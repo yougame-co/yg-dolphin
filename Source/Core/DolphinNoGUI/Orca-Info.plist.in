@@ -10,6 +10,8 @@
     <string>Orca</string>
     <key>CFBundleIdentifier</key>
     <string>co.yougame.orca</string>
+    <key>CFBundleIconFile</key>
+    <string>Orca</string>
     <key>CFBundleDevelopmentRegion</key>
     <string>English</string>
     <key>CFBundleInfoDictionaryVersion</key>
