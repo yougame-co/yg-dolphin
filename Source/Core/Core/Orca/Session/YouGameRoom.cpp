@@ -10,6 +10,7 @@
 #include <mutex>
 #include <optional>
 #include <random>
+#include <string_view>
 #include <thread>
 
 #include <fmt/format.h>
@@ -25,7 +26,6 @@ namespace
 {
 // The rooms Worker's lobby protocol (rooms/src/index.ts, rooms/src/game-lobby.ts in the YouGame
 // repo). Orca rooms are private two-player game lobbies; the host's Orca starts the match.
-constexpr const char* MODE = "orca-v1";
 constexpr const char* CODE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
 // The room allows 120 messages a second per socket: packets go out at most every 10 ms (a stalled
 // session asks to send far more often), the newest replacing any not yet sent.
@@ -124,6 +124,59 @@ std::string Str(const picojson::object& o, const std::string& key)
 
 constexpr int MAX_FRAME = 1 << 30;
 
+// picojson has no nesting limit (deep arrays overflow the I/O thread's stack) and aborts on a number
+// that overflows a double. Nothing YouGame sends nests deeply, uses an exponent or has more than 17
+// digits in a row, so a message that does is refused before parsing.
+bool SafeToParse(const std::string& text)
+{
+  int depth = 0, digits = 0;
+  for (size_t i = 0; i < text.size(); ++i)
+  {
+    const char c = text[i];
+    if (c == '"')
+    {
+      // Skip the string, escapes included.
+      for (++i; i < text.size() && text[i] != '"'; ++i)
+      {
+        if (text[i] == '\\')
+          ++i;
+      }
+      digits = 0;
+      continue;
+    }
+    digits = c >= '0' && c <= '9' ? digits + 1 : 0;
+    if (digits > 17)
+      return false;
+    if (c == '[' || c == '{')
+    {
+      if (++depth > 16)
+        return false;
+    }
+    else if (c == ']' || c == '}')
+    {
+      --depth;
+    }
+    else if (text.compare(i, 4, "true") == 0)
+    {
+      i += 3;
+    }
+    else if (text.compare(i, 5, "false") == 0)
+    {
+      i += 4;
+    }
+    else if (c == 'e' || c == 'E')
+    {
+      return false;
+    }
+  }
+  return true;
+}
+
+bool ParseJson(const std::string& text, picojson::value* value)
+{
+  return SafeToParse(text) && picojson::parse(*value, text).empty();
+}
+
 picojson::object PacketToJson(const Packet& packet)
 {
   picojson::object d;
@@ -210,6 +263,27 @@ bool PacketFromJson(const picojson::object& d, Packet* packet)
   return true;
 }
 
+// The desktop app's bridge: exactly http://127.0.0.1:<port>, so the token goes nowhere else.
+bool LoopbackBridge(std::string bridge)
+{
+  if (bridge.ends_with("/"))
+    bridge.pop_back();
+  constexpr std::string_view prefix = "http://127.0.0.1:";
+  if (!bridge.starts_with(prefix))
+    return false;
+  const std::string_view port = std::string_view(bridge).substr(prefix.size());
+  return !port.empty() && port.size() <= 5 &&
+         std::all_of(port.begin(), port.end(), [](char c) { return c >= '0' && c <= '9'; });
+}
+
+// Room tickets travel only over TLS, except to a rooms Worker on this machine (tests).
+bool AcceptableRoomUrl(const std::string& url)
+{
+  return url.starts_with("https://") || url.starts_with("wss://") ||
+         url.starts_with("http://127.0.0.1:") || url.starts_with("http://localhost:") ||
+         url.starts_with("ws://127.0.0.1:") || url.starts_with("ws://localhost:");
+}
+
 std::string WebSocketUrl(std::string url)
 {
   if (url.starts_with("https://"))
@@ -228,7 +302,7 @@ std::string EncodePacket(const Packet& packet)
 bool DecodePacket(const std::string& json, Packet* packet)
 {
   picojson::value value;
-  if (!picojson::parse(value, json).empty() || !value.is<picojson::object>())
+  if (!ParseJson(json, &value) || !value.is<picojson::object>())
     return false;
   return PacketFromJson(value.get<picojson::object>(), packet);
 }
@@ -257,6 +331,7 @@ struct YouGameRoom::Impl
   int peer_seat = -1;
   bool peer_hello = false;
   std::optional<Clock::time_point> begun_at;
+  int begin_tries = 0;
   Clock::time_point last_send{}, last_ping{}, last_hello{};
 
   explicit Impl(RoomOptions room_options) : options(std::move(room_options))
@@ -294,9 +369,13 @@ struct YouGameRoom::Impl
     status = std::move(why);
   }
 
-  bool SendJson(const picojson::object& message)
+  bool SendJson(const picojson::object& message,
+                std::chrono::milliseconds timeout = std::chrono::seconds(2))
   {
-    return ws.SendText(picojson::value(message).serialize(), std::chrono::seconds(2));
+    if (ws.SendText(picojson::value(message).serialize(), timeout))
+      return true;
+    WARN_LOG_FMT(NETPLAY, "Orca room: send failed: {}", ws.Error());
+    return false;
   }
 
   // The ticket for the room, and the room code, from the desktop app's bridge or (tests) the site.
@@ -317,13 +396,15 @@ struct YouGameRoom::Impl
       return false;
     }
     // The bridge is the desktop app on loopback; nothing else may receive the token.
-    if (use_bridge && !bridge.starts_with("http://127.0.0.1:"))
+    if (use_bridge && !LoopbackBridge(bridge))
     {
       End("Invalid YouGame app bridge address");
       return false;
     }
 
-    Common::HttpRequest http(std::chrono::seconds(15));
+    // Leave() must not wait out a slow request: the progress callback aborts it.
+    Common::HttpRequest http(std::chrono::seconds(10),
+                             [this](s64, s64, s64, s64) { return !stop.load(); });
     const auto post = [&](const std::string& target, const picojson::object& body,
                           const Common::HttpRequest::Headers& headers,
                           picojson::object* result) -> bool {
@@ -331,12 +412,14 @@ struct YouGameRoom::Impl
                                       Common::HttpRequest::AllowedReturnCodes::All);
       if (!response)
       {
-        End("YouGame did not respond");
+        WARN_LOG_FMT(NETPLAY, "Orca room: no reply from {} (HTTP {})", target,
+                     http.GetLastResponseCode());
+        End(stop ? "You left the room" : "YouGame did not respond");
         return false;
       }
       picojson::value json;
       const std::string text(response->begin(), response->end());
-      if (!picojson::parse(json, text).empty() || !json.is<picojson::object>())
+      if (!ParseJson(text, &json) || !json.is<picojson::object>())
       {
         End(fmt::format("YouGame sent an unreadable reply (HTTP {})", http.GetLastResponseCode()));
         return false;
@@ -389,7 +472,7 @@ struct YouGameRoom::Impl
       picojson::object request;
       request["type"] = picojson::value("mpTicket");
       request["players"] = picojson::value(2.0);
-      request["mode"] = picojson::value(MODE);
+      request["mode"] = picojson::value(options.mode);
       request["ranked"] = picojson::value(false);
       request["room"] = picojson::value(room);
       request["lobby"] = picojson::value(lobby);
@@ -416,7 +499,7 @@ struct YouGameRoom::Impl
       request["player_id"] = picojson::value(player);
       request["name"] = picojson::value(options.player_name);
       request["players"] = picojson::value(2.0);
-      request["mode"] = picojson::value(MODE);
+      request["mode"] = picojson::value(options.mode);
       request["room"] = picojson::value(room);
       request["lobby"] = picojson::value(lobby);
       if (!post(site + "/api/multiplayer/ticket", request, {{"Content-Type", "application/json"}},
@@ -427,9 +510,9 @@ struct YouGameRoom::Impl
     }
     *url = Str(reply, "url");
     *ticket = Str(reply, "ticket");
-    if (url->empty() || ticket->empty())
+    if (url->empty() || ticket->empty() || !AcceptableRoomUrl(*url))
     {
-      End("YouGame sent no room ticket");
+      End("YouGame sent no usable room ticket");
       return false;
     }
     std::lock_guard lock(mutex);
@@ -440,8 +523,13 @@ struct YouGameRoom::Impl
   void Run()
   {
     std::string url, ticket;
-    if (!Ticket(&url, &ticket) || stop)
+    if (!Ticket(&url, &ticket))
       return;
+    if (stop)
+    {
+      End("You left the room");
+      return;
+    }
     std::string room;
     {
       std::lock_guard lock(mutex);
@@ -451,8 +539,9 @@ struct YouGameRoom::Impl
     std::string error;
     if (!ws.Connect(WebSocketUrl(url) + "/room/" + room + "?ticket=" +
                         escape.EscapeComponent(ticket),
-                    std::chrono::seconds(10), &error))
+                    std::chrono::seconds(8), &error))
     {
+      WARN_LOG_FMT(NETPLAY, "Orca room: {}", error);
       End(error.find("HTTP 4") != std::string::npos ?
               "The room refused to let you in (full, a different Orca build, or an old invite)" :
               "Could not reach YouGame's rooms");
@@ -469,8 +558,10 @@ struct YouGameRoom::Impl
       }
       if (!ws.IsOpen())
       {
-        End(State() == RoomState::Playing ? "Lost the connection to the room" :
-                                            "The room closed the connection");
+        End(fmt::format("{} ({})",
+                        State() == RoomState::Playing ? "Lost the connection to the room" :
+                                                        "The room closed the connection",
+                        ws.Error().empty() ? "no reason given" : ws.Error()));
         break;
       }
       Tick();
@@ -483,13 +574,13 @@ struct YouGameRoom::Impl
       finish["t"] = picojson::value("finish");
       finish["matchId"] = picojson::value(match_id);
       finish["void"] = picojson::value(true);
-      SendJson(finish);
+      SendJson(finish, std::chrono::milliseconds(500));
     }
     if (ws.IsOpen())
     {
       picojson::object leave;
       leave["t"] = picojson::value("leave");
-      SendJson(leave);
+      SendJson(leave, std::chrono::milliseconds(500));
     }
     ws.Close();
   }
@@ -562,6 +653,13 @@ struct YouGameRoom::Impl
     picojson::object begin;
     begin["t"] = picojson::value("begin");
     begin["revision"] = picojson::value(static_cast<double>(revision));
+    // The room answers a begin it refuses with command-error and one it ignores with nothing: either
+    // way, the next try waits BEGIN_RETRY, and after a minute of tries the room is not usable.
+    if (++begin_tries > 20)
+    {
+      End("The room never started the match");
+      return;
+    }
     begun_at = Clock::now();
     SendJson(begin);
   }
@@ -596,6 +694,7 @@ struct YouGameRoom::Impl
       peer = other;
       peer_hello = false;
       begun_at.reset();
+      begin_tries = 0;
       std::string room;
       {
         std::lock_guard lock(mutex);
@@ -659,8 +758,11 @@ struct YouGameRoom::Impl
   void OnMessage(const std::string& text)
   {
     picojson::value value;
-    if (!picojson::parse(value, text).empty() || !value.is<picojson::object>())
+    if (!ParseJson(text, &value) || !value.is<picojson::object>())
+    {
+      WARN_LOG_FMT(NETPLAY, "Orca room: ignored an unreadable message ({} bytes)", text.size());
       return;
+    }
     const auto& m = value.get<picojson::object>();
     const std::string t = Str(m, "t");
     const RoomState current = State();
@@ -668,6 +770,11 @@ struct YouGameRoom::Impl
     if (t == "welcome")
     {
       me = Str(m, "me");
+      if (Str(m, "lifecycle") != "game")
+      {
+        End("This room is not an Orca lobby");
+        return;
+      }
       if (m.count("playing") && m.at("playing").evaluate_as_boolean())
       {
         End("This room already has a match running");
@@ -728,7 +835,10 @@ struct YouGameRoom::Impl
     {
       WARN_LOG_FMT(NETPLAY, "Orca room: {} refused: {}", Str(m, "action"), Str(m, "error"));
       if (Str(m, "action") == "begin")
-        begun_at.reset();
+      {
+        std::lock_guard lock(mutex);
+        status = fmt::format("Room {}: {}", code, Str(m, "error"));
+      }
     }
     else if (t == "error")
     {
@@ -767,11 +877,12 @@ struct YouGameRoom::Impl
       return;
     }
     std::lock_guard lock(mutex);
+    // Nobody read the inbox for a while (a long stall on this side). Each packet repeats every
+    // input the sender hasn't seen acknowledged, so the newer half says all the older half did.
     if (inbox.size() >= MAX_INBOX)
     {
-      state = RoomState::Ended;
-      status = "Too many unread messages from your friend";
-      return;
+      WARN_LOG_FMT(NETPLAY, "Orca room: inbox full, dropping the {} oldest packets", MAX_INBOX / 2);
+      inbox.erase(inbox.begin(), inbox.begin() + MAX_INBOX / 2);
     }
     inbox.push_back(std::move(packet));
   }
@@ -871,5 +982,6 @@ void YouGameRoom::Leave()
   m_impl->stop = true;
   if (m_impl->thread.joinable())
     m_impl->thread.join();
+  m_impl->End("You left the room");
 }
 }  // namespace Orca::Net

@@ -14,6 +14,7 @@
 
 #include "Common/Config/Config.h"
 #include "Common/Logging/Log.h"
+#include "Common/StringUtil.h"
 #include "Common/Version.h"
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/MainSettings.h"
@@ -27,7 +28,9 @@ namespace Orca::Online
 namespace
 {
 std::mutex s_mutex;
-std::unique_ptr<Net::YouGameRoom> s_room;
+// Shared so that a caller still holding the room (WaitForMatch, a status poll) keeps it alive
+// while Shutdown runs on another thread.
+std::shared_ptr<Net::YouGameRoom> s_room;
 
 std::string Env(const char* name)
 {
@@ -35,10 +38,10 @@ std::string Env(const char* name)
   return value ? value : "";
 }
 
-Net::YouGameRoom* Room()
+std::shared_ptr<Net::YouGameRoom> Room()
 {
   std::lock_guard lock(s_mutex);
-  return s_room.get();
+  return s_room;
 }
 }  // namespace
 
@@ -74,6 +77,9 @@ std::string CompatibilityKey()
       Config::Get(Config::GFX_HACK_SKIP_XFB_COPY_TO_RAM),
       Config::Get(Config::GFX_HACK_EFB_ACCESS_ENABLE), Config::Get(Config::GFX_HACK_BBOX_ENABLE),
       GetSeedSaveHash(), TestOverridesActive());
+  // The disc image itself, when the desktop app hashed it (a modified disc with the right game ID
+  // and revision would otherwise desync instead of being refused).
+  parts += "|disc=" + Env("ORCA_DISC_SHA1");
   // The room allows 1-64 characters [a-zA-Z0-9._:-].
   return fmt::format("orca1:{:016x}", XXH3_64bits(parts.data(), parts.size()));
 }
@@ -87,14 +93,22 @@ Net::Transport* WaitForMatch(Net::Config* config, const std::function<bool()>& s
       Net::RoomOptions options;
       options.room_code = Env("ORCA_ROOM");
       options.compatibility = CompatibilityKey();
+      if (const Profile* profile = ActiveProfile())
+      {
+        std::string game = profile->game_id;
+        Common::ToLower(&game);
+        options.mode = "orca-" + game;
+      }
       if (!Env("ORCA_NAME").empty())
         options.player_name = Env("ORCA_NAME").substr(0, 32);
       NOTICE_LOG_FMT(NETPLAY, "Orca: joining a YouGame room, compatibility {}",
                      options.compatibility);
-      s_room = std::make_unique<Net::YouGameRoom>(std::move(options));
+      s_room = std::make_shared<Net::YouGameRoom>(std::move(options));
     }
   }
-  Net::YouGameRoom* room = Room();
+  const std::shared_ptr<Net::YouGameRoom> room = Room();
+  if (!room)
+    return nullptr;
   std::string last_status;
   while (!stopping())
   {
@@ -104,7 +118,7 @@ Net::Transport* WaitForMatch(Net::Config* config, const std::function<bool()>& s
       config->seats = 2;
       config->local_seat = room->Seat();
       NOTICE_LOG_FMT(NETPLAY, "Orca: match on room {}, port {}", room->Code(), room->Seat() + 1);
-      return room;
+      return room.get();
     }
     if (state == Net::RoomState::Ended)
     {
@@ -123,25 +137,25 @@ Net::Transport* WaitForMatch(Net::Config* config, const std::function<bool()>& s
 
 u32 Seed()
 {
-  const Net::YouGameRoom* room = Room();
+  const auto room = Room();
   return room ? room->Seed() : 0;
 }
 
 int RoundTripMs()
 {
-  const Net::YouGameRoom* room = Room();
+  const auto room = Room();
   return room ? room->RoundTripMs() : -1;
 }
 
 std::string StatusLine()
 {
-  const Net::YouGameRoom* room = Room();
+  const auto room = Room();
   return room ? room->Status() : "";
 }
 
 void Shutdown()
 {
-  std::unique_ptr<Net::YouGameRoom> room;
+  std::shared_ptr<Net::YouGameRoom> room;
   {
     std::lock_guard lock(s_mutex);
     room = std::move(s_room);

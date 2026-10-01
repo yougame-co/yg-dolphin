@@ -19,7 +19,8 @@ bool Enabled();
 
 // Joins the room (ORCA_ROOM, else the app's invite, else a new code), blocks until the match
 // starts and fills in config's seats and local seat. Null when the room ended (StatusLine says
-// why) or `stopping` returned true. The transport stays valid until Shutdown.
+// why) or `stopping` returned true. The transport stays valid until Shutdown, which must run on the
+// emulator thread after the session stopped using it.
 Net::Transport* WaitForMatch(Net::Config* config, const std::function<bool()>& stopping);
 
 // The match's seed (valid once WaitForMatch returned a transport).

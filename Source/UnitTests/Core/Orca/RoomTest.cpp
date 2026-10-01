@@ -15,6 +15,18 @@ using namespace Orca::Net;
 
 namespace
 {
+void SetEnv(const char* name, const char* value)
+{
+#ifdef _WIN32
+  _putenv_s(name, value ? value : "");
+#else
+  if (value)
+    setenv(name, value, 1);
+  else
+    unsetenv(name);
+#endif
+}
+
 Packet Sample()
 {
   Packet packet;
@@ -93,6 +105,13 @@ TEST(OrcaRoom, RejectsMalformedPackets)
   EXPECT_FALSE(DecodePacket(with("[130,-1,-1,-1]", "[130,-2,-1,-1]"), &got));
   EXPECT_FALSE(DecodePacket(with("\"h\":\"fedcba9876543210\"", "\"h\":\"fedcba98\""), &got));
 
+  // What would crash the JSON parser: deep nesting, and numbers that overflow a double.
+  EXPECT_FALSE(DecodePacket(std::string(5000, '[') + std::string(5000, ']'), &got));
+  EXPECT_FALSE(DecodePacket(with("\"c\":121", "\"c\":1e999"), &got));
+  EXPECT_FALSE(DecodePacket(with("\"c\":121", "\"c\":" + std::string(400, '9')), &got));
+  // Words with an e inside strings, and true/false, are fine.
+  EXPECT_TRUE(DecodePacket(with("\"k\":\"p\"", "\"e\":\"eEe\",\"t\":true,\"u\":false,\"k\":\"p\""), &got));
+
   // More pads than a packet may carry.
   Packet big = Frames(0, 0, MAX_PADS_IN_PACKET + 1);
   EXPECT_FALSE(DecodePacket(EncodePacket(big), &got));
@@ -152,7 +171,7 @@ TEST(OrcaLive, TwoRoomsPlayEachOther)
   const char* live = std::getenv("ORCA_LIVE_TEST");
   if (!live || std::string(live) != "1")
     GTEST_SKIP() << "set ORCA_LIVE_TEST=1";
-  setenv("ORCA_TEST_DEV_GAME", "orca-live-test", 1);
+  SetEnv("ORCA_TEST_DEV_GAME", "orca-live-test");
   const std::string code =
       "orca" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 100000000);
   RoomOptions options;
@@ -172,7 +191,7 @@ TEST(OrcaLive, TwoRoomsPlayEachOther)
       break;
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
-  unsetenv("ORCA_TEST_DEV_GAME");
+  SetEnv("ORCA_TEST_DEV_GAME", nullptr);
   ASSERT_TRUE(a.Connected()) << a.Status();
   ASSERT_TRUE(b.Connected()) << b.Status();
   EXPECT_EQ(a.Seat(), 0);

@@ -25,6 +25,8 @@ struct RoomOptions
   // Lobby compatibility key: players with different keys can't share a room.
   std::string compatibility;
   std::string player_name = "Player";
+  // The room's mode: one per game, e.g. "orca-rsbe01". Both players must use the same.
+  std::string mode = "orca-test";
 };
 
 enum class RoomState
