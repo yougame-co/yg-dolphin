@@ -8,11 +8,15 @@
 #include <fstream>
 #include <functional>
 
+#include <cctype>
+
 #include <fmt/format.h>
+#include <xxh3.h>
 
 #include "Common/CPUDetect.h"
 #include "Common/FileUtil.h"
 #include "Common/Hash.h"
+#include "Common/IOFile.h"
 #include "Common/StringUtil.h"
 #ifdef USE_RETRO_ACHIEVEMENTS
 #include "Core/Config/AchievementSettings.h"
@@ -27,7 +31,9 @@
 #include "Core/HW/SI/SI_Device.h"
 #include "Core/HW/Sram.h"
 #include "Core/HW/Wiimote.h"
+#include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "DiscIO/Volume.h"
 
 namespace Orca
 {
@@ -82,7 +88,11 @@ void ForEachUniversalSetting(F&& f)
   f(Config::MAIN_SKIP_IPL, true);
   f(Config::SESSION_LOAD_IPL_DUMP, false);
   f(Config::MAIN_ENABLE_CHEATS, false);
+  // No SD card unless the profile inserts one; a profile's card is a verified image, read-only
+  // (writes would outlive a rollback and differ between players), never rebuilt from a folder.
   f(Config::MAIN_WII_SD_CARD, false);
+  f(Config::MAIN_ALLOW_SD_WRITES, false);
+  f(Config::MAIN_WII_SD_CARD_ENABLE_FOLDER_SYNC, false);
   f(Config::MAIN_BLUETOOTH_PASSTHROUGH_ENABLED, false);
   f(Config::MAIN_OVERRIDE_REGION_SETTINGS, true);
   f(Config::MAIN_GC_LANGUAGE, 0);  // English; written into the session SRAM
@@ -149,6 +159,9 @@ public:
     ForEachUniversalSetting([layer](const auto& info, auto value) { layer->Set(info, value); });
     for (const auto& [location, value] : m_profile.forced)
       layer->Set(location, value);
+    // A launcher profile's verified SD image, over any card path the player set.
+    if (!m_profile.sd_image_path.empty())
+      layer->Set(Config::MAIN_WII_SD_CARD_IMAGE_PATH, m_profile.sd_image_path);
   }
 
   void Save(Config::Layer*) override {}
@@ -262,7 +275,8 @@ u64 GetSeedSaveHash()
   return s_seed_save_hash;
 }
 
-std::optional<Profile> LoadProfile(const std::string& game_id, u16 revision, std::string* error)
+std::optional<Profile> LoadProfile(const std::string& game_id, std::optional<u16> revision,
+                                   std::string* error)
 {
   const std::string path = File::GetSysDirectory() + "Orca/" + game_id + ".ini";
   std::ifstream in(path);
@@ -308,7 +322,32 @@ std::optional<Profile> LoadProfile(const std::string& game_id, u16 revision, std
     if (key.empty() || value.empty())
       return fail("empty key or value");
 
-    if (section == "Profile")
+    if (section == "Profile" && (key == "Launcher" || key == "SDImageHash"))
+    {
+      if (value.size() != 32 ||
+          !std::ranges::all_of(value, [](unsigned char c) {
+            return std::isxdigit(c) && !std::isupper(c);
+          }))
+      {
+        return fail(fmt::format("{} must be 32 lowercase hex digits (XXH3-128)", key));
+      }
+      (key == "Launcher" ? profile.launcher_hash : profile.sd_image_hash) = value;
+    }
+    else if (section == "Profile" && (key == "Disc" || key == "SDImage"))
+    {
+      // A file name next to the launcher, never a path out of its folder.
+      if (key == "SDImage" && (value.find_first_of("/\\") != std::string::npos || value == ".."))
+        return fail("SDImage must be a file name");
+      (key == "Disc" ? profile.disc : profile.sd_image) = value;
+    }
+    else if (section == "Profile" && key == "SaveTitle")
+    {
+      u64 title = 0;
+      if (!value.starts_with("0x") || !TryParse(value.substr(2), &title, 16))
+        return fail("SaveTitle must be a hex title ID (0x...)");
+      profile.save_title = title;
+    }
+    else if (section == "Profile")
     {
       u32 number = 0;
       if (!ParseNumber(value, &number))
@@ -347,14 +386,122 @@ std::optional<Profile> LoadProfile(const std::string& game_id, u16 revision, std
     *error = fmt::format("Orca profile {} has no Revision", path);
     return std::nullopt;
   }
-  if (*profile_revision != revision)
+  if (revision && *profile_revision != *revision)
   {
     *error = fmt::format("This disc is {} revision {}; Orca's profile is for revision {}", game_id,
-                         revision, *profile_revision);
+                         *revision, *profile_revision);
     return std::nullopt;
   }
   profile.revision = *profile_revision;
+  // A launcher profile names the whole boot: loader, disc and SD image.
+  const bool any_launcher = !profile.launcher_hash.empty() || !profile.disc.empty() ||
+                            !profile.sd_image.empty() || !profile.sd_image_hash.empty();
+  if (any_launcher && (profile.launcher_hash.empty() || profile.disc.empty() ||
+                       profile.sd_image.empty() != profile.sd_image_hash.empty() ||
+                       !profile.frame_hook || !profile.frame_hook_word))
+  {
+    // Without the word, the boundary would fire inside the loader.
+    *error = fmt::format("Orca profile {}: a launcher profile needs Launcher, Disc, FrameHook and "
+                         "FrameHookWord, and SDImage with SDImageHash",
+                         path);
+    return std::nullopt;
+  }
   return profile;
+}
+
+std::string LauncherProfileName()
+{
+  const char* name = std::getenv("ORCA_PROFILE");
+  if (!name)
+    return {};
+  // A profile file name in Data/Sys/Orca, nothing else.
+  const std::string value(name);
+  if (value.empty() || value.size() > 32 ||
+      !std::ranges::all_of(value,
+                           [](unsigned char c) { return std::isalnum(c) || c == '-' || c == '_'; }))
+  {
+    return {};
+  }
+  return value;
+}
+
+std::string HashFile(const std::string& path)
+{
+  File::IOFile file(path, "rb");
+  if (!file)
+    return {};
+  XXH3_state_t* state = XXH3_createState();
+  if (!state)
+    return {};
+  XXH3_128bits_reset(state);
+  std::vector<u8> buffer(8 << 20);
+  u64 remaining = file.GetSize();
+  bool ok = true;
+  while (remaining > 0)
+  {
+    const size_t n = static_cast<size_t>(std::min<u64>(remaining, buffer.size()));
+    if (!file.ReadBytes(buffer.data(), n))
+    {
+      ok = false;
+      break;
+    }
+    XXH3_128bits_update(state, buffer.data(), n);
+    remaining -= n;
+  }
+  const XXH128_hash_t hash = XXH3_128bits_digest(state);
+  XXH3_freeState(state);
+  return ok ? fmt::format("{:016x}{:016x}", hash.high64, hash.low64) : std::string{};
+}
+
+bool PrepareLauncherBoot(Profile* profile, const std::string& executable_path,
+                         const std::string& disc_path, std::string* error)
+{
+  if (HashFile(executable_path) != profile->launcher_hash)
+  {
+    *error = fmt::format("Orca: {} is not the loader profile {} names", executable_path,
+                         profile->game_id);
+    return false;
+  }
+
+  const std::unique_ptr<DiscIO::Volume> disc =
+      disc_path.empty() ? nullptr : DiscIO::CreateVolume(disc_path);
+  if (!disc)
+  {
+    *error = fmt::format("Orca: profile {} boots {} from the drive, and no disc is set",
+                         profile->game_id, profile->disc);
+    return false;
+  }
+  const u16 disc_revision = disc->GetRevision().value_or(0);
+  if (disc->GetGameID() != profile->disc || disc_revision != profile->revision)
+  {
+    *error = fmt::format("Orca: profile {} needs {} revision {}; the disc is {} revision {}",
+                         profile->game_id, profile->disc, profile->revision, disc->GetGameID(),
+                         disc_revision);
+    return false;
+  }
+
+  if (profile->sd_image.empty())
+    return true;
+  std::string folder;
+  SplitPath(executable_path, &folder, nullptr, nullptr);
+  const std::string image = folder + profile->sd_image;
+  if (HashFile(image) != profile->sd_image_hash)
+  {
+    *error = fmt::format("Orca: {} is missing or is not the SD card profile {} names", image,
+                         profile->game_id);
+    return false;
+  }
+  // The session's config layer points the SD card at this image (read-only: writes are forced
+  // off), never at the player's own card.
+  profile->sd_image_path = image;
+  return true;
+}
+
+bool FrameHookLive(const Core::CPUThreadGuard& guard, const Profile& profile)
+{
+  if (!profile.IsLauncher() || !profile.frame_hook || !profile.frame_hook_word)
+    return true;
+  return PowerPC::MMU::HostRead<u32>(guard, *profile.frame_hook) == *profile.frame_hook_word;
 }
 
 std::unique_ptr<Config::ConfigLayerLoader> GenerateConfigLoader(const Profile& profile)
@@ -369,6 +516,8 @@ std::optional<std::string> VerifyForcedSettings(const Profile& profile)
       [&locations](const auto& info, auto) { locations.push_back(info.GetLocation()); });
   for (const auto& [location, value] : profile.forced)
     locations.push_back(location);
+  if (!profile.sd_image_path.empty())
+    locations.push_back(Config::MAIN_WII_SD_CARD_IMAGE_PATH.GetLocation());
 
   for (const Config::Location& location : locations)
   {

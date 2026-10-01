@@ -117,10 +117,13 @@ void PatchFixedFunctions(Core::System& system)
   {
     const u32 hook = *profile->frame_hook;
     const u32 word = system.GetMemory().Read_U32(hook & 0x1FFFFFFF);
-    if (!profile->frame_hook_word || word == *profile->frame_hook_word)
+    // A launcher profile's game isn't in RAM yet when its loader boots: install the hook now, and
+    // the boundary ignores every pass until the expected instruction is there (FrameHookLive).
+    if (!profile->frame_hook_word || word == *profile->frame_hook_word || profile->IsLauncher())
     {
       Patch(system, hook, "OrcaFrameBoundary");
-      NOTICE_LOG_FMT(ROLLBACK, "{}: frame boundary hook at {:08x}", profile->game_id, hook);
+      NOTICE_LOG_FMT(ROLLBACK, "{}: frame boundary hook at {:08x}{}", profile->game_id, hook,
+                     word == profile->frame_hook_word ? "" : " (live once the game is loaded)");
     }
     else
     {

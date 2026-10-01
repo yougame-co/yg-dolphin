@@ -41,6 +41,21 @@ Seat 0 is controller port 1.
 Unit tests: `ninja tests && ./Binaries/Tests/tests --gtest_filter='Orca*'`. With `ORCA_LIVE_TEST=1`,
 the `OrcaLive` tests also open real rooms on yougame.co.
 
+**Launcher profiles (prototype: Project+).** A mod that boots through its own loader program runs
+from a launcher profile, picked with `ORCA_PROFILE` (`Data/Sys/Orca/PPLUS32.ini` is Project+ v3.2).
+The session boots the loader executable (`-e <launcher.dol>`) with the disc as Dolphin's default disc
+(`-C Dolphin.Core.DefaultISO=<disc>`), and refuses unless the loader, the disc's ID and revision, and
+the SD card image next to the loader match the profile (XXH3-128). The SD image is opened read-only:
+every session forces SD writes and folder sync off. The profile also names the save that seeds the
+session NAND (`SaveTitle`), and its frame hook goes live once the game's instruction is at the
+address. None of a mod's files are in this repository; the player's machine downloads the official
+release. Example (Project+'s `Project+ Netplay Launcher.dol` and `sd.raw` side by side in `<dir>`):
+
+```bash
+ORCA_SESSION=1 ORCA_PROFILE=PPLUS32 dolphin-emu-nogui -p headless -u <user> -v Null \
+  -C "Dolphin.Core.DefaultISO=<RSBE01 rev 2 disc>" -e "<dir>/Project+ Netplay Launcher.dol"
+```
+
 A session also refuses whatever would change one player's game alone: pausing, loading savestates,
 the reset button, and the Wii power button (Stop ends the match instead).
 

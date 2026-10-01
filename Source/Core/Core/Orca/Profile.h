@@ -13,6 +13,10 @@
 #include "Common/Config/Config.h"
 
 struct Sram;
+namespace Core
+{
+class CPUThreadGuard;
+}
 
 // Orca per-game profiles and the settings every Orca rollback session forces. Both players of a
 // session must run identical emulated machines, so every setting that can change what the game sees
@@ -22,13 +26,38 @@ namespace Orca
 {
 struct Profile
 {
+  // The profile's name: the disc's game ID for a disc profile (RSBE01), the ORCA_PROFILE name for a
+  // launcher profile (PPLUS32).
   std::string game_id;
+  // The disc's revision (a launcher profile: the revision of the disc the launcher boots).
   u16 revision = 0;
   std::optional<u32> frame_hook;
-  // Instruction word expected at frame_hook, checked before the hook is installed.
+  // Instruction word expected at frame_hook. A disc profile checks it before installing the hook;
+  // a launcher profile installs the hook at boot (the game isn't in RAM yet) and the boundary
+  // ignores every pass while the word there differs.
   std::optional<u32> frame_hook_word;
   // Game-specific additions to the universal settings, as <System>.<Section>.<Key> = <Value>.
   std::vector<std::pair<Config::Location, std::string>> forced;
+
+  // Launcher profiles (a mod that boots through its own loader program, such as Project+): the
+  // session boots a loader executable with exactly this XXH3-128 hash (32 hex digits), and the loader
+  // boots the disc named by `disc` (and `revision`) from the DVD drive (Dolphin's default disc).
+  std::string launcher_hash;
+  std::string disc;
+  // The SD card image the loader reads its files from, next to the loader executable, and its
+  // XXH3-128 hash. A session opens it read-only.
+  std::string sd_image;
+  std::string sd_image_hash;
+  // Set at boot: the verified image's full path. The session's config layer forces the SD card
+  // path to it (not part of the lobby key: the hash is).
+  std::string sd_image_path;
+  // The title whose save seeds the session NAND (default: the booted title's own).
+  std::optional<u64> save_title;
+  // Set at boot: the game ID Dolphin gave what it booted (a loader's is derived from its file name).
+  // Its game settings INIs apply while the loader runs, the disc's after it.
+  std::string boot_game_id;
+
+  bool IsLauncher() const { return !launcher_hash.empty(); }
 };
 
 // True when this process runs an Orca rollback session (ORCA_SESSION=1 for now; the desktop app
@@ -49,8 +78,25 @@ int TestNetJitterMs();
 bool TestOverridesActive();
 
 // Loads the profile for a game; nullopt and a reason when there is none, the revision differs or a
-// line is malformed.
-std::optional<Profile> LoadProfile(const std::string& game_id, u16 revision, std::string* error);
+// line is malformed. Without a revision (a launcher boot) the caller checks the disc itself.
+std::optional<Profile> LoadProfile(const std::string& game_id, std::optional<u16> revision,
+                                   std::string* error);
+
+// ORCA_PROFILE: the launcher profile a session that boots an executable uses (empty when unset).
+std::string LauncherProfileName();
+
+// XXH3-128 of a file as 32 lowercase hex digits; empty when it can't be read.
+std::string HashFile(const std::string& path);
+
+// A launcher profile's boot checks, for a session booting the executable at `executable_path` with
+// `disc_path` in the drive: the executable, the disc and the SD image must be the profile's. On
+// success `profile->sd_image_path` names the verified image; on failure, `error` says why.
+bool PrepareLauncherBoot(Profile* profile, const std::string& executable_path,
+                         const std::string& disc_path, std::string* error);
+
+// The running game's frame boundary is live: for a launcher profile, its instruction word is at the
+// hook (a disc profile's hook was checked before it was installed).
+bool FrameHookLive(const Core::CPUThreadGuard& guard, const Profile& profile);
 
 // The running session's profile, set at boot (null outside a session). The rollback core reads its
 // frame boundary from it.

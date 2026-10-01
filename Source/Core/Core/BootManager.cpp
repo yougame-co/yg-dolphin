@@ -85,7 +85,38 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
   {
     Orca::Status::State("booting");
     std::string error;
-    orca_profile = Orca::LoadProfile(StartUp.GetGameID(), StartUp.GetRevision(), &error);
+    // A disc boots with its own profile; a loader executable (a mod's launcher) only with the
+    // launcher profile ORCA_PROFILE names, which checks the loader, the disc and the SD card.
+    const auto* executable = std::get_if<BootParameters::Executable>(&boot->parameters);
+    if (executable)
+    {
+      const std::string name = Orca::LauncherProfileName();
+      if (name.empty())
+        error = "Orca: booting a loader in a session needs ORCA_PROFILE (a launcher profile)";
+      else
+        orca_profile = Orca::LoadProfile(name, std::nullopt, &error);
+      if (orca_profile && !orca_profile->IsLauncher())
+      {
+        error = fmt::format("Orca: profile {} is not a launcher profile", name);
+        orca_profile.reset();
+      }
+      else if (orca_profile && !Orca::PrepareLauncherBoot(&*orca_profile, executable->path,
+                                                          Config::Get(Config::MAIN_DEFAULT_ISO),
+                                                          &error))
+      {
+        orca_profile.reset();
+      }
+    }
+    else
+    {
+      orca_profile = Orca::LoadProfile(StartUp.GetGameID(), StartUp.GetRevision(), &error);
+      if (orca_profile && orca_profile->IsLauncher())
+      {
+        error = fmt::format("Orca: profile {} boots through its loader, not the disc",
+                            orca_profile->game_id);
+        orca_profile.reset();
+      }
+    }
     const char* error_code = !orca_profile && error.find("revision") != std::string::npos ?
                                  "disc_revision" :
                                  (!orca_profile ? "profile" : "settings");
@@ -101,6 +132,7 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
       PanicAlertFmt("{}", error);
       return false;
     }
+    orca_profile->boot_game_id = StartUp.GetGameID();
     Config::AddLayer(Orca::GenerateConfigLoader(*orca_profile));
   }
 
