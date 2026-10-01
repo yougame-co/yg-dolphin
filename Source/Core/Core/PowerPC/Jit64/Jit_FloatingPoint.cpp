@@ -658,7 +658,8 @@ void Jit64::fmaddXX(UGeckoInstruction inst)
     // HandleNaNs needs to clobber XMM0. A double result keeps d's ps1, so it goes through XMM1.
     result_xmm = error_free_transformation || !single ? XMM1 : Rd;
     MOVAPD(result_xmm, R(XMM0));
-    DEBUG_ASSERT(!preserve_d);
+    // d is an input HandleNaNs still reads: the result must not be in d's register yet.
+    DEBUG_ASSERT(!preserve_d || result_xmm != Rd);
   }
 
   std::optional<FixupBranch> handled_nans;
