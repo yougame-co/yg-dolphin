@@ -38,8 +38,8 @@
 #include "VideoCommon/VideoBackendBase.h"
 #include "VideoCommon/VideoCommon.h"
 #include "VideoCommon/VideoConfig.h"
-#include "VideoCommon/VideoState.h"
 #include "VideoCommon/VideoEvents.h"
+#include "VideoCommon/VideoState.h"
 #include "VideoCommon/XFStateManager.h"
 
 using namespace BPFunctions;

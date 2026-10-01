@@ -6,6 +6,7 @@
 #include <atomic>
 
 #include "Common/ChunkFile.h"
+#include "Common/Logging/Log.h"
 #include "Core/System.h"
 #include "VideoCommon/BPMemory.h"
 #include "VideoCommon/BPStructs.h"
@@ -34,7 +35,10 @@ static std::atomic<bool> s_skip_render{false};
 void VideoCommon_SetSkipRender(bool skip)
 {
   if (skip && Core::System::GetInstance().IsDualCoreMode())
+  {
+    WARN_LOG_FMT(VIDEO, "Skip render refused: dual core");
     skip = false;
+  }
   s_skip_render.store(skip, std::memory_order_relaxed);
 }
 

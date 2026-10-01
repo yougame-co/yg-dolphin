@@ -32,6 +32,7 @@
 #include "Core/FifoPlayer/FifoPlayer.h"
 #include "Core/FifoPlayer/FifoRecorder.h"
 #include "Core/HW/Memmap.h"
+#include "Core/Orca/Profile.h"
 #include "Core/System.h"
 
 #include "VideoCommon/AbstractFramebuffer.h"
@@ -2215,6 +2216,11 @@ void TextureCacheBase::CopyRenderTargetToTexture(
   bool copy_to_ram =
       !(is_xfb_copy ? g_ActiveConfig.bSkipXFBCopyToRam : g_ActiveConfig.bSkipEFBCopyToRam) ||
       !copy_to_vram;
+  // Orca: RAM gets only the constant placeholder, on every backend (Null has no VRAM copies), so
+  // both players' RAM matches whatever their GPUs render.
+  static const bool s_orca_session = Orca::SessionActive();
+  if (s_orca_session)
+    copy_to_ram = false;
 
   // tex_w and tex_h are the native size of the texture in the GC memory.
   // The size scaled_* represents the emulated texture. Those differ

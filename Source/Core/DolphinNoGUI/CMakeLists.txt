@@ -70,6 +70,7 @@ if(APPLE)
   # profiles are found in development builds.
   add_custom_command(TARGET dolphin-nogui POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:dolphin-nogui>/Contents/Resources"
+    COMMAND ${CMAKE_COMMAND} -E rm -rf "$<TARGET_FILE_DIR:dolphin-nogui>/Contents/Resources/Sys"
     COMMAND ${CMAKE_COMMAND} -E create_symlink "${CMAKE_SOURCE_DIR}/Data/Sys"
             "$<TARGET_FILE_DIR:dolphin-nogui>/Contents/Resources/Sys")
 endif()

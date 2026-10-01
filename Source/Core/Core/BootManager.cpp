@@ -78,35 +78,24 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
     }
   }
 
-  // Orca rollback session: force the game profile's settings on both players.
+  // Orca rollback session: force the universal and the game profile's settings on both players.
+  std::optional<Orca::Profile> orca_profile;
   if (Orca::SessionActive())
   {
     std::string error;
-    const auto profile = Orca::LoadProfile(StartUp.GetGameID(), StartUp.GetRevision(), &error);
-    if (!profile)
+    orca_profile = Orca::LoadProfile(StartUp.GetGameID(), StartUp.GetRevision(), &error);
+    if (orca_profile && NetPlay::IsNetPlayRunning())
+      error = "Orca: a session can't run alongside Dolphin netplay";
+    else if (orca_profile && !boot->riivolution_patches.empty())
+      error = "Orca: Riivolution patches are not allowed in a session";
+    else if (orca_profile && Config::Get(Config::MAIN_GFX_BACKEND) == "Software Renderer")
+      error = "Orca: the Software renderer can't keep EFB copies on the GPU";
+    if (!error.empty())
     {
-      PanicAlertFmtT("{0}", error);
+      PanicAlertFmt("{}", error);
       return false;
     }
-    if (Orca::TestOverridesActive())
-      WARN_LOG_FMT(BOOT, "Orca: TEST overrides active (ORCA_TEST_PADS={}); not for real sessions",
-                   Orca::TestPads());
-    Config::AddLayer(Orca::GenerateConfigLoader(*profile));
-    NOTICE_LOG_FMT(BOOT,
-                   "Orca: profile {} rev {}: CPUThread={} CPUCore={} RTC={}:{} SI={},{},{},{} "
-                   "EFBToTexture={} XFBToTexture={} EFBAccess={} BBox={}",
-                   profile->game_id, profile->revision, Config::Get(Config::MAIN_CPU_THREAD),
-                   static_cast<int>(Config::Get(Config::MAIN_CPU_CORE)),
-                   Config::Get(Config::MAIN_CUSTOM_RTC_ENABLE),
-                   Config::Get(Config::MAIN_CUSTOM_RTC_VALUE),
-                   static_cast<int>(Config::Get(Config::GetInfoForSIDevice(0))),
-                   static_cast<int>(Config::Get(Config::GetInfoForSIDevice(1))),
-                   static_cast<int>(Config::Get(Config::GetInfoForSIDevice(2))),
-                   static_cast<int>(Config::Get(Config::GetInfoForSIDevice(3))),
-                   Config::Get(Config::GFX_HACK_SKIP_EFB_COPY_TO_RAM),
-                   Config::Get(Config::GFX_HACK_SKIP_XFB_COPY_TO_RAM),
-                   Config::Get(Config::GFX_HACK_EFB_ACCESS_ENABLE),
-                   Config::Get(Config::GFX_HACK_BBOX_ENABLE));
+    Config::AddLayer(Orca::GenerateConfigLoader(*orca_profile));
   }
 
   if (NetPlay::IsNetPlayRunning())
@@ -186,6 +175,17 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
     {
       Config::SetCurrent(Config::GFX_SUGGESTED_ASPECT_RATIO, AspectMode::ForceStandard);
     }
+  }
+
+  // Orca: nothing set after the forced layer may outrank it.
+  if (orca_profile)
+  {
+    if (const auto problem = Orca::VerifyForcedSettings(*orca_profile))
+    {
+      PanicAlertFmt("{}", *problem);
+      return false;
+    }
+    NOTICE_LOG_FMT(BOOT, "{}", Orca::DescribeForcedSettings(*orca_profile));
   }
 
   system.Initialize();

@@ -11,6 +11,7 @@ void VideoCommon_DoState(PointerWrap& p);
 // BP/CP/XF registers, TMEM, PE tokens and interrupts and the emulated GPU timing stay exactly as in a
 // rendered frame; vertex loading, draws, EFB/XFB copies, clears and presentation are skipped. A
 // skipped texture-only copy still writes its constant placeholder to RAM, so RAM matches a rendered
-// frame. Refused in dual core (the GPU thread would apply it to another frame's commands).
+// frame. Refused in dual core. In single core the GPU still runs in time slots, so a change at the
+// frame boundary can also cover the tail of the previous frame's commands; RAM is unaffected.
 void VideoCommon_SetSkipRender(bool skip);
 bool VideoCommon_IsSkippingRender();

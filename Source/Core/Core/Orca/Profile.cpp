@@ -5,13 +5,16 @@
 
 #include <cstdlib>
 #include <fstream>
-#include <sstream>
 
 #include <fmt/format.h>
 
+#include "Common/CPUDetect.h"
 #include "Common/FileUtil.h"
 #include "Common/StringUtil.h"
+#include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/MainSettings.h"
+#include "Core/Config/SYSCONFSettings.h"
+#include "Core/Config/SessionSettings.h"
 #include "Core/Config/WiimoteSettings.h"
 #include "Core/HW/SI/SI_Device.h"
 #include "Core/HW/Wiimote.h"
@@ -19,21 +22,132 @@
 
 namespace Orca
 {
+namespace
+{
+bool EnvIs(const char* name, const char* value)
+{
+  const char* v = std::getenv(name);
+  return v && std::string(v) == value;
+}
+
+// Decimal, or hex with a 0x prefix (no octal: a leading zero is still decimal).
+bool ParseNumber(const std::string& text, u32* out)
+{
+  if (text.starts_with("0x") || text.starts_with("0X"))
+    return TryParse(text, out, 16);
+  return TryParse(text, out, 10);
+}
+
+// Every setting an Orca session forces, whatever the game. Values are applied by ForcedConfigLoader
+// and checked by VerifyForcedSettings, so the two lists can't drift apart.
+template <typename F>
+void ForEachUniversalSetting(F&& f)
+{
+  // CPU and timing. Same JIT on both machines: matchmaking pairs players on the same platform.
+  f(Config::MAIN_CPU_THREAD, false);
+  f(Config::MAIN_CPU_CORE, PowerPC::DefaultCPUCore());
+  f(Config::MAIN_OVERCLOCK_ENABLE, false);
+  f(Config::MAIN_OVERCLOCK, 1.0f);
+  f(Config::MAIN_VI_OVERCLOCK_ENABLE, false);
+  f(Config::MAIN_MMU, false);
+  f(Config::MAIN_FASTMEM, Config::MAIN_FASTMEM.GetDefaultValue());
+  f(Config::MAIN_ACCURATE_NANS, false);
+  f(Config::MAIN_ACCURATE_FMADDS, Config::MAIN_ACCURATE_FMADDS.GetDefaultValue());
+  f(Config::MAIN_FPRF, false);
+  f(Config::MAIN_FLOAT_EXCEPTIONS, false);
+  f(Config::MAIN_DIVIDE_BY_ZERO_EXCEPTIONS, false);
+  f(Config::MAIN_DISABLE_ICACHE, false);
+  f(Config::MAIN_ACCURATE_CPU_CACHE, false);
+  f(Config::MAIN_JIT_FOLLOW_BRANCH, Config::MAIN_JIT_FOLLOW_BRANCH.GetDefaultValue());
+  f(Config::MAIN_SYNC_ON_SKIP_IDLE, Config::MAIN_SYNC_ON_SKIP_IDLE.GetDefaultValue());
+  // Fused multiply-add changes float results. ARM64 always has it; on x86-64 it follows the host,
+  // so it belongs in the lobby compatibility key (Phase 7).
+  f(Config::SESSION_USE_FMA, cpu_info.bFMA);
+  f(Config::MAIN_RAM_OVERRIDE_ENABLE, false);
+  f(Config::MAIN_CUSTOM_RTC_ENABLE, true);
+  f(Config::MAIN_CUSTOM_RTC_VALUE, Config::MAIN_CUSTOM_RTC_VALUE.GetDefaultValue());
+  f(Config::MAIN_DSP_HLE, true);
+  f(Config::MAIN_FAST_DISC_SPEED, false);
+  f(Config::MAIN_SKIP_IPL, true);
+  f(Config::SESSION_LOAD_IPL_DUMP, false);
+  f(Config::MAIN_ENABLE_CHEATS, false);
+  f(Config::MAIN_WII_SD_CARD, false);
+  f(Config::MAIN_BLUETOOTH_PASSTHROUGH_ENABLED, false);
+  f(Config::MAIN_OVERRIDE_REGION_SETTINGS, true);
+
+  // Wii system settings: the same on both machines rather than each user's.
+  f(Config::SYSCONF_LANGUAGE, 1u);  // English
+  f(Config::SYSCONF_COUNTRY, 49u);  // USA
+  f(Config::SYSCONF_WIDESCREEN, true);
+  f(Config::SYSCONF_PROGRESSIVE_SCAN, true);
+  f(Config::SYSCONF_PAL60, false);  // BootCore forces it off for NTSC Wii games anyway
+  f(Config::SYSCONF_SOUND_MODE, 1u);
+
+  // Controllers: GameCube pads only. 1v1 by default.
+  const bool four = TestPads() == 4;
+  f(Config::GetInfoForSIDevice(0), SerialInterface::SIDEVICE_GC_CONTROLLER);
+  f(Config::GetInfoForSIDevice(1), SerialInterface::SIDEVICE_GC_CONTROLLER);
+  f(Config::GetInfoForSIDevice(2),
+    four ? SerialInterface::SIDEVICE_GC_CONTROLLER : SerialInterface::SIDEVICE_NONE);
+  f(Config::GetInfoForSIDevice(3),
+    four ? SerialInterface::SIDEVICE_GC_CONTROLLER : SerialInterface::SIDEVICE_NONE);
+  for (int i = 0; i < 5; ++i)
+    f(Config::GetInfoForWiimoteSource(i), WiimoteSource::None);
+
+  // Graphics: copies stay on the GPU so RAM only ever gets a constant placeholder, never pixels; no
+  // CPU readbacks of GPU results; no graphics mods (they can skip copies).
+  f(Config::GFX_HACK_SKIP_EFB_COPY_TO_RAM, true);
+  f(Config::GFX_HACK_SKIP_XFB_COPY_TO_RAM, true);
+  f(Config::GFX_HACK_DISABLE_COPY_TO_VRAM, false);
+  f(Config::GFX_HACK_DEFER_EFB_COPIES, true);
+  f(Config::GFX_HACK_IMMEDIATE_XFB, false);
+  f(Config::GFX_HACK_EFB_ACCESS_ENABLE, false);
+  f(Config::GFX_HACK_BBOX_ENABLE, false);
+  f(Config::GFX_HACK_EFB_EMULATE_FORMAT_CHANGES, false);
+  f(Config::GFX_PERF_QUERIES_ENABLE, false);
+  f(Config::GFX_MODS_ENABLE, false);
+}
+
+class ForcedConfigLoader final : public Config::ConfigLayerLoader
+{
+public:
+  explicit ForcedConfigLoader(Profile profile)
+      : ConfigLayerLoader(Config::LayerType::Netplay), m_profile(std::move(profile))
+  {
+  }
+
+  void Load(Config::Layer* layer) override
+  {
+    ForEachUniversalSetting([layer](const auto& info, auto value) { layer->Set(info, value); });
+    for (const auto& [location, value] : m_profile.forced)
+      layer->Set(location, value);
+  }
+
+  void Save(Config::Layer*) override {}
+
+private:
+  Profile m_profile;
+};
+}  // namespace
+
 bool SessionActive()
 {
-  const char* v = std::getenv("ORCA_SESSION");
-  return v && *v == '1';
+  return EnvIs("ORCA_SESSION", "1");
 }
 
 int TestPads()
 {
-  const char* v = std::getenv("ORCA_TEST_PADS");
-  return v && std::atoi(v) == 4 ? 4 : 0;
+  return SessionActive() && EnvIs("ORCA_TEST_PADS", "4") ? 4 : 0;
+}
+
+bool TestSkipRender()
+{
+  return SessionActive() && EnvIs("ORCA_TEST_SKIP_RENDER", "1");
 }
 
 bool TestOverridesActive()
 {
-  return TestPads() != 0;
+  return TestPads() != 0 || TestSkipRender();
 }
 
 std::optional<Profile> LoadProfile(const std::string& game_id, u16 revision, std::string* error)
@@ -50,33 +164,51 @@ std::optional<Profile> LoadProfile(const std::string& game_id, u16 revision, std
   profile.game_id = game_id;
   std::optional<u16> profile_revision;
   std::string section, line;
+  int line_number = 0;
+  const auto fail = [&](std::string_view why) {
+    *error = fmt::format("Orca profile {} line {}: {}", path, line_number, why);
+    return std::nullopt;
+  };
   while (std::getline(in, line))
   {
+    ++line_number;
+    // Comments start a line, or follow whitespace.
+    if (const size_t hash = line.find('#');
+        hash == 0 || (hash != std::string::npos && (line[hash - 1] == ' ' || line[hash - 1] == '\t')))
+    {
+      line.resize(hash);
+    }
     line = std::string(StripWhitespace(line));
-    if (line.empty() || line[0] == '#' || line[0] == ';')
+    if (line.empty())
       continue;
     if (line.front() == '[' && line.back() == ']')
     {
       section = line.substr(1, line.size() - 2);
+      if (section != "Profile" && section != "Forced")
+        return fail(fmt::format("unknown section [{}]", section));
       continue;
     }
     const size_t eq = line.find('=');
     if (eq == std::string::npos)
-      continue;
+      return fail("expected <key> = <value>");
     const std::string key(StripWhitespace(line.substr(0, eq)));
     const std::string value(StripWhitespace(line.substr(eq + 1)));
+    if (key.empty() || value.empty())
+      return fail("empty key or value");
 
     if (section == "Profile")
     {
       u32 number = 0;
-      if (!TryParse(value, &number))
-        continue;
+      if (!ParseNumber(value, &number))
+        return fail(fmt::format("{} is not a number", value));
       if (key == "Revision")
         profile_revision = static_cast<u16>(number);
       else if (key == "FrameHook")
         profile.frame_hook = number;
       else if (key == "FrameHookWord")
         profile.frame_hook_word = number;
+      else
+        return fail(fmt::format("unknown key {}", key));
     }
     else if (section == "Forced")
     {
@@ -84,13 +216,17 @@ std::optional<Profile> LoadProfile(const std::string& game_id, u16 revision, std
       const size_t dot1 = key.find('.');
       const size_t dot2 = dot1 == std::string::npos ? dot1 : key.find('.', dot1 + 1);
       if (dot2 == std::string::npos)
-        continue;
+        return fail(fmt::format("{} is not <System>.<Section>.<Key>", key));
       const std::optional<Config::System> system = Config::GetSystemFromName(key.substr(0, dot1));
       if (!system)
-        continue;
+        return fail(fmt::format("unknown system in {}", key));
       profile.forced.emplace_back(Config::Location{*system, key.substr(dot1 + 1, dot2 - dot1 - 1),
                                                    key.substr(dot2 + 1)},
                                   value);
+    }
+    else
+    {
+      return fail("setting outside a section");
     }
   }
 
@@ -109,43 +245,49 @@ std::optional<Profile> LoadProfile(const std::string& game_id, u16 revision, std
   return profile;
 }
 
-namespace
-{
-class OrcaConfigLayerLoader final : public Config::ConfigLayerLoader
-{
-public:
-  explicit OrcaConfigLayerLoader(Profile profile)
-      : ConfigLayerLoader(Config::LayerType::Netplay), m_profile(std::move(profile))
-  {
-  }
-
-  void Load(Config::Layer* layer) override
-  {
-    for (const auto& [location, value] : m_profile.forced)
-      layer->Set(location, value);
-    // Same JIT on both machines (matchmaking pairs players on the same platform).
-    layer->Set(Config::MAIN_CPU_CORE, PowerPC::DefaultCPUCore());
-    // GameCube controllers only.
-    for (int i = 0; i < 5; ++i)
-      layer->Set(Config::GetInfoForWiimoteSource(i), WiimoteSource::None);
-    // Test harness only: ORCA_TEST_PADS=4 connects ports 3 and 4 too, for 4-player desync coverage.
-    // Never set by the desktop app; a session with it must not join a lobby (TestOverridesActive).
-    if (TestPads() == 4)
-    {
-      layer->Set(Config::GetInfoForSIDevice(2), SerialInterface::SIDEVICE_GC_CONTROLLER);
-      layer->Set(Config::GetInfoForSIDevice(3), SerialInterface::SIDEVICE_GC_CONTROLLER);
-    }
-  }
-
-  void Save(Config::Layer*) override {}
-
-private:
-  Profile m_profile;
-};
-}  // namespace
-
 std::unique_ptr<Config::ConfigLayerLoader> GenerateConfigLoader(const Profile& profile)
 {
-  return std::make_unique<OrcaConfigLayerLoader>(profile);
+  return std::make_unique<ForcedConfigLoader>(profile);
+}
+
+std::optional<std::string> VerifyForcedSettings(const Profile& profile)
+{
+  std::vector<Config::Location> locations;
+  ForEachUniversalSetting(
+      [&locations](const auto& info, auto) { locations.push_back(info.GetLocation()); });
+  for (const auto& [location, value] : profile.forced)
+    locations.push_back(location);
+
+  for (const Config::Location& location : locations)
+  {
+    const Config::LayerType active = Config::GetActiveLayerForConfig(location);
+    if (active != Config::LayerType::Netplay)
+    {
+      return fmt::format("Orca: {}.{}.{} is overridden by another config layer ({})",
+                         Config::GetSystemName(location.system), location.section, location.key,
+                         static_cast<int>(active));
+    }
+  }
+  return std::nullopt;
+}
+
+std::string DescribeForcedSettings(const Profile& profile)
+{
+  return fmt::format("Orca: profile {} rev {}{}: CPUThread={} CPUCore={} FMA={} RTC={}:{} "
+                     "SI={},{},{},{} EFBToTexture={} XFBToTexture={} EFBAccess={} BBox={}",
+                     profile.game_id, profile.revision,
+                     TestOverridesActive() ? " (TEST overrides active, not for real sessions)" : "",
+                     Config::Get(Config::MAIN_CPU_THREAD),
+                     static_cast<int>(Config::Get(Config::MAIN_CPU_CORE)),
+                     Config::Get(Config::SESSION_USE_FMA), Config::Get(Config::MAIN_CUSTOM_RTC_ENABLE),
+                     Config::Get(Config::MAIN_CUSTOM_RTC_VALUE),
+                     static_cast<int>(Config::Get(Config::GetInfoForSIDevice(0))),
+                     static_cast<int>(Config::Get(Config::GetInfoForSIDevice(1))),
+                     static_cast<int>(Config::Get(Config::GetInfoForSIDevice(2))),
+                     static_cast<int>(Config::Get(Config::GetInfoForSIDevice(3))),
+                     Config::Get(Config::GFX_HACK_SKIP_EFB_COPY_TO_RAM),
+                     Config::Get(Config::GFX_HACK_SKIP_XFB_COPY_TO_RAM),
+                     Config::Get(Config::GFX_HACK_EFB_ACCESS_ENABLE),
+                     Config::Get(Config::GFX_HACK_BBOX_ENABLE));
 }
 }  // namespace Orca

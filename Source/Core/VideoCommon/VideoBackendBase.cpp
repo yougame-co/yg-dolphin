@@ -3,8 +3,6 @@
 
 #include "VideoCommon/VideoBackendBase.h"
 
-#include <cstdlib>
-
 #include <algorithm>
 #include <cstring>
 #include <memory>
@@ -25,6 +23,7 @@
 #include "Core/DolphinAnalytics.h"
 #include "Core/HW/SystemTimers.h"
 #include "Core/HW/VideoInterface.h"
+#include "Core/Orca/Profile.h"
 #include "Core/System.h"
 
 // TODO: ugly
@@ -314,12 +313,8 @@ bool VideoBackendBase::InitializeShared(std::unique_ptr<AbstractGfx> gfx,
 
   // do not initialize again for the config window
   m_initialized = true;
-  // ORCA_TEST_SKIP_RENDER=1 (test only): skip host rendering for the whole run, to exercise the
-  // skip path without the rollback session.
-  {
-    const char* test_skip = std::getenv("ORCA_TEST_SKIP_RENDER");
-    VideoCommon_SetSkipRender(test_skip && *test_skip == '1');
-  }
+  // Off until the rollback session asks; ORCA_TEST_SKIP_RENDER=1 (test only) skips the whole run.
+  VideoCommon_SetSkipRender(Orca::TestSkipRender());
 
   g_gfx = std::move(gfx);
   g_vertex_manager = std::move(vertex_manager);

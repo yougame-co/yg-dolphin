@@ -26,6 +26,7 @@
 #include "Core/IOS/Uids.h"
 #include "Core/Movie.h"
 #include "Core/NetPlayClient.h"
+#include "Core/Orca/Profile.h"
 #include "Core/SysConf.h"
 #include "Core/System.h"
 
@@ -142,6 +143,15 @@ static void InitializeDeterministicWiiSaves(FS::FileSystem* session_fs,
       const std::string path = Common::GetTitleDataPath(title_id) + "/banner.bin";
       movie.SetClearSave(!configured_fs->GetMetadata(IOS::PID_KERNEL, IOS::PID_KERNEL, path));
     }
+  }
+
+  // Orca: both players start from the save prepared in the session's user directory (or none), never
+  // from anything else on their own NANDs.
+  if (Orca::SessionActive())
+  {
+    INFO_LOG_FMT(CORE, "Orca: copying save {:016x} into the session NAND", title_id);
+    CopySave(configured_fs.get(), session_fs, title_id);
+    return;
   }
 
   if ((NetPlay::IsNetPlayRunning() && SConfig::GetInstance().bCopyWiiSaveNetplay) ||
