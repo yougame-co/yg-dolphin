@@ -1,7 +1,9 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <filesystem>
 #include <string>
+#include <system_error>
 
 #ifndef _WIN32
 #include <unistd.h>
@@ -81,8 +83,15 @@ TEST(OrcaLaunch, ReadsTheFileNextToTheApp)
   const auto spec = Orca::ReadLaunchIni(dir, &error);
   ASSERT_TRUE(spec) << error;
   EXPECT_EQ(spec->profile, "PPLUS32");
-  EXPECT_NE(spec->executable.find("/pplus/Project+ Netplay Launcher.dol"), std::string::npos);
-  EXPECT_EQ(spec->executable.front(), '/');
+  // The loader's full path (separators and drive letters differ by platform): absolute, and the
+  // file written above.
+  const std::filesystem::path executable(spec->executable);
+  EXPECT_TRUE(executable.is_absolute()) << spec->executable;
+  EXPECT_EQ(executable.filename().string(), "Project+ Netplay Launcher.dol");
+  std::error_code ec;
+  EXPECT_TRUE(std::filesystem::equivalent(
+      executable, std::filesystem::path(dir) / "pplus" / "Project+ Netplay Launcher.dol", ec))
+      << spec->executable << " " << ec.message();
 
 #ifndef _WIN32
   // A symlink that leads out of the folder is refused like a ".." path.
