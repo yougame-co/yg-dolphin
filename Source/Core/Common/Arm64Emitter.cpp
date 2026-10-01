@@ -3874,6 +3874,8 @@ void ARM64FloatEmitter::ORR_BIC(u8 size, ARM64Reg Rd, u8 imm, u8 shift, u8 op)
     ASSERT_MSG(DYNA_REC, shift == 0 || shift == 8, "size16 only supports shift of 0 or 8! {}",
                shift);
 
+    // 16-bit lanes are cmode 10x1 (0xx1 is the 32-bit form).
+    cmode |= 8;
     if (shift == 8)
       cmode |= 2;
   }

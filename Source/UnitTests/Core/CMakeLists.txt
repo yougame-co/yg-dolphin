@@ -38,6 +38,7 @@ elseif(_M_ARM_64)
     PowerPC/JitArm64/Fres.cpp
     PowerPC/JitArm64/Frsqrte.cpp
     PowerPC/JitArm64/MovI2R.cpp
+    PowerPC/JitArm64/VectorModImm.cpp
   )
 else()
   add_dolphin_test(PowerPCTest
