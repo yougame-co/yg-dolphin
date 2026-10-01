@@ -42,6 +42,7 @@ Packet Sample()
   packet.advantage = -17;
   packet.rtt = 64;
   packet.stalls = 3;
+  packet.hitches = 5;
   return packet;
 }
 
@@ -58,6 +59,7 @@ void ExpectSame(const Packet& a, const Packet& b)
   EXPECT_EQ(a.advantage, b.advantage);
   EXPECT_EQ(a.rtt, b.rtt);
   EXPECT_EQ(a.stalls, b.stalls);
+  EXPECT_EQ(a.hitches, b.hitches);
 }
 
 Packet Frames(int seat, int first, int count)
@@ -88,17 +90,20 @@ TEST(OrcaRoom, PacketRoundTrips)
   EXPECT_FALSE(got.advantage);
   EXPECT_FALSE(got.rtt);
   EXPECT_EQ(got.stalls, -1);
+  EXPECT_EQ(got.hitches, -1);
   const std::string text = EncodePacket(bare);
   EXPECT_EQ(text.find("\"r\""), std::string::npos);
   EXPECT_EQ(text.find("\"v\""), std::string::npos);
   EXPECT_EQ(text.find("\"l\""), std::string::npos);
   EXPECT_EQ(text.find("\"n\""), std::string::npos);
+  EXPECT_EQ(text.find("\"j\""), std::string::npos);
 
   // A lead of zero, a quiet window and an instant relay still travel.
   bare.resimulated = 0;
   bare.advantage = 0;
   bare.rtt = 0;
   bare.stalls = 0;
+  bare.hitches = 0;
   ASSERT_TRUE(DecodePacket(EncodePacket(bare), &got));
   ExpectSame(bare, got);
 }
@@ -129,9 +134,9 @@ TEST(OrcaRoom, RejectsMalformedPackets)
   EXPECT_FALSE(DecodePacket(with("[130,-1,-1,-1]", "[130,-1,-1]"), &got));
   EXPECT_FALSE(DecodePacket(with("[130,-1,-1,-1]", "[130,-2,-1,-1]"), &got));
   EXPECT_FALSE(DecodePacket(with("\"h\":\"fedcba9876543210\"", "\"h\":\"fedcba98\""), &got));
-  // Telemetry (re-simulation count, lead, round trip, stalls) never refuses a packet, which would
-  // end the match: out of range is clamped, a fraction truncated, anything not a number ignored.
-  // (Exponents never reach the parser: SafeToParse refuses them for every field.)
+  // Telemetry (re-simulation count, lead, round trip, stalls, hitches) never refuses a packet,
+  // which would end the match: out of range is clamped, a fraction truncated, anything not a number
+  // ignored. (Exponents never reach the parser: SafeToParse refuses them for every field.)
   const auto telemetry = [&](const std::string& from, const std::string& to) {
     Packet out;
     EXPECT_TRUE(DecodePacket(with(from, to), &out)) << to;
@@ -152,6 +157,9 @@ TEST(OrcaRoom, RejectsMalformedPackets)
   EXPECT_EQ(telemetry("\"n\":3", "\"n\":2.5").stalls, 2);
   EXPECT_EQ(telemetry("\"n\":3", "\"n\":999999999999").stalls, 1 << 20);
   EXPECT_EQ(telemetry("\"n\":3", "\"n\":\"3\"").stalls, -1);
+  EXPECT_EQ(telemetry("\"j\":5", "\"j\":-2").hitches, 0);
+  EXPECT_EQ(telemetry("\"j\":5", "\"j\":999999999999").hitches, 1 << 20);
+  EXPECT_EQ(telemetry("\"j\":5", "\"j\":true").hitches, -1);
 
   // What would crash the JSON parser: deep nesting, and numbers that overflow a double.
   EXPECT_FALSE(DecodePacket(std::string(5000, '[') + std::string(5000, ']'), &got));

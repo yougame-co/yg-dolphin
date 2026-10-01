@@ -1,6 +1,7 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <array>
 #include <climits>
 #include <deque>
@@ -19,6 +20,7 @@
 #include <cstdlib>
 #include <string>
 
+#include <fmt/format.h>
 #include <gtest/gtest.h>
 #include <picojson.h>
 
@@ -393,6 +395,12 @@ public:
     int input_every = 7;
     // The room thread's least time between two sends (YouGameRoom's SEND_GAP).
     int send_gap_ms = 10;
+    // Host hitches (a disc read, a shader compile): the emulator stops for 5-20 frames, about once
+    // every hitch_every_s seconds (0: never), plus hitch_burst more in the first ten seconds (boot
+    // and menus). Each slow frame is reported to the session like OnlineMatch does.
+    int hitch_every_s = 0;
+    int hitch_burst = 0;
+    bool report_hitches = true;
   };
 
   RelayMatch(Config config, const Side& a, const Side& b)
@@ -424,6 +432,7 @@ public:
 
   const Session& SessionOf(int i) const { return m_peers[i]->session; }
   const FakeGame& GameOf(int i) const { return m_peers[i]->game; }
+  int HitchesOf(int i) const { return m_peers[i]->hitches_reported; }
 
   int CompareConfirmed() const
   {
@@ -454,10 +463,10 @@ public:
     {
       const Stats& s = SessionOf(i).GetStats();
       std::printf("[ %s %c ] rollbacks %d, re-run %d, deepest %d, stalls %d, waits %d, delay %d "
-                  "(+%d -%d reverted %d), advantage %.2f, round trip %d ms\n",
+                  "(+%d -%d reverted %d), advantage %.2f, round trip %d ms, hitches %d\n",
                   name, 'A' + i, s.rollbacks, s.resimulated_frames, s.deepest_rollback, s.stalls,
                   s.waits, s.delay, s.delay_raises, s.delay_lowers, s.delay_reverts,
-                  s.frame_advantage, m_peers[i]->rtt);
+                  s.frame_advantage, m_peers[i]->rtt, m_peers[i]->hitches_reported);
     }
   }
 
@@ -490,6 +499,22 @@ private:
       // The room's start message reaches each machine after its own way from the relay.
       next_call = start;
       pace = start;
+      std::mt19937 rng(77 + index);
+      const auto hitch = [&rng](Micros at) {
+        return std::pair{at, std::uniform_int_distribution<int>(5, 20)(rng) * FRAME_US};
+      };
+      for (int i = 0; i < s.hitch_burst; ++i)
+      {
+        const Micros at = start + std::uniform_int_distribution<Micros>(0, 10'000 * MS)(rng);
+        hitches.push_back(hitch(at));
+      }
+      for (Micros at = start; s.hitch_every_s > 0 && at < 600'000 * MS;)
+      {
+        at += std::uniform_int_distribution<Micros>(s.hitch_every_s * 500 * MS,
+                                                    s.hitch_every_s * 1500 * MS)(rng);
+        hitches.push_back(hitch(at));
+      }
+      std::sort(hitches.begin(), hitches.end());
     }
     Side side;
     FakeGame game;
@@ -512,6 +537,13 @@ private:
     u32 rtt_sequence = 0;
     u32 fed_sequence = 0;
     std::deque<Wire> held_out, uplink, downlink, held_in;
+    // When each hitch starts and how long it stops the emulator; the next one; when the last
+    // frame's boundary returned (OnlineMatch times frames from there, so stalls and waits don't
+    // count).
+    std::vector<std::pair<Micros, Micros>> hitches;
+    size_t next_hitch = 0;
+    std::optional<Micros> last_return;
+    int hitches_reported = 0;
   };
 
   Peer& At(int i) { return *m_peers[i]; }
@@ -602,6 +634,11 @@ private:
         p.in_step = true;
         p.waited = false;
         p.resets_before = p.game.m_pacing_resets;
+        if (p.side.report_hitches && p.last_return && at - *p.last_return > 2 * FRAME_US)
+        {
+          p.session.OnLocalHitch();
+          ++p.hitches_reported;
+        }
         if (p.rtt >= 0 && p.rtt_sequence != p.fed_sequence)
         {
           p.fed_sequence = p.rtt_sequence;
@@ -632,6 +669,7 @@ private:
         return;
       }
       p.in_step = false;
+      p.last_return = at;
       const bool reset = p.waited || p.game.m_pacing_resets != p.resets_before;
       p.completed = p.game.Run();
       if (p.session.Resimulating())
@@ -641,6 +679,9 @@ private:
       }
       p.pace = std::max((reset ? at : p.pace) + p.period, at - 100 * MS);
       p.next_call = std::max(p.pace, at);
+      // A hitch: this frame takes that much longer; the throttle makes up what it can afterwards.
+      if (p.next_hitch < p.hitches.size() && p.hitches[p.next_hitch].first <= at)
+        p.next_call += p.hitches[p.next_hitch++].second;
     }
   }
 
@@ -1214,6 +1255,7 @@ TEST(OrcaSession, HostilePeerTelemetryIsBounded)
       packet.advantage = INT_MIN;
       packet.rtt = INT_MAX;
       packet.stalls = INT_MAX;
+      packet.hitches = INT_MAX;
       return {packet};
     }
     bool Connected() const override { return true; }
@@ -1309,32 +1351,52 @@ TEST(OrcaSession, DepthOneRollbacksLoadTheCorrectedState)
   EXPECT_GT(compared, 300);
 }
 
-TEST(OrcaSessionDelay, AnyStallRaisesEverySideAndHolds)
+namespace
 {
-  // One late burst on B's way to A: A stalls once and B never does. B's delay is the one that would
-  // have kept A from stalling, so both raise one frame (B on A's report), and neither comes back
-  // down until STALL_HOLD_WINDOWS (30) windows have passed without a stall.
-  Match match(Config{}, 1, 0);
-  match.Play(600);
-  match.net.extra[0] = 12;
+// A burst of B's packets reaching A ten frames late against a margin of eight: A stalls once,
+// briefly (a longer one leaves A behind, and B's rollbacks while time sync catches up would raise
+// the delay on their own).
+// With `hitch`, B's emulator froze instead, and B reports it (Session::OnLocalHitch).
+void LateBurst(Match& match, bool hitch = false)
+{
+  if (hitch)
+    match.b->session.OnLocalHitch();
+  match.net.extra[0] = 10;
   match.Play(1);
   match.net.extra[0] = 0;
-  match.Play(119);
+}
+}  // namespace
+
+TEST(OrcaSessionDelay, StallsRaiseOnARateThenDecay)
+{
+  // After the warmup, one late burst stalls A once: a one-off is a hitch as often as the link, and
+  // one frame of delay would not cover it, so nothing moves. Two in consecutive seconds do: both
+  // sides raise (B on A's report; B's delay is the one that keeps A from stalling).
+  Match match(Config{}, 1, 0);
+  match.Play(700);
+  LateBurst(match);
+  match.Play(299);
   ExpectClean(match);
-  const Stats& a = match.a->session.GetStats();
-  const Stats& b = match.b->session.GetStats();
-  EXPECT_EQ(a.stalls, 1);
-  EXPECT_EQ(b.stalls, 0);
+  EXPECT_EQ(match.a->session.GetStats().stalls, 1);
+  EXPECT_EQ(match.b->session.GetStats().stalls, 0);
+  for (const Player* p : {match.a.get(), match.b.get()})
+    EXPECT_EQ(p->session.GetStats().delay_raises, 0);
+
+  LateBurst(match);
+  match.Play(59);
+  LateBurst(match);
+  match.Play(119);
+  EXPECT_EQ(match.a->session.GetStats().stalls, 3);
   for (const Player* p : {match.a.get(), match.b.get()})
   {
     EXPECT_EQ(p->session.Delay(), 3);
     EXPECT_EQ(p->session.GetStats().delay_raises, 1);
   }
-  // Quiet since (no rollbacks at one frame of latency): ten quiet windows would have lowered it.
-  match.Play(60 * 25);
+  // Then quiet: a short hold, and the ordinary quiet-window rule brings it back down.
+  match.Play(60 * 6);
   for (const Player* p : {match.a.get(), match.b.get()})
     EXPECT_EQ(p->session.Delay(), 3);
-  match.Play(60 * 10);
+  match.Play(60 * 8);
   ExpectClean(match);
   for (const Player* p : {match.a.get(), match.b.get()})
   {
@@ -1342,8 +1404,68 @@ TEST(OrcaSessionDelay, AnyStallRaisesEverySideAndHolds)
     EXPECT_EQ(p->session.GetStats().delay_lowers, 1);
     EXPECT_EQ(p->session.GetStats().delay_reverts, 0);
   }
-  EXPECT_EQ(a.stalls, 1);
-  EXPECT_GT(match.CompareConfirmed(), 2800);
+  EXPECT_GT(match.CompareConfirmed(), 1500);
+}
+
+TEST(OrcaSessionDelay, OneHiccupBothWaysRaisesNothing)
+{
+  // The relay holds both directions at once: each side stalls once, and hears of the other's. That
+  // is one event, not two stalls in a row.
+  Match match(Config{}, 1, 0);
+  match.Play(700);
+  match.net.extra = {10, 10};
+  match.Play(1);
+  match.net.extra = {0, 0};
+  match.Play(299);
+  ExpectClean(match);
+  for (const Player* p : {match.a.get(), match.b.get()})
+  {
+    EXPECT_EQ(p->session.GetStats().stalls, 1);
+    EXPECT_EQ(p->session.GetStats().delay_raises, 0);
+  }
+}
+
+TEST(OrcaSessionDelay, StallsOnAPeerHitchRaiseNothing)
+{
+  // The same stalls in consecutive seconds, each lined up with a hitch B reports: no delay cures
+  // a frozen emulator, so neither side raises.
+  Match match(Config{}, 1, 0);
+  match.Play(700);
+  for (int i = 0; i < 4; ++i)
+  {
+    LateBurst(match, true);
+    match.Play(59);
+  }
+  match.Play(120);
+  ExpectClean(match);
+  EXPECT_EQ(match.a->session.GetStats().stalls, 4);
+  for (const Player* p : {match.a.get(), match.b.get()})
+  {
+    EXPECT_EQ(p->session.Delay(), 2);
+    EXPECT_EQ(p->session.GetStats().delay_raises, 0);
+  }
+  EXPECT_GT(match.CompareConfirmed(), 800);
+}
+
+TEST(OrcaSessionDelay, WarmupStallsNeedAHigherRate)
+{
+  // In the first ten seconds (boot, menus), two stalls a second apart raise nothing (after the
+  // warmup they would); a third within three seconds still does, as a link too slow would make.
+  for (const int bursts : {2, 3})
+  {
+    Match match(Config{}, 1, 0);
+    match.Play(200);
+    for (int i = 0; i < bursts; ++i)
+    {
+      LateBurst(match);
+      match.Play(59);
+    }
+    match.Play(120);
+    ExpectClean(match);
+    EXPECT_EQ(match.a->session.GetStats().stalls, bursts);
+    for (const Player* p : {match.a.get(), match.b.get()})
+      EXPECT_EQ(p->session.GetStats().delay_raises, bursts == 3 ? 1 : 0) << "bursts " << bursts;
+  }
 }
 
 TEST(OrcaSessionDelay, RoundTripsFloorQuietLowers)
@@ -1435,8 +1557,9 @@ TEST(OrcaSessionRelay, SlowJitteryLinkStallsRarely)
 TEST(OrcaSessionRelay, JitterBothWaysEitherSideFast)
 {
   // The same link with A's jitter on both ways, and either clock fast: the fast side runs up to a
-  // frame ahead and is the one that stalls. Before, A stalled 654 times when its clock was the fast
-  // one, raising only its own delay (to 6) while B's stayed at 2.
+  // frame ahead and is the one that stalls. Before stalls counted from both sides, A stalled 654
+  // times when its clock was the fast one, raising only its own delay (to 6) while B's stayed at 2.
+  // Raising on a rate (two in three seconds) rather than on every stall costs a few more.
   for (const bool a_fast : {true, false})
   {
     RelayMatch::Side a = T3SideA();
@@ -1449,9 +1572,50 @@ TEST(OrcaSessionRelay, JitterBothWaysEitherSideFast)
     match.Print(a_fast ? "both ways, A fast" : "both ways, B fast");
     match.ExpectClean();
     for (int i = 0; i < 2; ++i)
-      EXPECT_LE(match.SessionOf(i).GetStats().stalls, 5) << "a_fast " << a_fast << " side " << i;
+      EXPECT_LE(match.SessionOf(i).GetStats().stalls, 10) << "a_fast " << a_fast << " side " << i;
     EXPECT_GT(match.CompareConfirmed(), 11000);
   }
+}
+
+TEST(OrcaSessionRelay, LanWithHitchesTracksTheLink)
+{
+  // 28 ms apart, but both emulators hitch (B, a Metal machine compiling shaders, twice as often),
+  // plus a burst of four each while booting. Every hitch longer than the rollback window stalls the
+  // other side, and no delay would have saved it. Before, any stall raised both sides and held
+  // 30 s: both delays climbed to 6, 100 ms of input lag on a LAN. Hitches reported and left out,
+  // the delay stays on the link. Unreported, the same hitches still ratchet it (a control: these
+  // stalls are frequent enough to pass for the link's).
+  RelayMatch::Side a, b;
+  a.relay_ms = b.relay_ms = 14;
+  a.speed = 1.01;
+  a.input_every = b.input_every = 40;
+  a.hitch_every_s = 12;
+  b.hitch_every_s = 6;
+  a.hitch_burst = b.hitch_burst = 4;
+  {
+    RelayMatch::Side quiet_a = a, quiet_b = b;
+    quiet_a.report_hitches = quiet_b.report_hitches = false;
+    RelayMatch unreported(Config{}, quiet_a, quiet_b);
+    unreported.Play(12000);
+    unreported.Print("LAN, hitches unreported");
+    unreported.ExpectClean();
+    EXPECT_GE(unreported.SessionOf(0).Delay(), 4);
+  }
+  RelayMatch match(Config{}, a, b);
+  match.Play(12000);
+  match.Print("LAN, hitches");
+  match.ExpectClean();
+  const int hitches = match.HitchesOf(0) + match.HitchesOf(1);
+  EXPECT_GT(match.HitchesOf(1), 25);
+  for (int i = 0; i < 2; ++i)
+  {
+    const Stats& stats = match.SessionOf(i).GetStats();
+    EXPECT_LE(match.SessionOf(i).Delay(), 3) << "side " << i;
+    EXPECT_EQ(stats.delay_raises, 0) << "side " << i;
+    // The stalls are the hitches': none beyond them.
+    EXPECT_LE(stats.stalls, hitches + 1) << "side " << i;
+  }
+  EXPECT_GT(match.CompareConfirmed(), 11000);
 }
 
 // Fuzz: random links, clock drift and wildly swinging round-trip reports (each side's delay jumps
@@ -1504,3 +1668,4 @@ TEST(OrcaSessionFuzz, BothSidesRunIdenticalInputsUnderDelaySwings)
     EXPECT_GT(match.CompareConfirmed(), 300);
   }
 }
+

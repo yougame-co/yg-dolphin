@@ -5,6 +5,7 @@
 
 #include <chrono>
 #include <memory>
+#include <optional>
 #include <string>
 
 #include <fmt/format.h>
@@ -33,6 +34,9 @@ struct Match
   // The frame the current boundary completes (-1 at the first boundary).
   int running = -1;
   u32 round_trip_sequence = 0;
+  // When the last boundary handed control back to the emulator: the next boundary times the frame
+  // from there, leaving out the session's own stalls and waits.
+  std::optional<std::chrono::steady_clock::time_point> last_return;
   Common::EventHook on_state_changed;
 };
 
@@ -50,6 +54,9 @@ bool Stopping(Core::System& system)
   return Core::GetState(system) == Core::State::Stopping ||
          system.GetCPU().GetState() != CPU::State::Running;
 }
+
+// Two frame periods at 60 Hz: a frame slower than this was a hitch.
+constexpr std::chrono::microseconds HITCH_TIME{33'334};
 
 // A round-trip sample the session has not seen yet (the room numbers its samples).
 std::optional<int> NewRoundTrip(u32* last_sequence)
@@ -83,6 +90,7 @@ std::optional<int> OnBoundary(Core::System& system,
     match.local_seat = 0;
     match.running = -1;
     match.round_trip_sequence = 0;
+    match.last_return.reset();
   }
   if (match.finished)
     return std::nullopt;
@@ -130,10 +138,16 @@ std::optional<int> OnBoundary(Core::System& system,
   // Round trips feed the session's adaptive input delay.
   if (const auto round_trip_ms = NewRoundTrip(&match.round_trip_sequence))
     match.session->OnRoundTrip(*round_trip_ms);
+  // A frame that took more than two frame periods of wall time was a hitch on this machine (a disc
+  // read, a shader compile): the other side stalls on it, and no input delay would have helped.
+  const auto now = std::chrono::steady_clock::now();
+  if (match.last_return && now - *match.last_return > HITCH_TIME)
+    match.session->OnLocalHitch();
 
   const Orca::Net::Step step =
       StepSession(*match.session, *match.port, match.running, local_pad(match.local_seat),
                   [&system] { return Stopping(system); }, std::chrono::milliseconds{1});
+  match.last_return = std::chrono::steady_clock::now();
   if (step.kind == Orca::Net::StepKind::Run || step.kind == Orca::Net::StepKind::Rollback)
   {
     match.running = step.frame;

@@ -24,9 +24,23 @@ constexpr int MAX_QUIET_WINDOWS = 1024;
 // samples to fade from the smoothed estimate; until then it only delays lowers.)
 constexpr int START_SECONDS = 3;
 constexpr int FLOOR_SAMPLES = 8;
-// A stall is the worst thing a player sees: a delay raised for one is kept this many windows
-// without a stall anywhere before quiet windows may lower it.
-constexpr int STALL_HOLD_WINDOWS = 30;
+// Stalls drive the delay only on a rate: STALLS_TO_RAISE counted stalls (here and reported) in the
+// last STALL_WINDOWS windows. A one-off stall is as often a hitch the frame timer missed as the
+// link, and one frame of delay can't cover a hitch; a link too slow for the delay stalls again and
+// again. A delay raised for stalls then holds STALL_HOLD_WINDOWS stall-free windows before the
+// quiet-window rule may lower it again.
+constexpr int STALL_WINDOWS = 3;
+constexpr int STALLS_TO_RAISE = 2;
+constexpr int STALL_HOLD_WINDOWS = 8;
+// The first seconds of a session boot the game and load menus from the disc, and stall now and
+// then on the emulator rather than the link: until WARMUP_SECONDS, a raise takes stalls several
+// times a second (WARMUP_STALLS_TO_RAISE in STALL_WINDOWS windows), which a link far too slow for
+// the delay still makes.
+constexpr int WARMUP_SECONDS = 10;
+constexpr int WARMUP_STALLS_TO_RAISE = 3;
+// A stall that began within this many frames after a hitch on any machine (or during which one was
+// heard of) is the hitch's, not the link's.
+constexpr int HITCH_FRAMES = 30;
 // No working relay is ten seconds away.
 constexpr int MAX_RTT_MS = 10000;
 // Time sync averages this many frames, waits at most once per that many, and only when it is more
@@ -144,13 +158,16 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad)
     if (!m_stalling)
     {
       ++m_stats.stalls;
-      // Before every peer's first input arrives, a stall is the trip itself, not the delay.
-      if (ConfirmedFrame() >= 0)
-        ++m_link_stalls;
+      m_stall_frame = m_frame;
+      m_stall_after_input = ConfirmedFrame() >= 0;
     }
     m_stalling = true;
     return {StepKind::Stall, m_frame};
   }
+  // A stall just ended: judged now, when the packet that ended it (and a hitch it reports) is in.
+  // Waiting for a peer's first packet is the trip, not the delay.
+  if (m_stalling && m_stall_after_input && m_last_hitch_frame < m_stall_frame - HITCH_FRAMES)
+    ++m_link_stalls;
   // After a stall or a wait, the time it held is not made up.
   if (m_stalling || m_waiting)
     m_game.ResetPacing();
@@ -241,6 +258,12 @@ void Session::OnRoundTrip(int rtt_ms)
   ApplyStartDelay();
 }
 
+void Session::OnLocalHitch()
+{
+  ++m_hitches;
+  m_last_hitch_frame = m_frame;
+}
+
 void Session::ApplyStartDelay()
 {
   // In the first seconds the delay covers what the rollback window can't (LatencyDelay), and
@@ -299,11 +322,13 @@ void Session::AdaptDelay()
   // in a row lower it one frame towards input_delay. A lower that brings the trouble back is
   // undone at the next window, and the quiet needed before the next try doubles.
   //
-  // A stall is what players notice most, and one side's stalls come from the other side's delay
-  // (its inputs arrive too late for this side's window). So stalls count from both sides, like
-  // re-simulated frames: one here or one a peer reports raises every side's delay, and a raised
-  // delay then waits STALL_HOLD_WINDOWS windows without a stall anywhere before it may come down.
+  // One side's stalls come from the other side's delay (its inputs arrive too late for this side's
+  // window), so stalls count from both sides, like re-simulated frames. They raise on a rate
+  // (STALLS_TO_RAISE in STALL_WINDOWS windows, more during the warmup), not one at a time, and
+  // stalls lined up with a hitch on either machine, which no delay cures, don't count at all.
   const int mine = m_stats.resimulated_frames - m_window_resimulated;
+  // The window's stalls are the most any one side had: one relay hiccup that stalls both sides
+  // once is one event, not two.
   int stalls = m_link_stalls - m_window_link_stalls;
   m_window_start = m_frame;
   m_window_resimulated = m_stats.resimulated_frames;
@@ -313,9 +338,17 @@ void Session::AdaptDelay()
   {
     if (s == m_config.local_seat || m_peer_stalls[s] <= m_peer_stalls_seen[s])
       continue;
-    stalls += 1;
+    // No window holds more stalls than frames (a hostile count included).
+    stalls = std::max(stalls,
+                      std::min(m_peer_stalls[s] - m_peer_stalls_seen[s], m_config.frame_rate));
     m_peer_stalls_seen[s] = m_peer_stalls[s];
   }
+  static_assert(std::tuple_size_v<decltype(m_stall_history)> == STALL_WINDOWS);
+  std::shift_left(m_stall_history.begin(), m_stall_history.end(), 1);
+  m_stall_history.back() = stalls;
+  int recent = 0;
+  for (const int n : m_stall_history)
+    recent += n;
   if (m_config.max_delay <= m_config.input_delay)
     return;
 
@@ -328,9 +361,9 @@ void Session::AdaptDelay()
   }
   const int rate = m_config.frame_rate;
   const bool quiet = resimulated * 20 <= rate && stalls == 0;
-  if (stalls > 0)
-    m_stall_hold = STALL_HOLD_WINDOWS;
-  else if (m_stall_hold > 0)
+  const bool warm = m_frame >= WARMUP_SECONDS * rate;
+  const bool stalling = recent >= (warm ? STALLS_TO_RAISE : WARMUP_STALLS_TO_RAISE);
+  if (stalls == 0 && m_stall_hold > 0)
     --m_stall_hold;
 
   // On probation after a lower: trouble means the lower was wrong, straight back up. Two windows,
@@ -349,19 +382,28 @@ void Session::AdaptDelay()
       }
       m_tried_delay = 0;
       m_stats.delay = m_delay;
+      // Stalls that undid a lower don't raise again on top.
+      if (stalling)
+        m_stall_history.fill(0);
       return;
     }
     if (--m_probe_windows == 0)
       m_tried_delay = 0;
   }
 
-  if (resimulated * 2 >= rate || stalls > 0)
+  if (resimulated * 2 >= rate || stalling)
   {
     m_quiet_windows = 0;
     if (m_delay < m_config.max_delay)
     {
       ++m_delay;
       ++m_stats.delay_raises;
+    }
+    // The stalls behind a raise are spent: the next one needs a new run of them.
+    if (stalling)
+    {
+      m_stall_history.fill(0);
+      m_stall_hold = STALL_HOLD_WINDOWS;
     }
   }
   else if (quiet)
@@ -540,8 +582,13 @@ void Session::ReceivePackets()
       m_peer_resimulated[s] =
           std::min(packet.resimulated, m_config.frame_rate * m_config.max_rollback);
     }
-    // A running count: only ever grows (a lower number is a stale or hostile one).
+    // Running counts: they only ever grow (a lower number is a stale or hostile one).
     m_peer_stalls[s] = std::max(m_peer_stalls[s], packet.stalls);
+    if (packet.hitches > m_peer_hitches[s])
+    {
+      m_peer_hitches[s] = packet.hitches;
+      m_last_hitch_frame = m_frame;
+    }
     if (packet.checksum_frame)
       m_peer_checksums[*packet.checksum_frame] = packet.checksum;
   }
@@ -612,6 +659,7 @@ void Session::SendPacket()
   packet.current_frame = m_frame;
   packet.resimulated = m_last_resimulated;
   packet.stalls = m_link_stalls;
+  packet.hitches = m_hitches;
   std::optional<double> lead;
   for (int s = 0; s < m_config.seats; ++s)
   {
