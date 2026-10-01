@@ -14,6 +14,7 @@
 
 #include <AppKit/AppKit.h>
 #include <Carbon/Carbon.h>
+#include <CoreGraphics/CoreGraphics.h>
 #include <Foundation/Foundation.h>
 #include <array>
 #include <chrono>
@@ -106,6 +107,24 @@
 }
 @end
 
+// Embed mode: Orca's view over the YouGame app's player box. It never takes the keyboard or the
+// mouse: clicks fall through to the app's window under it, which stays the key window, and the
+// pads and keys are read from the HID state (Quartz, SDL) while the app says the game has focus.
+@interface EmbedWindow : NSWindow
+@end
+
+@implementation EmbedWindow
+- (BOOL)canBecomeKeyWindow
+{
+  return NO;
+}
+
+- (BOOL)canBecomeMainWindow
+{
+  return NO;
+}
+@end
+
 @interface WindowDelegate : NSObject <NSWindowDelegate>
 
 - (void)windowDidResize:(NSNotification*)notification;
@@ -133,7 +152,17 @@ public:
 
   WindowSystemInfo GetWindowSystemInfo() const override;
 
+protected:
+  void EmbedSetRect(const Embed::Rect& rect) override;
+  void EmbedSetVisible(bool visible) override;
+  void EmbedSetFocus(bool focus) override;
+
 private:
+  bool InitEmbedded();
+  // Embed mode, every main loop pass: follows the parent window (moved, resized, minimized, hidden,
+  // another Space, ordered over Orca's window) and works out whether the game has the input.
+  // Returns false once the parent window is gone.
+  bool TrackParent();
   void ProcessEvents();
   void UpdateWindowPosition();
   void HandleSaveStates(NSUInteger key, NSUInteger flags);
@@ -150,6 +179,14 @@ private:
   unsigned int m_window_width = Config::Get(Config::MAIN_RENDER_WINDOW_WIDTH);
   unsigned int m_window_height = Config::Get(Config::MAIN_RENDER_WINDOW_HEIGHT);
   bool m_window_fullscreen = Config::Get(Config::MAIN_FULLSCREEN);
+
+  // Embed mode.
+  bool m_embed_visible = true;      // "show" / "hide"
+  bool m_embed_focus = true;        // "focus" / "blur"
+  bool m_embed_on_screen = false;   // ordered in, over the parent
+  // The parent left the window list: stopping after a grace period (a window that was just made
+  // can take a moment to show up in it, and so can one between Spaces).
+  std::optional<std::chrono::steady_clock::time_point> m_parent_missing_since;
 };
 
 PlatformMacOS::~PlatformMacOS()
@@ -171,6 +208,9 @@ static void FinishLaunching()
 
 bool PlatformMacOS::Init()
 {
+  if (IsEmbedded())
+    return InitEmbedded();
+
   [Application sharedApplication];
 
   m_app_delegate = [[AppDelegate alloc] initWithPlatform:this];
@@ -242,8 +282,232 @@ void PlatformMacOS::MainLoop()
     UpdateRunningFlag();
     Core::HostDispatchJobs(Core::System::GetInstance());
     ProcessEvents();
-    UpdateWindowPosition();
+    if (IsEmbedded())
+      TrackParent();
+    else
+      UpdateWindowPosition();
   }
+}
+
+bool PlatformMacOS::InitEmbedded()
+{
+  [Application sharedApplication];
+  m_app_delegate = [[AppDelegate alloc] initWithPlatform:this];
+  [NSApp setDelegate:m_app_delegate];
+  // Part of the YouGame app: no Dock icon, not in the app switcher, no menu bar of its own.
+  [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
+  [NSApp setPlatform:this];
+  FinishLaunching();
+
+  const Embed::Rect& r = m_embed.rect;
+  m_window = [[EmbedWindow alloc] initWithContentRect:NSMakeRect(0, 0, r.w, r.h)
+                                            styleMask:NSWindowStyleMaskBorderless
+                                              backing:NSBackingStoreBuffered
+                                                defer:NO];
+  if (m_window == nil)
+    return false;
+  [m_window setReleasedWhenClosed:NO];
+  [m_window setOpaque:YES];
+  [m_window setBackgroundColor:[NSColor blackColor]];
+  [m_window setHasShadow:NO];
+  [m_window setIgnoresMouseEvents:YES];
+  [m_window setAnimationBehavior:NSWindowAnimationBehaviorNone];
+  // Wherever the app's window is, its own Space when it is full screen included; TrackParent hides
+  // it whenever the app's window is not on screen.
+  [m_window setCollectionBehavior:NSWindowCollectionBehaviorCanJoinAllSpaces |
+                                  NSWindowCollectionBehaviorFullScreenAuxiliary |
+                                  NSWindowCollectionBehaviorIgnoresCycle |
+                                  NSWindowCollectionBehaviorTransient];
+  [m_window setTitle:@"Orca"];
+  m_window_delegate = [[WindowDelegate alloc] init];
+  [m_window setDelegate:m_window_delegate];
+  [[m_window contentView] setWantsLayer:YES];
+
+  m_window_focus = false;
+  // A window the app made a moment ago may not be in the window list yet.
+  while (TrackParent() && m_parent_missing_since)
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  if (!IsRunning())
+  {
+    fprintf(stderr, "Orca: --parent %llu is not a window on this screen\n", m_embed.parent);
+    return false;
+  }
+  return true;
+}
+
+void PlatformMacOS::EmbedSetRect(const Embed::Rect&)
+{
+  TrackParent();
+}
+
+void PlatformMacOS::EmbedSetVisible(bool visible)
+{
+  m_embed_visible = visible;
+  TrackParent();
+}
+
+void PlatformMacOS::EmbedSetFocus(bool focus)
+{
+  m_embed_focus = focus;
+  TrackParent();
+}
+
+bool PlatformMacOS::TrackParent()
+{
+  @autoreleasepool
+  {
+    const CGWindowID parent = static_cast<CGWindowID>(m_embed.parent);
+    bool exists = false;
+    bool on_screen = false;
+    bool closed = false;
+    pid_t owner = 0;
+    CGRect bounds = CGRectZero;  // global display space: points, origin at the main display's top left
+    if (CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow, parent))
+    {
+      if (CFArrayGetCount(list) > 0)
+      {
+        auto* const info = static_cast<CFDictionaryRef>(CFArrayGetValueAtIndex(list, 0));
+        auto* const number =
+            static_cast<CFNumberRef>(CFDictionaryGetValue(info, kCGWindowNumber));
+        int id = 0;
+        if (number && CFNumberGetValue(number, kCFNumberIntType, &id) &&
+            static_cast<CGWindowID>(id) == parent)
+        {
+          exists = true;
+          auto* const onscreen =
+              static_cast<CFBooleanRef>(CFDictionaryGetValue(info, kCGWindowIsOnscreen));
+          on_screen = onscreen && CFBooleanGetValue(onscreen);
+          // A closed window can linger in the list, transparent (AppKit keeps it a while): it
+          // counts as gone.
+          auto* const alpha = static_cast<CFNumberRef>(CFDictionaryGetValue(info, kCGWindowAlpha));
+          double alpha_value = 1;
+          if (alpha && CFNumberGetValue(alpha, kCFNumberDoubleType, &alpha_value) &&
+              alpha_value <= 0)
+          {
+            exists = false;
+            closed = true;
+          }
+          auto* const pid = static_cast<CFNumberRef>(CFDictionaryGetValue(info, kCGWindowOwnerPID));
+          if (pid)
+            CFNumberGetValue(pid, kCFNumberIntType, &owner);
+          auto* const rect = static_cast<CFDictionaryRef>(CFDictionaryGetValue(info, kCGWindowBounds));
+          if (!rect || !CGRectMakeWithDictionaryRepresentation(rect, &bounds))
+            exists = false;
+        }
+      }
+      CFRelease(list);
+    }
+    // A minimized window is missing from that query (macOS 26), but not from the full list: it
+    // still exists, off screen.
+    if (!exists && !closed)
+    {
+      if (CFArrayRef all = CGWindowListCreate(kCGWindowListOptionAll, kCGNullWindowID))
+      {
+        const CFIndex count = CFArrayGetCount(all);
+        for (CFIndex i = 0; i < count && !exists; ++i)
+        {
+          exists = static_cast<CGWindowID>(reinterpret_cast<uintptr_t>(
+                       CFArrayGetValueAtIndex(all, i))) == parent;
+        }
+        CFRelease(all);
+      }
+      on_screen = false;
+    }
+
+    if (!exists)
+    {
+      if (m_embed_on_screen)
+        [m_window orderOut:nil];
+      m_embed_on_screen = false;
+      m_window_focus = false;
+      // The app closed its window without "quit" (or never had one): no game without a place to
+      // show it, and none running unseen with its sound on.
+      const auto now = std::chrono::steady_clock::now();
+      if (!m_parent_missing_since)
+        m_parent_missing_since = now;
+      if (now - *m_parent_missing_since < std::chrono::seconds(2))
+        return true;
+      if (IsRunning())
+        fprintf(stderr, "Orca: the app's window %u is gone, stopping\n", parent);
+      Stop();
+      return false;
+    }
+    m_parent_missing_since.reset();
+
+    const bool show = m_embed_visible && on_screen;
+    if (show)
+    {
+      // The rect is in the app window's pixels from the top left of its frame (title bar
+      // included): points are pixels over the backing scale of the screen the window is on.
+      // The screen with the largest part of the window, as Electron's getDisplayMatching picks it.
+      NSArray<NSScreen*>* const screens = [NSScreen screens];
+      const CGFloat primary_height = screens.count ? screens[0].frame.size.height : 0;
+      const NSRect cocoa_bounds =
+          NSMakeRect(bounds.origin.x, primary_height - bounds.origin.y - bounds.size.height,
+                     bounds.size.width, bounds.size.height);
+      CGFloat scale = screens.count ? screens[0].backingScaleFactor : 1;
+      CGFloat best_area = 0;
+      for (NSScreen* screen in screens)
+      {
+        const NSRect overlap = NSIntersectionRect(cocoa_bounds, screen.frame);
+        const CGFloat area = overlap.size.width * overlap.size.height;
+        if (area > best_area)
+        {
+          best_area = area;
+          scale = screen.backingScaleFactor;
+        }
+      }
+
+      const Embed::Rect& r = m_embed.rect;
+      const CGFloat w = r.w / scale;
+      const CGFloat h = r.h / scale;
+      const CGFloat top = bounds.origin.y + r.y / scale;
+      const NSRect frame =
+          NSMakeRect(bounds.origin.x + r.x / scale, primary_height - top - h, w, h);
+      if (!NSEqualRects([m_window frame], frame))
+        [m_window setFrame:frame display:YES animate:NO];
+
+      // Under the app's window means hidden: the app came to the front (a click on it, the
+      // switcher), which brings all of its windows over everyone else's. Back on top of it, and
+      // only of it: whatever else is over the app's window (its menus, other apps) stays over Orca.
+      bool below = !m_embed_on_screen || ![m_window isVisible];
+      if (!below)
+      {
+        if (CFArrayRef above = CGWindowListCreate(kCGWindowListOptionOnScreenAboveWindow,
+                                                  static_cast<CGWindowID>([m_window windowNumber])))
+        {
+          const CFIndex count = CFArrayGetCount(above);
+          for (CFIndex i = 0; i < count; ++i)
+          {
+            if (static_cast<CGWindowID>(reinterpret_cast<uintptr_t>(
+                    CFArrayGetValueAtIndex(above, i))) == parent)
+            {
+              below = true;
+              break;
+            }
+          }
+          CFRelease(above);
+        }
+      }
+      if (below)
+      {
+        [m_window orderWindow:NSWindowAbove relativeTo:static_cast<NSInteger>(parent)];
+        m_embed_on_screen = true;
+      }
+    }
+    else if (m_embed_on_screen)
+    {
+      [m_window orderOut:nil];
+      m_embed_on_screen = false;
+    }
+
+    // The keys and pads count while the app is in front, shows the game and gave it the focus.
+    const bool app_in_front =
+        owner != 0 &&
+        NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier == owner;
+    m_window_focus = show && m_embed_focus && app_in_front;
+  }
+  return true;
 }
 
 WindowSystemInfo PlatformMacOS::GetWindowSystemInfo() const
@@ -262,13 +526,17 @@ void PlatformMacOS::ProcessEvents()
 {
   @autoreleasepool
   {
-    NSDate* expiration = [NSDate dateWithTimeIntervalSinceNow:1];
+    // Embedded, the loop also follows the app's window, as smoothly as the display refreshes.
+    NSDate* expiration = [NSDate dateWithTimeIntervalSinceNow:IsEmbedded() ? 1.0 / 120 : 1];
     NSEvent* event = [NSApp nextEventMatchingMask:NSEventMaskAny
                                         untilDate:expiration
                                            inMode:NSDefaultRunLoopMode
                                           dequeue:YES];
 
-    [NSApp sendEvent:event];
+    if (event)
+      [NSApp sendEvent:event];
+    if (IsEmbedded())
+      return;
 
     // Need to update if m_window becomes fullscreen
     m_window_fullscreen = [m_window styleMask] & NSWindowStyleMaskFullScreen;

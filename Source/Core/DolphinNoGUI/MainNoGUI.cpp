@@ -4,11 +4,13 @@
 #include "DolphinNoGUI/Platform.h"
 
 #include <OptionParser.h>
+#include <atomic>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #ifndef _WIN32
@@ -29,6 +31,7 @@
 #include "Core/BootManager.h"
 #include "Core/Core.h"
 #include "Core/DolphinAnalytics.h"
+#include "Core/HW/VideoInterface.h"
 #include "Core/Host.h"
 #include "Core/Orca/Branding.h"
 #include "Core/Config/MainSettings.h"
@@ -37,6 +40,9 @@
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Status.h"
 #include "Core/System.h"
+#include "DolphinNoGUI/Embed.h"
+#include "VideoCommon/Present.h"
+#include "VideoCommon/VideoEvents.h"
 
 #include "UICommon/CommandLineParse.h"
 #ifdef USE_DISCORD_PRESENCE
@@ -45,12 +51,14 @@
 #include "UICommon/UICommon.h"
 
 static std::unique_ptr<Platform> s_platform;
+// Embed mode (Embed.h): drawn inside the YouGame app's window, steered over stdin.
+static bool s_embedded = false;
 
 static void signal_handler(int)
 {
   constexpr char message[] = "A signal was received. A second signal will force Orca to stop.\n";
 #ifdef _WIN32
-  puts(message);
+  fputs(message, stderr);
 #else
   if (write(STDERR_FILENO, message, sizeof(message)) < 0)
   {
@@ -65,6 +73,12 @@ static void signal_handler(int)
 static bool MsgAlertHandler(const char* caption, const char* text, bool yes_no,
                             Common::MsgType style)
 {
+  // Embedded, a message box would pop up over the app: the log has it instead.
+  if (s_embedded)
+  {
+    fmt::print(stderr, "{}\n", Orca::BrandText(text));
+    return false;
+  }
   UINT window_style = MB_ICONINFORMATION;
   if (style == Common::MsgType::Question)
     window_style = MB_ICONQUESTION;
@@ -273,7 +287,8 @@ static std::optional<std::string> ChooseSessionDisc(const std::string& user_dire
 #define main app_main
 #endif
 
-int main(const int argc, char* argv[])
+// Everything after the embed arguments were taken out; returns the exit code.
+static int Run(const int argc, char* argv[], const Embed::Options& embed)
 {
 #ifdef ORCA_MACOS_BUNDLE
   // Orca.app runs sessions: the YouGame app starts it with no arguments. ORCA_SESSION=0 (or any value
@@ -398,9 +413,13 @@ int main(const int argc, char* argv[])
   Common::RegisterMsgAlertHandler(MsgAlertHandler);
 
   s_platform = GetPlatform(options);
+  if (s_platform && embed.enabled)
+    s_platform->SetEmbed(embed);
   if (!s_platform || !s_platform->Init())
   {
     fprintf(stderr, "No platform found, or failed to initialize.\n");
+    if (embed.enabled)
+      Embed::Out("error Orca couldn't open its view in the app's window");
     return 1;
   }
 
@@ -428,6 +447,10 @@ int main(const int argc, char* argv[])
   if (!launch_disc.empty())
     Config::SetCurrent(Config::MAIN_DEFAULT_ISO, launch_disc);
 #endif
+  // Embedded, input counts only while the app gives the game the focus: never in the background
+  // (the keyboard is read from the HID state, chat typing included).
+  if (embed.enabled)
+    Config::SetCurrent(Config::MAIN_INPUT_BACKGROUND_INPUT, false);
   UICommon::InitControllers(wsi);
 
   Common::ScopeGuard ui_common_guard([] {
@@ -461,9 +484,27 @@ int main(const int argc, char* argv[])
 
   DolphinAnalytics::Instance().ReportDolphinStart("nogui");
 
+  // "ready" once the first frame is on screen.
+  Common::EventHook first_frame_hook;
+  if (embed.enabled)
+  {
+    first_frame_hook = GetVideoEvents().after_present_event.Register([](PresentInfo& info) {
+      static std::atomic<bool> seen{false};
+      if (seen.exchange(true))
+        return;
+      s_platform->NotifyFirstFrame(
+          static_cast<int>(info.frame_buffer_width), static_cast<int>(info.frame_buffer_height),
+          Core::System::GetInstance().GetVideoInterface().GetTargetRefreshRate());
+    });
+    Embed::StartReading();
+  }
+
   if (!BootManager::BootCore(Core::System::GetInstance(), std::move(boot), wsi))
   {
     fprintf(stderr, "Could not boot the specified file\n");
+    // In a session the "orca error boot" line (and its "error" twin) says it.
+    if (embed.enabled && !Orca::SessionActive())
+      Embed::Out("error Orca couldn't start the game");
     Orca::Status::Finish();
     return 1;
   }
@@ -473,13 +514,56 @@ int main(const int argc, char* argv[])
 #endif
 
   s_platform->MainLoop();
+  // Stopping can take a while (a session leaves its room): out of the app's way first.
+  s_platform->EmbedTeardown();
   Core::Stop(Core::System::GetInstance());
 
   Core::Shutdown(Core::System::GetInstance());
+  first_frame_hook.reset();
   s_platform.reset();
 
   // In an Orca session the "orca error" line explains a non-zero exit.
   return Orca::Status::Finish();
+}
+
+int main(const int raw_argc, char* raw_argv[])
+{
+  // --embed, --parent and --rect are taken out before the regular parser sees the arguments.
+  std::vector<char*> arg_list(raw_argv, raw_argv + raw_argc);
+  std::string embed_error;
+  const std::optional<Embed::Options> embed = Embed::TakeArguments(&arg_list, &embed_error);
+  if (!embed)
+  {
+    fmt::print(stderr, "{}\n", embed_error);
+    Embed::Out("error " + embed_error);
+    Embed::Out("exit 2");
+    return 2;
+  }
+  s_embedded = embed->enabled;
+  if (s_embedded)
+  {
+    Orca::Status::SetOutput(Embed::ClaimStdout());
+    // The app reads errors as "error <sentence>"; the "orca error" line stays for the session.
+    Orca::Status::SetErrorListener([](std::string_view, std::string_view sentence) {
+      Embed::Out(fmt::format("error {}", sentence));
+    });
+  }
+  const int argc = static_cast<int>(arg_list.size());
+  arg_list.push_back(nullptr);
+
+  const int code = Run(argc, arg_list.data(), *embed);
+  if (s_embedded)
+  {
+    // Every exit path, after all of Run's cleanup.
+    Embed::Out(fmt::format("exit {}", code));
+#ifdef _WIN32
+    // The stdin reader may still hold stdin's lock inside ReadFile, and the CRT's exit-time flush
+    // would wait for it: everything that matters is written, so leave without that flush.
+    std::fflush(stderr);
+    _exit(code);
+#endif
+  }
+  return code;
 }
 
 #ifdef _WIN32

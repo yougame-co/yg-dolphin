@@ -20,11 +20,14 @@ std::mutex s_mutex;
 std::string s_state;
 bool s_errored = false;
 std::atomic<bool> s_started{false};
+std::FILE* s_out = nullptr;
+void (*s_error_listener)(std::string_view, std::string_view) = nullptr;
 
 void Print(const std::string& line)
 {
-  std::fputs(line.c_str(), stdout);
-  std::fflush(stdout);
+  std::FILE* const out = s_out ? s_out : stdout;
+  std::fputs(line.c_str(), out);
+  std::fflush(out);
 }
 
 // One line per status: a sentence can't break the protocol.
@@ -60,6 +63,20 @@ void Error(std::string_view code, std::string_view sentence)
     return;
   s_errored = true;
   Print(fmt::format("orca error {} {}\n", code, OneLine(sentence)));
+  if (s_error_listener)
+    s_error_listener(code, OneLine(sentence));
+}
+
+void SetOutput(std::FILE* out)
+{
+  std::lock_guard lock(s_mutex);
+  s_out = out;
+}
+
+void SetErrorListener(void (*listener)(std::string_view code, std::string_view sentence))
+{
+  std::lock_guard lock(s_mutex);
+  s_error_listener = listener;
 }
 
 int ExitCode()

@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <memory>
 #include <mutex>
@@ -11,6 +12,7 @@
 
 #include "Common/Flag.h"
 #include "Common/WindowSystemInfo.h"
+#include "DolphinNoGUI/Embed.h"
 
 class Platform
 {
@@ -36,6 +38,14 @@ public:
   // Request an immediate shutdown.
   void Stop();
 
+  // Embed mode (Embed.h): set before Init. The window is drawn inside the parent's.
+  void SetEmbed(const Embed::Options& options) { m_embed = options; }
+  bool IsEmbedded() const { return m_embed.enabled; }
+  // The first frame was presented: "ready" goes out on the next main loop pass.
+  void NotifyFirstFrame(int width, int height, double fps);
+  // The main loop ended: hidden and without the focus while emulation stops.
+  void EmbedTeardown();
+
   static std::unique_ptr<Platform> CreateHeadlessPlatform();
 #ifdef HAVE_X11
   static std::unique_ptr<Platform> CreateX11Platform();
@@ -60,6 +70,13 @@ public:
 
 protected:
   void UpdateRunningFlag();
+  // Embed mode, on the main loop's thread: runs the commands read from stdin, prints "ready" once.
+  void ProcessEmbedCommands();
+  // What the platform does for the window commands. rect: the parent-relative rectangle (units per
+  // OS, ORCA.md "Embedding"). visible: the app's "show"/"hide". focus: "focus"/"blur".
+  virtual void EmbedSetRect(const Embed::Rect& rect) {}
+  virtual void EmbedSetVisible(bool visible) {}
+  virtual void EmbedSetFocus(bool focus) {}
   // Applies the newest requested title on the main loop's thread. Orca: in a session, also asks
   // for the title again (every 250 ms at most) so it follows the room status.
   void UpdateTitle();
@@ -68,8 +85,11 @@ protected:
   Common::Flag m_shutdown_requested{false};
   Common::Flag m_tried_graceful_shutdown{false};
 
-  bool m_window_focus = true;  // Should be made atomic if actually implemented
+  // Read by the CPU thread (the input gate, Host_RendererHasFocus).
+  std::atomic<bool> m_window_focus = true;
   bool m_window_fullscreen = false;
+
+  Embed::Options m_embed;
 
 private:
   // Titles are set only on the main loop's thread: on Win32 setting it from the emulation thread
@@ -78,4 +98,10 @@ private:
   std::optional<std::string> m_requested_title;
   std::string m_shown_title;
   std::chrono::steady_clock::time_point m_next_title_check{};
+
+  std::mutex m_ready_lock;
+  std::optional<std::string> m_ready_line;
+  bool m_ready_sent = false;
+  // A "pause" before the game runs (Core::SetState only pauses a running core), applied once it is.
+  bool m_pause_pending = false;
 };

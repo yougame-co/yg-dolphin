@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstdio>
 #include <string>
 #include <string_view>
 
@@ -21,6 +22,11 @@ void Error(std::string_view code, std::string_view sentence);
 int ExitCode();
 // The game reached its first frame (called at every frame boundary; cheap after the first).
 void GameStarted();
+// Where the lines go (default stdout). The embed mode gives its protocol stream: stdout itself
+// then points at stderr, so nothing else (a log line) can land in the protocol.
+void SetOutput(std::FILE* out);
+// Also told about the error that gets printed (the embed mode repeats it in the app's "error" form).
+void SetErrorListener(void (*listener)(std::string_view code, std::string_view sentence));
 // At process exit: a session whose game never reached a frame, without saying why, reports a boot
 // error; then "ended". Returns ExitCode().
 int Finish();
