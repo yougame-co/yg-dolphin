@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 #include <deque>
 #include <chrono>
 #include <cmath>
@@ -15,6 +16,7 @@
 #include <string_view>
 #include <thread>
 
+#include <curl/curl.h>
 #include <fmt/format.h>
 #include <picojson.h>
 
@@ -378,6 +380,21 @@ struct YouGameRoom::Impl
   std::optional<Clock::time_point> begun_at;
   int begin_tries = 0;
   Clock::time_point last_send{}, last_ping{}, last_hello{};
+  // The room as the page draws it (welcome, join, leave, lobby and start carry these).
+  picojson::array room_participants, room_players;
+
+  // Under the desktop app: the room is mirrored to the YouGame page through the app's bridge
+  // (mpRoom, the latest only), and the page's lobby commands come back on its event stream.
+  bool bridged = false;
+  std::string bridge_url, bridge_token;
+  std::thread bridge_thread, events_thread;
+  std::atomic<bool> bridge_done{false};
+  std::mutex bridge_mutex;
+  std::condition_variable bridge_wake;
+  std::optional<std::string> bridge_pending;
+  std::string last_published;  // the I/O thread's
+  std::atomic<bool> leave_requested{false};
+  std::vector<picojson::object> page_commands;  // guarded by bridge_mutex
 
   // Test-only network delay (Orca::TestNetDelayMs): messages wait in these queues, in order.
   struct Held
@@ -471,6 +488,12 @@ struct YouGameRoom::Impl
       End("Invalid YouGame app bridge address");
       return false;
     }
+    if (use_bridge)
+    {
+      bridged = true;
+      bridge_url = bridge.ends_with("/") ? bridge.substr(0, bridge.size() - 1) : bridge;
+      bridge_token = token;
+    }
 
     // Leave() must not wait out a slow request: the progress callback aborts it.
     Common::HttpRequest http(std::chrono::seconds(10),
@@ -504,7 +527,9 @@ struct YouGameRoom::Impl
           End(Str(o, "error").empty() ? "The YouGame app refused the request" : Str(o, "error"));
           return false;
         }
-        o = o["result"].get<picojson::object>();
+        // Copied out first: assigning a map from one of its own elements frees it mid-copy.
+        picojson::object result = o["result"].get<picojson::object>();
+        o = std::move(result);
       }
       else if (http.GetLastResponseCode() != 200)
       {
@@ -618,6 +643,11 @@ struct YouGameRoom::Impl
       return;
     }
     SetStatus(fmt::format("Room {}: waiting for your friend", room));
+    if (bridged)
+    {
+      bridge_thread = std::thread([this] { BridgeLoop(); });
+      events_thread = std::thread([this] { EventsLoop(); });
+    }
 
     if (net_delay)
     {
@@ -626,6 +656,13 @@ struct YouGameRoom::Impl
     }
     while (!stop && State() != RoomState::Ended)
     {
+      if (leave_requested)
+      {
+        End("You left the room");
+        break;
+      }
+      if (bridged)
+        SendPageCommands();
       if (net_delay)
         FlushHeld();
       if (auto text = ws.ReceiveText(std::chrono::milliseconds(net_delay ? 1 : 2)))
@@ -663,6 +700,186 @@ struct YouGameRoom::Impl
       SendJson(leave, std::chrono::milliseconds(500), false);
     }
     ws.Close();
+    StopBridge();
+  }
+
+  // The lobby the page shows: the same mpRoom a web game's SDK publishes (Player.tsx parses it).
+  void Publish()
+  {
+    if (!bridged)
+      return;
+    picojson::object lobby;
+    lobby["version"] = picojson::value(1.0);
+    lobby["minPlayers"] = picojson::value(2.0);
+    lobby["maxLocalPlayers"] = picojson::value(1.0);
+    lobby["compatibility"] = picojson::value(options.compatibility);
+    picojson::object room;
+    room["type"] = picojson::value("mpRoom");
+    room["lifecycle"] = picojson::value("game");
+    room["participants"] = picojson::value(room_participants);
+    room["revision"] = picojson::value(static_cast<double>(revision));
+    room["matchId"] = match_id.empty() ? picojson::value() : picojson::value(match_id);
+    room["lobby"] = picojson::value(lobby);
+    room["me"] = picojson::value(me);
+    {
+      std::lock_guard lock(mutex);
+      room["code"] = picojson::value(code);
+      room["ready"] = picojson::value(state == RoomState::Playing);
+    }
+    room["queue"] = picojson::value("private");
+    room["size"] = picojson::value(2.0);
+    room["host"] = picojson::value(host);
+    room["readyIds"] = picojson::value(picojson::array{});
+    room["players"] = picojson::value(room_players);
+    std::string snapshot = picojson::value(room).serialize();
+    if (snapshot == last_published)
+      return;
+    last_published = snapshot;
+    {
+      std::lock_guard lock(bridge_mutex);
+      bridge_pending = std::move(snapshot);
+    }
+    bridge_wake.notify_all();
+  }
+
+  void SendPageCommands()
+  {
+    std::vector<picojson::object> commands;
+    {
+      std::lock_guard lock(bridge_mutex);
+      commands.swap(page_commands);
+    }
+    for (const auto& command : commands)
+      SendJson(command);
+  }
+
+  void BridgeLoop()
+  {
+    Common::HttpRequest http(std::chrono::seconds(5),
+                             [this](s64, s64, s64, s64) { return !bridge_done.load(); });
+    const Common::HttpRequest::Headers headers{{"Authorization", "Bearer " + bridge_token},
+                                               {"Content-Type", "application/json"}};
+    while (!bridge_done)
+    {
+      std::optional<std::string> body;
+      {
+        std::unique_lock lock(bridge_mutex);
+        bridge_wake.wait_for(lock, std::chrono::milliseconds(200),
+                             [this] { return bridge_done.load() || bridge_pending.has_value(); });
+        body.swap(bridge_pending);
+      }
+      if (!body || bridge_done)
+        continue;
+      const auto response = http.Post(bridge_url + "/sdk", *body, headers,
+                                      Common::HttpRequest::AllowedReturnCodes::All);
+      if (!response || http.GetLastResponseCode() != 200)
+      {
+        WARN_LOG_FMT(NETPLAY, "Orca room: the app did not take the room update (HTTP {})",
+                     http.GetLastResponseCode());
+      }
+    }
+  }
+
+  // One event from the app's stream: a lobby command the page sent this game.
+  void OnPageEvent(const std::string& line)
+  {
+    picojson::value value;
+    if (!ParseJson(line, &value) || !value.is<picojson::object>())
+      return;
+    const auto& e = value.get<picojson::object>();
+    // Only this game's own page may command it.
+    const std::string game = Env("YOUGAME_GAME");
+    if (game.empty() || Str(e, "slug") != game)
+      return;
+    const std::string cmd = Str(e, "cmd");
+    if (cmd == "leave")
+    {
+      leave_requested = true;
+    }
+    else if (cmd == "kick" && !Str(e, "id").empty())
+    {
+      picojson::object kick;
+      kick["t"] = picojson::value("kick");
+      kick["id"] = picojson::value(Str(e, "id"));
+      std::lock_guard lock(bridge_mutex);
+      if (page_commands.size() < 16)
+        page_commands.push_back(std::move(kick));
+    }
+    // ready, setting, local-add and local-remove don't apply: one controller per Orca, and the
+    // host's Orca starts the match itself.
+  }
+
+  struct EventStream
+  {
+    Impl* impl;
+    std::string pending;
+  };
+
+  static size_t OnEventData(char* data, size_t size, size_t count, void* user)
+  {
+    auto* stream = static_cast<EventStream*>(user);
+    stream->pending.append(data, size * count);
+    if (stream->pending.size() > 65536)
+      return 0;  // aborts the transfer
+    size_t newline;
+    while ((newline = stream->pending.find('\n')) != std::string::npos)
+    {
+      std::string line = stream->pending.substr(0, newline);
+      stream->pending.erase(0, newline + 1);
+      if (line.ends_with("\r"))
+        line.pop_back();
+      if (line.starts_with("data: "))
+        stream->impl->OnPageEvent(line.substr(6));
+    }
+    return size * count;
+  }
+
+  static int OnEventProgress(void* user, curl_off_t, curl_off_t, curl_off_t, curl_off_t)
+  {
+    return static_cast<EventStream*>(user)->impl->bridge_done ? 1 : 0;
+  }
+
+  void EventsLoop()
+  {
+    // The stream stays open for the whole session; reconnect if the app restarts it.
+    while (!bridge_done)
+    {
+      CURL* curl = curl_easy_init();
+      if (!curl)
+        return;
+      EventStream stream{this, {}};
+      curl_slist* headers =
+          curl_slist_append(nullptr, ("Authorization: Bearer " + bridge_token).c_str());
+      curl_easy_setopt(curl, CURLOPT_URL, (bridge_url + "/events").c_str());
+      curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
+      curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &OnEventData);
+      curl_easy_setopt(curl, CURLOPT_WRITEDATA, &stream);
+      curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+      curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, &OnEventProgress);
+      curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &stream);
+      curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 5000L);
+      curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+      curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
+      const CURLcode result = curl_easy_perform(curl);
+      curl_slist_free_all(headers);
+      curl_easy_cleanup(curl);
+      if (bridge_done)
+        return;
+      WARN_LOG_FMT(NETPLAY, "Orca room: the app's event stream ended ({})",
+                   curl_easy_strerror(result));
+      for (int i = 0; i < 20 && !bridge_done; ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+  }
+
+  void StopBridge()
+  {
+    bridge_done = true;
+    bridge_wake.notify_all();
+    if (bridge_thread.joinable())
+      bridge_thread.join();
+    if (events_thread.joinable())
+      events_thread.join();
   }
 
   void FlushHeld()
@@ -766,9 +983,18 @@ struct YouGameRoom::Impl
   {
     if (m.count("host"))
       host = Str(m, "host");
+    if (const auto players = m.find("players");
+        players != m.end() && players->second.is<picojson::array>())
+    {
+      room_players = players->second.get<picojson::array>();
+    }
     const auto it = m.find("participants");
     if (it == m.end() || !it->second.is<picojson::array>())
+    {
+      Publish();
       return;
+    }
+    room_participants = it->second.get<picojson::array>();
     const auto& participants = it->second.get<picojson::array>();
     if (participants.size() > 2)
     {
@@ -800,6 +1026,7 @@ struct YouGameRoom::Impl
       SetStatus(peer.empty() ? fmt::format("Room {}: waiting for your friend", room) :
                                fmt::format("Room {}: your friend is here, starting", room));
     }
+    Publish();
   }
 
   // Mid-match, a player who leaves or drops is out of it (rooms/src/index.ts onGone).
@@ -843,13 +1070,16 @@ struct YouGameRoom::Impl
       return;
     }
     match_id = Str(m, "matchId");
-    std::lock_guard lock(mutex);
-    seat = my_seat;
-    seed = static_cast<u32>(seed_value->second.get<double>());
-    state = RoomState::Playing;
-    status = fmt::format("Room {}: playing (port {})", code, my_seat + 1);
-    INFO_LOG_FMT(NETPLAY, "Orca room: match {} started, seat {}, seed {:08x}", match_id, my_seat,
-                 seed);
+    {
+      std::lock_guard lock(mutex);
+      seat = my_seat;
+      seed = static_cast<u32>(seed_value->second.get<double>());
+      state = RoomState::Playing;
+      status = fmt::format("Room {}: playing (port {})", code, my_seat + 1);
+      INFO_LOG_FMT(NETPLAY, "Orca room: match {} started, seat {}, seed {:08x}", match_id, my_seat,
+                   seed);
+    }
+    Publish();
   }
 
   void OnMessage(const std::string& text)

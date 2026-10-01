@@ -334,3 +334,49 @@ TEST(OrcaLive, TestNetworkDelayHoldsMessages)
   EXPECT_GE(a.RoundTripMs(), 200);
   EXPECT_LT(b.RoundTripMs(), 200);
 }
+
+// Under the desktop app: one room through the app's bridge (YOUGAME_BRIDGE, YOUGAME_TOKEN,
+// YOUGAME_GAME, set by the test's caller to a fake bridge), the other on a dev ticket. The bridged
+// side mirrors the room to the page, and the page's Leave ends it. ORCA_LIVE_TEST=1 and
+// ORCA_TEST_BRIDGE_ROOM=<the fake bridge's room code>.
+TEST(OrcaLive, BridgeMirrorsTheRoomAndTakesLeave)
+{
+  const char* live = std::getenv("ORCA_LIVE_TEST");
+  const char* room = std::getenv("ORCA_TEST_BRIDGE_ROOM");
+  if (!live || std::string(live) != "1" || !room || !std::getenv("YOUGAME_BRIDGE"))
+    GTEST_SKIP() << "set ORCA_LIVE_TEST=1, ORCA_TEST_BRIDGE_ROOM and a bridge";
+  RoomOptions options;
+  options.compatibility = "orca-live-test";
+  options.mode = "orca-test";
+  // The app's invite names the room (hello.room).
+  YouGameRoom a(options);
+  for (int i = 0; i < 1000 && a.GetState() == RoomState::Connecting; ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  ASSERT_EQ(a.GetState(), RoomState::Waiting) << a.Status();
+  EXPECT_EQ(a.Code(), room);
+
+  // The friend joins without the app.
+  const std::string bridge = std::getenv("YOUGAME_BRIDGE");
+  SetEnv("YOUGAME_BRIDGE", nullptr);
+  SetEnv("ORCA_TEST_DEV_GAME", "orca-bridge-test");
+  options.room_code = room;
+  YouGameRoom b(options);
+  // The room reads its environment on its own thread: restore it once b has its ticket.
+  for (int i = 0; i < 1000 && b.Code().empty() && b.GetState() != RoomState::Ended; ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  SetEnv("ORCA_TEST_DEV_GAME", nullptr);
+  SetEnv("YOUGAME_BRIDGE", bridge.c_str());
+  for (int i = 0; i < 1500 && !(a.Connected() && b.Connected()); ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  ASSERT_TRUE(a.Connected()) << a.Status();
+  ASSERT_TRUE(b.Connected()) << b.Status();
+
+  // The fake bridge sends the page's Leave two seconds after the room reads "ready".
+  for (int i = 0; i < 1000 && a.GetState() != RoomState::Ended; ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  EXPECT_EQ(a.GetState(), RoomState::Ended);
+  EXPECT_EQ(a.Status(), "You left the room");
+  for (int i = 0; i < 500 && b.Connected(); ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  EXPECT_FALSE(b.Connected()) << b.Status();
+}
