@@ -6,6 +6,7 @@
 #include "Core/HW/ProcessorInterface.h"
 #include "Core/IOS/IOS.h"
 #include "Core/IOS/STM/STM.h"
+#include "Core/Orca/Profile.h"
 #include "Core/System.h"
 
 Platform::~Platform() = default;
@@ -26,7 +27,9 @@ void Platform::UpdateRunningFlag()
     const auto& system = Core::System::GetInstance();
     const auto ios = system.GetIOS();
     const auto stm = ios ? ios->GetDeviceByName("/dev/stm/eventhook") : nullptr;
-    if (!m_tried_graceful_shutdown.IsSet() && stm &&
+    // Orca: an online session stops at once (the power button would reach only this player's game,
+    // and the game can't answer it while the session waits for the room).
+    if (!Orca::SessionActive() && !m_tried_graceful_shutdown.IsSet() && stm &&
         std::static_pointer_cast<IOS::HLE::STMEventHookDevice>(stm)->HasHookInstalled())
     {
       system.GetProcessorInterface().PowerButton_Tap();

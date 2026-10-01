@@ -307,6 +307,9 @@ void ProcessorInterfaceManager::ResetButton_Tap()
 
 void ProcessorInterfaceManager::PowerButton_Tap()
 {
+  // Orca: like the reset button, the power button would reach only this player's game.
+  if (Orca::SessionActive())
+    return;
   if (!Core::IsRunning(m_system))
     return;
 
