@@ -9,8 +9,10 @@
 #include <chrono>
 #include <functional>
 #include <optional>
+#include <utility>
 
 #include "Common/CommonTypes.h"
+#include "Core/CoreTiming.h"
 #include "Core/Orca/Session/Session.h"
 #include "Core/Rollback/Rollback.h"
 #include "InputCommon/GCPadStatus.h"
@@ -22,6 +24,8 @@ class System;
 
 namespace Rollback
 {
+// Create and destroy on the CPU thread at a frame boundary, or after emulation has stopped: the
+// destructor resets the ring and the NAND journal, and SI polls read the active port's pads.
 class RingPort final : public Orca::Net::Game
 {
 public:
@@ -46,23 +50,27 @@ public:
   static RingPort* Active();
 
 private:
-  void ApplyThrottle();
-
   Core::System& m_system;
+  // The newest max_rollback + 2 saves. The session saves only unconfirmed frames and checksum
+  // frames, and stalls once the newest frame is max_rollback past the confirmed one, so a rollback
+  // target or a checksum frame is asked for before more than max_rollback newer frames are saved.
   SnapshotRing m_ring;
   std::array<GCPadStatus, Orca::Net::MAX_SEATS> m_pads;
   bool m_unthrottled;
   bool m_resimulating = false;
-  // Frames left to run unthrottled after a stall, so pacing restarts from now.
-  int m_pacing_reset_frames = 0;
+  // The frame saved since the emulator last ran: a stalled boundary asks again for the same one.
+  int m_saved_since_run = -1;
+  // The throttle's reference before the rollback load, put back when the re-run catches up.
+  std::optional<std::pair<s64, TimePoint>> m_reference_before_load;
 };
 
 // One frame boundary of a session: reports the frame that completed and the local pad, then does
-// what the session says. While it stalls, waits `stall_wait` and asks again, until it moves on or
+// what the session says. While it stalls, waits `stall_wait` and asks again; when it asks this
+// machine to wait (time sync), holds one frame period and asks again; until it moves on or
 // `stopping()` is true. Returns the last step: Run or Rollback (the next frame has its pads, and
 // after a Rollback the state is the start of step.frame), or Ended (Session::Error says why;
 // stopping also ends with Ended).
-Orca::Net::Step StepSession(Orca::Net::Session& session, int completed_frame,
+Orca::Net::Step StepSession(Orca::Net::Session& session, RingPort& port, int completed_frame,
                             const Orca::Net::Pad& local_pad, const std::function<bool()>& stopping,
                             std::chrono::microseconds stall_wait);
 }  // namespace Rollback

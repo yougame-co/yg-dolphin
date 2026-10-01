@@ -7,7 +7,6 @@
 
 #include "Common/Logging/Log.h"
 #include "Core/Core.h"
-#include "Core/HW/Memmap.h"
 #include "Core/Orca/Session/PadCodec.h"
 #include "Core/System.h"
 
@@ -16,6 +15,9 @@ namespace Rollback
 namespace
 {
 RingPort* s_active = nullptr;
+
+// Brawl's frame period (NTSC, 60 Hz): how long a time-sync wait holds this machine.
+constexpr std::chrono::microseconds FRAME_PERIOD{16'667};
 }  // namespace
 
 RingPort::RingPort(Core::System& system, int max_rollback, bool unthrottled)
@@ -25,7 +27,8 @@ RingPort::RingPort(Core::System& system, int max_rollback, bool unthrottled)
   // Until the session sets them: every port connected with nothing pressed, on both machines.
   m_pads.fill(Orca::Net::DecodePad(Orca::Net::Pad{}));
   s_active = this;
-  ApplyThrottle();
+  if (m_unthrottled)
+    Core::SetIsThrottlerTempDisabled(true);
 }
 
 RingPort::~RingPort()
@@ -34,7 +37,8 @@ RingPort::~RingPort()
     s_active = nullptr;
   m_ring.Reset(m_system);
   Rollback::SetResimulating(false);
-  Core::SetIsThrottlerTempDisabled(false);
+  if (m_unthrottled)
+    Core::SetIsThrottlerTempDisabled(false);
 }
 
 RingPort* RingPort::Active()
@@ -44,14 +48,21 @@ RingPort* RingPort::Active()
 
 bool RingPort::Save(int frame)
 {
-  // Sparse: only frames a rollback may target or whose checksum is compared. The ring keeps the
-  // newest max_rollback + 2 of them.
+  // A boundary the session stalls at asks for the same frame again; nothing ran since.
+  if (m_saved_since_run == frame)
+    return true;
   m_ring.Save(m_system, frame);
+  m_saved_since_run = frame;
   return true;
 }
 
 bool RingPort::Load(int frame)
 {
+  // Loading re-anchors the throttle at the loaded time; keep the reference the present frame was
+  // paced by, so the time the rollback takes is made up afterwards.
+  if (!m_resimulating && !m_reference_before_load)
+    m_reference_before_load = m_system.GetCoreTiming().GetThrottleReference();
+  m_saved_since_run = -1;
   return m_ring.Load(m_system, frame);
 }
 
@@ -60,18 +71,20 @@ void RingPort::SetPads(int frame, const Orca::Net::Pads& pads)
   // Called once for every frame about to run.
   for (std::size_t port = 0; port < pads.size(); ++port)
     m_pads[port] = Orca::Net::DecodePad(pads[port]);
-  if (m_pacing_reset_frames > 0)
-  {
-    --m_pacing_reset_frames;
-    ApplyThrottle();
-  }
+  m_saved_since_run = -1;
 }
 
 void RingPort::SetResimulating(bool resimulating)
 {
+  // While re-running, CoreTiming treats the speed as unlimited (Rollback::IsResimulating), host
+  // rendering is skipped and the Mixer drops the re-run's audio.
   m_resimulating = resimulating;
   Rollback::SetResimulating(resimulating);
-  ApplyThrottle();
+  if (!resimulating && m_reference_before_load)
+  {
+    m_system.GetCoreTiming().SetThrottleReference(*m_reference_before_load);
+    m_reference_before_load.reset();
+  }
 }
 
 std::optional<u64> RingPort::SnapshotChecksum(int frame)
@@ -81,28 +94,34 @@ std::optional<u64> RingPort::SnapshotChecksum(int frame)
 
 void RingPort::ResetPacing()
 {
-  // While the throttler is off, CoreTiming keeps moving its reference to the current time; one
-  // unthrottled frame is enough to forget the time spent stalled. (The session calls this just
-  // before setting the pads of the frame that ends the stall, so that frame runs unthrottled.)
-  m_pacing_reset_frames = 2;
-  ApplyThrottle();
+  m_reference_before_load.reset();
+  m_system.GetCoreTiming().ResetThrottleToNow();
 }
 
-void RingPort::ApplyThrottle()
-{
-  // Re-run frames catch up to the present as fast as the machine allows.
-  Core::SetIsThrottlerTempDisabled(m_unthrottled || m_resimulating || m_pacing_reset_frames > 0);
-}
-
-Orca::Net::Step StepSession(Orca::Net::Session& session, int completed_frame,
+Orca::Net::Step StepSession(Orca::Net::Session& session, RingPort& port, int completed_frame,
                             const Orca::Net::Pad& local_pad, const std::function<bool()>& stopping,
                             std::chrono::microseconds stall_wait)
 {
+  bool waited = false;
   while (true)
   {
     const Orca::Net::Step step = session.OnBoundary(completed_frame, local_pad);
+    if (step.kind == Orca::Net::StepKind::Wait)
+    {
+      // Time sync: this machine is ahead. Hold one frame, then pace from now (otherwise the
+      // throttle would race to make the held frame up).
+      if (stopping())
+        return {Orca::Net::StepKind::Ended, step.frame};
+      std::this_thread::sleep_for(FRAME_PERIOD);
+      waited = true;
+      continue;
+    }
     if (step.kind != Orca::Net::StepKind::Stall)
+    {
+      if (waited)
+        port.ResetPacing();
       return step;
+    }
     if (stopping())
       return {Orca::Net::StepKind::Ended, step.frame};
     if (stall_wait.count() > 0)

@@ -20,6 +20,7 @@
 #include <string>
 #include <tuple>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "Common/CommonTypes.h"
@@ -106,6 +107,14 @@ public:
   u64 GetTicks() const;
   u64 GetIdleTicks() const;
   TimePoint GetTargetHostTime(s64 target_cycle);
+
+  // Orca rollback pacing (CPU thread). The throttle's reference: an emulated cycle and the host time
+  // it maps to. A rollback keeps the reference from before its load and puts it back once the
+  // re-run has caught up, so the time the rollback took is made up instead of shifting every later
+  // frame. ResetThrottleToNow forgets any lead or lag (after a stall or a deliberate wait).
+  std::pair<s64, TimePoint> GetThrottleReference() const;
+  void SetThrottleReference(const std::pair<s64, TimePoint>& reference);
+  void ResetThrottleToNow();
 
   void RefreshConfig();
 

@@ -40,6 +40,8 @@ public:
                 int jitter, int input_delay, int checksum_every);
 
   void Tick() { ++m_ticks; }
+  // Every recorded input has been sent: a session still waiting for more ran past the recording.
+  bool Exhausted() const { return m_delivered >= static_cast<int>(m_recording.size()) - 1; }
 
   void Send(const Orca::Net::Packet& packet) override;
   std::vector<Orca::Net::Packet> Receive() override;

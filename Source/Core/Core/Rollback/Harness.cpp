@@ -24,6 +24,7 @@
 #include "Common/FileUtil.h"
 #include "Common/IOFile.h"
 #include "Common/Logging/Log.h"
+#include "Core/Config/MainSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/CoreTiming.h"
@@ -63,18 +64,26 @@ const int s_render_reruns = EnvInt("YG_SYNCTEST_RENDER", 0);
 // rollback history would).
 const int s_clear_jit = EnvInt("YG_SYNCTEST_CLEARJIT", 0);
 // Loopback session test (Loopback.h): a recording from YG_PADREC replayed through a real session.
-const char* const s_loopback = std::getenv("YG_LOOPBACK");
-const int s_lb_lag = EnvInt("YG_LOOPBACK_LAG", 6);
-const int s_lb_jitter = EnvInt("YG_LOOPBACK_JITTER", 3);
-const int s_lb_delay = EnvInt("YG_LOOPBACK_DELAY", 2);
-const int s_lb_max_rollback = EnvInt("YG_LOOPBACK_MAX_ROLLBACK", 7);
-const int s_lb_checksum_every = EnvInt("YG_LOOPBACK_CHECKSUM_EVERY", 10);
+const char* const s_loopback = [] {
+  const char* v = std::getenv("YG_LOOPBACK");
+  return v && *v ? v : nullptr;
+}();
+const int s_lb_lag = std::max(0, EnvInt("YG_LOOPBACK_LAG", 6));
+const int s_lb_jitter = std::max(0, EnvInt("YG_LOOPBACK_JITTER", 3));
+const int s_lb_delay = std::max(0, EnvInt("YG_LOOPBACK_DELAY", 2));
+const int s_lb_max_rollback = std::max(1, EnvInt("YG_LOOPBACK_MAX_ROLLBACK", 7));
+const int s_lb_checksum_every = std::max(1, EnvInt("YG_LOOPBACK_CHECKSUM_EVERY", 10));
 // Diagnosis: save a snapshot at every boundary from this frame on and never load (does saving
 // alone change the run?).
 const int s_save_only_from = EnvInt("YG_SAVE_ONLY_FROM", -1);
 // Diagnosis: at the first-pass boundary of this frame, write MEM1 and MEM2 to
 // <user dir>/ram-<frame>-mem1.bin / -mem2.bin.
 const int s_dump_ram_at = EnvInt("YG_DUMP_RAM_AT", -1);
+// Visual checks: dump every presented frame (Dolphin's frame dump; pass
+// -C GFX.Settings.DumpFramesAsImages=True for images) from this first-pass frame up to the other.
+// Re-run frames present nothing, so a rollback run's dumps pair 1:1 with a plain run's.
+const int s_dump_frames_from = EnvInt("YG_DUMP_FRAMES_FROM", -1);
+const int s_dump_frames_to = EnvInt("YG_DUMP_FRAMES_TO", -1);
 
 // ---- Scene names (scene-relative input and logs) ----
 
@@ -564,7 +573,10 @@ void EndLoopback()
 void LogLoopbackResult(int frame)
 {
   const LoopbackRun& run = Lb();
-  const bool pass = run.error.empty() && run.stats.checksums_matched > 0;
+  // Checksums must have kept flowing to the end, not just started.
+  const int expected = run.stats.confirmed_frame / s_lb_checksum_every - 2;
+  const bool pass = run.error.empty() && run.stats.checksums_matched > 0 &&
+                    run.stats.checksums_matched >= expected;
   NOTICE_LOG_FMT(ROLLBACK,
                  "Loopback done at frame {} ({}): {} rollbacks, {} re-run frames, deepest {}, {} "
                  "stalls, {} checksums matched, confirmed frame {}{}{}",
@@ -586,10 +598,24 @@ void LoopbackBoundary(Core::System& system, int frame_here, bool first_pass)
       ERROR_LOG_FMT(ROLLBACK, "Loopback: {}", run.error);
       return;
     }
+    // Two seats only: ports 3 and 4 would replay as neutral and read as a desync.
+    for (const Loopback::RecordedFrame& recorded : run.recording)
+    {
+      if (recorded.pads[2] != Orca::Net::Pad{} || recorded.pads[3] != Orca::Net::Pad{})
+      {
+        run.error = "the recording has input on ports 3-4; the loopback plays two seats";
+        ERROR_LOG_FMT(ROLLBACK, "Loopback: {}", run.error);
+        run.recording.clear();
+        return;
+      }
+    }
     Orca::Net::Config config;
     config.seats = 2;
     config.local_seat = 0;
     config.input_delay = s_lb_delay;
+    // The recording fixes which frame each local input lands on: no adaptive delay here (time sync
+    // stays on: its waits change only timing, never inputs).
+    config.max_delay = s_lb_delay;
     config.max_rollback = s_lb_max_rollback;
     config.checksum_every = s_lb_checksum_every;
     run.remote = std::make_unique<Loopback::VirtualRemote>(run.recording, 1, 0, s_lb_lag,
@@ -613,18 +639,22 @@ void LoopbackBoundary(Core::System& system, int frame_here, bool first_pass)
   const std::size_t target = static_cast<std::size_t>(frame_here + s_lb_delay);
   const Orca::Net::Pad local =
       target < run.recording.size() ? run.recording[target].pads[0] : Orca::Net::Pad{};
-  int stall_calls = 0;
+  bool ran_past_recording = false;
   const Orca::Net::Step step = StepSession(
-      *run.session, frame_here - 1, local,
+      *run.session, *run.port, frame_here - 1, local,
       [&] {
-        run.remote->Tick();  // the remote player keeps playing while this one waits
-        return ++stall_calls > 100000;
+        // The remote player keeps playing while this one waits, until its recording runs out.
+        ran_past_recording = run.remote->Exhausted();
+        run.remote->Tick();
+        return ran_past_recording;
       },
       std::chrono::microseconds{0});
 
   if (step.kind == Orca::Net::StepKind::Ended)
   {
-    run.error = run.session->Error().empty() ? "stopped while stalled" : run.session->Error();
+    run.error = ran_past_recording       ? "ran past the end of the recording" :
+                run.session->Error().empty() ? "stopped while stalled" :
+                                           run.session->Error();
     ERROR_LOG_FMT(ROLLBACK, "Loopback session ended at frame {}: {}", frame_here, run.error);
     EndLoopback();
     LogLoopbackResult(frame_here);
@@ -649,7 +679,8 @@ bool Active()
 {
   return s_scenes || s_synctest_k > 0 || s_exit_after > 0 || !Input().empty() ||
          s_shot_every > 0 || s_hashlog != nullptr || s_bench_k > 0 || s_padrec != nullptr ||
-         s_loopback != nullptr || s_save_only_from >= 0;
+         s_loopback != nullptr || s_save_only_from >= 0 || s_dump_ram_at >= 0 ||
+         s_dump_frames_from >= 0;
 }
 
 std::optional<GCPadStatus> InputOverride(int port)
@@ -768,13 +799,18 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
   // Recording: the RAM checksum at the start of the frame about to run (the state a session
   // snapshot of that frame holds); its pads are written below, once the counter points at it.
   u64 recorded_checksum = 0;
-  if (s_padrec && first_pass_here)
+  bool record_here = s_padrec && first_pass_here && s_rewind_to < 0;
+  if (record_here)
   {
     auto& memory = system.GetMemory();
     recorded_checksum = RamChecksum({memory.GetRAM(), memory.GetRamSize()},
                                     {memory.GetEXRAM(), memory.GetExRamSize()});
   }
 
+  if (first_pass_here && s_dump_frames_from >= 0 && frame_here == s_dump_frames_from)
+    Config::SetCurrent(Config::MAIN_MOVIE_DUMP_FRAMES, true);
+  if (first_pass_here && s_dump_frames_to >= 0 && frame_here == s_dump_frames_to)
+    Config::SetCurrent(Config::MAIN_MOVIE_DUMP_FRAMES, false);
   if (first_pass_here && frame_here == s_dump_ram_at)
   {
     auto& memory = system.GetMemory();
@@ -783,8 +819,12 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
     File::IOFile(base + "-mem2.bin", "wb").WriteBytes(memory.GetEXRAM(), memory.GetExRamSize());
     NOTICE_LOG_FMT(ROLLBACK, "RAM at frame {} written to {}-mem*.bin", frame_here, base);
   }
-  if (s_save_only_from >= 0 && frame_here >= s_save_only_from)
+  // Not beside a session: both rings would trim and stop the same NAND journal.
+  if (s_save_only_from >= 0 && frame_here >= s_save_only_from && !s_loopback &&
+      !RingPort::Active())
+  {
     Ring().Save(system, frame_here);
+  }
   if (s_loopback)
     LoopbackBoundary(system, frame_here, first_pass_here);
   else if (s_synctest_k > 0 && frame_here >= s_synctest_from)
@@ -811,7 +851,9 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
   if (!s_loopback && !RingPort::Active())
     SetResimulating(s_frame <= s_max_frame && !s_render_reruns);
 
-  if (s_padrec && first_pass_here)
+  // A session that rolled back at this boundary replaced the state and the pads: skip the line.
+  record_here = record_here && s_frame == frame_here + 1;
+  if (record_here)
   {
     Orca::Net::Pads pads{};
     for (int port = 0; port < Orca::Net::MAX_SEATS; ++port)

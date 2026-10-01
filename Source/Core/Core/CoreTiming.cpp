@@ -23,6 +23,7 @@
 #include "Core/Core.h"
 #include "Core/HW/SystemTimers.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/Rollback/Rollback.h"
 #include "Core/System.h"
 
 #include "VideoCommon/Fifo.h"
@@ -404,7 +405,25 @@ TimePoint CoreTimingManager::CalculateTargetHostTimeInternal(s64 target_cycle)
 
 bool CoreTimingManager::IsSpeedUnlimited() const
 {
-  return m_throttle_adj_clock_per_sec == 0 || Core::GetIsThrottlerTempDisabled();
+  // Orca: frames re-run after a rollback load catch up to the present as fast as possible.
+  return m_throttle_adj_clock_per_sec == 0 || Core::GetIsThrottlerTempDisabled() ||
+         Rollback::IsResimulating();
+}
+
+std::pair<s64, TimePoint> CoreTimingManager::GetThrottleReference() const
+{
+  return {m_throttle_reference_cycle, m_throttle_reference_time};
+}
+
+void CoreTimingManager::SetThrottleReference(const std::pair<s64, TimePoint>& reference)
+{
+  m_throttle_reference_cycle = reference.first;
+  m_throttle_reference_time = reference.second;
+}
+
+void CoreTimingManager::ResetThrottleToNow()
+{
+  ResetThrottle(static_cast<s64>(GetTicks()));
 }
 
 TimePoint CoreTimingManager::GetTargetHostTime(s64 target_cycle)

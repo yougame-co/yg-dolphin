@@ -4,6 +4,8 @@
 #include "Core/Rollback/Loopback.h"
 
 #include <algorithm>
+#include <charconv>
+#include <string_view>
 #include <fstream>
 #include <map>
 #include <sstream>
@@ -22,12 +24,23 @@ std::string PadHex(const Orca::Net::Pad& pad)
   return hex;
 }
 
-bool ParsePad(const std::string& hex, Orca::Net::Pad* pad)
+// The whole field as hex, or false (no exceptions: the build has them off).
+template <typename T>
+bool ParseHex(std::string_view text, T* value)
+{
+  const auto [end, error] = std::from_chars(text.data(), text.data() + text.size(), *value, 16);
+  return error == std::errc{} && end == text.data() + text.size() && !text.empty();
+}
+
+bool ParsePad(std::string_view hex, Orca::Net::Pad* pad)
 {
   if (hex.size() != pad->size() * 2)
     return false;
   for (std::size_t i = 0; i < pad->size(); ++i)
-    (*pad)[i] = static_cast<u8>(std::stoul(hex.substr(i * 2, 2), nullptr, 16));
+  {
+    if (!ParseHex(hex.substr(i * 2, 2), &(*pad)[i]))
+      return false;
+  }
   return true;
 }
 }  // namespace
@@ -57,7 +70,8 @@ std::vector<RecordedFrame> LoadRecording(const std::string& path)
       if (!ParsePad(pads[port], &recorded.pads[port]))
         return {};
     }
-    recorded.checksum = std::stoull(checksum, nullptr, 16);
+    if (checksum.size() != 16 || !ParseHex(checksum, &recorded.checksum))
+      return {};
   }
   std::vector<RecordedFrame> recording;
   for (const auto& [frame, recorded] : frames)
