@@ -460,3 +460,28 @@ TEST(OrcaLive, DesyncLeaveIsReportedOnBothSides)
   EXPECT_EQ(b.ErrorCode(), "desync") << b.Status();
   EXPECT_EQ(a.ErrorCode(), "");
 }
+
+// A room waiting for a friend stays open for as long as the friend takes: half a minute of pings
+// and no other traffic. (Windows lost its socket after about 8 s of waiting, 2026-10-01.)
+TEST(OrcaLive, WaitingRoomStaysOpen)
+{
+  const char* live = std::getenv("ORCA_LIVE_TEST");
+  if (!live || std::string(live) != "1")
+    GTEST_SKIP() << "set ORCA_LIVE_TEST=1";
+  SetEnv("ORCA_TEST_DEV_GAME", "orca-live-test");
+  RoomOptions options;
+  options.room_code =
+      "orcaw" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 10000000);
+  options.compatibility = "orca-live-test";
+  YouGameRoom a(options);
+  for (int i = 0; i < 500 && a.GetState() == RoomState::Connecting; ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  SetEnv("ORCA_TEST_DEV_GAME", nullptr);
+  ASSERT_EQ(a.GetState(), RoomState::Waiting) << a.Status();
+  for (int second = 0; second < 30; ++second)
+  {
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    ASSERT_EQ(a.GetState(), RoomState::Waiting) << "after " << second + 1 << " s: " << a.Status();
+  }
+  EXPECT_GE(a.RoundTripMs(), 0);
+}
