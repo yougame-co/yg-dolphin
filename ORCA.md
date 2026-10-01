@@ -170,7 +170,7 @@ local keyframe folder.
 - Join time:
   - 0.5 s Dolphin boot to the first frame, then 0.2-0.4 s until the keyframe is offered: room
     connect and hello, capture 8-10 ms, compress 125-170 ms, store 5 ms;
-  - transfer 8 ms (local), unpack 72-96 ms, load 17-23 ms, catch-up 0.5-0.7 ms;
+  - transfer 8 ms (local), unpack 72-96 ms, load 17-23 ms, catch-up 0.5-0.7 s;
   - 0.8-1.1 s from the friend's first frame to plugged in, about 2.2 s from process launch.
 - Over the internet, the upload of 38-53 MB adds its own time.
 
