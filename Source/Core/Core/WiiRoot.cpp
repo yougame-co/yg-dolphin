@@ -151,6 +151,9 @@ static void InitializeDeterministicWiiSaves(FS::FileSystem* session_fs,
   {
     INFO_LOG_FMT(CORE, "Orca: copying save {:016x} into the session NAND", title_id);
     CopySave(configured_fs.get(), session_fs, title_id);
+    Orca::SetSeedSaveHash(Orca::HashSessionSave(title_id));
+    NOTICE_LOG_FMT(CORE, "Orca: session save {:016x} hash {:016x} (0 = no save)", title_id,
+                   Orca::GetSeedSaveHash());
     return;
   }
 
@@ -379,6 +382,10 @@ void InitializeWiiFileSystemContents(
 
 void CleanUpWiiFileSystemContents(const BootSessionData& boot_session_data)
 {
+  // Orca: the session NAND is thrown away; nothing goes back to the player's own NAND.
+  if (Orca::SessionActive())
+    return;
+
   // In TAS mode, copy back always.
   // In Netplay, only copy back when we're the host and writing back is enabled.
   const bool wii_root_is_temporary = WiiRootIsTemporary();

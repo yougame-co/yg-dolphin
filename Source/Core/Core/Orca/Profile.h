@@ -12,6 +12,8 @@
 #include "Common/CommonTypes.h"
 #include "Common/Config/Config.h"
 
+struct Sram;
+
 // Orca per-game profiles and the settings every Orca rollback session forces. Both players of a
 // session must run identical emulated machines, so every setting that can change what the game sees
 // is pinned: the universal ones in code (ForcedConfigLoader), the game-specific ones in
@@ -48,6 +50,15 @@ std::optional<Profile> LoadProfile(const std::string& game_id, u16 revision, std
 // A config layer forcing the universal session settings plus the profile's (the Netplay layer type:
 // Orca does not run Dolphin's own netplay, and refuses to start a session while it does).
 std::unique_ptr<Config::ConfigLayerLoader> GenerateConfigLoader(const Profile& profile);
+
+// The SRAM every session boots with (Dolphin's built-in default), instead of each player's own.
+const Sram* SessionSram();
+
+// A hash of the save the session NAND was seeded with (0 when there was none). Both players must
+// match; the lobby compatibility key will include it.
+u64 HashSessionSave(u64 title_id);
+void SetSeedSaveHash(u64 hash);
+u64 GetSeedSaveHash();
 
 // After every other boot-time config change: an error if anything outranks a forced setting.
 std::optional<std::string> VerifyForcedSettings(const Profile& profile);

@@ -3,20 +3,29 @@
 
 #include "Core/Orca/Profile.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <fstream>
+#include <functional>
 
 #include <fmt/format.h>
 
 #include "Common/CPUDetect.h"
 #include "Common/FileUtil.h"
+#include "Common/Hash.h"
 #include "Common/StringUtil.h"
+#ifdef USE_RETRO_ACHIEVEMENTS
+#include "Core/Config/AchievementSettings.h"
+#endif
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/Config/SYSCONFSettings.h"
 #include "Core/Config/SessionSettings.h"
 #include "Core/Config/WiimoteSettings.h"
+#include "Core/HW/EXI/EXI.h"
+#include "Core/HW/EXI/EXI_Device.h"
 #include "Core/HW/SI/SI_Device.h"
+#include "Core/HW/Sram.h"
 #include "Core/HW/Wiimote.h"
 #include "Core/PowerPC/PowerPC.h"
 
@@ -74,6 +83,23 @@ void ForEachUniversalSetting(F&& f)
   f(Config::MAIN_WII_SD_CARD, false);
   f(Config::MAIN_BLUETOOTH_PASSTHROUGH_ENABLED, false);
   f(Config::MAIN_OVERRIDE_REGION_SETTINGS, true);
+  f(Config::MAIN_GC_LANGUAGE, 0);  // English; written into the session SRAM
+  f(Config::MAIN_WII_WIILINK_ENABLE, false);
+  f(Config::MAIN_EMULATE_SKYLANDER_PORTAL, false);
+  f(Config::MAIN_EMULATE_INFINITY_BASE, false);
+  f(Config::MAIN_EMULATE_WII_SPEAK, false);
+  for (const auto& mic : Config::MAIN_EMULATE_LOGITECH_MIC)
+    f(mic, false);
+  // No memory cards or other EXI devices (netplay forces these too).
+  for (const auto slot : {ExpansionInterface::Slot::A, ExpansionInterface::Slot::B,
+                          ExpansionInterface::Slot::SP1})
+  {
+    f(Config::GetInfoForEXIDevice(slot), ExpansionInterface::EXIDeviceType::None);
+  }
+#ifdef USE_RETRO_ACHIEVEMENTS
+  // Hardcore mode refuses state loads, which rollback needs.
+  f(Config::RA_HARDCORE_ENABLED, false);
+#endif
 
   // Wii system settings: the same on both machines rather than each user's.
   f(Config::SYSCONF_LANGUAGE, 1u);  // English
@@ -148,6 +174,65 @@ bool TestSkipRender()
 bool TestOverridesActive()
 {
   return TestPads() != 0 || TestSkipRender();
+}
+
+const Sram* SessionSram()
+{
+  static const Sram sram = [] {
+    Sram s;
+    InitSRAM(&s, "");  // no file: Dolphin's built-in default
+    return s;
+  }();
+  return &sram;
+}
+
+namespace
+{
+u64 s_seed_save_hash = 0;
+}
+
+u64 HashSessionSave(u64 title_id)
+{
+  const std::string dir = File::GetUserPath(D_SESSION_WIIROOT_IDX) +
+                          fmt::format("/title/{:08x}/{:08x}/data/", static_cast<u32>(title_id >> 32),
+                                      static_cast<u32>(title_id));
+  if (!File::IsDirectory(dir))
+    return 0;
+  // Files in name order, each hashed with its name.
+  File::FSTEntry tree = File::ScanDirectoryTree(dir, true);
+  std::vector<std::string> paths;
+  const std::function<void(const File::FSTEntry&)> collect = [&](const File::FSTEntry& e) {
+    if (!e.isDirectory)
+      paths.push_back(e.physicalName);
+    for (const auto& child : e.children)
+      collect(child);
+  };
+  collect(tree);
+  std::sort(paths.begin(), paths.end());
+  u64 hash = 0xcbf29ce484222325ull;
+  for (const std::string& path : paths)
+  {
+    std::string data;
+    File::ReadFileToString(path, data);
+    const std::string name = path.substr(dir.size());
+    hash = (hash ^ Common::GetHash64(reinterpret_cast<const u8*>(name.data()),
+                                     static_cast<u32>(name.size()), 0)) *
+           0x100000001b3ull;
+    hash = (hash ^ Common::GetHash64(reinterpret_cast<const u8*>(data.data()),
+                                     static_cast<u32>(data.size()), 0)) *
+           0x100000001b3ull;
+  }
+  return hash == 0 ? 1 : hash;
+}
+
+void SetSeedSaveHash(u64 hash)
+{
+  s_seed_save_hash = hash;
+}
+
+u64 GetSeedSaveHash()
+{
+  return s_seed_save_hash;
 }
 
 std::optional<Profile> LoadProfile(const std::string& game_id, u16 revision, std::string* error)
