@@ -8,15 +8,19 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <vector>
 
 #include <fmt/format.h>
 #include <xxh3.h>
 
+#include "Common/CommonPaths.h"
 #include "Common/Config/Config.h"
+#include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
 #include "Common/Version.h"
 #include "Core/Config/GraphicsSettings.h"
+#include "Core/ConfigLoaders/GameConfigLoader.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
 #include "Core/Config/SessionSettings.h"
@@ -61,6 +65,24 @@ std::string CompatibilityKey()
   if (const Profile* profile = ActiveProfile())
   {
     parts += fmt::format("{}|{}|", profile->game_id, profile->revision);
+    // The data files that reach emulation besides the code: the profile itself, and every game
+    // settings INI Dolphin loads for this disc, shipped and the player's own (a local edit there
+    // changes what the game runs with, so it must change the key).
+    std::vector<std::string> files{File::GetSysDirectory() + "Orca/" + profile->game_id + ".ini"};
+    for (const std::string& name :
+         ConfigLoaders::GetGameIniFilenames(profile->game_id, profile->revision))
+    {
+      files.push_back(File::GetSysDirectory() + GAMESETTINGS_DIR DIR_SEP + name);
+      files.push_back(File::GetUserPath(D_GAMESETTINGS_IDX) + name);
+    }
+    for (const std::string& path : files)
+    {
+      std::string contents;
+      if (File::ReadFileToString(path, contents))
+        parts += fmt::format("{:016x}|", XXH3_64bits(contents.data(), contents.size()));
+      else
+        parts += "-|";
+    }
     for (const auto& [location, value] : profile->forced)
       parts += fmt::format("{}.{}.{}={}|", static_cast<int>(location.system), location.section,
                            location.key, value);
