@@ -66,6 +66,9 @@ public:
 
   // Leaves the room (reporting the match void if one is running).
   void Leave();
+  // Why this player is about to leave, told to the friend first so both report the same thing
+  // (an Orca::Status code; only "desync" is passed on).
+  void SetLeaveReason(std::string reason);
 
 private:
   struct Impl;

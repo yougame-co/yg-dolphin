@@ -392,6 +392,8 @@ struct YouGameRoom::Impl
   RoomState state = RoomState::Connecting;
   std::string status = "Connecting to YouGame...";
   std::string error_code;
+  // Why this player leaves, told to the friend before going (Orca::Status code, e.g. "desync").
+  std::string leave_reason;
   std::string code;
   int seat = -1;
   u32 seed = 0;
@@ -407,6 +409,8 @@ struct YouGameRoom::Impl
   int revision = -1;
   int peer_seat = -1;
   bool peer_hello = false;
+  // Why the friend said it was leaving (its "bye"), for this side's own report.
+  std::string peer_bye;
   std::optional<Clock::time_point> begun_at;
   int begin_tries = 0;
   Clock::time_point last_send{}, last_ping{}, last_hello{};
@@ -470,8 +474,8 @@ struct YouGameRoom::Impl
     status = std::move(line);
   }
 
-  // `code`: the desktop app's error code for this end (Orca::Status), empty for a normal leave.
-  void End(std::string why, std::string code = "network")
+  // `app_code`: the desktop app's error code for this end (Orca::Status), empty for a normal leave.
+  void End(std::string why, std::string app_code = "network")
   {
     WARN_LOG_FMT(NETPLAY, "Orca room ended: {}", why);
     std::lock_guard lock(mutex);
@@ -479,7 +483,7 @@ struct YouGameRoom::Impl
       return;
     state = RoomState::Ended;
     status = std::move(why);
-    error_code = std::move(code);
+    error_code = std::move(app_code);
   }
 
   // `held`: through the test delay queue when one is configured (teardown messages skip it).
@@ -714,6 +718,25 @@ struct YouGameRoom::Impl
       Tick();
     }
 
+    // The bridge threads wind down while the goodbyes go out.
+    bridge_done = true;
+    bridge_wake.notify_all();
+    std::string reason;
+    {
+      std::lock_guard lock(mutex);
+      reason = leave_reason;
+    }
+    if (!reason.empty() && !peer.empty() && ws.IsOpen())
+    {
+      picojson::object d;
+      d["k"] = picojson::value("bye");
+      d["r"] = picojson::value(reason);
+      picojson::object message;
+      message["t"] = picojson::value("msg");
+      message["to"] = picojson::value(peer);
+      message["d"] = picojson::value(d);
+      SendJson(message, std::chrono::milliseconds(500), false);
+    }
     // Leaving mid-match reports it void, so neither player is left waiting for a result.
     if (!match_id.empty() && ws.IsOpen())
     {
@@ -734,6 +757,7 @@ struct YouGameRoom::Impl
   }
 
   // The lobby the page shows: the same mpRoom a web game's SDK publishes (Player.tsx parses it).
+  // Nothing is published at the end: the app clears the lobby when Orca exits.
   void Publish()
   {
     if (!bridged)
@@ -802,7 +826,11 @@ struct YouGameRoom::Impl
         continue;
       const auto response = http.Post(bridge_url + "/sdk", *body, headers,
                                       Common::HttpRequest::AllowedReturnCodes::All);
-      if (!response || http.GetLastResponseCode() != 200)
+      picojson::value reply;
+      const bool taken = response && http.GetLastResponseCode() == 200 &&
+                         ParseJson(std::string(response->begin(), response->end()), &reply) &&
+                         reply.is<picojson::object>() && reply.get("ok").evaluate_as_boolean();
+      if (!taken)
       {
         WARN_LOG_FMT(NETPLAY, "Orca room: the app did not take the room update (HTTP {})",
                      http.GetLastResponseCode());
@@ -858,8 +886,9 @@ struct YouGameRoom::Impl
       stream->pending.erase(0, newline + 1);
       if (line.ends_with("\r"))
         line.pop_back();
-      if (line.starts_with("data: "))
-        stream->impl->OnPageEvent(line.substr(6));
+      // SSE: "data:" and an optional space.
+      if (line.starts_with("data:"))
+        stream->impl->OnPageEvent(line.substr(line.starts_with("data: ") ? 6 : 5));
     }
     return size * count;
   }
@@ -872,11 +901,15 @@ struct YouGameRoom::Impl
   void EventsLoop()
   {
     // The stream stays open for the whole session; reconnect if the app restarts it.
+    int backoff = 500;
     while (!bridge_done)
     {
       CURL* curl = curl_easy_init();
       if (!curl)
+      {
+        ERROR_LOG_FMT(NETPLAY, "Orca room: couldn't open the app's event stream");
         return;
+      }
       EventStream stream{this, {}};
       curl_slist* headers =
           curl_slist_append(nullptr, ("Authorization: Bearer " + bridge_token).c_str());
@@ -891,13 +924,24 @@ struct YouGameRoom::Impl
       curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
       curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
       const CURLcode result = curl_easy_perform(curl);
+      long http_status = 0;
+      curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &http_status);
       curl_slist_free_all(headers);
       curl_easy_cleanup(curl);
       if (bridge_done)
         return;
-      WARN_LOG_FMT(NETPLAY, "Orca room: the app's event stream ended ({})",
-                   curl_easy_strerror(result));
-      for (int i = 0; i < 20 && !bridge_done; ++i)
+      // An app without the stream, or one that refuses the token, won't change its mind.
+      if (http_status == 401 || http_status == 403 || http_status == 404)
+      {
+        ERROR_LOG_FMT(NETPLAY, "Orca room: the app refused its event stream (HTTP {}); the page's "
+                               "lobby commands won't reach this game",
+                      http_status);
+        return;
+      }
+      WARN_LOG_FMT(NETPLAY, "Orca room: the app's event stream ended ({}, HTTP {})",
+                   curl_easy_strerror(result), http_status);
+      backoff = std::min(backoff * 2, 10000);
+      for (int waited = 0; waited < backoff && !bridge_done; waited += 50)
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
   }
@@ -1147,7 +1191,12 @@ struct YouGameRoom::Impl
       if (current == RoomState::Playing)
       {
         if ((t == "leave" || t == "away") && PeerGone(m))
-          End("Your friend left the match", "peer_left");
+        {
+          if (peer_bye == "desync")
+            End("Your games went out of sync, so the match ended", "desync");
+          else
+            End("Your friend left the match", "peer_left");
+        }
         return;
       }
       Roster(m);
@@ -1163,8 +1212,10 @@ struct YouGameRoom::Impl
       {
         match_id.clear();
         const bool cancelled = m.count("void") && m.at("void").evaluate_as_boolean();
-        End(cancelled ? "The match was cancelled" : "The match is over",
-            cancelled ? "peer_left" : "");
+        if (cancelled && peer_bye == "desync")
+          End("Your games went out of sync, so the match ended", "desync");
+        else
+          End(cancelled ? "The match was cancelled" : "The match is over", cancelled ? "peer_left" : "");
       }
     }
     else if (t == "msg")
@@ -1205,13 +1256,20 @@ struct YouGameRoom::Impl
     }
     else if (t == "kicked")
     {
-      End("You were removed from the room", "room_mismatch");
+      End("You were removed from the room", "kicked");
     }
   }
 
   void OnPeerMessage(const picojson::object& d, RoomState current)
   {
     const std::string kind = Str(d, "k");
+    if (kind == "bye")
+    {
+      // Only known reasons, so a peer can't put text in this player's report.
+      if (Str(d, "r") == "desync")
+        peer_bye = "desync";
+      return;
+    }
     if (kind == "hello")
     {
       if (Str(d, "c") != options.compatibility)
@@ -1280,6 +1338,12 @@ std::string YouGameRoom::Status() const
 {
   std::lock_guard lock(m_impl->mutex);
   return m_impl->status;
+}
+
+void YouGameRoom::SetLeaveReason(std::string reason)
+{
+  std::lock_guard lock(m_impl->mutex);
+  m_impl->leave_reason = std::move(reason);
 }
 
 std::string YouGameRoom::ErrorCode() const

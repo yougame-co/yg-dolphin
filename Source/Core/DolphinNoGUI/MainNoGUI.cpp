@@ -307,6 +307,7 @@ int main(const int argc, char* argv[])
   if (!BootManager::BootCore(Core::System::GetInstance(), std::move(boot), wsi))
   {
     fprintf(stderr, "Could not boot the specified file\n");
+    Orca::Status::Finish();
     return 1;
   }
 
@@ -320,9 +321,8 @@ int main(const int argc, char* argv[])
   Core::Shutdown(Core::System::GetInstance());
   s_platform.reset();
 
-  // In an Orca session the last "orca error" line explains a non-zero exit.
-  Orca::Status::State("ended");
-  return Orca::Status::ExitCode();
+  // In an Orca session the "orca error" line explains a non-zero exit.
+  return Orca::Status::Finish();
 }
 
 #ifdef _WIN32

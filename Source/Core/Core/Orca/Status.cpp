@@ -65,4 +65,19 @@ int ExitCode()
   std::lock_guard lock(s_mutex);
   return s_errored ? 1 : 0;
 }
+
+int Finish()
+{
+  if (!SessionActive())
+    return 0;
+  bool stuck;
+  {
+    std::lock_guard lock(s_mutex);
+    stuck = !s_errored && (s_state.empty() || s_state == "booting");
+  }
+  if (stuck)
+    Error("boot", "Orca couldn't start the game");
+  State("ended");
+  return ExitCode();
+}
 }  // namespace Orca::Status

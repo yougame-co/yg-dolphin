@@ -429,3 +429,34 @@ TEST(OrcaRoom, RefusalsHaveAppCodes)
   EXPECT_EQ(RefusalCode("WebSocket connect failed: ... (HTTP 409)"), "room_full");
   EXPECT_EQ(RefusalCode("WebSocket connect failed: ... (HTTP 0)"), "network");
 }
+
+// A side that leaves because its game went out of sync says so first: the friend reports a desync
+// too, not that its friend left.
+TEST(OrcaLive, DesyncLeaveIsReportedOnBothSides)
+{
+  const char* live = std::getenv("ORCA_LIVE_TEST");
+  if (!live || std::string(live) != "1")
+    GTEST_SKIP() << "set ORCA_LIVE_TEST=1";
+  SetEnv("ORCA_TEST_DEV_GAME", "orca-live-test");
+  RoomOptions options;
+  options.room_code =
+      "orcab" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 10000000);
+  options.compatibility = "orca-live-test";
+  YouGameRoom a(options);
+  for (int i = 0; i < 500 && a.GetState() == RoomState::Connecting; ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  YouGameRoom b(options);
+  for (int i = 0; i < 1500 && !(a.Connected() && b.Connected()); ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  SetEnv("ORCA_TEST_DEV_GAME", nullptr);
+  ASSERT_TRUE(a.Connected()) << a.Status();
+  ASSERT_TRUE(b.Connected()) << b.Status();
+
+  a.SetLeaveReason("desync");
+  a.Leave();
+  for (int i = 0; i < 500 && b.Connected(); ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  EXPECT_FALSE(b.Connected());
+  EXPECT_EQ(b.ErrorCode(), "desync") << b.Status();
+  EXPECT_EQ(a.ErrorCode(), "");
+}

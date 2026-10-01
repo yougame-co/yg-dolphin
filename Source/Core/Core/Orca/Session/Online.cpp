@@ -169,22 +169,34 @@ std::string StatusLine()
 
 void ReportSessionEnd(const std::string& session_error)
 {
-  if (session_error.starts_with("Desync"))
+  const auto room = Room();
+  // Inputs that disagree, or a checksum that does: the games went apart. The friend hears it
+  // before this side leaves, so both report the same thing.
+  const bool desync = session_error.starts_with("Desync") ||
+                      session_error.find("changed its input") != std::string::npos ||
+                      session_error.find("arrived after") != std::string::npos ||
+                      session_error.starts_with("No local input");
+  if (desync)
   {
+    if (room)
+      room->SetLeaveReason("desync");
     Status::Error("desync", "Your games went out of sync, so the match ended");
     return;
   }
-  // The session ends when the room does: the room says why, unless this player left.
-  const auto room = Room();
-  const std::string code = room ? room->ErrorCode() : "";
+  // The session ends when the room does: the room says why, unless this player left. The state
+  // first: once Ended, the code is final.
   if (room && room->GetState() == Net::RoomState::Ended)
   {
-    if (!code.empty())
+    if (const std::string code = room->ErrorCode(); !code.empty())
       Status::Error(code, room->Status());
     return;
   }
-  if (!session_error.empty())
-    Status::Error("network", session_error);
+  if (session_error.empty())
+    return;
+  // The emulator side failed (a snapshot that wouldn't save or load, lost frame alignment), or
+  // the friend sent something no honest Orca sends.
+  const bool from_peer = session_error.find("sent an invalid packet") != std::string::npos;
+  Status::Error(from_peer ? "network" : "internal", session_error);
 }
 
 void Shutdown()
