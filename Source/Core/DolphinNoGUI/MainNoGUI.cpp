@@ -381,6 +381,7 @@ int main(const int argc, char* argv[])
   const WindowSystemInfo wsi = s_platform->GetWindowSystemInfo();
 
   UICommon::SetUserDirectory(user_directory);
+  UICommon::CreateDirectories();
   UICommon::Init();
 #ifdef ORCA_MACOS_BUNDLE
   // The local controller is port 1: until the player has their own mapping, the keyboard and the
