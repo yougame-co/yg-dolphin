@@ -721,6 +721,7 @@ PUBLIC
   videosoftware
 
 PRIVATE
+  CURL::libcurl
   FatFs
   fmt::fmt
   LZO::LZO

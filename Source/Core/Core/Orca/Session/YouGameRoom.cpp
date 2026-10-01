@@ -566,8 +566,8 @@ struct YouGameRoom::Impl
           return false;
         }
         // Copied out first: assigning a map from one of its own elements frees it mid-copy.
-        picojson::object result = o["result"].get<picojson::object>();
-        o = std::move(result);
+        picojson::object unwrapped = o["result"].get<picojson::object>();
+        o = std::move(unwrapped);
       }
       else if (http.GetLastResponseCode() != 200)
       {
