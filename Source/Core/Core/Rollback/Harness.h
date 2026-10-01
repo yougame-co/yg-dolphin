@@ -34,7 +34,8 @@
 //                         is local, seat 2 a virtual remote whose inputs arrive late; it also sends
 //                         the recording's checksums, so any divergence ends the session as a desync.
 //                         YG_LOOPBACK_LAG (6) + _JITTER (3) frames late, _DELAY input delay (2),
-//                         _MAX_ROLLBACK (7), _CHECKSUM_EVERY (10). A lag above max rollback plus the
+//                         _MAX_ROLLBACK (7), _CHECKSUM_EVERY (10), _SEATS (2, or 4 with
+//                         ORCA_TEST_PADS=4: seats 2-4 all remote). A lag above max rollback plus the
 //                         input delay makes the session stall. Exit well before the recording ends.
 // Runs need an Orca session (ORCA_SESSION=1): the frame boundary hook comes from its profile. All
 // modes run unthrottled. The frame counter is one per pass through the game's frame boundary. In a

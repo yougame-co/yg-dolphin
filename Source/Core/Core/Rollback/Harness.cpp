@@ -74,6 +74,8 @@ const int s_lb_jitter = std::max(0, EnvInt("YG_LOOPBACK_JITTER", 3));
 const int s_lb_delay = std::max(0, EnvInt("YG_LOOPBACK_DELAY", 2));
 const int s_lb_max_rollback = std::max(1, EnvInt("YG_LOOPBACK_MAX_ROLLBACK", 7));
 const int s_lb_checksum_every = std::max(1, EnvInt("YG_LOOPBACK_CHECKSUM_EVERY", 10));
+// 2 or 4 seats; seat 1 is local, the others virtual remotes (4 needs ORCA_TEST_PADS=4).
+const int s_lb_seats = EnvInt("YG_LOOPBACK_SEATS", 2) == 4 ? 4 : 2;
 // Diagnosis: save a snapshot at every boundary from this frame on and never load (does saving
 // alone change the run?).
 const int s_save_only_from = EnvInt("YG_SAVE_ONLY_FROM", -1);
@@ -620,19 +622,28 @@ void LoopbackBoundary(Core::System& system, int frame_here, bool first_pass)
       ERROR_LOG_FMT(ROLLBACK, "Loopback: {}", run.error);
       return;
     }
-    // Two seats only: ports 3 and 4 would replay as neutral and read as a desync.
+    // Ports 3 and 4 are GameCube pads only under ORCA_TEST_PADS=4.
+    if (s_lb_seats == 4 && Orca::TestPads() != 4)
+    {
+      run.error = "YG_LOOPBACK_SEATS=4 needs ORCA_TEST_PADS=4";
+      ERROR_LOG_FMT(ROLLBACK, "Loopback: {}", run.error);
+      run.recording.clear();
+      return;
+    }
+    // With two seats, ports 3 and 4 would replay as neutral and read as a desync.
     for (const Loopback::RecordedFrame& recorded : run.recording)
     {
-      if (recorded.pads[2] != Orca::Net::Pad{} || recorded.pads[3] != Orca::Net::Pad{})
+      if (s_lb_seats == 2 &&
+          (recorded.pads[2] != Orca::Net::Pad{} || recorded.pads[3] != Orca::Net::Pad{}))
       {
-        run.error = "the recording has input on ports 3-4; the loopback plays two seats";
+        run.error = "the recording has input on ports 3-4: set YG_LOOPBACK_SEATS=4";
         ERROR_LOG_FMT(ROLLBACK, "Loopback: {}", run.error);
         run.recording.clear();
         return;
       }
     }
     Orca::Net::Config config;
-    config.seats = 2;
+    config.seats = s_lb_seats;
     config.local_seat = 0;
     config.input_delay = s_lb_delay;
     // The recording fixes which frame each local input lands on: no adaptive delay here (time sync
@@ -640,16 +651,19 @@ void LoopbackBoundary(Core::System& system, int frame_here, bool first_pass)
     config.max_delay = s_lb_delay;
     config.max_rollback = s_lb_max_rollback;
     config.checksum_every = s_lb_checksum_every;
-    run.remote = std::make_unique<Loopback::VirtualRemote>(run.recording, 1, 0, s_lb_lag,
-                                                           s_lb_jitter, s_lb_delay,
+    std::vector<int> remote_seats;
+    for (int seat = 1; seat < s_lb_seats; ++seat)
+      remote_seats.push_back(seat);
+    run.remote = std::make_unique<Loopback::VirtualRemote>(run.recording, std::move(remote_seats),
+                                                           0, s_lb_lag, s_lb_jitter, s_lb_delay,
                                                            s_lb_checksum_every);
     run.port = std::make_unique<RingPort>(system, config.max_rollback, true);
     run.session = std::make_unique<Orca::Net::Session>(config, *run.port, *run.remote);
     NOTICE_LOG_FMT(ROLLBACK,
-                   "Loopback: {} recorded frames, remote lag {}+0..{}, input delay {}, max "
-                   "rollback {}, checksum every {}",
-                   run.recording.size(), s_lb_lag, s_lb_jitter, s_lb_delay, s_lb_max_rollback,
-                   s_lb_checksum_every);
+                   "Loopback: {} recorded frames, {} seats, remote lag {}+0..{}, input delay {}, "
+                   "max rollback {}, checksum every {}",
+                   run.recording.size(), s_lb_seats, s_lb_lag, s_lb_jitter, s_lb_delay,
+                   s_lb_max_rollback, s_lb_checksum_every);
   }
   if (!run.session)
     return;
