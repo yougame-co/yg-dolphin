@@ -109,6 +109,10 @@ bool WebSocket::Connect(const std::string& url, std::chrono::milliseconds timeou
     m_impl->Release();
     return false;
   }
+  // CURLOPT_TIMEOUT_MS bounds the handshake only. libcurl keeps applying it to the transfer
+  // afterwards, and Schannel checks it on every send, so on Windows each send failed with
+  // "timed out sending data" once the socket was older than the connect timeout.
+  curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 0L);
   m_impl->socket = socket;
   m_impl->open = true;
   return true;
