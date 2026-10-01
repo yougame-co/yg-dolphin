@@ -3,9 +3,11 @@
 
 #include "DolphinNoGUI/Platform.h"
 
+#include "Core/Core.h"
 #include "Core/HW/ProcessorInterface.h"
 #include "Core/IOS/IOS.h"
 #include "Core/IOS/STM/STM.h"
+#include "Core/Orca/Branding.h"
 #include "Core/Orca/Profile.h"
 #include "Core/System.h"
 
@@ -22,6 +24,7 @@ void Platform::SetTitle(const std::string& title)
 
 void Platform::UpdateRunningFlag()
 {
+  UpdateTitle();
   if (m_shutdown_requested.TestAndClear())
   {
     const auto& system = Core::System::GetInstance();
@@ -40,6 +43,36 @@ void Platform::UpdateRunningFlag()
       m_running.Clear();
     }
   }
+}
+
+void Platform::UpdateTitle()
+{
+  if (Orca::SessionActive() &&
+      Core::GetState(Core::System::GetInstance()) != Core::State::Uninitialized)
+  {
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= m_next_title_check)
+    {
+      m_next_title_check = now + std::chrono::milliseconds(250);
+      ShowTitle(Orca::WindowTitle());
+    }
+  }
+
+  std::optional<std::string> title;
+  {
+    std::lock_guard lock(m_title_lock);
+    title.swap(m_requested_title);
+  }
+  if (!title || *title == m_shown_title)
+    return;
+  m_shown_title = std::move(*title);
+  SetTitle(m_shown_title);
+}
+
+void Platform::ShowTitle(const std::string& title)
+{
+  std::lock_guard lock(m_title_lock);
+  m_requested_title = title;
 }
 
 void Platform::Stop()

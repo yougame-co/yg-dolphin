@@ -6,6 +6,7 @@
 #include "Common/MsgHandler.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
+#include "Core/Orca/Profile.h"
 #include "Core/State.h"
 #include "Core/System.h"
 #include "VideoCommon/EFBInterface.h"
@@ -203,7 +204,7 @@ bool PlatformMacOS::Init()
   [m_window makeKeyAndOrderFront:NSApp];
   [m_window makeMainWindow];
   [NSApp activateIgnoringOtherApps:YES];
-  [m_window setTitle:@"Dolphin-emu-nogui"];
+  [m_window setTitle:@"Orca"];
 
   SetupMenu();
 
@@ -312,11 +313,13 @@ void PlatformMacOS::SetupMenu()
                                                            action:nil
                                                     keyEquivalent:@""];
     [menuBar addItem:appMenuItem];
-    [menuBar addItem:stateMenuItem];
+    // Orca: a session refuses save states, so it doesn't offer them.
+    if (!Orca::SessionActive())
+      [menuBar addItem:stateMenuItem];
     [menuBar addItem:miscMenuItem];
 
     // Quit
-    NSString* quitTitle = [@"Quit " stringByAppendingString:@"dolphin-emu-nogui"];
+    NSString* quitTitle = @"Quit Orca";
     NSMenuItem* quitMenuItem = [[NSMenuItem alloc] initWithTitle:quitTitle
                                                           action:@selector(shutdown)
                                                    keyEquivalent:@"q"];
