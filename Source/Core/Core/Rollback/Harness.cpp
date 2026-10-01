@@ -31,6 +31,7 @@
 #include "Core/HW/Memmap.h"
 #include "Core/Orca/Profile.h"
 #include "Core/PowerPC/JitInterface.h"
+#include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Session/PadCodec.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/Rollback/Loopback.h"
@@ -127,6 +128,11 @@ FILE* OpenHashLog()
   return path && *path ? std::fopen(path, "w") : nullptr;
 }
 FILE* const s_hashlog = OpenHashLog();
+
+// The modes that save or load snapshots or play their own session (YG_SYNCTEST, YG_BENCH,
+// YG_LOOPBACK, YG_SAVE_ONLY_FROM) can't run beside a real online match: they would load states under
+// it and share its ring and NAND journal. Scripted input, recording, hashing and exit still work.
+bool SnapshotModesAllowed();
 
 FILE* OpenPadRecording()
 {
@@ -539,6 +545,22 @@ void Bench(Core::System& system, bool first_pass)
   s_last = clock::now();
 }
 
+bool SnapshotModesAllowed()
+{
+  static const bool allowed = [] {
+    if (!Orca::Online::Enabled())
+      return true;
+    if (s_synctest_k > 0 || s_bench_k > 0 || s_loopback || s_save_only_from >= 0)
+    {
+      ERROR_LOG_FMT(ROLLBACK, "Harness: YG_SYNCTEST, YG_BENCH, YG_LOOPBACK and YG_SAVE_ONLY_FROM are "
+                              "off in an online match (they save and load snapshots or play their "
+                              "own session)");
+    }
+    return false;
+  }();
+  return allowed;
+}
+
 // ---- Loopback session (YG_LOOPBACK) ----
 
 struct LoopbackRun
@@ -821,16 +843,26 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
   }
   // Not beside a session: both rings would trim and stop the same NAND journal.
   if (s_save_only_from >= 0 && frame_here >= s_save_only_from && !s_loopback &&
-      !RingPort::Active())
+      !RingPort::Active() && SnapshotModesAllowed())
   {
     Ring().Save(system, frame_here);
   }
-  if (s_loopback)
+  if (!SnapshotModesAllowed())
+  {
+    // An online match drives the session at this boundary.
+  }
+  else if (s_loopback)
+  {
     LoopbackBoundary(system, frame_here, first_pass_here);
+  }
   else if (s_synctest_k > 0 && frame_here >= s_synctest_from)
+  {
     SyncTest(system);
+  }
   else if (s_bench_k > 0)
+  {
     Bench(system, first_pass_here);
+  }
 
   // A session rolled back here: the state is now the start of that frame, which the next boundary
   // ends.
@@ -895,7 +927,7 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
       NOTICE_LOG_FMT(ROLLBACK, "Session save hash at exit: {:016x}",
                      Orca::HashSessionSave(SConfig::GetInstance().GetTitleID()));
     }
-    if (s_loopback)
+    if (s_loopback && SnapshotModesAllowed())
     {
       EndLoopback();
       LogLoopbackResult(frame_here);
