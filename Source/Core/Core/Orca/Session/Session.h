@@ -63,6 +63,10 @@ struct Packet
   // Frames the sender re-simulated in its last one-second window (-1: no window yet). A side's
   // rollbacks come from the other side's input delay, so each side adapts on the worst number.
   int resimulated = -1;
+  // Stalls the sender has had since inputs from every other player started arriving, counted over
+  // the whole match (-1: not reported). Each side's stalls come from the others' input delay, so
+  // every side raises on any side's stall; a running count can't be missed or counted twice.
+  int stalls = -1;
   // The sender's smoothed lead over the slowest other player, in tenths of a frame: its frame minus
   // the frame that player last reported (nullopt: nothing received yet). Both leads include the
   // same transit time, so time sync halves their difference and the transit cancels out.
@@ -185,6 +189,7 @@ private:
   void SampleLocal(const Pad& local_pad);
   void AdaptDelay();
   int LatencyDelay() const;
+  int DelayFloor() const;
   void ApplyStartDelay();
   double FramesFromMs(double ms) const;
   void TrackAdvantage();
@@ -224,10 +229,17 @@ private:
   int m_delay;
   int m_window_start = 0;
   int m_window_resimulated = 0;
-  int m_window_stalls = 0;
   // Re-simulated frames in this player's last window (sent), and in each peer's (received).
   int m_last_resimulated = -1;
   std::array<int, MAX_SEATS> m_peer_resimulated{-1, -1, -1, -1};
+  // Stalls once every peer's inputs started arriving (sent), as of the last window; each peer's
+  // reported count, and how much of it the last window already acted on.
+  int m_link_stalls = 0;
+  int m_window_link_stalls = 0;
+  std::array<int, MAX_SEATS> m_peer_stalls{0, 0, 0, 0};
+  std::array<int, MAX_SEATS> m_peer_stalls_seen{0, 0, 0, 0};
+  // Windows left before a delay raised for stalls may be lowered again.
+  int m_stall_hold = 0;
   int m_quiet_windows = 0;
   int m_quiet_needed;
   // After a lower: the delay before it, restored if a window on probation is not quiet (0: none).
@@ -239,6 +251,7 @@ private:
   std::optional<double> m_rtt_ms;
   double m_rtt_dev_ms = 0;
   std::array<std::optional<int>, MAX_SEATS> m_peer_rtt;
+  int m_rtt_samples = 0;
   // The delay the start estimate last set (0: none); it may follow the estimate down only while
   // nothing else changed the delay since.
   int m_start_delay = 0;

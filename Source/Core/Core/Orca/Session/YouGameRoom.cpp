@@ -140,9 +140,10 @@ std::string Str(const picojson::object& o, const std::string& key)
 
 constexpr int MAX_FRAME = 1 << 30;
 // Telemetry bounds: re-simulated frames in one second, a lead in tenths of a frame, a round trip
-// in milliseconds. Far beyond anything honest (the session clamps further), small enough that no
-// arithmetic on them overflows.
+// in milliseconds, stalls in a match. Far beyond anything honest (the session clamps further),
+// small enough that no arithmetic on them overflows.
 constexpr int MAX_RESIMULATED = 1 << 20;
+constexpr int MAX_STALLS = 1 << 20;
 constexpr int MAX_ADVANTAGE = 1 << 20;
 constexpr int MAX_RTT = 1 << 20;
 
@@ -221,6 +222,8 @@ picojson::object PacketToJson(const Packet& packet)
     d["v"] = picojson::value(static_cast<double>(*packet.advantage));
   if (packet.rtt)
     d["l"] = picojson::value(static_cast<double>(*packet.rtt));
+  if (packet.stalls >= 0)
+    d["n"] = picojson::value(static_cast<double>(packet.stalls));
   if (packet.checksum_frame)
   {
     d["x"] = picojson::value(static_cast<double>(*packet.checksum_frame));
@@ -282,6 +285,8 @@ bool PacketFromJson(const picojson::object& d, Packet* packet)
     out.resimulated = *resimulated;
   out.advantage = ClampedInt(d, "v", -MAX_ADVANTAGE, MAX_ADVANTAGE);
   out.rtt = ClampedInt(d, "l", 0, MAX_RTT);
+  if (const auto stalls = ClampedInt(d, "n", 0, MAX_STALLS))
+    out.stalls = *stalls;
   if (d.count("x"))
   {
     const auto frame = Int(d, "x", 0, MAX_FRAME);

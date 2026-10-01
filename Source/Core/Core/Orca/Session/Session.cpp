@@ -18,8 +18,15 @@ namespace
 constexpr int QUIET_WINDOWS = 10;
 constexpr int MAX_QUIET_WINDOWS = 1024;
 // Round trips may raise the delay during the first seconds of play only: later, a raise from a
-// single slow ping would cost responsiveness the rollbacks never asked for.
+// single slow ping would cost responsiveness the rollbacks never asked for. After that they only
+// keep quiet windows from lowering it below what the link needs, once this many have come in: a
+// lone stray ping can't hold the delay up all match. (A bad first one still takes about twenty
+// samples to fade from the smoothed estimate; until then it only delays lowers.)
 constexpr int START_SECONDS = 3;
+constexpr int FLOOR_SAMPLES = 8;
+// A stall is the worst thing a player sees: a delay raised for one is kept this many windows
+// without a stall anywhere before quiet windows may lower it.
+constexpr int STALL_HOLD_WINDOWS = 30;
 // No working relay is ten seconds away.
 constexpr int MAX_RTT_MS = 10000;
 // Time sync averages this many frames, waits at most once per that many, and only when it is more
@@ -135,7 +142,12 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad)
   if (m_frame - ConfirmedFrame() > m_config.max_rollback)
   {
     if (!m_stalling)
+    {
       ++m_stats.stalls;
+      // Before every peer's first input arrives, a stall is the trip itself, not the delay.
+      if (ConfirmedFrame() >= 0)
+        ++m_link_stalls;
+    }
     m_stalling = true;
     return {StepKind::Stall, m_frame};
   }
@@ -222,6 +234,7 @@ void Session::OnRoundTrip(int rtt_ms)
     *m_rtt_ms += error / 8;
     m_rtt_dev_ms += (std::abs(error) - m_rtt_dev_ms) / 4;
   }
+  ++m_rtt_samples;
   ApplyStartDelay();
 }
 
@@ -266,20 +279,40 @@ int Session::LatencyDelay() const
   return std::clamp(wanted, m_config.input_delay, m_config.max_delay);
 }
 
+int Session::DelayFloor() const
+{
+  // After the start, the link estimate still bounds how far quiet windows may lower the delay.
+  if (!m_rtt_ms || m_rtt_samples < FLOOR_SAMPLES)
+    return m_config.input_delay;
+  return LatencyDelay();
+}
+
 void Session::AdaptDelay()
 {
   // A delay shorter than the link makes every wrong guess re-simulate several frames inside one
   // displayed frame; a machine that spends its budget re-simulating answers late, the others guess
   // deeper, and the match spirals. So once a "second" (frame_rate frames run): re-simulating half
-  // a frame per frame on average, or two stalls, raises the delay one frame; enough quiet windows
+  // a frame per frame on average, or any stall, raises the delay one frame; enough quiet windows
   // in a row lower it one frame towards input_delay. A lower that brings the trouble back is
   // undone at the next window, and the quiet needed before the next try doubles.
+  //
+  // A stall is what players notice most, and one side's stalls come from the other side's delay
+  // (its inputs arrive too late for this side's window). So stalls count from both sides, like
+  // re-simulated frames: one here or one a peer reports raises every side's delay, and a raised
+  // delay then waits STALL_HOLD_WINDOWS windows without a stall anywhere before it may come down.
   const int mine = m_stats.resimulated_frames - m_window_resimulated;
-  const int stalls = m_stats.stalls - m_window_stalls;
+  int stalls = m_link_stalls - m_window_link_stalls;
   m_window_start = m_frame;
   m_window_resimulated = m_stats.resimulated_frames;
-  m_window_stalls = m_stats.stalls;
+  m_window_link_stalls = m_link_stalls;
   m_last_resimulated = mine;
+  for (int s = 0; s < m_config.seats; ++s)
+  {
+    if (s == m_config.local_seat || m_peer_stalls[s] <= m_peer_stalls_seen[s])
+      continue;
+    stalls += 1;
+    m_peer_stalls_seen[s] = m_peer_stalls[s];
+  }
   if (m_config.max_delay <= m_config.input_delay)
     return;
 
@@ -292,6 +325,10 @@ void Session::AdaptDelay()
   }
   const int rate = m_config.frame_rate;
   const bool quiet = resimulated * 20 <= rate && stalls == 0;
+  if (stalls > 0)
+    m_stall_hold = STALL_HOLD_WINDOWS;
+  else if (m_stall_hold > 0)
+    --m_stall_hold;
 
   // On probation after a lower: trouble means the lower was wrong, straight back up. Two windows,
   // where the SDK watches one: a lower makes the other side roll back, and its report of that
@@ -315,7 +352,7 @@ void Session::AdaptDelay()
       m_tried_delay = 0;
   }
 
-  if (resimulated * 2 >= rate || stalls >= 2)
+  if (resimulated * 2 >= rate || stalls > 0)
   {
     m_quiet_windows = 0;
     if (m_delay < m_config.max_delay)
@@ -330,7 +367,7 @@ void Session::AdaptDelay()
     int needed = m_quiet_needed;
     if (m_rtt_ms && FramesFromMs(m_rtt_dev_ms) <= 1.0)
       needed = std::max(5, needed / 2);
-    if (++m_quiet_windows >= needed && m_delay > m_config.input_delay)
+    if (++m_quiet_windows >= needed && m_stall_hold == 0 && m_delay > DelayFloor())
     {
       m_quiet_windows = 0;
       m_tried_delay = m_delay;
@@ -492,6 +529,8 @@ void Session::ReceivePackets()
       m_peer_resimulated[s] =
           std::min(packet.resimulated, m_config.frame_rate * m_config.max_rollback);
     }
+    // A running count: only ever grows (a lower number is a stale or hostile one).
+    m_peer_stalls[s] = std::max(m_peer_stalls[s], packet.stalls);
     if (packet.checksum_frame)
       m_peer_checksums[*packet.checksum_frame] = packet.checksum;
   }
@@ -561,6 +600,7 @@ void Session::SendPacket()
     packet.ack[s] = s == m_config.local_seat ? -1 : m_received[s];
   packet.current_frame = m_frame;
   packet.resimulated = m_last_resimulated;
+  packet.stalls = m_link_stalls;
   std::optional<double> lead;
   for (int s = 0; s < m_config.seats; ++s)
   {
