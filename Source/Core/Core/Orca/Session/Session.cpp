@@ -158,6 +158,9 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad)
   m_waiting = false;
 
   const int run = m_frame;
+  // Every frame runs with this player's own input for it, the one the others receive.
+  if (!m_local.contains(run))
+    return Fail(fmt::format("No local input for frame {}", run));
   const Pads pads = PadsFor(run);
   m_used[run] = pads;
   m_game.SetPads(run, pads);
@@ -490,6 +493,14 @@ void Session::ReceivePackets()
     {
       const int f = packet.first_frame + static_cast<int>(i);
       const Pad& pad = packet.pads[i];
+      // New input for a frame that already ran and can no longer be checked against what it ran
+      // with: the stall rule should make this impossible, so fail loudly rather than drift.
+      if (f > m_received[s] && f < m_frame && !m_used.contains(f) && !m_remote[s].contains(f))
+      {
+        Fail(fmt::format("Player {}'s input for frame {} arrived after that frame could be re-run",
+                         s + 1, f));
+        return;
+      }
       auto [it, inserted] = m_remote[s].emplace(f, pad);
       if (!inserted)
       {
