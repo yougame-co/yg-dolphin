@@ -54,8 +54,7 @@ u64 NowMs()
 
 std::string Env(const char* name)
 {
-  const char* value = std::getenv(name);
-  return value ? value : "";
+  return Orca::GetEnv(name);
 }
 
 bool ValidCode(const std::string& code)

@@ -12,6 +12,8 @@
 
 #include <fmt/format.h>
 
+#include "Common/FileUtil.h"
+
 namespace Rollback::Loopback
 {
 namespace
@@ -53,7 +55,8 @@ std::string FormatRecordedFrame(int frame, const Orca::Net::Pads& pads, u64 chec
 
 std::vector<RecordedFrame> LoadRecording(const std::string& path)
 {
-  std::ifstream in(path);
+  std::ifstream in;
+  File::OpenFStream(in, path, std::ios_base::in);
   std::map<int, RecordedFrame> frames;
   std::string line;
   while (std::getline(in, line))

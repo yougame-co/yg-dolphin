@@ -31,6 +31,11 @@ struct Profile
   std::vector<std::pair<Config::Location, std::string>> forced;
 };
 
+// An environment variable as UTF-8, empty when unset. (On Windows std::getenv answers in the ANSI
+// code page, which can't hold every character of a path or a name, and Dolphin's file functions
+// expect UTF-8.)
+std::string GetEnv(const char* name);
+
 // True when this process runs an Orca rollback session (ORCA_SESSION=1 for now; the desktop app
 // will pass it at launch).
 bool SessionActive();

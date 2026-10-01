@@ -1299,7 +1299,7 @@ TEST(OrcaSession, DepthOneRollbacksLoadTheCorrectedState)
   const auto remote = [](int f) { return Pad{static_cast<u8>(f % 5), static_cast<u8>(f % 3)}; };
   struct Late final : Transport
   {
-    explicit Late(std::function<Pad(int)> pad) : pad(std::move(pad)) {}
+    explicit Late(std::function<Pad(int)> remote_pad) : pad(std::move(remote_pad)) {}
     void Send(const Packet&) override {}
     std::vector<Packet> Receive() override
     {

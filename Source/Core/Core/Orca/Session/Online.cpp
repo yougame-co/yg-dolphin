@@ -40,8 +40,7 @@ std::shared_ptr<Net::YouGameRoom> s_room;
 
 std::string Env(const char* name)
 {
-  const char* value = std::getenv(name);
-  return value ? value : "";
+  return GetEnv(name);
 }
 
 std::shared_ptr<Net::YouGameRoom> Room()

@@ -46,7 +46,9 @@ the reset button, and the Wii power button (Stop ends the match instead).
 
 Stock behaviour Orca changes outside a session: the build uses the bundled libcurl (with mbedTLS
 and the system CA file) on macOS and Linux, because the netcode needs libcurl's WebSocket support.
-That client doesn't use the macOS Keychain's extra roots, and it doesn't do TLS 1.3.
+That client doesn't use the macOS Keychain's extra roots, and it doesn't do TLS 1.3. On Windows the
+bundled libcurl uses Schannel and the system store, with certificate revocation checked best effort
+(a CRL or OCSP server that can't be reached no longer fails the connection).
 
 Not yet supported: a GameCube controller adapter as the local controller (the local pad is the host's
 port 1 as mapped in Dolphin's controller settings).
