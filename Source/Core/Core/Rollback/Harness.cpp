@@ -124,6 +124,13 @@ SceneReader SceneReaderForRunningGame()
   const SConfig& config = SConfig::GetInstance();
   if (config.GetGameID() == "RSBE01" && config.GetRevision() == 2)
     return BrawlSceneName;
+  // A launcher profile booting Brawl rev 2 (Project+): the running metadata comes from the disc's
+  // TMD, whose version need not be the disc revision; the profile checked the disc at boot.
+  if (const Orca::Profile* profile = Orca::ActiveProfile();
+      profile && profile->IsLauncher() && profile->disc == "RSBE01" && profile->revision == 2)
+  {
+    return BrawlSceneName;
+  }
   return nullptr;
 }
 

@@ -129,7 +129,10 @@ static void InitializeDeterministicWiiSaves(FS::FileSystem* session_fs,
                                             const BootSessionData& boot_session_data)
 {
   auto& movie = Core::System::GetInstance().GetMovie();
-  const u64 title_id = SConfig::GetInstance().GetTitleID();
+  u64 title_id = SConfig::GetInstance().GetTitleID();
+  // Orca: a launcher profile boots a loader (title 0) that boots the game; seed the game's save.
+  if (const Orca::Profile* profile = Orca::ActiveProfile(); profile && profile->save_title)
+    title_id = *profile->save_title;
   const auto configured_fs = FS::MakeFileSystem(FS::Location::Configured);
   if (movie.IsRecordingInput())
   {

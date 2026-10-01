@@ -291,6 +291,13 @@ std::optional<GCPadStatus> InputOverride(int port)
 
 void OnFrameBoundary(const Core::CPUThreadGuard& guard)
 {
+  // A launcher profile's hook is installed before its loader has put the game in RAM: whatever
+  // runs at that address until then is not the game's frame loop.
+  if (const Orca::Profile* profile = Orca::ActiveProfile();
+      profile && !Orca::FrameHookLive(guard, *profile))
+  {
+    return;
+  }
   Orca::Status::GameStarted();
   // Inside a JIT block, pc and npc are not kept current: a snapshot taken here would record
   // whatever they last held (an exception vector, a stale branch target), and a load would put that

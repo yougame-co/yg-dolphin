@@ -21,6 +21,7 @@
 #include "Common/Version.h"
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/ConfigLoaders/GameConfigLoader.h"
+#include "Core/ConfigManager.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
 #include "Core/Config/SessionSettings.h"
@@ -68,11 +69,31 @@ std::string CompatibilityKey()
     // settings INI Dolphin loads for this disc, shipped and the player's own (a local edit there
     // changes what the game runs with, so it must change the key).
     std::vector<std::string> files{File::GetSysDirectory() + "Orca/" + profile->game_id + ".ini"};
-    for (const std::string& name :
-         ConfigLoaders::GetGameIniFilenames(profile->game_id, profile->revision))
+    // A launcher profile runs under two game IDs: its loader's, then the disc's.
+    std::vector<std::pair<std::string, u16>> ini_games{{profile->game_id, profile->revision}};
+    if (profile->IsLauncher())
     {
-      files.push_back(File::GetSysDirectory() + GAMESETTINGS_DIR DIR_SEP + name);
-      files.push_back(File::GetUserPath(D_GAMESETTINGS_IDX) + name);
+      // The running metadata comes from the disc's TMD, whose version can differ from the disc
+      // header's revision: hash the INIs for both.
+      const SConfig& running = SConfig::GetInstance();
+      ini_games = {{profile->boot_game_id, 0},
+                   {profile->disc, profile->revision},
+                   {running.GetGameID(), running.GetRevision()}};
+    }
+    for (const auto& [ini_game, ini_revision] : ini_games)
+    {
+      for (const std::string& name : ConfigLoaders::GetGameIniFilenames(ini_game, ini_revision))
+      {
+        files.push_back(File::GetSysDirectory() + GAMESETTINGS_DIR DIR_SEP + name);
+        files.push_back(File::GetUserPath(D_GAMESETTINGS_IDX) + name);
+      }
+    }
+    // The loader and SD card the boot verified (their hashes are in the profile too; stated here so
+    // the key never depends on a profile file staying in step with the check).
+    if (profile->IsLauncher())
+    {
+      parts += fmt::format("launcher={}|disc={}|sd={}|", profile->launcher_hash, profile->disc,
+                           profile->sd_image_hash);
     }
     for (const std::string& path : files)
     {
@@ -91,7 +112,8 @@ std::string CompatibilityKey()
   // ARM64 emitter and Jit64 ps1 fixes), so Mac and PC players meet. FMA, below, is in the key.
   // The universal forced settings that change what the game computes.
   parts += fmt::format(
-      "thread={}|fma={}|rtc={}:{}|si={},{},{},{}|efb={}|xfb={}|access={}|bbox={}|save={:016x}|test={}",
+      "thread={}|fma={}|rtc={}:{}|si={},{},{},{}|efb={}|xfb={}|access={}|bbox={}|save={:016x}|test={}"
+      "|sdcard={}:{}",
       Config::Get(Config::MAIN_CPU_THREAD), Config::Get(Config::SESSION_USE_FMA),
       Config::Get(Config::MAIN_CUSTOM_RTC_ENABLE), Config::Get(Config::MAIN_CUSTOM_RTC_VALUE),
       static_cast<int>(Config::Get(Config::GetInfoForSIDevice(0))),
@@ -101,7 +123,8 @@ std::string CompatibilityKey()
       Config::Get(Config::GFX_HACK_SKIP_EFB_COPY_TO_RAM),
       Config::Get(Config::GFX_HACK_SKIP_XFB_COPY_TO_RAM),
       Config::Get(Config::GFX_HACK_EFB_ACCESS_ENABLE), Config::Get(Config::GFX_HACK_BBOX_ENABLE),
-      GetSeedSaveHash(), TestOverridesActive());
+      GetSeedSaveHash(), TestOverridesActive(), Config::Get(Config::MAIN_WII_SD_CARD),
+      Config::Get(Config::MAIN_ALLOW_SD_WRITES));
   // The disc image itself, when the desktop app hashed it (a modified disc with the right game ID
   // and revision would otherwise desync instead of being refused).
   parts += "|disc=" + Env("ORCA_DISC_SHA1");
