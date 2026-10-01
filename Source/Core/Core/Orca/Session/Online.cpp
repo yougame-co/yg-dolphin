@@ -86,16 +86,9 @@ std::string CompatibilityKey()
       parts += fmt::format("{}.{}.{}={}|", static_cast<int>(location.system), location.section,
                            location.key, value);
   }
-  // The host CPU architecture: Jit64 and JitArm64 are not yet shown to compute the same results
-  // (with inaccurate NaNs, for one, x86-64 and ARM64 produce default NaNs of opposite sign). Until a
-  // cross-platform test proves otherwise, players only meet others on the same architecture.
-#if defined(_M_ARM_64)
-  parts += "arch=arm64|";
-#elif defined(_M_X86_64)
-  parts += "arch=x86-64|";
-#else
-  parts += "arch=other|";
-#endif
+  // Not the host CPU: JitArm64 and Jit64 compute identical results (12,001 frames of a scripted
+  // match hashed the same on an Apple Silicon Mac and an x86-64 Windows PC, 2026-10-01, after the
+  // ARM64 emitter and Jit64 ps1 fixes), so Mac and PC players meet. FMA, below, is in the key.
   // The universal forced settings that change what the game computes.
   parts += fmt::format(
       "thread={}|fma={}|rtc={}:{}|si={},{},{},{}|efb={}|xfb={}|access={}|bbox={}|save={:016x}|test={}",

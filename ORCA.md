@@ -44,10 +44,10 @@ gets `Sys/Orca/Input/GCPadNew.ini`: port 1 on the keyboard (Dolphin's default ke
 SDL gamepad of any model (`SDL/0/*`, a device name Orca matches as a wildcard).
 
 Two friends meet when both use the same code and the same compatibility key: the Orca build, the
-host CPU architecture, the game profile, every forced setting, the disc and the seeded save. The
-architecture is in the key until a test shows Jit64 and JitArm64 compute identical results (with
-inaccurate NaNs they don't), so for now an Apple Silicon Mac meets Apple Silicon Macs and ARM64
-PCs. The first in is the host; its Orca starts the match once the other says hello.
+game profile and data files, every forced setting (FMA included), the disc and the seeded save.
+Not the host CPU: an Apple Silicon Mac and an x86-64 PC compute the same game (a 12,001-frame
+scripted match hashed identically on both, 2026-10-01), so Mac and PC players meet. An x86-64 CPU
+without FMA3 has a different key. The first in is the host; its Orca starts the match once the other says hello.
 Seat 0 is controller port 1.
 
 Unit tests: `ninja tests && ./Binaries/Tests/tests --gtest_filter='Orca*'`. With `ORCA_LIVE_TEST=1`,
