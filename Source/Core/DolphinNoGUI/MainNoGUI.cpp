@@ -6,6 +6,8 @@
 #include <OptionParser.h>
 #include <csignal>
 #include <cstdio>
+#include <cstdlib>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -17,6 +19,9 @@
 
 #include <fmt/format.h>
 
+#include "Common/CommonPaths.h"
+#include "Common/FileUtil.h"
+#include "Common/IniFile.h"
 #include "Common/MsgHandler.h"
 #include "Common/ScopeGuard.h"
 #include "Core/Boot/Boot.h"
@@ -25,6 +30,8 @@
 #include "Core/DolphinAnalytics.h"
 #include "Core/Host.h"
 #include "Core/Orca/Branding.h"
+#include "Core/Orca/Disc.h"
+#include "Core/Orca/Profile.h"
 #include "Core/Orca/Status.h"
 #include "Core/System.h"
 
@@ -195,12 +202,68 @@ static std::unique_ptr<Platform> GetPlatform(const optparse::Values& options)
   return nullptr;
 }
 
+#ifdef ORCA_MACOS_BUNDLE
+// Orca.app, started with no disc: the one remembered in <user>/Config/Orca.ini if it is still there
+// and still right, else the player picks one (asked again after a wrong one). nullopt, with the
+// "orca error" line printed, when they give up.
+static std::optional<std::string> ChooseSessionDisc(const std::string& user_directory)
+{
+  const std::string ini_path = user_directory + DIR_SEP "Config" DIR_SEP "Orca.ini";
+  Common::IniFile ini;
+  ini.Load(ini_path);
+  auto* const disc_section = ini.GetOrCreateSection("Disc");
+  std::string remembered;
+  disc_section->Get("Path", &remembered);
+  if (!remembered.empty() && Orca::CheckDisc(remembered, Orca::APP_GAME_ID).ok)
+    return remembered;
+
+  std::optional<Orca::DiscCheck> refused;
+  while (true)
+  {
+    const std::optional<std::string> path =
+        Platform::ChooseFileMacOS(std::string(Orca::APP_DISC_PROMPT));
+    if (!path)
+    {
+      if (refused)
+        Orca::Status::Error(refused->code, refused->sentence);
+      else
+        Orca::Status::Error("cancelled", "No disc image was chosen.");
+      return std::nullopt;
+    }
+    Orca::DiscCheck check = Orca::CheckDisc(*path, Orca::APP_GAME_ID);
+    if (check.ok)
+    {
+      disc_section->Set("Path", *path);
+      File::CreateFullPath(ini_path);
+      ini.Save(ini_path);
+      return path;
+    }
+    fmt::print(stderr, "Orca: {}: {}\n", *path, check.sentence);
+    // A broken profile isn't the disc's fault: asking again wouldn't help.
+    if (check.code != "disc_revision")
+    {
+      Orca::Status::Error(check.code, check.sentence);
+      return std::nullopt;
+    }
+    Platform::ShowErrorMacOS("Orca can't play that disc", check.sentence);
+    refused = std::move(check);
+  }
+}
+#endif
+
 #ifdef _WIN32
 #define main app_main
 #endif
 
 int main(const int argc, char* argv[])
 {
+#ifdef ORCA_MACOS_BUNDLE
+  // Orca.app runs sessions: the YouGame app starts it with no arguments. ORCA_SESSION=0 (or any value
+  // already set) wins. Until the canonical save exists (O5), app sessions start from an empty NAND.
+  setenv("ORCA_SESSION", "1", 0);
+  Orca::SetSeedSessionSave(false);
+#endif
+
   const auto parser =
       CommandLineParse::CreateParser(CommandLineParse::ParserOptions::OmitGUIOptions);
   parser->add_option("-p", "--platform")
@@ -234,6 +297,15 @@ int main(const int argc, char* argv[])
     save_state_path = static_cast<const char*>(options.get("save_state"));
   }
 
+  std::string user_directory;
+  if (options.is_set("user"))
+    user_directory = static_cast<const char*>(options.get("user"));
+#ifdef ORCA_MACOS_BUNDLE
+  // Its own user directory, never Dolphin's.
+  else if (const char* home = std::getenv("HOME"); home && *home)
+    user_directory = std::string(home) + "/Library/Application Support/Orca";
+#endif
+
   std::unique_ptr<BootParameters> boot;
   bool game_specified = false;
   if (options.is_set("exec"))
@@ -264,6 +336,17 @@ int main(const int argc, char* argv[])
     args.erase(args.begin());
     game_specified = true;
   }
+#ifdef ORCA_MACOS_BUNDLE
+  else if (Orca::SessionActive() && !user_directory.empty())
+  {
+    const std::optional<std::string> disc = ChooseSessionDisc(user_directory);
+    if (!disc)
+      return Orca::Status::Finish();
+    boot = BootParameters::GenerateFromFile(
+        *disc, BootSessionData(save_state_path, DeleteSavestateAfterBoot::No));
+    game_specified = true;
+  }
+#endif
   else
   {
     parser->print_help();
@@ -273,10 +356,6 @@ int main(const int argc, char* argv[])
 #ifndef _WIN32
   Common::RegisterMsgAlertHandler(MsgAlertHandler);
 #endif
-
-  std::string user_directory;
-  if (options.is_set("user"))
-    user_directory = static_cast<const char*>(options.get("user"));
 
   s_platform = GetPlatform(options);
   if (!s_platform || !s_platform->Init())
@@ -289,6 +368,20 @@ int main(const int argc, char* argv[])
 
   UICommon::SetUserDirectory(user_directory);
   UICommon::Init();
+#ifdef ORCA_MACOS_BUNDLE
+  // The local controller is port 1: until the player has their own mapping, the keyboard and the
+  // first SDL gamepad (Sys/Orca/Input/GCPadNew.ini).
+  if (Orca::SessionActive())
+  {
+    const std::string pad_ini = File::GetUserPath(D_CONFIG_IDX) + "GCPadNew.ini";
+    if (!File::Exists(pad_ini) &&
+        !(File::CreateFullPath(pad_ini) &&
+          File::Copy(File::GetSysDirectory() + "Orca/Input/GCPadNew.ini", pad_ini)))
+    {
+      fmt::print(stderr, "Orca: couldn't write the default controller mapping to {}\n", pad_ini);
+    }
+  }
+#endif
   UICommon::InitControllers(wsi);
 
   Common::ScopeGuard ui_common_guard([] {

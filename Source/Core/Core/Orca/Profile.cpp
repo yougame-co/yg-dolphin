@@ -205,6 +205,7 @@ const Sram* SessionSram()
 namespace
 {
 u64 s_seed_save_hash = 0;
+bool s_seed_session_save = true;
 std::optional<Profile> s_active_profile;
 }  // namespace
 
@@ -235,6 +236,9 @@ u64 HashSessionSave(u64 title_id)
       collect(child);
   };
   collect(tree);
+  // The title's data folder exists from boot on (ES makes it), so an empty one means no save too.
+  if (paths.empty())
+    return 0;
   std::sort(paths.begin(), paths.end());
   u64 hash = 0xcbf29ce484222325ull;
   for (const std::string& path : paths)
@@ -260,6 +264,16 @@ void SetSeedSaveHash(u64 hash)
 u64 GetSeedSaveHash()
 {
   return s_seed_save_hash;
+}
+
+void SetSeedSessionSave(bool seed)
+{
+  s_seed_session_save = seed;
+}
+
+bool SeedSessionSave()
+{
+  return s_seed_session_save;
 }
 
 std::optional<Profile> LoadProfile(const std::string& game_id, u16 revision, std::string* error)

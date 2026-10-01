@@ -145,12 +145,15 @@ static void InitializeDeterministicWiiSaves(FS::FileSystem* session_fs,
     }
   }
 
-  // Orca: both players start from the save prepared in the session's user directory (or none), never
-  // from anything else on their own NANDs.
+  // Orca: both players start from the save prepared in the session's user directory (or, in
+  // Orca.app, none), never from anything else on their own NANDs.
   if (Orca::SessionActive())
   {
-    INFO_LOG_FMT(CORE, "Orca: copying save {:016x} into the session NAND", title_id);
-    CopySave(configured_fs.get(), session_fs, title_id);
+    if (Orca::SeedSessionSave())
+    {
+      INFO_LOG_FMT(CORE, "Orca: copying save {:016x} into the session NAND", title_id);
+      CopySave(configured_fs.get(), session_fs, title_id);
+    }
     Orca::SetSeedSaveHash(Orca::HashSessionSave(title_id));
     NOTICE_LOG_FMT(CORE, "Orca: session save {:016x} hash {:016x} (0 = no save)", title_id,
                    Orca::GetSeedSaveHash());
