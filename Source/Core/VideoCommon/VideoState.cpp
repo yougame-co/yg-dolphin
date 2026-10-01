@@ -8,6 +8,7 @@
 #include "Common/ChunkFile.h"
 #include "Common/Logging/Log.h"
 #include "Core/System.h"
+#include "VideoCommon/AbstractGfx.h"
 #include "VideoCommon/BPMemory.h"
 #include "VideoCommon/BPStructs.h"
 #include "VideoCommon/BoundingBox.h"
@@ -116,8 +117,9 @@ void VideoCommon_DoState(PointerWrap& p)
   system.GetGeometryShaderManager().DoState(p);
   p.DoMarker("GeometryShaderManager");
 
-  if (!s_rollback_snapshot)
-    g_vertex_manager->DoState(p);
+  // Always: on a load it flushes the vertices buffered on the abandoned timeline, and it holds
+  // emulated GX state (z slope, the vertex loader's normal/tangent/binormal caches).
+  g_vertex_manager->DoState(p);
   p.DoMarker("VertexManager");
 
   if (!s_rollback_snapshot)
@@ -149,4 +151,10 @@ void VideoCommon_DoState(PointerWrap& p)
     BPReload();
     VertexLoaderManager::MarkAllDirty();
   }
+
+  // A full save used to submit the host's GPU work through the EFB readback. A rollback snapshot
+  // skips that readback, so submit what is encoded (no wait): some backends (Metal) otherwise
+  // submit only when a frame is presented, and re-run frames present nothing.
+  if (s_rollback_snapshot && !p.IsMeasureMode())
+    g_gfx->Flush();
 }
