@@ -333,6 +333,8 @@ void Jit64::mfspr(UGeckoInstruction inst)
     CVTSI2SS(XMM0, PPCSTATE(downcount));
     MULSS(XMM0, MDisp(rcx, offsetof(CoreTiming::Globals, last_OC_factor_inverted)));
     CVTSS2SI(rdx, R(XMM0));  // RDX is downcount scaled by the overclocking factor
+    // Sign-extend: downcount can be negative here, and CVTSS2SI wrote only EDX.
+    MOVSX(64, 32, rdx, R(rdx));
     MOV(32, rax, MDisp(rcx, offsetof(CoreTiming::Globals, slice_length)));
     SUB(64, rax, rdx);  // cycles since the last CoreTiming::Advance() event is (slicelength -
                         // Scaled_downcount)
