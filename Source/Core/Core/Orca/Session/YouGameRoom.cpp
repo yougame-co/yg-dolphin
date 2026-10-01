@@ -339,6 +339,26 @@ std::string WebSocketUrl(std::string url)
 }
 }  // namespace
 
+// Why the rooms Worker refused the WebSocket upgrade, for the player. The upgrade's body isn't
+// readable here, only its status (rooms/src/index.ts, the room's join checks): 401 an expired
+// ticket; 403 a room whose lobby key differs (another Orca build, disc or save, which for an
+// Orca room is the only kind of room it can be refused for) or a host's kick; 409 a full room.
+std::string RefusalReason(const std::string& connect_error)
+{
+  if (connect_error.find("(HTTP 403)") != std::string::npos)
+  {
+    return "The room didn't let you in: your friend's Orca, disc or save differs from yours (both "
+           "of you: update YouGame and press Play again), or the host removed you";
+  }
+  if (connect_error.find("(HTTP 409)") != std::string::npos)
+    return "That room is full";
+  if (connect_error.find("(HTTP 401)") != std::string::npos)
+    return "The invite expired; press Play again";
+  if (connect_error.find("(HTTP 4") != std::string::npos)
+    return "The room refused to let you in";
+  return "Could not reach YouGame's rooms";
+}
+
 std::string EncodePacket(const Packet& packet)
 {
   return picojson::value(PacketToJson(packet)).serialize();
@@ -637,9 +657,7 @@ struct YouGameRoom::Impl
                     std::chrono::seconds(8), &error))
     {
       WARN_LOG_FMT(NETPLAY, "Orca room: {}", error);
-      End(error.find("HTTP 4") != std::string::npos ?
-              "The room refused to let you in (full, a different Orca build, or an old invite)" :
-              "Could not reach YouGame's rooms");
+      End(RefusalReason(error));
       return;
     }
     SetStatus(fmt::format("Room {}: waiting for your friend", room));

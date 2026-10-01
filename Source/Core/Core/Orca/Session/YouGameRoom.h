@@ -73,6 +73,8 @@ private:
 // Packets as room messages (exposed for tests).
 std::string EncodePacket(const Packet& packet);
 bool DecodePacket(const std::string& json, Packet* packet);
+// What to tell the player when the room refused the connection (WebSocket::Connect's error).
+std::string RefusalReason(const std::string& connect_error);
 // Queues `packet` in place of one not sent yet, keeping the older one's earlier inputs and checksum.
 void CoalescePacket(std::optional<Packet>* outgoing, const Packet& packet);
 }  // namespace Orca::Net

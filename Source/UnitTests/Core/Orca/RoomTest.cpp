@@ -380,3 +380,40 @@ TEST(OrcaLive, BridgeMirrorsTheRoomAndTakesLeave)
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   EXPECT_FALSE(b.Connected()) << b.Status();
 }
+
+TEST(OrcaRoom, RefusalsSayWhy)
+{
+  // WebSocket::Connect's error carries the upgrade's HTTP status.
+  EXPECT_NE(RefusalReason("WebSocket connect failed: ... (HTTP 403)").find("differs"),
+            std::string::npos);
+  EXPECT_EQ(RefusalReason("WebSocket connect failed: ... (HTTP 409)"), "That room is full");
+  EXPECT_NE(RefusalReason("WebSocket connect failed: ... (HTTP 401)").find("expired"),
+            std::string::npos);
+  EXPECT_EQ(RefusalReason("WebSocket connect failed: Couldn't connect to server (HTTP 0)"),
+            "Could not reach YouGame's rooms");
+}
+
+// Two Orcas whose compatibility keys differ never share a room: the second is told why.
+TEST(OrcaLive, DifferentKeysAreRefusedWithAReason)
+{
+  const char* live = std::getenv("ORCA_LIVE_TEST");
+  if (!live || std::string(live) != "1")
+    GTEST_SKIP() << "set ORCA_LIVE_TEST=1";
+  SetEnv("ORCA_TEST_DEV_GAME", "orca-live-test");
+  RoomOptions options;
+  options.room_code =
+      "orcak" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 10000000);
+  options.compatibility = "orca-key-a";
+  YouGameRoom a(options);
+  for (int i = 0; i < 500 && a.GetState() == RoomState::Connecting; ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  ASSERT_EQ(a.GetState(), RoomState::Waiting) << a.Status();
+  options.compatibility = "orca-key-b";
+  YouGameRoom b(options);
+  for (int i = 0; i < 1000 && b.GetState() != RoomState::Ended; ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  SetEnv("ORCA_TEST_DEV_GAME", nullptr);
+  EXPECT_EQ(b.GetState(), RoomState::Ended);
+  EXPECT_NE(b.Status().find("differs"), std::string::npos) << b.Status();
+  EXPECT_EQ(a.GetState(), RoomState::Waiting);
+}
