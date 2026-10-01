@@ -1,4 +1,6 @@
 add_executable(dolphin-nogui
+  Embed.cpp
+  Embed.h
   Platform.cpp
   Platform.h
   PlatformHeadless.cpp

@@ -40,6 +40,11 @@ void ReportSessionEnd(const std::string& session_error);
 // on the way out that the connection stalled (for its own report, if its game wakes up).
 void ReportPeerStalled(std::string_view sentence);
 
+// The YouGame app's "prepare-join" (embed mode, ORCA.md "Embedding"): the host invited a friend
+// who will drop into the running game. Called on the main thread; must not block. Stub until the
+// drop-in join lands.
+void PrepareJoin();
+
 // Leaves the room (reporting a running match void) and stops its thread. Call when emulation stops.
 void Shutdown();
 

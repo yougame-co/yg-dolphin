@@ -3,12 +3,21 @@
 
 #include "DolphinNoGUI/Platform.h"
 
+#include <algorithm>
+#include <cmath>
+#include <sstream>
+
+#include <fmt/format.h>
+
+#include "AudioCommon/AudioCommon.h"
+#include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
 #include "Core/HW/ProcessorInterface.h"
 #include "Core/IOS/IOS.h"
 #include "Core/IOS/STM/STM.h"
 #include "Core/Orca/Branding.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/Session/Online.h"
 #include "Core/System.h"
 
 Platform::~Platform() = default;
@@ -24,6 +33,7 @@ void Platform::SetTitle(const std::string& title)
 
 void Platform::UpdateRunningFlag()
 {
+  ProcessEmbedCommands();
   UpdateTitle();
   if (m_shutdown_requested.TestAndClear())
   {
@@ -83,4 +93,130 @@ void Platform::Stop()
 void Platform::RequestShutdown()
 {
   m_shutdown_requested.Set();
+}
+
+void Platform::NotifyFirstFrame(int width, int height, double fps)
+{
+  std::lock_guard lock(m_ready_lock);
+  if (m_ready_sent || m_ready_line)
+    return;
+  m_ready_line = fmt::format("ready {} {} {:.4f}", width, height, fps);
+}
+
+void Platform::EmbedTeardown()
+{
+  if (!m_embed.enabled)
+    return;
+  EmbedSetFocus(false);
+  EmbedSetVisible(false);
+}
+
+void Platform::ProcessEmbedCommands()
+{
+  if (!m_embed.enabled)
+    return;
+  {
+    std::optional<std::string> ready;
+    {
+      std::lock_guard lock(m_ready_lock);
+      ready.swap(m_ready_line);
+      if (ready)
+        m_ready_sent = true;
+    }
+    if (ready)
+      Embed::Out(*ready);
+  }
+
+  auto& system = Core::System::GetInstance();
+  if (m_pause_pending && Core::GetState(system) == Core::State::Running)
+  {
+    m_pause_pending = false;
+    Core::SetState(system, Core::State::Paused);
+  }
+  const auto report_state = [this, &system] {
+    Embed::Out(m_pause_pending || Core::GetState(system) == Core::State::Paused ? "state paused" :
+                                                                                  "state running");
+  };
+  for (const std::string& line : Embed::TakeCommands())
+  {
+    std::istringstream in(line);
+    std::string cmd;
+    in >> cmd;
+    if (cmd == "quit")
+    {
+      // At once, also outside a session: the app is closing the player (or has died).
+      Stop();
+    }
+    else if (cmd == "rect")
+    {
+      std::string rest;
+      std::getline(in, rest);
+      if (const std::optional<Embed::Rect> rect = Embed::ParseRect(rest))
+      {
+        m_embed.rect = *rect;
+        EmbedSetRect(*rect);
+      }
+    }
+    else if (cmd == "pause")
+    {
+      // A session never pauses (the other player's game keeps going; Core::SetState refuses it).
+      if (Orca::SessionActive())
+        Embed::Out("unsupported pause");
+      else if (Core::GetState(system) == Core::State::Running)
+        Core::SetState(system, Core::State::Paused);
+      else if (Core::GetState(system) != Core::State::Paused)
+        m_pause_pending = true;  // still starting
+      report_state();
+    }
+    else if (cmd == "resume")
+    {
+      m_pause_pending = false;
+      if (Core::GetState(system) == Core::State::Paused)
+        Core::SetState(system, Core::State::Running);
+      report_state();
+    }
+    else if (cmd == "focus" || cmd == "blur")
+    {
+      EmbedSetFocus(cmd == "focus");
+    }
+    else if (cmd == "hide" || cmd == "show")
+    {
+      EmbedSetVisible(cmd == "show");
+    }
+    else if (cmd == "volume")
+    {
+      // 0..1, linear, like the libretro host's gain. Only this run's layer: Dolphin.ini keeps its own.
+      float volume = 1.0f;
+      if (in >> volume && std::isfinite(volume))
+      {
+        volume = std::clamp(volume, 0.0f, 1.0f);
+        Config::SetCurrent(Config::MAIN_AUDIO_VOLUME, static_cast<int>(std::lround(volume * 100)));
+        AudioCommon::UpdateSoundStream(system);
+      }
+    }
+    else if (cmd == "save" || cmd == "load")
+    {
+      // Save states are the app's libretro feature; Orca keeps the game's own saves in its NAND.
+      int slot = 0;
+      in >> slot;
+      Embed::Out(fmt::format("unsupported {} {}", cmd, slot));
+    }
+    else if (cmd == "prepare-join")
+    {
+      // The host invited a friend who will drop into this game (drop-in join).
+      Orca::Online::PrepareJoin();
+    }
+    else if (cmd == "reset")
+    {
+      // A session refuses the reset button (it would reach one player's game only).
+      if (Orca::SessionActive() || !Core::IsRunning(system))
+        Embed::Out("unsupported reset");
+      else
+        system.GetProcessorInterface().ResetButton_Tap();
+    }
+    else if (!cmd.empty())
+    {
+      fmt::print(stderr, "Orca: unknown embed command: {}\n", cmd);
+    }
+  }
 }

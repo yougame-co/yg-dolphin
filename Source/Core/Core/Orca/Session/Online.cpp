@@ -258,4 +258,9 @@ void Shutdown()
   if (room)
     room->Leave();
 }
+void PrepareJoin()
+{
+  NOTICE_LOG_FMT(NETPLAY, "Orca: prepare-join (drop-in join is not in this build yet)");
+}
+
 }  // namespace Orca::Online
