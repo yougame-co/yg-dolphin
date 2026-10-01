@@ -1453,3 +1453,54 @@ TEST(OrcaSessionRelay, JitterBothWaysEitherSideFast)
     EXPECT_GT(match.CompareConfirmed(), 11000);
   }
 }
+
+// Fuzz: random links, clock drift and wildly swinging round-trip reports (each side's delay jumps
+// up and down, by several frames at once in the first seconds), with time sync on. Whatever the
+// delays do, both machines must end up having run every confirmed frame with identical inputs,
+// and with identical states.
+TEST(OrcaSessionFuzz, BothSidesRunIdenticalInputsUnderDelaySwings)
+{
+  for (u32 seed = 1; seed <= 60; ++seed)
+  {
+    std::mt19937 rng(seed);
+    const auto pick = [&rng](int lo, int hi) {
+      return std::uniform_int_distribution<int>(lo, hi)(rng);
+    };
+    Config config;
+    config.input_delay = pick(0, 3);
+    config.max_delay = config.input_delay + pick(0, 5);
+    Match match(config, pick(0, 8), pick(0, 6));
+    match.net.extra = {pick(0, 4), pick(0, 4)};
+    match.a_extra_every = pick(0, 1) ? pick(20, 200) : 0;
+    match.a->tag_ticks = true;
+    match.b->tag_ticks = true;
+    for (int chunk = 0; chunk < 60; ++chunk)
+    {
+      // Round trips anywhere from LAN to intercontinental, at random moments, per side.
+      for (Player* p : {match.a.get(), match.b.get()})
+      {
+        if (pick(0, 3) == 0)
+          p->session.OnRoundTrip(pick(5, 450));
+      }
+      match.Play(pick(5, 60));
+    }
+    match.Play(400);  // settle
+
+    SCOPED_TRACE(::testing::Message() << "seed " << seed);
+    ExpectClean(match);
+    const int confirmed = std::min(Settled(*match.a), Settled(*match.b));
+    ASSERT_GT(confirmed, 500);
+    int checked = 0;
+    for (int f = 0; f <= confirmed; ++f)
+    {
+      const auto ra = match.a->game.m_ran_pads.find(f);
+      const auto rb = match.b->game.m_ran_pads.find(f);
+      if (ra == match.a->game.m_ran_pads.end() || rb == match.b->game.m_ran_pads.end())
+        continue;
+      ASSERT_EQ(ra->second, rb->second) << "frame " << f;
+      ++checked;
+    }
+    EXPECT_GT(checked, 300);
+    EXPECT_GT(match.CompareConfirmed(), 300);
+  }
+}
