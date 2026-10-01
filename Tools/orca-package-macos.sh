@@ -12,6 +12,9 @@
 #   APPLE_API_KEY (.p8 path), APPLE_API_KEY_ID, APPLE_API_ISSUER
 #   ORCA_SOURCE_URL: the public repository players can fetch the source from (GPL); its
 #     orca-<version> tag must point at HEAD, and the tree must be clean before and after the build.
+# ORCA_INTERNAL=1 instead signs and notarizes an internal test build from the private repository:
+# the same credentials and clean tree, but no ORCA_SOURCE_URL or tag. SOURCE.txt says it is not for
+# public distribution and the zip is named *-internal.zip. Such a build only goes to testers.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -29,7 +32,19 @@ fail() {
 [ "$(uname -s)" = Darwin ] || fail "macOS only"
 
 RELEASE=0
-if [ -n "${CSC_LINK:-}${CSC_KEY_PASSWORD:-}${APPLE_API_KEY:-}${APPLE_API_KEY_ID:-}${APPLE_API_ISSUER:-}" ]; then
+INTERNAL=0
+case "${ORCA_INTERNAL:-}" in
+"" | 0) ;;
+1) INTERNAL=1 ;;
+*) fail "ORCA_INTERNAL is 1 or unset, not ${ORCA_INTERNAL}" ;;
+esac
+if [ "$INTERNAL" = 1 ]; then
+  [ -z "${ORCA_SOURCE_URL:-}" ] || fail "ORCA_INTERNAL=1 is a private build; unset ORCA_SOURCE_URL"
+  for var in CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER; do
+    [ -n "${!var:-}" ] || fail "an internal build is signed and needs $var"
+  done
+  RELEASE=1
+elif [ -n "${CSC_LINK:-}${CSC_KEY_PASSWORD:-}${APPLE_API_KEY:-}${APPLE_API_KEY_ID:-}${APPLE_API_ISSUER:-}" ]; then
   for var in CSC_LINK CSC_KEY_PASSWORD APPLE_API_KEY APPLE_API_KEY_ID APPLE_API_ISSUER ORCA_SOURCE_URL; do
     [ -n "${!var:-}" ] || fail "a signed build is a release and also needs $var"
   done
@@ -37,9 +52,21 @@ if [ -n "${CSC_LINK:-}${CSC_KEY_PASSWORD:-}${APPLE_API_KEY:-}${APPLE_API_KEY_ID:
 fi
 
 COMMIT="$(git -C "$ROOT" rev-parse HEAD)"
-tree_state() { git -C "$ROOT" status --porcelain --untracked-files=normal; }
+# Changed or untracked paths. A git status that fails (a broken submodule link, say) counts as
+# dirty, never as clean.
+tree_state() {
+  local out
+  out="$(git -C "$ROOT" status --porcelain --untracked-files=normal)" ||
+    { echo "git status failed"; return 0; }
+  printf '%s' "$out"
+}
+STATE="$(tree_state)"
 DIRTY=""
-[ -z "$(tree_state)" ] || DIRTY=" (with local changes)"
+if [ "$STATE" = "git status failed" ]; then
+  DIRTY=" (tree state unknown: git status failed)"
+elif [ -n "$STATE" ]; then
+  DIRTY=" (with local changes)"
+fi
 TAG="$(git -C "$ROOT" tag --points-at HEAD --list 'orca-*' | head -n 1)"
 VERSION="${ORCA_VERSION:-${TAG#orca-}}"
 VERSION="${VERSION:-0.0.0}"
@@ -48,7 +75,9 @@ PLIST_VERSION="$(echo "$VERSION" | grep -Eo '^[0-9]+(\.[0-9]+){0,2}' || true)"
 PLIST_VERSION="${PLIST_VERSION:-0.0.0}"
 
 if [ "$RELEASE" = 1 ]; then
-  [ -z "$DIRTY" ] || fail "a release needs a clean tree (untracked files included)"
+  [ -z "$DIRTY" ] || fail "a signed build needs a clean tree (untracked files included)$DIRTY"
+fi
+if [ "$RELEASE" = 1 ] && [ "$INTERNAL" = 0 ]; then
   [ -n "$TAG" ] || fail "a release needs an orca-<version> tag on HEAD"
   # Anonymous, so a private repository can't pass: players must be able to fetch it.
   PUBLISHED="$(GIT_TERMINAL_PROMPT=0 git -c credential.helper= ls-remote "$ORCA_SOURCE_URL" \
@@ -77,7 +106,7 @@ cmake --build "$BUILD_DIR" --target dolphin-nogui
 if [ "$RELEASE" = 1 ]; then
   # The source must not have moved under the build.
   [ "$(git -C "$ROOT" rev-parse HEAD)" = "$COMMIT" ] && [ -z "$(tree_state)" ] ||
-    fail "the tree changed during the build; start again from a clean checkout of $TAG"
+    fail "the tree changed during the build; start again from a clean checkout of ${TAG:-$COMMIT}"
 fi
 
 [ -x "$EXE" ] || fail "no $EXE"
@@ -91,13 +120,18 @@ $FOREIGN"
 
 # What the GPL asks to travel with the binary: where the source is, and the bundled licences.
 RESOURCES="$APP/Contents/Resources"
+if [ "$INTERNAL" = 1 ]; then
+  SOURCE_LINE="Internal test build of Orca $COMMIT from a private repository. Not for public distribution."
+else
+  SOURCE_LINE="Source:  ${ORCA_SOURCE_URL:-not published (a development build)}"
+fi
 cat >"$RESOURCES/SOURCE.txt" <<EOF
 Orca $VERSION for macOS (arm64)
 
 Orca is free software under the GNU General Public License; see COPYING and LICENSES/.
 It is based on the Dolphin emulator source (https://github.com/dolphin-emu/dolphin).
 
-Source:  ${ORCA_SOURCE_URL:-not published (a development build)}
+$SOURCE_LINE
 Commit:  $COMMIT$DIRTY
 Tag:     ${TAG:-none}
 
@@ -162,6 +196,7 @@ codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" \
 codesign --verify --strict --verbose=2 "$APP"
 
 ZIP="$OUT_DIR/Orca-$VERSION-macos-arm64.zip"
+[ "$INTERNAL" = 0 ] || ZIP="$OUT_DIR/Orca-$VERSION-macos-arm64-internal.zip"
 RESULT="$KEYCHAIN_DIR/notary.json"
 rm -f "$ZIP"
 ditto -c -k --keepParent "$APP" "$ZIP"
