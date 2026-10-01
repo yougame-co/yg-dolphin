@@ -15,6 +15,7 @@
 #include "Core/Core.h"
 #include "Core/HW/CPU.h"
 #include "Core/Orca/Session/Online.h"
+#include "Core/Orca/Status.h"
 #include "Core/Rollback/SessionPort.h"
 #include "Core/System.h"
 
@@ -57,6 +58,10 @@ bool Stopping(Core::System& system)
 
 // Two frame periods at 60 Hz: a frame slower than this was a hitch.
 constexpr std::chrono::microseconds HITCH_TIME{33'334};
+// A friend whose game froze with the connection still open would stall this one forever: a stall
+// or time-sync wait this long ends the match.
+constexpr std::chrono::seconds PEER_SILENCE_LIMIT{10};
+constexpr char PEER_SILENT_SENTENCE[] = "Your friend's game stopped responding";
 
 // A round-trip sample the session has not seen yet (the room numbers its samples).
 std::optional<int> NewRoundTrip(u32* last_sequence)
@@ -144,9 +149,11 @@ std::optional<int> OnBoundary(Core::System& system,
   if (match.last_return && now - *match.last_return > HITCH_TIME)
     match.session->OnLocalHitch();
 
-  const Orca::Net::Step step =
-      StepSession(*match.session, *match.port, match.running, local_pad(match.local_seat),
-                  [&system] { return Stopping(system); }, std::chrono::milliseconds{1});
+  bool peer_silent = false;
+  const Orca::Net::Step step = StepSession(
+      *match.session, *match.port, match.running, local_pad(match.local_seat),
+      [&system] { return Stopping(system); }, std::chrono::milliseconds{1}, PEER_SILENCE_LIMIT,
+      &peer_silent);
   match.last_return = std::chrono::steady_clock::now();
   if (step.kind == Orca::Net::StepKind::Run || step.kind == Orca::Net::StepKind::Rollback)
   {
@@ -162,11 +169,20 @@ std::optional<int> OnBoundary(Core::System& system,
     return std::nullopt;
   }
   const std::string error = match.session->Error();
+  if (peer_silent)
+  {
+    // The first error is the one the app shows, so this goes before ReportSessionEnd.
+    WARN_LOG_FMT(ROLLBACK, "Online: no word from the other side for {} s at frame {}",
+                 PEER_SILENCE_LIMIT.count(), match.running);
+    Orca::Status::Error("peer_left", PEER_SILENT_SENTENCE);
+  }
   // Before End leaves the room: the room's own reason (a friend who left, a lost connection) is
   // still there to report.
   Orca::Online::ReportSessionEnd(error);
   End("session ended");
-  StopEmulation(system, fmt::format("Online match ended: {}", error.empty() ? "stopped" : error));
+  StopEmulation(system, peer_silent ? std::string(PEER_SILENT_SENTENCE) :
+                                      fmt::format("Online match ended: {}",
+                                                  error.empty() ? "stopped" : error));
   return std::nullopt;
 }
 

@@ -37,6 +37,9 @@
 //                         _MAX_ROLLBACK (7), _CHECKSUM_EVERY (10), _SEATS (2, or 4 with
 //                         ORCA_TEST_PADS=4: seats 2-4 all remote). A lag above max rollback plus the
 //                         input delay makes the session stall. Exit well before the recording ends.
+//                         _SILENT_FROM=<frame>: the remotes send nothing from that frame on; PASS
+//                         then means the session gave up after _GIVE_UP_MS (10000; 0: never) of
+//                         stalling. Any run ends if one stall lasts that long.
 // Runs need an Orca session (ORCA_SESSION=1): the frame boundary hook comes from its profile. All
 // modes run unthrottled. The frame counter is one per pass through the game's frame boundary. In a
 // session the harness logs a hash of the game's session-NAND save at exit.

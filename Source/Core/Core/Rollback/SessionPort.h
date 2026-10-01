@@ -69,8 +69,10 @@ private:
 // machine to wait (time sync), holds one frame period and asks again; until it moves on or
 // `stopping()` is true. Returns the last step: Run or Rollback (the next frame has its pads, and
 // after a Rollback the state is the start of step.frame), or Ended (Session::Error says why;
-// stopping also ends with Ended).
+// stopping also ends with Ended). A stall or wait that lasts longer than `give_up_after` of wall
+// time (zero: never) also ends with Ended and sets *gave_up: the other side stopped answering.
 Orca::Net::Step StepSession(Orca::Net::Session& session, RingPort& port, int completed_frame,
                             const Orca::Net::Pad& local_pad, const std::function<bool()>& stopping,
-                            std::chrono::microseconds stall_wait);
+                            std::chrono::microseconds stall_wait,
+                            std::chrono::milliseconds give_up_after = {}, bool* gave_up = nullptr);
 }  // namespace Rollback

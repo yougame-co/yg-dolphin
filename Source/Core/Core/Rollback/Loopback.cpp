@@ -123,7 +123,9 @@ std::vector<Orca::Net::Packet> VirtualRemote::Receive()
   for (Seat& seat : m_seats)
   {
     const int position = m_ticks - Lag(seat.seat);  // the frame this remote player is running
-    const int newest = std::min(position + m_input_delay, static_cast<int>(m_recording.size()) - 1);
+    int newest = std::min(position + m_input_delay, static_cast<int>(m_recording.size()) - 1);
+    if (m_silent_from >= 0)
+      newest = std::min(newest, m_silent_from - 1);
     while (seat.delivered < newest)
     {
       Orca::Net::Packet packet;
@@ -135,7 +137,8 @@ std::vector<Orca::Net::Packet> VirtualRemote::Receive()
       packet.ack[m_local_seat] = m_local_newest;
       packet.current_frame = std::max(position, 0);
       const int checksum_frame = seat.last_checksum + m_checksum_every;
-      if (checksum_frame <= position && checksum_frame < static_cast<int>(m_recording.size()))
+      if (checksum_frame <= std::min(position, newest) &&
+          checksum_frame < static_cast<int>(m_recording.size()))
       {
         packet.checksum_frame = checksum_frame;
         packet.checksum = m_recording[checksum_frame].checksum;

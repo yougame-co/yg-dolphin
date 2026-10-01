@@ -76,6 +76,11 @@ const int s_lb_max_rollback = std::max(1, EnvInt("YG_LOOPBACK_MAX_ROLLBACK", 7))
 const int s_lb_checksum_every = std::max(1, EnvInt("YG_LOOPBACK_CHECKSUM_EVERY", 10));
 // 2 or 4 seats; seat 1 is local, the others virtual remotes (4 needs ORCA_TEST_PADS=4).
 const int s_lb_seats = EnvInt("YG_LOOPBACK_SEATS", 2) == 4 ? 4 : 2;
+// The remote seats go silent from this frame (a frozen friend); the session must give up after
+// _GIVE_UP_MS of stalling (default 10 s, as online; 0: never). With silence, PASS means it did.
+// Without silence, a stall that long ends the run too.
+const int s_lb_silent_from = EnvInt("YG_LOOPBACK_SILENT_FROM", -1);
+const int s_lb_give_up_ms = std::max(0, EnvInt("YG_LOOPBACK_GIVE_UP_MS", 10'000));
 // Diagnosis: save a snapshot at every boundary from this frame on and never load (does saving
 // alone change the run?).
 const int s_save_only_from = EnvInt("YG_SAVE_ONLY_FROM", -1);
@@ -574,6 +579,8 @@ struct LoopbackRun
   Orca::Net::Stats stats;
   std::string error;
   bool started = false;
+  // The session gave up on a remote that stopped answering, at this frame (-1: it didn't).
+  int gave_up_at = -1;
 };
 
 LoopbackRun& Lb()
@@ -599,8 +606,12 @@ void LogLoopbackResult(int frame)
   const LoopbackRun& run = Lb();
   // Checksums must have kept flowing to the end, not just started.
   const int expected = run.stats.confirmed_frame / s_lb_checksum_every - 2;
-  const bool pass = run.error.empty() && run.stats.checksums_matched > 0 &&
-                    run.stats.checksums_matched >= expected;
+  // A silent remote must end the session by the give-up rule, after the silence began; every
+  // checksum before it must still have matched.
+  const bool pass = s_lb_silent_from >= 0 ? run.gave_up_at >= s_lb_silent_from &&
+                                                run.stats.checksums_matched >= expected :
+                                            run.error.empty() && run.stats.checksums_matched > 0 &&
+                                                run.stats.checksums_matched >= expected;
   NOTICE_LOG_FMT(ROLLBACK,
                  "Loopback done at frame {} ({}): {} rollbacks, {} re-run frames, deepest {}, {} "
                  "stalls, {} checksums matched, confirmed frame {}{}{}",
@@ -657,6 +668,7 @@ void LoopbackBoundary(Core::System& system, int frame_here, bool first_pass)
     run.remote = std::make_unique<Loopback::VirtualRemote>(run.recording, std::move(remote_seats),
                                                            0, s_lb_lag, s_lb_jitter, s_lb_delay,
                                                            s_lb_checksum_every);
+    run.remote->SilenceFrom(s_lb_silent_from);
     run.port = std::make_unique<RingPort>(system, config.max_rollback, true);
     run.session = std::make_unique<Orca::Net::Session>(config, *run.port, *run.remote);
     NOTICE_LOG_FMT(ROLLBACK,
@@ -676,6 +688,7 @@ void LoopbackBoundary(Core::System& system, int frame_here, bool first_pass)
   const Orca::Net::Pad local =
       target < run.recording.size() ? run.recording[target].pads[0] : Orca::Net::Pad{};
   bool ran_past_recording = false;
+  bool gave_up = false;
   const Orca::Net::Step step = StepSession(
       *run.session, *run.port, frame_here - 1, local,
       [&] {
@@ -684,13 +697,16 @@ void LoopbackBoundary(Core::System& system, int frame_here, bool first_pass)
         run.remote->Tick();
         return ran_past_recording;
       },
-      std::chrono::microseconds{0});
+      std::chrono::microseconds{0}, std::chrono::milliseconds{s_lb_give_up_ms}, &gave_up);
 
   if (step.kind == Orca::Net::StepKind::Ended)
   {
-    run.error = ran_past_recording       ? "ran past the end of the recording" :
+    if (gave_up)
+      run.gave_up_at = frame_here;
+    run.error = gave_up ? fmt::format("the remote stopped answering ({} ms)", s_lb_give_up_ms) :
+                ran_past_recording           ? "ran past the end of the recording" :
                 run.session->Error().empty() ? "stopped while stalled" :
-                                           run.session->Error();
+                                               run.session->Error();
     ERROR_LOG_FMT(ROLLBACK, "Loopback session ended at frame {}: {}", frame_here, run.error);
     EndLoopback();
     LogLoopbackResult(frame_here);

@@ -3,6 +3,7 @@
 
 #include "Core/Rollback/SessionPort.h"
 
+#include <optional>
 #include <thread>
 
 #include "Common/Logging/Log.h"
@@ -100,9 +101,26 @@ void RingPort::ResetPacing()
 
 Orca::Net::Step StepSession(Orca::Net::Session& session, RingPort& port, int completed_frame,
                             const Orca::Net::Pad& local_pad, const std::function<bool()>& stopping,
-                            std::chrono::microseconds stall_wait)
+                            std::chrono::microseconds stall_wait,
+                            std::chrono::milliseconds give_up_after, bool* gave_up)
 {
   bool waited = false;
+  std::optional<std::chrono::steady_clock::time_point> held_since;
+  std::chrono::steady_clock::time_point last_poll;
+  // Whether this call has held the emulator longer than give_up_after. A gap between two polls
+  // much longer than the loop's own sleeps means this process wasn't running (stopped, or the Mac
+  // slept): that says nothing about the other side, so the count starts again.
+  const auto held_too_long = [&] {
+    const auto now = std::chrono::steady_clock::now();
+    if (!held_since || now - last_poll > std::chrono::seconds(1))
+      held_since = now;
+    last_poll = now;
+    if (give_up_after.count() <= 0 || now - *held_since <= give_up_after)
+      return false;
+    if (gave_up)
+      *gave_up = true;
+    return true;
+  };
   while (true)
   {
     const Orca::Net::Step step = session.OnBoundary(completed_frame, local_pad);
@@ -110,7 +128,7 @@ Orca::Net::Step StepSession(Orca::Net::Session& session, RingPort& port, int com
     {
       // Time sync: this machine is ahead. Hold one frame, then pace from now (otherwise the
       // throttle would race to make the held frame up).
-      if (stopping())
+      if (stopping() || held_too_long())
         return {Orca::Net::StepKind::Ended, step.frame};
       std::this_thread::sleep_for(FRAME_PERIOD);
       waited = true;
@@ -122,7 +140,7 @@ Orca::Net::Step StepSession(Orca::Net::Session& session, RingPort& port, int com
         port.ResetPacing();
       return step;
     }
-    if (stopping())
+    if (stopping() || held_too_long())
       return {Orca::Net::StepKind::Ended, step.frame};
     if (stall_wait.count() > 0)
       std::this_thread::sleep_for(stall_wait);
