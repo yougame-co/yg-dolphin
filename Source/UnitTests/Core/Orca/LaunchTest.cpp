@@ -12,6 +12,7 @@
 #include <gtest/gtest.h>
 
 #include "Common/FileUtil.h"
+#include "Common/StringUtil.h"
 #include "Core/Orca/Launch.h"
 
 namespace
@@ -65,6 +66,27 @@ TEST(OrcaLaunch, PathsStayInsideTheFolder)
   }
 }
 
+// A build folder whose name the Windows ANSI code page can't spell (paths are UTF-8 throughout).
+TEST(OrcaLaunch, ReadsAFolderWithANonAsciiName)
+{
+  const std::string parent = File::CreateTempDir();
+  const std::string dir = parent + "/Orca-é-日本-한-🎮";
+  ASSERT_TRUE(File::CreateFullPath(dir + "/pplus/"));
+  ASSERT_TRUE(File::WriteStringToFile(dir + "/orca-launch.ini", GOOD));
+  ASSERT_TRUE(File::WriteStringToFile(dir + "/pplus/Project+ Netplay Launcher.dol", "dol"));
+  std::string error;
+  const auto spec = Orca::ReadLaunchIni(dir, &error);
+  ASSERT_TRUE(spec) << error;
+  EXPECT_NE(spec->executable.find("Orca-é-日本-한-🎮"), std::string::npos)
+      << spec->executable;
+  std::error_code ec;
+  EXPECT_TRUE(std::filesystem::equivalent(
+      StringToPath(spec->executable), StringToPath(dir) / "pplus" / "Project+ Netplay Launcher.dol",
+      ec))
+      << spec->executable << " " << ec.message();
+  File::DeleteDirRecursively(parent);
+}
+
 TEST(OrcaLaunch, ReadsTheFileNextToTheApp)
 {
   const std::string dir = File::CreateTempDir();
@@ -85,12 +107,12 @@ TEST(OrcaLaunch, ReadsTheFileNextToTheApp)
   EXPECT_EQ(spec->profile, "PPLUS32");
   // The loader's full path (separators and drive letters differ by platform): absolute, and the
   // file written above.
-  const std::filesystem::path executable(spec->executable);
+  const std::filesystem::path executable = StringToPath(spec->executable);
   EXPECT_TRUE(executable.is_absolute()) << spec->executable;
   EXPECT_EQ(executable.filename().string(), "Project+ Netplay Launcher.dol");
   std::error_code ec;
   EXPECT_TRUE(std::filesystem::equivalent(
-      executable, std::filesystem::path(dir) / "pplus" / "Project+ Netplay Launcher.dol", ec))
+      executable, StringToPath(dir) / "pplus" / "Project+ Netplay Launcher.dol", ec))
       << spec->executable << " " << ec.message();
 
 #ifndef _WIN32

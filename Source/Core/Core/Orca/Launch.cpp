@@ -140,10 +140,12 @@ std::optional<LaunchSpec> ReadLaunchIni(const std::string& folder, std::string* 
     return std::nullopt;
 
   // The loader, symlinks resolved, must be a regular file inside the folder (also resolved).
+  // Paths are UTF-8 strings: StringToPath/PathToString, never fs::path(std::string) or
+  // .string(), which go through the ANSI code page on Windows.
   namespace fs = std::filesystem;
   std::error_code ec;
-  const fs::path root = fs::canonical(fs::path(folder), ec);
-  const fs::path exe = ec ? fs::path() : fs::canonical(root / fs::path(spec->executable), ec);
+  const fs::path root = fs::canonical(StringToPath(folder), ec);
+  const fs::path exe = ec ? fs::path() : fs::canonical(root / StringToPath(spec->executable), ec);
   if (ec || !fs::is_regular_file(exe, ec))
   {
     *error = fmt::format("orca-launch.ini: {} isn't there", spec->executable);
@@ -155,7 +157,7 @@ std::optional<LaunchSpec> ReadLaunchIni(const std::string& folder, std::string* 
     *error = fmt::format("orca-launch.ini: {} leads outside the build's folder", spec->executable);
     return std::nullopt;
   }
-  spec->executable = exe.string();
+  spec->executable = PathToString(exe);
   return spec;
 }
 }  // namespace Orca
