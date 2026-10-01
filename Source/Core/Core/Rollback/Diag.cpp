@@ -20,6 +20,7 @@
 
 #include "Common/Logging/Log.h"
 #include "Core/HW/Memmap.h"
+#include "Core/Rollback/Cow.h"
 #include "Core/System.h"
 
 namespace Rollback::Diag
@@ -76,6 +77,13 @@ struct SnapTimes
   double state = 0, mem1 = 0, mem2 = 0;
   int saves = 0;
   std::vector<float> port_saves, port_loads;
+  // Copy-on-write saves, and what the frames between them cost.
+  double cow_state = 0, cow_protect = 0;
+  int cow_saves = 0;
+  std::vector<float> cow_faults, cow_recorded, cow_copied;  // per first-pass frame
+  bool cow_sampled = false;
+  Rollback::Cow::Counters cow_last;
+  std::vector<float> ring_loads, ring_load_blocks;
 } s_snap;
 
 struct PageDiff
@@ -191,6 +199,20 @@ void OnFirstPassBoundary(Core::System& system, int frame)
   }
   if (s_pagediff_from >= 0 && frame >= s_pagediff_from - GAPS.back())
     SamplePages(system, frame);
+  if (s_snaptime && s_snap.cow_saves > 0)
+  {
+    const Rollback::Cow::Counters now = Rollback::Cow::GetCounters();
+    if (s_snap.cow_sampled && (s_frametime_from < 0 || frame > s_frametime_from))
+    {
+      s_snap.cow_faults.push_back(static_cast<float>(now.faults - s_snap.cow_last.faults));
+      s_snap.cow_recorded.push_back(
+          static_cast<float>(now.pages_recorded - s_snap.cow_last.pages_recorded));
+      s_snap.cow_copied.push_back(
+          static_cast<float>(now.pages_copied - s_snap.cow_last.pages_copied));
+    }
+    s_snap.cow_last = now;
+    s_snap.cow_sampled = true;
+  }
 }
 
 void LogSummary()
@@ -212,6 +234,24 @@ void LogSummary()
                    "Diag snapshot saves ({} copy): {}, state {:.2f} ms, MEM1 {:.2f} ms, MEM2 {:.2f} ms",
                    s_ntcopy ? "non-temporal" : "plain", s_snap.saves, s_snap.state / s_snap.saves,
                    s_snap.mem1 / s_snap.saves, s_snap.mem2 / s_snap.saves);
+  }
+  if (s_snap.cow_saves > 0)
+  {
+    const Rollback::Cow::Counters c = Rollback::Cow::GetCounters();
+    NOTICE_LOG_FMT(ROLLBACK,
+                   "Diag copy-on-write snapshots ({} KB pages): {} saves, state {:.3f} ms, "
+                   "save {:.3f} ms; per frame: faults {}; pages recorded by faults {}; hot pages "
+                   "copied {}; {} mapping changes",
+                   Rollback::Cow::PageSize() / 1024, s_snap.cow_saves,
+                   s_snap.cow_state / s_snap.cow_saves, s_snap.cow_protect / s_snap.cow_saves,
+                   Describe(s_snap.cow_faults), Describe(s_snap.cow_recorded),
+                   Describe(s_snap.cow_copied), c.remaps);
+  }
+  if (!s_snap.ring_loads.empty())
+  {
+    NOTICE_LOG_FMT(ROLLBACK, "Diag ring loads: {}, ms {}; 4 KB blocks restored {}",
+                   s_snap.ring_loads.size(), Describe(s_snap.ring_loads),
+                   Describe(s_snap.ring_load_blocks));
   }
   if (!s_snap.port_saves.empty() || !s_snap.port_loads.empty())
   {
@@ -271,6 +311,19 @@ void AddSnapshotSave(double state_ms, double mem1_ms, double mem2_ms)
   s_snap.mem1 += mem1_ms;
   s_snap.mem2 += mem2_ms;
   ++s_snap.saves;
+}
+
+void AddCowSave(double state_ms, double protect_ms)
+{
+  s_snap.cow_state += state_ms;
+  s_snap.cow_protect += protect_ms;
+  ++s_snap.cow_saves;
+}
+
+void AddRingLoad(double ms, std::size_t changed_blocks)
+{
+  s_snap.ring_loads.push_back(static_cast<float>(ms));
+  s_snap.ring_load_blocks.push_back(static_cast<float>(changed_blocks));
 }
 
 void AddPortSave(double ms)

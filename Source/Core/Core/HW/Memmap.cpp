@@ -7,6 +7,7 @@
 // may be redirected here (for example to Read_U32()).
 
 #include "Core/HW/Memmap.h"
+#include "Core/Rollback/Cow.h"
 #include "Core/Rollback/Rollback.h"
 
 #include <algorithm>
@@ -252,6 +253,7 @@ bool MemoryManager::InitFastmemArena()
 
   m_is_fastmem_arena_initialized = true;
   m_fastmem_arena_size = memory_size;
+  Rollback::Cow::OnMappingsChanged(m_system);
   return true;
 }
 
@@ -318,8 +320,12 @@ void MemoryManager::UpdateDBATMappings(const PowerPC::BatTable& dbat_table)
                             intersection_start, mapped_size, logical_address);
               continue;
             }
-            m_dbat_mapped_entries.emplace(logical_address,
-                                          LogicalMemoryView{mapped_pointer, mapped_size});
+            // Keyed by where this view is: one BAT run can cover MEM1 and MEM2 (0x80000000 and
+            // 0x90000000 map 0x00000000 and 0x10000000 contiguously), and both views must be
+            // remembered to be unmapped (and write-protected by rollback snapshots).
+            m_dbat_mapped_entries.emplace(
+                mapped_logical_address,
+                LogicalMemoryView{mapped_pointer, mapped_size, intersection_start, true});
           }
 
           u32 bat_index = mapped_logical_address / PowerPC::BAT_PAGE_SIZE;
@@ -330,6 +336,7 @@ void MemoryManager::UpdateDBATMappings(const PowerPC::BatTable& dbat_table)
       }
     }
   }
+  Rollback::Cow::OnMappingsChanged(m_system);
 }
 
 void MemoryManager::AddPageTableMapping(u32 logical_address, u32 translated_address, bool writeable)
@@ -426,6 +433,7 @@ void MemoryManager::AddHostPageTableMapping(u32 logical_address, u32 translated_
                         "region at 0x{:08X} (size 0x{:08X}, logical fastmem region at 0x{:08X}).",
                         intersection_start, mapped_size, logical_address);
         }
+        it->second.writeable = writeable;
       }
     }
     else
@@ -440,10 +448,12 @@ void MemoryManager::AddHostPageTableMapping(u32 logical_address, u32 translated_
                       intersection_start, mapped_size, logical_address);
         continue;
       }
-      m_page_table_mapped_entries.emplace(logical_address,
-                                          LogicalMemoryView{mapped_pointer, mapped_size});
+      m_page_table_mapped_entries.emplace(
+          logical_address,
+          LogicalMemoryView{mapped_pointer, mapped_size, intersection_start, writeable});
     }
   }
+  Rollback::Cow::OnMappingsChanged(m_system);
 }
 
 void MemoryManager::RemovePageTableMappings(const std::set<u32>& mappings)
@@ -488,11 +498,13 @@ void MemoryManager::RemoveHostPageTableMapping(u32 logical_address)
     m_arena.UnmapFromMemoryRegion(entry.mapped_pointer, entry.mapped_size);
 
     m_page_table_mapped_entries.erase(it);
+    Rollback::Cow::OnMappingsChanged(m_system);
   }
 }
 
 void MemoryManager::RemoveAllPageTableMappings()
 {
+  const bool had_mappings = !m_page_table_mapped_entries.empty();
   for (const auto& [logical_address, entry] : m_page_table_mapped_entries)
   {
     m_arena.UnmapFromMemoryRegion(entry.mapped_pointer, entry.mapped_size);
@@ -500,6 +512,48 @@ void MemoryManager::RemoveAllPageTableMappings()
   m_page_table_mapped_entries.clear();
   m_large_readable_pages.clear();
   m_large_writeable_pages.clear();
+  if (had_mappings)
+    Rollback::Cow::OnMappingsChanged(m_system);
+}
+
+std::vector<GuestRamView> MemoryManager::GetGuestRamViews() const
+{
+  std::vector<GuestRamView> views;
+  // MEM1 and MEM2 only: the locked L1 cache and fake VMEM are copied whole by snapshots.
+  const auto is_ram = [this](const PhysicalMemoryRegion& region) {
+    return region.active && (region.out_pointer == &m_ram || region.out_pointer == &m_exram);
+  };
+  for (const PhysicalMemoryRegion& region : m_physical_regions)
+  {
+    if (!is_ram(region))
+      continue;
+    views.push_back(GuestRamView{*region.out_pointer, region.physical_address, region.size, true});
+    if (m_is_fastmem_arena_initialized)
+    {
+      views.push_back(GuestRamView{m_physical_base + region.physical_address,
+                                   region.physical_address, region.size, true});
+    }
+  }
+  for (const auto* entries : {&m_dbat_mapped_entries, &m_page_table_mapped_entries})
+  {
+    for (const auto& [logical_address, entry] : *entries)
+    {
+      views.push_back(GuestRamView{static_cast<u8*>(entry.mapped_pointer), entry.physical_address,
+                                   entry.mapped_size, entry.writeable});
+    }
+  }
+  return views;
+}
+
+u8* MemoryManager::GetRollbackAlias(bool exram)
+{
+  const PhysicalMemoryRegion& region = m_physical_regions[exram ? 3 : 0];
+  if (!region.active)
+    return nullptr;
+  u8*& alias = m_rollback_alias[exram ? 1 : 0];
+  if (!alias)
+    alias = static_cast<u8*>(m_arena.CreateView(region.shm_position, region.size));
+  return alias;
 }
 
 void MemoryManager::DoState(PointerWrap& p)
@@ -560,6 +614,7 @@ void MemoryManager::DoState(PointerWrap& p)
 
 void MemoryManager::Shutdown()
 {
+  Rollback::Cow::StopTracking();
   ShutdownFastmemArena();
 
   m_is_initialized = false;
@@ -571,6 +626,12 @@ void MemoryManager::Shutdown()
     m_arena.ReleaseView(*region.out_pointer, region.size);
     *region.out_pointer = nullptr;
   }
+  for (std::size_t i = 0; i < m_rollback_alias.size(); ++i)
+  {
+    if (m_rollback_alias[i])
+      m_arena.ReleaseView(m_rollback_alias[i], i == 0 ? GetRamSize() : GetExRamSize());
+    m_rollback_alias[i] = nullptr;
+  }
   m_arena.ReleaseSHMSegment();
   m_mmio_mapping.reset();
   INFO_LOG_FMT(MEMMAP, "Memory system shut down.");
@@ -580,6 +641,8 @@ void MemoryManager::ShutdownFastmemArena()
 {
   if (!m_is_fastmem_arena_initialized)
     return;
+  // Rollback snapshots can't follow writes through views that come back later.
+  Rollback::Cow::StopTracking();
 
   for (const PhysicalMemoryRegion& region : m_physical_regions)
   {

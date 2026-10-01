@@ -30,6 +30,7 @@ Online play goes through a private two-player YouGame room (`Source/Core/Core/Or
 | `ORCA_TEST_DEV_GAME` | Tests only: an anonymous dev ticket from the site instead of the app (no ratings, no account). |
 | `ORCA_SITE` | Tests only: the site for dev tickets (default `https://yougame.co`). |
 | `ORCA_TEST_PADS`, `ORCA_TEST_SKIP_RENDER` | Harness overrides; they change the compatibility key. |
+| `ORCA_TEST_FULL_SNAPSHOTS` | `1`: rollback snapshots copy all of RAM instead of copy-on-write (`Source/Core/Core/Rollback/Cow.h`), to compare the two. A test override too. |
 
 **Orca.app** (the macOS bundle, `Tools/orca-package-macos.sh`) is what the YouGame desktop app
 starts, with no arguments. A bundle build is a session by default (`ORCA_SESSION=0` turns that off),

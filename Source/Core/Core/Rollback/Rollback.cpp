@@ -25,6 +25,7 @@
 #include "Core/PowerPC/JitCommon/JitBase.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/Rollback/Cow.h"
 #include "Core/Rollback/Diag.h"
 #include "Core/Rollback/Harness.h"
 #include "Core/Rollback/OnlineMatch.h"
@@ -140,6 +141,44 @@ SnapshotRing::SnapshotRing(std::size_t slots) : m_slots(std::max<std::size_t>(sl
 {
 }
 
+SnapshotRing::~SnapshotRing()
+{
+  Cow::Disarm(this);
+}
+
+void SnapshotRing::Forget(Slot* slot)
+{
+  if (slot->cow_id != 0)
+    Cow::Drop(slot->cow_id);
+  slot->cow_id = 0;
+  slot->frame = -1;
+}
+
+bool SnapshotRing::UseCow(Core::System& system, bool* armed_now)
+{
+  *armed_now = false;
+  // Tracking stopped under this ring (emulation stopped, or RAM mappings it can't follow): its
+  // copy-on-write snapshots are gone.
+  if (m_cow.value_or(false) && !Cow::IsArmedFor(this))
+  {
+    for (Slot& slot : m_slots)
+    {
+      if (slot.cow_id != 0)
+      {
+        slot.cow_id = 0;
+        slot.frame = -1;
+      }
+    }
+    m_cow.reset();
+  }
+  if (!m_cow)
+  {
+    m_cow = Orca::SessionActive() && !Orca::TestFullSnapshots() && Cow::ArmForSystem(system, this);
+    *armed_now = *m_cow;
+  }
+  return *m_cow;
+}
+
 SnapshotRing::Slot* SnapshotRing::Find(s64 frame)
 {
   for (Slot& slot : m_slots)
@@ -162,13 +201,19 @@ const SnapshotRing::Slot* SnapshotRing::Find(s64 frame) const
 
 bool SnapshotRing::Has(s64 frame) const
 {
-  return Find(frame) != nullptr;
+  const Slot* slot = Find(frame);
+  return slot && (slot->cow_id == 0 || Cow::Has(slot->cow_id));
 }
 
 void SnapshotRing::Reset(Core::System& system)
 {
   for (Slot& slot : m_slots)
+  {
     slot.frame = -1;
+    slot.cow_id = 0;
+  }
+  Cow::Disarm(this);
+  m_cow.reset();
   m_next = 0;
   if (IOS::HLE::FS::HostFileSystem* nand = HostNand(system))
     nand->JournalStop();
@@ -184,33 +229,46 @@ bool SnapshotRing::Save(Core::System& system, s64 frame)
     m_next = (m_next + 1) % m_slots.size();
   }
   m_last = static_cast<std::size_t>(slot - m_slots.data());
+  // Whatever the slot held is replaced (a re-saved frame's snapshot merges into the one before it).
+  Forget(slot);
+  bool armed_now;
+  const bool cow = UseCow(system, &armed_now);
   const auto buffers = [slot] {
     return std::tuple{slot->state.data(), slot->mem1.capacity(), slot->mem2.capacity()};
   };
   const auto buffers_before = buffers();
 
-  // Non-RAM state first, so anything DoState writes into RAM is in the RAM copy.
+  // Non-RAM state first, so anything DoState writes into RAM is in the RAM snapshot.
   const auto t0 = std::chrono::steady_clock::now();
   {
     SnapshotScope scope;
     slot->state_size = State::SaveToBufferForRollback(system, slot->state);
   }
   const auto t1 = std::chrono::steady_clock::now();
+  const auto ms = [](auto from, auto to) {
+    return std::chrono::duration<double, std::milli>(to - from).count();
+  };
 
   auto& memory = system.GetMemory();
-  Diag::CopyRam(&slot->mem1, memory.GetRAM(), memory.GetRamSize());
-  const auto t2 = std::chrono::steady_clock::now();
-  if (memory.GetEXRAM())
-    Diag::CopyRam(&slot->mem2, memory.GetEXRAM(), memory.GetExRamSize());
-  else
-    slot->mem2.clear();
-  if (Diag::SnapTime())
+  // RAM as it is now, kept by write-protecting it: the pages written since the previous save are
+  // read-only again and this snapshot's undo log is open. (0: tracking stopped; copy instead.)
+  if (cow)
+    slot->cow_id = Cow::Snapshot();
+  if (slot->cow_id != 0)
   {
-    const auto ms = [](auto from, auto to) {
-      return std::chrono::duration<double, std::milli>(to - from).count();
-    };
-    const auto t3 = std::chrono::steady_clock::now();
-    Diag::AddSnapshotSave(ms(t0, t1), ms(t1, t2), ms(t2, t3));
+    if (Diag::SnapTime())
+      Diag::AddCowSave(ms(t0, t1), ms(t1, std::chrono::steady_clock::now()));
+  }
+  else
+  {
+    Diag::CopyRam(&slot->mem1, memory.GetRAM(), memory.GetRamSize());
+    const auto t2 = std::chrono::steady_clock::now();
+    if (memory.GetEXRAM())
+      Diag::CopyRam(&slot->mem2, memory.GetEXRAM(), memory.GetExRamSize());
+    else
+      slot->mem2.clear();
+    if (Diag::SnapTime())
+      Diag::AddSnapshotSave(ms(t0, t1), ms(t1, t2), ms(t2, std::chrono::steady_clock::now()));
   }
   slot->l1_cache.assign(memory.GetL1Cache(), memory.GetL1Cache() + memory.GetL1CacheSize());
   slot->frame = frame;
@@ -227,7 +285,8 @@ bool SnapshotRing::Save(Core::System& system, s64 frame)
     }
     nand->JournalTrim(oldest);
   }
-  return buffers() != buffers_before;
+  // Arming protects all of RAM once: not what a save costs.
+  return armed_now || buffers() != buffers_before;
 }
 
 bool SnapshotRing::Load(Core::System& system, s64 frame)
@@ -244,11 +303,35 @@ bool SnapshotRing::Load(Core::System& system, s64 frame)
   // that was still pending when this snapshot was taken. Nothing in the device-state load writes RAM
   // in a session: the one writer, the texture cache's flush of pending EFB copies, has nothing to
   // write while sessions keep EFB copies on the GPU.
+  const auto start = std::chrono::steady_clock::now();
   auto& memory = system.GetMemory();
   std::unordered_set<u32> changed_pages;
-  RestoreRam(system, memory.GetRAM(), slot->mem1, MEM1_VIRTUAL, &changed_pages);
-  if (memory.GetEXRAM() && !slot->mem2.empty())
-    RestoreRam(system, memory.GetEXRAM(), slot->mem2, MEM2_VIRTUAL, &changed_pages);
+  if (slot->cow_id != 0)
+  {
+    // The undo logs of this snapshot and every newer one give exactly the pages written since it.
+    std::vector<u32> changed_blocks;
+    if (!Cow::Restore(slot->cow_id, [&changed_blocks](u32 physical, u32 length) {
+          for (u32 offset = 0; offset < length; offset += static_cast<u32>(RESTORE_PAGE))
+            changed_blocks.push_back(physical + offset);
+        }))
+    {
+      ERROR_LOG_FMT(CORE, "Rollback: the copy-on-write snapshot for frame {} is gone", frame);
+      return false;
+    }
+    // As RestoreRam: MEM1 runs at 0x80000000 and MEM2 at 0x90000000, both physical | 0x80000000.
+    auto& jit = system.GetJitInterface();
+    for (const u32 physical : changed_blocks)
+    {
+      jit.InvalidateICache(physical | MEM1_VIRTUAL, static_cast<u32>(RESTORE_PAGE), true);
+      changed_pages.insert(physical);
+    }
+  }
+  else
+  {
+    RestoreRam(system, memory.GetRAM(), slot->mem1, MEM1_VIRTUAL, &changed_pages);
+    if (memory.GetEXRAM() && !slot->mem2.empty())
+      RestoreRam(system, memory.GetEXRAM(), slot->mem2, MEM2_VIRTUAL, &changed_pages);
+  }
   std::memcpy(memory.GetL1Cache(), slot->l1_cache.data(), slot->l1_cache.size());
   ForgetLearnedJitAddresses(system, changed_pages);
 
@@ -270,13 +353,20 @@ bool SnapshotRing::Load(Core::System& system, s64 frame)
     return false;
   }
 
-  // Frames after this one are about to be re-run; their snapshots are re-saved as they go.
+  // Frames after this one are about to be re-run; their snapshots are re-saved as they go. (A
+  // copy-on-write restore already dropped every snapshot saved after this one.)
   for (Slot& other : m_slots)
   {
-    if (other.frame > frame)
-      other.frame = -1;
+    if (other.frame > frame || (other.cow_id != 0 && !Cow::Has(other.cow_id)))
+      Forget(&other);
   }
   m_next = (static_cast<std::size_t>(slot - m_slots.data()) + 1) % m_slots.size();
+  if (Diag::SnapTime())
+  {
+    Diag::AddRingLoad(
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(),
+        changed_pages.size());
+  }
   return true;
 }
 
@@ -285,6 +375,10 @@ std::optional<u64> SnapshotRing::RamChecksum(s64 frame) const
   const Slot* slot = Find(frame);
   if (!slot || slot->state_size == 0)
     return std::nullopt;
+  // Copy-on-write: RAM as it was at the save, rebuilt from live RAM and the undo logs (no full copy
+  // is kept, and the hash costs only the frames that ask for one).
+  if (slot->cow_id != 0)
+    return Cow::Checksum(slot->cow_id);
   return Rollback::RamChecksum(slot->mem1, slot->mem2);
 }
 
