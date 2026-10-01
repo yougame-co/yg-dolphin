@@ -47,6 +47,14 @@ public:
   // session's pads, the local player's included, so both machines see the same bytes.
   GCPadStatus Pad(int port) const { return m_pads[port]; }
 
+  // Drop-in: a joining player replays the host's frames as fast as it can, without rendering or
+  // sound, until it has caught up (then pacing restarts from now).
+  void SetCatchingUp(bool catching_up);
+  bool CatchingUp() const { return m_catching_up; }
+  // Drop-in: load the host's keyframe as the state at the start of `frame` (from the frame-boundary
+  // hook, like Load).
+  bool LoadImage(MachineImage image, int frame);
+
   // The port of the running session, or null.
   static RingPort* Active();
 
@@ -64,6 +72,7 @@ private:
   std::array<GCPadStatus, Orca::Net::MAX_SEATS> m_pads;
   bool m_unthrottled;
   bool m_resimulating = false;
+  bool m_catching_up = false;
   // The frame saved since the emulator last ran: a stalled boundary asks again for the same one.
   int m_saved_since_run = -1;
   // The throttle's reference before the rollback load, put back when the re-run catches up.

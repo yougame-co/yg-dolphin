@@ -15,6 +15,8 @@ namespace Orca::Net
 // The PAD_BUTTON_* and PAD_TRIGGER_* bits a game can read; PAD_USE_ORIGIN and PAD_GET_ORIGIN are
 // the local adapter's calibration state and never travel.
 constexpr u16 PAD_WIRE_BUTTONS = 0x1F7F;
+static_assert((PAD_WIRE_BUTTONS >> 8 & PAD_WIRE_UNPLUGGED) == 0,
+              "the unplugged mark must not be a button bit");
 
 inline Pad EncodePad(const GCPadStatus& status)
 {
@@ -32,6 +34,12 @@ inline Pad EncodePad(const GCPadStatus& status)
 inline GCPadStatus DecodePad(const Pad& pad)
 {
   GCPadStatus status;
+  if (IsUnplugged(pad))
+  {
+    // SI_DeviceGCController answers nothing for a disconnected pad: the game sees an empty port.
+    status.isConnected = false;
+    return status;
+  }
   status.button = static_cast<u16>((pad[0] << 8) | pad[1]) & PAD_WIRE_BUTTONS;
   status.stickX = static_cast<u8>(pad[2] + GCPadStatus::MAIN_STICK_CENTER_X);
   status.stickY = static_cast<u8>(pad[3] + GCPadStatus::MAIN_STICK_CENTER_Y);

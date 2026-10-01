@@ -11,9 +11,9 @@
 #include "Common/CommonTypes.h"
 #include "Core/Orca/Session/Session.h"
 
-// A private YouGame room carrying an Orca session: two friends join by room code, the host starts
-// the match, seats follow the room's slot order (seat 0 = controller port 1), and session packets
-// travel as relayed room messages. Tickets come from the YouGame desktop app's loopback bridge
+// A private YouGame room carrying an Orca drop-in session: the host plays from its boot, friends
+// join by room code (up to four players), each friend's seat is its room slot (seat 0, the host,
+// is controller port 1), and session packets travel as relayed room messages. Tickets come from the YouGame desktop app's loopback bridge
 // (YOUGAME_BRIDGE / YOUGAME_TOKEN), or, for tests only, straight from the site as an anonymous dev
 // game (ORCA_TEST_DEV_GAME: its rooms belong to a separate dev game, so they never meet real
 // players). All network work runs on one thread.
@@ -28,14 +28,44 @@ struct RoomOptions
   std::string player_name = "Player";
   // The room's mode: one per game, e.g. "orca-rsbe01". Both players must use the same.
   std::string mode = "orca-test";
+  // This Orca joins a friend's running game (ORCA_JOIN=1). Also true when the app opened an invite.
+  bool joining = false;
+};
+
+// Where the host's keyframe of its game is, for a joining friend (Orca::Net::KeyframeStore).
+struct KeyframeInfo
+{
+  int frame = -1;
+  std::string id;
+  u64 size = 0;
+  std::string hash;
+};
+
+// Something another player in the room did.
+struct PeerEvent
+{
+  enum class Kind
+  {
+    // It said hello with our compatibility key: a player of this game at `seat`.
+    Arrived,
+    // It left the room or its connection dropped.
+    Left,
+    // The host offered its keyframe (to a joiner).
+    Keyframe,
+  };
+  Kind kind = Kind::Arrived;
+  int seat = -1;
+  // The player is the game's host (the Orca that started it).
+  bool host = false;
+  std::string name;
+  KeyframeInfo keyframe;
 };
 
 enum class RoomState
 {
   Connecting,
-  // In the room, waiting for the other player (or for the host to start).
+  // In the room.
   Waiting,
-  Playing,
   Ended,
 };
 
@@ -46,9 +76,15 @@ public:
   ~YouGameRoom() override;
 
   RoomState GetState() const;
-  // Valid once Playing.
+  // This Orca's room slot (its seat), once in the room (-1 before).
   int Seat() const;
-  u32 Seed() const;
+  // Whether this Orca joins someone else's game, once the ticket is in (nullopt before, or if the
+  // room ended first).
+  std::optional<bool> Joining() const;
+  // What other players did since the last call.
+  std::vector<PeerEvent> TakePeerEvents();
+  // Host: offer `seat`'s player the keyframe (sent every second until its first packet arrives).
+  void OfferKeyframe(int seat, const KeyframeInfo& info);
   // The room code in use (for showing and sharing), once known.
   std::string Code() const;
   // A line for the UI or log: what the room is doing, or why it ended.

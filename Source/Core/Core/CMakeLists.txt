@@ -517,6 +517,8 @@ add_library(core
   Orca/Profile.h
   Orca/Status.cpp
   Orca/Status.h
+  Orca/Session/Keyframe.cpp
+  Orca/Session/Keyframe.h
   Orca/Session/Online.cpp
   Orca/Session/Online.h
   Orca/Session/PadCodec.h
@@ -732,6 +734,7 @@ PUBLIC
 
 PRIVATE
   CURL::libcurl
+  zstd::zstd
   FatFs
   fmt::fmt
   LZO::LZO

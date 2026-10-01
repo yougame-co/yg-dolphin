@@ -220,8 +220,24 @@ TEST(OrcaRoom, RefusesToStartOutsideTheApp)
   EXPECT_FALSE(room.Status().empty());
 }
 
-// Two players in one dev room on the real rooms Worker: both reach Playing on different seats with
-// the same seed, and a packet crosses. ORCA_LIVE_TEST=1 (ORCA_SITE picks another site).
+// Waits until `room` reports another player arrived; returns its event.
+std::optional<PeerEvent> WaitArrived(YouGameRoom& room)
+{
+  for (int i = 0; i < 1500 && room.GetState() != RoomState::Ended; ++i)
+  {
+    for (const PeerEvent& event : room.TakePeerEvents())
+    {
+      if (event.kind == PeerEvent::Kind::Arrived)
+        return event;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return std::nullopt;
+}
+
+// A host and a joiner in one dev room on the real rooms Worker: each sees the other arrive on its
+// seat, a packet and a keyframe offer cross, a forged packet is dropped, and the host sees the
+// joiner leave while its own room stays. ORCA_LIVE_TEST=1 (ORCA_SITE picks another site).
 TEST(OrcaLive, TwoRoomsPlayEachOther)
 {
   const char* live = std::getenv("ORCA_LIVE_TEST");
@@ -239,21 +255,41 @@ TEST(OrcaLive, TwoRoomsPlayEachOther)
   for (int i = 0; i < 500 && a.GetState() == RoomState::Connecting; ++i)
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   ASSERT_EQ(a.GetState(), RoomState::Waiting) << a.Status();
+  EXPECT_EQ(a.Joining(), false);
   options.player_name = "Orca B";
+  options.joining = true;
   YouGameRoom b(options);
-  for (int i = 0; i < 1500 && !(a.Connected() && b.Connected()); ++i)
-  {
-    if (a.GetState() == RoomState::Ended || b.GetState() == RoomState::Ended)
-      break;
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  }
+  const auto b_seen = WaitArrived(a);
+  const auto a_seen = WaitArrived(b);
   SetEnv("ORCA_TEST_DEV_GAME", nullptr);
-  ASSERT_TRUE(a.Connected()) << a.Status();
-  ASSERT_TRUE(b.Connected()) << b.Status();
+  ASSERT_TRUE(b_seen) << a.Status();
+  ASSERT_TRUE(a_seen) << b.Status();
+  EXPECT_EQ(b.Joining(), true);
   EXPECT_EQ(a.Seat(), 0);
   EXPECT_EQ(b.Seat(), 1);
-  EXPECT_EQ(a.Seed(), b.Seed());
+  EXPECT_EQ(b_seen->seat, 1);
+  EXPECT_FALSE(b_seen->host);
+  EXPECT_EQ(a_seen->seat, 0);
+  EXPECT_TRUE(a_seen->host);
   EXPECT_EQ(a.Code(), code);
+
+  KeyframeInfo offer{120, "kf-test", 1234, "00112233aabbccdd"};
+  a.OfferKeyframe(1, offer);
+  std::optional<PeerEvent> offered;
+  for (int i = 0; i < 500 && !offered; ++i)
+  {
+    for (const PeerEvent& event : b.TakePeerEvents())
+    {
+      if (event.kind == PeerEvent::Kind::Keyframe)
+        offered = event;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  ASSERT_TRUE(offered);
+  EXPECT_EQ(offered->keyframe.id, offer.id);
+  EXPECT_EQ(offered->keyframe.frame, offer.frame);
+  EXPECT_EQ(offered->keyframe.size, offer.size);
+  EXPECT_EQ(offered->keyframe.hash, offer.hash);
 
   Packet sent = Sample();
   sent.seat = a.Seat();
@@ -266,19 +302,29 @@ TEST(OrcaLive, TwoRoomsPlayEachOther)
   }
   ASSERT_EQ(got.size(), 1u);
   ExpectSame(sent, got[0]);
-  // A's seat speaking as B's is refused, and ends the room for B.
+  // A's seat speaking as B's is dropped.
   Packet forged = Sample();
   forged.seat = b.Seat();
   a.Send(forged);
-  for (int i = 0; i < 500 && b.Connected(); ++i)
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  EXPECT_FALSE(b.Connected());
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  EXPECT_TRUE(b.Receive().empty());
+  EXPECT_TRUE(b.Connected());
 
-  // Leaving reports the match void and closes; the other side sees its friend go.
+  // The joiner leaves; the host's room stays, and says who left.
   b.Leave();
-  for (int i = 0; i < 500 && a.Connected(); ++i)
+  std::optional<PeerEvent> left;
+  for (int i = 0; i < 500 && !left; ++i)
+  {
+    for (const PeerEvent& event : a.TakePeerEvents())
+    {
+      if (event.kind == PeerEvent::Kind::Left)
+        left = event;
+    }
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  EXPECT_FALSE(a.Connected()) << a.Status();
+  }
+  ASSERT_TRUE(left);
+  EXPECT_EQ(left->seat, 1);
+  EXPECT_TRUE(a.Connected()) << a.Status();
   EXPECT_GE(a.RoundTripMs(), 0);
 }
 
@@ -301,13 +347,10 @@ TEST(OrcaLive, TestNetworkDelayHoldsMessages)
   for (int i = 0; i < 500 && a.GetState() == RoomState::Connecting; ++i)
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   SetEnv("ORCA_TEST_NET_DELAY_MS", "0");
+  options.joining = true;
   YouGameRoom b(options);
-  for (int i = 0; i < 1500 && !(a.Connected() && b.Connected()); ++i)
-  {
-    if (a.GetState() == RoomState::Ended || b.GetState() == RoomState::Ended)
-      break;
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  }
+  WaitArrived(a);
+  WaitArrived(b);
   SetEnv("ORCA_TEST_NET_DELAY_MS", nullptr);
   SetEnv("ORCA_TEST_DEV_GAME", nullptr);
   SetEnv("ORCA_SESSION", nullptr);
@@ -428,37 +471,6 @@ TEST(OrcaRoom, RefusalsHaveAppCodes)
   EXPECT_EQ(RefusalCode("WebSocket connect failed: ... (HTTP 403)"), "room_mismatch");
   EXPECT_EQ(RefusalCode("WebSocket connect failed: ... (HTTP 409)"), "room_full");
   EXPECT_EQ(RefusalCode("WebSocket connect failed: ... (HTTP 0)"), "network");
-}
-
-// A side that leaves because its game went out of sync says so first: the friend reports a desync
-// too, not that its friend left.
-TEST(OrcaLive, DesyncLeaveIsReportedOnBothSides)
-{
-  const char* live = std::getenv("ORCA_LIVE_TEST");
-  if (!live || std::string(live) != "1")
-    GTEST_SKIP() << "set ORCA_LIVE_TEST=1";
-  SetEnv("ORCA_TEST_DEV_GAME", "orca-live-test");
-  RoomOptions options;
-  options.room_code =
-      "orcab" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 10000000);
-  options.compatibility = "orca-live-test";
-  YouGameRoom a(options);
-  for (int i = 0; i < 500 && a.GetState() == RoomState::Connecting; ++i)
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  YouGameRoom b(options);
-  for (int i = 0; i < 1500 && !(a.Connected() && b.Connected()); ++i)
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  SetEnv("ORCA_TEST_DEV_GAME", nullptr);
-  ASSERT_TRUE(a.Connected()) << a.Status();
-  ASSERT_TRUE(b.Connected()) << b.Status();
-
-  a.SetLeaveReason("desync");
-  a.Leave();
-  for (int i = 0; i < 500 && b.Connected(); ++i)
-    std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  EXPECT_FALSE(b.Connected());
-  EXPECT_EQ(b.ErrorCode(), "desync") << b.Status();
-  EXPECT_EQ(a.ErrorCode(), "");
 }
 
 // A room waiting for a friend stays open for as long as the friend takes: half a minute of pings

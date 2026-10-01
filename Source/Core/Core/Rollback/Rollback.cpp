@@ -13,6 +13,13 @@
 
 #include <xxh3.h>
 
+#if defined(_M_X86_64) || defined(__x86_64__)
+#include <xmmintrin.h>
+#elif defined(_MSC_VER) && (defined(_M_ARM64) || defined(_M_ARM64EC))
+#include <intrin.h>
+#endif
+
+#include "Common/FPURoundMode.h"
 #include "Common/Logging/Log.h"
 #include "Core/HW/Memmap.h"
 #include "Core/IOS/FS/HostBackend/FS.h"
@@ -370,6 +377,61 @@ bool SnapshotRing::Load(Core::System& system, s64 frame)
   return true;
 }
 
+bool SnapshotRing::Capture(Core::System& system, MachineImage* image, bool stop_journal)
+{
+  Common::UniqueBuffer<u8> state;
+  std::size_t state_size;
+  {
+    SnapshotScope scope;
+    state_size = State::SaveToBufferForRollback(system, state);
+  }
+  if (state_size == 0)
+    return false;
+  image->state.assign(state.data(), state.data() + state_size);
+  auto& memory = system.GetMemory();
+  image->mem1.assign(memory.GetRAM(), memory.GetRAM() + memory.GetRamSize());
+  if (memory.GetEXRAM())
+    image->mem2.assign(memory.GetEXRAM(), memory.GetEXRAM() + memory.GetExRamSize());
+  else
+    image->mem2.clear();
+  image->l1_cache.assign(memory.GetL1Cache(), memory.GetL1Cache() + memory.GetL1CacheSize());
+  if (stop_journal)
+  {
+    if (IOS::HLE::FS::HostFileSystem* nand = HostNand(system))
+      nand->JournalStop();
+  }
+  return true;
+}
+
+bool SnapshotRing::LoadImage(Core::System& system, MachineImage image, s64 frame)
+{
+  auto& memory = system.GetMemory();
+  if (image.state.empty() || image.mem1.size() != memory.GetRamSize() ||
+      image.mem2.size() != (memory.GetEXRAM() ? memory.GetExRamSize() : 0) ||
+      image.l1_cache.size() != memory.GetL1CacheSize())
+  {
+    ERROR_LOG_FMT(CORE, "Rollback: a keyframe for frame {} doesn't fit this machine", frame);
+    return false;
+  }
+  Slot* slot = Find(frame);
+  if (!slot)
+  {
+    slot = &m_slots[m_next];
+    m_next = (m_next + 1) % m_slots.size();
+  }
+  // A full-copy slot: Load restores mem1/mem2 only when the slot has no copy-on-write snapshot.
+  Forget(slot);
+  slot->state.reset(image.state.size());
+  std::memcpy(slot->state.data(), image.state.data(), image.state.size());
+  slot->state_size = image.state.size();
+  slot->mem1 = std::move(image.mem1);
+  slot->mem2 = std::move(image.mem2);
+  slot->l1_cache = std::move(image.l1_cache);
+  slot->frame = frame;
+  slot->nand_journal_mark = 0;
+  return Load(system, frame);
+}
+
 std::optional<u64> SnapshotRing::RamChecksum(s64 frame) const
 {
   const Slot* slot = Find(frame);
@@ -402,8 +464,65 @@ std::optional<GCPadStatus> InputOverride(int port)
   return std::nullopt;
 }
 
+namespace
+{
+// The host's floating-point control register: FPCR on ARM64, MXCSR on x86-64 (0 elsewhere).
+u64 HostFloatControl()
+{
+#if defined(_M_X86_64) || defined(__x86_64__)
+  return _mm_getcsr();
+#elif defined(_MSC_VER) && (defined(_M_ARM64) || defined(_M_ARM64EC))
+  return _ReadStatusReg(ARM64_FPCR);
+#elif defined(__aarch64__)
+  u64 fpcr;
+  __asm__ __volatile__("mrs %0, fpcr" : "=r"(fpcr));
+  return fpcr;
+#else
+  return 0;
+#endif
+}
+
+// The CPU thread runs with the guest's floating-point mode (PowerPC::RoundingModeUpdated: FPSCR.RN
+// and NI as the rounding mode and flush-to-zero, plus FPCR.AH on ARM64 with FEAT_AFP), in compiled
+// C++ as much as in JIT code. Under FPCR.AH, FNEG and FABS leave a NaN's sign bit alone, and clang
+// builds some integer constants with MOVI + FNEG: a {0, INT_MAX} pair came out {0, -1} in the
+// drop-in session (2026-10-01). The hook's own code (the session, the room, snapshots) runs in the
+// host's default mode; on the way out the guest's mode is set again from its FPSCR, which a
+// snapshot load in the hook may have changed.
+class HostFloatScope
+{
+public:
+  explicit HostFloatScope(PowerPC::PowerPCState& ppc_state) : m_ppc_state(ppc_state)
+  {
+    const u64 guest = HostFloatControl();
+    Common::FPU::LoadDefaultSIMDState();
+    static bool s_logged = false;
+    if (!s_logged && guest != HostFloatControl())
+    {
+      s_logged = true;
+      NOTICE_LOG_FMT(ROLLBACK,
+                     "Frame hook: the CPU thread arrived in the guest's floating-point mode "
+                     "({:#x}); the hook runs in the host's ({:#x})",
+                     guest, HostFloatControl());
+    }
+  }
+  ~HostFloatScope() { PowerPC::RoundingModeUpdated(m_ppc_state); }
+  HostFloatScope(const HostFloatScope&) = delete;
+  HostFloatScope& operator=(const HostFloatScope&) = delete;
+
+private:
+  PowerPC::PowerPCState& m_ppc_state;
+};
+}  // namespace
+
+u64 HostFloatControlForTests()
+{
+  return HostFloatControl();
+}
+
 void OnFrameBoundary(const Core::CPUThreadGuard& guard)
 {
+  HostFloatScope host_float(guard.GetSystem().GetPPCState());
   // A launcher profile's hook is installed before its loader has put the game in RAM: whatever
   // runs at that address until then is not the game's frame loop.
   if (const Orca::Profile* profile = Orca::ActiveProfile();

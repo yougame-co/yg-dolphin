@@ -23,10 +23,26 @@ namespace Orca::Net
 // One player's controller for one frame, as the SI device reports it (opaque to the session).
 using Pad = std::array<u8, 8>;
 constexpr int MAX_SEATS = 4;
+// Not a button: the top bit of the first byte (outside PadCodec's PAD_WIRE_BUTTONS, so a sampled pad
+// never has it) marks a port with no controller plugged in. Drop-in play leaves every port without
+// a player unplugged; a friend who joins plugs in at a frame every machine agrees on.
+constexpr u8 PAD_WIRE_UNPLUGGED = 0x80;
+constexpr Pad UNPLUGGED_PAD{PAD_WIRE_UNPLUGGED, 0, 0, 0, 0, 0, 0, 0};
+inline bool IsUnplugged(const Pad& pad)
+{
+  return (pad[0] & PAD_WIRE_UNPLUGGED) != 0;
+}
+// A frame that never comes (about 200 days of play): a seat plugged in "at NEVER" isn't plugged
+// in. Not INT_MAX: the session runs on Dolphin's CPU thread, where the JIT leaves FPCR.AH set on
+// Apple Silicon, and clang builds a {0, INT_MAX} pair as movi + FNEG, which FPCR.AH turns into
+// {0, -1} (FNEG then leaves a NaN's sign alone). 0x3fffffff pairs are plain MOV immediates.
+constexpr int NEVER = 0x3fffffff;
 // Bounds on what a peer may send: inputs per packet, and how far ahead of us its frames may be (a
 // peer is never more than its input delay plus a rollback window ahead; this is generous).
 constexpr int MAX_PADS_IN_PACKET = 64;
 constexpr int MAX_FRAMES_AHEAD = 240;
+// Drop-in history frames one packet may carry (a sender sends half, so two coalesced still fit).
+constexpr int MAX_HISTORY_IN_PACKET = 512;
 // Most predicted frames between two snapshots (Config::snapshot_every). A rollback may then load a
 // snapshot up to MAX_SNAPSHOT_EVERY - 1 frames older than the first wrong frame and re-run from
 // there.
@@ -57,6 +73,17 @@ public:
   // snapshot copies all of RAM: about 1.7 ms on an M-series Mac, 9 ms or more on a PC with older
   // DDR4, where the copy also evicts the L3 the next frame needs. Picks Config::snapshot_every.
   virtual double SaveMs() const { return 0; }
+};
+
+// Drop-in: a seat's controller is plugged in for frames [plug_from, unplug_from), and the seat
+// exchanges live inputs from live_from on (before that, its player replays the host's history).
+// NEVER for a frame that hasn't been decided.
+struct SeatPlan
+{
+  int plug_from = NEVER;
+  int unplug_from = NEVER;
+  int live_from = NEVER;
+  bool operator==(const SeatPlan&) const = default;
 };
 
 // One message from one player: its most recent inputs, what it has received, and a checksum.
@@ -90,6 +117,19 @@ struct Packet
   std::optional<int> rtt;
   std::optional<int> checksum_frame;
   u64 checksum = 0;
+
+  // Drop-in (see SeatPlan): which seats are plugged in when. Only the host's roster counts.
+  std::optional<std::array<SeatPlan, MAX_SEATS>> roster;
+  // The highest frame of the shared history this sender holds, contiguously from frame 0 (-1:
+  // none). The host sends a joining player the history it lacks.
+  int history_ack = -1;
+  // History for `history_seat` (-1: none): every seat's pads for frames history_first onwards,
+  // from the host's log of confirmed frames.
+  int history_seat = -1;
+  int history_first = 0;
+  std::vector<Pads> history;
+  // This player asks to unplug (leave); the host picks the frame.
+  bool leaving = false;
 };
 
 class Transport
@@ -133,6 +173,20 @@ struct Config
   // newest snapshot at or before the first wrong frame and re-runs from there: up to k - 1 more
   // re-run frames (which skip rendering) in exchange for k times fewer snapshots.
   int snapshot_every = 0;
+
+  // Drop-in play. Defaults: every seat below `seats` plugged in and live from frame 0 (a match both
+  // players start together), with nothing logged.
+  //
+  // The frame the session starts at: the host's next frame when a friend arrives (the frames
+  // before it are in the log), 0 for a friend who replays the host's game from the boot.
+  int start_frame = 0;
+  // The local pad the host held when the session started: it fills the frames the input delay
+  // skips, so a held button stays held.
+  Pad start_pad{};
+  // Each seat's plan at the start (default: seats below `seats` plugged in from frame 0).
+  std::optional<std::array<SeatPlan, MAX_SEATS>> plan;
+  // The seat whose roster decides who plugs in and when (the host), or -1 (a fixed roster).
+  int authority_seat = -1;
 };
 
 enum class StepKind
@@ -205,6 +259,44 @@ public:
   // only the emulator can say; peers hear of it and leave the stalls it caused out of the delay.
   void OnLocalHitch();
 
+  // ---- Drop-in ----
+  // The confirmed history: every seat's pads for frames [base, base + size). The host starts its
+  // session with the log of its solo frames since its keyframe and sends a joining player the part
+  // it lacks; TakeLog hands it back (with every frame run so far) when the session ends.
+  void SetLog(int base, std::vector<Pads> log);
+  std::vector<Pads> TakeLog(int* base);
+  int LogEnd() const { return m_log_base + static_cast<int>(m_log.size()); }
+  // Host: a player at `seat` arrived and loads the keyframe of frame `history_from`; it replays the
+  // log from there up to live_from - 1 and exchanges live inputs from live_from on. The session
+  // plugs its controller in once it has caught up.
+  void AddPeer(int seat, int live_from, int history_from);
+  // Host: the player at `seat` is gone (it left the room or stopped answering): its controller
+  // unplugs after the last input received from it.
+  void DropSeat(int seat);
+  // A joining player: ask the host to unplug this controller. LeftDone() once it has.
+  void RequestLeave();
+  bool LeftDone() const;
+  // Host: no other player is plugged in or joining: the session can end and the host play solo.
+  bool Idle() const;
+  // The local inputs already sampled for frames from CurrentFrame() on (the host keeps them when it
+  // goes back to solo play).
+  std::vector<Pad> PendingLocal() const;
+  // Whether this machine's own controller is plugged in at `frame`.
+  bool Plugged(int seat, int frame) const;
+  // The newest frame the host reported (a joining player catches up to it).
+  int AuthorityFrame() const;
+  // This player is still replaying the host's game: its own controller isn't plugged in yet.
+  bool CatchingUp() const;
+  // Host: drop every other player (they stopped answering, or the session failed on them).
+  void DropAllPeers();
+  // Host: a keyframe of the state at the start of CurrentFrame() would be final: every earlier
+  // frame is confirmed and nothing is being re-run.
+  bool Settled() const;
+  const std::array<SeatPlan, MAX_SEATS>& Plan() const { return m_plan; }
+  // The drop-in bookkeeping in one line, for logs: per seat its plan, received, acknowledged,
+  // reported frame and history acknowledgement; the log and local input ranges.
+  std::string Describe() const;
+
   const std::string& Error() const { return m_error; }
   const Stats& GetStats() const { return m_stats; }
   int CurrentFrame() const { return m_frame; }
@@ -228,6 +320,14 @@ private:
   void ApplyStartDelay();
   double FramesFromMs(double ms) const;
   void TrackAdvantage();
+  int KnownThrough(int seat) const;
+  bool InPlay(int seat) const;
+  void AdvanceReceived(int seat);
+  void ApplyRoster(const std::array<SeatPlan, MAX_SEATS>& roster);
+  void ReceiveHistory(const Packet& packet);
+  void AppendConfirmedToLog();
+  void PlugCaughtUpPeers();
+  void AddHistory(Packet* packet);
 
   Config m_config;
   Game& m_game;
@@ -319,6 +419,17 @@ private:
   int m_sync_start = 0;
   bool m_wait_pending = false;
   bool m_waiting = false;
+
+  // Drop-in.
+  std::array<SeatPlan, MAX_SEATS> m_plan{};
+  int m_log_base = 0;
+  std::vector<Pads> m_log;
+  // Host: per seat, the history frames sent (and when the peer's acknowledgement last moved), and
+  // the newest history frame the peer acknowledged.
+  std::array<int, MAX_SEATS> m_history_sent{-1, -1, -1, -1};
+  std::array<int, MAX_SEATS> m_history_acked{-1, -1, -1, -1};
+  std::array<int, MAX_SEATS> m_history_stuck{0, 0, 0, 0};
+  bool m_leaving = false;
 
   Stats m_stats;
   std::string m_error;
