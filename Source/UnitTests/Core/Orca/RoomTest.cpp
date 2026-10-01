@@ -225,3 +225,56 @@ TEST(OrcaLive, TwoRoomsPlayEachOther)
   EXPECT_FALSE(a.Connected()) << a.Status();
   EXPECT_GE(a.RoundTripMs(), 0);
 }
+
+// The test network delay: one side holds every message 100 ms each way, the other sets the variable
+// to 0 (both are then test processes, so their keys match). The delayed side's round trip shows it.
+TEST(OrcaLive, TestNetworkDelayHoldsMessages)
+{
+  const char* live = std::getenv("ORCA_LIVE_TEST");
+  if (!live || std::string(live) != "1")
+    GTEST_SKIP() << "set ORCA_LIVE_TEST=1";
+  SetEnv("ORCA_SESSION", "1");
+  SetEnv("ORCA_TEST_DEV_GAME", "orca-live-test");
+  const std::string code =
+      "orcad" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 10000000);
+  RoomOptions options;
+  options.room_code = code;
+  options.compatibility = "orca-live-test";
+  SetEnv("ORCA_TEST_NET_DELAY_MS", "100");
+  YouGameRoom a(options);
+  for (int i = 0; i < 500 && a.GetState() == RoomState::Connecting; ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  SetEnv("ORCA_TEST_NET_DELAY_MS", "0");
+  YouGameRoom b(options);
+  for (int i = 0; i < 1500 && !(a.Connected() && b.Connected()); ++i)
+  {
+    if (a.GetState() == RoomState::Ended || b.GetState() == RoomState::Ended)
+      break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  SetEnv("ORCA_TEST_NET_DELAY_MS", nullptr);
+  SetEnv("ORCA_TEST_DEV_GAME", nullptr);
+  SetEnv("ORCA_SESSION", nullptr);
+  ASSERT_TRUE(a.Connected()) << a.Status();
+  ASSERT_TRUE(b.Connected()) << b.Status();
+
+  // A packet from b reaches a's inbox no sooner than a's inbound delay.
+  const auto sent_at = std::chrono::steady_clock::now();
+  Packet sent = Sample();
+  sent.seat = b.Seat();
+  b.Send(sent);
+  std::vector<Packet> got;
+  for (int i = 0; i < 300 && got.empty(); ++i)
+  {
+    got = a.Receive();
+    if (got.empty())
+      std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  ASSERT_EQ(got.size(), 1u);
+  EXPECT_GE(std::chrono::steady_clock::now() - sent_at, std::chrono::milliseconds(100));
+  // Pings go out held and pongs come back held: the round trip includes both delays.
+  for (int i = 0; i < 300 && a.RoundTripMs() < 0; ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  EXPECT_GE(a.RoundTripMs(), 200);
+  EXPECT_LT(b.RoundTripMs(), 200);
+}

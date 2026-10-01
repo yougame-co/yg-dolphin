@@ -39,8 +39,13 @@ bool SessionActive();
 // active must never offer or join a lobby, and its compatibility key differs.
 //   ORCA_TEST_PADS=4         ports 3 and 4 connected too (4-player desync coverage)
 //   ORCA_TEST_SKIP_RENDER=1  host rendering skipped for the whole run
+//   ORCA_TEST_NET_DELAY_MS=N the YouGame room holds every message N ms (0-1000) each way, plus
+//   ORCA_TEST_NET_JITTER_MS=J a deterministic 0..J ms more per message, order kept. Set it (to 0
+//                            on the undelayed side) in both processes, so their keys match.
 int TestPads();
 bool TestSkipRender();
+std::optional<int> TestNetDelayMs();
+int TestNetJitterMs();
 bool TestOverridesActive();
 
 // Loads the profile for a game; nullopt and a reason when there is none, the revision differs or a

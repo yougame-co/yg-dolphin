@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <deque>
 #include <chrono>
 #include <cstdlib>
 #include <mutex>
@@ -19,6 +20,7 @@
 #include "Common/HttpRequest.h"
 #include "Common/Logging/Log.h"
 #include "Common/WebSocket.h"
+#include "Core/Orca/Profile.h"
 
 namespace Orca::Net
 {
@@ -334,6 +336,25 @@ struct YouGameRoom::Impl
   int begin_tries = 0;
   Clock::time_point last_send{}, last_ping{}, last_hello{};
 
+  // Test-only network delay (Orca::TestNetDelayMs): messages wait in these queues, in order.
+  struct Held
+  {
+    Clock::time_point due;
+    std::string text;
+  };
+  std::optional<int> net_delay = TestNetDelayMs();
+  int net_jitter = TestNetJitterMs();
+  u32 net_count = 0;
+  std::deque<Held> held_out, held_in;
+
+  Clock::time_point HoldUntil(const std::deque<Held>& queue)
+  {
+    // A deterministic 0..jitter extra per message; never earlier than the message before it.
+    const u32 extra = net_jitter ? (++net_count * 2654435761u) % static_cast<u32>(net_jitter + 1) : 0;
+    const auto due = Clock::now() + std::chrono::milliseconds(*net_delay + static_cast<int>(extra));
+    return queue.empty() ? due : std::max(due, queue.back().due);
+  }
+
   explicit Impl(RoomOptions room_options) : options(std::move(room_options))
   {
     thread = std::thread([this] { Run(); });
@@ -369,9 +390,15 @@ struct YouGameRoom::Impl
     status = std::move(why);
   }
 
+  // `held`: through the test delay queue when one is configured (teardown messages skip it).
   bool SendJson(const picojson::object& message,
-                std::chrono::milliseconds timeout = std::chrono::seconds(2))
+                std::chrono::milliseconds timeout = std::chrono::seconds(2), bool held = true)
   {
+    if (held && net_delay)
+    {
+      held_out.push_back({HoldUntil(held_out), picojson::value(message).serialize()});
+      return true;
+    }
     if (ws.SendText(picojson::value(message).serialize(), timeout))
       return true;
     WARN_LOG_FMT(NETPLAY, "Orca room: send failed: {}", ws.Error());
@@ -549,11 +576,21 @@ struct YouGameRoom::Impl
     }
     SetStatus(fmt::format("Room {}: waiting for your friend", room));
 
+    if (net_delay)
+    {
+      WARN_LOG_FMT(NETPLAY, "Orca room: TEST network delay {} ms + 0..{} ms each way", *net_delay,
+                   net_jitter);
+    }
     while (!stop && State() != RoomState::Ended)
     {
-      if (auto text = ws.ReceiveText(std::chrono::milliseconds(2)))
+      if (net_delay)
+        FlushHeld();
+      if (auto text = ws.ReceiveText(std::chrono::milliseconds(net_delay ? 1 : 2)))
       {
-        OnMessage(*text);
+        if (net_delay)
+          held_in.push_back({HoldUntil(held_in), std::move(*text)});
+        else
+          OnMessage(*text);
         continue;
       }
       if (!ws.IsOpen())
@@ -574,15 +611,32 @@ struct YouGameRoom::Impl
       finish["t"] = picojson::value("finish");
       finish["matchId"] = picojson::value(match_id);
       finish["void"] = picojson::value(true);
-      SendJson(finish, std::chrono::milliseconds(500));
+      SendJson(finish, std::chrono::milliseconds(500), false);
     }
     if (ws.IsOpen())
     {
       picojson::object leave;
       leave["t"] = picojson::value("leave");
-      SendJson(leave, std::chrono::milliseconds(500));
+      SendJson(leave, std::chrono::milliseconds(500), false);
     }
     ws.Close();
+  }
+
+  void FlushHeld()
+  {
+    const auto now = Clock::now();
+    while (!held_out.empty() && held_out.front().due <= now)
+    {
+      if (!ws.SendText(held_out.front().text, std::chrono::seconds(2)))
+        WARN_LOG_FMT(NETPLAY, "Orca room: send failed: {}", ws.Error());
+      held_out.pop_front();
+    }
+    while (!held_in.empty() && held_in.front().due <= now && State() != RoomState::Ended)
+    {
+      const std::string text = std::move(held_in.front().text);
+      held_in.pop_front();
+      OnMessage(text);
+    }
   }
 
   void Tick()

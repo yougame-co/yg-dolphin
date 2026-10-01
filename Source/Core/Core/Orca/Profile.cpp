@@ -171,9 +171,23 @@ bool TestSkipRender()
   return SessionActive() && EnvIs("ORCA_TEST_SKIP_RENDER", "1");
 }
 
+std::optional<int> TestNetDelayMs()
+{
+  const char* value = std::getenv("ORCA_TEST_NET_DELAY_MS");
+  if (!SessionActive() || !value)
+    return std::nullopt;
+  return std::clamp(std::atoi(value), 0, 1000);
+}
+
+int TestNetJitterMs()
+{
+  const char* value = std::getenv("ORCA_TEST_NET_JITTER_MS");
+  return TestNetDelayMs() && value ? std::clamp(std::atoi(value), 0, 1000) : 0;
+}
+
 bool TestOverridesActive()
 {
-  return TestPads() != 0 || TestSkipRender();
+  return TestPads() != 0 || TestSkipRender() || TestNetDelayMs().has_value();
 }
 
 const Sram* SessionSram()
