@@ -184,6 +184,20 @@ void Session::ReceivePackets()
     const int s = packet.seat;
     if (s < 0 || s >= m_config.seats || s == m_config.local_seat)
       continue;
+    // Packets come from another machine through a relay: bound everything before using it. No
+    // honest peer sends more than a packet's worth of inputs, inputs for frames it can't have
+    // reached, or frame numbers near overflow.
+    const int window = MAX_FRAMES_AHEAD + m_config.input_delay;
+    if (packet.pads.size() > static_cast<size_t>(MAX_PADS_IN_PACKET) || packet.first_frame < 0 ||
+        packet.first_frame > m_frame + window ||
+        packet.first_frame + static_cast<int>(packet.pads.size()) > m_frame + window + 1 ||
+        packet.current_frame < 0 || packet.current_frame > m_frame + window ||
+        (packet.checksum_frame &&
+         (*packet.checksum_frame < 0 || *packet.checksum_frame > m_frame + window)))
+    {
+      Fail(fmt::format("Player {} sent an invalid packet", s + 1));
+      return;
+    }
     for (size_t i = 0; i < packet.pads.size(); ++i)
     {
       const int f = packet.first_frame + static_cast<int>(i);
@@ -204,7 +218,9 @@ void Session::ReceivePackets()
     }
     while (m_remote[s].contains(m_received[s] + 1))
       ++m_received[s];
-    m_acked[s] = std::max(m_acked[s], packet.ack[m_config.local_seat]);
+    const int ack = packet.ack[m_config.local_seat];
+    if (ack >= -1 && ack <= m_frame + window)
+      m_acked[s] = std::max(m_acked[s], ack);
     m_remote_frame[s] = packet.current_frame;
     if (packet.checksum_frame)
       m_peer_checksums[*packet.checksum_frame] = packet.checksum;

@@ -2,12 +2,20 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <deque>
+#include <utility>
 #include <map>
 #include <optional>
 #include <random>
 #include <vector>
 
+#include <cstdlib>
+#include <string>
+
 #include <gtest/gtest.h>
+#include <picojson.h>
+
+#include "Common/HttpRequest.h"
+#include "Common/WebSocket.h"
 
 #include "Core/Orca/Session/PadCodec.h"
 #include "Core/Orca/Session/Session.h"
@@ -285,4 +293,100 @@ TEST(OrcaPadCodec, NeutralIsZeroAndRoundTrips)
   EXPECT_EQ(back.triggerRight, 12);
   EXPECT_EQ(back.analogA, 0);
   EXPECT_TRUE(back.isConnected);
+}
+
+TEST(OrcaSession, RejectsHostilePackets)
+{
+  struct Inject final : Transport
+  {
+    void Send(const Packet&) override {}
+    std::vector<Packet> Receive() override { return std::exchange(queue, {}); }
+    bool Connected() const override { return true; }
+    std::vector<Packet> queue;
+  };
+  const auto run = [](Packet bad) {
+    FakeGame game;
+    Inject net;
+    Config config;
+    Session session(config, game, net);
+    int completed = -1;
+    for (int f = 0; f < 3; ++f)
+    {
+      session.OnBoundary(completed, Pad{});
+      completed = game.Run();
+    }
+    bad.seat = 1;
+    net.queue.push_back(bad);
+    session.OnBoundary(completed, Pad{});
+    return session.Error();
+  };
+  Packet huge_frame;
+  huge_frame.first_frame = 2147483000;
+  huge_frame.pads.resize(1);
+  EXPECT_NE(run(huge_frame).find("invalid packet"), std::string::npos);
+
+  Packet many_pads;
+  many_pads.first_frame = 0;
+  many_pads.pads.resize(100000);
+  EXPECT_NE(run(many_pads).find("invalid packet"), std::string::npos);
+
+  Packet negative;
+  negative.first_frame = -5;
+  negative.pads.resize(1);
+  EXPECT_NE(run(negative).find("invalid packet"), std::string::npos);
+
+  Packet fine;
+  fine.first_frame = 0;
+  fine.pads.resize(4);
+  EXPECT_TRUE(run(fine).empty());
+}
+
+// Live check against YouGame's rooms worker, only with ORCA_LIVE_TEST=1 (writes nothing: an
+// anonymous dev game whose results are never recorded).
+TEST(OrcaLive, WebSocketReachesARoom)
+{
+  const char* live = std::getenv("ORCA_LIVE_TEST");
+  if (!live || std::string(live) != "1")
+    GTEST_SKIP() << "set ORCA_LIVE_TEST=1";
+  const std::string site = std::getenv("ORCA_SITE") ? std::getenv("ORCA_SITE") : "https://yougame.co";
+
+  Common::HttpRequest http(std::chrono::seconds(15));
+  const std::string body = R"({"dev":"orca-live-test","player_id":"orca-live-0000000001","name":"Orca","players":2,"mode":"orca-v1","room":"orcalive1",)"
+                           R"("lobby":{"version":1,"minPlayers":2,"maxLocalPlayers":1,"compatibility":"orca-test"}})";
+  const auto response = http.Post(site + "/api/multiplayer/ticket", body,
+                                  {{"Content-Type", "application/json"}},
+                                  Common::HttpRequest::AllowedReturnCodes::All);
+  ASSERT_TRUE(response.has_value()) << "no response from " << site;
+  const std::string text(response->begin(), response->end());
+  ASSERT_EQ(http.GetLastResponseCode(), 200) << text;
+  picojson::value json;
+  ASSERT_TRUE(picojson::parse(json, text).empty()) << text;
+  const std::string url = json.get("url").to_str();
+  const std::string ticket = json.get("ticket").to_str();
+  std::string ws_url = url;
+  if (ws_url.starts_with("https://"))
+    ws_url.replace(0, 8, "wss://");
+  else if (ws_url.starts_with("http://"))
+    ws_url.replace(0, 7, "ws://");
+  ws_url += "/room/orcalive1?ticket=" + http.EscapeComponent(ticket);
+
+  Common::WebSocket ws;
+  std::string error;
+  ASSERT_TRUE(ws.Connect(ws_url, std::chrono::seconds(10), &error)) << error;
+  std::optional<std::string> first;
+  for (int i = 0; i < 20 && !first; ++i)
+    first = ws.ReceiveText(std::chrono::milliseconds(500));
+  ASSERT_TRUE(first.has_value()) << ws.Error();
+  picojson::value welcome;
+  ASSERT_TRUE(picojson::parse(welcome, *first).empty()) << *first;
+  EXPECT_EQ(welcome.get("t").to_str(), "welcome") << *first;
+  EXPECT_TRUE(ws.SendText(R"({"t":"ping","at":1})", std::chrono::seconds(2))) << ws.Error();
+  bool pong = false;
+  for (int i = 0; i < 20 && !pong; ++i)
+  {
+    if (auto m = ws.ReceiveText(std::chrono::milliseconds(500)))
+      pong = m->find("\"pong\"") != std::string::npos;
+  }
+  EXPECT_TRUE(pong);
+  ws.Close();
 }

@@ -21,6 +21,10 @@ namespace Orca::Net
 // One player's controller for one frame, as the SI device reports it (opaque to the session).
 using Pad = std::array<u8, 8>;
 constexpr int MAX_SEATS = 4;
+// Bounds on what a peer may send: inputs per packet, and how far ahead of us its frames may be (a
+// peer is never more than its input delay plus a rollback window ahead; this is generous).
+constexpr int MAX_PADS_IN_PACKET = 64;
+constexpr int MAX_FRAMES_AHEAD = 240;
 using Pads = std::array<Pad, MAX_SEATS>;
 
 // What the session needs from the emulator. Frame numbers count game frames from 0. "The state at
