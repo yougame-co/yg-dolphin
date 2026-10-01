@@ -31,6 +31,17 @@
 #include "VideoCommon/XFStateManager.h"
 
 static std::atomic<bool> s_skip_render{false};
+static bool s_rollback_snapshot = false;
+
+void VideoCommon_SetRollbackSnapshot(bool snapshot)
+{
+  s_rollback_snapshot = snapshot;
+}
+
+bool VideoCommon_IsRollbackSnapshot()
+{
+  return s_rollback_snapshot;
+}
 
 void VideoCommon_SetSkipRender(bool skip)
 {
@@ -105,20 +116,24 @@ void VideoCommon_DoState(PointerWrap& p)
   system.GetGeometryShaderManager().DoState(p);
   p.DoMarker("GeometryShaderManager");
 
-  g_vertex_manager->DoState(p);
+  if (!s_rollback_snapshot)
+    g_vertex_manager->DoState(p);
   p.DoMarker("VertexManager");
 
-  g_framebuffer_manager->DoState(p);
+  if (!s_rollback_snapshot)
+    g_framebuffer_manager->DoState(p);
   p.DoMarker("FramebufferManager");
 
-  g_texture_cache->DoState(p);
+  if (!s_rollback_snapshot)
+    g_texture_cache->DoState(p);
   p.DoMarker("TextureCache");
 
   g_presenter->DoState(p);
   g_frame_dumper->DoState(p);
   p.DoMarker("Presenter");
 
-  g_bounding_box->DoState(p);
+  if (!s_rollback_snapshot)
+    g_bounding_box->DoState(p);
   p.DoMarker("Bounding Box");
 
   g_widescreen->DoState(p);
