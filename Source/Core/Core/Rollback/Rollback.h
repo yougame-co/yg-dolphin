@@ -49,6 +49,16 @@ public:
   SnapshotScope& operator=(const SnapshotScope&) = delete;
 };
 
+// A whole machine at one frame boundary, as a ring slot holds it, outside any ring: a drop-in
+// keyframe the host sends a joining friend. The NAND's contents travel separately.
+struct MachineImage
+{
+  std::vector<u8> state;
+  std::vector<u8> mem1;
+  std::vector<u8> mem2;
+  std::vector<u8> l1_cache;
+};
+
 // A ring of snapshots keyed by frame number. Saving overwrites the oldest slot.
 class SnapshotRing
 {
@@ -73,6 +83,13 @@ public:
 
   // The non-RAM state written by the most recent Save (for hashing and diagnostics).
   std::span<const u8> LastState() const;
+
+  // Drop-in keyframes. Capture writes what Save would into `image` (call it where Save is called:
+  // the frame-boundary hook). With `stop_journal`, the NAND journal the capture started stops again
+  // (no ring holds a snapshot to undo to). LoadImage takes an image captured on another machine
+  // into a slot as `frame` and loads it like Load; the NAND must already hold the image's contents.
+  static bool Capture(Core::System& system, MachineImage* image, bool stop_journal);
+  bool LoadImage(Core::System& system, MachineImage image, s64 frame);
 
 private:
   struct Slot
@@ -110,6 +127,9 @@ u64 RamChecksum(std::span<const u8> mem1, std::span<const u8> mem2);
 // local leaks into the emulated machine.
 std::optional<GCPadStatus> InputOverride(int port);
 
-// Called by the game profile's frame-boundary hook once per game frame.
+// Called by the game profile's frame-boundary hook once per game frame. Runs in the host's
+// floating-point mode and leaves the guest's set again (from its FPSCR) on the way out.
 void OnFrameBoundary(const Core::CPUThreadGuard& guard);
+// FPCR (ARM64) or MXCSR (x86-64) as this thread has it now; for tests.
+u64 HostFloatControlForTests();
 }  // namespace Rollback

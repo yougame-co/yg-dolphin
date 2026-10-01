@@ -71,6 +71,14 @@ public:
   // True once if journaling or undoing failed since the last call: the NAND may no longer match
   // what a snapshot expects.
   bool TakeJournalError() { return std::exchange(m_journal_error, false); }
+  // Orca drop-in: the NAND's host folder, and re-reading the FST after its files were replaced
+  // with a keyframe's (no handle may be open on them: load the keyframe's state next).
+  const std::string& HostRoot() const { return m_root_path; }
+  void ReloadFst()
+  {
+    ResetFst();
+    LoadFst();
+  }
 
 private:
   struct FstEntry

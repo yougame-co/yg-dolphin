@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/Session/Online.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -121,8 +122,9 @@ void ForEachUniversalSetting(F&& f)
   f(Config::SYSCONF_PAL60, false);  // BootCore forces it off for NTSC Wii games anyway
   f(Config::SYSCONF_SOUND_MODE, 1u);
 
-  // Controllers: GameCube pads only. 1v1 by default.
-  const bool four = TestPads() == 4;
+  // Controllers: GameCube pads only. 1v1 by default; four ports in online (drop-in) play, where a
+  // port without a player reports no controller (Orca::Net::UNPLUGGED_PAD) until a friend plugs in.
+  const bool four = TestPads() == 4 || Online::Enabled();
   f(Config::GetInfoForSIDevice(0), SerialInterface::SIDEVICE_GC_CONTROLLER);
   f(Config::GetInfoForSIDevice(1), SerialInterface::SIDEVICE_GC_CONTROLLER);
   f(Config::GetInfoForSIDevice(2),

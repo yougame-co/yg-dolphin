@@ -99,12 +99,31 @@ void RingPort::SetPads(int frame, const Orca::Net::Pads& pads)
   m_saved_since_run = -1;
 }
 
+void RingPort::SetCatchingUp(bool catching_up)
+{
+  if (catching_up == m_catching_up)
+    return;
+  m_catching_up = catching_up;
+  Rollback::SetResimulating(m_catching_up || m_resimulating);
+  if (!catching_up)
+  {
+    m_reference_before_load.reset();
+    ResetPacing();
+  }
+}
+
+bool RingPort::LoadImage(MachineImage image, int frame)
+{
+  m_saved_since_run = -1;
+  return m_ring.LoadImage(m_system, std::move(image), frame);
+}
+
 void RingPort::SetResimulating(bool resimulating)
 {
   // While re-running, CoreTiming treats the speed as unlimited (Rollback::IsResimulating), host
   // rendering is skipped and the Mixer drops the re-run's audio.
   m_resimulating = resimulating;
-  Rollback::SetResimulating(resimulating);
+  Rollback::SetResimulating(resimulating || m_catching_up);
   if (!resimulating && m_reference_before_load)
   {
     m_system.GetCoreTiming().SetThrottleReference(*m_reference_before_load);

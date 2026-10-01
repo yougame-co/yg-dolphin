@@ -3,6 +3,7 @@
 
 #include "Core/Orca/Session/Online.h"
 
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <memory>
@@ -132,69 +133,78 @@ std::string CompatibilityKey()
   return fmt::format("orca1:{:016x}", XXH3_64bits(parts.data(), parts.size()));
 }
 
-Net::Transport* WaitForMatch(Net::Config* config, const std::function<bool()>& stopping)
+void Start()
 {
+  std::lock_guard lock(s_mutex);
+  if (s_room)
+    return;
+  Net::RoomOptions options;
+  options.room_code = Env("ORCA_ROOM");
+  options.compatibility = CompatibilityKey();
+  options.joining = Env("ORCA_JOIN") == "1";
+  if (const Profile* profile = ActiveProfile())
   {
-    std::lock_guard lock(s_mutex);
-    if (!s_room)
-    {
-      Net::RoomOptions options;
-      options.room_code = Env("ORCA_ROOM");
-      options.compatibility = CompatibilityKey();
-      if (const Profile* profile = ActiveProfile())
-      {
-        std::string game = profile->game_id;
-        Common::ToLower(&game);
-        options.mode = "orca-" + game;
-      }
-      if (!Env("ORCA_NAME").empty())
-        options.player_name = Env("ORCA_NAME").substr(0, 32);
-      NOTICE_LOG_FMT(NETPLAY, "Orca: joining a YouGame room, compatibility {}",
-                     options.compatibility);
-      s_room = std::make_shared<Net::YouGameRoom>(std::move(options));
-    }
+    std::string game = profile->game_id;
+    Common::ToLower(&game);
+    options.mode = "orca-" + game;
   }
-  const std::shared_ptr<Net::YouGameRoom> room = Room();
-  if (!room)
-    return nullptr;
-  std::string last_status;
-  Status::State("lobby");
-  while (!stopping())
-  {
-    const Net::RoomState state = room->GetState();
-    if (state == Net::RoomState::Playing)
-    {
-      Status::State("playing");
-      config->seats = 2;
-      config->local_seat = room->Seat();
-      NOTICE_LOG_FMT(NETPLAY, "Orca: match on room {}, port {}", room->Code(), room->Seat() + 1);
-      Core::DisplayMessage(fmt::format("Playing on port {}", room->Seat() + 1), 4000);
-      return room.get();
-    }
-    if (state == Net::RoomState::Ended)
-    {
-      ERROR_LOG_FMT(NETPLAY, "Orca: {}", room->Status());
-      Core::DisplayMessage(room->Status(), 10000);
-      if (const std::string code = room->ErrorCode(); !code.empty())
-        Status::Error(code, room->Status());
-      return nullptr;
-    }
-    if (std::string status = room->Status(); status != last_status)
-    {
-      NOTICE_LOG_FMT(NETPLAY, "Orca: {}", status);
-      // On screen too, until the next line replaces it: the room code is what a friend needs.
-      Core::DisplayMessage(status, 60000);
-      last_status = std::move(status);
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(5));
-  }
-  return nullptr;
+  if (!Env("ORCA_NAME").empty())
+    options.player_name = Env("ORCA_NAME").substr(0, 32);
+  NOTICE_LOG_FMT(NETPLAY, "Orca: joining a YouGame room ({}), compatibility {}",
+                 options.joining ? "to join a friend's game" : "as the host",
+                 options.compatibility);
+  s_room = std::make_shared<Net::YouGameRoom>(std::move(options));
 }
 
-u32 Seed()
+std::optional<bool> Joining()
 {
   const auto room = Room();
-  return room ? room->Seed() : 0;
+  return room ? room->Joining() : std::nullopt;
+}
+
+Net::Transport* Transport()
+{
+  const auto room = Room();
+  return room.get();
+}
+
+int Seat()
+{
+  const auto room = Room();
+  return room ? room->Seat() : -1;
+}
+
+std::vector<Net::PeerEvent> TakePeerEvents()
+{
+  const auto room = Room();
+  return room ? room->TakePeerEvents() : std::vector<Net::PeerEvent>{};
+}
+
+bool RoomEnded()
+{
+  const auto room = Room();
+  return !room || room->GetState() == Net::RoomState::Ended;
+}
+
+void OfferKeyframe(int seat, const Net::KeyframeInfo& info)
+{
+  if (const auto room = Room())
+    room->OfferKeyframe(seat, info);
+}
+
+namespace
+{
+std::atomic<bool> s_prepare_join{false};
+}
+
+void PrepareJoin()
+{
+  s_prepare_join.store(true, std::memory_order_relaxed);
+}
+
+bool TakePrepareJoin()
+{
+  return s_prepare_join.exchange(false, std::memory_order_relaxed);
 }
 
 int RoundTripMs(u32* sequence)
@@ -258,9 +268,4 @@ void Shutdown()
   if (room)
     room->Leave();
 }
-void PrepareJoin()
-{
-  NOTICE_LOG_FMT(NETPLAY, "Orca: prepare-join (drop-in join is not in this build yet)");
-}
-
 }  // namespace Orca::Online

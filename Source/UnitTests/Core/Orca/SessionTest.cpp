@@ -24,6 +24,7 @@
 #include <gtest/gtest.h>
 #include <picojson.h>
 
+#include "Common/FPURoundMode.h"
 #include "Common/HttpRequest.h"
 #include "Common/WebSocket.h"
 
@@ -1954,4 +1955,333 @@ TEST(OrcaSessionSparse, SpacingFollowsTheMeasuredSaveTime)
     EXPECT_EQ(match.a->session.GetStats().snapshot_every, k);
   }
   ExpectClean(match);
+}
+
+// ---- Drop-in ----
+
+namespace
+{
+// map.at() without exceptions (they're off): a missing frame fails the test instead of aborting.
+template <typename T>
+T At(const std::map<int, T>& map, int frame)
+{
+  const auto it = map.find(frame);
+  if (it == map.end())
+  {
+    ADD_FAILURE() << "no frame " << frame;
+    return T{};
+  }
+  return it->second;
+}
+
+// A drop-in player: its session over a FakeGame, stepping up to `frames` new frames per tick (a
+// joiner catching up runs many).
+struct DropInPlayer
+{
+  DropInPlayer(const Config& config, FakeNet& net, int index, int start)
+      : transport(net, index), session(config, game, transport), completed(start - 1)
+  {
+    game.ring_slots = static_cast<size_t>(config.max_rollback) + 2;
+  }
+  Pad LocalPad(int tick) const
+  {
+    Pad pad{};
+    pad[0] = static_cast<u8>((tick / 5 + seat * 3) % 4);
+    pad[2] = static_cast<u8>(tick & 0xff);
+    pad[4] = static_cast<u8>(1 + seat);
+    return pad;
+  }
+  int Tick(int tick, int frames)
+  {
+    int ran = 0;
+    for (int guard = 0; guard < 4000 && ran < frames; ++guard)
+    {
+      const Step step = session.OnBoundary(completed, LocalPad(tick));
+      if (step.kind == StepKind::Ended || step.kind == StepKind::Stall ||
+          step.kind == StepKind::Wait)
+      {
+        return ran;
+      }
+      const bool new_frame = step.kind == StepKind::Run && !session.Resimulating();
+      completed = game.Run();
+      if (new_frame)
+        ++ran;
+    }
+    return ran;
+  }
+  FakeGame game;
+  FakeNet::End transport;
+  Session session;
+  int completed;
+  int seat = 0;
+};
+
+Config DropInConfig(int local_seat, int start_frame)
+{
+  Config config;
+  config.seats = MAX_SEATS;
+  config.local_seat = local_seat;
+  config.authority_seat = 0;
+  config.start_frame = start_frame;
+  std::array<SeatPlan, MAX_SEATS> plan{};
+  plan[0] = {0, NEVER, 0};
+  config.plan = plan;
+  return config;
+}
+
+// The host's solo frames 0..frames-1 on `game`, logged.
+std::vector<Pads> PlaySolo(FakeGame* game, int from, int frames, std::vector<Pads> log = {})
+{
+  for (int f = from; f < from + frames; ++f)
+  {
+    Pads pads;
+    pads.fill(UNPLUGGED_PAD);
+    pads[0] = Pad{static_cast<u8>((f / 9) % 4), 0, static_cast<u8>(f & 0xff), 0, 9, 0, 0, 0};
+    game->SetPads(f, pads);
+    game->Run();
+    log.push_back(pads);
+  }
+  return log;
+}
+}  // namespace
+
+TEST(OrcaPadCodec, UnpluggedIsNotAButton)
+{
+  EXPECT_TRUE(IsUnplugged(UNPLUGGED_PAD));
+  EXPECT_FALSE(IsUnplugged(Pad{}));
+  GCPadStatus held;
+  held.button = 0xFFFF;
+  EXPECT_FALSE(IsUnplugged(EncodePad(held)));
+  EXPECT_FALSE(DecodePad(UNPLUGGED_PAD).isConnected);
+  EXPECT_TRUE(DecodePad(Pad{}).isConnected);
+}
+
+TEST(OrcaDropIn, PacketFieldsRoundTrip)
+{
+  Packet sent;
+  sent.seat = 0;
+  sent.current_frame = 900;
+  std::array<SeatPlan, MAX_SEATS> roster{};
+  roster[0] = {0, NEVER, 0};
+  roster[1] = {950, 1200, 900};
+  sent.roster = roster;
+  sent.history_ack = 899;
+  sent.history_seat = 1;
+  sent.history_first = 600;
+  Pads a;
+  a.fill(UNPLUGGED_PAD);
+  a[0] = Pad{1, 2, 3, 4, 5, 6, 7, 8};
+  Pads b = a;
+  b[0][0] = 9;
+  sent.history = {a, a, a, b, a};
+  sent.leaving = true;
+  Packet got;
+  ASSERT_TRUE(DecodePacket(EncodePacket(sent), &got));
+  ASSERT_TRUE(got.roster);
+  EXPECT_EQ(*got.roster, roster);
+  EXPECT_EQ(got.history_ack, 899);
+  EXPECT_EQ(got.history_seat, 1);
+  EXPECT_EQ(got.history_first, 600);
+  EXPECT_EQ(got.history, sent.history);
+  EXPECT_TRUE(got.leaving);
+  // Runs of equal pads travel once.
+  EXPECT_NE(EncodePacket(sent).find("[3,"), std::string::npos);
+
+  // Coalescing keeps history that continues.
+  std::optional<Packet> pending;
+  Packet first = sent;
+  first.history = {a, a};
+  Packet second = sent;
+  second.history_first = 602;
+  second.history = {b};
+  CoalescePacket(&pending, first);
+  CoalescePacket(&pending, second);
+  EXPECT_EQ(pending->history_first, 600);
+  EXPECT_EQ(pending->history.size(), 3u);
+}
+
+// The host plays solo; a friend loads the keyframe of frame 240, replays the host's frames since,
+// plugs in, both run identical frames with matching checksums, the friend leaves and the host plays
+// on alone; then a second friend joins from a later keyframe.
+TEST(OrcaDropIn, FriendJoinsPlaysLeavesAndAnotherJoins)
+{
+  for (const auto& [latency, jitter] : std::vector<std::pair<int, int>>{{1, 0}, {4, 2}, {8, 4}})
+  {
+    SCOPED_TRACE(::testing::Message() << "latency " << latency << " jitter " << jitter);
+    FakeNet net;
+    net.latency = latency;
+    net.jitter = jitter;
+    FakeGame solo;
+    std::vector<Pads> log = PlaySolo(&solo, 0, 300);
+    const int keyframe = 240;
+
+    auto host = std::make_unique<DropInPlayer>(DropInConfig(0, 300), net, 0, 300);
+    host->game.m_state = solo.m_state;
+    host->game.m_history = solo.m_history;
+    host->game.m_ran_pads = solo.m_ran_pads;
+    host->session.SetLog(0, log);
+    host->session.AddPeer(1, 300, keyframe);
+    EXPECT_EQ(host->session.Plan()[0], (SeatPlan{0, NEVER, 0})) << host->session.Describe();
+    auto joiner = std::make_unique<DropInPlayer>(DropInConfig(1, keyframe), net, 1, keyframe);
+    joiner->seat = 1;
+    joiner->game.m_state = At(solo.m_history, keyframe);
+
+    int t = 0;
+    int plugged_at = -1;
+    for (; t < 1200; ++t)
+    {
+      net.now = t;
+      host->Tick(t, 1);
+      // Unthrottled while behind, as RingPort::SetCatchingUp makes it.
+      const bool behind = joiner->session.CatchingUp() ||
+                          joiner->session.AuthorityFrame() - joiner->session.CurrentFrame() > 12;
+      joiner->Tick(t, behind ? 40 : 1);
+      ASSERT_TRUE(host->session.Error().empty()) << host->session.Error();
+      ASSERT_TRUE(joiner->session.Error().empty()) << joiner->session.Error();
+      if (plugged_at < 0 && !joiner->session.CatchingUp())
+        plugged_at = host->session.Plan()[1].plug_from;
+    }
+    ASSERT_GE(plugged_at, 300);
+    // The host's own port stays plugged in throughout.
+    for (int f = 300; f < host->session.CurrentFrame(); ++f)
+      ASSERT_FALSE(IsUnplugged(At(host->game.m_ran_pads, f)[0])) << "frame " << f;
+    // Plugged in on both machines from exactly frame S, unplugged before.
+    for (const FakeGame* game : {&host->game, &joiner->game})
+    {
+      EXPECT_TRUE(IsUnplugged(At(game->m_ran_pads, plugged_at - 1)[1]));
+      EXPECT_FALSE(IsUnplugged(At(game->m_ran_pads, plugged_at)[1]));
+      EXPECT_TRUE(IsUnplugged(At(game->m_ran_pads, plugged_at)[2]));
+    }
+    // Every frame both confirmed: the same state and pads on both, from the keyframe on.
+    const int confirmed =
+        std::min({host->session.GetStats().confirmed_frame, host->session.CurrentFrame() - 1,
+                  joiner->session.GetStats().confirmed_frame, joiner->session.CurrentFrame() - 1});
+    ASSERT_GT(confirmed, plugged_at + 300);
+    for (int f = keyframe; f <= confirmed; ++f)
+    {
+      ASSERT_EQ(At(host->game.m_history, f), At(joiner->game.m_history, f)) << "frame " << f;
+      ASSERT_EQ(At(host->game.m_ran_pads, f), At(joiner->game.m_ran_pads, f)) << "frame " << f;
+    }
+    EXPECT_GT(host->session.GetStats().checksums_matched, 10);
+    EXPECT_GT(joiner->session.GetStats().checksums_matched, 10);
+
+    // The friend leaves; its port unplugs at a frame both agree on and the host goes idle.
+    joiner->session.RequestLeave();
+    for (int end = t + 200; t < end && !(joiner->session.LeftDone() && host->session.Idle()); ++t)
+    {
+      net.now = t;
+      host->Tick(t, 1);
+      if (!joiner->session.LeftDone())
+        joiner->Tick(t, 1);
+    }
+    ASSERT_TRUE(joiner->session.LeftDone());
+    ASSERT_TRUE(host->session.Idle());
+    const int unplug = host->session.Plan()[1].unplug_from;
+    ASSERT_NE(unplug, NEVER);
+    EXPECT_EQ(joiner->session.Plan()[1].unplug_from, unplug);
+    EXPECT_FALSE(IsUnplugged(At(host->game.m_ran_pads, unplug - 1)[1]));
+    EXPECT_TRUE(IsUnplugged(At(host->game.m_ran_pads, unplug)[1]));
+    for (int f = keyframe; f < unplug; ++f)
+      ASSERT_EQ(At(host->game.m_history, f), At(joiner->game.m_history, f)) << "frame " << f;
+
+    // Back to solo: the log holds every frame the host ran, as it ran them.
+    int base = -1;
+    std::vector<Pads> host_log = host->session.TakeLog(&base);
+    const int next = host->session.CurrentFrame();
+    ASSERT_EQ(base, 0);
+    ASSERT_EQ(static_cast<int>(host_log.size()), next);
+    for (int f = 0; f < next; ++f)
+      ASSERT_EQ(host_log[f], At(host->game.m_ran_pads, f)) << "frame " << f;
+    const std::vector<Pad> pending = host->session.PendingLocal();
+    host_log = PlaySolo(&host->game, next, 400, host_log);
+    // (A real host plays the pending inputs first; this one's solo pads are its own.)
+    (void)pending;
+
+    // A second friend joins from a keyframe of the solo frames after.
+    const int keyframe2 = next + 300;
+    const int start2 = next + 400;
+    FakeNet net2;
+    net2.latency = latency;
+    net2.jitter = jitter;
+    auto host2 = std::make_unique<DropInPlayer>(DropInConfig(0, start2), net2, 0, start2);
+    host2->game.m_state = host->game.m_state;
+    host2->game.m_history = host->game.m_history;
+    host2->game.m_ran_pads = host->game.m_ran_pads;
+    host2->session.SetLog(0, host_log);
+    host2->session.AddPeer(1, start2, keyframe2);
+    auto joiner2 = std::make_unique<DropInPlayer>(DropInConfig(1, keyframe2), net2, 1, keyframe2);
+    joiner2->seat = 1;
+    joiner2->game.m_state = At(host->game.m_history, keyframe2);
+    for (int u = 0; u < 900; ++u)
+    {
+      net2.now = u;
+      host2->Tick(u, 1);
+      const bool behind = joiner2->session.CatchingUp() ||
+                          joiner2->session.AuthorityFrame() - joiner2->session.CurrentFrame() > 12;
+      joiner2->Tick(u, behind ? 40 : 1);
+      ASSERT_TRUE(host2->session.Error().empty()) << host2->session.Error();
+      ASSERT_TRUE(joiner2->session.Error().empty()) << joiner2->session.Error();
+    }
+    EXPECT_FALSE(joiner2->session.CatchingUp());
+    EXPECT_GT(host2->session.GetStats().checksums_matched, 5);
+    const int confirmed2 =
+        std::min({host2->session.GetStats().confirmed_frame, host2->session.CurrentFrame() - 1,
+                  joiner2->session.GetStats().confirmed_frame, joiner2->session.CurrentFrame() - 1});
+    EXPECT_GT(confirmed2, start2 + 300);
+    for (int f = keyframe2; f <= confirmed2; ++f)
+      ASSERT_EQ(At(host2->game.m_history, f), At(joiner2->game.m_history, f)) << "frame " << f;
+  }
+}
+
+// A friend whose connection drops: the host unplugs it after its last input and plays on, rolling
+// back the frames that guessed otherwise.
+TEST(OrcaDropIn, DroppedFriendUnplugsAfterItsLastInput)
+{
+  FakeNet net;
+  net.latency = 4;
+  FakeGame solo;
+  std::vector<Pads> log = PlaySolo(&solo, 0, 120);
+  auto host = std::make_unique<DropInPlayer>(DropInConfig(0, 120), net, 0, 120);
+  host->game.m_state = solo.m_state;
+  host->session.SetLog(0, log);
+  host->session.AddPeer(1, 120, 60);
+  auto joiner = std::make_unique<DropInPlayer>(DropInConfig(1, 60), net, 1, 60);
+  joiner->seat = 1;
+  joiner->game.m_state = At(solo.m_history, 60);
+  int t = 0;
+  for (; t < 400; ++t)
+  {
+    net.now = t;
+    host->Tick(t, 1);
+    joiner->Tick(t, joiner->session.CatchingUp() ? 40 : 1);
+  }
+  ASSERT_FALSE(joiner->session.CatchingUp());
+  // Gone: nothing more from it.
+  host->session.DropSeat(1);
+  for (int end = t + 60; t < end; ++t)
+  {
+    net.now = t;
+    host->Tick(t, 1);
+  }
+  ASSERT_TRUE(host->session.Error().empty()) << host->session.Error();
+  EXPECT_TRUE(host->session.Idle());
+  const int unplug = host->session.Plan()[1].unplug_from;
+  EXPECT_TRUE(IsUnplugged(At(host->game.m_ran_pads, unplug)[1]));
+  EXPECT_TRUE(IsUnplugged(At(host->game.m_ran_pads, host->session.CurrentFrame() - 1)[1]));
+}
+
+// The session runs on Dolphin's CPU thread in the guest's floating-point mode unless the frame hook
+// switches to the host's (Rollback::OnFrameBoundary does). Under the guest's non-IEEE mode (FPCR.FZ
+// and FPCR.AH on ARM64, MXCSR.FTZ on x86-64), the roster still holds exactly what was set.
+TEST(OrcaDropIn, PlanSurvivesTheGuestFloatMode)
+{
+  Common::FPU::SetSIMDMode(Common::FPU::ROUND_NEAR, true);
+  FakeNet net;
+  DropInPlayer host(DropInConfig(0, 100), net, 0, 100);
+  host.session.AddPeer(1, 100, 40);
+  const std::array<SeatPlan, MAX_SEATS> plan = host.session.Plan();
+  Common::FPU::LoadDefaultSIMDState();
+  EXPECT_EQ(plan[0], (SeatPlan{0, NEVER, 0}));
+  EXPECT_EQ(plan[1], (SeatPlan{NEVER, NEVER, 100}));
+  EXPECT_EQ(plan[2], SeatPlan{});
 }

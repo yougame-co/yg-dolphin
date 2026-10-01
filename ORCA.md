@@ -20,12 +20,16 @@ No disc images, NAND dumps or save data belong in this repository.
 
 A session is `ORCA_SESSION=1` plus a disc whose profile is in `Data/Sys/Orca/` (boot refuses anything
 else, and anything that would change what the game computes: see `Source/Core/Core/Orca/Profile.h`).
-Online play goes through a private two-player YouGame room (`Source/Core/Core/Orca/Session/Online.h`):
+Online play is drop-in, through a private YouGame room of up to four (`Source/Core/Core/Orca/Session/Online.h`,
+"Drop-in" below): the host plays at once, and a friend who joins plugs into the next port.
 
 | Variable | Meaning |
 |---|---|
 | `YOUGAME_BRIDGE`, `YOUGAME_TOKEN` | Set by the YouGame desktop app: tickets come from its loopback bridge. |
 | `ORCA_ROOM` | Room code (6-12 of `a-z0-9`). Default: the app's invite, else a new code. |
+| `ORCA_JOIN` | `1`: join the friend's game in that room (also implied when the app opened an invite). |
+| `ORCA_TEST_KEYFRAME_DIR` | Tests only: keyframes go through this folder instead of YouGame. |
+| `ORCA_TEST_LEAVE_AT` | Tests only: a joined friend leaves at this frame. |
 | `ORCA_NAME` | Name shown in the room. |
 | `ORCA_TEST_DEV_GAME` | Tests only: an anonymous dev ticket from the site instead of the app (no ratings, no account). |
 | `ORCA_SITE` | Tests only: the site for dev tickets (default `https://yougame.co`). |
@@ -48,8 +52,8 @@ Two friends meet when both use the same code and the same compatibility key: the
 game profile and data files, every forced setting (FMA included), the disc and the seeded save.
 Not the host CPU: an Apple Silicon Mac and an x86-64 PC compute the same game (a 12,001-frame
 scripted match hashed identically on both, 2026-10-01), so Mac and PC players meet. An x86-64 CPU
-without FMA3 has a different key. The first in is the host; its Orca starts the match once the other says hello.
-Seat 0 is controller port 1.
+without FMA3 has a different key. The host (the Orca that started the game) is seat 0, controller
+port 1; a friend's seat is its room slot.
 
 Unit tests: `ninja tests && ./Binaries/Tests/tests --gtest_filter='Orca*'`. With `ORCA_LIVE_TEST=1`,
 the `OrcaLive` tests also open real rooms on yougame.co.
@@ -88,6 +92,134 @@ bundled libcurl uses Schannel and the system store, with certificate revocation 
 
 Not yet supported: a GameCube controller adapter as the local controller (the local pad is the host's
 port 1 as mapped in Dolphin's controller settings).
+
+## Drop-in
+
+Luis's rule: the host plays at once; an invited friend joins as if they had plugged a controller
+into the next port of the host's game, and both machines show it. Luis, 2026-10-01: the friend
+loads the host's latest state and syncs from there, so joining never takes longer the longer the
+host has played.
+
+### How it works (`Rollback/OnlineMatch.cpp`, `Orca/Session/Session.*`, `Orca/Session/Keyframe.*`)
+
+1. **Solo.** A session machine always runs inside the determinism envelope. Online, SI is forced
+   to four GameCube pads, and every port without a player reports no controller: the wire pad's
+   bit `0x80` of byte 0, `UNPLUGGED_PAD`, outside the button bits, so `SI_DeviceGCController`
+   answers nothing. The host's port 1 is its local pad with no input delay. It logs every
+   frame's pads (32 bytes a frame) and joins its room in the background as the host. There is no
+   rollback and no snapshot.
+2. **Keyframe.** On an invite (`Online::PrepareJoin`, the embed host's `prepare-join` line) or
+   when a friend arrives in the room, whichever comes first:
+   - At its next frame boundary, the host captures the machine with `SnapshotRing::Capture`
+     (device state and MEM1/MEM2, the same bytes a rollback snapshot holds).
+   - It takes the session NAND as a copy-on-write `clonefile` (instant on APFS; elsewhere read at
+     the boundary). The NAND travels because rollback snapshots keep only a journal mark.
+   - A thread packs everything, compresses it with zstd level 3 (long-distance matching, 128 MB
+     window), and stores it through a `KeyframeStore`. The game goes on meanwhile.
+   - A keyframe less than 30 s old is reused; each one serves one joiner, who deletes it after
+     loading.
+3. **Join.**
+   - The host starts a rollback session at its next frame J. It sends the friend the keyframe's
+     id, frame K, size and hash.
+   - The friend's Orca boots the same disc and profile, then waits at its first boundary
+     (`orca state joining <percent>`; the host shows `orca state friend-joining`).
+   - It downloads and checks the keyframe, replaces its own temporary session NAND with the
+     host's (`ReloadFst`), and loads the state with `SnapshotRing::LoadImage`.
+   - It then runs the host's logged pads for [K, J) (history in packets, runs of equal pads sent
+     once) and the host's live inputs from J. It runs unthrottled, without rendering or sound,
+     until it has caught up.
+4. **Plug in.** Once the friend has caught up, the host picks S as its own frame plus a margin (the
+   rollback window, twice the maximum delay, and the round trip). It announces S in its roster,
+   which every packet carries. Both machines plug port 2 in at exactly S. From S the seat counts
+   for stalls and checksums like any other, and the host never waits on a joiner before that.
+5. **Leave.**
+   - The friend asks to leave; the host picks an unplug frame L ahead in the same way. The
+     friend stops after its inputs before L are acknowledged.
+   - A friend whose connection drops is unplugged by the host after its last input, rolling back
+     the frames that guessed otherwise.
+   - A friend who stops answering is dropped after 10 s.
+   - With nobody else plugged in, the host hands its log back and plays solo, with no input delay.
+   - A third or fourth friend goes the same way on seats 3-4. Only two players have been tested.
+6. **Rooms.**
+   - Orca asks for 4-seat private rooms with the game-owned lobby. No room match is ever started,
+     so there are no results or ratings.
+   - Seats are lobby slots. A hello carries the compatibility key and whether the sender is the
+     host.
+   - The rooms Worker needed no change: it admits late joiners, assigns the lowest free slot and
+     relays `msg` between connections.
+
+**Hazard found on the way (Apple Silicon).** Dolphin's JIT leaves `FPCR.AH` set when the
+frame-boundary hook runs host C++ on the CPU thread. Clang may build a 64-bit constant whose high
+word is `0x7fffffff` (a `{0, INT_MAX}` struct) with `movi` + `fneg`, and with `FPCR.AH` set,
+`FNEG` leaves a NaN's sign bit alone: the constant came out as `{0, -1}`. Drop-in's "never" frame
+is therefore `0x3fffffff` (plain `mov` immediates). Other host code called from the JIT has the same
+exposure. `objdump -d` a CPU-thread object for `fneg`/`fabs` that aren't float math.
+
+### Measurements
+
+Brawl rev 2, `bf-mario-link-results.txt`, Null video, muted, Apple Silicon under a shared load of
+8-17.
+
+| Frame (scene) | MEM1+MEM2 raw | zstd -1 | zstd -3 | Non-RAM DoState | Session NAND |
+|---|---|---|---|---|---|
+| 300 (scStrap, boot) | 96 MB | 23.5 MB | 22.7 MB | 3.6 MB | 2.4 MB |
+| 3600 (scBoot, 1 min) | 96 MB | 26.7 MB | 25.8 MB | 3.2 MB | 37.9 MB |
+| 5350 (muMenuMain) | 96 MB | 31.3 MB | 30.2 MB | 3.6 MB | 54.2 MB |
+| 5600 (scSelctCharacter) | 96 MB | 29.5 MB | 28.4 MB | 3.2 MB | 54.2 MB |
+| 7000 (scMelee, mid-fight) | 96 MB | 30.3 MB | 29.0 MB | 3.2 MB | 54.2 MB |
+
+- The NAND is mostly `/tmp`: 37 MB of `ARC` packs that Brawl writes on the strap screen (26.4 MB
+  at zstd -3). Brawl's save adds 16 MB from frame ~5000 (`collect.vff` is 14.6 MB, 0.14 MB
+  compressed).
+- Whole machine at zstd -3 with long-distance matching:
+  - 37.6 MB at frame 3600 and 51.5 MB mid-fight;
+  - 0.16-0.25 s to compress on all cores, 0.25 s to decompress;
+  - long-distance matching saves 4-14 MB against plain zstd.
+- In Orca (keyframe of frame ~600-2300): capture 10 ms at the boundary; pack and compress
+  125-160 ms on a thread (29-38 MB); unpack 64-99 ms; NAND plus state load 17-77 ms.
+- Replay unthrottled with rendering skipped: about 2,100 frames/s in the boot, 1,200 in menus and
+  540 in fights.
+
+### Keyframe store: YouGame endpoint (to build, YouGame repo)
+
+Test builds use `ORCA_TEST_KEYFRAME_DIR` (`LocalKeyframeStore`). The real store is a site
+endpoint over a **private** R2 bucket; the games bucket is public.
+
+- **Auth:** the room ticket. Orca already holds it: the bridge's `mpTicket` or the dev ticket.
+  The site verifies it with `ROOMS_SECRET` and takes `game`, `room` and `player` from it.
+- **`PUT /api/orca/keyframes/<room>/<id>`**
+  - Headers: `Authorization: Ticket <ticket>`, `Content-Length` of at most 128 MB, and
+    `X-Orca-Frame` and `X-Orca-Hash` (XXH3-64 hex of the body).
+  - Stores `orca-keyframes/<game>/<room>/<id>` with `{frame, hash, player, expires}` metadata
+    and returns `{id, size}`.
+  - `id` is `kf-<frame>-<hash8>`. A room keeps at most 2 objects, and a third PUT deletes the
+    oldest.
+  - Rate limit: 6 PUTs a minute per ticket player.
+- **Large bodies:** the Workers request-body limit is 100 MB, and keyframes are 30-55 MB today. If
+  that limit gets in the way, `POST /api/orca/keyframes/<room>/<id>/upload` returns a presigned
+  R2 PUT URL (5 min, exact `Content-Length`), as `api/native/upload` does.
+- **`GET /api/orca/keyframes/<room>/<id>`**
+  - Auth: a ticket for the same game and room. Any member of the room may fetch.
+  - Streams the object with `Content-Length` (Orca reports progress from it) and
+    `X-Orca-Hash`. Large bodies go through the `worker.ts` handoff (the OpenNext R2 stream memory
+    limit).
+- **`DELETE` the same path:** the joiner calls it after loading, the host when it replaces an
+  unused keyframe or leaves.
+- **Cleanup:** an R2 lifecycle rule deletes `orca-keyframes/` objects older than 24 h.
+- **Optional:** the host encrypts each keyframe with AES-GCM under a key sent only in the room's
+  `kf` message, so the site never reads the save. mbedTLS is in the tree.
+
+### Room messages (relayed `msg`, `Orca/Session/YouGameRoom.cpp`)
+
+- `hello {c: key, r: heard you, h: is host}`: sent until answered. A mismatched key keeps a
+  joiner out.
+- `kf {f, id, n, x}`: host to a joiner's connection, every second until its first packet arrives.
+- `p`: session packets, broadcast once to the room. Fields beyond the 2-player ones:
+  - `ro`: roster, `[plug, unplug, live]` per seat, with -1 for never;
+  - `ha`: history acknowledgement;
+  - `ht`, `hf`, `hp`: history seat, first frame, and `[count, 4 pads hex]` runs;
+  - `lv`: leaving.
+- `bye {r}`: why a player leaves.
 
 ## Embedding
 
@@ -146,7 +278,7 @@ window (layout, scroll, resize, full screen). Moving, minimizing or hiding the w
 | `volume V` | V from 0 to 1, linear, as the libretro gain. For this run only: Dolphin.ini is untouched. It is allowed in a session and doesn't touch the compatibility key. |
 | `save N` / `load N` | Answers `unsupported save N` / `unsupported load N`. A session refuses save states, and Orca keeps the game's own saves in its NAND. |
 | `reset` | The console's reset button. Answers `unsupported reset` in a session or before the game runs. |
-| `prepare-join` | The host invited a friend to drop in. It calls `Orca::Online::PrepareJoin()`, which is a stub until drop-in join lands. |
+| `prepare-join` | The host invited a friend to drop in. It calls `Orca::Online::PrepareJoin()`: the next frame boundary captures a keyframe ("Drop-in"). |
 | `quit` | Stops at once (no power-button shutdown, also outside a session), then exits. |
 
 Any other line goes to stderr. The app's `EMBED_COMMAND` filter must add `blur` and `prepare-join`.

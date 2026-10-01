@@ -7,6 +7,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <deque>
+#include <map>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -30,18 +31,16 @@ namespace Orca::Net
 namespace
 {
 // The rooms Worker's lobby protocol (rooms/src/index.ts, rooms/src/game-lobby.ts in the YouGame
-// repo). Orca rooms are private two-player game lobbies; the host's Orca starts the match.
+// repo). Orca rooms are private game lobbies of up to four. The host plays from the moment it boots;
+// a friend who joins the room plugs into the next free port (drop-in). No room match is started:
+// a friends room keeps no results.
 constexpr const char* CODE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
 // The room allows 120 messages a second per socket: packets go out at most every 10 ms (a stalled
 // session asks to send far more often), the newest replacing any not yet sent.
 constexpr auto SEND_GAP = std::chrono::milliseconds(10);
 constexpr auto PING_EVERY = std::chrono::seconds(1);
 constexpr auto HELLO_EVERY = std::chrono::seconds(1);
-constexpr auto BEGIN_RETRY = std::chrono::seconds(3);
 constexpr size_t MAX_INBOX = 1024;
-// The friend gave up waiting for this side's inputs: its game or the network between stalled.
-constexpr const char* STALLED_SENTENCE =
-    "The connection with your friend stalled, so the match ended";
 
 using Clock = std::chrono::steady_clock;
 
@@ -150,6 +149,9 @@ constexpr int MAX_RESIMULATED = 1 << 20;
 constexpr int MAX_STALLS = 1 << 20;
 constexpr int MAX_ADVANTAGE = 1 << 20;
 constexpr int MAX_RTT = 1 << 20;
+// Drop-in history in one packet (the session sends far less; CoalescePacket may join two).
+constexpr size_t MAX_HISTORY_RUNS_IN_PACKET = 128;
+constexpr size_t MAX_HISTORY_FRAMES_IN_PACKET = 1024;
 
 // picojson has no nesting limit (deep arrays overflow the I/O thread's stack) and aborts on a number
 // that overflows a double. Nothing YouGame sends nests deeply, uses an exponent or has more than 17
@@ -239,6 +241,45 @@ picojson::object PacketToJson(const Packet& packet)
       bytes[i] = static_cast<u8>(packet.checksum >> (56 - 8 * i));
     d["h"] = picojson::value(ToHex(bytes, 8));
   }
+  // Drop-in (all optional): the roster as [plug, unplug, live] per seat (-1: never), the history
+  // acknowledgement, history as [count, pads hex] runs, and a leave request.
+  if (packet.roster)
+  {
+    picojson::array roster;
+    for (const SeatPlan& plan : *packet.roster)
+    {
+      picojson::array entry;
+      for (int v : {plan.plug_from, plan.unplug_from, plan.live_from})
+        entry.emplace_back(static_cast<double>(v == NEVER ? -1 : v));
+      roster.emplace_back(entry);
+    }
+    d["ro"] = picojson::value(roster);
+  }
+  if (packet.history_ack >= 0)
+    d["ha"] = picojson::value(static_cast<double>(packet.history_ack));
+  if (packet.history_seat >= 0 && !packet.history.empty())
+  {
+    d["ht"] = picojson::value(static_cast<double>(packet.history_seat));
+    d["hf"] = picojson::value(static_cast<double>(packet.history_first));
+    picojson::array runs;
+    for (size_t i = 0; i < packet.history.size();)
+    {
+      size_t n = 1;
+      while (i + n < packet.history.size() && packet.history[i + n] == packet.history[i])
+        ++n;
+      std::string hex;
+      for (const Pad& pad : packet.history[i])
+        hex += ToHex(pad.data(), pad.size());
+      picojson::array run;
+      run.emplace_back(static_cast<double>(n));
+      run.emplace_back(hex);
+      runs.emplace_back(run);
+      i += n;
+    }
+    d["hp"] = picojson::value(runs);
+  }
+  if (packet.leaving)
+    d["lv"] = picojson::value(true);
   return d;
 }
 
@@ -306,6 +347,73 @@ bool PacketFromJson(const picojson::object& d, Packet* packet)
     for (u8 b : hash)
       out.checksum = out.checksum << 8 | b;
   }
+  if (d.count("ro"))
+  {
+    const auto& ro = d.at("ro");
+    if (!ro.is<picojson::array>() || ro.get<picojson::array>().size() != MAX_SEATS)
+      return false;
+    std::array<SeatPlan, MAX_SEATS> roster;
+    for (int s = 0; s < MAX_SEATS; ++s)
+    {
+      const auto& entry = ro.get<picojson::array>()[s];
+      if (!entry.is<picojson::array>() || entry.get<picojson::array>().size() != 3)
+        return false;
+      int values[3];
+      for (int k = 0; k < 3; ++k)
+      {
+        const picojson::value& v = entry.get<picojson::array>()[k];
+        if (!v.is<double>() || v.get<double>() < -1 || v.get<double>() > MAX_FRAME ||
+            v.get<double>() != static_cast<double>(static_cast<int>(v.get<double>())))
+        {
+          return false;
+        }
+        values[k] = v.get<double>() < 0 ? NEVER : static_cast<int>(v.get<double>());
+      }
+      roster[s] = {values[0], values[1], values[2]};
+    }
+    out.roster = roster;
+  }
+  if (d.count("ha"))
+  {
+    const auto ha = Int(d, "ha", 0, MAX_FRAME);
+    if (!ha)
+      return false;
+    out.history_ack = *ha;
+  }
+  if (d.count("hp"))
+  {
+    const auto seat_h = Int(d, "ht", 0, MAX_SEATS - 1);
+    const auto first_h = Int(d, "hf", 0, MAX_FRAME);
+    const auto& hp = d.at("hp");
+    if (!seat_h || !first_h || !hp.is<picojson::array>() ||
+        hp.get<picojson::array>().size() > MAX_HISTORY_RUNS_IN_PACKET)
+    {
+      return false;
+    }
+    out.history_seat = *seat_h;
+    out.history_first = *first_h;
+    for (const picojson::value& run : hp.get<picojson::array>())
+    {
+      if (!run.is<picojson::array>() || run.get<picojson::array>().size() != 2)
+        return false;
+      const auto& r = run.get<picojson::array>();
+      std::vector<u8> run_bytes;
+      if (!r[0].is<double>() || !r[1].is<std::string>() || r[0].get<double>() < 1 ||
+          r[0].get<double>() > MAX_HISTORY_FRAMES_IN_PACKET ||
+          !FromHex(r[1].get<std::string>(), &run_bytes) || run_bytes.size() != sizeof(Pads))
+      {
+        return false;
+      }
+      const int n = static_cast<int>(r[0].get<double>());
+      if (out.history.size() + n > MAX_HISTORY_FRAMES_IN_PACKET)
+        return false;
+      Pads run_pads;
+      for (int k = 0; k < MAX_SEATS; ++k)
+        std::copy_n(run_bytes.begin() + k * sizeof(Pad), sizeof(Pad), run_pads[k].begin());
+      out.history.insert(out.history.end(), n, run_pads);
+    }
+  }
+  out.leaving = d.count("lv") && d.at("lv").evaluate_as_boolean();
   *packet = std::move(out);
   return true;
 }
@@ -398,7 +506,6 @@ struct YouGameRoom::Impl
   std::string leave_reason;
   std::string code;
   int seat = -1;
-  u32 seed = 0;
   int rtt = -1;
   // Counts pongs, so a caller can tell a new measurement from the same one read again.
   u32 rtt_sequence = 0;
@@ -407,15 +514,34 @@ struct YouGameRoom::Impl
 
   // The I/O thread's own.
   Common::WebSocket ws;
-  std::string me, peer, host, match_id;
+  std::string me, host;
   int revision = -1;
-  int peer_seat = -1;
-  bool peer_hello = false;
-  // Why the friend said it was leaving (its "bye"), for this side's own report.
-  std::string peer_bye;
-  std::optional<Clock::time_point> begun_at;
-  int begin_tries = 0;
+  // Every other participant, by connection id.
+  struct Peer
+  {
+    int slot = -1;
+    std::string name;
+    // It said hello with our compatibility key; it heard ours; it was reported as a player.
+    bool heard = false;
+    bool heard_us = false;
+    bool announced = false;
+    bool drop_in_host = false;
+    bool sent_packet = false;
+    std::optional<KeyframeInfo> keyframe;
+    // Why it said it was leaving (its "bye"), for this side's own report.
+    std::string bye;
+  };
+  std::map<std::string, Peer> peers;
   Clock::time_point last_send{}, last_ping{}, last_hello{};
+  // Shared with the emulator thread (under mutex): what happened to other players, and the
+  // keyframe the host offers each joining seat.
+  std::vector<PeerEvent> events;
+  std::map<int, KeyframeInfo> keyframe_offers;
+  // Whether this Orca joins someone else's game (RoomOptions::joining, or the app's invite), known
+  // once the ticket is in (role_known, under mutex).
+  bool joining = false;
+  bool role_known = false;
+  std::atomic<bool> offer_now{false};
   // The room as the page draws it (welcome, join, leave, lobby and start carry these).
   picojson::array room_participants, room_players;
 
@@ -453,6 +579,7 @@ struct YouGameRoom::Impl
 
   explicit Impl(RoomOptions room_options) : options(std::move(room_options))
   {
+    joining = options.joining;
     thread = std::thread([this] { Run(); });
   }
 
@@ -594,6 +721,9 @@ struct YouGameRoom::Impl
         if (!post(bridge + "/sdk", hello, headers, &reply))
           return false;
         room = Str(reply, "room");
+        // The app opened an invite: this Orca joins the friend's game.
+        if (!room.empty())
+          joining = true;
       }
       if (room.empty())
         room = RandomString(CODE_ALPHABET, 8);
@@ -604,7 +734,7 @@ struct YouGameRoom::Impl
       }
       picojson::object request;
       request["type"] = picojson::value("mpTicket");
-      request["players"] = picojson::value(2.0);
+      request["players"] = picojson::value(static_cast<double>(MAX_SEATS));
       request["mode"] = picojson::value(options.mode);
       request["ranked"] = picojson::value(false);
       request["room"] = picojson::value(room);
@@ -631,7 +761,7 @@ struct YouGameRoom::Impl
       request["dev"] = picojson::value(dev);
       request["player_id"] = picojson::value(player);
       request["name"] = picojson::value(options.player_name);
-      request["players"] = picojson::value(2.0);
+      request["players"] = picojson::value(static_cast<double>(MAX_SEATS));
       request["mode"] = picojson::value(options.mode);
       request["room"] = picojson::value(room);
       request["lobby"] = picojson::value(lobby);
@@ -650,6 +780,7 @@ struct YouGameRoom::Impl
     }
     std::lock_guard lock(mutex);
     code = room;
+    role_known = true;
     return true;
   }
 
@@ -712,8 +843,7 @@ struct YouGameRoom::Impl
       if (!ws.IsOpen())
       {
         End(fmt::format("{} ({})",
-                        State() == RoomState::Playing ? "Lost the connection to the room" :
-                                                        "The room closed the connection",
+                        "Lost the connection to the room",
                         ws.Error().empty() ? "no reason given" : ws.Error()));
         break;
       }
@@ -728,25 +858,15 @@ struct YouGameRoom::Impl
       std::lock_guard lock(mutex);
       reason = leave_reason;
     }
-    if (!reason.empty() && !peer.empty() && ws.IsOpen())
+    if (!reason.empty() && !peers.empty() && ws.IsOpen())
     {
       picojson::object d;
       d["k"] = picojson::value("bye");
       d["r"] = picojson::value(reason);
       picojson::object message;
       message["t"] = picojson::value("msg");
-      message["to"] = picojson::value(peer);
       message["d"] = picojson::value(d);
       SendJson(message, std::chrono::milliseconds(500), false);
-    }
-    // Leaving mid-match reports it void, so neither player is left waiting for a result.
-    if (!match_id.empty() && ws.IsOpen())
-    {
-      picojson::object finish;
-      finish["t"] = picojson::value("finish");
-      finish["matchId"] = picojson::value(match_id);
-      finish["void"] = picojson::value(true);
-      SendJson(finish, std::chrono::milliseconds(500), false);
     }
     if (ws.IsOpen())
     {
@@ -774,16 +894,17 @@ struct YouGameRoom::Impl
     room["lifecycle"] = picojson::value("game");
     room["participants"] = picojson::value(room_participants);
     room["revision"] = picojson::value(static_cast<double>(revision));
-    room["matchId"] = match_id.empty() ? picojson::value() : picojson::value(match_id);
+    room["matchId"] = picojson::value();
     room["lobby"] = picojson::value(lobby);
     room["me"] = picojson::value(me);
     {
       std::lock_guard lock(mutex);
       room["code"] = picojson::value(code);
-      room["ready"] = picojson::value(state == RoomState::Playing);
+      room["ready"] = picojson::value(std::any_of(
+          peers.begin(), peers.end(), [](const auto& p) { return p.second.announced; }));
     }
     room["queue"] = picojson::value("private");
-    room["size"] = picojson::value(2.0);
+    room["size"] = picojson::value(static_cast<double>(MAX_SEATS));
     room["host"] = picojson::value(host);
     room["readyIds"] = picojson::value(picojson::array{});
     room["players"] = picojson::value(room_players);
@@ -992,24 +1113,40 @@ struct YouGameRoom::Impl
       SendJson(ping);
     }
 
-    const RoomState current = State();
-    if (current != RoomState::Playing)
+    // Say hello to every other Orca in the room until it answers, so neither side treats the other
+    // as a player before both programs are up and agree on the build. Then the host offers each
+    // newcomer its keyframe, again every second until the newcomer's first packet arrives.
+    if (now - last_hello >= HELLO_EVERY || offer_now.exchange(false))
     {
-      // Say hello to the friend's Orca until it answers, so the host only starts the match once
-      // both programs are up and agree on the build.
-      if (!peer.empty() && now - last_hello >= HELLO_EVERY)
+      last_hello = now;
+      std::map<int, KeyframeInfo> offers;
       {
-        last_hello = now;
-        picojson::object d;
-        d["k"] = picojson::value("hello");
-        d["c"] = picojson::value(options.compatibility);
-        d["r"] = picojson::value(peer_hello);
-        SendTo(peer, d);
+        std::lock_guard lock(mutex);
+        offers = keyframe_offers;
       }
-      if (begun_at && now - *begun_at >= BEGIN_RETRY)
-        begun_at.reset();
-      MaybeBegin();
-      return;
+      for (auto& [id, peer] : peers)
+      {
+        if (!peer.heard || !peer.heard_us)
+        {
+          picojson::object d;
+          d["k"] = picojson::value("hello");
+          d["c"] = picojson::value(options.compatibility);
+          d["r"] = picojson::value(peer.heard);
+          d["h"] = picojson::value(!joining);
+          SendTo(id, d);
+        }
+        if (const auto offer = offers.find(peer.slot);
+            offer != offers.end() && peer.heard && !peer.sent_packet)
+        {
+          picojson::object d;
+          d["k"] = picojson::value("kf");
+          d["f"] = picojson::value(static_cast<double>(offer->second.frame));
+          d["id"] = picojson::value(offer->second.id);
+          d["n"] = picojson::value(static_cast<double>(offer->second.size));
+          d["x"] = picojson::value(offer->second.hash);
+          SendTo(id, d);
+        }
+      }
     }
 
     if (now - last_send < SEND_GAP)
@@ -1022,9 +1159,12 @@ struct YouGameRoom::Impl
     if (!packet)
       return;
     last_send = now;
-    picojson::object d = PacketToJson(*packet);
-    d["m"] = picojson::value(match_id);
-    SendTo(peer, d);
+    // One message to the whole room (the rooms Worker relays it to everyone else): every other
+    // player gets the same inputs, and a room message limit counts it once.
+    picojson::object message;
+    message["t"] = picojson::value("msg");
+    message["d"] = picojson::value(PacketToJson(*packet));
+    SendJson(message);
   }
 
   void SendTo(const std::string& to, const picojson::object& d)
@@ -1036,22 +1176,11 @@ struct YouGameRoom::Impl
     SendJson(message);
   }
 
-  void MaybeBegin()
+  void Emit(PeerEvent event)
   {
-    if (State() != RoomState::Waiting || host != me || peer.empty() || !peer_hello || begun_at)
-      return;
-    picojson::object begin;
-    begin["t"] = picojson::value("begin");
-    begin["revision"] = picojson::value(static_cast<double>(revision));
-    // The room answers a begin it refuses with command-error and one it ignores with nothing: either
-    // way, the next try waits BEGIN_RETRY, and after a minute of tries the room is not usable.
-    if (++begin_tries > 20)
-    {
-      End("The room never started the match");
-      return;
-    }
-    begun_at = Clock::now();
-    SendJson(begin);
+    std::lock_guard lock(mutex);
+    if (events.size() < 256)
+      events.push_back(std::move(event));
   }
 
   // The lobby roster rides on welcome, join, leave, back, away and lobby messages.
@@ -1071,90 +1200,58 @@ struct YouGameRoom::Impl
       return;
     }
     room_participants = it->second.get<picojson::array>();
-    const auto& participants = it->second.get<picojson::array>();
-    if (participants.size() > 2)
-    {
-      End("Orca rooms are for two players", "room_full");
-      return;
-    }
     if (const auto rev = Int(m, "revision", 0, MAX_FRAME))
       revision = *rev;
-    std::string other;
-    for (const auto& p : participants)
-    {
-      if (!p.is<picojson::object>())
-        continue;
-      const std::string id = Str(p.get<picojson::object>(), "connectionId");
-      if (id != me)
-        other = id;
-    }
-    if (other != peer)
-    {
-      peer = other;
-      peer_hello = false;
-      begun_at.reset();
-      begin_tries = 0;
-      std::string room;
-      {
-        std::lock_guard lock(mutex);
-        room = code;
-      }
-      SetStatus(peer.empty() ? fmt::format("Room {}: waiting for your friend", room) :
-                               fmt::format("Room {}: your friend is here, starting", room));
-    }
-    Publish();
-  }
-
-  // Mid-match, a player who leaves or drops is out of it (rooms/src/index.ts onGone).
-  bool PeerGone(const picojson::object& m) const
-  {
-    const auto it = m.find("player");
-    return it != m.end() && it->second.is<picojson::object>() &&
-           Str(it->second.get<picojson::object>(), "id") == peer;
-  }
-
-  void Start(const picojson::object& m)
-  {
-    const auto it = m.find("matchParticipants");
-    const auto seed_value = m.find("seed");
-    if (it == m.end() || !it->second.is<picojson::array>() || seed_value == m.end() ||
-        !seed_value->second.is<double>() || seed_value->second.get<double>() < 0 ||
-        seed_value->second.get<double>() > 4294967295.0)
-    {
-      End("The room started a match it didn't describe");
-      return;
-    }
-    int my_seat = -1;
-    peer_seat = -1;
-    for (const auto& p : it->second.get<picojson::array>())
+    std::map<std::string, std::pair<int, std::string>> present;
+    for (const auto& p : room_participants)
     {
       if (!p.is<picojson::object>())
         continue;
       const auto& o = p.get<picojson::object>();
-      const auto slot = Int(o, "slot", 0, 1);
-      if (!slot)
-        continue;
       const std::string id = Str(o, "connectionId");
+      const auto slot = Int(o, "slot", 0, MAX_SEATS - 1);
+      if (id.empty() || !slot)
+        continue;
       if (id == me)
-        my_seat = *slot;
-      else if (id == peer)
-        peer_seat = *slot;
+      {
+        std::lock_guard lock(mutex);
+        seat = *slot;
+        continue;
+      }
+      present[id] = {*slot, Str(o, "name")};
     }
-    if (my_seat < 0 || peer_seat < 0 || my_seat == peer_seat)
+    // Who left: a player of the game is unplugged by the host; the host leaving ends a joiner's.
+    for (auto p = peers.begin(); p != peers.end();)
     {
-      End("The room started a match without both of you");
-      return;
+      if (present.contains(p->first))
+      {
+        ++p;
+        continue;
+      }
+      if (p->second.announced)
+        Emit({PeerEvent::Kind::Left, p->second.slot, p->second.drop_in_host, p->second.name, {}});
+      {
+        // An offer was for that player only: the next one in the seat gets its own keyframe.
+        std::lock_guard lock(mutex);
+        keyframe_offers.erase(p->second.slot);
+      }
+      p = peers.erase(p);
     }
-    match_id = Str(m, "matchId");
+    for (const auto& [id, info] : present)
+    {
+      auto [p, inserted] = peers.try_emplace(id);
+      p->second.slot = info.first;
+      p->second.name = info.second;
+      if (inserted)
+        last_hello = {};
+    }
+    std::string room;
     {
       std::lock_guard lock(mutex);
-      seat = my_seat;
-      seed = static_cast<u32>(seed_value->second.get<double>());
-      state = RoomState::Playing;
-      status = fmt::format("Room {}: playing (port {})", code, my_seat + 1);
-      INFO_LOG_FMT(NETPLAY, "Orca room: match {} started, seat {}, seed {:08x}", match_id, my_seat,
-                   seed);
+      room = code;
     }
+    if (peers.empty())
+      SetStatus(fmt::format("Room {}: waiting for your friend", room));
     Publish();
   }
 
@@ -1168,7 +1265,6 @@ struct YouGameRoom::Impl
     }
     const auto& m = value.get<picojson::object>();
     const std::string t = Str(m, "t");
-    const RoomState current = State();
 
     if (t == "welcome")
     {
@@ -1178,11 +1274,7 @@ struct YouGameRoom::Impl
         End("This room is not an Orca lobby", "room_mismatch");
         return;
       }
-      if (m.count("playing") && m.at("playing").evaluate_as_boolean())
-      {
-        End("This room already has a match running", "room_full");
-        return;
-      }
+      // A room whose game is running is what a drop-in friend joins: no refusal.
       Roster(m);
       std::lock_guard lock(mutex);
       if (state == RoomState::Connecting)
@@ -1190,48 +1282,37 @@ struct YouGameRoom::Impl
     }
     else if (t == "join" || t == "back" || t == "leave" || t == "away" || t == "lobby")
     {
-      if (current == RoomState::Playing)
+      // A dropped connection ("away") is out of the game at once: its controller unplugs.
+      if (t == "away")
       {
-        if ((t == "leave" || t == "away") && PeerGone(m))
+        if (const auto player = m.find("player");
+            player != m.end() && player->second.is<picojson::object>())
         {
-          if (peer_bye == "desync")
-            End("Your games went out of sync, so the match ended", "desync");
-          else if (peer_bye == "stalled")
-            End(STALLED_SENTENCE, "peer_left");
-          else
-            End("Your friend left the match", "peer_left");
+          const std::string id = Str(player->second.get<picojson::object>(), "id");
+          if (const auto p = peers.find(id); p != peers.end())
+          {
+            if (p->second.announced)
+              Emit({PeerEvent::Kind::Left, p->second.slot, p->second.drop_in_host, p->second.name, {}});
+            {
+              std::lock_guard lock(mutex);
+              keyframe_offers.erase(p->second.slot);
+            }
+            p->second = {};
+            p->second.slot = -1;
+          }
         }
-        return;
       }
       Roster(m);
     }
-    else if (t == "start")
-    {
-      if (current == RoomState::Waiting)
-        Start(m);
-    }
-    else if (t == "result")
-    {
-      if (current == RoomState::Playing)
-      {
-        match_id.clear();
-        const bool cancelled = m.count("void") && m.at("void").evaluate_as_boolean();
-        if (cancelled && peer_bye == "desync")
-          End("Your games went out of sync, so the match ended", "desync");
-        else if (cancelled && peer_bye == "stalled")
-          End(STALLED_SENTENCE, "peer_left");
-        else
-          End(cancelled ? "The match was cancelled" : "The match is over", cancelled ? "peer_left" : "");
-      }
-    }
     else if (t == "msg")
     {
-      if (peer.empty() || Str(m, "from") != peer)
+      const auto p = peers.find(Str(m, "from"));
+      if (p == peers.end())
         return;
       const auto d = m.find("d");
       if (d == m.end() || !d->second.is<picojson::object>())
         return;
-      OnPeerMessage(d->second.get<picojson::object>(), current);
+      OnPeerMessage(p->first, p->second, d->second.get<picojson::object>());
     }
     else if (t == "pong")
     {
@@ -1250,11 +1331,6 @@ struct YouGameRoom::Impl
     else if (t == "command-error")
     {
       WARN_LOG_FMT(NETPLAY, "Orca room: {} refused: {}", Str(m, "action"), Str(m, "error"));
-      if (Str(m, "action") == "begin")
-      {
-        std::lock_guard lock(mutex);
-        status = fmt::format("Room {}: {}", code, Str(m, "error"));
-      }
     }
     else if (t == "error")
     {
@@ -1266,39 +1342,75 @@ struct YouGameRoom::Impl
     }
   }
 
-  void OnPeerMessage(const picojson::object& d, RoomState current)
+  void OnPeerMessage(const std::string& id, Peer& peer, const picojson::object& d)
   {
     const std::string kind = Str(d, "k");
     if (kind == "bye")
     {
       // Only known reasons, so a peer can't put text in this player's report.
       if (const std::string reason = Str(d, "r"); reason == "desync" || reason == "stalled")
-        peer_bye = reason;
+        peer.bye = reason;
       return;
     }
     if (kind == "hello")
     {
       if (Str(d, "c") != options.compatibility)
       {
-        End("Your friend is running a different Orca build or setup", "room_mismatch");
+        // Not a player of this game; a joiner can't play it at all.
+        WARN_LOG_FMT(NETPLAY, "Orca room: {} runs a different Orca build or setup", id);
+        if (joining)
+          End("Your friend is running a different Orca build or setup", "room_mismatch");
         return;
       }
-      if (!peer_hello)
+      const bool was_heard = peer.heard;
+      peer.heard = true;
+      peer.heard_us = peer.heard_us || (d.count("r") && d.at("r").evaluate_as_boolean());
+      peer.drop_in_host = d.count("h") && d.at("h").evaluate_as_boolean();
+      if (!was_heard)
+        last_hello = {};  // answer at once rather than on the next hello tick
+      // A player of the game: a joiner at a seat other than the host's, or the host itself.
+      if (!peer.announced && peer.slot >= 0)
       {
-        peer_hello = true;
-        // Answer at once rather than on the next hello tick.
-        last_hello = {};
+        peer.announced = true;
+        std::string room;
+        {
+          std::lock_guard lock(mutex);
+          room = code;
+        }
+        SetStatus(fmt::format("Room {}: {} is here", room, peer.name.empty() ? "a friend" : peer.name));
+        Emit({PeerEvent::Kind::Arrived, peer.slot, peer.drop_in_host, peer.name, {}});
       }
       return;
     }
-    if (kind != "p" || current != RoomState::Playing || Str(d, "m") != match_id)
-      return;
-    Packet packet;
-    if (!PacketFromJson(d, &packet) || packet.seat != peer_seat)
+    if (kind == "kf")
     {
-      End("Your friend's Orca sent a malformed message");
+      // Only from the host, to a joiner.
+      if (!peer.drop_in_host || !joining)
+        return;
+      KeyframeInfo info;
+      const auto frame = Int(d, "f", 0, MAX_FRAME);
+      const auto size = Int(d, "n", 1, MAX_FRAME);
+      info.id = Str(d, "id");
+      info.hash = Str(d, "x");
+      if (!frame || !size || info.id.empty() || info.id.size() > 128 || info.hash.size() > 64)
+        return;
+      info.frame = *frame;
+      info.size = static_cast<u64>(*size);
+      if (peer.keyframe && peer.keyframe->id == info.id)
+        return;
+      peer.keyframe = info;
+      Emit({PeerEvent::Kind::Keyframe, peer.slot, true, peer.name, info});
       return;
     }
+    if (kind != "p" || !peer.announced)
+      return;
+    Packet packet;
+    if (!PacketFromJson(d, &packet) || packet.seat != peer.slot)
+    {
+      WARN_LOG_FMT(NETPLAY, "Orca room: a malformed packet from seat {}", peer.slot + 1);
+      return;
+    }
+    peer.sent_packet = true;
     std::lock_guard lock(mutex);
     // Nobody read the inbox for a while (a long stall on this side). Each packet repeats every
     // input the sender hasn't seen acknowledged, so the newer half says all the older half did.
@@ -1328,10 +1440,26 @@ int YouGameRoom::Seat() const
   return m_impl->seat;
 }
 
-u32 YouGameRoom::Seed() const
+std::optional<bool> YouGameRoom::Joining() const
 {
   std::lock_guard lock(m_impl->mutex);
-  return m_impl->seed;
+  if (!m_impl->role_known)
+    return std::nullopt;
+  return m_impl->joining;
+}
+
+std::vector<PeerEvent> YouGameRoom::TakePeerEvents()
+{
+  std::lock_guard lock(m_impl->mutex);
+  return std::exchange(m_impl->events, {});
+}
+
+void YouGameRoom::OfferKeyframe(int seat, const KeyframeInfo& info)
+{
+  std::lock_guard lock(m_impl->mutex);
+  m_impl->keyframe_offers[seat] = info;
+  // Sent on the I/O thread's next turn, not its next hello tick: a friend waits on it.
+  m_impl->offer_now = true;
 }
 
 std::string YouGameRoom::Code() const
@@ -1394,6 +1522,28 @@ void CoalescePacket(std::optional<Packet>* outgoing, const Packet& packet)
     merged.checksum_frame = pending->checksum_frame;
     merged.checksum = pending->checksum;
   }
+  // Drop-in history: the older packet's goes first when the newer one continues it (or has none);
+  // a gap is sent again once the joiner's acknowledgement stalls.
+  if (!pending->history.empty())
+  {
+    if (merged.history.empty())
+    {
+      merged.history_seat = pending->history_seat;
+      merged.history_first = pending->history_first;
+      merged.history = pending->history;
+    }
+    else if (merged.history_seat == pending->history_seat &&
+             pending->history_first + static_cast<int>(pending->history.size()) ==
+                 merged.history_first &&
+             pending->history.size() + merged.history.size() <= 512)
+    {
+      std::vector<Pads> joined = pending->history;
+      joined.insert(joined.end(), merged.history.begin(), merged.history.end());
+      merged.history = std::move(joined);
+      merged.history_first = pending->history_first;
+    }
+  }
+  merged.leaving = merged.leaving || pending->leaving;
   pending = std::move(merged);
 }
 
@@ -1411,7 +1561,7 @@ std::vector<Packet> YouGameRoom::Receive()
 
 bool YouGameRoom::Connected() const
 {
-  return GetState() == RoomState::Playing;
+  return GetState() == RoomState::Waiting;
 }
 
 void YouGameRoom::Leave()

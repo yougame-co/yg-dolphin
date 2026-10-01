@@ -86,6 +86,13 @@ const int s_save_only_from = EnvInt("YG_SAVE_ONLY_FROM", -1);
 // Diagnosis: at the first-pass boundary of this frame, write MEM1 and MEM2 to
 // <user dir>/ram-<frame>-mem1.bin / -mem2.bin.
 const int s_dump_ram_at = EnvInt("YG_DUMP_RAM_AT", -1);
+// Drop-in keyframes: at this first-pass frame, capture the machine as a joining friend's keyframe
+// (SnapshotRing::Capture), keep saving ring snapshots (copy-on-write in a session) for
+// KEYFRAME_TEST_FRAMES more, then load the keyframe into the ring (SnapshotRing::LoadImage, over a
+// slot whose copy-on-write snapshot is stale) and re-run: RAM must equal the capture, and every
+// re-run frame must hash as its first pass.
+const int s_keyframe_test = EnvInt("YG_KEYFRAME_TEST", -1);
+constexpr int KEYFRAME_TEST_FRAMES = 30;
 // Visual checks: dump every presented frame (Dolphin's frame dump; pass
 // -C GFX.Settings.DumpFramesAsImages=True for images) from this first-pass frame up to the other.
 // Re-run frames present nothing, so a rollback run's dumps pair 1:1 with a plain run's.
@@ -304,6 +311,74 @@ SnapshotRing& Ring()
   static SnapshotRing ring(static_cast<std::size_t>(std::max(s_synctest_k, s_bench_k)) +
                            static_cast<std::size_t>(SyncTestLoadEvery()) + 1);
   return ring;
+}
+
+// ---- Keyframe test (YG_KEYFRAME_TEST) ----
+
+struct KeyframeTestState
+{
+  std::optional<MachineImage> image;
+  u64 ram = 0;
+  std::map<int, u64> hashes;
+  bool loaded = false;
+  int checked = 0;
+  int mismatches = 0;
+};
+KeyframeTestState s_keyframe;
+
+u64 LiveRamChecksum(Core::System& system)
+{
+  auto& memory = system.GetMemory();
+  return RamChecksum({memory.GetRAM(), memory.GetRamSize()},
+                     {memory.GetEXRAM(), memory.GetEXRAM() ? memory.GetExRamSize() : 0});
+}
+
+void KeyframeTest(Core::System& system, int f, bool first_pass)
+{
+  const int from = s_keyframe_test, to = s_keyframe_test + KEYFRAME_TEST_FRAMES;
+  if (!first_pass)
+  {
+    if (const auto it = s_keyframe.hashes.find(f); it != s_keyframe.hashes.end())
+    {
+      ++s_keyframe.checked;
+      if (it->second != LiveRamChecksum(system))
+        ++s_keyframe.mismatches;
+    }
+    if (f == to)
+    {
+      NOTICE_LOG_FMT(ROLLBACK, "Keyframe test re-run: {} frames checked, {} mismatches ({})",
+                     s_keyframe.checked, s_keyframe.mismatches,
+                     s_keyframe.checked == KEYFRAME_TEST_FRAMES && s_keyframe.mismatches == 0 ?
+                         "PASS" :
+                         "FAIL");
+    }
+    return;
+  }
+  if (f < from || f > to)
+    return;
+  if (f == from)
+  {
+    MachineImage image;
+    if (SnapshotRing::Capture(system, &image, false))
+    {
+      s_keyframe.image = std::move(image);
+      s_keyframe.ram = LiveRamChecksum(system);
+    }
+  }
+  if (f > from)
+    s_keyframe.hashes[f] = LiveRamChecksum(system);
+  Ring().Save(system, f);
+  if (f == to && s_keyframe.image && !s_keyframe.loaded)
+  {
+    s_keyframe.loaded = true;
+    const bool ok = Ring().LoadImage(system, std::move(*s_keyframe.image), from);
+    const u64 ram = LiveRamChecksum(system);
+    NOTICE_LOG_FMT(ROLLBACK, "Keyframe test: loaded frame {} at frame {}: {}, RAM {:016x} (captured {:016x}) {}",
+                   from, f, ok ? "ok" : "failed", ram, s_keyframe.ram,
+                   ok && ram == s_keyframe.ram ? "PASS" : "FAIL");
+    if (ok)
+      s_frame = from;
+  }
 }
 
 void LogByteDiffs(const FrameRecord& want, const FrameRecord& got)
@@ -919,6 +994,10 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
   else if (s_synctest_k > 0 && frame_here >= s_synctest_from)
   {
     SyncTest(system);
+  }
+  else if (s_keyframe_test >= 0)
+  {
+    KeyframeTest(system, frame_here, first_pass_here);
   }
   else if (s_bench_k > 0)
   {
