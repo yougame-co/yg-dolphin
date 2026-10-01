@@ -15,3 +15,11 @@ void VideoCommon_DoState(PointerWrap& p);
 // frame boundary can also cover the tail of the previous frame's commands; RAM is unaffected.
 void VideoCommon_SetSkipRender(bool skip);
 bool VideoCommon_IsSkippingRender();
+
+// Orca: true while a rollback snapshot is measured, saved or loaded (set around the snapshot's
+// DoState; must be the same for all three). Host GPU state is then left alone: no EFB readback,
+// no texture-cache save or reload, no bounding-box readback, no vertex flush. None of it reaches
+// emulated RAM in a session (copies are texture-only), and skipping it saves a GPU sync per
+// snapshot; after a load, EFB-copy effects show the newest frame's copy for a frame.
+void VideoCommon_SetRollbackSnapshot(bool snapshot);
+bool VideoCommon_IsRollbackSnapshot();
