@@ -158,6 +158,11 @@ struct Stats
   // Time-sync waits, and the last averaged (our lead - their lead) / 2, in frames.
   int waits = 0;
   double frame_advantage = 0;
+  // Slow frames this machine reported (OnLocalHitch), and the most any other player reported.
+  int hitches = 0;
+  int peer_hitches = 0;
+  // Stalls that counted toward a delay raise (no hitch on either machine around them).
+  int counted_stalls = 0;
 };
 
 class Session

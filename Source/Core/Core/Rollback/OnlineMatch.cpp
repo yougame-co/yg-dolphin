@@ -37,8 +37,6 @@ struct Match
   // When the last boundary handed control back to the emulator: the next boundary times the frame
   // from there, leaving out the session's own stalls and waits.
   std::optional<std::chrono::steady_clock::time_point> last_return;
-  // This machine's hitches reported to the session this match.
-  int hitches = 0;
   Common::EventHook on_state_changed;
 };
 
@@ -93,7 +91,6 @@ std::optional<int> OnBoundary(Core::System& system,
     match.running = -1;
     match.round_trip_sequence = 0;
     match.last_return.reset();
-    match.hitches = 0;
   }
   if (match.finished)
     return std::nullopt;
@@ -145,10 +142,7 @@ std::optional<int> OnBoundary(Core::System& system,
   // read, a shader compile): the other side stalls on it, and no input delay would have helped.
   const auto now = std::chrono::steady_clock::now();
   if (match.last_return && now - *match.last_return > HITCH_TIME)
-  {
     match.session->OnLocalHitch();
-    ++match.hitches;
-  }
 
   const Orca::Net::Step step =
       StepSession(*match.session, *match.port, match.running, local_pad(match.local_seat),
@@ -181,11 +175,12 @@ void LogStats(const char* when)
   const Orca::Net::Stats& stats = match.session->GetStats();
   NOTICE_LOG_FMT(
       ROLLBACK,
-      "Online match {}: frame {}, {} rollbacks, {} re-run frames, deepest {}, {} stalls, "
-      "{} waits, {} hitches, frame advantage {:.2f}, input delay {} (+{} -{} reverted "
-      "{}), {} checksums matched, confirmed frame {}, round trip {} ms{}{}",
+      "Online match {}: frame {}, {} rollbacks, {} re-run frames, deepest {}, {} stalls ({} "
+      "counted), {} waits, {} hitches here, {} there, frame advantage {:.2f}, input delay {} "
+      "(+{} -{} reverted {}), {} checksums matched, confirmed frame {}, round trip {} ms{}{}",
       when, match.session->CurrentFrame(), stats.rollbacks, stats.resimulated_frames,
-      stats.deepest_rollback, stats.stalls, stats.waits, match.hitches, stats.frame_advantage,
+      stats.deepest_rollback, stats.stalls, stats.counted_stalls, stats.waits, stats.hitches,
+      stats.peer_hitches, stats.frame_advantage,
       stats.delay, stats.delay_raises, stats.delay_lowers, stats.delay_reverts,
       stats.checksums_matched, stats.confirmed_frame, Orca::Online::RoundTripMs(),
       match.session->Error().empty() ? "" : "; ", match.session->Error());

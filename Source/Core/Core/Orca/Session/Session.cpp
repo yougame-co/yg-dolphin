@@ -167,7 +167,7 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad)
   // A stall just ended: judged now, when the packet that ended it (and a hitch it reports) is in.
   // Waiting for a peer's first packet is the trip, not the delay.
   if (m_stalling && m_stall_after_input && m_last_hitch_frame < m_stall_frame - HITCH_FRAMES)
-    ++m_link_stalls;
+    m_stats.counted_stalls = ++m_link_stalls;
   // After a stall or a wait, the time it held is not made up.
   if (m_stalling || m_waiting)
     m_game.ResetPacing();
@@ -261,6 +261,7 @@ void Session::OnRoundTrip(int rtt_ms)
 void Session::OnLocalHitch()
 {
   ++m_hitches;
+  m_stats.hitches = m_hitches;
   m_last_hitch_frame = m_frame;
 }
 
@@ -587,6 +588,7 @@ void Session::ReceivePackets()
     if (packet.hitches > m_peer_hitches[s])
     {
       m_peer_hitches[s] = packet.hitches;
+      m_stats.peer_hitches = std::max(m_stats.peer_hitches, packet.hitches);
       m_last_hitch_frame = m_frame;
     }
     if (packet.checksum_frame)
