@@ -63,10 +63,13 @@ struct Packet
   // Frames the sender re-simulated in its last one-second window (-1: no window yet). A side's
   // rollbacks come from the other side's input delay, so each side adapts on the worst number.
   int resimulated = -1;
-  // The sender's smoothed lead over the slowest other player, in tenths of a frame (its frame minus
-  // its estimate of theirs; nullopt: no round trip measured yet). Time sync halves the difference
-  // between both sides' numbers, which cancels a round-trip estimate that is off on both.
+  // The sender's smoothed lead over the slowest other player, in tenths of a frame: its frame minus
+  // the frame that player last reported (nullopt: nothing received yet). Both leads include the
+  // same transit time, so time sync halves their difference and the transit cancels out.
   std::optional<int> advantage;
+  // The sender's smoothed round trip to the relay, in milliseconds (nullopt: none measured). The
+  // one-way time between two players is half of each one's round trip to the relay.
+  std::optional<int> rtt;
   std::optional<int> checksum_frame;
   u64 checksum = 0;
 };
@@ -96,8 +99,8 @@ struct Config
   // time-sync windows is this many frames run, so sessions fed the same packets decide alike. Also
   // converts round trips in milliseconds into frames.
   int frame_rate = 60;
-  // Ask for a one-frame wait (StepKind::Wait) while this player runs ahead of the others. Needs
-  // round-trip samples (Session::OnRoundTrip) on both sides; without them the session never waits.
+  // Ask for a one-frame wait (StepKind::Wait) while this player runs ahead of the others (needs
+  // packets from a peer whose session reports its lead).
   bool time_sync = true;
   // Deepest rollback allowed; beyond it the session stalls until inputs arrive.
   int max_rollback = 7;
@@ -158,9 +161,10 @@ public:
   // first boundary, before frame 0). `local_pad` is the local controller now; it applies to frame
   // (next frame + Delay()). Re-run boundaries also call this; the pad is ignored there.
   Step OnBoundary(int completed_frame, const Pad& local_pad);
-  // A measured round trip to the other player(s), from the transport's pings. Call it on the thread
-  // that calls OnBoundary. In the first three seconds it may raise the delay to cover what the
-  // rollback window can't; time sync needs it to place the other players' frames.
+  // A measured round trip to the relay, from the transport's pings. Call it on the thread that
+  // calls OnBoundary, once per new measurement (YouGameRoom::RoundTripMs gives a sequence number
+  // that changes with each pong; feed only when it changed, or one ping counts many times). In
+  // the first three seconds it sets the delay to cover what the rollback window can't.
   void OnRoundTrip(int rtt_ms);
 
   const std::string& Error() const { return m_error; }
@@ -181,6 +185,7 @@ private:
   void SampleLocal(const Pad& local_pad);
   void AdaptDelay();
   int LatencyDelay() const;
+  void ApplyStartDelay();
   double FramesFromMs(double ms) const;
   void TrackAdvantage();
 
@@ -229,9 +234,14 @@ private:
   int m_tried_delay = 0;
   int m_probe_windows = 0;
 
-  // Smoothed round trip and its mean deviation, in milliseconds (no samples yet: nullopt).
+  // Smoothed round trip to the relay and its mean deviation, in milliseconds (no samples yet:
+  // nullopt), and each peer's as it reported.
   std::optional<double> m_rtt_ms;
   double m_rtt_dev_ms = 0;
+  std::array<std::optional<int>, MAX_SEATS> m_peer_rtt;
+  // The delay the start estimate last set (0: none); it may follow the estimate down only while
+  // nothing else changed the delay since.
+  int m_start_delay = 0;
 
   // Time sync, per peer, in frames: our latest lead over it, that lead smoothed, and its own
   // smoothed lead over its slowest peer as it reported. The balance (ours - theirs) / 2 is averaged

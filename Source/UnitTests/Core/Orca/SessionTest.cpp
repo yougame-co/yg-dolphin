@@ -1,7 +1,10 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
+#include <climits>
 #include <deque>
+#include <functional>
 #include <utility>
 #include <map>
 #include <optional>
@@ -52,6 +55,7 @@ public:
     if (it == m_snapshots.end())
       return false;
     m_state = it->second;
+    m_loads.emplace_back(frame, m_state);
     return true;
   }
   void SetPads(int frame, const Pads& pads) override
@@ -89,6 +93,7 @@ public:
   std::set<int> m_saved_since_load;
   int m_saves = 0;
   int m_double_saves = 0;
+  std::vector<std::pair<int, u64>> m_loads;
   std::map<int, u64> m_history;
   std::map<int, Pads> m_ran_pads;
   u64 m_state = 1;
@@ -176,20 +181,20 @@ struct Player
   // An independent model of which sample each frame must carry: the sample at frame F goes to
   // F + delay; frames a raise skips repeat the previous input; a sample whose frame already has
   // one (after a lower, or a repeated stalled boundary) is dropped.
-  void Expect(const Pad& pad, int input_delay)
+  void Expect(const Pad& pad, int input_delay, int frame, int delay)
   {
     if (expected.empty())
     {
       for (int f = 0; f < input_delay; ++f)
         expected[f] = Pad{};
     }
-    const int target = session.CurrentFrame() + session.Delay();
+    const int target = frame + delay;
     const int newest = expected.empty() ? -1 : expected.rbegin()->first;
     if (target <= newest)
     {
-      if (session.Delay() < last_delay)
+      if (delay < last_delay)
         ++dropped_after_lower;
-      last_delay = session.Delay();
+      last_delay = delay;
       return;
     }
     if (target > newest + 1 && newest >= 0)
@@ -198,17 +203,27 @@ struct Player
     for (int f = newest + 1; f < target; ++f)
       expected[f] = held;
     expected[target] = pad;
-    last_delay = session.Delay();
+    last_delay = delay;
   }
+
+  // The tick a tagged pad was sampled at (-1: neutral, never sampled).
+  static int TickOf(const Pad& pad) { return pad[4] ? pad[2] | pad[3] << 8 : -1; }
 
   // One tick of wall time: re-run any frames a rollback needs, then run at most one new frame.
   void Tick(int tick)
   {
-    if (model_input_delay >= 0 && !session.Resimulating())
-      Expect(LocalPad(tick), model_input_delay);
+    // The model applies to the tick's first boundary, which samples unless it is a Wait.
+    const int frame = session.CurrentFrame();
+    const int delay = session.Delay();
     for (int guard = 0; guard < 64; ++guard)
     {
       const Step step = session.OnBoundary(completed, LocalPad(tick));
+      if (guard == 0)
+      {
+        first_steps.push_back({tick, frame, step.kind});
+        if (model_input_delay >= 0 && step.kind != StepKind::Wait)
+          Expect(LocalPad(tick), model_input_delay, frame, delay);
+      }
       if (step.kind == StepKind::Ended || step.kind == StepKind::Stall ||
           step.kind == StepKind::Wait)
         return;
@@ -232,6 +247,14 @@ struct Player
   int last_delay = -1;
   int filled = 0;
   int dropped_after_lower = 0;
+  struct First
+  {
+    int tick;
+    int frame;
+    StepKind kind;
+  };
+  // The first boundary of every tick: the frame it was at and what it returned.
+  std::vector<First> first_steps;
 };
 
 struct Match
@@ -251,18 +274,17 @@ struct Match
     for (int t = played; t < end; ++t)
     {
       net.now = t;
-      // Both ends measure the round trip every half second, as the relay's pings would.
+      // Both ends measure their round trip to the relay every half second. Through a relay
+      // halfway, that is the link's one-way latency, unless a test gives each side its own.
       if (rtt_samples && t % 30 == 0)
       {
-        for (Player* p : {a.get(), b.get()})
+        for (int i = 0; i < 2; ++i)
         {
-          int rtt = 2 * net.latency;
+          int rtt = net.latency;
           if (net.jitter > 0)
-          {
-            rtt += std::uniform_int_distribution<int>(0, net.jitter)(rtt_rng) +
-                   std::uniform_int_distribution<int>(0, net.jitter)(rtt_rng);
-          }
-          p->session.OnRoundTrip(rtt * 1000 / 60);
+            rtt += std::uniform_int_distribution<int>(0, net.jitter)(rtt_rng);
+          (i == 0 ? a : b)->session.OnRoundTrip(relay_rtt_ms[i] >= 0 ? relay_rtt_ms[i] :
+                                                                        rtt * 1000 / 60);
         }
       }
       a->Tick(t);
@@ -314,10 +336,17 @@ struct Match
   FakeNet net;
   std::unique_ptr<Player> a, b;
   bool rtt_samples = false;
+  std::array<int, 2> relay_rtt_ms{-1, -1};
   std::mt19937 rtt_rng{99};
   int a_extra_every = 0;
   int played = 0;
 };
+
+// The newest frame this player ran with confirmed inputs (confirmed_frame may run ahead of it).
+int Settled(const Player& p)
+{
+  return std::min(p.session.GetStats().confirmed_frame, p.session.CurrentFrame() - 1);
+}
 
 void ExpectClean(const Match& match)
 {
@@ -555,14 +584,14 @@ TEST(OrcaSessionDelay, StaysPutWhenQuietOrDisabled)
 TEST(OrcaSessionDelay, StartsFromMeasuredLatency)
 {
   // Rollback hides latency up to its window (7, less 2 for jitter): only what is beyond it goes
-  // into input delay. 100 ms round trip: 3 frames one way, all hidden.
+  // into input delay. 50 ms to the relay on both sides: 3 frames one way, all hidden.
   Match near(Config{}, 3, 0);
   near.rtt_samples = true;
   near.Play(1);
   EXPECT_EQ(near.a->session.Delay(), 2);
   EXPECT_EQ(near.b->session.Delay(), 2);
 
-  // 300 ms: 9 frames one way, 4 of them delay and 5 rolled back. One stall at the very start (the
+  // 150 ms each: 9 frames one way, 4 of them delay and 5 rolled back. One stall at the start (the
   // first packet is 9 frames away, the window 7), none after: the window holds the rest.
   Match far(Config{}, 9, 0);
   far.rtt_samples = true;
@@ -613,7 +642,7 @@ TEST(OrcaSessionDelay, IncreaseFillsSkippedFramesAndPeerConfirmsThem)
 
 TEST(OrcaSessionDelay, FallsAfterQuietTimeAndDropsOneSamplePerStep)
 {
-  // A reports a 400 ms round trip before the match starts, so it opens at max_delay; the link is
+  // A measures 400 ms to the relay before the match starts, so it opens at max_delay; the link is
   // really instant, so quiet windows bring it back down one frame at a time. B stays at 2 all
   // along: the two delays differ for the whole match and the frames still agree.
   Match match(Config{}, 0, 0);
@@ -644,12 +673,12 @@ TEST(OrcaSessionDelay, FallsAfterQuietTimeAndDropsOneSamplePerStep)
 
 TEST(OrcaSessionDelay, LowerThatBringsRollbacksBackReverts)
 {
-  // Four frames of latency. Both measure 300 ms before the match (a slow first ping), so both open
-  // at 4, where inputs arrive just in time. A step down to 3 makes the other side roll back, so it
-  // reverts, and the next try waits longer.
+  // Four frames of latency. Both measure 150 ms to the relay before the match (a slow first ping),
+  // so both open at 4, where inputs arrive just in time. A step down to 3 makes the other side roll
+  // back, so it reverts, and the next try waits longer.
   Match match(Config{}, 4, 0);
-  match.a->session.OnRoundTrip(300);
-  match.b->session.OnRoundTrip(300);
+  match.a->session.OnRoundTrip(150);
+  match.b->session.OnRoundTrip(150);
   ASSERT_EQ(match.a->session.Delay(), 4);
   match.Play(2400);
   ExpectClean(match);
@@ -669,11 +698,16 @@ TEST(OrcaSessionTimeSync, FastSideWaits)
 {
   Config config;
   config.max_delay = config.input_delay;  // keep the delay out of it
-  const auto play = [&config](bool time_sync, int extra_every) {
+  const auto play = [&config](bool time_sync, int extra_every, bool tagged = false) {
     config.time_sync = time_sync;
     auto match = std::make_unique<Match>(config, 3, 1);
     match->rtt_samples = true;
     match->a_extra_every = extra_every;
+    for (Player* p : {match->a.get(), match->b.get()})
+    {
+      p->tag_ticks = tagged;
+      p->model_input_delay = tagged ? config.input_delay : -1;
+    }
     match->Play(2400);
     ExpectClean(*match);
     EXPECT_GT(match->CompareConfirmed(), 2000);
@@ -704,6 +738,68 @@ TEST(OrcaSessionTimeSync, FastSideWaits)
   const auto even = play(true, 0);
   EXPECT_EQ(even->a->session.GetStats().waits, 0);
   EXPECT_EQ(even->b->session.GetStats().waits, 0);
+
+  // With every sample tagged: each wait resets pacing (the frame it held is not made up), and the
+  // wait boundary samples nothing, so the frame it waited on carries the pad of the boundary after
+  // the wait (fresh), not one sampled before it and held. Read off what B actually ran, at the
+  // fixed delay: the sample of a boundary at frame F runs at F + delay.
+  const auto tagged = play(true, 40, true);
+  const Player& ta = *tagged->a;
+  const Player& tb = *tagged->b;
+  const int delay = config.input_delay;
+  EXPECT_GT(ta.session.GetStats().waits, 30);
+  EXPECT_GE(ta.game.m_pacing_resets, ta.session.GetStats().waits);
+  EXPECT_EQ(ta.session.GetStats().stalls, 0);
+  EXPECT_GT(Match::CheckSamples(ta, tb), 2000);
+  EXPECT_GT(Match::CheckSamples(tb, ta), 2000);
+  int waits_checked = 0;
+  for (size_t i = 0; i + 1 < ta.first_steps.size(); ++i)
+  {
+    const Player::First& wait = ta.first_steps[i];
+    const Player::First& after = ta.first_steps[i + 1];
+    if (wait.kind != StepKind::Wait || wait.frame + delay > Settled(tb))
+      continue;
+    ASSERT_EQ(after.frame, wait.frame);
+    EXPECT_EQ(tb.game.m_ran_pads.at(wait.frame + delay)[0], ta.LocalPad(after.tick))
+        << "wait at tick " << wait.tick;
+    ++waits_checked;
+  }
+  EXPECT_GT(waits_checked, 30);
+  // B never waits or stalls: its samples advance exactly one tick per frame.
+  for (int f = delay + 1; f <= Settled(ta); ++f)
+  {
+    EXPECT_EQ(Player::TickOf(ta.game.m_ran_pads.at(f)[1]),
+              Player::TickOf(ta.game.m_ran_pads.at(f - 1)[1]) + 1)
+        << "frame " << f;
+  }
+}
+
+TEST(OrcaSessionTimeSync, UnequalRelayRoundTrips)
+{
+  // A is 17 ms from the relay, B 217 ms: 7 frames apart one way. A round-trip-based estimate of
+  // the other's frame would be off by (217 - 17) / 4 ms on each side in opposite directions and
+  // make A wait until it sat about two frames behind. Frame numbers alone don't care.
+  Config config;
+  Match match(config, 7, 0);
+  match.rtt_samples = true;
+  match.relay_rtt_ms = {17, 217};
+  match.Play(1);
+  // Alone, each side assumes the other is as far from the relay as itself.
+  EXPECT_EQ(match.a->session.Delay(), 2);
+  EXPECT_EQ(match.b->session.Delay(), 6);
+  match.Play(29);
+  // Once the other's round trip arrived: (17 + 217) / 2 = 117 ms = 8 frames one way, 5 of them
+  // rolled back. Both agree, and B came down from its first guess.
+  EXPECT_EQ(match.a->session.Delay(), 3);
+  EXPECT_EQ(match.b->session.Delay(), 3);
+  match.Play(1770);
+  ExpectClean(match);
+  for (const Player* p : {match.a.get(), match.b.get()})
+  {
+    EXPECT_EQ(p->session.GetStats().waits, 0);
+    EXPECT_LT(std::abs(p->session.GetStats().frame_advantage), 1.0);
+  }
+  EXPECT_GT(match.CompareConfirmed(), 1600);
 }
 
 TEST(OrcaSession, NeverSavesAFrameTwice)
@@ -732,20 +828,187 @@ TEST(OrcaSession, NeverSavesAFrameTwice)
   EXPECT_GT(waits.a->session.GetStats().waits, 0);
 }
 
-TEST(OrcaSessionTimeSync, WrongRoundTripOnBothSidesCancels)
+TEST(OrcaSessionDelay, FixedDelaySamplesLandDelayFramesLater)
 {
-  // Six frames apart, but both measure a 17 ms round trip (a ping answered by a nearby relay, say):
-  // each believes it is about six frames ahead. Half the difference of the two leads is still zero,
-  // so neither waits; a one-sided estimate would make both give a frame back every half second.
+  // Checked against the rule itself, not a model of the session: at a fixed delay d with no
+  // stall or wait, frames below d run neutral and the sample of tick t runs at frame t + d, on
+  // both machines. Also with no delay at all.
+  for (const int delay : {2, 0})
+  {
+    Config config;
+    config.input_delay = delay;
+    config.max_delay = delay;
+    Match match(config, 1, 0);
+    for (Player* p : {match.a.get(), match.b.get()})
+      p->tag_ticks = true;
+    match.Play(300);
+    ExpectClean(match);
+    for (const Player* from : {match.a.get(), match.b.get()})
+    {
+      const Player* to = from == match.a.get() ? match.b.get() : match.a.get();
+      EXPECT_EQ(from->session.GetStats().stalls, 0);
+      EXPECT_EQ(from->session.GetStats().waits, 0);
+      const int confirmed = Settled(*to);
+      ASSERT_GT(confirmed, 250);
+      for (int f = 0; f <= confirmed; ++f)
+      {
+        const Pad& ran = to->game.m_ran_pads.at(f)[from->seat];
+        EXPECT_EQ(ran, f < delay ? Pad{} : from->LocalPad(f - delay))
+            << "delay " << delay << " seat " << from->seat << " frame " << f;
+      }
+    }
+    EXPECT_GT(match.CompareConfirmed(), 250);
+  }
+}
+
+TEST(OrcaSessionDelay, RaiseDuringAStall)
+{
+  // A narrow window and a slow link make A stall at the start, before B's first packet. Raising
+  // A's delay while it stalls (a first round trip arriving) applies at its next sample: the
+  // frames in between repeat the sample taken when the stall began.
   Config config;
-  config.max_delay = config.input_delay;
+  config.max_rollback = 2;  // so LatencyDelay takes the whole latency
+  config.time_sync = false;
   Match match(config, 6, 0);
-  match.a->session.OnRoundTrip(17);
-  match.b->session.OnRoundTrip(17);
-  match.Play(1200);
+  for (Player* p : {match.a.get(), match.b.get()})
+    p->tag_ticks = true;
+  Player& a = *match.a;
+  while (a.first_steps.empty() || a.first_steps.back().kind != StepKind::Stall)
+  {
+    match.Play(1);
+    ASSERT_LT(match.played, 10);
+  }
+  const Player::First stall = a.first_steps.back();
+  a.session.OnRoundTrip(1000);
+  ASSERT_EQ(a.session.Delay(), 6);
+  match.Play(1);
+  const Player::First next = a.first_steps.back();
+  ASSERT_EQ(next.kind, StepKind::Stall);
+  ASSERT_EQ(next.frame, stall.frame);
+  match.Play(300);
   ExpectClean(match);
-  EXPECT_EQ(match.a->session.GetStats().waits, 0);
-  EXPECT_EQ(match.b->session.GetStats().waits, 0);
-  EXPECT_LT(std::abs(match.a->session.GetStats().frame_advantage), 1.0);
-  EXPECT_GT(match.CompareConfirmed(), 1000);
+  const auto ran = [&](int f) { return match.b->game.m_ran_pads.at(f)[0]; };
+  // Sampled at delay 2 when the stall began, then at delay 6 on the next boundary.
+  EXPECT_EQ(ran(stall.frame + 2), a.LocalPad(stall.tick));
+  for (int f = stall.frame + 3; f < stall.frame + 6; ++f)
+    EXPECT_EQ(ran(f), a.LocalPad(stall.tick)) << "frame " << f;
+  EXPECT_EQ(ran(stall.frame + 6), a.LocalPad(next.tick));
+  EXPECT_GT(match.CompareConfirmed(), 200);
+}
+
+TEST(OrcaSession, HostilePeerTelemetryIsBounded)
+{
+  // A peer that sends good inputs, ahead of time, with the worst numbers it may: a re-simulation
+  // count past any window, a lead claiming it is far behind, frames at both ends of what the
+  // session accepts, and an absurd round trip.
+  struct Hostile final : Transport
+  {
+    void Send(const Packet&) override {}
+    std::vector<Packet> Receive() override
+    {
+      Packet packet;
+      packet.seat = 1;
+      packet.first_frame = next;
+      const int up_to = session->CurrentFrame() + 4;
+      for (; next <= up_to; ++next)
+        packet.pads.push_back(Pad{});
+      packet.ack = {session->CurrentFrame(), -1, -1, -1};
+      packet.current_frame = flip ? 0 : session->CurrentFrame() + MAX_FRAMES_AHEAD;
+      flip = !flip;
+      packet.resimulated = INT_MAX;
+      packet.advantage = INT_MIN;
+      packet.rtt = INT_MAX;
+      return {packet};
+    }
+    bool Connected() const override { return true; }
+    Session* session = nullptr;
+    int next = 0;
+    bool flip = false;
+  };
+  FakeGame game;
+  Hostile net;
+  Config config;
+  Session session(config, game, net);
+  net.session = &session;
+  session.OnRoundTrip(30);
+  int completed = -1;
+  int frames = 0;
+  for (int i = 0; i < 1200; ++i)
+  {
+    const Step step = session.OnBoundary(completed, Pad{});
+    ASSERT_NE(step.kind, StepKind::Ended) << session.Error();
+    if (step.kind == StepKind::Run || step.kind == StepKind::Rollback)
+    {
+      completed = game.Run();
+      ++frames;
+    }
+  }
+  const Stats& stats = session.GetStats();
+  EXPECT_TRUE(session.Error().empty()) << session.Error();
+  EXPECT_EQ(stats.stalls, 0);
+  EXPECT_LE(stats.delay, config.max_delay);
+  EXPECT_LE(session.Delay(), config.max_delay);
+  EXPECT_GT(stats.waits, 0);
+  EXPECT_LE(stats.waits, frames / 30 + 1);
+}
+
+TEST(OrcaSession, DepthOneRollbacksLoadTheCorrectedState)
+{
+  // Every remote input arrives one frame late and differs from the guess, so every frame runs
+  // twice: a depth-1 rollback loads the state at the start of the frame, saved on the boundary
+  // after the previous frame's own re-run. A snapshot skipped there would load the uncorrected
+  // state. Checked against a game run straight with the right inputs.
+  const auto remote = [](int f) { return Pad{static_cast<u8>(f % 5), static_cast<u8>(f % 3)}; };
+  struct Late final : Transport
+  {
+    explicit Late(std::function<Pad(int)> pad) : pad(std::move(pad)) {}
+    void Send(const Packet&) override {}
+    std::vector<Packet> Receive() override
+    {
+      Packet packet;
+      packet.seat = 1;
+      packet.first_frame = next;
+      for (; next < session->CurrentFrame(); ++next)
+        packet.pads.push_back(pad(next));
+      packet.current_frame = session->CurrentFrame();
+      return {packet};
+    }
+    bool Connected() const override { return true; }
+    std::function<Pad(int)> pad;
+    Session* session = nullptr;
+    int next = 0;
+  };
+  FakeGame game;
+  Late net(remote);
+  Config config;
+  config.time_sync = false;
+  Session session(config, game, net);
+  net.session = &session;
+  int completed = -1;
+  for (int i = 0; i < 1000; ++i)
+  {
+    const Step step = session.OnBoundary(completed, Pad{});
+    ASSERT_NE(step.kind, StepKind::Ended) << session.Error();
+    if (step.kind == StepKind::Run || step.kind == StepKind::Rollback)
+      completed = game.Run();
+  }
+  const Stats& stats = session.GetStats();
+  EXPECT_GT(stats.rollbacks, 300);
+  EXPECT_EQ(stats.deepest_rollback, 1);
+
+  FakeGame straight;
+  for (int f = 0; f <= stats.confirmed_frame; ++f)
+  {
+    straight.SetPads(f, Pads{Pad{}, remote(f)});
+    straight.Run();
+  }
+  for (const auto& [frame, state] : game.m_loads)
+  {
+    if (frame <= stats.confirmed_frame)
+      EXPECT_EQ(state, straight.m_history.at(frame)) << "load of frame " << frame;
+  }
+  int compared = 0;
+  for (int f = 0; f <= stats.confirmed_frame; ++f, ++compared)
+    EXPECT_EQ(game.m_history.at(f), straight.m_history.at(f)) << "frame " << f;
+  EXPECT_GT(compared, 300);
 }

@@ -7,6 +7,7 @@
 #include <atomic>
 #include <deque>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <mutex>
 #include <optional>
@@ -118,6 +119,19 @@ std::optional<int> Int(const picojson::object& o, const std::string& key, int lo
   return static_cast<int>(v);
 }
 
+// A telemetry number: clamped into [lo, hi] rather than refused, since a bad one should not end
+// the match; nullopt when absent or not a number.
+std::optional<int> ClampedInt(const picojson::object& o, const std::string& key, int lo, int hi)
+{
+  const auto it = o.find(key);
+  if (it == o.end() || !it->second.is<double>())
+    return std::nullopt;
+  const double v = it->second.get<double>();
+  if (std::isnan(v))
+    return std::nullopt;
+  return static_cast<int>(std::clamp(v, static_cast<double>(lo), static_cast<double>(hi)));
+}
+
 std::string Str(const picojson::object& o, const std::string& key)
 {
   const auto it = o.find(key);
@@ -125,10 +139,12 @@ std::string Str(const picojson::object& o, const std::string& key)
 }
 
 constexpr int MAX_FRAME = 1 << 30;
-// Re-simulated frames in one second, and a lead in tenths of a frame: far beyond anything honest
-// (the session clamps both further), small enough that no arithmetic on them overflows.
+// Telemetry bounds: re-simulated frames in one second, a lead in tenths of a frame, a round trip
+// in milliseconds. Far beyond anything honest (the session clamps further), small enough that no
+// arithmetic on them overflows.
 constexpr int MAX_RESIMULATED = 1 << 20;
 constexpr int MAX_ADVANTAGE = 1 << 20;
+constexpr int MAX_RTT = 1 << 20;
 
 // picojson has no nesting limit (deep arrays overflow the I/O thread's stack) and aborts on a number
 // that overflows a double. Nothing YouGame sends nests deeply, uses an exponent or has more than 17
@@ -203,6 +219,8 @@ picojson::object PacketToJson(const Packet& packet)
     d["r"] = picojson::value(static_cast<double>(packet.resimulated));
   if (packet.advantage)
     d["v"] = picojson::value(static_cast<double>(*packet.advantage));
+  if (packet.rtt)
+    d["l"] = picojson::value(static_cast<double>(*packet.rtt));
   if (packet.checksum_frame)
   {
     d["x"] = picojson::value(static_cast<double>(*packet.checksum_frame));
@@ -259,20 +277,11 @@ bool PacketFromJson(const picojson::object& d, Packet* packet)
     }
     out.ack[s] = static_cast<int>(v.get<double>());
   }
-  if (d.count("r"))
-  {
-    const auto resimulated = Int(d, "r", 0, MAX_RESIMULATED);
-    if (!resimulated)
-      return false;
+  // Telemetry for adaptive delay and time sync: optional (older peers send none) and clamped.
+  if (const auto resimulated = ClampedInt(d, "r", 0, MAX_RESIMULATED))
     out.resimulated = *resimulated;
-  }
-  if (d.count("v"))
-  {
-    const auto advantage = Int(d, "v", -MAX_ADVANTAGE, MAX_ADVANTAGE);
-    if (!advantage)
-      return false;
-    out.advantage = *advantage;
-  }
+  out.advantage = ClampedInt(d, "v", -MAX_ADVANTAGE, MAX_ADVANTAGE);
+  out.rtt = ClampedInt(d, "l", 0, MAX_RTT);
   if (d.count("x"))
   {
     const auto frame = Int(d, "x", 0, MAX_FRAME);
@@ -346,6 +355,8 @@ struct YouGameRoom::Impl
   int seat = -1;
   u32 seed = 0;
   int rtt = -1;
+  // Counts pongs, so a caller can tell a new measurement from the same one read again.
+  u32 rtt_sequence = 0;
   std::vector<Packet> inbox;
   std::optional<Packet> outgoing;
 
@@ -905,6 +916,7 @@ struct YouGameRoom::Impl
         {
           std::lock_guard lock(mutex);
           rtt = static_cast<int>(now - sent);
+          ++rtt_sequence;
         }
       }
     }
@@ -1000,9 +1012,11 @@ std::string YouGameRoom::Status() const
   return m_impl->status;
 }
 
-int YouGameRoom::RoundTripMs() const
+int YouGameRoom::RoundTripMs(u32* sequence) const
 {
   std::lock_guard lock(m_impl->mutex);
+  if (sequence)
+    *sequence = m_impl->rtt_sequence;
   return m_impl->rtt;
 }
 

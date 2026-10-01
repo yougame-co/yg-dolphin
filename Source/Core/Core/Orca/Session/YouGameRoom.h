@@ -53,7 +53,9 @@ public:
   // A line for the UI or log: what the room is doing, or why it ended.
   std::string Status() const;
   // The latest round trip to the room server and back, in milliseconds (-1 before the first).
-  int RoundTripMs() const;
+  // `sequence`, if given, receives a count that changes with each new measurement: feed
+  // Session::OnRoundTrip only when it changed since the last call.
+  int RoundTripMs(u32* sequence = nullptr) const;
 
   void Send(const Packet& packet) override;
   std::vector<Packet> Receive() override;

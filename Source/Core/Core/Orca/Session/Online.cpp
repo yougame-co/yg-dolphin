@@ -141,10 +141,10 @@ u32 Seed()
   return room ? room->Seed() : 0;
 }
 
-int RoundTripMs()
+int RoundTripMs(u32* sequence)
 {
   const auto room = Room();
-  return room ? room->RoundTripMs() : -1;
+  return room ? room->RoundTripMs(sequence) : -1;
 }
 
 std::string StatusLine()

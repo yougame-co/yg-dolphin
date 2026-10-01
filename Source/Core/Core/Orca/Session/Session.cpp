@@ -20,6 +20,8 @@ constexpr int MAX_QUIET_WINDOWS = 1024;
 // Round trips may raise the delay during the first seconds of play only: later, a raise from a
 // single slow ping would cost responsiveness the rollbacks never asked for.
 constexpr int START_SECONDS = 3;
+// No working relay is ten seconds away.
+constexpr int MAX_RTT_MS = 10000;
 // Time sync averages this many frames, waits at most once per that many, and only when it is more
 // than this many frames ahead on average: anything less is jitter.
 constexpr int TIME_SYNC_FRAMES = 30;
@@ -86,6 +88,16 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad)
     if (NeedsSnapshot(m_frame) && !SaveOnce(m_frame))
       return Fail(fmt::format("Saving frame {} failed", m_frame));
 
+    // Running ahead of the others: give one frame of time back, deliberately and before it costs
+    // a stall here and deep rollbacks there. Decided before sampling, so the frame's input is the
+    // pad sampled after the wait, not one held for a frame.
+    if (m_wait_pending)
+    {
+      m_wait_pending = false;
+      m_waiting = true;
+      ++m_stats.waits;
+      return {StepKind::Wait, m_frame};
+    }
     SampleLocal(local_pad);
   }
 
@@ -125,18 +137,9 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad)
     if (!m_stalling)
       ++m_stats.stalls;
     m_stalling = true;
-    m_wait_pending = false;  // the stall already gives the time back
     return {StepKind::Stall, m_frame};
   }
-  // Running ahead of the others: give one frame of time back, deliberately and before it costs a
-  // stall here and deep rollbacks there.
-  if (m_wait_pending)
-  {
-    m_wait_pending = false;
-    m_waiting = true;
-    ++m_stats.waits;
-    return {StepKind::Wait, m_frame};
-  }
+  // After a stall or a wait, the time it held is not made up.
   if (m_stalling || m_waiting)
     m_game.ResetPacing();
   m_stalling = false;
@@ -206,7 +209,7 @@ void Session::SampleLocal(const Pad& local_pad)
 void Session::OnRoundTrip(int rtt_ms)
 {
   // Nothing a working relay measures; a broken clock or a ping answered after a freeze.
-  if (rtt_ms < 0 || rtt_ms > 10000)
+  if (rtt_ms < 0 || rtt_ms > MAX_RTT_MS)
     return;
   // Smoothed like TCP's estimator: an eighth of each error moves the mean, a quarter the deviation.
   if (!m_rtt_ms)
@@ -219,11 +222,22 @@ void Session::OnRoundTrip(int rtt_ms)
     *m_rtt_ms += error / 8;
     m_rtt_dev_ms += (std::abs(error) - m_rtt_dev_ms) / 4;
   }
-  // The start delay covers what the rollback window can't (LatencyDelay). It only rises here;
-  // quiet windows bring it down if the link turns out better.
-  if (m_frame < START_SECONDS * m_config.frame_rate)
+  ApplyStartDelay();
+}
+
+void Session::ApplyStartDelay()
+{
+  // In the first seconds the delay covers what the rollback window can't (LatencyDelay), and
+  // follows the estimate as round trips (ours, then the peer's) come in. Down too, but only while
+  // nothing else moved it: a rise the rollbacks asked for stays.
+  if (!m_rtt_ms || m_frame >= START_SECONDS * m_config.frame_rate)
+    return;
+  const int wanted = LatencyDelay();
+  const bool ours = m_start_delay == 0 ? m_delay == m_config.input_delay : m_delay == m_start_delay;
+  if (wanted > m_delay || (wanted < m_delay && ours))
   {
-    m_delay = std::max(m_delay, LatencyDelay());
+    m_delay = wanted;
+    m_start_delay = wanted;
     m_stats.delay = m_delay;
   }
 }
@@ -236,10 +250,17 @@ double Session::FramesFromMs(double ms) const
 int Session::LatencyDelay() const
 {
   // Rollback hides latency up to its window; input delay only covers what the window alone would
-  // stall on. One way is half the round trip, the deviation covers packets later than average,
-  // and a rollback this deep (max_rollback - 2) still leaves room for jitter. The epsilon keeps an
-  // exact multiple of the frame time (150 ms is 9.000 frames) from rounding up.
-  const double one_way = *m_rtt_ms / 2 + m_rtt_dev_ms;
+  // stall on. Through a relay, one way is half our round trip to it plus half the peer's (the
+  // slowest peer's that reported one; ours twice until then). The deviation covers packets later
+  // than average, and a rollback this deep (max_rollback - 2) still leaves room for jitter. The
+  // epsilon keeps an exact multiple of the frame time (150 ms is 9.000 frames) from rounding up.
+  std::optional<int> peer;
+  for (int s = 0; s < m_config.seats; ++s)
+  {
+    if (s != m_config.local_seat && m_peer_rtt[s])
+      peer = std::max(peer.value_or(*m_peer_rtt[s]), *m_peer_rtt[s]);
+  }
+  const double one_way = (*m_rtt_ms + peer.value_or(*m_rtt_ms)) / 2 + m_rtt_dev_ms;
   const int frames = static_cast<int>(std::ceil(FramesFromMs(one_way) - 1e-6));
   const int wanted = frames - (m_config.max_rollback - 2);
   return std::clamp(wanted, m_config.input_delay, m_config.max_delay);
@@ -329,10 +350,10 @@ void Session::TrackAdvantage()
 {
   // Like GGPO's time sync: a player whose clock runs ahead keeps running frames the others' inputs
   // haven't reached, so it rolls back deep and stalls while they never wait for it. Each side
-  // estimates its lead from the other's frame plus half a round trip and reports it; half the
-  // difference of the two is how far ahead this side really is, whatever error the round trip
-  // estimate puts into both. Without round trips on both sides, nothing is known.
-  if (!m_config.time_sync || !m_rtt_ms)
+  // measures its lead as its frame minus the other's last reported one, and reports it. Both
+  // leads include the transit between them, which is the same both ways through a relay, so half
+  // their difference is how far ahead this side really is, whatever either side's round trip.
+  if (!m_config.time_sync)
     return;
   std::optional<double> balance;
   for (int s = 0; s < m_config.seats; ++s)
@@ -452,15 +473,18 @@ void Session::ReceivePackets()
     if (ack >= -1 && ack <= m_frame + window)
       m_acked[s] = std::max(m_acked[s], ack);
     m_remote_frame[s] = packet.current_frame;
-    // How far ahead of this peer we are: its frame when it sent, plus the frames it ran since
-    // (half a round trip's worth). Ordered delivery makes the newest packet the best estimate.
-    if (m_rtt_ms)
-      m_advantage[s] = m_frame - (packet.current_frame + FramesFromMs(*m_rtt_ms) / 2);
-    // Its own lead, bounded like its frames.
+    // Our lead over this peer, transit included (it cancels against the peer's own number).
+    m_advantage[s] = m_frame - packet.current_frame;
+    // Its own lead and round trip: telemetry, bounded rather than trusted.
     if (packet.advantage)
     {
       constexpr int bound = MAX_FRAMES_AHEAD * 10;
       m_remote_advantage[s] = std::clamp(*packet.advantage, -bound, bound) / 10.0;
+    }
+    if (packet.rtt && m_peer_rtt[s] != std::clamp(*packet.rtt, 0, MAX_RTT_MS))
+    {
+      m_peer_rtt[s] = std::clamp(*packet.rtt, 0, MAX_RTT_MS);
+      ApplyStartDelay();
     }
     // No window re-simulates more than every frame of the deepest rollback.
     if (packet.resimulated >= 0)
@@ -544,7 +568,12 @@ void Session::SendPacket()
       lead = std::max(lead.value_or(*m_smoothed_advantage[s]), *m_smoothed_advantage[s]);
   }
   if (lead)
-    packet.advantage = static_cast<int>(std::lround(*lead * 10));
+  {
+    constexpr double bound = MAX_FRAMES_AHEAD;
+    packet.advantage = static_cast<int>(std::lround(std::clamp(*lead, -bound, bound) * 10));
+  }
+  if (m_rtt_ms)
+    packet.rtt = static_cast<int>(std::lround(*m_rtt_ms));
   if (m_pending_checksum)
   {
     packet.checksum_frame = m_pending_checksum;

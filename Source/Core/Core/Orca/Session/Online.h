@@ -25,8 +25,9 @@ Net::Transport* WaitForMatch(Net::Config* config, const std::function<bool()>& s
 
 // The match's seed (valid once WaitForMatch returned a transport).
 u32 Seed();
-// The latest round trip to the room server, in milliseconds (-1 before the first).
-int RoundTripMs();
+// The latest round trip to the room server, in milliseconds (-1 before the first). `sequence`, if
+// given, changes with each new measurement: feed Session::OnRoundTrip only when it changed.
+int RoundTripMs(u32* sequence = nullptr);
 // What the room is doing or why it ended, for the window title or log.
 std::string StatusLine();
 
