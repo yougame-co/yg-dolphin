@@ -5,6 +5,7 @@
 
 #include <functional>
 #include <string>
+#include <string_view>
 
 #include "Common/CommonTypes.h"
 #include "Core/Orca/Session/Session.h"
@@ -34,6 +35,10 @@ std::string StatusLine();
 // Reports why the session ended to the desktop app (Orca::Status): a desync, the room's reason,
 // or the session's own error. Nothing for a normal leave.
 void ReportSessionEnd(const std::string& session_error);
+
+// The friend stopped answering mid-match: reports peer_left with `sentence`, and tells the friend
+// on the way out that the connection stalled (for its own report, if its game wakes up).
+void ReportPeerStalled(std::string_view sentence);
 
 // Leaves the room (reporting a running match void) and stops its thread. Call when emulation stops.
 void Shutdown();

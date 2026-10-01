@@ -39,6 +39,9 @@ constexpr auto PING_EVERY = std::chrono::seconds(1);
 constexpr auto HELLO_EVERY = std::chrono::seconds(1);
 constexpr auto BEGIN_RETRY = std::chrono::seconds(3);
 constexpr size_t MAX_INBOX = 1024;
+// The friend gave up waiting for this side's inputs: its game or the network between stalled.
+constexpr const char* STALLED_SENTENCE =
+    "The connection with your friend stalled, so the match ended";
 
 using Clock = std::chrono::steady_clock;
 
@@ -1194,6 +1197,8 @@ struct YouGameRoom::Impl
         {
           if (peer_bye == "desync")
             End("Your games went out of sync, so the match ended", "desync");
+          else if (peer_bye == "stalled")
+            End(STALLED_SENTENCE, "peer_left");
           else
             End("Your friend left the match", "peer_left");
         }
@@ -1214,6 +1219,8 @@ struct YouGameRoom::Impl
         const bool cancelled = m.count("void") && m.at("void").evaluate_as_boolean();
         if (cancelled && peer_bye == "desync")
           End("Your games went out of sync, so the match ended", "desync");
+        else if (cancelled && peer_bye == "stalled")
+          End(STALLED_SENTENCE, "peer_left");
         else
           End(cancelled ? "The match was cancelled" : "The match is over", cancelled ? "peer_left" : "");
       }
@@ -1266,8 +1273,8 @@ struct YouGameRoom::Impl
     if (kind == "bye")
     {
       // Only known reasons, so a peer can't put text in this player's report.
-      if (Str(d, "r") == "desync")
-        peer_bye = "desync";
+      if (const std::string reason = Str(d, "r"); reason == "desync" || reason == "stalled")
+        peer_bye = reason;
       return;
     }
     if (kind == "hello")

@@ -226,6 +226,13 @@ void ReportSessionEnd(const std::string& session_error)
   Status::Error(from_peer ? "network" : "internal", session_error);
 }
 
+void ReportPeerStalled(std::string_view sentence)
+{
+  if (const auto room = Room())
+    room->SetLeaveReason("stalled");
+  Status::Error("peer_left", sentence);
+}
+
 void Shutdown()
 {
   std::shared_ptr<Net::YouGameRoom> room;

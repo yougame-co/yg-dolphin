@@ -15,7 +15,6 @@
 #include "Core/Core.h"
 #include "Core/HW/CPU.h"
 #include "Core/Orca/Session/Online.h"
-#include "Core/Orca/Status.h"
 #include "Core/Rollback/SessionPort.h"
 #include "Core/System.h"
 
@@ -174,7 +173,7 @@ std::optional<int> OnBoundary(Core::System& system,
     // The first error is the one the app shows, so this goes before ReportSessionEnd.
     WARN_LOG_FMT(ROLLBACK, "Online: no word from the other side for {} s at frame {}",
                  PEER_SILENCE_LIMIT.count(), match.running);
-    Orca::Status::Error("peer_left", PEER_SILENT_SENTENCE);
+    Orca::Online::ReportPeerStalled(PEER_SILENT_SENTENCE);
   }
   // Before End leaves the room: the room's own reason (a friend who left, a lost connection) is
   // still there to report.
