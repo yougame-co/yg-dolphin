@@ -40,6 +40,9 @@ public:
                 int lag, int jitter, int input_delay, int checksum_every);
 
   void Tick() { ++m_ticks; }
+  // From this frame on, every remote seat sends nothing more (a game that froze while its
+  // connection stays open). Negative: never.
+  void SilenceFrom(int frame) { m_silent_from = frame; }
   // Every recorded input has been sent: a session still waiting for more ran past the recording.
   bool Exhausted() const;
 
@@ -64,6 +67,7 @@ private:
   int m_input_delay;
   int m_checksum_every;
   int m_ticks = 0;
+  int m_silent_from = -1;
   int m_local_newest = -1;  // newest local frame received (acknowledged back)
 };
 }  // namespace Rollback::Loopback
