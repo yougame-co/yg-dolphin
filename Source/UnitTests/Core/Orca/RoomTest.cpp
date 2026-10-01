@@ -38,6 +38,8 @@ Packet Sample()
   packet.current_frame = 121;
   packet.checksum_frame = 60;
   packet.checksum = 0xfedcba9876543210ull;
+  packet.resimulated = 42;
+  packet.advantage = -17;
   return packet;
 }
 
@@ -50,6 +52,8 @@ void ExpectSame(const Packet& a, const Packet& b)
   EXPECT_EQ(a.current_frame, b.current_frame);
   EXPECT_EQ(a.checksum_frame, b.checksum_frame);
   EXPECT_EQ(a.checksum, b.checksum);
+  EXPECT_EQ(a.resimulated, b.resimulated);
+  EXPECT_EQ(a.advantage, b.advantage);
 }
 
 Packet Frames(int seat, int first, int count)
@@ -71,9 +75,20 @@ TEST(OrcaRoom, PacketRoundTrips)
   ASSERT_TRUE(DecodePacket(EncodePacket(sent), &got));
   ExpectSame(sent, got);
 
-  // Without a checksum, and with no pads.
+  // Without a checksum, re-simulation count or advantage, and with no pads.
   Packet bare;
   bare.current_frame = 5;
+  ASSERT_TRUE(DecodePacket(EncodePacket(bare), &got));
+  ExpectSame(bare, got);
+  EXPECT_EQ(got.resimulated, -1);
+  EXPECT_FALSE(got.advantage);
+  const std::string text = EncodePacket(bare);
+  EXPECT_EQ(text.find("\"r\""), std::string::npos);
+  EXPECT_EQ(text.find("\"v\""), std::string::npos);
+
+  // A lead of zero and a quiet window still travel.
+  bare.resimulated = 0;
+  bare.advantage = 0;
   ASSERT_TRUE(DecodePacket(EncodePacket(bare), &got));
   ExpectSame(bare, got);
 }
@@ -104,6 +119,16 @@ TEST(OrcaRoom, RejectsMalformedPackets)
   EXPECT_FALSE(DecodePacket(with("[130,-1,-1,-1]", "[130,-1,-1]"), &got));
   EXPECT_FALSE(DecodePacket(with("[130,-1,-1,-1]", "[130,-2,-1,-1]"), &got));
   EXPECT_FALSE(DecodePacket(with("\"h\":\"fedcba9876543210\"", "\"h\":\"fedcba98\""), &got));
+  // Re-simulation count and advantage: whole numbers in bounds.
+  EXPECT_FALSE(DecodePacket(with("\"r\":42", "\"r\":-1"), &got));
+  EXPECT_FALSE(DecodePacket(with("\"r\":42", "\"r\":4.5"), &got));
+  EXPECT_FALSE(DecodePacket(with("\"r\":42", "\"r\":1e12"), &got));
+  EXPECT_FALSE(DecodePacket(with("\"r\":42", "\"r\":\"42\""), &got));
+  EXPECT_FALSE(DecodePacket(with("\"v\":-17", "\"v\":-1.5"), &got));
+  EXPECT_FALSE(DecodePacket(with("\"v\":-17", "\"v\":-1e12"), &got));
+  EXPECT_FALSE(DecodePacket(with("\"v\":-17", "\"v\":null"), &got));
+  EXPECT_TRUE(DecodePacket(with("\"v\":-17", "\"v\":1000"), &got));
+  EXPECT_EQ(got.advantage, 1000);
 
   // What would crash the JSON parser: deep nesting, and numbers that overflow a double.
   EXPECT_FALSE(DecodePacket(std::string(5000, '[') + std::string(5000, ']'), &got));

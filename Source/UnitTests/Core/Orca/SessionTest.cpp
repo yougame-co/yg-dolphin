@@ -6,8 +6,10 @@
 #include <map>
 #include <optional>
 #include <random>
+#include <set>
 #include <vector>
 
+#include <cmath>
 #include <cstdlib>
 #include <string>
 
@@ -36,11 +38,16 @@ class FakeGame final : public Game
 public:
   bool Save(int frame) override
   {
+    // Saving the same frame twice between loads is wasted work (a full snapshot in Dolphin).
+    if (!m_saved_since_load.insert(frame).second)
+      ++m_double_saves;
+    ++m_saves;
     m_snapshots[frame] = m_state;
     return true;
   }
   bool Load(int frame) override
   {
+    m_saved_since_load.clear();
     const auto it = m_snapshots.find(frame);
     if (it == m_snapshots.end())
       return false;
@@ -79,6 +86,9 @@ public:
   }
 
   std::map<int, u64> m_snapshots;
+  std::set<int> m_saved_since_load;
+  int m_saves = 0;
+  int m_double_saves = 0;
   std::map<int, u64> m_history;
   std::map<int, Pads> m_ran_pads;
   u64 m_state = 1;
@@ -544,23 +554,35 @@ TEST(OrcaSessionDelay, StaysPutWhenQuietOrDisabled)
 
 TEST(OrcaSessionDelay, StartsFromMeasuredLatency)
 {
-  Match match(Config{}, 3, 0);
-  match.rtt_samples = true;
-  // 100 ms round trip: 3 frames one way at 60 Hz, steady.
-  match.Play(1);
-  EXPECT_EQ(match.a->session.Delay(), 3);
-  EXPECT_EQ(match.b->session.Delay(), 3);
-  // Four quiet seconds (a lower needs five): no rollback at all.
-  match.Play(239);
-  ExpectClean(match);
-  EXPECT_EQ(match.a->session.GetStats().rollbacks, 0);
-  EXPECT_EQ(match.b->session.GetStats().rollbacks, 0);
-  EXPECT_GT(match.CompareConfirmed(), 200);
+  // Rollback hides latency up to its window (7, less 2 for jitter): only what is beyond it goes
+  // into input delay. 100 ms round trip: 3 frames one way, all hidden.
+  Match near(Config{}, 3, 0);
+  near.rtt_samples = true;
+  near.Play(1);
+  EXPECT_EQ(near.a->session.Delay(), 2);
+  EXPECT_EQ(near.b->session.Delay(), 2);
+
+  // 300 ms: 9 frames one way, 4 of them delay and 5 rolled back. One stall at the very start (the
+  // first packet is 9 frames away, the window 7), none after: the window holds the rest.
+  Match far(Config{}, 9, 0);
+  far.rtt_samples = true;
+  far.Play(1);
+  EXPECT_EQ(far.a->session.Delay(), 4);
+  EXPECT_EQ(far.b->session.Delay(), 4);
+  far.Play(239);
+  ExpectClean(far);
+  for (const Player* p : {far.a.get(), far.b.get()})
+  {
+    EXPECT_LE(p->session.GetStats().stalls, 1);
+    EXPECT_GT(p->session.GetStats().rollbacks, 0);
+    EXPECT_LE(p->session.GetStats().deepest_rollback, 5);
+  }
+  EXPECT_GT(far.CompareConfirmed(), 200);
 
   // A huge round trip is capped at max_delay; after the first seconds, round trips move nothing.
-  Match far(Config{}, 0, 0);
-  far.a->session.OnRoundTrip(1000);
-  EXPECT_EQ(far.a->session.Delay(), Config{}.max_delay);
+  Match huge(Config{}, 0, 0);
+  huge.a->session.OnRoundTrip(1000);
+  EXPECT_EQ(huge.a->session.Delay(), Config{}.max_delay);
   Match late(Config{}, 0, 0);
   late.Play(200);
   late.a->session.OnRoundTrip(1000);
@@ -591,7 +613,7 @@ TEST(OrcaSessionDelay, IncreaseFillsSkippedFramesAndPeerConfirmsThem)
 
 TEST(OrcaSessionDelay, FallsAfterQuietTimeAndDropsOneSamplePerStep)
 {
-  // A reports a 200 ms round trip before the match starts, so it opens at max_delay; the link is
+  // A reports a 400 ms round trip before the match starts, so it opens at max_delay; the link is
   // really instant, so quiet windows bring it back down one frame at a time. B stays at 2 all
   // along: the two delays differ for the whole match and the frames still agree.
   Match match(Config{}, 0, 0);
@@ -600,7 +622,7 @@ TEST(OrcaSessionDelay, FallsAfterQuietTimeAndDropsOneSamplePerStep)
     p->tag_ticks = true;
     p->model_input_delay = Config{}.input_delay;
   }
-  match.a->session.OnRoundTrip(200);
+  match.a->session.OnRoundTrip(400);
   ASSERT_EQ(match.a->session.Delay(), 6);
   match.Play(1800);
   ExpectClean(match);
@@ -622,10 +644,13 @@ TEST(OrcaSessionDelay, FallsAfterQuietTimeAndDropsOneSamplePerStep)
 
 TEST(OrcaSessionDelay, LowerThatBringsRollbacksBackReverts)
 {
-  // Four frames of latency, measured: both open at 4, where inputs arrive just in time. A step
-  // down to 3 makes the other side roll back, so it reverts, and the next try waits longer.
+  // Four frames of latency. Both measure 300 ms before the match (a slow first ping), so both open
+  // at 4, where inputs arrive just in time. A step down to 3 makes the other side roll back, so it
+  // reverts, and the next try waits longer.
   Match match(Config{}, 4, 0);
-  match.rtt_samples = true;
+  match.a->session.OnRoundTrip(300);
+  match.b->session.OnRoundTrip(300);
+  ASSERT_EQ(match.a->session.Delay(), 4);
   match.Play(2400);
   ExpectClean(match);
   for (const Player* p : {match.a.get(), match.b.get()})
@@ -664,14 +689,63 @@ TEST(OrcaSessionTimeSync, FastSideWaits)
   EXPECT_EQ(b.waits, 0);
   EXPECT_EQ(unsynced->a->session.GetStats().waits, 0);
   // Without time sync the fast side runs into the rollback window and stalls there, re-simulating
-  // deep all the way. With it, it never stalls and holds about the 1.5-frame threshold ahead.
-  EXPECT_GT(unsynced->a->session.GetStats().stalls, 30);
+  // deep all the way. With it, nobody stalls, the lead stays near the one-frame threshold, and the
+  // two sides together re-simulate about half as much.
+  const Stats& ua = unsynced->a->session.GetStats();
+  const Stats& ub = unsynced->b->session.GetStats();
+  EXPECT_GT(ua.stalls, 30);
   EXPECT_EQ(a.stalls, 0);
-  EXPECT_LT(a.resimulated_frames * 4, unsynced->a->session.GetStats().resimulated_frames * 3);
-  EXPECT_LT(a.frame_advantage, 3.0);
+  EXPECT_EQ(b.stalls, 0);
+  EXPECT_LT(a.frame_advantage, 2.0);
+  EXPECT_LT((a.resimulated_frames + b.resimulated_frames) * 3,
+            (ua.resimulated_frames + ub.resimulated_frames) * 2);
 
   // Equal clocks: nobody waits.
   const auto even = play(true, 0);
   EXPECT_EQ(even->a->session.GetStats().waits, 0);
   EXPECT_EQ(even->b->session.GetStats().waits, 0);
+}
+
+TEST(OrcaSession, NeverSavesAFrameTwice)
+{
+  // Stalls and time-sync waits repeat the boundary of the same frame many times: one snapshot each.
+  Config stalling;
+  stalling.max_rollback = 4;
+  Match stalls(stalling, 10, 2);
+  stalls.Play(900);
+  Config waiting;
+  waiting.max_delay = waiting.input_delay;
+  Match waits(waiting, 3, 1);
+  waits.rtt_samples = true;
+  waits.a_extra_every = 40;
+  waits.Play(1200);
+  for (const Match* match : {&stalls, &waits})
+  {
+    ExpectClean(*match);
+    for (const Player* p : {match->a.get(), match->b.get()})
+    {
+      EXPECT_GT(p->game.m_saves, 100);
+      EXPECT_EQ(p->game.m_double_saves, 0);
+    }
+  }
+  EXPECT_GT(stalls.a->session.GetStats().stalls, 0);
+  EXPECT_GT(waits.a->session.GetStats().waits, 0);
+}
+
+TEST(OrcaSessionTimeSync, WrongRoundTripOnBothSidesCancels)
+{
+  // Six frames apart, but both measure a 17 ms round trip (a ping answered by a nearby relay, say):
+  // each believes it is about six frames ahead. Half the difference of the two leads is still zero,
+  // so neither waits; a one-sided estimate would make both give a frame back every half second.
+  Config config;
+  config.max_delay = config.input_delay;
+  Match match(config, 6, 0);
+  match.a->session.OnRoundTrip(17);
+  match.b->session.OnRoundTrip(17);
+  match.Play(1200);
+  ExpectClean(match);
+  EXPECT_EQ(match.a->session.GetStats().waits, 0);
+  EXPECT_EQ(match.b->session.GetStats().waits, 0);
+  EXPECT_LT(std::abs(match.a->session.GetStats().frame_advantage), 1.0);
+  EXPECT_GT(match.CompareConfirmed(), 1000);
 }

@@ -20,10 +20,10 @@ constexpr int MAX_QUIET_WINDOWS = 1024;
 // Round trips may raise the delay during the first seconds of play only: later, a raise from a
 // single slow ping would cost responsiveness the rollbacks never asked for.
 constexpr int START_SECONDS = 3;
-// Time sync averages this many frames, waits at most once per that many, and only for a lead of
-// more than this many frames: anything less is jitter and the estimate's own error.
+// Time sync averages this many frames, waits at most once per that many, and only when it is more
+// than this many frames ahead on average: anything less is jitter.
 constexpr int TIME_SYNC_FRAMES = 30;
-constexpr double TIME_SYNC_LEAD = 1.5;
+constexpr double TIME_SYNC_LEAD = 1.0;
 }  // namespace
 
 Session::Session(const Config& config, Game& game, Transport& transport)
@@ -62,7 +62,7 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad)
   if (m_resim_until >= 0)
   {
     const int next = completed_frame + 1;
-    if (NeedsSnapshot(next) && !m_game.Save(next))
+    if (NeedsSnapshot(next) && !SaveOnce(next))
       return Fail(fmt::format("Saving frame {} failed", next));
     if (completed_frame < m_resim_until)
     {
@@ -83,7 +83,7 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad)
       return Fail(fmt::format("Frame alignment lost: frame {} ended, expected {}", completed_frame,
                               m_frame - 1));
     }
-    if (NeedsSnapshot(m_frame) && !m_game.Save(m_frame))
+    if (NeedsSnapshot(m_frame) && !SaveOnce(m_frame))
       return Fail(fmt::format("Saving frame {} failed", m_frame));
 
     SampleLocal(local_pad);
@@ -105,6 +105,7 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad)
     const int depth = m_frame - from;
     if (depth > m_config.max_rollback)
       return Fail(fmt::format("Rollback of {} frames exceeds the limit", depth));
+    m_last_saved = -1;
     if (!m_game.Load(from))
       return Fail(fmt::format("Loading frame {} failed", from));
     ++m_stats.rollbacks;
@@ -175,6 +176,16 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad)
   return {StepKind::Run, run};
 }
 
+bool Session::SaveOnce(int frame)
+{
+  if (m_last_saved == frame)
+    return true;
+  if (!m_game.Save(frame))
+    return false;
+  m_last_saved = frame;
+  return true;
+}
+
 void Session::SampleLocal(const Pad& local_pad)
 {
   const int target = m_frame + m_delay;
@@ -208,8 +219,8 @@ void Session::OnRoundTrip(int rtt_ms)
     *m_rtt_ms += error / 8;
     m_rtt_dev_ms += (std::abs(error) - m_rtt_dev_ms) / 4;
   }
-  // The start delay covers the measured latency, so the match opens without rollbacks. It only
-  // rises here; quiet windows bring it down if the link turns out better.
+  // The start delay covers what the rollback window can't (LatencyDelay). It only rises here;
+  // quiet windows bring it down if the link turns out better.
   if (m_frame < START_SECONDS * m_config.frame_rate)
   {
     m_delay = std::max(m_delay, LatencyDelay());
@@ -224,12 +235,13 @@ double Session::FramesFromMs(double ms) const
 
 int Session::LatencyDelay() const
 {
-  // One way is half the round trip; the deviation covers packets later than average. The epsilon
-  // keeps an exact multiple of the frame time (100 ms is 6.000 frames) from rounding up.
-  const auto frames = [this](double ms) {
-    return static_cast<int>(std::ceil(FramesFromMs(ms) - 1e-6));
-  };
-  const int wanted = frames(*m_rtt_ms / 2) + frames(m_rtt_dev_ms);
+  // Rollback hides latency up to its window; input delay only covers what the window alone would
+  // stall on. One way is half the round trip, the deviation covers packets later than average,
+  // and a rollback this deep (max_rollback - 2) still leaves room for jitter. The epsilon keeps an
+  // exact multiple of the frame time (150 ms is 9.000 frames) from rounding up.
+  const double one_way = *m_rtt_ms / 2 + m_rtt_dev_ms;
+  const int frames = static_cast<int>(std::ceil(FramesFromMs(one_way) - 1e-6));
+  const int wanted = frames - (m_config.max_rollback - 2);
   return std::clamp(wanted, m_config.input_delay, m_config.max_delay);
 }
 
@@ -315,33 +327,42 @@ void Session::AdaptDelay()
 
 void Session::TrackAdvantage()
 {
-  // Like GGPO's and Slippi's time sync: a player whose clock runs ahead keeps running frames the
-  // others' inputs haven't reached, so it rolls back deep and stalls while they never wait for it.
-  // Without round trips there is no telling ahead from merely far away.
+  // Like GGPO's time sync: a player whose clock runs ahead keeps running frames the others' inputs
+  // haven't reached, so it rolls back deep and stalls while they never wait for it. Each side
+  // estimates its lead from the other's frame plus half a round trip and reports it; half the
+  // difference of the two is how far ahead this side really is, whatever error the round trip
+  // estimate puts into both. Without round trips on both sides, nothing is known.
   if (!m_config.time_sync || !m_rtt_ms)
     return;
-  std::optional<double> lead;
+  std::optional<double> balance;
   for (int s = 0; s < m_config.seats; ++s)
   {
-    if (s != m_config.local_seat && m_advantage[s])
-      lead = std::max(lead.value_or(*m_advantage[s]), *m_advantage[s]);
+    if (s == m_config.local_seat || !m_advantage[s])
+      continue;
+    auto& smoothed = m_smoothed_advantage[s];
+    smoothed = smoothed ? *smoothed + (*m_advantage[s] - *smoothed) / 8 : *m_advantage[s];
+    if (m_remote_advantage[s])
+    {
+      const double b = (*smoothed - *m_remote_advantage[s]) / 2;
+      balance = std::max(balance.value_or(b), b);
+    }
   }
-  if (lead)
+  if (balance)
   {
-    m_advantage_sum += *lead;
-    ++m_advantage_samples;
+    m_balance_sum += *balance;
+    ++m_balance_samples;
   }
   if (m_frame - m_sync_start < TIME_SYNC_FRAMES)
     return;
   m_sync_start = m_frame;
-  if (m_advantage_samples > 0)
+  if (m_balance_samples > 0)
   {
-    const double average = m_advantage_sum / m_advantage_samples;
+    const double average = m_balance_sum / m_balance_samples;
     m_stats.frame_advantage = average;
     m_wait_pending = average > TIME_SYNC_LEAD;
   }
-  m_advantage_sum = 0;
-  m_advantage_samples = 0;
+  m_balance_sum = 0;
+  m_balance_samples = 0;
 }
 
 Pads Session::PadsFor(int frame)
@@ -435,6 +456,12 @@ void Session::ReceivePackets()
     // (half a round trip's worth). Ordered delivery makes the newest packet the best estimate.
     if (m_rtt_ms)
       m_advantage[s] = m_frame - (packet.current_frame + FramesFromMs(*m_rtt_ms) / 2);
+    // Its own lead, bounded like its frames.
+    if (packet.advantage)
+    {
+      constexpr int bound = MAX_FRAMES_AHEAD * 10;
+      m_remote_advantage[s] = std::clamp(*packet.advantage, -bound, bound) / 10.0;
+    }
     // No window re-simulates more than every frame of the deepest rollback.
     if (packet.resimulated >= 0)
     {
@@ -510,6 +537,14 @@ void Session::SendPacket()
     packet.ack[s] = s == m_config.local_seat ? -1 : m_received[s];
   packet.current_frame = m_frame;
   packet.resimulated = m_last_resimulated;
+  std::optional<double> lead;
+  for (int s = 0; s < m_config.seats; ++s)
+  {
+    if (s != m_config.local_seat && m_smoothed_advantage[s])
+      lead = std::max(lead.value_or(*m_smoothed_advantage[s]), *m_smoothed_advantage[s]);
+  }
+  if (lead)
+    packet.advantage = static_cast<int>(std::lround(*lead * 10));
   if (m_pending_checksum)
   {
     packet.checksum_frame = m_pending_checksum;

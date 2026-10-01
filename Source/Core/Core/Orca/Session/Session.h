@@ -63,6 +63,10 @@ struct Packet
   // Frames the sender re-simulated in its last one-second window (-1: no window yet). A side's
   // rollbacks come from the other side's input delay, so each side adapts on the worst number.
   int resimulated = -1;
+  // The sender's smoothed lead over the slowest other player, in tenths of a frame (its frame minus
+  // its estimate of theirs; nullopt: no round trip measured yet). Time sync halves the difference
+  // between both sides' numbers, which cancels a round-trip estimate that is off on both.
+  std::optional<int> advantage;
   std::optional<int> checksum_frame;
   u64 checksum = 0;
 };
@@ -93,7 +97,7 @@ struct Config
   // converts round trips in milliseconds into frames.
   int frame_rate = 60;
   // Ask for a one-frame wait (StepKind::Wait) while this player runs ahead of the others. Needs
-  // round-trip samples (Session::OnRoundTrip); without them the session never waits.
+  // round-trip samples (Session::OnRoundTrip) on both sides; without them the session never waits.
   bool time_sync = true;
   // Deepest rollback allowed; beyond it the session stalls until inputs arrive.
   int max_rollback = 7;
@@ -140,7 +144,7 @@ struct Stats
   int delay_raises = 0;
   int delay_lowers = 0;
   int delay_reverts = 0;
-  // Time-sync waits, and the last averaged lead over the slowest other player, in frames.
+  // Time-sync waits, and the last averaged (our lead - their lead) / 2, in frames.
   int waits = 0;
   double frame_advantage = 0;
 };
@@ -155,8 +159,8 @@ public:
   // (next frame + Delay()). Re-run boundaries also call this; the pad is ignored there.
   Step OnBoundary(int completed_frame, const Pad& local_pad);
   // A measured round trip to the other player(s), from the transport's pings. Call it on the thread
-  // that calls OnBoundary. In the first three seconds it may raise the delay to cover the latency;
-  // time sync needs it to place the other players' frames.
+  // that calls OnBoundary. In the first three seconds it may raise the delay to cover what the
+  // rollback window can't; time sync needs it to place the other players' frames.
   void OnRoundTrip(int rtt_ms);
 
   const std::string& Error() const { return m_error; }
@@ -173,6 +177,7 @@ private:
   bool NeedsSnapshot(int frame) const;
   void CheckChecksums();
   Step Fail(std::string error);
+  bool SaveOnce(int frame);
   void SampleLocal(const Pad& local_pad);
   void AdaptDelay();
   int LatencyDelay() const;
@@ -206,6 +211,9 @@ private:
   std::optional<int> m_pending_checksum;
   int m_last_sent_newest = -1;
   bool m_stalling = false;
+  // The frame whose state was last saved since the last load (-1: none): a repeated boundary on a
+  // stalled or waiting frame must not snapshot it again.
+  int m_last_saved = -1;
 
   // Adaptive input delay, decided once per window of frame_rate frames.
   int m_delay;
@@ -225,10 +233,14 @@ private:
   std::optional<double> m_rtt_ms;
   double m_rtt_dev_ms = 0;
 
-  // Time sync: each peer's last estimated lag behind us, in frames, averaged over a window.
+  // Time sync, per peer, in frames: our latest lead over it, that lead smoothed, and its own
+  // smoothed lead over its slowest peer as it reported. The balance (ours - theirs) / 2 is averaged
+  // over a window.
   std::array<std::optional<double>, MAX_SEATS> m_advantage;
-  double m_advantage_sum = 0;
-  int m_advantage_samples = 0;
+  std::array<std::optional<double>, MAX_SEATS> m_smoothed_advantage;
+  std::array<std::optional<double>, MAX_SEATS> m_remote_advantage;
+  double m_balance_sum = 0;
+  int m_balance_samples = 0;
   int m_sync_start = 0;
   bool m_wait_pending = false;
   bool m_waiting = false;

@@ -125,6 +125,10 @@ std::string Str(const picojson::object& o, const std::string& key)
 }
 
 constexpr int MAX_FRAME = 1 << 30;
+// Re-simulated frames in one second, and a lead in tenths of a frame: far beyond anything honest
+// (the session clamps both further), small enough that no arithmetic on them overflows.
+constexpr int MAX_RESIMULATED = 1 << 20;
+constexpr int MAX_ADVANTAGE = 1 << 20;
 
 // picojson has no nesting limit (deep arrays overflow the I/O thread's stack) and aborts on a number
 // that overflows a double. Nothing YouGame sends nests deeply, uses an exponent or has more than 17
@@ -194,6 +198,11 @@ picojson::object PacketToJson(const Packet& packet)
     ack.emplace_back(static_cast<double>(a));
   d["a"] = picojson::value(ack);
   d["c"] = picojson::value(static_cast<double>(packet.current_frame));
+  // Optional, so a peer built before adaptive delay and time sync still parses these packets.
+  if (packet.resimulated >= 0)
+    d["r"] = picojson::value(static_cast<double>(packet.resimulated));
+  if (packet.advantage)
+    d["v"] = picojson::value(static_cast<double>(*packet.advantage));
   if (packet.checksum_frame)
   {
     d["x"] = picojson::value(static_cast<double>(*packet.checksum_frame));
@@ -249,6 +258,20 @@ bool PacketFromJson(const picojson::object& d, Packet* packet)
       return false;
     }
     out.ack[s] = static_cast<int>(v.get<double>());
+  }
+  if (d.count("r"))
+  {
+    const auto resimulated = Int(d, "r", 0, MAX_RESIMULATED);
+    if (!resimulated)
+      return false;
+    out.resimulated = *resimulated;
+  }
+  if (d.count("v"))
+  {
+    const auto advantage = Int(d, "v", -MAX_ADVANTAGE, MAX_ADVANTAGE);
+    if (!advantage)
+      return false;
+    out.advantage = *advantage;
   }
   if (d.count("x"))
   {
