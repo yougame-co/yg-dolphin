@@ -31,7 +31,9 @@
 #include "Core/DolphinAnalytics.h"
 #include "Core/Host.h"
 #include "Core/Orca/Branding.h"
+#include "Core/Config/MainSettings.h"
 #include "Core/Orca/Disc.h"
+#include "Core/Orca/Launch.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Status.h"
 #include "Core/System.h"
@@ -324,6 +326,8 @@ int main(const int argc, char* argv[])
 
   std::unique_ptr<BootParameters> boot;
   bool game_specified = false;
+  // Orca.app booting a loader from orca-launch.ini: the disc it boots from the drive.
+  [[maybe_unused]] std::string launch_disc;
   if (options.is_set("exec"))
   {
     const std::list<std::string> paths_list = options.all("exec");
@@ -355,11 +359,33 @@ int main(const int argc, char* argv[])
 #ifdef ORCA_MACOS_BUNDLE
   else if (Orca::SessionActive() && !user_directory.empty())
   {
+    // A mod's build ships orca-launch.ini next to Orca.app (Core/Orca/Launch.h): its launcher
+    // profile and loader, booted with the player's disc as the default disc. Without one, the disc.
+    std::string bundle_parent;
+    SplitPath(File::GetBundleDirectory(), &bundle_parent, nullptr, nullptr);
+    std::string launch_error;
+    const std::optional<Orca::LaunchSpec> launch =
+        bundle_parent.empty() ? std::nullopt : Orca::ReadLaunchIni(bundle_parent, &launch_error);
+    if (!launch_error.empty())
+    {
+      Orca::Status::Error("profile", launch_error);
+      return Orca::Status::Finish();
+    }
     const std::optional<std::string> disc = ChooseSessionDisc(user_directory);
     if (!disc)
       return Orca::Status::Finish();
-    boot = BootParameters::GenerateFromFile(
-        *disc, BootSessionData(save_state_path, DeleteSavestateAfterBoot::No));
+    if (launch)
+    {
+      setenv("ORCA_PROFILE", launch->profile.c_str(), 0);
+      launch_disc = *disc;
+      boot = BootParameters::GenerateFromFile(
+          launch->executable, BootSessionData(save_state_path, DeleteSavestateAfterBoot::No));
+    }
+    else
+    {
+      boot = BootParameters::GenerateFromFile(
+          *disc, BootSessionData(save_state_path, DeleteSavestateAfterBoot::No));
+    }
     game_specified = true;
   }
 #endif
@@ -396,6 +422,11 @@ int main(const int argc, char* argv[])
       fmt::print(stderr, "Orca: couldn't write the default controller mapping to {}\n", pad_ini);
     }
   }
+#endif
+#ifdef ORCA_MACOS_BUNDLE
+  // Only for this run: the player's Dolphin.ini keeps whatever default disc it had.
+  if (!launch_disc.empty())
+    Config::SetCurrent(Config::MAIN_DEFAULT_ISO, launch_disc);
 #endif
   UICommon::InitControllers(wsi);
 

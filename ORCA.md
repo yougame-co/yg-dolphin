@@ -68,6 +68,14 @@ ORCA_SESSION=1 ORCA_PROFILE=PPLUS32 dolphin-emu-nogui -p headless -u <user> -v N
   -C "Dolphin.Core.DefaultISO=<RSBE01 rev 2 disc>" -e "<dir>/Project+ Netplay Launcher.dol"
 ```
 
+Orca.app started with no arguments reads `orca-launch.ini` next to the app, when the build ships
+one: `[Launch]` with `Profile` (a launcher profile) and `Executable` (the loader, relative to that
+folder; the profile then finds the SD image next to it). It boots that loader with the disc the
+player picked as the default disc. The parser refuses unknown keys and sections, and any path that
+is absolute, has a `.` or `..` component, or resolves (symlinks included) outside the folder
+(`Source/Core/Core/Orca/Launch.h`). A YouGame mod listing's native build is Orca.app plus the mod's
+files and that ini, side by side.
+
 A session also refuses whatever would change one player's game alone: pausing, loading savestates,
 the reset button, and the Wii power button (Stop ends the match instead).
 
