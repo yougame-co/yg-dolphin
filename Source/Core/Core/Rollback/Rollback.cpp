@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstring>
 #include <span>
+#include <tuple>
 #include <unordered_set>
 
 #include <xxh3.h>
@@ -171,7 +172,7 @@ void SnapshotRing::Reset(Core::System& system)
     nand->JournalStop();
 }
 
-void SnapshotRing::Save(Core::System& system, s64 frame)
+bool SnapshotRing::Save(Core::System& system, s64 frame)
 {
   // Re-saving a frame (after a rewind) reuses its slot; otherwise take the next one.
   Slot* slot = Find(frame);
@@ -181,6 +182,10 @@ void SnapshotRing::Save(Core::System& system, s64 frame)
     m_next = (m_next + 1) % m_slots.size();
   }
   m_last = static_cast<std::size_t>(slot - m_slots.data());
+  const auto buffers = [slot] {
+    return std::tuple{slot->state.data(), slot->mem1.capacity(), slot->mem2.capacity()};
+  };
+  const auto buffers_before = buffers();
 
   // Non-RAM state first, so anything DoState writes into RAM is in the RAM copy.
   {
@@ -209,6 +214,7 @@ void SnapshotRing::Save(Core::System& system, s64 frame)
     }
     nand->JournalTrim(oldest);
   }
+  return buffers() != buffers_before;
 }
 
 bool SnapshotRing::Load(Core::System& system, s64 frame)

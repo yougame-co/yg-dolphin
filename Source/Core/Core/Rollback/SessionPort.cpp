@@ -3,6 +3,7 @@
 
 #include "Core/Rollback/SessionPort.h"
 
+#include <algorithm>
 #include <optional>
 #include <thread>
 
@@ -52,7 +53,19 @@ bool RingPort::Save(int frame)
   // A boundary the session stalls at asks for the same frame again; nothing ran since.
   if (m_saved_since_run == frame)
     return true;
-  m_ring.Save(m_system, frame);
+  const auto start = std::chrono::steady_clock::now();
+  const bool allocated = m_ring.Save(m_system, frame);
+  double ms =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+  // A slot's first use allocates and faults in ~100 MB: not what a save costs. After that, an
+  // eighth of each sample, at most four times the estimate: one slow save (a busy machine) barely
+  // moves it.
+  if (!allocated)
+  {
+    if (m_save_ms > 0)
+      ms = std::min(ms, 4 * m_save_ms);
+    m_save_ms = m_save_ms == 0 ? ms : m_save_ms + (ms - m_save_ms) / 8;
+  }
   m_saved_since_run = frame;
   return true;
 }

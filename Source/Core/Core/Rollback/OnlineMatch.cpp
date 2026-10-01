@@ -14,6 +14,7 @@
 #include "Common/Logging/Log.h"
 #include "Core/Core.h"
 #include "Core/HW/CPU.h"
+#include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Rollback/SessionPort.h"
 #include "Core/System.h"
@@ -126,6 +127,9 @@ std::optional<int> OnBoundary(Core::System& system,
       return std::nullopt;
     }
     match.local_seat = config.local_seat;
+    // Snapshot spacing is this machine's own business (it changes no frame's result), chosen from
+    // the measured save time unless a test fixes it.
+    config.snapshot_every = Orca::TestSnapshotEvery();
     match.port = std::make_unique<RingPort>(system, config.max_rollback);
     match.session = std::make_unique<Orca::Net::Session>(config, *match.port, *transport);
     // The wait for the match is not time the game should make up.
@@ -195,12 +199,14 @@ void LogStats(const char* when)
       ROLLBACK,
       "Online match {}: frame {}, {} rollbacks, {} re-run frames, deepest {}, {} stalls ({} "
       "counted), {} waits, {} hitches here, {} there, frame advantage {:.2f}, input delay {} "
-      "(+{} -{} reverted {}), {} checksums matched, confirmed frame {}, round trip {} ms{}{}",
+      "(+{} -{} reverted {}), {} checksums matched, confirmed frame {}, round trip {} ms, {} "
+      "snapshots (every {}, {:.2f} ms each){}{}",
       when, match.session->CurrentFrame(), stats.rollbacks, stats.resimulated_frames,
       stats.deepest_rollback, stats.stalls, stats.counted_stalls, stats.waits, stats.hitches,
       stats.peer_hitches, stats.frame_advantage,
       stats.delay, stats.delay_raises, stats.delay_lowers, stats.delay_reverts,
-      stats.checksums_matched, stats.confirmed_frame, Orca::Online::RoundTripMs(),
+      stats.checksums_matched, stats.confirmed_frame, Orca::Online::RoundTripMs(), stats.saves,
+      stats.snapshot_every, match.port ? match.port->SaveMs() : 0.0,
       match.session->Error().empty() ? "" : "; ", match.session->Error());
 }
 

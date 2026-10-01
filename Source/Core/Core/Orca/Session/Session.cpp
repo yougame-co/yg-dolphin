@@ -47,6 +47,11 @@ constexpr int MAX_RTT_MS = 10000;
 // than this many frames ahead on average: anything less is jitter.
 constexpr int TIME_SYNC_FRAMES = 30;
 constexpr double TIME_SYNC_LEAD = 1.0;
+// Snapshot spacing: one more predicted frame between snapshots per this much a save costs (about
+// what a re-run frame without rendering costs on the slow PCs this is for), with a dead band
+// around each step so a save time near one doesn't flip the spacing every window.
+constexpr double SAVE_MS_PER_SPACING = 3.0;
+constexpr double SPACING_DEAD_BAND_MS = 0.25;
 }  // namespace
 
 Session::Session(const Config& config, Game& game, Transport& transport)
@@ -55,7 +60,9 @@ Session::Session(const Config& config, Game& game, Transport& transport)
 {
   m_config.max_delay = std::max(m_config.max_delay, m_config.input_delay);
   m_config.frame_rate = std::max(m_config.frame_rate, 1);
+  m_config.snapshot_every = std::clamp(m_config.snapshot_every, 0, MAX_SNAPSHOT_EVERY);
   m_stats.delay = m_delay;
+  ChooseSnapshotEvery();
   // Frames before the input delay have no sampled input: both sides treat them as neutral, and
   // sending them explicitly lets the other side confirm them like any other frame.
   for (int f = 0; f < m_config.input_delay; ++f)
@@ -130,20 +137,30 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad)
     return {StepKind::Ended, m_frame};
   SendPacket();
 
-  // A frame that already ran with a wrong guess: rewind to it and re-run up to the newest frame.
+  // A frame that already ran with a wrong guess: load the newest snapshot at or before it and
+  // re-run from there up to the newest frame. Frames before the wrong one re-run with the inputs
+  // they ran with, so they come out the same.
   if (m_dirty < m_frame)
   {
-    const int from = m_dirty;
+    const int dirty = m_dirty;
     m_dirty = INT_MAX;
+    if (m_frame - dirty > m_config.max_rollback)
+      return Fail(fmt::format("Rollback of {} frames exceeds the limit", m_frame - dirty));
+    // There is a snapshot at most k - 1 frames before any frame a rollback targets (NeedsSnapshot).
+    const auto after = m_saved.upper_bound(dirty);
+    const int from = after == m_saved.begin() ? -1 : *std::prev(after);
     const int depth = m_frame - from;
-    if (depth > m_config.max_rollback)
-      return Fail(fmt::format("Rollback of {} frames exceeds the limit", depth));
+    if (from < 0 || depth > m_config.max_rollback + MAX_SNAPSHOT_EVERY - 1)
+      return Fail(fmt::format("No snapshot to roll back to frame {} from", dirty));
     m_last_saved = -1;
     if (!m_game.Load(from))
       return Fail(fmt::format("Loading frame {} failed", from));
+    // Snapshots after the loaded frame hold the history that is being replaced.
+    m_saved.erase(m_saved.upper_bound(from), m_saved.end());
     ++m_stats.rollbacks;
     m_stats.resimulated_frames += depth;
     m_stats.deepest_rollback = std::max(m_stats.deepest_rollback, depth);
+    m_guessed_frames += m_frame - dirty;
     m_resim_until = m_frame - 1;
     m_game.SetResimulating(true);
     const Pads pads = PadsFor(from);
@@ -183,12 +200,16 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad)
   m_game.SetPads(run, pads);
   ++m_frame;
   if (m_frame - m_window_start >= m_config.frame_rate)
+  {
     AdaptDelay();
+    ChooseSnapshotEvery();
+  }
   TrackAdvantage();
 
-  // History older than the deepest possible rollback is no longer needed. Keep one remote input
-  // before the window, since predictions repeat the last known input.
-  const int oldest = m_frame - m_config.max_rollback - 2;
+  // History older than the deepest possible rollback (from a snapshot up to MAX_SNAPSHOT_EVERY - 1
+  // frames before the first wrong frame) is no longer needed. Keep one remote input before the
+  // window, since predictions repeat the last known input.
+  const int oldest = m_frame - m_config.max_rollback - MAX_SNAPSHOT_EVERY - 1;
   int oldest_unacked = INT_MAX;
   for (int s = 0; s < m_config.seats; ++s)
   {
@@ -198,6 +219,7 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad)
   const int keep_local = std::min(oldest, oldest_unacked);
   std::erase_if(m_local, [keep_local](const auto& e) { return e.first < keep_local; });
   std::erase_if(m_used, [oldest](const auto& e) { return e.first < oldest; });
+  m_saved.erase(m_saved.begin(), m_saved.lower_bound(oldest));
   for (int s = 0; s < m_config.seats; ++s)
   {
     auto& inputs = m_remote[s];
@@ -218,7 +240,31 @@ bool Session::SaveOnce(int frame)
   if (!m_game.Save(frame))
     return false;
   m_last_saved = frame;
+  m_saved.insert(frame);
+  ++m_stats.saves;
   return true;
+}
+
+void Session::ChooseSnapshotEvery()
+{
+  // A save that costs more than a re-run frame is worth spreading out: one more predicted frame
+  // between snapshots per SAVE_MS_PER_SPACING a save costs. Re-chosen once a window; any spacing
+  // is safe to change to at any frame (NeedsSnapshot measures it from the newest snapshot, not
+  // from frame numbers).
+  if (m_config.snapshot_every > 0)
+  {
+    m_snapshot_every = m_config.snapshot_every;
+  }
+  else
+  {
+    const double save_ms = std::isfinite(m_game.SaveMs()) ? m_game.SaveMs() : 0;
+    int& k = m_snapshot_every;
+    while (k < MAX_SNAPSHOT_EVERY && save_ms > SAVE_MS_PER_SPACING * k + SPACING_DEAD_BAND_MS)
+      ++k;
+    while (k > 1 && save_ms < SAVE_MS_PER_SPACING * (k - 1) - SPACING_DEAD_BAND_MS)
+      --k;
+  }
+  m_stats.snapshot_every = m_snapshot_every;
 }
 
 void Session::SampleLocal(const Pad& local_pad)
@@ -327,12 +373,12 @@ void Session::AdaptDelay()
   // window), so stalls count from both sides, like re-simulated frames. They raise on a rate
   // (STALLS_TO_RAISE in STALL_WINDOWS windows, more during the warmup), not one at a time, and
   // stalls lined up with a hitch on either machine, which no delay cures, don't count at all.
-  const int mine = m_stats.resimulated_frames - m_window_resimulated;
+  const int mine = m_guessed_frames - m_window_resimulated;
   // The window's stalls are the most any one side had: one relay hiccup that stalls both sides
   // once is one event, not two.
   int stalls = m_link_stalls - m_window_link_stalls;
   m_window_start = m_frame;
-  m_window_resimulated = m_stats.resimulated_frames;
+  m_window_resimulated = m_guessed_frames;
   m_window_link_stalls = m_link_stalls;
   m_last_resimulated = mine;
   for (int s = 0; s < m_config.seats; ++s)
@@ -494,10 +540,22 @@ Pads Session::PadsFor(int frame)
 
 bool Session::NeedsSnapshot(int frame) const
 {
+  // Checksum frames are saved regardless, since their hash comes from the snapshot.
+  if (frame % m_config.checksum_every == 0)
+    return true;
   // A rollback only ever targets a frame that ran on a guess, and such a frame is past the newest
-  // confirmed one: the state at the start of a confirmed frame is never loaded. Checksum frames are
-  // saved regardless, since their hash comes from the snapshot.
-  return frame > ConfirmedFrame() || frame % m_config.checksum_every == 0;
+  // confirmed one: the state at the start of a confirmed frame is never loaded.
+  if (frame <= ConfirmedFrame())
+    return false;
+  // A predicted frame is saved once it is k frames past the newest snapshot of this history (the
+  // snapshots a rollback hasn't dropped). Any frame a rollback targets ran predicted, so it was
+  // either saved or had a snapshot less than k frames before it, and that snapshot is still there:
+  // only a rollback to an earlier frame drops it, and that re-runs the target too. So a rollback
+  // never re-runs more than k - 1 frames before the first wrong one. (Every frame number divisible
+  // by k would not do: frames whose inputs were in when they ran are not saved, so a rollback right
+  // after a run of them would find nothing near without an extra save past the confirmed frame.)
+  const auto newer = m_saved.lower_bound(frame);
+  return newer == m_saved.begin() || frame - *std::prev(newer) >= m_snapshot_every;
 }
 
 int Session::ConfirmedFrame() const

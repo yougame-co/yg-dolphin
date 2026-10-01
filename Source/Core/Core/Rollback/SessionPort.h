@@ -41,6 +41,7 @@ public:
   void SetResimulating(bool resimulating) override;
   std::optional<u64> SnapshotChecksum(int frame) override;
   void ResetPacing() override;
+  double SaveMs() const override { return m_save_ms; }
 
   // What GameCube port `port` (0-3) reports while the current frame runs: decoded from the
   // session's pads, the local player's included, so both machines see the same bytes.
@@ -54,7 +55,12 @@ private:
   // The newest max_rollback + 2 saves. The session saves only unconfirmed frames and checksum
   // frames, and stalls once the newest frame is max_rollback past the confirmed one, so a rollback
   // target or a checksum frame is asked for before more than max_rollback newer frames are saved.
+  // Sparse snapshots (Config::snapshot_every) need no more: a rollback to the first wrong frame d
+  // loads the newest snapshot s <= d, and every snapshot newer than s is past d, so at most
+  // max_rollback of them (frames d + 1 to the newest) are newer than the one it loads.
   SnapshotRing m_ring;
+  // Wall time of one Save, smoothed (0: none measured yet). Saves that allocate are not measured.
+  double m_save_ms = 0;
   std::array<GCPadStatus, Orca::Net::MAX_SEATS> m_pads;
   bool m_unthrottled;
   bool m_resimulating = false;

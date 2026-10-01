@@ -289,9 +289,19 @@ std::map<int, FrameRecord> s_records;
 std::vector<std::string> s_frame_events;  // CoreTiming events since the last frame end
 u64 s_checked = 0, s_mismatches = 0, s_ram_mismatches = 0, s_loads = 0;
 
+// ORCA_TEST_SNAPSHOT_EVERY=K (in a session): the synctest loads only frames that are multiples of
+// K, so each rewind re-runs k to k + K - 1 frames, like a session's rollback from a sparse
+// snapshot. Every frame is still saved (its hashes come from the save), so this checks longer
+// re-runs, not frames that run unsaved in one pass and saved in another: YG_LOOPBACK does that.
+int SyncTestLoadEvery()
+{
+  return std::max(Orca::TestSnapshotEvery(), 1);
+}
+
 SnapshotRing& Ring()
 {
-  static SnapshotRing ring(static_cast<std::size_t>(std::max(s_synctest_k, s_bench_k)) + 2);
+  static SnapshotRing ring(static_cast<std::size_t>(std::max(s_synctest_k, s_bench_k)) +
+                           static_cast<std::size_t>(SyncTestLoadEvery()) + 1);
   return ring;
 }
 
@@ -434,7 +444,8 @@ void SyncTest(Core::System& system)
   {
     s_records[f] = std::move(rec);
     s_records.erase(s_records.begin(),
-                    s_records.lower_bound(f - (s_diag ? std::max(8, s_synctest_k + 1) : 64)));
+                    s_records.lower_bound(
+                        f - (s_diag ? std::max(8, s_synctest_k + SyncTestLoadEvery()) : 64)));
   }
   else if (auto it = s_records.find(f); it != s_records.end())
   {
@@ -476,15 +487,18 @@ void SyncTest(Core::System& system)
     }
   }
 
-  // Once per new frame, rewind k frames so the last k frames are re-run and compared.
-  if (first_pass && ring.Has(f - s_synctest_k))
+  // Once per new frame, rewind k frames (to a multiple of ORCA_TEST_SNAPSHOT_EVERY at or before
+  // that) so the last k or more frames are re-run and compared.
+  const int every = SyncTestLoadEvery();
+  const int target = f - s_synctest_k - ((f - s_synctest_k) % every + every) % every;
+  if (first_pass && target >= 0 && ring.Has(target))
   {
-    if (ring.Load(system, f - s_synctest_k))
+    if (ring.Load(system, target))
     {
       ++s_loads;
       if (s_clear_jit)
         system.GetJitInterface().ClearSafe();
-      s_frame = f - s_synctest_k;
+      s_frame = target;
       s_frame_events.clear();
       if (auto history = s_scene_history.find(s_frame); history != s_scene_history.end())
       {
@@ -498,9 +512,9 @@ void SyncTest(Core::System& system)
   {
     NOTICE_LOG_FMT(ROLLBACK,
                    "Synctest frame {} (scene {}): {} re-run frames checked, {} RAM mismatches, {} "
-                   "device-state-only mismatches, {} loads",
+                   "device-state-only mismatches, {} loads (rewind {}, to multiples of {})",
                    f, s_scene, s_checked, s_ram_mismatches, s_mismatches - s_ram_mismatches,
-                   s_loads);
+                   s_loads, s_synctest_k, every);
   }
 }
 
@@ -582,6 +596,7 @@ struct LoopbackRun
   std::unique_ptr<RingPort> port;
   std::unique_ptr<Orca::Net::Session> session;
   Orca::Net::Stats stats;
+  double save_ms = 0;
   std::string error;
   bool started = false;
   // The session gave up on a remote that stopped answering, at this frame (-1: it didn't).
@@ -601,6 +616,8 @@ void EndLoopback()
   LoopbackRun& run = Lb();
   if (run.session)
     run.stats = run.session->GetStats();
+  if (run.port)
+    run.save_ms = run.port->SaveMs();
   run.session.reset();
   run.port.reset();
   run.remote.reset();
@@ -619,10 +636,14 @@ void LogLoopbackResult(int frame)
                                                 run.stats.checksums_matched >= expected;
   NOTICE_LOG_FMT(ROLLBACK,
                  "Loopback done at frame {} ({}): {} rollbacks, {} re-run frames, deepest {}, {} "
-                 "stalls, {} checksums matched, confirmed frame {}{}{}",
+                 "stalls, {} checksums matched, confirmed frame {}, {} snapshots ({:.2f} per "
+                 "frame, every {}, {:.2f} ms each){}{}",
                  frame, pass ? "PASS" : "FAIL", run.stats.rollbacks, run.stats.resimulated_frames,
                  run.stats.deepest_rollback, run.stats.stalls, run.stats.checksums_matched,
-                 run.stats.confirmed_frame, run.error.empty() ? "" : "; error: ", run.error);
+                 run.stats.confirmed_frame, run.stats.saves,
+                 frame > 0 ? static_cast<double>(run.stats.saves) / frame : 0.0,
+                 run.stats.snapshot_every, run.save_ms, run.error.empty() ? "" : "; error: ",
+                 run.error);
 }
 
 void LoopbackBoundary(Core::System& system, int frame_here, bool first_pass)
@@ -667,6 +688,7 @@ void LoopbackBoundary(Core::System& system, int frame_here, bool first_pass)
     config.max_delay = s_lb_delay;
     config.max_rollback = s_lb_max_rollback;
     config.checksum_every = s_lb_checksum_every;
+    config.snapshot_every = Orca::TestSnapshotEvery();
     std::vector<int> remote_seats;
     for (int seat = 1; seat < s_lb_seats; ++seat)
       remote_seats.push_back(seat);
@@ -678,9 +700,10 @@ void LoopbackBoundary(Core::System& system, int frame_here, bool first_pass)
     run.session = std::make_unique<Orca::Net::Session>(config, *run.port, *run.remote);
     NOTICE_LOG_FMT(ROLLBACK,
                    "Loopback: {} recorded frames, {} seats, remote lag {}+0..{}, input delay {}, "
-                   "max rollback {}, checksum every {}",
+                   "max rollback {}, checksum every {}, snapshot every {}",
                    run.recording.size(), s_lb_seats, s_lb_lag, s_lb_jitter, s_lb_delay,
-                   s_lb_max_rollback, s_lb_checksum_every);
+                   s_lb_max_rollback, s_lb_checksum_every,
+                   config.snapshot_every > 0 ? fmt::to_string(config.snapshot_every) : "auto");
   }
   if (!run.session)
     return;

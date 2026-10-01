@@ -76,10 +76,16 @@ bool SessionActive();
 //   ORCA_TEST_NET_DELAY_MS=N the YouGame room holds every message N ms (0-1000) each way, plus
 //   ORCA_TEST_NET_JITTER_MS=J a deterministic 0..J ms more per message, order kept. Set it (to 0
 //                            on the undelayed side) in both processes, so their keys match.
+//   ORCA_TEST_SNAPSHOT_EVERY=K  the session snapshots every K-th predicted frame (1-4) instead
+//                            of choosing from the measured save time; the synctest
+//                            (YG_SYNCTEST) then loads only frames that are multiples of K. Peers
+//                            may use different K, but both need some test override for their
+//                            keys to match.
 int TestPads();
 bool TestSkipRender();
 std::optional<int> TestNetDelayMs();
 int TestNetJitterMs();
+int TestSnapshotEvery();  // 0: unset
 bool TestOverridesActive();
 
 // Loads the profile for a game; nullopt and a reason when there is none, the revision differs or a

@@ -53,7 +53,8 @@ class SnapshotRing
 public:
   explicit SnapshotRing(std::size_t slots);
 
-  void Save(Core::System& system, s64 frame);
+  // Returns true when the save had to allocate (a slot's first use, or a bigger state).
+  bool Save(Core::System& system, s64 frame);
   // Restores the snapshot taken at `frame`. Returns false if it is not in the ring, the state does
   // not load, or the NAND could not be put back. Only call this from the frame-boundary hook, where
   // every snapshot was taken: loading anywhere else would resume at the hook's pinned pc, run the

@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -26,6 +27,10 @@ constexpr int MAX_SEATS = 4;
 // peer is never more than its input delay plus a rollback window ahead; this is generous).
 constexpr int MAX_PADS_IN_PACKET = 64;
 constexpr int MAX_FRAMES_AHEAD = 240;
+// Most predicted frames between two snapshots (Config::snapshot_every). A rollback may then load a
+// snapshot up to MAX_SNAPSHOT_EVERY - 1 frames older than the first wrong frame and re-run from
+// there.
+constexpr int MAX_SNAPSHOT_EVERY = 4;
 using Pads = std::array<Pad, MAX_SEATS>;
 
 // What the session needs from the emulator. Frame numbers count game frames from 0. "The state at
@@ -48,6 +53,10 @@ public:
   virtual std::optional<u64> SnapshotChecksum(int frame) = 0;
   // After a stall: restart frame pacing from now, so the emulator doesn't race to make up the time.
   virtual void ResetPacing() = 0;
+  // What one Save costs on this machine, smoothed, in milliseconds (0: not measured). A full
+  // snapshot copies all of RAM: about 1.7 ms on an M-series Mac, 9 ms or more on a PC with older
+  // DDR4, where the copy also evicts the L3 the next frame needs. Picks Config::snapshot_every.
+  virtual double SaveMs() const { return 0; }
 };
 
 // One message from one player: its most recent inputs, what it has received, and a checksum.
@@ -61,8 +70,9 @@ struct Packet
   std::array<int, MAX_SEATS> ack{-1, -1, -1, -1};
   // The frame this sender is at, for time sync.
   int current_frame = 0;
-  // Frames the sender re-simulated in its last one-second window (-1: no window yet). A side's
-  // rollbacks come from the other side's input delay, so each side adapts on the worst number.
+  // Frames the sender re-simulated in its last one-second window, counted from each rollback's
+  // first wrong frame (-1: no window yet). A side's rollbacks come from the other side's input
+  // delay, so each side adapts on the worst number.
   int resimulated = -1;
   // The sender's stalls that count for the delay, over the whole match (-1: not reported): once
   // every peer's inputs were arriving, and not lined up with a hitch on either machine. Each side's
@@ -117,6 +127,12 @@ struct Config
   int checksum_every = 60;
   // Most inputs repeated in one packet.
   int max_pads_per_packet = 16;
+  // Predicted frames per snapshot, 1 to MAX_SNAPSHOT_EVERY (0: from Game::SaveMs, re-chosen once a
+  // "second": 1 while a save costs under about 3 ms, then one more per 3 ms). A predicted frame is saved
+  // when it is k frames past the newest snapshot; checksum frames always are. A rollback loads the
+  // newest snapshot at or before the first wrong frame and re-runs from there: up to k - 1 more
+  // re-run frames (which skip rendering) in exchange for k times fewer snapshots.
+  int snapshot_every = 0;
 };
 
 enum class StepKind
@@ -145,8 +161,13 @@ struct Step
 struct Stats
 {
   int rollbacks = 0;
+  // Frames re-run, and the most in one rollback: from the snapshot loaded to the newest frame, so
+  // they include the frames before the first wrong one that sparse snapshots re-run.
   int resimulated_frames = 0;
   int deepest_rollback = 0;
+  // Snapshots taken, and the predicted frames per snapshot now (Config::snapshot_every).
+  int saves = 0;
+  int snapshot_every = 1;
   int stalls = 0;
   int checksums_matched = 0;
   int confirmed_frame = -1;
@@ -196,6 +217,7 @@ private:
   Pads PadsFor(int frame);
   int ConfirmedFrame() const;
   bool NeedsSnapshot(int frame) const;
+  void ChooseSnapshotEvery();
   void CheckChecksums();
   Step Fail(std::string error);
   bool SaveOnce(int frame);
@@ -237,10 +259,18 @@ private:
   // The frame whose state was last saved since the last load (-1: none): a repeated boundary on a
   // stalled or waiting frame must not snapshot it again.
   int m_last_saved = -1;
+  // Frames whose snapshot holds the state this session's history leads to: a rollback forgets
+  // those after the frame it loads, until the re-run saves them again.
+  std::set<int> m_saved;
+  // Predicted frames per snapshot (Config::snapshot_every, or chosen from Game::SaveMs).
+  int m_snapshot_every = 1;
 
   // Adaptive input delay, decided once per window of frame_rate frames.
   int m_delay;
   int m_window_start = 0;
+  // Frames re-run from the first wrong one on, over the match: what the link costs, whatever the
+  // snapshot spacing adds before it. The delay adapts on these.
+  int m_guessed_frames = 0;
   int m_window_resimulated = 0;
   // Re-simulated frames in this player's last window (sent), and in each peer's (received).
   int m_last_resimulated = -1;

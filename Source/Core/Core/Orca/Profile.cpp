@@ -31,6 +31,7 @@
 #include "Core/HW/SI/SI_Device.h"
 #include "Core/HW/Sram.h"
 #include "Core/HW/Wiimote.h"
+#include "Core/Orca/Session/Session.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "DiscIO/Volume.h"
@@ -210,9 +211,18 @@ int TestNetJitterMs()
   return TestNetDelayMs() && !value.empty() ? std::clamp(std::atoi(value.c_str()), 0, 1000) : 0;
 }
 
+int TestSnapshotEvery()
+{
+  const std::string value = GetEnv("ORCA_TEST_SNAPSHOT_EVERY");
+  if (!SessionActive() || value.empty())
+    return 0;
+  return std::clamp(std::atoi(value.c_str()), 1, Net::MAX_SNAPSHOT_EVERY);
+}
+
 bool TestOverridesActive()
 {
-  return TestPads() != 0 || TestSkipRender() || TestNetDelayMs().has_value();
+  return TestPads() != 0 || TestSkipRender() || TestNetDelayMs().has_value() ||
+         TestSnapshotEvery() != 0;
 }
 
 const Sram* SessionSram()

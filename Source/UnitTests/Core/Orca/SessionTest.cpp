@@ -51,6 +51,14 @@ public:
     if (!m_saved_since_load.insert(frame).second)
       ++m_double_saves;
     ++m_saves;
+    // Like SnapshotRing: a new frame takes the next slot, evicting what it held.
+    if (ring_slots > 0 && !m_snapshots.contains(frame))
+    {
+      m_ring.resize(ring_slots, -1);
+      m_snapshots.erase(m_ring[m_next]);
+      m_ring[m_next] = frame;
+      m_next = (m_next + 1) % ring_slots;
+    }
     m_snapshots[frame] = m_state;
     return true;
   }
@@ -62,6 +70,19 @@ public:
       return false;
     m_state = it->second;
     m_loads.emplace_back(frame, m_state);
+    // Like SnapshotRing: the snapshots after the loaded frame are gone (the re-run saves them
+    // again), and the next save takes the slot after the loaded one.
+    m_snapshots.erase(m_snapshots.upper_bound(frame), m_snapshots.end());
+    if (ring_slots > 0)
+    {
+      const auto slot = std::find(m_ring.begin(), m_ring.end(), frame);
+      for (int& f : m_ring)
+      {
+        if (f > frame)
+          f = -1;
+      }
+      m_next = static_cast<size_t>(slot - m_ring.begin() + 1) % ring_slots;
+    }
     return true;
   }
   void SetPads(int frame, const Pads& pads) override
@@ -80,6 +101,7 @@ public:
     return it->second;
   }
   void ResetPacing() override { ++m_pacing_resets; }
+  double SaveMs() const override { return save_ms; }
 
   // Runs the frame whose pads were set last; returns its number.
   int Run()
@@ -95,6 +117,11 @@ public:
     return m_pads_frame;
   }
 
+  // Slots like RingPort's ring (0: keep every snapshot), and what a save reports it costs.
+  size_t ring_slots = 0;
+  double save_ms = 0;
+  std::vector<int> m_ring;
+  size_t m_next = 0;
   std::map<int, u64> m_snapshots;
   std::set<int> m_saved_since_load;
   int m_saves = 0;
@@ -164,8 +191,17 @@ struct FakeNet
 struct Player
 {
   Player(const Config& config, FakeNet& net, int index)
-      : transport(net, index), session(config, game, transport), seat(index)
+      : game(RingGame(config)), transport(net, index), session(config, game, transport),
+        seat(index)
   {
+  }
+
+  // A game whose snapshots live in a ring as small as RingPort's.
+  static FakeGame RingGame(const Config& config)
+  {
+    FakeGame game;
+    game.ring_slots = static_cast<size_t>(config.max_rollback) + 2;
+    return game;
   }
 
   // Inputs that change every few frames, differently per seat, so guesses are often wrong. With
@@ -174,6 +210,8 @@ struct Player
   Pad LocalPad(int tick) const
   {
     Pad pad{};
+    if (still)
+      return pad;
     const int phase = tick + seat * 37;
     pad[0] = static_cast<u8>((phase / 7) % 4);
     pad[1] = static_cast<u8>((phase / 11) % 3 == 0 ? 0x80 : 0);
@@ -249,6 +287,8 @@ struct Player
   int seat;
   int completed = -1;
   bool tag_ticks = false;
+  // Never touch the controller: every guess is right, so nothing rolls back.
+  bool still = false;
   // >= 0: track `expected` (the session's input_delay).
   int model_input_delay = -1;
   std::map<int, Pad> expected;
@@ -496,6 +536,7 @@ private:
           period(static_cast<Micros>(std::llround(FRAME_US / s.speed))),
           start(static_cast<Micros>(s.relay_ms + s.hold_in_ms) * MS)
     {
+      game.ring_slots = static_cast<size_t>(config.max_rollback) + 2;
       // The room's start message reaches each machine after its own way from the relay.
       next_call = start;
       pace = start;
@@ -1138,14 +1179,19 @@ TEST(OrcaSessionTimeSync, UnequalRelayRoundTrips)
   EXPECT_GT(match.CompareConfirmed(), 1600);
 }
 
-TEST(OrcaSession, NeverSavesAFrameTwice)
+namespace
 {
+void ExpectNoFrameSavedTwice(int snapshot_every)
+{
+  SCOPED_TRACE(::testing::Message() << "snapshot every " << snapshot_every);
   // Stalls and time-sync waits repeat the boundary of the same frame many times: one snapshot each.
   Config stalling;
+  stalling.snapshot_every = snapshot_every;
   stalling.max_rollback = 4;
   Match stalls(stalling, 10, 2);
   stalls.Play(900);
   Config waiting;
+  waiting.snapshot_every = snapshot_every;
   waiting.max_delay = waiting.input_delay;
   Match waits(waiting, 3, 1);
   waits.rtt_samples = true;
@@ -1156,12 +1202,21 @@ TEST(OrcaSession, NeverSavesAFrameTwice)
     ExpectClean(*match);
     for (const Player* p : {match->a.get(), match->b.get()})
     {
-      EXPECT_GT(p->game.m_saves, 100);
+      EXPECT_GT(p->game.m_saves, 100 / snapshot_every);
       EXPECT_EQ(p->game.m_double_saves, 0);
+      EXPECT_EQ(p->session.GetStats().saves, p->game.m_saves);
     }
+    EXPECT_GT(match->CompareConfirmed(), 300);
   }
   EXPECT_GT(stalls.a->session.GetStats().stalls, 0);
   EXPECT_GT(waits.a->session.GetStats().waits, 0);
+}
+}  // namespace
+
+TEST(OrcaSession, NeverSavesAFrameTwice)
+{
+  for (int k = 1; k <= MAX_SNAPSHOT_EVERY; ++k)
+    ExpectNoFrameSavedTwice(k);
 }
 
 TEST(OrcaSessionDelay, FixedDelaySamplesLandDelayFramesLater)
@@ -1622,7 +1677,9 @@ TEST(OrcaSessionRelay, LanWithHitchesTracksTheLink)
 // up and down, by several frames at once in the first seconds), with time sync on. Whatever the
 // delays do, both machines must end up having run every confirmed frame with identical inputs,
 // and with identical states.
-TEST(OrcaSessionFuzz, BothSidesRunIdenticalInputsUnderDelaySwings)
+namespace
+{
+void FuzzDelaySwings(int snapshot_every)
 {
   for (u32 seed = 1; seed <= 60; ++seed)
   {
@@ -1631,6 +1688,7 @@ TEST(OrcaSessionFuzz, BothSidesRunIdenticalInputsUnderDelaySwings)
       return std::uniform_int_distribution<int>(lo, hi)(rng);
     };
     Config config;
+    config.snapshot_every = snapshot_every;
     config.input_delay = pick(0, 3);
     config.max_delay = config.input_delay + pick(0, 5);
     Match match(config, pick(0, 8), pick(0, 6));
@@ -1645,13 +1703,23 @@ TEST(OrcaSessionFuzz, BothSidesRunIdenticalInputsUnderDelaySwings)
       {
         if (pick(0, 3) == 0)
           p->session.OnRoundTrip(pick(5, 450));
+        // Automatic spacing (snapshot_every 0): what a save costs swings too, so the spacing
+        // changes mid-match, by several steps at once.
+        if (snapshot_every == 0 && seed % 2 == 0 && pick(0, 3) == 0)
+          p->game.save_ms = pick(0, 14);
       }
       match.Play(pick(5, 60));
     }
     match.Play(400);  // settle
 
-    SCOPED_TRACE(::testing::Message() << "seed " << seed);
+    SCOPED_TRACE(::testing::Message() << "seed " << seed << ", snapshot every " << snapshot_every);
     ExpectClean(match);
+    for (const Player* p : {match.a.get(), match.b.get()})
+    {
+      EXPECT_LE(p->session.GetStats().deepest_rollback,
+                config.max_rollback +
+                    (snapshot_every > 0 ? snapshot_every : MAX_SNAPSHOT_EVERY) - 1);
+    }
     const int confirmed = std::min(Settled(*match.a), Settled(*match.b));
     ASSERT_GT(confirmed, 500);
     int checked = 0;
@@ -1668,4 +1736,222 @@ TEST(OrcaSessionFuzz, BothSidesRunIdenticalInputsUnderDelaySwings)
     EXPECT_GT(match.CompareConfirmed(), 300);
   }
 }
+}  // namespace
 
+TEST(OrcaSessionFuzz, BothSidesRunIdenticalInputsUnderDelaySwings)
+{
+  FuzzDelaySwings(0);
+}
+
+// The same with sparse snapshots: rollbacks load a snapshot up to k - 1 frames before the first
+// wrong frame, from a ring as small as RingPort's.
+TEST(OrcaSessionFuzz, SparseSnapshotsKeepBothSidesIdentical)
+{
+  for (int k = 2; k <= MAX_SNAPSHOT_EVERY; ++k)
+    FuzzDelaySwings(k);
+}
+
+// Every frame runs on a guess (the link is slower than the input delay): k times fewer snapshots,
+// the same confirmed states and checksums.
+TEST(OrcaSessionSparse, SavesDropByKUnderConstantPrediction)
+{
+  for (const bool still : {true, false})
+  {
+    std::array<double, MAX_SNAPSHOT_EVERY + 1> per_frame{};
+    std::array<u64, MAX_SNAPSHOT_EVERY + 1> final_state{};
+    for (int k = 1; k <= MAX_SNAPSHOT_EVERY; ++k)
+    {
+      SCOPED_TRACE(::testing::Message() << "still " << still << ", snapshot every " << k);
+      Config config;
+      config.snapshot_every = k;
+      config.max_delay = config.input_delay;
+      Match match(config, 5, 0);
+      match.a->still = still;
+      match.b->still = still;
+      match.Play(3000);
+      ExpectClean(match);
+      EXPECT_GT(match.CompareConfirmed(), 2900);
+      const Stats& stats = match.a->session.GetStats();
+      EXPECT_GT(stats.checksums_matched, 40);
+      EXPECT_EQ(stats.snapshot_every, k);
+      EXPECT_LE(stats.deepest_rollback, config.max_rollback + k - 1);
+      EXPECT_EQ(stats.rollbacks > 0, !still);
+      per_frame[k] = static_cast<double>(stats.saves) / match.a->session.CurrentFrame();
+      // The same inputs make the same game whatever the snapshot spacing.
+      const auto late = match.a->game.m_history.find(2800);
+      ASSERT_NE(late, match.a->game.m_history.end());
+      final_state[k] = late->second;
+      EXPECT_EQ(final_state[k], final_state[1]);
+      std::printf("[ sparse %s k=%d ] %.3f saves per frame, %d rollbacks, %d re-run frames, "
+                  "deepest %d\n",
+                  still ? "still" : "moving", k, per_frame[k], stats.rollbacks,
+                  stats.resimulated_frames, stats.deepest_rollback);
+    }
+    for (int k = 2; k <= MAX_SNAPSHOT_EVERY; ++k)
+    {
+      // Constant input: exactly every k-th frame, and a checksum frame now and then. Rollbacks
+      // re-save on their re-runs, which k spreads out too.
+      const double ratio = per_frame[1] / per_frame[k];
+      EXPECT_GT(ratio, still ? 0.9 * k : 0.7 * k) << "k " << k;
+    }
+  }
+}
+
+// The first wrong frame falls between two snapshots: the rollback loads the newest snapshot before
+// it and re-runs the frames in between with the inputs they had, which come out the same. Checked
+// against a game run straight with the right inputs.
+TEST(OrcaSessionSparse, RollbackBetweenSnapshotsReRunsFromTheOlderOne)
+{
+  // The remote input changes every 17 frames and arrives 4 frames late (input delay 2): each
+  // change is a wrong guess at exactly that frame.
+  constexpr int CHANGE_EVERY = 17;
+  const auto remote = [](int f) { return Pad{static_cast<u8>((f / CHANGE_EVERY) % 4)}; };
+  struct Lagging final : Transport
+  {
+    Lagging(std::function<Pad(int)> remote_pad, int lag_frames)
+        : pad(std::move(remote_pad)), lag(lag_frames)
+    {
+    }
+    void Send(const Packet&) override {}
+    std::vector<Packet> Receive() override
+    {
+      Packet packet;
+      packet.seat = 1;
+      packet.first_frame = next;
+      for (; next <= session->CurrentFrame() - lag; ++next)
+        packet.pads.push_back(pad(next));
+      packet.current_frame = session->CurrentFrame();
+      return {packet};
+    }
+    bool Connected() const override { return true; }
+    std::function<Pad(int)> pad;
+    int lag;
+    Session* session = nullptr;
+    int next = 0;
+  };
+  // Records, at every load, the snapshots the game held just before it.
+  struct Recording final : Game
+  {
+    bool Save(int frame) override { return game.Save(frame); }
+    bool Load(int frame) override
+    {
+      std::set<int> held;
+      for (const auto& [f, state] : game.m_snapshots)
+        held.insert(f);
+      held_at_load.push_back(std::move(held));
+      return game.Load(frame);
+    }
+    void SetPads(int frame, const Pads& pads) override { game.SetPads(frame, pads); }
+    void SetResimulating(bool resimulating) override { game.SetResimulating(resimulating); }
+    std::optional<u64> SnapshotChecksum(int frame) override { return game.SnapshotChecksum(frame); }
+    void ResetPacing() override { game.ResetPacing(); }
+    FakeGame game;
+    std::vector<std::set<int>> held_at_load;
+  };
+
+  // 4 frames late; and max_rollback late, where rollbacks reach max_rollback + k - 1 frames back
+  // through a ring as small as RingPort's.
+  for (const int LAG : {4, Config{}.max_rollback})
+  for (int k = 2; k <= MAX_SNAPSHOT_EVERY; ++k)
+  {
+    SCOPED_TRACE(::testing::Message() << "lag " << LAG << ", snapshot every " << k);
+    Recording game;
+    Lagging net(remote, LAG);
+    Config config;
+    config.time_sync = false;
+    config.max_delay = config.input_delay;
+    config.snapshot_every = k;
+    game.game.ring_slots = static_cast<size_t>(config.max_rollback) + 2;
+    Session session(config, game, net);
+    net.session = &session;
+    int completed = -1;
+    for (int i = 0; i < 1200; ++i)
+    {
+      const Step step = session.OnBoundary(completed, Pad{});
+      ASSERT_NE(step.kind, StepKind::Ended) << session.Error();
+      if (step.kind == StepKind::Run || step.kind == StepKind::Rollback)
+        completed = game.game.Run();
+    }
+    const Stats& stats = session.GetStats();
+    const std::vector<std::pair<int, u64>>& loads = game.game.m_loads;
+    ASSERT_EQ(loads.size(), static_cast<size_t>(stats.rollbacks));
+    ASSERT_GT(loads.size(), 40u);
+
+    FakeGame straight;
+    for (int f = 0; f <= stats.confirmed_frame; ++f)
+    {
+      straight.SetPads(f, Pads{Pad{}, remote(f)});
+      straight.Run();
+    }
+    const auto state_at = [](const FakeGame& g, int f) {
+      const auto it = g.m_history.find(f);
+      return it == g.m_history.end() ? std::optional<u64>() : it->second;
+    };
+    int before_wrong = 0;
+    for (size_t i = 0; i < loads.size(); ++i)
+    {
+      // The i-th rollback is the (i + 1)-th change.
+      const int wrong = static_cast<int>(i + 1) * CHANGE_EVERY;
+      const int loaded = loads[i].first;
+      const std::set<int>& held = game.held_at_load[i];
+      EXPECT_LE(loaded, wrong);
+      EXPECT_LE(wrong - loaded, k - 1) << "wrong frame " << wrong;
+      // The newest snapshot at or before the wrong frame, not just any.
+      const auto newer = held.upper_bound(wrong);
+      EXPECT_EQ(newer == held.begin() ? -1 : *std::prev(newer), loaded) << "wrong frame " << wrong;
+      EXPECT_EQ(loads[i].second, state_at(straight, loaded)) << "load of frame " << loaded;
+      before_wrong += loaded < wrong;
+    }
+    // Most changes land between snapshots (k - 1 of every k frames are not saved).
+    EXPECT_GT(before_wrong, static_cast<int>(loads.size()) / 3);
+    EXPECT_EQ(stats.deepest_rollback, LAG + k - 1);
+    EXPECT_EQ(stats.stalls, 0);
+    std::printf("[ between lag %d k=%d ] %zu rollbacks, %d loaded a snapshot before the wrong "
+                "frame\n",
+                LAG, k, loads.size(), before_wrong);
+    EXPECT_EQ(stats.resimulated_frames - stats.rollbacks * LAG, [&] {
+      int extra = 0;
+      for (size_t i = 0; i < loads.size(); ++i)
+        extra += static_cast<int>(i + 1) * CHANGE_EVERY - loads[i].first;
+      return extra;
+    }());
+    int compared = 0;
+    for (int f = 0; f <= stats.confirmed_frame; ++f, ++compared)
+      EXPECT_EQ(state_at(game.game, f), state_at(straight, f)) << "frame " << f;
+    EXPECT_GT(compared, 700);
+  }
+}
+
+// The spacing follows what a save costs on this machine.
+TEST(OrcaSessionSparse, SpacingFollowsTheMeasuredSaveTime)
+{
+  for (const auto& [save_ms, k] : std::vector<std::pair<double, int>>{
+           {0.0, 1}, {1.7, 1}, {2.9, 1}, {3.5, 2}, {6.0, 2}, {6.4, 3}, {9.4, 4}, {40.0, 4}})
+  {
+    SCOPED_TRACE(::testing::Message() << save_ms << " ms");
+    Config config;
+    Match match(config, 5, 0);
+    match.a->game.save_ms = save_ms;
+    match.Play(130);  // two windows: the spacing is re-chosen once a window
+    ExpectClean(match);
+    EXPECT_EQ(match.a->session.GetStats().snapshot_every, k);
+    EXPECT_EQ(match.b->session.GetStats().snapshot_every, 1);
+    // A fixed spacing (ORCA_TEST_SNAPSHOT_EVERY) wins over the measurement.
+    config.snapshot_every = 2;
+    Match fixed(config, 5, 0);
+    fixed.a->game.save_ms = save_ms;
+    fixed.Play(130);
+    EXPECT_EQ(fixed.a->session.GetStats().snapshot_every, 2);
+  }
+  // A save time that drifts across a step moves the spacing only once it is clear of it.
+  Match match(Config{}, 5, 0);
+  for (const auto& [save_ms, k] : std::vector<std::pair<double, int>>{
+           {6.4, 3}, {6.1, 3}, {5.9, 3}, {5.7, 2}, {6.2, 2}, {6.3, 3}, {0.5, 1}})
+  {
+    SCOPED_TRACE(::testing::Message() << save_ms << " ms");
+    match.a->game.save_ms = save_ms;
+    match.Play(60);
+    EXPECT_EQ(match.a->session.GetStats().snapshot_every, k);
+  }
+  ExpectClean(match);
+}
