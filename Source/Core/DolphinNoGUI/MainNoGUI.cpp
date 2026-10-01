@@ -15,13 +15,17 @@
 #include <windows.h>
 #endif
 
+#include <fmt/format.h>
+
+#include "Common/MsgHandler.h"
 #include "Common/ScopeGuard.h"
 #include "Core/Boot/Boot.h"
 #include "Core/BootManager.h"
 #include "Core/Core.h"
-#include "Core/Orca/Status.h"
 #include "Core/DolphinAnalytics.h"
 #include "Core/Host.h"
+#include "Core/Orca/Branding.h"
+#include "Core/Orca/Status.h"
 #include "Core/System.h"
 
 #include "UICommon/CommandLineParse.h"
@@ -34,7 +38,7 @@ static std::unique_ptr<Platform> s_platform;
 
 static void signal_handler(int)
 {
-  constexpr char message[] = "A signal was received. A second signal will force Dolphin to stop.\n";
+  constexpr char message[] = "A signal was received. A second signal will force Orca to stop.\n";
 #ifdef _WIN32
   puts(message);
 #else
@@ -45,6 +49,16 @@ static void signal_handler(int)
 
   s_platform->RequestShutdown();
 }
+
+#ifndef _WIN32
+// Alerts go to stderr, as with the default handler, but name Orca in a session.
+static bool MsgAlertHandler(const char*, const char* text, bool, Common::MsgType)
+{
+  fmt::print(stderr, "{}\n", Orca::BrandText(text));
+  // No to any question, like the default handler.
+  return false;
+}
+#endif
 
 std::vector<std::string> Host_GetPreferredLocales()
 {
@@ -72,7 +86,7 @@ void Host_Message(const HostMessageID id)
 
 void Host_UpdateTitle(const std::string& title)
 {
-  s_platform->SetTitle(title);
+  s_platform->ShowTitle(title);
 }
 
 void Host_UpdateDisasmDialog()
@@ -255,6 +269,10 @@ int main(const int argc, char* argv[])
     parser->print_help();
     return 0;
   }
+
+#ifndef _WIN32
+  Common::RegisterMsgAlertHandler(MsgAlertHandler);
+#endif
 
   std::string user_directory;
   if (options.is_set("user"))

@@ -65,6 +65,7 @@
 #include "Core/Movie.h"
 #include "Core/NetPlayClient.h"
 #include "Core/NetPlayProto.h"
+#include "Core/Orca/Branding.h"
 #include "Core/Orca/Profile.h"
 #include "Core/PatchEngine.h"
 #include "Core/PowerPC/GDBStub.h"
@@ -901,6 +902,13 @@ void Callback_NewField(Core::System& system)
 
 void UpdateTitle(Core::System& system)
 {
+  // Orca: a player in a session sees "Orca — <game> — <room status>", not build details.
+  if (Orca::SessionActive())
+  {
+    Host_UpdateTitle(Orca::WindowTitle());
+    return;
+  }
+
   // Settings are shown the same for both extended and summary info
   const std::string SSettings = fmt::format(
       "{} {} | {} | {}", system.GetPowerPC().GetCPUName(), system.IsDualCoreMode() ? "DC" : "SC",
