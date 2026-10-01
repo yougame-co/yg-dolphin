@@ -9,6 +9,7 @@
 
 #include <gtest/gtest.h>
 
+#include "Core/Orca/Session/PadCodec.h"
 #include "Core/Orca/Session/Session.h"
 
 using namespace Orca::Net;
@@ -259,4 +260,29 @@ TEST(OrcaSession, DetectsDesync)
   const bool detected = match.a->session.Error().find("Desync") != std::string::npos ||
                         match.b->session.Error().find("Desync") != std::string::npos;
   EXPECT_TRUE(detected) << match.a->session.Error() << " / " << match.b->session.Error();
+}
+
+TEST(OrcaPadCodec, NeutralIsZeroAndRoundTrips)
+{
+  EXPECT_EQ(EncodePad(GCPadStatus{}), Pad{});
+
+  GCPadStatus status;
+  status.button = PAD_BUTTON_A | PAD_TRIGGER_Z | PAD_GET_ORIGIN | PAD_USE_ORIGIN;
+  status.stickX = 0;
+  status.stickY = 255;
+  status.substickX = 37;
+  status.substickY = 200;
+  status.triggerLeft = 255;
+  status.triggerRight = 12;
+  status.analogA = 99;
+  const GCPadStatus back = DecodePad(EncodePad(status));
+  EXPECT_EQ(back.button, PAD_BUTTON_A | PAD_TRIGGER_Z);  // origin bits never travel
+  EXPECT_EQ(back.stickX, 0);
+  EXPECT_EQ(back.stickY, 255);
+  EXPECT_EQ(back.substickX, 37);
+  EXPECT_EQ(back.substickY, 200);
+  EXPECT_EQ(back.triggerLeft, 255);
+  EXPECT_EQ(back.triggerRight, 12);
+  EXPECT_EQ(back.analogA, 0);
+  EXPECT_TRUE(back.isConnected);
 }
