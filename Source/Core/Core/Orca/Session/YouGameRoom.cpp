@@ -510,6 +510,9 @@ struct YouGameRoom::Impl
   // Counts pongs, so a caller can tell a new measurement from the same one read again.
   u32 rtt_sequence = 0;
   std::vector<Packet> inbox;
+  // Which connection sent each inbox packet: a player who left takes its unread packets with it
+  // (the next player in that seat must not read them as its own).
+  std::vector<std::string> inbox_from;
   std::optional<Packet> outgoing;
 
   // The I/O thread's own.
@@ -1176,6 +1179,20 @@ struct YouGameRoom::Impl
     SendJson(message);
   }
 
+  // A player left: its unread packets go too.
+  void ForgetPackets(const std::string& id)
+  {
+    std::lock_guard lock(mutex);
+    for (size_t i = inbox.size(); i-- > 0;)
+    {
+      if (inbox_from[i] == id)
+      {
+        inbox.erase(inbox.begin() + static_cast<std::ptrdiff_t>(i));
+        inbox_from.erase(inbox_from.begin() + static_cast<std::ptrdiff_t>(i));
+      }
+    }
+  }
+
   void Emit(PeerEvent event)
   {
     std::lock_guard lock(mutex);
@@ -1235,6 +1252,7 @@ struct YouGameRoom::Impl
         std::lock_guard lock(mutex);
         keyframe_offers.erase(p->second.slot);
       }
+      ForgetPackets(p->first);
       p = peers.erase(p);
     }
     for (const auto& [id, info] : present)
@@ -1297,6 +1315,7 @@ struct YouGameRoom::Impl
               std::lock_guard lock(mutex);
               keyframe_offers.erase(p->second.slot);
             }
+            ForgetPackets(p->first);
             p->second = {};
             p->second.slot = -1;
           }
@@ -1418,8 +1437,10 @@ struct YouGameRoom::Impl
     {
       WARN_LOG_FMT(NETPLAY, "Orca room: inbox full, dropping the {} oldest packets", MAX_INBOX / 2);
       inbox.erase(inbox.begin(), inbox.begin() + MAX_INBOX / 2);
+      inbox_from.erase(inbox_from.begin(), inbox_from.begin() + MAX_INBOX / 2);
     }
     inbox.push_back(std::move(packet));
+    inbox_from.push_back(id);
   }
 };
 
@@ -1556,6 +1577,7 @@ void YouGameRoom::Send(const Packet& packet)
 std::vector<Packet> YouGameRoom::Receive()
 {
   std::lock_guard lock(m_impl->mutex);
+  m_impl->inbox_from.clear();
   return std::exchange(m_impl->inbox, {});
 }
 

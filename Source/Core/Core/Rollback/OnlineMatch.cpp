@@ -412,6 +412,8 @@ void HostEvents(Core::System& system, Match& match)
       std::array<Orca::Net::SeatPlan, Orca::Net::MAX_SEATS> plan{};
       plan[0] = {0, Orca::Net::NEVER, 0};
       config.plan = plan;
+      // Whatever arrived while solo (a friend's last packets, after it left) belongs to no one.
+      Orca::Online::Transport()->Receive();
       match.session = std::make_unique<Orca::Net::Session>(config, *match.port,
                                                            *Orca::Online::Transport());
       match.session->SetLog(match.log_base, std::move(match.log));
