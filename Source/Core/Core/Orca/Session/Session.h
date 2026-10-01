@@ -60,6 +60,9 @@ struct Packet
   std::array<int, MAX_SEATS> ack{-1, -1, -1, -1};
   // The frame this sender is at, for time sync.
   int current_frame = 0;
+  // Frames the sender re-simulated in its last one-second window (-1: no window yet). A side's
+  // rollbacks come from the other side's input delay, so each side adapts on the worst number.
+  int resimulated = -1;
   std::optional<int> checksum_frame;
   u64 checksum = 0;
 };
@@ -78,8 +81,20 @@ struct Config
 {
   int seats = 2;
   int local_seat = 0;
-  // Frames between sampling a local input and the frame it applies to.
+  // Frames between sampling a local input and the frame it applies to: the starting delay and the
+  // floor of the adaptive one.
   int input_delay = 2;
+  // Ceiling of the adaptive delay (100 ms at 60 Hz). At or below input_delay the delay never
+  // changes. Each player's delay is its own: every local input travels explicitly, whichever
+  // boundary sampled it, so peers with different delays agree on every frame.
+  int max_delay = 6;
+  // Game frames per second. Frames are the session's only clock: "a second" for the delay and
+  // time-sync windows is this many frames run, so sessions fed the same packets decide alike. Also
+  // converts round trips in milliseconds into frames.
+  int frame_rate = 60;
+  // Ask for a one-frame wait (StepKind::Wait) while this player runs ahead of the others. Needs
+  // round-trip samples (Session::OnRoundTrip); without them the session never waits.
+  bool time_sync = true;
   // Deepest rollback allowed; beyond it the session stalls until inputs arrive.
   int max_rollback = 7;
   // Every this many confirmed frames, players exchange a state checksum (a full RAM hash costs a few
@@ -98,6 +113,10 @@ enum class StepKind
   // Waiting for remote inputs: call OnBoundary again with the same frame without running anything
   // (after a short wait; give up if the emulator is stopping).
   Stall,
+  // Time sync: this player has been running ahead of the others, so it gives one frame of time
+  // back. Hold for one frame period, then call OnBoundary again with the same frame (the session
+  // resets pacing there, so the frame is not made up). At most one per 30 frames.
+  Wait,
   // The session ended (see Session::Error).
   Ended,
 };
@@ -116,6 +135,14 @@ struct Stats
   int stalls = 0;
   int checksums_matched = 0;
   int confirmed_frame = -1;
+  // The current input delay and how it got there (start raises from round trips not counted).
+  int delay = 0;
+  int delay_raises = 0;
+  int delay_lowers = 0;
+  int delay_reverts = 0;
+  // Time-sync waits, and the last averaged lead over the slowest other player, in frames.
+  int waits = 0;
+  double frame_advantage = 0;
 };
 
 class Session
@@ -125,13 +152,18 @@ public:
 
   // Called at every boundary. `completed_frame` is the frame that just finished (-1 at the very
   // first boundary, before frame 0). `local_pad` is the local controller now; it applies to frame
-  // (next frame + input_delay). Re-run boundaries also call this; the pad is ignored there.
+  // (next frame + Delay()). Re-run boundaries also call this; the pad is ignored there.
   Step OnBoundary(int completed_frame, const Pad& local_pad);
+  // A measured round trip to the other player(s), from the transport's pings. Call it on the thread
+  // that calls OnBoundary. In the first three seconds it may raise the delay to cover the latency;
+  // time sync needs it to place the other players' frames.
+  void OnRoundTrip(int rtt_ms);
 
   const std::string& Error() const { return m_error; }
   const Stats& GetStats() const { return m_stats; }
   int CurrentFrame() const { return m_frame; }
   bool Resimulating() const { return m_resim_until >= 0; }
+  int Delay() const { return m_delay; }
 
 private:
   void ReceivePackets();
@@ -141,6 +173,11 @@ private:
   bool NeedsSnapshot(int frame) const;
   void CheckChecksums();
   Step Fail(std::string error);
+  void SampleLocal(const Pad& local_pad);
+  void AdaptDelay();
+  int LatencyDelay() const;
+  double FramesFromMs(double ms) const;
+  void TrackAdvantage();
 
   Config m_config;
   Game& m_game;
@@ -169,6 +206,32 @@ private:
   std::optional<int> m_pending_checksum;
   int m_last_sent_newest = -1;
   bool m_stalling = false;
+
+  // Adaptive input delay, decided once per window of frame_rate frames.
+  int m_delay;
+  int m_window_start = 0;
+  int m_window_resimulated = 0;
+  int m_window_stalls = 0;
+  // Re-simulated frames in this player's last window (sent), and in each peer's (received).
+  int m_last_resimulated = -1;
+  std::array<int, MAX_SEATS> m_peer_resimulated{-1, -1, -1, -1};
+  int m_quiet_windows = 0;
+  int m_quiet_needed;
+  // After a lower: the delay before it, restored if a window on probation is not quiet (0: none).
+  int m_tried_delay = 0;
+  int m_probe_windows = 0;
+
+  // Smoothed round trip and its mean deviation, in milliseconds (no samples yet: nullopt).
+  std::optional<double> m_rtt_ms;
+  double m_rtt_dev_ms = 0;
+
+  // Time sync: each peer's last estimated lag behind us, in frames, averaged over a window.
+  std::array<std::optional<double>, MAX_SEATS> m_advantage;
+  double m_advantage_sum = 0;
+  int m_advantage_samples = 0;
+  int m_sync_start = 0;
+  bool m_wait_pending = false;
+  bool m_waiting = false;
 
   Stats m_stats;
   std::string m_error;
