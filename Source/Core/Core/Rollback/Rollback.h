@@ -3,8 +3,10 @@
 
 // Orca rollback core: exact whole-machine snapshots taken and restored at one point in the frame.
 //
-// A snapshot is RAM (MEM1, MEM2, the locked L1 cache) copied by the ring, plus everything else
-// through Dolphin's own DoState with RAM skipped. Saves and loads happen at the same instruction
+// A snapshot is RAM (MEM1, MEM2, the locked L1 cache) kept by the ring, plus everything else
+// through Dolphin's own DoState with RAM skipped. In a session, MEM1 and MEM2 are kept copy-on-write
+// (Rollback/Cow.h): a snapshot holds only the pages written after it; ORCA_TEST_FULL_SNAPSHOTS=1
+// and anything outside a session copy them whole. Saves and loads happen at the same instruction
 // (the frame boundary), so CPU registers, the stack, CoreTiming, the DSP, IOS and the devices are
 // all restored as they were. Subsystems check InSnapshotDoState() to leave out what a rollback
 // must not touch: RAM inside DoState, the JIT clears on load (JitInterface and unchanged BATs), and
@@ -52,6 +54,9 @@ class SnapshotRing
 {
 public:
   explicit SnapshotRing(std::size_t slots);
+  ~SnapshotRing();
+  SnapshotRing(const SnapshotRing&) = delete;
+  SnapshotRing& operator=(const SnapshotRing&) = delete;
 
   // Returns true when the save had to allocate (a slot's first use, or a bigger state).
   bool Save(Core::System& system, s64 frame);
@@ -79,14 +84,21 @@ private:
     Common::UniqueBuffer<u8> state;
     std::size_t state_size = 0;
     u64 nand_journal_mark = 0;  // the NAND journal mark this snapshot's state recorded
+    // The copy-on-write snapshot of MEM1 and MEM2 (Cow.h), or 0 when they are copied in mem1/mem2.
+    u64 cow_id = 0;
   };
 
   Slot* Find(s64 frame);
   const Slot* Find(s64 frame) const;
+  // Empties a slot (its copy-on-write snapshot merges into the one before it).
+  void Forget(Slot* slot);
+  // Whether this ring's saves are copy-on-write, decided (and tracking armed) at its first save.
+  bool UseCow(Core::System& system, bool* armed_now);
 
   std::vector<Slot> m_slots;
   std::size_t m_next = 0;
   std::size_t m_last = 0;
+  std::optional<bool> m_cow;
 };
 
 // XXH3 over MEM1 then MEM2: the state checksum players compare to detect a desync.

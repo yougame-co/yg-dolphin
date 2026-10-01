@@ -219,10 +219,15 @@ int TestSnapshotEvery()
   return std::clamp(std::atoi(value.c_str()), 1, Net::MAX_SNAPSHOT_EVERY);
 }
 
+bool TestFullSnapshots()
+{
+  return SessionActive() && EnvIs("ORCA_TEST_FULL_SNAPSHOTS", "1");
+}
+
 bool TestOverridesActive()
 {
   return TestPads() != 0 || TestSkipRender() || TestNetDelayMs().has_value() ||
-         TestSnapshotEvery() != 0;
+         TestSnapshotEvery() != 0 || TestFullSnapshots();
 }
 
 const Sram* SessionSram()

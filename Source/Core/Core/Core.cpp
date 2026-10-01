@@ -72,6 +72,7 @@
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/State.h"
+#include "Core/Rollback/Cow.h"
 #include "Core/System.h"
 #include "Core/WiiRoot.h"
 
@@ -390,6 +391,8 @@ static void CpuThread(Core::System& system, const std::optional<std::string>& sa
   s_memory_watcher.reset();
 #endif
 
+  // Rollback snapshots' write-protected RAM needs the fault handler: writable again first.
+  Rollback::Cow::StopTracking();
   if (exception_handler)
     EMM::UninstallExceptionHandler();
 

@@ -34,6 +34,7 @@
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Session/PadCodec.h"
 #include "Core/PowerPC/MMU.h"
+#include "Core/Rollback/Diag.h"
 #include "Core/Rollback/Loopback.h"
 #include "Core/Rollback/OnlineMatch.h"
 #include "Core/Rollback/Rollback.h"
@@ -839,7 +840,7 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
     return;
   auto& system = guard.GetSystem();
   // Harness modes run unthrottled, unless a session's port paces the run (an online match).
-  if (!RingPort::Active())
+  if (!RingPort::Active() && !Diag::KeepThrottle())
     Core::SetIsThrottlerTempDisabled(true);
   if (s_diag && s_synctest_k > 0 && s_frame >= s_synctest_from - 1)
     CoreTiming::g_rollback_event_trace = &s_frame_events;
@@ -862,6 +863,8 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
 
   const int frame_here = s_frame;
   const bool first_pass_here = frame_here > s_max_frame;  // false while re-running after a load
+  if (first_pass_here)
+    Diag::OnFirstPassBoundary(system, frame_here);
   if (s_hashlog && first_pass_here && s_synctest_k <= 0)
   {
     const auto regions = HashRegions(system);
@@ -972,6 +975,7 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
       s_online_stop_at < 0)
   {
     s_stop_queued = true;
+    Diag::LogSummary();
     NOTICE_LOG_FMT(ROLLBACK,
                    "Harness done at frame {}: {} re-run frames checked, {} RAM mismatches ({}), {} "
                    "device-state-only mismatches, {} loads",

@@ -81,11 +81,14 @@ bool SessionActive();
 //                            (YG_SYNCTEST) then loads only frames that are multiples of K. Peers
 //                            may use different K, but both need some test override for their
 //                            keys to match.
+//   ORCA_TEST_FULL_SNAPSHOTS=1  rollback snapshots copy all of RAM, as before copy-on-write
+//                            snapshots (Rollback/Cow.h), to compare the two.
 int TestPads();
 bool TestSkipRender();
 std::optional<int> TestNetDelayMs();
 int TestNetJitterMs();
 int TestSnapshotEvery();  // 0: unset
+bool TestFullSnapshots();
 bool TestOverridesActive();
 
 // Loads the profile for a game; nullopt and a reason when there is none, the revision differs or a
