@@ -501,6 +501,8 @@ add_library(core
   Movie.cpp
   Movie.h
   NetPlayClient.cpp
+  Orca/Profile.cpp
+  Orca/Profile.h
   NetPlayClient.h
   NetPlayCommon.cpp
   NetPlayCommon.h

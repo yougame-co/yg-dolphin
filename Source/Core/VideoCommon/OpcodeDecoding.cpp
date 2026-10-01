@@ -27,6 +27,7 @@
 #include "VideoCommon/Statistics.h"
 #include "VideoCommon/VertexLoaderBase.h"
 #include "VideoCommon/VertexLoaderManager.h"
+#include "VideoCommon/VideoState.h"
 #include "VideoCommon/XFMemory.h"
 #include "VideoCommon/XFStateManager.h"
 
@@ -129,8 +130,12 @@ public:
     // load vertices
     const u32 size = vertex_size * num_vertices;
 
+    // Orca: a skipped frame loads and draws nothing; the decoder already knows the size.
     const u32 bytes =
-        VertexLoaderManager::RunVertices<is_preprocess>(vat, primitive, num_vertices, vertex_data);
+        (!is_preprocess && VideoCommon_IsSkippingRender()) ?
+            size :
+            VertexLoaderManager::RunVertices<is_preprocess>(vat, primitive, num_vertices,
+                                                            vertex_data);
 
     ASSERT(bytes == size);
 

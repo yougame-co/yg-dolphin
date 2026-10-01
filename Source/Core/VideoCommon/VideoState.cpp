@@ -3,6 +3,8 @@
 
 #include "VideoCommon/VideoState.h"
 
+#include <atomic>
+
 #include "Common/ChunkFile.h"
 #include "Core/System.h"
 #include "VideoCommon/BPMemory.h"
@@ -26,6 +28,20 @@
 #include "VideoCommon/Widescreen.h"
 #include "VideoCommon/XFMemory.h"
 #include "VideoCommon/XFStateManager.h"
+
+static std::atomic<bool> s_skip_render{false};
+
+void VideoCommon_SetSkipRender(bool skip)
+{
+  if (skip && Core::System::GetInstance().IsDualCoreMode())
+    skip = false;
+  s_skip_render.store(skip, std::memory_order_relaxed);
+}
+
+bool VideoCommon_IsSkippingRender()
+{
+  return s_skip_render.load(std::memory_order_relaxed);
+}
 
 void VideoCommon_DoState(PointerWrap& p)
 {

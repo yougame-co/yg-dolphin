@@ -64,6 +64,16 @@ if(USE_DISCORD_PRESENCE)
   target_compile_definitions(dolphin-nogui PRIVATE -DUSE_DISCORD_PRESENCE)
 endif()
 
+if(APPLE)
+  # Orca: a headless macOS build looks for Sys at <exe dir>/Contents/Resources/Sys (the bundle layout),
+  # which a plain build never creates. Link the source tree's Data/Sys there so game INIs and Orca
+  # profiles are found in development builds.
+  add_custom_command(TARGET dolphin-nogui POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_FILE_DIR:dolphin-nogui>/Contents/Resources"
+    COMMAND ${CMAKE_COMMAND} -E create_symlink "${CMAKE_SOURCE_DIR}/Data/Sys"
+            "$<TARGET_FILE_DIR:dolphin-nogui>/Contents/Resources/Sys")
+endif()
+
 set(CPACK_PACKAGE_EXECUTABLES ${CPACK_PACKAGE_EXECUTABLES} dolphin-nogui)
 if (NOT WIN32)
   install(TARGETS dolphin-nogui RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})

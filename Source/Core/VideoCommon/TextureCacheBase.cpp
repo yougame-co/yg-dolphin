@@ -57,6 +57,7 @@
 #include "VideoCommon/VertexManagerBase.h"
 #include "VideoCommon/VideoCommon.h"
 #include "VideoCommon/VideoConfig.h"
+#include "VideoCommon/VideoState.h"
 
 static const u64 TEXHASH_INVALID = 0;
 // Sonic the Fighters (inside Sonic Gems Collection) loops a 64 frames animation
@@ -2264,6 +2265,20 @@ void TextureCacheBase::CopyRenderTargetToTexture(
   if (dst == nullptr)
   {
     ERROR_LOG_FMT(VIDEO, "Trying to copy from EFB to invalid address {:#010x}", dstAddr);
+    return;
+  }
+
+  // Orca: no host copy on a skipped frame. A texture-only copy still writes its constant
+  // placeholder, so RAM is the same as on a rendered frame; a copy to RAM keeps the old pixels.
+  if (VideoCommon_IsSkippingRender())
+  {
+    if (!copy_to_ram)
+    {
+      if (is_xfb_copy)
+        UninitializeXFBMemory(dst, dstStride, bytes_per_row, num_blocks_y);
+      else
+        UninitializeEFBMemory(dst, dstStride, bytes_per_row, num_blocks_y);
+    }
     return;
   }
 

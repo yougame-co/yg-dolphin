@@ -37,6 +37,7 @@
 #include "Core/HW/Sram.h"
 #include "Core/Movie.h"
 #include "Core/NetPlayProto.h"
+#include "Core/Orca/Profile.h"
 #include "Core/System.h"
 #include "Core/WiiRoot.h"
 
@@ -75,6 +76,37 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
           File::DeleteDirRecursively(movie_path);
       }
     }
+  }
+
+  // Orca rollback session: force the game profile's settings on both players.
+  if (Orca::SessionActive())
+  {
+    std::string error;
+    const auto profile = Orca::LoadProfile(StartUp.GetGameID(), StartUp.GetRevision(), &error);
+    if (!profile)
+    {
+      PanicAlertFmtT("{0}", error);
+      return false;
+    }
+    if (Orca::TestOverridesActive())
+      WARN_LOG_FMT(BOOT, "Orca: TEST overrides active (ORCA_TEST_PADS={}); not for real sessions",
+                   Orca::TestPads());
+    Config::AddLayer(Orca::GenerateConfigLoader(*profile));
+    NOTICE_LOG_FMT(BOOT,
+                   "Orca: profile {} rev {}: CPUThread={} CPUCore={} RTC={}:{} SI={},{},{},{} "
+                   "EFBToTexture={} XFBToTexture={} EFBAccess={} BBox={}",
+                   profile->game_id, profile->revision, Config::Get(Config::MAIN_CPU_THREAD),
+                   static_cast<int>(Config::Get(Config::MAIN_CPU_CORE)),
+                   Config::Get(Config::MAIN_CUSTOM_RTC_ENABLE),
+                   Config::Get(Config::MAIN_CUSTOM_RTC_VALUE),
+                   static_cast<int>(Config::Get(Config::GetInfoForSIDevice(0))),
+                   static_cast<int>(Config::Get(Config::GetInfoForSIDevice(1))),
+                   static_cast<int>(Config::Get(Config::GetInfoForSIDevice(2))),
+                   static_cast<int>(Config::Get(Config::GetInfoForSIDevice(3))),
+                   Config::Get(Config::GFX_HACK_SKIP_EFB_COPY_TO_RAM),
+                   Config::Get(Config::GFX_HACK_SKIP_XFB_COPY_TO_RAM),
+                   Config::Get(Config::GFX_HACK_EFB_ACCESS_ENABLE),
+                   Config::Get(Config::GFX_HACK_BBOX_ENABLE));
   }
 
   if (NetPlay::IsNetPlayRunning())

@@ -3,6 +3,8 @@
 
 #include "VideoCommon/VideoBackendBase.h"
 
+#include <cstdlib>
+
 #include <algorithm>
 #include <cstring>
 #include <memory>
@@ -101,7 +103,7 @@ void VideoBackendBase::Video_OutputXFB(u32 xfb_addr, u32 fb_width, u32 fb_stride
   auto& system = Core::System::GetInstance();
   auto& core_timing = system.GetCoreTiming();
 
-  if (!g_ActiveConfig.bImmediateXFB)
+  if (!g_ActiveConfig.bImmediateXFB && !VideoCommon_IsSkippingRender())
   {
     system.GetFifo().SyncGPU(Fifo::SyncGPUReason::Swap);
 
@@ -312,6 +314,12 @@ bool VideoBackendBase::InitializeShared(std::unique_ptr<AbstractGfx> gfx,
 
   // do not initialize again for the config window
   m_initialized = true;
+  // ORCA_TEST_SKIP_RENDER=1 (test only): skip host rendering for the whole run, to exercise the
+  // skip path without the rollback session.
+  {
+    const char* test_skip = std::getenv("ORCA_TEST_SKIP_RENDER");
+    VideoCommon_SetSkipRender(test_skip && *test_skip == '1');
+  }
 
   g_gfx = std::move(gfx);
   g_vertex_manager = std::move(vertex_manager);
