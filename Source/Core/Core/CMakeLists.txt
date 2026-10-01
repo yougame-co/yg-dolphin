@@ -581,8 +581,14 @@ add_library(core
   PowerPC/SignatureDB/SignatureDB.h
   Rollback/Harness.cpp
   Rollback/Harness.h
+  Rollback/Loopback.cpp
+  Rollback/Loopback.h
+  Rollback/OnlineMatch.cpp
+  Rollback/OnlineMatch.h
   Rollback/Rollback.cpp
   Rollback/Rollback.h
+  Rollback/SessionPort.cpp
+  Rollback/SessionPort.h
   State.cpp
   State.h
   SyncIdentifier.h

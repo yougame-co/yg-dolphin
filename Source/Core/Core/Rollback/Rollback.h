@@ -32,8 +32,8 @@ namespace Rollback
 // True while a rollback snapshot is being saved or loaded (CPU thread; single core only).
 bool InSnapshotDoState();
 
-// True while frames are being re-run after a load: their host rendering is skipped. (Their audio
-// still plays; muting it is not done yet.)
+// True while frames are being re-run after a load: their host rendering is skipped and the audio
+// they produce is dropped (it already played the first time).
 bool IsResimulating();
 void SetResimulating(bool resimulating);
 
@@ -62,6 +62,8 @@ public:
   bool Has(s64 frame) const;
   // Forgets every snapshot and stops the NAND journal (call while emulation is still running).
   void Reset(Core::System& system);
+  // RamChecksum of the snapshot taken at `frame`, or nullopt if it is not in the ring.
+  std::optional<u64> RamChecksum(s64 frame) const;
 
   // The non-RAM state written by the most recent Save (for hashing and diagnostics).
   std::span<const u8> LastState() const;
@@ -86,9 +88,13 @@ private:
   std::size_t m_last = 0;
 };
 
-// The complete status a GameCube controller port (0-based) reports for the current frame, when the
-// rollback session or the test harness supplies it. It replaces the host controller's status
-// entirely (analog A/B included), so nothing local leaks into the emulated machine.
+// XXH3 over MEM1 then MEM2: the state checksum players compare to detect a desync.
+u64 RamChecksum(std::span<const u8> mem1, std::span<const u8> mem2);
+
+// The complete status a GameCube controller port (0-based) reports for the current frame: the
+// session's pads, the test harness's, or, in a session that has not supplied pads yet (the boot), a
+// neutral pad. It replaces the host controller's status entirely (analog A/B, origin), so nothing
+// local leaks into the emulated machine.
 std::optional<GCPadStatus> InputOverride(int port);
 
 // Called by the game profile's frame-boundary hook once per game frame.

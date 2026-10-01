@@ -26,6 +26,13 @@
 //                         other boundaries than the first pass did
 //   YG_BENCH=<k>          timing: save every frame, every 60th frame load k back; logs normal and
 //                         re-run frame, save and load averages
+//   YG_PADREC=<file>      record every port's pad (wire form) and the RAM checksum per frame
+//   YG_LOOPBACK=<file>    replay such a recording through a real Orca session (Loopback.h): seat 1
+//                         is local, seat 2 a virtual remote whose inputs arrive late; it also sends
+//                         the recording's checksums, so any divergence ends the session as a desync.
+//                         YG_LOOPBACK_LAG (6) + _JITTER (3) frames late, _DELAY input delay (2),
+//                         _MAX_ROLLBACK (7), _CHECKSUM_EVERY (10). A lag above max rollback plus the
+//                         input delay makes the session stall. Exit well before the recording ends.
 // Runs need an Orca session (ORCA_SESSION=1): the frame boundary hook comes from its profile. All
 // modes run unthrottled. The frame counter is one per pass through the game's frame boundary. In a
 // session the harness logs a hash of the game's session-NAND save at exit.
@@ -45,5 +52,7 @@ namespace Rollback::Harness
 {
 bool Active();
 std::optional<GCPadStatus> InputOverride(int port);
+// A session (online or loopback) rolled back to the start of `frame` at the current boundary.
+void RewindTo(int frame);
 void OnFrameBoundary(const Core::CPUThreadGuard& guard);
 }  // namespace Rollback::Harness

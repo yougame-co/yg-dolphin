@@ -21,6 +21,8 @@
 
 #include "Common/ChunkFile.h"
 #include "Common/CommonTypes.h"
+#include "Common/FileUtil.h"
+#include "Common/IOFile.h"
 #include "Common/Logging/Log.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
@@ -28,8 +30,12 @@
 #include "Core/HW/Memmap.h"
 #include "Core/Orca/Profile.h"
 #include "Core/PowerPC/JitInterface.h"
+#include "Core/Orca/Session/PadCodec.h"
 #include "Core/PowerPC/MMU.h"
+#include "Core/Rollback/Loopback.h"
+#include "Core/Rollback/OnlineMatch.h"
 #include "Core/Rollback/Rollback.h"
+#include "Core/Rollback/SessionPort.h"
 #include "Core/System.h"
 
 namespace Rollback::Harness
@@ -56,6 +62,19 @@ const int s_render_reruns = EnvInt("YG_SYNCTEST_RENDER", 0);
 // re-runs compile blocks with other boundaries than the first pass (as a peer with another
 // rollback history would).
 const int s_clear_jit = EnvInt("YG_SYNCTEST_CLEARJIT", 0);
+// Loopback session test (Loopback.h): a recording from YG_PADREC replayed through a real session.
+const char* const s_loopback = std::getenv("YG_LOOPBACK");
+const int s_lb_lag = EnvInt("YG_LOOPBACK_LAG", 6);
+const int s_lb_jitter = EnvInt("YG_LOOPBACK_JITTER", 3);
+const int s_lb_delay = EnvInt("YG_LOOPBACK_DELAY", 2);
+const int s_lb_max_rollback = EnvInt("YG_LOOPBACK_MAX_ROLLBACK", 7);
+const int s_lb_checksum_every = EnvInt("YG_LOOPBACK_CHECKSUM_EVERY", 10);
+// Diagnosis: save a snapshot at every boundary from this frame on and never load (does saving
+// alone change the run?).
+const int s_save_only_from = EnvInt("YG_SAVE_ONLY_FROM", -1);
+// Diagnosis: at the first-pass boundary of this frame, write MEM1 and MEM2 to
+// <user dir>/ram-<frame>-mem1.bin / -mem2.bin.
+const int s_dump_ram_at = EnvInt("YG_DUMP_RAM_AT", -1);
 
 // ---- Scene names (scene-relative input and logs) ----
 
@@ -99,6 +118,13 @@ FILE* OpenHashLog()
   return path && *path ? std::fopen(path, "w") : nullptr;
 }
 FILE* const s_hashlog = OpenHashLog();
+
+FILE* OpenPadRecording()
+{
+  const char* path = std::getenv("YG_PADREC");
+  return path && *path ? std::fopen(path, "w") : nullptr;
+}
+FILE* const s_padrec = OpenPadRecording();
 
 // ---- Scripted input ----
 
@@ -180,6 +206,8 @@ const std::vector<InputRule>& Input()
 // ---- Frame and scene bookkeeping ----
 
 int s_frame = 0;       // the frame being run, or whose end we are at (rewinds on a load)
+int s_rewind_to = -1;  // a session rolled back to the start of this frame at this boundary
+int s_online_stop_at = -1;  // online: the first-pass frame at which emulation stops
 int s_max_frame = -1;  // highest frame reached on a first pass
 bool s_stop_queued = false;
 std::string s_scene;
@@ -501,12 +529,127 @@ void Bench(Core::System& system, bool first_pass)
   }
   s_last = clock::now();
 }
+
+// ---- Loopback session (YG_LOOPBACK) ----
+
+struct LoopbackRun
+{
+  std::vector<Loopback::RecordedFrame> recording;
+  std::unique_ptr<Loopback::VirtualRemote> remote;
+  std::unique_ptr<RingPort> port;
+  std::unique_ptr<Orca::Net::Session> session;
+  Orca::Net::Stats stats;
+  std::string error;
+  bool started = false;
+};
+
+LoopbackRun& Lb()
+{
+  static LoopbackRun run;
+  return run;
+}
+
+// Ends the session while emulation still runs (RingPort's destructor resets the ring and the NAND
+// journal).
+void EndLoopback()
+{
+  LoopbackRun& run = Lb();
+  if (run.session)
+    run.stats = run.session->GetStats();
+  run.session.reset();
+  run.port.reset();
+  run.remote.reset();
+}
+
+void LogLoopbackResult(int frame)
+{
+  const LoopbackRun& run = Lb();
+  const bool pass = run.error.empty() && run.stats.checksums_matched > 0;
+  NOTICE_LOG_FMT(ROLLBACK,
+                 "Loopback done at frame {} ({}): {} rollbacks, {} re-run frames, deepest {}, {} "
+                 "stalls, {} checksums matched, confirmed frame {}{}{}",
+                 frame, pass ? "PASS" : "FAIL", run.stats.rollbacks, run.stats.resimulated_frames,
+                 run.stats.deepest_rollback, run.stats.stalls, run.stats.checksums_matched,
+                 run.stats.confirmed_frame, run.error.empty() ? "" : "; error: ", run.error);
+}
+
+void LoopbackBoundary(Core::System& system, int frame_here, bool first_pass)
+{
+  LoopbackRun& run = Lb();
+  if (!run.started)
+  {
+    run.started = true;
+    run.recording = Loopback::LoadRecording(s_loopback);
+    if (run.recording.empty())
+    {
+      run.error = fmt::format("no usable recording in {}", s_loopback);
+      ERROR_LOG_FMT(ROLLBACK, "Loopback: {}", run.error);
+      return;
+    }
+    Orca::Net::Config config;
+    config.seats = 2;
+    config.local_seat = 0;
+    config.input_delay = s_lb_delay;
+    config.max_rollback = s_lb_max_rollback;
+    config.checksum_every = s_lb_checksum_every;
+    run.remote = std::make_unique<Loopback::VirtualRemote>(run.recording, 1, 0, s_lb_lag,
+                                                           s_lb_jitter, s_lb_delay,
+                                                           s_lb_checksum_every);
+    run.port = std::make_unique<RingPort>(system, config.max_rollback, true);
+    run.session = std::make_unique<Orca::Net::Session>(config, *run.port, *run.remote);
+    NOTICE_LOG_FMT(ROLLBACK,
+                   "Loopback: {} recorded frames, remote lag {}+0..{}, input delay {}, max "
+                   "rollback {}, checksum every {}",
+                   run.recording.size(), s_lb_lag, s_lb_jitter, s_lb_delay, s_lb_max_rollback,
+                   s_lb_checksum_every);
+  }
+  if (!run.session)
+    return;
+
+  if (first_pass)
+    run.remote->Tick();
+  // The frame that runs next is frame_here (frame_here - 1 just completed); the local pad sampled
+  // now applies input_delay frames later.
+  const std::size_t target = static_cast<std::size_t>(frame_here + s_lb_delay);
+  const Orca::Net::Pad local =
+      target < run.recording.size() ? run.recording[target].pads[0] : Orca::Net::Pad{};
+  int stall_calls = 0;
+  const Orca::Net::Step step = StepSession(
+      *run.session, frame_here - 1, local,
+      [&] {
+        run.remote->Tick();  // the remote player keeps playing while this one waits
+        return ++stall_calls > 100000;
+      },
+      std::chrono::microseconds{0});
+
+  if (step.kind == Orca::Net::StepKind::Ended)
+  {
+    run.error = run.session->Error().empty() ? "stopped while stalled" : run.session->Error();
+    ERROR_LOG_FMT(ROLLBACK, "Loopback session ended at frame {}: {}", frame_here, run.error);
+    EndLoopback();
+    LogLoopbackResult(frame_here);
+    if (!s_stop_queued)
+    {
+      s_stop_queued = true;
+      Core::QueueHostJob([](Core::System& host_system) { Core::Stop(host_system); });
+    }
+    return;
+  }
+  if (step.kind == Orca::Net::StepKind::Rollback)
+    RewindTo(step.frame);
+}
 }  // namespace
+
+void RewindTo(int frame)
+{
+  s_rewind_to = frame;
+}
 
 bool Active()
 {
   return s_scenes || s_synctest_k > 0 || s_exit_after > 0 || !Input().empty() ||
-         s_shot_every > 0 || s_hashlog != nullptr || s_bench_k > 0;
+         s_shot_every > 0 || s_hashlog != nullptr || s_bench_k > 0 || s_padrec != nullptr ||
+         s_loopback != nullptr || s_save_only_from >= 0;
 }
 
 std::optional<GCPadStatus> InputOverride(int port)
@@ -575,7 +718,8 @@ std::optional<GCPadStatus> InputOverride(int port)
   pad.analogA = 0;
   pad.analogB = 0;
   pad.isConnected = true;
-  return pad;
+  // Through the session wire form, so a recording replays exactly what this run's ports reported.
+  return Orca::Net::DecodePad(Orca::Net::EncodePad(pad));
 }
 
 void OnFrameBoundary(const Core::CPUThreadGuard& guard)
@@ -583,7 +727,9 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
   if (!Active())
     return;
   auto& system = guard.GetSystem();
-  Core::SetIsThrottlerTempDisabled(true);
+  // Harness modes run unthrottled, unless a session's port paces the run (an online match).
+  if (!RingPort::Active())
+    Core::SetIsThrottlerTempDisabled(true);
   if (s_diag && s_synctest_k > 0 && s_frame >= s_synctest_from - 1)
     CoreTiming::g_rollback_event_trace = &s_frame_events;
 
@@ -619,19 +765,79 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
   {
     Core::SaveScreenShot(fmt::format("f{:06d}", frame_here));
   }
-  if (s_synctest_k > 0 && frame_here >= s_synctest_from)
+  // Recording: the RAM checksum at the start of the frame about to run (the state a session
+  // snapshot of that frame holds); its pads are written below, once the counter points at it.
+  u64 recorded_checksum = 0;
+  if (s_padrec && first_pass_here)
+  {
+    auto& memory = system.GetMemory();
+    recorded_checksum = RamChecksum({memory.GetRAM(), memory.GetRamSize()},
+                                    {memory.GetEXRAM(), memory.GetExRamSize()});
+  }
+
+  if (first_pass_here && frame_here == s_dump_ram_at)
+  {
+    auto& memory = system.GetMemory();
+    const std::string base = File::GetUserPath(D_USER_IDX) + fmt::format("ram-{}", frame_here);
+    File::IOFile(base + "-mem1.bin", "wb").WriteBytes(memory.GetRAM(), memory.GetRamSize());
+    File::IOFile(base + "-mem2.bin", "wb").WriteBytes(memory.GetEXRAM(), memory.GetExRamSize());
+    NOTICE_LOG_FMT(ROLLBACK, "RAM at frame {} written to {}-mem*.bin", frame_here, base);
+  }
+  if (s_save_only_from >= 0 && frame_here >= s_save_only_from)
+    Ring().Save(system, frame_here);
+  if (s_loopback)
+    LoopbackBoundary(system, frame_here, first_pass_here);
+  else if (s_synctest_k > 0 && frame_here >= s_synctest_from)
     SyncTest(system);
   else if (s_bench_k > 0)
     Bench(system, first_pass_here);
 
+  // A session rolled back here: the state is now the start of that frame, which the next boundary
+  // ends.
+  if (s_rewind_to >= 0)
+  {
+    s_frame = s_rewind_to;
+    if (auto history = s_scene_history.find(s_rewind_to); history != s_scene_history.end())
+    {
+      s_scene = history->second.first;
+      s_scene_start = history->second.second;
+    }
+    s_rewind_to = -1;
+  }
   // A load above rewound s_frame; the next frame end is the frame after it.
   ++s_frame;
   s_max_frame = std::max(s_max_frame, frame_here);
-  // The next frame is a re-run if it has been run before.
-  SetResimulating(s_frame <= s_max_frame && !s_render_reruns);
+  // The next frame is a re-run if it has been run before (a session decides that itself).
+  if (!s_loopback && !RingPort::Active())
+    SetResimulating(s_frame <= s_max_frame && !s_render_reruns);
+
+  if (s_padrec && first_pass_here)
+  {
+    Orca::Net::Pads pads{};
+    for (int port = 0; port < Orca::Net::MAX_SEATS; ++port)
+    {
+      // What the port reports during the next frame (the session's pads in a loopback run).
+      if (const auto pad = Rollback::InputOverride(port))
+        pads[port] = Orca::Net::EncodePad(*pad);
+    }
+    std::fputs(Loopback::FormatRecordedFrame(frame_here, pads, recorded_checksum).c_str(),
+               s_padrec);
+    if (frame_here % 60 == 0)
+      std::fflush(s_padrec);
+  }
+
+  // Online: the stats were logged at the exit frame; stop a little later, so the other player
+  // reaches its own exit frame before this one leaves the room.
+  if (s_online_stop_at >= 0 && first_pass_here && frame_here >= s_online_stop_at &&
+      !s_stop_queued)
+  {
+    s_stop_queued = true;
+    Core::QueueHostJob([](Core::System& host_system) { Core::Stop(host_system); });
+  }
 
   // Stop at the end of first-pass frame n, in every mode.
-  if (s_exit_after > 0 && first_pass_here && frame_here >= s_exit_after && !s_stop_queued)
+  if (s_exit_after > 0 && first_pass_here && frame_here >= s_exit_after && !s_stop_queued &&
+      s_online_stop_at < 0)
   {
     s_stop_queued = true;
     NOTICE_LOG_FMT(ROLLBACK,
@@ -646,6 +852,20 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
     {
       NOTICE_LOG_FMT(ROLLBACK, "Session save hash at exit: {:016x}",
                      Orca::HashSessionSave(SConfig::GetInstance().GetTitleID()));
+    }
+    if (s_loopback)
+    {
+      EndLoopback();
+      LogLoopbackResult(frame_here);
+    }
+    if (s_padrec)
+      std::fflush(s_padrec);
+    if (OnlineMatch::Active())
+    {
+      OnlineMatch::LogStats(fmt::format("at exit frame {}", frame_here).c_str());
+      s_stop_queued = false;
+      s_online_stop_at = frame_here + 180;
+      return;
     }
     Core::QueueHostJob([](Core::System& host_system) { Core::Stop(host_system); });
   }

@@ -9,15 +9,23 @@
 #include <span>
 #include <unordered_set>
 
+#include <xxhash.h>
+
 #include "Common/Logging/Log.h"
 #include "Core/HW/Memmap.h"
 #include "Core/IOS/FS/HostBackend/FS.h"
 #include "Core/IOS/IOS.h"
+#include "Core/HW/GCPad.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/Session/Online.h"
+#include "Core/Orca/Session/PadCodec.h"
 #include "Core/PowerPC/JitCommon/JitBase.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/Rollback/Harness.h"
+#include "Core/Rollback/OnlineMatch.h"
+#include "Core/Rollback/SessionPort.h"
+#include "InputCommon/ControllerInterface/ControllerInterface.h"
 #include "Core/State.h"
 #include "Core/System.h"
 #include "VideoCommon/VideoState.h"
@@ -81,6 +89,17 @@ IOS::HLE::FS::HostFileSystem* HostNand(Core::System& system)
 }
 }  // namespace
 
+u64 RamChecksum(std::span<const u8> mem1, std::span<const u8> mem2)
+{
+  XXH3_state_t* const state = XXH3_createState();
+  XXH3_64bits_reset(state);
+  XXH3_64bits_update(state, mem1.data(), mem1.size());
+  XXH3_64bits_update(state, mem2.data(), mem2.size());
+  const u64 hash = XXH3_64bits_digest(state);
+  XXH3_freeState(state);
+  return hash;
+}
+
 bool InSnapshotDoState()
 {
   return s_in_snapshot.load(std::memory_order_relaxed);
@@ -99,10 +118,14 @@ void SetResimulating(bool resimulating)
 SnapshotScope::SnapshotScope()
 {
   s_in_snapshot.store(true, std::memory_order_relaxed);
+  // Host GPU state (EFB, texture cache, bounding box) never reaches emulated RAM in a session, so
+  // snapshots leave it out: no GPU readback per save, no texture-cache reload per load.
+  VideoCommon_SetRollbackSnapshot(true);
 }
 
 SnapshotScope::~SnapshotScope()
 {
+  VideoCommon_SetRollbackSnapshot(false);
   s_in_snapshot.store(false, std::memory_order_relaxed);
 }
 
@@ -234,6 +257,14 @@ bool SnapshotRing::Load(Core::System& system, s64 frame)
   return true;
 }
 
+std::optional<u64> SnapshotRing::RamChecksum(s64 frame) const
+{
+  const Slot* slot = Find(frame);
+  if (!slot || slot->state_size == 0)
+    return std::nullopt;
+  return Rollback::RamChecksum(slot->mem1, slot->mem2);
+}
+
 std::span<const u8> SnapshotRing::LastState() const
 {
   const Slot& slot = m_slots[m_last];
@@ -242,7 +273,16 @@ std::span<const u8> SnapshotRing::LastState() const
 
 std::optional<GCPadStatus> InputOverride(int port)
 {
-  return Harness::InputOverride(port);
+  if (const RingPort* session_port = RingPort::Active())
+    return session_port->Pad(port);
+  if (auto pad = Harness::InputOverride(port))
+    return pad;
+  // In a session, nothing local reaches the machine before the session supplies pads either: the
+  // boot polls every port too, and a host controller's status (its origin, for one) would be
+  // latched by the game and diverge much later.
+  if (Orca::SessionActive())
+    return Orca::Net::DecodePad(Orca::Net::Pad{});
+  return std::nullopt;
 }
 
 void OnFrameBoundary(const Core::CPUThreadGuard& guard)
@@ -258,6 +298,23 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
     ppc_state.pc = *profile->frame_hook;
     ppc_state.npc = *profile->frame_hook;
   }
+
+  // An online match runs its session here.
+  if (Orca::Online::Enabled())
+  {
+    const auto local_pad = [](int local_seat) {
+      // A test script plays the seat this player was given; otherwise the host's first
+      // controller, whatever the seat.
+      if (const auto scripted = Harness::InputOverride(local_seat))
+        return Orca::Net::EncodePad(*scripted);
+      g_controller_interface.SetCurrentInputChannel(ciface::InputChannel::SerialInterface);
+      g_controller_interface.UpdateInput();
+      return Orca::Net::EncodePad(Pad::GetStatus(0));
+    };
+    if (const auto rewound_to = OnlineMatch::OnBoundary(guard.GetSystem(), local_pad))
+      Harness::RewindTo(*rewound_to);
+  }
+
   Harness::OnFrameBoundary(guard);
 
   // Re-run frames are thrown away as soon as they are simulated: skip their host rendering (the
