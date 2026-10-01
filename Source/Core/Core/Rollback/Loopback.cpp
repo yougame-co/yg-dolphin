@@ -5,10 +5,10 @@
 
 #include <algorithm>
 #include <charconv>
-#include <string_view>
 #include <fstream>
 #include <map>
 #include <sstream>
+#include <string_view>
 
 #include <fmt/format.h>
 
@@ -83,18 +83,27 @@ std::vector<RecordedFrame> LoadRecording(const std::string& path)
   return recording;
 }
 
-VirtualRemote::VirtualRemote(const std::vector<RecordedFrame>& recording, int seat, int local_seat,
-                             int lag, int jitter, int input_delay, int checksum_every)
-    : m_recording(recording), m_seat(seat), m_local_seat(local_seat), m_lag(lag),
-      m_jitter(jitter), m_input_delay(input_delay), m_checksum_every(checksum_every)
+VirtualRemote::VirtualRemote(const std::vector<RecordedFrame>& recording, std::vector<int> seats,
+                             int local_seat, int lag, int jitter, int input_delay,
+                             int checksum_every)
+    : m_recording(recording), m_local_seat(local_seat), m_lag(lag), m_jitter(jitter),
+      m_input_delay(input_delay), m_checksum_every(checksum_every)
 {
+  for (const int seat : seats)
+    m_seats.push_back(Seat{seat});
 }
 
-int VirtualRemote::Lag() const
+bool VirtualRemote::Exhausted() const
+{
+  const int last = static_cast<int>(m_recording.size()) - 1;
+  return std::ranges::all_of(m_seats, [last](const Seat& seat) { return seat.delivered >= last; });
+}
+
+int VirtualRemote::Lag(int seat) const
 {
   if (m_jitter <= 0)
     return m_lag;
-  u32 x = static_cast<u32>(m_ticks) * 2654435761u;
+  u32 x = static_cast<u32>(m_ticks) * 2654435761u + static_cast<u32>(seat) * 0x9E3779B9u;
   x ^= x >> 13;
   return m_lag + static_cast<int>(x % static_cast<u32>(m_jitter + 1));
 }
@@ -110,29 +119,31 @@ void VirtualRemote::Send(const Orca::Net::Packet& packet)
 
 std::vector<Orca::Net::Packet> VirtualRemote::Receive()
 {
-  const int position = m_ticks - Lag();  // the frame the remote player is running
-  const int newest =
-      std::min(position + m_input_delay, static_cast<int>(m_recording.size()) - 1);
   std::vector<Orca::Net::Packet> packets;
-  while (m_delivered < newest)
+  for (Seat& seat : m_seats)
   {
-    Orca::Net::Packet packet;
-    packet.seat = m_seat;
-    packet.first_frame = m_delivered + 1;
-    const int last = std::min(newest, m_delivered + 16);
-    for (int frame = packet.first_frame; frame <= last; ++frame)
-      packet.pads.push_back(m_recording[frame].pads[m_seat]);
-    packet.ack[m_local_seat] = m_local_newest;
-    packet.current_frame = std::max(position, 0);
-    const int checksum_frame = m_last_checksum + m_checksum_every;
-    if (checksum_frame <= position && checksum_frame < static_cast<int>(m_recording.size()))
+    const int position = m_ticks - Lag(seat.seat);  // the frame this remote player is running
+    const int newest = std::min(position + m_input_delay, static_cast<int>(m_recording.size()) - 1);
+    while (seat.delivered < newest)
     {
-      packet.checksum_frame = checksum_frame;
-      packet.checksum = m_recording[checksum_frame].checksum;
-      m_last_checksum = checksum_frame;
+      Orca::Net::Packet packet;
+      packet.seat = seat.seat;
+      packet.first_frame = seat.delivered + 1;
+      const int last = std::min(newest, seat.delivered + 16);
+      for (int frame = packet.first_frame; frame <= last; ++frame)
+        packet.pads.push_back(m_recording[frame].pads[seat.seat]);
+      packet.ack[m_local_seat] = m_local_newest;
+      packet.current_frame = std::max(position, 0);
+      const int checksum_frame = seat.last_checksum + m_checksum_every;
+      if (checksum_frame <= position && checksum_frame < static_cast<int>(m_recording.size()))
+      {
+        packet.checksum_frame = checksum_frame;
+        packet.checksum = m_recording[checksum_frame].checksum;
+        seat.last_checksum = checksum_frame;
+      }
+      seat.delivered = last;
+      packets.push_back(std::move(packet));
     }
-    m_delivered = last;
-    packets.push_back(std::move(packet));
   }
   return packets;
 }
