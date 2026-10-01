@@ -14,8 +14,17 @@ std::string WindowTitle()
   std::string title = "Orca";
   if (const std::string& game = SConfig::GetInstance().GetTitleDescription(); !game.empty())
     title += " — " + game;
-  if (const std::string status = Online::StatusLine(); !status.empty())
+  if (std::string status = Online::StatusLine(); !status.empty())
+  {
+    // Not the room code: window pickers (streaming, screen sharing) show titles, and the code
+    // lets anyone into the room. The on-screen display and the YouGame page show it instead.
+    if (status.starts_with("Room "))
+    {
+      if (const auto colon = status.find(": "); colon != std::string::npos)
+        status.erase(0, colon + 2);
+    }
     title += " — " + status;
+  }
   return title;
 }
 
