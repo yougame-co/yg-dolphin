@@ -727,8 +727,9 @@ void Jit64::mffsx(UGeckoInstruction inst)
 
   MOV(32, R(RSCRATCH), PPCSTATE(fpscr));
 
+  // mffs writes ps0 only; d's ps1 is kept, so d is read too.
   int d = inst.FD;
-  RCX64Reg Rd = fpr.Bind(d, RCMode::Write);
+  RCX64Reg Rd = fpr.Bind(d, RCMode::ReadWrite);
   RegCache::Realize(Rd);
   MOV(64, R(RSCRATCH2), Imm64(0xFFF8000000000000));
   OR(64, R(RSCRATCH), R(RSCRATCH2));
