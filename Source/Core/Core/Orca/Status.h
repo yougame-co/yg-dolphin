@@ -19,7 +19,9 @@ void State(std::string_view state);
 void Error(std::string_view code, std::string_view sentence);
 // 0 after a normal leave; 1 once an error was reported.
 int ExitCode();
-// At process exit: a session that never got past booting without saying why reports a boot error;
-// then "ended". Returns ExitCode().
+// The game reached its first frame (called at every frame boundary; cheap after the first).
+void GameStarted();
+// At process exit: a session whose game never reached a frame, without saying why, reports a boot
+// error; then "ended". Returns ExitCode().
 int Finish();
 }  // namespace Orca::Status

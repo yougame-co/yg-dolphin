@@ -17,6 +17,7 @@
 #include "Core/IOS/IOS.h"
 #include "Core/HW/GCPad.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/Status.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Session/PadCodec.h"
 #include "Core/PowerPC/JitCommon/JitBase.h"
@@ -287,6 +288,7 @@ std::optional<GCPadStatus> InputOverride(int port)
 
 void OnFrameBoundary(const Core::CPUThreadGuard& guard)
 {
+  Orca::Status::GameStarted();
   // Inside a JIT block, pc and npc are not kept current: a snapshot taken here would record
   // whatever they last held (an exception vector, a stale branch target), and a load would put that
   // back as the next instruction. Pin both to the boundary so every snapshot records where it was

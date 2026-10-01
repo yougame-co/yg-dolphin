@@ -3,6 +3,7 @@
 
 #include "Core/Orca/Status.h"
 
+#include <atomic>
 #include <cstdio>
 #include <mutex>
 #include <string>
@@ -18,6 +19,7 @@ namespace
 std::mutex s_mutex;
 std::string s_state;
 bool s_errored = false;
+std::atomic<bool> s_started{false};
 
 void Print(const std::string& line)
 {
@@ -66,6 +68,11 @@ int ExitCode()
   return s_errored ? 1 : 0;
 }
 
+void GameStarted()
+{
+  s_started.store(true, std::memory_order_relaxed);
+}
+
 int Finish()
 {
   if (!SessionActive())
@@ -73,7 +80,7 @@ int Finish()
   bool stuck;
   {
     std::lock_guard lock(s_mutex);
-    stuck = !s_errored && (s_state.empty() || s_state == "booting");
+    stuck = !s_errored && !s_started.load(std::memory_order_relaxed);
   }
   if (stuck)
     Error("boot", "Orca couldn't start the game");
