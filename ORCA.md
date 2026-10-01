@@ -31,10 +31,22 @@ Online play goes through a private two-player YouGame room (`Source/Core/Core/Or
 | `ORCA_SITE` | Tests only: the site for dev tickets (default `https://yougame.co`). |
 | `ORCA_TEST_PADS`, `ORCA_TEST_SKIP_RENDER` | Harness overrides; they change the compatibility key. |
 
-Two friends meet when both use the same code and the same compatibility key (the Orca build, the
-game profile, every forced setting and the seeded save; not the host CPU, so a Mac and a PC can
-play each other). The first in is the host; its Orca starts the match once the other says hello.
+Two friends meet when both use the same code and the same compatibility key: the Orca build, the
+host CPU architecture, the game profile, every forced setting, the disc and the seeded save. The
+architecture is in the key until a test shows Jit64 and JitArm64 compute identical results (with
+inaccurate NaNs they don't), so for now an Apple Silicon Mac meets Apple Silicon Macs and ARM64
+PCs. The first in is the host; its Orca starts the match once the other says hello.
 Seat 0 is controller port 1.
 
 Unit tests: `ninja tests && ./Binaries/Tests/tests --gtest_filter='Orca*'`. With `ORCA_LIVE_TEST=1`,
 the `OrcaLive` tests also open real rooms on yougame.co.
+
+A session also refuses whatever would change one player's game alone: pausing, loading savestates,
+the reset button, and the Wii power button (Stop ends the match instead).
+
+Stock behaviour Orca changes outside a session: the build uses the bundled libcurl (with mbedTLS
+and the system CA file) on macOS and Linux, because the netcode needs libcurl's WebSocket support.
+That client doesn't use the macOS Keychain's extra roots, and it doesn't do TLS 1.3.
+
+Not yet supported: a GameCube controller adapter as the local controller (the local pad is the host's
+port 1 as mapped in Dolphin's controller settings).

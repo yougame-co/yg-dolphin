@@ -15,7 +15,8 @@
 // the match, seats follow the room's slot order (seat 0 = controller port 1), and session packets
 // travel as relayed room messages. Tickets come from the YouGame desktop app's loopback bridge
 // (YOUGAME_BRIDGE / YOUGAME_TOKEN), or, for tests only, straight from the site as an anonymous dev
-// game (ORCA_TEST_DEV_GAME, see Orca::TestOverridesActive). All network work runs on one thread.
+// game (ORCA_TEST_DEV_GAME: its rooms belong to a separate dev game, so they never meet real
+// players). All network work runs on one thread.
 namespace Orca::Net
 {
 struct RoomOptions

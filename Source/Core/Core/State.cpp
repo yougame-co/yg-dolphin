@@ -45,6 +45,7 @@
 #include "Core/HW/Wiimote.h"
 #include "Core/Movie.h"
 #include "Core/NetPlayProto.h"
+#include "Core/Orca/Profile.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/System.h"
 
@@ -209,6 +210,12 @@ static bool CheckIfStateLoadIsAllowed(Core::System& system)
   if (NetPlay::IsNetPlayRunning())
   {
     OSD::AddMessage("Loading savestates is disabled in Netplay to prevent desyncs");
+    return false;
+  }
+
+  if (Orca::SessionActive())
+  {
+    OSD::AddMessage("Loading savestates is disabled in an online match");
     return false;
   }
 
@@ -819,6 +826,10 @@ static void LoadFileStateData(const std::string& filename, Common::UniqueBuffer<
 
 static void LoadAsFromCore(Core::System& system, std::string filename)
 {
+  // Every path that loads a savestate file ends here (undo and "load last" too). A rollback
+  // session's own snapshots load through LoadFromBufferForRollback instead.
+  if (Orca::SessionActive())
+    return;
   // Ensure all data has reached the filesystem before trying to use it.
   s_compress_and_dump_thread.WaitForCompletion();
 

@@ -63,8 +63,17 @@ std::string CompatibilityKey()
       parts += fmt::format("{}.{}.{}={}|", static_cast<int>(location.system), location.section,
                            location.key, value);
   }
-  // The universal forced settings that change what the game computes (CPU core and JIT choice are
-  // left out on purpose: they differ between Mac and PC and must not change results).
+  // The host CPU architecture: Jit64 and JitArm64 are not yet shown to compute the same results
+  // (with inaccurate NaNs, for one, x86-64 and ARM64 produce default NaNs of opposite sign). Until a
+  // cross-platform test proves otherwise, players only meet others on the same architecture.
+#if defined(_M_ARM_64)
+  parts += "arch=arm64|";
+#elif defined(_M_X86_64)
+  parts += "arch=x86-64|";
+#else
+  parts += "arch=other|";
+#endif
+  // The universal forced settings that change what the game computes.
   parts += fmt::format(
       "thread={}|fma={}|rtc={}:{}|si={},{},{},{}|efb={}|xfb={}|access={}|bbox={}|save={:016x}|test={}",
       Config::Get(Config::MAIN_CPU_THREAD), Config::Get(Config::SESSION_USE_FMA),

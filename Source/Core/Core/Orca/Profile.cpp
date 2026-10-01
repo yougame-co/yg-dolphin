@@ -73,6 +73,8 @@ void ForEachUniversalSetting(F&& f)
   // so it belongs in the lobby compatibility key (Phase 7).
   f(Config::SESSION_USE_FMA, cpu_info.bFMA);
   f(Config::MAIN_RAM_OVERRIDE_ENABLE, false);
+  // Switching to the YouGame app (to invite a friend) must not pause the match.
+  f(Config::MAIN_PAUSE_ON_FOCUS_LOST, false);
   f(Config::MAIN_CUSTOM_RTC_ENABLE, true);
   f(Config::MAIN_CUSTOM_RTC_VALUE, Config::MAIN_CUSTOM_RTC_VALUE.GetDefaultValue());
   f(Config::MAIN_DSP_HLE, true);

@@ -692,6 +692,10 @@ void SetState(Core::System& system, State state, bool report_state_change,
     switch (state)
     {
     case State::Paused:
+      // Orca: a rollback session can't pause (the other player's game keeps running), and the CPU
+      // thread may be waiting for the room, which a pause would wait on in turn.
+      if (Orca::SessionActive())
+        return;
 #ifdef USE_RETRO_ACHIEVEMENTS
       if (!override_achievement_restrictions && !AchievementManager::GetInstance().CanPause())
         return;

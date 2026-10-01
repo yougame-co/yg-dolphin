@@ -35,7 +35,7 @@ std::string StatusLine();
 void Shutdown();
 
 // The lobby compatibility key: players whose keys differ can't share a room. Built from the Orca
-// build, the game profile, every forced setting that two machines must share, and the save the
-// session was seeded with. Not the host CPU: Mac and PC players play each other.
+// build, the host CPU architecture (until cross-architecture determinism is proven), the game
+// profile, every forced setting that two machines must share, the disc and the seeded save.
 std::string CompatibilityKey();
 }  // namespace Orca::Online
