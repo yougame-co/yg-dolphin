@@ -325,7 +325,20 @@ void JitArm64::HLEFunction(u32 hook_index)
   gpr.Flush(FlushMode::Full, ARM64Reg::INVALID_REG);
   fpr.Flush(FlushMode::Full, ARM64Reg::INVALID_REG);
 
+  // The rollback frame boundary saves and loads snapshots: settle this block's cycles so far first,
+  // so the time a snapshot records does not depend on where the compiled block started.
+  if (HLE::NeedsExactTime(hook_index))
+  {
+    DoDownCount();
+    js.downcountAmount = 0;
+  }
+
   ABI_CallFunction(&HLE::ExecuteFromJIT, js.compilerPC, hook_index, &m_system);
+
+  // The boundary may load a snapshot, which replaces every register: values this block knew at
+  // compile time no longer hold.
+  if (HLE::NeedsExactTime(hook_index))
+    m_constant_propagation.Clear();
 }
 
 void JitArm64::DoNothing(UGeckoInstruction inst)

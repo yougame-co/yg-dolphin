@@ -396,6 +396,7 @@ add_library(core
   IOS/FS/HostBackend/File.cpp
   IOS/FS/HostBackend/FS.cpp
   IOS/FS/HostBackend/FS.h
+  IOS/FS/HostBackend/Journal.cpp
   IOS/IOS.cpp
   IOS/IOS.h
   IOS/IOSC.cpp
@@ -571,6 +572,10 @@ add_library(core
   PowerPC/SignatureDB/MEGASignatureDB.h
   PowerPC/SignatureDB/SignatureDB.cpp
   PowerPC/SignatureDB/SignatureDB.h
+  Rollback/Harness.cpp
+  Rollback/Harness.h
+  Rollback/Rollback.cpp
+  Rollback/Rollback.h
   State.cpp
   State.h
   SyncIdentifier.h
@@ -859,3 +864,6 @@ if(USE_RETRO_ACHIEVEMENTS)
     target_compile_definitions(core PUBLIC -DRC_CLIENT_SUPPORTS_RAINTEGRATION)
   endif()
 endif()
+
+# Orca rollback harness hashes RAM with xxHash
+target_link_libraries(core PRIVATE xxhash::xxhash)

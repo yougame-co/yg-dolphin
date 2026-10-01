@@ -187,6 +187,7 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
     }
     NOTICE_LOG_FMT(BOOT, "{}", Orca::DescribeForcedSettings(*orca_profile));
   }
+  Orca::SetActiveProfile(orca_profile);
 
   system.Initialize();
 

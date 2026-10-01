@@ -420,9 +420,18 @@ void Jit64::HLEFunction(u32 hook_index)
 {
   gpr.Flush();
   fpr.Flush();
+  // See JitArm64::HLEFunction: settle pending cycles before the rollback frame boundary hook.
+  if (HLE::NeedsExactTime(hook_index))
+  {
+    SUB(32, PPCSTATE(downcount), Imm32(js.downcountAmount));
+    js.downcountAmount = 0;
+  }
   ABI_PushRegistersAndAdjustStack({}, 0);
   ABI_CallFunctionCCP(HLE::ExecuteFromJIT, js.compilerPC, hook_index, &m_system);
   ABI_PopRegistersAndAdjustStack({}, 0);
+  // See JitArm64::HLEFunction: a snapshot load replaces every register.
+  if (HLE::NeedsExactTime(hook_index))
+    m_constant_propagation.Clear();
 }
 
 void Jit64::DoNothing(UGeckoInstruction _inst)

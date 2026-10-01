@@ -7,6 +7,7 @@
 // may be redirected here (for example to Read_U32()).
 
 #include "Core/HW/Memmap.h"
+#include "Core/Rollback/Rollback.h"
 
 #include <algorithm>
 #include <array>
@@ -539,13 +540,20 @@ void MemoryManager::DoState(PointerWrap& p)
     return;
   }
 
-  p.DoArray(m_ram, current_ram_size);
-  p.DoArray(m_l1_cache, current_l1_cache_size);
+  // Rollback snapshots copy RAM themselves (Core/Rollback), page by page on load.
+  const bool skip_ram = Rollback::InSnapshotDoState();
+  if (!skip_ram)
+  {
+    p.DoArray(m_ram, current_ram_size);
+    p.DoArray(m_l1_cache, current_l1_cache_size);
+  }
   p.DoMarker("Memory RAM");
+  // The ring copies MEM1, MEM2 and the L1 cache only; fake VMEM (GameCube without MMU emulation)
+  // stays in the state.
   if (current_have_fake_vmem)
     p.DoArray(m_fake_vmem, current_fake_vmem_size);
   p.DoMarker("Memory FakeVMEM");
-  if (current_have_exram)
+  if (current_have_exram && !skip_ram)
     p.DoArray(m_exram, current_exram_size);
   p.DoMarker("Memory EXRAM");
 }

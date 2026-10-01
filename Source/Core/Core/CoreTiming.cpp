@@ -34,6 +34,8 @@
 
 namespace CoreTiming
 {
+std::vector<std::string>* g_rollback_event_trace = nullptr;
+
 static constexpr int MAX_SLICE_LENGTH = 20000;
 
 static void EmptyTimedCallback(Core::System& system, u64 userdata, s64 cyclesLate)
@@ -366,6 +368,12 @@ void CoreTimingManager::Advance()
     Event evt = m_event_queue.front();
     std::ranges::pop_heap(m_event_queue, std::ranges::greater{});
     m_event_queue.pop_back();
+    if (g_rollback_event_trace)
+    {
+      g_rollback_event_trace->push_back(fmt::format("{} t={} late={} ud={}", *evt.type->name,
+                                                    evt.time, m_globals.global_timer - evt.time,
+                                                    evt.userdata));
+    }
     evt.type->callback(m_system, evt.userdata, m_globals.global_timer - evt.time);
   }
 

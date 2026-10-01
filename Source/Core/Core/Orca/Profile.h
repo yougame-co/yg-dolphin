@@ -47,6 +47,11 @@ bool TestOverridesActive();
 // line is malformed.
 std::optional<Profile> LoadProfile(const std::string& game_id, u16 revision, std::string* error);
 
+// The running session's profile, set at boot (null outside a session). The rollback core reads its
+// frame boundary from it.
+void SetActiveProfile(std::optional<Profile> profile);
+const Profile* ActiveProfile();
+
 // A config layer forcing the universal session settings plus the profile's (the Netplay layer type:
 // Orca does not run Dolphin's own netplay, and refuses to start a session while it does).
 std::unique_ptr<Config::ConfigLayerLoader> GenerateConfigLoader(const Profile& profile);

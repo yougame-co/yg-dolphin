@@ -189,6 +189,17 @@ const Sram* SessionSram()
 namespace
 {
 u64 s_seed_save_hash = 0;
+std::optional<Profile> s_active_profile;
+}  // namespace
+
+void SetActiveProfile(std::optional<Profile> profile)
+{
+  s_active_profile = std::move(profile);
+}
+
+const Profile* ActiveProfile()
+{
+  return s_active_profile ? &*s_active_profile : nullptr;
 }
 
 u64 HashSessionSave(u64 title_id)

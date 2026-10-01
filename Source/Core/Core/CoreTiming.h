@@ -38,6 +38,9 @@ class System;
 
 namespace CoreTiming
 {
+// Rollback harness diagnostics: when set, every executed event is appended.
+extern std::vector<std::string>* g_rollback_event_trace;
+
 // These really shouldn't be global, but jit64 accesses them directly
 struct Globals
 {
