@@ -42,7 +42,7 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad)
   if (m_resim_until >= 0)
   {
     const int next = completed_frame + 1;
-    if (!m_game.Save(next))
+    if (NeedsSnapshot(next) && !m_game.Save(next))
       return Fail(fmt::format("Saving frame {} failed", next));
     if (completed_frame < m_resim_until)
     {
@@ -63,7 +63,7 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad)
       return Fail(fmt::format("Frame alignment lost: frame {} ended, expected {}", completed_frame,
                               m_frame - 1));
     }
-    if (!m_game.Save(m_frame))
+    if (NeedsSnapshot(m_frame) && !m_game.Save(m_frame))
       return Fail(fmt::format("Saving frame {} failed", m_frame));
 
     const int target = m_frame + m_config.input_delay;
@@ -164,6 +164,14 @@ Pads Session::PadsFor(int frame)
       pads[s] = std::prev(after)->second;
   }
   return pads;
+}
+
+bool Session::NeedsSnapshot(int frame) const
+{
+  // A rollback only ever targets a frame that ran on a guess, and such a frame is past the newest
+  // confirmed one: the state at the start of a confirmed frame is never loaded. Checksum frames are
+  // saved regardless, since their hash comes from the snapshot.
+  return frame > ConfirmedFrame() || frame % m_config.checksum_every == 0;
 }
 
 int Session::ConfirmedFrame() const

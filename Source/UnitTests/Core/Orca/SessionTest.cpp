@@ -49,6 +49,7 @@ public:
   }
   void SetPads(int frame, const Pads& pads) override
   {
+    m_history[frame] = m_state;  // the state at the start of `frame` (re-runs overwrite)
     m_pads_frame = frame;
     m_pads = pads;
   }
@@ -77,6 +78,7 @@ public:
   }
 
   std::map<int, u64> m_snapshots;
+  std::map<int, u64> m_history;
   u64 m_state = 1;
   int m_pads_frame = -1;
   Pads m_pads{};
@@ -200,12 +202,12 @@ struct Match
     const int confirmed = std::min(a->session.GetStats().confirmed_frame,
                                    b->session.GetStats().confirmed_frame);
     int compared = 0;
-    for (const auto& [frame, state] : a->game.m_snapshots)
+    for (const auto& [frame, state] : a->game.m_history)
     {
       if (frame > confirmed)
         continue;
-      const auto other = b->game.m_snapshots.find(frame);
-      if (other == b->game.m_snapshots.end())
+      const auto other = b->game.m_history.find(frame);
+      if (other == b->game.m_history.end())
         continue;
       EXPECT_EQ(state, other->second) << "frame " << frame;
       ++compared;
@@ -227,6 +229,18 @@ TEST(OrcaSession, NoLatencyNeverRollsBack)
   EXPECT_EQ(match.a->session.GetStats().rollbacks, 0);
   EXPECT_EQ(match.b->session.GetStats().rollbacks, 0);
   EXPECT_GT(match.CompareConfirmed(), 500);
+  EXPECT_GT(match.a->session.GetStats().checksums_matched, 5);
+}
+
+TEST(OrcaSession, SavesOnlyFramesItMayRollBackTo)
+{
+  // Remote inputs arrive within the input delay, so no frame runs on a guess: only checksum frames
+  // (every 60) need a snapshot.
+  Match match(Config{}, 1, 0);
+  match.Play(600);
+  EXPECT_TRUE(match.a->session.Error().empty()) << match.a->session.Error();
+  EXPECT_EQ(match.a->session.GetStats().rollbacks, 0);
+  EXPECT_LE(match.a->game.m_snapshots.size(), 20u);
   EXPECT_GT(match.a->session.GetStats().checksums_matched, 5);
 }
 

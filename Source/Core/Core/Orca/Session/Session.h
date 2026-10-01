@@ -33,7 +33,8 @@ class Game
 {
 public:
   virtual ~Game() = default;
-  // Snapshot the current state as the state at the start of `frame`.
+  // Snapshot the current state as the state at the start of `frame`. Only frames the session may
+  // roll back to, or compare checksums of, are saved: Load is never asked for an unsaved frame.
   virtual bool Save(int frame) = 0;
   // Restore the state at the start of `frame`; the next boundary reached is the end of `frame`.
   virtual bool Load(int frame) = 0;
@@ -137,6 +138,7 @@ private:
   void SendPacket();
   Pads PadsFor(int frame);
   int ConfirmedFrame() const;
+  bool NeedsSnapshot(int frame) const;
   void CheckChecksums();
   Step Fail(std::string error);
 
