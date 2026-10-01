@@ -31,6 +31,10 @@ int RoundTripMs(u32* sequence = nullptr);
 // What the room is doing or why it ended, for the window title or log.
 std::string StatusLine();
 
+// Reports why the session ended to the desktop app (Orca::Status): a desync, the room's reason,
+// or the session's own error. Nothing for a normal leave.
+void ReportSessionEnd(const std::string& session_error);
+
 // Leaves the room (reporting a running match void) and stops its thread. Call when emulation stops.
 void Shutdown();
 

@@ -53,6 +53,8 @@ public:
   std::string Code() const;
   // A line for the UI or log: what the room is doing, or why it ended.
   std::string Status() const;
+  // Once Ended: the desktop app's error code for why (Orca::Status), empty for a normal end.
+  std::string ErrorCode() const;
   // The latest round trip to the room server and back, in milliseconds (-1 before the first).
   // `sequence`, if given, receives a count that changes with each new measurement: feed
   // Session::OnRoundTrip only when it changed since the last call.
@@ -73,8 +75,10 @@ private:
 // Packets as room messages (exposed for tests).
 std::string EncodePacket(const Packet& packet);
 bool DecodePacket(const std::string& json, Packet* packet);
-// What to tell the player when the room refused the connection (WebSocket::Connect's error).
+// What to tell the player when the room refused the connection (WebSocket::Connect's error), and
+// the desktop app's error code for it.
 std::string RefusalReason(const std::string& connect_error);
+std::string RefusalCode(const std::string& connect_error);
 // Queues `packet` in place of one not sent yet, keeping the older one's earlier inputs and checksum.
 void CoalescePacket(std::optional<Packet>* outgoing, const Packet& packet);
 }  // namespace Orca::Net

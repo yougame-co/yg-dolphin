@@ -19,6 +19,7 @@
 #include "Core/Boot/Boot.h"
 #include "Core/BootManager.h"
 #include "Core/Core.h"
+#include "Core/Orca/Status.h"
 #include "Core/DolphinAnalytics.h"
 #include "Core/Host.h"
 #include "Core/System.h"
@@ -319,7 +320,9 @@ int main(const int argc, char* argv[])
   Core::Shutdown(Core::System::GetInstance());
   s_platform.reset();
 
-  return 0;
+  // In an Orca session the last "orca error" line explains a non-zero exit.
+  Orca::Status::State("ended");
+  return Orca::Status::ExitCode();
 }
 
 #ifdef _WIN32

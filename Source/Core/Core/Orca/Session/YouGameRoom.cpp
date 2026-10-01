@@ -343,6 +343,15 @@ std::string WebSocketUrl(std::string url)
 // readable here, only its status (rooms/src/index.ts, the room's join checks): 401 an expired
 // ticket; 403 a room whose lobby key differs (another Orca build, disc or save, which for an
 // Orca room is the only kind of room it can be refused for) or a host's kick; 409 a full room.
+std::string RefusalCode(const std::string& connect_error)
+{
+  if (connect_error.find("(HTTP 403)") != std::string::npos)
+    return "room_mismatch";
+  if (connect_error.find("(HTTP 409)") != std::string::npos)
+    return "room_full";
+  return "network";
+}
+
 std::string RefusalReason(const std::string& connect_error)
 {
   if (connect_error.find("(HTTP 403)") != std::string::npos)
@@ -382,6 +391,7 @@ struct YouGameRoom::Impl
   mutable std::mutex mutex;
   RoomState state = RoomState::Connecting;
   std::string status = "Connecting to YouGame...";
+  std::string error_code;
   std::string code;
   int seat = -1;
   u32 seed = 0;
@@ -460,7 +470,8 @@ struct YouGameRoom::Impl
     status = std::move(line);
   }
 
-  void End(std::string why)
+  // `code`: the desktop app's error code for this end (Orca::Status), empty for a normal leave.
+  void End(std::string why, std::string code = "network")
   {
     WARN_LOG_FMT(NETPLAY, "Orca room ended: {}", why);
     std::lock_guard lock(mutex);
@@ -468,6 +479,7 @@ struct YouGameRoom::Impl
       return;
     state = RoomState::Ended;
     status = std::move(why);
+    error_code = std::move(code);
   }
 
   // `held`: through the test delay queue when one is configured (teardown messages skip it).
@@ -527,7 +539,7 @@ struct YouGameRoom::Impl
       {
         WARN_LOG_FMT(NETPLAY, "Orca room: no reply from {} (HTTP {})", target,
                      http.GetLastResponseCode());
-        End(stop ? "You left the room" : "YouGame did not respond");
+        End(stop ? "You left the room" : "YouGame did not respond", stop ? "" : "network");
         return false;
       }
       picojson::value json;
@@ -642,7 +654,7 @@ struct YouGameRoom::Impl
       return;
     if (stop)
     {
-      End("You left the room");
+      End("You left the room", "");
       return;
     }
     std::string room;
@@ -657,7 +669,7 @@ struct YouGameRoom::Impl
                     std::chrono::seconds(8), &error))
     {
       WARN_LOG_FMT(NETPLAY, "Orca room: {}", error);
-      End(RefusalReason(error));
+      End(RefusalReason(error), RefusalCode(error));
       return;
     }
     SetStatus(fmt::format("Room {}: waiting for your friend", room));
@@ -676,7 +688,7 @@ struct YouGameRoom::Impl
     {
       if (leave_requested)
       {
-        End("You left the room");
+        End("You left the room", "");
         break;
       }
       if (bridged)
@@ -1016,7 +1028,7 @@ struct YouGameRoom::Impl
     const auto& participants = it->second.get<picojson::array>();
     if (participants.size() > 2)
     {
-      End("Orca rooms are for two players");
+      End("Orca rooms are for two players", "room_full");
       return;
     }
     if (const auto rev = Int(m, "revision", 0, MAX_FRAME))
@@ -1117,12 +1129,12 @@ struct YouGameRoom::Impl
       me = Str(m, "me");
       if (Str(m, "lifecycle") != "game")
       {
-        End("This room is not an Orca lobby");
+        End("This room is not an Orca lobby", "room_mismatch");
         return;
       }
       if (m.count("playing") && m.at("playing").evaluate_as_boolean())
       {
-        End("This room already has a match running");
+        End("This room already has a match running", "room_full");
         return;
       }
       Roster(m);
@@ -1135,7 +1147,7 @@ struct YouGameRoom::Impl
       if (current == RoomState::Playing)
       {
         if ((t == "leave" || t == "away") && PeerGone(m))
-          End("Your friend left the match");
+          End("Your friend left the match", "peer_left");
         return;
       }
       Roster(m);
@@ -1150,8 +1162,9 @@ struct YouGameRoom::Impl
       if (current == RoomState::Playing)
       {
         match_id.clear();
-        End(m.count("void") && m.at("void").evaluate_as_boolean() ? "The match was cancelled" :
-                                                                    "The match is over");
+        const bool cancelled = m.count("void") && m.at("void").evaluate_as_boolean();
+        End(cancelled ? "The match was cancelled" : "The match is over",
+            cancelled ? "peer_left" : "");
       }
     }
     else if (t == "msg")
@@ -1192,7 +1205,7 @@ struct YouGameRoom::Impl
     }
     else if (t == "kicked")
     {
-      End("You were removed from the room");
+      End("You were removed from the room", "room_mismatch");
     }
   }
 
@@ -1203,7 +1216,7 @@ struct YouGameRoom::Impl
     {
       if (Str(d, "c") != options.compatibility)
       {
-        End("Your friend is running a different Orca build or setup");
+        End("Your friend is running a different Orca build or setup", "room_mismatch");
         return;
       }
       if (!peer_hello)
@@ -1269,6 +1282,12 @@ std::string YouGameRoom::Status() const
   return m_impl->status;
 }
 
+std::string YouGameRoom::ErrorCode() const
+{
+  std::lock_guard lock(m_impl->mutex);
+  return m_impl->state == RoomState::Ended ? m_impl->error_code : "";
+}
+
 int YouGameRoom::RoundTripMs(u32* sequence) const
 {
   std::lock_guard lock(m_impl->mutex);
@@ -1330,6 +1349,6 @@ void YouGameRoom::Leave()
   m_impl->stop = true;
   if (m_impl->thread.joinable())
     m_impl->thread.join();
-  m_impl->End("You left the room");
+  m_impl->End("You left the room", "");
 }
 }  // namespace Orca::Net

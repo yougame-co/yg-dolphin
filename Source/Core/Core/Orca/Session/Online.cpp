@@ -20,6 +20,7 @@
 #include "Core/Config/MainSettings.h"
 #include "Core/Config/SessionSettings.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/Status.h"
 #include "Core/HW/SI/SI_Device.h"
 #include "Core/Orca/Session/YouGameRoom.h"
 
@@ -119,11 +120,13 @@ Net::Transport* WaitForMatch(Net::Config* config, const std::function<bool()>& s
   if (!room)
     return nullptr;
   std::string last_status;
+  Status::State("lobby");
   while (!stopping())
   {
     const Net::RoomState state = room->GetState();
     if (state == Net::RoomState::Playing)
     {
+      Status::State("playing");
       config->seats = 2;
       config->local_seat = room->Seat();
       NOTICE_LOG_FMT(NETPLAY, "Orca: match on room {}, port {}", room->Code(), room->Seat() + 1);
@@ -132,6 +135,8 @@ Net::Transport* WaitForMatch(Net::Config* config, const std::function<bool()>& s
     if (state == Net::RoomState::Ended)
     {
       ERROR_LOG_FMT(NETPLAY, "Orca: {}", room->Status());
+      if (const std::string code = room->ErrorCode(); !code.empty())
+        Status::Error(code, room->Status());
       return nullptr;
     }
     if (std::string status = room->Status(); status != last_status)
@@ -160,6 +165,26 @@ std::string StatusLine()
 {
   const auto room = Room();
   return room ? room->Status() : "";
+}
+
+void ReportSessionEnd(const std::string& session_error)
+{
+  if (session_error.starts_with("Desync"))
+  {
+    Status::Error("desync", "Your games went out of sync, so the match ended");
+    return;
+  }
+  // The session ends when the room does: the room says why, unless this player left.
+  const auto room = Room();
+  const std::string code = room ? room->ErrorCode() : "";
+  if (room && room->GetState() == Net::RoomState::Ended)
+  {
+    if (!code.empty())
+      Status::Error(code, room->Status());
+    return;
+  }
+  if (!session_error.empty())
+    Status::Error("network", session_error);
 }
 
 void Shutdown()

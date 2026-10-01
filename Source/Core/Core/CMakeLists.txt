@@ -509,6 +509,8 @@ add_library(core
   NetPlayServer.h
   Orca/Profile.cpp
   Orca/Profile.h
+  Orca/Status.cpp
+  Orca/Status.h
   Orca/Session/Online.cpp
   Orca/Session/Online.h
   Orca/Session/PadCodec.h

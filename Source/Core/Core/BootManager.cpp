@@ -38,6 +38,7 @@
 #include "Core/Movie.h"
 #include "Core/NetPlayProto.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/Status.h"
 #include "Core/System.h"
 #include "Core/WiiRoot.h"
 
@@ -82,8 +83,12 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
   std::optional<Orca::Profile> orca_profile;
   if (Orca::SessionActive())
   {
+    Orca::Status::State("booting");
     std::string error;
     orca_profile = Orca::LoadProfile(StartUp.GetGameID(), StartUp.GetRevision(), &error);
+    const char* error_code = !orca_profile && error.find("revision") != std::string::npos ?
+                                 "disc_revision" :
+                                 (!orca_profile ? "profile" : "settings");
     if (orca_profile && NetPlay::IsNetPlayRunning())
       error = "Orca: a session can't run alongside Dolphin netplay";
     else if (orca_profile && !boot->riivolution_patches.empty())
@@ -92,6 +97,7 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
       error = "Orca: the Software renderer can't keep EFB copies on the GPU";
     if (!error.empty())
     {
+      Orca::Status::Error(error_code, error);
       PanicAlertFmt("{}", error);
       return false;
     }
@@ -182,6 +188,7 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
   {
     if (const auto problem = Orca::VerifyForcedSettings(*orca_profile))
     {
+      Orca::Status::Error("settings", *problem);
       PanicAlertFmt("{}", *problem);
       return false;
     }

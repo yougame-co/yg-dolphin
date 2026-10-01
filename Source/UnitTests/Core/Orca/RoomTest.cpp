@@ -376,6 +376,7 @@ TEST(OrcaLive, BridgeMirrorsTheRoomAndTakesLeave)
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   EXPECT_EQ(a.GetState(), RoomState::Ended);
   EXPECT_EQ(a.Status(), "You left the room");
+  EXPECT_EQ(a.ErrorCode(), "");
   for (int i = 0; i < 500 && b.Connected(); ++i)
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   EXPECT_FALSE(b.Connected()) << b.Status();
@@ -415,5 +416,16 @@ TEST(OrcaLive, DifferentKeysAreRefusedWithAReason)
   SetEnv("ORCA_TEST_DEV_GAME", nullptr);
   EXPECT_EQ(b.GetState(), RoomState::Ended);
   EXPECT_NE(b.Status().find("differs"), std::string::npos) << b.Status();
+  EXPECT_EQ(b.ErrorCode(), "room_mismatch");
   EXPECT_EQ(a.GetState(), RoomState::Waiting);
+  EXPECT_EQ(a.ErrorCode(), "");
+  a.Leave();
+  EXPECT_EQ(a.ErrorCode(), "");
+}
+
+TEST(OrcaRoom, RefusalsHaveAppCodes)
+{
+  EXPECT_EQ(RefusalCode("WebSocket connect failed: ... (HTTP 403)"), "room_mismatch");
+  EXPECT_EQ(RefusalCode("WebSocket connect failed: ... (HTTP 409)"), "room_full");
+  EXPECT_EQ(RefusalCode("WebSocket connect failed: ... (HTTP 0)"), "network");
 }

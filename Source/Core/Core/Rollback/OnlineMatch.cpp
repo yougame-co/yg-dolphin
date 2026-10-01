@@ -162,6 +162,9 @@ std::optional<int> OnBoundary(Core::System& system,
     return std::nullopt;
   }
   const std::string error = match.session->Error();
+  // Before End leaves the room: the room's own reason (a friend who left, a lost connection) is
+  // still there to report.
+  Orca::Online::ReportSessionEnd(error);
   End("session ended");
   StopEmulation(system, fmt::format("Online match ended: {}", error.empty() ? "stopped" : error));
   return std::nullopt;
