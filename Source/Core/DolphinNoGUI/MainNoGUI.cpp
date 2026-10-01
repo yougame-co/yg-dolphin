@@ -19,6 +19,7 @@
 
 #include "Common/MsgHandler.h"
 #include "Common/ScopeGuard.h"
+#include "Common/StringUtil.h"
 #include "Core/Boot/Boot.h"
 #include "Core/BootManager.h"
 #include "Core/Core.h"
@@ -50,7 +51,22 @@ static void signal_handler(int)
   s_platform->RequestShutdown();
 }
 
-#ifndef _WIN32
+#ifdef _WIN32
+// Alerts show a message box, as with the default handler, but name Orca in a session.
+static bool MsgAlertHandler(const char* caption, const char* text, bool yes_no,
+                            Common::MsgType style)
+{
+  UINT window_style = MB_ICONINFORMATION;
+  if (style == Common::MsgType::Question)
+    window_style = MB_ICONQUESTION;
+  if (style == Common::MsgType::Warning)
+    window_style = MB_ICONWARNING;
+
+  return IDYES == MessageBox(nullptr, UTF8ToTStr(Orca::BrandText(text)).c_str(),
+                             UTF8ToTStr(caption).c_str(),
+                             window_style | (yes_no ? MB_YESNO : MB_OK));
+}
+#else
 // Alerts go to stderr, as with the default handler, but name Orca in a session.
 static bool MsgAlertHandler(const char*, const char* text, bool, Common::MsgType)
 {
@@ -270,9 +286,7 @@ int main(const int argc, char* argv[])
     return 0;
   }
 
-#ifndef _WIN32
   Common::RegisterMsgAlertHandler(MsgAlertHandler);
-#endif
 
   std::string user_directory;
   if (options.is_set("user"))
