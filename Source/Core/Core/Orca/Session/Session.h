@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <climits>
 #include <cstddef>
 #include <map>
 #include <optional>
@@ -63,10 +64,13 @@ struct Packet
   // Frames the sender re-simulated in its last one-second window (-1: no window yet). A side's
   // rollbacks come from the other side's input delay, so each side adapts on the worst number.
   int resimulated = -1;
-  // Stalls the sender has had since inputs from every other player started arriving, counted over
-  // the whole match (-1: not reported). Each side's stalls come from the others' input delay, so
-  // every side raises on any side's stall; a running count can't be missed or counted twice.
+  // The sender's stalls that count for the delay, over the whole match (-1: not reported): once
+  // every peer's inputs were arriving, and not lined up with a hitch on either machine. Each side's
+  // stalls come from the others' input delay, so every side adapts on all of them; a running count
+  // can't be missed or counted twice.
   int stalls = -1;
+  // The sender's hitches (Session::OnLocalHitch) over the whole match (-1: not reported).
+  int hitches = -1;
   // The sender's smoothed lead over the slowest other player, in tenths of a frame: its frame minus
   // the frame that player last reported (nullopt: nothing received yet). Both leads include the
   // same transit time, so time sync halves their difference and the transit cancels out.
@@ -170,6 +174,10 @@ public:
   // that changes with each pong; feed only when it changed, or one ping counts many times). In
   // the first three seconds it sets the delay to cover what the rollback window can't.
   void OnRoundTrip(int rtt_ms);
+  // This machine just had a slow frame (a disc read, a shader compile: more than two frame periods
+  // of wall time outside the session's own stalls and waits). The session has no wall clock, so
+  // only the emulator can say; peers hear of it and leave the stalls it caused out of the delay.
+  void OnLocalHitch();
 
   const std::string& Error() const { return m_error; }
   const Stats& GetStats() const { return m_stats; }
@@ -232,12 +240,21 @@ private:
   // Re-simulated frames in this player's last window (sent), and in each peer's (received).
   int m_last_resimulated = -1;
   std::array<int, MAX_SEATS> m_peer_resimulated{-1, -1, -1, -1};
-  // Stalls once every peer's inputs started arriving (sent), as of the last window; each peer's
-  // reported count, and how much of it the last window already acted on.
+  // Stalls that count for the delay (sent), as of the last window; each peer's reported count, and
+  // how much of it the last window already acted on.
   int m_link_stalls = 0;
   int m_window_link_stalls = 0;
   std::array<int, MAX_SEATS> m_peer_stalls{0, 0, 0, 0};
   std::array<int, MAX_SEATS> m_peer_stalls_seen{0, 0, 0, 0};
+  // Counted stalls, here and reported, in each of the last STALL_WINDOWS windows (oldest first).
+  std::array<int, 3> m_stall_history{};
+  // The frame the current stall began at, and whether every peer's inputs had started arriving.
+  int m_stall_frame = 0;
+  bool m_stall_after_input = false;
+  // This machine's hitches (sent), each peer's, and the frame the latest of any was heard of.
+  int m_hitches = 0;
+  std::array<int, MAX_SEATS> m_peer_hitches{0, 0, 0, 0};
+  int m_last_hitch_frame = INT_MIN / 2;
   // Windows left before a delay raised for stalls may be lowered again.
   int m_stall_hold = 0;
   int m_quiet_windows = 0;
