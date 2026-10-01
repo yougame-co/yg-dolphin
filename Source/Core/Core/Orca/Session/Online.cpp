@@ -10,7 +10,7 @@
 #include <thread>
 
 #include <fmt/format.h>
-#include <xxhash.h>
+#include <xxh3.h>
 
 #include "Common/Config/Config.h"
 #include "Common/Logging/Log.h"
