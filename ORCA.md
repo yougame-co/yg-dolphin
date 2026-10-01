@@ -31,6 +31,18 @@ Online play goes through a private two-player YouGame room (`Source/Core/Core/Or
 | `ORCA_SITE` | Tests only: the site for dev tickets (default `https://yougame.co`). |
 | `ORCA_TEST_PADS`, `ORCA_TEST_SKIP_RENDER` | Harness overrides; they change the compatibility key. |
 
+**Orca.app** (the macOS bundle, `Tools/orca-package-macos.sh`) is what the YouGame desktop app
+starts, with no arguments. A bundle build is a session by default (`ORCA_SESSION=0` turns that off),
+its user directory is `~/Library/Application Support/Orca` unless `-u` says otherwise, and without
+`-e` it asks for the player's own Brawl disc image with a macOS open panel. It checks the game ID
+and revision before boot, asks again after a wrong disc (`orca error disc_revision` if the player
+then gives up, `orca error cancelled` if they never chose one), and remembers the path in
+`Config/Orca.ini` `[Disc] Path`, asking again when that file is gone. Until the canonical save
+exists, Orca.app sessions start from an empty NAND (save hash 0) whatever the user directory's NAND
+holds; Brawl makes its save in-session on both machines. A session with no `Config/GCPadNew.ini`
+gets `Sys/Orca/Input/GCPadNew.ini`: port 1 on the keyboard (Dolphin's default keys) and the first
+SDL gamepad of any model (`SDL/0/*`, a device name Orca matches as a wildcard).
+
 Two friends meet when both use the same code and the same compatibility key: the Orca build, the
 host CPU architecture, the game profile, every forced setting, the disc and the seeded save. The
 architecture is in the key until a test shows Jit64 and JitArm64 compute identical results (with

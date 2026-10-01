@@ -9,8 +9,8 @@
 // Machine-readable status for the YouGame desktop app, one line each on stdout in a session:
 //   orca state booting|lobby|playing|ended
 //   orca error <code> <sentence for the player>
-// Codes: boot, disc_revision, profile, settings, room_mismatch, room_full, kicked, network,
-// peer_left, desync, internal.
+// Codes: boot, cancelled (Orca.app's disc picker closed without a disc), disc_revision, profile,
+// settings, room_mismatch, room_full, kicked, network, peer_left, desync, internal.
 // Only the first error is printed: it is the one that explains the exit. Outside a session these
 // print nothing.
 namespace Orca::Status

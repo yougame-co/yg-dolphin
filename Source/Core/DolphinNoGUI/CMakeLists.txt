@@ -36,6 +36,8 @@ if (WIN32)
     OUTPUT_NAME      DolphinNoGUI
   )
 elseif(APPLE AND ORCA_MACOS_BUNDLE)
+  # Orca.app: a session by default, its own user dir, and a disc picker (MainNoGUI.cpp).
+  target_compile_definitions(dolphin-nogui PRIVATE ORCA_MACOS_BUNDLE)
   set_target_properties(dolphin-nogui PROPERTIES
     MACOSX_BUNDLE TRUE
     MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/Orca-Info.plist.in"

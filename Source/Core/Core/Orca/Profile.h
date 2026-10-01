@@ -36,8 +36,8 @@ struct Profile
 // expect UTF-8.)
 std::string GetEnv(const char* name);
 
-// True when this process runs an Orca rollback session (ORCA_SESSION=1 for now; the desktop app
-// will pass it at launch).
+// True when this process runs an Orca rollback session: ORCA_SESSION=1, which Orca.app sets for
+// itself unless the environment already says otherwise (ORCA_SESSION=0 turns it off).
 bool SessionActive();
 
 // Test-only overrides for harness runs, honoured only inside a session. A process with any of them
@@ -74,6 +74,13 @@ const Sram* SessionSram();
 u64 HashSessionSave(u64 title_id);
 void SetSeedSaveHash(u64 hash);
 u64 GetSeedSaveHash();
+
+// Whether a session copies the title's save from the configured NAND into the session NAND (on by
+// default). Orca.app turns it off: until the canonical save exists (desktop plan O5), every app
+// session starts from an empty NAND (save hash 0), whatever the player's own NAND holds, and the
+// game makes its save in-session on both machines.
+void SetSeedSessionSave(bool seed);
+bool SeedSessionSave();
 
 // After every other boot-time config change: an error if anything outranks a forced setting.
 std::optional<std::string> VerifyForcedSettings(const Profile& profile);

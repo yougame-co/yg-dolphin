@@ -157,6 +157,18 @@ PlatformMacOS::~PlatformMacOS()
   [m_window close];
 }
 
+// finishLaunching runs once, whether the disc picker or Init gets there first.
+static bool s_launched = false;
+
+static void FinishLaunching()
+{
+  [Application sharedApplication];
+  if (s_launched)
+    return;
+  s_launched = true;
+  [Application.sharedApplication finishLaunching];
+}
+
 bool PlatformMacOS::Init()
 {
   [Application sharedApplication];
@@ -166,7 +178,7 @@ bool PlatformMacOS::Init()
 
   [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
   [NSApp setPlatform:this];
-  [Application.sharedApplication finishLaunching];
+  FinishLaunching();
 
   unsigned long styleMask =
       NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable;
@@ -429,4 +441,72 @@ void PlatformMacOS::SetupMenu()
 std::unique_ptr<Platform> Platform::CreateMacOSPlatform()
 {
   return std::make_unique<PlatformMacOS>();
+}
+
+namespace
+{
+// The dialogs run before PlatformMacOS::Init, so they make the shared application (as Application,
+// which Init expects) and bring this process to the front: the YouGame app starts it directly.
+void BringToFront()
+{
+  [Application sharedApplication];
+  [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+  FinishLaunching();
+  // Copy and paste in the panel's text fields (Go to Folder) need an Edit menu; Init replaces this.
+  if ([NSApp mainMenu] == nil || [[NSApp mainMenu] numberOfItems] == 0)
+  {
+    NSMenu* bar = [NSMenu new];
+    NSMenuItem* app_item = [NSMenuItem new];
+    NSMenu* app_menu = [NSMenu new];
+    [app_menu addItemWithTitle:@"Quit Orca" action:@selector(terminate:) keyEquivalent:@"q"];
+    [app_item setSubmenu:app_menu];
+    [bar addItem:app_item];
+    NSMenuItem* edit_item = [NSMenuItem new];
+    NSMenu* edit_menu = [[NSMenu alloc] initWithTitle:@"Edit"];
+    [edit_menu addItemWithTitle:@"Cut" action:@selector(cut:) keyEquivalent:@"x"];
+    [edit_menu addItemWithTitle:@"Copy" action:@selector(copy:) keyEquivalent:@"c"];
+    [edit_menu addItemWithTitle:@"Paste" action:@selector(paste:) keyEquivalent:@"v"];
+    [edit_menu addItemWithTitle:@"Select All" action:@selector(selectAll:) keyEquivalent:@"a"];
+    [edit_item setSubmenu:edit_menu];
+    [bar addItem:edit_item];
+    [NSApp setMainMenu:bar];
+  }
+  [NSApp activateIgnoringOtherApps:YES];
+}
+}  // namespace
+
+std::optional<std::string> Platform::ChooseFileMacOS(const std::string& message)
+{
+  @autoreleasepool
+  {
+    BringToFront();
+    NSOpenPanel* panel = [NSOpenPanel openPanel];
+    [panel setCanChooseFiles:YES];
+    [panel setCanChooseDirectories:NO];
+    [panel setAllowsMultipleSelection:NO];
+    [panel setTitle:@"Orca"];
+    [panel setMessage:[NSString stringWithUTF8String:message.c_str()]];
+    [panel setPrompt:@"Choose"];
+    // Above other apps' windows even if macOS doesn't let this process take the focus from the
+    // YouGame app that started it.
+    [panel setLevel:NSModalPanelWindowLevel];
+    if ([panel runModal] != NSModalResponseOK || panel.URL == nil || panel.URL.path == nil)
+      return std::nullopt;
+    return std::string(panel.URL.path.UTF8String);
+  }
+}
+
+void Platform::ShowErrorMacOS(const std::string& title, const std::string& message)
+{
+  @autoreleasepool
+  {
+    BringToFront();
+    NSAlert* alert = [[NSAlert alloc] init];
+    [alert setAlertStyle:NSAlertStyleWarning];
+    [alert setMessageText:[NSString stringWithUTF8String:title.c_str()]];
+    [alert setInformativeText:[NSString stringWithUTF8String:message.c_str()]];
+    [alert addButtonWithTitle:@"OK"];
+    [[alert window] setLevel:NSModalPanelWindowLevel];
+    [alert runModal];
+  }
 }
