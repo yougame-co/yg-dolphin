@@ -9,6 +9,7 @@ import math
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 
 from PIL import Image, ImageDraw
@@ -84,6 +85,9 @@ def main():
         if shutil.which("iconutil"):
             subprocess.run(["iconutil", "-c", "icns", iconset, "-o",
                             os.path.join(out_dir, "Orca.icns")], check=True)
+        else:
+            print("orca-icon: no iconutil (macOS only): Data/Orca.icns was not updated and is now "
+                  "out of step with Orca.png and Orca.ico", file=sys.stderr)
 
     # Windows: a multi-size .ico for the executable's resources.
     icon.save(os.path.join(ROOT, "Installer", "Orca.ico"),
