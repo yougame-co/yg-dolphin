@@ -18,6 +18,7 @@
 #include "Common/Version.h"
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/MainSettings.h"
+#include "Core/Core.h"
 #include "Core/Config/SessionSettings.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Status.h"
@@ -130,11 +131,13 @@ Net::Transport* WaitForMatch(Net::Config* config, const std::function<bool()>& s
       config->seats = 2;
       config->local_seat = room->Seat();
       NOTICE_LOG_FMT(NETPLAY, "Orca: match on room {}, port {}", room->Code(), room->Seat() + 1);
+      Core::DisplayMessage(fmt::format("Playing on port {}", room->Seat() + 1), 4000);
       return room.get();
     }
     if (state == Net::RoomState::Ended)
     {
       ERROR_LOG_FMT(NETPLAY, "Orca: {}", room->Status());
+      Core::DisplayMessage(room->Status(), 10000);
       if (const std::string code = room->ErrorCode(); !code.empty())
         Status::Error(code, room->Status());
       return nullptr;
@@ -142,6 +145,8 @@ Net::Transport* WaitForMatch(Net::Config* config, const std::function<bool()>& s
     if (std::string status = room->Status(); status != last_status)
     {
       NOTICE_LOG_FMT(NETPLAY, "Orca: {}", status);
+      // On screen too, until the next line replaces it: the room code is what a friend needs.
+      Core::DisplayMessage(status, 60000);
       last_status = std::move(status);
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
