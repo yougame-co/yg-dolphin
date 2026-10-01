@@ -104,6 +104,16 @@ elseif(APPLE)
     COMMAND ${CMAKE_COMMAND} -E rm -rf "$<TARGET_FILE_DIR:dolphin-nogui>/Contents/Resources/Sys"
     COMMAND ${CMAKE_COMMAND} -E create_symlink "${CMAKE_SOURCE_DIR}/Data/Sys"
             "$<TARGET_FILE_DIR:dolphin-nogui>/Contents/Resources/Sys")
+elseif(NOT ANDROID AND NOT ENABLE_QT)
+  # Orca: on Windows and Linux Sys is found next to the executable, and only DolphinQt's build puts
+  # it there. A build without Qt links (or, without symlink rights on Windows, copies) it itself, or
+  # no game INI or Orca profile is found. With Qt on, DolphinQt does it; doing it twice would race.
+  add_custom_command(TARGET dolphin-nogui POST_BUILD
+    COMMAND ${CMAKE_COMMAND}
+      -Dtarget="${CMAKE_SOURCE_DIR}/Data/Sys"
+      -Dlink="${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/Sys"
+      -P="${CMAKE_SOURCE_DIR}/CMake/DolphinSymlinkOrCopy.cmake"
+  )
 endif()
 
 set(CPACK_PACKAGE_EXECUTABLES ${CPACK_PACKAGE_EXECUTABLES} dolphin-nogui)

@@ -721,8 +721,10 @@ endif()
 dolphin_find_optional_system_library(MBEDTLS Externals/mbedtls 2.28)
 
 # Orca: the netcode needs libcurl's WebSocket support, which macOS's system libcurl lacks and
-# distribution builds may lack or predate (7.86); use the bundled curl unless asked otherwise.
-if(NOT WIN32 AND NOT DEFINED USE_SYSTEM_CURL)
+# distribution builds may lack or predate (7.86); use the bundled curl unless asked otherwise. On
+# Windows too: a curl found through vcpkg or CMAKE_PREFIX_PATH may be a DLL, an older version or
+# another TLS backend than the bundled Schannel one.
+if(NOT DEFINED USE_SYSTEM_CURL)
   set(USE_SYSTEM_CURL OFF CACHE STRING "Use the system libcurl (Orca needs WebSocket support)")
 endif()
 dolphin_find_optional_system_library(CURL Externals/curl)

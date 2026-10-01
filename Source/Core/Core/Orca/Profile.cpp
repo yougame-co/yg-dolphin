@@ -35,8 +35,7 @@ namespace
 {
 bool EnvIs(const char* name, const char* value)
 {
-  const char* v = std::getenv(name);
-  return v && std::string(v) == value;
+  return GetEnv(name) == value;
 }
 
 // Decimal, or hex with a 0x prefix (no octal: a leading zero is still decimal).
@@ -158,6 +157,17 @@ private:
 };
 }  // namespace
 
+std::string GetEnv(const char* name)
+{
+#ifdef _WIN32
+  const wchar_t* value = _wgetenv(UTF8ToWString(name).c_str());
+  return value ? WStringToUTF8(value) : std::string();
+#else
+  const char* value = std::getenv(name);
+  return value ? value : std::string();
+#endif
+}
+
 bool SessionActive()
 {
   return EnvIs("ORCA_SESSION", "1");
@@ -175,16 +185,16 @@ bool TestSkipRender()
 
 std::optional<int> TestNetDelayMs()
 {
-  const char* value = std::getenv("ORCA_TEST_NET_DELAY_MS");
-  if (!SessionActive() || !value)
+  const std::string value = GetEnv("ORCA_TEST_NET_DELAY_MS");
+  if (!SessionActive() || value.empty())
     return std::nullopt;
-  return std::clamp(std::atoi(value), 0, 1000);
+  return std::clamp(std::atoi(value.c_str()), 0, 1000);
 }
 
 int TestNetJitterMs()
 {
-  const char* value = std::getenv("ORCA_TEST_NET_JITTER_MS");
-  return TestNetDelayMs() && value ? std::clamp(std::atoi(value), 0, 1000) : 0;
+  const std::string value = GetEnv("ORCA_TEST_NET_JITTER_MS");
+  return TestNetDelayMs() && !value.empty() ? std::clamp(std::atoi(value.c_str()), 0, 1000) : 0;
 }
 
 bool TestOverridesActive()
@@ -227,6 +237,11 @@ u64 HashSessionSave(u64 title_id)
     return 0;
   // Files in name order, each hashed with its name.
   File::FSTEntry tree = File::ScanDirectoryTree(dir, true);
+  // Names relative to the scanned root as ScanDirectoryTree spells it (on Windows it rebuilds paths
+  // in generic form), so every platform hashes the same names.
+  std::string root = tree.physicalName;
+  if (!root.ends_with('/'))
+    root += '/';
   std::vector<std::string> paths;
   const std::function<void(const File::FSTEntry&)> collect = [&](const File::FSTEntry& e) {
     if (!e.isDirectory)
@@ -241,7 +256,7 @@ u64 HashSessionSave(u64 title_id)
   {
     std::string data;
     File::ReadFileToString(path, data);
-    const std::string name = path.substr(dir.size());
+    const std::string name = path.starts_with(root) ? path.substr(root.size()) : path;
     hash = (hash ^ Common::GetHash64(reinterpret_cast<const u8*>(name.data()),
                                      static_cast<u32>(name.size()), 0)) *
            0x100000001b3ull;
@@ -265,7 +280,10 @@ u64 GetSeedSaveHash()
 std::optional<Profile> LoadProfile(const std::string& game_id, u16 revision, std::string* error)
 {
   const std::string path = File::GetSysDirectory() + "Orca/" + game_id + ".ini";
-  std::ifstream in(path);
+  // Through OpenFStream: the path is UTF-8, which std::ifstream would read as the ANSI code page on
+  // Windows (an install path with any non-ASCII character would find no profile).
+  std::ifstream in;
+  File::OpenFStream(in, path, std::ios_base::in);
   if (!in)
   {
     *error = fmt::format("Orca has no profile for {} ({})", game_id, path);

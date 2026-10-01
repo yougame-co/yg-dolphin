@@ -29,7 +29,7 @@ public:
   WindowSystemInfo GetWindowSystemInfo() const override;
 
 private:
-  static constexpr TCHAR WINDOW_CLASS_NAME[] = _T("DolphinNoGUI");
+  static constexpr TCHAR WINDOW_CLASS_NAME[] = _T("Orca");
 
   static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -61,12 +61,12 @@ bool PlatformWin32::RegisterRenderWindowClass()
   wc.cbClsExtra = 0;
   wc.cbWndExtra = 0;
   wc.hInstance = GetModuleHandle(nullptr);
-  wc.hIcon = LoadIcon(nullptr, IDI_ICON1);
+  wc.hIcon = LoadIcon(wc.hInstance, IDI_ICON1);
   wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
   wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
   wc.lpszMenuName = nullptr;
   wc.lpszClassName = WINDOW_CLASS_NAME;
-  wc.hIconSm = LoadIcon(nullptr, IDI_ICON1);
+  wc.hIconSm = LoadIcon(wc.hInstance, IDI_ICON1);
 
   if (!RegisterClassEx(&wc))
   {
@@ -79,7 +79,7 @@ bool PlatformWin32::RegisterRenderWindowClass()
 
 bool PlatformWin32::CreateRenderWindow()
 {
-  m_hwnd = CreateWindowEx(WS_EX_CLIENTEDGE, WINDOW_CLASS_NAME, _T("Dolphin"), WS_OVERLAPPEDWINDOW,
+  m_hwnd = CreateWindowEx(WS_EX_CLIENTEDGE, WINDOW_CLASS_NAME, _T("Orca"), WS_OVERLAPPEDWINDOW,
                           m_window_x < 0 ? CW_USEDEFAULT : m_window_x,
                           m_window_y < 0 ? CW_USEDEFAULT : m_window_y, m_window_width,
                           m_window_height, nullptr, nullptr, GetModuleHandle(nullptr), this);

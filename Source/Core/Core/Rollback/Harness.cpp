@@ -46,8 +46,8 @@ namespace
 {
 int EnvInt(const char* name, int fallback)
 {
-  const char* v = std::getenv(name);
-  return v && *v ? std::atoi(v) : fallback;
+  const std::string v = Orca::GetEnv(name);
+  return v.empty() ? fallback : std::atoi(v.c_str());
 }
 
 const int s_scenes = EnvInt("YG_SCENES", 0);
@@ -65,10 +65,8 @@ const int s_render_reruns = EnvInt("YG_SYNCTEST_RENDER", 0);
 // rollback history would).
 const int s_clear_jit = EnvInt("YG_SYNCTEST_CLEARJIT", 0);
 // Loopback session test (Loopback.h): a recording from YG_PADREC replayed through a real session.
-const char* const s_loopback = [] {
-  const char* v = std::getenv("YG_LOOPBACK");
-  return v && *v ? v : nullptr;
-}();
+const std::string s_loopback_path = Orca::GetEnv("YG_LOOPBACK");
+const char* const s_loopback = s_loopback_path.empty() ? nullptr : s_loopback_path.c_str();
 const int s_lb_lag = std::max(0, EnvInt("YG_LOOPBACK_LAG", 6));
 const int s_lb_jitter = std::max(0, EnvInt("YG_LOOPBACK_JITTER", 3));
 const int s_lb_delay = std::max(0, EnvInt("YG_LOOPBACK_DELAY", 2));
@@ -129,24 +127,23 @@ SceneReader SceneReaderForRunningGame()
   return nullptr;
 }
 
-FILE* OpenHashLog()
+// A file named by an environment variable, open for writing (null handle when unset). IOFile takes
+// UTF-8 paths on Windows too.
+File::IOFile OpenEnvFile(const char* name)
 {
-  const char* path = std::getenv("YG_HASHLOG");
-  return path && *path ? std::fopen(path, "w") : nullptr;
+  const std::string path = Orca::GetEnv(name);
+  return path.empty() ? File::IOFile() : File::IOFile(path, "w");
 }
-FILE* const s_hashlog = OpenHashLog();
+File::IOFile s_hashlog_file = OpenEnvFile("YG_HASHLOG");
+FILE* const s_hashlog = s_hashlog_file.GetHandle();
 
 // The modes that save or load snapshots or play their own session (YG_SYNCTEST, YG_BENCH,
 // YG_LOOPBACK, YG_SAVE_ONLY_FROM) can't run beside a real online match: they would load states under
 // it and share its ring and NAND journal. Scripted input, recording, hashing and exit still work.
 bool SnapshotModesAllowed();
 
-FILE* OpenPadRecording()
-{
-  const char* path = std::getenv("YG_PADREC");
-  return path && *path ? std::fopen(path, "w") : nullptr;
-}
-FILE* const s_padrec = OpenPadRecording();
+File::IOFile s_padrec_file = OpenEnvFile("YG_PADREC");
+FILE* const s_padrec = s_padrec_file.GetHandle();
 
 // ---- Scripted input ----
 
@@ -162,10 +159,11 @@ struct InputRule
 std::vector<InputRule> LoadInputScript()
 {
   std::vector<InputRule> rules;
-  const char* path = std::getenv("YG_INPUT");
-  if (!path || !*path)
+  const std::string path = Orca::GetEnv("YG_INPUT");
+  if (path.empty())
     return rules;
-  std::ifstream in(path);
+  std::ifstream in;
+  File::OpenFStream(in, path, std::ios_base::in);
   std::string line;
   while (std::getline(in, line))
   {

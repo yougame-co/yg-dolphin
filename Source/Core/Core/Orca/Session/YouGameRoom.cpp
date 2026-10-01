@@ -54,8 +54,7 @@ u64 NowMs()
 
 std::string Env(const char* name)
 {
-  const char* value = std::getenv(name);
-  return value ? value : "";
+  return Orca::GetEnv(name);
 }
 
 bool ValidCode(const std::string& code)
@@ -567,8 +566,8 @@ struct YouGameRoom::Impl
           return false;
         }
         // Copied out first: assigning a map from one of its own elements frees it mid-copy.
-        picojson::object result = o["result"].get<picojson::object>();
-        o = std::move(result);
+        picojson::object unwrapped = o["result"].get<picojson::object>();
+        o = std::move(unwrapped);
       }
       else if (http.GetLastResponseCode() != 200)
       {

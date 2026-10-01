@@ -71,7 +71,9 @@ void RestoreRam(Core::System& system, u8* live, const std::vector<u8>& saved, u3
 // non-forced invalidation does this word by word, far too slow for thousands of pages per load.)
 void ForgetLearnedJitAddresses(Core::System& system, const std::unordered_set<u32>& changed_pages)
 {
-  auto* jit = dynamic_cast<JitBase*>(system.GetJitInterface().GetCore());
+  // JitInterface only ever holds a JitBase (null for the interpreter). No dynamic_cast: the MSVC
+  // build has RTTI off (/GR-), and C4541 is an error under /WX.
+  auto* jit = static_cast<JitBase*>(system.GetJitInterface().GetCore());
   if (!jit || changed_pages.empty())
     return;
   const auto in_changed_page = [&changed_pages](u32 address) {
@@ -82,11 +84,12 @@ void ForgetLearnedJitAddresses(Core::System& system, const std::unordered_set<u3
   std::erase_if(jit->js.noSpeculativeConstantsAddresses, in_changed_page);
 }
 
-// The NAND, when it is the host backend (it always is today); its journal undoes NAND changes.
+// The NAND, which is always the host backend (FS::MakeFileSystem creates nothing else); its journal
+// undoes NAND changes. A static_cast: no RTTI on MSVC (see above).
 IOS::HLE::FS::HostFileSystem* HostNand(Core::System& system)
 {
   IOS::HLE::EmulationKernel* ios = system.GetIOS();
-  return ios ? dynamic_cast<IOS::HLE::FS::HostFileSystem*>(ios->GetFS().get()) : nullptr;
+  return ios ? static_cast<IOS::HLE::FS::HostFileSystem*>(ios->GetFS().get()) : nullptr;
 }
 }  // namespace
 
