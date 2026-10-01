@@ -352,6 +352,8 @@ void HostEvents(Core::System& system, Match& match)
     if (!job->ok)
     {
       ERROR_LOG_FMT(ROLLBACK, "Drop-in: keyframe of frame {} failed: {}", job->frame, job->error);
+      // Whoever waits for it gets another try.
+      match.keyframe_wanted = !match.waiting.empty();
     }
     else
     {
@@ -385,6 +387,8 @@ void HostEvents(Core::System& system, Match& match)
     {
       match.keyframe_wanted = false;
       StartKeyframe(system, match, next);
+      if (!match.job)
+        match.keyframe_wanted = !match.waiting.empty();
     }
   }
   if (!match.store && !match.waiting.empty())

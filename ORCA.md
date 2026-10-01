@@ -148,12 +148,42 @@ host has played.
    - The rooms Worker needed no change: it admits late joiners, assigns the lowest free slot and
      relays `msg` between connections.
 
-**Hazard found on the way (Apple Silicon).** Dolphin's JIT leaves `FPCR.AH` set when the
-frame-boundary hook runs host C++ on the CPU thread. Clang may build a 64-bit constant whose high
-word is `0x7fffffff` (a `{0, INT_MAX}` struct) with `movi` + `fneg`, and with `FPCR.AH` set,
-`FNEG` leaves a NaN's sign bit alone: the constant came out as `{0, -1}`. Drop-in's "never" frame
-is therefore `0x3fffffff` (plain `mov` immediates). Other host code called from the JIT has the same
-exposure. `objdump -d` a CPU-thread object for `fneg`/`fabs` that aren't float math.
+**The frame hook runs in the host's floating-point mode** (`Rollback.cpp`, `HostFloatScope`).
+- The CPU thread runs compiled C++ in the guest's FP mode (`PowerPC::RoundingModeUpdated`). In
+  Brawl that is FPCR `0x1000002` (FZ and AH) on Apple Silicon, and MXCSR with the guest rounding
+  mode and FTZ on x86-64.
+- Under FPCR.AH, FNEG and FABS leave a NaN's sign alone, and clang builds some 64-bit constants
+  with MOVI + FNEG. A `{0, INT_MAX}` roster entry came out as `{0, -1}`.
+- The hook now switches to the host's default on entry. On the way out it sets the guest's mode
+  again from its FPSCR, which a snapshot load inside the hook may have changed. That is exactly
+  what the JIT itself sets.
+- The synctest (0 RAM mismatches over 6,384 re-run frames) and the loopback (PASS, 899
+  checksums) are unchanged. As defence in depth, "never" is still `0x3fffffff`.
+
+**Results** (2026-10-01): two Orca processes on one Mac, over prod rooms with dev tickets and a
+local keyframe folder.
+- The host played solo for a minute; a friend joined at frame ~3,700 and plugged into port 2.
+- Both reached character select, stage select and the fight (`scMelee` at frame 6,017) on the
+  same frames.
+- 185 checksums matched over 11,000 frames, then the friend left at an agreed frame and the host
+  played on solo. A second friend joined (74 checksums matched) and left.
+- Join time:
+  - 0.5 s Dolphin boot to the first frame, then 0.2-0.4 s until the keyframe is offered: room
+    connect and hello, capture 8-10 ms, compress 125-170 ms, store 5 ms;
+  - transfer 8 ms (local), unpack 72-96 ms, load 17-23 ms, catch-up 0.5-0.7 ms;
+  - 0.8-1.1 s from the friend's first frame to plugged in, about 2.2 s from process launch.
+- Over the internet, the upload of 38-53 MB adds its own time.
+
+**Limits:**
+- Only two players have been tested.
+- With a third player, the packet that carries a catching-up joiner's inputs also limits the
+  inputs every other player gets: the live players would stall during the join. Catching up
+  should come from history only.
+- A player dropped abruptly could already have its last inputs confirmed by another player but
+  not by the host.
+- There is no YouGame keyframe endpoint yet (spec below), so an app build can't serve a joiner.
+- Desktop only: the NAND capture is an APFS clone on macOS and a synchronous read elsewhere
+  (about 55 MB).
 
 ### Measurements
 

@@ -151,7 +151,7 @@ constexpr int MAX_ADVANTAGE = 1 << 20;
 constexpr int MAX_RTT = 1 << 20;
 // Drop-in history in one packet (the session sends far less; CoalescePacket may join two).
 constexpr size_t MAX_HISTORY_RUNS_IN_PACKET = 128;
-constexpr size_t MAX_HISTORY_FRAMES_IN_PACKET = 1024;
+constexpr size_t MAX_HISTORY_FRAMES_IN_PACKET = MAX_HISTORY_IN_PACKET;
 
 // picojson has no nesting limit (deep arrays overflow the I/O thread's stack) and aborts on a number
 // that overflows a double. Nothing YouGame sends nests deeply, uses an exponent or has more than 17
@@ -1384,7 +1384,9 @@ struct YouGameRoom::Impl
       const bool was_heard = peer.heard;
       peer.heard = true;
       peer.heard_us = peer.heard_us || (d.count("r") && d.at("r").evaluate_as_boolean());
-      peer.drop_in_host = d.count("h") && d.at("h").evaluate_as_boolean();
+      // The game's host says so, and is the room's host (the first in): no other player can take
+      // a joiner's game over by claiming it.
+      peer.drop_in_host = d.count("h") && d.at("h").evaluate_as_boolean() && id == host;
       if (!was_heard)
         last_hello = {};  // answer at once rather than on the next hello tick
       // A player of the game: a joiner at a seat other than the host's, or the host itself.
@@ -1556,7 +1558,7 @@ void CoalescePacket(std::optional<Packet>* outgoing, const Packet& packet)
     else if (merged.history_seat == pending->history_seat &&
              pending->history_first + static_cast<int>(pending->history.size()) ==
                  merged.history_first &&
-             pending->history.size() + merged.history.size() <= 512)
+             pending->history.size() + merged.history.size() <= MAX_HISTORY_FRAMES_IN_PACKET)
     {
       std::vector<Pads> joined = pending->history;
       joined.insert(joined.end(), merged.history.begin(), merged.history.end());

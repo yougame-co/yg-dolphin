@@ -41,6 +41,8 @@ constexpr int NEVER = 0x3fffffff;
 // peer is never more than its input delay plus a rollback window ahead; this is generous).
 constexpr int MAX_PADS_IN_PACKET = 64;
 constexpr int MAX_FRAMES_AHEAD = 240;
+// Drop-in history frames one packet may carry (a sender sends half, so two coalesced still fit).
+constexpr int MAX_HISTORY_IN_PACKET = 512;
 // Most predicted frames between two snapshots (Config::snapshot_every). A rollback may then load a
 // snapshot up to MAX_SNAPSHOT_EVERY - 1 frames older than the first wrong frame and re-run from
 // there.

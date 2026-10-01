@@ -57,7 +57,6 @@ constexpr double SPACING_DEAD_BAND_MS = 0.25;
 // equal pads (a packet stays a few KB), and at most this far past the frame the joiner reported. A
 // history send the joiner hasn't acknowledged after this many packets goes again.
 constexpr int CATCH_UP_SLACK = 8;
-constexpr int MAX_HISTORY_IN_PACKET = 256;
 constexpr int MAX_HISTORY_RUNS = 32;
 constexpr int HISTORY_AHEAD = 4096;
 constexpr int HISTORY_RESEND_PACKETS = 120;
@@ -1074,7 +1073,7 @@ void Session::AddHistory(Packet* packet)
       m_history_stuck[s] = 0;
     }
     const int first = std::max(m_history_sent[s], m_history_acked[s]) + 1;
-    const int last = std::min({until, first + MAX_HISTORY_IN_PACKET - 1,
+    const int last = std::min({until, first + MAX_HISTORY_IN_PACKET / 2 - 1,
                                std::max(m_remote_frame[s], m_log_base) + HISTORY_AHEAD});
     if (last < first)
       continue;
