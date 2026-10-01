@@ -1,0 +1,152 @@
+// Copyright 2026 YouGame
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#include "Core/Orca/Session/Online.h"
+
+#include <chrono>
+#include <cstdlib>
+#include <memory>
+#include <mutex>
+#include <thread>
+
+#include <fmt/format.h>
+#include <xxhash.h>
+
+#include "Common/Config/Config.h"
+#include "Common/Logging/Log.h"
+#include "Common/Version.h"
+#include "Core/Config/GraphicsSettings.h"
+#include "Core/Config/MainSettings.h"
+#include "Core/Config/SessionSettings.h"
+#include "Core/Orca/Profile.h"
+#include "Core/HW/SI/SI_Device.h"
+#include "Core/Orca/Session/YouGameRoom.h"
+
+namespace Orca::Online
+{
+namespace
+{
+std::mutex s_mutex;
+std::unique_ptr<Net::YouGameRoom> s_room;
+
+std::string Env(const char* name)
+{
+  const char* value = std::getenv(name);
+  return value ? value : "";
+}
+
+Net::YouGameRoom* Room()
+{
+  std::lock_guard lock(s_mutex);
+  return s_room.get();
+}
+}  // namespace
+
+bool Enabled()
+{
+  if (!SessionActive())
+    return false;
+  return (!Env("YOUGAME_BRIDGE").empty() && !Env("YOUGAME_TOKEN").empty()) ||
+         !Env("ORCA_TEST_DEV_GAME").empty();
+}
+
+std::string CompatibilityKey()
+{
+  std::string parts = fmt::format("orca|{}|", Common::GetScmRevGitStr());
+  if (const Profile* profile = ActiveProfile())
+  {
+    parts += fmt::format("{}|{}|", profile->game_id, profile->revision);
+    for (const auto& [location, value] : profile->forced)
+      parts += fmt::format("{}.{}.{}={}|", static_cast<int>(location.system), location.section,
+                           location.key, value);
+  }
+  // The universal forced settings that change what the game computes (CPU core and JIT choice are
+  // left out on purpose: they differ between Mac and PC and must not change results).
+  parts += fmt::format(
+      "thread={}|fma={}|rtc={}:{}|si={},{},{},{}|efb={}|xfb={}|access={}|bbox={}|save={:016x}|test={}",
+      Config::Get(Config::MAIN_CPU_THREAD), Config::Get(Config::SESSION_USE_FMA),
+      Config::Get(Config::MAIN_CUSTOM_RTC_ENABLE), Config::Get(Config::MAIN_CUSTOM_RTC_VALUE),
+      static_cast<int>(Config::Get(Config::GetInfoForSIDevice(0))),
+      static_cast<int>(Config::Get(Config::GetInfoForSIDevice(1))),
+      static_cast<int>(Config::Get(Config::GetInfoForSIDevice(2))),
+      static_cast<int>(Config::Get(Config::GetInfoForSIDevice(3))),
+      Config::Get(Config::GFX_HACK_SKIP_EFB_COPY_TO_RAM),
+      Config::Get(Config::GFX_HACK_SKIP_XFB_COPY_TO_RAM),
+      Config::Get(Config::GFX_HACK_EFB_ACCESS_ENABLE), Config::Get(Config::GFX_HACK_BBOX_ENABLE),
+      GetSeedSaveHash(), TestOverridesActive());
+  // The room allows 1-64 characters [a-zA-Z0-9._:-].
+  return fmt::format("orca1:{:016x}", XXH3_64bits(parts.data(), parts.size()));
+}
+
+Net::Transport* WaitForMatch(Net::Config* config, const std::function<bool()>& stopping)
+{
+  {
+    std::lock_guard lock(s_mutex);
+    if (!s_room)
+    {
+      Net::RoomOptions options;
+      options.room_code = Env("ORCA_ROOM");
+      options.compatibility = CompatibilityKey();
+      if (!Env("ORCA_NAME").empty())
+        options.player_name = Env("ORCA_NAME").substr(0, 32);
+      NOTICE_LOG_FMT(NETPLAY, "Orca: joining a YouGame room, compatibility {}",
+                     options.compatibility);
+      s_room = std::make_unique<Net::YouGameRoom>(std::move(options));
+    }
+  }
+  Net::YouGameRoom* room = Room();
+  std::string last_status;
+  while (!stopping())
+  {
+    const Net::RoomState state = room->GetState();
+    if (state == Net::RoomState::Playing)
+    {
+      config->seats = 2;
+      config->local_seat = room->Seat();
+      NOTICE_LOG_FMT(NETPLAY, "Orca: match on room {}, port {}", room->Code(), room->Seat() + 1);
+      return room;
+    }
+    if (state == Net::RoomState::Ended)
+    {
+      ERROR_LOG_FMT(NETPLAY, "Orca: {}", room->Status());
+      return nullptr;
+    }
+    if (std::string status = room->Status(); status != last_status)
+    {
+      NOTICE_LOG_FMT(NETPLAY, "Orca: {}", status);
+      last_status = std::move(status);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  return nullptr;
+}
+
+u32 Seed()
+{
+  const Net::YouGameRoom* room = Room();
+  return room ? room->Seed() : 0;
+}
+
+int RoundTripMs()
+{
+  const Net::YouGameRoom* room = Room();
+  return room ? room->RoundTripMs() : -1;
+}
+
+std::string StatusLine()
+{
+  const Net::YouGameRoom* room = Room();
+  return room ? room->Status() : "";
+}
+
+void Shutdown()
+{
+  std::unique_ptr<Net::YouGameRoom> room;
+  {
+    std::lock_guard lock(s_mutex);
+    room = std::move(s_room);
+  }
+  if (room)
+    room->Leave();
+}
+}  // namespace Orca::Online

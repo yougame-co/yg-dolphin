@@ -509,9 +509,13 @@ add_library(core
   NetPlayServer.h
   Orca/Profile.cpp
   Orca/Profile.h
+  Orca/Session/Online.cpp
+  Orca/Session/Online.h
   Orca/Session/PadCodec.h
   Orca/Session/Session.cpp
   Orca/Session/Session.h
+  Orca/Session/YouGameRoom.cpp
+  Orca/Session/YouGameRoom.h
   NetworkCaptureLogger.cpp
   NetworkCaptureLogger.h
   PatchEngine.cpp
