@@ -587,6 +587,8 @@ add_library(core
   PowerPC/SignatureDB/MEGASignatureDB.h
   PowerPC/SignatureDB/SignatureDB.cpp
   PowerPC/SignatureDB/SignatureDB.h
+  Rollback/Diag.cpp
+  Rollback/Diag.h
   Rollback/Harness.cpp
   Rollback/Harness.h
   Rollback/Loopback.cpp

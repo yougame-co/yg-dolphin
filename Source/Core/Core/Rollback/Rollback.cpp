@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <span>
 #include <tuple>
@@ -24,6 +25,7 @@
 #include "Core/PowerPC/JitCommon/JitBase.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/Rollback/Diag.h"
 #include "Core/Rollback/Harness.h"
 #include "Core/Rollback/OnlineMatch.h"
 #include "Core/Rollback/SessionPort.h"
@@ -188,17 +190,28 @@ bool SnapshotRing::Save(Core::System& system, s64 frame)
   const auto buffers_before = buffers();
 
   // Non-RAM state first, so anything DoState writes into RAM is in the RAM copy.
+  const auto t0 = std::chrono::steady_clock::now();
   {
     SnapshotScope scope;
     slot->state_size = State::SaveToBufferForRollback(system, slot->state);
   }
+  const auto t1 = std::chrono::steady_clock::now();
 
   auto& memory = system.GetMemory();
-  slot->mem1.assign(memory.GetRAM(), memory.GetRAM() + memory.GetRamSize());
+  Diag::CopyRam(&slot->mem1, memory.GetRAM(), memory.GetRamSize());
+  const auto t2 = std::chrono::steady_clock::now();
   if (memory.GetEXRAM())
-    slot->mem2.assign(memory.GetEXRAM(), memory.GetEXRAM() + memory.GetExRamSize());
+    Diag::CopyRam(&slot->mem2, memory.GetEXRAM(), memory.GetExRamSize());
   else
     slot->mem2.clear();
+  if (Diag::SnapTime())
+  {
+    const auto ms = [](auto from, auto to) {
+      return std::chrono::duration<double, std::milli>(to - from).count();
+    };
+    const auto t3 = std::chrono::steady_clock::now();
+    Diag::AddSnapshotSave(ms(t0, t1), ms(t1, t2), ms(t2, t3));
+  }
   slot->l1_cache.assign(memory.GetL1Cache(), memory.GetL1Cache() + memory.GetL1CacheSize());
   slot->frame = frame;
 

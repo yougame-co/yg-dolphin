@@ -4,12 +4,14 @@
 #include "Core/Rollback/SessionPort.h"
 
 #include <algorithm>
+#include <chrono>
 #include <optional>
 #include <thread>
 
 #include "Common/Logging/Log.h"
 #include "Core/Core.h"
 #include "Core/Orca/Session/PadCodec.h"
+#include "Core/Rollback/Diag.h"
 #include "Core/System.h"
 
 namespace Rollback
@@ -57,6 +59,8 @@ bool RingPort::Save(int frame)
   const bool allocated = m_ring.Save(m_system, frame);
   double ms =
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+  if (Diag::SnapTime())
+    Diag::AddPortSave(ms);
   // A slot's first use allocates and faults in ~100 MB: not what a save costs. After that, an
   // eighth of each sample, at most four times the estimate: one slow save (a busy machine) barely
   // moves it.
@@ -77,7 +81,14 @@ bool RingPort::Load(int frame)
   if (!m_resimulating && !m_reference_before_load)
     m_reference_before_load = m_system.GetCoreTiming().GetThrottleReference();
   m_saved_since_run = -1;
-  return m_ring.Load(m_system, frame);
+  const auto start = std::chrono::steady_clock::now();
+  const bool loaded = m_ring.Load(m_system, frame);
+  if (Diag::SnapTime())
+  {
+    Diag::AddPortLoad(
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count());
+  }
+  return loaded;
 }
 
 void RingPort::SetPads(int frame, const Orca::Net::Pads& pads)
