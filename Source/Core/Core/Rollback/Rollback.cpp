@@ -9,7 +9,7 @@
 #include <span>
 #include <unordered_set>
 
-#include <xxhash.h>
+#include <xxh3.h>
 
 #include "Common/Logging/Log.h"
 #include "Core/HW/Memmap.h"
