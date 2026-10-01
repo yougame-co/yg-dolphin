@@ -12,6 +12,7 @@
 #include "Common/HookableEvent.h"
 #include "Common/Logging/Log.h"
 #include "Core/Core.h"
+#include "Core/HW/CPU.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Rollback/SessionPort.h"
 #include "Core/System.h"
@@ -24,6 +25,8 @@ struct Match
 {
   bool started = false;
   bool finished = false;
+  // Emulation stopped since this match started: the next boot plays a new match.
+  bool stale = false;
   std::unique_ptr<RingPort> port;
   std::unique_ptr<Orca::Net::Session> session;
   int local_seat = 0;
@@ -39,9 +42,13 @@ Match& TheMatch()
   return match;
 }
 
+// Emulation is stopping, or the host asked the CPU thread to pause (a pause, a stop with
+// confirmation, a PauseAndLock): its caller waits for the CPU thread to go idle, so a loop that
+// holds the CPU thread here must give up rather than deadlock it.
 bool Stopping(Core::System& system)
 {
-  return Core::GetState(system) == Core::State::Stopping;
+  return Core::GetState(system) == Core::State::Stopping ||
+         system.GetCPU().GetState() != CPU::State::Running;
 }
 
 // A round-trip sample the session has not seen yet (the room numbers its samples).
@@ -67,6 +74,16 @@ std::optional<int> OnBoundary(Core::System& system,
                               const std::function<Orca::Net::Pad(int local_seat)>& local_pad)
 {
   Match& match = TheMatch();
+  if (match.stale)
+  {
+    // A new boot in the same process (the room was left when the last one stopped).
+    match.started = false;
+    match.finished = false;
+    match.stale = false;
+    match.local_seat = 0;
+    match.running = -1;
+    match.round_trip_sequence = 0;
+  }
   if (match.finished)
     return std::nullopt;
 
@@ -74,10 +91,15 @@ std::optional<int> OnBoundary(Core::System& system,
   {
     match.started = true;
     // Once emulation has stopped (the CPU thread is gone), leave the room.
-    match.on_state_changed = Core::AddOnStateChangedCallback([](Core::State state) {
-      if (state == Core::State::Uninitialized)
+    if (!match.on_state_changed)
+    {
+      match.on_state_changed = Core::AddOnStateChangedCallback([](Core::State state) {
+        if (state != Core::State::Uninitialized)
+          return;
         End("emulation stopped");
-    });
+        TheMatch().stale = true;
+      });
+    }
 
     Orca::Net::Config config;
     Orca::Net::Transport* transport =
