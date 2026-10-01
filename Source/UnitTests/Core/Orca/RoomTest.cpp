@@ -336,7 +336,7 @@ TEST(OrcaLive, TestNetworkDelayHoldsMessages)
 }
 
 // Under the desktop app: one room through the app's bridge (YOUGAME_BRIDGE, YOUGAME_TOKEN,
-// YOUGAME_GAME, set by the test's caller to a fake bridge), the other on a dev ticket. The bridged
+// YOUGAME_GAME, set by the test's caller to Tools/orca/fake_bridge.py), the other on a dev ticket. The bridged
 // side mirrors the room to the page, and the page's Leave ends it. ORCA_LIVE_TEST=1 and
 // ORCA_TEST_BRIDGE_ROOM=<the fake bridge's room code>.
 TEST(OrcaLive, BridgeMirrorsTheRoomAndTakesLeave)
