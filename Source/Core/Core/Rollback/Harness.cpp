@@ -17,7 +17,7 @@
 #include <vector>
 
 #include <fmt/format.h>
-#include <xxhash.h>
+#include <xxh3.h>
 
 #include "Common/ChunkFile.h"
 #include "Common/CommonTypes.h"
