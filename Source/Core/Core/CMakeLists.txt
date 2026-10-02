@@ -517,6 +517,8 @@ add_library(core
   Orca/Profile.h
   Orca/Status.cpp
   Orca/Status.h
+  Orca/Session/Events.cpp
+  Orca/Session/Events.h
   Orca/Session/Keyframe.cpp
   Orca/Session/Keyframe.h
   Orca/Session/Online.cpp
