@@ -29,8 +29,11 @@
 #include "Core/Core.h"
 #include "Core/CoreTiming.h"
 #include "Core/HW/Memmap.h"
+#include "Core/IOS/FS/HostBackend/FS.h"
+#include "Core/IOS/IOS.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Events.h"
+#include "Core/Orca/Session/Keyframe.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Session/PadCodec.h"
@@ -87,6 +90,19 @@ const int s_save_only_from = EnvInt("YG_SAVE_ONLY_FROM", -1);
 // Diagnosis: at the first-pass boundary of this frame, write MEM1 and MEM2 to
 // <user dir>/ram-<frame>-mem1.bin / -mem2.bin.
 const int s_dump_ram_at = EnvInt("YG_DUMP_RAM_AT", -1);
+// Diagnosis: at the first-pass boundaries of these frames (comma-separated), log every NAND file's
+// size and hash (the hash a drop-in keyframe names it by), to compare what different inputs leave
+// in the NAND (a profile's BootNandFrame).
+const std::vector<int> s_nand_hashes_at = [] {
+  std::vector<int> frames;
+  std::istringstream list(Orca::GetEnv("YG_NAND_HASHES_AT"));
+  for (std::string word; std::getline(list, word, ',');)
+  {
+    if (!word.empty())
+      frames.push_back(std::atoi(word.c_str()));
+  }
+  return frames;
+}();
 // Drop-in keyframes: at this first-pass frame, capture the machine as a joining friend's keyframe
 // (SnapshotRing::Capture), keep saving ring snapshots (copy-on-write in a session) for
 // KEYFRAME_TEST_FRAMES more, then load the keyframe into the ring (SnapshotRing::LoadImage, over a
@@ -837,7 +853,7 @@ bool Active()
   return s_scenes || s_synctest_k > 0 || s_exit_after > 0 || !Input().empty() ||
          s_shot_every > 0 || s_hashlog != nullptr || s_bench_k > 0 || s_padrec != nullptr ||
          s_loopback != nullptr || s_save_only_from >= 0 || s_dump_ram_at >= 0 ||
-         s_dump_frames_from >= 0;
+         s_dump_frames_from >= 0 || !s_nand_hashes_at.empty();
 }
 
 std::optional<GCPadStatus> InputOverride(int port)
@@ -998,6 +1014,26 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
     File::IOFile(base + "-mem1.bin", "wb").WriteBytes(memory.GetRAM(), memory.GetRamSize());
     File::IOFile(base + "-mem2.bin", "wb").WriteBytes(memory.GetEXRAM(), memory.GetExRamSize());
     NOTICE_LOG_FMT(ROLLBACK, "RAM at frame {} written to {}-mem*.bin", frame_here, base);
+  }
+  if (first_pass_here && std::find(s_nand_hashes_at.begin(), s_nand_hashes_at.end(), frame_here) !=
+                             s_nand_hashes_at.end())
+  {
+    IOS::HLE::EmulationKernel* ios = system.GetIOS();
+    const auto* nand = ios ? static_cast<IOS::HLE::FS::HostFileSystem*>(ios->GetFS().get()) : nullptr;
+    std::vector<Orca::Net::NandEntry> entries;
+    if (nand && Orca::Net::ReadNandTree(nand->HostRoot(), &entries))
+    {
+      u64 total = 0;
+      for (const Orca::Net::NandEntry& entry : entries)
+      {
+        if (entry.directory)
+          continue;
+        total += entry.data.size();
+        NOTICE_LOG_FMT(ROLLBACK, "NAND at frame {}: {} {} {:016x}", frame_here, entry.path,
+                       entry.data.size(), Orca::Net::NandHash(entry.data));
+      }
+      NOTICE_LOG_FMT(ROLLBACK, "NAND at frame {}: {} bytes in files", frame_here, total);
+    }
   }
   // Not beside a session: both rings would trim and stop the same NAND journal.
   if (s_save_only_from >= 0 && frame_here >= s_save_only_from && !s_loopback &&

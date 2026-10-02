@@ -127,8 +127,10 @@ void ApplyGamePatches(const Core::CPUThreadGuard& guard)
   // Loaded per profile (a process could boot a second game), on the CPU thread only.
   static std::string s_for;
   static std::vector<GamePatch> s_patches;
+  // A disc profile's file (RSBE01.patches) or a launcher profile's (PPLUS32.patches). A launcher's
+  // frame hook, which calls this, goes live only once the game it boots is in RAM.
   const Orca::Profile* profile = Orca::ActiveProfile();
-  const std::string game = profile && !profile->IsLauncher() ? profile->game_id : std::string{};
+  const std::string game = profile ? profile->game_id : std::string{};
   if (game != s_for)
   {
     s_for = game;

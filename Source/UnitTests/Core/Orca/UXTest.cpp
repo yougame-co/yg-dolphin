@@ -674,25 +674,54 @@ TEST(OrcaUXGamePatches, ConsecutiveCodeLinesAreOneGroupWrittenWhole)
   EXPECT_FALSE(GroupApplies(*guards, std::vector<u32>{7, 8}));
 }
 
-TEST(OrcaUXGamePatches, TheShippedBrawlFileParses)
+namespace
 {
-  // The source tree's copy, found from this file (tests run from the build directory).
+// The source tree's copy of a shipped patch file, found from this file (tests run from the build
+// directory), parsed.
+std::vector<GamePatch> ShippedPatches(const char* name)
+{
   const std::string path =
-      (std::filesystem::path(__FILE__).parent_path() / "../../../../Data/Sys/Orca/RSBE01.patches")
-          .string();
+      (std::filesystem::path(__FILE__).parent_path() / "../../../../Data/Sys/Orca" / name).string();
   std::string text;
-  ASSERT_TRUE(File::ReadFileToString(path, text)) << path;
+  EXPECT_TRUE(File::ReadFileToString(path, text)) << path;
   std::string error;
   const auto patches = ParseGamePatches(text, &error);
-  ASSERT_TRUE(patches.has_value()) << error;
-  EXPECT_GT(patches->size(), 10u);
-  // The boot-save block is one six-word group.
-  for (size_t i = 0; i < patches->size(); ++i)
+  EXPECT_TRUE(patches.has_value()) << name << ": " << error;
+  return patches.value_or(std::vector<GamePatch>{});
+}
+
+// The boot-save block is one six-word group, every word guarded by its original.
+void ExpectBootSaveGroup(const std::vector<GamePatch>& patches)
+{
+  int words = 0;
+  for (const GamePatch& p : patches)
   {
-    const u32 a = (*patches)[i].address;
-    if (a > 0x811A6430 && a <= 0x811A6444)
-      EXPECT_TRUE((*patches)[i].joins_previous) << std::hex << a;
+    if (p.address < 0x811A6430 || p.address > 0x811A6444)
+      continue;
+    ++words;
+    EXPECT_TRUE(p.original.has_value()) << std::hex << p.address;
+    EXPECT_EQ(p.joins_previous, p.address != 0x811A6430) << std::hex << p.address;
   }
+  EXPECT_EQ(words, 6);
+}
+}  // namespace
+
+TEST(OrcaUXGamePatches, TheShippedBrawlFileParses)
+{
+  const auto patches = ShippedPatches("RSBE01.patches");
+  EXPECT_GT(patches.size(), 10u);
+  ExpectBootSaveGroup(patches);
+}
+
+TEST(OrcaUXGamePatches, TheShippedProjectPlusFileHasOnlyGuardedCode)
+{
+  // Project+'s own codes own the memory around the disc's modules: its file may only hold code
+  // groups guarded by the words they replace, never a `*` line written every frame.
+  const auto patches = ShippedPatches("PPLUS32.patches");
+  ASSERT_FALSE(patches.empty());
+  for (const GamePatch& p : patches)
+    EXPECT_TRUE(p.original.has_value()) << std::hex << p.address;
+  ExpectBootSaveGroup(patches);
 }
 
 TEST(OrcaUXNameTags, UsernamesBecomeBrawlTags)

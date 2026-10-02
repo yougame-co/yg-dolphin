@@ -16,11 +16,12 @@ namespace Core
 class CPUThreadGuard;
 }
 
-// Orca's own game patches, forced on in every session of a disc profile (not a player option, and
-// never the player's own GameSettings codes, which a session drops): Data/Sys/Orca/<game>.patches,
-// hashed into the lobby compatibility key. A launcher profile's file (PPLUS32.patches) is hashed too
-// but never applied: there are none, and the launcher's own codes own that memory. One 32-bit word
-// per line:
+// Orca's own game patches, forced on in every session (not a player option, and never the player's
+// own GameSettings codes, which a session drops): Data/Sys/Orca/<profile>.patches, hashed into the
+// lobby compatibility key. A launcher profile's file (PPLUS32.patches) applies only once its frame
+// hook is live, after the loader has handed over to the game, and the launcher's own codes own most
+// of that memory: such a file holds only guarded code groups of the disc's own modules. One 32-bit
+// word per line:
 //
 //   <address> <original> <value>   # comment
 //   <address> * <value>             # comment
@@ -51,7 +52,7 @@ std::optional<std::vector<GamePatch>> ParseGamePatches(std::string_view text, st
 // Whether one group (or one `*` line) is written, given what memory holds at its addresses now.
 bool GroupApplies(std::span<const GamePatch> group, std::span<const u32> now);
 
-// The active disc profile's patches (loaded when the profile changes); nothing for a launcher
-// profile or none. A malformed file is a session error (Orca::Status "profile") and is not applied.
+// The active profile's patches (loaded when the profile changes); nothing without a profile or a
+// file. A malformed file is a session error (Orca::Status "profile") and is not applied.
 void ApplyGamePatches(const Core::CPUThreadGuard& guard);
 }  // namespace Orca::UX

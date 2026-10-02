@@ -65,8 +65,13 @@ The session boots the loader executable (`-e <launcher.dol>`) with the disc as D
 the SD card image next to the loader match the profile (XXH3-128). The SD image is opened read-only:
 every session forces SD writes and folder sync off. The profile also names the save that seeds the
 session NAND (`SaveTitle`), and its frame hook goes live once the game's instruction is at the
-address. None of a mod's files are in this repository; the player's machine downloads the official
-release. Example (Project+'s `Project+ Netplay Launcher.dol` and `sd.raw` side by side in `<dir>`):
+address. Its game patches (`Data/Sys/Orca/<profile>.patches`, `Core/Orca/UX/GamePatches.h`) apply
+from then on, as guarded code groups only: `PPLUS32.patches` skips Project+'s "Create save file for
+Project+?" prompt the way `RSBE01.patches` skips Brawl's (Project+ loads Brawl's boot module
+unchanged), so a session with no save goes straight to character select at frame 150 and writes no
+save; answering Yes cost 13 s of save writing (character select at frame ~925). None of a mod's
+files are in this repository; the player's machine downloads the official release. Example
+(Project+'s `Project+ Netplay Launcher.dol` and `sd.raw` side by side in `<dir>`):
 
 ```bash
 ORCA_SESSION=1 ORCA_PROFILE=PPLUS32 dolphin-emu-nogui -p headless -u <user> -v Null \
@@ -116,8 +121,10 @@ host has played.
      the boundary). The NAND travels because rollback snapshots keep only a journal mark.
    - The NAND's `/tmp` files that the game's boot writes whatever the player does (`BootNandFrame`
      in the profile) travel as XXH3 hashes only. Brawl writes 38.7 MB of packs by frame 1800 and
-     Project+ 2.3 MB by frame 300, byte-identical with or without input. Saves always travel:
-     Project+'s boot writes Brawl's saves early, and only when the player presses on. The host hashes its NAND at that frame. The joiner runs its own boot to
+     Project+ 2.3 MB by frame 300, byte-identical with or without input (and unchanged through a
+     match, checked with the harness's `YG_NAND_HASHES_AT`). Saves always travel: a save the boot
+     writes can depend on what the player pressed (Project+ without its patches wrote Brawl's on
+     the player's Yes). The host hashes its NAND at that frame. The joiner runs its own boot to
      that frame, unthrottled and unseen, while it downloads, then fills those files in from its
      own NAND, refusing the keyframe if one is missing or differs.
    - A thread packs everything, compresses it with zstd level 3 (long-distance matching, 128 MB
