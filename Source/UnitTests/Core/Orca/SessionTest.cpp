@@ -36,6 +36,24 @@ using namespace Orca::Net;
 
 namespace
 {
+// A uniform integer in [lo, hi], the same on every platform. std::mt19937's output is fixed by the
+// standard, but std::uniform_int_distribution's algorithm is each library's own: with it, MSVC and
+// libc++ simulate different networks from the same seed, and a threshold tuned on one fails on
+// the other. Rejection sampling keeps it unbiased.
+template <typename T>
+T Uniform(std::mt19937& rng, T lo, T hi)
+{
+  const u64 span = static_cast<u64>(hi - lo) + 1;
+  constexpr u64 RANGE = u64{1} << 32;  // mt19937 draws 32 bits
+  const u64 limit = RANGE - RANGE % span;
+  u64 draw;
+  do
+  {
+    draw = static_cast<u64>(rng());
+  } while (draw >= limit);
+  return static_cast<T>(lo + static_cast<T>(draw % span));
+}
+
 u64 Mix(u64 h, u64 v)
 {
   h ^= v + 0x9e3779b97f4a7c15ull + (h << 6) + (h >> 2);
@@ -162,7 +180,7 @@ struct FakeNet
     {
       int delay = m_net.latency + m_net.extra[1 - m_index];
       if (m_net.jitter > 0)
-        delay += std::uniform_int_distribution<int>(0, m_net.jitter)(m_net.rng);
+        delay += Uniform(m_net.rng, 0, m_net.jitter);
       // A relayed WebSocket is ordered: never deliver before an earlier packet.
       auto& queue = m_net.queues[1 - m_index];
       int at = m_net.now + delay;
@@ -331,7 +349,7 @@ struct Match
         {
           int rtt = net.latency;
           if (net.jitter > 0)
-            rtt += std::uniform_int_distribution<int>(0, net.jitter)(rtt_rng);
+            rtt += Uniform(rtt_rng, 0, net.jitter);
           (i == 0 ? a : b)->session.OnRoundTrip(relay_rtt_ms[i] >= 0 ? relay_rtt_ms[i] :
                                                                         rtt * 1000 / 60);
         }
@@ -547,24 +565,22 @@ private:
       pace = start;
       std::mt19937 rng(77 + index);
       const auto hitch = [&rng](Micros at) {
-        return std::pair{at, std::uniform_int_distribution<int>(5, 20)(rng) * FRAME_US};
+        return std::pair{at, Uniform(rng, 5, 20) * FRAME_US};
       };
       for (int i = 0; i < s.hitch_burst; ++i)
       {
-        const Micros at = start + std::uniform_int_distribution<Micros>(0, 10'000 * MS)(rng);
+        const Micros at = start + Uniform<Micros>(rng, 0, 10'000 * MS);
         hitches.push_back(hitch(at));
       }
       for (Micros at = start; s.hitch_every_s > 0 && at < 600'000 * MS;)
       {
-        at += std::uniform_int_distribution<Micros>(s.hitch_every_s * 500 * MS,
-                                                    s.hitch_every_s * 1500 * MS)(rng);
+        at += Uniform<Micros>(rng, s.hitch_every_s * 500 * MS, s.hitch_every_s * 1500 * MS);
         hitches.push_back(hitch(at));
       }
       std::sort(hitches.begin(), hitches.end());
       for (Micros at = start; s.spike_every_s > 0 && at < 600'000 * MS;)
       {
-        at += std::uniform_int_distribution<Micros>(s.spike_every_s * 900 * MS,
-                                                    s.spike_every_s * 1100 * MS)(rng);
+        at += Uniform<Micros>(rng, s.spike_every_s * 900 * MS, s.spike_every_s * 1100 * MS);
         spikes.emplace_back(at, at + s.spike_ms * MS);
       }
     }
@@ -606,7 +622,7 @@ private:
 
   Micros Hold(int ms, int jitter_ms)
   {
-    const int extra = jitter_ms > 0 ? std::uniform_int_distribution<int>(0, jitter_ms)(m_rng) : 0;
+    const int extra = jitter_ms > 0 ? Uniform(m_rng, 0, jitter_ms) : 0;
     return static_cast<Micros>(ms + extra) * MS;
   }
 
@@ -1969,7 +1985,7 @@ TEST(OrcaSessionRelay, SlowJitteryLinkStallsRarely)
   const Stats& a = match.SessionOf(0).GetStats();
   const Stats& b = match.SessionOf(1).GetStats();
   // All of A's in the first fifteen seconds, before B's raise (the old rule's raise on two stalls
-  // came after three).
+  // came after three). Over 25 jitter seeds: 4-8.
   EXPECT_LE(a.stalls, 8);
   EXPECT_EQ(a.stalls, early_stalls);
   EXPECT_LE(b.stalls, 5);
@@ -1988,7 +2004,9 @@ TEST(OrcaSessionRelay, JitterBothWaysEitherSideFast)
   // frame ahead and is the one that stalls. Before stalls counted from both sides, A stalled 654
   // times when its clock was the fast one, raising only its own delay (to 6) while B's stayed at 2.
   // Raising only on stalls in separate seconds (a burst counts twice at most), and in the first
-  // ten seconds on one more, costs a few more at the start, where these happen.
+  // ten seconds on one more, costs a few more at the start: the fast side stalls in the first
+  // fifteen seconds, until the other side's raise, and rarely after. Over 25 jitter seeds: 0-18
+  // stalls in those seconds, at most 4 in the three minutes after.
   for (const bool a_fast : {true, false})
   {
     RelayMatch::Side a = T3SideA();
@@ -1997,11 +2015,18 @@ TEST(OrcaSessionRelay, JitterBothWaysEitherSideFast)
     a.speed = a_fast ? 1.01 : 1.0;
     b.speed = a_fast ? 1.0 : 1.01;
     RelayMatch match(Config{}, a, b);
+    match.Play(900);
+    const std::array<int, 2> early{match.SessionOf(0).GetStats().stalls,
+                                   match.SessionOf(1).GetStats().stalls};
     match.Play(12000);
     match.Print(a_fast ? "both ways, A fast" : "both ways, B fast");
     match.ExpectClean();
     for (int i = 0; i < 2; ++i)
-      EXPECT_LE(match.SessionOf(i).GetStats().stalls, 10) << "a_fast " << a_fast << " side " << i;
+    {
+      const int stalls = match.SessionOf(i).GetStats().stalls;
+      EXPECT_LE(early[i], 20) << "a_fast " << a_fast << " side " << i;
+      EXPECT_LE(stalls - early[i], 5) << "a_fast " << a_fast << " side " << i;
+    }
     EXPECT_GT(match.CompareConfirmed(), 11000);
   }
 }
@@ -2061,7 +2086,7 @@ void FuzzDelaySwings(int snapshot_every)
   {
     std::mt19937 rng(seed);
     const auto pick = [&rng](int lo, int hi) {
-      return std::uniform_int_distribution<int>(lo, hi)(rng);
+      return Uniform(rng, lo, hi);
     };
     Config config;
     config.snapshot_every = snapshot_every;
