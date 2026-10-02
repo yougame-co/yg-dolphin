@@ -118,7 +118,9 @@ std::string CompatibilityKey()
   }
   // Not the host CPU: JitArm64 and Jit64 compute identical results (12,001 frames of a scripted
   // match hashed the same on an Apple Silicon Mac and an x86-64 Windows PC, 2026-10-01, after the
-  // ARM64 emitter and Jit64 ps1 fixes), so Mac and PC players meet. FMA, below, is in the key.
+  // ARM64 emitter and Jit64 ps1 fixes; Project+ too from 2026-10-02, after a launcher boot took a
+  // fixed region and JitArm64's sign operations went bitwise), so Mac and PC players meet. FMA,
+  // below, is in the key.
   // The universal forced settings that change what the game computes.
   parts += fmt::format(
       "thread={}|fma={}|rtc={}:{}|si={},{},{},{}|efb={}|xfb={}|access={}|bbox={}|save={:016x}|test={}"

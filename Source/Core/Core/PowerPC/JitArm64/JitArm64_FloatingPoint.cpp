@@ -62,6 +62,68 @@ void JitArm64::Force25BitPrecision(ARM64Reg output, ARM64Reg input)
   }
 }
 
+// Orca: PowerPC's fneg, fabs and fnabs (and their paired forms, and the final negation of
+// fnmadd/fnmsub) change only the sign bit, NaNs included, as Jit64 does with XORPD/ANDPD/ORPD.
+// AArch64's FNEG and FABS leave a NaN's sign alone while FPCR.AH is set, which Dolphin sets in the
+// guest's non-IEEE mode, so a Mac computed a NaN of the other sign than a PC: Project+ makes one
+// with fnmsubs (inf * 0) as a match starts, and the two players' memory diverged there.
+// size: 32 or 64 (the lanes). packed: Vd and Vn are D (two singles) or Q (two doubles) registers
+// and every lane changes; otherwise only the low lane, and the rest of Vd is zeroed as FNEG did.
+void JitArm64::EmitSignOp(SignOp op, u8 size, ARM64Reg Vd, ARM64Reg Vn, bool packed)
+{
+  const u64 sign = size == 64 ? 0x8000000000000000ULL : 0x80000000ULL;
+  const u64 all = size == 64 ? ~0ULL : 0xFFFFFFFFULL;
+  if (!packed)
+  {
+    const auto WA = gpr.GetScopedReg();
+    const bool wide = size == 64;
+    const ARM64Reg RA = wide ? EncodeRegTo64(WA) : ARM64Reg(WA);
+    const GPRSize gpr_size = wide ? GPRSize::B64 : GPRSize::B32;
+    const ARM64Reg FD = wide ? EncodeRegToDouble(Vd) : EncodeRegToSingle(Vd);
+    const ARM64Reg FN = wide ? EncodeRegToDouble(Vn) : EncodeRegToSingle(Vn);
+    m_float_emit.FMOV(RA, FN);
+    switch (op)
+    {
+    case SignOp::Negate:
+      EOR(RA, RA, LogicalImm(sign, gpr_size));
+      break;
+    case SignOp::Abs:
+      AND(RA, RA, LogicalImm(all & ~sign, gpr_size));
+      break;
+    case SignOp::NegativeAbs:
+      ORR(RA, RA, LogicalImm(sign, gpr_size));
+      break;
+    }
+    m_float_emit.FMOV(FD, RA);
+    return;
+  }
+
+  const auto VM = fpr.GetScopedReg();
+  const ARM64Reg mask = IsQuad(Vd) ? EncodeRegToQuad(VM) : EncodeRegToDouble(VM);
+  if (size == 64)
+  {
+    const auto WA = gpr.GetScopedReg();
+    MOVI2R(EncodeRegTo64(WA), sign);
+    m_float_emit.DUP(64, mask, EncodeRegTo64(WA));
+  }
+  else
+  {
+    m_float_emit.MOVI(32, mask, 0x80, 24);
+  }
+  switch (op)
+  {
+  case SignOp::Negate:
+    m_float_emit.EOR(Vd, Vn, mask);
+    break;
+  case SignOp::Abs:
+    m_float_emit.BIC(Vd, Vn, mask);
+    break;
+  case SignOp::NegativeAbs:
+    m_float_emit.ORR(Vd, Vn, mask);
+    break;
+  }
+}
+
 void JitArm64::fp_arith(UGeckoInstruction inst)
 {
   INSTRUCTION_START
@@ -300,7 +362,7 @@ void JitArm64::fp_arith(UGeckoInstruction inst)
     // PowerPC's nmadd/nmsub perform rounding before the final negation, which is not the case
     // for any of AArch64's FMA instructions, so we negate using a separate instruction.
     if (negate_result)
-      m_float_emit.FNEG(VD, result_reg);
+      EmitSignOp(SignOp::Negate, IsSingle(VD) ? 32 : 64, VD, result_reg, false);
     else if (result_reg != VD)
       m_float_emit.MOV(EncodeRegToDouble(VD), EncodeRegToDouble(result_reg));
 
@@ -355,17 +417,16 @@ void JitArm64::fp_logic(UGeckoInstruction inst)
     switch (op10)
     {
     case 40:
-      m_float_emit.FNEG(size, VD, VB);
+      EmitSignOp(SignOp::Negate, size, VD, VB, true);
       break;
     case 72:
       m_float_emit.ORR(VD, VB, VB);
       break;
     case 136:
-      m_float_emit.FABS(size, VD, VB);
-      m_float_emit.FNEG(size, VD, VD);
+      EmitSignOp(SignOp::NegativeAbs, size, VD, VB, true);
       break;
     case 264:
-      m_float_emit.FABS(size, VD, VB);
+      EmitSignOp(SignOp::Abs, size, VD, VB, true);
       break;
     default:
       ASSERT_MSG(DYNA_REC, 0, "fp_logic");
@@ -375,7 +436,6 @@ void JitArm64::fp_logic(UGeckoInstruction inst)
   else
   {
     const RegType type = single ? RegType::LowerPairSingle : RegType::LowerPair;
-    const auto reg_encoder = single ? EncodeRegToSingle : EncodeRegToDouble;
 
     const ARM64Reg VB = fpr.R(b, type);
     const ARM64Reg VD = fpr.RW(d, type);
@@ -383,17 +443,16 @@ void JitArm64::fp_logic(UGeckoInstruction inst)
     switch (op10)
     {
     case 40:
-      m_float_emit.FNEG(reg_encoder(VD), reg_encoder(VB));
+      EmitSignOp(SignOp::Negate, size, VD, VB, false);
       break;
     case 72:
       m_float_emit.INS(size, VD, 0, VB, 0);
       break;
     case 136:
-      m_float_emit.FABS(reg_encoder(VD), reg_encoder(VB));
-      m_float_emit.FNEG(reg_encoder(VD), reg_encoder(VD));
+      EmitSignOp(SignOp::NegativeAbs, size, VD, VB, false);
       break;
     case 264:
-      m_float_emit.FABS(reg_encoder(VD), reg_encoder(VB));
+      EmitSignOp(SignOp::Abs, size, VD, VB, false);
       break;
     default:
       ASSERT_MSG(DYNA_REC, 0, "fp_logic");

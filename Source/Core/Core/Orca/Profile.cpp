@@ -102,6 +102,11 @@ void ForEachUniversalSetting(F&& f)
   f(Config::MAIN_WII_SD_CARD_ENABLE_FOLDER_SYNC, false);
   f(Config::MAIN_BLUETOOTH_PASSTHROUGH_ENABLED, false);
   f(Config::MAIN_OVERRIDE_REGION_SETTINGS, true);
+  // The console region a DOL boots as (the Project+ launcher), which Dolphin otherwise takes from
+  // the host's locale: a Mac it couldn't read a country from booted P+ as a PAL console
+  // (setting.txt EUR/PAL) and a US PC as NTSC-U, and their games diverged from the first frame.
+  // Orca's games are NTSC-U discs. A disc boot takes the disc's region and never reads this.
+  f(Config::MAIN_FALLBACK_REGION, DiscIO::Region::NTSC_U);
   f(Config::MAIN_GC_LANGUAGE, 0);  // English; written into the session SRAM
   f(Config::MAIN_WII_WIILINK_ENABLE, false);
   f(Config::MAIN_EMULATE_SKYLANDER_PORTAL, false);

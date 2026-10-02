@@ -414,7 +414,7 @@ void JitArm64::ps_arith(UGeckoInstruction inst)
     // PowerPC's nmadd/nmsub perform rounding before the final negation, which is not the case
     // for any of AArch64's FMA instructions, so we negate using a separate instruction.
     if (negate_result)
-      m_float_emit.FNEG(size, VD, result_reg);
+      EmitSignOp(SignOp::Negate, size, VD, result_reg, true);
     else if (result_reg != VD)
       m_float_emit.MOV(VD, result_reg);
 

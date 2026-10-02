@@ -134,6 +134,12 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
     }
     orca_profile->boot_game_id = StartUp.GetGameID();
     Config::AddLayer(Orca::GenerateConfigLoader(*orca_profile));
+    // A loader executable has no region of its own: SetPathsAndGameMetadata, above, gave it the
+    // fallback region from before this layer, which follows the host's locale (PAL on a Mac whose
+    // country Dolphin can't read, NTSC-U on a US PC), and setting.txt and the boot follow it. Use
+    // the session's forced one, so every player's console is the same.
+    if (executable)
+      StartUp.m_region = Config::Get(Config::MAIN_FALLBACK_REGION);
   }
 
   if (NetPlay::IsNetPlayRunning())

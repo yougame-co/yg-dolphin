@@ -387,6 +387,15 @@ protected:
   bool MultiplyImmediate(u32 imm, int a, int d, bool rc);
 
   void SetFPRFIfNeeded(bool single, Arm64Gen::ARM64Reg reg);
+  // Orca: fneg/fabs/fnabs and the final negation of fnmadd/fnmsub, as bitwise sign operations
+  // (JitArm64_FloatingPoint.cpp).
+  enum class SignOp
+  {
+    Negate,
+    Abs,
+    NegativeAbs,
+  };
+  void EmitSignOp(SignOp op, u8 size, Arm64Gen::ARM64Reg Vd, Arm64Gen::ARM64Reg Vn, bool packed);
   void Force25BitPrecision(Arm64Gen::ARM64Reg output, Arm64Gen::ARM64Reg input);
 
   // <Fast path fault location, slow path handler location>
