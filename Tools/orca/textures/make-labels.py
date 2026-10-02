@@ -11,11 +11,16 @@ both load textures as RSBE01; their labels hash differently, so one folder serve
   python3 Tools/orca/textures/make-labels.py [--out <dir>] [--sheet <preview.png>]
 
 Needs Pillow. The fonts are next to this script, with their licences (SIL Open Font License 1.1):
-Archivo Black for Brawl's heavy, wide labels and title bar, Anton for Project+'s condensed ones.
+Archivo Black for Brawl's heavy, wide labels, Anton for Project+'s condensed ones and for Brawl's
+title bar (the game's own titles there are a light condensed sans: SELECT MODE, / WITH ANYONE).
 Nothing here is derived from the game's art: the sizes and boxes below are numbers measured on the
 game's own textures (where its letters sit), so ours sit in the same place.
 
-Each label is drawn at 4x the game's size (Dolphin takes any integer multiple).
+Each label is drawn at 4x the game's size (Dolphin takes any integer multiple), with mip levels
+down to the game's own size (<name>_mip1.png at 2x, _mip2.png at 1x): a custom texture's sampler
+takes its mip levels even where the game's texture has none (TextureCacheBase::GetSamplerState
+lifts the LOD clamp for custom textures), so a label drawn at 1x internal resolution is a clean 1x
+image instead of the 4x one read every fourth texel, which breaks thin strokes (Anton's N).
 """
 
 import argparse
@@ -40,13 +45,16 @@ LABELS = [
     # Brawl's main menu: the Wi-Fi button's label (MenMainFrTop15, "NINTENDO Wi-Fi CONNECTION").
     dict(name="tex1_127x96_fdd5334e5af7357c_2", lines=["Play", "Online"], box=(7, 12, 119, 84),
          style="brawl"),
-    # Brawl's breadcrumb on the Online pages (MenMainTtlJ.03, "NINTENDO WFC").
-    dict(name="tex1_120x16_a56825159146a723_0", lines=["ONLINE"], box=(0, 1, 120, 14),
+    # Brawl's page title and breadcrumb on the Online pages (MenMainTtlJ.03, "NINTENDO WFC"): its
+    # letters span the slot at the height of every title's (rows 1-14); ours take that height.
+    dict(name="tex1_120x16_a56825159146a723_0", lines=["ONLINE"], box=(3, 1, 117, 14),
          style="title"),
     # Brawl's With Anyone: Basic Brawl (MenMainWifi22) and Team Battle (MenMainWifi23).
     dict(name="tex1_144x88_115d82941c7412cd_2", lines=["Casual"], box=(7, 22, 138, 66),
          style="brawl"),
-    dict(name="tex1_160x80_e364b4db513567ba_2", lines=["Ranked"], box=(7, 18, 151, 62),
+    # (The game's letters reach x 151; ours stop at 140, so RANKED's rim clears the handshake icon
+    # as CASUAL's clears its own.)
+    dict(name="tex1_160x80_e364b4db513567ba_2", lines=["Ranked"], box=(7, 18, 140, 62),
          style="brawl"),
     # Project+'s With Anyone: Basic Versus (MenMainWifi22) and Team Battle (MenMainWifi23).
     dict(name="tex1_144x88_ecd09d11be34045f_5", lines=["CASUAL"], box=(11, 16, 133, 71),
@@ -105,7 +113,8 @@ def text_mask(label, w, h):
         elif style == "pplus":
             lines.append(line_mask([(text, ImageFont.truetype(ANTON, big))], big * 0.02))
         else:
-            lines.append(line_mask([(text, ImageFont.truetype(ARCHIVO, big))], big * 0.12))
+            # Anton as it comes (condensed, like the game's titles), with hardly any tracking.
+            lines.append(line_mask([(text, ImageFont.truetype(ANTON, big))], big * 0.03))
     gap = int(big * 0.14)
     tw = max(m.width for m in lines)
     th = sum(m.height for m in lines) + gap * (len(lines) - 1)
@@ -114,7 +123,8 @@ def text_mask(label, w, h):
     for m in lines:
         block.paste(m, ((tw - m.width) // 2, y))
         y += m.height + gap
-    # The title bar's letters fill its height; a label keeps its aspect inside its box.
+    # The title bar's letters fill its height (centred, as the game's own short titles are); a label
+    # keeps its aspect inside its box.
     k = min(bw / tw, bh / th)
     if style == "title":
         k = bh / th
@@ -158,6 +168,23 @@ def draw(label):
     return Image.composite(black, out, mask)
 
 
+def mips(label, im):
+    """The label's mip levels, each half the last (box filter), down to the game's size. Pillow
+    averages RGBA premultiplied; the title (I4: intensity is colour and alpha) halves its mask."""
+    assert SCALE & (SCALE - 1) == 0, "mip levels halve down to the game's size: SCALE is 2^n"
+    w, h = size_of(label["name"])
+    out = []
+    while im.width > w:
+        size = (im.width // 2, im.height // 2)
+        if label["style"] == "title":
+            a = im.getchannel("A").resize(size, Image.BOX)
+            im = Image.merge("RGBA", (a, a, a, a))
+        else:
+            im = im.resize(size, Image.BOX)
+        out.append(im)
+    return out
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     p.add_argument("--out", default=os.path.join(REPO, "Data", "Sys", "Orca", "Textures", "RSBE01"))
@@ -171,6 +198,10 @@ def main():
         im.save(path, optimize=True)
         images.append((label, im))
         print(path, im.size)
+        for level, mip in enumerate(mips(label, im), 1):
+            path = os.path.join(a.out, f"{label['name']}_mip{level}.png")
+            mip.save(path, optimize=True)
+            print(path, mip.size)
     if a.sheet:
         cw = max(im.width for _, im in images) + 20
         sheet = Image.new("RGBA", (cw * 2, sum(im.height + 20 for _, im in images)), (0, 0, 0, 255))

@@ -16,11 +16,12 @@ class CPUThreadGuard;
 // The main menu's own words about going online, rewritten so none of them is Nintendo's (ORCA.md
 // "Online menu"; Luis: nothing about connecting may look like Nintendo's). Brawl's footer under
 // the Online button says "Play different modes while connected to Nintendo WFC.", Project+'s
-// "Play different modes online. (Discontinued)"; both become "Play different modes online.", and
-// the With Anyone page's descriptions fit Casual and Ranked. The textures (the button's label,
-// Brawl's "NINTENDO WFC" title, Casual and Ranked) are Orca's texture pack, which never touches
-// emulated memory; these words are text the game prints, so they are rewritten where the game
-// keeps them.
+// "Play different modes online. (Discontinued)"; both become "Play different modes online.", the
+// With Anyone page's descriptions fit Casual and Ranked, and the With Friends page's say what each
+// of its buttons now does (the local Versus character select, where friends drop in) instead of
+// promising a roster or modes that aren't there. The textures (the button's label, Brawl's
+// "NINTENDO WFC" title, Casual and Ranked) are Orca's texture pack, which never touches emulated
+// memory; these words are text the game prints, so they are rewritten where the game keeps them.
 //
 // Where (Brawl rev 2 and Project+, found under the harness and in the disc's and the SD card's
 // mu_menumain archive): the scene manager (0x805A0060) +4 is the main menu's scene ("muMenuMain"),

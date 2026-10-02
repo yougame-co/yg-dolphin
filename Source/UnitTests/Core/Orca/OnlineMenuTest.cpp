@@ -6,6 +6,7 @@
 // reader that tells the app what the player picked.
 
 #include <algorithm>
+#include <cctype>
 #include <cstdio>
 #include <filesystem>
 #include <map>
@@ -19,10 +20,13 @@
 
 #include "Common/FileUtil.h"
 #include "Common/IOFile.h"
+#include "Common/ScopeGuard.h"
 #include "Core/Orca/UX/GamePatches.h"
 #include "Core/Orca/UX/MenuText.h"
 #include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/OnlineMenu.h"
+#include "Core/Rollback/OnlineMatch.h"
+#include "VideoCommon/HiresTextures.h"
 
 using namespace Orca::UX;
 
@@ -250,7 +254,9 @@ TEST(OrcaOnlineMenuTextures, TextureNamesParse)
 TEST(OrcaOnlineMenuTextures, EveryShippedTextureIsAnIntegerMultipleOfItsName)
 {
   const std::filesystem::path root = SysOrca() / "Textures";
-  int count = 0;
+  // Each texture's size, and its mip levels' (<name>_mip<N>) by level.
+  std::map<std::string, std::pair<u32, u32>> bases;
+  std::map<std::string, std::map<u32, std::pair<u32, u32>>> levels;
   for (const auto& entry : std::filesystem::recursive_directory_iterator(root))
   {
     if (!entry.is_regular_file())
@@ -260,21 +266,112 @@ TEST(OrcaOnlineMenuTextures, EveryShippedTextureIsAnIntegerMultipleOfItsName)
     // Only PNGs, in a folder named for the game ID the game loads its textures as.
     EXPECT_EQ(entry.path().extension(), ".png");
     EXPECT_EQ(entry.path().parent_path().filename(), "RSBE01");
-    const auto name = ParseTextureName(entry.path().stem().string());
+    std::string stem = entry.path().stem().string();
+    const auto size = PngSize(path);
+    ASSERT_TRUE(size.has_value());
+    if (const size_t mip = stem.rfind("_mip"); mip != std::string::npos)
+    {
+      levels[stem.substr(0, mip)][static_cast<u32>(std::stoul(stem.substr(mip + 4)))] = *size;
+      continue;
+    }
+    const auto name = ParseTextureName(stem);
     ASSERT_TRUE(name.has_value());
     // Formats without a palette (I4 0, IA4 2, RGB5A3 5, ...): their names carry no TLUT hash.
     EXPECT_TRUE(name->format != "8" && name->format != "9" && name->format != "10");
-    const auto size = PngSize(path);
-    ASSERT_TRUE(size.has_value());
     const auto [w, h] = *size;
     EXPECT_EQ(w % name->width, 0u);
     EXPECT_EQ(h % name->height, 0u);
     EXPECT_EQ(w / name->width, h / name->height);  // one scale, the game's aspect
     EXPECT_GE(w / name->width, 1u);
-    ++count;
+    bases[stem] = *size;
   }
   // Brawl's PLAY ONLINE, ONLINE breadcrumb, CASUAL and RANKED; Project+'s CASUAL and RANKED.
-  EXPECT_EQ(count, 6);
+  EXPECT_EQ(bases.size(), 6u);
+  // Each has its mip levels, every one half the last (Dolphin drops a level of any other size),
+  // down to the game's own size, so a label drawn small is never the 4x one read every fourth
+  // texel. No level without its texture.
+  for (const auto& [stem, size] : bases)
+  {
+    SCOPED_TRACE(stem);
+    const auto name = ParseTextureName(stem);
+    ASSERT_TRUE(name.has_value());
+    auto [w, h] = size;
+    u32 level = 0;
+    for (const auto& [n, mip] : levels[stem])
+    {
+      EXPECT_EQ(n, ++level);
+      w /= 2;
+      h /= 2;
+      EXPECT_EQ(mip, std::pair(w, h)) << "level " << n;
+    }
+    EXPECT_EQ(std::pair(w, h), std::pair(name->width, name->height));
+  }
+  EXPECT_EQ(levels.size(), bases.size());
+}
+
+TEST(OrcaOnlineMenuTextures, OrcasPackKeepsItsOwnNamesAndThePlayersPackTheRest)
+{
+  // A player's own pack for the game (<user>/Load/Textures/RSBE01): a Brawl HD pack that holds
+  // two of the textures Orca replaces (the "NINTENDO WFC" title, the Wi-Fi button's label as an
+  // _arb file in a subfolder) and one Orca doesn't touch.
+  const std::string root = File::CreateTempDir();
+  ASSERT_FALSE(root.empty());
+  Common::ScopeGuard remove_root([&] { File::DeleteDirRecursively(root); });
+  const std::string player = root + "/Load/Textures/RSBE01";
+  const std::string player2 = root + "/Load/Textures/RSBE01-more";
+  const std::string title = "tex1_120x16_a56825159146a723_0";
+  const std::string button = "tex1_127x96_fdd5334e5af7357c_2";
+  const std::string other = "tex1_64x64_0123456789abcdef_5";
+  for (const std::string& path :
+       {player + "/" + title + ".png", player + "/" + title + "_mip1.png",
+        player + "/hd/" + button + "_arb.png", player + "/" + other + ".png",
+        player + "/" + other + "_mip1.png", player + "/notes.png", player2 + "/" + other + ".dds"})
+  {
+    ASSERT_TRUE(File::CreateFullPath(path));
+    ASSERT_TRUE(File::WriteStringToFile(path, "not decoded here"));
+  }
+  const std::string orca = (SysOrca() / "Textures" / "RSBE01").lexically_normal().string();
+  const auto by_id = [](const std::vector<HiresTextureFile>& files) {
+    std::map<std::string, HiresTextureFile> out;
+    for (const HiresTextureFile& f : files)
+      EXPECT_TRUE(out.emplace(f.id, f).second) << "two files for " << f.id;
+    return out;
+  };
+  const auto under = [](const std::string& path, const std::string& directory) {
+    return std::filesystem::path(path).lexically_normal().string().starts_with(
+        std::filesystem::path(directory + "/").lexically_normal().string());
+  };
+
+  // In a session: Orca's six names are Orca's, wherever else they are; every other name is the
+  // player's. Mip level files (<name>_mip<N>) load with their texture, never as one of their own.
+  {
+    const auto files = by_id(CollectHiresTextureFiles({player, player2}, {orca}));
+    ASSERT_EQ(files.size(), 7u);
+    for (const auto& [id, f] : files)
+    {
+      SCOPED_TRACE(id);
+      EXPECT_EQ(f.orca_pack, id != other);
+      EXPECT_TRUE(under(f.path, f.orca_pack ? orca : player));
+      EXPECT_FALSE(f.has_arbitrary_mipmaps);
+    }
+    EXPECT_TRUE(files.contains(title) && files.contains(button));
+    // The player's first directory still wins over its second (Dolphin's rule).
+    EXPECT_EQ(std::filesystem::path(files.at(other).path).extension(), ".png");
+  }
+  // Outside a session Orca's pack isn't loaded: the player's pack has every name it holds.
+  {
+    const auto files = by_id(CollectHiresTextureFiles({player, player2}, {}));
+    ASSERT_EQ(files.size(), 3u);
+    for (const auto& [id, f] : files)
+    {
+      EXPECT_FALSE(f.orca_pack);
+      EXPECT_TRUE(under(f.path, player)) << f.path;
+    }
+    EXPECT_TRUE(files.at(button).has_arbitrary_mipmaps);
+    EXPECT_FALSE(files.at(title).has_arbitrary_mipmaps);
+  }
+  // A session with no pack of the player's: Orca's alone.
+  EXPECT_EQ(CollectHiresTextureFiles({}, {orca}).size(), 6u);
 }
 
 namespace
@@ -394,6 +491,66 @@ TEST(OrcaOnlineMenuReader, APickMadeWhileNotAloneIsNeverAnnouncedLater)
   r.Step(Menu());
   r.Step(Leaving(25));
   EXPECT_EQ(r.picks, std::vector<OnlinePick>{OnlinePick::Friends});
+}
+
+TEST(OrcaOnlineMenuReader, AloneMeansNoFriendIsAboutToLand)
+{
+  using Rollback::OnlineMatch::AloneAt;
+  using Rollback::OnlineMatch::KEYFRAME_FRESH_FRAMES;
+  EXPECT_EQ(KEYFRAME_FRESH_FRAMES, 30 * 60);  // 30 s
+  // Solo, nothing of drop-in under way or waiting, no keyframe stored: alone.
+  EXPECT_TRUE(AloneAt(5000, true, false, std::nullopt));
+  // Not solo and idle (a friend plugged in or on the way, joining, catching up, a keyframe wanted
+  // or being made).
+  EXPECT_FALSE(AloneAt(5000, false, false, std::nullopt));
+  // Drop-in work this boundary will take: a friend's arrival, a prepare-join, the app's join or
+  // leave.
+  EXPECT_FALSE(AloneAt(5000, true, true, std::nullopt));
+  // A keyframe stored for an invite nobody took yet: a friend who arrives within 30 s of it
+  // replays every frame since.
+  EXPECT_FALSE(AloneAt(5000, true, false, 5000));
+  EXPECT_FALSE(AloneAt(5000 + KEYFRAME_FRESH_FRAMES, true, false, 5000));
+  // Older than that, an arrival gets a keyframe of its own, taken after this frame.
+  EXPECT_TRUE(AloneAt(5000 + KEYFRAME_FRESH_FRAMES + 1, true, false, 5000));
+  EXPECT_FALSE(AloneAt(5000 + KEYFRAME_FRESH_FRAMES + 1, true, true, 5000));
+}
+
+TEST(OrcaOnlineMenuReader, APickWhileAFriendIsAboutToLandIsNeverAnnounced)
+{
+  using Rollback::OnlineMatch::AloneAt;
+  using Rollback::OnlineMatch::KEYFRAME_FRESH_FRAMES;
+  {
+    // The app invites a friend (prepare-join): the host stores a keyframe at frame 1000 and plays
+    // on. The player picks Casual 10 s later: a friend who lands now replays that pick, so it is
+    // never announced, not even once the keyframe is stale and the game alone again.
+    Feed r;
+    const std::optional<int> invite = 1000;
+    int frame = 1600;
+    const auto step = [&](const MenuState& s) {
+      r.Step(s, AloneAt(frame, true, false, invite));
+      frame += 50;
+    };
+    step(Menu());
+    step(Leaving(30));
+    step(Leaving(30));
+    frame = 1000 + KEYFRAME_FRESH_FRAMES + 1;
+    step(Leaving(30));
+    step(Other());
+    EXPECT_TRUE(r.picks.empty());
+    // Back on the menu once the invite's keyframe is stale: the next pick is the player's.
+    step(Menu());
+    step(Leaving(31));
+    EXPECT_EQ(r.picks, std::vector<OnlinePick>{OnlinePick::Ranked});
+  }
+  {
+    // A friend's arrival waits for the boundary the menu leaves at: the pick is the friend's too.
+    Feed r;
+    r.Step(Menu(), AloneAt(2000, true, false, std::nullopt));
+    r.Step(Leaving(24), AloneAt(2001, true, true, std::nullopt));
+    r.Step(Leaving(24), AloneAt(2002, false, false, std::nullopt));  // taken: a keyframe is wanted
+    r.Step(Other(), AloneAt(2003, false, false, std::nullopt));
+    EXPECT_TRUE(r.picks.empty());
+  }
 }
 
 TEST(OrcaOnlineMenuReader, AResyncStartsOverWithoutAnnouncing)
@@ -639,6 +796,14 @@ std::vector<std::string> Placeholders(size_t n)
 
 constexpr char BRAWL_COLOUR[] = "\x12\x02\x0c"
                                 "333\xff";
+constexpr char PPLUS_COLOUR[] = "\x12\x02\x0c\xbf\xc7\xc4\xff";
+
+// What the edits take out of the game's words.
+constexpr const char* TAKEN_OUT[] = {
+    "Nintendo WFC",   "(Discontinued)",   "(Project M not compatible!)",
+    "(No names)",     "2-on-2",           "Register",
+    "defeat enemies", "Home-Run Contest", "10 bosses",
+    "(2 players)"};
 }  // namespace
 
 TEST(OrcaOnlineMenuText, EveryEditFitsItsSlotAndSaysNothingOfNintendo)
@@ -656,14 +821,52 @@ TEST(OrcaOnlineMenuText, EveryEditFitsItsSlotAndSaysNothingOfNintendo)
       EXPECT_GE(static_cast<u8>(e.text[i]), 0x20) << i;
     for (const char* word : {"Nintendo", "WFC", "Wiimmfi", "Wi-Fi", "Discontinued", "Project M"})
       EXPECT_EQ(e.text.find(word), std::string_view::npos) << word;
-    // Each original is one of the game's own: it names what we take out.
+    // Each original is one of the game's own: it names what we take out (Nintendo's service, or a
+    // mode, a roster or a promise the page no longer leads to).
     const bool names_it =
-        e.original.find("Nintendo WFC") != std::string_view::npos ||
-        e.original.find("(Discontinued)") != std::string_view::npos ||
-        e.original.find("(Project M not compatible!)") != std::string_view::npos ||
-        e.original.find("(No names)") != std::string_view::npos ||
-        e.original.find("2-on-2") != std::string_view::npos;
+        std::any_of(std::begin(TAKEN_OUT), std::end(TAKEN_OUT), [&](const char* what) {
+          return e.original.find(what) != std::string_view::npos;
+        });
     EXPECT_TRUE(names_it);
+    for (const char* what : TAKEN_OUT)
+      EXPECT_EQ(e.text.find(what), std::string_view::npos) << what;
+  }
+}
+
+TEST(OrcaOnlineMenuText, WithFriendsSaysWhereEachButtonGoes)
+{
+  // Every With Friends button leaves for the local Versus character select, where friends drop in
+  // (2-4 players: Orca's four seats). Friend Roster (45), Team Multi-Man (47), Home-Run Contest
+  // (48) and the Boss Battles text no button shows (49) are rewritten in both games; the Brawl /
+  // FIGHT! button's own (46) already says just that.
+  for (const char* colour : {BRAWL_COLOUR, PPLUS_COLOUR})
+  {
+    SCOPED_TRACE(colour == BRAWL_COLOUR ? "Brawl" : "Project+");
+    std::vector<std::string> five = Placeholders(50);
+    five[46] = std::string(colour) + "Take on your friends! (2-4 players)\x13";
+    for (const u32 k : {45u, 47u, 48u, 49u})
+    {
+      const MenuTextEdit& e = Edit(5, k, colour);
+      ASSERT_EQ(e.original.substr(0, 7), colour);
+      five[k] = std::string(e.original);
+      std::string lower(e.text);
+      std::transform(lower.begin(), lower.end(), lower.begin(),
+                     [](char c) { return static_cast<char>(std::tolower(static_cast<u8>(c))); });
+      EXPECT_NE(lower.find("friends"), std::string::npos) << k;
+      EXPECT_NE(e.text.find("(2-4 players)"), std::string_view::npos) << k;
+      // Each game's own word for a Versus match.
+      EXPECT_NE(lower.find(colour == BRAWL_COLOUR ? "brawl" : "fight"), std::string::npos) << k;
+    }
+    FakeMemory m = MainMenu();
+    const auto where = WriteArchive(m, {{5, five}});
+    EXPECT_EQ(ApplyMenuText(m, MenuTextEdits()), 4);
+    const u32 file = where.at(5);
+    for (const u32 k : {45u, 47u, 48u, 49u})
+    {
+      const MenuTextEdit& e = Edit(5, k, colour);
+      EXPECT_EQ(Bytes(m, file + m.Read32(file + 4 * k), e.text.size()), e.text) << k;
+    }
+    EXPECT_EQ(Bytes(m, file + m.Read32(file + 4 * 46), five[46].size()), five[46]);
   }
 }
 

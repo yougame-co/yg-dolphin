@@ -21,13 +21,15 @@ class CPUThreadGuard;
 // Friends mode. The app hears of the pick on stdout ("orca menu online casual local", ...), so the
 // page can say what comes next; nothing here changes the game.
 //
-// The reader follows the menu at every frame boundary that runs a frame for the first time (never
-// a re-run: what a rollback undoes was never decided) and announces a pick only when it happens
-// while this game plays alone (Events' `alone`): a pick while friends play is theirs too, and a
-// pick seen while a friend catches up or a session runs on guessed inputs is not news once the
-// game is alone again. Whenever the game stops following on from what the reader saw (Events
-// NoteResync: back to solo after a session, a friend's keyframe loaded) it starts over from the
-// next boundary without announcing anything, so nothing stale is ever printed.
+// The reader follows the menu at every frame boundary that runs a frame for the first time (never a
+// re-run: what a rollback undoes was never decided) and announces a pick only when it happens while
+// this game plays alone (Events' `alone`): a pick while friends play is theirs too, so is one made
+// while a friend is about to land (an arrival or a prepare-join not taken yet, or an invite's
+// stored keyframe that a friend who arrives would replay from), and one made while the app's own
+// join or leave waits, or seen while a friend catches up or a session runs on guessed inputs, is
+// not news once the game is alone again. Whenever the game stops following on from what the reader
+// saw (Events NoteResync: back to solo after a session, a friend's keyframe loaded) it starts over
+// from the next boundary without announcing anything, so nothing stale is ever printed.
 //
 // Found under the harness (ORCA_UX_PROBE watches, Brawl rev 2 and Project+ alike, which run the
 // same executable and scene code): the scene manager (0x805A0060) +4 -> the scene, whose +0 is its

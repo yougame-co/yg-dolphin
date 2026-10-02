@@ -267,8 +267,6 @@ constexpr std::chrono::seconds PEER_SILENCE_LIMIT{10};
 constexpr char PEER_SILENT_SENTENCE[] = "Your friend's game stopped responding";
 // The session's rollback window (Config::max_rollback): RingPort keeps this many snapshots and two.
 constexpr int MAX_ROLLBACK = 7;
-// A keyframe this recent serves a new arrival as it is: the joiner replays up to this many frames.
-constexpr int KEYFRAME_FRESH_FRAMES = 30 * 60;
 // No keyframe of a boot's first frames: Project+'s first frames after its launcher hands over (3-9)
 // run differently on a machine whose JIT holds other blocks (a synctest that drops the JIT after
 // every load differs there, in CoreTiming ticks and RAM; Brawl over frames 0-600 does not), and a
@@ -843,6 +841,7 @@ void HostEvents(Core::System& system, Match& match)
   // at a boundary whose earlier frames are all final.
   const int next = match.running + 1;
   const bool fresh = match.keyframe && next - match.keyframe->frame <= KEYFRAME_FRESH_FRAMES;
+  bool capture_failed = false;
   if (match.keyframe_wanted && !match.job && match.store)
   {
     if (fresh)
@@ -852,7 +851,10 @@ void HostEvents(Core::System& system, Match& match)
       match.keyframe_wanted = false;
       StartKeyframe(system, match, next);
       if (!match.job)
+      {
+        capture_failed = true;
         match.keyframe_wanted = !match.waiting.empty();
+      }
     }
   }
   if (!match.store && !match.waiting.empty())
@@ -860,8 +862,15 @@ void HostEvents(Core::System& system, Match& match)
 
   // Take in whoever waits once there is a keyframe for them. Not while a solo pause winds the CPU
   // thread down (BeginPause): the session's first step would give up half done.
-  if (!match.keyframe || match.waiting.empty() || match.job || s_pausing)
+  // Solo, nor on the stale keyframe a capture that failed here would have replaced: a friend who
+  // replayed from it would replay frames the frame hook already told the app were this player's
+  // alone (AloneAt). The capture is tried again at the next boundary. (A keyframe that went stale
+  // while it was packed and stored is fine: no frame since its capture was alone, SoloIdle.)
+  if (!match.keyframe || match.waiting.empty() || match.job || s_pausing ||
+      (capture_failed && !match.session))
+  {
     return;
+  }
   for (auto it = match.waiting.begin(); it != match.waiting.end();)
   {
     const int seat = it->first;
@@ -1585,7 +1594,10 @@ std::optional<int> Boundary(Core::System& system,
     const int frame = match.running + 1;
     const bool resimulating = match.session && match.session->Resimulating();
     const std::vector<Orca::Events::PortInfo> ports = PortsAt(match, frame);
-    on_frame(frame, resimulating, ports, !resimulating && SoloIdle(match));
+    on_frame(frame, resimulating, ports,
+             !resimulating &&
+                 AloneAt(frame, SoloIdle(match), Orca::Online::DropInPending(),
+                         match.keyframe ? std::optional(match.keyframe->frame) : std::nullopt));
     if (!resimulating && ports != match.told_ports)
     {
       match.told_ports = ports;
@@ -2006,6 +2018,12 @@ void End(const char* reason)
   if (match.keyframe && match.store)
     match.store->Delete(match.keyframe->id);
   Orca::Online::Shutdown();
+}
+
+bool AloneAt(int frame, bool solo_idle, bool drop_in_pending, std::optional<int> stored_keyframe)
+{
+  return solo_idle && !drop_in_pending &&
+         !(stored_keyframe && frame - *stored_keyframe <= KEYFRAME_FRESH_FRAMES);
 }
 
 bool SoloPauseAllowed()

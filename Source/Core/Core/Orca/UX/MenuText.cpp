@@ -27,7 +27,7 @@ using namespace std::string_view_literals;
 
 // Read from the disc's and Project+'s mu_menumain archives (MiscData 5 and 10), each original
 // checked byte for byte there. Grouped by file (one archive walk per file per boundary).
-constexpr std::array<MenuTextEdit, 9> EDITS{{
+constexpr std::array<MenuTextEdit, 17> EDITS{{
     // The main menu's footer under the Online button. Brawl: 'Play different modes while
     // connected to Nintendo WFC.'; Project+: 'Play different modes online. (Discontinued)'.
     {5, 2, BRAWL "Play different modes while connected to " BRAWL "Nintendo WFC." END END ""sv,
@@ -49,6 +49,30 @@ constexpr std::array<MenuTextEdit, 9> EDITS{{
      BRAWL "Brawl someone at your level for a higher rank!" END ""sv},
     {5, 52, PPLUS "Form a team with someone, somewhere for a 2-on-2 battle!" END ""sv,
      PPLUS "Fight someone at your level for a higher rank!" END ""sv},
+    // The ONLINE page's With Friends: every button goes to the local Versus character select, where
+    // friends drop in (Brawl calls it a brawl, Project+ a fight), so none may promise another mode
+    // or a roster. Its Brawl / FIGHT! button keeps 'Take on your friends! (2-4 players)'.
+    // Friend Roster: 'Register friends here to simplify playing with them.'
+    {5, 45, BRAWL "Register friends here to simplify playing with them." END ""sv,
+     BRAWL "Friends you invite join your brawl! (2-4 players)" END ""sv},
+    {5, 45, PPLUS "Register friends here to simplify playing with them." END ""sv,
+     PPLUS "Friends you invite join your fight! (2-4 players)" END ""sv},
+    // Team Multi-Man Brawl / Smash: 'Join forces with a friend to defeat enemies! (2 players)'.
+    {5, 47, BRAWL "Join forces with a friend to defeat enemies! (2 players)" END ""sv,
+     BRAWL "Brawl with the friends you invite! (2-4 players)" END ""sv},
+    {5, 47, PPLUS "Join forces with a friend to defeat enemies! (2 players)" END ""sv,
+     PPLUS "Fight the friends you invite! (2-4 players)" END ""sv},
+    // Home-Run Contest: 'Have an online Home-Run Contest with a friend! (2 players)'.
+    {5, 48, BRAWL "Have an online Home-Run Contest with a friend! (2 players)" END ""sv,
+     BRAWL "Take on your friends in a brawl! (2-4 players)" END ""sv},
+    {5, 48, PPLUS "Have an online Home-Run Contest with a friend! (2 players)" END ""sv,
+     PPLUS "Take on your friends in a fight! (2-4 players)" END ""sv},
+    // Boss Battles, which none of the page's four buttons shows: 'Take on 10 bosses with the help
+    // of a friend! (2 players)'. Rewritten too, so nothing on the page can ever promise it.
+    {5, 49, BRAWL "Take on 10 bosses with the help of a friend! (2 players)" END ""sv,
+     BRAWL "Take on your friends in a brawl! (2-4 players)" END ""sv},
+    {5, 49, PPLUS "Take on 10 bosses with the help of a friend! (2 players)" END ""sv,
+     PPLUS "Take on your friends in a fight! (2-4 players)" END ""sv},
     // Data > Records (Brawl): 'View group records (excludes Nintendo WFC brawls).', a colour per
     // piece.
     {5, 78,

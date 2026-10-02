@@ -410,7 +410,9 @@ and the matched room come later):
   rewritten). Either goes to the local Versus character select and Orca prints
   `orca menu online casual local` or `orca menu online ranked local`.
 - **With Friends**: each of its buttons goes to the local Versus character select, where friends
-  drop in ("Drop-in"), and Orca prints `orca menu online friends`.
+  drop in ("Drop-in"), and Orca prints `orca menu online friends`. Their descriptions say so (a
+  brawl, or in Project+ a fight, with the friends you invite, 2-4 players); none promises a roster
+  or a mode that isn't there.
 
 ### How (`Data/Sys/Orca/RSBE01.patches`, `PPLUS32.patches`; `Core/Orca/UX/MenuText.h`, `OnlineMenu.h`)
 
@@ -433,27 +435,36 @@ and the matched room come later):
     in a session and each refusal is logged at INFO (`IOS_WC24`, `IOS_NET`, `IOS_SSL`).
 - **Text** (`MenuText.h`): the main menu's message files, found through the menu scene's archive
   (`mu_menumain_en`, MiscData 5 and 10), are rewritten in emulated memory: Brawl's footer ("...
-  while connected to Nintendo WFC."), Project+'s "(Discontinued)" and "(Project M not
-  compatible!)", With Anyone's descriptions (Casual, Ranked), and the records' "Nintendo WFC"
+  while connected to Nintendo WFC."), Project+'s "(Discontinued)" and "(Project M not compatible!)",
+  With Anyone's descriptions (Casual, Ranked), With Friends' (Friend Roster, Team Multi-Man,
+  Home-Run Contest, and the Boss Battles text no button shows) and the records' "Nintendo WFC"
   mentions. A message is rewritten only while its bytes are exactly the game's own, into the same
   slot (never longer, zeros after), at every frame boundary on both machines: a pure function of
   emulated memory, covered by the UX's compatibility version (`ux=4`).
 - **Textures** (`Data/Sys/Orca/Textures/RSBE01`, `Tools/orca/textures/README.md`): our own art,
   drawn by `Tools/orca/textures/make-labels.py` with SIL OFL fonts: Brawl's PLAY ONLINE label and
-  ONLINE title, CASUAL and RANKED in both games. A session forces texture replacement on
-  (`Profile.cpp`) and `HiresTexture::Update` loads Orca's pack after the player's own
-  (`<user>/Load/Textures` wins any name both have), always preloaded so the game's own label never
-  shows while ours loads, and without the "Found N custom textures" message on screen. Replacing
-  textures only changes what is drawn, so the pack is not in the compatibility key: `YG_HASHLOG`
-  is identical with and without it, in both games.
+  ONLINE title (Anton, like the game's own light condensed titles), CASUAL and RANKED in both games,
+  each 4x with mip levels down to the game's size (a custom texture's sampler takes them even where
+  the game's texture has none, so 1x internal resolution reads a clean 1x level). A session forces
+  texture replacement on (`Profile.cpp`) and `HiresTexture::Update` loads Orca's pack with the
+  player's own: Orca's keeps the names it has, so a player's pack in `<user>/Load/Textures` (a Brawl
+  HD pack, say) can never bring back "NINTENDO Wi-Fi CONNECTION" or "NINTENDO WFC", and the player's
+  has every other name (`CollectHiresTextureFiles`). Orca's is always preloaded so the game's own
+  label never shows while ours loads, and a session shows no "Found N custom textures" message.
+  Replacing textures only changes what is drawn, so the pack is not in the compatibility key:
+  `YG_HASHLOG` is identical with and without it, in both games.
 - **Events** (`OnlineMenu.h`): a reader in the frame hook follows the main menu at every boundary
-  that runs a frame for the first time (never a re-run) and reads the exit code the menu leaves
-  with (scene manager `0x805A0060` +0x284, visible from the first scMemoryChange boundary). It
-  prints an event only for a pick made while the player's game is alone (no friend plugged in or
-  on the way, not joining or catching up, no keyframe wanted or being made: OnlineMatch's
-  `SoloIdle`); a pick made while friends play is theirs too and is never announced, not even once
-  the game is alone again. Going solo after a session, or loading a friend's keyframe, starts the
-  reader over (`Events::NoteResync`), so nothing stale is ever printed. It only reads memory.
+  that runs a frame for the first time (never a re-run) and reads the exit code the menu leaves with
+  (scene manager `0x805A0060` +0x284, visible from the first scMemoryChange boundary). It prints an
+  event only for a pick made while the player's game is alone (OnlineMatch's `AloneAt`): no friend
+  plugged in or on the way, not joining or catching up, no keyframe wanted or being made
+  (`SoloIdle`), nothing of drop-in waiting for the boundary to take it (a friend's arrival, a
+  prepare-join, the app's join or leave: `Online::DropInPending`), and no keyframe stored for an
+  invite nobody took yet while it is fresh (30 s: a friend who arrives then replays every frame
+  since). A pick made while friends play, or while one is about to land, is theirs too and is never
+  announced, not even once the game is alone again. Going solo after a session, or loading a
+  friend's keyframe, starts the reader over (`Events::NoteResync`), so nothing stale is ever
+  printed. It only reads memory.
 - **No network, proven per run**: `Tools/orca/online-menu.py` drives every page in both games and
   fails on any `/dev/net` open, any NET_KD_REQ, NCD, IP/Top or SSL request, or any NAND command on
   the save's, WiiConnect24's or the network settings' folders after the boot.
@@ -469,10 +480,12 @@ treats them as "the player asked to play online" (Casual and Ranked today: "comi
 friend). A later build that searches will print `orca menu online casual` (no `local`) when its
 search window opens, behind a `host` capability this build doesn't have.
 
-Tests: `OrcaOnlineMenu*` unit tests (the gates, the texture names, the text rewrite, the reader's
-edges); `Tools/orca/online-menu.py <nogui> <disc> [--pplus <dol>] [--video Metal --shots <dir>]`
-(every way through the menu, solo, offline); `Tools/orca/online-menu-dropin.py` (a friend drops
-into a host on the ONLINE page; the pick that follows is both players', and nothing prints).
+Tests: `OrcaOnlineMenu*` unit tests (the gates, the textures and their precedence, the text rewrite,
+the reader's edges and `AloneAt`); `Tools/orca/online-menu.py <nogui> <disc> [--pplus <dol>]
+[--video Metal --shots <dir> [--scale 4]]` (every way through the menu, solo, offline);
+`Tools/orca/online-menu-dropin.py` (a friend drops into a host on the ONLINE page; the pick that
+follows is both players', and nothing prints; with `--invite`, a pick within 30 s of an invite's
+stored keyframe prints nothing and one after it prints).
 
 ## Embedding
 

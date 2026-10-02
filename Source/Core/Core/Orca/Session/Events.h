@@ -72,11 +72,12 @@ std::optional<GCPadStatus> LocalPad();
 // `ports`: the controllers plugged in at `frame`, from the session's synced plan and the room's
 // roster names, identical on every machine for the same frame (solo: this player's port). Use these
 // for memory writes, never NotifyPlugIn's (that one is for the UI, first runs only).
-// `alone`: this machine's game plays alone, with nothing of drop-in under way (no friend plugged
-// in or on the way, not joining or catching up, no keyframe wanted or being made: the session's
-// solo state, OnlineMatch SoloIdle as the last boundary left it; in harness runs, true on first
-// runs and false on re-runs). It differs between machines: what a reader prints may depend on it
-// (the app's "orca menu" lines), never what is written to memory.
+// `alone`: what this machine's game does at `frame` is its player's alone (Rollback::OnlineMatch
+// AloneAt: it plays solo with nothing of drop-in under way or waiting to be taken, no friend
+// plugged in or on the way, not joining or catching up, no keyframe wanted or being made, and no
+// keyframe stored for a friend who may still arrive and replay from it; in harness runs, every
+// first run). Always false on re-runs. It differs between machines: what a reader prints may depend
+// on it (the app's "orca menu" lines), never what is written to memory.
 using FrameCallback =
     std::function<void(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
                        const std::vector<PortInfo>& ports, bool alone)>;

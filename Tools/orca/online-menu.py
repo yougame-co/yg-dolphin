@@ -3,8 +3,8 @@
 # at a time, every way through it in Brawl or Project+.
 #
 #   Tools/orca/online-menu.py <dolphin-emu-nogui> <disc> [--pplus <launcher.dol>] [--video Metal]
-#                             [--only <scenario>[,<scenario>...]] [--shots <dir>] [--keep]
-#                             [--sandbox]
+#                             [--only <scenario>[,<scenario>...]] [--shots <dir>] [--scale <n>]
+#                             [--keep] [--sandbox]
 #
 # Scenarios (each a boot of its own, in a fresh user folder):
 #   tour       PLAY ONLINE, the ONLINE page, B back to the top page and in again, With Friends
@@ -26,6 +26,8 @@
 # --shots <dir>: with a real video backend (--video Metal), a screenshot of every page the scenario
 # visits, named <game>-<scenario>-<step>.png (each taken just before the next button). They show
 # the disc's art: keep them local.
+# --scale <n>: the internal resolution (1x by default; Orca's labels are drawn at 4x): the shots are
+# named <game>-<scenario>-<step>-<n>x.png.
 # --sandbox (macOS): run Orca under sandbox-exec with outbound and inbound IP denied.
 # Runs nice'd, muted, with a timeout; prints PASS or the first failure per scenario.
 import glob
@@ -39,7 +41,7 @@ import time
 
 if len(sys.argv) < 3:
     sys.exit("usage: online-menu.py <nogui> <disc> [--pplus <dol>] [--video Metal] [--only s,..] "
-             "[--shots <dir>] [--keep] [--sandbox]")
+             "[--shots <dir>] [--scale <n>] [--keep] [--sandbox]")
 BIN, DISC = sys.argv[1], sys.argv[2]
 
 
@@ -50,6 +52,7 @@ def arg_value(name, default=None):
 PPLUS = arg_value("--pplus")
 VIDEO = arg_value("--video", "Null")
 SHOTS = arg_value("--shots")
+SCALE = arg_value("--scale")
 ONLY = arg_value("--only")
 KEEP = "--keep" in sys.argv
 SANDBOX = "--sandbox" in sys.argv
@@ -172,6 +175,8 @@ def run(name, steps, expected):
     for t in ("ROLLBACK", "IOS", "IOS_FS", "IOS_NET", "IOS_SSL", "IOS_WC24"):
         args += ["-C", f"Logger.Logs.{t}=True"]
     args += ["-C", "Logger.Logs.OSREPORT_HLE=False"]
+    if SCALE:
+        args += ["-C", f"Graphics.Settings.InternalResolution={int(SCALE)}"]
     args += (["-C", f"Dolphin.Core.DefaultISO={DISC}", "-e", PPLUS] if PPLUS else ["-e", DISC])
     prefix = ["nice", "-n", "10"]
     if SANDBOX:
@@ -245,6 +250,7 @@ def run(name, steps, expected):
         return f"{len(bad)} forbidden log lines after the boot, first: {bad[0]}"
 
     if SHOTS and VIDEO != "Null":
+        suffix = f"-{int(SCALE)}x" if SCALE else ""
         menu_start = int(next(f for f, s in scenes if s == "muMenuMain"))
         shots = sorted(glob.glob(os.path.join(user, "ScreenShots", "**", "f*.png"), recursive=True))
         by_frame = {int(re.search(r"f(\d+)", os.path.basename(p)).group(1)): p for p in shots}
@@ -258,13 +264,14 @@ def run(name, steps, expected):
                 have = [f for f in by_frame if f <= want]
                 if have:
                     shutil.copy(by_frame[max(have)],
-                                os.path.join(SHOTS, f"{GAME}-{name}-{label}.png"))
+                                os.path.join(SHOTS, f"{GAME}-{name}-{label}{suffix}.png"))
         css = [int(f) for f, s in scenes if s == "scSelctCharacter" and int(f) > menu_start]
         if css:
             want = css[0] + 120
             have = [f for f in by_frame if f <= want]
             if have:
-                shutil.copy(by_frame[max(have)], os.path.join(SHOTS, f"{GAME}-{name}-css.png"))
+                shutil.copy(by_frame[max(have)],
+                            os.path.join(SHOTS, f"{GAME}-{name}-css{suffix}.png"))
         shutil.rmtree(os.path.join(user, "ScreenShots"), ignore_errors=True)
     log(f"{name}: menu lines {menu}; scenes after the menu {after}; {fs_commands} NAND commands "
         f"after the boot, none on the save, WiiConnect24 or network folders")

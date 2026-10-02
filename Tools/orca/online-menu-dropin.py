@@ -2,7 +2,7 @@
 # online-menu-dropin.py: a friend drops into a host who sits on the game's own ONLINE page
 # (ORCA.md "Online menu"), over a real YouGame dev room, headless and muted. Two Orcas at most.
 #
-#   Tools/orca/online-menu-dropin.py <dolphin-emu-nogui> <disc> [--pplus <launcher.dol>]
+#   Tools/orca/online-menu-dropin.py <dolphin-emu-nogui> <disc> [--pplus <launcher.dol>] [--invite]
 #
 # 1. Host boots to the main menu and opens PLAY ONLINE: the ONLINE page (With Friends / With
 #    Anyone), and stays there.
@@ -14,9 +14,21 @@
 # 4. The friend leaves: the host plays on alone ("friend-left left"), still printing nothing (the
 #    pick was made while not alone and is never announced later).
 # Fails on a desync, a timeout, an "orca error", or any "orca menu" line.
+#
+# --invite (one Orca at a time, two boots): the app invites a friend who hasn't arrived yet. The
+# host, on the ONLINE page, gets "prepare-join" and stores its keyframe; nobody takes it.
+#   fresh: the host picks With Anyone > Casual some 15 s later, alone in its room but within the
+#          30 s in which a friend who arrives would replay from that keyframe (and so replay the
+#          pick): nothing prints (OnlineMatch AloneAt).
+#   stale: the same, but the pick comes more than 30 s after the keyframe, which no longer serves
+#          an arrival (a friend would get a new one): "orca menu online casual local" prints, so the
+#          reader does run in a room and only the fresh keyframe kept the first one quiet.
+# Each checks that the keyframe was stored before the pick, so nothing else of drop-in was under
+# way when the menu was left.
 import os
 import queue
 import random
+import re
 import shutil
 import string
 import subprocess
@@ -26,9 +38,10 @@ import threading
 import time
 
 if len(sys.argv) < 3:
-    sys.exit("usage: online-menu-dropin.py <nogui> <disc> [--pplus <dol>]")
+    sys.exit("usage: online-menu-dropin.py <nogui> <disc> [--pplus <dol>] [--invite]")
 BIN, DISC = sys.argv[1], sys.argv[2]
 PPLUS = sys.argv[sys.argv.index("--pplus") + 1] if "--pplus" in sys.argv else None
+INVITE = "--invite" in sys.argv
 ROOM = "olm" + "".join(random.choice(string.ascii_lowercase + string.digits) for _ in range(6))
 WORK = tempfile.mkdtemp(prefix="orca-online-dropin-")
 T0 = time.time()
@@ -36,6 +49,9 @@ T0 = time.time()
 # (a friend plugs in some 30-60 s after the host reaches the menu). A join slower than this makes
 # the host pick alone: it prints the event and the test fails on it, saying so.
 PICK_AT = 7200
+# --invite: the picks, some 15 s and some 45 s after the keyframe the invite stores (it is sent 10 s
+# after the menu shows, and taken about 800 frames into the menu).
+INVITE_PICKS = {"fresh": 1500, "stale": 3600}
 
 if PPLUS:
     HOST_INPUT = ["285 330 1 B", "@muMenuMain 120 124 1 B",
@@ -44,9 +60,12 @@ else:
     HOST_INPUT = ["@scStrap mash 30 99999 1 40 A", "@scBoot mash 30 99999 1 40 A",
                   "@scTitle mash 30 99999 1 40 A",
                   "@muMenuMain 120 123 1 DOWN", "@muMenuMain 170 173 1 A"]
-HOST_INPUT += [f"@muMenuMain {PICK_AT} {PICK_AT + 3} 1 RIGHT",
-               f"@muMenuMain {PICK_AT + 50} {PICK_AT + 53} 1 A",
-               f"@muMenuMain {PICK_AT + 100} {PICK_AT + 103} 1 A"]
+
+
+def pick_at(frame):
+    return [f"@muMenuMain {frame} {frame + 3} 1 RIGHT",
+            f"@muMenuMain {frame + 50} {frame + 53} 1 A",
+            f"@muMenuMain {frame + 100} {frame + 103} 1 A"]
 
 
 def log(text):
@@ -162,15 +181,81 @@ def fail(why):
     sys.exit(1)
 
 
+def start_host(room, picks, label="Host"):
+    host = Orca(label, {"ORCA_ROOM": room}, write(f"{label}.txt", HOST_INPUT + pick_at(picks)))
+    orcas.append(host)
+    host.expect("orca caps", 30)
+    host.send("caps join leave stats")
+    host.expect("orca state playing", 90)
+    log(f"{label}: {host.wait_log('-> muMenuMain', 180)}")
+    # On the ONLINE page (opened 170-250 frames into the menu) for a few seconds.
+    time.sleep(10)
+    return host
+
+
+def frame_of(line, key):
+    return int(line.split(key)[1].split(":")[0])
+
+
+def invite(case):
+    room = ROOM + case[0]
+    log(f"--invite {case}: room {room}")
+    host = start_host(room, INVITE_PICKS[case], f"Host-{case}")
+    # Project+ boots into its character select: the one that counts is the next.
+    css_before = len(host.log_lines("-> scSelctCharacter"))
+    host.send("prepare-join")
+    # Logged once the keyframe is packed and in the store ("Drop-in: keyframe of frame N: ...
+    # stored; ..."), after the capture's own line.
+    stored_re = re.compile(r"Drop-in: keyframe of frame (\d+): .* stored;")
+    end = time.time() + 60
+    while not any(stored_re.search(l) for l in host.log_lines("Drop-in: keyframe of frame")):
+        if time.time() > end or host.proc.poll() is not None:
+            fail(f"{host.name}: no keyframe stored after prepare-join")
+        time.sleep(1)
+    keyframe = next(l for l in host.log_lines("Drop-in: keyframe of frame") if stored_re.search(l))
+    log(f"{host.name}: {keyframe[keyframe.find('Drop-in'):]}")
+    kf_frame = int(stored_re.search(keyframe).group(1))
+    css = host.wait_log("-> scSelctCharacter", 180, after=css_before)
+    log(f"{host.name}: {css[css.find('Scene frame'):]}")
+    time.sleep(5)
+    lines = host.log_lines("")
+    stored = next((i for i, l in enumerate(lines) if stored_re.search(l)), None)
+    menu = max(i for i, l in enumerate(lines) if "-> muMenuMain" in l)
+    left = next((i for i, l in enumerate(lines) if "-> scMemoryChange" in l and i > menu), None)
+    if stored is None or left is None or left < stored:
+        fail(f"{host.name}: the menu was left before the invite's keyframe was stored")
+    # The pick shows at the first boundary between scenes.
+    since = frame_of(lines[left], "Scene frame ") - kf_frame
+    fresh = since <= 30 * 60
+    if fresh != (case == "fresh"):
+        fail(f"{host.name}: the pick came {since} frames after the keyframe")
+    if host.proc.poll() is not None:
+        fail(f"{host.name} stopped")
+    want = [] if case == "fresh" else ["orca menu online casual local"]
+    if host.menu != want:
+        fail(f"{host.name} printed {host.menu}, {since} frames after the invite's keyframe "
+             f"(expected {want})")
+    log(f"{host.name}: left the menu {since} frames after the invite's keyframe, nobody took it; "
+        f"printed {host.menu}")
+    host.stop()
+    orcas.remove(host)
+
+
 log(f"room {ROOM}, work {WORK}")
-host = Orca("Host", {"ORCA_ROOM": ROOM}, write("host.txt", HOST_INPUT))
-orcas.append(host)
-host.expect("orca caps", 30)
-host.send("caps join leave stats")
-host.expect("orca state playing", 90)
-log(f"Host: {host.wait_log('-> muMenuMain', 180)}")
-# On the ONLINE page (opened 170-250 frames into the menu) for a few seconds.
-time.sleep(10)
+if INVITE:
+    for case in ("fresh", "stale"):
+        try:
+            invite(case)
+        except Exception as e:  # never leave an Orca running
+            fail(f"--invite {case}: {type(e).__name__}: {e}")
+    log("PASS")
+    if os.environ.get("ORCA_TEST_KEEP") == "1":
+        log(f"logs kept in {WORK}")
+    else:
+        shutil.rmtree(WORK, ignore_errors=True)
+    sys.exit(0)
+
+host = start_host(ROOM, PICK_AT)
 
 friend = Orca("Friend", {}, write("friend.txt", ["# no presses: port 2 stays still"]))
 orcas.append(friend)
