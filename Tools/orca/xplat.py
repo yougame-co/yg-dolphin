@@ -89,8 +89,9 @@ else:
     args += ["-e", a.disc]
 
 errlog = open(os.path.join(work, "orca.log"), "w")
+# UTF-8 explicitly: Orca prints UTF-8, and Windows' default text encoding is the ANSI code page.
 orca = subprocess.Popen(args, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errlog,
-                        text=True, bufsize=1)
+                        text=True, bufsize=1, encoding="utf-8", errors="replace")
 states, errors, stats = [], [], []
 
 
@@ -120,7 +121,7 @@ code = orca.wait()
 bridge.terminate()
 errlog.close()
 
-text = open(os.path.join(work, "orca.log"), errors="replace").read()
+text = open(os.path.join(work, "orca.log"), encoding="utf-8", errors="replace").read()
 ends = re.findall(r"Online match ([^:]*): frame (\d+), (\d+) rollbacks, (\d+) re-run frames, deepest (\d+), "
                   r"(\d+) stalls \((\d+) counted\).*?input delay (\d+).*?, (\d+) checksums matched", text)
 matched = max((int(e[8]) for e in ends), default=0)
