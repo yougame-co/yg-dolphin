@@ -54,6 +54,11 @@ bool FreshTicket(bool fresh, std::string* ticket, std::string* store_url, std::s
 void DropPeer(int seat, const std::string& reason);
 // Whether a session error means the games went apart (inputs or a checksum that disagree).
 bool IsDesync(const std::string& session_error);
+// Host: every port name so far, to every player in the game (YouGameRoom::BroadcastNames).
+void BroadcastNames(const std::vector<Net::KeyframeInfo::Name>& names);
+// Leaves the room like Shutdown, but on a thread of its own: the goodbye and the socket's close
+// take up to a second or two, which the emulator thread must not wait out mid-game.
+void ShutdownInBackground();
 // Host: offer a joining seat the keyframe.
 void OfferKeyframe(int seat, const Net::KeyframeInfo& info);
 

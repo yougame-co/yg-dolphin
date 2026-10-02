@@ -66,6 +66,8 @@ struct PeerEvent
     Left,
     // The host offered its keyframe (to a joiner).
     Keyframe,
+    // The host's port names changed (a friend was taken in): `keyframe.names` only.
+    Names,
   };
   Kind kind = Kind::Arrived;
   int seat = -1;
@@ -101,6 +103,8 @@ public:
   std::vector<PeerEvent> TakePeerEvents();
   // Host: offer `seat`'s player the keyframe (sent every second until its first packet arrives).
   void OfferKeyframe(int seat, const KeyframeInfo& info);
+  // Host: every port name so far (KeyframeInfo::names), to every player in the game.
+  void BroadcastNames(const std::vector<KeyframeInfo::Name>& names);
   // Host: tell `seat`'s player it was unplugged and why ("desync", "stalled", "network"), so its
   // own report says the same. Its room ends with that code.
   void DropPeer(int seat, const std::string& reason);

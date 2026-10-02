@@ -63,6 +63,65 @@ bool ValidCode(const std::string& code)
                      [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'); });
 }
 
+// A player name as it may reach game memory and line-based output: printable ASCII and whole UTF-8
+// sequences only, at most 64 bytes, never a character cut in half.
+std::string CleanName(const std::string& raw)
+{
+  std::string out;
+  for (size_t i = 0; i < raw.size();)
+  {
+    const auto c = static_cast<unsigned char>(raw[i]);
+    size_t length = c < 0x80 ? 1 : (c >> 5) == 0x6 ? 2 : (c >> 4) == 0xE ? 3 : (c >> 3) == 0x1E ? 4 : 0;
+    bool ok = length != 0 && i + length <= raw.size() && (length > 1 || (c >= 0x20 && c != 0x7F));
+    for (size_t k = 1; ok && k < length; ++k)
+      ok = (static_cast<unsigned char>(raw[i + k]) & 0xC0) == 0x80;
+    if (!ok)
+    {
+      ++i;
+      continue;
+    }
+    if (out.size() + length > 64)
+      break;
+    out.append(raw, i, length);
+    i += length;
+  }
+  return out;
+}
+
+picojson::value NamesToJson(const std::vector<KeyframeInfo::Name>& names)
+{
+  picojson::array out;
+  for (const KeyframeInfo::Name& n : names)
+  {
+    out.push_back(picojson::value(picojson::array{picojson::value(static_cast<double>(n.seat)),
+                                                  picojson::value(static_cast<double>(n.from)),
+                                                  picojson::value(n.name)}));
+  }
+  return picojson::value(out);
+}
+
+// At most 16 entries (a few per seat: who held it, from when).
+std::vector<KeyframeInfo::Name> NamesFromJson(const picojson::object& d)
+{
+  std::vector<KeyframeInfo::Name> names;
+  const auto nm = d.find("nm");
+  if (nm == d.end() || !nm->second.is<picojson::array>())
+    return names;
+  for (const auto& entry : nm->second.get<picojson::array>())
+  {
+    if (!entry.is<picojson::array>() || names.size() >= 16)
+      continue;
+    const auto& a = entry.get<picojson::array>();
+    if (a.size() != 3 || !a[0].is<double>() || !a[1].is<double>() || !a[2].is<std::string>())
+      continue;
+    const double seat = a[0].get<double>(), from = a[1].get<double>();
+    if (seat < 0 || seat >= MAX_SEATS || from < 0 || from > (1 << 30))
+      continue;
+    names.push_back({static_cast<int>(seat), static_cast<int>(from), CleanName(a[2].get<std::string>())});
+  }
+  return names;
+}
+
 std::string RandomString(const char* alphabet, size_t length)
 {
   std::random_device random;
@@ -544,6 +603,7 @@ struct YouGameRoom::Impl
   std::vector<PeerEvent> events;
   std::map<int, KeyframeInfo> keyframe_offers;
   std::vector<std::pair<int, std::string>> pending_drops;
+  std::optional<std::vector<KeyframeInfo::Name>> pending_names;
   // Whether this Orca joins someone else's game (RoomOptions::joining, or the app's invite), known
   // once the ticket is in (role_known, under mutex).
   bool joining = false;
@@ -1232,6 +1292,22 @@ struct YouGameRoom::Impl
       std::lock_guard lock(mutex);
       drops.swap(pending_drops);
     }
+    std::optional<std::vector<KeyframeInfo::Name>> names;
+    {
+      std::lock_guard lock(mutex);
+      names.swap(pending_names);
+    }
+    if (names)
+    {
+      picojson::object d;
+      d["k"] = picojson::value("nm");
+      d["nm"] = NamesToJson(*names);
+      for (const auto& [id, peer] : peers)
+      {
+        if (peer.heard)
+          SendTo(id, d);
+      }
+    }
     for (const auto& [slot, reason] : drops)
     {
       for (const auto& [id, peer] : peers)
@@ -1277,14 +1353,7 @@ struct YouGameRoom::Impl
           d["n"] = picojson::value(static_cast<double>(offer->second.size));
           d["x"] = picojson::value(offer->second.hash);
           d["key"] = picojson::value(offer->second.key);
-          picojson::array names;
-          for (const KeyframeInfo::Name& n : offer->second.names)
-          {
-            names.push_back(picojson::value(picojson::array{
-                picojson::value(static_cast<double>(n.seat)),
-                picojson::value(static_cast<double>(n.from)), picojson::value(n.name)}));
-          }
-          d["nm"] = picojson::value(names);
+          d["nm"] = NamesToJson(offer->second.names);
           SendTo(id, d);
         }
       }
@@ -1368,7 +1437,7 @@ struct YouGameRoom::Impl
       const auto slot = Int(o, "slot", 0, MAX_SEATS - 1);
       if (id.empty() || !slot)
         continue;
-      names[*slot] = Str(o, "name").substr(0, 64);
+      names[*slot] = CleanName(Str(o, "name"));
       if (id == me)
       {
         std::lock_guard lock(mutex);
@@ -1567,6 +1636,16 @@ struct YouGameRoom::Impl
       }
       return;
     }
+    if (kind == "nm")
+    {
+      // Only from the host, to a player of its game.
+      if (!peer.drop_in_host || !joining)
+        return;
+      KeyframeInfo info;
+      info.names = NamesFromJson(d);
+      Emit({PeerEvent::Kind::Names, peer.slot, true, peer.name, info});
+      return;
+    }
     if (kind == "kf")
     {
       // Only from the host, to a joiner.
@@ -1586,25 +1665,7 @@ struct YouGameRoom::Impl
       }
       info.frame = *frame;
       info.size = static_cast<u64>(*size);
-      if (const auto nm = d.find("nm"); nm != d.end() && nm->second.is<picojson::array>())
-      {
-        for (const auto& entry : nm->second.get<picojson::array>())
-        {
-          if (!entry.is<picojson::array>() || info.names.size() >= MAX_SEATS)
-            continue;
-          const auto& a = entry.get<picojson::array>();
-          if (a.size() != 3 || !a[0].is<double>() || !a[1].is<double>() || !a[2].is<std::string>())
-            continue;
-          const double seat_n = a[0].get<double>(), from_n = a[1].get<double>();
-          const std::string& name = a[2].get<std::string>();
-          if (seat_n < 0 || seat_n >= MAX_SEATS || from_n < 0 || from_n > MAX_FRAME ||
-              name.size() > 64)
-          {
-            continue;
-          }
-          info.names.push_back({static_cast<int>(seat_n), static_cast<int>(from_n), name});
-        }
-      }
+      info.names = NamesFromJson(d);
       if (peer.keyframe && peer.keyframe->id == info.id)
         return;
       peer.keyframe = info;
@@ -1676,6 +1737,13 @@ void YouGameRoom::DropPeer(int seat, const std::string& reason)
   std::lock_guard lock(m_impl->mutex);
   if (m_impl->pending_drops.size() < 16)
     m_impl->pending_drops.emplace_back(seat, reason);
+}
+
+void YouGameRoom::BroadcastNames(const std::vector<KeyframeInfo::Name>& names)
+{
+  std::lock_guard lock(m_impl->mutex);
+  m_impl->pending_names = names;
+  m_impl->offer_now = true;
 }
 
 void YouGameRoom::OfferKeyframe(int seat, const KeyframeInfo& info)

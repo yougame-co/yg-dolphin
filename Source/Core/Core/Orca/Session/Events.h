@@ -25,6 +25,8 @@ struct PortInfo
 {
   int port = 0;  // 0-based GameCube port
   std::string name;
+  // Whether another machine holds this port. This differs between machines (each sees its own port
+  // as local): UI only, never part of a memory write.
   bool remote = false;
   bool operator==(const PortInfo&) const = default;
 };

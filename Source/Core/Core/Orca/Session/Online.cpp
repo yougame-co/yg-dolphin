@@ -279,6 +279,23 @@ bool IsDesync(const std::string& session_error)
          session_error.starts_with("No local input");
 }
 
+void BroadcastNames(const std::vector<Net::KeyframeInfo::Name>& names)
+{
+  if (const auto room = Room())
+    room->BroadcastNames(names);
+}
+
+void ShutdownInBackground()
+{
+  std::shared_ptr<Net::YouGameRoom> room;
+  {
+    std::lock_guard lock(s_mutex);
+    room = std::move(s_room);
+  }
+  if (room)
+    std::thread([room = std::move(room)] { room->Leave(); }).detach();
+}
+
 void OfferKeyframe(int seat, const Net::KeyframeInfo& info)
 {
   if (const auto room = Room())

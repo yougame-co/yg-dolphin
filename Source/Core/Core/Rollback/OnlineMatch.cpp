@@ -182,12 +182,21 @@ struct Match
   // host: its own once its room roster has it, a friend's when the session takes it in. A joiner
   // takes the host's (they travel with the keyframe offer), so both games name every frame the
   // same. The ports the UI was last told of.
-  std::map<int, Orca::Net::KeyframeInfo::Name> port_names;
+  // Per seat, who held it from which frame (a few entries: a frame re-run after a player left, or
+  // after another took the seat, still gets the name it had).
+  std::map<int, std::vector<Orca::Net::KeyframeInfo::Name>> port_names;
   std::vector<Orca::Events::PortInfo> told_ports;
+  // A joiner's host left during a re-run: handled at the next boundary that isn't one.
+  std::optional<std::string> host_gone;
 };
 
 // Desyncs this process saw, every match (the stats line's "ds").
 int s_desyncs = 0;
+
+void AddName(Match& match, Orca::Net::KeyframeInfo::Name name);
+std::vector<Orca::Net::KeyframeInfo::Name> AllNames(const Match& match);
+void SetNames(Match& match, const std::vector<Orca::Net::KeyframeInfo::Name>& names);
+std::vector<Orca::Events::PortInfo> PortsAt(Match& match, int frame);
 
 Match& TheMatch()
 {
@@ -408,7 +417,7 @@ void RunSolo(Match& match, const std::function<Pad(int)>& local_pad)
   }
   else
   {
-    pad = local_pad(0);
+    pad = local_pad(match.local_seat);
   }
   Pads pads;
   pads.fill(Orca::Net::UNPLUGGED_PAD);
@@ -417,6 +426,14 @@ void RunSolo(Match& match, const std::function<Pad(int)>& local_pad)
   match.port->SetPads(frame, pads);
   match.log.push_back(pads);
   match.running = frame;
+  // With no keyframe in play (none stored, none being made), only the newest frames can serve the
+  // next one: keep the log from growing without end (a solo game with no room makes none).
+  if (!match.keyframe && !match.job && match.log.size() > 4 * KEYFRAME_FRESH_FRAMES)
+  {
+    const int drop = static_cast<int>(match.log.size()) - KEYFRAME_FRESH_FRAMES;
+    match.log.erase(match.log.begin(), match.log.begin() + drop);
+    match.log_base += drop;
+  }
 }
 
 // Host: unplug every friend still in the session, telling each (and the app) why.
@@ -444,6 +461,8 @@ void GoSolo(Match& match, const char* why, const char* state = "playing")
                  match.running + 1, why, stats.rollbacks, stats.checksums_matched);
   match.session.reset();
   match.port->SetCatchingUp(false);
+  // A session that ended mid re-run left the port in re-run mode (unthrottled, unrendered, muted).
+  match.port->SetResimulating(false);
   if (state)
     Orca::Status::State(state);
 }
@@ -477,6 +496,9 @@ void ResetDropIn(Match& match)
   match.waiting.clear();
   match.seated.clear();
   match.keyframe_wanted = false;
+  // The old store joins its transfers (a delete retries for seconds) as it goes: not on this thread.
+  if (match.store)
+    std::thread([store = std::move(match.store)]() mutable { store.reset(); }).detach();
   match.store = MakeStore();
 }
 
@@ -485,7 +507,7 @@ void ResetDropIn(Match& match)
 // app can still send "join".
 void ReopenRoom(Match& match)
 {
-  Orca::Online::Shutdown();
+  Orca::Online::ShutdownInBackground();
   if (match.local_seat == 0)
     Orca::Online::StartRoom("", false);
 }
@@ -647,14 +669,13 @@ void HostEvents(Core::System& system, Match& match)
     }
     match.session->AddPeer(seat, next, keyframe_frame);
     match.seated.insert(seat);
-    match.port_names[seat] = {seat, next, it->second};
+    AddName(match, {seat, next, it->second});
     NOTICE_LOG_FMT(ROLLBACK, "Drop-in: {}", match.session->Describe());
     Orca::Net::KeyframeInfo offer = *match.keyframe;
-    for (const auto& [named_seat, name] : match.port_names)
-    {
-      if (named_seat == match.local_seat || match.seated.count(named_seat))
-        offer.names.push_back(name);
-    }
+    offer.names = AllNames(match);
+    // Players already in the game hear the newcomer's name before its plug frame (the room sends it
+    // ahead of the session packets that plug it in).
+    Orca::Online::BroadcastNames(offer.names);
     Orca::Online::OfferKeyframe(seat, offer);
     NOTICE_LOG_FMT(ROLLBACK,
                    "Drop-in: port {} replays from keyframe frame {}, live from frame {}", seat + 1,
@@ -890,11 +911,7 @@ Load LoadKeyframe(Core::System& system, Match& match, int* frame_out)
 
   // A join during play takes its seat from the friend's room now (a launch join had it at once).
   match.local_seat = Orca::Online::Seat();
-  match.port_names.clear();
-  for (const Orca::Net::KeyframeInfo::Name& name : download->info.names)
-    match.port_names[name.seat] = name;
-  for (const auto& [seat, name] : match.port_names)
-    NOTICE_LOG_FMT(ROLLBACK, "Drop-in: port {} is {} from frame {}", seat + 1, name.name, name.from);
+  SetNames(match, download->info.names);
   match.join_in_play = false;
   match.log.clear();
   match.log_base = frame;
@@ -989,7 +1006,7 @@ void JoinInPlay(Match& match, const std::string& code)
   if (match.session)
     GoSolo(match, "joining another game", nullptr);
   ResetDropIn(match);
-  Orca::Online::Shutdown();
+  Orca::Online::ShutdownInBackground();
   Orca::Online::StartRoom(code, true);
   NOTICE_LOG_FMT(ROLLBACK, "Drop-in: joining room {} during play, frame {}", code, match.running + 1);
   match.joining = true;
@@ -1008,7 +1025,7 @@ void JoinInPlay(Match& match, const std::string& code)
 // during a launch join.
 void TakeCommands(Match& match)
 {
-  if (!Soft())
+  if (!Orca::Status::Cap("join") && !Orca::Status::Cap("leave"))
     return;
   if (match.session &&
       (match.session->Resimulating() || match.session->CurrentFrame() != match.running + 1))
@@ -1019,16 +1036,58 @@ void TakeCommands(Match& match)
     return;
   if (Orca::Online::TakeLeaveRequest())
     Leave(match);
-  if (const auto code = Orca::Online::TakeJoinRequest())
+  if (const auto code = Orca::Online::TakeJoinRequest(); code && Orca::Status::Cap("join"))
     JoinInPlay(match, *code);
 }
 
 // ---- Ports, for the in-game UX ----
 
+// Host: a seat's new holder, from its plug frame. A few entries per seat are kept.
+void AddName(Match& match, Orca::Net::KeyframeInfo::Name name)
+{
+  auto& history = match.port_names[name.seat];
+  if (!history.empty() && history.back().from >= name.from)
+    history.pop_back();
+  history.push_back(std::move(name));
+  if (history.size() > 4)
+    history.erase(history.begin());
+}
+
+std::vector<Orca::Net::KeyframeInfo::Name> AllNames(const Match& match)
+{
+  std::vector<Orca::Net::KeyframeInfo::Name> all;
+  for (const auto& [seat, history] : match.port_names)
+    all.insert(all.end(), history.begin(), history.end());
+  return all;
+}
+
+// A joiner: the host's names, as they are now (they replace this machine's own view).
+void SetNames(Match& match, const std::vector<Orca::Net::KeyframeInfo::Name>& names)
+{
+  match.port_names.clear();
+  std::vector<Orca::Net::KeyframeInfo::Name> sorted = names;
+  std::stable_sort(sorted.begin(), sorted.end(),
+                   [](const auto& a, const auto& b) { return a.from < b.from; });
+  for (auto& name : sorted)
+  {
+    NOTICE_LOG_FMT(ROLLBACK, "Drop-in: port {} is {} from frame {}", name.seat + 1, name.name,
+                   name.from);
+    match.port_names[name.seat].push_back(std::move(name));
+  }
+}
+
 std::string NameAt(const Match& match, int seat, int frame)
 {
   const auto it = match.port_names.find(seat);
-  return it != match.port_names.end() && frame >= it->second.from ? it->second.name : "";
+  if (it == match.port_names.end())
+    return "";
+  // The newest holder from before this frame (entries are in frame order).
+  for (auto entry = it->second.rbegin(); entry != it->second.rend(); ++entry)
+  {
+    if (frame >= entry->from)
+      return entry->name;
+  }
+  return "";
 }
 
 // The controllers plugged in at `frame`: in a session, by its synced plan; solo, this player's own.
@@ -1041,7 +1100,7 @@ std::vector<Orca::Events::PortInfo> PortsAt(Match& match, int frame)
       Orca::Online::Seat() == match.local_seat)
   {
     if (std::string own = Orca::Online::SeatName(match.local_seat); !own.empty())
-      match.port_names[match.local_seat] = {match.local_seat, frame, std::move(own)};
+      AddName(match, {match.local_seat, frame, std::move(own)});
   }
   std::vector<Orca::Events::PortInfo> ports;
   if (!match.session)
@@ -1319,8 +1378,16 @@ std::optional<int> OnBoundary(Core::System& system,
   {
     for (const Orca::Net::PeerEvent& event : Orca::Online::TakePeerEvents())
     {
-      if (event.kind != Orca::Net::PeerEvent::Kind::Left || !event.host)
-        continue;
+      if (event.kind == Orca::Net::PeerEvent::Kind::Names)
+        SetNames(match, event.keyframe.names);
+      else if (event.kind == Orca::Net::PeerEvent::Kind::Left && event.host)
+        match.host_gone = event.reason;
+    }
+    // Only at a boundary that isn't a re-run: going solo mid re-run would leave half-replayed frames.
+    if (match.host_gone && !match.session->Resimulating())
+    {
+      Orca::Net::PeerEvent event;
+      event.reason = *std::exchange(match.host_gone, std::nullopt);
       LogStats("host left");
       if (event.reason == "desync")
         ++s_desyncs;
@@ -1384,7 +1451,13 @@ std::optional<int> OnBoundary(Core::System& system,
     if (match.session && match.session->GetStats().stalls > stalls_before)
       match.stats_stall_ms += MsSince(step_start);
     if (step.kind == Orca::Net::StepKind::Rollback)
+    {
       match.stats_rbmax = std::max(match.stats_rbmax, running_before - step.frame + 1);
+      // The loaded snapshot holds the hook's writes from that frame's first run, made with the ports
+      // known then; a rollback can be caused by exactly those ports changing (a seat unplugged in the
+      // past). Run it again for the frame landed on, whichever snapshot each machine had.
+      on_frame(step.frame, true, PortsAt(match, step.frame));
+    }
     if (step.kind == Orca::Net::StepKind::Run || step.kind == Orca::Net::StepKind::Rollback)
     {
       match.running = step.frame;
@@ -1424,7 +1497,8 @@ std::optional<int> OnBoundary(Core::System& system,
                                            match.local_seat + 1),
                                4000);
         }
-        if (match.session->LeftDone())
+        if (match.session->LeftDone() && step.kind == Orca::Net::StepKind::Run &&
+            !match.session->Resimulating())
         {
           NOTICE_LOG_FMT(ROLLBACK, "Drop-in: unplugged at frame {}",
                          match.session->Plan()[match.local_seat].unplug_from);
