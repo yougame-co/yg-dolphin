@@ -7,9 +7,13 @@
 # 1. Host and Friend each boot their own game, solo, in rooms of their own.
 # 2. Friend starts and sends "join <host's room>" before the caps handshake: it drops into the
 #    host's game once caps turn join on.
-# 3. Friend sends "leave": unplugged at an agreed frame, it plays on solo ("left").
-# 4. Friend joins again; then the host sends "leave": Friend sees "host-left" and plays on.
+# 3. Both pick and start a match (the input scripts wait 100 s into character select, past the
+#    join); 10 s into it the friend sends "leave": unplugged at an agreed frame, it plays on solo
+#    ("left").
+# 4. Friend joins again, into the running match; then the host sends "leave": Friend sees
+#    "host-left" and plays on.
 # Each step waits for the states it expects and fails on a timeout. Two Orca processes at most.
+import json
 import os
 import queue
 import random
@@ -26,7 +30,9 @@ if len(sys.argv) < 3:
 BIN, DISC = sys.argv[1], sys.argv[2]
 PPLUS = sys.argv[sys.argv.index("--pplus") + 1] if "--pplus" in sys.argv else None
 HERE = os.path.dirname(os.path.abspath(__file__))
-INPUT = os.path.join(HERE, "inputs", "bf-mario-link-results.txt")
+# Both games reach character select before the friend is there: the scripts act late there, so the
+# two start a match together that the friend's second join drops into.
+INPUT = os.path.join(HERE, "inputs", "pplus-dropin.txt" if PPLUS else "bf-dropin.txt")
 ROOM = "cmd" + "".join(random.choice(string.ascii_lowercase + string.digits) for _ in range(6))
 WORK = tempfile.mkdtemp(prefix="orca-cmd-")
 T0 = time.time()
@@ -53,6 +59,7 @@ class Orca:
             "ORCA_TEST_KEYFRAME_DIR": os.path.join(WORK, "kf"),
             "ORCA_NAME": name,
             "YG_INPUT": INPUT,
+            "YG_SCENES": "1",
         }
         if PPLUS:
             env["ORCA_PROFILE"] = "PPLUS32"
@@ -104,6 +111,19 @@ class Orca:
                 fail(f"{self.name}: '{line}' while waiting for '{want}'")
         fail(f"{self.name}: no '{want}' in {timeout} s")
 
+    def wait_log(self, text, timeout):
+        """Waits for a line containing `text` in this Orca's log (stderr)."""
+        end = time.time() + timeout
+        while time.time() < end:
+            if self.proc.poll() is not None:
+                fail(f"{self.name} exited (code {self.proc.returncode}) waiting for '{text}' in its log")
+            with open(os.path.join(WORK, f"{self.name}.log"), errors="replace") as f:
+                for line in f:
+                    if text in line:
+                        return line.rstrip()
+            time.sleep(1)
+        fail(f"{self.name}: no '{text}' in its log in {timeout} s")
+
     def stop(self):
         if self.proc.poll() is None:
             try:
@@ -149,14 +169,16 @@ friend.expect("orca state joining", 60)
 host.expect("orca state friend-joining", 60)
 friend.expect("orca state playing", 120)
 log(f"joined; host stats {last_stats(host)}")
-time.sleep(30)
-log(f"after 30 s together: host {last_stats(host)} / friend {last_stats(friend)}")
 
-# 3. The friend leaves at an agreed frame and plays on.
+# 3. A match together; 10 s into it the friend leaves at an agreed frame and plays on.
+for o in (host, friend):
+    log(f"{o.name}: {o.wait_log('-> scMelee', 240)}")
+time.sleep(10)
+log(f"10 s into the match: host {last_stats(host)} / friend {last_stats(friend)}")
 friend.send("leave")
 friend.expect("orca state left", 30)
 host.expect("orca state friend-left left", 30)
-time.sleep(10)
+time.sleep(5)
 if friend.proc.poll() is not None:
     fail("friend stopped after leaving")
 
@@ -174,6 +196,32 @@ for o in orcas:
 log(f"host stats {last_stats(host)} / friend {last_stats(friend)}")
 for o in orcas:
     o.stop()
+# What happened, from the logs: scenes, keyframes (with the NAND they named instead of sending),
+# loads, and each session's numbers.
+KEYS = ("Scene frame", "Drop-in: keyframe of frame", "Drop-in: loaded keyframe", "Online match",
+        "Drop-in: back to solo", "Drop-in: joining room", "doesn't match the host's")
+for o in orcas:
+    with open(os.path.join(WORK, f"{o.name}.log"), errors="replace") as f:
+        for line in f:
+            if any(k in line for k in KEYS):
+                log(f"{o.name}: {line.rstrip()[line.find('N[') if 'N[' in line else 0:]}")
+# Each Orca's "orca stats" lines while a friend was plugged in: frame rate and rollbacks.
+for o in orcas:
+    together = []
+    for line in o.stats:
+        try:
+            st = json.loads(line)
+        except ValueError:
+            continue
+        if st.get("peers", 0) > 0:
+            together.append(st)
+    if together:
+        fps = [st["fps"] for st in together]
+        log(f"{o.name}: {len(together)} s with a friend: fps avg {sum(fps) / len(fps):.1f} min "
+            f"{min(fps):.1f}, rollbacks {sum(st['rb'] for st in together)} "
+            f"({sum(st['rbf'] for st in together)} frames, deepest "
+            f"{max(st['rbmax'] for st in together)}), stalls {sum(st['st'] for st in together)}, "
+            f"delay {together[-1]['delay']}, ping {together[-1]['ping']} ms")
 log("PASS")
 if os.environ.get("ORCA_TEST_KEEP") == "1":
     log(f"logs kept in {WORK}")
