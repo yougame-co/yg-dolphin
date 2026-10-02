@@ -1891,6 +1891,15 @@ std::vector<PeerEvent> YouGameRoom::TakePeerEvents()
   return std::exchange(m_impl->events, {});
 }
 
+bool YouGameRoom::ArrivalPending() const
+{
+  std::lock_guard lock(m_impl->mutex);
+  // As the host takes them (OnlineMatch's HostEvents): a friend on a seat after the host's.
+  return std::ranges::any_of(m_impl->events, [](const PeerEvent& event) {
+    return event.kind == PeerEvent::Kind::Arrived && event.seat > 0 && !event.host;
+  });
+}
+
 bool YouGameRoom::FreshTicket(bool fresh, std::string* ticket, std::string* store_url,
                               std::string* error)
 {

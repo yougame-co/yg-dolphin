@@ -27,8 +27,9 @@ void Report(std::string_view code, std::string_view sentence);
 
 // Capabilities (ORCA.md, "Embedding"): what this build implements, printed once as
 // "orca caps <list>" before "ready", and what the app said it understands ("caps <list>" on
-// stdin). A feature is on only when both list it.
-inline constexpr const char* CAPS = "join leave stats";
+// stdin). A feature is on only when both list it. "pause" needs no answer: it says this Orca
+// pauses a session while the player's game is alone in it (older ones answer "unsupported pause").
+inline constexpr const char* CAPS = "join leave stats pause";
 void PrintCaps();
 void SetAppCaps(std::string_view list);
 bool Cap(std::string_view name);

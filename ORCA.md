@@ -380,8 +380,8 @@ Orca --embed --parent <handle> --rect X Y W H [-u <user>] -e <disc> [-C ...]
   the front as a regular app for that dialog.
 - Orca never asks with dialogs while embedded: alerts go to stderr.
 - stdin must stay open. A closed stdin means the app is gone, and Orca quits.
-- Orca.app runs a session unless `ORCA_SESSION=0` is in its environment. The app sets that for solo
-  play, or `pause` and `reset` are refused.
+- Orca.app runs a session unless `ORCA_SESSION=0` is in its environment. In a session `reset` is
+  refused, and `pause` works only while the player's game is alone (below).
 - When the app's window goes away without a `quit`, Orca stops too. On Windows that happens when its
   child window is destroyed; on macOS, 2 s after the window leaves the window list. A minimized
   window doesn't count as gone.
@@ -408,7 +408,7 @@ window (layout, scroll, resize, full screen). Moving, minimizing or hiding the w
 | `rect X Y W H` | Moves and resizes the view (units above). A rect while hidden doesn't show it. |
 | `hide` / `show` | Takes the view off screen and puts it back. Hidden also means no input. |
 | `focus` / `blur` | The game gets the input, or gives it back to the page. See "Focus" below. `blur` is new: the libretro host has no `blur`. |
-| `pause` / `resume` | Answers `state paused` or `state running`. A `pause` before the game runs is held until it does, so `ready` waits for `resume`. **In a session** `pause` answers `unsupported pause` then `state running`: the game keeps running (the friend's does), and nothing waits. |
+| `pause` / `resume` | Answers `state paused` or `state running`. A `pause` before the game runs is held until it does, so `ready` waits for `resume`. **In a session** (Orca with `orca caps ... pause`) `pause` pauses only while the player's game is alone in it: no friend plugged in or on the way, not joining or catching up, no keyframe wanted or being made, and no `prepare-join`, `join` or `leave` waiting for a frame (`Rollback::OnlineMatch::SoloPauseAllowed`). Otherwise, and before the game runs, it answers `unsupported pause` then `state running`: the game keeps running (the friend's does), and nothing waits. A solo pause ends by itself, with `state running`, as soon as drop-in needs the game: a friend arriving in the room, `prepare-join`, `join` or `leave`. While paused, the room's connection stays up (its thread pings the server every second whatever the game does), but a room that drops meanwhile is reopened only after the resume (that happens at frame boundaries), so a pause longer than the server's 90 s hold on a dropped player's seat comes back to a new code. The pause stops the emulated machine between two instructions and changes nothing it computes; the `orca stats` line leaves the paused time out of its `fps`. An Orca without `pause` in its caps answers `unsupported pause` to every `pause` in a session. |
 | `volume V` | V from 0 to 1, linear, as the libretro gain. For this run only: Dolphin.ini is untouched. It is allowed in a session and doesn't touch the compatibility key. |
 | `save N` / `load N` | Answers `unsupported save N` / `unsupported load N`. A session refuses save states, and Orca keeps the game's own saves in its NAND. |
 | `reset` | The console's reset button. Answers `unsupported reset` in a session or before the game runs. |
@@ -423,7 +423,7 @@ Any other line goes to stderr. The app's `EMBED_COMMAND` filter must add `blur` 
 | Line | Meaning |
 |---|---|
 | `ready W H FPS` | The first frame is on screen. W and H are the emulated frame buffer (Brawl: `640 480`); FPS is the VI rate (`59.9401`). The Mac takes about 1-2 s. A session can show `orca state lobby` **after** `ready` and wait there for its friend: after `ready`, no startup timeout applies. |
-| `state running` / `state paused` | The answer to `pause` and `resume`. |
+| `state running` / `state paused` | The answer to `pause` and `resume`; also `state running` when a session's solo pause ends for drop-in. |
 | `unsupported <command> [N]` | The command was refused. The game carries on, so this is not an error. |
 | `key escape` / `key fullscreen` | Windows only, and only if Orca's window somehow has the keyboard (Esc, F11). Normally the page sees those keys itself, as on macOS. |
 | `error <sentence>` | Something failed: bad arguments, the view couldn't open, the game didn't boot. Each `orca error` also gets an `error` twin. |

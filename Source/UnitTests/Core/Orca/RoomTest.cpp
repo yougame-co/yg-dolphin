@@ -30,6 +30,25 @@ void SetEnv(const char* name, const char* value)
 #endif
 }
 
+// Sets a variable for one scope, then puts back what was there.
+class ScopedEnv
+{
+public:
+  ScopedEnv(const char* name, const char* value) : m_name(name)
+  {
+    if (const char* old = std::getenv(name))
+      m_old = old;
+    SetEnv(name, value);
+  }
+  ~ScopedEnv() { SetEnv(m_name, m_old ? m_old->c_str() : nullptr); }
+  ScopedEnv(const ScopedEnv&) = delete;
+  ScopedEnv& operator=(const ScopedEnv&) = delete;
+
+private:
+  const char* m_name;
+  std::optional<std::string> m_old;
+};
+
 Packet Sample()
 {
   Packet packet;
@@ -331,6 +350,35 @@ TEST(OrcaLive, TwoRoomsPlayEachOther)
   EXPECT_EQ(left->seat, 1);
   EXPECT_TRUE(a.Connected()) << a.Status();
   EXPECT_GE(a.RoundTripMs(), 0);
+}
+
+// A friend arriving is visible before the emulator thread takes it (what ends a solo pause, which
+// takes no events while paused), and no longer once taken. ORCA_LIVE_TEST=1.
+TEST(OrcaLive, ArrivalIsPendingUntilTaken)
+{
+  const char* live = std::getenv("ORCA_LIVE_TEST");
+  if (!live || std::string(live) != "1")
+    GTEST_SKIP() << "set ORCA_LIVE_TEST=1";
+  const ScopedEnv dev_game("ORCA_TEST_DEV_GAME", "orca-live-test");
+  RoomOptions options;
+  options.room_code =
+      "orcap" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 10000000);
+  options.compatibility = "orca-live-test";
+  YouGameRoom a(options);
+  for (int i = 0; i < 500 && a.GetState() == RoomState::Connecting; ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  ASSERT_EQ(a.GetState(), RoomState::Waiting) << a.Status();
+  EXPECT_FALSE(a.ArrivalPending());
+  options.joining = true;
+  YouGameRoom b(options);
+  for (int i = 0; i < 1500 && !a.ArrivalPending() && a.GetState() != RoomState::Ended; ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  ASSERT_TRUE(a.ArrivalPending()) << a.Status();
+  bool arrived = false;
+  for (const PeerEvent& event : a.TakePeerEvents())
+    arrived = arrived || event.kind == PeerEvent::Kind::Arrived;
+  EXPECT_TRUE(arrived);
+  EXPECT_FALSE(a.ArrivalPending());
 }
 
 // The test network delay: one side holds every message 100 ms each way, the other sets the variable

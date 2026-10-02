@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <functional>
 #include <optional>
 
@@ -40,4 +41,24 @@ void LogStats(const char* when);
 // Logs the session's stats (and why it ended), ends the session and leaves the room. Safe to call
 // more than once; called by itself when emulation stops or the session ends.
 void End(const char* reason);
+
+// The player's pause in a session (the app's "pause", Core::SetState). A pause may stop only this
+// player's game: allowed in a session without a room (tests), and online while the last frame
+// boundary left this game alone with nothing of drop-in under way (no friend plugged in or on the
+// way, not joining or catching up, no keyframe wanted or being made) and nothing waits for the
+// next one (Orca::Online::DropInPending: a friend arriving, an invite, a join or a leave).
+// Any thread.
+bool SoloPauseAllowed();
+// Core::SetState(Paused) in a session: whether the pause may go ahead (SoloPauseAllowed). From a
+// yes until EndPause, boundaries take no friend in, so one that still runs while the CPU thread
+// winds down never starts a session it can't step (a step gives up while the CPU is stepping).
+bool BeginPause();
+// Core::SetState(Running): the pause, if any, is over.
+void EndPause();
+// Between a BeginPause that said yes and EndPause: the core is paused by the player's pause (not
+// still stepping at boot, nor stopped by an HLE reload or a panic).
+bool Pausing();
+// Host time spent paused since the last call. The stats line leaves it out of its interval, so
+// its fps counts running time only.
+std::chrono::nanoseconds TakePausedTime();
 }  // namespace Rollback::OnlineMatch

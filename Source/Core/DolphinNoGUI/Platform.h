@@ -74,6 +74,9 @@ protected:
   void UpdateRunningFlag();
   // Embed mode, on the main loop's thread: runs the commands read from stdin, prints "ready" once.
   void ProcessEmbedCommands();
+  // Orca: a solo pause lasts only while nothing of drop-in needs the game (a friend arriving, an
+  // invite, the app's join or leave): then it runs again, and the app hears "state running".
+  void EndSoloPauseForDropIn();
   // What the platform does for the window commands. rect: the parent-relative rectangle (units per
   // OS, ORCA.md "Embedding"). visible: the app's "show"/"hide". focus: "focus"/"blur".
   virtual void EmbedSetRect(const Embed::Rect& rect) {}
@@ -106,5 +109,6 @@ private:
   std::optional<std::string> m_ready_line;
   bool m_ready_sent = false;
   // A "pause" before the game runs (Core::SetState only pauses a running core), applied once it is.
+  // Never in a session: it pauses only a game it can see is alone.
   bool m_pause_pending = false;
 };

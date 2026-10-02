@@ -73,6 +73,7 @@
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/State.h"
 #include "Core/Rollback/Cow.h"
+#include "Core/Rollback/OnlineMatch.h"
 #include "Core/System.h"
 #include "Core/WiiRoot.h"
 
@@ -696,14 +697,15 @@ void SetState(Core::System& system, State state, bool report_state_change,
     switch (state)
     {
     case State::Paused:
-      // Orca: a rollback session can't pause (the other player's game keeps running), and the CPU
-      // thread may be waiting for the room, which a pause would wait on in turn.
-      if (Orca::SessionActive())
-        return;
 #ifdef USE_RETRO_ACHIEVEMENTS
       if (!override_achievement_restrictions && !AchievementManager::GetInstance().CanPause())
         return;
 #endif  // USE_RETRO_ACHIEVEMENTS
+      // Orca: a session pauses only while this player's game is alone in it (with a friend, the
+      // friend's game keeps running, and the CPU thread may be waiting for the room, which a pause
+      // would wait on in turn).
+      if (Orca::SessionActive() && !Rollback::OnlineMatch::BeginPause())
+        return;
       // NOTE: GetState() will return State::Paused immediately, even before anything has
       //   stopped (including the CPU).
       system.GetCPU().SetStepping(true);  // Break
@@ -715,6 +717,7 @@ void SetState(Core::System& system, State state, bool report_state_change,
       break;
     case State::Running:
     {
+      Rollback::OnlineMatch::EndPause();
       system.GetCPU().SetStepping(false);
       Wiimote::Resume();
       break;

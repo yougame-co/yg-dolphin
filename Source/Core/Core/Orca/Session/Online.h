@@ -77,6 +77,11 @@ void PrepareJoin();
 // True once after a PrepareJoin (the emulator thread takes it at a frame boundary).
 bool TakePrepareJoin();
 
+// Drop-in work the next frame boundary will take: a friend arriving in the room (not taken yet) or
+// a PrepareJoin while the room is up, the app's join or leave once its caps allow them. A solo
+// pause ends for it (Rollback::OnlineMatch::SoloPauseAllowed). Any thread; never blocks for long.
+bool DropInPending();
+
 // The latest round trip to the room server, in milliseconds (-1 before the first). `sequence`, if
 // given, changes with each new measurement: feed Session::OnRoundTrip only when it changed.
 int RoundTripMs(u32* sequence = nullptr);

@@ -418,6 +418,21 @@ bool TakePrepareJoin()
   return s_prepare_join.exchange(false, std::memory_order_relaxed);
 }
 
+bool DropInPending()
+{
+  // As the boundary takes them: a join or leave once the app's caps turn it on (OnlineMatch's
+  // TakeCommands), an invite or an arrival only while the room is up (HostEvents).
+  {
+    std::lock_guard lock(s_request_mutex);
+    if ((s_join_request && Status::Cap("join")) || (s_leave_request && Status::Cap("leave")))
+      return true;
+  }
+  const auto room = Room();
+  if (!room || room->GetState() == Net::RoomState::Ended)
+    return false;
+  return s_prepare_join.load(std::memory_order_relaxed) || room->ArrivalPending();
+}
+
 int RoundTripMs(u32* sequence)
 {
   const auto room = Room();

@@ -213,6 +213,23 @@ struct Match
 // Desyncs this process saw, every match (the stats line's "ds").
 int s_desyncs = 0;
 
+// The solo pause (BeginPause). s_solo_idle: the last boundary left this game alone with nothing of
+// drop-in under way (false while a boundary runs). s_pausing: a pause went ahead and hasn't ended;
+// boundaries take nobody in meanwhile. Sequentially consistent: a pause either sees a boundary
+// that has begun (and is refused) or that boundary sees the pause.
+std::atomic<bool> s_solo_idle{false};
+std::atomic<bool> s_pausing{false};
+// Host time paused, for the stats line (TakePausedTime). The start is the host thread's (pause and
+// resume both come through Core::SetState there); 0 while not paused.
+std::atomic<s64> s_paused_since_ns{0};
+std::atomic<s64> s_paused_ns{0};
+
+s64 NowNs()
+{
+  return std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch())
+      .count();
+}
+
 void AddName(Match& match, Orca::Net::KeyframeInfo::Name name);
 std::vector<Orca::Net::KeyframeInfo::Name> AllNames(const Match& match);
 void SetNames(Match& match, const std::vector<Orca::Net::KeyframeInfo::Name>& names);
@@ -223,6 +240,14 @@ Match& TheMatch()
 {
   static Match match;
   return match;
+}
+
+// This game plays alone, and nothing of drop-in is under way (SoloPauseAllowed).
+bool SoloIdle(const Match& match)
+{
+  return match.started && !match.finished && match.port && !match.session && !match.joining &&
+         !match.download && !match.job && !match.keyframe_wanted && match.waiting.empty() &&
+         match.plugging.empty() && !match.port->CatchingUp();
 }
 
 // Emulation is stopping, or the host asked the CPU thread to pause (a pause, a stop with
@@ -813,8 +838,9 @@ void HostEvents(Core::System& system, Match& match)
   if (!match.store && !match.waiting.empty())
     WARN_LOG_FMT(ROLLBACK, "Drop-in: no keyframe store: a friend can't join yet");
 
-  // Take in whoever waits once there is a keyframe for them.
-  if (!match.keyframe || match.waiting.empty() || match.job)
+  // Take in whoever waits once there is a keyframe for them. Not while a solo pause winds the CPU
+  // thread down (BeginPause): the session's first step would give up half done.
+  if (!match.keyframe || match.waiting.empty() || match.job || s_pausing)
     return;
   for (auto it = match.waiting.begin(); it != match.waiting.end();)
   {
@@ -1388,6 +1414,8 @@ void PublishStats(Match& match)
   link.confirmed_frame = stats.confirmed_frame;
 
   const auto now = Clock::now();
+  // Time paused is no part of the interval: fps counts running time.
+  match.stats_time += TakePausedTime();
   if (match.stats_frame < 0)
   {
     match.stats_time = now;
@@ -1445,9 +1473,11 @@ void PublishStall(Match& match, double stalled_ms)
 }
 }  // namespace
 
-std::optional<int> OnBoundary(Core::System& system,
-                              const std::function<Orca::Net::Pad(int local_seat)>& local_pad,
-                              const FrameHook& on_frame)
+namespace
+{
+std::optional<int> Boundary(Core::System& system,
+                            const std::function<Orca::Net::Pad(int local_seat)>& local_pad,
+                            const FrameHook& on_frame)
 {
   Match& match = TheMatch();
   if (match.stale)
@@ -1892,6 +1922,17 @@ std::optional<int> OnBoundary(Core::System& system,
   }
   return rewound_to;
 }
+}  // namespace
+
+std::optional<int> OnBoundary(Core::System& system,
+                              const std::function<Orca::Net::Pad(int local_seat)>& local_pad,
+                              const FrameHook& on_frame)
+{
+  s_solo_idle = false;
+  const std::optional<int> rewound_to = Boundary(system, local_pad, on_frame);
+  s_solo_idle = SoloIdle(TheMatch());
+  return rewound_to;
+}
 
 void LogStats(const char* when)
 {
@@ -1926,6 +1967,7 @@ void End(const char* reason)
   if (!match.started || match.finished)
     return;
   match.finished = true;
+  s_solo_idle = false;
   LogStats(fmt::format("ended ({})", reason).c_str());
   // Transfers in flight give up now: their threads are joined below.
   if (match.store)
@@ -1937,5 +1979,44 @@ void End(const char* reason)
   if (match.keyframe && match.store)
     match.store->Delete(match.keyframe->id);
   Orca::Online::Shutdown();
+}
+
+bool SoloPauseAllowed()
+{
+  // A session with no room (tests): nobody else's game.
+  if (!Orca::Online::Enabled())
+    return true;
+  return s_solo_idle && !Orca::Online::DropInPending();
+}
+
+bool BeginPause()
+{
+  const bool was_pausing = s_pausing.exchange(true);
+  if (!SoloPauseAllowed())
+  {
+    if (!was_pausing)
+      s_pausing = false;
+    return false;
+  }
+  s64 none = 0;
+  s_paused_since_ns.compare_exchange_strong(none, NowNs());
+  return true;
+}
+
+void EndPause()
+{
+  s_pausing = false;
+  if (const s64 since = s_paused_since_ns.exchange(0); since != 0)
+    s_paused_ns += NowNs() - since;
+}
+
+bool Pausing()
+{
+  return s_pausing;
+}
+
+std::chrono::nanoseconds TakePausedTime()
+{
+  return std::chrono::nanoseconds(s_paused_ns.exchange(0));
 }
 }  // namespace Rollback::OnlineMatch

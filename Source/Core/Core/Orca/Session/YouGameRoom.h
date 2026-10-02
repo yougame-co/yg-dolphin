@@ -105,6 +105,9 @@ public:
   std::optional<bool> Joining() const;
   // What other players did since the last call.
   std::vector<PeerEvent> TakePeerEvents();
+  // Whether those events, not taken yet, include a friend arriving (Kind::Arrived on a seat after
+  // the host's, from a player that isn't the game's host).
+  bool ArrivalPending() const;
   // Host: offer `seat`'s player the keyframe (sent every second until its first packet arrives).
   void OfferKeyframe(int seat, const KeyframeInfo& info);
   // Host: every port name so far (KeyframeInfo::names), to every player in the game.

@@ -10,6 +10,7 @@
 #include <fmt/format.h>
 
 #include "AudioCommon/AudioCommon.h"
+#include "Common/Logging/Log.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
 #include "Core/HW/ProcessorInterface.h"
@@ -20,6 +21,7 @@
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/Overlay.h"
+#include "Core/Rollback/OnlineMatch.h"
 #include "Core/System.h"
 
 Platform::~Platform() = default;
@@ -36,6 +38,7 @@ void Platform::SetTitle(const std::string& title)
 void Platform::UpdateRunningFlag()
 {
   ProcessEmbedCommands();
+  EndSoloPauseForDropIn();
   UpdateTitle();
   if (m_shutdown_requested.TestAndClear())
   {
@@ -55,6 +58,23 @@ void Platform::UpdateRunningFlag()
       m_running.Clear();
     }
   }
+}
+
+void Platform::EndSoloPauseForDropIn()
+{
+  auto& system = Core::System::GetInstance();
+  // Only the player's own pause (BeginPause): the CPU also steps at boot, after an HLE reload and
+  // on a panic, and none of those is this one to end.
+  if (!Orca::SessionActive() || !Rollback::OnlineMatch::Pausing() ||
+      Core::GetState(system) != Core::State::Paused || Rollback::OnlineMatch::SoloPauseAllowed())
+  {
+    return;
+  }
+  NOTICE_LOG_FMT(ROLLBACK, "Orca: the pause ends for drop-in (a friend arriving, an invite, a join "
+                           "or a leave)");
+  Core::SetState(system, Core::State::Running);
+  if (m_embed.enabled || m_test_commands)
+    Embed::Out("state running");
 }
 
 void Platform::UpdateTitle()
@@ -166,13 +186,14 @@ void Platform::ProcessEmbedCommands()
     }
     else if (cmd == "pause")
     {
-      // A session never pauses (the other player's game keeps going; Core::SetState refuses it).
-      if (Orca::SessionActive())
-        Embed::Out("unsupported pause");
-      else if (Core::GetState(system) == Core::State::Running)
+      // A session pauses only while this player's game is alone in it (Core::SetState asks
+      // Rollback::OnlineMatch::BeginPause): with a friend, the friend's game keeps going.
+      if (Core::GetState(system) == Core::State::Running)
         Core::SetState(system, Core::State::Paused);
-      else if (Core::GetState(system) != Core::State::Paused)
+      else if (Core::GetState(system) != Core::State::Paused && !Orca::SessionActive())
         m_pause_pending = true;  // still starting
+      if (!m_pause_pending && Core::GetState(system) != Core::State::Paused)
+        Embed::Out("unsupported pause");
       report_state();
     }
     else if (cmd == "resume")
