@@ -30,6 +30,7 @@
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Status.h"
 #include "Core/HW/SI/SI_Device.h"
+#include "Core/Orca/Session/Events.h"
 #include "Core/Orca/Session/YouGameRoom.h"
 
 namespace Orca::Online
@@ -130,6 +131,8 @@ std::string CompatibilityKey()
   // The disc image itself, when the desktop app hashed it (a modified disc with the right game ID
   // and revision would otherwise desync instead of being refused).
   parts += "|disc=" + Env("ORCA_DISC_SHA1");
+  // What the in-game UX writes to emulated memory (name tags, mode locks), by its version.
+  parts += fmt::format("|ux={}", Events::UXCompatVersion());
   // The room allows 1-64 characters [a-zA-Z0-9._:-].
   return fmt::format("orca1:{:016x}", XXH3_64bits(parts.data(), parts.size()));
 }

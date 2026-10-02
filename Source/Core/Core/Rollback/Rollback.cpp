@@ -558,7 +558,10 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
       g_controller_interface.UpdateInput();
       return Orca::Net::EncodePad(Pad::GetStatus(0));
     };
-    if (const auto rewound_to = OnlineMatch::OnBoundary(guard.GetSystem(), local_pad))
+    const auto on_frame = [&guard](int frame, bool resimulating) {
+      Orca::Events::NotifyFrame(guard, frame, resimulating);
+    };
+    if (const auto rewound_to = OnlineMatch::OnBoundary(guard.GetSystem(), local_pad, on_frame))
       Harness::RewindTo(*rewound_to);
   }
 

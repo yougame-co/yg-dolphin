@@ -1086,7 +1086,8 @@ void PublishStall(Match& match, double stalled_ms)
 }  // namespace
 
 std::optional<int> OnBoundary(Core::System& system,
-                              const std::function<Orca::Net::Pad(int local_seat)>& local_pad)
+                              const std::function<Orca::Net::Pad(int local_seat)>& local_pad,
+                              const std::function<void(int frame, bool resimulating)>& on_frame)
 {
   Match& match = TheMatch();
   if (match.stale)
@@ -1154,6 +1155,10 @@ std::optional<int> OnBoundary(Core::System& system,
       NOTICE_LOG_FMT(ROLLBACK, "Drop-in: playing solo on port 1; room {}", Orca::Online::StatusLine());
     }
   }
+
+  // The in-game UX's frame hook: before this boundary's snapshot or keyframe, so what it writes is
+  // in them, and on re-runs too.
+  on_frame(match.running + 1, match.session && match.session->Resimulating());
 
   TakeCommands(match);
 
@@ -1300,6 +1305,7 @@ std::optional<int> OnBoundary(Core::System& system,
             stall_published = now;
             stall_shown = true;
             PublishStall(match, MsSince(step_start));
+            Orca::Events::NotifyStall(static_cast<int>(MsSince(step_start)));
           }
           return Stopping(system);
         },

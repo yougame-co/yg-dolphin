@@ -3,6 +3,7 @@
 
 #include "Core/Orca/Session/Events.h"
 
+#include <atomic>
 #include <mutex>
 #include <utility>
 
@@ -14,6 +15,9 @@ std::mutex s_lock;
 PlugInCallback s_plug_in;
 LinkStats s_stats;
 LocalPadSource s_pad_source;
+FrameCallback s_frame;
+StallCallback s_stall;
+std::atomic<int> s_ux_compat{0};
 }  // namespace
 
 void SetPlugInCallback(PlugInCallback callback)
@@ -59,5 +63,52 @@ void NotifyPlugIn(int frame, const std::vector<PortInfo>& ports)
   }
   if (callback)
     callback(frame, ports);
+}
+}  // namespace Orca::Events
+
+namespace Orca::Events
+{
+void SetFrameCallback(FrameCallback callback)
+{
+  std::lock_guard lk(s_lock);
+  s_frame = std::move(callback);
+}
+
+void SetStallCallback(StallCallback callback)
+{
+  std::lock_guard lk(s_lock);
+  s_stall = std::move(callback);
+}
+
+void SetUXCompatVersion(int version)
+{
+  s_ux_compat.store(version, std::memory_order_relaxed);
+}
+
+int UXCompatVersion()
+{
+  return s_ux_compat.load(std::memory_order_relaxed);
+}
+
+void NotifyFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating)
+{
+  FrameCallback callback;
+  {
+    std::lock_guard lk(s_lock);
+    callback = s_frame;
+  }
+  if (callback)
+    callback(guard, frame, resimulating);
+}
+
+void NotifyStall(int stalled_ms)
+{
+  StallCallback callback;
+  {
+    std::lock_guard lk(s_lock);
+    callback = s_stall;
+  }
+  if (callback)
+    callback(stalled_ms);
 }
 }  // namespace Orca::Events

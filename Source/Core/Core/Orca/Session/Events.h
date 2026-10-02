@@ -11,6 +11,11 @@
 #include "Common/CommonTypes.h"
 #include "InputCommon/GCPadStatus.h"
 
+namespace Core
+{
+class CPUThreadGuard;
+}
+
 // What the online session tells the rest of Orca (the in-game UX: overlay, name tags, the desktop
 // app's netlog). The session owns the data; readers only get copies and callbacks.
 namespace Orca::Events
@@ -56,7 +61,28 @@ using LocalPadSource = std::function<std::optional<GCPadStatus>()>;
 void SetLocalPadSource(LocalPadSource source);
 std::optional<GCPadStatus> LocalPad();
 
+// Every frame boundary, on every machine, solo or online, first runs and re-runs alike: before
+// anything is saved at this boundary (a rollback snapshot, a keyframe), so what it writes is in
+// them, and again whenever the frame is re-run. `frame` is the frame about to run (the numbers
+// NotifyPlugIn uses); `resimulating` while a rollback re-runs frames. A write to emulated memory
+// from here must be a pure function of that memory and synced data, and idempotent.
+using FrameCallback =
+    std::function<void(const Core::CPUThreadGuard& guard, int frame, bool resimulating)>;
+void SetFrameCallback(FrameCallback callback);
+
+// While the game waits on a friend (a stall), every few milliseconds on the CPU thread: how long so
+// far. The overlay redraws the last frame from here (nothing is presented during a stall).
+using StallCallback = std::function<void(int stalled_ms)>;
+void SetStallCallback(StallCallback callback);
+
+// The in-game UX's version of whatever it writes to emulated memory: part of the lobby
+// compatibility key. Set before the game boots.
+void SetUXCompatVersion(int version);
+int UXCompatVersion();
+
 // The session's side (Rollback / Online): publish the latest stats, and fire the plug-in callback.
 void PublishLinkStats(const LinkStats& stats);
 void NotifyPlugIn(int frame, const std::vector<PortInfo>& ports);
+void NotifyFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating);
+void NotifyStall(int stalled_ms);
 }  // namespace Orca::Events
