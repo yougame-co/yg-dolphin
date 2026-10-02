@@ -395,6 +395,16 @@ std::optional<Profile> LoadProfile(const std::string& game_id, std::optional<u16
         return fail("SDImage must be a file name");
       (key == "Disc" ? profile.disc : profile.sd_image) = value;
     }
+    else if (section == "Profile" && key == "Title")
+    {
+      // Shown in the window title: printable ASCII only, and short.
+      if (value.size() > 48 ||
+          !std::ranges::all_of(value, [](unsigned char c) { return c >= 0x20 && c < 0x7f; }))
+      {
+        return fail("Title must be at most 48 printable ASCII characters");
+      }
+      profile.title = value;
+    }
     else if (section == "Profile" && key == "SaveTitle")
     {
       u64 title = 0;

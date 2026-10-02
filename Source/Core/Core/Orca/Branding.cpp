@@ -12,7 +12,11 @@ namespace Orca
 std::string WindowTitle()
 {
   std::string title = "Orca";
-  if (const std::string& game = SConfig::GetInstance().GetTitleDescription(); !game.empty())
+  // A launcher profile's game is the mod it boots, not the disc's (Project+, not Brawl).
+  const Profile* profile = ActiveProfile();
+  if (profile && !profile->title.empty())
+    title += " — " + profile->title;
+  else if (const std::string& game = SConfig::GetInstance().GetTitleDescription(); !game.empty())
     title += " — " + game;
   if (std::string status = Online::StatusLine(); !status.empty())
   {

@@ -146,6 +146,15 @@ void AddTypedMessage(MessageType type, std::string message, u32 ms, u32 argb,
   s_messages.emplace(type, Message(Orca::BrandText(message), ms, argb, icon));
 }
 
+void DiscardTypedMessage(MessageType type)
+{
+  std::lock_guard lock{s_messages_mutex};
+  // As AddTypedMessage: discarded on the video thread, at the next DrawMessages().
+  auto range = s_messages.equal_range(type);
+  for (auto it = range.first; it != range.second; ++it)
+    it->second.should_discard = true;
+}
+
 void AddMessage(std::string message, u32 ms, u32 argb,
                 const VideoCommon::CustomTextureData::ArraySlice::Level* icon)
 {

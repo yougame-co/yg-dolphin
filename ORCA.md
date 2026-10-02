@@ -69,7 +69,7 @@ The session boots the loader executable (`-e <launcher.dol>`) with the disc as D
 the SD card image next to the loader match the profile (XXH3-128). The SD image is opened read-only:
 every session forces SD writes and folder sync off. The profile also names the save that seeds the
 session NAND (`SaveTitle`), and its frame hook goes live once the game's instruction is at the
-address. Its game patches (`Data/Sys/Orca/<profile>.patches`, `Core/Orca/UX/GamePatches.h`) apply
+address. Its `Title` (Project+) names the game in the window title instead of the disc's. Its game patches (`Data/Sys/Orca/<profile>.patches`, `Core/Orca/UX/GamePatches.h`) apply
 from then on, as guarded code groups only: `PPLUS32.patches` skips Project+'s "Create save file for
 Project+?" prompt the way `RSBE01.patches` skips Brawl's (Project+ loads Brawl's boot module
 unchanged), so a session with no save goes straight to character select at frame 150 and writes no
@@ -191,7 +191,11 @@ host has played.
      lead there. Once a room works again, `orca state playing` follows. A host's session that ended
      with its room doesn't report `friend-left network`, and a re-run in progress finishes first.
    - A socket the server replaced (close code 4000: another run of the game on the same account
-     took the room) is the other run's room: a host opens a fresh one rather than take it back.
+     took the room) is the other run's room: a host opens a fresh one rather than take it back, and
+     never goes back to a room someone else holds, whatever ends the tries after.
+   - A rollback the joiner can't make (`No snapshot to roll back`, `exceeds the limit`: an engine
+     fault, not the games going apart) ends its session as `network` with the error in the
+     sentence; every session end logs its error (`Online: session ended at frame N: …`).
    - A player the room re-seats on a new socket (`back`, or `join` for a listed id) is another run of
      Orca: it is unplugged like an `away` one, and greeted (and offered a keyframe) anew.
    - A room the page was shown ends with an emptied mirror (its code, no players or participants,
@@ -199,7 +203,16 @@ host has played.
      process's newest: an older room's late update never overwrites a newer one's.
    - The page's lobby Leave is the app's `leave` (with `caps leave`); without it, it ends the room. A
      host that leaves always opens a new room, even with nobody in the old one: the page reads
-     `orca state left` as Orca having left its room.
+     `orca state left` as Orca having left its room. The new room opens a second later, so the
+     app's Stop (`leave`, then `quit` at once) never asks for its ticket; the old room's goodbye is
+     still sent, since the process waits up to 2 s at exit for rooms it is leaving. A friend hears
+     the host went at once, not after its silence limit.
+   - A player on another port than 1 (it joined a friend's game and then went solo: it left, its
+     host did, or the session failed) has no room of its own until seats map to ports, and prints
+     `orca state no-room` once, after the room it left has told the page it is empty (and never
+     mirrors that room again). The app can still send `join`.
+   - A friend that leaves while it still catches up (never plugged in) just leaves the room at
+     once; the host drops the seat (`friend-left left`).
 
 **The frame hook runs in the host's floating-point mode** (`Rollback.cpp`, `HostFloatScope`).
 - The CPU thread runs compiled C++ in the guest's FP mode (`PowerPC::RoundingModeUpdated`). In
@@ -410,7 +423,7 @@ Any other line goes to stderr. The app's `EMBED_COMMAND` filter must add `blur` 
 | `unsupported <command> [N]` | The command was refused. The game carries on, so this is not an error. |
 | `key escape` / `key fullscreen` | Windows only, and only if Orca's window somehow has the keyboard (Esc, F11). Normally the page sees those keys itself, as on macOS. |
 | `error <sentence>` | Something failed: bad arguments, the view couldn't open, the game didn't boot. Each `orca error` also gets an `error` twin. |
-| `orca state <state>` / `orca error <code> <sentence>` | Session status (`Core/Orca/Status.h`). New states, such as drop-in's `joining`, come through unchanged: forward every line that starts with `orca `. |
+| `orca state <state>` / `orca error <code> <sentence>` | Session status (`Core/Orca/Status.h`). New states, such as drop-in's `joining`, `friend-joined` and `no-room`, come through unchanged: forward every line that starts with `orca `. |
 | `exit <code>` | Always the last line, on every exit path: 0 after a normal stop, 1 after a reported error, 2 for bad arguments. |
 
 Embedded, Orca keeps fd 1 for the protocol and points the process's stdout at stderr. So the Dolphin

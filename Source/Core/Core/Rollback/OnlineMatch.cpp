@@ -28,6 +28,7 @@
 #include "Common/FileUtil.h"
 #include "Common/HookableEvent.h"
 #include "Common/Logging/Log.h"
+#include "Common/StringUtil.h"
 #include "Common/Timer.h"
 #include "Core/Core.h"
 #include "Core/HW/CPU.h"
@@ -42,6 +43,7 @@
 #include "Core/Rollback/SessionPort.h"
 #include "Core/System.h"
 #include "Core/WiiRoot.h"
+#include "VideoCommon/OnScreenDisplay.h"
 
 namespace Rollback::OnlineMatch
 {
@@ -153,6 +155,12 @@ struct Match
   Clock::time_point room_lost_at{}, reopen_at{};
   std::chrono::seconds reopen_backoff{0};
   std::string home_code;
+  // A new room of its own, opened a moment after a leave (ReopenRoom): a quit that follows the
+  // leave at once (the app's Stop) never asks for its ticket.
+  std::optional<Clock::time_point> reopen_pending;
+  // A player on another port than 1 (it joined a friend's game, then went solo) has no room: the
+  // app hears so once, at the next boundary (after whatever the leave itself printed).
+  bool tell_no_room = false;
 
   // A joining player.
   std::unique_ptr<Download> download;
@@ -252,6 +260,14 @@ std::optional<int> NewRoundTrip(u32* last_sequence)
     return std::nullopt;
   *last_sequence = sequence;
   return round_trip_ms;
+}
+
+// A joining player's one line about its join: each replaces the last, and the join's end takes it
+// away (a "Joining..." line that waits as long as the join may take must not outlast it).
+void ShowJoinMessage(std::string message, u32 ms)
+{
+  if (std::ranges::all_of(message, Common::IsPrintableCharacter))
+    OSD::AddTypedMessage(OSD::MessageType::OrcaJoin, std::move(message), ms);
 }
 
 void StopEmulation(Core::System& system, const std::string& message)
@@ -555,9 +571,6 @@ void ResetDropIn(Match& match)
   match.store = MakeStore();
 }
 
-// The room once this player is solo again: a new one of its own while it plays port 1 (friends can
-// drop in on the ports after it), none on another port (drop-in hosts play port 1). Either way the
-// app can still send "join".
 // A room this player left on purpose (or for a friend's): whatever KeepRoomOpen knew of the old one
 // is over.
 void ForgetRoom(Match& match)
@@ -565,14 +578,25 @@ void ForgetRoom(Match& match)
   match.room_lost = false;
   match.reopen_backoff = {};
   match.home_code.clear();
+  match.reopen_pending.reset();
+  match.tell_no_room = false;
 }
 
+// How long after a leave the new room opens (KeepRoomOpen): the app's Stop sends "leave" and then
+// "quit" at once, and the quit should find no ticket request under way.
+constexpr std::chrono::seconds REOPEN_DELAY{1};
+
+// The room once this player is solo again: a new one of its own while it plays port 1 (friends can
+// drop in on the ports after it), none on another port (drop-in hosts play port 1: "no-room").
+// Either way the app can still send "join".
 void ReopenRoom(Match& match)
 {
   ForgetRoom(match);
   Orca::Online::ShutdownInBackground();
   if (match.local_seat == 0)
-    Orca::Online::StartRoom("", false);
+    match.reopen_pending = Clock::now() + REOPEN_DELAY;
+  else
+    match.tell_no_room = true;
 }
 
 // Host (port 1, not joining), at each boundary: its room ended without this player leaving it (the
@@ -586,6 +610,15 @@ void KeepRoomOpen(Match& match)
 {
   if (match.local_seat != 0)
     return;
+  // The room ReopenRoom asked for, once its moment comes.
+  if (match.reopen_pending)
+  {
+    if (Clock::now() < *match.reopen_pending)
+      return;
+    match.reopen_pending.reset();
+    Orca::Online::StartRoom("", false);
+    return;
+  }
   if (!Orca::Online::RoomEnded())
   {
     if (Orca::Online::InRoom())
@@ -612,6 +645,10 @@ void KeepRoomOpen(Match& match)
   if (code.empty())
     return;
   const auto now = Clock::now();
+  // Someone else holds that room (a friend hosting it, or another run of this game on the same
+  // account): never back into it, whatever ends the tries after this one.
+  if (Orca::Online::RoomTaken())
+    match.home_code.clear();
   if (!match.room_lost)
   {
     match.room_lost = true;
@@ -633,7 +670,7 @@ void KeepRoomOpen(Match& match)
   }
   if (now < match.reopen_at)
     return;
-  const bool held = !Orca::Online::RoomTaken() && now - match.room_lost_at < ROOM_HOLD;
+  const bool held = now - match.room_lost_at < ROOM_HOLD;
   const std::string reopen = held ? match.home_code : std::string();
   NOTICE_LOG_FMT(ROLLBACK, "Drop-in: reopening {} (the last ended: {}: {})",
                  reopen.empty() ? std::string("a new room") : "room " + reopen, code,
@@ -669,6 +706,8 @@ void BecomeSolo(Match& match, const char* why, const char* state, bool own_boot 
   match.leave_requested = false;
   match.leave_at = -1;
   match.last_percent = -1;
+  // Whatever the join last said ("Joining...") is over.
+  OSD::DiscardTypedMessage(OSD::MessageType::OrcaJoin);
   match.port->SetCatchingUp(false);
   ResetDropIn(match);
   ReopenRoom(match);
@@ -886,7 +925,8 @@ JoinPump PumpJoin(Match& match, std::string* last_status)
         match.host_here = true;
         match.host_seat = event.seat;
         match.host_name = event.name.empty() ? "your friend" : event.name;
-        Core::DisplayMessage(fmt::format("Joining {}'s game...", match.host_name), 60000);
+        ShowJoinMessage(fmt::format("Joining {}'s game...", match.host_name),
+                        static_cast<u32>(std::chrono::milliseconds(JOIN_LIMIT).count()));
       }
       else if (event.kind == Orca::Net::PeerEvent::Kind::Left && event.host)
       {
@@ -919,7 +959,8 @@ JoinPump PumpJoin(Match& match, std::string* last_status)
     {
       // Download is the first half of joining; catching up is the second.
       const int percent = match.download->percent / 2;
-      if (percent != match.last_percent)
+      // Only ever forward: a join's percent never goes back.
+      if (percent > match.last_percent)
       {
         match.last_percent = percent;
         Orca::Status::State(fmt::format("joining {}", percent));
@@ -1068,6 +1109,8 @@ Load LoadKeyframe(Core::System& system, Match& match, int* frame_out)
       std::make_unique<Orca::Net::Session>(config, *match.port, *Orca::Online::Transport());
   match.port->SetCatchingUp(true);
   match.running = frame - 1;
+  // The stats line's frame rate starts over: the frames up to the keyframe were never run here.
+  match.stats_frame = -1;
   *frame_out = frame;
   return Load::Done;
 }
@@ -1093,6 +1136,7 @@ std::optional<int> JoinHost(Core::System& system, Match& match)
       if (const auto code = Orca::Online::TakeJoinRequest(); code && *code != Orca::Online::Code())
       {
         NOTICE_LOG_FMT(ROLLBACK, "Drop-in: joining room {} instead", *code);
+        OSD::DiscardTypedMessage(OSD::MessageType::OrcaJoin);
         ResetDropIn(match);
         Orca::Online::ShutdownInBackground();
         Orca::Online::StartRoom(*code, true);
@@ -1137,6 +1181,16 @@ std::optional<int> JoinHost(Core::System& system, Match& match)
 // new one, so it can still invite.
 void Leave(Match& match)
 {
+  if (match.joining && match.session && match.session->CatchingUp())
+  {
+    // Still replaying the host's game: its controller never plugged in, so there is no unplug frame
+    // to agree on (the host just lets a seat still catching up go). Leaving the room is the leave:
+    // the host drops the seat when the room says it went.
+    NOTICE_LOG_FMT(ROLLBACK, "Drop-in: left while catching up, frame {}", match.running);
+    BecomeSolo(match, "left while catching up", nullptr);
+    Orca::Status::Event("left");
+    return;
+  }
   if (match.joining && match.session)
   {
     if (!match.leave_requested)
@@ -1457,6 +1511,15 @@ std::optional<int> OnBoundary(Core::System& system,
     }
   }
 
+  // Only once the room it left has finished leaving: its emptied mirror is the page's last word
+  // about it, and the page must not see that room again after "no-room".
+  if (match.tell_no_room && !Orca::Online::RoomsLeaving())
+  {
+    match.tell_no_room = false;
+    NOTICE_LOG_FMT(ROLLBACK, "Drop-in: no room of its own on port {}", match.local_seat + 1);
+    Orca::Status::State("no-room");
+  }
+
   // The in-game UX's frame hook: before this boundary's snapshot or keyframe, so what it writes is
   // in them, and on re-runs too.
   {
@@ -1535,7 +1598,8 @@ std::optional<int> OnBoundary(Core::System& system,
   if (!match.joining)
   {
     MaybeHashBootNand(system, match);
-    KeepRoomOpen(match);
+    if (!Stopping(system))
+      KeepRoomOpen(match);
     if (!Orca::Online::RoomEnded())
       HostEvents(system, match);
     if (!match.session)
@@ -1695,7 +1759,8 @@ std::optional<int> OnBoundary(Core::System& system,
         if (match.session->CatchingUp())
         {
           const int percent = 50 + std::clamp(50 - behind / 4, 0, 49);
-          if (percent != match.last_percent)
+          // The host's frame runs on too, so `behind` can grow back for a moment: never backwards.
+          if (percent > match.last_percent)
           {
             match.last_percent = percent;
             Orca::Status::State(fmt::format("joining {}", percent));
@@ -1711,9 +1776,9 @@ std::optional<int> OnBoundary(Core::System& system,
                          "since the keyframe was offered, {:.0f} ms since this Orca's first frame",
                          match.local_seat + 1, step.frame, catch_up, MsSince(match.offered_time),
                          MsSince(match.boot_time));
-          Core::DisplayMessage(fmt::format("Joined {}'s game on port {}", match.host_name,
-                                           match.local_seat + 1),
-                               4000);
+          ShowJoinMessage(
+              fmt::format("Joined {}'s game on port {}", match.host_name, match.local_seat + 1),
+              4000);
         }
         if (match.session->LeftDone() && step.kind == Orca::Net::StepKind::Run &&
             !match.session->Resimulating())
@@ -1792,6 +1857,8 @@ std::optional<int> OnBoundary(Core::System& system,
       RunSolo(match, local_pad);
       return rewound_to;
     }
+    WARN_LOG_FMT(ROLLBACK, "Online: session ended at frame {}: {}", match.running + 1,
+                 error.empty() ? (peer_silent ? "no word from the host" : "no error") : error);
     NOTICE_LOG_FMT(ROLLBACK, "Drop-in: session state at the end: {}", match.session->Describe());
     if (peer_silent)
     {

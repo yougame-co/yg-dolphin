@@ -7,13 +7,17 @@
 # 1. A friend joins a room nobody's game is in: it gives up within seconds (peer_left), plays on.
 # 2. The friend reaches a room before its host's game does: the host finds someone else hosting
 #    it, says so (orca error network) and opens a fresh room; the friend gives up (peer_left).
-# 3. The friend joins the host's fresh room: the host says "friend-joined" once it plugs in.
+# 3. The friend leaves while it catches up (the host's keyframe is 25 s old, from a prepare-join, so
+#    the friend replays 25 s of its game): it leaves at once ("left"), and the host hears a plain
+#    leave, not a stall. Then it joins the host's fresh room: "friend-joined" once it plugs in.
 # 4. The host's connection drops mid-match (the test-only "test-drop-room"): the host says so,
 #    reconnects to the same room (its player id comes back into its held seat), and the friend,
-#    whose host left, plays on ("host-left") and joins it again.
-# 5. A host under the app (Tools/orca/fake_bridge.py as its bridge): the page's lobby Leave is the
-#    app's "leave". The host leaves ("left"), the page is told the room is empty, then shown the
-#    host's new room.
+#    whose host left, plays on ("host-left", then "no-room": it is on port 2) and joins it again.
+#    Then the app's Stop on the host, "leave" and "quit" at once: the friend hears it within ~1 s.
+# 5. Both under the app (a Tools/orca/fake_bridge.py each), the friend joining from the app's invite:
+#    the host's page Leave is the app's "leave". The host leaves ("left"), its page is told the room
+#    is empty, then shown the host's new room. The friend ("host-left", then "no-room": port 2) has
+#    told its page the old room is empty before "no-room", and never shows it again after.
 # Each step waits for the lines it expects and fails on a timeout. Two Orca processes at most.
 import json
 import os
@@ -104,7 +108,7 @@ class Orca:
                 fail(f"{self.name}: '{line}' while waiting for '{want}'")
         fail(f"{self.name}: no '{want}' in {timeout} s")
 
-    def wait_log(self, pattern, timeout, after=0):
+    def wait_log(self, pattern, timeout, after=0, poll=0.1):
         """Waits for a line of the Dolphin log (stderr) matching `pattern`, past offset `after`."""
         end = time.time() + timeout
         while time.time() < end:
@@ -113,7 +117,7 @@ class Orca:
                 m = re.search(pattern, f.read())
             if m:
                 return m
-            time.sleep(0.1)
+            time.sleep(poll)
         fail(f"{self.name}: no log line like '{pattern}' in {timeout} s")
 
     def log_size(self):
@@ -186,7 +190,24 @@ log(f"the host now hosts {fresh}")
 friend.expect("orca error peer_left", 20, forbid=("orca error network", "orca error internal"))
 friend.expect("orca state playing", 20)
 
-# 3. The friend joins the host's fresh room; the host says so once it plugs in.
+# 3. A leave while catching up, then a join that plugs in.
+host.send("prepare-join")
+time.sleep(25)
+mark = friend.log_size()
+friend.send(f"join {fresh}")
+host.expect("orca state friend-joining", 60)
+# Catching up starts once the keyframe is loaded (the "joining" percent says 50 from the end of the
+# download until the last few seconds of catching up, so the log says when).
+friend.wait_log(r"Drop-in: loaded keyframe frame", 60, after=mark, poll=0.02)
+sent = time.time()
+friend.send("leave")
+friend.expect("orca state left", 5)
+log(f"left while catching up after {time.time() - sent:.2f} s")
+friend.wait_log(r"Drop-in: left while catching up", 5, after=mark)
+host.expect("orca state friend-left left", 10,
+            forbid=("orca error", "orca state friend-left stalled", "orca state friend-joined"))
+friend.expect("orca state no-room", 10)
+time.sleep(2)
 friend.send(f"join {fresh}")
 host.expect("orca state friend-joining", 60)
 friend.expect("orca state playing", 120)
@@ -205,6 +226,7 @@ again = host.wait_log(r"Drop-in: hosting room ([a-z0-9]+) again", 40, after=mark
 if again != fresh:
     fail(f"the host reopened {again}, not its room {fresh}")
 friend.expect("orca state host-left", 30, forbid=("orca error internal",))
+friend.expect("orca state no-room", 10, forbid=("orca error internal",))
 time.sleep(3)
 friend.send(f"join {fresh}")
 host.expect("orca state friend-joining", 60)
@@ -213,36 +235,77 @@ host.expect("orca state friend-joined", 60)
 time.sleep(10)
 for o in orcas:
     o.alive()
+sent = time.time()
+host.send("leave")
+host.send("quit")
+friend.expect("orca state host-left", 10, forbid=("orca error internal",))
+took = time.time() - sent
+log(f"the friend heard the stopping host go after {took:.2f} s")
+if took > 2.5:
+    fail(f"the stopping host's goodbye took {took:.1f} s to reach the friend")
+friend.expect("orca state no-room", 10, forbid=("orca error internal",))
+if host.proc.wait(timeout=20) != 0:
+    fail(f"the host exited with {host.proc.returncode}")
+friend.alive()
 for o in orcas:
     o.stop()
 orcas.clear()
 
-# 5. The page's Leave through the app's bridge. The fake bridge mints dev tickets for its own dev
-# game, so the friend uses that one too; it sends the Leave once, two seconds after the mirrored
-# room reads ready (the friend's Orca said hello).
+# 5. The page's Leave through the app's bridge. Each Orca has a fake bridge of its own, which mints
+# dev tickets for its own dev game (the same for both). The friend's names the host's room on its
+# hello, as an invite the player opened does; the host's sends the Leave once, eight seconds after
+# the mirrored room reads ready (the friend said hello), by when the friend has plugged in.
 paged = code("pge")
 bridge_log = os.path.join(WORK, "bridge.log")
-bridge = subprocess.Popen([sys.executable, os.path.join(HERE, "fake_bridge.py")], stdout=subprocess.PIPE,
-                          text=True, env=dict(os.environ, FAKE_ROOM=paged, FAKE_LOG=bridge_log))
+friend_bridge_log = os.path.join(WORK, "bridge-friend.log")
+bridges = []
+
+
+def start_bridge(log_path, **extra):
+    proc = subprocess.Popen([sys.executable, os.path.join(HERE, "fake_bridge.py")], stdout=subprocess.PIPE,
+                            text=True, env=dict(os.environ, FAKE_ROOM=paged, FAKE_LOG=log_path, **extra))
+    bridges.append(proc)
+    return proc.stdout.readline().strip()
+
+
+def mirrors(path):
+    if not os.path.exists(path):
+        return []
+    with open(path) as f:
+        return [dict(json.loads(l)["mpRoom"], t=json.loads(l)["t"]) for l in f if '"mpRoom"' in l]
+
+
 try:
-    port = bridge.stdout.readline().strip()
+    port = start_bridge(bridge_log, FAKE_LEAVE_AFTER="8")
     host = Orca("Host2", {"ORCA_ROOM": paged, "YOUGAME_BRIDGE": f"http://127.0.0.1:{port}",
                           "YOUGAME_TOKEN": "t0ken", "YOUGAME_GAME": "orca-test"})
     orcas.append(host)
     host.expect("orca caps", 30)
     host.send("caps join leave stats")
     host.expect("orca state playing", 90)
-    friend = Orca("Friend2", {"ORCA_TEST_DEV_GAME": "orca-bridge-test"})
+    end = time.time() + 20
+    while not any(r["code"] == paged for r in mirrors(bridge_log)) and time.time() < end:
+        time.sleep(0.2)
+    friend_port = start_bridge(friend_bridge_log, FAKE_NO_LEAVE="1")
+    friend = Orca("Friend2", {"YOUGAME_BRIDGE": f"http://127.0.0.1:{friend_port}",
+                              "YOUGAME_TOKEN": "t0ken", "YOUGAME_GAME": "orca-test"})
     orcas.append(friend)
     friend.expect("orca caps", 30)
     friend.send("caps join leave stats")
-    friend.expect("orca state playing", 90)
-    friend.send(f"join {paged}")
     host.expect("orca state friend-joining", 60)
+    friend.expect("orca state playing", 120)
     host.expect("orca state left", 30, forbid=("orca error",))
-    line = friend.expect("orca ", 30, forbid=("orca error internal",))
-    while not (line.startswith("orca state host-left") or line.startswith("orca error peer_left")):
-        line = friend.expect("orca ", 30, forbid=("orca error internal",))
+    friend.expect("orca state host-left", 30, forbid=("orca error",))
+    friend.expect("orca state no-room", 10, forbid=("orca error",))
+    no_room_at = time.time()
+    time.sleep(3)
+    friend_rooms = mirrors(friend_bridge_log)
+    shown = ", ".join(f'{r["code"]}:{len(r["players"])}@{r["t"] - no_room_at:+.2f}s' for r in friend_rooms)
+    log(f"friend's mirrors (time from no-room): {shown}")
+    if any(r["code"] == paged and r["players"] and r["t"] >= no_room_at for r in friend_rooms):
+        fail("the friend's page was shown the old room after no-room")
+    if not any(r["code"] == paged and not r["players"] and r["t"] < no_room_at for r in friend_rooms):
+        fail("the friend's page wasn't told the old room was empty before no-room")
     # The page ends on the host's new room: the old one emptied first (or, had the new room been
     # quicker, never mirrored again after it).
     end = time.time() + 20
@@ -253,15 +316,15 @@ try:
         if rooms and rooms[-1]["code"] != paged and rooms[-1]["players"]:
             break
         time.sleep(0.5)
-    mirrors = ", ".join(f'{r["code"]}:{len(r["players"])}' for r in rooms)
-    log(f"mirrors: {mirrors}")
+    shown = ", ".join(f'{r["code"]}:{len(r["players"])}' for r in rooms)
+    log(f"host's mirrors: {shown}")
     if not rooms or rooms[-1]["code"] == paged or not rooms[-1]["players"]:
-        fail(f"the page doesn't end on the host's new room: {mirrors}")
+        fail(f"the page doesn't end on the host's new room: {shown}")
     if not any(r["code"] == paged and len(r["players"]) >= 2 for r in rooms):
         fail("the page never saw the friend in the host's room")
     first_new = next(i for i, r in enumerate(rooms) if r["code"] != paged)
     if any(r["code"] == paged for r in rooms[first_new:]):
-        fail(f"the old room was mirrored after the new one: {mirrors}")
+        fail(f"the old room was mirrored after the new one: {shown}")
     if not any(r["code"] == paged and not r["players"] for r in rooms):
         log("(the new room's mirror went out before the old one's end)")
     for o in orcas:
@@ -269,7 +332,8 @@ try:
     for o in orcas:
         o.stop()
 finally:
-    bridge.kill()
+    for b in bridges:
+        b.kill()
 log("PASS")
 if os.environ.get("ORCA_TEST_KEEP") == "1":
     log(f"logs kept in {WORK}")

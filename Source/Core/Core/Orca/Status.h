@@ -8,7 +8,8 @@
 #include <string_view>
 
 // Machine-readable status for the YouGame desktop app, one line each on stdout in a session:
-//   orca state booting|lobby|playing|ended
+//   orca state booting|lobby|playing|ended, and drop-in's (ORCA.md "Drop-in"): joining <percent>,
+//   friend-joining, friend-joined, friend-left <why>, host-left, left, no-room
 //   orca error <code> <sentence for the player>
 // Codes: boot, cancelled (Orca.app's disc picker closed without a disc), disc_revision, profile,
 // settings, room_mismatch, room_full, kicked, network, peer_left, desync, internal.

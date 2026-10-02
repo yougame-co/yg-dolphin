@@ -29,6 +29,9 @@ struct Profile
   // The profile's name: the disc's game ID for a disc profile (RSBE01), the ORCA_PROFILE name for a
   // launcher profile (PPLUS32).
   std::string game_id;
+  // What players call it, for the window title (a launcher profile's game is the mod, not the disc
+  // it boots). Empty: the disc's own title.
+  std::string title;
   // The disc's revision (a launcher profile: the revision of the disc the launcher boots).
   u16 revision = 0;
   std::optional<u32> frame_hook;

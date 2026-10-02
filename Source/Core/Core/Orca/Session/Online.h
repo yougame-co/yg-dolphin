@@ -57,11 +57,16 @@ void DropPeer(int seat, const std::string& reason);
 // Whether a session error means the games went apart (inputs or a checksum that disagree, or a
 // correction that came too late to apply).
 bool IsDesync(const std::string& session_error);
+// Whether a session error is a rollback this machine couldn't make ("No snapshot to roll back",
+// "exceeds the limit"): an engine fault the player survives, reported in its own words.
+bool IsRollbackFailure(const std::string& session_error);
 // Host: every port name so far, to every player in the game (YouGameRoom::BroadcastNames).
 void BroadcastNames(const std::vector<Net::KeyframeInfo::Name>& names);
 // Leaves the room like Shutdown, but on a thread of its own: the goodbye and the socket's close
 // take up to a second or two, which the emulator thread must not wait out mid-game.
 void ShutdownInBackground();
+// Rooms ShutdownInBackground is still leaving (their page mirror may still post until then).
+bool RoomsLeaving();
 // Host: offer a joining seat the keyframe.
 void OfferKeyframe(int seat, const Net::KeyframeInfo& info);
 
@@ -97,7 +102,8 @@ void ReportPeerStalled(std::string_view sentence);
 // failure would.
 void TestDropRoom();
 
-// Leaves the room (reporting a running match void) and stops its thread. Call when emulation stops.
+// Leaves the room (reporting a running match void) and stops its thread, then waits (2 s at most)
+// for rooms ShutdownInBackground is still leaving. Call when emulation stops.
 void Shutdown();
 
 // The lobby compatibility key: players whose keys differ can't share a room. Built from the Orca

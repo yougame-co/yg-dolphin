@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdlib>
 #include <memory>
 #include <mutex>
@@ -37,6 +38,9 @@ namespace Orca::Online
 {
 namespace
 {
+// How long Shutdown waits for rooms still being left in the background (a goodbye, a close
+// handshake and the page's emptied room take about a second).
+constexpr auto TEARDOWN_WAIT = std::chrono::seconds(2);
 std::mutex s_mutex;
 // Shared so that a caller still holding the room (WaitForMatch, a status poll) keeps it alive
 // while Shutdown runs on another thread.
@@ -284,9 +288,12 @@ bool IsDesync(const std::string& session_error)
          session_error.find("changed its input") != std::string::npos ||
          session_error.find("arrived after") != std::string::npos ||
          session_error.find("history changed") != std::string::npos ||
-         session_error.starts_with("No local input") ||
-         // A rollback this machine couldn't make: the frames it already ran stay wrong.
-         session_error.starts_with("No snapshot to roll back") ||
+         session_error.starts_with("No local input");
+}
+
+bool IsRollbackFailure(const std::string& session_error)
+{
+  return session_error.starts_with("No snapshot to roll back") ||
          session_error.find("exceeds the limit") != std::string::npos;
 }
 
@@ -296,6 +303,30 @@ void BroadcastNames(const std::vector<Net::KeyframeInfo::Name>& names)
     room->BroadcastNames(names);
 }
 
+namespace
+{
+// Rooms being left in the background, until their goodbyes are out. Never destroyed: a teardown
+// still running when the process exits must not find these gone.
+struct Teardowns
+{
+  std::mutex mutex;
+  std::condition_variable done;
+  int running = 0;
+};
+Teardowns& TheTeardowns()
+{
+  static Teardowns* const teardowns = new Teardowns;
+  return *teardowns;
+}
+}  // namespace
+
+bool RoomsLeaving()
+{
+  Teardowns& teardowns = TheTeardowns();
+  std::lock_guard lock(teardowns.mutex);
+  return teardowns.running > 0;
+}
+
 void ShutdownInBackground()
 {
   std::shared_ptr<Net::YouGameRoom> room;
@@ -303,8 +334,20 @@ void ShutdownInBackground()
     std::lock_guard lock(s_mutex);
     room = std::move(s_room);
   }
-  if (room)
-    std::thread([room = std::move(room)] { room->Leave(); }).detach();
+  if (!room)
+    return;
+  Teardowns& teardowns = TheTeardowns();
+  {
+    std::lock_guard lock(teardowns.mutex);
+    ++teardowns.running;
+  }
+  std::thread([room = std::move(room), &teardowns]() mutable {
+    room->Leave();
+    room.reset();
+    std::lock_guard lock(teardowns.mutex);
+    --teardowns.running;
+    teardowns.done.notify_all();
+  }).detach();
 }
 
 void OfferKeyframe(int seat, const Net::KeyframeInfo& info)
@@ -373,6 +416,16 @@ bool ReportSessionEnd(const std::string& session_error)
     Status::Report("desync", "Your games went out of sync, so the match ended");
     return true;
   }
+  // A rollback this machine couldn't make (an engine fault, not the games going apart): it leaves
+  // the match and plays on from where it is. Said in its own words, so a log tells it from a
+  // desync.
+  if (IsRollbackFailure(session_error))
+  {
+    Status::Report(
+        "network",
+        fmt::format("Your game couldn't roll back ({}), so you left the match", session_error));
+    return true;
+  }
   // The session ends when the room does: the room says why, unless this player left. The state
   // first: once Ended, the code is final.
   if (room && room->GetState() == Net::RoomState::Ended)
@@ -417,5 +470,12 @@ void Shutdown()
   }
   if (room)
     room->Leave();
+  // Rooms left in the background just before (a leave, then a quit at once) say their goodbyes
+  // too, so a friend hears at once that this player went rather than after its silence limit.
+  // Bounded: a teardown that hangs doesn't hold the exit.
+  Teardowns& teardowns = TheTeardowns();
+  std::unique_lock lock(teardowns.mutex);
+  if (!teardowns.done.wait_for(lock, TEARDOWN_WAIT, [&] { return teardowns.running == 0; }))
+    WARN_LOG_FMT(NETPLAY, "Orca: {} room(s) still leaving at shutdown", teardowns.running);
 }
 }  // namespace Orca::Online

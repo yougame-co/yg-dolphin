@@ -26,6 +26,8 @@ SLUG = os.environ.get("FAKE_SLUG", "orca-test"); LOG = os.environ.get("FAKE_LOG"
 # tickets, as the app gets them. FAKE_NO_LEAVE=1: the page never sends Leave.
 COOKIE = os.environ.get("FAKE_COOKIE", ""); TICKET_SLUG = os.environ.get("FAKE_TICKET_SLUG", "")
 SITE = os.environ.get("FAKE_SITE", "https://yougame.co"); NO_LEAVE = os.environ.get("FAKE_NO_LEAVE") == "1"
+# FAKE_LEAVE_AFTER: seconds from the room reading ready to the page's Leave (default 2).
+LEAVE_AFTER = float(os.environ.get("FAKE_LEAVE_AFTER", "2"))
 
 def pad_script():
     path = os.environ.get("FAKE_PAD_SCRIPT")
@@ -61,7 +63,8 @@ state = {"leave_at": None, "rooms": 0, "left": False}
 lock = threading.Lock()
 
 def log(obj):
-    with open(LOG, "a") as f: f.write(json.dumps(obj) + "\n")
+    # "t": when the bridge took it (time.time()), so a test can order it against Orca's output.
+    with open(LOG, "a") as f: f.write(json.dumps(dict(obj, t=time.time())) + "\n")
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
@@ -101,7 +104,7 @@ class H(BaseHTTPRequestHandler):
             with lock:
                 state["rooms"] += 1
                 if msg.get("ready") and state["leave_at"] is None and not NO_LEAVE:
-                    state["leave_at"] = time.time() + 2
+                    state["leave_at"] = time.time() + LEAVE_AFTER
             return self.reply(200, {"ok": True, "result": {}})
         return self.reply(200, {"ok": False, "error": "unknown type " + str(t)})
     def controllers(self):
