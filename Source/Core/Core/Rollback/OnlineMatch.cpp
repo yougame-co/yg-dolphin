@@ -277,10 +277,12 @@ void StartKeyframe(Core::System& system, Match& match, int frame)
         raw->error = "reading the NAND clone failed";
       File::DeleteDirRecursively(clone);
     }
-    // What the joiner's own boot writes travels as a hash.
+    // What the joiner's own boot writes travels as a hash: the boot's scratch files in /tmp only.
+    // A save the host's boot made can depend on what the host pressed (Project+ writes Brawl's
+    // saves before frame 600 when the player presses on), so saves always travel.
     for (Orca::Net::NandEntry& entry : entries)
     {
-      if (entry.directory)
+      if (entry.directory || !entry.path.starts_with("tmp/"))
         continue;
       const auto it = boot.find(entry.path);
       const u64 hash = Orca::Net::NandHash(entry.data);

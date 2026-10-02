@@ -114,9 +114,10 @@ host has played.
      (device state and MEM1/MEM2, the same bytes a rollback snapshot holds).
    - It takes the session NAND as a copy-on-write `clonefile` (instant on APFS; elsewhere read at
      the boundary). The NAND travels because rollback snapshots keep only a journal mark.
-   - NAND files the game's boot writes whatever the player does (`BootNandFrame` in the profile:
-     Brawl's 38.7 MB of `/tmp` packs by frame 1800, byte-identical with or without input) travel
-     as XXH3 hashes only. The host hashes its NAND at that frame. The joiner runs its own boot to
+   - The NAND's `/tmp` files that the game's boot writes whatever the player does (`BootNandFrame`
+     in the profile) travel as XXH3 hashes only. Brawl writes 38.7 MB of packs by frame 1800 and
+     Project+ 2.3 MB by frame 300, byte-identical with or without input. Saves always travel:
+     Project+'s boot writes Brawl's saves early, and only when the player presses on. The host hashes its NAND at that frame. The joiner runs its own boot to
      that frame, unthrottled and unseen, while it downloads, then fills those files in from its
      own NAND, refusing the keyframe if one is missing or differs.
    - A thread packs everything, compresses it with zstd level 3 (long-distance matching, 128 MB
@@ -195,9 +196,18 @@ local keyframe folder.
   should come from history only.
 - A player dropped abruptly could already have its last inputs confirmed by another player but
   not by the host.
-- Tested against prod rooms with a local keyframe folder. The YouGame endpoint (below) is
-  exercised against `Tools/orca/fake_keyframes.py`; a prod run needs a signed-in player on a live
-  Orca listing (`Tools/orca/fake_bridge.py` with `FAKE_COOKIE` and `FAKE_TICKET_SLUG`).
+- Prod end to end (2026-10-01): two Orca processes on one Mac, each behind
+  `Tools/orca/fake_bridge.py` minting real tickets (`FAKE_COOKIE`, `FAKE_TICKET_SLUG`) for a
+  private test listing, through YouGame's keyframe store.
+  - The host played solo for a minute; a friend joined, played 3 minutes (183 checksums matched)
+    and left. A second friend joined (70 checksums) and left.
+  - Keyframes were 25.8 MB and 30.2 MB, uploaded in 2.0 and 3.4 s and downloaded in 2.3 and
+    1.8 s.
+  - Joins took 5.7 and 7.2 s from the friend's first frame to plugged in. That is about 2.4-3.9 s
+    waiting for the keyframe (capture, compress 0.2-0.3 s, upload, offer), the download, and about
+    1 s of catch-up.
+  - Every keyframe was gone afterwards (404 `gone`).
+- Project+ joins work the same way (local store: 23.2 MB keyframe, 32 checksums).
 - Desktop only: the NAND capture is an APFS clone on macOS and a synchronous read elsewhere
   (about 55 MB).
 
