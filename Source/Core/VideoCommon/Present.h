@@ -176,6 +176,10 @@ private:
 
   std::unique_ptr<VideoCommon::PostProcessing> m_post_processor;
   std::unique_ptr<VideoCommon::OnScreenUI> m_onscreen_ui;
+  // Orca tests (ORCA_TEST_PRESENT=WxH, headless only): presents go to this image, the OSD and
+  // Orca's overlay on it, and screenshots and frame dumps take it instead of the bare XFB.
+  std::unique_ptr<AbstractTexture> m_test_target;
+  std::unique_ptr<AbstractFramebuffer> m_test_framebuffer;
 
   u64 m_frame_count = 0;
   u64 m_present_count = 0;
