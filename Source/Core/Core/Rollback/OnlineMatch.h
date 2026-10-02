@@ -26,10 +26,12 @@ namespace Rollback::OnlineMatch
 // host's keyframe (or emulation stops). `local_pad(seat)` gives this player's pad for the given
 // seat. Returns the frame the state was rewound to here (a rollback, or a joiner's keyframe): the
 // state is now the start of that frame.
-// `on_frame(frame, resimulating, ports)` runs first at every boundary (Orca::Events::NotifyFrame),
-// before anything is saved there; `ports` are the controllers plugged in at that frame.
+// `on_frame(frame, resimulating, ports, alone)` runs first at every boundary
+// (Orca::Events::NotifyFrame), before anything is saved there; `ports` are the controllers plugged
+// in at that frame; `alone`: this game plays alone with nothing of drop-in under way (as the last
+// boundary left it: SoloPauseAllowed's state; false on re-runs).
 using FrameHook = std::function<void(int frame, bool resimulating,
-                                     const std::vector<Orca::Events::PortInfo>& ports)>;
+                                     const std::vector<Orca::Events::PortInfo>& ports, bool alone)>;
 std::optional<int> OnBoundary(Core::System& system,
                               const std::function<Orca::Net::Pad(int local_seat)>& local_pad,
                               const FrameHook& on_frame);

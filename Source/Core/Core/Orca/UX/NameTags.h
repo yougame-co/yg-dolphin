@@ -66,6 +66,23 @@ public:
   virtual void Write32(u32 address, u32 value) = 0;
 };
 
+// The CPU thread's emulated memory (at a frame boundary, through the guard).
+class GuardMemory final : public GuestMemory
+{
+public:
+  explicit GuardMemory(const Core::CPUThreadGuard& guard) : m_guard(guard) {}
+  bool Valid(u32 address) const override;
+  u32 Read32(u32 address) const override;
+  u16 Read16(u32 address) const override;
+  u8 Read8(u32 address) const override;
+  void Write8(u32 address, u8 value) override;
+  void Write16(u32 address, u16 value) override;
+  void Write32(u32 address, u32 value) override;
+
+private:
+  const Core::CPUThreadGuard& m_guard;
+};
+
 // One frame boundary's writes for these ports (the plug-in list in effect). Returns how many ports
 // were given a tag.
 int ApplyNameTags(GuestMemory& memory, const std::vector<Events::PortInfo>& ports);

@@ -563,6 +563,8 @@ void DropFriends(Match& match, const std::string& reason, bool announce = true)
 
 void GoSolo(Match& match, const char* why, const char* state = "playing")
 {
+  // The frames the UX's readers saw with friends ran on guessed inputs too: they start over.
+  Orca::Events::NoteResync();
   match.log = match.session->TakeLog(&match.log_base);
   const std::vector<Pad> pending = match.session->PendingLocal();
   match.queued_local.assign(pending.begin(), pending.end());
@@ -734,6 +736,7 @@ void KeepRoomOpen(Match& match)
 // keyframe was ever loaded, so this is its own game, played on port 1.
 void BecomeSolo(Match& match, const char* why, const char* state, bool own_boot = false)
 {
+  Orca::Events::NoteResync();
   if (match.session)
   {
     GoSolo(match, why, nullptr);
@@ -1132,6 +1135,8 @@ Load LoadKeyframe(Core::System& system, Match& match, int* frame_out)
   }
   match.load_ms = MsSince(load_start);
   match.loaded_time = Clock::now();
+  // This machine's game is now the host's: the UX's readers start over from it.
+  Orca::Events::NoteResync();
   if (match.store)
     match.store->Delete(download->info.id);
   NOTICE_LOG_FMT(ROLLBACK,
@@ -1580,7 +1585,7 @@ std::optional<int> Boundary(Core::System& system,
     const int frame = match.running + 1;
     const bool resimulating = match.session && match.session->Resimulating();
     const std::vector<Orca::Events::PortInfo> ports = PortsAt(match, frame);
-    on_frame(frame, resimulating, ports);
+    on_frame(frame, resimulating, ports, !resimulating && SoloIdle(match));
     if (!resimulating && ports != match.told_ports)
     {
       match.told_ports = ports;
@@ -1794,7 +1799,7 @@ std::optional<int> Boundary(Core::System& system,
       // The loaded snapshot holds the hook's writes from that frame's first run, made with the ports
       // known then; a rollback can be caused by exactly those ports changing (a seat unplugged in the
       // past). Run it again for the frame landed on, whichever snapshot each machine had.
-      on_frame(step.frame, true, PortsAt(match, step.frame));
+      on_frame(step.frame, true, PortsAt(match, step.frame), false);
     }
     if (step.kind == Orca::Net::StepKind::Run || step.kind == Orca::Net::StepKind::Rollback)
     {

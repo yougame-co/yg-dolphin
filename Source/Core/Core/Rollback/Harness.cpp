@@ -111,8 +111,8 @@ const std::vector<int> s_nand_hashes_at = [] {
 const int s_keyframe_test = EnvInt("YG_KEYFRAME_TEST", -1);
 constexpr int KEYFRAME_TEST_FRAMES = 30;
 // Visual checks: dump every presented frame (Dolphin's frame dump; pass
-// -C GFX.Settings.DumpFramesAsImages=True for images) from this first-pass frame up to the other.
-// Re-run frames present nothing, so a rollback run's dumps pair 1:1 with a plain run's.
+// -C Graphics.Settings.DumpFramesAsImages=True for images) from this first-pass frame up to the
+// other. Re-run frames present nothing, so a rollback run's dumps pair 1:1 with a plain run's.
 const int s_dump_frames_from = EnvInt("YG_DUMP_FRAMES_FROM", -1);
 const int s_dump_frames_to = EnvInt("YG_DUMP_FRAMES_TO", -1);
 
@@ -974,7 +974,8 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
         ports.push_back({0, "", false});
       return ports;
     }();
-    Orca::Events::NotifyFrame(guard, frame_here + 1, !first_pass_here, s_test_ports);
+    Orca::Events::NotifyFrame(guard, frame_here + 1, !first_pass_here, s_test_ports,
+                              first_pass_here);
   }
   if (first_pass_here)
     Diag::OnFirstPassBoundary(system, frame_here);

@@ -6,6 +6,11 @@
 # another module that later occupies the memory. Never a `*` line: Project+ owns the game's data
 # (the one data group below sets a default once, then leaves the words to the game).
 # This file is hashed into the lobby key.
+#
+# Groups: the boot's save prompt skipped; the main menu's Play Online, the game's own ONLINE page
+# with no connection and every way on from it to the local Versus character select (ORCA.md
+# "Online menu"; Orca's texture pack relabels With Anyone CASUAL / RANKED, UX/MenuText.h drops
+# "(Discontinued)"); the rules' items off by default.
 
 # muBootNandTask (Brawl's sora_menu_boot, loaded at 0x811A6000 on the boot scene; process
 # 0x811A6300, state at +0x78), which Project+ loads unchanged at the same address (the six original
@@ -21,6 +26,71 @@
 811A643C 4182001C 38000037    # li    r0, 55
 811A6440 7C030378 90030078    # stw   r0, 0x78(r3)
 811A6444 4AF193ED 48001204    # b     0x811A7648 (the process's end)
+
+# The main menu's Play Online (RSBE01.patches describes these groups for Brawl): the game's own
+# ONLINE page with no connection, and every way on from it to the local Versus character select.
+# Project+ replaces sora_menu_main with its own build of the module (/Project+/pf/module), loaded at
+# 0x81164C00, whose code sits at the same offsets as Brawl's: every address below is Brawl's
+# + 0x1480 (each original word read in Project+'s RAM on its main menu, 2026-10-02). Project+'s
+# button already says PLAY ONLINE and its pages ONLINE; without these groups A on it showed
+# "There is no save data. Unable to access Wiimmfi." (the connection window's save check).
+#
+# muProcTop's update: A on Play Online enters its page like every other button, never creating the
+# connection window. Two copies of the press check.
+81179ED8 A01D0042 A01D0042    # lhz    r0, 0x42(r29) (the cursor; guard)
+81179EDC 28000002 28000002    # cmplwi r0, 2 (guard)
+81179EE0 4082007C 4800007C    # bne +0x7C -> b +0x7C
+
+8117A0B0 A01D0042 A01D0042    # lhz    r0, 0x42(r29) (guard)
+8117A0B4 28000002 28000002    # cmplwi r0, 2 (guard)
+8117A0B8 4082007C 4800007C    # bne +0x7C -> b +0x7C
+
+# muProcWifi (the ONLINE page): B goes back to the top page as the game does once its "Disconnect
+# from Wiimmfi?" window returns, with no window. Two copies.
+8117B3C8 4AEB1C51 7FA3EB78    # mr   r3, r29
+8117B3CC 3CA0811A 38800000    # li   r4, 0
+8117B3D0 3CC0811A 4B52A689    # bl   0x806A5A58 (the back animation)
+8117B3D4 80630004 38000000    # li   r0, 0
+8117B3D8 38A550EC 901D0634    # stw  r0, 0x634(r29) (next proc: the top page)
+8117B3DC 38C6511C 38000003    # li   r0, 3
+8117B3E0 38800004 901D0664    # stw  r0, 0x664(r29) (sub-state)
+8117B3E4 38E00000 38600001    # li   r3, 1
+8117B3E8 4B275B5D 4800026C    # b    0x8117B654 (the function's end)
+
+8117B5C8 4AEB1A51 7FA3EB78    # mr   r3, r29
+8117B5CC 3CA0811A 38800000    # li   r4, 0
+8117B5D0 3CC0811A 4B52A489    # bl   0x806A5A58
+8117B5D4 80630004 38000000    # li   r0, 0
+8117B5D8 38A550EC 901D0634    # stw  r0, 0x634(r29)
+8117B5DC 38C6511C 38000003    # li   r0, 3
+8117B5E0 38800004 901D0664    # stw  r0, 0x664(r29)
+8117B5E4 38E00000 38600001    # li   r3, 1
+8117B5E8 4B27595D 4800006C    # b    0x8117B654
+
+# The ONLINE page's Options and With Anyone's Spectator never show (isEnableButton is always no).
+8117AE84 38600020 38600020    # li r3, 0x20 (guard)
+8117AE88 4AFD5055 38600000    # bl isEnableButton -> li r3, 0
+8117AE8C 28030001 28030001    # (guard)
+8117AE90 4082000C 4082000C    # (guard)
+8117AE94 38000001 38000001    # (guard)
+8117AE98 48000018 48000018    # (guard)
+8117AE9C 38600040 38600040    # li r3, 0x40 (guard)
+8117AEA0 4AFD503D 38600000    # bl isEnableButton -> li r3, 0
+811931FC 38600010 38600010    # li r3, 0x10 (guard)
+81193200 4AFBCCDD 38600000    # bl isEnableButton -> li r3, 0
+81193204 7C7F1B78 7C7F1B78    # mr r31, r3 (guard)
+
+# sqMenuMain::setNext's table in Brawl's sora_scene, which Project+ does not replace (the same
+# words as in Brawl): every online sequence (codes 24-27, 29, 30, 31) becomes sqVsMelee's, Project+'s
+# local VERSUS character select. Code 28 is a guard.
+80701A04 806DC8C8 806DC618    # code 24 (sqNetFriendList)
+80701A08 806DC8C8 806DC618    # code 25
+80701A0C 806DC8C8 806DC618    # code 26
+80701A10 806DC8C8 806DC618    # code 27
+80701A14 806DC940 806DC940    # code 28 (guard)
+80701A18 806DC8E0 806DC618    # code 29 (sqNetAnyWatch)
+80701A1C 806DC8F8 806DC618    # code 30 (sqNetAnyOkiraku)
+80701A20 806DC910 806DC618    # code 31 (sqNetAnyTeamMelee)
 
 # The rules menu's item default, as RSBE01.patches sets it for Brawl (which describes these four
 # words of Brawl's gmGlobalRecord menu data): Project+ keeps Brawl's record and its Item Switch page

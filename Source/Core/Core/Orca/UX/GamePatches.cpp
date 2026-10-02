@@ -169,6 +169,13 @@ void ApplyGamePatches(const Core::CPUThreadGuard& guard)
     }
     if (!GroupApplies(group, now))
       continue;
+    // A guarded group lands once per load of its module, and again on a re-run that crosses that
+    // load (Tools/orca/online-menu.py checks where).
+    if (group[0].original)
+    {
+      INFO_LOG_FMT(ROLLBACK, "Orca: patch group {:08x} ({} words) landed", group[0].address,
+                   group.size());
+    }
     for (size_t i = 0; i < group.size(); ++i)
     {
       if (now[i] == group[i].value)

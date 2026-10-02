@@ -17,6 +17,7 @@
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
 #include "Core/ConfigManager.h"
+#include "Core/Orca/Profile.h"
 #include "Core/System.h"
 #include "VideoCommon/Assets/DirectFilesystemAssetLibrary.h"
 #include "VideoCommon/OnScreenDisplay.h"
@@ -83,13 +84,31 @@ void HiresTexture::Update()
     return;
   }
 
-  const std::set<std::string> texture_directories = GetTextureDirectoriesForFirstMatchingGameId(
-      File::GetUserPath(D_HIRESTEXTURES_IDX), SConfig::GetInstance().GetGameIDsForTextures());
+  const std::vector<std::string> game_ids = SConfig::GetInstance().GetGameIDsForTextures();
+  const std::set<std::string> user_directories =
+      GetTextureDirectoriesForFirstMatchingGameId(File::GetUserPath(D_HIRESTEXTURES_IDX), game_ids);
+  std::vector<std::string> texture_directories(user_directories.begin(), user_directories.end());
+  // Orca: a session also loads Orca's own pack (Data/Sys/Orca/Textures/<game ID>, the Online
+  // menu's labels; ORCA.md "Online menu"), after the player's: the first file of a name wins, so a
+  // player's own pack is never shadowed by ours. Replacing textures only changes what is drawn,
+  // never emulated memory. Ours is always preloaded (a few small labels), so the game's own
+  // label never shows for a frame while ours loads; the player's follows the player's setting.
+  const size_t orca_pack_from = texture_directories.size();
+  if (Orca::SessionActive())
+  {
+    for (const std::string& directory : GetTextureDirectoriesForFirstMatchingGameId(
+             File::GetSysDirectory() + "Orca/Textures/", game_ids))
+    {
+      texture_directories.push_back(directory);
+    }
+  }
 
   constexpr auto extensions = std::to_array<std::string_view>({".png", ".dds"});
 
-  for (const auto& texture_directory : texture_directories)
+  for (size_t directory_index = 0; directory_index < texture_directories.size(); ++directory_index)
   {
+    const std::string& texture_directory = texture_directories[directory_index];
+    const bool preload = g_ActiveConfig.bCacheHiresTextures || directory_index >= orca_pack_from;
     // Watch this directory for any texture reloads
     s_file_library->Watch(texture_directory);
 
@@ -122,7 +141,7 @@ void HiresTexture::Update()
           s_file_library->SetAssetIDMapData(filename, std::map<std::string, std::filesystem::path>{
                                                           {"texture", StringToPath(path)}});
 
-          if (g_ActiveConfig.bCacheHiresTextures)
+          if (preload)
           {
             auto hires_texture =
                 std::make_shared<HiresTexture>(has_arbitrary_mipmaps, std::move(filename));
@@ -155,7 +174,12 @@ void HiresTexture::Update()
     message = fmt::format("Found '{}' custom textures for '{}'",
                           s_hires_texture_id_to_arbmipmap.size(), game_id_display);
   }
-  OSD::AddMessage(message, 10000);
+  // Orca: a session's top left is the online overlay's (the connection circle and ping); Orca's
+  // own pack is always there, so the count says nothing to the player.
+  if (Orca::SessionActive())
+    INFO_LOG_FMT(VIDEO, "{}", message);
+  else
+    OSD::AddMessage(message, 10000);
 }
 
 void HiresTexture::Clear()

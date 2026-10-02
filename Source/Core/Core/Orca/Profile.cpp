@@ -157,6 +157,13 @@ void ForEachUniversalSetting(F&& f)
   f(Config::GFX_HACK_EFB_EMULATE_FORMAT_CHANGES, false);
   f(Config::GFX_PERF_QUERIES_ENABLE, false);
   f(Config::GFX_MODS_ENABLE, false);
+  // Texture replacement, for Orca's own pack (the Online menu's labels, Data/Sys/Orca/Textures;
+  // HiresTexture::Update loads it after the player's own pack in a session). It only changes what
+  // is drawn: the texture cache hashes RAM and swaps the host texture, and nothing it draws reaches
+  // RAM (above). Not preloaded (GFX_CACHE_HIRES_TEXTURES stays the player's): that would load a
+  // player's whole pack into memory, and Orca's few small labels show from their first frame
+  // without it.
+  f(Config::GFX_HIRES_TEXTURES, true);
 }
 
 class ForcedConfigLoader final : public Config::ConfigLayerLoader
