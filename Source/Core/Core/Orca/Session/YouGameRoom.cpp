@@ -1762,7 +1762,9 @@ struct YouGameRoom::Impl
       {
         WARN_LOG_FMT(NETPLAY, "Orca room: {} computes floating point differently ({}, here {})", id,
                      their_platform, options.platform);
-        if (joining)
+        // Only the host's hello: another joiner of the wrong class is refused by the host, and must
+        // not take this one, who plays the host's game, out of it.
+        if (joining && id == host)
           End("This game can't be played between your computers yet", "platform_mismatch");
         return;
       }
@@ -1770,7 +1772,7 @@ struct YouGameRoom::Impl
       {
         // Not a player of this game; a joiner can't play it at all.
         WARN_LOG_FMT(NETPLAY, "Orca room: {} runs a different Orca build or setup", id);
-        if (joining)
+        if (joining && id == host)
           End("Your friend is running a different Orca build or setup", "room_mismatch");
         return;
       }
