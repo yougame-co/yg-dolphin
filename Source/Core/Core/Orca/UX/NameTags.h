@@ -47,7 +47,9 @@ constexpr int TAG_SLOTS = 120;
 
 // A YouGame username as a Brawl tag: ASCII letters uppercased, digits kept, '-', '.', '!' and '?'
 // kept, '_' and spaces as '-', anything else dropped; at most 5 characters. Pure and the same on
-// every machine (no locale). Empty when nothing usable is left.
+// every machine (no locale). Empty when nothing usable is left. Any bytes are fine (the session's
+// names are printable UTF-8 up to 64 bytes). Nothing here reads PortInfo.remote, which differs per
+// machine: only the port number and the name decide what is written.
 std::u16string BrawlTag(std::string_view username);
 
 // Emulated memory as the writer needs it (the tests give it a map).

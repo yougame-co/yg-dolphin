@@ -43,9 +43,10 @@ void Init()
     if (s_late >= 0 && !resimulating && frame < s_late)
     {
       std::vector<Orca::Events::PortInfo> early = ports;
+      // PortInfo.remote differs per machine: the friend is whoever is not on port 1.
       for (Orca::Events::PortInfo& p : early)
       {
-        if (p.remote)
+        if (p.port != 0)
           p.name.clear();
       }
       WriteNameTags(guard, early);

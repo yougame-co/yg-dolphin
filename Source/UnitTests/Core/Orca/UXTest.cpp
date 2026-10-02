@@ -623,6 +623,23 @@ TEST(OrcaUXNameTags, UsernamesBecomeBrawlTags)
   EXPECT_EQ(BrawlTag("j\xc3\xa9r\xc3\xb4me"), u"JRME");  // non-ASCII dropped, never transliterated
   EXPECT_EQ(BrawlTag("@#$"), u"");
   EXPECT_EQ(BrawlTag(""), u"");
+  // The session's longest name (64 bytes of UTF-8): five characters, from the ASCII ones.
+  EXPECT_EQ(BrawlTag("\xe5\xb0\x8f\xe6\x98\x8e" + std::string(58, 'q')), u"QQQQQ");
+  EXPECT_EQ(BrawlTag(std::string(64, '\xff')), u"");
+}
+
+TEST(OrcaUXNameTags, TheRemoteFlagNeverChangesWhatIsWritten)
+{
+  // Each machine sees the other as remote: the bytes must be the same either way.
+  FakeBrawl a, b;
+  for (FakeBrawl* m : {&a, &b})
+  {
+    m->Join(0);
+    m->Join(1);
+  }
+  ApplyNameTags(a, {{0, "sandbox-ada", false}, {1, "sandbox-bo", true}});
+  ApplyNameTags(b, {{0, "sandbox-ada", true}, {1, "sandbox-bo", false}});
+  EXPECT_EQ(a.bytes, b.bytes);
 }
 
 TEST(OrcaUXNameTags, JoinedPortsGetTheirTagOnTheCharacterSelect)
