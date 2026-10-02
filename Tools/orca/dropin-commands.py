@@ -5,7 +5,8 @@
 #   Tools/orca/dropin-commands.py <dolphin-emu-nogui> <disc> [--pplus <launcher.dol>]
 #
 # 1. Host and Friend each boot their own game, solo, in rooms of their own.
-# 2. Friend sends "join <host's room>": it drops into the host's game during play.
+# 2. Friend starts and sends "join <host's room>" before the caps handshake: it drops into the
+#    host's game once caps turn join on.
 # 3. Friend sends "leave": unplugged at an agreed frame, it plays on solo ("left").
 # 4. Friend joins again; then the host sends "leave": Friend sees "host-left" and plays on.
 # Each step waits for the states it expects and fails on a timeout. Two Orca processes at most.
@@ -134,17 +135,17 @@ host = Orca("Host", {"ORCA_ROOM": ROOM})
 orcas.append(host)
 host.expect("orca caps", 30)
 host.send("caps join leave stats")
+host.expect("orca state playing", 90)
+time.sleep(30)
+
+# 2. A join sent at once, before the caps handshake (as the app does for an invite it opened): Orca
+# holds it until "caps" turns join on, then joins.
 friend = Orca("Friend", {})
 orcas.append(friend)
+friend.send(f"join {ROOM}")
 friend.expect("orca caps", 30)
 friend.send("caps join leave stats")
-host.expect("orca state playing", 90)
-friend.expect("orca state playing", 90)
-time.sleep(40)
-
-# 2. A join during play.
-friend.send(f"join {ROOM}")
-friend.expect("orca state joining", 20)
+friend.expect("orca state joining", 60)
 host.expect("orca state friend-joining", 60)
 friend.expect("orca state playing", 120)
 log(f"joined; host stats {last_stats(host)}")

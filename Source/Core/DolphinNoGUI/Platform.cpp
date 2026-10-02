@@ -225,17 +225,17 @@ void Platform::ProcessEmbedCommands()
                          std::all_of(code.begin(), code.end(), [](char c) {
                            return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
                          });
-      if (!Orca::Status::Cap("join") || !valid)
+      // Before the app's "caps" line arrives (it answers "orca caps", printed at the first frame), a
+      // join waits for it: the emulator thread takes it once "join" is on.
+      if (!valid)
         Embed::Out("unsupported join");
       else
         Orca::Online::RequestJoin(code);
     }
     else if (cmd == "leave")
     {
-      if (!Orca::Status::Cap("leave"))
-        Embed::Out("unsupported leave");
-      else
-        Orca::Online::RequestLeave();
+      // As join: taken once the app's "caps" line turns "leave" on.
+      Orca::Online::RequestLeave();
     }
     else if (cmd == "ping")
     {

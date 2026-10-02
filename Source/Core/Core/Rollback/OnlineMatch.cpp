@@ -1020,6 +1020,17 @@ void JoinInPlay(Match& match, const std::string& code)
   match.leave_requested = false;
   match.last_percent = -1;
   match.join_status.clear();
+  // Too early in this game's own boot to have written what the host's keyframe only names (the
+  // profile's boot_nand_frame): run the boot there first, unthrottled and unseen, as a launch join
+  // does, then wait for the keyframe.
+  if (const Orca::Profile* profile = Orca::ActiveProfile();
+      profile && profile->boot_nand_frame &&
+      match.running + 1 < static_cast<int>(*profile->boot_nand_frame))
+  {
+    match.join_in_play = false;
+    match.boot_ahead_to = static_cast<int>(*profile->boot_nand_frame);
+    match.port->SetCatchingUp(true);
+  }
   Orca::Status::State("joining 0");
 }
 
@@ -1027,6 +1038,7 @@ void JoinInPlay(Match& match, const std::string& code)
 // during a launch join.
 void TakeCommands(Match& match)
 {
+  // A command sent before the app's "caps" line waits here (queued in Online) until it arrives.
   if (!Orca::Status::Cap("join") && !Orca::Status::Cap("leave"))
     return;
   if (match.session &&
@@ -1036,10 +1048,13 @@ void TakeCommands(Match& match)
   }
   if (match.joining && !match.join_in_play && !match.session)
     return;
-  if (Orca::Online::TakeLeaveRequest())
+  if (Orca::Status::Cap("leave") && Orca::Online::TakeLeaveRequest())
     Leave(match);
-  if (const auto code = Orca::Online::TakeJoinRequest(); code && Orca::Status::Cap("join"))
-    JoinInPlay(match, *code);
+  if (Orca::Status::Cap("join"))
+  {
+    if (const auto code = Orca::Online::TakeJoinRequest())
+      JoinInPlay(match, *code);
+  }
 }
 
 // ---- Ports, for the in-game UX ----
