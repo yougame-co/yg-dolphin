@@ -38,6 +38,40 @@
 806CA1F8 38000003 38000010    # li r0, 3 -> 16 (the opening movie)
 806CA204 3800000C 38000010    # li r0, 12 -> 16 (the "press Start" logo)
 
+# --- Main menu: no Nintendo Wi-Fi Connection ------------------------------------------------------
+
+# muProcTop (sora_menu_main, the main menu's six buttons: 0 Group, 1 Solo, 2 Wi-Fi, 3 Vault,
+# 4 Options, 5 Data): its cursor table, four words per button (up, down, left, right), each
+# 0x00TTWW00 with TT the button the cursor moves to and WW 1 when the move wraps around. Nothing
+# moves onto Wi-Fi any more (Group goes to Vault, Vault and Data skip over it), so the button stays
+# where it is, drawn as before, and is never selected: Nintendo's servers are never asked for.
+# Kept in place for YouGame's own online menu later. The whole table is one group, so it lands only
+# while the module's own table is there.
+811A4070 00020100 00030100    # Group up -> Vault (was Wi-Fi)
+811A4074 00020000 00030000    # Group down -> Vault (was Wi-Fi)
+811A4078 00010100 00010100    # Group left -> Solo
+811A407C 00010000 00010000    # Group right -> Solo
+811A4080 00040100 00040100    # Solo up -> Options
+811A4084 00040000 00040000    # Solo down -> Options
+811A4088 00000000 00000000    # Solo left -> Group
+811A408C 00000100 00000100    # Solo right -> Group
+811A4090 00000000 00000000    # Wi-Fi up -> Group
+811A4094 00000100 00000100    # Wi-Fi down -> Group
+811A4098 00050100 00050100    # Wi-Fi left -> Data
+811A409C 00030000 00030000    # Wi-Fi right -> Vault
+811A40A0 00000000 00000000    # Vault up -> Group
+811A40A4 00000100 00000100    # Vault down -> Group
+811A40A8 00020000 00050100    # Vault left -> Data (was Wi-Fi)
+811A40AC 00040000 00040000    # Vault right -> Options
+811A40B0 00010000 00010000    # Options up -> Solo
+811A40B4 00010100 00010100    # Options down -> Solo
+811A40B8 00030000 00030000    # Options left -> Vault
+811A40BC 00050000 00050000    # Options right -> Data
+811A40C0 00010000 00010000    # Data up -> Solo
+811A40C4 00010100 00010100    # Data down -> Solo
+811A40C8 00040000 00040000    # Data left -> Options
+811A40CC 00020100 00030100    # Data right -> Vault (was Wi-Fi)
+
 # --- Everything unlocked --------------------------------------------------------------------------
 
 # The prize-unlock check (0x8004F978) reads any bit outside its 102-prize table as set for bits
