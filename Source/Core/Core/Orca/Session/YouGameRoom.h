@@ -51,6 +51,7 @@ struct KeyframeInfo
     int seat = 0;
     int from = 0;
     std::string name;
+    bool operator==(const Name&) const = default;
   };
   std::vector<Name> names;
 };

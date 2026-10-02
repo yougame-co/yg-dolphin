@@ -104,6 +104,12 @@ bool Session::Plugged(int seat, int frame) const
          frame < m_plan[seat].unplug_from;
 }
 
+void Session::RerunFrom(int frame)
+{
+  if (frame < m_frame)
+    m_dirty = std::min(m_dirty, frame);
+}
+
 bool Session::InPlay(int seat) const
 {
   return seat != m_config.local_seat && seat >= 0 && seat < m_config.seats &&

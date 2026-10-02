@@ -3,8 +3,10 @@
 
 #include "Core/Rollback/OnlineMatch.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cstdint>
 #include <deque>
 #include <cmath>
 #include <map>
@@ -1379,7 +1381,32 @@ std::optional<int> OnBoundary(Core::System& system,
     for (const Orca::Net::PeerEvent& event : Orca::Online::TakePeerEvents())
     {
       if (event.kind == Orca::Net::PeerEvent::Kind::Names)
+      {
+        // A name that applies to frames already run (it arrived after its plug frame): those frames
+        // ran without it, and the host's with it. Re-run them; the frame hook writes it as it goes.
+        const std::vector<Orca::Net::KeyframeInfo::Name> before = AllNames(match);
+        int earliest = INT32_MAX;
+        for (const auto& name : event.keyframe.names)
+        {
+          if (std::find(before.begin(), before.end(), name) == before.end())
+            earliest = std::min(earliest, name.from);
+        }
         SetNames(match, event.keyframe.names);
+        if (earliest <= match.running)
+        {
+          if (match.running + 1 - earliest <= MAX_ROLLBACK)
+          {
+            NOTICE_LOG_FMT(ROLLBACK, "Drop-in: a name for frame {} arrived at frame {}: re-running",
+                           earliest, match.running + 1);
+            match.session->RerunFrom(earliest);
+          }
+          else
+          {
+            WARN_LOG_FMT(ROLLBACK, "Drop-in: a name for frame {} arrived at frame {}, too late to "
+                         "re-run", earliest, match.running + 1);
+          }
+        }
+      }
       else if (event.kind == Orca::Net::PeerEvent::Kind::Left && event.host)
         match.host_gone = event.reason;
     }
