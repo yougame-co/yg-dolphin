@@ -63,8 +63,8 @@ public:
     std::string stats;  // empty: not shown
   };
 
-  // The session's plug-in callback (any thread). A re-run of a plug-in frame repeats its list: a
-  // list from a frame at or before the last one handled shows nothing.
+  // The session's plug-in callback (any thread; first runs only, when the list changes). A list equal
+  // to the last one shows nothing new.
   void OnPorts(int frame, const std::vector<Events::PortInfo>& ports, double now_ms);
   // The newest link stats (the drawing thread, each frame).
   void Update(const LinkView& link, double now_ms);
@@ -75,7 +75,6 @@ private:
 
   mutable std::mutex m_lock;
   bool m_seen_ports = false;
-  int m_last_frame = -1;
   std::vector<Events::PortInfo> m_ports;
   std::deque<std::pair<double, std::string>> m_toasts;
   LinkView m_link;

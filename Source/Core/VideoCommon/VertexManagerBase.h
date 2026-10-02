@@ -120,6 +120,8 @@ public:
 
   void Flush();
   bool HasSendableVertices() const { return !m_is_flushed && !m_cull_all; }
+  // Orca: no batch is pending (the online overlay's redraw during a stall checks this).
+  bool IsFlushed() const { return m_is_flushed; }
 
   void DoState(PointerWrap& p);
 

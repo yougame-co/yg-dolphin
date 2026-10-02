@@ -6,6 +6,7 @@
 #include <cstdlib>
 
 #include "Core/Core.h"
+#include "Core/Orca/Profile.h"
 #include "Core/PowerPC/MMU.h"
 
 namespace Orca::UX
@@ -17,6 +18,10 @@ constexpr u32 GAME_GLOBAL = 0x805A00E0;
 constexpr u32 GAME_GLOBAL_NAME_RECORDS = 0x28;
 constexpr u32 RECORDS_TAGS = 0xE0;
 constexpr u32 TAG_SIZE = 0x124;
+constexpr u32 TAG_RUMBLE = 0x0C;
+constexpr u32 TAG_CONTROLS = 0x14;
+constexpr u32 CONTROLS_TEMPLATE = 0x80406938;
+constexpr u32 CONTROLS_TEMPLATE_SIZE = 0x2D;
 constexpr u32 SCENE_SELCHAR_TASK = 0x400;
 constexpr u32 TASK_AREAS = 0x44;
 constexpr u32 AREA_INDEX = 0x1B0;
@@ -66,25 +71,73 @@ std::u16string TagAt(const GuestMemory& m, u32 tag)
   return name;
 }
 
-// The tag holding this name, else the highest unused one; -1 when every tag is taken.
-int SlotFor(GuestMemory& m, u32 tags, const std::u16string& name)
+// The tag holding this name; -1 when none does.
+int FindTag(const GuestMemory& m, u32 tags, const std::u16string& name)
+{
+  for (int i = 0; i < TAG_SLOTS; ++i)
+  {
+    if (TagAt(m, tags + static_cast<u32>(i) * TAG_SIZE) == name)
+      return i;
+  }
+  return -1;
+}
+
+// A new tag in the highest unused slot, made the way the game makes one: the record cleared, the
+// name, rumble on, and the game's own default controls for every controller type (the table at
+// CONTROLS_TEMPLATE, which a tag's +0x14 copies: GameCube 12 bytes, Wii Remote 8, with Nunchuk 12,
+// Classic 13). -1 when every tag is taken.
+int MakeTag(GuestMemory& m, u32 tags, const std::u16string& name)
 {
   int unused = -1;
   for (int i = 0; i < TAG_SLOTS; ++i)
   {
-    const u32 tag = tags + static_cast<u32>(i) * TAG_SIZE;
-    const std::u16string held = TagAt(m, tag);
-    if (held == name)
-      return i;
-    if (held.empty())
+    if (TagAt(m, tags + static_cast<u32>(i) * TAG_SIZE).empty())
       unused = i;
   }
-  if (unused < 0)
+  if (unused < 0 || !m.Valid(CONTROLS_TEMPLATE) ||
+      !m.Valid(CONTROLS_TEMPLATE + CONTROLS_TEMPLATE_SIZE - 1))
+  {
     return -1;
+  }
   const u32 tag = tags + static_cast<u32>(unused) * TAG_SIZE;
-  for (u32 i = 0; i <= TAG_CHARS; ++i)
-    m.Write16(tag + 2 * i, i < name.size() ? static_cast<u16>(name[i]) : 0);
+  for (u32 i = 0; i < TAG_SIZE; i += 2)
+    m.Write16(tag + i, 0);
+  for (u32 i = 0; i < name.size() && i < TAG_CHARS; ++i)
+    m.Write16(tag + 2 * i, static_cast<u16>(name[i]));
+  m.Write8(tag + TAG_RUMBLE, 1);
+  for (u32 i = 0; i < CONTROLS_TEMPLATE_SIZE; ++i)
+    m.Write8(tag + TAG_CONTROLS + i, m.Read8(CONTROLS_TEMPLATE + i));
   return unused;
+}
+
+// Which tag a port's area wears; the areas are already checked by the caller.
+bool WornByAnotherPort(const GuestMemory& m, u32 task, int port, int slot)
+{
+  for (int other = 0; other < 4; ++other)
+  {
+    if (other == port)
+      continue;
+    const u32 at = task + TASK_AREAS + 4 * static_cast<u32>(other);
+    const u32 area = m.Read32(at);
+    if (Pointer(m, area) && Pointer(m, area + AREA_NAME_ID) &&
+        m.Read32(area + AREA_NAME_ID) == static_cast<u32>(slot))
+    {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Two usernames can share their first five letters (sandbox-ada, sandbox-bo): the second port's
+// tag ends in its port number instead (SAND2), as Brawl never lets two players wear one tag.
+std::u16string Variant(std::u16string name, int port)
+{
+  const char16_t digit = static_cast<char16_t>(u'1' + port);
+  if (name.size() < static_cast<size_t>(TAG_CHARS))
+    name.push_back(digit);
+  else
+    name.back() = digit;
+  return name;
 }
 
 class GuardMemory final : public GuestMemory
@@ -98,6 +151,10 @@ public:
   u32 Read32(u32 address) const override { return PowerPC::MMU::HostRead<u32>(m_guard, address); }
   u16 Read16(u32 address) const override { return PowerPC::MMU::HostRead<u16>(m_guard, address); }
   u8 Read8(u32 address) const override { return PowerPC::MMU::HostRead<u8>(m_guard, address); }
+  void Write8(u32 address, u8 value) override
+  {
+    PowerPC::MMU::HostWrite<u8>(m_guard, value, address);
+  }
   void Write16(u32 address, u16 value) override
   {
     PowerPC::MMU::HostWrite<u16>(m_guard, value, address);
@@ -168,7 +225,17 @@ int ApplyNameTags(GuestMemory& m, const std::vector<Events::PortInfo>& ports)
     {
       continue;
     }
-    const int slot = SlotFor(m, tags, name);
+    std::u16string tag = name;
+    int slot = FindTag(m, tags, tag);
+    if (slot >= 0 && WornByAnotherPort(m, task, p.port, slot))
+    {
+      tag = Variant(name, p.port);
+      slot = FindTag(m, tags, tag);
+      if (slot >= 0 && WornByAnotherPort(m, task, p.port, slot))
+        continue;
+    }
+    if (slot < 0)
+      slot = MakeTag(m, tags, tag);
     if (slot < 0)
       continue;
     m.Write32(area + AREA_NAME_ID, static_cast<u32>(slot));
@@ -179,7 +246,13 @@ int ApplyNameTags(GuestMemory& m, const std::vector<Events::PortInfo>& ports)
 
 void WriteNameTags(const Core::CPUThreadGuard& guard, const std::vector<Events::PortInfo>& ports)
 {
-  if (ports.empty())
+  // Only Brawl rev 2 itself (RSBE01) or a launcher profile booting it (Project+): the addresses are
+  // that executable's.
+  const Orca::Profile* profile = Orca::ActiveProfile();
+  const bool brawl_rev2 =
+      profile && profile->revision == 2 &&
+      (profile->IsLauncher() ? profile->disc == "RSBE01" : profile->game_id == "RSBE01");
+  if (ports.empty() || !brawl_rev2)
     return;
   GuardMemory memory(guard);
   ApplyNameTags(memory, ports);

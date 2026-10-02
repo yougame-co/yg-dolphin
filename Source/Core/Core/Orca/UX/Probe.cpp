@@ -3,6 +3,7 @@
 
 #include "Core/Orca/UX/Probe.h"
 
+#include <cctype>
 #include <chrono>
 #include <cstdlib>
 #include <thread>
@@ -17,6 +18,7 @@
 #include "Common/IOFile.h"
 #include "Common/Logging/Log.h"
 #include "Core/Core.h"
+#include "Core/Orca/Session/Online.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/System.h"
 #include "Core/Orca/UX/Overlay.h"
@@ -70,19 +72,24 @@ std::vector<Command> Load()
   return out;
 }
 
+bool Mapped(const Core::CPUThreadGuard& guard, u32 address)
+{
+  return PowerPC::MMU::HostIsRAMAddress(guard, address);
+}
+
 std::string SceneName(const Core::CPUThreadGuard& guard)
 {
   const u32 manager = PowerPC::MMU::HostRead<u32>(guard, 0x805a0060);
-  if (manager < 0x80000000u)
+  if (!Mapped(guard, manager + 0x4))
     return {};
   const u32 scene = PowerPC::MMU::HostRead<u32>(guard, manager + 0x4);
-  if (scene < 0x80000000u)
+  if (!Mapped(guard, scene))
     return {};
   const u32 name_ptr = PowerPC::MMU::HostRead<u32>(guard, scene);
-  if (name_ptr < 0x80000000u)
+  if (!Mapped(guard, name_ptr))
     return {};
   std::string name;
-  for (u32 i = 0; i < 32; ++i)
+  for (u32 i = 0; i < 32 && Mapped(guard, name_ptr + i); ++i)
   {
     const char c = static_cast<char>(PowerPC::MMU::HostRead<u8>(guard, name_ptr + i));
     if (c == '\0')
@@ -101,17 +108,21 @@ u32 Address(const Core::CPUThreadGuard& guard, const std::string& expr)
     u32 offset = 0;
     if (close + 1 < expr.size() && expr[close + 1] == '+')
       offset = static_cast<u32>(std::strtoul(expr.substr(close + 2).c_str(), nullptr, 16));
-    return PowerPC::MMU::HostRead<u32>(guard, at) + offset;
+    return Mapped(guard, at) ? PowerPC::MMU::HostRead<u32>(guard, at) + offset : 0;
   }
   return static_cast<u32>(std::strtoul(expr.c_str(), nullptr, 16));
 }
 }  // namespace
 
-void ProbeFrame(const Core::CPUThreadGuard& guard)
+bool TestKnobsAllowed()
 {
-  static std::vector<Command> commands = Load();
-  static int frame = 0;
-  ++frame;
+  const char* dev = std::getenv("ORCA_TEST_DEV_GAME");
+  return !Orca::Online::Enabled() || (dev && dev[0] != '\0');
+}
+
+void ProbeFrame(const Core::CPUThreadGuard& guard, int frame)
+{
+  static std::vector<Command> commands = TestKnobsAllowed() ? Load() : std::vector<Command>{};
   if (commands.empty())
     return;
   static std::string scene;
@@ -140,6 +151,11 @@ void ProbeFrame(const Core::CPUThreadGuard& guard)
       continue;
     }
     const u32 addr = Address(guard, c.addr);
+    if (!Mapped(guard, addr))
+    {
+      NOTICE_LOG_FMT(ROLLBACK, "Probe {} {}: {} is not mapped", scene, rel, c.addr);
+      continue;
+    }
     if (c.verb == "write")
     {
       const std::string hex = c.arg + c.arg2;

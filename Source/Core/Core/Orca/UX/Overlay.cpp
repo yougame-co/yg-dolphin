@@ -73,9 +73,9 @@ LinkView ViewOf(const Events::LinkStats& stats)
 void OverlayModel::OnPorts(int frame, const std::vector<Events::PortInfo>& ports, double now_ms)
 {
   std::lock_guard lk(m_lock);
-  if (m_seen_ports && frame <= m_last_frame)
-    return;
-  m_last_frame = frame;
+  // The session calls this on first runs only, when the list changes; a drop-in join can take the
+  // frame number backwards (the host's frame), so frames don't order the lists.
+  (void)frame;
   const auto find = [](const std::vector<Events::PortInfo>& list, int port) {
     return std::find_if(list.begin(), list.end(),
                         [port](const Events::PortInfo& p) { return p.port == port; });
@@ -292,18 +292,22 @@ void ShutdownOverlay()
 void RepresentDuringStall(int stalled_ms)
 {
   // Sessions run single core, so this presents on the CPU thread inside the stall wait: nothing
-  // for a short stall (the overlay has nothing to say before 250 ms), then ~15 times a second.
+  // for a short stall (the overlay has nothing to say before 250 ms), then ~15 times a second, or
+  // 4 when presenting is slow here (vsync, an occluded window) so the wait keeps listening.
   static double s_last = 0;
+  static double s_every = 66;
   if (stalled_ms < OverlayModel::WAITING_AFTER_MS - 50)
     return;
   const double now = NowMs();
-  if (now - s_last < 66)
+  if (now - s_last < s_every)
     return;
-  s_last = now;
   AsyncRequests::GetInstance()->PushEvent([] {
     if (g_presenter)
       g_presenter->RepresentLast();
   });
+  const double took = NowMs() - now;
+  s_every = took > 12 ? 250 : 66;
+  s_last = NowMs();
 }
 
 void InitOverlay()

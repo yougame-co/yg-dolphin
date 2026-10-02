@@ -3,6 +3,7 @@
 
 #include <array>
 #include <map>
+#include <set>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -433,9 +434,11 @@ TEST(OrcaUXOverlay, ToastsFollowThePortListOnceEach)
   v = m.View(5001, false);
   ASSERT_EQ(v.toasts.size(), 1u);
   EXPECT_EQ(v.toasts[0].text, "ada left");
-  // A rollback that re-runs the older plug-in frame repeats its list: nothing new.
-  m.OnPorts(300, Ports({{0, "luis", false}, {1, "ada", true}}), 5100);
-  EXPECT_EQ(m.View(5101, false).toasts.size(), 1u);
+  // Joining a friend's game takes the frame number back to theirs: still shown.
+  m.OnPorts(120, Ports({{0, "bo", true}, {1, "luis", false}}), 5100);
+  const auto joined = m.View(5101, false).toasts;
+  ASSERT_EQ(joined.size(), 2u);
+  EXPECT_EQ(joined[1].text, "bo joined on port 1");
 
   // A joiner's first list already holds the host.
   OverlayModel joiner;
@@ -537,6 +540,8 @@ public:
       bytes[NAME + static_cast<u32>(i)] = static_cast<u8>(scene[i]);
     W32(SCENE + 0x400, TASK);
     W32(0x805A00E0, GLOBAL);
+    for (u32 i = 0; i < CONTROLS.size(); ++i)
+      bytes[0x80406938 + i] = CONTROLS[i];
     W32(GLOBAL + 0x28, RECORDS);
     for (u32 a = RECORDS; a < Tag(120); a += 2)
       Write16(a, 0);
@@ -551,6 +556,12 @@ public:
     }
   }
   void Join(int i) { W32(Area(i) + 0x1B4, 1); }
+  // Brawl rev 2's default controls (RAM 0x80406938, read from a dump): GameCube, Wii Remote,
+  // with Nunchuk, Classic.
+  static constexpr std::array<u8, 0x2D> CONTROLS{
+      0x03, 0x03, 0x04, 0x0a, 0x0b, 0x0c, 0x00, 0x01, 0x05, 0x02, 0x02, 0x80, 0x01, 0x00, 0x05,
+      0x09, 0x03, 0x04, 0x02, 0x04, 0x0a, 0x0c, 0x0b, 0x00, 0x01, 0x04, 0x03, 0x02, 0x02, 0x04,
+      0x03, 0x40, 0x03, 0x03, 0x04, 0x04, 0x0a, 0x0b, 0x0c, 0x00, 0x01, 0x05, 0x02, 0x02, 0x80};
   void SetTag(int i, const std::u16string& name)
   {
     for (u32 k = 0; k < 6; ++k)
@@ -569,11 +580,23 @@ public:
   u8 Read8(u32 a) const override { return bytes.at(a); }
   u16 Read16(u32 a) const override { return static_cast<u16>(Read8(a) << 8 | Read8(a + 1)); }
   u32 Read32(u32 a) const override { return u32(Read16(a)) << 16 | Read16(a + 2); }
+  void Write8(u32 a, u8 v) override
+  {
+    bytes[a] = v;
+    ++writes;
+    if (recording)
+      written.insert(a);
+  }
   void Write16(u32 a, u16 v) override
   {
     bytes[a] = static_cast<u8>(v >> 8);
     bytes[a + 1] = static_cast<u8>(v);
     ++writes;
+    if (recording)
+    {
+      written.insert(a);
+      written.insert(a + 1);
+    }
   }
   void Write32(u32 a, u32 v) override
   {
@@ -584,6 +607,8 @@ public:
 
   std::map<u32, u8> bytes;
   int writes = 0;
+  bool recording = false;
+  std::set<u32> written;
 };
 }  // namespace
 
@@ -635,6 +660,86 @@ TEST(OrcaUXNameTags, ReusesTheSameNameAndLeavesAChosenTagAlone)
   EXPECT_EQ(m.TagName(0), u"MINE");
   EXPECT_EQ(m.NameId(1), 3);
   EXPECT_EQ(m.TagName(119), u"");  // nothing new was made
+}
+
+TEST(OrcaUXNameTags, ANewTagIsMadeAsTheGameMakesOneAndNothingElseIsWritten)
+{
+  FakeBrawl m;
+  // A leftover record (a deleted tag's bytes) in the slot that will be used.
+  for (u32 a = FakeBrawl::Tag(119) + 0x60; a < FakeBrawl::Tag(119) + 0x80; a += 2)
+    m.Write16(a, 0xAAAA);
+  m.Join(0);
+  m.recording = true;
+  ASSERT_EQ(ApplyNameTags(m, {{0, "luis", false}}), 1);
+  const u32 tag = FakeBrawl::Tag(119);
+  EXPECT_EQ(m.TagName(119), u"LUIS");
+  EXPECT_EQ(m.Read8(tag + 0x0C), 1);  // rumble on
+  for (u32 i = 0; i < FakeBrawl::CONTROLS.size(); ++i)
+    EXPECT_EQ(m.Read8(tag + 0x14 + i), FakeBrawl::CONTROLS[i]) << i;
+  for (u32 a = tag + 0x60; a < tag + 0x80; ++a)
+    EXPECT_EQ(m.Read8(a), 0);  // cleared
+  // Only that record and port 0's tag field.
+  for (const u32 a : m.written)
+  {
+    const bool in_tag = a >= tag && a < tag + 0x124;
+    const bool in_name_id = a >= FakeBrawl::Area(0) + 0x1C8 && a < FakeBrawl::Area(0) + 0x1CC;
+    EXPECT_TRUE(in_tag || in_name_id) << std::hex << a;
+  }
+}
+
+TEST(OrcaUXNameTags, TwoPortsNeverShareATag)
+{
+  FakeBrawl m;
+  m.Join(0);
+  m.Join(1);
+  m.Join(2);
+  // Every sandbox account starts SANDB; a short name gets the digit appended.
+  EXPECT_EQ(ApplyNameTags(m, {{0, "sandbox-ada", false},
+                              {1, "sandbox-bo", true},
+                              {2, "sandbox-cy", true}}),
+            3);
+  EXPECT_EQ(m.TagName(m.NameId(0)), u"SANDB");
+  EXPECT_EQ(m.TagName(m.NameId(1)), u"SAND2");
+  EXPECT_EQ(m.TagName(m.NameId(2)), u"SAND3");
+  // A port joining later whose tag someone already wears: its variant.
+  FakeBrawl late;
+  late.Join(1);
+  EXPECT_EQ(ApplyNameTags(late, {{0, "ada", false}, {1, "ada", true}}), 1);
+  EXPECT_EQ(late.TagName(late.NameId(1)), u"ADA");
+  late.Join(0);
+  EXPECT_EQ(ApplyNameTags(late, {{0, "ada", false}, {1, "ada", true}}), 1);
+  EXPECT_EQ(late.TagName(late.NameId(0)), u"ADA1");
+  // One port joined, one not: only the joined one.
+  FakeBrawl half;
+  half.Join(1);
+  EXPECT_EQ(ApplyNameTags(half, {{0, "luis", false}, {1, "ada", true}}), 1);
+  EXPECT_EQ(half.NameId(0), -1);
+  EXPECT_EQ(half.TagName(half.NameId(1)), u"ADA");
+}
+
+TEST(OrcaUXNameTags, UnmappedPointersWriteNothing)
+{
+  {
+    FakeBrawl m;
+    m.Join(0);
+    m.W32(FakeBrawl::TASK + 0x44, 0x83000000);  // area pointer to nowhere
+    m.recording = true;
+    EXPECT_EQ(ApplyNameTags(m, {{0, "luis", false}}), 0);
+    EXPECT_TRUE(m.written.empty());
+  }
+  {
+    FakeBrawl m;
+    m.Join(0);
+    m.W32(FakeBrawl::SCENE + 0x400, 0x83000000);  // no task
+    EXPECT_EQ(ApplyNameTags(m, {{0, "luis", false}}), 0);
+  }
+  {
+    // The records' end not mapped.
+    FakeBrawl m;
+    m.Join(0);
+    m.bytes.erase(FakeBrawl::Tag(120) - 1);
+    EXPECT_EQ(ApplyNameTags(m, {{0, "luis", false}}), 0);
+  }
 }
 
 TEST(OrcaUXNameTags, NothingOutsideTheCharacterSelectOrWhenItDoesNotLookRight)

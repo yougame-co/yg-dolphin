@@ -160,8 +160,12 @@ private:
     }
     // Sequence numbers count within one helper run (a restarted helper, or the app's own empty
     // snapshot after a failure, starts again): order only within a session.
-    if (m_latest && m_latest->session == parsed->session && parsed->sequence < m_latest->sequence)
+    // Sequence 0 is the app's own snapshot (an idle or failed helper), never stale.
+    if (m_latest && m_latest->session == parsed->session && parsed->sequence != 0 &&
+        parsed->sequence < m_latest->sequence)
+    {
       return;
+    }
     if (parsed->received_at > 0 && parsed->received_at != m_last_report)
     {
       m_last_report = parsed->received_at;
@@ -208,9 +212,10 @@ private:
       // Loopback: no proxy, and Nagle off so a small event is never held back.
       curl_easy_setopt(curl, CURLOPT_NOPROXY, "*");
       curl_easy_setopt(curl, CURLOPT_TCP_NODELAY, 1L);
-      // The app sends at least every 100 ms: a stream silent for 3 s is dead (a hung bridge).
+      // A hung bridge: nothing at all for 30 s (a running helper sends every 100 ms; a failed or
+      // missing one sends nothing, and reconnecting faster would only respawn it).
       curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
-      curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 3L);
+      curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 30L);
       const CURLcode result = curl_easy_perform(curl);
       long status = 0;
       curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);

@@ -905,7 +905,9 @@ void Presenter::RenderXFBToScreen(const MathUtil::Rectangle<int>& target_rc,
 
 void Presenter::RepresentLast()
 {
-  if (m_xfb_entry)
+  // Present() flushes a pending vertex batch: only when there is none, so this host-timed redraw
+  // never changes when the emulated GPU's work is submitted.
+  if (m_xfb_entry && g_vertex_manager->IsFlushed())
     Present();
 }
 

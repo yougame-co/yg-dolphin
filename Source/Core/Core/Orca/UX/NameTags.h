@@ -28,10 +28,13 @@ class CPUThreadGuard;
 //     match's player data (gmPlayerInitData +0x0C name, +0x18 tag index), which the fighter's
 //     name above it and the results read.
 // So at every frame boundary on the character select, a joined port of a named player with no tag
-// gets one: the tag already holding that name, else the highest unused tag, filled in. What it
+// gets one: the tag already holding that name, else the highest unused tag, made as the game makes
+// one (name, rumble on, the game's default controls from 0x80406938); a name another port already
+// wears gets its port number as its last character instead (SAND2). What it
 // writes depends only on emulated memory and the session's synced port list, the same on both
 // machines at the same frame, and it is idempotent (a re-run frame writes the same bytes, a port
-// that has a tag is left alone, the player's own choice included). A port whose name is empty (not
+// that has a tag is left alone, the player's own choice included; a player who sets "no tag" gets
+// theirs back the next frame). A port whose name is empty (not
 // known yet on this machine) gets nothing, and a name gives the same bytes whenever it became known.
 // Known gap until the session sends host-authoritative names with the plug-in: if one machine has
 // a name at frame F and the other still has "", their writes differ at F (a desync). Not yet: the character select's
@@ -56,6 +59,7 @@ public:
   virtual u32 Read32(u32 address) const = 0;
   virtual u16 Read16(u32 address) const = 0;
   virtual u8 Read8(u32 address) const = 0;
+  virtual void Write8(u32 address, u8 value) = 0;
   virtual void Write16(u32 address, u16 value) = 0;
   virtual void Write32(u32 address, u32 value) = 0;
 };

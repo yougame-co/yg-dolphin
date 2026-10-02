@@ -32,13 +32,13 @@ void Init()
     static bool s_logged = false;
     if (!std::exchange(s_logged, true))
       NOTICE_LOG_FMT(ROLLBACK, "Orca UX: frame hook live at frame {}", frame);
-    ProbeFrame(guard);
+    ProbeFrame(guard, frame);
     // Test only, ORCA_UX_TEST_LATE_NAME=<frame>: a friend's name that reached this machine late.
     // First runs before that frame see it empty, re-runs see it, as when the roster arrives
     // between a frame's first run and its re-run (the known gap in NameTags.h).
     static const int s_late = [] {
       const char* v = std::getenv("ORCA_UX_TEST_LATE_NAME");
-      return v ? std::atoi(v) : -1;
+      return v && TestKnobsAllowed() ? std::atoi(v) : -1;
     }();
     if (s_late >= 0 && !resimulating && frame < s_late)
     {
