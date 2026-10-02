@@ -133,6 +133,9 @@ public:
   // `sequence`, if given, receives a count that changes with each new measurement: feed
   // Session::OnRoundTrip only when it changed since the last call.
   int RoundTripMs(u32* sequence = nullptr) const;
+  // The latest RTT_SAMPLES round trips, oldest first, for a session that starts now (it covers the
+  // link from its first frame), and in `sequence` the count RoundTripMs gives with the newest.
+  std::vector<int> RecentRoundTrips(u32* sequence) const;
 
   void Send(const Packet& packet) override;
   std::vector<Packet> Receive() override;

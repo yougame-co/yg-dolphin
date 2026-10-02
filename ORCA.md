@@ -355,6 +355,42 @@ the store refuses dev tickets.
 - `bye {r}`: why a player leaves, `desync` or `stalled` (anything else is ignored). It is broadcast
   before the leave, so the room's leave event carries it.
 
+## Input delay
+
+`Orca/Session/Session.cpp` ("Input delay") has the rule; it changed in 0.3.5.
+
+- Two frames by default, like Slippi. Rollback hides the rest of the link, spikes included.
+- The adaptive delay rises only for what rollback can't cover:
+  - **The typical link.** It is the median of the player's latest 15 round trips to the relay (one a
+    second) and the slowest friend's median, which each reports. Through the relay, one way is half
+    of each. The delay covers what the 7-frame rollback window leaves of that, keeping a frame for
+    the boundary and one for jitter: two frames cover a round trip of about 230 ms between the
+    players. A new session takes the room's recent round trips at once, and the delay rises as soon
+    as every player's median is in. One side's alone sets nothing.
+  - **Sustained stalls on a friend's side.** A friend stalls when this player's inputs outran its
+    rollback window, so only this player's delay can help. Three such stalls in the last 10
+    one-second windows raise it a frame; one second counts two at most, and the first 10 s of a
+    session need four. A friend's stall counts only if its lag on this player's inputs (below)
+    reached the window around then: with three or four players, it may have waited on someone
+    else. Stalls don't count while a controller isn't plugged in yet (catching up), around a hitch
+    on either machine, or while waiting for the first packet.
+- Rollbacks never move the delay, however many there are.
+- A raised delay steps down a frame at a time, and only if every friend would still have had a
+  frame of room. Each packet shows how far the friend ran past this player's newest input it had
+  (its frame minus its acknowledgement); in the last 10 s that may not have reached the window
+  minus one. A delay the link raised follows the link down after 3 s of wanting less (a first
+  median inflated by a keyframe's transfer). One that stalls raised waits for 10 stall-free
+  seconds per step. Stalls back within 20 s of a step undo it and double the next wait.
+- The app's `delay N` fixes it instead (Embedding, stdin).
+- Why (2026-10-02, a Project+ match): a Mac at 34-35 ms whose Wi-Fi spiked to 113-123 ms every
+  ~11 s, against a friend at 22 ms whose game hitched about as often. In menus both sat at 2 with
+  no rollbacks. In every match the old rule climbed to 4-5:
+  - A second with 30 re-run frames, or two stalls in three seconds, on either side raised both
+    players. The stalls came from the spikes and from the friend's hitches.
+  - A lower needed ten seconds of at most three re-run frames per second. A match never has those,
+    so the delay came down only between matches.
+  - At 4-5 the rollbacks barely moved: 20-30 per 15 s, 3-4 frames deep, against 59 at 2.
+
 ## Embedding
 
 The YouGame desktop app shows Orca inside its own window, at the page's player box, the way it runs
@@ -414,6 +450,7 @@ window (layout, scroll, resize, full screen). Moving, minimizing or hiding the w
 | `reset` | The console's reset button. Answers `unsupported reset` in a session or before the game runs. |
 | `prepare-join` | The host invited a friend to drop in. It calls `Orca::Online::PrepareJoin()`: the next frame boundary captures a keyframe ("Drop-in"). |
 | `join <code>` / `leave` | With `caps join` / `caps leave`: into a friend's game, or out of one ("Drop-in"). Both are also taken while a launch join waits for the keyframe. |
+| `delay auto` / `delay N` | With `caps delay` (Orca 0.3.5 on): this player's input delay. `N` from 1 to 6 frames is exactly that, never adapted; `auto` is the adaptive delay ("Input delay" below). The choice stays for the run, so it may come before a session and holds for every session after; until the app's `caps` line turns `delay` on, it waits. Mid-match it applies from this player's next frame and the friend needs nothing: each player's delay is its own, and every input travels explicitly. Anything else answers `unsupported delay`. The `orca stats` line's `delay` is the delay in use. |
 | `quit` | Stops at once (no power-button shutdown, also outside a session), then exits. |
 
 Any other line goes to stderr. The app's `EMBED_COMMAND` filter must add `blur` and `prepare-join`.

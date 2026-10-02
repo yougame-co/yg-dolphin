@@ -38,6 +38,12 @@ void RequestJoin(const std::string& code);
 std::optional<std::string> TakeJoinRequest();
 void RequestLeave();
 bool TakeLeaveRequest();
+// The app's "delay auto|1..6" (embed mode; any thread, never blocks): this player's input delay
+// from now on, in frames, or nullopt for the adaptive one. It stays for every session after, and
+// counts only while the app's caps include "delay" (Rollback::OnlineMatch applies it at each
+// frame boundary, and to a new session from its first frame).
+void SetChosenDelay(std::optional<int> frames);
+std::optional<int> ChosenDelay();
 // Whether this Orca joins someone else's game (ORCA_JOIN=1, or the desktop app opened an invite),
 // once known; nullopt before, or if the room ended first.
 std::optional<bool> Joining();
@@ -85,6 +91,9 @@ bool DropInPending();
 // The latest round trip to the room server, in milliseconds (-1 before the first). `sequence`, if
 // given, changes with each new measurement: feed Session::OnRoundTrip only when it changed.
 int RoundTripMs(u32* sequence = nullptr);
+// The room's latest round trips, oldest first, for a session that starts now; `sequence` as above,
+// for the newest (unchanged with no room).
+std::vector<int> RecentRoundTrips(u32* sequence);
 // Why the room ended, as an Orca::Status code ("" while it runs, or when it gave none).
 std::string RoomErrorCode();
 // The room ended because someone else holds it: a hosting Orca that wasn't its host, or whose

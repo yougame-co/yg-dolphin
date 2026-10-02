@@ -250,6 +250,7 @@ namespace
 std::mutex s_request_mutex;
 std::optional<std::string> s_join_request;
 bool s_leave_request = false;
+std::optional<int> s_chosen_delay;
 }  // namespace
 
 void RequestJoin(const std::string& code)
@@ -274,6 +275,18 @@ bool TakeLeaveRequest()
 {
   std::lock_guard lock(s_request_mutex);
   return std::exchange(s_leave_request, false);
+}
+
+void SetChosenDelay(std::optional<int> frames)
+{
+  std::lock_guard lock(s_request_mutex);
+  s_chosen_delay = frames;
+}
+
+std::optional<int> ChosenDelay()
+{
+  std::lock_guard lock(s_request_mutex);
+  return s_chosen_delay;
 }
 
 std::optional<bool> Joining()
@@ -437,6 +450,12 @@ int RoundTripMs(u32* sequence)
 {
   const auto room = Room();
   return room ? room->RoundTripMs(sequence) : -1;
+}
+
+std::vector<int> RecentRoundTrips(u32* sequence)
+{
+  const auto room = Room();
+  return room ? room->RecentRoundTrips(sequence) : std::vector<int>{};
 }
 
 namespace

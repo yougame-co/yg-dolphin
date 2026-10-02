@@ -591,6 +591,8 @@ struct YouGameRoom::Impl
   int rtt = -1;
   // Counts pongs, so a caller can tell a new measurement from the same one read again.
   u32 rtt_sequence = 0;
+  // The latest RTT_SAMPLES measurements, oldest first.
+  std::deque<int> recent_rtts;
   std::vector<Packet> inbox;
   // Which connection sent each inbox packet: a player who left takes its unread packets with it
   // (the next player in that seat must not read them as its own).
@@ -1712,6 +1714,9 @@ struct YouGameRoom::Impl
           std::lock_guard lock(mutex);
           rtt = static_cast<int>(now - sent);
           ++rtt_sequence;
+          recent_rtts.push_back(rtt);
+          if (recent_rtts.size() > static_cast<size_t>(RTT_SAMPLES))
+            recent_rtts.pop_front();
         }
       }
     }
@@ -1965,6 +1970,13 @@ int YouGameRoom::RoundTripMs(u32* sequence) const
   if (sequence)
     *sequence = m_impl->rtt_sequence;
   return m_impl->rtt;
+}
+
+std::vector<int> YouGameRoom::RecentRoundTrips(u32* sequence) const
+{
+  std::lock_guard lock(m_impl->mutex);
+  *sequence = m_impl->rtt_sequence;
+  return {m_impl->recent_rtts.begin(), m_impl->recent_rtts.end()};
 }
 
 void CoalescePacket(std::optional<Packet>* outgoing, const Packet& packet)

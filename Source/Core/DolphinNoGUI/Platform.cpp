@@ -4,6 +4,7 @@
 #include "DolphinNoGUI/Platform.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cmath>
 #include <sstream>
 
@@ -257,6 +258,23 @@ void Platform::ProcessEmbedCommands()
     {
       // As join: taken once the app's "caps" line turns "leave" on.
       Orca::Online::RequestLeave();
+    }
+    else if (cmd == "delay")
+    {
+      // This player's input delay: "auto" (adaptive) or a fixed 1 to max_delay (6) frames. Kept
+      // for the run and applied while the app's "caps" line has "delay" on; mid-match, from the
+      // next frame.
+      std::string value;
+      in >> value;
+      int frames = 0;
+      const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), frames);
+      if (value == "auto")
+        Orca::Online::SetChosenDelay(std::nullopt);
+      else if (error == std::errc{} && end == value.data() + value.size() && frames >= 1 &&
+               frames <= Orca::Net::Config{}.max_delay)
+        Orca::Online::SetChosenDelay(frames);
+      else
+        Embed::Out("unsupported delay");
     }
     else if (cmd == "ping")
     {

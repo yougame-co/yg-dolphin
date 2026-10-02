@@ -281,6 +281,13 @@ constexpr std::chrono::seconds JOIN_LIMIT{90};
 // How long the rooms Worker holds the seat of a player whose connection dropped (AWAY_MS).
 constexpr std::chrono::seconds ROOM_HOLD{90};
 
+// The input delay the player chose ("delay N" from the app, with "caps delay"), or nullopt for the
+// adaptive one.
+std::optional<int> ChosenDelay()
+{
+  return Orca::Status::Cap("delay") ? Orca::Online::ChosenDelay() : std::nullopt;
+}
+
 // A round-trip sample the session has not seen yet (the room numbers its samples).
 std::optional<int> NewRoundTrip(u32* last_sequence)
 {
@@ -290,6 +297,14 @@ std::optional<int> NewRoundTrip(u32* last_sequence)
     return std::nullopt;
   *last_sequence = sequence;
   return round_trip_ms;
+}
+
+// A new session takes the room's latest round trips at once, so its input delay covers the link
+// from the first frame; later ones come one at a time (NewRoundTrip).
+void SeedRoundTrips(Match& match)
+{
+  for (const int round_trip_ms : Orca::Online::RecentRoundTrips(&match.round_trip_sequence))
+    match.session->OnRoundTrip(round_trip_ms);
 }
 
 // A joining player's one line about its join: each replaces the last, and the join's end takes it
@@ -321,6 +336,8 @@ Orca::Net::Config SessionConfig()
   // Snapshot spacing is this machine's own business (it changes no frame's result), chosen from
   // the measured save time unless a test fixes it.
   config.snapshot_every = Orca::TestSnapshotEvery();
+  // So is the input delay: the one the player chose, from the session's first frame.
+  config.fixed_delay = ChosenDelay();
   return config;
 }
 
@@ -865,6 +882,7 @@ void HostEvents(Core::System& system, Match& match)
       Orca::Online::Transport()->Receive();
       match.session = std::make_unique<Orca::Net::Session>(config, *match.port,
                                                            *Orca::Online::Transport());
+      SeedRoundTrips(match);
       match.session->SetLog(match.log_base, std::move(match.log));
       match.log.clear();
       // Pads sampled while solo carry no delay; from here they do, and the frames the delay skips
@@ -1138,6 +1156,7 @@ Load LoadKeyframe(Core::System& system, Match& match, int* frame_out)
   config.plan = plan;
   match.session =
       std::make_unique<Orca::Net::Session>(config, *match.port, *Orca::Online::Transport());
+  SeedRoundTrips(match);
   match.port->SetCatchingUp(true);
   match.running = frame - 1;
   // The stats line's frame rate starts over: the frames up to the keyframe were never run here.
@@ -1647,9 +1666,11 @@ std::optional<int> Boundary(Core::System& system,
   if (!match.session)
     return std::nullopt;
 
-  // Round trips feed the session's adaptive input delay.
+  // Round trips feed the session's adaptive input delay, unless the player chose one: each player's
+  // delay is its own, so a change here needs nothing from the others (Session::SetFixedDelay).
   if (const auto round_trip_ms = NewRoundTrip(&match.round_trip_sequence))
     match.session->OnRoundTrip(*round_trip_ms);
+  match.session->SetFixedDelay(ChosenDelay());
   // A frame that took more than two frame periods of wall time was a hitch on this machine (a disc
   // read, a shader compile): the other side stalls on it, and no input delay would have helped.
   const auto now = Clock::now();
@@ -1943,13 +1964,14 @@ void LogStats(const char* when)
   NOTICE_LOG_FMT(
       ROLLBACK,
       "Online match {}: frame {}, {} rollbacks, {} re-run frames, deepest {}, {} stalls ({} "
-      "counted), {} waits, {} hitches here, {} there, frame advantage {:.2f}, input delay {} "
+      "counted), {} waits, {} hitches here, {} there, frame advantage {:.2f}, input delay {}{} "
       "(+{} -{} reverted {}), {} checksums matched, confirmed frame {}, round trip {} ms, {} "
       "snapshots (every {}, {:.2f} ms each){}{}",
       when, match.session->CurrentFrame(), stats.rollbacks, stats.resimulated_frames,
       stats.deepest_rollback, stats.stalls, stats.counted_stalls, stats.waits, stats.hitches,
-      stats.peer_hitches, stats.frame_advantage,
-      stats.delay, stats.delay_raises, stats.delay_lowers, stats.delay_reverts,
+      stats.peer_hitches, stats.frame_advantage, stats.delay,
+      stats.delay_fixed ? " (chosen)" : "", stats.delay_raises, stats.delay_lowers,
+      stats.delay_reverts,
       stats.checksums_matched, stats.confirmed_frame, Orca::Online::RoundTripMs(), stats.saves,
       stats.snapshot_every, match.port ? match.port->SaveMs() : 0.0,
       match.session->Error().empty() ? "" : "; ", match.session->Error());
