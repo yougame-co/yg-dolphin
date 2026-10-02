@@ -506,6 +506,9 @@ struct YouGameRoom::Impl
   std::string leave_reason;
   std::string code;
   int seat = -1;
+  // Each seat's player name as the room's roster gives it (the same bytes on every machine; under
+  // mutex).
+  std::map<int, std::string> seat_names;
   int rtt = -1;
   // Counts pongs, so a caller can tell a new measurement from the same one read again.
   u32 rtt_sequence = 0;
@@ -1347,6 +1350,7 @@ struct YouGameRoom::Impl
     if (const auto rev = Int(m, "revision", 0, MAX_FRAME))
       revision = *rev;
     std::map<std::string, std::pair<int, std::string>> present;
+    std::map<int, std::string> names;
     for (const auto& p : room_participants)
     {
       if (!p.is<picojson::object>())
@@ -1356,6 +1360,7 @@ struct YouGameRoom::Impl
       const auto slot = Int(o, "slot", 0, MAX_SEATS - 1);
       if (id.empty() || !slot)
         continue;
+      names[*slot] = Str(o, "name").substr(0, 64);
       if (id == me)
       {
         std::lock_guard lock(mutex);
@@ -1363,6 +1368,10 @@ struct YouGameRoom::Impl
         continue;
       }
       present[id] = {*slot, Str(o, "name")};
+    }
+    {
+      std::lock_guard lock(mutex);
+      seat_names = std::move(names);
     }
     // Who left: a player of the game is unplugged by the host; the host leaving ends a joiner's.
     for (auto p = peers.begin(); p != peers.end();)
@@ -1648,6 +1657,13 @@ void YouGameRoom::OfferKeyframe(int seat, const KeyframeInfo& info)
   m_impl->keyframe_offers[seat] = info;
   // Sent on the I/O thread's next turn, not its next hello tick: a friend waits on it.
   m_impl->offer_now = true;
+}
+
+std::string YouGameRoom::SeatName(int seat) const
+{
+  std::lock_guard lock(m_impl->mutex);
+  const auto it = m_impl->seat_names.find(seat);
+  return it == m_impl->seat_names.end() ? std::string() : it->second;
 }
 
 std::string YouGameRoom::Code() const

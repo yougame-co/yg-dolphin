@@ -11,6 +11,7 @@
 #include <functional>
 #include <optional>
 
+#include "Core/Orca/Session/Events.h"
 #include "Core/Orca/Session/Session.h"
 
 namespace Core
@@ -24,11 +25,13 @@ namespace Rollback::OnlineMatch
 // host's keyframe (or emulation stops). `local_pad(seat)` gives this player's pad for the given
 // seat. Returns the frame the state was rewound to here (a rollback, or a joiner's keyframe): the
 // state is now the start of that frame.
-// `on_frame(frame, resimulating)` runs first at every boundary (Orca::Events::NotifyFrame), before
-// anything is saved there.
+// `on_frame(frame, resimulating, ports)` runs first at every boundary (Orca::Events::NotifyFrame),
+// before anything is saved there; `ports` are the controllers plugged in at that frame.
+using FrameHook = std::function<void(int frame, bool resimulating,
+                                     const std::vector<Orca::Events::PortInfo>& ports)>;
 std::optional<int> OnBoundary(Core::System& system,
                               const std::function<Orca::Net::Pad(int local_seat)>& local_pad,
-                              const std::function<void(int frame, bool resimulating)>& on_frame);
+                              const FrameHook& on_frame);
 
 // True while this process plays online (solo in its room, or with friends).
 bool Active();

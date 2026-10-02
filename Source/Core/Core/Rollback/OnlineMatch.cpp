@@ -177,6 +177,13 @@ struct Match
   Orca::Net::Stats stats_last{};
   int stats_rbmax = 0;
   double stats_stall_ms = 0;
+
+  // Player names by seat and the frame its controller plugged in (Orca::Events::PortInfo): kept once
+  // seen, so a frame re-run after that player left the room still gets the name it had; this
+  // player's own, for solo frames (also after leaving a room). The ports the UI was last told of.
+  std::map<std::pair<int, int>, std::string> names;
+  std::string own_name;
+  std::vector<Orca::Events::PortInfo> told_ports;
 };
 
 // Desyncs this process saw, every match (the stats line's "ds").
@@ -999,6 +1006,43 @@ void TakeCommands(Match& match)
     JoinInPlay(match, *code);
 }
 
+// ---- Ports, for the in-game UX ----
+
+std::string NameFor(Match& match, int seat, int plug_from)
+{
+  const auto key = std::make_pair(seat, plug_from);
+  if (const auto it = match.names.find(key); it != match.names.end())
+    return it->second;
+  std::string name = Orca::Online::SeatName(seat);
+  if (!name.empty())
+    match.names[key] = name;
+  return name;
+}
+
+// The controllers plugged in at `frame`: in a session, by its synced plan; solo, this player's own.
+std::vector<Orca::Events::PortInfo> PortsAt(Match& match, int frame)
+{
+  if (const std::string own = Orca::Online::SeatName(match.local_seat);
+      !own.empty() && Orca::Online::Seat() == match.local_seat)
+  {
+    match.own_name = own;
+  }
+  std::vector<Orca::Events::PortInfo> ports;
+  if (!match.session)
+  {
+    ports.push_back({match.local_seat, match.own_name, false});
+    return ports;
+  }
+  for (int seat = 0; seat < Orca::Net::MAX_SEATS; ++seat)
+  {
+    if (!match.session->Plugged(seat, frame))
+      continue;
+    ports.push_back(
+        {seat, NameFor(match, seat, match.session->Plan()[seat].plug_from), seat != match.local_seat});
+  }
+  return ports;
+}
+
 // ---- Stats ----
 
 // The numbers for the app ("orca stats", Orca::Events), about once a second; the link stats each
@@ -1087,7 +1131,7 @@ void PublishStall(Match& match, double stalled_ms)
 
 std::optional<int> OnBoundary(Core::System& system,
                               const std::function<Orca::Net::Pad(int local_seat)>& local_pad,
-                              const std::function<void(int frame, bool resimulating)>& on_frame)
+                              const FrameHook& on_frame)
 {
   Match& match = TheMatch();
   if (match.stale)
@@ -1158,7 +1202,17 @@ std::optional<int> OnBoundary(Core::System& system,
 
   // The in-game UX's frame hook: before this boundary's snapshot or keyframe, so what it writes is
   // in them, and on re-runs too.
-  on_frame(match.running + 1, match.session && match.session->Resimulating());
+  {
+    const int frame = match.running + 1;
+    const bool resimulating = match.session && match.session->Resimulating();
+    const std::vector<Orca::Events::PortInfo> ports = PortsAt(match, frame);
+    on_frame(frame, resimulating, ports);
+    if (!resimulating && ports != match.told_ports)
+    {
+      match.told_ports = ports;
+      Orca::Events::NotifyPlugIn(frame, ports);
+    }
+  }
 
   TakeCommands(match);
 

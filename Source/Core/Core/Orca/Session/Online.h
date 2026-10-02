@@ -29,6 +29,8 @@ void Start();
 void StartRoom(const std::string& code, bool joining);
 // The room's code, once known ("" before, or with no room).
 std::string Code();
+// The room roster's name for a seat ("" when unknown or no room).
+std::string SeatName(int seat);
 
 // The app's "join <code>" and "leave" (embed mode; any thread, never blocks). The emulator thread
 // takes them at a frame boundary.

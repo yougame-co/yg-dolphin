@@ -30,6 +30,7 @@
 #include "Core/CoreTiming.h"
 #include "Core/HW/Memmap.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/Session/Events.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Session/PadCodec.h"
@@ -938,6 +939,27 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
 
   const int frame_here = s_frame;
   const bool first_pass_here = frame_here > s_max_frame;  // false while re-running after a load
+  // The in-game UX's frame hook, as an online match calls it (OnlineMatch::OnBoundary): before this
+  // boundary saves anything, and on re-runs, for the frame about to run. The ports are the test's
+  // (ORCA_UX_TEST_NAMES, comma-separated names for ports 1, 2...; else port 1 alone).
+  if (SnapshotModesAllowed())
+  {
+    static const std::vector<Orca::Events::PortInfo> s_test_ports = [] {
+      std::vector<Orca::Events::PortInfo> ports;
+      std::string names = Orca::GetEnv("ORCA_UX_TEST_NAMES");
+      int port = 0;
+      for (size_t start = 0; !names.empty() && start <= names.size() && port < 4; ++port)
+      {
+        const size_t comma = std::min(names.find(',', start), names.size());
+        ports.push_back({port, names.substr(start, comma - start), port > 0});
+        start = comma + 1;
+      }
+      if (ports.empty())
+        ports.push_back({0, "", false});
+      return ports;
+    }();
+    Orca::Events::NotifyFrame(guard, frame_here + 1, !first_pass_here, s_test_ports);
+  }
   if (first_pass_here)
     Diag::OnFirstPassBoundary(system, frame_here);
   if (s_hashlog && first_pass_here && s_synctest_k <= 0)

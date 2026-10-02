@@ -180,6 +180,12 @@ void StartRoom(const std::string& code, bool joining)
   StartLocked(std::move(options));
 }
 
+std::string SeatName(int seat)
+{
+  const auto room = Room();
+  return room ? room->SeatName(seat) : "";
+}
+
 std::string Code()
 {
   const auto room = Room();

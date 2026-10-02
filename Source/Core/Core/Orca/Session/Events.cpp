@@ -90,7 +90,8 @@ int UXCompatVersion()
   return s_ux_compat.load(std::memory_order_relaxed);
 }
 
-void NotifyFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating)
+void NotifyFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
+                 const std::vector<PortInfo>& ports)
 {
   FrameCallback callback;
   {
@@ -98,7 +99,7 @@ void NotifyFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating
     callback = s_frame;
   }
   if (callback)
-    callback(guard, frame, resimulating);
+    callback(guard, frame, resimulating, ports);
 }
 
 void NotifyStall(int stalled_ms)

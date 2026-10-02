@@ -101,6 +101,8 @@ public:
   bool FreshTicket(bool fresh, std::string* ticket, std::string* store_url, std::string* error);
   // The room code in use (for showing and sharing), once known.
   std::string Code() const;
+  // The roster's name for a seat (this player's own included), "" when nobody holds it.
+  std::string SeatName(int seat) const;
   // A line for the UI or log: what the room is doing, or why it ended.
   std::string Status() const;
   // Once Ended: the desktop app's error code for why (Orca::Status), empty for a normal end.

@@ -26,12 +26,13 @@ struct PortInfo
   int port = 0;  // 0-based GameCube port
   std::string name;
   bool remote = false;
+  bool operator==(const PortInfo&) const = default;
 };
 
-// A friend plugged in (or the ports changed): fires on the CPU thread at the frame boundary of
-// `frame` on every machine in the session, inside the rollback domain, so it runs again if that
-// frame is re-simulated. Writes to emulated memory from here must depend only on `frame` and
-// `ports`. One callback; setting it again replaces it, an empty function clears it.
+// The plugged-in ports changed (a friend plugged in or out): on the CPU thread at the boundary of
+// `frame`, first runs only, for the UI (toasts, the overlay). Not for memory writes: a re-run never
+// repeats it (the frame callback's `ports` is what writes use). One callback; setting it again
+// replaces it, an empty function clears it.
 using PlugInCallback = std::function<void(int frame, const std::vector<PortInfo>& ports)>;
 void SetPlugInCallback(PlugInCallback callback);
 
@@ -66,8 +67,11 @@ std::optional<GCPadStatus> LocalPad();
 // them, and again whenever the frame is re-run. `frame` is the frame about to run (the numbers
 // NotifyPlugIn uses); `resimulating` while a rollback re-runs frames. A write to emulated memory
 // from here must be a pure function of that memory and synced data, and idempotent.
-using FrameCallback =
-    std::function<void(const Core::CPUThreadGuard& guard, int frame, bool resimulating)>;
+// `ports`: the controllers plugged in at `frame`, from the session's synced plan and the room's
+// roster names, identical on every machine for the same frame (solo: this player's port). Use these
+// for memory writes, never NotifyPlugIn's (that one is for the UI, first runs only).
+using FrameCallback = std::function<void(const Core::CPUThreadGuard& guard, int frame,
+                                         bool resimulating, const std::vector<PortInfo>& ports)>;
 void SetFrameCallback(FrameCallback callback);
 
 // While the game waits on a friend (a stall), every few milliseconds on the CPU thread: how long so
@@ -83,6 +87,7 @@ int UXCompatVersion();
 // The session's side (Rollback / Online): publish the latest stats, and fire the plug-in callback.
 void PublishLinkStats(const LinkStats& stats);
 void NotifyPlugIn(int frame, const std::vector<PortInfo>& ports);
-void NotifyFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating);
+void NotifyFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
+                 const std::vector<PortInfo>& ports);
 void NotifyStall(int stalled_ms);
 }  // namespace Orca::Events
