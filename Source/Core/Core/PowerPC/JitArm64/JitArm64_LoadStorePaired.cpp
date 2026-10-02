@@ -25,6 +25,13 @@ void JitArm64::psq_lXX(UGeckoInstruction inst)
   // If fastmem is enabled, the asm routines assume address translation is on.
   FALLBACK_IF(!js.assumeNoPairedQuantize && jo.fastmem &&
               !(m_ppc_state.feature_flags & FEATURE_FLAG_MSR_DR));
+  // Orca: in a session, the interpreter runs exactly the psq_l and psq_st that Jit64 sends there
+  // (address translation off, or rA = 0), so a Mac and a PC run each one on the same core. The
+  // interpreter's answers differ from both JITs' (psq_st truncates to single, flushes denormals
+  // whatever FPSCR.NI says and keeps an SNaN; psq_l keeps an SNaN). Project+'s codes do use rA = 0
+  // (psq_stx f14-f31 at 0x803f2e70, psq_lx at 0x801629bc), rarely enough to cost nothing.
+  FALLBACK_IF(m_orca_session &&
+              (inst.RA == 0 || !(m_ppc_state.feature_flags & FEATURE_FLAG_MSR_DR)));
 
   // X30 is LR
   // X0 is a temporary
@@ -122,6 +129,24 @@ void JitArm64::psq_lXX(UGeckoInstruction inst)
     m_float_emit.INS(32, VS, 1, ARM64Reg::Q0, 0);
   }
 
+  if (m_orca_session)
+  {
+    // Orca: Jit64 widens what psq_l loads with CVTPS2PD, which makes an SNaN quiet and keeps
+    // everything else exact (denormals too: MXCSR.DAZ is off). JitArm64 keeps the raw singles, so
+    // an SNaN pattern loaded by psq_l and stored again by stfs or stfd (or moved by fmr first)
+    // came out 0x7FC00001 on a PC and 0x7F800001 on a Mac. In a session the quiet bit of each NaN
+    // lane is set here, as on a PC. FCMEQ only reads (a denormal still equals itself when FPCR.FZ
+    // flushes it), so the other values stay bit for bit. Only a float type can load a NaN. Q0,
+    // locked above, is the one temporary.
+    const ARM64Reg VS_d = EncodeRegToDouble(VS);
+    m_float_emit.FCMEQ(32, ARM64Reg::D0, VS_d, VS_d);  // the lanes that are numbers: all ones
+    m_float_emit.NOT(ARM64Reg::D0, ARM64Reg::D0);      // the NaN lanes: all ones
+    m_float_emit.SHL(32, ARM64Reg::D0, ARM64Reg::D0, 22);
+    m_float_emit.BIC(32, ARM64Reg::D0, 0xFF, 24);
+    m_float_emit.BIC(32, ARM64Reg::D0, 0x80, 16);  // 0x00400000, the quiet bit, in NaN lanes
+    m_float_emit.ORR(VS_d, VS_d, ARM64Reg::D0);
+  }
+
   const ARM64Reg VS_again = fpr.RW(inst.RS, RegType::Single, true);
   ASSERT(VS == VS_again);
 
@@ -152,6 +177,9 @@ void JitArm64::psq_stXX(UGeckoInstruction inst)
   // If fastmem is enabled, the asm routines assume address translation is on.
   FALLBACK_IF(!js.assumeNoPairedQuantize && jo.fastmem &&
               !(m_ppc_state.feature_flags & FEATURE_FLAG_MSR_DR));
+  // Orca: as Jit64 does it, in a session (see psq_lXX).
+  FALLBACK_IF(m_orca_session &&
+              (inst.RA == 0 || !(m_ppc_state.feature_flags & FEATURE_FLAG_MSR_DR)));
 
   // X30 is LR
   // X0 is a temporary

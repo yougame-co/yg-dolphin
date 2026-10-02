@@ -824,6 +824,12 @@ bool Arm64FPRCache::IsTopHalfUsed(ARM64Reg reg) const
 void Arm64FPRCache::FlushRegister(size_t preg, FlushMode mode, ARM64Reg tmp_reg)
 {
   OpArg& reg = m_guest_registers[preg];
+  // Orca: nothing to store or release for a register that isn't in a host register, as in the GPR
+  // cache. DoJit flushes the FPRs an instruction used that nothing reads later; after a fallback
+  // to the interpreter (which flushes every register first) those are already in PPCState, and
+  // this went on to unlock INVALID_REG ("Don't try unlocking a register that isn't in the cache").
+  if (!reg.IsInHostRegister())
+    return;
   const ARM64Reg host_reg = reg.GetReg();
   const bool dirty = !reg.IsInPPCState();
   RegType type = reg.GetFPRType();

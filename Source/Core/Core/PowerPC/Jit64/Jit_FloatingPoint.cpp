@@ -257,7 +257,9 @@ void Jit64::fp_arith(UGeckoInstruction inst)
     sseOp = packed ? &XEmitter::SUBPD : &XEmitter::SUBSD;
     break;
   case 21:
-    reversible = !m_accurate_nans;
+    // Orca: reversible with accurate NaNs too. Upstream relied on x86 picking the first operand's
+    // NaN for an addition; HandleNaNs now picks it from a and b in PowerPC's order itself.
+    reversible = true;
     preserve_inputs = m_accurate_nans;
     avxOp = packed ? &XEmitter::VADDPD : &XEmitter::VADDSD;
     sseOp = packed ? &XEmitter::ADDPD : &XEmitter::ADDSD;

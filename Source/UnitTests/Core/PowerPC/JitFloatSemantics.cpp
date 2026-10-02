@@ -12,14 +12,20 @@
 // - a denormal single that was loaded (lfs, psq_l) counts as itself in arithmetic, compares and
 //   conversions, where an ARM CPU without FEAT_AFP (Apple M1 to M3) flushes it as an input;
 // - fctiw(z) of a NaN is 0x80000000; frsqrte of a negative number is the default NaN.
+// The FPSCR bits the JITs write themselves (ZX and VXSQRT, with FX) must match the interpreter's
+// too: mffs and an OS context save carry them into RAM. Data accesses run with address translation
+// on (a BAT maps the first 256 MB as itself), as games run, so Jit64 runs psq_l and psq_st itself
+// (it leaves them to the interpreter with translation off).
 // On an Apple M4 or later, run it a second time with ORCA_TEST_NO_AFP=1 to cover an M1 to M3.
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
 #include <cstdlib>
 #include <functional>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -38,6 +44,7 @@
 #include "Core/HW/Memmap.h"
 #include "Core/PowerPC/JitCommon/JitBase.h"
 #include "Core/PowerPC/JitInterface.h"
+#include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/System.h"
 #include "UICommon/UICommon.h"
@@ -82,6 +89,14 @@ constexpr u32 STFS(u32 s, u32 offset)
 {
   return D_FORM(52, s, 5, offset);
 }
+constexpr u32 STFD(u32 s, u32 offset)
+{
+  return D_FORM(54, s, 5, offset);
+}
+constexpr u32 FMR(u32 d, u32 b)
+{
+  return (63u << 26) | (d << 21) | (b << 11) | (72u << 1);
+}
 // GQR0 is zero: float pairs, no scale.
 constexpr u32 PSQ_L(u32 d, u32 offset)
 {
@@ -91,15 +106,25 @@ constexpr u32 PSQ_ST(u32 s, u32 offset, u32 w = 0)
 {
   return (60u << 26) | (s << 21) | (5u << 16) | (w << 15) | (offset & 0xFFF);
 }
+// psq_lx/psq_stx with rA = 0: the address is r5 alone.
+constexpr u32 PSQ_LX_RA0(u32 d)
+{
+  return (4u << 26) | (d << 21) | (5u << 11) | (6u << 1);
+}
+constexpr u32 PSQ_STX_RA0(u32 s)
+{
+  return (4u << 26) | (s << 21) | (5u << 11) | (7u << 1);
+}
 
 // Opcodes and extended opcodes
 constexpr u32 OP_DOUBLE = 63, OP_SINGLE = 59, OP_PAIRED = 4;
-constexpr u32 XO_DIV = 18, XO_SUB = 20, XO_ADD = 21, XO_SEL = 23, XO_MUL = 25, XO_RSQRTE = 26,
-              XO_MSUB = 28, XO_MADD = 29, XO_NMSUB = 30, XO_NMADD = 31;
+constexpr u32 XO_DIV = 18, XO_SUB = 20, XO_ADD = 21, XO_SEL = 23, XO_RES = 24, XO_MUL = 25,
+              XO_RSQRTE = 26, XO_MSUB = 28, XO_MADD = 29, XO_NMSUB = 30, XO_NMADD = 31;
 constexpr u32 XO_SUM0 = 10, XO_SUM1 = 11, XO_MULS0 = 12, XO_MULS1 = 13, XO_MADDS0 = 14,
               XO_MADDS1 = 15;
 
 constexpr u64 ZERO = 0;
+constexpr u64 NEG_ZERO = 0x8000'0000'0000'0000;
 constexpr u64 ONE = 0x3FF0'0000'0000'0000;
 constexpr u64 TWO = 0x4000'0000'0000'0000;
 constexpr u64 MINUS_ONE = 0xBFF0'0000'0000'0000;
@@ -168,11 +193,18 @@ struct Case
   std::function<void(const Result&, const std::string&)> expect;
   // Stored words (by index) the JIT may store differently from the interpreter.
   std::vector<u32> data_differs_from_interpreter;
+  // Registers the JIT may hold differently from the interpreter (both halves).
+  std::vector<int> fprs_differ_from_interpreter;
   // The interpreter's own answer depends on the host here: on a CPU that flushes denormal inputs
   // (DenormalInputsFlushed) its C++ compares read a double denormal as zero, where the JIT, Jit64
   // and the interpreter elsewhere don't. The pinned expectation still holds.
   bool interpreter_flushes_here = false;
 };
+
+// The FPSCR exception bits a JIT sets itself in an Orca session (fres, frsqrte and their paired
+// forms). The JITs leave the others (VXISI, VXIMZ, VXSNAN, ZX of fdiv...) alone with float
+// exceptions off, where the interpreter sets them, so only these are compared.
+constexpr u32 JIT_FPSCR_BITS = FPSCR_ZX | FPSCR_VXSQRT;
 
 class JitFloatSemantics : public testing::Test
 {
@@ -240,8 +272,13 @@ protected:
     ppc.fpscr.NI = 1;
     ppc.fpscr.RN = static_cast<Common::FPU::RoundMode>(c.rounding_mode);
     PowerPC::RoundingModeUpdated(ppc);
+    // DBAT0: effective 0x00000000-0x0FFFFFFF to the same physical addresses, read/write.
+    ppc.spr[SPR_DBAT0U] = 0x0000'1FFF;
+    ppc.spr[SPR_DBAT0L] = 0x0000'0002;
+    system.GetMMU().DBATUpdated();
     ppc.msr.Hex = 0;
     ppc.msr.FP = 1;
+    ppc.msr.DR = 1;
     HID2(ppc).PSE = 1;
     HID2(ppc).LSQE = 1;
     power_pc.MSRUpdated();
@@ -292,6 +329,11 @@ protected:
     const bool skip_fprs = c.interpreter_flushes_here && ARM_JIT && !cpu_info.bAFP;
     for (int reg = 0; reg < 32 && !skip_fprs; ++reg)
     {
+      if (std::find(c.fprs_differ_from_interpreter.begin(), c.fprs_differ_from_interpreter.end(),
+                    reg) != c.fprs_differ_from_interpreter.end())
+      {
+        continue;
+      }
       EXPECT_EQ(expected.ps0[reg], actual.ps0[reg])
           << where
           << fmt::format(": f{} ps0 interpreter {:016x}, JIT {:016x}", reg, expected.ps0[reg],
@@ -302,6 +344,14 @@ protected:
                          actual.ps1[reg]);
     }
     EXPECT_EQ(expected.cr, actual.cr) << where << ": CR";
+    if (!skip_fprs)
+    {
+      EXPECT_EQ(expected.fpscr & JIT_FPSCR_BITS, actual.fpscr & JIT_FPSCR_BITS)
+          << where
+          << fmt::format(": FPSCR interpreter {:08x}, JIT {:08x}", expected.fpscr, actual.fpscr);
+    }
+    if (actual.fpscr & JIT_FPSCR_BITS)
+      EXPECT_NE(0u, actual.fpscr & FPSCR_FX) << where << fmt::format(": FPSCR {:08x}", actual.fpscr);
     for (u32 i = 0; i < DATA_WORDS; ++i)
     {
       bool skip = false;
@@ -750,24 +800,28 @@ TEST_F(JitFloatSemantics, DenormalSingles)
     EXPECT_EQ(S_DENORMAL, r.data[12]) << where;
   };
   Check(stfs);
-  // An SNaN that psq_l loaded goes quiet on psq_st, as Jit64 stores it (CVTPS2PD, CVTPD2PS). The
-  // interpreter keeps it signalling. Jit64 itself only runs psq_l/psq_st with address translation
-  // on, so in this test (translation off) it falls back to the interpreter.
-  if (ARM_JIT)
+  // An SNaN that psq_l loads goes quiet, as Jit64 loads it (CVTPS2PD), whatever stores it next:
+  // psq_st, stfs, stfd, or stfs after fmr. The interpreter keeps it signalling.
   {
-    Case snan = make("psq_st of psq_l SNaN", {PSQ_L(2, 32), PSQ_ST(2, 40)});
-    snan.data_differs_from_interpreter = {10};
+    Case snan = make("psq_l SNaN, then psq_st, stfs, stfd, fmr + stfs",
+                     {PSQ_L(2, 32), PSQ_ST(2, 40), STFS(2, 48), STFD(2, 56), FMR(6, 2),
+                      STFS(6, 64)});
+    snan.data_differs_from_interpreter = {10, 12, 14, 15, 16};
+    snan.fprs_differ_from_interpreter = {2, 6};
     snan.expect = [](const Result& r, const std::string& where) {
-      EXPECT_EQ(0x7FC0'0001u, r.data[10]) << where << fmt::format(": {:08x}", r.data[10]);
+      EXPECT_EQ(0x7FC0'0001u, r.data[10]) << where << fmt::format(": psq_st {:08x}", r.data[10]);
       EXPECT_EQ(S_ONE, r.data[11]) << where;
+      EXPECT_EQ(0x7FC0'0001u, r.data[12]) << where << fmt::format(": stfs {:08x}", r.data[12]);
+      EXPECT_EQ(0x7FF8'0000u, r.data[14]) << where << fmt::format(": stfd {:08x}", r.data[14]);
+      EXPECT_EQ(0x2000'0000u, r.data[15]) << where << fmt::format(": stfd {:08x}", r.data[15]);
+      EXPECT_EQ(0x7FC0'0001u, r.data[16]) << where << fmt::format(": fmr {:08x}", r.data[16]);
+      EXPECT_EQ(0x7FF8'0000'2000'0000u, r.ps0[2]) << where << fmt::format(": {:016x}", r.ps0[2]);
     };
     Check(snan);
   }
 
   // A NaN stored as an integer: Jit64's answer (the interpreter casts a NaN to an integer, which
-  // has none). A pair saturates as 65535 does, a single becomes the type's minimum. Only JitArm64
-  // runs psq_st here (Jit64 needs address translation on for it and falls back).
-  if (ARM_JIT)
+  // has none). A pair saturates as 65535 does, a single becomes the type's minimum.
   {
     struct Quantized
     {
@@ -820,4 +874,142 @@ TEST_F(JitFloatSemantics, DenormalSingles)
     fmt::print("{}: {:016x}\n", where, r.ps0[1]);
   };
   Check(double_denormal);
+}
+
+// fres, ps_res, frsqrte and ps_rsqrte of +0 and -0: the infinity of the input's sign, and
+// FPSCR.ZX with FX. Jit64's fres saw -0.0 as nonzero (the sign bit) until 2026-10-02 and skipped
+// both bits, which an OS context save then carried into RAM.
+TEST_F(JitFloatSemantics, EstimatesOfZero)
+{
+  for (const u64 zero : {ZERO, NEG_ZERO})
+  {
+    const u64 inf = zero == ZERO ? INF : NINF;
+    for (const auto& [name, opcode, xo] :
+         {std::tuple{"fres", OP_SINGLE, XO_RES}, std::tuple{"ps_res", OP_PAIRED, XO_RES},
+          std::tuple{"frsqrte", OP_DOUBLE, XO_RSQRTE},
+          std::tuple{"ps_rsqrte", OP_PAIRED, XO_RSQRTE}})
+    {
+      Case c;
+      c.name = fmt::format("{} {:016x}", name, zero);
+      c.code = {A_FORM(opcode, xo, 1, 0, 3, 0)};
+      c.fprs = {{3, zero, zero}};
+      c.expect = [inf](const Result& r, const std::string& where) {
+        EXPECT_EQ(inf, r.ps0[1]) << where << fmt::format(": f1 ps0 {:016x}", r.ps0[1]);
+        EXPECT_EQ(FPSCR_ZX | FPSCR_FX, r.fpscr & (FPSCR_ZX | FPSCR_FX))
+            << where << fmt::format(": FPSCR {:08x}", r.fpscr);
+      };
+      Check(c);
+    }
+  }
+}
+
+// fmadds and ps_madd of loaded singles whose exact product lies on a tie between two singles, which
+// b, far smaller, decides (Mario Strikers Charged): 50 * c + b is 0xBF55BF17. An AFP CPU runs a
+// single-precision FMADD on these; an M1 to M3 (they could be denormals there) and Jit64 the
+// double-precision error-free transformation. Both must round once.
+TEST_F(JitFloatSemantics, FmaddsTie)
+{
+  const std::vector<std::pair<u32, u32>> data = {{0, 0x4248'0000}, {1, 0x4248'0000},
+                                                 {2, 0x1B1C'72A0}, {3, 0x1B1C'72A0},
+                                                 {4, 0xBC88'CC38}, {5, 0xBC88'CC38}};
+  Case fmadds;
+  fmadds.name = "fmadds tie (lfs)";
+  fmadds.code = {LFS(2, 0), LFS(3, 8), LFS(4, 16), A_FORM(OP_SINGLE, XO_MADD, 1, 2, 3, 4),
+                 STFS(1, 40)};
+  fmadds.data = data;
+  fmadds.expect = [](const Result& r, const std::string& where) {
+    EXPECT_EQ(0xBF55'BF17u, r.data[10]) << where << fmt::format(": {:08x}", r.data[10]);
+  };
+  Check(fmadds);
+  Case ps_madd;
+  ps_madd.name = "ps_madd tie (psq_l)";
+  ps_madd.code = {PSQ_L(2, 0), PSQ_L(3, 8), PSQ_L(4, 16), A_FORM(OP_PAIRED, XO_MADD, 1, 2, 3, 4),
+                  PSQ_ST(1, 40)};
+  ps_madd.data = data;
+  ps_madd.expect = [](const Result& r, const std::string& where) {
+    EXPECT_EQ(0xBF55'BF17u, r.data[10]) << where << fmt::format(": ps0 {:08x}", r.data[10]);
+    EXPECT_EQ(0xBF55'BF17u, r.data[11]) << where << fmt::format(": ps1 {:08x}", r.data[11]);
+  };
+  Check(ps_madd);
+}
+
+// The interpreter, which the JITs fall back to (Rc = 1 forms, among others), runs under the
+// guest's host float mode too. On an ARM CPU with FEAT_AFP that sets FPCR.AH, where the host's
+// FABS and FNEG leave a NaN's sign alone and Clang's std::copysign of a double (a mask built with
+// FNEG) loses the sign. The interpreter's fabs, fres and fctiw must not depend on it.
+TEST_F(JitFloatSemantics, InterpreterSignsUnderHostMode)
+{
+  // fabs, fnabs, fneg of a negative NaN, an SNaN and -0.
+  for (const u64 b : {QNAN_B, SNAN_C, NEG_ZERO, MINUS_ONE})
+  {
+    for (const auto& [name, xo, result] :
+         {std::tuple{"fabs", 264u, b & ~NEG_ZERO}, std::tuple{"fnabs", 136u, b | NEG_ZERO},
+          std::tuple{"fneg", 40u, b ^ NEG_ZERO}})
+    {
+      Case c;
+      c.name = fmt::format("{} {:016x}", name, b);
+      c.code = {X_FORM(OP_DOUBLE, xo, 1, 0, 3)};
+      c.fprs = {{3, b, b}};
+      c.expect = ExpectF1Ps0(result);
+      Check(c);
+    }
+  }
+  // fres of a negative number too small, too large, or infinite for the table.
+  for (const auto& [b, result] :
+       {std::pair{std::bit_cast<u64>(-1e-300), std::bit_cast<u64>(-double(3.4028234663852886e38))},
+        std::pair{std::bit_cast<u64>(-1e300), NEG_ZERO}, std::pair{NINF, NEG_ZERO}})
+  {
+    Case c;
+    c.name = fmt::format("fres {:016x}", b);
+    c.code = {A_FORM(OP_SINGLE, XO_RES, 1, 0, 3, 0)};
+    c.fprs = {{3, b, b}};
+    c.expect = ExpectF1(result, result);
+    Check(c);
+  }
+  // fctiw of negative numbers in every rounding mode (the interpreter's round-to-nearest adds
+  // 2^52 with the input's sign). A result of -0 is the one place the JITs and the interpreter
+  // still differ, alike on every host: PowerPC (and the interpreter) set the upper word to
+  // 0xFFF80001 there, both JITs to 0xFFF80000.
+  struct Conversion
+  {
+    double b;
+    std::array<s32, 4> by_mode;  // nearest, toward zero, toward +inf, toward -inf
+  };
+  for (const Conversion& conversion :
+       {Conversion{-1.5, {-2, -1, -1, -2}}, Conversion{-3.5, {-4, -3, -3, -4}},
+        Conversion{-2.5, {-2, -2, -2, -3}}, Conversion{-0.75, {-1, 0, 0, -1}},
+        Conversion{-0.4, {0, 0, 0, -1}}, Conversion{2.5, {2, 2, 3, 2}}})
+  {
+    for (u32 rn = 0; rn < 4; ++rn)
+    {
+      const s32 value = conversion.by_mode[rn];
+      Case c;
+      c.name = fmt::format("fctiw {} RN {}", conversion.b, rn);
+      c.code = {X_FORM(OP_DOUBLE, 14, 1, 0, 3)};
+      c.fprs = {{3, std::bit_cast<u64>(conversion.b), std::bit_cast<u64>(conversion.b)}};
+      c.rounding_mode = rn;
+      if (value == 0 && conversion.b < 0)
+        c.fprs_differ_from_interpreter = {1};
+      const u64 result = 0xFFF8'0000'0000'0000 | static_cast<u32>(value);
+      c.expect = ExpectF1Ps0(result);
+      Check(c);
+    }
+  }
+}
+
+// psq_lx and psq_stx with rA = 0, which Project+'s codes use: Jit64 leaves them to the interpreter,
+// and in a session JitArm64 does too, so a Mac and a PC store the same truncated single (the
+// interpreter's psq_st truncates; both JITs round). JitArm64 used to stop on its register cache
+// here (an FPR flushed by the fallback, then flushed again as unused).
+TEST_F(JitFloatSemantics, PairedRa0FallsBack)
+{
+  Case store;
+  store.name = "psq_stx rA = 0 of 1/3";
+  store.code = {PSQ_STX_RA0(2), PSQ_LX_RA0(3)};
+  store.fprs = {{2, 0x3FD5'5555'5555'5555, ONE}};
+  store.expect = [](const Result& r, const std::string& where) {
+    EXPECT_EQ(0x3EAA'AAAAu, r.data[0]) << where << fmt::format(": {:08x}", r.data[0]);
+    EXPECT_EQ(S_ONE, r.data[1]) << where;
+  };
+  Check(store);
 }
