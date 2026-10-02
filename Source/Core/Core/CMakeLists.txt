@@ -532,6 +532,8 @@ add_library(core
   Orca/UX/Controllers.h
   Orca/UX/ControllerSource.cpp
   Orca/UX/ControllerSource.h
+  Orca/UX/Overlay.cpp
+  Orca/UX/Overlay.h
   Orca/UX/UX.cpp
   Orca/UX/UX.h
   NetworkCaptureLogger.cpp
@@ -742,6 +744,7 @@ PUBLIC
 
 PRIVATE
   CURL::libcurl
+  imgui
   zstd::zstd
   FatFs
   fmt::fmt

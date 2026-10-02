@@ -20,6 +20,7 @@
 
 #include "Core/Orca/UX/ControllerSource.h"
 #include "Core/Orca/UX/Controllers.h"
+#include "Core/Orca/UX/Overlay.h"
 #include "InputCommon/GCPadStatus.h"
 
 using namespace Orca::UX;
@@ -391,6 +392,116 @@ TEST(OrcaUXControllers, StaleOrSuspendedInputIsNeutral)
   EXPECT_FALSE(ChooseLocalPad(*s, 250)->neutral);
   EXPECT_TRUE(ChooseLocalPad(*s, 250.5)->neutral);
   EXPECT_EQ(ChooseLocalPad(*s, 250.5)->pad.stickX, 128);
+}
+
+
+namespace
+{
+std::vector<Orca::Events::PortInfo> Ports(std::initializer_list<Orca::Events::PortInfo> list)
+{
+  return list;
+}
+}  // namespace
+
+TEST(OrcaUXOverlay, ToastsFollowThePortListOnceEach)
+{
+  OverlayModel m;
+  // The solo host's own port at boot: no toast.
+  m.OnPorts(Ports({{0, "luis", false}}), 0);
+  EXPECT_TRUE(m.View(10, false).toasts.empty());
+  // A friend plugs in; a re-run of that frame gives the same list again: one toast.
+  m.OnPorts(Ports({{0, "luis", false}, {1, "ada", true}}), 1000);
+  m.OnPorts(Ports({{0, "luis", false}, {1, "ada", true}}), 1010);
+  auto v = m.View(1100, false);
+  ASSERT_EQ(v.toasts.size(), 1u);
+  EXPECT_EQ(v.toasts[0].text, "ada joined on port 2");
+  EXPECT_FLOAT_EQ(v.toasts[0].alpha, 1);
+  // It fades over its last half second and is gone after three.
+  EXPECT_NEAR(m.View(3750, false).toasts[0].alpha, 0.5f, 1e-4);
+  EXPECT_TRUE(m.View(4001, false).toasts.empty());
+  // The friend unplugs.
+  m.OnPorts(Ports({{0, "luis", false}}), 5000);
+  v = m.View(5001, false);
+  ASSERT_EQ(v.toasts.size(), 1u);
+  EXPECT_EQ(v.toasts[0].text, "ada left");
+
+  // A joiner's first list already holds the host.
+  OverlayModel joiner;
+  joiner.OnPorts(Ports({{0, "luis", true}, {1, "ada", false}}), 0);
+  ASSERT_EQ(joiner.View(1, false).toasts.size(), 1u);
+  EXPECT_EQ(joiner.View(1, false).toasts[0].text, "luis is on port 1");
+}
+
+TEST(OrcaUXOverlay, WaitingOnlyAfterAQuarterSecondOfStall)
+{
+  OverlayModel m;
+  m.OnPorts(Ports({{0, "luis", false}, {1, "ada", true}}), 0);
+  LinkView link;
+  link.online = true;
+  link.round_trip_ms = 40;
+  link.stalled_ms = 200;
+  link.waiting_seat = 1;
+  m.Update(link, 100);
+  EXPECT_EQ(m.View(100, false).waiting, "");
+  link.stalled_ms = 260;
+  m.Update(link, 160);
+  EXPECT_EQ(m.View(160, false).waiting, "Waiting for ada\u2026");
+  EXPECT_EQ(m.View(160, false).signal, Signal::Bad);
+  // The session that doesn't report stall time yet (-1) never shows it.
+  link.stalled_ms = -1;
+  m.Update(link, 200);
+  EXPECT_EQ(m.View(200, false).waiting, "");
+  // Offline: nothing at all.
+  link.online = false;
+  link.stalled_ms = 900;
+  m.Update(link, 300);
+  EXPECT_FALSE(m.View(300, false).show_signal);
+  EXPECT_EQ(m.View(300, false).waiting, "");
+}
+
+TEST(OrcaUXOverlay, SignalFromRoundTripAndRecentStalls)
+{
+  LinkView link;
+  link.online = true;
+  link.stalled_ms = 0;
+  const auto signal_at = [](LinkView l, std::vector<std::pair<double, int>> stalls) {
+    OverlayModel m;
+    for (auto [t, n] : stalls)
+    {
+      l.stalls = n;
+      m.Update(l, t);
+    }
+    return m.View(stalls.back().first, false).signal;
+  };
+  link.round_trip_ms = 30;
+  EXPECT_EQ(signal_at(link, {{0, 5}, {1000, 5}}), Signal::Good);
+  EXPECT_EQ(signal_at(link, {{0, 5}, {1000, 7}}), Signal::Ok);
+  EXPECT_EQ(signal_at(link, {{0, 5}, {1000, 15}}), Signal::Bad);
+  // Stalls older than three seconds no longer count.
+  EXPECT_EQ(signal_at(link, {{0, 5}, {1000, 15}, {4500, 15}}), Signal::Good);
+  link.round_trip_ms = 90;
+  EXPECT_EQ(signal_at(link, {{0, 0}}), Signal::Ok);
+  link.round_trip_ms = 160;
+  EXPECT_EQ(signal_at(link, {{0, 0}}), Signal::Bad);
+  link.round_trip_ms = -1;  // no measurement yet
+  EXPECT_EQ(signal_at(link, {{0, 0}}), Signal::Good);
+}
+
+TEST(OrcaUXOverlay, StatsReadoutOnlyWhenAskedAndOnline)
+{
+  OverlayModel m;
+  LinkView link;
+  link.online = true;
+  link.round_trip_ms = 42;
+  link.delay = 2;
+  link.rollbacks_per_second = 1.25;
+  m.Update(link, 0);
+  EXPECT_EQ(m.View(0, false).stats, "");
+  EXPECT_EQ(m.View(0, true).stats, "42 ms \u00b7 delay 2 \u00b7 1.2 rb/s");
+  EXPECT_TRUE(m.View(0, true).show_signal);
+  link.online = false;
+  m.Update(link, 1);
+  EXPECT_EQ(m.View(1, true).stats, "");
 }
 
 #ifndef _WIN32

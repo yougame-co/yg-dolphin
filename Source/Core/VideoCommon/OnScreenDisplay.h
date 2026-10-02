@@ -50,6 +50,11 @@ void AddTypedMessage(MessageType type, std::string message, u32 ms = Duration::S
 void DrawMessages();
 void ClearMessages();
 
+// Orca: a host-side layer (the online overlay) drawn with ImGui after the messages, once per
+// presented frame, over the final image. Empty clears it.
+void SetHostOverlay(std::function<void()> draw);
+void DrawHostOverlay();
+
 void SetObscuredPixelsLeft(int width);
 void SetObscuredPixelsTop(int height);
 }  // namespace OSD

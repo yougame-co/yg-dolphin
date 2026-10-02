@@ -19,6 +19,7 @@
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Status.h"
+#include "Core/Orca/UX/Overlay.h"
 #include "Core/System.h"
 
 Platform::~Platform() = default;
@@ -234,6 +235,14 @@ void Platform::ProcessEmbedCommands()
         Embed::Out("unsupported leave");
       else
         Orca::Online::RequestLeave();
+    }
+    else if (cmd == "ping")
+    {
+      // The online overlay's ping and delay readout (off by default).
+      std::string value;
+      in >> value;
+      if (value == "on" || value == "off")
+        Orca::UX::SetStatsVisible(value == "on");
     }
     else if (cmd == "prepare-join")
     {

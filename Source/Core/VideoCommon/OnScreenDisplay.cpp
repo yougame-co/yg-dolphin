@@ -153,6 +153,25 @@ void AddMessage(std::string message, u32 ms, u32 argb,
   s_messages.emplace(MessageType::Typeless, Message(Orca::BrandText(message), ms, argb, icon));
 }
 
+namespace
+{
+std::mutex s_host_overlay_mutex;
+std::function<void()> s_host_overlay;
+}  // namespace
+
+void SetHostOverlay(std::function<void()> draw)
+{
+  std::lock_guard lock{s_host_overlay_mutex};
+  s_host_overlay = std::move(draw);
+}
+
+void DrawHostOverlay()
+{
+  std::lock_guard lock{s_host_overlay_mutex};
+  if (s_host_overlay)
+    s_host_overlay();
+}
+
 void DrawMessages()
 {
   const bool draw_messages = Config::Get(Config::MAIN_OSD_MESSAGES);
