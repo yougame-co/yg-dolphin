@@ -20,7 +20,9 @@
 # it) and, on Yes, write a new save to the NAND. In its place: the game's own "continue without
 # saving" (state 24 on No then Yes): clear the save flags (+0x48 &= 0xE0) and go to state 55, the
 # end of the boot check. No dialog, no save written; a session's NAND is thrown away anyway. A
-# session that seeds a save never reaches state 5.
+# session that seeds a save never reaches state 5. The six words are one group (GamePatches.h),
+# written only while all six originals are there, the relocated `bl` included: other menu modules
+# use this memory after the boot.
 811A6430 80030068 88030048    # lbz   r0, 0x48(r3)
 811A6434 83E3005C 54000634    # rlwinm r0, r0, 0, 24, 26
 811A6438 2C000000 98030048    # stb   r0, 0x48(r3)
@@ -38,21 +40,30 @@
 
 # --- Everything unlocked --------------------------------------------------------------------------
 
-# Status (2026-10-02, checked on the character and stage selects under the harness): every stage
-# (all 31 Brawl stages, Melee stages) is unlocked, and Marth, Luigi and Ness join the roster with
-# no announcement; the eleven characters met in the Subspace Emissary (Falco, Wolf, Toon Link,
-# Ganondorf, Jigglypuff, Sonic, Mr. Game & Watch, R.O.B., Snake, Lucario, Captain Falcon) are not
-# there yet: their unlock lives somewhere this file doesn't write yet.
-#
 # The prize-unlock check (0x8004F978) reads any bit outside its 102-prize table as set for bits
 # 0-11 of each word (the community code's choice).
 8004FAE4 7C03002E 38000FFF    # lwzx r0, r3, r0 -> li r0, 0xFFF (the prize-unlock check)
-8004E818 5403F7FE 38600001    # record +0x268 bit 0x04 -> always 1
-8004E83C 5403EFFE 38600001    # record +0x268 bit 0x08 -> always 1
+8004E7D0 540307FE 38600001    # record +0x268 bit 0x01 -> always 1 (Solo: All-Star)
+8004E7F4 5403FFFE 38600001    # record +0x268 bit 0x02 -> always 1 (Stadium: Boss Battles)
+8004E818 5403F7FE 38600001    # record +0x268 bit 0x04 -> always 1 (community code)
+8004E83C 5403EFFE 38600001    # record +0x268 bit 0x08 -> always 1 (community code)
 
-# gmGlobalRecord (0x9017B640) data, written every frame: its first word, and 0x80 bytes of state 2
-# at +0x1528 (both as the community code writes them).
-9017B640 * 000001FF
+# sqPrizeCheck (sora_scene, 0x806F5B64, state at +0x8): at boot it walks the prizes that are
+# unlocked and not yet announced (the list at 0x806F5FB8: four tables, the last ones derived, such
+# as co-op events from the roster) and, if any, shows them on scPrizeInfo before the menu. The
+# list is still built (it marks what it finds as announced, as the game does), but state 10 always
+# goes on to state 14, the menu, never to the announcement. The first table is skipped outright so
+# its entries can never fill the 16-entry list before the derived tables have run.
+806F603C 40820084 48000084    # bne- +0x84 -> b +0x84 (first table: skip the prize)
+806F5EB0 40820010 48000010    # bne- +0x10 -> b +0x10 (state 10: never scPrizeInfo)
+
+# gmGlobalRecord (0x9017B640) data, written every frame. The fighters: 3 bits each from bit 0 of
+# the record (unlocked, shown on the character select, seen there: no "NEW!"), for the 14 secret
+# fighters n = 0-13 of the table at 0x80407A40 (0x800AF350; n = 14 is a starter); the community code
+# sets bits 0-8 (Marth, Luigi, Ness), here all 42. Then 0x80 bytes of state 2 at +0x1528, as the
+# community code writes them.
+9017B640 * FFFFFFFF
+9017B644 * 000003FF
 9017CB68 * 02020202
 9017CB6C * 02020202
 9017CB70 * 02020202
@@ -96,12 +107,12 @@
 9017B66C * FFFFFFFF
 9017B670 * FFFFFFFF
 9017B674 * FFFFFFFF
-# The prize states the check reads first (+0x24C, 102 prizes at 2 bits): all unlocked and
-# announced.
+# The prize states the check reads first (+0x24C, 102 prizes at 2 bits, bit 0 of each word first):
+# all unlocked and announced, and nothing past the 204th bit.
 9017B88C * FFFFFFFF
 9017B890 * FFFFFFFF
 9017B894 * FFFFFFFF
 9017B898 * FFFFFFFF
 9017B89C * FFFFFFFF
 9017B8A0 * FFFFFFFF
-9017B8A4 * FFFFFFFF
+9017B8A4 * 00000FFF

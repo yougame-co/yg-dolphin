@@ -4,7 +4,7 @@
 #include "Core/Orca/UX/GamePatches.h"
 
 #include <cstdlib>
-#include <mutex>
+#include <set>
 
 #include <fmt/format.h>
 
@@ -14,6 +14,7 @@
 #include "Core/Core.h"
 #include "Core/Debugger/PPCDebugInterface.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/Status.h"
 #include "Core/PowerPC/MMU.h"
 
 namespace Orca::UX
@@ -62,7 +63,10 @@ std::vector<std::string_view> Words(std::string_view line)
 std::optional<std::vector<GamePatch>> ParseGamePatches(std::string_view text, std::string* error)
 {
   std::vector<GamePatch> patches;
+  std::set<u32> seen;
   int number = 0;
+  if (text.starts_with("\xEF\xBB\xBF"))  // a UTF-8 BOM an editor may add
+    text.remove_prefix(3);
   while (!text.empty())
   {
     ++number;
@@ -89,42 +93,89 @@ std::optional<std::vector<GamePatch>> ParseGamePatches(std::string_view text, st
         *error = fmt::format("line {}: expected `<address> <original|*> <value>` in hex", number);
       return std::nullopt;
     }
-    patches.push_back({*address, original, *value});
+    if (!seen.insert(*address).second)
+    {
+      if (error)
+        *error = fmt::format("line {}: address {:08X} repeated", number, *address);
+      return std::nullopt;
+    }
+    const bool joins = original && !patches.empty() && patches.back().original &&
+                       patches.back().address + 4 == *address;
+    patches.push_back({*address, original, *value, joins});
   }
   return patches;
 }
 
+bool GroupApplies(std::span<const GamePatch> group, std::span<const u32> now)
+{
+  if (group.empty() || group.size() != now.size())
+    return false;
+  if (!group[0].original)  // a `*` line
+    return now[0] != group[0].value;
+  bool changes = false;
+  for (size_t i = 0; i < group.size(); ++i)
+  {
+    if (now[i] != *group[i].original)
+      return false;
+    changes |= group[i].value != *group[i].original;
+  }
+  return changes;
+}
+
 void ApplyGamePatches(const Core::CPUThreadGuard& guard)
 {
-  static std::once_flag s_loaded;
+  // Loaded per profile (a process could boot a second game), on the CPU thread only.
+  static std::string s_for;
   static std::vector<GamePatch> s_patches;
-  std::call_once(s_loaded, [] {
-    const Orca::Profile* profile = Orca::ActiveProfile();
-    if (!profile || profile->IsLauncher())
-      return;
-    const std::string path = File::GetSysDirectory() + "Orca/" + profile->game_id + ".patches";
-    std::string text;
-    if (!File::ReadFileToString(path, text))
-      return;
-    std::string error;
-    if (auto parsed = ParseGamePatches(text, &error))
-    {
-      s_patches = std::move(*parsed);
-      NOTICE_LOG_FMT(ROLLBACK, "Orca: {} game patches from {}", s_patches.size(), path);
-    }
-    else
-    {
-      ERROR_LOG_FMT(ROLLBACK, "Orca: {} refused, {}: no game patches", path, error);
-    }
-  });
-  for (const GamePatch& p : s_patches)
+  const Orca::Profile* profile = Orca::ActiveProfile();
+  const std::string game = profile && !profile->IsLauncher() ? profile->game_id : std::string{};
+  if (game != s_for)
   {
-    if (!PowerPC::MMU::HostIsRAMAddress(guard, p.address))
+    s_for = game;
+    s_patches.clear();
+    const std::string path = File::GetSysDirectory() + "Orca/" + game + ".patches";
+    std::string text;
+    if (!game.empty() && File::ReadFileToString(path, text))
+    {
+      std::string error;
+      if (auto parsed = ParseGamePatches(text, &error))
+      {
+        s_patches = std::move(*parsed);
+        NOTICE_LOG_FMT(ROLLBACK, "Orca: {} game patches from {}", s_patches.size(), path);
+      }
+      else
+      {
+        ERROR_LOG_FMT(ROLLBACK, "Orca: {} refused, {}: no game patches", path, error);
+        Orca::Status::Error("profile", "Orca's game data for this disc is damaged. Reinstall Orca.");
+      }
+    }
+  }
+  std::vector<u32> now;
+  for (size_t start = 0; start < s_patches.size();)
+  {
+    size_t end = start + 1;
+    while (end < s_patches.size() && s_patches[end].joins_previous)
+      ++end;
+    const std::span<const GamePatch> group(s_patches.data() + start, end - start);
+    start = end;
+    now.clear();
+    for (const GamePatch& p : group)
+    {
+      if (!PowerPC::MMU::HostIsRAMAddress(guard, p.address))
+        break;
+      now.push_back(PowerPC::MMU::HostRead<u32>(guard, p.address));
+    }
+    if (!GroupApplies(group, now))
       continue;
-    const u32 now = PowerPC::MMU::HostRead<u32>(guard, p.address);
-    if (now == p.value || (p.original && now != *p.original))
-      continue;
-    ApplyMemoryPatch<u32>(guard, p.value, p.address);
+    for (size_t i = 0; i < group.size(); ++i)
+    {
+      if (now[i] == group[i].value)
+        continue;
+      if (group[i].original)
+        ApplyMemoryPatch<u32>(guard, group[i].value, group[i].address);  // code: drop the JIT's copy
+      else
+        PowerPC::MMU::HostWrite<u32>(guard, group[i].value, group[i].address);
+    }
   }
 }
 }  // namespace Orca::UX

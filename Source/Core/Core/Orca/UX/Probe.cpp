@@ -32,6 +32,7 @@
 //   @<scene> <frame> utf16 <addr> <text>           text as UTF-16BE with a 0 terminator
 //   @<scene> <frame> dump <addr> <length> <name>   to <user dir>/probe-<name>.bin
 //   @* 0 watch <addr> <name>                       every frame: log the u32 there when it changes
+//                                                  (re-runs too: frame numbers can go backwards)
 //   @<scene> <frame> stall <ms> 0                  block the CPU thread like a session stall,
 //                                                  calling RepresentDuringStall every 10 ms
 // <addr> is hex, or [hex]+hex for one pointer hop (e.g. [805a00e0]+28).
@@ -120,6 +121,8 @@ u32 Address(const Core::CPUThreadGuard& guard, std::string_view expr)
         break;
       }
     }
+    if (close == 0)
+      return 0;  // unbalanced brackets: no address
     const u32 at = Address(guard, expr.substr(1, close - 1));
     u32 offset = 0;
     if (close + 1 < expr.size() && expr[close + 1] == '+')
@@ -139,11 +142,12 @@ bool TestKnobsAllowed()
 void ProbeFrame(const Core::CPUThreadGuard& guard, int frame)
 {
   // ORCA_UX_PROBE_WATCHDOG=1 (research): when no frame boundary comes for 2 s, sample the guest's
-  // pc and lr from a host thread (racy reads, for finding where the game waits).
+  // pc and lr from a host thread (racy reads; inside a JIT block pc is the last block exit, so this
+  // only says roughly where the game waits). Test runs only, like every probe knob.
   static std::atomic<int> s_last_frame{0};
   s_last_frame = frame;
   static const bool s_dog = [] {
-    if (!std::getenv("ORCA_UX_PROBE_WATCHDOG"))
+    if (!std::getenv("ORCA_UX_PROBE_WATCHDOG") || !TestKnobsAllowed())
       return false;
     std::thread([] {
       auto& ppc = Core::System::GetInstance().GetPPCState();

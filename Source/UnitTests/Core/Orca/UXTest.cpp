@@ -629,14 +629,49 @@ TEST(OrcaUXGamePatches, ParsesTheFileAndRefusesAnythingElse)
   EXPECT_EQ((*ok)[1].address, 0x9017B640u);
   EXPECT_FALSE((*ok)[1].original.has_value());
   EXPECT_EQ((*ok)[1].value, 0x1FFu);
+  EXPECT_TRUE(ParseGamePatches("\xEF\xBB\xBF" "806CAD50 41820010 48000010\n", &error).has_value());
+  for (const char* good : {"817FFFFC * 0", "93FFFFFC * 0", "80000000 * 0", "90000000 * 0"})
+    EXPECT_TRUE(ParseGamePatches(good, &error).has_value()) << good;
   for (const char* bad : {"806CAD50 41820010", "806CAD51 * 0", "7FFFFFFC * 0", "818000000 * 0",
-                          "806CAD50 4182001G 48000010", "806CAD50 41820010 48000010 1",
-                          "94000000 * 0"})
+                          "81800000 * 0", "8FFFFFFC * 0", "806CAD50 4182001G 48000010",
+                          "806CAD50 41820010 48000010 1", "94000000 * 0",
+                          "9017B640 * 1\n9017B640 * 2"})
   {
     error.clear();
     EXPECT_FALSE(ParseGamePatches(bad, &error).has_value()) << bad;
     EXPECT_FALSE(error.empty()) << bad;
   }
+}
+
+TEST(OrcaUXGamePatches, ConsecutiveCodeLinesAreOneGroupWrittenWhole)
+{
+  const auto p = ParseGamePatches("811A6430 1 A\n811A6434 2 2\n811A6438 3 C\n"  // a group, one guard
+                                  "811A6440 4 D\n"                               // not consecutive
+                                  "9017B640 * 5\n9017B644 * 6\n",               // data: alone
+                                  nullptr);
+  ASSERT_TRUE(p.has_value());
+  ASSERT_EQ(p->size(), 6u);
+  EXPECT_FALSE((*p)[0].joins_previous);
+  EXPECT_TRUE((*p)[1].joins_previous);
+  EXPECT_TRUE((*p)[2].joins_previous);
+  EXPECT_FALSE((*p)[3].joins_previous);
+  EXPECT_FALSE((*p)[4].joins_previous);
+  EXPECT_FALSE((*p)[5].joins_previous);
+  const std::span<const GamePatch> group(p->data(), 3);
+  const auto applies = [&](std::vector<u32> now) { return GroupApplies(group, now); };
+  EXPECT_TRUE(applies({1, 2, 3}));    // the module is there, unpatched
+  EXPECT_FALSE(applies({0xA, 2, 0xC}));  // already patched
+  EXPECT_FALSE(applies({1, 2, 9}));   // something else: one word differs
+  EXPECT_FALSE(applies({1, 9, 3}));   // the guard word differs
+  EXPECT_FALSE(applies({0xA, 2, 3}));  // half patched (never written so): left alone
+  EXPECT_FALSE(applies({1, 2}));      // not all of it mapped
+  const std::span<const GamePatch> data(p->data() + 4, 1);
+  EXPECT_TRUE(GroupApplies(data, std::vector<u32>{0}));
+  EXPECT_FALSE(GroupApplies(data, std::vector<u32>{5}));
+  // A group of guards only never writes.
+  const auto guards = ParseGamePatches("80001000 7 7\n80001004 8 8\n", nullptr);
+  ASSERT_TRUE(guards.has_value());
+  EXPECT_FALSE(GroupApplies(*guards, std::vector<u32>{7, 8}));
 }
 
 TEST(OrcaUXGamePatches, TheShippedBrawlFileParses)
@@ -651,6 +686,13 @@ TEST(OrcaUXGamePatches, TheShippedBrawlFileParses)
   const auto patches = ParseGamePatches(text, &error);
   ASSERT_TRUE(patches.has_value()) << error;
   EXPECT_GT(patches->size(), 10u);
+  // The boot-save block is one six-word group.
+  for (size_t i = 0; i < patches->size(); ++i)
+  {
+    const u32 a = (*patches)[i].address;
+    if (a > 0x811A6430 && a <= 0x811A6444)
+      EXPECT_TRUE((*patches)[i].joins_previous) << std::hex << a;
+  }
 }
 
 TEST(OrcaUXNameTags, UsernamesBecomeBrawlTags)
