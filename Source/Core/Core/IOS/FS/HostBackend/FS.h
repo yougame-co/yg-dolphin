@@ -74,6 +74,11 @@ public:
   // Orca drop-in: the NAND's host folder, and re-reading the FST after its files were replaced
   // with a keyframe's (no handle may be open on them: load the keyframe's state next).
   const std::string& HostRoot() const { return m_root_path; }
+  // Windows opens host files unshared: while the game has a NAND file open, nothing can read,
+  // copy or delete it by path. These close (and so flush) every open host file, and reopen them
+  // for the handles still open. Loading a keyframe's state reopens them itself.
+  void CloseHostFiles();
+  void ReopenHostFiles();
   void ReloadFst()
   {
     ResetFst();

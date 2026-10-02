@@ -387,6 +387,21 @@ void HostFileSystem::DoState(PointerWrap& p)
   }
 }
 
+void HostFileSystem::CloseHostFiles()
+{
+  for (Handle& handle : m_handles)
+    handle.host_file.reset();
+}
+
+void HostFileSystem::ReopenHostFiles()
+{
+  for (Handle& handle : m_handles)
+  {
+    if (handle.opened && !handle.host_file)
+      handle.host_file = OpenHostFile(BuildFilename(handle.wii_path).host_path);
+  }
+}
+
 ResultCode HostFileSystem::Format(Uid uid)
 {
   if (uid != 0)

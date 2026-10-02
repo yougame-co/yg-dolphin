@@ -297,7 +297,12 @@ void StartKeyframe(Core::System& system, Match& match, int frame)
   }
 #endif
   if (nand && clone.empty())
+  {
+    // With the game's open files flushed and closed: Windows can't read them while they're open.
+    nand->CloseHostFiles();
     nand_ok = Orca::Net::ReadNandTree(nand->HostRoot(), &entries);
+    nand->ReopenHostFiles();
+  }
   job->capture_ms = MsSince(start);
   if (!nand_ok)
   {
@@ -386,6 +391,24 @@ void MaybeHashBootNand(Core::System& system, Match& match)
   if (clonefile(nand->HostRoot().c_str(), clone.c_str(), CLONE_NOFOLLOW) != 0)
     clone.clear();
 #endif
+  if (clone.empty())
+  {
+    // No copy-on-write clone: a plain copy now, with the game's open files flushed and closed
+    // (Windows can't read them while they're open), so the thread hashes this boundary's NAND.
+    const auto copy_start = Clock::now();
+    clone = File::GetUserPath(D_USER_IDX) + "OrcaBootNand";
+    File::DeleteDirRecursively(clone);
+    nand->CloseHostFiles();
+    const bool copied = File::Copy(nand->HostRoot(), clone);
+    nand->ReopenHostFiles();
+    NOTICE_LOG_FMT(ROLLBACK, "Drop-in: boot NAND copied for hashing in {:.1f} ms ({})",
+                   MsSince(copy_start), copied ? "ok" : "failed");
+    if (!copied)
+    {
+      File::DeleteDirRecursively(clone);
+      clone.clear();
+    }
+  }
   // Without a clone, the live NAND is read on the thread: a file the game writes meanwhile hashes
   // wrong, and a keyframe then sends it whole (references only match identical bytes).
   BootNandJob* const raw = job.get();
@@ -869,10 +892,16 @@ Load LoadKeyframe(Core::System& system, Match& match, int* frame_out)
       entry.reference = false;
     }
   }
+  // The NAND is read and then replaced by path: no file of it may stay open (Windows can't read
+  // or delete an open one). The keyframe's state reopens what it has open.
+  if (nand)
+    nand->CloseHostFiles();
   std::string missing;
   if (nand && !Orca::Net::ResolveNandReferences(nand->HostRoot(), &download->nand, &missing))
   {
     ERROR_LOG_FMT(ROLLBACK, "Drop-in: this boot's NAND doesn't match the host's: {}", missing);
+    // This game plays on solo, with its own files.
+    nand->ReopenHostFiles();
     match.join_error_code = "room_mismatch";
     match.join_error = "Your friend's game data differs from yours";
     return Load::Failed;

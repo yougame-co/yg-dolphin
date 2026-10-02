@@ -22,6 +22,7 @@
 #include <xxh3.h>
 #include <zstd.h>
 
+#include "Common/CommonFuncs.h"
 #include "Common/CurlTLS.h"
 #include "Common/FileUtil.h"
 #include "Common/IOFile.h"
@@ -149,6 +150,19 @@ bool ReadNandTree(const std::string& root, std::vector<NandEntry>* entries)
   return ok;
 }
 
+namespace
+{
+// Why a NAND replacement step failed, for the log (the OS's own error text).
+std::string LastOsError()
+{
+#ifdef _WIN32
+  return Common::GetLastErrorString();
+#else
+  return Common::LastStrerrorString();
+#endif
+}
+}  // namespace
+
 bool ReplaceNandTree(const std::string& root, const std::vector<NandEntry>& entries)
 {
   if (root.empty())
@@ -156,25 +170,40 @@ bool ReplaceNandTree(const std::string& root, const std::vector<NandEntry>& entr
   for (const NandEntry& entry : entries)
   {
     if (!SafeRelative(entry.path))
+    {
+      ERROR_LOG_FMT(ROLLBACK, "Drop-in: the keyframe's NAND has an unsafe path");
       return false;
+    }
   }
   if (File::IsDirectory(root) && !File::DeleteDirRecursively(root))
+  {
+    ERROR_LOG_FMT(ROLLBACK, "Drop-in: couldn't delete the NAND at {}: {}", root, LastOsError());
     return false;
+  }
   if (!File::CreateFullPath(root + "/"))
+  {
+    ERROR_LOG_FMT(ROLLBACK, "Drop-in: couldn't create {}: {}", root, LastOsError());
     return false;
+  }
   for (const NandEntry& entry : entries)
   {
     const std::string path = root + "/" + entry.path;
     if (entry.directory)
     {
       if (!File::CreateFullPath(path + "/"))
+      {
+        ERROR_LOG_FMT(ROLLBACK, "Drop-in: couldn't create {}: {}", path, LastOsError());
         return false;
+      }
       continue;
     }
     File::CreateFullPath(path);
     File::IOFile file(path, "wb");
     if (!file || !file.WriteBytes(entry.data.data(), entry.data.size()))
+    {
+      ERROR_LOG_FMT(ROLLBACK, "Drop-in: couldn't write {}: {}", path, LastOsError());
       return false;
+    }
   }
   return true;
 }
