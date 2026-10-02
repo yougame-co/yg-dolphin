@@ -382,14 +382,31 @@ void JitArm64::GenerateFrsqrte()
   LSLV(ARM64Reg::X1, ARM64Reg::X1, ARM64Reg::X3);
   LSR(ARM64Reg::X1, ARM64Reg::X1, 11);
   BFI(ARM64Reg::X1, ARM64Reg::X3, 52, 12);
+  // Orca: the result's exponent from the input's, not from FRSQRTE, which reads a denormal as zero
+  // (and so gives inf) under FPCR.FZ, with or without AH: every Apple CPU in the guest's non-IEEE
+  // mode. The normalized input's biased exponent is e = 12 - clz, and PowerPC's estimate has
+  // (0xBFC - e) / 2, rounded down (Common::ApproximateReciprocalSquareRoot).
+  ADD(ARM64Reg::X0, ARM64Reg::X3, 0xBFC - 12);
+  LSR(ARM64Reg::X0, ARM64Reg::X0, 1);
+  LSL(ARM64Reg::X0, ARM64Reg::X0, 52);
   B(positive_normal);
 
+  // Orca: bit 62 is the exponent's top bit, so a negative number of magnitude 2 or more comes here
+  // too, not only an infinity or a NaN. Such a number went out with FRSQRTE's NaN and without
+  // FPSCR.VXSQRT, which Jit64 and the interpreter set; it goes to `negative` now.
   SetJumpTarget(nan_or_inf);
-  MOVI2R(ARM64Reg::X2, std::bit_cast<u64>(-std::numeric_limits<double>::infinity()));
-  CMP(ARM64Reg::X1, ARM64Reg::X2);
-  B(CCFlags::CC_NEQ, done);
+  UBFX(ARM64Reg::X2, ARM64Reg::X1, 52, 11);
+  CMP(ARM64Reg::X2, 0x7FF);
+  FixupBranch negative_normal = B(CCFlags::CC_NEQ);
+  LSL(ARM64Reg::X2, ARM64Reg::X1, 12);
+  CBNZ(ARM64Reg::X2, done);        // NaN: FRSQRTE made it quiet
+  TBZ(ARM64Reg::X1, 63, done);     // +inf: FRSQRTE's +0
+  SetJumpTarget(negative_normal);  // and -inf
 
   SetJumpTarget(negative);
+  // Orca: PowerPC's default NaN, positive, rather than FRSQRTE's, which is negative under FPCR.AH
+  // (an Apple M4 and later) and positive without it.
+  MOVI2R(ARM64Reg::X0, 0x7FF8'0000'0000'0000ULL);
   TBNZ(ARM64Reg::W3, 9, done);
   ORRI2R(ARM64Reg::W3, ARM64Reg::W3, FPSCR_FX | FPSCR_VXSQRT, ARM64Reg::W2);
   B(store_fpscr);
@@ -837,6 +854,22 @@ void JitArm64::GenerateQuantizedStores()
   BitSet32 fprs_to_push = BitSet32(0xFFFFFFFF) & ~BitSet32{0, 1};
   ARM64FloatEmitter float_emit(this);
 
+  // Orca, with accurate NaNs (every Orca session): a NaN stored as an integer the way Jit64 stores
+  // it, where FCVTZU/FCVTZS make it 0. Jit64 clamps a pair with MINPS(x, 65535.0), which returns
+  // its second operand for a NaN, so the NaN saturates as 65535 does (255, 127, 65535, 32767), and
+  // clamps a single with MAXSS(x, min) first, so a NaN becomes the type's minimum (0, -128, 0,
+  // -32768). FMINNM/FMAXNM pick the number over a quiet NaN, and the FMUL by the scale before has
+  // made any NaN quiet. The interpreter has no answer of its own here (a NaN cast to an integer).
+  const auto nan_as_jit64 = [&](float bound, bool is_min) {
+    if (!m_accurate_nans)
+      return;
+    float_emit.MOVI2FDUP(ARM64Reg::D1, bound, EncodeRegTo32(temp_reg));
+    if (is_min)
+      float_emit.FMINNM(32, ARM64Reg::D0, ARM64Reg::D0, ARM64Reg::D1);
+    else
+      float_emit.FMAXNM(32, ARM64Reg::D0, ARM64Reg::D0, ARM64Reg::D1);
+  };
+
   const u8* start = GetCodePtr();
   const u8* storePairedIllegal = GetCodePtr();
   BRK(0x101);
@@ -856,6 +889,7 @@ void JitArm64::GenerateQuantizedStores()
     ADD(scale_reg, temp_reg, scale_reg, ArithOption(scale_reg, ShiftType::LSL, 3));
     float_emit.LDR(32, IndexType::Unsigned, ARM64Reg::D1, scale_reg, load_offset);
     float_emit.FMUL(32, ARM64Reg::D0, ARM64Reg::D0, ARM64Reg::D1, 0);
+    nan_as_jit64(65535.0f, true);
 
     float_emit.FCVTZU(32, ARM64Reg::D0, ARM64Reg::D0);
     float_emit.UQXTN(16, ARM64Reg::D0, ARM64Reg::D0);
@@ -875,6 +909,7 @@ void JitArm64::GenerateQuantizedStores()
     ADD(scale_reg, temp_reg, scale_reg, ArithOption(scale_reg, ShiftType::LSL, 3));
     float_emit.LDR(32, IndexType::Unsigned, ARM64Reg::D1, scale_reg, load_offset);
     float_emit.FMUL(32, ARM64Reg::D0, ARM64Reg::D0, ARM64Reg::D1, 0);
+    nan_as_jit64(65535.0f, true);
 
     float_emit.FCVTZS(32, ARM64Reg::D0, ARM64Reg::D0);
     float_emit.SQXTN(16, ARM64Reg::D0, ARM64Reg::D0);
@@ -894,6 +929,7 @@ void JitArm64::GenerateQuantizedStores()
     ADD(scale_reg, temp_reg, scale_reg, ArithOption(scale_reg, ShiftType::LSL, 3));
     float_emit.LDR(32, IndexType::Unsigned, ARM64Reg::D1, scale_reg, load_offset);
     float_emit.FMUL(32, ARM64Reg::D0, ARM64Reg::D0, ARM64Reg::D1, 0);
+    nan_as_jit64(65535.0f, true);
 
     float_emit.FCVTZU(32, ARM64Reg::D0, ARM64Reg::D0);
     float_emit.UQXTN(16, ARM64Reg::D0, ARM64Reg::D0);
@@ -912,6 +948,7 @@ void JitArm64::GenerateQuantizedStores()
     ADD(scale_reg, temp_reg, scale_reg, ArithOption(scale_reg, ShiftType::LSL, 3));
     float_emit.LDR(32, IndexType::Unsigned, ARM64Reg::D1, scale_reg, load_offset);
     float_emit.FMUL(32, ARM64Reg::D0, ARM64Reg::D0, ARM64Reg::D1, 0);
+    nan_as_jit64(65535.0f, true);
 
     float_emit.FCVTZS(32, ARM64Reg::D0, ARM64Reg::D0);
     float_emit.SQXTN(16, ARM64Reg::D0, ARM64Reg::D0);
@@ -960,6 +997,7 @@ void JitArm64::GenerateQuantizedStores()
     ADD(scale_reg, temp_reg, scale_reg, ArithOption(scale_reg, ShiftType::LSL, 3));
     float_emit.LDR(32, IndexType::Unsigned, ARM64Reg::D1, scale_reg, load_offset);
     float_emit.FMUL(32, ARM64Reg::D0, ARM64Reg::D0, ARM64Reg::D1);
+    nan_as_jit64(-128.0f, false);
 
     float_emit.FCVTZS(32, ARM64Reg::D0, ARM64Reg::D0);
     float_emit.SQXTN(16, ARM64Reg::D0, ARM64Reg::D0);
@@ -997,6 +1035,7 @@ void JitArm64::GenerateQuantizedStores()
     ADD(scale_reg, temp_reg, scale_reg, ArithOption(scale_reg, ShiftType::LSL, 3));
     float_emit.LDR(32, IndexType::Unsigned, ARM64Reg::D1, scale_reg, load_offset);
     float_emit.FMUL(32, ARM64Reg::D0, ARM64Reg::D0, ARM64Reg::D1);
+    nan_as_jit64(-32768.0f, false);
 
     float_emit.FCVTZS(32, ARM64Reg::D0, ARM64Reg::D0);
     float_emit.SQXTN(16, ARM64Reg::D0, ARM64Reg::D0);

@@ -169,7 +169,11 @@ void JitArm64::psq_stXX(UGeckoInstruction inst)
   if (!js.assumeNoPairedQuantize)
     fpr.Lock(ARM64Reg::Q1);
 
-  const bool have_single = fpr.IsSingle(inst.RS);
+  // Orca: in a session, a single is stored bit for bit only when it is store-safe (an arithmetic
+  // result). Any other (loaded by psq_l, say) is rounded to single as Jit64 does it (CVTPD2PS):
+  // a denormal flushes in the guest's non-IEEE mode and an SNaN goes quiet.
+  const bool have_single =
+      fpr.IsSingle(inst.RS) && (!m_orca_session || js.fpr_is_store_safe[inst.RS]);
 
   Arm64FPRCache::ScopedARM64Reg VS =
       fpr.R(inst.RS, have_single ? RegType::Single : RegType::Register);
