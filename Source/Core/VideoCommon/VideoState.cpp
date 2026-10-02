@@ -33,6 +33,7 @@
 
 static std::atomic<bool> s_skip_render{false};
 static bool s_rollback_snapshot = false;
+static bool s_snapshot_redisplays = false;
 
 void VideoCommon_SetRollbackSnapshot(bool snapshot)
 {
@@ -42,6 +43,16 @@ void VideoCommon_SetRollbackSnapshot(bool snapshot)
 bool VideoCommon_IsRollbackSnapshot()
 {
   return s_rollback_snapshot;
+}
+
+void VideoCommon_SetSnapshotRedisplays(bool redisplays)
+{
+  s_snapshot_redisplays = redisplays;
+}
+
+bool VideoCommon_LoadRedisplays()
+{
+  return !s_rollback_snapshot || s_snapshot_redisplays;
 }
 
 void VideoCommon_SetSkipRender(bool skip)

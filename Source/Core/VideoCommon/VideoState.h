@@ -24,3 +24,12 @@ bool VideoCommon_IsSkippingRender();
 // wait) after each snapshot save or load.
 void VideoCommon_SetRollbackSnapshot(bool snapshot);
 bool VideoCommon_IsRollbackSnapshot();
+
+// Orca: whether loading a state shows its last frame again (Presenter::DoState). A savestate does,
+// and so does a drop-in keyframe (SnapshotRing::LoadImage): nothing else would be on screen until
+// the game's next frame. A rollback snapshot does not: the re-run frames after the load end at the
+// corrected frame, which presents itself, so showing the snapshot's frame first put a stale one on
+// screen (often the frame before, a one-frame backward flicker) on almost every rollback, and
+// cost a present and a drawable inside the rollback.
+void VideoCommon_SetSnapshotRedisplays(bool redisplays);
+bool VideoCommon_LoadRedisplays();

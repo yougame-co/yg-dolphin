@@ -25,6 +25,7 @@
 #include "VideoCommon/VertexManagerBase.h"
 #include "VideoCommon/VideoConfig.h"
 #include "VideoCommon/VideoEvents.h"
+#include "VideoCommon/VideoState.h"
 #include "VideoCommon/Widescreen.h"
 
 std::unique_ptr<VideoCommon::Presenter> g_presenter;
@@ -1108,8 +1109,9 @@ void Presenter::DoState(PointerWrap& p)
   p.Do(m_last_xfb_stride);
   p.Do(m_last_xfb_height);
 
-  // If we're loading and there is a last XFB, re-display it.
-  if (p.IsReadMode() && m_last_xfb_stride != 0)
+  // If we're loading and there is a last XFB, re-display it. (Orca: not after a rollback load,
+  // whose re-run frames end at the corrected frame: VideoCommon_LoadRedisplays.)
+  if (p.IsReadMode() && m_last_xfb_stride != 0 && VideoCommon_LoadRedisplays())
   {
     // This technically counts as the end of the frame
     GetVideoEvents().after_frame_event.Trigger(Core::System::GetInstance());

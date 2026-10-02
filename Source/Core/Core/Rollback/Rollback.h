@@ -92,6 +92,10 @@ public:
   bool LoadImage(Core::System& system, MachineImage image, s64 frame);
 
 private:
+  // Load, and whether the load shows the snapshot's frame again (a keyframe's does; a rollback's
+  // does not: VideoCommon_SetSnapshotRedisplays).
+  bool LoadSlot(Core::System& system, s64 frame, bool redisplay);
+
   struct Slot
   {
     s64 frame = -1;

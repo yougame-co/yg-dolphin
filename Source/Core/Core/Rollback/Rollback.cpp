@@ -302,6 +302,11 @@ bool SnapshotRing::Save(Core::System& system, s64 frame)
 
 bool SnapshotRing::Load(Core::System& system, s64 frame)
 {
+  return LoadSlot(system, frame, false);
+}
+
+bool SnapshotRing::LoadSlot(Core::System& system, s64 frame, bool redisplay)
+{
   Slot* slot = Find(frame);
   if (!slot || slot->state_size == 0)
   {
@@ -349,8 +354,10 @@ bool SnapshotRing::Load(Core::System& system, s64 frame)
   bool ok;
   {
     SnapshotScope scope;
+    VideoCommon_SetSnapshotRedisplays(redisplay);
     ok = State::LoadFromBufferForRollback(
         system, std::span<u8>(slot->state.data(), slot->state_size));
+    VideoCommon_SetSnapshotRedisplays(false);
   }
   if (!ok)
   {
@@ -433,7 +440,8 @@ bool SnapshotRing::LoadImage(Core::System& system, MachineImage image, s64 frame
   slot->l1_cache = std::move(image.l1_cache);
   slot->frame = frame;
   slot->nand_journal_mark = 0;
-  return Load(system, frame);
+  // A joining machine has nothing on screen yet: show the keyframe's frame, as a savestate would.
+  return LoadSlot(system, frame, true);
 }
 
 std::optional<u64> SnapshotRing::RamChecksum(s64 frame) const
