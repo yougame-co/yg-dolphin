@@ -29,7 +29,8 @@ void Report(std::string_view code, std::string_view sentence);
 // "orca caps <list>" before "ready", and what the app said it understands ("caps <list>" on
 // stdin). A feature is on only when both list it. "pause" needs no answer: it says this Orca
 // pauses a session while the player's game is alone in it (older ones answer "unsupported pause").
-inline constexpr const char* CAPS = "join leave stats pause";
+// "delay": the app may send "delay auto|1..6", the player's own input delay (ORCA.md).
+inline constexpr const char* CAPS = "join leave stats pause delay";
 void PrintCaps();
 void SetAppCaps(std::string_view list);
 bool Cap(std::string_view name);

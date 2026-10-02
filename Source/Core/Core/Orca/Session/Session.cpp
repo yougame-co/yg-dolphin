@@ -14,30 +14,62 @@ namespace Orca::Net
 {
 namespace
 {
-// Quiet windows in a row before the delay steps down; doubles each time a lower has to be undone.
-constexpr int QUIET_WINDOWS = 10;
-constexpr int MAX_QUIET_WINDOWS = 1024;
-// Round trips may raise the delay during the first seconds of play only: later, a raise from a
-// single slow ping would cost responsiveness the rollbacks never asked for. After that they only
-// keep quiet windows from lowering it below what the link needs, once this many have come in: a
-// lone stray ping can't hold the delay up all match. (A bad first one still takes about twenty
-// samples to fade from the smoothed estimate; until then it only delays lowers.)
-constexpr int START_SECONDS = 3;
-constexpr int FLOOR_SAMPLES = 8;
-// Stalls drive the delay only on a rate: STALLS_TO_RAISE counted stalls (here and reported) in the
-// last STALL_WINDOWS windows. A one-off stall is as often a hitch the frame timer missed as the
-// link, and one frame of delay can't cover a hitch; a link too slow for the delay stalls again and
-// again. A delay raised for stalls then holds STALL_HOLD_WINDOWS stall-free windows before the
-// quiet-window rule may lower it again.
-constexpr int STALL_WINDOWS = 3;
-constexpr int STALLS_TO_RAISE = 2;
-constexpr int STALL_HOLD_WINDOWS = 8;
+// Input delay, as Slippi does it: two frames (Config::input_delay), and rollback hides the rest of
+// the link, its spikes included. Delay costs every input its frames all the time; a rollback costs
+// only the frames a late input changed, and only then. So the adaptive delay covers only what
+// rollback can't, and never rises for anything rollback did cover:
+//
+// - The typical link (LatencyDelay): the median of this player's latest RTT_SAMPLES round trips to
+//   the relay (one a second) and the slowest peer's median, as each reports it. A median ignores
+//   spikes in up to half the window: a Mac's Wi-Fi going off channel every ten seconds or so
+//   (AWDL, 35 ms pings with one of 115 ms) moves nothing, while a link that really got slower
+//   moves it within RTT_SAMPLES / 2 seconds. Never a maximum, never a mean a spike drags up. The
+//   delay rises to what the link needs as soon as both ends' medians are in (RaiseToLink).
+// - Stalls the others had on this player's inputs, sustained: STALLS_TO_RAISE in the last
+//   STALL_WINDOWS windows, at most MAX_STALLS_PER_WINDOW of them in any one, raise the delay one
+//   frame. A side stalls when the others' inputs outran its rollback window, so only the others'
+//   delays can help it: each player raises its own delay on the others' stalls, never on its own,
+//   and only on those of a player whose lag on its inputs (below) reached max_rollback then: with
+//   three or four players, one that stalled on someone else's inputs is theirs to answer.
+//   A single spike, even one past the rollback window, stalls once (twice at worst) and raises
+//   nothing, and neither does one every few seconds; a link too slow for the delay stalls again
+//   and again.
+//   Stalls lined up with a hitch on either machine don't count (no delay cures a frozen emulator),
+//   nor a joining player's before its controller plugs in (it runs to the host's newest inputs as
+//   fast as it can, by design), nor waiting for a peer's first packet (the trip).
+//
+// Rollbacks don't move the delay at all, however many: at two frames a 40 ms link rolls back a
+// frame or two now and then, and a spike deeper; that is rollback doing its job.
+//
+// A delay above the link's steps back down one frame per window: one the link put there once the
+// link has wanted less for LINK_HOLD_WINDOWS (a first median inflated by a keyframe's transfer
+// comes back down in seconds), one stalls put there after STALL_HOLD_WINDOWS without a stall (so
+// the stall history is clean when it does). Either way only if the others would still have had a
+// frame of room with a frame less. Their packets say how far each ran past the newest of this
+// player's inputs it had (its frame minus its acknowledgement): as deep as a change of them would
+// roll it back; past max_rollback it stalls. A frame less delay adds a frame to that, so no window
+// of the last STALL_WINDOWS (around a hitch aside) may have reached max_rollback - 1. On a jittery
+// link that may never come, and a step down there would only bring the stalls back. A raise for
+// stalls within PROBATION_WINDOWS of a step down undoes it anyway, and doubles the stall-free run
+// the next try needs. A delay the player chose (Config::fixed_delay) never adapts.
+constexpr int MIN_RTT_SAMPLES = 3;
+constexpr int LINK_HOLD_WINDOWS = 3;
+constexpr int EDGE_WINDOWS = 3;
+constexpr int STALL_WINDOWS = 10;
+constexpr int STALLS_TO_RAISE = 3;
+constexpr int MAX_STALLS_PER_WINDOW = 2;
+constexpr int STALL_HOLD_WINDOWS = STALL_WINDOWS;
+constexpr int MAX_STALL_HOLD_WINDOWS = 1024;
+constexpr int PROBATION_WINDOWS = 2 * STALL_WINDOWS;
 // The first seconds of a session boot the game and load menus from the disc, and stall now and
-// then on the emulator rather than the link: until WARMUP_SECONDS, a raise takes stalls several
-// times a second (WARMUP_STALLS_TO_RAISE in STALL_WINDOWS windows), which a link far too slow for
-// the delay still makes.
+// then on the emulator rather than the link: while the last STALL_WINDOWS reach back into the
+// first WARMUP_SECONDS, a raise takes STALLS_TO_RAISE from after them or WARMUP_STALLS_TO_RAISE
+// counting theirs, which a link far too slow for the delay still makes.
 constexpr int WARMUP_SECONDS = 10;
-constexpr int WARMUP_STALLS_TO_RAISE = 3;
+constexpr int WARMUP_STALLS_TO_RAISE = 4;
+// What the link needs: an input reaches the other side one way after it was sampled, and runs at
+// the boundary after that (up to a frame later); one more frame stays free for jitter.
+constexpr int LATENCY_SLACK_FRAMES = 2;
 // A stall that began within this many frames after a hitch on any machine (or during which one was
 // heard of) is the hitch's, not the link's.
 constexpr int HITCH_FRAMES = 30;
@@ -64,12 +96,19 @@ constexpr int HISTORY_RESEND_PACKETS = 120;
 
 Session::Session(const Config& config, Game& game, Transport& transport)
     : m_config(config), m_game(game), m_transport(transport), m_dirty(INT_MAX),
-      m_delay(config.input_delay), m_quiet_needed(QUIET_WINDOWS)
+      m_delay(config.input_delay), m_hold_windows(STALL_HOLD_WINDOWS)
 {
   m_config.max_delay = std::max(m_config.max_delay, m_config.input_delay);
   m_config.frame_rate = std::max(m_config.frame_rate, 1);
   m_config.snapshot_every = std::clamp(m_config.snapshot_every, 0, MAX_SNAPSHOT_EVERY);
+  if (m_config.fixed_delay)
+  {
+    m_fixed_delay = std::clamp(*m_config.fixed_delay, std::min(1, m_config.max_delay),
+                               m_config.max_delay);
+    m_delay = *m_fixed_delay;
+  }
   m_stats.delay = m_delay;
+  m_stats.delay_fixed = m_fixed_delay.has_value();
   ChooseSnapshotEvery();
   m_config.seats = std::clamp(m_config.seats, 1, MAX_SEATS);
   if (m_config.plan)
@@ -91,7 +130,7 @@ Session::Session(const Config& config, Game& game, Transport& transport)
   // confirm them like any other frame.
   if (Plugged(m_config.local_seat, m_frame))
   {
-    for (int f = m_frame; f < m_frame + m_config.input_delay; ++f)
+    for (int f = m_frame; f < m_frame + m_delay; ++f)
       m_local[f] = m_config.start_pad;
   }
   for (int s = 0; s < m_config.seats; ++s)
@@ -215,7 +254,7 @@ void Session::AddPeer(int seat, int live_from, int history_from)
   m_history_sent[seat] = m_history_acked[seat] = std::max(history_from, m_log_base) - 1;
   m_history_stuck[seat] = 0;
   m_peer_stalls[seat] = m_peer_stalls_seen[seat] = m_peer_hitches[seat] = 0;
-  m_peer_resimulated[seat] = -1;
+  m_edge_frame[seat] = INT_MIN / 2;
   m_advantage[seat].reset();
   m_smoothed_advantage[seat].reset();
   m_remote_advantage[seat].reset();
@@ -360,7 +399,6 @@ void Session::PlugCaughtUpPeers()
   // The host plugs a joining player's controller in once it has replayed the history and caught
   // up, far enough ahead that every machine hears of it before running that frame: the joiner may
   // be up to its delay plus a rollback window ahead of what the host last heard from it.
-  const int rtt_frames = m_rtt_ms ? static_cast<int>(std::ceil(FramesFromMs(*m_rtt_ms))) : 6;
   for (int s = 0; s < m_config.seats; ++s)
   {
     if (!InPlay(s))
@@ -368,6 +406,7 @@ void Session::PlugCaughtUpPeers()
     SeatPlan& plan = m_plan[s];
     if (plan.plug_from != NEVER || m_history_acked[s] < plan.live_from - 1)
       continue;
+    const int rtt_frames = RoundTripFrames(s);
     if (m_remote_frame[s] < m_frame - CATCH_UP_SLACK - rtt_frames)
       continue;
     plan.plug_from = m_frame + m_config.max_rollback + 2 * m_config.max_delay + rtt_frames + 4;
@@ -487,13 +526,14 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad)
     {
       ++m_stats.stalls;
       m_stall_frame = m_frame;
-      m_stall_after_input = ConfirmedFrame() >= 0;
+      m_stall_after_input = ConfirmedFrame() >= 0 && Plugged(m_config.local_seat, m_frame);
     }
     m_stalling = true;
     return {StepKind::Stall, m_frame};
   }
   // A stall just ended: judged now, when the packet that ended it (and a hitch it reports) is in.
-  // Waiting for a peer's first packet is the trip, not the delay.
+  // Waiting for a peer's first packet is the trip, not the delay; a joining player whose
+  // controller isn't plugged in yet stalls on the host's newest inputs by design.
   if (m_stalling && m_stall_after_input && m_last_hitch_frame < m_stall_frame - HITCH_FRAMES)
     m_stats.counted_stalls = ++m_link_stalls;
   // After a stall or a wait, the time it held is not made up.
@@ -619,19 +659,34 @@ void Session::OnRoundTrip(int rtt_ms)
   // Nothing a working relay measures; a broken clock or a ping answered after a freeze.
   if (rtt_ms < 0 || rtt_ms > MAX_RTT_MS)
     return;
-  // Smoothed like TCP's estimator: an eighth of each error moves the mean, a quarter the deviation.
-  if (!m_rtt_ms)
-  {
-    m_rtt_ms = rtt_ms;
-  }
-  else
-  {
-    const double error = rtt_ms - *m_rtt_ms;
-    *m_rtt_ms += error / 8;
-    m_rtt_dev_ms += (std::abs(error) - m_rtt_dev_ms) / 4;
-  }
-  ++m_rtt_samples;
-  ApplyStartDelay();
+  m_rtts.push_back(rtt_ms);
+  if (static_cast<int>(m_rtts.size()) > RTT_SAMPLES)
+    m_rtts.pop_front();
+  const int count = static_cast<int>(m_rtts.size());
+  if (count < MIN_RTT_SAMPLES)
+    return;
+  // The median (the lower one of an even count): what most round trips are, whatever the spikes.
+  std::array<int, RTT_SAMPLES> sorted{};
+  const auto end = std::copy(m_rtts.begin(), m_rtts.end(), sorted.begin());
+  const auto middle = sorted.begin() + (count - 1) / 2;
+  std::nth_element(sorted.begin(), middle, end);
+  m_typical_rtt = *middle;
+  RaiseToLink();
+}
+
+void Session::RaiseToLink()
+{
+  // The typical link outgrew the rollback window plus the delay: up to what it needs, at once.
+  // Down only in AdaptDelay, a frame at a time.
+  if (m_fixed_delay || m_config.max_delay <= m_config.input_delay)
+    return;
+  const std::optional<int> link = LatencyDelay();
+  if (!link || *link <= m_delay)
+    return;
+  m_delay = *link;
+  m_delay_from_link = true;
+  ++m_stats.delay_raises;
+  m_stats.delay = m_delay;
 }
 
 void Session::OnLocalHitch()
@@ -641,21 +696,34 @@ void Session::OnLocalHitch()
   m_last_hitch_frame = m_frame;
 }
 
-void Session::ApplyStartDelay()
+void Session::SetFixedDelay(std::optional<int> frames)
 {
-  // In the first seconds the delay covers what the rollback window can't (LatencyDelay), and
-  // follows the estimate as round trips (ours, then the peer's) come in. Down too, but only while
-  // nothing else moved it: a rise the rollbacks asked for stays.
-  if (!m_rtt_ms || m_frame - m_config.start_frame >= START_SECONDS * m_config.frame_rate)
+  if (frames)
+    frames = std::clamp(*frames, std::min(1, m_config.max_delay), m_config.max_delay);
+  if (frames == m_fixed_delay)
     return;
-  const int wanted = LatencyDelay();
-  const bool ours = m_start_delay == 0 ? m_delay == m_config.input_delay : m_delay == m_start_delay;
-  if (wanted > m_delay || (wanted < m_delay && ours))
+  m_fixed_delay = frames;
+  if (m_fixed_delay)
   {
-    m_delay = wanted;
-    m_start_delay = wanted;
-    m_stats.delay = m_delay;
+    m_delay = *m_fixed_delay;
   }
+  else if (m_config.max_delay > m_config.input_delay)
+  {
+    // Adaptive again: from what the link needs, with no stalls on record and a fresh hold.
+    m_delay = LatencyDelay().value_or(m_config.input_delay);
+    m_delay_from_link = true;
+    m_link_below_windows = 0;
+    m_stall_history.fill(0);
+    m_lag_history.fill(0);
+    m_stall_free_windows = 0;
+    m_windows_since_lower = INT_MAX / 2;
+  }
+  else
+  {
+    m_delay = m_config.input_delay;
+  }
+  m_stats.delay = m_delay;
+  m_stats.delay_fixed = m_fixed_delay.has_value();
 }
 
 double Session::FramesFromMs(double ms) const
@@ -663,144 +731,141 @@ double Session::FramesFromMs(double ms) const
   return ms * m_config.frame_rate / 1000.0;
 }
 
-int Session::LatencyDelay() const
+int Session::RoundTripFrames(int seat) const
+{
+  // From this machine to `seat` and back, through the relay: our typical round trip to it plus the
+  // player's (one of them twice while only one is known; six frames while neither is).
+  const std::optional<int> theirs = m_peer_rtt[seat];
+  if (!m_typical_rtt && !theirs)
+    return 6;
+  const int mine = m_typical_rtt ? *m_typical_rtt : *theirs;
+  const int other = theirs ? *theirs : mine;
+  return static_cast<int>(std::ceil(FramesFromMs(mine + other)));
+}
+
+std::optional<int> Session::LatencyDelay() const
 {
   // Rollback hides latency up to its window; input delay only covers what the window alone would
-  // stall on. Through a relay, one way is half our round trip to it plus half the peer's (the
-  // slowest peer's that reported one; ours twice until then). The deviation covers packets later
-  // than average, and a rollback this deep (max_rollback - 2) still leaves room for jitter. The
-  // epsilon keeps an exact multiple of the frame time (150 ms is 9.000 frames) from rounding up.
+  // stall on. Through a relay, one way is half our typical round trip to it plus half the slowest
+  // player's. A sample taken d frames ahead arrives one way later and runs at the boundary after,
+  // with a frame kept free for jitter (LATENCY_SLACK_FRAMES); the other side runs up to
+  // max_rollback frames on a guess before it stalls. The epsilon keeps an exact multiple of the
+  // frame time (150 ms is 9.000 frames) from rounding up. Until our median and every other
+  // player's are in, the link is unknown (nullopt), and with no other player there is none: one
+  // side's alone would take the other for as far from the relay. Two frames (input_delay) cover a
+  // round trip of about 230 ms between the two players.
+  if (!m_typical_rtt)
+    return std::nullopt;
   std::optional<int> peer;
   for (int s = 0; s < m_config.seats; ++s)
   {
-    if (s != m_config.local_seat && m_peer_rtt[s])
-      peer = std::max(peer.value_or(*m_peer_rtt[s]), *m_peer_rtt[s]);
+    if (!InPlay(s))
+      continue;
+    if (!m_peer_rtt[s])
+      return std::nullopt;
+    peer = std::max(peer.value_or(0), *m_peer_rtt[s]);
   }
-  const double one_way = (*m_rtt_ms + peer.value_or(*m_rtt_ms)) / 2 + m_rtt_dev_ms;
+  if (!peer)
+    return std::nullopt;
+  const double one_way = (*m_typical_rtt + *peer) / 2.0;
   const int frames = static_cast<int>(std::ceil(FramesFromMs(one_way) - 1e-6));
-  const int wanted = frames - (m_config.max_rollback - 2);
+  const int wanted = frames + LATENCY_SLACK_FRAMES - m_config.max_rollback;
   return std::clamp(wanted, m_config.input_delay, m_config.max_delay);
-}
-
-int Session::DelayFloor() const
-{
-  // After the start, the link estimate still bounds how far quiet windows may lower the delay.
-  if (!m_rtt_ms || m_rtt_samples < FLOOR_SAMPLES)
-    return m_config.input_delay;
-  return LatencyDelay();
 }
 
 void Session::AdaptDelay()
 {
-  // A delay shorter than the link makes every wrong guess re-simulate several frames inside one
-  // displayed frame; a machine that spends its budget re-simulating answers late, the others guess
-  // deeper, and the match spirals. So once a "second" (frame_rate frames run): re-simulating half
-  // a frame per frame on average, or any stall, raises the delay one frame; enough quiet windows
-  // in a row lower it one frame towards input_delay. A lower that brings the trouble back is
-  // undone at the next window, and the quiet needed before the next try doubles.
-  //
-  // One side's stalls come from the other side's delay (its inputs arrive too late for this side's
-  // window), so stalls count from both sides, like re-simulated frames. They raise on a rate
-  // (STALLS_TO_RAISE in STALL_WINDOWS windows, more during the warmup), not one at a time, and
-  // stalls lined up with a hitch on either machine, which no delay cures, don't count at all.
-  const int mine = m_guessed_frames - m_window_resimulated;
-  // The window's stalls are the most any one side had: one relay hiccup that stalls both sides
-  // once is one event, not two.
-  int stalls = m_link_stalls - m_window_link_stalls;
+  // Once a "second" (frame_rate frames run); the rule is at the top of this file ("Input delay").
   m_window_start = m_frame;
+  m_last_resimulated = m_guessed_frames - m_window_resimulated;
   m_window_resimulated = m_guessed_frames;
-  m_window_link_stalls = m_link_stalls;
-  m_last_resimulated = mine;
+  // The others' stalls since the last window, judged as each ended on its own machine. Only from
+  // a player that was waiting on this one's inputs (its lag on them reached max_rollback within
+  // the last EDGE_WINDOWS): one that stalled on a third player's inputs is that player's to answer.
+  // The most any one of them had, so one relay hiccup that stalls two players is one event. No
+  // window holds more stalls than frames (a hostile count included).
+  int stalls = 0;
   for (int s = 0; s < m_config.seats; ++s)
   {
     if (s == m_config.local_seat || m_peer_stalls[s] <= m_peer_stalls_seen[s])
       continue;
-    // No window holds more stalls than frames (a hostile count included).
-    stalls = std::max(stalls,
-                      std::min(m_peer_stalls[s] - m_peer_stalls_seen[s], m_config.frame_rate));
+    if (m_frame - m_edge_frame[s] <= EDGE_WINDOWS * m_config.frame_rate)
+    {
+      stalls = std::max(stalls,
+                        std::min(m_peer_stalls[s] - m_peer_stalls_seen[s], m_config.frame_rate));
+    }
     m_peer_stalls_seen[s] = m_peer_stalls[s];
   }
   static_assert(std::tuple_size_v<decltype(m_stall_history)> == STALL_WINDOWS);
+  static_assert(std::tuple_size_v<decltype(m_lag_history)> == STALL_WINDOWS);
+  static_assert(std::tuple_size_v<decltype(m_warm_history)> == STALL_WINDOWS);
   std::shift_left(m_stall_history.begin(), m_stall_history.end(), 1);
   m_stall_history.back() = stalls;
-  int recent = 0;
-  for (const int n : m_stall_history)
-    recent += n;
-  if (m_config.max_delay <= m_config.input_delay)
+  std::shift_left(m_warm_history.begin(), m_warm_history.end(), 1);
+  m_warm_history.back() = m_frame - m_config.start_frame > WARMUP_SECONDS * m_config.frame_rate;
+  std::shift_left(m_lag_history.begin(), m_lag_history.end(), 1);
+  m_lag_history.back() = std::exchange(m_window_peer_lag, 0);
+  m_stall_free_windows = stalls > 0 ? 0 : std::min(m_stall_free_windows + 1, INT_MAX / 2);
+  m_windows_since_lower = std::min(m_windows_since_lower + 1, INT_MAX / 2);
+  if (m_fixed_delay || m_config.max_delay <= m_config.input_delay)
     return;
 
-  // Our rollbacks come from the others' delay and theirs from ours: adapt on the worst side.
-  int resimulated = mine;
-  for (int s = 0; s < m_config.seats; ++s)
+  // What the link needs. Unknown while another player's median is still missing (one who just
+  // arrived): nothing steps down for the link meanwhile, unless ours never came either.
+  const int link = LatencyDelay().value_or(m_typical_rtt ? m_delay : m_config.input_delay);
+  m_link_below_windows = link < m_delay ? m_link_below_windows + 1 : 0;
+  // Stalls in the last STALL_WINDOWS, at most MAX_STALLS_PER_WINDOW from each, and of those the
+  // ones from after the warmup.
+  int recent_stalls = 0;
+  int warm_stalls = 0;
+  for (size_t w = 0; w < m_stall_history.size(); ++w)
   {
-    if (s != m_config.local_seat)
-      resimulated = std::max(resimulated, m_peer_resimulated[s]);
+    const int n = std::min(m_stall_history[w], MAX_STALLS_PER_WINDOW);
+    recent_stalls += n;
+    warm_stalls += m_warm_history[w] ? n : 0;
   }
-  const int rate = m_config.frame_rate;
-  const bool quiet = resimulated * 20 <= rate && stalls == 0;
-  const bool warm = m_frame - m_config.start_frame >= WARMUP_SECONDS * rate;
-  const bool stalling = recent >= (warm ? STALLS_TO_RAISE : WARMUP_STALLS_TO_RAISE);
-  if (stalls == 0 && m_stall_hold > 0)
-    --m_stall_hold;
-
-  // On probation after a lower: trouble means the lower was wrong, straight back up. Two windows,
-  // where the SDK watches one: a lower makes the other side roll back, and its report of that
-  // arrives a window late.
-  if (m_tried_delay > 0)
+  // A frame less adds a frame to every lag: it must stay below max_rollback - 1, a frame short of
+  // the edge, in every window of the last STALL_WINDOWS.
+  const bool room = *std::max_element(m_lag_history.begin(), m_lag_history.end()) <
+                    m_config.max_rollback - 1;
+  // A delay the link put there follows it back down once it has wanted less for a few windows
+  // (an inflated first median: pings during a keyframe's upload or download); one stalls put there
+  // waits out the stall-free hold.
+  const bool step_down =
+      (m_delay_from_link && m_link_below_windows >= LINK_HOLD_WINDOWS) ||
+      m_stall_free_windows >= m_hold_windows;
+  if (warm_stalls >= STALLS_TO_RAISE || recent_stalls >= WARMUP_STALLS_TO_RAISE)
   {
-    if (!quiet)
+    // The others keep stalling on this player's inputs: a frame more (and at least the link's).
+    // The stalls behind it are spent. Soon after a step down, they say the step was wrong: this
+    // undoes it, and the next try needs a longer stall-free run.
+    m_stall_history.fill(0);
+    m_delay_from_link = false;
+    const int raised = std::clamp(m_delay + 1, link, m_config.max_delay);
+    if (m_windows_since_lower < PROBATION_WINDOWS)
     {
-      m_quiet_windows = 0;
-      m_quiet_needed = std::min(m_quiet_needed * 2, MAX_QUIET_WINDOWS);
-      if (m_delay < m_tried_delay)
-      {
-        m_delay = m_tried_delay;
-        ++m_stats.delay_reverts;
-      }
-      m_tried_delay = 0;
-      m_stats.delay = m_delay;
-      // Stalls that undid a lower don't raise again on top.
-      if (stalling)
-        m_stall_history.fill(0);
-      return;
+      ++m_stats.delay_reverts;
+      m_hold_windows = std::min(m_hold_windows * 2, MAX_STALL_HOLD_WINDOWS);
+      m_windows_since_lower = INT_MAX / 2;
     }
-    if (--m_probe_windows == 0)
-      m_tried_delay = 0;
-  }
-
-  if (resimulated * 2 >= rate || stalling)
-  {
-    m_quiet_windows = 0;
-    if (m_delay < m_config.max_delay)
+    else if (raised > m_delay)
     {
-      ++m_delay;
       ++m_stats.delay_raises;
     }
-    // The stalls behind a raise are spent: the next one needs a new run of them.
-    if (stalling)
-    {
-      m_stall_history.fill(0);
-      m_stall_hold = STALL_HOLD_WINDOWS;
-    }
+    m_delay = raised;
   }
-  else if (quiet)
+  else if (link > m_delay)
   {
-    // A steady link (round trips within a frame of each other) earns a lower in half the time.
-    int needed = m_quiet_needed;
-    if (m_rtt_ms && FramesFromMs(m_rtt_dev_ms) <= 1.0)
-      needed = std::max(5, needed / 2);
-    if (++m_quiet_windows >= needed && m_stall_hold == 0 && m_delay > DelayFloor())
-    {
-      m_quiet_windows = 0;
-      m_tried_delay = m_delay;
-      m_probe_windows = 2;
-      --m_delay;
-      ++m_stats.delay_lowers;
-    }
+    RaiseToLink();
   }
-  else
+  else if (m_delay > link && step_down && room)
   {
-    m_quiet_windows = 0;
+    // Above what the link needs, and a frame of room left for everyone with a frame less: one
+    // frame down.
+    --m_delay;
+    ++m_stats.delay_lowers;
+    m_stall_free_windows = 0;
+    m_windows_since_lower = 0;
   }
   m_stats.delay = m_delay;
 }
@@ -1007,6 +1072,18 @@ void Session::ReceivePackets()
     const int ack = packet.ack[m_config.local_seat];
     if (ack >= -1 && ack <= m_frame + window)
       m_acked[s] = std::max(m_acked[s], ack);
+    // How far this player ran past the newest of our inputs it had, while it needed them: as deep
+    // as a change of them would roll it back. AdaptDelay's lowers watch it, and its stalls count
+    // for our delay only when it reached max_rollback. Bounded. Not around a hitch on either
+    // machine: a frozen emulator, not the link (as for stalls).
+    if (ack >= 0 && Plugged(m_config.local_seat, packet.current_frame) &&
+        Plugged(s, packet.current_frame) && m_last_hitch_frame < m_frame - HITCH_FRAMES)
+    {
+      const int lag = std::clamp(packet.current_frame - ack, 0, MAX_FRAMES_AHEAD);
+      m_window_peer_lag = std::max(m_window_peer_lag, lag);
+      if (lag >= m_config.max_rollback)
+        m_edge_frame[s] = m_frame;
+    }
     m_remote_frame[s] = packet.current_frame;
     // Our lead over this peer, transit included (it cancels against the peer's own number).
     m_advantage[s] = m_frame - packet.current_frame;
@@ -1019,13 +1096,7 @@ void Session::ReceivePackets()
     if (packet.rtt && m_peer_rtt[s] != std::clamp(*packet.rtt, 0, MAX_RTT_MS))
     {
       m_peer_rtt[s] = std::clamp(*packet.rtt, 0, MAX_RTT_MS);
-      ApplyStartDelay();
-    }
-    // No window re-simulates more than every frame of the deepest rollback.
-    if (packet.resimulated >= 0)
-    {
-      m_peer_resimulated[s] =
-          std::min(packet.resimulated, m_config.frame_rate * m_config.max_rollback);
+      RaiseToLink();
     }
     // Running counts: they only ever grow (a lower number is a stale or hostile one).
     m_peer_stalls[s] = std::max(m_peer_stalls[s], packet.stalls);
@@ -1186,8 +1257,7 @@ void Session::SendPacket()
     constexpr double bound = MAX_FRAMES_AHEAD;
     packet.advantage = static_cast<int>(std::lround(std::clamp(*lead, -bound, bound) * 10));
   }
-  if (m_rtt_ms)
-    packet.rtt = static_cast<int>(std::lround(*m_rtt_ms));
+  packet.rtt = m_typical_rtt;
   if (m_pending_checksum)
   {
     packet.checksum_frame = m_pending_checksum;
