@@ -534,6 +534,11 @@ std::optional<IPCReply> NetIPTopDevice::IOCtl(const IOCtlRequest& request)
 
 std::optional<IPCReply> NetIPTopDevice::IOCtlV(const IOCtlVRequest& request)
 {
+  // As IOCtl: no guest networking while determinism is wanted (an Orca session never lets the game
+  // reach any server, Nintendo's included: name lookups, sendto and recvfrom are refused too).
+  if (Core::WantsDeterminism())
+    return IPCReply(IPC_EACCES);
+
   switch (request.request)
   {
   case IOCTLV_SO_GETINTERFACEOPT:
