@@ -268,20 +268,66 @@ Project+ player on an M1 to M3 was kept from the others (the room hello's float 
   included (checked on this M4 Pro: FRSQRTE of 2^-1074 is +inf with FZ, with or without AH). In a
   session, rounding to single where Jit64 rounds (psq_st, ps_sum's copied lane) applies on every
   ARM CPU.
+- **Paired loads and stores:** in a session JitArm64 makes an SNaN that psq_l loads quiet, as
+  Jit64's CVTPS2PD does (an SNaN pattern loaded by psq_l and stored by stfs or stfd, or moved by
+  fmr first, was `0x7FC00001` on a PC and `0x7F800001` on a Mac); denormals stay exact. And it
+  leaves to the interpreter the psq_l and psq_st that Jit64 leaves there (address translation off,
+  or rA = 0), whose answers differ from both JITs' (psq_st truncates to single). Project+'s codes
+  use rA = 0 (psq_stx f14 to f31 at `0x803f2e70`, psq_lx at `0x801629bc`), so a PC ran those on
+  the interpreter and a Mac on its JIT before. Falling back there first stopped JitArm64 on its
+  own register cache (an FPR the fallback had flushed, flushed again as unused, unlocked
+  `INVALID_REG`), which `Arm64FPRCache::FlushRegister` now skips as the GPR cache does; any
+  fallback whose FPRs nothing read afterwards (an Rc = 1 float op, say) could hit it.
+- **The interpreter under the host's mode.** The JITs fall back to the interpreter (Rc = 1 forms,
+  among others), and that C++ runs in the guest's FP mode too, so under FPCR.AH (an M4) the host's
+  FABS and FNEG leave a NaN's sign alone and Clang's `std::copysign` of a double, whose mask it
+  builds with FNEG of all ones, loses the sign (the same trap as the frame hook's above). The
+  interpreter's fabs is bitwise now, and fres (`Common::ApproximateReciprocal`) and fctiw's
+  round-to-nearest (`RoundToIntegerMode`) put the sign on with integer operations: on an M4,
+  fres(-0) was +inf, and fctiw of -1.5 or -3.5 rounded to -1 and -3.
+- **Jit64's fres and ps_res of -0.0** set FPSCR.ZX and FX, as the interpreter and JitArm64 do (its
+  zero test missed the sign bit). Those bits reach RAM through mffs and an OS context save.
 - FEAT_AFP is detected on macOS (`hw.optional.arm.FEAT_AFP`; Dolphin never set it on Apple), and
   FPCR.AH is set only where the CPU has it. `ORCA_TEST_NO_AFP=1` makes an M4 behave as an M1.
-- Outside a session: the accurate-NaN fixes apply wherever Dolphin's accurate-NaN setting is on;
-  frsqrte (negative inputs, double denormals, FPSCR.VXSQRT for a negative of magnitude 2 or more,
-  which JitArm64 skipped) and FEAT_AFP detection are fixed for every run.
+- **Outside a session (stock Dolphin behaviour, for the release notes):** the accurate-NaN fixes
+  apply wherever Dolphin's accurate-NaN setting is on; frsqrte (negative inputs, double denormals,
+  FPSCR.VXSQRT for a negative of magnitude 2 or more, which JitArm64 skipped), Jit64's fres(-0.0),
+  the interpreter's fabs, fres and fctiw under FPCR.AH, JitArm64's FPR flush after a fallback, and
+  FEAT_AFP detection change for every run. They match PowerPC, Jit64 and the interpreter, and the three bAFP-gated JitArm64 paths
+  (FloatCompare, GeneratePsMaddEft, SetSIMDMode) behave the same under AH with FIZ off.
+- Forcing accurate NaNs changes a PC's and an M4's results wherever a NaN is made (x86's
+  inf - inf was `0xFFF8...`). Matchmaking is unaffected (the build is in the compatibility key),
+  but an input recording or replay from an older build no longer reproduces a run that makes one.
 
-Residual differences (no fix that costs nothing): a double denormal (below 2^-1022, as a double)
-used as an input is still flushed on an M1 to M3 and kept elsewhere; it needs a 64-bit word with a
-zero exponent loaded with lfd and then computed with, which no scripted run has shown. And a
-result whose exact value lies within half an ulp below the smallest normal, and rounds up to it,
-flushes to zero on an M1 to M3 (tininess before rounding) but not on the others; that is a window
-of 2^-24 relative to 2^-126 (singles), reached only by values decaying through the bottom of the
-float range. An x86-64 CPU without SSE4.1 stores a NaN as a u16 differently (0); every CPU with
-FMA3 has SSE4.1.
+Residual differences, all detected rather than silent (the 60-frame checksum exchange reports
+a desync and the friend is unplugged), and none measured per match yet:
+- **M1 to M3 only, double denormal inputs.** A double below 2^-1022 used as an input is flushed
+  there and kept elsewhere. It needs a 64-bit word with a zero exponent loaded with lfd and then
+  computed with: compares (fcmpu, fsel, ps_sel through FCMP/FCMPE), fctiw (FRINTI), an fmadd
+  addend, frsqrte through an interpreter fallback, and the interpreter's C++ in any Rc = 1 fallback.
+  No scripted run (about 80,000 frames) has shown one.
+- **M1 to M3 only, tininess before rounding.** A result whose exact value lies within half an ulp
+  below the smallest normal and rounds up to it flushes to zero there (AH off detects tininess
+  before rounding) but not elsewhere. For singles that window is 2^-25 relative to 2^-126. Only
+  inexact results land in it: fmul, fdiv, fmadd, and conversions from double to single (frsp,
+  psq_st, rounding to single after an op); a sum or difference of two singles that close to
+  FLT_MIN is exact, so it can't. A value decaying geometrically by a factor k per step lands in
+  the window with probability about 2^-25 / (1 - k): 3e-7 at k = 0.9, 3e-6 at 0.99, 3e-5 at
+  0.999. Making an M1 to M3 detect after rounding has no cheap form (AH is what changes it, and it
+  isn't there); a debug counter for single results in [FLT_MIN (1 - 2^-24), FLT_MIN) and for
+  double-denormal FP inputs over the scripted runs would turn this estimate into a rate.
+- **fctiw of a number that rounds to -0:** PowerPC (and the interpreter) put `0xFFF80001` in the
+  upper word, both JITs `0xFFF80000`. The same on every host, so a Mac and a PC agree; only an
+  Rc = 1 fctiw (interpreter on both) differs from the plain form.
+- An x86-64 CPU without SSE4.1 stores a NaN as a u16 differently (0); every CPU with FMA3 has
+  SSE4.1.
+
+Considered and not done: setting FZ without AH on every ARM CPU in a session (what
+`ORCA_TEST_NO_AFP` does) would make M1 to M4 share one FPCR, so the M1-to-M3 residuals above
+would vanish between Macs, at 504 fps instead of 532 on an M4. x86 could then copy the
+before-rounding flush in `FinalizeSingleResult` (a double intermediate below FLT_MIN becomes a
+signed zero, exact for fmuls and fadds, and what the interpreter's ForceSingle comment says
+PowerPC does). The cost: M4-vs-PC parity would then rest on that x86 change too.
 
 Checked 2026-10-02 on an M4 Pro (FEAT_AFP), with `ORCA_TEST_NO_AFP=1` standing in for an M1 to M3:
 - Offline scripted runs (`YG_HASHLOG`) hash the same every frame with and without the knob:
