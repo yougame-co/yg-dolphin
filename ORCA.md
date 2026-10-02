@@ -135,6 +135,9 @@ host has played.
      window), encrypts it with AES-256-GCM under a fresh random key, and stores it through a
      `KeyframeStore`. The game goes on meanwhile.
    - The key travels only in the room's `kf` message, so the store holds ciphertext.
+   - Never of the host's first 300 frames (5 s): Project+'s first frames after its launcher run
+     differently on a machine whose JIT holds other blocks (frames 3-9 differ in a synctest that
+     drops the JIT after every load). A friend who arrives earlier waits.
    - A keyframe less than 30 s old is reused; each one serves one joiner, who deletes it after
      loading.
 3. **Join.**

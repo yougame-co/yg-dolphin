@@ -244,6 +244,11 @@ constexpr char PEER_SILENT_SENTENCE[] = "Your friend's game stopped responding";
 constexpr int MAX_ROLLBACK = 7;
 // A keyframe this recent serves a new arrival as it is: the joiner replays up to this many frames.
 constexpr int KEYFRAME_FRESH_FRAMES = 30 * 60;
+// No keyframe of a boot's first frames: Project+'s first frames after its launcher hands over (3-9)
+// run differently on a machine whose JIT holds other blocks (a synctest that drops the JIT after
+// every load differs there, in CoreTiming ticks and RAM; Brawl over frames 0-600 does not), and a
+// joiner's JIT always does. A friend who arrives earlier waits until the host's frame 300 (5 s).
+constexpr int FIRST_KEYFRAME_FRAME = 300;
 // A joiner far behind the host runs unthrottled.
 constexpr int CATCH_UP_BEHIND = 12;
 // How long a joiner waits for the host's keyframe before it gives up.
@@ -797,7 +802,7 @@ void HostEvents(Core::System& system, Match& match)
   {
     if (fresh)
       match.keyframe_wanted = false;
-    else if (!match.session || match.session->Settled())
+    else if (next >= FIRST_KEYFRAME_FRAME && (!match.session || match.session->Settled()))
     {
       match.keyframe_wanted = false;
       StartKeyframe(system, match, next);
