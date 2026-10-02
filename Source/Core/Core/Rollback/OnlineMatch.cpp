@@ -61,8 +61,23 @@ struct KeyframeJob
   Orca::Net::KeyframeInfo info;
   double capture_ms = 0, pack_ms = 0, put_ms = 0;
   u64 raw_size = 0;
+  // NAND bytes named by hash, not sent (the joiner's boot writes them).
+  u64 referenced = 0;
   std::string error;
   ~KeyframeJob()
+  {
+    if (thread.joinable())
+      thread.join();
+  }
+};
+
+// The host's NAND file hashes at Profile::boot_nand_frame, read on a thread from a clone.
+struct BootNandJob
+{
+  std::thread thread;
+  std::atomic<bool> done{false};
+  std::map<std::string, u64> hashes;
+  ~BootNandJob()
   {
     if (thread.joinable())
       thread.join();
@@ -128,6 +143,12 @@ struct Match
   bool joined = false;
   int leave_at = -1;
   bool leave_requested = false;
+  // The joiner runs its own boot to this frame before loading (Profile::boot_nand_frame).
+  int boot_ahead_to = 0;
+  std::string join_status;
+  // Host: its NAND's file hashes at Profile::boot_nand_frame, which keyframes name instead of
+  // sending.
+  std::unique_ptr<BootNandJob> boot_nand;
   int last_percent = -1;
 
   u32 round_trip_sequence = 0;
@@ -242,13 +263,31 @@ void StartKeyframe(Core::System& system, Match& match, int frame)
 
   KeyframeJob* const raw = job.get();
   Orca::Net::KeyframeStore* const store = match.store.get();
+  std::map<std::string, u64> boot;
+  if (match.boot_nand && match.boot_nand->done)
+    boot = match.boot_nand->hashes;
   raw->thread = std::thread([raw, store, clone, image = std::move(image),
-                             entries = std::move(entries)]() mutable {
+                             entries = std::move(entries), boot = std::move(boot)]() mutable {
     if (!clone.empty())
     {
       if (!Orca::Net::ReadNandTree(clone, &entries))
         raw->error = "reading the NAND clone failed";
       File::DeleteDirRecursively(clone);
+    }
+    // What the joiner's own boot writes travels as a hash.
+    for (Orca::Net::NandEntry& entry : entries)
+    {
+      if (entry.directory)
+        continue;
+      const auto it = boot.find(entry.path);
+      const u64 hash = Orca::Net::NandHash(entry.data);
+      if (it == boot.end() || it->second != hash)
+        continue;
+      raw->referenced += entry.data.size();
+      entry.reference = true;
+      entry.hash = hash;
+      entry.data.clear();
+      entry.data.shrink_to_fit();
     }
     const auto pack_start = Clock::now();
     u64 raw_size = image.state.size() + image.mem1.size() + image.mem2.size();
@@ -267,7 +306,7 @@ void StartKeyframe(Core::System& system, Match& match, int frame)
       raw->info.hash = Orca::Net::KeyframeHash(blob);
       raw->info.id = fmt::format("kf-{}-{}", raw->frame, raw->info.hash.substr(0, 8));
       const auto put_start = Clock::now();
-      raw->ok = store->Put(raw->info.id, blob, &raw->error);
+      raw->ok = store->Put(raw->info, blob, &raw->error);
       raw->put_ms = MsSince(put_start);
     }
     raw->done = true;
@@ -275,6 +314,44 @@ void StartKeyframe(Core::System& system, Match& match, int frame)
   match.job = std::move(job);
   NOTICE_LOG_FMT(ROLLBACK, "Drop-in: keyframe of frame {} captured in {:.1f} ms", frame,
                  match.job->capture_ms);
+}
+
+// Host: at Profile::boot_nand_frame, note what the boot wrote to the NAND (a joiner's boot writes the
+// same, so keyframes name those files instead of sending them).
+void MaybeHashBootNand(Core::System& system, Match& match)
+{
+  const Orca::Profile* profile = Orca::ActiveProfile();
+  if (!profile || !profile->boot_nand_frame || match.boot_nand ||
+      match.running + 1 != static_cast<int>(*profile->boot_nand_frame))
+  {
+    return;
+  }
+  IOS::HLE::FS::HostFileSystem* nand = HostNand(system);
+  if (!nand)
+    return;
+  auto job = std::make_unique<BootNandJob>();
+  std::string clone;
+#ifdef __APPLE__
+  clone = File::GetUserPath(D_USER_IDX) + "OrcaBootNand";
+  File::DeleteDirRecursively(clone);
+  if (clonefile(nand->HostRoot().c_str(), clone.c_str(), CLONE_NOFOLLOW) != 0)
+    clone.clear();
+#endif
+  if (clone.empty())
+  {
+    job->hashes = Orca::Net::HashNandTree(nand->HostRoot());
+    job->done = true;
+  }
+  else
+  {
+    BootNandJob* const raw = job.get();
+    raw->thread = std::thread([raw, clone] {
+      raw->hashes = Orca::Net::HashNandTree(clone);
+      File::DeleteDirRecursively(clone);
+      raw->done = true;
+    });
+  }
+  match.boot_nand = std::move(job);
 }
 
 // The host's solo frame: its own pad on port 1, every other port unplugged.
@@ -297,6 +374,19 @@ void RunSolo(Match& match, const std::function<Pad(int)>& local_pad)
   match.port->SetPads(frame, pads);
   match.log.push_back(pads);
   match.running = frame;
+}
+
+// Host: unplug every friend still in the session, telling each (and the app) why.
+void DropFriends(Match& match, const std::string& reason)
+{
+  for (int seat = 0; seat < Orca::Net::MAX_SEATS; ++seat)
+  {
+    if (seat == match.local_seat || match.session->Plan()[seat].live_from == Orca::Net::NEVER)
+      continue;
+    Orca::Online::DropPeer(seat, reason);
+    match.session->DropSeat(seat);
+  }
+  Orca::Status::State("friend-left " + reason);
 }
 
 void GoSolo(Match& match, const char* why)
@@ -332,12 +422,18 @@ void HostEvents(Core::System& system, Match& match)
     }
     else if (event.kind == Orca::Net::PeerEvent::Kind::Left)
     {
-      match.waiting.erase(event.seat);
+      const bool was_waiting = match.waiting.erase(event.seat) > 0;
+      const bool was_playing =
+          match.session && match.session->Plan()[event.seat].live_from != Orca::Net::NEVER;
       if (match.session)
       {
-        NOTICE_LOG_FMT(ROLLBACK, "Drop-in: port {} left the room", event.seat + 1);
+        NOTICE_LOG_FMT(ROLLBACK, "Drop-in: port {} left the room{}{}", event.seat + 1,
+                       event.reason.empty() ? "" : ": ", event.reason);
         match.session->DropSeat(event.seat);
       }
+      // The app hears why a friend went (its bye: "desync", "stalled"), as the friend's own does.
+      if (was_waiting || was_playing)
+        Orca::Status::State("friend-left " + (event.reason.empty() ? std::string("left") : event.reason));
     }
   }
   if (Orca::Online::TakePrepareJoin())
@@ -358,9 +454,11 @@ void HostEvents(Core::System& system, Match& match)
     else
     {
       NOTICE_LOG_FMT(ROLLBACK,
-                     "Drop-in: keyframe of frame {}: {:.1f} MB raw, {:.1f} MB stored; capture "
-                     "{:.1f} ms, pack and compress {:.0f} ms, store {:.0f} ms",
-                     job->frame, job->raw_size / 1e6, job->info.size / 1e6, job->capture_ms,
+                     "Drop-in: keyframe of frame {}: {:.1f} MB raw ({:.1f} MB of NAND named, not "
+                     "sent), {:.1f} MB stored; capture {:.1f} ms, pack and compress {:.0f} ms, "
+                     "store {:.0f} ms",
+                     job->frame, job->raw_size / 1e6, job->referenced / 1e6, job->info.size / 1e6,
+                     job->capture_ms,
                      job->pack_ms, job->put_ms);
       // An earlier keyframe nobody took (an invite not accepted yet) is replaced.
       if (match.keyframe && match.store)
@@ -451,7 +549,7 @@ void StartDownload(Match& match, const Orca::Net::KeyframeInfo& info)
     const auto start = Clock::now();
     std::string error;
     const auto blob = store->Get(
-        raw->info.id, raw->info.size,
+        raw->info,
         [raw](u64 done, u64 total) {
           raw->percent = static_cast<int>(done * 100 / std::max<u64>(total, 1));
           return !raw->cancel.load();
@@ -481,14 +579,18 @@ void StartDownload(Match& match, const Orca::Net::KeyframeInfo& info)
   match.download = std::move(download);
 }
 
-// Blocks at the joiner's first boundary until the host's keyframe is loaded. Returns the frame it
-// holds (the state is now the start of it), or nullopt (emulation stops; the reason is shown).
-std::optional<int> JoinHost(Core::System& system, Match& match)
+enum class JoinPump
 {
-  match.boot_time = Clock::now();
-  Orca::Status::State("joining 0");
-  std::string last_status;
-  while (!Stopping(system))
+  Waiting,
+  Ready,
+  Failed,
+};
+
+// One look at the room for a joiner: the host's arrival and its keyframe offer, the download's
+// progress. Never blocks. Ready once the keyframe is downloaded and unpacked; Failed stops
+// emulation (the reason is shown).
+JoinPump PumpJoin(Core::System& system, Match& match, std::string* last_status)
+{
   {
     for (const Orca::Net::PeerEvent& event : Orca::Online::TakePeerEvents())
     {
@@ -503,7 +605,7 @@ std::optional<int> JoinHost(Core::System& system, Match& match)
       {
         StopEmulation(system, "Your friend left before you could join");
         Orca::Status::Error("peer_left", "Your friend left before you could join");
-        return std::nullopt;
+        return JoinPump::Failed;
       }
       else if (event.kind == Orca::Net::PeerEvent::Kind::Keyframe && !match.download)
       {
@@ -518,7 +620,12 @@ std::optional<int> JoinHost(Core::System& system, Match& match)
     {
       const std::string status = Orca::Online::StatusLine();
       StopEmulation(system, fmt::format("Couldn't join: {}", status));
-      return std::nullopt;
+      return JoinPump::Failed;
+    }
+    if (std::string status = Orca::Online::StatusLine(); status != *last_status)
+    {
+      NOTICE_LOG_FMT(NETPLAY, "Orca: {}", status);
+      *last_status = std::move(status);
     }
     if (match.download)
     {
@@ -530,22 +637,31 @@ std::optional<int> JoinHost(Core::System& system, Match& match)
         Orca::Status::State(fmt::format("joining {}", percent));
       }
       if (match.download->done)
-        break;
+        return JoinPump::Ready;
     }
     if (Clock::now() - match.boot_time > JOIN_LIMIT)
     {
       StopEmulation(system, "Couldn't join: your friend's game never sent its state");
       Orca::Status::Error("network", "Your friend's game never sent its state");
-      return std::nullopt;
+      return JoinPump::Failed;
     }
-    if (std::string status = Orca::Online::StatusLine(); status != last_status)
-    {
-      NOTICE_LOG_FMT(NETPLAY, "Orca: {}", status);
-      last_status = std::move(status);
-    }
+  }
+  return JoinPump::Waiting;
+}
+
+// Blocks at a joiner's boundary until the host's keyframe is loaded. Returns the frame it holds
+// (the state is now the start of it), or nullopt (emulation stops; the reason is shown).
+std::optional<int> JoinHost(Core::System& system, Match& match)
+{
+  JoinPump pump = JoinPump::Waiting;
+  while (!Stopping(system))
+  {
+    pump = PumpJoin(system, match, &match.join_status);
+    if (pump != JoinPump::Waiting)
+      break;
     std::this_thread::sleep_for(std::chrono::milliseconds(5));
   }
-  if (!match.download || !match.download->done)
+  if (pump != JoinPump::Ready || !match.download || !match.download->done)
     return std::nullopt;
   std::unique_ptr<Download> download = std::move(match.download);
   if (download->thread.joinable())
@@ -561,6 +677,15 @@ std::optional<int> JoinHost(Core::System& system, Match& match)
   // The host's NAND, then its machine. The session NAND is a temporary folder of this session's.
   const auto load_start = Clock::now();
   IOS::HLE::FS::HostFileSystem* nand = HostNand(system);
+  // Files the host's keyframe only names: this machine's boot wrote them too.
+  std::string missing;
+  if (nand && !Orca::Net::ResolveNandReferences(nand->HostRoot(), &download->nand, &missing))
+  {
+    ERROR_LOG_FMT(ROLLBACK, "Drop-in: this boot's NAND doesn't match the host's: {}", missing);
+    StopEmulation(system, "Couldn't join: your friend's game data differs from yours");
+    Orca::Status::Error("room_mismatch", "Your friend's game data differs from yours");
+    return std::nullopt;
+  }
   if (!nand || !Core::WiiRootIsTemporary() ||
       !Orca::Net::ReplaceNandTree(nand->HostRoot(), download->nand))
   {
@@ -570,7 +695,8 @@ std::optional<int> JoinHost(Core::System& system, Match& match)
   }
   nand->ReloadFst();
   const int frame = download->frame;
-  match.port = std::make_unique<RingPort>(system, MAX_ROLLBACK);
+  if (!match.port)
+    match.port = std::make_unique<RingPort>(system, MAX_ROLLBACK);
   if (!match.port->LoadImage(std::move(download->image), frame))
   {
     StopEmulation(system, "Couldn't join: your friend's game state didn't load");
@@ -632,7 +758,10 @@ std::optional<int> OnBoundary(Core::System& system,
         TheMatch().stale = true;
       });
     }
-    match.store = Orca::Net::MakeKeyframeStore();
+    match.store = Orca::Net::MakeKeyframeStore(
+        [](std::string* ticket, std::string* store_url, std::string* error) {
+          return Orca::Online::FreshTicket(ticket, store_url, error);
+        });
     if (const std::string leave = Orca::GetEnv("ORCA_TEST_LEAVE_AT"); !leave.empty())
       match.leave_at = std::atoi(leave.c_str());
     Orca::Online::Start();
@@ -653,12 +782,14 @@ std::optional<int> OnBoundary(Core::System& system,
         End("no keyframe store");
         return std::nullopt;
       }
-      rewound_to = JoinHost(system, match);
-      if (!rewound_to)
-      {
-        End("couldn't join");
-        return std::nullopt;
-      }
+      // Until the keyframe is in, this machine runs its own boot, unthrottled and unseen, as far
+      // as the profile's boot_nand_frame: the NAND files that boot writes needn't travel.
+      match.boot_time = Clock::now();
+      Orca::Status::State("joining 0");
+      match.port = std::make_unique<RingPort>(system, MAX_ROLLBACK);
+      match.port->SetCatchingUp(true);
+      if (const Orca::Profile* profile = Orca::ActiveProfile(); profile && profile->boot_nand_frame)
+        match.boot_ahead_to = static_cast<int>(*profile->boot_nand_frame);
     }
     else
     {
@@ -668,8 +799,33 @@ std::optional<int> OnBoundary(Core::System& system,
     }
   }
 
+  if (match.joining && !match.session)
+  {
+    if (match.running + 1 < match.boot_ahead_to)
+    {
+      if (PumpJoin(system, match, &match.join_status) == JoinPump::Failed)
+      {
+        End("couldn't join");
+        return std::nullopt;
+      }
+      Pads pads;
+      pads.fill(Orca::Net::UNPLUGGED_PAD);
+      pads[0] = Pad{};
+      match.port->SetPads(match.running + 1, pads);
+      ++match.running;
+      return std::nullopt;
+    }
+    rewound_to = JoinHost(system, match);
+    if (!rewound_to)
+    {
+      End("couldn't join");
+      return std::nullopt;
+    }
+  }
+
   if (!match.joining)
   {
+    MaybeHashBootNand(system, match);
     if (!Orca::Online::RoomEnded())
       HostEvents(system, match);
     if (!match.session)
@@ -689,6 +845,27 @@ std::optional<int> OnBoundary(Core::System& system,
   const auto now = Clock::now();
   if (match.last_return && now - *match.last_return > HITCH_TIME && !match.port->CatchingUp())
     match.session->OnLocalHitch();
+
+  // A joiner whose host left: the game it joined is gone. The host's bye says whether their games
+  // went apart.
+  if (match.joining)
+  {
+    for (const Orca::Net::PeerEvent& event : Orca::Online::TakePeerEvents())
+    {
+      if (event.kind != Orca::Net::PeerEvent::Kind::Left || !event.host)
+        continue;
+      LogStats("host left");
+      if (event.reason == "desync")
+        Orca::Status::Error("desync", "Your games went out of sync, so the match ended");
+      else
+        Orca::Status::Error("peer_left", "Your friend's game ended");
+      End("host left");
+      StopEmulation(system, event.reason == "desync" ?
+                                "Your games went out of sync, so the match ended" :
+                                "Your friend's game ended");
+      return rewound_to;
+    }
+  }
 
   if (match.joining && match.leave_at >= 0 && match.running >= match.leave_at &&
       !match.leave_requested)
@@ -783,9 +960,10 @@ std::optional<int> OnBoundary(Core::System& system,
       if (error.empty())
       {
         // Silent friends: unplug them and step again (the session still runs).
-        match.session->DropAllPeers();
+        DropFriends(match, "stalled");
         continue;
       }
+      DropFriends(match, Orca::Online::IsDesync(error) ? "desync" : "network");
       GoSolo(match, "the session failed");
       RunSolo(match, local_pad);
       return rewound_to;

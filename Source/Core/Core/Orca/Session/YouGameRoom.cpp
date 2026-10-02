@@ -540,6 +540,7 @@ struct YouGameRoom::Impl
   // keyframe the host offers each joining seat.
   std::vector<PeerEvent> events;
   std::map<int, KeyframeInfo> keyframe_offers;
+  std::vector<std::pair<int, std::string>> pending_drops;
   // Whether this Orca joins someone else's game (RoomOptions::joining, or the app's invite), known
   // once the ticket is in (role_known, under mutex).
   bool joining = false;
@@ -552,6 +553,9 @@ struct YouGameRoom::Impl
   // (mpRoom, the latest only), and the page's lobby commands come back on its event stream.
   bool bridged = false;
   std::string bridge_url, bridge_token;
+  // How tickets were minted (set once, before role_known): the dev site and player, and the
+  // keyframe store's address from the ticket reply (YouGame's "keyframes", else the default).
+  std::string site, dev_player, keyframes_url;
   std::thread bridge_thread, events_thread;
   std::atomic<bool> bridge_done{false};
   std::mutex bridge_mutex;
@@ -583,6 +587,11 @@ struct YouGameRoom::Impl
   explicit Impl(RoomOptions room_options) : options(std::move(room_options))
   {
     joining = options.joining;
+    site = Env("ORCA_SITE");
+    if (site.empty())
+      site = "https://yougame.co";
+    while (site.ends_with("/"))
+      site.pop_back();
     thread = std::thread([this] { Run(); });
   }
 
@@ -754,12 +763,10 @@ struct YouGameRoom::Impl
         End("Room codes are 6 to 12 lowercase letters and digits");
         return false;
       }
-      std::string site = Env("ORCA_SITE");
-      if (site.empty())
-        site = "https://yougame.co";
       std::string player = Env("ORCA_TEST_PLAYER");
       if (player.empty())
         player = "orca-" + RandomString("abcdefghijklmnopqrstuvwxyz0123456789", 15);
+      dev_player = player;
       picojson::object request;
       request["dev"] = picojson::value(dev);
       request["player_id"] = picojson::value(player);
@@ -781,9 +788,97 @@ struct YouGameRoom::Impl
       End("YouGame sent no usable room ticket");
       return false;
     }
+    keyframes_url = KeyframesUrl(Str(reply, "keyframes"));
     std::lock_guard lock(mutex);
     code = room;
     role_known = true;
+    return true;
+  }
+
+  // The keyframe store's base: what YouGame's ticket reply names (only a URL on the site the
+  // tickets come from: ORCA_SITE, else yougame.co), else the site's default.
+  std::string KeyframesUrl(const std::string& named) const
+  {
+    if (!named.empty() && named.starts_with(site + "/"))
+      return named.ends_with("/") ? named.substr(0, named.size() - 1) : named;
+    return site + "/api/orca/keyframes";
+  }
+
+  // A fresh ticket for this room (tickets live five minutes; a keyframe goes out much later), for
+  // the keyframe store. Any thread, once the room has its first ticket; no side effects.
+  bool FreshTicket(std::string* ticket, std::string* store_url, std::string* error)
+  {
+    std::string room;
+    {
+      std::lock_guard lock(mutex);
+      if (!role_known)
+      {
+        *error = "the room has no ticket yet";
+        return false;
+      }
+      room = code;
+    }
+    picojson::object lobby;
+    lobby["version"] = picojson::value(1.0);
+    lobby["minPlayers"] = picojson::value(2.0);
+    lobby["maxLocalPlayers"] = picojson::value(1.0);
+    lobby["compatibility"] = picojson::value(options.compatibility);
+    picojson::object request;
+    request["players"] = picojson::value(static_cast<double>(MAX_SEATS));
+    request["mode"] = picojson::value(options.mode);
+    request["room"] = picojson::value(room);
+    request["lobby"] = picojson::value(lobby);
+    Common::HttpRequest http(std::chrono::seconds(10));
+    Common::HttpRequest::Response response;
+    if (bridged)
+    {
+      request["type"] = picojson::value("mpTicket");
+      request["ranked"] = picojson::value(false);
+      response = http.Post(bridge_url + "/sdk", picojson::value(request).serialize(),
+                           {{"Authorization", "Bearer " + bridge_token},
+                            {"Content-Type", "application/json"}},
+                           Common::HttpRequest::AllowedReturnCodes::All);
+    }
+    else
+    {
+      request["dev"] = picojson::value(Env("ORCA_TEST_DEV_GAME"));
+      request["player_id"] = picojson::value(dev_player);
+      request["name"] = picojson::value(options.player_name);
+      response = http.Post(site + "/api/multiplayer/ticket", picojson::value(request).serialize(),
+                           {{"Content-Type", "application/json"}},
+                           Common::HttpRequest::AllowedReturnCodes::All);
+    }
+    picojson::value json;
+    if (!response || !ParseJson(std::string(response->begin(), response->end()), &json) ||
+        !json.is<picojson::object>())
+    {
+      *error = fmt::format("no ticket from YouGame (HTTP {})", http.GetLastResponseCode());
+      return false;
+    }
+    picojson::object reply = json.get<picojson::object>();
+    if (bridged)
+    {
+      if (!reply.count("ok") || !reply["ok"].evaluate_as_boolean() ||
+          !reply["result"].is<picojson::object>())
+      {
+        *error = Str(reply, "error").empty() ? "the app refused a ticket" : Str(reply, "error");
+        return false;
+      }
+      picojson::object unwrapped = reply["result"].get<picojson::object>();
+      reply = std::move(unwrapped);
+    }
+    else if (http.GetLastResponseCode() != 200)
+    {
+      *error = Str(reply, "error").empty() ? "YouGame refused a ticket" : Str(reply, "error");
+      return false;
+    }
+    *ticket = Str(reply, "ticket");
+    if (ticket->empty())
+    {
+      *error = "YouGame sent no ticket";
+      return false;
+    }
+    *store_url = KeyframesUrl(Str(reply, "keyframes")) + "/" + room;
     return true;
   }
 
@@ -1116,6 +1211,25 @@ struct YouGameRoom::Impl
       SendJson(ping);
     }
 
+    // Players the host unplugged hear why first.
+    std::vector<std::pair<int, std::string>> drops;
+    {
+      std::lock_guard lock(mutex);
+      drops.swap(pending_drops);
+    }
+    for (const auto& [slot, reason] : drops)
+    {
+      for (const auto& [id, peer] : peers)
+      {
+        if (peer.slot != slot)
+          continue;
+        picojson::object d;
+        d["k"] = picojson::value("drop");
+        d["r"] = picojson::value(reason);
+        SendTo(id, d);
+      }
+    }
+
     // Say hello to every other Orca in the room until it answers, so neither side treats the other
     // as a player before both programs are up and agree on the build. Then the host offers each
     // newcomer its keyframe, again every second until the newcomer's first packet arrives.
@@ -1246,7 +1360,10 @@ struct YouGameRoom::Impl
         continue;
       }
       if (p->second.announced)
-        Emit({PeerEvent::Kind::Left, p->second.slot, p->second.drop_in_host, p->second.name, {}});
+      {
+        Emit({PeerEvent::Kind::Left, p->second.slot, p->second.drop_in_host, p->second.name, {},
+              p->second.bye});
+      }
       {
         // An offer was for that player only: the next one in the seat gets its own keyframe.
         std::lock_guard lock(mutex);
@@ -1310,7 +1427,10 @@ struct YouGameRoom::Impl
           if (const auto p = peers.find(id); p != peers.end())
           {
             if (p->second.announced)
-              Emit({PeerEvent::Kind::Left, p->second.slot, p->second.drop_in_host, p->second.name, {}});
+            {
+              Emit({PeerEvent::Kind::Left, p->second.slot, p->second.drop_in_host,
+                    p->second.name, {}, p->second.bye});
+            }
             {
               std::lock_guard lock(mutex);
               keyframe_offers.erase(p->second.slot);
@@ -1369,6 +1489,20 @@ struct YouGameRoom::Impl
       // Only known reasons, so a peer can't put text in this player's report.
       if (const std::string reason = Str(d, "r"); reason == "desync" || reason == "stalled")
         peer.bye = reason;
+      return;
+    }
+    if (kind == "drop")
+    {
+      // The host unplugged this player: its report says why, as the host's does.
+      if (!peer.drop_in_host || !joining)
+        return;
+      const std::string reason = Str(d, "r");
+      if (reason == "desync")
+        End("Your games went out of sync, so you left your friend's game", "desync");
+      else if (reason == "stalled")
+        End("The connection with your friend stalled, so you left the game", "peer_left");
+      else
+        End("Your friend's game disconnected you", "network");
       return;
     }
     if (kind == "hello")
@@ -1475,6 +1609,18 @@ std::vector<PeerEvent> YouGameRoom::TakePeerEvents()
 {
   std::lock_guard lock(m_impl->mutex);
   return std::exchange(m_impl->events, {});
+}
+
+bool YouGameRoom::FreshTicket(std::string* ticket, std::string* store_url, std::string* error)
+{
+  return m_impl->FreshTicket(ticket, store_url, error);
+}
+
+void YouGameRoom::DropPeer(int seat, const std::string& reason)
+{
+  std::lock_guard lock(m_impl->mutex);
+  if (m_impl->pending_drops.size() < 16)
+    m_impl->pending_drops.emplace_back(seat, reason);
 }
 
 void YouGameRoom::OfferKeyframe(int seat, const KeyframeInfo& info)

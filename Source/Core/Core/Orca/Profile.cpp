@@ -407,6 +407,8 @@ std::optional<Profile> LoadProfile(const std::string& game_id, std::optional<u16
         profile.frame_hook = number;
       else if (key == "FrameHookWord")
         profile.frame_hook_word = number;
+      else if (key == "BootNandFrame")
+        profile.boot_nand_frame = number;
       else
         return fail(fmt::format("unknown key {}", key));
     }

@@ -186,6 +186,32 @@ bool RoomEnded()
   return !room || room->GetState() == Net::RoomState::Ended;
 }
 
+bool FreshTicket(std::string* ticket, std::string* store_url, std::string* error)
+{
+  const auto room = Room();
+  if (!room)
+  {
+    *error = "not in a room";
+    return false;
+  }
+  return room->FreshTicket(ticket, store_url, error);
+}
+
+void DropPeer(int seat, const std::string& reason)
+{
+  if (const auto room = Room())
+    room->DropPeer(seat, reason);
+}
+
+bool IsDesync(const std::string& session_error)
+{
+  return session_error.starts_with("Desync") ||
+         session_error.find("changed its input") != std::string::npos ||
+         session_error.find("arrived after") != std::string::npos ||
+         session_error.find("history changed") != std::string::npos ||
+         session_error.starts_with("No local input");
+}
+
 void OfferKeyframe(int seat, const Net::KeyframeInfo& info)
 {
   if (const auto room = Room())
@@ -224,11 +250,7 @@ void ReportSessionEnd(const std::string& session_error)
   const auto room = Room();
   // Inputs that disagree, or a checksum that does: the games went apart. The friend hears it
   // before this side leaves, so both report the same thing.
-  const bool desync = session_error.starts_with("Desync") ||
-                      session_error.find("changed its input") != std::string::npos ||
-                      session_error.find("arrived after") != std::string::npos ||
-                      session_error.starts_with("No local input");
-  if (desync)
+  if (IsDesync(session_error))
   {
     if (room)
       room->SetLeaveReason("desync");

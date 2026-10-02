@@ -21,6 +21,7 @@ add_dolphin_test(OrcaRoomTest Orca/RoomTest.cpp)
 add_dolphin_test(OrcaDiscTest Orca/DiscTest.cpp)
 add_dolphin_test(OrcaLaunchTest Orca/LaunchTest.cpp)
 add_dolphin_test(OrcaCowTest Orca/CowTest.cpp)
+add_dolphin_test(OrcaKeyframeTest Orca/KeyframeTest.cpp)
 
 add_dolphin_test(SkylandersTest IOS/USB/SkylandersTest.cpp)
 

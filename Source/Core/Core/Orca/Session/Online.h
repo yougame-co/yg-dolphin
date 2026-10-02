@@ -34,6 +34,12 @@ Net::Transport* Transport();
 int Seat();
 std::vector<Net::PeerEvent> TakePeerEvents();
 bool RoomEnded();
+// A fresh ticket for the room and the keyframe store's address (YouGameRoom::FreshTicket).
+bool FreshTicket(std::string* ticket, std::string* store_url, std::string* error);
+// Host: tell a friend it was unplugged and why ("desync", "stalled", "network").
+void DropPeer(int seat, const std::string& reason);
+// Whether a session error means the games went apart (inputs or a checksum that disagree).
+bool IsDesync(const std::string& session_error);
 // Host: offer a joining seat the keyframe.
 void OfferKeyframe(int seat, const Net::KeyframeInfo& info);
 

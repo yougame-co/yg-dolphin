@@ -59,6 +59,8 @@ struct PeerEvent
   bool host = false;
   std::string name;
   KeyframeInfo keyframe;
+  // Left: why it said it was going ("desync" or "stalled", from its bye; empty: it just left).
+  std::string reason;
 };
 
 enum class RoomState
@@ -85,6 +87,12 @@ public:
   std::vector<PeerEvent> TakePeerEvents();
   // Host: offer `seat`'s player the keyframe (sent every second until its first packet arrives).
   void OfferKeyframe(int seat, const KeyframeInfo& info);
+  // Host: tell `seat`'s player it was unplugged and why ("desync", "stalled", "network"), so its
+  // own report says the same. Its room ends with that code.
+  void DropPeer(int seat, const std::string& reason);
+  // A fresh ticket for this room, and the keyframe store's address for it (YouGame's
+  // ".../api/orca/keyframes/<room>"). Any thread; blocks on an HTTP request.
+  bool FreshTicket(std::string* ticket, std::string* store_url, std::string* error);
   // The room code in use (for showing and sharing), once known.
   std::string Code() const;
   // A line for the UI or log: what the room is doing, or why it ended.

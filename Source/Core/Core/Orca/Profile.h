@@ -36,6 +36,10 @@ struct Profile
   // a launcher profile installs the hook at boot (the game isn't in RAM yet) and the boundary
   // ignores every pass while the word there differs.
   std::optional<u32> frame_hook_word;
+  // Drop-in: by this frame the game's boot has written every NAND file it writes whatever the
+  // player does (Brawl's /tmp packs), so a joining friend makes them by running its own boot to here
+  // and the keyframe carries only their hashes. Unset: the keyframe carries every file.
+  std::optional<u32> boot_nand_frame;
   // Game-specific additions to the universal settings, as <System>.<Section>.<Key> = <Value>.
   std::vector<std::pair<Config::Location, std::string>> forced;
 
