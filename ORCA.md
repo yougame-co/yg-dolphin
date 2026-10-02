@@ -465,6 +465,7 @@ Any other line goes to stderr. The app's `EMBED_COMMAND` filter must add `blur` 
 | `state running` / `state paused` | The answer to `pause` and `resume`; also `state running` when a session's solo pause ends for drop-in. |
 | `unsupported <command> [N]` | The command was refused. The game carries on, so this is not an error. |
 | `key escape` / `key fullscreen` | Windows only, and only if Orca's window somehow has the keyboard (Esc, F11). Normally the page sees those keys itself, as on macOS. |
+| `orca click` | Windows only: a mouse button (left, right or middle) went down on Orca's window, once per press. The page never sees that click, so the app hands it over: it focuses its window and page, and the page treats it as a press on the box. That means taking DOM focus off whatever had it (a chat field would otherwise keep the keys, since `webContents.focus()` gives it back) and sending `focus`. Do it on every `orca click`, even when the page thinks the game already has the input: Chromium may count a click on another process's child window as its own window losing activation. Orca changes nothing itself on a click. In and out of a session, with no cap: every app forwards the `orca` lines it doesn't know to the page, which ignores them. On macOS the click reaches the page itself ("Focus"). |
 | `error <sentence>` | Something failed: bad arguments, the view couldn't open, the game didn't boot. Each `orca error` also gets an `error` twin. |
 | `orca state <state>` / `orca error <code> <sentence>` | Session status (`Core/Orca/Status.h`). New states, such as drop-in's `joining`, `friend-joined` and `no-room`, come through unchanged: forward every line that starts with `orca `. |
 | `exit <code>` | Always the last line, on every exit path: 0 after a normal stop, 1 after a reported error, 2 for bad arguments. |
@@ -483,6 +484,9 @@ means:
   (it sends the keyboard to Orca as a pad in the controller stream).
   - The child window doesn't take the focus on a click, `focus` or `show`; if Windows hands it the
     focus anyway, it gives it straight back to the app's window.
+  - A click on the picture lands in the child window, not in the page, so Orca prints `orca click`
+    for it (`WM_LBUTTONDOWN`, `WM_RBUTTONDOWN`, `WM_MBUTTONDOWN`). The app and page then do what a
+    click on the box does on macOS (stdout, `orca click`).
   - Input counts while the last command was `focus` (the default), the view is shown, and the
     app's window is the foreground window, as on macOS.
   - The `key` lines only come if the child window somehow has the keyboard; normally the page sees
@@ -490,8 +494,9 @@ means:
   - Caveat, as with libretro: a child window in another process shares the app's input queue, so a
     stall on Orca's main thread stalls the app's UI. `quit` and a closed stdin stop Orca at once.
 - **macOS:** Orca never takes the keyboard or the mouse.
-  - Its window can't become key and lets clicks through to the page beneath, so the app stays the
-    active app with its key window.
+  - Its window can't become key and lets clicks through to the page beneath (`ignoresMouseEvents`),
+    so the app stays the active app with its key window. Orca never sees a mouse event, so it prints
+    no `orca click`: the page gets the click on the box as its own.
   - Orca reads the keyboard from the HID state and the pads through SDL. Input counts while the last
     command was `focus` (the default), the view is shown, and the app's process is the frontmost app.
   - So the page sends `blur` when it wants keys for itself (a text field, chat, a sheet) and `focus`
