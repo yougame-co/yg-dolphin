@@ -108,6 +108,12 @@ public:
   // same either way.
   static void SetSurfaceVisible(bool visible);
   static bool IsSurfaceVisible();
+  // Orca: the most frames a second the screen showing the render surface can show (0: unknown),
+  // set by the frontend as the window moves between screens or a screen's mode changes. A screen
+  // below 59 Hz can't show every frame of a 59.94 Hz game; the Metal backend then never waits for a
+  // drawable (a frame without one isn't shown), so the screen can't slow the game. Host only.
+  static void SetSurfaceRefreshRate(int hz);
+  static int SurfaceRefreshRate();
 
   void SetKeyMap(const DolphinKeyMap& key_map);
 

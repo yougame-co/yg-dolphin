@@ -196,6 +196,7 @@ private:
 
   id m_occlusion_observer = nil;
   bool m_surface_visible = true;
+  int m_surface_refresh_rate = -1;
 };
 
 PlatformMacOS::~PlatformMacOS()
@@ -322,11 +323,28 @@ void PlatformMacOS::UpdateSurfaceVisible()
   // Embedded, ordering out hides it at once; the occlusion state follows a moment later.
   const bool visible = (!IsEmbedded() || m_embed_on_screen) &&
                        ([m_window occlusionState] & NSWindowOcclusionStateVisible) != 0;
-  if (visible == m_surface_visible)
-    return;
-  m_surface_visible = visible;
-  VideoCommon::Presenter::SetSurfaceVisible(visible);
-  NOTICE_LOG_FMT(VIDEO, "Orca: the game's window is {}", visible ? "visible" : "out of sight");
+  if (visible != m_surface_visible)
+  {
+    m_surface_visible = visible;
+    VideoCommon::Presenter::SetSurfaceVisible(visible);
+    NOTICE_LOG_FMT(VIDEO, "Orca: the game's window is {}", visible ? "visible" : "out of sight");
+  }
+
+  // The screen the window is on (the one with most of it), for the video backend: below 59 Hz it
+  // can't keep up with the game (Presenter::SetSurfaceRefreshRate). Read every pass rather than
+  // observed: it is cheap, and covers a move to another screen and a change of mode alike.
+  int hz = 0;
+  if (@available(macOS 12.0, *))
+  {
+    if (NSScreen* screen = [m_window screen])
+      hz = static_cast<int>([screen maximumFramesPerSecond]);
+  }
+  if (hz != m_surface_refresh_rate)
+  {
+    m_surface_refresh_rate = hz;
+    VideoCommon::Presenter::SetSurfaceRefreshRate(hz);
+    NOTICE_LOG_FMT(VIDEO, "Orca: the game's screen shows up to {} frames a second", hz);
+  }
 }
 
 bool PlatformMacOS::InitEmbedded()

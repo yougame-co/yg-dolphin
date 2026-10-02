@@ -85,11 +85,21 @@ private:
   u32 m_staging_texture_counter = 0;
   std::array<u32, 4> m_shader_counter = {};
 
-  // Orca: what BindBackbuffer would wait for while the window system isn't showing the layer
-  // (MTLGfx.mm, AcquireDrawable).
+  // Orca: what BindBackbuffer would wait for while the window system isn't showing the layer, or
+  // shows it on a screen slower than the game (MTLGfx.mm, AcquireDrawable).
   struct DrawableProbe;
   std::shared_ptr<DrawableProbe> m_drawable_probe;
-  bool m_drawables_late = false;
+  // Why drawables come from a background acquire (No: nextDrawable on the CPU thread).
+  enum class Late
+  {
+    No,
+    Covered,     // a nextDrawable waited longer than LATE_DRAWABLE: until the surface hides
+    SlowScreen,  // the screen shows under MIN_SCREEN_HZ frames a second: until it shows more
+    Paced,       // nextDrawable kept waiting: until background acquires are prompt
+  };
+  Late m_late = Late::No;
+  u32 m_paced_waits = 0;  // bit i: whether the i-th last nextDrawable waited PACED_WAIT or more
+  int m_prompt_acquires = 0;
 
   void CheckForSurfaceChange();
   void CheckForSurfaceResize();
@@ -97,5 +107,6 @@ private:
   MRCOwned<id<CAMetalDrawable>> AcquireDrawable();
   void StartDrawableProbe();
   void DropProbedDrawable();
+  void SetLate(Late late);
 };
 }  // namespace Metal

@@ -18,6 +18,7 @@
 #include "VideoCommon/Present.h"
 #include "VideoCommon/VideoBackendBase.h"
 
+#include <bit>
 #include <chrono>
 #include <fstream>
 #include <mutex>
@@ -456,22 +457,39 @@ void Metal::Gfx::DispatchComputeShader(const AbstractShader* shader,  //
 // window minimized, ordered out or covered), and nextDrawable then waits up to its one second
 // timeout. In a single-core session that wait is on the CPU thread: the emulated machine stops with
 // it, and so does a friend's, which waits for this machine's inputs. So no drawable is taken while
-// the frontend says the surface isn't visible (Presenter::SetSurfaceVisible). And after one wait
-// longer than LATE_DRAWABLE (covered before the frontend heard of it, or drawables held for any
-// other reason), drawables come from a background acquire, one frame ahead: a frame whose drawable
-// isn't there yet is not shown, and the CPU thread never waits. That lasts until the frontend next
-// says the surface is hidden. Promptness proves nothing: a covered window gave drawables back
-// promptly for seconds at a time between its one second waits. The emulated GPU's work is the same
-// either way.
+// the frontend says the surface isn't visible (Presenter::SetSurfaceVisible). Otherwise drawables
+// come from a background acquire, one frame ahead, whenever waiting for them would slow the game:
+// a frame whose drawable isn't there yet is not shown, and the CPU thread never waits. The emulated
+// GPU's work is the same either way. The reasons (Late), each with its way back:
+// - Covered: one nextDrawable waited longer than LATE_DRAWABLE (covered before the frontend heard
+//   of it, or drawables held for any other reason). Until the frontend next says the surface is
+//   hidden: promptness proves nothing here, a covered window gave drawables back promptly for
+//   seconds at a time between its one second waits.
+// - SlowScreen: the screen shows fewer than MIN_SCREEN_HZ frames a second
+//   (Presenter::SurfaceRefreshRate). With VSync off nextDrawable only waits for a free drawable,
+//   but a 50 Hz screen frees one every 20 ms: the game (16.7 ms a frame) waited ~17 ms in every
+//   frame and ran at 50 fps, 83% speed, and online it held the friend back too. Now about one
+//   frame in six isn't shown instead. Until the window is on a screen that keeps up.
+// - Paced: PACED_COUNT of the last PACED_WINDOW nextDrawable calls waited PACED_WAIT or more (a
+//   screen that can't keep up without saying so). Until PROMPT_ACQUIRES background acquires in a
+//   row were done in time without waiting. A lone slow wait (a burst of presents after a stall)
+//   changes nothing.
 static constexpr std::chrono::milliseconds LATE_DRAWABLE{50};
+static constexpr int MIN_SCREEN_HZ = 59;
+static constexpr std::chrono::microseconds PACED_WAIT{4000};
+static constexpr int PACED_WINDOW = 16;
+static constexpr int PACED_COUNT = 8;
+static constexpr int PROMPT_ACQUIRES = 120;  // about two seconds
 
 struct Metal::Gfx::DrawableProbe
 {
   std::mutex mutex;
   bool running = false;
-  // The last background acquire's drawable (none after a timeout), until it is taken.
+  // The last background acquire's drawable (none after a timeout), until it is taken, and how long
+  // that nextDrawable waited.
   bool done = false;
   MRCOwned<id<CAMetalDrawable>> drawable;
+  std::chrono::steady_clock::duration waited{};
 };
 
 void Metal::Gfx::StartDrawableProbe()
@@ -485,11 +503,14 @@ void Metal::Gfx::StartDrawableProbe()
   dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
     @autoreleasepool
     {
+      const auto start = std::chrono::steady_clock::now();
       id<CAMetalDrawable> drawable = [layer nextDrawable];
+      const auto waited = std::chrono::steady_clock::now() - start;
       std::lock_guard probe_lock(probe->mutex);
       probe->running = false;
       probe->done = true;
       probe->drawable = MRCRetain(drawable);
+      probe->waited = waited;
     }
   });
 }
@@ -503,28 +524,72 @@ void Metal::Gfx::DropProbedDrawable()
   m_drawable_probe->done = false;
 }
 
+void Metal::Gfx::SetLate(Late late)
+{
+  if (late == m_late)
+    return;
+  const char* why = "";
+  switch (late)
+  {
+  case Late::No:
+    why = "from nextDrawable again";
+    break;
+  case Late::Covered:
+    why = "from a background acquire: a wait that long means the window is not shown";
+    break;
+  case Late::SlowScreen:
+    why = "from a background acquire: the screen is slower than the game";
+    break;
+  case Late::Paced:
+    why = "from a background acquire: nextDrawable keeps waiting";
+    break;
+  }
+  NOTICE_LOG_FMT(VIDEO, "Metal: drawables {} ({} Hz screen)", why,
+                 VideoCommon::Presenter::SurfaceRefreshRate());
+  m_late = late;
+  m_paced_waits = 0;
+  m_prompt_acquires = 0;
+  if (late == Late::No)
+    return;
+  if (!m_drawable_probe)
+    m_drawable_probe = std::make_shared<DrawableProbe>();
+  StartDrawableProbe();
+}
+
 MRCOwned<id<CAMetalDrawable>> Metal::Gfx::AcquireDrawable()
 {
   if (!m_layer)
     return nullptr;
   if (!VideoCommon::Presenter::IsSurfaceVisible())
   {
-    // Nothing to show it on. Once the surface shows again, nextDrawable again.
-    if (m_drawables_late)
+    // Nothing to show it on. Once the surface shows again, nextDrawable again (unless its screen is
+    // slow, below).
+    if (m_late != Late::No)
       NOTICE_LOG_FMT(VIDEO, "Metal: the surface is hidden; nextDrawable again once it shows");
-    m_drawables_late = false;
+    m_late = Late::No;
+    m_paced_waits = 0;
+    m_prompt_acquires = 0;
     DropProbedDrawable();
     return nullptr;
   }
 
-  if (m_drawables_late)
+  const int hz = VideoCommon::Presenter::SurfaceRefreshRate();
+  const bool slow_screen = hz > 0 && hz < MIN_SCREEN_HZ;
+  if (slow_screen && (m_late == Late::No || m_late == Late::Paced))
+    SetLate(Late::SlowScreen);
+  else if (!slow_screen && m_late == Late::SlowScreen)
+    SetLate(Late::No);
+
+  if (m_late != Late::No)
   {
     MRCOwned<id<CAMetalDrawable>> drawable;
+    std::chrono::steady_clock::duration waited{};
     {
       std::lock_guard lock(m_drawable_probe->mutex);
       if (m_drawable_probe->done)
       {
         drawable = std::move(m_drawable_probe->drawable);
+        waited = m_drawable_probe->waited;
         m_drawable_probe->done = false;
       }
     }
@@ -534,6 +599,15 @@ MRCOwned<id<CAMetalDrawable>> Metal::Gfx::AcquireDrawable()
     {
       drawable.Reset();
     }
+    if (m_late == Late::Paced)
+    {
+      m_prompt_acquires = drawable && waited < PACED_WAIT ? m_prompt_acquires + 1 : 0;
+      if (m_prompt_acquires >= PROMPT_ACQUIRES)
+      {
+        SetLate(Late::No);
+        return drawable;
+      }
+    }
     StartDrawableProbe();
     return drawable;
   }
@@ -541,8 +615,8 @@ MRCOwned<id<CAMetalDrawable>> Metal::Gfx::AcquireDrawable()
   if (m_drawable_probe)
   {
     std::lock_guard lock(m_drawable_probe->mutex);
-    // One nextDrawable on the layer at a time: a background acquire from before the surface was
-    // hidden may still be waiting, and the first drawable back is its. This frame isn't shown.
+    // One nextDrawable on the layer at a time: a background acquire from before may still be
+    // waiting, and the first drawable back is its. This frame isn't shown.
     if (m_drawable_probe->running)
       return nullptr;
     // One it got after late acquiring ended goes back.
@@ -554,14 +628,16 @@ MRCOwned<id<CAMetalDrawable>> Metal::Gfx::AcquireDrawable()
   const auto waited = std::chrono::steady_clock::now() - start;
   if (waited > LATE_DRAWABLE)
   {
-    NOTICE_LOG_FMT(VIDEO, "Metal: nextDrawable waited {} ms{}; acquiring in the background",
+    NOTICE_LOG_FMT(VIDEO, "Metal: nextDrawable waited {} ms{}",
                    std::chrono::duration_cast<std::chrono::milliseconds>(waited).count(),
                    drawable ? "" : " for nothing");
-    if (!m_drawable_probe)
-      m_drawable_probe = std::make_shared<DrawableProbe>();
-    m_drawables_late = true;
-    StartDrawableProbe();
+    SetLate(Late::Covered);
+    return drawable;
   }
+  m_paced_waits = (m_paced_waits << 1 | (waited >= PACED_WAIT ? 1u : 0u)) &
+                  ((1u << PACED_WINDOW) - 1);
+  if (std::popcount(m_paced_waits) >= PACED_COUNT)
+    SetLate(Late::Paced);
   return drawable;
 }
 
@@ -613,7 +689,9 @@ void Metal::Gfx::CheckForSurfaceChange()
   m_layer = MRCRetain(static_cast<CAMetalLayer*>(g_presenter->GetNewSurfaceHandle()));
   // Orca: a background acquire still running is for the old layer.
   m_drawable_probe.reset();
-  m_drawables_late = false;
+  m_late = Late::No;
+  m_paced_waits = 0;
+  m_prompt_acquires = 0;
   SetupSurface();
 }
 

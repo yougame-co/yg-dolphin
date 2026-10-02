@@ -644,6 +644,18 @@ bool Presenter::IsSurfaceVisible()
   return s_surface_visible.load(std::memory_order_relaxed);
 }
 
+static std::atomic<int> s_surface_refresh_rate{0};
+
+void Presenter::SetSurfaceRefreshRate(int hz)
+{
+  s_surface_refresh_rate.store(hz, std::memory_order_relaxed);
+}
+
+int Presenter::SurfaceRefreshRate()
+{
+  return s_surface_refresh_rate.load(std::memory_order_relaxed);
+}
+
 void Presenter::ResizeSurface()
 {
   std::lock_guard<std::mutex> lock(m_swap_mutex);
