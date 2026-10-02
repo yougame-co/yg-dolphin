@@ -69,7 +69,8 @@ class NameTagWriter
 public:
   void OnPlugIn(int frame, const std::vector<Events::PortInfo>& ports);
   std::vector<Events::PortInfo> PortsAt(int frame) const;
-  // At a frame boundary, CPU thread, inside the rollback domain.
+  // Events' frame callback: every frame boundary, CPU thread, first runs and re-runs, before the
+  // session saves anything there (so snapshots and keyframes hold what it wrote).
   void OnFrame(const Core::CPUThreadGuard& guard, int frame);
 
 private:

@@ -107,7 +107,7 @@ void ProbeFrame(const Core::CPUThreadGuard& guard)
 {
   static std::vector<Command> commands = Load();
   // ORCA_UX_TEST_NAMES="0:ada,1:bob": the name tags as if the session had plugged those ports in
-  // at frame 0, written at every boundary (what the session's frame hook will do).
+  // at frame 0 (the frame callback then writes them, as in a session).
   static const bool s_test_names = [] {
     const char* v = std::getenv("ORCA_UX_TEST_NAMES");
     if (!v)
@@ -124,10 +124,9 @@ void ProbeFrame(const Core::CPUThreadGuard& guard)
     NameTags().OnPlugIn(0, ports);
     return true;
   }();
+  (void)s_test_names;
   static int frame = 0;
   ++frame;
-  if (s_test_names)
-    NameTags().OnFrame(guard, frame);
   if (commands.empty())
     return;
   static std::string scene;
