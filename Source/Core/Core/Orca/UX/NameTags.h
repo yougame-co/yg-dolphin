@@ -31,7 +31,10 @@ class CPUThreadGuard;
 // gets one: the tag already holding that name, else the highest unused tag, filled in. What it
 // writes depends only on emulated memory and the session's synced port list, the same on both
 // machines at the same frame, and it is idempotent (a re-run frame writes the same bytes, a port
-// that has a tag is left alone, the player's own choice included). Not yet: the character select's
+// that has a tag is left alone, the player's own choice included). A port whose name is empty (not
+// known yet on this machine) gets nothing, and a name gives the same bytes whenever it became known.
+// Known gap until the session sends host-authoritative names with the plug-in: if one machine has
+// a name at frame F and the other still has "", their writes differ at F (a desync). Not yet: the character select's
 // name plate keeps "PLAYER n" until the game redraws it (its own setter, 0x8069B1CC, is called only
 // when the player picks a tag); that needs a game-side code.
 namespace Orca::UX
@@ -65,7 +68,4 @@ int ApplyNameTags(GuestMemory& memory, const std::vector<Events::PortInfo>& port
 // session saves anything there, so snapshots and keyframes hold what it wrote), with the ports in
 // effect at that frame as the session computes them from its synced seat plan.
 void WriteNameTags(const Core::CPUThreadGuard& guard, const std::vector<Events::PortInfo>& ports);
-
-// ORCA_UX_TEST_NAMES="0:ada,1:bob" as a port list (tests and harness runs); empty when unset.
-std::vector<Events::PortInfo> TestPorts();
 }  // namespace Orca::UX

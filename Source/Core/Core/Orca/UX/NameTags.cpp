@@ -185,26 +185,4 @@ void WriteNameTags(const Core::CPUThreadGuard& guard, const std::vector<Events::
   ApplyNameTags(memory, ports);
 }
 
-std::vector<Events::PortInfo> TestPorts()
-{
-  std::vector<Events::PortInfo> ports;
-  const char* v = std::getenv("ORCA_UX_TEST_NAMES");
-  if (!v)
-    return ports;
-  std::string_view rest(v);
-  while (!rest.empty())
-  {
-    const size_t comma = rest.find(',');
-    const std::string_view item = rest.substr(0, comma);
-    rest = comma == std::string_view::npos ? std::string_view{} : rest.substr(comma + 1);
-    const size_t colon = item.find(':');
-    if (colon == std::string_view::npos || colon == 0)
-      continue;
-    const int port = item[0] - '0';
-    if (colon != 1 || port < 0 || port > 3)
-      continue;
-    ports.push_back({port, std::string(item.substr(colon + 1)), false});
-  }
-  return ports;
-}
 }  // namespace Orca::UX

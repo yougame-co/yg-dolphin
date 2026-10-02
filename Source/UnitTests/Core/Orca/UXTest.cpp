@@ -668,18 +668,6 @@ TEST(OrcaUXNameTags, NothingOutsideTheCharacterSelectOrWhenItDoesNotLookRight)
   }
 }
 
-TEST(OrcaUXNameTags, TestNamesFromTheEnvironment)
-{
-  setenv("ORCA_UX_TEST_NAMES", "0:luis,1:sandbox_ada,7:no,x:no,2", 1);
-  const auto ports = TestPorts();
-  unsetenv("ORCA_UX_TEST_NAMES");
-  ASSERT_EQ(ports.size(), 2u);
-  EXPECT_EQ(ports[0].port, 0);
-  EXPECT_EQ(ports[0].name, "luis");
-  EXPECT_EQ(ports[1].port, 1);
-  EXPECT_EQ(ports[1].name, "sandbox_ada");
-  EXPECT_TRUE(TestPorts().empty());
-}
 
 #ifndef _WIN32
 namespace
