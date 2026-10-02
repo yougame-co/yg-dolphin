@@ -9,6 +9,7 @@
 #include <map>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <optional>
 #include <string>
 #include <thread>
@@ -130,8 +131,10 @@ struct Match
   std::optional<Orca::Net::KeyframeInfo> keyframe;
   double keyframe_capture_ms = 0;
   bool keyframe_wanted = false;
-  // Players who arrived and wait for a keyframe before the session takes them in.
+  // Players who arrived and wait for a keyframe before the session takes them in, and the seats
+  // the session took in (until the room says they left).
   std::map<int, std::string> waiting;
+  std::set<int> seated;
 
   // A joining player.
   std::unique_ptr<Download> download;
@@ -422,8 +425,8 @@ void HostEvents(Core::System& system, Match& match)
     else if (event.kind == Orca::Net::PeerEvent::Kind::Left)
     {
       const bool was_waiting = match.waiting.erase(event.seat) > 0;
-      const bool was_playing =
-          match.session && match.session->Plan()[event.seat].live_from != Orca::Net::NEVER;
+      // Taken in (it may have unplugged already, and the host gone solo): the app still hears it.
+      const bool was_playing = match.seated.erase(event.seat) > 0;
       if (match.session)
       {
         NOTICE_LOG_FMT(ROLLBACK, "Drop-in: port {} left the room{}{}", event.seat + 1,
@@ -524,6 +527,7 @@ void HostEvents(Core::System& system, Match& match)
       match.queued_local.clear();
     }
     match.session->AddPeer(seat, next, keyframe_frame);
+    match.seated.insert(seat);
     NOTICE_LOG_FMT(ROLLBACK, "Drop-in: {}", match.session->Describe());
     Orca::Online::OfferKeyframe(seat, *match.keyframe);
     NOTICE_LOG_FMT(ROLLBACK,
