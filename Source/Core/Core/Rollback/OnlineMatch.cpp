@@ -6,6 +6,7 @@
 #include <atomic>
 #include <chrono>
 #include <deque>
+#include <cmath>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -16,6 +17,7 @@
 #include <vector>
 
 #include <fmt/format.h>
+#include <picojson.h>
 
 #ifdef __APPLE__
 #include <sys/clonefile.h>
@@ -30,6 +32,7 @@
 #include "Core/IOS/FS/HostBackend/FS.h"
 #include "Core/IOS/IOS.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/Session/Events.h"
 #include "Core/Orca/Session/Keyframe.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Session/PadCodec.h"
@@ -78,6 +81,9 @@ struct BootNandJob
   std::thread thread;
   std::atomic<bool> done{false};
   std::map<std::string, u64> hashes;
+  // The boot's /tmp files themselves: a join later in the game resolves the host's references from
+  // these (the game may have rewritten its own /tmp since).
+  std::map<std::string, std::vector<u8>> tmp_files;
   ~BootNandJob()
   {
     if (thread.joinable())
@@ -157,7 +163,24 @@ struct Match
   u32 round_trip_sequence = 0;
   std::optional<Clock::time_point> last_return;
   Common::EventHook on_state_changed;
+
+  // A join the app asked for during play ("join <code>"): this game plays on solo in the friend's
+  // room until the keyframe is in.
+  bool join_in_play = false;
+  // Why the join failed (PumpJoin), for the caller to report.
+  std::string join_error_code, join_error;
+
+  // The "orca stats" line: the numbers at the last line, and the deepest rollback and the stall time
+  // since.
+  Clock::time_point stats_time{};
+  int stats_frame = -1;
+  Orca::Net::Stats stats_last{};
+  int stats_rbmax = 0;
+  double stats_stall_ms = 0;
 };
+
+// Desyncs this process saw, every match (the stats line's "ds").
+int s_desyncs = 0;
 
 Match& TheMatch()
 {
@@ -351,6 +374,15 @@ void MaybeHashBootNand(Core::System& system, Match& match)
   const std::string root = clone.empty() ? nand->HostRoot() : clone;
   raw->thread = std::thread([raw, root, cloned = !clone.empty()] {
     raw->hashes = Orca::Net::HashNandTree(root);
+    std::vector<Orca::Net::NandEntry> entries;
+    if (Orca::Net::ReadNandTree(root, &entries))
+    {
+      for (Orca::Net::NandEntry& entry : entries)
+      {
+        if (!entry.directory && entry.path.starts_with("tmp/"))
+          raw->tmp_files[entry.path] = std::move(entry.data);
+      }
+    }
     if (cloned)
       File::DeleteDirRecursively(root);
     raw->done = true;
@@ -358,7 +390,7 @@ void MaybeHashBootNand(Core::System& system, Match& match)
   match.boot_nand = std::move(job);
 }
 
-// The host's solo frame: its own pad on port 1, every other port unplugged.
+// A solo frame: this player's pad on its port (port 1 for a host), every other port unplugged.
 void RunSolo(Match& match, const std::function<Pad(int)>& local_pad)
 {
   Pad pad;
@@ -373,7 +405,7 @@ void RunSolo(Match& match, const std::function<Pad(int)>& local_pad)
   }
   Pads pads;
   pads.fill(Orca::Net::UNPLUGGED_PAD);
-  pads[0] = pad;
+  pads[match.local_seat] = pad;
   const int frame = match.running + 1;
   match.port->SetPads(frame, pads);
   match.log.push_back(pads);
@@ -381,7 +413,7 @@ void RunSolo(Match& match, const std::function<Pad(int)>& local_pad)
 }
 
 // Host: unplug every friend still in the session, telling each (and the app) why.
-void DropFriends(Match& match, const std::string& reason)
+void DropFriends(Match& match, const std::string& reason, bool announce = true)
 {
   for (int seat = 0; seat < Orca::Net::MAX_SEATS; ++seat)
   {
@@ -390,10 +422,12 @@ void DropFriends(Match& match, const std::string& reason)
     Orca::Online::DropPeer(seat, reason);
     match.session->DropSeat(seat);
   }
-  Orca::Status::State("friend-left " + reason);
+  match.seated.clear();
+  if (announce)
+    Orca::Status::State("friend-left " + reason);
 }
 
-void GoSolo(Match& match, const char* why)
+void GoSolo(Match& match, const char* why, const char* state = "playing")
 {
   match.log = match.session->TakeLog(&match.log_base);
   const std::vector<Pad> pending = match.session->PendingLocal();
@@ -403,7 +437,83 @@ void GoSolo(Match& match, const char* why)
                  match.running + 1, why, stats.rollbacks, stats.checksums_matched);
   match.session.reset();
   match.port->SetCatchingUp(false);
-  Orca::Status::State("playing");
+  if (state)
+    Orca::Status::State(state);
+}
+
+// With the app's "caps join", what used to end the game (a join that failed, the host leaving, a
+// desync) leaves this player solo instead.
+bool Soft()
+{
+  return Orca::Status::Cap("join");
+}
+
+std::unique_ptr<Orca::Net::KeyframeStore> MakeStore()
+{
+  return Orca::Net::MakeKeyframeStore(
+      [](bool fresh, std::string* ticket, std::string* store_url, std::string* error) {
+        return Orca::Online::FreshTicket(fresh, ticket, store_url, error);
+      });
+}
+
+// Drops what drop-in had in flight for the room being left: the keyframe and its transfers, whoever
+// waited for it. A store cancelled once stays cancelled: the next room gets a new one.
+void ResetDropIn(Match& match)
+{
+  if (match.keyframe && match.store)
+    match.store->Delete(match.keyframe->id);
+  match.keyframe.reset();
+  if (match.store)
+    match.store->Cancel();
+  match.job.reset();
+  match.download.reset();
+  match.waiting.clear();
+  match.seated.clear();
+  match.keyframe_wanted = false;
+  match.store = MakeStore();
+}
+
+// The room once this player is solo again: a new one of its own while it plays port 1 (friends can
+// drop in on the ports after it), none on another port (drop-in hosts play port 1). Either way the
+// app can still send "join".
+void ReopenRoom(Match& match)
+{
+  Orca::Online::Shutdown();
+  if (match.local_seat == 0)
+    Orca::Online::StartRoom("", false);
+}
+
+// A joining player on its own again (it left, its host did, the session failed, or the join never
+// finished): it plays on from the state it has, every other controller unplugged. `own_boot`: no
+// keyframe was ever loaded, so this is its own game, played on port 1.
+void BecomeSolo(Match& match, const char* why, const char* state, bool own_boot = false)
+{
+  if (match.session)
+  {
+    GoSolo(match, why, nullptr);
+  }
+  else
+  {
+    match.log.clear();
+    match.log_base = match.running + 1;
+    match.queued_local.clear();
+  }
+  if (own_boot)
+    match.local_seat = 0;
+  match.joining = false;
+  match.join_in_play = false;
+  match.joined = false;
+  match.host_here = false;
+  match.leave_requested = false;
+  match.leave_at = -1;
+  match.last_percent = -1;
+  match.port->SetCatchingUp(false);
+  ResetDropIn(match);
+  ReopenRoom(match);
+  NOTICE_LOG_FMT(ROLLBACK, "Drop-in: playing solo on port {} from frame {} ({})",
+                 match.local_seat + 1, match.running + 1, why);
+  if (state)
+    Orca::Status::State(state);
 }
 
 void HostEvents(Core::System& system, Match& match)
@@ -596,7 +706,7 @@ enum class JoinPump
 // One look at the room for a joiner: the host's arrival and its keyframe offer, the download's
 // progress. Never blocks. Ready once the keyframe is downloaded and unpacked; Failed stops
 // emulation (the reason is shown).
-JoinPump PumpJoin(Core::System& system, Match& match, std::string* last_status)
+JoinPump PumpJoin(Match& match, std::string* last_status)
 {
   {
     for (const Orca::Net::PeerEvent& event : Orca::Online::TakePeerEvents())
@@ -610,8 +720,8 @@ JoinPump PumpJoin(Core::System& system, Match& match, std::string* last_status)
       }
       else if (event.kind == Orca::Net::PeerEvent::Kind::Left && event.host)
       {
-        StopEmulation(system, "Your friend left before you could join");
-        Orca::Status::Error("peer_left", "Your friend left before you could join");
+        match.join_error_code = "peer_left";
+        match.join_error = "Your friend left before you could join";
         return JoinPump::Failed;
       }
       else if (event.kind == Orca::Net::PeerEvent::Kind::Keyframe && !match.download)
@@ -625,8 +735,9 @@ JoinPump PumpJoin(Core::System& system, Match& match, std::string* last_status)
     }
     if (Orca::Online::RoomEnded())
     {
-      const std::string status = Orca::Online::StatusLine();
-      StopEmulation(system, fmt::format("Couldn't join: {}", status));
+      // The room's own code (room_full, room_mismatch, kicked, network) is reported by the caller.
+      match.join_error_code.clear();
+      match.join_error = fmt::format("Couldn't join: {}", Orca::Online::StatusLine());
       return JoinPump::Failed;
     }
     if (std::string status = Orca::Online::StatusLine(); status != *last_status)
@@ -648,57 +759,94 @@ JoinPump PumpJoin(Core::System& system, Match& match, std::string* last_status)
     }
     if (Clock::now() - match.boot_time > JOIN_LIMIT)
     {
-      StopEmulation(system, "Couldn't join: your friend's game never sent its state");
-      Orca::Status::Error("network", "Your friend's game never sent its state");
+      match.join_error_code = "network";
+      match.join_error = "Your friend's game never sent its state";
       return JoinPump::Failed;
     }
   }
   return JoinPump::Waiting;
 }
 
-// Blocks at a joiner's boundary until the host's keyframe is loaded. Returns the frame it holds
-// (the state is now the start of it), or nullopt (emulation stops; the reason is shown).
-std::optional<int> JoinHost(Core::System& system, Match& match)
+// A join that failed before anything of this game changed. With the app's "caps join" this player
+// plays on solo where it was; otherwise the game stops, as it always did.
+void FailJoin(Core::System& system, Match& match)
 {
-  JoinPump pump = JoinPump::Waiting;
-  while (!Stopping(system))
+  const std::string sentence =
+      match.join_error.empty() ? std::string("Couldn't join your friend's game") : match.join_error;
+  // An empty code: the room ended, and says why itself.
+  std::string code = match.join_error_code;
+  if (code.empty())
+    code = Orca::Online::RoomErrorCode();
+  Orca::Status::Report(code.empty() ? "network" : code, sentence);
+  match.join_error_code.clear();
+  match.join_error.clear();
+  if (Soft())
   {
-    pump = PumpJoin(system, match, &match.join_status);
-    if (pump != JoinPump::Waiting)
-      break;
-    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    Core::DisplayMessage(sentence, 6000);
+    BecomeSolo(match, "the join failed", "playing", match.loaded_time == Clock::time_point{});
+    return;
   }
-  if (pump != JoinPump::Ready || !match.download || !match.download->done)
-    return std::nullopt;
+  StopEmulation(system, sentence);
+  End("couldn't join");
+}
+
+enum class Load
+{
+  Done,
+  // Nothing of this game changed: FailJoin reports it.
+  Failed,
+  // Half loaded: the game stopped.
+  Broken,
+};
+
+// Loads the host's downloaded keyframe and starts the joiner's session. On Done, `*frame` is the
+// frame the state now starts.
+Load LoadKeyframe(Core::System& system, Match& match, int* frame_out)
+{
   std::unique_ptr<Download> download = std::move(match.download);
   if (download->thread.joinable())
     download->thread.join();
   if (!download->ok)
   {
     ERROR_LOG_FMT(ROLLBACK, "Drop-in: keyframe {}: {}", download->info.id, download->error);
-    StopEmulation(system, "Couldn't join: " + download->error);
-    Orca::Status::Error("network", "Couldn't load your friend's game");
-    return std::nullopt;
+    match.join_error_code = "network";
+    match.join_error = "Couldn't load your friend's game";
+    return Load::Failed;
   }
 
   // The host's NAND, then its machine. The session NAND is a temporary folder of this session's.
   const auto load_start = Clock::now();
   IOS::HLE::FS::HostFileSystem* nand = HostNand(system);
-  // Files the host's keyframe only names: this machine's boot wrote them too.
+  // Files the host's keyframe only names: this machine's boot wrote them too. Those this boot
+  // kept (a join later in the game, after the game rewrote its /tmp) first, then the NAND as it is.
+  if (match.boot_nand && match.boot_nand->done)
+  {
+    for (Orca::Net::NandEntry& entry : download->nand)
+    {
+      if (!entry.reference)
+        continue;
+      const auto it = match.boot_nand->tmp_files.find(entry.path);
+      if (it == match.boot_nand->tmp_files.end() || Orca::Net::NandHash(it->second) != entry.hash)
+        continue;
+      entry.data = it->second;
+      entry.reference = false;
+    }
+  }
   std::string missing;
   if (nand && !Orca::Net::ResolveNandReferences(nand->HostRoot(), &download->nand, &missing))
   {
     ERROR_LOG_FMT(ROLLBACK, "Drop-in: this boot's NAND doesn't match the host's: {}", missing);
-    StopEmulation(system, "Couldn't join: your friend's game data differs from yours");
-    Orca::Status::Error("room_mismatch", "Your friend's game data differs from yours");
-    return std::nullopt;
+    match.join_error_code = "room_mismatch";
+    match.join_error = "Your friend's game data differs from yours";
+    return Load::Failed;
   }
   if (!nand || !Core::WiiRootIsTemporary() ||
       !Orca::Net::ReplaceNandTree(nand->HostRoot(), download->nand))
   {
     StopEmulation(system, "Couldn't join: the game's save folder couldn't be replaced");
     Orca::Status::Error("internal", "Couldn't load your friend's game");
-    return std::nullopt;
+    End("couldn't join");
+    return Load::Broken;
   }
   nand->ReloadFst();
   const int frame = download->frame;
@@ -708,7 +856,8 @@ std::optional<int> JoinHost(Core::System& system, Match& match)
   {
     StopEmulation(system, "Couldn't join: your friend's game state didn't load");
     Orca::Status::Error("internal", "Couldn't load your friend's game");
-    return std::nullopt;
+    End("couldn't join");
+    return Load::Broken;
   }
   match.load_ms = MsSince(load_start);
   match.loaded_time = Clock::now();
@@ -720,6 +869,12 @@ std::optional<int> JoinHost(Core::System& system, Match& match)
                  frame, std::chrono::duration<double, std::milli>(match.offered_time - match.boot_time).count(),
                  download->transfer_ms, download->unpack_ms, match.load_ms);
 
+  // A join during play takes its seat from the friend's room now (a launch join had it at once).
+  match.local_seat = Orca::Online::Seat();
+  match.join_in_play = false;
+  match.log.clear();
+  match.log_base = frame;
+  match.queued_local.clear();
   Orca::Net::Config config = SessionConfig();
   config.local_seat = match.local_seat;
   config.authority_seat = match.host_seat;
@@ -731,7 +886,202 @@ std::optional<int> JoinHost(Core::System& system, Match& match)
       std::make_unique<Orca::Net::Session>(config, *match.port, *Orca::Online::Transport());
   match.port->SetCatchingUp(true);
   match.running = frame - 1;
-  return frame;
+  *frame_out = frame;
+  return Load::Done;
+}
+
+// A launch join (ORCA_JOIN, or an invite the app opened): blocks at the joiner's boundary until the
+// host's keyframe is in. The frame the state now starts, or nullopt: the join failed (FailJoin
+// reported it; with "caps join" this player now plays solo) or emulation is stopping.
+std::optional<int> JoinHost(Core::System& system, Match& match)
+{
+  JoinPump pump = JoinPump::Waiting;
+  while (!Stopping(system))
+  {
+    pump = PumpJoin(match, &match.join_status);
+    if (pump != JoinPump::Waiting)
+      break;
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  if (pump == JoinPump::Waiting)
+    return std::nullopt;
+  if (pump == JoinPump::Failed)
+  {
+    FailJoin(system, match);
+    return std::nullopt;
+  }
+  int frame = -1;
+  switch (LoadKeyframe(system, match, &frame))
+  {
+  case Load::Done:
+    return frame;
+  case Load::Failed:
+    FailJoin(system, match);
+    return std::nullopt;
+  case Load::Broken:
+    return std::nullopt;
+  }
+  return std::nullopt;
+}
+
+// ---- The app's commands (embed mode, with "caps join") ----
+
+// "leave": unplug from friends and play on solo. A joiner asks its host to unplug it at an agreed
+// frame ("left" once it has); a host leaves its room (its friends play on without it) and opens a
+// new one, so it can still invite.
+void Leave(Match& match)
+{
+  if (match.joining && match.session)
+  {
+    if (!match.leave_requested)
+    {
+      match.leave_requested = true;
+      NOTICE_LOG_FMT(ROLLBACK, "Drop-in: leaving at the app's request, frame {}", match.running);
+      match.session->RequestLeave();
+    }
+    return;
+  }
+  if (match.joining)
+  {
+    // Still downloading the host's game: give up on it.
+    BecomeSolo(match, "left before joining", nullptr);
+  }
+  else if (match.session || !match.waiting.empty())
+  {
+    if (match.session)
+      GoSolo(match, "left", nullptr);
+    ResetDropIn(match);
+    ReopenRoom(match);
+  }
+  Orca::Status::Event("left");
+}
+
+// "join <code>": into a friend's game during play. This game leaves its room (friends in it play
+// on without it) and goes on solo while the friend's keyframe downloads; then it loads it.
+void JoinInPlay(Match& match, const std::string& code)
+{
+  if (code == Orca::Online::Code() && match.joining)
+    return;
+  if (match.session)
+    GoSolo(match, "joining another game", nullptr);
+  ResetDropIn(match);
+  Orca::Online::Shutdown();
+  Orca::Online::StartRoom(code, true);
+  NOTICE_LOG_FMT(ROLLBACK, "Drop-in: joining room {} during play, frame {}", code, match.running + 1);
+  match.joining = true;
+  match.join_in_play = true;
+  match.boot_time = Clock::now();
+  match.offered_time = match.boot_time;
+  match.host_here = false;
+  match.joined = false;
+  match.leave_requested = false;
+  match.last_percent = -1;
+  match.join_status.clear();
+  Orca::Status::State("joining 0");
+}
+
+// Takes the app's commands at a boundary where the game may change hands: never mid re-run, never
+// during a launch join.
+void TakeCommands(Match& match)
+{
+  if (!Soft())
+    return;
+  if (match.session &&
+      (match.session->Resimulating() || match.session->CurrentFrame() != match.running + 1))
+  {
+    return;
+  }
+  if (match.joining && !match.join_in_play && !match.session)
+    return;
+  if (Orca::Online::TakeLeaveRequest())
+    Leave(match);
+  if (const auto code = Orca::Online::TakeJoinRequest())
+    JoinInPlay(match, *code);
+}
+
+// ---- Stats ----
+
+// The numbers for the app ("orca stats", Orca::Events), about once a second; the link stats each
+// boundary.
+void PublishStats(Match& match)
+{
+  if (match.session && match.session->Resimulating())
+    return;
+  const Orca::Net::Stats stats = match.session ? match.session->GetStats() : Orca::Net::Stats{};
+  int peers = 0;
+  if (match.session)
+  {
+    for (int seat = 0; seat < Orca::Net::MAX_SEATS; ++seat)
+    {
+      if (seat != match.local_seat && match.session->Plugged(seat, match.running))
+        ++peers;
+    }
+  }
+  Orca::Events::LinkStats link;
+  link.online = peers > 0;
+  link.delay = stats.delay;
+  link.deepest_rollback = match.stats_rbmax;
+  link.stalls = stats.stalls;
+  link.hitches = stats.hitches;
+  link.peer_hitches = stats.peer_hitches;
+  link.round_trip_ms = Orca::Online::RoundTripMs();
+  link.confirmed_frame = stats.confirmed_frame;
+
+  const auto now = Clock::now();
+  if (match.stats_frame < 0)
+  {
+    match.stats_time = now;
+    match.stats_frame = match.running;
+    match.stats_last = stats;
+  }
+  const double seconds = std::chrono::duration<double>(now - match.stats_time).count();
+  // A new session restarts its counters.
+  const bool reset = stats.rollbacks < match.stats_last.rollbacks ||
+                     stats.stalls < match.stats_last.stalls;
+  const Orca::Net::Stats& last = reset ? Orca::Net::Stats{} : match.stats_last;
+  if (seconds > 0)
+    link.rollbacks_per_second = (stats.rollbacks - last.rollbacks) / seconds;
+  Orca::Events::PublishLinkStats(link);
+  if (seconds < 1.0)
+    return;
+  picojson::object o;
+  const auto num = [&o](const char* key, double value) { o[key] = picojson::value(value); };
+  num("f", match.running);
+  num("seat", match.local_seat);
+  num("peers", peers);
+  num("ping", link.round_trip_ms);
+  num("delay", stats.delay);
+  num("rb", stats.rollbacks - last.rollbacks);
+  num("rbf", stats.resimulated_frames - last.resimulated_frames);
+  num("rbmax", match.stats_rbmax);
+  num("st", stats.stalls - last.stalls);
+  num("stms", std::round(match.stats_stall_ms));
+  num("ds", s_desyncs);
+  num("fps", std::round((match.running - match.stats_frame) / seconds * 10) / 10);
+  num("hi", stats.hitches);
+  num("phi", stats.peer_hitches);
+  Orca::Status::Stats(picojson::value(o).serialize());
+  match.stats_time = now;
+  match.stats_frame = match.running;
+  match.stats_last = stats;
+  match.stats_rbmax = 0;
+  match.stats_stall_ms = 0;
+}
+
+// While the session waits on a friend inside StepSession: how long, for the overlay.
+void PublishStall(Match& match, double stalled_ms)
+{
+  Orca::Events::LinkStats link = Orca::Events::GetLinkStats();
+  link.stalled_ms = static_cast<int>(stalled_ms);
+  link.waiting_seat = -1;
+  if (stalled_ms > 0)
+  {
+    if (match.joining)
+      link.waiting_seat = match.host_seat;
+    else if (!match.seated.empty())
+      link.waiting_seat = *match.seated.begin();
+  }
+  Orca::Events::PublishLinkStats(link);
 }
 }  // namespace
 
@@ -767,10 +1117,7 @@ std::optional<int> OnBoundary(Core::System& system,
         TheMatch().stale = true;
       });
     }
-    match.store = Orca::Net::MakeKeyframeStore(
-        [](bool fresh, std::string* ticket, std::string* store_url, std::string* error) {
-          return Orca::Online::FreshTicket(fresh, ticket, store_url, error);
-        });
+    match.store = MakeStore();
     if (const std::string leave = Orca::GetEnv("ORCA_TEST_LEAVE_AT"); !leave.empty())
       match.leave_at = std::atoi(leave.c_str());
     Orca::Online::Start();
@@ -808,27 +1155,64 @@ std::optional<int> OnBoundary(Core::System& system,
     }
   }
 
-  if (match.joining && !match.session)
+  TakeCommands(match);
+
+  if (match.joining && !match.session && match.join_in_play)
+  {
+    // A join during play: this game goes on solo until the friend's keyframe is in.
+    int frame = -1;
+    switch (PumpJoin(match, &match.join_status))
+    {
+    case JoinPump::Waiting:
+      RunSolo(match, local_pad);
+      PublishStats(match);
+      return std::nullopt;
+    case JoinPump::Failed:
+      FailJoin(system, match);
+      break;
+    case JoinPump::Ready:
+      switch (LoadKeyframe(system, match, &frame))
+      {
+      case Load::Done:
+        rewound_to = frame;
+        break;
+      case Load::Failed:
+        FailJoin(system, match);
+        break;
+      case Load::Broken:
+        return std::nullopt;
+      }
+      break;
+    }
+    if (match.finished)
+      return std::nullopt;
+  }
+  else if (match.joining && !match.session)
   {
     if (match.running + 1 < match.boot_ahead_to)
     {
-      if (PumpJoin(system, match, &match.join_status) == JoinPump::Failed)
+      if (PumpJoin(match, &match.join_status) == JoinPump::Failed)
       {
-        End("couldn't join");
+        FailJoin(system, match);
+        if (match.finished)
+          return std::nullopt;
+      }
+      else
+      {
+        Pads pads;
+        pads.fill(Orca::Net::UNPLUGGED_PAD);
+        pads[0] = Pad{};
+        match.port->SetPads(match.running + 1, pads);
+        ++match.running;
         return std::nullopt;
       }
-      Pads pads;
-      pads.fill(Orca::Net::UNPLUGGED_PAD);
-      pads[0] = Pad{};
-      match.port->SetPads(match.running + 1, pads);
-      ++match.running;
-      return std::nullopt;
     }
-    rewound_to = JoinHost(system, match);
-    if (!rewound_to)
+    else
     {
-      End("couldn't join");
-      return std::nullopt;
+      rewound_to = JoinHost(system, match);
+      // Failed (with "caps join" this player now plays solo), or stopping.
+      if (!rewound_to && (match.joining || match.finished || Stopping(system)))
+        return std::nullopt;
     }
   }
 
@@ -840,7 +1224,8 @@ std::optional<int> OnBoundary(Core::System& system,
     if (!match.session)
     {
       RunSolo(match, local_pad);
-      return std::nullopt;
+      PublishStats(match);
+      return rewound_to;
     }
   }
   if (!match.session)
@@ -865,6 +1250,18 @@ std::optional<int> OnBoundary(Core::System& system,
         continue;
       LogStats("host left");
       if (event.reason == "desync")
+        ++s_desyncs;
+      if (Soft())
+      {
+        // The host's game is gone, this one goes on: every other controller unplugs.
+        if (event.reason == "desync")
+          Orca::Status::Report("desync", "Your games went out of sync, so the match ended");
+        Core::DisplayMessage(fmt::format("{} left: you play on", match.host_name), 6000);
+        BecomeSolo(match, "host left", "host-left");
+        RunSolo(match, local_pad);
+        return rewound_to;
+      }
+      if (event.reason == "desync")
         Orca::Status::Error("desync", "Your games went out of sync, so the match ended");
       else
         Orca::Status::Error("peer_left", "Your friend's game ended");
@@ -887,14 +1284,37 @@ std::optional<int> OnBoundary(Core::System& system,
   for (int attempt = 0; attempt < 2; ++attempt)
   {
     bool peer_silent = false;
+    // A stall (waiting on a friend's input) is shown as it lasts: StepSession polls `stopping`
+    // while it waits.
+    const auto step_start = Clock::now();
+    auto stall_published = step_start;
+    bool stall_shown = false;
+    const int stalls_before = match.session->GetStats().stalls;
+    const int running_before = match.running;
     const Orca::Net::Step step = StepSession(
         *match.session, *match.port, match.running, local_pad(match.local_seat),
-        [&system] { return Stopping(system); }, std::chrono::milliseconds{1}, PEER_SILENCE_LIMIT,
-        &peer_silent);
+        [&] {
+          const auto now = Clock::now();
+          if (now - stall_published > std::chrono::milliseconds(10))
+          {
+            stall_published = now;
+            stall_shown = true;
+            PublishStall(match, MsSince(step_start));
+          }
+          return Stopping(system);
+        },
+        std::chrono::milliseconds{1}, PEER_SILENCE_LIMIT, &peer_silent);
     match.last_return = Clock::now();
+    if (stall_shown)
+      PublishStall(match, 0);
+    if (match.session && match.session->GetStats().stalls > stalls_before)
+      match.stats_stall_ms += MsSince(step_start);
+    if (step.kind == Orca::Net::StepKind::Rollback)
+      match.stats_rbmax = std::max(match.stats_rbmax, running_before - step.frame + 1);
     if (step.kind == Orca::Net::StepKind::Run || step.kind == Orca::Net::StepKind::Rollback)
     {
       match.running = step.frame;
+      PublishStats(match);
       // Every half minute of play with friends, the session's numbers (checksums matched...).
       if (step.kind == Orca::Net::StepKind::Run && !match.session->Resimulating() &&
           step.frame % 1800 == 0 && !match.port->CatchingUp())
@@ -935,6 +1355,15 @@ std::optional<int> OnBoundary(Core::System& system,
           NOTICE_LOG_FMT(ROLLBACK, "Drop-in: unplugged at frame {}",
                          match.session->Plan()[match.local_seat].unplug_from);
           LogStats("at leave");
+          if (Soft())
+          {
+            Core::DisplayMessage(fmt::format("You left {}'s game", match.host_name), 4000);
+            BecomeSolo(match, "left", nullptr);
+            Orca::Status::Event("left");
+            if (step.kind == Orca::Net::StepKind::Rollback)
+              return step.frame;
+            return rewound_to;
+          }
           End("left");
           StopEmulation(system, "You left your friend's game");
           return rewound_to;
@@ -972,6 +1401,8 @@ std::optional<int> OnBoundary(Core::System& system,
         DropFriends(match, "stalled");
         continue;
       }
+      if (Orca::Online::IsDesync(error))
+        ++s_desyncs;
       DropFriends(match, Orca::Online::IsDesync(error) ? "desync" : "network");
       GoSolo(match, "the session failed");
       RunSolo(match, local_pad);
@@ -984,7 +1415,19 @@ std::optional<int> OnBoundary(Core::System& system,
                    PEER_SILENCE_LIMIT.count(), match.running);
       Orca::Online::ReportPeerStalled(PEER_SILENT_SENTENCE);
     }
-    Orca::Online::ReportSessionEnd(error);
+    const bool survivable = Orca::Online::ReportSessionEnd(error);
+    if (Orca::Online::IsDesync(error))
+      ++s_desyncs;
+    if (Soft() && survivable && match.joining)
+    {
+      // Unplugged from the host's game; this one goes on.
+      Core::DisplayMessage(peer_silent ? std::string(PEER_SILENT_SENTENCE) :
+                                         "The connection to your friend's game ended: you play on",
+                           6000);
+      BecomeSolo(match, "the session ended", "host-left");
+      RunSolo(match, local_pad);
+      return rewound_to;
+    }
     End("session ended");
     StopEmulation(system, peer_silent ? std::string(PEER_SILENT_SENTENCE) :
                                         fmt::format("Online match ended: {}",

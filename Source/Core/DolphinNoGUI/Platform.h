@@ -41,6 +41,8 @@ public:
   // Embed mode (Embed.h): set before Init. The window is drawn inside the parent's.
   void SetEmbed(const Embed::Options& options) { m_embed = options; }
   bool IsEmbedded() const { return m_embed.enabled; }
+  // Tests: take the embed protocol's commands on stdin without embedding (ORCA_TEST_COMMANDS=1).
+  void EnableTestCommands() { m_test_commands = true; }
   // The first frame was presented: "ready" goes out on the next main loop pass.
   void NotifyFirstFrame(int width, int height, double fps);
   // The main loop ended: hidden and without the focus while emulation stops.
@@ -90,6 +92,7 @@ protected:
   bool m_window_fullscreen = false;
 
   Embed::Options m_embed;
+  bool m_test_commands = false;
 
 private:
   // Titles are set only on the main loop's thread: on Win32 setting it from the emulation thread

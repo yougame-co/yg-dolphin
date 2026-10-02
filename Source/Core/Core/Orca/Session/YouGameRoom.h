@@ -30,6 +30,9 @@ struct RoomOptions
   std::string mode = "orca-test";
   // This Orca joins a friend's running game (ORCA_JOIN=1). Also true when the app opened an invite.
   bool joining = false;
+  // With no room_code, ask the desktop app whether the player opened an invite (only at launch: a
+  // room opened later, after a leave, is always a new one).
+  bool ask_app_for_room = true;
 };
 
 // Where the host's keyframe of its game is, for a joining friend (Orca::Net::KeyframeStore).

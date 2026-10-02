@@ -4,10 +4,12 @@
 #pragma once
 
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "Common/CommonTypes.h"
+#include "InputCommon/GCPadStatus.h"
 
 // What the online session tells the rest of Orca (the in-game UX: overlay, name tags, the desktop
 // app's netlog). The session owns the data; readers only get copies and callbacks.
@@ -40,8 +42,19 @@ struct LinkStats
   int peer_hitches = 0;
   int round_trip_ms = -1;  // to the room server; -1 before the first
   int confirmed_frame = -1;
+  // The game is waiting for a friend's input right now: for how long, and whose seat (-1: nobody).
+  int stalled_ms = 0;
+  int waiting_seat = -1;
 };
 LinkStats GetLinkStats();
+
+// The local player's controller, if something other than Dolphin's own pad input supplies it (the
+// YouGame app's controller stream). Called on the CPU thread once per frame boundary, solo or in a
+// session; it must not block. nullopt: use Dolphin's pad. The session records what it returns, so
+// a re-run frame replays it and never asks again.
+using LocalPadSource = std::function<std::optional<GCPadStatus>()>;
+void SetLocalPadSource(LocalPadSource source);
+std::optional<GCPadStatus> LocalPad();
 
 // The session's side (Rollback / Online): publish the latest stats, and fire the plug-in callback.
 void PublishLinkStats(const LinkStats& stats);

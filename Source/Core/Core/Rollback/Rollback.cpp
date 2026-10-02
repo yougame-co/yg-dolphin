@@ -27,6 +27,7 @@
 #include "Core/HW/GCPad.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Status.h"
+#include "Core/Orca/Session/Events.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Session/PadCodec.h"
 #include "Core/PowerPC/JitCommon/JitBase.h"
@@ -551,6 +552,8 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
       // controller, whatever the seat.
       if (const auto scripted = Harness::InputOverride(local_seat))
         return Orca::Net::EncodePad(*scripted);
+      if (const auto from_app = Orca::Events::LocalPad())
+        return Orca::Net::EncodePad(*from_app);
       g_controller_interface.SetCurrentInputChannel(ciface::InputChannel::SerialInterface);
       g_controller_interface.UpdateInput();
       return Orca::Net::EncodePad(Pad::GetStatus(0));

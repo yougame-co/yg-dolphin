@@ -6,6 +6,8 @@
 #include <atomic>
 #include <cstdio>
 #include <mutex>
+#include <set>
+#include <sstream>
 #include <string>
 
 #include <fmt/format.h>
@@ -21,6 +23,7 @@ std::string s_state;
 bool s_errored = false;
 std::atomic<bool> s_started{false};
 std::FILE* s_out = nullptr;
+std::set<std::string, std::less<>> s_app_caps;
 void (*s_error_listener)(std::string_view, std::string_view) = nullptr;
 
 void Print(const std::string& line)
@@ -52,6 +55,67 @@ void State(std::string_view state)
     return;
   s_state = state;
   Print(fmt::format("orca state {}\n", state));
+}
+
+void Event(std::string_view state)
+{
+  if (!SessionActive())
+    return;
+  std::lock_guard lock(s_mutex);
+  s_state = state;
+  Print(fmt::format("orca state {}\n", state));
+}
+
+void Report(std::string_view code, std::string_view sentence)
+{
+  if (!Cap("join"))
+  {
+    Error(code, sentence);
+    return;
+  }
+  if (!SessionActive())
+    return;
+  std::lock_guard lock(s_mutex);
+  Print(fmt::format("orca error {} {}\n", code, OneLine(sentence)));
+}
+
+void PrintCaps()
+{
+  if (!SessionActive())
+    return;
+  std::lock_guard lock(s_mutex);
+  Print(fmt::format("orca caps {}\n", CAPS));
+}
+
+void SetAppCaps(std::string_view list)
+{
+  std::set<std::string, std::less<>> ours;
+  std::istringstream mine{std::string(CAPS)};
+  for (std::string name; mine >> name;)
+    ours.insert(name);
+  std::set<std::string, std::less<>> both;
+  std::istringstream theirs{std::string(list)};
+  for (std::string name; theirs >> name;)
+  {
+    if (ours.count(name))
+      both.insert(name);
+  }
+  std::lock_guard lock(s_mutex);
+  s_app_caps = std::move(both);
+}
+
+bool Cap(std::string_view name)
+{
+  std::lock_guard lock(s_mutex);
+  return s_app_caps.find(name) != s_app_caps.end();
+}
+
+void Stats(std::string_view json)
+{
+  if (!SessionActive() || !Cap("stats"))
+    return;
+  std::lock_guard lock(s_mutex);
+  Print(fmt::format("orca stats {}\n", OneLine(json)));
 }
 
 void Error(std::string_view code, std::string_view sentence)

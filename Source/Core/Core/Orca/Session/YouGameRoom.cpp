@@ -726,7 +726,7 @@ struct YouGameRoom::Impl
     {
       const Common::HttpRequest::Headers headers{{"Authorization", "Bearer " + token},
                                                  {"Content-Type", "application/json"}};
-      if (room.empty())
+      if (room.empty() && options.ask_app_for_room)
       {
         // An invite the player opened in the app names the room.
         picojson::object hello;

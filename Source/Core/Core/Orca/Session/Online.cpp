@@ -9,6 +9,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <fmt/format.h>
@@ -133,15 +134,11 @@ std::string CompatibilityKey()
   return fmt::format("orca1:{:016x}", XXH3_64bits(parts.data(), parts.size()));
 }
 
-void Start()
+namespace
 {
-  std::lock_guard lock(s_mutex);
-  if (s_room)
-    return;
-  Net::RoomOptions options;
-  options.room_code = Env("ORCA_ROOM");
+void StartLocked(Net::RoomOptions options)
+{
   options.compatibility = CompatibilityKey();
-  options.joining = Env("ORCA_JOIN") == "1";
   if (const Profile* profile = ActiveProfile())
   {
     std::string game = profile->game_id;
@@ -154,6 +151,67 @@ void Start()
                  options.joining ? "to join a friend's game" : "as the host",
                  options.compatibility);
   s_room = std::make_shared<Net::YouGameRoom>(std::move(options));
+}
+}  // namespace
+
+void Start()
+{
+  std::lock_guard lock(s_mutex);
+  if (s_room)
+    return;
+  Net::RoomOptions options;
+  options.room_code = Env("ORCA_ROOM");
+  options.joining = Env("ORCA_JOIN") == "1";
+  StartLocked(std::move(options));
+}
+
+void StartRoom(const std::string& code, bool joining)
+{
+  std::lock_guard lock(s_mutex);
+  if (s_room)
+    return;
+  Net::RoomOptions options;
+  options.room_code = code;
+  options.joining = joining;
+  options.ask_app_for_room = false;
+  StartLocked(std::move(options));
+}
+
+std::string Code()
+{
+  const auto room = Room();
+  return room ? room->Code() : "";
+}
+
+namespace
+{
+std::mutex s_request_mutex;
+std::optional<std::string> s_join_request;
+bool s_leave_request = false;
+}  // namespace
+
+void RequestJoin(const std::string& code)
+{
+  std::lock_guard lock(s_request_mutex);
+  s_join_request = code;
+}
+
+std::optional<std::string> TakeJoinRequest()
+{
+  std::lock_guard lock(s_request_mutex);
+  return std::exchange(s_join_request, std::nullopt);
+}
+
+void RequestLeave()
+{
+  std::lock_guard lock(s_request_mutex);
+  s_leave_request = true;
+}
+
+bool TakeLeaveRequest()
+{
+  std::lock_guard lock(s_request_mutex);
+  return std::exchange(s_leave_request, false);
 }
 
 std::optional<bool> Joining()
@@ -239,13 +297,19 @@ int RoundTripMs(u32* sequence)
   return room ? room->RoundTripMs(sequence) : -1;
 }
 
+std::string RoomErrorCode()
+{
+  const auto room = Room();
+  return room ? room->ErrorCode() : "";
+}
+
 std::string StatusLine()
 {
   const auto room = Room();
   return room ? room->Status() : "";
 }
 
-void ReportSessionEnd(const std::string& session_error)
+bool ReportSessionEnd(const std::string& session_error)
 {
   const auto room = Room();
   // Inputs that disagree, or a checksum that does: the games went apart. The friend hears it
@@ -254,30 +318,36 @@ void ReportSessionEnd(const std::string& session_error)
   {
     if (room)
       room->SetLeaveReason("desync");
-    Status::Error("desync", "Your games went out of sync, so the match ended");
-    return;
+    Status::Report("desync", "Your games went out of sync, so the match ended");
+    return true;
   }
   // The session ends when the room does: the room says why, unless this player left. The state
   // first: once Ended, the code is final.
   if (room && room->GetState() == Net::RoomState::Ended)
   {
     if (const std::string code = room->ErrorCode(); !code.empty())
-      Status::Error(code, room->Status());
-    return;
+      Status::Report(code, room->Status());
+    return true;
   }
   if (session_error.empty())
-    return;
+    return true;
   // The emulator side failed (a snapshot that wouldn't save or load, lost frame alignment), or
   // the friend sent something no honest Orca sends.
   const bool from_peer = session_error.find("sent an invalid packet") != std::string::npos;
-  Status::Error(from_peer ? "network" : "internal", session_error);
+  if (from_peer)
+  {
+    Status::Report("network", session_error);
+    return true;
+  }
+  Status::Error("internal", session_error);
+  return false;
 }
 
 void ReportPeerStalled(std::string_view sentence)
 {
   if (const auto room = Room())
     room->SetLeaveReason("stalled");
-  Status::Error("peer_left", sentence);
+  Status::Report("peer_left", sentence);
 }
 
 void Shutdown()

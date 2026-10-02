@@ -18,6 +18,7 @@
 #include "Core/Orca/Branding.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Online.h"
+#include "Core/Orca/Status.h"
 #include "Core/System.h"
 
 Platform::~Platform() = default;
@@ -113,7 +114,7 @@ void Platform::EmbedTeardown()
 
 void Platform::ProcessEmbedCommands()
 {
-  if (!m_embed.enabled)
+  if (!m_embed.enabled && !m_test_commands)
     return;
   {
     std::optional<std::string> ready;
@@ -124,7 +125,12 @@ void Platform::ProcessEmbedCommands()
         m_ready_sent = true;
     }
     if (ready)
+    {
+      // What this build can do beyond the base protocol, before "ready" (the app answers with
+      // "caps <list>"). Outside a session: nothing.
+      Orca::Status::PrintCaps();
       Embed::Out(*ready);
+    }
   }
 
   auto& system = Core::System::GetInstance();
@@ -200,6 +206,34 @@ void Platform::ProcessEmbedCommands()
       int slot = 0;
       in >> slot;
       Embed::Out(fmt::format("unsupported {} {}", cmd, slot));
+    }
+    else if (cmd == "caps")
+    {
+      // The features the app understands (Orca::Status::CAPS lists ours).
+      std::string rest;
+      std::getline(in, rest);
+      Orca::Status::SetAppCaps(rest);
+    }
+    else if (cmd == "join")
+    {
+      // Into a friend's game, from the running one (Orca::Online::ValidCode checks the code).
+      std::string code;
+      in >> code;
+      const bool valid = code.size() >= 6 && code.size() <= 12 &&
+                         std::all_of(code.begin(), code.end(), [](char c) {
+                           return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+                         });
+      if (!Orca::Status::Cap("join") || !valid)
+        Embed::Out("unsupported join");
+      else
+        Orca::Online::RequestJoin(code);
+    }
+    else if (cmd == "leave")
+    {
+      if (!Orca::Status::Cap("leave"))
+        Embed::Out("unsupported leave");
+      else
+        Orca::Online::RequestLeave();
     }
     else if (cmd == "prepare-join")
     {

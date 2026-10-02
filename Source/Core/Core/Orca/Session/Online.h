@@ -24,6 +24,18 @@ bool Enabled();
 // Drop-in play. The room this process plays in starts at the first frame boundary (Start) and
 // runs on its own thread: the host keeps playing while friends come and go.
 void Start();
+// The room for this process from now on, after Shutdown: a friend's (`code`, joining), or a new one
+// of this player's own (empty code). Never asks the app for an invite.
+void StartRoom(const std::string& code, bool joining);
+// The room's code, once known ("" before, or with no room).
+std::string Code();
+
+// The app's "join <code>" and "leave" (embed mode; any thread, never blocks). The emulator thread
+// takes them at a frame boundary.
+void RequestJoin(const std::string& code);
+std::optional<std::string> TakeJoinRequest();
+void RequestLeave();
+bool TakeLeaveRequest();
 // Whether this Orca joins someone else's game (ORCA_JOIN=1, or the desktop app opened an invite),
 // once known; nullopt before, or if the room ended first.
 std::optional<bool> Joining();
@@ -53,12 +65,15 @@ bool TakePrepareJoin();
 // The latest round trip to the room server, in milliseconds (-1 before the first). `sequence`, if
 // given, changes with each new measurement: feed Session::OnRoundTrip only when it changed.
 int RoundTripMs(u32* sequence = nullptr);
+// Why the room ended, as an Orca::Status code ("" while it runs, or when it gave none).
+std::string RoomErrorCode();
 // What the room is doing or why it ended, for the window title or log.
 std::string StatusLine();
 
 // Reports why the session ended to the desktop app (Orca::Status): a desync, the room's reason,
-// or the session's own error. Nothing for a normal leave.
-void ReportSessionEnd(const std::string& session_error);
+// or the session's own error. Nothing for a normal leave. False when the game can't go on solo
+// (this machine's emulation failed: an "internal" error, always terminal).
+bool ReportSessionEnd(const std::string& session_error);
 
 // The friend stopped answering mid-match: reports peer_left with `sentence`, and tells the friend
 // on the way out that the connection stalled (for its own report, if its game wakes up).

@@ -498,6 +498,12 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
     });
     Embed::StartReading();
   }
+  else if (Orca::GetEnv("ORCA_TEST_COMMANDS") == "1")
+  {
+    s_platform->EnableTestCommands();
+    Embed::StartReading();
+    Orca::Status::PrintCaps();
+  }
 
   if (!BootManager::BootCore(Core::System::GetInstance(), std::move(boot), wsi))
   {

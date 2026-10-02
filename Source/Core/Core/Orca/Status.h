@@ -17,7 +17,22 @@
 namespace Orca::Status
 {
 void State(std::string_view state);
+// A state printed even when it repeats the current one ("left" answers every leave command).
+void Event(std::string_view state);
 void Error(std::string_view code, std::string_view sentence);
+// An error the session survives: with the app's "caps join" it is printed and Orca plays on solo
+// (the exit code stays 0, the embed "error" line isn't sent); without, it is Error().
+void Report(std::string_view code, std::string_view sentence);
+
+// Capabilities (ORCA.md, "Embedding"): what this build implements, printed once as
+// "orca caps <list>" before "ready", and what the app said it understands ("caps <list>" on
+// stdin). A feature is on only when both list it.
+inline constexpr const char* CAPS = "join leave stats";
+void PrintCaps();
+void SetAppCaps(std::string_view list);
+bool Cap(std::string_view name);
+// "orca stats <json>" (with the "stats" capability).
+void Stats(std::string_view json);
 // 0 after a normal leave; 1 once an error was reported.
 int ExitCode();
 // The game reached its first frame (called at every frame boundary; cheap after the first).

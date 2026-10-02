@@ -13,6 +13,7 @@ namespace
 std::mutex s_lock;
 PlugInCallback s_plug_in;
 LinkStats s_stats;
+LocalPadSource s_pad_source;
 }  // namespace
 
 void SetPlugInCallback(PlugInCallback callback)
@@ -31,6 +32,22 @@ void PublishLinkStats(const LinkStats& stats)
 {
   std::lock_guard lk(s_lock);
   s_stats = stats;
+}
+
+void SetLocalPadSource(LocalPadSource source)
+{
+  std::lock_guard lk(s_lock);
+  s_pad_source = std::move(source);
+}
+
+std::optional<GCPadStatus> LocalPad()
+{
+  LocalPadSource source;
+  {
+    std::lock_guard lk(s_lock);
+    source = s_pad_source;
+  }
+  return source ? source() : std::nullopt;
 }
 
 void NotifyPlugIn(int frame, const std::vector<PortInfo>& ports)
