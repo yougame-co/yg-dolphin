@@ -43,12 +43,13 @@ private:
   bool CreateRenderWindow();
   void UpdateWindowPosition();
   void ProcessEvents();
+  void UpdateEmbedFocus();
 
   HWND m_hwnd{};
   // Embed mode: "show" / "hide" (a rect while hidden must not bring the window back).
   bool m_embed_visible = true;
-  // "focus" / "blur": the focus the app wants, applied again on "show".
-  bool m_embed_focus = false;
+  // "focus" / "blur": whether the app gives the game the input (the default, as on macOS).
+  bool m_embed_focus = true;
 
   int m_window_x = Config::Get(Config::MAIN_RENDER_WINDOW_XPOS);
   int m_window_y = Config::Get(Config::MAIN_RENDER_WINDOW_YPOS);
@@ -109,8 +110,8 @@ bool PlatformWin32::CreateRenderWindow()
       fprintf(stderr, "Orca: CreateWindowEx under the app's window failed (%lu)\n", GetLastError());
       return false;
     }
-    m_window_focus = false;
     ShowWindow(m_hwnd, SW_SHOWNA);
+    UpdateEmbedFocus();
     return true;
   }
 
@@ -167,6 +168,8 @@ void PlatformWin32::MainLoop()
     Core::HostDispatchJobs(Core::System::GetInstance());
     ProcessEvents();
     UpdateWindowPosition();
+    if (IsEmbedded())
+      UpdateEmbedFocus();
 
     // TODO: Is this sleep appropriate?
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -206,20 +209,23 @@ void PlatformWin32::EmbedSetRect(const Embed::Rect& r)
 void PlatformWin32::EmbedSetVisible(bool visible)
 {
   m_embed_visible = visible;
-  if (!visible && GetFocus() == m_hwnd)
-    SetFocus(GetParent(m_hwnd));
   ShowWindow(m_hwnd, visible ? SW_SHOWNA : SW_HIDE);
-  if (visible && m_embed_focus)
-    SetFocus(m_hwnd);
+  UpdateEmbedFocus();
 }
 
 void PlatformWin32::EmbedSetFocus(bool focus)
 {
   m_embed_focus = focus;
-  if (focus && m_embed_visible)
-    SetFocus(m_hwnd);
-  else if (!focus && GetFocus() == m_hwnd)
-    SetFocus(GetParent(m_hwnd));
+  UpdateEmbedFocus();
+}
+
+// Embedded, the app keeps the keyboard (its page reads the keys and sends them as a pad): this
+// window never takes the focus. The input gate opens while the app's window is the foreground
+// window, shows the game, and its last word was "focus", as on macOS.
+void PlatformWin32::UpdateEmbedFocus()
+{
+  const HWND root = GetAncestor(m_hwnd, GA_ROOT);
+  m_window_focus = m_embed_visible && m_embed_focus && root && GetForegroundWindow() == root;
 }
 
 void PlatformWin32::ProcessEvents()
@@ -282,15 +288,6 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
     }
     break;
 
-  // Embedded: a click on the game gives it the keyboard; the input gate follows the focus.
-  case WM_LBUTTONDOWN:
-    if (platform->IsEmbedded())
-    {
-      platform->m_embed_focus = true;
-      SetFocus(hwnd);
-    }
-    break;
-
   // Embedded, Alt and F10 are game keys: the default handling would open the app's window menu.
   // Alt+F4 still closes the app.
   case WM_SYSKEYDOWN:
@@ -306,14 +303,14 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
       platform->Stop();
     return DefWindowProc(hwnd, msg, wParam, lParam);
 
+  // Embedded, the keyboard stays with the app: if anything hands this window the focus, it goes
+  // straight back to the app's window.
   case WM_SETFOCUS:
-    if (platform->IsEmbedded())
-      platform->m_window_focus = true;
-    break;
-
-  case WM_KILLFOCUS:
-    if (platform->IsEmbedded())
-      platform->m_window_focus = false;
+    if (platform && platform->IsEmbedded())
+    {
+      if (const HWND root = GetAncestor(hwnd, GA_ROOT); root && root != hwnd)
+        SetFocus(root);
+    }
     break;
 
   case WM_CLOSE:

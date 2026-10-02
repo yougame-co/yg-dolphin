@@ -369,7 +369,7 @@ Any other line goes to stderr. The app's `EMBED_COMMAND` filter must add `blur` 
 | `ready W H FPS` | The first frame is on screen. W and H are the emulated frame buffer (Brawl: `640 480`); FPS is the VI rate (`59.9401`). The Mac takes about 1-2 s. A session can show `orca state lobby` **after** `ready` and wait there for its friend: after `ready`, no startup timeout applies. |
 | `state running` / `state paused` | The answer to `pause` and `resume`. |
 | `unsupported <command> [N]` | The command was refused. The game carries on, so this is not an error. |
-| `key escape` / `key fullscreen` | Windows only, while Orca has the keyboard (Esc, F11). On macOS the page sees those keys itself. |
+| `key escape` / `key fullscreen` | Windows only, and only if Orca's window somehow has the keyboard (Esc, F11). Normally the page sees those keys itself, as on macOS. |
 | `error <sentence>` | Something failed: bad arguments, the view couldn't open, the game didn't boot. Each `orca error` also gets an `error` twin. |
 | `orca state <state>` / `orca error <code> <sentence>` | Session status (`Core/Orca/Status.h`). New states, such as drop-in's `joining`, come through unchanged: forward every line that starts with `orca `. |
 | `exit <code>` | Always the last line, on every exit path: 0 after a normal stop, 1 after a reported error, 2 for bad arguments. |
@@ -384,11 +384,14 @@ Dolphin reads every input (keyboard and pads alike) only while `Host_RendererHas
 Embedded, Orca turns off "background input" for the run so that rule always applies. Embedded, that
 means:
 
-- **Windows:** the child window has the Win32 keyboard focus.
-  - It gets it with `focus` or a click on the game; `blur`, `hide` or a click elsewhere gives it back to the parent.
-  - A `show` puts the focus back if the last command was `focus`.
-  - Alt and F10 stay game keys, so they don't open the app's menu. Alt+F4 still reaches the app.
-  - The page sees no keys meanwhile, hence the `key` lines.
+- **Windows:** Orca never takes the keyboard. The app's window keeps it, so the page sees every key
+  (it sends the keyboard to Orca as a pad in the controller stream).
+  - The child window doesn't take the focus on a click, `focus` or `show`; if Windows hands it the
+    focus anyway, it gives it straight back to the app's window.
+  - Input counts while the last command was `focus` (the default), the view is shown, and the
+    app's window is the foreground window, as on macOS.
+  - The `key` lines only come if the child window somehow has the keyboard; normally the page sees
+    Esc and F11 itself.
   - Caveat, as with libretro: a child window in another process shares the app's input queue, so a
     stall on Orca's main thread stalls the app's UI. `quit` and a closed stdin stop Orca at once.
 - **macOS:** Orca never takes the keyboard or the mouse.
