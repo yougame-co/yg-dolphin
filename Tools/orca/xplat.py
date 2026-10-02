@@ -132,7 +132,8 @@ peers = [s for s in stats if s.get("peers", 0) > 0]
 fps = [s["fps"] for s in peers if "fps" in s]
 summary = {
     "role": a.role, "room": a.room, "slug": slug, "exit": code, "errors": errors,
-    "desync": any("desync" in e for e in errors) or "Desync" in text,
+    "desync": (any("desync" in e for e in errors) or "Desync" in text
+               or any("desync" in st for st in states) or "the session failed" in text),
     "plugged": "plugged into port" in text or any(s.startswith("friend-joining") for s in states),
     "checksums_matched": matched,
     "seconds_with_peer": len(peers),
