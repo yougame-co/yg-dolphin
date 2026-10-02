@@ -17,6 +17,7 @@
 //   exit            quit this program (Orca's stdin closes with it)
 // Orca's stdout is echoed to this program's stdout, each line prefixed with "orca> ".
 #import <AppKit/AppKit.h>
+#include <signal.h>
 #include <spawn.h>
 #include <stdio.h>
 #include <unistd.h>
@@ -123,6 +124,7 @@ static void Command(NSString* line)
   {
     [NSApp activateIgnoringOtherApps:YES];
     [g_window makeKeyAndOrderFront:nil];
+    [g_window orderFrontRegardless];  // in front even when macOS refuses the activation
   }
   else if ([cmd isEqualToString:@"where"])
   {
@@ -164,6 +166,8 @@ int main(int argc, char** argv)
       fprintf(stderr, "usage: embed-test-host <orca> [args...] < commands\n");
       return 2;
     }
+    // A line for an Orca that already exited fails instead of ending this program.
+    signal(SIGPIPE, SIG_IGN);
     [NSApplication sharedApplication];
     [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
 
