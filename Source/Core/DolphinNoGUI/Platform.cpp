@@ -189,6 +189,7 @@ void Platform::ProcessEmbedCommands()
     else if (cmd == "hide" || cmd == "show")
     {
       EmbedSetVisible(cmd == "show");
+      Orca::UX::SetHostVisible(cmd == "show");
     }
     else if (cmd == "volume")
     {

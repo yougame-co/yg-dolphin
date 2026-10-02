@@ -22,10 +22,13 @@
 // replays the recorded pad, never a fresh read.
 namespace Orca::UX
 {
-// The pad for this frame boundary, or nullopt to use Pad::GetStatus(0). CPU thread. Starts the
-// stream the first time (only under the app: YOUGAME_BRIDGE and YOUGAME_TOKEN on loopback).
-// Follows Dolphin's input gate (focus) like the keyboard does: unfocused is neutral.
+// The pad for this frame boundary, or nullopt to use Pad::GetStatus(0). CPU thread; never starts
+// anything. Follows Dolphin's input gate (focus) like the keyboard does: unfocused is neutral.
 std::optional<GCPadStatus> LocalPad();
+
+// The stream under the app (YOUGAME_BRIDGE and YOUGAME_TOKEN on loopback); nothing otherwise.
+// From UX::Init, on the main thread, before the game boots.
+void StartControllerStreamFromEnvironment();
 
 // The stream for an explicit bridge (tests; LocalPad() uses the environment).
 void StartControllerStream(const std::string& bridge, const std::string& token);

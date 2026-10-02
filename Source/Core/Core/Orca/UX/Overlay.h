@@ -89,6 +89,8 @@ void ShutdownOverlay();
 // stall nears 250 ms the last frame is shown again with the overlay on it, about 15 times a second.
 // Host-only drawing: the emulated state is untouched.
 void RepresentDuringStall(int stalled_ms);
+// The app hid or showed the game (embed `hide` / `show`): no stall redraws while hidden.
+void SetHostVisible(bool visible);
 void SetStatsVisible(bool visible);
 OverlayModel& Overlay();
 }  // namespace Orca::UX

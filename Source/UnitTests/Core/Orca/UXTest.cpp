@@ -825,11 +825,11 @@ public:
       std::this_thread::sleep_for(std::chrono::milliseconds(10));
     return m_client >= 0;
   }
-  void Send(const std::string& json)
+  void Send(const std::string& json) { SendRaw("data: " + json + "\n\n"); }
+  void SendRaw(const std::string& bytes)
   {
-    const std::string event = "data: " + json + "\n\n";
     if (m_client >= 0)
-      (void)!write(m_client, event.data(), event.size());
+      (void)!write(m_client, bytes.data(), bytes.size());
   }
   void Close()
   {
@@ -964,6 +964,51 @@ TEST(OrcaUXControllerStream, CachesTheNewestSnapshotAndGoesNeutralThenFallsBack)
   bridge.Close();
   ASSERT_TRUE(Eventually([] { return !GetControllerTiming().attached; }));
   ASSERT_TRUE(Eventually([] { return !LatestPad().has_value(); }, 2500));
+  StopControllerStream();
+}
+
+TEST(OrcaUXControllerStream, CrlfCommentsAndMultiLineData)
+{
+  FakeBridge bridge;
+  StartControllerStream(bridge.Url(), "t0ken");
+  ASSERT_TRUE(bridge.WaitConnected());
+  const auto now_ms = [] {
+    return std::chrono::duration<double, std::milli>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+  };
+  const auto event = [&](int buttons) {
+    const double t = now_ms();
+    return Event(true, FourPorts(PortJson(0, 0, "wired", buttons)), "", t, t);
+  };
+  const auto pad_is = [](u16 buttons) {
+    return [buttons] {
+      const auto p = LatestPad();
+      return p && p->button == buttons;
+    };
+  };
+  // The app's keepalive between events, then an event with CRLF line ends.
+  bridge.SendRaw(": ping\n\n: ping\r\n\r\n");
+  bridge.SendRaw("data: " + event(0x01) + "\r\n\r\n");
+  ASSERT_TRUE(Eventually(pad_is(PAD_BUTTON_A)));
+  // A comment line inside an event, and the JSON split over two data lines.
+  const std::string json = event(0x02);
+  const size_t half = json.find(",\"pads\"");
+  bridge.SendRaw(": ping\ndata: " + json.substr(0, half) + "\ndata: " + json.substr(half) +
+                 "\n\n");
+  ASSERT_TRUE(Eventually(pad_is(PAD_BUTTON_B)));
+  // Bare CR line ends.
+  bridge.SendRaw("data: " + event(0x04) + "\r\r");
+  ASSERT_TRUE(Eventually(pad_is(PAD_BUTTON_X)));
+  EXPECT_EQ(GetControllerTiming().refused, 0u);
+  // Many keepalives never fill the buffer or drop the stream.
+  std::string pings;
+  for (int i = 0; i < 40000; ++i)
+    pings += ": ping\n\n";
+  bridge.SendRaw(pings);
+  bridge.SendRaw("data: " + event(0x08) + "\n\n");
+  ASSERT_TRUE(Eventually(pad_is(PAD_BUTTON_Y)));
+  EXPECT_TRUE(GetControllerTiming().attached);
   StopControllerStream();
 }
 

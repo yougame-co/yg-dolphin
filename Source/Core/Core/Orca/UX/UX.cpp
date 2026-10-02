@@ -19,6 +19,7 @@ namespace Orca::UX
 {
 void Init()
 {
+  StartControllerStreamFromEnvironment();
   Orca::Events::SetLocalPadSource([] { return LocalPad(); });
   InitOverlay();
   // The name tags write emulated memory: the compatibility key carries their version.
@@ -38,9 +39,10 @@ void Init()
     // between a frame's first run and its re-run (the known gap in NameTags.h).
     static const int s_late = [] {
       const char* v = std::getenv("ORCA_UX_TEST_LATE_NAME");
-      return v && TestKnobsAllowed() ? std::atoi(v) : -1;
+      return v ? std::atoi(v) : -1;
     }();
-    if (s_late >= 0 && !resimulating && frame < s_late)
+    // Checked every frame: a host that boots solo can take a real friend's drop-in later.
+    if (s_late >= 0 && !resimulating && frame < s_late && TestKnobsAllowed())
     {
       std::vector<Orca::Events::PortInfo> early = ports;
       // PortInfo.remote differs per machine: the friend is whoever is not on port 1.

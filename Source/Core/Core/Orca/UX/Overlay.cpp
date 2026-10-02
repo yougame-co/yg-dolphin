@@ -168,6 +168,7 @@ namespace
 {
 OverlayModel s_overlay;
 std::atomic<bool> s_show_stats{false};
+std::atomic<bool> s_visible{true};  // the app shows the game (embed hide/show)
 // ORCA_UX_OVERLAY_DEMO=1 (design checks only): a made-up friend whose link cycles good, ok, bad
 // with a stall, every 12 s, in place of the session's stats.
 bool s_demo = false;
@@ -289,15 +290,30 @@ void ShutdownOverlay()
   OSD::SetHostOverlay({});
 }
 
+void SetHostVisible(bool visible)
+{
+  s_visible = visible;
+}
+
 void RepresentDuringStall(int stalled_ms)
 {
-  // Sessions run single core, so this presents on the CPU thread inside the stall wait: nothing
-  // for a short stall (the overlay has nothing to say before 250 ms), then ~15 times a second, or
-  // 4 when presenting is slow here (vsync, an occluded window) so the wait keeps listening.
+  // Sessions run single core, so this presents on the CPU thread inside the stall wait, and while
+  // it presents the wait hears nothing (the friend's input, a stop). So: nothing for a short stall
+  // (the overlay has nothing to say before 250 ms), nothing while the app hides the game, ~15 times
+  // a second, 4 when presenting is slow, and not again in this stall once one present took over
+  // 50 ms (vsync or a minimized or occluded window can hold a Metal drawable for about a second).
   static double s_last = 0;
   static double s_every = 66;
-  if (stalled_ms < OverlayModel::WAITING_AFTER_MS - 50)
+  static int s_stall_ms = 0;
+  static bool s_off_this_stall = false;
+  if (stalled_ms < s_stall_ms)
+    s_off_this_stall = false;  // a new stall
+  s_stall_ms = stalled_ms;
+  if (s_off_this_stall || !s_visible.load(std::memory_order_relaxed) ||
+      stalled_ms < OverlayModel::WAITING_AFTER_MS - 50)
+  {
     return;
+  }
   const double now = NowMs();
   if (now - s_last < s_every)
     return;
@@ -307,6 +323,8 @@ void RepresentDuringStall(int stalled_ms)
   });
   const double took = NowMs() - now;
   s_every = took > 12 ? 250 : 66;
+  if (took > 50)
+    s_off_this_stall = true;
   s_last = NowMs();
 }
 

@@ -15,6 +15,7 @@
 
 #include <curl/curl.h>
 
+#include "Common/HttpRequest.h"
 #include "Common/Logging/Log.h"
 #include "Core/Orca/UX/Controllers.h"
 #include "InputCommon/ControlReference/ControlReference.h"
@@ -127,16 +128,49 @@ private:
     auto* self = static_cast<Stream*>(user);
     if (self->m_done)
       return 0;  // aborts the transfer
-    self->m_pending.append(data, size * count);
+    // SSE lines end in LF, CRLF or CR (the app sends LF); a CR never appears inside the JSON, so
+    // dropping CRs and treating a lone CR as LF reads all three alike.
+    for (size_t i = 0; i < size * count; ++i)
+    {
+      const char c = data[i];
+      if (c == '\r')
+      {
+        self->m_after_cr = true;
+        self->m_pending.push_back('\n');
+        continue;
+      }
+      if (c == '\n' && self->m_after_cr)
+      {
+        self->m_after_cr = false;
+        continue;  // the LF of a CRLF
+      }
+      self->m_after_cr = false;
+      self->m_pending.push_back(c);
+    }
     if (self->m_pending.size() > 256 * 1024)
       return 0;
-    // SSE: events end with a blank line; each data line is `data: <json>`.
+    // An event ends with a blank line. Its `data:` lines are joined with LF; comment lines
+    // (`: ping`, the app's keepalive) and other fields are ignored.
     size_t end;
     while ((end = self->m_pending.find("\n\n")) != std::string::npos)
     {
-      const std::string_view event(self->m_pending.data(), end);
-      if (event.starts_with("data:"))
-        self->OnEvent(event.substr(event.starts_with("data: ") ? 6 : 5));
+      std::string_view block(self->m_pending.data(), end);
+      std::string payload;
+      bool has_data = false;
+      while (!block.empty())
+      {
+        const size_t nl = block.find('\n');
+        const std::string_view line = block.substr(0, nl);
+        block = nl == std::string_view::npos ? std::string_view{} : block.substr(nl + 1);
+        if (!line.starts_with("data:"))
+          continue;
+        if (has_data)
+          payload.push_back('\n');
+        payload.append(line.substr(line.starts_with("data: ") ? 6 : 5));
+        has_data = true;
+      }
+      if (has_data)
+        self->OnEvent(payload);
       self->m_pending.erase(0, end + 2);
     }
     return size * count;
@@ -198,6 +232,7 @@ private:
       if (!curl)
         return;
       m_pending.clear();
+      m_after_cr = false;
       curl_slist* headers = curl_slist_append(nullptr, ("Authorization: Bearer " + m_token).c_str());
       curl_easy_setopt(curl, CURLOPT_URL, m_url.c_str());
       curl_easy_setopt(curl, CURLOPT_HTTPHEADER, headers);
@@ -259,6 +294,7 @@ private:
   const std::string m_token;
   std::atomic<bool> m_done{false};
   std::string m_pending;  // stream thread only
+  bool m_after_cr = false;
   long m_last_status = -1;
   CURLcode m_last_result = CURLE_OK;
 
@@ -277,7 +313,6 @@ private:
 
 std::mutex s_stream_lock;
 std::unique_ptr<Stream> s_stream;
-std::once_flag s_from_env;
 
 // Joins the stream thread at exit.
 struct Teardown
@@ -306,8 +341,9 @@ void StartControllerStream(const std::string& bridge, const std::string& token)
   std::unique_ptr<Stream> next;
   if (LoopbackBridge(bridge) && !token.empty())
   {
-    static std::once_flag s_curl;
-    std::call_once(s_curl, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
+    // libcurl's global init, through Common::HttpRequest's own once-only path (the room client and
+    // the keyframe store use it too), before the stream thread's first curl_easy_init.
+    { Common::HttpRequest init; }
     next = std::make_unique<Stream>(bridge, token);
   }
   {
@@ -334,19 +370,21 @@ std::optional<GCPadStatus> LatestPad()
   return std::nullopt;
 }
 
+void StartControllerStreamFromEnvironment()
+{
+  const std::string bridge = Env("YOUGAME_BRIDGE"), token = Env("YOUGAME_TOKEN");
+  if (bridge.empty() || token.empty())
+    return;
+  if (!LoopbackBridge(bridge))
+  {
+    ERROR_LOG_FMT(CONTROLLERINTERFACE, "Orca: YOUGAME_BRIDGE is not a loopback address");
+    return;
+  }
+  StartControllerStream(bridge, token);
+}
+
 std::optional<GCPadStatus> LocalPad()
 {
-  std::call_once(s_from_env, [] {
-    const std::string bridge = Env("YOUGAME_BRIDGE"), token = Env("YOUGAME_TOKEN");
-    if (bridge.empty() || token.empty())
-      return;
-    if (!LoopbackBridge(bridge))
-    {
-      ERROR_LOG_FMT(CONTROLLERINTERFACE, "Orca: YOUGAME_BRIDGE is not a loopback address");
-      return;
-    }
-    StartControllerStream(bridge, token);
-  });
   const auto choice = Choose();
   if (!choice)
     return std::nullopt;

@@ -122,7 +122,10 @@ bool TestKnobsAllowed()
 
 void ProbeFrame(const Core::CPUThreadGuard& guard, int frame)
 {
-  static std::vector<Command> commands = TestKnobsAllowed() ? Load() : std::vector<Command>{};
+  static std::vector<Command> commands = Load();
+  // Checked every frame: a host that boots solo can take a real friend's drop-in later.
+  if (commands.empty() || !TestKnobsAllowed())
+    return;
   if (commands.empty())
     return;
   static std::string scene;
