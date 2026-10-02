@@ -340,20 +340,16 @@ void MaybeHashBootNand(Core::System& system, Match& match)
   if (clonefile(nand->HostRoot().c_str(), clone.c_str(), CLONE_NOFOLLOW) != 0)
     clone.clear();
 #endif
-  if (clone.empty())
-  {
-    job->hashes = Orca::Net::HashNandTree(nand->HostRoot());
-    job->done = true;
-  }
-  else
-  {
-    BootNandJob* const raw = job.get();
-    raw->thread = std::thread([raw, clone] {
-      raw->hashes = Orca::Net::HashNandTree(clone);
-      File::DeleteDirRecursively(clone);
-      raw->done = true;
-    });
-  }
+  // Without a clone, the live NAND is read on the thread: a file the game writes meanwhile hashes
+  // wrong, and a keyframe then sends it whole (references only match identical bytes).
+  BootNandJob* const raw = job.get();
+  const std::string root = clone.empty() ? nand->HostRoot() : clone;
+  raw->thread = std::thread([raw, root, cloned = !clone.empty()] {
+    raw->hashes = Orca::Net::HashNandTree(root);
+    if (cloned)
+      File::DeleteDirRecursively(root);
+    raw->done = true;
+  });
   match.boot_nand = std::move(job);
 }
 
@@ -740,6 +736,8 @@ std::optional<int> OnBoundary(Core::System& system,
   if (match.stale)
   {
     // A new boot in the same process (the room was left when the last one stopped).
+    if (match.store)
+      match.store->Cancel();
     match.session.reset();
     match.port.reset();
     match.job.reset();
@@ -1024,6 +1022,9 @@ void End(const char* reason)
     return;
   match.finished = true;
   LogStats(fmt::format("ended ({})", reason).c_str());
+  // Transfers in flight give up now: their threads are joined below.
+  if (match.store)
+    match.store->Cancel();
   match.session.reset();
   match.port.reset();
   match.download.reset();

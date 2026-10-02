@@ -11,6 +11,8 @@
 #include <string_view>
 #include <thread>
 
+#include <atomic>
+
 #include <curl/curl.h>
 #include <mbedtls/ctr_drbg.h>
 #include <mbedtls/entropy.h>
@@ -20,6 +22,7 @@
 #include <xxh3.h>
 #include <zstd.h>
 
+#include "Common/CurlTLS.h"
 #include "Common/FileUtil.h"
 #include "Common/IOFile.h"
 #include "Common/Logging/Log.h"
@@ -517,6 +520,11 @@ public:
                                      const std::function<bool(u64, u64)>& progress,
                                      std::string* error) override
   {
+    if (info.size == 0 || info.size > MAX_KEYFRAME_BYTES)
+    {
+      *error = fmt::format("a keyframe of {} bytes", info.size);
+      return std::nullopt;
+    }
     std::vector<u8> body;
     const bool ok = WithRetries(error, [&](const std::string& ticket, const std::string& base,
                                            Result* result) {
@@ -539,21 +547,34 @@ public:
   {
     // Best effort, off the caller's thread (the CPU thread calls this right after a load); the
     // site's cleanup rule catches what this misses.
+    // The room's cached ticket now (the room may be gone by the time the thread runs).
+    std::string ticket, base, error;
+    if (!m_tickets || !m_tickets(false, &ticket, &base, &error))
+    {
+      WARN_LOG_FMT(NETPLAY, "Orca keyframe: can't delete {}: {}", id, error);
+      return;
+    }
     std::lock_guard lock(m_deletes_mutex);
-    m_deletes.emplace_back([this, id] {
-      std::string error;
-      WithRetries(&error, [&](const std::string& ticket, const std::string& base, Result* result) {
-        *result = Request("DELETE", base + "/" + id, {"Authorization: Ticket " + ticket}, nullptr,
-                          nullptr, nullptr);
-        if (result->status == 404)
-          result->status = 204;  // already gone
-      });
-      if (!error.empty())
-        WARN_LOG_FMT(NETPLAY, "Orca keyframe: deleting {} failed: {}", id, error);
+    m_deletes.emplace_back([ticket, base, id] {
+      for (int attempt = 0; attempt < 3; ++attempt)
+      {
+        const Result result = Request("DELETE", base + "/" + id, {"Authorization: Ticket " + ticket},
+                                      nullptr, nullptr, nullptr, nullptr);
+        if ((result.status >= 200 && result.status < 300) || result.status == 404)
+          return;
+        if (result.status != 0 && result.status != 429 && result.status < 500)
+        {
+          WARN_LOG_FMT(NETPLAY, "Orca keyframe: deleting {} refused (HTTP {})", id, result.status);
+          return;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(500 << attempt));
+      }
     });
   }
 
 private:
+  void Cancel() override { m_cancel = true; }
+
   struct Result
   {
     long status = 0;  // 0: no HTTP response
@@ -571,13 +592,22 @@ private:
     for (int attempt = 0; attempt < ATTEMPTS; ++attempt)
     {
       if (attempt > 0 && !fresh)
-        std::this_thread::sleep_for(std::chrono::milliseconds(500 << (attempt - 1)));
+      {
+        const auto until =
+            std::chrono::steady_clock::now() + std::chrono::milliseconds(500 << (attempt - 1));
+        while (!m_cancel && std::chrono::steady_clock::now() < until)
+          std::this_thread::sleep_for(std::chrono::milliseconds(20));
+      }
+      if (m_cancel)
+      {
+        *error = "cancelled";
+        return false;
+      }
       std::string ticket, base, ticket_error;
       if (!m_tickets || !m_tickets(fresh, &ticket, &base, &ticket_error))
       {
         *error = "no ticket: " + ticket_error;
-        fresh = false;
-        continue;
+        return false;
       }
       Result result;
       op(ticket, base, &result);
@@ -609,12 +639,21 @@ private:
 
   struct Transfer
   {
+    CURL* curl = nullptr;
     const std::vector<u8>* upload = nullptr;
     size_t sent = 0;
     std::vector<u8>* download = nullptr;
+    std::vector<u8>* error_body = nullptr;
     u64 limit = 0;
     std::function<bool(u64, u64)> progress;
+    const std::atomic<bool>* cancel = nullptr;
   };
+
+  static int OnProgress(void* user, curl_off_t, curl_off_t, curl_off_t, curl_off_t)
+  {
+    const auto* t = static_cast<Transfer*>(user);
+    return t->cancel && t->cancel->load() ? 1 : 0;
+  }
 
   static size_t OnRead(char* buffer, size_t size, size_t count, void* user)
   {
@@ -629,7 +668,17 @@ private:
   {
     auto* t = static_cast<Transfer*>(user);
     const size_t n = size * count;
-    if (!t->download || t->download->size() + n > t->limit)
+    // A refusal's body is YouGame's {error, code}, not the keyframe.
+    long status = 0;
+    curl_easy_getinfo(t->curl, CURLINFO_RESPONSE_CODE, &status);
+    if (status < 200 || status >= 300 || !t->download)
+    {
+      if (t->error_body->size() + n > 64 * 1024)
+        return 0;
+      t->error_body->insert(t->error_body->end(), data, data + n);
+      return n;
+    }
+    if (t->download->size() + n > t->limit)
       return 0;  // aborts: more than any keyframe
     t->download->insert(t->download->end(), data, data + n);
     if (t->progress && !t->progress(t->download->size(), 0))
@@ -637,9 +686,17 @@ private:
     return n;
   }
 
+  Result Request(const char* method, const std::string& url,
+                 const std::vector<std::string>& headers, const std::vector<u8>* upload,
+                 std::vector<u8>* download, std::function<bool(u64, u64)> progress) const
+  {
+    return Request(method, url, headers, upload, download, std::move(progress), &m_cancel);
+  }
+
   static Result Request(const char* method, const std::string& url,
                         const std::vector<std::string>& headers, const std::vector<u8>* upload,
-                        std::vector<u8>* download, std::function<bool(u64, u64)> progress)
+                        std::vector<u8>* download, std::function<bool(u64, u64)> progress,
+                        const std::atomic<bool>* cancel)
   {
     Result result;
     CURL* curl = curl_easy_init();
@@ -653,11 +710,18 @@ private:
       list = curl_slist_append(list, h.c_str());
     std::vector<u8> error_body;
     Transfer t;
+    t.curl = curl;
     t.upload = upload;
-    t.download = download ? download : &error_body;
-    t.limit = download ? MAX_KEYFRAME_BYTES : 64 * 1024;
+    t.download = download;
+    t.error_body = &error_body;
+    t.limit = MAX_KEYFRAME_BYTES;
     t.progress = std::move(progress);
+    t.cancel = cancel;
+    Common::ConfigureCurlTLS(curl);
     curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, &OnProgress);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &t);
     curl_easy_setopt(curl, CURLOPT_HTTPHEADER, list);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
@@ -686,8 +750,10 @@ private:
     if (code != CURLE_OK)
     {
       result.error = curl_easy_strerror(code);
-      // An abort from progress (the player gave up) is not worth repeating.
-      result.final = code == CURLE_WRITE_ERROR || code == CURLE_ABORTED_BY_CALLBACK;
+      // An abort (the player gave up, emulation stopping, an oversized body) is not worth
+      // repeating.
+      result.final = code == CURLE_WRITE_ERROR || code == CURLE_ABORTED_BY_CALLBACK ||
+                     (cancel && cancel->load());
       if (result.status >= 200 && result.status < 300)
         result.status = 0;
     }
@@ -709,6 +775,7 @@ private:
   }
 
   TicketSource m_tickets;
+  std::atomic<bool> m_cancel{false};
   std::mutex m_deletes_mutex;
   std::vector<std::thread> m_deletes;
 };

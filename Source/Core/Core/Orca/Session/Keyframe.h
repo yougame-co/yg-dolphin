@@ -71,6 +71,8 @@ public:
                                              const std::function<bool(u64, u64)>& progress,
                                              std::string* error) = 0;
   virtual void Delete(const std::string& id) = 0;
+  // Put and Get in progress (or later) give up as soon as they can: emulation is stopping.
+  virtual void Cancel() {}
 };
 
 // A room ticket (with `fresh`, a newly minted one) and the store's address for the room

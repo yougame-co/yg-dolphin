@@ -178,6 +178,37 @@ TEST(OrcaKeyframe, HttpStoreAgainstAFakeServer)
     auto again = store_for(room, "good", "good");
     EXPECT_FALSE(again->Get(info, [](u64, u64) { return true; }, &error));
     EXPECT_NE(error.find("404"), std::string::npos) << error;
+    EXPECT_NE(error.find("gone"), std::string::npos) << "the store's sentence: " << error;
+  }
+  // A GET with a stale ticket gets a new one too, and the refusal's body never counts as progress.
+  {
+    minted = 0;
+    auto putter = store_for("room2", "good", "good");
+    const std::vector<u8> blob(50000, 3);
+    const std::string hash = KeyframeHash(blob);
+    const KeyframeInfo info{7, "kf-7-" + hash.substr(0, 8), blob.size(), hash, ""};
+    std::string error;
+    ASSERT_TRUE(putter->Put(info, blob, &error)) << error;
+    minted = 0;
+    auto getter = store_for("room2", "stale", "good");
+    u64 most = 0;
+    const auto got =
+        getter->Get(info, [&](u64 done, u64) { most = std::max(most, done); return true; }, &error);
+    ASSERT_TRUE(got) << error;
+    EXPECT_EQ(*got, blob);
+    EXPECT_EQ(minted, 1);
+    EXPECT_EQ(most, blob.size());
+    getter->Delete(info.id);
+  }
+  // Cancelled (emulation stopping): no more tries.
+  {
+    auto store = store_for("flaky", "good", "good");
+    store->Cancel();
+    const std::vector<u8> blob(1000, 2);
+    const std::string hash = KeyframeHash(blob);
+    std::string error;
+    EXPECT_FALSE(store->Put({3, "kf-3-" + hash.substr(0, 8), blob.size(), hash, ""}, blob, &error));
+    EXPECT_EQ(error, "cancelled");
   }
   // A ticket the store refuses even when new: final.
   auto refused = store_for("room1", "bad", "bad");

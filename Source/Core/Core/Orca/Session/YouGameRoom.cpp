@@ -1557,7 +1557,8 @@ struct YouGameRoom::Impl
         return;
       KeyframeInfo info;
       const auto frame = Int(d, "f", 0, MAX_FRAME);
-      const auto size = Int(d, "n", 1, MAX_FRAME);
+      // YouGame's store takes 128 MB at most.
+      const auto size = Int(d, "n", 1, 128 << 20);
       info.id = Str(d, "id");
       info.hash = Str(d, "x");
       info.key = Str(d, "key");
