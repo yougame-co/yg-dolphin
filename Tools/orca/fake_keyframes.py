@@ -6,17 +6,15 @@
 # tests: python3 Tools/orca/fake_keyframes.py <port>, then
 # ORCA_TEST_KEYFRAME_SERVER=http://127.0.0.1:<port> ./Binaries/Tests/tests --gtest_filter='OrcaKeyframe*'
 #
-#   PUT    /api/orca/keyframes/<room>/<id>         Authorization: Ticket good; 413 above LIMIT bytes
-#   POST   /api/orca/keyframes/<room>/<id>/upload  -> {"url": "http://127.0.0.1:<port>/direct/<room>/<id>"}
-#   PUT    /direct/<room>/<id>                     (the presigned upload: no Authorization)
-#   GET    /api/orca/keyframes/<room>/<id>
+#   PUT    /api/orca/keyframes/<room>/<id>   Authorization: Ticket good; X-Orca-Frame, X-Orca-Hash;
+#                                            409 {"code": "exists"} for an id already there
+#   GET    /api/orca/keyframes/<room>/<id>   404 {"code": "gone"} when absent
 #   DELETE /api/orca/keyframes/<room>/<id>
-# A ticket other than "good" gets 401. Room "flaky" answers 503 to every other request.
+# Any other ticket gets 401 {"code": "ticket"}. Room "flaky" answers 503 to every other request.
 import json
 import sys
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-LIMIT = 1 << 20
 store = {}
 flaky = {"n": 0}
 
@@ -43,10 +41,8 @@ class Handler(BaseHTTPRequestHandler):
             if flaky["n"] % 2 == 1:
                 self.reply(503, b'{"error":"busy"}')
                 return False
-        if self.path.startswith("/direct/"):
-            return True
         if self.headers.get("Authorization") != "Ticket good":
-            self.reply(401, b'{"error":"Bad or expired ticket"}')
+            self.reply(401, b'{"error":"Bad or expired ticket","code":"ticket"}')
             return False
         return True
 
@@ -59,21 +55,13 @@ class Handler(BaseHTTPRequestHandler):
             return
         p = self.parts()
         data = self.body()
-        if p[0] == "direct":
-            store[(p[1], p[2])] = data
-            return self.reply(200, b"{}")
-        if len(data) > LIMIT:
-            return self.reply(413, b'{"error":"too large"}')
+        frame, digest = self.headers.get("X-Orca-Frame"), self.headers.get("X-Orca-Hash", "")
+        if not frame or len(digest) != 16 or not p[4].endswith("-" + digest[:8]):
+            return self.reply(400, b'{"error":"bad keyframe headers","code":"bad_request"}')
+        if (p[3], p[4]) in store:
+            return self.reply(409, b'{"error":"That keyframe is already stored","code":"exists"}')
         store[(p[3], p[4])] = data
         self.reply(200, json.dumps({"id": p[4], "size": len(data)}).encode())
-
-    def do_POST(self):
-        if not self.check():
-            return
-        p = self.parts()
-        self.body()
-        url = "http://127.0.0.1:%d/direct/%s/%s" % (self.server.server_port, p[3], p[4])
-        self.reply(200, json.dumps({"url": url}).encode())
 
     def do_GET(self):
         if not self.check():
@@ -81,7 +69,7 @@ class Handler(BaseHTTPRequestHandler):
         p = self.parts()
         data = store.get((p[3], p[4]))
         if data is None:
-            return self.reply(404, b'{"error":"no such keyframe"}')
+            return self.reply(404, b'{"error":"That keyframe is gone","code":"gone"}')
         self.reply(200, data, "application/octet-stream")
 
     def do_DELETE(self):
@@ -89,7 +77,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         p = self.parts()
         existed = store.pop((p[3], p[4]), None) is not None
-        self.reply(204 if existed else 404)
+        self.reply(200 if existed else 404, b"{}")
 
 
 ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), Handler).serve_forever()

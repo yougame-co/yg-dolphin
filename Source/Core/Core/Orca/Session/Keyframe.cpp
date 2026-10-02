@@ -12,6 +12,9 @@
 #include <thread>
 
 #include <curl/curl.h>
+#include <mbedtls/ctr_drbg.h>
+#include <mbedtls/entropy.h>
+#include <mbedtls/gcm.h>
 #include <fmt/format.h>
 #include <picojson.h>
 #include <xxh3.h>
@@ -273,6 +276,103 @@ bool UnpackKeyframe(const std::vector<u8>& blob, int* frame, Rollback::MachineIm
   return r.AtEnd();
 }
 
+namespace
+{
+constexpr size_t GCM_IV = 12;
+constexpr size_t GCM_TAG = 16;
+
+std::string Aad(int frame)
+{
+  return fmt::format("orca-keyframe-{}", frame);
+}
+
+bool RandomBytes(u8* out, size_t size)
+{
+  mbedtls_entropy_context entropy;
+  mbedtls_ctr_drbg_context drbg;
+  mbedtls_entropy_init(&entropy);
+  mbedtls_ctr_drbg_init(&drbg);
+  static constexpr char personal[] = "orca-keyframe";
+  const bool ok =
+      mbedtls_ctr_drbg_seed(&drbg, mbedtls_entropy_func, &entropy,
+                            reinterpret_cast<const unsigned char*>(personal), sizeof(personal)) ==
+          0 &&
+      mbedtls_ctr_drbg_random(&drbg, out, size) == 0;
+  mbedtls_ctr_drbg_free(&drbg);
+  mbedtls_entropy_free(&entropy);
+  return ok;
+}
+
+bool KeyFromHex(const std::string& hex, u8 key[32])
+{
+  if (hex.size() != 64)
+    return false;
+  for (size_t i = 0; i < 32; ++i)
+  {
+    unsigned value = 0;
+    for (size_t k = 0; k < 2; ++k)
+    {
+      const char c = hex[i * 2 + k];
+      const int digit = c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
+      if (digit < 0)
+        return false;
+      value = value * 16 + static_cast<unsigned>(digit);
+    }
+    key[i] = static_cast<u8>(value);
+  }
+  return true;
+}
+}  // namespace
+
+bool EncryptKeyframe(int frame, std::vector<u8>* blob, std::string* key_hex)
+{
+  u8 key[32], iv[GCM_IV];
+  if (!RandomBytes(key, sizeof(key)) || !RandomBytes(iv, sizeof(iv)))
+    return false;
+  std::vector<u8> out(GCM_IV + blob->size() + GCM_TAG);
+  std::copy(iv, iv + GCM_IV, out.begin());
+  const std::string aad = Aad(frame);
+  mbedtls_gcm_context gcm;
+  mbedtls_gcm_init(&gcm);
+  const bool ok =
+      mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key, 256) == 0 &&
+      mbedtls_gcm_crypt_and_tag(&gcm, MBEDTLS_GCM_ENCRYPT, blob->size(), iv, GCM_IV,
+                                reinterpret_cast<const unsigned char*>(aad.data()), aad.size(),
+                                blob->data(), out.data() + GCM_IV, GCM_TAG,
+                                out.data() + GCM_IV + blob->size()) == 0;
+  mbedtls_gcm_free(&gcm);
+  if (!ok)
+    return false;
+  key_hex->clear();
+  for (u8 b : key)
+    *key_hex += fmt::format("{:02x}", b);
+  *blob = std::move(out);
+  return true;
+}
+
+bool DecryptKeyframe(int frame, const std::string& key_hex, std::vector<u8>* blob)
+{
+  u8 key[32];
+  if (!KeyFromHex(key_hex, key) || blob->size() < GCM_IV + GCM_TAG)
+    return false;
+  const size_t length = blob->size() - GCM_IV - GCM_TAG;
+  std::vector<u8> out(length);
+  const std::string aad = Aad(frame);
+  mbedtls_gcm_context gcm;
+  mbedtls_gcm_init(&gcm);
+  const bool ok =
+      mbedtls_gcm_setkey(&gcm, MBEDTLS_CIPHER_ID_AES, key, 256) == 0 &&
+      mbedtls_gcm_auth_decrypt(&gcm, length, blob->data(), GCM_IV,
+                               reinterpret_cast<const unsigned char*>(aad.data()), aad.size(),
+                               blob->data() + GCM_IV + length, GCM_TAG, blob->data() + GCM_IV,
+                               out.data()) == 0;
+  mbedtls_gcm_free(&gcm);
+  if (!ok)
+    return false;
+  *blob = std::move(out);
+  return true;
+}
+
 u64 NandHash(const std::vector<u8>& data)
 {
   return XXH3_64bits(data.data(), data.size());
@@ -385,9 +485,9 @@ private:
 };
 
 // YouGame's keyframe endpoint (ORCA.md, "Keyframe store"): PUT, GET and DELETE on
-// <store_url>/<id> with "Authorization: Ticket <room ticket>". A body too large for the site
-// (HTTP 413) goes straight to storage through a presigned URL from POST <store_url>/<id>/upload.
-// Network errors, 429 and 5xx are retried with backoff; other refusals are final.
+// <store_url>/<id> with "Authorization: Ticket <room ticket>". A 401 with code "ticket" gets a newly
+// minted ticket; network errors, 429 and 5xx are retried with backoff; other refusals are final. A
+// PUT answered 409 "exists" already landed (an earlier try whose reply was lost).
 class HttpKeyframeStore final : public KeyframeStore
 {
 public:
@@ -403,32 +503,13 @@ public:
   {
     return WithRetries(error, [&](const std::string& ticket, const std::string& base,
                                   Result* result) {
-      const std::vector<std::string> headers = {
-          "Authorization: Ticket " + ticket, "Content-Type: application/octet-stream",
-          fmt::format("X-Orca-Frame: {}", info.frame), "X-Orca-Hash: " + info.hash};
-      *result = Request("PUT", base + "/" + info.id, headers, &data, nullptr, nullptr);
-      if (result->status != 413)
-        return;
-      // Too large for the site's request limit: straight to storage.
-      std::vector<u8> reply;
-      static const std::vector<u8> no_body;
-      *result = Request("POST", base + "/" + info.id + "/upload",
+      *result = Request("PUT", base + "/" + info.id,
                         {"Authorization: Ticket " + ticket,
-                         fmt::format("X-Orca-Size: {}", data.size()),
+                         "Content-Type: application/octet-stream",
                          fmt::format("X-Orca-Frame: {}", info.frame), "X-Orca-Hash: " + info.hash},
-                        &no_body, &reply, nullptr);
-      if (result->status != 200)
-        return;
-      const std::string url = PresignedUrl(reply);
-      if (url.empty())
-      {
-        result->status = 0;
-        result->error = "no upload address in YouGame's reply";
-        result->final = true;
-        return;
-      }
-      *result = Request("PUT", url, {"Content-Type: application/octet-stream"}, &data, nullptr,
-                        nullptr);
+                        &data, nullptr, nullptr);
+      if (result->status == 409 && result->code == "exists")
+        result->status = 200;
     });
   }
 
@@ -477,6 +558,7 @@ private:
   {
     long status = 0;  // 0: no HTTP response
     std::string error;
+    std::string code;  // YouGame's {"code"} in a refusal
     bool final = false;  // not worth retrying
   };
 
@@ -485,14 +567,16 @@ private:
   bool WithRetries(std::string* error,
                    const std::function<void(const std::string&, const std::string&, Result*)>& op)
   {
+    bool fresh = false;
     for (int attempt = 0; attempt < ATTEMPTS; ++attempt)
     {
-      if (attempt > 0)
+      if (attempt > 0 && !fresh)
         std::this_thread::sleep_for(std::chrono::milliseconds(500 << (attempt - 1)));
       std::string ticket, base, ticket_error;
-      if (!m_tickets || !m_tickets(&ticket, &base, &ticket_error))
+      if (!m_tickets || !m_tickets(fresh, &ticket, &base, &ticket_error))
       {
         *error = "no ticket: " + ticket_error;
+        fresh = false;
         continue;
       }
       Result result;
@@ -505,30 +589,22 @@ private:
       *error = result.status ? fmt::format("HTTP {}{}{}", result.status,
                                            result.error.empty() ? "" : ": ", result.error) :
                                result.error;
-      // A refusal (bad ticket, wrong room, too large, gone) stays a refusal; 429 and 5xx and the
-      // network may pass. A 401 gets one more try with a new ticket.
-      const bool retry = !result.final &&
-                         (result.status == 0 || result.status == 429 || result.status >= 500 ||
-                          (result.status == 401 && attempt == 0));
+      // An expired or unknown ticket: once more with a new one.
+      if (result.status == 401 && result.code == "ticket" && !fresh)
+      {
+        fresh = true;
+        continue;
+      }
+      fresh = false;
+      // A refusal (wrong room, too large, gone, a full room) stays a refusal; 429 and 5xx and the
+      // network may pass.
+      const bool retry = !result.final && (result.status == 0 || result.status == 429 ||
+                                           result.status >= 500);
       if (!retry)
         return false;
       WARN_LOG_FMT(NETPLAY, "Orca keyframe: {}; trying again", *error);
     }
     return false;
-  }
-
-  static std::string PresignedUrl(const std::vector<u8>& reply)
-  {
-    picojson::value json;
-    const std::string text(reply.begin(), reply.end());
-    if (!picojson::parse(json, text).empty() || !json.is<picojson::object>())
-      return {};
-    const auto& o = json.get<picojson::object>();
-    const auto it = o.find("url");
-    if (it == o.end() || !it->second.is<std::string>())
-      return {};
-    const std::string& url = it->second.get<std::string>();
-    return url.starts_with("https://") || url.starts_with("http://127.0.0.1:") ? url : "";
   }
 
   struct Transfer
@@ -599,12 +675,6 @@ private:
       curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE,
                        static_cast<curl_off_t>(upload ? upload->size() : 0));
     }
-    else if (std::string_view(method) == "POST")
-    {
-      curl_easy_setopt(curl, CURLOPT_POST, 1L);
-      curl_easy_setopt(curl, CURLOPT_POSTFIELDSIZE, 0L);
-      curl_easy_setopt(curl, CURLOPT_POSTFIELDS, "");
-    }
     else if (std::string_view(method) != "GET")
     {
       curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, method);
@@ -623,9 +693,17 @@ private:
     }
     else if (!(result.status >= 200 && result.status < 300) && !error_body.empty())
     {
-      // YouGame's refusals are {"error": "..."}: keep the sentence for the log.
-      result.error.assign(error_body.begin(),
-                          error_body.begin() + std::min<size_t>(error_body.size(), 200));
+      // YouGame's refusals are {"error": "...", "code": "..."}.
+      picojson::value json;
+      const std::string text(error_body.begin(), error_body.end());
+      if (picojson::parse(json, text).empty() && json.is<picojson::object>())
+      {
+        const auto& o = json.get<picojson::object>();
+        if (const auto it = o.find("error"); it != o.end() && it->second.is<std::string>())
+          result.error = it->second.get<std::string>().substr(0, 200);
+        if (const auto it = o.find("code"); it != o.end() && it->second.is<std::string>())
+          result.code = it->second.get<std::string>().substr(0, 32);
+      }
     }
     return result;
   }

@@ -556,6 +556,7 @@ struct YouGameRoom::Impl
   // How tickets were minted (set once, before role_known): the dev site and player, and the
   // keyframe store's address from the ticket reply (YouGame's "keyframes", else the default).
   std::string site, dev_player, keyframes_url;
+  std::string current_ticket;  // under mutex
   std::thread bridge_thread, events_thread;
   std::atomic<bool> bridge_done{false};
   std::mutex bridge_mutex;
@@ -791,6 +792,7 @@ struct YouGameRoom::Impl
     keyframes_url = KeyframesUrl(Str(reply, "keyframes"));
     std::lock_guard lock(mutex);
     code = room;
+    current_ticket = *ticket;
     role_known = true;
     return true;
   }
@@ -806,7 +808,7 @@ struct YouGameRoom::Impl
 
   // A fresh ticket for this room (tickets live five minutes; a keyframe goes out much later), for
   // the keyframe store. Any thread, once the room has its first ticket; no side effects.
-  bool FreshTicket(std::string* ticket, std::string* store_url, std::string* error)
+  bool FreshTicket(bool fresh, std::string* ticket, std::string* store_url, std::string* error)
   {
     std::string room;
     {
@@ -817,6 +819,14 @@ struct YouGameRoom::Impl
         return false;
       }
       room = code;
+      // YouGame's keyframe store takes a room's ticket for hours past its expiry: mint another
+      // only when it refused this one.
+      if (!fresh && !current_ticket.empty())
+      {
+        *ticket = current_ticket;
+        *store_url = keyframes_url + "/" + room;
+        return true;
+      }
     }
     picojson::object lobby;
     lobby["version"] = picojson::value(1.0);
@@ -879,6 +889,8 @@ struct YouGameRoom::Impl
       return false;
     }
     *store_url = KeyframesUrl(Str(reply, "keyframes")) + "/" + room;
+    std::lock_guard lock(mutex);
+    current_ticket = *ticket;
     return true;
   }
 
@@ -1261,6 +1273,7 @@ struct YouGameRoom::Impl
           d["id"] = picojson::value(offer->second.id);
           d["n"] = picojson::value(static_cast<double>(offer->second.size));
           d["x"] = picojson::value(offer->second.hash);
+          d["key"] = picojson::value(offer->second.key);
           SendTo(id, d);
         }
       }
@@ -1547,8 +1560,12 @@ struct YouGameRoom::Impl
       const auto size = Int(d, "n", 1, MAX_FRAME);
       info.id = Str(d, "id");
       info.hash = Str(d, "x");
-      if (!frame || !size || info.id.empty() || info.id.size() > 128 || info.hash.size() > 64)
+      info.key = Str(d, "key");
+      if (!frame || !size || info.id.empty() || info.id.size() > 128 || info.hash.size() > 64 ||
+          info.key.size() != 64)
+      {
         return;
+      }
       info.frame = *frame;
       info.size = static_cast<u64>(*size);
       if (peer.keyframe && peer.keyframe->id == info.id)
@@ -1611,9 +1628,10 @@ std::vector<PeerEvent> YouGameRoom::TakePeerEvents()
   return std::exchange(m_impl->events, {});
 }
 
-bool YouGameRoom::FreshTicket(std::string* ticket, std::string* store_url, std::string* error)
+bool YouGameRoom::FreshTicket(bool fresh, std::string* ticket, std::string* store_url,
+                              std::string* error)
 {
-  return m_impl->FreshTicket(ticket, store_url, error);
+  return m_impl->FreshTicket(fresh, ticket, store_url, error);
 }
 
 void YouGameRoom::DropPeer(int seat, const std::string& reason)

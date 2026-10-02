@@ -1,6 +1,7 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <cstdlib>
 #include <random>
 #include <string>
@@ -87,36 +88,78 @@ TEST(OrcaKeyframe, RefusesDamagedAndHostileKeyframes)
   }
 }
 
+// Encryption: the store only ever holds ciphertext; the right key and frame open it, nothing else.
+TEST(OrcaKeyframe, EncryptionRoundTripsAndRefusesTampering)
+{
+  const std::vector<u8> packed = PackKeyframe(77, Image(5, 8192), Nand());
+  std::vector<u8> sealed = packed;
+  std::string key;
+  ASSERT_TRUE(EncryptKeyframe(77, &sealed, &key));
+  EXPECT_EQ(key.size(), 64u);
+  EXPECT_EQ(sealed.size(), packed.size() + 28);
+  EXPECT_EQ(std::search(sealed.begin(), sealed.end(), packed.begin() + 8, packed.begin() + 40),
+            sealed.end());
+  std::string other_key;
+  std::vector<u8> twice = packed;
+  ASSERT_TRUE(EncryptKeyframe(77, &twice, &other_key));
+  EXPECT_NE(key, other_key);
+  EXPECT_NE(twice, sealed);
+
+  std::vector<u8> opened = sealed;
+  ASSERT_TRUE(DecryptKeyframe(77, key, &opened));
+  EXPECT_EQ(opened, packed);
+  opened = sealed;
+  EXPECT_FALSE(DecryptKeyframe(77, other_key, &opened));
+  opened = sealed;
+  EXPECT_FALSE(DecryptKeyframe(78, key, &opened)) << "the frame is authenticated";
+  opened = sealed;
+  opened[opened.size() / 2] ^= 1;
+  EXPECT_FALSE(DecryptKeyframe(77, key, &opened));
+  opened = sealed;
+  EXPECT_FALSE(DecryptKeyframe(77, key.substr(0, 63) + "g", &opened));
+}
+
 // The HTTP store against Tools/orca/fake_keyframes.py (ORCA_TEST_KEYFRAME_SERVER=http://127.0.0.1:<port>):
-// put, get with progress, delete; a body over the site's limit through the presigned upload; retries
-// past 503s; a refused ticket is final.
+// put, get with progress, delete; retries past 503s; a stale ticket refused with code "ticket" is
+// replaced once; a ticket refused again is final; a repeated PUT of the same id counts as done.
 TEST(OrcaKeyframe, HttpStoreAgainstAFakeServer)
 {
   const char* server = std::getenv("ORCA_TEST_KEYFRAME_SERVER");
   if (!server || !*server)
     GTEST_SKIP() << "start Tools/orca/fake_keyframes.py and set ORCA_TEST_KEYFRAME_SERVER";
-  const auto store_for = [&](const std::string& room, const std::string& ticket) {
-    return MakeHttpKeyframeStore([=](std::string* t, std::string* url, std::string*) {
-      *t = ticket;
-      *url = std::string(server) + "/api/orca/keyframes/" + room;
-      return true;
-    });
+  int minted = 0;
+  const auto store_for = [&](const std::string& room, const std::string& cached,
+                             const std::string& fresh_ticket) {
+    return MakeHttpKeyframeStore(
+        [=, &minted](bool fresh, std::string* t, std::string* url, std::string*) {
+          // Like YouGameRoom::FreshTicket: a minted ticket is the cached one from then on.
+          minted += fresh;
+          *t = minted ? fresh_ticket : cached;
+          *url = std::string(server) + "/api/orca/keyframes/" + room;
+          return true;
+        });
   };
   for (const auto& [room, size] : std::vector<std::pair<std::string, size_t>>{
            {"room1", 300000}, {"room1", 3 << 20}, {"flaky", 200000}})
   {
     SCOPED_TRACE(room + " " + std::to_string(size));
-    auto store = store_for(room, "good");
+    // The cached ticket went stale: one refusal, then a new one.
+    minted = 0;
+    auto store = store_for(room, "stale", "good");
     std::vector<u8> blob(size);
     std::mt19937 rng(static_cast<u32>(size));
     for (u8& b : blob)
       b = static_cast<u8>(rng());
-    KeyframeInfo info{1200, "kf-1200-" + std::to_string(size), blob.size(), KeyframeHash(blob)};
+    const std::string hash = KeyframeHash(blob);
+    KeyframeInfo info{1200, "kf-1200-" + hash.substr(0, 8), blob.size(), hash, ""};
     std::string error;
     ASSERT_TRUE(store->Put(info, blob, &error)) << error;
+    EXPECT_EQ(minted, 1);
+    auto good = store_for(room, "good", "good");
+    ASSERT_TRUE(good->Put(info, blob, &error)) << "409 exists is done: " << error;
     int calls = 0;
     u64 last = 0;
-    const auto got = store->Get(
+    const auto got = good->Get(
         info,
         [&](u64 done, u64 total) {
           ++calls;
@@ -130,17 +173,18 @@ TEST(OrcaKeyframe, HttpStoreAgainstAFakeServer)
     EXPECT_EQ(*got, blob);
     EXPECT_GT(calls, 0);
     EXPECT_EQ(last, info.size);
-    store->Delete(info.id);
-    store.reset();  // waits for the delete
-    auto again = store_for(room, "good");
+    good->Delete(info.id);
+    good.reset();  // waits for the delete
+    auto again = store_for(room, "good", "good");
     EXPECT_FALSE(again->Get(info, [](u64, u64) { return true; }, &error));
     EXPECT_NE(error.find("404"), std::string::npos) << error;
   }
-  // A ticket the site refuses: a final answer, not retried for long.
-  auto refused = store_for("room1", "expired");
+  // A ticket the store refuses even when new: final.
+  auto refused = store_for("room1", "bad", "bad");
   std::string error;
   const std::vector<u8> blob(1000, 1);
-  EXPECT_FALSE(refused->Put({1, "kf-1-x", blob.size(), KeyframeHash(blob)}, blob, &error));
+  const std::string hash = KeyframeHash(blob);
+  EXPECT_FALSE(refused->Put({1, "kf-1-" + hash.substr(0, 8), blob.size(), hash, ""}, blob, &error));
   EXPECT_NE(error.find("401"), std::string::npos) << error;
 }
 

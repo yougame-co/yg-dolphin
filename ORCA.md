@@ -114,15 +114,22 @@ host has played.
      (device state and MEM1/MEM2, the same bytes a rollback snapshot holds).
    - It takes the session NAND as a copy-on-write `clonefile` (instant on APFS; elsewhere read at
      the boundary). The NAND travels because rollback snapshots keep only a journal mark.
+   - NAND files the game's boot writes whatever the player does (`BootNandFrame` in the profile:
+     Brawl's 38.7 MB of `/tmp` packs by frame 1800, byte-identical with or without input) travel
+     as XXH3 hashes only. The host hashes its NAND at that frame. The joiner runs its own boot to
+     that frame, unthrottled and unseen, while it downloads, then fills those files in from its
+     own NAND, refusing the keyframe if one is missing or differs.
    - A thread packs everything, compresses it with zstd level 3 (long-distance matching, 128 MB
-     window), and stores it through a `KeyframeStore`. The game goes on meanwhile.
+     window), encrypts it with AES-256-GCM under a fresh random key, and stores it through a
+     `KeyframeStore`. The game goes on meanwhile.
+   - The key travels only in the room's `kf` message, so the store holds ciphertext.
    - A keyframe less than 30 s old is reused; each one serves one joiner, who deletes it after
      loading.
 3. **Join.**
    - The host starts a rollback session at its next frame J. It sends the friend the keyframe's
      id, frame K, size and hash.
-   - The friend's Orca boots the same disc and profile, then waits at its first boundary
-     (`orca state joining <percent>`; the host shows `orca state friend-joining`).
+   - The friend's Orca boots the same disc and profile, runs its boot to `BootNandFrame`, then
+     waits (`orca state joining <percent>`; the host shows `orca state friend-joining`).
    - It downloads and checks the keyframe, replaces its own temporary session NAND with the
      host's (`ReloadFst`), and loads the state with `SnapshotRing::LoadImage`.
    - It then runs the host's logged pads for [K, J) (history in packets, runs of equal pads sent
@@ -138,6 +145,13 @@ host has played.
    - A friend whose connection drops is unplugged by the host after its last input, rolling back
      the frames that guessed otherwise.
    - A friend who stops answering is dropped after 10 s.
+   - Why a friend went reaches both sides:
+     - The host prints `orca state friend-left <left|desync|stalled|network>` and keeps playing.
+     - A friend whose own session saw a desync leaves with `bye desync`.
+     - A friend the host unplugs for a desync (or for going quiet) gets a `drop` message and
+       ends with `orca error desync` (or `peer_left`).
+     - A friend whose host left ends with `peer_left`, or with `desync` when the host's bye
+       said so.
    - With nobody else plugged in, the host hands its log back and plays solo, with no input delay.
    - A third or fourth friend goes the same way on seats 3-4. Only two players have been tested.
 6. **Rooms.**
@@ -181,7 +195,9 @@ local keyframe folder.
   should come from history only.
 - A player dropped abruptly could already have its last inputs confirmed by another player but
   not by the host.
-- There is no YouGame keyframe endpoint yet (spec below), so an app build can't serve a joiner.
+- Tested against prod rooms with a local keyframe folder. The YouGame endpoint (below) is
+  exercised against `Tools/orca/fake_keyframes.py`; a prod run needs a signed-in player on a live
+  Orca listing (`Tools/orca/fake_bridge.py` with `FAKE_COOKIE` and `FAKE_TICKET_SLUG`).
 - Desktop only: the NAND capture is an APFS clone on macOS and a synchronous read elsewhere
   (about 55 MB).
 
@@ -209,47 +225,70 @@ Brawl rev 2, `bf-mario-link-results.txt`, Null video, muted, Apple Silicon under
   125-160 ms on a thread (29-38 MB); unpack 64-99 ms; NAND plus state load 17-77 ms.
 - Replay unthrottled with rendering skipped: about 2,100 frames/s in the boot, 1,200 in menus and
   540 in fights.
+- With NAND references (2026-10-01):
+  - keyframes are 25.8 MB at frame 3,644 (was 37.7) and 30.3 MB mid-fight (was 52.8), with
+    unchanged compress times (120-130 ms);
+  - joins took 1.4-1.6 s from the first frame, 0.9 s of it the joiner's own boot to frame 1,800,
+    which overlaps the download over a network.
+- zstd levels on a mid-fight keyframe without references (159.6 MB raw, long-distance matching,
+  all cores):
 
-### Keyframe store: YouGame endpoint (to build, YouGame repo)
+  | Level | Size | Compress |
+  |---|---|---|
+  | 1 | 50.1 MB | 131 ms |
+  | 3 | 48.7 MB | 135 ms |
+  | 7 | 47.7 MB | 209 ms |
+  | 12 | 46.5 MB | 758 ms |
+  | 19 | 42.4 MB | 10.6 s |
 
-Test builds use `ORCA_TEST_KEYFRAME_DIR` (`LocalKeyframeStore`). The real store is a site
-endpoint over a **private** R2 bucket; the games bucket is public.
+  Decompression is about 90 ms at every level. Higher levels don't pay: what's left is already
+  compressed game data. Per section at level 3: MEM2 24.0 MB, MEM1 6.4 MB, `/tmp` 26.4 MB, and the
+  rest under 0.2 MB.
+- Uploading while compressing would save at most the compress time, 0.13-0.17 s, against
+  6-10 s of upload at 25 Mbit/s for 20-30 MB. It also needs a multipart upload, since R2 takes a
+  body of known length. Not worth it; leaving `/tmp` out halved the upload instead.
 
-- **Auth:** the room ticket. Orca already holds it: the bridge's `mpTicket` or the dev ticket.
-  The site verifies it with `ROOMS_SECRET` and takes `game`, `room` and `player` from it.
-- **`PUT /api/orca/keyframes/<room>/<id>`**
-  - Headers: `Authorization: Ticket <ticket>`, `Content-Length` of at most 128 MB, and
-    `X-Orca-Frame` and `X-Orca-Hash` (XXH3-64 hex of the body).
-  - Stores `orca-keyframes/<game>/<room>/<id>` with `{frame, hash, player, expires}` metadata
-    and returns `{id, size}`.
-  - `id` is `kf-<frame>-<hash8>`. A room keeps at most 2 objects, and a third PUT deletes the
-    oldest.
-  - Rate limit: 6 PUTs a minute per ticket player.
-- **Large bodies:** the Workers request-body limit is 100 MB, and keyframes are 30-55 MB today. If
-  that limit gets in the way, `POST /api/orca/keyframes/<room>/<id>/upload` returns a presigned
-  R2 PUT URL (5 min, exact `Content-Length`), as `api/native/upload` does.
-- **`GET /api/orca/keyframes/<room>/<id>`**
-  - Auth: a ticket for the same game and room. Any member of the room may fetch.
-  - Streams the object with `Content-Length` (Orca reports progress from it) and
-    `X-Orca-Hash`. Large bodies go through the `worker.ts` handoff (the OpenNext R2 stream memory
-    limit).
-- **`DELETE` the same path:** the joiner calls it after loading, the host when it replaces an
-  unused keyframe or leaves.
-- **Cleanup:** an R2 lifecycle rule deletes `orca-keyframes/` objects older than 24 h.
-- **Optional:** the host encrypts each keyframe with AES-GCM under a key sent only in the room's
-  `kf` message, so the site never reads the save. mbedTLS is in the tree.
+### Keyframe store: YouGame endpoint (live since 2026-10-01, YouGame PR #398)
+
+`HttpKeyframeStore` in `Orca/Session/Keyframe.cpp`. Tests use `ORCA_TEST_KEYFRAME_DIR` instead:
+the store refuses dev tickets.
+
+- **Address:** `https://yougame.co/api/orca/keyframes/<room>/<id>`. `id` is
+  `kf-<frame>-<first 8 hex of XXH3-64 of the body>`. `ORCA_SITE` replaces the site, and a ticket
+  reply's `keyframes` URL on the same site wins.
+- **Auth:** `Authorization: Ticket <ticket>` with the room's mpTicket ticket, from a signed-in
+  player of a live Orca listing.
+  - The store takes tickets up to 6 h past expiry, so Orca reuses the room's ticket.
+  - On 401 `{"code": "ticket"}` it mints a new one for the same room
+    (`YouGameRoom::FreshTicket`) and tries once more.
+- **PUT:**
+  - `Content-Length`, at most 128 MB; the edge refuses over 100 MB, and keyframes are 26-53 MB.
+  - `X-Orca-Frame`, and `X-Orca-Hash` (16 hex starting with the id's 8). The body is the
+    encrypted keyframe.
+  - 200 `{id, size}`. 409 `exists` means an earlier try landed, and counts as done.
+  - 409 `room_full`: another player holds both of the room's slots.
+  - 6 PUTs a minute per account.
+- **GET:** streams the body with `Content-Length` (progress for `orca state joining`). Orca checks
+  the size and the hash, then decrypts. 404 `gone` means it expired.
+- **DELETE:** the joiner deletes after loading, off the CPU thread, as best effort. The host
+  deletes a keyframe nobody took when it replaces it or leaves.
+- **Retries:** network errors, 429 and 5xx retry 4 times with 0.5/1/2 s backoff. Every other
+  refusal is final. Errors are `{error, code}`.
 
 ### Room messages (relayed `msg`, `Orca/Session/YouGameRoom.cpp`)
 
 - `hello {c: key, r: heard you, h: is host}`: sent until answered. A mismatched key keeps a
   joiner out.
-- `kf {f, id, n, x}`: host to a joiner's connection, every second until its first packet arrives.
+- `kf {f, id, n, x, key}`: host to a joiner's connection, every second until its first packet
+  arrives. `key` is the keyframe's AES-256-GCM key (64 hex).
+- `drop {r}`: host to a joiner it unplugged: `desync`, `stalled` or `network`.
 - `p`: session packets, broadcast once to the room. Fields beyond the 2-player ones:
   - `ro`: roster, `[plug, unplug, live]` per seat, with -1 for never;
   - `ha`: history acknowledgement;
   - `ht`, `hf`, `hp`: history seat, first frame, and `[count, 4 pads hex]` runs;
   - `lv`: leaving.
-- `bye {r}`: why a player leaves.
+- `bye {r}`: why a player leaves, `desync` or `stalled` (anything else is ignored). It is broadcast
+  before the leave, so the room's leave event carries it.
 
 ## Embedding
 

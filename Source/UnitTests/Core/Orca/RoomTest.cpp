@@ -273,7 +273,8 @@ TEST(OrcaLive, TwoRoomsPlayEachOther)
   EXPECT_TRUE(a_seen->host);
   EXPECT_EQ(a.Code(), code);
 
-  KeyframeInfo offer{120, "kf-test", 1234, "00112233aabbccdd"};
+  KeyframeInfo offer{120, "kf-test", 1234, "00112233aabbccdd",
+                     "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"};
   a.OfferKeyframe(1, offer);
   std::optional<PeerEvent> offered;
   for (int i = 0; i < 500 && !offered; ++i)
@@ -290,6 +291,7 @@ TEST(OrcaLive, TwoRoomsPlayEachOther)
   EXPECT_EQ(offered->keyframe.frame, offer.frame);
   EXPECT_EQ(offered->keyframe.size, offer.size);
   EXPECT_EQ(offered->keyframe.hash, offer.hash);
+  EXPECT_EQ(offered->keyframe.key, offer.key);
 
   Packet sent = Sample();
   sent.seat = a.Seat();

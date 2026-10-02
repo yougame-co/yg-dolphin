@@ -53,6 +53,12 @@ bool UnpackKeyframe(const std::vector<u8>& blob, int* frame, Rollback::MachineIm
                     std::vector<NandEntry>* nand);
 std::string KeyframeHash(const std::vector<u8>& blob);
 
+// AES-256-GCM over a packed keyframe, so YouGame's store only ever holds ciphertext: a fresh random
+// key per keyframe, travelling only in the room's `kf` message to the joiner (KeyframeInfo::key,
+// 64 hex). The body is IV (12) | ciphertext | tag (16); the frame is authenticated with it.
+bool EncryptKeyframe(int frame, std::vector<u8>* blob, std::string* key_hex);
+bool DecryptKeyframe(int frame, const std::string& key_hex, std::vector<u8>* blob);
+
 // Where keyframes travel: the host puts one, a joining friend gets it, and it's deleted once loaded.
 // Put and Get block (call them on a thread of their own); progress reports bytes done of total, and
 // returning false from it aborts. Delete never blocks.
@@ -67,9 +73,10 @@ public:
   virtual void Delete(const std::string& id) = 0;
 };
 
-// A fresh room ticket and the store's address for the room (YouGameRoom::FreshTicket).
-using TicketSource =
-    std::function<bool(std::string* ticket, std::string* store_url, std::string* error)>;
+// A room ticket (with `fresh`, a newly minted one) and the store's address for the room
+// (YouGameRoom::FreshTicket).
+using TicketSource = std::function<bool(bool fresh, std::string* ticket, std::string* store_url,
+                                        std::string* error)>;
 
 // ORCA_TEST_KEYFRAME_DIR: a folder both processes on this machine share (tests). Otherwise
 // YouGame's keyframe endpoint (ORCA.md, "Keyframe store"), authorized by room tickets from

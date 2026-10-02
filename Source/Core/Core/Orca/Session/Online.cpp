@@ -186,7 +186,7 @@ bool RoomEnded()
   return !room || room->GetState() == Net::RoomState::Ended;
 }
 
-bool FreshTicket(std::string* ticket, std::string* store_url, std::string* error)
+bool FreshTicket(bool fresh, std::string* ticket, std::string* store_url, std::string* error)
 {
   const auto room = Room();
   if (!room)
@@ -194,7 +194,7 @@ bool FreshTicket(std::string* ticket, std::string* store_url, std::string* error
     *error = "not in a room";
     return false;
   }
-  return room->FreshTicket(ticket, store_url, error);
+  return room->FreshTicket(fresh, ticket, store_url, error);
 }
 
 void DropPeer(int seat, const std::string& reason)

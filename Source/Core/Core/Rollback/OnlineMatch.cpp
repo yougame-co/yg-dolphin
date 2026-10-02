@@ -296,9 +296,12 @@ void StartKeyframe(Core::System& system, Match& match, int frame)
     raw->raw_size = raw_size;
     std::vector<u8> blob =
         raw->error.empty() ? Orca::Net::PackKeyframe(raw->frame, image, entries) : std::vector<u8>{};
-    raw->pack_ms = MsSince(pack_start);
     if (raw->error.empty() && blob.empty())
       raw->error = "compression failed";
+    // The store sees ciphertext only; the key goes to the joiner inside the room.
+    if (raw->error.empty() && !Orca::Net::EncryptKeyframe(raw->frame, &blob, &raw->info.key))
+      raw->error = "encryption failed";
+    raw->pack_ms = MsSince(pack_start);
     if (raw->error.empty())
     {
       raw->info.frame = raw->frame;
@@ -548,7 +551,7 @@ void StartDownload(Match& match, const Orca::Net::KeyframeInfo& info)
   raw->thread = std::thread([raw, store] {
     const auto start = Clock::now();
     std::string error;
-    const auto blob = store->Get(
+    auto blob = store->Get(
         raw->info,
         [raw](u64 done, u64 total) {
           raw->percent = static_cast<int>(done * 100 / std::max<u64>(total, 1));
@@ -562,14 +565,16 @@ void StartDownload(Match& match, const Orca::Net::KeyframeInfo& info)
       raw->done = true;
       return;
     }
-    if (Orca::Net::KeyframeHash(*blob) != raw->info.hash)
+    std::vector<u8> plain = std::move(*blob);
+    if (Orca::Net::KeyframeHash(plain) != raw->info.hash ||
+        !Orca::Net::DecryptKeyframe(raw->info.frame, raw->info.key, &plain))
     {
       raw->error = "the keyframe arrived damaged";
       raw->done = true;
       return;
     }
     const auto unpack_start = Clock::now();
-    raw->ok = Orca::Net::UnpackKeyframe(*blob, &raw->frame, &raw->image, &raw->nand) &&
+    raw->ok = Orca::Net::UnpackKeyframe(plain, &raw->frame, &raw->image, &raw->nand) &&
               raw->frame == raw->info.frame;
     raw->unpack_ms = MsSince(unpack_start);
     if (!raw->ok)
@@ -759,8 +764,8 @@ std::optional<int> OnBoundary(Core::System& system,
       });
     }
     match.store = Orca::Net::MakeKeyframeStore(
-        [](std::string* ticket, std::string* store_url, std::string* error) {
-          return Orca::Online::FreshTicket(ticket, store_url, error);
+        [](bool fresh, std::string* ticket, std::string* store_url, std::string* error) {
+          return Orca::Online::FreshTicket(fresh, ticket, store_url, error);
         });
     if (const std::string leave = Orca::GetEnv("ORCA_TEST_LEAVE_AT"); !leave.empty())
       match.leave_at = std::atoi(leave.c_str());

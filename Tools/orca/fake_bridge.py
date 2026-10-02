@@ -14,6 +14,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 ROOM = os.environ["FAKE_ROOM"]; TOKEN = os.environ.get("FAKE_TOKEN", "t0ken")
 SLUG = os.environ.get("FAKE_SLUG", "orca-test"); LOG = os.environ["FAKE_LOG"]
+# FAKE_COOKIE (a signed-in session's cookie header) and FAKE_TICKET_SLUG (a live Orca listing): real
+# tickets, as the app gets them. FAKE_NO_LEAVE=1: the page never sends Leave.
+COOKIE = os.environ.get("FAKE_COOKIE", ""); TICKET_SLUG = os.environ.get("FAKE_TICKET_SLUG", "")
+SITE = os.environ.get("FAKE_SITE", "https://yougame.co"); NO_LEAVE = os.environ.get("FAKE_NO_LEAVE") == "1"
 state = {"leave_at": None, "rooms": 0}
 lock = threading.Lock()
 
@@ -35,10 +39,18 @@ class H(BaseHTTPRequestHandler):
         if t == "hello": return self.reply(200, {"ok": True, "result": {"room": ROOM}})
         if t == "mpTicket":
             pid = "orcabr-" + "".join(random.choice(string.ascii_lowercase) for _ in range(12))
-            body = {"dev": "orca-bridge-test", "player_id": pid, "name": "Bridge", "players": msg["players"],
-                    "mode": msg["mode"], "room": msg["room"], "lobby": msg["lobby"]}
-            req = urllib.request.Request("https://yougame.co/api/multiplayer/ticket", data=json.dumps(body).encode(),
-                headers={"content-type": "application/json", "user-agent": "Mozilla/5.0 (Macintosh) OrcaTest"})
+            headers = {"content-type": "application/json", "user-agent": "Mozilla/5.0 (Macintosh) OrcaTest"}
+            if COOKIE:
+                # A signed-in player's ticket for a real listing (the keyframe store refuses dev tickets).
+                body = {"slug": TICKET_SLUG, "player_id": pid, "players": msg["players"], "mode": msg["mode"],
+                        "room": msg["room"], "lobby": msg["lobby"]}
+                headers["cookie"] = COOKIE
+                headers["origin"] = SITE
+            else:
+                body = {"dev": "orca-bridge-test", "player_id": pid, "name": "Bridge", "players": msg["players"],
+                        "mode": msg["mode"], "room": msg["room"], "lobby": msg["lobby"]}
+            req = urllib.request.Request(SITE + "/api/multiplayer/ticket", data=json.dumps(body).encode(),
+                headers=headers)
             res = json.loads(urllib.request.urlopen(req, timeout=15).read())
             log({"ticket_for": msg["room"], "mode": msg["mode"]})
             return self.reply(200, {"ok": True, "result": res})
@@ -46,7 +58,7 @@ class H(BaseHTTPRequestHandler):
             log({"mpRoom": msg})
             with lock:
                 state["rooms"] += 1
-                if msg.get("ready") and state["leave_at"] is None:
+                if msg.get("ready") and state["leave_at"] is None and not NO_LEAVE:
                     state["leave_at"] = time.time() + 2
             return self.reply(200, {"ok": True, "result": {}})
         return self.reply(200, {"ok": False, "error": "unknown type " + str(t)})

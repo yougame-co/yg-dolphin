@@ -39,6 +39,8 @@ struct KeyframeInfo
   std::string id;
   u64 size = 0;
   std::string hash;
+  // The keyframe's AES-256-GCM key (64 hex), only ever in the room's `kf` message.
+  std::string key;
 };
 
 // Something another player in the room did.
@@ -90,9 +92,10 @@ public:
   // Host: tell `seat`'s player it was unplugged and why ("desync", "stalled", "network"), so its
   // own report says the same. Its room ends with that code.
   void DropPeer(int seat, const std::string& reason);
-  // A fresh ticket for this room, and the keyframe store's address for it (YouGame's
-  // ".../api/orca/keyframes/<room>"). Any thread; blocks on an HTTP request.
-  bool FreshTicket(std::string* ticket, std::string* store_url, std::string* error);
+  // A ticket for this room (with `fresh`, a newly minted one: the store refused the last), and the
+  // keyframe store's address for it (".../api/orca/keyframes/<room>"). Any thread; minting blocks
+  // on an HTTP request.
+  bool FreshTicket(bool fresh, std::string* ticket, std::string* store_url, std::string* error);
   // The room code in use (for showing and sharing), once known.
   std::string Code() const;
   // A line for the UI or log: what the room is doing, or why it ended.
