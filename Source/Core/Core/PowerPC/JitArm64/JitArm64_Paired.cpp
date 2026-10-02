@@ -353,6 +353,16 @@ void JitArm64::ps_arith(UGeckoInstruction inst)
       BL(GetAsmRoutines()->ps_madd_eft);
     }
 
+    // Taken before the accurate-NaN branch, which skips the negation (EmitSignOp).
+    Arm64GPRCache::ScopedARM64Reg negate_gpr = ARM64Reg::INVALID_REG;
+    Arm64FPRCache::ScopedARM64Reg negate_fpr = ARM64Reg::INVALID_REG;
+    if (negate_result)
+    {
+      negate_fpr = fpr.GetScopedReg();
+      if (size == 64)
+        negate_gpr = gpr.GetScopedReg();
+    }
+
     FixupBranch nan_fixup;
     if (m_accurate_nans)
     {
@@ -414,7 +424,7 @@ void JitArm64::ps_arith(UGeckoInstruction inst)
     // PowerPC's nmadd/nmsub perform rounding before the final negation, which is not the case
     // for any of AArch64's FMA instructions, so we negate using a separate instruction.
     if (negate_result)
-      EmitSignOp(SignOp::Negate, size, VD, result_reg, true);
+      EmitSignOp(SignOp::Negate, size, VD, result_reg, true, negate_gpr, negate_fpr);
     else if (result_reg != VD)
       m_float_emit.MOV(VD, result_reg);
 

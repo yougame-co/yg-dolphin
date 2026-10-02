@@ -69,15 +69,15 @@ void JitArm64::Force25BitPrecision(ARM64Reg output, ARM64Reg input)
 // with fnmsubs (inf * 0) as a match starts, and the two players' memory diverged there.
 // size: 32 or 64 (the lanes). packed: Vd and Vn are D (two singles) or Q (two doubles) registers
 // and every lane changes; otherwise only the low lane, and the rest of Vd is zeroed as FNEG did.
-void JitArm64::EmitSignOp(SignOp op, u8 size, ARM64Reg Vd, ARM64Reg Vn, bool packed)
+void JitArm64::EmitSignOp(SignOp op, u8 size, ARM64Reg Vd, ARM64Reg Vn, bool packed,
+                          ARM64Reg scratch_gpr, ARM64Reg scratch_fpr)
 {
   const u64 sign = size == 64 ? 0x8000000000000000ULL : 0x80000000ULL;
   const u64 all = size == 64 ? ~0ULL : 0xFFFFFFFFULL;
   if (!packed)
   {
-    const auto WA = gpr.GetScopedReg();
     const bool wide = size == 64;
-    const ARM64Reg RA = wide ? EncodeRegTo64(WA) : ARM64Reg(WA);
+    const ARM64Reg RA = wide ? EncodeRegTo64(scratch_gpr) : EncodeRegTo32(scratch_gpr);
     const GPRSize gpr_size = wide ? GPRSize::B64 : GPRSize::B32;
     const ARM64Reg FD = wide ? EncodeRegToDouble(Vd) : EncodeRegToSingle(Vd);
     const ARM64Reg FN = wide ? EncodeRegToDouble(Vn) : EncodeRegToSingle(Vn);
@@ -98,13 +98,11 @@ void JitArm64::EmitSignOp(SignOp op, u8 size, ARM64Reg Vd, ARM64Reg Vn, bool pac
     return;
   }
 
-  const auto VM = fpr.GetScopedReg();
-  const ARM64Reg mask = IsQuad(Vd) ? EncodeRegToQuad(VM) : EncodeRegToDouble(VM);
+  const ARM64Reg mask = IsQuad(Vd) ? EncodeRegToQuad(scratch_fpr) : EncodeRegToDouble(scratch_fpr);
   if (size == 64)
   {
-    const auto WA = gpr.GetScopedReg();
-    MOVI2R(EncodeRegTo64(WA), sign);
-    m_float_emit.DUP(64, mask, EncodeRegTo64(WA));
+    MOVI2R(EncodeRegTo64(scratch_gpr), sign);
+    m_float_emit.DUP(64, mask, EncodeRegTo64(scratch_gpr));
   }
   else
   {
@@ -268,6 +266,11 @@ void JitArm64::fp_arith(UGeckoInstruction inst)
       break;
     }
 
+    // Taken before the accurate-NaN branch, which skips the negation (EmitSignOp).
+    Arm64GPRCache::ScopedARM64Reg negate_gpr = ARM64Reg::INVALID_REG;
+    if (negate_result)
+      negate_gpr = gpr.GetScopedReg();
+
     Common::SmallVector<FixupBranch, 4> nan_fixups;
     std::optional<FixupBranch> nan_early_fixup;
     if (m_accurate_nans)
@@ -362,7 +365,8 @@ void JitArm64::fp_arith(UGeckoInstruction inst)
     // PowerPC's nmadd/nmsub perform rounding before the final negation, which is not the case
     // for any of AArch64's FMA instructions, so we negate using a separate instruction.
     if (negate_result)
-      EmitSignOp(SignOp::Negate, IsSingle(VD) ? 32 : 64, VD, result_reg, false);
+      EmitSignOp(SignOp::Negate, IsSingle(VD) ? 32 : 64, VD, result_reg, false, negate_gpr,
+                 ARM64Reg::INVALID_REG);
     else if (result_reg != VD)
       m_float_emit.MOV(EncodeRegToDouble(VD), EncodeRegToDouble(result_reg));
 
@@ -406,6 +410,16 @@ void JitArm64::fp_logic(UGeckoInstruction inst)
   const bool single = fpr.IsSingle(b, !packed);
   const u8 size = single ? 32 : 64;
 
+  // EmitSignOp's scratch registers (every case but fmr).
+  Arm64GPRCache::ScopedARM64Reg sign_gpr = ARM64Reg::INVALID_REG;
+  Arm64FPRCache::ScopedARM64Reg sign_fpr = ARM64Reg::INVALID_REG;
+  if (op10 != 72)
+  {
+    sign_gpr = gpr.GetScopedReg();
+    if (packed)
+      sign_fpr = fpr.GetScopedReg();
+  }
+
   if (packed)
   {
     const RegType type = single ? RegType::Single : RegType::Register;
@@ -417,16 +431,16 @@ void JitArm64::fp_logic(UGeckoInstruction inst)
     switch (op10)
     {
     case 40:
-      EmitSignOp(SignOp::Negate, size, VD, VB, true);
+      EmitSignOp(SignOp::Negate, size, VD, VB, true, sign_gpr, sign_fpr);
       break;
     case 72:
       m_float_emit.ORR(VD, VB, VB);
       break;
     case 136:
-      EmitSignOp(SignOp::NegativeAbs, size, VD, VB, true);
+      EmitSignOp(SignOp::NegativeAbs, size, VD, VB, true, sign_gpr, sign_fpr);
       break;
     case 264:
-      EmitSignOp(SignOp::Abs, size, VD, VB, true);
+      EmitSignOp(SignOp::Abs, size, VD, VB, true, sign_gpr, sign_fpr);
       break;
     default:
       ASSERT_MSG(DYNA_REC, 0, "fp_logic");
@@ -443,16 +457,16 @@ void JitArm64::fp_logic(UGeckoInstruction inst)
     switch (op10)
     {
     case 40:
-      EmitSignOp(SignOp::Negate, size, VD, VB, false);
+      EmitSignOp(SignOp::Negate, size, VD, VB, false, sign_gpr, sign_fpr);
       break;
     case 72:
       m_float_emit.INS(size, VD, 0, VB, 0);
       break;
     case 136:
-      EmitSignOp(SignOp::NegativeAbs, size, VD, VB, false);
+      EmitSignOp(SignOp::NegativeAbs, size, VD, VB, false, sign_gpr, sign_fpr);
       break;
     case 264:
-      EmitSignOp(SignOp::Abs, size, VD, VB, false);
+      EmitSignOp(SignOp::Abs, size, VD, VB, false, sign_gpr, sign_fpr);
       break;
     default:
       ASSERT_MSG(DYNA_REC, 0, "fp_logic");

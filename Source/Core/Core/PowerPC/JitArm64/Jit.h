@@ -395,7 +395,11 @@ protected:
     Abs,
     NegativeAbs,
   };
-  void EmitSignOp(SignOp op, u8 size, Arm64Gen::ARM64Reg Vd, Arm64Gen::ARM64Reg Vn, bool packed);
+  // The caller takes the scratch registers (Arm64GPRCache/Arm64FPRCache::GetScopedReg) before any
+  // branch that skips this, so a register flushed to make room is flushed on every path: a GPR,
+  // and for packed an FPR too.
+  void EmitSignOp(SignOp op, u8 size, Arm64Gen::ARM64Reg Vd, Arm64Gen::ARM64Reg Vn, bool packed,
+                  Arm64Gen::ARM64Reg scratch_gpr, Arm64Gen::ARM64Reg scratch_fpr);
   void Force25BitPrecision(Arm64Gen::ARM64Reg output, Arm64Gen::ARM64Reg input);
 
   // <Fast path fault location, slow path handler location>

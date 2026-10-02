@@ -240,7 +240,8 @@ bool TestFullSnapshots()
 bool TestOverridesActive()
 {
   return TestPads() != 0 || TestSkipRender() || TestNetDelayMs().has_value() ||
-         TestSnapshotEvery() != 0 || TestFullSnapshots();
+         TestSnapshotEvery() != 0 || TestFullSnapshots() ||
+         !GetEnv("ORCA_TEST_FLOAT_CLASS").empty();
 }
 
 const Sram* SessionSram()
