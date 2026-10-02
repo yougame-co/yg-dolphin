@@ -912,14 +912,14 @@ void Session::ReceivePackets()
     // by design: the host's own frame and checksums may be anywhere ahead (the host never sends
     // inputs beyond what the joiner said it can take).
     const int window = MAX_FRAMES_AHEAD + m_config.max_delay;
-    const int far = CatchingUp() ? (1 << 30) : m_frame + window;
+    const int far_limit = CatchingUp() ? (1 << 30) : m_frame + window;
     if (packet.pads.size() > static_cast<size_t>(MAX_PADS_IN_PACKET) || packet.first_frame < 0 ||
         packet.first_frame > m_frame + window ||
         packet.first_frame + static_cast<int>(packet.pads.size()) > m_frame + window + 1 ||
-        packet.current_frame < 0 || packet.current_frame > far ||
-        (packet.checksum_frame && (*packet.checksum_frame < 0 || *packet.checksum_frame > far)) ||
+        packet.current_frame < 0 || packet.current_frame > far_limit ||
+        (packet.checksum_frame && (*packet.checksum_frame < 0 || *packet.checksum_frame > far_limit)) ||
         packet.history.size() > static_cast<size_t>(MAX_HISTORY_IN_PACKET) ||
-        packet.history_first < 0 || packet.history_ack > far)
+        packet.history_first < 0 || packet.history_ack > far_limit)
     {
       Fail(fmt::format("Player {} sent an invalid packet", s + 1));
       return;

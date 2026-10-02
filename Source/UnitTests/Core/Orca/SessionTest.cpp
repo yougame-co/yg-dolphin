@@ -963,28 +963,28 @@ TEST(OrcaSessionDelay, StartsFromMeasuredLatency)
 {
   // Rollback hides latency up to its window (7, less 2 for jitter): only what is beyond it goes
   // into input delay. 50 ms to the relay on both sides: 3 frames one way, all hidden.
-  Match near(Config{}, 3, 0);
-  near.rtt_samples = true;
-  near.Play(1);
-  EXPECT_EQ(near.a->session.Delay(), 2);
-  EXPECT_EQ(near.b->session.Delay(), 2);
+  Match near_match(Config{}, 3, 0);
+  near_match.rtt_samples = true;
+  near_match.Play(1);
+  EXPECT_EQ(near_match.a->session.Delay(), 2);
+  EXPECT_EQ(near_match.b->session.Delay(), 2);
 
   // 150 ms each: 9 frames one way, 4 of them delay and 5 rolled back. One stall at the start (the
   // first packet is 9 frames away, the window 7), none after: the window holds the rest.
-  Match far(Config{}, 9, 0);
-  far.rtt_samples = true;
-  far.Play(1);
-  EXPECT_EQ(far.a->session.Delay(), 4);
-  EXPECT_EQ(far.b->session.Delay(), 4);
-  far.Play(239);
-  ExpectClean(far);
-  for (const Player* p : {far.a.get(), far.b.get()})
+  Match far_match(Config{}, 9, 0);
+  far_match.rtt_samples = true;
+  far_match.Play(1);
+  EXPECT_EQ(far_match.a->session.Delay(), 4);
+  EXPECT_EQ(far_match.b->session.Delay(), 4);
+  far_match.Play(239);
+  ExpectClean(far_match);
+  for (const Player* p : {far_match.a.get(), far_match.b.get()})
   {
     EXPECT_LE(p->session.GetStats().stalls, 1);
     EXPECT_GT(p->session.GetStats().rollbacks, 0);
     EXPECT_LE(p->session.GetStats().deepest_rollback, 5);
   }
-  EXPECT_GT(far.CompareConfirmed(), 200);
+  EXPECT_GT(far_match.CompareConfirmed(), 200);
 
   // A huge round trip is capped at max_delay; after the first seconds, round trips move nothing.
   Match huge(Config{}, 0, 0);
