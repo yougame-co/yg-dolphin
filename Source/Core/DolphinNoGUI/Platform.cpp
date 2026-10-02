@@ -239,11 +239,14 @@ void Platform::ProcessEmbedCommands()
     }
     else if (cmd == "ping")
     {
-      // The online overlay's ping and delay readout (off by default).
+      // The online overlay's ping beside its circle (off until the app asks): "on" the ping, "full"
+      // also the delay and rollbacks per second.
       std::string value;
       in >> value;
-      if (value == "on" || value == "off")
-        Orca::UX::SetStatsVisible(value == "on");
+      if (value == "on" || value == "off" || value == "full")
+        Orca::UX::SetStats(value == "on"   ? Orca::UX::Stats::Ping :
+                           value == "full" ? Orca::UX::Stats::Full :
+                                             Orca::UX::Stats::Off);
     }
     else if (cmd == "test-drop-room" && Orca::GetEnv("ORCA_TEST_COMMANDS") == "1")
     {
