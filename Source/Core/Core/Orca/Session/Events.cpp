@@ -17,6 +17,7 @@ LinkStats s_stats;
 LocalPadSource s_pad_source;
 FrameCallback s_frame;
 StallCallback s_stall;
+BoundaryCallback s_boundary;
 std::atomic<int> s_ux_compat{0};
 }  // namespace
 
@@ -80,6 +81,12 @@ void SetStallCallback(StallCallback callback)
   s_stall = std::move(callback);
 }
 
+void SetBoundaryCallback(BoundaryCallback callback)
+{
+  std::lock_guard lk(s_lock);
+  s_boundary = std::move(callback);
+}
+
 void SetUXCompatVersion(int version)
 {
   s_ux_compat.store(version, std::memory_order_relaxed);
@@ -111,5 +118,16 @@ void NotifyStall(int stalled_ms)
   }
   if (callback)
     callback(stalled_ms);
+}
+
+void NotifyBoundary(bool shown)
+{
+  BoundaryCallback callback;
+  {
+    std::lock_guard lk(s_lock);
+    callback = s_boundary;
+  }
+  if (callback)
+    callback(shown);
 }
 }  // namespace Orca::Events

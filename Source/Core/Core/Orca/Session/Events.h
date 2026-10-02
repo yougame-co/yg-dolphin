@@ -81,6 +81,12 @@ void SetFrameCallback(FrameCallback callback);
 using StallCallback = std::function<void(int stalled_ms)>;
 void SetStallCallback(StallCallback callback);
 
+// Every frame boundary, solo or online, on the CPU thread: whether the frame that just ended was
+// shown, a first run rendered as usual (not a re-run, nor a joiner's catch-up, which run unseen).
+// The overlay's frame meter times these with the host's clock. Nothing here may touch emulation.
+using BoundaryCallback = std::function<void(bool shown)>;
+void SetBoundaryCallback(BoundaryCallback callback);
+
 // The in-game UX's version of whatever it writes to emulated memory: part of the lobby
 // compatibility key. Set before the game boots.
 void SetUXCompatVersion(int version);
@@ -92,4 +98,5 @@ void NotifyPlugIn(int frame, const std::vector<PortInfo>& ports);
 void NotifyFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
                  const std::vector<PortInfo>& ports);
 void NotifyStall(int stalled_ms);
+void NotifyBoundary(bool shown);
 }  // namespace Orca::Events

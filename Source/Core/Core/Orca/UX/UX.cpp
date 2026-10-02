@@ -61,6 +61,8 @@ void Init()
   // Nothing is presented while the game waits for a friend: show the last frame again, with the
   // overlay's "Waiting for <name>..." on it.
   Orca::Events::SetStallCallback([](int stalled_ms) { RepresentDuringStall(stalled_ms); });
+  // The frame meter times the game's shown frames.
+  Orca::Events::SetBoundaryCallback([](bool shown) { FrameBoundary(shown); });
   // The session's plug-in callback, for the overlay's joined/left toasts only (local UI; never a
   // source for memory writes: those take the frame callback's ports).
   Orca::Events::SetPlugInCallback([](int frame, const std::vector<Orca::Events::PortInfo>& ports) {
@@ -74,6 +76,7 @@ void Init()
 void Shutdown()
 {
   Orca::Events::SetStallCallback({});
+  Orca::Events::SetBoundaryCallback({});
   Orca::Events::SetFrameCallback({});
   Orca::Events::SetPlugInCallback({});
   Orca::Events::SetLocalPadSource({});

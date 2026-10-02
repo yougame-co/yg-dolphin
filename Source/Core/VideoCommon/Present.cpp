@@ -3,6 +3,9 @@
 
 #include "VideoCommon/Present.h"
 
+#include <cstdio>
+#include <cstdlib>
+
 #include "Common/ChunkFile.h"
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/MainSettings.h"
@@ -131,6 +134,34 @@ bool Presenter::Initialize()
     // Draw a blank frame (and complete OnScreenUI initialization)
     g_gfx->BindBackbuffer({{0.0f, 0.0f, 0.0f, 1.0f}});
     g_gfx->PresentBackbuffer();
+  }
+  else if (const char* size = std::getenv("ORCA_TEST_PRESENT");
+           size && g_gfx->SupportsUtilityDrawing())
+  {
+    // Orca tests: a headless run presents into an image of its own, OSD included, so screenshots
+    // (YG_SHOT_EVERY) show what a window would. Not with the Software renderer (no UI drawing).
+    int width = 0, height = 0;
+    if (std::sscanf(size, "%dx%d", &width, &height) != 2 || width < 64 || height < 64 ||
+        width > 7680 || height > 4320)
+    {
+      PanicAlertFmt("ORCA_TEST_PRESENT must be WxH");
+      return false;
+    }
+    SetBackbuffer({static_cast<u32>(width), static_cast<u32>(height), 1.0f,
+                   AbstractTextureFormat::RGBA8});
+    m_test_target = g_gfx->CreateTexture(
+        TextureConfig(width, height, 1, 1, 1, AbstractTextureFormat::RGBA8,
+                      AbstractTextureFlag_RenderTarget, AbstractTextureType::Texture_2DArray),
+        "Orca test present");
+    m_test_framebuffer =
+        m_test_target ? g_gfx->CreateFramebuffer(m_test_target.get(), nullptr) : nullptr;
+    m_post_processor = std::make_unique<VideoCommon::PostProcessing>();
+    m_onscreen_ui = std::make_unique<OnScreenUI>();
+    if (!m_test_framebuffer || !m_post_processor->Initialize(m_backbuffer_format) ||
+        !m_onscreen_ui->Initialize(m_backbuffer_width, m_backbuffer_height, m_backbuffer_scale))
+    {
+      return false;
+    }
   }
 
   return true;
@@ -261,6 +292,12 @@ void Presenter::SetNextSwapEstimatedTime(u64 ticks, TimePoint host_time)
 
 void Presenter::ProcessFrameDumping(u64 ticks) const
 {
+  if (g_frame_dumper->IsFrameDumping() && m_xfb_entry && m_test_target)
+  {
+    g_frame_dumper->DumpCurrentFrame(m_test_target.get(), m_test_target->GetRect(),
+                                     m_test_target->GetRect(), ticks, m_frame_count);
+    return;
+  }
   if (g_frame_dumper->IsFrameDumping() && m_xfb_entry)
   {
     MathUtil::Rectangle<int> target_rect;
@@ -927,7 +964,7 @@ void Presenter::Present(PresentInfo* present_info)
 {
   m_present_count++;
 
-  if (g_gfx->IsHeadless() || (!m_onscreen_ui && !m_xfb_entry))
+  if ((g_gfx->IsHeadless() && !m_test_framebuffer) || (!m_onscreen_ui && !m_xfb_entry))
     return;
 
   if (!g_gfx->SupportsUtilityDrawing())
@@ -954,7 +991,10 @@ void Presenter::Present(PresentInfo* present_info)
   UpdateDrawRectangle();
 
   g_gfx->BeginUtilityDrawing();
-  const bool backbuffer_bound = g_gfx->BindBackbuffer({{0.0f, 0.0f, 0.0f, 1.0f}});
+  if (m_test_framebuffer)
+    g_gfx->SetAndClearFramebuffer(m_test_framebuffer.get(), {{0.0f, 0.0f, 0.0f, 1.0f}});
+  const bool backbuffer_bound =
+      m_test_framebuffer || g_gfx->BindBackbuffer({{0.0f, 0.0f, 0.0f, 1.0f}});
 
   // Render the XFB to the screen.
   if (backbuffer_bound && m_xfb_entry)
@@ -989,7 +1029,8 @@ void Presenter::Present(PresentInfo* present_info)
       present_info->present_time_accuracy = PresentInfo::PresentTimeAccuracy::PresentInProgress;
     }
 
-    g_gfx->PresentBackbuffer();
+    if (!m_test_framebuffer)
+      g_gfx->PresentBackbuffer();
   }
 
   if (m_xfb_entry)
