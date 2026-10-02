@@ -85,7 +85,11 @@ void ForEachUniversalSetting(F&& f)
   // Orca talks to YouGame only: no usage reports to Dolphin's analytics server.
   f(Config::MAIN_ANALYTICS_ENABLED, false);
   f(Config::MAIN_CUSTOM_RTC_ENABLE, true);
-  f(Config::MAIN_CUSTOM_RTC_VALUE, Config::MAIN_CUSTOM_RTC_VALUE.GetDefaultValue());
+  // A pinned clock, the same for both players, but not Dolphin's default (2000-01-01 00:00:00, the
+  // GameCube epoch): from there the timebase reads about -2^32 at boot (Brawl rev 2's SI TypeTime),
+  // and an SI alarm queued then for a small absolute time waits ~70 s for the timebase to climb
+  // back past 0 (Brawl's GameCube pads stayed in PADReset until frame ~4200). 2025-01-01 UTC.
+  f(Config::MAIN_CUSTOM_RTC_VALUE, 1735689600u);
   f(Config::MAIN_DSP_HLE, true);
   f(Config::MAIN_FAST_DISC_SPEED, false);
   f(Config::MAIN_SKIP_IPL, true);
