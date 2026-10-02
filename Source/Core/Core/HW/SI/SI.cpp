@@ -553,6 +553,24 @@ void SerialInterfaceManager::UpdateDevices()
   NetPlay::SetSIPollBatching(false);
 }
 
+void SerialInterfaceManager::RelatchInputs()
+{
+  // Orca: the game reads a channel's buffer once per frame, a few ms after the frame hook, and only
+  // when the channel's RDST bit says the poll before it (just before the hook) latched new data: a
+  // buffer written here, with that bit left as the poll set it, is what that read takes. Nothing
+  // else changes: no status bit, no interrupt, no extra read (ORCA.md, "Input latency").
+  for (u32 i = 0; i != MAX_SI_CHANNELS; ++i)
+  {
+    u32 hi = 0, lo = 0;
+    if (m_channel[i].device->GetData(hi, lo) != DataResponse::Success)
+      continue;
+    const u32 errlatch = m_channel[i].in_hi.ERRLATCH.Value();
+    m_channel[i].in_hi.hex = hi;
+    m_channel[i].in_lo.hex = lo;
+    m_channel[i].in_hi.ERRLATCH = errlatch;
+  }
+}
+
 SIDevices SerialInterfaceManager::GetDeviceType(int channel) const
 {
   if (channel < 0 || channel >= MAX_SI_CHANNELS || !m_channel[channel].device)

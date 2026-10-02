@@ -56,6 +56,10 @@ public:
   void RemoveEvent(int device_number);
 
   void UpdateDevices();
+  // Orca (latency): put every channel's input in its input buffer now, as a poll would, from the
+  // pads the session set at the frame boundary, without the poll's host input update, device
+  // changes, status bits or interrupt. A channel without data (unplugged) is left to the next poll.
+  void RelatchInputs();
   u32 GetInLength() const { return m_com_csr.INLNGTH; }
 
   void RemoveDevice(int device_number);

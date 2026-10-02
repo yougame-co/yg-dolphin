@@ -22,6 +22,7 @@
 #include "Common/FPURoundMode.h"
 #include "Common/Logging/Log.h"
 #include "Core/HW/Memmap.h"
+#include "Core/HW/SI/SI.h"
 #include "Core/IOS/FS/HostBackend/FS.h"
 #include "Core/IOS/IOS.h"
 #include "Core/HW/GCPad.h"
@@ -581,6 +582,15 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
   }
 
   Harness::OnFrameBoundary(guard);
+
+  // Latency (ORCA.md, "Input latency"): the pads just set for the frame about to run go into the SI
+  // input buffers now. The game reads them a few ms into the frame from what the SI's last poll
+  // latched, and that poll ran just before this hook, so without this every frame played the
+  // previous frame's pads: one whole frame (16.7 ms) on every input, local and remote. On every
+  // pass, re-runs and catch-up included, after any snapshot of this boundary was saved or loaded,
+  // so a snapshot holds the poll's latch and every machine relatches the same pads.
+  if (Orca::SessionActive())
+    guard.GetSystem().GetSerialInterface().RelatchInputs();
 
   // Re-run frames are thrown away as soon as they are simulated: skip their host rendering (the
   // emulated GPU still runs, so RAM and timing match a rendered frame).
