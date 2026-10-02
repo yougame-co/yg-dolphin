@@ -149,6 +149,11 @@ Signal OverlayModel::Quality(double) const
   return Signal::Good;
 }
 
+double OverlayModel::RunningMs(double now_ms) const
+{
+  return (m_paused ? m_paused_at : now_ms) - m_paused_ms;
+}
+
 void OverlayModel::OnFrame(double now_ms, bool shown)
 {
   std::lock_guard lk(m_lock);
@@ -157,19 +162,27 @@ void OverlayModel::OnFrame(double now_ms, bool shown)
     ++m_unshown;
     return;
   }
+  const double now = RunningMs(now_ms);
   // A long run of unseen frames is a joiner's catch-up, a load rather than the game's pace: the
   // meter starts over. A rollback's few re-runs only lengthen the next shown frame.
   if (std::exchange(m_unshown, 0) > PERF_MAX_UNSHOWN)
   {
     m_frames.clear();
+    m_first_frame = -1;
     m_last_frame = -1;
   }
-  if (m_last_frame < 0)
-    m_first_frame = now_ms;
+  if (m_first_frame < 0)
+  {
+    // The first shown boundary arms the meter, the second starts it.
+    if (m_last_frame >= 0)
+      m_first_frame = now;
+  }
   else
-    m_frames.emplace_back(now_ms, now_ms - m_last_frame);
-  m_last_frame = now_ms;
-  while (!m_frames.empty() && m_frames.front().first <= now_ms - PERF_WINDOW_MS - PERF_HOLD_MS)
+  {
+    m_frames.emplace_back(now, now - m_last_frame);
+  }
+  m_last_frame = now;
+  while (!m_frames.empty() && m_frames.front().first <= now - PERF_WINDOW_MS - PERF_HOLD_MS)
     m_frames.pop_front();
 }
 
@@ -188,22 +201,14 @@ void OverlayModel::Resume(double now_ms)
   if (!m_paused)
     return;
   m_paused = false;
-  // As if the pause never was: the first frame after it is timed without the paused time, and the
-  // last second's frames are still the last second's.
-  const double paused = std::max(0.0, now_ms - m_paused_at);
-  for (auto& frame : m_frames)
-    frame.first += paused;
-  if (m_first_frame >= 0)
-    m_first_frame += paused;
-  if (m_last_frame >= 0)
-    m_last_frame += paused;
+  m_paused_ms += std::max(0.0, now_ms - m_paused_at);
 }
 
 void OverlayModel::Meter(double now_ms, Stats stats, Perf perf, Frame* f) const
 {
   // Paused, the readout stands still at the moment of the pause.
-  const double now = m_paused ? m_paused_at : now_ms;
-  if (perf == Perf::Off || m_last_frame < 0 || now < m_first_frame + PERF_WINDOW_MS)
+  const double now = RunningMs(now_ms);
+  if (perf == Perf::Off || m_first_frame < 0 || now < m_first_frame + PERF_WINDOW_MS)
     return;
   // One pass, oldest first: the readout at each shown boundary of the last PERF_HOLD_MS gives the
   // colour its hold. `first` is the oldest frame of the second being read; `hitch` and `late` are
@@ -379,6 +384,8 @@ void FrameGraph(ImDrawList* dl, ImVec2 pos, ImVec2 size, const std::vector<float
   dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), Rgba(10, 14, 28, 0.62f),
                     size.y * 0.12f);
   const float slot = size.x / SLOTS;
+  // Bars a few pixels wide get a gap; thinner ones touch (a gap would alias them away).
+  const float gap = slot >= 3 ? slot * 0.2f : 0;
   const float bottom = pos.y + size.y;
   float x = pos.x + size.x;
   for (auto it = frames.rbegin(); it != frames.rend() && x - slot >= pos.x - 0.5f; ++it)
@@ -387,9 +394,9 @@ void FrameGraph(ImDrawList* dl, ImVec2 pos, ImVec2 size, const std::vector<float
     const Signal level = ms > OverlayModel::PERF_BAD_FRAME_MS ? Signal::Bad :
                          ms > OverlayModel::PERF_OK_FRAME_MS  ? Signal::Ok :
                                                                 Signal::Good;
-    const float h = std::min(ms, TOP_MS) / TOP_MS * size.y;
-    dl->AddRectFilled(ImVec2(x - slot, bottom - h), ImVec2(x - slot * 0.15f, bottom),
-                      LevelColour(level, level == Signal::Good ? 0.75f : 1));
+    const float h = std::max(1.0f, std::min(ms, TOP_MS) / TOP_MS * size.y);
+    dl->AddRectFilled(ImVec2(x - slot, bottom - h), ImVec2(x - gap, bottom),
+                      level == Signal::Good ? Rgba(170, 200, 255, 0.7f) : LevelColour(level, 1));
     x -= slot;
   }
   const float period_y = bottom - 1000.0f / 60 / TOP_MS * size.y;
@@ -414,28 +421,30 @@ void Draw()
   const float margin = 3 * unit;
   const float text_size = 3.0f * unit;
   // Top left, where Brawl's matches and menus leave the screen empty: the circle, the ping beside
-  // it on the circle's centre line (the frame meter under the ping), the meter alone when solo,
-  // its graph, then the toasts under them.
+  // it on the circle's centre line (the frame meter under it), the meter alone when solo, its
+  // graph, then the toasts under them.
   float y = margin;
   if (f.show_signal)
   {
     const float r = 3.0f * unit;
     const ImVec2 c(margin + r, margin + r);
     SignalCircle(dl, c, r, f.signal);
+    // The first line on the circle's centre line, as the ping alone always sat; the meter under it.
     const float x = c.x + r + unit;
-    if (!f.stats.empty() && !f.perf.empty())
+    const float line = TextSize(text_size, "0").y;
+    float bottom = c.y + r;
+    float text_y = c.y - line / 2;
+    if (!f.stats.empty())
     {
-      OutlinedText(dl, text_size, ImVec2(x, c.y - TextSize(text_size, f.stats).y), 1, f.stats);
-      OutlinedText(dl, text_size, ImVec2(x, c.y), 1, f.perf, f.perf_level);
+      OutlinedText(dl, text_size, ImVec2(x, text_y), 1, f.stats);
+      text_y += line;
     }
-    else if (!f.stats.empty() || !f.perf.empty())
+    if (!f.perf.empty())
     {
-      const std::string& text = f.stats.empty() ? f.perf : f.stats;
-      const ImVec2 s = TextSize(text_size, text);
-      OutlinedText(dl, text_size, ImVec2(x, c.y - s.y / 2), 1, text,
-                   f.stats.empty() ? f.perf_level : Signal::Good);
+      OutlinedText(dl, text_size, ImVec2(x, text_y), 1, f.perf, f.perf_level);
+      bottom = std::max(bottom, text_y + line);
     }
-    y += 2 * r + 1.5f * unit;
+    y = bottom + 1.5f * unit;
   }
   else if (!f.perf.empty())
   {
@@ -444,7 +453,7 @@ void Draw()
   }
   if (!f.graph.empty())
   {
-    const ImVec2 size(24 * unit, 5 * unit);
+    const ImVec2 size(40 * unit, 8 * unit);
     FrameGraph(dl, ImVec2(margin, y), size, f.graph);
     y += size.y + 1.5f * unit;
   }

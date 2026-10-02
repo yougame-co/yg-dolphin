@@ -739,6 +739,63 @@ TEST(OrcaUXOverlay, FrameMeterStandsStillWhilePausedAndShowsAStallAsItLasts)
   EXPECT_EQ(early.View(5000, Stats::Off, Perf::Fps).perf, "");
 }
 
+TEST(OrcaUXOverlay, FrameMeterTimesOnlyTheRunningPartOfAFrameAPauseCutsIn)
+{
+  const auto no_negative_bars = [](const OverlayModel::Frame& f) {
+    return std::all_of(f.graph.begin(), f.graph.end(), [](float ms) { return ms > 0; });
+  };
+  // Resumed: the CPU runs again before Core's state callback says so, and a boundary lands
+  // between the two.
+  {
+    OverlayModel m;
+    Pacer p;
+    double t = p.Until(m, 3000);
+    m.Pause(t + 5);
+    p.t = t + 5000 + 12;  // the CPU's first boundary after the resume at t + 5000...
+    m.OnFrame(p.t, true);
+    m.Resume(p.t + 1);  // ...then the callback
+    t = p.Until(m, p.t + 600);
+    const auto f = m.View(t, Stats::Off, Perf::Detailed);
+    // The frame the pause cut in two counts twice (both boundaries were shown), and neither part
+    // holds the pause.
+    EXPECT_EQ(f.perf, "61 fps · 17 ms");
+    EXPECT_EQ(f.perf_level, Signal::Good);
+    EXPECT_TRUE(no_negative_bars(f));
+    EXPECT_LE(*std::max_element(f.graph.begin(), f.graph.end()), 17.0f);
+  }
+  // Paused: the callback comes as the CPU is told to stop, and it may still reach a boundary.
+  {
+    OverlayModel m;
+    Pacer p;
+    double t = p.Until(m, 3000);
+    m.Pause(t + 10);
+    m.OnFrame(t + 16, true);  // the frame the CPU was finishing
+    m.Resume(t + 5000);
+    p.t = t + 5000 + 10;
+    m.OnFrame(p.t, true);
+    t = p.Until(m, p.t + 600);
+    const auto f = m.View(t, Stats::Off, Perf::Detailed);
+    EXPECT_EQ(f.perf, "61 fps · 17 ms");
+    EXPECT_EQ(f.perf_level, Signal::Good);
+    EXPECT_TRUE(no_negative_bars(f));
+    EXPECT_LE(*std::max_element(f.graph.begin(), f.graph.end()), 17.0f);
+  }
+}
+
+TEST(OrcaUXOverlay, FrameMeterStartsAfterTheFirstBoundarysWait)
+{
+  // A session's first boundary waits for the room's ticket: that frame is no measure of the pace.
+  OverlayModel m;
+  m.OnFrame(0, true);
+  Pacer p;
+  p.t = 450;
+  const double t = p.Until(m, 1400);
+  EXPECT_EQ(m.View(t, Stats::Off, Perf::Fps).perf, "");
+  const auto f = m.View(p.Until(m, 2000), Stats::Off, Perf::Fps);
+  EXPECT_EQ(f.perf, "60 fps · 17 ms");
+  EXPECT_EQ(f.perf_level, Signal::Good);
+}
+
 TEST(OrcaUXOverlay, FrameMeterDetailedAddsTheGraphAndOnlineTheDelay)
 {
   OverlayModel m;

@@ -36,6 +36,7 @@ Online play is drop-in, through a private YouGame room of up to four (`Source/Co
 | `ORCA_SITE` | Tests only: the site for dev tickets (default `https://yougame.co`). |
 | `ORCA_TEST_PADS`, `ORCA_TEST_SKIP_RENDER` | Harness overrides; they change the compatibility key. |
 | `ORCA_TEST_FULL_SNAPSHOTS` | `1`: rollback snapshots copy all of RAM instead of copy-on-write (`Source/Core/Core/Rollback/Cow.h`), to compare the two. A test override too. |
+| `ORCA_TEST_PRESENT` | Tests only, headless (`-p headless`): `WxH` presents into an offscreen image of that size, the OSD and Orca's overlay on it, and screenshots (`YG_SHOT_EVERY`) and frame dumps take that image instead of the bare frame. Presenting then waits for its present time like a window does (headless normally presents nothing). Each screenshot's readback is a frame of its own ~13 ms longer, which the frame meter shows. Not with the Software renderer (it draws no UI); the compatibility key is unchanged. |
 
 **Orca.app** (the macOS bundle, `Tools/orca-package-macos.sh`) is what the YouGame desktop app
 starts, with no arguments. A bundle build is a session by default (`ORCA_SESSION=0` turns that off),

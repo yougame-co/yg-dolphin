@@ -135,10 +135,11 @@ bool Presenter::Initialize()
     g_gfx->BindBackbuffer({{0.0f, 0.0f, 0.0f, 1.0f}});
     g_gfx->PresentBackbuffer();
   }
-  else if (const char* size = std::getenv("ORCA_TEST_PRESENT"))
+  else if (const char* size = std::getenv("ORCA_TEST_PRESENT");
+           size && g_gfx->SupportsUtilityDrawing())
   {
     // Orca tests: a headless run presents into an image of its own, OSD included, so screenshots
-    // (YG_SHOT_EVERY) show what a window would.
+    // (YG_SHOT_EVERY) show what a window would. Not with the Software renderer (no UI drawing).
     int width = 0, height = 0;
     if (std::sscanf(size, "%dx%d", &width, &height) != 2 || width < 64 || height < 64 ||
         width > 7680 || height > 4320)

@@ -16,7 +16,7 @@
 //   - "Waiting for <name>…" while the game has been waiting for a friend's input for 250 ms;
 //   - short toasts, "<name> joined on port N" and "<name> left", under the circle;
 //   - beside the circle, the ping: "32 ms" with embed `ping on` (the YouGame page's default) or
-//     ORCA_UX_STATS=1; with `ping full` or ORCA_UX_STATS=2, also the delay and rollbacks per second;
+//     ORCA_UX_STATS=1; with `ping full` or ORCA_UX_STATS=2, also the delay and rollbacks/s;
 //   - the frame meter, solo too: "60 fps · 17 ms", the frames shown in the last second and the
 //     longest of them, coloured while the game misses its pace (embed `perf`, on until it says).
 // It is drawn by the host's OSD layer over the presented image (ImGui), never into the emulated
@@ -106,8 +106,12 @@ public:
   // Every frame boundary (the CPU thread): `shown` says the frame that just ended ran rendered, a
   // first run (not a re-run, nor a joiner's catch-up). A frame's time is the host's wall time since
   // the last shown frame's boundary, so re-runs in between lengthen it but never count as frames.
+  // The first shown boundary only arms the meter: the one before it can hold a wait (a session's
+  // first boundary waits for the room's ticket).
   void OnFrame(double now_ms, bool shown);
-  // The core paused / resumed: the meter stands still meanwhile, then goes on as if no time passed.
+  // The core paused / resumed (the host thread, around the CPU's own stop and start): the meter's
+  // clock stands still meanwhile, so a boundary that lands between a resume and its callback, or
+  // between a pause's callback and the CPU stopping, times only the running part of its frame.
   void Pause(double now_ms);
   void Resume(double now_ms);
   Frame View(double now_ms, Stats stats, Perf perf = Perf::Off) const;
@@ -115,6 +119,8 @@ public:
 private:
   Signal Quality(double now_ms) const;
   void Meter(double now_ms, Stats stats, Perf perf, Frame* f) const;
+  // The meter's clock: host time less the time paused, standing still while paused.
+  double RunningMs(double now_ms) const;
 
   mutable std::mutex m_lock;
   bool m_seen_ports = false;
@@ -122,14 +128,16 @@ private:
   std::deque<std::pair<double, std::string>> m_toasts;
   LinkView m_link;
   std::deque<std::pair<double, int>> m_stall_history;  // (time, total stalls)
-  // The frame meter: shown frames (boundary time, frame time ms) of the last PERF_WINDOW_MS +
-  // PERF_HOLD_MS, enough to give the readout at every boundary the colour holds for.
+  // The frame meter, on its own clock (RunningMs): shown frames (boundary, frame time ms) of the
+  // last PERF_WINDOW_MS + PERF_HOLD_MS, enough to give the readout at every boundary the colour
+  // holds for.
   std::deque<std::pair<double, double>> m_frames;
-  double m_first_frame = -1;  // the first shown boundary: no readout for its first second
-  double m_last_frame = -1;   // the last shown boundary
+  double m_first_frame = -1;  // where the meter starts: no readout for its first second
+  double m_last_frame = -1;   // the last shown boundary (-1: not armed)
   int m_unshown = 0;          // unseen frames since it
   bool m_paused = false;
-  double m_paused_at = 0;
+  double m_paused_at = 0;     // host time
+  double m_paused_ms = 0;     // host time paused, pauses that ended
 };
 
 // The process's overlay: Init() registers it with the OSD layer and the session.
