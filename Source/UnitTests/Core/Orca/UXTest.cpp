@@ -1055,6 +1055,52 @@ TEST(OrcaUXGamePatches, TheShippedBrawlFileParses)
   ExpectBootSaveGroup(patches);
 }
 
+TEST(OrcaUXGamePatches, BrawlInputLagFixIsTheMagusCodeInPlace)
+{
+  // The "Controller Input Lag Fix" [Magus] (Gecko C202AD8C: add r3, r3, r0; subi r3, r3, 0x404)
+  // as an in-place rewrite: the 22 loads of the pad copy at 0x8002AD90 read 0x404 lower, every
+  // other word of the run only guards, and the 45 words land together once.
+  const auto patches = ShippedPatches("RSBE01.patches");
+  const auto first = std::find_if(patches.begin(), patches.end(),
+                                  [](const GamePatch& p) { return p.address == 0x8002AD8C; });
+  ASSERT_NE(first, patches.end());
+  constexpr size_t WORDS = 45;
+  ASSERT_GE(static_cast<size_t>(patches.end() - first), WORDS);
+  const std::span<const GamePatch> group(&*first, WORDS);
+  int loads = 0;
+  std::vector<u32> originals, landed;
+  for (size_t i = 0; i < group.size(); ++i)
+  {
+    const GamePatch& p = group[i];
+    ASSERT_TRUE(p.original.has_value()) << std::hex << p.address;
+    EXPECT_EQ(p.address, 0x8002AD8Cu + 4 * i);
+    EXPECT_EQ(p.joins_previous, i != 0) << std::hex << p.address;
+    const u32 op = *p.original >> 26, ra = (*p.original >> 16) & 31, d = *p.original & 0xFFFF;
+    // lwz (32), lbz (34) or lfs (48) from r3: the copy's loads.
+    if ((op == 32 || op == 34 || op == 48) && ra == 3)
+    {
+      ++loads;
+      EXPECT_GE(d, 0x444u) << std::hex << p.address;
+      EXPECT_EQ(p.value, *p.original - 0x404) << std::hex << p.address;
+    }
+    else
+    {
+      EXPECT_EQ(p.value, *p.original) << std::hex << p.address;
+    }
+    originals.push_back(*p.original);
+    landed.push_back(p.value);
+  }
+  EXPECT_EQ(loads, 22);
+  EXPECT_EQ(group[0].value, 0x7C630214u);  // the `add` the Gecko code hooks stays
+  if (first + WORDS != patches.end())
+    EXPECT_FALSE(first[WORDS].joins_previous);
+  EXPECT_TRUE(GroupApplies(group, originals));
+  EXPECT_FALSE(GroupApplies(group, landed));
+  // Project+ ships the code in its own codeset.
+  for (const GamePatch& p : ShippedPatches("PPLUS32.patches"))
+    EXPECT_FALSE(p.address >= 0x8002AD8C && p.address <= 0x8002AE3C) << std::hex << p.address;
+}
+
 TEST(OrcaUXGamePatches, TheShippedProjectPlusFileGuardsEveryLine)
 {
   // Project+'s own codes own the memory around the disc's modules, and Project+ owns the game's

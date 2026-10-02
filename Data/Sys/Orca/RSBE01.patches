@@ -3,8 +3,9 @@
 # original is written only while that word is there. This file is hashed into the lobby key.
 #
 # Found with Orca's harness (ORCA_UX_PROBE watches, RAM dumps and Dolphin's disassembler); the
-# unlock words are from the community "Global Brawl Netplay Settings" Gecko code shipped in
-# Dolphin's GameSettings/RSBE01.ini (vBrawl's "Global Brawl Netplay Settings V1"), unlock part only.
+# unlock words and the input-lag fix are from the community "Global Brawl Netplay Settings" Gecko
+# code shipped in Dolphin's GameSettings/RSBE01.ini (vBrawl's "Global Brawl Netplay Settings V1"),
+# those parts only.
 
 # --- Boot straight to the main menu -------------------------------------------------------------
 
@@ -71,6 +72,66 @@
 811A40C4 00010100 00010100    # Data down -> Solo
 811A40C8 00040000 00040000    # Data left -> Options
 811A40CC 00020100 00030100    # Data right -> Vault (was Wi-Fi)
+
+# --- Input: the game reads this frame's pads ------------------------------------------------------
+
+# "Controller Input Lag Fix" [Magus], the line `C202AD8C 00000002 7C630214 3863FBFC` of the
+# community "Global Brawl Netplay Settings" code in Dolphin's GameSettings/RSBE01.ini ("disables
+# ... controller input lag"), which Project+ also ships in its codeset (so PPLUS32.patches doesn't
+# carry it). The code at 0x8002AD88 copies one pad's 0x40-byte status out for the game (r4 the
+# port, r5 the destination, r0 = port * 0x40) from the array at r3 + 0x444; the Gecko code inserts
+# `subi r3, r3, 0x404` after its `add`, so it copies from the array at r3 + 0x40, which is a frame
+# newer: vanilla Brawl answers a press a frame sooner, as Project+ does (its first changed image is
+# the copy of press+3 instead of press+4). Here the same addresses come from the copy's own
+# displacements (0x444.. -> 0x40..), in place, with no code cave: nothing else reads r3 before
+# `li r3, 1; blr`. The stores between the loads are guard words, so the group is one run of 45 and
+# lands once, at boot, whole. Emulated code: both players run it (the file is in the lobby key), and
+# a rollback or a drop-in keyframe carries it in RAM.
+8002AD8C 7C630214 7C630214    # add   r3, r3, r0 (guard only)
+8002AD90 80030444 80030040    # lwz   r0, 0x444(r3) -> 0x40(r3)
+8002AD94 90050000 90050000    # stw   r0, 0x0(r5) (guard only)
+8002AD98 80030448 80030044    # lwz   r0, 0x448(r3) -> 0x44(r3)
+8002AD9C 90050004 90050004    # stw   r0, 0x4(r5) (guard only)
+8002ADA0 8003044C 80030048    # lwz   r0, 0x44C(r3) -> 0x48(r3)
+8002ADA4 90050008 90050008    # stw   r0, 0x8(r5) (guard only)
+8002ADA8 80030450 8003004C    # lwz   r0, 0x450(r3) -> 0x4C(r3)
+8002ADAC 9005000C 9005000C    # stw   r0, 0xC(r5) (guard only)
+8002ADB0 80030454 80030050    # lwz   r0, 0x454(r3) -> 0x50(r3)
+8002ADB4 90050010 90050010    # stw   r0, 0x10(r5) (guard only)
+8002ADB8 80030458 80030054    # lwz   r0, 0x458(r3) -> 0x54(r3)
+8002ADBC 90050014 90050014    # stw   r0, 0x14(r5) (guard only)
+8002ADC0 C003045C C0030058    # lfs   f0, 0x45C(r3) -> 0x58(r3)
+8002ADC4 D0050018 D0050018    # stfs  f0, 0x18(r5) (guard only)
+8002ADC8 C0030460 C003005C    # lfs   f0, 0x460(r3) -> 0x5C(r3)
+8002ADCC D005001C D005001C    # stfs  f0, 0x1C(r5) (guard only)
+8002ADD0 C0030464 C0030060    # lfs   f0, 0x464(r3) -> 0x60(r3)
+8002ADD4 D0050020 D0050020    # stfs  f0, 0x20(r5) (guard only)
+8002ADD8 C0030468 C0030064    # lfs   f0, 0x468(r3) -> 0x64(r3)
+8002ADDC D0050024 D0050024    # stfs  f0, 0x24(r5) (guard only)
+8002ADE0 C003046C C0030068    # lfs   f0, 0x46C(r3) -> 0x68(r3)
+8002ADE4 D0050028 D0050028    # stfs  f0, 0x28(r5) (guard only)
+8002ADE8 C0030470 C003006C    # lfs   f0, 0x470(r3) -> 0x6C(r3)
+8002ADEC D005002C D005002C    # stfs  f0, 0x2C(r5) (guard only)
+8002ADF0 88030474 88030070    # lbz   r0, 0x474(r3) -> 0x70(r3)
+8002ADF4 98050030 98050030    # stb   r0, 0x30(r5) (guard only)
+8002ADF8 88030475 88030071    # lbz   r0, 0x475(r3) -> 0x71(r3)
+8002ADFC 98050031 98050031    # stb   r0, 0x31(r5) (guard only)
+8002AE00 88030476 88030072    # lbz   r0, 0x476(r3) -> 0x72(r3)
+8002AE04 98050032 98050032    # stb   r0, 0x32(r5) (guard only)
+8002AE08 88030477 88030073    # lbz   r0, 0x477(r3) -> 0x73(r3)
+8002AE0C 98050033 98050033    # stb   r0, 0x33(r5) (guard only)
+8002AE10 88030478 88030074    # lbz   r0, 0x478(r3) -> 0x74(r3)
+8002AE14 98050034 98050034    # stb   r0, 0x34(r5) (guard only)
+8002AE18 88030479 88030075    # lbz   r0, 0x479(r3) -> 0x75(r3)
+8002AE1C 98050035 98050035    # stb   r0, 0x35(r5) (guard only)
+8002AE20 8803047A 88030076    # lbz   r0, 0x47A(r3) -> 0x76(r3)
+8002AE24 98050036 98050036    # stb   r0, 0x36(r5) (guard only)
+8002AE28 8803047B 88030077    # lbz   r0, 0x47B(r3) -> 0x77(r3)
+8002AE2C 98050037 98050037    # stb   r0, 0x37(r5) (guard only)
+8002AE30 8803047C 88030078    # lbz   r0, 0x47C(r3) -> 0x78(r3)
+8002AE34 98050038 98050038    # stb   r0, 0x38(r5) (guard only)
+8002AE38 80030480 8003007C    # lwz   r0, 0x480(r3) -> 0x7C(r3)
+8002AE3C 9005003C 9005003C    # stw   r0, 0x3C(r5) (guard only)
 
 # --- Everything unlocked --------------------------------------------------------------------------
 
