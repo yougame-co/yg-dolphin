@@ -71,7 +71,9 @@ std::string CompatibilityKey()
     // The data files that reach emulation besides the code: the profile itself, and every game
     // settings INI Dolphin loads for this disc, shipped and the player's own (a local edit there
     // changes what the game runs with, so it must change the key).
-    std::vector<std::string> files{File::GetSysDirectory() + "Orca/" + profile->game_id + ".ini"};
+    std::vector<std::string> files{File::GetSysDirectory() + "Orca/" + profile->game_id + ".ini",
+                                   // Orca's forced game patches (UX/GamePatches.h)
+                                   File::GetSysDirectory() + "Orca/" + profile->game_id + ".patches"};
     // A launcher profile runs under two game IDs: its loader's, then the disc's.
     std::vector<std::pair<std::string, u16>> ini_games{{profile->game_id, profile->revision}};
     if (profile->IsLauncher())

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <array>
+#include <filesystem>
 #include <map>
 #include <set>
 #include <atomic>
@@ -20,10 +21,12 @@
 #endif
 
 #include <fmt/format.h>
+#include "Common/FileUtil.h"
 #include <gtest/gtest.h>
 
 #include "Core/Orca/UX/ControllerSource.h"
 #include "Core/Orca/UX/Controllers.h"
+#include "Core/Orca/UX/GamePatches.h"
 #include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "InputCommon/GCPadStatus.h"
@@ -611,6 +614,44 @@ public:
   std::set<u32> written;
 };
 }  // namespace
+
+TEST(OrcaUXGamePatches, ParsesTheFileAndRefusesAnythingElse)
+{
+  std::string error;
+  const auto ok = ParseGamePatches("# a comment\r\n\n806CAD50 41820010 48000010    # code\n"
+                                   "9017B640 * 000001ff\n",
+                                   &error);
+  ASSERT_TRUE(ok.has_value()) << error;
+  ASSERT_EQ(ok->size(), 2u);
+  EXPECT_EQ((*ok)[0].address, 0x806CAD50u);
+  EXPECT_EQ((*ok)[0].original, std::optional<u32>(0x41820010u));
+  EXPECT_EQ((*ok)[0].value, 0x48000010u);
+  EXPECT_EQ((*ok)[1].address, 0x9017B640u);
+  EXPECT_FALSE((*ok)[1].original.has_value());
+  EXPECT_EQ((*ok)[1].value, 0x1FFu);
+  for (const char* bad : {"806CAD50 41820010", "806CAD51 * 0", "7FFFFFFC * 0", "818000000 * 0",
+                          "806CAD50 4182001G 48000010", "806CAD50 41820010 48000010 1",
+                          "94000000 * 0"})
+  {
+    error.clear();
+    EXPECT_FALSE(ParseGamePatches(bad, &error).has_value()) << bad;
+    EXPECT_FALSE(error.empty()) << bad;
+  }
+}
+
+TEST(OrcaUXGamePatches, TheShippedBrawlFileParses)
+{
+  // The source tree's copy, found from this file (tests run from the build directory).
+  const std::string path =
+      (std::filesystem::path(__FILE__).parent_path() / "../../../../Data/Sys/Orca/RSBE01.patches")
+          .string();
+  std::string text;
+  ASSERT_TRUE(File::ReadFileToString(path, text)) << path;
+  std::string error;
+  const auto patches = ParseGamePatches(text, &error);
+  ASSERT_TRUE(patches.has_value()) << error;
+  EXPECT_GT(patches->size(), 10u);
+}
 
 TEST(OrcaUXNameTags, UsernamesBecomeBrawlTags)
 {

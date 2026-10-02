@@ -7,10 +7,11 @@
 // from the YouGame app, the minimal overlay, the players' names in the game's own name tags.
 namespace Orca::UX
 {
-// Bumped whenever anything here that writes emulated memory changes (the name tags): the session
+// Bumped whenever anything here that writes emulated memory changes (the name tags; 2: the game
+// patches, GamePatches.h, whose file is also hashed into the key): the session
 // hashes it into the compatibility key as `ux=<n>`, so two builds that would write different bytes
 // never meet in a room.
-constexpr int kCompatVersion = 1;
+constexpr int kCompatVersion = 2;
 
 // Once, before the game boots in a session: registers the local pad source, the overlay, and the
 // session's plug-in, frame and stall callbacks, and puts kCompatVersion in the compatibility key.

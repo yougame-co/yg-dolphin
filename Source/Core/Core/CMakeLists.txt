@@ -532,6 +532,8 @@ add_library(core
   Orca/UX/Controllers.h
   Orca/UX/ControllerSource.cpp
   Orca/UX/ControllerSource.h
+  Orca/UX/GamePatches.cpp
+  Orca/UX/GamePatches.h
   Orca/UX/NameTags.cpp
   Orca/UX/NameTags.h
   Orca/UX/Overlay.cpp

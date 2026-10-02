@@ -11,6 +11,7 @@
 #include "Common/Logging/Log.h"
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/UX/ControllerSource.h"
+#include "Core/Orca/UX/GamePatches.h"
 #include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/UX/Probe.h"
@@ -33,6 +34,7 @@ void Init()
     static bool s_logged = false;
     if (!std::exchange(s_logged, true))
       NOTICE_LOG_FMT(ROLLBACK, "Orca UX: frame hook live at frame {}", frame);
+    ApplyGamePatches(guard);
     ProbeFrame(guard, frame);
     // Test only, ORCA_UX_TEST_LATE_NAME=<frame>: a friend's name that reached this machine late.
     // First runs before that frame see it empty, re-runs see it, as when the roster arrives

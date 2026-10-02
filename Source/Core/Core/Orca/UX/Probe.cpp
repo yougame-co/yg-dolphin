@@ -3,6 +3,7 @@
 
 #include "Core/Orca/UX/Probe.h"
 
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cstdlib>
@@ -20,6 +21,7 @@
 #include "Core/Core.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/PowerPC/MMU.h"
+#include "Core/PowerPC/PowerPC.h"
 #include "Core/System.h"
 #include "Core/Orca/UX/Overlay.h"
 
@@ -29,6 +31,7 @@
 //   @<scene> <frame> write <addr> <hex bytes>      e.g. @muMenuMain 20 write 90180c10 0000
 //   @<scene> <frame> utf16 <addr> <text>           text as UTF-16BE with a 0 terminator
 //   @<scene> <frame> dump <addr> <length> <name>   to <user dir>/probe-<name>.bin
+//   @* 0 watch <addr> <name>                       every frame: log the u32 there when it changes
 //   @<scene> <frame> stall <ms> 0                  block the CPU thread like a session stall,
 //                                                  calling RepresentDuringStall every 10 ms
 // <addr> is hex, or [hex]+hex for one pointer hop (e.g. [805a00e0]+28).
@@ -45,6 +48,7 @@ struct Command
   std::string arg;
   std::string arg2;
   bool done = false;
+  u32 last = 0;
 };
 
 std::vector<Command> Load()
@@ -99,18 +103,30 @@ std::string SceneName(const Core::CPUThreadGuard& guard)
   return name;
 }
 
-u32 Address(const Core::CPUThreadGuard& guard, const std::string& expr)
+// expr := hex | '[' expr ']' [ '+' hex ]  (each [..] reads the u32 there).
+u32 Address(const Core::CPUThreadGuard& guard, std::string_view expr)
 {
   if (expr.starts_with("["))
   {
-    const size_t close = expr.find(']');
-    const u32 at = static_cast<u32>(std::strtoul(expr.substr(1, close - 1).c_str(), nullptr, 16));
+    int depth = 0;
+    size_t close = 0;
+    for (size_t i = 0; i < expr.size(); ++i)
+    {
+      if (expr[i] == '[')
+        ++depth;
+      else if (expr[i] == ']' && --depth == 0)
+      {
+        close = i;
+        break;
+      }
+    }
+    const u32 at = Address(guard, expr.substr(1, close - 1));
     u32 offset = 0;
     if (close + 1 < expr.size() && expr[close + 1] == '+')
-      offset = static_cast<u32>(std::strtoul(expr.substr(close + 2).c_str(), nullptr, 16));
+      offset = static_cast<u32>(std::strtoul(std::string(expr.substr(close + 2)).c_str(), nullptr, 16));
     return Mapped(guard, at) ? PowerPC::MMU::HostRead<u32>(guard, at) + offset : 0;
   }
-  return static_cast<u32>(std::strtoul(expr.c_str(), nullptr, 16));
+  return static_cast<u32>(std::strtoul(std::string(expr).c_str(), nullptr, 16));
 }
 }  // namespace
 
@@ -122,11 +138,33 @@ bool TestKnobsAllowed()
 
 void ProbeFrame(const Core::CPUThreadGuard& guard, int frame)
 {
+  // ORCA_UX_PROBE_WATCHDOG=1 (research): when no frame boundary comes for 2 s, sample the guest's
+  // pc and lr from a host thread (racy reads, for finding where the game waits).
+  static std::atomic<int> s_last_frame{0};
+  s_last_frame = frame;
+  static const bool s_dog = [] {
+    if (!std::getenv("ORCA_UX_PROBE_WATCHDOG"))
+      return false;
+    std::thread([] {
+      auto& ppc = Core::System::GetInstance().GetPPCState();
+      int seen = -1, quiet = 0;
+      for (;;)
+      {
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        const int f = s_last_frame;
+        quiet = f == seen ? quiet + 1 : 0;
+        seen = f;
+        if (quiet >= 8 && quiet % 4 == 0)
+          NOTICE_LOG_FMT(ROLLBACK, "Watchdog: no frame since {}: pc {:08x} lr {:08x}", f, ppc.pc,
+                         ppc.spr[SPR_LR]);
+      }
+    }).detach();
+    return true;
+  }();
+  (void)s_dog;
   static std::vector<Command> commands = Load();
   // Checked every frame: a host that boots solo can take a real friend's drop-in later.
   if (commands.empty() || !TestKnobsAllowed())
-    return;
-  if (commands.empty())
     return;
   static std::string scene;
   static int scene_start = 0;
@@ -139,6 +177,19 @@ void ProbeFrame(const Core::CPUThreadGuard& guard, int frame)
   const int rel = frame - scene_start;
   for (Command& c : commands)
   {
+    if (c.verb == "watch")
+    {
+      const u32 at = Address(guard, c.addr);
+      const u32 value = at && Mapped(guard, at) ? PowerPC::MMU::HostRead<u32>(guard, at) : 0xDEADDEAD;
+      if (!c.done || value != c.last)
+      {
+        NOTICE_LOG_FMT(ROLLBACK, "Watch frame {} ({} {}): {} = {:08x}", frame, scene, rel, c.arg,
+                       value);
+        c.last = value;
+        c.done = true;
+      }
+      continue;
+    }
     if (c.done || c.scene != scene || c.frame != rel)
       continue;
     c.done = true;
