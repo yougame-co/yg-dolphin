@@ -178,11 +178,11 @@ struct Match
   int stats_rbmax = 0;
   double stats_stall_ms = 0;
 
-  // Player names by seat and the frame its controller plugged in (Orca::Events::PortInfo): kept once
-  // seen, so a frame re-run after that player left the room still gets the name it had; this
-  // player's own, for solo frames (also after leaving a room). The ports the UI was last told of.
-  std::map<std::pair<int, int>, std::string> names;
-  std::string own_name;
+  // Each port's player name and the frame it applies from (Orca::Events::PortInfo), decided by the
+  // host: its own once its room roster has it, a friend's when the session takes it in. A joiner
+  // takes the host's (they travel with the keyframe offer), so both games name every frame the
+  // same. The ports the UI was last told of.
+  std::map<int, Orca::Net::KeyframeInfo::Name> port_names;
   std::vector<Orca::Events::PortInfo> told_ports;
 };
 
@@ -647,8 +647,15 @@ void HostEvents(Core::System& system, Match& match)
     }
     match.session->AddPeer(seat, next, keyframe_frame);
     match.seated.insert(seat);
+    match.port_names[seat] = {seat, next, it->second};
     NOTICE_LOG_FMT(ROLLBACK, "Drop-in: {}", match.session->Describe());
-    Orca::Online::OfferKeyframe(seat, *match.keyframe);
+    Orca::Net::KeyframeInfo offer = *match.keyframe;
+    for (const auto& [named_seat, name] : match.port_names)
+    {
+      if (named_seat == match.local_seat || match.seated.count(named_seat))
+        offer.names.push_back(name);
+    }
+    Orca::Online::OfferKeyframe(seat, offer);
     NOTICE_LOG_FMT(ROLLBACK,
                    "Drop-in: port {} replays from keyframe frame {}, live from frame {}", seat + 1,
                    keyframe_frame, next);
@@ -847,9 +854,15 @@ Load LoadKeyframe(Core::System& system, Match& match, int* frame_out)
     match.join_error = "Your friend's game data differs from yours";
     return Load::Failed;
   }
+  // A join during play: this game's own snapshots, and the NAND journal they undo with, are of
+  // another game. A new ring (the old one's reset stops the journal) before the NAND changes under it.
+  match.port.reset();
+  match.port = std::make_unique<RingPort>(system, MAX_ROLLBACK);
   if (!nand || !Core::WiiRootIsTemporary() ||
       !Orca::Net::ReplaceNandTree(nand->HostRoot(), download->nand))
   {
+    ERROR_LOG_FMT(ROLLBACK, "Drop-in: replacing the NAND failed (nand {}, temporary {})",
+                  nand != nullptr, Core::WiiRootIsTemporary());
     StopEmulation(system, "Couldn't join: the game's save folder couldn't be replaced");
     Orca::Status::Error("internal", "Couldn't load your friend's game");
     End("couldn't join");
@@ -857,10 +870,9 @@ Load LoadKeyframe(Core::System& system, Match& match, int* frame_out)
   }
   nand->ReloadFst();
   const int frame = download->frame;
-  if (!match.port)
-    match.port = std::make_unique<RingPort>(system, MAX_ROLLBACK);
   if (!match.port->LoadImage(std::move(download->image), frame))
   {
+    ERROR_LOG_FMT(ROLLBACK, "Drop-in: loading keyframe frame {} into the ring failed", frame);
     StopEmulation(system, "Couldn't join: your friend's game state didn't load");
     Orca::Status::Error("internal", "Couldn't load your friend's game");
     End("couldn't join");
@@ -878,6 +890,11 @@ Load LoadKeyframe(Core::System& system, Match& match, int* frame_out)
 
   // A join during play takes its seat from the friend's room now (a launch join had it at once).
   match.local_seat = Orca::Online::Seat();
+  match.port_names.clear();
+  for (const Orca::Net::KeyframeInfo::Name& name : download->info.names)
+    match.port_names[name.seat] = name;
+  for (const auto& [seat, name] : match.port_names)
+    NOTICE_LOG_FMT(ROLLBACK, "Drop-in: port {} is {} from frame {}", seat + 1, name.name, name.from);
   match.join_in_play = false;
   match.log.clear();
   match.log_base = frame;
@@ -1008,37 +1025,34 @@ void TakeCommands(Match& match)
 
 // ---- Ports, for the in-game UX ----
 
-std::string NameFor(Match& match, int seat, int plug_from)
+std::string NameAt(const Match& match, int seat, int frame)
 {
-  const auto key = std::make_pair(seat, plug_from);
-  if (const auto it = match.names.find(key); it != match.names.end())
-    return it->second;
-  std::string name = Orca::Online::SeatName(seat);
-  if (!name.empty())
-    match.names[key] = name;
-  return name;
+  const auto it = match.port_names.find(seat);
+  return it != match.port_names.end() && frame >= it->second.from ? it->second.name : "";
 }
 
 // The controllers plugged in at `frame`: in a session, by its synced plan; solo, this player's own.
+// Names as the host decided them (Match::port_names).
 std::vector<Orca::Events::PortInfo> PortsAt(Match& match, int frame)
 {
-  if (const std::string own = Orca::Online::SeatName(match.local_seat);
-      !own.empty() && Orca::Online::Seat() == match.local_seat)
+  // A host names its own port once its roster has it, from this frame on (a joiner learns when
+  // from the keyframe offer). A joiner's names, its own included, all come from its host.
+  if (!match.joining && !match.port_names.count(match.local_seat) &&
+      Orca::Online::Seat() == match.local_seat)
   {
-    match.own_name = own;
+    if (std::string own = Orca::Online::SeatName(match.local_seat); !own.empty())
+      match.port_names[match.local_seat] = {match.local_seat, frame, std::move(own)};
   }
   std::vector<Orca::Events::PortInfo> ports;
   if (!match.session)
   {
-    ports.push_back({match.local_seat, match.own_name, false});
+    ports.push_back({match.local_seat, NameAt(match, match.local_seat, frame), false});
     return ports;
   }
   for (int seat = 0; seat < Orca::Net::MAX_SEATS; ++seat)
   {
-    if (!match.session->Plugged(seat, frame))
-      continue;
-    ports.push_back(
-        {seat, NameFor(match, seat, match.session->Plan()[seat].plug_from), seat != match.local_seat});
+    if (match.session->Plugged(seat, frame))
+      ports.push_back({seat, NameAt(match, seat, frame), seat != match.local_seat});
   }
   return ports;
 }

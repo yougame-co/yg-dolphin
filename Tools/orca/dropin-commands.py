@@ -59,6 +59,7 @@ class Orca:
         args = [BIN, "-p", "headless", "-u", user, "-v", "Null",
                 "-C", "Dolphin.DSP.Backend=No Audio Output",
                 "-C", "Logger.Logs.ROLLBACK=True", "-C", "Logger.Logs.NETPLAY=True",
+                "-C", "Logger.Logs.CORE=True", "-C", "Logger.Logs.IOS_FS=True",
                 "-C", "Logger.Options.Verbosity=2"]
         if PPLUS:
             args += ["-C", f"Dolphin.Core.DefaultISO={DISC}", "-e", PPLUS]
@@ -173,4 +174,7 @@ log(f"host stats {last_stats(host)} / friend {last_stats(friend)}")
 for o in orcas:
     o.stop()
 log("PASS")
-shutil.rmtree(WORK, ignore_errors=True)
+if os.environ.get("ORCA_TEST_KEEP") == "1":
+    log(f"logs kept in {WORK}")
+else:
+    shutil.rmtree(WORK, ignore_errors=True)

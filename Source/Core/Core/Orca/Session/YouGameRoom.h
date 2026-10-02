@@ -44,6 +44,15 @@ struct KeyframeInfo
   std::string hash;
   // The keyframe's AES-256-GCM key (64 hex), only ever in the room's `kf` message.
   std::string key;
+  // The host's player names for the game's ports, each from the frame it applies: the joiner names
+  // ports exactly as the host does (Orca::Events::PortInfo), never from its own view of the roster.
+  struct Name
+  {
+    int seat = 0;
+    int from = 0;
+    std::string name;
+  };
+  std::vector<Name> names;
 };
 
 // Something another player in the room did.

@@ -1277,6 +1277,14 @@ struct YouGameRoom::Impl
           d["n"] = picojson::value(static_cast<double>(offer->second.size));
           d["x"] = picojson::value(offer->second.hash);
           d["key"] = picojson::value(offer->second.key);
+          picojson::array names;
+          for (const KeyframeInfo::Name& n : offer->second.names)
+          {
+            names.push_back(picojson::value(picojson::array{
+                picojson::value(static_cast<double>(n.seat)),
+                picojson::value(static_cast<double>(n.from)), picojson::value(n.name)}));
+          }
+          d["nm"] = picojson::value(names);
           SendTo(id, d);
         }
       }
@@ -1578,6 +1586,25 @@ struct YouGameRoom::Impl
       }
       info.frame = *frame;
       info.size = static_cast<u64>(*size);
+      if (const auto nm = d.find("nm"); nm != d.end() && nm->second.is<picojson::array>())
+      {
+        for (const auto& entry : nm->second.get<picojson::array>())
+        {
+          if (!entry.is<picojson::array>() || info.names.size() >= MAX_SEATS)
+            continue;
+          const auto& a = entry.get<picojson::array>();
+          if (a.size() != 3 || !a[0].is<double>() || !a[1].is<double>() || !a[2].is<std::string>())
+            continue;
+          const double seat_n = a[0].get<double>(), from_n = a[1].get<double>();
+          const std::string& name = a[2].get<std::string>();
+          if (seat_n < 0 || seat_n >= MAX_SEATS || from_n < 0 || from_n > MAX_FRAME ||
+              name.size() > 64)
+          {
+            continue;
+          }
+          info.names.push_back({static_cast<int>(seat_n), static_cast<int>(from_n), name});
+        }
+      }
       if (peer.keyframe && peer.keyframe->id == info.id)
         return;
       peer.keyframe = info;

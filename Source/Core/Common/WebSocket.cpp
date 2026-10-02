@@ -221,6 +221,29 @@ void WebSocket::Close(u16 code)
     const std::array<char, 2> payload{static_cast<char>(code >> 8), static_cast<char>(code & 0xFF)};
     size_t sent = 0;
     curl_ws_send(m_impl->curl, payload.data(), payload.size(), &sent, 0, CURLWS_CLOSE);
+    // The closing handshake: read until the server's close frame (or half a second), so the socket
+    // isn't torn down with data unread. That tears it down with a reset, and a reset can drop what
+    // was sent just before (an Orca room's "leave": the room then holds the seat instead).
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+    std::array<char, 4096> buffer;
+    while (true)
+    {
+      const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+          deadline - std::chrono::steady_clock::now());
+      if (left.count() <= 0)
+        break;
+      size_t got = 0;
+      const curl_ws_frame* meta = nullptr;
+      const CURLcode result = curl_ws_recv(m_impl->curl, buffer.data(), buffer.size(), &got, &meta);
+      if (result == CURLE_AGAIN)
+      {
+        if (!WaitSocket(m_impl->socket, false, left))
+          break;
+        continue;
+      }
+      if (result != CURLE_OK || (meta && (meta->flags & CURLWS_CLOSE)))
+        break;
+    }
   }
   m_impl->Release();
 }
