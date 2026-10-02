@@ -25,6 +25,8 @@
 #include "Common/Logging/Log.h"
 #include "Common/WebSocket.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/Session/Online.h"
+#include "Core/Orca/Status.h"
 
 namespace Orca::Net
 {
@@ -41,8 +43,26 @@ constexpr auto SEND_GAP = std::chrono::milliseconds(10);
 constexpr auto PING_EVERY = std::chrono::seconds(1);
 constexpr auto HELLO_EVERY = std::chrono::seconds(1);
 constexpr size_t MAX_INBOX = 1024;
+// The server answers every ping (one a second): a connection that brings nothing back for this long
+// is dead, even though sends still succeed into the socket's buffer (a network that went away
+// without a reset, a laptop that slept). Not much less: a keyframe upload fills a home uplink, and
+// pings wait behind it in the modem's buffer (a second or two on many links).
+constexpr auto SERVER_SILENCE_LIMIT = std::chrono::seconds(8);
+// A joiner whose room has no host (a stale invite, a host that left or restarted) gives up this
+// long after its welcome; a host that is there says hello within about a second.
+constexpr auto HOST_WAIT = std::chrono::seconds(8);
+// How long a teardown waits for the app to take the emptied room (loopback, normally milliseconds).
+constexpr auto MIRROR_END_TIMEOUT = std::chrono::seconds(1);
 
 using Clock = std::chrono::steady_clock;
+
+// Rooms come and go within one process (a host's reopened room, a join, a leave), each mirroring
+// itself to the page on threads of its own: the page must only ever get the newest room's updates,
+// never an older room's late one (its emptied room at teardown included). Each room has a
+// generation; a post from a room older than the newest that posted is dropped.
+std::atomic<u64> s_room_generation{0};
+std::mutex s_mirror_mutex;
+u64 s_mirror_newest = 0;  // under s_mirror_mutex
 
 u64 NowMs()
 {
@@ -611,6 +631,14 @@ struct YouGameRoom::Impl
   std::atomic<bool> offer_now{false};
   // The room as the page draws it (welcome, join, leave, lobby and start carry these).
   picojson::array room_participants, room_players;
+  // This room's place among the process's rooms (s_room_generation): its page mirror never
+  // overwrites a newer room's.
+  const u64 generation = ++s_room_generation;
+  // The I/O thread's: when the welcome came (a joiner waits HOST_WAIT for its host from then),
+  // whether the game's host ever said hello here, and when the server last sent anything.
+  std::optional<Clock::time_point> welcomed_at;
+  bool host_seen = false;
+  Clock::time_point last_heard{};
 
   // Under the desktop app: the room is mirrored to the YouGame page through the app's bridge
   // (mpRoom, the latest only), and the page's lobby commands come back on its event stream.
@@ -626,7 +654,9 @@ struct YouGameRoom::Impl
   std::condition_variable bridge_wake;
   std::optional<std::string> bridge_pending;
   std::string last_published;  // the I/O thread's
+  bool mirror_closed = false;  // under s_mirror_mutex: the emptied room went out
   std::atomic<bool> leave_requested{false};
+  std::atomic<bool> test_drop{false};
   std::vector<picojson::object> page_commands;  // guarded by bridge_mutex
 
   // Test-only network delay (Orca::TestNetDelayMs): messages wait in these queues, in order.
@@ -983,6 +1013,7 @@ struct YouGameRoom::Impl
       return;
     }
     SetStatus(fmt::format("Room {}: waiting for your friend", room));
+    last_heard = Clock::now();
     if (bridged)
     {
       bridge_thread = std::thread([this] { BridgeLoop(); });
@@ -994,11 +1025,20 @@ struct YouGameRoom::Impl
       WARN_LOG_FMT(NETPLAY, "Orca room: TEST network delay {} ms + 0..{} ms each way", *net_delay,
                    net_jitter);
     }
+    // The connection failed under the player (it went quiet, or a test drops it): see below.
+    bool dropped = false;
     while (!stop && State() != RoomState::Ended)
     {
       if (leave_requested)
       {
         End("You left the room", "");
+        break;
+      }
+      if (test_drop)
+      {
+        WARN_LOG_FMT(NETPLAY, "Orca room: TEST dropping the connection");
+        dropped = true;
+        End("Lost the connection to the room (test drop)");
         break;
       }
       if (bridged)
@@ -1007,6 +1047,7 @@ struct YouGameRoom::Impl
         FlushHeld();
       if (auto text = ws.ReceiveText(std::chrono::milliseconds(net_delay ? 1 : 2)))
       {
+        last_heard = Clock::now();
         if (net_delay)
           held_in.push_back({HoldUntil(held_in), std::move(*text)});
         else
@@ -1015,48 +1056,75 @@ struct YouGameRoom::Impl
       }
       if (!ws.IsOpen())
       {
+        // 4000: the server replaced this socket with a newer one for the same player (another run
+        // of this game, on this account, in the same room). A host leaves the room to it rather
+        // than take it back, which would replace that one in turn, and so on.
+        const bool replaced = ws.CloseCode() == 4000;
         End(fmt::format("{} ({})",
-                        "Lost the connection to the room",
-                        ws.Error().empty() ? "no reason given" : ws.Error()));
+                        replaced ? "Another game of yours took over this room" :
+                                   "Lost the connection to the room",
+                        ws.Error().empty() ? "no reason given" : ws.Error()),
+            replaced && !joining ? "taken" : "network");
+        break;
+      }
+      if (Clock::now() - last_heard > SERVER_SILENCE_LIMIT)
+      {
+        dropped = true;
+        End(fmt::format("Lost the connection to the room (no answer for {} s)",
+                        SERVER_SILENCE_LIMIT.count()));
         break;
       }
       Tick();
     }
 
-    // The bridge threads wind down while the goodbyes go out.
+    // The bridge threads wind down while the goodbyes go out. First the page learns the room is
+    // gone (Orca left it), ahead of the next room's mirror if there is one (else that one stands,
+    // and this is dropped: PostMirror).
     bridge_done = true;
     bridge_wake.notify_all();
+    if (bridged)
+      PublishEnded();
     std::string reason;
     {
       std::lock_guard lock(mutex);
       reason = leave_reason;
     }
-    if (!reason.empty() && !peers.empty() && ws.IsOpen())
+    // A connection that failed under the player goes without a goodbye, and with a close the server
+    // reads as a dropped connection: it holds the seat (and the host's role) for the player's next
+    // connection, as it does for a real drop.
+    if (dropped)
     {
-      picojson::object d;
-      d["k"] = picojson::value("bye");
-      d["r"] = picojson::value(reason);
-      picojson::object message;
-      message["t"] = picojson::value("msg");
-      message["d"] = picojson::value(d);
-      SendJson(message, std::chrono::milliseconds(500), false);
+      ws.Close(4001);
     }
-    if (ws.IsOpen())
+    else
     {
-      picojson::object leave;
-      leave["t"] = picojson::value("leave");
-      SendJson(leave, std::chrono::milliseconds(500), false);
+      if (!reason.empty() && !peers.empty() && ws.IsOpen())
+      {
+        picojson::object d;
+        d["k"] = picojson::value("bye");
+        d["r"] = picojson::value(reason);
+        picojson::object message;
+        message["t"] = picojson::value("msg");
+        message["d"] = picojson::value(d);
+        SendJson(message, std::chrono::milliseconds(500), false);
+      }
+      if (ws.IsOpen())
+      {
+        picojson::object leave;
+        leave["t"] = picojson::value("leave");
+        SendJson(leave, std::chrono::milliseconds(500), false);
+      }
+      ws.Close();
     }
-    ws.Close();
     StopBridge();
   }
 
   // The lobby the page shows: the same mpRoom a web game's SDK publishes (Player.tsx parses it).
-  // Nothing is published at the end: the app clears the lobby when Orca exits.
-  void Publish()
+  // `ended`: the room is gone (Orca left it, or lost it): its code with nobody in it, which the
+  // page reads as Orca having left the room (Player's gameRoom, OrcaEmbed's onRoom), so a later
+  // invite into the same room isn't taken for one Orca is already in.
+  picojson::object RoomMirror(bool ended)
   {
-    if (!bridged)
-      return;
     picojson::object lobby;
     lobby["version"] = picojson::value(1.0);
     lobby["minPlayers"] = picojson::value(2.0);
@@ -1065,7 +1133,7 @@ struct YouGameRoom::Impl
     picojson::object room;
     room["type"] = picojson::value("mpRoom");
     room["lifecycle"] = picojson::value("game");
-    room["participants"] = picojson::value(room_participants);
+    room["participants"] = picojson::value(ended ? picojson::array{} : room_participants);
     room["revision"] = picojson::value(static_cast<double>(revision));
     room["matchId"] = picojson::value();
     room["lobby"] = picojson::value(lobby);
@@ -1073,15 +1141,23 @@ struct YouGameRoom::Impl
     {
       std::lock_guard lock(mutex);
       room["code"] = picojson::value(code);
-      room["ready"] = picojson::value(std::any_of(
-          peers.begin(), peers.end(), [](const auto& p) { return p.second.announced; }));
+      room["ready"] =
+          picojson::value(!ended && std::any_of(peers.begin(), peers.end(),
+                                                [](const auto& p) { return p.second.announced; }));
     }
     room["queue"] = picojson::value("private");
     room["size"] = picojson::value(static_cast<double>(MAX_SEATS));
-    room["host"] = picojson::value(host);
+    room["host"] = ended ? picojson::value() : picojson::value(host);
     room["readyIds"] = picojson::value(picojson::array{});
-    room["players"] = picojson::value(room_players);
-    std::string snapshot = picojson::value(room).serialize();
+    room["players"] = picojson::value(ended ? picojson::array{} : room_players);
+    return room;
+  }
+
+  void Publish()
+  {
+    if (!bridged)
+      return;
+    std::string snapshot = picojson::value(RoomMirror(false)).serialize();
     if (snapshot == last_published)
       return;
     last_published = snapshot;
@@ -1090,6 +1166,37 @@ struct YouGameRoom::Impl
       bridge_pending = std::move(snapshot);
     }
     bridge_wake.notify_all();
+  }
+
+  // At teardown, on the I/O thread: the emptied room, posted at once (the bridge thread is winding
+  // down), for a room the page was shown.
+  void PublishEnded()
+  {
+    if (last_published.empty())
+      return;
+    Common::HttpRequest http(MIRROR_END_TIMEOUT);
+    if (!PostMirror(http, picojson::value(RoomMirror(true)).serialize(), true))
+      WARN_LOG_FMT(NETPLAY, "Orca room: the app did not take the room's end");
+  }
+
+  // One mirror update to the app, unless a newer room has already posted its own (then the page has
+  // that one, and this is stale) or this room already posted its end (`last`: this is the end).
+  // True once the app took it, or when there was nothing to send.
+  bool PostMirror(Common::HttpRequest& http, const std::string& body, bool last = false)
+  {
+    std::lock_guard lock(s_mirror_mutex);
+    if (generation < s_mirror_newest || mirror_closed)
+      return true;
+    s_mirror_newest = generation;
+    mirror_closed = last;
+    const auto response = http.Post(
+        bridge_url + "/sdk", body,
+        {{"Authorization", "Bearer " + bridge_token}, {"Content-Type", "application/json"}},
+        Common::HttpRequest::AllowedReturnCodes::All);
+    picojson::value reply;
+    return response && http.GetLastResponseCode() == 200 &&
+           ParseJson(std::string(response->begin(), response->end()), &reply) &&
+           reply.is<picojson::object>() && reply.get("ok").evaluate_as_boolean();
   }
 
   void SendPageCommands()
@@ -1107,8 +1214,6 @@ struct YouGameRoom::Impl
   {
     Common::HttpRequest http(std::chrono::seconds(5),
                              [this](s64, s64, s64, s64) { return !bridge_done.load(); });
-    const Common::HttpRequest::Headers headers{{"Authorization", "Bearer " + bridge_token},
-                                               {"Content-Type", "application/json"}};
     while (!bridge_done)
     {
       std::optional<std::string> body;
@@ -1120,13 +1225,7 @@ struct YouGameRoom::Impl
       }
       if (!body || bridge_done)
         continue;
-      const auto response = http.Post(bridge_url + "/sdk", *body, headers,
-                                      Common::HttpRequest::AllowedReturnCodes::All);
-      picojson::value reply;
-      const bool taken = response && http.GetLastResponseCode() == 200 &&
-                         ParseJson(std::string(response->begin(), response->end()), &reply) &&
-                         reply.is<picojson::object>() && reply.get("ok").evaluate_as_boolean();
-      if (!taken)
+      if (!PostMirror(http, *body))
       {
         WARN_LOG_FMT(NETPLAY, "Orca room: the app did not take the room update (HTTP {})",
                      http.GetLastResponseCode());
@@ -1148,7 +1247,13 @@ struct YouGameRoom::Impl
     const std::string cmd = Str(e, "cmd");
     if (cmd == "leave")
     {
-      leave_requested = true;
+      // The lobby's Leave is the app's "leave": a joiner unplugs at an agreed frame and plays on, a
+      // host gives its friends up and opens a new room (OnlineMatch's Leave, at a frame boundary).
+      // Only an app that never turned "leave" on gets the old meaning: this room just ends.
+      if (Orca::Status::Cap("leave"))
+        Orca::Online::RequestLeave();
+      else
+        leave_requested = true;
     }
     else if (cmd == "kick" && !Str(e, "id").empty())
     {
@@ -1272,6 +1377,14 @@ struct YouGameRoom::Impl
   void Tick()
   {
     const auto now = Clock::now();
+    // A joiner in a room its friend's game isn't in (a stale invite, a host that left, restarted or
+    // got here second) would wait for a keyframe that never comes: it gives up soon after its
+    // welcome, unless the host said hello by then. From then on the host's leave says it all.
+    if (joining && !host_seen && welcomed_at && now - *welcomed_at >= HOST_WAIT)
+    {
+      End("Your friend isn't in that game any more", "peer_left");
+      return;
+    }
     if (now - last_ping >= PING_EVERY)
     {
       last_ping = now;
@@ -1407,6 +1520,29 @@ struct YouGameRoom::Impl
       events.push_back(std::move(event));
   }
 
+  // A connection that is out of the game while the room still lists it (gone away, or replaced by a
+  // new socket): a player of the game is unplugged, its keyframe offer and unread packets go, and
+  // whatever comes back on it is a stranger until it says hello again.
+  void ResetPeer(std::map<std::string, Peer>::iterator p)
+  {
+    if (p->second.announced)
+    {
+      Emit({PeerEvent::Kind::Left,
+            p->second.slot,
+            p->second.drop_in_host,
+            p->second.name,
+            {},
+            p->second.bye});
+    }
+    {
+      std::lock_guard lock(mutex);
+      keyframe_offers.erase(p->second.slot);
+    }
+    ForgetPackets(p->first);
+    p->second = {};
+    p->second.slot = -1;
+  }
+
   // The lobby roster rides on welcome, join, leave, back, away and lobby messages.
   void Roster(const picojson::object& m)
   {
@@ -1446,9 +1582,23 @@ struct YouGameRoom::Impl
       }
       present[id] = {*slot, Str(o, "name")};
     }
+    int my_seat;
     {
       std::lock_guard lock(mutex);
       seat_names = std::move(names);
+      my_seat = seat;
+    }
+    // A hosting Orca holds the room's first seat and is the room's host: its game's port 1 is seat
+    // 0, and joiners trust only the room's host. A friend who got here first (an invite sent before
+    // this Orca reached its own room) holds both, so the room can't work for either: it ends, and
+    // the game opens a fresh one (OnlineMatch), which the page then mirrors. "taken" never reaches
+    // the app.
+    if (!joining && !me.empty() && (my_seat != 0 || host != me))
+    {
+      WARN_LOG_FMT(NETPLAY, "Orca room: this game's host got seat {} of a room hosted by {}",
+                   my_seat + 1, host == me ? "it" : "someone else");
+      End("Someone else was already hosting this room, so your game opened a new one", "taken");
+      return;
     }
     // Who left: a player of the game is unplugged by the host; the host leaving ends a joiner's.
     for (auto p = peers.begin(); p != peers.end();)
@@ -1509,15 +1659,21 @@ struct YouGameRoom::Impl
         return;
       }
       // A room whose game is running is what a drop-in friend joins: no refusal.
+      welcomed_at = Clock::now();
       Roster(m);
       std::lock_guard lock(mutex);
+      NOTICE_LOG_FMT(NETPLAY, "Orca room: in room {} on seat {}, {}", code, seat + 1,
+                     joining ? "joining" : "hosting");
       if (state == RoomState::Connecting)
         state = RoomState::Waiting;
     }
     else if (t == "join" || t == "back" || t == "leave" || t == "away" || t == "lobby")
     {
-      // A dropped connection ("away") is out of the game at once: its controller unplugs.
-      if (t == "away")
+      // A dropped connection ("away") is out of the game at once: its controller unplugs. So is the
+      // connection a player comes back on ("back", or "join" for an id still listed): the room
+      // replaced a socket that died without it noticing, and behind the new one is another run of
+      // Orca, which greets anew and needs its own keyframe.
+      if (t == "away" || t == "back" || t == "join")
       {
         if (const auto player = m.find("player");
             player != m.end() && player->second.is<picojson::object>())
@@ -1525,18 +1681,9 @@ struct YouGameRoom::Impl
           const std::string id = Str(player->second.get<picojson::object>(), "id");
           if (const auto p = peers.find(id); p != peers.end())
           {
-            if (p->second.announced)
-            {
-              Emit({PeerEvent::Kind::Left, p->second.slot, p->second.drop_in_host,
-                    p->second.name, {}, p->second.bye});
-            }
-            {
-              std::lock_guard lock(mutex);
-              keyframe_offers.erase(p->second.slot);
-            }
-            ForgetPackets(p->first);
-            p->second = {};
-            p->second.slot = -1;
+            ResetPeer(p);
+            if (t != "away")
+              last_hello = {};  // greet it at once
           }
         }
       }
@@ -1620,6 +1767,7 @@ struct YouGameRoom::Impl
       // The game's host says so, and is the room's host (the first in): no other player can take
       // a joiner's game over by claiming it.
       peer.drop_in_host = d.count("h") && d.at("h").evaluate_as_boolean() && id == host;
+      host_seen = host_seen || peer.drop_in_host;
       if (!was_heard)
         last_hello = {};  // answer at once rather than on the next hello tick
       // A player of the game: a joiner at a seat other than the host's, or the host itself.
@@ -1633,6 +1781,8 @@ struct YouGameRoom::Impl
         }
         SetStatus(fmt::format("Room {}: {} is here", room, peer.name.empty() ? "a friend" : peer.name));
         Emit({PeerEvent::Kind::Arrived, peer.slot, peer.drop_in_host, peer.name, {}});
+        // The page's lobby shows the room ready now, not at its next roster change.
+        Publish();
       }
       return;
     }
@@ -1844,6 +1994,11 @@ void CoalescePacket(std::optional<Packet>* outgoing, const Packet& packet)
   }
   merged.leaving = merged.leaving || pending->leaving;
   pending = std::move(merged);
+}
+
+void YouGameRoom::TestDropConnection()
+{
+  m_impl->test_drop = true;
 }
 
 void YouGameRoom::Send(const Packet& packet)

@@ -288,8 +288,9 @@ public:
   // This player is still replaying the host's game: its own controller isn't plugged in yet.
   bool CatchingUp() const;
   // Something outside the inputs that the frames from `frame` on depend on changed (a port's name
-  // arrived late): re-run them, as for a wrong guess. Only within the rollback window.
-  void RerunFrom(int frame);
+  // arrived late): re-run them, as for a wrong guess. Only within the rollback window and from a
+  // snapshot this machine still has: false (nothing re-runs, nothing fails) otherwise.
+  bool RerunFrom(int frame);
   // Host: drop every other player (they stopped answering, or the session failed on them).
   void DropAllPeers();
   // Host: a keyframe of the state at the start of CurrentFrame() would be final: every earlier

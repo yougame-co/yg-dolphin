@@ -119,7 +119,9 @@ public:
   std::string SeatName(int seat) const;
   // A line for the UI or log: what the room is doing, or why it ended.
   std::string Status() const;
-  // Once Ended: the desktop app's error code for why (Orca::Status), empty for a normal end.
+  // Once Ended: the desktop app's error code for why (Orca::Status), empty for a normal end. One
+  // code is the game's own: "taken", a hosting Orca that found someone else hosting its room (it
+  // opens another, and reports that as "network").
   std::string ErrorCode() const;
   // The latest round trip to the room server and back, in milliseconds (-1 before the first).
   // `sequence`, if given, receives a count that changes with each new measurement: feed
@@ -135,6 +137,9 @@ public:
   // Why this player is about to leave, told to the friend first so both report the same thing
   // (an Orca::Status code; only "desync" is passed on).
   void SetLeaveReason(std::string reason);
+  // Tests only: the connection drops as a network failure would (no goodbye, and the server holds
+  // the seat); the room ends with "network".
+  void TestDropConnection();
 
 private:
   struct Impl;

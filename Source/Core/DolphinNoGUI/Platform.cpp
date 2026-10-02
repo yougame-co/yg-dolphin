@@ -245,6 +245,11 @@ void Platform::ProcessEmbedCommands()
       if (value == "on" || value == "off")
         Orca::UX::SetStatsVisible(value == "on");
     }
+    else if (cmd == "test-drop-room" && Orca::GetEnv("ORCA_TEST_COMMANDS") == "1")
+    {
+      // Tests only: the room's connection drops as a network failure would.
+      Orca::Online::TestDropRoom();
+    }
     else if (cmd == "prepare-join")
     {
       // The host invited a friend who will drop into this game (drop-in join).

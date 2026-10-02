@@ -3,9 +3,12 @@
 
 #include <chrono>
 #include <cstdlib>
+#include <fstream>
+#include <memory>
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -400,11 +403,13 @@ TEST(OrcaLive, BridgeMirrorsTheRoomAndTakesLeave)
   ASSERT_EQ(a.GetState(), RoomState::Waiting) << a.Status();
   EXPECT_EQ(a.Code(), room);
 
-  // The friend joins without the app.
+  // The friend joins without the app. (Not as a host: a hosting Orca that finds someone else
+  // hosting its room gives it up.)
   const std::string bridge = std::getenv("YOUGAME_BRIDGE");
   SetEnv("YOUGAME_BRIDGE", nullptr);
   SetEnv("ORCA_TEST_DEV_GAME", "orca-bridge-test");
   options.room_code = room;
+  options.joining = true;
   YouGameRoom b(options);
   // The room reads its environment on its own thread: restore it once b has its ticket.
   for (int i = 0; i < 1000 && b.Code().empty() && b.GetState() != RoomState::Ended; ++i)
@@ -416,7 +421,8 @@ TEST(OrcaLive, BridgeMirrorsTheRoomAndTakesLeave)
   ASSERT_TRUE(a.Connected()) << a.Status();
   ASSERT_TRUE(b.Connected()) << b.Status();
 
-  // The fake bridge sends the page's Leave two seconds after the room reads "ready".
+  // The fake bridge sends the page's Leave two seconds after the room reads "ready". Without the
+  // app's "caps leave" (none here), it ends the room.
   for (int i = 0; i < 1000 && a.GetState() != RoomState::Ended; ++i)
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   EXPECT_EQ(a.GetState(), RoomState::Ended);
@@ -425,6 +431,23 @@ TEST(OrcaLive, BridgeMirrorsTheRoomAndTakesLeave)
   for (int i = 0; i < 500 && b.Connected(); ++i)
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   EXPECT_FALSE(b.Connected()) << b.Status();
+
+  // The page's last word on the room is the room with nobody in it (Orca left it), so a later
+  // invite into it isn't taken for one Orca is already in. FAKE_LOG: the bridge's log, if given.
+  a.Leave();
+  if (const char* log = std::getenv("FAKE_LOG"))
+  {
+    std::ifstream in(log);
+    std::string line, last;
+    while (std::getline(in, line))
+    {
+      if (line.find("\"mpRoom\"") != std::string::npos)
+        last = line;
+    }
+    EXPECT_NE(last.find("\"players\": []"), std::string::npos) << last;
+    EXPECT_NE(last.find("\"participants\": []"), std::string::npos) << last;
+    EXPECT_NE(last.find(std::string("\"code\": \"") + room + "\""), std::string::npos) << last;
+  }
 }
 
 TEST(OrcaRoom, RefusalsSayWhy)
@@ -561,6 +584,135 @@ TEST(OrcaLive, DesyncIsReportedOnBothSides)
     EXPECT_EQ(host.ErrorCode(), "");
   }
   SetEnv("ORCA_TEST_DEV_GAME", nullptr);
+}
+
+// A player the room re-seats on a new socket ("back": its old one died without the room noticing)
+// is another run of Orca: the host unplugs the old one and greets the new one, which can then get
+// its own keyframe. A joiner whose host is there doesn't give up on it.
+TEST(OrcaLive, ReturningPlayerIsGreetedAgain)
+{
+  const char* live = std::getenv("ORCA_LIVE_TEST");
+  if (!live || std::string(live) != "1")
+    GTEST_SKIP() << "set ORCA_LIVE_TEST=1";
+  SetEnv("ORCA_TEST_DEV_GAME", "orca-live-test");
+  const std::string stamp =
+      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 10000000);
+  RoomOptions options;
+  options.room_code = "orcab" + stamp;
+  options.compatibility = "orca-live-test";
+  YouGameRoom host(options);
+  for (int i = 0; i < 500 && host.GetState() == RoomState::Connecting; ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  ASSERT_EQ(host.GetState(), RoomState::Waiting) << host.Status();
+  options.joining = true;
+  const std::string player = "orca-back-" + stamp;
+  SetEnv("ORCA_TEST_PLAYER", player.c_str());
+  auto first = std::make_unique<YouGameRoom>(options);
+  const auto arrived = WaitArrived(host);
+  ASSERT_TRUE(arrived) << host.Status();
+  EXPECT_EQ(arrived->seat, 1);
+
+  // The same player from a new socket: the room replaces the old one and says "back".
+  YouGameRoom second(options);
+  for (int i = 0; i < 1000 && second.Code().empty() && second.GetState() != RoomState::Ended; ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  SetEnv("ORCA_TEST_PLAYER", nullptr);
+  SetEnv("ORCA_TEST_DEV_GAME", nullptr);
+  std::vector<PeerEvent::Kind> seen;
+  for (int i = 0; i < 1500 && (seen.empty() || seen.back() != PeerEvent::Kind::Arrived); ++i)
+  {
+    for (const PeerEvent& event : host.TakePeerEvents())
+    {
+      EXPECT_EQ(event.seat, 1);
+      seen.push_back(event.kind);
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  ASSERT_EQ(seen.size(), 2u) << host.Status();
+  EXPECT_EQ(seen[0], PeerEvent::Kind::Left);
+  EXPECT_EQ(seen[1], PeerEvent::Kind::Arrived);
+  EXPECT_TRUE(second.Connected()) << second.Status();
+  // Its host said hello: it waits as long as the keyframe takes.
+  std::this_thread::sleep_for(std::chrono::seconds(9));
+  EXPECT_TRUE(second.Connected()) << second.Status();
+  EXPECT_TRUE(host.Connected()) << host.Status();
+}
+
+// A friend who reaches the room before its host (an invite sent before the host's game got there)
+// holds the room's first seat. The host's room ends ("taken": its game opens another), and the
+// friend, with nobody's game to join, gives up soon after its welcome instead of waiting minutes.
+TEST(OrcaLive, HostSecondInItsRoomGivesItUp)
+{
+  const char* live = std::getenv("ORCA_LIVE_TEST");
+  if (!live || std::string(live) != "1")
+    GTEST_SKIP() << "set ORCA_LIVE_TEST=1";
+  SetEnv("ORCA_TEST_DEV_GAME", "orca-live-test");
+  RoomOptions options;
+  options.room_code =
+      "orcat" +
+      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 10000000);
+  options.compatibility = "orca-live-test";
+  options.joining = true;
+  YouGameRoom joiner(options);
+  for (int i = 0; i < 500 && joiner.GetState() == RoomState::Connecting; ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  ASSERT_EQ(joiner.GetState(), RoomState::Waiting) << joiner.Status();
+  const auto welcomed = std::chrono::steady_clock::now();
+  options.joining = false;
+  YouGameRoom host(options);
+  for (int i = 0; i < 1000 && host.GetState() != RoomState::Ended; ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  SetEnv("ORCA_TEST_DEV_GAME", nullptr);
+  EXPECT_EQ(host.GetState(), RoomState::Ended) << host.Status();
+  EXPECT_EQ(host.ErrorCode(), "taken") << host.Status();
+  for (int i = 0; i < 1500 && joiner.GetState() != RoomState::Ended; ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  EXPECT_EQ(joiner.GetState(), RoomState::Ended);
+  EXPECT_EQ(joiner.ErrorCode(), "peer_left") << joiner.Status();
+  EXPECT_NE(joiner.Status().find("isn't in that game"), std::string::npos) << joiner.Status();
+  EXPECT_LT(std::chrono::steady_clock::now() - welcomed, std::chrono::seconds(12));
+}
+
+// A host whose connection dropped comes back into its own room, and its seat: the same player id
+// on a new socket inside the server's hold (what a reopened room does after a dropped connection).
+TEST(OrcaLive, HostComesBackToItsRoom)
+{
+  const char* live = std::getenv("ORCA_LIVE_TEST");
+  if (!live || std::string(live) != "1")
+    GTEST_SKIP() << "set ORCA_LIVE_TEST=1";
+  SetEnv("ORCA_TEST_DEV_GAME", "orca-live-test");
+  const std::string stamp =
+      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 10000000);
+  const std::string player = "orca-host-" + stamp;
+  SetEnv("ORCA_TEST_PLAYER", player.c_str());
+  RoomOptions options;
+  options.room_code = "orcah" + stamp;
+  options.compatibility = "orca-live-test";
+  auto first = std::make_unique<YouGameRoom>(options);
+  for (int i = 0; i < 500 && first->GetState() == RoomState::Connecting; ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  ASSERT_EQ(first->GetState(), RoomState::Waiting) << first->Status();
+  // A friend was in the game, and leaves once its host is gone.
+  SetEnv("ORCA_TEST_PLAYER", nullptr);
+  options.joining = true;
+  auto friend_room = std::make_unique<YouGameRoom>(options);
+  ASSERT_TRUE(WaitArrived(*first)) << first->Status();
+  options.joining = false;
+  SetEnv("ORCA_TEST_PLAYER", player.c_str());
+  first->TestDropConnection();
+  for (int i = 0; i < 500 && first->GetState() != RoomState::Ended; ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  EXPECT_EQ(first->ErrorCode(), "network") << first->Status();
+  first.reset();
+  friend_room->Leave();
+  YouGameRoom again(options);
+  for (int i = 0; i < 1000 && again.GetState() == RoomState::Connecting; ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  SetEnv("ORCA_TEST_PLAYER", nullptr);
+  SetEnv("ORCA_TEST_DEV_GAME", nullptr);
+  ASSERT_EQ(again.GetState(), RoomState::Waiting) << again.Status() << " / " << again.ErrorCode();
+  EXPECT_EQ(again.Seat(), 0);
+  EXPECT_EQ(again.Code(), options.room_code);
 }
 
 // A room waiting for a friend stays open for as long as the friend takes: half a minute of pings

@@ -36,6 +36,8 @@ public:
   bool IsOpen() const;
   // Why the connection closed or failed (empty while open).
   const std::string& Error() const;
+  // The status code of the server's close frame (0: none came).
+  u16 CloseCode() const;
 
   // Sends a close frame (best effort) and releases the connection.
   void Close(u16 code = 1000);

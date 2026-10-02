@@ -41,6 +41,7 @@ struct WebSocket::Impl
   curl_socket_t socket = CURL_SOCKET_BAD;
   bool open = false;
   std::string error;
+  u16 close_code = 0;
   std::string partial;
 
   void Fail(std::string why)
@@ -74,6 +75,7 @@ bool WebSocket::Connect(const std::string& url, std::chrono::milliseconds timeou
 {
   m_impl->Release();
   m_impl->error.clear();
+  m_impl->close_code = 0;
   m_impl->partial.clear();
   m_impl->curl = curl_easy_init();
   if (!m_impl->curl)
@@ -182,7 +184,14 @@ std::optional<std::string> WebSocket::ReceiveText(std::chrono::milliseconds time
       continue;
     if (meta->flags & CURLWS_CLOSE)
     {
-      m_impl->Fail("WebSocket closed by the server");
+      if (received >= 2)
+      {
+        m_impl->close_code =
+            static_cast<u16>(static_cast<u8>(buffer[0]) << 8 | static_cast<u8>(buffer[1]));
+      }
+      m_impl->Fail(m_impl->close_code ?
+                       fmt::format("WebSocket closed by the server ({})", m_impl->close_code) :
+                       std::string("WebSocket closed by the server"));
       return std::nullopt;
     }
     // libcurl answers pings itself; only text (and its continuations) carries messages.
@@ -207,6 +216,11 @@ std::optional<std::string> WebSocket::ReceiveText(std::chrono::milliseconds time
 bool WebSocket::IsOpen() const
 {
   return m_impl->open;
+}
+
+u16 WebSocket::CloseCode() const
+{
+  return m_impl->close_code;
 }
 
 const std::string& WebSocket::Error() const

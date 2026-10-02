@@ -104,10 +104,21 @@ bool Session::Plugged(int seat, int frame) const
          frame < m_plan[seat].unplug_from;
 }
 
-void Session::RerunFrom(int frame)
+bool Session::RerunFrom(int frame)
 {
-  if (frame < m_frame)
-    m_dirty = std::min(m_dirty, frame);
+  if (frame >= m_frame)
+    return true;  // nothing ran yet
+  // As a rollback to `frame` would (OnBoundary): the newest snapshot at or before it, within the
+  // window. Frames that ran confirmed have none (only predicted and checksum frames are saved).
+  const auto after = m_saved.upper_bound(frame);
+  const int from = after == m_saved.begin() ? -1 : *std::prev(after);
+  if (m_frame - frame > m_config.max_rollback || from < 0 ||
+      m_frame - from > m_config.max_rollback + MAX_SNAPSHOT_EVERY - 1)
+  {
+    return false;
+  }
+  m_dirty = std::min(m_dirty, frame);
+  return true;
 }
 
 bool Session::InPlay(int seat) const
@@ -380,7 +391,9 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad)
 {
   if (!m_error.empty())
     return {StepKind::Ended, m_frame};
-  if (!m_transport.Connected())
+  // A re-run needs nothing from the transport: a connection lost mid re-run fails the session at
+  // the next normal boundary, where the emulator's frame is the session's own.
+  if (!m_transport.Connected() && m_resim_until < 0)
     return Fail("Connection lost");
 
   // A re-run frame just completed.

@@ -787,6 +787,45 @@ TEST(OrcaSession, LatencyBeyondTheWindowStalls)
   EXPECT_GT(match.CompareConfirmed(), 300);
 }
 
+// A port's name that arrives late asks for a re-run (OnlineMatch's Names). Only a frame with a
+// snapshot in reach can have one, and frames that ran confirmed have none: RerunFrom says so and
+// leaves the session be, rather than failing it later ("No snapshot to roll back").
+TEST(OrcaSession, RerunOnlyWithASnapshotInReach)
+{
+  // Inputs arrive within the input delay: nothing runs on a guess, so only checksum frames (every
+  // 60) are saved, and frame ~100 is 40 frames past the newest.
+  {
+    Match match(Config{}, 1, 0);
+    match.Play(100);
+    Session& session = match.a->session;
+    ASSERT_GT(session.CurrentFrame() % 60, Config{}.max_rollback + MAX_SNAPSHOT_EVERY);
+    EXPECT_FALSE(session.RerunFrom(session.CurrentFrame() - 2));
+    // Beyond the rollback window, never.
+    EXPECT_FALSE(session.RerunFrom(session.CurrentFrame() - Config{}.max_rollback - 1));
+    // A frame not run yet needs nothing.
+    EXPECT_TRUE(session.RerunFrom(session.CurrentFrame()));
+    match.Play(200);
+    EXPECT_TRUE(session.Error().empty()) << session.Error();
+    EXPECT_EQ(session.GetStats().rollbacks, 0);
+    EXPECT_GT(match.CompareConfirmed(), 250);
+  }
+  // Inputs later than the delay: every frame runs on a guess and is saved, so a re-run is in reach
+  // and comes out the same.
+  {
+    Match match(Config{}, 4, 0);
+    match.Play(300);
+    Session& session = match.a->session;
+    const int rollbacks = session.GetStats().rollbacks;
+    EXPECT_TRUE(session.RerunFrom(session.CurrentFrame() - 2));
+    match.Play(1);
+    EXPECT_GT(session.GetStats().rollbacks, rollbacks);
+    match.Play(300);
+    EXPECT_TRUE(session.Error().empty()) << session.Error();
+    EXPECT_TRUE(match.b->session.Error().empty()) << match.b->session.Error();
+    EXPECT_GT(match.CompareConfirmed(), 500);
+  }
+}
+
 TEST(OrcaSession, DetectsDesync)
 {
   Match match(Config{}, 3, 1);

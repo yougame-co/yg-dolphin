@@ -30,6 +30,7 @@ Online play is drop-in, through a private YouGame room of up to four (`Source/Co
 | `ORCA_JOIN` | `1`: join the friend's game in that room (also implied when the app opened an invite). |
 | `ORCA_TEST_KEYFRAME_DIR` | Tests only: keyframes go through this folder instead of YouGame. |
 | `ORCA_TEST_LEAVE_AT` | Tests only: a joined friend leaves at this frame. |
+| `ORCA_TEST_COMMANDS` | Tests only: `1` takes the embed protocol's stdin commands without embedding, and `test-drop-room` (the room's connection drops once, as a network failure would). |
 | `ORCA_NAME` | Name shown in the room. |
 | `ORCA_TEST_DEV_GAME` | Tests only: an anonymous dev ticket from the site instead of the app (no ratings, no account). |
 | `ORCA_SITE` | Tests only: the site for dev tickets (default `https://yougame.co`). |
@@ -56,7 +57,10 @@ without FMA3 has a different key. The host (the Orca that started the game) is s
 port 1; a friend's seat is its room slot.
 
 Unit tests: `ninja tests && ./Binaries/Tests/tests --gtest_filter='Orca*'`. With `ORCA_LIVE_TEST=1`,
-the `OrcaLive` tests also open real rooms on yougame.co.
+the `OrcaLive` tests also open real rooms on yougame.co. Two Orca processes over real rooms, steered
+like the app steers them: `Tools/orca/dropin-commands.py <nogui> <disc>` (join, leave, rejoin, the
+host leaving) and `Tools/orca/dropin-rooms.py <nogui> <disc>` (a room with no host, a friend first
+in the host's room, the host's connection dropping mid-match).
 
 **Launcher profiles (prototype: Project+).** A mod that boots through its own loader program runs
 from a launcher profile, picked with `ORCA_PROFILE` (`Data/Sys/Orca/PPLUS32.ini` is Project+ v3.2).
@@ -146,7 +150,8 @@ host has played.
 4. **Plug in.** Once the friend has caught up, the host picks S as its own frame plus a margin (the
    rollback window, twice the maximum delay, and the round trip). It announces S in its roster,
    which every packet carries. Both machines plug port 2 in at exactly S. From S the seat counts
-   for stalls and checksums like any other, and the host never waits on a joiner before that.
+   for stalls and checksums like any other, and the host never waits on a joiner before that. Once
+   the last friend on the way has plugged in, the host prints `orca state friend-joined`.
 5. **Leave.**
    - The friend asks to leave; the host picks an unplug frame L ahead in the same way. The
      friend stops after its inputs before L are acknowledged.
@@ -169,6 +174,32 @@ host has played.
      host.
    - The rooms Worker needed no change: it admits late joiners, assigns the lowest free slot and
      relays `msg` between connections.
+   - The host must hold slot 0 and be the room's host. A friend who reached the code first (an
+     invite sent before the host's game got there) holds both, so a host that finds itself on
+     another slot gives that room up and opens a fresh one, which the page then mirrors.
+   - A joiner that hears no host hello within 8 s of its welcome (nobody's game is in the room: a
+     stale invite, a host that left or restarted, or got there second) ends with `peer_left`
+     ("Your friend isn't in that game any more") instead of waiting out the 90 s join limit.
+   - The server answers a ping every second; 8 s without any message from it ends the room
+     (`network`), as a closed socket does, and closes it as a dropped connection (no `leave`, close
+     code 4001), so the server holds the seat. Not much less than 8 s: a keyframe upload fills a
+     home uplink, and the pings wait behind it.
+   - A host whose room ends without it leaving (a dropped or silent connection, a server restart,
+     the code taken) prints `orca error network <why>` once (with `caps join`) and reopens:
+     2 s later, then backing off to 30 s between tries. Within the server's 90 s hold the same code
+     comes first: the app's player id comes back into its held seat, and invites already sent still
+     lead there. Once a room works again, `orca state playing` follows. A host's session that ended
+     with its room doesn't report `friend-left network`, and a re-run in progress finishes first.
+   - A socket the server replaced (close code 4000: another run of the game on the same account
+     took the room) is the other run's room: a host opens a fresh one rather than take it back.
+   - A player the room re-seats on a new socket (`back`, or `join` for a listed id) is another run of
+     Orca: it is unplugged like an `away` one, and greeted (and offered a keyframe) anew.
+   - A room the page was shown ends with an emptied mirror (its code, no players or participants,
+     `ready: false`), so the page knows Orca left it. Each room mirrors only while it is the
+     process's newest: an older room's late update never overwrites a newer one's.
+   - The page's lobby Leave is the app's `leave` (with `caps leave`); without it, it ends the room. A
+     host that leaves always opens a new room, even with nobody in the old one: the page reads
+     `orca state left` as Orca having left its room.
 
 **The frame hook runs in the host's floating-point mode** (`Rollback.cpp`, `HostFloatScope`).
 - The CPU thread runs compiled C++ in the guest's FP mode (`PowerPC::RoundingModeUpdated`). In
@@ -365,6 +396,7 @@ window (layout, scroll, resize, full screen). Moving, minimizing or hiding the w
 | `save N` / `load N` | Answers `unsupported save N` / `unsupported load N`. A session refuses save states, and Orca keeps the game's own saves in its NAND. |
 | `reset` | The console's reset button. Answers `unsupported reset` in a session or before the game runs. |
 | `prepare-join` | The host invited a friend to drop in. It calls `Orca::Online::PrepareJoin()`: the next frame boundary captures a keyframe ("Drop-in"). |
+| `join <code>` / `leave` | With `caps join` / `caps leave`: into a friend's game, or out of one ("Drop-in"). Both are also taken while a launch join waits for the keyframe. |
 | `quit` | Stops at once (no power-button shutdown, also outside a session), then exits. |
 
 Any other line goes to stderr. The app's `EMBED_COMMAND` filter must add `blur` and `prepare-join`.

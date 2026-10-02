@@ -57,7 +57,7 @@ def snapshot(session, seq, step, received):
             "ports": ports, "pads": []}
 
 controller_stream = {"open": False}
-state = {"leave_at": None, "rooms": 0}
+state = {"leave_at": None, "rooms": 0, "left": False}
 lock = threading.Lock()
 
 def log(obj):
@@ -133,15 +133,19 @@ class H(BaseHTTPRequestHandler):
         if self.path != "/events" or not self.authed(): return self.reply(401, {"ok": False})
         self.send_response(200); self.send_header("content-type", "text/event-stream"); self.end_headers()
         self.wfile.write(b": connected\n\n"); self.wfile.flush()
-        sent = False
         while True:
             time.sleep(0.2)
-            with lock: at = state["leave_at"]
+            with lock:
+                # Once per bridge, as the page sends it: a room opened after the leave (its own event
+                # stream) doesn't hear it again.
+                at = state["leave_at"] if not state["left"] else None
+                if at and time.time() >= at:
+                    state["left"] = True
             try:
-                if at and not sent and time.time() >= at:
+                if at and time.time() >= at:
                     self.wfile.write(("data: " + json.dumps({"slug": "someone-else", "cmd": "leave"}) + "\n\n").encode())
                     self.wfile.write(("data: " + json.dumps({"yg": 1, "slug": SLUG, "cmd": "leave"}) + "\n\n").encode())
-                    self.wfile.flush(); sent = True; log({"sent": "leave"})
+                    self.wfile.flush(); log({"sent": "leave"})
                 else:
                     self.wfile.write(b": ping\n\n"); self.wfile.flush()
             except Exception:

@@ -255,6 +255,12 @@ bool RoomEnded()
   return !room || room->GetState() == Net::RoomState::Ended;
 }
 
+bool InRoom()
+{
+  const auto room = Room();
+  return room && room->Connected();
+}
+
 bool FreshTicket(bool fresh, std::string* ticket, std::string* store_url, std::string* error)
 {
   const auto room = Room();
@@ -278,7 +284,10 @@ bool IsDesync(const std::string& session_error)
          session_error.find("changed its input") != std::string::npos ||
          session_error.find("arrived after") != std::string::npos ||
          session_error.find("history changed") != std::string::npos ||
-         session_error.starts_with("No local input");
+         session_error.starts_with("No local input") ||
+         // A rollback this machine couldn't make: the frames it already ran stay wrong.
+         session_error.starts_with("No snapshot to roll back") ||
+         session_error.find("exceeds the limit") != std::string::npos;
 }
 
 void BroadcastNames(const std::vector<Net::KeyframeInfo::Name>& names)
@@ -325,10 +334,25 @@ int RoundTripMs(u32* sequence)
   return room ? room->RoundTripMs(sequence) : -1;
 }
 
+namespace
+{
+// The room's own code as the app knows it: "taken" is the game's (it opens another room).
+std::string AppCode(std::string code)
+{
+  return code == "taken" ? "network" : code;
+}
+}  // namespace
+
 std::string RoomErrorCode()
 {
   const auto room = Room();
-  return room ? room->ErrorCode() : "";
+  return room ? AppCode(room->ErrorCode()) : "";
+}
+
+bool RoomTaken()
+{
+  const auto room = Room();
+  return room && room->ErrorCode() == "taken";
 }
 
 std::string StatusLine()
@@ -353,7 +377,7 @@ bool ReportSessionEnd(const std::string& session_error)
   // first: once Ended, the code is final.
   if (room && room->GetState() == Net::RoomState::Ended)
   {
-    if (const std::string code = room->ErrorCode(); !code.empty())
+    if (const std::string code = AppCode(room->ErrorCode()); !code.empty())
       Status::Report(code, room->Status());
     return true;
   }
@@ -376,6 +400,12 @@ void ReportPeerStalled(std::string_view sentence)
   if (const auto room = Room())
     room->SetLeaveReason("stalled");
   Status::Report("peer_left", sentence);
+}
+
+void TestDropRoom()
+{
+  if (const auto room = Room())
+    room->TestDropConnection();
 }
 
 void Shutdown()

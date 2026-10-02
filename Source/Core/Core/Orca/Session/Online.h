@@ -48,11 +48,14 @@ Net::Transport* Transport();
 int Seat();
 std::vector<Net::PeerEvent> TakePeerEvents();
 bool RoomEnded();
+// This Orca is in its room: the welcome came and the room hasn't ended.
+bool InRoom();
 // A fresh ticket for the room and the keyframe store's address (YouGameRoom::FreshTicket).
 bool FreshTicket(bool fresh, std::string* ticket, std::string* store_url, std::string* error);
 // Host: tell a friend it was unplugged and why ("desync", "stalled", "network").
 void DropPeer(int seat, const std::string& reason);
-// Whether a session error means the games went apart (inputs or a checksum that disagree).
+// Whether a session error means the games went apart (inputs or a checksum that disagree, or a
+// correction that came too late to apply).
 bool IsDesync(const std::string& session_error);
 // Host: every port name so far, to every player in the game (YouGameRoom::BroadcastNames).
 void BroadcastNames(const std::vector<Net::KeyframeInfo::Name>& names);
@@ -74,6 +77,10 @@ bool TakePrepareJoin();
 int RoundTripMs(u32* sequence = nullptr);
 // Why the room ended, as an Orca::Status code ("" while it runs, or when it gave none).
 std::string RoomErrorCode();
+// The room ended because someone else holds it: a hosting Orca that wasn't its host, or whose
+// socket the server replaced with another run's (YouGameRoom's "taken"; RoomErrorCode says
+// "network").
+bool RoomTaken();
 // What the room is doing or why it ended, for the window title or log.
 std::string StatusLine();
 
@@ -85,6 +92,10 @@ bool ReportSessionEnd(const std::string& session_error);
 // The friend stopped answering mid-match: reports peer_left with `sentence`, and tells the friend
 // on the way out that the connection stalled (for its own report, if its game wakes up).
 void ReportPeerStalled(std::string_view sentence);
+
+// Tests only (ORCA_TEST_COMMANDS' "test-drop-room"): the room's connection drops as a network
+// failure would.
+void TestDropRoom();
 
 // Leaves the room (reporting a running match void) and stops its thread. Call when emulation stops.
 void Shutdown();
