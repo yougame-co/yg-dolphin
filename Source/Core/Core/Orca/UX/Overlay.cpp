@@ -14,7 +14,9 @@
 #include <fmt/format.h>
 #include <imgui.h>
 
+#include "VideoCommon/AsyncRequests.h"
 #include "VideoCommon/OnScreenDisplay.h"
+#include "VideoCommon/Present.h"
 
 namespace Orca::UX
 {
@@ -68,9 +70,12 @@ LinkView ViewOf(const Events::LinkStats& stats)
   return v;
 }
 
-void OverlayModel::OnPorts(const std::vector<Events::PortInfo>& ports, double now_ms)
+void OverlayModel::OnPorts(int frame, const std::vector<Events::PortInfo>& ports, double now_ms)
 {
   std::lock_guard lk(m_lock);
+  if (m_seen_ports && frame <= m_last_frame)
+    return;
+  m_last_frame = frame;
   const auto find = [](const std::vector<Events::PortInfo>& list, int port) {
     return std::find_if(list.begin(), list.end(),
                         [port](const Events::PortInfo& p) { return p.port == port; });
@@ -173,8 +178,8 @@ LinkView DemoLink(double now)
   if (s_demo_start < 0)
   {
     s_demo_start = now;
-    s_overlay.OnPorts({{0, "luis", false}}, now);
-    s_overlay.OnPorts({{0, "luis", false}, {1, "ada", true}}, now);
+    s_overlay.OnPorts(0, {{0, "luis", false}}, now);
+    s_overlay.OnPorts(1, {{0, "luis", false}, {1, "ada", true}}, now);
   }
   const double t = std::fmod(now - s_demo_start, 12000);
   LinkView v;
@@ -277,6 +282,24 @@ OverlayModel& Overlay()
 void SetStatsVisible(bool visible)
 {
   s_show_stats = visible;
+}
+
+void ShutdownOverlay()
+{
+  OSD::SetHostOverlay({});
+}
+
+void RepresentDuringStall()
+{
+  static double s_last = 0;
+  const double now = NowMs();
+  if (now - s_last < 33)
+    return;
+  s_last = now;
+  AsyncRequests::GetInstance()->PushEvent([] {
+    if (g_presenter)
+      g_presenter->RepresentLast();
+  });
 }
 
 void InitOverlay()

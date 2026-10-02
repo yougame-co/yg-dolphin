@@ -903,6 +903,12 @@ void Presenter::RenderXFBToScreen(const MathUtil::Rectangle<int>& target_rc,
   }
 }
 
+void Presenter::RepresentLast()
+{
+  if (m_xfb_entry)
+    Present();
+}
+
 void Presenter::Present(PresentInfo* present_info)
 {
   m_present_count++;

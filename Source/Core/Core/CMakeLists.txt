@@ -532,8 +532,12 @@ add_library(core
   Orca/UX/Controllers.h
   Orca/UX/ControllerSource.cpp
   Orca/UX/ControllerSource.h
+  Orca/UX/NameTags.cpp
+  Orca/UX/NameTags.h
   Orca/UX/Overlay.cpp
   Orca/UX/Overlay.h
+  Orca/UX/Probe.cpp
+  Orca/UX/Probe.h
   Orca/UX/UX.cpp
   Orca/UX/UX.h
   NetworkCaptureLogger.cpp

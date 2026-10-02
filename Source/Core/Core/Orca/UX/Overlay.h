@@ -37,7 +37,7 @@ struct LinkView
   int stalls = 0;  // frames waited, in total
   int round_trip_ms = -1;
   int stalled_ms = 0;     // the current stall (0: none); -1: the session doesn't say
-  int waiting_seat = -1;  // whose input it waits for
+  int waiting_seat = -1;  // whose input it waits for (seat s plays on GameCube port s)
 };
 LinkView ViewOf(const Events::LinkStats& stats);
 
@@ -63,9 +63,9 @@ public:
     std::string stats;  // empty: not shown
   };
 
-  // The session's plug-in callback (any thread; called again with the same list on a re-run frame,
-  // which shows nothing new).
-  void OnPorts(const std::vector<Events::PortInfo>& ports, double now_ms);
+  // The session's plug-in callback (any thread). A re-run of a plug-in frame repeats its list: a
+  // list from a frame at or before the last one handled shows nothing.
+  void OnPorts(int frame, const std::vector<Events::PortInfo>& ports, double now_ms);
   // The newest link stats (the drawing thread, each frame).
   void Update(const LinkView& link, double now_ms);
   Frame View(double now_ms, bool show_stats) const;
@@ -75,6 +75,7 @@ private:
 
   mutable std::mutex m_lock;
   bool m_seen_ports = false;
+  int m_last_frame = -1;
   std::vector<Events::PortInfo> m_ports;
   std::deque<std::pair<double, std::string>> m_toasts;
   LinkView m_link;
@@ -83,6 +84,12 @@ private:
 
 // The process's overlay: Init() registers it with the OSD layer and the session.
 void InitOverlay();
+void ShutdownOverlay();
+// While the game waits for a friend the CPU thread is blocked, so no frame is presented and the
+// overlay could not say so: the session calls this from its stall wait (CPU thread), and every
+// ~33 ms the last frame is shown again with the overlay on it. Host-only drawing: the emulated
+// state is untouched.
+void RepresentDuringStall();
 void SetStatsVisible(bool visible);
 OverlayModel& Overlay();
 }  // namespace Orca::UX

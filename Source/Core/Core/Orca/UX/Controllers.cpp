@@ -276,14 +276,17 @@ std::optional<Snapshot> ParseSnapshotEvent(std::string_view json)
   const auto received_at = Number(o, "receivedAt", 0, MAX_SAFE);
   const auto owned = Bool(o, "owned");
   const auto suspended = Bool(o, "suspended");
+  const picojson::value* session = Field(o, "session");
   const picojson::value* ports = Field(o, "ports");
   const picojson::value* pads = Field(o, "pads");
-  if (!schema || !sequence || !sent_at || !received_at || !owned || !suspended || !ports ||
+  if (!session || !session->is<std::string>() || session->get<std::string>().size() > 128 ||
+      !schema || !sequence || !sent_at || !received_at || !owned || !suspended || !ports ||
       !ports->is<picojson::array>() || !pads || !pads->is<picojson::array>())
   {
     return std::nullopt;
   }
   Snapshot s;
+  s.session = session->get<std::string>();
   s.sequence = static_cast<u64>(*sequence);
   s.sent_at = *sent_at;
   s.received_at = *received_at;

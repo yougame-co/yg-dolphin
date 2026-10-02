@@ -15,4 +15,6 @@ constexpr int kCompatVersion = 1;
 // Once, before the game boots in a session: registers the local pad source and the session's
 // plug-in callback. Outside a session it does nothing.
 void Init();
+// At exit, before the UI layer and logging shut down: stops the stream thread, unhooks the overlay.
+void Shutdown();
 }  // namespace Orca::UX

@@ -1,0 +1,81 @@
+// Copyright 2026 YouGame
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#pragma once
+
+#include <map>
+#include <mutex>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include "Common/CommonTypes.h"
+#include "Core/Orca/Session/Events.h"
+
+namespace Core
+{
+class CPUThreadGuard;
+}
+
+// Each player's YouGame username in Brawl's own name tags (ORCA_ONLINE_UX.md 1C), so the game
+// itself shows it over the fighter and on the results, as a tag the player picked would be.
+//
+// Brawl rev 2 (RSBE01; Project+ runs the same executable), found under the harness:
+//   - the save's tags: g_GameGlobal (0x805A00E0) +0x28 -> records, tag i at +0xE0 + i * 0x124,
+//     its name first: up to 5 UTF-16BE characters and a 0; a tag with an empty name is unused;
+//   - the character select: scene manager (0x805A0060) +4 -> the scene ("scSelctCharacter"),
+//     +0x400 -> muSelCharTask, +0x44 + 4 * i -> player area i (GameCube port i), whose +0x1B0 is
+//     i again, +0x1B4 the player kind (1: a human has joined), +0x1C8 the tag (-1: none);
+//   - joining a port clears its tag to -1, and leaving the screen copies each area's tag into the
+//     match's player data (gmPlayerInitData +0x0C name, +0x18 tag index), which the fighter's
+//     name above it and the results read.
+// So at every frame boundary on the character select, a joined port of a named player with no tag
+// gets one: the tag already holding that name, else the highest unused tag, filled in. What it
+// writes depends only on emulated memory and the session's synced port list, the same on both
+// machines at the same frame, and it is idempotent (a re-run frame writes the same bytes, a port
+// that has a tag is left alone, the player's own choice included). Not yet: the character select's
+// name plate keeps "PLAYER n" until the game redraws it (its own setter, 0x8069B1CC, is called only
+// when the player picks a tag); that needs a game-side code.
+namespace Orca::UX
+{
+constexpr int TAG_CHARS = 5;
+constexpr int TAG_SLOTS = 120;
+
+// A YouGame username as a Brawl tag: ASCII letters uppercased, digits kept, '-', '.', '!' and '?'
+// kept, '_' and spaces as '-', anything else dropped; at most 5 characters. Pure and the same on
+// every machine (no locale). Empty when nothing usable is left.
+std::u16string BrawlTag(std::string_view username);
+
+// Emulated memory as the writer needs it (the tests give it a map).
+class GuestMemory
+{
+public:
+  virtual ~GuestMemory() = default;
+  virtual bool Valid(u32 address) const = 0;  // a mapped, readable RAM address
+  virtual u32 Read32(u32 address) const = 0;
+  virtual u16 Read16(u32 address) const = 0;
+  virtual u8 Read8(u32 address) const = 0;
+  virtual void Write16(u32 address, u16 value) = 0;
+  virtual void Write32(u32 address, u32 value) = 0;
+};
+
+// One frame boundary's writes for these ports (the plug-in list in effect). Returns how many ports
+// were given a tag.
+int ApplyNameTags(GuestMemory& memory, const std::vector<Events::PortInfo>& ports);
+
+// The session's plug-in lists by frame, so a re-run frame sees the list that was in effect then.
+class NameTagWriter
+{
+public:
+  void OnPlugIn(int frame, const std::vector<Events::PortInfo>& ports);
+  std::vector<Events::PortInfo> PortsAt(int frame) const;
+  // At a frame boundary, CPU thread, inside the rollback domain.
+  void OnFrame(const Core::CPUThreadGuard& guard, int frame);
+
+private:
+  mutable std::mutex m_lock;
+  std::map<int, std::vector<Events::PortInfo>> m_lists;
+};
+
+NameTagWriter& NameTags();
+}  // namespace Orca::UX

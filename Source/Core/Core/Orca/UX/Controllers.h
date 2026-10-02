@@ -6,6 +6,7 @@
 #include <array>
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -43,6 +44,7 @@ struct StandardPad
 
 struct Snapshot
 {
+  std::string session;  // the helper run: sequence numbers count within one
   u64 sequence = 0;
   double sent_at = 0;      // helper clock, epoch ms
   double received_at = 0;  // helper clock: the last valid adapter report (0: none yet)
@@ -88,7 +90,9 @@ struct LocalChoice
 
 // Which pad is this player's: the adapter port on the lowest seat with a controller in it (seat 0,
 // the one the player claimed, when it is plugged in), else the first standard gamepad; nullopt
-// when there is neither (the caller falls back to Dolphin's mapping, GCPadNew.ini).
+// when there is neither (the caller falls back to Dolphin's mapping, GCPadNew.ini). That includes
+// a helper that failed (the app then publishes suspended, every device gone): the keyboard and
+// Dolphin's own SDL input take over rather than leaving the player stuck neutral.
 // `age_ms` is how long ago this machine received the snapshot (its own steady clock): staleness is
 // never judged by comparing two processes' wall clocks.
 std::optional<LocalChoice> ChooseLocalPad(const Snapshot& snapshot, double age_ms);

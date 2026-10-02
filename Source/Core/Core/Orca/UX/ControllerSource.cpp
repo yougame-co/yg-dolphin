@@ -89,13 +89,18 @@ public:
 
   ControllerTiming Timing() const
   {
-    std::lock_guard lk(m_lock);
-    ControllerTiming t = m_timing;
-    t.attached = m_attached;
-    t.samples = m_samples.size();
-    if (!m_samples.empty())
+    ControllerTiming t;
+    std::vector<double> sorted;
     {
-      std::vector<double> sorted = m_samples;
+      std::lock_guard lk(m_lock);
+      t = m_timing;
+      t.attached = m_attached;
+      sorted = m_samples;
+    }
+    // Sorted outside the lock: the stream thread and the CPU thread never wait on it.
+    t.samples = sorted.size();
+    if (!sorted.empty())
+    {
       std::sort(sorted.begin(), sorted.end());
       const auto at = [&sorted](double q) {
         return sorted[std::min(sorted.size() - 1, static_cast<size_t>(q * sorted.size()))];
@@ -153,8 +158,9 @@ private:
       ++m_timing.refused;
       return;
     }
-    // A reconnect starts a new helper session whose sequence restarts: order only within a stream.
-    if (m_latest && m_attached && parsed->sequence < m_latest->sequence)
+    // Sequence numbers count within one helper run (a restarted helper, or the app's own empty
+    // snapshot after a failure, starts again): order only within a session.
+    if (m_latest && m_latest->session == parsed->session && parsed->sequence < m_latest->sequence)
       return;
     if (parsed->received_at > 0 && parsed->received_at != m_last_report)
     {
@@ -202,6 +208,9 @@ private:
       // Loopback: no proxy, and Nagle off so a small event is never held back.
       curl_easy_setopt(curl, CURLOPT_NOPROXY, "*");
       curl_easy_setopt(curl, CURLOPT_TCP_NODELAY, 1L);
+      // The app sends at least every 100 ms: a stream silent for 3 s is dead (a hung bridge).
+      curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
+      curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 3L);
       const CURLcode result = curl_easy_perform(curl);
       long status = 0;
       curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
@@ -228,8 +237,14 @@ private:
         wait_ms = backoff_ms = 500;  // the app restarted the stream
       else
         wait_ms = backoff_ms = std::min(backoff_ms * 2, 5000);
-      WARN_LOG_FMT(CONTROLLERINTERFACE, "Orca: controller stream ended ({}, HTTP {})",
-                   curl_easy_strerror(result), status);
+      // Once per change, not once a second while another game holds the stream.
+      if (status != m_last_status || result != m_last_result)
+      {
+        WARN_LOG_FMT(CONTROLLERINTERFACE, "Orca: controller stream ended ({}, HTTP {})",
+                     curl_easy_strerror(result), status);
+        m_last_status = status;
+        m_last_result = result;
+      }
       for (int waited = 0; waited < wait_ms && !m_done; waited += 50)
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
     }
@@ -239,6 +254,8 @@ private:
   const std::string m_token;
   std::atomic<bool> m_done{false};
   std::string m_pending;  // stream thread only
+  long m_last_status = -1;
+  CURLcode m_last_result = CURLE_OK;
 
   mutable std::mutex m_lock;
   std::shared_ptr<const Snapshot> m_latest;
@@ -281,11 +298,18 @@ std::optional<LocalChoice> Choose()
 
 void StartControllerStream(const std::string& bridge, const std::string& token)
 {
-  std::lock_guard lk(s_stream_lock);
-  s_stream.reset();
-  if (!LoopbackBridge(bridge) || token.empty())
-    return;
-  s_stream = std::make_unique<Stream>(bridge, token);
+  std::unique_ptr<Stream> next;
+  if (LoopbackBridge(bridge) && !token.empty())
+  {
+    static std::once_flag s_curl;
+    std::call_once(s_curl, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
+    next = std::make_unique<Stream>(bridge, token);
+  }
+  {
+    std::lock_guard lk(s_stream_lock);
+    next.swap(s_stream);
+  }
+  next.reset();  // the old stream joins outside the lock
 }
 
 void StopControllerStream()

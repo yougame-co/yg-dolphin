@@ -2,10 +2,13 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <array>
+#include <map>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <cstring>
 #include <string>
+#include <mutex>
 #include <thread>
 
 #ifndef _WIN32
@@ -20,6 +23,7 @@
 
 #include "Core/Orca/UX/ControllerSource.h"
 #include "Core/Orca/UX/Controllers.h"
+#include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "InputCommon/GCPadStatus.h"
 
@@ -387,6 +391,11 @@ TEST(OrcaUXControllers, StaleOrSuspendedInputIsNeutral)
   // Suspended.
   s = ParseSnapshotEvent(Event(true, ports, pad, 1759370000500.0, 1759370000500.0, true));
   EXPECT_TRUE(ChooseLocalPad(*s, 0)->neutral);
+  // The helper failed (the app's fail(): suspended, every port emptied, no pads): Dolphin's own
+  // mapping takes over instead of leaving the player stuck neutral.
+  s = ParseSnapshotEvent(Event(true, FourPorts(), "", 1759370000500.0, 1759370000400.0, true));
+  ASSERT_TRUE(s);
+  EXPECT_FALSE(ChooseLocalPad(*s, 0).has_value());
   // A gamepad goes stale with its snapshot.
   s = ParseSnapshotEvent(Event(false, "", pad));
   EXPECT_FALSE(ChooseLocalPad(*s, 250)->neutral);
@@ -407,11 +416,11 @@ TEST(OrcaUXOverlay, ToastsFollowThePortListOnceEach)
 {
   OverlayModel m;
   // The solo host's own port at boot: no toast.
-  m.OnPorts(Ports({{0, "luis", false}}), 0);
+  m.OnPorts(0, Ports({{0, "luis", false}}), 0);
   EXPECT_TRUE(m.View(10, false).toasts.empty());
   // A friend plugs in; a re-run of that frame gives the same list again: one toast.
-  m.OnPorts(Ports({{0, "luis", false}, {1, "ada", true}}), 1000);
-  m.OnPorts(Ports({{0, "luis", false}, {1, "ada", true}}), 1010);
+  m.OnPorts(300, Ports({{0, "luis", false}, {1, "ada", true}}), 1000);
+  m.OnPorts(300, Ports({{0, "luis", false}, {1, "ada", true}}), 1010);
   auto v = m.View(1100, false);
   ASSERT_EQ(v.toasts.size(), 1u);
   EXPECT_EQ(v.toasts[0].text, "ada joined on port 2");
@@ -420,14 +429,17 @@ TEST(OrcaUXOverlay, ToastsFollowThePortListOnceEach)
   EXPECT_NEAR(m.View(3750, false).toasts[0].alpha, 0.5f, 1e-4);
   EXPECT_TRUE(m.View(4001, false).toasts.empty());
   // The friend unplugs.
-  m.OnPorts(Ports({{0, "luis", false}}), 5000);
+  m.OnPorts(900, Ports({{0, "luis", false}}), 5000);
   v = m.View(5001, false);
   ASSERT_EQ(v.toasts.size(), 1u);
   EXPECT_EQ(v.toasts[0].text, "ada left");
+  // A rollback that re-runs the older plug-in frame repeats its list: nothing new.
+  m.OnPorts(300, Ports({{0, "luis", false}, {1, "ada", true}}), 5100);
+  EXPECT_EQ(m.View(5101, false).toasts.size(), 1u);
 
   // A joiner's first list already holds the host.
   OverlayModel joiner;
-  joiner.OnPorts(Ports({{0, "luis", true}, {1, "ada", false}}), 0);
+  joiner.OnPorts(0, Ports({{0, "luis", true}, {1, "ada", false}}), 0);
   ASSERT_EQ(joiner.View(1, false).toasts.size(), 1u);
   EXPECT_EQ(joiner.View(1, false).toasts[0].text, "luis is on port 1");
 }
@@ -435,7 +447,7 @@ TEST(OrcaUXOverlay, ToastsFollowThePortListOnceEach)
 TEST(OrcaUXOverlay, WaitingOnlyAfterAQuarterSecondOfStall)
 {
   OverlayModel m;
-  m.OnPorts(Ports({{0, "luis", false}, {1, "ada", true}}), 0);
+  m.OnPorts(0, Ports({{0, "luis", false}, {1, "ada", true}}), 0);
   LinkView link;
   link.online = true;
   link.round_trip_ms = 40;
@@ -504,6 +516,173 @@ TEST(OrcaUXOverlay, StatsReadoutOnlyWhenAskedAndOnline)
   EXPECT_EQ(m.View(1, true).stats, "");
 }
 
+
+namespace
+{
+// Brawl's memory as the name-tag writer walks it, laid out like rev 2 on the character select.
+class FakeBrawl final : public GuestMemory
+{
+public:
+  static constexpr u32 SCENE = 0x90ff6340, NAME = 0x806ff278, TASK = 0x815e75e0,
+                       GLOBAL = 0x90181300, RECORDS = 0x90172d40;
+  static u32 Area(int i) { return 0x81500000 + static_cast<u32>(i) * 0x1000; }
+  static u32 Tag(int i) { return RECORDS + 0xE0 + static_cast<u32>(i) * 0x124; }
+
+  explicit FakeBrawl(const char* scene = "scSelctCharacter")
+  {
+    W32(0x805A0060, 0x805b8ba0);
+    W32(0x805b8ba0 + 4, SCENE);
+    W32(SCENE, NAME);
+    for (size_t i = 0; i <= std::strlen(scene); ++i)
+      bytes[NAME + static_cast<u32>(i)] = static_cast<u8>(scene[i]);
+    W32(SCENE + 0x400, TASK);
+    W32(0x805A00E0, GLOBAL);
+    W32(GLOBAL + 0x28, RECORDS);
+    for (u32 a = RECORDS; a < Tag(120); a += 2)
+      Write16(a, 0);
+    for (int i = 0; i < 4; ++i)
+    {
+      W32(TASK + 0x44 + 4 * static_cast<u32>(i), Area(i));
+      for (u32 a = Area(i); a < Area(i) + 0x448; a += 4)
+        W32(a, 0);
+      W32(Area(i) + 0x1B0, static_cast<u32>(i));
+      W32(Area(i) + 0x1B4, 0);
+      W32(Area(i) + 0x1C8, 0xFFFFFFFF);
+    }
+  }
+  void Join(int i) { W32(Area(i) + 0x1B4, 1); }
+  void SetTag(int i, const std::u16string& name)
+  {
+    for (u32 k = 0; k < 6; ++k)
+      Write16(Tag(i) + 2 * k, k < name.size() ? static_cast<u16>(name[k]) : 0);
+  }
+  std::u16string TagName(int i) const
+  {
+    std::u16string n;
+    for (u32 k = 0; k < 5 && Read16(Tag(i) + 2 * k); ++k)
+      n.push_back(static_cast<char16_t>(Read16(Tag(i) + 2 * k)));
+    return n;
+  }
+  s32 NameId(int i) const { return static_cast<s32>(Read32(Area(i) + 0x1C8)); }
+
+  bool Valid(u32 a) const override { return bytes.contains(a); }
+  u8 Read8(u32 a) const override { return bytes.at(a); }
+  u16 Read16(u32 a) const override { return static_cast<u16>(Read8(a) << 8 | Read8(a + 1)); }
+  u32 Read32(u32 a) const override { return u32(Read16(a)) << 16 | Read16(a + 2); }
+  void Write16(u32 a, u16 v) override
+  {
+    bytes[a] = static_cast<u8>(v >> 8);
+    bytes[a + 1] = static_cast<u8>(v);
+    ++writes;
+  }
+  void Write32(u32 a, u32 v) override
+  {
+    Write16(a, static_cast<u16>(v >> 16));
+    Write16(a + 2, static_cast<u16>(v));
+  }
+  void W32(u32 a, u32 v) { Write32(a, v); }
+
+  std::map<u32, u8> bytes;
+  int writes = 0;
+};
+}  // namespace
+
+TEST(OrcaUXNameTags, UsernamesBecomeBrawlTags)
+{
+  EXPECT_EQ(BrawlTag("ada"), u"ADA");
+  EXPECT_EQ(BrawlTag("crunchytester"), u"CRUNC");
+  EXPECT_EQ(BrawlTag("sandbox-ada"), u"SANDB");
+  EXPECT_EQ(BrawlTag("a_b c"), u"A-B-C");
+  EXPECT_EQ(BrawlTag("x.y!?"), u"X.Y!?");
+  EXPECT_EQ(BrawlTag("L0u1s"), u"L0U1S");
+  EXPECT_EQ(BrawlTag("j\xc3\xa9r\xc3\xb4me"), u"JRME");  // non-ASCII dropped, never transliterated
+  EXPECT_EQ(BrawlTag("@#$"), u"");
+  EXPECT_EQ(BrawlTag(""), u"");
+}
+
+TEST(OrcaUXNameTags, JoinedPortsGetTheirTagOnTheCharacterSelect)
+{
+  FakeBrawl m;
+  const std::vector<Orca::Events::PortInfo> ports{{0, "luis", false}, {1, "ada", true}};
+  // Nobody has joined yet: nothing.
+  EXPECT_EQ(ApplyNameTags(m, ports), 0);
+  m.Join(0);
+  m.Join(1);
+  EXPECT_EQ(ApplyNameTags(m, ports), 2);
+  // The highest unused tags, in port order.
+  EXPECT_EQ(m.NameId(0), 119);
+  EXPECT_EQ(m.TagName(119), u"LUIS");
+  EXPECT_EQ(m.NameId(1), 118);
+  EXPECT_EQ(m.TagName(118), u"ADA");
+  EXPECT_EQ(m.NameId(2), -1);
+  // Idempotent: the next frame (or a re-run of this one) writes nothing.
+  const int writes = m.writes;
+  EXPECT_EQ(ApplyNameTags(m, ports), 0);
+  EXPECT_EQ(m.writes, writes);
+}
+
+TEST(OrcaUXNameTags, ReusesTheSameNameAndLeavesAChosenTagAlone)
+{
+  FakeBrawl m;
+  m.SetTag(0, u"MINE");
+  m.SetTag(3, u"ADA");
+  m.Join(0);
+  m.Join(1);
+  // Port 0's player picked their own tag; port 1's name is already a tag.
+  m.W32(FakeBrawl::Area(0) + 0x1C8, 0);
+  EXPECT_EQ(ApplyNameTags(m, {{0, "luis", false}, {1, "ada", true}}), 1);
+  EXPECT_EQ(m.NameId(0), 0);
+  EXPECT_EQ(m.TagName(0), u"MINE");
+  EXPECT_EQ(m.NameId(1), 3);
+  EXPECT_EQ(m.TagName(119), u"");  // nothing new was made
+}
+
+TEST(OrcaUXNameTags, NothingOutsideTheCharacterSelectOrWhenItDoesNotLookRight)
+{
+  {
+    FakeBrawl m("scMelee");
+    m.Join(0);
+    EXPECT_EQ(ApplyNameTags(m, {{0, "luis", false}}), 0);
+  }
+  {
+    // An area that is not port 0's (another layout, a Project+ build that moved it): left alone.
+    FakeBrawl m;
+    m.Join(0);
+    m.W32(FakeBrawl::Area(0) + 0x1B0, 2);
+    EXPECT_EQ(ApplyNameTags(m, {{0, "luis", false}}), 0);
+    EXPECT_EQ(m.NameId(0), -1);
+  }
+  {
+    // A name with nothing Brawl can show, and a port out of range.
+    FakeBrawl m;
+    m.Join(0);
+    EXPECT_EQ(ApplyNameTags(m, {{0, "\xe2\x98\x83", false}, {5, "ada", true}}), 0);
+  }
+  {
+    // Every tag taken: no tag rather than someone else's.
+    FakeBrawl m;
+    for (int i = 0; i < 120; ++i)
+      m.SetTag(i, u"T");
+    m.Join(0);
+    EXPECT_EQ(ApplyNameTags(m, {{0, "luis", false}}), 0);
+  }
+}
+
+TEST(OrcaUXNameTags, TheListInEffectAtEachFrame)
+{
+  NameTagWriter w;
+  EXPECT_TRUE(w.PortsAt(10).empty());
+  w.OnPlugIn(0, {{0, "luis", false}});
+  w.OnPlugIn(500, {{0, "luis", false}, {1, "ada", true}});
+  EXPECT_EQ(w.PortsAt(499).size(), 1u);
+  EXPECT_EQ(w.PortsAt(500).size(), 2u);
+  // A rollback re-running frames before the plug-in sees the old list.
+  EXPECT_EQ(w.PortsAt(495).size(), 1u);
+  w.OnPlugIn(2000, {{0, "luis", false}});
+  EXPECT_EQ(w.PortsAt(2000).size(), 1u);
+  EXPECT_EQ(w.PortsAt(1999).size(), 2u);  // still kept: newer than 600 frames before the last
+}
+
 #ifndef _WIN32
 namespace
 {
@@ -552,12 +731,16 @@ public:
       close(m_listen);
       m_listen = -1;
     }
-    if (m_client >= 0)
+    if (const int fd = m_client.exchange(-1); fd >= 0)
     {
-      shutdown(m_client, SHUT_RDWR);
-      close(m_client);
-      m_client = -1;
+      shutdown(fd, SHUT_RDWR);
+      close(fd);
     }
+  }
+  std::string Request()
+  {
+    std::lock_guard lk(m_request_lock);
+    return request;
   }
   std::string request;
   std::atomic<int> connections{0};
@@ -565,26 +748,38 @@ public:
 private:
   void Serve()
   {
-    const int fd = accept(m_listen, nullptr, nullptr);
-    if (fd < 0)
-      return;
-    ++connections;
-    char buf[4096];
-    const ssize_t n = read(fd, buf, sizeof(buf));
-    request.assign(buf, n > 0 ? size_t(n) : 0);
-    const std::string head =
-        m_status == 200 ?
-            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-store\r\n\r\n" :
-            fmt::format("HTTP/1.1 {} No\r\ncontent-type: application/json\r\ncontent-length: 2\r\n\r\n{{}}",
-                        m_status);
-    (void)!write(fd, head.data(), head.size());
-    if (m_status != 200)
+    // Every connection until Close(): a client that retries is counted, not left in the backlog.
+    for (;;)
     {
-      close(fd);
-      return;
+      const int fd = accept(m_listen, nullptr, nullptr);
+      if (fd < 0)
+        return;
+      ++connections;
+      char buf[4096];
+      const ssize_t n = read(fd, buf, sizeof(buf));
+      {
+        std::lock_guard lk(m_request_lock);
+        request.assign(buf, n > 0 ? size_t(n) : 0);
+      }
+      const std::string head =
+          m_status == 200 ?
+              "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-store\r\n\r\n" :
+              fmt::format(
+                  "HTTP/1.1 {} No\r\ncontent-type: application/json\r\ncontent-length: 2\r\n\r\n{{}}",
+                  m_status);
+      (void)!write(fd, head.data(), head.size());
+      if (m_status != 200)
+      {
+        close(fd);
+        continue;
+      }
+      if (m_client >= 0)
+        close(fd);  // one stream at a time, like the app
+      else
+        m_client = fd;
     }
-    m_client = fd;
   }
+  std::mutex m_request_lock;
   int m_status;
   int m_listen = -1;
   std::atomic<int> m_client{-1};
@@ -610,8 +805,8 @@ TEST(OrcaUXControllerStream, CachesTheNewestSnapshotAndGoesNeutralThenFallsBack)
   FakeBridge bridge;
   StartControllerStream(bridge.Url(), "t0ken");
   ASSERT_TRUE(bridge.WaitConnected());
-  EXPECT_NE(bridge.request.find("GET /controllers/events "), std::string::npos);
-  EXPECT_NE(bridge.request.find("Authorization: Bearer t0ken"), std::string::npos);
+  EXPECT_NE(bridge.Request().find("GET /controllers/events "), std::string::npos);
+  EXPECT_NE(bridge.Request().find("Authorization: Bearer t0ken"), std::string::npos);
   EXPECT_FALSE(LatestPad().has_value());
 
   const auto now_ms = [] {
@@ -624,31 +819,42 @@ TEST(OrcaUXControllerStream, CachesTheNewestSnapshotAndGoesNeutralThenFallsBack)
     bridge.Send(Event(true, FourPorts(PortJson(0, 0, "wired", buttons, {stick_x, 128, 128, 128})),
                       "", t, t));
   };
+  const auto pad_is = [](u16 buttons, u8 stick_x) {
+    return [buttons, stick_x] {
+      const auto p = LatestPad();
+      return p && p->button == buttons && p->stickX == stick_x;
+    };
+  };
   send(0x01, 170);
-  ASSERT_TRUE(Eventually([] { return LatestPad().has_value(); }));
-  EXPECT_EQ(LatestPad()->button, PAD_BUTTON_A);
-  EXPECT_EQ(LatestPad()->stickX, 170);
+  ASSERT_TRUE(Eventually(pad_is(PAD_BUTTON_A, 170)));
   // Several reports between two frames: only the newest counts.
   send(0x02, 100);
   send(0x04, 90);
-  ASSERT_TRUE(Eventually([] { return LatestPad()->button == PAD_BUTTON_X; }));
-  EXPECT_EQ(LatestPad()->stickX, 90);
+  ASSERT_TRUE(Eventually(pad_is(PAD_BUTTON_X, 90)));
   // A malformed event is refused and changes nothing.
   bridge.Send(R"({"type":"controllers","snapshot":{"schema":9}})");
-  std::this_thread::sleep_for(std::chrono::milliseconds(30));
-  EXPECT_EQ(LatestPad()->button, PAD_BUTTON_X);
-  EXPECT_GE(GetControllerTiming().refused, 1u);
+  ASSERT_TRUE(Eventually([] { return GetControllerTiming().refused >= 1; }));
+  send(0x04, 90);
+  ASSERT_TRUE(Eventually(pad_is(PAD_BUTTON_X, 90)));
   EXPECT_TRUE(GetControllerTiming().attached);
   EXPECT_GE(GetControllerTiming().samples, 2u);
+  // A restarted helper counts its sequence from 1 again: still taken.
+  {
+    const double t = now_ms();
+    std::string restarted = Event(true, FourPorts(PortJson(0, 0, "wired", 0x08, {60, 128, 128, 128})),
+                                  "", t, t);
+    const std::string from = R"("session":"0b6f","sequence":7)";
+    restarted.replace(restarted.find(from), from.size(), R"("session":"other","sequence":1)");
+    bridge.Send(restarted);
+  }
+  ASSERT_TRUE(Eventually(pad_is(PAD_BUTTON_Y, 60)));
 
   // Nothing new for 250 ms: neutral, not the last held button.
-  ASSERT_TRUE(Eventually([] { return LatestPad() && LatestPad()->button == 0; }, 600));
-  EXPECT_EQ(LatestPad()->stickX, 128);
+  ASSERT_TRUE(Eventually(pad_is(0, 128), 600));
 
   // The app closes the stream: still neutral a moment, then none (Dolphin's own mapping).
   bridge.Close();
   ASSERT_TRUE(Eventually([] { return !GetControllerTiming().attached; }));
-  EXPECT_TRUE(LatestPad().has_value());
   ASSERT_TRUE(Eventually([] { return !LatestPad().has_value(); }, 2500));
   StopControllerStream();
 }
@@ -659,8 +865,8 @@ TEST(OrcaUXControllerStream, RefusedTokenStopsAndNonLoopbackNeverConnects)
     FakeBridge bridge(401);
     StartControllerStream(bridge.Url(), "bad");
     ASSERT_TRUE(Eventually([&] { return bridge.connections.load() == 1; }));
-    std::this_thread::sleep_for(std::chrono::milliseconds(600));
-    EXPECT_EQ(bridge.connections.load(), 1);  // no retry
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    EXPECT_EQ(bridge.connections.load(), 1);  // no retry (a retry would be counted)
     EXPECT_FALSE(LatestPad().has_value());
     StopControllerStream();
   }

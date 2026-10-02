@@ -458,6 +458,7 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
     Orca::UX::Init();
 
   Common::ScopeGuard ui_common_guard([] {
+    Orca::UX::Shutdown();
     UICommon::ShutdownControllers();
     UICommon::Shutdown();
   });
