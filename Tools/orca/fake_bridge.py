@@ -9,15 +9,54 @@
 #     YOUGAME_TOKEN=t0ken YOUGAME_GAME=orca-test ./Binaries/Tests/tests \
 #     --gtest_filter='OrcaLive.BridgeMirrorsTheRoomAndTakesLeave'
 # Run that test alone: with a bridge configured, every room goes through it.
-import json, os, sys, threading, time, urllib.request, random, string
+#
+# GET /controllers/events: the app's controller stream (desktop/src/controllers.ts snapshots, schema
+# 1) with one GameCube adapter, a controller in port 1, reporting at 125 Hz. FAKE_PAD_SCRIPT is a
+# JSON-lines file of {"t": <seconds since the stream opened>, "buttons": <adapter wire mask>,
+# "axes": [x, y, cx, cy], "triggers": [l, r]} (each holds until the next; the last one loops back to
+# the first after FAKE_PAD_LOOP seconds, default never); without it, A is tapped every 2 s. Wire
+# mask: A 1, B 2, X 4, Y 8, Left 16, Right 32, Down 64, Up 128, Start 256, Z 512, R 1024, L 2048.
+# FAKE_PAD_GAMEPAD=1 sends the script as a standard gamepad instead (buttons: W3C indices bit mask).
+import json, os, sys, threading, time, urllib.request, random, string, uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-ROOM = os.environ["FAKE_ROOM"]; TOKEN = os.environ.get("FAKE_TOKEN", "t0ken")
-SLUG = os.environ.get("FAKE_SLUG", "orca-test"); LOG = os.environ["FAKE_LOG"]
+ROOM = os.environ.get("FAKE_ROOM"); TOKEN = os.environ.get("FAKE_TOKEN", "t0ken")
+SLUG = os.environ.get("FAKE_SLUG", "orca-test"); LOG = os.environ.get("FAKE_LOG", os.devnull)
 # FAKE_COOKIE (a signed-in session's cookie header) and FAKE_TICKET_SLUG (a live Orca listing): real
 # tickets, as the app gets them. FAKE_NO_LEAVE=1: the page never sends Leave.
 COOKIE = os.environ.get("FAKE_COOKIE", ""); TICKET_SLUG = os.environ.get("FAKE_TICKET_SLUG", "")
 SITE = os.environ.get("FAKE_SITE", "https://yougame.co"); NO_LEAVE = os.environ.get("FAKE_NO_LEAVE") == "1"
+
+def pad_script():
+    path = os.environ.get("FAKE_PAD_SCRIPT")
+    if not path:
+        return [{"t": 0, "buttons": 0}, {"t": 1.9, "buttons": 1}, {"t": 2.0, "buttons": 0}], 2.0
+    with open(path) as f:
+        steps = [json.loads(l) for l in f if l.strip()]
+    loop = float(os.environ.get("FAKE_PAD_LOOP", "0"))
+    return sorted(steps, key=lambda s: s["t"]), loop
+
+def snapshot(session, seq, step, received):
+    now = time.time() * 1000
+    axes = step.get("axes", [128, 128, 128, 128]); triggers = step.get("triggers", [0, 0])
+    if os.environ.get("FAKE_PAD_GAMEPAD") == "1":
+        mask = step.get("buttons", 0)
+        pad = {"index": 0, "id": "Fake Gamepad (045e:0b13)", "connected": True, "mapping": "standard",
+               "axes": [(a - 128) / 127 for a in axes],
+               "buttons": [{"value": 1 if mask >> i & 1 else 0, "pressed": bool(mask >> i & 1)} for i in range(17)],
+               "timestamp": now}
+        return {"schema": 1, "session": session, "sequence": seq, "sentAt": now, "receivedAt": 0,
+                "source": "native", "state": "ready", "message": "", "owned": False, "suspended": False,
+                "ports": [], "pads": [pad]}
+    ports = [{"adapterId": session + "-gc", "port": i, "seat": i, "connected": i == 0,
+              "type": "wired" if i == 0 else None, "buttons": step.get("buttons", 0) if i == 0 else 0,
+              "axes": axes if i == 0 else [128] * 4, "triggers": triggers if i == 0 else [0, 0],
+              "origin": [128, 128, 128, 128, 0, 0], "calibrationRevision": 0} for i in range(4)]
+    return {"schema": 1, "session": session, "sequence": seq, "sentAt": now, "receivedAt": received,
+            "source": "native", "state": "connected", "message": "", "owned": True, "suspended": False,
+            "ports": ports, "pads": []}
+
+controller_stream = {"open": False}
 state = {"leave_at": None, "rooms": 0}
 lock = threading.Lock()
 
@@ -36,6 +75,9 @@ class H(BaseHTTPRequestHandler):
         if self.path != "/sdk" or not self.authed(): return self.reply(401, {"ok": False, "error": "no"})
         msg = json.loads(self.rfile.read(int(self.headers["content-length"])))
         t = msg.get("type")
+        if t == "controllers":
+            log({"controllers": msg})
+            return self.reply(200, {"ok": True, "result": None})
         if t == "hello": return self.reply(200, {"ok": True, "result": {"room": ROOM}})
         if t == "mpTicket":
             pid = "orcabr-" + "".join(random.choice(string.ascii_lowercase) for _ in range(12))
@@ -62,7 +104,32 @@ class H(BaseHTTPRequestHandler):
                     state["leave_at"] = time.time() + 2
             return self.reply(200, {"ok": True, "result": {}})
         return self.reply(200, {"ok": False, "error": "unknown type " + str(t)})
+    def controllers(self):
+        with lock:
+            if controller_stream["open"]:
+                return self.reply(409, {"ok": False, "error": "This game's controller stream is already attached."})
+            controller_stream["open"] = True
+        try:
+            self.send_response(200); self.send_header("content-type", "text/event-stream"); self.end_headers()
+            steps, loop = pad_script(); session = str(uuid.uuid4()); start = time.time(); seq = 0
+            log({"controllers": "attached"})
+            while True:
+                t = time.time() - start
+                if loop > 0: t %= loop
+                step = steps[0]
+                for s in steps:
+                    if s["t"] <= t: step = s
+                seq += 1
+                event = {"type": "controllers", "snapshot": snapshot(session, seq, step, time.time() * 1000)}
+                self.wfile.write(("data: " + json.dumps(event) + "\n\n").encode()); self.wfile.flush()
+                time.sleep(0.008)
+        except Exception:
+            return
+        finally:
+            with lock: controller_stream["open"] = False
+            log({"controllers": "detached"})
     def do_GET(self):
+        if self.path == "/controllers/events" and self.authed(): return self.controllers()
         if self.path != "/events" or not self.authed(): return self.reply(401, {"ok": False})
         self.send_response(200); self.send_header("content-type", "text/event-stream"); self.end_headers()
         self.wfile.write(b": connected\n\n"); self.wfile.flush()

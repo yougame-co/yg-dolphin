@@ -39,6 +39,7 @@
 #include "Core/Orca/Launch.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Status.h"
+#include "Core/Orca/UX/UX.h"
 #include "Core/System.h"
 #include "DolphinNoGUI/Embed.h"
 #include "VideoCommon/Present.h"
@@ -452,6 +453,9 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
   if (embed.enabled)
     Config::SetCurrent(Config::MAIN_INPUT_BACKGROUND_INPUT, false);
   UICommon::InitControllers(wsi);
+  // The in-game UX: the YouGame app's controllers as the local pad, overlay, name tags.
+  if (Orca::SessionActive())
+    Orca::UX::Init();
 
   Common::ScopeGuard ui_common_guard([] {
     UICommon::ShutdownControllers();

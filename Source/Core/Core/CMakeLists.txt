@@ -528,6 +528,12 @@ add_library(core
   Orca/Session/Session.h
   Orca/Session/YouGameRoom.cpp
   Orca/Session/YouGameRoom.h
+  Orca/UX/Controllers.cpp
+  Orca/UX/Controllers.h
+  Orca/UX/ControllerSource.cpp
+  Orca/UX/ControllerSource.h
+  Orca/UX/UX.cpp
+  Orca/UX/UX.h
   NetworkCaptureLogger.cpp
   NetworkCaptureLogger.h
   PatchEngine.cpp
