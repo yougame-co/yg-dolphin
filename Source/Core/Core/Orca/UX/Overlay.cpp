@@ -130,7 +130,7 @@ Signal OverlayModel::Quality(double) const
   return Signal::Good;
 }
 
-OverlayModel::Frame OverlayModel::View(double now_ms, bool show_stats) const
+OverlayModel::Frame OverlayModel::View(double now_ms, Stats stats) const
 {
   std::lock_guard lk(m_lock);
   Frame f;
@@ -154,12 +154,14 @@ OverlayModel::Frame OverlayModel::View(double now_ms, bool show_stats) const
     f.toasts.push_back(
         {text, static_cast<float>(std::clamp(left / TOAST_FADE_MS, 0.0, 1.0))});
   }
-  if (show_stats && m_link.online)
+  if (stats != Stats::Off && m_link.online)
   {
-    f.stats = fmt::format("{} · delay {} · {:.1f} rb/s",
-                          m_link.round_trip_ms >= 0 ? fmt::format("{} ms", m_link.round_trip_ms) :
-                                                      std::string("– ms"),
-                          m_link.delay, m_link.rollbacks_per_second);
+    const std::string ping = m_link.round_trip_ms >= 0 ?
+                                 fmt::format("{} ms", m_link.round_trip_ms) :
+                                 std::string("– ms");
+    f.stats = stats == Stats::Full ? fmt::format("{} · delay {} · {:.1f} rb/s", ping,
+                                                 m_link.delay, m_link.rollbacks_per_second) :
+                                     ping;
   }
   return f;
 }
@@ -167,7 +169,7 @@ OverlayModel::Frame OverlayModel::View(double now_ms, bool show_stats) const
 namespace
 {
 OverlayModel s_overlay;
-std::atomic<bool> s_show_stats{false};
+std::atomic<Stats> s_stats{Stats::Off};
 std::atomic<bool> s_visible{true};  // the app shows the game (embed hide/show)
 // ORCA_UX_OVERLAY_DEMO=1 (design checks only): a made-up friend whose link cycles good, ok, bad
 // with a stall, every 12 s, in place of the session's stats.
@@ -239,25 +241,28 @@ void Draw()
 {
   const double now = NowMs();
   s_overlay.Update(s_demo ? DemoLink(now) : ViewOf(Events::GetLinkStats()), now);
-  const OverlayModel::Frame f = s_overlay.View(now, s_show_stats.load(std::memory_order_relaxed));
+  const OverlayModel::Frame f = s_overlay.View(now, s_stats.load(std::memory_order_relaxed));
   if (!f.show_signal && f.waiting.empty() && f.toasts.empty() && f.stats.empty())
     return;
   ImDrawList* dl = ImGui::GetForegroundDrawList();
   const ImVec2 screen = ImGui::GetIO().DisplaySize;
   const float unit = screen.y / 100;  // 1% of the height: the overlay scales with the window
   const float margin = 3 * unit;
-  float right_y = margin;
+  // Top left, where Brawl's matches and menus leave the screen empty: the circle, the ping beside
+  // it on the circle's centre line, then the toasts under them.
+  float y = margin;
   if (f.show_signal)
   {
     const float r = 3.0f * unit;
-    SignalCircle(dl, ImVec2(screen.x - margin - r, margin + r), r, f.signal);
-    right_y += 2 * r + unit;
-  }
-  if (!f.stats.empty())
-  {
-    const float size = 2.4f * unit;
-    const ImVec2 s = TextSize(size, f.stats);
-    OutlinedText(dl, size, ImVec2(screen.x - margin - s.x, right_y), 0.9f, f.stats);
+    const ImVec2 c(margin + r, margin + r);
+    SignalCircle(dl, c, r, f.signal);
+    if (!f.stats.empty())
+    {
+      const float size = 3.0f * unit;
+      const ImVec2 s = TextSize(size, f.stats);
+      OutlinedText(dl, size, ImVec2(c.x + r + unit, c.y - s.y / 2), 1, f.stats);
+    }
+    y += 2 * r + 1.5f * unit;
   }
   if (!f.waiting.empty())
   {
@@ -265,7 +270,6 @@ void Draw()
     const ImVec2 s = TextSize(size, f.waiting);
     OutlinedText(dl, size, ImVec2((screen.x - s.x) / 2, screen.y * 0.18f), 1, f.waiting);
   }
-  float y = margin;
   for (const OverlayModel::Toast& t : f.toasts)
   {
     const float size = 3.0f * unit;
@@ -280,9 +284,9 @@ OverlayModel& Overlay()
   return s_overlay;
 }
 
-void SetStatsVisible(bool visible)
+void SetStats(Stats stats)
 {
-  s_show_stats = visible;
+  s_stats = stats;
 }
 
 void ShutdownOverlay()
@@ -331,8 +335,8 @@ void RepresentDuringStall(int stalled_ms)
 
 void InitOverlay()
 {
-  if (const char* v = std::getenv("ORCA_UX_STATS"); v && v[0] == '1')
-    s_show_stats = true;
+  if (const char* v = std::getenv("ORCA_UX_STATS"); v && (v[0] == '1' || v[0] == '2'))
+    s_stats = v[0] == '2' ? Stats::Full : Stats::Ping;
   if (const char* v = std::getenv("ORCA_UX_OVERLAY_DEMO"); v && v[0] == '1')
     s_demo = true;
   OSD::SetHostOverlay(&Draw);

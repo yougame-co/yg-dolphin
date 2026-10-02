@@ -421,33 +421,33 @@ TEST(OrcaUXOverlay, ToastsFollowThePortListOnceEach)
   OverlayModel m;
   // The solo host's own port at boot: no toast.
   m.OnPorts(0, Ports({{0, "luis", false}}), 0);
-  EXPECT_TRUE(m.View(10, false).toasts.empty());
+  EXPECT_TRUE(m.View(10, Stats::Off).toasts.empty());
   // A friend plugs in; a re-run of that frame gives the same list again: one toast.
   m.OnPorts(300, Ports({{0, "luis", false}, {1, "ada", true}}), 1000);
   m.OnPorts(300, Ports({{0, "luis", false}, {1, "ada", true}}), 1010);
-  auto v = m.View(1100, false);
+  auto v = m.View(1100, Stats::Off);
   ASSERT_EQ(v.toasts.size(), 1u);
   EXPECT_EQ(v.toasts[0].text, "ada joined on port 2");
   EXPECT_FLOAT_EQ(v.toasts[0].alpha, 1);
   // It fades over its last half second and is gone after three.
-  EXPECT_NEAR(m.View(3750, false).toasts[0].alpha, 0.5f, 1e-4);
-  EXPECT_TRUE(m.View(4001, false).toasts.empty());
+  EXPECT_NEAR(m.View(3750, Stats::Off).toasts[0].alpha, 0.5f, 1e-4);
+  EXPECT_TRUE(m.View(4001, Stats::Off).toasts.empty());
   // The friend unplugs.
   m.OnPorts(900, Ports({{0, "luis", false}}), 5000);
-  v = m.View(5001, false);
+  v = m.View(5001, Stats::Off);
   ASSERT_EQ(v.toasts.size(), 1u);
   EXPECT_EQ(v.toasts[0].text, "ada left");
   // Joining a friend's game takes the frame number back to theirs: still shown.
   m.OnPorts(120, Ports({{0, "bo", true}, {1, "luis", false}}), 5100);
-  const auto joined = m.View(5101, false).toasts;
+  const auto joined = m.View(5101, Stats::Off).toasts;
   ASSERT_EQ(joined.size(), 2u);
   EXPECT_EQ(joined[1].text, "bo joined on port 1");
 
   // A joiner's first list already holds the host.
   OverlayModel joiner;
   joiner.OnPorts(0, Ports({{0, "luis", true}, {1, "ada", false}}), 0);
-  ASSERT_EQ(joiner.View(1, false).toasts.size(), 1u);
-  EXPECT_EQ(joiner.View(1, false).toasts[0].text, "luis is on port 1");
+  ASSERT_EQ(joiner.View(1, Stats::Off).toasts.size(), 1u);
+  EXPECT_EQ(joiner.View(1, Stats::Off).toasts[0].text, "luis is on port 1");
 }
 
 TEST(OrcaUXOverlay, WaitingOnlyAfterAQuarterSecondOfStall)
@@ -460,21 +460,21 @@ TEST(OrcaUXOverlay, WaitingOnlyAfterAQuarterSecondOfStall)
   link.stalled_ms = 200;
   link.waiting_seat = 1;
   m.Update(link, 100);
-  EXPECT_EQ(m.View(100, false).waiting, "");
+  EXPECT_EQ(m.View(100, Stats::Off).waiting, "");
   link.stalled_ms = 260;
   m.Update(link, 160);
-  EXPECT_EQ(m.View(160, false).waiting, "Waiting for ada\u2026");
-  EXPECT_EQ(m.View(160, false).signal, Signal::Bad);
+  EXPECT_EQ(m.View(160, Stats::Off).waiting, "Waiting for ada\u2026");
+  EXPECT_EQ(m.View(160, Stats::Off).signal, Signal::Bad);
   // The session that doesn't report stall time yet (-1) never shows it.
   link.stalled_ms = -1;
   m.Update(link, 200);
-  EXPECT_EQ(m.View(200, false).waiting, "");
+  EXPECT_EQ(m.View(200, Stats::Off).waiting, "");
   // Offline: nothing at all.
   link.online = false;
   link.stalled_ms = 900;
   m.Update(link, 300);
-  EXPECT_FALSE(m.View(300, false).show_signal);
-  EXPECT_EQ(m.View(300, false).waiting, "");
+  EXPECT_FALSE(m.View(300, Stats::Off).show_signal);
+  EXPECT_EQ(m.View(300, Stats::Off).waiting, "");
 }
 
 TEST(OrcaUXOverlay, SignalFromRoundTripAndRecentStalls)
@@ -489,7 +489,7 @@ TEST(OrcaUXOverlay, SignalFromRoundTripAndRecentStalls)
       l.stalls = n;
       m.Update(l, t);
     }
-    return m.View(stalls.back().first, false).signal;
+    return m.View(stalls.back().first, Stats::Off).signal;
   };
   link.round_trip_ms = 30;
   EXPECT_EQ(signal_at(link, {{0, 5}, {1000, 5}}), Signal::Good);
@@ -514,12 +514,17 @@ TEST(OrcaUXOverlay, StatsReadoutOnlyWhenAskedAndOnline)
   link.delay = 2;
   link.rollbacks_per_second = 1.25;
   m.Update(link, 0);
-  EXPECT_EQ(m.View(0, false).stats, "");
-  EXPECT_EQ(m.View(0, true).stats, "42 ms \u00b7 delay 2 \u00b7 1.2 rb/s");
-  EXPECT_TRUE(m.View(0, true).show_signal);
-  link.online = false;
+  EXPECT_EQ(m.View(0, Stats::Off).stats, "");
+  EXPECT_EQ(m.View(0, Stats::Ping).stats, "42 ms");
+  EXPECT_EQ(m.View(0, Stats::Full).stats, "42 ms \u00b7 delay 2 \u00b7 1.2 rb/s");
+  EXPECT_TRUE(m.View(0, Stats::Ping).show_signal);
+  link.round_trip_ms = -1;  // no ping measured yet
   m.Update(link, 1);
-  EXPECT_EQ(m.View(1, true).stats, "");
+  EXPECT_EQ(m.View(1, Stats::Ping).stats, "\u2013 ms");
+  link.online = false;
+  m.Update(link, 2);
+  EXPECT_EQ(m.View(2, Stats::Ping).stats, "");
+  EXPECT_EQ(m.View(2, Stats::Full).stats, "");
 }
 
 

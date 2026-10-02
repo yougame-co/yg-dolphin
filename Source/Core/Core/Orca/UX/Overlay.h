@@ -11,15 +11,24 @@
 #include "Core/Orca/Session/Events.h"
 
 // The minimal online overlay (ORCA_ONLINE_UX.md 1D), only what the game has nothing native for:
-//   - a small connection circle in the corner while a friend is plugged in, styled after Brawl's
-//     own Wi-Fi connection circle: 3 arcs blue, 2 yellow, 1 red;
+//   - a small connection circle in the top-left corner while a friend is plugged in, styled after
+//     Brawl's own Wi-Fi connection circle: 3 arcs blue, 2 yellow, 1 red;
 //   - "Waiting for <name>…" while the game has been waiting for a friend's input for 250 ms;
-//   - short toasts, "<name> joined on port N" and "<name> left";
-//   - optionally (embed `ping on`, or ORCA_UX_STATS=1) a one-line ping/delay readout.
+//   - short toasts, "<name> joined on port N" and "<name> left", under the circle;
+//   - beside the circle, the ping: "32 ms" with embed `ping on` (the YouGame page's default) or
+//     ORCA_UX_STATS=1; with `ping full` or ORCA_UX_STATS=2, also the delay and rollbacks per second.
 // It is drawn by the host's OSD layer over the presented image (ImGui), never into the emulated
 // framebuffer, and reads no game state: nothing in it can change emulation or desync.
 namespace Orca::UX
 {
+// What the readout beside the circle says.
+enum class Stats
+{
+  Off,
+  Ping,  // "32 ms"
+  Full,  // "32 ms · delay 2 · 1.2 rb/s"
+};
+
 enum class Signal
 {
   Good,
@@ -68,7 +77,7 @@ public:
   void OnPorts(int frame, const std::vector<Events::PortInfo>& ports, double now_ms);
   // The newest link stats (the drawing thread, each frame).
   void Update(const LinkView& link, double now_ms);
-  Frame View(double now_ms, bool show_stats) const;
+  Frame View(double now_ms, Stats stats) const;
 
 private:
   Signal Quality(double now_ms) const;
@@ -91,6 +100,6 @@ void ShutdownOverlay();
 void RepresentDuringStall(int stalled_ms);
 // The app hid or showed the game (embed `hide` / `show`): no stall redraws while hidden.
 void SetHostVisible(bool visible);
-void SetStatsVisible(bool visible);
+void SetStats(Stats stats);
 OverlayModel& Overlay();
 }  // namespace Orca::UX
