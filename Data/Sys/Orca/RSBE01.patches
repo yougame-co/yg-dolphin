@@ -150,3 +150,29 @@
 9017B89C * FFFFFFFF
 9017B8A0 * FFFFFFFF
 9017B8A4 * 00000FFF
+
+# --- Rules: items off by default ------------------------------------------------------------------
+
+# gmGlobalRecord (0x9017B640) keeps the rules menu's item settings at +0x810, the record's menu data
+# (GameGlobal::getGlobalRecordMenuDatap, 0x8004E5CC): +0 the item frequency (one byte: 0 None, 1
+# Low, 2 Medium, 3 High) and +8 the item switch (64 bits, one per item). GameGlobal::init
+# (0x8004C63C, its stores at 0x8004C9CC-0x8004C9D8) sets Medium with every item on before the
+# first frame, so before any patch here can apply, and a session has no save to replace them: every
+# match had items. Rules > Item Switch (muProcItemSwitch, in the resident rules module at
+# 0x806A3A60: it reads these words at 0x806AA62C and writes them back at 0x806AA9B8) edits them in
+# place, and a match takes its items from there. Instead, once: the frequency None, so no item
+# appears. The switch is left as the game set it, so choosing a frequency there brings the usual
+# items back. The group is written only while all four words hold the game's defaults; its second
+# word (menu data +4, padding after the frequency byte: no load or store of record +0x811-0x817 in
+# the DOL or the boot, menu and match modules) becomes 'ORCA', so it never lands again and a player
+# who picks Medium with every item on keeps it (without the marker that choice went back to None
+# in the same frame). All of it is emulated memory: a friend who drops in from the host's keyframe
+# gets the host's settings and marker, and a re-run sees what the first run saw. Found with
+# ORCA_UX_PROBE watches on the record and on the Item Switch page (its frequency at +0x678) under
+# scripted visits; the community "Global Brawl Netplay Settings" code in Dolphin's
+# GameSettings/RSBE01.ini writes the same words (and the stage list and the stock and time rules,
+# not changed here).
+9017BE50 02000000 00000000    # item frequency: Medium -> None
+9017BE54 00000000 4F524341    # menu data +4 (unused): 'ORCA', the group has landed
+9017BE58 FFFFFFFF FFFFFFFF    # item switch: every item on (guard only, left as is)
+9017BE5C FFFFFFFF FFFFFFFF    # (guard only)
