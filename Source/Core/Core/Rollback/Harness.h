@@ -20,6 +20,11 @@
 //   YG_SYNCTEST_DIAG=1    byte-level RAM diffs, DoState section diffs and a CoreTiming event trace
 //                         (with IPC replies) for the first mismatches; a one-time snapshot size
 //                         breakdown
+//   YG_SYNCTEST_SECTIONS=1  for every re-run frame whose device state differs, which DoState
+//                         sections differ (by marker); counts per section at each 600-frame report
+//                         and at exit. The device-state hash differs on almost every re-run frame
+//                         (host counters, the icache, GPU dirty flags), so a change to emulated
+//                         device state (the SI's, say) only shows in its own section's count
 //   YG_SYNCTEST_RENDER=1  render re-run frames too (they skip host rendering by default, as in a
 //                         match)
 //   YG_SYNCTEST_CLEARJIT=1  drop every JIT block after each load, so re-runs compile blocks with
@@ -27,8 +32,8 @@
 //   YG_BENCH=<k>          timing: save every frame, every 60th frame load k back; logs normal and
 //                         re-run frame, save and load averages
 //   YG_DUMP_FRAMES_FROM=<n> / _TO=<m>  Dolphin's frame dump for first-pass frames n..m (with
-//                         -C GFX.Settings.DumpFramesAsImages=True): re-runs present nothing, so a
-//                         rollback run's dumps pair 1:1 with a plain run's
+//                         -C Graphics.Settings.DumpFramesAsImages=True; `GFX.` is ignored): re-runs
+//                         present nothing, so a rollback run's dumps pair 1:1 with a plain run's
 //   YG_PADREC=<file>      record every port's pad (wire form) and the RAM checksum per frame
 //   YG_LOOPBACK=<file>    replay such a recording through a real Orca session (Loopback.h): seat 1
 //                         is local, seat 2 a virtual remote whose inputs arrive late; it also sends
@@ -39,10 +44,11 @@
 //                         input delay makes the session stall. Exit well before the recording ends.
 //                         _SILENT_FROM=<frame>: the remotes send nothing from that frame on; PASS
 //                         then means the session gave up after _GIVE_UP_MS (10000; 0: never) of
-//                         stalling. Any run ends if one stall lasts that long.
+//                         stalling. Any run ends if one stall lasts that long. With YG_THROTTLE=1
+//                         the session runs in real time, as a match does.
 // Runs need an Orca session (ORCA_SESSION=1): the frame boundary hook comes from its profile. All
-// modes run unthrottled. The frame counter is one per pass through the game's frame boundary. In a
-// session the harness logs a hash of the game's session-NAND save at exit.
+// modes run unthrottled unless YG_THROTTLE=1. The frame counter is one per pass through the game's
+// frame boundary. In a session the harness logs a hash of the game's session-NAND save at exit.
 
 #pragma once
 

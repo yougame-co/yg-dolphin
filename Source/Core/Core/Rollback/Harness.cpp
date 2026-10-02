@@ -10,6 +10,7 @@
 #include <cstring>
 #include <fstream>
 #include <map>
+#include <set>
 #include <memory>
 #include <sstream>
 #include <string>
@@ -62,6 +63,11 @@ const int s_exit_after = EnvInt("YG_EXIT_AFTER", 0);
 const int s_shot_every = EnvInt("YG_SHOT_EVERY", 0);
 const int s_shot_from = EnvInt("YG_SHOT_FROM", 0);
 const int s_diag = EnvInt("YG_SYNCTEST_DIAG", 0);
+// YG_SYNCTEST_SECTIONS=1: compare each re-run frame's device state with its first pass section by
+// section (the DoState markers) and count the frames each section differed in. The device-state
+// hash differs on nearly every re-run frame anyway (host counters, the icache, GPU dirty flags), so
+// only a per-section count shows a change that adds a difference (the SI's, say).
+const int s_sections = EnvInt("YG_SYNCTEST_SECTIONS", 0);
 const int s_bench_k = EnvInt("YG_BENCH", 0);
 // Re-run frames skip host rendering, as they will in a match; YG_SYNCTEST_RENDER=1 renders them.
 const int s_render_reruns = EnvInt("YG_SYNCTEST_RENDER", 0);
@@ -313,6 +319,65 @@ struct FrameRecord
 std::map<int, FrameRecord> s_records;
 std::vector<std::string> s_frame_events;  // CoreTiming events since the last frame end
 u64 s_checked = 0, s_mismatches = 0, s_ram_mismatches = 0, s_loads = 0;
+std::map<std::string, u64> s_section_frames;  // YG_SYNCTEST_SECTIONS: re-run frames it differed in
+
+// YG_SYNCTEST_SECTIONS: which DoState sections of a re-run frame's device state differ from its
+// first pass, by name and occurrence (a section can change size without shifting the rest).
+void CountSectionDiffs(const FrameRecord& want, const FrameRecord& got)
+{
+  using Ranges = std::map<std::string, std::vector<std::pair<std::size_t, std::size_t>>>;
+  const auto sections = [](const FrameRecord& r) {
+    Ranges out;
+    std::size_t start = 0;
+    for (const auto& [name, end] : r.markers)
+    {
+      out[name].emplace_back(start, end);
+      start = end;
+    }
+    if (start < r.dev_buf.size())
+      out["(after last marker)"].emplace_back(start, r.dev_buf.size());
+    return out;
+  };
+  const Ranges a = sections(want), b = sections(got);
+  std::set<std::string> differ;
+  for (const auto& [name, ranges] : a)
+  {
+    const auto it = b.find(name);
+    if (it == b.end() || it->second.size() != ranges.size())
+    {
+      differ.insert(name);
+      continue;
+    }
+    for (std::size_t k = 0; k < ranges.size(); ++k)
+    {
+      const auto [a0, a1] = ranges[k];
+      const auto [b0, b1] = it->second[k];
+      if (a1 - a0 != b1 - b0 ||
+          std::memcmp(want.dev_buf.data() + a0, got.dev_buf.data() + b0, a1 - a0) != 0)
+      {
+        differ.insert(name);
+        break;
+      }
+    }
+  }
+  for (const auto& [name, ranges] : b)
+  {
+    if (!a.contains(name))
+      differ.insert(name);
+  }
+  for (const std::string& name : differ)
+    ++s_section_frames[name];
+}
+
+std::string DescribeSectionDiffs()
+{
+  if (s_section_frames.empty())
+    return "none";
+  std::string out;
+  for (const auto& [name, frames] : s_section_frames)
+    out += fmt::format("{}{}: {}", out.empty() ? "" : ", ", name, frames);
+  return out;
+}
 
 // ORCA_TEST_SNAPSHOT_EVERY=K (in a session): the synctest loads only frames that are multiples of
 // K, so each rewind re-runs k to k + K - 1 frames, like a session's rollback from a sparse
@@ -492,7 +557,7 @@ void SyncTest(Core::System& system)
   SnapshotRing& ring = Ring();
 
   std::vector<std::pair<std::string, const u8*>> marker_ptrs;
-  if (s_diag)
+  if (s_diag || s_sections)
     PointerWrap::s_marker_log = &marker_ptrs;
   ring.Save(system, f);
   PointerWrap::s_marker_log = nullptr;
@@ -503,7 +568,7 @@ void SyncTest(Core::System& system)
   rec.dev = XXH3_64bits(state.data(), state.size());
   rec.regions = HashRegions(system);
   rec.ram = XXH3_64bits(rec.regions.data(), rec.regions.size() * sizeof(u64));
-  if (s_diag)
+  if (s_diag || s_sections)
   {
     rec.dev_buf.assign(state.begin(), state.end());
     for (const auto& [name, ptr] : marker_ptrs)
@@ -511,6 +576,9 @@ void SyncTest(Core::System& system)
       if (ptr >= state.data() && ptr <= state.data() + state.size())
         rec.markers.emplace_back(name, static_cast<std::size_t>(ptr - state.data()));
     }
+  }
+  if (s_diag)
+  {
     auto& memory = system.GetMemory();
     rec.mem1.assign(memory.GetRAM(), memory.GetRAM() + memory.GetRamSize());
     if (memory.GetEXRAM())
@@ -544,6 +612,8 @@ void SyncTest(Core::System& system)
   {
     ++s_checked;
     const FrameRecord& want = it->second;
+    if (s_sections && want.dev != rec.dev)
+      CountSectionDiffs(want, rec);
     if (want.ram != rec.ram || want.dev != rec.dev)
     {
       // RAM decides pass or fail. Device state also holds the emulated icache (filled only when
@@ -608,6 +678,9 @@ void SyncTest(Core::System& system)
                    "device-state-only mismatches, {} loads (rewind {}, to multiples of {})",
                    f, s_scene, s_checked, s_ram_mismatches, s_mismatches - s_ram_mismatches,
                    s_loads, s_synctest_k, every);
+    if (s_sections)
+      NOTICE_LOG_FMT(ROLLBACK, "Synctest device-state sections differing (re-run frames): {}",
+                     DescribeSectionDiffs());
   }
 }
 
@@ -789,11 +862,14 @@ void LoopbackBoundary(Core::System& system, int frame_here, bool first_pass)
                                                            0, s_lb_lag, s_lb_jitter, s_lb_delay,
                                                            s_lb_checksum_every);
     run.remote->SilenceFrom(s_lb_silent_from);
-    run.port = std::make_unique<RingPort>(system, config.max_rollback, true);
+    // YG_THROTTLE=1 paces the session in real time, as a match is (re-runs still run flat out):
+    // what a rollback's re-runs cost the frames on screen.
+    run.port = std::make_unique<RingPort>(system, config.max_rollback, !Diag::KeepThrottle());
     run.session = std::make_unique<Orca::Net::Session>(config, *run.port, *run.remote);
     NOTICE_LOG_FMT(ROLLBACK,
-                   "Loopback: {} recorded frames, {} seats, remote lag {}+0..{}, input delay {}, "
+                   "Loopback{}: {} recorded frames, {} seats, remote lag {}+0..{}, input delay {}, "
                    "max rollback {}, checksum every {}, snapshot every {}",
+                   Diag::KeepThrottle() ? " (real time)" : "",
                    run.recording.size(), s_lb_seats, s_lb_lag, s_lb_jitter, s_lb_delay,
                    s_lb_max_rollback, s_lb_checksum_every,
                    config.snapshot_every > 0 ? fmt::to_string(config.snapshot_every) : "auto");
@@ -1119,6 +1195,11 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
                    frame_here, s_checked, s_ram_mismatches,
                    s_synctest_k > 0 ? (s_ram_mismatches == 0 ? "PASS" : "FAIL") : "no sync test",
                    s_mismatches - s_ram_mismatches, s_loads);
+    if (s_sections && s_synctest_k > 0)
+    {
+      NOTICE_LOG_FMT(ROLLBACK, "Synctest device-state sections differing (re-run frames): {}",
+                     DescribeSectionDiffs());
+    }
     // The game's save on the session NAND: equal across runs with and without rollback when NAND
     // writes inside rollback windows are undone correctly.
     if (Orca::SessionActive())
