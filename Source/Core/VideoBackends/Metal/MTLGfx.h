@@ -100,6 +100,7 @@ private:
   Late m_late = Late::No;
   u32 m_paced_waits = 0;  // bit i: whether the i-th last nextDrawable waited PACED_WAIT or more
   int m_prompt_acquires = 0;
+  int m_paced_rounds = 0;  // times Paced began on this surface (each wants twice the prompt run)
 
   void CheckForSurfaceChange();
   void CheckForSurfaceResize();

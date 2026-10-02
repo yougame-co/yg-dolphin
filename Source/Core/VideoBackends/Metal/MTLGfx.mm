@@ -18,6 +18,7 @@
 #include "VideoCommon/Present.h"
 #include "VideoCommon/VideoBackendBase.h"
 
+#include <algorithm>
 #include <bit>
 #include <chrono>
 #include <fstream>
@@ -472,8 +473,9 @@ void Metal::Gfx::DispatchComputeShader(const AbstractShader* shader,  //
 //   frame in six isn't shown instead. Until the window is on a screen that keeps up.
 // - Paced: PACED_COUNT of the last PACED_WINDOW nextDrawable calls waited PACED_WAIT or more (a
 //   screen that can't keep up without saying so). Until PROMPT_ACQUIRES background acquires in a
-//   row were done in time without waiting. A lone slow wait (a burst of presents after a stall)
-//   changes nothing.
+//   row were done in time without waiting, twice as many each time Paced comes back (up to 16
+//   times): a screen that paces only now and then doesn't make the game wait every few seconds. A
+//   lone slow wait (a burst of presents after a stall) changes nothing.
 static constexpr std::chrono::milliseconds LATE_DRAWABLE{50};
 static constexpr int MIN_SCREEN_HZ = 59;
 static constexpr std::chrono::microseconds PACED_WAIT{4000};
@@ -602,7 +604,7 @@ MRCOwned<id<CAMetalDrawable>> Metal::Gfx::AcquireDrawable()
     if (m_late == Late::Paced)
     {
       m_prompt_acquires = drawable && waited < PACED_WAIT ? m_prompt_acquires + 1 : 0;
-      if (m_prompt_acquires >= PROMPT_ACQUIRES)
+      if (m_prompt_acquires >= PROMPT_ACQUIRES << std::min(m_paced_rounds - 1, 4))
       {
         SetLate(Late::No);
         return drawable;
@@ -637,7 +639,10 @@ MRCOwned<id<CAMetalDrawable>> Metal::Gfx::AcquireDrawable()
   m_paced_waits = (m_paced_waits << 1 | (waited >= PACED_WAIT ? 1u : 0u)) &
                   ((1u << PACED_WINDOW) - 1);
   if (std::popcount(m_paced_waits) >= PACED_COUNT)
+  {
+    ++m_paced_rounds;
     SetLate(Late::Paced);
+  }
   return drawable;
 }
 
@@ -692,6 +697,7 @@ void Metal::Gfx::CheckForSurfaceChange()
   m_late = Late::No;
   m_paced_waits = 0;
   m_prompt_acquires = 0;
+  m_paced_rounds = 0;
   SetupSurface();
 }
 

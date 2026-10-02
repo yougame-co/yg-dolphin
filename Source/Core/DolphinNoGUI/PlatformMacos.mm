@@ -333,7 +333,8 @@ void PlatformMacOS::UpdateSurfaceVisible()
   // The screen the window is on (the one with most of it), for the video backend: below 59 Hz it
   // can't keep up with the game (Presenter::SetSurfaceRefreshRate). Read every pass rather than
   // observed: it is cheap, and covers a move to another screen and a change of mode alike.
-  int hz = 0;
+  // A window with no screen (ordered out, hidden) keeps the last one's: it shows nothing anyway.
+  int hz = m_surface_refresh_rate < 0 ? 0 : m_surface_refresh_rate;
   if (@available(macOS 12.0, *))
   {
     if (NSScreen* screen = [m_window screen])

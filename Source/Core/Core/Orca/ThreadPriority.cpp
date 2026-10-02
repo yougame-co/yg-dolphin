@@ -23,7 +23,7 @@ namespace Orca
 {
 namespace
 {
-const char* Name(LatencyThread thread)
+[[maybe_unused]] const char* Name(LatencyThread thread)
 {
   switch (thread)
   {
@@ -56,26 +56,25 @@ void PrioritizeThread(LatencyThread thread)
 {
   if (!Wanted(thread))
     return;
-  bool ok = false;
 #if defined(_WIN32)
   // The CPU thread runs flat out between throttles, a notch up; the two network threads mostly
   // wait, and should run the moment their data arrives. Power throttling (EcoQoS) off for the
-  // thread as Dolphin already does for the process (Timer::IncreaseResolution): Orca's window is a
-  // child of the app's, so Windows never counts Orca as the foreground process.
-  ok = SetThreadPriority(GetCurrentThread(), thread == LatencyThread::Cpu ?
-                                                 THREAD_PRIORITY_ABOVE_NORMAL :
-                                                 THREAD_PRIORITY_HIGHEST) != 0;
+  // thread too, as Dolphin already does for the process (Timer::IncreaseResolution): Orca's window
+  // is a child of the app's, so Windows never counts Orca as the foreground process.
+  const bool ok = SetThreadPriority(GetCurrentThread(), thread == LatencyThread::Cpu ?
+                                                            THREAD_PRIORITY_ABOVE_NORMAL :
+                                                            THREAD_PRIORITY_HIGHEST) != 0;
   THREAD_POWER_THROTTLING_STATE throttling{};
   throttling.Version = THREAD_POWER_THROTTLING_CURRENT_VERSION;
   throttling.ControlMask = THREAD_POWER_THROTTLING_EXECUTION_SPEED;
   throttling.StateMask = 0;
   SetThreadInformation(GetCurrentThread(), ThreadPowerThrottling, &throttling, sizeof(throttling));
-#elif defined(__APPLE__)
-  ok = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0) == 0;
-#else
-  return;  // Orca ships for macOS and Windows only
-#endif
-  NOTICE_LOG_FMT(CORE, "Orca: {} thread at interactive priority{}", Name(thread),
+  NOTICE_LOG_FMT(CORE, "Orca: {} thread at raised priority{}", Name(thread),
                  ok ? "" : " (refused)");
+#elif defined(__APPLE__)
+  const bool ok = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0) == 0;
+  NOTICE_LOG_FMT(CORE, "Orca: {} thread at interactive QoS{}", Name(thread),
+                 ok ? "" : " (refused)");
+#endif
 }
 }  // namespace Orca
