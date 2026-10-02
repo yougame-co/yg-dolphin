@@ -668,19 +668,17 @@ TEST(OrcaUXNameTags, NothingOutsideTheCharacterSelectOrWhenItDoesNotLookRight)
   }
 }
 
-TEST(OrcaUXNameTags, TheListInEffectAtEachFrame)
+TEST(OrcaUXNameTags, TestNamesFromTheEnvironment)
 {
-  NameTagWriter w;
-  EXPECT_TRUE(w.PortsAt(10).empty());
-  w.OnPlugIn(0, {{0, "luis", false}});
-  w.OnPlugIn(500, {{0, "luis", false}, {1, "ada", true}});
-  EXPECT_EQ(w.PortsAt(499).size(), 1u);
-  EXPECT_EQ(w.PortsAt(500).size(), 2u);
-  // A rollback re-running frames before the plug-in sees the old list.
-  EXPECT_EQ(w.PortsAt(495).size(), 1u);
-  w.OnPlugIn(2000, {{0, "luis", false}});
-  EXPECT_EQ(w.PortsAt(2000).size(), 1u);
-  EXPECT_EQ(w.PortsAt(1999).size(), 2u);  // still kept: newer than 600 frames before the last
+  setenv("ORCA_UX_TEST_NAMES", "0:luis,1:sandbox_ada,7:no,x:no,2", 1);
+  const auto ports = TestPorts();
+  unsetenv("ORCA_UX_TEST_NAMES");
+  ASSERT_EQ(ports.size(), 2u);
+  EXPECT_EQ(ports[0].port, 0);
+  EXPECT_EQ(ports[0].name, "luis");
+  EXPECT_EQ(ports[1].port, 1);
+  EXPECT_EQ(ports[1].name, "sandbox_ada");
+  EXPECT_TRUE(TestPorts().empty());
 }
 
 #ifndef _WIN32

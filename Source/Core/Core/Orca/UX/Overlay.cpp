@@ -289,11 +289,15 @@ void ShutdownOverlay()
   OSD::SetHostOverlay({});
 }
 
-void RepresentDuringStall()
+void RepresentDuringStall(int stalled_ms)
 {
+  // Sessions run single core, so this presents on the CPU thread inside the stall wait: nothing
+  // for a short stall (the overlay has nothing to say before 250 ms), then ~15 times a second.
   static double s_last = 0;
+  if (stalled_ms < OverlayModel::WAITING_AFTER_MS - 50)
+    return;
   const double now = NowMs();
-  if (now - s_last < 33)
+  if (now - s_last < 66)
     return;
   s_last = now;
   AsyncRequests::GetInstance()->PushEvent([] {

@@ -3,6 +3,8 @@
 
 #include "Core/Orca/UX/NameTags.h"
 
+#include <cstdlib>
+
 #include "Core/Core.h"
 #include "Core/PowerPC/MMU.h"
 
@@ -109,7 +111,6 @@ private:
   const Core::CPUThreadGuard& m_guard;
 };
 
-NameTagWriter s_writer;
 }  // namespace
 
 std::u16string BrawlTag(std::string_view username)
@@ -176,38 +177,34 @@ int ApplyNameTags(GuestMemory& m, const std::vector<Events::PortInfo>& ports)
   return given;
 }
 
-void NameTagWriter::OnPlugIn(int frame, const std::vector<Events::PortInfo>& ports)
+void WriteNameTags(const Core::CPUThreadGuard& guard, const std::vector<Events::PortInfo>& ports)
 {
-  std::lock_guard lk(m_lock);
-  m_lists[frame] = ports;
-  // A rollback re-runs a handful of frames; nothing older than a few seconds is ever asked for.
-  while (m_lists.size() > 1 && m_lists.begin()->first < frame - 600 &&
-         std::next(m_lists.begin())->first <= frame - 600)
-  {
-    m_lists.erase(m_lists.begin());
-  }
-}
-
-std::vector<Events::PortInfo> NameTagWriter::PortsAt(int frame) const
-{
-  std::lock_guard lk(m_lock);
-  auto it = m_lists.upper_bound(frame);
-  if (it == m_lists.begin())
-    return {};
-  return std::prev(it)->second;
-}
-
-void NameTagWriter::OnFrame(const Core::CPUThreadGuard& guard, int frame)
-{
-  const std::vector<Events::PortInfo> ports = PortsAt(frame);
   if (ports.empty())
     return;
   GuardMemory memory(guard);
   ApplyNameTags(memory, ports);
 }
 
-NameTagWriter& NameTags()
+std::vector<Events::PortInfo> TestPorts()
 {
-  return s_writer;
+  std::vector<Events::PortInfo> ports;
+  const char* v = std::getenv("ORCA_UX_TEST_NAMES");
+  if (!v)
+    return ports;
+  std::string_view rest(v);
+  while (!rest.empty())
+  {
+    const size_t comma = rest.find(',');
+    const std::string_view item = rest.substr(0, comma);
+    rest = comma == std::string_view::npos ? std::string_view{} : rest.substr(comma + 1);
+    const size_t colon = item.find(':');
+    if (colon == std::string_view::npos || colon == 0)
+      continue;
+    const int port = item[0] - '0';
+    if (colon != 1 || port < 0 || port > 3)
+      continue;
+    ports.push_back({port, std::string(item.substr(colon + 1)), false});
+  }
+  return ports;
 }
 }  // namespace Orca::UX

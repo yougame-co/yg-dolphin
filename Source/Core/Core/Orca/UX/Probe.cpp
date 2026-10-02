@@ -3,7 +3,9 @@
 
 #include "Core/Orca/UX/Probe.h"
 
+#include <chrono>
 #include <cstdlib>
+#include <thread>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -17,7 +19,7 @@
 #include "Core/Core.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/System.h"
-#include "Core/Orca/UX/NameTags.h"
+#include "Core/Orca/UX/Overlay.h"
 
 // Research tool for the name tags (ORCA_ONLINE_UX.md 1C), never on in a real session:
 // ORCA_UX_PROBE=<file> runs one command per line at a frame boundary, counted from entry into a
@@ -25,6 +27,8 @@
 //   @<scene> <frame> write <addr> <hex bytes>      e.g. @muMenuMain 20 write 90180c10 0000
 //   @<scene> <frame> utf16 <addr> <text>           text as UTF-16BE with a 0 terminator
 //   @<scene> <frame> dump <addr> <length> <name>   to <user dir>/probe-<name>.bin
+//   @<scene> <frame> stall <ms> 0                  block the CPU thread like a session stall,
+//                                                  calling RepresentDuringStall every 10 ms
 // <addr> is hex, or [hex]+hex for one pointer hop (e.g. [805a00e0]+28).
 namespace Orca::UX
 {
@@ -106,25 +110,6 @@ u32 Address(const Core::CPUThreadGuard& guard, const std::string& expr)
 void ProbeFrame(const Core::CPUThreadGuard& guard)
 {
   static std::vector<Command> commands = Load();
-  // ORCA_UX_TEST_NAMES="0:ada,1:bob": the name tags as if the session had plugged those ports in
-  // at frame 0 (the frame callback then writes them, as in a session).
-  static const bool s_test_names = [] {
-    const char* v = std::getenv("ORCA_UX_TEST_NAMES");
-    if (!v)
-      return false;
-    std::vector<Events::PortInfo> ports;
-    std::istringstream in(v);
-    std::string item;
-    while (std::getline(in, item, ','))
-    {
-      const size_t colon = item.find(':');
-      if (colon != std::string::npos)
-        ports.push_back({std::atoi(item.substr(0, colon).c_str()), item.substr(colon + 1), false});
-    }
-    NameTags().OnPlugIn(0, ports);
-    return true;
-  }();
-  (void)s_test_names;
   static int frame = 0;
   ++frame;
   if (commands.empty())
@@ -143,6 +128,17 @@ void ProbeFrame(const Core::CPUThreadGuard& guard)
     if (c.done || c.scene != scene || c.frame != rel)
       continue;
     c.done = true;
+    if (c.verb == "stall")
+    {
+      const int ms = std::atoi(c.addr.c_str());
+      for (int waited = 0; waited < ms; waited += 10)
+      {
+        RepresentDuringStall(waited);
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+      }
+      NOTICE_LOG_FMT(ROLLBACK, "Probe {} {}: stalled {} ms", scene, rel, ms);
+      continue;
+    }
     const u32 addr = Address(guard, c.addr);
     if (c.verb == "write")
     {

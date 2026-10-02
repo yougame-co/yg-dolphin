@@ -86,10 +86,10 @@ private:
 void InitOverlay();
 void ShutdownOverlay();
 // While the game waits for a friend the CPU thread is blocked, so no frame is presented and the
-// overlay could not say so: the session calls this from its stall wait (CPU thread), and every
-// ~33 ms the last frame is shown again with the overlay on it. Host-only drawing: the emulated
-// state is untouched.
-void RepresentDuringStall();
+// overlay could not say so: the session calls this from its stall wait (CPU thread), and once the
+// stall nears 250 ms the last frame is shown again with the overlay on it, about 15 times a second.
+// Host-only drawing: the emulated state is untouched.
+void RepresentDuringStall(int stalled_ms);
 void SetStatsVisible(bool visible);
 OverlayModel& Overlay();
 }  // namespace Orca::UX

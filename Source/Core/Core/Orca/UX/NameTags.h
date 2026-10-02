@@ -3,8 +3,6 @@
 
 #pragma once
 
-#include <map>
-#include <mutex>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -63,20 +61,11 @@ public:
 // were given a tag.
 int ApplyNameTags(GuestMemory& memory, const std::vector<Events::PortInfo>& ports);
 
-// The session's plug-in lists by frame, so a re-run frame sees the list that was in effect then.
-class NameTagWriter
-{
-public:
-  void OnPlugIn(int frame, const std::vector<Events::PortInfo>& ports);
-  std::vector<Events::PortInfo> PortsAt(int frame) const;
-  // Events' frame callback: every frame boundary, CPU thread, first runs and re-runs, before the
-  // session saves anything there (so snapshots and keyframes hold what it wrote).
-  void OnFrame(const Core::CPUThreadGuard& guard, int frame);
+// At a frame boundary (Events' frame callback: every boundary, first runs and re-runs, before the
+// session saves anything there, so snapshots and keyframes hold what it wrote), with the ports in
+// effect at that frame as the session computes them from its synced seat plan.
+void WriteNameTags(const Core::CPUThreadGuard& guard, const std::vector<Events::PortInfo>& ports);
 
-private:
-  mutable std::mutex m_lock;
-  std::map<int, std::vector<Events::PortInfo>> m_lists;
-};
-
-NameTagWriter& NameTags();
+// ORCA_UX_TEST_NAMES="0:ada,1:bob" as a port list (tests and harness runs); empty when unset.
+std::vector<Events::PortInfo> TestPorts();
 }  // namespace Orca::UX
