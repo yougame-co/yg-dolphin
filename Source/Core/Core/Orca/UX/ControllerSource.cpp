@@ -17,6 +17,7 @@
 
 #include "Common/HttpRequest.h"
 #include "Common/Logging/Log.h"
+#include "Core/Orca/Profile.h"
 #include "Core/Orca/UX/Controllers.h"
 #include "InputCommon/ControlReference/ControlReference.h"
 
@@ -225,6 +226,8 @@ private:
 
   void Run()
   {
+    // The local player's pads arrive here from the app (Profile.h, PrioritizeThread).
+    Orca::PrioritizeThread(Orca::LatencyThread::Controllers);
     int backoff_ms = 500;
     while (!m_done)
     {

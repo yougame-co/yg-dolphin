@@ -329,6 +329,8 @@ static void CpuThread(Core::System& system, const std::optional<std::string>& sa
     Common::SetCurrentThreadName("CPU thread");
   else
     Common::SetCurrentThreadName("CPU-GPU thread");
+  // Orca: a session samples and applies the pads in this thread's frame hook (Profile.h).
+  Orca::PrioritizeThread(Orca::LatencyThread::Cpu);
 
   // This needs to be delayed until after the video backend is ready.
   DolphinAnalytics::Instance().ReportGameStart();

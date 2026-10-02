@@ -76,6 +76,22 @@ std::string GetEnv(const char* name);
 // itself unless the environment already says otherwise (ORCA_SESSION=0 turns it off).
 bool SessionActive();
 
+// Latency (ORCA.md, "Input latency"): the calling thread is one an input's way through Orca runs
+// on, and gets an interactive thread's scheduling, so a busy machine (a browser, a build, the app
+// itself) neither delays it nor moves it to an efficiency core: on macOS
+// QOS_CLASS_USER_INTERACTIVE, on Windows a raised priority and no power throttling (EcoQoS). In a
+// session only.
+// ORCA_THREAD_QOS=0 leaves every thread as it was; =1 raises the CPU thread in a scripted harness
+// run too, which otherwise keeps it as it was (an unthrottled run would hold a core at interactive
+// priority for minutes). Host only: when a thread runs never changes what it computes.
+enum class LatencyThread
+{
+  Cpu,          // the CPU thread: emulation, the frame hook, the session
+  Room,         // the YouGame room's network thread
+  Controllers,  // the app's controller stream
+};
+void PrioritizeThread(LatencyThread thread);
+
 // Test-only overrides for harness runs, honoured only inside a session. A process with any of them
 // active must never offer or join a lobby, and its compatibility key differs.
 //   ORCA_TEST_PADS=4         ports 3 and 4 connected too (4-player desync coverage)

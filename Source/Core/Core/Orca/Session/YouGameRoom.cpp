@@ -991,6 +991,8 @@ struct YouGameRoom::Impl
 
   void Run()
   {
+    // Every input to and from the friend passes through here (Profile.h, PrioritizeThread).
+    Orca::PrioritizeThread(Orca::LatencyThread::Room);
     std::string url, ticket;
     if (!Ticket(&url, &ticket))
       return;
