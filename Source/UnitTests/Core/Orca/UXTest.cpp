@@ -13,6 +13,7 @@
 #include <string>
 #include <mutex>
 #include <thread>
+#include <utility>
 
 #ifndef _WIN32
 #include <arpa/inet.h>
@@ -526,6 +527,250 @@ TEST(OrcaUXOverlay, StatsReadoutOnlyWhenAskedAndOnline)
   m.Update(link, 2);
   EXPECT_EQ(m.View(2, Stats::Ping).stats, "");
   EXPECT_EQ(m.View(2, Stats::Full).stats, "");
+}
+
+namespace
+{
+// Shown frames at 60 fps on a millisecond clock: 16, 17, 17 ms, so any second holds exactly 60.
+struct Pacer
+{
+  double t = 0;  // the last boundary
+  int k = 0;
+  bool started = false;
+  // Frames until the next would pass `to`; returns the last boundary.
+  double Until(OverlayModel& m, double to)
+  {
+    if (!std::exchange(started, true))
+      m.OnFrame(t, true);
+    for (;;)
+    {
+      const double next = t + (k % 3 == 0 ? 16 : 17);
+      if (next > to)
+        return t;
+      t = next;
+      ++k;
+      m.OnFrame(t, true);
+    }
+  }
+  // One frame that took `ms`, then the rhythm goes on.
+  double Late(OverlayModel& m, double ms)
+  {
+    t += ms;
+    m.OnFrame(t, true);
+    return t;
+  }
+};
+
+// Shown frames every `ms` until the next would pass `to`. Returns the last boundary.
+double RunEvery(OverlayModel& m, double ms, double to)
+{
+  double t = 0;
+  for (; t + ms <= to; t += ms)
+    m.OnFrame(t + ms, true);
+  return t;
+}
+}  // namespace
+
+TEST(OrcaUXOverlay, FrameMeterTextSoloAfterItsFirstSecond)
+{
+  OverlayModel m;
+  Pacer p;
+  // Nothing before the first frame, and nothing in the meter's first second (a part-second would
+  // read as a low frame rate).
+  EXPECT_EQ(m.View(0, Stats::Ping, Perf::Fps).perf, "");
+  double t = p.Until(m, 990);
+  EXPECT_EQ(m.View(t, Stats::Ping, Perf::Fps).perf, "");
+  t = p.Until(m, 3000);
+  // Solo: no circle, no ping, the meter alone.
+  const auto f = m.View(t, Stats::Ping, Perf::Fps);
+  EXPECT_FALSE(f.show_signal);
+  EXPECT_EQ(f.stats, "");
+  EXPECT_EQ(f.perf, "60 fps · 17 ms");
+  EXPECT_EQ(f.perf_level, Signal::Good);
+  EXPECT_TRUE(f.graph.empty());
+  EXPECT_EQ(m.View(t, Stats::Ping, Perf::Off).perf, "");
+  // Mid-frame (the overlay draws while the next frame runs): the same second.
+  EXPECT_EQ(m.View(t + 9, Stats::Ping, Perf::Fps).perf, "60 fps · 17 ms");
+}
+
+TEST(OrcaUXOverlay, FrameMeterColourThresholds)
+{
+  const auto at_rate = [](double ms) {
+    OverlayModel m;
+    return m.View(RunEvery(m, ms, 4000), Stats::Off, Perf::Fps);
+  };
+  // 55 fps of 18 ms frames: under 59 fps.
+  auto f = at_rate(18.2);
+  EXPECT_EQ(f.perf, "55 fps · 18 ms");
+  EXPECT_EQ(f.perf_level, Signal::Ok);
+  // 45 fps: under 50, and every frame past 20 ms.
+  f = at_rate(22.3);
+  EXPECT_EQ(f.perf, "45 fps · 22 ms");
+  EXPECT_EQ(f.perf_level, Signal::Bad);
+  // 30 fps: two frame periods each, hitches.
+  EXPECT_EQ(at_rate(33.4).perf_level, Signal::Bad);
+  // The Wii's 59.94 Hz: plain.
+  f = at_rate(1000 / 59.94);
+  EXPECT_EQ(f.perf, "60 fps · 17 ms");
+  EXPECT_EQ(f.perf_level, Signal::Good);
+
+  // One late frame at 60 fps: past 20 ms is coloured, past two frame periods is a hitch.
+  const auto one_late = [](double late_ms) {
+    OverlayModel m;
+    Pacer p;
+    p.Until(m, 3000);
+    p.Late(m, late_ms);
+    return m.View(p.Until(m, p.t + 200), Stats::Off, Perf::Fps);
+  };
+  f = one_late(19);
+  EXPECT_EQ(f.perf, "60 fps · 19 ms");
+  EXPECT_EQ(f.perf_level, Signal::Good);
+  f = one_late(25);
+  EXPECT_EQ(f.perf, "60 fps · 25 ms");
+  EXPECT_EQ(f.perf_level, Signal::Ok);
+  f = one_late(40);
+  EXPECT_EQ(f.perf, "59 fps · 40 ms");
+  EXPECT_EQ(f.perf_level, Signal::Bad);
+}
+
+TEST(OrcaUXOverlay, FrameMeterHoldsTheColourTwoSecondsAfterTheReadoutClears)
+{
+  OverlayModel m;
+  Pacer p;
+  p.Until(m, 3000);
+  // A 300 ms freeze (a SIGSTOP, a disc read), then 60 fps again.
+  const double hitch = p.Late(m, 300);
+  auto f = m.View(p.Until(m, hitch + 500), Stats::Off, Perf::Fps);
+  EXPECT_EQ(f.perf, "43 fps · 300 ms");
+  EXPECT_EQ(f.perf_level, Signal::Bad);
+  // A second later the readout is back to normal, the colour isn't...
+  f = m.View(p.Until(m, hitch + 1200), Stats::Off, Perf::Fps);
+  EXPECT_EQ(f.perf, "60 fps · 17 ms");
+  EXPECT_EQ(f.perf_level, Signal::Bad);
+  EXPECT_EQ(m.View(p.Until(m, hitch + 2900), Stats::Off, Perf::Fps).perf_level, Signal::Bad);
+  // ...until two seconds after the last readout that showed the freeze.
+  f = m.View(p.Until(m, hitch + 3100), Stats::Off, Perf::Fps);
+  EXPECT_EQ(f.perf, "60 fps · 17 ms");
+  EXPECT_EQ(f.perf_level, Signal::Good);
+
+  // A frame a little late holds the yellow the same way.
+  const double dip = p.Late(m, 26);
+  f = m.View(p.Until(m, dip + 400), Stats::Off, Perf::Fps);
+  EXPECT_EQ(f.perf, "60 fps · 26 ms");
+  EXPECT_EQ(f.perf_level, Signal::Ok);
+  EXPECT_EQ(m.View(p.Until(m, dip + 2900), Stats::Off, Perf::Fps).perf_level, Signal::Ok);
+  EXPECT_EQ(m.View(p.Until(m, dip + 3100), Stats::Off, Perf::Fps).perf_level, Signal::Good);
+}
+
+TEST(OrcaUXOverlay, FrameMeterCountsShownFramesOnlyAndTimesReRunsIntoThem)
+{
+  OverlayModel m;
+  double t = 0;
+  // 60 fps where every 6th boundary rolls back 4 frames: the re-runs run unshown, take 6 ms in all,
+  // and the next shown frame is that much later.
+  for (int k = 0; k < 240; ++k)
+  {
+    m.OnFrame(t, true);
+    if (k % 6 == 5)
+    {
+      for (int r = 1; r <= 4; ++r)
+        m.OnFrame(t + 1.5 * r, false);
+      t += 6;
+    }
+    t += k % 3 == 0 ? 16 : 17;
+  }
+  const auto f = m.View(t - 1, Stats::Off, Perf::Fps);
+  EXPECT_EQ(f.perf, "56 fps · 23 ms");
+  EXPECT_EQ(f.perf_level, Signal::Ok);
+
+  // A short catch-up (a joiner a few frames behind its host) is timed into the next shown frame.
+  OverlayModel joiner;
+  Pacer p;
+  t = p.Until(joiner, 2000);
+  for (int k = 1; k <= 20; ++k)
+    joiner.OnFrame(t + k, false);
+  EXPECT_EQ(joiner.View(p.Late(joiner, 60), Stats::Off, Perf::Fps).perf, "58 fps · 60 ms");
+  // A join's catch-up (hundreds of frames run unseen after the keyframe loads) is a load, not the
+  // game's pace: the meter starts over, and shows nothing of it.
+  t = p.Until(joiner, 5000);
+  for (int k = 1; k <= 300; ++k)
+    joiner.OnFrame(t + k, false);
+  t = p.Late(joiner, 2000);
+  EXPECT_EQ(joiner.View(t, Stats::Off, Perf::Fps).perf, "");
+  const auto after = joiner.View(p.Until(joiner, t + 1500), Stats::Off, Perf::Fps);
+  EXPECT_EQ(after.perf, "60 fps · 17 ms");
+  EXPECT_EQ(after.perf_level, Signal::Good);
+}
+
+TEST(OrcaUXOverlay, FrameMeterStandsStillWhilePausedAndShowsAStallAsItLasts)
+{
+  OverlayModel m;
+  Pacer p;
+  double t = p.Until(m, 3000);
+  const auto before = m.View(t + 5, Stats::Off, Perf::Detailed);
+  ASSERT_EQ(before.perf, "60 fps · 17 ms");
+  // Paused for a minute: the readout is the one at the pause, never "0 fps".
+  m.Pause(t + 5);
+  for (double later : {5.0, 700.0, 1500.0, 60000.0})
+  {
+    const auto f = m.View(t + later, Stats::Off, Perf::Detailed);
+    EXPECT_EQ(f.perf, before.perf);
+    EXPECT_EQ(f.perf_level, Signal::Good);
+    EXPECT_EQ(f.graph, before.graph);
+  }
+  // Resumed: the frame across the pause is timed without it, and the last second is still full.
+  m.Resume(t + 60000);
+  p.t = t + 60000 + 12;
+  m.OnFrame(p.t, true);
+  auto f = m.View(p.t, Stats::Off, Perf::Fps);
+  EXPECT_EQ(f.perf, "60 fps · 17 ms");
+  EXPECT_EQ(f.perf_level, Signal::Good);
+
+  // Not paused, the game waiting for a friend: the frame still running is already that long.
+  t = p.Until(m, p.t + 2000);
+  f = m.View(t + 400, Stats::Off, Perf::Fps);
+  EXPECT_EQ(f.perf, "36 fps · 400 ms");
+  EXPECT_EQ(f.perf_level, Signal::Bad);
+
+  // A pause before the meter's first second: nothing to show, then or after.
+  OverlayModel early;
+  early.OnFrame(0, true);
+  early.Pause(10);
+  EXPECT_EQ(early.View(5000, Stats::Off, Perf::Fps).perf, "");
+}
+
+TEST(OrcaUXOverlay, FrameMeterDetailedAddsTheGraphAndOnlineTheDelay)
+{
+  OverlayModel m;
+  Pacer p;
+  p.Until(m, 2500);
+  p.Late(m, 40);
+  const double t = p.Until(m, p.t + 500);
+  auto f = m.View(t, Stats::Ping, Perf::Detailed);
+  // Solo: no delay or rollbacks to show.
+  EXPECT_EQ(f.perf, "59 fps · 40 ms");
+  // Two seconds of frames, oldest first, the late one among them.
+  EXPECT_EQ(f.graph.size(), 119u);
+  EXPECT_EQ(*std::max_element(f.graph.begin(), f.graph.end()), 40.0f);
+  EXPECT_LE(f.graph.back(), 17.0f);
+  EXPECT_TRUE(m.View(t, Stats::Ping, Perf::Fps).graph.empty());
+
+  // With a friend: the circle, the ping, and the meter with the delay and rollbacks per second,
+  // unless the ping line (`ping full`) already says them.
+  LinkView link;
+  link.online = true;
+  link.round_trip_ms = 32;
+  link.delay = 2;
+  link.rollbacks_per_second = 1.25;
+  m.Update(link, t);
+  f = m.View(t, Stats::Ping, Perf::Detailed);
+  EXPECT_TRUE(f.show_signal);
+  EXPECT_EQ(f.stats, "32 ms");
+  EXPECT_EQ(f.perf, "59 fps · 40 ms · delay 2 · 1.2 rb/s");
+  f = m.View(t, Stats::Full, Perf::Detailed);
+  EXPECT_EQ(f.stats, "32 ms · delay 2 · 1.2 rb/s");
+  EXPECT_EQ(f.perf, "59 fps · 40 ms");
+  EXPECT_EQ(m.View(t, Stats::Ping, Perf::Fps).perf, "59 fps · 40 ms");
 }
 
 

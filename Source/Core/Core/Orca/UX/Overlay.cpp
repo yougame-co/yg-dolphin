@@ -10,10 +10,13 @@
 #include <cmath>
 #include <cstdlib>
 #include <numbers>
+#include <utility>
 
 #include <fmt/format.h>
 #include <imgui.h>
 
+#include "Common/HookableEvent.h"
+#include "Core/Core.h"
 #include "VideoCommon/AsyncRequests.h"
 #include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/Present.h"
@@ -53,6 +56,22 @@ int WaitingSeat(const T& stats)
 std::string NameOf(const Events::PortInfo& p)
 {
   return p.name.empty() ? fmt::format("Player {}", p.port + 1) : p.name;
+}
+
+// The frame meter's colour for a readout: its frames shown in a second, and whether one of them was
+// a hitch (past two frame periods) or late (past 20 ms).
+Signal LevelOf(int fps, bool hitch, bool late)
+{
+  if (fps < OverlayModel::PERF_BAD_FPS || hitch)
+    return Signal::Bad;
+  if (fps < OverlayModel::PERF_OK_FPS || late)
+    return Signal::Ok;
+  return Signal::Good;
+}
+
+Signal Worse(Signal a, Signal b)
+{
+  return static_cast<int>(a) >= static_cast<int>(b) ? a : b;
 }
 }  // namespace
 
@@ -130,7 +149,108 @@ Signal OverlayModel::Quality(double) const
   return Signal::Good;
 }
 
-OverlayModel::Frame OverlayModel::View(double now_ms, Stats stats) const
+void OverlayModel::OnFrame(double now_ms, bool shown)
+{
+  std::lock_guard lk(m_lock);
+  if (!shown)
+  {
+    ++m_unshown;
+    return;
+  }
+  // A long run of unseen frames is a joiner's catch-up, a load rather than the game's pace: the
+  // meter starts over. A rollback's few re-runs only lengthen the next shown frame.
+  if (std::exchange(m_unshown, 0) > PERF_MAX_UNSHOWN)
+  {
+    m_frames.clear();
+    m_last_frame = -1;
+  }
+  if (m_last_frame < 0)
+    m_first_frame = now_ms;
+  else
+    m_frames.emplace_back(now_ms, now_ms - m_last_frame);
+  m_last_frame = now_ms;
+  while (!m_frames.empty() && m_frames.front().first <= now_ms - PERF_WINDOW_MS - PERF_HOLD_MS)
+    m_frames.pop_front();
+}
+
+void OverlayModel::Pause(double now_ms)
+{
+  std::lock_guard lk(m_lock);
+  if (m_paused)
+    return;
+  m_paused = true;
+  m_paused_at = now_ms;
+}
+
+void OverlayModel::Resume(double now_ms)
+{
+  std::lock_guard lk(m_lock);
+  if (!m_paused)
+    return;
+  m_paused = false;
+  // As if the pause never was: the first frame after it is timed without the paused time, and the
+  // last second's frames are still the last second's.
+  const double paused = std::max(0.0, now_ms - m_paused_at);
+  for (auto& frame : m_frames)
+    frame.first += paused;
+  if (m_first_frame >= 0)
+    m_first_frame += paused;
+  if (m_last_frame >= 0)
+    m_last_frame += paused;
+}
+
+void OverlayModel::Meter(double now_ms, Stats stats, Perf perf, Frame* f) const
+{
+  // Paused, the readout stands still at the moment of the pause.
+  const double now = m_paused ? m_paused_at : now_ms;
+  if (perf == Perf::Off || m_last_frame < 0 || now < m_first_frame + PERF_WINDOW_MS)
+    return;
+  // One pass, oldest first: the readout at each shown boundary of the last PERF_HOLD_MS gives the
+  // colour its hold. `first` is the oldest frame of the second being read; `hitch` and `late` are
+  // the newest frames past the thresholds (-1: none).
+  std::size_t first = 0;
+  std::ptrdiff_t hitch = -1, late = -1;
+  const auto level_at = [&](std::size_t end, double t) {
+    while (first < end && m_frames[first].first <= t - PERF_WINDOW_MS)
+      ++first;
+    const auto oldest = static_cast<std::ptrdiff_t>(first);
+    return LevelOf(static_cast<int>(end - first), hitch >= oldest, late >= oldest);
+  };
+  Signal level = Signal::Good;
+  std::size_t end = 0;
+  for (; end < m_frames.size() && m_frames[end].first <= now; ++end)
+  {
+    const auto [at, ms] = m_frames[end];
+    if (ms > PERF_BAD_FRAME_MS)
+      hitch = static_cast<std::ptrdiff_t>(end);
+    if (ms > PERF_OK_FRAME_MS)
+      late = static_cast<std::ptrdiff_t>(end);
+    if (at > now - PERF_HOLD_MS && at >= m_first_frame + PERF_WINDOW_MS)
+      level = Worse(level, level_at(end + 1, at));
+  }
+  // Now: the last second's frames, and the frame still running (the game waiting for a friend)
+  // is at least this long already.
+  level_at(end, now);
+  const int fps = static_cast<int>(end - first);
+  double longest_ms = std::max(0.0, now - m_last_frame);
+  for (std::size_t i = first; i < end; ++i)
+    longest_ms = std::max(longest_ms, m_frames[i].second);
+  f->perf_level = Worse(level, LevelOf(fps, longest_ms > PERF_BAD_FRAME_MS,
+                                       longest_ms > PERF_OK_FRAME_MS));
+  f->perf = fmt::format("{} fps · {:.0f} ms", fps, longest_ms);
+  if (perf != Perf::Detailed)
+    return;
+  // The ping line says these already with `ping full`.
+  if (m_link.online && stats != Stats::Full)
+    f->perf += fmt::format(" · delay {} · {:.1f} rb/s", m_link.delay, m_link.rollbacks_per_second);
+  for (std::size_t i = 0; i < end; ++i)
+  {
+    if (m_frames[i].first > now - PERF_GRAPH_MS)
+      f->graph.push_back(static_cast<float>(m_frames[i].second));
+  }
+}
+
+OverlayModel::Frame OverlayModel::View(double now_ms, Stats stats, Perf perf) const
 {
   std::lock_guard lk(m_lock);
   Frame f;
@@ -163,6 +283,7 @@ OverlayModel::Frame OverlayModel::View(double now_ms, Stats stats) const
                                                  m_link.delay, m_link.rollbacks_per_second) :
                                      ping;
   }
+  Meter(now_ms, stats, perf, &f);
   return f;
 }
 
@@ -170,6 +291,9 @@ namespace
 {
 OverlayModel s_overlay;
 std::atomic<Stats> s_stats{Stats::Off};
+// On until the app says otherwise (Luis wants it while testing).
+std::atomic<Perf> s_perf{Perf::Fps};
+Common::EventHook s_state_hook;  // the core's pause and resume, for the frame meter
 std::atomic<bool> s_visible{true};  // the app shows the game (embed hide/show)
 // ORCA_UX_OVERLAY_DEMO=1 (design checks only): a made-up friend whose link cycles good, ok, bad
 // with a stall, every 12 s, in place of the session's stats.
@@ -200,15 +324,24 @@ ImU32 Rgba(int r, int g, int b, float a)
   return IM_COL32(r, g, b, static_cast<int>(std::lround(std::clamp(a, 0.0f, 1.0f) * 255)));
 }
 
+// The frame meter's colours: white while the game keeps its pace, then the circle's yellow and red.
+ImU32 LevelColour(Signal level, float alpha)
+{
+  return level == Signal::Bad ? Rgba(255, 72, 64, alpha) :
+         level == Signal::Ok  ? Rgba(255, 208, 64, alpha) :
+                                Rgba(255, 255, 255, alpha);
+}
+
 // Text the way Brawl's HUD sets it: white, with a dark outline so it reads on any stage.
-void OutlinedText(ImDrawList* dl, float size, ImVec2 pos, float alpha, const std::string& text)
+void OutlinedText(ImDrawList* dl, float size, ImVec2 pos, float alpha, const std::string& text,
+                  Signal level = Signal::Good)
 {
   ImFont* font = ImGui::GetFont();
   const float o = std::max(1.0f, size / 14);
   for (const ImVec2 d : {ImVec2(-o, 0), ImVec2(o, 0), ImVec2(0, -o), ImVec2(0, o), ImVec2(o, o)})
     dl->AddText(font, size, ImVec2(pos.x + d.x, pos.y + d.y), Rgba(16, 16, 24, alpha * 0.85f),
                 text.c_str());
-  dl->AddText(font, size, pos, Rgba(255, 255, 255, alpha), text.c_str());
+  dl->AddText(font, size, pos, LevelColour(level, alpha), text.c_str());
 }
 
 ImVec2 TextSize(float size, const std::string& text)
@@ -237,32 +370,83 @@ void SignalCircle(ImDrawList* dl, ImVec2 c, float r, Signal signal)
   }
 }
 
+// The frame meter's graph: a bar per shown frame of the last two seconds, newest on the right, up
+// to 50 ms tall, with a line at one frame period.
+void FrameGraph(ImDrawList* dl, ImVec2 pos, ImVec2 size, const std::vector<float>& frames)
+{
+  constexpr float TOP_MS = 50;
+  constexpr float SLOTS = OverlayModel::PERF_GRAPH_MS * 60 / 1000;
+  dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), Rgba(10, 14, 28, 0.62f),
+                    size.y * 0.12f);
+  const float slot = size.x / SLOTS;
+  const float bottom = pos.y + size.y;
+  float x = pos.x + size.x;
+  for (auto it = frames.rbegin(); it != frames.rend() && x - slot >= pos.x - 0.5f; ++it)
+  {
+    const float ms = *it;
+    const Signal level = ms > OverlayModel::PERF_BAD_FRAME_MS ? Signal::Bad :
+                         ms > OverlayModel::PERF_OK_FRAME_MS  ? Signal::Ok :
+                                                                Signal::Good;
+    const float h = std::min(ms, TOP_MS) / TOP_MS * size.y;
+    dl->AddRectFilled(ImVec2(x - slot, bottom - h), ImVec2(x - slot * 0.15f, bottom),
+                      LevelColour(level, level == Signal::Good ? 0.75f : 1));
+    x -= slot;
+  }
+  const float period_y = bottom - 1000.0f / 60 / TOP_MS * size.y;
+  dl->AddLine(ImVec2(pos.x, period_y), ImVec2(pos.x + size.x, period_y),
+              Rgba(255, 255, 255, 0.35f), std::max(1.0f, size.y / 40));
+}
+
 void Draw()
 {
   const double now = NowMs();
   s_overlay.Update(s_demo ? DemoLink(now) : ViewOf(Events::GetLinkStats()), now);
-  const OverlayModel::Frame f = s_overlay.View(now, s_stats.load(std::memory_order_relaxed));
-  if (!f.show_signal && f.waiting.empty() && f.toasts.empty() && f.stats.empty())
+  const OverlayModel::Frame f = s_overlay.View(now, s_stats.load(std::memory_order_relaxed),
+                                               s_perf.load(std::memory_order_relaxed));
+  if (!f.show_signal && f.waiting.empty() && f.toasts.empty() && f.stats.empty() &&
+      f.perf.empty())
+  {
     return;
+  }
   ImDrawList* dl = ImGui::GetForegroundDrawList();
   const ImVec2 screen = ImGui::GetIO().DisplaySize;
   const float unit = screen.y / 100;  // 1% of the height: the overlay scales with the window
   const float margin = 3 * unit;
+  const float text_size = 3.0f * unit;
   // Top left, where Brawl's matches and menus leave the screen empty: the circle, the ping beside
-  // it on the circle's centre line, then the toasts under them.
+  // it on the circle's centre line (the frame meter under the ping), the meter alone when solo,
+  // its graph, then the toasts under them.
   float y = margin;
   if (f.show_signal)
   {
     const float r = 3.0f * unit;
     const ImVec2 c(margin + r, margin + r);
     SignalCircle(dl, c, r, f.signal);
-    if (!f.stats.empty())
+    const float x = c.x + r + unit;
+    if (!f.stats.empty() && !f.perf.empty())
     {
-      const float size = 3.0f * unit;
-      const ImVec2 s = TextSize(size, f.stats);
-      OutlinedText(dl, size, ImVec2(c.x + r + unit, c.y - s.y / 2), 1, f.stats);
+      OutlinedText(dl, text_size, ImVec2(x, c.y - TextSize(text_size, f.stats).y), 1, f.stats);
+      OutlinedText(dl, text_size, ImVec2(x, c.y), 1, f.perf, f.perf_level);
+    }
+    else if (!f.stats.empty() || !f.perf.empty())
+    {
+      const std::string& text = f.stats.empty() ? f.perf : f.stats;
+      const ImVec2 s = TextSize(text_size, text);
+      OutlinedText(dl, text_size, ImVec2(x, c.y - s.y / 2), 1, text,
+                   f.stats.empty() ? f.perf_level : Signal::Good);
     }
     y += 2 * r + 1.5f * unit;
+  }
+  else if (!f.perf.empty())
+  {
+    OutlinedText(dl, text_size, ImVec2(margin, y), 1, f.perf, f.perf_level);
+    y += TextSize(text_size, f.perf).y + unit;
+  }
+  if (!f.graph.empty())
+  {
+    const ImVec2 size(24 * unit, 5 * unit);
+    FrameGraph(dl, ImVec2(margin, y), size, f.graph);
+    y += size.y + 1.5f * unit;
   }
   if (!f.waiting.empty())
   {
@@ -272,9 +456,8 @@ void Draw()
   }
   for (const OverlayModel::Toast& t : f.toasts)
   {
-    const float size = 3.0f * unit;
-    OutlinedText(dl, size, ImVec2(margin, y), t.alpha, t.text);
-    y += TextSize(size, t.text).y + unit;
+    OutlinedText(dl, text_size, ImVec2(margin, y), t.alpha, t.text);
+    y += TextSize(text_size, t.text).y + unit;
   }
 }
 }  // namespace
@@ -289,9 +472,20 @@ void SetStats(Stats stats)
   s_stats = stats;
 }
 
+void SetPerf(Perf perf)
+{
+  s_perf = perf;
+}
+
+void FrameBoundary(bool shown)
+{
+  s_overlay.OnFrame(NowMs(), shown);
+}
+
 void ShutdownOverlay()
 {
   OSD::SetHostOverlay({});
+  s_state_hook.reset();
 }
 
 void SetHostVisible(bool visible)
@@ -339,6 +533,13 @@ void InitOverlay()
     s_stats = v[0] == '2' ? Stats::Full : Stats::Ping;
   if (const char* v = std::getenv("ORCA_UX_OVERLAY_DEMO"); v && v[0] == '1')
     s_demo = true;
+  // Paused, the frame meter stands still (a pause is no slow frame), on whichever thread pauses.
+  s_state_hook = Core::AddOnStateChangedCallback([](Core::State state) {
+    if (state == Core::State::Paused)
+      s_overlay.Pause(NowMs());
+    else if (state == Core::State::Running)
+      s_overlay.Resume(NowMs());
+  });
   OSD::SetHostOverlay(&Draw);
 }
 }  // namespace Orca::UX

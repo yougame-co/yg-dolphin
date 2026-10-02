@@ -269,6 +269,19 @@ void Platform::ProcessEmbedCommands()
                            value == "full" ? Orca::UX::Stats::Full :
                                              Orca::UX::Stats::Off);
     }
+    else if (cmd == "perf")
+    {
+      // The overlay's frame meter, solo too (on, "fps", until the app says): "fps" the frames shown
+      // in the last second and the longest, "detailed" also a graph of the last 2 s.
+      std::string value;
+      in >> value;
+      if (value == "off" || value == "fps" || value == "detailed")
+        Orca::UX::SetPerf(value == "fps"      ? Orca::UX::Perf::Fps :
+                          value == "detailed" ? Orca::UX::Perf::Detailed :
+                                                Orca::UX::Perf::Off);
+      else
+        Embed::Out("unsupported perf");
+    }
     else if (cmd == "test-drop-room" && Orca::GetEnv("ORCA_TEST_COMMANDS") == "1")
     {
       // Tests only: the room's connection drops as a network failure would.

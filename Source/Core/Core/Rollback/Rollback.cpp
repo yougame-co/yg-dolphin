@@ -49,6 +49,9 @@ namespace
 {
 std::atomic<bool> s_in_snapshot{false};
 std::atomic<bool> s_resimulating{false};
+// Whether the frame running now is shown (rendered): set at each boundary for the next frame, for
+// the overlay's frame meter. CPU thread only.
+bool s_frame_shown = true;
 
 constexpr std::size_t RESTORE_PAGE = 4096;
 constexpr u32 MEM1_VIRTUAL = 0x80000000u;
@@ -532,6 +535,9 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
     return;
   }
   Orca::Status::GameStarted();
+  // The overlay's frame meter: the frame that just ended, shown unless the last boundary set it to
+  // run as a re-run or a catch-up (below). Host time only.
+  Orca::Events::NotifyBoundary(s_frame_shown);
   // Inside a JIT block, pc and npc are not kept current: a snapshot taken here would record
   // whatever they last held (an exception vector, a stale branch target), and a load would put that
   // back as the next instruction. Pin both to the boundary so every snapshot records where it was
@@ -571,5 +577,6 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
   // Re-run frames are thrown away as soon as they are simulated: skip their host rendering (the
   // emulated GPU still runs, so RAM and timing match a rendered frame).
   VideoCommon_SetSkipRender(IsResimulating() || Orca::TestSkipRender());
+  s_frame_shown = !IsResimulating();
 }
 }  // namespace Rollback

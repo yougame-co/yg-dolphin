@@ -16,7 +16,9 @@
 //   - "Waiting for <name>…" while the game has been waiting for a friend's input for 250 ms;
 //   - short toasts, "<name> joined on port N" and "<name> left", under the circle;
 //   - beside the circle, the ping: "32 ms" with embed `ping on` (the YouGame page's default) or
-//     ORCA_UX_STATS=1; with `ping full` or ORCA_UX_STATS=2, also the delay and rollbacks per second.
+//     ORCA_UX_STATS=1; with `ping full` or ORCA_UX_STATS=2, also the delay and rollbacks per second;
+//   - the frame meter, solo too: "60 fps · 17 ms", the frames shown in the last second and the
+//     longest of them, coloured while the game misses its pace (embed `perf`, on until it says).
 // It is drawn by the host's OSD layer over the presented image (ImGui), never into the emulated
 // framebuffer, and reads no game state: nothing in it can change emulation or desync.
 namespace Orca::UX
@@ -27,6 +29,14 @@ enum class Stats
   Off,
   Ping,  // "32 ms"
   Full,  // "32 ms · delay 2 · 1.2 rb/s"
+};
+
+// What the frame meter shows (embed `perf off|fps|detailed`; `fps` until the app says).
+enum class Perf
+{
+  Off,
+  Fps,       // "60 fps · 17 ms"
+  Detailed,  // also the last 2 s of frame times as a graph, and online the delay and rollbacks/s
 };
 
 enum class Signal
@@ -57,6 +67,19 @@ public:
   static constexpr double TOAST_MS = 3000;
   static constexpr double TOAST_FADE_MS = 500;
   static constexpr int WAITING_AFTER_MS = 250;
+  // The frame meter: fps and the longest frame over the last second, the graph over two. Coloured
+  // (Ok) under 59 fps or past 20 ms a frame; Bad under 50 fps or past two frame periods (a hitch,
+  // as OnlineMatch's HITCH_TIME counts them). The colour is the worst of the readouts at the
+  // boundaries of the last two seconds, so a single hitch stays coloured that much longer.
+  static constexpr double PERF_WINDOW_MS = 1000;
+  static constexpr double PERF_GRAPH_MS = 2000;
+  static constexpr double PERF_HOLD_MS = 2000;
+  static constexpr int PERF_OK_FPS = 59;
+  static constexpr double PERF_OK_FRAME_MS = 20;
+  static constexpr int PERF_BAD_FPS = 50;
+  static constexpr double PERF_BAD_FRAME_MS = 2000.0 / 60;
+  // More unseen frames in a row than any rollback re-runs: a joiner's catch-up.
+  static constexpr int PERF_MAX_UNSHOWN = 60;
 
   struct Toast
   {
@@ -70,6 +93,9 @@ public:
     std::string waiting;  // empty: not shown
     std::vector<Toast> toasts;
     std::string stats;  // empty: not shown
+    std::string perf;   // the frame meter; empty: not shown
+    Signal perf_level = Signal::Good;  // Good: plain text
+    std::vector<float> graph;          // Detailed: the last 2 s of frame times (ms), oldest first
   };
 
   // The session's plug-in callback (any thread; first runs only, when the list changes). A list equal
@@ -77,10 +103,18 @@ public:
   void OnPorts(int frame, const std::vector<Events::PortInfo>& ports, double now_ms);
   // The newest link stats (the drawing thread, each frame).
   void Update(const LinkView& link, double now_ms);
-  Frame View(double now_ms, Stats stats) const;
+  // Every frame boundary (the CPU thread): `shown` says the frame that just ended ran rendered, a
+  // first run (not a re-run, nor a joiner's catch-up). A frame's time is the host's wall time since
+  // the last shown frame's boundary, so re-runs in between lengthen it but never count as frames.
+  void OnFrame(double now_ms, bool shown);
+  // The core paused / resumed: the meter stands still meanwhile, then goes on as if no time passed.
+  void Pause(double now_ms);
+  void Resume(double now_ms);
+  Frame View(double now_ms, Stats stats, Perf perf = Perf::Off) const;
 
 private:
   Signal Quality(double now_ms) const;
+  void Meter(double now_ms, Stats stats, Perf perf, Frame* f) const;
 
   mutable std::mutex m_lock;
   bool m_seen_ports = false;
@@ -88,6 +122,14 @@ private:
   std::deque<std::pair<double, std::string>> m_toasts;
   LinkView m_link;
   std::deque<std::pair<double, int>> m_stall_history;  // (time, total stalls)
+  // The frame meter: shown frames (boundary time, frame time ms) of the last PERF_WINDOW_MS +
+  // PERF_HOLD_MS, enough to give the readout at every boundary the colour holds for.
+  std::deque<std::pair<double, double>> m_frames;
+  double m_first_frame = -1;  // the first shown boundary: no readout for its first second
+  double m_last_frame = -1;   // the last shown boundary
+  int m_unshown = 0;          // unseen frames since it
+  bool m_paused = false;
+  double m_paused_at = 0;
 };
 
 // The process's overlay: Init() registers it with the OSD layer and the session.
@@ -101,5 +143,8 @@ void RepresentDuringStall(int stalled_ms);
 // The app hid or showed the game (embed `hide` / `show`): no stall redraws while hidden.
 void SetHostVisible(bool visible);
 void SetStats(Stats stats);
+void SetPerf(Perf perf);
+// The game's frame boundary (Orca::Events' boundary callback), for the frame meter.
+void FrameBoundary(bool shown);
 OverlayModel& Overlay();
 }  // namespace Orca::UX
