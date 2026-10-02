@@ -3,6 +3,7 @@
 
 #include "DolphinNoGUI/Platform.h"
 
+#include "Common/Logging/Log.h"
 #include "Common/MsgHandler.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
@@ -164,6 +165,11 @@ private:
   // Returns false once the parent window is gone.
   bool TrackParent();
   void ProcessEvents();
+  // Whether any of Orca's window is on screen, for the video backend
+  // (Presenter::SetSurfaceVisible): not while it is minimized, ordered out (embedded: the app's
+  // window minimized, hidden, on another Space, or "hide") or entirely covered by other windows.
+  void UpdateSurfaceVisible();
+  void ObserveOcclusion();
   void UpdateWindowPosition();
   void HandleSaveStates(NSUInteger key, NSUInteger flags);
   void SetupMenu();
@@ -187,10 +193,15 @@ private:
   // The parent left the window list: stopping after a grace period (a window that was just made
   // can take a moment to show up in it, and so can one between Spaces).
   std::optional<std::chrono::steady_clock::time_point> m_parent_missing_since;
+
+  id m_occlusion_observer = nil;
+  bool m_surface_visible = true;
 };
 
 PlatformMacOS::~PlatformMacOS()
 {
+  if (m_occlusion_observer)
+    [[NSNotificationCenter defaultCenter] removeObserver:m_occlusion_observer];
   [m_window close];
 }
 
@@ -257,6 +268,7 @@ bool PlatformMacOS::Init()
   [m_window makeMainWindow];
   [NSApp activateIgnoringOtherApps:YES];
   [m_window setTitle:@"Orca"];
+  ObserveOcclusion();
 
   SetupMenu();
 
@@ -286,7 +298,35 @@ void PlatformMacOS::MainLoop()
       TrackParent();
     else
       UpdateWindowPosition();
+    UpdateSurfaceVisible();
   }
+}
+
+void PlatformMacOS::ObserveOcclusion()
+{
+  if (m_occlusion_observer)
+    return;
+  // At once when the window system says so, even while the main loop waits for events.
+  m_occlusion_observer = [[NSNotificationCenter defaultCenter]
+      addObserverForName:NSWindowDidChangeOcclusionStateNotification
+                  object:m_window
+                   queue:nil
+              usingBlock:^(NSNotification*) {
+                UpdateSurfaceVisible();
+              }];
+  UpdateSurfaceVisible();
+}
+
+void PlatformMacOS::UpdateSurfaceVisible()
+{
+  // Embedded, ordering out hides it at once; the occlusion state follows a moment later.
+  const bool visible = (!IsEmbedded() || m_embed_on_screen) &&
+                       ([m_window occlusionState] & NSWindowOcclusionStateVisible) != 0;
+  if (visible == m_surface_visible)
+    return;
+  m_surface_visible = visible;
+  VideoCommon::Presenter::SetSurfaceVisible(visible);
+  NOTICE_LOG_FMT(VIDEO, "Orca: the game's window is {}", visible ? "visible" : "out of sight");
 }
 
 bool PlatformMacOS::InitEmbedded()
@@ -332,6 +372,7 @@ bool PlatformMacOS::InitEmbedded()
     fprintf(stderr, "Orca: --parent %llu is not a window on this screen\n", m_embed.parent);
     return false;
   }
+  ObserveOcclusion();
   return true;
 }
 
@@ -344,6 +385,7 @@ void PlatformMacOS::EmbedSetVisible(bool visible)
 {
   m_embed_visible = visible;
   TrackParent();
+  UpdateSurfaceVisible();
 }
 
 void PlatformMacOS::EmbedSetFocus(bool focus)

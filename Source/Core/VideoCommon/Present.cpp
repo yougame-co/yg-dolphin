@@ -594,6 +594,18 @@ void Presenter::ChangeSurface(void* new_surface_handle)
   m_surface_changed.Set();
 }
 
+static std::atomic<bool> s_surface_visible{true};
+
+void Presenter::SetSurfaceVisible(bool visible)
+{
+  s_surface_visible.store(visible, std::memory_order_relaxed);
+}
+
+bool Presenter::IsSurfaceVisible()
+{
+  return s_surface_visible.load(std::memory_order_relaxed);
+}
+
 void Presenter::ResizeSurface()
 {
   std::lock_guard<std::mutex> lock(m_swap_mutex);

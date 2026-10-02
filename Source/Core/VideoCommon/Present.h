@@ -100,6 +100,15 @@ public:
   bool SurfaceChangedTestAndClear() { return m_surface_changed.TestAndClear(); }
   void* GetNewSurfaceHandle();
 
+  // Orca: whether the window system shows the render surface at all. The frontend clears it, from
+  // any thread and before or after the backend exists, while the window is minimized, ordered out
+  // or entirely covered (DolphinNoGUI on macOS). The Metal backend then takes no drawable: its
+  // nextDrawable waits up to a second for a layer nobody sees, and a single-core session would wait
+  // with it. Host only: the emulated GPU's work, its timing and everything the game sees are the
+  // same either way.
+  static void SetSurfaceVisible(bool visible);
+  static bool IsSurfaceVisible();
+
   void SetKeyMap(const DolphinKeyMap& key_map);
 
   void SetKey(u32 key, bool is_down, const char* chars);

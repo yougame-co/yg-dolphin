@@ -6,6 +6,8 @@
 #include <Metal/Metal.h>
 #include <QuartzCore/QuartzCore.h>
 
+#include <memory>
+
 #include "VideoCommon/AbstractGfx.h"
 
 #include "VideoBackends/Metal/MRCHelpers.h"
@@ -83,8 +85,17 @@ private:
   u32 m_staging_texture_counter = 0;
   std::array<u32, 4> m_shader_counter = {};
 
+  // Orca: what BindBackbuffer would wait for while the window system isn't showing the layer
+  // (MTLGfx.mm, AcquireDrawable).
+  struct DrawableProbe;
+  std::shared_ptr<DrawableProbe> m_drawable_probe;
+  bool m_drawables_late = false;
+
   void CheckForSurfaceChange();
   void CheckForSurfaceResize();
   void SetupSurface();
+  MRCOwned<id<CAMetalDrawable>> AcquireDrawable();
+  void StartDrawableProbe();
+  void DropProbedDrawable();
 };
 }  // namespace Metal

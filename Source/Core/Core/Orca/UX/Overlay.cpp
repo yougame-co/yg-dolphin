@@ -299,9 +299,9 @@ void RepresentDuringStall(int stalled_ms)
 {
   // Sessions run single core, so this presents on the CPU thread inside the stall wait, and while
   // it presents the wait hears nothing (the friend's input, a stop). So: nothing for a short stall
-  // (the overlay has nothing to say before 250 ms), nothing while the app hides the game, ~15 times
-  // a second, 4 when presenting is slow, and not again in this stall once one present took over
-  // 50 ms (vsync or a minimized or occluded window can hold a Metal drawable for about a second).
+  // (the overlay has nothing to say before 250 ms), nothing while the app hides the game or its
+  // window is out of sight, ~15 times a second, 4 when presenting is slow, and not again in this
+  // stall once one present took over 50 ms (vsync can hold a Metal drawable for a while).
   static double s_last = 0;
   static double s_every = 66;
   static int s_stall_ms = 0;
@@ -310,6 +310,7 @@ void RepresentDuringStall(int stalled_ms)
     s_off_this_stall = false;  // a new stall
   s_stall_ms = stalled_ms;
   if (s_off_this_stall || !s_visible.load(std::memory_order_relaxed) ||
+      !VideoCommon::Presenter::IsSurfaceVisible() ||
       stalled_ms < OverlayModel::WAITING_AFTER_MS - 50)
   {
     return;

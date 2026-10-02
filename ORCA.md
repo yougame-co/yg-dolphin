@@ -423,6 +423,14 @@ apps' windows still cover it.
   app into full screen.
 - **Hidden with the app:** it hides while the app's window is minimized, hidden or on another Space.
   The game keeps running while hidden: Orca's CPU use was the same shown, hidden and minimized.
+- **Out of sight, nothing is presented** (also outside embed mode): while Orca's window is ordered
+  out, minimized or entirely covered by other windows (`NSWindow.occlusionState`), the Metal backend
+  takes no drawable (`Presenter::SetSurfaceVisible`). A covered layer gets its drawables back late,
+  and `nextDrawable` waited up to its one second timeout on the CPU thread, which a session shares
+  with the GPU: the game fell to 14 fps (2.9 in its worst second) while another app's window covered
+  the app's, and the friend's game waited with it. After any `nextDrawable` wait over 50 ms (a window
+  covered before Orca hears of it), drawables come from a background acquire, one frame ahead, until
+  the window is next out of sight. `Tools/orca/occluded-test.py` measures it.
 - **Back on top:** when a click or the switcher brings the app's windows forward, Orca's window goes
   back over the app's window within one poll (8 ms). During a live drag it trails by one poll at most.
 - **Covering page content:** nothing in the page can draw over the view, so a page sheet or menu over

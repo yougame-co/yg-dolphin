@@ -3,6 +3,8 @@
 
 #include "VideoBackends/Metal/MTLGfx.h"
 
+#include "Common/Logging/Log.h"
+
 #include "VideoBackends/Metal/MTLBoundingBox.h"
 #include "VideoBackends/Metal/MTLObjectCache.h"
 #include "VideoBackends/Metal/MTLPipeline.h"
@@ -16,7 +18,9 @@
 #include "VideoCommon/Present.h"
 #include "VideoCommon/VideoBackendBase.h"
 
+#include <chrono>
 #include <fstream>
+#include <mutex>
 
 Metal::Gfx::Gfx(MRCOwned<CAMetalLayer*> layer) : m_layer(std::move(layer))
 {
@@ -448,16 +452,132 @@ void Metal::Gfx::DispatchComputeShader(const AbstractShader* shader,  //
   }
 }
 
+// Orca: the window system gives a layer's drawables back late while it isn't showing the layer (its
+// window minimized, ordered out or covered), and nextDrawable then waits up to its one second
+// timeout. In a single-core session that wait is on the CPU thread: the emulated machine stops with
+// it, and so does a friend's, which waits for this machine's inputs. So no drawable is taken while
+// the frontend says the surface isn't visible (Presenter::SetSurfaceVisible). And after one wait
+// longer than LATE_DRAWABLE (covered before the frontend heard of it, or drawables held for any
+// other reason), drawables come from a background acquire, one frame ahead: a frame whose drawable
+// isn't there yet is not shown, and the CPU thread never waits. That lasts until the frontend next
+// says the surface is hidden. Promptness proves nothing: a covered window gave drawables back
+// promptly for seconds at a time between its one second waits. The emulated GPU's work is the same
+// either way.
+static constexpr std::chrono::milliseconds LATE_DRAWABLE{50};
+
+struct Metal::Gfx::DrawableProbe
+{
+  std::mutex mutex;
+  bool running = false;
+  // The last background acquire's drawable (none after a timeout), until it is taken.
+  bool done = false;
+  MRCOwned<id<CAMetalDrawable>> drawable;
+};
+
+void Metal::Gfx::StartDrawableProbe()
+{
+  std::lock_guard lock(m_drawable_probe->mutex);
+  if (m_drawable_probe->running || m_drawable_probe->done)
+    return;
+  m_drawable_probe->running = true;
+  std::shared_ptr<DrawableProbe> probe = m_drawable_probe;
+  CAMetalLayer* layer = m_layer;  // retained by the block
+  dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+    @autoreleasepool
+    {
+      id<CAMetalDrawable> drawable = [layer nextDrawable];
+      std::lock_guard probe_lock(probe->mutex);
+      probe->running = false;
+      probe->done = true;
+      probe->drawable = MRCRetain(drawable);
+    }
+  });
+}
+
+void Metal::Gfx::DropProbedDrawable()
+{
+  if (!m_drawable_probe)
+    return;
+  std::lock_guard lock(m_drawable_probe->mutex);
+  m_drawable_probe->drawable.Reset();
+  m_drawable_probe->done = false;
+}
+
+MRCOwned<id<CAMetalDrawable>> Metal::Gfx::AcquireDrawable()
+{
+  if (!m_layer)
+    return nullptr;
+  if (!VideoCommon::Presenter::IsSurfaceVisible())
+  {
+    // Nothing to show it on. Once the surface shows again, nextDrawable again.
+    if (m_drawables_late)
+      NOTICE_LOG_FMT(VIDEO, "Metal: the surface is hidden; nextDrawable again once it shows");
+    m_drawables_late = false;
+    DropProbedDrawable();
+    return nullptr;
+  }
+
+  if (m_drawables_late)
+  {
+    MRCOwned<id<CAMetalDrawable>> drawable;
+    {
+      std::lock_guard lock(m_drawable_probe->mutex);
+      if (m_drawable_probe->done)
+      {
+        drawable = std::move(m_drawable_probe->drawable);
+        m_drawable_probe->done = false;
+      }
+    }
+    // One for a size the surface no longer has goes back.
+    if (drawable && ([[drawable texture] width] != m_backbuffer->GetWidth() ||
+                     [[drawable texture] height] != m_backbuffer->GetHeight()))
+    {
+      drawable.Reset();
+    }
+    StartDrawableProbe();
+    return drawable;
+  }
+
+  if (m_drawable_probe)
+  {
+    std::lock_guard lock(m_drawable_probe->mutex);
+    // One nextDrawable on the layer at a time: a background acquire from before the surface was
+    // hidden may still be waiting, and the first drawable back is its. This frame isn't shown.
+    if (m_drawable_probe->running)
+      return nullptr;
+    // One it got after late acquiring ended goes back.
+    m_drawable_probe->drawable.Reset();
+    m_drawable_probe->done = false;
+  }
+  const auto start = std::chrono::steady_clock::now();
+  MRCOwned<id<CAMetalDrawable>> drawable = MRCRetain([m_layer nextDrawable]);
+  const auto waited = std::chrono::steady_clock::now() - start;
+  if (waited > LATE_DRAWABLE)
+  {
+    NOTICE_LOG_FMT(VIDEO, "Metal: nextDrawable waited {} ms{}; acquiring in the background",
+                   std::chrono::duration_cast<std::chrono::milliseconds>(waited).count(),
+                   drawable ? "" : " for nothing");
+    if (!m_drawable_probe)
+      m_drawable_probe = std::make_shared<DrawableProbe>();
+    m_drawables_late = true;
+    StartDrawableProbe();
+  }
+  return drawable;
+}
+
 bool Metal::Gfx::BindBackbuffer(const ClearColor& clear_color)
 {
   @autoreleasepool
   {
     CheckForSurfaceChange();
     CheckForSurfaceResize();
-    m_drawable = MRCRetain([m_layer nextDrawable]);
+    m_drawable = AcquireDrawable();
+    // Orca: without a drawable, no render pass either (one with no texture is invalid).
+    if (!m_drawable)
+      return false;
     m_backbuffer->UpdateBackbufferTexture([m_drawable texture]);
     SetAndClearFramebuffer(m_backbuffer.get(), clear_color);
-    return m_drawable != nullptr;
+    return true;
   }
 }
 
@@ -491,6 +611,9 @@ void Metal::Gfx::CheckForSurfaceChange()
   if (!g_presenter->SurfaceChangedTestAndClear())
     return;
   m_layer = MRCRetain(static_cast<CAMetalLayer*>(g_presenter->GetNewSurfaceHandle()));
+  // Orca: a background acquire still running is for the old layer.
+  m_drawable_probe.reset();
+  m_drawables_late = false;
   SetupSurface();
 }
 
