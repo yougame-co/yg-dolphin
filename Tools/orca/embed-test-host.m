@@ -15,7 +15,8 @@
 //   close           close Orca's stdin (the app died)
 //   closewin        close the window but keep Orca's stdin open
 //   exit            quit this program (Orca's stdin closes with it)
-// Orca's stdout is echoed to this program's stdout, each line prefixed with "orca> ".
+// Orca's stdout is echoed to this program's stdout, each line prefixed with "orca> ". Mouse presses
+// in the window (the page's clicks, the box included) print as "host> mouse-down ...".
 #import <AppKit/AppKit.h>
 #include <signal.h>
 #include <spawn.h>
@@ -90,6 +91,27 @@ static NSRect GlobalTopLeft(NSRect cocoa)
   NSRectFill(BoxInContent());  // green: Orca should cover all of it
   [@"YouGame (embed test host)" drawAtPoint:NSMakePoint(20, 12)
                              withAttributes:@{NSForegroundColorAttributeName : NSColor.whiteColor}];
+}
+// A press in this window, as the page would get it. Orca's view lets clicks through to the window
+// under it (ORCA.md "Focus"), so a press on the game's picture shows up here "in the box".
+- (void)logPress:(NSEvent*)event
+{
+  const NSPoint p = [self convertPoint:event.locationInWindow fromView:nil];
+  printf("host> mouse-down button %ld at %.0f,%.0f, %s the box\n", (long)event.buttonNumber, p.x,
+         p.y, NSPointInRect(p, BoxInContent()) ? "in" : "outside");
+  fflush(stdout);
+}
+- (void)mouseDown:(NSEvent*)event
+{
+  [self logPress:event];
+}
+- (void)rightMouseDown:(NSEvent*)event
+{
+  [self logPress:event];
+}
+- (void)otherMouseDown:(NSEvent*)event
+{
+  [self logPress:event];
 }
 @end
 
