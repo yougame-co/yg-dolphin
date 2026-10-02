@@ -70,11 +70,12 @@ the SD card image next to the loader match the profile (XXH3-128). The SD image 
 every session forces SD writes and folder sync off. The profile also names the save that seeds the
 session NAND (`SaveTitle`), and its frame hook goes live once the game's instruction is at the
 address. Its `Title` (Project+) names the game in the window title instead of the disc's. Its game patches (`Data/Sys/Orca/<profile>.patches`, `Core/Orca/UX/GamePatches.h`) apply
-from then on, as guarded code groups only: `PPLUS32.patches` skips Project+'s "Create save file for
-Project+?" prompt the way `RSBE01.patches` skips Brawl's (Project+ loads Brawl's boot module
-unchanged), so a session with no save goes straight to character select at frame 150 and writes no
-save; answering Yes cost 13 s of save writing (character select at frame ~925). None of a mod's
-files are in this repository; the player's machine downloads the official release. Example
+from then on, as guarded groups only (code groups, and the one data group that starts the rules'
+items at None once, as `RSBE01.patches` does for Brawl): `PPLUS32.patches` skips Project+'s "Create
+save file for Project+?" prompt the way `RSBE01.patches` skips Brawl's (Project+ loads Brawl's boot
+module unchanged), so a session with no save goes straight to character select at frame 150 and
+writes no save; answering Yes cost 13 s of save writing (character select at frame ~925). None of a
+mod's files are in this repository; the player's machine downloads the official release. Example
 (Project+'s `Project+ Netplay Launcher.dol` and `sd.raw` side by side in `<dir>`):
 
 ```bash

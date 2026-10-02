@@ -20,21 +20,24 @@ class CPUThreadGuard;
 // own GameSettings codes, which a session drops): Data/Sys/Orca/<profile>.patches, hashed into the
 // lobby compatibility key. A launcher profile's file (PPLUS32.patches) applies only once its frame
 // hook is live, after the loader has handed over to the game, and the launcher's own codes own most
-// of that memory: such a file holds only guarded code groups of the disc's own modules. One 32-bit
-// word per line:
+// of that memory: such a file holds only guarded groups (code groups of the disc's own modules, and
+// a data group that sets a default once). One 32-bit word per line:
 //
 //   <address> <original> <value>   # comment
 //   <address> * <value>             # comment
 //
-// all hex. A line with an original is a code patch for a module the game loads at that address.
-// Consecutive such lines (each 4 bytes after the last) are one group, written only while every word
-// of the group is its original: the module is loaded and not yet patched, so the group lands once
-// per load, whole, and never into whatever else later occupies that memory (a single common word
-// would match some later module by chance; a group's run of words does not). A line whose original
-// equals its value only guards. A `*` line is data, written every frame. Applied at each frame
-// boundary through the session's frame hook (first runs and re-runs, before anything is saved);
-// code words through Dolphin's memory-patch path, which invalidates the JIT's copy. A pure function
-// of emulated memory: the same on both machines.
+// all hex. A line with an original is guarded. Consecutive such lines (each 4 bytes after the last)
+// are one group, written only while every word of the group is its original. Most groups are code
+// patches for a module the game loads at that address: the module is loaded and not yet patched, so
+// the group lands once per load, whole, and never into whatever else later occupies that memory (a
+// single common word would match some later module by chance; a group's run of words does not). A
+// guarded data group (the rules' item default in gmGlobalRecord, 0x9017BE50) lands once, while the
+// game's own defaults are there, and one of its words becomes a marker ('ORCA') so it never lands
+// again: a player's later choice stays. A line whose original equals its value only guards. A `*`
+// line is data, written every frame. Applied at each frame boundary through the session's frame
+// hook (first runs and re-runs, before anything is saved); guarded words through Dolphin's
+// memory-patch path, which invalidates the JIT's copy. A pure function of emulated memory: the same
+// on both machines.
 namespace Orca::UX
 {
 struct GamePatch

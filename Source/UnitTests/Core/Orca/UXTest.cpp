@@ -1,6 +1,7 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <map>
@@ -709,6 +710,40 @@ void ExpectBootSaveGroup(const std::vector<GamePatch>& patches)
   }
   EXPECT_EQ(words, 6);
 }
+
+// The rules' item default is one four-word data group in gmGlobalRecord's menu data (0x9017BE50):
+// written only while every word is still the game's own default, and its 'ORCA' marker keeps it
+// from landing again, so a player's own choice stays. `item_switch` is the game's default switch.
+void ExpectItemDefaultGroup(const std::vector<GamePatch>& patches, u32 item_switch)
+{
+  const auto first = std::find_if(patches.begin(), patches.end(),
+                                  [](const GamePatch& p) { return p.address == 0x9017BE50; });
+  ASSERT_NE(first, patches.end());
+  ASSERT_GE(patches.end() - first, 4);
+  const std::span<const GamePatch> group(&*first, 4);
+  for (size_t i = 0; i < group.size(); ++i)
+  {
+    EXPECT_EQ(group[i].address, 0x9017BE50u + 4 * i);
+    EXPECT_TRUE(group[i].original.has_value()) << std::hex << group[i].address;
+    EXPECT_EQ(group[i].joins_previous, i != 0) << std::hex << group[i].address;
+  }
+  if (first + 4 != patches.end())
+    EXPECT_FALSE(first[4].joins_previous) << std::hex << first[4].address;  // nothing else joins
+  constexpr u32 marker = 0x4F524341;  // 'ORCA'
+  std::vector<u32> landed;
+  for (const GamePatch& p : group)
+    landed.push_back(p.value);
+  // The frequency becomes None, the padding word the marker; the switch is only a guard.
+  EXPECT_EQ(landed, (std::vector<u32>{0, marker, item_switch, 0xFFFFFFFF}));
+  const auto applies = [&](std::vector<u32> now) { return GroupApplies(group, now); };
+  EXPECT_TRUE(applies({0x02000000, 0, item_switch, 0xFFFFFFFF}));  // the game's defaults: lands
+  EXPECT_FALSE(applies(landed));                                     // landed: never again
+  EXPECT_FALSE(applies({0x02000000, marker, item_switch, 0xFFFFFFFF}));  // Medium chosen after
+  EXPECT_FALSE(applies({0x01000000, marker, item_switch, 0xFFFFFFFF}));  // Low chosen after
+  for (const u32 frequency : {0x00000000u, 0x01000000u, 0x03000000u, 0x02000001u})
+    EXPECT_FALSE(applies({frequency, 0, item_switch, 0xFFFFFFFF})) << std::hex << frequency;
+  EXPECT_FALSE(applies({0x02000000, 0, item_switch & ~1u, 0xFFFFFFFF}));  // a switch changed
+}
 }  // namespace
 
 TEST(OrcaUXGamePatches, TheShippedBrawlFileParses)
@@ -718,15 +753,29 @@ TEST(OrcaUXGamePatches, TheShippedBrawlFileParses)
   ExpectBootSaveGroup(patches);
 }
 
-TEST(OrcaUXGamePatches, TheShippedProjectPlusFileHasOnlyGuardedCode)
+TEST(OrcaUXGamePatches, TheShippedProjectPlusFileGuardsEveryLine)
 {
-  // Project+'s own codes own the memory around the disc's modules: its file may only hold code
-  // groups guarded by the words they replace, never a `*` line written every frame.
+  // Project+'s own codes own the memory around the disc's modules, and Project+ owns the game's
+  // data: its file may only hold groups guarded by the words they replace (code groups, and the one
+  // data group that sets the item default once), never a `*` line written every frame.
   const auto patches = ShippedPatches("PPLUS32.patches");
   ASSERT_FALSE(patches.empty());
   for (const GamePatch& p : patches)
     EXPECT_TRUE(p.original.has_value()) << std::hex << p.address;
   ExpectBootSaveGroup(patches);
+}
+
+TEST(OrcaUXGamePatches, ItemsOffIsOneGroupThatLandsOnlyOnTheGamesDefaults)
+{
+  {
+    SCOPED_TRACE("RSBE01.patches");
+    ExpectItemDefaultGroup(ShippedPatches("RSBE01.patches"), 0xFFFFFFFF);  // every item on
+  }
+  {
+    SCOPED_TRACE("PPLUS32.patches");
+    // Project+'s GameGlobal::init hook clears the Mayhem and Passive Aggression bits.
+    ExpectItemDefaultGroup(ShippedPatches("PPLUS32.patches"), 0xFFE7FFFF);
+  }
 }
 
 TEST(OrcaUXNameTags, UsernamesBecomeBrawlTags)
