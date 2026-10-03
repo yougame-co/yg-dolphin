@@ -181,15 +181,20 @@ const std::optional<Digest>& CompilerDigest()
 }
 }  // namespace
 
-std::optional<Key> MakeKey(std::string_view hlsl, std::string_view target, u32 flags,
-                           std::string_view macros)
+std::optional<Key> MakeKey(std::string_view hlsl, std::string_view entry, std::string_view target,
+                           u32 flags, std::string_view macros)
 {
   if (!g_ActiveConfig.bShaderCache)
     return std::nullopt;
   const std::optional<Digest>& compiler = CompilerDigest();
   if (!compiler)
     return std::nullopt;
+  return KeyFor(*compiler, hlsl, entry, target, flags, macros);
+}
 
+Key KeyFor(const Digest& compiler, std::string_view hlsl, std::string_view entry,
+           std::string_view target, u32 flags, std::string_view macros)
+{
   // Every part with its length, so no two inputs hash the same bytes.
   auto context = Common::SHA1::CreateContext();
   const auto part = [&context](const void* data, size_t size) {
@@ -197,7 +202,8 @@ std::optional<Key> MakeKey(std::string_view hlsl, std::string_view target, u32 f
     context->Update(reinterpret_cast<const u8*>(&size64), sizeof(size64));
     context->Update(static_cast<const u8*>(data), size);
   };
-  part(compiler->data(), compiler->size());
+  part(compiler.data(), compiler.size());
+  part(entry.data(), entry.size());
   part(target.data(), target.size());
   part(&flags, sizeof(flags));
   part(macros.data(), macros.size());

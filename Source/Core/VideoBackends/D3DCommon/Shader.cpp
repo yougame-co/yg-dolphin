@@ -267,7 +267,9 @@ Shader::CompileShader(D3D_FEATURE_LEVEL feature_level, ShaderStage stage, std::s
   std::string macro_text;
   for (const D3D_SHADER_MACRO* macro = macros; macro->Name; ++macro)
     macro_text += fmt::format("{}={};", macro->Name, macro->Definition);
-  const std::optional<FxcCache::Key> key = FxcCache::MakeKey(*hlsl, target, flags, macro_text);
+  static constexpr char entry[] = "main";
+  const std::optional<FxcCache::Key> key =
+      FxcCache::MakeKey(*hlsl, entry, target, flags, macro_text);
   if (key)
   {
     if (std::optional<BinaryData> cached = FxcCache::Find(*key))
@@ -277,7 +279,7 @@ Shader::CompileShader(D3D_FEATURE_LEVEL feature_level, ShaderStage stage, std::s
   Microsoft::WRL::ComPtr<ID3DBlob> code;
   Microsoft::WRL::ComPtr<ID3DBlob> errors;
   const auto compile_start = Clock::now();
-  HRESULT hr = d3d_compile(hlsl->data(), hlsl->size(), nullptr, macros, nullptr, "main", target,
+  HRESULT hr = d3d_compile(hlsl->data(), hlsl->size(), nullptr, macros, nullptr, entry, target,
                            flags, 0, &code, &errors);
   const auto compile_end = Clock::now();
   if (FAILED(hr))

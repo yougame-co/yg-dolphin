@@ -26,10 +26,15 @@ namespace D3DCommon::FxcCache
 {
 using Key = Common::SHA1::Digest;
 
-// The key of one compile; empty when the cache is off (Dolphin's shader cache setting, or a
-// compiler DLL that couldn't be read).
-std::optional<Key> MakeKey(std::string_view hlsl, std::string_view target, u32 flags,
-                           std::string_view macros);
+// The key of one compile: everything D3DCompile is given that can vary (Shader.cpp passes no
+// source name, no include handler and no second flags) and the compiler's own bytes. Empty when the
+// cache is off (Dolphin's shader cache setting, or a compiler DLL that couldn't be read).
+std::optional<Key> MakeKey(std::string_view hlsl, std::string_view entry, std::string_view target,
+                           u32 flags, std::string_view macros);
+
+// MakeKey with the compiler's digest given (the loaded DLL's in MakeKey); for tests.
+Key KeyFor(const Common::SHA1::Digest& compiler, std::string_view hlsl, std::string_view entry,
+           std::string_view target, u32 flags, std::string_view macros);
 
 // FXC's output for this key from an earlier compile, of this run or an earlier one.
 std::optional<std::vector<u8>> Find(const Key& key);
