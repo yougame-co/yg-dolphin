@@ -3,6 +3,10 @@
 # (ORCA.md "Embedding": caps, join, leave) the way the desktop app would, headless and muted.
 #
 #   Tools/orca/dropin-commands.py <dolphin-emu-nogui> <disc> [--pplus <launcher.dol>]
+#                                 [--env NAME=VALUE ...]
+#
+# --env (repeatable) sets a variable in both Orcas, a test override such as ORCA_TEST_GATE, which
+# then marks both compatibility keys alike.
 #
 # 1. Host and Friend each boot their own game, solo, in rooms of their own.
 # 2. Friend starts and sends "join <host's room>" before the caps handshake: it drops into the
@@ -29,6 +33,7 @@ if len(sys.argv) < 3:
     sys.exit(__doc__ if __doc__ else "usage: dropin-commands.py <nogui> <disc> [--pplus <dol>]")
 BIN, DISC = sys.argv[1], sys.argv[2]
 PPLUS = sys.argv[sys.argv.index("--pplus") + 1] if "--pplus" in sys.argv else None
+BOTH_ENV = dict(sys.argv[i + 1].split("=", 1) for i, a in enumerate(sys.argv) if a == "--env")
 HERE = os.path.dirname(os.path.abspath(__file__))
 # Both games reach character select before the friend is there: the scripts act late there, so the
 # two start a match together that the friend's second join drops into.
@@ -63,6 +68,7 @@ class Orca:
         }
         if PPLUS:
             env["ORCA_PROFILE"] = "PPLUS32"
+        env.update(BOTH_ENV)
         env.update(env_extra)
         args = [BIN, "-p", "headless", "-u", user, "-v", "Null",
                 "-C", "Dolphin.DSP.Backend=No Audio Output",
