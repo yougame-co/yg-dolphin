@@ -12,8 +12,9 @@
 //   orca state booting|lobby|playing|ended, and drop-in's (ORCA.md "Drop-in"): joining <percent>,
 //   friend-joining, friend-joined, friend-left <why>, host-left, left, no-room
 //   orca error <code> <sentence for the player>
-//   orca menu <event>, a pick in the game's own Online menu: online casual local, online ranked
-//   local, online friends
+//   orca menu <event>, a pick in the game's own Online menu: online casual, online ranked (with the
+//   app's "host"; "... local" without it), online friends, cancel (ORCA.md "Matchmaking")
+//   orca result <json>, a verdict of the room in a matchmade room (with the app's "results")
 //   orca shaders <compiled> <total>, while the boot compiles shaders before the first frame
 // Codes: boot, cancelled (Orca.app's disc picker closed without a disc), disc_revision, profile,
 // settings, room_mismatch, room_full, kicked, network, peer_left, desync, internal.
@@ -26,9 +27,15 @@ void State(std::string_view state);
 void Event(std::string_view state);
 void Error(std::string_view code, std::string_view sentence);
 // "orca menu <event>": the player picked something in the game's own Online menu (ORCA.md "Online
-// menu"): "online casual local", "online ranked local", "online friends". An event, never a state:
-// each pick prints once.
+// menu"): "online casual", "online ranked" (with the app's "host"; "online casual local" and
+// "online ranked local" without it), "online friends", and "cancel" (the player backed out of a
+// search). An event, never a state: each pick prints once.
 void Menu(std::string_view event);
+// "orca result <json>" (with the "results" capability): a matchmade room's verdict on a game or a
+// ranked set (ORCA.md "Matchmaking"). The whole line stays within 300 bytes (the app's limit).
+void Result(std::string_view json);
+// A line of the embed protocol as it is ("unsupported host"), on the status stream.
+void Line(std::string_view line);
 // An error the session survives: with the app's "caps join" it is printed and Orca plays on solo
 // (the exit code stays 0, the embed "error" line isn't sent); without, it is Error().
 void Report(std::string_view code, std::string_view sentence);
@@ -40,7 +47,14 @@ void Report(std::string_view code, std::string_view sentence);
 // "delay": the app may send "delay auto|1..6", the player's own input delay (ORCA.md).
 // "perf": the app may send "perf off|fps|detailed", the overlay's frame meter (ORCA.md).
 // "direct": the app may send "direct on|off", the player's switch for direct links (ORCA.md).
-inline constexpr const char* CAPS = "join leave stats pause delay perf direct";
+// "host": the app may send "host <code>" (host the room the queue matched this game into) and
+// "queue-cancel" (the search ended); the Online menu's Casual and Ranked print without "local".
+// "results": "orca result" lines, offered only for a profile whose result reader is verified
+// (UX/Results.h, ResultsVerified); the room hears the results either way (ORCA.md "Matchmaking").
+inline constexpr const char* CAPS = "join leave stats pause delay perf direct host";
+inline constexpr const char* RESULTS_CAP = "results";
+// What this build offers for the running profile: CAPS, and "results" where its reader is verified.
+std::string OfferedCaps();
 void PrintCaps();
 void SetAppCaps(std::string_view list);
 bool Cap(std::string_view name);

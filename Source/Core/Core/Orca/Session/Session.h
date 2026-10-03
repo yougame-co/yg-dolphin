@@ -360,13 +360,15 @@ public:
   int CurrentFrame() const { return m_frame; }
   bool Resimulating() const { return m_resim_until >= 0; }
   int Delay() const { return m_delay; }
+  // The newest frame whose inputs are known for every seat (every frame through it ran, or will
+  // re-run, with every player's real inputs).
+  int ConfirmedFrame() const;
 
 private:
   void ReceivePackets();
   void AddPeerChecksum(int seat, const Packet& packet);
   void SendPacket();
   Pads PadsFor(int frame);
-  int ConfirmedFrame() const;
   bool NeedsSnapshot(int frame) const;
   void ChooseSnapshotEvery();
   void CheckChecksums();

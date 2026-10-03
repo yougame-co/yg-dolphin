@@ -34,6 +34,7 @@
 #include "Core/IOS/IOS.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Events.h"
+#include "Core/Orca/UX/Results.h"
 #include "Core/Orca/Session/Keyframe.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/Orca/Session/Online.h"
@@ -1117,6 +1118,22 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
     }();
     Orca::Events::NotifyFrame(guard, frame_here + 1, !first_pass_here, s_test_ports,
                               first_pass_here);
+    // YG_RESULTS=1: the matchmaking result reader (Orca/UX/Results.h) over this run, every frame
+    // final at its first pass (a sync test's re-runs come after and change nothing).
+    static const bool s_results = Orca::GetEnv("YG_RESULTS") == "1";
+    if (s_results && first_pass_here)
+    {
+      for (const Orca::UX::GameResult& r : Orca::UX::Tracker().Confirm(frame_here + 1, -1))
+      {
+        NOTICE_LOG_FMT(ROLLBACK, "Results: frame {}: {}{}{}", r.frame,
+                       r.kind == Orca::UX::GameResult::Kind::Win ?
+                           fmt::format("port {} won", r.winner_port + 1) :
+                       r.kind == Orca::UX::GameResult::Kind::Draw ? std::string("a draw") :
+                                                                    "void " + r.why,
+                       r.kind == Orca::UX::GameResult::Kind::Void ? "" : " ",
+                       r.kind == Orca::UX::GameResult::Kind::Void ? "" : r.DetailJson());
+      }
+    }
   }
   if (first_pass_here)
     Diag::OnFirstPassBoundary(system, frame_here);

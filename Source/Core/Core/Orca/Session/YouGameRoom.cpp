@@ -14,6 +14,7 @@
 #include <mutex>
 #include <optional>
 #include <random>
+#include <set>
 #include <string_view>
 #include <thread>
 
@@ -28,6 +29,7 @@
 #include "Core/Orca/Session/DirectLink.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Status.h"
+#include "Core/Orca/UX/Overlay.h"
 
 namespace Orca::Net
 {
@@ -52,6 +54,17 @@ constexpr auto SERVER_SILENCE_LIMIT = std::chrono::seconds(8);
 // A joiner whose room has no host (a stale invite, a host that left or restarted) gives up this
 // long after its welcome; a host that is there says hello within about a second.
 constexpr auto HOST_WAIT = std::chrono::seconds(8);
+// Matchmade rooms (ORCA.md "Matchmaking"): a game's report waits this long for the room's match to
+// start; the host's begin gets this many tries (one per roster change after a refusal), and one
+// unanswered for this long is sent again; a ranked set ends void after this many game verdicts
+// without a winner, and goes to whoever wins this many.
+constexpr auto REPORT_HOLD = std::chrono::seconds(60);
+constexpr int BEGIN_TRIES = 5;
+constexpr auto BEGIN_ANSWER = std::chrono::seconds(5);
+constexpr int SET_GAME_LIMIT = 7;
+constexpr int SET_WINS = 2;
+// The room closed a matchmade room after its result (rooms/src/index.ts: 4004 "match-over").
+constexpr int CLOSE_MATCH_OVER = 4004;
 // How long a teardown waits for the app to take the emptied room (loopback, normally milliseconds).
 constexpr auto MIRROR_END_TIMEOUT = std::chrono::seconds(1);
 // Direct links (DirectLink.h): a stalled session asks to send every millisecond; a direct copy
@@ -237,6 +250,27 @@ constexpr int MAX_RTT = 1 << 20;
 // Drop-in history in one packet (the session sends far less; CoalescePacket may join two).
 constexpr size_t MAX_HISTORY_RUNS_IN_PACKET = 128;
 constexpr size_t MAX_HISTORY_FRAMES_IN_PACKET = MAX_HISTORY_IN_PACKET;
+
+// A JSON string literal.
+std::string JsonString(const std::string& text)
+{
+  return picojson::value(text).serialize();
+}
+
+// A label for a line the app shows (a rank's): printable ASCII, no quotes or backslashes, at most
+// `max` characters.
+std::string CleanLabel(const std::string& raw, size_t max)
+{
+  std::string out;
+  for (const char c : raw)
+  {
+    if (out.size() >= max)
+      break;
+    if (c >= 0x20 && c < 0x7F && c != '"' && c != '\\')
+      out += c;
+  }
+  return out;
+}
 
 // picojson has no nesting limit (deep arrays overflow the I/O thread's stack) and aborts on a number
 // that overflows a double. Nothing YouGame sends nests deeply, uses an exponent or has more than 17
@@ -721,6 +755,46 @@ struct YouGameRoom::Impl
   std::atomic<bool> test_drop{false};
   std::vector<picojson::object> page_commands;  // guarded by bridge_mutex
 
+  // A matchmade room (ORCA.md "Matchmaking"): its queue from the welcome, the room match running
+  // (its id) and whether a ranked set finished here (under mutex); what the emulator thread says
+  // (under mutex): the host's opponent plugged in, game reports, a desync.
+  std::string queue = "private";
+  bool stay = false;
+  std::string match_id;
+  bool set_done = false;
+  bool opponent_plugged = false;
+  struct HeldReport
+  {
+    GameReport report;
+    Clock::time_point at;
+  };
+  std::deque<HeldReport> reports;
+  bool desync_pending = false;
+  // The I/O thread's: the room's participants (id, connection, slot), whether anyone is away, the
+  // host's begin (sent and unanswered; tries; waiting for the roster after a refusal), what was
+  // reported and decided in this match.
+  struct LobbyParticipant
+  {
+    std::string id, connection;
+    int slot = -1;
+  };
+  std::vector<LobbyParticipant> lobby_participants;
+  bool someone_away = false;
+  std::optional<Clock::time_point> begin_sent;
+  int begin_tries = 0;
+  bool begin_wait_roster = false;
+  int ranked_sent = 0;
+  int casual_sent = 0;
+  int casual_results = 0;
+  std::map<std::string, int> wins;
+  int ranked_verdicts = 0;
+  bool finish_sent = false;
+  std::set<std::string> verdicts_seen;
+  // Why this side reported a game or the set void, and the detail it sent, by report id ("g<n>",
+  // "c<n>" for a casual game, "$final").
+  std::map<std::string, std::string> void_why;
+  std::map<std::string, std::string> sent_detail;
+
   // Direct links to the other Orcas (DirectLink.h), unless ORCA_DIRECT=0. The pointer never
   // changes after construction; the link thread starts with the welcome.
   std::optional<DirectOptions> direct_options = DirectOptionsFromEnv();
@@ -790,7 +864,7 @@ struct YouGameRoom::Impl
     return spike_to;
   }
 
-  Clock::time_point HoldUntil(const std::deque<Held>& queue)
+  Clock::time_point HoldUntil(const std::deque<Held>& line)
   {
     // A deterministic 0..jitter extra per message, after any spike (and on the way out, a slow
     // uplink's hold); never earlier than the message before it.
@@ -798,14 +872,14 @@ struct YouGameRoom::Impl
     const u32 extra = net_jitter ? (++net_count * 2654435761u) % static_cast<u32>(net_jitter + 1) : 0;
     auto due = RadioFree(now) + std::chrono::milliseconds(*net_delay + static_cast<int>(extra));
     const auto since = std::chrono::duration_cast<std::chrono::seconds>(now - net_opened).count();
-    if (&queue == &held_out && net_uplink && since >= net_uplink->from_s &&
+    if (&line == &held_out && net_uplink && since >= net_uplink->from_s &&
         since < net_uplink->to_s)
     {
       const u32 x = ++uplink_count * 2246822519u ^ 0x85ebca6bu;
       const u32 more = (x ^ (x >> 13)) % static_cast<u32>(net_uplink->jitter_ms + 1);
       due += std::chrono::milliseconds(net_uplink->delay_ms + static_cast<int>(more));
     }
-    return queue.empty() ? due : std::max(due, queue.back().due);
+    return line.empty() ? due : std::max(due, line.back().due);
   }
 
   explicit Impl(RoomOptions room_options) : options(std::move(room_options))
@@ -1397,6 +1471,12 @@ struct YouGameRoom::Impl
         // 4000: the server replaced this socket with a newer one for the same player (another run
         // of this game, on this account, in the same room). A host leaves the room to it rather
         // than take it back, which would replace that one in turn, and so on.
+        // 4004: a matchmade room closed after its result (a ranked set's): a clean end.
+        if (ws.CloseCode() == CLOSE_MATCH_OVER)
+        {
+          End("The match is over", "match-over");
+          break;
+        }
         const bool replaced = ws.CloseCode() == 4000;
         End(fmt::format("{} ({})",
                         replaced ? "Another game of yours took over this room" :
@@ -1439,6 +1519,9 @@ struct YouGameRoom::Impl
     }
     else
     {
+      // Reports and a void the emulator thread left for this room go out before the goodbye.
+      if (ws.IsOpen())
+        FlushLobby();
       if (!reason.empty() && !peers.empty() && ws.IsOpen())
       {
         picojson::object d;
@@ -1476,7 +1559,10 @@ struct YouGameRoom::Impl
     room["lifecycle"] = picojson::value("game");
     room["participants"] = picojson::value(ended ? picojson::array{} : room_participants);
     room["revision"] = picojson::value(static_cast<double>(revision));
-    room["matchId"] = picojson::value();
+    {
+      std::lock_guard lock(mutex);
+      room["matchId"] = match_id.empty() || ended ? picojson::value() : picojson::value(match_id);
+    }
     room["lobby"] = picojson::value(lobby);
     room["me"] = picojson::value(me);
     {
@@ -1486,7 +1572,10 @@ struct YouGameRoom::Impl
           picojson::value(!ended && std::any_of(peers.begin(), peers.end(),
                                                 [](const auto& p) { return p.second.announced; }));
     }
-    room["queue"] = picojson::value("private");
+    {
+      std::lock_guard lock(mutex);
+      room["queue"] = picojson::value(queue);
+    }
     room["size"] = picojson::value(static_cast<double>(MAX_SEATS));
     room["host"] = ended ? picojson::value() : picojson::value(host);
     room["readyIds"] = picojson::value(picojson::array{});
@@ -1715,6 +1804,472 @@ struct YouGameRoom::Impl
     }
   }
 
+  // ---- Matchmade rooms (ORCA.md "Matchmaking") ----
+
+  // The room's lobby fields that ride on welcome, join, leave, back, away, lobby and start: the
+  // participants (the ids results name) and the room match running.
+  void LobbyFields(const picojson::object& m)
+  {
+    if (const auto it = m.find("matchId"); it != m.end())
+    {
+      std::string id = it->second.is<std::string>() ? it->second.get<std::string>() : "";
+      if (id.size() > 64)
+        id.clear();
+      std::lock_guard lock(mutex);
+      if (id != match_id)
+        NOTICE_LOG_FMT(NETPLAY, "Orca room: room match {}", id.empty() ? "over" : id);
+      match_id = std::move(id);
+    }
+    if (const auto it = m.find("participants"); it != m.end() && it->second.is<picojson::array>())
+    {
+      lobby_participants.clear();
+      for (const auto& p : it->second.get<picojson::array>())
+      {
+        if (!p.is<picojson::object>() || lobby_participants.size() >= MAX_SEATS * 2)
+          continue;
+        const auto& o = p.get<picojson::object>();
+        const auto slot = Int(o, "slot", 0, MAX_SEATS - 1);
+        const std::string id = Str(o, "id"), connection = Str(o, "connectionId");
+        if (!slot || id.empty() || id.size() > 128)
+          continue;
+        lobby_participants.push_back({id, connection, *slot});
+      }
+    }
+    if (const auto it = m.find("players"); it != m.end() && it->second.is<picojson::array>())
+    {
+      someone_away = false;
+      for (const auto& p : it->second.get<picojson::array>())
+      {
+        if (p.is<picojson::object>() && p.get<picojson::object>().count("away") &&
+            p.get<picojson::object>().at("away").evaluate_as_boolean())
+        {
+          someone_away = true;
+        }
+      }
+    }
+    // A refused begin waits for the roster to change.
+    begin_wait_roster = false;
+  }
+
+  std::string ParticipantAt(int slot) const
+  {
+    for (const auto& p : lobby_participants)
+    {
+      if (p.slot == slot)
+        return p.id;
+    }
+    return "";
+  }
+
+  // This player's participant id and slot, and the opponent's id.
+  std::string MyId() const
+  {
+    for (const auto& p : lobby_participants)
+    {
+      if (p.connection == me)
+        return p.id;
+    }
+    return "";
+  }
+  int MySlot() const
+  {
+    for (const auto& p : lobby_participants)
+    {
+      if (p.connection == me)
+        return p.slot;
+    }
+    return -1;
+  }
+  std::string TheirId() const
+  {
+    for (const auto& p : lobby_participants)
+    {
+      if (p.connection != me)
+        return p.id;
+    }
+    return "";
+  }
+
+  void SendRaw(const std::string& text)
+  {
+    if (net_delay)
+    {
+      held_out.push_back({HoldUntil(held_out), text});
+      return;
+    }
+    if (!ws.SendText(text, std::chrono::seconds(2)))
+      WARN_LOG_FMT(NETPLAY, "Orca room: send failed: {}", ws.Error());
+  }
+
+  // The host's Orca starts the room's match once its opponent plays in its game.
+  void TryBegin()
+  {
+    std::string current_match, room_queue;
+    bool plugged, done;
+    int my_seat;
+    {
+      std::lock_guard lock(mutex);
+      current_match = match_id;
+      room_queue = queue;
+      plugged = opponent_plugged;
+      done = set_done;
+      my_seat = seat;
+    }
+    if (room_queue == "private" || !current_match.empty() || (room_queue == "ranked" && done))
+      return;
+    if (begin_sent && Clock::now() - *begin_sent < BEGIN_ANSWER)
+      return;
+    if (begin_wait_roster || begin_tries >= BEGIN_TRIES || joining || host != me || my_seat != 0 ||
+        lobby_participants.size() != 2 || someone_away || !plugged)
+    {
+      return;
+    }
+    begin_sent = Clock::now();
+    ++begin_tries;
+    NOTICE_LOG_FMT(NETPLAY, "Orca room: beginning the room's {} match (revision {}, try {})",
+                   room_queue, revision, begin_tries);
+    SendRaw(fmt::format("{{\"t\":\"begin\",\"revision\":{}}}", revision));
+  }
+
+  // A game's report to the room's match, as both Orcas send it (the same bytes).
+  void SendReport(const GameReport& report, const std::string& match, const std::string& room_queue)
+  {
+    const bool ranked = room_queue == "ranked";
+    const int n = ranked ? ++ranked_sent : ++casual_sent;
+    const std::string id = fmt::format("{}{}", ranked ? "g" : "c", n);
+    std::string winner;
+    GameReport r = report;
+    if (r.kind == GameReport::Kind::Win)
+    {
+      winner = ParticipantAt(r.winner_seat);
+      if (winner.empty())
+      {
+        r.kind = GameReport::Kind::Void;
+        r.why = "ports";
+      }
+    }
+    std::string outcome;
+    switch (r.kind)
+    {
+    case GameReport::Kind::Win:
+      outcome = fmt::format("\"winner\":{},\"detail\":{}", JsonString(winner), r.detail);
+      break;
+    case GameReport::Kind::Draw:
+      outcome = fmt::format("\"draw\":true,\"detail\":{}", r.detail);
+      break;
+    case GameReport::Kind::Void:
+      outcome = "\"void\":true";
+      void_why[id] = r.why;
+      break;
+    }
+    if (r.kind != GameReport::Kind::Void)
+      sent_detail[id] = r.detail;
+    const std::string text =
+        ranked ? fmt::format("{{\"t\":\"game-report\",\"matchId\":{},\"id\":\"{}\",{}}}",
+                             JsonString(match), id, outcome) :
+                 fmt::format("{{\"t\":\"finish\",\"matchId\":{},{}}}", JsonString(match), outcome);
+    NOTICE_LOG_FMT(NETPLAY, "Orca room: report {}", text);
+    SendRaw(text);
+  }
+
+  // The set's (or a casual game's) end, once.
+  void SendFinish(const std::string& match, const std::string& winner, const std::string& why)
+  {
+    finish_sent = true;
+    if (!why.empty())
+      void_why["$final"] = why;
+    const std::string text =
+        winner.empty() ?
+            fmt::format("{{\"t\":\"finish\",\"matchId\":{},\"void\":true}}", JsonString(match)) :
+            fmt::format("{{\"t\":\"finish\",\"matchId\":{},\"winner\":{}}}", JsonString(match),
+                        JsonString(winner));
+    NOTICE_LOG_FMT(NETPLAY, "Orca room: {}", text);
+    SendRaw(text);
+  }
+
+  // Reports wait for the room's match; a desync voids the match in progress.
+  void FlushLobby()
+  {
+    std::string current_match, room_queue;
+    bool desync, done;
+    std::vector<GameReport> ready;
+    {
+      std::lock_guard lock(mutex);
+      current_match = match_id;
+      room_queue = queue;
+      done = set_done;
+      desync = std::exchange(desync_pending, false);
+      const auto now = Clock::now();
+      while (!reports.empty())
+      {
+        if (room_queue == "private")
+        {
+          reports.pop_front();
+          continue;
+        }
+        if (current_match.empty())
+        {
+          if (now - reports.front().at < REPORT_HOLD)
+            break;
+          WARN_LOG_FMT(NETPLAY, "Orca room: a game's report found no room match in {} s: dropped",
+                       REPORT_HOLD.count());
+          reports.pop_front();
+          continue;
+        }
+        ready.push_back(std::move(reports.front().report));
+        reports.pop_front();
+      }
+    }
+    if (room_queue == "private" || current_match.empty())
+      return;
+    if (desync && !finish_sent && !done)
+    {
+      NOTICE_LOG_FMT(NETPLAY, "Orca room: the games went apart: the room's match is void");
+      SendFinish(current_match, "", "desync");
+      return;
+    }
+    // A ranked set already decided takes no more games.
+    if (room_queue == "ranked" && (finish_sent || done))
+      return;
+    for (const GameReport& report : ready)
+      SendReport(report, current_match, room_queue);
+  }
+
+  // The local player's view of a detail the room echoed (port order): their own port first.
+  std::string LocalDetail(const picojson::object& event, const std::string& id) const
+  {
+    std::vector<int> c, st;
+    int stage = -1, to = 0;
+    bool have = false;
+    const auto from = [&](const picojson::object& d) {
+      const auto ints = [&](const char* key, std::vector<int>* out) {
+        const auto it = d.find(key);
+        if (it == d.end() || !it->second.is<picojson::array>())
+          return false;
+        for (const auto& v : it->second.get<picojson::array>())
+        {
+          if (!v.is<double>() || out->size() >= 2)
+            return false;
+          out->push_back(static_cast<int>(v.get<double>()));
+        }
+        return out->size() == 2;
+      };
+      const auto s = Int(d, "st", -1, 1 << 30), t = Int(d, "to", 0, 1);
+      if (!s || !t || !ints("c", &c) || !ints("s", &st))
+        return false;
+      stage = *s;
+      to = *t;
+      return true;
+    };
+    if (const auto it = event.find("detail"); it != event.end() && it->second.is<picojson::object>())
+      have = from(it->second.get<picojson::object>());
+    if (!have)
+    {
+      c.clear();
+      st.clear();
+      picojson::value sent;
+      if (const auto it = sent_detail.find(id);
+          it != sent_detail.end() && ParseJson(it->second, &sent) && sent.is<picojson::object>())
+      {
+        have = from(sent.get<picojson::object>());
+      }
+    }
+    if (!have)
+      return "";
+    if (MySlot() == 1)
+    {
+      std::swap(c[0], c[1]);
+      std::swap(st[0], st[1]);
+    }
+    return fmt::format("{{\"st\":{},\"c\":[{},{}],\"s\":[{},{}],\"to\":{}}}", stage, c[0], c[1],
+                       st[0], st[1], to);
+  }
+
+  // How a verdict came out for this player: won, lost, draw or void (and why it doesn't count).
+  struct Verdict
+  {
+    std::string out, why;
+    std::string winner;
+  };
+  Verdict ReadVerdict(const picojson::object& event, const std::string& id) const
+  {
+    Verdict v;
+    const bool is_void = event.count("void") && event.at("void").evaluate_as_boolean();
+    const bool draw = event.count("draw") && event.at("draw").evaluate_as_boolean();
+    if (const auto it = event.find("ranking");
+        it != event.end() && it->second.is<picojson::array>() &&
+        !it->second.get<picojson::array>().empty() &&
+        it->second.get<picojson::array>()[0].is<std::string>())
+    {
+      v.winner = it->second.get<picojson::array>()[0].get<std::string>();
+    }
+    if (is_void)
+    {
+      v.out = "void";
+      v.winner.clear();
+      if (const auto it = void_why.find(id); it != void_why.end())
+        v.why = it->second;
+      else if (Str(event, "reason").find("could not be recorded") != std::string::npos)
+        v.why = "unrecorded";
+      else
+        v.why = id == "$final" ? "unrecorded" : "mismatch";
+      return v;
+    }
+    if (draw)
+    {
+      v.out = "draw";
+      v.winner.clear();
+      return v;
+    }
+    v.out = !v.winner.empty() && v.winner == MyId() ? "won" : "lost";
+    return v;
+  }
+
+  std::string Score() const
+  {
+    const auto count = [this](const std::string& id) {
+      const auto it = wins.find(id);
+      return it == wins.end() ? 0 : it->second;
+    };
+    return fmt::format("[{},{}]", count(MyId()), count(TheirId()));
+  }
+
+  // "game-result": a ranked game's verdict.
+  void OnGameResult(const picojson::object& m)
+  {
+    std::string current_match;
+    {
+      std::lock_guard lock(mutex);
+      current_match = match_id;
+    }
+    const std::string id = Str(m, "id"), match = Str(m, "matchId");
+    if (current_match.empty() || match != current_match || id.size() > 64 ||
+        !verdicts_seen.insert(match + "/" + id).second)
+    {
+      return;
+    }
+    const Verdict v = ReadVerdict(m, id);
+    ++ranked_verdicts;
+    if (!v.winner.empty() && v.out != "void" && v.out != "draw")
+      ++wins[v.winner];
+    int n = 0;
+    if (id.size() > 1 && id[0] == 'g')
+      n = std::atoi(id.c_str() + 1);
+    const std::string d = LocalDetail(m, id);
+    Orca::Status::Result(fmt::format(
+        "{{\"q\":\"ranked\",\"k\":\"game\",\"n\":{},\"out\":\"{}\"{},\"score\":{}{}}}", n, v.out,
+        v.why.empty() ? "" : fmt::format(",\"why\":\"{}\"", v.why), Score(),
+        d.empty() ? "" : ",\"d\":" + d));
+    const std::string score = Score();
+    const auto it_mine = wins.find(MyId()), it_theirs = wins.find(TheirId());
+    const int mine = it_mine == wins.end() ? 0 : it_mine->second;
+    const int theirs = it_theirs == wins.end() ? 0 : it_theirs->second;
+    Orca::UX::ShowToast(v.out == "won"  ? fmt::format("You won game {} · {}–{}", n, mine, theirs) :
+                        v.out == "lost" ? fmt::format("You lost game {} · {}–{}", n, mine, theirs) :
+                        v.out == "draw" ? fmt::format("Game {} was a draw", n) :
+                                          fmt::format("Game {} didn't count", n));
+    NOTICE_LOG_FMT(NETPLAY, "Orca room: game {} {} for this player, set {}", id, v.out, score);
+    if (finish_sent)
+      return;
+    if (!v.winner.empty() && wins[v.winner] >= SET_WINS)
+      SendFinish(current_match, v.winner, "");
+    else if (ranked_verdicts >= SET_GAME_LIMIT)
+      SendFinish(current_match, "", "limit");
+  }
+
+  // "result": a ranked set's verdict, or a casual game's.
+  void OnResult(const picojson::object& m)
+  {
+    std::string room_queue;
+    {
+      std::lock_guard lock(mutex);
+      room_queue = queue;
+    }
+    const std::string match = Str(m, "matchId");
+    if (room_queue == "private" || match.empty() || !verdicts_seen.insert(match + "/$final").second)
+      return;
+    if (room_queue == "ranked")
+    {
+      const Verdict v = ReadVerdict(m, "$final");
+      const bool forfeit = Str(m, "disposition") == "forfeit";
+      std::string extra;
+      const std::string my_id = MyId();
+      if (const auto r = m.find("ratings"); r != m.end() && r->second.is<picojson::object>() &&
+                                            r->second.get<picojson::object>().count(my_id))
+      {
+        const picojson::value& mine = r->second.get<picojson::object>().at(my_id);
+        if (mine.is<picojson::object>())
+        {
+          const auto& o = mine.get<picojson::object>();
+          const auto before = ClampedInt(o, "before", 0, 1 << 20);
+          const auto after = ClampedInt(o, "after", 0, 1 << 20);
+          if (before && after)
+            extra += fmt::format(",\"r\":[{},{}]", *before, *after);
+          if (const auto rank = o.find("rank"); rank != o.end() && rank->second.is<picojson::object>())
+          {
+            const std::string label = CleanLabel(Str(rank->second.get<picojson::object>(), "label"), 24);
+            if (!label.empty())
+              extra += fmt::format(",\"rank\":\"{}\"", label);
+          }
+        }
+      }
+      Orca::Status::Result(fmt::format(
+          "{{\"q\":\"ranked\",\"k\":\"set\",\"out\":\"{}\",\"by\":\"{}\"{},\"score\":{}{}}}", v.out,
+          forfeit ? "forfeit" : "games",
+          v.why.empty() ? "" : fmt::format(",\"why\":\"{}\"", v.why), Score(), extra));
+      const auto it_mine = wins.find(my_id), it_theirs = wins.find(TheirId());
+      const int mine = it_mine == wins.end() ? 0 : it_mine->second;
+      const int theirs = it_theirs == wins.end() ? 0 : it_theirs->second;
+      Orca::UX::ShowToast(v.out == "void" ? std::string("This set doesn't count") :
+                          forfeit && v.out == "won" ? std::string("Opponent left: you win the set") :
+                          v.out == "won" ? fmt::format("You won the set {}–{}", mine, theirs) :
+                                           fmt::format("You lost the set {}–{}", mine, theirs));
+      NOTICE_LOG_FMT(NETPLAY, "Orca room: the set: {} {} ({})", v.out, Score(),
+                     Str(m, "disposition"));
+      std::lock_guard lock(mutex);
+      set_done = true;
+      match_id.clear();
+      return;
+    }
+    // Casual: each game is the room's match.
+    const int n = ++casual_results;
+    const std::string id = fmt::format("c{}", n);
+    Verdict v = ReadVerdict(m, id);
+    // A desync voided this game's match (SendFinish's "$final").
+    if (const auto it = void_why.find("$final"); it != void_why.end())
+    {
+      if (v.out == "void")
+        v.why = it->second;
+      void_why.erase(it);
+    }
+    const std::string d = LocalDetail(m, id);
+    Orca::Status::Result(fmt::format("{{\"q\":\"casual\",\"k\":\"game\",\"n\":{},\"out\":\"{}\"{}{}}}",
+                                     n, v.out,
+                                     v.why.empty() ? "" : fmt::format(",\"why\":\"{}\"", v.why),
+                                     d.empty() ? "" : ",\"d\":" + d));
+    Orca::UX::ShowToast(v.out == "won"  ? std::string("You won") :
+                        v.out == "lost" ? std::string("You lost") :
+                        v.out == "draw" ? std::string("That game was a draw") :
+                                          std::string("That game didn't count"));
+    NOTICE_LOG_FMT(NETPLAY, "Orca room: casual game {} {} for this player", n, v.out);
+    // The room stays: the host begins the next match (TryBegin).
+    finish_sent = false;
+    std::lock_guard lock(mutex);
+    match_id.clear();
+  }
+
+  // "start": the room's match began.
+  void OnStart(const picojson::object& m)
+  {
+    begin_sent.reset();
+    begin_tries = 0;
+    ranked_sent = 0;
+    ranked_verdicts = 0;
+    wins.clear();
+    finish_sent = false;
+    LobbyFields(m);
+  }
+
   void Tick()
   {
     const auto now = Clock::now();
@@ -1817,6 +2372,9 @@ struct YouGameRoom::Impl
 
     LinkPeers();
 
+    TryBegin();
+    FlushLobby();
+
     if (now - last_send < SEND_GAP)
       return;
     std::optional<Packet> packet;
@@ -1892,6 +2450,7 @@ struct YouGameRoom::Impl
   // The lobby roster rides on welcome, join, leave, back, away and lobby messages.
   void Roster(const picojson::object& m)
   {
+    LobbyFields(m);
     if (m.count("host"))
       host = Str(m, "host");
     if (const auto players = m.find("players");
@@ -2010,6 +2569,19 @@ struct YouGameRoom::Impl
       }
       // A room whose game is running is what a drop-in friend joins: no refusal.
       welcomed_at = Clock::now();
+      if (const auto r = m.find("room"); r != m.end() && r->second.is<picojson::object>())
+      {
+        const auto& room = r->second.get<picojson::object>();
+        const std::string q = Str(room, "queue");
+        std::lock_guard lock(mutex);
+        queue = q == "casual" || q == "ranked" ? q : "private";
+        stay = room.count("stay") && room.at("stay").evaluate_as_boolean();
+        if (queue != "private")
+        {
+          NOTICE_LOG_FMT(NETPLAY, "Orca room: a matchmade {} room{}", queue,
+                         stay ? " (the players stay together)" : "");
+        }
+      }
       LinkPeers();
       Roster(m);
       std::lock_guard lock(mutex);
@@ -2067,9 +2639,28 @@ struct YouGameRoom::Impl
         }
       }
     }
+    else if (t == "start")
+    {
+      OnStart(m);
+      Roster(m);
+    }
+    else if (t == "game-result")
+    {
+      OnGameResult(m);
+    }
+    else if (t == "result")
+    {
+      OnResult(m);
+    }
     else if (t == "command-error")
     {
       WARN_LOG_FMT(NETPLAY, "Orca room: {} refused: {}", Str(m, "action"), Str(m, "error"));
+      // The host's begin goes again once the roster changes (BEGIN_TRIES at most).
+      if (Str(m, "action") == "begin")
+      {
+        begin_sent.reset();
+        begin_wait_roster = true;
+      }
     }
     else if (t == "error")
     {
@@ -2097,6 +2688,15 @@ struct YouGameRoom::Impl
       if (!peer.drop_in_host || !joining)
         return;
       const std::string reason = Str(d, "r");
+      // A matchmade room hears that the match in progress is void before this player goes.
+      if (reason == "desync")
+      {
+        {
+          std::lock_guard lock(mutex);
+          desync_pending = true;
+        }
+        FlushLobby();
+      }
       if (reason == "desync")
         End("Your games went out of sync, so you left your friend's game", "desync");
       else if (reason == "stalled")
@@ -2386,6 +2986,37 @@ void CoalescePacket(std::optional<Packet>* outgoing, const Packet& packet)
   }
   merged.leaving = merged.leaving || pending->leaving;
   pending = std::move(merged);
+}
+
+std::string YouGameRoom::Queue() const
+{
+  std::lock_guard lock(m_impl->mutex);
+  return m_impl->queue;
+}
+
+bool YouGameRoom::MatchLive() const
+{
+  std::lock_guard lock(m_impl->mutex);
+  return !m_impl->match_id.empty() && !m_impl->set_done;
+}
+
+void YouGameRoom::SetOpponentPlugged(bool plugged)
+{
+  std::lock_guard lock(m_impl->mutex);
+  m_impl->opponent_plugged = plugged;
+}
+
+void YouGameRoom::ReportGame(GameReport report)
+{
+  std::lock_guard lock(m_impl->mutex);
+  if (m_impl->reports.size() < 16)
+    m_impl->reports.push_back({std::move(report), Clock::now()});
+}
+
+void YouGameRoom::ReportDesync()
+{
+  std::lock_guard lock(m_impl->mutex);
+  m_impl->desync_pending = true;
 }
 
 void YouGameRoom::TestDropConnection()

@@ -4,7 +4,9 @@
 #pragma once
 
 #include <optional>
+#include <string>
 #include <string_view>
+#include <utility>
 
 #include "Common/CommonTypes.h"
 
@@ -65,9 +67,37 @@ MenuState ReadMenuState(const GuestMemory& memory);
 std::optional<OnlinePick> PickForExitCode(u32 exit_code);
 
 // The stdout line's words after "orca menu": Casual and Ranked land on the local Versus character
-// select for now ("local": nothing searches), With Friends on the same screen, where friends drop
-// in.
-std::string_view MenuEventText(OnlinePick pick);
+// select, where the app's queue searches while the player waits ("online casual", "online ranked",
+// with the app's "host"; without it, "... local": nothing searches), With Friends on the same
+// screen, where friends drop in.
+std::string_view MenuEventText(OnlinePick pick, bool queue = false);
+
+// The current scene's name ("" when there is none to read).
+std::string ReadSceneName(const GuestMemory& memory);
+
+// The search after a Casual or Ranked pick (ORCA.md "Matchmaking"), as the overlay shows it: the
+// app's queue searches until it matches this game (`host <code>`: it hosts, Found until the
+// opponent plugs in; `join <code>`: the join's own messages take over), the app ends the search
+// (`queue-cancel`), or the player backs out of the character select to the main menu, which
+// prints "orca menu cancel" once. Any thread.
+namespace Search
+{
+enum class State
+{
+  None,
+  Searching,
+  Found,
+};
+void Begin(bool ranked);
+// The app's host/join for the match: Found (hosting) or None (joining).
+void Matched(bool hosting);
+// The opponent plugged in, the app ended the search, or the room it waited in went away.
+void End();
+State Current();
+bool Ranked();
+// The overlay's lines while searching or found (empty: nothing).
+std::pair<std::string, std::string> Lines();
+}  // namespace Search
 
 class OnlineMenuReader
 {

@@ -3,11 +3,15 @@
 
 #include "Core/Orca/UX/OnlineMenu.h"
 
+#include <mutex>
 #include <string>
+
+#include <fmt/format.h>
 
 #include "Common/Logging/Log.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Events.h"
+#include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/NameTags.h"
 
@@ -25,7 +29,9 @@ bool Pointer(const GuestMemory& m, u32 p)
   return p % 4 == 0 && m.Valid(p);
 }
 
-std::string SceneName(const GuestMemory& m)
+}  // namespace
+
+std::string ReadSceneName(const GuestMemory& m)
 {
   if (!Pointer(m, SCENE_MANAGER))
     return {};
@@ -46,12 +52,11 @@ std::string SceneName(const GuestMemory& m)
   }
   return {};  // not a name
 }
-}  // namespace
 
 MenuState ReadMenuState(const GuestMemory& m)
 {
   MenuState state;
-  const std::string scene = SceneName(m);
+  const std::string scene = ReadSceneName(m);
   if (scene == "muMenuMain")
     state.where = MenuState::Where::Menu;
   else if (scene == "scMemoryChange")
@@ -83,14 +88,14 @@ std::optional<OnlinePick> PickForExitCode(u32 exit_code)
   }
 }
 
-std::string_view MenuEventText(OnlinePick pick)
+std::string_view MenuEventText(OnlinePick pick, bool queue)
 {
   switch (pick)
   {
   case OnlinePick::Casual:
-    return "online casual local";
+    return queue ? "online casual" : "online casual local";
   case OnlinePick::Ranked:
-    return "online ranked local";
+    return queue ? "online ranked" : "online ranked local";
   case OnlinePick::Friends:
     return "online friends";
   }
@@ -151,11 +156,91 @@ void ReadOnlineMenu(const Core::CPUThreadGuard& guard, bool resimulating, bool a
   static OnlineMenuReader s_reader;
   GuardMemory memory(guard);
   const MenuState state = ReadMenuState(memory);
+  // With the app's "host" the queue searches for Casual and Ranked while the player waits on the
+  // character select.
+  const bool queue = Orca::Status::Cap("host");
   if (const auto pick = s_reader.Boundary(state, false, alone, Orca::Events::Resyncs()))
   {
     NOTICE_LOG_FMT(ROLLBACK, "Online menu: exit code {}: orca menu {}", state.exit_code,
-                   MenuEventText(*pick));
-    Orca::Status::Menu(MenuEventText(*pick));
+                   MenuEventText(*pick, queue));
+    Orca::Status::Menu(MenuEventText(*pick, queue));
+    if (queue && *pick != OnlinePick::Friends)
+      Search::Begin(*pick == OnlinePick::Ranked);
+    else
+      Search::End();
+    return;
+  }
+  // Backed out of the character select to the main menu while searching (or matched and still
+  // alone): the search is over.
+  if (alone && state.where == MenuState::Where::Menu && Search::Current() != Search::State::None)
+  {
+    NOTICE_LOG_FMT(ROLLBACK, "Online menu: back on the main menu while searching: orca menu cancel");
+    Search::End();
+    Orca::Status::Menu("cancel");
   }
 }
+
+namespace Search
+{
+namespace
+{
+std::mutex s_mutex;
+State s_state = State::None;
+bool s_ranked = false;
+}  // namespace
+
+void Begin(bool ranked)
+{
+  std::lock_guard lock(s_mutex);
+  s_state = State::Searching;
+  s_ranked = ranked;
+}
+
+void Matched(bool hosting)
+{
+  std::lock_guard lock(s_mutex);
+  // A join's own messages ("Joining <name>'s game...") take over from the search's.
+  s_state = hosting && s_state != State::None ? State::Found : State::None;
+}
+
+void End()
+{
+  std::lock_guard lock(s_mutex);
+  s_state = State::None;
+}
+
+State Current()
+{
+  std::lock_guard lock(s_mutex);
+  return s_state;
+}
+
+bool Ranked()
+{
+  std::lock_guard lock(s_mutex);
+  return s_ranked;
+}
+
+std::pair<std::string, std::string> Lines()
+{
+  State state;
+  bool ranked;
+  {
+    std::lock_guard lock(s_mutex);
+    state = s_state;
+    ranked = s_ranked;
+  }
+  const std::string beta = ranked ? "RANKED BETA" : "";
+  if (state == State::Searching)
+    return {"Searching for an opponent… (B: back)", beta};
+  if (state == State::Found)
+  {
+    const std::string name = Orca::Online::SeatName(1);
+    return {name.empty() ? std::string("Opponent found · waiting for them…") :
+                           fmt::format("Opponent found · waiting for {}…", name),
+            beta};
+  }
+  return {};
+}
+}  // namespace Search
 }  // namespace Orca::UX

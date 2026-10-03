@@ -102,6 +102,8 @@ public:
   // The session's plug-in callback (any thread; first runs only, when the list changes). A list equal
   // to the last one shows nothing new.
   void OnPorts(int frame, const std::vector<Events::PortInfo>& ports, double now_ms);
+  // A toast of its own (a matchmade game's result: "You won game 2 · 1–1"). Any thread.
+  void AddToast(std::string text, double now_ms);
   // The newest link stats (the drawing thread, each frame).
   void Update(const LinkView& link, double now_ms);
   // Every frame boundary (the CPU thread): `shown` says the frame that just ended ran rendered, a
@@ -155,5 +157,7 @@ void SetStats(Stats stats);
 void SetPerf(Perf perf);
 // The game's frame boundary (Orca::Events' boundary callback), for the frame meter.
 void FrameBoundary(bool shown);
+// A short toast under the circle (OverlayModel::AddToast, now). Any thread.
+void ShowToast(std::string text);
 OverlayModel& Overlay();
 }  // namespace Orca::UX

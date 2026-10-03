@@ -213,6 +213,7 @@ namespace
 {
 std::mutex s_request_mutex;
 std::optional<std::string> s_join_request;
+std::optional<std::string> s_host_request;
 bool s_leave_request = false;
 std::optional<int> s_chosen_delay;
 std::atomic<bool> s_direct_wanted{true};
@@ -228,6 +229,48 @@ std::optional<std::string> TakeJoinRequest()
 {
   std::lock_guard lock(s_request_mutex);
   return std::exchange(s_join_request, std::nullopt);
+}
+
+void RequestHost(const std::string& code)
+{
+  std::lock_guard lock(s_request_mutex);
+  s_host_request = code;
+}
+
+std::optional<std::string> TakeHostRequest()
+{
+  std::lock_guard lock(s_request_mutex);
+  return std::exchange(s_host_request, std::nullopt);
+}
+
+std::string RoomQueue()
+{
+  const auto room = Room();
+  return room ? room->Queue() : "private";
+}
+
+bool MatchLive()
+{
+  const auto room = Room();
+  return room && room->MatchLive();
+}
+
+void SetOpponentPlugged(bool plugged)
+{
+  if (const auto room = Room())
+    room->SetOpponentPlugged(plugged);
+}
+
+void ReportGame(const Net::GameReport& report)
+{
+  if (const auto room = Room())
+    room->ReportGame(report);
+}
+
+void ReportDesync()
+{
+  if (const auto room = Room())
+    room->ReportDesync();
 }
 
 void RequestLeave()
@@ -412,8 +455,11 @@ bool DropInPending()
   // TakeCommands), an invite or an arrival only while the room is up (HostEvents).
   {
     std::lock_guard lock(s_request_mutex);
-    if ((s_join_request && Status::Cap("join")) || (s_leave_request && Status::Cap("leave")))
+    if ((s_join_request && Status::Cap("join")) || (s_leave_request && Status::Cap("leave")) ||
+        (s_host_request && Status::Cap("host")))
+    {
       return true;
+    }
   }
   const auto room = Room();
   if (!room || room->GetState() == Net::RoomState::Ended)
@@ -474,7 +520,10 @@ bool ReportSessionEnd(const std::string& session_error)
   if (IsDesync(session_error))
   {
     if (room)
+    {
+      room->ReportDesync();
       room->SetLeaveReason("desync");
+    }
     Status::Report("desync", "Your games went out of sync, so the match ended");
     return true;
   }
@@ -492,7 +541,8 @@ bool ReportSessionEnd(const std::string& session_error)
   // first: once Ended, the code is final.
   if (room && room->GetState() == Net::RoomState::Ended)
   {
-    if (const std::string code = AppCode(room->ErrorCode()); !code.empty())
+    // A matchmade room closed after its result: a clean end, which the caller says.
+    if (const std::string code = AppCode(room->ErrorCode()); !code.empty() && code != "match-over")
       Status::Report(code, room->Status());
     return true;
   }

@@ -17,6 +17,7 @@
 #include "Core/Orca/UX/OnlineMenu.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/UX/Probe.h"
+#include "Core/Orca/UX/Results.h"
 
 namespace Orca::UX
 {
@@ -41,6 +42,11 @@ void Init()
     WriteMenuText(guard);
     // Reads only: the app hears what the player picked in the game's Online menu.
     ReadOnlineMenu(guard, resimulating, alone);
+    // Reads only: each game's result in a matchmade room, once its frames are final (Results.h).
+    ReadResultsFrame(guard, frame);
+    // A host that just took a matchmade room presets Brawl's rules, alone, before any keyframe.
+    if (!resimulating)
+      ApplyQueueRules(guard, alone);
     ProbeFrame(guard, frame);
     // Test only, ORCA_UX_TEST_LATE_NAME=<frame>: a friend's name that reached this machine late.
     // First runs before that frame see it empty, re-runs see it, as when the roster arrives

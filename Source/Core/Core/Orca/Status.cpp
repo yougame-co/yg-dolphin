@@ -13,6 +13,7 @@
 #include <fmt/format.h>
 
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/UX/Results.h"
 
 namespace Orca::Status
 {
@@ -74,6 +75,26 @@ void Menu(std::string_view event)
   Print(fmt::format("orca menu {}\n", OneLine(event)));
 }
 
+void Result(std::string_view json)
+{
+  if (!SessionActive() || !Cap(RESULTS_CAP))
+    return;
+  std::string line = fmt::format("orca result {}", OneLine(json));
+  // The app forwards 300 characters of a line at most: a longer one would arrive cut.
+  if (line.size() > 300)
+    return;
+  std::lock_guard lock(s_mutex);
+  Print(line + "\n");
+}
+
+void Line(std::string_view line)
+{
+  if (!SessionActive())
+    return;
+  std::lock_guard lock(s_mutex);
+  Print(OneLine(line) + "\n");
+}
+
 void Report(std::string_view code, std::string_view sentence)
 {
   if (!Cap("join"))
@@ -87,18 +108,27 @@ void Report(std::string_view code, std::string_view sentence)
   Print(fmt::format("orca error {} {}\n", code, OneLine(sentence)));
 }
 
+std::string OfferedCaps()
+{
+  std::string caps = CAPS;
+  if (UX::ResultsVerified())
+    caps += fmt::format(" {}", RESULTS_CAP);
+  return caps;
+}
+
 void PrintCaps()
 {
   if (!SessionActive())
     return;
+  const std::string caps = OfferedCaps();
   std::lock_guard lock(s_mutex);
-  Print(fmt::format("orca caps {}\n", CAPS));
+  Print(fmt::format("orca caps {}\n", caps));
 }
 
 void SetAppCaps(std::string_view list)
 {
   std::set<std::string, std::less<>> ours;
-  std::istringstream mine{std::string(CAPS)};
+  std::istringstream mine{OfferedCaps()};
   for (std::string name; mine >> name;)
     ours.insert(name);
   std::set<std::string, std::less<>> both;

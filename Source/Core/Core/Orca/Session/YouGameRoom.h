@@ -93,6 +93,24 @@ struct DirectSummary
   std::string line = "relay";
 };
 
+// A game's result as this Orca read it (UX/Results.h), for a matchmade room's report.
+struct GameReport
+{
+  enum class Kind
+  {
+    Win,
+    Draw,
+    Void,
+  };
+  Kind kind = Kind::Void;
+  // Win: the winner's seat (its room slot).
+  int winner_seat = -1;
+  // Void: why ("nocontest", "ports").
+  std::string why;
+  // Win and Draw: {"f":..,"st":..,"c":[..],"s":[..],"to":..}, ports in order.
+  std::string detail;
+};
+
 enum class RoomState
 {
   Connecting,
@@ -150,6 +168,20 @@ public:
   DirectSummary Direct() const;
   // Tests only: `test-direct off|on|in|out|rebuild` (DirectLink::Test).
   void TestDirect(const std::string& command);
+
+  // ---- Matchmade rooms (ORCA.md "Matchmaking") ----
+  // The room's queue from its welcome: "private" (a friends room, and until the welcome),
+  // "casual" or "ranked".
+  std::string Queue() const;
+  // A room match is running whose result isn't in yet (a ranked set until its result).
+  bool MatchLive() const;
+  // Host: the opponent is plugged in past its catch-up ("friend-joined"), so the room's match may
+  // begin; false once it unplugs.
+  void SetOpponentPlugged(bool plugged);
+  // A game's result, reported to the room's match once it has one (held 60 s at most).
+  void ReportGame(GameReport report);
+  // The games went apart: the match in progress is reported void (a ranked set, or a casual game).
+  void ReportDesync();
 
   void Send(const Packet& packet) override;
   std::vector<Packet> Receive() override;

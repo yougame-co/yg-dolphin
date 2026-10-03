@@ -21,6 +21,7 @@
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Status.h"
+#include "Core/Orca/UX/OnlineMenu.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Rollback/OnlineMatch.h"
 #include "Core/System.h"
@@ -253,6 +254,27 @@ void Platform::ProcessEmbedCommands()
         Embed::Out("unsupported join");
       else
         Orca::Online::RequestJoin(code);
+    }
+    else if (cmd == "host")
+    {
+      // Host the room the queue matched this game into (ORCA.md "Matchmaking"), from the running
+      // game; taken once the app's "caps" line turns "host" on. The same code check as join's.
+      std::string code;
+      in >> code;
+      const bool valid = code.size() >= 6 && code.size() <= 12 &&
+                         std::all_of(code.begin(), code.end(), [](char c) {
+                           return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
+                         });
+      if (!valid)
+        Embed::Out("unsupported host");
+      else
+        Orca::Online::RequestHost(code);
+    }
+    else if (cmd == "queue-cancel")
+    {
+      // The app's search ended (cancelled, failed, or the match never came): the overlay stops
+      // saying it searches.
+      Orca::UX::Search::End();
     }
     else if (cmd == "leave")
     {

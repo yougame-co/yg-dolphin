@@ -17,6 +17,7 @@
 
 #include "Common/HookableEvent.h"
 #include "Core/Core.h"
+#include "Core/Orca/UX/OnlineMenu.h"
 #include "VideoCommon/AsyncRequests.h"
 #include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/Present.h"
@@ -124,6 +125,14 @@ void OverlayModel::OnPorts(int frame, const std::vector<Events::PortInfo>& ports
       m_toasts.emplace_back(now_ms, fmt::format("{} left", NameOf(p)));
   }
   m_ports = ports;
+  while (m_toasts.size() > 3)
+    m_toasts.pop_front();
+}
+
+void OverlayModel::AddToast(std::string text, double now_ms)
+{
+  std::lock_guard lk(m_lock);
+  m_toasts.emplace_back(now_ms, std::move(text));
   while (m_toasts.size() > 3)
     m_toasts.pop_front();
 }
@@ -414,8 +423,10 @@ void Draw()
   s_overlay.Update(s_demo ? DemoLink(now) : ViewOf(Events::GetLinkStats()), now);
   const OverlayModel::Frame f = s_overlay.View(now, s_stats.load(std::memory_order_relaxed),
                                                s_perf.load(std::memory_order_relaxed));
+  // The matchmaking search (UX/OnlineMenu.h), while the player waits on the character select.
+  const auto [search, search_note] = Search::Lines();
   if (!f.show_signal && f.waiting.empty() && f.toasts.empty() && f.stats.empty() &&
-      f.perf.empty())
+      f.perf.empty() && search.empty())
   {
     return;
   }
@@ -472,6 +483,22 @@ void Draw()
     OutlinedText(dl, text_size, ImVec2(margin, y), t.alpha, t.text);
     y += TextSize(text_size, t.text).y + unit;
   }
+  if (!search.empty())
+  {
+    // Top centre, clear of the circle and the meter in the top-left corner.
+    const float size = 3.6f * unit;
+    const ImVec2 s = TextSize(size, search);
+    float line_y = screen.y * 0.04f;
+    if (!search_note.empty())
+    {
+      const float note_size = 2.8f * unit;
+      const ImVec2 n = TextSize(note_size, search_note);
+      OutlinedText(dl, note_size, ImVec2((screen.x - n.x) / 2, line_y), 1, search_note,
+                   Signal::Ok);
+      line_y += n.y + 0.5f * unit;
+    }
+    OutlinedText(dl, size, ImVec2((screen.x - s.x) / 2, line_y), 1, search);
+  }
 }
 }  // namespace
 
@@ -493,6 +520,11 @@ void SetPerf(Perf perf)
 void FrameBoundary(bool shown)
 {
   s_overlay.OnFrame(NowMs(), shown);
+}
+
+void ShowToast(std::string text)
+{
+  s_overlay.AddToast(std::move(text), NowMs());
 }
 
 void ShutdownOverlay()

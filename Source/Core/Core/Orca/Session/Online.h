@@ -38,6 +38,22 @@ void RequestJoin(const std::string& code);
 std::optional<std::string> TakeJoinRequest();
 void RequestLeave();
 bool TakeLeaveRequest();
+// The app's "host <code>" (embed mode, with the app's "host"; any thread, never blocks): host the
+// room the queue matched this game into (ORCA.md "Matchmaking"). Taken at a frame boundary.
+void RequestHost(const std::string& code);
+std::optional<std::string> TakeHostRequest();
+
+// ---- Matchmade rooms (ORCA.md "Matchmaking"; YouGameRoom's) ----
+// The room's queue: "private" (a friends room, or no room), "casual" or "ranked".
+std::string RoomQueue();
+// A room match is running whose result isn't in yet.
+bool MatchLive();
+// Host: the opponent plays in this game (past its catch-up), or no longer does.
+void SetOpponentPlugged(bool plugged);
+// A game's result, for the room's match.
+void ReportGame(const Net::GameReport& report);
+// The games went apart: the room's match in progress is void.
+void ReportDesync();
 // The app's "delay auto|1..6" (embed mode; any thread, never blocks): this player's input delay
 // from now on, in frames, or nullopt for the adaptive one. It stays for every session after, and
 // counts only while the app's caps include "delay" (Rollback::OnlineMatch applies it at each
