@@ -72,7 +72,8 @@ host leaving), `Tools/orca/dropin-rooms.py <nogui> <disc>` (a room with no host,
 in the host's room, the host's connection dropping mid-match) and `Tools/orca/dropin-delay.py
 <nogui> <disc>` (the input delay for five minutes after a join at character select or mid-match;
 with `--friend-env ORCA_TEST_NET_SPIKES=... --host-env ORCA_TEST_NET_DELAY_MS=0 --expect-raise
-S1-S2`, through a test link that goes dark again and again).
+S1-S2`, through a test link that goes dark again and again) and `Tools/orca/dropin-identity.py
+<nogui> <disc>` (each player's own name-tag controls in the other's game, "Port values" below).
 
 **Launcher profiles (prototype: Project+).** A mod that boots through its own loader program runs
 from a launcher profile, picked with `ORCA_PROFILE` (`Data/Sys/Orca/PPLUS32.ini` is Project+ v3.2).
@@ -268,6 +269,40 @@ host has played.
      mirrors that room again). The app can still send `join`.
    - A friend that leaves while it still catches up (never plugged in) just leaves the room at
      once; the host drops the seat (`friend-left left`).
+
+**Port values: each player's name and own controls** (`Rollback/OnlineMatch.cpp` "Ports",
+`Core/Orca/UX/NameTags.h`). A joiner plays on a copy of the host's machine, save included, so
+its own name tags are not there. Each port carries its player's values instead, which the frame
+hook writes into the port's name tag on the character select:
+- **What:** the YouGame username, as the tag's name, and the player's own controls: the tag's
+  rumble byte (+0x0C) and its whole layout (+0x14, 0x2D bytes: GameCube, Wii Remote, Nunchuk,
+  Classic, tap jump and shake smash included). As a match starts (scMelee's first frame), Brawl
+  and Project+ copy each port's tag layout for its controller into the per-port table at
+  0x805B7480, so the port plays with its player's own buttons and tap jump.
+- **Whose:** a player's own controls are read from its own game while it plays alone: the tag its
+  port wears on the character select (or last wore there), else its YouGame tag (`Events::
+  OwnControls`). A joiner sends them in its hello (`ct`); the host takes its own as a session
+  starts.
+- **When:** the host decides each port's values and the frame they apply from, and every machine
+  holds them before it runs that frame. A joiner gets them with the keyframe offer (`kf`'s `nm`,
+  with their version `nv`). Players already in the game hear them (`nm`, `v`) and acknowledge the
+  newest version in their packets (`va`); the host plugs a newcomer in only once every player has
+  (`Session::RequireValues`), so its plug frame, which each player hears of before running it,
+  comes after its values. The host's own values change only while it plays solo.
+- **Safety:** a profile from another machine reaches the tag only as the game's own menus could
+  have set it (rumble 0 or 1, flag bytes only their bits, actions up to 0xE, else the default),
+  and only at its exact size; the wire takes at most 64 bytes. A port with controls and no name
+  the game can show wears "P<port>", like the game's own label. Friends rooms carry controls too:
+  a joiner plays with its own layout in a friend's game.
+- **Proof** (2026-10-03, Brawl rev 2 and Project+): `YG_SYNCTEST=7` from character select through
+  the match's start with both ports carrying custom controls (`ORCA_UX_TEST_NAMES`,
+  `ORCA_UX_TEST_CONTROLS`): 5,621 and 4,221 re-run frames, 0 RAM mismatches. `YG_KEYFRAME_TEST`
+  where each port gets its tag and across the match's start: PASS in both games.
+  `Tools/orca/dropin-identity.py` (two Orcas, each with its own layout set in its own game, the
+  friend joining from its character select): both games' tags hold each player's layout and
+  rumble, the match's per-port table shows port 1 with the host's and port 2 with the friend's on
+  both machines, and the hash logs agree on every frame from the keyframe on (Brawl 3,073
+  frames, 50 checksums; Project+ 1,628 frames, 27 checksums).
 
 **The frame hook runs in the host's floating-point mode** (`Rollback.cpp`, `HostFloatScope`).
 - The CPU thread runs compiled C++ in the guest's FP mode (`PowerPC::RoundingModeUpdated`). In
