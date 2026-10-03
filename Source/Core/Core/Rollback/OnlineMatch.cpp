@@ -593,9 +593,13 @@ void DropFriends(Match& match, const std::string& reason, bool announce = true)
   }
 }
 
+void ConfirmResults(Match& match);
+
 void GoSolo(Match& match, const char* why, const char* state = "playing")
 {
-  // The frames the UX's readers saw with friends ran on guessed inputs too: they start over.
+  // Games already decided at final frames go to the room before the session ends (a leave, an
+  // unplug): what the readers saw after them ran on guessed inputs too, and starts over.
+  ConfirmResults(match);
   Orca::Events::NoteResync();
   match.log = match.session->TakeLog(&match.log_base);
   const std::vector<Pad> pending = match.session->PendingLocal();

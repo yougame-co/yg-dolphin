@@ -5,12 +5,15 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
+#include <cstring>
 
 #include <fmt/format.h>
 
 #include "Common/Logging/Log.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/UX/NameTags.h"
+#include "Core/Orca/UX/Probe.h"
 
 namespace Orca::UX::RankedSet
 {
@@ -327,6 +330,21 @@ void SetRoomMode(MatchBlock::Mode mode)
 
 void ApplyRoomMode(const Core::CPUThreadGuard& guard, bool alone)
 {
+  // Test only, ORCA_TEST_MATCH_BLOCK=ranked|casual: a queue room's header with no room (harness
+  // runs, a dev game's room), as if this game hosted one.
+  static const int s_test = [] {
+    const char* v = std::getenv("ORCA_TEST_MATCH_BLOCK");
+    if (!v)
+      return -1;
+    return std::strcmp(v, "ranked") == 0 ? static_cast<int>(MatchBlock::Mode::Ranked) :
+           std::strcmp(v, "casual") == 0 ? static_cast<int>(MatchBlock::Mode::Casual) :
+                                           -1;
+  }();
+  if (s_test >= 0 && s_room_mode.load() < 0 && TestKnobsAllowed())
+  {
+    WARN_LOG_FMT(ROLLBACK, "Match block: TEST header from ORCA_TEST_MATCH_BLOCK");
+    s_room_mode.store(s_test);
+  }
   const int wanted = s_room_mode.load();
   if (wanted < 0 || !alone || !ResultsVerified())
     return;
