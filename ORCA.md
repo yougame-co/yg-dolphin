@@ -39,6 +39,7 @@ Online play is drop-in, through a private YouGame room of up to four (`Source/Co
 | `ORCA_TEST_DEV_GAME` | Tests only: an anonymous dev ticket from the site instead of the app (no ratings, no account). |
 | `ORCA_SITE` | Tests only: the site for dev tickets (default `https://yougame.co`). |
 | `ORCA_TEST_PADS`, `ORCA_TEST_SKIP_RENDER` | Harness overrides; they change the compatibility key. |
+| `ORCA_TEST_GATE` | Tests only: masks in the input gate ("Input gate"). A test override too. |
 | `ORCA_TEST_FULL_SNAPSHOTS` | `1`: rollback snapshots copy all of RAM instead of copy-on-write (`Source/Core/Core/Rollback/Cow.h`), to compare the two. A test override too. |
 | `ORCA_THREAD_QOS` | `0`: no interactive scheduling for the CPU, room and controller-stream threads ("Input latency"); `1`: also for a scripted harness run's CPU thread. |
 | `ORCA_TEST_PRESENT` | Tests only, headless (`-p headless`): `WxH` presents into an offscreen image of that size, the OSD and Orca's overlay on it, and screenshots (`YG_SHOT_EVERY`) and frame dumps take that image instead of the bare frame. Presenting then waits for its present time like a window does (headless normally presents nothing). Each screenshot's readback is a frame of its own ~13 ms longer, which the frame meter shows. Not with the Software renderer (it draws no UI); the compatibility key is unchanged. |
@@ -1700,6 +1701,84 @@ Results on 2026-10-03 (branch `rs-spike` on the matchmaking tip, Apple Silicon, 
 | Low MEM1, `0x80001800`-`0x80003000` | Free in Brawl under Orca (8 bytes at `0x80001804`), but Project+'s code handler fills `0x80001800`-`0x80002160` and its codes keep variables there (`0x800022A4`, MUSIC_SELECT_STEP `0x80002810`). |
 | The Network heap | Both games decompress fighter files in it (the design's research). |
 | The online scenes (scNetFriendList, scNetWatchBet, scNetTimeResult), `0x806C6998`-`0x806C7F18` | Most likely dead too, but which sequences create them was not traced. A reserve. |
+
+## Input gate
+
+The rules for queue matches take input away from a player: the port whose turn it isn't on a stage
+strike, B on the stage select, a locked character. The gate does that per port and per frame where
+the game reads its controllers, so no game code has to be found and patched for each control
+(`Core/Rollback/InputGate.*`).
+
+- **What a mask does.** For one port: buttons the game sees released (L and R also zero their
+  analog trigger, A and B their analog value) and either stick centred. `ALL` leaves a connected pad
+  with nothing pressed. An unplugged port stays unplugged, and the origin and error bits are left
+  alone.
+- **Where.** `Rollback::InputOverride`, which `SI_DeviceGCController::GetPadStatus` calls for every
+  poll and for the SI relatch. Everything else stays raw: the local pad sampled for the wire, the
+  session's pads (`RingPort`), and the harness's recording (`YG_PADREC`, through
+  `RawInputOverride`). So both machines apply the same masks to the same pads, a re-run applies
+  them again, and a loopback replays a recording made under the same masks.
+- **When.** The rule code registers one source (`InputGate::SetSource`): a pure function of
+  emulated memory. The frame-boundary hook evaluates it as its last step, just before the SI
+  relatch: after the frame callback, after the session's step (a rollback's load, a joiner's
+  keyframe) and after the harness's (a sync test's or a keyframe test's load). So a frame's masks
+  always come from the state that frame starts from, on every pass, and nothing of them outlives a
+  load: there is no host state to carry in snapshots or keyframes. A boundary where the game isn't
+  running yet (a launcher's hook before it goes live) clears them.
+- **Not from the frame callback.** It runs before the session's step at the boundary, so a load
+  can follow it: a rollback's (OnlineMatch runs the callback again), and a sync test's, a keyframe
+  test's or a joiner's keyframe (nothing runs it again). Masks set there would belong to the frame
+  before the load. The source may not write memory either (the boundary's snapshot is taken by
+  then): what it needs from the session's synced data (the ports in a seat plan, names) the frame
+  callback writes into memory earlier at the same boundary, and the source reads it back.
+- **Compatibility.** No source is registered yet, so this build computes exactly what one without
+  the gate does. A source changes what the game computes: bump `UX::kCompatVersion` with it.
+  Friends rooms register none, or one that returns no masks.
+- **Not yet.** Synthesized presses (a Start the rules press for a player), and a raw view of a
+  masked button for the rules (a press the game didn't see).
+
+**Test knob** `ORCA_TEST_GATE` (a test override: the compatibility key says so; set the same value
+in both processes). Comma-separated rules `<port 1-4>:<what>[:<when>]`: `<what>` joins with `+` any
+of `A B X Y Z L R START UP DOWN LEFT RIGHT STICK CSTICK ALL`; `<when>` is `always` (the default)
+or `mem/<n>` (n 2-64; `mem` is `mem/2`), on one frame in n: those where byte (port - 1) of an XXH3
+of the game's static data (0x80500000-0x80600000, both games) is a multiple of n. That changes
+from frame to frame, so masks computed from the wrong frame's memory show in a sync test, a
+keyframe test or a drop-in; a larger n leaves the scripts' menu presses mostly intact. Every 600
+first-run boundaries the log says how many each port was masked and how often the masks changed.
+Example: `ORCA_TEST_GATE=1:A+STICK+CSTICK+X+Y+Z+R:mem/8,2:START`.
+
+Tests: `OrcaInputGate*` unit tests (what a mask does, masks that follow the state at every
+boundary and nothing else, the game's read gated and the raw read not, the knob's parser).
+
+Checked 2026-10-03 on an M4 Pro with `bf-mario-link-results.txt` (Brawl) and `pplus-1v1.txt`
+(Project+), under `ORCA_TEST_GATE=1:A+STICK+CSTICK+X+Y+Z+R:mem/8,2:A+STICK+CSTICK+B+X+Y+Z:mem/8`
+unless said otherwise: both ports masked on about one frame in eight, the masks changing on about
+40% of frames, and the game's RAM apart from an ungated run's from Brawl's frame 99 and Project+'s
+frame 267 on.
+- `YG_SYNCTEST=7` across the whole loop (character select, stage select, a match, results,
+  character select again): Brawl frames 1600-10600, 62,951 re-run frames; Project+ 150-5600,
+  38,101; 0 RAM mismatches. With `YG_SYNCTEST_SECTIONS=1` (Project+) the SerialInterface section
+  never differs; the device-state-only differences are the usual ones (icache, GPU managers).
+- `YG_KEYFRAME_TEST` at the character select, stage select, match and results: Brawl 1760, 1930,
+  3000, 10000; Project+ 300, 420, 450, 1500, 5000. All pass. 450's window crosses the stage
+  select's exit: a keyframe test's load now restores the harness's scene as a sync test's does,
+  without which it failed 30 of 30 frames with or without the gate.
+- A recording made under the masks replays through a loopback session with rollbacks: Brawl to
+  frame 4000 (186 rollbacks, 399 checksums matched), Project+ to 2400 (208, 239).
+- `YG_PADREC` keeps the raw pads: Brawl's recording under the masks has the same pads as one
+  without them on every frame before the stage select (164 with port 1 pressed), while their RAM
+  checksums differ from frame 99 on.
+- Two Orcas over a real room, `dropin-commands.py --env ORCA_TEST_GATE=...`, pass in both games: a
+  keyframe at the character select, a match together, the friend leaving and rejoining mid-match
+  from a second keyframe, the host leaving. Checksums matched 116 and 20 (Brawl), 83 and 21
+  (Project+), no desync.
+- A negative control: the same Brawl sync test with the masks evaluated where the frame callback
+  runs (an experiment build, never committed) fails, 385 RAM mismatches in 4,851 re-run frames
+  from the character select's frame 1756.
+- With no source and no knob, `YG_HASHLOG` equals the base build's (`51987e7894`) on every frame:
+  Brawl 10,606 frames, Project+ 8,010.
+- `ORCA_TEST_GATE=1:START`: Brawl never leaves the character select (port 1's scripted Start never
+  reaches the game).
 
 ## Embedding
 
