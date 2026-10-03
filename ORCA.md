@@ -1850,10 +1850,18 @@ header at boot.
 
 At every boundary of a ranked block, `RankedSet::Step` reads the scene (`scMelee` fight,
 `scMemoryChange` between, `scVsResult` results):
-- a fight scene starts a fight (its first frame is the game's id); back into a fight from between
-  scenes is sudden death in the same game;
-- during the fight, where the fighters can be read (`RankedSet::ReadLiveFight`), it counts each
-  player's ledge grabs and keeps stocks and percent as they were when time ran out;
+- a fight scene starts a fight (its first frame is the game's id). Brawl's sudden death stays in
+  `scMelee`: the fighters are gone for a few frames and come back with 1 stock each, which is how
+  it is told (also a way back into a fight from between scenes);
+- during the fight (Brawl), `RankedSet::ReadLiveFight` reads the fighters: sora_melee's
+  `g_ftEntryManager` (module 27's section 6 + `0x2E88`, through the OS module list at
+  `0x800030C8`), each entry (`0x244` bytes: `+0x0A` active instance, `+0x28` ftOwner, `+0x30`
+  instances, `+0x58` the port); the owner's data `+0x34` stocks (`u32`) and `+0x24` damage (`f32`);
+  the fighter `+0x60` -> `+0xD8` -> `+0x70` the status module, `+0x34` the status (`0x73`-`0x75`
+  catching or holding the ledge). The result info's decision (`+0x1378`) is 9 during the fight and
+  turns 1 the frame time runs out (the game freezes on "TIME!"), 2 at the deciding KO. It counts
+  each player's ledge grabs (entries into those statuses) and keeps stocks and percent as they were
+  when time ran out; nothing after time-up or in a sudden death counts;
 - the results screen judges the game (`RankedSet::Judge`) and records it; any other scene ends a
   fight without a game.
 
