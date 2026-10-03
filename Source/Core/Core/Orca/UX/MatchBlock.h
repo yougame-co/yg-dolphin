@@ -37,6 +37,7 @@
 //            +0x43 u8 strikes or bans made in this step   +0x44 u16 struck or banned this game
 //            +0x48 u32 the step's deadline (the frame hook's frame number)
 //            +0x4C u8 the pick's timer ran out: the default pick is being made   +0x4D u8 its stage
+//            +0x4E u8 the default pick's A is pressed this frame
 namespace Orca::UX
 {
 class GuestMemory;
@@ -91,6 +92,7 @@ struct State
   u32 deadline = 0;
   bool auto_pick = false;
   u8 auto_stage = NONE;
+  bool auto_press = false;  // the default pick's A, pressed 4 frames then released 4
   bool operator==(const State&) const = default;
 
   // A new set: the header's fields and nothing else.

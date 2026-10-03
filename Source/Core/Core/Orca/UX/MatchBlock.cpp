@@ -32,6 +32,7 @@ constexpr u32 OFF_STRUCK = 0x44;
 constexpr u32 OFF_DEADLINE = 0x48;
 constexpr u32 OFF_AUTO = 0x4C;
 constexpr u32 OFF_AUTO_STAGE = 0x4D;
+constexpr u32 OFF_AUTO_PRESS = 0x4E;
 
 // The block as bytes, so a write compares byte by byte.
 std::array<u8, SIZE> Bytes(const State& s)
@@ -79,6 +80,7 @@ std::array<u8, SIZE> Bytes(const State& s)
   put32(OFF_DEADLINE, s.deadline);
   b[OFF_AUTO] = s.auto_pick ? 1 : 0;
   b[OFF_AUTO_STAGE] = s.auto_stage;
+  b[OFF_AUTO_PRESS] = s.auto_press ? 1 : 0;
   return b;
 }
 }  // namespace
@@ -126,6 +128,7 @@ std::optional<State> Read(const GuestMemory& m)
   s.deadline = m.Read32(BASE + OFF_DEADLINE);
   s.auto_pick = r8(OFF_AUTO) != 0;
   s.auto_stage = r8(OFF_AUTO_STAGE);
+  s.auto_press = r8(OFF_AUTO_PRESS) != 0;
   return s;
 }
 

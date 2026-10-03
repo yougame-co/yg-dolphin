@@ -206,6 +206,7 @@ void StartStep(const Ranked::Ruleset& rules, const Plan& plan, MatchBlock::State
   s.step_done = 0;
   s.auto_pick = false;
   s.auto_stage = MatchBlock::NONE;
+  s.auto_press = false;
   if (s.step < plan.steps.size())
   {
     s.active = plan.steps[s.step].port;
@@ -340,6 +341,7 @@ void Step1(GuestMemory& m, MatchBlock::State& s, int frame, bool two_players,
     s.active = MatchBlock::NONE;
     s.auto_pick = false;
     s.auto_stage = MatchBlock::NONE;
+    s.auto_press = false;
   }
   if (scene == "scSelctCharacter")
   {
@@ -356,6 +358,7 @@ void Step1(GuestMemory& m, MatchBlock::State& s, int frame, bool two_players,
       s.active = MatchBlock::NONE;
       s.auto_pick = false;
       s.auto_stage = MatchBlock::NONE;
+      s.auto_press = false;
     }
   }
   if (task && !s.done && two_players)
@@ -374,6 +377,7 @@ void Step1(GuestMemory& m, MatchBlock::State& s, int frame, bool two_players,
     s.active = MatchBlock::NONE;
     s.auto_pick = false;
     s.auto_stage = MatchBlock::NONE;
+    s.auto_press = false;
   }
 }
 }  // namespace
@@ -449,6 +453,9 @@ int Apply(GuestMemory& m, int frame, bool two_players)
     }
     if (s.auto_pick)
     {
+      // A held 4 frames, released 4: the game takes a press, not a held button, and its own
+      // redraw of the struck art clears the selection once.
+      s.auto_press = ((static_cast<u32>(frame) - s.deadline) >> 2 & 1) == 0;
       const int pos = PositionOf(page0, s.auto_stage);
       if (pos >= 0 && m.Read32(task + SSS_SELECTED) != static_cast<u32>(pos))
       {
@@ -484,7 +491,7 @@ Rollback::InputGate::Masks Masks(const GuestMemory& m)
   {
     // The pick's timer ran out: the selection is the default, and A is pressed for the player.
     mine = Rollback::InputGate::ALL;
-    mine.press = PAD_BUTTON_A;
+    mine.press = s->auto_press ? PAD_BUTTON_A : 0;
     return masks;
   }
   mine.buttons = PAD_BUTTON_B | PAD_TRIGGER_L | PAD_TRIGGER_R | PAD_TRIGGER_Z | PAD_BUTTON_START |
