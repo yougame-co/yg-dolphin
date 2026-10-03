@@ -988,7 +988,7 @@ D3D's DXBC on Windows) carry the build's git commit in their header and are empt
 build; the pipeline UID cache survives. Without the boot compile, that cache was recompiled on one
 background thread (`ShaderCompilerThreads` defaults to 1), and a pipeline still queued at the
 countdown compiled again on the emulation thread. macOS adds Apple's own Metal cache, kept per
-binary. Before 0.3.8 only the desktop app's macOS command line asked for the first two settings.
+binary. Until this change only the desktop app's macOS command line asked for the first two settings.
 
 Measured 2026-10-03 (M4, Metal, 871x434 window, scripted Brawl Mario vs Link on Battlefield and
 P+ 1v1, `YG_SHADERLOG=1` probe build): VI stalls from 0.6 s before scMelee to 12 s after.
