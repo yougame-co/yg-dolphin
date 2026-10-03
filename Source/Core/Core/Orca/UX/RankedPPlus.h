@@ -31,8 +31,9 @@ class CPUThreadGuard;
 //   (PAGE_INDEX set apart from CURRENT_PAGE).
 // - Turns: the stage select's controller field (+0x278) is the active port, and the input gate
 //   leaves only that port's stick and the step's button (X to strike, A to pick); B, L, R, Z,
-//   Start and Y are masked (no clearing strikes, no L+R+A back to the characters, no alternate
-//   stages, no hazards), as is A or X on Random.
+//   Start, Y and the C-stick are masked (no clearing strikes, no L+R+A back to the characters, no
+//   alternate stages, no hazards), as are A and X on Random and the items past it, and on the
+//   stage builder's page.
 // - Timers: a strike step that runs out strikes the first remaining stages in list order; a pick
 //   that runs out picks the first allowed stage (the selection set to it and A pressed through the
 //   gate).
@@ -56,7 +57,11 @@ constexpr u32 CURRENT_PAGE = 0x80496000;
 constexpr u32 SSS_HOVERED = 0x244;     // the item under the cursor (RANDOM_ITEM: Random)
 constexpr u32 SSS_SELECTED = 0x248;    // the page position selected, -1 none
 constexpr u32 SSS_CONTROLLER = 0x278;  // 0xF0 every port, 0-3 that port only
-constexpr u32 RANDOM_ITEM = 0x36;
+constexpr u32 SSS_PAGE = 0x228;        // Brawl's page: CUSTOM_PAGE the stage builder's
+constexpr u32 CUSTOM_PAGE = 2;
+// The hovered item's values: 0 nothing, 1-0x34 a stage, then these.
+constexpr u32 PAGE_ITEM = 0x35;    // the page button
+constexpr u32 RANDOM_ITEM = 0x36;  // Random
 
 // The 2024 Proposed preset, Project+ v3.2's pf/stage/switch/Switch03.rss.
 extern const u8 kSwitch03[RSS_EXDATA_SIZE];

@@ -349,10 +349,13 @@ TEST(OrcaRankedPPlus, GameOneStrikesInTurnsThenTheCoinPicks)
   EXPECT_TRUE(masks[1].buttons & PAD_TRIGGER_Z);
   EXPECT_FALSE(masks[1].buttons & PAD_BUTTON_X);
   EXPECT_EQ(masks[2], Rollback::InputGate::ALL);
-  // On Random, X is masked too.
+  // On Random, X is masked too; on the page button it strikes the stage last hovered, as ever.
   m.Write32(TASK + RankedPPlus::SSS_HOVERED, RankedPPlus::RANDOM_ITEM);
   EXPECT_TRUE(RankedPPlus::Masks(m)[1].buttons & PAD_BUTTON_X);
+  m.Write32(TASK + RankedPPlus::SSS_HOVERED, RankedPPlus::PAGE_ITEM);
+  EXPECT_FALSE(RankedPPlus::Masks(m)[1].buttons & PAD_BUTTON_X);
   m.Write32(TASK + RankedPPlus::SSS_HOVERED, 0);
+  EXPECT_TRUE(RankedPPlus::Masks(m)[1].c_stick);
 
   // Port 2 strikes Smashville: port 1's turn, two strikes.
   StrikeAt(m, 2);
@@ -376,10 +379,20 @@ TEST(OrcaRankedPPlus, GameOneStrikesInTurnsThenTheCoinPicks)
   EXPECT_EQ(s.struck, 0x0015);
   EXPECT_EQ(s.step, 2);
   EXPECT_EQ(s.active, 1);
-  // The pick: A allowed, X masked.
+  // The pick: A allowed, X masked; not A on Random or the items past it, nor on the stage
+  // builder's page except on the page button.
   masks = RankedPPlus::Masks(m);
   EXPECT_FALSE(masks[1].buttons & PAD_BUTTON_A);
   EXPECT_TRUE(masks[1].buttons & PAD_BUTTON_X);
+  m.Write32(TASK + RankedPPlus::SSS_HOVERED, 0x37);
+  EXPECT_TRUE(RankedPPlus::Masks(m)[1].buttons & PAD_BUTTON_A);
+  m.Write32(TASK + RankedPPlus::SSS_PAGE, RankedPPlus::CUSTOM_PAGE);
+  m.Write32(TASK + RankedPPlus::SSS_HOVERED, 3);
+  EXPECT_TRUE(RankedPPlus::Masks(m)[1].buttons & PAD_BUTTON_A);
+  m.Write32(TASK + RankedPPlus::SSS_HOVERED, RankedPPlus::PAGE_ITEM);
+  EXPECT_FALSE(RankedPPlus::Masks(m)[1].buttons & PAD_BUTTON_A);
+  m.Write32(TASK + RankedPPlus::SSS_PAGE, 0);
+  m.Write32(TASK + RankedPPlus::SSS_HOVERED, 0);
 
   // Port 2 picks PS2: the fight starts on it, and port 2 wins it.
   m.Write8(MODE_MELEE + 0x1B, 0x2E);

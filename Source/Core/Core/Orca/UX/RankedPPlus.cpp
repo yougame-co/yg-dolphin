@@ -498,8 +498,14 @@ Rollback::InputGate::Masks Masks(const GuestMemory& m)
                  PAD_BUTTON_Y;
   const bool pick = plan.steps[s->step].kind == StepKind::Pick;
   mine.buttons |= pick ? PAD_BUTTON_X : PAD_BUTTON_A;
-  // Random would strike every stage outside the random set, or pick for the player.
-  if (m.Read32(task + SSS_HOVERED) == RANDOM_ITEM)
+  mine.c_stick = true;
+  // Past the page button, the screen's other items: Random (it would strike every stage outside
+  // the random set, or pick for the player) and the rest. A on the page button turns the page
+  // (every page but the first is all struck); on the stage builder's page A picks nothing.
+  const u32 hovered = m.Read32(task + SSS_HOVERED);
+  if (hovered > PAGE_ITEM)
+    mine.buttons |= PAD_BUTTON_A | PAD_BUTTON_X;
+  if (m.Read32(task + SSS_PAGE) == CUSTOM_PAGE && hovered != PAGE_ITEM)
     mine.buttons |= PAD_BUTTON_A | PAD_BUTTON_X;
   return masks;
 }
