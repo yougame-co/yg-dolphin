@@ -1549,6 +1549,94 @@ same verdicts, each from its side. Dev tickets by default (nothing recorded); `-
 --cookie-a/--cookie-b <file> --id-a/--id-b <id>` uses real tickets as two signed-in players.
 Under `flock orca-run.lock`, never while Luis plays.
 
+## Free space
+
+The online rules (casual locks, ranked sets) need room in the game's own memory: a match block of
+about 96 bytes (the header and the set state, which every rollback snapshot and drop-in keyframe
+must carry), and code caves for the lock patches. Both come from one place, the same in Brawl rev 2
+and Project+ v3.2: the dead code of Brawl's online sequences in sora_scene. The addresses are
+constants in `Core/Orca/UX/FreeSpace.h`; nothing uses them yet.
+
+| What | Where | Size |
+|---|---|---|
+| Match block (data only) | `0x806F2380`-`0x806F2580`, in sqNetAnyOkiraku::setNext; it can grow to `0x806F2618` | 512 bytes |
+| Code caves | 12 runs from `0x806F2674` to `0x806F82A4` (the header lists them) | 16,908 bytes |
+
+### Why it is free
+
+- **sora_scene is resident and shared.** The game loads `sora_scene.rel` (module 1) once at boot,
+  at `0x806BB480` (text `0x806BB554`-`0x806F8ADC`), and never reloads it. Project+ ships no copy of
+  its own, and its other modules don't refer to these addresses.
+- **Nothing enters the online sequences.** sqNetAnyOkiraku (With Anyone's Basic Brawl),
+  sqNetFriendList, sqNetFriendMelee, sqNetFriendKumite, sqNetFriendHomerun (With Friends),
+  sqNetAnyTeamMelee and sqNetAnyWatch start only from sqMenuMain::setNext's entries for exit codes
+  24-27 and 29-31, which Orca's patches already send to its own block ("Online menu").
+- **Nothing else refers to their code.** Read from the RELs' relocations:
+  - every reference into these runs, in sora_scene, in every other module on the disc and in
+    Project+'s modules and plugins, comes from those sequences' own vtables and state tables;
+  - only the sequences' own code reads those tables.
+- **Not free, and left out:**
+  - each sequence's create function, which runs at boot when sora_scene registers its sequences;
+  - the 25 words the loader relocates against sora_melee (module 27). sora_melee is loaded at boot
+    and stays, so they hold the same values all along, but a relink would rewrite them;
+  - `0x806F3DA4`, which Project+'s codeset nops every frame ("Online Handicap Disable", in
+    sqNetFriendMelee), so every cave word is the same in both games. That nop is the only Project+
+    code in these runs (its NETPLAY and NETBOOST codesets parsed, every direct write checked).
+
+### Proven under the harness
+
+`Tools/orca/free-space.py <nogui> <disc> [--pplus <dol>]` runs one scripted loop through every scene
+online play visits: boot; PLAY ONLINE > With Anyone > Casual; B out of the character select
+(Orca's back out); Ranked; two whole matches with their results; B out; the top page;
+Group > Brawl; B out. It runs that loop twice:
+
+- **observe:** every word of the block and every 64th byte of the caves are watched at every frame
+  boundary, and MEM1 is dumped at 16 points in Brawl, 17 in Project+ (MEM2 at 5). The block and
+  the caves hold the game's own code in every dump, the same bytes, and no watch moves after the
+  module loads.
+- **trap:** 5 frames into the first scene the block and every cave are filled with illegal
+  instructions (primary opcode 0, every word different). No unknown instruction ever runs, the
+  fill is intact in every dump, and no watch moves after it. A drop-in keyframe taken in the first
+  match carries it (`YG_KEYFRAME_TEST`: loaded, and 30 re-run frames identical).
+- **both:** the two runs reach the same scenes at the same frames, and every dump is byte-for-byte
+  the same outside the block and the caves, in MEM1 and MEM2. Nothing the game does reads them.
+
+Results on 2026-10-03 (branch `rs-spike` on the matchmaking tip, Apple Silicon, `-v Null`):
+
+| Game | The loop | free-space.py | Rollback re-runs with the fill (`YG_SYNCTEST=7`, scratch run) |
+|---|---|---|---|---|
+| Brawl rev 2 | 33 scene changes, to frame 20,014; matches of 2:00 | PASS: 16 points, the fill seen from frame 74, keyframe at 5,000 | frames 1,400-3,600 (title to the match's start): 15,351 re-run frames, 0 RAM mismatches |
+| Project+ v3.2 | 33 scene changes, to frame 11,137 | PASS: 17 points, the fill seen from frame 8, keyframe at 4,000 | frames 150-1,800 (boot to the match): 11,501 re-run frames, 0 RAM mismatches |
+
+- **Project+ against Brawl:** in the same loops, every word of the seven runs and the create
+  functions is the same in both games except `0x806F3DA4`, Project+'s nop.
+- **A wider fill:** a scratch run in Brawl filled the seven whole runs (18,944 bytes, the short
+  pieces between relocated words included) and gave the same result.
+- **The loader:** the dumped code equals sora_scene.rel's own bytes except at relocation sites,
+  which confirms the load address.
+
+### Using it
+
+- **Before Orca writes it, the block holds code**, never zeros (its first word is `li r17, 0`,
+  `0x3A200000`). A reader checks the block's magic and treats anything else as no block.
+- **The block is data only.** Orca's frame hook writes it, as a pure function of memory on both
+  machines; no patch group ever does (a unit test checks the shipped files). It is 32-byte aligned,
+  so it shares no cache line with a cave.
+- **A cave is a guarded group** in `Data/Sys/Orca/<profile>.patches` whose originals are the dead
+  code that is there (`GamePatches.h`). It lands once per boot, the same in both games, and any MEM1
+  address is a relative `b`/`bl` away (MEM1 is 24 MB, the branch reaches 32 MB).
+
+### Places that don't work
+
+| Candidate | Why not |
+|---|---|
+| sqVsMelee+0x18 (its heap block's slack) | Orca already keeps the exit code there ("Online menu"); 4 bytes are left. |
+| `0x806DC8C8`-`0x806DC91C` | sqMenuMain::setNext's old online entries: Orca's own block and back-out helper. |
+| The record's event area, `0x9017B96C` | Save data (gmGlobalRecord's Event scores): the game loads it from the save, writes it back, and the Events menu shows it. Ruled out for what it is, not tested. |
+| Low MEM1, `0x80001800`-`0x80003000` | Free in Brawl under Orca (8 bytes at `0x80001804`), but Project+'s code handler fills `0x80001800`-`0x80002160` and its codes keep variables there (`0x800022A4`, MUSIC_SELECT_STEP `0x80002810`). |
+| The Network heap | Both games decompress fighter files in it (the design's research). |
+| The online scenes (scNetFriendList, scNetWatchBet, scNetTimeResult), `0x806C6998`-`0x806C7F18` | Most likely dead too, but which sequences create them was not traced. A reserve. |
+
 ## Embedding
 
 The YouGame desktop app shows Orca inside its own window, at the page's player box, the way it runs

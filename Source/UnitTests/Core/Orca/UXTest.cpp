@@ -28,6 +28,7 @@
 
 #include "Core/Orca/UX/ControllerSource.h"
 #include "Core/Orca/UX/Controllers.h"
+#include "Core/Orca/UX/FreeSpace.h"
 #include "Core/Orca/UX/GamePatches.h"
 #include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/Overlay.h"
@@ -1123,6 +1124,54 @@ TEST(OrcaUXGamePatches, ItemsOffIsOneGroupThatLandsOnlyOnTheGamesDefaults)
     SCOPED_TRACE("PPLUS32.patches");
     // Project+'s GameGlobal::init hook clears the Mayhem and Passive Aggression bits.
     ExpectItemDefaultGroup(ShippedPatches("PPLUS32.patches"), 0xFFE7FFFF);
+  }
+}
+
+TEST(OrcaUXFreeSpace, TheBlockAndTheCavesFitAndNoShippedPatchStraysIntoThem)
+{
+  using namespace FreeSpace;
+  // Room for the design's ~96-byte header and set state, and code space for the lock patches.
+  EXPECT_GE(kMatchBlock.Size(), 96u);
+  u32 cave_bytes = 0;
+  for (const FreeSpace::Range& cave : kCodeCaves)
+    cave_bytes += cave.Size();
+  EXPECT_EQ(cave_bytes, 16908u);
+  // The dead runs the block and the caves come from: the online sequences' methods.
+  constexpr std::array<FreeSpace::Range, 7> dead{{{0x806F22EC, 0x806F2D24},
+                                                  {0x806F2D74, 0x806F30E0},
+                                                  {0x806F3130, 0x806F3FA0},
+                                                  {0x806F3FF0, 0x806F4C70},
+                                                  {0x806F4CC0, 0x806F58B4},
+                                                  {0x806F6C74, 0x806F76F8},
+                                                  {0x806F7748, 0x806F82A4}}};
+  const auto within_dead = [&](const FreeSpace::Range& range) {
+    return std::any_of(dead.begin(), dead.end(), [&](const FreeSpace::Range& run) {
+      return range.begin >= run.begin && range.end <= run.end;
+    });
+  };
+  EXPECT_TRUE(within_dead(kMatchBlock));
+  for (const FreeSpace::Range& cave : kCodeCaves)
+    EXPECT_TRUE(within_dead(cave)) << std::hex << cave.begin;
+  // The block is data: no patch line ever writes it. Inside the dead runs a patch line may only
+  // write a cave, never a create function, a word relocated against sora_melee or Project+'s nop.
+  for (const char* name : {"RSBE01.patches", "PPLUS32.patches"})
+  {
+    SCOPED_TRACE(name);
+    for (const GamePatch& p : ShippedPatches(name))
+    {
+      EXPECT_FALSE(kMatchBlock.Contains(p.address)) << std::hex << p.address;
+      const bool in_dead = std::any_of(dead.begin(), dead.end(), [&](const FreeSpace::Range& run) {
+        return run.Contains(p.address);
+      });
+      const bool in_cave =
+          std::any_of(kCodeCaves.begin(), kCodeCaves.end(),
+                      [&](const FreeSpace::Range& cave) { return cave.Contains(p.address); });
+      EXPECT_TRUE(!in_dead || in_cave) << std::hex << p.address;
+      EXPECT_FALSE(
+          std::any_of(kSequenceCreates.begin(), kSequenceCreates.end(),
+                      [&](const FreeSpace::Range& create) { return create.Contains(p.address); }))
+          << std::hex << p.address;
+    }
   }
 }
 
