@@ -508,7 +508,12 @@ void KeyframeTest(Core::System& system, int f, bool first_pass)
                    from, f, ok ? "ok" : "failed", ram, s_keyframe.ram,
                    ok && ram == s_keyframe.ram ? "PASS" : "FAIL");
     if (ok)
+    {
       s_frame = from;
+      // As a sync test's load does: scene-relative input follows the loaded frame's scene, or a
+      // window that crosses a scene change re-runs with the inputs shifted.
+      RestoreScene(from);
+    }
   }
 }
 
