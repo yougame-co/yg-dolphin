@@ -1585,8 +1585,9 @@ beta: a best of 3, rated once per set, with the host's rules (YouGame `docs/ORCA
    both Orcas, the same bytes (below). Casual: each game is a `finish`, the room stays, and the host
    begins the next match. Ranked: each game is a `game-report` (`g1`..`g7`); when one player has 2
    agreed wins (`game-result` verdicts), both send `finish {winner}`; 7 games without that, `finish
-   {void}` ("limit"). The room settles each report by agreement (a mismatch, detail included, is
-   void) and rates the set once.
+   {void}` ("limit"). The room settles each report by agreement on the outcome (winner, draw,
+   void): different outcomes void the game; a detail read differently does not (since YouGame PR
+   #489 the room keeps the lowest slot's, the host's, and logs both). It rates the set once.
 7. A ranked room closes with 4004 "match-over" after its result: a clean end. The host prints
    `orca state friend-left match-over` and opens a fresh private room (never the closed code); the
    joiner prints `orca state host-left match-over`, moves to port 1 and opens its own room too.
@@ -1614,7 +1615,7 @@ gone. A desync voids the match in progress (`finish {void}`) before the players 
 | `orca state friend-left match-over` / `orca state host-left match-over` | A ranked room closed after its result. |
 
 `orca result` shapes (the local player first; `n` the game's number in the casual pairing or the
-ranked set; `score` agreed wins; `d` the agreed detail):
+ranked set; `score` agreed wins; `d` the settled detail, the host's):
 - casual game: `{"q":"casual","k":"game","n":3,"out":"won"|"lost"|"draw"|"void","why"?:"mismatch"|"nocontest"|"ports"|"unrecorded"|"desync","d"?:{"st":2,"c":[mine,theirs],"s":[mine,theirs],"to":0|1}}`
 - ranked game: `{"q":"ranked","k":"game","n":2,"out":...,"why"?:...,"score":[mine,theirs],"d"?:{...}}`
 - ranked set: `{"q":"ranked","k":"set","out":"won"|"lost"|"void","by":"games"|"forfeit","why"?:"desync"|"limit"|"unrecorded","score":[mine,theirs],"r"?:[before,after],"rank"?:"<24 chars>"}`
