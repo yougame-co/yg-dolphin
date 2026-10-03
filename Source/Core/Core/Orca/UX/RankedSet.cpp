@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <atomic>
+#include <utility>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -19,11 +21,11 @@ namespace Orca::UX::RankedSet
 {
 namespace
 {
-using MatchBlock::GameRecord;
-using MatchBlock::How;
-using MatchBlock::NO_PORT;
-using MatchBlock::Ruleset;
-using MatchBlock::SetState;
+using SetBlock::GameRecord;
+using SetBlock::How;
+using SetBlock::NO_PORT;
+using SetBlock::Ruleset;
+using SetBlock::SetState;
 using Scene = Reading::Scene;
 
 constexpr u32 GAME_GLOBAL = 0x805A00E0;
@@ -60,8 +62,11 @@ int LedgeLimit(bool tiebreak, u8 character)
 // the wins, the game number.
 std::atomic<u32> s_published{0};
 std::atomic<int> s_local_port{0};
-// SetRoomMode's wish: -1 nothing asked yet, else a MatchBlock::Mode.
+// SetRoomMode's wish: -1 nothing asked yet, else a SetBlock::Mode; and a count of wishes, so a
+// new queue room starts a fresh set even with the same header (the CPU thread's last one applied).
 std::atomic<int> s_room_mode{-1};
+std::atomic<u32> s_room_wish{0};
+u32 s_room_applied = 0;
 }  // namespace
 
 std::optional<GameRecord> Judge(Ruleset ruleset, const SetState& set, const ResultBlock& block,
@@ -83,8 +88,8 @@ std::optional<GameRecord> Judge(Ruleset ruleset, const SetState& set, const Resu
     r.characters[i] = Byte(p[i].character);
     r.stocks[i] = Byte(p[i].stocks);
   }
-  const bool snapped = set.fight_flags & MatchBlock::FIGHT_TIMEUP;
-  const bool sudden = set.fight_flags & MatchBlock::FIGHT_SUDDEN;
+  const bool snapped = set.fight_flags & SetBlock::FIGHT_TIMEUP;
+  const bool sudden = set.fight_flags & SetBlock::FIGHT_SUDDEN;
   r.timeout = snapped || decision == DECISION_TIME_UP;
   const bool first0 = p[0].place == 0, first1 = p[1].place == 0;
   const auto win = [&](int port, How how) {
@@ -162,13 +167,13 @@ SetState Step(SetState s, Ruleset ruleset, const Facts& f, u32 frame)
       s.snap_percent = {0, 0};
       s.on_ledge = {0, 0};
     }
-    else if (s.fight_flags & MatchBlock::FIGHT_BETWEEN)
+    else if (s.fight_flags & SetBlock::FIGHT_BETWEEN)
     {
       // Back into a fight from between scenes: sudden death, the same game.
-      s.fight_flags = static_cast<u8>((s.fight_flags & ~MatchBlock::FIGHT_BETWEEN) |
-                                      MatchBlock::FIGHT_SUDDEN);
+      s.fight_flags = static_cast<u8>((s.fight_flags & ~SetBlock::FIGHT_BETWEEN) |
+                                      SetBlock::FIGHT_SUDDEN);
     }
-    if (f.live.valid && !(s.fight_flags & MatchBlock::FIGHT_SUDDEN))
+    if (f.live.valid && !(s.fight_flags & SetBlock::FIGHT_SUDDEN))
     {
       for (int i = 0; i < 2; ++i)
       {
@@ -176,9 +181,9 @@ SetState Step(SetState s, Ruleset ruleset, const Facts& f, u32 frame)
           ++s.ledge[i];
         s.on_ledge[i] = f.live.on_ledge[i] ? 1 : 0;
       }
-      if (f.live.time_up && !(s.fight_flags & MatchBlock::FIGHT_TIMEUP))
+      if (f.live.time_up && !(s.fight_flags & SetBlock::FIGHT_TIMEUP))
       {
-        s.fight_flags |= MatchBlock::FIGHT_TIMEUP;
+        s.fight_flags |= SetBlock::FIGHT_TIMEUP;
         s.snap_stocks = f.live.stocks;
         s.snap_percent = f.live.percent;
       }
@@ -186,7 +191,7 @@ SetState Step(SetState s, Ruleset ruleset, const Facts& f, u32 frame)
     break;
   case Scene::Between:
     if (s.fight)
-      s.fight_flags |= MatchBlock::FIGHT_BETWEEN;
+      s.fight_flags |= SetBlock::FIGHT_BETWEEN;
     break;
   case Scene::Results:
   {
@@ -198,7 +203,7 @@ SetState Step(SetState s, Ruleset ruleset, const Facts& f, u32 frame)
     s.on_ledge = {0, 0};
     if (!r)
       break;
-    if (s.games < MatchBlock::MAX_RECORDS)
+    if (s.games < SetBlock::MAX_RECORDS)
       s.records[s.games] = *r;
     ++s.games;
     if (r->winner != NO_PORT)
@@ -222,7 +227,7 @@ SetState Step(SetState s, Ruleset ruleset, const Facts& f, u32 frame)
       if (s.tb_streak >= TIEBREAK_STREAK_LIMIT)
         s.done = 2;
     }
-    if (!s.done && s.games >= MatchBlock::MAX_RECORDS)
+    if (!s.done && s.games >= SetBlock::MAX_RECORDS)
       s.done = 2;
     if (s.done == 2)
     {
@@ -244,7 +249,7 @@ SetState Step(SetState s, Ruleset ruleset, const Facts& f, u32 frame)
   return s;
 }
 
-int WriteSetRules(GuestMemory& memory, const SetState& set)
+int WriteSetRules(GuestMemory& memory, const SetState& set, u8 stocks, u8 minutes)
 {
   const u32 rule = SetRule(memory);
   if (!rule)
@@ -257,8 +262,8 @@ int WriteSetRules(GuestMemory& memory, const SetState& set)
     ++changed;
   };
   put(RULE_MODE, 1);
-  put(RULE_STOCKS, set.tiebreak ? 1 : 3);
-  put(RULE_STOCK_MINUTES, set.tiebreak ? 3 : 8);
+  put(RULE_STOCKS, set.tiebreak ? 1 : stocks);
+  put(RULE_STOCK_MINUTES, set.tiebreak ? 3 : minutes);
   return changed;
 }
 
@@ -286,21 +291,21 @@ void Frame(const Core::CPUThreadGuard& guard, int frame)
   if (!ResultsVerified())
     return;
   GuardMemory memory(guard);
-  const std::optional<MatchBlock::Header> header = MatchBlock::ReadHeader(memory);
-  if (!header || header->mode != MatchBlock::Mode::Ranked)
+  const std::optional<SetBlock::Header> header = SetBlock::ReadHeader(memory);
+  if (!header || header->mode != SetBlock::Mode::Ranked)
   {
     s_published.store(0, std::memory_order_relaxed);
     return;
   }
   const Facts facts = ReadFacts(memory);
-  const SetState before = MatchBlock::ReadSet(memory);
+  const SetState before = SetBlock::ReadSet(memory);
   const SetState after = Step(before, header->ruleset, facts, static_cast<u32>(frame));
   if (after != before)
   {
-    MatchBlock::WriteSet(memory, after);
+    SetBlock::WriteSet(memory, after);
     if (after.games != before.games)
     {
-      const GameRecord& r = after.records[std::min(after.games, u8(MatchBlock::MAX_RECORDS)) - 1];
+      const GameRecord& r = after.records[std::min(after.games, u8(SetBlock::MAX_RECORDS)) - 1];
       NOTICE_LOG_FMT(ROLLBACK,
                      "Ranked set: game {} at frame {} (fight from {}): winner {}, how {}, "
                      "ledge {}/{}, set {}-{}{}",
@@ -314,7 +319,20 @@ void Frame(const Core::CPUThreadGuard& guard, int frame)
     }
   }
   if (header->ruleset == Ruleset::Brawl && facts.scene != Scene::Fight)
-    WriteSetRules(memory, after);
+  {
+    // Test only, ORCA_TEST_SET_RULES=<stocks>,<minutes>: shorter games than 3 stocks and 8:00.
+    static const std::pair<u8, u8> s_rules = [] {
+      const char* v = std::getenv("ORCA_TEST_SET_RULES");
+      int stocks = 0, minutes = 0;
+      if (v && std::sscanf(v, "%d,%d", &stocks, &minutes) == 2 && stocks >= 1 && stocks <= 99 &&
+          minutes >= 1 && minutes <= 99 && TestKnobsAllowed())
+      {
+        return std::pair<u8, u8>(static_cast<u8>(stocks), static_cast<u8>(minutes));
+      }
+      return std::pair<u8, u8>(3, 8);
+    }();
+    WriteSetRules(memory, after, s_rules.first, s_rules.second);
+  }
   const bool fighting = facts.scene == Scene::Fight || facts.scene == Scene::Between;
   const u32 packed = 0x80000000u | (fighting ? 1u << 30 : 0) | (u32(after.done & 3) << 24) |
                      (after.tiebreak ? 1u << 23 : 0) |
@@ -323,9 +341,10 @@ void Frame(const Core::CPUThreadGuard& guard, int frame)
   s_published.store(packed, std::memory_order_relaxed);
 }
 
-void SetRoomMode(MatchBlock::Mode mode)
+void SetRoomMode(SetBlock::Mode mode)
 {
   s_room_mode.store(static_cast<int>(mode));
+  s_room_wish.fetch_add(1);
 }
 
 void ApplyRoomMode(const Core::CPUThreadGuard& guard, bool alone)
@@ -336,8 +355,8 @@ void ApplyRoomMode(const Core::CPUThreadGuard& guard, bool alone)
     const char* v = std::getenv("ORCA_TEST_MATCH_BLOCK");
     if (!v)
       return -1;
-    return std::strcmp(v, "ranked") == 0 ? static_cast<int>(MatchBlock::Mode::Ranked) :
-           std::strcmp(v, "casual") == 0 ? static_cast<int>(MatchBlock::Mode::Casual) :
+    return std::strcmp(v, "ranked") == 0 ? static_cast<int>(SetBlock::Mode::Ranked) :
+           std::strcmp(v, "casual") == 0 ? static_cast<int>(SetBlock::Mode::Casual) :
                                            -1;
   }();
   if (s_test >= 0 && s_room_mode.load() < 0 && TestKnobsAllowed())
@@ -348,26 +367,32 @@ void ApplyRoomMode(const Core::CPUThreadGuard& guard, bool alone)
   const int wanted = s_room_mode.load();
   if (wanted < 0 || !alone || !ResultsVerified())
     return;
+  const u32 wish = s_room_wish.load();
+  const bool fresh = wish != s_room_applied;
+  s_room_applied = wish;
   GuardMemory memory(guard);
-  const std::optional<MatchBlock::Header> have = MatchBlock::ReadHeader(memory);
-  const auto mode = static_cast<MatchBlock::Mode>(wanted);
-  if (mode == MatchBlock::Mode::None)
+  const std::optional<SetBlock::Header> have = SetBlock::ReadHeader(memory);
+  const auto mode = static_cast<SetBlock::Mode>(wanted);
+  if (mode == SetBlock::Mode::None)
   {
     if (!have)
       return;
-    const int changed = MatchBlock::Clear(memory);
+    const int changed = SetBlock::Clear(memory);
     NOTICE_LOG_FMT(ROLLBACK, "Match block: cleared ({} byte(s))", changed);
     return;
   }
   const Orca::Profile* profile = Orca::ActiveProfile();
-  MatchBlock::Header header;
+  SetBlock::Header header;
   header.mode = mode;
   header.ruleset = profile && profile->IsLauncher() ? Ruleset::PPlus : Ruleset::Brawl;
-  if (have == header)
+  if (have == header && !fresh)
     return;
-  const int changed = MatchBlock::WriteHeader(memory, header);
+  int changed = SetBlock::WriteHeader(memory, header);
+  // A new queue room's set starts from nothing, whatever the block held.
+  if (fresh)
+    changed += SetBlock::WriteSet(memory, SetState{});
   NOTICE_LOG_FMT(ROLLBACK, "Match block: header {} {} ({} byte(s))",
-                 mode == MatchBlock::Mode::Ranked ? "ranked" : "casual",
+                 mode == SetBlock::Mode::Ranked ? "ranked" : "casual",
                  header.ruleset == Ruleset::PPlus ? "Project+" : "Brawl", changed);
 }
 

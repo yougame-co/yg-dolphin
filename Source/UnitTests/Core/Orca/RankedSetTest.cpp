@@ -9,18 +9,18 @@
 
 #include <gtest/gtest.h>
 
-#include "Core/Orca/UX/MatchBlock.h"
+#include "Core/Orca/UX/SetBlock.h"
 #include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/RankedSet.h"
 #include "Core/Orca/UX/Results.h"
 
 using namespace Orca::UX;
-using MatchBlock::GameRecord;
-using MatchBlock::How;
-using MatchBlock::Mode;
-using MatchBlock::NO_PORT;
-using MatchBlock::Ruleset;
-using MatchBlock::SetState;
+using SetBlock::GameRecord;
+using SetBlock::How;
+using SetBlock::Mode;
+using SetBlock::NO_PORT;
+using SetBlock::Ruleset;
+using SetBlock::SetState;
 using Scene = Reading::Scene;
 
 namespace
@@ -55,8 +55,8 @@ public:
 FakeMemory Block()
 {
   FakeMemory m;
-  for (u32 i = 0; i < MatchBlock::SIZE; ++i)
-    m.bytes[MatchBlock::BASE + i] = static_cast<u8>(0x3A + i * 7);
+  for (u32 i = 0; i < SetBlock::SIZE; ++i)
+    m.bytes[SetBlock::BASE + i] = static_cast<u8>(0x3A + i * 7);
   return m;
 }
 
@@ -135,33 +135,33 @@ std::vector<RankedSet::Live> Grabs(int port, int grabs)
 }
 }  // namespace
 
-TEST(OrcaMatchBlock, HeaderRoundTripsAndStartsAFreshSet)
+TEST(OrcaSetBlock, HeaderRoundTripsAndStartsAFreshSet)
 {
   FakeMemory m = Block();
-  EXPECT_FALSE(MatchBlock::ReadHeader(m));
-  EXPECT_GT(MatchBlock::WriteHeader(m, {Mode::Ranked, Ruleset::Brawl}), 0);
-  ASSERT_TRUE(MatchBlock::ReadHeader(m));
-  EXPECT_EQ(*MatchBlock::ReadHeader(m), (MatchBlock::Header{Mode::Ranked, Ruleset::Brawl}));
-  EXPECT_EQ(MatchBlock::ReadSet(m), SetState{});
+  EXPECT_FALSE(SetBlock::ReadHeader(m));
+  EXPECT_GT(SetBlock::WriteHeader(m, {Mode::Ranked, Ruleset::Brawl}), 0);
+  ASSERT_TRUE(SetBlock::ReadHeader(m));
+  EXPECT_EQ(*SetBlock::ReadHeader(m), (SetBlock::Header{Mode::Ranked, Ruleset::Brawl}));
+  EXPECT_EQ(SetBlock::ReadSet(m), SetState{});
   // The same header again writes nothing and keeps the set.
   SetState s;
   s.games = 1;
   s.wins = {1, 0};
-  MatchBlock::WriteSet(m, s);
-  EXPECT_EQ(MatchBlock::WriteHeader(m, {Mode::Ranked, Ruleset::Brawl}), 0);
-  EXPECT_EQ(MatchBlock::ReadSet(m), s);
+  SetBlock::WriteSet(m, s);
+  EXPECT_EQ(SetBlock::WriteHeader(m, {Mode::Ranked, Ruleset::Brawl}), 0);
+  EXPECT_EQ(SetBlock::ReadSet(m), s);
   // Another mode starts a fresh set.
-  EXPECT_GT(MatchBlock::WriteHeader(m, {Mode::Casual, Ruleset::Brawl}), 0);
-  EXPECT_EQ(MatchBlock::ReadSet(m), SetState{});
-  EXPECT_GT(MatchBlock::Clear(m), 0);
-  EXPECT_FALSE(MatchBlock::ReadHeader(m));
-  EXPECT_EQ(MatchBlock::Clear(m), 0);
+  EXPECT_GT(SetBlock::WriteHeader(m, {Mode::Casual, Ruleset::Brawl}), 0);
+  EXPECT_EQ(SetBlock::ReadSet(m), SetState{});
+  EXPECT_GT(SetBlock::Clear(m), 0);
+  EXPECT_FALSE(SetBlock::ReadHeader(m));
+  EXPECT_EQ(SetBlock::Clear(m), 0);
 }
 
-TEST(OrcaMatchBlock, SetRoundTripsAndWritesOnlyWhatChanged)
+TEST(OrcaSetBlock, SetRoundTripsAndWritesOnlyWhatChanged)
 {
   FakeMemory m = Block();
-  MatchBlock::WriteHeader(m, {Mode::Ranked, Ruleset::PPlus});
+  SetBlock::WriteHeader(m, {Mode::Ranked, Ruleset::PPlus});
   SetState s;
   s.games = 3;
   s.wins = {2, 1};
@@ -173,16 +173,16 @@ TEST(OrcaMatchBlock, SetRoundTripsAndWritesOnlyWhatChanged)
   s.ledge = {36, 2};
   s.records[0] = {100, 0, How::Results, 2, false, false, {0, 3}, {1, 0}, {0, 0}};
   s.records[1] = {200, 1, How::Percent, 0x1F, true, true, {0x16, 3}, {1, 1}, {21, 4}};
-  EXPECT_GT(MatchBlock::WriteSet(m, s), 0);
-  EXPECT_EQ(MatchBlock::ReadSet(m), s);
+  EXPECT_GT(SetBlock::WriteSet(m, s), 0);
+  EXPECT_EQ(SetBlock::ReadSet(m), s);
   m.writes = 0;
-  EXPECT_EQ(MatchBlock::WriteSet(m, s), 0);
+  EXPECT_EQ(SetBlock::WriteSet(m, s), 0);
   EXPECT_EQ(m.writes, 0);
   EXPECT_EQ(s.StagesWonBy(0), u64(1) << 2);
   EXPECT_EQ(s.StagesWonBy(1), u64(1) << 0x1F);
   // Nothing outside the block.
   for (const auto& [a, v] : m.bytes)
-    EXPECT_TRUE(a >= MatchBlock::BASE && a < MatchBlock::BASE + MatchBlock::SIZE);
+    EXPECT_TRUE(a >= SetBlock::BASE && a < SetBlock::BASE + SetBlock::SIZE);
 }
 
 TEST(OrcaRankedSet, BestOfThree)

@@ -540,8 +540,8 @@ add_library(core
   Orca/UX/FreeSpace.h
   Orca/UX/GamePatches.cpp
   Orca/UX/GamePatches.h
-  Orca/UX/MatchBlock.cpp
-  Orca/UX/MatchBlock.h
+  Orca/UX/SetBlock.cpp
+  Orca/UX/SetBlock.h
   Orca/UX/MenuText.cpp
   Orca/UX/MenuText.h
   Orca/UX/NameTags.cpp

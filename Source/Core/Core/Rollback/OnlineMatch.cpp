@@ -677,7 +677,7 @@ constexpr std::chrono::seconds REOPEN_DELAY{1};
 void ReopenRoom(Match& match)
 {
   // The match block clears once the game is alone (UX/RankedSet.h): a room of its own is no queue's.
-  Orca::UX::RankedSet::SetRoomMode(Orca::UX::MatchBlock::Mode::None);
+  Orca::UX::RankedSet::SetRoomMode(Orca::UX::SetBlock::Mode::None);
   ForgetRoom(match);
   Orca::Online::ShutdownInBackground();
   if (match.local_seat == 0)
@@ -1483,8 +1483,8 @@ void HostInPlay(Match& match, const std::string& code)
   // Brawl's rules for a matchmade game, at the next boundary (UX/Results.h), and the match block's
   // header for the queue (UX/RankedSet.h).
   Orca::UX::RequestQueueRules();
-  Orca::UX::RankedSet::SetRoomMode(Orca::UX::Search::Ranked() ? Orca::UX::MatchBlock::Mode::Ranked :
-                                                                 Orca::UX::MatchBlock::Mode::Casual);
+  Orca::UX::RankedSet::SetRoomMode(Orca::UX::Search::Ranked() ? Orca::UX::SetBlock::Mode::Ranked :
+                                                                 Orca::UX::SetBlock::Mode::Casual);
   NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: hosting room {} from frame {}", code, match.running + 1);
 }
 

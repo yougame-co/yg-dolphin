@@ -10,7 +10,7 @@
 #include <vector>
 
 #include "Common/CommonTypes.h"
-#include "Core/Orca/UX/MatchBlock.h"
+#include "Core/Orca/UX/SetBlock.h"
 
 namespace Core
 {
@@ -77,7 +77,7 @@ struct Reading
   // In the results scene only.
   ResultBlock block;
   // A ranked match block's set (RankedSet.h), at every boundary of a ranked queue match.
-  std::optional<MatchBlock::SetState> set;
+  std::optional<SetBlock::SetState> set;
   bool operator==(const Reading&) const = default;
 };
 
@@ -107,7 +107,7 @@ struct GameResult
   std::array<int, 2> stocks{-1, -1};
   bool timeout = false;
   // A ranked set's game (from the match block): its fight's first frame (the report's id, the same
-  // on both machines), its number in the set, how it was decided (MatchBlock::How), a tiebreak
+  // on both machines), its number in the set, how it was decided (SetBlock::How), a tiebreak
   // game, each port's ledge grabs; and, for the game that ended the set, the set's end (1 won by
   // `set_winner`, 2 void).
   int start = -1;
@@ -125,7 +125,7 @@ struct GameResult
 };
 
 // A ranked set's game as the match block recorded it (index `index` of `set`).
-GameResult FromRecord(const MatchBlock::SetState& set, int index);
+GameResult FromRecord(const SetBlock::SetState& set, int index);
 
 // A results screen's verdict: exactly two human players on ports 1 and 2 (else void "ports"), a
 // fight that ended normally (else void "nocontest"), one of them placed first (a win) or both (a

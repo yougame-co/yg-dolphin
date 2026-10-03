@@ -1,11 +1,11 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "Core/Orca/UX/MatchBlock.h"
+#include "Core/Orca/UX/SetBlock.h"
 
 #include "Core/Orca/UX/NameTags.h"
 
-namespace Orca::UX::MatchBlock
+namespace Orca::UX::SetBlock
 {
 namespace
 {
@@ -90,8 +90,6 @@ int WriteHeader(GuestMemory& memory, const Header& header)
   w.U8(HDR_VERSION, VERSION);
   w.U8(HDR_MODE, static_cast<u8>(header.mode));
   w.U8(HDR_RULESET, static_cast<u8>(header.ruleset));
-  for (u32 i = HDR_RULESET + 1; i < HDR_END; ++i)
-    w.U8(i, 0);
   int changed = w.changed;
   if (!before || *before != header)
     changed += WriteSet(memory, SetState{});
@@ -103,7 +101,9 @@ int Clear(GuestMemory& memory)
   if (!Mapped(memory))
     return 0;
   Writer w(memory);
-  for (u32 i = 0; i < SET_END; ++i)
+  for (u32 i = HDR_MAGIC; i <= HDR_RULESET; ++i)
+    w.U8(i, 0);
+  for (u32 i = SET_BEGIN; i < SET_END; ++i)
     w.U8(i, 0);
   return w.changed;
 }
@@ -191,4 +191,4 @@ int WriteSet(GuestMemory& memory, const SetState& s)
   }
   return w.changed;
 }
-}  // namespace Orca::UX::MatchBlock
+}  // namespace Orca::UX::SetBlock

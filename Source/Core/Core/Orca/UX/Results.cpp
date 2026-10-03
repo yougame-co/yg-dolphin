@@ -74,15 +74,15 @@ std::string GameResult::DetailJson() const
   return out + "}";
 }
 
-GameResult FromRecord(const MatchBlock::SetState& set, int index)
+GameResult FromRecord(const SetBlock::SetState& set, int index)
 {
   GameResult g;
-  if (index < 0 || index >= MatchBlock::MAX_RECORDS)
+  if (index < 0 || index >= SetBlock::MAX_RECORDS)
   {
     g.why = "limit";
     return g;
   }
-  const MatchBlock::GameRecord& r = set.records[index];
+  const SetBlock::GameRecord& r = set.records[index];
   const auto value = [](u8 v) { return v == 0xFF ? -1 : int(v); };
   g.start = static_cast<int>(r.start & 0x7FFFFFFF);
   g.frame = g.start;
@@ -237,7 +237,7 @@ std::vector<GameResult> ResultsTracker::Confirm(int confirmed, int plug_frame)
       // A ranked set: its games are the match block's (RankedSet.h), judged in the game itself.
       // Only games whose fight began after the opponent's plug frame are reported (on both
       // machines the same), and none seen before the tracker's first final reading.
-      const MatchBlock::SetState& set = *r.set;
+      const SetBlock::SetState& set = *r.set;
       if (!m_have_set || set.games < m_set_games)
       {
         m_have_set = true;
@@ -335,10 +335,10 @@ void ReadResultsFrame(const Core::CPUThreadGuard& guard, int frame)
     return;
   GuardMemory memory(guard);
   Reading reading = ReadResults(memory);
-  if (const auto header = MatchBlock::ReadHeader(memory);
-      header && header->mode == MatchBlock::Mode::Ranked)
+  if (const auto header = SetBlock::ReadHeader(memory);
+      header && header->mode == SetBlock::Mode::Ranked)
   {
-    reading.set = MatchBlock::ReadSet(memory);
+    reading.set = SetBlock::ReadSet(memory);
   }
   Tracker().Store(frame, reading, Orca::Events::Resyncs());
 }

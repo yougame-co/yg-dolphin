@@ -844,6 +844,8 @@ struct YouGameRoom::Impl
     std::string winner;
   };
   std::map<std::string, SetEnd> set_ends;
+  // The reports that came from the match block: the block alone ends their set.
+  std::set<std::string> block_ids;
 
   // Direct links to the other Orcas (DirectLink.h), unless ORCA_DIRECT=0. The pointer never
   // changes after construction; the link thread starts with the welcome.
@@ -1998,6 +2000,8 @@ struct YouGameRoom::Impl
     if (ranked)
     {
       game_numbers[id] = report.number > 0 ? report.number : n;
+      if (report.start >= 0)
+        block_ids.insert(id);
       if (report.set_done)
       {
         SetEnd end;
@@ -2222,12 +2226,16 @@ struct YouGameRoom::Impl
       n = it->second;
     else if (id.size() > 1 && id[0] == 'g')
       n = std::atoi(id.c_str() + 1);
-    // The match block ended the set with this game (both games decided it the same way): its end
-    // is the set's, whatever the room's tally of agreed games says.
-    if (const auto it = set_ends.find(id); it != set_ends.end())
+    // A game from the match block: the block ends the set (both games decided it the same way),
+    // whatever the room's tally of agreed games says.
+    if (block_ids.count(id))
     {
-      end = SetTally::End{it->second.done == 1 ? it->second.winner : "",
-                          it->second.done == 1 && !it->second.winner.empty() ? "" : "limit"};
+      end.reset();
+      if (const auto it = set_ends.find(id); it != set_ends.end())
+      {
+        end = SetTally::End{it->second.done == 1 ? it->second.winner : "",
+                            it->second.done == 1 && !it->second.winner.empty() ? "" : "limit"};
+      }
     }
     const std::string d = LocalDetail(m, id);
     Orca::Status::Result(
@@ -2337,6 +2345,7 @@ struct YouGameRoom::Impl
     finish_sent = false;
     game_numbers.clear();
     set_ends.clear();
+    block_ids.clear();
     match_participants.clear();
     LobbyFields(m);
     match_participants = lobby_participants;

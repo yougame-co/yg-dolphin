@@ -8,7 +8,7 @@
 #include <string>
 
 #include "Common/CommonTypes.h"
-#include "Core/Orca/UX/MatchBlock.h"
+#include "Core/Orca/UX/SetBlock.h"
 #include "Core/Orca/UX/Results.h"
 
 namespace Core
@@ -18,7 +18,7 @@ class CPUThreadGuard;
 
 // A ranked set in the game's own memory (ORCA.md "Ranked sets"): the frame hook follows each fight
 // of a queue match whose match block says ranked, judges it by the set's ruleset when its results
-// screen comes, and keeps the score in the block (MatchBlock::SetState). Every write is a pure
+// screen comes, and keeps the score in the block (SetBlock::SetState). Every write is a pure
 // function of memory and the frame number (the same on both machines), on first runs and re-runs
 // alike, and only bytes that differ are written, so a re-run from a snapshot taken at a boundary
 // writes nothing new there. The room hears each game from the block once its frames are final
@@ -35,7 +35,7 @@ class CPUThreadGuard;
 // - Project+ (2024): the results screen's winner. Its own codeset already decides time-outs by
 //   stocks then percent and gives an exact tie overtime, so there is nothing to add.
 // A game without exactly two humans on ports 1 and 2, or with a no contest, isn't recorded.
-// The set ends when a port has won 2 games, or void after MatchBlock::MAX_RECORDS games.
+// The set ends when a port has won 2 games, or void after SetBlock::MAX_RECORDS games.
 namespace Orca::UX::RankedSet
 {
 constexpr int WINS = 2;
@@ -70,17 +70,18 @@ struct Facts
 };
 
 // The verdict on one finished fight, or nothing (a void game: not recorded).
-std::optional<MatchBlock::GameRecord> Judge(MatchBlock::Ruleset ruleset,
-                                            const MatchBlock::SetState& set,
+std::optional<SetBlock::GameRecord> Judge(SetBlock::Ruleset ruleset,
+                                            const SetBlock::SetState& set,
                                             const ResultBlock& block, u8 decision);
 
 // One frame boundary: the set as it is after it. `frame` is the frame hook's.
-MatchBlock::SetState Step(MatchBlock::SetState set, MatchBlock::Ruleset ruleset,
+SetBlock::SetState Step(SetBlock::SetState set, SetBlock::Ruleset ruleset,
                           const Facts& facts, u32 frame);
 
 // The rules a Brawl ranked game is played with (written on the menus, never in a fight): 3 stocks
 // and 8:00, or 1 stock and 3:00 for a tiebreak game. Returns how many bytes changed.
-int WriteSetRules(GuestMemory& memory, const MatchBlock::SetState& set);
+int WriteSetRules(GuestMemory& memory, const SetBlock::SetState& set, u8 stocks = 3,
+                  u8 minutes = 8);
 
 // The fight's live state, where it can be read (reads only; invalid where it can't).
 Live ReadLiveFight(const GuestMemory& memory);
@@ -96,12 +97,12 @@ void Frame(const Core::CPUThreadGuard& guard, int frame);
 // friend's game) for none. Written at the next boundary where the game plays alone (never while a
 // friend is plugged in or on the way, so never in a frame anyone else replays), only when the
 // block says something else: a different header starts a fresh set, none clears the block.
-void SetRoomMode(MatchBlock::Mode mode);
+void SetRoomMode(SetBlock::Mode mode);
 void ApplyRoomMode(const Core::CPUThreadGuard& guard, bool alone);
 
 // The set score line for the overlay (local UI only): "Game 2 · 1–0", the local player's score
 // first; "Tiebreak game · 1–1"; "Set over · 2–1". Empty outside a ranked set.
-std::string ScoreLine(const MatchBlock::SetState& set, int local_port);
+std::string ScoreLine(const SetBlock::SetState& set, int local_port);
 // The last line the hook published (any thread), for this machine's player (SetLocalPort); empty
 // during a fight.
 std::string CurrentScoreLine();
