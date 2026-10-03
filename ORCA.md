@@ -39,6 +39,7 @@ Online play is drop-in, through a private YouGame room of up to four (`Source/Co
 | `ORCA_TEST_DEV_GAME` | Tests only: an anonymous dev ticket from the site instead of the app (no ratings, no account). |
 | `ORCA_SITE` | Tests only: the site for dev tickets (default `https://yougame.co`). |
 | `ORCA_TEST_PADS`, `ORCA_TEST_SKIP_RENDER` | Harness overrides; they change the compatibility key. |
+| `ORCA_TEST_GATE` | Tests only: masks in the input gate ("Input gate"). A test override too. |
 | `ORCA_TEST_FULL_SNAPSHOTS` | `1`: rollback snapshots copy all of RAM instead of copy-on-write (`Source/Core/Core/Rollback/Cow.h`), to compare the two. A test override too. |
 | `ORCA_THREAD_QOS` | `0`: no interactive scheduling for the CPU, room and controller-stream threads ("Input latency"); `1`: also for a scripted harness run's CPU thread. |
 | `ORCA_TEST_PRESENT` | Tests only, headless (`-p headless`): `WxH` presents into an offscreen image of that size, the OSD and Orca's overlay on it, and screenshots (`YG_SHOT_EVERY`) and frame dumps take that image instead of the bare frame. Presenting then waits for its present time like a window does (headless normally presents nothing). Each screenshot's readback is a frame of its own ~13 ms longer, which the frame meter shows. Not with the Software renderer (it draws no UI); the compatibility key is unchanged. |
@@ -1548,6 +1549,53 @@ the stage until it has no stocks left. It checks the stdout sequence and that bo
 same verdicts, each from its side. Dev tickets by default (nothing recorded); `--slug <listing>
 --cookie-a/--cookie-b <file> --id-a/--id-b <id>` uses real tickets as two signed-in players.
 Under `flock orca-run.lock`, never while Luis plays.
+
+## Input gate
+
+The rules for queue matches take input away from a player: the port whose turn it isn't on a stage
+strike, B on the stage select, a locked character. The gate does that per port and per frame where
+the game reads its controllers, so no game code has to be found and patched for each control
+(`Core/Rollback/InputGate.*`).
+
+- **What a mask does.** For one port: buttons the game sees released (L and R also zero their
+  analog trigger, A and B their analog value) and either stick centred. `ALL` leaves a connected pad
+  with nothing pressed. An unplugged port stays unplugged, and the origin and error bits are left
+  alone.
+- **Where.** `Rollback::InputOverride`, which `SI_DeviceGCController::GetPadStatus` calls for every
+  poll and for the SI relatch. Everything else stays raw: the local pad sampled for the wire, the
+  session's pads (`RingPort`), and the harness's recording (`YG_PADREC`, through
+  `RawInputOverride`). So both machines apply the same masks to the same pads, a re-run applies
+  them again, and a loopback replays a recording made under the same masks.
+- **When.** The rule code registers one source (`InputGate::SetSource`): a pure function of
+  emulated memory. The frame-boundary hook evaluates it as its last step, just before the SI
+  relatch: after the frame callback, after the session's step (a rollback's load, a joiner's
+  keyframe) and after the harness's (a sync test's or a keyframe test's load). So a frame's masks
+  always come from the state that frame starts from, on every pass, and nothing of them outlives a
+  load: there is no host state to carry in snapshots or keyframes. A boundary where the game isn't
+  running yet (a launcher's hook before it goes live) clears them.
+- **Not from the frame callback.** It runs before the session's step at the boundary, so a load
+  can follow it: a rollback's (OnlineMatch runs the callback again), and a sync test's, a keyframe
+  test's or a joiner's keyframe (nothing runs it again). Masks set there would belong to the frame
+  before the load. The source may not write memory either (the boundary's snapshot is taken by
+  then): what it needs from the session's synced data (the ports in a seat plan, names) the frame
+  callback writes into memory earlier at the same boundary, and the source reads it back.
+- **Compatibility.** No source is registered yet, so this build computes exactly what one without
+  the gate does. A source changes what the game computes: bump `UX::kCompatVersion` with it.
+  Friends rooms register none, or one that returns no masks.
+- **Not yet.** Synthesized presses (a Start the rules press for a player), and a raw view of a
+  masked button for the rules (a press the game didn't see).
+
+**Test knob** `ORCA_TEST_GATE` (a test override: the compatibility key says so; set the same value
+in both processes). Comma-separated rules `<port 1-4>:<what>[:<when>]`: `<what>` joins with `+` any
+of `A B X Y Z L R START UP DOWN LEFT RIGHT STICK CSTICK ALL`; `<when>` is `always` (the default)
+or `mem`, only on frames where bit (port - 1) of an XXH3 of the game's static data
+(0x80500000-0x80600000, both games) is 1. That changes from frame to frame, so masks computed from
+the wrong frame's memory show in a sync test, a keyframe test or a drop-in. Every 600 first-run
+boundaries the log says how many each port was masked and how often the masks changed. Example:
+`ORCA_TEST_GATE=1:STICK+CSTICK+X:mem,2:STICK+CSTICK+B:mem`.
+
+Tests: `OrcaInputGate*` unit tests (what a mask does, masks that follow the state at every
+boundary and nothing else, the game's read gated and the raw read not, the knob's parser).
 
 ## Embedding
 
