@@ -555,10 +555,11 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
   {
     const auto local_pad = [](int local_seat) {
       // A test script plays the seat this player was given; otherwise the host's first
-      // controller, whatever the seat.
+      // controller, whatever the seat. A re-run's or a catch-up's read is never used: the app's
+      // stream times only a frame's own (its input age).
       if (const auto scripted = Harness::InputOverride(local_seat))
         return Orca::Net::EncodePad(*scripted);
-      if (const auto from_app = Orca::Events::LocalPad())
+      if (const auto from_app = Orca::Events::LocalPad(!IsResimulating()))
         return Orca::Net::EncodePad(*from_app);
       g_controller_interface.SetCurrentInputChannel(ciface::InputChannel::SerialInterface);
       g_controller_interface.UpdateInput();

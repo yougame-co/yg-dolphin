@@ -1498,6 +1498,87 @@ TEST(OrcaUXControllerStream, RefusedTokenStopsAndNonLoopbackNeverConnects)
   StopControllerStream();
 }
 
+TEST(OrcaUXControllerStream, InputAgeAtFrameReads)
+{
+  FakeBridge bridge;
+  StartControllerStream(bridge.Url(), "t0ken");
+  ASSERT_TRUE(bridge.WaitConnected());
+  const auto now_ms = [] {
+    return std::chrono::duration<double, std::milli>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+  };
+  // The helper received each report 3 ms before it sent the snapshot.
+  const auto send = [&](int buttons) {
+    const double t = now_ms();
+    bridge.Send(Event(true, FourPorts(PortJson(0, 0, "wired", buttons)), "", t, t - 3));
+  };
+  const auto pad_is = [](u16 buttons) {
+    return [buttons] {
+      const auto p = LatestPad();
+      return p && p->button == buttons;
+    };
+  };
+  send(0x01);
+  ASSERT_TRUE(Eventually(pad_is(PAD_BUTTON_A)));
+  // The first frame's read has nothing to compare with, the next one reads the same pad: no age
+  // yet. A read that isn't a frame's own (a re-run's) counts for nothing.
+  EXPECT_TRUE(LocalPad(true).has_value());
+  EXPECT_TRUE(LocalPad(true).has_value());
+  EXPECT_TRUE(LocalPad(false).has_value());
+  ControllerTiming t = GetControllerTiming();
+  EXPECT_EQ(t.input.frames, 2u);
+  EXPECT_EQ(t.input.reports, 1u);
+  EXPECT_EQ(t.input.changes, 0u);
+  EXPECT_EQ(t.age_samples, 0u);
+
+  // Another pad, read by a frame 20 ms after it arrived: one age, 3 ms of it the helper's.
+  send(0x02);
+  ASSERT_TRUE(Eventually(pad_is(PAD_BUTTON_B)));
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  LocalPad(true);
+  t = GetControllerTiming();
+  EXPECT_EQ(t.input.frames, 3u);
+  EXPECT_EQ(t.input.reports, 2u);
+  EXPECT_EQ(t.input.changes, 1u);
+  EXPECT_EQ(t.age_samples, 1u);
+  EXPECT_NEAR(t.helper_p50_ms, 3.0, 0.01);
+  EXPECT_GE(t.app_p50_ms, 20.0);
+  EXPECT_LT(t.app_p50_ms, 250.0);
+  EXPECT_NEAR(t.age_p50_ms, t.helper_p50_ms + t.app_p50_ms, 0.01);
+  EXPECT_NEAR(t.input.age_ms, t.age_p50_ms, 0.01);
+  EXPECT_EQ(GetInputAge().changes, 1u);
+
+  // Stale (no report for 250 ms): neutral, not timed, and the next read starts afresh, so its pad
+  // isn't a change even though it differs.
+  std::this_thread::sleep_for(std::chrono::milliseconds(300));
+  LocalPad(true);
+  EXPECT_EQ(GetInputAge().frames, 3u);
+  send(0x04);
+  ASSERT_TRUE(Eventually(pad_is(PAD_BUTTON_X)));
+  LocalPad(true);
+  EXPECT_EQ(GetInputAge().frames, 4u);
+  EXPECT_EQ(GetInputAge().changes, 1u);
+
+  // A standard gamepad carries no report times: not timed either.
+  {
+    const double now = now_ms();
+    bridge.Send(Event(false, "", PadJson(0, "standard", "[0,0,0,0]", Buttons17(0)), now, now));
+  }
+  ASSERT_TRUE(Eventually([] {
+    const auto p = LatestPad();
+    return p && p->button == PAD_BUTTON_A;
+  }));
+  LocalPad(true);
+  EXPECT_EQ(GetInputAge().frames, 4u);
+
+  ResetControllerTiming();
+  EXPECT_EQ(GetInputAge().frames, 0u);
+  EXPECT_EQ(GetControllerTiming().age_samples, 0u);
+  StopControllerStream();
+  EXPECT_EQ(GetInputAge().frames, 0u);
+}
+
 // The transport's added latency against the real desktop app (bridge.ts + controllers.ts) with a
 // scripted helper: Tools/orca/controller-latency.mjs sets these and runs this test alone.
 TEST(OrcaUXLatency, BridgeTransport)
@@ -1518,6 +1599,47 @@ TEST(OrcaUXLatency, BridgeTransport)
              t.snapshots, t.samples, t.refused, t.p50_ms, t.p95_ms, t.p99_ms, t.max_ms);
   EXPECT_EQ(t.refused, 0u);
   EXPECT_GT(t.samples, 0u);
+  StopControllerStream();
+}
+
+// The input age at frame boundaries (ControllerSource.h) against a stream: reads like a frame
+// boundary, 59.94 times a second, for ORCA_UX_LATENCY_SECONDS (10) and prints the numbers. With
+// Tools/orca/fake_bridge.py (its helper side is 0) and a pad that changes on every report, from
+// build/:
+//   FAKE_PAD_HZ=1000 FAKE_PAD_NOISE=1 python3 ../Tools/orca/fake_bridge.py   # prints its port
+//   ORCA_UX_LATENCY_BRIDGE=http://127.0.0.1:<port> ORCA_UX_LATENCY_TOKEN=t0ken \
+//     ./Binaries/Tests/tests --gtest_filter=OrcaUXLatency.BoundaryInputAge
+// Expected mean: about half the report interval plus the transport (a little over 4 ms at 125 Hz,
+// under 1 ms at 1 kHz).
+TEST(OrcaUXLatency, BoundaryInputAge)
+{
+  const char* bridge = std::getenv("ORCA_UX_LATENCY_BRIDGE");
+  const char* token = std::getenv("ORCA_UX_LATENCY_TOKEN");
+  if (!bridge || !token)
+    GTEST_SKIP() << "set ORCA_UX_LATENCY_BRIDGE/TOKEN (Tools/orca/fake_bridge.py)";
+  const char* seconds_env = std::getenv("ORCA_UX_LATENCY_SECONDS");
+  const int seconds = seconds_env ? std::atoi(seconds_env) : 10;
+  StartControllerStream(bridge, token);
+  ASSERT_TRUE(Eventually([] { return GetControllerTiming().samples > 10; }, 5000));
+  ResetControllerTiming();
+  const auto period = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+      std::chrono::duration<double>(1001.0 / 60000));
+  auto next = std::chrono::steady_clock::now();
+  const auto end = next + std::chrono::seconds(seconds);
+  while (next < end)
+  {
+    next += period;
+    std::this_thread::sleep_until(next);
+    LocalPad(true);
+  }
+  const ControllerTiming t = GetControllerTiming();
+  const Orca::Events::InputAge& in = t.input;
+  fmt::print("orca ux input age frames={} changes={} reports/frame={:.2f} mean={:.3f} p50={:.3f} "
+             "p95={:.3f} p99={:.3f} max={:.3f} ms (helper p50 {:.3f}, app p50 {:.3f})\n",
+             in.frames, in.changes, in.frames ? double(in.reports) / in.frames : 0.0,
+             in.changes ? in.age_ms / in.changes : 0.0, t.age_p50_ms, t.age_p95_ms, t.age_p99_ms,
+             t.age_max_ms, t.helper_p50_ms, t.app_p50_ms);
+  EXPECT_GT(in.changes, 0u);
   StopControllerStream();
 }
 #endif

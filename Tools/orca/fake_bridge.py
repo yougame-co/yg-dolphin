@@ -11,7 +11,11 @@
 # Run that test alone: with a bridge configured, every room goes through it.
 #
 # GET /controllers/events: the app's controller stream (desktop/src/controllers.ts snapshots, schema
-# 1) with one GameCube adapter, a controller in port 1, reporting at 125 Hz. FAKE_PAD_SCRIPT is a
+# 1) with one GameCube adapter, a controller in port 1, reporting at FAKE_PAD_HZ (default 125, the
+# official adapter's rate; 1000 for an overclocked one). FAKE_PAD_NOISE=1 steps the main stick's X
+# by one on every report (wrapping at 256), so every report is a new pad and so is every frame's
+# read, however many reports came between two (for Orca's input age,
+# OrcaUXLatency.BoundaryInputAge). FAKE_PAD_SCRIPT is a
 # JSON-lines file of {"t": <seconds since the stream opened>, "buttons": <adapter wire mask>,
 # "axes": [x, y, cx, cy], "triggers": [l, r]} (each holds until the next; the last one loops back to
 # the first after FAKE_PAD_LOOP seconds, default never); without it, A is tapped every 2 s. Wire
@@ -28,6 +32,7 @@ COOKIE = os.environ.get("FAKE_COOKIE", ""); TICKET_SLUG = os.environ.get("FAKE_T
 SITE = os.environ.get("FAKE_SITE", "https://yougame.co"); NO_LEAVE = os.environ.get("FAKE_NO_LEAVE") == "1"
 # FAKE_LEAVE_AFTER: seconds from the room reading ready to the page's Leave (default 2).
 LEAVE_AFTER = float(os.environ.get("FAKE_LEAVE_AFTER", "2"))
+PAD_HZ = float(os.environ.get("FAKE_PAD_HZ", "125")); PAD_NOISE = os.environ.get("FAKE_PAD_NOISE") == "1"
 
 def pad_script():
     path = os.environ.get("FAKE_PAD_SCRIPT")
@@ -40,7 +45,8 @@ def pad_script():
 
 def snapshot(session, seq, step, received):
     now = time.time() * 1000
-    axes = step.get("axes", [128, 128, 128, 128]); triggers = step.get("triggers", [0, 0])
+    axes = list(step.get("axes", [128, 128, 128, 128])); triggers = step.get("triggers", [0, 0])
+    if PAD_NOISE: axes[0] = (axes[0] + seq) % 256
     if os.environ.get("FAKE_PAD_GAMEPAD") == "1":
         mask = step.get("buttons", 0)
         pad = {"index": 0, "id": "Fake Gamepad (045e:0b13)", "connected": True, "mapping": "standard",
@@ -116,6 +122,9 @@ class H(BaseHTTPRequestHandler):
             self.send_response(200); self.send_header("content-type", "text/event-stream"); self.end_headers()
             steps, loop = pad_script(); session = str(uuid.uuid4()); start = time.time(); seq = 0
             log({"controllers": "attached"})
+            # Each report on a fixed schedule (a late one doesn't push the rest back), like the
+            # adapter's USB polls; after a long stall the schedule starts again from now.
+            period = 1 / PAD_HZ; due = time.time()
             while True:
                 t = time.time() - start
                 if loop > 0: t %= loop
@@ -125,7 +134,9 @@ class H(BaseHTTPRequestHandler):
                 seq += 1
                 event = {"type": "controllers", "snapshot": snapshot(session, seq, step, time.time() * 1000)}
                 self.wfile.write(("data: " + json.dumps(event) + "\n\n").encode()); self.wfile.flush()
-                time.sleep(0.008)
+                due += period
+                if due < time.time() - 4 * period: due = time.time()
+                time.sleep(max(0, due - time.time()))
         except Exception:
             return
         finally:

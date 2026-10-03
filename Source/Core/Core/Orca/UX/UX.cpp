@@ -23,7 +23,8 @@ namespace Orca::UX
 void Init()
 {
   StartControllerStreamFromEnvironment();
-  Orca::Events::SetLocalPadSource([] { return LocalPad(); });
+  Orca::Events::SetLocalPadSource([](bool for_frame) { return LocalPad(for_frame); });
+  Orca::Events::SetInputAgeSource([] { return GetInputAge(); });
   InitOverlay();
   // The name tags write emulated memory: the compatibility key carries their version.
   Orca::Events::SetUXCompatVersion(kCompatVersion);
@@ -85,6 +86,7 @@ void Shutdown()
   Orca::Events::SetFrameCallback({});
   Orca::Events::SetPlugInCallback({});
   Orca::Events::SetLocalPadSource({});
+  Orca::Events::SetInputAgeSource({});
   ShutdownOverlay();
   StopControllerStream();
 }

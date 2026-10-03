@@ -197,6 +197,8 @@ struct Match
   Orca::Net::Stats stats_last{};
   int stats_rbmax = 0;
   double stats_stall_ms = 0;
+  // The local controller's input age totals at the last line (Orca::Events::InputAge).
+  Orca::Events::InputAge stats_input{};
 
   // Each port's player name and the frame it applies from (Orca::Events::PortInfo), decided by the
   // host: its own once its room roster has it, a friend's when the session takes it in. A joiner
@@ -1454,6 +1456,7 @@ void PublishStats(Match& match)
     match.stats_time = now;
     match.stats_frame = match.running;
     match.stats_last = stats;
+    match.stats_input = Orca::Events::GetInputAge();
   }
   const double seconds = std::chrono::duration<double>(now - match.stats_time).count();
   // A new session restarts its counters.
@@ -1481,10 +1484,25 @@ void PublishStats(Match& match)
   num("fps", std::round((match.running - match.stats_frame) / seconds * 10) / 10);
   num("hi", stats.hitches);
   num("phi", stats.peer_hitches);
+  // The local controller's input age over the interval (ControllerSource.h): the mean age of the
+  // newest adapter report at the frames whose pad changed ("pa", ms), and the adapter's reports
+  // per frame ("rpf"); -1 when no frame read an adapter. A restarted stream counts from zero.
+  const Orca::Events::InputAge input = Orca::Events::GetInputAge();
+  const Orca::Events::InputAge& input_last =
+      input.frames < match.stats_input.frames ? Orca::Events::InputAge{} : match.stats_input;
+  const u64 input_changes = input.changes - input_last.changes;
+  const u64 input_frames = input.frames - input_last.frames;
+  num("pa", input_changes > 0 ?
+                std::round((input.age_ms - input_last.age_ms) / input_changes * 10) / 10 :
+                -1);
+  num("rpf", input_frames > 0 ?
+                 std::round(double(input.reports - input_last.reports) / input_frames * 10) / 10 :
+                 -1);
   Orca::Status::Stats(picojson::value(o).serialize());
   match.stats_time = now;
   match.stats_frame = match.running;
   match.stats_last = stats;
+  match.stats_input = input;
   match.stats_rbmax = 0;
   match.stats_stall_ms = 0;
 }

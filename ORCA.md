@@ -104,8 +104,31 @@ That client doesn't use the macOS Keychain's extra roots, and it doesn't do TLS 
 bundled libcurl uses Schannel and the system store, with certificate revocation checked best effort
 (a CRL or OCSP server that can't be reached no longer fails the connection).
 
-Not yet supported: a GameCube controller adapter as the local controller (the local pad is the host's
-port 1 as mapped in Dolphin's controller settings).
+The local controller: under the YouGame app, the app's controller helper reads GameCube adapters
+(libusb, raw reports) and gamepads, and Orca takes the newest snapshot of its stream at each frame
+boundary (`Core/Orca/UX/ControllerSource.*`). Without the app, it is port 1 as mapped in Dolphin's
+controller settings. A session never runs Dolphin's own adapter code: its ports are standard pads.
+
+### Controller input age
+
+How stale the game's view of an adapter is when a frame reads it (`ControllerSource.h`). Only a
+frame's own read counts (re-runs and a joiner's catch-up don't), and only reads whose pad differs
+from the frame before's (an unchanged pad's age says nothing). The age is that of the newest adapter
+report, split at the helper's send: the helper's part (on its own clock) and the app's (the trip
+through the app on the two epoch clocks, plus the wait in Orca's cache).
+
+- With every report published, the mean is about half the USB report interval plus the transport
+  (0.1-0.3 ms through the app). So the 125 Hz the official adapter reports at shows as a little over
+  4 ms, and 1 kHz as under 1 ms. Not counted: the adapter's own controller poll (its data is up to
+  ~1.2 ms old when a report leaves) and the host's USB stack.
+- Each `orca stats` line carries `pa`, the mean age over the interval in ms, and `rpf`, the adapter
+  reports per frame (2.1 at 125 Hz, 16.7 at 1 kHz); both are -1 when no frame read an adapter. The
+  app keeps only the stats keys it knows (`STATS_KEYS` in `desktop/src/orca-policy.ts`): netlog
+  shows these two once it lists them.
+- The ROLLBACK log has a line every 10 s with the percentiles and the split, and one for the run
+  when the stream stops.
+- Without an adapter: `Tools/orca/fake_bridge.py` with `FAKE_PAD_HZ` and `FAKE_PAD_NOISE`, and the
+  `OrcaUXLatency.BoundaryInputAge` test (commands in the test).
 
 ## Drop-in
 
