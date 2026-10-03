@@ -677,9 +677,32 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
     p1 = p1 || p.port == 0;
     p2 = p2 || p.port == 1;
   }
+  const std::optional<MatchBlock::State> before =
+      resimulating ? std::nullopt : MatchBlock::Read(memory);
   Apply(memory, frame, p1 && p2);
   if (!resimulating)
   {
+    // The flow's changes, first runs only (a re-run repeats them).
+    const std::optional<MatchBlock::State> after = MatchBlock::Read(memory);
+    if (after && IsRankedPPlus(*after) && (!before || *before != *after))
+    {
+      const MatchBlock::State& a = *after;
+      const MatchBlock::State b = before.value_or(MatchBlock::State{});
+      if (a.flow != b.flow || a.step != b.step || a.struck != b.struck ||
+          a.auto_pick != b.auto_pick || a.games != b.games || a.fight != b.fight ||
+          a.done != b.done)
+      {
+        NOTICE_LOG_FMT(
+            ROLLBACK,
+            "Ranked: frame {}: game {} score {}-{} flow {} step {} port {} struck {:03x} "
+            "made {} auto {} fight {} stage {} won {:03x}/{:03x}{}",
+            frame, a.games + 1, a.score[0], a.score[1], a.flow, a.step,
+            a.active <= 1 ? a.active + 1 : 0, a.struck, a.step_done,
+            a.auto_pick ? static_cast<int>(a.auto_stage) : -1, a.fight ? 1 : 0,
+            a.stage == MatchBlock::NONE ? -1 : a.stage, a.won_on[0], a.won_on[1],
+            a.done ? fmt::format(" SET port {}", a.set_winner + 1) : std::string());
+      }
+    }
     Lines lines = Describe(memory, frame, ports);
     std::lock_guard lock(s_lines_mutex);
     s_lines = std::move(lines);
