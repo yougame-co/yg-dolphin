@@ -1890,6 +1890,23 @@ memory: the preset, game 1's turns, a strike on a struck stage, the fight and it
 winner strikes, the timers' defaults and the default pick, the set's end, an opponent who leaves,
 the overlay's lines, and every boundary applied twice).
 
+Checked 2026-10-03 on an M4 Pro, Project+ (`Tools/orca/inputs/pplus-ranked.txt`, `ORCA_PROFILE=PPLUS32
+ORCA_TEST_RANKED=1 ORCA_UX_TEST_NAMES=ada,bo`):
+- `YG_SYNCTEST=7 YG_SYNCTEST_FROM=170` over the whole set, frames 170-8656: 57,561 re-run frames
+  checked to frame 8400, **0 RAM mismatches**. It covers the character select, game 1's stage
+  select (port 2's X strike on Battlefield through the cursor, port 1's two strikes and port 2's
+  pick by their timers, the pick made with the gate's pressed A on Luigi's Mansion), the fight, the
+  results counted into the set, game 2's stage select (the winner's two X strikes, Battlefield and
+  Bowser's Castle, then the loser's pick by its timer, PS2), the second fight and the 2-0 set.
+- Without the sync test, the same set with a probe that set the selection (+0x248) before each X
+  and A: every strike and both picks through the players' presses, the table and the struck art
+  as the block said (page 0 bits 0x0F for the counterpicks at game 1's start, then 0x2F, 0x6F,
+  0x7F), Project+'s own check refusing a struck stage under the cursor (Bowser's Castle), and the
+  stage the fight loaded the one picked.
+- The probe tool's one-shot writes don't repeat on a sync test's re-runs: a rules write from a
+  probe at the character select shows as RAM mismatches at that frame, so the sync test runs
+  without one.
+
 ## Embedding
 
 The YouGame desktop app shows Orca inside its own window, at the page's player box, the way it runs
