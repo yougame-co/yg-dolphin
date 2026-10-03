@@ -163,6 +163,9 @@ protected:
   bool m_fastmem_enabled = false;
   bool m_page_table_fastmem_enabled = false;
   bool m_accurate_cpu_cache_enabled = false;
+  // Orca: an Orca session (ORCA_SESSION=1), whose JIT output must compute the same game on every
+  // host CPU (Orca/Profile.cpp forces the settings; this covers what no setting does).
+  bool m_orca_session = false;
 
   bool m_enable_blr_optimization = false;
   bool m_cleanup_after_stackfault = false;

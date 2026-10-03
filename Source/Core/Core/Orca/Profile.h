@@ -12,6 +12,11 @@
 #include "Common/CommonTypes.h"
 #include "Common/Config/Config.h"
 
+namespace PowerPC
+{
+enum class CPUCore;
+}
+
 struct Sram;
 namespace Core
 {
@@ -106,12 +111,21 @@ void PrioritizeThread(LatencyThread thread);
 //                            keys to match.
 //   ORCA_TEST_FULL_SNAPSHOTS=1  rollback snapshots copy all of RAM, as before copy-on-write
 //                            snapshots (Rollback/Cow.h), to compare the two.
+//   ORCA_TEST_NO_AFP=1       an ARM CPU with FEAT_AFP (Apple M4 and later) behaves as one without
+//                            (M1 to M3): FPCR.AH is never set and the JIT takes its no-AFP paths.
+//                            Read where the CPU is detected (Common/ArmCPUDetect.cpp), so it acts
+//                            outside a session too; on x86-64 it only marks the key, so a PC with
+//                            it set meets a Mac with it set.
+//   ORCA_TEST_CPUCORE=N      the session runs CPU core N instead of the host's JIT: 0 the
+//                            interpreter, 5 the cached interpreter (a reference for the JITs).
 int TestPads();
 bool TestSkipRender();
 std::optional<int> TestNetDelayMs();
 int TestNetJitterMs();
 int TestSnapshotEvery();  // 0: unset
 bool TestFullSnapshots();
+bool TestNoAfp();
+std::optional<PowerPC::CPUCore> TestCpuCore();
 bool TestOverridesActive();
 
 // Loads the profile for a game; nullopt and a reason when there is none, the revision differs or a

@@ -252,11 +252,15 @@ void Jit64::fp_arith(UGeckoInstruction inst)
     sseOp = packed ? &XEmitter::DIVPD : &XEmitter::DIVSD;
     break;
   case 20:
+    preserve_inputs = m_accurate_nans;
     avxOp = packed ? &XEmitter::VSUBPD : &XEmitter::VSUBSD;
     sseOp = packed ? &XEmitter::SUBPD : &XEmitter::SUBSD;
     break;
   case 21:
-    reversible = !m_accurate_nans;
+    // Orca: reversible with accurate NaNs too. Upstream relied on x86 picking the first operand's
+    // NaN for an addition; HandleNaNs now picks it from a and b in PowerPC's order itself.
+    reversible = true;
+    preserve_inputs = m_accurate_nans;
     avxOp = packed ? &XEmitter::VADDPD : &XEmitter::VADDSD;
     sseOp = packed ? &XEmitter::ADDPD : &XEmitter::ADDSD;
     break;
@@ -329,19 +333,13 @@ void Jit64::fp_arith(UGeckoInstruction inst)
 
   if (m_accurate_nans)
   {
-    std::optional<FixupBranch> handled_nans;
-    switch (inst.SUBOP5)
-    {
-    case 18:
-      handled_nans = HandleNaNs(inst, dest, XMM0, Ra, Rarg2, std::nullopt);
-      break;
-    case 25:
-      handled_nans = HandleNaNs(inst, dest, XMM0, Ra, std::nullopt, Rarg2);
-      break;
-    }
-
-    if (handled_nans)
-      SetJumpTarget(*handled_nans);
+    // Orca: fadd and fsub too. x86-64 picks among NaN inputs as PowerPC does there (the first
+    // operand), but inf - inf makes x86's default NaN, which is negative, where PowerPC's (and
+    // JitArm64's in accurate-NaN mode) is positive.
+    const FixupBranch handled_nans = inst.SUBOP5 == 25 ?
+                                         HandleNaNs(inst, dest, XMM0, Ra, std::nullopt, Rarg2) :
+                                         HandleNaNs(inst, dest, XMM0, Ra, Rarg2, std::nullopt);
+    SetJumpTarget(handled_nans);
   }
 
   if (single)

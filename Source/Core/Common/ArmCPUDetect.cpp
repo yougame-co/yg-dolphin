@@ -3,6 +3,7 @@
 
 #include "Common/CPUDetect.h"
 
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <sstream>
@@ -234,6 +235,14 @@ void CPUInfo::Detect()
   bSHA1 = true;
   bSHA2 = true;
   bCRC32 = true;
+
+  // Orca: FEAT_AFP (FPCR.AH and FIZ), which Apple M4 and later have and M1 to M3 don't. Without
+  // it here Dolphin set AH on every Mac and hoped, and its workarounds for CPUs that flush denormal
+  // inputs ran on the ones that don't too.
+  int afp = 0;
+  size_t afp_size = sizeof(afp);
+  if (sysctlbyname("hw.optional.arm.FEAT_AFP", &afp, &afp_size, nullptr, 0) == 0)
+    bAFP = afp != 0;
 #elif defined(_WIN32)
   // NOTE All this info is from cpu core 0 only.
 
@@ -329,6 +338,13 @@ void CPUInfo::Detect()
 
   model_name = ReplaceAll(model_name, ",", "_");
   cpu_id = ReplaceAll(cpu_id, ",", "_");
+
+  // Orca, tests only: ORCA_TEST_NO_AFP=1 makes a CPU with FEAT_AFP behave as one without (Apple M1
+  // to M3): FPCR.AH is never set (Common/ArmFPURoundMode.cpp) and the JIT takes its no-AFP paths.
+  // An Orca session with it set is a test session (Orca::TestOverridesActive), so it never meets a
+  // real one.
+  if (const char* no_afp = std::getenv("ORCA_TEST_NO_AFP"); no_afp && std::strcmp(no_afp, "1") == 0)
+    bAFP = false;
 }
 
 std::string CPUInfo::Summarize()

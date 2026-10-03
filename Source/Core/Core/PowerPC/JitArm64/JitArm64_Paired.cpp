@@ -8,6 +8,7 @@
 #include "Common/Arm64Emitter.h"
 #include "Common/CommonTypes.h"
 #include "Common/Config/Config.h"
+#include "Common/SmallVector.h"
 #include "Common/StringUtil.h"
 
 #include "Core/Config/SessionSettings.h"
@@ -99,7 +100,8 @@ void JitArm64::ps_arith(UGeckoInstruction inst)
   const bool round_c = use_c && !js.op->fprIsSingle[c];
 
   const auto inputs_are_singles_func = [&] {
-    return fpr.IsSingle(a) && (!use_b || fpr.IsSingle(b)) && (!use_c || fpr.IsSingle(c));
+    return IsSingleForArithmetic(a, false) && (!use_b || IsSingleForArithmetic(b, false)) &&
+           (!use_c || IsSingleForArithmetic(c, false));
   };
 
   const bool single =
@@ -369,9 +371,11 @@ void JitArm64::ps_arith(UGeckoInstruction inst)
       const ARM64Reg nan_temp_reg = single ? EncodeRegToSingle(V1Q) : EncodeRegToDouble(V1Q);
       const ARM64Reg nan_temp_reg_paired = reg_encoder(V1Q);
 
-      // Check if we need to handle NaNs
-
-      m_float_emit.FMAXP(nan_temp_reg, result_reg);
+      // Check if we need to handle NaNs. Orca: the lanes' sum, not FMAXP: under FPCR.AH (an Apple
+      // M4 and later) FMAXP of a NaN and a number is the second operand, so a NaN in ps0 alone went
+      // unseen there. A sum is a NaN when either lane is (and for +inf beside -inf, which the far
+      // path below leaves as it is).
+      m_float_emit.FADDP(nan_temp_reg, result_reg);
       m_float_emit.FCMP(nan_temp_reg);
       FixupBranch no_nan = B(CCFlags::CC_VC);
       FixupBranch nan = B();
@@ -379,6 +383,15 @@ void JitArm64::ps_arith(UGeckoInstruction inst)
 
       SwitchToFarCode();
       SetJumpTarget(nan);
+
+      // Orca: a lane the operation made NaN from no NaN input gets PowerPC's default NaN, which is
+      // positive; the host's (FPCR.AH: negative on an Apple M4 and later) differs from it only in
+      // the sign, so clearing the sign bit of every NaN lane makes it. A lane with a NaN input is
+      // replaced by that input just below.
+      m_float_emit.FCMEQ(size, nan_temp_reg_paired, result_reg, result_reg);
+      m_float_emit.NOT(nan_temp_reg_paired, nan_temp_reg_paired);
+      m_float_emit.SHL(size, nan_temp_reg_paired, nan_temp_reg_paired, size - 1);
+      m_float_emit.BIC(result_reg, result_reg, nan_temp_reg_paired);
 
       // Pick the right NaNs
 
@@ -457,7 +470,8 @@ void JitArm64::ps_sel(UGeckoInstruction inst)
   const u32 c = inst.FC;
   const u32 d = inst.FD;
 
-  const bool singles = fpr.IsSingle(a) && fpr.IsSingle(b) && fpr.IsSingle(c);
+  // a compares as a single only where that can't flush a denormal (IsSingleForArithmetic).
+  const bool singles = IsSingleForArithmetic(a, false) && fpr.IsSingle(b) && fpr.IsSingle(c);
   const RegType type = singles ? RegType::Single : RegType::Register;
   const u8 size = singles ? 32 : 64;
   const auto reg_encoder = singles ? EncodeRegToDouble : EncodeRegToQuad;
@@ -503,7 +517,10 @@ void JitArm64::ps_sumX(UGeckoInstruction inst)
 
   const bool upper = inst.SUBOP5 & 0x1;
 
-  const bool singles = fpr.IsSingle(a) && fpr.IsSingle(b) && fpr.IsSingle(c);
+  // Orca: in a session the single path also needs c store-safe. It copies c's lane bit for bit,
+  // where Jit64 and the double path round it to single (a denormal flushes, an SNaN goes quiet).
+  const bool singles = IsSingleForArithmetic(a, false) && IsSingleForArithmetic(b, false) &&
+                       fpr.IsSingle(c) && (!m_orca_session || js.fpr_is_store_safe[c]);
   const RegType type = singles ? RegType::Single : RegType::Register;
   const u8 size = singles ? 32 : 64;
   const auto reg_encoder = singles ? EncodeRegToDouble : EncodeRegToQuad;
@@ -514,27 +531,59 @@ void JitArm64::ps_sumX(UGeckoInstruction inst)
   const ARM64Reg VC = fpr.R(c, type);
   const ARM64Reg VD = fpr.RW(d, type);
 
+  if (m_accurate_nans)
+  {
+    // PowerPC's NaN rules for a.ps0 + b.ps1, whatever the host's: the first NaN of the two, made
+    // quiet; with neither a NaN (inf + -inf), the positive default NaN, where the host's is
+    // negative under FPCR.AH (an Apple M4 and later). The sum goes through V0, since d can be a or
+    // b.
+    const auto V0 = fpr.GetScopedReg();
+    const ARM64Reg S0 = scalar_reg_encoder(V0);
+    const ARM64Reg SA = scalar_reg_encoder(VA);
+
+    m_float_emit.DUP(size, reg_encoder(V0), reg_encoder(VB), 1);
+    m_float_emit.FADD(S0, S0, SA);
+    m_float_emit.FCMP(S0);
+    FixupBranch no_nan = B(CCFlags::CC_VC);
+    FixupBranch nan = B();
+    SetJumpTarget(no_nan);
+
+    SwitchToFarCode();
+    SetJumpTarget(nan);
+    Common::SmallVector<FixupBranch, 3> nan_fixups;
+    m_float_emit.FCMP(SA);
+    FixupBranch a_not_nan = B(CCFlags::CC_VC);
+    m_float_emit.FADD(S0, SA, SA);
+    nan_fixups.push_back(B());
+    SetJumpTarget(a_not_nan);
+    m_float_emit.DUP(size, reg_encoder(V0), reg_encoder(VB), 1);
+    m_float_emit.FCMP(S0);
+    FixupBranch b_not_nan = B(CCFlags::CC_VC);
+    m_float_emit.FADD(S0, S0, S0);
+    nan_fixups.push_back(B());
+    SetJumpTarget(b_not_nan);
+    EmitPPCDefaultNaN(V0, singles);
+    nan_fixups.push_back(B());
+    SwitchToNearCode();
+    for (FixupBranch fixup : nan_fixups)
+      SetJumpTarget(fixup);
+
+    if (upper)
+    {
+      m_float_emit.TRN1(size, reg_encoder(VD), reg_encoder(VC), reg_encoder(V0));
+    }
+    else
+    {
+      if (d != c)
+        m_float_emit.INS(size, VD, 1, VC, 1);
+      m_float_emit.INS(size, VD, 0, V0, 0);
+    }
+  }
+  else
   {
     const auto V0 = fpr.GetScopedReg();
 
     m_float_emit.DUP(size, reg_encoder(V0), reg_encoder(VB), 1);
-
-    if (m_accurate_nans)
-    {
-      // If the first input is NaN, set the temp register for the second input to 0. This is
-      // because:
-      //
-      // - If the second input is also NaN, setting it to 0 ensures that the first NaN will be
-      // picked.
-      // - If only the first input is NaN, setting the second input to 0 has no effect on the
-      // result.
-      //
-      // Either way, we can then do an FADD as usual, and the FADD will make the NaN quiet.
-      m_float_emit.FCMP(scalar_reg_encoder(VA));
-      FixupBranch a_not_nan = B(CCFlags::CC_VC);
-      m_float_emit.MOVI(64, scalar_reg_encoder(V0), 0);
-      SetJumpTarget(a_not_nan);
-    }
 
     if (upper)
     {

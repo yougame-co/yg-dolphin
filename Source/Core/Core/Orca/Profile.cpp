@@ -59,15 +59,24 @@ bool ParseNumber(const std::string& text, u32* out)
 template <typename F>
 void ForEachUniversalSetting(F&& f)
 {
-  // CPU and timing. Same JIT on both machines: matchmaking pairs players on the same platform.
+  // CPU and timing. Each host's own JIT (JitArm64 on a Mac, Jit64 on a PC): the two compute the
+  // same game (see MAIN_ACCURATE_NANS below and Online.cpp CompatibilityKey).
   f(Config::MAIN_CPU_THREAD, false);
-  f(Config::MAIN_CPU_CORE, PowerPC::DefaultCPUCore());
+  f(Config::MAIN_CPU_CORE, TestCpuCore().value_or(PowerPC::DefaultCPUCore()));
   f(Config::MAIN_OVERCLOCK_ENABLE, false);
   f(Config::MAIN_OVERCLOCK, 1.0f);
   f(Config::MAIN_VI_OVERCLOCK_ENABLE, false);
   f(Config::MAIN_MMU, false);
   f(Config::MAIN_FASTMEM, Config::MAIN_FASTMEM.GetDefaultValue());
-  f(Config::MAIN_ACCURATE_NANS, false);
+  // PowerPC's NaN rules on every host: an input NaN is picked in PowerPC's operand order and made
+  // quiet, and a NaN an operation makes from no NaN (inf * 0, inf - inf, 0 / 0, frsqrte of -1)
+  // is the positive default 0x7FF8000000000000. The hosts' own rules differ: x86-64 and an ARM CPU
+  // with FEAT_AFP (FPCR.AH, Apple M4 and later) make that NaN negative, an ARM CPU without it
+  // (Apple M1 to M3) positive, and they pick among NaN inputs differently. Project+ makes one with
+  // fnmsubs (inf * 0) as a match starts, so before 2026-10-02 an M1 Mac couldn't play it with an M4
+  // Mac or a PC (Online.cpp kept those players apart then). Both JITs' accurate-NaN paths cost a
+  // compare and a branch per arithmetic op that is never taken unless a NaN comes out.
+  f(Config::MAIN_ACCURATE_NANS, true);
   f(Config::MAIN_ACCURATE_FMADDS, Config::MAIN_ACCURATE_FMADDS.GetDefaultValue());
   f(Config::MAIN_FPRF, false);
   f(Config::MAIN_FLOAT_EXCEPTIONS, false);
@@ -167,6 +176,13 @@ void ForEachUniversalSetting(F&& f)
   f(Config::GFX_HACK_EFB_EMULATE_FORMAT_CHANGES, false);
   f(Config::GFX_PERF_QUERIES_ENABLE, false);
   f(Config::GFX_MODS_ENABLE, false);
+  // Texture replacement, for Orca's own pack (the Online menu's labels, Data/Sys/Orca/Textures;
+  // in a session HiresTexture::Update loads it with the player's own pack, and it keeps its own
+  // names: CollectHiresTextureFiles). It only changes what is drawn: the texture cache hashes RAM
+  // and swaps the host texture, and nothing it draws reaches RAM (above). Prefetching isn't forced
+  // (GFX_CACHE_HIRES_TEXTURES stays the player's): that would load a player's whole pack into
+  // memory; Orca's few small labels are always preloaded on their own.
+  f(Config::GFX_HIRES_TEXTURES, true);
 }
 
 class ForcedConfigLoader final : public Config::ConfigLayerLoader
@@ -247,11 +263,34 @@ bool TestFullSnapshots()
   return SessionActive() && EnvIs("ORCA_TEST_FULL_SNAPSHOTS", "1");
 }
 
+std::optional<PowerPC::CPUCore> TestCpuCore()
+{
+  const std::string value = GetEnv("ORCA_TEST_CPUCORE");
+  if (!SessionActive() || value.empty())
+    return std::nullopt;
+  switch (std::atoi(value.c_str()))
+  {
+  case static_cast<int>(PowerPC::CPUCore::Interpreter):
+    return PowerPC::CPUCore::Interpreter;
+  case static_cast<int>(PowerPC::CPUCore::CachedInterpreter):
+    return PowerPC::CPUCore::CachedInterpreter;
+  default:
+    return std::nullopt;
+  }
+}
+
+bool TestNoAfp()
+{
+  // Read where the CPU is detected (Common/ArmCPUDetect.cpp), which clears cpu_info.bAFP; only an
+  // ARM build has anything to clear, but the key counts it everywhere.
+  return EnvIs("ORCA_TEST_NO_AFP", "1");
+}
+
 bool TestOverridesActive()
 {
   return TestPads() != 0 || TestSkipRender() || TestNetDelayMs().has_value() ||
-         TestSnapshotEvery() != 0 || TestFullSnapshots() ||
-         !GetEnv("ORCA_TEST_FLOAT_CLASS").empty();
+         TestSnapshotEvery() != 0 || TestFullSnapshots() || TestNoAfp() ||
+         TestCpuCore().has_value();
 }
 
 const Sram* SessionSram()

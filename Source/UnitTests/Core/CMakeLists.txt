@@ -23,6 +23,7 @@ add_dolphin_test(OrcaLaunchTest Orca/LaunchTest.cpp)
 add_dolphin_test(OrcaCowTest Orca/CowTest.cpp)
 add_dolphin_test(OrcaKeyframeTest Orca/KeyframeTest.cpp)
 add_dolphin_test(OrcaUXTest Orca/UXTest.cpp)
+add_dolphin_test(OrcaOnlineMenuTest Orca/OnlineMenuTest.cpp)
 add_dolphin_test(OrcaPauseTest Orca/PauseTest.cpp)
 
 add_dolphin_test(SkylandersTest IOS/USB/SkylandersTest.cpp)
@@ -35,6 +36,7 @@ if(_M_X86_64)
     PowerPC/Jit64Common/Fres.cpp
     PowerPC/Jit64Common/Frsqrte.cpp
     PowerPC/Jit64Common/Ps1.cpp
+    PowerPC/JitFloatSemantics.cpp
   )
 elseif(_M_ARM_64)
   add_dolphin_test(PowerPCTest
@@ -46,6 +48,7 @@ elseif(_M_ARM_64)
     PowerPC/JitArm64/Frsqrte.cpp
     PowerPC/JitArm64/MovI2R.cpp
     PowerPC/JitArm64/VectorModImm.cpp
+    PowerPC/JitFloatSemantics.cpp
   )
 else()
   add_dolphin_test(PowerPCTest

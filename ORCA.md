@@ -38,6 +38,8 @@ Online play is drop-in, through a private YouGame room of up to four (`Source/Co
 | `ORCA_TEST_FULL_SNAPSHOTS` | `1`: rollback snapshots copy all of RAM instead of copy-on-write (`Source/Core/Core/Rollback/Cow.h`), to compare the two. A test override too. |
 | `ORCA_THREAD_QOS` | `0`: no interactive scheduling for the CPU, room and controller-stream threads ("Input latency"); `1`: also for a scripted harness run's CPU thread. |
 | `ORCA_TEST_PRESENT` | Tests only, headless (`-p headless`): `WxH` presents into an offscreen image of that size, the OSD and Orca's overlay on it, and screenshots (`YG_SHOT_EVERY`) and frame dumps take that image instead of the bare frame. Presenting then waits for its present time like a window does (headless normally presents nothing). Each screenshot's readback is a frame of its own ~13 ms longer, which the frame meter shows. Not with the Software renderer (it draws no UI); the compatibility key is unchanged. |
+| `ORCA_TEST_NO_AFP` | `1`: an ARM CPU with FEAT_AFP (Apple M4 and later) behaves as one without (M1 to M3): FPCR.AH is never set and the JIT takes its no-AFP paths ("Floating point on every host"). A test override too. |
+| `ORCA_TEST_CPUCORE` | `0` (interpreter) or `5` (cached interpreter) instead of the host's JIT, as a reference. A test override too. |
 
 **Orca.app** (the macOS bundle, `Tools/orca-package-macos.sh`) is what the YouGame desktop app
 starts, with no arguments. A bundle build is a session by default (`ORCA_SESSION=0` turns that off),
@@ -54,9 +56,10 @@ SDL gamepad of any model (`SDL/0/*`, a device name Orca matches as a wildcard).
 Two friends meet when both use the same code and the same compatibility key: the Orca build, the
 game profile and data files, every forced setting (FMA included), the disc and the seeded save.
 Not the host CPU: an Apple Silicon Mac and an x86-64 PC compute the same game (a 12,001-frame
-scripted match hashed identically on both, 2026-10-01), so Mac and PC players meet. An x86-64 CPU
-without FMA3 has a different key. The host (the Orca that started the game) is seat 0, controller
-port 1; a friend's seat is its room slot.
+scripted match hashed identically on both, 2026-10-01), so Mac and PC players meet, and so do Macs
+with and without FEAT_AFP ("Floating point on every host" below). An x86-64 CPU without FMA3 has a
+different key. The host (the Orca that started the game) is seat 0, controller port 1; a friend's
+seat is its room slot.
 
 Unit tests: `ninja tests && ./Binaries/Tests/tests --gtest_filter='Orca*'`. With `ORCA_LIVE_TEST=1`,
 the `OrcaLive` tests also open real rooms on yougame.co. Two Orca processes over real rooms, steered
@@ -231,6 +234,127 @@ host has played.
   what the JIT itself sets.
 - The synctest (0 RAM mismatches over 6,384 re-run frames) and the loopback (PASS, 899
   checksums) are unchanged. As defence in depth, "never" is still `0x3fffffff`.
+
+**Floating point on every host** (2026-10-02). Every Mac and PC computes the same game, whatever
+the CPU. Three hosts are in play, and each one's own floating point differs from PowerPC's in the
+guest's non-IEEE mode (FPSCR.NI, which Brawl and Project+ run in):
+
+| | x86-64 (Jit64) | ARM with FEAT_AFP (Apple M4+) | ARM without (Apple M1 to M3) |
+|---|---|---|---|
+| Mode Orca sets | MXCSR FTZ | FPCR FZ, AH | FPCR FZ |
+| NaN made from no NaN (inf * 0) | negative | negative | positive (PowerPC: positive) |
+| Denormal inputs | kept (as PowerPC) | kept | flushed to zero |
+| Denormal outputs | flushed, tininess after rounding | flushed, after rounding | flushed, before rounding (as PowerPC) |
+
+Project+ makes a NaN (fnmsubs, inf * 0) as a match starts, so for a few hours on 2026-10-02 a
+Project+ player on an M1 to M3 was kept from the others (the room hello's float class,
+`platform_mismatch`). That is gone. What a session does instead:
+
+- **PowerPC's NaN rules** (`Profile.cpp` forces `MAIN_ACCURATE_NANS`): an input NaN is picked in
+  PowerPC's order (a, b, c) and made quiet; a NaN made from none is `0x7FF8000000000000`; a NaN
+  result is never negated. Both JITs' accurate-NaN paths now cover every arithmetic op: Jit64's
+  fadd/fsub and ps_sum didn't fix x86's negative NaN, and JitArm64 kept the host's NaN when no input
+  was one (negative under AH), missed a NaN in ps0 alone under AH (FMAXP returns its second operand
+  there) and made ps_sum's NaN the host's. frsqrte of a negative number gives PowerPC's NaN on ARM
+  too, fctiw(z) of a NaN gives `0x80000000` as on PowerPC and Jit64 (FCVTZS gave 0), and a NaN
+  stored as an integer by psq_st saturates the way Jit64 stores it (the interpreter has no answer
+  there). JitArm64's frsqrte also missed FPSCR.VXSQRT for a negative input of magnitude 2 or
+  more (its NaN-or-infinity test was the exponent's top bit), which Jit64 and PowerPC set.
+- **Denormal inputs kept**, as PowerPC and the other two hosts do: on a CPU that flushes them
+  (`JitArm64::DenormalInputsFlushed`), a single that may be a denormal (loaded, not produced by an
+  arithmetic op in the block) never goes into a single-precision operation, compare or conversion
+  (`IsSingleForArithmetic`); the op runs in double precision, where every single is a normal number,
+  as Jit64 computes everything. JitArm64's frsqrte takes a double denormal's exponent from the
+  input instead of from FRSQRTE, which reads it as zero under FPCR.FZ on every Apple CPU, M4
+  included (checked on this M4 Pro: FRSQRTE of 2^-1074 is +inf with FZ, with or without AH). In a
+  session, rounding to single where Jit64 rounds (psq_st, ps_sum's copied lane) applies on every
+  ARM CPU.
+- **Paired loads and stores:** in a session JitArm64 makes an SNaN that psq_l loads quiet, as
+  Jit64's CVTPS2PD does (an SNaN pattern loaded by psq_l and stored by stfs or stfd, or moved by
+  fmr first, was `0x7FC00001` on a PC and `0x7F800001` on a Mac); denormals stay exact. And it
+  leaves to the interpreter the psq_l and psq_st that Jit64 leaves there (address translation off,
+  or rA = 0), whose answers differ from both JITs' (psq_st truncates to single). Project+'s codes
+  use rA = 0 (psq_stx f14 to f31 at `0x803f2e70`, psq_lx at `0x801629bc`), so a PC ran those on
+  the interpreter and a Mac on its JIT before. Falling back there first stopped JitArm64 on its
+  own register cache (an FPR the fallback had flushed, flushed again as unused, unlocked
+  `INVALID_REG`), which `Arm64FPRCache::FlushRegister` now skips as the GPR cache does; any
+  fallback whose FPRs nothing read afterwards (an Rc = 1 float op, say) could hit it.
+- **The interpreter under the host's mode.** The JITs fall back to the interpreter (Rc = 1 forms,
+  among others), and that C++ runs in the guest's FP mode too, so under FPCR.AH (an M4) the host's
+  FABS and FNEG leave a NaN's sign alone and Clang's `std::copysign` of a double, whose mask it
+  builds with FNEG of all ones, loses the sign (the same trap as the frame hook's above). The
+  interpreter's fabs is bitwise now, and fres (`Common::ApproximateReciprocal`) and fctiw's
+  round-to-nearest (`RoundToIntegerMode`) put the sign on with integer operations: on an M4,
+  fres(-0) was +inf, and fctiw of -1.5 or -3.5 rounded to -1 and -3.
+- **Jit64's fres and ps_res of -0.0** set FPSCR.ZX and FX, as the interpreter and JitArm64 do (its
+  zero test missed the sign bit). Those bits reach RAM through mffs and an OS context save.
+- FEAT_AFP is detected on macOS (`hw.optional.arm.FEAT_AFP`; Dolphin never set it on Apple), and
+  FPCR.AH is set only where the CPU has it. `ORCA_TEST_NO_AFP=1` makes an M4 behave as an M1.
+- **Outside a session (stock Dolphin behaviour, for the release notes):** the accurate-NaN fixes
+  apply wherever Dolphin's accurate-NaN setting is on; frsqrte (negative inputs, double denormals,
+  FPSCR.VXSQRT for a negative of magnitude 2 or more, which JitArm64 skipped), Jit64's fres(-0.0),
+  the interpreter's fabs, fres and fctiw under FPCR.AH, JitArm64's FPR flush after a fallback, and
+  FEAT_AFP detection change for every run. They match PowerPC, Jit64 and the interpreter, and the three bAFP-gated JitArm64 paths
+  (FloatCompare, GeneratePsMaddEft, SetSIMDMode) behave the same under AH with FIZ off.
+- Forcing accurate NaNs changes a PC's and an M4's results wherever a NaN is made (x86's
+  inf - inf was `0xFFF8...`). Matchmaking is unaffected (the build is in the compatibility key),
+  but an input recording or replay from an older build no longer reproduces a run that makes one.
+
+Residual differences, all detected rather than silent (the 60-frame checksum exchange reports
+a desync and the friend is unplugged), and none measured per match yet:
+- **M1 to M3 only, double denormal inputs.** A double below 2^-1022 used as an input is flushed
+  there and kept elsewhere. It needs a 64-bit word with a zero exponent loaded with lfd and then
+  computed with: compares (fcmpu, fsel, ps_sel through FCMP/FCMPE), fctiw (FRINTI), an fmadd
+  addend, frsqrte through an interpreter fallback, and the interpreter's C++ in any Rc = 1 fallback.
+  No scripted run (about 80,000 frames) has shown one.
+- **M1 to M3 only, tininess before rounding.** A result whose exact value lies within half an ulp
+  below the smallest normal and rounds up to it flushes to zero there (AH off detects tininess
+  before rounding) but not elsewhere. For singles that window is 2^-25 relative to 2^-126. Only
+  inexact results land in it: fmul, fdiv, fmadd, and conversions from double to single (frsp,
+  psq_st, rounding to single after an op); a sum or difference of two singles that close to
+  FLT_MIN is exact, so it can't. A value decaying geometrically by a factor k per step lands in
+  the window with probability about 2^-25 / (1 - k): 3e-7 at k = 0.9, 3e-6 at 0.99, 3e-5 at
+  0.999. Making an M1 to M3 detect after rounding has no cheap form (AH is what changes it, and it
+  isn't there); a debug counter for single results in [FLT_MIN (1 - 2^-24), FLT_MIN) and for
+  double-denormal FP inputs over the scripted runs would turn this estimate into a rate.
+- **fctiw of a number that rounds to -0:** PowerPC (and the interpreter) put `0xFFF80001` in the
+  upper word, both JITs `0xFFF80000`. The same on every host, so a Mac and a PC agree; only an
+  Rc = 1 fctiw (interpreter on both) differs from the plain form.
+- An x86-64 CPU without SSE4.1 stores a NaN as a u16 differently (0); every CPU with FMA3 has
+  SSE4.1.
+
+Considered and not done: setting FZ without AH on every ARM CPU in a session (what
+`ORCA_TEST_NO_AFP` does) would make M1 to M4 share one FPCR, so the M1-to-M3 residuals above
+would vanish between Macs, at 504 fps instead of 532 on an M4. x86 could then copy the
+before-rounding flush in `FinalizeSingleResult` (a double intermediate below FLT_MIN becomes a
+signed zero, exact for fmuls and fadds, and what the interpreter's ForceSingle comment says
+PowerPC does). The cost: M4-vs-PC parity would then rest on that x86 change too.
+
+Checked 2026-10-02 on an M4 Pro (FEAT_AFP), with `ORCA_TEST_NO_AFP=1` standing in for an M1 to M3:
+- Offline scripted runs (`YG_HASHLOG`) hash the same every frame with and without the knob:
+  Project+ `pplus-1v1.txt` 6,005 frames (its match makes the fnmsubs NaN at frame ~461) and
+  `pplus-dropin.txt` 20,017 frames (two matches); Brawl `bf-mario-link-results.txt` 10,315 frames,
+  the same with other fuzz seeds 20,016 frames, and `bf-dropin.txt` 25,006 frames (menus only:
+  it stops at stage select offline).
+- A Project+ synctest (`YG_SYNCTEST=7`, frames 1000-1600) passes with and without the knob (0 RAM
+  mismatches; its device-state-only mismatches are the emulated icache, as before).
+- Unit tests: `JitFloatSemantics.*` (the JIT against the interpreter in a session's float setup,
+  with PowerPC's answers pinned; it runs on Jit64 too) and `JitArm64.FresNonIEEE`/`FrsqrteNonIEEE`
+  pass with and without the knob.
+- The x86-64 side was checked by reading Jit64 and under Rosetta 2 (inf - inf is `0xFFF8...`;
+  MINPS and MAXSS with a NaN return the other operand; CVTPD2DQ of a NaN is `0x80000000`; FTZ
+  detects tininess after rounding). Jit64's changes compile for x86-64 but haven't run on a PC: run
+  `JitFloatSemantics.*` there and one `Tools/orca/xplat.py` match between a PC and a Mac before
+  calling the PC side proven (for an M1-class Mac, `ORCA_TEST_NO_AFP=1` on both machines: it does
+  nothing on x86-64 but marks both keys as test sessions, so they still match).
+- `ORCA_TEST_CPUCORE=0` and `=5` run Project+ through that NaN on the interpreters, but their RAM
+  differs from the JIT's from frame 0 (each core's timing; scenes shift by two frames), so whole-RAM
+  hashes can't compare cores. `JitFloatSemantics` compares them per instruction instead.
+- Cost (`Tools/orca/perf.mjs`, Brawl's match, frames 2200-9800 unthrottled, three interleaved runs
+  each on a shared M4 Pro): 545 fps before, 532 fps after (-2.4%; user CPU +2.4%), and 504 fps
+  with `ORCA_TEST_NO_AFP=1` (-7.6%; user CPU +8.1%), the price of keeping loaded denormals exact on
+  an M1 to M3. Jit64 pays a compare and a never-taken branch per arithmetic op (UCOMISD/JP, or
+  CMPPD/PTEST/JNZ for pairs), plus a register copy where d is an input: an estimated 2-5%.
 
 **Results** (2026-10-01): two Orca processes on one Mac, over prod rooms with dev tickets and a
 local keyframe folder.
@@ -549,6 +673,101 @@ Settings go through Dolphin's config system names: `Graphics.*`, never `GFX.*` (
 word). Headless Metal presents nothing, so presentation is measured in a `-p macos` window; warm the
 shader cache first (a cold Metal cache costs ~3.3 s at match start).
 
+## Online menu
+
+Luis's rules: Play Online works in both games, through the game's own menus and never a new
+screen; no Nintendo server is ever asked for anything; nothing about connecting looks like
+Nintendo's. What this build does (v1: the menus and the events; the search window, `host <code>`
+and the matched room come later):
+
+- **The top page.** Brawl's Wi-Fi button reads PLAY ONLINE (a texture, below) and can be selected
+  again; Project+'s already reads PLAY ONLINE. The footer under it says "Play different modes
+  online." in both games.
+- **A opens the game's own ONLINE page** (With Friends / With Anyone), with no connection window:
+  no save check ("There is no save data" in Project+), no NAND access, no network interface task.
+  B goes straight back to the top page, with no "Disconnect from Nintendo WFC?" window. Options
+  (WiiConnect24) and Spectator never show. Brawl's page title reads ONLINE.
+- **With Anyone** shows CASUAL and RANKED (textures, both games, with their descriptions
+  rewritten). Either goes to the local Versus character select and Orca prints
+  `orca menu online casual local` or `orca menu online ranked local`.
+- **With Friends**: each of its buttons goes to the local Versus character select, where friends
+  drop in ("Drop-in"), and Orca prints `orca menu online friends`. Their descriptions say so (a
+  brawl, or in Project+ a fight, with the friends you invite, 2-4 players); none promises a roster
+  or a mode that isn't there.
+
+### How (`Data/Sys/Orca/RSBE01.patches`, `PPLUS32.patches`; `Core/Orca/UX/MenuText.h`, `OnlineMenu.h`)
+
+- **Game patches**, guarded code groups (`GamePatches.h`); Project+'s copy of the menu module sits
+  0x1480 above Brawl's, sora_scene is the same in both:
+  - Brawl only: the main menu's cursor table is the game's own again (Group moves down onto the
+    button). Project+'s was never changed.
+  - The top page's press on the button takes the path every other button takes into its page,
+    never creating the connection window (`muWifiCnctWndTask`), which is what would create the
+    network interface task, check the save's Wi-Fi data and connect.
+  - The ONLINE page's B does what the game does once its disconnect window says OK, without the
+    window.
+  - The ONLINE page's Options (`muProcOptWifi`, WiiConnect24 jobs) and With Anyone's Spectator are
+    never enabled (`isEnableButton` answers no; they also stay hidden without a connection).
+  - sqMenuMain's exit table: codes 24-27 (With Friends), 29 (Spectator), 30 (Casual, was Basic
+    Brawl / Basic Versus) and 31 (Ranked, was Team Battle) all go to sqVsMelee, the local Versus
+    character select. No online scene, network thread or DWC is ever entered. The menu's exit code
+    itself is left as the game wrote it, and Orca reads it.
+  - The IOS refusals of every session stay as the backstop: NET_KD_REQ, IP/Top and SSL refuse
+    in a session and each refusal is logged at INFO (`IOS_WC24`, `IOS_NET`, `IOS_SSL`).
+- **Text** (`MenuText.h`): the main menu's message files, found through the menu scene's archive
+  (`mu_menumain_en`, MiscData 5 and 10), are rewritten in emulated memory: Brawl's footer ("...
+  while connected to Nintendo WFC."), Project+'s "(Discontinued)" and "(Project M not compatible!)",
+  With Anyone's descriptions (Casual, Ranked), With Friends' (Friend Roster, Team Multi-Man,
+  Home-Run Contest, and the Boss Battles text no button shows) and the records' "Nintendo WFC"
+  mentions. A message is rewritten only while its bytes are exactly the game's own, into the same
+  slot (never longer, zeros after), at every frame boundary on both machines: a pure function of
+  emulated memory, covered by the UX's compatibility version (`ux=4`).
+- **Textures** (`Data/Sys/Orca/Textures/RSBE01`, `Tools/orca/textures/README.md`): our own art,
+  drawn by `Tools/orca/textures/make-labels.py` with SIL OFL fonts: Brawl's PLAY ONLINE label and
+  ONLINE title (Anton, like the game's own light condensed titles), CASUAL and RANKED in both games,
+  each 4x with mip levels down to the game's size (a custom texture's sampler takes them even where
+  the game's texture has none, so 1x internal resolution reads a clean 1x level). A session forces
+  texture replacement on (`Profile.cpp`) and `HiresTexture::Update` loads Orca's pack with the
+  player's own: Orca's keeps the names it has, so a player's pack in `<user>/Load/Textures` (a Brawl
+  HD pack, say) can never bring back "NINTENDO Wi-Fi CONNECTION" or "NINTENDO WFC", and the player's
+  has every other name (`CollectHiresTextureFiles`). Orca's is always preloaded so the game's own
+  label never shows while ours loads, and a session shows no "Found N custom textures" message.
+  Replacing textures only changes what is drawn, so the pack is not in the compatibility key:
+  `YG_HASHLOG` is identical with and without it, in both games.
+- **Events** (`OnlineMenu.h`): a reader in the frame hook follows the main menu at every boundary
+  that runs a frame for the first time (never a re-run) and reads the exit code the menu leaves with
+  (scene manager `0x805A0060` +0x284, visible from the first scMemoryChange boundary). It prints an
+  event only for a pick made while the player's game is alone (OnlineMatch's `AloneAt`): no friend
+  plugged in or on the way, not joining or catching up, no keyframe wanted or being made
+  (`SoloIdle`), nothing of drop-in waiting for the boundary to take it (a friend's arrival, a
+  prepare-join, the app's join or leave: `Online::DropInPending`), and no keyframe stored for an
+  invite nobody took yet while it is fresh (30 s: a friend who arrives then replays every frame
+  since). A pick made while friends play, or while one is about to land, is theirs too and is never
+  announced, not even once the game is alone again. Going solo after a session, or loading a
+  friend's keyframe, starts the reader over (`Events::NoteResync`), so nothing stale is ever
+  printed. It only reads memory.
+- **No network, proven per run**: `Tools/orca/online-menu.py` drives every page in both games and
+  fails on any `/dev/net` open, any NET_KD_REQ, NCD, IP/Top or SSL request, or any NAND command on
+  the save's, WiiConnect24's or the network settings' folders after the boot.
+
+| stdout | When |
+|---|---|
+| `orca menu online casual local` | With Anyone > Casual: the game went to the local Versus character select ("local": nothing searches yet). |
+| `orca menu online ranked local` | With Anyone > Ranked, the same. |
+| `orca menu online friends` | Any With Friends button: the local Versus character select, where friends drop in. |
+
+The lines print once per pick, only while the player is alone, and never carry state: the page
+treats them as "the player asked to play online" (Casual and Ranked today: "coming soon", invite a
+friend). A later build that searches will print `orca menu online casual` (no `local`) when its
+search window opens, behind a `host` capability this build doesn't have.
+
+Tests: `OrcaOnlineMenu*` unit tests (the gates, the textures and their precedence, the text rewrite,
+the reader's edges and `AloneAt`); `Tools/orca/online-menu.py <nogui> <disc> [--pplus <dol>]
+[--video Metal --shots <dir> [--scale 4]]` (every way through the menu, solo, offline);
+`Tools/orca/online-menu-dropin.py` (a friend drops into a host on the ONLINE page; the pick that
+follows is both players', and nothing prints; with `--invite`, a pick within 30 s of an invite's
+stored keyframe prints nothing and one after it prints).
+
 ## Embedding
 
 The YouGame desktop app shows Orca inside its own window, at the page's player box, the way it runs
@@ -625,6 +844,7 @@ Any other line goes to stderr. The app's `EMBED_COMMAND` filter must add `blur` 
 | `orca click` | Windows only: a mouse button (left, right or middle) went down on Orca's window, once per press. The page never sees that click, so the app hands it over: it focuses its window and page, and the page treats it as a press on the box. That means taking DOM focus off whatever had it (a chat field would otherwise keep the keys, since `webContents.focus()` gives it back) and sending `focus`. Do it on every `orca click`, even when the page thinks the game already has the input: Chromium may count a click on another process's child window as its own window losing activation. Orca changes nothing itself on a click. In and out of a session, with no cap: every app forwards the `orca` lines it doesn't know to the page, which ignores them. On macOS the click reaches the page itself ("Focus"). |
 | `error <sentence>` | Something failed: bad arguments, the view couldn't open, the game didn't boot. Each `orca error` also gets an `error` twin. |
 | `orca state <state>` / `orca error <code> <sentence>` | Session status (`Core/Orca/Status.h`). New states, such as drop-in's `joining`, `friend-joined` and `no-room`, come through unchanged: forward every line that starts with `orca `. |
+| `orca menu <event>` | The player picked something in the game's own Online menu: `online casual local`, `online ranked local`, `online friends` ("Online menu"). An event, printed once per pick, only while the player's game is alone. |
 | `exit <code>` | Always the last line, on every exit path: 0 after a normal stop, 1 after a reported error, 2 for bad arguments. |
 
 Embedded, Orca keeps fd 1 for the protocol and points the process's stdout at stderr. So the Dolphin

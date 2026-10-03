@@ -16,11 +16,6 @@
 #include <fmt/format.h>
 #include <xxh3.h>
 
-#ifdef __APPLE__
-#include <sys/sysctl.h>
-#endif
-
-#include "Common/CPUDetect.h"
 #include "Common/CommonPaths.h"
 #include "Common/Config/Config.h"
 #include "Common/FileUtil.h"
@@ -70,44 +65,6 @@ bool Enabled()
   return (!Env("YOUGAME_BRIDGE").empty() && !Env("YOUGAME_TOKEN").empty()) ||
          !Env("ORCA_TEST_DEV_GAME").empty();
 }
-
-namespace
-{
-// How this machine's floating point treats NaNs in the guest's non-IEEE mode: "ah" for x86-64, and
-// for an ARM CPU with FEAT_AFP (FPCR.AH, which Dolphin sets there: Apple M4 and later), which
-// compute alike; "noah" for an ARM CPU without it (Apple M1 to M3), where AH does nothing and a
-// generated NaN gets the other sign.
-std::string FloatClass()
-{
-  // Tests stand in for a machine of another class (a test session never meets a real one).
-  if (const std::string forced = Env("ORCA_TEST_FLOAT_CLASS"); !forced.empty())
-    return forced;
-#if defined(_M_ARM_64) || defined(__aarch64__)
-#ifdef __APPLE__
-  int afp = 0;
-  size_t size = sizeof(afp);
-  if (sysctlbyname("hw.optional.arm.FEAT_AFP", &afp, &size, nullptr, 0) != 0)
-    afp = 0;
-  return afp ? "ah" : "noah";
-#else
-  return cpu_info.bAFP ? "ah" : "noah";
-#endif
-#else
-  return "ah";
-#endif
-}
-
-// Project+ (the launcher profile) makes a NaN with fnmsubs as a match starts, so its players must
-// share a float class, which the room's hello checks rather than the compatibility key, so the
-// friend hears why (the rooms server turns a different key away with a bare 403) (2026-10-02: an M4 Mac and a PC hash a P+ match the same every frame, an
-// M4 with AH cleared, as on an M1, diverges at that NaN). Vanilla Brawl never made such a NaN in a
-// 3,606-frame scripted match with AH on or off, so it stays open to every machine.
-bool FloatClassMatters()
-{
-  const Profile* profile = ActiveProfile();
-  return profile && profile->IsLauncher();
-}
-}  // namespace
 
 std::string CompatibilityKey()
 {
@@ -164,6 +121,15 @@ std::string CompatibilityKey()
   // ARM64 emitter and Jit64 ps1 fixes; Project+ too from 2026-10-02, after a launcher boot took a
   // fixed region and JitArm64's sign operations went bitwise), so Mac and PC players meet. FMA,
   // below, is in the key.
+  //
+  // Nor whether an ARM CPU has FEAT_AFP. On 2026-10-02 Project+ was kept from players across that
+  // line for a few hours: the room's hello carried a float class ("ah" for x86-64 and an Apple M4
+  // or later, "noah" for an M1 to M3, where FPCR.AH does nothing) and a joiner of the other class
+  // was turned away with platform_mismatch, because Project+ makes a NaN (fnmsubs, inf * 0) as a
+  // match starts that the two classes gave opposite signs. Sessions now force accurate NaNs (one
+  // PowerPC answer on every host) and keep denormal single inputs exact on a CPU that flushes them
+  // (Profile.cpp MAIN_ACCURATE_NANS, JitArm64::DenormalInputsFlushed), so every Mac and PC plays
+  // every other; ORCA_TEST_NO_AFP stands in for an M1 to M3 on a newer Mac.
   // The universal forced settings that change what the game computes.
   parts += fmt::format(
       "thread={}|fma={}|rtc={}:{}|si={},{},{},{}|efb={}|xfb={}|access={}|bbox={}|save={:016x}|test={}"
@@ -193,8 +159,6 @@ namespace
 void StartLocked(Net::RoomOptions options)
 {
   options.compatibility = CompatibilityKey();
-  if (FloatClassMatters())
-    options.platform = FloatClass();
   if (const Profile* profile = ActiveProfile())
   {
     std::string game = profile->game_id;

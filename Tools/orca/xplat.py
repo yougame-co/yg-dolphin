@@ -67,6 +67,9 @@ if not port.isdigit():
 
 env = {k: v for k, v in os.environ.items() if k in ("HOME", "PATH", "SYSTEMROOT", "TEMP", "TMP",
                                                     "USERPROFILE", "APPDATA", "LOCALAPPDATA")}
+# Test overrides pass through (ORCA_TEST_NO_AFP=1 on both machines plays an M1-class Mac against a
+# PC; any test override marks both keys as test sessions, so they still meet).
+env.update({k: v for k, v in os.environ.items() if k.startswith("ORCA_TEST_")})
 env.update(ORCA_SESSION="1", ORCA_ROOM=a.room, ORCA_NAME=a.name or a.role.capitalize(),
            YOUGAME_BRIDGE=f"http://127.0.0.1:{port}", YOUGAME_TOKEN="t0ken", YOUGAME_GAME=slug,
            ORCA_TEST_COMMANDS="1", YG_SCENES="1", YG_INPUT=inp)

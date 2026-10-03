@@ -32,8 +32,9 @@
 //   YG_BENCH=<k>          timing: save every frame, every 60th frame load k back; logs normal and
 //                         re-run frame, save and load averages
 //   YG_DUMP_FRAMES_FROM=<n> / _TO=<m>  Dolphin's frame dump for first-pass frames n..m (with
-//                         -C Graphics.Settings.DumpFramesAsImages=True; `GFX.` is ignored): re-runs
-//                         present nothing, so a rollback run's dumps pair 1:1 with a plain run's
+//                         -C Graphics.Settings.DumpFramesAsImages=True; the -C system is
+//                         Graphics, not GFX): re-runs present nothing, so a rollback run's dumps
+//                         pair 1:1 with a plain run's
 //   YG_PADREC=<file>      record every port's pad (wire form) and the RAM checksum per frame
 //   YG_LOOPBACK=<file>    replay such a recording through a real Orca session (Loopback.h): seat 1
 //                         is local, seat 2 a virtual remote whose inputs arrive late; it also sends

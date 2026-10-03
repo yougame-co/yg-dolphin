@@ -26,13 +26,29 @@ namespace Rollback::OnlineMatch
 // host's keyframe (or emulation stops). `local_pad(seat)` gives this player's pad for the given
 // seat. Returns the frame the state was rewound to here (a rollback, or a joiner's keyframe): the
 // state is now the start of that frame.
-// `on_frame(frame, resimulating, ports)` runs first at every boundary (Orca::Events::NotifyFrame),
-// before anything is saved there; `ports` are the controllers plugged in at that frame.
+// `on_frame(frame, resimulating, ports, alone)` runs first at every boundary
+// (Orca::Events::NotifyFrame), before anything is saved there; `ports` are the controllers plugged
+// in at that frame; `alone`: AloneAt this frame (false on re-runs).
 using FrameHook = std::function<void(int frame, bool resimulating,
-                                     const std::vector<Orca::Events::PortInfo>& ports)>;
+                                     const std::vector<Orca::Events::PortInfo>& ports, bool alone)>;
 std::optional<int> OnBoundary(Core::System& system,
                               const std::function<Orca::Net::Pad(int local_seat)>& local_pad,
                               const FrameHook& on_frame);
+
+// A keyframe this recent serves a new arrival as it is: the joiner replays up to this many frames
+// (30 s at 60 fps) and catches up from there.
+constexpr int KEYFRAME_FRESH_FRAMES = 30 * 60;
+
+// The frame hook's `alone` at the first run of `frame`: what this game does then is this player's
+// alone, so the UX may announce it (UX/OnlineMenu.h). It plays solo with nothing of drop-in under
+// way as the last boundary left it (`solo_idle`, SoloIdle: no friend plugged in or on the way, not
+// joining or catching up, no keyframe wanted or being made); nothing waits for this boundary to
+// take it (`drop_in_pending`, Orca::Online::DropInPending: a friend's arrival, a prepare-join or an
+// invite, the app's join or leave); and no keyframe it stored that nobody took yet
+// (`stored_keyframe`, its frame: a prepare-join's or an invite's) is still fresh, since a friend
+// who arrives within KEYFRAME_FRESH_FRAMES of it replays every frame since, which makes them the
+// friend's too.
+bool AloneAt(int frame, bool solo_idle, bool drop_in_pending, std::optional<int> stored_keyframe);
 
 // True while this process plays online (solo in its room, or with friends).
 bool Active();

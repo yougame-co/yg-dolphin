@@ -19,6 +19,7 @@ FrameCallback s_frame;
 StallCallback s_stall;
 BoundaryCallback s_boundary;
 std::atomic<int> s_ux_compat{0};
+std::atomic<u64> s_resyncs{0};
 }  // namespace
 
 void SetPlugInCallback(PlugInCallback callback)
@@ -98,7 +99,7 @@ int UXCompatVersion()
 }
 
 void NotifyFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
-                 const std::vector<PortInfo>& ports)
+                 const std::vector<PortInfo>& ports, bool alone)
 {
   FrameCallback callback;
   {
@@ -106,7 +107,17 @@ void NotifyFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating
     callback = s_frame;
   }
   if (callback)
-    callback(guard, frame, resimulating, ports);
+    callback(guard, frame, resimulating, ports, alone);
+}
+
+void NoteResync()
+{
+  s_resyncs.fetch_add(1, std::memory_order_relaxed);
+}
+
+u64 Resyncs()
+{
+  return s_resyncs.load(std::memory_order_relaxed);
 }
 
 void NotifyStall(int stalled_ms)

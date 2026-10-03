@@ -3,8 +3,6 @@
 
 #include "Core/PowerPC/JitArm64/Jit.h"
 
-#include <optional>
-
 #include "Common/Arm64Emitter.h"
 #include "Common/CPUDetect.h"
 #include "Common/CommonTypes.h"
@@ -122,6 +120,22 @@ void JitArm64::EmitSignOp(SignOp op, u8 size, ARM64Reg Vd, ARM64Reg Vn, bool pac
   }
 }
 
+void JitArm64::EmitPPCDefaultNaN(ARM64Reg Vd, bool single)
+{
+  const ARM64Reg VD = EncodeRegToDouble(Vd);
+  if (single)
+  {
+    m_float_emit.MOVI(32, VD, 0x7F, 24);  // 0x7F000000
+    m_float_emit.ORR(32, VD, 0xC0, 16);   // 0x7FC00000
+  }
+  else
+  {
+    m_float_emit.MOVI(64, VD, 0xFFFF'0000'0000'0000ULL);
+    m_float_emit.BIC(16, VD, 0x80, 8);  // 0x7FFF'0000'0000'0000
+    m_float_emit.BIC(16, VD, 0x07, 0);  // 0x7FF8'0000'0000'0000
+  }
+}
+
 void JitArm64::fp_arith(UGeckoInstruction inst)
 {
   INSTRUCTION_START
@@ -147,8 +161,8 @@ void JitArm64::fp_arith(UGeckoInstruction inst)
   const bool round_c = use_c && output_is_single && !js.op->fprIsSingle[c];
 
   const auto inputs_are_singles_func = [&] {
-    return fpr.IsSingle(a, true) && (!use_b || fpr.IsSingle(b, true)) &&
-           (!use_c || fpr.IsSingle(c, true));
+    return IsSingleForArithmetic(a, true) && (!use_b || IsSingleForArithmetic(b, true)) &&
+           (!use_c || IsSingleForArithmetic(c, true));
   };
 
   const bool single = inputs_are_singles_func() && output_is_single &&
@@ -272,7 +286,6 @@ void JitArm64::fp_arith(UGeckoInstruction inst)
       negate_gpr = gpr.GetScopedReg();
 
     Common::SmallVector<FixupBranch, 4> nan_fixups;
-    std::optional<FixupBranch> nan_early_fixup;
     if (m_accurate_nans)
     {
       // Check if we need to handle NaNs
@@ -291,13 +304,13 @@ void JitArm64::fp_arith(UGeckoInstruction inst)
       if (use_c && VA != VC && (!use_b || VB != VC))
         inputs.push_back(VC);
 
-      // If any inputs are NaNs, pick the first NaN of them and set its quiet bit.
-      // However, we can skip checking the last input, because if exactly one input is NaN, AArch64
-      // arithmetic instructions automatically pick that NaN and make it quiet, just like we want.
-      for (size_t i = 0; i < inputs.size() - 1; ++i)
+      // If any inputs are NaNs, pick the first NaN of them and set its quiet bit: PowerPC's order,
+      // a, b, c, with c as it is before its 25-bit rounding (as Jit64 and the interpreter's fmadds
+      // pick it). Orca: every input is checked, the last too. The hardware would pick a last NaN
+      // input right, but with no NaN input it makes its own default NaN, which is negative under
+      // FPCR.AH (an Apple M4 and later; x86-64's is negative too) and positive without (M1 to M3).
+      for (const ARM64Reg input : inputs)
       {
-        const ARM64Reg input = inputs[i];
-
         m_float_emit.FCMP(input);
         FixupBranch skip = B(CCFlags::CC_VC);
 
@@ -309,17 +322,10 @@ void JitArm64::fp_arith(UGeckoInstruction inst)
         SetJumpTarget(skip);
       }
 
-      if (negate_result)
-      {
-        // If we have a NaN, we must not execute FNEG.
-        if (result_reg != VD)
-          m_float_emit.MOV(EncodeRegToDouble(VD), EncodeRegToDouble(result_reg));
-        nan_fixups.push_back(B());
-      }
-      else
-      {
-        nan_early_fixup = B();
-      }
+      // No NaN input: PowerPC's default NaN, positive on every host. Either way the NaN result is
+      // never negated (fnmadd/fnmsub), as on PowerPC.
+      EmitPPCDefaultNaN(VD, single);
+      nan_fixups.push_back(B());
 
       SwitchToNearCode();
     }
@@ -358,9 +364,6 @@ void JitArm64::fp_arith(UGeckoInstruction inst)
 
       BL(GetAsmRoutines()->fmadds_eft);
     }
-
-    if (nan_early_fixup)
-      SetJumpTarget(*nan_early_fixup);
 
     // PowerPC's nmadd/nmsub perform rounding before the final negation, which is not the case
     // for any of AArch64's FMA instructions, so we negate using a separate instruction.
@@ -489,11 +492,15 @@ void JitArm64::fselx(UGeckoInstruction inst)
   const u32 c = inst.FC;
   const u32 d = inst.FD;
 
-  const bool b_and_c_singles = fpr.IsSingle(b, true) && fpr.IsSingle(c, true);
+  // a compares as a single only where that can't flush a denormal (IsSingleForArithmetic). b and c
+  // are only selected, bit for bit, so they stay singles unless one of them is a.
+  const bool a_single_ok = IsSingleForArithmetic(a, true);
+  const bool b_and_c_singles =
+      fpr.IsSingle(b, true) && fpr.IsSingle(c, true) && (a_single_ok || (a != b && a != c));
   const RegType b_and_c_type = b_and_c_singles ? RegType::LowerPairSingle : RegType::LowerPair;
   const auto b_and_c_reg_encoder = b_and_c_singles ? EncodeRegToSingle : EncodeRegToDouble;
 
-  const bool a_single = fpr.IsSingle(a, true) && (b_and_c_singles || (a != b && a != c));
+  const bool a_single = a_single_ok && (b_and_c_singles || (a != b && a != c));
   const RegType a_type = a_single ? RegType::LowerPairSingle : RegType::LowerPair;
   const auto a_reg_encoder = a_single ? EncodeRegToSingle : EncodeRegToDouble;
 
@@ -694,7 +701,9 @@ void JitArm64::fctiwx(UGeckoInstruction inst)
   const u32 b = inst.FB;
   const u32 d = inst.FD;
 
-  const bool single = fpr.IsSingle(b, true);
+  // With accurate NaNs (every Orca session), always from a double: its NaN check below, and no
+  // flushed denormal single (IsSingleForArithmetic) under a directed rounding mode.
+  const bool single = fpr.IsSingle(b, true) && !m_accurate_nans;
   const bool is_fctiwzx = inst.SUBOP10 == 15;
 
   const ARM64Reg VB = fpr.R(b, single ? RegType::LowerPairSingle : RegType::LowerPair);
@@ -726,15 +735,22 @@ void JitArm64::fctiwx(UGeckoInstruction inst)
   else
   {
     const auto WA = gpr.GetScopedReg();
+    Arm64GPRCache::ScopedARM64Reg WB = ARM64Reg::INVALID_REG;
+    if (m_accurate_nans)
+      WB = gpr.GetScopedReg();
 
-    if (is_fctiwzx)
-    {
-      m_float_emit.FCVTS(WA, EncodeRegToDouble(VB), RoundingMode::Z);
-    }
-    else
-    {
+    const ARM64Reg converted = is_fctiwzx ? EncodeRegToDouble(VB) : EncodeRegToDouble(VD);
+    if (!is_fctiwzx)
       m_float_emit.FRINTI(EncodeRegToDouble(VD), EncodeRegToDouble(VB));
-      m_float_emit.FCVTS(WA, EncodeRegToDouble(VD), RoundingMode::Z);
+    m_float_emit.FCVTS(WA, converted, RoundingMode::Z);
+
+    if (m_accurate_nans)
+    {
+      // Orca: a NaN converts to 0x80000000 on PowerPC (the interpreter) and Jit64; FCVTZS makes
+      // it 0. FRINTI keeps a NaN a NaN, so the converted register still says.
+      m_float_emit.FCMP(converted);
+      CSET(WB, CCFlags::CC_VS);
+      ORR(WA, WA, WB, ArithOption(WB, ShiftType::LSL, 31));
     }
 
     ORR(EncodeRegTo64(WA), EncodeRegTo64(WA), LogicalImm(0xFFF8'0000'0000'0000ULL, GPRSize::B64));
@@ -992,4 +1008,20 @@ void JitArm64::ConvertSingleToDoublePair(size_t guest_reg, ARM64Reg dest_reg, AR
 bool JitArm64::IsFPRStoreSafe(size_t guest_reg) const
 {
   return js.fpr_is_store_safe[guest_reg];
+}
+
+bool JitArm64::DenormalInputsFlushed() const
+{
+  // cpu_info.bAFP is false on a CPU without FEAT_AFP and with ORCA_TEST_NO_AFP; FPCR.AH is set only
+  // where it is true (Common/ArmFPURoundMode.cpp).
+  return m_orca_session && !cpu_info.bAFP;
+}
+
+bool JitArm64::IsSingleForArithmetic(size_t guest_reg, bool lower_only) const
+{
+  // A store-safe value came out of a single-precision arithmetic operation in this block, which
+  // flushed it if it was a denormal (PPCAnalyst, fprIsStoreSafe); with FPSCR.NI clear nothing is
+  // flushed at all.
+  return fpr.IsSingle(guest_reg, lower_only) &&
+         (!DenormalInputsFlushed() || js.fpr_is_store_safe[guest_reg]);
 }
