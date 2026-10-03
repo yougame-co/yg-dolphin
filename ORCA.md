@@ -36,6 +36,7 @@ Online play is drop-in, through a private YouGame room of up to four (`Source/Co
 | `ORCA_SITE` | Tests only: the site for dev tickets (default `https://yougame.co`). |
 | `ORCA_TEST_PADS`, `ORCA_TEST_SKIP_RENDER` | Harness overrides; they change the compatibility key. |
 | `ORCA_TEST_FULL_SNAPSHOTS` | `1`: rollback snapshots copy all of RAM instead of copy-on-write (`Source/Core/Core/Rollback/Cow.h`), to compare the two. A test override too. |
+| `ORCA_THREAD_QOS` | `0`: no interactive scheduling for the CPU, room and controller-stream threads ("Input latency"); `1`: also for a scripted harness run's CPU thread. |
 | `ORCA_TEST_PRESENT` | Tests only, headless (`-p headless`): `WxH` presents into an offscreen image of that size, the OSD and Orca's overlay on it, and screenshots (`YG_SHOT_EVERY`) and frame dumps take that image instead of the bare frame. Presenting then waits for its present time like a window does (headless normally presents nothing). Each screenshot's readback is a frame of its own ~13 ms longer, which the frame meter shows. Not with the Software renderer (it draws no UI); the compatibility key is unchanged. |
 
 **Orca.app** (the macOS bundle, `Tools/orca-package-macos.sh`) is what the YouGame desktop app
@@ -383,6 +384,9 @@ the store refuses dev tickets.
   median inflated by a keyframe's transfer). One that stalls raised waits for 10 stall-free
   seconds per step. Stalls back within 20 s of a step undo it and double the next wait.
 - The app's `delay N` fixes it instead (Embedding, stdin).
+- Since the SI relatch ("Input latency"), a pad sampled for frame f is what the game reads in frame
+  f, so delay N is N frames, as in Slippi. Before it the game read each frame's pads a frame late,
+  and delay 2 acted like 3.
 - Why (2026-10-02, a Project+ match): a Mac at 34-35 ms whose Wi-Fi spiked to 113-123 ms every
   ~11 s, against a friend at 22 ms whose game hitched about as often. In menus both sat at 2 with
   no rollbacks. In every match the old rule climbed to 4-5:
@@ -391,6 +395,159 @@ the store refuses dev tickets.
   - A lower needed ten seconds of at most three re-run frames per second. A match never has those,
     so the delay came down only between matches.
   - At 4-5 the rollbacks barely moved: 20-30 per 15 s, 3-4 frames deep, against 59 at 2.
+
+## Input latency
+
+What happens between a press and the frame that shows it, and what Orca does about each part
+(latency-r1, 2026-10-02). Measured with the latency probe (`Tools/orca/latency-probe.py` on the
+`lat-probe` branch): a scripted press, the first emulated frame whose image differs from a run
+without it (frame dumps), and timestamps on one clock from the frame boundary that sampled the pad
+to the present call and to CoreAnimation's `presentedTime`. Solo, real-time pacing, Metal, a visible
+871x434 window on the M4 Pro's 120 Hz screen. Online adds the input delay on top (2 frames by
+default, 16.68 ms each).
+
+| Change                          | Where                                   | Emulation   | What it does                                                                                       |
+| ------------------------------- | --------------------------------------- | ----------- | -------------------------------------------------------------------------------------------------- |
+| Immediate XFB                   | `Orca/Profile.cpp`                      | no          | Each frame is presented at its XFB copy instead of 18 ms later at the VI field that scans it out.  |
+| VSync off                       | `Orca/Profile.cpp`                      | no          | Forced, so a `GFX.ini` can't add 2-19 ms or let the screen pace the game.                          |
+| No re-present on rollback loads | `VideoCommon/Present.cpp`               | no          | A rollback no longer flashes the snapshot's (stale) frame or spends a present inside the rollback. |
+| Slow screens drop frames        | `Metal/MTLGfx.mm`                       | no          | A screen under 59 Hz no longer slows the game to its own rate.                                     |
+| Thread priority                 | `Orca/ThreadPriority.cpp`               | no          | The CPU, room and controller-stream threads run at interactive priority.                           |
+| Brawl's input lag fix           | `Data/Sys/Orca/RSBE01.patches`          | yes (Brawl) | Vanilla Brawl copies this frame's pads, not last frame's: its image comes a frame sooner.          |
+| SI relatch                      | `HW/SI/SI.cpp`, `Rollback/Rollback.cpp` | yes         | The game reads the pads the frame hook just set, not the previous hook's: a frame sooner.          |
+
+The two that change emulation change the lobby compatibility key (the patch file's hash, and the git
+revision every build carries), so builds with and without them never meet.
+
+### Presentation (host only)
+
+- **Immediate XFB** (`GFX_HACK_IMMEDIATE_XFB`, forced on). Dolphin otherwise shows each frame at the
+  VI field that would scan it out on a Wii: Brawl and P+ copy their XFB about 15.8 ms into a frame
+  and the field starts 18 ms later. Project+'s and Slippi's Dolphin ship it on. Why it can't desync:
+  `ImmediateSwap` is already skipped on re-run frames; the VI-end throttle it bypasses only sleeps
+  (VI skip is off under `WantsDeterminism`); `SyncGPU` does nothing in single core. Measured:
+  per-frame RAM hashes identical to it off over whole scripted matches, Null and Metal. Brawl and P+
+  make one XFB copy per frame, so `CapImmediateXFB` stays off. It also shows the corrected frame
+  after a rollback at once, where the VI path showed up to two mispredicted copies.
+- **VSync** forced off. A composited window never tears, so VSync only adds latency (2-19 ms at the
+  glass) and, on a screen slower than 59.94 Hz, would let `nextDrawable` pace the game.
+- **Smooth Early Presentation and Rush Frame Presentation** stay at Dolphin's default (off). Smooth
+  evens out Immediate XFB's present cadence for about +1-2 ms, but its offset moves late fast and
+  early slowly, so stall catch-up and rollbacks that overrun a frame would cost more online; it has
+  not been measured in an online match. Rush gains nothing without Immediate XFB and puts each
+  rollback's re-run time straight onto the frame's present. Both need a real-time rollback
+  measurement first (`YG_LOOPBACK` with `YG_THROTTLE=1`).
+- **No re-present on rollback loads.** `Presenter::DoState` re-showed the loaded state's last frame
+  on every load; for a rollback that is a stale frame (often the one before: a one-frame backward
+  flicker) plus a present and a `nextDrawable` inside the rollback. Rollback snapshots now skip it
+  (`VideoCommon_LoadRedisplays`); savestates and drop-in keyframes (`SnapshotRing::LoadImage`) still
+  show their frame. Host only.
+- **Slow screens** (Metal). With VSync off `nextDrawable` only waits for a free drawable, but a 50
+  Hz screen frees one every 20 ms: the game waited ~17 ms every frame and ran at 50 fps (83% speed),
+  dragging an online friend down too. Drawables now come from a background acquire, and a frame
+  without one isn't shown, while the window's screen shows under 59 frames a second
+  (`NSScreen.maximumFramesPerSecond`, read by the frontend every main-loop pass), or after 8 of 16
+  `nextDrawable` calls waited 4 ms or more. Each has its way back: the window on a faster screen;
+  120 background acquires in a row on time. A covered window behaves as before.
+- **Thread priority.** The CPU thread (emulation, the frame hook, snapshots and re-runs), the room's
+  network thread and the controller stream get `QOS_CLASS_USER_INTERACTIVE` on macOS, and on Windows
+  a raised priority (above normal for the CPU thread, highest for the two network threads) with
+  power throttling off. Only in a session; a scripted harness run keeps its CPU thread as it was
+  unless something paces it (an online match, `YG_THROTTLE=1`). `ORCA_THREAD_QOS=0` turns it off,
+  `=1` forces it on.
+
+### Emulation
+
+- **Brawl's Controller Input Lag Fix [Magus]** (`RSBE01.patches`, "Input"). Brawl's pad code at
+  0x8002AD88 copies each pad's status for the game from the array at +0x444, a frame old; the
+  community code (in Dolphin's own `GameSettings/RSBE01.ini` netplay set, and in Project+'s codeset)
+  makes it copy from +0x40. Orca writes it in place, as 0x404 off the copy's 22 load displacements,
+  one guarded group of 45 words that lands once at boot. Project+ already runs it, so
+  `PPLUS32.patches` doesn't carry it.
+- **SI relatch.** The game reads its pads a few ms into each frame from the SI input buffers, which
+  the SI's last poll filled just before Orca's frame hook. So every frame played the previous hook's
+  pads, a whole frame that stock Dolphin and Slippi don't have ("delay 2" acted like 3). At the end
+  of the frame hook, on every pass, `SerialInterfaceManager::RelatchInputs` writes each channel's
+  input buffer from the pads just set, as a poll would, but leaves the status register alone: no
+  RDST bit, no interrupt, no host input update. The game's read takes the buffer only when the poll
+  before it set RDST, as it had, so it now takes this frame's pads, and nothing else changes. Why it
+  is deterministic: a pure function of the session's pads, applied after the boundary's snapshot was
+  saved or loaded, so a snapshot holds the poll's latch and every load relatches. Scripted inputs
+  land a frame earlier relative to the game; they count frames from scene entry, so the scripts
+  still reach the same scenes.
+
+### Measurements
+
+Medians over 82 presses (two runs of 41 jumps each, Mario on Battlefield; P+ the same), M4 Pro
+built-in 120 Hz screen, 1-minute load 3.6-6.7 (other agents' emulators sometimes alongside).
+"Sample" is the frame boundary that sampled the press; "boundary" the one that starts the frame
+whose image first changed.
+
+| Build | Brawl: image at | sample -> present | boundary -> present | sample -> glass |
+|---|---|---|---|---|
+| 0.3.5 (`d9ed99f137`) | press+4 | 100.95 ms (6.05 fr) | 34.28 ms (2.06 fr) | 104.4 ms |
+| + presentation and threads | press+4 | 79.69 ms (4.78 fr) | 13.03 ms (0.78 fr) | 85.2 ms |
+| + Brawl's input lag fix | press+3 | 62.88 ms (3.77 fr) | 13.31 ms (0.80 fr) | 68.9 ms |
+| + SI relatch | press+2 | 46.62 ms (2.79 fr) | 13.52 ms (0.81 fr) | 52.8 ms |
+
+| Build | P+: image at | sample -> present | boundary -> present | sample -> glass |
+|---|---|---|---|---|
+| 0.3.5 | press+3 | 83.73 ms (5.02 fr) | 33.63 ms (2.02 fr) | 86.9 ms |
+| + presentation and threads | press+3 | 65.59 ms (3.93 fr) | 15.33 ms (0.92 fr) | 69.5 ms |
+| + SI relatch | press+2 | 46.37 ms (2.78 fr) | 13.67 ms (0.82 fr) | 51.7 ms |
+
+- On glass depends on the compositor's state (about 4 ms or about 19 ms after the present, which
+  Orca doesn't choose). With Immediate XFB the present cadence is less even: 30-38% of frames off
+  the two-refresh rhythm against 20-23% before, which Smooth Early Presentation would fix for a
+  millisecond or two once it is measured online.
+- On Luis's 49.95 Hz LG UltraWide (Brawl, before vs after the presentation changes): the game ran at
+  50 fps (a boundary every 19.96 ms, `nextDrawable` waiting 15.7 ms each frame); now at full speed
+  (16.70 ms), 2.5% of the screen's refreshes repeat a frame. Sample -> present 136.8 -> 79.8 ms,
+  sample -> glass 195.7 -> 127.8 ms (that screen adds 39 ms after the GPU, at any setting).
+- SI relatch: in every scene of both games (boot, menus, character and stage select, match) 100% of
+  the game's pad reads took the pads of the hook just before them (before: 2-49% in Brawl's menus
+  and 4% in a match), every read found RDST set, and there was still one read per frame.
+- Thread priority, measured with the frame meter's own number (boundary-to-boundary host time,
+  `YG_FRAMETIME`), one minute of a real-time Brawl match in a window, Orca and 10 or 12 busy loops
+  all at nice 10, four pairs: p99 19.7 / 20.6 / 25.2 / 25.2 ms with it against 29.0 / 20.8 / 26.6 /
+  24.7 without, and the worst frame 98-106 ms against 121-158 ms. No consistent p99 gain on an M4
+  Pro at this load, a smaller worst case; the case it is for (the app frontmost, Orca's threads on
+  efficiency cores, a Windows PC with EcoQoS) is not measured.
+
+Checks:
+- Presentation and threads: per-frame RAM hashes identical to 0.3.5 over whole scripted matches of
+  both games (Brawl 10,807 frames, to the results screen and back to character select; P+ 9,000),
+  Null and Metal (in a window).
+- No re-present on rollback loads: a loopback session with 66 rollbacks presented 66 frames more
+  than its first-pass frames on 0.3.5, and none more with the change.
+- Input lag fix alone: the same sync test on Brawl, 0 RAM mismatches; P+'s per-frame hashes
+  unchanged by it (its patch file isn't P+'s).
+- Input lag fix and relatch: whole scripted matches of both games still reach the results screen and
+  character select again (scene changes move by 1-9 frames; the scripts count from scene entry and
+  needed no change); sync tests (rewind 7, boot through menus, character and stage select into a
+  match; Brawl frames 300-4,500, P+ 150-3,000) with 0 RAM mismatches and no DoState section
+  (`YG_SYNCTEST_SECTIONS`) differing on re-runs that didn't already differ without the relatch, the
+  SerialInterface's included; drop-in keyframe tests at Brawl frames 700, 1,500, 1,700, 2,500 and
+  4,000 and P+ 250, 400 and 1,500; real-time loopback sessions (`YG_LOOPBACK` with `YG_THROTTLE=1`:
+  Brawl 289 rollbacks and P+ 387, deepest 6, 479 and 379 checksums matched); a two-Orca drop-in over
+  dev rooms (`dropin-commands.py`, both games: joins, leaves, rejoins, every checksum matched).
+- P+'s keyframe test at frame 130 (the boot's save prompt) fails its re-run on 0.3.5 too (9 of 30
+  frames): not from these changes.
+
+### Re-measuring
+
+```
+# A probe build of any commit: cherry-pick the probe hooks (lat-probe) onto it, build, then
+Tools/orca/latency-probe.py run --out /tmp/lat --bin <probe build> --press jump \
+  --configs shipped --repeat 2 --hold-lock
+Tools/orca/latency-probe.py run --out /tmp/lat-pp --bin <probe build> --game pplus --press jump \
+  --configs shipped --repeat 2 --hold-lock
+# the second screen: --screen 1
+```
+
+Settings go through Dolphin's config system names: `Graphics.*`, never `GFX.*` (ignored without a
+word). Headless Metal presents nothing, so presentation is measured in a `-p macos` window; warm the
+shader cache first (a cold Metal cache costs ~3.3 s at match start).
 
 ## Embedding
 
