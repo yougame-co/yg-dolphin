@@ -47,6 +47,10 @@
 //                         then means the session gave up after _GIVE_UP_MS (10000; 0: never) of
 //                         stalling. Any run ends if one stall lasts that long. With YG_THROTTLE=1
 //                         the session runs in real time, as a match does.
+//                         _SPIKE=<period ms>,<length ms>[,<from frame>]: link spikes, the remotes'
+//                         packets held for length ms of every period (wall time), then delivered
+//                         at once; the remotes keep playing meanwhile, at most _MAX_ROLLBACK frames
+//                         ahead. With YG_THROTTLE=1: stalls and the catch-up after them.
 // Runs need an Orca session (ORCA_SESSION=1): the frame boundary hook comes from its profile. All
 // modes run unthrottled unless YG_THROTTLE=1. The frame counter is one per pass through the game's
 // frame boundary. In a session the harness logs a hash of the game's session-NAND save at exit.

@@ -111,6 +111,43 @@ int VirtualRemote::Lag(int seat) const
   return m_lag + static_cast<int>(x % static_cast<u32>(m_jitter + 1));
 }
 
+void VirtualRemote::Tick()
+{
+  m_last_tick = std::chrono::steady_clock::now();
+  if (m_lead > 0)
+    --m_lead;
+  else
+    ++m_ticks;
+}
+
+void VirtualRemote::TickWhileWaiting()
+{
+  if (m_spike_period.count() <= 0)
+  {
+    ++m_ticks;
+    return;
+  }
+  // The remote player runs at the frame rate, and no further than its rollback window allows
+  // past this player's inputs.
+  constexpr std::chrono::microseconds FRAME{16'683};
+  const auto now = std::chrono::steady_clock::now();
+  if (now - m_last_tick < FRAME || m_lead >= m_max_lead)
+    return;
+  m_last_tick = now;
+  ++m_ticks;
+  ++m_lead;
+}
+
+void VirtualRemote::StartSpikes(std::chrono::milliseconds period, std::chrono::milliseconds length,
+                                int max_lead)
+{
+  m_spike_period = period;
+  m_spike_length = length;
+  m_spike_start = std::chrono::steady_clock::now();
+  m_last_tick = m_spike_start;
+  m_max_lead = max_lead;
+}
+
 void VirtualRemote::Send(const Orca::Net::Packet& packet)
 {
   if (!packet.pads.empty())
@@ -123,6 +160,17 @@ void VirtualRemote::Send(const Orca::Net::Packet& packet)
 std::vector<Orca::Net::Packet> VirtualRemote::Receive()
 {
   std::vector<Orca::Net::Packet> packets;
+  if (m_spike_period.count() > 0)
+  {
+    // The first spike starts one period in, and each lasts `length` of every period.
+    const auto since = std::chrono::steady_clock::now() - m_spike_start;
+    const bool held = since >= m_spike_period && since % m_spike_period < m_spike_length;
+    if (held && !m_spiking)
+      ++m_spikes;
+    m_spiking = held;
+    if (held)
+      return packets;
+  }
   for (Seat& seat : m_seats)
   {
     const int position = m_ticks - Lag(seat.seat);  // the frame this remote player is running

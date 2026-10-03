@@ -90,6 +90,27 @@ const int s_lb_seats = EnvInt("YG_LOOPBACK_SEATS", 2) == 4 ? 4 : 2;
 // Without silence, a stall that long ends the run too.
 const int s_lb_silent_from = EnvInt("YG_LOOPBACK_SILENT_FROM", -1);
 const int s_lb_give_up_ms = std::max(0, EnvInt("YG_LOOPBACK_GIVE_UP_MS", 10'000));
+// Link spikes: "<period ms>,<length ms>[,<from frame>]". From that frame (default 0) on, every
+// period of wall time the remote seats' packets are held for length ms, then arrive at once
+// (Loopback.h, StartSpikes). Meant with YG_THROTTLE=1: stalls, then the catch-up after them.
+struct LoopbackSpikes
+{
+  int period_ms = 0;
+  int length_ms = 0;
+  int from = 0;
+};
+const LoopbackSpikes s_lb_spikes = [] {
+  LoopbackSpikes spikes;
+  const std::string value = Orca::GetEnv("YG_LOOPBACK_SPIKE");
+  if (value.empty() ||
+      std::sscanf(value.c_str(), "%d,%d,%d", &spikes.period_ms, &spikes.length_ms, &spikes.from) <
+          2 ||
+      spikes.period_ms <= 0 || spikes.length_ms <= 0 || spikes.length_ms >= spikes.period_ms)
+  {
+    return LoopbackSpikes{};
+  }
+  return spikes;
+}();
 // Diagnosis: save a snapshot at every boundary from this frame on and never load (does saving
 // alone change the run?).
 const int s_save_only_from = EnvInt("YG_SAVE_ONLY_FROM", -1);
@@ -767,6 +788,8 @@ struct LoopbackRun
   bool started = false;
   // The session gave up on a remote that stopped answering, at this frame (-1: it didn't).
   int gave_up_at = -1;
+  int remote_spikes = 0;  // link spikes so far (YG_LOOPBACK_SPIKE)
+  bool spikes_started = false;
 };
 
 LoopbackRun& Lb()
@@ -782,6 +805,8 @@ void EndLoopback()
   LoopbackRun& run = Lb();
   if (run.session)
     run.stats = run.session->GetStats();
+  if (run.remote)
+    run.remote_spikes = run.remote->Spikes();
   if (run.port)
     run.save_ms = run.port->SaveMs();
   run.session.reset();
@@ -803,13 +828,14 @@ void LogLoopbackResult(int frame)
   NOTICE_LOG_FMT(ROLLBACK,
                  "Loopback done at frame {} ({}): {} rollbacks, {} re-run frames, deepest {}, {} "
                  "stalls, {} checksums matched, confirmed frame {}, {} snapshots ({:.2f} per "
-                 "frame, every {}, {:.2f} ms each){}{}",
+                 "frame, every {}, {:.2f} ms each){}{}{}",
                  frame, pass ? "PASS" : "FAIL", run.stats.rollbacks, run.stats.resimulated_frames,
                  run.stats.deepest_rollback, run.stats.stalls, run.stats.checksums_matched,
                  run.stats.confirmed_frame, run.stats.saves,
                  frame > 0 ? static_cast<double>(run.stats.saves) / frame : 0.0,
-                 run.stats.snapshot_every, run.save_ms, run.error.empty() ? "" : "; error: ",
-                 run.error);
+                 run.stats.snapshot_every, run.save_ms,
+                 run.remote_spikes > 0 ? fmt::format("; {} link spikes", run.remote_spikes) : "",
+                 run.error.empty() ? "" : "; error: ", run.error);
 }
 
 void LoopbackBoundary(Core::System& system, int frame_here, bool first_pass)
@@ -878,7 +904,17 @@ void LoopbackBoundary(Core::System& system, int frame_here, bool first_pass)
     return;
 
   if (first_pass)
+  {
+    if (s_lb_spikes.period_ms > 0 && !run.spikes_started && frame_here >= s_lb_spikes.from)
+    {
+      run.spikes_started = true;
+      run.remote->StartSpikes(std::chrono::milliseconds{s_lb_spikes.period_ms},
+                              std::chrono::milliseconds{s_lb_spikes.length_ms}, s_lb_max_rollback);
+      NOTICE_LOG_FMT(ROLLBACK, "Loopback: link spikes from frame {}: {} ms every {} ms",
+                     frame_here, s_lb_spikes.length_ms, s_lb_spikes.period_ms);
+    }
     run.remote->Tick();
+  }
   // The frame that runs next is frame_here (frame_here - 1 just completed); the local pad sampled
   // now applies input_delay frames later.
   const std::size_t target = static_cast<std::size_t>(frame_here + s_lb_delay);
@@ -891,10 +927,12 @@ void LoopbackBoundary(Core::System& system, int frame_here, bool first_pass)
       [&] {
         // The remote player keeps playing while this one waits, until its recording runs out.
         ran_past_recording = run.remote->Exhausted();
-        run.remote->Tick();
+        run.remote->TickWhileWaiting();
         return ran_past_recording;
       },
-      std::chrono::microseconds{0}, std::chrono::milliseconds{s_lb_give_up_ms}, &gave_up);
+      // With link spikes, poll as a match does rather than spin.
+      std::chrono::microseconds{s_lb_spikes.period_ms > 0 ? 1000 : 0},
+      std::chrono::milliseconds{s_lb_give_up_ms}, &gave_up);
 
   if (step.kind == Orca::Net::StepKind::Ended)
   {
