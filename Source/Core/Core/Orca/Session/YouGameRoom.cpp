@@ -56,13 +56,10 @@ constexpr auto SERVER_SILENCE_LIMIT = std::chrono::seconds(8);
 constexpr auto HOST_WAIT = std::chrono::seconds(8);
 // Matchmade rooms (ORCA.md "Matchmaking"): a game's report waits this long for the room's match to
 // start; the host's begin gets this many tries (one per roster change after a refusal), and one
-// unanswered for this long is sent again; a ranked set ends void after this many game verdicts
-// without a winner, and goes to whoever wins this many.
+// unanswered for this long is sent again.
 constexpr auto REPORT_HOLD = std::chrono::seconds(60);
 constexpr int BEGIN_TRIES = 5;
 constexpr auto BEGIN_ANSWER = std::chrono::seconds(5);
-constexpr int SET_GAME_LIMIT = 7;
-constexpr int SET_WINS = 2;
 // The room closed a matchmade room after its result (rooms/src/index.ts: 4004 "match-over").
 constexpr int CLOSE_MATCH_OVER = 4004;
 // How long a teardown waits for the app to take the emptied room (loopback, normally milliseconds).
@@ -786,8 +783,7 @@ struct YouGameRoom::Impl
   int ranked_sent = 0;
   int casual_sent = 0;
   int casual_results = 0;
-  std::map<std::string, int> wins;
-  int ranked_verdicts = 0;
+  SetTally tally;
   bool finish_sent = false;
   std::set<std::string> verdicts_seen;
   // Why this side reported a game or the set void, and the detail it sent, by report id ("g<n>",
@@ -2127,11 +2123,7 @@ struct YouGameRoom::Impl
 
   std::string Score() const
   {
-    const auto count = [this](const std::string& id) {
-      const auto it = wins.find(id);
-      return it == wins.end() ? 0 : it->second;
-    };
-    return fmt::format("[{},{}]", count(MyId()), count(TheirId()));
+    return fmt::format("[{},{}]", tally.Wins(MyId()), tally.Wins(TheirId()));
   }
 
   // "game-result": a ranked game's verdict.
@@ -2149,9 +2141,7 @@ struct YouGameRoom::Impl
       return;
     }
     const Verdict v = ReadVerdict(m, id);
-    ++ranked_verdicts;
-    if (!v.winner.empty() && v.out != "void" && v.out != "draw")
-      ++wins[v.winner];
+    const std::optional<SetTally::End> end = tally.Game(v.winner);
     int n = 0;
     if (id.size() > 1 && id[0] == 'g')
       n = std::atoi(id.c_str() + 1);
@@ -2161,20 +2151,14 @@ struct YouGameRoom::Impl
         v.why.empty() ? "" : fmt::format(",\"why\":\"{}\"", v.why), Score(),
         d.empty() ? "" : ",\"d\":" + d));
     const std::string score = Score();
-    const auto it_mine = wins.find(MyId()), it_theirs = wins.find(TheirId());
-    const int mine = it_mine == wins.end() ? 0 : it_mine->second;
-    const int theirs = it_theirs == wins.end() ? 0 : it_theirs->second;
+    const int mine = tally.Wins(MyId()), theirs = tally.Wins(TheirId());
     Orca::UX::ShowToast(v.out == "won"  ? fmt::format("You won game {} · {}–{}", n, mine, theirs) :
                         v.out == "lost" ? fmt::format("You lost game {} · {}–{}", n, mine, theirs) :
                         v.out == "draw" ? fmt::format("Game {} was a draw", n) :
                                           fmt::format("Game {} didn't count", n));
     NOTICE_LOG_FMT(NETPLAY, "Orca room: game {} {} for this player, set {}", id, v.out, score);
-    if (finish_sent)
-      return;
-    if (!v.winner.empty() && wins[v.winner] >= SET_WINS)
-      SendFinish(current_match, v.winner, "");
-    else if (ranked_verdicts >= SET_GAME_LIMIT)
-      SendFinish(current_match, "", "limit");
+    if (end && !finish_sent)
+      SendFinish(current_match, end->winner, end->why);
   }
 
   // "result": a ranked set's verdict, or a casual game's.
@@ -2217,9 +2201,7 @@ struct YouGameRoom::Impl
           "{{\"q\":\"ranked\",\"k\":\"set\",\"out\":\"{}\",\"by\":\"{}\"{},\"score\":{}{}}}", v.out,
           forfeit ? "forfeit" : "games",
           v.why.empty() ? "" : fmt::format(",\"why\":\"{}\"", v.why), Score(), extra));
-      const auto it_mine = wins.find(my_id), it_theirs = wins.find(TheirId());
-      const int mine = it_mine == wins.end() ? 0 : it_mine->second;
-      const int theirs = it_theirs == wins.end() ? 0 : it_theirs->second;
+      const int mine = tally.Wins(my_id), theirs = tally.Wins(TheirId());
       Orca::UX::ShowToast(v.out == "void" ? std::string("This set doesn't count") :
                           forfeit && v.out == "won" ? std::string("Opponent left: you win the set") :
                           v.out == "won" ? fmt::format("You won the set {}–{}", mine, theirs) :
@@ -2264,8 +2246,7 @@ struct YouGameRoom::Impl
     begin_sent.reset();
     begin_tries = 0;
     ranked_sent = 0;
-    ranked_verdicts = 0;
-    wins.clear();
+    tally.Reset();
     finish_sent = false;
     LobbyFields(m);
   }
@@ -2933,6 +2914,37 @@ std::vector<int> YouGameRoom::RecentRoundTrips(u32* sequence) const
   std::lock_guard lock(m_impl->mutex);
   *sequence = m_impl->rtt_sequence;
   return {m_impl->recent_rtts.begin(), m_impl->recent_rtts.end()};
+}
+
+std::optional<SetTally::End> SetTally::Game(const std::string& winner)
+{
+  if (m_ended)
+    return std::nullopt;
+  ++m_games;
+  if (!winner.empty() && ++m_wins[winner] >= SET_WINS)
+  {
+    m_ended = true;
+    return End{winner, ""};
+  }
+  if (m_games >= SET_GAMES)
+  {
+    m_ended = true;
+    return End{"", "limit"};
+  }
+  return std::nullopt;
+}
+
+int SetTally::Wins(const std::string& id) const
+{
+  const auto it = m_wins.find(id);
+  return it == m_wins.end() ? 0 : it->second;
+}
+
+void SetTally::Reset()
+{
+  m_wins.clear();
+  m_games = 0;
+  m_ended = false;
 }
 
 void CoalescePacket(std::optional<Packet>* outgoing, const Packet& packet)

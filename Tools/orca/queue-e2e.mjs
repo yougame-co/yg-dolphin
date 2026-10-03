@@ -56,6 +56,10 @@ const ALARM = Number(opt("--alarm", "900"));
 // match (default): the whole flow. cancel: one Orca picks, then backs out of the character select
 // while searching (`orca menu cancel`).
 const SCENARIO = opt("--scenario", "match");
+// --shots <every>: the first Orca renders with Metal and saves a screenshot every that many frames
+// (its user folder's ScreenShots), from --shots-from (default 1500).
+const SHOTS = opt("--shots");
+const SHOTS_FROM = opt("--shots-from", "1500");
 const PROFILE = PPLUS ? "pplus32" : "rsbe01";
 const DEV_GAME = `orca-queue-e2e-${PROFILE}`;
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), "orca-queue-e2e-"));
@@ -569,7 +573,8 @@ async function playGame(host, joiner, first) {
     await Promise.all([host.press("A"), joiner.press("A")]);
     await sleep(1500);
   }
-  while (host.scene === "scSelctCharacter") {
+  for (let tries = 0; host.scene === "scSelctCharacter"; ++tries) {
+    if (tries >= 25) fail("the character select never started the match");
     await host.press("START");
     await sleep(1200);
   }

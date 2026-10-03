@@ -1292,8 +1292,8 @@ itself (its thread-stack guard, MSVC): the same checks on the PC are what close 
 
 Luis's rules: Play Online works in both games, through the game's own menus and never a new
 screen; no Nintendo server is ever asked for anything; nothing about connecting looks like
-Nintendo's. What this build does (v1: the menus and the events; the search window, `host <code>`
-and the matched room come later):
+Nintendo's. What this build does (the menus and the events here; the search, `host <code>` and
+the matched room in "Matchmaking" below):
 
 - **The top page.** Brawl's Wi-Fi button reads PLAY ONLINE (a texture, below) and can be selected
   again; Project+'s already reads PLAY ONLINE. The footer under it says "Play different modes
@@ -1304,7 +1304,9 @@ and the matched room come later):
   (WiiConnect24) and Spectator never show. Brawl's page title reads ONLINE.
 - **With Anyone** shows CASUAL and RANKED (textures, both games, with their descriptions
   rewritten). Either goes to the local Versus character select and Orca prints
-  `orca menu online casual local` or `orca menu online ranked local`.
+  `orca menu online casual` or `orca menu online ranked` (with the app's `host`: the page's queue
+  searches while the player waits there, "Matchmaking"), else `orca menu online casual local` or
+  `orca menu online ranked local`.
 - **With Friends**: each of its buttons goes to the local Versus character select, where friends
   drop in ("Drop-in"), and Orca prints `orca menu online friends`. Their descriptions say so (a
   brawl, or in Project+ a fight, with the friends you invite, 2-4 players); none promises a roster
@@ -1387,14 +1389,12 @@ and the matched room come later):
 
 | stdout | When |
 |---|---|
-| `orca menu online casual local` | With Anyone > Casual: the game went to the local Versus character select ("local": nothing searches yet). |
-| `orca menu online ranked local` | With Anyone > Ranked, the same. |
+| `orca menu online casual` / `orca menu online ranked` | With Anyone > Casual or Ranked, with the app's `host`: the game went to the local Versus character select and the page's queue searches ("Matchmaking"). |
+| `orca menu online casual local` / `orca menu online ranked local` | The same without `host` (an older app or page): nothing searches. |
 | `orca menu online friends` | Any With Friends button: the local Versus character select, where friends drop in. |
+| `orca menu cancel` | Searching (or matched as the host, with nobody plugged in yet), the player backed out of the character select to the main menu, alone: the search is over. Once. |
 
-The lines print once per pick, only while the player is alone, and never carry state: the page
-treats them as "the player asked to play online" (Casual and Ranked today: "coming soon", invite a
-friend). A later build that searches will print `orca menu online casual` (no `local`) when its
-search window opens, behind a `host` capability this build doesn't have.
+The lines print once per pick, only while the player is alone, and never carry state.
 
 Tests: `OrcaOnlineMenu*` unit tests (the gates, the textures and their precedence, the text rewrite,
 the reader's edges and `AloneAt`); `Tools/orca/online-menu.py <nogui> <disc> [--pplus <dol>]
@@ -1406,6 +1406,148 @@ out of the character select and press A on the page that comes back: the same pi
 proves the page and the cursor (`back-friends-N`, `back-casual`, `back-ranked`), `back-chain` walks
 B to ONLINE and the top page and picks Casual, `back-versus` checks Group > Brawl still comes back to
 Group. They use the harness's per-visit rules (`@muMenuMain:2 ...`: only on the scene's second entry).
+
+## Matchmaking
+
+Orca 0.4.0 plays a stranger the queue found: With Anyone > Casual or Ranked in the game's own
+ONLINE menu, the YouGame page's queue (the rooms Worker's `/match`, Elo and distance windows, the
+same Orca build and disc to meet), then the existing drop-in into the matched room. Ranked is a
+beta: a best of 3, rated once per set, with the host's rules (YouGame `docs/ORCA_ONLINE_UX.md`).
+
+### The flow
+
+1. The pick prints `orca menu online casual|ranked` (no `local`: the app's `caps` has `host`). The
+   game is on the local Versus character select; the overlay shows "Searching for an opponent…
+   (B: back)", with "RANKED BETA" over it for Ranked, until `host`, `join`, `queue-cancel` or a
+   back-out. B out of the character select to the main menu, alone, prints `orca menu cancel`.
+2. The page queues a ticket in the queue's mode (`orca-rsbe01-ranked`, `orca-pplus32-casual`...)
+   with Orca's own lobby exactly (the compatibility key). On `matched`, slot 0 gets `host <code>`
+   and the other `join <code>` 1.5 s later.
+3. `host <code>`: only while this game is alone (no friend plugged in or on the way, not joining or
+   catching up, no keyframe wanted or being made, nothing of drop-in waiting), else
+   `unsupported host`. The game leaves its room and hosts `<code>` where it is (normally the
+   character select): Orca's ticket for that room goes through the bridge's `mpTicket` with
+   `room: <code>`, which the page mints as the queue's ticket with `match_room` (the keyframe store
+   needs a ticket signed for that room). A former joiner moves its pad to port 1 first: solo, so
+   only its own game changes, and the next keyframe carries it. Brawl hosts preset the rules: 3
+   stocks, 8:00, items off (`gmSetRule`, below), at the next boundary while alone, before any
+   keyframe (`ux=6`). Project+ keeps its own rules. The overlay says "Opponent found · waiting for
+   <name>…" until the opponent plugs in.
+4. `join <code>` is the existing drop-in: the joiner lands on port 2 of the host's character
+   select.
+5. Once the opponent is plugged in past its catch-up (`friend-joined`), the host's Orca begins the
+   room's match (`{"t":"begin","revision":R}`: room host on seat 0, no match running, two
+   participants, nobody away; on a `command-error` it tries again at the next roster change, five
+   times at most). Both Orcas learn the match id from `start`.
+6. Each game's result is read from the game's memory as its frames become final and reported by
+   both Orcas, the same bytes (below). Casual: each game is a `finish`, the room stays, and the host
+   begins the next match. Ranked: each game is a `game-report` (`g1`..`g7`); when one player has 2
+   agreed wins (`game-result` verdicts), both send `finish {winner}`; 7 games without that, `finish
+   {void}` ("limit"). The room settles each report by agreement (a mismatch, detail included, is
+   void) and rates the set once.
+7. A ranked room closes with 4004 "match-over" after its result: a clean end. The host prints
+   `orca state friend-left match-over` and opens a fresh private room (never the closed code); the
+   joiner prints `orca state host-left match-over`, moves to port 1 and opens its own room too.
+
+Leaving: `leave` in a ranked set is a forfeit (the room's rule, 15 s). The survivor of a ranked set
+whose opponent went (the room still holds a match without a verdict) stays in the room with no
+session until the room's verdict (a forfeit or void, then 4004) or 30 s, then opens a room of its
+own. In casual the host leaves the queue's room for a fresh private one as soon as the opponent is
+gone. A desync voids the match in progress (`finish {void}`) before the players part.
+
+### Lines
+
+| stdin | |
+|---|---|
+| `host <code>` | With `caps host`: host the matched room (above). An invalid code, or a game that isn't alone: `unsupported host`. |
+| `queue-cancel` | With `caps host`: the page's search ended; the overlay's search lines go. Nothing else changes. |
+
+| stdout | |
+|---|---|
+| `orca caps ... host results` | `results` only where the result reader is verified (Brawl rev 2, Project+); the room hears the results either way. |
+| `orca menu online casual\|ranked` | The pick, with `host` agreed (`... local` without). |
+| `orca menu cancel` | The player backed out of searching (above). |
+| `unsupported host` | The `host` was refused. |
+| `orca result <json>` | With `results` agreed: the room's verdict, when it arrives (not at this Orca's own read). At most 300 bytes. |
+| `orca state friend-left match-over` / `orca state host-left match-over` | A ranked room closed after its result. |
+
+`orca result` shapes (the local player first; `n` the game's number in the casual pairing or the
+ranked set; `score` agreed wins; `d` the agreed detail):
+- casual game: `{"q":"casual","k":"game","n":3,"out":"won"|"lost"|"draw"|"void","why"?:"mismatch"|"nocontest"|"ports"|"unrecorded"|"desync","d"?:{"st":2,"c":[mine,theirs],"s":[mine,theirs],"to":0|1}}`
+- ranked game: `{"q":"ranked","k":"game","n":2,"out":...,"why"?:...,"score":[mine,theirs],"d"?:{...}}`
+- ranked set: `{"q":"ranked","k":"set","out":"won"|"lost"|"void","by":"games"|"forfeit","why"?:"desync"|"limit"|"unrecorded","score":[mine,theirs],"r"?:[before,after],"rank"?:"<24 chars>"}`
+
+The overlay toasts the same: "You won game 2 · 1–1", "You won the set 2–1", "Opponent left: you
+win the set", "This set doesn't count".
+
+### Room messages (queue rooms only: the welcome's `room.queue` casual or ranked)
+
+- Read: `room.queue`, `room.stay` (welcome); `participants` (`id`, `connectionId`, `slot`),
+  `players` (`away`), `revision`, `matchId`, `host` (welcome, join, leave, back, away, lobby, start).
+  The page's mirror (`mpRoom`) carries the real `queue` and `matchId`.
+- Sent, both Orcas the same bytes: ranked `{"t":"game-report","matchId":M,"id":"g<n>","winner":"<participant id>","detail":D}`
+  (or `"draw":true,"detail":D`, or `"void":true`); casual `{"t":"finish","matchId":M,"winner":...,"detail":D}`;
+  a ranked set `{"t":"finish","matchId":M,"winner":"<id>"}` or `{"t":"finish","matchId":M,"void":true}`.
+  D is `{"f":F,"st":S,"c":[c1,c2],"s":[s1,s2],"to":0|1}`, integers in port order, these keys in
+  this order: F the session frame of the first final results-screen reading (the same on both
+  machines), S the stage, c the characters, s the stocks left (-1 in a timed match), to the fight
+  ran out of time. A report waits for the room's match (60 s at most). Friends rooms never begin
+  or report.
+- Handled: `start` (the match id), `game-result` (a ranked game's verdict: the set's tally),
+  `result` (a set's or a casual game's verdict), `command-error` (logged; a refused begin tries
+  again), the socket's 4004 close.
+
+### Results (`Core/Orca/UX/Results.*`, read only)
+
+At every frame boundary, first runs and re-runs, the frame hook stores a small reading of the
+frame just run: the scene (`scMelee` the fight, `scMemoryChange` between scenes, `scVsResult` the
+results screen) and, on the results screen, the result info. OnlineMatch consumes the readings in
+frame order once their frames are final (`Session::ConfirmedFrame`, at a boundary that isn't a
+re-run, so every rollback has been re-run), so both machines see the same readings: a re-run's
+reading replaces the guess, and nothing is written to the game. A game is a fight entered at a frame
+after the opponent's plug frame (the same on both machines: a fight running when the joiner dropped
+in never counts), ended by the results screen (its verdict) or by any other scene (void
+"nocontest"); back into the fight from between scenes (sudden death) is the same game. Going solo
+or loading a keyframe forgets everything read (`Events::NoteResync`).
+
+The verdict: exactly two human players on ports 1 and 2 (else void "ports": a CPU, a third port),
+a fight that ended normally (the pause menu's L+R+A+Start is void "nocontest"), one of them placed
+first (a win; both first, a draw). Port s is seat s and room slot s, which names the participant.
+
+Where (Brawl rev 2; Project+ runs the same executable), from the probes (ORCA_UX_PROBE dumps of
+scripted matches won by each port, a timed match, a quit, two stages):
+- g_GameGlobal `0x805A00E0` -> `0x90181300`: +0x08 gmGlobalModeMelee (`0x90180F20`: +0x1B the
+  stage, +0x20 the time limit in frames, +0x98 the players' init data, 4 x 0x5C: +0x00 character,
+  +0x01 player type 0 human / 1 CPU / 3 none, +0x04 starting stocks, 0xFF in a timed match);
+  +0x18 the result info (`0x9017F420`); +0x1C the rules (`0x9017F360`).
+- The result info, filled as the fight ends (before the results screen's first frame): +0x01 mode
+  (0 time, 1 stock), +0x04 time limit (minutes, u32), +0x08 stocks (u32), +0x0C the stage (u16),
+  +0x0E how the fight ended (u16: 1 normally, by stocks or time; 2 no contest). One record per port
+  at +0x24 + port x 0x2AC: +0x00 character, +0x01 player type, +0x0A stocks left (0xFF timed),
+  +0x0E place (0 first; a 1v1's loser 1), +0x10 KOs (u32), +0x14 falls (u32), +0x18
+  self-destructs (u16).
+- The rules (gmSetRule): +0x02 mode (0 time, 1 stock), +0x03 a timed match's minutes, +0x04
+  stocks, +0x08 a stock match's time limit in minutes (0 none), +0x0C item frequency (0 none). The
+  game copies them into gmGlobalModeMelee when a match starts, so a write on the character select
+  holds for the next match. The fresh save's defaults (a session's empty NAND): a 2-minute timed
+  match, 3 stocks, items on. Project+'s: 4 stocks, 8:00, items off.
+
+Checked: the harness (`YG_RESULTS=1` logs each game as the reader sees it) on Brawl wins by port 1
+and port 2, a timed match, a pause-menu quit (void "nocontest") and Project+'s scripted 1v1, the
+latter also under `YG_SYNCTEST=7` (0 RAM mismatches, the same result); `OrcaResults*` and
+`OrcaRankedSet*` unit tests; `Tools/orca/queue-e2e.mjs`.
+
+### Tests
+
+`Tools/orca/queue-e2e.mjs <nogui> <disc> [--pplus <dol>] [--queue ranked|casual] [--scenario cancel]`:
+two headless Orcas (one for `cancel`), each behind a stand-in for the desktop app's bridge that
+plays the page's part exactly (caps, Orca's own tickets, the queue ticket and `/match`,
+`host`/`join`, the `match_room` rewrite) and serves the app's controller stream, whose pad the
+script presses through the menus, the character select and the stage; in the fight port 2 walks off
+the stage until it has no stocks left. It checks the stdout sequence and that both Orcas print the
+same verdicts, each from its side. Dev tickets by default (nothing recorded); `--slug <listing>
+--cookie-a/--cookie-b <file> --id-a/--id-b <id>` uses real tickets as two signed-in players.
+Under `flock orca-run.lock`, never while Luis plays.
 
 ## Embedding
 
@@ -1467,6 +1609,7 @@ window (layout, scroll, resize, full screen). Moving, minimizing or hiding the w
 | `reset` | The console's reset button. Answers `unsupported reset` in a session or before the game runs. |
 | `prepare-join` | The host invited a friend to drop in. It calls `Orca::Online::PrepareJoin()`: the next frame boundary captures a keyframe ("Drop-in"). |
 | `join <code>` / `leave` | With `caps join` / `caps leave`: into a friend's game, or out of one ("Drop-in"). Both are also taken while a launch join waits for the keyframe. |
+| `host <code>` / `queue-cancel` | With `caps host` (Orca 0.4.0 on): host the room the queue matched this game into, or the search ended ("Matchmaking"). `unsupported host` when refused. |
 | `direct on` / `direct off` | With `caps direct` (Orca 0.3.9 on): the player's switch for direct links to the other players ("Direct links"). On until the app says; the choice stays for the run and applies while the `caps` line has `direct`. `off` drops every link at the room's next tick and sends every input through the relay (as YouGame's ticket switch does); `on` builds them anew. The `orca stats` line's `tx` shows the path in use. Anything else answers `unsupported direct`. |
 | `delay auto` / `delay N` | With `caps delay` (Orca 0.3.5 on): this player's input delay. `N` from 1 to 6 frames is exactly that, never adapted; `auto` is the adaptive delay ("Input delay" below). The choice stays for the run, so it may come before a session and holds for every session after; until the app's `caps` line turns `delay` on, it waits. Mid-match it applies from this player's next frame and the friend needs nothing: each player's delay is its own, and every input travels explicitly. Anything else answers `unsupported delay`. The `orca stats` line's `delay` is the delay in use. |
 | `quit` | Stops at once (no power-button shutdown, also outside a session), then exits. |
@@ -1484,7 +1627,8 @@ Any other line goes to stderr. The app's `EMBED_COMMAND` filter must add `blur` 
 | `orca click` | Windows only: a mouse button (left, right or middle) went down on Orca's window, once per press. The page never sees that click, so the app hands it over: it focuses its window and page, and the page treats it as a press on the box. That means taking DOM focus off whatever had it (a chat field would otherwise keep the keys, since `webContents.focus()` gives it back) and sending `focus`. Do it on every `orca click`, even when the page thinks the game already has the input: Chromium may count a click on another process's child window as its own window losing activation. Orca changes nothing itself on a click. In and out of a session, with no cap: every app forwards the `orca` lines it doesn't know to the page, which ignores them. On macOS the click reaches the page itself ("Focus"). |
 | `error <sentence>` | Something failed: bad arguments, the view couldn't open, the game didn't boot. Each `orca error` also gets an `error` twin. |
 | `orca state <state>` / `orca error <code> <sentence>` | Session status (`Core/Orca/Status.h`). New states, such as drop-in's `joining`, `friend-joined` and `no-room`, come through unchanged: forward every line that starts with `orca `. |
-| `orca menu <event>` | The player picked something in the game's own Online menu: `online casual local`, `online ranked local`, `online friends` ("Online menu"). An event, printed once per pick, only while the player's game is alone. |
+| `orca menu <event>` | The player picked something in the game's own Online menu: `online casual`, `online ranked` (with `caps host`; `... local` without), `online friends`, or backed out of searching: `cancel` ("Online menu", "Matchmaking"). An event, printed once per pick, only while the player's game is alone. |
+| `orca result <json>` | With `caps results`: a matchmade room's verdict on a game or a ranked set ("Matchmaking"). |
 | `exit <code>` | Always the last line, on every exit path: 0 after a normal stop, 1 after a reported error, 2 for bad arguments. |
 
 Embedded, Orca keeps fd 1 for the protocol and points the process's stdout at stderr. So the Dolphin

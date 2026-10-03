@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -199,6 +200,33 @@ public:
 private:
   struct Impl;
   std::unique_ptr<Impl> m_impl;
+};
+
+// A ranked set's tally (ORCA.md "Matchmaking"; exposed for tests): the room's game verdicts in
+// order, and the set's end once one player has won SET_WINS games, or SET_GAMES games passed
+// without that (void, "limit"). Both players' Orcas see the same verdicts, so both end the set the
+// same way.
+class SetTally
+{
+public:
+  static constexpr int SET_WINS = 2;
+  static constexpr int SET_GAMES = 7;
+  struct End
+  {
+    // The set's winner (a participant id); empty: the set is void.
+    std::string winner;
+    std::string why;
+  };
+  // One game's verdict: its winner's participant id, or "" for a draw or a void game. The set's
+  // end, once (nothing after it).
+  std::optional<End> Game(const std::string& winner);
+  int Wins(const std::string& id) const;
+  void Reset();
+
+private:
+  std::map<std::string, int> m_wins;
+  int m_games = 0;
+  bool m_ended = false;
 };
 
 // Packets as room messages (exposed for tests).
