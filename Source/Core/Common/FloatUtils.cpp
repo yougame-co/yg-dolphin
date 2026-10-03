@@ -156,25 +156,33 @@ double ApproximateReciprocal(double val)
   const s64 sign = integral & (1ULL << 63);
   s64 exponent = integral & (0x7FFLL << 52);
 
+  // Orca: the sign goes on with integer operations, not std::copysign. Clang builds copysign's
+  // 0x7FFF... mask on ARM64 as FNEG of all ones, a NaN, and under FPCR.AH (set while the guest's
+  // non-IEEE mode is, on an AFP CPU such as an Apple M4) FNEG leaves a NaN's sign alone: the mask
+  // came out all ones and fres(-0.0) returned +inf in the interpreter there.
+  const auto with_sign = [sign](double magnitude) {
+    return std::bit_cast<double>(std::bit_cast<s64>(magnitude) | sign);
+  };
+
   // Special case 0
   if (mantissa == 0 && exponent == 0)
-    return std::copysign(std::numeric_limits<double>::infinity(), val);
+    return with_sign(std::numeric_limits<double>::infinity());
 
   // Special case NaN-ish numbers
   if (exponent == (0x7FFLL << 52))
   {
     if (mantissa == 0)
-      return std::copysign(0.0, val);
+      return with_sign(0.0);
     return MakeQuiet(val);
   }
 
   // Special case small inputs
   if (exponent < (895LL << 52))
-    return std::copysign(std::numeric_limits<float>::max(), val);
+    return with_sign(std::numeric_limits<float>::max());
 
   // Special case large inputs
   if (exponent >= (1149LL << 52))
-    return std::copysign(0.0, val);
+    return with_sign(0.0);
 
   exponent = (0x7FDLL << 52) - exponent;
 

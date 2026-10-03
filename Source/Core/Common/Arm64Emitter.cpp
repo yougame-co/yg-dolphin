@@ -3180,6 +3180,14 @@ void ARM64FloatEmitter::FMIN(u8 size, ARM64Reg Rd, ARM64Reg Rn, ARM64Reg Rm)
 {
   EmitThreeSame(0, 2 | size >> 6, 0b11110, Rd, Rn, Rm);
 }
+void ARM64FloatEmitter::FMAXNM(u8 size, ARM64Reg Rd, ARM64Reg Rn, ARM64Reg Rm)
+{
+  EmitThreeSame(0, size >> 6, 0b11000, Rd, Rn, Rm);
+}
+void ARM64FloatEmitter::FMINNM(u8 size, ARM64Reg Rd, ARM64Reg Rn, ARM64Reg Rm)
+{
+  EmitThreeSame(0, 2 | size >> 6, 0b11000, Rd, Rn, Rm);
+}
 void ARM64FloatEmitter::FCVTL(u8 size, ARM64Reg Rd, ARM64Reg Rn)
 {
   Emit2RegMisc(false, 0, size >> 6, 0x17, Rd, Rn);

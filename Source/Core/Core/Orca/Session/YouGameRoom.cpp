@@ -1454,8 +1454,6 @@ struct YouGameRoom::Impl
           picojson::object d;
           d["k"] = picojson::value("hello");
           d["c"] = picojson::value(options.compatibility);
-          if (!options.platform.empty())
-            d["pf"] = picojson::value(options.platform);
           d["r"] = picojson::value(peer.heard);
           d["h"] = picojson::value(!joining);
           SendTo(id, d);
@@ -1760,19 +1758,9 @@ struct YouGameRoom::Impl
     }
     if (kind == "hello")
     {
-      // A game whose players must share a float class (Online.cpp FloatClass), on another one: not
-      // a player of this game, and a joiner says why and plays on alone.
-      if (const std::string their_platform = Str(d, "pf");
-          !options.platform.empty() && !their_platform.empty() && their_platform != options.platform)
-      {
-        WARN_LOG_FMT(NETPLAY, "Orca room: {} computes floating point differently ({}, here {})", id,
-                     their_platform, options.platform);
-        // Only the host's hello: another joiner of the wrong class is refused by the host, and must
-        // not take this one, who plays the host's game, out of it.
-        if (joining && id == host)
-          End("This game can't be played between your computers yet", "platform_mismatch");
-        return;
-      }
+      // A hello's "pf" (a float class, sent by 0.3.4 builds for Project+) is ignored: every Mac and
+      // PC computes the same game now (Online.cpp CompatibilityKey), and a build that differs in
+      // how has another compatibility key.
       if (Str(d, "c") != options.compatibility)
       {
         // Not a player of this game; a joiner can't play it at all.
