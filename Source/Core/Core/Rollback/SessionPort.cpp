@@ -142,11 +142,13 @@ void RingPort::ResetPacing()
   m_system.GetCoreTiming().ResetThrottleToNow();
 }
 
-Orca::Net::Step StepSession(Orca::Net::Session& session, RingPort& port, int completed_frame,
-                            const Orca::Net::Pad& local_pad, const std::function<bool()>& stopping,
+Orca::Net::Step StepSession(Orca::Net::Session& session, Orca::Net::Game& game, int completed_frame,
+                            const std::function<Orca::Net::Pad()>& sample_local,
+                            const std::function<bool()>& stopping,
                             std::chrono::microseconds stall_wait,
                             std::chrono::milliseconds give_up_after, bool* gave_up)
 {
+  Orca::Net::Pad local_pad = sample_local();
   bool waited = false;
   std::optional<std::chrono::steady_clock::time_point> held_since;
   std::chrono::steady_clock::time_point last_poll;
@@ -175,12 +177,14 @@ Orca::Net::Step StepSession(Orca::Net::Session& session, RingPort& port, int com
         return {Orca::Net::StepKind::Ended, step.frame};
       std::this_thread::sleep_for(FRAME_PERIOD);
       waited = true;
+      // The wait came before this boundary sampled anything: its frame plays the pad read now.
+      local_pad = sample_local();
       continue;
     }
     if (step.kind != Orca::Net::StepKind::Stall)
     {
       if (waited)
-        port.ResetPacing();
+        game.ResetPacing();
       return step;
     }
     if (stopping() || held_too_long())

@@ -923,7 +923,7 @@ void LoopbackBoundary(Core::System& system, int frame_here, bool first_pass)
   bool ran_past_recording = false;
   bool gave_up = false;
   const Orca::Net::Step step = StepSession(
-      *run.session, *run.port, frame_here - 1, local,
+      *run.session, *run.port, frame_here - 1, [&local] { return local; },
       [&] {
         // The remote player keeps playing while this one waits, until its recording runs out.
         ran_past_recording = run.remote->Exhausted();
