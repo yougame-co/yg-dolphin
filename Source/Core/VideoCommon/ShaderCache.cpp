@@ -83,6 +83,11 @@ void ShaderCache::Reload()
 {
   WaitForAsyncCompiler();
   ClosePipelineUIDCache();
+  // Orca: the EFB copy pipelines in use are compiled again now, not at their next copy (ORCA.md,
+  // "Match start").
+  std::vector<TextureConversionShaderGen::TCShaderUid> efb_copy_uids;
+  for (const auto& [uid, pipeline] : m_efb_copy_to_vram_pipelines)
+    efb_copy_uids.push_back(uid);
   ClearCaches();
 
   if (!CompileSharedPipelines())
@@ -90,6 +95,8 @@ void ShaderCache::Reload()
 
   if (g_ActiveConfig.bShaderCache)
     LoadCaches();
+  for (const auto& uid : efb_copy_uids)
+    GetEFBCopyToVRAMPipeline(uid);
 
   // Switch to the precompiling shader configuration while we rebuild.
   m_async_shader_compiler->ResizeWorkerThreads(g_ActiveConfig.GetShaderPrecompilerThreads());
@@ -890,7 +897,11 @@ void ShaderCache::LoadEFBCopyUIDCache()
     {
       TCShaderUid uid;
       while (in.ReadBytes(uid.GetUidData(), sizeof(UidData)))
-        uids.push_back(uid);
+      {
+        // An entry no copy can have (a damaged file) is left out.
+        if (static_cast<u32>(uid.GetUidData()->dst_format) <= static_cast<u32>(EFBCopyFormat::XFB))
+          uids.push_back(uid);
+      }
     }
   }
   // Compiled now, before the first frame; a broken or unknown entry only costs its compile.
