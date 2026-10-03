@@ -537,6 +537,7 @@ add_library(core
   Orca/UX/Controllers.h
   Orca/UX/ControllerSource.cpp
   Orca/UX/ControllerSource.h
+  Orca/UX/FreeSpace.h
   Orca/UX/GamePatches.cpp
   Orca/UX/GamePatches.h
   Orca/UX/MenuText.cpp
