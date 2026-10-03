@@ -301,8 +301,9 @@ void ShaderCache::WaitForBootCompile()
   const double seconds = std::chrono::duration<double>(Clock::now() - start).count();
   if (done)
   {
-    NOTICE_LOG_FMT(VIDEO, "Orca: compiled {} pipelines ({} ubershader) before the first frame in "
-                          "{:.1f} s",
+    NOTICE_LOG_FMT(VIDEO,
+                   "Orca: compiled {} pipelines ({} ubershader) before the first frame in "
+                   "{:.1f} s",
                    total, first_uber, seconds);
   }
   else
@@ -994,8 +995,8 @@ void ShaderCache::LoadEFBCopyUIDCache()
   {
     File::IOFile in(filename, "rb");
     u32 header[3] = {};
-    if (in && in.ReadArray(header, 3) && header[0] == EFB_COPY_UID_MAGIC && header[1] == EFB_COPY_UID_VERSION &&
-        header[2] == sizeof(UidData))
+    if (in && in.ReadArray(header, 3) && header[0] == EFB_COPY_UID_MAGIC &&
+        header[1] == EFB_COPY_UID_VERSION && header[2] == sizeof(UidData))
     {
       TCShaderUid uid;
       while (in.ReadBytes(uid.GetUidData(), sizeof(UidData)))
@@ -1016,8 +1017,8 @@ void ShaderCache::LoadEFBCopyUIDCache()
 void ShaderCache::OpenEFBCopyUIDCache()
 {
   // Written again whole (drops a torn last entry), then appended to as new copies show up.
-  const std::string filename = File::GetUserPath(D_CACHE_IDX) +
-                               SConfig::GetInstance().GetGameID() + ".efbcopy.uidcache";
+  const std::string filename =
+      File::GetUserPath(D_CACHE_IDX) + SConfig::GetInstance().GetGameID() + ".efbcopy.uidcache";
   if (!m_efb_copy_uid_cache_file.Open(filename, "wb"))
     return;
   const u32 header[3] = {EFB_COPY_UID_MAGIC, EFB_COPY_UID_VERSION,
