@@ -664,9 +664,13 @@ Ishiiruka, slippi-rust-extensions):
   - `ORCA_DIRECT=0` (a test switch) builds no links and offers none in the hello.
   - While switched off an Orca still says in its hello that it can link, and ignores the other
     side's offers, so switching back on needs nothing from the other player.
+  - All of these but `ORCA_DIRECT=0` are 0.3.9 on. Orca 0.3.8 (`da855207e2`, the first release
+    with direct links) ignores the ticket's `direct` and has no `direct` cap (nor the flood limit,
+    the mint backoff, the generation fix or `OneLan`). While 0.3.8 is the current release, links
+    go off for everyone only by making another version current (0.3.7 is relay only).
 - **Logs** never carry addresses, candidates or credentials: libjuice's own lines go to the
   NETPLAY log (never stdout, which the app parses) with addresses taken out.
-  - Embedded in the app (`--embed`), the NETPLAY and ROLLBACK logs are on at INFO from 0.3.8
+  - Embedded in the app (`--embed`), the NETPLAY and ROLLBACK logs are on at INFO from 0.3.9
     (`MainNoGUI.cpp`; the packaged Logger.ini has both off at NOTICE), so the per-game log under
     the app's `orca/logs` has the room's, the links' and the match's lines. "seat N sends over 300
     packets a second" during a catch-up is expected.
@@ -1269,7 +1273,7 @@ window (layout, scroll, resize, full screen). Moving, minimizing or hiding the w
 | `reset` | The console's reset button. Answers `unsupported reset` in a session or before the game runs. |
 | `prepare-join` | The host invited a friend to drop in. It calls `Orca::Online::PrepareJoin()`: the next frame boundary captures a keyframe ("Drop-in"). |
 | `join <code>` / `leave` | With `caps join` / `caps leave`: into a friend's game, or out of one ("Drop-in"). Both are also taken while a launch join waits for the keyframe. |
-| `direct on` / `direct off` | With `caps direct` (Orca 0.3.8 on): the player's switch for direct links to the other players ("Direct links"). On until the app says; the choice stays for the run and applies while the `caps` line has `direct`. `off` drops every link at the room's next tick and sends every input through the relay (as YouGame's ticket switch does); `on` builds them anew. The `orca stats` line's `tx` shows the path in use. Anything else answers `unsupported direct`. |
+| `direct on` / `direct off` | With `caps direct` (Orca 0.3.9 on): the player's switch for direct links to the other players ("Direct links"). On until the app says; the choice stays for the run and applies while the `caps` line has `direct`. `off` drops every link at the room's next tick and sends every input through the relay (as YouGame's ticket switch does); `on` builds them anew. The `orca stats` line's `tx` shows the path in use. Anything else answers `unsupported direct`. |
 | `delay auto` / `delay N` | With `caps delay` (Orca 0.3.5 on): this player's input delay. `N` from 1 to 6 frames is exactly that, never adapted; `auto` is the adaptive delay ("Input delay" below). The choice stays for the run, so it may come before a session and holds for every session after; until the app's `caps` line turns `delay` on, it waits. Mid-match it applies from this player's next frame and the friend needs nothing: each player's delay is its own, and every input travels explicitly. Anything else answers `unsupported delay`. The `orca stats` line's `delay` is the delay in use. |
 | `quit` | Stops at once (no power-button shutdown, also outside a session), then exits. |
 

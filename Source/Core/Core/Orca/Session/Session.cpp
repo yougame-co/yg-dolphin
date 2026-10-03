@@ -34,7 +34,7 @@ namespace
 //   a need: the least delay at which, as far as it shows, the others would not have stalled on
 //   this player's inputs (the delay the input a stall waited on carried, plus the frames that
 //   would have spared it; for a stall longer than SPARED_FRAMES, more than any raise gives; a
-//   player that reports no lengths, before 0.3.8: a frame more). A raise of k frames is worth it
+//   player that reports no lengths, before 0.3.9: a frame more). A raise of k frames is worth it
 //   once it would have spared stalls in RAISE_SPARED windows per frame of the last NEED_WINDOWS
 //   (none from before the last step down): a frame on every input, from then on, against a stall
 //   saved every five or six seconds. The delay then rises a frame, and the next window judges the
@@ -920,7 +920,7 @@ void Session::AdaptDelay()
   // them reached max_rollback within the last EDGE_WINDOWS): one that stalled on a third player's
   // inputs is that player's to answer. A stall over within k frames needs k frames more than the
   // inputs it waited on carried; a longer one, more than any raise could give. A player that
-  // reports no lengths (before 0.3.8): a frame more. No window holds more stalls than frames (a
+  // reports no lengths (before 0.3.9): a frame more. No window holds more stalls than frames (a
   // hostile count included).
   int need = NO_NEED;
   for (int s = 0; s < m_config.seats; ++s)
