@@ -134,6 +134,12 @@ GCPadStatus Apply(const GCPadStatus& pad, const Mask& mask)
     out.substickX = GCPadStatus::C_STICK_CENTER_X;
     out.substickY = GCPadStatus::C_STICK_CENTER_Y;
   }
+  const u16 press = mask.press & ALL_BUTTONS;
+  out.button = static_cast<u16>(out.button | press);
+  if (press & PAD_BUTTON_A)
+    out.analogA = 0xFF;
+  if (press & PAD_BUTTON_B)
+    out.analogB = 0xFF;
   return out;
 }
 

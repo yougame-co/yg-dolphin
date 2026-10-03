@@ -372,11 +372,16 @@ std::string TestGateSpec()
   return SessionActive() ? GetEnv("ORCA_TEST_GATE") : std::string();
 }
 
+std::string TestRankedSpec()
+{
+  return SessionActive() ? GetEnv("ORCA_TEST_RANKED") : std::string();
+}
+
 bool TestOverridesActive()
 {
   return TestPads() != 0 || TestSkipRender() || TestNetDelayMs().has_value() ||
          TestSnapshotEvery() != 0 || TestFullSnapshots() || TestNoAfp() ||
-         TestCpuCore().has_value() || !TestGateSpec().empty();
+         TestCpuCore().has_value() || !TestGateSpec().empty() || !TestRankedSpec().empty();
 }
 
 const Sram* SessionSram()

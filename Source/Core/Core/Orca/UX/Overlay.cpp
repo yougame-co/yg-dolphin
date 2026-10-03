@@ -307,6 +307,9 @@ OverlayModel::Frame OverlayModel::View(double now_ms, Stats stats, Perf perf) co
 
 namespace
 {
+std::mutex s_rules_lock;
+std::string s_rules_line;
+std::string s_rules_note;
 OverlayModel s_overlay;
 std::atomic<Stats> s_stats{Stats::Off};
 // On until the app says otherwise (Luis wants it while testing).
@@ -425,8 +428,14 @@ void Draw()
                                                s_perf.load(std::memory_order_relaxed));
   // The matchmaking search (UX/OnlineMenu.h), while the player waits on the character select.
   const auto [search, search_note] = Search::Lines();
+  std::string rules, rules_note;
+  {
+    std::lock_guard lk(s_rules_lock);
+    rules = s_rules_line;
+    rules_note = s_rules_note;
+  }
   if (!f.show_signal && f.waiting.empty() && f.toasts.empty() && f.stats.empty() &&
-      f.perf.empty() && search.empty())
+      f.perf.empty() && search.empty() && rules.empty() && rules_note.empty())
   {
     return;
   }
@@ -497,12 +506,38 @@ void Draw()
       OutlinedText(dl, size, ImVec2((screen.x - n.x) / 2, line_y), 1, search_note, Signal::Ok);
     }
   }
+  if (!rules.empty() || !rules_note.empty())
+  {
+    // Top centre too (the search lines are gone once the opponent is in).
+    const float size = 3.0f * unit;
+    float line_y = margin;
+    if (!search.empty())
+      line_y += 2 * (TextSize(size, search).y + 0.5f * unit);
+    if (!rules.empty())
+    {
+      const ImVec2 s = TextSize(size, rules);
+      OutlinedText(dl, size, ImVec2((screen.x - s.x) / 2, line_y), 1, rules);
+      line_y += s.y + 0.5f * unit;
+    }
+    if (!rules_note.empty())
+    {
+      const ImVec2 n = TextSize(size, rules_note);
+      OutlinedText(dl, size, ImVec2((screen.x - n.x) / 2, line_y), 1, rules_note, Signal::Ok);
+    }
+  }
 }
 }  // namespace
 
 OverlayModel& Overlay()
 {
   return s_overlay;
+}
+
+void SetRulesLines(std::string line, std::string note)
+{
+  std::lock_guard lk(s_rules_lock);
+  s_rules_line = std::move(line);
+  s_rules_note = std::move(note);
 }
 
 void SetStats(Stats stats)

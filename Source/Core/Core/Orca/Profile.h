@@ -165,6 +165,9 @@ bool TestNoAfp();
 std::optional<PowerPC::CPUCore> TestCpuCore();
 std::optional<int> TestShaderWaitMs();
 std::string TestGateSpec();  // ORCA_TEST_GATE in a session, else empty
+// ORCA_TEST_RANKED in a session, else empty: `brawl` plays every Brawl game as a ranked set's
+// (UX/BrawlStages.h), until the match block's header says so in production.
+std::string TestRankedSpec();
 bool TestOverridesActive();
 
 // Loads the profile for a game; nullopt and a reason when there is none, the revision differs or a

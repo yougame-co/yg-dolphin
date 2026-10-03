@@ -10,6 +10,7 @@
 
 #include "Common/Logging/Log.h"
 #include "Core/Orca/Session/Events.h"
+#include "Core/Orca/UX/BrawlStages.h"
 #include "Core/Orca/UX/ControllerSource.h"
 #include "Core/Orca/UX/GamePatches.h"
 #include "Core/Orca/UX/MenuText.h"
@@ -47,6 +48,8 @@ void Init()
     // A host that just took a matchmade room presets Brawl's rules, alone, before any keyframe.
     if (!resimulating)
       ApplyQueueRules(guard, alone);
+    // A ranked set's stage flow on vanilla Brawl's stage select (a pure function of memory).
+    BrawlStages::FrameHook(guard, resimulating, ports);
     ProbeFrame(guard, frame);
     // This player's own controls in its own game, for the session to carry into a game it joins or
     // hosts (reads only; only while this game is its player's alone, so never a friend's game).
@@ -84,6 +87,12 @@ void Init()
     // snapshot saved here) decides the same and writes nothing new (GamePatches.h).
     ApplyToggledGamePatches(guard);
   });
+  // The input gate's masks for the frame about to run: every rule's, from memory (InputGate.h).
+  Rollback::InputGate::SetSource([](const Core::CPUThreadGuard& guard) {
+    Rollback::InputGate::Masks masks{};
+    BrawlStages::GateMasks(guard, &masks);
+    return masks;
+  });
   // Nothing is presented while the game waits for a friend: show the last frame again, with the
   // overlay's "Waiting for <name>..." on it.
   Orca::Events::SetStallCallback([](int stalled_ms) { RepresentDuringStall(stalled_ms); });
@@ -101,6 +110,7 @@ void Init()
 
 void Shutdown()
 {
+  Rollback::InputGate::SetSource({});
   Orca::Events::SetStallCallback({});
   Orca::Events::SetBoundaryCallback({});
   Orca::Events::SetFrameCallback({});
