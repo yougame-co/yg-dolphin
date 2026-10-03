@@ -32,8 +32,9 @@ namespace
 // records before it, so no bytecode is ever read back under another compile's key.
 constexpr u32 MAGIC = 0x4358464f;  // "OFXC"
 constexpr u32 FORMAT = 1;
-// A file past this starts over: the shaders of older builds pile up when the generators change.
-constexpr u64 MAX_FILE_SIZE = u64{128} << 20;
+// A file past this starts over: the shaders of older builds pile up when the generators change,
+// and the whole file is in memory (Luis's Brawl and P+ specialized shaders: about 8 MB of DXBC).
+constexpr u64 MAX_FILE_SIZE = u64{64} << 20;
 constexpr u32 MAX_RECORD_SIZE = u32{16} << 20;
 
 using Digest = Common::SHA1::Digest;

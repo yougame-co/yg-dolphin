@@ -1183,15 +1183,15 @@ characters, the stage, the countdown's effects). Orca sessions force (`Orca/Prof
   generators and GLSL-to-HLSL path write the same text gets its shaders without compiling; any
   change to the text, the flags or the compiler is another key, so a binary is only ever used for
   the compile that made it. Each record also carries a SHA-1 of its key and DXBC: a torn or
-  interleaved write ends the read and the file is written again from the records before it. One
-  file for every game, started over past 128 MB. No release from 0.3.4 to 0.3.9 changed a shader
-  generator, glslang, SPIRV-Cross or `D3DCommon/Shader.cpp`, while each touched other video files,
-  so a key on the generator sources or the VideoCommon tree would have lost the cache every time
-  and been only as safe as its file list. The log names every FXC compile of 250 ms or more ("Orca:
-  FXC compiled a ps_5_0 in N ms (K KB of HLSL, from GLSL in M ms; ...)") and, at shutdown, "Orca:
-  FXC cache: R shaders read from ..., F compiles found there, A compiled and added".
-  `ORCA_TEST_FXC_FLAGS=<hex>` replaces FXC's `D3DCOMPILE_*` flags (rendering only, not in the lobby
-  key), to time other optimization levels.
+  interleaved write ends the read and the file is written again from the records before it. One file
+  for every game, read whole into memory and started over past 64 MB. No release from 0.3.4 to 0.3.9
+  changed a shader generator, glslang, SPIRV-Cross or `D3DCommon/Shader.cpp`, while each touched
+  other video files, so a key on the generator sources or the VideoCommon tree would have lost the
+  cache every time and been only as safe as its file list. The log names every FXC compile of 250 ms
+  or more ("Orca: FXC compiled a ps_5_0 in N ms (K KB of HLSL, from GLSL in M ms; ...)") and, at
+  shutdown, "Orca: FXC cache: R shaders read from ..., F compiles found there, A compiled and
+  added". `ORCA_TEST_FXC_FLAGS=<hex>` replaces FXC's `D3DCOMPILE_*` flags (rendering only, not in
+  the lobby key), to time other optimization levels.
 
 Rendering only: nothing drawn reaches RAM (EFB/XFB copies stay on the GPU, EFB access and bbox are
 off), so none of this can make two players' games differ.
