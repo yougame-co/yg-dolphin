@@ -139,6 +139,53 @@ TEST(OrcaRoom, PacketRoundTrips)
   ExpectSame(bare, got);
 }
 
+// The host's port values travel in the room's "nm" and "kf" messages: names, the frame each
+// applies from, and a player's own controls; a joiner reads back exactly what the host holds.
+TEST(OrcaRoom, PortValuesRoundTrip)
+{
+  std::vector<u8> controls(46);
+  for (size_t i = 0; i < controls.size(); ++i)
+    controls[i] = static_cast<u8>(i * 7);
+  const std::vector<KeyframeInfo::Name> sent{
+      {0, 12, "luis", {}}, {1, 3600, "sandbox-ada", controls}, {0, 3601, "luis", controls}};
+  picojson::object message;
+  message["nm"] = NamesToJson(sent);
+  const std::string text = picojson::value(message).serialize();
+  picojson::value parsed;
+  ASSERT_TRUE(picojson::parse(parsed, text).empty());
+  EXPECT_EQ(NamesFromJson(parsed.get<picojson::object>()), sent);
+  // A port with no controls has no fourth element (as builds before them sent).
+  EXPECT_NE(text.find("[0,12,\"luis\"]"), std::string::npos) << text;
+
+  // Controls past MAX_CONTROLS bytes, or not hex, are none; the name stays.
+  const auto read = [](const std::string& json) {
+    picojson::value v;
+    EXPECT_TRUE(picojson::parse(v, json).empty()) << json;
+    return NamesFromJson(v.get<picojson::object>());
+  };
+  const std::string long_hex(2 * (MAX_CONTROLS + 1), 'a');
+  std::vector<KeyframeInfo::Name> got = read(R"({"nm":[[1,5,"ada",")" + long_hex + R"("]]})");
+  ASSERT_EQ(got.size(), 1u);
+  EXPECT_EQ(got[0].name, "ada");
+  EXPECT_TRUE(got[0].controls.empty());
+  got = read(R"({"nm":[[1,5,"ada","zz"],[2,6,"bo",7],[2,6,"bo","0a0b"]]})");
+  ASSERT_EQ(got.size(), 3u);
+  EXPECT_TRUE(got[0].controls.empty());
+  EXPECT_TRUE(got[1].controls.empty());
+  EXPECT_EQ(got[2].controls, (std::vector<u8>{0x0a, 0x0b}));
+  // Five elements, a bad seat: skipped.
+  EXPECT_TRUE(read(R"({"nm":[[1,5,"ada","00",1],[9,5,"x"]]})").empty());
+
+  // The players' acknowledgement of the newest values (Packet::values_ack).
+  Packet packet = Sample();
+  packet.values_ack = 7;
+  Packet back;
+  ASSERT_TRUE(DecodePacket(EncodePacket(packet), &back));
+  EXPECT_EQ(back.values_ack, 7);
+  EXPECT_FALSE(
+      DecodePacket(R"({"k":"p","s":1,"f":0,"c":0,"p":"","a":[-1,-1,-1,-1],"va":-3})", &back));
+}
+
 TEST(OrcaRoom, RejectsMalformedPackets)
 {
   Packet got;
