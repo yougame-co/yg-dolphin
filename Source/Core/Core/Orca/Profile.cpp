@@ -165,9 +165,14 @@ void ForEachUniversalSetting(F&& f)
   // of Project+'s and Slippi's Dolphin), and after a rollback the corrected frame is the one shown.
   // Host only: ImmediateSwap is skipped on re-run frames, the VI throttle it bypasses only sleeps
   // (VI skip is off under WantsDeterminism), and in single core SyncGPU does nothing. Brawl and P+
-  // make one XFB copy per frame, so CapImmediateXFB stays off. Smooth Early Presentation and Rush
-  // Frame Presentation stay at Dolphin's default (off): neither is measured in online play.
+  // make one XFB copy per frame, so CapImmediateXFB stays off.
   f(Config::GFX_HACK_IMMEDIATE_XFB, true);
+  // Smooth Early Presentation evens out Immediate XFB's present times for about 2 ms (ORCA.md, "Input
+  // latency"): in real-time loopbacks with rollbacks and link spikes a 60 Hz screen would repeat
+  // 0.7-2.1% of its refreshes and drop 1.5-3.0% of the frames, against 4.0-6.1% and 4.7-6.8%
+  // without it, and it costs the frames right after a stall no more than any other (a session
+  // never makes a stall's time up, so there is no catch-up for it to delay). Host only.
+  f(Config::MAIN_SMOOTH_EARLY_PRESENTATION, true);
   // VSync adds 2-19 ms at the glass with no pacing gain (a composited window never tears) and,
   // below 60 Hz, would let the screen slow the game: never on in a session, whatever GFX.ini says.
   f(Config::GFX_VSYNC, false);
@@ -658,7 +663,7 @@ std::string DescribeForcedSettings(const Profile& profile)
 {
   return fmt::format("Orca: profile {} rev {}{}: CPUThread={} CPUCore={} FMA={} RTC={}:{} "
                      "SI={},{},{},{} EFBToTexture={} XFBToTexture={} EFBAccess={} BBox={} "
-                     "ImmediateXFB={} VSync={}",
+                     "ImmediateXFB={} VSync={} SmoothEarlyPresentation={} AudioBufferSize={}",
                      profile.game_id, profile.revision,
                      TestOverridesActive() ? " (TEST overrides active, not for real sessions)" : "",
                      Config::Get(Config::MAIN_CPU_THREAD),
@@ -673,6 +678,8 @@ std::string DescribeForcedSettings(const Profile& profile)
                      Config::Get(Config::GFX_HACK_SKIP_XFB_COPY_TO_RAM),
                      Config::Get(Config::GFX_HACK_EFB_ACCESS_ENABLE),
                      Config::Get(Config::GFX_HACK_BBOX_ENABLE),
-                     Config::Get(Config::GFX_HACK_IMMEDIATE_XFB), Config::Get(Config::GFX_VSYNC));
+                     Config::Get(Config::GFX_HACK_IMMEDIATE_XFB), Config::Get(Config::GFX_VSYNC),
+                     Config::Get(Config::MAIN_SMOOTH_EARLY_PRESENTATION),
+                     Config::Get(Config::MAIN_AUDIO_BUFFER_SIZE));
 }
 }  // namespace Orca
