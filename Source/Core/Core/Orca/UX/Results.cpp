@@ -150,7 +150,10 @@ GameResult Judge(const ResultBlock& block, int frame)
 {
   GameResult g;
   g.frame = frame;
-  if (block.end != 1)
+  // A no contest: the decision still 9 (the fight's start value; the pause menu's quit leaves it).
+  // Without a decision read, the older reading: +0x0E..+0x0F other than 1 (it is the count of
+  // players tied for first, so this also voided a level time-up's sudden death).
+  if (block.decision == 9 || (block.decision == 0 && block.end != 1))
   {
     g.why = "nocontest";
     return g;

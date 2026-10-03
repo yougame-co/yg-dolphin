@@ -58,8 +58,10 @@ struct ResultBlock
 {
   int mode = -1;  // 0 time, 1 stock
   int stage = -1;
-  int end = 0;  // 1 normal, 2 no contest
-  int decision = 0;  // gmResultInfo +0x1378: 1 time up
+  // +0x0E..+0x0F: read as how the fight ended (1 normally, 2 a no contest) by the beta; it is the
+  // count of players tied for first (BrawlHeaders' m_numWinners at +0x0F).
+  int end = 0;
+  int decision = 0;  // gmResultInfo +0x1378: 1 time up, 2 a KO win, 9 no contest (0: not read)
   std::array<PortResult, 4> ports{};
   bool operator==(const ResultBlock&) const = default;
 };

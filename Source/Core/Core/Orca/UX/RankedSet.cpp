@@ -33,6 +33,7 @@ constexpr u32 RULE_MODE = 0x02;
 constexpr u32 RULE_STOCKS = 0x04;
 constexpr u32 RULE_STOCK_MINUTES = 0x08;
 constexpr u8 DECISION_TIME_UP = 1;
+constexpr u8 DECISION_NO_CONTEST = 9;
 
 u32 SetRule(const GuestMemory& m)
 {
@@ -71,9 +72,12 @@ u32 s_room_applied = 0;
 std::optional<GameRecord> Judge(Ruleset ruleset, const SetState& set, const ResultBlock& block,
                                 u8 decision)
 {
+  // A no contest is the decision's (9: it never changed from the fight's start, as when the pause
+  // menu quits); the result info's +0x0E..+0x0F is the count of players tied for first, 2 after a
+  // time-up level on stocks even when the sudden death that follows had a winner.
   const auto& p = block.ports;
-  if (block.end != 1 || !p[0].present || !p[1].present || !p[0].human || !p[1].human ||
-      p[2].present || p[3].present)
+  if (decision == DECISION_NO_CONTEST || !p[0].present || !p[1].present || !p[0].human ||
+      !p[1].human || p[2].present || p[3].present)
   {
     return std::nullopt;
   }

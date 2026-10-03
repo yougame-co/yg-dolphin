@@ -221,6 +221,7 @@ TEST(OrcaRankedSet, VoidGamesAreNotRecorded)
   EXPECT_EQ(s.games, 0);
   ResultBlock quit = Result(0, 1);
   quit.end = 2;
+  quit.decision = 9;
   s = Play(s, Ruleset::Brawl, 2000, quit);
   EXPECT_EQ(s.games, 0);
   // A fight left for the menus without its results screen.
@@ -330,6 +331,18 @@ TEST(OrcaRankedSet, BrawlTieMeansATiebreakGame)
 
 TEST(OrcaRankedSet, BrawlSuddenDeathInTheSameFightScene)
 {
+  // As a level time-up leaves the result info: two players tied for first (+0x0F), decision 1.
+  ResultBlock level = Result(0, 1, 1, 0);
+  level.end = 2;
+  level.decision = 1;
+  {
+    const RankedSet::Live gone{};
+    SetState s = Play({}, Ruleset::Brawl, 1000, level,
+                      {LiveAt(true, 1, 1, 12, 5), gone, LiveAt(false, 1, 1, 300, 300)});
+    EXPECT_EQ(s.games, 1);
+    EXPECT_EQ(s.records[0].how, How::Percent);
+    EXPECT_EQ(s.records[0].winner, 1);
+  }
   // Brawl's time-up sudden death stays in scMelee: the fighters are gone for a few frames, then
   // rebuilt with 1 stock each. Level stocks at time-up: the lower percent wins, whoever wins the
   // sudden death; and the ledge grabs after time-up don't count.
