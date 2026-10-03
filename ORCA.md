@@ -1299,8 +1299,12 @@ match in the same process compiles little (its blocks are still there).
   where the stage appears and 47 ms at 3.9 s; with it 31,544 of 32,625 compiled ahead (1,025 are
   Donkey Kong's and Final Destination's, not in RAM), 16 compiled by the game, worst VI 22.5 ms
   in the whole window, as the second launch (23.4 ms). Project+ with it: 28,031 of 28,054 ahead, 34
-  by the game, from frame 28 worst 23 ms (the second launch 21.4 ms). Two matches from the seed
-  (`bf-two-new.txt`): from frame 170 worst 21.3 and 21.4 ms. Headless, per-frame RAM hashes from
+  by the game, from frame 28 worst 23 ms (the second launch 21.4 ms; frames 0-27 had 87 and 84 ms,
+  behind the loading image, with 13 pipelines his UID cache didn't have). Two matches from the seed
+  (`bf-two-new.txt`): from frame 170 worst 21.3 and 21.4 ms, but match 1 had 91 and 76 ms at
+  2.3-2.4 s, where Brawl's stage appears, with 44 pipelines his UID cache didn't have and 16 blocks
+  compiled by the game: not the JIT, likely a new pipeline's first ubershader draw on Metal (the
+  next launch had none over 25 ms in either match). Headless, per-frame RAM hashes from
   the seed equal the 0.3.9 references (Brawl 10,739 frames, P+ 9,006, x86-64 with
   `ORCA_TEST_JITWARM_SLOW_US=28` and arm64), and so do synctests across the match start from the
   seed (4,851 re-run frames each) and the loopbacks (P+ 579 rollbacks, Brawl 789, 879 checksums).
