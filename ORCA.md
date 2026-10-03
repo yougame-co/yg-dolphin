@@ -661,12 +661,16 @@ Checks:
 - Input lag fix and relatch: whole scripted matches of both games still reach the results screen and
   character select again (scene changes move by 1-9 frames; the scripts count from scene entry and
   needed no change); sync tests (rewind 7, boot through menus, character and stage select into a
-  match; Brawl frames 300-4,500, P+ 150-3,000) with 0 RAM mismatches and no DoState section
-  (`YG_SYNCTEST_SECTIONS`) differing on re-runs that didn't already differ without the relatch, the
-  SerialInterface's included; drop-in keyframe tests at Brawl frames 700, 1,500, 1,700, 2,500 and
-  4,000 and P+ 250, 400 and 1,500; real-time loopback sessions (`YG_LOOPBACK` with `YG_THROTTLE=1`:
-  Brawl 289 rollbacks and P+ 387, deepest 6, 479 and 379 checksums matched); a two-Orca drop-in over
-  dev rooms (`dropin-commands.py`, both games: joins, leaves, rejoins, every checksum matched).
+  match; Brawl frames 300-4,500, P+ 150-3,000) with 0 RAM mismatches; real-time loopback sessions
+  (`YG_LOOPBACK` with `YG_THROTTLE=1`: Brawl 289 rollbacks and P+ 387, deepest 6, 479 and 379
+  checksums matched), where every rollback relatches the remote's corrected pads over mispredicted
+  ones; drop-in keyframe tests at Brawl frames 700, 1,500, 1,700, 2,500 and 4,000 and P+ 250, 400
+  and 1,500; a two-Orca drop-in over dev rooms (`dropin-commands.py`, both games: joins, leaves,
+  rejoins, every checksum matched). The relatch's evidence is those 0 RAM mismatches and the
+  loopbacks. The sync test's per-section device-state diff (`YG_SYNCTEST_SECTIONS`) can't show what
+  the relatch wrote: snapshots are taken before `RelatchInputs`, and the next poll overwrites
+  `in_hi`/`in_lo` before the next one. (No section differed on more re-runs than without the
+  relatch, the SerialInterface's included, which says only that much.)
 - P+'s keyframe test at frame 130 (the boot's save prompt) fails its re-run on 0.3.5 too (9 of 30
   frames): not from these changes.
 
