@@ -198,6 +198,7 @@ private:
   bool m_checked = false;
   bool m_enabled = false;
   int m_budget_us = BUDGET_US;
+  bool m_log_frames = false;  // ORCA_JITWARM_LOG=1: a line per frame boundary that compiled
   std::string m_path;
 
   // Scenes.
@@ -249,6 +250,7 @@ bool State::Enabled()
   m_enabled = SessionActive() && KnownGame() && GetEnv("ORCA_JITWARM") != "0";
   if (const std::string budget = GetEnv("ORCA_JITWARM_BUDGET_US"); !budget.empty())
     m_budget_us = std::clamp(std::atoi(budget.c_str()), 0, 100'000);
+  m_log_frames = GetEnv("ORCA_JITWARM_LOG") == "1";
   m_path = FilePath();
   if (m_enabled)
     NOTICE_LOG_FMT(ROLLBACK, "JIT warm-up: on ({}, {} us per frame)", m_path, m_budget_us);
@@ -433,6 +435,8 @@ void State::Warm(const Core::CPUThreadGuard& guard)
   const auto start = std::chrono::steady_clock::now();
   const auto deadline = start + std::chrono::microseconds(m_budget_us);
   bool compiled_here = false;
+  const int compiled_before = m_compiled, discarded_before = m_discarded;
+  int not_in_ram = 0;
   while (true)
   {
     if (m_cursor == m_order.size())
@@ -463,7 +467,10 @@ void State::Warm(const Core::CPUThreadGuard& guard)
       continue;
     }
     if (HashRanges(mem1, mem2, b.ranges) != b.hash)
+    {
+      ++not_in_ram;
       continue;  // not loaded (yet), or other code at that address this match
+    }
     if (m_attempts[index] >= MAX_ATTEMPTS)
     {
       status = Status::GivenUp;
@@ -523,6 +530,13 @@ void State::Warm(const Core::CPUThreadGuard& guard)
     if (m_first_frame < 0)
       m_first_frame = m_match_frame;
     m_last_frame = m_match_frame;
+    if (m_log_frames)
+    {
+      NOTICE_LOG_FMT(ROLLBACK,
+                     "JIT warm-up: frame {}: {} compiled, {} discarded, {} not in RAM, {:.2f} ms",
+                     m_match_frame, m_compiled - compiled_before, m_discarded - discarded_before,
+                     not_in_ram, ms);
+    }
   }
 }
 
