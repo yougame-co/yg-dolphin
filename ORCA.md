@@ -1308,7 +1308,8 @@ character select while a queue match's header says casual or ranked; friends gam
 ```
 when 9017B96C == 59474D31               # the word is 'YGM1'
 when 9017B970 & FF000000 != 00000000    # and its masked word isn't 0
-8119A124 4082000C 4800000C              # (an example) bne -> b while both hold
+8119A120 2C030000 2C030000              # (an example) cmpwi r3, 0 (guard)
+8119A124 4082000C 4800000C              # bne -> b while both hold
 end
 ```
 
@@ -1330,8 +1331,10 @@ end
 - Refused at load (the file is then "damaged", status `profile`): a `*` line in a block; a block
   with no lines; a `when` after a block's line (no nesting); an `end` without a `when`; a file that
   ends inside a block; a mask of 0, or a value with bits outside its mask; a condition that reads a
-  word the file writes (a toggle never switches its own condition, or another's). A group never
-  spans a `when` or an `end`.
+  word the file writes (a toggle never switches its own condition, or another's); a toggled group
+  of one word, or one that changes nothing. A toggled group writes on its values as well as on its
+  originals, so a lone word would match other code by chance twice as often as a guarded one: the
+  words around a flip go in as guards. A group never spans a `when` or an `end`.
 - Meant for branch flips in the game's own code; real code goes into a cave. Conditions read fixed
   addresses only (no pointer chains): the match block's header is meant to be at one.
 - Adding the kind changed nothing the shipped files write, so the UX version stays `ux=6`. A file

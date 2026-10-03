@@ -58,9 +58,12 @@ class CPUThreadGuard;
 // boundary, after every other writer of the frame hook, so a condition one of them sets is followed
 // at that same boundary, and the hook run again there (a re-run from the snapshot saved there)
 // writes nothing new. A group never spans a `when` or an `end`; blocks don't nest; a block holds
-// no `*` line and at least one line; a condition may not read a word the file writes (a toggle
-// never switches its own condition or another's). Meant for branch flips in the game's code while
-// an online mode is on (the match block's header says casual or ranked); real code goes in a cave.
+// no `*` line and at least one line; each toggled group has two words at least, one of them
+// changing (it writes on its values as well as its originals, so a lone word would match other
+// code by chance twice as often: the words around a flip go in as guards); a condition may not
+// read a word the file writes (a toggle never switches its own condition or another's). Meant for
+// branch flips in the game's code while an online mode is on (the match block's header says casual
+// or ranked); real code goes in a cave.
 namespace Orca::UX
 {
 class GuestMemory;  // NameTags.h

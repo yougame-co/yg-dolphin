@@ -86,6 +86,7 @@ const char* const FILE_WITH_TOGGLES = "# toggled while the header says an online
                                       "81001000 4082007C 4800007C     # bne -> b\n"
                                       "81001004 38600001 38600001     # guard only\n"
                                       "81001010 41820010 60000000     # beq -> nop\n"
+                                      "81001014 38000000 38000000     # guard only\n"
                                       "end\n"
                                       "81002000 11111111 22222222     # lands once\n"
                                       "9017B640 * 000003FF            # data, every frame\n";
@@ -97,6 +98,7 @@ Memory Booted(u32 mode)
   m.Write32(0x81001000, 0x4082007C);
   m.Write32(0x81001004, 0x38600001);
   m.Write32(0x81001010, 0x41820010);
+  m.Write32(0x81001014, 0x38000000);
   m.Write32(0x81002000, 0x11111111);
   m.Write32(0x9017B640, 0);
   m.Write32(MAGIC, YGM1);
@@ -113,31 +115,36 @@ TEST(OrcaGamePatches, ParsesWhenBlocks)
                        "81000000 4082007C 4800007C\n"
                        "81000004 38600001 38600001\n"
                        "81000010 11111111 22222222\n"
+                       "81000014 33333333 33333333     # a guard\n"
                        "end   # a comment\n"
-                       "81000014 33333333 44444444     # right after the block's last word\n"
+                       "81000018 44444444 55555555     # right after the block's last word\n"
                        "when 90001000 == 59474D31\n"
-                       "81000018 5 6                   # the same condition, a new block\n"
+                       "8100001C 5 6                   # the same condition, a new block\n"
+                       "81000020 7 7\n"
                        "end\n"
-                       "8100001C 7 8\n");
-  ASSERT_EQ(p.size(), 7u);
+                       "81000024 8 9\n");
+  ASSERT_EQ(p.size(), 9u);
   const std::vector<PatchCondition> when{{0x90001000, 0xFFFFFFFF, YGM1, true},
                                          {0x90001004, 0xFF000000, 0, false}};
+  const std::vector<PatchCondition> magic{{0x90001000, 0xFFFFFFFF, YGM1, true}};
   EXPECT_TRUE(p[0].when.empty());
-  EXPECT_EQ(p[1].when, when);
-  EXPECT_EQ(p[2].when, when);
-  EXPECT_EQ(p[3].when, when);
-  EXPECT_TRUE(p[4].when.empty());
-  EXPECT_EQ(p[5].when, (std::vector<PatchCondition>{{0x90001000, 0xFFFFFFFF, YGM1, true}}));
-  EXPECT_TRUE(p[6].when.empty());
+  for (size_t i = 1; i <= 4; ++i)
+    EXPECT_EQ(p[i].when, when) << i;
+  EXPECT_TRUE(p[5].when.empty());
+  EXPECT_EQ(p[6].when, magic);
+  EXPECT_EQ(p[7].when, magic);
+  EXPECT_TRUE(p[8].when.empty());
   // A group never spans a `when` or an `end`, whatever the addresses; inside a block, groups form
   // as everywhere else.
   EXPECT_FALSE(p[0].joins_previous);
   EXPECT_FALSE(p[1].joins_previous);  // after `when`: not with the line before the block
   EXPECT_TRUE(p[2].joins_previous);
   EXPECT_FALSE(p[3].joins_previous);  // not consecutive
-  EXPECT_FALSE(p[4].joins_previous);  // after `end`
-  EXPECT_FALSE(p[5].joins_previous);  // a second block, even with the same condition
-  EXPECT_FALSE(p[6].joins_previous);
+  EXPECT_TRUE(p[4].joins_previous);
+  EXPECT_FALSE(p[5].joins_previous);  // after `end`
+  EXPECT_FALSE(p[6].joins_previous);  // a second block, even with the same condition
+  EXPECT_TRUE(p[7].joins_previous);
+  EXPECT_FALSE(p[8].joins_previous);  // after `end`
   EXPECT_EQ(p[1].original, std::optional<u32>(0x4082007C));
   EXPECT_EQ(p[1].value, 0x4800007Cu);
   // A file with none of it parses as before: every line untoggled.
@@ -154,7 +161,7 @@ TEST(OrcaGamePatches, RefusesMalformedBlocks)
   };
   for (const Bad& bad : std::initializer_list<Bad>{
            {"end\n", "line 1"},                                                      // no `when`
-           {"81000000 1 2\nwhen 90001000 == 1\n81000004 1 2\n", "line 2"},            // no `end`
+           {"81000000 1 2\nwhen 90001000 == 1\n81000008 1 2\n", "line 2"},            // no `end`
            {"when 90001000 == 1\nend\n", "line 2"},                                  // no line
            {"when 90001000 == 1\n9017B640 * 5\nend\n", "line 2"},                    // a `*` line
            {"when 90001000 == 1\n81000000 1 2\nwhen 90001004 == 1\nend\n", "line 3"},  // nested
@@ -181,6 +188,11 @@ TEST(OrcaGamePatches, RefusesMalformedBlocks)
            {"when 90001000 == 1\n81000000 1 2\nend\n90001000 * 3\n", "line 1"},
            // An address once, toggled or not.
            {"81000000 1 2\nwhen 90001000 == 1\n81000000 1 3\nend\n", "line 3"},
+           // A toggled group of one word, or one that changes nothing.
+           {"when 90001000 == 1\n81000000 1 2\nend\n", "line 2"},
+           {"when 90001000 == 1\n81000000 1 2\n81000004 3 3\n81000010 5 6\nend\n", "line 4"},
+           {"when 80000000 == 0\nwhen 90000000 == 0\n81000000 1 1\n81000004 2 2\nend\n",
+            "line 3"},
        })
   {
     std::string error;
@@ -188,9 +200,9 @@ TEST(OrcaGamePatches, RefusesMalformedBlocks)
     EXPECT_TRUE(error.starts_with(std::string(bad.line) + ":")) << bad.text << "\n" << error;
   }
   std::string error;
-  for (const char* good : {"when 90001000 != 0\n81000000 1 2\nend\n",
-                           "when 93FFFFFC & 80000000 == 80000000\n817FFFFC 1 2\nend\n",
-                           "when 80000000 == 0\nwhen 90000000 == 0\n81000000 1 1\nend\n"})
+  for (const char* good : {"when 90001000 != 0\n81000000 1 2\n81000004 3 3\nend\n",
+                           "when 93FFFFFC & 80000000 == 80000000\n817FFFF8 1 1\n817FFFFC 1 2\nend\n",
+                           "when 80000000 == 0\nwhen 90000000 == 0\n81000000 1 1\n81000004 2 3\nend\n"})
   {
     EXPECT_TRUE(ParseGamePatches(good, &error).has_value()) << good << "\n" << error;
   }
@@ -244,8 +256,10 @@ TEST(OrcaGamePatches, AToggledGroupOnlyEverMovesBetweenItsTwoStates)
     EXPECT_EQ(toggle({1, 2}, holds), Toggle::Leave);         // not all of it mapped
     EXPECT_EQ(toggle({}, holds), Toggle::Leave);
   }
-  // A group of guards only never writes.
-  const auto guards = Parse("when 90001000 == 1\n81000000 7 7\n81000004 8 8\nend\n");
+  // A group of guards only (the parser refuses one) never writes.
+  const std::vector<PatchCondition> when{{0x90001000, 0xFFFFFFFF, 1, true}};
+  const std::vector<GamePatch> guards{{0x81000000, 7, 7, false, when},
+                                      {0x81000004, 8, 8, true, when}};
   EXPECT_EQ(ToggleGroup(guards, std::vector<u32>{7, 8}, true), Toggle::Leave);
   EXPECT_EQ(ToggleGroup(guards, std::vector<u32>{7, 8}, false), Toggle::Leave);
   // GroupApplies (the shipped-file tests' check) reads a toggled group as landing on its
@@ -257,7 +271,7 @@ TEST(OrcaGamePatches, AToggledGroupOnlyEverMovesBetweenItsTwoStates)
 TEST(OrcaGamePatches, ToggledGroupsFollowTheirConditionBothWays)
 {
   const auto patches = Parse(FILE_WITH_TOGGLES);
-  ASSERT_EQ(patches.size(), 5u);
+  ASSERT_EQ(patches.size(), 6u);
   Memory m = Booted(0);  // the header says none: friends play
   const auto toggled = [&] { return PlanGamePatches(patches, m, true); };
 
@@ -272,7 +286,7 @@ TEST(OrcaGamePatches, ToggledGroupsFollowTheirConditionBothWays)
   plan = toggled();
   EXPECT_EQ(Addresses(plan.on), (std::vector<u32>{0x81001000, 0x81001010}));
   EXPECT_EQ(plan.on[0].words, 2u);
-  EXPECT_EQ(plan.on[1].words, 1u);
+  EXPECT_EQ(plan.on[1].words, 2u);
   EXPECT_TRUE(plan.off.empty() && plan.landed.empty());
   ASSERT_EQ(plan.writes.size(), 2u);
   EXPECT_EQ(plan.writes[0].address, 0x81001000u);
