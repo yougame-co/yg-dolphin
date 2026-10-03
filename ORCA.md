@@ -595,8 +595,8 @@ Ishiiruka, slippi-rust-extensions):
 - **The firewall.** The room opens a throwaway UDP socket on every interface the moment it is in
   the room, so a Windows Defender Firewall prompt (Windows asks on the first non-loopback bind of
   an exe it doesn't know) comes in the lobby, not when a friend arrives mid-game. Whatever the
-  player answers, links still form in most cases: ICE sends first from both sides, and a stateful
-  firewall passes the replies. Windows ties the rule to the exe's path, and the app installs each
+  player answers, links should still form in most cases (not yet tried on the PC): ICE sends
+  first from both sides, and a stateful firewall passes the replies. Windows ties the rule to the exe's path, and the app installs each
   Orca under its own version folder, so every release asks again. Slippi avoids that with one
   fixed install path, updated in place (slippi-launcher `mainline_installation.ts`).
   - On macOS, Orca.app is signed, so the Application Firewall lets it be. The Local Network
