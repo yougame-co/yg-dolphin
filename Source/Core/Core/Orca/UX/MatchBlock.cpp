@@ -24,15 +24,15 @@ constexpr u32 OFF_FIGHT = 0x1A;
 constexpr u32 OFF_STAGE = 0x1B;
 constexpr u32 OFF_CHARACTERS = 0x1C;
 constexpr u32 OFF_RECORDS = 0x20;
-constexpr u32 OFF_FLOW = 0x40;
-constexpr u32 OFF_STEP = 0x41;
-constexpr u32 OFF_ACTIVE = 0x42;
-constexpr u32 OFF_STEP_DONE = 0x43;
-constexpr u32 OFF_STRUCK = 0x44;
-constexpr u32 OFF_DEADLINE = 0x48;
-constexpr u32 OFF_AUTO = 0x4C;
-constexpr u32 OFF_AUTO_STAGE = 0x4D;
-constexpr u32 OFF_AUTO_PRESS = 0x4E;
+constexpr u32 OFF_FLOW = 0x80;
+constexpr u32 OFF_STEP = 0x81;
+constexpr u32 OFF_ACTIVE = 0x82;
+constexpr u32 OFF_STEP_DONE = 0x83;
+constexpr u32 OFF_STRUCK = 0x84;
+constexpr u32 OFF_DEADLINE = 0x88;
+constexpr u32 OFF_AUTO = 0x8C;
+constexpr u32 OFF_AUTO_STAGE = 0x8D;
+constexpr u32 OFF_AUTO_PRESS = 0x8E;
 
 // The block as bytes, so a write compares byte by byte.
 std::array<u8, SIZE> Bytes(const State& s)

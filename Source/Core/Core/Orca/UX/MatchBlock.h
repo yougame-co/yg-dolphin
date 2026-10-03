@@ -32,12 +32,14 @@
 //            +0x1B u8 its stage (ruleset index, 0xFF unknown)
 //            +0x1C u8 port 1's character, +0x1D port 2's (gmCharacterKind, 0xFF unknown)
 //            +0x20 4 bytes per counted game (up to 8): winner, stage, port 1's and 2's characters
-//   steps    +0x40 u8 the stage flow: 0 idle, 1 running on the stage select
-//            +0x41 u8 step   +0x42 u8 the port whose turn it is (0xFF none)
-//            +0x43 u8 strikes or bans made in this step   +0x44 u16 struck or banned this game
-//            +0x48 u32 the step's deadline (the frame hook's frame number)
-//            +0x4C u8 the pick's timer ran out: the default pick is being made   +0x4D u8 its stage
-//            +0x4E u8 the default pick's A is pressed this frame
+//   steps    +0x80 u8 the stage flow: 0 idle, 1 running on the stage select
+//            +0x81 u8 step   +0x82 u8 the port whose turn it is (0xFF none)
+//            +0x83 u8 strikes or bans made in this step   +0x84 u16 struck or banned this game
+//            +0x88 u32 the step's deadline (the frame hook's frame number)
+//            +0x8C u8 the pick's timer ran out: the default pick is being made   +0x8D u8 its stage
+//            +0x8E u8 the default pick's A is pressed this frame
+// The ranges follow the rules tracks' reservations (the casual track's MatchBlock.h: header
+// +0x00-0x0F, set +0x10-0x7F, steps +0x80-0xBF); +0x07, reserved there, is the coin here.
 namespace Orca::UX
 {
 class GuestMemory;
@@ -46,7 +48,7 @@ class GuestMemory;
 namespace Orca::UX::MatchBlock
 {
 constexpr u32 BASE = FreeSpace::kMatchBlock.begin;
-constexpr u32 SIZE = 0x60;
+constexpr u32 SIZE = 0x90;
 static_assert(BASE + SIZE <= FreeSpace::kMatchBlock.end);
 constexpr u32 MAGIC = 0x59474D31;  // "YGM1"
 constexpr u8 VERSION = 1;

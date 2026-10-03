@@ -1834,7 +1834,7 @@ machine and block on its own track.
   - Timers: game 1's steps 30, 30 and 10 s, a later strike, ban or pick 30 s, each with 3 s of
     grace (the clock shows 0:00 meanwhile). Defaults: the strikes still owed fall on the first
     allowed stages in list order; Brawl's optional ban is none; a pick is the first allowed stage.
-- **The match block** (`Core/Orca/UX/MatchBlock.*`): 96 bytes at the start of FreeSpace.h's block.
+- **The match block** (`Core/Orca/UX/MatchBlock.*`): 0x90 bytes at the start of FreeSpace.h's block, in the ranges the casual track reserves (header +0x00, set +0x10, steps +0x80).
   - Header: magic `YGM1`, version, mode (none, casual, ranked), ruleset (1 Brawl Supernova 2025,
     2 Project+ 2024), and the coin: game 1's first striker, one bit of an FNV-1a hash of the
     room's code. The server makes the code, neither player picks it, and both games read the coin
