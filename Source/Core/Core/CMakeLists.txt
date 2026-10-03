@@ -622,6 +622,8 @@ add_library(core
   Rollback/Diag.h
   Rollback/Harness.cpp
   Rollback/Harness.h
+  Rollback/InputGate.cpp
+  Rollback/InputGate.h
   Rollback/Loopback.cpp
   Rollback/Loopback.h
   Rollback/OnlineMatch.cpp

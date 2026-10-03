@@ -1243,8 +1243,9 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
     Orca::Net::Pads pads{};
     for (int port = 0; port < Orca::Net::MAX_SEATS; ++port)
     {
-      // What the port reports during the next frame (the session's pads in a loopback run).
-      if (const auto pad = Rollback::InputOverride(port))
+      // What the port reports during the next frame (the session's pads in a loopback run), before
+      // the input gate: a recording keeps the raw pads, as the session's wire does.
+      if (const auto pad = Rollback::RawInputOverride(port))
         pads[port] = Orca::Net::EncodePad(*pad);
     }
     std::fputs(Loopback::FormatRecordedFrame(frame_here, pads, recorded_checksum).c_str(),
