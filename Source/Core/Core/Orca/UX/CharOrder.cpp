@@ -44,6 +44,7 @@ constexpr u32 AT_MAGIC = 0x0;
 constexpr u32 AT_GAME = 0x4;
 constexpr u32 AT_STEP = 0x5;
 constexpr u32 AT_FIRST = 0x6;
+constexpr u32 AT_LOCKED = 0x7;
 constexpr u32 AT_SINCE = 0x8;
 constexpr u32 AT_ELAPSED = 0xC;
 
@@ -56,7 +57,7 @@ bool Pointer(const GuestMemory& m, u32 p)
 // shared condition, so the gate never acts on a state the machine would clear).
 bool Applies(const SetView& set, const CssView& css)
 {
-  return css.on_css && set.ruleset == Ruleset::PPlus && set.game >= 2 && set.game <= 0xFF &&
+  return css.on_css && set.ruleset != Ruleset::None && set.game >= 2 && set.game <= 0xFF &&
          (set.last_winner == 0 || set.last_winner == 1) && css.ports[0].human &&
          css.ports[1].human;
 }
@@ -73,7 +74,7 @@ std::string Clock(int frames)
   return fmt::format("{}:{:02}", seconds / 60, seconds % 60);
 }
 
-// What the hook's ReadSet takes from ORCA_TEST_CHAR_ORDER, parsed once (a test override).
+// ORCA_TEST_CHAR_ORDER's set at its first game, parsed once (a test override).
 const SetView& TestSet()
 {
   static const SetView set = [] {
@@ -81,8 +82,9 @@ const SetView& TestSet()
     const std::string spec = TestCharOrderSpec();
     if (!spec.empty() && !ParseTestSpec(spec, &out))
     {
-      ERROR_LOG_FMT(ROLLBACK, "Character order: ORCA_TEST_CHAR_ORDER={} is not "
-                              "<pplus|brawl>:<game>:<winner port 1-2>; ignored",
+      ERROR_LOG_FMT(ROLLBACK,
+                    "Character order: ORCA_TEST_CHAR_ORDER={} is not "
+                    "<pplus|brawl>:<game>:<winner port 1-2>; ignored",
                     spec);
       out = {};
     }
@@ -94,6 +96,7 @@ const SetView& TestSet()
   }();
   return set;
 }
+
 }  // namespace
 
 State Advance(const SetView& set, const CssView& css, const State& state, int frame)
@@ -104,10 +107,12 @@ State Advance(const SetView& set, const CssView& css, const State& state, int fr
     return state == State{} ? state : State{};
   if (state.step == Step::Idle || state.game != set.game || state.first != set.last_winner)
   {
-    // A new game's character select: the winner picks first. No press counts on this boundary
-    // (it was made before the order began), which also keeps a re-run here writing nothing new.
-    return State{static_cast<u8>(set.game), Step::First, static_cast<u8>(set.last_winner),
-                 static_cast<u32>(frame), 0};
+    // A new game's character select: the winner first (Project+), both at once (Brawl). No press
+    // counts on this boundary (it was made before the order began), which also keeps a re-run here
+    // writing nothing new.
+    return State{static_cast<u8>(set.game),
+                 set.ruleset == Ruleset::PPlus ? Step::First : Step::Both,
+                 static_cast<u8>(set.last_winner), 0, static_cast<u32>(frame), 0};
   }
   State s = state;
   const u32 now = static_cast<u32>(frame);
@@ -115,12 +120,28 @@ State Advance(const SetView& set, const CssView& css, const State& state, int fr
   s.elapsed = static_cast<u16>(std::min<u32>(elapsed, 0xFFFF));
   if (elapsed == 0 || s.step == Step::Done)
     return s;
-  // The player whose turn it is: a lock-in is A newly pressed on a frame of this step with the token
-  // on a character (A on a character picks it, A anywhere else keeps the one the token is on).
-  const int port = s.step == Step::First ? s.first : 1 - s.first;
-  const CssPort& p = css.ports[port];
-  const bool locked_in = (p.pressed & PAD_BUTTON_A) != 0 && p.placed;
-  if (locked_in || elapsed >= static_cast<u32>(PICK_FRAMES))
+  // A lock-in: A newly pressed on a frame of this step with the token on a character (A on a
+  // character picks it, A anywhere else keeps the one the token is on).
+  const auto locks_in = [&css](int port) {
+    const CssPort& p = css.ports[port];
+    return (p.pressed & PAD_BUTTON_A) != 0 && p.placed;
+  };
+  const bool timed_out = elapsed >= static_cast<u32>(PICK_FRAMES);
+  bool next = timed_out;
+  if (s.step == Step::Both)
+  {
+    for (int port = 0; port < 2; ++port)
+    {
+      if (locks_in(port))
+        s.locked = static_cast<u8>(s.locked | (1 << port));
+    }
+    next = next || s.locked == 3;
+  }
+  else
+  {
+    next = next || locks_in(s.step == Step::First ? s.first : 1 - s.first);
+  }
+  if (next)
   {
     s.step = s.step == Step::First ? Step::Second : Step::Done;
     s.since = now;
@@ -146,6 +167,16 @@ Masks Gate(const SetView& set, const CssView& css, const State& state)
     masks[winner] = ALL;
     masks[loser].buttons = PAD_BUTTON_B;
     break;
+  case Step::Both:
+    // Neither takes the token back or goes on; a player who locked in can't change.
+    for (int port = 0; port < 2; ++port)
+    {
+      if (state.locked & (1 << port))
+        masks[port] = ALL;
+      else
+        masks[port].buttons = PAD_BUTTON_B | PAD_BUTTON_START;
+    }
+    break;
   case Step::Done:
     masks[winner] = ALL;
     masks[loser] = ALL;
@@ -164,26 +195,35 @@ std::string Line(const SetView& set, const CssView& css, const State& state,
 {
   if (!Active(set, css, state) || state.step == Step::Done)
     return {};
-  const int port = state.step == Step::First ? state.first : 1 - state.first;
-  std::string name = fmt::format("P{}", port + 1);
-  bool local = false;
+  // Each port's name ("P<n>" without one), and this machine's port (-1: neither; a harness run).
+  std::array<std::string, 2> names{"P1", "P2"};
+  int local = -1;
   for (const Events::PortInfo& p : ports)
   {
-    if (p.port != port)
+    if (p.port < 0 || p.port > 1)
       continue;
     if (!p.name.empty())
-      name = p.name;
-    local = !p.remote;
+      names[p.port] = p.name;
+    if (!p.remote)
+      local = p.port;
   }
-  // Solo (a harness run) has only this machine's port: every turn reads as the other player's.
   const std::string left = Clock(PICK_FRAMES - state.elapsed);
-  if (local)
+  if (state.step == Step::Both)
+  {
+    if (local < 0)
+      return fmt::format("Characters · {}", left);
+    if (state.locked & (1 << local))
+      return fmt::format("Waiting for {} · {}", names[1 - local], left);
+    return fmt::format("Pick your character · {} · A locks it in", left);
+  }
+  const int port = state.step == Step::First ? state.first : 1 - state.first;
+  if (port == local)
   {
     return fmt::format("{} · {} · A locks it in",
                        state.step == Step::First ? "You pick first" : "Your pick", left);
   }
-  return fmt::format("{} {} · {}", name, state.step == Step::First ? "picks first" : "picks",
-                     left);
+  return fmt::format("{} {} · {}", names[port],
+                     state.step == Step::First ? "picks first" : "picks", left);
 }
 
 int MkFreePicker(const std::array<int, 2>& characters)
@@ -252,11 +292,12 @@ State ReadState(const GuestMemory& m)
   if (!m.Valid(kArea) || !m.Valid(kArea + 0xF) || m.Read32(kArea + AT_MAGIC) != kMagic)
     return s;
   const u8 step = m.Read8(kArea + AT_STEP);
-  if (step > static_cast<u8>(Step::Done))
+  if (step > static_cast<u8>(Step::Both))
     return s;
   s.game = m.Read8(kArea + AT_GAME);
   s.step = static_cast<Step>(step);
   s.first = m.Read8(kArea + AT_FIRST) & 1;
+  s.locked = m.Read8(kArea + AT_LOCKED) & 3;
   s.since = m.Read32(kArea + AT_SINCE);
   s.elapsed = m.Read16(kArea + AT_ELAPSED);
   return s;
@@ -282,7 +323,7 @@ int WriteState(GuestMemory& m, const State& s)
   put8(AT_GAME, s.game);
   put8(AT_STEP, static_cast<u8>(s.step));
   put8(AT_FIRST, s.first);
-  put8(AT_FIRST + 1, 0);
+  put8(AT_LOCKED, s.locked);
   put32(AT_SINCE, s.since);
   put8(AT_ELAPSED, static_cast<u8>(s.elapsed >> 8));
   put8(AT_ELAPSED + 1, static_cast<u8>(s.elapsed));

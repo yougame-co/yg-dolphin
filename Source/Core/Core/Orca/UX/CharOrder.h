@@ -40,8 +40,9 @@ class CPUThreadGuard;
 //
 // Brawl keeps the interim order until its stage pick moves before characters (Supernova 2025
 // §3.3: the ban, the loser's stage, then the winner may change character, then the loser): both
-// pick at once, and nothing here acts on a Brawl set. MkFreePicker() is that order's Meta Knight
-// re-check, for when it lands.
+// pick at once on later games, with the same 45 seconds; neither can take the token back or go on
+// with Start, each locks in with A (and then can't change), and once both have, or the time is up,
+// Orca presses Start. MkFreePicker() is the exact order's Meta Knight re-check, for when it lands.
 //
 // Found under the harness (ORCA_UX_PROBE dumps, Brawl rev 2 and Project+ alike):
 //   - the character select: scene "scSelctCharacter", whose +0x400 is muSelCharTask; player area i
@@ -95,9 +96,10 @@ struct CssView
 enum class Step : u8
 {
   Idle = 0,    // no order on this game
-  First = 1,   // the previous game's winner picks
-  Second = 2,  // the loser picks
+  First = 1,   // Project+: the previous game's winner picks
+  Second = 2,  // Project+: the loser picks
   Done = 3,    // both picked: Orca presses Start for the loser until the screen goes
+  Both = 4,    // Brawl (interim): both pick at once, each locking in with A
 };
 
 // The order's state, in the match block at kArea.
@@ -106,6 +108,7 @@ struct State
   u8 game = 0;  // the set's game it belongs to (0: none)
   Step step = Step::Idle;
   u8 first = 0;      // the port that picks first (the previous game's winner)
+  u8 locked = 0;     // Both: bit p set once port p locked in
   u32 since = 0;     // the hook frame its step began at
   u16 elapsed = 0;   // frames into the step, as of the last boundary (what the gate reads)
   bool operator==(const State&) const = default;
@@ -115,16 +118,17 @@ struct State
 constexpr int PICK_FRAMES = 45 * 60;
 
 // The order's 16 bytes, the last of the match block (FreeSpace.h): +0 kMagic, +4 game, +5 step,
-// +6 first, +7 0, +8 since, +0xC elapsed, +0xE 0. Anything without the magic reads as Idle.
+// +6 first, +7 locked, +8 since, +0xC elapsed, +0xE 0. Anything without the magic reads as Idle.
 constexpr u32 kArea = FreeSpace::kMatchBlock.end - 0x10;
 constexpr u32 kMagic = 0x5947434F;  // "YGCO"
 static_assert(FreeSpace::kMatchBlock.Contains(kArea) && kArea % 16 == 0);
 
 // The step machine: the state after this boundary, from the state before it. Pure. On the
-// character select of a Project+ ranked set's game 2 or later, it starts the order (the winner
-// first), moves on when the player whose turn it is locks in (A newly pressed with the token on a
-// character) or the pick's time is up; it clears a stale order on the character select of any game
-// it doesn't apply to; off the character select it changes nothing.
+// character select of a ranked set's game 2 or later it starts the order (Project+: the winner
+// first; Brawl: both at once), moves on when the player whose turn it is locks in (A newly pressed
+// on a frame of the step, with the token on a character) or the pick's time is up; it clears a
+// stale order on the character select of any game it doesn't apply to; off the character select it
+// changes nothing.
 State Advance(const SetView& set, const CssView& css, const State& state, int frame);
 
 // The gate's masks and presses for the frame about to run, from the state the hook left. Pure.
@@ -157,7 +161,8 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
 Rollback::InputGate::Masks GateFrame(const Core::CPUThreadGuard& guard);
 
 // Test knob ORCA_TEST_CHAR_ORDER=<pplus|brawl>:<game>:<winner port 1-2> (a test override, both
-// processes alike): the set view this many games in, with no match block behind it, so the order
-// runs on the first character select of a harness run. Parsed for tests.
+// processes alike): that set view on every character select, with no match block behind it, so
+// `pplus:2:1` runs the order on the boot's character select once both players have joined. Parsed
+// for tests.
 bool ParseTestSpec(const std::string& spec, SetView* out);
 }  // namespace Orca::UX::CharOrder
