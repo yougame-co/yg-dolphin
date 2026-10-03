@@ -175,6 +175,14 @@ private:
   std::unique_ptr<Impl> m_impl;
 };
 
+// Exposed for tests: whether two machines are on one LAN, which the "upgrade" rule asks before it
+// trades a working server-reflexive or TURN link for a try at their LAN addresses. A host
+// candidate subnet in common (an IPv4 /24 or IPv6 /64) is not enough: two homes on the same
+// common router subnet (192.168.1.x, 10.0.0.x) have one too. They must also share a public
+// address that STUN saw (any port): machines behind one NAT do, two homes never do.
+bool OneLan(const std::vector<std::string>& my_hosts, const std::vector<std::string>& their_hosts,
+            const std::vector<std::string>& my_srflx, const std::vector<std::string>& their_srflx);
+
 // Exposed for tests: the keys of one link and its datagrams.
 namespace DirectCrypto
 {

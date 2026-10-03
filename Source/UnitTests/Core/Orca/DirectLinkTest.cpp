@@ -193,6 +193,27 @@ TEST(OrcaDirectLink, KeysDifferPerDirectionGenerationRoomAndPair)
   EXPECT_NE(DirectCrypto::DeriveKeys(KeyOf(1), KeyOf(3), "room", 1, "a", "b").first, base.first);
 }
 
+TEST(OrcaDirectLink, OneLanNeedsASharedPublicAddress)
+{
+  // Two homes on the same router default (192.168.1.x): the same /24, but STUN saw two public
+  // addresses. Not one LAN: no "upgrade" teardown of their working cross-home link.
+  const std::vector<std::string> mine{"192.168.1.20"}, theirs{"192.168.1.35"};
+  EXPECT_FALSE(OneLan(mine, theirs, {"203.0.113.7"}, {"198.51.100.40"}));
+  // Behind one NAT: one public address, each on a port of its own (and maybe more than one).
+  EXPECT_TRUE(OneLan(mine, theirs, {"203.0.113.7"}, {"198.51.100.40", "203.0.113.7"}));
+  EXPECT_TRUE(OneLan(mine, theirs, {"203.0.113.7"}, {"203.0.113.7"}));
+  // A side STUN never answered: no proof, no upgrade.
+  EXPECT_FALSE(OneLan(mine, theirs, {}, {"203.0.113.7"}));
+  EXPECT_FALSE(OneLan(mine, theirs, {"203.0.113.7"}, {}));
+  // One public address, but no subnet in common (a guest network behind the same NAT).
+  EXPECT_FALSE(OneLan({"192.168.1.20"}, {"192.168.2.35"}, {"203.0.113.7"}, {"203.0.113.7"}));
+  // IPv6: the same /64 counts as a subnet.
+  EXPECT_TRUE(OneLan({"2001:db8:1:2::10"}, {"2001:db8:1:2::20"}, {"203.0.113.7"},
+                     {"203.0.113.7"}));
+  EXPECT_FALSE(OneLan({"2001:db8:1:2::10"}, {"2001:db8:1:3::20"}, {"203.0.113.7"},
+                      {"203.0.113.7"}));
+}
+
 TEST(OrcaDirectLink, DatagramsAuthenticateAndRefuseReplays)
 {
   const DirectCrypto::Key key = KeyOf(7);

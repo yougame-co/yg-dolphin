@@ -75,8 +75,8 @@ constexpr auto KEEPALIVE_EVERY = 200ms;
 // failed only after 30 s without consent): no answer to an offer in this long; no path this long
 // after both descriptions; no datagram this long while the relay still brings the peer's packets
 // (an interface that changed, a NAT mapping that expired); and once, this long after connecting,
-// a relayed or reflexive pair between two machines on one subnet (a local network permission
-// granted late). Between rebuilds for a failure: 2, 4, 8 ... 30 s, back to 2 once a link stayed
+// a relayed or reflexive pair between two machines on one LAN (a local network permission
+// granted late; OneLan). Between rebuilds for a failure: 2, 4, 8 ... 30 s, back to 2 once a link stayed
 // up 30 s.
 constexpr auto ANSWER_TIMEOUT = 5s;
 constexpr auto CONNECT_TIMEOUT = 10s;
@@ -322,10 +322,10 @@ bool Allowed(const std::string& force, const std::string& type)
 }
 
 // A description as libjuice writes it, keeping only the ICE lines (and of the candidates only
-// those `force` allows). The host candidates' addresses go to `hosts` (for the same-subnet check;
-// never logged).
+// those `force` allows). The host candidates' addresses go to `hosts` and the server-reflexive
+// ones' to `srflx` (for the one-LAN check; never logged).
 std::string FilterDescription(std::string_view description, const std::string& force,
-                              std::vector<std::string>* hosts)
+                              std::vector<std::string>* hosts, std::vector<std::string>* srflx)
 {
   std::string out;
   size_t start = 0;
@@ -345,6 +345,8 @@ std::string FilterDescription(std::string_view description, const std::string& f
         continue;
       if (c->type == "host" && hosts && c->address != "127.0.0.1" && c->address != "::1")
         hosts->push_back(c->address);
+      if (c->type == "srflx" && srflx)
+        srflx->push_back(c->address);
       if (!Allowed(force, c->type))
         continue;
     }
@@ -500,6 +502,19 @@ void PrimeFirewall()
   }
 }
 }  // namespace
+
+bool OneLan(const std::vector<std::string>& my_hosts, const std::vector<std::string>& their_hosts,
+            const std::vector<std::string>& my_srflx, const std::vector<std::string>& their_srflx)
+{
+  if (!SameSubnet(my_hosts, their_hosts))
+    return false;
+  for (const std::string& mine : my_srflx)
+  {
+    if (std::find(their_srflx.begin(), their_srflx.end(), mine) != their_srflx.end())
+      return true;
+  }
+  return false;
+}
 
 // ---- Keys ----
 
@@ -916,6 +931,9 @@ struct DirectLink::Impl
     bool early_done = false;
     size_t remote_candidates = 0;
     std::vector<std::string> my_hosts, their_hosts;
+    // The public addresses STUN saw (server-reflexive candidates): two machines behind one NAT
+    // share one, two homes never do.
+    std::vector<std::string> my_srflx, their_srflx;
     // Candidates to trickle, and whether gathering is done (sent with the last batch).
     std::vector<std::string> trickle;
     bool trickle_done = false;
@@ -1399,6 +1417,8 @@ struct DirectLink::Impl
     case Event::Kind::Candidate:
     {
       const auto c = ParseCandidate(event.candidate);
+      if (c && c->type == "srflx")
+        peer->my_srflx.push_back(c->address);
       // Host candidates went out with the description.
       if (!c || c->type == "host" || !Allowed(options.force, c->type) ||
           event.candidate.size() > MAX_CANDIDATE_LENGTH)
@@ -1554,6 +1574,8 @@ struct DirectLink::Impl
       return;
     if (c->type == "host" && c->address != "127.0.0.1" && c->address != "::1")
       peer.their_hosts.push_back(c->address);
+    if (c->type == "srflx")
+      peer.their_srflx.push_back(c->address);
     if (!Allowed(options.force, c->type))
       return;
     if (!peer.answered)
@@ -1582,7 +1604,9 @@ struct DirectLink::Impl
       peer.link->keyed = true;
     }
     peer.their_hosts.clear();
-    const std::string remote = FilterDescription(description, options.force, &peer.their_hosts);
+    peer.their_srflx.clear();
+    const std::string remote =
+        FilterDescription(description, options.force, &peer.their_hosts, &peer.their_srflx);
     if (juice_set_remote_description(peer.link->agent, remote.c_str()) != JUICE_ERR_SUCCESS)
     {
       WARN_LOG_FMT(NETPLAY, "Orca direct link: seat {} sent a description libjuice refused",
@@ -1757,7 +1781,9 @@ struct DirectLink::Impl
       return;
     }
     peer.my_hosts.clear();
-    std::string mine = FilterDescription(description, options.force, &peer.my_hosts);
+    peer.my_srflx.clear();
+    std::string mine =
+        FilterDescription(description, options.force, &peer.my_hosts, &peer.my_srflx);
     if (options.loopback && options.force.empty())
       mine += LoopbackCandidates(description);
     {
@@ -1937,7 +1963,8 @@ struct DirectLink::Impl
       else if (connected && !peer.upgrade_tried && peer.connected_at &&
                now - *peer.connected_at > UPGRADE_AFTER &&
                (peer.turn || peer.pair.ends_with("/srflx")) &&
-               options.force.empty() && SameSubnet(peer.my_hosts, peer.their_hosts))
+               options.force.empty() &&
+               OneLan(peer.my_hosts, peer.their_hosts, peer.my_srflx, peer.their_srflx))
       {
         reason = "upgrade";
         peer.upgrade_tried = true;

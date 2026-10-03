@@ -626,7 +626,10 @@ Ishiiruka, slippi-rust-extensions):
   - when a link that was up gets nothing for 3 s while the relay still brings the peer's packets
     (a Wi-Fi/Ethernet switch, a DHCP renew, an expired NAT mapping);
   - once, 10 s after connecting, on a TURN or server-reflexive pair between two machines on one
-    subnet (a macOS Local Network permission granted late).
+    LAN (a macOS Local Network permission granted late): a host subnet in common AND a public
+    address STUN saw on both sides (`OneLan`). A shared /24 alone isn't one LAN: two homes on
+    192.168.1.x or Xfinity's 10.0.0.x would tear down a working cross-home link for a probe of
+    the friend's private address on this side's own network.
   - Rebuilds for a failure back off 2, 4, 8 ... 30 s, and the backoff resets after 30 s up. The
     answering side asks for one with `dlr`; the offering side builds it (not twice in a second).
   - Each build is a new generation with fresh keys. TURN credentials older than 10 minutes are
