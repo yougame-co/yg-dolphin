@@ -369,14 +369,14 @@ Live ReadLiveFight(const GuestMemory& m)
   return live;
 }
 
-Facts ReadFacts(const GuestMemory& memory)
+Facts ReadFacts(const GuestMemory& memory, bool live)
 {
   Facts f;
   const Reading r = ReadResults(memory);
   f.scene = r.scene;
   f.block = r.block;
   f.decision = static_cast<u8>(r.block.decision);
-  if (f.scene == Scene::Fight)
+  if (live && f.scene == Scene::Fight)
     f.live = ReadLiveFight(memory);
   return f;
 }
@@ -392,7 +392,9 @@ void Frame(const Core::CPUThreadGuard& guard, int frame)
     s_published.store(0, std::memory_order_relaxed);
     return;
   }
-  const Facts facts = ReadFacts(memory);
+  // Only Brawl's verdict needs the fight's clock, stocks, percent and ledge (Project+ decides its
+  // time-outs itself, and its modules are its own).
+  const Facts facts = ReadFacts(memory, header->ruleset == Ruleset::Brawl);
   const SetState before = SetBlock::ReadSet(memory);
   const SetState after = Step(before, header->ruleset, facts, static_cast<u32>(frame));
   if (after != before)

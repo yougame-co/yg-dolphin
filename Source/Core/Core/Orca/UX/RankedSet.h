@@ -85,8 +85,8 @@ int WriteSetRules(GuestMemory& memory, const SetBlock::SetState& set, u8 stocks 
 // The fight's live state, where it can be read (reads only; invalid where it can't).
 Live ReadLiveFight(const GuestMemory& memory);
 
-// Facts from memory (reads only).
-Facts ReadFacts(const GuestMemory& memory);
+// Facts from memory (reads only); the fight's live state only with `live`.
+Facts ReadFacts(const GuestMemory& memory, bool live);
 
 // The frame hook's part (first runs and re-runs): follows the set in a ranked block.
 void Frame(const Core::CPUThreadGuard& guard, int frame);
