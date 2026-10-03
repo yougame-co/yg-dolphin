@@ -172,20 +172,36 @@ SetState Step(SetState s, Ruleset ruleset, const Facts& f, u32 frame)
       s.fight_flags =
           static_cast<u8>((s.fight_flags & ~SetBlock::FIGHT_BETWEEN) | SetBlock::FIGHT_SUDDEN);
     }
-    if (f.live.valid && !(s.fight_flags & SetBlock::FIGHT_SUDDEN))
+    if (f.live.valid)
     {
-      for (int i = 0; i < 2; ++i)
+      // The fighters back after they were gone, in the same fight scene: Brawl's sudden death
+      // (after a time-up level on stocks, or a simultaneous last-stock loss) rebuilds them.
+      if (s.fight_flags & SetBlock::FIGHT_GONE)
       {
-        if (f.live.on_ledge[i] && !s.on_ledge[i] && s.ledge[i] < 255)
-          ++s.ledge[i];
-        s.on_ledge[i] = f.live.on_ledge[i] ? 1 : 0;
+        s.fight_flags = static_cast<u8>((s.fight_flags & ~SetBlock::FIGHT_GONE) |
+                                        SetBlock::FIGHT_SUDDEN);
       }
-      if (f.live.time_up && !(s.fight_flags & SetBlock::FIGHT_TIMEUP))
+      s.fight_flags |= SetBlock::FIGHT_SEEN;
+      // The ledge grabs and the time-up snapshot are the regular game's only.
+      if (!(s.fight_flags & (SetBlock::FIGHT_SUDDEN | SetBlock::FIGHT_TIMEUP)))
       {
-        s.fight_flags |= SetBlock::FIGHT_TIMEUP;
-        s.snap_stocks = f.live.stocks;
-        s.snap_percent = f.live.percent;
+        for (int i = 0; i < 2; ++i)
+        {
+          if (f.live.on_ledge[i] && !s.on_ledge[i] && s.ledge[i] < 255)
+            ++s.ledge[i];
+          s.on_ledge[i] = f.live.on_ledge[i] ? 1 : 0;
+        }
+        if (f.live.time_up)
+        {
+          s.fight_flags |= SetBlock::FIGHT_TIMEUP;
+          s.snap_stocks = f.live.stocks;
+          s.snap_percent = f.live.percent;
+        }
       }
+    }
+    else if (f.live_read && (s.fight_flags & SetBlock::FIGHT_SEEN))
+    {
+      s.fight_flags |= SetBlock::FIGHT_GONE;
     }
     break;
   case Scene::Between:
@@ -386,7 +402,10 @@ Facts ReadFacts(const GuestMemory& memory, bool live)
   f.block = r.block;
   f.decision = static_cast<u8>(r.block.decision);
   if (live && f.scene == Scene::Fight)
+  {
     f.live = ReadLiveFight(memory);
+    f.live_read = true;
+  }
   return f;
 }
 

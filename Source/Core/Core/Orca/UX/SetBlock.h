@@ -89,6 +89,8 @@ static_assert(SET_END <= SIZE && FreeSpace::Detail::Free({BASE + SET_BEGIN, BASE
 constexpr u8 FIGHT_BETWEEN = 0x01;  // left the fight scene (between scenes)
 constexpr u8 FIGHT_SUDDEN = 0x02;   // came back into a fight: sudden death
 constexpr u8 FIGHT_TIMEUP = 0x04;   // time ran out (the snapshot holds stocks and percent)
+constexpr u8 FIGHT_SEEN = 0x08;     // the fighters were read in this fight
+constexpr u8 FIGHT_GONE = 0x10;     // and then couldn't be: a sudden death rebuilds them
 
 constexpr u8 NO_PORT = 0xFF;
 

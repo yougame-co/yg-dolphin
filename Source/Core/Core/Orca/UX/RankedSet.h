@@ -67,6 +67,9 @@ struct Facts
   // The result info's decision (gmResultInfo +0x1378): 1 time up.
   u8 decision = 0;
   Live live;
+  // The fight's live state was read (Brawl's verdict needs it): an invalid one means the fighters
+  // are gone (between two fights in the same scene, or at its end).
+  bool live_read = false;
 };
 
 // The verdict on one finished fight, or nothing (a void game: not recorded).

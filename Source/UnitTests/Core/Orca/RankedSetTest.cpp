@@ -93,6 +93,7 @@ SetState Play(SetState s, Ruleset ruleset, u32 start, const ResultBlock& result,
   {
     RankedSet::Facts f = At(Scene::Fight);
     f.live = l;
+    f.live_read = true;
     s = RankedSet::Step(s, ruleset, f, frame++);
   }
   s = RankedSet::Step(s, ruleset, At(Scene::Between), frame++);
@@ -325,6 +326,36 @@ TEST(OrcaRankedSet, BrawlTieMeansATiebreakGame)
   EXPECT_EQ(v.done, 2);
   EXPECT_EQ(v.winner, NO_PORT);
   EXPECT_FALSE(v.tiebreak);
+}
+
+TEST(OrcaRankedSet, BrawlSuddenDeathInTheSameFightScene)
+{
+  // Brawl's time-up sudden death stays in scMelee: the fighters are gone for a few frames, then
+  // rebuilt with 1 stock each. Level stocks at time-up: the lower percent wins, whoever wins the
+  // sudden death; and the ledge grabs after time-up don't count.
+  const RankedSet::Live gone{};
+  std::vector<RankedSet::Live> live = {LiveAt(false, 2, 2, 10, 20), LiveAt(true, 2, 2, 30, 20),
+                                       gone, gone, LiveAt(false, 1, 1, 300, 300)};
+  for (const auto& l : Grabs(1, 40))
+    live.push_back(l);
+  SetState s = Play({}, Ruleset::Brawl, 1000, Result(0, 1, 1, 0), live);
+  EXPECT_EQ(s.records[0].how, How::Percent);
+  EXPECT_EQ(s.records[0].winner, 1);
+  EXPECT_EQ(s.records[0].ledge, (std::array<u8, 2>{0, 0}));
+  // A simultaneous last-stock loss: the fighters rebuilt with no time-up seen, a tie.
+  live = {LiveAt(false, 1, 1, 80, 90), gone, LiveAt(false, 1, 1, 300, 300)};
+  s = Play({}, Ruleset::Brawl, 1000, Result(0, 1, 1, 0), live);
+  EXPECT_EQ(s.records[0].how, How::Tie);
+  EXPECT_TRUE(s.tiebreak);
+  // The fighters gone at the fight's end (no sudden death): the results screen's winner.
+  live = {LiveAt(false, 1, 1, 80, 90), gone, gone};
+  s = Play({}, Ruleset::Brawl, 1000, Result(1, 0, 0, 1), live);
+  EXPECT_EQ(s.records[0].how, How::Results);
+  EXPECT_EQ(s.records[0].winner, 1);
+  // Before the fighters are first read (the fight's first frames), nothing is gone.
+  live = {gone, gone, LiveAt(false, 3, 3, 0, 0), gone};
+  s = Play({}, Ruleset::Brawl, 1000, Result(0, 1, 1, 0), live);
+  EXPECT_EQ(s.records[0].how, How::Results);
 }
 
 TEST(OrcaRankedSet, BrawlTimeOutWithoutTheClockUsesTheGamesStocks)
