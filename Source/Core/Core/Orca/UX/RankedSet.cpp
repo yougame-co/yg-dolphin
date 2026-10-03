@@ -267,11 +267,107 @@ int WriteSetRules(GuestMemory& memory, const SetState& set, u8 stocks, u8 minute
   return changed;
 }
 
-Live ReadLiveFight(const GuestMemory& memory)
+namespace
 {
-  // Not located yet: the fight's clock, stocks, percent and ledge state (ORCA.md "Ranked sets").
-  (void)memory;
-  return {};
+// The fighters, from sora_melee's g_ftEntryManager (BrawlHeaders: module 27, section 6 + 0x2E88),
+// found through the OS module list: ftEntryManager +0x00 the entries, +0x04 their count; an
+// ftEntry (0x244 bytes) +0x0A the active instance, +0x28 its ftOwner, +0x30 the instances
+// (kind, Fighter*), +0x58 its player number (the port); an ftOwner +0x00 its data.
+constexpr u32 OS_MODULE_LIST = 0x800030C8;
+constexpr u32 SORA_MELEE = 27;
+constexpr u32 SORA_MELEE_BSS_SECTION = 6;
+constexpr u32 G_FT_ENTRY_MANAGER = 0x2E88;
+constexpr u32 ENTRY_SIZE = 0x244;
+constexpr u32 ENTRY_ACTIVE = 0x0A;
+constexpr u32 ENTRY_OWNER = 0x28;
+constexpr u32 ENTRY_INSTANCES = 0x30;
+constexpr u32 ENTRY_PLAYER_NO = 0x58;
+// Fighter +0x60 its soModuleAccesser, +0xD8 the module list, +0x70 the status module.
+constexpr u32 FIGHTER_MODULES = 0x60;
+constexpr u32 MODULES_LIST = 0xD8;
+constexpr u32 LIST_STATUS = 0x70;
+// Located from RAM dumps of a fight (ORCA.md "Ranked sets"); 0: not located.
+constexpr u32 OWNER_DATA_STOCKS = 0;
+constexpr u32 OWNER_DATA_DAMAGE = 0;
+constexpr u32 STATUS_KIND = 0;
+// Fighter::StatusKind: Cliff_Catch_Move, Cliff_Catch, Cliff_Wait.
+constexpr u32 STATUS_CLIFF_FIRST = 0x73;
+constexpr u32 STATUS_CLIFF_LAST = 0x75;
+
+u32 Ptr(const GuestMemory& m, u32 at)
+{
+  if (at % 4 || !m.Valid(at) || !m.Valid(at + 3))
+    return 0;
+  const u32 p = m.Read32(at);
+  return p % 4 == 0 && p >= 0x80000000 && m.Valid(p) ? p : 0;
+}
+
+u32 SoraMeleeBss(const GuestMemory& m)
+{
+  u32 module = Ptr(m, OS_MODULE_LIST);
+  for (int i = 0; module && i < 64; ++i)
+  {
+    if (m.Read32(module) == SORA_MELEE && m.Valid(module + 0x10))
+    {
+      if (m.Read32(module + 0x0C) <= SORA_MELEE_BSS_SECTION)
+        return 0;
+      const u32 sections = Ptr(m, module + 0x10);
+      const u32 at = sections + 8 * SORA_MELEE_BSS_SECTION;
+      if (!sections || !m.Valid(at))
+        return 0;
+      const u32 bss = m.Read32(at) & ~1u;
+      return bss && m.Valid(bss) ? bss : 0;
+    }
+    module = Ptr(m, module + 4);
+  }
+  return 0;
+}
+}  // namespace
+
+Live ReadLiveFight(const GuestMemory& m)
+{
+  Live live;
+  if (!OWNER_DATA_STOCKS || !OWNER_DATA_DAMAGE || !STATUS_KIND)
+    return live;
+  const u32 bss = SoraMeleeBss(m);
+  const u32 manager = bss ? Ptr(m, bss + G_FT_ENTRY_MANAGER) : 0;
+  const u32 entries = manager ? Ptr(m, manager) : 0;
+  if (!entries || !m.Valid(manager + 4))
+    return live;
+  const u32 count = std::min<u32>(m.Read32(manager + 4), 8);
+  std::array<bool, 2> seen{false, false};
+  for (u32 i = 0; i < count; ++i)
+  {
+    const u32 e = entries + ENTRY_SIZE * i;
+    if (!m.Valid(e + ENTRY_SIZE - 1))
+      break;
+    const u32 port = m.Read32(e + ENTRY_PLAYER_NO);
+    if (port > 1 || seen[port])
+      continue;
+    const u32 owner = Ptr(m, e + ENTRY_OWNER);
+    const u32 data = owner ? Ptr(m, owner) : 0;
+    if (!data || !m.Valid(data + OWNER_DATA_STOCKS) || !m.Valid(data + OWNER_DATA_DAMAGE + 3))
+      return {};
+    live.stocks[port] = static_cast<u8>(std::min<u32>(m.Read32(data + OWNER_DATA_STOCKS), 255));
+    const u32 bits = m.Read32(data + OWNER_DATA_DAMAGE);
+    float damage;
+    std::memcpy(&damage, &bits, sizeof(damage));
+    live.percent[port] =
+        damage > 0 && damage < 10000 ? static_cast<u16>(static_cast<int>(damage)) : u16(0);
+    const u32 active = std::min<u32>(m.Read8(e + ENTRY_ACTIVE), 3);
+    const u32 fighter = Ptr(m, e + ENTRY_INSTANCES + 8 * active + 4);
+    const u32 modules = fighter ? Ptr(m, fighter + FIGHTER_MODULES) : 0;
+    const u32 list = modules ? Ptr(m, modules + MODULES_LIST) : 0;
+    const u32 status = list ? Ptr(m, list + LIST_STATUS) : 0;
+    if (status && m.Valid(status + STATUS_KIND + 3))
+    {
+      const u32 kind = m.Read32(status + STATUS_KIND);
+      live.on_ledge[port] = kind >= STATUS_CLIFF_FIRST && kind <= STATUS_CLIFF_LAST;
+    }
+    seen[port] = true;
+  }
+  live.valid = seen[0] && seen[1];
+  return live;
 }
 
 Facts ReadFacts(const GuestMemory& memory)
