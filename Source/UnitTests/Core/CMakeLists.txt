@@ -29,6 +29,7 @@ add_dolphin_test(OrcaGamePatchesTest Orca/GamePatchesTest.cpp)
 add_dolphin_test(OrcaPauseTest Orca/PauseTest.cpp)
 add_dolphin_test(OrcaJitWarmTest Orca/JitWarmTest.cpp)
 add_dolphin_test(OrcaResultsTest Orca/ResultsTest.cpp)
+add_dolphin_test(OrcaRankedSetTest Orca/RankedSetTest.cpp)
 add_dolphin_test(OrcaInputGateTest Orca/InputGateTest.cpp)
 
 add_dolphin_test(SkylandersTest IOS/USB/SkylandersTest.cpp)

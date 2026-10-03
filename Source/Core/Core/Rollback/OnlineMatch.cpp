@@ -41,6 +41,7 @@
 #include "Core/Orca/Session/PadCodec.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/OnlineMenu.h"
+#include "Core/Orca/UX/RankedSet.h"
 #include "Core/Orca/UX/Results.h"
 #include "Core/Rollback/SessionPort.h"
 #include "Core/System.h"
@@ -671,6 +672,8 @@ constexpr std::chrono::seconds REOPEN_DELAY{1};
 // Either way the app can still send "join".
 void ReopenRoom(Match& match)
 {
+  // The match block clears once the game is alone (UX/RankedSet.h): a room of its own is no queue's.
+  Orca::UX::RankedSet::SetRoomMode(Orca::UX::MatchBlock::Mode::None);
   ForgetRoom(match);
   Orca::Online::ShutdownInBackground();
   if (match.local_seat == 0)
@@ -1473,8 +1476,11 @@ void HostInPlay(Match& match, const std::string& code)
   Orca::Online::ShutdownInBackground();
   Orca::Online::StartRoom(code, false);
   Orca::UX::Search::Matched(true);
-  // Brawl's rules for a matchmade game, at the next boundary (UX/Results.h).
+  // Brawl's rules for a matchmade game, at the next boundary (UX/Results.h), and the match block's
+  // header for the queue (UX/RankedSet.h).
   Orca::UX::RequestQueueRules();
+  Orca::UX::RankedSet::SetRoomMode(Orca::UX::Search::Ranked() ? Orca::UX::MatchBlock::Mode::Ranked :
+                                                                 Orca::UX::MatchBlock::Mode::Casual);
   NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: hosting room {} from frame {}", code, match.running + 1);
 }
 
@@ -1793,6 +1799,16 @@ void ConfirmResults(Match& match)
     report.why = r.why;
     if (report.kind != Orca::Net::GameReport::Kind::Void)
       report.detail = r.DetailJson();
+    report.start = r.start;
+    report.number = r.number;
+    report.set_done = r.set_done;
+    report.set_winner_seat = r.set_winner;
+    if (r.set_done)
+    {
+      NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: the set ended with game {}: {}", r.number,
+                     r.set_done == 1 ? fmt::format("port {} won", r.set_winner + 1) :
+                                       std::string("void"));
+    }
     NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: a game ended at frame {}: {}", r.frame,
                    report.kind == Orca::Net::GameReport::Kind::Win ?
                        fmt::format("port {} won, {}", r.winner_port + 1, report.detail) :
@@ -2325,6 +2341,7 @@ std::optional<int> OnBoundary(Core::System& system,
   s_solo_idle = false;
   const std::optional<int> rewound_to = Boundary(system, local_pad, on_frame);
   ConfirmResults(TheMatch());
+  Orca::UX::RankedSet::SetLocalPort(TheMatch().local_seat);
   s_solo_idle = SoloIdle(TheMatch());
   return rewound_to;
 }

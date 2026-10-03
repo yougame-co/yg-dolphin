@@ -17,6 +17,7 @@
 #include "Core/Orca/UX/OnlineMenu.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/UX/Probe.h"
+#include "Core/Orca/UX/RankedSet.h"
 #include "Core/Orca/UX/Results.h"
 
 namespace Orca::UX
@@ -42,11 +43,17 @@ void Init()
     WriteMenuText(guard);
     // Reads only: the app hears what the player picked in the game's Online menu.
     ReadOnlineMenu(guard, resimulating, alone);
+    // A ranked queue match's set, followed in the match block (a pure function of memory).
+    RankedSet::Frame(guard, frame);
     // Reads only: each game's result in a matchmade room, once its frames are final (Results.h).
     ReadResultsFrame(guard, frame);
-    // A host that just took a matchmade room presets Brawl's rules, alone, before any keyframe.
+    // A host that just took a matchmade room presets Brawl's rules, alone, before any keyframe;
+    // the match block's header follows the room this game is in, only while it plays alone.
     if (!resimulating)
+    {
       ApplyQueueRules(guard, alone);
+      RankedSet::ApplyRoomMode(guard, alone);
+    }
     ProbeFrame(guard, frame);
     // This player's own controls in its own game, for the session to carry into a game it joins or
     // hosts (reads only; only while this game is its player's alone, so never a friend's game).

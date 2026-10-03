@@ -1,0 +1,427 @@
+// Copyright 2026 YouGame
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+// Ranked sets (ORCA.md "Ranked sets"): the match block's layout, the set followed in the game's
+// memory, each ruleset's verdict, and the tracker's reports from the block.
+
+#include <map>
+#include <vector>
+
+#include <gtest/gtest.h>
+
+#include "Core/Orca/UX/MatchBlock.h"
+#include "Core/Orca/UX/NameTags.h"
+#include "Core/Orca/UX/RankedSet.h"
+#include "Core/Orca/UX/Results.h"
+
+using namespace Orca::UX;
+using MatchBlock::GameRecord;
+using MatchBlock::How;
+using MatchBlock::Mode;
+using MatchBlock::NO_PORT;
+using MatchBlock::Ruleset;
+using MatchBlock::SetState;
+using Scene = Reading::Scene;
+
+namespace
+{
+class FakeMemory final : public GuestMemory
+{
+public:
+  bool Valid(u32 a) const override { return bytes.contains(a); }
+  u8 Read8(u32 a) const override { return bytes.at(a); }
+  u16 Read16(u32 a) const override { return static_cast<u16>(Read8(a) << 8 | Read8(a + 1)); }
+  u32 Read32(u32 a) const override { return u32(Read16(a)) << 16 | Read16(a + 2); }
+  void Write8(u32 a, u8 v) override
+  {
+    bytes[a] = v;
+    ++writes;
+  }
+  void Write16(u32 a, u16 v) override
+  {
+    Write8(a, static_cast<u8>(v >> 8));
+    Write8(a + 1, static_cast<u8>(v));
+  }
+  void Write32(u32 a, u32 v) override
+  {
+    Write16(a, static_cast<u16>(v >> 16));
+    Write16(a + 2, static_cast<u16>(v));
+  }
+  std::map<u32, u8> bytes;
+  int writes = 0;
+};
+
+// The block as the game leaves it before Orca writes it: dead code, not zeros.
+FakeMemory Block()
+{
+  FakeMemory m;
+  for (u32 i = 0; i < MatchBlock::SIZE; ++i)
+    m.bytes[MatchBlock::BASE + i] = static_cast<u8>(0x3A + i * 7);
+  return m;
+}
+
+// A 1v1's result block: two humans on ports 1 and 2.
+ResultBlock Result(int place0, int place1, int stocks0 = 1, int stocks1 = 0, int character0 = 0,
+                   int character1 = 3)
+{
+  ResultBlock b;
+  b.mode = 1;
+  b.stage = 2;
+  b.end = 1;
+  b.decision = 2;
+  b.ports[0] = {true, true, character0, stocks0, place0};
+  b.ports[1] = {true, true, character1, stocks1, place1};
+  return b;
+}
+
+RankedSet::Facts At(Scene scene)
+{
+  RankedSet::Facts f;
+  f.scene = scene;
+  return f;
+}
+
+// One whole game through Step: CSS, between, the fight, between, the results screen.
+SetState Play(SetState s, Ruleset ruleset, u32 start, const ResultBlock& result,
+              const std::vector<RankedSet::Live>& live = {}, bool sudden = false)
+{
+  s = RankedSet::Step(s, ruleset, At(Scene::Other), start - 2);
+  s = RankedSet::Step(s, ruleset, At(Scene::Between), start - 1);
+  u32 frame = start;
+  s = RankedSet::Step(s, ruleset, At(Scene::Fight), frame++);
+  for (const RankedSet::Live& l : live)
+  {
+    RankedSet::Facts f = At(Scene::Fight);
+    f.live = l;
+    s = RankedSet::Step(s, ruleset, f, frame++);
+  }
+  s = RankedSet::Step(s, ruleset, At(Scene::Between), frame++);
+  if (sudden)
+  {
+    s = RankedSet::Step(s, ruleset, At(Scene::Fight), frame++);
+    s = RankedSet::Step(s, ruleset, At(Scene::Between), frame++);
+  }
+  RankedSet::Facts results = At(Scene::Results);
+  results.block = result;
+  results.decision = static_cast<u8>(result.decision);
+  s = RankedSet::Step(s, ruleset, results, frame++);
+  // The results screen stays: nothing more is recorded.
+  s = RankedSet::Step(s, ruleset, results, frame++);
+  return s;
+}
+
+RankedSet::Live LiveAt(bool time_up, u8 stocks0, u8 stocks1, u16 percent0, u16 percent1,
+                       bool ledge0 = false, bool ledge1 = false)
+{
+  RankedSet::Live l;
+  l.valid = true;
+  l.time_up = time_up;
+  l.stocks = {stocks0, stocks1};
+  l.percent = {percent0, percent1};
+  l.on_ledge = {ledge0, ledge1};
+  return l;
+}
+
+// `grabs` ledge grabs by `port`: on the ledge, off it, again.
+std::vector<RankedSet::Live> Grabs(int port, int grabs)
+{
+  std::vector<RankedSet::Live> out;
+  for (int i = 0; i < grabs; ++i)
+  {
+    out.push_back(LiveAt(false, 3, 3, 0, 0, port == 0, port == 1));
+    out.push_back(LiveAt(false, 3, 3, 0, 0));
+  }
+  return out;
+}
+}  // namespace
+
+TEST(OrcaMatchBlock, HeaderRoundTripsAndStartsAFreshSet)
+{
+  FakeMemory m = Block();
+  EXPECT_FALSE(MatchBlock::ReadHeader(m));
+  EXPECT_GT(MatchBlock::WriteHeader(m, {Mode::Ranked, Ruleset::Brawl}), 0);
+  ASSERT_TRUE(MatchBlock::ReadHeader(m));
+  EXPECT_EQ(*MatchBlock::ReadHeader(m), (MatchBlock::Header{Mode::Ranked, Ruleset::Brawl}));
+  EXPECT_EQ(MatchBlock::ReadSet(m), SetState{});
+  // The same header again writes nothing and keeps the set.
+  SetState s;
+  s.games = 1;
+  s.wins = {1, 0};
+  MatchBlock::WriteSet(m, s);
+  EXPECT_EQ(MatchBlock::WriteHeader(m, {Mode::Ranked, Ruleset::Brawl}), 0);
+  EXPECT_EQ(MatchBlock::ReadSet(m), s);
+  // Another mode starts a fresh set.
+  EXPECT_GT(MatchBlock::WriteHeader(m, {Mode::Casual, Ruleset::Brawl}), 0);
+  EXPECT_EQ(MatchBlock::ReadSet(m), SetState{});
+  EXPECT_GT(MatchBlock::Clear(m), 0);
+  EXPECT_FALSE(MatchBlock::ReadHeader(m));
+  EXPECT_EQ(MatchBlock::Clear(m), 0);
+}
+
+TEST(OrcaMatchBlock, SetRoundTripsAndWritesOnlyWhatChanged)
+{
+  FakeMemory m = Block();
+  MatchBlock::WriteHeader(m, {Mode::Ranked, Ruleset::PPlus});
+  SetState s;
+  s.games = 3;
+  s.wins = {2, 1};
+  s.done = 1;
+  s.winner = 0;
+  s.last_winner = 0;
+  s.fight_start = 0x12345678;
+  s.snap_percent = {123, 456};
+  s.ledge = {36, 2};
+  s.records[0] = {100, 0, How::Results, 2, false, false, {0, 3}, {1, 0}, {0, 0}};
+  s.records[1] = {200, 1, How::Percent, 0x1F, true, true, {0x16, 3}, {1, 1}, {21, 4}};
+  EXPECT_GT(MatchBlock::WriteSet(m, s), 0);
+  EXPECT_EQ(MatchBlock::ReadSet(m), s);
+  m.writes = 0;
+  EXPECT_EQ(MatchBlock::WriteSet(m, s), 0);
+  EXPECT_EQ(m.writes, 0);
+  EXPECT_EQ(s.StagesWonBy(0), u64(1) << 2);
+  EXPECT_EQ(s.StagesWonBy(1), u64(1) << 0x1F);
+  // Nothing outside the block.
+  for (const auto& [a, v] : m.bytes)
+    EXPECT_TRUE(a >= MatchBlock::BASE && a < MatchBlock::BASE + MatchBlock::SIZE);
+}
+
+TEST(OrcaRankedSet, BestOfThree)
+{
+  SetState s;
+  s = Play(s, Ruleset::Brawl, 1000, Result(0, 1));
+  EXPECT_EQ(s.games, 1);
+  EXPECT_EQ(s.wins, (std::array<u8, 2>{1, 0}));
+  EXPECT_EQ(s.last_winner, 0);
+  EXPECT_EQ(s.records[0].start, 1000u);
+  EXPECT_EQ(s.records[0].winner, 0);
+  EXPECT_EQ(s.records[0].how, How::Results);
+  EXPECT_EQ(s.GameNumber(), 2);
+  EXPECT_FALSE(s.done);
+  s = Play(s, Ruleset::Brawl, 5000, Result(1, 0, 0, 2));
+  EXPECT_EQ(s.wins, (std::array<u8, 2>{1, 1}));
+  EXPECT_EQ(s.last_winner, 1);
+  EXPECT_EQ(s.StagesWonBy(1), u64(1) << 2);
+  s = Play(s, Ruleset::Brawl, 9000, Result(1, 0, 0, 1));
+  EXPECT_EQ(s.done, 1);
+  EXPECT_EQ(s.winner, 1);
+  EXPECT_EQ(s.games, 3);
+  // A finished set follows nothing more.
+  const SetState after = Play(s, Ruleset::Brawl, 13000, Result(0, 1));
+  EXPECT_EQ(after.games, 3);
+  EXPECT_FALSE(after.fight);
+}
+
+TEST(OrcaRankedSet, VoidGamesAreNotRecorded)
+{
+  SetState s;
+  ResultBlock cpu = Result(0, 1);
+  cpu.ports[1].human = false;
+  s = Play(s, Ruleset::Brawl, 1000, cpu);
+  EXPECT_EQ(s.games, 0);
+  ResultBlock quit = Result(0, 1);
+  quit.end = 2;
+  s = Play(s, Ruleset::Brawl, 2000, quit);
+  EXPECT_EQ(s.games, 0);
+  // A fight left for the menus without its results screen.
+  s = RankedSet::Step(s, Ruleset::Brawl, At(Scene::Fight), 3000);
+  EXPECT_TRUE(s.fight);
+  s = RankedSet::Step(s, Ruleset::Brawl, At(Scene::Other), 3001);
+  EXPECT_FALSE(s.fight);
+  EXPECT_EQ(s.games, 0);
+}
+
+TEST(OrcaRankedSet, BrawlTimeOutLedgeLimitThenStocksThenPercent)
+{
+  // Port 1 grabs the ledge 36 times (over 35): port 2 wins although port 1 had more stocks.
+  std::vector<RankedSet::Live> live = Grabs(0, 36);
+  live.push_back(LiveAt(true, 3, 2, 10, 20));
+  SetState s = Play({}, Ruleset::Brawl, 1000, Result(0, 1, 3, 2), live);
+  EXPECT_EQ(s.records[0].ledge, (std::array<u8, 2>{36, 0}));
+  EXPECT_EQ(s.records[0].winner, 1);
+  EXPECT_EQ(s.records[0].how, How::Ledge);
+  EXPECT_TRUE(s.records[0].timeout);
+  // 35 is within the limit: stocks decide.
+  live = Grabs(0, 35);
+  live.push_back(LiveAt(true, 3, 2, 10, 20));
+  s = Play({}, Ruleset::Brawl, 1000, Result(0, 1, 3, 2), live);
+  EXPECT_EQ(s.records[0].winner, 0);
+  EXPECT_EQ(s.records[0].how, How::Stocks);
+  // Meta Knight's limit is 20.
+  live = Grabs(0, 21);
+  live.push_back(LiveAt(true, 3, 2, 10, 20));
+  s = Play({}, Ruleset::Brawl, 1000, Result(0, 1, 3, 2, RankedSet::META_KNIGHT), live);
+  EXPECT_EQ(s.records[0].how, How::Ledge);
+  EXPECT_EQ(s.records[0].winner, 1);
+  // Both over: the limit is ignored.
+  live = Grabs(0, 40);
+  for (const auto& l : Grabs(1, 40))
+    live.push_back(l);
+  live.push_back(LiveAt(true, 2, 3, 10, 20));
+  s = Play({}, Ruleset::Brawl, 1000, Result(1, 0, 2, 3), live);
+  EXPECT_EQ(s.records[0].how, How::Stocks);
+  EXPECT_EQ(s.records[0].winner, 1);
+  // Level on stocks at time-up (sudden death follows, and is ignored): lower percent wins.
+  live = {LiveAt(false, 2, 2, 10, 20), LiveAt(true, 2, 2, 88, 40)};
+  s = Play({}, Ruleset::Brawl, 1000, Result(0, 1, 1, 0), live, true);
+  EXPECT_EQ(s.records[0].how, How::Percent);
+  EXPECT_EQ(s.records[0].winner, 1);
+  EXPECT_EQ(s.wins, (std::array<u8, 2>{0, 1}));
+  // What happens after time-up never changes the snapshot.
+  live = {LiveAt(true, 2, 2, 40, 88), LiveAt(true, 1, 2, 300, 300)};
+  s = Play({}, Ruleset::Brawl, 1000, Result(1, 0, 0, 1), live, true);
+  EXPECT_EQ(s.records[0].how, How::Percent);
+  EXPECT_EQ(s.records[0].winner, 0);
+}
+
+TEST(OrcaRankedSet, BrawlTieMeansATiebreakGame)
+{
+  // Level on everything at time-up.
+  std::vector<RankedSet::Live> live = {LiveAt(true, 2, 2, 50, 50)};
+  SetState s = Play({}, Ruleset::Brawl, 1000, Result(0, 1, 1, 0), live, true);
+  EXPECT_EQ(s.games, 1);
+  EXPECT_EQ(s.records[0].winner, NO_PORT);
+  EXPECT_EQ(s.records[0].how, How::Tie);
+  EXPECT_TRUE(s.tiebreak);
+  EXPECT_EQ(s.tb_streak, 1);
+  EXPECT_EQ(s.wins, (std::array<u8, 2>{0, 0}));
+  EXPECT_EQ(s.GameNumber(), 1);
+  // The tiebreak game is played with 1 stock and 3:00.
+  FakeMemory m;
+  for (u32 a : {0x805A00E0u, 0x805A00E1u, 0x805A00E2u, 0x805A00E3u})
+    m.bytes[a] = 0;
+  m.Write32(0x805A00E0, 0x90181300);
+  for (u32 i = 0; i < 0x20; ++i)
+    m.bytes[0x90181300 + i] = 0;
+  m.Write32(0x9018131C, 0x9017F360);
+  for (u32 i = 0; i < 0x10; ++i)
+    m.bytes[0x9017F360 + i] = 0;
+  EXPECT_EQ(RankedSet::WriteSetRules(m, s), 3);
+  EXPECT_EQ(m.Read8(0x9017F362), 1);
+  EXPECT_EQ(m.Read8(0x9017F364), 1);
+  EXPECT_EQ(m.Read8(0x9017F368), 3);
+  EXPECT_EQ(RankedSet::WriteSetRules(m, s), 0);
+  // The tiebreak game's ledge limit is 11.
+  live = Grabs(1, 12);
+  live.push_back(LiveAt(true, 1, 1, 50, 60));
+  SetState t = Play(s, Ruleset::Brawl, 5000, Result(0, 1, 1, 1), live);
+  EXPECT_TRUE(t.records[1].tiebreak);
+  EXPECT_EQ(t.records[1].how, How::Ledge);
+  EXPECT_EQ(t.records[1].winner, 0);
+  EXPECT_EQ(t.wins, (std::array<u8, 2>{1, 0}));
+  EXPECT_FALSE(t.tiebreak);
+  EXPECT_EQ(t.tb_streak, 0);
+  EXPECT_EQ(t.GameNumber(), 2);
+  EXPECT_EQ(RankedSet::WriteSetRules(m, t), 2);
+  EXPECT_EQ(m.Read8(0x9017F364), 3);
+  EXPECT_EQ(m.Read8(0x9017F368), 8);
+  // A simultaneous last-stock loss (sudden death, no time-up): a tie as well.
+  SetState u = Play({}, Ruleset::Brawl, 1000, Result(0, 1, 1, 0), {}, true);
+  EXPECT_EQ(u.records[0].how, How::Tie);
+  EXPECT_TRUE(u.tiebreak);
+  // Five ties in a row void the set.
+  SetState v;
+  for (int i = 0; i < RankedSet::TIEBREAK_STREAK_LIMIT; ++i)
+    v = Play(v, Ruleset::Brawl, 1000 + 1000 * i, Result(0, 1, 1, 0), {}, true);
+  EXPECT_EQ(v.done, 2);
+  EXPECT_EQ(v.winner, NO_PORT);
+  EXPECT_FALSE(v.tiebreak);
+}
+
+TEST(OrcaRankedSet, BrawlTimeOutWithoutTheClockUsesTheGamesStocks)
+{
+  // The game's own time-up (decision 1) with no live reading: more stocks, as the result info says.
+  ResultBlock r = Result(1, 0, 1, 2);
+  r.decision = 1;
+  SetState s = Play({}, Ruleset::Brawl, 1000, r);
+  EXPECT_EQ(s.records[0].how, How::Stocks);
+  EXPECT_EQ(s.records[0].winner, 1);
+  EXPECT_TRUE(s.records[0].timeout);
+}
+
+TEST(OrcaRankedSet, ProjectPlusKeepsItsOwnTimeOutRules)
+{
+  std::vector<RankedSet::Live> live = Grabs(0, 80);
+  live.push_back(LiveAt(true, 2, 2, 10, 90));
+  ResultBlock r = Result(0, 1, 2, 2);
+  r.decision = 1;
+  SetState s = Play({}, Ruleset::PPlus, 1000, r, live);
+  EXPECT_EQ(s.records[0].how, How::Results);
+  EXPECT_EQ(s.records[0].winner, 0);
+  EXPECT_FALSE(s.tiebreak);
+  // A tie (overtime should have prevented it) is recorded without a tiebreak game.
+  s = Play({}, Ruleset::PPlus, 1000, Result(0, 0, 1, 1));
+  EXPECT_EQ(s.records[0].how, How::Tie);
+  EXPECT_FALSE(s.tiebreak);
+}
+
+TEST(OrcaRankedSet, ScoreLine)
+{
+  SetState s;
+  EXPECT_EQ(RankedSet::ScoreLine(s, 0), "Game 1 · 0–0");
+  s.wins = {1, 0};
+  EXPECT_EQ(RankedSet::ScoreLine(s, 0), "Game 2 · 1–0");
+  EXPECT_EQ(RankedSet::ScoreLine(s, 1), "Game 2 · 0–1");
+  s.tiebreak = true;
+  EXPECT_EQ(RankedSet::ScoreLine(s, 1), "Tiebreak game · 0–1");
+  s.tiebreak = false;
+  s.wins = {2, 1};
+  s.done = 1;
+  EXPECT_EQ(RankedSet::ScoreLine(s, 1), "Set over · 1–2");
+  s.done = 2;
+  EXPECT_EQ(RankedSet::ScoreLine(s, 0), "Set void · 2–1");
+}
+
+TEST(OrcaRankedSet, TrackerReportsTheBlocksGames)
+{
+  ResultsTracker t;
+  SetState s;
+  int frame = 100;
+  const auto store = [&](const SetState& set, Scene scene = Scene::Other) {
+    Reading r;
+    r.scene = scene;
+    r.set = set;
+    t.Store(frame++, r, 0);
+  };
+  // The first final reading only sets what was already there.
+  s = Play(s, Ruleset::Brawl, 50, Result(0, 1));
+  store(s);
+  EXPECT_TRUE(t.Confirm(frame, 10).empty());
+  // A game whose fight began after the opponent's plug frame (10).
+  s = Play(s, Ruleset::Brawl, 2000, Result(1, 0, 0, 1));
+  store(s, Scene::Results);
+  store(s, Scene::Results);
+  std::vector<GameResult> out = t.Confirm(frame, 10);
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(out[0].kind, GameResult::Kind::Win);
+  EXPECT_EQ(out[0].winner_port, 1);
+  EXPECT_EQ(out[0].start, 2000);
+  EXPECT_EQ(out[0].number, 2);
+  EXPECT_EQ(out[0].set_done, 0);
+  EXPECT_EQ(out[0].DetailJson(),
+            "{\"f\":2000,\"st\":2,\"c\":[0,3],\"s\":[0,1],\"to\":0,\"k\":1,\"lg\":[0,0],\"tb\":0}");
+  // Unconfirmed readings wait.
+  s = Play(s, Ruleset::Brawl, 3000, Result(0, 1));
+  store(s);
+  EXPECT_TRUE(t.Confirm(frame - 2, 10).empty());
+  out = t.Confirm(frame, 10);
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(out[0].start, 3000);
+  EXPECT_EQ(out[0].set_done, 1);
+  EXPECT_EQ(out[0].set_winner, 0);
+  // A tie is a draw; a fight from before the plug frame isn't reported.
+  ResultsTracker t2;
+  SetState a;
+  Reading r;
+  r.set = a;
+  t2.Store(1, r, 0);
+  EXPECT_TRUE(t2.Confirm(1, 500).empty());
+  a = Play(a, Ruleset::Brawl, 400, Result(0, 1));
+  a = Play(a, Ruleset::Brawl, 1000, Result(0, 1, 1, 0), {}, true);
+  r.set = a;
+  t2.Store(2, r, 0);
+  out = t2.Confirm(2, 500);
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(out[0].kind, GameResult::Kind::Draw);
+  EXPECT_EQ(out[0].start, 1000);
+  EXPECT_EQ(out[0].how, static_cast<int>(How::Tie));
+}

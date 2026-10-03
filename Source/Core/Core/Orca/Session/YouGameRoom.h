@@ -125,6 +125,13 @@ struct GameReport
   std::string why;
   // Win and Draw: {"f":..,"st":..,"c":[..],"s":[..],"to":..}, ports in order.
   std::string detail;
+  // A ranked set's game from the match block (UX/RankedSet.h): its fight's first frame (the
+  // report's id, "g<start>", the same on both machines; -1: the beta's "g<n>"), its number in the
+  // set, and for the game that ended the set, how (1 won by `set_winner_seat`, 2 void).
+  int start = -1;
+  int number = 0;
+  int set_done = 0;
+  int set_winner_seat = -1;
 };
 
 enum class RoomState
