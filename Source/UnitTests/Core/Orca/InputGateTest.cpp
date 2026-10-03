@@ -49,7 +49,7 @@ bool Same(const GCPadStatus& a, const GCPadStatus& b)
 }
 
 // Leaves no source and no masks behind, whatever the test did.
-class GateTest : public ::testing::Test
+class OrcaInputGateBoundary : public ::testing::Test
 {
 protected:
   void TearDown() override
@@ -105,14 +105,14 @@ TEST(OrcaInputGate, SticksCentredSeparately)
 {
   const GCPadStatus pad = Busy();
   GCPadStatus out = Apply(pad, Mask{0, true, false});
-  EXPECT_EQ(out.stickX, GCPadStatus::MAIN_STICK_CENTER_X);
-  EXPECT_EQ(out.stickY, GCPadStatus::MAIN_STICK_CENTER_Y);
+  EXPECT_EQ(out.stickX, int{GCPadStatus::MAIN_STICK_CENTER_X});
+  EXPECT_EQ(out.stickY, int{GCPadStatus::MAIN_STICK_CENTER_Y});
   EXPECT_EQ(out.substickX, pad.substickX);
   EXPECT_EQ(out.button, pad.button);
   out = Apply(pad, Mask{0, false, true});
   EXPECT_EQ(out.stickX, pad.stickX);
-  EXPECT_EQ(out.substickX, GCPadStatus::C_STICK_CENTER_X);
-  EXPECT_EQ(out.substickY, GCPadStatus::C_STICK_CENTER_Y);
+  EXPECT_EQ(out.substickX, int{GCPadStatus::C_STICK_CENTER_X});
+  EXPECT_EQ(out.substickY, int{GCPadStatus::C_STICK_CENTER_Y});
 }
 
 TEST(OrcaInputGate, AllIsANeutralConnectedPadButOriginBitsStay)
@@ -162,10 +162,10 @@ TEST(OrcaInputGate, SameBytesAsTheWireSees)
   const GCPadStatus b = Apply(Orca::Net::DecodePad(wire), Mask{PAD_BUTTON_START, true, false});
   EXPECT_TRUE(Same(a, b));
   EXPECT_EQ(a.button & PAD_BUTTON_START, 0);
-  EXPECT_EQ(a.stickX, GCPadStatus::MAIN_STICK_CENTER_X);
+  EXPECT_EQ(a.stickX, int{GCPadStatus::MAIN_STICK_CENTER_X});
 }
 
-TEST_F(GateTest, NoSourceNoMasks)
+TEST_F(OrcaInputGateBoundary, NoSourceNoMasks)
 {
   Boundary();
   for (const Mask& mask : Current())
@@ -174,7 +174,7 @@ TEST_F(GateTest, NoSourceNoMasks)
   EXPECT_TRUE(Same(GatePad(0, pad), pad));
 }
 
-TEST_F(GateTest, MasksFollowTheStateAtEachBoundary)
+TEST_F(OrcaInputGateBoundary, MasksFollowTheStateAtEachBoundary)
 {
   // The source reads "memory" (here an int): the masks of a boundary depend on it alone, so a
   // rollback that brings back an earlier state brings back that state's masks, and nothing is
@@ -216,7 +216,7 @@ TEST_F(GateTest, MasksFollowTheStateAtEachBoundary)
   EXPECT_TRUE(Same(GatePad(-1, pad), pad));
 }
 
-TEST_F(GateTest, ClearedSourceAndClearStopMasking)
+TEST_F(OrcaInputGateBoundary, ClearedSourceAndClearStopMasking)
 {
   SetSource([](const Core::CPUThreadGuard&) {
     Masks masks{};
@@ -236,7 +236,7 @@ TEST_F(GateTest, ClearedSourceAndClearStopMasking)
   EXPECT_TRUE(Current()[0].Empty());
 }
 
-TEST_F(GateTest, GameReadsGatedRawReadsDoNot)
+TEST_F(OrcaInputGateBoundary, GameReadsGatedRawReadsDoNot)
 {
   // A session's port: the game's read (InputOverride, SI_DeviceGCController) goes through the
   // masks; the raw read (what a recording keeps) and the session's pads themselves do not.
@@ -263,7 +263,7 @@ TEST_F(GateTest, GameReadsGatedRawReadsDoNot)
   const std::optional<GCPadStatus> raw0 = Rollback::RawInputOverride(0);
   ASSERT_TRUE(game0 && raw0);
   EXPECT_EQ(game0->button, PAD_BUTTON_A);
-  EXPECT_EQ(game0->stickX, GCPadStatus::MAIN_STICK_CENTER_X);
+  EXPECT_EQ(game0->stickX, int{GCPadStatus::MAIN_STICK_CENTER_X});
   EXPECT_EQ(raw0->button, PAD_BUTTON_A | PAD_BUTTON_START);
   EXPECT_EQ(raw0->stickX, 255);
   EXPECT_EQ(Orca::Net::EncodePad(*raw0), pads[0]);
