@@ -987,6 +987,18 @@ characters, the stage, the countdown's effects). Orca sessions force (`Orca/Prof
   copy pipelines are in no Dolphin disk cache and no ubershader covers them, so each kind compiled
   at its first copy, in every run: Brawl's first two (R8 and RGBA8) come at the countdown. Their
   UIDs are kept in `Cache/<game>.efbcopy.uidcache`.
+- **A limit on that wait** (`ShaderCache::WaitForBootCompile`, sessions only). The first boot after
+  an update compiles every pipeline in the UID cache (below), and the desktop app kills a boot that
+  hasn't drawn in 120 s (`desktop/src/orca.ts`), a timer installed apps keep. After 40 s the wait
+  ends as soon as the ubershaders are compiled; at 60 s it ends whatever is left. What is left
+  compiles in the background on the runtime thread count and is drawn with an ubershader until it
+  is ready; an ubershader still compiling at 60 s is compiled again at its first draw (a stall,
+  not a failed start). The log says which: "Orca: compiled N pipelines (K ubershader) before the
+  first frame in X s" or "Orca: stopped waiting for shaders after X s, ...". While the wait lasts
+  more than a second, Orca prints `orca shaders <compiled> <total>` once a second, before
+  `ready`, so an app can tell a slow boot from a hung one. `ORCA_TEST_SHADER_WAIT_MS=N` sets both
+  limits to N ms. Dolphin's shader workers slept through work already queued when their count
+  changed; they no longer do (`AsyncShaderCompiler::WorkerThreadRun`).
 
 Rendering only: nothing drawn reaches RAM (EFB/XFB copies stay on the GPU, EFB access and bbox are
 off), so none of this can make two players' games differ.
@@ -996,8 +1008,13 @@ DXBC on Windows) carry the build's git commit in their header and are emptied by
 the pipeline UID cache survives. Without the boot compile, that cache was recompiled on one
 background thread (`ShaderCompilerThreads` defaults to 1), and a pipeline still queued at the
 countdown compiled again on the emulation thread. macOS adds Apple's own Metal cache, kept per
-binary. Until this change only the desktop app's macOS command line asked for the first two
-settings.
+binary (Metal keeps no `Cache/Shaders` file). Until this change only the desktop app's macOS
+command line asked for the first two settings. The app's `-u` is `<userData>/orca/user`
+(`%APPDATA%\yougame-desktop\orca\user` on Windows, `~/Library/Application
+Support/yougame-desktop/orca/user` on macOS), one folder for every Orca version: the UID caches,
+the EFB copy cache and the JIT list survive updates, the compiled shaders don't. The app passes no
+`-v`, so Windows draws with Dolphin's default, D3D11 (`D3D`), unless the folder's `Dolphin.ini`
+says otherwise; the forced-settings line names it (`GFXBackend=`).
 
 Measured 2026-10-03 (M4, Metal, 871x434 window, scripted Brawl Mario vs Link on Battlefield and
 P+ 1v1, `YG_SHADERLOG=1` probe build): VI stalls from 0.6 s before scMelee to 12 s after.
