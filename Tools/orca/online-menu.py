@@ -194,7 +194,10 @@ def run(name, steps, expected):
         out_lines = f.read().splitlines()
     with open(log_path, errors="replace") as f:
         log_lines = f.read().splitlines()
-    every = out_lines + log_lines
+    # Orca logs to stderr on macOS but to stdout on Windows (ConsoleListenerWin, redirected): the
+    # landing checks read both. Event lines ("orca menu ...") match none of the log patterns.
+    log_lines = out_lines + log_lines
+    every = log_lines
     if code != 0:
         return f"exit code {code}"
 
