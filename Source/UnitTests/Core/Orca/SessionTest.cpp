@@ -3656,6 +3656,95 @@ TEST(OrcaDropIn, DroppedFriendUnplugsAfterItsLastInput)
   EXPECT_TRUE(IsUnplugged(At(host->game.m_ran_pads, host->session.CurrentFrame() - 1)[1]));
 }
 
+// The session's value channel (Session::RequireValues): a newcomer plugs in only once every player
+// in the session, the newcomer included, acknowledges holding the port values it plugs in with, so
+// no player hears of its plug frame before it holds them.
+TEST(OrcaDropIn, PlugInWaitsForEveryPlayerToHoldThePortValues)
+{
+  struct Inject final : Transport
+  {
+    void Send(const Packet& packet) override { sent.push_back(packet); }
+    std::vector<Packet> Receive() override { return std::exchange(queue, {}); }
+    bool Connected() const override { return true; }
+    std::vector<Packet> queue;
+    std::vector<Packet> sent;
+  };
+  FakeGame solo;
+  std::vector<Pads> log = PlaySolo(&solo, 0, 300);
+  Inject net;
+  FakeGame game;
+  game.m_state = solo.m_state;
+  game.m_history = solo.m_history;
+  game.m_ran_pads = solo.m_ran_pads;
+  Session host(DropInConfig(0, 300), game, net);
+  host.SetLog(0, log);
+  // Two friends replay from the keyframe of frame 240; seat 3's values came later (version 5).
+  host.AddPeer(1, 300, 240);
+  host.AddPeer(2, 300, 240);
+  host.RequireValues(1, 4);
+  host.RequireValues(2, 5);
+  int completed = 299;
+  std::array<int, MAX_SEATS> sequence{};
+  // Both friends caught up (history acknowledged, at the host's frame), holding these versions.
+  const auto boundary = [&](int ack1, int ack2) {
+    for (const auto& [seat, ack] : {std::pair(1, ack1), std::pair(2, ack2)})
+    {
+      Packet p;
+      p.seat = seat;
+      p.sequence = ++sequence[seat];
+      p.current_frame = host.CurrentFrame();
+      p.history_ack = host.CurrentFrame() - 1;
+      p.values_ack = ack;
+      net.queue.push_back(p);
+    }
+    const Step step = host.OnBoundary(completed, Pad{});
+    EXPECT_EQ(step.kind, StepKind::Run) << host.Error();
+    completed = game.Run();
+  };
+  // Seat 2 has nobody's acknowledgement of version 5 yet; seat 1 has everyone's version 4.
+  for (int i = 0; i < 3; ++i)
+    boundary(4, 4);
+  EXPECT_NE(host.Plan()[1].plug_from, NEVER) << host.Describe();
+  EXPECT_EQ(host.Plan()[2].plug_from, NEVER) << host.Describe();
+  // The newcomer holds them, the friend already in doesn't: still not.
+  for (int i = 0; i < 3; ++i)
+    boundary(4, 5);
+  EXPECT_EQ(host.Plan()[2].plug_from, NEVER) << host.Describe();
+  // An acknowledgement never goes back: a stale packet saying 4 changes nothing once 5 is in.
+  boundary(5, 4);
+  const int plugged = host.Plan()[2].plug_from;
+  EXPECT_NE(plugged, NEVER) << host.Describe();
+  EXPECT_GT(plugged, host.CurrentFrame());
+  // The roster the host sends carries it from then on.
+  ASSERT_FALSE(net.sent.empty());
+  ASSERT_TRUE(net.sent.back().roster);
+  EXPECT_EQ((*net.sent.back().roster)[2].plug_from, plugged);
+  EXPECT_TRUE(host.Error().empty()) << host.Error();
+}
+
+// A player's packets acknowledge the newest values version it holds, and only ever more.
+TEST(OrcaDropIn, PlayersAcknowledgeTheValuesTheyHold)
+{
+  FakeNet net;
+  DropInPlayer joiner(DropInConfig(1, 40), net, 1, 40);
+  joiner.seat = 1;
+  FakeNet::End host_end(net, 0);
+  joiner.session.SetValuesHeld(3);
+  joiner.session.SetValuesHeld(2);
+  joiner.Tick(0, 1);
+  net.now = 1000;
+  const std::vector<Packet> got = host_end.Receive();
+  ASSERT_FALSE(got.empty());
+  EXPECT_EQ(got.back().values_ack, 3);
+  // It survives the wire.
+  Packet decoded;
+  ASSERT_TRUE(DecodePacket(EncodePacket(got.back()), &decoded));
+  EXPECT_EQ(decoded.values_ack, 3);
+  Packet none;
+  ASSERT_TRUE(DecodePacket(EncodePacket(Packet{}), &none));
+  EXPECT_EQ(none.values_ack, -1);
+}
+
 // The session runs on Dolphin's CPU thread in the guest's floating-point mode unless the frame hook
 // switches to the host's (Rollback::OnFrameBoundary does). Under the guest's non-IEEE mode (FPCR.FZ
 // and FPCR.AH on ARM64, MXCSR.FTZ on x86-64), the roster still holds exactly what was set.

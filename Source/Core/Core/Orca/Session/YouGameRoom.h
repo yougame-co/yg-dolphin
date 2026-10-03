@@ -33,6 +33,9 @@ struct RoomOptions
   std::string mode = "orca-test";
   // This Orca joins a friend's running game (ORCA_JOIN=1). Also true when the app opened an invite.
   bool joining = false;
+  // A joiner's own controls (Orca::Events::OwnControls), told to the host in its hello: the host
+  // puts them in the joiner's port (KeyframeInfo::Name::controls). Empty: none.
+  std::vector<u8> controls;
   // With no room_code, ask the desktop app whether the player opened an invite (only at launch: a
   // room opened later, after a leave, is always a new one).
   bool ask_app_for_room = true;
@@ -47,17 +50,27 @@ struct KeyframeInfo
   std::string hash;
   // The keyframe's AES-256-GCM key (64 hex), only ever in the room's `kf` message.
   std::string key;
-  // The host's player names for the game's ports, each from the frame it applies: the joiner names
-  // ports exactly as the host does (Orca::Events::PortInfo), never from its own view of the roster.
+  // The host's values for the game's ports (who plays each, and with which controls), each from
+  // the frame it applies: the joiner names ports exactly as the host does (Orca::Events::PortInfo),
+  // never from its own view of the roster.
   struct Name
   {
     int seat = 0;
     int from = 0;
     std::string name;
+    // The player's own controls (Orca::Events::PortInfo::controls; at most MAX_CONTROLS bytes,
+    // empty: none).
+    std::vector<u8> controls;
     bool operator==(const Name&) const = default;
   };
   std::vector<Name> names;
+  // The host's count of changes to `names` (Session::RequireValues): a player acknowledges the
+  // newest it holds, and the host plugs a newcomer in only once every player holds its values.
+  int names_version = 0;
 };
+
+// The most bytes a port's controls may have on the wire (UX/NameTags.h's profile is 46).
+constexpr size_t MAX_CONTROLS = 64;
 
 // Something another player in the room did.
 struct PeerEvent
@@ -78,6 +91,8 @@ struct PeerEvent
   // The player is the game's host (the Orca that started it).
   bool host = false;
   std::string name;
+  // Arrived: the joiner's own controls from its hello (RoomOptions::controls; empty: none).
+  std::vector<u8> controls;
   KeyframeInfo keyframe;
   // Left: why it said it was going ("desync" or "stalled", from its bye; empty: it just left).
   std::string reason;
@@ -139,8 +154,9 @@ public:
   bool ArrivalPending() const;
   // Host: offer `seat`'s player the keyframe (sent every second until its first packet arrives).
   void OfferKeyframe(int seat, const KeyframeInfo& info);
-  // Host: every port name so far (KeyframeInfo::names), to every player in the game.
-  void BroadcastNames(const std::vector<KeyframeInfo::Name>& names);
+  // Host: every port's values so far (KeyframeInfo::names) and their version, to every player in
+  // the game.
+  void BroadcastNames(const std::vector<KeyframeInfo::Name>& names, int version);
   // Host: tell `seat`'s player it was unplugged and why ("desync", "stalled", "network"), so its
   // own report says the same. Its room ends with that code.
   void DropPeer(int seat, const std::string& reason);
@@ -232,6 +248,11 @@ private:
 // Packets as room messages (exposed for tests).
 std::string EncodePacket(const Packet& packet);
 bool DecodePacket(const std::string& json, Packet* packet);
+// Port values in the room's "nm" and "kf" messages (exposed for tests): each [seat, from, name]
+// and, for a port with controls, their hex; at most 16 entries are read, and controls longer than
+// MAX_CONTROLS bytes, or not hex, are none.
+picojson::value NamesToJson(const std::vector<KeyframeInfo::Name>& names);
+std::vector<KeyframeInfo::Name> NamesFromJson(const picojson::object& message);
 // A packet from a direct link to the player at `slot`: as through the relay, only for that player's
 // own seat, and never with drop-in history (the relay alone carries it, in order).
 bool DecodeDirectPacket(const std::string& payload, int slot, Packet* packet);

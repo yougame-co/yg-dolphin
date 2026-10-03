@@ -25,7 +25,8 @@ bool Enabled();
 // runs on its own thread: the host keeps playing while friends come and go.
 void Start();
 // The room for this process from now on, after Shutdown: a friend's (`code`, joining), or a new one
-// of this player's own (empty code). Never asks the app for an invite.
+// of this player's own (empty code). Never asks the app for an invite. A joiner tells the host its
+// player's own controls as the in-game UX last read them (Orca::Events::OwnControls).
 void StartRoom(const std::string& code, bool joining);
 // The room's code, once known ("" before, or with no room).
 std::string Code();
@@ -88,8 +89,9 @@ bool IsDesync(const std::string& session_error);
 // Whether a session error is a rollback this machine couldn't make ("No snapshot to roll back",
 // "exceeds the limit"): an engine fault the player survives, reported in its own words.
 bool IsRollbackFailure(const std::string& session_error);
-// Host: every port name so far, to every player in the game (YouGameRoom::BroadcastNames).
-void BroadcastNames(const std::vector<Net::KeyframeInfo::Name>& names);
+// Host: every port's values so far and their version, to every player in the game
+// (YouGameRoom::BroadcastNames).
+void BroadcastNames(const std::vector<Net::KeyframeInfo::Name>& names, int version);
 // Leaves the room like Shutdown, but on a thread of its own: the goodbye and the socket's close
 // take up to a second or two, which the emulator thread must not wait out mid-game.
 void ShutdownInBackground();
