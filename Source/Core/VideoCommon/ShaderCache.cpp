@@ -97,6 +97,8 @@ void ShaderCache::Reload()
     LoadCaches();
   for (const auto& uid : efb_copy_uids)
     GetEFBCopyToVRAMPipeline(uid);
+  if (g_ActiveConfig.bShaderCache && m_api_type != APIType::Nothing)
+    OpenEFBCopyUIDCache();
 
   // Switch to the precompiling shader configuration while we rebuild.
   m_async_shader_compiler->ResizeWorkerThreads(g_ActiveConfig.GetShaderPrecompilerThreads());
@@ -884,15 +886,13 @@ void ShaderCache::LoadEFBCopyUIDCache()
 {
   using TextureConversionShaderGen::TCShaderUid;
   using TextureConversionShaderGen::UidData;
-  constexpr u32 MAGIC = 0x59504345;  // ECPY
-  constexpr u32 VERSION = 1;
   const std::string filename =
       File::GetUserPath(D_CACHE_IDX) + SConfig::GetInstance().GetGameID() + ".efbcopy.uidcache";
   std::vector<TCShaderUid> uids;
   {
     File::IOFile in(filename, "rb");
     u32 header[3] = {};
-    if (in && in.ReadArray(header, 3) && header[0] == MAGIC && header[1] == VERSION &&
+    if (in && in.ReadArray(header, 3) && header[0] == EFB_COPY_UID_MAGIC && header[1] == EFB_COPY_UID_VERSION &&
         header[2] == sizeof(UidData))
     {
       TCShaderUid uid;
@@ -907,16 +907,23 @@ void ShaderCache::LoadEFBCopyUIDCache()
   // Compiled now, before the first frame; a broken or unknown entry only costs its compile.
   for (const TCShaderUid& uid : uids)
     GetEFBCopyToVRAMPipeline(uid);
-  // Written again whole (drops a torn last entry), then appended to as new copies show up.
-  if (m_efb_copy_uid_cache_file.Open(filename, "wb"))
-  {
-    const u32 header[3] = {MAGIC, VERSION, sizeof(UidData)};
-    m_efb_copy_uid_cache_file.WriteArray(header, 3);
-    for (const auto& [uid, pipeline] : m_efb_copy_to_vram_pipelines)
-      m_efb_copy_uid_cache_file.WriteBytes(uid.GetUidData(), sizeof(UidData));
-    m_efb_copy_uid_cache_file.Flush();
-  }
+  OpenEFBCopyUIDCache();
   INFO_LOG_FMT(VIDEO, "Compiled {} EFB copy pipelines from {}", uids.size(), filename);
+}
+
+void ShaderCache::OpenEFBCopyUIDCache()
+{
+  // Written again whole (drops a torn last entry), then appended to as new copies show up.
+  const std::string filename = File::GetUserPath(D_CACHE_IDX) +
+                               SConfig::GetInstance().GetGameID() + ".efbcopy.uidcache";
+  if (!m_efb_copy_uid_cache_file.Open(filename, "wb"))
+    return;
+  const u32 header[3] = {EFB_COPY_UID_MAGIC, EFB_COPY_UID_VERSION,
+                         sizeof(TextureConversionShaderGen::UidData)};
+  m_efb_copy_uid_cache_file.WriteArray(header, 3);
+  for (const auto& [uid, pipeline] : m_efb_copy_to_vram_pipelines)
+    m_efb_copy_uid_cache_file.WriteBytes(uid.GetUidData(), uid.GetUidDataSize());
+  m_efb_copy_uid_cache_file.Flush();
 }
 
 void ShaderCache::AppendEFBCopyUID(const TextureConversionShaderGen::TCShaderUid& uid)

@@ -126,6 +126,9 @@ private:
   // first copy of each kind compiles on the emulation thread (a match's countdown, every run).
   // Their UIDs are kept per game and compiled before the first frame.
   void LoadEFBCopyUIDCache();
+  void OpenEFBCopyUIDCache();
+  static constexpr u32 EFB_COPY_UID_MAGIC = 0x59504345;  // ECPY
+  static constexpr u32 EFB_COPY_UID_VERSION = 1;
   void AppendEFBCopyUID(const TextureConversionShaderGen::TCShaderUid& uid);
   void CompileMissingPipelines();
   void QueueUberShaderPipelines();

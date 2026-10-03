@@ -595,9 +595,13 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
     guard.GetSystem().GetSerialInterface().RelatchInputs();
 
   // Match start (ORCA.md): blocks the next match will run compile while it loads, and a match's own
-  // compiles are remembered for the next. Only before a first pass: a re-run's RAM is the past.
-  if (Orca::SessionActive() && !IsResimulating())
+  // compiles are remembered for the next. Only before a first pass (a re-run's RAM is the past), and
+  // not while catching up, whose frames run back to back.
+  if (Orca::SessionActive() && !IsResimulating() &&
+      !(RingPort::Active() && RingPort::Active()->CatchingUp()))
+  {
     Orca::JitWarm::OnBoundary(guard);
+  }
 
   // Re-run frames are thrown away as soon as they are simulated: skip their host rendering (the
   // emulated GPU still runs, so RAM and timing match a rendered frame).

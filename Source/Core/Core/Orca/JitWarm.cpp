@@ -210,7 +210,6 @@ private:
   // The blocks known before this match, and what this match did with them.
   std::vector<Block> m_known;
   std::vector<Status> m_status;
-  std::vector<bool> m_seen;
   // The blocks this sweep looks at, by `when` (what a match runs first, first), and those still
   // waiting for the next sweep.
   std::vector<u32> m_queue, m_waiting;
@@ -317,7 +316,6 @@ void State::StartMatch()
                    [this](u32 a, u32 b) { return m_known[a].when < m_known[b].when; });
   m_waiting.clear();
   m_status.assign(m_known.size(), Status::Waiting);
-  m_seen.assign(m_known.size(), false);
   m_cursor = 0;
   m_next_sweep = 0;
   m_warming = !m_known.empty() && m_budget_us > 0;
@@ -392,7 +390,11 @@ void State::FinishRecording()
   if (m_io.joinable())
     m_io.join();
   // Merged and written off the CPU thread; the next match takes the result.
-  m_io = std::thread([this, known = std::move(m_known), seen = std::move(m_seen),
+  // Found compiled this match, or compiled here: young again.
+  std::vector<bool> seen(m_status.size());
+  for (std::size_t i = 0; i < m_status.size(); ++i)
+    seen[i] = m_status[i] == Status::Present || m_status[i] == Status::Compiled;
+  m_io = std::thread([this, known = std::move(m_known), seen = std::move(seen),
                       learned = std::move(m_stable)]() mutable {
     std::vector<Block> merged = Merge(std::move(known), seen, std::move(learned));
     const std::vector<u8> bytes = Encode(merged);
@@ -413,7 +415,6 @@ void State::FinishRecording()
     INFO_LOG_FMT(ROLLBACK, "JIT warm-up: {} blocks kept ({} bytes)", count, bytes.size());
   });
   m_known.clear();
-  m_seen.clear();
   m_stable.clear();
   m_status.clear();
   m_queue.clear();
@@ -468,7 +469,6 @@ void State::Warm(const Core::CPUThreadGuard& guard)
     {
       status = Status::Present;
       ++m_present;
-      m_seen[index] = true;
       ++m_cursor;
       continue;
     }
@@ -520,7 +520,6 @@ void State::Warm(const Core::CPUThreadGuard& guard)
     }
     ++m_compiled;
     status = Status::Compiled;
-    m_seen[index] = true;
   }
   const double ms =
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();

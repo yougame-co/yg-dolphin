@@ -1115,9 +1115,9 @@ bool JitArm64::CanCompileFromHook() const
   // Far more than any block: Common::CodeBlock::IsAlmostFull counts 64 KiB as more than the biggest
   // block ever.
   constexpr std::size_t ROOM = 1024 * 1024;
-  const auto largest = [](const Common::RangeSizeSet<u8*>& free) -> std::size_t {
-    const auto it = free.by_size_begin();
-    return it == free.by_size_end() ? 0 : static_cast<std::size_t>(it.to() - it.from());
+  const auto largest = [](const Common::RangeSizeSet<u8*>& ranges) -> std::size_t {
+    const auto it = ranges.by_size_begin();
+    return it == ranges.by_size_end() ? 0 : static_cast<std::size_t>(it.to() - it.from());
   };
   // SetEmitterStateToFreeCodeRegion takes region 1 while both its parts have ROOM, else the region
   // whose smaller part is larger: either way the one it takes has ROOM when this holds.
