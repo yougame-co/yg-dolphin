@@ -967,11 +967,17 @@ shader cache first (a cold Metal cache costs ~3.3 s at match start). A forced se
 
 ## Match start
 
-Luis, 2026-10-03: the first seconds of every match (the countdown and just after) dropped frames
-and froze, and the rest of the match was smooth; loading may take longer, but those drops must go.
-Two things compiled there, on the one thread that runs the game in a session (single core): the
-GPU pipelines the match draws first, and the match's PowerPC code. Both now compile before the
-match is on screen.
+Luis, 2026-10-03 (on his Windows PC): the first seconds of every match (the countdown and just
+after) dropped frames and froze, and the rest of the match was smooth; loading may take longer, but
+those drops must go. Two things compiled there, on the one thread that runs the game in a session
+(single core): the GPU pipelines the match draws first, and the match's PowerPC code. Both now
+compile before the match is on screen.
+
+Status, 2026-10-03: on the Mac, from the second launch after an update on, both matches of a
+two-match run start smooth (tables below). On Windows it is likely fixed, not confirmed: nobody has
+seen the freeze on his PC yet. What would confirm it is a run of the installed Orca on a copy of
+his own Orca folder (D3D11, his UID and shader caches, one and two matches per process) that shows
+the freeze, and the same with this build that doesn't. Until then, say "likely fixed" for Windows.
 
 ### Shaders
 
@@ -1031,7 +1037,12 @@ P+ 1v1, `YG_SHADERLOG=1` probe build): VI stalls from 0.6 s before scMelee to 12
 | Brawl, everything warm (any mode) | none | 2 | 96 ms | 523-543 ms |
 
 The boot compile costs, on the M4 after an update: 2.9 s with an empty UID cache, 10.7 s (Brawl,
-407 pipelines) and 14.6 s (P+, 656); 0.2 s otherwise. New textures cost 3-5 ms in the same window
+407 pipelines) and 14.6 s (P+, 656); 0.2 s otherwise. With Luis's own P+ UID cache of 2026-10-03
+(709 pipelines, 790 with the ubershaders) it took 15.2 s, printing an `orca shaders` line a second.
+With the wait cut to 2 s (`ORCA_TEST_SHADER_WAIT_MS=2000`) it stopped with 772 left (63
+ubershaders): the game ran, the menus had one 216 ms stall (ubershaders compiled at their first
+draw), and the match started as it did without the limit. Windows compiles each shader through
+glslang, SPIRV-Cross and FXC: its time after an update is unmeasured. New textures cost 3-5 ms in the same window
 (the hires lookup for Orca's own pack 0.1 ms). What is left with everything warm (about 100 + 60 ms
 at the countdown and 45 ms at 4 s, no compile, no texture work) is not shaders.
 
@@ -1069,6 +1080,14 @@ match in the same process compiles little (its blocks are still there).
   code memory under the running block (`JitBase::CanCompileFromHook`, `CompileFromHook`: the frame
   hook runs inside a JIT block). The emulated instruction cache sees the same fetches earlier; the
   synctest already counts it device state only.
+- **Jit64** (Windows, Intel Macs) compiles from the hook the same way (`Jit64::CanCompileFromHook`:
+  no stack-fault cleanup pending, trampolines not almost full, 1 MiB free in both the near and the
+  far code). Dolphin frees code only in a compile from the dispatcher, which resets the host stack
+  first (`Jit64AsmRoutineManager::ResetStack`), so a free range never holds the running block or a
+  return address the BLR optimization pushed; a hook's compile takes only free ranges and leaves
+  what was freed since to the dispatcher's next compile. A stack fault inside a hook's compile
+  (the hook runs deeper in the host stack) is Dolphin's own: it only invalidates blocks and asks
+  the next dispatcher compile to clear the cache, and the hook checks again before each block.
 - `ORCA_JITWARM=0` turns it off; `ORCA_JITWARM_LOG=1` logs each frame that compiled ahead.
 
 Measured 2026-10-03 on the M4 (871x434 Metal window, the same scripted matches; host VI intervals
@@ -1087,11 +1106,34 @@ from 0.6 s before scMelee to 12 s after; "before" is the 0.3.8 release, with the
 | P+ before, warm | 2 | 2 | 88 ms |
 | P+ after, warm (4 runs) | 2 | 0 | 30.9-31.6 ms |
 
+Two matches in one process (`Tools/orca/inputs/bf-two-new.txt`: Mario vs Link on Battlefield, then
+Mario vs Donkey Kong on Final Destination, a stage and a fighter the first match never loaded), on
+copies of Luis's own Mac Orca folder (his UID caches; `node Tools/orca/match-start.mjs <run>`):
+
+| run | match 1 | match 2 |
+|---|---|---|
+| before (0.3.8, the macOS app's flags) | 4 VI > 50 ms, worst 99 ms | none > 33 ms, worst 25 ms |
+| after, first launch after the update (no list yet) | 2 > 50 ms, worst 97 ms | none > 33 ms, worst 27 ms |
+| after, the next launch | none > 25 ms, worst 23 ms | none > 33 ms, worst 27 ms |
+
+On the Mac a second match was already smooth before: its shaders were asynchronous, and its code
+was mostly compiled by the first match. On Windows, before this change, a never-drawn pipeline in
+any match compiled on the emulation thread.
+
 The game's own long frame at the end of loading (100 ms in Brawl, 84 ms in P+) remains, behind the
 loading image. Emulation is unchanged: per-frame RAM hashes with the warm-up equal 0.3.7's (Brawl
 10,800 frames, P+ 9,000) and a run without it over two Brawl matches (19,020 frames, the second
 with other fighters); loopbacks pass (Brawl 936 rollbacks, P+ 579), and so do synctests across the
 match start (both games, 4,851 re-run frames each).
+
+The same on Jit64, 2026-10-03: an x86-64 build under Rosetta 2 with AVX and FMA advertised
+(`ROSETTA_ADVERTISE_AVX=1`, the paths a PC runs), each game first recording its list and then
+compiling from it: 30,004 (Brawl) and 26,532 (P+) blocks compiled from the hook, none discarded, no
+boundary without room, no cache flush, no BLR fault. Per-frame RAM hashes equal the arm64 ones
+above (Brawl 10,807 frames with and without the list, P+ 9,002, the two-match run 19,010);
+synctests across the match start pass (4,851 re-run frames each) and so do loopbacks (Brawl 936
+rollbacks, P+ 579). Rosetta translates Jit64's output, so this checks Jit64's logic, not Windows
+itself (its thread-stack guard, MSVC): the same checks on the PC are what close that.
 
 ## Online menu
 
