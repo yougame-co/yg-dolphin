@@ -199,6 +199,9 @@ void ForEachUniversalSetting(F&& f)
   // reaches RAM (above), so the two machines' games can't differ by it.
   f(Config::GFX_SHADER_COMPILATION_MODE, ShaderCompilationMode::AsynchronousUberShaders);
   f(Config::GFX_WAIT_FOR_SHADERS_BEFORE_STARTING, true);
+  // A pipeline first drawn in a match compiles on Dolphin's "Auto" count of threads (cores - 3,
+  // 1 to 4) instead of the default one, so it is drawn with an ubershader for less time.
+  f(Config::GFX_SHADER_COMPILER_THREADS, -1);
 }
 
 class ForcedConfigLoader final : public Config::ConfigLayerLoader
@@ -675,7 +678,7 @@ std::string DescribeForcedSettings(const Profile& profile)
   return fmt::format("Orca: profile {} rev {}{}: CPUThread={} CPUCore={} FMA={} RTC={}:{} "
                      "SI={},{},{},{} EFBToTexture={} XFBToTexture={} EFBAccess={} BBox={} "
                      "ImmediateXFB={} VSync={} SmoothEarlyPresentation={} AudioBufferSize={} "
-                     "ShaderCompilationMode={} WaitForShaders={}",
+                     "ShaderCompilationMode={} WaitForShaders={} ShaderCompilerThreads={}",
                      profile.game_id, profile.revision,
                      TestOverridesActive() ? " (TEST overrides active, not for real sessions)" : "",
                      Config::Get(Config::MAIN_CPU_THREAD),
@@ -694,6 +697,7 @@ std::string DescribeForcedSettings(const Profile& profile)
                      Config::Get(Config::MAIN_SMOOTH_EARLY_PRESENTATION),
                      Config::Get(Config::MAIN_AUDIO_BUFFER_SIZE),
                      static_cast<int>(Config::Get(Config::GFX_SHADER_COMPILATION_MODE)),
-                     Config::Get(Config::GFX_WAIT_FOR_SHADERS_BEFORE_STARTING));
+                     Config::Get(Config::GFX_WAIT_FOR_SHADERS_BEFORE_STARTING),
+                     Config::Get(Config::GFX_SHADER_COMPILER_THREADS));
 }
 }  // namespace Orca
