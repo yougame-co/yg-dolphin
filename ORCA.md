@@ -516,6 +516,101 @@ the store refuses dev tickets.
     so the delay came down only between matches.
   - At 4-5 the rollbacks barely moved: 20-30 per 15 s, 3-4 frames deep, against 59 at 2.
 
+## Online menu
+
+Luis's rules: Play Online works in both games, through the game's own menus and never a new
+screen; no Nintendo server is ever asked for anything; nothing about connecting looks like
+Nintendo's. What this build does (v1: the menus and the events; the search window, `host <code>`
+and the matched room come later):
+
+- **The top page.** Brawl's Wi-Fi button reads PLAY ONLINE (a texture, below) and can be selected
+  again; Project+'s already reads PLAY ONLINE. The footer under it says "Play different modes
+  online." in both games.
+- **A opens the game's own ONLINE page** (With Friends / With Anyone), with no connection window:
+  no save check ("There is no save data" in Project+), no NAND access, no network interface task.
+  B goes straight back to the top page, with no "Disconnect from Nintendo WFC?" window. Options
+  (WiiConnect24) and Spectator never show. Brawl's page title reads ONLINE.
+- **With Anyone** shows CASUAL and RANKED (textures, both games, with their descriptions
+  rewritten). Either goes to the local Versus character select and Orca prints
+  `orca menu online casual local` or `orca menu online ranked local`.
+- **With Friends**: each of its buttons goes to the local Versus character select, where friends
+  drop in ("Drop-in"), and Orca prints `orca menu online friends`. Their descriptions say so (a
+  brawl, or in Project+ a fight, with the friends you invite, 2-4 players); none promises a roster
+  or a mode that isn't there.
+
+### How (`Data/Sys/Orca/RSBE01.patches`, `PPLUS32.patches`; `Core/Orca/UX/MenuText.h`, `OnlineMenu.h`)
+
+- **Game patches**, guarded code groups (`GamePatches.h`); Project+'s copy of the menu module sits
+  0x1480 above Brawl's, sora_scene is the same in both:
+  - Brawl only: the main menu's cursor table is the game's own again (Group moves down onto the
+    button). Project+'s was never changed.
+  - The top page's press on the button takes the path every other button takes into its page,
+    never creating the connection window (`muWifiCnctWndTask`), which is what would create the
+    network interface task, check the save's Wi-Fi data and connect.
+  - The ONLINE page's B does what the game does once its disconnect window says OK, without the
+    window.
+  - The ONLINE page's Options (`muProcOptWifi`, WiiConnect24 jobs) and With Anyone's Spectator are
+    never enabled (`isEnableButton` answers no; they also stay hidden without a connection).
+  - sqMenuMain's exit table: codes 24-27 (With Friends), 29 (Spectator), 30 (Casual, was Basic
+    Brawl / Basic Versus) and 31 (Ranked, was Team Battle) all go to sqVsMelee, the local Versus
+    character select. No online scene, network thread or DWC is ever entered. The menu's exit code
+    itself is left as the game wrote it, and Orca reads it.
+  - The IOS refusals of every session stay as the backstop: NET_KD_REQ, IP/Top and SSL refuse
+    in a session and each refusal is logged at INFO (`IOS_WC24`, `IOS_NET`, `IOS_SSL`).
+- **Text** (`MenuText.h`): the main menu's message files, found through the menu scene's archive
+  (`mu_menumain_en`, MiscData 5 and 10), are rewritten in emulated memory: Brawl's footer ("...
+  while connected to Nintendo WFC."), Project+'s "(Discontinued)" and "(Project M not compatible!)",
+  With Anyone's descriptions (Casual, Ranked), With Friends' (Friend Roster, Team Multi-Man,
+  Home-Run Contest, and the Boss Battles text no button shows) and the records' "Nintendo WFC"
+  mentions. A message is rewritten only while its bytes are exactly the game's own, into the same
+  slot (never longer, zeros after), at every frame boundary on both machines: a pure function of
+  emulated memory, covered by the UX's compatibility version (`ux=4`).
+- **Textures** (`Data/Sys/Orca/Textures/RSBE01`, `Tools/orca/textures/README.md`): our own art,
+  drawn by `Tools/orca/textures/make-labels.py` with SIL OFL fonts: Brawl's PLAY ONLINE label and
+  ONLINE title (Anton, like the game's own light condensed titles), CASUAL and RANKED in both games,
+  each 4x with mip levels down to the game's size (a custom texture's sampler takes them even where
+  the game's texture has none, so 1x internal resolution reads a clean 1x level). A session forces
+  texture replacement on (`Profile.cpp`) and `HiresTexture::Update` loads Orca's pack with the
+  player's own: Orca's keeps the names it has, so a player's pack in `<user>/Load/Textures` (a Brawl
+  HD pack, say) can never bring back "NINTENDO Wi-Fi CONNECTION" or "NINTENDO WFC", and the player's
+  has every other name (`CollectHiresTextureFiles`). Orca's is always preloaded so the game's own
+  label never shows while ours loads, and a session shows no "Found N custom textures" message.
+  Replacing textures only changes what is drawn, so the pack is not in the compatibility key:
+  `YG_HASHLOG` is identical with and without it, in both games.
+- **Events** (`OnlineMenu.h`): a reader in the frame hook follows the main menu at every boundary
+  that runs a frame for the first time (never a re-run) and reads the exit code the menu leaves with
+  (scene manager `0x805A0060` +0x284, visible from the first scMemoryChange boundary). It prints an
+  event only for a pick made while the player's game is alone (OnlineMatch's `AloneAt`): no friend
+  plugged in or on the way, not joining or catching up, no keyframe wanted or being made
+  (`SoloIdle`), nothing of drop-in waiting for the boundary to take it (a friend's arrival, a
+  prepare-join, the app's join or leave: `Online::DropInPending`), and no keyframe stored for an
+  invite nobody took yet while it is fresh (30 s: a friend who arrives then replays every frame
+  since). A pick made while friends play, or while one is about to land, is theirs too and is never
+  announced, not even once the game is alone again. Going solo after a session, or loading a
+  friend's keyframe, starts the reader over (`Events::NoteResync`), so nothing stale is ever
+  printed. It only reads memory.
+- **No network, proven per run**: `Tools/orca/online-menu.py` drives every page in both games and
+  fails on any `/dev/net` open, any NET_KD_REQ, NCD, IP/Top or SSL request, or any NAND command on
+  the save's, WiiConnect24's or the network settings' folders after the boot.
+
+| stdout | When |
+|---|---|
+| `orca menu online casual local` | With Anyone > Casual: the game went to the local Versus character select ("local": nothing searches yet). |
+| `orca menu online ranked local` | With Anyone > Ranked, the same. |
+| `orca menu online friends` | Any With Friends button: the local Versus character select, where friends drop in. |
+
+The lines print once per pick, only while the player is alone, and never carry state: the page
+treats them as "the player asked to play online" (Casual and Ranked today: "coming soon", invite a
+friend). A later build that searches will print `orca menu online casual` (no `local`) when its
+search window opens, behind a `host` capability this build doesn't have.
+
+Tests: `OrcaOnlineMenu*` unit tests (the gates, the textures and their precedence, the text rewrite,
+the reader's edges and `AloneAt`); `Tools/orca/online-menu.py <nogui> <disc> [--pplus <dol>]
+[--video Metal --shots <dir> [--scale 4]]` (every way through the menu, solo, offline);
+`Tools/orca/online-menu-dropin.py` (a friend drops into a host on the ONLINE page; the pick that
+follows is both players', and nothing prints; with `--invite`, a pick within 30 s of an invite's
+stored keyframe prints nothing and one after it prints).
+
 ## Embedding
 
 The YouGame desktop app shows Orca inside its own window, at the page's player box, the way it runs
@@ -592,6 +687,7 @@ Any other line goes to stderr. The app's `EMBED_COMMAND` filter must add `blur` 
 | `orca click` | Windows only: a mouse button (left, right or middle) went down on Orca's window, once per press. The page never sees that click, so the app hands it over: it focuses its window and page, and the page treats it as a press on the box. That means taking DOM focus off whatever had it (a chat field would otherwise keep the keys, since `webContents.focus()` gives it back) and sending `focus`. Do it on every `orca click`, even when the page thinks the game already has the input: Chromium may count a click on another process's child window as its own window losing activation. Orca changes nothing itself on a click. In and out of a session, with no cap: every app forwards the `orca` lines it doesn't know to the page, which ignores them. On macOS the click reaches the page itself ("Focus"). |
 | `error <sentence>` | Something failed: bad arguments, the view couldn't open, the game didn't boot. Each `orca error` also gets an `error` twin. |
 | `orca state <state>` / `orca error <code> <sentence>` | Session status (`Core/Orca/Status.h`). New states, such as drop-in's `joining`, `friend-joined` and `no-room`, come through unchanged: forward every line that starts with `orca `. |
+| `orca menu <event>` | The player picked something in the game's own Online menu: `online casual local`, `online ranked local`, `online friends` ("Online menu"). An event, printed once per pick, only while the player's game is alone. |
 | `exit <code>` | Always the last line, on every exit path: 0 after a normal stop, 1 after a reported error, 2 for bad arguments. |
 
 Embedded, Orca keeps fd 1 for the protocol and points the process's stdout at stderr. So the Dolphin

@@ -2,6 +2,11 @@
 # (Source/Core/Core/Orca/UX/GamePatches.h): `<address> <original|*> <value>`, hex. A line with an
 # original is written only while that word is there. This file is hashed into the lobby key.
 #
+# Sections: the boot straight to the main menu; the main menu's Play Online, the game's own ONLINE
+# page with no connection (ORCA.md "Online menu": with Orca's texture pack and its rewrite of the
+# menu's text, UX/MenuText.h, nothing on it says Nintendo); everything unlocked; items off by
+# default.
+#
 # Found with Orca's harness (ORCA_UX_PROBE watches, RAM dumps and Dolphin's disassembler); the
 # unlock words are from the community "Global Brawl Netplay Settings" Gecko code shipped in
 # Dolphin's GameSettings/RSBE01.ini (vBrawl's "Global Brawl Netplay Settings V1"), unlock part only.
@@ -38,39 +43,94 @@
 806CA1F8 38000003 38000010    # li r0, 3 -> 16 (the opening movie)
 806CA204 3800000C 38000010    # li r0, 12 -> 16 (the "press Start" logo)
 
-# --- Main menu: no Nintendo Wi-Fi Connection ------------------------------------------------------
+# --- Main menu: Play Online, the game's own ONLINE page with no connection -----------------------
 
-# muProcTop (sora_menu_main, the main menu's six buttons: 0 Group, 1 Solo, 2 Wi-Fi, 3 Vault,
-# 4 Options, 5 Data): its cursor table, four words per button (up, down, left, right), each
-# 0x00TTWW00 with TT the button the cursor moves to and WW 1 when the move wraps around. Nothing
-# moves onto Wi-Fi any more (Group goes to Vault, Vault and Data skip over it), so the button stays
-# where it is, drawn as before, and is never selected: Nintendo's servers are never asked for.
-# Kept in place for YouGame's own online menu later. The whole table is one group, so it lands only
-# while the module's own table is there.
-811A4070 00020100 00030100    # Group up -> Vault (was Wi-Fi)
-811A4074 00020000 00030000    # Group down -> Vault (was Wi-Fi)
-811A4078 00010100 00010100    # Group left -> Solo
-811A407C 00010000 00010000    # Group right -> Solo
-811A4080 00040100 00040100    # Solo up -> Options
-811A4084 00040000 00040000    # Solo down -> Options
-811A4088 00000000 00000000    # Solo left -> Group
-811A408C 00000100 00000100    # Solo right -> Group
-811A4090 00000000 00000000    # Wi-Fi up -> Group
-811A4094 00000100 00000100    # Wi-Fi down -> Group
-811A4098 00050100 00050100    # Wi-Fi left -> Data
-811A409C 00030000 00030000    # Wi-Fi right -> Vault
-811A40A0 00000000 00000000    # Vault up -> Group
-811A40A4 00000100 00000100    # Vault down -> Group
-811A40A8 00020000 00050100    # Vault left -> Data (was Wi-Fi)
-811A40AC 00040000 00040000    # Vault right -> Options
-811A40B0 00010000 00010000    # Options up -> Solo
-811A40B4 00010100 00010100    # Options down -> Solo
-811A40B8 00030000 00030000    # Options left -> Vault
-811A40BC 00050000 00050000    # Options right -> Data
-811A40C0 00010000 00010000    # Data up -> Solo
-811A40C4 00010100 00010100    # Data down -> Solo
-811A40C8 00040000 00040000    # Data left -> Options
-811A40CC 00020100 00030100    # Data right -> Vault (was Wi-Fi)
+# The main menu's Wi-Fi button reads PLAY ONLINE (Orca's texture pack, Data/Sys/Orca/Textures, our
+# own art) and opens the game's own ONLINE page (With Friends / With Anyone), relabelled and
+# rewritten so nothing on it is Nintendo's (the breadcrumb by texture; the button's description
+# by Orca's UX, UX/MenuText.h). Every way on from it leaves through the game's own exit to the local
+# Versus character select; Orca reads which (UX/OnlineMenu.h) and tells the app. Nintendo's servers
+# are never asked for: the connection window (muWifiCnctWndTask), which creates the network
+# interface task, checks the save's Wi-Fi data and then connects, is never created; the Spectator
+# and Options buttons (Options runs WiiConnect24 jobs) never show on the ONLINE page (the game
+# hides them without a connection: nteGlobal's button flags) and nothing here shows them.
+#
+# Found under the harness (ORCA_UX_PROBE watches, RAM dumps and Dolphin's disassembler) with
+# sora_menu_main.rel loaded at 0x81163780 (text at 0x8116384C); Project+'s own copy of the module
+# sits 0x1480 higher (PPLUS32.patches).
+#
+# The cursor table of muProcTop (the top page's six buttons: 0 Group, 1 Solo, 2 Wi-Fi, 3 Vault,
+# 4 Options, 5 Data) is the game's own again: Group moves down onto the button.
+#
+# muProcTop's update (0x811787F8): A on button 2 would create the connection window (mode 0) and
+# wait for its result; instead the press takes the path every other button takes into its page
+# (the cursor's proc, 3: muProcWifi). Two copies of the press check, one group each.
+81178A58 A01D0042 A01D0042    # lhz    r0, 0x42(r29) (the cursor; guard)
+81178A5C 28000002 28000002    # cmplwi r0, 2 (guard)
+81178A60 4082007C 4800007C    # bne +0x7C -> b +0x7C: button 2 enters its page like the others
+
+81178C30 A01D0042 A01D0042    # lhz    r0, 0x42(r29) (guard)
+81178C34 28000002 28000002    # cmplwi r0, 2 (guard)
+81178C38 4082007C 4800007C    # bne +0x7C -> b +0x7C
+
+# muProcWifi (the ONLINE page): B would open the same window in mode 1, "Disconnect from Nintendo
+# WFC?", and go back once it closed. Instead what the game does when that window returns: the back
+# animation (0x806A5A58), next proc 0 (the top page), sub-state 3, return 1. Two copies (two input
+# paths), one nine-word group each.
+81179F48 4AEB30D1 7FA3EB78    # mr   r3, r29
+81179F4C 3CA0811A 38800000    # li   r4, 0
+81179F50 3CC0811A 4B52BB09    # bl   0x806A5A58 (the back animation)
+81179F54 80630004 38000000    # li   r0, 0
+81179F58 38A53C60 901D0634    # stw  r0, 0x634(r29) (next proc: the top page)
+81179F5C 38C63C90 38000003    # li   r0, 3
+81179F60 38800004 901D0664    # stw  r0, 0x664(r29) (sub-state)
+81179F64 38E00000 38600001    # li   r3, 1
+81179F68 4B276FDD 4800026C    # b    0x8117A1D4 (the function's end)
+
+8117A148 4AEB2ED1 7FA3EB78    # mr   r3, r29
+8117A14C 3CA0811A 38800000    # li   r4, 0
+8117A150 3CC0811A 4B52B909    # bl   0x806A5A58
+8117A154 80630004 38000000    # li   r0, 0
+8117A158 38A53C60 901D0634    # stw  r0, 0x634(r29)
+8117A15C 38C63C90 38000003    # li   r0, 3
+8117A160 38800004 901D0664    # stw  r0, 0x664(r29)
+8117A164 38E00000 38600001    # li   r3, 1
+8117A168 4B276DDD 4800006C    # b    0x8117A1D4
+
+# The ONLINE page's third button (Options, proc 28: muProcOptWifi, which runs WiiConnect24 jobs)
+# and With Anyone's Spectator (exit code 29) show only when nteGlobal says the service allows them
+# (isEnableButton 0x8014FEDC, flags 0x20/0x40 and 0x10). Without a connection it never does; here
+# the answer is always no, so neither button is drawn or can take the cursor whatever that data
+# holds. muProcWifi's init (0x811799B8):
+81179A04 38600020 38600020    # li r3, 0x20 (guard)
+81179A08 4AFD64D5 38600000    # bl isEnableButton -> li r3, 0
+81179A0C 28030001 28030001    # (guard)
+81179A10 4082000C 4082000C    # (guard)
+81179A14 38000001 38000001    # (guard)
+81179A18 48000018 48000018    # (guard)
+81179A1C 38600040 38600040    # li r3, 0x40 (guard)
+81179A20 4AFD64BD 38600000    # bl isEnableButton -> li r3, 0
+# muProcWifiAnybody's init (0x81191D44):
+81191D7C 38600010 38600010    # li r3, 0x10 (guard)
+81191D80 4AFBE15D 38600000    # bl isEnableButton -> li r3, 0
+81191D84 7C7F1B78 7C7F1B78    # mr r31, r3 (guard)
+
+# sqMenuMain::setNext's table (sora_scene, resident; one entry per main-menu exit code, which the
+# menu leaves at [0x805A0060]+0x284): every online sequence becomes sqVsMelee's entry (0x806DC618),
+# the local Versus character select that Group > Brawl (code 1) opens. 24-27 are With Friends'
+# modes (sqNetFriendList), 29 Spectator (sqNetAnyWatch), 30 With Anyone's Basic Brawl
+# (sqNetAnyOkiraku), 31 its Team Battle (sqNetAnyTeamMelee): none of them is ever entered, so no
+# online scene, no network thread, no DWC. The code itself stays as the menu wrote it: Orca reads it
+# (30 Casual, 31 Ranked, 24-27 Friends). 28 is a guard. Project+ keeps Brawl's sora_scene, so its
+# file has the same group.
+80701A04 806DC8C8 806DC618    # code 24 (sqNetFriendList)
+80701A08 806DC8C8 806DC618    # code 25
+80701A0C 806DC8C8 806DC618    # code 26
+80701A10 806DC8C8 806DC618    # code 27
+80701A14 806DC940 806DC940    # code 28 (guard)
+80701A18 806DC8E0 806DC618    # code 29 (sqNetAnyWatch)
+80701A1C 806DC8F8 806DC618    # code 30 (sqNetAnyOkiraku)
+80701A20 806DC910 806DC618    # code 31 (sqNetAnyTeamMelee)
 
 # --- Everything unlocked --------------------------------------------------------------------------
 

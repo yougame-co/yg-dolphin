@@ -72,9 +72,23 @@ std::optional<GCPadStatus> LocalPad();
 // `ports`: the controllers plugged in at `frame`, from the session's synced plan and the room's
 // roster names, identical on every machine for the same frame (solo: this player's port). Use these
 // for memory writes, never NotifyPlugIn's (that one is for the UI, first runs only).
-using FrameCallback = std::function<void(const Core::CPUThreadGuard& guard, int frame,
-                                         bool resimulating, const std::vector<PortInfo>& ports)>;
+// `alone`: what this machine's game does at `frame` is its player's alone (Rollback::OnlineMatch
+// AloneAt: it plays solo with nothing of drop-in under way or waiting to be taken, no friend
+// plugged in or on the way, not joining or catching up, no keyframe wanted or being made, and no
+// keyframe stored for a friend who may still arrive and replay from it; in harness runs, every
+// first run). Always false on re-runs. It differs between machines: what a reader prints may depend
+// on it (the app's "orca menu" lines), never what is written to memory.
+using FrameCallback =
+    std::function<void(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
+                       const std::vector<PortInfo>& ports, bool alone)>;
 void SetFrameCallback(FrameCallback callback);
+
+// This machine's game stopped following on from the frames its readers saw: it went solo after a
+// session (whose first runs saw guessed inputs), or it loaded a friend's keyframe. A reader that
+// tracks the game across frame boundaries (UX/OnlineMenu.h) takes the next boundary as its new
+// start and announces nothing about what changed meanwhile. CPU thread; Resyncs() any thread.
+void NoteResync();
+u64 Resyncs();
 
 // While the game waits on a friend (a stall), every few milliseconds on the CPU thread: how long so
 // far. The overlay redraws the last frame from here (nothing is presented during a stall).
@@ -96,7 +110,7 @@ int UXCompatVersion();
 void PublishLinkStats(const LinkStats& stats);
 void NotifyPlugIn(int frame, const std::vector<PortInfo>& ports);
 void NotifyFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
-                 const std::vector<PortInfo>& ports);
+                 const std::vector<PortInfo>& ports, bool alone);
 void NotifyStall(int stalled_ms);
 void NotifyBoundary(bool shown);
 }  // namespace Orca::Events

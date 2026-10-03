@@ -139,36 +139,36 @@ std::u16string Variant(std::u16string name, int port)
     name.back() = digit;
   return name;
 }
-
-class GuardMemory final : public GuestMemory
-{
-public:
-  explicit GuardMemory(const Core::CPUThreadGuard& guard) : m_guard(guard) {}
-  bool Valid(u32 address) const override
-  {
-    return PowerPC::MMU::HostIsRAMAddress(m_guard, address);
-  }
-  u32 Read32(u32 address) const override { return PowerPC::MMU::HostRead<u32>(m_guard, address); }
-  u16 Read16(u32 address) const override { return PowerPC::MMU::HostRead<u16>(m_guard, address); }
-  u8 Read8(u32 address) const override { return PowerPC::MMU::HostRead<u8>(m_guard, address); }
-  void Write8(u32 address, u8 value) override
-  {
-    PowerPC::MMU::HostWrite<u8>(m_guard, value, address);
-  }
-  void Write16(u32 address, u16 value) override
-  {
-    PowerPC::MMU::HostWrite<u16>(m_guard, value, address);
-  }
-  void Write32(u32 address, u32 value) override
-  {
-    PowerPC::MMU::HostWrite<u32>(m_guard, value, address);
-  }
-
-private:
-  const Core::CPUThreadGuard& m_guard;
-};
-
 }  // namespace
+
+bool GuardMemory::Valid(u32 address) const
+{
+  return PowerPC::MMU::HostIsRAMAddress(m_guard, address);
+}
+u32 GuardMemory::Read32(u32 address) const
+{
+  return PowerPC::MMU::HostRead<u32>(m_guard, address);
+}
+u16 GuardMemory::Read16(u32 address) const
+{
+  return PowerPC::MMU::HostRead<u16>(m_guard, address);
+}
+u8 GuardMemory::Read8(u32 address) const
+{
+  return PowerPC::MMU::HostRead<u8>(m_guard, address);
+}
+void GuardMemory::Write8(u32 address, u8 value)
+{
+  PowerPC::MMU::HostWrite<u8>(m_guard, value, address);
+}
+void GuardMemory::Write16(u32 address, u16 value)
+{
+  PowerPC::MMU::HostWrite<u16>(m_guard, value, address);
+}
+void GuardMemory::Write32(u32 address, u32 value)
+{
+  PowerPC::MMU::HostWrite<u32>(m_guard, value, address);
+}
 
 std::u16string BrawlTag(std::string_view username)
 {

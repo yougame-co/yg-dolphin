@@ -66,6 +66,14 @@ void Event(std::string_view state)
   Print(fmt::format("orca state {}\n", state));
 }
 
+void Menu(std::string_view event)
+{
+  if (!SessionActive())
+    return;
+  std::lock_guard lock(s_mutex);
+  Print(fmt::format("orca menu {}\n", OneLine(event)));
+}
+
 void Report(std::string_view code, std::string_view sentence)
 {
   if (!Cap("join"))

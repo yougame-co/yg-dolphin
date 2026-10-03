@@ -11,6 +11,8 @@
 //   orca state booting|lobby|playing|ended, and drop-in's (ORCA.md "Drop-in"): joining <percent>,
 //   friend-joining, friend-joined, friend-left <why>, host-left, left, no-room
 //   orca error <code> <sentence for the player>
+//   orca menu <event>, a pick in the game's own Online menu: online casual local, online ranked
+//   local, online friends
 // Codes: boot, cancelled (Orca.app's disc picker closed without a disc), disc_revision, profile,
 // settings, room_mismatch, room_full, kicked, network, peer_left, desync, internal.
 // Only the first error is printed: it is the one that explains the exit. Outside a session these
@@ -21,6 +23,10 @@ void State(std::string_view state);
 // A state printed even when it repeats the current one ("left" answers every leave command).
 void Event(std::string_view state);
 void Error(std::string_view code, std::string_view sentence);
+// "orca menu <event>": the player picked something in the game's own Online menu (ORCA.md "Online
+// menu"): "online casual local", "online ranked local", "online friends". An event, never a state:
+// each pick prints once.
+void Menu(std::string_view event);
 // An error the session survives: with the app's "caps join" it is printed and Orca plays on solo
 // (the exit code stays 0, the embed "error" line isn't sent); without, it is Error().
 void Report(std::string_view code, std::string_view sentence);

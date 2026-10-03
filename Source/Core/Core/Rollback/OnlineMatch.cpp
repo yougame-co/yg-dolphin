@@ -267,8 +267,6 @@ constexpr std::chrono::seconds PEER_SILENCE_LIMIT{10};
 constexpr char PEER_SILENT_SENTENCE[] = "Your friend's game stopped responding";
 // The session's rollback window (Config::max_rollback): RingPort keeps this many snapshots and two.
 constexpr int MAX_ROLLBACK = 7;
-// A keyframe this recent serves a new arrival as it is: the joiner replays up to this many frames.
-constexpr int KEYFRAME_FRESH_FRAMES = 30 * 60;
 // No keyframe of a boot's first frames: Project+'s first frames after its launcher hands over (3-9)
 // run differently on a machine whose JIT holds other blocks (a synctest that drops the JIT after
 // every load differs there, in CoreTiming ticks and RAM; Brawl over frames 0-600 does not), and a
@@ -563,6 +561,8 @@ void DropFriends(Match& match, const std::string& reason, bool announce = true)
 
 void GoSolo(Match& match, const char* why, const char* state = "playing")
 {
+  // The frames the UX's readers saw with friends ran on guessed inputs too: they start over.
+  Orca::Events::NoteResync();
   match.log = match.session->TakeLog(&match.log_base);
   const std::vector<Pad> pending = match.session->PendingLocal();
   match.queued_local.assign(pending.begin(), pending.end());
@@ -734,6 +734,7 @@ void KeepRoomOpen(Match& match)
 // keyframe was ever loaded, so this is its own game, played on port 1.
 void BecomeSolo(Match& match, const char* why, const char* state, bool own_boot = false)
 {
+  Orca::Events::NoteResync();
   if (match.session)
   {
     GoSolo(match, why, nullptr);
@@ -840,6 +841,7 @@ void HostEvents(Core::System& system, Match& match)
   // at a boundary whose earlier frames are all final.
   const int next = match.running + 1;
   const bool fresh = match.keyframe && next - match.keyframe->frame <= KEYFRAME_FRESH_FRAMES;
+  bool capture_failed = false;
   if (match.keyframe_wanted && !match.job && match.store)
   {
     if (fresh)
@@ -849,7 +851,10 @@ void HostEvents(Core::System& system, Match& match)
       match.keyframe_wanted = false;
       StartKeyframe(system, match, next);
       if (!match.job)
+      {
+        capture_failed = true;
         match.keyframe_wanted = !match.waiting.empty();
+      }
     }
   }
   if (!match.store && !match.waiting.empty())
@@ -857,8 +862,15 @@ void HostEvents(Core::System& system, Match& match)
 
   // Take in whoever waits once there is a keyframe for them. Not while a solo pause winds the CPU
   // thread down (BeginPause): the session's first step would give up half done.
-  if (!match.keyframe || match.waiting.empty() || match.job || s_pausing)
+  // Solo, nor on the stale keyframe a capture that failed here would have replaced: a friend who
+  // replayed from it would replay frames the frame hook already told the app were this player's
+  // alone (AloneAt). The capture is tried again at the next boundary. (A keyframe that went stale
+  // while it was packed and stored is fine: no frame since its capture was alone, SoloIdle.)
+  if (!match.keyframe || match.waiting.empty() || match.job || s_pausing ||
+      (capture_failed && !match.session))
+  {
     return;
+  }
   for (auto it = match.waiting.begin(); it != match.waiting.end();)
   {
     const int seat = it->first;
@@ -1132,6 +1144,8 @@ Load LoadKeyframe(Core::System& system, Match& match, int* frame_out)
   }
   match.load_ms = MsSince(load_start);
   match.loaded_time = Clock::now();
+  // This machine's game is now the host's: the UX's readers start over from it.
+  Orca::Events::NoteResync();
   if (match.store)
     match.store->Delete(download->info.id);
   NOTICE_LOG_FMT(ROLLBACK,
@@ -1580,7 +1594,10 @@ std::optional<int> Boundary(Core::System& system,
     const int frame = match.running + 1;
     const bool resimulating = match.session && match.session->Resimulating();
     const std::vector<Orca::Events::PortInfo> ports = PortsAt(match, frame);
-    on_frame(frame, resimulating, ports);
+    on_frame(frame, resimulating, ports,
+             !resimulating &&
+                 AloneAt(frame, SoloIdle(match), Orca::Online::DropInPending(),
+                         match.keyframe ? std::optional(match.keyframe->frame) : std::nullopt));
     if (!resimulating && ports != match.told_ports)
     {
       match.told_ports = ports;
@@ -1794,7 +1811,7 @@ std::optional<int> Boundary(Core::System& system,
       // The loaded snapshot holds the hook's writes from that frame's first run, made with the ports
       // known then; a rollback can be caused by exactly those ports changing (a seat unplugged in the
       // past). Run it again for the frame landed on, whichever snapshot each machine had.
-      on_frame(step.frame, true, PortsAt(match, step.frame));
+      on_frame(step.frame, true, PortsAt(match, step.frame), false);
     }
     if (step.kind == Orca::Net::StepKind::Run || step.kind == Orca::Net::StepKind::Rollback)
     {
@@ -2001,6 +2018,12 @@ void End(const char* reason)
   if (match.keyframe && match.store)
     match.store->Delete(match.keyframe->id);
   Orca::Online::Shutdown();
+}
+
+bool AloneAt(int frame, bool solo_idle, bool drop_in_pending, std::optional<int> stored_keyframe)
+{
+  return solo_idle && !drop_in_pending &&
+         !(stored_keyframe && frame - *stored_keyframe <= KEYFRAME_FRESH_FRAMES);
 }
 
 bool SoloPauseAllowed()

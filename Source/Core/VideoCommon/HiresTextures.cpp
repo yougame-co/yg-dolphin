@@ -3,6 +3,7 @@
 
 #include "VideoCommon/HiresTextures.h"
 
+#include <algorithm>
 #include <fmt/format.h>
 #include <memory>
 #include <string>
@@ -17,6 +18,7 @@
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
 #include "Core/ConfigManager.h"
+#include "Core/Orca/Profile.h"
 #include "Core/System.h"
 #include "VideoCommon/Assets/DirectFilesystemAssetLibrary.h"
 #include "VideoCommon/OnScreenDisplay.h"
@@ -70,6 +72,75 @@ std::pair<std::string, bool> GetNameArbPair(const TextureInfo& texture_info)
 }
 }  // namespace
 
+namespace
+{
+// A mip level of another file (<name>_mip<N>), which loads with it (TextureAssetUtils' LoadMips,
+// from the same folder): not a texture of its own.
+bool IsMipLevelFile(std::string_view filename)
+{
+  const size_t at = filename.rfind("_mip");
+  return at != std::string_view::npos && at + 4 < filename.size() &&
+         std::all_of(filename.begin() + at + 4, filename.end(),
+                     [](char c) { return c >= '0' && c <= '9'; });
+}
+}  // namespace
+
+std::vector<HiresTextureFile>
+CollectHiresTextureFiles(const std::vector<std::string>& player_directories,
+                         const std::vector<std::string>& orca_directories)
+{
+  constexpr auto extensions = std::to_array<std::string_view>({".png", ".dds"});
+  std::vector<HiresTextureFile> files;
+  // Each name taken so far, and whether Orca's pack took it.
+  std::unordered_map<std::string, bool> taken;
+  const auto collect = [&](const std::string& texture_directory, bool orca_pack) {
+    bool failed_insert = false;
+    int kept_by_orca = 0;
+    for (const std::string& path :
+         Common::DoFileSearch(texture_directory, extensions, /*recursive*/ true))
+    {
+      std::string filename;
+      SplitPath(path, nullptr, &filename, nullptr);
+      if (filename.substr(0, s_format_prefix.length()) != s_format_prefix ||
+          IsMipLevelFile(filename))
+      {
+        continue;
+      }
+      const size_t arb_index = filename.rfind("_arb");
+      const bool has_arbitrary_mipmaps = arb_index != std::string::npos;
+      if (has_arbitrary_mipmaps)
+        filename.erase(arb_index, 4);
+      const auto [it, inserted] = taken.try_emplace(filename, orca_pack);
+      if (!inserted)
+      {
+        if (it->second && !orca_pack)
+          ++kept_by_orca;
+        else
+          failed_insert = true;
+        continue;
+      }
+      files.push_back({std::move(filename), path, has_arbitrary_mipmaps, orca_pack});
+    }
+    if (failed_insert)
+    {
+      ERROR_LOG_FMT(VIDEO, "One or more textures at path '{}' were already inserted",
+                    texture_directory);
+    }
+    if (kept_by_orca > 0)
+    {
+      INFO_LOG_FMT(VIDEO,
+                   "Orca: {} texture(s) at path '{}' replace the same textures as Orca's "
+                   "own pack, whose are used in a session",
+                   kept_by_orca, texture_directory);
+    }
+  };
+  for (const std::string& texture_directory : orca_directories)
+    collect(texture_directory, true);
+  for (const std::string& texture_directory : player_directories)
+    collect(texture_directory, false);
+  return files;
+}
+
 void HiresTexture::Shutdown()
 {
   Clear();
@@ -83,60 +154,50 @@ void HiresTexture::Update()
     return;
   }
 
-  const std::set<std::string> texture_directories = GetTextureDirectoriesForFirstMatchingGameId(
-      File::GetUserPath(D_HIRESTEXTURES_IDX), SConfig::GetInstance().GetGameIDsForTextures());
-
-  constexpr auto extensions = std::to_array<std::string_view>({".png", ".dds"});
-
-  for (const auto& texture_directory : texture_directories)
+  const std::vector<std::string> game_ids = SConfig::GetInstance().GetGameIDsForTextures();
+  const std::set<std::string> user_directories =
+      GetTextureDirectoriesForFirstMatchingGameId(File::GetUserPath(D_HIRESTEXTURES_IDX), game_ids);
+  // Orca: a session also loads Orca's own pack (Data/Sys/Orca/Textures/<game ID>, the Online
+  // menu's labels; ORCA.md "Online menu"), which keeps its own names (CollectHiresTextureFiles).
+  std::set<std::string> orca_directories;
+  if (Orca::SessionActive())
   {
-    // Watch this directory for any texture reloads
+    orca_directories = GetTextureDirectoriesForFirstMatchingGameId(
+        File::GetSysDirectory() + "Orca/Textures/", game_ids);
+  }
+
+  // Watch these directories for any texture reloads
+  for (const auto& texture_directory : orca_directories)
+    s_file_library->Watch(texture_directory);
+  for (const auto& texture_directory : user_directories)
     s_file_library->Watch(texture_directory);
 
-    const auto texture_paths =
-        Common::DoFileSearch(texture_directory, extensions, /*recursive*/ true);
+  for (HiresTextureFile& file :
+       CollectHiresTextureFiles({user_directories.begin(), user_directories.end()},
+                                {orca_directories.begin(), orca_directories.end()}))
+  {
+    // An earlier Update's file of the same name stays (as in Dolphin), unless this one is Orca's:
+    // Orca's pack keeps its names whatever an earlier Update registered.
+    if (file.orca_pack)
+      s_hires_texture_id_to_arbmipmap.insert_or_assign(file.id, file.has_arbitrary_mipmaps);
+    else if (!s_hires_texture_id_to_arbmipmap.emplace(file.id, file.has_arbitrary_mipmaps).second)
+      continue;
+    // Since this is just a texture (single file) the mapper doesn't really matter
+    // just provide a string
+    s_file_library->SetAssetIDMapData(file.id, std::map<std::string, std::filesystem::path>{
+                                                   {"texture", StringToPath(file.path)}});
 
-    bool failed_insert = false;
-    for (auto& path : texture_paths)
+    // Orca's pack is always preloaded (a few small labels), so the game's own label never shows
+    // for a frame while ours loads; the player's follows the player's setting.
+    if (g_ActiveConfig.bCacheHiresTextures || file.orca_pack)
     {
-      std::string filename;
-      SplitPath(path, nullptr, &filename, nullptr);
-
-      if (filename.substr(0, s_format_prefix.length()) == s_format_prefix)
-      {
-        const size_t arb_index = filename.rfind("_arb");
-        const bool has_arbitrary_mipmaps = arb_index != std::string::npos;
-        if (has_arbitrary_mipmaps)
-          filename.erase(arb_index, 4);
-
-        const auto [it, inserted] =
-            s_hires_texture_id_to_arbmipmap.try_emplace(filename, has_arbitrary_mipmaps);
-        if (!inserted)
-        {
-          failed_insert = true;
-        }
-        else
-        {
-          // Since this is just a texture (single file) the mapper doesn't really matter
-          // just provide a string
-          s_file_library->SetAssetIDMapData(filename, std::map<std::string, std::filesystem::path>{
-                                                          {"texture", StringToPath(path)}});
-
-          if (g_ActiveConfig.bCacheHiresTextures)
-          {
-            auto hires_texture =
-                std::make_shared<HiresTexture>(has_arbitrary_mipmaps, std::move(filename));
-            static_cast<void>(hires_texture->LoadTexture());
-            s_hires_texture_cache.try_emplace(hires_texture->GetId(), hires_texture);
-          }
-        }
-      }
-    }
-
-    if (failed_insert)
-    {
-      ERROR_LOG_FMT(VIDEO, "One or more textures at path '{}' were already inserted",
-                    texture_directory);
+      auto hires_texture =
+          std::make_shared<HiresTexture>(file.has_arbitrary_mipmaps, std::move(file.id));
+      static_cast<void>(hires_texture->LoadTexture());
+      if (file.orca_pack)
+        s_hires_texture_cache.insert_or_assign(hires_texture->GetId(), hires_texture);
+      else
+        s_hires_texture_cache.try_emplace(hires_texture->GetId(), hires_texture);
     }
   }
 
@@ -155,7 +216,12 @@ void HiresTexture::Update()
     message = fmt::format("Found '{}' custom textures for '{}'",
                           s_hires_texture_id_to_arbmipmap.size(), game_id_display);
   }
-  OSD::AddMessage(message, 10000);
+  // Orca: a session's top left is the online overlay's (the connection circle and ping); Orca's
+  // own pack is always there, so the count says nothing to the player.
+  if (Orca::SessionActive())
+    INFO_LOG_FMT(VIDEO, "{}", message);
+  else
+    OSD::AddMessage(message, 10000);
 }
 
 void HiresTexture::Clear()
