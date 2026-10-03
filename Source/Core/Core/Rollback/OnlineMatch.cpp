@@ -1471,6 +1471,10 @@ void PublishStats(Match& match)
   num("seat", match.local_seat);
   num("peers", peers);
   num("ping", link.round_trip_ms);
+  // The medians the delay's link part follows: this player's round trip to the relay and the
+  // slowest friend's (-1: not known yet). "ping" is the latest single one.
+  num("pmed", stats.rtt_median);
+  num("fpmed", stats.peer_rtt_median);
   num("delay", stats.delay);
   num("rb", stats.rollbacks - last.rollbacks);
   num("rbf", stats.resimulated_frames - last.resimulated_frames);
@@ -1803,6 +1807,12 @@ std::optional<int> Boundary(Core::System& system,
     match.last_return = Clock::now();
     if (stall_shown)
       PublishStall(match, 0);
+    // Each change of the input delay, with why (Session.cpp, "Input delay").
+    if (match.session)
+    {
+      for (const std::string& note : match.session->TakeDelayNotes())
+        NOTICE_LOG_FMT(ROLLBACK, "Online match: {}", note);
+    }
     if (match.session && match.session->GetStats().stalls > stalls_before)
       match.stats_stall_ms += MsSince(step_start);
     if (step.kind == Orca::Net::StepKind::Rollback)
@@ -1982,14 +1992,14 @@ void LogStats(const char* when)
       ROLLBACK,
       "Online match {}: frame {}, {} rollbacks, {} re-run frames, deepest {}, {} stalls ({} "
       "counted), {} waits, {} hitches here, {} there, frame advantage {:.2f}, input delay {}{} "
-      "(+{} -{} reverted {}), {} checksums matched, confirmed frame {}, round trip {} ms, {} "
-      "snapshots (every {}, {:.2f} ms each){}{}",
+      "(+{} -{} reverted {}), {} checksums matched, confirmed frame {}, round trip {} ms (median "
+      "{} ms here, {} ms there), {} snapshots (every {}, {:.2f} ms each){}{}",
       when, match.session->CurrentFrame(), stats.rollbacks, stats.resimulated_frames,
       stats.deepest_rollback, stats.stalls, stats.counted_stalls, stats.waits, stats.hitches,
       stats.peer_hitches, stats.frame_advantage, stats.delay,
       stats.delay_fixed ? " (chosen)" : "", stats.delay_raises, stats.delay_lowers,
-      stats.delay_reverts,
-      stats.checksums_matched, stats.confirmed_frame, Orca::Online::RoundTripMs(), stats.saves,
+      stats.delay_reverts, stats.checksums_matched, stats.confirmed_frame,
+      Orca::Online::RoundTripMs(), stats.rtt_median, stats.peer_rtt_median, stats.saves,
       stats.snapshot_every, match.port ? match.port->SaveMs() : 0.0,
       match.session->Error().empty() ? "" : "; ", match.session->Error());
 }

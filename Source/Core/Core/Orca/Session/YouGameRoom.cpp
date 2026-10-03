@@ -671,12 +671,42 @@ struct YouGameRoom::Impl
   int net_jitter = TestNetJitterMs();
   u32 net_count = 0;
   std::deque<Held> held_out, held_in;
+  // Test-only spikes (Orca::TestNetSpikesConfig): the current or next one, from the room's start.
+  std::optional<TestNetSpikes> net_spikes = TestNetSpikesConfig();
+  const Clock::time_point net_opened = Clock::now();
+  Clock::time_point spike_from = net_opened;
+  Clock::time_point spike_to = net_opened;
+  u32 spike_count = 0;
+
+  // The end of the spike `now` falls in, or `now`.
+  Clock::time_point RadioFree(Clock::time_point now)
+  {
+    if (!net_spikes)
+      return now;
+    const auto draw = [this](int lo, int hi) {
+      const u32 x = ++spike_count * 2246822519u ^ 0x9e3779b9u;
+      return lo + static_cast<int>((x ^ (x >> 15)) % static_cast<u32>(hi - lo + 1));
+    };
+    while (spike_to <= now)
+    {
+      spike_from = spike_to + std::chrono::milliseconds(draw(net_spikes->gap_min_ms,
+                                                             net_spikes->gap_max_ms));
+      spike_to = spike_from + std::chrono::milliseconds(draw(net_spikes->length_min_ms,
+                                                             net_spikes->length_max_ms));
+    }
+    const auto since = std::chrono::duration_cast<std::chrono::seconds>(spike_from - net_opened);
+    if (now < spike_from || since.count() < net_spikes->from_s || since.count() >= net_spikes->to_s)
+      return now;
+    return spike_to;
+  }
 
   Clock::time_point HoldUntil(const std::deque<Held>& queue)
   {
-    // A deterministic 0..jitter extra per message; never earlier than the message before it.
+    // A deterministic 0..jitter extra per message, after any spike; never earlier than the message
+    // before it.
     const u32 extra = net_jitter ? (++net_count * 2654435761u) % static_cast<u32>(net_jitter + 1) : 0;
-    const auto due = Clock::now() + std::chrono::milliseconds(*net_delay + static_cast<int>(extra));
+    const auto due = RadioFree(Clock::now()) +
+                     std::chrono::milliseconds(*net_delay + static_cast<int>(extra));
     return queue.empty() ? due : std::max(due, queue.back().due);
   }
 
@@ -1026,6 +1056,14 @@ struct YouGameRoom::Impl
     {
       WARN_LOG_FMT(NETPLAY, "Orca room: TEST network delay {} ms + 0..{} ms each way", *net_delay,
                    net_jitter);
+    }
+    if (net_spikes)
+    {
+      WARN_LOG_FMT(NETPLAY,
+                   "Orca room: TEST network spikes: dark both ways for {}-{} ms after every {}-{} "
+                   "ms, from {} s to {} s",
+                   net_spikes->length_min_ms, net_spikes->length_max_ms, net_spikes->gap_min_ms,
+                   net_spikes->gap_max_ms, net_spikes->from_s, net_spikes->to_s);
     }
     // The connection failed under the player (it went quiet, or a test drops it): see below.
     bool dropped = false;

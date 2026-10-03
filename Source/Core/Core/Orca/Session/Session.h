@@ -11,6 +11,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "Common/CommonTypes.h"
@@ -51,6 +52,8 @@ constexpr int MAX_SNAPSHOT_EVERY = 4;
 // Round trips to the relay whose median is the link the adaptive delay covers (one a second: the
 // last fifteen seconds). A new session can take this many at once (Session::OnRoundTrip).
 constexpr int RTT_SAMPLES = 15;
+// Delay change notes kept for the log until taken (Session::TakeDelayNotes).
+constexpr size_t MAX_DELAY_NOTES = 16;
 using Pads = std::array<Pad, MAX_SEATS>;
 
 // What the session needs from the emulator. Frame numbers count game frames from 0. "The state at
@@ -246,9 +249,15 @@ struct Stats
   // Slow frames this machine reported (OnLocalHitch), and the most any other player reported.
   int hitches = 0;
   int peer_hitches = 0;
-  // Stalls that count toward the others' delay (no hitch on either machine around them, not while
-  // catching up), as this machine reports them (Packet::stalls).
+  // Stalls that count toward the others' delay (no hitch on either machine around them, not set
+  // off by the other side's own stall, not while catching up or settling after a plug-in), as this
+  // machine reports them (Packet::stalls).
   int counted_stalls = 0;
+  // The typical round trip to the relay, in milliseconds: this player's median (what it reports)
+  // and the slowest other player's as reported (-1: not known yet). What the link part of the delay
+  // follows; the latest single round trip is noisier (Wi-Fi spikes).
+  int rtt_median = -1;
+  int peer_rtt_median = -1;
 };
 
 class Session
@@ -322,6 +331,11 @@ public:
   // reported frame and history acknowledgement; the log and local input ranges.
   std::string Describe() const;
 
+  // Each change of this player's delay since the last call, one line each: the frame, from and to,
+  // and why (the link, the others' stalls, a step down, the player's choice), with the numbers the
+  // rule went by. For the log; at most the newest MAX_DELAY_NOTES are kept.
+  std::vector<std::string> TakeDelayNotes() { return std::exchange(m_delay_notes, {}); }
+
   const std::string& Error() const { return m_error; }
   const Stats& GetStats() const { return m_stats; }
   int CurrentFrame() const { return m_frame; }
@@ -341,12 +355,14 @@ private:
   void SampleLocal(const Pad& local_pad);
   void AdaptDelay();
   void RaiseToLink();
+  void NoteDelay(int from, std::string why);
   std::optional<int> LatencyDelay() const;
   int RoundTripFrames(int seat) const;
   double FramesFromMs(double ms) const;
   void TrackAdvantage();
   int KnownThrough(int seat) const;
   bool InPlay(int seat) const;
+  int SettleFrom() const;
   void AdvanceReceived(int seat);
   void ApplyRoster(const std::array<SeatPlan, MAX_SEATS>& roster);
   void ReceiveHistory(const Packet& packet);
@@ -404,27 +420,30 @@ private:
   int m_link_stalls = 0;
   std::array<int, MAX_SEATS> m_peer_stalls{0, 0, 0, 0};
   std::array<int, MAX_SEATS> m_peer_stalls_seen{0, 0, 0, 0};
-  // The others' stalls in each of the last STALL_WINDOWS windows (oldest first), and how far the
-  // furthest of them ran past this player's inputs (this window's so far, then each window's);
-  // windows in a row with no stall, how many in a row a step down needs (doubled by each one
-  // undone), and windows since the last step down.
-  std::array<int, 10> m_stall_history{};
-  int m_window_peer_lag = 0;
-  std::array<int, 10> m_lag_history{};
+  // The others' stalls in each of the last STALL_WINDOWS windows (oldest first), and the furthest
+  // reach of theirs on this player's inputs (how far its sampling ran behind their frame: their
+  // lag plus this player's delay; this window's so far, then each window's); quiet windows in a
+  // row (no stall, or the only one of the last STALL_WINDOWS), how many in a row a step down needs
+  // (doubled by each one undone), and windows since the last step down.
+  std::array<int, 5> m_stall_history{};
+  int m_window_peer_reach = 0;
+  std::array<int, 5> m_reach_history{};
   // Per player, the frame at which its lag on our inputs last reached max_rollback (it was waiting
   // on them): only then are its stalls ours to answer.
   std::array<int, MAX_SEATS> m_edge_frame{INT_MIN / 2, INT_MIN / 2, INT_MIN / 2, INT_MIN / 2};
-  // Which of the last STALL_WINDOWS windows came after the warmup (its stalls weigh on its own
-  // bar), whether the link raised the delay to where it is (it may then follow the link back
-  // down), and windows in a row the link has wanted less.
-  std::array<bool, 10> m_warm_history{};
+  // The frame at which another player's counted stall was last heard of: a stall here around it
+  // came of theirs (they stopped sending new inputs while stalled).
+  int m_last_peer_stall_frame = INT_MIN / 2;
+  // Whether the link raised the delay to where it is (it may then follow the link back down), and
+  // windows in a row the link has wanted less.
   bool m_delay_from_link = false;
   int m_link_below_windows = 0;
-  int m_stall_free_windows = 0;
+  int m_quiet_windows = 0;
   int m_hold_windows;
   int m_windows_since_lower = INT_MAX / 2;
-  // The frame the current stall began at, and whether it counts: every peer's inputs had started
-  // arriving and this player's controller is plugged in.
+  // The frame the current stall began at, and whether it may count: every peer's inputs had
+  // started arriving, this player's controller is plugged in, and the newest plug-in has settled
+  // (SettleFrom). Judged again when it ends (hitches, the others' stalls).
   int m_stall_frame = 0;
   bool m_stall_after_input = false;
   // This machine's hitches (sent), each peer's, and the frame the latest of any was heard of.
@@ -460,6 +479,8 @@ private:
   std::array<int, MAX_SEATS> m_history_acked{-1, -1, -1, -1};
   std::array<int, MAX_SEATS> m_history_stuck{0, 0, 0, 0};
   bool m_leaving = false;
+
+  std::vector<std::string> m_delay_notes;
 
   Stats m_stats;
   std::string m_error;

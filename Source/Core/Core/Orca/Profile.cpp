@@ -5,6 +5,7 @@
 #include "Core/Orca/Session/Online.h"
 
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
 #include <functional>
@@ -229,9 +230,30 @@ bool TestSkipRender()
 std::optional<int> TestNetDelayMs()
 {
   const std::string value = GetEnv("ORCA_TEST_NET_DELAY_MS");
+  if (!SessionActive())
+    return std::nullopt;
+  if (value.empty())
+    return TestNetSpikesConfig() ? std::optional<int>(0) : std::nullopt;
+  return std::clamp(std::atoi(value.c_str()), 0, 1000);
+}
+
+std::optional<TestNetSpikes> TestNetSpikesConfig()
+{
+  const std::string value = GetEnv("ORCA_TEST_NET_SPIKES");
   if (!SessionActive() || value.empty())
     return std::nullopt;
-  return std::clamp(std::atoi(value.c_str()), 0, 1000);
+  TestNetSpikes spikes;
+  const int fields = std::sscanf(value.c_str(), "%d-%d/%d-%d/%d-%d", &spikes.gap_min_ms,
+                                 &spikes.gap_max_ms, &spikes.length_min_ms, &spikes.length_max_ms,
+                                 &spikes.from_s, &spikes.to_s);
+  if ((fields != 4 && fields != 6) || spikes.gap_min_ms < 1 ||
+      spikes.gap_max_ms < spikes.gap_min_ms || spikes.length_min_ms < 0 ||
+      spikes.length_max_ms < spikes.length_min_ms || spikes.length_max_ms > 5000 ||
+      spikes.to_s < spikes.from_s)
+  {
+    return std::nullopt;
+  }
+  return spikes;
 }
 
 int TestNetJitterMs()
