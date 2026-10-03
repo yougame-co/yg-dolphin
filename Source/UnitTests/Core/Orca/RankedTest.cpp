@@ -106,6 +106,7 @@ FakeMemory Game(std::string_view scene)
   for (u32 port = 0; port < 4; ++port)
     m.Write8(RESULT_INFO + 0x24 + port * 0x2AC + 0x01, 3);
   m.Fill(MatchBlock::BASE, 0x200, 0x3A);
+  m.Write32(MatchBlock::BASE, FreeSpace::kMatchBlockOriginalWord);
   return m;
 }
 
@@ -274,6 +275,13 @@ TEST(OrcaMatchBlock, RoundTripsAndWritesOnlyWhatChanged)
   EXPECT_EQ(MatchBlock::Clear(m), 4);
   EXPECT_FALSE(MatchBlock::Read(m).has_value());
   EXPECT_EQ(MatchBlock::Clear(m), 0);
+  EXPECT_EQ(m.Read32(MatchBlock::BASE), FreeSpace::kMatchBlockOriginalWord);
+  // Written again after a clear; never over memory that isn't the dead code.
+  EXPECT_GT(MatchBlock::Write(m, s), 0);
+  MatchBlock::Clear(m);
+  m.Write32(MatchBlock::BASE, 0x12345678);
+  EXPECT_EQ(MatchBlock::Write(m, s), 0);
+  EXPECT_FALSE(MatchBlock::Read(m).has_value());
 }
 
 TEST(OrcaRankedPPlus, PageZeroOfTheProposedPresetIsTheLegalList)

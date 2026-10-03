@@ -129,9 +129,19 @@ std::optional<State> Read(const GuestMemory& m)
   return s;
 }
 
-int Write(GuestMemory& m, const State& s)
+bool Present(const GuestMemory& m)
 {
   if (!m.Valid(BASE) || !m.Valid(BASE + SIZE - 1))
+    return false;
+  const u32 first = m.Read32(BASE + OFF_MAGIC);
+  return first == MAGIC || first == FreeSpace::kMatchBlockOriginalWord;
+}
+
+int Write(GuestMemory& m, const State& s)
+{
+  // Only over sora_scene's dead code (or a block already there): before the game loads the module,
+  // this memory is something else's.
+  if (!Present(m))
     return 0;
   const std::array<u8, SIZE> b = Bytes(s);
   int changed = 0;
@@ -151,7 +161,8 @@ int Clear(GuestMemory& m)
 {
   if (!m.Valid(BASE + 3) || m.Read32(BASE + OFF_MAGIC) != MAGIC)
     return 0;
-  m.Write32(BASE + OFF_MAGIC, 0);
+  // The dead code's own first word again: no header, and a new one may be written.
+  m.Write32(BASE + OFF_MAGIC, FreeSpace::kMatchBlockOriginalWord);
   return 4;
 }
 

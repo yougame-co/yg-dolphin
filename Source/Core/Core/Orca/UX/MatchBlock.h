@@ -99,9 +99,15 @@ struct State
 
 // The block, or nullopt when it holds no header (the game's dead code, or a newer version).
 std::optional<State> Read(const GuestMemory& memory);
-// Writes `state` with the header, only the bytes that differ. Returns how many bytes changed.
+// Whether the block's memory is there to write: sora_scene's dead code (its first word,
+// FreeSpace.h kMatchBlockOriginalWord) or a block already. Before the game loads sora_scene this
+// memory is something else's.
+bool Present(const GuestMemory& memory);
+// Writes `state` with the header, only the bytes that differ, and only where Present. Returns how
+// many bytes changed.
 int Write(GuestMemory& memory, const State& state);
-// No header: the magic word cleared (nothing else is read without it). Returns bytes changed.
+// No header: the dead code's first word back in place of the magic (nothing else is read without
+// it). Returns bytes changed.
 int Clear(GuestMemory& memory);
 
 // Game 1's first striker from the room's code: one bit of its FNV-1a hash. The server makes the
