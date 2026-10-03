@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdio>
 #include <string>
 #include <string_view>
@@ -13,6 +14,7 @@
 //   orca error <code> <sentence for the player>
 //   orca menu <event>, a pick in the game's own Online menu: online casual local, online ranked
 //   local, online friends
+//   orca shaders <compiled> <total>, while the boot compiles shaders before the first frame
 // Codes: boot, cancelled (Orca.app's disc picker closed without a disc), disc_revision, profile,
 // settings, room_mismatch, room_full, kicked, network, peer_left, desync, internal.
 // Only the first error is printed: it is the one that explains the exit. Outside a session these
@@ -43,6 +45,11 @@ void SetAppCaps(std::string_view list);
 bool Cap(std::string_view name);
 // "orca stats <json>" (with the "stats" capability).
 void Stats(std::string_view json);
+// "orca shaders <compiled> <total>", about once a second while the boot waits for the pipelines it
+// compiles before the first frame (VideoCommon/ShaderCache.cpp, WaitForBootCompile), so the app
+// can tell a boot that is compiling from one that hangs; then once more as the wait ends. Only
+// before "ready", and only when that wait lasts a second or more.
+void Shaders(std::size_t compiled, std::size_t total);
 // 0 after a normal leave; 1 once an error was reported.
 int ExitCode();
 // The game reached its first frame (called at every frame boundary; cheap after the first).

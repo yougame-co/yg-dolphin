@@ -126,6 +126,14 @@ void Stats(std::string_view json)
   Print(fmt::format("orca stats {}\n", OneLine(json)));
 }
 
+void Shaders(std::size_t compiled, std::size_t total)
+{
+  if (!SessionActive())
+    return;
+  std::lock_guard lock(s_mutex);
+  Print(fmt::format("orca shaders {} {}\n", compiled, total));
+}
+
 void Error(std::string_view code, std::string_view sentence)
 {
   if (!SessionActive())

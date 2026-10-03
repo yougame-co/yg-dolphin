@@ -118,6 +118,9 @@ private:
   static constexpr size_t NUM_PALETTE_CONVERSION_SHADERS = 3;
 
   void WaitForAsyncCompiler();
+  // Orca: WaitForAsyncCompiler for a session's boot, which gives up at a limit (ShaderCache.cpp,
+  // BOOT_WAIT_SOFT and BOOT_WAIT_HARD) and prints "orca shaders" lines while it waits.
+  void WaitForBootCompile();
   void LoadCaches();
   void ClearCaches();
   void LoadPipelineUIDCache();

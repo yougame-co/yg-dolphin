@@ -305,6 +305,14 @@ bool TestNoAfp()
   return EnvIs("ORCA_TEST_NO_AFP", "1");
 }
 
+std::optional<int> TestShaderWaitMs()
+{
+  const std::string value = GetEnv("ORCA_TEST_SHADER_WAIT_MS");
+  if (!SessionActive() || value.empty())
+    return std::nullopt;
+  return std::clamp(std::atoi(value.c_str()), 0, 600'000);
+}
+
 bool TestOverridesActive()
 {
   return TestPads() != 0 || TestSkipRender() || TestNetDelayMs().has_value() ||
