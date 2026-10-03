@@ -1620,10 +1620,13 @@ scripted matches won by each port, a timed match, a quit, two stages):
   stage, +0x20 the time limit in frames, +0x98 the players' init data, 4 x 0x5C: +0x00 character,
   +0x01 player type 0 human / 1 CPU / 3 none, +0x04 starting stocks, 0xFF in a timed match);
   +0x18 the result info (`0x9017F420`); +0x1C the rules (`0x9017F360`).
-- The result info, filled as the fight ends (before the results screen's first frame): +0x01 mode
-  (0 time, 1 stock), +0x04 time limit (minutes, u32), +0x08 stocks (u32), +0x0C the stage (u16),
-  +0x0E how the fight ended (u16: 1 normally, by stocks or time; 2 no contest). One record per port
-  at +0x24 + port x 0x2AC: +0x00 character, +0x01 player type, +0x0A stocks left (0xFF timed),
+- The result info, filled as the fight ends (before the results screen's first frame), much of it
+  live during the fight: +0x01 mode (0 time, 1 stock), +0x04 time limit (minutes, u32), +0x08
+  stocks (u32), +0x0C the stage (u16), +0x0E..+0x0F the count of players tied for first (read by
+  the beta as how the fight ended, 1 normally and 2 a no contest; a level time-up's sudden death
+  also leaves 2, so the no contest is now the decision's), +0x1378 the decision (9 from the fight's
+  start, so a no contest; 1 the frame time runs out; 2 a deciding KO). One record per port at
+  +0x24 + port x 0x2AC: +0x00 character, +0x01 player type, +0x0A stocks left (0xFF timed),
   +0x0E place (0 first; a 1v1's loser 1), +0x10 KOs (u32), +0x14 falls (u32), +0x18
   self-destructs (u16).
 - The rules (gmSetRule): +0x02 mode (0 time, 1 stock), +0x03 a timed match's minutes, +0x04
@@ -1899,8 +1902,13 @@ already final when a session ends (a leave, an unplug) is confirmed before the r
 Leaving, quitting the app or losing the connection mid-set is the room's forfeit (15 s).
 
 Checked: `OrcaSetBlock*`, `OrcaRankedSet*` unit tests (layout, a Bo3, void games, the Brawl
-time-out order with the ledge limit, ties and tiebreak games, Project+, the score line, the
-tracker's reports).
+time-out order with the ledge limit, sudden death in the fight scene, ties and tiebreak games,
+Project+, the score line, the tracker's reports); RAM probes of Brawl fights (the fighter chain,
+stocks and damage, statuses `0xBD` dead and `0xBE` rebirth as BrawlHeaders names them, the
+decision turning 1 at time-up, sudden death staying in `scMelee`); a harness set with
+`ORCA_TEST_MATCH_BLOCK=ranked ORCA_TEST_SET_RULES=1,1` (a level time-up is a tie, the tiebreak game
+and one more game win the set 2-0, a fourth game isn't recorded), also under `YG_SYNCTEST=7`, and
+Project+'s 2-0 under `YG_SYNCTEST=7`. Not checked live: a real ledge grab count.
 
 ## Embedding
 
