@@ -69,6 +69,7 @@ Packet Sample()
   packet.rtt = 64;
   packet.stalls = 3;
   packet.hitches = 5;
+  packet.spared = std::array<int, SPARED_FRAMES>{1, 2, 2, 3};
   return packet;
 }
 
@@ -86,6 +87,7 @@ void ExpectSame(const Packet& a, const Packet& b)
   EXPECT_EQ(a.rtt, b.rtt);
   EXPECT_EQ(a.stalls, b.stalls);
   EXPECT_EQ(a.hitches, b.hitches);
+  EXPECT_EQ(a.spared, b.spared);
 }
 
 Packet Frames(int seat, int first, int count)
@@ -117,12 +119,14 @@ TEST(OrcaRoom, PacketRoundTrips)
   EXPECT_FALSE(got.rtt);
   EXPECT_EQ(got.stalls, -1);
   EXPECT_EQ(got.hitches, -1);
+  EXPECT_FALSE(got.spared);
   const std::string text = EncodePacket(bare);
   EXPECT_EQ(text.find("\"r\""), std::string::npos);
   EXPECT_EQ(text.find("\"v\""), std::string::npos);
   EXPECT_EQ(text.find("\"l\""), std::string::npos);
   EXPECT_EQ(text.find("\"n\""), std::string::npos);
   EXPECT_EQ(text.find("\"j\""), std::string::npos);
+  EXPECT_EQ(text.find("\"sp\""), std::string::npos);
 
   // A lead of zero, a quiet window and an instant relay still travel.
   bare.resimulated = 0;
@@ -130,6 +134,7 @@ TEST(OrcaRoom, PacketRoundTrips)
   bare.rtt = 0;
   bare.stalls = 0;
   bare.hitches = 0;
+  bare.spared = std::array<int, SPARED_FRAMES>{};
   ASSERT_TRUE(DecodePacket(EncodePacket(bare), &got));
   ExpectSame(bare, got);
 }
@@ -186,6 +191,12 @@ TEST(OrcaRoom, RejectsMalformedPackets)
   EXPECT_EQ(telemetry("\"j\":5", "\"j\":-2").hitches, 0);
   EXPECT_EQ(telemetry("\"j\":5", "\"j\":999999999999").hitches, 1 << 20);
   EXPECT_EQ(telemetry("\"j\":5", "\"j\":true").hitches, -1);
+  using Spared = std::array<int, SPARED_FRAMES>;
+  EXPECT_EQ(telemetry("[1,2,2,3]", "[-1,2.5,2,999999999999]").spared, (Spared{0, 2, 2, 1 << 20}));
+  EXPECT_EQ(telemetry("[1,2,2,3]", "[1,2,2]").spared, std::nullopt);
+  EXPECT_EQ(telemetry("[1,2,2,3]", "[1,2,2,3,4]").spared, std::nullopt);
+  EXPECT_EQ(telemetry("[1,2,2,3]", "[1,\"2\",2,3]").spared, std::nullopt);
+  EXPECT_EQ(telemetry("\"sp\":[1,2,2,3]", "\"sp\":7").spared, std::nullopt);
 
   // What would crash the JSON parser: deep nesting, and numbers that overflow a double.
   EXPECT_FALSE(DecodePacket(std::string(5000, '[') + std::string(5000, ']'), &got));

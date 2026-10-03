@@ -68,8 +68,11 @@ seat is its room slot.
 Unit tests: `ninja tests && ./Binaries/Tests/tests --gtest_filter='Orca*'`. With `ORCA_LIVE_TEST=1`,
 the `OrcaLive` tests also open real rooms on yougame.co. Two Orca processes over real rooms, steered
 like the app steers them: `Tools/orca/dropin-commands.py <nogui> <disc>` (join, leave, rejoin, the
-host leaving) and `Tools/orca/dropin-rooms.py <nogui> <disc>` (a room with no host, a friend first
-in the host's room, the host's connection dropping mid-match).
+host leaving), `Tools/orca/dropin-rooms.py <nogui> <disc>` (a room with no host, a friend first
+in the host's room, the host's connection dropping mid-match) and `Tools/orca/dropin-delay.py
+<nogui> <disc>` (the input delay for five minutes after a join at character select or mid-match;
+with `--friend-env ORCA_TEST_NET_SPIKES=... --host-env ORCA_TEST_NET_DELAY_MS=0 --expect-raise
+S1-S2`, through a test link that goes dark again and again).
 
 **Launcher profiles (prototype: Project+).** A mod that boots through its own loader program runs
 from a launcher profile, picked with `ORCA_PROFILE` (`Data/Sys/Orca/PPLUS32.ini` is Project+ v3.2).
@@ -724,42 +727,151 @@ Tests:
 
 ## Input delay
 
-`Orca/Session/Session.cpp` ("Input delay") has the rule; it changed in 0.3.5.
+`Orca/Session/Session.cpp` ("Input delay") has the rule; it changed in 0.3.5, and again for drop-ins
+and spiky links on branch `delay-dropin` (2026-10-02 and 03).
 
-- Two frames by default, like Slippi. Rollback hides the rest of the link, spikes included.
-- The adaptive delay rises only for what rollback can't cover:
+- Two frames by default, like Slippi. Rollback hides the rest of the link, jitter and spikes
+  included. A spike past the rollback window costs a stall there, not a frame of delay on every
+  input all match long.
+- The adaptive delay rises only for what rollback can't cover, and only where a little delay cures
+  it:
   - **The typical link.** It is the median of the player's latest 15 round trips to the relay (one a
     second) and the slowest friend's median, which each reports. Through the relay, one way is half
     of each. The delay covers what the 7-frame rollback window leaves of that, keeping a frame for
-    the boundary and one for jitter: two frames cover a round trip of about 230 ms between the
+    the boundary and one for jitter: two frames cover a round trip of about 240 ms between the
     players. A new session takes the room's recent round trips at once, and the delay rises as soon
-    as every player's median is in. One side's alone sets nothing.
-  - **Sustained stalls on a friend's side.** A friend stalls when this player's inputs outran its
-    rollback window, so only this player's delay can help. Three such stalls in the last 10
-    one-second windows raise it a frame; one second counts two at most, and the first 10 s of a
-    session need four. A friend's stall counts only if its lag on this player's inputs (below)
-    reached the window around then: with three or four players, it may have waited on someone
-    else. Stalls don't count while a controller isn't plugged in yet (catching up), around a hitch
-    on either machine, or while waiting for the first packet.
-- Rollbacks never move the delay, however many there are.
-- A raised delay steps down a frame at a time, and only if every friend would still have had a
-  frame of room. Each packet shows how far the friend ran past this player's newest input it had
-  (its frame minus its acknowledgement); in the last 10 s that may not have reached the window
-  minus one. A delay the link raised follows the link down after 3 s of wanting less (a first
-  median inflated by a keyframe's transfer). One that stalls raised waits for 10 stall-free
-  seconds per step. Stalls back within 20 s of a step undo it and double the next wait.
+    as every player's median is in. One side's alone sets nothing. It rises once the link is 4 ms
+    (one way) past a frame's boundary and comes back once it is 4 ms short of it, so a median that
+    wanders around a boundary doesn't flip it up and down.
+  - **A friend's stalls that a little more delay would have spared.** A friend stalls when this
+    player's inputs outran its rollback window, so only this player's delay can help. Each side
+    times its own counted stalls (until the input it waited on came, not to the end of the
+    rollback that input sets off, whose re-run would make a stall look a frame longer) and
+    reports, with their count, how many were over within one, two, three and four frames
+    (`Packet::spared`, `"sp"` in the room message): k frames more of the other's delay would have
+    brought the input it waited on k frames sooner, and spared it. Each
+    second gets a need: the least delay that would have kept the friend out of every stall that
+    second (and, with none, how near the edge of its window it ran). A raise of k frames is worth
+    it once it would have spared stalls in 8 seconds per frame of the last 45 (none from before the
+    last step down): a frame on every input from then on, against a stall saved every five or six
+    seconds. The delay then rises a frame, and the next second judges the next frame on the same
+    seconds.
+    - Lateness a frame or two cures raises within half a minute or so of its start: a slow, bursty
+      uplink (inputs a frame late in bunches every few seconds, which the round-trip median doesn't
+      show), or dropouts just past the window every two seconds.
+    - Spikes at random that outlast the window by anything from under a frame to six (the Mac's
+      bad-day Wi-Fi: 80-220 ms, every 2.7 s on average) raise nothing: a frame more would spare only
+      the shortest, and a chance bunch of those seldom reaches 8 in 45 s. Nor do long dropouts every
+      second (150-300 ms): a raise to 6 would spare fewer than half of them. Those cost their
+      stalls, as they would in Slippi.
+    - A friend's stall counts only if its lag on this player's inputs (below) reached the window
+      around then (with three or four players, it may have waited on someone else). It doesn't
+      count:
+      - around a hitch on either machine;
+      - when this player's own stall set it off: the friend waited on inputs this player wasn't
+        sending, because it was stalled itself (a stall of this player's heard of during the
+        friend's or in the half second before it);
+      - while a controller isn't plugged in yet (catching up), or while waiting for the first
+        packet;
+      - in the first 10 s after the newest plug-in, on both machines: the start of a match, or a
+        drop-in, where the joiner plugs in up to a dozen frames behind the host, the host stalls on
+        its first inputs, and time sync evens the two out.
+    - A friend on an older Orca reports no lengths: each of its stalls counts as one a frame would
+      have spared.
+- Rollbacks never move the delay, however many there are, and neither do time-sync waits.
+- A raised delay comes back down a frame at a time. One the link raised follows the link down after
+  3 s of wanting less (a first median inflated by a keyframe's transfer). One that stalls raised
+  steps down after 5 quiet seconds, then a frame each further quiet second, while there is room: in
+  the last 5 s, no second where a frame less would have stalled the friend, run it at the edge of
+  its window or within a frame of it, and at most one where it stalled even at this delay (a spike
+  the delay could not have spared either). Each packet shows how far the friend ran past this
+  player's newest input it had (its frame minus its acknowledgement); that plus the delay this
+  input carried (the reach) doesn't depend on the delay. Two frames of room, not one: what a delay
+  sees runs a frame or two short of what the delay below sees once the friend stalls there again
+  (dropouts every 2 s showed a frame of room at 2 from 3, and stalled again at 2). A step down
+  spends what the seconds before it said, so the next raise needs fresh ones. Stalls that raise it
+  again within a minute undo the step and double the next quiet wait (up to 40 s); a step that
+  holds a minute halves it again. After a minute of a slow, bursty uplink, the delay is back at 2
+  about 10 s after the link is clean.
+- Each change is logged with its reason and the numbers behind it, for instance `Online match: input
+  delay 2 -> 3 at frame 5400: 1 frame more would have spared the others' stalls on this player's
+  inputs in 8 of the last 45 s (the delays those seconds needed: 3 3 4 3 7 3 3 3 3)`. The
+  1800-frame stats line also counts the stalls a frame more would have spared, and it and
+  `xplat.py` show the round-trip medians the link part uses (`orca stats` `pmed` and `fpmed`).
 - The app's `delay N` fixes it instead (Embedding, stdin).
 - Since the SI relatch ("Input latency"), a pad sampled for frame f is what the game reads in frame
   f, so delay N is N frames, as in Slippi. Before it the game read each frame's pads a frame late,
   and delay 2 acted like 3.
-- Why (2026-10-02, a Project+ match): a Mac at 34-35 ms whose Wi-Fi spiked to 113-123 ms every
-  ~11 s, against a friend at 22 ms whose game hitched about as often. In menus both sat at 2 with
-  no rollbacks. In every match the old rule climbed to 4-5:
+- **Round trips are per side.** `ping` in `orca stats` and "round trip" in the stats line are the
+  latest single round trip from this machine to the relay (YouGameRoom's ping every second), not
+  between the players: one way between them is about half the sum of the two. Each machine measures
+  its own leg, so the two can differ a lot. In the 2026-10-02 drop-ins the PC read 14-23 ms in every
+  run, while the Mac on Wi-Fi (AWDL active) read 15-17 ms with occasional 79-117 ms spikes on a good
+  run and 30-155 ms on a bad one, at a load of about 25 in one of them. The same thread carries the
+  game's packets, so whatever delays the pong delays the inputs too. `xplat.py`'s `ping_avg`
+  averages those single samples, so spikes pull it up; the medians are `ping_median` and
+  `friend_ping_median`.
+- Why (2026-10-02, a Project+ match, 0.3.5): a Mac at 34-35 ms whose Wi-Fi spiked to 113-123 ms
+  every ~11 s, against a friend at 22 ms whose game hitched about as often. In menus both sat at 2
+  with no rollbacks. In every match the old rule climbed to 4-5:
   - A second with 30 re-run frames, or two stalls in three seconds, on either side raised both
     players. The stalls came from the spikes and from the friend's hitches.
   - A lower needed ten seconds of at most three re-run frames per second. A match never has those,
     so the delay came down only between matches.
   - At 4-5 the rollbacks barely moved: 20-30 per 15 s, 3-4 frames deep, against 59 at 2.
+- Why (2026-10-02 evening, `delay-dropin`): three Mac and PC drop-ins over the prod relay on clean
+  PC links. In two, the PC's delay went from 2 to 5 within 30 s of plugging in and both sides
+  hovered at 4-6 for the whole match; in the third both held 2. The drop-in wasn't the cause (the
+  0.3.5 and 0.3.6 rules are the same). The Mac's own link was: in the bad runs its spikes past the
+  rollback window came every few seconds (ping average 49-70 against 25-33), and each stalled both
+  sides once. 0.3.5 read three stalls in 10 s as sustained, raised the other side's delay, cleared
+  the history and could raise again at once, while a step down needed 10 quiet seconds per frame.
+  Two more flaws broke the bar without driving those runs: the first-seconds allowance was timed
+  from the keyframe, so a joiner's ran out during its catch-up, before it plugged in; and a stall
+  this player's own stall set off counted toward this player's delay.
+- Why the stall lengths (2026-10-03, review of `delay-dropin`): its first fix raised only on stalls
+  in 3 of any 4 seconds. That held 2 on spikes at least 2 s apart, but missed both ways. Lateness
+  that stalls in at most 2 of every 4 seconds never raised it however long it lasted: a slow,
+  bursty uplink (90 ms + 0-120 ms, in order) stalled the PC 89 times in 5 minutes at 2, where 3
+  would have left 6-7; dropouts of 130-150 ms every 2.1 s kept both at 2 with 80-120 stalls a side.
+  And spikes at random rather than spaced bunched into 3 of 4 seconds now and then, so the delay
+  went up and down 4-14 times in 5 minutes. A count of stalled seconds can't tell those links apart
+  (each stalls in 5-11 seconds of every 30); how long each stall lasts can: the uplink's and the
+  dropouts' are over within a frame or two, the random spikes' anything up to six. `SessionTest`
+  covers each:
+  `SpikesAtRandomKeepTwo` (16 draws: no change), `SpikesAtRandomEveryTwoSecondsRarelyMove`,
+  `ClusteredLatenessRaisesTheLateSide`, `SustainedLatenessRaisesThenComesBackDown`,
+  `DropoutsAFrameWouldSpareRaiseAndStay`, `LongDropoutsEverySecondRaiseNothing`,
+  `StallsWeighByWhatARaiseWouldSpare` and `StallsARaiseWouldSpareRaiseThenDecay`; the spaced
+  spikes (`SpikesEveryFewSecondsKeepTwo`), drop-ins on a clean link at 10, 30 and 75 s
+  (`DropInOnACleanLinkKeepsTwo`) and `StallsSetOffByTheOtherSidesStallCountForNothing` still hold.
+  Over 16 simulated draws each: random spikes every 3.5 or 2.7 s on average, the Mac hosting or
+  joining, never moved either delay (every 2 s on average, one up and one down on a side on 1 or
+  2 draws in 16); the bursty uplink raised the Mac's to 3 within 31-122 s and the PC stalled 12-32
+  times in 5 minutes; the dropouts raised the Mac's to 3 and the PC's to 4 within 26-53 s, for
+  good. With re-run frames of 2 ms each (12 draws): the uplink raised within 37-85 s, the dropouts
+  within 28-59 s, and random spikes every 3.5 or 2.7 s moved a delay up and back down on 1 draw
+  in 12 of some of the four cases.
+  `Tools/orca/dropin-delay.py` checks it with two Orcas over a real room; `ORCA_TEST_NET_SPIKES`
+  (now also `~M` for gaps at random) and `ORCA_TEST_NET_UPLINK` (Profile.h) give one of them the
+  test link. On one Mac over the prod relay (2026-10-03, dev rooms):
+  - Joins at character select and mid-match held 2 on both sides for 5 minutes in Brawl and
+    Project+: 0 desyncs, 0-5 stalls a side, none counted.
+  - The friend's room on spikes at random (`~2700/80-220`) held 2 on both sides for 5 minutes in
+    both games: 63-69 stalls a side, of the counted ones 10-14 short enough for a frame to spare,
+    0 desyncs.
+  - A slow, bursty uplink on the friend (`ORCA_TEST_NET_UPLINK=90+120/60-210`, Brawl, two runs)
+    took the friend's delay to 3 22 and 67 s into it, the host having stalled about 10-15 times
+    by then (in the second run 17 of its 20 counted stalls were over within a frame), and back to
+    2 7 s after it ended. The host's stayed at 2. A first build timed stalls through the rollback
+    their input set off: only 8 of 14 counted stalls, nearly all 3-16 ms long, came out as over
+    within a frame, and nothing rose.
+  - Dropouts of 130-150 ms every 2.1 s for 110 s (Project+) took both to 3, 68 and 83 s in, and
+    back to 2 around their end.
+  - The loopbacks (`YG_LOOPBACK`, fresh recordings, 8,900 frames) PASS in both games.
+
+  Two Orcas on one Mac's Wi-Fi are a noisy link on some runs (round trips of 100-370 ms every few
+  seconds on one of the two connections): compare runs only with their `pmed` and `ping`.
 
 ## Input latency
 

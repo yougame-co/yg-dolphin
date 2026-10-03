@@ -319,6 +319,13 @@ picojson::object PacketToJson(const Packet& packet)
     d["n"] = picojson::value(static_cast<double>(packet.stalls));
   if (packet.hitches >= 0)
     d["j"] = picojson::value(static_cast<double>(packet.hitches));
+  if (packet.spared)
+  {
+    picojson::array spared;
+    for (const int n : *packet.spared)
+      spared.emplace_back(static_cast<double>(n));
+    d["sp"] = picojson::value(spared);
+  }
   if (packet.checksum_frame)
   {
     d["x"] = picojson::value(static_cast<double>(*packet.checksum_frame));
@@ -430,6 +437,26 @@ bool PacketFromJson(const picojson::object& d, Packet* packet)
     out.stalls = *stalls;
   if (const auto hitches = ClampedInt(d, "j", 0, MAX_STALLS))
     out.hitches = *hitches;
+  // Stall lengths (Packet::spared): SPARED_FRAMES numbers, each clamped like the counts above, or
+  // none at all (a wrong length, or anything not a number in it).
+  if (const auto sp = d.find("sp"); sp != d.end() && sp->second.is<picojson::array>() &&
+                                    sp->second.get<picojson::array>().size() == SPARED_FRAMES)
+  {
+    std::array<int, SPARED_FRAMES> spared{};
+    bool numbers = true;
+    for (int k = 0; k < SPARED_FRAMES && numbers; ++k)
+    {
+      const picojson::value& v = sp->second.get<picojson::array>()[k];
+      numbers = v.is<double>() && !std::isnan(v.get<double>());
+      if (numbers)
+      {
+        spared[k] =
+            static_cast<int>(std::clamp(v.get<double>(), 0.0, static_cast<double>(MAX_STALLS)));
+      }
+    }
+    if (numbers)
+      out.spared = spared;
+  }
   if (d.count("x"))
   {
     const auto frame = Int(d, "x", 0, MAX_FRAME);
@@ -725,12 +752,59 @@ struct YouGameRoom::Impl
   int net_jitter = TestNetJitterMs();
   u32 net_count = 0;
   std::deque<Held> held_out, held_in;
+  // Test-only spikes (Orca::TestNetSpikesConfig): the current or next one, from the room's start.
+  std::optional<TestNetSpikes> net_spikes = TestNetSpikesConfig();
+  const Clock::time_point net_opened = Clock::now();
+  Clock::time_point spike_from = net_opened;
+  Clock::time_point spike_to = net_opened;
+  u32 spike_count = 0;
+  // Test-only slow uplink (Orca::TestNetUplinkConfig): what this room sends waits longer.
+  std::optional<TestNetUplink> net_uplink = TestNetUplinkConfig();
+  u32 uplink_count = 0;
+
+  // The end of the spike `now` falls in, or `now`.
+  Clock::time_point RadioFree(Clock::time_point now)
+  {
+    if (!net_spikes)
+      return now;
+    const auto draw = [this](int lo, int hi) {
+      const u32 x = ++spike_count * 2246822519u ^ 0x9e3779b9u;
+      return lo + static_cast<int>((x ^ (x >> 15)) % static_cast<u32>(hi - lo + 1));
+    };
+    // An exponential gap around the mean, from the same deterministic draws.
+    const auto gap = [&] {
+      if (!net_spikes->poisson)
+        return draw(net_spikes->gap_min_ms, net_spikes->gap_max_ms);
+      const double u = (draw(0, (1 << 24) - 1) + 1) / static_cast<double>(1 << 24);
+      return static_cast<int>(std::lround(-std::log(u) * net_spikes->gap_min_ms));
+    };
+    while (spike_to <= now)
+    {
+      spike_from = spike_to + std::chrono::milliseconds(gap());
+      spike_to = spike_from + std::chrono::milliseconds(draw(net_spikes->length_min_ms,
+                                                             net_spikes->length_max_ms));
+    }
+    const auto since = std::chrono::duration_cast<std::chrono::seconds>(spike_from - net_opened);
+    if (now < spike_from || since.count() < net_spikes->from_s || since.count() >= net_spikes->to_s)
+      return now;
+    return spike_to;
+  }
 
   Clock::time_point HoldUntil(const std::deque<Held>& queue)
   {
-    // A deterministic 0..jitter extra per message; never earlier than the message before it.
+    // A deterministic 0..jitter extra per message, after any spike (and on the way out, a slow
+    // uplink's hold); never earlier than the message before it.
+    const auto now = Clock::now();
     const u32 extra = net_jitter ? (++net_count * 2654435761u) % static_cast<u32>(net_jitter + 1) : 0;
-    const auto due = Clock::now() + std::chrono::milliseconds(*net_delay + static_cast<int>(extra));
+    auto due = RadioFree(now) + std::chrono::milliseconds(*net_delay + static_cast<int>(extra));
+    const auto since = std::chrono::duration_cast<std::chrono::seconds>(now - net_opened).count();
+    if (&queue == &held_out && net_uplink && since >= net_uplink->from_s &&
+        since < net_uplink->to_s)
+    {
+      const u32 x = ++uplink_count * 2246822519u ^ 0x85ebca6bu;
+      const u32 more = (x ^ (x >> 13)) % static_cast<u32>(net_uplink->jitter_ms + 1);
+      due += std::chrono::milliseconds(net_uplink->delay_ms + static_cast<int>(more));
+    }
     return queue.empty() ? due : std::max(due, queue.back().due);
   }
 
@@ -1271,6 +1345,23 @@ struct YouGameRoom::Impl
     {
       WARN_LOG_FMT(NETPLAY, "Orca room: TEST network delay {} ms + 0..{} ms each way", *net_delay,
                    net_jitter);
+    }
+    if (net_spikes)
+    {
+      WARN_LOG_FMT(NETPLAY,
+                   "Orca room: TEST network spikes: dark both ways for {}-{} ms after every "
+                   "{}{}-{} ms, from {} s to {} s",
+                   net_spikes->length_min_ms, net_spikes->length_max_ms,
+                   net_spikes->poisson ? "(on average) " : "", net_spikes->gap_min_ms,
+                   net_spikes->gap_max_ms, net_spikes->from_s, net_spikes->to_s);
+    }
+    if (net_uplink)
+    {
+      WARN_LOG_FMT(NETPLAY,
+                   "Orca room: TEST slow uplink: what it sends waits {} ms + 0..{} ms, from {} s "
+                   "to {} s",
+                   net_uplink->delay_ms, net_uplink->jitter_ms, net_uplink->from_s,
+                   net_uplink->to_s);
     }
     // The connection failed under the player (it went quiet, or a test drops it): see below.
     bool dropped = false;

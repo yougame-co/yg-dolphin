@@ -133,6 +133,7 @@ public:
   }
   void ResetPacing() override { ++m_pacing_resets; }
   double SaveMs() const override { return save_ms; }
+  double NowMs() const override { return now_ms; }
 
   // Runs the frame whose pads were set last; returns its number.
   int Run()
@@ -148,9 +149,11 @@ public:
     return m_pads_frame;
   }
 
-  // Slots like RingPort's ring (0: keep every snapshot), and what a save reports it costs.
+  // Slots like RingPort's ring (0: keep every snapshot), what a save reports it costs, and the
+  // simulated clock (Game::NowMs).
   size_t ring_slots = 0;
   double save_ms = 0;
+  double now_ms = 0;
   std::vector<int> m_ring;
   size_t m_next = 0;
   std::map<int, u64> m_snapshots;
@@ -321,6 +324,7 @@ struct Player
   // One tick of wall time: re-run any frames a rollback needs, then run at most one new frame.
   void Tick(int tick)
   {
+    game.now_ms = tick * 1000.0 / 60;
     // The model applies to the tick's first boundary, which samples unless it is a Wait.
     const int frame = session.CurrentFrame();
     const int delay = session.Delay();
@@ -473,21 +477,33 @@ void ExpectClean(const Match& match)
 // room thread coalesces packets (CoalescePacket) and sends the newest at most every 10 ms, pings
 // the relay every second, and with a test delay holds every message it sends and receives
 // (held_out, held_in). Packets travel as their JSON (EncodePacket, DecodePacket).
+//
+// With a DropIn, side 1 drops into side 0's game the way OnlineMatch does it: side 0 (the host)
+// plays alone from the start; when its friend arrives it keeps a keyframe of its next frame, and
+// once that is stored it starts its session with the frames since in its log (drop-in sessions
+// always send, every boundary). The friend loads the keyframe a little later and replays the log
+// as fast as it can (no pacing, no rendering, no hitches reported: RingPort::SetCatchingUp) until
+// it is within CATCH_UP_BEHIND frames of the host, then plugs in where the host's roster says.
 class RelayMatch
 {
 public:
   using Micros = s64;
   static constexpr Micros MS = 1000;
   static constexpr Micros FRAME_US = 16667;
+  // OnlineMatch's: a joiner further behind the host than this runs unthrottled.
+  static constexpr int CATCH_UP_BEHIND = 12;
 
   struct Side
   {
     // The test delay this side's room holds each message it sends and receives, plus 0..jitter_ms
-    // per message (never overtaking the message before it).
+    // per message (never overtaking the message before it), only from hold_from_s to hold_to_s of
+    // the side's wall clock.
     int hold_out_ms = 0;
     int hold_in_ms = 0;
     int jitter_out_ms = 0;
     int jitter_in_ms = 0;
+    int hold_from_s = -1'000'000;
+    int hold_to_s = 1'000'000;
     // One way between this machine and the relay.
     int relay_ms = 8;
     // Frames per second relative to 60 (1.01: a clock 1% fast).
@@ -505,7 +521,12 @@ public:
     int hitch_burst = 0;
     bool report_hitches = true;
     // Wi-Fi spikes (a Mac's radio off channel for AWDL): about every spike_every_s seconds (0:
-    // never), nothing leaves or reaches this machine for spike_ms; then it all goes at once.
+    // never), nothing leaves or reaches this machine for spike_ms; then it all goes at once. Or,
+    // with spike_gap_ms set, gaps and lengths drawn from those ranges (a radio on a bad day: 80-220
+    // ms every 2-5 s), only from spike_from_s to spike_to_s of the side's wall clock. Or, with
+    // spike_mean_gap_ms set, spikes that come at random, unspaced (a Poisson process: each
+    // millisecond starts one with the same small chance, so two may come back to back), that many
+    // ms apart on average, with lengths from spike_len_ms.
     int spike_every_s = 0;
     int spike_ms = 0;
     // A direct link to the other machine beside the relay (YouGameRoom's DirectLink): every packet
@@ -515,39 +536,82 @@ public:
     int direct_ms = -1;
     int direct_jitter_ms = 0;
     int direct_loss_percent = 0;
+    std::array<int, 2> spike_gap_ms{0, 0};
+    std::array<int, 2> spike_len_ms{0, 0};
+    int spike_mean_gap_ms = 0;
+    int spike_from_s = 0;
+    int spike_to_s = 1'000'000;
+    // The spikes hold only what reaches this machine (its download stalls; what it sends goes).
+    bool spike_in_only = false;
   };
 
-  RelayMatch(Config config, const Side& a, const Side& b)
+  // Side 1 drops into side 0's game: it arrives join_s seconds after side 0 started alone. Side 0
+  // starts its session keyframe_frames frames later (packing and storing the keyframe: 4.35 s in
+  // the field), and side 1 starts replaying from the keyframe load_ms after that (download and
+  // load), catch_up_frame_us per replayed frame.
+  struct DropIn
+  {
+    int join_s = 30;
+    int keyframe_frames = 261;
+    int load_ms = 1900;
+    Micros catch_up_frame_us = 3000;
+  };
+
+  // `seed` picks another draw of every random number (the same for 0 as ever).
+  RelayMatch(Config config, const Side& a, const Side& b,
+             std::optional<DropIn> drop_in = std::nullopt, u32 seed = 0)
+      : m_drop_in(drop_in), m_rng(4321 + seed)
   {
     for (int i = 0; i < 2; ++i)
     {
       config.local_seat = i;
-      m_peers[i] = std::make_unique<Peer>(config, i == 0 ? a : b, i);
+      m_peers[i] = std::make_unique<Peer>(config, i == 0 ? a : b, i, seed);
+      if (!m_drop_in)
+        m_peers[i]->session.emplace(config, m_peers[i]->game, m_peers[i]->link);
     }
   }
 
   // Runs until both sides have run `frames` frames (or ten minutes of wall time pass).
   void Play(int frames)
   {
-    for (; m_now < 600'000 * MS; m_now += MS)
+    for (; m_now < END; m_now += MS)
     {
-      if (At(0).session.CurrentFrame() >= frames && At(1).session.CurrentFrame() >= frames)
-        return;
-      if (::testing::Test::HasFatalFailure())
-        return;
-      MoveMessages();
-      for (int i = 0; i < 2; ++i)
+      if (Running(0) && Running(1) && SessionOf(0).CurrentFrame() >= frames &&
+          SessionOf(1).CurrentFrame() >= frames)
       {
-        RoomThread(i);
-        Emulate(i);
+        return;
       }
+      if (!TickOnce())
+        return;
     }
   }
 
-  const Session& SessionOf(int i) const { return m_peers[i]->session; }
+  // Runs `seconds` more of wall time.
+  void PlaySeconds(int seconds)
+  {
+    const Micros until = m_now + seconds * 1000 * MS;
+    for (; m_now < until && m_now < END; m_now += MS)
+    {
+      if (!TickOnce())
+        return;
+    }
+  }
+
+  bool Running(int i) const { return m_peers[i]->session.has_value(); }
+  const Session& SessionOf(int i) const { return *m_peers[i]->session; }
   const FakeGame& GameOf(int i) const { return m_peers[i]->game; }
   int HitchesOf(int i) const { return m_peers[i]->hitches_reported; }
   int DirectReceivedBy(int i) const { return m_peers[i]->direct_received; }
+  // The most each side's delay reached since `MarkDelays`, and every delay change it noted.
+  int MaxDelayOf(int i) const { return m_peers[i]->max_delay; }
+  void MarkDelays()
+  {
+    for (const auto& p : m_peers)
+      p->max_delay = p->session ? p->session->Delay() : 0;
+  }
+  const std::vector<std::string>& NotesOf(int i) const { return m_peers[i]->notes; }
+  // Drop-in: the frame the friend's controller plugged in at (-1: not yet).
+  int PluggedFrame() const { return m_plugged_frame; }
 
   int CompareConfirmed() const
   {
@@ -568,7 +632,10 @@ public:
   void ExpectClean() const
   {
     for (int i = 0; i < 2; ++i)
+    {
+      ASSERT_TRUE(Running(i)) << "side " << i << " never started";
       EXPECT_TRUE(SessionOf(i).Error().empty()) << SessionOf(i).Error();
+    }
   }
 
   // One line per side, for the record: what a test's numbers were.
@@ -576,16 +643,27 @@ public:
   {
     for (int i = 0; i < 2; ++i)
     {
+      if (!Running(i))
+        continue;
       const Stats& s = SessionOf(i).GetStats();
-      std::printf("[ %s %c ] rollbacks %d, re-run %d, deepest %d, stalls %d, waits %d, delay %d "
-                  "(+%d -%d reverted %d), advantage %.2f, round trip %d ms, hitches %d\n",
+      std::printf("[ %s %c ] rollbacks %d, re-run %d, deepest %d, stalls %d (%d counted, %d a "
+                  "frame would spare), waits %d, delay %d (+%d -%d reverted %d, most %d), "
+                  "advantage %.2f, round trip %d ms, hitches %d\n",
                   name, 'A' + i, s.rollbacks, s.resimulated_frames, s.deepest_rollback, s.stalls,
-                  s.waits, s.delay, s.delay_raises, s.delay_lowers, s.delay_reverts,
-                  s.frame_advantage, m_peers[i]->rtt, m_peers[i]->hitches_reported);
+                  s.counted_stalls, s.spared_stalls, s.waits, s.delay, s.delay_raises,
+                  s.delay_lowers, s.delay_reverts, m_peers[i]->max_delay, s.frame_advantage,
+                  m_peers[i]->rtt, m_peers[i]->hitches_reported);
+      if (std::getenv("ORCA_TEST_DELAY_NOTES"))
+      {
+        for (const std::string& note : m_peers[i]->notes)
+          std::printf("    %c: %s\n", 'A' + i, note.c_str());
+      }
     }
   }
 
 private:
+  static constexpr Micros END = 900'000 * MS;
+
   struct Wire
   {
     Micros due;
@@ -613,9 +691,8 @@ private:
 
   struct Peer
   {
-    Peer(const Config& config, const Side& s, int index)
-        : side(s), session(config, game, link), seat(index),
-          period(static_cast<Micros>(std::llround(FRAME_US / s.speed))),
+    Peer(const Config& config, const Side& s, int index, u32 seed)
+        : side(s), seat(index), period(static_cast<Micros>(std::llround(FRAME_US / s.speed))),
           start(static_cast<Micros>(s.relay_ms + s.hold_in_ms) * MS)
     {
       game.ring_slots = static_cast<size_t>(config.max_rollback) + 2;
@@ -623,7 +700,7 @@ private:
       // The room's start message reaches each machine after its own way from the relay.
       next_call = start;
       pace = start;
-      std::mt19937 rng(77 + index);
+      std::mt19937 rng(77 + index + seed * 13);
       const auto hitch = [&rng](Micros at) {
         return std::pair{at, Uniform(rng, 5, 20) * FRAME_US};
       };
@@ -632,22 +709,42 @@ private:
         const Micros at = start + Uniform<Micros>(rng, 0, 10'000 * MS);
         hitches.push_back(hitch(at));
       }
-      for (Micros at = start; s.hitch_every_s > 0 && at < 600'000 * MS;)
+      for (Micros at = start; s.hitch_every_s > 0 && at < END;)
       {
         at += Uniform<Micros>(rng, s.hitch_every_s * 500 * MS, s.hitch_every_s * 1500 * MS);
         hitches.push_back(hitch(at));
       }
       std::sort(hitches.begin(), hitches.end());
-      for (Micros at = start; s.spike_every_s > 0 && at < 600'000 * MS;)
+      for (Micros at = start; s.spike_every_s > 0 && at < END;)
       {
         at += Uniform<Micros>(rng, s.spike_every_s * 900 * MS, s.spike_every_s * 1100 * MS);
         spikes.emplace_back(at, at + s.spike_ms * MS);
+      }
+      for (Micros at = start; s.spike_gap_ms[1] > 0 && at < END;)
+      {
+        at += Uniform<Micros>(rng, s.spike_gap_ms[0], s.spike_gap_ms[1]) * MS;
+        const Micros length = Uniform<Micros>(rng, s.spike_len_ms[0], s.spike_len_ms[1]) * MS;
+        if (at >= s.spike_from_s * 1000 * MS && at < s.spike_to_s * 1000 * MS)
+          spikes.emplace_back(at, at + length);
+      }
+      // Poisson: a geometric number of milliseconds to the next start (no distribution object, so
+      // every platform draws the same), never inside the spike before it.
+      for (Micros at = start; s.spike_mean_gap_ms > 0 && at < END;)
+      {
+        do
+          at += MS;
+        while (Uniform(rng, 0, s.spike_mean_gap_ms - 1) != 0);
+        if (!spikes.empty())
+          at = std::max(at, spikes.back().second);
+        const Micros length = Uniform<Micros>(rng, s.spike_len_ms[0], s.spike_len_ms[1]) * MS;
+        if (at >= s.spike_from_s * 1000 * MS && at < s.spike_to_s * 1000 * MS)
+          spikes.emplace_back(at, at + length);
       }
     }
     Side side;
     FakeGame game;
     Link link;
-    Session session;
+    std::optional<Session> session;
     int seat;
     Micros period;
     Micros start;
@@ -679,12 +776,35 @@ private:
     int hitches_reported = 0;
     // Each Wi-Fi spike's start and end, in order.
     std::vector<std::pair<Micros, Micros>> spikes;
+    // Drop-in: the frames this side ran alone before its session (the host), and whether it runs
+    // unthrottled to catch up (the friend).
+    int solo_frame = 0;
+    std::vector<Pads> solo_log;
+    bool catching_up = false;
+    int max_delay = 0;
+    std::vector<std::string> notes;
   };
 
   Peer& At(int i) { return *m_peers[i]; }
 
-  Micros Hold(int ms, int jitter_ms)
+  bool TickOnce()
   {
+    if (::testing::Test::HasFatalFailure())
+      return false;
+    StartDropIn();
+    MoveMessages();
+    for (int i = 0; i < 2; ++i)
+    {
+      RoomThread(i);
+      Emulate(i);
+    }
+    return true;
+  }
+
+  Micros Hold(const Peer& p, int ms, int jitter_ms)
+  {
+    if (m_now < p.side.hold_from_s * 1000 * MS || m_now >= p.side.hold_to_s * 1000 * MS)
+      return 0;
     const int extra = jitter_ms > 0 ? Uniform(m_rng, 0, jitter_ms) : 0;
     return static_cast<Micros>(ms + extra) * MS;
   }
@@ -748,6 +868,84 @@ private:
     }
   }
 
+  // The pad a player holds at wall time `at`: it changes every few frames.
+  static Pad PadAt(const Peer& p, Micros at)
+  {
+    const int tick = static_cast<int>(at / FRAME_US) + p.seat * 37;
+    const int every = p.side.input_every;
+    Pad pad{};
+    pad[0] = static_cast<u8>((tick / every) % 4);
+    pad[1] = static_cast<u8>((tick * 7 / (every * 11)) % 3 == 0 ? 0x80 : 0);
+    return pad;
+  }
+
+  static Config DropInConfig(const Peer& p, int start_frame)
+  {
+    Config config;
+    config.seats = MAX_SEATS;
+    config.local_seat = p.seat;
+    config.authority_seat = 0;
+    config.start_frame = start_frame;
+    std::array<SeatPlan, MAX_SEATS> plan{};
+    plan[0] = {0, NEVER, 0};
+    config.plan = plan;
+    return config;
+  }
+
+  void StartDropIn()
+  {
+    if (!m_drop_in)
+      return;
+    Peer& host = At(0);
+    Peer& friend_ = At(1);
+    const Micros arrive = host.start + m_drop_in->join_s * 1000 * MS;
+    if (m_keyframe < 0 && m_now >= arrive)
+      m_keyframe = host.solo_frame;
+    const Micros host_starts = arrive + m_drop_in->keyframe_frames * FRAME_US;
+    if (!host.session && m_now >= host_starts)
+    {
+      // OnlineMatch: the session starts at the host's next frame with the frames since the
+      // keyframe in its log, the pad it holds now filling the frames its delay skips.
+      const int next = host.solo_frame;
+      Config config = DropInConfig(host, next);
+      config.start_pad = host.solo_log.empty() ? Pad{} : host.solo_log.back()[0];
+      host.session.emplace(config, host.game, host.link);
+      host.session->SetLog(m_keyframe, std::vector<Pads>(host.solo_log.begin() + m_keyframe,
+                                                         host.solo_log.end()));
+      host.session->AddPeer(1, next, m_keyframe);
+      host.completed = next - 1;
+      host.in_step = false;
+    }
+    if (host.session && !friend_.session &&
+        m_now >= host_starts + static_cast<Micros>(m_drop_in->load_ms) * MS)
+    {
+      const auto keyframe = host.game.m_history.find(m_keyframe);
+      ASSERT_NE(keyframe, host.game.m_history.end()) << "no keyframe " << m_keyframe;
+      friend_.game.m_state = keyframe->second;
+      friend_.session.emplace(DropInConfig(friend_, m_keyframe), friend_.game, friend_.link);
+      friend_.completed = m_keyframe - 1;
+      friend_.next_call = friend_.pace = m_now;
+      friend_.catching_up = true;
+    }
+  }
+
+  // The host's game before its session: frames at its own pace, logged.
+  void RunSolo(Peer& p)
+  {
+    while (p.next_call <= m_now)
+    {
+      const int f = p.solo_frame++;
+      Pads pads;
+      pads.fill(UNPLUGGED_PAD);
+      pads[0] = PadAt(p, p.next_call);
+      p.game.SetPads(f, pads);
+      p.game.Run();
+      p.solo_log.push_back(pads);
+      p.next_call += p.period;
+      p.pace = p.next_call;
+    }
+  }
+
   void MoveMessages()
   {
     MoveDirect();
@@ -760,7 +958,10 @@ private:
     for (int i = 0; i < 2; ++i)
     {
       while (due(At(i).held_out))
-        Enter(At(i).uplink, pop(At(i).held_out), Radio(At(i), m_now) + At(i).side.relay_ms * MS);
+      {
+        const Micros sent = At(i).side.spike_in_only ? m_now : Radio(At(i), m_now);
+        Enter(At(i).uplink, pop(At(i).held_out), sent + At(i).side.relay_ms * MS);
+      }
     }
     for (int i = 0; i < 2; ++i)
     {
@@ -777,7 +978,7 @@ private:
       while (due(p.downlink))
       {
         Enter(p.held_in, pop(p.downlink),
-              Radio(p, m_now) + Hold(p.side.hold_in_ms, p.side.jitter_in_ms));
+              Radio(p, m_now) + Hold(p, p.side.hold_in_ms, p.side.jitter_in_ms));
       }
       while (due(p.held_in))
       {
@@ -789,6 +990,9 @@ private:
           p.rtt_history.push_back(p.rtt);
           continue;
         }
+        // Whatever arrives before this side's session belongs to no one (OnlineMatch drops it).
+        if (!p.session)
+          continue;
         Packet packet;
         ASSERT_TRUE(DecodePacket(w.text, &packet)) << w.text;
         p.link.inbox.push_back(std::move(packet));
@@ -803,13 +1007,13 @@ private:
     {
       p.last_ping = m_now;
       Enter(p.held_out, {0, i, i, m_now, {}},
-            m_now + Hold(p.side.hold_out_ms, p.side.jitter_out_ms));
+            m_now + Hold(p, p.side.hold_out_ms, p.side.jitter_out_ms));
     }
     if (p.link.outgoing && m_now - p.last_send >= p.side.send_gap_ms * MS)
     {
       p.last_send = m_now;
       Enter(p.held_out, {0, i, 1 - i, 0, EncodePacket(*p.link.outgoing)},
-            m_now + Hold(p.side.hold_out_ms, p.side.jitter_out_ms));
+            m_now + Hold(p, p.side.hold_out_ms, p.side.jitter_out_ms));
       p.link.outgoing.reset();
     }
   }
@@ -817,19 +1021,28 @@ private:
   void Emulate(int i)
   {
     Peer& p = At(i);
+    if (!p.session)
+    {
+      if (m_drop_in && i == 0)
+        RunSolo(p);
+      return;
+    }
+    Session& session = *p.session;
     for (int guard = 0; p.next_call <= m_now; ++guard)
     {
       ASSERT_LT(guard, 64) << "side " << i << " ran away";
       const Micros at = p.next_call;
       if (!p.in_step)
       {
-        // OnlineMatch: a new round trip is fed once per boundary, before StepSession.
+        // OnlineMatch: a new round trip is fed once per boundary, before StepSession; a hitch is
+        // reported unless the game is catching up.
         p.in_step = true;
         p.waited = false;
         p.resets_before = p.game.m_pacing_resets;
-        if (p.side.report_hitches && p.last_return && at - *p.last_return > 2 * FRAME_US)
+        if (p.side.report_hitches && !p.catching_up && p.last_return &&
+            at - *p.last_return > 2 * FRAME_US)
         {
-          p.session.OnLocalHitch();
+          session.OnLocalHitch();
           ++p.hitches_reported;
         }
         if (!p.seeded)
@@ -840,22 +1053,20 @@ private:
           const size_t n = p.rtt_history.size();
           const size_t keep = static_cast<size_t>(RTT_SAMPLES);
           for (size_t k = n > keep ? n - keep : 0; k < n; ++k)
-            p.session.OnRoundTrip(p.rtt_history[k]);
+            session.OnRoundTrip(p.rtt_history[k]);
           p.fed_sequence = p.rtt_sequence;
         }
         else if (p.rtt >= 0 && p.rtt_sequence != p.fed_sequence)
         {
           p.fed_sequence = p.rtt_sequence;
-          p.session.OnRoundTrip(p.rtt);
+          session.OnRoundTrip(p.rtt);
         }
       }
       // A player's inputs follow the wall clock, changing every few frames.
-      const int tick = static_cast<int>(at / FRAME_US) + i * 37;
-      const int every = p.side.input_every;
-      Pad pad{};
-      pad[0] = static_cast<u8>((tick / every) % 4);
-      pad[1] = static_cast<u8>((tick * 7 / (every * 11)) % 3 == 0 ? 0x80 : 0);
-      const Step step = p.session.OnBoundary(p.completed, pad);
+      p.game.now_ms = static_cast<double>(at) / MS;
+      const Step step = session.OnBoundary(p.completed, PadAt(p, at));
+      for (std::string& note : session.TakeDelayNotes())
+        p.notes.push_back(std::move(note));
       if (step.kind == StepKind::Wait)
       {
         p.waited = true;
@@ -874,12 +1085,28 @@ private:
       }
       p.in_step = false;
       p.last_return = at;
-      const bool reset = p.waited || p.game.m_pacing_resets != p.resets_before;
+      bool reset = p.waited || p.game.m_pacing_resets != p.resets_before;
       p.completed = p.game.Run();
-      if (p.session.Resimulating())
+      p.max_delay = std::max(p.max_delay, session.Delay());
+      if (session.Resimulating())
       {
         p.next_call = at + p.side.rerun_us;
         continue;
+      }
+      if (m_drop_in && i == 1)
+      {
+        // OnlineMatch: unthrottled while far behind the host; pacing restarts when it is not.
+        const bool was = p.catching_up;
+        p.catching_up = session.CatchingUp() ||
+                        session.AuthorityFrame() - step.frame > CATCH_UP_BEHIND;
+        reset = reset || (was && !p.catching_up);
+        if (m_plugged_frame < 0 && session.Plugged(1, step.frame))
+          m_plugged_frame = step.frame;
+        if (p.catching_up)
+        {
+          p.next_call = at + m_drop_in->catch_up_frame_us;
+          continue;
+        }
       }
       p.pace = std::max((reset ? at : p.pace) + p.period, at - 100 * MS);
       p.next_call = std::max(p.pace, at);
@@ -890,8 +1117,11 @@ private:
   }
 
   std::array<std::unique_ptr<Peer>, 2> m_peers;
+  std::optional<DropIn> m_drop_in;
+  int m_keyframe = -1;
+  int m_plugged_frame = -1;
   Micros m_now = -3000 * MS;  // the lobby: pings before the match starts
-  std::mt19937 m_rng{4321};
+  std::mt19937 m_rng;
   std::mt19937 m_direct_rng{8765};
 };
 }  // namespace
@@ -1262,9 +1492,10 @@ TEST(OrcaSessionDelay, LinkRaisesAtOnceAndFallsAFrameAtATime)
 TEST(OrcaSessionDelay, StepsDownOnlyWithHeadroomAndUndoesAWrongOne)
 {
   // Ten frames each way, no round trips measured: at delay 2 the window (7) is a frame short, and
-  // both sides stall every few frames. Both raise to 3 on the other's stalls (the warmup's rate),
-  // where nothing stalls, but each runs right at the edge of its window on the other's inputs: a
-  // frame less would stall it again, so neither ever steps down.
+  // both sides stall every few frames, each time for under a frame. Once the first ten seconds
+  // have settled, both raise to 3 on the other's stalls (eight seconds of them that a frame more
+  // would have spared), where nothing stalls, but each runs right at the edge of its window on the
+  // other's inputs: a frame less would stall it again, so neither ever steps down.
   Match match(Config{}, 10, 0);
   match.Play(1800);
   for (const Player* p : {match.a.get(), match.b.get()})
@@ -1276,10 +1507,26 @@ TEST(OrcaSessionDelay, StepsDownOnlyWithHeadroomAndUndoesAWrongOne)
   }
   const int stalls = match.a->session.GetStats().stalls;
 
-  // Eight frames: two frames of room at 3. After the hold, both step down to 2, where nothing
-  // stalls either.
+  // Eight frames: two frames of room at 3, one at 2. Not enough: a step down asks for two frames of
+  // room at the lower delay (what a delay sees runs a frame or two short of what the one below it
+  // would), so both stay at 3.
   match.net.latency = 8;
-  match.Play(900);
+  match.Play(60 * 15);
+  for (const Player* p : {match.a.get(), match.b.get()})
+  {
+    EXPECT_EQ(p->session.Delay(), 3);
+    EXPECT_EQ(p->session.GetStats().delay_lowers, 0);
+  }
+
+  // Seven frames: two frames of room at 2. Once the last five seconds all had it (and none had a
+  // stall), both step down to 2, where nothing stalls either.
+  match.net.latency = 7;
+  for (int i = 0; i < 20 && (match.a->session.GetStats().delay_lowers == 0 ||
+                             match.b->session.GetStats().delay_lowers == 0);
+       ++i)
+  {
+    match.Play(60);
+  }
   for (const Player* p : {match.a.get(), match.b.get()})
   {
     EXPECT_EQ(p->session.Delay(), 2);
@@ -1287,11 +1534,11 @@ TEST(OrcaSessionDelay, StepsDownOnlyWithHeadroomAndUndoesAWrongOne)
   }
   EXPECT_EQ(match.a->session.GetStats().stalls, stalls);
 
-  // Ten again, soon after: the stalls are back, and the step down is undone (not counted as a
+  // Ten again, right after: the stalls are back, and the step down is undone (not counted as a
   // raise).
   match.net.latency = 10;
-  for (int i = 0; i < 15 && (match.a->session.GetStats().delay_reverts == 0 ||
-                             match.b->session.GetStats().delay_reverts == 0);
+  for (int i = 0; i < 9 && (match.a->session.GetStats().delay_reverts == 0 ||
+                            match.b->session.GetStats().delay_reverts == 0);
        ++i)
   {
     match.Play(60);
@@ -1304,16 +1551,16 @@ TEST(OrcaSessionDelay, StepsDownOnlyWithHeadroomAndUndoesAWrongOne)
     EXPECT_EQ(stats.delay_lowers, 1);
     EXPECT_EQ(stats.delay_reverts, 1);
   }
-  // Eight again at once: room for a step down, but the next try needs twenty stall-free windows,
-  // not ten.
-  match.net.latency = 8;
-  match.Play(60 * 15);
+  // Seven again at once: room for a step down, but the next try needs ten quiet windows, not
+  // five.
+  match.net.latency = 7;
+  match.Play(60 * 8);
   for (const Player* p : {match.a.get(), match.b.get()})
   {
     EXPECT_EQ(p->session.Delay(), 3);
     EXPECT_EQ(p->session.GetStats().delay_lowers, 1);
   }
-  match.Play(60 * 8);
+  match.Play(60 * 5);
   ExpectClean(match);
   for (const Player* p : {match.a.get(), match.b.get()})
   {
@@ -1321,7 +1568,7 @@ TEST(OrcaSessionDelay, StepsDownOnlyWithHeadroomAndUndoesAWrongOne)
     EXPECT_EQ(p->session.GetStats().delay_lowers, 2);
     EXPECT_EQ(p->session.GetStats().delay_reverts, 1);
   }
-  EXPECT_GT(match.CompareConfirmed(), 3500);
+  EXPECT_GT(match.CompareConfirmed(), 3000);
 }
 
 TEST(OrcaSessionTimeSync, FastSideWaits)
@@ -1498,19 +1745,20 @@ TEST(OrcaSessionTimeSync, StepSessionReadsThePadAgainAfterAWait)
 
 TEST(OrcaSessionTimeSync, UnequalRelayRoundTrips)
 {
-  // A is 17 ms from the relay, B 217 ms: 7 frames apart one way. A round-trip-based estimate of
-  // the other's frame would be off by (217 - 17) / 4 ms on each side in opposite directions and
+  // A is 17 ms from the relay, B 227 ms: 7 frames apart one way. A round-trip-based estimate of
+  // the other's frame would be off by (227 - 17) / 4 ms on each side in opposite directions and
   // make A wait until it sat about two frames behind. Frame numbers alone don't care.
   Config config;
   Match match(config, 7, 0);
   match.rtt_samples = true;
-  match.relay_rtt_ms = {17, 217};
+  match.relay_rtt_ms = {17, 227};
   // Too few round trips yet: the delay is input_delay's.
   match.Play(30);
   EXPECT_EQ(match.a->session.Delay(), 2);
   EXPECT_EQ(match.b->session.Delay(), 2);
-  // Three each, and the other's median in its packets: (17 + 217) / 2 = 117 ms = 8 frames one way,
-  // 5 of them rolled back. Both agree, and B never took its own 217 ms for the whole link.
+  // Three each, and the other's median in its packets: (17 + 227) / 2 = 122 ms, 8 frames one way
+  // (7.3, past the dead band), 5 of them rolled back. Both agree, and B never took its own 227 ms
+  // for the whole link.
   match.Play(150);
   for (const Player* p : {match.a.get(), match.b.get()})
   {
@@ -1769,45 +2017,67 @@ void LateBurst(Match& match, bool hitch = false, int late = 10)
 }
 }  // namespace
 
-TEST(OrcaSessionDelay, SustainedStallsRaiseThenDecay)
+TEST(OrcaSessionDelay, StallsARaiseWouldSpareRaiseThenDecay)
 {
-  // After the warmup, each late burst of B's packets stalls A once. One, and then a second a
-  // second later, raise nothing: a spike past the window is still a spike. A third within ten
-  // seconds makes it sustained: B's delay rises, since A stalls on B's inputs and only B's delay
-  // keeps them in A's window. A's own delay stays: it could not help A.
+  // After the settle seconds, each late burst of B's packets stalls A once, and A reports how long
+  // it held (Packet::spared). Stalls A has on B's inputs are B's delay's to answer, and what counts
+  // is how many a raise would have spared, per frame of it, in the last 45 seconds. A burst
+  // fourteen frames late holds A six frames: no raise within max_delay would spare it, so one every
+  // five seconds raises nothing, however long it goes on.
+  {
+    Match match(Config{}, 1, 0);
+    match.Play(700);
+    for (int i = 0; i < 20; ++i)
+    {
+      LateBurst(match, false, 14);
+      match.Play(299);
+    }
+    ExpectClean(match);
+    EXPECT_EQ(match.a->session.GetStats().counted_stalls, 20);
+    EXPECT_EQ(match.a->session.GetStats().spared_stalls, 0);
+    for (const Player* p : {match.a.get(), match.b.get()})
+    {
+      EXPECT_EQ(p->session.Delay(), 2);
+      EXPECT_EQ(p->session.GetStats().delay_raises, 0);
+    }
+  }
+  // A burst ten frames late holds A two frames, which two frames more of B's delay would have
+  // spared: that is worth it once sixteen seconds in 45 had one (eight per frame). Fifteen bursts
+  // two seconds apart raise nothing; the sixteenth takes B to 3, and the next second, on the same
+  // seconds, to 4. A's own delay stays: it could not help A. Once quiet, B steps back down, a frame
+  // a second after five quiet ones.
   Match match(Config{}, 1, 0);
   match.Play(700);
-  LateBurst(match);
-  match.Play(59);
-  LateBurst(match);
-  match.Play(299);
-  ExpectClean(match);
-  EXPECT_EQ(match.a->session.GetStats().stalls, 2);
+  for (int i = 0; i < 15; ++i)
+  {
+    LateBurst(match, false, 10);
+    match.Play(119);
+  }
+  EXPECT_EQ(match.a->session.GetStats().counted_stalls, 15);
+  EXPECT_EQ(match.a->session.GetStats().spared_stalls, 0);
   EXPECT_EQ(match.b->session.GetStats().stalls, 0);
   for (const Player* p : {match.a.get(), match.b.get()})
   {
     EXPECT_EQ(p->session.Delay(), 2);
     EXPECT_EQ(p->session.GetStats().delay_raises, 0);
   }
-
-  LateBurst(match);
-  match.Play(119);
-  EXPECT_EQ(match.a->session.GetStats().stalls, 3);
-  EXPECT_EQ(match.a->session.GetStats().counted_stalls, 3);
+  LateBurst(match, false, 10);
+  match.Play(59);
   EXPECT_EQ(match.b->session.Delay(), 3);
-  EXPECT_EQ(match.b->session.GetStats().delay_raises, 1);
+  match.Play(60);
+  EXPECT_EQ(match.b->session.Delay(), 4);
+  EXPECT_EQ(match.b->session.GetStats().delay_raises, 2);
   EXPECT_EQ(match.a->session.Delay(), 2);
   EXPECT_EQ(match.a->session.GetStats().delay_raises, 0);
-  // Then quiet: ten stall-free seconds, and B steps back down to the link's.
-  match.Play(60 * 7);
-  EXPECT_EQ(match.b->session.Delay(), 3);
+  match.Play(60 * 3);
+  EXPECT_EQ(match.b->session.Delay(), 4);
   match.Play(60 * 5);
   ExpectClean(match);
   EXPECT_EQ(match.b->session.Delay(), 2);
-  EXPECT_EQ(match.b->session.GetStats().delay_lowers, 1);
+  EXPECT_EQ(match.b->session.GetStats().delay_lowers, 2);
   EXPECT_EQ(match.b->session.GetStats().delay_reverts, 0);
   EXPECT_EQ(match.a->session.GetStats().delay_lowers, 0);
-  EXPECT_GT(match.CompareConfirmed(), 1500);
+  EXPECT_GT(match.CompareConfirmed(), 2800);
 }
 
 TEST(OrcaSessionDelay, OneHiccupBothWaysRaisesNothing)
@@ -1850,32 +2120,38 @@ TEST(OrcaSessionDelay, StallsOnAPeerHitchRaiseNothing)
   EXPECT_GT(match.CompareConfirmed(), 800);
 }
 
-TEST(OrcaSessionDelay, WarmupStallsNeedAHigherRate)
+TEST(OrcaSessionDelay, NoStallCountsWhileSettling)
 {
-  // In the first ten seconds (boot, menus), three stalls a second apart raise nothing (after the
-  // warmup they would); a fourth still does, as a link too slow would make.
-  for (const int bursts : {3, 4})
+  // In the first ten seconds after the controllers plug in (the game booting and loading, or a
+  // friend's drop-in settling), no stall counts, however many: stalls in five seconds in a row
+  // raise nothing. After them, as many as a raise is worth raise B's delay.
+  Match match(Config{}, 1, 0);
+  match.Play(60);
+  // Longer bursts than elsewhere: time sync gives back only a frame per 30, so A is still a little
+  // behind B from the burst before.
+  for (int i = 0; i < 5; ++i)
   {
-    Match match(Config{}, 1, 0);
-    match.Play(60);
-    // Longer bursts than elsewhere: time sync gives back only a frame per 30, so A is still a
-    // little behind B from the burst before.
-    for (int i = 0; i < bursts; ++i)
-    {
-      LateBurst(match, false, 14);
-      match.Play(59);
-    }
-    match.Play(60);
-    ExpectClean(match);
-    ASSERT_LT(match.b->session.CurrentFrame(), 600);
-    EXPECT_EQ(match.a->session.GetStats().stalls, bursts);
-    EXPECT_EQ(match.a->session.GetStats().delay_raises, 0) << "bursts " << bursts;
-    EXPECT_EQ(match.b->session.GetStats().delay_raises, bursts == 4 ? 1 : 0) << "bursts " << bursts;
-    // Past the warmup, its stalls don't carry over onto the lower bar.
-    match.Play(400);
-    ASSERT_GT(match.b->session.CurrentFrame(), 660);
-    EXPECT_EQ(match.b->session.GetStats().delay_raises, bursts == 4 ? 1 : 0) << "bursts " << bursts;
+    LateBurst(match, false, 14);
+    match.Play(59);
   }
+  match.Play(60);
+  ExpectClean(match);
+  ASSERT_LT(match.b->session.CurrentFrame(), 600);
+  EXPECT_EQ(match.a->session.GetStats().stalls, 5);
+  EXPECT_EQ(match.a->session.GetStats().counted_stalls, 0);
+  for (const Player* p : {match.a.get(), match.b.get()})
+    EXPECT_EQ(p->session.GetStats().delay_raises, 0);
+  match.Play(300);
+  ASSERT_GT(match.b->session.CurrentFrame(), 600);
+  for (int i = 0; i < 16; ++i)
+  {
+    LateBurst(match, false, 10);
+    match.Play(119);
+  }
+  ExpectClean(match);
+  EXPECT_EQ(match.a->session.GetStats().counted_stalls, 16);
+  EXPECT_EQ(match.a->session.GetStats().delay_raises, 0);
+  EXPECT_GE(match.b->session.GetStats().delay_raises, 1);
 }
 
 TEST(OrcaSessionDelay, RoundTripsSetTheFloor)
@@ -1954,7 +2230,7 @@ TEST(OrcaSessionDelay, FixedDelayNeverAdapts)
     EXPECT_EQ(p->session.Delay(), 2);
     EXPECT_EQ(p->session.FixedDelay().value_or(-1), 2);
     EXPECT_TRUE(stats.delay_fixed);
-    EXPECT_GT(stats.counted_stalls, 30);
+    EXPECT_GT(stats.counted_stalls, 15);
     EXPECT_EQ(stats.delay_raises + stats.delay_lowers + stats.delay_reverts, 0);
   }
   EXPECT_GT(slow.CompareConfirmed(), 1000);
@@ -2076,15 +2352,92 @@ TEST(OrcaSessionDelay, StallsCountOnlyFromPlayersWaitingOnUs)
   }
   EXPECT_EQ(session.Delay(), 2);
   EXPECT_EQ(session.GetStats().delay_raises, 0);
-  // The same at the edge of its window on our inputs: ours to answer, a frame more.
+  // The same at the edge of its window on our inputs: ours to answer. It reports no lengths (a
+  // player before 0.3.7), so each counts as one a frame more would have spared: the eighth in 45
+  // seconds raises.
   net.lag[1] = config.max_rollback + 1;
-  for (int i = 0; i < 3; ++i)
+  for (int i = 0; i < 7; ++i)
   {
     ++net.stalls[1];
     play(60);
   }
+  EXPECT_EQ(session.Delay(), 2);
+  ++net.stalls[1];
+  play(60);
   EXPECT_EQ(session.Delay(), 3);
   EXPECT_EQ(session.GetStats().delay_raises, 1);
+}
+
+// Each side reports how long its counted stalls held it (Packet::spared), and the other weighs a
+// raise by what it would have spared: k frames more must have spared stalls in eight seconds per
+// frame of the last 45. Stalls longer than a raise within max_delay could cover never count;
+// two-frame stalls take a two-frame raise's worth of seconds (sixteen) before the first frame,
+// which the next second's judgement then follows with the second.
+TEST(OrcaSessionDelay, StallsWeighByWhatARaiseWouldSpare)
+{
+  struct Scripted final : Transport
+  {
+    void Send(const Packet&) override {}
+    std::vector<Packet> Receive() override
+    {
+      Packet packet;
+      packet.seat = 1;
+      packet.first_frame = next;
+      const int now = session->CurrentFrame();
+      for (; next <= now + 4; ++next)
+        packet.pads.push_back(Pad{});
+      packet.current_frame = now;
+      packet.ack = {std::max(now - lag, 0), -1, -1, -1};
+      packet.stalls = stalls;
+      packet.spared = spared;
+      return {packet};
+    }
+    bool Connected() const override { return true; }
+    Session* session = nullptr;
+    int next = 0;
+    int lag = 0;
+    int stalls = 0;
+    std::array<int, SPARED_FRAMES> spared{};
+  };
+  FakeGame game;
+  Scripted net;
+  Config config;
+  config.time_sync = false;
+  Session session(config, game, net);
+  net.session = &session;
+  int completed = -1;
+  const auto play = [&](int frames) {
+    const int until = session.CurrentFrame() + frames;
+    while (session.CurrentFrame() < until)
+    {
+      const Step step = session.OnBoundary(completed, Pad{});
+      ASSERT_NE(step.kind, StepKind::Ended) << session.Error();
+      ASSERT_NE(step.kind, StepKind::Stall);
+      completed = game.Run();
+    }
+  };
+  // A stall a second, at the edge of its window on our inputs, each over in `frames` frames (0:
+  // longer than SPARED_FRAMES).
+  const auto stall = [&](int frames) {
+    net.lag = config.max_rollback + 1;
+    ++net.stalls;
+    for (int k = 0; k < SPARED_FRAMES; ++k)
+      net.spared[k] += frames > 0 && frames <= k + 1 ? 1 : 0;
+    play(60);
+  };
+  play(700);
+  for (int i = 0; i < 30; ++i)
+    stall(0);
+  EXPECT_EQ(session.Delay(), 2);
+  for (int i = 0; i < 15; ++i)
+    stall(2);
+  EXPECT_EQ(session.Delay(), 2);
+  stall(2);
+  EXPECT_EQ(session.Delay(), 3);
+  play(60);
+  EXPECT_EQ(session.Delay(), 4);
+  EXPECT_EQ(session.GetStats().delay_raises, 2);
+  EXPECT_TRUE(session.Error().empty()) << session.Error();
 }
 
 // The player changes its delay mid-match, several times and by several frames at once, while the
@@ -2171,20 +2524,21 @@ TEST(OrcaSessionRelay, SlowJitteryLinkStallsRarely)
   // A's way in outran a margin of about 7 + B's delay (2) - 6 frames of transit - A's lead (up to a
   // frame, time sync's tolerance), so under 30 ms. A raised its own delay to 6, which could not
   // help it, and B, whose delay could, never heard of A's stalls and stayed at 2. Now only B
-  // raises on them (to 3, once A has stalled in a few separate seconds), and with A running at the
-  // edge of its window on B's inputs, B never steps back down into A's stalls.
+  // raises on them, to 3 once a frame more would have spared eight of A's stalled seconds in 45
+  // (none count in the first ten seconds), and with A running at the edge of its window on B's
+  // inputs, B never steps back down into A's stalls.
   RelayMatch match(Config{}, T3SideA(), T3SideB());
-  match.Play(900);
+  match.Play(1800);
   const int early_stalls = match.SessionOf(0).GetStats().stalls;
   match.Play(12000);
   match.Print("T3");
   match.ExpectClean();
   const Stats& a = match.SessionOf(0).GetStats();
   const Stats& b = match.SessionOf(1).GetStats();
-  // All of A's in the first fifteen seconds, before B's raise (the old rule's raise on two stalls
-  // came after three). Over 25 jitter seeds: 4-8.
-  EXPECT_LE(a.stalls, 8);
-  EXPECT_EQ(a.stalls, early_stalls);
+  // Nearly all of A's in the first thirty seconds, before B's raise. Over 12 draws: 12-25, at most
+  // 4 after.
+  EXPECT_LE(a.stalls, 30);
+  EXPECT_LE(a.stalls - early_stalls, 6);
   EXPECT_LE(b.stalls, 5);
   // B raised its delay on A's stalls; A's stays on the link (the median says two frames).
   EXPECT_GE(b.delay_raises, 1);
@@ -2200,10 +2554,11 @@ TEST(OrcaSessionRelay, JitterBothWaysEitherSideFast)
   // The same link with A's jitter on both ways, and either clock fast: the fast side runs up to a
   // frame ahead and is the one that stalls. Before stalls counted from both sides, A stalled 654
   // times when its clock was the fast one, raising only its own delay (to 6) while B's stayed at 2.
-  // Raising only on stalls in separate seconds (a burst counts twice at most), and in the first
-  // ten seconds on one more, costs a few more at the start: the fast side stalls in the first
-  // fifteen seconds, until the other side's raise, and rarely after. Over 25 jitter seeds: 0-18
-  // stalls in those seconds, at most 4 in the three minutes after.
+  // Now the other side raises on them, once they are sustained: none count in the first ten
+  // seconds, and then eight seconds in 45 with stalls a frame more would have spared. The
+  // fast side stalls most in the first twenty seconds, and now and then after (a stall every
+  // twenty seconds or so raises nothing). Over 12 draws: 4-58 in those seconds, at most 14 in the
+  // three minutes after.
   for (const bool a_fast : {true, false})
   {
     RelayMatch::Side a = T3SideA();
@@ -2212,7 +2567,7 @@ TEST(OrcaSessionRelay, JitterBothWaysEitherSideFast)
     a.speed = a_fast ? 1.01 : 1.0;
     b.speed = a_fast ? 1.0 : 1.01;
     RelayMatch match(Config{}, a, b);
-    match.Play(900);
+    match.Play(1200);
     const std::array<int, 2> early{match.SessionOf(0).GetStats().stalls,
                                    match.SessionOf(1).GetStats().stalls};
     match.Play(12000);
@@ -2221,9 +2576,11 @@ TEST(OrcaSessionRelay, JitterBothWaysEitherSideFast)
     for (int i = 0; i < 2; ++i)
     {
       const int stalls = match.SessionOf(i).GetStats().stalls;
-      EXPECT_LE(early[i], 20) << "a_fast " << a_fast << " side " << i;
-      EXPECT_LE(stalls - early[i], 5) << "a_fast " << a_fast << " side " << i;
+      EXPECT_LE(early[i], 60) << "a_fast " << a_fast << " side " << i;
+      EXPECT_LE(stalls - early[i], 20) << "a_fast " << a_fast << " side " << i;
     }
+    // The slow side's delay rose for the fast side's stalls (and both for the link's median).
+    EXPECT_GE(match.SessionOf(a_fast ? 1 : 0).Delay(), 4);
     EXPECT_GT(match.CompareConfirmed(), 11000);
   }
 }
@@ -2233,9 +2590,9 @@ TEST(OrcaSessionRelay, LanWithHitchesTracksTheLink)
   // 28 ms apart, but both emulators hitch (B, a Metal machine compiling shaders, twice as often),
   // plus a burst of four each while booting. Every hitch longer than the rollback window stalls the
   // other side, and no delay would have saved it. Before, any stall raised both sides and held
-  // 30 s: both delays climbed to 6, 100 ms of input lag on a LAN. Hitches reported and left out,
-  // the delay stays on the link. Unreported, the same hitches pass for the link's now and then (a
-  // control: these stalls are frequent enough to raise it).
+  // 30 s: both delays climbed to 6, 100 ms of input lag on a LAN. Hitches reported, their stalls
+  // don't count, and the delay stays on the link. Unreported (a control), the same stalls count,
+  // but one every few seconds is no sustained lateness either: still no raise.
   RelayMatch::Side a, b;
   a.relay_ms = b.relay_ms = 14;
   a.speed = 1.01;
@@ -2250,9 +2607,9 @@ TEST(OrcaSessionRelay, LanWithHitchesTracksTheLink)
     unreported.Play(12000);
     unreported.Print("LAN, hitches unreported");
     unreported.ExpectClean();
-    EXPECT_GE(unreported.SessionOf(0).GetStats().delay_raises +
-                  unreported.SessionOf(1).GetStats().delay_raises,
-              1);
+    EXPECT_GT(unreported.SessionOf(0).GetStats().counted_stalls, 15);
+    for (int i = 0; i < 2; ++i)
+      EXPECT_EQ(unreported.SessionOf(i).GetStats().delay_raises, 0) << "side " << i;
   }
   RelayMatch match(Config{}, a, b);
   match.Play(12000);
@@ -2265,10 +2622,421 @@ TEST(OrcaSessionRelay, LanWithHitchesTracksTheLink)
     const Stats& stats = match.SessionOf(i).GetStats();
     EXPECT_LE(match.SessionOf(i).Delay(), 3) << "side " << i;
     EXPECT_EQ(stats.delay_raises, 0) << "side " << i;
+    EXPECT_EQ(stats.counted_stalls, 0) << "side " << i;
     // The stalls are the hitches': none beyond them.
     EXPECT_LE(stats.stalls, hitches + 1) << "side " << i;
   }
   EXPECT_GT(match.CompareConfirmed(), 11000);
+}
+
+namespace
+{
+// The field's link between Luis's Mac and his friend's PC through the relay (2026-10-02): 14-23 ms
+// round trips on the PC's side, the Mac's Wi-Fi a little slower and less even, both clocks a hair
+// apart, inputs changing every few frames. Clean: no spike reaches past the rollback window.
+RelayMatch::Side CleanMac()
+{
+  RelayMatch::Side mac;
+  mac.relay_ms = 9;
+  mac.jitter_in_ms = mac.jitter_out_ms = 8;
+  mac.speed = 1.002;
+  mac.input_every = 5;
+  return mac;
+}
+
+RelayMatch::Side CleanPc()
+{
+  RelayMatch::Side pc;
+  pc.relay_ms = 8;
+  pc.jitter_in_ms = pc.jitter_out_ms = 3;
+  pc.input_every = 5;
+  return pc;
+}
+
+// The Mac on a bad day (x36bf0a, xpfp2pp): round trips of 30-155 ms, its radio off for 80-220 ms
+// every 2-5 s, both ways (a model: the field's timing data can't show how the spikes were spaced).
+RelayMatch::Side SpikyMac()
+{
+  RelayMatch::Side mac = CleanMac();
+  mac.spike_gap_ms = {2000, 5000};
+  mac.spike_len_ms = {80, 220};
+  return mac;
+}
+
+// Every delay change both sides noted, for a failure's message.
+std::string Notes(const RelayMatch& match)
+{
+  std::string out;
+  for (int i = 0; i < 2; ++i)
+  {
+    for (const std::string& note : match.NotesOf(i))
+      out += fmt::format("\n  {}: {}", static_cast<char>('A' + i), note);
+  }
+  return out;
+}
+}  // namespace
+
+// A friend drops into the host's game on a clean link: in the menus soon after boot, at character
+// select, mid-match. Its catch-up ends a dozen frames behind the host, which stalls on its first
+// inputs until time sync evens the two out: none of that is the link, so neither delay moves, on
+// either side, for five minutes after the join, and both run identical frames. (Before, nothing
+// kept those seconds out: the warmup was timed from the keyframe, so it was over before the friend
+// plugged in.)
+TEST(OrcaSessionRelay, DropInOnACleanLinkKeepsTwo)
+{
+  for (const int join_s : {10, 30, 75})
+  {
+    SCOPED_TRACE(::testing::Message() << "join at " << join_s << " s");
+    for (const bool mac_hosts : {true, false})
+    {
+      SCOPED_TRACE(::testing::Message() << (mac_hosts ? "Mac hosts" : "PC hosts"));
+      RelayMatch::DropIn drop_in;
+      drop_in.join_s = join_s;
+      // A slow machine replays the host's frames not even twice as fast as it plays them, so it
+      // plugs in further behind.
+      drop_in.catch_up_frame_us = mac_hosts ? 3000 : 9000;
+      RelayMatch match(Config{}, mac_hosts ? CleanMac() : CleanPc(),
+                       mac_hosts ? CleanPc() : CleanMac(), drop_in);
+      match.PlaySeconds(join_s + 25);
+      ASSERT_GE(match.PluggedFrame(), 0)
+          << "the friend never plugged in: host "
+          << (match.Running(0) ? match.SessionOf(0).Describe() : "not started") << "; friend "
+          << (match.Running(1) ? match.SessionOf(1).Describe() + " " + match.SessionOf(1).Error() :
+                                 "not started");
+      match.MarkDelays();
+      match.PlaySeconds(300);
+      match.Print(fmt::format("drop-in at {} s, {}", join_s, mac_hosts ? "Mac hosts" : "PC hosts")
+                      .c_str());
+      match.ExpectClean();
+      // A catch-up tail there was: the friend stalled replaying the host's game, by design.
+      EXPECT_GT(match.SessionOf(1).GetStats().stalls, 0);
+      for (int i = 0; i < 2; ++i)
+      {
+        const Stats& stats = match.SessionOf(i).GetStats();
+        EXPECT_EQ(stats.counted_stalls, 0) << "side " << i;
+        EXPECT_EQ(stats.delay_raises, 0) << "side " << i << Notes(match);
+        EXPECT_EQ(match.MaxDelayOf(i), 2) << "side " << i << Notes(match);
+        EXPECT_EQ(match.SessionOf(i).Delay(), 2) << "side " << i;
+      }
+      EXPECT_GT(match.SessionOf(0).GetStats().checksums_matched, 250);
+      EXPECT_GT(match.CompareConfirmed(), 300 * 60);
+    }
+  }
+}
+
+// A model of what the field saw (x36bf0a, xpfp2pp, 2026-10-02), with its spikes spaced at least
+// 2 s apart (SpikesAtRandomKeepTwo has them unspaced): the Mac's radio drops out for 80-220 ms
+// every 2-5 s, mostly past the rollback window, so both sides stall about once per spike, the Mac
+// hosting or joining. Rollback can't hide a spike that long, and a frame more of delay would hide
+// few of them while costing every input a frame: the delay stays at 2 on both sides, and each
+// spike costs its stall. (The rule in 0.3.6 raised the other side's delay on three of them in ten
+// seconds, and both sides hovered at 4-6 for the whole match.)
+TEST(OrcaSessionRelay, SpikesEveryFewSecondsKeepTwo)
+{
+  for (const bool mac_hosts : {true, false})
+  {
+    SCOPED_TRACE(::testing::Message() << (mac_hosts ? "Mac hosts" : "PC hosts"));
+    RelayMatch::DropIn drop_in;
+    drop_in.join_s = 45;
+    RelayMatch match(Config{}, mac_hosts ? SpikyMac() : CleanPc(),
+                     mac_hosts ? CleanPc() : SpikyMac(), drop_in);
+    match.PlaySeconds(60);
+    ASSERT_GE(match.PluggedFrame(), 0) << "the friend never plugged in";
+    match.MarkDelays();
+    match.PlaySeconds(300);
+    match.Print(mac_hosts ? "Mac spikes, Mac hosts" : "Mac spikes, PC hosts");
+    match.ExpectClean();
+    for (int i = 0; i < 2; ++i)
+    {
+      const Stats& stats = match.SessionOf(i).GetStats();
+      EXPECT_GT(stats.counted_stalls, 20) << "side " << i;
+      EXPECT_EQ(stats.delay_raises, 0) << "side " << i << Notes(match);
+      EXPECT_EQ(match.MaxDelayOf(i), 2) << "side " << i << Notes(match);
+    }
+    EXPECT_GT(match.CompareConfirmed(), 300 * 60);
+  }
+}
+
+// A clock that runs fast keeps time sync busy: the fast side gives a frame back again and again,
+// on a link with some jitter. Those waits are time sync's job and say nothing of the link: no
+// delay moves.
+TEST(OrcaSessionRelay, SteadySmallWaitsRaiseNothing)
+{
+  RelayMatch::Side a = CleanMac();
+  RelayMatch::Side b = CleanPc();
+  a.speed = 1.015;
+  a.jitter_in_ms = a.jitter_out_ms = 15;
+  RelayMatch match(Config{}, a, b);
+  match.Play(12000);
+  match.Print("fast clock, jitter");
+  match.ExpectClean();
+  EXPECT_GT(match.SessionOf(0).GetStats().waits, 100);
+  for (int i = 0; i < 2; ++i)
+  {
+    EXPECT_EQ(match.SessionOf(i).GetStats().delay_raises, 0) << "side " << i << Notes(match);
+    EXPECT_EQ(match.MaxDelayOf(i), 2) << "side " << i;
+  }
+  EXPECT_GT(match.CompareConfirmed(), 11000);
+}
+
+// The field's spikes as they come: at random, unspaced (a Poisson process: two may come back to
+// back), 80-220 ms long, both ways on the Mac, which drops into the PC's game or hosts it. On
+// average every 3.5 s (SpikesEveryFewSecondsKeepTwo's rate) or 2.7 s (about the field's counted
+// rate, 11 stalls in 30 s). Bunched by chance, three or four of them come within as many seconds
+// now and then; each that outlasts the rollback window stalls both sides once, for anything from
+// under a frame to six. A frame more of delay would have spared only the shortest of them, never
+// eight seconds' worth in 45: neither delay moves on any draw. (The rule before raised on
+// three stalled seconds in four, which such bunches reach: it went to 3-4 and back 4-14 times in
+// five minutes on every draw, each change dropping or repeating a sampled input.)
+TEST(OrcaSessionRelay, SpikesAtRandomKeepTwo)
+{
+  for (const int mean_gap_ms : {3500, 2700})
+  {
+    for (const bool mac_hosts : {true, false})
+    {
+      for (u32 seed = 0; seed < 4; ++seed)
+      {
+        SCOPED_TRACE(::testing::Message() << "a spike every " << mean_gap_ms << " ms on average, "
+                                          << (mac_hosts ? "Mac hosts" : "PC hosts") << ", draw "
+                                          << seed);
+        RelayMatch::Side mac = CleanMac();
+        mac.spike_mean_gap_ms = mean_gap_ms;
+        mac.spike_len_ms = {80, 220};
+        RelayMatch::DropIn drop_in;
+        drop_in.join_s = 45;
+        RelayMatch match(Config{}, mac_hosts ? mac : CleanPc(), mac_hosts ? CleanPc() : mac,
+                         drop_in, seed);
+        match.PlaySeconds(60);
+        ASSERT_GE(match.PluggedFrame(), 0) << "the friend never plugged in";
+        match.MarkDelays();
+        match.PlaySeconds(300);
+        match.ExpectClean();
+        for (int i = 0; i < 2; ++i)
+        {
+          const Stats& stats = match.SessionOf(i).GetStats();
+          EXPECT_GT(stats.counted_stalls, 20) << "side " << i;
+          EXPECT_EQ(stats.delay_raises + stats.delay_reverts, 0) << "side " << i << Notes(match);
+          EXPECT_EQ(match.MaxDelayOf(i), 2) << "side " << i << Notes(match);
+        }
+        EXPECT_GT(match.CompareConfirmed(), 300 * 60);
+      }
+    }
+  }
+}
+
+// A radio worse than the field's, a spike every 2 s on average: a chance bunch of short ones may
+// add up to eight seconds a frame would have spared. Then that side's delay rises to 3 and comes
+// back down once quiet: at most once each way per side in five minutes, never above 3.
+TEST(OrcaSessionRelay, SpikesAtRandomEveryTwoSecondsRarelyMove)
+{
+  for (const bool mac_hosts : {true, false})
+  {
+    for (u32 seed = 0; seed < 4; ++seed)
+    {
+      SCOPED_TRACE(::testing::Message() << (mac_hosts ? "Mac hosts" : "PC hosts") << ", draw "
+                                        << seed);
+      RelayMatch::Side mac = CleanMac();
+      mac.spike_mean_gap_ms = 2000;
+      mac.spike_len_ms = {80, 220};
+      RelayMatch::DropIn drop_in;
+      drop_in.join_s = 45;
+      RelayMatch match(Config{}, mac_hosts ? mac : CleanPc(), mac_hosts ? CleanPc() : mac,
+                       drop_in, seed);
+      match.PlaySeconds(60);
+      ASSERT_GE(match.PluggedFrame(), 0) << "the friend never plugged in";
+      match.MarkDelays();
+      match.PlaySeconds(300);
+      match.ExpectClean();
+      for (int i = 0; i < 2; ++i)
+      {
+        const Stats& stats = match.SessionOf(i).GetStats();
+        EXPECT_LE(stats.delay_raises + stats.delay_reverts, 1) << "side " << i << Notes(match);
+        EXPECT_LE(stats.delay_lowers, 1) << "side " << i << Notes(match);
+        EXPECT_LE(match.MaxDelayOf(i), 3) << "side " << i << Notes(match);
+      }
+      EXPECT_GT(match.CompareConfirmed(), 300 * 60);
+    }
+  }
+}
+
+namespace
+{
+// The Mac's uplink slow and bursty: its room holds what it sends 90 ms plus 0-120 ms of jitter, in
+// order. Its round trips' median (about 170 ms, against the PC's 17) says two frames of delay
+// (a one-way time of about 95 ms, inside the rollback window), but the jitter bunches its inputs:
+// they reach the PC late in clusters every few seconds, stalling the PC for under a frame each.
+RelayMatch::Side SlowUplinkMac()
+{
+  RelayMatch::Side mac = CleanMac();
+  mac.hold_out_ms = 90;
+  mac.jitter_out_ms = 120;
+  return mac;
+}
+}  // namespace
+
+// Sustained lateness the link's median misses: the PC stalls on the Mac's inputs in clusters, and
+// a frame more of the Mac's delay would have spared nearly every stall. Once eight such seconds
+// fall within 45, the Mac's delay rises to 3 and stays there; the PC hardly stalls again, and its
+// own delay never moves. (The rule before needed stalls in three seconds of four, which clusters
+// 2-5 s apart seldom reach: on some draws the Mac stayed at 2 while the PC stalled 89 times in five
+// minutes, on others it raised after four minutes.) With re-run frames that cost what they do on a
+// real machine (3 ms each), a stall is timed to when its input came, not to the end of the
+// rollback that input set off: the same stalls are spared by a frame, and the Mac's delay rises
+// all the same.
+TEST(OrcaSessionRelay, ClusteredLatenessRaisesTheLateSide)
+{
+  for (const RelayMatch::Micros rerun_us : {0, 3000})
+  {
+    for (u32 seed = 0; seed < 4; ++seed)
+    {
+      SCOPED_TRACE(::testing::Message() << "draw " << seed << ", re-runs " << rerun_us << " us");
+      RelayMatch::Side mac = SlowUplinkMac();
+      RelayMatch::Side pc = CleanPc();
+      mac.rerun_us = pc.rerun_us = rerun_us;
+      RelayMatch match(Config{}, mac, pc, std::nullopt, seed);
+      match.PlaySeconds(rerun_us ? 120 : 60);
+      EXPECT_EQ(match.SessionOf(0).Delay(), 3) << Notes(match);
+      match.MarkDelays();
+      match.PlaySeconds(rerun_us ? 200 : 260);
+      match.Print("slow, bursty uplink");
+      match.ExpectClean();
+      const Stats& mac_stats = match.SessionOf(0).GetStats();
+      const Stats& pc_stats = match.SessionOf(1).GetStats();
+      EXPECT_EQ(match.SessionOf(0).Delay(), 3) << Notes(match);
+      EXPECT_EQ(mac_stats.delay_raises, 1) << Notes(match);
+      EXPECT_EQ(mac_stats.delay_lowers + mac_stats.delay_reverts, 0) << Notes(match);
+      EXPECT_EQ(pc_stats.delay_raises + pc_stats.delay_lowers + pc_stats.delay_reverts, 0)
+          << Notes(match);
+      EXPECT_EQ(match.MaxDelayOf(1), 2) << Notes(match);
+      EXPECT_LE(pc_stats.stalls, 30);
+      // Nearly every one of the PC's counted stalls was over within a frame.
+      EXPECT_GE(pc_stats.spared_stalls * 4, pc_stats.counted_stalls * 3);
+      EXPECT_GT(match.CompareConfirmed(), 300 * 60);
+    }
+  }
+}
+
+// The same lateness for one minute only: the Mac's delay rises within it, and once the uplink is
+// clean again comes back to 2 within about ten seconds (five quiet ones with room for a frame
+// less), then stays there.
+TEST(OrcaSessionRelay, SustainedLatenessRaisesThenComesBackDown)
+{
+  for (u32 seed = 0; seed < 4; ++seed)
+  {
+    SCOPED_TRACE(::testing::Message() << "draw " << seed);
+    RelayMatch::Side mac = SlowUplinkMac();
+    mac.hold_from_s = 60;
+    mac.hold_to_s = 120;
+    RelayMatch match(Config{}, mac, CleanPc(), std::nullopt, seed);
+    match.PlaySeconds(60);
+    match.MarkDelays();
+    match.PlaySeconds(60);
+    match.Print("a slow, bursty minute");
+    EXPECT_EQ(match.MaxDelayOf(0), 3) << Notes(match);
+    EXPECT_EQ(match.MaxDelayOf(1), 2) << Notes(match);
+    match.PlaySeconds(12);
+    match.ExpectClean();
+    for (int i = 0; i < 2; ++i)
+    {
+      EXPECT_EQ(match.SessionOf(i).Delay(), 2) << "side " << i << Notes(match);
+      EXPECT_EQ(match.SessionOf(i).GetStats().delay_reverts, 0) << "side " << i << Notes(match);
+    }
+    match.MarkDelays();
+    match.PlaySeconds(60);
+    for (int i = 0; i < 2; ++i)
+      EXPECT_EQ(match.MaxDelayOf(i), 2) << "side " << i << Notes(match);
+    EXPECT_LE(match.SessionOf(1).GetStats().stalls, 30);
+    EXPECT_GT(match.CompareConfirmed(), 180 * 60);
+  }
+}
+
+// Dropouts a frame would cure: the Mac's radio goes dark both ways for 130-150 ms every 2.1 s,
+// just past the rollback window. At two frames each stalls both sides, under a frame or two; a
+// frame or two more of delay spares nearly all of them. Both delays rise (the PC's to 4, the Mac's
+// to 3: the dropout holds the PC's inputs a little longer on their way in) and stay, and the
+// stalls stop. (The rule before kept both at 2 for five minutes, with 80-120 stalls a side.)
+TEST(OrcaSessionRelay, DropoutsAFrameWouldSpareRaiseAndStay)
+{
+  for (u32 seed = 0; seed < 4; ++seed)
+  {
+    SCOPED_TRACE(::testing::Message() << "draw " << seed);
+    RelayMatch::Side mac = CleanMac();
+    mac.spike_gap_ms = {2100, 2100};
+    mac.spike_len_ms = {130, 150};
+    RelayMatch match(Config{}, mac, CleanPc(), std::nullopt, seed);
+    match.PlaySeconds(300);
+    match.Print("dropouts every 2.1 s");
+    match.ExpectClean();
+    for (int i = 0; i < 2; ++i)
+    {
+      const Stats& stats = match.SessionOf(i).GetStats();
+      EXPECT_GE(match.SessionOf(i).Delay(), 3) << "side " << i << Notes(match);
+      EXPECT_EQ(stats.delay_lowers + stats.delay_reverts, 0) << "side " << i << Notes(match);
+      EXPECT_LE(stats.stalls, 40) << "side " << i;
+    }
+    EXPECT_GT(match.CompareConfirmed(), 290 * 60);
+  }
+}
+
+// Long dropouts every second (150-300 ms, both ways, for a minute): every one stalls both sides,
+// for two to eleven frames. Each frame of delay would spare only the few that it covers (a raise
+// to 6 fewer than half), at a frame on every input until the link is clean: the delay stays at 2,
+// and rollback and the stalls take the minute as it is. (The rule before went to 6 within twenty
+// seconds and stalled about a quarter less.)
+TEST(OrcaSessionRelay, LongDropoutsEverySecondRaiseNothing)
+{
+  for (u32 seed = 0; seed < 4; ++seed)
+  {
+    SCOPED_TRACE(::testing::Message() << "draw " << seed);
+    RelayMatch::Side mac = CleanMac();
+    mac.spike_gap_ms = {600, 1200};
+    mac.spike_len_ms = {150, 300};
+    mac.spike_from_s = 60;
+    mac.spike_to_s = 120;
+    RelayMatch match(Config{}, mac, CleanPc(), std::nullopt, seed);
+    match.PlaySeconds(60);
+    match.MarkDelays();
+    match.PlaySeconds(75);
+    match.Print("a minute of long dropouts");
+    match.ExpectClean();
+    for (int i = 0; i < 2; ++i)
+    {
+      EXPECT_GT(match.SessionOf(i).GetStats().counted_stalls, 30) << "side " << i;
+      EXPECT_EQ(match.MaxDelayOf(i), 2) << "side " << i << Notes(match);
+    }
+    EXPECT_GT(match.CompareConfirmed(), 120 * 60);
+  }
+}
+
+// Only the Mac's download stalls (250-300 ms every second for a minute): its inputs reach the PC
+// on time, the PC's reach it late. The Mac stalls on the PC's inputs, so the PC's delay rises. The
+// PC stalls too, but only because the Mac stopped sending new inputs while it stalled: the Mac's
+// delay could not have helped, so it stays at 2.
+TEST(OrcaSessionRelay, StallsSetOffByTheOtherSidesStallCountForNothing)
+{
+  RelayMatch::Side mac = CleanMac();
+  mac.spike_gap_ms = {800, 1200};
+  mac.spike_len_ms = {250, 300};
+  mac.spike_in_only = true;
+  mac.spike_from_s = 20;
+  mac.spike_to_s = 80;
+  RelayMatch match(Config{}, mac, CleanPc());
+  match.PlaySeconds(90);
+  match.Print("Mac download spikes");
+  match.ExpectClean();
+  const Stats& mac_stats = match.SessionOf(0).GetStats();
+  const Stats& pc_stats = match.SessionOf(1).GetStats();
+  EXPECT_GT(mac_stats.counted_stalls, 20);
+  EXPECT_GT(pc_stats.stalls, 5);
+  EXPECT_EQ(pc_stats.counted_stalls, 0);
+  EXPECT_GE(match.MaxDelayOf(1), 3) << Notes(match);
+  EXPECT_EQ(match.MaxDelayOf(0), 2) << Notes(match);
+  EXPECT_EQ(mac_stats.delay_raises, 0) << Notes(match);
+  // (The Mac's delay may still rise for the link, should its median round trip run through a
+  // stretch of spikes; never for the PC's stalls.)
+  for (const std::string& note : match.NotesOf(0))
+    EXPECT_EQ(note.find("stalled"), std::string::npos) << note;
+  EXPECT_GT(match.CompareConfirmed(), 80 * 60);
 }
 
 // Fuzz: random links, clock drift and wildly swinging round-trip reports (each side's delay jumps

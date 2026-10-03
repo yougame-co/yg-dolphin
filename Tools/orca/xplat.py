@@ -145,7 +145,11 @@ summary = {
     "fps_min": min(fps, default=None), "fps_avg": round(sum(fps) / len(fps), 1) if fps else None,
     "rollbacks": sum(s.get("rb", 0) for s in peers), "stalls": sum(s.get("st", 0) for s in peers),
     "stall_ms": sum(s.get("stms", 0) for s in peers),
+    # The latest single round trip to the relay, averaged per second (spikes pull it up), and the
+    # medians the delay's link part follows: this side's and the friend's, as last reported.
     "ping_avg": round(sum(s.get("ping", 0) for s in peers) / len(peers)) if peers else None,
+    "ping_median": peers[-1].get("pmed") if peers else None,
+    "friend_ping_median": peers[-1].get("fpmed") if peers else None,
     "delay_max": max((s.get("delay", 0) for s in peers), default=None),
     "hitches": max((s.get("hi", 0) for s in stats), default=0),
     # How the friend's inputs came: seconds on each path ("tx": 0 relay, 1 direct, 2 TURN), and
@@ -161,6 +165,9 @@ summary = {
                      if "Orca direct link: seat" in l][:8],
     "peer_hitches": max((s.get("phi", 0) for s in stats), default=0),
     "last_lines": [l for l in text.splitlines() if "Online match" in l][-3:],
+    # Every change of this side's input delay, with why (Session.cpp, "Input delay").
+    "delay_changes": [l[l.find("input delay"):] for l in text.splitlines()
+                      if "Online match: input delay" in l][:20],
     "work": work,
 }
 ok = (code == 0 and not errors and not summary["desync"] and summary["checksums_matched"] > 0)
