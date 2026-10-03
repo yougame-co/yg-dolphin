@@ -1,0 +1,31 @@
+# Project+ ranked set under the harness (ORCA.md "Ranked stage flow"): ORCA_PROFILE=PPLUS32,
+# ORCA_TEST_RANKED=1 (game 1's first striker is port 2), ORCA_UX_TEST_NAMES=ada,bo (ports 1 and 2
+# plugged in), ORCA_UX_PROBE=pplus-ranked.probe (1-stock rules; the stage under the cursor for each
+# strike or pick: the selection +0x248 that X and A act on, as hovering the stage sets it).
+# Game 1: port 2 strikes Smashville, port 1 strikes Battlefield and Temple of Time, port 2 picks
+# Luigi's Mansion of the last two; port 2 walks off, port 1 wins. Game 2: no input on the stage
+# select: port 1's two strikes and port 2's pick run out (Battlefield and PS2 struck, Smashville
+# picked for port 2 with a pressed A); port 1 wins again, 2-0. Then the stage select is free.
+@scBoot mash 30 99999 1 40 A
+@scSelctCharacter:1 60 63 1 A
+@scSelctCharacter:1 70 73 2 A
+@scSelctCharacter:1 90 116 1 SY=255
+@scSelctCharacter:1 90 116 2 SY=255
+@scSelctCharacter:1 140 143 1 A
+@scSelctCharacter:1 150 153 2 A
+@scSelctCharacter:1 200 203 1 START
+# Game 1's stage select: the cursor off Random (up past Battlefield and Bowser's Castle).
+@scSelStage:1 40 43 2 SY=255
+@scSelStage:1 56 59 2 SY=255
+@scSelStage:1 72 75 2 SY=255
+@scSelStage:1 101 103 2 X
+@scSelStage:1 141 143 1 X
+@scSelStage:1 171 173 1 X
+@scSelStage:1 201 203 2 A
+@scMelee 60 99999 2 SX=1
+@scVsResult mash 240 99999 1 40 A
+@scVsResult mash 260 99999 2 40 A
+@scVsResult mash 600 99999 1 40 START
+@scVsResult mash 620 99999 2 40 START
+@scSelctCharacter:2 80 83 1 START
+@scSelctCharacter:3 80 83 1 START
