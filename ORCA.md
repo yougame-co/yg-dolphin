@@ -546,6 +546,7 @@ default, 16.68 ms each).
 | ------------------------------- | --------------------------------------- | ----------- | -------------------------------------------------------------------------------------------------- |
 | Immediate XFB                   | `Orca/Profile.cpp`                      | no          | Each frame is presented at its XFB copy instead of 18 ms later at the VI field that scans it out.  |
 | VSync off                       | `Orca/Profile.cpp`                      | no          | Forced, so a `GFX.ini` can't add 2-19 ms or let the screen pace the game.                          |
+| Smooth Early Presentation       | `Orca/Profile.cpp`                      | no          | Presents evened out for about 2 ms: a 60 Hz screen repeats and drops a third as many frames.       |
 | No re-present on rollback loads | `VideoCommon/Present.cpp`               | no          | A rollback no longer flashes the snapshot's (stale) frame or spends a present inside the rollback. |
 | Slow screens drop frames        | `Metal/MTLGfx.mm`                       | no          | A screen under 59 Hz no longer slows the game to its own rate.                                     |
 | Thread priority                 | `Orca/ThreadPriority.cpp`               | no          | The CPU, room and controller-stream threads run at interactive priority.                           |
@@ -567,12 +568,17 @@ revision every build carries), so builds with and without them never meet.
   after a rollback at once, where the VI path showed up to two mispredicted copies.
 - **VSync** forced off. A composited window never tears, so VSync only adds latency (2-19 ms at the
   glass) and, on a screen slower than 59.94 Hz, would let `nextDrawable` pace the game.
-- **Smooth Early Presentation and Rush Frame Presentation** stay at Dolphin's default (off). Smooth
-  evens out Immediate XFB's present cadence for about +1-2 ms, but its offset moves late fast and
-  early slowly, so stall catch-up and rollbacks that overrun a frame would cost more online; it has
-  not been measured in an online match. Rush gains nothing without Immediate XFB and puts each
-  rollback's re-run time straight onto the frame's present. Both need a real-time rollback
-  measurement first (`YG_LOOPBACK` with `YG_THROTTLE=1`).
+- **Smooth Early Presentation** (`MAIN_SMOOTH_EARLY_PRESENTATION`, forced on). Immediate XFB
+  presents each frame the moment its copy is done, and Brawl's and P+'s copies land unevenly in the
+  frame, so on a 60 Hz screen 4-6% of the refreshes repeated a frame and 5-7% of the frames never
+  showed. Smooth presents at the VI time plus an offset that follows the earliest arrivals slowly
+  and the latest quickly: about 2 ms later on average, a third as many repeats and drops
+  (Measurements). Its offset jumps late when a frame comes late, so the worry was stalls and their
+  catch-up; but a session never makes a stall's time up (`Session.cpp` resets the pacing when a
+  stall or a wait ends), so after a stall there is only the rollback's re-run, and the frames right
+  after a stall cost the same 2 ms as any other. Rush Frame Presentation stays off: it gains
+  nothing over Immediate XFB and puts each rollback's re-run time straight onto the frame's
+  present.
 - **No re-present on rollback loads.** `Presenter::DoState` re-showed the loaded state's last frame
   on every load; for a rollback that is a stale frame (often the one before: a one-frame backward
   flicker) plus a present and a `nextDrawable` inside the rollback. Rollback snapshots now skip it
@@ -591,6 +597,17 @@ revision every build carries), so builds with and without them never meet.
   power throttling off. Only in a session; a scripted harness run keeps its CPU thread as it was
   unless something paces it (an online match, `YG_THROTTLE=1`). `ORCA_THREAD_QOS=0` turns it off,
   `=1` forces it on.
+
+### Audio (host only)
+
+- **The buffer** stays at Dolphin's 80 ms (`AudioBufferSize`, not forced). At 80 the mixer's
+  queue holds 38-52 ms of sound (the setting is its ceiling, not its level); Cubeb adds 10.7 ms and
+  the device its own, so sound trails the picture by about 50-65 ms. A smaller buffer starves: the
+  game hands the mixer a frame's audio in one burst, a rollback's re-run holds the next burst back
+  by up to ~15 ms, and a queue that overflows its ceiling is cut to half of it. In real-time
+  loopbacks with rollbacks, 80 ms gave 0-1 underflows (a gap the mixer fills by looping) in a
+  minute of match, 56-64 ms 1-3 for 0-10 ms less delay, 40-48 ms 5-32, 32 ms 174 (Measurements).
+  A stall starves any size: no frames, no sound.
 
 ### Emulation
 
@@ -625,17 +642,58 @@ whose image first changed.
 | + presentation and threads | press+4 | 79.69 ms (4.78 fr) | 13.03 ms (0.78 fr) | 85.2 ms |
 | + Brawl's input lag fix | press+3 | 62.88 ms (3.77 fr) | 13.31 ms (0.80 fr) | 68.9 ms |
 | + SI relatch | press+2 | 46.62 ms (2.79 fr) | 13.52 ms (0.81 fr) | 52.8 ms |
+| + Smooth Early Presentation | press+2 | 48.89 ms (2.93 fr) | 15.54 ms (0.93 fr) | 52.9 ms |
 
 | Build | P+: image at | sample -> present | boundary -> present | sample -> glass |
 |---|---|---|---|---|
 | 0.3.5 | press+3 | 83.73 ms (5.02 fr) | 33.63 ms (2.02 fr) | 86.9 ms |
 | + presentation and threads | press+3 | 65.59 ms (3.93 fr) | 15.33 ms (0.92 fr) | 69.5 ms |
 | + SI relatch | press+2 | 46.37 ms (2.78 fr) | 13.67 ms (0.82 fr) | 51.7 ms |
+| + Smooth Early Presentation | press+2 | 48.90 ms (2.93 fr) | 15.52 ms (0.93 fr) | 52.9 ms |
 
 - On glass depends on the compositor's state (about 4 ms or about 19 ms after the present, which
-  Orca doesn't choose). With Immediate XFB the present cadence is less even: 30-38% of frames off
-  the two-refresh rhythm against 20-23% before, which Smooth Early Presentation would fix for a
-  millisecond or two once it is measured online.
+  Orca doesn't choose). With Immediate XFB alone the present cadence was less even: 30-38% of
+  frames off the two-refresh rhythm against 20-23% before; with Smooth Early Presentation 10.7-12.5%
+  (the last rows: a probe build of `dae32cfe4f`). Smooth costs 2.3-2.5 ms to the present
+  call, but on glass about nothing at the median (52.9 against 52.8 and 51.7 ms) and less at p90
+  (58.5 and 55.8 against 61.1 and 59.2): presents that come evenly catch the compositor's earlier
+  slot more often (GPU done -> glass p90 6.4 and 4.7 ms, against 12.0 and 9.5).
+- Smooth Early Presentation in rollback play, with stalls: real-time loopbacks (`YG_LOOPBACK`,
+  `YG_THROTTLE=1`, input delay 2, the remote 6-9 frames late, so 4-7 frame rollbacks: Brawl ~890
+  and P+ ~550 per run) with a 150 ms link spike every 4 s (`YG_LOOPBACK_SPIKE=4000,150`: 30 and 19
+  stalls of ~105 ms), Metal in an 871x434 window, two runs each way per game. "60 Hz" is a
+  simulated 60 Hz screen showing the latest finished frame at each refresh (GPU-done times):
+
+  | | Brawl off | Brawl on | P+ off | P+ on |
+  |---|---|---|---|---|
+  | 60 Hz repeats / drops, 1.5 s+ after a stall | 4.0-4.1% / 4.7-4.8% | 0.7-0.8% / 1.5-1.6% | 6.0-6.1% / 6.8% | 2.1% / 2.9-3.0% |
+  | the same, first 0.5 s after a stall | 3.6-5.5% / 7.3-8.3% | 1.5-1.9% / 5.1-5.2% | 5.9-6.8% / 9.1-9.6% | 3.3% / 6.1-6.2% |
+  | off the 2-refresh rhythm (120 Hz glass), first 0.5 s | 29-32% | 13-24% | 30-43% | 14-36% |
+  | sample -> present, 1.5 s+ after a stall (p50) | 79.0-79.2 ms | 81.4 ms | 79.2 ms | 81.1 ms |
+  | the same, sampled 1-15 frames after a stall (p50) | 77.8-79.9 ms | 81.2-81.6 ms | 78.4-80.6 ms | 79.5-81.7 ms |
+  | stall end -> first present call (p50) | 22.4-30.1 ms | 25.1-32.3 ms | 26.2-26.4 ms | 26.6 ms |
+
+  (Sample -> present here includes the 2 frames of input delay.) There is no catch-up after a
+  stall: the session resets the pacing when a stall ends, the late inputs cost one rollback (4-5
+  re-run frames, none of them rendered), and the next frame runs on time. So Smooth's slow-moving
+  offset has nothing to fall behind on, and the frames after a stall pay its ~2 ms like any other.
+- Audio (`AudioBufferSize`, the probe's `AQ` lines: the DMA mixer's queue at each dequeue and
+  its underflows), Cubeb at volume 0, Null video, real time. Loopbacks as above with a 150 ms
+  spike every 10 s, the match seconds without a stall (Brawl 54, P+ 45):
+
+  | Buffer | Brawl: queue mean, underflows | P+: queue mean, underflows |
+  |---|---|---|
+  | 80 ms | 51.7 ms, 0 | 51.6 ms, 1 |
+  | 64 ms | 42.3 ms, 3 | 51.1 ms, 2 |
+  | 56 ms | 41.3 ms, 3 | 43.2 ms, 1 |
+  | 48 ms | 37.0 ms, 11 | |
+  | 40 ms | 32.3 ms, 5 | 31.0 ms, 32 |
+  | 32 ms | 22.5 ms, 174 | |
+  | 24 ms | 15.4 ms, 648 | |
+
+  The seconds with a stall had 19-34 underflows at 56-80 ms and 38-233 below. Solo (the scripted
+  match in real time, no rollbacks): 80 ms 41.4 and 38.4 ms, no underflow in 72 and 57 s of match;
+  64 ms 30.0 and 30.9 ms, 1 and 0. Input rate 32 kHz, a granule step 4 ms.
 - On Luis's 49.95 Hz LG UltraWide (Brawl, before vs after the presentation changes): the game ran at
   50 fps (a boundary every 19.96 ms, `nextDrawable` waiting 15.7 ms each frame); now at full speed
   (16.70 ms), 2.5% of the screen's refreshes repeat a frame. Sample -> present 136.8 -> 79.8 ms,
@@ -673,6 +731,12 @@ Checks:
   relatch, the SerialInterface's included, which says only that much.)
 - P+'s keyframe test at frame 130 (the boot's save prompt) fails its re-run on 0.3.5 too (9 of 30
   frames): not from these changes.
+- Smooth Early Presentation (host only), on the merge with 0.3.6 (`dae32cfe4f`): per-frame RAM
+  hashes of both whole scripted matches identical to the build without it (`a7a2d51a99`: Brawl
+  10,811 frames, P+ 9,009 in common), and with Cubeb audio (volume 0) identical to without.
+- Slow screens: a whole Brawl scripted match in real time in a Metal window, the frontend reporting
+  a 50 Hz screen (`YG_LATPROBE_SCREEN_HZ=50`, probe build), so drawables came from the background
+  acquire throughout: per-frame RAM hashes identical to a Null run over all 10,811 frames.
 
 ### Re-measuring
 
@@ -683,11 +747,24 @@ Tools/orca/latency-probe.py run --out /tmp/lat --bin <probe build> --press jump 
 Tools/orca/latency-probe.py run --out /tmp/lat-pp --bin <probe build> --game pplus --press jump \
   --configs shipped --repeat 2 --hold-lock
 # the second screen: --screen 1
+
+# Rollback play with stalls: record a plain run, then replay it through a session in real time,
+# in a window, with a 150 ms link spike every 4 s from frame 2400 (probe build, YG_LATPROBE=<file>,
+# YG_LATPROBE_WINDOW=1); pacing and latency around the stalls come from the probe log.
+ORCA_SESSION=1 YG_INPUT=Tools/orca/inputs/bf-mario-link-results.txt YG_EXIT_AFTER=9800 \
+  YG_PADREC=/tmp/bf.pads <nogui> -p headless -v Null -e <disc>
+ORCA_SESSION=1 YG_LOOPBACK=/tmp/bf.pads YG_THROTTLE=1 YG_LOOPBACK_SPIKE=4000,150,2400 \
+  YG_EXIT_AFTER=9600 YG_LATPROBE=/tmp/bf.probe YG_LATPROBE_WINDOW=1 <probe build> -p macos -v Metal \
+  -C Dolphin.Core.SmoothEarlyPresentation=False -e <disc>   # a forced setting: only a probe build
+                                                            # without it in Profile.cpp takes this
+# Audio: add -C Dolphin.DSP.Backend=Cubeb -C Dolphin.DSP.Volume=0 (and AudioBufferSize=<ms>);
+# the probe log's AQ lines are the mixer queue's depth and underflows, once a second.
 ```
 
 Settings go through Dolphin's config system names: `Graphics.*`, never `GFX.*` (ignored without a
 word). Headless Metal presents nothing, so presentation is measured in a `-p macos` window; warm the
-shader cache first (a cold Metal cache costs ~3.3 s at match start).
+shader cache first (a cold Metal cache costs ~3.3 s at match start). A forced session setting
+(`Orca/Profile.cpp`) beats `-C`: comparing one needs a build that doesn't force it.
 
 ## Online menu
 
