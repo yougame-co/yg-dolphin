@@ -8,9 +8,9 @@
 # This file is hashed into the lobby key.
 #
 # Groups: the boot's save prompt skipped; the main menu's Play Online, the game's own ONLINE page
-# with no connection and every way on from it to the local Versus character select (ORCA.md
-# "Online menu"; Orca's texture pack relabels With Anyone CASUAL / RANKED, UX/MenuText.h drops
-# "(Discontinued)"); the rules' items off by default.
+# with no connection and every way on from it to the local Versus character select, and B from
+# there back to the page it came from (ORCA.md "Online menu"; Orca's texture pack relabels With
+# Anyone CASUAL / RANKED, UX/MenuText.h drops "(Discontinued)"); the rules' items off by default.
 
 # muBootNandTask (Brawl's sora_menu_boot, loaded at 0x811A6000 on the boot scene; process
 # 0x811A6300, state at +0x78), which Project+ loads unchanged at the same address (the six original
@@ -81,16 +81,53 @@
 81193204 7C7F1B78 7C7F1B78    # mr r31, r3 (guard)
 
 # sqMenuMain::setNext's table in Brawl's sora_scene, which Project+ does not replace (the same
-# words as in Brawl): every online sequence (codes 24-27, 29, 30, 31) becomes sqVsMelee's, Project+'s
-# local VERSUS character select. Code 28 is a guard.
-80701A04 806DC8C8 806DC618    # code 24 (sqNetFriendList)
-80701A08 806DC8C8 806DC618    # code 25
-80701A0C 806DC8C8 806DC618    # code 26
-80701A10 806DC8C8 806DC618    # code 27
+# words as in Brawl): every online code (24-27, 29, 30, 31) goes to sqVsMelee, Project+'s local
+# VERSUS character select, through the block below. Code 28 is a guard; 24-27 already point at the
+# block's address.
+80701A04 806DC8C8 806DC8C8    # code 24 (guard: the block below)
+80701A08 806DC8C8 806DC8C8    # code 25 (guard)
+80701A0C 806DC8C8 806DC8C8    # code 26 (guard)
+80701A10 806DC8C8 806DC8C8    # code 27 (guard)
 80701A14 806DC940 806DC940    # code 28 (guard)
-80701A18 806DC8E0 806DC618    # code 29 (sqNetAnyWatch)
-80701A1C 806DC8F8 806DC618    # code 30 (sqNetAnyOkiraku)
-80701A20 806DC910 806DC618    # code 31 (sqNetAnyTeamMelee)
+80701A18 806DC8E0 806DC8C8    # code 29 (sqNetAnyWatch)
+80701A1C 806DC8F8 806DC8C8    # code 30 (sqNetAnyOkiraku)
+80701A20 806DC910 806DC8C8    # code 31 (sqNetAnyTeamMelee)
+
+# B out of that character select goes back to the ONLINE page it came from (With Friends on the
+# button picked, With Anyone on Casual or Ranked), not to VERSUS: RSBE01.patches describes these
+# groups for Brawl. Project+ keeps Brawl's sqMenuMain, sqVsMelee and their tables (the original
+# words read in Project+'s RAM on its character select and main menu, 2026-10-03), but its codeset
+# makes sqVsMelee::start always keep the character select as it was (0x806DCA90 is a `b`), so the
+# exit code is kept by the menu's block, not by that start. The menu's mode puts the cursor back on
+# the button in Project+'s own copy of the menu module too.
+806DC8C8 80B20284 7E439378    # mr     r3, r18
+806DC8CC 7E439378 38930030    # addi   r4, r19, 48 ("sqVsMelee", as VERSUS)
+806DC8D0 38930160 38A00000    # li     r5, 0 (its argument, as VERSUS)
+806DC8D4 4B950D6D 4B950D6D    # bl     setNextSequence (0x8002D640; guard)
+806DC8D8 93CF0008 80720014    # lwz    r3, 0x14(r18) (the next sequence: sqVsMelee)
+806DC8DC 480000F4 80120284    # lwz    r0, 0x284(r18) (the menu's exit code)
+806DC8E0 7E439378 90030018    # stw    r0, 0x18(r3) (kept for the back out)
+806DC8E4 38930170 93CF0008    # stw    r30, 0x8(r15)
+806DC8E8 38A00000 480000E8    # b      0x806DC9D0
+806DC8EC 4B950D55 80AF0018    # helper: lwz r5, 0x18(r15) (r15 is sqVsMelee there)
+806DC8F0 93CF0008 38000000    # li     r0, 0
+806DC8F4 480000DC 900F0018    # stw    r0, 0x18(r15) (used once)
+806DC8F8 7E439378 3805FFE8    # subi   r0, r5, 24
+806DC8FC 38930180 28000007    # cmplwi r0, 7
+806DC900 38A00000 41810018    # bgt    0x806DC918 (not an online code)
+806DC904 4B950D3D 38A5FFFF    # subi   r5, r5, 1
+806DC908 93CF0008 28000004    # cmplwi r0, 4
+806DC90C 480000C4 4D800020    # bltlr  (24-27: With Friends, 23-26)
+806DC910 7E439378 38A5FFFF    # subi   r5, r5, 1
+806DC914 38930190 4E800020    # blr    (29-31: With Anyone, 27-29)
+806DC918 38A00000 38A00001    # li     r5, 1 (VERSUS, as before)
+806DC91C 4B950D25 4E800020    # blr
+
+# sqVsMelee::setNext's state 16, the back out (0x806DCE34): the argument comes from the helper.
+806DCE34 806F0014 806F0014    # lwz    r3, 0x14(r15) (guard)
+806DCE38 38910064 38910064    # addi   r4, r17, 100 ("sqMenuMain"; guard)
+806DCE3C 38A00001 4BFFFAB1    # li r5, 1 -> bl 0x806DC8EC (r5: the argument)
+806DCE40 4B950801 4B950801    # bl     setNextSequence (guard)
 
 # The rules menu's item default, as RSBE01.patches sets it for Brawl (which describes these four
 # words of Brawl's gmGlobalRecord menu data): Project+ keeps Brawl's record and its Item Switch page

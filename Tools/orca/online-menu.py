@@ -12,14 +12,25 @@
 #   casual     With Anyone > Casual
 #   ranked     With Anyone > Ranked
 #   friends-N  With Friends' button N (0-3)
+#   back-friends-N  With Friends' button N, B out of the character select: the menu comes back on
+#              the With Friends page with N selected, and A there picks N again
+#   back-casual, back-ranked  the same from With Anyone: back on With Anyone, Casual (Ranked)
+#              selected, A picks it again
+#   back-chain With Friends > FIGHT!, B out: then B to the ONLINE page, B to the top page, in again,
+#              With Anyone > Casual (the pages work after a menu that started on one of them)
+#   back-versus  Group (VERSUS) > Brawl, B out: back on Group with Brawl selected, A goes to the
+#              character select again, nothing printed
 #
 # Each run must show:
 #   - stdout: exactly the scenario's "orca menu ..." lines ("online casual local", "online ranked
-#     local", "online friends"), nothing for the pages and the B-backs;
+#     local", "online friends"), nothing for the pages and the B-backs; the log, the menu's exit
+#     code for each (24-27 the With Friends buttons, 30 Casual, 31 Ranked), so a back scenario's
+#     second pick proves the cursor came back on the same button;
 #   - the scenes: the main menu, then the local Versus character select (scSelctCharacter), never an
-#     online scene;
-#   - the log: the main menu module's online groups landed, each on the main menu (or the scene
-#     change into it) and nowhere else; the main menu's text rewritten (UX/MenuText.h); after the
+#     online scene; a back scenario reaches the character select twice;
+#   - the log: Orca's sora_scene groups (the table, the block and the back out) landed once each;
+#     the main menu module's online groups landed, each on the main menu (or the scene change into
+#     it) and nowhere else; the main menu's text rewritten (UX/MenuText.h); after the
 #     boot (from the first main menu frame on) no /dev/net device opened, no request to NET_KD_REQ,
 #     NCD, IP/Top or SSL (any IOS_NET, IOS_SSL or IOS_WC24 line), no NAND command on the game's
 #     save, WiiConnect24's or the network settings' folders; no invalid memory access.
@@ -63,18 +74,28 @@ T0 = time.time()
 # Frames between two presses on the menu: enough for every page's animation to settle.
 STEP = 50
 # Booting to the main menu's top page, and the first press there (frames of the main menu scene).
+# Menu presses are for the menu's first visit (`@muMenuMain:1`), a back scenario's for its second.
 if PPLUS:
     # Project+ boots to its character select (frame ~163); holding B goes to the main menu's VERSUS
     # page, B again to the top page. The hold counts from the boot, not the scene: the character
-    # select the menu leaves for later must not send the game back to the menu.
-    BOOT = ["285 330 1 B", "@muMenuMain 120 124 1 B"]
+    # select the menu leaves for later must not send the game back to the menu. The scenario's
+    # character select is then the second.
+    BOOT = ["285 330 1 B", "@muMenuMain:1 120 124 1 B"]
     FIRST = 200
+    CSS_VISIT = 2
     EXIT_FRAMES = 700  # after the last press: out of the menu to character select
 else:
     BOOT = ["@scStrap mash 30 99999 1 40 A", "@scBoot mash 30 99999 1 40 A",
             "@scTitle mash 30 99999 1 40 A"]
     FIRST = 120
+    CSS_VISIT = 1
     EXIT_FRAMES = 700
+# A back scenario holds B on its character select from this frame (of that scene) until it leaves,
+# then presses on the menu's next visit from BACK_FIRST, which leaves the page time to come in.
+CSS_B = (150, 260)
+BACK_FIRST = 200
+# From the menu's first press to the character select and out of it again, at most.
+CSS_FRAMES = 600
 
 # The top page's cursor starts on Group / VERSUS; Play Online is below it. On the ONLINE page the
 # cursor starts on With Friends; With Anyone is to its right. With Anyone's cursor starts on Casual,
@@ -83,6 +104,12 @@ else:
 # right); right, down, left, up goes round them in that order (Brawl and Project+ alike).
 TO_ONLINE = [("DOWN", "top-play-online"), ("A", "online")]
 FRIENDS_PATH = {0: [], 1: ["RIGHT"], 2: ["RIGHT", "DOWN", "LEFT"], 3: ["RIGHT", "DOWN"]}
+# The menu's exit code for each With Friends button (the button's mode: 25 is FIGHT!, the friend
+# list's Brawl, 24 Friend Roster, 26 Team Multi-Man, 27 Home-Run Contest), Casual's and Ranked's.
+FRIENDS_CODE = {0: 25, 1: 24, 2: 26, 3: 27}
+CASUAL_CODE, RANKED_CODE = 30, 31
+CASUAL = TO_ONLINE + [("RIGHT", None), ("A", "with-anyone"), ("A", None)]
+RANKED = TO_ONLINE + [("RIGHT", None), ("A", "with-anyone"), ("DOWN", "ranked-selected"), ("A", None)]
 
 
 def friends(n):
@@ -91,6 +118,8 @@ def friends(n):
     return path + [("A", None)]
 
 
+# name: (menu presses, stdout lines, exit codes, presses on the menu's next visit after B out of
+# the character select or None, character selects reached)
 SCENARIOS = {
     "tour": (
         TO_ONLINE + [
@@ -114,20 +143,37 @@ SCENARIOS = {
             ("A", "with-anyone-again"),
             ("A", None),
         ],
-        ["online casual local"]),
-    "casual": (TO_ONLINE + [("RIGHT", None), ("A", "with-anyone"), ("A", None)],
-               ["online casual local"]),
-    "ranked": (TO_ONLINE + [("RIGHT", None), ("A", "with-anyone"), ("DOWN", "ranked-selected"),
-                            ("A", None)],
-               ["online ranked local"]),
+        ["online casual local"], [CASUAL_CODE], None, 1),
+    "casual": (CASUAL, ["online casual local"], [CASUAL_CODE], None, 1),
+    "ranked": (RANKED, ["online ranked local"], [RANKED_CODE], None, 1),
 }
 for n in FRIENDS_PATH:
-    SCENARIOS[f"friends-{n}"] = (friends(n), ["online friends"])
+    SCENARIOS[f"friends-{n}"] = (friends(n), ["online friends"], [FRIENDS_CODE[n]], None, 1)
+for n in FRIENDS_PATH:
+    SCENARIOS[f"back-friends-{n}"] = (friends(n), ["online friends"] * 2, [FRIENDS_CODE[n]] * 2,
+                                      [("A", "back-with-friends")], 2)
+SCENARIOS["back-casual"] = (CASUAL, ["online casual local"] * 2, [CASUAL_CODE] * 2,
+                            [("A", "back-with-anyone")], 2)
+SCENARIOS["back-ranked"] = (RANKED, ["online ranked local"] * 2, [RANKED_CODE] * 2,
+                            [("A", "back-with-anyone-ranked")], 2)
+SCENARIOS["back-chain"] = (
+    friends(0), ["online friends", "online casual local"], [FRIENDS_CODE[0], CASUAL_CODE],
+    [("B", "back-with-friends"), ("B", "back-online"), ("A", "back-top"),
+     ("RIGHT", "back-online-again"), ("A", "back-online-with-anyone"), ("A", "back-with-anyone")],
+    2)
+SCENARIOS["back-versus"] = ([("A", "top"), ("A", "group")], [], [], [("A", "back-group")], 2)
+# The back scenarios whose page comes back on a button with a rewritten description (Friend Roster,
+# Team Multi-Man, Home-Run Contest, Casual, Ranked; MenuText.h): the menu formats it in the frame its
+# archive loads, so the description box's copy must be rewritten as well, at that boundary.
+BOX_REWRITE = {"back-friends-1", "back-friends-2", "back-friends-3", "back-casual", "back-ranked"}
 
 # The main menu module's online groups (RSBE01.patches; Project+'s module sits 0x1480 higher): each
 # must land on the main menu (or the scene change into it, while the module loads) and nowhere else.
 MENU_GROUPS = [a + (0x1480 if PPLUS else 0) for a in
                (0x81178A58, 0x81178C30, 0x81179F48, 0x8117A148, 0x81179A04, 0x81191D7C)]
+# Orca's groups in sora_scene (resident, the same in both games): sqMenuMain::setNext's table, its
+# block for the online codes and the back out's helper, sqVsMelee's back out. Each lands once.
+SCENE_GROUPS = [0x80701A04, 0x806DC8C8, 0x806DCE34]
 
 # NAND folders nothing on these pages may touch: the game's save (Brawl's title, which Project+
 # keeps), WiiConnect24's, and the console's network settings.
@@ -138,20 +184,28 @@ def log(text):
     print(f"[{time.time() - T0:6.1f}] {text}", flush=True)
 
 
-def write_input(name, steps):
+def write_input(name, steps, back):
     lines = [f"# online-menu.py {GAME} {name}"] + BOOT
     frame = FIRST
     for button, _ in steps:
-        lines.append(f"@muMenuMain {frame} {frame + 3} 1 {button}")
+        lines.append(f"@muMenuMain:1 {frame} {frame + 3} 1 {button}")
         frame += STEP
+    if back is not None:
+        lines.append(f"@scSelctCharacter:{CSS_VISIT} {CSS_B[0]} {CSS_B[1]} 1 B")
+        frame += CSS_FRAMES
+        back_frame = BACK_FIRST
+        for button, _ in back:
+            lines.append(f"@muMenuMain:2 {back_frame} {back_frame + 3} 1 {button}")
+            back_frame += STEP
+        frame += back_frame
     path = os.path.join(WORK, f"{name}.txt")
     with open(path, "w") as f:
         f.write("\n".join(lines) + "\n")
     return path, frame
 
 
-def run(name, steps, expected):
-    input_path, last = write_input(name, steps)
+def run(name, steps, expected, codes, back, css_count):
+    input_path, last = write_input(name, steps, back)
     user = os.path.join(WORK, f"user-{name}")
     os.makedirs(user)
     # The menu scene starts at about frame 1430 in Brawl and 330 in Project+.
@@ -204,6 +258,9 @@ def run(name, steps, expected):
     menu = [l[len("orca menu "):] for l in out_lines if l.startswith("orca menu ")]
     if menu != expected:
         return f"stdout menu lines {menu}, expected {expected}"
+    exits = [int(m.group(1)) for l in log_lines if (m := re.search(r"Online menu: exit code (\d+):", l))]
+    if exits != codes:
+        return f"menu exit codes {exits}, expected {codes}"
 
     scenes = [m.group(1, 2) for l in every
               if (m := re.search(r"Scene frame (\d+): \S* -> (\S+)", l))]
@@ -213,6 +270,18 @@ def run(name, steps, expected):
     after = names[names.index("muMenuMain"):]
     if "scSelctCharacter" not in after:
         return f"no character select after the menu: {names}"
+    if after.count("scSelctCharacter") != css_count:
+        return f"{after.count('scSelctCharacter')} character selects after the menu, expected {css_count}"
+    if back is not None and after.count("muMenuMain") < 2:
+        return f"B out of the character select never reached the menu: {after}"
+    if back is not None:
+        # The menu's second visit, up to the first press there: the description box's copy.
+        second = [i for i, l in enumerate(log_lines) if "-> muMenuMain" in l][1]
+        box = sum(int(m.group(1)) for l in log_lines[second:]
+                  if (m := re.search(r"rewritten, (\d+) of them the description box", l)))
+        if box != (1 if name in BOX_REWRITE else 0):
+            return f"the description box's copy rewritten {box} times after B, expected " \
+                   f"{1 if name in BOX_REWRITE else 0}"
     online = [s for s in after if re.search(r"Net|Wifi|Wi-Fi|Online", s, re.I)]
     if online:
         return f"an online scene: {online}"
@@ -234,6 +303,9 @@ def run(name, steps, expected):
             return f"group {group:08x} landed on {prev} (next {following})"
     if landed != set(MENU_GROUPS):
         return f"groups never landed: {[f'{g:08x}' for g in set(MENU_GROUPS) - landed]}"
+    scene_landed = [g for _, g in events if g in SCENE_GROUPS]
+    if sorted(scene_landed) != sorted(SCENE_GROUPS):
+        return f"sora_scene groups landed {[f'{g:08x}' for g in scene_landed]}, expected each once"
 
     # The boot's own device opens are fine; from the first main menu frame on, nothing.
     start = next(i for i, l in enumerate(log_lines) if "-> muMenuMain" in l)
@@ -254,7 +326,8 @@ def run(name, steps, expected):
 
     if SHOTS and VIDEO != "Null":
         suffix = f"-{int(SCALE)}x" if SCALE else ""
-        menu_start = int(next(f for f, s in scenes if s == "muMenuMain"))
+        menu_starts = [int(f) for f, s in scenes if s == "muMenuMain"]
+        menu_start = menu_starts[0]
         shots = sorted(glob.glob(os.path.join(user, "ScreenShots", "**", "f*.png"), recursive=True))
         by_frame = {int(re.search(r"f(\d+)", os.path.basename(p)).group(1)): p for p in shots}
         os.makedirs(SHOTS, exist_ok=True)
@@ -275,18 +348,29 @@ def run(name, steps, expected):
             if have:
                 shutil.copy(by_frame[max(have)],
                             os.path.join(SHOTS, f"{GAME}-{name}-css{suffix}.png"))
+        if back is not None and len(menu_starts) > 1:
+            frame = BACK_FIRST - STEP
+            for button, label in back:
+                frame += STEP
+                if label:
+                    want = menu_starts[1] + frame - 2
+                    have = [f for f in by_frame if f <= want]
+                    if have:
+                        shutil.copy(by_frame[max(have)],
+                                    os.path.join(SHOTS, f"{GAME}-{name}-{label}{suffix}.png"))
         shutil.rmtree(os.path.join(user, "ScreenShots"), ignore_errors=True)
-    log(f"{name}: menu lines {menu}; scenes after the menu {after}; {fs_commands} NAND commands "
-        f"after the boot, none on the save, WiiConnect24 or network folders")
+    log(f"{name}: menu lines {menu}, exit codes {exits}; scenes after the menu {after}; "
+        f"{fs_commands} NAND commands after the boot, none on the save, WiiConnect24 or network "
+        f"folders")
     return None
 
 
 failed = 0
-for name, (steps, expected) in SCENARIOS.items():
+for name, (steps, expected, codes, back, css_count) in SCENARIOS.items():
     if ONLY and name not in ONLY.split(","):
         continue
     log(f"{GAME} {name} ...")
-    why = run(name, steps, expected)
+    why = run(name, steps, expected, codes, back, css_count)
     if why:
         failed += 1
         log(f"FAIL {GAME} {name}: {why}")

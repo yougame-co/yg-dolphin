@@ -117,21 +117,72 @@
 81191D84 7C7F1B78 7C7F1B78    # mr r31, r3 (guard)
 
 # sqMenuMain::setNext's table (sora_scene, resident; one entry per main-menu exit code, which the
-# menu leaves at [0x805A0060]+0x284): every online sequence becomes sqVsMelee's entry (0x806DC618),
-# the local Versus character select that Group > Brawl (code 1) opens. 24-27 are With Friends'
-# modes (sqNetFriendList), 29 Spectator (sqNetAnyWatch), 30 With Anyone's Basic Brawl
-# (sqNetAnyOkiraku), 31 its Team Battle (sqNetAnyTeamMelee): none of them is ever entered, so no
-# online scene, no network thread, no DWC. The code itself stays as the menu wrote it: Orca reads it
-# (30 Casual, 31 Ranked, 24-27 Friends). 28 is a guard. Project+ keeps Brawl's sora_scene, so its
-# file has the same group.
-80701A04 806DC8C8 806DC618    # code 24 (sqNetFriendList)
-80701A08 806DC8C8 806DC618    # code 25
-80701A0C 806DC8C8 806DC618    # code 26
-80701A10 806DC8C8 806DC618    # code 27
+# menu leaves at [0x805A0060]+0x284): every online code goes to the local Versus character select
+# that Group > Brawl (code 1) opens, through the block below. 24-27 are With Friends' modes
+# (sqNetFriendList), 29 Spectator (sqNetAnyWatch), 30 With Anyone's Basic Brawl (sqNetAnyOkiraku),
+# 31 its Team Battle (sqNetAnyTeamMelee): none of them is ever entered, so no online scene, no
+# network thread, no DWC. The code itself stays as the menu wrote it: Orca reads it (30 Casual, 31
+# Ranked, 24-27 Friends). 28 is a guard; 24-27 already point at the block's address (the friend
+# list's entry, which the block replaces). Project+ keeps Brawl's sora_scene, so its file has the
+# same groups.
+80701A04 806DC8C8 806DC8C8    # code 24 (guard: the block below)
+80701A08 806DC8C8 806DC8C8    # code 25 (guard)
+80701A0C 806DC8C8 806DC8C8    # code 26 (guard)
+80701A10 806DC8C8 806DC8C8    # code 27 (guard)
 80701A14 806DC940 806DC940    # code 28 (guard)
-80701A18 806DC8E0 806DC618    # code 29 (sqNetAnyWatch)
-80701A1C 806DC8F8 806DC618    # code 30 (sqNetAnyOkiraku)
-80701A20 806DC910 806DC618    # code 31 (sqNetAnyTeamMelee)
+80701A18 806DC8E0 806DC8C8    # code 29 (sqNetAnyWatch)
+80701A1C 806DC8F8 806DC8C8    # code 30 (sqNetAnyOkiraku)
+80701A20 806DC910 806DC8C8    # code 31 (sqNetAnyTeamMelee)
+
+# Back out of that character select to where the player was, as the game does when it comes back
+# from an online mode. sqVsMelee (sora_scene) leaves its character select for the menu in one place,
+# setNext's state 16, always with setNextSequence("sqMenuMain", 1) (0x806DCE3C). sqMenuMain turns
+# that argument into the menu's mode through its own table (0x80701A4C: 0-22 stay, 23-26 become
+# 24-27, 27-29 become 29-31), muMenuMain::start (0x806CC038) reads the mode at [0x805A0060]+0x280,
+# and the mode is the exit code of the button to come back to: its page from a table (0x806F9228)
+# and the cursor on that button. Mode 1 is Group with Brawl selected; 24-27 the With Friends page
+# on that button, 29-31 With Anyone on Spectator, Casual (Basic Brawl) or Ranked (Team Battle).
+# So the block that starts sqVsMelee for an online code keeps that code in the sequence object, at
+# +0x18 (sqVsMelee is 0x18 bytes in a 0x20-byte block; +0x18 to +0x1F keep the heap's fill through
+# boots, menus and whole matches, in both games), and the back out takes it, once: an online code
+# (24-31) goes back as its argument (24-27 -> 23-26, 29-31 -> 27-29), anything else (0, the heap's
+# fill, a code already used) is 1 as before. Group > Brawl never sets it, so from there B still
+# opens Group. A match in between keeps it: the results come back through sqPrizeCheck, which
+# restarts sqVsMelee with 255 and leaves the object alone. Emulated code and memory only: both
+# players run it, a rollback re-runs it, a drop-in keyframe carries the object.
+#
+# sqMenuMain::setNext's entries for codes 24-31 (0x806DC8C8 to 0x806DC924: the friend list's,
+# Spectator's, Basic Brawl's and Team Battle's blocks, which the table above no longer reaches): the
+# block, then the back out's helper. r18 is the scene manager, r19 the sequence names (0x807017B0,
+# +48 "sqVsMelee"), r15 sqMenuMain, r30 its next state.
+806DC8C8 80B20284 7E439378    # mr     r3, r18
+806DC8CC 7E439378 38930030    # addi   r4, r19, 48 ("sqVsMelee", as Group > Brawl)
+806DC8D0 38930160 38A00000    # li     r5, 0 (its argument, as Group > Brawl)
+806DC8D4 4B950D6D 4B950D6D    # bl     setNextSequence (0x8002D640; guard)
+806DC8D8 93CF0008 80720014    # lwz    r3, 0x14(r18) (the next sequence: sqVsMelee)
+806DC8DC 480000F4 80120284    # lwz    r0, 0x284(r18) (the menu's exit code)
+806DC8E0 7E439378 90030018    # stw    r0, 0x18(r3) (kept for the back out)
+806DC8E4 38930170 93CF0008    # stw    r30, 0x8(r15)
+806DC8E8 38A00000 480000E8    # b      0x806DC9D0 (setNext's loop, as every entry)
+806DC8EC 4B950D55 80AF0018    # helper: lwz r5, 0x18(r15) (r15 is sqVsMelee there)
+806DC8F0 93CF0008 38000000    # li     r0, 0
+806DC8F4 480000DC 900F0018    # stw    r0, 0x18(r15) (used once)
+806DC8F8 7E439378 3805FFE8    # subi   r0, r5, 24
+806DC8FC 38930180 28000007    # cmplwi r0, 7
+806DC900 38A00000 41810018    # bgt    0x806DC918 (not an online code)
+806DC904 4B950D3D 38A5FFFF    # subi   r5, r5, 1
+806DC908 93CF0008 28000004    # cmplwi r0, 4
+806DC90C 480000C4 4D800020    # bltlr  (24-27: With Friends, 23-26)
+806DC910 7E439378 38A5FFFF    # subi   r5, r5, 1
+806DC914 38930190 4E800020    # blr    (29-31: With Anyone, 27-29)
+806DC918 38A00000 38A00001    # li     r5, 1 (Group, as before)
+806DC91C 4B950D25 4E800020    # blr
+
+# sqVsMelee::setNext's state 16 (0x806DCE34): the argument comes from the helper.
+806DCE34 806F0014 806F0014    # lwz    r3, 0x14(r15) (guard)
+806DCE38 38910064 38910064    # addi   r4, r17, 100 ("sqMenuMain"; guard)
+806DCE3C 38A00001 4BFFFAB1    # li r5, 1 -> bl 0x806DC8EC (r5: the argument)
+806DCE40 4B950801 4B950801    # bl     setNextSequence (guard)
 
 # --- Input: the game reads this frame's pads ------------------------------------------------------
 

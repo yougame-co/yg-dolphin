@@ -158,15 +158,48 @@ void ExpectOnlineGates(const std::vector<GamePatch>& patches, u32 module)
       }
     }
   }
-  // G4: sora_scene's exit table, the same in both games: every online sequence becomes local
-  // Versus (sqVsMelee), code 28 untouched.
+  // G4: sora_scene's exit table, the same in both games: every online code goes to Orca's block
+  // (the friend list's old entry), which starts local Versus (sqVsMelee); code 28 untouched.
   {
     const auto g = GroupAt(patches, 0x80701A04);
     ASSERT_EQ(g.size(), 8u);
     EXPECT_EQ(Originals(g), (std::vector<u32>{0x806DC8C8, 0x806DC8C8, 0x806DC8C8, 0x806DC8C8,
                                               0x806DC940, 0x806DC8E0, 0x806DC8F8, 0x806DC910}));
-    EXPECT_EQ(Values(g), (std::vector<u32>{0x806DC618, 0x806DC618, 0x806DC618, 0x806DC618,
-                                           0x806DC940, 0x806DC618, 0x806DC618, 0x806DC618}));
+    EXPECT_EQ(Values(g), (std::vector<u32>{0x806DC8C8, 0x806DC8C8, 0x806DC8C8, 0x806DC8C8,
+                                           0x806DC940, 0x806DC8C8, 0x806DC8C8, 0x806DC8C8}));
+  }
+  // G5: B out of that character select goes back to the page the pick came from. The block
+  // starts sqVsMelee as Group > Brawl does and keeps the exit code in it; sqVsMelee's back out
+  // asks the helper for sqMenuMain's argument instead of always 1.
+  {
+    const auto block = GroupAt(patches, 0x806DC8C8);
+    ASSERT_EQ(block.size(), 22u);  // 0x806DC8C8-0x806DC91C, the four online entries' old blocks
+    // sqMenuMain::setNext's own entry for Group > Brawl (0x806DC618), apart from what follows.
+    EXPECT_EQ(block[0].value, 0x7E439378u);  // mr r3, r18
+    EXPECT_EQ(block[1].value, 0x38930030u);  // addi r4, r19, 48: "sqVsMelee"
+    EXPECT_EQ(block[2].value, 0x38A00000u);  // li r5, 0
+    EXPECT_EQ(BranchTarget(block[3].address, block[3].value), std::optional<u32>(0x8002D640));
+    EXPECT_EQ(block[3].value & 1, 1u);       // bl setNextSequence
+    EXPECT_EQ(block[4].value, 0x80720014u);  // lwz r3, 0x14(r18): the next sequence
+    EXPECT_EQ(block[5].value, 0x80120284u);  // lwz r0, 0x284(r18): the menu's exit code
+    EXPECT_EQ(block[6].value, 0x90030018u);  // stw r0, 0x18(r3)
+    EXPECT_EQ(block[7].value, 0x93CF0008u);  // stw r30, 0x8(r15)
+    EXPECT_EQ(BranchTarget(block[8].address, block[8].value), std::optional<u32>(0x806DC9D0));
+    EXPECT_EQ(block[8].value & 1, 0u);  // b: setNext's loop, as every entry
+    // The helper reads and clears it, and answers 1 for anything but an online code.
+    EXPECT_EQ(block[9].address, 0x806DC8ECu);
+    EXPECT_EQ(block[9].value, 0x80AF0018u);   // lwz r5, 0x18(r15)
+    EXPECT_EQ(block[11].value, 0x900F0018u);  // stw r0, 0x18(r15), r0 = 0
+    EXPECT_EQ(block[20].value, 0x38A00001u);  // li r5, 1
+    EXPECT_EQ(block[21].value, 0x4E800020u);  // blr
+    const auto back = GroupAt(patches, 0x806DCE34);
+    ASSERT_EQ(back.size(), 4u);
+    EXPECT_EQ(*back[2].original, 0x38A00001u);  // li r5, 1: always Group
+    EXPECT_EQ(BranchTarget(back[2].address, back[2].value), std::optional<u32>(0x806DC8EC));
+    EXPECT_EQ(back[2].value & 1, 1u);  // bl the helper
+    EXPECT_EQ(BranchTarget(back[3].address, back[3].value), std::optional<u32>(0x8002D640));
+    for (const size_t guard : {0u, 1u, 3u})
+      EXPECT_EQ(back[guard].value, *back[guard].original);
   }
   // Nothing patches the connection's own code: the window is never created, and nothing else of
   // Nintendo's online code is reached.
@@ -191,6 +224,22 @@ TEST(OrcaOnlineMenuGates, ProjectPlusOpensTheOnlinePageWithNoConnection)
   // Project+'s cursor table (0x811A54FC) was never patched: its button was always selectable.
   EXPECT_FALSE(AnyLineIn(patches, 0x811A54FC, 0x811A5558));
   ExpectOnlineGates(patches, 0x1480);
+}
+
+// Project+ keeps Brawl's sora_scene: its groups there are Brawl's, word for word.
+TEST(OrcaOnlineMenuGates, SceneGroupsAreTheSameInBothGames)
+{
+  const auto brawl = Shipped("RSBE01.patches");
+  const auto pplus = Shipped("PPLUS32.patches");
+  for (const u32 at : {0x80701A04u, 0x806DC8C8u, 0x806DCE34u})
+  {
+    SCOPED_TRACE(at);
+    const auto b = GroupAt(brawl, at);
+    const auto p = GroupAt(pplus, at);
+    ASSERT_FALSE(b.empty());
+    EXPECT_EQ(Originals(b), Originals(p));
+    EXPECT_EQ(Values(b), Values(p));
+  }
 }
 
 namespace
@@ -867,6 +916,138 @@ TEST(OrcaOnlineMenuText, WithFriendsSaysWhereEachButtonGoes)
       EXPECT_EQ(Bytes(m, file + m.Read32(file + 4 * k), e.text.size()), e.text) << k;
     }
     EXPECT_EQ(Bytes(m, file + m.Read32(file + 4 * 46), five[46].size()), five[46]);
+  }
+}
+
+namespace
+{
+// The description box as MenuText.h finds it: muMenuMain +0x7BC -> the panel (the message shown at
+// +0x40), +0x48 -> its window (its message file at +0x4), +0x8 -> +0x9C -> the text, whose buffer
+// (+0x50) holds `formatted` (+0x4C its length, +0x48 its capacity), then the game's 0x01 after it.
+constexpr u32 PANEL = 0x81510000, WINDOW = 0x81511000, TEXT = 0x81512000, MSG = 0x81513000;
+constexpr u32 BUFFER = 0x81514000;
+
+void WriteDescription(FakeMemory& m, u32 messages, u32 shown, const std::string& formatted)
+{
+  m.Write32(0x80910000 + 0x7BC, PANEL);
+  m.Fill(PANEL, 0x80);
+  m.Write32(PANEL + 0x40, shown);
+  m.Write32(PANEL + 0x48, WINDOW);
+  m.Write32(PANEL + 0x5C, 0x92000040);  // the layout's file (MiscData 3), not the messages
+  m.Fill(WINDOW, 0x10);
+  m.Write32(WINDOW + 0x4, messages);
+  m.Write32(WINDOW + 0x8, TEXT);
+  m.Fill(TEXT, 0xA0);
+  m.Write32(TEXT + 0x9C, MSG);
+  m.Fill(MSG, 0x60);
+  m.Write32(MSG + 0x48, 0x200);
+  m.Write32(MSG + 0x4C, static_cast<u32>(formatted.size()));
+  m.Write32(MSG + 0x50, BUFFER);
+  m.Fill(BUFFER, 0x200);
+  for (size_t i = 0; i < formatted.size(); ++i)
+    m.bytes[BUFFER + static_cast<u32>(i)] = static_cast<u8>(formatted[i]);
+  m.bytes[BUFFER + static_cast<u32>(formatted.size())] = 0x01;
+  m.writes = 0;
+}
+
+// The box's own control codes before the message, as the game writes them (Brawl's With Anyone
+// page, read in RAM).
+const std::string BOX_PREFIX("\x17\xfe}\x00\x0c\x01\x83\xff\xf4\x18\x01\x03\x18\x10"
+                             "0\x1d \x1c\x00\xcc\r@@\x0f\xff\x00\x05\x01\x02\x08\x0c/..\xff"
+                             "\x04/..\xff\x03\x00\x00",
+                             0x2B);
+}  // namespace
+
+TEST(OrcaOnlineMenuText, RewritesTheDescriptionBoxsCopy)
+{
+  // A menu that opened straight on With Anyone with Ranked selected: the box formatted message 52
+  // before it was rewritten. The boundary rewrites the message and the box's copy, which then
+  // holds what the game formats from the rewritten message: the new words, the slot's zeros, and
+  // its own length and 0x01 after them unchanged.
+  for (const char* colour : {BRAWL_COLOUR, PPLUS_COLOUR})
+  {
+    SCOPED_TRACE(colour == BRAWL_COLOUR ? "Brawl" : "Project+");
+    const MenuTextEdit& ranked = Edit(5, 52, colour);
+    std::vector<std::string> five = Placeholders(53);
+    five[52] = std::string(ranked.original);
+    FakeMemory m = MainMenu();
+    const auto where = WriteArchive(m, {{5, five}});
+    const std::string formatted = BOX_PREFIX + std::string(ranked.original);
+    WriteDescription(m, where.at(5), 52, formatted);
+    const MenuDescription d = FindMenuDescription(m, where.at(5));
+    EXPECT_EQ(d.buffer, BUFFER);
+    EXPECT_EQ(d.length, formatted.size());
+    EXPECT_EQ(d.message, 52u);
+
+    int in_box = -1;
+    EXPECT_EQ(ApplyMenuText(m, MenuTextEdits(), &in_box), 2);  // the message and the box's copy
+    EXPECT_EQ(in_box, 1);
+    const u32 at = BUFFER + static_cast<u32>(BOX_PREFIX.size());
+    EXPECT_EQ(Bytes(m, BUFFER, BOX_PREFIX.size()), BOX_PREFIX);
+    EXPECT_EQ(Bytes(m, at, ranked.text.size()), ranked.text);
+    for (size_t i = ranked.text.size(); i < ranked.original.size(); ++i)
+      EXPECT_EQ(m.Read8(at + static_cast<u32>(i)), 0) << i;
+    EXPECT_EQ(m.Read8(BUFFER + static_cast<u32>(formatted.size())), 0x01);
+    EXPECT_EQ(m.Read32(MSG + 0x4C), formatted.size());
+    // The same bytes as the archive's rewritten slot: what the box formats from it.
+    const u32 file = where.at(5);
+    EXPECT_EQ(Bytes(m, at, ranked.original.size()),
+              Bytes(m, file + m.Read32(file + 4 * 52), ranked.original.size()));
+
+    // Done: nothing matches any more.
+    m.writes = 0;
+    EXPECT_EQ(ApplyMenuText(m, MenuTextEdits()), 0);
+    EXPECT_EQ(m.writes, 0);
+  }
+}
+
+TEST(OrcaOnlineMenuText, LeavesTheBoxAloneUnlessItShowsThatMessage)
+{
+  const MenuTextEdit& ranked = Edit(5, 52, BRAWL_COLOUR);
+  const MenuTextEdit& casual = Edit(5, 51, BRAWL_COLOUR);
+  std::vector<std::string> five = Placeholders(53);
+  five[51] = std::string(casual.original);
+  five[52] = std::string(ranked.original);
+  const std::string formatted = BOX_PREFIX + std::string(ranked.original);
+  {
+    // The panel says another message is shown (the cursor moved on): the copy is not that edit's.
+    FakeMemory m = MainMenu();
+    const auto where = WriteArchive(m, {{5, five}});
+    WriteDescription(m, where.at(5), 51, formatted);
+    EXPECT_EQ(ApplyMenuDescription(m, where.at(5), MenuTextEdits()), 0);
+    EXPECT_EQ(m.writes, 0);
+  }
+  {
+    // A window that prints from another file is not the description box.
+    FakeMemory m = MainMenu();
+    const auto where = WriteArchive(m, {{5, five}});
+    WriteDescription(m, where.at(5) + 0x20, 52, formatted);
+    EXPECT_EQ(FindMenuDescription(m, where.at(5)).buffer, 0u);
+    EXPECT_EQ(ApplyMenuDescription(m, where.at(5), MenuTextEdits()), 0);
+  }
+  {
+    // A length past the capacity, or a broken chain: nothing.
+    FakeMemory m = MainMenu();
+    const auto where = WriteArchive(m, {{5, five}});
+    WriteDescription(m, where.at(5), 52, formatted);
+    m.Write32(MSG + 0x4C, 0x201);
+    EXPECT_EQ(FindMenuDescription(m, where.at(5)).buffer, 0u);
+    WriteDescription(m, where.at(5), 52, formatted);
+    m.Write32(WINDOW + 0x8, TEXT + 2);
+    EXPECT_EQ(FindMenuDescription(m, where.at(5)).buffer, 0u);
+    m.writes = 0;
+    EXPECT_EQ(ApplyMenuDescription(m, where.at(5), MenuTextEdits()), 0);
+    EXPECT_EQ(m.writes, 0);
+  }
+  {
+    // The box already shows the new words (the page formatted the rewritten message).
+    FakeMemory m = MainMenu();
+    const auto where = WriteArchive(m, {{5, five}});
+    std::string rewritten(ranked.text);
+    rewritten.resize(ranked.original.size(), '\0');
+    WriteDescription(m, where.at(5), 52, BOX_PREFIX + rewritten);
+    EXPECT_EQ(ApplyMenuDescription(m, where.at(5), MenuTextEdits()), 0);
+    EXPECT_EQ(m.writes, 0);
   }
 }
 
