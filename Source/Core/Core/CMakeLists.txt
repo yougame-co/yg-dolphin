@@ -517,6 +517,8 @@ add_library(core
   Orca/Profile.h
   Orca/Status.cpp
   Orca/Status.h
+  Orca/Session/DirectLink.cpp
+  Orca/Session/DirectLink.h
   Orca/Session/Events.cpp
   Orca/Session/Events.h
   Orca/Session/Keyframe.cpp
@@ -755,6 +757,7 @@ PUBLIC
 PRIVATE
   CURL::libcurl
   imgui
+  LibJuice::LibJuice
   zstd::zstd
   FatFs
   fmt::fmt
