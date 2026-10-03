@@ -1855,20 +1855,30 @@ only a queue room's host writes one (`Core/Orca/UX/OnlineRules.*`, `MatchBlock.h
 | gmSetRule | stock, 3 stocks, 8:00, handicap off, ratio 1.0, team attack on, pause off | the same with 4 stocks |
 | Items | frequency None, every item off (record menu data `+0x00`, `+0x08`, `+0x0C`) | the same |
 | Stage choice | casual Random, ranked Choose | the same |
-| Legal stages | Random Stage Switch: Brawl page `0x04005007` (BF, FD, Delfino, YI, Lylat, Smashville), Melee page `0x00020000` (Pokemon Stadium); FD's bit off while a human player is Ice Climbers (`0x10`): from the character select's panels there, from the match's init data after it (a Random character resolved) | the 2024 Proposed list as its preset 3 (`Switch03.rss`) holds it: its first `0xA8` bytes of RSS_EXDATA (`0x8042C4E8`: page 0 the 9 legal stages, all in the random set, hazards off), written on the character select; casual also clears the strike table |
+| Legal stages | Random Stage Switch: Brawl page `0x04005007` (BF, FD, Delfino, YI, Lylat, Smashville), Melee page `0x00020000` (Pokemon Stadium); FD's bit off while a human player's pick is Ice Climbers (`0x10`): the match's init data (gmGlobalModeMelee +0x98, 0x5C per port: the character select writes each pick there as it is made; the panel's own +0x1B8 is only the hovered character), on the character select and on the way to the fight (a Random character resolved) | the 2024 Proposed list as its preset 3 (`Switch03.rss`) holds it: its first `0xA8` bytes of RSS_EXDATA (`0x8042C4E8`: page 0 the 9 legal stages, all in the random set, hazards off), written on the character select; casual also clears the strike table |
 | Input gate | character select: B; stage select: B; fight: Start | the same, plus the D-pad on the character select (its Code Menu) and L, R and Z on the stage select (alternates, hazards, L+R+A) |
 
-- Casual's Start: Random stage choice skips the stage select, and the game's own RNG (in memory,
-  the same on both machines) picks from the legal list. Project+'s random never repeats the last
+- Casual's Start: Random stage choice skips the stage select (two frames in scSelStage), and the
+  game's own RNG (in memory, the same on both machines) picks from the legal list. Probed: the
+  Brawl page's Smashville bit alone gave stage 0x21 (Smashville), the Melee page's 0x00020000 alone
+  0x2E (Pokemon Stadium). Project+'s random never repeats the last
   stage (its own rule).
-- No B on the character select: holding B is the way back to the menus. Nothing needs B to pick.
+- No way back to the menus: sqVsMelee::setNext's state 5 takes the character select's result and
+  sends anything but "go on" to state 16, the menu. A toggled group (`RSBE01.patches`,
+  `PPLUS32.patches`, conditions on the header's magic and mode) flips that one store to state 4,
+  the character select again, the way the stage select's B comes back to it: the BACK button (and
+  held B) reload the character select instead (checked under the harness: A on BACK with
+  `ORCA_TEST_QUEUE=casual` brings back a fresh character select; without it, the menu). The gate
+  also takes B away on the character select, so held B does nothing at all. Nothing needs B to
+  pick. Project+'s own hooks in sqVsMelee (MusicSelect, SSSButtons, css.asm) are elsewhere.
 - Pause off: Brawl's rule, and no Start in a fight for Project+'s hold-Start pause.
 - The rules screen still opens, but whatever is changed there goes back at the next boundary.
 
 ### Ranked's character select timer and stalls
 
-- **No-ready timer** (block `+0xC0`): before the set's first fight, once one human panel has a
-  character and another doesn't, 60 s; then that port is the no-show (`+0xC2`). OnlineMatch reads
+- **No-ready timer** (block `+0xC0`): before the set's first fight, with ports 1 and 2 plugged in
+  (block `+0xC4`, written from the synced ports at every boundary), once one of them has picked
+  and the other hasn't, 60 s; then that port is the no-show (`+0xC2`). OnlineMatch reads
   it at final frames (`Rules::ConfirmNoShow`): the no-show's own Orca leaves the room (bye reason
   `no-show`), which the room awards as a forfeit; the other waits there for the verdict. Later games
   keep their characters, so no timer.
