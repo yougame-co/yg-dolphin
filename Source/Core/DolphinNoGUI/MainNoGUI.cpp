@@ -24,6 +24,8 @@
 #include "Common/CommonPaths.h"
 #include "Common/FileUtil.h"
 #include "Common/IniFile.h"
+#include "Common/Logging/Log.h"
+#include "Common/Logging/LogManager.h"
 #include "Common/MsgHandler.h"
 #include "Common/ScopeGuard.h"
 #include "Common/StringUtil.h"
@@ -429,6 +431,18 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
   UICommon::SetUserDirectory(user_directory);
   UICommon::CreateDirectories();
   UICommon::Init();
+  // Embedded in the YouGame app, the netplay and rollback logs are on by default at INFO (the
+  // console listener's lines reach stderr, which the app writes to the game's log): a player's
+  // report then says what the room, the direct links and the online match did. Small: a few lines
+  // per room event and one stats line every 30 s. A Logger.ini that asks for more keeps it.
+  if (embed.enabled)
+  {
+    auto* const logs = Common::Log::LogManager::GetInstance();
+    logs->SetEnable(Common::Log::LogType::NETPLAY, true);
+    logs->SetEnable(Common::Log::LogType::ROLLBACK, true);
+    if (logs->GetEffectiveLogLevel() < Common::Log::LogLevel::LINFO)
+      logs->SetConfigLogLevel(Common::Log::LogLevel::LINFO);
+  }
 #ifdef ORCA_MACOS_BUNDLE
   // The local controller is port 1: until the player has their own mapping, the keyboard and the
   // first SDL gamepad (Sys/Orca/Input/GCPadNew.ini).
