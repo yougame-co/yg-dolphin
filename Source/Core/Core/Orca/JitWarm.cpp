@@ -66,6 +66,11 @@ constexpr int LATE_BUDGET_US = 1000;
 // JIT compiles 200 blocks in 8 ms (Jit64 on Luis's PC) is behind by ~12,000 blocks there, a
 // 374 ms frame. Paced, the loading frames run longer instead (the loading image is still).
 constexpr int LEAD = 3;
+// The most one boundary's first sweep may take, pace or not: a sweep that fell behind (boundaries
+// where the JIT had no room) catches up over several frames instead of in one long frame during
+// play. The PC's paced Project+ loading frames take 30-38 ms; this leaves room for a host at
+// ~2.5 times its ~40 us a block.
+constexpr int MAX_SWEEP_US = 100'000;
 // The JIT's room at a match's first frame (JitBase::ReserveForBlocks): a process's first match
 // compiles its whole start (Brawl ~30,000 blocks, Project+ ~28,000, listed or not); a later one
 // little, its blocks still there (2,700 with a stage and a fighter the first never loaded).
@@ -581,9 +586,11 @@ void State::Warm(const Core::CPUThreadGuard& guard)
   // other blocks still not in RAM, during play.
   const auto deadline =
       start + std::chrono::microseconds(m_sweeps == 0 ? m_budget_us : LATE_BUDGET_US);
-  // The first sweep gets at least this far, past the budget if it must (LEAD above).
+  // The first sweep gets at least this far, past the budget if it must (LEAD above), but never
+  // past MAX_SWEEP_US.
   const std::size_t must_reach =
       m_sweeps == 0 ? PacedTarget(m_due, m_cursor, m_match_frame, LEAD) : m_cursor;
+  const auto hard_deadline = start + std::chrono::microseconds(std::max(m_budget_us, MAX_SWEEP_US));
   bool compiled_here = false;
   const int compiled_before = m_compiled, discarded_before = m_discarded;
   const std::size_t cursor_before = m_cursor;
@@ -600,8 +607,11 @@ void State::Warm(const Core::CPUThreadGuard& guard)
       ++m_sweeps;
       break;
     }
-    if (m_cursor >= must_reach && std::chrono::steady_clock::now() >= deadline)
+    if (const auto now = std::chrono::steady_clock::now();
+        now >= hard_deadline || (m_cursor >= must_reach && now >= deadline))
+    {
       break;
+    }
     const u32 index = m_queue[m_cursor];
     const Block& b = m_known[index];
     Status& status = m_status[index];

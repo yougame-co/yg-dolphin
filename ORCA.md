@@ -1178,8 +1178,9 @@ characters, the stage, the countdown's effects). Orca sessions force (`Orca/Prof
   worst was 51.6 ms with the skip and 3,012 ms without it.
 - **FXC's output kept across builds** (`D3DCommon/FxcCache.*`, D3D11 and D3D12, whenever Dolphin's
   shader cache setting is on). `Cache/Shaders/D3D-fxc.cache` maps a SHA-1 of exactly what FXC is
-  given (a SHA-1 of `d3dcompiler_47.dll`'s bytes, the target, the flags, the macros and the HLSL
-  text) to the DXBC it returned. FXC is a pure function of that input, so a build whose shader
+  given (a SHA-1 of `d3dcompiler_47.dll`'s bytes, the entry point, the target, the flags, the
+  macros and the HLSL text; `Shader.cpp` passes no source name, include handler or second flags)
+  to the DXBC it returned. FXC is a pure function of that input, so a build whose shader
   generators and GLSL-to-HLSL path write the same text gets its shaders without compiling; any
   change to the text, the flags or the compiler is another key, so a binary is only ever used for
   the compile that made it. Each record also carries a SHA-1 of its key and DXBC: a torn or
@@ -1191,7 +1192,10 @@ characters, the stage, the countdown's effects). Orca sessions force (`Orca/Prof
   or more ("Orca: FXC compiled a ps_5_0 in N ms (K KB of HLSL, from GLSL in M ms; ...)") and, at
   shutdown, "Orca: FXC cache: R shaders read from ..., F compiles found there, A compiled and
   added". `ORCA_TEST_FXC_FLAGS=<hex>` replaces FXC's `D3DCOMPILE_*` flags (rendering only, not in
-  the lobby key), to time other optimization levels.
+  the lobby key), to time other optimization levels. `FxcCacheTest` (every platform: elsewhere
+  the test builds `FxcCache.cpp` itself) checks that each of those inputs changes the key, that a
+  torn last record keeps the records before it and the file is written again from them, and that
+  a changed byte in a record's key or DXBC is never returned under any key, nor anything after it.
 
 Rendering only: nothing drawn reaches RAM (EFB/XFB copies stay on the GPU, EFB access and bbox are
 off), so none of this can make two players' games differ.
@@ -1265,6 +1269,27 @@ match in the same process compiles little (its blocks are still there).
   a while after it: Brawl through frame ~169, Project+ through frame 27 (the stage from 28). On the
   M4 the warm-up takes 37 frames (Brawl, 30,000 blocks) and 35 (Project+, 28,000), the blocks the
   stage's first frames run first.
+- **Orca's own list for a player without one** (`Data/Sys/Orca/RSBE01.jitwarm`,
+  `PPLUS32.jitwarm`; `SeedPath`). A first install, or the first match after an update from 0.3.8
+  or before, has no `Cache/<profile>.jitwarm`, and that match compiled its whole start itself: on
+  Luis's PC (0.3.9 on a copy of his 0.3.8 folder) Brawl's first match froze 160, 117 and 326 ms
+  where the stage appears, 2.9-3.2 s after scMelee (R-A-bf-1). Orca ships a list for each game,
+  recorded from the reference matches with `ORCA_JITWARM_SEED=0` on a fresh user folder: Brawl
+  `Tools/orca/inputs/bf-two-new.txt` (Mario vs Link on Battlefield, then Mario vs Donkey Kong on
+  Final Destination: 32,625 blocks), Project+ `pplus-1v1.txt` (28,054). The x86-64 build under
+  Rosetta and the arm64 build record the same bytes, and either JIT compiles the other's list with
+  nothing discarded. The warm-up reads it only when the player's own file is missing or doesn't
+  read, and treats it like the player's own: a block whose words aren't this game's in RAM is never
+  compiled (another fighter's or stage's code waits and is compiled at its first run, as before),
+  and after the first match the player's own list replaces it. The log says so: "JIT warm-up: no
+  list of this player's yet; Orca's <path> (N blocks)". `ORCA_JITWARM_SEED=0` turns it off.
+  Re-record both after a change to the games' patches, the scene detection or how the JIT splits
+  blocks (a stale list only finds fewer blocks in RAM), on a fresh folder each:
+  `ORCA_SESSION=1 YG_SCENES=1 ORCA_JITWARM_SEED=0 YG_INPUT=Tools/orca/inputs/bf-two-new.txt
+  YG_EXIT_AFTER=11500 <Orca> -p headless -v Null -u <fresh> -e <Brawl rev 2>` and, for Project+,
+  `ORCA_PROFILE=PPLUS32 YG_INPUT=.../pplus-1v1.txt YG_EXIT_AFTER=1150` with `-C
+  Dolphin.Core.DefaultISO=<Brawl> -e <Project+ Netplay Launcher.dol>`; copy `<fresh>/Cache/*.jitwarm`
+  into `Data/Sys/Orca`.
 - **Paced by the recorded frames** (`PacedTarget`). Each block is due by the boundary 3 frames
   before the frame the recorded match first ran it (`when`, the earliest over the matches seen),
   and the first sweep goes past the 8 ms as far as the most pressing deadline needs, its blocks

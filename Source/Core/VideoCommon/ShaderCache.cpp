@@ -292,9 +292,11 @@ void ShaderCache::WaitForBootCompile()
   const Pending first = pending();
   const size_t total = first.specialized + first.uber;
   Pending left = first;
+  // The total never shrinks between lines (stages queued after the first count raise it).
+  size_t max_units = first.Sum();
   const auto progress = [&] {
-    const size_t units = std::max(first.Sum(), left.Sum());
-    return std::pair{units - left.Sum(), units};
+    max_units = std::max(max_units, left.Sum());
+    return std::pair{max_units - left.Sum(), max_units};
   };
   auto next_line = start + SHOW_AFTER;
   bool said = false;

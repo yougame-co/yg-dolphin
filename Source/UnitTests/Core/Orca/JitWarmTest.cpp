@@ -1,9 +1,13 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <filesystem>
+#include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
+
+#include "Common/FileUtil.h"
 
 #include "Core/Orca/JitWarm.h"
 
@@ -170,4 +174,27 @@ TEST(OrcaJitWarm, PacedTargetMeetsEveryDeadline)
   EXPECT_EQ(PacedTarget({}, 0, 5, LEAD), 0u);
   // Brawl's shape (30,000 by frame 165) asks little of each boundary: the budget does the rest.
   EXPECT_EQ(PacedTarget(std::vector<std::pair<int, std::size_t>>{{165, 30'000}}, 0, 0, LEAD), 185u);
+}
+
+// The lists Orca ships for a player without one (Data/Sys/Orca/<profile>.jitwarm, JitWarm.cpp
+// SeedPath): they read (checksum, format), hold a match's start, and are in `when` order
+// enough to pace (some block first run in the loading frames).
+TEST(OrcaJitWarm, ShippedSeedListsRead)
+{
+  // The source tree's Data/Sys/Orca, found from this file (tests run from the build directory).
+  const auto dir = std::filesystem::path(__FILE__).parent_path() / "../../../../Data/Sys/Orca";
+  for (const char* name : {"RSBE01.jitwarm", "PPLUS32.jitwarm"})
+  {
+    std::string bytes;
+    ASSERT_TRUE(File::ReadFileToString((dir / name).string(), bytes)) << name;
+    const auto blocks =
+        Orca::JitWarm::Decode(std::span(reinterpret_cast<const u8*>(bytes.data()), bytes.size()));
+    ASSERT_TRUE(blocks.has_value()) << name;
+    EXPECT_GT(blocks->size(), 20'000u) << name;
+    EXPECT_LE(blocks->size(), Orca::JitWarm::MAX_BLOCKS) << name;
+    bool early = false;
+    for (const Block& b : *blocks)
+      early = early || b.when < 30;
+    EXPECT_TRUE(early) << name;
+  }
 }
