@@ -61,6 +61,14 @@ constexpr std::size_t MAX_BLOCKS = 200'000;
 std::vector<Block> Merge(std::vector<Block> known, const std::vector<bool>& seen,
                          std::vector<Block> learned);
 
+// The first sweep's pace (JitWarm.cpp, LEAD): `due` lists, in queue order, each first-run frame
+// (`when`) and the queue index past its last block; the sweep is at `cursor` at the boundary before
+// frame `frame`. Returns how far it must get at this boundary so that each block is passed by the
+// boundary `lead` frames before its `when`, every deadline's remaining blocks spread evenly over
+// the boundaries left to it (all of them now once it has passed).
+std::size_t PacedTarget(std::span<const std::pair<int, std::size_t>> due, std::size_t cursor,
+                        int frame, int lead);
+
 // Every block the JIT finishes (JitBaseBlockCache::FinalizeBlock). Recorded during a match's first
 // RECORD_FRAMES frames, never while warming.
 void OnBlockFinalized(const JitBlock& block);
