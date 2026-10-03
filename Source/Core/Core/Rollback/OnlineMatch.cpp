@@ -1787,7 +1787,7 @@ std::optional<int> Boundary(Core::System& system,
     const int stalls_before = match.session->GetStats().stalls;
     const int running_before = match.running;
     const Orca::Net::Step step = StepSession(
-        *match.session, *match.port, match.running, local_pad(match.local_seat),
+        *match.session, *match.port, match.running, [&] { return local_pad(match.local_seat); },
         [&] {
           const auto now = Clock::now();
           if (now - stall_published > std::chrono::milliseconds(10))

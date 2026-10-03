@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <climits>
 #include <deque>
 #include <functional>
@@ -31,6 +32,17 @@
 #include "Core/Orca/Session/PadCodec.h"
 #include "Core/Orca/Session/Session.h"
 #include "Core/Orca/Session/YouGameRoom.h"
+
+namespace Rollback
+{
+// Core/Rollback/SessionPort.h's: that header's includes bring in Common's `Config` namespace, which
+// would clash with this file's Config.
+Orca::Net::Step StepSession(Orca::Net::Session& session, Orca::Net::Game& game, int completed_frame,
+                            const std::function<Orca::Net::Pad()>& sample_local,
+                            const std::function<bool()>& stopping,
+                            std::chrono::microseconds stall_wait,
+                            std::chrono::milliseconds give_up_after = {}, bool* gave_up = nullptr);
+}  // namespace Rollback
 
 using namespace Orca::Net;
 
@@ -1297,6 +1309,98 @@ TEST(OrcaSessionTimeSync, FastSideWaits)
               Player::TickOf(ta.game.m_ran_pads.at(f - 1)[1]) + 1)
         << "frame " << f;
   }
+}
+
+// The same through Rollback::StepSession, which OnlineMatch and the harness call: a time-sync wait
+// holds the boundary for a frame period inside the call, and the frame it held plays the pad read
+// after the wait, not the one read before it.
+TEST(OrcaSessionTimeSync, StepSessionReadsThePadAgainAfterAWait)
+{
+  Config config;
+  config.max_delay = config.input_delay;  // keep the delay out of it
+  config.time_sync = true;
+  Match match(config, 3, 1);
+  for (Player* p : {match.a.get(), match.b.get()})
+    p->tag_ticks = true;
+  Player& a = *match.a;
+  Player& b = *match.b;
+  struct Held
+  {
+    int frame;
+    int tick_after;  // the tick whose pad the session read after the wait
+  };
+  std::vector<Held> held;
+  // A's boundaries go through StepSession. Its wait sleeps a frame period and reads the pad again:
+  // the next tick's. A then skips that tick, as Player::Tick gives one back on a Wait.
+  bool skip_next = false;
+  const auto step_a = [&](int tick) {
+    if (std::exchange(skip_next, false))
+      return;
+    for (int guard = 0; guard < 64; ++guard)
+    {
+      const int frame = a.session.CurrentFrame();
+      const int waits_before = a.session.GetStats().waits;
+      int reads = 0;
+      int asked = 0;
+      const Step step = Rollback::StepSession(
+          a.session, a.game, a.completed, [&] { return a.LocalPad(tick + reads++); },
+          // Asked once per Wait (counted before it returns) and once per Stall poll. A stall can't
+          // end inside the call (the network moves between ticks): end it, try next tick.
+          [&] { return ++asked > a.session.GetStats().waits - waits_before; },
+          std::chrono::microseconds{0});
+      if (a.session.GetStats().waits > waits_before)
+      {
+        held.push_back({frame, tick + 1});
+        skip_next = true;
+      }
+      if (step.kind == StepKind::Ended)
+      {
+        ASSERT_TRUE(a.session.Error().empty()) << a.session.Error();
+        return;
+      }
+      const bool new_frame = step.kind == StepKind::Run && !a.session.Resimulating();
+      a.completed = a.game.Run();
+      if (new_frame)
+        return;
+    }
+    FAIL() << "too many boundaries in one tick";
+  };
+  std::mt19937 rtt_rng{99};
+  for (int t = 0; t < 1200; ++t)
+  {
+    match.net.now = t;
+    if (t % 30 == 0)
+    {
+      for (Player* p : {&a, &b})
+      {
+        const int rtt = match.net.latency + Uniform(rtt_rng, 0, match.net.jitter);
+        p->session.OnRoundTrip(rtt * 1000 / 60);
+      }
+    }
+    step_a(t);
+    b.Tick(t);
+    // A's clock runs 2.5% fast: one extra frame every 40 ticks.
+    if (t % 40 == 39)
+      step_a(t);
+  }
+  ExpectClean(match);
+  EXPECT_GT(match.CompareConfirmed(), 1000);
+  EXPECT_GT(a.session.GetStats().waits, 5);
+  EXPECT_EQ(static_cast<int>(held.size()), a.session.GetStats().waits);
+  int checked = 0;
+  const int delay = config.input_delay;
+  for (const Held& h : held)
+  {
+    if (h.frame + delay > Settled(b))
+      continue;
+    // What B ran for A's seat: the read after the wait. Before StepSession read again it was the
+    // read from the tick before (a frame older), which the tags tell apart.
+    const Pad ran = b.game.m_ran_pads.at(h.frame + delay)[0];
+    EXPECT_EQ(Player::TickOf(ran), h.tick_after) << "wait at frame " << h.frame;
+    EXPECT_EQ(ran, a.LocalPad(h.tick_after)) << "wait at frame " << h.frame;
+    ++checked;
+  }
+  EXPECT_GT(checked, 5);
 }
 
 TEST(OrcaSessionTimeSync, UnequalRelayRoundTrips)

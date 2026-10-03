@@ -86,8 +86,13 @@ private:
 // after a Rollback the state is the start of step.frame), or Ended (Session::Error says why;
 // stopping also ends with Ended). A stall or wait that lasts longer than `give_up_after` of wall
 // time (zero: never) also ends with Ended and sets *gave_up: the other side stopped answering.
-Orca::Net::Step StepSession(Orca::Net::Session& session, RingPort& port, int completed_frame,
-                            const Orca::Net::Pad& local_pad, const std::function<bool()>& stopping,
+// `sample_local` reads the local pad: once, and again after each wait, so the frame that runs after
+// a wait plays the pad as it is then, not one a frame old (the session decides a wait before it
+// samples). A stall's retries pass the first sample again: the session keeps a frame's first one.
+// `game` is the session's Game (the RingPort in a match).
+Orca::Net::Step StepSession(Orca::Net::Session& session, Orca::Net::Game& game, int completed_frame,
+                            const std::function<Orca::Net::Pad()>& sample_local,
+                            const std::function<bool()>& stopping,
                             std::chrono::microseconds stall_wait,
                             std::chrono::milliseconds give_up_after = {}, bool* gave_up = nullptr);
 }  // namespace Rollback
