@@ -486,18 +486,16 @@ void Draw()
   if (!search.empty())
   {
     // Top centre, clear of the circle and the meter in the top-left corner.
-    const float size = 3.6f * unit;
+    const float size = 3.0f * unit;
     const ImVec2 s = TextSize(size, search);
-    float line_y = screen.y * 0.04f;
+    float line_y = margin;
+    OutlinedText(dl, size, ImVec2((screen.x - s.x) / 2, line_y), 1, search);
     if (!search_note.empty())
     {
-      const float note_size = 2.8f * unit;
-      const ImVec2 n = TextSize(note_size, search_note);
-      OutlinedText(dl, note_size, ImVec2((screen.x - n.x) / 2, line_y), 1, search_note,
-                   Signal::Ok);
-      line_y += n.y + 0.5f * unit;
+      line_y += s.y + 0.5f * unit;
+      const ImVec2 n = TextSize(size, search_note);
+      OutlinedText(dl, size, ImVec2((screen.x - n.x) / 2, line_y), 1, search_note, Signal::Ok);
     }
-    OutlinedText(dl, size, ImVec2((screen.x - s.x) / 2, line_y), 1, search);
   }
 }
 }  // namespace

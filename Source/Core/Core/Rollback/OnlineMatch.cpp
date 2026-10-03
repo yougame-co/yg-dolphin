@@ -217,6 +217,8 @@ struct Match
   // "Matchmaking"): this game stays in it, solo, until the room's verdict closes it or this time
   // passes, then opens a room of its own.
   std::optional<Clock::time_point> linger_until;
+  // Host: the app heard that the opponent went ("friend-left <why>"), since they joined.
+  bool friend_left_told = false;
 };
 
 // Desyncs this process saw, every match (the stats line's "ds").
@@ -571,7 +573,10 @@ void DropFriends(Match& match, const std::string& reason, bool announce = true)
   if (reason == "desync")
     Orca::Online::ReportDesync();
   if (announce)
+  {
     Orca::Status::State("friend-left " + reason);
+    match.friend_left_told = true;
+  }
 }
 
 void GoSolo(Match& match, const char* why, const char* state = "playing")
@@ -683,6 +688,10 @@ void AfterFriendsGone(Match& match)
   const std::string queue = Orca::Online::RoomQueue();
   if (queue == "private" || Orca::Online::RoomEnded() || match.linger_until)
     return;
+  // The opponent unplugged (its own leave, at a frame both agreed): the app hears it now, since
+  // this game won't be in the room to hear the room say so.
+  if (!std::exchange(match.friend_left_told, true))
+    Orca::Status::State("friend-left left");
   if (queue == "ranked" && Orca::Online::MatchLive())
   {
     NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: the opponent went mid-set: waiting for the room's verdict");
@@ -863,7 +872,11 @@ void HostEvents(Core::System& system, Match& match)
         Orca::Online::SetOpponentPlugged(false);
       // The app hears why a friend went (its bye: "desync", "stalled"), as the friend's own does.
       if (was_waiting || was_playing)
-        Orca::Status::State("friend-left " + (event.reason.empty() ? std::string("left") : event.reason));
+      {
+        Orca::Status::State("friend-left " +
+                            (event.reason.empty() ? std::string("left") : event.reason));
+        match.friend_left_told = true;
+      }
     }
   }
   if (Orca::Online::TakePrepareJoin())
@@ -2115,6 +2128,7 @@ std::optional<int> Boundary(Core::System& system,
             match.plugging.empty() && match.waiting.empty())
         {
           Orca::Status::State("friend-joined");
+          match.friend_left_told = false;
           // A matchmade room's match may begin (YouGameRoom); the search is over.
           Orca::Online::SetOpponentPlugged(true);
           Orca::UX::Search::End();

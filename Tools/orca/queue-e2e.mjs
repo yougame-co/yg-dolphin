@@ -53,8 +53,11 @@ const SITE = (opt("--site", "https://yougame.co") || "").replace(/\/$/, "");
 const SLUG = opt("--slug");
 const KEEP = argv.includes("--keep");
 const ALARM = Number(opt("--alarm", "900"));
-// match (default): the whole flow. cancel: one Orca picks, then backs out of the character select
-// while searching (`orca menu cancel`).
+// match (default): the whole flow (ranked: a set; casual: --games games, then the joiner leaves).
+// cancel: one Orca picks, then backs out of the character select while searching
+// (`orca menu cancel`). forfeit (ranked): after game 1 the joiner's connection drops, and the host
+// wins the set by forfeit. rehost (casual): after a game and the joiner's leave, the former joiner
+// queues first, hosts from port 1, and they play another game.
 const SCENARIO = opt("--scenario", "match");
 // --shots <every>: the first Orca renders with Metal and saves a screenshot every that many frames
 // (its user folder's ScreenShots), from --shots-from (default 1500).
@@ -274,6 +277,13 @@ class Side {
     };
     if (!SLUG) env.ORCA_TEST_KEYFRAME_DIR = path.join(WORK, "kf");
     if (PPLUS) env.ORCA_PROFILE = "PPLUS32";
+    const shots = SHOTS && this.name === "ada";
+    if (shots)
+      Object.assign(env, {
+        YG_SHOT_EVERY: SHOTS,
+        YG_SHOT_FROM: SHOTS_FROM,
+        ORCA_TEST_PRESENT: "640x528",
+      });
     const args = [
       "-n",
       "10",
@@ -286,7 +296,7 @@ class Side {
       "-u",
       user,
       "-v",
-      "Null",
+      shots ? "Metal" : "Null",
       "-C",
       "Dolphin.DSP.Backend=No Audio Output",
       "-C",
@@ -295,6 +305,8 @@ class Side {
       "Logger.Logs.ROLLBACK=True",
       "-C",
       "Logger.Logs.NETPLAY=True",
+      "-C",
+      "Logger.Logs.CONTROLLERINTERFACE=True",
       "-C",
       "Logger.Options.Verbosity=3",
       "-C",
@@ -484,10 +496,11 @@ async function menuToQueue(side, queue) {
 }
 
 // The page's queue for one side: a queue ticket, /match, then host or join.
-async function queueUp(side, queue, onMatched) {
+async function queueUp(side, queue, from = 0) {
   const menu = await side.expect(
     /^orca menu (online (casual|ranked|friends)( local)?|cancel)$/,
     60000,
+    from,
   );
   if (menu.m[3])
     fail(`${side.name}: "${menu.line}": Orca says local with host on`);
@@ -649,6 +662,59 @@ async function cancelScenario() {
 }
 
 const sides = [];
+
+// Both sides pick in the menu (`first` picks first, so it waits longest and gets slot 0, the host),
+// queue, and meet in the matched room: the host's `friend-joined`, the joiner's `playing`.
+async function meet(first, second, queue, pick) {
+  const from = [first.lines.length, second.lines.length];
+  const queued = [];
+  await pick(first);
+  queued.push(queueUp(first, queue, from[0]));
+  await sleep(6000);
+  await pick(second);
+  queued.push(queueUp(second, queue, from[1]));
+  const [m1, m2] = await Promise.all(queued);
+  if (m1.room !== m2.room) fail(`matched into different rooms: ${m1.room} ${m2.room}`);
+  const host = m1.slot === 0 ? first : second;
+  const joiner = host === first ? second : first;
+  log(`host ${host.name}, joiner ${joiner.name}, room ${m1.room}`);
+  const hostFrom = host.lines.length;
+  await Promise.all([hostOrJoin(first, m1.room, m1.slot), hostOrJoin(second, m2.room, m2.slot)]);
+  await host.expect(/^orca state friend-joined$/, 120000, hostFrom);
+  if (host.lines.slice(hostFrom).some((l) => l === "unsupported host")) fail("unsupported host");
+  return { host, joiner, room: m1.room };
+}
+
+// Both printed the same verdicts, each from its own side, and no errors.
+function sameVerdicts(host, joiner, fromHost = 0, fromJoiner = 0) {
+  const ga = host.results.slice(fromHost),
+    gb = joiner.results.slice(fromJoiner);
+  if (ga.length !== gb.length)
+    fail(`${ga.length} result lines on the host, ${gb.length} on the joiner`);
+  for (let i = 0; i < ga.length; ++i)
+    if (!mirrored(ga[i], gb[i]))
+      fail(`result ${i + 1} differs: ${JSON.stringify(ga[i])} / ${JSON.stringify(gb[i])}`);
+  return ga.length;
+}
+
+function noErrors(sides, allowed = /^$/) {
+  for (const s of sides) {
+    const errors = s.lines.filter(
+      (l) => l && l.startsWith("orca error ") && !allowed.test(l),
+    );
+    if (errors.length) fail(`${s.name}: ${errors.join("; ")}`);
+  }
+}
+
+// Back out of the character select to the With Anyone page (the cursor comes back on the pick),
+// then pick it again.
+async function pickAgain(side) {
+  await side.press("B", 2500);
+  await side.waitScene("muMenuMain", 30000);
+  await sleep(3000);
+  await side.press("A");
+}
+
 async function main() {
   if (SCENARIO === "cancel") return cancelScenario();
   const a = new Side("ada", opt("--cookie-a"), opt("--id-a"));
@@ -656,43 +722,43 @@ async function main() {
   sides.push(a, b);
   for (const s of [a, b]) await s.startBridge();
   log(
-    `work ${WORK}; ${SLUG ? `listing ${SLUG} on ${SITE}` : `dev game ${DEV_GAME}`}; ${QUEUE}`,
+    `work ${WORK}; ${SLUG ? `listing ${SLUG} on ${SITE}` : `dev game ${DEV_GAME}`}; ${QUEUE}; ${SCENARIO}`,
   );
   a.start();
   await sleep(4000);
   b.start();
   for (const s of [a, b]) {
     await s.expect(/^orca caps .*\bhost\b/, 120000);
-    if (
-      QUEUE === "ranked" &&
-      !s.lines.some((l) => l && /^orca caps .*\bresults\b/.test(l))
-    )
+    if (QUEUE === "ranked" && !s.lines.some((l) => l && /^orca caps .*\bresults\b/.test(l)))
       fail(`${s.name}: Orca offers no results for this profile`);
     s.send("caps join leave stats pause delay perf direct host results");
   }
-  // Ada picks first, so she waits longest and gets slot 0 (the host).
-  const queued = [];
-  await menuToQueue(a, QUEUE);
-  queued.push(queueUp(a, QUEUE));
-  await sleep(6000);
-  await menuToQueue(b, QUEUE);
-  queued.push(queueUp(b, QUEUE));
-  const [ma, mb] = await Promise.all(queued);
-  if (ma.room !== mb.room)
-    fail(`matched into different rooms: ${ma.room} ${mb.room}`);
-  const host = ma.slot === 0 ? a : b;
-  const joiner = host === a ? b : a;
-  log(`host ${host.name}, joiner ${joiner.name}, room ${ma.room}`);
-  const hostFrom = host.lines.length;
-  await Promise.all([
-    hostOrJoin(a, ma.room, ma.slot),
-    hostOrJoin(b, mb.room, mb.slot),
-  ]);
-  await host.expect(/^orca state friend-joined$/, 120000, hostFrom);
-  if (host.lines.slice(hostFrom).some((l) => l === "unsupported host"))
-    fail("unsupported host");
+  const { host, joiner, room } = await meet(a, b, QUEUE, (s) => menuToQueue(s, QUEUE));
 
-  const wantGames = QUEUE === "ranked" ? 2 : GAMES;
+  // A host with its opponent plugged in refuses another `host`.
+  {
+    const from = host.lines.length;
+    host.send("host zz22zz22");
+    await host.expect(/^unsupported host$/, 10000, from);
+  }
+
+  if (SCENARIO === "forfeit") {
+    if (QUEUE !== "ranked") fail("forfeit is a ranked scenario");
+    await playGame(host, joiner, true);
+    await host.expect(/^orca result \{"q":"ranked","k":"game","n":1/, 30000);
+    // The joiner's connection drops mid-set (as a network failure): the room awards the set to the
+    // host after 15 s, which waits in the room for it.
+    joiner.send("test-drop-room");
+    const set = await host.expect(/^orca result (\{"q":"ranked","k":"set".*)$/, 60000);
+    const r = JSON.parse(set.m[1]);
+    if (r.out !== "won" || r.by !== "forfeit") fail(`the set: ${set.m[1]}`);
+    await host.expect(/^orca state friend-left match-over$/, 30000);
+    noErrors([host], /^$/);
+    log("PASS: the opponent dropped mid-set: the host won the set by forfeit");
+    return;
+  }
+
+  const wantGames = QUEUE === "ranked" ? 2 : SCENARIO === "rehost" ? 1 : GAMES;
   for (let g = 0; g < GAMES; ++g) {
     await playGame(host, joiner, g === 0);
     const games = host.results.filter((r) => r.k === "game").length;
@@ -707,29 +773,33 @@ async function main() {
     await joiner.expect(/^orca state host-left match-over$/, 30000);
     // The host's next room is a fresh one of its own, never the closed code.
     await sleep(4000);
-    const fresh = host.ownRooms.filter((r) => r !== ma.room);
-    if (!fresh.length) fail("the host opened no room of its own after the set");
+    if (!host.ownRooms.some((r) => r !== room))
+      fail("the host opened no room of its own after the set");
   } else {
     const from = host.lines.length;
     joiner.send("leave");
     await host.expect(/^orca state friend-left /, 60000, from);
   }
+  const n = sameVerdicts(host, joiner);
+  noErrors([a, b]);
 
-  // Both printed the same verdicts, each from its own side.
-  const ga = host.results,
-    gb = joiner.results;
-  if (ga.length !== gb.length)
-    fail(`${ga.length} result lines on the host, ${gb.length} on the joiner`);
-  for (let i = 0; i < ga.length; ++i)
-    if (!mirrored(ga[i], gb[i]))
-      fail(
-        `result ${i + 1} differs: ${JSON.stringify(ga[i])} / ${JSON.stringify(gb[i])}`,
-      );
-  for (const s of [a, b]) {
-    const errors = s.lines.filter((l) => l && l.startsWith("orca error "));
-    if (errors.length) fail(`${s.name}: ${errors.join("; ")}`);
+  if (SCENARIO === "rehost") {
+    // The former joiner (port 2, no room of its own) queues first this time: it hosts, moving to
+    // port 1, and the former host joins it.
+    await sleep(3000);
+    const hostResults = joiner.results.length,
+      joinerResults = host.results.length;
+    const next = await meet(joiner, host, QUEUE, pickAgain);
+    if (next.host !== joiner) fail("the former joiner did not get slot 0");
+    await playGame(next.host, next.joiner, true);
+    await next.host.expect(/^orca result \{"q":"casual","k":"game","n":1/, 60000);
+    await next.joiner.expect(/^orca result \{"q":"casual","k":"game","n":1/, 60000);
+    sameVerdicts(next.host, next.joiner, hostResults, joinerResults);
+    noErrors([a, b]);
+    log(`PASS: ${n} verdicts, then the former joiner hosted the next match from port 1`);
+    return;
   }
-  log(`PASS: ${ga.length} verdicts, the same on both sides`);
+  log(`PASS: ${n} verdicts, the same on both sides`);
 }
 
 let code = 0;
