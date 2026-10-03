@@ -53,18 +53,19 @@ bool Pointer(const GuestMemory& m, u32 p)
   return p % 4 == 0 && m.Valid(p);
 }
 
-// The order is on for this set, game and character select (the step machine's and the gate's
-// shared condition, so the gate never acts on a state the machine would clear).
-bool Applies(const SetView& set, const CssView& css)
+// The set has an order on the game about to be played.
+bool SetApplies(const SetView& set)
 {
-  return css.on_css && set.ruleset != Ruleset::None && set.game >= 2 && set.game <= 0xFF &&
-         (set.last_winner == 0 || set.last_winner == 1) && css.ports[0].human &&
-         css.ports[1].human;
+  return set.ruleset != Ruleset::None && set.game >= 2 && set.game <= 0xFF &&
+         (set.last_winner == 0 || set.last_winner == 1);
 }
 
+// The state is this game's order (the step machine's and the gate's shared condition, so the gate
+// never acts on a state the machine would clear). Once begun, the order holds even if a player's
+// area stops being a human's for a while (the player-type button), so it never starts over.
 bool Active(const SetView& set, const CssView& css, const State& state)
 {
-  return Applies(set, css) && state.step != Step::Idle && state.game == set.game &&
+  return css.on_css && SetApplies(set) && state.step != Step::Idle && state.game == set.game &&
          state.first == set.last_winner;
 }
 
@@ -103,13 +104,15 @@ State Advance(const SetView& set, const CssView& css, const State& state, int fr
 {
   if (!css.on_css)
     return state;
-  if (!Applies(set, css))
+  if (!SetApplies(set))
     return state == State{} ? state : State{};
-  if (state.step == Step::Idle || state.game != set.game || state.first != set.last_winner)
+  if (!Active(set, css, state))
   {
-    // A new game's character select: the winner first (Project+), both at once (Brawl). No press
-    // counts on this boundary (it was made before the order began), which also keeps a re-run here
-    // writing nothing new.
+    // A new game's character select: the winner first (Project+), both at once (Brawl), once both
+    // players have joined. No press counts on this boundary (it was made before the order began),
+    // which also keeps a re-run here writing nothing new.
+    if (!css.ports[0].human || !css.ports[1].human)
+      return state == State{} ? state : State{};
     return State{static_cast<u8>(set.game),
                  set.ruleset == Ruleset::PPlus ? Step::First : Step::Both,
                  static_cast<u8>(set.last_winner), 0, static_cast<u32>(frame), 0};

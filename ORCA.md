@@ -1815,6 +1815,73 @@ frame 267 on.
 - `ORCA_TEST_GATE=1:START`: Brawl never leaves the character select (port 1's scripted Start never
   reaches the game).
 
+## Character order
+
+A ranked set's later games pick characters in order on the game's own character select
+(`Core/Orca/UX/CharOrder.*`; the ranked rules' Phase 4, Luis's spec of 2026-10-03):
+
+- **Project+** (2024 Recommended, B.6): the previous game's winner picks first; the loser sees that
+  pick and picks second. 45 s each. Then the stage select as the stage tracks run it.
+- **Brawl** keeps the interim order until its stage pick can move before characters: both pick at
+  once on later games, with the same 45 s. Supernova 2025's exact order (the ban, the loser's
+  stage, then the winner may change character, then the loser) needs results -> stage select ->
+  character select -> match, and the Meta Knight clause re-checked once both final characters are
+  known (`MkFreePicker`, unit-tested, not wired).
+- Game 1 has no order (both pick at once, the ranked ready timer applies), and nothing here acts in
+  casual or friends games.
+
+**How it plays.** On the winner's turn the loser's controller does nothing, and the winner can't
+take the token back (B) or go on (Start); A locks the pick in, on a character or anywhere else to
+keep the one the token is on (the tokens stay down from one game's character select to the next).
+Then the loser's turn, the winner's controller doing nothing; A locks in, or Start goes on. When
+both have picked or the time is up, Orca presses Start for the loser, every other frame until the
+screen goes. Brawl: B and Start masked for both, each locks in with A and then can't change, Start
+once both have or the time is up. The overlay's top line says whose turn it is and the time left
+("Ada picks first · 0:42", "Your pick · 0:42 · A locks it in").
+
+A player who picks the token up (A on their own token) and lets the time run out can only move and
+put it down; Orca puts it on the character under the hand if there is one, and presses Start only
+once both tokens are down ("Waiting for Ada to put the token down").
+
+**Determinism.** The state is 16 bytes right after the match block (`kArea` = `0x806F2580`, the
+same dead code of `sqNetAnyOkiraku::setNext`, short of `kMatchBlockLimit`, so the rules tracks' own
+layouts of the block can't collide with it): magic `YGCO`, the game it belongs to, the step, the
+port that picks first, the lock-ins, the hook frame the step began at and the frames into it. The
+frame hook advances it at every boundary, first runs and re-runs (a re-run at the same boundary
+finds its own write and writes nothing new: no press counts on a step's first boundary, and every
+change resets the step's frames to 0), and the input gate's masks and presses come from that
+state and the character select's memory alone. The gate's masks gained a synthesized press
+(`Mask::press`, applied after the mask), which Done uses for Start and the put-down A.
+
+**Where it reads the set.** The match block's header (`YGM1`, version 1, mode 2 ranked, ruleset 1
+Brawl or 2 Project+) and the ranked set's state as the ranked sets track lays it out: the games
+won by ports 1 and 2 (`+0x21`, `+0x22`: the game number is one more than their sum, so a tied game
+keeps its number and its order, which leaves the characters as they were), whether the set is
+decided (`+0x23`) and the last decided game's winner (`+0x25`). `CharOrder::ReadSet` is the only
+reader; another layout changes `CharOrder::Block`.
+
+**Found under the harness** (ORCA_UX_PROBE watches and dumps, Brawl rev 2 and Project+ alike): the
+character select's task is the scene's `+0x400`; player area i (port i) at task `+0x44 + 4 * i`:
+
+| Offset | What |
+|---|---|
+| `+0x0C` | u32 buttons held (PAD bits; the stick's directions as the D-pad's) |
+| `+0x10` | u32 buttons newly pressed on the frame that just ran, as the game saw them |
+| `+0x1B4` | the player kind (1 a human) |
+| `+0x1B8` | the character under the hand while the token is in it, else the token's (`0x28` none) |
+| `+0x1F8` | u8 1 while the token is in the hand, 0 once it is down (`+0x1F9` 1 while it flies) |
+
+A on a character with the token in the hand puts it there; A on a player's own token picks it up;
+B takes it back to the hand; A elsewhere with the token down changes nothing (both games).
+`gfPadSystem` (`0x805A0040` ->) keeps only held buttons (port i at `+0x40 + 0x40 * i`), no newly
+pressed ones.
+
+**Test knob** `ORCA_TEST_CHAR_ORDER=<pplus|brawl>:<game>:<winner port 1-2>` (a test override, both
+processes alike): that set on every character select with no match block behind it, so the order
+runs on the boot's character select once both players have joined.
+
+**Proof** (2026-10-03): see below.
+
 ## Embedding
 
 The YouGame desktop app shows Orca inside its own window, at the page's player box, the way it runs

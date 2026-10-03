@@ -398,3 +398,16 @@ TEST(OrcaCharOrder, ReadsTheCharacterSelect)
   m.bytes[0x80920000 + 2] = 'X';
   EXPECT_FALSE(ReadCss(m).on_css);
 }
+
+TEST(OrcaCharOrder, OrderHoldsWhileAPlayerIsNotAHuman)
+{
+  // Once begun, the player-type button can't start the order over or lift its masks.
+  State s = Twice(kGame2, Css(), State{}, 10);
+  CssView cpu = Css();
+  cpu.ports[1].human = false;
+  s = Twice(kGame2, cpu, s, 20);
+  EXPECT_EQ(s, St(2, Step::First, 0, 10, 10));
+  EXPECT_EQ(Gate(kGame2, cpu, s)[1], ALL);
+  s = Twice(kGame2, Css(), s, 30);
+  EXPECT_EQ(s, St(2, Step::First, 0, 10, 20));
+}
