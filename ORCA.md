@@ -1381,8 +1381,9 @@ end
   lists its Code Menu opener and the Giga Bowser and Wario-Man selections) needs another way if it
   is such a hook: the codeset's data, or the input gate. A group that logs `on` at boundary after
   boundary and never `off` is in such memory.
-- Adding the kind changed nothing the shipped files write, so the UX version stays `ux=6`. A file
-  that uses it is refused by older builds, and the file is in the lobby key, so they never meet.
+- Adding the kind changed nothing the shipped files write, so it took no UX version of its own (the
+  key's `ux=7` is the name tags' controls). A file that uses it is refused by older builds, and the
+  file is in the lobby key, so they never meet.
 
 Tests: `OrcaGamePatches*` (the format and its refusals, toggling both ways, the guards, the
 conditions, idempotence and purity over a fake memory, and that the shipped files' groups land as
