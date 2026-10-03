@@ -31,13 +31,13 @@ constexpr u32 SCENE_SELCHAR_TASK = 0x400;
 constexpr u32 TASK_AREAS = 0x44;
 constexpr u32 AREA_KIND = 0x1B4;
 constexpr u32 AREA_CHARACTER = 0x1B8;
-constexpr u32 AREA_PLACED = 0x1C0;  // TODO probe
+// The area's own controller: +0x10 the buttons newly pressed on the frame that just ran (PAD_*
+// bits, the stick's directions as the D-pad's), as the game saw them through the input gate.
+constexpr u32 AREA_PRESSED = 0x10;
+// u8: 1 while the token is in the hand (just joined, taken back with B, or picked up with A on it),
+// 0 once it is on a character (the next byte is 1 while it flies there).
+constexpr u32 AREA_IN_HAND = 0x1F8;
 constexpr u32 KIND_HUMAN = 1;
-// The game's pads.
-constexpr u32 PAD_SYSTEM = 0x805A0040;
-constexpr u32 PAD_STATUS = 0x40;   // TODO probe
-constexpr u32 PAD_SIZE = 0x40;
-constexpr u32 PAD_PRESSED = 0x08;  // TODO probe
 
 // The state's bytes at kArea.
 constexpr u32 AT_MAGIC = 0x0;
@@ -178,12 +178,27 @@ Masks Gate(const SetView& set, const CssView& css, const State& state)
     }
     break;
   case Step::Done:
-    masks[winner] = ALL;
-    masks[loser] = ALL;
-    // Start for the loser on every other frame: each is a new press, until the screen goes.
-    if (state.elapsed % 2 == 0)
+  {
+    const bool even = state.elapsed % 2 == 0;  // a synthesized press is new every other frame
+    for (const int port : {winner, loser})
+    {
+      const CssPort& p = css.ports[port];
+      if (p.placed)
+      {
+        masks[port] = ALL;
+        continue;
+      }
+      // A token still in the hand (picked up with A, then the time ran out): the player can move
+      // and put it down, and Orca puts it on the character under the hand, if there is one.
+      masks[port].buttons = Rollback::InputGate::ALL_BUTTONS & ~PAD_BUTTON_A;
+      if (even && p.character != kNoCharacter)
+        masks[port].press = PAD_BUTTON_A;
+    }
+    // Start for the loser once both tokens are down, until the screen goes.
+    if (even && css.ports[0].placed && css.ports[1].placed)
       masks[loser].press = PAD_BUTTON_START;
     break;
+  }
   case Step::Idle:
     break;
   }
@@ -193,7 +208,7 @@ Masks Gate(const SetView& set, const CssView& css, const State& state)
 std::string Line(const SetView& set, const CssView& css, const State& state,
                  const std::vector<Events::PortInfo>& ports)
 {
-  if (!Active(set, css, state) || state.step == Step::Done)
+  if (!Active(set, css, state))
     return {};
   // Each port's name ("P<n>" without one), and this machine's port (-1: neither; a harness run).
   std::array<std::string, 2> names{"P1", "P2"};
@@ -206,6 +221,19 @@ std::string Line(const SetView& set, const CssView& css, const State& state,
       names[p.port] = p.name;
     if (!p.remote)
       local = p.port;
+  }
+  if (state.step == Step::Done)
+  {
+    // Only while a token is still in a hand (the game waits for it).
+    for (int port = 0; port < 2; ++port)
+    {
+      if (css.ports[port].placed)
+        continue;
+      if (port == local)
+        return "Put your token on a character";
+      return fmt::format("Waiting for {} to put the token down", names[port]);
+    }
+    return {};
   }
   const std::string left = Clock(PICK_FRAMES - state.elapsed);
   if (state.step == Step::Both)
@@ -281,22 +309,13 @@ CssView ReadCss(const GuestMemory& m)
   {
     const u32 area = m.Read32(task + TASK_AREAS + 4 * i);
     CssPort& p = css.ports[i];
-    if (Pointer(m, area + AREA_KIND) && Pointer(m, area + AREA_CHARACTER) &&
-        Pointer(m, area + AREA_PLACED))
+    if (Pointer(m, area + AREA_PRESSED) && Pointer(m, area + AREA_KIND) &&
+        Pointer(m, area + AREA_CHARACTER) && m.Valid(area + AREA_IN_HAND))
     {
       p.human = m.Read32(area + AREA_KIND) == KIND_HUMAN;
       p.character = static_cast<int>(m.Read32(area + AREA_CHARACTER));
-      p.placed = m.Read32(area + AREA_PLACED) != 0;
-    }
-  }
-  if (Pointer(m, PAD_SYSTEM))
-  {
-    const u32 pads = m.Read32(PAD_SYSTEM);
-    for (u32 i = 0; i < 2; ++i)
-    {
-      const u32 at = pads + PAD_STATUS + i * PAD_SIZE + PAD_PRESSED;
-      if (Pointer(m, at))
-        css.ports[i].pressed = static_cast<u16>(m.Read32(at));
+      p.placed = m.Read8(area + AREA_IN_HAND) == 0;
+      p.pressed = static_cast<u16>(m.Read32(area + AREA_PRESSED));
     }
   }
   return css;

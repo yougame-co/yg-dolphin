@@ -337,3 +337,64 @@ TEST(OrcaCharOrder, ReadsTheSetFromTheMatchBlock)
   m.Write8(base + Block::VERSION, 2);
   EXPECT_EQ(ReadSet(m), SetView{});
 }
+
+TEST(OrcaCharOrder, DoneWithATokenStillInAHand)
+{
+  // Port 1 (the winner) picked its token up with A and its time ran out, the hand over a
+  // character: it can move and put it down, Orca puts it there every other frame, and no Start yet.
+  CssView css = Css(false, true);
+  const auto even = Gate(kGame2, css, St(2, Step::Done, 0, 0, 4));
+  EXPECT_EQ(even[0].buttons, ALL.buttons & ~PAD_BUTTON_A);
+  EXPECT_FALSE(even[0].main_stick);
+  EXPECT_EQ(even[0].press, PAD_BUTTON_A);
+  EXPECT_EQ(even[1], ALL);
+  EXPECT_EQ(Gate(kGame2, css, St(2, Step::Done, 0, 0, 5))[0].press, 0);
+  // Over no character: nothing pressed for it.
+  css.ports[0].character = kNoCharacter;
+  EXPECT_EQ(Gate(kGame2, css, St(2, Step::Done, 0, 0, 4))[0].press, 0);
+  std::vector<Orca::Events::PortInfo> ports{{0, "ADA", true, {}}, {1, "BO", false, {}}};
+  EXPECT_EQ(Line(kGame2, css, St(2, Step::Done, 0, 0, 4), ports),
+            "Waiting for ADA to put the token down");
+  ports[0].remote = false;
+  ports[1].remote = true;
+  EXPECT_EQ(Line(kGame2, css, St(2, Step::Done, 0, 0, 4), ports), "Put your token on a character");
+}
+
+TEST(OrcaCharOrder, ReadsTheCharacterSelect)
+{
+  FakeMemory m;
+  // The scene manager, the scene named scSelctCharacter, its task and two player areas.
+  const auto zero = [&m](u32 a, u32 n) {
+    for (u32 i = 0; i < n; ++i)
+      m.bytes[a + i] = 0;
+  };
+  zero(0x805A0060, 4);
+  zero(0x80900000, 8);
+  zero(0x80910000, 0x404);
+  zero(0x80930000, 0x50);
+  zero(0x80940000, 0x200);
+  zero(0x80950000, 0x200);
+  m.Write32(0x805A0060, 0x80900000);
+  m.Write32(0x80900004, 0x80910000);
+  m.Write32(0x80910000, 0x80920000);
+  const char* name = "scSelctCharacter";
+  for (u32 i = 0; i <= 16; ++i)
+    m.bytes[0x80920000 + i] = i < 16 ? static_cast<u8>(name[i]) : 0;
+  m.Write32(0x80910400, 0x80930000);
+  m.Write32(0x80930044, 0x80940000);
+  m.Write32(0x80930048, 0x80950000);
+  m.Write32(0x80940000 + 0x1B4, 1);
+  m.Write32(0x80940000 + 0x1B8, 0x16);
+  m.Write8(0x80940000 + 0x1F8, 0);
+  m.Write32(0x80940000 + 0x10, PAD_BUTTON_A);
+  m.Write32(0x80950000 + 0x1B4, 1);
+  m.Write32(0x80950000 + 0x1B8, 0x28);
+  m.Write8(0x80950000 + 0x1F8, 1);
+  const CssView css = ReadCss(m);
+  EXPECT_TRUE(css.on_css);
+  EXPECT_EQ(css.ports[0], (CssPort{true, 0x16, true, PAD_BUTTON_A}));
+  EXPECT_EQ(css.ports[1], (CssPort{true, kNoCharacter, false, 0}));
+  // Another scene: not the character select.
+  m.bytes[0x80920000 + 2] = 'X';
+  EXPECT_FALSE(ReadCss(m).on_css);
+}

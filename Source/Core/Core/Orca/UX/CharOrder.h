@@ -30,7 +30,9 @@ class CPUThreadGuard;
 //   - then the loser's turn: the winner's controller does nothing, the loser can't take the token
 //     back, and locks in with A or goes on with Start;
 //   - then Orca presses Start for the loser (every other frame until the screen goes), so the game
-//     goes on to the stage select with both picks.
+//     goes on to the stage select with both picks. A player who picked the token up (A on it) and
+//     let the time run out can only move and put it down, and Orca puts it on the character under
+//     the hand, if any, before it presses Start.
 // The overlay says whose turn it is and the time left ("Ada picks first · 0:42").
 //
 // Everything is a pure function of emulated memory and the hook's frame number, the same on both
@@ -44,13 +46,19 @@ class CPUThreadGuard;
 // with Start, each locks in with A (and then can't change), and once both have, or the time is up,
 // Orca presses Start. MkFreePicker() is the exact order's Meta Knight re-check, for when it lands.
 //
-// Found under the harness (ORCA_UX_PROBE dumps, Brawl rev 2 and Project+ alike):
+// Found under the harness (ORCA_UX_PROBE watches and dumps, Brawl rev 2 and Project+ alike):
 //   - the character select: scene "scSelctCharacter", whose +0x400 is muSelCharTask; player area i
-//     (GameCube port i) at task +0x44 + 4 * i: +0x1B4 the player kind (1: a human has joined),
-//     +0x1B8 the character, kAreaPlaced: whether its token is on a character;
-//   - the game's pads: gfPadSystem (0x805A0040 ->), port i's status at kPadStatus + i * kPadSize,
-//     whose kPadPressed word holds the buttons newly pressed on the frame that just ran, as the
-//     game saw them (after the input gate).
+//     (GameCube port i) at task +0x44 + 4 * i:
+//       +0x10 u32 the buttons newly pressed on the frame that just ran (PAD_* bits; +0x0C held),
+//             as the game saw them (after the input gate);
+//       +0x1B4 the player kind (1: a human has joined);
+//       +0x1B8 the character under the hand while the token is in it, else the token's
+//             (kNoCharacter: none);
+//       +0x1F8 u8 1 while the token is in the hand, 0 once it is down (+0x1F9 1 while it flies);
+//   - A on a character with the token in the hand puts it there; A on the player's own token picks
+//     it up; B takes it back to the hand; A elsewhere with the token down changes nothing; the
+//     tokens stay down from one game's character select to the next (and back from the stage
+//     select).
 namespace Orca::UX
 {
 class GuestMemory;
@@ -78,10 +86,12 @@ struct SetView
 };
 
 // One port's part of the character select at a frame boundary.
+constexpr int kNoCharacter = 0x28;
+
 struct CssPort
 {
   bool human = false;  // a human has joined this port's area
-  int character = -1;
+  int character = kNoCharacter;  // under the hand while the token is in it, else the token's
   bool placed = false;  // its token is on a character
   u16 pressed = 0;      // PAD_* bits newly pressed on the frame that just ran (the game's view)
   bool operator==(const CssPort&) const = default;
