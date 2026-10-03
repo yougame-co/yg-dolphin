@@ -94,6 +94,8 @@ int RoundTripMs(u32* sequence = nullptr);
 // The room's latest round trips, oldest first, for a session that starts now; `sequence` as above,
 // for the newest (unchanged with no room).
 std::vector<int> RecentRoundTrips(u32* sequence);
+// How the other players' inputs reach this one: the relay, or direct links (Net::DirectLink).
+Net::DirectSummary Direct();
 // Why the room ended, as an Orca::Status code ("" while it runs, or when it gave none).
 std::string RoomErrorCode();
 // The room ended because someone else holds it: a hosting Orca that wasn't its host, or whose
@@ -115,6 +117,9 @@ void ReportPeerStalled(std::string_view sentence);
 // Tests only (ORCA_TEST_COMMANDS' "test-drop-room"): the room's connection drops as a network
 // failure would.
 void TestDropRoom();
+// Tests only (ORCA_TEST_COMMANDS' "test-direct off|on|in|out|rebuild"): direct links drop every
+// datagram, or only incoming or outgoing ones, or none again; or every link is built anew.
+void TestDirect(const std::string& command);
 
 // Leaves the room (reporting a running match void) and stops its thread, then waits (2 s at most)
 // for rooms ShutdownInBackground is still leaving. Call when emulation stops.

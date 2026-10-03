@@ -49,6 +49,10 @@ struct LinkStats
   int hitches = 0;           // this machine's slow frames, in total
   int peer_hitches = 0;
   int round_trip_ms = -1;  // to the room server; -1 before the first
+  // How the friends' inputs arrive (the worst of them): 0 the relay, 1 a direct link, 2 a direct
+  // link through TURN; and that link's round trip (-1: none).
+  int transport = 0;
+  int link_rtt_ms = -1;
   int confirmed_frame = -1;
   // The game is waiting for a friend's input right now: for how long, and whose seat (-1: nobody).
   int stalled_ms = 0;

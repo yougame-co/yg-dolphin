@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <fstream>
 #include <memory>
 #include <optional>
@@ -318,20 +320,25 @@ TEST(OrcaLive, TwoRoomsPlayEachOther)
   Packet sent = Sample();
   sent.seat = a.Seat();
   a.Send(sent);
+  // Through the relay, and over a direct link too once one is up (DirectLink): the same packet.
   std::vector<Packet> got;
-  for (int i = 0; i < 500 && got.empty(); ++i)
+  for (int i = 0; i < 500 && got.size() < 2 && (got.empty() || i < 100); ++i)
   {
-    got = b.Receive();
+    for (Packet& packet : b.Receive())
+      got.push_back(std::move(packet));
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
-  ASSERT_EQ(got.size(), 1u);
-  ExpectSame(sent, got[0]);
-  // A's seat speaking as B's is dropped.
+  ASSERT_GE(got.size(), 1u);
+  ASSERT_LE(got.size(), 2u);
+  for (const Packet& packet : got)
+    ExpectSame(sent, packet);
+  // A's seat speaking as B's is dropped, on either path.
   Packet forged = Sample();
   forged.seat = b.Seat();
   a.Send(forged);
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
-  EXPECT_TRUE(b.Receive().empty());
+  for (const Packet& packet : b.Receive())
+    EXPECT_NE(packet.seat, b.Seat());
   EXPECT_TRUE(b.Connected());
 
   // The joiner leaves; the host's room stays, and says who left.
@@ -350,6 +357,99 @@ TEST(OrcaLive, TwoRoomsPlayEachOther)
   EXPECT_EQ(left->seat, 1);
   EXPECT_TRUE(a.Connected()) << a.Status();
   EXPECT_GE(a.RoundTripMs(), 0);
+}
+
+// Two Orcas in one dev room link directly (here, over this machine): both report a direct link
+// within seconds, a packet comes over it well ahead of the relay's copy, a test block puts the
+// inputs back on the relay and lifting it brings the link back, and a third Orca with
+// ORCA_DIRECT=0 never links (the room then reports the relay, the worst of its links).
+// ORCA_LIVE_TEST=1.
+TEST(OrcaLive, DirectLinkBetweenTwoRooms)
+{
+  const char* live = std::getenv("ORCA_LIVE_TEST");
+  if (!live || std::string(live) != "1")
+    GTEST_SKIP() << "set ORCA_LIVE_TEST=1";
+  const ScopedEnv dev_game("ORCA_TEST_DEV_GAME", "orca-live-test");
+  const ScopedEnv loopback("ORCA_DIRECT_LOOPBACK", "1");
+  const auto wait_for = [](const std::function<bool()>& done, int ms) {
+    for (int waited = 0; waited < ms && !done(); waited += 10)
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    return done();
+  };
+  const std::string code =
+      "orca" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 100000000);
+  RoomOptions options;
+  options.room_code = code;
+  options.compatibility = "orca-live-test";
+  options.player_name = "Orca A";
+  YouGameRoom a(options);
+  ASSERT_TRUE(wait_for([&] { return a.GetState() != RoomState::Connecting; }, 5000));
+  options.player_name = "Orca B";
+  options.joining = true;
+  YouGameRoom b(options);
+  ASSERT_TRUE(WaitArrived(a));
+  ASSERT_TRUE(WaitArrived(b));
+  ASSERT_TRUE(wait_for([&] { return a.Direct().transport == 1 && b.Direct().transport == 1; },
+                       10000))
+      << a.Direct().line << " / " << b.Direct().line;
+  ASSERT_TRUE(wait_for([&] { return a.Direct().rtt_ms >= 0; }, 3000));
+  std::printf("[ direct ] A: %s, B: %s, relay round trip %d ms\n", a.Direct().line.c_str(),
+              b.Direct().line.c_str(), a.RoundTripMs());
+  EXPECT_LE(a.Direct().rtt_ms, 20);
+
+  // The direct copy first, the relay's after.
+  Packet sent = Frames(a.Seat(), 100, 4);
+  sent.sequence = 1;
+  const auto start = std::chrono::steady_clock::now();
+  a.Send(sent);
+  std::vector<Packet> got;
+  std::optional<double> first_ms;
+  for (int i = 0; i < 3000 && got.size() < 2; ++i)
+  {
+    for (Packet& packet : b.Receive())
+    {
+      if (!first_ms)
+      {
+        first_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                             start)
+                       .count();
+      }
+      got.push_back(std::move(packet));
+    }
+    std::this_thread::sleep_for(std::chrono::microseconds(500));
+  }
+  ASSERT_EQ(got.size(), 2u);
+  for (const Packet& packet : got)
+    EXPECT_EQ(packet.pads, sent.pads);
+  const double second_ms =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+  std::printf("[ direct ] first copy after %.1f ms, the relay's after %.1f ms\n", *first_ms,
+              second_ms);
+  EXPECT_LT(*first_ms, std::max(5.0, second_ms / 2));
+
+  // Datagrams blocked: both see the relay again; lifted: the link is back.
+  a.TestDirect("off");
+  EXPECT_TRUE(wait_for([&] { return a.Direct().transport == 0 && b.Direct().transport == 0; },
+                       3000));
+  a.TestDirect("on");
+  EXPECT_TRUE(wait_for([&] { return a.Direct().transport == 1 && b.Direct().transport == 1; },
+                       10000))
+      << a.Direct().line << " / " << b.Direct().line;
+
+  // A third Orca without direct links: the others link to each other, never to it.
+  {
+    const ScopedEnv off("ORCA_DIRECT", "0");
+    options.player_name = "Orca C";
+    YouGameRoom c(options);
+    ASSERT_TRUE(WaitArrived(c));
+    EXPECT_TRUE(wait_for([&] { return a.Direct().transport == 0; }, 5000)) << a.Direct().line;
+    EXPECT_TRUE(wait_for([&] { return b.Direct().transport == 0; }, 5000)) << b.Direct().line;
+    EXPECT_EQ(c.Direct().transport, 0);
+    c.Leave();
+  }
+  EXPECT_TRUE(wait_for([&] { return a.Direct().transport == 1; }, 5000)) << a.Direct().line;
+  b.Leave();
+  a.Leave();
 }
 
 // A friend arriving is visible before the emulator thread takes it (what ends a solo pause, which

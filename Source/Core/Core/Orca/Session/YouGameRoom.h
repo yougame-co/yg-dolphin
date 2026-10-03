@@ -80,6 +80,17 @@ struct PeerEvent
   std::string reason;
 };
 
+// How the other players' inputs reach this one (DirectLink.h): the worst of them.
+struct DirectSummary
+{
+  // 0 the relay only, 1 a direct link, 2 a direct link through TURN (`orca stats` "tx").
+  int transport = 0;
+  // Round trip on that link, in milliseconds (-1: relay, or not measured yet).
+  int rtt_ms = -1;
+  // For logs: "direct host/host 1 ms", "TURN relay/host 38 ms", "relay".
+  std::string line = "relay";
+};
+
 enum class RoomState
 {
   Connecting,
@@ -133,6 +144,10 @@ public:
   // The latest RTT_SAMPLES round trips, oldest first, for a session that starts now (it covers the
   // link from its first frame), and in `sequence` the count RoundTripMs gives with the newest.
   std::vector<int> RecentRoundTrips(u32* sequence) const;
+  // The direct links to the other players (refreshed a few times a second).
+  DirectSummary Direct() const;
+  // Tests only: `test-direct off|on|in|out|rebuild` (DirectLink::Test).
+  void TestDirect(const std::string& command);
 
   void Send(const Packet& packet) override;
   std::vector<Packet> Receive() override;
@@ -155,6 +170,9 @@ private:
 // Packets as room messages (exposed for tests).
 std::string EncodePacket(const Packet& packet);
 bool DecodePacket(const std::string& json, Packet* packet);
+// A packet from a direct link to the player at `slot`: as through the relay, only for that player's
+// own seat, and never with drop-in history (the relay alone carries it, in order).
+bool DecodeDirectPacket(const std::string& payload, int slot, Packet* packet);
 // What to tell the player when the room refused the connection (WebSocket::Connect's error), and
 // the desktop app's error code for it.
 std::string RefusalReason(const std::string& connect_error);
