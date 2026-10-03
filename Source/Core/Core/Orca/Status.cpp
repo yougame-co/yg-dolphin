@@ -13,6 +13,7 @@
 #include <fmt/format.h>
 
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/UX/OnlineRules.h"
 #include "Core/Orca/UX/Results.h"
 
 namespace Orca::Status
@@ -113,6 +114,8 @@ std::string OfferedCaps()
   std::string caps = CAPS;
   if (UX::ResultsVerified())
     caps += fmt::format(" {}", RESULTS_CAP);
+  if (UX::Rules::ProfileRuleset() != UX::Rules::Ruleset::None)
+    caps += fmt::format(" {}", LOCKS_CAP);
   return caps;
 }
 

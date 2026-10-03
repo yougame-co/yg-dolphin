@@ -53,7 +53,12 @@ void Report(std::string_view code, std::string_view sentence);
 // (UX/Results.h, ResultsVerified); the room hears the results either way (ORCA.md "Matchmaking").
 inline constexpr const char* CAPS = "join leave stats pause delay perf direct host";
 inline constexpr const char* RESULTS_CAP = "results";
-// What this build offers for the running profile: CAPS, and "results" where its reader is verified.
+// "locks": a queue room's game carries the online rules (UX/OnlineRules.h: rules locked, casual's
+// random legal stage, no way out of the character and stage select), offered for a profile with a
+// ruleset (Brawl rev 2, Project+). Information for the page: the locks don't wait for its answer.
+inline constexpr const char* LOCKS_CAP = "locks";
+// What this build offers for the running profile: CAPS, "results" where its reader is verified,
+// and "locks" where it has a ruleset.
 std::string OfferedCaps();
 void PrintCaps();
 void SetAppCaps(std::string_view list);

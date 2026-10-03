@@ -14,6 +14,7 @@
 #include "Core/Orca/UX/GamePatches.h"
 #include "Core/Orca/UX/MenuText.h"
 #include "Core/Orca/UX/NameTags.h"
+#include "Core/Orca/UX/OnlineRules.h"
 #include "Core/Orca/UX/OnlineMenu.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/UX/Probe.h"
@@ -27,6 +28,8 @@ void Init()
   Orca::Events::SetLocalPadSource([](bool for_frame) { return LocalPad(for_frame); });
   Orca::Events::SetInputAgeSource([] { return GetInputAge(); });
   InitOverlay();
+  // The online rules' input masks (a queue match's locks), evaluated at every boundary.
+  Rules::Install();
   // The name tags write emulated memory: the compatibility key carries their version.
   Orca::Events::SetUXCompatVersion(kCompatVersion);
   // At every frame boundary, first runs and re-runs, before the session saves anything there, with
@@ -44,9 +47,6 @@ void Init()
     ReadOnlineMenu(guard, resimulating, alone);
     // Reads only: each game's result in a matchmade room, once its frames are final (Results.h).
     ReadResultsFrame(guard, frame);
-    // A host that just took a matchmade room presets Brawl's rules, alone, before any keyframe.
-    if (!resimulating)
-      ApplyQueueRules(guard, alone);
     ProbeFrame(guard, frame);
     // This player's own controls in its own game, for the session to carry into a game it joins or
     // hosts (reads only; only while this game is its player's alone, so never a friend's game).
@@ -79,6 +79,9 @@ void Init()
     {
       WriteNameTags(guard, ports);
     }
+    // The online rules (OnlineRules.h): a queue room's header at an alone boundary, then the
+    // locks it calls for (rules, stages, the ready timer), on first runs and re-runs alike.
+    Rules::OnFrame(guard, frame, resimulating, alone);
     // Last, after every other writer here: a toggled patch group follows its condition as this
     // boundary's writers left it, so the hook run again at this boundary (a re-run from the
     // snapshot saved here) decides the same and writes nothing new (GamePatches.h).
@@ -101,6 +104,7 @@ void Init()
 
 void Shutdown()
 {
+  Rules::Uninstall();
   Orca::Events::SetStallCallback({});
   Orca::Events::SetBoundaryCallback({});
   Orca::Events::SetFrameCallback({});

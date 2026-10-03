@@ -564,6 +564,12 @@ bool ReportSessionEnd(const std::string& session_error)
   return false;
 }
 
+void SetLeaveReason(const std::string& reason)
+{
+  if (const auto room = Room())
+    room->SetLeaveReason(reason);
+}
+
 void ReportPeerStalled(std::string_view sentence)
 {
   if (const auto room = Room())

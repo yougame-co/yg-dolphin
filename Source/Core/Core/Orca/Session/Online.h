@@ -134,6 +134,11 @@ std::string StatusLine();
 // (this machine's emulation failed: an "internal" error, always terminal).
 bool ReportSessionEnd(const std::string& session_error);
 
+// Why this Orca leaves its room, for its bye (the others' "friend-left <why>", the room's lobby):
+// "mismatch" (a queue room's header it wouldn't play), "no-show" (it never picked in time). Any
+// thread.
+void SetLeaveReason(const std::string& reason);
+
 // The friend stopped answering mid-match: reports peer_left with `sentence`, and tells the friend
 // on the way out that the connection stalled (for its own report, if its game wakes up).
 void ReportPeerStalled(std::string_view sentence);
