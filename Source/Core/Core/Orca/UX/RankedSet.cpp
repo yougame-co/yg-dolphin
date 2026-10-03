@@ -285,10 +285,16 @@ constexpr u32 ENTRY_PLAYER_NO = 0x58;
 constexpr u32 FIGHTER_MODULES = 0x60;
 constexpr u32 MODULES_LIST = 0xD8;
 constexpr u32 LIST_STATUS = 0x70;
-// Located from RAM dumps of a fight (ORCA.md "Ranked sets"); 0: not located.
-constexpr u32 OWNER_DATA_STOCKS = 0;
-constexpr u32 OWNER_DATA_DAMAGE = 0;
-constexpr u32 STATUS_KIND = 0;
+// From RAM dumps of a Brawl fight (ORCA.md "Ranked sets"): ftOwner::getStockCount reads its data's
+// u32 at +0x34, ftOwner::getDamage (vtable +0x14) its f32 at +0x24, and the status module's
+// getStatusKind (vtable +0x48) its u32 at +0x34.
+constexpr u32 OWNER_DATA_STOCKS = 0x34;
+constexpr u32 OWNER_DATA_DAMAGE = 0x24;
+constexpr u32 STATUS_KIND = 0x34;
+// The result info's decision, live during the fight: 9 while it runs, 1 the moment time runs out
+// (the game freezes on "TIME!"), 2 at the deciding KO.
+constexpr u32 GLOBAL_RESULT_INFO = 0x18;
+constexpr u32 RESULT_DECISION = 0x1378;
 // Fighter::StatusKind: Cliff_Catch_Move, Cliff_Catch, Cliff_Wait.
 constexpr u32 STATUS_CLIFF_FIRST = 0x73;
 constexpr u32 STATUS_CLIFF_LAST = 0x75;
@@ -326,8 +332,11 @@ u32 SoraMeleeBss(const GuestMemory& m)
 Live ReadLiveFight(const GuestMemory& m)
 {
   Live live;
-  if (!OWNER_DATA_STOCKS || !OWNER_DATA_DAMAGE || !STATUS_KIND)
+  const u32 global = Ptr(m, GAME_GLOBAL);
+  const u32 info = global ? Ptr(m, global + GLOBAL_RESULT_INFO) : 0;
+  if (!info || !m.Valid(info + RESULT_DECISION))
     return live;
+  live.time_up = m.Read8(info + RESULT_DECISION) == DECISION_TIME_UP;
   const u32 bss = SoraMeleeBss(m);
   const u32 manager = bss ? Ptr(m, bss + G_FT_ENTRY_MANAGER) : 0;
   const u32 entries = manager ? Ptr(m, manager) : 0;
