@@ -1002,6 +1002,8 @@ void HostEvents(Core::System& system, Match& match)
     match.session->AddPeer(seat, next, keyframe_frame);
     match.seated.insert(seat);
     match.plugging.insert(seat);
+    NOTICE_LOG_FMT(ROLLBACK, "Drop-in: port {} is {} from frame {}{}", seat + 1, it->second.name,
+                   next, it->second.controls.empty() ? "" : ", with their own controls");
     AddName(match, {seat, next, it->second.name, it->second.controls});
     // The newcomer plugs in only once every player holds its values: its plug frame, which every
     // player hears of before running it, then comes after them.
