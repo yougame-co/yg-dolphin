@@ -1390,8 +1390,6 @@ Tests: `OrcaGamePatches*` (the format and its refusals, toggling both ways, the 
 conditions, idempotence and purity over a fake memory, and that the shipped files' groups land as
 before).
 
-<<<<<<< HEAD
-=======
 Checked 2026-10-03 (Mac, arm64), with a test-only copy of each file that toggles the pad copy's lag
 fix every 8 frames by the frame counter at `0x805B50D8` (a word that counts frames in both games),
 so the code the game runs changes under every rollback window and keyframe: Brawl's 45-word lag-fix
@@ -1417,7 +1415,6 @@ at `0x8002AD8C` left alone, see above).
   and mid-match (9,118), 116 and 21 checksums matched, 14 rollbacks; Project+ at 1,975 and 7,385,
   84 and 21, 22 rollbacks.
 
->>>>>>> origin/ranked-spec
 ## Online menu
 
 Luis's rules: Play Online works in both games, through the game's own menus and never a new
