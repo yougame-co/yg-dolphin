@@ -967,6 +967,14 @@ shader cache first (a cold Metal cache costs ~3.3 s at match start). A forced se
 
 ## Match start
 
+Luis, 2026-10-03: the first seconds of every match (the countdown and just after) dropped frames
+and froze, and the rest of the match was smooth; loading may take longer, but those drops must go.
+Two things compiled there, on the one thread that runs the game in a session (single core): the
+GPU pipelines the match draws first, and the match's PowerPC code. Both now compile before the
+match is on screen.
+
+### Shaders
+
 A match's countdown is where most of a game's new GPU pipelines are first drawn (both
 characters, the stage, the countdown's effects). Orca sessions force (`Orca/Profile.cpp`):
 
@@ -1012,6 +1020,37 @@ at the countdown and 45 ms at 4 s, no compile, no texture work) is not shaders.
 
 Re-measure with a build of branch `hitch-shaders` (the `YG_SHADERLOG=1` probe: one line per frame
 that compiled anything, and the shader cache's size and boot time).
+
+### The match's code (JIT warm-up, `Orca/JitWarm.*`)
+
+The first time a process runs a match, Dolphin's JIT compiles the match's code at its first use:
+in Brawl ~16,500 blocks in the two frames where the stage and the first fighter appear (64-105 ms
+each on an M4, the same with Null video) and ~4,100 more when the second fighter enters during the
+countdown (45 ms); Project+ the same 5,200 + 11,200 blocks 22-25 frames after scMelee. A second
+match in the same process compiles little (its blocks are still there).
+
+- **Recording.** In a match's first 600 frames (from the scMelee scene on), every block the game
+  compiles is noted: its start, the physical ranges of its instructions and a hash of those words
+  in RAM. One whose words are not the same a second later (code rewritten after its compile) is
+  never kept. At frame 600 or the match's end, a thread merges them into
+  `Cache/<profile>.jitwarm` (Brawl ~30,000 blocks, 1.2 MB): a block found compiled or compiled again
+  is young again, the others age a match, and one unused for 24 matches (or past 200,000) goes.
+- **Warm-up.** From the next match's first frame, at each boundary before a first pass, up to
+  8 ms (`ORCA_JITWARM_BUDGET_US`): blocks the JIT doesn't have, whose words are in RAM again, are
+  compiled, earliest-run first; the rest are looked at again every 20 frames, for 600 frames. In
+  Brawl it all fits in the loading image's ~165 frames; in Project+ the earliest-run blocks are done
+  before the stage appears.
+- **Why it can't change the game.** A block compiled early is the block the game's first run would
+  compile: the same words at the same addresses (the hash), the same feature flags, compiled in the
+  guest's floating-point mode as the dispatcher compiles, and kept only if its instructions span
+  the recorded ranges (else it is erased unused). Like the blocks a rollback keeps
+  (`Rollback.cpp` keeps the JIT across loads), it relies on the game invalidating code it rewrites,
+  hence the second's check above. Only code an instruction BAT maps is touched (no page-table walk,
+  no TLB change), and the JIT is never asked to compile where it could clear its cache or reuse
+  code memory under the running block (`JitBase::CanCompileFromHook`, `CompileFromHook`: the frame
+  hook runs inside a JIT block). The emulated instruction cache sees the same fetches earlier; the
+  synctest already counts it device state only.
+- `ORCA_JITWARM=0` turns it off; `ORCA_JITWARM_LOG=1` logs each frame that compiled ahead.
 
 ## Online menu
 
