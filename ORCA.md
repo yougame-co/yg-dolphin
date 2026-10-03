@@ -1366,8 +1366,9 @@ at `0x8002AD8C` left alone, see above).
   `YG_SYNCTEST_CLEARJIT=1`, and the match's end through results back to character select
   (9700-10800, 7,651); Project+ from boot through character select, stage select and the match
   start (150-1000, 5,901) and the match's end through results (4200-5100, 6,251). With the JIT
-  cleared after each load Project+'s 150-1000 shows its boot's known 28 mismatches (frames
-  151-157, `scBoot`), the same frames with and without toggles and none after.
+  cleared after each load, Project+ shows 28 RAM mismatches in the first seven frames of the
+  window wherever it starts (151-157 from 150, 171-177 from 170), the same frames on
+  `origin/matchmaking` without toggles, and none after them.
 - `YG_KEYFRAME_TEST`, every one PASS (the RAM loaded equals the capture; 30 re-run frames hash as
   their first pass): Brawl at 1700 (character select), 1880 (stage select), 2050 (the match
   loading), 5000 (the match), 10000 (results), 10500 (character select again); Project+ at 250,
