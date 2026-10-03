@@ -1352,6 +1352,30 @@ Tests: `OrcaGamePatches*` (the format and its refusals, toggling both ways, the 
 conditions, idempotence and purity over a fake memory, and that the shipped files' groups land as
 before).
 
+Checked 2026-10-03 (Mac, arm64), with a test-only copy of each file that toggles the pad copy's lag
+fix every 8 frames by the frame counter at `0x805B50D8` (a word that counts frames in both games),
+so the code the game runs changes under every rollback window and keyframe: Brawl's 45-word lag-fix
+group inside a `when` block, and in Project+ the pad copy's 22 loads moved by 0x404 (its own hook
+at `0x8002AD8C` left alone, see above).
+- The shipped files hash as on `origin/matchmaking` on every frame (`YG_HASHLOG`: Brawl
+  `bf-mario-link-results.txt` 10,809 frames, Project+ `pplus-1v1.txt` 9,018).
+- Toggling, the same run twice (the second compiling its match from the JIT warm-up list) hashes
+  the same on every frame: Brawl 10,807 frames with 1,350 toggles, Project+ 9,021 with 1,127.
+- `YG_SYNCTEST=7`, 0 RAM mismatches: Brawl from main menu through character select, stage select
+  and the match start (1500-2700, 8,351 re-run frames, 1,384 toggles), the same with
+  `YG_SYNCTEST_CLEARJIT=1`, and the match's end through results back to character select
+  (9700-10800, 7,651); Project+ from boot through character select, stage select and the match
+  start (150-1000, 5,901) and the match's end through results (4200-5100, 6,251). With the JIT
+  cleared after each load Project+'s 150-1000 shows its boot's known 28 mismatches (frames
+  151-157, `scBoot`), the same frames with and without toggles and none after.
+- `YG_KEYFRAME_TEST`, every one PASS (the RAM loaded equals the capture; 30 re-run frames hash as
+  their first pass): Brawl at 1700 (character select), 1880 (stage select), 2050 (the match
+  loading), 5000 (the match), 10000 (results), 10500 (character select again); Project+ at 250,
+  400, 2000, 4500, 4900.
+- `Tools/orca/dropin-commands.py`, both games, PASS: Brawl joins at character select (frame 1,828)
+  and mid-match (9,118), 116 and 21 checksums matched, 14 rollbacks; Project+ at 1,975 and 7,385,
+  84 and 21, 22 rollbacks.
+
 ## Online menu
 
 Luis's rules: Play Online works in both games, through the game's own menus and never a new
