@@ -66,6 +66,8 @@ constexpr int LATE_BUDGET_US = 1000;
 // JIT compiles 200 blocks in 8 ms (Jit64 on Luis's PC) is behind by ~12,000 blocks there, a
 // 374 ms frame. Paced, the loading frames run longer instead (the loading image is still).
 constexpr int LEAD = 3;
+// What a match compiles at its start with no list (Brawl ~30,000 blocks, Project+ ~28,000).
+constexpr std::size_t FIRST_MATCH_BLOCKS = 32'000;
 // Recording: the blocks the game compiles in a match's first RECORD_FRAMES frames; one counts when
 // its words are unchanged STABLE_AFTER frames after its compile (so never a block whose code was
 // rewritten after its compile without an invalidation: compiling it ahead could run other words
@@ -246,6 +248,7 @@ private:
       m_game_unlisted = 0;
   std::vector<u32> m_game_gone;  // a few of the warmed blocks the game compiled again
   int m_boundaries = 0;
+  bool m_logged_frame = false;  // this boundary's warm-up line is out
 
   // Warm-up figures for the log.
   int m_compiled = 0, m_present = 0, m_discarded = 0, m_no_room = 0, m_sweeps = 0;
@@ -667,6 +670,7 @@ void State::Warm(const Core::CPUThreadGuard& guard)
   }
   if (m_log_frames)
   {
+    m_logged_frame = true;
     NOTICE_LOG_FMT(ROLLBACK,
                    "JIT warm-up: frame {}: {} compiled, {} discarded, {} not in RAM, {:.2f} ms ({} "
                    "due)",
@@ -719,6 +723,20 @@ void State::OnBoundary(const Core::CPUThreadGuard& guard)
     if (!m_seen_other_scene)
       return;  // joined a match already running: its code is compiled as it runs
     StartMatch();
+    // The JIT's tables grow now, behind the loading image, not inside a compile during play: room
+    // for the blocks listed, or a first match's ~30,000.
+    if (auto* jit = static_cast<JitBase*>(guard.GetSystem().GetJitInterface().GetCore()))
+    {
+      const auto start = std::chrono::steady_clock::now();
+      jit->ReserveForBlocks(std::max<std::size_t>(m_known.size(), FIRST_MATCH_BLOCKS));
+      if (m_log_frames)
+      {
+        NOTICE_LOG_FMT(
+            ROLLBACK, "JIT warm-up: frame 0: the JIT's tables made room in {:.2f} ms",
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+                .count());
+      }
+    }
   }
   else if (!*in_match)
   {
@@ -737,6 +755,7 @@ void State::OnBoundary(const Core::CPUThreadGuard& guard)
     if (m_match_frame >= RECORD_FRAMES)
       FinishRecording();
   }
+  m_logged_frame = false;
   if (m_warming)
   {
     if (m_match_frame >= WARM_FRAMES)
@@ -744,6 +763,10 @@ void State::OnBoundary(const Core::CPUThreadGuard& guard)
     else
       Warm(guard);
   }
+  // Every boundary of a match's first frames has a line in this mode, which places each frame in
+  // time (Tools/orca/match-start.mjs --from-frame).
+  if (m_log_frames && m_in_match && m_match_frame < RECORD_FRAMES && !m_logged_frame)
+    NOTICE_LOG_FMT(ROLLBACK, "JIT warm-up: frame {}: nothing to warm", m_match_frame);
 }
 }  // namespace
 
