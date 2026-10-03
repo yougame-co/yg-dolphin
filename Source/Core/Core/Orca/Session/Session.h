@@ -154,6 +154,9 @@ struct Packet
   std::vector<Pads> history;
   // This player asks to unplug (leave); the host picks the frame.
   bool leaving = false;
+  // The newest version of the host's port values (Session::RequireValues) this sender holds (-1:
+  // none, or a peer that doesn't say).
+  int values_ack = -1;
 };
 
 class Transport
@@ -327,6 +330,15 @@ public:
   bool LeftDone() const;
   // Host: no other player is plugged in or joining: the session can end and the host play solo.
   bool Idle() const;
+  // ---- Port values (who plays a port, and with which controls) ----
+  // The host decides each port's values from the frame its controller plugs in (the app keeps
+  // them, with their version: Rollback/OnlineMatch.cpp "Ports"); every machine must hold them
+  // before it runs that frame. Host: `seat` plugs in only once every player in the session
+  // (the newcomer included) acknowledges holding values `version` or newer, so its plug frame, which
+  // each player hears of before running it, comes after the values it then writes. A player:
+  // the newest version it holds, which its packets acknowledge. Versions only grow.
+  void RequireValues(int seat, int version);
+  void SetValuesHeld(int version);
   // The local inputs already sampled for frames from CurrentFrame() on (the host keeps them when it
   // goes back to solo play).
   std::vector<Pad> PendingLocal() const;
@@ -526,6 +538,11 @@ private:
   std::array<int, MAX_SEATS> m_history_acked{-1, -1, -1, -1};
   std::array<int, MAX_SEATS> m_history_stuck{0, 0, 0, 0};
   bool m_leaving = false;
+  // Port values: per seat, the version every player must hold before it plugs in (host); per
+  // seat, the newest each player acknowledged (host); the newest this machine holds.
+  std::array<int, MAX_SEATS> m_values_required{-1, -1, -1, -1};
+  std::array<int, MAX_SEATS> m_values_acked{-1, -1, -1, -1};
+  int m_values_held = -1;
 
   std::vector<std::string> m_delay_notes;
 

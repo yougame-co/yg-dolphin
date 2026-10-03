@@ -273,9 +273,11 @@ std::string Session::Describe() const
   for (int s = 0; s < m_config.seats; ++s)
   {
     const SeatPlan& p = m_plan[s];
-    out += fmt::format("; seat {} plug {} unplug {} live {} received {} acked {} at {} history {}/{}",
+    out += fmt::format("; seat {} plug {} unplug {} live {} received {} acked {} at {} history {}/{} "
+                       "values {}/{}",
                        s + 1, n(p.plug_from), n(p.unplug_from), n(p.live_from), m_received[s],
-                       m_acked[s], m_remote_frame[s], m_history_sent[s], m_history_acked[s]);
+                       m_acked[s], m_remote_frame[s], m_history_sent[s], m_history_acked[s],
+                       m_values_acked[s], m_values_required[s]);
   }
   return out;
 }
@@ -315,6 +317,7 @@ void Session::AddPeer(int seat, int live_from, int history_from)
   m_remote_frame[seat] = 0;
   m_history_sent[seat] = m_history_acked[seat] = std::max(history_from, m_log_base) - 1;
   m_history_stuck[seat] = 0;
+  m_values_acked[seat] = -1;
   m_peer_stalls[seat] = m_peer_stalls_seen[seat] = m_peer_hitches[seat] = 0;
   m_peer_spared[seat].fill(0);
   m_peer_spared_seen[seat].fill(0);
@@ -328,6 +331,17 @@ void Session::AddPeer(int seat, int live_from, int history_from)
   m_peer_sequence[seat] = 0;
   m_peer_checksum_frame[seat] = -1;
   AdvanceReceived(seat);
+}
+
+void Session::RequireValues(int seat, int version)
+{
+  if (seat >= 0 && seat < MAX_SEATS)
+    m_values_required[seat] = std::max(m_values_required[seat], version);
+}
+
+void Session::SetValuesHeld(int version)
+{
+  m_values_held = std::max(m_values_held, version);
 }
 
 void Session::DropSeat(int seat)
@@ -479,6 +493,15 @@ void Session::PlugCaughtUpPeers()
       continue;
     SeatPlan& plan = m_plan[s];
     if (plan.plug_from != NEVER || m_history_acked[s] < plan.live_from - 1)
+      continue;
+    // Every player, the newcomer included, holds the values this seat plugs in with.
+    bool values_held = true;
+    for (int p = 0; p < m_config.seats; ++p)
+    {
+      if (InPlay(p) && m_values_acked[p] < m_values_required[s])
+        values_held = false;
+    }
+    if (!values_held)
       continue;
     const int rtt_frames = RoundTripFrames(s);
     if (m_remote_frame[s] < m_frame - CATCH_UP_SLACK - rtt_frames)
@@ -1241,6 +1264,7 @@ void Session::ReceivePackets()
         m_history_acked[s] = std::min(packet.history_ack, LogEnd() - 1);
         m_history_stuck[s] = 0;
       }
+      m_values_acked[s] = std::max(m_values_acked[s], packet.values_ack);
       // A player asks to leave: its controller unplugs a little ahead, so every machine hears of it
       // first. One still catching up just goes.
       if (packet.leaving)
@@ -1499,6 +1523,7 @@ void Session::SendPacket()
   {
     packet.history_ack = LogEnd() - 1;
     packet.leaving = m_leaving;
+    packet.values_ack = m_values_held;
     if (m_config.authority_seat == m_config.local_seat)
     {
       packet.roster = m_plan;

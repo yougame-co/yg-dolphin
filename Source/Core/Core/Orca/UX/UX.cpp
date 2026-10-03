@@ -48,9 +48,14 @@ void Init()
     if (!resimulating)
       ApplyQueueRules(guard, alone);
     ProbeFrame(guard, frame);
-    // Test only, ORCA_UX_TEST_LATE_NAME=<frame>: a friend's name that reached this machine late.
-    // First runs before that frame see it empty, re-runs see it, as when the roster arrives
-    // between a frame's first run and its re-run (the known gap in NameTags.h).
+    // This player's own controls in its own game, for the session to carry into a game it joins or
+    // hosts (reads only; only while this game is its player's alone, so never a friend's game).
+    if (alone)
+      ReadOwnControlsFrame(guard, ports);
+    // Test only, ORCA_UX_TEST_LATE_NAME=<frame>: a friend's name and controls that reached this
+    // machine late. First runs before that frame see them empty, re-runs see them, as when a port's
+    // values arrive between a frame's first run and its re-run: what the session's value channel
+    // rules out (NameTags.h), shown desyncing.
     static const int s_late = [] {
       const char* v = std::getenv("ORCA_UX_TEST_LATE_NAME");
       return v ? std::atoi(v) : -1;
@@ -63,7 +68,10 @@ void Init()
       for (Orca::Events::PortInfo& p : early)
       {
         if (p.port != 0)
+        {
           p.name.clear();
+          p.controls.clear();
+        }
       }
       WriteNameTags(guard, early);
       return;

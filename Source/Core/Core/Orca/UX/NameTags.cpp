@@ -3,7 +3,10 @@
 
 #include "Core/Orca/UX/NameTags.h"
 
+#include <algorithm>
 #include <cstdlib>
+#include <optional>
+#include <utility>
 
 #include "Core/Core.h"
 #include "Core/Orca/Profile.h"
@@ -21,7 +24,12 @@ constexpr u32 TAG_SIZE = 0x124;
 constexpr u32 TAG_RUMBLE = 0x0C;
 constexpr u32 TAG_CONTROLS = 0x14;
 constexpr u32 CONTROLS_TEMPLATE = 0x80406938;
-constexpr u32 CONTROLS_TEMPLATE_SIZE = 0x2D;
+constexpr u32 CONTROLS_TEMPLATE_SIZE = CONTROLS_LAYOUT_SIZE;
+// The layout's flag bytes (offsets into it) and the bits each may hold: GameCube tap jump, the
+// Nunchuk's tap jump (0x40) and shake smash (0x80), Classic tap jump. Every other byte is an action.
+constexpr u32 FLAGS_GAMECUBE = 11, FLAGS_NUNCHUK = 0x1F, FLAGS_CLASSIC = 0x2C;
+// The highest action the game's menus (and Project+'s) set: 0xE is "none".
+constexpr u8 MAX_ACTION = 0x0E;
 constexpr u32 SCENE_SELCHAR_TASK = 0x400;
 constexpr u32 TASK_AREAS = 0x44;
 constexpr u32 AREA_INDEX = 0x1B0;
@@ -139,6 +147,89 @@ std::u16string Variant(std::u16string name, int port)
     name.back() = digit;
   return name;
 }
+
+// What a profile's layout byte becomes in a tag (ApplyNameTags): only what the game's own menus
+// could have set there, else the game's default for that byte.
+u8 LayoutByte(u32 i, u8 value, u8 default_value)
+{
+  switch (i)
+  {
+  case FLAGS_GAMECUBE:
+  case FLAGS_CLASSIC:
+    return value & 0x80;
+  case FLAGS_NUNCHUK:
+    return value & 0xC0;
+  default:
+    return value <= MAX_ACTION ? value : default_value;
+  }
+}
+
+// A port's controls into the tag it gets: rumble, then the layout, each byte written only where it
+// differs. The defaults must be readable (the caller checked).
+void WriteControls(GuestMemory& m, u32 tag, const std::vector<u8>& profile)
+{
+  const u8 rumble = profile[0] != 0 ? 1 : 0;
+  if (m.Read8(tag + TAG_RUMBLE) != rumble)
+    m.Write8(tag + TAG_RUMBLE, rumble);
+  for (u32 i = 0; i < CONTROLS_LAYOUT_SIZE; ++i)
+  {
+    const u8 value = LayoutByte(i, profile[1 + i], m.Read8(CONTROLS_TEMPLATE + i));
+    if (m.Read8(tag + TAG_CONTROLS + i) != value)
+      m.Write8(tag + TAG_CONTROLS + i, value);
+  }
+}
+
+bool TemplateReadable(const GuestMemory& m)
+{
+  return m.Valid(CONTROLS_TEMPLATE) && m.Valid(CONTROLS_TEMPLATE + CONTROLS_TEMPLATE_SIZE - 1);
+}
+
+// The character select's task, when the scene is the character select and it looks right.
+bool CharacterSelectTask(const GuestMemory& m, u32* task)
+{
+  if (!SceneIs(m, CHARACTER_SELECT))
+    return false;
+  const u32 scene = m.Read32(m.Read32(SCENE_MANAGER) + 4);
+  if (!Pointer(m, scene + SCENE_SELCHAR_TASK))
+    return false;
+  *task = m.Read32(scene + SCENE_SELCHAR_TASK);
+  return Pointer(m, *task + TASK_AREAS);
+}
+
+// The save's first tag, when the whole table is mapped.
+bool TagTable(const GuestMemory& m, u32* tags)
+{
+  if (!Pointer(m, GAME_GLOBAL))
+    return false;
+  const u32 global = m.Read32(GAME_GLOBAL);
+  if (!Pointer(m, global + GAME_GLOBAL_NAME_RECORDS))
+    return false;
+  const u32 records = m.Read32(global + GAME_GLOBAL_NAME_RECORDS);
+  *tags = records + RECORDS_TAGS;
+  return Pointer(m, records) && m.Valid(*tags + TAG_SLOTS * TAG_SIZE - 1);
+}
+
+// Port `port`'s player area on the character select, if it is that port's and a human joined it.
+std::optional<u32> JoinedArea(const GuestMemory& m, u32 task, int port)
+{
+  const u32 at = task + TASK_AREAS + 4 * static_cast<u32>(port);
+  if (!Pointer(m, at))
+    return std::nullopt;
+  const u32 area = m.Read32(at);
+  if (!Pointer(m, area) || !Pointer(m, area + AREA_NAME_ID) ||
+      m.Read32(area + AREA_INDEX) != static_cast<u32>(port) ||
+      m.Read32(area + AREA_PLAYER_KIND) != PLAYER_KIND_HUMAN)
+  {
+    return std::nullopt;
+  }
+  return area;
+}
+
+// The label a port with controls and no name the game can show wears: "P2", as the game's own.
+std::u16string PortLabel(int port)
+{
+  return {u'P', static_cast<char16_t>(u'1' + port)};
+}
 }  // namespace
 
 bool GuardMemory::Valid(u32 address) const
@@ -191,40 +282,23 @@ std::u16string BrawlTag(std::string_view username)
 
 int ApplyNameTags(GuestMemory& m, const std::vector<Events::PortInfo>& ports)
 {
-  if (ports.empty() || !SceneIs(m, CHARACTER_SELECT))
-    return 0;
-  const u32 scene = m.Read32(m.Read32(SCENE_MANAGER) + 4);
-  if (!Pointer(m, scene + SCENE_SELCHAR_TASK))
-    return 0;
-  const u32 task = m.Read32(scene + SCENE_SELCHAR_TASK);
-  if (!Pointer(m, task + TASK_AREAS) || !Pointer(m, GAME_GLOBAL))
-    return 0;
-  const u32 global = m.Read32(GAME_GLOBAL);
-  if (!Pointer(m, global + GAME_GLOBAL_NAME_RECORDS))
-    return 0;
-  const u32 records = m.Read32(global + GAME_GLOBAL_NAME_RECORDS);
-  const u32 tags = records + RECORDS_TAGS;
-  if (!Pointer(m, records) || !m.Valid(tags + TAG_SLOTS * TAG_SIZE - 1))
+  u32 task = 0, tags = 0;
+  if (ports.empty() || !CharacterSelectTask(m, &task) || !TagTable(m, &tags))
     return 0;
   int given = 0;
   for (const Events::PortInfo& p : ports)
   {
     if (p.port < 0 || p.port > 3)
       continue;
-    const std::u16string name = BrawlTag(p.name);
+    const bool carries = p.controls.size() == CONTROLS_PROFILE_SIZE;
+    std::u16string name = BrawlTag(p.name);
+    if (name.empty() && carries)
+      name = PortLabel(p.port);
     if (name.empty())
       continue;
-    const u32 at = task + TASK_AREAS + 4 * static_cast<u32>(p.port);
-    if (!Pointer(m, at))
+    const std::optional<u32> area = JoinedArea(m, task, p.port);
+    if (!area || m.Read32(*area + AREA_NAME_ID) != NO_TAG)
       continue;
-    const u32 area = m.Read32(at);
-    if (!Pointer(m, area) || !Pointer(m, area + AREA_NAME_ID) ||
-        m.Read32(area + AREA_INDEX) != static_cast<u32>(p.port) ||
-        m.Read32(area + AREA_PLAYER_KIND) != PLAYER_KIND_HUMAN ||
-        m.Read32(area + AREA_NAME_ID) != NO_TAG)
-    {
-      continue;
-    }
     std::u16string tag = name;
     int slot = FindTag(m, tags, tag);
     if (slot >= 0 && WornByAnotherPort(m, task, p.port, slot))
@@ -234,28 +308,95 @@ int ApplyNameTags(GuestMemory& m, const std::vector<Events::PortInfo>& ports)
       if (slot >= 0 && WornByAnotherPort(m, task, p.port, slot))
         continue;
     }
+    if (carries && !TemplateReadable(m))
+      continue;
     if (slot < 0)
       slot = MakeTag(m, tags, tag);
     if (slot < 0)
       continue;
-    m.Write32(area + AREA_NAME_ID, static_cast<u32>(slot));
+    // The player's own controls, in the tag the port plays the match with.
+    if (carries)
+      WriteControls(m, tags + static_cast<u32>(slot) * TAG_SIZE, p.controls);
+    m.Write32(*area + AREA_NAME_ID, static_cast<u32>(slot));
     ++given;
   }
   return given;
 }
 
+namespace
+{
+// Only Brawl rev 2 itself (RSBE01) or a launcher profile booting it (Project+): the addresses are
+// that executable's.
+bool BrawlRev2()
+{
+  const Orca::Profile* profile = Orca::ActiveProfile();
+  return profile && profile->revision == 2 &&
+         (profile->IsLauncher() ? profile->disc == "RSBE01" : profile->game_id == "RSBE01");
+}
+}  // namespace
+
 void WriteNameTags(const Core::CPUThreadGuard& guard, const std::vector<Events::PortInfo>& ports)
 {
-  // Only Brawl rev 2 itself (RSBE01) or a launcher profile booting it (Project+): the addresses are
-  // that executable's.
-  const Orca::Profile* profile = Orca::ActiveProfile();
-  const bool brawl_rev2 =
-      profile && profile->revision == 2 &&
-      (profile->IsLauncher() ? profile->disc == "RSBE01" : profile->game_id == "RSBE01");
-  if (ports.empty() || !brawl_rev2)
+  if (ports.empty() || !BrawlRev2())
     return;
   GuardMemory memory(guard);
   ApplyNameTags(memory, ports);
+}
+
+std::vector<u8> ReadOwnControls(const GuestMemory& m, int port, std::string_view own_name,
+                                std::u16string* last_worn)
+{
+  u32 tags = 0;
+  if (!TagTable(m, &tags))
+    return {};
+  // On the character select, the tag the player's port wears is the one they play with.
+  u32 task = 0;
+  if (port >= 0 && port <= 3 && CharacterSelectTask(m, &task))
+  {
+    if (const std::optional<u32> area = JoinedArea(m, task, port))
+    {
+      const u32 id = m.Read32(*area + AREA_NAME_ID);
+      if (id < static_cast<u32>(TAG_SLOTS))
+      {
+        if (std::u16string worn = TagAt(m, tags + id * TAG_SIZE); !worn.empty())
+          *last_worn = std::move(worn);
+      }
+    }
+  }
+  int slot = last_worn->empty() ? -1 : FindTag(m, tags, *last_worn);
+  if (const std::u16string own = BrawlTag(own_name); slot < 0 && !own.empty())
+    slot = FindTag(m, tags, own);
+  if (slot < 0)
+    return {};
+  const u32 tag = tags + static_cast<u32>(slot) * TAG_SIZE;
+  std::vector<u8> profile;
+  profile.reserve(CONTROLS_PROFILE_SIZE);
+  profile.push_back(m.Read8(tag + TAG_RUMBLE));
+  for (u32 i = 0; i < CONTROLS_LAYOUT_SIZE; ++i)
+    profile.push_back(m.Read8(tag + TAG_CONTROLS + i));
+  return profile;
+}
+
+void ReadOwnControlsFrame(const Core::CPUThreadGuard& guard,
+                          const std::vector<Events::PortInfo>& ports)
+{
+  if (!BrawlRev2())
+    return;
+  // This machine's own port: a read for what this player sends, never a write (the one place
+  // PortInfo.remote decides anything, and it decides only what this machine reads).
+  const auto own = std::find_if(ports.begin(), ports.end(),
+                                [](const Events::PortInfo& p) { return !p.remote; });
+  if (own == ports.end())
+    return;
+  static std::u16string s_last_worn;
+  static std::vector<u8> s_published;
+  GuardMemory memory(guard);
+  std::vector<u8> profile = ReadOwnControls(memory, own->port, own->name, &s_last_worn);
+  if (profile != s_published)
+  {
+    s_published = profile;
+    Events::SetOwnControls(std::move(profile));
+  }
 }
 
 }  // namespace Orca::UX
