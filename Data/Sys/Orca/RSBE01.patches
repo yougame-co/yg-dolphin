@@ -164,7 +164,8 @@
 806DC8E0 7E439378 90030018    # stw    r0, 0x18(r3) (kept for the back out)
 806DC8E4 38930170 93CF0008    # stw    r30, 0x8(r15)
 806DC8E8 38A00000 480000E8    # b      0x806DC9D0 (setNext's loop, as every entry)
-806DC8EC 4B950D55 80AF0018    # helper: lwz r5, 0x18(r15) (r15 is sqVsMelee there)
+806DC8EC 4B950D55 48015D88    # helper: b 0x806F2674 (the backstop below), whose last word is
+                              # lwz r5, 0x18(r15) (r15 is sqVsMelee there)
 806DC8F0 93CF0008 38000000    # li     r0, 0
 806DC8F4 480000DC 900F0018    # stw    r0, 0x18(r15) (used once)
 806DC8F8 7E439378 3805FFE8    # subi   r0, r5, 24
@@ -183,6 +184,29 @@
 806DCE38 38910064 38910064    # addi   r4, r17, 100 ("sqMenuMain"; guard)
 806DCE3C 38A00001 4BFFFAB1    # li r5, 1 -> bl 0x806DC8EC (r5: the argument)
 806DCE40 4B950801 4B950801    # bl     setNextSequence (guard)
+
+# The online rules' backstop (ORCA.md "Online rules"; the match block, UX/MatchBlock.h): while the
+# block's header says casual or ranked, sqVsMelee's way out to the menu (setNext's state 16, the
+# character select's Back button and held B alike) starts sqVsMelee again instead, with 255 as
+# after a match (the picks stay): no way out of the character select in a queue match. Without a
+# header (friends, solo) the helper above goes on as before. The helper's first word branches to
+# this code, in the dead code of sqNetAnyOkiraku::setNext (FreeSpace.h, its first code cave; the
+# originals are what is there in both games). At the helper's call r4 is "sqMenuMain" (0x807017B0)
+# and "sqVsMelee" is 0x30 after it; r0, r11 and r12 are free there.
+806F2674 7C63A82E 3D80806F    # lis    r12, 0x806F
+806F2678 2C030000 800C2380    # lwz    r0, 0x2380(r12) (the match block's magic)
+806F267C 41820010 3D605947    # lis    r11, 0x5947
+806F2680 8803005D 616B4D31    # ori    r11, r11, 0x4D31 ('YGM1')
+806F2684 54000776 7C005800    # cmpw   r0, r11
+806F2688 9803005D 4082001C    # bne    0x806F26A4 (no header)
+806F268C 3AD60001 880C2385    # lbz    r0, 0x2385(r12) (its mode)
+806F2690 3A94005C 2C000000    # cmpwi  r0, 0
+806F2694 2C160007 41820010    # beq    0x806F26A4 (mode none)
+806F2698 3AB50004 38840030    # addi   r4, r4, 0x30 ("sqMenuMain" -> "sqVsMelee")
+806F269C 3A52005C 38A000FF    # li     r5, 255 (its argument after a match)
+806F26A0 4180FEFC 4E800020    # blr
+806F26A4 88710009 80AF0018    # lwz    r5, 0x18(r15) (the helper's own first word)
+806F26A8 38000004 4BFEA248    # b      0x806DC8F0 (the helper goes on)
 
 # --- Input: the game reads this frame's pads ------------------------------------------------------
 

@@ -63,8 +63,6 @@ constexpr u32 MELEE = 0x90180F20;
 constexpr u32 MENU_DATA = 0x9017BE50;
 constexpr u32 SCENE = 0x80910000;
 constexpr u32 SCENE_NAME = 0x80920000;
-constexpr u32 CSS_TASK = 0x80930000;
-constexpr u32 PANELS = 0x80940000;
 constexpr u32 PPLUS_RSS = 0x8042C4E8;
 constexpr u32 PPLUS_STRIKES = 0x8042C822;
 
@@ -74,17 +72,19 @@ void SetScene(FakeMemory& m, std::string_view scene)
   m.Text(SCENE_NAME, scene);
 }
 
-// A panel on the character select: kind 0 human, 1 CPU, 2 closed; the character's id or none.
-void SetPanel(FakeMemory& m, int port, u32 kind, u32 character)
+// A port's pick in the match's init data, as the character select writes it: type 0 a human's
+// pick, 1 a CPU's, 3 nobody's; the character (gmCharacterKind; 0x3E none).
+void SetPick(FakeMemory& m, int port, u8 type, u8 character)
 {
-  const u32 panel = PANELS + static_cast<u32>(port) * 0x200;
-  m.Write32(panel + 0x1B4, kind);
-  m.Write32(panel + 0x1B8, character);
+  const u32 p = MELEE + 0x98 + static_cast<u32>(port) * 0x5C;
+  m.Write8(p + 0, character);
+  m.Write8(p + 1, type);
 }
+constexpr u8 HUMAN = 0, CPU = 1, NOBODY = 3, NONE = 0x3E;
 
-// Brawl's memory as the probes found it: the scene manager and its scene (the character select's
-// task and panels), g_GameGlobal with the rules and the match's init data, the record's menu data
-// with the fresh save's defaults, and the match block holding the game's dead code.
+// Brawl's memory as the probes found it: the scene manager and its scene, g_GameGlobal with the
+// rules and the match's init data, the record's menu data with the fresh save's defaults, and the
+// match block holding the game's dead code.
 FakeMemory Game(std::string_view scene)
 {
   FakeMemory m;
@@ -94,24 +94,15 @@ FakeMemory Game(std::string_view scene)
   m.Write32(0x805A0060, 0x80900000);
   m.Write32(0x80900004, SCENE);
   m.Write32(SCENE, SCENE_NAME);
-  m.Write32(SCENE + 0x400, CSS_TASK);
   SetScene(m, scene);
-  m.Fill(CSS_TASK, 0x60);
-  m.Fill(PANELS, 4 * 0x200);
-  for (int port = 0; port < 4; ++port)
-  {
-    m.Write32(CSS_TASK + 0x44 + 4 * static_cast<u32>(port),
-              PANELS + static_cast<u32>(port) * 0x200);
-    SetPanel(m, port, 2, 0xFFFFFFFF);
-  }
   m.Fill(0x805A00E0, 4);
   m.Fill(0x90181300, 0x40);
   m.Write32(0x805A00E0, 0x90181300);
   m.Write32(0x90181308, MELEE);
   m.Write32(0x9018131C, SET_RULE);
   m.Fill(MELEE, 0x98 + 4 * 0x5C);
-  for (u32 port = 0; port < 4; ++port)
-    m.Write8(MELEE + 0x98 + port * 0x5C + 1, 3);  // nobody
+  for (int port = 0; port < 4; ++port)
+    SetPick(m, port, NOBODY, NONE);
   m.Fill(SET_RULE, 0x88);
   // The fresh save's rules: a 2-minute timed match, 3 stocks, ratio 1.0, Choose, pause on.
   m.Write8(SET_RULE + 0x02, 0x00);
@@ -263,28 +254,25 @@ TEST(OrcaOnlineRules, RankedChoosesTheStageAndProjectPlusPlaysFourStocks)
 TEST(OrcaOnlineRules, IceClimbersTakeFinalDestinationOutOfTheRandomStages)
 {
   FakeMemory m = Locked(Mode::Casual, Ruleset::Brawl);
-  SetPanel(m, 0, 0, 0x00);  // Mario
-  SetPanel(m, 1, 0, 0x02);  // Link
+  SetPick(m, 0, HUMAN, 0x00);  // Mario
+  SetPick(m, 1, HUMAN, 0x02);  // Link
   ApplyLocks(m);
   EXPECT_EQ(m.Read32(MENU_DATA + 0x24) & BRAWL_FINAL_DESTINATION_BIT, BRAWL_FINAL_DESTINATION_BIT);
-  SetPanel(m, 1, 0, CHARACTER_ICE_CLIMBERS);
+  SetPick(m, 1, HUMAN, CHARACTER_ICE_CLIMBERS);
   ApplyLocks(m);
   EXPECT_EQ(m.Read32(MENU_DATA + 0x24), BRAWL_LEGAL_BRAWL_PAGE & ~BRAWL_FINAL_DESTINATION_BIT);
   // A CPU's Ice Climbers don't count (and a queue match has none).
-  SetPanel(m, 1, 1, CHARACTER_ICE_CLIMBERS);
+  SetPick(m, 1, CPU, CHARACTER_ICE_CLIMBERS);
   ApplyLocks(m);
   EXPECT_EQ(m.Read32(MENU_DATA + 0x24), BRAWL_LEGAL_BRAWL_PAGE);
-  // After the character select: the match's init data, where a Random character is resolved.
+  // On the way to the fight (a Random character resolved there).
   SetScene(m, "scSelStage");
-  m.Write8(MELEE + 0x98 + 0 * 0x5C + 0, 0x00);
-  m.Write8(MELEE + 0x98 + 0 * 0x5C + 1, 0);
-  m.Write8(MELEE + 0x98 + 1 * 0x5C + 0, CHARACTER_ICE_CLIMBERS);
-  m.Write8(MELEE + 0x98 + 1 * 0x5C + 1, 0);
+  SetPick(m, 1, HUMAN, CHARACTER_ICE_CLIMBERS);
   ApplyLocks(m);
   EXPECT_EQ(m.Read32(MENU_DATA + 0x24), BRAWL_LEGAL_BRAWL_PAGE & ~BRAWL_FINAL_DESTINATION_BIT);
   // In the fight the list stays as it was.
   SetScene(m, "scMelee");
-  m.Write8(MELEE + 0x98 + 1 * 0x5C + 0, 0x02);
+  SetPick(m, 1, HUMAN, 0x02);
   ApplyLocks(m);
   EXPECT_EQ(m.Read32(MENU_DATA + 0x24), BRAWL_LEGAL_BRAWL_PAGE & ~BRAWL_FINAL_DESTINATION_BIT);
 }
@@ -341,7 +329,8 @@ TEST(OrcaOnlineRules, TheGateLocksTheMenusOnlyUnderAHeader)
 TEST(OrcaOnlineRules, FriendsGamesAreUntouched)
 {
   FakeMemory m = Game("scSelctCharacter");
-  SetPanel(m, 0, 0, CHARACTER_ICE_CLIMBERS);
+  SetPick(m, 0, HUMAN, CHARACTER_ICE_CLIMBERS);
+  m.writes = 0;
   EXPECT_EQ(ApplyLocks(m), 0);
   EXPECT_EQ(m.writes, 0);
   // A header with mode none (never written so, but a reader must not lock on it).
@@ -361,8 +350,8 @@ TEST(OrcaOnlineRules, FriendsGamesAreUntouched)
 TEST(OrcaOnlineRules, RankedsReadyTimerFindsTheNoShow)
 {
   FakeMemory m = Locked(Mode::Ranked, Ruleset::Brawl);
-  SetPanel(m, 0, 0, 0x00);         // ready: Mario
-  SetPanel(m, 1, 0, 0xFFFFFFFF);   // a human with no character yet
+  m.Write8(MB::PLUGGED, 3);
+  SetPick(m, 0, HUMAN, 0x00);  // ready: Mario
   for (int f = 0; f < CSS_READY_FRAMES - 1; ++f)
     ApplyLocks(m);
   EXPECT_EQ(m.Read16(MB::CSS_TIMER), CSS_READY_FRAMES - 1);
@@ -370,7 +359,7 @@ TEST(OrcaOnlineRules, RankedsReadyTimerFindsTheNoShow)
   ApplyLocks(m);
   EXPECT_EQ(m.Read8(MB::CSS_NO_SHOW), 2);  // port 2
   // Picking now changes nothing: the no-show stands while the character select is up.
-  SetPanel(m, 1, 0, 0x02);
+  SetPick(m, 1, HUMAN, 0x02);
   ApplyLocks(m);
   EXPECT_EQ(m.Read8(MB::CSS_NO_SHOW), 2);
   // Leaving the character select clears it.
@@ -379,34 +368,40 @@ TEST(OrcaOnlineRules, RankedsReadyTimerFindsTheNoShow)
   EXPECT_EQ(m.Read8(MB::CSS_NO_SHOW), 0);
 }
 
-TEST(OrcaOnlineRules, TheReadyTimerStopsWhenBothPickAndAfterTheFirstFight)
+TEST(OrcaOnlineRules, TheReadyTimerWaitsForBothPlayersAndStopsWhenBothPick)
 {
   FakeMemory m = Locked(Mode::Ranked, Ruleset::Brawl);
-  SetPanel(m, 0, 0, 0x00);
-  SetPanel(m, 1, 0, 0xFFFFFFFF);
+  SetPick(m, 0, HUMAN, 0x00);
+  // The opponent isn't plugged in yet: no timer.
+  m.Write8(MB::PLUGGED, 1);
+  for (int f = 0; f < CSS_READY_FRAMES + 5; ++f)
+    ApplyLocks(m);
+  EXPECT_EQ(m.Read16(MB::CSS_TIMER), 0);
+  EXPECT_EQ(m.Read8(MB::CSS_NO_SHOW), 0);
+  m.Write8(MB::PLUGGED, 3);
   for (int f = 0; f < 100; ++f)
     ApplyLocks(m);
   EXPECT_EQ(m.Read16(MB::CSS_TIMER), 100);
-  SetPanel(m, 1, 0, 0x02);
+  SetPick(m, 1, HUMAN, 0x02);
   ApplyLocks(m);
   EXPECT_EQ(m.Read16(MB::CSS_TIMER), 0);
-  // Nobody picked yet, or only one human: no timer either.
-  SetPanel(m, 0, 0, 0xFFFFFFFF);
-  SetPanel(m, 1, 0, 0xFFFFFFFF);
+  // Nobody picked yet: no timer either.
+  SetPick(m, 0, NOBODY, NONE);
+  SetPick(m, 1, NOBODY, NONE);
   ApplyLocks(m);
   EXPECT_EQ(m.Read16(MB::CSS_TIMER), 0);
   // After a fight the set's later games keep their characters: no no-show.
   SetScene(m, "scMelee");
   ApplyLocks(m);
   SetScene(m, "scSelctCharacter");
-  SetPanel(m, 0, 0, 0x00);
+  SetPick(m, 0, HUMAN, 0x00);
   for (int f = 0; f < CSS_READY_FRAMES + 5; ++f)
     ApplyLocks(m);
   EXPECT_EQ(m.Read8(MB::CSS_NO_SHOW), 0);
   // Casual has no timer.
   FakeMemory c = Locked(Mode::Casual, Ruleset::Brawl);
-  SetPanel(c, 0, 0, 0x00);
-  SetPanel(c, 1, 0, 0xFFFFFFFF);
+  c.Write8(MB::PLUGGED, 3);
+  SetPick(c, 0, HUMAN, 0x00);
   for (int f = 0; f < CSS_READY_FRAMES + 5; ++f)
     ApplyLocks(c);
   EXPECT_EQ(c.Read16(MB::CSS_TIMER), 0);
@@ -418,8 +413,8 @@ TEST(OrcaOnlineRules, LocksArePureFunctionsOfMemory)
   // The same memory twice (a first run and its re-run from the snapshot) writes the same bytes.
   FakeMemory a = Locked(Mode::Casual, Ruleset::Brawl);
   FakeMemory b = Locked(Mode::Casual, Ruleset::Brawl);
-  SetPanel(a, 0, 0, CHARACTER_ICE_CLIMBERS);
-  SetPanel(b, 0, 0, CHARACTER_ICE_CLIMBERS);
+  SetPick(a, 0, HUMAN, CHARACTER_ICE_CLIMBERS);
+  SetPick(b, 0, HUMAN, CHARACTER_ICE_CLIMBERS);
   EXPECT_EQ(ApplyLocks(a), ApplyLocks(b));
   EXPECT_EQ(a.bytes, b.bytes);
 }

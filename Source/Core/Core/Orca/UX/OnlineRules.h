@@ -80,17 +80,18 @@ constexpr u32 BRAWL_LEGAL_BRAWL_PAGE = 0x04005007;  // BF, FD, Delfino, YI, Lyla
 constexpr u32 BRAWL_LEGAL_MELEE_PAGE = 0x00020000;  // Pokemon Stadium
 constexpr u32 BRAWL_FINAL_DESTINATION_BIT = 0x00000002;
 
-// The CSS characters this module knows (the select's ids, which the match's init data and result
-// records use too).
+// The characters this module knows, in the match's init data (gmCharacterKind: the character
+// select writes a port's pick there as it is made, and a Random pick resolved as it ends).
 constexpr int CHARACTER_ICE_CLIMBERS = 0x10;
+constexpr int CHARACTER_NONE = 0x3E;
 
-// One port on the character select, as ApplyLocks reads it.
-struct CssPort
+// One port's pick, from the match's init data (gmGlobalModeMelee +0x98 + port x 0x5C).
+struct PlayerPick
 {
-  bool human = false;     // a human player's panel (not CPU, not closed)
-  int character = -1;     // the character picked, -1 none yet
+  bool human = false;  // a human's pick (type 0), not a CPU's or nobody's
+  int character = -1;  // the character picked (gmCharacterKind), -1 none
 };
-std::array<CssPort, 4> ReadCss(const GuestMemory& memory);
+std::array<PlayerPick, 4> ReadPicks(const GuestMemory& memory);
 
 // The ranked character select's no-ready limit, in frames (60 s).
 constexpr int CSS_READY_FRAMES = 60 * 60;
@@ -115,7 +116,11 @@ std::optional<int> ConfirmNoShow(int confirmed);
 // ---- The frame hook's part (UX.cpp) ----
 // At every boundary, after the name tags and before the toggled patch groups: the header at an
 // alone boundary (first runs only), then the locks (first runs and re-runs).
-void OnFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, bool alone);
+// `plugged`: the ports in play at `frame` (the session's synced plan, Events::PortInfo): written
+// into the block while it locks, for the ready timer (a pure function of synced data, as the name
+// tags are).
+void OnFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, bool alone,
+             u8 plugged);
 // Registers the input gate's source (UX::Init) and removes it (UX::Shutdown).
 void Install();
 void Uninstall();

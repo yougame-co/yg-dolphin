@@ -81,7 +81,13 @@ void Init()
     }
     // The online rules (OnlineRules.h): a queue room's header at an alone boundary, then the
     // locks it calls for (rules, stages, the ready timer), on first runs and re-runs alike.
-    Rules::OnFrame(guard, frame, resimulating, alone);
+    u8 plugged = 0;
+    for (const Orca::Events::PortInfo& p : ports)
+    {
+      if (p.port >= 0 && p.port < 4)
+        plugged |= static_cast<u8>(1 << p.port);
+    }
+    Rules::OnFrame(guard, frame, resimulating, alone, plugged);
     // Last, after every other writer here: a toggled patch group follows its condition as this
     // boundary's writers left it, so the hook run again at this boundary (a re-run from the
     // snapshot saved here) decides the same and writes nothing new (GamePatches.h).

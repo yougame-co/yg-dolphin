@@ -67,6 +67,10 @@ constexpr u32 CSS_TIMER = BASE + 0xC0;
 // u8: the port (1-4) that didn't ready in time; 0 none. Set once when the timer runs out, cleared
 // when the character select is left.
 constexpr u32 CSS_NO_SHOW = BASE + 0xC2;
+// u8: bit 0, a fight began since the header was written (the no-show applies before it only).
+constexpr u32 FOUGHT = BASE + 0xC3;
+// u8: the ports in play (bit n: port n+1), from the session's synced plan at each boundary.
+constexpr u32 PLUGGED = BASE + 0xC4;
 constexpr u32 PHASE1_SIZE = 0x10;
 
 // ---- Saved at the header's alone write, given back when it is cleared ----

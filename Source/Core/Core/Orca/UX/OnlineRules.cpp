@@ -58,16 +58,6 @@ constexpr u32 MENU_ITEM_SWITCH_LO = MENU_DATA + 0x0C;
 constexpr u32 MENU_STAGES_MELEE = MENU_DATA + 0x20;
 constexpr u32 MENU_STAGES_BRAWL = MENU_DATA + 0x24;
 
-// The scene manager (OnlineMenu.cpp): +0x04 the current scene. The character select's scene:
-// +0x400 its task, whose +0x44 + 4 x port are the players' panels: +0x1B4 the panel's kind,
-// +0x1B8 its character (the research's probes; ReadCss).
-constexpr u32 SCENE_MANAGER = 0x805A0060;
-constexpr u32 SCENE_CURRENT = 0x04;
-constexpr u32 CSS_TASK = 0x400;
-constexpr u32 CSS_PANELS = 0x44;
-constexpr u32 PANEL_KIND = 0x1B4;
-constexpr u32 PANEL_CHARACTER = 0x1B8;
-
 // Project+'s stage switch data (Net-Random.asm RSS_EXDATA, its preset loaded from the SD card) and
 // its strike table (STAGE_STRIKE_TABLE: 6 bytes per page, 5 pages).
 constexpr u32 PPLUS_RSS = 0x8042C4E8;
@@ -97,10 +87,6 @@ constexpr const char* SCENE_CSS = "scSelctCharacter";
 constexpr const char* SCENE_SSS = "scSelStage";
 constexpr const char* SCENE_FIGHT = "scMelee";
 constexpr const char* SCENE_BETWEEN = "scMemoryChange";
-
-// Phase 1's own flags in the block: +0xC3 bit 0, a fight began since the header was written (the
-// set's first game is under way or done: the ready timer's no-show applies only before it).
-constexpr u32 FOUGHT = B::BASE + 0xC3;
 
 bool Pointer(const GuestMemory& m, u32 p)
 {
@@ -157,41 +143,27 @@ u8 StocksFor(Ruleset ruleset)
   return ruleset == Ruleset::PPlus ? 4 : 3;
 }
 
-u32 CssTask(const GuestMemory& m)
+// The picks as they stand (the match's init data: the character select writes each pick there).
+std::array<PlayerPick, 4> Picks(const GuestMemory& m)
 {
-  if (!Pointer(m, SCENE_MANAGER))
-    return 0;
-  const u32 manager = m.Read32(SCENE_MANAGER);
-  if (!Pointer(m, manager + SCENE_CURRENT))
-    return 0;
-  const u32 scene = m.Read32(manager + SCENE_CURRENT);
-  if (!Pointer(m, scene + CSS_TASK))
-    return 0;
-  const u32 task = m.Read32(scene + CSS_TASK);
-  return Pointer(m, task + CSS_PANELS + 12) ? task : 0;
-}
-
-// The players' characters for the match about to start, from its init data (filled as the
-// character select ends: the stage select and the scenes between).
-std::array<CssPort, 4> ReadMatchPlayers(const GuestMemory& m)
-{
-  std::array<CssPort, 4> out{};
+  std::array<PlayerPick, 4> out{};
   const u32 melee = GlobalField(m, GLOBAL_MODE_MELEE);
-  if (!melee || !m.Valid(melee + MELEE_PLAYERS + 4 * MELEE_PLAYER_SIZE))
+  if (!melee || !m.Valid(melee + MELEE_PLAYERS + 4 * MELEE_PLAYER_SIZE - 1))
     return out;
   for (u32 i = 0; i < 4; ++i)
   {
     const u32 p = melee + MELEE_PLAYERS + i * MELEE_PLAYER_SIZE;
     out[i].human = m.Read8(p + 1) == PLAYER_HUMAN;
-    if (out[i].human)
-      out[i].character = m.Read8(p);
+    const u8 character = m.Read8(p);
+    if (out[i].human && character != CHARACTER_NONE)
+      out[i].character = character;
   }
   return out;
 }
 
-bool AnyIceClimbers(const std::array<CssPort, 4>& ports)
+bool AnyIceClimbers(const std::array<PlayerPick, 4>& ports)
 {
-  for (const CssPort& p : ports)
+  for (const PlayerPick& p : ports)
   {
     if (p.human && p.character == CHARACTER_ICE_CLIMBERS)
       return true;
@@ -223,15 +195,11 @@ void ForceStages(Writer& w, const Header& h, const std::string& scene)
 {
   if (h.ruleset == Ruleset::Brawl)
   {
-    // The characters as they stand: on the character select its panels, from its end on the
-    // match's init data (a Random character is resolved there). Elsewhere the list stays as it is.
-    std::array<CssPort, 4> ports;
-    if (scene == SCENE_CSS)
-      ports = ReadCss(w.m);
-    else if (scene == SCENE_SSS || scene == SCENE_BETWEEN)
-      ports = ReadMatchPlayers(w.m);
-    else
+    // The picks as they stand, on the character select and on the way to the fight (a Random
+    // character resolved as the character select ends). In the fight the list stays as it is.
+    if (scene != SCENE_CSS && scene != SCENE_SSS && scene != SCENE_BETWEEN)
       return;
+    const std::array<PlayerPick, 4> ports = Picks(w.m);
     const bool ice = AnyIceClimbers(ports);
     w.U32(MENU_STAGES_BRAWL, BRAWL_LEGAL_BRAWL_PAGE & ~(ice ? BRAWL_FINAL_DESTINATION_BIT : 0));
     w.U32(MENU_STAGES_MELEE, BRAWL_LEGAL_MELEE_PAGE);
@@ -252,22 +220,26 @@ void ForceStages(Writer& w, const Header& h, const std::string& scene)
 void ReadyTimer(Writer& w, const Header& h, const std::string& scene)
 {
   if (scene == SCENE_FIGHT)
-    w.U8(FOUGHT, static_cast<u8>(w.m.Read8(FOUGHT) | 1));
+    w.U8(B::FOUGHT, static_cast<u8>(w.m.Read8(B::FOUGHT) | 1));
   if (scene != SCENE_CSS)
   {
     w.U16(B::CSS_TIMER, 0);
     w.U8(B::CSS_NO_SHOW, 0);
     return;
   }
-  if (h.mode != Mode::Ranked || (w.m.Read8(FOUGHT) & 1) || w.m.Read8(B::CSS_NO_SHOW) != 0)
+  if (h.mode != Mode::Ranked || (w.m.Read8(B::FOUGHT) & 1) || w.m.Read8(B::CSS_NO_SHOW) != 0)
     return;
-  const std::array<CssPort, 4> ports = ReadCss(w.m);
-  int ready = 0, waiting = -1;
-  for (int i = 0; i < 4; ++i)
+  // The two players of a queue match, ports 1 and 2, both plugged in.
+  if ((w.m.Read8(B::PLUGGED) & 3) != 3)
   {
-    if (!ports[i].human)
-      continue;
-    if (ports[i].character >= 0)
+    w.U16(B::CSS_TIMER, 0);
+    return;
+  }
+  const std::array<PlayerPick, 4> picks = Picks(w.m);
+  int ready = 0, waiting = -1;
+  for (int i = 0; i < 2; ++i)
+  {
+    if (picks[i].character >= 0)
       ++ready;
     else if (waiting < 0)
       waiting = i;
@@ -337,26 +309,9 @@ Ruleset ProfileRuleset()
   return profile->game_id == "RSBE01" ? Ruleset::Brawl : Ruleset::None;
 }
 
-std::array<CssPort, 4> ReadCss(const GuestMemory& m)
+std::array<PlayerPick, 4> ReadPicks(const GuestMemory& m)
 {
-  std::array<CssPort, 4> out{};
-  const u32 task = CssTask(m);
-  if (!task)
-    return out;
-  for (u32 i = 0; i < 4; ++i)
-  {
-    const u32 panel = m.Read32(task + CSS_PANELS + 4 * i);
-    if (!Pointer(m, panel + PANEL_CHARACTER))
-      continue;
-    // The panel's kind: 0 a human player's, 1 a CPU's, 2 closed (the research's probes).
-    const u32 kind = m.Read32(panel + PANEL_KIND);
-    out[i].human = kind == 0;
-    if (!out[i].human)
-      continue;
-    const u32 character = m.Read32(panel + PANEL_CHARACTER);
-    out[i].character = character < 0x40 ? static_cast<int>(character) : -1;
-  }
-  return out;
+  return Picks(m);
 }
 
 int WriteHeader(GuestMemory& m, Mode mode, Ruleset ruleset)
@@ -540,7 +495,8 @@ std::optional<int> ConfirmNoShow(int confirmed)
   return out;
 }
 
-void OnFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, bool alone)
+void OnFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, bool alone,
+             u8 plugged)
 {
   const Ruleset ruleset = ProfileRuleset();
   if (ruleset == Ruleset::None)
@@ -564,6 +520,9 @@ void OnFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, bo
     }
     s_settled = true;
   }
+  // The ports in play, for the ready timer: synced data, the same at this frame on every machine.
+  if (ReadHeader(m).Locked() && m.Read8(B::PLUGGED) != plugged)
+    m.Write8(B::PLUGGED, plugged);
   const int locked = ApplyLocks(m);
   if (locked > 0 && !resimulating)
     DEBUG_LOG_FMT(ROLLBACK, "Online rules: {} bytes forced at frame {}", locked, frame);
