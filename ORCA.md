@@ -1824,18 +1824,19 @@ rates the set once.
 
 ### The match block
 
-`FreeSpace::kMatchBlock` (`0x806F2380`, 512 bytes, both games). Only Orca's frame hook writes it,
-as a pure function of memory and the frame number, first runs and re-runs alike, and only the
-bytes that differ. The header and the stage flow's bytes (`+0x00`-`+0x5F`) are the stage-select
-track's layout (`MatchBlock.h` there); the set as this track follows it sits clear of them, at
-`+0x100`. Layout (big-endian):
+`FreeSpace::kMatchBlock` (`0x806F2380`, both games) and its free tail up to `kMatchBlockLimit`
+(`0x806F2618`). Only Orca's frame hook writes it, as a pure function of memory and the frame
+number, first runs and re-runs alike, and only the bytes that differ. Every rules track writes the
+same header; the set as this track follows it sits at `+0x210`, past the 512-byte block, clear of
+the other tracks' sets, steps, saved rules (`+0x10`-`+0x1FF`) and the character order (`+0x200`).
+Layout (big-endian):
 
 | Offset | |
 |---|---|
-| `+0x00` | Header: `u32` magic `YGM1`, `u8` version 1, `u8` mode (0 none, 1 casual, 2 ranked), `u8` ruleset (1 Brawl / Supernova 2025, 2 Project+ 2024). `+0x07`-`+0x5F`: the stage flow's (its coin and steps), never touched here. |
-| `+0x100` | Set: `u8` games recorded, `u8[2]` wins (ports 1, 2), `u8` done (1 won, 2 void), `u8` winner port, `u8` last game's winner, `u8` tiebreak next, `u8` ties in a row. |
-| `+0x108` | The fight being followed: `u8` on, `u8` flags (1 between scenes, 2 sudden death, 4 time ran out), `u8[2]` ledge grabs, `u32` its first frame (the game's id), `u8[2]` stocks and `u16[2]` percent when time ran out, `u8[2]` on the ledge last frame. |
-| `+0x120` | 8 game records of 16 bytes: `u32` first frame, `u8` winner port (`0xFF` a tie), `u8` how (1 results screen, 2 stocks, 3 percent, 4 ledge limit, 5 tie), `u8` stage, `u8` flags (1 tiebreak game, 2 time ran out), `u8[2]` characters, `u8[2]` stocks left, `u8[2]` ledge grabs. |
+| `+0x00` | Header: `u32` magic `YGM1`, `u8` version 1, `u8` mode (0 none, 1 casual, 2 ranked), `u8` ruleset (1 Brawl / Supernova 2025, 2 Project+ 2024). Nothing else below `+0x210` is touched here. |
+| `+0x210` | Set: `u8` games recorded, `u8[2]` wins (ports 1, 2), `u8` done (1 won, 2 void), `u8` winner port, `u8` last game's winner, `u8` tiebreak next, `u8` ties in a row. |
+| `+0x218` | The fight being followed: `u8` on, `u8` flags (1 between scenes, 2 sudden death, 4 time ran out), `u8[2]` ledge grabs, `u32` its first frame (the game's id), `u8[2]` stocks and `u16[2]` percent when time ran out, `u8[2]` on the ledge last frame. |
+| `+0x230` | 8 game records of 12 bytes: `u32` first frame, `u8` winner port (`0xFF` a tie), `u8` how (bits 0-3: 1 results screen, 2 stocks, 3 percent, 4 ledge limit, 5 tie; `0x10` a tiebreak game, `0x20` time ran out), `u8` stage, `u8[2]` characters, `u8` stocks left (port 1 high nibble, port 2 low; `0xF` unknown), `u8[2]` ledge grabs. |
 
 The header follows the room this game is in (`RankedSet::SetRoomMode`). A host that takes a queue
 room (`host <code>`) asks for its queue's mode; any room of its own again (`ReopenRoom`: after a

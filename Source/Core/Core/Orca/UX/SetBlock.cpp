@@ -134,14 +134,15 @@ SetState ReadSet(const GuestMemory& memory)
     r.start = R32(memory, o);
     r.winner = R8(memory, o + 4);
     const u8 how = R8(memory, o + 5);
-    r.how = how <= static_cast<u8>(How::Tie) ? static_cast<How>(how) : How::None;
+    r.how = (how & 0x0F) <= static_cast<u8>(How::Tie) ? static_cast<How>(how & 0x0F) : How::None;
+    r.tiebreak = how & 0x10;
+    r.timeout = how & 0x20;
     r.stage = R8(memory, o + 6);
-    const u8 flags = R8(memory, o + 7);
-    r.tiebreak = flags & 1;
-    r.timeout = flags & 2;
-    r.characters = {R8(memory, o + 8), R8(memory, o + 9)};
-    r.stocks = {R8(memory, o + 10), R8(memory, o + 11)};
-    r.ledge = {R8(memory, o + 12), R8(memory, o + 13)};
+    r.characters = {R8(memory, o + 7), R8(memory, o + 8)};
+    const u8 stocks = R8(memory, o + 9);
+    const auto nibble = [](u8 v) { return v == 0xF ? u8(0xFF) : v; };
+    r.stocks = {nibble(stocks >> 4), nibble(stocks & 0xF)};
+    r.ledge = {R8(memory, o + 10), R8(memory, o + 11)};
   }
   return s;
 }
@@ -176,18 +177,17 @@ int WriteSet(GuestMemory& memory, const SetState& s)
   {
     const u32 o = SET_RECORDS + RECORD_SIZE * i;
     const GameRecord& r = s.records[i];
+    const auto nibble = [](u8 v) { return static_cast<u8>(v > 14 ? 0xF : v); };
     w.U32(o, r.start);
     w.U8(o + 4, r.winner);
-    w.U8(o + 5, static_cast<u8>(r.how));
+    w.U8(o + 5, static_cast<u8>((static_cast<u8>(r.how) & 0x0F) | (r.tiebreak ? 0x10 : 0) |
+                                (r.timeout ? 0x20 : 0)));
     w.U8(o + 6, r.stage);
-    w.U8(o + 7, static_cast<u8>((r.tiebreak ? 1 : 0) | (r.timeout ? 2 : 0)));
-    w.U8(o + 8, r.characters[0]);
-    w.U8(o + 9, r.characters[1]);
-    w.U8(o + 10, r.stocks[0]);
-    w.U8(o + 11, r.stocks[1]);
-    w.U8(o + 12, r.ledge[0]);
-    w.U8(o + 13, r.ledge[1]);
-    w.U16(o + 14, 0);
+    w.U8(o + 7, r.characters[0]);
+    w.U8(o + 8, r.characters[1]);
+    w.U8(o + 9, static_cast<u8>(nibble(r.stocks[0]) << 4 | nibble(r.stocks[1])));
+    w.U8(o + 10, r.ledge[0]);
+    w.U8(o + 11, r.ledge[1]);
   }
   return w.changed;
 }
