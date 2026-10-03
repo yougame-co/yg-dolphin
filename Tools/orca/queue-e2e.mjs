@@ -579,8 +579,9 @@ async function playGame(host, joiner, first) {
     await Promise.all([host.press("A"), joiner.press("A")]);
     await sleep(600);
     await Promise.all([
-      host.hold([128, 255, 128, 128], 700),
-      joiner.hold([128, 255, 128, 128], 700),
+      // Up from the panel into the middle of the grid: further reaches the top bar and BACK.
+      host.hold([128, 255, 128, 128], 450),
+      joiner.hold([128, 255, 128, 128], 450),
     ]);
     await sleep(300);
     await Promise.all([host.press("A"), joiner.press("A")]);
@@ -593,7 +594,8 @@ async function playGame(host, joiner, first) {
   }
   await host.waitScene("scSelStage", 30000);
   await sleep(1500);
-  await host.hold([128, 255, 128, 128], 700);
+  // Brawl: up to the top row (Battlefield's); Project+: one step up.
+  await host.hold([128, 255, 128, 128], PPLUS ? 70 : 700);
   await host.press("A");
   for (let i = 0; i < 6 && host.scene === "scSelStage"; ++i) {
     await sleep(1500);

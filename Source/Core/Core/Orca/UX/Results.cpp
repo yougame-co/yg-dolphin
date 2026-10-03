@@ -111,8 +111,7 @@ GameResult Judge(const ResultBlock& block, int frame)
     return g;
   }
   const auto& p = block.ports;
-  if (!p[0].present || !p[1].present || !p[0].human || !p[1].human || p[2].present ||
-      p[3].present)
+  if (!p[0].present || !p[1].present || !p[0].human || !p[1].human || p[2].present || p[3].present)
   {
     g.why = "ports";
     return g;
@@ -299,8 +298,9 @@ void ApplyQueueRules(const Core::CPUThreadGuard& guard, bool alone)
   }
   GuardMemory memory(guard);
   const int changed = WriteQueueRules(memory);
-  NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: the rules preset (3 stocks, 8:00, items off), {} byte(s) "
-                           "changed",
+  NOTICE_LOG_FMT(ROLLBACK,
+                 "Matchmaking: the rules preset (3 stocks, 8:00, items off), {} byte(s) "
+                 "changed",
                  changed);
 }
 }  // namespace Orca::UX

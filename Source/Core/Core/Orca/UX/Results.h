@@ -93,7 +93,8 @@ struct GameResult
   // Void: why ("nocontest", "ports").
   std::string why;
   // The detail (Win and Draw): the frame of the first results-scene reading, the stage, ports 1
-  // and 2's characters and stocks left (-1 in a timed match), and whether the fight ran out of time.
+  // and 2's characters and stocks left (-1 in a timed match), and whether the fight ran out of
+  // time.
   int frame = -1;
   int stage = -1;
   std::array<int, 2> characters{-1, -1};

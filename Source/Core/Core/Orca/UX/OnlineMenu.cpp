@@ -174,7 +174,8 @@ void ReadOnlineMenu(const Core::CPUThreadGuard& guard, bool resimulating, bool a
   // alone): the search is over.
   if (alone && state.where == MenuState::Where::Menu && Search::Current() != Search::State::None)
   {
-    NOTICE_LOG_FMT(ROLLBACK, "Online menu: back on the main menu while searching: orca menu cancel");
+    NOTICE_LOG_FMT(ROLLBACK,
+                   "Online menu: back on the main menu while searching: orca menu cancel");
     Search::End();
     Orca::Status::Menu("cancel");
   }

@@ -5,12 +5,12 @@
 
 #include <algorithm>
 #include <atomic>
-#include <condition_variable>
-#include <deque>
-#include <map>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdlib>
+#include <deque>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <random>
@@ -757,6 +757,7 @@ struct YouGameRoom::Impl
   // (under mutex): the host's opponent plugged in, game reports, a desync.
   std::string queue = "private";
   bool stay = false;
+  int room_size = MAX_SEATS;
   std::string match_id;
   bool set_done = false;
   bool opponent_plugged = false;
@@ -868,8 +869,7 @@ struct YouGameRoom::Impl
     const u32 extra = net_jitter ? (++net_count * 2654435761u) % static_cast<u32>(net_jitter + 1) : 0;
     auto due = RadioFree(now) + std::chrono::milliseconds(*net_delay + static_cast<int>(extra));
     const auto since = std::chrono::duration_cast<std::chrono::seconds>(now - net_opened).count();
-    if (&line == &held_out && net_uplink && since >= net_uplink->from_s &&
-        since < net_uplink->to_s)
+    if (&line == &held_out && net_uplink && since >= net_uplink->from_s && since < net_uplink->to_s)
     {
       const u32 x = ++uplink_count * 2246822519u ^ 0x85ebca6bu;
       const u32 more = (x ^ (x >> 13)) % static_cast<u32>(net_uplink->jitter_ms + 1);
@@ -1571,8 +1571,8 @@ struct YouGameRoom::Impl
     {
       std::lock_guard lock(mutex);
       room["queue"] = picojson::value(queue);
+      room["size"] = picojson::value(static_cast<double>(room_size));
     }
-    room["size"] = picojson::value(static_cast<double>(MAX_SEATS));
     room["host"] = ended ? picojson::value() : picojson::value(host);
     room["readyIds"] = picojson::value(picojson::array{});
     room["players"] = picojson::value(ended ? picojson::array{} : room_players);
@@ -2057,7 +2057,8 @@ struct YouGameRoom::Impl
       to = *t;
       return true;
     };
-    if (const auto it = event.find("detail"); it != event.end() && it->second.is<picojson::object>())
+    if (const auto it = event.find("detail");
+        it != event.end() && it->second.is<picojson::object>())
       have = from(it->second.get<picojson::object>());
     if (!have)
     {
@@ -2146,10 +2147,10 @@ struct YouGameRoom::Impl
     if (id.size() > 1 && id[0] == 'g')
       n = std::atoi(id.c_str() + 1);
     const std::string d = LocalDetail(m, id);
-    Orca::Status::Result(fmt::format(
-        "{{\"q\":\"ranked\",\"k\":\"game\",\"n\":{},\"out\":\"{}\"{},\"score\":{}{}}}", n, v.out,
-        v.why.empty() ? "" : fmt::format(",\"why\":\"{}\"", v.why), Score(),
-        d.empty() ? "" : ",\"d\":" + d));
+    Orca::Status::Result(
+        fmt::format("{{\"q\":\"ranked\",\"k\":\"game\",\"n\":{},\"out\":\"{}\"{},\"score\":{}{}}}",
+                    n, v.out, v.why.empty() ? "" : fmt::format(",\"why\":\"{}\"", v.why), Score(),
+                    d.empty() ? "" : ",\"d\":" + d));
     const std::string score = Score();
     const int mine = tally.Wins(MyId()), theirs = tally.Wins(TheirId());
     Orca::UX::ShowToast(v.out == "won"  ? fmt::format("You won game {} · {}–{}", n, mine, theirs) :
@@ -2189,9 +2190,11 @@ struct YouGameRoom::Impl
           const auto after = ClampedInt(o, "after", 0, 1 << 20);
           if (before && after)
             extra += fmt::format(",\"r\":[{},{}]", *before, *after);
-          if (const auto rank = o.find("rank"); rank != o.end() && rank->second.is<picojson::object>())
+          if (const auto rank = o.find("rank");
+              rank != o.end() && rank->second.is<picojson::object>())
           {
-            const std::string label = CleanLabel(Str(rank->second.get<picojson::object>(), "label"), 24);
+            const std::string label =
+                CleanLabel(Str(rank->second.get<picojson::object>(), "label"), 24);
             if (!label.empty())
               extra += fmt::format(",\"rank\":\"{}\"", label);
           }
@@ -2199,11 +2202,12 @@ struct YouGameRoom::Impl
       }
       Orca::Status::Result(fmt::format(
           "{{\"q\":\"ranked\",\"k\":\"set\",\"out\":\"{}\",\"by\":\"{}\"{},\"score\":{}{}}}", v.out,
-          forfeit ? "forfeit" : "games",
-          v.why.empty() ? "" : fmt::format(",\"why\":\"{}\"", v.why), Score(), extra));
+          forfeit ? "forfeit" : "games", v.why.empty() ? "" : fmt::format(",\"why\":\"{}\"", v.why),
+          Score(), extra));
       const int mine = tally.Wins(my_id), theirs = tally.Wins(TheirId());
       Orca::UX::ShowToast(v.out == "void" ? std::string("This set doesn't count") :
-                          forfeit && v.out == "won" ? std::string("Opponent left: you win the set") :
+                          forfeit && v.out == "won" ?
+                                            std::string("Opponent left: you win the set") :
                           v.out == "won" ? fmt::format("You won the set {}–{}", mine, theirs) :
                                            fmt::format("You lost the set {}–{}", mine, theirs));
       NOTICE_LOG_FMT(NETPLAY, "Orca room: the set: {} {} ({})", v.out, Score(),
@@ -2225,10 +2229,10 @@ struct YouGameRoom::Impl
       void_why.erase(it);
     }
     const std::string d = LocalDetail(m, id);
-    Orca::Status::Result(fmt::format("{{\"q\":\"casual\",\"k\":\"game\",\"n\":{},\"out\":\"{}\"{}{}}}",
-                                     n, v.out,
-                                     v.why.empty() ? "" : fmt::format(",\"why\":\"{}\"", v.why),
-                                     d.empty() ? "" : ",\"d\":" + d));
+    Orca::Status::Result(
+        fmt::format("{{\"q\":\"casual\",\"k\":\"game\",\"n\":{},\"out\":\"{}\"{}{}}}", n, v.out,
+                    v.why.empty() ? "" : fmt::format(",\"why\":\"{}\"", v.why),
+                    d.empty() ? "" : ",\"d\":" + d));
     Orca::UX::ShowToast(v.out == "won"  ? std::string("You won") :
                         v.out == "lost" ? std::string("You lost") :
                         v.out == "draw" ? std::string("That game was a draw") :
@@ -2557,6 +2561,7 @@ struct YouGameRoom::Impl
         std::lock_guard lock(mutex);
         queue = q == "casual" || q == "ranked" ? q : "private";
         stay = room.count("stay") && room.at("stay").evaluate_as_boolean();
+        room_size = Int(room, "size", 2, MAX_SEATS).value_or(MAX_SEATS);
         if (queue != "private")
         {
           NOTICE_LOG_FMT(NETPLAY, "Orca room: a matchmade {} room{}", queue,

@@ -694,7 +694,8 @@ void AfterFriendsGone(Match& match)
     Orca::Status::State("friend-left left");
   if (queue == "ranked" && Orca::Online::MatchLive())
   {
-    NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: the opponent went mid-set: waiting for the room's verdict");
+    NOTICE_LOG_FMT(ROLLBACK,
+                   "Matchmaking: the opponent went mid-set: waiting for the room's verdict");
     match.linger_until = Clock::now() + VERDICT_WAIT;
     return;
   }
@@ -1416,8 +1417,8 @@ void HostInPlay(Match& match, const std::string& code)
 {
   const bool alone = match.port && !match.session && !match.joining && !match.download &&
                      !match.job && !match.keyframe_wanted && match.waiting.empty() &&
-                     match.plugging.empty() && match.seated.empty() &&
-                     !match.port->CatchingUp() && !Orca::Online::DropInPending();
+                     match.plugging.empty() && match.seated.empty() && !match.port->CatchingUp() &&
+                     !Orca::Online::DropInPending();
   if (!alone)
   {
     WARN_LOG_FMT(ROLLBACK, "Matchmaking: can't host room {}: this game isn't alone", code);
