@@ -5,7 +5,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <utility>
@@ -418,9 +417,11 @@ void Frame(const Core::CPUThreadGuard& guard, int frame)
     // Test only, ORCA_TEST_SET_RULES=<stocks>,<minutes>: shorter games than 3 stocks and 8:00.
     static const std::pair<u8, u8> s_rules = [] {
       const char* v = std::getenv("ORCA_TEST_SET_RULES");
-      int stocks = 0, minutes = 0;
-      if (v && std::sscanf(v, "%d,%d", &stocks, &minutes) == 2 && stocks >= 1 && stocks <= 99 &&
-          minutes >= 1 && minutes <= 99 && TestKnobsAllowed())
+      char* end = nullptr;
+      const long stocks = v ? std::strtol(v, &end, 10) : 0;
+      const long minutes = end && *end == ',' ? std::strtol(end + 1, &end, 10) : 0;
+      if (stocks >= 1 && stocks <= 99 && minutes >= 1 && minutes <= 99 && end && *end == '\0' &&
+          TestKnobsAllowed())
       {
         return std::pair<u8, u8>(static_cast<u8>(stocks), static_cast<u8>(minutes));
       }
