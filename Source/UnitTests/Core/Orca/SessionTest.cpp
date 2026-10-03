@@ -171,6 +171,14 @@ struct FakeNet
   // Extra latency on the way to each end (index: the receiving end).
   std::array<int, 2> extra{0, 0};
   std::mt19937 rng{1234};
+  // A direct link beside the relay (YouGameRoom's DirectLink; off while direct_latency < 0): every
+  // packet also goes this way, without its drop-in history, in direct_latency plus 0..direct_jitter
+  // ticks and in no particular order, losing direct_loss_percent of them.
+  int direct_latency = -1;
+  int direct_jitter = 0;
+  int direct_loss_percent = 0;
+  std::array<std::vector<InFlight>, 2> direct;
+  int direct_delivered = 0;
 
   class End final : public Transport
   {
@@ -187,10 +195,34 @@ struct FakeNet
       if (!queue.empty())
         at = std::max(at, queue.back().deliver_at);
       queue.push_back({at, packet});
+      if (m_net.direct_latency >= 0 &&
+          Uniform(m_net.rng, 0, 99) >= m_net.direct_loss_percent)
+      {
+        Packet copy = packet;
+        copy.history_seat = -1;
+        copy.history_first = 0;
+        copy.history.clear();
+        const int wobble =
+            m_net.direct_jitter > 0 ? Uniform(m_net.rng, 0, m_net.direct_jitter) : 0;
+        m_net.direct[1 - m_index].push_back(
+            {m_net.now + m_net.direct_latency + wobble, std::move(copy)});
+      }
     }
     std::vector<Packet> Receive() override
     {
       std::vector<Packet> out;
+      auto& fast = m_net.direct[m_index];
+      for (auto it = fast.begin(); it != fast.end();)
+      {
+        if (it->deliver_at > m_net.now)
+        {
+          ++it;
+          continue;
+        }
+        out.push_back(std::move(it->packet));
+        it = fast.erase(it);
+        ++m_net.direct_delivered;
+      }
       auto& queue = m_net.queues[m_index];
       while (!queue.empty() && queue.front().deliver_at <= m_net.now)
       {
@@ -464,6 +496,13 @@ public:
     // never), nothing leaves or reaches this machine for spike_ms; then it all goes at once.
     int spike_every_s = 0;
     int spike_ms = 0;
+    // A direct link to the other machine beside the relay (YouGameRoom's DirectLink): every packet
+    // this side sends also goes straight there, without its drop-in history, the moment the
+    // session sends it, in direct_ms plus 0..direct_jitter_ms and in no particular order, losing
+    // direct_loss_percent of them (-1: no link).
+    int direct_ms = -1;
+    int direct_jitter_ms = 0;
+    int direct_loss_percent = 0;
   };
 
   RelayMatch(Config config, const Side& a, const Side& b)
@@ -496,6 +535,7 @@ public:
   const Session& SessionOf(int i) const { return m_peers[i]->session; }
   const FakeGame& GameOf(int i) const { return m_peers[i]->game; }
   int HitchesOf(int i) const { return m_peers[i]->hitches_reported; }
+  int DirectReceivedBy(int i) const { return m_peers[i]->direct_received; }
 
   int CompareConfirmed() const
   {
@@ -545,11 +585,18 @@ private:
 
   struct Link final : Transport
   {
-    void Send(const Packet& packet) override { CoalescePacket(&outgoing, packet); }
+    void Send(const Packet& packet) override
+    {
+      CoalescePacket(&outgoing, packet);
+      if (direct)
+        direct_out.push_back(packet);
+    }
     std::vector<Packet> Receive() override { return std::exchange(inbox, {}); }
     bool Connected() const override { return true; }
     std::optional<Packet> outgoing;
     std::vector<Packet> inbox;
+    bool direct = false;
+    std::vector<Packet> direct_out;
   };
 
   struct Peer
@@ -560,6 +607,7 @@ private:
           start(static_cast<Micros>(s.relay_ms + s.hold_in_ms) * MS)
     {
       game.ring_slots = static_cast<size_t>(config.max_rollback) + 2;
+      link.direct = s.direct_ms >= 0;
       // The room's start message reaches each machine after its own way from the relay.
       next_call = start;
       pace = start;
@@ -607,6 +655,9 @@ private:
     std::vector<int> rtt_history;
     bool seeded = false;
     std::deque<Wire> held_out, uplink, downlink, held_in;
+    // Direct copies on their way to this machine, in no order.
+    std::vector<Wire> direct_in;
+    int direct_received = 0;
     // When each hitch starts and how long it stops the emulator; the next one; when the last
     // frame's boundary returned (OnlineMatch times frames from there, so stalls and waits don't
     // count).
@@ -645,8 +696,49 @@ private:
     queue.push_back(std::move(wire));
   }
 
+  void MoveDirect()
+  {
+    for (int i = 0; i < 2; ++i)
+    {
+      Peer& from = At(i);
+      for (Packet& packet : std::exchange(from.link.direct_out, {}))
+      {
+        if (Uniform(m_direct_rng, 0, 99) < from.side.direct_loss_percent)
+          continue;
+        packet.history_seat = -1;
+        packet.history_first = 0;
+        packet.history.clear();
+        const int extra = from.side.direct_jitter_ms > 0 ?
+                              Uniform(m_direct_rng, 0, from.side.direct_jitter_ms) :
+                              0;
+        At(1 - i).direct_in.push_back({Radio(from, m_now) + (from.side.direct_ms + extra) * MS, i,
+                                       1 - i, 0, EncodePacket(packet)});
+      }
+    }
+    for (int i = 0; i < 2; ++i)
+    {
+      Peer& p = At(i);
+      if (Radio(p, m_now) != m_now)
+        continue;
+      for (auto it = p.direct_in.begin(); it != p.direct_in.end();)
+      {
+        if (it->due > m_now)
+        {
+          ++it;
+          continue;
+        }
+        Packet packet;
+        ASSERT_TRUE(DecodePacket(it->text, &packet)) << it->text;
+        p.link.inbox.push_back(std::move(packet));
+        ++p.direct_received;
+        it = p.direct_in.erase(it);
+      }
+    }
+  }
+
   void MoveMessages()
   {
+    MoveDirect();
     const auto due = [this](std::deque<Wire>& q) { return !q.empty() && q.front().due <= m_now; };
     const auto pop = [](std::deque<Wire>& q) {
       Wire w = std::move(q.front());
@@ -788,6 +880,7 @@ private:
   std::array<std::unique_ptr<Peer>, 2> m_peers;
   Micros m_now = -3000 * MS;  // the lobby: pings before the match starts
   std::mt19937 m_rng{4321};
+  std::mt19937 m_direct_rng{8765};
 };
 }  // namespace
 
@@ -2705,4 +2798,236 @@ TEST(OrcaDropIn, PlanSurvivesTheGuestFloatMode)
   EXPECT_EQ(plan[0], (SeatPlan{0, NEVER, 0}));
   EXPECT_EQ(plan[1], (SeatPlan{NEVER, NEVER, 100}));
   EXPECT_EQ(plan[2], SeatPlan{});
+}
+
+// ---- Direct links (YouGameRoom's DirectLink beside the relay) ----
+
+// Packets that come twice and out of order: a direct link's copy and the relay's, the relay's
+// coalesced. Each copy adds its inputs, acknowledgements and a checksum not compared yet; only a
+// packet newer than any before it from that seat moves the host's roster or its frame.
+TEST(OrcaSessionDirect, StaleCopiesNeverPutTheRosterOrTheClockBack)
+{
+  struct Scripted final : Transport
+  {
+    void Send(const Packet&) override {}
+    std::vector<Packet> Receive() override { return std::exchange(queue, {}); }
+    bool Connected() const override { return true; }
+    std::vector<Packet> queue;
+  };
+  // The host (seat 0) and this player (seat 1), both plugged in from frame 0; the host's roster
+  // decides.
+  Config config;
+  config.seats = 2;
+  config.local_seat = 1;
+  config.authority_seat = 0;
+  config.time_sync = false;
+  config.max_delay = config.input_delay;
+  std::array<SeatPlan, MAX_SEATS> plan{};
+  plan[0] = {0, NEVER, 0};
+  plan[1] = {0, NEVER, 0};
+  config.plan = plan;
+  FakeGame game;
+  Scripted net;
+  Session session(config, game, net);
+  int completed = -1;
+  const auto run_to = [&](int frame) {
+    for (int guard = 0; guard < 4000 && session.CurrentFrame() < frame; ++guard)
+    {
+      const Step step = session.OnBoundary(completed, Pad{});
+      if (step.kind == StepKind::Ended || step.kind == StepKind::Stall)
+        return;
+      if (step.kind != StepKind::Wait)
+        completed = game.Run();
+    }
+  };
+  const auto host_pad = [](int f) { return Pad{static_cast<u8>(f % 4), 0, static_cast<u8>(f), 0, 7, 0, 0, 0}; };
+  // The host's roster as of its newest packet.
+  std::array<SeatPlan, MAX_SEATS> roster = plan;
+  const auto host_packet = [&](int sequence, int first, int count, int current) {
+    Packet p;
+    p.seat = 0;
+    p.sequence = sequence;
+    p.first_frame = first;
+    for (int f = first; f < first + count; ++f)
+      p.pads.push_back(host_pad(f));
+    p.ack = {-1, -1, -1, -1};
+    p.current_frame = current;
+    p.roster = roster;
+    return p;
+  };
+
+  // The host's newer packet says this player unplugs at frame 400; its older copy, arriving after,
+  // still has no unplug. The newer one stands, and so does the host's newer frame.
+  Packet older = host_packet(1, 0, 6, 4);
+  roster[1].unplug_from = 400;
+  Packet newer = host_packet(2, 0, 12, 10);
+  net.queue = {newer, older};
+  run_to(1);
+  ASSERT_TRUE(session.Error().empty()) << session.Error();
+  EXPECT_EQ(session.Plan()[1].unplug_from, 400);
+  EXPECT_EQ(session.AuthorityFrame(), 10);
+  // The same packet twice changes nothing.
+  net.queue = {newer, newer};
+  run_to(2);
+  ASSERT_TRUE(session.Error().empty()) << session.Error();
+  EXPECT_EQ(session.Plan()[1].unplug_from, 400);
+
+  // One packet lost, then five in a row: each repeats every input not acknowledged, so the next
+  // one that arrives fills the gap.
+  net.queue = {host_packet(4, 8, 16, 14)};  // 3 lost
+  run_to(10);
+  ASSERT_TRUE(session.Error().empty()) << session.Error();
+  EXPECT_EQ(session.GetStats().confirmed_frame, 23);
+  net.queue = {host_packet(10, 16, 40, 30)};  // 5 to 9 lost
+  run_to(40);
+  ASSERT_TRUE(session.Error().empty()) << session.Error();
+  EXPECT_EQ(session.GetStats().confirmed_frame, 55);
+  EXPECT_EQ(session.AuthorityFrame(), 30);
+  // An older copy with an older frame and every older input: nothing moves back.
+  Packet stale = host_packet(5, 0, 30, 12);
+  stale.roster = plan;
+  net.queue = {stale};
+  run_to(41);
+  EXPECT_EQ(session.AuthorityFrame(), 30);
+  EXPECT_EQ(session.Plan()[1].unplug_from, 400);
+
+  // Up to frame 130 with every input in, so frames 60 and 120 have local checksums.
+  net.queue = {host_packet(11, 56, 64, 100), host_packet(12, 100, 60, 150)};
+  run_to(140);
+  ASSERT_TRUE(session.Error().empty()) << session.Error();
+  ASSERT_TRUE(game.SnapshotChecksum(60).has_value());
+  ASSERT_TRUE(game.SnapshotChecksum(120).has_value());
+  const int matched = session.GetStats().checksums_matched;
+  // The checksum of frame 60 over both paths: compared once.
+  Packet with_checksum = host_packet(13, 150, 4, 152);
+  with_checksum.checksum_frame = 60;
+  with_checksum.checksum = *game.SnapshotChecksum(60);
+  net.queue = {with_checksum, with_checksum};
+  run_to(142);
+  ASSERT_TRUE(session.Error().empty()) << session.Error();
+  EXPECT_EQ(session.GetStats().checksums_matched, matched + 1);
+  // The relay coalesced packet 14's checksum (frame 120) into packet 15, whose direct copy came
+  // first without it: the relay's copy is older than nothing, yet its checksum is new and counts.
+  Packet direct_copy = host_packet(15, 150, 8, 156);
+  Packet relay_copy = direct_copy;
+  relay_copy.checksum_frame = 120;
+  relay_copy.checksum = *game.SnapshotChecksum(120) ^ 1;  // a desync, to show it was compared
+  net.queue = {direct_copy, relay_copy};
+  run_to(144);
+  EXPECT_NE(session.Error().find("Desync at frame 120"), std::string::npos) << session.Error();
+}
+
+// A drop-in friend over a direct link beside the relay: every packet twice, the direct copies
+// first, in no order and a fifth of them lost, without the history (only the relay carries it).
+// The friend catches up, plugs in at one frame on both machines, and both run identical frames
+// with each checksum compared once; then it leaves cleanly.
+TEST(OrcaSessionDirect, FriendJoinsOverADirectLink)
+{
+  FakeNet net;
+  net.latency = 6;
+  net.jitter = 2;
+  net.direct_latency = 0;
+  net.direct_jitter = 2;
+  net.direct_loss_percent = 20;
+  FakeGame solo;
+  std::vector<Pads> log = PlaySolo(&solo, 0, 300);
+  const int keyframe = 240;
+  auto host = std::make_unique<DropInPlayer>(DropInConfig(0, 300), net, 0, 300);
+  host->game.m_state = solo.m_state;
+  host->game.m_history = solo.m_history;
+  host->game.m_ran_pads = solo.m_ran_pads;
+  host->session.SetLog(0, log);
+  host->session.AddPeer(1, 300, keyframe);
+  auto joiner = std::make_unique<DropInPlayer>(DropInConfig(1, keyframe), net, 1, keyframe);
+  joiner->seat = 1;
+  joiner->game.m_state = At(solo.m_history, keyframe);
+  int t = 0;
+  for (; t < 1500; ++t)
+  {
+    net.now = t;
+    if (t % 30 == 0)
+    {
+      for (DropInPlayer* p : {host.get(), joiner.get()})
+        p->session.OnRoundTrip(7 * 1000 / 60);
+    }
+    host->Tick(t, 1);
+    const bool behind = joiner->session.CatchingUp() ||
+                        joiner->session.AuthorityFrame() - joiner->session.CurrentFrame() > 12;
+    joiner->Tick(t, behind ? 40 : 1);
+    ASSERT_TRUE(host->session.Error().empty()) << host->session.Error();
+    ASSERT_TRUE(joiner->session.Error().empty()) << joiner->session.Error();
+  }
+  ASSERT_FALSE(joiner->session.CatchingUp());
+  EXPECT_GT(net.direct_delivered, 1000);
+  const int plugged_at = host->session.Plan()[1].plug_from;
+  ASSERT_NE(plugged_at, NEVER);
+  EXPECT_EQ(joiner->session.Plan()[1].plug_from, plugged_at);
+  const int confirmed =
+      std::min({host->session.GetStats().confirmed_frame, host->session.CurrentFrame() - 1,
+                joiner->session.GetStats().confirmed_frame, joiner->session.CurrentFrame() - 1});
+  ASSERT_GT(confirmed, plugged_at + 600);
+  for (int f = keyframe; f <= confirmed; ++f)
+  {
+    ASSERT_EQ(At(host->game.m_history, f), At(joiner->game.m_history, f)) << "frame " << f;
+    ASSERT_EQ(At(host->game.m_ran_pads, f), At(joiner->game.m_ran_pads, f)) << "frame " << f;
+  }
+  // One comparison per checksum frame, though most come twice.
+  for (const DropInPlayer* p : {host.get(), joiner.get()})
+  {
+    EXPECT_GT(p->session.GetStats().checksums_matched, 10);
+    EXPECT_LE(p->session.GetStats().checksums_matched, (confirmed - keyframe) / 60 + 1);
+  }
+
+  joiner->session.RequestLeave();
+  for (int end = t + 200; t < end && !(joiner->session.LeftDone() && host->session.Idle()); ++t)
+  {
+    net.now = t;
+    host->Tick(t, 1);
+    if (!joiner->session.LeftDone())
+      joiner->Tick(t, 1);
+  }
+  ASSERT_TRUE(joiner->session.LeftDone());
+  ASSERT_TRUE(host->session.Idle());
+  EXPECT_EQ(joiner->session.Plan()[1].unplug_from, host->session.Plan()[1].unplug_from);
+}
+
+// A match in wall-clock time with a direct link beside the relay, the two machines 8 and 40 ms
+// from the relay: every packet comes twice, the direct copy in 1-4 ms with a tenth lost, the
+// relay's 48 ms later and coalesced. Both sides stay identical, each checksum is compared once, time
+// sync stays balanced, and the inputs that come in time on the direct path take most rollbacks
+// away.
+TEST(OrcaSessionDirect, DirectLinkBesideTheRelay)
+{
+  const auto side = [](int relay_ms, bool direct) {
+    RelayMatch::Side s;
+    s.relay_ms = relay_ms;
+    s.input_every = 5;
+    if (direct)
+    {
+      s.direct_ms = 1;
+      s.direct_jitter_ms = 3;
+      s.direct_loss_percent = 10;
+    }
+    return s;
+  };
+  RelayMatch relay(Config{}, side(8, false), side(40, false));
+  relay.Play(3600);
+  relay.Print("relay only");
+  relay.ExpectClean();
+  RelayMatch both(Config{}, side(8, true), side(40, true));
+  both.Play(3600);
+  both.Print("direct + relay");
+  both.ExpectClean();
+  EXPECT_GT(both.CompareConfirmed(), 3400);
+  for (int i = 0; i < 2; ++i)
+  {
+    const Stats& s = both.SessionOf(i).GetStats();
+    EXPECT_GT(both.DirectReceivedBy(i), 3000);
+    EXPECT_GE(s.checksums_matched, 55);
+    EXPECT_LE(s.checksums_matched, 60);
+    EXPECT_LT(std::abs(s.frame_advantage), 1.0);
+    EXPECT_LE(s.waits, 3);
+    EXPECT_EQ(s.delay, 2);
+    EXPECT_LT(s.rollbacks * 4, relay.SessionOf(i).GetStats().rollbacks) << "side " << i;
+  }
 }

@@ -300,6 +300,8 @@ picojson::object PacketToJson(const Packet& packet)
     ack.emplace_back(static_cast<double>(a));
   d["a"] = picojson::value(ack);
   d["c"] = picojson::value(static_cast<double>(packet.current_frame));
+  if (packet.sequence > 0)
+    d["q"] = picojson::value(static_cast<double>(packet.sequence));
   // Optional, so a peer built before adaptive delay and time sync still parses these packets.
   if (packet.resimulated >= 0)
     d["r"] = picojson::value(static_cast<double>(packet.resimulated));
@@ -389,6 +391,13 @@ bool PacketFromJson(const picojson::object& d, Packet* packet)
   out.seat = *seat;
   out.first_frame = *first;
   out.current_frame = *current;
+  if (d.count("q"))
+  {
+    const auto sequence = Int(d, "q", 1, MAX_FRAME - 1);
+    if (!sequence)
+      return false;
+    out.sequence = *sequence;
+  }
   for (size_t i = 0; i < bytes.size(); i += sizeof(Pad))
   {
     Pad pad;
