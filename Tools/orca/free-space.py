@@ -8,7 +8,7 @@
 # With Anyone > Casual, B out of the character select (Orca's back out), Ranked, two whole matches
 # with their results, B out, the top page, Group > Brawl, B out.
 #   observe  watches every word of the block and every 64th byte of the caves at every frame
-#            boundary, and dumps MEM1 at 16 points (MEM2 at 5);
+#            boundary, and dumps MEM1 at 16 points (17 in Project+; MEM2 at 5);
 #   trap     the same, after filling the block and every cave with illegal instructions (primary
 #            opcode 0, each word different) 5 frames into the first scene, once sora_scene is
 #            loaded; with a drop-in keyframe test (YG_KEYFRAME_TEST) in the first match.
@@ -198,10 +198,6 @@ def watches(text):
     for frame, name, value in re.findall(r"Watch frame (\d+) \([^)]*\): (\S+) = ([0-9a-f]{8})", text):
         out.setdefault(name, []).append((int(frame), int(value, 16)))
     return out
-
-
-def in_free(address):
-    return any(lo <= address < hi for lo, hi in FREE)
 
 
 def main():
