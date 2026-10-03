@@ -1337,6 +1337,14 @@ end
   words around a flip go in as guards. A group never spans a `when` or an `end`.
 - Meant for branch flips in the game's own code; real code goes into a cave. Conditions read fixed
   addresses only (no pointer chains): the match block's header is meant to be at one.
+- Never on a word that game code also writes. Project+'s Gecko code handler writes its hooks again
+  every frame (a C2 code's branch, such as its lag fix's at `0x8002AD8C`): a group toggled there
+  lands at every boundary and is undone within the frame, and which of the two words the JIT runs
+  then depends on the machine's JIT history (a synctest that clears the JIT after each load showed
+  1,487 RAM mismatches in 850 frames). Any of Project+'s own hook sites the locks need (the plan
+  lists its Code Menu opener and the Giga Bowser and Wario-Man selections) needs another way if it
+  is such a hook: the codeset's data, or the input gate. A group that logs `on` at boundary after
+  boundary and never `off` is in such memory.
 - Adding the kind changed nothing the shipped files write, so the UX version stays `ux=6`. A file
   that uses it is refused by older builds, and the file is in the lobby key, so they never meet.
 
