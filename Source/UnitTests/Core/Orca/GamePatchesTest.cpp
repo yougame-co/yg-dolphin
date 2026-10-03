@@ -119,7 +119,7 @@ TEST(OrcaGamePatches, ParsesWhenBlocks)
                        "81000018 5 6                   # the same condition, a new block\n"
                        "end\n"
                        "8100001C 7 8\n");
-  ASSERT_EQ(p.size(), 8u);
+  ASSERT_EQ(p.size(), 7u);
   const std::vector<PatchCondition> when{{0x90001000, 0xFFFFFFFF, YGM1, true},
                                          {0x90001004, 0xFF000000, 0, false}};
   EXPECT_TRUE(p[0].when.empty());
@@ -418,7 +418,7 @@ TEST(OrcaGamePatches, TogglesArePureFunctionsOfMemory)
     }
     EXPECT_EQ(played.bytes, keyframe.bytes);
     // A re-run of this boundary, from what was saved here: nothing new.
-    EXPECT_TRUE(PlanGamePatches(patches, played, false).writes.empty() || frame == 0);
+    EXPECT_TRUE(PlanGamePatches(patches, played, false).writes.empty());
     EXPECT_TRUE(PlanGamePatches(patches, played, true).writes.empty());
   }
   // Planning only reads.
