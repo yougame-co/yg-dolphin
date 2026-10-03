@@ -1126,7 +1126,12 @@ those drops must go. Two things compiled there, on the one thread that runs the 
 (single core): the GPU pipelines the match draws first, and the match's PowerPC code. Both now
 compile before the match is on screen.
 
-Status, 2026-10-03: on the Mac, from the second launch after an update on, both matches of a
+Status, 2026-10-03 (branch `pplus-start`): on the Mac every match start is smooth from the first
+launch after an update, Project+ and Brawl alike, now that Orca ships a JIT list for a player who
+has none and paces the warm-up by when each block first runs (below). On Luis's PC 0.3.9 left
+Project+ with a 374 ms frame at the end of its loading image and its first launch after the update
+with shaders still compiling in the match; both fixes are in and not yet confirmed there.
+Before: on the Mac, from the second launch after an update on, both matches of a
 two-match run start smooth (tables below). On Windows it is likely fixed, not confirmed: nobody has
 seen the freeze on his PC yet. What would confirm it is a run of the installed Orca on a copy of
 his own Orca folder (D3D11, his UID and shader caches, one and two matches per process) that shows
@@ -1289,7 +1294,16 @@ match in the same process compiles little (its blocks are still there).
   YG_EXIT_AFTER=11500 <Orca> -p headless -v Null -u <fresh> -e <Brawl rev 2>` and, for Project+,
   `ORCA_PROFILE=PPLUS32 YG_INPUT=.../pplus-1v1.txt YG_EXIT_AFTER=1150` with `-C
   Dolphin.Core.DefaultISO=<Brawl> -e <Project+ Netplay Launcher.dol>`; copy `<fresh>/Cache/*.jitwarm`
-  into `Data/Sys/Orca`.
+  into `Data/Sys/Orca`. Mac, 2026-10-03, windowed on copies of Luis's own Mac folder (his UID
+  caches, no list), `match-start.mjs`: Brawl without the seed (`ORCA_JITWARM_SEED=0`) 93 and 62 ms
+  where the stage appears and 47 ms at 3.9 s; with it 31,544 of 32,625 compiled ahead (1,025 are
+  Donkey Kong's and Final Destination's, not in RAM), 16 compiled by the game, worst VI 22.5 ms
+  in the whole window, as the second launch (23.4 ms). Project+ with it: 28,031 of 28,054 ahead, 34
+  by the game, from frame 28 worst 23 ms (the second launch 21.4 ms). Two matches from the seed
+  (`bf-two-new.txt`): from frame 170 worst 21.3 and 21.4 ms. Headless, per-frame RAM hashes from
+  the seed equal the 0.3.9 references (Brawl 10,739 frames, P+ 9,006, x86-64 with
+  `ORCA_TEST_JITWARM_SLOW_US=28` and arm64), and so do synctests across the match start from the
+  seed (4,851 re-run frames each) and the loopbacks (P+ 579 rollbacks, Brawl 789, 879 checksums).
 - **Paced by the recorded frames** (`PacedTarget`). Each block is due by the boundary 3 frames
   before the frame the recorded match first ran it (`when`, the earliest over the matches seen),
   and the first sweep goes past the 8 ms as far as the most pressing deadline needs, its blocks
@@ -1300,7 +1314,9 @@ match in the same process compiles little (its blocks are still there).
   the PC's run, and the "12,602 already compiled" (blocks the game had compiled before the sweep
   got to them; nothing invalidated them). Paced, the PC's frames 0-21 each take ~30-35 ms of
   compiling, all behind the loading image. Brawl needs ~110 blocks a boundary (18,000 by frame
-  ~166), under the budget everywhere.
+  ~166), under the budget everywhere. One boundary never takes more than 100 ms
+  (`MAX_SWEEP_US`): a sweep that fell behind (boundaries where the JIT had no room) catches up
+  over several frames, not in one long frame during play.
 - **The JIT's tables grow behind the loading image** (`JitBase::ReserveForBlocks`, at a match's
   first frame). Jit64 keeps an `m_back_patch_info` entry for every fastmem load and store it ever
   compiled (~11 a block, until a cache clear), and the unordered map rehashes inside the compile
