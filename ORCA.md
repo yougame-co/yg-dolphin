@@ -1869,7 +1869,11 @@ The verdict:
 - Project+ (2024): the results screen's winner. Its codeset already decides a time-out by stocks
   then percent and gives an exact tie overtime ("Tiebreaker v2.0", "RoA Overtime v2.1").
 
-Two wins end the set; 8 games without that void it. The menus (character and stage select, the
+Two wins end the set; 8 games without that void it. What the other tracks read: the score
+(`+0x211`), the last winner (`+0x215`, the loser picks next), the stages each port won on (the
+records' winner and stage, for Dave's Stupid Rule), the tiebreak flag (`+0x216`: the next game is
+played on the last record's stage with its characters; locking those is the stage select's and
+the input gate's part, not done here) and the set's end (`+0x213`). The menus (character and stage select, the
 results screen) show the score at the top centre: "Game 2 · 1–0", "Tiebreak game · 1–1",
 "Set over · 2–1" (`RankedSet::ScoreLine`, the local player's wins first).
 
