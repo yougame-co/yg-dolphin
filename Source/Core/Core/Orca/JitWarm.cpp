@@ -66,8 +66,11 @@ constexpr int LATE_BUDGET_US = 1000;
 // JIT compiles 200 blocks in 8 ms (Jit64 on Luis's PC) is behind by ~12,000 blocks there, a
 // 374 ms frame. Paced, the loading frames run longer instead (the loading image is still).
 constexpr int LEAD = 3;
-// What a match compiles at its start with no list (Brawl ~30,000 blocks, Project+ ~28,000).
+// The JIT's room at a match's first frame (JitBase::ReserveForBlocks): a process's first match
+// compiles its whole start (Brawl ~30,000 blocks, Project+ ~28,000, listed or not); a later one
+// little, its blocks still there (2,700 with a stage and a fighter the first never loaded).
 constexpr std::size_t FIRST_MATCH_BLOCKS = 32'000;
+constexpr std::size_t LATER_MATCH_BLOCKS = 8'000;
 // Recording: the blocks the game compiles in a match's first RECORD_FRAMES frames; one counts when
 // its words are unchanged STABLE_AFTER frames after its compile (so never a block whose code was
 // rewritten after its compile without an invalidation: compiling it ahead could run other words
@@ -723,12 +726,12 @@ void State::OnBoundary(const Core::CPUThreadGuard& guard)
     if (!m_seen_other_scene)
       return;  // joined a match already running: its code is compiled as it runs
     StartMatch();
-    // The JIT's tables grow now, behind the loading image, not inside a compile during play: room
-    // for the blocks listed, or a first match's ~30,000.
+    // The JIT's tables grow now, behind the loading image, not inside a compile during play.
     if (auto* jit = static_cast<JitBase*>(guard.GetSystem().GetJitInterface().GetCore()))
     {
       const auto start = std::chrono::steady_clock::now();
-      jit->ReserveForBlocks(std::max<std::size_t>(m_known.size(), FIRST_MATCH_BLOCKS));
+      jit->ReserveForBlocks(m_matches == 1 ? std::max(m_known.size(), FIRST_MATCH_BLOCKS) :
+                                             LATER_MATCH_BLOCKS);
       if (m_log_frames)
       {
         NOTICE_LOG_FMT(

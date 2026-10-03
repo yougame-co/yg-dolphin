@@ -1221,8 +1221,29 @@ match in the same process compiles little (its blocks are still there).
   compiled, earliest-run first. Those not in RAM (another fighter's code at that address) are
   looked at again every 30 frames, 1 ms per boundary, until frame 600. Both games have the match's
   code loaded at scMelee's first frame, and both show a still loading image ("Ready to fight") for
-  a while after it: Brawl ~165 frames, Project+ ~28. On the M4 the warm-up takes 37 frames (Brawl,
-  30,000 blocks) and 35 (Project+, 28,000), the blocks the stage's first frames run first.
+  a while after it: Brawl through frame ~169, Project+ through frame 27 (the stage from 28). On the
+  M4 the warm-up takes 37 frames (Brawl, 30,000 blocks) and 35 (Project+, 28,000), the blocks the
+  stage's first frames run first.
+- **Paced by the recorded frames** (`PacedTarget`). Each block is due by the boundary 3 frames
+  before the frame the recorded match first ran it (`when`, the earliest over the matches seen),
+  and the first sweep goes past the 8 ms as far as the most pressing deadline needs, its blocks
+  spread evenly over the boundaries left. Project+ runs its match code in frames 21-24 (400, then
+  5,200, then 11,200 blocks) and 1,200 more in frame 34. Jit64 on Luis's PC compiles ~200 blocks
+  in 8 ms (~40 us each; Rosetta 2 on the M4 ~600, JitArm64 ~800), so unpaced it had ~5,000 of
+  them by frame 24, and the game compiled the other ~12,600 itself in frame 24: the 374 ms VI of
+  the PC's run, and the "12,602 already compiled" (blocks the game had compiled before the sweep
+  got to them; nothing invalidated them). Paced, the PC's frames 0-21 each take ~30-35 ms of
+  compiling, all behind the loading image. Brawl needs ~110 blocks a boundary (18,000 by frame
+  ~166), under the budget everywhere.
+- **The JIT's tables grow behind the loading image** (`JitBase::ReserveForBlocks`, at a match's
+  first frame). Jit64 keeps an `m_back_patch_info` entry for every fastmem load and store it ever
+  compiled (~11 a block, until a cache clear), and the unordered map rehashes inside the compile
+  that doubles it: 4, 12 and 26 ms at 100,000, 200,000 and 400,000 entries under Rosetta (a
+  match's ~30,000 blocks cross 400,000 during the warm-up; the PC's logs show one 22-27 ms
+  boundary a run, likely this). At frame 0 Jit64 now makes room for 16 entries a block: each
+  block listed in a process's first match (at least 32,000), 8,000 blocks in a later one (which
+  compiles ~2,700 with a new stage and fighter). 13-16 ms there under Rosetta, no slow compile
+  after; nothing to do at a second match. JitArm64 keeps a `std::map` there.
 - **Why it can't change the game.** A block compiled early is the block the game's first run would
   compile: the same words at the same addresses (the hash), the same feature flags, compiled in the
   guest's floating-point mode as the dispatcher compiles, and kept only if its instructions span
@@ -1241,7 +1262,14 @@ match in the same process compiles little (its blocks are still there).
   what was freed since to the dispatcher's next compile. A stack fault inside a hook's compile
   (the hook runs deeper in the host stack) is Dolphin's own: it only invalidates blocks and asks
   the next dispatcher compile to clear the cache, and the hook checks again before each block.
-- `ORCA_JITWARM=0` turns it off; `ORCA_JITWARM_LOG=1` logs each frame that compiled ahead.
+- `ORCA_JITWARM=0` turns it off. `ORCA_JITWARM_LOG=1` logs a line for each of a match's first
+  600 frames: what the warm-up compiled and how many were due, what the game compiled itself and
+  what the warm-up had done with those (warmed and gone since, not reached yet, not listed), and
+  any single compile over 4 ms; `=2` also counts, outside matches, the listed blocks already in
+  RAM (Project+: 26,000 of 28,000 from the title screen on, its code is resident). The frame lines
+  place each frame in time: `node Tools/orca/match-start.mjs --from-frame 28 <run>` (Project+;
+  Brawl 170) counts the VIs a player sees after the loading image. `ORCA_TEST_JITWARM_SLOW_US=N`
+  makes each warm-up compile N us longer, a slower host for testing the pace.
 
 Measured 2026-10-03 on the M4 (871x434 Metal window, the same scripted matches; host VI intervals
 from 0.6 s before scMelee to 12 s after; "before" is the 0.3.8 release, with the macOS app's
@@ -1287,6 +1315,28 @@ above (Brawl 10,807 frames with and without the list, P+ 9,002, the two-match ru
 synctests across the match start pass (4,851 re-run frames each) and so do loopbacks (Brawl 936
 rollbacks, P+ 579). Rosetta translates Jit64's output, so this checks Jit64's logic, not Windows
 itself (its thread-stack guard, MSVC): the same checks on the PC are what close that.
+
+Project+ on Windows, 2026-10-03 (the 0.3.9 candidate on Luis's PC, RTX 2080, D3D11, copies of his
+folder). From the second launch, P+'s match 1 had 4 VI over 33 ms, one of 374 ms, and the warm-up
+logged "15,452 of 28,054 blocks compiled ahead ... 12,602 already compiled" then "compiled 12,613
+blocks itself" (headless Jit64 the same, 11,003). Those 12,600 were compiled once, by the game, in
+frame 24, before the warm-up's 8 ms a frame got to them (it was ~5,000 blocks in); every one of
+the 4 VIs was frames 0-24, while P+ still shows its loading image (through frame 27). From frame 28
+(`match-start.mjs --from-frame 28`) that run had no VI over 25 ms, worst 22 ms, as Brawl's second
+launch. The same on the M4 under Rosetta with `ORCA_TEST_JITWARM_SLOW_US=28` (the PC's ~40 us a
+block): unpaced 15,036 ahead, 13,018 already compiled, 11,035 compiled by the game in frame 24
+(none "warmed and gone": nothing invalidated a warmed block); paced 28,031 of 28,054 ahead, 34
+compiled by the game in the first 600 frames, frames 0-21 at 30-38 ms of compiling each, and no
+compile over 4 ms after frame 0 (the backpatch map's 26 ms rehash had landed at frame 31). Per-frame
+RAM hashes with the pace and the slow knob equal the 0.3.9 references (P+ 9,006 frames, Brawl
+10,739), and so do synctests across the match start (4,851 re-run frames) and the P+ loopback (579
+rollbacks, 879 checksums). What a rollback costs the JIT: Rollback.cpp invalidates every block in
+a 4 KiB page it restores, and Project+ has code in pages whose other words change from frame to
+frame (blocks at 0x8056xxxx, 0x8078xxxx, 0x8093xxxx, 0x8106xxxx, a few in the DOL), so each
+rollback compiles 40-120 blocks again (~1.5-5 ms of Jit64 on the PC), warmed ones included; the
+loopback's 579 rollbacks did ~2,000 such compiles in the first 600 frames, none in the loading
+frames. Invalidating only the 32-byte lines that changed would keep the blocks whose own words
+didn't (not done, not measured).
 
 ## Online menu
 
