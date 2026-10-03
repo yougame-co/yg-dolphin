@@ -1899,8 +1899,9 @@ struct DirectLink::Impl
       // When to build anew.
       if (!peer.pending_build.empty())
       {
+        // A copy: Build clears pending_build before it uses the reason.
         if (now - peer.built_at >= 500ms)
-          Build(peer, peer.pending_build, nullptr);
+          Build(peer, std::string(peer.pending_build), nullptr);
         continue;
       }
       std::string reason;
