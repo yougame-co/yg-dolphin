@@ -666,6 +666,10 @@ Ishiiruka, slippi-rust-extensions):
     side's offers, so switching back on needs nothing from the other player.
 - **Logs** never carry addresses, candidates or credentials: libjuice's own lines go to the
   NETPLAY log (never stdout, which the app parses) with addresses taken out.
+  - Embedded in the app (`--embed`), the NETPLAY and ROLLBACK logs are on at INFO from 0.3.8
+    (`MainNoGUI.cpp`; the packaged Logger.ini has both off at NOTICE), so the per-game log under
+    the app's `orca/logs` has the room's, the links' and the match's lines. "seat N sends over 300
+    packets a second" during a catch-up is expected.
   - NOTICE lines: `Orca direct link: seat N up, direct host/host, round trip 1 ms (link G)`,
     `... down (nothing for 500 ms; link G, 0 refused), inputs go through the relay`, each build,
     and each link's counts when it closes.
