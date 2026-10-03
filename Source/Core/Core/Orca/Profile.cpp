@@ -686,7 +686,8 @@ std::string DescribeForcedSettings(const Profile& profile)
   return fmt::format("Orca: profile {} rev {}{}: CPUThread={} CPUCore={} FMA={} RTC={}:{} "
                      "SI={},{},{},{} EFBToTexture={} XFBToTexture={} EFBAccess={} BBox={} "
                      "ImmediateXFB={} VSync={} SmoothEarlyPresentation={} AudioBufferSize={} "
-                     "ShaderCompilationMode={} WaitForShaders={} ShaderCompilerThreads={}",
+                     "ShaderCompilationMode={} WaitForShaders={} ShaderCompilerThreads={} "
+                     "GFXBackend={}",
                      profile.game_id, profile.revision,
                      TestOverridesActive() ? " (TEST overrides active, not for real sessions)" : "",
                      Config::Get(Config::MAIN_CPU_THREAD),
@@ -706,6 +707,7 @@ std::string DescribeForcedSettings(const Profile& profile)
                      Config::Get(Config::MAIN_AUDIO_BUFFER_SIZE),
                      static_cast<int>(Config::Get(Config::GFX_SHADER_COMPILATION_MODE)),
                      Config::Get(Config::GFX_WAIT_FOR_SHADERS_BEFORE_STARTING),
-                     Config::Get(Config::GFX_SHADER_COMPILER_THREADS));
+                     Config::Get(Config::GFX_SHADER_COMPILER_THREADS),
+                     Config::Get(Config::MAIN_GFX_BACKEND));
 }
 }  // namespace Orca
