@@ -276,6 +276,18 @@ void Platform::ProcessEmbedCommands()
       else
         Embed::Out("unsupported delay");
     }
+    else if (cmd == "direct")
+    {
+      // The player's switch for direct links to the other players ("direct on|off", ORCA.md
+      // "Direct links"): kept for the run and applied while the app's "caps" line has "direct" on;
+      // the room turns its links off or on at once (the relay carries every input either way).
+      std::string value;
+      in >> value;
+      if (value == "on" || value == "off")
+        Orca::Online::SetDirectWanted(value == "on");
+      else
+        Embed::Out("unsupported direct");
+    }
     else if (cmd == "ping")
     {
       // The online overlay's ping beside its circle (off until the app asks): "on" the ping, "full"

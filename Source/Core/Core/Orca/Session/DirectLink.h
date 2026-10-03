@@ -71,9 +71,11 @@ struct DirectStats
   int generation = 0;
   u64 sent = 0;
   u64 received = 0;
-  // Datagrams that failed authentication, and replays of ones already taken.
+  // Datagrams that failed authentication, replays of ones already taken, and authentic packets
+  // dropped for coming faster than an honest peer sends them.
   u64 auth_drops = 0;
   u64 replays = 0;
+  u64 floods = 0;
   // The longest a send took on the caller's thread, in microseconds.
   int max_send_us = 0;
   // Links built for this peer, the latest reason ("new", "failed", "silent", "upgrade", ...).

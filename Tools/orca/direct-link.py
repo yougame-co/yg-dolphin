@@ -4,6 +4,7 @@
 #
 #   Tools/orca/direct-link.py <dolphin-emu-nogui> <disc> [--both K=V ...] [--host K=V ...]
 #                             [--friend K=V ...] [--expect relay|direct|turn] [--quick]
+#                             [--ticket-direct off]
 #
 # 1. Host boots solo in a room of its own; Friend joins it (drop-in) through the app's commands.
 # 2. Both report the expected path in "orca stats" ("tx": 0 relay, 1 direct, 2 TURN) within 30 s,
@@ -11,12 +12,18 @@
 # 3. Both start a match (the input script); 20 s into it, unless --quick:
 #    - "test-direct off" on the host: both fall back to the relay at once, then "on": back;
 #    - "test-direct in" on the host: only the host's inputs still go direct, then "on";
-#    - three "test-direct rebuild": a new link each time, nothing refused.
+#    - three "test-direct rebuild": a new link each time, nothing refused;
+#    - the player's switch on the host ("direct off", with "caps ... direct"): both on the relay at
+#      once, then "direct on": back, the host's links starting over while the friend's carry on.
 # 4. Another 20 s, then both quit. PASS needs no error and no desync, checksums matched, and the
 #    expected path for most of the match.
 # --both/--host/--friend set environment variables (ORCA_DIRECT_FORCE=turn, ORCA_DIRECT_LOSS=20,
-# ORCA_TEST_NET_DELAY_MS=30, ORCA_DIRECT=0 ...). Two Orca processes at most; take
+# ORCA_TEST_NET_DELAY_MS=30, ORCA_DIRECT=0 ...). --ticket-direct off: both Orcas get their tickets
+# through a proxy on this machine (ORCA_SITE) that adds YouGame's `"direct": false` to each reply,
+# as the site's remote switch does: no link is ever tried (implies --expect relay; the log must
+# say why and show no link). Two Orca processes at most; take
 # ~/Documents/brawl-dolphin/orca-run.lock around it on the shared Mac.
+import http.server
 import json
 import os
 import queue
@@ -28,6 +35,8 @@ import sys
 import tempfile
 import threading
 import time
+import urllib.error
+import urllib.request
 
 args = sys.argv[1:]
 if len(args) < 2:
@@ -37,6 +46,7 @@ BIN, DISC = args[0], args[1]
 ENV = {"both": {}, "host": {}, "friend": {}}
 EXPECT = "direct"
 QUICK = False
+TICKET_DIRECT = None
 i = 2
 while i < len(args):
     if args[i] in ("--both", "--host", "--friend"):
@@ -49,6 +59,10 @@ while i < len(args):
     elif args[i] == "--quick":
         QUICK = True
         i += 1
+    elif args[i] == "--ticket-direct":
+        TICKET_DIRECT = args[i + 1] != "off"
+        EXPECT = "direct" if TICKET_DIRECT else "relay"
+        i += 2
     else:
         sys.exit(f"unknown argument {args[i]}")
 TX = {"relay": 0, "direct": 1, "turn": 2}[EXPECT]
@@ -63,6 +77,49 @@ T0 = time.time()
 
 def log(text):
     print(f"[{time.time() - T0:6.1f}] {text}", flush=True)
+
+
+SITE = "https://yougame.co"
+
+
+class TicketProxy(http.server.BaseHTTPRequestHandler):
+    """The site, as the Orcas see it with --ticket-direct: each request goes to yougame.co, and a
+    ticket reply gets YouGame's switch for direct links."""
+
+    def log_message(self, *a):
+        pass
+
+    def forward(self, body=None):
+        req = urllib.request.Request(SITE + self.path, data=body, method=self.command, headers={
+            "content-type": self.headers.get("content-type", "application/json"),
+            "user-agent": "Mozilla/5.0 (Macintosh) OrcaTest"})
+        try:
+            res = urllib.request.urlopen(req, timeout=15)
+            code, data = res.status, res.read()
+        except urllib.error.HTTPError as e:
+            code, data = e.code, e.read()
+        if self.path.startswith("/api/multiplayer/ticket") and code == 200:
+            reply = json.loads(data)
+            reply["direct"] = TICKET_DIRECT
+            data = json.dumps(reply).encode()
+            log(f"proxy: a ticket with direct {TICKET_DIRECT}")
+        self.send_response(code)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_GET(self):
+        self.forward()
+
+    def do_POST(self):
+        self.forward(self.rfile.read(int(self.headers.get("content-length", 0))))
+
+
+if TICKET_DIRECT is not None:
+    proxy = http.server.ThreadingHTTPServer(("127.0.0.1", 0), TicketProxy)
+    threading.Thread(target=proxy.serve_forever, daemon=True).start()
+    ENV["both"]["ORCA_SITE"] = f"http://127.0.0.1:{proxy.server_address[1]}"
 
 
 class Orca:
@@ -202,14 +259,14 @@ log(f"room {ROOM}, work {WORK}, expecting {EXPECT}, env {ENV}")
 host = Orca("Host", dict(ENV["host"], ORCA_ROOM=ROOM))
 orcas.append(host)
 host.expect("orca caps", 30)
-host.send("caps join leave stats")
+host.send("caps join leave stats direct")
 host.expect("orca state playing", 90)
 time.sleep(15)
 friend = Orca("Friend", ENV["friend"])
 orcas.append(friend)
 friend.send(f"join {ROOM}")
 friend.expect("orca caps", 30)
-friend.send("caps join leave stats")
+friend.send("caps join leave stats direct")
 friend.expect("orca state joining", 60)
 friend.expect("orca state playing", 120)
 took = wait_tx(TX, 30)
@@ -253,6 +310,19 @@ if not QUICK and TX != 0:
         time.sleep(1.5)
         log(f"rebuild {n + 1}: {EXPECT} after {wait_tx(TX, 30):.1f} s")
     check_alive()
+    # The player's switch (the app's "direct off|on"): the host drops its links at once and takes
+    # every input through the relay; on again, its links start over (generation 1) while the
+    # friend's side still counts from the links above.
+    time.sleep(3)
+    host.send("direct off")
+    events.append(("direct off", time.time() - T0))
+    log(f"switch off: relay after {wait_tx(0, 10):.1f} s")
+    time.sleep(8)
+    check_alive()
+    host.send("direct on")
+    events.append(("direct on", time.time() - T0))
+    log(f"switch on: {EXPECT} again after {wait_tx(TX, 40):.1f} s")
+    check_alive()
 time.sleep(20)
 check_alive()
 for o in orcas:
@@ -292,6 +362,15 @@ for o in orcas:
     if main != TX:
         log(f"{o.name}: mostly on tx {main}, expected {TX}")
         ok = False
+if TICKET_DIRECT is False:
+    # YouGame's switch: each Orca says why it has no links, and never tried one.
+    for o in orcas:
+        why = o.log_lines("direct links off (YouGame's ticket")
+        tried = o.log_lines("Orca direct link: seat")
+        log(f"{o.name}: {why[0][why[0].find('Orca room'):] if why else 'no switch line'}; "
+            f"{len(tried)} link lines")
+        if not why or tried:
+            ok = False
 log(f"events {events}")
 log("PASS" if ok else "FAIL")
 if ok and os.environ.get("ORCA_TEST_KEEP") != "1":

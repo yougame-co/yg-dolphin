@@ -2,10 +2,13 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -375,4 +378,129 @@ TEST(OrcaDirectLink, TestDelayCoversTheLinkBothWays)
   ASSERT_TRUE(mesh.WaitFor([&] { return mesh.Stats(0, 1).rtt_ms >= 110; }, 3s))
       << mesh.Stats(0, 1).rtt_ms;
   EXPECT_LE(mesh.Stats(0, 1).rtt_ms, 160);
+}
+
+// A peer sending far faster than an honest one (one a frame; while it stalls, one every 4 ms) gets
+// a burst of 64 and 300 a second through to Receive, the rest dropped and counted (its packets
+// still come through the relay); once it slows down, the link delivers everything again.
+TEST(OrcaDirectLink, AFloodingPeerIsHeldToTheRate)
+{
+  Mesh mesh(2);
+  ASSERT_TRUE(mesh.WaitFor([&] { return mesh.AllUp(); }));
+  const auto start = std::chrono::steady_clock::now();
+  constexpr int SENT = 3000;
+  for (int i = 0; i < SENT; ++i)
+    mesh.At(0).link->Send("flood");
+  mesh.WaitFor(
+      [&] {
+        return mesh.Stats(1, 0).floods > 0 && Count(mesh.At(1).received, "flood") >= 64;
+      },
+      2s);
+  // Everything that made it through the sockets is in by now.
+  std::this_thread::sleep_for(300ms);
+  mesh.Pump();
+  const double seconds =
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+  const int got = Count(mesh.At(1).received, "flood");
+  const u64 dropped = mesh.Stats(1, 0).floods;
+  std::printf("[ flood ] %d sent, %d delivered, %llu dropped over the rate, in %.2f s\n", SENT, got,
+              static_cast<unsigned long long>(dropped), seconds);
+  EXPECT_GE(got, 64);
+  EXPECT_LE(got, 64 + static_cast<int>(300 * seconds) + 1);
+  EXPECT_GT(dropped, 0u);
+  // An honest pace afterwards: every packet delivered.
+  std::this_thread::sleep_for(300ms);
+  for (int i = 0; i < 30; ++i)
+  {
+    mesh.At(0).link->Send("steady " + std::to_string(i));
+    std::this_thread::sleep_for(16ms);
+  }
+  ASSERT_TRUE(mesh.WaitFor([&] {
+    for (int i = 0; i < 30; ++i)
+    {
+      if (Count(mesh.At(1).received, "steady " + std::to_string(i)) != 1)
+        return false;
+    }
+    return true;
+  }, 3s));
+  EXPECT_EQ(mesh.Stats(1, 0).floods, dropped);
+}
+
+// One side starts over while the other keeps its count (a seat change, or links turned off and on
+// on one side only): the offering side's new link must go past the generation the answering side
+// holds, and an answering side with none asks at once. Both come back up in a few seconds, not
+// after the backoff climbs past the old count or libjuice's 30 s consent timeout.
+TEST(OrcaDirectLink, OneSideStartingOverCatchesUp)
+{
+  Mesh mesh(2);
+  ASSERT_TRUE(mesh.WaitFor([&] { return mesh.AllUp(); }));
+  // A few builds first: the answering side holds generation 4.
+  for (int i = 0; i < 3; ++i)
+  {
+    std::this_thread::sleep_for(600ms);
+    const int before = mesh.Stats(1, 0).generation;
+    mesh.At(0).link->Test("rebuild");
+    ASSERT_TRUE(mesh.WaitFor(
+        [&] { return mesh.Stats(1, 0).generation > before && mesh.AllUp(); }));
+  }
+  const int held = mesh.Stats(1, 0).generation;
+  ASSERT_EQ(held, 4);
+
+  // The offering side starts over: its first offer (generation 1) is refused with the answering
+  // side's generation, and its next one goes past it.
+  auto start = std::chrono::steady_clock::now();
+  mesh.At(0).link->RemovePeer(mesh.At(1).id);
+  mesh.At(0).link->AddPeer(mesh.At(1).id, 1);
+  ASSERT_TRUE(mesh.WaitFor([&] {
+    return mesh.Stats(0, 1).generation > held && mesh.Stats(1, 0).generation > held &&
+           mesh.AllUp();
+  }, 4s))
+      << mesh.Stats(0, 1).generation << " / " << mesh.Stats(1, 0).generation;
+  std::printf("[ restart ] offering side: up again at link %d after %.1f s\n",
+              mesh.Stats(0, 1).generation,
+              std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+
+  // The answering side starts over: it has no link and no generation, asks (`dlr` 0) once its
+  // wait for an offer runs out, and the offering side builds at once.
+  std::this_thread::sleep_for(1100ms);
+  const int before = mesh.Stats(0, 1).generation;
+  start = std::chrono::steady_clock::now();
+  mesh.At(1).link->RemovePeer(mesh.At(0).id);
+  mesh.At(1).link->AddPeer(mesh.At(0).id, 0);
+  ASSERT_TRUE(mesh.WaitFor([&] { return mesh.Stats(0, 1).generation > before && mesh.AllUp(); },
+                           9s))
+      << mesh.Stats(0, 1).generation << " / " << mesh.Stats(1, 0).generation;
+  std::printf("[ restart ] answering side: up again at link %d after %.1f s\n",
+              mesh.Stats(0, 1).generation,
+              std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+  mesh.At(0).link->Send("after both restarts");
+  ASSERT_TRUE(mesh.WaitFor([&] { return Count(mesh.At(1).received, "after both restarts") == 1; }));
+}
+
+// Fresh ICE credentials that can't be minted (no ticket: the site is down) are not asked for again
+// on every build, each of which would hold the link thread up to 10 s: one try, then a wait. The
+// links meanwhile build with what they have.
+TEST(OrcaDirectLink, AFailedIceMintBacksOff)
+{
+  std::array<std::atomic<int>, 2> mints{};
+  Mesh mesh(2, [&mints](DirectOptions& o, int i) {
+    o.ice_minted = std::chrono::steady_clock::now() - 11min;
+    o.fresh_ice = [&mints, i]() -> std::optional<IceConfig> {
+      ++mints[static_cast<size_t>(i)];
+      return std::nullopt;
+    };
+  });
+  ASSERT_TRUE(mesh.WaitFor([&] { return mesh.AllUp(); }));
+  for (int i = 0; i < 3; ++i)
+  {
+    std::this_thread::sleep_for(1100ms);
+    const int before = mesh.Stats(0, 1).generation;
+    mesh.At(i % 2).link->Test("rebuild");
+    ASSERT_TRUE(mesh.WaitFor([&] { return mesh.Stats(1, 0).generation > before && mesh.AllUp(); }))
+        << "rebuild " << i;
+  }
+  // Four builds on each side, one mint each.
+  EXPECT_EQ(mesh.Stats(0, 1).builds, 4);
+  EXPECT_EQ(mints[0].load(), 1);
+  EXPECT_EQ(mints[1].load(), 1);
 }

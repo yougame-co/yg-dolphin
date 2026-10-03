@@ -14,7 +14,9 @@
 
 #include <gtest/gtest.h>
 
+#include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Session/YouGameRoom.h"
+#include "Core/Orca/Status.h"
 
 using namespace Orca::Net;
 
@@ -231,6 +233,23 @@ TEST(OrcaRoom, CoalescingKeepsEarlierInputsAndChecksum)
   EXPECT_EQ(pending->pads.front()[0], 70 - MAX_PADS_IN_PACKET);
 }
 
+// YouGame's remote switch for direct links: the ticket reply's top-level `direct`, off only when
+// it is false; a site that sends none (or something else) leaves them on.
+TEST(OrcaRoom, TicketSwitchesDirectLinks)
+{
+  const auto reply = [](const char* text) {
+    picojson::value value;
+    EXPECT_TRUE(picojson::parse(value, text).empty()) << text;
+    return value.get<picojson::object>();
+  };
+  EXPECT_TRUE(TicketAllowsDirect(reply(R"({"url":"wss://rooms.yougame.co","ticket":"t"})")));
+  EXPECT_TRUE(TicketAllowsDirect(reply(R"({"ticket":"t","direct":true})")));
+  EXPECT_FALSE(TicketAllowsDirect(reply(R"({"ticket":"t","direct":false})")));
+  EXPECT_TRUE(TicketAllowsDirect(reply(R"({"ticket":"t","direct":0})")));
+  EXPECT_TRUE(TicketAllowsDirect(reply(R"({"ticket":"t","direct":"false"})")));
+  EXPECT_TRUE(TicketAllowsDirect(reply(R"({"ticket":"t","ice":{"direct":false}})")));
+}
+
 TEST(OrcaRoom, RefusesToStartOutsideTheApp)
 {
   // No bridge and no dev game: the room ends at once with a reason, without touching the network.
@@ -435,6 +454,22 @@ TEST(OrcaLive, DirectLinkBetweenTwoRooms)
   EXPECT_TRUE(wait_for([&] { return a.Direct().transport == 1 && b.Direct().transport == 1; },
                        10000))
       << a.Direct().line << " / " << b.Direct().line;
+
+  // The player's switch ("direct off" from an app with the "direct" cap): both rooms of this
+  // process go back to the relay at once, and come back when it is on again. Without the cap it
+  // counts for nothing.
+  Orca::Status::SetAppCaps("");
+  Orca::Online::SetDirectWanted(false);
+  std::this_thread::sleep_for(std::chrono::milliseconds(600));
+  EXPECT_EQ(a.Direct().transport, 1);
+  Orca::Status::SetAppCaps("direct");
+  EXPECT_TRUE(wait_for([&] { return a.Direct().transport == 0 && b.Direct().transport == 0; },
+                       3000));
+  Orca::Online::SetDirectWanted(true);
+  EXPECT_TRUE(wait_for([&] { return a.Direct().transport == 1 && b.Direct().transport == 1; },
+                       10000))
+      << a.Direct().line << " / " << b.Direct().line;
+  Orca::Status::SetAppCaps("");
 
   // A third Orca without direct links: the others link to each other, never to it.
   {

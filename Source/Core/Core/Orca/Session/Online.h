@@ -44,6 +44,12 @@ bool TakeLeaveRequest();
 // frame boundary, and to a new session from its first frame).
 void SetChosenDelay(std::optional<int> frames);
 std::optional<int> ChosenDelay();
+// The app's "direct on|off" (embed mode; any thread, never blocks): whether this player allows
+// direct links to the other players (ORCA.md "Direct links"). On until the app says; it stays for
+// every room after, and counts only while the app's caps include "direct". The room turns its
+// links off or on at its next tick (YouGameRoom).
+void SetDirectWanted(bool on);
+bool DirectWanted();
 // Whether this Orca joins someone else's game (ORCA_JOIN=1, or the desktop app opened an invite),
 // once known; nullopt before, or if the room ended first.
 std::optional<bool> Joining();

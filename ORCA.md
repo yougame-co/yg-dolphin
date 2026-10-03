@@ -628,10 +628,36 @@ Ishiiruka, slippi-rust-extensions):
     answering side asks for one with `dlr`; the offering side builds it (not twice in a second).
   - Each build is a new generation with fresh keys. TURN credentials older than 10 minutes are
     minted again first (`YouGameRoom::FreshTicket`): a friend may arrive long after the room
-    opened.
+    opened. A mint that fails (it can hold the link thread 10 s) isn't tried again on every build:
+    30 s, doubling to 5 minutes, while links keep the credentials they have.
+  - One side may start over while the other keeps its count (a seat change, links switched off
+    and on one side only): the answering side refuses an offer older than its generation and
+    answers it with that generation (`dlr`, once a second at most); the offering side goes past it
+    with its next build, half a second after its last. An answering side with no link at all asks
+    with generation 0, which the offering side always takes.
 - **Three or four players:** a link per pair, each falling back on its own.
 - **Drop-in:** linking starts at the hello, in the lobby. A joiner's history comes through the
   relay, and its live inputs go direct as soon as the link is up.
+- **A peer that floods.** Each link delivers at most 300 packets a second (a token bucket with a
+  burst of 64), after authentication: an honest Orca sends one a frame, and while it stalls one
+  every 4 ms. Past that the datagram is dropped and counted (its packet still comes through the
+  relay), so a modified Orca holding the link's keys can't make `Receive` decode thousands of
+  packets on the emulator thread. The first drop logs a warning; each link's close line counts
+  them ("over the rate").
+- **Switched off** (no link tried, every input through the relay, logged as
+  `Orca room: direct links off (<why>): inputs go through the relay`):
+  - by YouGame, for everyone: a ticket reply with `"direct": false` at its top level
+    (`TicketAllowsDirect`; absent or not a boolean means on). Every ticket the room gets is read
+    again (a fresh one for TURN credentials or the keyframe store too), so the switch also reaches
+    a room that is already open, at its next ticket. A room whose first ticket says off never
+    starts its link thread. The desktop app's page must pass `direct` through in its `mpTicket`
+    reply (YouGame `web/src/components/Player.tsx`, which lists the fields it returns);
+  - by the player: the app's `direct off` / `direct on` on stdin, with the `direct` cap ("Embedding").
+    It holds for the run, and takes effect at the room's next tick (milliseconds): the links go,
+    and `direct on` builds them anew.
+  - `ORCA_DIRECT=0` (a test switch) builds no links and offers none in the hello.
+  - While switched off an Orca still says in its hello that it can link, and ignores the other
+    side's offers, so switching back on needs nothing from the other player.
 - **Logs** never carry addresses, candidates or credentials: libjuice's own lines go to the
   NETPLAY log (never stdout, which the app parses) with addresses taken out.
   - NOTICE lines: `Orca direct link: seat N up, direct host/host, round trip 1 ms (link G)`,
@@ -683,13 +709,17 @@ Measured on the Mac (2026-10-03), two Orcas on one machine, Brawl, Mario vs Link
 Tests:
 
 - `OrcaDirectLink*` (in-process links over loopback: keys, datagrams, replays, rebuilds, three
-  players, blocks, the test delay).
+  players, blocks, the test delay, a flooding peer, either side starting over, a failed
+  credential mint).
+- `OrcaRoom.TicketSwitchesDirectLinks` (the ticket's `direct`).
 - `OrcaSessionDirect*` (duplicates and reordering in the session, a drop-in friend and a
   wall-clock match beside the relay).
-- `ORCA_LIVE_TEST=1` `OrcaLive.DirectLinkBetweenTwoRooms` (two rooms on yougame.co).
+- `ORCA_LIVE_TEST=1` `OrcaLive.DirectLinkBetweenTwoRooms` (two rooms on yougame.co, the player's
+  switch included).
 - `Tools/orca/direct-link.py <nogui> <disc>`: two Orcas over a dev room, a match, `test-direct`
-  off/in/on and three rebuilds. `--both ORCA_DIRECT_FORCE=turn --expect turn` and similar run the
-  variants. `Tools/orca/xplat.py` passes the `ORCA_DIRECT*` switches through and reports the
+  off/in/on, three rebuilds and the player's switch (`direct off`, then `on`, on the host only).
+  `--both ORCA_DIRECT_FORCE=turn --expect turn` and similar run the variants; `--ticket-direct off`
+  fetches both Orcas' tickets through a local proxy that adds `"direct": false`. `Tools/orca/xplat.py` passes the `ORCA_DIRECT*` switches through and reports the
   transport.
 
 ## Input delay
@@ -1120,6 +1150,7 @@ window (layout, scroll, resize, full screen). Moving, minimizing or hiding the w
 | `reset` | The console's reset button. Answers `unsupported reset` in a session or before the game runs. |
 | `prepare-join` | The host invited a friend to drop in. It calls `Orca::Online::PrepareJoin()`: the next frame boundary captures a keyframe ("Drop-in"). |
 | `join <code>` / `leave` | With `caps join` / `caps leave`: into a friend's game, or out of one ("Drop-in"). Both are also taken while a launch join waits for the keyframe. |
+| `direct on` / `direct off` | With `caps direct` (Orca 0.3.8 on): the player's switch for direct links to the other players ("Direct links"). On until the app says; the choice stays for the run and applies while the `caps` line has `direct`. `off` drops every link at the room's next tick and sends every input through the relay (as YouGame's ticket switch does); `on` builds them anew. The `orca stats` line's `tx` shows the path in use. Anything else answers `unsupported direct`. |
 | `delay auto` / `delay N` | With `caps delay` (Orca 0.3.5 on): this player's input delay. `N` from 1 to 6 frames is exactly that, never adapted; `auto` is the adaptive delay ("Input delay" below). The choice stays for the run, so it may come before a session and holds for every session after; until the app's `caps` line turns `delay` on, it waits. Mid-match it applies from this player's next frame and the friend needs nothing: each player's delay is its own, and every input travels explicitly. Anything else answers `unsupported delay`. The `orca stats` line's `delay` is the delay in use. |
 | `quit` | Stops at once (no power-button shutdown, also outside a session), then exits. |
 

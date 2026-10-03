@@ -585,6 +585,12 @@ bool DecodePacket(const std::string& json, Packet* packet)
   return PacketFromJson(value.get<picojson::object>(), packet);
 }
 
+bool TicketAllowsDirect(const picojson::object& reply)
+{
+  const auto it = reply.find("direct");
+  return it == reply.end() || !it->second.is<bool>() || it->second.get<bool>();
+}
+
 bool DecodeDirectPacket(const std::string& payload, int slot, Packet* packet)
 {
   Packet decoded;
@@ -694,6 +700,11 @@ struct YouGameRoom::Impl
   const std::unique_ptr<DirectLink> direct =
       direct_options ? std::make_unique<DirectLink>() : nullptr;
   bool direct_started = false;  // the I/O thread's
+  // Whether links are on, as the I/O thread last saw it (DirectAllowed; logged when it changes).
+  std::optional<bool> direct_on;
+  // The ticket reply's `direct` (TicketAllowsDirect): YouGame's own switch, read again from every
+  // ticket this room gets (under mutex).
+  bool ticket_direct = true;
   Clock::time_point direct_summary_at{};
   DirectSummary direct_summary;  // under mutex
   // The ticket's ICE servers and when they were minted (under mutex).
@@ -937,6 +948,7 @@ struct YouGameRoom::Impl
     if (const auto it = reply.find("ice"); it != reply.end())
       ParseIce(it->second, &ice);
     ice_minted = Clock::now();
+    ticket_direct = TicketAllowsDirect(reply);
     return true;
   }
 
@@ -1036,6 +1048,7 @@ struct YouGameRoom::Impl
     current_ticket = *ticket;
     if (const auto it = reply.find("ice"); it != reply.end() && ParseIce(it->second, &ice))
       ice_minted = Clock::now();
+    ticket_direct = TicketAllowsDirect(reply);
     return true;
   }
 
@@ -1053,7 +1066,34 @@ struct YouGameRoom::Impl
     return ice;
   }
 
-  // The direct links start with the welcome (this Orca's connection id is the link's identity).
+  // Whether direct links may run now, and if not, why: YouGame's ticket can turn them off
+  // (`direct: false`, for everyone), and so can the player (the app's "direct off", with the
+  // "direct" cap). ORCA_DIRECT=0 builds no DirectLink at all.
+  bool DirectAllowed(std::string* why)
+  {
+    if (!direct)
+    {
+      *why = "ORCA_DIRECT=0";
+      return false;
+    }
+    {
+      std::lock_guard lock(mutex);
+      if (!ticket_direct)
+      {
+        *why = "YouGame's ticket turned them off";
+        return false;
+      }
+    }
+    if (Orca::Status::Cap("direct") && !Orca::Online::DirectWanted())
+    {
+      *why = "the player turned them off";
+      return false;
+    }
+    return true;
+  }
+
+  // The direct links start with the welcome (this Orca's connection id is the link's identity),
+  // or later, when they are turned on.
   void StartDirect()
   {
     if (!direct || direct_started || me.empty())
@@ -1073,11 +1113,38 @@ struct YouGameRoom::Impl
     direct->Start(std::move(o));
   }
 
-  // Each player whose hello offered direct links, once both sides heard each other: a link.
+  // Each player whose hello offered direct links, once both sides heard each other: a link. While
+  // links are off (DirectAllowed), none: every player's goes, and the inputs take the relay.
   void LinkPeers()
   {
-    if (!direct_started)
+    if (!direct || me.empty())
       return;
+    std::string why;
+    const bool on = DirectAllowed(&why);
+    if (direct_on != on)
+    {
+      if (!on)
+      {
+        NOTICE_LOG_FMT(NETPLAY, "Orca room: direct links off ({}): inputs go through the relay",
+                       why);
+      }
+      else if (direct_on)
+      {
+        NOTICE_LOG_FMT(NETPLAY, "Orca room: direct links on again");
+      }
+      direct_on = on;
+    }
+    if (!on)
+    {
+      for (auto& [id, peer] : peers)
+        UnlinkPeer(id, peer);
+      if (direct_started)
+        direct->TakeSignals();
+      std::lock_guard lock(mutex);
+      direct_summary = {};
+      return;
+    }
+    StartDirect();
     for (auto& [id, peer] : peers)
     {
       if (peer.announced && peer.heard && peer.heard_us && peer.direct && !peer.linked)
@@ -1852,7 +1919,7 @@ struct YouGameRoom::Impl
       }
       // A room whose game is running is what a drop-in friend joins: no refusal.
       welcomed_at = Clock::now();
-      StartDirect();
+      LinkPeers();
       Roster(m);
       std::lock_guard lock(mutex);
       NOTICE_LOG_FMT(NETPLAY, "Orca room: in room {} on seat {}, {}", code, seat + 1,
@@ -2026,8 +2093,9 @@ struct YouGameRoom::Impl
     if (kind == "dl" || kind == "dlc" || kind == "dlr")
     {
       // Direct link signalling, only from a player of this game (its hello had our compatibility
-      // key) that offered links. Its offer may come before this side linked it: link it now.
-      if (!direct_started || !peer.announced || !peer.direct)
+      // key) that offered links, while links are on here. Its offer may come before this side
+      // linked it: link it now.
+      if (!direct_started || !direct_on.value_or(false) || !peer.announced || !peer.direct)
         return;
       if (!peer.linked)
       {

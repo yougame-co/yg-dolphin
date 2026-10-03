@@ -8,6 +8,8 @@
 #include <string>
 #include <vector>
 
+#include <picojson.h>
+
 #include "Common/CommonTypes.h"
 #include "Core/Orca/Session/Session.h"
 
@@ -173,6 +175,9 @@ bool DecodePacket(const std::string& json, Packet* packet);
 // A packet from a direct link to the player at `slot`: as through the relay, only for that player's
 // own seat, and never with drop-in history (the relay alone carries it, in order).
 bool DecodeDirectPacket(const std::string& payload, int slot, Packet* packet);
+// YouGame's switch for direct links in a ticket reply: its top-level `direct`, false turning them
+// off. Absent or not a boolean (an older site): on.
+bool TicketAllowsDirect(const picojson::object& reply);
 // What to tell the player when the room refused the connection (WebSocket::Connect's error), and
 // the desktop app's error code for it.
 std::string RefusalReason(const std::string& connect_error);

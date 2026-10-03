@@ -89,6 +89,18 @@ constexpr int MAX_BACKOFF_S = 30;
 // TURN credentials live 30 minutes and tickets hand them out with at least 15 left: older than
 // this, a new link asks for fresh ones first.
 constexpr auto ICE_FRESH_FOR = 10min;
+// A failed mint of fresh credentials (a ticket request, up to 10 s on the link thread) is tried
+// again no sooner than this, doubling to the most: the links meanwhile keep the ones they have.
+constexpr auto FRESH_ICE_RETRY_FIRST = 30s;
+constexpr auto FRESH_ICE_RETRY_MAX = 5min;
+// Packets a link delivers: a token bucket of this many a second and this burst. An honest peer
+// sends one a frame, and while it stalls one every 4 ms (YouGameRoom's DIRECT_STALL_GAP), well
+// under it; past it a datagram is dropped (the relay still carries its packet), so a modified
+// peer with the keys can't make Receive decode thousands a second on the emulator thread.
+constexpr double FLOOD_RATE = 300;
+constexpr double FLOOD_BURST = 64;
+// An offer refused for an old generation is answered with this side's (`dlr`) at most this often.
+constexpr auto REFUSAL_ANSWER_GAP = 1s;
 // Candidates go out in batches at most this often (the room allows 120 messages a second).
 constexpr auto TRICKLE_EVERY = 100ms;
 constexpr size_t MAX_CANDIDATES_IN_MESSAGE = 16;
@@ -764,6 +776,27 @@ struct Link : std::enable_shared_from_this<Link>
   int max_send_us = 0;
   u64 send_us_total = 0, sends_timed = 0, slow_sends = 0;
 
+  // Deliver's token bucket (FLOOD_RATE), under DirectLink::Impl::inbox_mutex, and the authentic
+  // packets it dropped (read anywhere).
+  double tokens = FLOOD_BURST;
+  std::optional<Clock::time_point> tokens_at;
+  std::atomic<u64> flood_drops{0};
+
+  // Under inbox_mutex: whether a packet arriving now may be delivered.
+  bool TakeToken(Clock::time_point now)
+  {
+    if (tokens_at)
+    {
+      const double seconds = std::chrono::duration<double>(now - *tokens_at).count();
+      tokens = std::min(FLOOD_BURST, tokens + std::max(0.0, seconds) * FLOOD_RATE);
+    }
+    tokens_at = now;
+    if (tokens < 1)
+      return false;
+    tokens -= 1;
+    return true;
+  }
+
   bool Selected() const
   {
     const int s = state.load();
@@ -899,6 +932,11 @@ struct DirectLink::Impl
     int backoff_s = FIRST_BACKOFF_S;
     int builds = 0;
     std::string reason;
+    // The offering side: a build the rules want as soon as the last is half a second old (the
+    // answering side said it holds a newer generation).
+    std::string pending_build;
+    // The answering side: when it last answered a refused offer with its generation.
+    Clock::time_point refusal_answered_at{};
   };
 
   struct Command
@@ -989,6 +1027,10 @@ struct DirectLink::Impl
   // The link thread's own.
   std::map<std::string, Peer> peers;
   std::map<std::string, std::pair<std::string, Clock::time_point>> resolved;
+  // After a failed mint of fresh ICE credentials: no other try before this, and the wait after the
+  // next failure.
+  Clock::time_point fresh_ice_retry_at{};
+  std::chrono::seconds fresh_ice_backoff = FRESH_ICE_RETRY_FIRST;
 
   ~Impl() { Stop(); }
 
@@ -1165,6 +1207,17 @@ struct DirectLink::Impl
     std::lock_guard lock(inbox_mutex);
     if (epochs[link.peer] != link.epoch)
       return;
+    if (!link.TakeToken(Clock::now()))
+    {
+      if (link.flood_drops++ == 0)
+      {
+        WARN_LOG_FMT(NETPLAY,
+                     "Orca direct link: seat {} sends over {} packets a second; the rest of them "
+                     "come through the relay only (link {})",
+                     link.slot + 1, FLOOD_RATE, link.generation);
+      }
+      return;
+    }
     if (inbox.size() >= MAX_INBOX)
       inbox.pop_front();
     inbox.push_back({link.peer, link.slot, std::move(*payload)});
@@ -1405,7 +1458,27 @@ struct DirectLink::Impl
         // An offer: a new link, unless it is the one this side already answered, or one came
         // less than half a second ago (an honest peer offers at most once a second; its own rules
         // offer again if this one goes unanswered).
-        if (*generation < peer.generation || (*generation == peer.generation && peer.link) ||
+        if (*generation < peer.generation)
+        {
+          // From before this side's newest link: the offering side started over (it unlinked and
+          // linked again, a seat change or a switch turned off and on) and counts from 1 again.
+          // Tell it where this side is, so its next offer comes after (`dlr` below).
+          const auto now = Clock::now();
+          if (now - peer.refusal_answered_at >= REFUSAL_ANSWER_GAP)
+          {
+            peer.refusal_answered_at = now;
+            INFO_LOG_FMT(NETPLAY,
+                         "Orca direct link: seat {} offered link {}, older than link {}: asking "
+                         "for a newer one",
+                         peer.slot + 1, *generation, peer.generation);
+            picojson::object d;
+            d["k"] = picojson::value("dlr");
+            d["g"] = picojson::value(static_cast<double>(peer.generation));
+            Signal(peer, std::move(d));
+          }
+          return;
+        }
+        if ((*generation == peer.generation && peer.link) ||
             (peer.link && Clock::now() - peer.built_at < 500ms))
         {
           return;
@@ -1448,10 +1521,29 @@ struct DirectLink::Impl
     }
     if (kind == "dlr" && peer.low)
     {
-      // The answering side wants a new link: its own rules found this one dead (or never got an
-      // offer). Not twice in a second (both sides' rules may fire together).
-      if (*generation == peer.generation && Clock::now() - peer.built_at >= 1s)
+      if (*generation > peer.generation)
+      {
+        // The answering side holds a newer generation than this side's newest: this side started
+        // over (its count went back to 0) while that one kept its own, and refuses anything older.
+        // The next offer goes past it, as soon as the last build is half a second old.
+        if (*generation == 0xFFFF)
+          return;
+        INFO_LOG_FMT(NETPLAY, "Orca direct link: seat {} is at link {}, past this side's {}",
+                     peer.slot + 1, *generation, peer.generation);
+        DestroyLink(peer);
+        peer.generation = static_cast<u16>(*generation);
+        peer.pending_build = "behind";
+        return;
+      }
+      // The answering side wants a new link: its own rules found this one dead, or it has none at
+      // all (generation 0: it never took an offer, or started over itself). Not twice in a second
+      // (both sides' rules may fire together). An older generation is a request from before this
+      // side's newest build.
+      if ((*generation == peer.generation || *generation == 0) &&
+          Clock::now() - peer.built_at >= 1s)
+      {
         Build(peer, "asked", nullptr);
+      }
     }
   }
 
@@ -1514,9 +1606,10 @@ struct DirectLink::Impl
       std::lock_guard lock(link->m);
       NOTICE_LOG_FMT(NETPLAY,
                      "Orca direct link: seat {} link {} closed: {} sent, {} received, {} refused, "
-                     "{} replayed; sends {:.1f} us on average, longest {} us, {} over 1 ms",
+                     "{} replayed, {} over the rate; sends {:.1f} us on average, longest {} us, "
+                     "{} over 1 ms",
                      peer.slot + 1, link->generation, link->sent, link->received, link->auth_drops,
-                     link->replays,
+                     link->replays, link->flood_drops.load(),
                      link->sends_timed ? static_cast<double>(link->send_us_total) /
                                              static_cast<double>(link->sends_timed) :
                                          0.0,
@@ -1565,6 +1658,7 @@ struct DirectLink::Impl
   void Build(Peer& peer, const std::string& reason, const picojson::object* offer)
   {
     DestroyLink(peer);
+    peer.pending_build.clear();
     if (peer.low)
     {
       if (peer.generation == 0xFFFF)
@@ -1574,12 +1668,26 @@ struct DirectLink::Impl
     peer.built_at = Clock::now();
     ++peer.builds;
     peer.reason = reason;
-    if (Clock::now() - options.ice_minted > ICE_FRESH_FOR && options.fresh_ice)
+    if (Clock::now() - options.ice_minted > ICE_FRESH_FOR && options.fresh_ice &&
+        Clock::now() >= fresh_ice_retry_at)
     {
       if (const auto fresh = options.fresh_ice())
       {
         options.ice = *fresh;
         options.ice_minted = Clock::now();
+        fresh_ice_backoff = FRESH_ICE_RETRY_FIRST;
+      }
+      else
+      {
+        // Not again on every build (each try can hold this thread 10 s): the links keep the
+        // credentials they have meanwhile (TURN only fails once those expire).
+        fresh_ice_retry_at = Clock::now() + fresh_ice_backoff;
+        WARN_LOG_FMT(NETPLAY,
+                     "Orca direct link: no fresh ICE servers; the next try in {} s, links keep "
+                     "the ticket's until then",
+                     fresh_ice_backoff.count());
+        fresh_ice_backoff = std::min<std::chrono::seconds>(fresh_ice_backoff * 2,
+                                                           FRESH_ICE_RETRY_MAX);
       }
     }
     const IceConfig& ice = options.ice;
@@ -1789,6 +1897,12 @@ struct DirectLink::Impl
       }
 
       // When to build anew.
+      if (!peer.pending_build.empty())
+      {
+        if (now - peer.built_at >= 500ms)
+          Build(peer, peer.pending_build, nullptr);
+        continue;
+      }
       std::string reason;
       const int state = peer.link ? peer.link->state.load() : -1;
       const bool connected = peer.link && peer.link->Selected();
@@ -1854,6 +1968,7 @@ struct DirectLink::Impl
         s.received = peer.link->received;
         s.auth_drops = peer.link->auth_drops;
         s.replays = peer.link->replays;
+        s.floods = peer.link->flood_drops.load();
         s.max_send_us = peer.link->max_send_us;
       }
       out[id] = std::move(s);

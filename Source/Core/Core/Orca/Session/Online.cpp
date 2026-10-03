@@ -215,6 +215,7 @@ std::mutex s_request_mutex;
 std::optional<std::string> s_join_request;
 bool s_leave_request = false;
 std::optional<int> s_chosen_delay;
+std::atomic<bool> s_direct_wanted{true};
 }  // namespace
 
 void RequestJoin(const std::string& code)
@@ -239,6 +240,16 @@ bool TakeLeaveRequest()
 {
   std::lock_guard lock(s_request_mutex);
   return std::exchange(s_leave_request, false);
+}
+
+void SetDirectWanted(bool on)
+{
+  s_direct_wanted = on;
+}
+
+bool DirectWanted()
+{
+  return s_direct_wanted;
 }
 
 void SetChosenDelay(std::optional<int> frames)
