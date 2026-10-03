@@ -3,8 +3,10 @@
 
 #include "Core/Orca/UX/GamePatches.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <set>
+#include <utility>
 
 #include <fmt/format.h>
 
@@ -15,6 +17,7 @@
 #include "Core/Debugger/PPCDebugInterface.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Status.h"
+#include "Core/Orca/UX/NameTags.h"
 #include "Core/PowerPC/MMU.h"
 
 namespace Orca::UX
@@ -58,12 +61,73 @@ std::vector<std::string_view> Words(std::string_view line)
   }
   return words;
 }
+
+// A word-aligned address in MEM1 or MEM2.
+bool InRam(std::optional<u32> address)
+{
+  return address && (*address % 4 == 0) &&
+         ((*address >= 0x80000000 && *address < 0x81800000) ||
+          (*address >= 0x90000000 && *address < 0x94000000));
+}
+
+// `when <address> [& <mask>] ==|!= <value>`: nullopt for anything else, a mask of 0, or a value
+// with bits outside the mask (an == that could never hold).
+std::optional<PatchCondition> ParseCondition(std::span<const std::string_view> words)
+{
+  if (words.size() != 4 && words.size() != 6)
+    return std::nullopt;
+  PatchCondition c;
+  const auto address = Hex32(words[1]);
+  if (!InRam(address))
+    return std::nullopt;
+  c.address = *address;
+  size_t op = 2;
+  if (words.size() == 6)
+  {
+    const auto mask = Hex32(words[3]);
+    if (words[2] != "&" || !mask || *mask == 0)
+      return std::nullopt;
+    c.mask = *mask;
+    op = 4;
+  }
+  if (words[op] != "==" && words[op] != "!=")
+    return std::nullopt;
+  c.equal = words[op] == "==";
+  const auto value = Hex32(words[op + 1]);
+  if (!value || (*value & ~c.mask) != 0)
+    return std::nullopt;
+  c.value = *value;
+  return c;
+}
+
+// The end of the group that starts at `start` (one past its last line).
+size_t GroupEnd(std::span<const GamePatch> patches, size_t start)
+{
+  size_t end = start + 1;
+  while (end < patches.size() && patches[end].joins_previous)
+    ++end;
+  return end;
+}
 }  // namespace
 
 std::optional<std::vector<GamePatch>> ParseGamePatches(std::string_view text, std::string* error)
 {
   std::vector<GamePatch> patches;
+  std::vector<int> lines;  // each patch's line number
   std::set<u32> seen;
+  // The open `when` block: its conditions, the line of its first `when`, whether a line followed.
+  std::vector<PatchCondition> when;
+  int when_line = 0;
+  bool block_has_lines = false;
+  // The next line starts a group whatever its address (it follows a `when` or an `end`).
+  bool group_break = false;
+  // Every condition's address and line, checked once every written address is known.
+  std::vector<std::pair<u32, int>> condition_lines;
+  const auto fail = [error](std::string message) {
+    if (error)
+      *error = std::move(message);
+    return std::nullopt;
+  };
   int number = 0;
   if (text.starts_with("\xEF\xBB\xBF"))  // a UTF-8 BOM an editor may add
     text.remove_prefix(3);
@@ -80,28 +144,86 @@ std::optional<std::vector<GamePatch>> ParseGamePatches(std::string_view text, st
     const auto words = Words(line);
     if (words.empty())
       continue;
+    if (words[0] == "when")
+    {
+      if (block_has_lines)
+        return fail(fmt::format("line {}: `when` inside a block: close it with `end` first", number));
+      const auto condition = ParseCondition(words);
+      if (!condition)
+      {
+        return fail(fmt::format("line {}: expected `when <address> [& <mask>] ==|!= <value>` in hex "
+                                "(a nonzero mask, the value inside it)",
+                                number));
+      }
+      if (when.empty())
+        when_line = number;
+      when.push_back(*condition);
+      condition_lines.emplace_back(condition->address, number);
+      group_break = true;
+      continue;
+    }
+    if (words[0] == "end")
+    {
+      if (words.size() != 1)
+        return fail(fmt::format("line {}: `end` takes nothing after it", number));
+      if (when.empty())
+        return fail(fmt::format("line {}: `end` without `when`", number));
+      if (!block_has_lines)
+        return fail(fmt::format("line {}: a `when` block with no lines", number));
+      when.clear();
+      block_has_lines = false;
+      group_break = true;
+      continue;
+    }
     const auto address = words.size() == 3 ? Hex32(words[0]) : std::nullopt;
     const auto value = words.size() == 3 ? Hex32(words[2]) : std::nullopt;
     const auto original = words.size() == 3 && words[1] != "*" ? Hex32(words[1]) : std::nullopt;
     // A word-aligned address in MEM1 or MEM2, and an original that is either `*` or hex.
-    const bool in_ram = address && (*address % 4 == 0) &&
-                        ((*address >= 0x80000000 && *address < 0x81800000) ||
-                         (*address >= 0x90000000 && *address < 0x94000000));
-    if (!in_ram || !value || (words[1] != "*" && !original))
-    {
-      if (error)
-        *error = fmt::format("line {}: expected `<address> <original|*> <value>` in hex", number);
-      return std::nullopt;
-    }
+    if (!InRam(address) || !value || (words[1] != "*" && !original))
+      return fail(fmt::format("line {}: expected `<address> <original|*> <value>` in hex", number));
     if (!seen.insert(*address).second)
-    {
-      if (error)
-        *error = fmt::format("line {}: address {:08X} repeated", number, *address);
-      return std::nullopt;
-    }
-    const bool joins = original && !patches.empty() && patches.back().original &&
+      return fail(fmt::format("line {}: address {:08X} repeated", number, *address));
+    if (!when.empty() && !original)
+      return fail(fmt::format("line {}: a `*` line can't be toggled: give its original", number));
+    const bool joins = !group_break && original && !patches.empty() && patches.back().original &&
                        patches.back().address + 4 == *address;
-    patches.push_back({*address, original, *value, joins});
+    patches.push_back({*address, original, *value, joins, when});
+    lines.push_back(number);
+    group_break = false;
+    block_has_lines = !when.empty();
+  }
+  if (!when.empty())
+    return fail(fmt::format("line {}: `when` without `end`", when_line));
+  for (const auto& [address, line] : condition_lines)
+  {
+    if (seen.contains(address))
+    {
+      return fail(fmt::format("line {}: the condition reads {:08X}, a word this file writes", line,
+                              address));
+    }
+  }
+  // A toggled group writes when memory holds its originals or its values, so one word alone would
+  // match some other module by chance twice as often as a guarded word: two words at least (the
+  // words around a flip as guards), and one that changes (a group of guards never toggles).
+  for (size_t start = 0; start < patches.size();)
+  {
+    const size_t end = GroupEnd(patches, start);
+    const std::span<const GamePatch> group(patches.data() + start, end - start);
+    const int line = lines[start];
+    start = end;
+    if (group[0].when.empty())
+      continue;
+    if (group.size() < 2)
+    {
+      return fail(fmt::format("line {}: a toggled group needs two words at least: add the words "
+                              "around it as guards",
+                              line));
+    }
+    if (std::none_of(group.begin(), group.end(),
+                     [](const GamePatch& p) { return p.value != *p.original; }))
+    {
+      return fail(fmt::format("line {}: a toggled group that changes nothing", line));
+    }
   }
   return patches;
 }
@@ -122,9 +244,92 @@ bool GroupApplies(std::span<const GamePatch> group, std::span<const u32> now)
   return changes;
 }
 
-void ApplyGamePatches(const Core::CPUThreadGuard& guard)
+bool ConditionsHold(std::span<const PatchCondition> when, const GuestMemory& memory)
 {
-  // Loaded per profile (a process could boot a second game), on the CPU thread only.
+  for (const PatchCondition& c : when)
+  {
+    if (!memory.Valid(c.address))
+      return false;
+    if (((memory.Read32(c.address) & c.mask) == c.value) != c.equal)
+      return false;
+  }
+  return true;
+}
+
+Toggle ToggleGroup(std::span<const GamePatch> group, std::span<const u32> now, bool holds)
+{
+  if (group.empty() || group.size() != now.size())
+    return Toggle::Leave;
+  bool originals = true, values = true, changes = false;
+  for (size_t i = 0; i < group.size(); ++i)
+  {
+    if (!group[i].original)  // never so in a parsed file
+      return Toggle::Leave;
+    originals &= now[i] == *group[i].original;
+    values &= now[i] == group[i].value;
+    changes |= group[i].value != *group[i].original;
+  }
+  // A group of guards only is both at once and never writes.
+  if (!changes)
+    return Toggle::Leave;
+  if (holds && originals)
+    return Toggle::On;
+  if (!holds && values)
+    return Toggle::Off;
+  return Toggle::Leave;
+}
+
+PatchPlan PlanGamePatches(std::span<const GamePatch> patches, const GuestMemory& memory,
+                          bool toggled)
+{
+  PatchPlan plan;
+  std::vector<u32> now;
+  for (size_t start = 0; start < patches.size();)
+  {
+    const size_t end = GroupEnd(patches, start);
+    const std::span<const GamePatch> group = patches.subspan(start, end - start);
+    start = end;
+    if (group[0].when.empty() == toggled)
+      continue;
+    now.clear();
+    for (const GamePatch& p : group)
+    {
+      if (!memory.Valid(p.address))
+        break;
+      now.push_back(memory.Read32(p.address));
+    }
+    bool restore = false;
+    if (!toggled)
+    {
+      if (!GroupApplies(group, now))
+        continue;
+      if (group[0].original)
+        plan.landed.push_back({group[0].address, static_cast<u32>(group.size())});
+    }
+    else
+    {
+      const Toggle toggle = ToggleGroup(group, now, ConditionsHold(group[0].when, memory));
+      if (toggle == Toggle::Leave)
+        continue;
+      restore = toggle == Toggle::Off;
+      (restore ? plan.off : plan.on).push_back({group[0].address, static_cast<u32>(group.size())});
+    }
+    for (size_t i = 0; i < group.size(); ++i)
+    {
+      const u32 target = restore ? *group[i].original : group[i].value;
+      if (now[i] != target)
+        plan.writes.push_back({group[i].address, target, group[i].original.has_value()});
+    }
+  }
+  return plan;
+}
+
+namespace
+{
+// The active profile's patches, loaded when the profile changes (a process could boot a second
+// game), on the CPU thread only.
+const std::vector<GamePatch>& ActivePatches()
+{
   static std::string s_for;
   static std::vector<GamePatch> s_patches;
   // A disc profile's file (RSBE01.patches) or a launcher profile's (PPLUS32.patches). A launcher's
@@ -152,39 +357,42 @@ void ApplyGamePatches(const Core::CPUThreadGuard& guard)
       }
     }
   }
-  std::vector<u32> now;
-  for (size_t start = 0; start < s_patches.size();)
+  return s_patches;
+}
+
+void Apply(const Core::CPUThreadGuard& guard, bool toggled)
+{
+  const std::vector<GamePatch>& patches = ActivePatches();
+  if (patches.empty())
+    return;
+  GuardMemory memory(guard);
+  const PatchPlan plan = PlanGamePatches(patches, memory, toggled);
+  // A guarded group lands once per load of its module, and again on a re-run that crosses that
+  // load (Tools/orca/online-menu.py checks where, reading "patch group <address> " as a landing);
+  // a toggled group switches at each change of its condition, and again on re-runs that cross one.
+  for (const PatchPlan::Group& g : plan.landed)
+    INFO_LOG_FMT(ROLLBACK, "Orca: patch group {:08x} ({} words) landed", g.address, g.words);
+  for (const PatchPlan::Group& g : plan.on)
+    INFO_LOG_FMT(ROLLBACK, "Orca: toggled group {:08x} ({} words) on", g.address, g.words);
+  for (const PatchPlan::Group& g : plan.off)
+    INFO_LOG_FMT(ROLLBACK, "Orca: toggled group {:08x} ({} words) off", g.address, g.words);
+  for (const PatchWrite& w : plan.writes)
   {
-    size_t end = start + 1;
-    while (end < s_patches.size() && s_patches[end].joins_previous)
-      ++end;
-    const std::span<const GamePatch> group(s_patches.data() + start, end - start);
-    start = end;
-    now.clear();
-    for (const GamePatch& p : group)
-    {
-      if (!PowerPC::MMU::HostIsRAMAddress(guard, p.address))
-        break;
-      now.push_back(PowerPC::MMU::HostRead<u32>(guard, p.address));
-    }
-    if (!GroupApplies(group, now))
-      continue;
-    // A guarded group lands once per load of its module, and again on a re-run that crosses that
-    // load (Tools/orca/online-menu.py checks where).
-    if (group[0].original)
-    {
-      INFO_LOG_FMT(ROLLBACK, "Orca: patch group {:08x} ({} words) landed", group[0].address,
-                   group.size());
-    }
-    for (size_t i = 0; i < group.size(); ++i)
-    {
-      if (now[i] == group[i].value)
-        continue;
-      if (group[i].original)
-        ApplyMemoryPatch<u32>(guard, group[i].value, group[i].address);  // code: drop the JIT's copy
-      else
-        PowerPC::MMU::HostWrite<u32>(guard, group[i].value, group[i].address);
-    }
+    if (w.code)
+      ApplyMemoryPatch<u32>(guard, w.value, w.address);  // code: drop the JIT's copy
+    else
+      PowerPC::MMU::HostWrite<u32>(guard, w.value, w.address);
   }
+}
+}  // namespace
+
+void ApplyGamePatches(const Core::CPUThreadGuard& guard)
+{
+  Apply(guard, false);
+}
+
+void ApplyToggledGamePatches(const Core::CPUThreadGuard& guard)
+{
+  Apply(guard, true);
 }
 }  // namespace Orca::UX
