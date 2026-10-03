@@ -1992,13 +1992,14 @@ void LogStats(const char* when)
       ROLLBACK,
       "Online match {}: frame {}, {} rollbacks, {} re-run frames, deepest {}, {} stalls ({} "
       "counted), {} waits, {} hitches here, {} there, frame advantage {:.2f}, input delay {}{} "
-      "(+{} -{} reverted {}), {} checksums matched, confirmed frame {}, round trip {} ms (median "
-      "{} ms here, {} ms there), {} snapshots (every {}, {:.2f} ms each){}{}",
+      "(+{} -{} reverted {}), {} counted stalls a frame more would have spared, {} checksums "
+      "matched, confirmed frame {}, round trip {} ms (median {} ms here, {} ms there), {} "
+      "snapshots (every {}, {:.2f} ms each){}{}",
       when, match.session->CurrentFrame(), stats.rollbacks, stats.resimulated_frames,
       stats.deepest_rollback, stats.stalls, stats.counted_stalls, stats.waits, stats.hitches,
       stats.peer_hitches, stats.frame_advantage, stats.delay,
       stats.delay_fixed ? " (chosen)" : "", stats.delay_raises, stats.delay_lowers,
-      stats.delay_reverts, stats.checksums_matched, stats.confirmed_frame,
+      stats.delay_reverts, stats.spared_stalls, stats.checksums_matched, stats.confirmed_frame,
       Orca::Online::RoundTripMs(), stats.rtt_median, stats.peer_rtt_median, stats.saves,
       stats.snapshot_every, match.port ? match.port->SaveMs() : 0.0,
       match.session->Error().empty() ? "" : "; ", match.session->Error());

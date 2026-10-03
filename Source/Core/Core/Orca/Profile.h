@@ -92,7 +92,13 @@ bool SessionActive();
 //                            radio off channel): after each gap of G1-G2 ms, for L1-L2 ms
 //                            (deterministic draws), from S1 to S2 s after the room opened
 //                            (default: always). What it sends and receives meanwhile goes at the
-//                            end, in order. Implies ORCA_TEST_NET_DELAY_MS (0 unless set).
+//                            end, in order. Implies ORCA_TEST_NET_DELAY_MS (0 unless set). With
+//                            ~M for G1-G2, the gaps come at random, M ms on average (a Poisson
+//                            process: no least gap).
+//   ORCA_TEST_NET_UPLINK=D+J[/S1-S2]  what the room sends waits D ms plus a deterministic 0..J ms
+//                            more per message, order kept (a slow, bursty uplink; what it
+//                            receives is untouched), from S1 to S2 s after the room opened
+//                            (default: always). Implies ORCA_TEST_NET_DELAY_MS (0 unless set).
 //   ORCA_TEST_SNAPSHOT_EVERY=K  the session snapshots every K-th predicted frame (1-4) instead
 //                            of choosing from the measured save time; the synctest
 //                            (YG_SYNCTEST) then loads only frames that are multiples of K. Peers
@@ -119,8 +125,18 @@ struct TestNetSpikes
   int length_max_ms = 0;
   int from_s = 0;
   int to_s = 0x3fffffff;
+  // Gaps drawn around gap_min_ms on average (exponential), not between the bounds.
+  bool poisson = false;
 };
 std::optional<TestNetSpikes> TestNetSpikesConfig();
+struct TestNetUplink
+{
+  int delay_ms = 0;
+  int jitter_ms = 0;
+  int from_s = 0;
+  int to_s = 0x3fffffff;
+};
+std::optional<TestNetUplink> TestNetUplinkConfig();
 int TestSnapshotEvery();  // 0: unset
 bool TestFullSnapshots();
 bool TestNoAfp();

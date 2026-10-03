@@ -4,7 +4,7 @@
 #
 #   Tools/orca/dropin-delay.py <dolphin-emu-nogui> <disc> [--pplus <launcher.dol>]
 #       [--at css|match] [--minutes 5] [--host-env K=V ...] [--friend-env K=V ...]
-#       [--expect-max N] [--expect-raise S1-S2]
+#       [--expect-max N] [--expect-raise S1-S2 [--raise-on host|friend|both]]
 #
 # 1. The host boots its game, solo, in a room of its own, and reaches character select.
 # 2. --at css: the friend joins 30 s later, at character select. --at match: the friend joins at
@@ -15,13 +15,22 @@
 #
 # PASS needs no error, no desync, and the delay as expected on both sides from the plug-in on:
 # never above --expect-max (default 2: what a clean link must hold), or with --expect-raise S1-S2
-# (a test link late from about S1 to S2 s after the join: ORCA_TEST_NET_SPIKES, whose own window
-# counts from its room's opening, a few seconds before the join) above 2 at some point in that span
-# (or up to 15 s after) and back to 2 for the last minute. The log's "input delay A -> B" lines say
-# why each change happened. Two Orca processes at most; ORCA_TEST_KEEP=1 keeps the logs.
+# (a test link late from about S1 to S2 s after the join: ORCA_TEST_NET_SPIKES or
+# ORCA_TEST_NET_UPLINK, whose own window counts from its room's opening, a few seconds before the
+# join) above 2 at some point in that span (or up to 15 s after) and back to 2 for the last minute,
+# on the sides --raise-on names (default both; the other side must hold 2 throughout: a slow
+# uplink is the late side's delay's to answer, never the other's).
+# The log's "input delay A -> B" lines say why each change happened. Two Orca processes at most;
+# ORCA_TEST_KEEP=1 keeps the logs. The friend's test link (Profile.h), for instance:
 #
-#   dropin-delay.py <nogui> <disc> --friend-env ORCA_TEST_NET_SPIKES=600-1200/150-300/60-150 \
-#       --host-env ORCA_TEST_NET_DELAY_MS=0 --expect-raise 45-150
+#   a slow, bursty uplink for a minute and a half (raises the friend's delay, then back to 2):
+#     --friend-env ORCA_TEST_NET_UPLINK=90+120/60-210 --host-env ORCA_TEST_NET_DELAY_MS=0 \
+#       --minutes 5 --expect-raise 45-210 --raise-on friend
+#   dropouts a frame would cure, 130-150 ms every 2 s (raises both):
+#     --friend-env ORCA_TEST_NET_SPIKES=2000-2000/130-150/40-150 \
+#       --host-env ORCA_TEST_NET_DELAY_MS=0 --minutes 4 --expect-raise 30-150
+#   a Mac's bad-day Wi-Fi, 80-220 ms spikes at random every 2.7 s on average (holds 2):
+#     --friend-env ORCA_TEST_NET_SPIKES=~2700/80-220 --host-env ORCA_TEST_NET_DELAY_MS=0
 import argparse
 import json
 import os
@@ -46,6 +55,7 @@ p.add_argument("--host-env", action="append", default=[])
 p.add_argument("--friend-env", action="append", default=[])
 p.add_argument("--expect-max", type=int, default=2)
 p.add_argument("--expect-raise")
+p.add_argument("--raise-on", choices=["host", "friend", "both"], default="both")
 a = p.parse_args()
 HERE = os.path.dirname(os.path.abspath(__file__))
 INPUT = os.path.join(HERE, "inputs", "pplus-dropin.txt" if a.pplus else "bf-dropin.txt")
@@ -233,6 +243,7 @@ for o in orcas:
     notes = [l[l.find("input delay"):] for l in text.splitlines() if "Online match: input delay" in l]
     ends = re.findall(r"Online match [^\n]*?(\d+) stalls \((\d+) counted\), (\d+) waits[^\n]*?"
                       r"input delay (\d+)[^\n]*?(\d+) checksums matched", text)
+    spared = re.findall(r"(\d+) counted stalls a frame more would have spared", text)
     s = {
         "seconds": len(after),
         "delay_max": max(delays, default=None),
@@ -241,12 +252,18 @@ for o in orcas:
         "ping_median": after[-1][1].get("pmed") if after else None,
         "desyncs": desyncs,
         "checksums_matched": max((int(e[4]) for e in ends), default=0),
+        "counted_stalls": max((int(e[1]) for e in ends), default=0),
+        "spared_by_a_frame": max((int(n) for n in spared), default=0),
         "delay_changes": notes,
     }
     summary[o.name] = s
     log(f"{o.name}: {json.dumps(s)}")
     if desyncs or not after or s["checksums_matched"] == 0:
         ok = False
+    elif a.expect_raise and a.raise_on not in ("both", o.name.lower()):
+        if s["delay_max"] > 2:
+            log(f"{o.name}: delay {s['delay_max']} at most; the other side's link was the late one")
+            ok = False
     elif a.expect_raise:
         lo, hi = (float(x) for x in a.expect_raise.split("-"))
         during = [st.get("delay", 0) for t, st in after if lo <= t <= hi + 15]
