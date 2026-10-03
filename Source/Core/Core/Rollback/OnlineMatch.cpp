@@ -306,6 +306,9 @@ constexpr std::chrono::seconds ROOM_HOLD{90};
 // How long a player whose opponent left a ranked set waits in the room for its verdict (the room
 // awards a forfeit 15 s after the opponent went).
 constexpr std::chrono::seconds VERDICT_WAIT{30};
+// A ranked set whose opponent's inputs stop this long while this game waits on them: this player
+// claims the set (Online::ReportStall), as a disconnect would hand it over.
+constexpr std::chrono::seconds RANKED_STALL_LIMIT{15};
 
 // The input delay the player chose ("delay N" from the app, with "caps delay"), or nullopt for the
 // adaptive one.
@@ -2194,6 +2197,7 @@ std::optional<int> Boundary(Core::System& system,
     const auto step_start = Clock::now();
     auto stall_published = step_start;
     bool stall_shown = false;
+    bool stall_claimed = false;
     const int stalls_before = match.session->GetStats().stalls;
     const int running_before = match.running;
     const Orca::Net::Step step = StepSession(
@@ -2206,6 +2210,16 @@ std::optional<int> Boundary(Core::System& system,
             stall_shown = true;
             PublishStall(match, MsSince(step_start));
             Orca::Events::NotifyStall(static_cast<int>(MsSince(step_start)));
+            if (!stall_claimed && now - step_start >= RANKED_STALL_LIMIT &&
+                Orca::Online::RoomQueue() == "ranked" && Orca::Online::MatchLive())
+            {
+              stall_claimed = true;
+              WARN_LOG_FMT(ROLLBACK, "Matchmaking: the opponent's inputs stopped for {} s: "
+                                     "claiming the set",
+                           RANKED_STALL_LIMIT.count());
+              Orca::Online::ReportStall();
+              Core::DisplayMessage("Your opponent stopped playing: the set is yours", 6000);
+            }
           }
           return Stopping(system);
         },
@@ -2341,7 +2355,9 @@ std::optional<int> Boundary(Core::System& system,
       }
       if (error.empty())
       {
-        // Silent friends: unplug them and step again (the session still runs).
+        // Silent friends: unplug them and step again (the session still runs). A ranked set's
+        // opponent who went silent loses it (Online::ReportStall).
+        Orca::Online::ReportStall();
         DropFriends(match, "stalled");
         continue;
       }
@@ -2382,6 +2398,8 @@ std::optional<int> Boundary(Core::System& system,
       // A ranked set whose host went quiet: this player stays in the room (leaving it would be
       // its own forfeit) and waits for the room's verdict on the host's absence.
       NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: the host went quiet mid-set: waiting for the verdict");
+      if (peer_silent)
+        Orca::Online::ReportStall();
       Core::DisplayMessage(PEER_SILENT_SENTENCE, 6000);
       BecomeSolo(match, "the session ended", "host-left", false, true);
       match.linger_until = Clock::now() + VERDICT_WAIT;

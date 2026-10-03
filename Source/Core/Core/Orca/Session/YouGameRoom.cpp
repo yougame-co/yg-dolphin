@@ -809,6 +809,8 @@ struct YouGameRoom::Impl
   };
   std::deque<HeldReport> reports;
   bool desync_pending = false;
+  // The opponent stopped sending inputs mid ranked set (ReportStall): this player claims the set.
+  bool stall_pending = false;
   // The I/O thread's: the room's participants (id, connection, slot), whether anyone is away, the
   // host's begin (sent and unanswered; tries; waiting for the roster after a refusal), what was
   // reported and decided in this match.
@@ -2028,7 +2030,7 @@ struct YouGameRoom::Impl
   void FlushLobby()
   {
     std::string current_match, room_queue;
-    bool desync, done;
+    bool desync, done, stall;
     std::vector<GameReport> ready;
     {
       std::lock_guard lock(mutex);
@@ -2036,6 +2038,7 @@ struct YouGameRoom::Impl
       room_queue = queue;
       done = set_done;
       desync = std::exchange(desync_pending, false);
+      stall = std::exchange(stall_pending, false);
       const auto now = Clock::now();
       while (!reports.empty())
       {
@@ -2064,6 +2067,18 @@ struct YouGameRoom::Impl
       NOTICE_LOG_FMT(NETPLAY, "Orca room: the games went apart: the room's match is void");
       SendFinish(current_match, "", "desync");
       return;
+    }
+    // The opponent's inputs stopped mid ranked set: this player names itself the set's winner.
+    // The room then never awards the set to the player who stalled (the survivor's word goes
+    // against them), and awards it here if they also went from the room.
+    if (stall && room_queue == "ranked" && !finish_sent && !done)
+    {
+      if (const std::string mine = MyId(); !mine.empty())
+      {
+        NOTICE_LOG_FMT(NETPLAY, "Orca room: the opponent stalled: claiming the set");
+        SendFinish(current_match, mine, "");
+        return;
+      }
     }
     // A ranked set already decided takes no more games.
     if (room_queue == "ranked" && (finish_sent || done))
@@ -3094,6 +3109,12 @@ void YouGameRoom::ReportDesync()
 {
   std::lock_guard lock(m_impl->mutex);
   m_impl->desync_pending = true;
+}
+
+void YouGameRoom::ReportStall()
+{
+  std::lock_guard lock(m_impl->mutex);
+  m_impl->stall_pending = true;
 }
 
 void YouGameRoom::TestDropConnection()

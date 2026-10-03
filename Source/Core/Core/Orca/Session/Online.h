@@ -55,6 +55,9 @@ void SetOpponentPlugged(bool plugged);
 void ReportGame(const Net::GameReport& report);
 // The games went apart: the room's match in progress is void.
 void ReportDesync();
+// A ranked set whose opponent stopped sending inputs (15 s stalled, or silent): this player claims
+// the set (YouGameRoom::ReportStall). Nothing outside a ranked room's live match.
+void ReportStall();
 // The app's "delay auto|1..6" (embed mode; any thread, never blocks): this player's input delay
 // from now on, in frames, or nullopt for the adaptive one. It stays for every session after, and
 // counts only while the app's caps include "delay" (Rollback::OnlineMatch applies it at each

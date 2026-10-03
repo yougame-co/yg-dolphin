@@ -199,6 +199,9 @@ public:
   void ReportGame(GameReport report);
   // The games went apart: the match in progress is reported void (a ranked set, or a casual game).
   void ReportDesync();
+  // The opponent's inputs stopped mid ranked set (Rollback/OnlineMatch.cpp): a `finish` naming this
+  // player the winner, once, if the set is still open.
+  void ReportStall();
 
   void Send(const Packet& packet) override;
   std::vector<Packet> Receive() override;

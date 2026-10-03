@@ -277,6 +277,12 @@ void ReportDesync()
     room->ReportDesync();
 }
 
+void ReportStall()
+{
+  if (const auto room = Room(); room && room->Queue() == "ranked" && room->MatchLive())
+    room->ReportStall();
+}
+
 void RequestLeave()
 {
   std::lock_guard lock(s_request_mutex);
