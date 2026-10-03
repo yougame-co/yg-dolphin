@@ -68,8 +68,10 @@ if not port.isdigit():
 env = {k: v for k, v in os.environ.items() if k in ("HOME", "PATH", "SYSTEMROOT", "TEMP", "TMP",
                                                     "USERPROFILE", "APPDATA", "LOCALAPPDATA")}
 # Test overrides pass through (ORCA_TEST_NO_AFP=1 on both machines plays an M1-class Mac against a
-# PC; any test override marks both keys as test sessions, so they still meet).
-env.update({k: v for k, v in os.environ.items() if k.startswith("ORCA_TEST_")})
+# PC; any test override marks both keys as test sessions, so they still meet), and so do the direct
+# link's switches (ORCA_DIRECT=0, ORCA_DIRECT_FORCE=turn, ...; ORCA.md "Direct links").
+env.update({k: v for k, v in os.environ.items()
+            if k.startswith("ORCA_TEST_") or k.startswith("ORCA_DIRECT")})
 env.update(ORCA_SESSION="1", ORCA_ROOM=a.room, ORCA_NAME=a.name or a.role.capitalize(),
            YOUGAME_BRIDGE=f"http://127.0.0.1:{port}", YOUGAME_TOKEN="t0ken", YOUGAME_GAME=slug,
            ORCA_TEST_COMMANDS="1", YG_SCENES="1", YG_INPUT=inp)
@@ -146,6 +148,17 @@ summary = {
     "ping_avg": round(sum(s.get("ping", 0) for s in peers) / len(peers)) if peers else None,
     "delay_max": max((s.get("delay", 0) for s in peers), default=None),
     "hitches": max((s.get("hi", 0) for s in stats), default=0),
+    # How the friend's inputs came: seconds on each path ("tx": 0 relay, 1 direct, 2 TURN), and
+    # the direct link's median round trip while it carried them.
+    "transport_seconds": {name: sum(1 for s in peers if s.get("tx", 0) == k)
+                          for k, name in ((0, "relay"), (1, "direct"), (2, "turn"))},
+    "transport": max(((sum(1 for s in peers if s.get("tx", 0) == k), name)
+                      for k, name in ((0, "relay"), (1, "direct"), (2, "turn"))),
+                     default=(0, "relay"))[1] if peers else None,
+    "link_rtt_median": (sorted(s["lrtt"] for s in peers if s.get("tx", 0) > 0 and s.get("lrtt", -1) >= 0)
+                        or [None])[len([1 for s in peers if s.get("tx", 0) > 0 and s.get("lrtt", -1) >= 0]) // 2],
+    "direct_lines": [l[l.find("Orca direct link"):] for l in text.splitlines()
+                     if "Orca direct link: seat" in l][:8],
     "peer_hitches": max((s.get("phi", 0) for s in stats), default=0),
     "last_lines": [l for l in text.splitlines() if "Online match" in l][-3:],
     "work": work,

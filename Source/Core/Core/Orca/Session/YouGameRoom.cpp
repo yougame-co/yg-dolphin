@@ -25,6 +25,7 @@
 #include "Common/Logging/Log.h"
 #include "Common/WebSocket.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/Session/DirectLink.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Status.h"
 
@@ -53,6 +54,11 @@ constexpr auto SERVER_SILENCE_LIMIT = std::chrono::seconds(8);
 constexpr auto HOST_WAIT = std::chrono::seconds(8);
 // How long a teardown waits for the app to take the emptied room (loopback, normally milliseconds).
 constexpr auto MIRROR_END_TIMEOUT = std::chrono::seconds(1);
+// Direct links (DirectLink.h): a stalled session asks to send every millisecond; a direct copy
+// goes out for new inputs, a checksum or a leave, else at most this often. The summary for stats
+// is refreshed this often.
+constexpr auto DIRECT_STALL_GAP = std::chrono::milliseconds(4);
+constexpr auto DIRECT_SUMMARY_EVERY = std::chrono::milliseconds(250);
 
 using Clock = std::chrono::steady_clock;
 
@@ -300,6 +306,8 @@ picojson::object PacketToJson(const Packet& packet)
     ack.emplace_back(static_cast<double>(a));
   d["a"] = picojson::value(ack);
   d["c"] = picojson::value(static_cast<double>(packet.current_frame));
+  if (packet.sequence > 0)
+    d["q"] = picojson::value(static_cast<double>(packet.sequence));
   // Optional, so a peer built before adaptive delay and time sync still parses these packets.
   if (packet.resimulated >= 0)
     d["r"] = picojson::value(static_cast<double>(packet.resimulated));
@@ -389,6 +397,13 @@ bool PacketFromJson(const picojson::object& d, Packet* packet)
   out.seat = *seat;
   out.first_frame = *first;
   out.current_frame = *current;
+  if (d.count("q"))
+  {
+    const auto sequence = Int(d, "q", 1, MAX_FRAME - 1);
+    if (!sequence)
+      return false;
+    out.sequence = *sequence;
+  }
   for (size_t i = 0; i < bytes.size(); i += sizeof(Pad))
   {
     Pad pad;
@@ -570,6 +585,15 @@ bool DecodePacket(const std::string& json, Packet* packet)
   return PacketFromJson(value.get<picojson::object>(), packet);
 }
 
+bool DecodeDirectPacket(const std::string& payload, int slot, Packet* packet)
+{
+  Packet decoded;
+  if (!DecodePacket(payload, &decoded) || decoded.seat != slot || !decoded.history.empty())
+    return false;
+  *packet = std::move(decoded);
+  return true;
+}
+
 struct YouGameRoom::Impl
 {
   RoomOptions options;
@@ -614,6 +638,9 @@ struct YouGameRoom::Impl
     bool announced = false;
     bool drop_in_host = false;
     bool sent_packet = false;
+    // Its hello offered direct links (`dl`), and one is being built with it.
+    bool direct = false;
+    bool linked = false;
     std::optional<KeyframeInfo> keyframe;
     // Why it said it was leaving (its "bye"), for this side's own report.
     std::string bye;
@@ -661,6 +688,22 @@ struct YouGameRoom::Impl
   std::atomic<bool> test_drop{false};
   std::vector<picojson::object> page_commands;  // guarded by bridge_mutex
 
+  // Direct links to the other Orcas (DirectLink.h), unless ORCA_DIRECT=0. The pointer never
+  // changes after construction; the link thread starts with the welcome.
+  std::optional<DirectOptions> direct_options = DirectOptionsFromEnv();
+  const std::unique_ptr<DirectLink> direct =
+      direct_options ? std::make_unique<DirectLink>() : nullptr;
+  bool direct_started = false;  // the I/O thread's
+  Clock::time_point direct_summary_at{};
+  DirectSummary direct_summary;  // under mutex
+  // The ticket's ICE servers and when they were minted (under mutex).
+  IceConfig ice;
+  Clock::time_point ice_minted = Clock::now();
+  // The emulator thread's: the last direct copy, and the newest input it carried.
+  Clock::time_point direct_sent_at{};
+  int direct_sent_newest = -1;
+  bool direct_malformed_logged = false;
+
   // Test-only network delay (Orca::TestNetDelayMs): messages wait in these queues, in order.
   struct Held
   {
@@ -696,6 +739,8 @@ struct YouGameRoom::Impl
     stop = true;
     if (thread.joinable())
       thread.join();
+    if (direct)
+      direct->Stop();
   }
 
   RoomState State() const
@@ -889,6 +934,9 @@ struct YouGameRoom::Impl
     code = room;
     current_ticket = *ticket;
     role_known = true;
+    if (const auto it = reply.find("ice"); it != reply.end())
+      ParseIce(it->second, &ice);
+    ice_minted = Clock::now();
     return true;
   }
 
@@ -986,7 +1034,135 @@ struct YouGameRoom::Impl
     *store_url = KeyframesUrl(Str(reply, "keyframes")) + "/" + room;
     std::lock_guard lock(mutex);
     current_ticket = *ticket;
+    if (const auto it = reply.find("ice"); it != reply.end() && ParseIce(it->second, &ice))
+      ice_minted = Clock::now();
     return true;
+  }
+
+  // Fresh TURN credentials (a new ticket for this room), for a direct link built long after the
+  // room opened. On the direct link's thread.
+  std::optional<IceConfig> FreshIce()
+  {
+    std::string ticket, store, error;
+    if (!FreshTicket(true, &ticket, &store, &error))
+    {
+      WARN_LOG_FMT(NETPLAY, "Orca room: no fresh ICE servers for a direct link: {}", error);
+      return std::nullopt;
+    }
+    std::lock_guard lock(mutex);
+    return ice;
+  }
+
+  // The direct links start with the welcome (this Orca's connection id is the link's identity).
+  void StartDirect()
+  {
+    if (!direct || direct_started || me.empty())
+      return;
+    direct_started = true;
+    DirectOptions o = *direct_options;
+    o.me = me;
+    {
+      std::lock_guard lock(mutex);
+      o.room = code;
+      o.ice = ice;
+      o.ice_minted = ice_minted;
+    }
+    o.fresh_ice = [this] { return FreshIce(); };
+    NOTICE_LOG_FMT(NETPLAY, "Orca room: direct links on{}{}{}", o.force.empty() ? "" : ", forced ",
+                 o.force, o.ice.turn_host.empty() ? ", no TURN in the ticket" : "");
+    direct->Start(std::move(o));
+  }
+
+  // Each player whose hello offered direct links, once both sides heard each other: a link.
+  void LinkPeers()
+  {
+    if (!direct_started)
+      return;
+    for (auto& [id, peer] : peers)
+    {
+      if (peer.announced && peer.heard && peer.heard_us && peer.direct && !peer.linked)
+      {
+        direct->AddPeer(id, peer.slot);
+        peer.linked = true;
+      }
+    }
+    for (auto& [to, d] : direct->TakeSignals())
+    {
+      if (const auto p = peers.find(to); p != peers.end() && p->second.linked)
+        SendTo(to, d);
+    }
+    const auto now = Clock::now();
+    if (now - direct_summary_at < DIRECT_SUMMARY_EVERY)
+      return;
+    direct_summary_at = now;
+    // The worst link among the players of the game: the relay, then TURN, then direct.
+    const auto rank = [](LinkKind kind) {
+      return kind == LinkKind::Relay ? 0 : kind == LinkKind::Turn ? 1 : 2;
+    };
+    std::optional<DirectStats> worst;
+    for (const auto& [id, peer] : peers)
+    {
+      if (!peer.announced)
+        continue;
+      DirectStats stats;
+      if (peer.linked)
+        stats = direct->Stats(id).value_or(DirectStats{});
+      if (!worst || rank(stats.kind) < rank(worst->kind))
+        worst = stats;
+    }
+    DirectSummary summary;
+    if (worst && worst->kind != LinkKind::Relay)
+    {
+      summary.transport = static_cast<int>(worst->kind);
+      summary.rtt_ms = worst->rtt_ms;
+      summary.line = fmt::format("{} {}{}", worst->kind == LinkKind::Turn ? "TURN" : "direct",
+                                 worst->pair.empty() ? "?" : worst->pair,
+                                 worst->rtt_ms >= 0 ? fmt::format(" {} ms", worst->rtt_ms) : "");
+    }
+    std::lock_guard lock(mutex);
+    direct_summary = summary;
+  }
+
+  void UnlinkPeer(const std::string& id, Peer& peer)
+  {
+    if (peer.linked)
+      direct->RemovePeer(id);
+    peer.linked = false;
+  }
+
+  // The emulator thread's half of Send: a copy of the packet straight to every linked player, on
+  // this thread, without the room's lock. Never the drop-in history (the relay carries it, in
+  // order), and as many inputs as a datagram holds (the oldest, as the session's catch-up does).
+  void SendDirect(const Packet& packet)
+  {
+    if (!direct)
+      return;
+    const auto now = Clock::now();
+    const int newest =
+        packet.pads.empty() ? -1 : packet.first_frame + static_cast<int>(packet.pads.size()) - 1;
+    if (newest < direct_sent_newest - 600)
+      direct_sent_newest = -1;  // another session, from an earlier frame
+    if (newest <= direct_sent_newest && !packet.checksum_frame && !packet.leaving &&
+        now - direct_sent_at < DIRECT_STALL_GAP)
+    {
+      return;
+    }
+    direct_sent_at = now;
+    direct_sent_newest = std::max(direct_sent_newest, newest);
+    Packet copy = packet;
+    copy.history_seat = -1;
+    copy.history_first = 0;
+    copy.history.clear();
+    std::string payload = EncodePacket(copy);
+    while (payload.size() > DirectLink::MAX_PAYLOAD && copy.pads.size() > 1)
+    {
+      // Each pad is 16 hex digits.
+      const size_t over = (payload.size() - DirectLink::MAX_PAYLOAD + 15) / 16;
+      copy.pads.resize(copy.pads.size() > over ? copy.pads.size() - over : 1);
+      payload = EncodePacket(copy);
+    }
+    if (payload.size() <= DirectLink::MAX_PAYLOAD)
+      direct->Send(payload);
   }
 
   void Run()
@@ -1081,6 +1257,9 @@ struct YouGameRoom::Impl
       Tick();
     }
 
+    // Direct links close with the room (the session ends with it).
+    if (direct)
+      direct->Stop();
     // The bridge threads wind down while the goodbyes go out. First the page learns the room is
     // gone (Orca left it), ahead of the next room's mirror if there is one (else that one stands,
     // and this is dropped: PostMirror).
@@ -1458,6 +1637,8 @@ struct YouGameRoom::Impl
           d["c"] = picojson::value(options.compatibility);
           d["r"] = picojson::value(peer.heard);
           d["h"] = picojson::value(!joining);
+          if (direct)
+            d["dl"] = picojson::value(1.0);
           SendTo(id, d);
         }
         if (const auto offer = offers.find(peer.slot);
@@ -1475,6 +1656,8 @@ struct YouGameRoom::Impl
         }
       }
     }
+
+    LinkPeers();
 
     if (now - last_send < SEND_GAP)
       return;
@@ -1543,6 +1726,7 @@ struct YouGameRoom::Impl
       keyframe_offers.erase(p->second.slot);
     }
     ForgetPackets(p->first);
+    UnlinkPeer(p->first, p->second);
     p->second = {};
     p->second.slot = -1;
   }
@@ -1623,11 +1807,15 @@ struct YouGameRoom::Impl
         keyframe_offers.erase(p->second.slot);
       }
       ForgetPackets(p->first);
+      UnlinkPeer(p->first, p->second);
       p = peers.erase(p);
     }
     for (const auto& [id, info] : present)
     {
       auto [p, inserted] = peers.try_emplace(id);
+      // A link speaks for one seat: another seat, another link.
+      if (p->second.linked && p->second.slot != info.first)
+        UnlinkPeer(p->first, p->second);
       p->second.slot = info.first;
       p->second.name = info.second;
       if (inserted)
@@ -1664,6 +1852,7 @@ struct YouGameRoom::Impl
       }
       // A room whose game is running is what a drop-in friend joins: no refusal.
       welcomed_at = Clock::now();
+      StartDirect();
       Roster(m);
       std::lock_guard lock(mutex);
       NOTICE_LOG_FMT(NETPLAY, "Orca room: in room {} on seat {}, {}", code, seat + 1,
@@ -1773,6 +1962,8 @@ struct YouGameRoom::Impl
       }
       const bool was_heard = peer.heard;
       peer.heard = true;
+      // It offers direct links (an Orca with ORCA_DIRECT=0 doesn't).
+      peer.direct = d.count("dl") && d.at("dl").is<double>() && d.at("dl").get<double>() == 1;
       peer.heard_us = peer.heard_us || (d.count("r") && d.at("r").evaluate_as_boolean());
       // The game's host says so, and is the room's host (the first in): no other player can take
       // a joiner's game over by claiming it.
@@ -1832,6 +2023,20 @@ struct YouGameRoom::Impl
       Emit({PeerEvent::Kind::Keyframe, peer.slot, true, peer.name, info});
       return;
     }
+    if (kind == "dl" || kind == "dlc" || kind == "dlr")
+    {
+      // Direct link signalling, only from a player of this game (its hello had our compatibility
+      // key) that offered links. Its offer may come before this side linked it: link it now.
+      if (!direct_started || !peer.announced || !peer.direct)
+        return;
+      if (!peer.linked)
+      {
+        direct->AddPeer(id, peer.slot);
+        peer.linked = true;
+      }
+      direct->OnSignal(id, d);
+      return;
+    }
     if (kind != "p" || !peer.announced)
       return;
     Packet packet;
@@ -1841,6 +2046,8 @@ struct YouGameRoom::Impl
       return;
     }
     peer.sent_packet = true;
+    if (peer.linked)
+      direct->OnRelayPacket(id);
     std::lock_guard lock(mutex);
     // Nobody read the inbox for a while (a long stall on this side). Each packet repeats every
     // input the sender hasn't seen acknowledged, so the newer half says all the older half did.
@@ -2029,15 +2236,49 @@ void YouGameRoom::TestDropConnection()
 
 void YouGameRoom::Send(const Packet& packet)
 {
-  std::lock_guard lock(m_impl->mutex);
-  CoalescePacket(&m_impl->outgoing, packet);
+  {
+    std::lock_guard lock(m_impl->mutex);
+    CoalescePacket(&m_impl->outgoing, packet);
+  }
+  // Every packet also goes straight to each linked player; whichever copy arrives first counts
+  // (Session::ReceivePackets takes both).
+  m_impl->SendDirect(packet);
 }
 
 std::vector<Packet> YouGameRoom::Receive()
 {
+  std::vector<Packet> packets;
+  {
+    std::lock_guard lock(m_impl->mutex);
+    m_impl->inbox_from.clear();
+    packets = std::exchange(m_impl->inbox, {});
+  }
+  if (!m_impl->direct)
+    return packets;
+  for (DirectLink::Received& received : m_impl->direct->Receive())
+  {
+    Packet packet;
+    if (!DecodeDirectPacket(received.payload, received.slot, &packet))
+    {
+      if (!std::exchange(m_impl->direct_malformed_logged, true))
+        WARN_LOG_FMT(NETPLAY, "Orca room: a malformed direct packet from seat {}", received.slot + 1);
+      continue;
+    }
+    packets.push_back(std::move(packet));
+  }
+  return packets;
+}
+
+DirectSummary YouGameRoom::Direct() const
+{
   std::lock_guard lock(m_impl->mutex);
-  m_impl->inbox_from.clear();
-  return std::exchange(m_impl->inbox, {});
+  return m_impl->direct_summary;
+}
+
+void YouGameRoom::TestDirect(const std::string& command)
+{
+  if (m_impl->direct)
+    m_impl->direct->Test(command);
 }
 
 bool YouGameRoom::Connected() const

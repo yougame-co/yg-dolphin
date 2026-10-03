@@ -305,6 +305,14 @@ void Platform::ProcessEmbedCommands()
       // Tests only: the room's connection drops as a network failure would.
       Orca::Online::TestDropRoom();
     }
+    else if (cmd == "test-direct" && Orca::GetEnv("ORCA_TEST_COMMANDS") == "1")
+    {
+      // Tests only: direct links drop datagrams ("off", "in", "out"), stop dropping ("on"), or are
+      // built anew ("rebuild").
+      std::string value;
+      in >> value;
+      Orca::Online::TestDirect(value);
+    }
     else if (cmd == "prepare-join")
     {
       // The host invited a friend who will drop into this game (drop-in join).

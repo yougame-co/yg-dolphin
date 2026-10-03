@@ -259,6 +259,8 @@ void Session::AddPeer(int seat, int live_from, int history_from)
   m_smoothed_advantage[seat].reset();
   m_remote_advantage[seat].reset();
   m_peer_rtt[seat].reset();
+  m_peer_sequence[seat] = 0;
+  m_peer_checksum_frame[seat] = -1;
   AdvanceReceived(seat);
 }
 
@@ -350,6 +352,12 @@ void Session::ApplyRoster(const std::array<SeatPlan, MAX_SEATS>& roster)
       m_dirty = std::min(m_dirty, changed);
     if (s != m_config.local_seat && mine.live_from == NEVER && now.live_from != NEVER)
       m_acked[s] = now.live_from - 1;
+    // Another player at the seat: its packets count from 1 again.
+    if (s != m_config.local_seat && now.live_from != mine.live_from && now.live_from != NEVER)
+    {
+      m_peer_sequence[s] = 0;
+      m_peer_checksum_frame[s] = -1;
+    }
     mine = now;
     AdvanceReceived(s);
   }
@@ -1002,8 +1010,15 @@ void Session::ReceivePackets()
       Fail(fmt::format("Player {} sent an invalid packet", s + 1));
       return;
     }
+    // A packet can come twice (a direct link and the relay) and out of order. Inputs, history,
+    // acknowledgements, running counts, a leave and a checksum are the same in every copy, or only
+    // ever grow: each copy adds them. What says where the sender is now (the host's roster, its
+    // frame, its lead and round trip) comes only from a packet newer than any before it from that
+    // seat: an older one would put the roster or the time sync back.
+    const bool stale = packet.sequence > 0 && packet.sequence <= m_peer_sequence[s];
+    m_peer_sequence[s] = std::max(m_peer_sequence[s], packet.sequence);
     const bool from_authority = s == m_config.authority_seat;
-    if (from_authority && packet.roster)
+    if (from_authority && packet.roster && !stale)
     {
       ApplyRoster(*packet.roster);
       if (!m_error.empty())
@@ -1072,6 +1087,13 @@ void Session::ReceivePackets()
     const int ack = packet.ack[m_config.local_seat];
     if (ack >= -1 && ack <= m_frame + window)
       m_acked[s] = std::max(m_acked[s], ack);
+    // An older copy: its checksum may still be new. The running counts below never exceed a newer
+    // packet's.
+    if (stale)
+    {
+      AddPeerChecksum(s, packet);
+      continue;
+    }
     // How far this player ran past the newest of our inputs it had, while it needed them: as deep
     // as a change of them would roll it back. AdaptDelay's lowers watch it, and its stalls count
     // for our delay only when it reached max_rollback. Bounded. Not around a hitch on either
@@ -1106,9 +1128,18 @@ void Session::ReceivePackets()
       m_stats.peer_hitches = std::max(m_stats.peer_hitches, packet.hitches);
       m_last_hitch_frame = m_frame;
     }
-    if (packet.checksum_frame)
-      m_peer_checksums[*packet.checksum_frame] = packet.checksum;
+    AddPeerChecksum(s, packet);
   }
+}
+
+void Session::AddPeerChecksum(int seat, const Packet& packet)
+{
+  // A seat's checksums go out in frame order, each in one packet: a frame at or before the newest
+  // taken from it is a second copy (a direct link's and the relay's), already compared.
+  if (!packet.checksum_frame || *packet.checksum_frame <= m_peer_checksum_frame[seat])
+    return;
+  m_peer_checksum_frame[seat] = *packet.checksum_frame;
+  m_peer_checksums[*packet.checksum_frame] = packet.checksum;
 }
 
 void Session::CheckChecksums()
@@ -1224,6 +1255,10 @@ void Session::SendPacket()
 
   Packet packet;
   packet.seat = m_config.local_seat;
+  // Sequence numbers stop short of the wire format's bound (Packet::sequence): 1 << 30 packets is
+  // years of play.
+  m_send_sequence = std::min(m_send_sequence + 1, (1 << 30) - 1);
+  packet.sequence = m_send_sequence;
   packet.first_frame = first <= last ? first : 0;
   for (int f = first; f <= last; ++f)
   {

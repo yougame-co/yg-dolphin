@@ -18,6 +18,7 @@ add_dolphin_test(FileSystemTest IOS/FS/FileSystemTest.cpp)
 
 add_dolphin_test(OrcaSessionTest Orca/SessionTest.cpp)
 add_dolphin_test(OrcaRoomTest Orca/RoomTest.cpp)
+add_dolphin_test(OrcaDirectLinkTest Orca/DirectLinkTest.cpp)
 add_dolphin_test(OrcaDiscTest Orca/DiscTest.cpp)
 add_dolphin_test(OrcaLaunchTest Orca/LaunchTest.cpp)
 add_dolphin_test(OrcaCowTest Orca/CowTest.cpp)

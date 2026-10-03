@@ -30,7 +30,11 @@ Online play is drop-in, through a private YouGame room of up to four (`Source/Co
 | `ORCA_JOIN` | `1`: join the friend's game in that room (also implied when the app opened an invite). |
 | `ORCA_TEST_KEYFRAME_DIR` | Tests only: keyframes go through this folder instead of YouGame. |
 | `ORCA_TEST_LEAVE_AT` | Tests only: a joined friend leaves at this frame. |
-| `ORCA_TEST_COMMANDS` | Tests only: `1` takes the embed protocol's stdin commands without embedding, and `test-drop-room` (the room's connection drops once, as a network failure would). |
+| `ORCA_TEST_COMMANDS` | Tests only: `1` takes the embed protocol's stdin commands without embedding, `test-drop-room` (the room's connection drops once, as a network failure would) and `test-direct off\|on\|in\|out\|rebuild` (direct links drop every datagram, only incoming or outgoing ones, none again, or are built anew; "Direct links"). |
+| `ORCA_DIRECT` | `0`: no direct links, the relay only (the hello stops offering them, so the friend's Orca uses the relay too). Default: on. |
+| `ORCA_DIRECT_FORCE` | Tests only: `turn` offers and accepts relayed candidates only (a link through Cloudflare TURN); `srflx` nothing on a host interface. |
+| `ORCA_DIRECT_LOOPBACK` | Tests only: `1` also offers loopback candidates, for two Orcas on one machine whose LAN address refuses a send to itself. |
+| `ORCA_DIRECT_LOSS`, `ORCA_DIRECT_BLOCK` | Tests only: drop this percentage of the datagrams sent; `1` starts with every datagram dropped (as `test-direct off`). |
 | `ORCA_NAME` | Name shown in the room. |
 | `ORCA_TEST_DEV_GAME` | Tests only: an anonymous dev ticket from the site instead of the app (no ratings, no account). |
 | `ORCA_SITE` | Tests only: the site for dev tickets (default `https://yougame.co`). |
@@ -480,18 +484,174 @@ the store refuses dev tickets.
 
 ### Room messages (relayed `msg`, `Orca/Session/YouGameRoom.cpp`)
 
-- `hello {c: key, r: heard you, h: is host}`: sent until answered. A mismatched key keeps a
-  joiner out.
+- `hello {c: key, r: heard you, h: is host, dl: 1}`: sent until answered. A mismatched key keeps a
+  joiner out. `dl` offers a direct link (absent with `ORCA_DIRECT=0`).
+- `dl {v: 1, g, key, desc}`, `dlc {g, c: [candidates] | done}`, `dlr {g}`: direct link signalling
+  ("Direct links"), to one connection, only between two Orcas whose hellos both offered links.
 - `kf {f, id, n, x, key}`: host to a joiner's connection, every second until its first packet
   arrives. `key` is the keyframe's AES-256-GCM key (64 hex).
 - `drop {r}`: host to a joiner it unplugged: `desync`, `stalled` or `network`.
-- `p`: session packets, broadcast once to the room. Fields beyond the 2-player ones:
+- `p`: session packets, broadcast once to the room (and to each linked player directly, without the
+  history fields). `q` is the sender's packet count, from 1: a copy no newer than the newest from
+  its seat still adds its inputs, acknowledgements and a checksum not taken yet, but never moves
+  the roster, the sender's frame, lead or round trip (`Session::ReceivePackets`). Fields beyond the
+  2-player ones:
   - `ro`: roster, `[plug, unplug, live]` per seat, with -1 for never;
   - `ha`: history acknowledgement;
   - `ht`, `hf`, `hp`: history seat, first frame, and `[count, 4 pads hex]` runs;
   - `lv`: leaving.
 - `bye {r}`: why a player leaves, `desync` or `stalled` (anything else is ignored). It is broadcast
   before the leave, so the room's leave event carries it.
+
+## Direct links
+
+`Orca/Session/DirectLink.*` (branch `direct-link`, 2026-10-03; Luis: "direct p2p is A MUST"). Every
+session packet also goes straight to each other Orca in the room over UDP, beside the relay. The
+relay costs about 15 ms each way: Mac -> Cloudflare MIA -> the room's Durable Object -> MIA ->
+other machine, over TCP. On one LAN that is a 40-50 ms round trip where a direct one takes about
+1 ms.
+
+**What Slippi does** (read 2026-10-03: project-slippi/dolphin `Source/Core/Core/Slippi`,
+Ishiiruka, slippi-rust-extensions):
+
+- **Data path.** ENet over plain UDP between the two players. Pads go `UNSEQUENCED` on their own
+  channel, every unacknowledged pad repeated in each packet (up to 128) until acknowledged, and the
+  latest checksum rides each one (`SlippiNetplay.cpp` 689-720, 1248-1316). The ping is the pad
+  acknowledgement's round trip (400-441). The socket is marked DSCP EF (`IP_TOS 0xb8`, qWAVE on
+  Windows; 979-1023).
+- **Connecting.** Hole punching through its own UDP matchmaking server:
+  - a fixed random port in 41000-51000, the one it talks to the server from
+    (`SlippiMatchmaking.cpp` 316-334);
+  - the server hands each side the other's public address, and the LAN address when the external
+    addresses match (609-635);
+  - both connect at once, accepting a connect by host alone for NATs that change the port
+    (`SlippiNetplay.cpp` 98-148, 895-921).
+- **What it lacks.** IPv4 only (`SlippiMatchmaking.cpp` 405-406), no encryption or peer
+  authentication, and no relay or TURN: after 8 s it gives up and matchmaking looks for someone
+  else (918-926). The escape hatch is a forwarded port (`SlippiPane.cpp` 92-95). The firewall
+  prompt isn't avoided: it binds `ENET_HOST_ANY` on that port.
+
+**What Orca does**, the same data path with standard ICE and the room as a live fallback:
+
+- **ICE** is [libjuice](https://github.com/paullouisageneau/libjuice) 1.7.4 (MPL-2.0, used under
+  its section 3.3 with Dolphin's GPLv2+; `Externals/libjuice`). It is what libdatachannel uses for
+  WebRTC, without SCTP and DTLS. Candidates:
+  - host candidates on every interface, IPv4 and IPv6 (one dual-stack socket);
+  - the public address from STUN (`stun.cloudflare.com`, or the ticket's);
+  - Cloudflare TURN over UDP from the ticket's `ice`, the credentials the browser SDK uses
+    (YouGame `web/src/lib/turn.ts`; dev tickets carry them too).
+  - Connectivity checks run both ways; peer-reflexive addresses cover port-changing NATs.
+  - TURN over TCP or TLS isn't used: on a network that blocks UDP the room's relay is the path.
+- **Signalling** is room peer messages (above), only between two Orcas that said hello with the
+  same compatibility key and both offered links. The lower connection id offers (`dl` with its
+  ICE description and host candidates); the other answers; candidates found later trickle in
+  batches (`dlc`, at most 10 messages a second, under the room's 120).
+- **Keys.** Each side sends 32 random bytes in its `dl`. HKDF-SHA256 over both (the lower id's
+  first), salted with the room code, with info `orca-dl1`, the generation and both ids, gives one
+  key per direction.
+  - Every datagram is ChaCha20-Poly1305: the 18-byte header is the associated data, and the nonce
+    is the sender's counter, which only grows under a key.
+  - A 64-counter replay window drops repeats. A datagram that fails authentication is dropped
+    silently and counted.
+  - A packet must name the seat of the link's player (`DecodeDirectPacket`, as the relay checks)
+    and carry no history.
+  - Only the two Orcas of a pair can make a datagram the other takes. The room sees both halves,
+    as it sees the keyframe key: the trust is the relay's, no more.
+- **Datagram.** `'o'`, version and kind (packet or keepalive), generation, counter, the newest
+  counter received from the peer and how long ago (in 0.1 ms), then the sealed payload and a
+  16-byte tag. 1200 bytes at most: IPv6's minimum MTU less IP, UDP and a TURN channel header.
+  - The payload is the packet's JSON without the drop-in history (the relay alone carries it, in
+    order). A catch-up packet that doesn't fit keeps its oldest inputs.
+  - The echo gives the round trip on the path inputs take, like Slippi's ping, with no shared
+    clock. A keepalive goes out after 200 ms idle.
+- **Sending.** `YouGameRoom::Send` queues the relay copy as before, and seals and sends the direct
+  copy at once on the emulator thread, under DirectLink's own lock, never the room's, with no
+  2 ms poll and no 10 ms send gap. Each link logs its sends' cost when it closes: 70-100 us on
+  average on an M-series Mac (sealing, libjuice and `sendto`), rarely over 1 ms (1 in 3,500 in
+  one run; a preempted thread), at most 4.5 ms seen. While a session stalls (it asks every
+  millisecond), a direct copy goes out for new inputs, a checksum or a leave, else every 4 ms.
+  Datagrams are marked DSCP EF as Slippi's are (not on Windows: libjuice can't, and qWAVE is a
+  follow-up).
+- **Both paths, always.** The relay still carries every packet. Whichever copy arrives first
+  counts, so a link that fails or never opens costs only the relay's time, and switching either
+  way needs nothing. Unlike the browser SDK (direct when open, relay otherwise), the inputs always
+  take the faster of the two.
+- **Links come and go** (one agent per pair, built and destroyed on DirectLink's own thread; the
+  STUN and TURN names are resolved there first, so no teardown waits on DNS). libjuice nominates
+  a pair once and calls a pair failed only after 30 s without consent, so Orca rebuilds:
+  - when the agent fails;
+  - when no answer comes within 5 s, or no path within 10 s of both descriptions;
+  - when a link that was up gets nothing for 3 s while the relay still brings the peer's packets
+    (a Wi-Fi/Ethernet switch, a DHCP renew, an expired NAT mapping);
+  - once, 10 s after connecting, on a TURN or server-reflexive pair between two machines on one
+    subnet (a macOS Local Network permission granted late).
+  - Rebuilds for a failure back off 2, 4, 8 ... 30 s, and the backoff resets after 30 s up. The
+    answering side asks for one with `dlr`; the offering side builds it (not twice in a second).
+  - Each build is a new generation with fresh keys. TURN credentials older than 10 minutes are
+    minted again first (`YouGameRoom::FreshTicket`): a friend may arrive long after the room
+    opened.
+- **Three or four players:** a link per pair, each falling back on its own.
+- **Drop-in:** linking starts at the hello, in the lobby. A joiner's history comes through the
+  relay, and its live inputs go direct as soon as the link is up.
+- **Logs** never carry addresses, candidates or credentials: libjuice's own lines go to the
+  NETPLAY log (never stdout, which the app parses) with addresses taken out.
+  - NOTICE lines: `Orca direct link: seat N up, direct host/host, round trip 1 ms (link G)`,
+    `... down (nothing for 500 ms; link G, 0 refused), inputs go through the relay`, each build,
+    and each link's counts when it closes.
+  - The session's stats line ends `link direct host/host 1 ms` (or `relay`).
+  - libjuice names an unrelayed local side by its first local candidate (normally `host`, here and
+    there `prflx`). The remote half tells a LAN path from a NAT's.
+- **`orca stats`** gains `tx` (0 relay, 1 direct, 2 TURN: the worst of the friends' links) and
+  `lrtt` (that link's median round trip, -1 on the relay). `ping` stays the relay's round trip.
+  The desktop app passes only the keys it knows (YouGame `desktop/src/orca-policy.ts`
+  `STATS_KEYS`), so the page sees these once it adds them.
+- **The firewall.** The room opens a throwaway UDP socket on every interface the moment it is in
+  the room, so a Windows Defender Firewall prompt (Windows asks on the first non-loopback bind of
+  an exe it doesn't know) comes in the lobby, not when a friend arrives mid-game. Whatever the
+  player answers, links should still form in most cases (not yet tried on the PC): ICE sends
+  first from both sides, and a stateful firewall passes the replies. Windows ties the rule to the exe's path, and the app installs each
+  Orca under its own version folder, so every release asks again. Slippi avoids that with one
+  fixed install path, updated in place (slippi-launcher `mainline_installation.ts`).
+  - On macOS, Orca.app is signed, so the Application Firewall lets it be. The Local Network
+    privacy prompt (macOS 15+) goes to the launching app. Denied, LAN pairs fail and links take
+    the router's hairpin or TURN instead.
+- **Privacy.** ICE shows each player's LAN and public addresses to the others in the room, as
+  Slippi does to opponents. A TURN-only option could hide them later.
+- Not yet: playing on through a room disconnect while direct links are up (Slippi drops its
+  matchmaking connection once matched); feeding the link's round trip into the delay rule (it
+  still uses the relay's); a binary packet codec; thinning the relay copy.
+
+Measured on the Mac (2026-10-03), two Orcas on one machine, Brawl, Mario vs Link fuzzed:
+
+| Run | Path | Link round trip | Rollbacks | Stalls | Desyncs |
+|---|---|---|---|---|---|
+| Prod rooms (`xplat.py`, real tickets, 117 s together) | direct host/host all 117 s | 0 ms (relay ping 13-14 ms) | 0 and 0 | 0 | 0 |
+| Same, `ORCA_DIRECT=0` | relay | - (ping 26-28 ms) | 7 host, 65 joiner | 4 (joiner) | 0 |
+| Dev room (`direct-link.py`, 40 s of match) | direct | 0 ms | 0.00/s both | 0 | 0 |
+| Same, friend `ORCA_DIRECT=0` | relay (negotiated off) | - (ping 27-35 ms) | 0.57/s host, 6.20/s friend | 0 | 0 |
+| `ORCA_DIRECT_LOSS=20` both | direct | 0 ms | 0.00/s, 0.29/s | 0 | 0 |
+| `ORCA_TEST_NET_DELAY_MS=30` both | direct | 121 ms (30 ms out and in on both) | 6.3/s both | 0-1 | 0 |
+| `ORCA_DIRECT_FORCE=turn` both | TURN relay/relay (Cloudflare) | 23-24 ms (relay ping 12-14 ms) | 0.03/s both | 0 | 0 |
+
+- The full `direct-link.py` run: the link was up 0.4 s after the friend plugged in.
+  - `test-direct off`: both on the relay at once, no desync.
+  - `on`: back to direct (after the silent-link rebuilds the relay's packets set off).
+  - `in`: one way only.
+  - Three rebuilds: links 4-6, each up in well under a second, 0 refused, 0 replayed.
+- `dropin-commands.py` (join, leave, rejoin, the host leaving) and `dropin-rooms.py` pass with
+  links on. The friend saw 0 rollbacks over 135 s with the host.
+
+Tests:
+
+- `OrcaDirectLink*` (in-process links over loopback: keys, datagrams, replays, rebuilds, three
+  players, blocks, the test delay).
+- `OrcaSessionDirect*` (duplicates and reordering in the session, a drop-in friend and a
+  wall-clock match beside the relay).
+- `ORCA_LIVE_TEST=1` `OrcaLive.DirectLinkBetweenTwoRooms` (two rooms on yougame.co).
+- `Tools/orca/direct-link.py <nogui> <disc>`: two Orcas over a dev room, a match, `test-direct`
+  off/in/on and three rebuilds. `--both ORCA_DIRECT_FORCE=turn --expect turn` and similar run the
+  variants. `Tools/orca/xplat.py` passes the `ORCA_DIRECT*` switches through and reports the
+  transport.
 
 ## Input delay
 

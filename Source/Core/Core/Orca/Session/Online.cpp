@@ -416,6 +416,12 @@ int RoundTripMs(u32* sequence)
   return room ? room->RoundTripMs(sequence) : -1;
 }
 
+Net::DirectSummary Direct()
+{
+  const auto room = Room();
+  return room ? room->Direct() : Net::DirectSummary{};
+}
+
 std::vector<int> RecentRoundTrips(u32* sequence)
 {
   const auto room = Room();
@@ -504,6 +510,12 @@ void TestDropRoom()
 {
   if (const auto room = Room())
     room->TestDropConnection();
+}
+
+void TestDirect(const std::string& command)
+{
+  if (const auto room = Room())
+    room->TestDirect(command);
 }
 
 void Shutdown()

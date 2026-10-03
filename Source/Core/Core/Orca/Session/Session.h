@@ -94,6 +94,10 @@ struct SeatPlan
 struct Packet
 {
   int seat = 0;
+  // The sender's count of packets sent, from 1 (0: unsequenced, a hand-built packet). A packet can
+  // arrive twice (over a direct link and through the relay) and out of order: only one newer than
+  // any before it from that seat says where the sender is now (Session::ReceivePackets).
+  int sequence = 0;
   // pads[i] is the input for frame first_frame + i.
   int first_frame = 0;
   std::vector<Pad> pads;
@@ -330,6 +334,7 @@ public:
 
 private:
   void ReceivePackets();
+  void AddPeerChecksum(int seat, const Packet& packet);
   void SendPacket();
   Pads PadsFor(int frame);
   int ConfirmedFrame() const;
@@ -449,6 +454,12 @@ private:
   int m_sync_start = 0;
   bool m_wait_pending = false;
   bool m_waiting = false;
+
+  // Packets: the last sequence number sent, and per seat the newest received and the newest
+  // checksum frame taken (a second copy of a packet carries the same one).
+  int m_send_sequence = 0;
+  std::array<int, MAX_SEATS> m_peer_sequence{0, 0, 0, 0};
+  std::array<int, MAX_SEATS> m_peer_checksum_frame{-1, -1, -1, -1};
 
   // Drop-in.
   std::array<SeatPlan, MAX_SEATS> m_plan{};

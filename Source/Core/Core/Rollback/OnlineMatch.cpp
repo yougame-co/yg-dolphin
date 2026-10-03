@@ -1445,6 +1445,9 @@ void PublishStats(Match& match)
   link.peer_hitches = stats.peer_hitches;
   link.round_trip_ms = Orca::Online::RoundTripMs();
   link.confirmed_frame = stats.confirmed_frame;
+  const Orca::Net::DirectSummary direct = Orca::Online::Direct();
+  link.transport = direct.transport;
+  link.link_rtt_ms = direct.rtt_ms;
 
   const auto now = Clock::now();
   // Time paused is no part of the interval: fps counts running time.
@@ -1481,6 +1484,8 @@ void PublishStats(Match& match)
   num("fps", std::round((match.running - match.stats_frame) / seconds * 10) / 10);
   num("hi", stats.hitches);
   num("phi", stats.peer_hitches);
+  num("tx", link.transport);
+  num("lrtt", link.link_rtt_ms);
   Orca::Status::Stats(picojson::value(o).serialize());
   match.stats_time = now;
   match.stats_frame = match.running;
@@ -1982,14 +1987,15 @@ void LogStats(const char* when)
       ROLLBACK,
       "Online match {}: frame {}, {} rollbacks, {} re-run frames, deepest {}, {} stalls ({} "
       "counted), {} waits, {} hitches here, {} there, frame advantage {:.2f}, input delay {}{} "
-      "(+{} -{} reverted {}), {} checksums matched, confirmed frame {}, round trip {} ms, {} "
-      "snapshots (every {}, {:.2f} ms each){}{}",
+      "(+{} -{} reverted {}), {} checksums matched, confirmed frame {}, round trip {} ms, link {}, "
+      "{} snapshots (every {}, {:.2f} ms each){}{}",
       when, match.session->CurrentFrame(), stats.rollbacks, stats.resimulated_frames,
       stats.deepest_rollback, stats.stalls, stats.counted_stalls, stats.waits, stats.hitches,
       stats.peer_hitches, stats.frame_advantage, stats.delay,
       stats.delay_fixed ? " (chosen)" : "", stats.delay_raises, stats.delay_lowers,
       stats.delay_reverts,
-      stats.checksums_matched, stats.confirmed_frame, Orca::Online::RoundTripMs(), stats.saves,
+      stats.checksums_matched, stats.confirmed_frame, Orca::Online::RoundTripMs(),
+      Orca::Online::Direct().line, stats.saves,
       stats.snapshot_every, match.port ? match.port->SaveMs() : 0.0,
       match.session->Error().empty() ? "" : "; ", match.session->Error());
 }
