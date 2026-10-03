@@ -330,30 +330,42 @@ signed zero, exact for fmuls and fadds, and what the interpreter's ForceSingle c
 PowerPC does). The cost: M4-vs-PC parity would then rest on that x86 change too.
 
 Checked 2026-10-02 on an M4 Pro (FEAT_AFP), with `ORCA_TEST_NO_AFP=1` standing in for an M1 to M3:
-- Offline scripted runs (`YG_HASHLOG`) hash the same every frame with and without the knob:
-  Project+ `pplus-1v1.txt` 6,005 frames (its match makes the fnmsubs NaN at frame ~461) and
-  `pplus-dropin.txt` 20,017 frames (two matches); Brawl `bf-mario-link-results.txt` 10,315 frames,
-  the same with other fuzz seeds 20,016 frames, and `bf-dropin.txt` 25,006 frames (menus only:
-  it stops at stage select offline).
-- A Project+ synctest (`YG_SYNCTEST=7`, frames 1000-1600) passes with and without the knob (0 RAM
-  mismatches; its device-state-only mismatches are the emulated icache, as before).
+- Offline scripted runs (`YG_HASHLOG`) hash the same on every frame three ways: this build, this
+  build with the knob, and rel-0.3.5 (`d9ed99f137`, accurate NaNs off, the Mac build that 0.3.5's
+  cross-machine smoke matched with a PC). Project+ `pplus-1v1.txt` 6,010 frames (its match makes
+  the fnmsubs NaN at frame ~461) and `pplus-dropin.txt` 20,015 frames (four match stretches);
+  Brawl `bf-mario-link-results.txt` 10,322 frames and `bf-dropin.txt` 25,012 frames (menus only:
+  it stops at stage select offline). Earlier the same held with other Brawl fuzz seeds (20,016
+  frames).
+- A Project+ synctest (`YG_SYNCTEST=7`, frames 1000-1600) passes with and without the knob: 4,151
+  re-run frames, 0 RAM mismatches (the device-state-only mismatches are the emulated icache, as
+  before).
 - Unit tests: `JitFloatSemantics.*` (the JIT against the interpreter in a session's float setup,
-  with PowerPC's answers pinned; it runs on Jit64 too) and `JitArm64.FresNonIEEE`/`FrsqrteNonIEEE`
-  pass with and without the knob.
+  with PowerPC's answers pinned, data accesses translated so Jit64 compiles psq_l/psq_st too) and
+  `JitArm64.FresNonIEEE`/`FrsqrteNonIEEE` pass with and without the knob, as do `Orca*`.
 - The x86-64 side was checked by reading Jit64 and under Rosetta 2 (inf - inf is `0xFFF8...`;
   MINPS and MAXSS with a NaN return the other operand; CVTPD2DQ of a NaN is `0x80000000`; FTZ
-  detects tininess after rounding). Jit64's changes compile for x86-64 but haven't run on a PC: run
+  detects tininess after rounding), and the pinned psq_st NaN-to-integer answers by reading
+  Jit64's quantized store routines. Jit64's changes have not run on a PC yet: run
   `JitFloatSemantics.*` there and one `Tools/orca/xplat.py` match between a PC and a Mac before
-  calling the PC side proven (for an M1-class Mac, `ORCA_TEST_NO_AFP=1` on both machines: it does
-  nothing on x86-64 but marks both keys as test sessions, so they still match).
+  calling the PC side proven (for an M1-class Mac, `ORCA_TEST_NO_AFP=1` on both machines; xplat
+  passes `ORCA_TEST_*` through, and the knob does nothing on x86-64 but marks both keys as test
+  sessions, so they still meet).
+- No real M1, M2 or M3 has run it; the knob is the stand-in.
 - `ORCA_TEST_CPUCORE=0` and `=5` run Project+ through that NaN on the interpreters, but their RAM
   differs from the JIT's from frame 0 (each core's timing; scenes shift by two frames), so whole-RAM
   hashes can't compare cores. `JitFloatSemantics` compares them per instruction instead.
-- Cost (`Tools/orca/perf.mjs`, Brawl's match, frames 2200-9800 unthrottled, three interleaved runs
-  each on a shared M4 Pro): 545 fps before, 532 fps after (-2.4%; user CPU +2.4%), and 504 fps
-  with `ORCA_TEST_NO_AFP=1` (-7.6%; user CPU +8.1%), the price of keeping loaded denormals exact on
-  an M1 to M3. Jit64 pays a compare and a never-taken branch per arithmetic op (UCOMISD/JP, or
-  CMPPD/PTEST/JNZ for pairs), plus a register copy where d is an input: an estimated 2-5%.
+- Cost (`Tools/orca/perf.mjs`, Brawl's match, frames 2200-9800 unthrottled, interleaved runs on a
+  shared M4 Pro whose other load moves single runs by +-5%): against rel-0.3.5 this build is about
+  3-5% slower (604 vs 577 fps over four rounds at a steady load; 627 vs 608 over four more), and
+  10-11% slower with `ORCA_TEST_NO_AFP=1` (560 fps), the price of keeping loaded denormals exact on
+  an M1 to M3. A real M1 starts from a slower base, so its re-simulation headroom shrinks more;
+  not measured on one. The psq_l quieting is about 1% of that (within the noise: 587 vs 577 fps in
+  one series, none in the other). Every FP arithmetic op also carries a 15-25 instruction far-code
+  stub for its NaN path on both JITs, so the far-code buffer fills (and the JIT cache is cleared)
+  sooner in large games. Jit64 pays a compare and a never-taken branch per arithmetic op
+  (UCOMISD/JP, or CMPPD/PTEST/JNZ for pairs), plus a register copy where d is an input: an
+  estimated 2-5%, not measured on a PC.
 
 **Results** (2026-10-01): two Orca processes on one Mac, over prod rooms with dev tickets and a
 local keyframe folder.
