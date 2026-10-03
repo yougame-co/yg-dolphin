@@ -1208,6 +1208,16 @@ TranslateResult MMU::JitCache_TranslateAddress(u32 address)
   return TranslateResult{from_bat, tlb_addr.address};
 }
 
+std::optional<u32> MMU::InstructionBATTranslate(u32 address) const
+{
+  if (!m_ppc_state.msr.IR)
+    return address;
+  bool wi = false;
+  if (!TranslateBatAddress(m_ibat_table, &address, &wi))
+    return std::nullopt;
+  return address;
+}
+
 void MMU::GenerateDSIException(u32 effective_address, bool write)
 {
   // DSI exceptions are only supported in MMU mode.

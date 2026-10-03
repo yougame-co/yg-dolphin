@@ -26,6 +26,7 @@
 #include "Core/IOS/FS/HostBackend/FS.h"
 #include "Core/IOS/IOS.h"
 #include "Core/HW/GCPad.h"
+#include "Core/Orca/JitWarm.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/Session/Events.h"
@@ -592,6 +593,11 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
   // so a snapshot holds the poll's latch and every machine relatches the same pads.
   if (Orca::SessionActive())
     guard.GetSystem().GetSerialInterface().RelatchInputs();
+
+  // Match start (ORCA.md): blocks the next match will run compile while it loads, and a match's own
+  // compiles are remembered for the next. Only before a first pass: a re-run's RAM is the past.
+  if (Orca::SessionActive() && !IsResimulating())
+    Orca::JitWarm::OnBoundary(guard);
 
   // Re-run frames are thrown away as soon as they are simulated: skip their host rendering (the
   // emulated GPU still runs, so RAM and timing match a rendered frame).

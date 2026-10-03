@@ -805,7 +805,9 @@ void Jit64::Jit(u32 em_address, bool clear_cache_and_retry_on_failure)
     }
     ClearCache();
   }
-  FreeRanges();
+  // Orca: not from a hook (JitBase::CompileFromHook).
+  if (!m_compiling_from_hook)
+    FreeRanges();
 
   std::size_t block_size = m_code_buffer.size();
 
@@ -1302,6 +1304,21 @@ void Jit64::EraseSingleBlock(const JitBlock& block)
 std::vector<JitBase::MemoryStats> Jit64::GetMemoryStats() const
 {
   return {{"near", m_free_ranges_near.get_stats()}, {"far", m_free_ranges_far.get_stats()}};
+}
+
+bool Jit64::CanCompileFromHook() const
+{
+  // Far more than any block: Common::CodeBlock::IsAlmostFull counts 64 KiB as more than the biggest
+  // block ever.
+  constexpr std::size_t ROOM = 1024 * 1024;
+  const auto largest = [](const Common::RangeSizeSet<u8*>& free) -> std::size_t {
+    const auto it = free.by_size_begin();
+    return it == free.by_size_end() ? 0 : static_cast<std::size_t>(it.to() - it.from());
+  };
+  // Jit() clears the cache when the trampolines are almost full or a stack fault is pending.
+  return !m_cleanup_after_stackfault && !IsDebuggingEnabled() &&
+         !SConfig::GetInstance().bJITNoBlockCache && !trampolines.IsAlmostFull() &&
+         largest(m_free_ranges_near) >= ROOM && largest(m_free_ranges_far) >= ROOM;
 }
 
 std::size_t Jit64::DisassembleNearCode(const JitBlock& block, std::ostream& stream) const

@@ -67,6 +67,7 @@ public:
 
   void EraseSingleBlock(const JitBlock& block) override;
   std::vector<MemoryStats> GetMemoryStats() const override;
+  bool CanCompileFromHook() const override;
 
   std::size_t DisassembleNearCode(const JitBlock& block, std::ostream& stream) const override;
   std::size_t DisassembleFarCode(const JitBlock& block, std::ostream& stream) const override;

@@ -18,6 +18,7 @@
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
 #include "Core/Host.h"
+#include "Core/Orca/JitWarm.h"
 #include "Core/PowerPC/JitCommon/JitBase.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PPCSymbolDB.h"
@@ -202,6 +203,9 @@ void JitBaseBlockCache::FinalizeBlock(JitBlock& block, bool block_link,
     Common::JitRegister::Register(block.normalEntry, block.near_end - block.normalEntry,
                                   "JIT_PPC_{:08x}", block.physicalAddress);
   }
+
+  // Orca: a match's first compiles are remembered, to compile them while the next one loads.
+  Orca::JitWarm::OnBlockFinalized(block);
 }
 
 JitBlock* JitBaseBlockCache::GetBlockFromStartAddress(u32 addr, CPUEmuFeatureFlags feature_flags)
