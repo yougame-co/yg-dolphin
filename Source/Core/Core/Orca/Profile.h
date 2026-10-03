@@ -161,6 +161,13 @@ bool TestFullSnapshots();
 bool TestNoAfp();
 std::optional<PowerPC::CPUCore> TestCpuCore();
 std::optional<int> TestShaderWaitMs();
+// ORCA_SHADER_WAIT_S: how long the app lets a session's boot wait for its shaders, in seconds (60 to
+// 900). An app sets it when it keeps a boot alive while `orca shaders` lines arrive; without it the
+// boot waits at most 60 s (the 120 s startup timer of the apps installed before it).
+std::optional<int> ShaderWaitLimitS();
+// ORCA_TEST_FXC_FLAGS (hex): the D3DCOMPILE_* flags FXC compiles with (D3DCommon/Shader.cpp), to
+// time other optimization levels. Rendering only, like ORCA_TEST_SHADER_WAIT_MS: not in the lobby key.
+std::optional<u32> TestFxcFlags();
 bool TestOverridesActive();
 
 // Loads the profile for a game; nullopt and a reason when there is none, the revision differs or a

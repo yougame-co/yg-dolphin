@@ -1126,7 +1126,12 @@ those drops must go. Two things compiled there, on the one thread that runs the 
 (single core): the GPU pipelines the match draws first, and the match's PowerPC code. Both now
 compile before the match is on screen.
 
-Status, 2026-10-03: on the Mac, from the second launch after an update on, both matches of a
+Status, 2026-10-03 (branch `pplus-start`): on the Mac every match start is smooth from the first
+launch after an update, Project+ and Brawl alike, now that Orca ships a JIT list for a player who
+has none and paces the warm-up by when each block first runs (below). On Luis's PC 0.3.9 left
+Project+ with a 374 ms frame at the end of its loading image and its first launch after the update
+with shaders still compiling in the match; both fixes are in and not yet confirmed there.
+Before: on the Mac, from the second launch after an update on, both matches of a
 two-match run start smooth (tables below). On Windows it is likely fixed, not confirmed: nobody has
 seen the freeze on his PC yet. What would confirm it is a run of the installed Orca on a copy of
 his own Orca folder (D3D11, his UID and shader caches, one and two matches per process) that shows
@@ -1146,34 +1151,78 @@ characters, the stage, the countdown's effects). Orca sessions force (`Orca/Prof
   copy pipelines are in no Dolphin disk cache and no ubershader covers them, so each kind compiled
   at its first copy, in every run: Brawl's first two (R8 and RGBA8) come at the countdown. Their
   UIDs are kept in `Cache/<game>.efbcopy.uidcache`.
-- **A limit on that wait** (`ShaderCache::WaitForBootCompile`, sessions only). The first boot after
-  an update compiles every pipeline in the UID cache (below), and the desktop app kills a boot that
-  hasn't drawn in 120 s (`desktop/src/orca.ts`), a timer installed apps keep. After 40 s the wait
-  ends as soon as the ubershaders are compiled; at 60 s it ends whatever is left. What is left
-  compiles in the background on the runtime thread count and is drawn with an ubershader until it
-  is ready; an ubershader still compiling at 60 s is compiled again at its first draw (a stall,
-  not a failed start). The log says which: "Orca: compiled N pipelines (K ubershader) before the
-  first frame in X s" or "Orca: stopped waiting for shaders after X s, ...". While the wait lasts
-  more than a second, Orca prints `orca shaders <compiled> <total>` once a second, before
-  `ready`, so an app can tell a slow boot from a hung one. `ORCA_TEST_SHADER_WAIT_MS=N` sets both
-  limits to N ms. Dolphin's shader workers slept through work already queued when their count
-  changed; they no longer do (`AsyncShaderCompiler::WorkerThreadRun`).
+- **The UID cache before the ubershaders** (`ShaderCache::CompileMissingPipelines`, sessions
+  only): its pipelines queue at priority 150, ahead of the ubershaders (200), instead of after them
+  (300). They are what the match draws and take a fraction of the time (FXC on Luis's PC: the
+  ubershaders ~35 s, Brawl's 451 pipelines ~1 s after them), so a boot that stops waiting has them.
+- **A limit on that wait** (`ShaderCache::WaitForBootCompile`, sessions only). The wait ends when
+  everything is compiled, ubershaders and UID cache alike, or at its limit: 60 s, or the app's
+  `ORCA_SHADER_WAIT_S` (60-900 s). Desktop apps installed before that variable kill a boot that
+  hasn't drawn in 120 s (`desktop/src/orca.ts`), so Orca keeps to 60 s unless the app says it
+  keeps a boot alive while `orca shaders` lines arrive (it then sets the variable and restarts its
+  timer on each line). Before 2026-10-03 the wait also ended at 40 s as soon as the ubershaders
+  were done: P+ on Windows stopped there with its 1,331 UID-cache pipelines left (seconds of work:
+  Brawl's 451 took about one), and they compiled beside its first match (VI over 33 ms for 9 s). What is left at the
+  limit compiles in the background on the runtime thread count. The log says which: "Orca:
+  compiled N pipelines (K ubershader) before the first frame in X s on T threads" or "Orca:
+  stopped waiting for shaders after X s (limit L s), ...". While the wait lasts more than a
+  second, Orca prints `orca shaders <done> <total>` once a second, before `ready`, so an app can
+  tell a slow boot from a hung one; the units are pipelines plus the shader stages they wait on (a
+  pipeline completes only after every stage of its priority, so pipelines alone read 0 until the
+  end: 0 of 1,493 for 30 s on Windows). `ORCA_TEST_SHADER_WAIT_MS=N` sets the limit to N ms.
+  Dolphin's shader workers slept through work already queued when their count changed; they no
+  longer do (`AsyncShaderCompiler::WorkerThreadRun`).
+- **No ubershader compiled on the emulation thread** (`ShaderCache::GetUberPipelineForUidIfReady`,
+  `VertexManagerBase::UpdatePipelineObject`, sessions only). A draw whose specialized pipeline
+  isn't ready is drawn with an ubershader; when that ubershader is itself still compiling in the
+  background (a boot that hit its limit), Dolphin compiled it again right there, a freeze of as
+  long as FXC takes (seconds). The draw is skipped instead, as Dolphin's "skip drawing" mode does,
+  until the ubershader or the specialized pipeline (ONDEMAND, first in the queue) is ready; the log
+  says so once ("Orca: skipping draws whose ubershader is still compiling ..."). Mac test, P+ with
+  an empty UID cache, the limit at 0 and each pixel ubershader slowed by 3 s: the first 600 frames'
+  worst was 51.6 ms with the skip and 3,012 ms without it.
+- **FXC's output kept across builds** (`D3DCommon/FxcCache.*`, D3D11 and D3D12, whenever Dolphin's
+  shader cache setting is on). `Cache/Shaders/D3D-fxc.cache` maps a SHA-1 of exactly what FXC is
+  given (a SHA-1 of `d3dcompiler_47.dll`'s bytes, the entry point, the target, the flags, the
+  macros and the HLSL text; `Shader.cpp` passes no source name, include handler or second flags)
+  to the DXBC it returned. FXC is a pure function of that input, so a build whose shader
+  generators and GLSL-to-HLSL path write the same text gets its shaders without compiling; any
+  change to the text, the flags or the compiler is another key, so a binary is only ever used for
+  the compile that made it. Each record also carries a SHA-1 of its key and DXBC: a torn or
+  interleaved write ends the read and the file is written again from the records before it. One file
+  for every game, read whole into memory and started over past 64 MB. It stays open while Orca runs,
+  opened so others may read and write it (`File::SharedAccess::ReadWrite`, `_SH_DENYNO`): Windows'
+  plain open shares nothing once it writes, so a second Orca on the same user folder could neither
+  read it nor add to it (and `FxcCacheTest` failed on the PC). No release from 0.3.4 to 0.3.9
+  changed a shader generator, glslang, SPIRV-Cross or `D3DCommon/Shader.cpp`, while each touched
+  other video files, so a key on the generator sources or the VideoCommon tree would have lost the
+  cache every time and been only as safe as its file list. The log names every FXC compile of 250 ms
+  or more ("Orca: FXC compiled a ps_5_0 in N ms (K KB of HLSL, from GLSL in M ms; ...)") and, at
+  shutdown, "Orca: FXC cache: R shaders read from ..., F compiles found there, A compiled and
+  added". `ORCA_TEST_FXC_FLAGS=<hex>` replaces FXC's `D3DCOMPILE_*` flags (rendering only, not in
+  the lobby key), to time other optimization levels. `FxcCacheTest` (every platform: elsewhere
+  the test builds `FxcCache.cpp` itself) checks that each of those inputs changes the key, that a
+  torn last record keeps the records before it and the file is written again from them, and that
+  a changed byte in a record's key or DXBC is never returned under any key, nor anything after it,
+  and that another Orca with the file open to append keeps its records through this one's read,
+  rewrite and appends (after a rewrite the file is reopened with `"ab"`: a `"wb"` handle writes
+  where it is, over whatever the other appended).
 
 Rendering only: nothing drawn reaches RAM (EFB/XFB copies stay on the GPU, EFB access and bbox are
 off), so none of this can make two players' games differ.
 
 Why it came back after every update: Dolphin's compiled-shader files (`Cache/Shaders/*.cache`, D3D's
 DXBC on Windows) carry the build's git commit in their header and are emptied by any other build;
-the pipeline UID cache survives. Without the boot compile, that cache was recompiled on one
-background thread (`ShaderCompilerThreads` defaults to 1), and a pipeline still queued at the
-countdown compiled again on the emulation thread. macOS adds Apple's own Metal cache, kept per
-binary (Metal keeps no `Cache/Shaders` file). Until this change only the desktop app's macOS
-command line asked for the first two settings. The app's `-u` is `<userData>/orca/user`
-(`%APPDATA%\yougame-desktop\orca\user` on Windows, `~/Library/Application
-Support/yougame-desktop/orca/user` on macOS), one folder for every Orca version: the UID caches,
-the EFB copy cache and the JIT list survive updates, the compiled shaders don't. The app passes no
-`-v`, so Windows draws with Dolphin's default, D3D11 (`D3D`), unless the folder's `Dolphin.ini`
-says otherwise; the forced-settings line names it (`GFXBackend=`).
+the pipeline UID cache survives (and, from 2026-10-03, D3D's `D3D-fxc.cache`). Without the boot
+compile, that cache was recompiled on one background thread (`ShaderCompilerThreads` defaults to 1),
+and a pipeline still queued at the countdown compiled again on the emulation thread. macOS adds
+Apple's own Metal cache, kept per binary (Metal keeps no `Cache/Shaders` file). Until this change
+only the desktop app's macOS command line asked for the first two settings. The app's `-u` is
+`<userData>/orca/user` (`%APPDATA%\yougame-desktop\orca\user` on Windows, `~/Library/Application
+Support/yougame-desktop/orca/user` on macOS), one folder for every Orca version: the UID caches, the
+EFB copy cache and the JIT list survive updates, the compiled shaders don't. The app passes no `-v`,
+so Windows draws with Dolphin's default, D3D11 (`D3D`), unless the folder's `Dolphin.ini` says
+otherwise; the forced-settings line names it (`GFXBackend=`).
 
 Measured 2026-10-03 (M4, Metal, 871x434 window, scripted Brawl Mario vs Link on Battlefield and
 P+ 1v1, `YG_SHADERLOG=1` probe build): VI stalls from 0.6 s before scMelee to 12 s after.
@@ -1195,7 +1244,14 @@ The boot compile costs, on the M4 after an update: 2.9 s with an empty UID cache
 With the wait cut to 2 s (`ORCA_TEST_SHADER_WAIT_MS=2000`) it stopped with 772 left (63
 ubershaders): the game ran, the menus had one 216 ms stall (ubershaders compiled at their first
 draw), and the match started as it did without the limit. Windows compiles each shader through
-glslang, SPIRV-Cross and FXC: its time after an update is unmeasured. New textures cost 3-5 ms in the same window
+glslang, SPIRV-Cross and FXC; on Luis's PC (RTX 2080, D3D11, 0.3.9 on copies of his folder) the
+first boot after the update compiled Brawl's 613 pipelines (162 ubershader) in 38-39 s and stopped
+P+'s 1,493 at 40 s. Of that, the 63 ubershader stages (54 pixel, 9 vertex: 9 texgen counts x
+early/late/per-pixel depth x uint output on D3D) took about 30-37 s with every thread in FXC, and
+Brawl's 451 UID-cache pipelines then about one second. The progress read 0 for the first 30 s
+because pipelines complete only after every stage of their priority is compiled (fixed above).
+The boot compiles on Dolphin's precompile thread count (logical cores - 2 unless `GFX.ini` sets
+`ShaderPrecompilerThreads`), not the runtime 1-4. New textures cost 3-5 ms in the same window
 (the hires lookup for Orca's own pack 0.1 ms). What is left with everything warm (about 100 + 60 ms
 at the countdown and 45 ms at 4 s, no compile, no texture work) is not shaders.
 
@@ -1221,8 +1277,65 @@ match in the same process compiles little (its blocks are still there).
   compiled, earliest-run first. Those not in RAM (another fighter's code at that address) are
   looked at again every 30 frames, 1 ms per boundary, until frame 600. Both games have the match's
   code loaded at scMelee's first frame, and both show a still loading image ("Ready to fight") for
-  a while after it: Brawl ~165 frames, Project+ ~28. On the M4 the warm-up takes 37 frames (Brawl,
-  30,000 blocks) and 35 (Project+, 28,000), the blocks the stage's first frames run first.
+  a while after it: Brawl through frame ~169, Project+ through frame 27 (the stage from 28). On the
+  M4 the warm-up takes 37 frames (Brawl, 30,000 blocks) and 35 (Project+, 28,000), the blocks the
+  stage's first frames run first.
+- **Orca's own list for a player without one** (`Data/Sys/Orca/RSBE01.jitwarm`,
+  `PPLUS32.jitwarm`; `SeedPath`). A first install, or the first match after an update from 0.3.8
+  or before, has no `Cache/<profile>.jitwarm`, and that match compiled its whole start itself: on
+  Luis's PC (0.3.9 on a copy of his 0.3.8 folder) Brawl's first match froze 160, 117 and 326 ms
+  where the stage appears, 2.9-3.2 s after scMelee (R-A-bf-1). Orca ships a list for each game,
+  recorded from the reference matches with `ORCA_JITWARM_SEED=0` on a fresh user folder: Brawl
+  `Tools/orca/inputs/bf-two-new.txt` (Mario vs Link on Battlefield, then Mario vs Donkey Kong on
+  Final Destination: 32,625 blocks), Project+ `pplus-1v1.txt` (28,054). The x86-64 build under
+  Rosetta and the arm64 build record the same bytes, and either JIT compiles the other's list with
+  nothing discarded. The warm-up reads it only when the player's own file is missing or doesn't
+  read, and treats it like the player's own: a block whose words aren't this game's in RAM is never
+  compiled (another fighter's or stage's code waits and is compiled at its first run, as before),
+  and after the first match the player's own list replaces it. The log says so: "JIT warm-up: no
+  list of this player's yet; Orca's <path> (N blocks)". `ORCA_JITWARM_SEED=0` turns it off.
+  Re-record both after a change to the games' patches, the scene detection or how the JIT splits
+  blocks (a stale list only finds fewer blocks in RAM), on a fresh folder each:
+  `ORCA_SESSION=1 YG_SCENES=1 ORCA_JITWARM_SEED=0 YG_INPUT=Tools/orca/inputs/bf-two-new.txt
+  YG_EXIT_AFTER=11500 <Orca> -p headless -v Null -u <fresh> -e <Brawl rev 2>` and, for Project+,
+  `ORCA_PROFILE=PPLUS32 YG_INPUT=.../pplus-1v1.txt YG_EXIT_AFTER=1150` with `-C
+  Dolphin.Core.DefaultISO=<Brawl> -e <Project+ Netplay Launcher.dol>`; copy `<fresh>/Cache/*.jitwarm`
+  into `Data/Sys/Orca`. Mac, 2026-10-03, windowed on copies of Luis's own Mac folder (his UID
+  caches, no list), `match-start.mjs`: Brawl without the seed (`ORCA_JITWARM_SEED=0`) 93 and 62 ms
+  where the stage appears and 47 ms at 3.9 s; with it 31,544 of 32,625 compiled ahead (1,025 are
+  Donkey Kong's and Final Destination's, not in RAM), 16 compiled by the game, worst VI 22.5 ms
+  in the whole window, as the second launch (23.4 ms). Project+ with it: 28,031 of 28,054 ahead, 34
+  by the game, from frame 28 worst 23 ms (the second launch 21.4 ms; frames 0-27 had 87 and 84 ms,
+  behind the loading image, with 13 pipelines his UID cache didn't have). Two matches from the seed
+  (`bf-two-new.txt`): from frame 170 worst 21.3 and 21.4 ms, but match 1 had 91 and 76 ms at
+  2.3-2.4 s, where Brawl's stage appears, with 44 pipelines his UID cache didn't have and 16 blocks
+  compiled by the game: not the JIT, likely a new pipeline's first ubershader draw on Metal (the
+  next launch had none over 25 ms in either match). Headless, per-frame RAM hashes from
+  the seed equal the 0.3.9 references (Brawl 10,739 frames, P+ 9,006, x86-64 with
+  `ORCA_TEST_JITWARM_SLOW_US=28` and arm64), and so do synctests across the match start from the
+  seed (4,851 re-run frames each) and the loopbacks (P+ 579 rollbacks, Brawl 789, 879 checksums).
+- **Paced by the recorded frames** (`PacedTarget`). Each block is due by the boundary 3 frames
+  before the frame the recorded match first ran it (`when`, the earliest over the matches seen),
+  and the first sweep goes past the 8 ms as far as the most pressing deadline needs, its blocks
+  spread evenly over the boundaries left. Project+ runs its match code in frames 21-24 (400, then
+  5,200, then 11,200 blocks) and 1,200 more in frame 34. Jit64 on Luis's PC compiles ~200 blocks
+  in 8 ms (~40 us each; Rosetta 2 on the M4 ~600, JitArm64 ~800), so unpaced it had ~5,000 of
+  them by frame 24, and the game compiled the other ~12,600 itself in frame 24: the 374 ms VI of
+  the PC's run, and the "12,602 already compiled" (blocks the game had compiled before the sweep
+  got to them; nothing invalidated them). Paced, the PC's frames 0-21 each take ~30-35 ms of
+  compiling, all behind the loading image. Brawl needs ~110 blocks a boundary (18,000 by frame
+  ~166), under the budget everywhere. One boundary never takes more than 100 ms
+  (`MAX_SWEEP_US`): a sweep that fell behind (boundaries where the JIT had no room) catches up
+  over several frames, not in one long frame during play.
+- **The JIT's tables grow behind the loading image** (`JitBase::ReserveForBlocks`, at a match's
+  first frame). Jit64 keeps an `m_back_patch_info` entry for every fastmem load and store it ever
+  compiled (~11 a block, until a cache clear), and the unordered map rehashes inside the compile
+  that doubles it: 4, 12 and 26 ms at 100,000, 200,000 and 400,000 entries under Rosetta (a
+  match's ~30,000 blocks cross 400,000 during the warm-up; the PC's logs show one 22-27 ms
+  boundary a run, likely this). At frame 0 Jit64 now makes room for 16 entries a block: each
+  block listed in a process's first match (at least 32,000), 8,000 blocks in a later one (which
+  compiles ~2,700 with a new stage and fighter). 13-16 ms there under Rosetta, no slow compile
+  after; nothing to do at a second match. JitArm64 keeps a `std::map` there.
 - **Why it can't change the game.** A block compiled early is the block the game's first run would
   compile: the same words at the same addresses (the hash), the same feature flags, compiled in the
   guest's floating-point mode as the dispatcher compiles, and kept only if its instructions span
@@ -1241,7 +1354,14 @@ match in the same process compiles little (its blocks are still there).
   what was freed since to the dispatcher's next compile. A stack fault inside a hook's compile
   (the hook runs deeper in the host stack) is Dolphin's own: it only invalidates blocks and asks
   the next dispatcher compile to clear the cache, and the hook checks again before each block.
-- `ORCA_JITWARM=0` turns it off; `ORCA_JITWARM_LOG=1` logs each frame that compiled ahead.
+- `ORCA_JITWARM=0` turns it off. `ORCA_JITWARM_LOG=1` logs a line for each of a match's first
+  600 frames: what the warm-up compiled and how many were due, what the game compiled itself and
+  what the warm-up had done with those (warmed and gone since, not reached yet, not listed), and
+  any single compile over 4 ms; `=2` also counts, outside matches, the listed blocks already in
+  RAM (Project+: 26,000 of 28,000 from the title screen on, its code is resident). The frame lines
+  place each frame in time: `node Tools/orca/match-start.mjs --from-frame 28 <run>` (Project+;
+  Brawl 170) counts the VIs a player sees after the loading image. `ORCA_TEST_JITWARM_SLOW_US=N`
+  makes each warm-up compile N us longer, a slower host for testing the pace.
 
 Measured 2026-10-03 on the M4 (871x434 Metal window, the same scripted matches; host VI intervals
 from 0.6 s before scMelee to 12 s after; "before" is the 0.3.8 release, with the macOS app's
@@ -1287,6 +1407,28 @@ above (Brawl 10,807 frames with and without the list, P+ 9,002, the two-match ru
 synctests across the match start pass (4,851 re-run frames each) and so do loopbacks (Brawl 936
 rollbacks, P+ 579). Rosetta translates Jit64's output, so this checks Jit64's logic, not Windows
 itself (its thread-stack guard, MSVC): the same checks on the PC are what close that.
+
+Project+ on Windows, 2026-10-03 (the 0.3.9 candidate on Luis's PC, RTX 2080, D3D11, copies of his
+folder). From the second launch, P+'s match 1 had 4 VI over 33 ms, one of 374 ms, and the warm-up
+logged "15,452 of 28,054 blocks compiled ahead ... 12,602 already compiled" then "compiled 12,613
+blocks itself" (headless Jit64 the same, 11,003). Those 12,600 were compiled once, by the game, in
+frame 24, before the warm-up's 8 ms a frame got to them (it was ~5,000 blocks in); every one of
+the 4 VIs was frames 0-24, while P+ still shows its loading image (through frame 27). From frame 28
+(`match-start.mjs --from-frame 28`) that run had no VI over 25 ms, worst 22 ms, as Brawl's second
+launch. The same on the M4 under Rosetta with `ORCA_TEST_JITWARM_SLOW_US=28` (the PC's ~40 us a
+block): unpaced 15,036 ahead, 13,018 already compiled, 11,035 compiled by the game in frame 24
+(none "warmed and gone": nothing invalidated a warmed block); paced 28,031 of 28,054 ahead, 34
+compiled by the game in the first 600 frames, frames 0-21 at 30-38 ms of compiling each, and no
+compile over 4 ms after frame 0 (the backpatch map's 26 ms rehash had landed at frame 31). Per-frame
+RAM hashes with the pace and the slow knob equal the 0.3.9 references (P+ 9,006 frames, Brawl
+10,739), and so do synctests across the match start (4,851 re-run frames) and the P+ loopback (579
+rollbacks, 879 checksums). What a rollback costs the JIT: Rollback.cpp invalidates every block in
+a 4 KiB page it restores, and Project+ has code in pages whose other words change from frame to
+frame (blocks at 0x8056xxxx, 0x8078xxxx, 0x8093xxxx, 0x8106xxxx, a few in the DOL), so each
+rollback compiles 40-120 blocks again (~1.5-5 ms of Jit64 on the PC), warmed ones included; the
+loopback's 579 rollbacks did ~2,000 such compiles in the first 600 frames, none in the loading
+frames. Invalidating only the 32-byte lines that changed would keep the blocks whose own words
+didn't (not done, not measured).
 
 ## Online menu
 

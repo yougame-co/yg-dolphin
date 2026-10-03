@@ -14,6 +14,7 @@
 #include "Common/MsgHandler.h"
 #include "Common/StringUtil.h"
 
+#include "VideoBackends/D3DCommon/FxcCache.h"
 #include "VideoCommon/TextureConfig.h"
 #include "VideoCommon/VideoConfig.h"
 
@@ -66,6 +67,8 @@ bool LoadLibraries()
 
 void UnloadLibraries()
 {
+  // Orca: the FXC cache (FxcCache.h) closes with the compiler whose output it keeps.
+  FxcCache::Close();
   create_dxgi_factory = nullptr;
   create_dxgi_factory2 = nullptr;
   d3d_compile = nullptr;

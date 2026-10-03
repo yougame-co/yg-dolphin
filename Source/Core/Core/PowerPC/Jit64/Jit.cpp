@@ -1321,6 +1321,23 @@ bool Jit64::CanCompileFromHook() const
          largest(m_free_ranges_near) >= ROOM && largest(m_free_ranges_far) >= ROOM;
 }
 
+void Jit64::ReserveForBlocks(std::size_t count)
+{
+  // One entry per fastmem load and store compiled, never erased before a cache clear: ~11 a block
+  // (Project+'s menus and match, ~36,000 blocks, ~411,000 entries). Each time it doubles the map
+  // rehashes inside a compile, 4, 12 and 26 ms at 100,000, 200,000 and 400,000 entries (Rosetta 2
+  // on an M4; the PC's warm-up logs show one 22-27 ms boundary a run, likely the same): during a
+  // match, a dropped frame. 16 a block leaves room for what rollbacks compile again after them.
+  // Only ever grown (a smaller reserve may shrink it, another rehash).
+  constexpr std::size_t PER_BLOCK = 16;
+  const std::size_t wanted = m_back_patch_info.size() + count * PER_BLOCK;
+  if (static_cast<float>(wanted) >
+      m_back_patch_info.max_load_factor() * static_cast<float>(m_back_patch_info.bucket_count()))
+  {
+    m_back_patch_info.reserve(wanted);
+  }
+}
+
 std::size_t Jit64::DisassembleNearCode(const JitBlock& block, std::ostream& stream) const
 {
   return m_disassembler->Disassemble(block.normalEntry, block.near_end, stream);
