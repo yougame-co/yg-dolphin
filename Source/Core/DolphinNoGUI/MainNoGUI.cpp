@@ -517,11 +517,11 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
     });
     Embed::StartReading();
   }
-  else if (Orca::GetEnv("ORCA_TEST_COMMANDS") == "1")
+  const bool test_commands = !embed.enabled && Orca::GetEnv("ORCA_TEST_COMMANDS") == "1";
+  if (test_commands)
   {
     s_platform->EnableTestCommands();
     Embed::StartReading();
-    Orca::Status::PrintCaps();
   }
 
   if (!BootManager::BootCore(Core::System::GetInstance(), std::move(boot), wsi))
@@ -533,6 +533,10 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
     Orca::Status::Finish();
     return 1;
   }
+
+  // Test commands: the caps once the boot chose its profile (whether it offers "results").
+  if (test_commands)
+    Orca::Status::PrintCaps();
 
 #ifdef USE_DISCORD_PRESENCE
   Discord::UpdateDiscordPresence();
