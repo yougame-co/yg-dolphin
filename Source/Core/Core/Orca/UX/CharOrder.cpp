@@ -377,8 +377,18 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
   const State after = Advance(set, css, before, frame);
   if (after != before)
     WriteState(m, after);
-  if (!resimulating)
-    SetRuleLine(Line(set, css, after, ports));
+  if (resimulating)
+    return;
+  SetRuleLine(Line(set, css, after, ports));
+  if (after.step != before.step || after.game != before.game || after.locked != before.locked)
+  {
+    static constexpr const char* STEPS[] = {"idle", "first", "second", "done", "both"};
+    NOTICE_LOG_FMT(ROLLBACK,
+                   "Character order: frame {} game {} step {} (port {} first, locked {}), was {} "
+                   "after {} frames",
+                   frame, after.game, STEPS[static_cast<int>(after.step)], after.first + 1,
+                   after.locked, STEPS[static_cast<int>(before.step)], before.elapsed);
+  }
 }
 
 Masks GateFrame(const Core::CPUThreadGuard& guard)
