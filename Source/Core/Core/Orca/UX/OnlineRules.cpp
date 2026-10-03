@@ -574,7 +574,8 @@ void OnFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, bo
     if (s_expect)
     {
       const Header h = ReadHeader(m);
-      const Mode expected = *s_expect;
+      // ORCA_TEST_QUEUE in both Orcas: the host's header is the knob's, whatever the room.
+      const Mode expected = TestQueueMode().value_or(*s_expect);
       s_expect.reset();
       const bool ok = expected == Mode::None ?
                           !h.Locked() :

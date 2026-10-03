@@ -1529,9 +1529,11 @@ beta: a best of 3, rated once per set, with the host's rules (YouGame `docs/ORCA
    character select): Orca's ticket for that room goes through the bridge's `mpTicket` with
    `room: <code>`, which the page mints as the queue's ticket with `match_room` (the keyframe store
    needs a ticket signed for that room). A former joiner moves its pad to port 1 first: solo, so
-   only its own game changes, and the next keyframe carries it. Brawl hosts preset the rules: 3
-   stocks, 8:00, items off (`gmSetRule`, below), at the next boundary while alone, before any
-   keyframe (`ux=6`). Project+ keeps its own rules. The overlay says "Opponent found · waiting for
+   only its own game changes, and the next keyframe carries it. Once the room's welcome says its
+   queue, the host's next alone boundary writes the match block's header, and the locks follow
+   ("Online rules": the ruleset's rules in both games, casual's random legal stage, no way out of
+   the character and stage select; `ux=8`, which replaced the beta's Brawl-only rules preset). A
+   keyframe for the opponent waits for that header. The overlay says "Opponent found · waiting for
    <name>…" until the opponent plugs in.
 4. `join <code>` is the existing drop-in: the joiner lands on port 2 of the host's character
    select.
@@ -1564,7 +1566,7 @@ gone. A desync voids the match in progress (`finish {void}`) before the players 
 
 | stdout | |
 |---|---|
-| `orca caps ... host results` | `results` only where the result reader is verified (Brawl rev 2, Project+); the room hears the results either way. |
+| `orca caps ... host results locks` | `results` only where the result reader is verified (Brawl rev 2, Project+); the room hears the results either way. `locks` where the profile has a ruleset (the same two): queue rooms play the online rules ("Online rules"). Information only: the locks don't wait for the app's answer. |
 | `orca menu online casual\|ranked` | The pick, with `host` agreed (`... local` without). |
 | `orca menu cancel` | The player backed out of searching (above). |
 | `unsupported host` | The `host` was refused. |
@@ -1814,6 +1816,73 @@ frame 267 on.
   Brawl 10,606 frames, Project+ 8,010.
 - `ORCA_TEST_GATE=1:START`: Brawl never leaves the character select (port 1's scripted Start never
   reaches the game).
+
+## Online rules
+
+Phase 1 of the online rules for queue matches (YouGame `docs/ORCA_ONLINE_UX.md`; the design's
+phases and rulesets): rules locked in both games, casual's Start going to a random legal stage,
+no way back from the character and stage select to the menus, ranked's no-ready timer and its
+stall rule. Friends rooms are unchanged: nothing here acts without the match block's header, and
+only a queue room's host writes one (`Core/Orca/UX/OnlineRules.*`, `MatchBlock.h`).
+
+### The match block's header
+
+- **Where:** `MatchBlock.h`, at FreeSpace's block (`0x806F2380`, both games). Header: `YGM1`,
+  version 1, mode (0 none, 1 casual, 2 ranked), ruleset (1 Brawl Supernova 2025, 2 Project+ 2024).
+  Then the set state (`+0x10`, Phases 2-3), the step state (`+0x80`, Phase 2), Phase 1's ready
+  timer (`+0xC0`), and the player's own rules saved when the header was written (`+0xD0`, and
+  Project+'s stage switch data at `+0x100`).
+- **Who writes it, and when:** only at a boundary where the game is its player's alone (Events.h
+  `alone`: nobody plugged in or on the way, nothing anyone replays), the header this machine's room
+  calls for (OnlineMatch `WantedRulesMode`): a casual or ranked queue room's mode while this game
+  hosts it (port 1), or waits in a ranked room for the set's verdict; none otherwise. None clears
+  it, gives back the saved rules and zeroes the block; a block that never had a header (the game's
+  dead code) is never touched. Everything else in the block is game logic at every boundary.
+- **The keyframe waits for it:** a keyframe for an arrival is captured only once the header is as
+  the room calls for (at most 120 boundaries, so an arrival never waits forever). The header lands
+  at the first alone boundary after the room's welcome, long before the opponent can arrive.
+- **The joiner checks it** at the first frame hook after its keyframe loads: the mode its room's
+  queue calls for (none for a friends room) and its own profile's ruleset. Anything else: it leaves
+  at once, with `orca error mismatch That match couldn't start` and the bye reason `mismatch`.
+- **Lifecycle:** casual unlocks when the opponent unplugs (the host leaves the queue room for a
+  room of its own: header none). Ranked stays locked while the set is open, whoever is plugged in
+  (the survivor waits in the room for the verdict), and clears once the room closes.
+
+### The locks (while the header says casual or ranked; first runs and re-runs, only bytes that differ)
+
+| | Brawl (Supernova 2025) | Project+ (2024) |
+|---|---|---|
+| gmSetRule | stock, 3 stocks, 8:00, handicap off, ratio 1.0, team attack on, pause off | the same with 4 stocks |
+| Items | frequency None, every item off (record menu data `+0x00`, `+0x08`, `+0x0C`) | the same |
+| Stage choice | casual Random, ranked Choose | the same |
+| Legal stages | Random Stage Switch: Brawl page `0x04005007` (BF, FD, Delfino, YI, Lylat, Smashville), Melee page `0x00020000` (Pokemon Stadium); FD's bit off while a human player is Ice Climbers (`0x10`): from the character select's panels there, from the match's init data after it (a Random character resolved) | the 2024 Proposed list as its preset 3 (`Switch03.rss`) holds it: its first `0xA8` bytes of RSS_EXDATA (`0x8042C4E8`: page 0 the 9 legal stages, all in the random set, hazards off), written on the character select; casual also clears the strike table |
+| Input gate | character select: B; stage select: B; fight: Start | the same, plus the D-pad on the character select (its Code Menu) and L, R and Z on the stage select (alternates, hazards, L+R+A) |
+
+- Casual's Start: Random stage choice skips the stage select, and the game's own RNG (in memory,
+  the same on both machines) picks from the legal list. Project+'s random never repeats the last
+  stage (its own rule).
+- No B on the character select: holding B is the way back to the menus. Nothing needs B to pick.
+- Pause off: Brawl's rule, and no Start in a fight for Project+'s hold-Start pause.
+- The rules screen still opens, but whatever is changed there goes back at the next boundary.
+
+### Ranked's character select timer and stalls
+
+- **No-ready timer** (block `+0xC0`): before the set's first fight, once one human panel has a
+  character and another doesn't, 60 s; then that port is the no-show (`+0xC2`). OnlineMatch reads
+  it at final frames (`Rules::ConfirmNoShow`): the no-show's own Orca leaves the room (bye reason
+  `no-show`), which the room awards as a forfeit; the other waits there for the verdict. Later games
+  keep their characters, so no timer.
+- **Stalls:** a ranked set's player whose game has waited 15 s on the opponent's inputs, or whose
+  opponent went silent (the existing 10 s limit), sends `finish` naming itself the winner, once
+  (`Online::ReportStall`). The room then never hands the set to the one who stalled (the survivor's
+  report goes against them) and awards it here when they leave. A joiner whose host went silent mid
+  set now waits in the room for the verdict instead of leaving it (which was its own forfeit).
+
+### Compatibility and tests
+
+`ux=8` (the rules preset of `ux=6` is gone), cap `locks`. Test knob `ORCA_TEST_QUEUE=casual|ranked`
+(a test override): the header as a queue room's host writes it, in a harness run or a dev game's
+room, both Orcas set alike. Unit tests `OrcaOnlineRules*`.
 
 ## Embedding
 
