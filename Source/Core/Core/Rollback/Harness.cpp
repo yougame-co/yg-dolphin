@@ -4,6 +4,7 @@
 #include "Core/Rollback/Harness.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -1104,21 +1105,49 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
   const bool first_pass_here = frame_here > s_max_frame;  // false while re-running after a load
   // The in-game UX's frame hook, as an online match calls it (OnlineMatch::OnBoundary): before this
   // boundary saves anything, and on re-runs, for the frame about to run. The ports are the test's
-  // (ORCA_UX_TEST_NAMES, comma-separated names for ports 1, 2...; else port 1 alone).
+  // (ORCA_UX_TEST_NAMES, comma-separated names for ports 1, 2...; else port 1 alone), each with
+  // the controls in ORCA_UX_TEST_CONTROLS (comma-separated in the same order: a profile's hex, as
+  // UX/NameTags.h lays it out, or empty or "-" for none).
   if (SnapshotModesAllowed())
   {
     static const std::vector<Orca::Events::PortInfo> s_test_ports = [] {
+      const auto split = [](const std::string& list) {
+        std::vector<std::string> items;
+        for (size_t start = 0; !list.empty() && start <= list.size() && items.size() < 4;)
+        {
+          const size_t comma = std::min(list.find(',', start), list.size());
+          items.push_back(list.substr(start, comma - start));
+          start = comma + 1;
+        }
+        return items;
+      };
+      const std::vector<std::string> names = split(Orca::GetEnv("ORCA_UX_TEST_NAMES"));
+      const std::vector<std::string> controls = split(Orca::GetEnv("ORCA_UX_TEST_CONTROLS"));
       std::vector<Orca::Events::PortInfo> ports;
-      std::string names = Orca::GetEnv("ORCA_UX_TEST_NAMES");
-      int port = 0;
-      for (size_t start = 0; !names.empty() && start <= names.size() && port < 4; ++port)
+      for (int port = 0; port < static_cast<int>(names.size()); ++port)
       {
-        const size_t comma = std::min(names.find(',', start), names.size());
-        ports.push_back({port, names.substr(start, comma - start), port > 0});
-        start = comma + 1;
+        std::vector<u8> profile;
+        if (static_cast<size_t>(port) < controls.size() && controls[port] != "-")
+        {
+          const std::string& hex = controls[port];
+          if (hex.size() % 2 == 0 && std::all_of(hex.begin(), hex.end(), [](char c) {
+                return std::isxdigit(static_cast<unsigned char>(c)) != 0;
+              }))
+          {
+            for (size_t i = 0; i < hex.size(); i += 2)
+              profile.push_back(
+                  static_cast<u8>(std::strtoul(hex.substr(i, 2).c_str(), nullptr, 16)));
+          }
+          else
+          {
+            ERROR_LOG_FMT(ROLLBACK, "ORCA_UX_TEST_CONTROLS: port {}'s profile isn't hex: none",
+                          port + 1);
+          }
+        }
+        ports.push_back({port, names[port], port > 0, std::move(profile)});
       }
       if (ports.empty())
-        ports.push_back({0, "", false});
+        ports.push_back({0, "", false, {}});
       return ports;
     }();
     Orca::Events::NotifyFrame(guard, frame_here + 1, !first_pass_here, s_test_ports,
