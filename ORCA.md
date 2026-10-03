@@ -1054,6 +1054,28 @@ match in the same process compiles little (its blocks are still there).
   synctest already counts it device state only.
 - `ORCA_JITWARM=0` turns it off; `ORCA_JITWARM_LOG=1` logs each frame that compiled ahead.
 
+Measured 2026-10-03 on the M4 (871x434 Metal window, the same scripted matches; host VI intervals
+from 0.6 s before scMelee to 12 s after; "before" is the 0.3.8 release, with the macOS app's
+`ShaderCompilationMode=2` + `WaitForShadersBeforeStarting` flags unless it says synchronous):
+
+| run | VI > 25 ms | > 50 ms | worst |
+|---|---|---|---|
+| Brawl before, synchronous (as on Windows), cold | 12 | 10 | 1,502 ms |
+| Brawl before, cold | 5 | 4 | 102 ms |
+| Brawl before, warm | 4 | 2 | 95 ms (the JIT: 68 + 95 at the stage, 46 at P2's entrance) |
+| Brawl after, first match ever (no list yet) | 5 | 4 | 102 ms |
+| Brawl after, warm (4 runs) | 0 | 0 | 22.6-24.9 ms |
+| Brawl after, a new binary (Metal cold) | 0 | 0 | 22.8 ms (boot 8.7 s instead of 2.1) |
+| P+ before, synchronous, cold | 10 | 10 | 538 ms |
+| P+ before, warm | 2 | 2 | 88 ms |
+| P+ after, warm (4 runs) | 2 | 0 | 30.9-31.6 ms |
+
+The game's own long frame at the end of loading (100 ms in Brawl, 84 ms in P+) remains, behind the
+loading image. Emulation is unchanged: per-frame RAM hashes with the warm-up equal 0.3.7's (Brawl
+10,800 frames, P+ 9,000) and a run without it over two Brawl matches (19,020 frames, the second
+with other fighters); loopbacks pass (Brawl 936 rollbacks, P+ 579), and so do synctests across the
+match start (both games, 4,851 re-run frames each).
+
 ## Online menu
 
 Luis's rules: Play Online works in both games, through the game's own menus and never a new
