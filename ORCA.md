@@ -553,8 +553,9 @@ Ishiiruka, slippi-rust-extensions):
     clock. A keepalive goes out after 200 ms idle.
 - **Sending.** `YouGameRoom::Send` queues the relay copy as before, and seals and sends the direct
   copy at once on the emulator thread, under DirectLink's own lock, never the room's, with no
-  2 ms poll and no 10 ms send gap. Each link logs its longest send when it closes: 0.15-0.4 ms
-  in the Mac runs below, twice 2.4-2.6 ms (a preempted thread). While a session stalls (it asks every
+  2 ms poll and no 10 ms send gap. Each link logs its sends' cost when it closes: 70-100 us on
+  average on an M-series Mac (sealing, libjuice and `sendto`), rarely over 1 ms (1 in 3,500 in
+  one run; a preempted thread), at most 4.5 ms seen. While a session stalls (it asks every
   millisecond), a direct copy goes out for new inputs, a checksum or a leave, else every 4 ms.
   Datagrams are marked DSCP EF as Slippi's are (not on Windows: libjuice can't, and qWAVE is a
   follow-up).
@@ -606,6 +607,26 @@ Ishiiruka, slippi-rust-extensions):
 - Not yet: playing on through a room disconnect while direct links are up (Slippi drops its
   matchmaking connection once matched); feeding the link's round trip into the delay rule (it
   still uses the relay's); a binary packet codec; thinning the relay copy.
+
+Measured on the Mac (2026-10-03), two Orcas on one machine, Brawl, Mario vs Link fuzzed:
+
+| Run | Path | Link round trip | Rollbacks | Stalls | Desyncs |
+|---|---|---|---|---|---|
+| Prod rooms (`xplat.py`, real tickets, 117 s together) | direct host/host all 117 s | 0 ms (relay ping 13-14 ms) | 0 and 0 | 0 | 0 |
+| Same, `ORCA_DIRECT=0` | relay | - (ping 26-28 ms) | 7 host, 65 joiner | 4 (joiner) | 0 |
+| Dev room (`direct-link.py`, 40 s of match) | direct | 0 ms | 0.00/s both | 0 | 0 |
+| Same, friend `ORCA_DIRECT=0` | relay (negotiated off) | - (ping 27-35 ms) | 0.57/s host, 6.20/s friend | 0 | 0 |
+| `ORCA_DIRECT_LOSS=20` both | direct | 0 ms | 0.00/s, 0.29/s | 0 | 0 |
+| `ORCA_TEST_NET_DELAY_MS=30` both | direct | 121 ms (30 ms out and in on both) | 6.3/s both | 0-1 | 0 |
+| `ORCA_DIRECT_FORCE=turn` both | TURN relay/relay (Cloudflare) | 23-24 ms (relay ping 12-14 ms) | 0.03/s both | 0 | 0 |
+
+- The full `direct-link.py` run: the link was up 0.4 s after the friend plugged in.
+  - `test-direct off`: both on the relay at once, no desync.
+  - `on`: back to direct (after the silent-link rebuilds the relay's packets set off).
+  - `in`: one way only.
+  - Three rebuilds: links 4-6, each up in well under a second, 0 refused, 0 replayed.
+- `dropin-commands.py` (join, leave, rejoin, the host leaving) and `dropin-rooms.py` pass with
+  links on. The friend saw 0 rollbacks over 135 s with the host.
 
 Tests:
 

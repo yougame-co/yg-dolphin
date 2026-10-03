@@ -759,7 +759,10 @@ struct Link : std::enable_shared_from_this<Link>
   std::optional<Clock::time_point> last_rx;
   Clock::time_point last_tx{};
   u64 sent = 0, received = 0, auth_drops = 0, replays = 0;
+  // Sends on the caller's thread (sealing included): the longest, the total, and how many took
+  // over a millisecond.
   int max_send_us = 0;
+  u64 send_us_total = 0, sends_timed = 0, slow_sends = 0;
 
   bool Selected() const
   {
@@ -1077,6 +1080,9 @@ struct DirectLink::Impl
           std::chrono::duration_cast<std::chrono::microseconds>(Clock::now() - start).count());
       std::lock_guard link_lock(link->m);
       link->max_send_us = std::max(link->max_send_us, us);
+      link->send_us_total += static_cast<u64>(us);
+      ++link->sends_timed;
+      link->slow_sends += us > 1000;
     }
   }
 
@@ -1500,10 +1506,14 @@ struct DirectLink::Impl
     {
       std::lock_guard lock(link->m);
       NOTICE_LOG_FMT(NETPLAY,
-                   "Orca direct link: seat {} link {} closed: {} sent, {} received, {} refused, "
-                   "{} replayed, longest send {} us",
-                   peer.slot + 1, link->generation, link->sent, link->received, link->auth_drops,
-                   link->replays, link->max_send_us);
+                     "Orca direct link: seat {} link {} closed: {} sent, {} received, {} refused, "
+                     "{} replayed; sends {:.1f} us on average, longest {} us, {} over 1 ms",
+                     peer.slot + 1, link->generation, link->sent, link->received, link->auth_drops,
+                     link->replays,
+                     link->sends_timed ? static_cast<double>(link->send_us_total) /
+                                             static_cast<double>(link->sends_timed) :
+                                         0.0,
+                     link->max_send_us, link->slow_sends);
     }
     juice_agent_t* agent;
     {
