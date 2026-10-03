@@ -136,15 +136,15 @@ void JitArm64::psq_lXX(UGeckoInstruction inst)
     // an SNaN pattern loaded by psq_l and stored again by stfs or stfd (or moved by fmr first)
     // came out 0x7FC00001 on a PC and 0x7F800001 on a Mac. In a session the quiet bit of each NaN
     // lane is set here, as on a PC. FCMEQ only reads (a denormal still equals itself when FPCR.FZ
-    // flushes it), so the other values stay bit for bit. Only a float type can load a NaN. Q0,
-    // locked above, is the one temporary.
+    // flushes it), so the other values stay bit for bit. Only a float type can load a NaN. About
+    // 1% of Brawl's frame time on an M4 (perf.mjs, within its noise).
     const ARM64Reg VS_d = EncodeRegToDouble(VS);
+    const auto quiet_reg = fpr.GetScopedReg();
+    const ARM64Reg quiet = EncodeRegToDouble(quiet_reg);
     m_float_emit.FCMEQ(32, ARM64Reg::D0, VS_d, VS_d);  // the lanes that are numbers: all ones
-    m_float_emit.NOT(ARM64Reg::D0, ARM64Reg::D0);      // the NaN lanes: all ones
-    m_float_emit.SHL(32, ARM64Reg::D0, ARM64Reg::D0, 22);
-    m_float_emit.BIC(32, ARM64Reg::D0, 0xFF, 24);
-    m_float_emit.BIC(32, ARM64Reg::D0, 0x80, 16);  // 0x00400000, the quiet bit, in NaN lanes
-    m_float_emit.ORR(VS_d, VS_d, ARM64Reg::D0);
+    m_float_emit.ORR(quiet, VS_d, VS_d);
+    m_float_emit.ORR(32, quiet, 0x40, 16);        // every lane with the quiet bit (0x00400000)
+    m_float_emit.BIF(VS_d, quiet, ARM64Reg::D0);  // which the NaN lanes take
   }
 
   const ARM64Reg VS_again = fpr.RW(inst.RS, RegType::Single, true);
