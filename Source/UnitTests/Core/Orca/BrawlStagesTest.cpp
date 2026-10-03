@@ -91,7 +91,7 @@ FakeMemory Game(std::string_view scene, u32 page = 0)
   m.Fill(TASK, 0x300);
   m.Write32(TASK + 0x200, CURSOR);
   m.Write32(TASK + 0x228, page);
-  m.Write32(TASK + 0x230, SLOTS);
+  m.Write8(TASK + 0x230, SLOTS);
   m.Write32(TASK + 0x244, 0);
   m.Write32(TASK + 0x248, 0xFFFFFFFF);
   m.Write32(TASK + 0x278, 0xF0);
@@ -114,7 +114,7 @@ FakeMemory Game(std::string_view scene, u32 page = 0)
     m.Write8(MELEE + 0x98 + port * 0x5C + 1, port < 2 ? 0 : 3);
   m.Write8(MELEE + 0x98, MARIO);
   m.Write8(MELEE + 0x98 + 0x5C, LINK);
-  m.Fill(RESULT, 0x24 + 4 * 0x2AC);
+  m.Fill(RESULT, 0x24 + 4 * 0x2AC + 4);
   m.Fill(kRegion, kRegionSize, 0x60);  // the dead code that's there before Orca writes it
   return m;
 }
@@ -128,7 +128,7 @@ void Hover(FakeMemory& m, int stage)
 {
   const Tile& t = TileFor(stage);
   m.Write32(TASK + 0x228, t.page);
-  m.Write32(TASK + 0x244, 0);
+  m.Write32(TASK + 0x244, t.slot + 2u);  // the hovered item (page 0: the slot + 2)
   m.Write32(TASK + 0x248, t.slot);
 }
 

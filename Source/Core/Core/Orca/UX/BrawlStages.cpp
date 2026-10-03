@@ -148,7 +148,7 @@ namespace
 {
 // ---- The stage select's layout (Brawl rev 2, an empty save; from the probes) ----
 // The task: +0x200 the cursor (+0x3C x, +0x40 y, floats), +0x224 the select state (0 choosing),
-// +0x228 the page (0 Brawl's stages, 1 Melee's), +0x230 the icons on the page, +0x250 frames
+// +0x228 the page (0 Brawl's stages, 1 Melee's), +0x230 the icons on the page (u8), +0x250 frames
 // since the screen opened, +0x615C the stage kind it took.
 constexpr u32 TASK_CURSOR = 0x200;
 constexpr u32 CURSOR_X = 0x3C;
@@ -168,19 +168,23 @@ constexpr u32 ICON_B = 0x10;
 constexpr u32 ICON_FRAME = 0x18;
 constexpr u32 GREY = 0x00000000;  // 0.0f
 
-// TBD(probe): filled from the stage select probes.
+// Brawl rev 2's stage select (probes, empty save): page 0 holds Brawl's 31 stages in the order of
+// MuStageTblAccess's table (0x806B9298: per page a list of the select's stage ids, 0x806B99D8 for
+// page 0, 0x806B9A58 for page 1), page 1 Melee's 10. The cursor runs over x -30..30, y -19.5..19.5
+// (up is +y); icons are about 6.2 wide. The points are inside each icon where the probes' cursor
+// sweeps hovered it.
 constexpr std::array<Tile, RS::BRAWL_STAGES> kTiles{{
-    {0, 0, 0, 0},  // Battlefield
-    {1, 0, 0, 0},  // Pokemon Stadium
-    {0, 0, 0, 0},  // Lylat Cruise
-    {0, 0, 0, 0},  // Smashville
-    {0, 0, 0, 0},  // Yoshi's Island
-    {0, 0, 0, 0},  // Final Destination
-    {0, 0, 0, 0},  // Delfino Plaza
+    {0, 0, -1.5f, 15.74f},   // Battlefield (stage id 0x00)
+    {1, 5, 0, 0},            // Pokemon Stadium (0x24) TBD(probe)
+    {0, 13, 11.2f, 4.46f},   // Lylat Cruise (0x0E)
+    {0, 20, 23.0f, -3.06f},  // Smashville (0x1A)
+    {0, 11, -1.6f, 4.46f},   // Yoshi's Island (0x0C)
+    {0, 1, 4.7f, 15.74f},    // Final Destination (0x01)
+    {0, 2, 11.3f, 15.74f},   // Delfino Plaza (0x02)
 }};
-// The page button, in the cursor's coordinates (the same on both pages).
-constexpr float PAGE_BUTTON_X = 0;
-constexpr float PAGE_BUTTON_Y = 0;
+// The page button (Melee Stages / Brawl Stages), bottom right on both pages.
+constexpr float PAGE_BUTTON_X = 23.0f;
+constexpr float PAGE_BUTTON_Y = -18.11f;
 }  // namespace
 
 const Tile& TileFor(int stage)
@@ -263,8 +267,10 @@ int StageAt(u32 page, s32 slot)
 
 int HoveredStage(const GuestMemory& m, const View& v)
 {
-  if (!v.present || v.hovered_item == ITEM_PAGE || v.hovered_item == ITEM_RANDOM ||
-      v.hovered_item == ITEM_BACK || v.selected < 0)
+  // +0x248 keeps the last slot after the cursor leaves the icons: only a stage item (not 0, the
+  // page button, Random or Back) means the cursor is on that slot.
+  if (!v.present || v.hovered_item == 0 || v.hovered_item == ITEM_PAGE ||
+      v.hovered_item == ITEM_RANDOM || v.hovered_item == ITEM_BACK || v.selected < 0)
   {
     return -1;
   }
@@ -377,7 +383,7 @@ void SelectFrame(GuestMemory& m, const View& v, State* s)
   const u16 allowed = s->progress.picked >= 0 ? Bit(s->progress.picked) :
                                                 RS::Allowed(Rules(), plan, s->progress, s->set);
   const u32 page = m.Read32(v.task + TASK_PAGE);
-  const u32 count = std::min<u32>(m.Read32(v.task + TASK_ICON_COUNT), 64);
+  const u32 count = std::min<u32>(m.Read8(v.task + TASK_ICON_COUNT), 64);
   for (u32 slot = 0; slot < count; ++slot)
   {
     const int stage = StageAt(page, static_cast<s32>(slot));
