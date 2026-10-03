@@ -66,9 +66,15 @@ void Init()
           p.name.clear();
       }
       WriteNameTags(guard, early);
-      return;
     }
-    WriteNameTags(guard, ports);
+    else
+    {
+      WriteNameTags(guard, ports);
+    }
+    // Last, after every other writer here: a toggled patch group follows its condition as this
+    // boundary's writers left it, so the hook run again at this boundary (a re-run from the
+    // snapshot saved here) decides the same and writes nothing new (GamePatches.h).
+    ApplyToggledGamePatches(guard);
   });
   // Nothing is presented while the game waits for a friend: show the last frame again, with the
   // overlay's "Waiting for <name>..." on it.
