@@ -66,9 +66,9 @@ enum class Ruleset : u8
   PPlus = 2,  // Project+ 2024 Recommended
 };
 
-// What the match block's set state says about the game about to be played. The set state is the
-// ranked rules' (Phase 2: game number, score, each game's winner); ReadSet() is the one place that
-// reads it.
+// What the match block's set state says about the game about to be played: a ranked set that is
+// still open, the game number (one more than the games won: a tied game is played again), and the
+// last decided game's winner. ReadSet() is the one place that reads it.
 struct SetView
 {
   Ruleset ruleset = Ruleset::None;  // None: no ranked set on this game; nothing here acts
@@ -117,11 +117,31 @@ struct State
 // 45 seconds a pick (the ranked rules' character timers), at the game's 60 frames a second.
 constexpr int PICK_FRAMES = 45 * 60;
 
-// The order's 16 bytes, the last of the match block (FreeSpace.h): +0 kMagic, +4 game, +5 step,
-// +6 first, +7 locked, +8 since, +0xC elapsed, +0xE 0. Anything without the magic reads as Idle.
-constexpr u32 kArea = FreeSpace::kMatchBlock.end - 0x10;
+// The order's 16 bytes, right after the match block (FreeSpace.h): the same dead code of
+// sqNetAnyOkiraku::setNext, short of kMatchBlockLimit, so the rules tracks' own layouts of the
+// 512-byte block can't collide with it. +0 kMagic, +4 game, +5 step, +6 first, +7 locked, +8 since,
+// +0xC elapsed, +0xE 0. Anything without the magic reads as Idle.
+constexpr u32 kArea = FreeSpace::kMatchBlock.end;
+constexpr u32 kAreaSize = 0x10;
 constexpr u32 kMagic = 0x5947434F;  // "YGCO"
-static_assert(FreeSpace::kMatchBlock.Contains(kArea) && kArea % 16 == 0);
+static_assert(kArea % 16 == 0 && kArea + kAreaSize <= FreeSpace::kMatchBlockLimit &&
+              FreeSpace::Detail::Free({kArea, kArea + kAreaSize}));
+
+// The match block's header and the ranked set's state, as ReadSet() reads them (offsets from
+// FreeSpace::kMatchBlock.begin; the header as every rules track writes it, the set state as the
+// ranked sets track lays it out, its MatchBlock.h).
+namespace Block
+{
+constexpr u32 MAGIC = 0x00;  // u32 "YGM1"
+constexpr u32 MAGIC_VALUE = 0x59474D31;
+constexpr u32 VERSION = 0x04;  // u8 1
+constexpr u32 MODE = 0x05;     // u8: 2 ranked
+constexpr u32 RULESET = 0x06;  // u8: 1 Brawl (Supernova 2025), 2 Project+ (2024)
+constexpr u32 SET_WINS = 0x21;         // u8[2]: games won by ports 1 and 2
+constexpr u32 SET_DONE = 0x23;         // u8: 0 the set is open
+constexpr u32 SET_LAST_WINNER = 0x25;  // u8: the last decided game's winning port, 0xFF none
+constexpr u8 MODE_RANKED = 2;
+}  // namespace Block
 
 // The step machine: the state after this boundary, from the state before it. Pure. On the
 // character select of a ranked set's game 2 or later it starts the order (Project+: the winner

@@ -240,10 +240,26 @@ SetView ReadSet(const GuestMemory& memory)
   // Harness runs: the test knob's set.
   if (TestSet().ruleset != Ruleset::None)
     return TestSet();
-  // The ranked set state lives in the match block (the ranked rules' Phase 2), which this branch
-  // doesn't have yet: until it does, no set, and the order never runs.
-  (void)memory;
-  return {};
+  const GuestMemory& m = memory;
+  const u32 base = FreeSpace::kMatchBlock.begin;
+  if (!m.Valid(base + Block::MAGIC) || !m.Valid(base + Block::SET_LAST_WINNER) ||
+      m.Read32(base + Block::MAGIC) != Block::MAGIC_VALUE || m.Read8(base + Block::VERSION) != 1 ||
+      m.Read8(base + Block::MODE) != Block::MODE_RANKED || m.Read8(base + Block::SET_DONE) != 0)
+  {
+    return {};
+  }
+  SetView set;
+  const u8 ruleset = m.Read8(base + Block::RULESET);
+  if (ruleset == static_cast<u8>(Ruleset::Brawl))
+    set.ruleset = Ruleset::Brawl;
+  else if (ruleset == static_cast<u8>(Ruleset::PPlus))
+    set.ruleset = Ruleset::PPlus;
+  else
+    return {};
+  set.game = m.Read8(base + Block::SET_WINS) + m.Read8(base + Block::SET_WINS + 1) + 1;
+  const u8 last = m.Read8(base + Block::SET_LAST_WINNER);
+  set.last_winner = last <= 1 ? last : -1;
+  return set;
 }
 
 CssView ReadCss(const GuestMemory& m)
@@ -289,7 +305,7 @@ CssView ReadCss(const GuestMemory& m)
 State ReadState(const GuestMemory& m)
 {
   State s;
-  if (!m.Valid(kArea) || !m.Valid(kArea + 0xF) || m.Read32(kArea + AT_MAGIC) != kMagic)
+  if (!m.Valid(kArea) || !m.Valid(kArea + kAreaSize - 1) || m.Read32(kArea + AT_MAGIC) != kMagic)
     return s;
   const u8 step = m.Read8(kArea + AT_STEP);
   if (step > static_cast<u8>(Step::Both))
@@ -305,7 +321,7 @@ State ReadState(const GuestMemory& m)
 
 int WriteState(GuestMemory& m, const State& s)
 {
-  if (!m.Valid(kArea) || !m.Valid(kArea + 0xF))
+  if (!m.Valid(kArea) || !m.Valid(kArea + kAreaSize - 1))
     return 0;
   int changed = 0;
   const auto put8 = [&](u32 at, u8 v) {

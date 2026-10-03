@@ -42,7 +42,7 @@ public:
 };
 
 // The match block's last 16 bytes as the game leaves them: dead code, never the magic.
-FakeMemory Block()
+FakeMemory DeadArea()
 {
   FakeMemory m;
   for (u32 i = 0; i < 16; ++i)
@@ -227,7 +227,7 @@ TEST(OrcaCharOrder, LineSaysWhoseTurnAndTheTimeLeft)
 
 TEST(OrcaCharOrder, StateBytesRoundTripAndWriteOnlyWhatDiffers)
 {
-  FakeMemory m = Block();
+  FakeMemory m = DeadArea();
   EXPECT_EQ(ReadState(m), State{});  // dead code: no magic
   const State s = St(2, Step::Second, 1, 0x01020304, 0x0506, 2);
   EXPECT_EQ(WriteState(m, s), 16);
@@ -301,4 +301,39 @@ TEST(OrcaCharOrder, BrawlLine)
   EXPECT_EQ(Line(kBrawl2, Css(), St(2, Step::Both, 1, 0, 600, 1), ports),
             "Waiting for BO · 0:35");
   EXPECT_EQ(Line(kBrawl2, Css(), St(2, Step::Both, 1, 0, 0, 2), {}), "Characters · 0:45");
+}
+
+TEST(OrcaCharOrder, ReadsTheSetFromTheMatchBlock)
+{
+  FakeMemory m;
+  const u32 base = Orca::UX::FreeSpace::kMatchBlock.begin;
+  for (u32 i = 0; i < 0x40; ++i)
+    m.bytes[base + i] = 0;
+  EXPECT_EQ(ReadSet(m), SetView{});  // no magic: friends, solo
+  m.Write32(base + Block::MAGIC, Block::MAGIC_VALUE);
+  m.Write8(base + Block::VERSION, 1);
+  m.Write8(base + Block::MODE, Block::MODE_RANKED);
+  m.Write8(base + Block::RULESET, 2);
+  m.Write8(base + Block::SET_LAST_WINNER, 0xFF);
+  EXPECT_EQ(ReadSet(m), (SetView{Ruleset::PPlus, 1, -1}));
+  // Port 2 won game 1.
+  m.Write8(base + Block::SET_WINS + 1, 1);
+  m.Write8(base + Block::SET_LAST_WINNER, 1);
+  EXPECT_EQ(ReadSet(m), (SetView{Ruleset::PPlus, 2, 1}));
+  m.Write8(base + Block::RULESET, 1);
+  m.Write8(base + Block::SET_WINS, 1);
+  m.Write8(base + Block::SET_LAST_WINNER, 0);
+  EXPECT_EQ(ReadSet(m), (SetView{Ruleset::Brawl, 3, 0}));
+  // Casual, a decided set, an unknown ruleset or version: no set.
+  m.Write8(base + Block::MODE, 1);
+  EXPECT_EQ(ReadSet(m), SetView{});
+  m.Write8(base + Block::MODE, Block::MODE_RANKED);
+  m.Write8(base + Block::SET_DONE, 1);
+  EXPECT_EQ(ReadSet(m), SetView{});
+  m.Write8(base + Block::SET_DONE, 0);
+  m.Write8(base + Block::RULESET, 7);
+  EXPECT_EQ(ReadSet(m), SetView{});
+  m.Write8(base + Block::RULESET, 1);
+  m.Write8(base + Block::VERSION, 2);
+  EXPECT_EQ(ReadSet(m), SetView{});
 }
