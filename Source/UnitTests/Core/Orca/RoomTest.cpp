@@ -182,7 +182,8 @@ TEST(OrcaRoom, PortValuesRoundTrip)
   Packet back;
   ASSERT_TRUE(DecodePacket(EncodePacket(packet), &back));
   EXPECT_EQ(back.values_ack, 7);
-  EXPECT_FALSE(DecodePacket(R"({"k":"p","s":1,"f":0,"c":0,"p":"","a":[-1,-1,-1,-1],"va":-3})", &back));
+  EXPECT_FALSE(
+      DecodePacket(R"({"k":"p","s":1,"f":0,"c":0,"p":"","a":[-1,-1,-1,-1],"va":-3})", &back));
 }
 
 TEST(OrcaRoom, RejectsMalformedPackets)

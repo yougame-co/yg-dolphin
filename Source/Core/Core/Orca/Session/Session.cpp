@@ -273,11 +273,12 @@ std::string Session::Describe() const
   for (int s = 0; s < m_config.seats; ++s)
   {
     const SeatPlan& p = m_plan[s];
-    out += fmt::format("; seat {} plug {} unplug {} live {} received {} acked {} at {} history {}/{} "
-                       "values {}/{}",
-                       s + 1, n(p.plug_from), n(p.unplug_from), n(p.live_from), m_received[s],
-                       m_acked[s], m_remote_frame[s], m_history_sent[s], m_history_acked[s],
-                       m_values_acked[s], m_values_required[s]);
+    out +=
+        fmt::format("; seat {} plug {} unplug {} live {} received {} acked {} at {} history {}/{} "
+                    "values {}/{}",
+                    s + 1, n(p.plug_from), n(p.unplug_from), n(p.live_from), m_received[s],
+                    m_acked[s], m_remote_frame[s], m_history_sent[s], m_history_acked[s],
+                    m_values_acked[s], m_values_required[s]);
   }
   return out;
 }

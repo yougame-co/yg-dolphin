@@ -334,8 +334,8 @@ public:
   // The host decides each port's values from the frame its controller plugs in (the app keeps
   // them, with their version: Rollback/OnlineMatch.cpp "Ports"); every machine must hold them
   // before it runs that frame. Host: `seat` plugs in only once every player in the session
-  // (the newcomer included) acknowledges holding values `version` or newer, so its plug frame, which
-  // each player hears of before running it, comes after the values it then writes. A player:
+  // (the newcomer included) acknowledges holding values `version` or newer, so its plug frame,
+  // which each player hears of before running it, comes after the values it then writes. A player:
   // the newest version it holds, which its packets acknowledge. Versions only grow.
   void RequireValues(int seat, int version);
   void SetValuesHeld(int version);

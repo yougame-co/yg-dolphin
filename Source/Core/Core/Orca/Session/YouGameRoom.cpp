@@ -2547,7 +2547,12 @@ struct YouGameRoom::Impl
       }
       if (p->second.announced)
       {
-        Emit({PeerEvent::Kind::Left, p->second.slot, p->second.drop_in_host, p->second.name, {}, {},
+        Emit({PeerEvent::Kind::Left,
+              p->second.slot,
+              p->second.drop_in_host,
+              p->second.name,
+              {},
+              {},
               p->second.bye});
       }
       {
@@ -2775,7 +2780,8 @@ struct YouGameRoom::Impl
           room = code;
         }
         SetStatus(fmt::format("Room {}: {} is here", room, peer.name.empty() ? "a friend" : peer.name));
-        Emit({PeerEvent::Kind::Arrived, peer.slot, peer.drop_in_host, peer.name, peer.controls, {}});
+        Emit(
+            {PeerEvent::Kind::Arrived, peer.slot, peer.drop_in_host, peer.name, peer.controls, {}});
         // The page's lobby shows the room ready now, not at its next roster change.
         Publish();
       }

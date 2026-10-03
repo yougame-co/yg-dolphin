@@ -25,8 +25,8 @@ constexpr u32 TAG_RUMBLE = 0x0C;
 constexpr u32 TAG_CONTROLS = 0x14;
 constexpr u32 CONTROLS_TEMPLATE = 0x80406938;
 constexpr u32 CONTROLS_TEMPLATE_SIZE = CONTROLS_LAYOUT_SIZE;
-// The layout's flag bytes (offsets into it) and the bits each may hold: GameCube tap jump, the
-// Nunchuk's tap jump (0x40) and shake smash (0x80), Classic tap jump. Every other byte is an action.
+// The layout's flag bytes (offsets into it): GameCube tap jump, the Nunchuk's tap jump (0x40) and
+// shake smash (0x80), Classic tap jump. Every other byte is an action.
 constexpr u32 FLAGS_GAMECUBE = 11, FLAGS_NUNCHUK = 0x1F, FLAGS_CLASSIC = 0x2C;
 // The highest action the game's menus (and Project+'s) set: 0xE is "none".
 constexpr u8 MAX_ACTION = 0x0E;
@@ -384,8 +384,8 @@ void ReadOwnControlsFrame(const Core::CPUThreadGuard& guard,
     return;
   // This machine's own port: a read for what this player sends, never a write (the one place
   // PortInfo.remote decides anything, and it decides only what this machine reads).
-  const auto own = std::find_if(ports.begin(), ports.end(),
-                                [](const Events::PortInfo& p) { return !p.remote; });
+  const auto own =
+      std::find_if(ports.begin(), ports.end(), [](const Events::PortInfo& p) { return !p.remote; });
   if (own == ports.end())
     return;
   static std::u16string s_last_worn;

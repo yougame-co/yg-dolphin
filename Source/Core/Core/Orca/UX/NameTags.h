@@ -31,11 +31,11 @@ class CPUThreadGuard;
 //     (0 attack, 1 special, 2 jump, 3 shield, 4 grab, 5 smash, 9 taunt, 0xA-0xC the taunts,
 //     0xE none);
 //   - as a match starts (scMelee's first frame) the game copies the layout of each port's tag into
-//     its per-port table (0x805B7480, pointed to by 0x805A00C8: the four GameCube layouts, then each
-//     port's other three), which the match's input reads: what a port's tag holds when the match
-//     starts is what that port plays with (a harness run that turned a tag's A into jump and its
-//     tap jump off on the character select changed only that port's row, at scMelee frame 1, and
-//     the tap-jump bit of every input the match buffered for it; Project+ alike);
+//     its per-port table (0x805B7480, pointed to by 0x805A00C8: the four GameCube layouts, then
+//     each port's other three), which the match's input reads: what a port's tag holds when the
+//     match starts is what that port plays with (a harness run that turned a tag's A into jump and
+//     its tap jump off on the character select changed only that port's row, at scMelee frame 1,
+//     and the tap-jump bit of every input the match buffered for it; Project+ alike);
 //   - the character select: scene manager (0x805A0060) +4 -> the scene ("scSelctCharacter"),
 //     +0x400 -> muSelCharTask, +0x44 + 4 * i -> player area i (GameCube port i), whose +0x1B0 is
 //     i again, +0x1B4 the player kind (1: a human has joined), +0x1C8 the tag (-1: none);

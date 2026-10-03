@@ -1281,8 +1281,8 @@ TEST(OrcaUXNameTags, APortsOwnControlsGoIntoTheTagItGets)
   FakeBrawl m;
   m.Join(0);
   m.Join(1);
-  const std::vector<Orca::Events::PortInfo> ports{
-      {0, "luis", false, {}}, {1, "ada", true, Profile(0, CustomLayout())}};
+  const std::vector<Orca::Events::PortInfo> ports{{0, "luis", false, {}},
+                                                  {1, "ada", true, Profile(0, CustomLayout())}};
   m.recording = true;
   EXPECT_EQ(ApplyNameTags(m, ports), 2);
   // Port 0 carries nothing: the game's defaults, rumble on.
@@ -1340,12 +1340,12 @@ TEST(OrcaUXNameTags, ControlsOnlyAsTheGamesMenusSetThem)
   // A profile from another machine with bytes no menu sets: rumble 5, actions past 0xE, stray
   // bits in the flag bytes. Each becomes what the menus allow, else the game's default.
   std::array<u8, 0x2D> wild = CustomLayout();
-  wild[0] = 0x0F;         // L: no such action
-  wild[8] = 0xFF;         // C-stick
-  wild[11] = 0xFF;        // GameCube tap jump: only 0x80
-  wild[0x1F] = 0xFF;      // Nunchuk tap jump and shake smash: only 0xC0
-  wild[0x2C] = 0x7F;      // Classic tap jump: only 0x80
-  wild[0x20] = 0x0E;      // "none" is fine
+  wild[0] = 0x0F;     // L: no such action
+  wild[8] = 0xFF;     // C-stick
+  wild[11] = 0xFF;    // GameCube tap jump: only 0x80
+  wild[0x1F] = 0xFF;  // Nunchuk tap jump and shake smash: only 0xC0
+  wild[0x2C] = 0x7F;  // Classic tap jump: only 0x80
+  wild[0x20] = 0x0E;  // "none" is fine
   FakeBrawl m;
   m.Join(0);
   ASSERT_EQ(ApplyNameTags(m, {{0, "luis", false, Profile(5, wild)}}), 1);
