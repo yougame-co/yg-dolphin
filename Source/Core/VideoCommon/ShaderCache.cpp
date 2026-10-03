@@ -3,6 +3,7 @@
 
 #include "VideoCommon/ShaderCache.h"
 
+#include <algorithm>
 #include <chrono>
 #include <thread>
 #include <tuple>
@@ -53,6 +54,11 @@ constexpr std::chrono::seconds BOOT_WAIT{60};
 
 void DrawCompileProgress(size_t completed, size_t total)
 {
+  // Orca: headless (-p headless with a real backend, the Mac's shader tests) has no ImGui context,
+  // and ImGui asserts without one.
+  if (!ImGui::GetCurrentContext())
+    return;
+
   const float center_x = ImGui::GetIO().DisplaySize.x * 0.5f;
   const float center_y = ImGui::GetIO().DisplaySize.y * 0.5f;
   const float scale = ImGui::GetIO().DisplayFramebufferScale.x;
@@ -256,19 +262,40 @@ void ShaderCache::WaitForBootCompile()
   const size_t threads = g_ActiveConfig.GetShaderPrecompilerThreads();
 
   // Pipelines still compiling (the flag a pipeline's work item clears when retrieved): the ones
-  // from the UID cache, and the ubershaders.
+  // from the UID cache, and the ubershaders. And the shader stages they wait on, for the progress
+  // shown: a pipeline whose stages weren't ready queues itself again behind every stage of its
+  // priority, so the pipelines alone sat at 0 until the very end (D3D: 30 s, Metal: 8 s).
+  struct Pending
+  {
+    size_t specialized = 0;
+    size_t uber = 0;
+    size_t stages = 0;
+    size_t Sum() const { return specialized + uber + stages; }
+  };
   const auto pending = [this] {
-    std::pair<size_t, size_t> n{};
+    Pending n;
     for (const auto& [uid, entry] : m_gx_pipeline_cache)
-      n.first += entry.second;
+      n.specialized += entry.second;
     for (const auto& [uid, entry] : m_gx_uber_pipeline_cache)
-      n.second += entry.second;
+      n.uber += entry.second;
+    const auto stages = [&n](const auto& cache) {
+      for (const auto& [uid, entry] : cache.shader_map)
+        n.stages += entry.pending;
+    };
+    stages(m_vs_cache);
+    stages(m_ps_cache);
+    stages(m_uber_vs_cache);
+    stages(m_uber_ps_cache);
     return n;
   };
   const auto start = Clock::now();
-  const auto [first_specialized, first_uber] = pending();
-  const size_t total = first_specialized + first_uber;
-  size_t specialized = first_specialized, uber = first_uber;
+  const Pending first = pending();
+  const size_t total = first.specialized + first.uber;
+  Pending left = first;
+  const auto progress = [&] {
+    const size_t units = std::max(first.Sum(), left.Sum());
+    return std::pair{units - left.Sum(), units};
+  };
   auto next_line = start + SHOW_AFTER;
   bool said = false;
   bool done = false;
@@ -278,7 +305,7 @@ void ShaderCache::WaitForBootCompile()
     // Completed work is retrieved here, as each frame does at runtime: a pipeline whose shaders
     // weren't compiled yet queues itself again, and the flags above are cleared.
     m_async_shader_compiler->RetrieveWorkItems();
-    std::tie(specialized, uber) = pending();
+    left = pending();
     if (!m_async_shader_compiler->HasPendingWork() && !m_async_shader_compiler->HasCompletedWork())
     {
       done = true;
@@ -290,18 +317,22 @@ void ShaderCache::WaitForBootCompile()
     const auto now = Clock::now();
     if (now - start >= limit)
       break;
+    const auto [compiled, units] = progress();
     if (now - start >= SHOW_AFTER)
-      DrawCompileProgress(total - specialized - uber, total);
+      DrawCompileProgress(compiled, units);
     if (now >= next_line)
     {
-      Orca::Status::Shaders(total - specialized - uber, total);
+      Orca::Status::Shaders(compiled, units);
       said = true;
       next_line += SHOW_AFTER;
     }
     std::this_thread::sleep_for(CHECK_INTERVAL);
   }
   if (said)
-    Orca::Status::Shaders(total - specialized - uber, total);
+  {
+    const auto [compiled, units] = progress();
+    Orca::Status::Shaders(compiled, units);
+  }
 
   const double seconds = std::chrono::duration<double>(Clock::now() - start).count();
   if (done)
@@ -309,16 +340,17 @@ void ShaderCache::WaitForBootCompile()
     NOTICE_LOG_FMT(VIDEO,
                    "Orca: compiled {} pipelines ({} ubershader) before the first frame in "
                    "{:.1f} s on {} threads",
-                   total, first_uber, seconds, threads);
+                   total, first.uber, seconds, threads);
   }
   else
   {
     NOTICE_LOG_FMT(VIDEO,
-                   "Orca: stopped waiting for shaders after {:.1f} s (limit {} s), {} of {} "
+                   "Orca: stopped waiting for shaders after {:.1f} s (limit {:.1f} s), {} of {} "
                    "pipelines compiled on {} threads; {} ({} ubershader) left to compile in the "
                    "background",
-                   seconds, std::chrono::duration_cast<std::chrono::seconds>(limit).count(),
-                   total - specialized - uber, total, threads, specialized + uber, uber);
+                   seconds, std::chrono::duration<double>(limit).count(),
+                   total - left.specialized - left.uber, total, threads,
+                   left.specialized + left.uber, left.uber);
   }
 
   // An extra Present to clear the screen
