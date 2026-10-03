@@ -1288,6 +1288,95 @@ synctests across the match start pass (4,851 re-run frames each) and so do loopb
 rollbacks, P+ 579). Rosetta translates Jit64's output, so this checks Jit64's logic, not Windows
 itself (its thread-stack guard, MSVC): the same checks on the PC are what close that.
 
+## Game patches
+
+`Data/Sys/Orca/<profile>.patches` (`Core/Orca/UX/GamePatches.h`): Orca's own changes to the game's
+code and data, forced on in every session (never the player's own codes, which a session drops)
+and hashed into the lobby key. They are applied at every frame boundary from the frame hook, first
+runs and re-runs, before anything there is saved, as a pure function of emulated memory. One 32-bit
+word per line, in hex; three kinds:
+
+| Kind | Lines | Written |
+|---|---|---|
+| Guarded group | `<address> <original> <value>`, each 4 bytes after the last | once, while every word is its original (a module just loaded, a default the game just set); a line whose original is its value only guards |
+| Data | `<address> * <value>` | every frame |
+| Toggled group | guarded lines between `when` lines and `end` | its values while the conditions hold, its originals again while they don't |
+
+**Toggled groups** (2026-10-03, for the online modes' locks: rules, and no way out of the
+character select while a queue match's header says casual or ranked; friends games untouched):
+
+```
+when 9017B96C == 59474D31               # the word is 'YGM1'
+when 9017B970 & FF000000 != 00000000    # and its masked word isn't 0
+8119A120 2C030000 2C030000              # (an example) cmpwi r3, 0 (guard)
+8119A124 4082000C 4800000C              # bne -> b while both hold
+end
+```
+
+- A block's `when` lines must all hold: `when <address> [& <mask>] ==|!= <value>`, one aligned
+  word of MEM1 or MEM2 each, read at the boundary. An address that isn't mapped never holds.
+- At each boundary, a group whose words are all its originals gets its values while the conditions
+  hold; one whose words are all its values gets its originals back while they don't. Anything else
+  (its module not loaded, other code in that memory) is left alone, as a guarded group is; a guard
+  word (original = value) has to match in both states.
+- Both ways, every word goes through Dolphin's memory-patch path, which drops the JIT's copy, so
+  the code the game runs next is the code in memory. A rollback's restore drops the JIT's blocks
+  for every page it copies back, and a joiner's keyframe load is such a restore.
+- They are applied last in the frame hook (`ApplyToggledGamePatches`), after every other writer
+  there: a condition one of them sets at a boundary is followed at that same boundary, and the hook
+  run again at that boundary (a re-run from the snapshot saved there) writes nothing new.
+- Deterministic: the decision reads only the condition words and the group's own words. Both
+  machines, every re-run, and a friend who loaded a keyframe (memory carries whichever state the
+  code was in) decide the same at the same boundary.
+- Refused at load (the file is then "damaged", status `profile`): a `*` line in a block; a block
+  with no lines; a `when` after a block's line (no nesting); an `end` without a `when`; a file that
+  ends inside a block; a mask of 0, or a value with bits outside its mask; a condition that reads a
+  word the file writes (a toggle never switches its own condition, or another's); a toggled group
+  of one word, or one that changes nothing. A toggled group writes on its values as well as on its
+  originals, so a lone word would match other code by chance twice as often as a guarded one: the
+  words around a flip go in as guards. A group never spans a `when` or an `end`.
+- Meant for branch flips in the game's own code; real code goes into a cave. Conditions read fixed
+  addresses only (no pointer chains): the match block's header is meant to be at one.
+- Never on a word that game code also writes. Project+'s Gecko code handler writes its hooks again
+  every frame (a C2 code's branch, such as its lag fix's at `0x8002AD8C`): a group toggled there
+  lands at every boundary and is undone within the frame, and which of the two words the JIT runs
+  then depends on the machine's JIT history (a synctest that clears the JIT after each load showed
+  1,487 RAM mismatches in 850 frames). Any of Project+'s own hook sites the locks need (the plan
+  lists its Code Menu opener and the Giga Bowser and Wario-Man selections) needs another way if it
+  is such a hook: the codeset's data, or the input gate. A group that logs `on` at boundary after
+  boundary and never `off` is in such memory.
+- Adding the kind changed nothing the shipped files write, so the UX version stays `ux=6`. A file
+  that uses it is refused by older builds, and the file is in the lobby key, so they never meet.
+
+Tests: `OrcaGamePatches*` (the format and its refusals, toggling both ways, the guards, the
+conditions, idempotence and purity over a fake memory, and that the shipped files' groups land as
+before).
+
+Checked 2026-10-03 (Mac, arm64), with a test-only copy of each file that toggles the pad copy's lag
+fix every 8 frames by the frame counter at `0x805B50D8` (a word that counts frames in both games),
+so the code the game runs changes under every rollback window and keyframe: Brawl's 45-word lag-fix
+group inside a `when` block, and in Project+ the pad copy's 22 loads moved by 0x404 (its own hook
+at `0x8002AD8C` left alone, see above).
+- The shipped files hash as on `origin/matchmaking` on every frame (`YG_HASHLOG`: Brawl
+  `bf-mario-link-results.txt` 10,809 frames, Project+ `pplus-1v1.txt` 9,018).
+- Toggling, the same run twice (the second compiling its match from the JIT warm-up list) hashes
+  the same on every frame: Brawl 10,807 frames with 1,350 toggles, Project+ 9,021 with 1,127.
+- `YG_SYNCTEST=7`, 0 RAM mismatches: Brawl from main menu through character select, stage select
+  and the match start (1500-2700, 8,351 re-run frames, 1,384 toggles), the same with
+  `YG_SYNCTEST_CLEARJIT=1`, and the match's end through results back to character select
+  (9700-10800, 7,651); Project+ from boot through character select, stage select and the match
+  start (150-1000, 5,901) and the match's end through results (4200-5100, 6,251). With the JIT
+  cleared after each load, Project+ shows 28 RAM mismatches in the first seven frames of the
+  window wherever it starts (151-157 from 150, 171-177 from 170), the same frames on
+  `origin/matchmaking` without toggles, and none after them.
+- `YG_KEYFRAME_TEST`, every one PASS (the RAM loaded equals the capture; 30 re-run frames hash as
+  their first pass): Brawl at 1700 (character select), 1880 (stage select), 2050 (the match
+  loading), 5000 (the match), 10000 (results), 10500 (character select again); Project+ at 250,
+  400, 2000, 4500, 4900.
+- `Tools/orca/dropin-commands.py`, both games, PASS: Brawl joins at character select (frame 1,828)
+  and mid-match (9,118), 116 and 21 checksums matched, 14 rollbacks; Project+ at 1,975 and 7,385,
+  84 and 21, 22 rollbacks.
+
 ## Online menu
 
 Luis's rules: Play Online works in both games, through the game's own menus and never a new
