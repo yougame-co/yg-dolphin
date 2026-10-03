@@ -62,6 +62,14 @@ INPUT = os.path.join(HERE, "inputs", "pplus-dropin.txt" if a.pplus else "bf-drop
 ROOM = "dly" + "".join(random.choice(string.ascii_lowercase + string.digits) for _ in range(6))
 WORK = tempfile.mkdtemp(prefix="orca-delay-")
 T0 = time.time()
+# The test link's spikes and slow uplink (ORCA_TEST_NET_SPIKES, ORCA_TEST_NET_UPLINK) shape only the
+# room relay: a direct link (on by default since 0.3.8) applies neither, so its copy of every input
+# would arrive on time and hide them, and the gate would test nothing (or --expect-raise fail).
+# Those runs, and every --expect-raise run, keep both Orcas on the relay (ORCA_DIRECT=0) unless a
+# --host-env/--friend-env names ORCA_DIRECT itself.
+SHAPED = any(pair.partition("=")[0] in ("ORCA_TEST_NET_SPIKES", "ORCA_TEST_NET_UPLINK")
+             for pair in a.host_env + a.friend_env)
+RELAY_ONLY = SHAPED or bool(a.expect_raise)
 
 
 def log(text):
@@ -96,6 +104,8 @@ class Orca:
         }
         if a.pplus:
             env["ORCA_PROFILE"] = "PPLUS32"
+        if RELAY_ONLY:
+            env["ORCA_DIRECT"] = "0"
         env.update(env_extra)
         args = [a.bin, "-p", "headless", "-u", user, "-v", "Null",
                 "-C", "Dolphin.DSP.Backend=No Audio Output",
@@ -191,7 +201,8 @@ def fail(why):
     sys.exit(1)
 
 
-log(f"room {ROOM}, work {WORK}, at {a.at}, {a.minutes} min")
+log(f"room {ROOM}, work {WORK}, at {a.at}, {a.minutes} min"
+    + (", relay only (ORCA_DIRECT=0)" if RELAY_ONLY else ""))
 host = Orca("Host", {"ORCA_ROOM": ROOM, **env_pairs(a.host_env)})
 orcas.append(host)
 host.expect("orca caps", 30)

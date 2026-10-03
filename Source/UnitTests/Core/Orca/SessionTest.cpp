@@ -2353,7 +2353,7 @@ TEST(OrcaSessionDelay, StallsCountOnlyFromPlayersWaitingOnUs)
   EXPECT_EQ(session.Delay(), 2);
   EXPECT_EQ(session.GetStats().delay_raises, 0);
   // The same at the edge of its window on our inputs: ours to answer. It reports no lengths (a
-  // player before 0.3.7), so each counts as one a frame more would have spared: the eighth in 45
+  // player before 0.3.8), so each counts as one a frame more would have spared: the eighth in 45
   // seconds raises.
   net.lag[1] = config.max_rollback + 1;
   for (int i = 0; i < 7; ++i)

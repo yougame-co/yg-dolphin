@@ -129,7 +129,7 @@ struct Packet
   // Of those counted stalls, how many were over within k + 1 frames, for k = 0 .. SPARED_FRAMES -
   // 1, over the whole match: k + 1 more frames of the others' delay would have spared the sender
   // those (their inputs would have come that much sooner). A running count per k, like `stalls`
-  // (nullopt: not reported, a peer before 0.3.7).
+  // (nullopt: not reported, a peer before 0.3.8).
   std::optional<std::array<int, SPARED_FRAMES>> spared;
   // The sender's smoothed lead over the slowest other player, in tenths of a frame: its frame minus
   // the frame that player last reported (nullopt: nothing received yet). Both leads include the
