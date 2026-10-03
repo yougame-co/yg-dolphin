@@ -3,6 +3,7 @@
 
 #include "Core/Orca/UX/GamePatches.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <set>
 #include <utility>
@@ -112,6 +113,7 @@ size_t GroupEnd(std::span<const GamePatch> patches, size_t start)
 std::optional<std::vector<GamePatch>> ParseGamePatches(std::string_view text, std::string* error)
 {
   std::vector<GamePatch> patches;
+  std::vector<int> lines;  // each patch's line number
   std::set<u32> seen;
   // The open `when` block: its conditions, the line of its first `when`, whether a line followed.
   std::vector<PatchCondition> when;
@@ -186,6 +188,7 @@ std::optional<std::vector<GamePatch>> ParseGamePatches(std::string_view text, st
     const bool joins = !group_break && original && !patches.empty() && patches.back().original &&
                        patches.back().address + 4 == *address;
     patches.push_back({*address, original, *value, joins, when});
+    lines.push_back(number);
     group_break = false;
     block_has_lines = !when.empty();
   }
@@ -197,6 +200,29 @@ std::optional<std::vector<GamePatch>> ParseGamePatches(std::string_view text, st
     {
       return fail(fmt::format("line {}: the condition reads {:08X}, a word this file writes", line,
                               address));
+    }
+  }
+  // A toggled group writes when memory holds its originals or its values, so one word alone would
+  // match some other module by chance twice as often as a guarded word: two words at least (the
+  // words around a flip as guards), and one that changes (a group of guards never toggles).
+  for (size_t start = 0; start < patches.size();)
+  {
+    const size_t end = GroupEnd(patches, start);
+    const std::span<const GamePatch> group(patches.data() + start, end - start);
+    const int line = lines[start];
+    start = end;
+    if (group[0].when.empty())
+      continue;
+    if (group.size() < 2)
+    {
+      return fail(fmt::format("line {}: a toggled group needs two words at least: add the words "
+                              "around it as guards",
+                              line));
+    }
+    if (std::none_of(group.begin(), group.end(),
+                     [](const GamePatch& p) { return p.value != *p.original; }))
+    {
+      return fail(fmt::format("line {}: a toggled group that changes nothing", line));
     }
   }
   return patches;
@@ -342,9 +368,8 @@ void Apply(const Core::CPUThreadGuard& guard, bool toggled)
   GuardMemory memory(guard);
   const PatchPlan plan = PlanGamePatches(patches, memory, toggled);
   // A guarded group lands once per load of its module, and again on a re-run that crosses that
-  // load (Tools/orca/online-menu.py checks where); a toggled group on each change of its condition
-  // and on re-runs that cross one.
-  // (Tools/orca/online-menu.py reads "patch group <address> " as a landing.)
+  // load (Tools/orca/online-menu.py checks where, reading "patch group <address> " as a landing);
+  // a toggled group switches at each change of its condition, and again on re-runs that cross one.
   for (const PatchPlan::Group& g : plan.landed)
     INFO_LOG_FMT(ROLLBACK, "Orca: patch group {:08x} ({} words) landed", g.address, g.words);
   for (const PatchPlan::Group& g : plan.on)
