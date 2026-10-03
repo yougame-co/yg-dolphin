@@ -995,7 +995,9 @@ void JitArm64::Jit(u32 em_address, bool clear_cache_and_retry_on_failure)
 
   if (SConfig::GetInstance().bJITNoBlockCache)
     ClearCache();
-  FreeRanges();
+  // Orca: not from a hook (JitBase::CompileFromHook).
+  if (!m_compiling_from_hook)
+    FreeRanges();
 
   const Common::ScopedJITPageWriteAndNoExecute enable_jit_page_writes;
 
@@ -1106,6 +1108,26 @@ std::vector<JitBase::MemoryStats> JitArm64::GetMemoryStats() const
           {"near_1", m_free_ranges_near_1.get_stats()},
           {"far_0", m_free_ranges_far_0.get_stats()},
           {"far_1", m_free_ranges_far_1.get_stats()}};
+}
+
+bool JitArm64::CanCompileFromHook() const
+{
+  // Far more than any block: Common::CodeBlock::IsAlmostFull counts 64 KiB as more than the biggest
+  // block ever.
+  constexpr std::size_t ROOM = 1024 * 1024;
+  const auto largest = [](const Common::RangeSizeSet<u8*>& ranges) -> std::size_t {
+    const auto it = ranges.by_size_begin();
+    return it == ranges.by_size_end() ? 0 : static_cast<std::size_t>(it.to() - it.from());
+  };
+  // SetEmitterStateToFreeCodeRegion takes region 1 while both its parts have ROOM, else the region
+  // whose smaller part is larger: either way the one it takes has ROOM when this holds.
+  const std::size_t region_0 =
+      std::min(largest(m_free_ranges_near_0), largest(m_free_ranges_far_0));
+  const std::size_t region_1 =
+      std::min(largest(m_free_ranges_near_1), largest(m_free_ranges_far_1));
+  // Jit() clears the cache when a stack fault is pending.
+  return !m_cleanup_after_stackfault && !IsDebuggingEnabled() &&
+         !SConfig::GetInstance().bJITNoBlockCache && std::max(region_0, region_1) >= ROOM;
 }
 
 std::size_t JitArm64::DisassembleNearCode(const JitBlock& block, std::ostream& stream) const

@@ -3,6 +3,9 @@
 
 #include "VideoCommon/ShaderCache.h"
 
+#include <chrono>
+#include <thread>
+#include <tuple>
 #include <utility>
 
 #include <fmt/format.h>
@@ -11,6 +14,10 @@
 #include "Common/FileUtil.h"
 #include "Common/MsgHandler.h"
 #include "Core/ConfigManager.h"
+#include "Core/Core.h"
+#include "Core/Orca/Profile.h"
+#include "Core/Orca/Status.h"
+#include "Core/System.h"
 
 #include "VideoCommon/AbstractGfx.h"
 #include "VideoCommon/ConstantManager.h"
@@ -31,6 +38,44 @@ std::unique_ptr<VideoCommon::ShaderCache> g_shader_cache;
 
 namespace VideoCommon
 {
+namespace
+{
+// Orca (ORCA.md, "Match start"): how long a session's boot waits for the shaders it compiles before
+// the first frame. Every Orca update empties the compiled shaders on disk, so the first boot after
+// one compiles every pipeline the player's games have drawn (Cache/<game>.uidcache) plus the
+// ubershaders, and the desktop app kills a boot that hasn't drawn in 120 s. Past BOOT_WAIT_SOFT the
+// wait ends as soon as the ubershaders are compiled (the rest compile in the background and are
+// drawn with an ubershader until they are ready); at BOOT_WAIT_HARD it ends whatever is left (an
+// ubershader still compiling then is compiled again at its first draw, a stall but not a failed
+// start).
+constexpr std::chrono::seconds BOOT_WAIT_SOFT{40};
+constexpr std::chrono::seconds BOOT_WAIT_HARD{60};
+
+void DrawCompileProgress(size_t completed, size_t total)
+{
+  const float center_x = ImGui::GetIO().DisplaySize.x * 0.5f;
+  const float center_y = ImGui::GetIO().DisplaySize.y * 0.5f;
+  const float scale = ImGui::GetIO().DisplayFramebufferScale.x;
+
+  ImGui::SetNextWindowSize(ImVec2(400.0f * scale, 50.0f * scale), ImGuiCond_Always);
+  ImGui::SetNextWindowPos(ImVec2(center_x, center_y), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+  if (ImGui::Begin(Common::GetStringT("Compiling Shaders").c_str(), nullptr,
+                   ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoInputs |
+                       ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
+                       ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoNav |
+                       ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing))
+  {
+    ImGui::Text("Compiling shaders: %zu/%zu", completed, total);
+    ImGui::ProgressBar(static_cast<float>(completed) /
+                           static_cast<float>(std::max(total, static_cast<size_t>(1))),
+                       ImVec2(-1.0f, 0.0f), "");
+  }
+  ImGui::End();
+
+  g_presenter->Present();
+}
+}  // namespace
+
 ShaderCache::ShaderCache() : m_api_type{APIType::Nothing}
 {
 }
@@ -63,6 +108,7 @@ void ShaderCache::InitializeShaderCache()
   {
     LoadCaches();
     LoadPipelineUIDCache();
+    LoadEFBCopyUIDCache();
   }
 
   // Queue ubershader precompiling if required.
@@ -72,7 +118,13 @@ void ShaderCache::InitializeShaderCache()
   // Compile all known UIDs.
   CompileMissingPipelines();
   if (g_ActiveConfig.bWaitForShadersBeforeStarting)
-    WaitForAsyncCompiler();
+  {
+    // Orca: a session's boot waits a limited time (BOOT_WAIT_SOFT, BOOT_WAIT_HARD).
+    if (Orca::SessionActive())
+      WaitForBootCompile();
+    else
+      WaitForAsyncCompiler();
+  }
 
   // Switch to the runtime shader compiler thread configuration.
   m_async_shader_compiler->ResizeWorkerThreads(g_ActiveConfig.GetShaderCompilerThreads());
@@ -82,6 +134,11 @@ void ShaderCache::Reload()
 {
   WaitForAsyncCompiler();
   ClosePipelineUIDCache();
+  // Orca: the EFB copy pipelines in use are compiled again now, not at their next copy (ORCA.md,
+  // "Match start").
+  std::vector<TextureConversionShaderGen::TCShaderUid> efb_copy_uids;
+  for (const auto& [uid, pipeline] : m_efb_copy_to_vram_pipelines)
+    efb_copy_uids.push_back(uid);
   ClearCaches();
 
   if (!CompileSharedPipelines())
@@ -89,6 +146,10 @@ void ShaderCache::Reload()
 
   if (g_ActiveConfig.bShaderCache)
     LoadCaches();
+  for (const auto& uid : efb_copy_uids)
+    GetEFBCopyToVRAMPipeline(uid);
+  if (g_ActiveConfig.bShaderCache && m_api_type != APIType::Nothing)
+    OpenEFBCopyUIDCache();
 
   // Switch to the precompiling shader configuration while we rebuild.
   m_async_shader_compiler->ResizeWorkerThreads(g_ActiveConfig.GetShaderPrecompilerThreads());
@@ -170,35 +231,87 @@ void ShaderCache::WaitForAsyncCompiler()
 {
   bool running = true;
 
-  constexpr auto update_ui_progress = [](size_t completed, size_t total) {
-    const float center_x = ImGui::GetIO().DisplaySize.x * 0.5f;
-    const float center_y = ImGui::GetIO().DisplaySize.y * 0.5f;
-    const float scale = ImGui::GetIO().DisplayFramebufferScale.x;
-
-    ImGui::SetNextWindowSize(ImVec2(400.0f * scale, 50.0f * scale), ImGuiCond_Always);
-    ImGui::SetNextWindowPos(ImVec2(center_x, center_y), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
-    if (ImGui::Begin(Common::GetStringT("Compiling Shaders").c_str(), nullptr,
-                     ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoInputs |
-                         ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoSavedSettings |
-                         ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoNav |
-                         ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoFocusOnAppearing))
-    {
-      ImGui::Text("Compiling shaders: %zu/%zu", completed, total);
-      ImGui::ProgressBar(static_cast<float>(completed) /
-                             static_cast<float>(std::max(total, static_cast<size_t>(1))),
-                         ImVec2(-1.0f, 0.0f), "");
-    }
-    ImGui::End();
-
-    g_presenter->Present();
-  };
-
   while (running &&
          (m_async_shader_compiler->HasPendingWork() || m_async_shader_compiler->HasCompletedWork()))
   {
-    running = m_async_shader_compiler->WaitUntilCompletion(update_ui_progress);
+    running = m_async_shader_compiler->WaitUntilCompletion(DrawCompileProgress);
 
     m_async_shader_compiler->RetrieveWorkItems();
+  }
+
+  // An extra Present to clear the screen
+  g_presenter->Present();
+}
+
+void ShaderCache::WaitForBootCompile()
+{
+  using Clock = std::chrono::steady_clock;
+  constexpr auto CHECK_INTERVAL = std::chrono::milliseconds(1000 / 30);
+  constexpr auto SHOW_AFTER = std::chrono::seconds(1);
+  auto soft = std::chrono::duration_cast<Clock::duration>(BOOT_WAIT_SOFT);
+  auto hard = std::chrono::duration_cast<Clock::duration>(BOOT_WAIT_HARD);
+  if (const std::optional<int> test_ms = Orca::TestShaderWaitMs())
+    soft = hard = std::chrono::milliseconds(*test_ms);
+
+  // Pipelines still compiling (the flag a pipeline's work item clears when retrieved): the ones
+  // from the UID cache, and the ubershaders.
+  const auto pending = [this] {
+    std::pair<size_t, size_t> n{};
+    for (const auto& [uid, entry] : m_gx_pipeline_cache)
+      n.first += entry.second;
+    for (const auto& [uid, entry] : m_gx_uber_pipeline_cache)
+      n.second += entry.second;
+    return n;
+  };
+  const auto start = Clock::now();
+  const auto [first_specialized, first_uber] = pending();
+  const size_t total = first_specialized + first_uber;
+  size_t specialized = first_specialized, uber = first_uber;
+  auto next_line = start + SHOW_AFTER;
+  bool said = false;
+  bool done = false;
+  auto& system = Core::System::GetInstance();
+  while (Core::GetState(system) != Core::State::Stopping)
+  {
+    // Completed work is retrieved here, as each frame does at runtime: a pipeline whose shaders
+    // weren't compiled yet queues itself again, and the flags above are cleared.
+    m_async_shader_compiler->RetrieveWorkItems();
+    std::tie(specialized, uber) = pending();
+    if (!m_async_shader_compiler->HasPendingWork() && !m_async_shader_compiler->HasCompletedWork())
+    {
+      done = true;
+      break;
+    }
+    const auto now = Clock::now();
+    if (now - start >= hard || (now - start >= soft && uber == 0))
+      break;
+    if (now - start >= SHOW_AFTER)
+      DrawCompileProgress(total - specialized - uber, total);
+    if (now >= next_line)
+    {
+      Orca::Status::Shaders(total - specialized - uber, total);
+      said = true;
+      next_line += SHOW_AFTER;
+    }
+    std::this_thread::sleep_for(CHECK_INTERVAL);
+  }
+  if (said)
+    Orca::Status::Shaders(total - specialized - uber, total);
+
+  const double seconds = std::chrono::duration<double>(Clock::now() - start).count();
+  if (done)
+  {
+    NOTICE_LOG_FMT(VIDEO,
+                   "Orca: compiled {} pipelines ({} ubershader) before the first frame in "
+                   "{:.1f} s",
+                   total, first_uber, seconds);
+  }
+  else
+  {
+    NOTICE_LOG_FMT(VIDEO,
+                   "Orca: stopped waiting for shaders after {:.1f} s, {} of {} pipelines compiled; "
+                   "{} ({} ubershader) left to compile in the background",
+                   seconds, total - specialized - uber, total, specialized + uber, uber);
   }
 
   // An extra Present to clear the screen
@@ -869,6 +982,62 @@ void ShaderCache::ClosePipelineUIDCache()
 {
   // This is left as a method in case we need to append extra data to the file in the future.
   m_gx_pipeline_uid_cache_file.Close();
+  m_efb_copy_uid_cache_file.Close();
+}
+
+void ShaderCache::LoadEFBCopyUIDCache()
+{
+  using TextureConversionShaderGen::TCShaderUid;
+  using TextureConversionShaderGen::UidData;
+  const std::string filename =
+      File::GetUserPath(D_CACHE_IDX) + SConfig::GetInstance().GetGameID() + ".efbcopy.uidcache";
+  std::vector<TCShaderUid> uids;
+  {
+    File::IOFile in(filename, "rb");
+    u32 header[3] = {};
+    if (in && in.ReadArray(header, 3) && header[0] == EFB_COPY_UID_MAGIC &&
+        header[1] == EFB_COPY_UID_VERSION && header[2] == sizeof(UidData))
+    {
+      TCShaderUid uid;
+      while (in.ReadBytes(uid.GetUidData(), sizeof(UidData)))
+      {
+        // An entry no copy can have (a damaged file) is left out.
+        if (static_cast<u32>(uid.GetUidData()->dst_format) <= static_cast<u32>(EFBCopyFormat::XFB))
+          uids.push_back(uid);
+      }
+    }
+  }
+  // Compiled now, before the first frame; a broken or unknown entry only costs its compile.
+  for (const TCShaderUid& uid : uids)
+    GetEFBCopyToVRAMPipeline(uid);
+  OpenEFBCopyUIDCache();
+  INFO_LOG_FMT(VIDEO, "Compiled {} EFB copy pipelines from {}", uids.size(), filename);
+}
+
+void ShaderCache::OpenEFBCopyUIDCache()
+{
+  // Written again whole (drops a torn last entry), then appended to as new copies show up.
+  const std::string filename =
+      File::GetUserPath(D_CACHE_IDX) + SConfig::GetInstance().GetGameID() + ".efbcopy.uidcache";
+  if (!m_efb_copy_uid_cache_file.Open(filename, "wb"))
+    return;
+  const u32 header[3] = {EFB_COPY_UID_MAGIC, EFB_COPY_UID_VERSION,
+                         sizeof(TextureConversionShaderGen::UidData)};
+  m_efb_copy_uid_cache_file.WriteArray(header, 3);
+  for (const auto& [uid, pipeline] : m_efb_copy_to_vram_pipelines)
+    m_efb_copy_uid_cache_file.WriteBytes(uid.GetUidData(), uid.GetUidDataSize());
+  m_efb_copy_uid_cache_file.Flush();
+}
+
+void ShaderCache::AppendEFBCopyUID(const TextureConversionShaderGen::TCShaderUid& uid)
+{
+  if (!m_efb_copy_uid_cache_file.IsOpen())
+    return;
+  if (!m_efb_copy_uid_cache_file.WriteBytes(uid.GetUidData(), uid.GetUidDataSize()) ||
+      !m_efb_copy_uid_cache_file.Flush())
+  {
+    m_efb_copy_uid_cache_file.Close();
+  }
 }
 
 void ShaderCache::AddSerializedGXPipelineUID(const SerializedGXPipelineUid& uid)
@@ -1288,6 +1457,8 @@ ShaderCache::GetEFBCopyToVRAMPipeline(const TextureConversionShaderGen::TCShader
   config.framebuffer_state = RenderState::GetRGBA8FramebufferState();
   config.usage = AbstractPipelineUsage::Utility;
   auto iiter = m_efb_copy_to_vram_pipelines.emplace(uid, g_gfx->CreatePipeline(config));
+  if (g_ActiveConfig.bShaderCache && iiter.first->second)
+    AppendEFBCopyUID(uid);
   return iiter.first->second.get();
 }
 

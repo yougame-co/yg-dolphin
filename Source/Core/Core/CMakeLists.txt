@@ -511,6 +511,8 @@ add_library(core
   Orca/Branding.h
   Orca/Disc.cpp
   Orca/Disc.h
+  Orca/JitWarm.cpp
+  Orca/JitWarm.h
   Orca/Launch.cpp
   Orca/Launch.h
   Orca/Profile.cpp

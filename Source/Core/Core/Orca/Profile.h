@@ -129,6 +129,9 @@ void PrioritizeThread(LatencyThread thread);
 //                            it set meets a Mac with it set.
 //   ORCA_TEST_CPUCORE=N      the session runs CPU core N instead of the host's JIT: 0 the
 //                            interpreter, 5 the cached interpreter (a reference for the JITs).
+// Not in TestOverridesActive (it can't change the game, so the key stays):
+//   ORCA_TEST_SHADER_WAIT_MS=N  the boot's wait for shaders (VideoCommon/ShaderCache.cpp,
+//                            WaitForBootCompile) gives up after N ms instead of its two limits.
 int TestPads();
 bool TestSkipRender();
 std::optional<int> TestNetDelayMs();
@@ -157,6 +160,7 @@ int TestSnapshotEvery();  // 0: unset
 bool TestFullSnapshots();
 bool TestNoAfp();
 std::optional<PowerPC::CPUCore> TestCpuCore();
+std::optional<int> TestShaderWaitMs();
 bool TestOverridesActive();
 
 // Loads the profile for a game; nullopt and a reason when there is none, the revision differs or a

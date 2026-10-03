@@ -26,6 +26,7 @@ add_dolphin_test(OrcaKeyframeTest Orca/KeyframeTest.cpp)
 add_dolphin_test(OrcaUXTest Orca/UXTest.cpp)
 add_dolphin_test(OrcaOnlineMenuTest Orca/OnlineMenuTest.cpp)
 add_dolphin_test(OrcaPauseTest Orca/PauseTest.cpp)
+add_dolphin_test(OrcaJitWarmTest Orca/JitWarmTest.cpp)
 
 add_dolphin_test(SkylandersTest IOS/USB/SkylandersTest.cpp)
 

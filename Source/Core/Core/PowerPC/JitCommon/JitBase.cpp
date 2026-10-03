@@ -121,6 +121,13 @@ bool JitBase::DoesConfigNeedRefresh() const
   });
 }
 
+void JitBase::CompileFromHook(u32 em_address)
+{
+  m_compiling_from_hook = true;
+  Jit(em_address);
+  m_compiling_from_hook = false;
+}
+
 void JitBase::RefreshConfig()
 {
   const bool wanted_page_table_mappings = WantsPageTableMappings();

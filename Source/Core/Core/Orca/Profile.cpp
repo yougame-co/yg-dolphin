@@ -37,6 +37,7 @@
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "DiscIO/Volume.h"
+#include "VideoCommon/VideoConfig.h"
 
 namespace Orca
 {
@@ -189,6 +190,19 @@ void ForEachUniversalSetting(F&& f)
   // (GFX_CACHE_HIRES_TEXTURES stays the player's): that would load a player's whole pack into
   // memory; Orca's few small labels are always preloaded on their own.
   f(Config::GFX_HIRES_TEXTURES, true);
+  // Shaders (ORCA.md, "Match start"): a pipeline the game has never drawn before compiles in the
+  // background and is drawn with an ubershader meanwhile, and every pipeline this game has drawn
+  // before (Cache/<game>.uidcache), the ubershaders and the EFB copy pipelines compile before the
+  // first frame. Dolphin's default compiles on the emulation thread at the first draw: a match's
+  // countdown is where most new pipelines show up (Brawl, cold: 60 compiles, 3.9 s of stalls, one
+  // 1.6 s freeze), and every Orca release discards the compiled shaders on disk (their header holds
+  // the build's commit), so it came back after each update. Rendering only: what is drawn never
+  // reaches RAM (above), so the two machines' games can't differ by it.
+  f(Config::GFX_SHADER_COMPILATION_MODE, ShaderCompilationMode::AsynchronousUberShaders);
+  f(Config::GFX_WAIT_FOR_SHADERS_BEFORE_STARTING, true);
+  // A pipeline first drawn in a match compiles on Dolphin's "Auto" count of threads (cores - 3,
+  // 1 to 4) instead of the default one, so it is drawn with an ubershader for less time.
+  f(Config::GFX_SHADER_COMPILER_THREADS, -1);
 }
 
 class ForcedConfigLoader final : public Config::ConfigLayerLoader
@@ -343,6 +357,14 @@ bool TestNoAfp()
   // Read where the CPU is detected (Common/ArmCPUDetect.cpp), which clears cpu_info.bAFP; only an
   // ARM build has anything to clear, but the key counts it everywhere.
   return EnvIs("ORCA_TEST_NO_AFP", "1");
+}
+
+std::optional<int> TestShaderWaitMs()
+{
+  const std::string value = GetEnv("ORCA_TEST_SHADER_WAIT_MS");
+  if (!SessionActive() || value.empty())
+    return std::nullopt;
+  return std::clamp(std::atoi(value.c_str()), 0, 600'000);
 }
 
 bool TestOverridesActive()
@@ -717,7 +739,9 @@ std::string DescribeForcedSettings(const Profile& profile)
 {
   return fmt::format("Orca: profile {} rev {}{}: CPUThread={} CPUCore={} FMA={} RTC={}:{} "
                      "SI={},{},{},{} EFBToTexture={} XFBToTexture={} EFBAccess={} BBox={} "
-                     "ImmediateXFB={} VSync={} SmoothEarlyPresentation={} AudioBufferSize={}",
+                     "ImmediateXFB={} VSync={} SmoothEarlyPresentation={} AudioBufferSize={} "
+                     "ShaderCompilationMode={} WaitForShaders={} ShaderCompilerThreads={} "
+                     "GFXBackend={}",
                      profile.game_id, profile.revision,
                      TestOverridesActive() ? " (TEST overrides active, not for real sessions)" : "",
                      Config::Get(Config::MAIN_CPU_THREAD),
@@ -734,6 +758,10 @@ std::string DescribeForcedSettings(const Profile& profile)
                      Config::Get(Config::GFX_HACK_BBOX_ENABLE),
                      Config::Get(Config::GFX_HACK_IMMEDIATE_XFB), Config::Get(Config::GFX_VSYNC),
                      Config::Get(Config::MAIN_SMOOTH_EARLY_PRESENTATION),
-                     Config::Get(Config::MAIN_AUDIO_BUFFER_SIZE));
+                     Config::Get(Config::MAIN_AUDIO_BUFFER_SIZE),
+                     static_cast<int>(Config::Get(Config::GFX_SHADER_COMPILATION_MODE)),
+                     Config::Get(Config::GFX_WAIT_FOR_SHADERS_BEFORE_STARTING),
+                     Config::Get(Config::GFX_SHADER_COMPILER_THREADS),
+                     Config::Get(Config::MAIN_GFX_BACKEND));
 }
 }  // namespace Orca
