@@ -54,7 +54,8 @@ struct LinkView
   double rollbacks_per_second = 0;
   int deepest_rollback = 0;
   int stalls = 0;  // frames waited, in total
-  int round_trip_ms = -1;
+  int round_trip_ms = -1;  // the input path's: the direct link's when one is up, else the relay's
+  int transport = 0;       // 0 relay, 1 direct, 2 TURN (Events::LinkStats::transport)
   int stalled_ms = 0;     // the current stall (0: none); -1: the session doesn't say
   int waiting_seat = -1;  // whose input it waits for (seat s plays on GameCube port s)
 };

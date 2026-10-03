@@ -83,7 +83,10 @@ LinkView ViewOf(const Events::LinkStats& stats)
   v.rollbacks_per_second = stats.rollbacks_per_second;
   v.deepest_rollback = stats.deepest_rollback;
   v.stalls = stats.stalls;
-  v.round_trip_ms = stats.round_trip_ms;
+  // Over a direct link (or TURN) the inputs travel that link, so its round trip is the ping that
+  // matters (as Slippi shows); the relay's stays the ping until the link is up.
+  v.transport = stats.link_rtt_ms >= 0 ? stats.transport : 0;
+  v.round_trip_ms = v.transport > 0 ? stats.link_rtt_ms : stats.round_trip_ms;
   v.stalled_ms = StalledMs(stats);
   v.waiting_seat = WaitingSeat(stats);
   return v;
@@ -284,7 +287,8 @@ OverlayModel::Frame OverlayModel::View(double now_ms, Stats stats, Perf perf) co
     const std::string ping = m_link.round_trip_ms >= 0 ?
                                  fmt::format("{} ms", m_link.round_trip_ms) :
                                  std::string("– ms");
-    f.stats = stats == Stats::Full ? fmt::format("{} · delay {} · {:.1f} rb/s", ping,
+    const char* path = m_link.transport == 1 ? " direct" : m_link.transport == 2 ? " TURN" : "";
+    f.stats = stats == Stats::Full ? fmt::format("{}{} · delay {} · {:.1f} rb/s", ping, path,
                                                  m_link.delay, m_link.rollbacks_per_second) :
                                      ping;
   }
