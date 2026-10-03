@@ -5,10 +5,10 @@
 
 #include <algorithm>
 #include <atomic>
-#include <utility>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <utility>
 
 #include <fmt/format.h>
 
@@ -170,8 +170,8 @@ SetState Step(SetState s, Ruleset ruleset, const Facts& f, u32 frame)
     else if (s.fight_flags & SetBlock::FIGHT_BETWEEN)
     {
       // Back into a fight from between scenes: sudden death, the same game.
-      s.fight_flags = static_cast<u8>((s.fight_flags & ~SetBlock::FIGHT_BETWEEN) |
-                                      SetBlock::FIGHT_SUDDEN);
+      s.fight_flags =
+          static_cast<u8>((s.fight_flags & ~SetBlock::FIGHT_BETWEEN) | SetBlock::FIGHT_SUDDEN);
     }
     if (f.live.valid && !(s.fight_flags & SetBlock::FIGHT_SUDDEN))
     {
@@ -310,8 +310,7 @@ void Frame(const Core::CPUThreadGuard& guard, int frame)
                      "Ranked set: game {} at frame {} (fight from {}): winner {}, how {}, "
                      "ledge {}/{}, set {}-{}{}",
                      after.games, frame, r.start, r.winner == NO_PORT ? 0 : r.winner + 1,
-                     static_cast<int>(r.how), r.ledge[0], r.ledge[1], after.wins[0],
-                     after.wins[1],
+                     static_cast<int>(r.how), r.ledge[0], r.ledge[1], after.wins[0], after.wins[1],
                      after.done == 1 ? " (over)" :
                      after.done == 2 ? " (void)" :
                      after.tiebreak  ? " (tiebreak next)" :
@@ -335,9 +334,8 @@ void Frame(const Core::CPUThreadGuard& guard, int frame)
   }
   const bool fighting = facts.scene == Scene::Fight || facts.scene == Scene::Between;
   const u32 packed = 0x80000000u | (fighting ? 1u << 30 : 0) | (u32(after.done & 3) << 24) |
-                     (after.tiebreak ? 1u << 23 : 0) |
-                     (u32(after.wins[0]) << 16) | (u32(after.wins[1]) << 8) |
-                     u32(std::min(after.GameNumber(), 255));
+                     (after.tiebreak ? 1u << 23 : 0) | (u32(after.wins[0]) << 16) |
+                     (u32(after.wins[1]) << 8) | u32(std::min(after.GameNumber(), 255));
   s_published.store(packed, std::memory_order_relaxed);
 }
 

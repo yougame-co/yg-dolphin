@@ -12,8 +12,9 @@
 // The ranked set's part of the match block (ORCA.md "Ranked sets"): FreeSpace::kMatchBlock in
 // the game's own memory, so every rollback snapshot and drop-in keyframe carries it and both
 // machines compute the same thing from it. Written only by Orca's frame hook, as a pure function of
-// memory (and the frame number), on first runs and re-runs alike, only the bytes that differ. Before
-// Orca writes it the block holds the game's dead code (FreeSpace.h), so a reader checks the magic.
+// memory (and the frame number), on first runs and re-runs alike, only the bytes that differ.
+// Before Orca writes it the block holds the game's dead code (FreeSpace.h), so a reader checks the
+// magic.
 //
 // Layout (offsets from the block's start, big-endian like the game):
 //   +0x00 .. +0x06  the header, the same bytes as the stage flow's MatchBlock.h (magic "YGM1",
@@ -62,18 +63,18 @@ struct Header
 
 // The set's state.
 constexpr u32 SET_BEGIN = 0x100;
-constexpr u32 SET_GAMES = 0x100;        // u8: games recorded (wins and ties; void games aren't)
-constexpr u32 SET_WINS = 0x101;         // u8[2]: games won by ports 1 and 2
-constexpr u32 SET_DONE = 0x103;         // u8: 0 open, 1 won (SET_WINNER), 2 void
-constexpr u32 SET_WINNER = 0x104;       // u8: the set's winning port (0-based), 0xFF none
-constexpr u32 SET_LAST_WINNER = 0x105;  // u8: the last decided game's winning port, 0xFF none
-constexpr u32 SET_TIEBREAK = 0x106;     // u8: 1 the next game is a tiebreak game
-constexpr u32 SET_TB_STREAK = 0x107;    // u8: tied games in a row
-constexpr u32 SET_FIGHT = 0x108;        // u8: 1 while a fight is followed (start to results)
-constexpr u32 SET_FIGHT_FLAGS = 0x109;  // u8: FIGHT_* below
-constexpr u32 SET_LEDGE = 0x10A;        // u8[2]: ledge grabs this fight (255 at most)
-constexpr u32 SET_FIGHT_START = 0x10C;  // u32: the fight's first frame (the game's report id)
-constexpr u32 SET_SNAP_STOCKS = 0x110;  // u8[2]: stocks when time ran out
+constexpr u32 SET_GAMES = 0x100;         // u8: games recorded (wins and ties; void games aren't)
+constexpr u32 SET_WINS = 0x101;          // u8[2]: games won by ports 1 and 2
+constexpr u32 SET_DONE = 0x103;          // u8: 0 open, 1 won (SET_WINNER), 2 void
+constexpr u32 SET_WINNER = 0x104;        // u8: the set's winning port (0-based), 0xFF none
+constexpr u32 SET_LAST_WINNER = 0x105;   // u8: the last decided game's winning port, 0xFF none
+constexpr u32 SET_TIEBREAK = 0x106;      // u8: 1 the next game is a tiebreak game
+constexpr u32 SET_TB_STREAK = 0x107;     // u8: tied games in a row
+constexpr u32 SET_FIGHT = 0x108;         // u8: 1 while a fight is followed (start to results)
+constexpr u32 SET_FIGHT_FLAGS = 0x109;   // u8: FIGHT_* below
+constexpr u32 SET_LEDGE = 0x10A;         // u8[2]: ledge grabs this fight (255 at most)
+constexpr u32 SET_FIGHT_START = 0x10C;   // u32: the fight's first frame (the game's report id)
+constexpr u32 SET_SNAP_STOCKS = 0x110;   // u8[2]: stocks when time ran out
 constexpr u32 SET_SNAP_PERCENT = 0x112;  // u16[2]: percent when time ran out
 constexpr u32 SET_ON_LEDGE = 0x116;      // u8[2]: on the ledge at the last frame (for counting)
 constexpr u32 SET_RECORDS = 0x120;       // GameRecord x MAX_RECORDS

@@ -8,8 +8,8 @@
 #include <string>
 
 #include "Common/CommonTypes.h"
-#include "Core/Orca/UX/SetBlock.h"
 #include "Core/Orca/UX/Results.h"
+#include "Core/Orca/UX/SetBlock.h"
 
 namespace Core
 {
@@ -70,13 +70,12 @@ struct Facts
 };
 
 // The verdict on one finished fight, or nothing (a void game: not recorded).
-std::optional<SetBlock::GameRecord> Judge(SetBlock::Ruleset ruleset,
-                                            const SetBlock::SetState& set,
-                                            const ResultBlock& block, u8 decision);
+std::optional<SetBlock::GameRecord> Judge(SetBlock::Ruleset ruleset, const SetBlock::SetState& set,
+                                          const ResultBlock& block, u8 decision);
 
 // One frame boundary: the set as it is after it. `frame` is the frame hook's.
-SetBlock::SetState Step(SetBlock::SetState set, SetBlock::Ruleset ruleset,
-                          const Facts& facts, u32 frame);
+SetBlock::SetState Step(SetBlock::SetState set, SetBlock::Ruleset ruleset, const Facts& facts,
+                        u32 frame);
 
 // The rules a Brawl ranked game is played with (written on the menus, never in a fight): 3 stocks
 // and 8:00, or 1 stock and 3:00 for a tiebreak game. Returns how many bytes changed.

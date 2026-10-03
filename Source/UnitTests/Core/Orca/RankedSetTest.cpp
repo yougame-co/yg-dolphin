@@ -9,10 +9,10 @@
 
 #include <gtest/gtest.h>
 
-#include "Core/Orca/UX/SetBlock.h"
 #include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/RankedSet.h"
 #include "Core/Orca/UX/Results.h"
+#include "Core/Orca/UX/SetBlock.h"
 
 using namespace Orca::UX;
 using SetBlock::GameRecord;

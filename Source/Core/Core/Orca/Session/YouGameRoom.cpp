@@ -1996,7 +1996,7 @@ struct YouGameRoom::Impl
     // A ranked set's game from the match block is named by its fight's first frame: the same on
     // both machines whatever either missed.
     const std::string id = ranked && report.start >= 0 ? fmt::format("g{}", report.start) :
-                                                          fmt::format("{}{}", ranked ? "g" : "c", n);
+                                                         fmt::format("{}{}", ranked ? "g" : "c", n);
     if (ranked)
     {
       game_numbers[id] = report.number > 0 ? report.number : n;

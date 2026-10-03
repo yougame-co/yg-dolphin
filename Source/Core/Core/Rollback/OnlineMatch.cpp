@@ -676,7 +676,7 @@ constexpr std::chrono::seconds REOPEN_DELAY{1};
 // Either way the app can still send "join".
 void ReopenRoom(Match& match)
 {
-  // The match block clears once the game is alone (UX/RankedSet.h): a room of its own is no queue's.
+  // The match block clears once the game is alone (UX/RankedSet.h): no queue's room any more.
   Orca::UX::RankedSet::SetRoomMode(Orca::UX::SetBlock::Mode::None);
   ForgetRoom(match);
   Orca::Online::ShutdownInBackground();
@@ -1484,7 +1484,7 @@ void HostInPlay(Match& match, const std::string& code)
   // header for the queue (UX/RankedSet.h).
   Orca::UX::RequestQueueRules();
   Orca::UX::RankedSet::SetRoomMode(Orca::UX::Search::Ranked() ? Orca::UX::SetBlock::Mode::Ranked :
-                                                                 Orca::UX::SetBlock::Mode::Casual);
+                                                                Orca::UX::SetBlock::Mode::Casual);
   NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: hosting room {} from frame {}", code, match.running + 1);
 }
 
