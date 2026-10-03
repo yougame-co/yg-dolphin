@@ -4,6 +4,7 @@
 #include "Core/Rollback/Harness.h"
 
 #include <algorithm>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -1124,8 +1125,19 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
         if (static_cast<size_t>(port) < controls.size() && controls[port] != "-")
         {
           const std::string& hex = controls[port];
-          for (size_t i = 0; i + 1 < hex.size(); i += 2)
-            profile.push_back(static_cast<u8>(std::strtoul(hex.substr(i, 2).c_str(), nullptr, 16)));
+          if (hex.size() % 2 == 0 && std::all_of(hex.begin(), hex.end(), [](char c) {
+                return std::isxdigit(static_cast<unsigned char>(c)) != 0;
+              }))
+          {
+            for (size_t i = 0; i < hex.size(); i += 2)
+              profile.push_back(
+                  static_cast<u8>(std::strtoul(hex.substr(i, 2).c_str(), nullptr, 16)));
+          }
+          else
+          {
+            ERROR_LOG_FMT(ROLLBACK, "ORCA_UX_TEST_CONTROLS: port {}'s profile isn't hex: none",
+                          port + 1);
+          }
         }
         ports.push_back({port, names[port], port > 0, std::move(profile)});
       }

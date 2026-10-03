@@ -390,6 +390,14 @@ void ReadOwnControlsFrame(const Core::CPUThreadGuard& guard,
     return;
   static std::u16string s_last_worn;
   static std::vector<u8> s_published;
+  // The tag last worn was in the game this machine played before (its own, before it loaded a
+  // friend's keyframe or went solo after a session): a tag of that name here may be someone else's.
+  static u64 s_resyncs = 0;
+  if (const u64 resyncs = Events::Resyncs(); resyncs != s_resyncs)
+  {
+    s_resyncs = resyncs;
+    s_last_worn.clear();
+  }
   GuardMemory memory(guard);
   std::vector<u8> profile = ReadOwnControls(memory, own->port, own->name, &s_last_worn);
   if (profile != s_published)
