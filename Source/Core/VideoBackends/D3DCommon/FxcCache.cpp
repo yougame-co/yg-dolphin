@@ -3,6 +3,7 @@
 
 #include "VideoBackends/D3DCommon/FxcCache.h"
 
+#include <cstdio>
 #include <cstring>
 #include <map>
 #include <mutex>
@@ -27,15 +28,24 @@ namespace D3DCommon::FxcCache
 namespace
 {
 // The file: MAGIC and FORMAT, then one record per compile: its size (u32), its key, a SHA-1 of the
-// key and the bytecode together, and the bytecode. A record whose SHA-1 doesn't match (a torn write,
-// or two processes appending at once) ends the read, and the file is written again from the
+// key and the bytecode together, and the bytecode. A record whose SHA-1 doesn't match (a torn
+// write, or two processes appending at once) ends the read, and the file is written again from the
 // records before it, so no bytecode is ever read back under another compile's key.
 constexpr u32 MAGIC = 0x4358464f;  // "OFXC"
+// Another FORMAT must also change what RecordCheck hashes (fold FORMAT into it): an older Orca
+// still running on the same user folder keeps appending its records after a newer one wrote its
+// header.
 constexpr u32 FORMAT = 1;
 // A file past this starts over: the shaders of older builds pile up when the generators change,
 // and the whole file is in memory (Luis's Brawl and P+ specialized shaders: about 8 MB of DXBC).
 constexpr u64 MAX_FILE_SIZE = u64{64} << 20;
 constexpr u32 MAX_RECORD_SIZE = u32{16} << 20;
+// The file stays open for the whole run, and on Windows a plain open (_tfopen_s) shares nothing
+// once it writes: while one Orca had it open, a second on the same user folder could neither read
+// it nor keep anything in it, and no other program could read it. Every open here lets others read
+// and write it. Two Orcas writing at once can tear a record; its check keeps it from being read
+// (the records after it are lost to the next run, not misread).
+constexpr File::SharedAccess SHARED = File::SharedAccess::ReadWrite;
 
 using Digest = Common::SHA1::Digest;
 
@@ -64,6 +74,16 @@ Digest RecordCheck(const Key& key, std::span<const u8> bytecode)
   return context->Finish();
 }
 
+// Unbuffered, so each record (and the header) goes to the file in one write: no part of one sits
+// in a buffer while another Orca appends.
+bool OpenToWrite(File::IOFile& file, const std::string& path, const char* mode)
+{
+  if (!file.Open(path, mode, SHARED))
+    return false;
+  std::setvbuf(file.GetHandle(), nullptr, _IONBF, 0);
+  return true;
+}
+
 void WriteRecord(File::IOFile& file, const Key& key, std::span<const u8> bytecode)
 {
   // One write per record.
@@ -90,7 +110,7 @@ std::string FilePath()
 // Reads every whole, matching record; false when the file doesn't end right after the last one.
 bool ReadRecords(const std::string& path, std::map<Key, std::vector<u8>>* entries)
 {
-  File::IOFile in(path, "rb");
+  File::IOFile in(path, "rb", SHARED);
   if (!in)
     return false;
   const u64 file_size = in.GetSize();
@@ -105,7 +125,9 @@ bool ReadRecords(const std::string& path, std::map<Key, std::vector<u8>>* entrie
     return false;
   for (;;)
   {
-    if (in.Tell() == file_size)
+    // Past it when another Orca's record was still being appended at the size read: that record
+    // read whole and checked.
+    if (in.Tell() >= file_size)
       return true;
     u32 size = 0;
     Key key{};
@@ -133,7 +155,7 @@ void OpenLocked(State& state)
   state.read = state.entries.size();
   if (whole)
   {
-    state.file.Open(path, "ab");
+    OpenToWrite(state.file, path, "ab");
     return;
   }
 
@@ -143,13 +165,14 @@ void OpenLocked(State& state)
     WARN_LOG_FMT(VIDEO, "Orca: {} didn't read to its end; writing it again with {} shaders", path,
                  state.entries.size());
   }
-  if (!state.file.Open(path, "wb"))
+  if (!OpenToWrite(state.file, path, "wb"))
     return;
   const u32 header[2] = {MAGIC, FORMAT};
   state.file.WriteArray(header, 2);
   for (const auto& [key, bytecode] : state.entries)
     WriteRecord(state.file, key, bytecode);
-  state.file.Flush();
+  // Appended to from here: "wb" writes where it is, over anything another Orca appended since.
+  OpenToWrite(state.file, path, "ab");
 }
 
 std::optional<Digest> ReadCompilerDigest()

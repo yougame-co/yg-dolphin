@@ -1190,7 +1190,10 @@ characters, the stage, the countdown's effects). Orca sessions force (`Orca/Prof
   change to the text, the flags or the compiler is another key, so a binary is only ever used for
   the compile that made it. Each record also carries a SHA-1 of its key and DXBC: a torn or
   interleaved write ends the read and the file is written again from the records before it. One file
-  for every game, read whole into memory and started over past 64 MB. No release from 0.3.4 to 0.3.9
+  for every game, read whole into memory and started over past 64 MB. It stays open while Orca runs,
+  opened so others may read and write it (`File::SharedAccess::ReadWrite`, `_SH_DENYNO`): Windows'
+  plain open shares nothing once it writes, so a second Orca on the same user folder could neither
+  read it nor add to it (and `FxcCacheTest` failed on the PC). No release from 0.3.4 to 0.3.9
   changed a shader generator, glslang, SPIRV-Cross or `D3DCommon/Shader.cpp`, while each touched
   other video files, so a key on the generator sources or the VideoCommon tree would have lost the
   cache every time and been only as safe as its file list. The log names every FXC compile of 250 ms
@@ -1200,7 +1203,10 @@ characters, the stage, the countdown's effects). Orca sessions force (`Orca/Prof
   the lobby key), to time other optimization levels. `FxcCacheTest` (every platform: elsewhere
   the test builds `FxcCache.cpp` itself) checks that each of those inputs changes the key, that a
   torn last record keeps the records before it and the file is written again from them, and that
-  a changed byte in a record's key or DXBC is never returned under any key, nor anything after it.
+  a changed byte in a record's key or DXBC is never returned under any key, nor anything after it,
+  and that another Orca with the file open to append keeps its records through this one's read,
+  rewrite and appends (after a rewrite the file is reopened with `"ab"`: a `"wb"` handle writes
+  where it is, over whatever the other appended).
 
 Rendering only: nothing drawn reaches RAM (EFB/XFB copies stay on the GPU, EFB access and bbox are
 off), so none of this can make two players' games differ.

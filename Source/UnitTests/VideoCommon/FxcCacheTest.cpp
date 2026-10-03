@@ -5,7 +5,10 @@
 // must hold: a binary only ever comes back for the very compile that made it (every input is in the
 // key), and a damaged file never hands back bytes under any key (each record checks its own key and
 // bytes; the read stops at the first that doesn't, and the file is written again from the ones
-// before it).
+// before it). The file stays open while a run lasts, and another Orca on the same user folder may
+// read it and append to it meanwhile (SharedWithAnotherOrca). On Windows a plain open of a file
+// that something else has open for writing fails, so the tests end the run (Reopen) before reading
+// the file the plain way or damaging it, and read it mid-run the way another Orca does.
 
 #include <string>
 #include <string_view>
@@ -16,6 +19,7 @@
 #include "Common/CommonPaths.h"
 #include "Common/CommonTypes.h"
 #include "Common/FileUtil.h"
+#include "Common/IOFile.h"
 #include "VideoBackends/D3DCommon/FxcCache.h"
 
 namespace
@@ -75,20 +79,48 @@ protected:
 
   static std::string CachePath() { return File::GetUserPath(D_SHADERCACHE_IDX) + "D3D-fxc.cache"; }
 
+  // The file as any program reads it; on Windows only once no run has it open, which this checks
+  // too: Close lets it go.
   static std::string ReadCache()
   {
     std::string bytes;
-    File::ReadFileToString(CachePath(), bytes);
+    EXPECT_TRUE(File::ReadFileToString(CachePath(), bytes)) << "is the cache still open?";
     return bytes;
   }
 
+  // The file read while a run has it open, the way another Orca reads it: sharing it with the
+  // run's writes.
+  static std::string ReadCacheWhileOpen()
+  {
+    File::IOFile in(CachePath(), "rb", File::SharedAccess::ReadWrite);
+    std::string bytes(in.GetSize(), '\0');
+    EXPECT_TRUE(in.ReadBytes(bytes.data(), bytes.size())) << "the cache can't be read while open";
+    return bytes;
+  }
+
+  // Between runs: on Windows nothing else can write it while a run has it open.
   static void WriteCache(const std::string& bytes)
   {
-    ASSERT_TRUE(File::WriteStringToFile(CachePath(), bytes));
+    ASSERT_TRUE(File::WriteStringToFile(CachePath(), bytes)) << "is the cache still open?";
   }
 
   // A new run: what the last one wrote, read from the file.
   static void Reopen() { FxcCache::Close(); }
+
+  // One record as the cache writes it (FxcCache.cpp, "The file"): another Orca's.
+  static std::string Record(const FxcCache::Key& key, const std::vector<u8>& bytes)
+  {
+    auto context = Common::SHA1::CreateContext();
+    context->Update(key.data(), key.size());
+    context->Update(bytes.data(), bytes.size());
+    const Digest check = context->Finish();
+    const u32 size = static_cast<u32>(bytes.size());
+    std::string record(reinterpret_cast<const char*>(&size), sizeof(size));
+    record.append(reinterpret_cast<const char*>(key.data()), key.size());
+    record.append(reinterpret_cast<const char*>(check.data()), check.size());
+    record.append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    return record;
+  }
 
   std::string m_dir;
   std::string m_old_user;
@@ -130,7 +162,8 @@ TEST_F(FxcCacheTest, KeptAcrossRuns)
   EXPECT_EQ(FxcCache::Find(KeyOf(2)), Bytes(3000, 2));
   // The same compile again adds nothing.
   FxcCache::Store(KeyOf(2), Bytes(3000, 2));
-  EXPECT_EQ(ReadCache().size(), HEADER + 2 * RECORD + 100 + 3000);
+  // On disk already, while the run goes on (a killed Orca keeps them), and readable meanwhile.
+  EXPECT_EQ(ReadCacheWhileOpen().size(), HEADER + 2 * RECORD + 100 + 3000);
 
   Reopen();
   EXPECT_EQ(FxcCache::Find(KeyOf(1)), Bytes(100, 1));
@@ -155,12 +188,13 @@ TEST_F(FxcCacheTest, TornRecordKeepsTheOnesBefore)
   EXPECT_EQ(FxcCache::Find(KeyOf(1)), Bytes(100, 1));
   EXPECT_EQ(FxcCache::Find(KeyOf(2)), Bytes(200, 2));
   EXPECT_FALSE(FxcCache::Find(KeyOf(3)));
-  // Written again from the two whole records, and appended to from there.
-  EXPECT_EQ(ReadCache().size(), HEADER + 2 * RECORD + 300);
+  // Written again from the two whole records, and appended to from there in the same run.
+  EXPECT_EQ(ReadCacheWhileOpen().size(), HEADER + 2 * RECORD + 300);
   FxcCache::Store(KeyOf(3), Bytes(300, 3));
   Reopen();
   EXPECT_EQ(FxcCache::Find(KeyOf(3)), Bytes(300, 3));
   // The same three records (rewritten in key order).
+  Reopen();
   EXPECT_EQ(ReadCache().size(), whole.size());
 }
 
@@ -180,10 +214,10 @@ TEST_F(FxcCacheTest, AlteredBytesAreNeverReturned)
     std::string damaged = whole;
     damaged[at] = static_cast<char>(damaged[at] ^ 0x10);
     WriteCache(damaged);
-    Reopen();
     EXPECT_EQ(FxcCache::Find(KeyOf(1)), Bytes(100, 1));
     EXPECT_FALSE(FxcCache::Find(KeyOf(2)));
     EXPECT_FALSE(FxcCache::Find(KeyOf(3)));
+    Reopen();
     EXPECT_EQ(ReadCache().size(), HEADER + RECORD + 100);
   }
 }
@@ -194,11 +228,44 @@ TEST_F(FxcCacheTest, ForeignFileStartsOver)
        {std::string("not a cache"), std::string("OFXC\x02\0\0\0", 8), std::string()})
   {
     WriteCache(foreign);
-    Reopen();
     EXPECT_FALSE(FxcCache::Find(KeyOf(1)));
     FxcCache::Store(KeyOf(1), Bytes(64, 9));
     Reopen();
     EXPECT_EQ(FxcCache::Find(KeyOf(1)), Bytes(64, 9));
+    Reopen();
     EXPECT_EQ(ReadCache().size(), HEADER + RECORD + 64);
+  }
+}
+
+TEST_F(FxcCacheTest, SharedWithAnotherOrca)
+{
+  // Another Orca on the same user folder has the file open to append the whole time this run reads
+  // it and appends to it: a whole file, then a foreign one this run writes again from the start.
+  for (const bool whole : {true, false})
+  {
+    if (whole)
+    {
+      FxcCache::Store(KeyOf(1), Bytes(100, 1));
+      Reopen();
+    }
+    else
+    {
+      WriteCache("not a cache");
+    }
+    File::IOFile other(CachePath(), "ab", File::SharedAccess::ReadWrite);
+    ASSERT_TRUE(other.IsOpen());
+    EXPECT_FALSE(FxcCache::Find(KeyOf(2)));
+    // The other Orca keeps a compile, then this run does: neither writes over the other.
+    const std::string theirs = Record(KeyOf(2), Bytes(200, 2));
+    ASSERT_TRUE(other.WriteBytes(theirs.data(), theirs.size()) && other.Flush());
+    FxcCache::Store(KeyOf(3), Bytes(60, 3));
+    other.Close();
+
+    Reopen();
+    EXPECT_EQ(FxcCache::Find(KeyOf(2)), Bytes(200, 2));
+    EXPECT_EQ(FxcCache::Find(KeyOf(3)), Bytes(60, 3));
+    EXPECT_EQ(FxcCache::Find(KeyOf(1)).has_value(), whole);
+    Reopen();
+    EXPECT_EQ(ReadCache().size(), HEADER + 2 * RECORD + 260 + (whole ? RECORD + 100 : 0));
   }
 }
