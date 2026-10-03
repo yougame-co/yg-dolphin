@@ -1,0 +1,163 @@
+// Copyright 2026 YouGame
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#pragma once
+
+#include <array>
+#include <string>
+#include <vector>
+
+#include "Common/CommonTypes.h"
+#include "Core/Orca/Session/Events.h"
+#include "Core/Orca/UX/FreeSpace.h"
+#include "Core/Rollback/InputGate.h"
+
+namespace Core
+{
+class CPUThreadGuard;
+}
+
+// The character order of a ranked set's later games (ORCA.md "Character order"; the ranked rules'
+// Phase 4): on the character select of game 2 and on, the previous game's winner picks first, and
+// the loser, who sees that pick, picks second. Each pick has 45 seconds; a pick that runs out keeps
+// the character the player's token is on, which is the previous game's character unless they moved
+// it. Project+'s 2024 Recommended order (B.6: characters, winner then loser, then the stage).
+//
+// How it plays, on the game's own character select (no new screen):
+//   - first, the winner's turn: the loser's controller does nothing, the winner can't take the token
+//     back (B) or leave (Start), and locks the pick in with A (on a character, or anywhere to keep
+//     the one the token is on);
+//   - then the loser's turn: the winner's controller does nothing, the loser can't take the token
+//     back, and locks in with A or goes on with Start;
+//   - then Orca presses Start for the loser (every other frame until the screen goes), so the game
+//     goes on to the stage select with both picks.
+// The overlay says whose turn it is and the time left ("Ada picks first · 0:42").
+//
+// Everything is a pure function of emulated memory and the hook's frame number, the same on both
+// machines and on every re-run: the state lives in the match block (kArea), written only from the
+// frame hook (idempotent: a re-run at the same boundary finds it written and writes nothing new),
+// and the input gate's masks and presses are computed from that memory (Rollback/InputGate.h).
+//
+// Brawl keeps the interim order until its stage pick moves before characters (Supernova 2025
+// §3.3: the ban, the loser's stage, then the winner may change character, then the loser): both
+// pick at once, and nothing here acts on a Brawl set. MkFreePicker() is that order's Meta Knight
+// re-check, for when it lands.
+//
+// Found under the harness (ORCA_UX_PROBE dumps, Brawl rev 2 and Project+ alike):
+//   - the character select: scene "scSelctCharacter", whose +0x400 is muSelCharTask; player area i
+//     (GameCube port i) at task +0x44 + 4 * i: +0x1B4 the player kind (1: a human has joined),
+//     +0x1B8 the character, kAreaPlaced: whether its token is on a character;
+//   - the game's pads: gfPadSystem (0x805A0040 ->), port i's status at kPadStatus + i * kPadSize,
+//     whose kPadPressed word holds the buttons newly pressed on the frame that just ran, as the
+//     game saw them (after the input gate).
+namespace Orca::UX
+{
+class GuestMemory;
+}
+
+namespace Orca::UX::CharOrder
+{
+// Which ruleset a ranked set plays (the match block's header; ORCA.md "Online rules").
+enum class Ruleset : u8
+{
+  None = 0,
+  Brawl = 1,  // Supernova 2025
+  PPlus = 2,  // Project+ 2024 Recommended
+};
+
+// What the match block's set state says about the game about to be played. The set state is the
+// ranked rules' (Phase 2: game number, score, each game's winner); ReadSet() is the one place that
+// reads it.
+struct SetView
+{
+  Ruleset ruleset = Ruleset::None;  // None: no ranked set on this game; nothing here acts
+  int game = 0;                     // 1-based: the game about to be played
+  int last_winner = -1;             // the previous game's winning port (0 or 1), from game 2 on
+  bool operator==(const SetView&) const = default;
+};
+
+// One port's part of the character select at a frame boundary.
+struct CssPort
+{
+  bool human = false;  // a human has joined this port's area
+  int character = -1;
+  bool placed = false;  // its token is on a character
+  u16 pressed = 0;      // PAD_* bits newly pressed on the frame that just ran (the game's view)
+  bool operator==(const CssPort&) const = default;
+};
+struct CssView
+{
+  bool on_css = false;
+  std::array<CssPort, 2> ports{};
+  bool operator==(const CssView&) const = default;
+};
+
+enum class Step : u8
+{
+  Idle = 0,    // no order on this game
+  First = 1,   // the previous game's winner picks
+  Second = 2,  // the loser picks
+  Done = 3,    // both picked: Orca presses Start for the loser until the screen goes
+};
+
+// The order's state, in the match block at kArea.
+struct State
+{
+  u8 game = 0;  // the set's game it belongs to (0: none)
+  Step step = Step::Idle;
+  u8 first = 0;      // the port that picks first (the previous game's winner)
+  u32 since = 0;     // the hook frame its step began at
+  u16 elapsed = 0;   // frames into the step, as of the last boundary (what the gate reads)
+  bool operator==(const State&) const = default;
+};
+
+// 45 seconds a pick (the ranked rules' character timers), at the game's 60 frames a second.
+constexpr int PICK_FRAMES = 45 * 60;
+
+// The order's 16 bytes, the last of the match block (FreeSpace.h): +0 kMagic, +4 game, +5 step,
+// +6 first, +7 0, +8 since, +0xC elapsed, +0xE 0. Anything without the magic reads as Idle.
+constexpr u32 kArea = FreeSpace::kMatchBlock.end - 0x10;
+constexpr u32 kMagic = 0x5947434F;  // "YGCO"
+static_assert(FreeSpace::kMatchBlock.Contains(kArea) && kArea % 16 == 0);
+
+// The step machine: the state after this boundary, from the state before it. Pure. On the
+// character select of a Project+ ranked set's game 2 or later, it starts the order (the winner
+// first), moves on when the player whose turn it is locks in (A newly pressed with the token on a
+// character) or the pick's time is up; it clears a stale order on the character select of any game
+// it doesn't apply to; off the character select it changes nothing.
+State Advance(const SetView& set, const CssView& css, const State& state, int frame);
+
+// The gate's masks and presses for the frame about to run, from the state the hook left. Pure.
+Rollback::InputGate::Masks Gate(const SetView& set, const CssView& css, const State& state);
+
+// The overlay's line ("Ada picks first · 0:42"; "Your pick · 0:42 · A locks it in"), empty when
+// nothing is on. `ports` names the players and says which is this machine's (UI only).
+std::string Line(const SetView& set, const CssView& css, const State& state,
+                 const std::vector<Events::PortInfo>& ports);
+
+// Supernova 2025's Meta Knight clause, re-checked once both final characters are known (Brawl's
+// exact order): if exactly one player is Meta Knight, the other port picks any legal stage. -1:
+// the clause doesn't apply. Character values are the character select's.
+constexpr int kMetaKnight = 0x16;
+int MkFreePicker(const std::array<int, 2>& characters);
+
+// ---- Memory ----
+
+SetView ReadSet(const GuestMemory& memory);
+CssView ReadCss(const GuestMemory& memory);
+State ReadState(const GuestMemory& memory);
+// Writes `state` at kArea, only the bytes that differ. Returns how many bytes changed.
+int WriteState(GuestMemory& memory, const State& state);
+
+// The frame hook's part (UX.cpp): reads, advances and writes the state (first runs and re-runs),
+// and on first runs gives the overlay its line.
+void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
+           const std::vector<Events::PortInfo>& ports);
+// The input gate's part (Rollback::InputGate::SetSource): masks from memory alone.
+Rollback::InputGate::Masks GateFrame(const Core::CPUThreadGuard& guard);
+
+// Test knob ORCA_TEST_CHAR_ORDER=<pplus|brawl>:<game>:<winner port 1-2> (a test override, both
+// processes alike): the set view this many games in, with no match block behind it, so the order
+// runs on the first character select of a harness run. Parsed for tests.
+bool ParseTestSpec(const std::string& spec, SetView* out);
+}  // namespace Orca::UX::CharOrder

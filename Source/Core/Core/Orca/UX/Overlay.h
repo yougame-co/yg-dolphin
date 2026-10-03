@@ -159,5 +159,8 @@ void SetPerf(Perf perf);
 void FrameBoundary(bool shown);
 // A short toast under the circle (OverlayModel::AddToast, now). Any thread.
 void ShowToast(std::string text);
+// The online rules' line, top centre while no search line shows there ("Ada picks first · 0:42");
+// empty: none. Display only: the rules compute it from memory on first runs. Any thread.
+void SetRuleLine(std::string text);
 OverlayModel& Overlay();
 }  // namespace Orca::UX

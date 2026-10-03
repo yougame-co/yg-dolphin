@@ -313,6 +313,8 @@ std::atomic<Stats> s_stats{Stats::Off};
 std::atomic<Perf> s_perf{Perf::Fps};
 Common::EventHook s_state_hook;  // the core's pause and resume, for the frame meter
 std::atomic<bool> s_visible{true};  // the app shows the game (embed hide/show)
+std::mutex s_rule_line_lock;
+std::string s_rule_line;  // SetRuleLine's
 // ORCA_UX_OVERLAY_DEMO=1 (design checks only): a made-up friend whose link cycles good, ok, bad
 // with a stall, every 12 s, in place of the session's stats.
 bool s_demo = false;
@@ -425,8 +427,13 @@ void Draw()
                                                s_perf.load(std::memory_order_relaxed));
   // The matchmaking search (UX/OnlineMenu.h), while the player waits on the character select.
   const auto [search, search_note] = Search::Lines();
+  std::string rule_line;
+  {
+    std::lock_guard lk(s_rule_line_lock);
+    rule_line = s_rule_line;
+  }
   if (!f.show_signal && f.waiting.empty() && f.toasts.empty() && f.stats.empty() &&
-      f.perf.empty() && search.empty())
+      f.perf.empty() && search.empty() && rule_line.empty())
   {
     return;
   }
@@ -497,6 +504,12 @@ void Draw()
       OutlinedText(dl, size, ImVec2((screen.x - n.x) / 2, line_y), 1, search_note, Signal::Ok);
     }
   }
+  else if (!rule_line.empty())
+  {
+    const float size = 3.0f * unit;
+    const ImVec2 s = TextSize(size, rule_line);
+    OutlinedText(dl, size, ImVec2((screen.x - s.x) / 2, margin), 1, rule_line);
+  }
 }
 }  // namespace
 
@@ -523,6 +536,12 @@ void FrameBoundary(bool shown)
 void ShowToast(std::string text)
 {
   s_overlay.AddToast(std::move(text), NowMs());
+}
+
+void SetRuleLine(std::string text)
+{
+  std::lock_guard lk(s_rule_line_lock);
+  s_rule_line = std::move(text);
 }
 
 void ShutdownOverlay()

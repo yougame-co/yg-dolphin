@@ -30,6 +30,7 @@ add_dolphin_test(OrcaPauseTest Orca/PauseTest.cpp)
 add_dolphin_test(OrcaJitWarmTest Orca/JitWarmTest.cpp)
 add_dolphin_test(OrcaResultsTest Orca/ResultsTest.cpp)
 add_dolphin_test(OrcaInputGateTest Orca/InputGateTest.cpp)
+add_dolphin_test(OrcaCharOrderTest Orca/CharOrderTest.cpp)
 
 add_dolphin_test(SkylandersTest IOS/USB/SkylandersTest.cpp)
 

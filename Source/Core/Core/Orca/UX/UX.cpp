@@ -10,6 +10,7 @@
 
 #include "Common/Logging/Log.h"
 #include "Core/Orca/Session/Events.h"
+#include "Core/Orca/UX/CharOrder.h"
 #include "Core/Orca/UX/ControllerSource.h"
 #include "Core/Orca/UX/GamePatches.h"
 #include "Core/Orca/UX/MenuText.h"
@@ -18,6 +19,7 @@
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/UX/Probe.h"
 #include "Core/Orca/UX/Results.h"
+#include "Core/Rollback/InputGate.h"
 
 namespace Orca::UX
 {
@@ -79,11 +81,17 @@ void Init()
     {
       WriteNameTags(guard, ports);
     }
+    // A ranked set's character order on later games' character select (CharOrder.h): its state
+    // in the match block, which the input gate reads for the frame about to run.
+    CharOrder::Frame(guard, frame, resimulating, ports);
     // Last, after every other writer here: a toggled patch group follows its condition as this
     // boundary's writers left it, so the hook run again at this boundary (a re-run from the
     // snapshot saved here) decides the same and writes nothing new (GamePatches.h).
     ApplyToggledGamePatches(guard);
   });
+  // The input gate's masks: the character order's (a pure function of memory).
+  Rollback::InputGate::SetSource(
+      [](const Core::CPUThreadGuard& guard) { return CharOrder::GateFrame(guard); });
   // Nothing is presented while the game waits for a friend: show the last frame again, with the
   // overlay's "Waiting for <name>..." on it.
   Orca::Events::SetStallCallback([](int stalled_ms) { RepresentDuringStall(stalled_ms); });
@@ -101,6 +109,7 @@ void Init()
 
 void Shutdown()
 {
+  Rollback::InputGate::SetSource({});
   Orca::Events::SetStallCallback({});
   Orca::Events::SetBoundaryCallback({});
   Orca::Events::SetFrameCallback({});

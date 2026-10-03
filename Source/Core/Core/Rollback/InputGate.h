@@ -45,8 +45,13 @@ struct Mask
   u16 buttons = 0;
   bool main_stick = false;
   bool c_stick = false;
+  // Buttons the game reads as held this frame whatever the pad says (a synthesized press, applied
+  // after the mask): rules that act for a player, such as a turn timer's default. Same bits as
+  // `buttons`; A, B, L or R also read fully pressed in analog. A press reaches the game as a new
+  // press only on a frame after one without it, so a rule that wants one press per try alternates.
+  u16 press = 0;
 
-  bool Empty() const { return buttons == 0 && !main_stick && !c_stick; }
+  bool Empty() const { return buttons == 0 && !main_stick && !c_stick && press == 0; }
   bool operator==(const Mask&) const = default;
 };
 // Everything: the port reads as a connected pad with nothing pressed.
@@ -55,8 +60,9 @@ constexpr Mask ALL{ALL_BUTTONS, true, true};
 
 using Masks = std::array<Mask, PORTS>;
 
-// `pad` as the game sees it through `mask`. Pure. The origin and error bits (PAD_GET_ORIGIN,
-// PAD_USE_ORIGIN, PAD_ERR_STATUS) and isConnected are kept, and an unplugged pad is left as it is.
+// `pad` as the game sees it through `mask` (its masked bits released, then its pressed bits held).
+// Pure. The origin and error bits (PAD_GET_ORIGIN, PAD_USE_ORIGIN, PAD_ERR_STATUS) and isConnected
+// are kept, and an unplugged pad is left as it is.
 GCPadStatus Apply(const GCPadStatus& pad, const Mask& mask);
 
 // The rule code's masks for the frame about to run: called on the CPU thread at every frame
