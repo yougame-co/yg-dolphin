@@ -167,6 +167,10 @@ void StartLocked(Net::RoomOptions options)
   }
   if (!Env("ORCA_NAME").empty())
     options.player_name = Env("ORCA_NAME").substr(0, 32);
+  // A joiner's own controls, for its port in the host's game (a launch join's game hasn't run
+  // yet: none).
+  if (options.joining)
+    options.controls = Events::OwnControls();
   NOTICE_LOG_FMT(NETPLAY, "Orca: joining a YouGame room ({}), compatibility {}",
                  options.joining ? "to join a friend's game" : "as the host",
                  options.compatibility);
@@ -375,10 +379,10 @@ bool IsRollbackFailure(const std::string& session_error)
          session_error.find("exceeds the limit") != std::string::npos;
 }
 
-void BroadcastNames(const std::vector<Net::KeyframeInfo::Name>& names)
+void BroadcastNames(const std::vector<Net::KeyframeInfo::Name>& names, int version)
 {
   if (const auto room = Room())
-    room->BroadcastNames(names);
+    room->BroadcastNames(names, version);
 }
 
 namespace

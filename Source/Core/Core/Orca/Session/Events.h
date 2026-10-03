@@ -20,7 +20,9 @@ class CPUThreadGuard;
 // app's netlog). The session owns the data; readers only get copies and callbacks.
 namespace Orca::Events
 {
-// A controller port in play: who holds it, by their YouGame username (from the join handshake).
+// A controller port in play: who holds it, by their YouGame username (from the join handshake), and
+// the controls they play with. Both are the host's values for that port at the frame (the
+// session's value channel: Rollback/OnlineMatch.cpp "Ports"), the same bytes on every machine.
 struct PortInfo
 {
   int port = 0;  // 0-based GameCube port
@@ -28,8 +30,17 @@ struct PortInfo
   // Whether another machine holds this port. This differs between machines (each sees its own port
   // as local): UI only, never part of a memory write.
   bool remote = false;
+  // The player's own controls, as their own game held them (UX/NameTags.h, ControlsProfile:
+  // rumble, then the name tag's layout); empty: none carried (the port's tag keeps what it has).
+  std::vector<u8> controls;
   bool operator==(const PortInfo&) const = default;
 };
+
+// This machine's player's own controls, as the in-game UX last read them from this machine's own
+// game while it played alone (UX/NameTags.h ReadOwnControls; empty: none), for the session to
+// carry into a game this player joins or hosts. Any thread.
+void SetOwnControls(std::vector<u8> controls);
+std::vector<u8> OwnControls();
 
 // The plugged-in ports changed (a friend plugged in or out): on the CPU thread at the boundary of
 // `frame`, first runs only, for the UI (toasts, the overlay). Not for memory writes: a re-run never
