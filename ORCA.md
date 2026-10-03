@@ -1139,6 +1139,13 @@ and the matched room come later):
   drop in ("Drop-in"), and Orca prints `orca menu online friends`. Their descriptions say so (a
   brawl, or in Project+ a fight, with the friends you invite, 2-4 players); none promises a roster
   or a mode that isn't there.
+- **B out of that character select** goes back to the page the pick was made on, with the cursor
+  on the button picked, the way B after Group > Brawl comes back to Group with Brawl selected (and
+  the way the game comes back from its own online modes): With Friends on FIGHT! (or whichever of
+  its buttons), With Anyone on Casual or Ranked; one more B is the ONLINE page. It holds after
+  matches too: the results come back to the same character select, and B from there goes back to
+  the same page. From Group > Brawl (Project+'s VERSUS, and its boot character select) B still
+  opens Group.
 
 ### How (`Data/Sys/Orca/RSBE01.patches`, `PPLUS32.patches`; `Core/Orca/UX/MenuText.h`, `OnlineMenu.h`)
 
@@ -1154,9 +1161,18 @@ and the matched room come later):
   - The ONLINE page's Options (`muProcOptWifi`, WiiConnect24 jobs) and With Anyone's Spectator are
     never enabled (`isEnableButton` answers no; they also stay hidden without a connection).
   - sqMenuMain's exit table: codes 24-27 (With Friends), 29 (Spectator), 30 (Casual, was Basic
-    Brawl / Basic Versus) and 31 (Ranked, was Team Battle) all go to sqVsMelee, the local Versus
-    character select. No online scene, network thread or DWC is ever entered. The menu's exit code
-    itself is left as the game wrote it, and Orca reads it.
+    Brawl / Basic Versus) and 31 (Ranked, was Team Battle) all go to Orca's block in place of the
+    online sequences' entries, which starts sqVsMelee, the local Versus character select, as Group >
+    Brawl does. No online scene, network thread or DWC is ever entered. The menu's exit code itself
+    is left as the game wrote it, and Orca reads it.
+  - The back out (sora_scene, both games): sqVsMelee always went back to sqMenuMain with argument 1,
+    which the menu opens as Group with Brawl selected. The block keeps the exit code in sqVsMelee's
+    object (+0x18, slack in its heap block) and the back out's helper (in the online entries' old
+    blocks) turns it into sqMenuMain's argument for that button (24-27 -> 23-26, 29-31 -> 27-29;
+    sqMenuMain's own table maps them to menu modes 24-27 and 29-31, and a mode is the exit code of
+    the button the menu opens on), once; anything else is 1, as before. sqPrizeCheck restarts
+    sqVsMelee after a match without touching the object, so the code outlives matches. Game code and
+    memory: rollback re-runs it and a drop-in keyframe carries it.
   - The IOS refusals of every session stay as the backstop: NET_KD_REQ, IP/Top and SSL refuse
     in a session and each refusal is logged at INFO (`IOS_WC24`, `IOS_NET`, `IOS_SSL`).
 - **Text** (`MenuText.h`): the main menu's message files, found through the menu scene's archive
@@ -1166,7 +1182,11 @@ and the matched room come later):
   Home-Run Contest, and the Boss Battles text no button shows) and the records' "Nintendo WFC"
   mentions. A message is rewritten only while its bytes are exactly the game's own, into the same
   slot (never longer, zeros after), at every frame boundary on both machines: a pure function of
-  emulated memory, covered by the UX's compatibility version (`ux=4`).
+  emulated memory, covered by the UX's compatibility version (`ux=5`). The description box at the
+  bottom prints from its own copy of a message, formatted when a page shows it; a menu that opens
+  straight on With Friends or With Anyone (B out of an Online character select) formats it in the
+  frame the archive loads, before any boundary, so the box's copy is rewritten the same way, while it
+  holds the original and the panel says that message is the one shown (`MenuText.h`).
 - **Textures** (`Data/Sys/Orca/Textures/RSBE01`, `Tools/orca/textures/README.md`): our own art,
   drawn by `Tools/orca/textures/make-labels.py` with SIL OFL fonts: Brawl's PLAY ONLINE label and
   ONLINE title (Anton, like the game's own light condensed titles), CASUAL and RANKED in both games,
@@ -1211,7 +1231,11 @@ the reader's edges and `AloneAt`); `Tools/orca/online-menu.py <nogui> <disc> [--
 [--video Metal --shots <dir> [--scale 4]]` (every way through the menu, solo, offline);
 `Tools/orca/online-menu-dropin.py` (a friend drops into a host on the ONLINE page; the pick that
 follows is both players', and nothing prints; with `--invite`, a pick within 30 s of an invite's
-stored keyframe prints nothing and one after it prints).
+stored keyframe prints nothing and one after it prints). online-menu.py's `back-*` scenarios hold B
+out of the character select and press A on the page that comes back: the same pick (exit code) again
+proves the page and the cursor (`back-friends-N`, `back-casual`, `back-ranked`), `back-chain` walks
+B to ONLINE and the top page and picks Casual, `back-versus` checks Group > Brawl still comes back to
+Group. They use the harness's per-visit rules (`@muMenuMain:2 ...`: only on the scene's second entry).
 
 ## Embedding
 

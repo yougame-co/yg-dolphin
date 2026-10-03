@@ -3,8 +3,10 @@
 
 #include "Core/Orca/UX/MenuText.h"
 
+#include <algorithm>
 #include <array>
 #include <string_view>
+#include <vector>
 
 #include "Common/Logging/Log.h"
 #include "Core/Orca/Profile.h"
@@ -102,6 +104,18 @@ constexpr u32 ENTRY_HEADER = 0x20;  // u16 type, u16 index, u32 size, ...; the d
 constexpr u16 TYPE_MISC = 1;
 constexpr u32 MAX_ENTRIES = 64;
 constexpr u32 MAX_MESSAGES = 1024;
+// The description box (MenuText.h): muMenuMain's panel and the message it shows, its window and
+// the window's message file, then the text it formatted that message into.
+constexpr u32 MENU_PANEL = 0x7BC;
+constexpr u32 PANEL_MESSAGE = 0x40;
+constexpr u32 PANEL_WINDOW = 0x48;
+constexpr u32 WINDOW_FILE = 0x4;
+constexpr u32 WINDOW_TEXT = 0x8;
+constexpr u32 TEXT_MSG = 0x9C;
+constexpr u32 MSG_CAPACITY = 0x48;
+constexpr u32 MSG_LENGTH = 0x4C;
+constexpr u32 MSG_BUFFER = 0x50;
+constexpr u32 MAX_CAPACITY = 0x1000;
 
 bool Pointer(const GuestMemory& m, u32 p)
 {
@@ -179,8 +193,75 @@ u32 FindArchiveFile(const GuestMemory& m, u32 archive, u32 file)
   return 0;
 }
 
-int ApplyMenuText(GuestMemory& m, std::span<const MenuTextEdit> edits)
+MenuDescription FindMenuDescription(const GuestMemory& m, u32 messages)
 {
+  if (!messages || !Pointer(m, SCENE_MANAGER))
+    return {};
+  const u32 manager = m.Read32(SCENE_MANAGER);
+  if (!Pointer(m, manager + MANAGER_SCENE))
+    return {};
+  const u32 scene = m.Read32(manager + MANAGER_SCENE);
+  if (!Pointer(m, scene) || !Pointer(m, scene + MENU_PANEL) ||
+      !StringAt(m, m.Read32(scene), "muMenuMain"))
+  {
+    return {};
+  }
+  const u32 panel = m.Read32(scene + MENU_PANEL);
+  if (!Pointer(m, panel) || !Pointer(m, panel + PANEL_WINDOW))
+    return {};
+  const u32 window = m.Read32(panel + PANEL_WINDOW);
+  if (!Pointer(m, window) || !Pointer(m, window + WINDOW_TEXT) ||
+      m.Read32(window + WINDOW_FILE) != messages)
+  {
+    return {};
+  }
+  const u32 text = m.Read32(window + WINDOW_TEXT);
+  if (!Pointer(m, text) || !Pointer(m, text + TEXT_MSG))
+    return {};
+  const u32 msg = m.Read32(text + TEXT_MSG);
+  if (!Pointer(m, msg) || !Pointer(m, msg + MSG_BUFFER))
+    return {};
+  const u32 capacity = m.Read32(msg + MSG_CAPACITY);
+  const u32 length = m.Read32(msg + MSG_LENGTH);
+  const u32 buffer = m.Read32(msg + MSG_BUFFER);
+  if (capacity > MAX_CAPACITY || length == 0 || length > capacity || !m.Valid(buffer) ||
+      !m.Valid(buffer + length - 1))
+  {
+    return {};
+  }
+  return {buffer, length, m.Read32(panel + PANEL_MESSAGE)};
+}
+
+int ApplyMenuDescription(GuestMemory& m, u32 messages, std::span<const MenuTextEdit> edits)
+{
+  const MenuDescription d = FindMenuDescription(m, messages);
+  if (!d.buffer)
+    return 0;
+  std::vector<u8> now(d.length);
+  for (u32 i = 0; i < d.length; ++i)
+    now[i] = m.Read8(d.buffer + i);
+  for (const MenuTextEdit& e : edits)
+  {
+    if (e.file != DESCRIPTION_FILE || e.message != d.message || e.original.size() > now.size())
+      continue;
+    const auto at = std::search(now.begin(), now.end(), e.original.begin(), e.original.end(),
+                                [](u8 a, char b) { return a == static_cast<u8>(b); });
+    if (at == now.end())
+      continue;
+    // The bytes the game itself formats from the rewritten message: the new words, then the
+    // slot's zeros, in the same place (the box's length and what follows stay as they are).
+    const u32 from = d.buffer + static_cast<u32>(at - now.begin());
+    for (size_t i = 0; i < e.original.size(); ++i)
+      m.Write8(from + static_cast<u32>(i), i < e.text.size() ? static_cast<u8>(e.text[i]) : 0);
+    return 1;
+  }
+  return 0;
+}
+
+int ApplyMenuText(GuestMemory& m, std::span<const MenuTextEdit> edits, int* in_box)
+{
+  if (in_box)
+    *in_box = 0;
   const u32 archive = FindMenuArchive(m);
   if (!archive)
     return 0;
@@ -219,7 +300,12 @@ int ApplyMenuText(GuestMemory& m, std::span<const MenuTextEdit> edits)
       m.Write8(at + static_cast<u32>(i), i < e.text.size() ? static_cast<u8>(e.text[i]) : 0);
     ++written;
   }
-  return written;
+  // After the messages: a box that formatted one of them before it was rewritten shows the new
+  // words from the next frame on.
+  const int box = ApplyMenuDescription(m, FindArchiveFile(m, archive, DESCRIPTION_FILE), edits);
+  if (in_box)
+    *in_box = box;
+  return written + box;
 }
 
 void WriteMenuText(const Core::CPUThreadGuard& guard)
@@ -232,7 +318,11 @@ void WriteMenuText(const Core::CPUThreadGuard& guard)
     return;
   }
   GuardMemory memory(guard);
-  if (const int n = ApplyMenuText(memory, MenuTextEdits()))
-    INFO_LOG_FMT(ROLLBACK, "Orca: {} main menu text(s) rewritten", n);
+  int in_box = 0;
+  if (const int n = ApplyMenuText(memory, MenuTextEdits(), &in_box))
+  {
+    INFO_LOG_FMT(ROLLBACK, "Orca: {} main menu text(s) rewritten, {} of them the description box's",
+                 n, in_box);
+  }
 }
 }  // namespace Orca::UX

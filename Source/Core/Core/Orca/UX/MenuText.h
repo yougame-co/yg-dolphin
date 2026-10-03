@@ -36,6 +36,18 @@ class CPUThreadGuard;
 // never anywhere else. A pure function of emulated memory, applied at every frame boundary on
 // both machines, first runs and re-runs alike: written before anything is saved there, so
 // snapshots and keyframes hold it. UX kCompatVersion covers it.
+//
+// The description box at the bottom of the menu prints from a copy: when a page shows a message,
+// the box formats it (control codes, then the message's whole slot) into a buffer of its own and
+// draws that buffer every frame. A menu that opens straight on a page (B out of an Online
+// character select comes back to With Friends or With Anyone) loads the archive and formats that
+// page's first description in the same frame, before any boundary could rewrite the message, so
+// the box's copy is rewritten too, the same way: while it holds a rewritten message's original
+// bytes, and the panel says that message is the one shown. Found under the harness (Brawl rev 2
+// and Project+ alike): muMenuMain +0x7BC is the description panel, whose +0x40 is the message shown
+// and +0x48 its window; the window's +0x4 is the archive's MiscData 5 and +0x8 -> +0x9C its text,
+// with the buffer at +0x50, its length at +0x4C and its capacity at +0x48. The bytes written are
+// the ones the game formats from the rewritten message itself.
 namespace Orca::UX
 {
 class GuestMemory;
@@ -55,8 +67,25 @@ std::span<const MenuTextEdit> MenuTextEdits();
 u32 FindMenuArchive(const GuestMemory& memory);
 // The address of MiscData `file`'s data in that image, 0 if it has none.
 u32 FindArchiveFile(const GuestMemory& memory, u32 archive, u32 file);
-// One boundary's writes. Returns how many messages were rewritten.
-int ApplyMenuText(GuestMemory& memory, std::span<const MenuTextEdit> edits);
+// The menu descriptions' message file (MiscData 5), where the box's messages come from.
+constexpr u32 DESCRIPTION_FILE = 5;
+
+// The description box's copy of the message it shows, if the main menu's panel is up and its window
+// prints from `messages` (the archive's MiscData 5); a zero buffer otherwise.
+struct MenuDescription
+{
+  u32 buffer = 0;
+  u32 length = 0;
+  u32 message = 0;  // the message shown
+};
+MenuDescription FindMenuDescription(const GuestMemory& memory, u32 messages);
+// Rewrites the box's copy of an edit's original (at most one: the box shows one message). Returns
+// 1 if it did.
+int ApplyMenuDescription(GuestMemory& memory, u32 messages, std::span<const MenuTextEdit> edits);
+// One boundary's writes: the messages, then the box's copy. Returns how many were rewritten, and in
+// `in_box` how many of them were the box's copy.
+int ApplyMenuText(GuestMemory& memory, std::span<const MenuTextEdit> edits,
+                  int* in_box = nullptr);
 
 // The frame hook's part (Brawl rev 2 and Project+ only).
 void WriteMenuText(const Core::CPUThreadGuard& guard);
