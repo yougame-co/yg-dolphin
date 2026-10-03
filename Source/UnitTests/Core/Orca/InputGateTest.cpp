@@ -293,8 +293,8 @@ TEST(OrcaInputGateTestKnob, Parses)
 
 TEST(OrcaInputGateTestKnob, Refuses)
 {
-  for (const char* bad :
-       {"", "1", "0:A", "5:A", "1:Q", "1:A:sometimes", "1:A:mem:x", "1:A,", "12:A", "1:"})
+  for (const char* bad : {"", "1", "0:A", "5:A", "1:Q", "1:A:sometimes", "1:A:mem:x", "1:A,",
+                          "12:A", "1:", "1:A+", "1:A,,2:B", "1:a", " 1:A"})
   {
     std::string error;
     EXPECT_FALSE(ParseTestSpec(bad, &error)) << bad;

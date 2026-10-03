@@ -10,7 +10,6 @@
 #include <xxh3.h>
 
 #include "Common/Logging/Log.h"
-#include "Common/StringUtil.h"
 #include "Core/Core.h"
 #include "Core/HW/Memmap.h"
 #include "Core/Orca/Profile.h"
@@ -67,6 +66,20 @@ u64 TestMemoryHash(const Core::CPUThreadGuard& guard)
   if (!memory.GetRAM() || memory.GetRamSize() < offset + TEST_HASH_SIZE)
     return 0;
   return XXH3_64bits(memory.GetRAM() + offset, TEST_HASH_SIZE);
+}
+
+// Splits at every `delim`, keeping empty fields (so a stray separator is an error, not ignored).
+std::vector<std::string> Split(std::string_view text, char delim)
+{
+  std::vector<std::string> fields;
+  while (true)
+  {
+    const std::size_t at = text.find(delim);
+    fields.emplace_back(text.substr(0, at));
+    if (at == std::string_view::npos)
+      return fields;
+    text.remove_prefix(at + 1);
+  }
 }
 
 // The test knob's log: on first runs, how often each port was masked and how often the masks
@@ -183,9 +196,9 @@ std::optional<std::vector<TestRule>> ParseTestSpec(std::string_view spec, std::s
       {"DOWN", PAD_BUTTON_DOWN}, {"LEFT", PAD_BUTTON_LEFT},   {"RIGHT", PAD_BUTTON_RIGHT},
   };
   std::vector<TestRule> rules;
-  for (const std::string& rule_text : SplitString(std::string(spec), ','))
+  for (const std::string& rule_text : Split(spec, ','))
   {
-    const std::vector<std::string> parts = SplitString(rule_text, ':');
+    const std::vector<std::string> parts = Split(rule_text, ':');
     if (parts.size() < 2 || parts.size() > 3)
     {
       *error = fmt::format("'{}' is not <port>:<what>[:<when>]", rule_text);
@@ -198,7 +211,7 @@ std::optional<std::vector<TestRule>> ParseTestSpec(std::string_view spec, std::s
       return std::nullopt;
     }
     rule.port = parts[0][0] - '1';
-    for (const std::string& name : SplitString(parts[1], '+'))
+    for (const std::string& name : Split(parts[1], '+'))
     {
       if (name == "ALL")
       {
