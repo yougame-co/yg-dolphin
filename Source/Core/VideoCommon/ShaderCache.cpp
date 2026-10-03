@@ -63,6 +63,7 @@ void ShaderCache::InitializeShaderCache()
   {
     LoadCaches();
     LoadPipelineUIDCache();
+    LoadEFBCopyUIDCache();
   }
 
   // Queue ubershader precompiling if required.
@@ -869,6 +870,53 @@ void ShaderCache::ClosePipelineUIDCache()
 {
   // This is left as a method in case we need to append extra data to the file in the future.
   m_gx_pipeline_uid_cache_file.Close();
+  m_efb_copy_uid_cache_file.Close();
+}
+
+void ShaderCache::LoadEFBCopyUIDCache()
+{
+  using TextureConversionShaderGen::TCShaderUid;
+  using TextureConversionShaderGen::UidData;
+  constexpr u32 MAGIC = 0x59504345;  // ECPY
+  constexpr u32 VERSION = 1;
+  const std::string filename =
+      File::GetUserPath(D_CACHE_IDX) + SConfig::GetInstance().GetGameID() + ".efbcopy.uidcache";
+  std::vector<TCShaderUid> uids;
+  {
+    File::IOFile in(filename, "rb");
+    u32 header[3] = {};
+    if (in && in.ReadArray(header, 3) && header[0] == MAGIC && header[1] == VERSION &&
+        header[2] == sizeof(UidData))
+    {
+      TCShaderUid uid;
+      while (in.ReadBytes(uid.GetUidData(), sizeof(UidData)))
+        uids.push_back(uid);
+    }
+  }
+  // Compiled now, before the first frame; a broken or unknown entry only costs its compile.
+  for (const TCShaderUid& uid : uids)
+    GetEFBCopyToVRAMPipeline(uid);
+  // Written again whole (drops a torn last entry), then appended to as new copies show up.
+  if (m_efb_copy_uid_cache_file.Open(filename, "wb"))
+  {
+    const u32 header[3] = {MAGIC, VERSION, sizeof(UidData)};
+    m_efb_copy_uid_cache_file.WriteArray(header, 3);
+    for (const auto& [uid, pipeline] : m_efb_copy_to_vram_pipelines)
+      m_efb_copy_uid_cache_file.WriteBytes(uid.GetUidData(), sizeof(UidData));
+    m_efb_copy_uid_cache_file.Flush();
+  }
+  INFO_LOG_FMT(VIDEO, "Compiled {} EFB copy pipelines from {}", uids.size(), filename);
+}
+
+void ShaderCache::AppendEFBCopyUID(const TextureConversionShaderGen::TCShaderUid& uid)
+{
+  if (!m_efb_copy_uid_cache_file.IsOpen())
+    return;
+  if (!m_efb_copy_uid_cache_file.WriteBytes(uid.GetUidData(), uid.GetUidDataSize()) ||
+      !m_efb_copy_uid_cache_file.Flush())
+  {
+    m_efb_copy_uid_cache_file.Close();
+  }
 }
 
 void ShaderCache::AddSerializedGXPipelineUID(const SerializedGXPipelineUid& uid)
@@ -1288,6 +1336,8 @@ ShaderCache::GetEFBCopyToVRAMPipeline(const TextureConversionShaderGen::TCShader
   config.framebuffer_state = RenderState::GetRGBA8FramebufferState();
   config.usage = AbstractPipelineUsage::Utility;
   auto iiter = m_efb_copy_to_vram_pipelines.emplace(uid, g_gfx->CreatePipeline(config));
+  if (g_ActiveConfig.bShaderCache && iiter.first->second)
+    AppendEFBCopyUID(uid);
   return iiter.first->second.get();
 }
 

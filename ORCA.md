@@ -965,6 +965,53 @@ word). Headless Metal presents nothing, so presentation is measured in a `-p mac
 shader cache first (a cold Metal cache costs ~3.3 s at match start). A forced session setting
 (`Orca/Profile.cpp`) beats `-C`: comparing one needs a build that doesn't force it.
 
+## Match start
+
+A match's countdown is where most of a game's new GPU pipelines are first drawn (both
+characters, the stage, the countdown's effects). Orca sessions force (`Orca/Profile.cpp`):
+
+- **Asynchronous ubershaders** (`ShaderCompilationMode=2`): a pipeline never drawn before compiles
+  in the background and is drawn with an ubershader until it is ready. Dolphin's default
+  (synchronous) compiles it on the emulation thread, which in a session is also the GPU thread.
+- **Compile before starting** (`WaitForShadersBeforeStarting`): the ubershaders and every pipeline
+  in `Cache/<game>.uidcache` compile on all cores before the first frame.
+- **EFB copy pipelines before the first frame** (`ShaderCache::LoadEFBCopyUIDCache`): EFB and XFB
+  copy pipelines are in no Dolphin disk cache and no ubershader covers them, so each kind compiled
+  at its first copy, in every run: Brawl's first two (R8 and RGBA8) come at the countdown. Their
+  UIDs are kept in `Cache/<game>.efbcopy.uidcache`.
+
+Rendering only: nothing drawn reaches RAM (EFB/XFB copies stay on the GPU, EFB access and bbox are
+off), so none of this can make two players' games differ.
+
+Why it came back after every update: Dolphin's compiled-shader files (`Cache/Shaders/*.cache`,
+D3D's DXBC on Windows) carry the build's git commit in their header and are emptied by any other
+build; the pipeline UID cache survives. Without the boot compile, that cache was recompiled on one
+background thread (`ShaderCompilerThreads` defaults to 1), and a pipeline still queued at the
+countdown compiled again on the emulation thread. macOS adds Apple's own Metal cache, kept per
+binary. Before 0.3.8 only the desktop app's macOS command line asked for the first two settings.
+
+Measured 2026-10-03 (M4, Metal, 871x434 window, scripted Brawl Mario vs Link on Battlefield and
+P+ 1v1, `YG_SHADERLOG=1` probe build): VI stalls from 0.6 s before scMelee to 12 s after.
+
+| run | compiles on the emulation thread | VI > 50 ms | worst | lost |
+|---|---|---|---|---|
+| Brawl, synchronous, cold | 60 pipelines (3.9 s), 2 EFB copies (0.15 s) | 11 | 1,603 ms | 4,652 ms |
+| Brawl, synchronous, a real player's UID cache (407), new binary | 18 (1.2 s), 2 EFB copies | 10 | 275 ms | 1,840 ms |
+| P+, synchronous, a real player's UID cache (656), new binary | 80 (1.8 s), 2 EFB copies | 9 | 841 ms | 2,279 ms |
+| P+, synchronous + compile before starting, same | 35 never-seen (1.3 s), 2 EFB copies | 7 | 779 ms | 1,860 ms |
+| P+, ubershaders + compile before starting, same | 2 EFB copies (0.14 s) | 4 | 100 ms | 635 ms |
+| Brawl, ubershaders + before starting, new binary | 2 EFB copies (0.15 s) | 4 | 103 ms | 672 ms |
+| the same with the EFB copy cache | none | 3 | 95 ms | 538 ms |
+| Brawl, everything warm (any mode) | none | 2 | 96 ms | 523-543 ms |
+
+The boot compile costs, on the M4 after an update: 2.9 s with an empty UID cache, 10.7 s (Brawl,
+407 pipelines) and 14.6 s (P+, 656); 0.2 s otherwise. New textures cost 3-5 ms in the same window
+(the hires lookup for Orca's own pack 0.1 ms). What is left with everything warm (about 100 + 60 ms
+at the countdown and 45 ms at 4 s, no compile, no texture work) is not shaders.
+
+Re-measure with a build of branch `hitch-shaders` (the `YG_SHADERLOG=1` probe: one line per frame
+that compiled anything, and the shader cache's size and boot time).
+
 ## Online menu
 
 Luis's rules: Play Online works in both games, through the game's own menus and never a new

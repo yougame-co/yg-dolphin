@@ -122,6 +122,11 @@ private:
   void ClearCaches();
   void LoadPipelineUIDCache();
   void ClosePipelineUIDCache();
+  // EFB/XFB copy pipelines are in no disk cache and never covered by ubershaders: without this, the
+  // first copy of each kind compiles on the emulation thread (a match's countdown, every run).
+  // Their UIDs are kept per game and compiled before the first frame.
+  void LoadEFBCopyUIDCache();
+  void AppendEFBCopyUID(const TextureConversionShaderGen::TCShaderUid& uid);
   void CompileMissingPipelines();
   void QueueUberShaderPipelines();
   bool CompileSharedPipelines();
@@ -229,6 +234,7 @@ private:
   std::map<GXUberPipelineUid, std::pair<std::unique_ptr<AbstractPipeline>, bool>>
       m_gx_uber_pipeline_cache;
   File::IOFile m_gx_pipeline_uid_cache_file;
+  File::IOFile m_efb_copy_uid_cache_file;
   Common::LinearDiskCache<SerializedGXPipelineUid, u8> m_gx_pipeline_disk_cache;
   Common::LinearDiskCache<SerializedGXUberPipelineUid, u8> m_gx_uber_pipeline_disk_cache;
 
