@@ -1852,7 +1852,7 @@ machine and block on its own track.
     whether ports 1 and 2 are both plugged in (the session's synced plan), first runs and re-runs
     alike (a rollback runs the hook again on the loaded state: a second pass changes nothing).
 - **Project+** (`RankedPPlus.*`), while the block says ranked and Project+:
-  - Outside the stage select, `RSS_EXDATA` (0x8042C4E8, 0x320 bytes) holds the 2024 Proposed preset
+  - Outside the stage select, `RSS_EXDATA` (0x8042C4E8; its first 0xA8 bytes, past which every preset Project+ ships is the same) holds the 2024 Proposed preset
     (`pf/stage/switch/Switch03.rss`): page 0 is the 9 legal stages, hazards off. Its page-0 slots
     give each position's stage kind through the preset's slot table (+0x104): positions 0-8 are
     GHZ, Bowser's Castle, Frigate Husk, Dream Land, Temple of Time, Smashville, Battlefield, PS2,

@@ -49,6 +49,8 @@ namespace Orca::UX::RankedPPlus
 // Project+ v3.2's stage select data (Source/Netplay/Net-Random.asm).
 constexpr u32 RSS_EXDATA = 0x8042C4E8;
 constexpr u32 RSS_EXDATA_SIZE = 0x320;
+// What the flow writes of the preset: every preset Project+ ships is the same after it.
+constexpr u32 PRESET_BYTES = 0xA8;
 constexpr u32 PAGE_INDEX = 0x8042C821;
 constexpr u32 STAGE_STRIKE_TABLE = 0x8042C822;
 constexpr u32 STRIKE_PAGES = 5;

@@ -417,9 +417,11 @@ int Apply(GuestMemory& m, int frame, bool two_players)
   const u32 task = StageSelectTask(m, scene);
   int changed = 0;
   // Outside the stage select, the 2024 Proposed preset: the stage select builds its pages from it.
-  if (scene != "scSelStage" && m.Valid(RSS_EXDATA) && m.Valid(RSS_EXDATA + RSS_EXDATA_SIZE - 1))
+  // Every preset Project+ ships is the same past PRESET_BYTES (the random masks, the hazards and
+  // the pages' stages are before it), the range the casual track saves and gives back too.
+  if (scene != "scSelStage" && m.Valid(RSS_EXDATA) && m.Valid(RSS_EXDATA + PRESET_BYTES - 1))
   {
-    for (u32 i = 0; i < RSS_EXDATA_SIZE; ++i)
+    for (u32 i = 0; i < PRESET_BYTES; ++i)
     {
       if (m.Read8(RSS_EXDATA + i) != kSwitch03[i])
       {

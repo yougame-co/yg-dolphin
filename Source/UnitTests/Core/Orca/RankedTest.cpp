@@ -94,6 +94,9 @@ FakeMemory Game(std::string_view scene)
   m.Write32(TASK + RankedPPlus::SSS_CONTROLLER, 0xF0);
   // Project+'s netplay default preset in RSS_EXDATA (any other bytes will do), its tables after.
   m.Fill(RankedPPlus::RSS_EXDATA, 0x400, 0x11);
+  // Past the preset's first bytes every preset is the same: the slot table (kinds) included.
+  for (u32 i = RankedPPlus::PRESET_BYTES; i < RankedPPlus::RSS_EXDATA_SIZE; ++i)
+    m.Write8(RankedPPlus::RSS_EXDATA + i, RankedPPlus::kSwitch03[i]);
   m.Fill(RankedPPlus::STAGE_STRIKE_TABLE - 1, 0x1F, 0);
   m.Fill(RankedPPlus::CURRENT_PAGE, 4);
   m.Fill(0x805A00E0, 4);
@@ -311,9 +314,12 @@ TEST(OrcaRankedPPlus, PresetOutsideTheStageSelectOnly)
   FakeMemory m = Game("scSelctCharacter");
   MatchBlock::Write(
       m, MatchBlock::State::Fresh(MatchBlock::MODE_RANKED, Ranked::RULESET_PPLUS_2024, 0));
+  // Past the preset's first bytes nothing is written (every preset is the same there).
+  m.Write8(RankedPPlus::RSS_EXDATA + RankedPPlus::PRESET_BYTES, 0x77);
   EXPECT_GT(RankedPPlus::Apply(m, 1, true), 0);
-  for (u32 i = 0; i < RankedPPlus::RSS_EXDATA_SIZE; ++i)
+  for (u32 i = 0; i < RankedPPlus::PRESET_BYTES; ++i)
     ASSERT_EQ(m.Read8(RankedPPlus::RSS_EXDATA + i), RankedPPlus::kSwitch03[i]);
+  EXPECT_EQ(m.Read8(RankedPPlus::RSS_EXDATA + RankedPPlus::PRESET_BYTES), 0x77);
   EXPECT_EQ(RankedPPlus::Apply(m, 2, true), 0);
   // On the stage select it's left alone.
   SetScene(m, "scSelStage");
