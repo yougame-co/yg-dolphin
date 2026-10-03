@@ -124,14 +124,36 @@ std::string CleanName(const std::string& raw)
   return out;
 }
 
+// Hex digits and back (defined below, with the packets').
+std::string ToHex(const u8* data, size_t size);
+bool FromHex(const std::string& hex, std::vector<u8>* out);
+
+// A port's controls from the wire: hex, at most MAX_CONTROLS bytes; anything else is none. The
+// host keeps exactly what a joiner then reads back from it (the same bound on both sides).
+std::vector<u8> ControlsFromHex(const picojson::value& v)
+{
+  std::vector<u8> bytes;
+  if (!v.is<std::string>() || v.get<std::string>().size() > MAX_CONTROLS * 2 ||
+      !FromHex(v.get<std::string>(), &bytes))
+  {
+    return {};
+  }
+  return bytes;
+}
+
+}  // namespace
+
+// Each entry [seat, from, name] and, when the port carries controls, their hex.
 picojson::value NamesToJson(const std::vector<KeyframeInfo::Name>& names)
 {
   picojson::array out;
   for (const KeyframeInfo::Name& n : names)
   {
-    out.push_back(picojson::value(picojson::array{picojson::value(static_cast<double>(n.seat)),
-                                                  picojson::value(static_cast<double>(n.from)),
-                                                  picojson::value(n.name)}));
+    picojson::array entry{picojson::value(static_cast<double>(n.seat)),
+                          picojson::value(static_cast<double>(n.from)), picojson::value(n.name)};
+    if (!n.controls.empty())
+      entry.push_back(picojson::value(ToHex(n.controls.data(), n.controls.size())));
+    out.push_back(picojson::value(std::move(entry)));
   }
   return picojson::value(out);
 }
@@ -148,15 +170,23 @@ std::vector<KeyframeInfo::Name> NamesFromJson(const picojson::object& d)
     if (!entry.is<picojson::array>() || names.size() >= 16)
       continue;
     const auto& a = entry.get<picojson::array>();
-    if (a.size() != 3 || !a[0].is<double>() || !a[1].is<double>() || !a[2].is<std::string>())
+    if ((a.size() != 3 && a.size() != 4) || !a[0].is<double>() || !a[1].is<double>() ||
+        !a[2].is<std::string>())
+    {
       continue;
+    }
     const double seat = a[0].get<double>(), from = a[1].get<double>();
     if (seat < 0 || seat >= MAX_SEATS || from < 0 || from > (1 << 30))
       continue;
-    names.push_back({static_cast<int>(seat), static_cast<int>(from), CleanName(a[2].get<std::string>())});
+    names.push_back({static_cast<int>(seat), static_cast<int>(from),
+                     CleanName(a[2].get<std::string>()),
+                     a.size() == 4 ? ControlsFromHex(a[3]) : std::vector<u8>{}});
   }
   return names;
 }
+
+namespace
+{
 
 std::string RandomString(const char* alphabet, size_t length)
 {
@@ -382,6 +412,8 @@ picojson::object PacketToJson(const Packet& packet)
   }
   if (packet.history_ack >= 0)
     d["ha"] = picojson::value(static_cast<double>(packet.history_ack));
+  if (packet.values_ack >= 0)
+    d["va"] = picojson::value(static_cast<double>(packet.values_ack));
   if (packet.history_seat >= 0 && !packet.history.empty())
   {
     d["ht"] = picojson::value(static_cast<double>(packet.history_seat));
@@ -531,6 +563,13 @@ bool PacketFromJson(const picojson::object& d, Packet* packet)
     if (!ha)
       return false;
     out.history_ack = *ha;
+  }
+  if (d.count("va"))
+  {
+    const auto va = Int(d, "va", 0, MAX_FRAME);
+    if (!va)
+      return false;
+    out.values_ack = *va;
   }
   if (d.count("hp"))
   {
@@ -702,6 +741,8 @@ struct YouGameRoom::Impl
     bool announced = false;
     bool drop_in_host = false;
     bool sent_packet = false;
+    // A joiner's own controls, from its hello ("ct"; empty: none).
+    std::vector<u8> controls;
     // Its hello offered direct links (`dl`), and one is being built with it.
     bool direct = false;
     bool linked = false;
@@ -716,7 +757,7 @@ struct YouGameRoom::Impl
   std::vector<PeerEvent> events;
   std::map<int, KeyframeInfo> keyframe_offers;
   std::vector<std::pair<int, std::string>> pending_drops;
-  std::optional<std::vector<KeyframeInfo::Name>> pending_names;
+  std::optional<std::pair<std::vector<KeyframeInfo::Name>, int>> pending_names;
   // Whether this Orca joins someone else's game (RoomOptions::joining, or the app's invite), known
   // once the ticket is in (role_known, under mutex).
   bool joining = false;
@@ -2286,7 +2327,7 @@ struct YouGameRoom::Impl
       std::lock_guard lock(mutex);
       drops.swap(pending_drops);
     }
-    std::optional<std::vector<KeyframeInfo::Name>> names;
+    std::optional<std::pair<std::vector<KeyframeInfo::Name>, int>> names;
     {
       std::lock_guard lock(mutex);
       names.swap(pending_names);
@@ -2295,7 +2336,8 @@ struct YouGameRoom::Impl
     {
       picojson::object d;
       d["k"] = picojson::value("nm");
-      d["nm"] = NamesToJson(*names);
+      d["nm"] = NamesToJson(names->first);
+      d["v"] = picojson::value(static_cast<double>(names->second));
       for (const auto& [id, peer] : peers)
       {
         if (peer.heard)
@@ -2337,6 +2379,9 @@ struct YouGameRoom::Impl
           d["h"] = picojson::value(!joining);
           if (direct)
             d["dl"] = picojson::value(1.0);
+          // A joiner tells the host its own controls, for its port in the host's game.
+          if (joining && !options.controls.empty() && options.controls.size() <= MAX_CONTROLS)
+            d["ct"] = picojson::value(ToHex(options.controls.data(), options.controls.size()));
           SendTo(id, d);
         }
         if (const auto offer = offers.find(peer.slot);
@@ -2350,6 +2395,7 @@ struct YouGameRoom::Impl
           d["x"] = picojson::value(offer->second.hash);
           d["key"] = picojson::value(offer->second.key);
           d["nm"] = NamesToJson(offer->second.names);
+          d["nv"] = picojson::value(static_cast<double>(offer->second.names_version));
           SendTo(id, d);
         }
       }
@@ -2419,6 +2465,7 @@ struct YouGameRoom::Impl
             p->second.slot,
             p->second.drop_in_host,
             p->second.name,
+            {},
             {},
             p->second.bye});
     }
@@ -2500,7 +2547,12 @@ struct YouGameRoom::Impl
       }
       if (p->second.announced)
       {
-        Emit({PeerEvent::Kind::Left, p->second.slot, p->second.drop_in_host, p->second.name, {},
+        Emit({PeerEvent::Kind::Left,
+              p->second.slot,
+              p->second.drop_in_host,
+              p->second.name,
+              {},
+              {},
               p->second.bye});
       }
       {
@@ -2712,6 +2764,9 @@ struct YouGameRoom::Impl
       // The game's host says so, and is the room's host (the first in): no other player can take
       // a joiner's game over by claiming it.
       peer.drop_in_host = d.count("h") && d.at("h").evaluate_as_boolean() && id == host;
+      // A joiner's own controls (none from the game's host: its own are in its port already).
+      if (!peer.drop_in_host && d.count("ct"))
+        peer.controls = ControlsFromHex(d.at("ct"));
       host_seen = host_seen || peer.drop_in_host;
       if (!was_heard)
         last_hello = {};  // answer at once rather than on the next hello tick
@@ -2725,7 +2780,8 @@ struct YouGameRoom::Impl
           room = code;
         }
         SetStatus(fmt::format("Room {}: {} is here", room, peer.name.empty() ? "a friend" : peer.name));
-        Emit({PeerEvent::Kind::Arrived, peer.slot, peer.drop_in_host, peer.name, {}});
+        Emit(
+            {PeerEvent::Kind::Arrived, peer.slot, peer.drop_in_host, peer.name, peer.controls, {}});
         // The page's lobby shows the room ready now, not at its next roster change.
         Publish();
       }
@@ -2738,7 +2794,9 @@ struct YouGameRoom::Impl
         return;
       KeyframeInfo info;
       info.names = NamesFromJson(d);
-      Emit({PeerEvent::Kind::Names, peer.slot, true, peer.name, info});
+      if (const auto version = Int(d, "v", 0, MAX_FRAME))
+        info.names_version = *version;
+      Emit({PeerEvent::Kind::Names, peer.slot, true, peer.name, {}, info});
       return;
     }
     if (kind == "kf")
@@ -2761,10 +2819,12 @@ struct YouGameRoom::Impl
       info.frame = *frame;
       info.size = static_cast<u64>(*size);
       info.names = NamesFromJson(d);
+      if (const auto version = Int(d, "nv", 0, MAX_FRAME))
+        info.names_version = *version;
       if (peer.keyframe && peer.keyframe->id == info.id)
         return;
       peer.keyframe = info;
-      Emit({PeerEvent::Kind::Keyframe, peer.slot, true, peer.name, info});
+      Emit({PeerEvent::Kind::Keyframe, peer.slot, true, peer.name, {}, info});
       return;
     }
     if (kind == "dl" || kind == "dlc" || kind == "dlr")
@@ -2860,10 +2920,10 @@ void YouGameRoom::DropPeer(int seat, const std::string& reason)
     m_impl->pending_drops.emplace_back(seat, reason);
 }
 
-void YouGameRoom::BroadcastNames(const std::vector<KeyframeInfo::Name>& names)
+void YouGameRoom::BroadcastNames(const std::vector<KeyframeInfo::Name>& names, int version)
 {
   std::lock_guard lock(m_impl->mutex);
-  m_impl->pending_names = names;
+  m_impl->pending_names = std::pair(names, version);
   m_impl->offer_now = true;
 }
 

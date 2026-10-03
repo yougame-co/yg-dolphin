@@ -119,6 +119,13 @@ struct Download
   }
 };
 
+// A player who arrived for a seat (its hello): its name, and its own controls (empty: none).
+struct Arrival
+{
+  std::string name;
+  std::vector<u8> controls;
+};
+
 struct Match
 {
   bool started = false;
@@ -145,7 +152,7 @@ struct Match
   bool keyframe_wanted = false;
   // Players who arrived and wait for a keyframe before the session takes them in, and the seats
   // the session took in (until the room says they left).
-  std::map<int, std::string> waiting;
+  std::map<int, Arrival> waiting;
   std::set<int> seated;
   // Seats taken in whose controller hasn't plugged in yet: the app hears "friend-joined" once the
   // last of them has.
@@ -202,13 +209,18 @@ struct Match
   // The local controller's input age totals at the last line (Orca::Events::InputAge).
   Orca::Events::InputAge stats_input{};
 
-  // Each port's player name and the frame it applies from (Orca::Events::PortInfo), decided by the
-  // host: its own once its room roster has it, a friend's when the session takes it in. A joiner
-  // takes the host's (they travel with the keyframe offer), so both games name every frame the
-  // same. The ports the UI was last told of.
+  // Each port's values (Orca::Events::PortInfo: the player's name and own controls) and the frame
+  // they apply from, decided by the host ("Ports" below): its own once its room roster has its name
+  // (its controls once a session starts), a friend's when the session takes it in. A joiner takes
+  // the host's (they travel with the keyframe offer), so both games write every frame the same.
   // Per seat, who held it from which frame (a few entries: a frame re-run after a player left, or
-  // after another took the seat, still gets the name it had).
+  // after another took the seat, still gets the values it had).
   std::map<int, std::vector<Orca::Net::KeyframeInfo::Name>> port_names;
+  // Their version (Session::RequireValues): the host counts each change; a joiner holds the host's
+  // newest, and keeps one heard while it still downloads the keyframe for when it has loaded it.
+  int names_version = 0;
+  std::optional<Orca::Net::KeyframeInfo> later_names;
+  // The ports the UI was last told of.
   std::vector<Orca::Events::PortInfo> told_ports;
   // A joiner's host left during a re-run: handled at the next boundary that isn't one.
   std::optional<std::string> host_gone;
@@ -243,7 +255,8 @@ s64 NowNs()
 
 void AddName(Match& match, Orca::Net::KeyframeInfo::Name name);
 std::vector<Orca::Net::KeyframeInfo::Name> AllNames(const Match& match);
-void SetNames(Match& match, const std::vector<Orca::Net::KeyframeInfo::Name>& names);
+void SetNames(Match& match, const Orca::Net::KeyframeInfo& from_host);
+void RefreshOwnValues(Match& match, int frame);
 std::vector<Orca::Events::PortInfo> PortsAt(Match& match, int frame);
 void Leave(Match& match);
 
@@ -827,6 +840,7 @@ void BecomeSolo(Match& match, const char* why, const char* state, bool own_boot 
   match.leave_requested = false;
   match.leave_at = -1;
   match.last_percent = -1;
+  match.later_names.reset();
   // Whatever the join last said ("Joining...") is over.
   OSD::DiscardTypedMessage(OSD::MessageType::OrcaJoin);
   match.port->SetCatchingUp(false);
@@ -853,7 +867,7 @@ void HostEvents(Core::System& system, Match& match)
       }
       NOTICE_LOG_FMT(ROLLBACK, "Drop-in: {} arrived for port {}", event.name, event.seat + 1);
       Core::DisplayMessage(fmt::format("{} is joining on port {}", event.name, event.seat + 1), 4000);
-      match.waiting[event.seat] = event.name;
+      match.waiting[event.seat] = {event.name, event.controls};
       match.keyframe_wanted = true;
       Orca::Status::State("friend-joining");
     }
@@ -980,17 +994,27 @@ void HostEvents(Core::System& system, Match& match)
       // Pads sampled while solo carry no delay; from here they do, and the frames the delay skips
       // repeat the pad held now (Config::start_pad).
       match.queued_local.clear();
+      // The host's own controls go with its port from the frame after this one (whose frame hook
+      // already ran, with the values before), never while a session runs: a friend may already
+      // have run the frame they would start at.
+      RefreshOwnValues(match, next + 1);
     }
     match.session->AddPeer(seat, next, keyframe_frame);
     match.seated.insert(seat);
     match.plugging.insert(seat);
-    AddName(match, {seat, next, it->second});
+    NOTICE_LOG_FMT(ROLLBACK, "Drop-in: port {} is {} from frame {}{}", seat + 1, it->second.name,
+                   next, it->second.controls.empty() ? "" : ", with their own controls");
+    AddName(match, {seat, next, it->second.name, it->second.controls});
+    // The newcomer plugs in only once every player holds its values: its plug frame, which every
+    // player hears of before running it, then comes after them.
+    match.session->RequireValues(seat, match.names_version);
     NOTICE_LOG_FMT(ROLLBACK, "Drop-in: {}", match.session->Describe());
     Orca::Net::KeyframeInfo offer = *match.keyframe;
     offer.names = AllNames(match);
-    // Players already in the game hear the newcomer's name before its plug frame (the room sends it
-    // ahead of the session packets that plug it in).
-    Orca::Online::BroadcastNames(offer.names);
+    offer.names_version = match.names_version;
+    // Players already in the game hear the newcomer's values; they acknowledge them in their
+    // packets, and the host plugs the newcomer in only after that (Session::RequireValues).
+    Orca::Online::BroadcastNames(offer.names, offer.names_version);
     Orca::Online::OfferKeyframe(seat, offer);
     NOTICE_LOG_FMT(ROLLBACK,
                    "Drop-in: port {} replays from keyframe frame {}, live from frame {}", seat + 1,
@@ -1074,6 +1098,13 @@ JoinPump PumpJoin(Match& match, std::string* last_status)
         match.join_error_code = "peer_left";
         match.join_error = "Your friend left before you could join";
         return JoinPump::Failed;
+      }
+      else if (event.kind == Orca::Net::PeerEvent::Kind::Names)
+      {
+        // The host took another friend in while this one downloads: newer than the offer's values,
+        // which this player acknowledges once it has loaded the keyframe.
+        if (!match.later_names || event.keyframe.names_version > match.later_names->names_version)
+          match.later_names = event.keyframe;
       }
       else if (event.kind == Orca::Net::PeerEvent::Kind::Keyframe && !match.download)
       {
@@ -1240,7 +1271,12 @@ Load LoadKeyframe(Core::System& system, Match& match, int* frame_out)
 
   // A join during play takes its seat from the friend's room now (a launch join had it at once).
   match.local_seat = Orca::Online::Seat();
-  SetNames(match, download->info.names);
+  // The host's port values, the newest heard (the offer's, or a later broadcast's).
+  if (match.later_names && match.later_names->names_version > download->info.names_version)
+    SetNames(match, *match.later_names);
+  else
+    SetNames(match, download->info);
+  match.later_names.reset();
   match.join_in_play = false;
   match.log.clear();
   match.log_base = frame;
@@ -1254,6 +1290,9 @@ Load LoadKeyframe(Core::System& system, Match& match, int* frame_out)
   config.plan = plan;
   match.session =
       std::make_unique<Orca::Net::Session>(config, *match.port, *Orca::Online::Transport());
+  // Its packets acknowledge the host's port values from the first (the host plugs this player in
+  // only once they do: Session::RequireValues).
+  match.session->SetValuesHeld(match.names_version);
   SeedRoundTrips(match);
   match.port->SetCatchingUp(true);
   match.running = frame - 1;
@@ -1293,6 +1332,7 @@ std::optional<int> JoinHost(Core::System& system, Match& match)
         match.host_here = false;
         match.last_percent = -1;
         match.join_status.clear();
+        match.later_names.reset();
         Orca::Status::State("joining 0");
       }
     }
@@ -1387,6 +1427,7 @@ void JoinInPlay(Match& match, const std::string& code)
   NOTICE_LOG_FMT(ROLLBACK, "Drop-in: joining room {} during play, frame {}", code, match.running + 1);
   match.joining = true;
   match.join_in_play = true;
+  match.later_names.reset();
   match.boot_time = Clock::now();
   match.offered_time = match.boot_time;
   match.host_here = false;
@@ -1466,8 +1507,21 @@ void TakeCommands(Match& match)
 }
 
 // ---- Ports, for the in-game UX ----
+//
+// The session's value channel: each port's values (the player's name and own controls,
+// Orca::Events::PortInfo) are the host's, from a frame the host picks, and every machine holds them
+// before it runs that frame, so the frame hook writes the same bytes everywhere (UX/NameTags.h).
+//   - A friend's values are the ones its hello brought (its name in the room, its own controls as
+//     its game held them while it played alone), from the frame the host takes it in; its port
+//     shows them from its plug frame on. It gets them with the keyframe offer, before it runs
+//     anything; players already in the game hear them (BroadcastNames) and acknowledge them, and
+//     the host plugs the newcomer in only after every player has (Session::RequireValues).
+//   - The host's own: its name once its roster has it, while it plays solo; and its controls as its
+//     game held them while it played alone, from the frame after the one a session starts at. Never
+//     changed while a session runs.
+// Each change counts one version (Match::names_version).
 
-// Host: a seat's new holder, from its plug frame. A few entries per seat are kept.
+// Host: a seat's new values, from their frame. A few entries per seat are kept.
 void AddName(Match& match, Orca::Net::KeyframeInfo::Name name)
 {
   auto& history = match.port_names[name.seat];
@@ -1476,6 +1530,7 @@ void AddName(Match& match, Orca::Net::KeyframeInfo::Name name)
   history.push_back(std::move(name));
   if (history.size() > 4)
     history.erase(history.begin());
+  ++match.names_version;
 }
 
 std::vector<Orca::Net::KeyframeInfo::Name> AllNames(const Match& match)
@@ -1486,57 +1541,90 @@ std::vector<Orca::Net::KeyframeInfo::Name> AllNames(const Match& match)
   return all;
 }
 
-// A joiner: the host's names, as they are now (they replace this machine's own view).
-void SetNames(Match& match, const std::vector<Orca::Net::KeyframeInfo::Name>& names)
+// A joiner: the host's values, as they are now (they replace this machine's own view), with their
+// version, which this player's packets acknowledge from now on.
+void SetNames(Match& match, const Orca::Net::KeyframeInfo& from_host)
 {
   match.port_names.clear();
-  std::vector<Orca::Net::KeyframeInfo::Name> sorted = names;
+  std::vector<Orca::Net::KeyframeInfo::Name> sorted = from_host.names;
   std::stable_sort(sorted.begin(), sorted.end(),
                    [](const auto& a, const auto& b) { return a.from < b.from; });
   for (auto& name : sorted)
   {
-    NOTICE_LOG_FMT(ROLLBACK, "Drop-in: port {} is {} from frame {}", name.seat + 1, name.name,
-                   name.from);
+    NOTICE_LOG_FMT(ROLLBACK, "Drop-in: port {} is {} from frame {}{}", name.seat + 1, name.name,
+                   name.from, name.controls.empty() ? "" : ", with their own controls");
     match.port_names[name.seat].push_back(std::move(name));
   }
+  match.names_version = from_host.names_version;
+  if (match.session)
+    match.session->SetValuesHeld(match.names_version);
 }
 
-std::string NameAt(const Match& match, int seat, int frame)
+// The values a seat had at `frame` (the newest from before it), or none.
+const Orca::Net::KeyframeInfo::Name* EntryAt(const Match& match, int seat, int frame)
 {
   const auto it = match.port_names.find(seat);
   if (it == match.port_names.end())
-    return "";
-  // The newest holder from before this frame (entries are in frame order).
+    return nullptr;
+  // Entries are in frame order.
   for (auto entry = it->second.rbegin(); entry != it->second.rend(); ++entry)
   {
     if (frame >= entry->from)
-      return entry->name;
+      return &*entry;
   }
-  return "";
+  return nullptr;
+}
+
+// Host, as a session starts (solo until now): its own port's values from `frame`, its roster name
+// and its own controls as its game held them while it played alone, if they differ from the newest.
+void RefreshOwnValues(Match& match, int frame)
+{
+  const Orca::Net::KeyframeInfo::Name* now = EntryAt(match, match.local_seat, frame);
+  std::string own = Orca::Online::Seat() == match.local_seat ?
+                        Orca::Online::SeatName(match.local_seat) :
+                        std::string();
+  if (own.empty() && now)
+    own = now->name;
+  std::vector<u8> controls = Orca::Events::OwnControls();
+  if (now ? now->name == own && now->controls == controls : own.empty() && controls.empty())
+    return;
+  NOTICE_LOG_FMT(ROLLBACK, "Drop-in: port {} is {} from frame {}{}", match.local_seat + 1, own,
+                 frame, controls.empty() ? "" : ", with their own controls");
+  AddName(match, {match.local_seat, frame, std::move(own), std::move(controls)});
 }
 
 // The controllers plugged in at `frame`: in a session, by its synced plan; solo, this player's own.
-// Names as the host decided them (Match::port_names).
+// Values as the host decided them (Match::port_names).
 std::vector<Orca::Events::PortInfo> PortsAt(Match& match, int frame)
 {
   // A host names its own port once its roster has it, from this frame on (a joiner learns when
-  // from the keyframe offer). A joiner's names, its own included, all come from its host.
-  if (!match.joining && !match.port_names.count(match.local_seat) &&
+  // from the keyframe offer), while it plays solo: in a session a friend may already have run this
+  // frame. A joiner's values, its own included, all come from its host.
+  if (!match.joining && !match.session && !match.port_names.count(match.local_seat) &&
       Orca::Online::Seat() == match.local_seat)
   {
     if (std::string own = Orca::Online::SeatName(match.local_seat); !own.empty())
-      AddName(match, {match.local_seat, frame, std::move(own)});
+      AddName(match, {match.local_seat, frame, std::move(own), {}});
   }
+  const auto port = [&](int seat) {
+    Orca::Events::PortInfo info{seat, "", seat != match.local_seat, {}};
+    if (const Orca::Net::KeyframeInfo::Name* entry = EntryAt(match, seat, frame))
+    {
+      info.name = entry->name;
+      info.controls = entry->controls;
+    }
+    return info;
+  };
   std::vector<Orca::Events::PortInfo> ports;
   if (!match.session)
   {
-    ports.push_back({match.local_seat, NameAt(match, match.local_seat, frame), false});
+    ports.push_back(port(match.local_seat));
     return ports;
   }
   for (int seat = 0; seat < Orca::Net::MAX_SEATS; ++seat)
   {
     if (match.session->Plugged(seat, frame))
-      ports.push_back({seat, NameAt(match, seat, frame), seat != match.local_seat});
+      ports.push_back(port(seat));
   }
   return ports;
 }
@@ -1935,6 +2023,10 @@ std::optional<int> Boundary(Core::System& system,
         // A port shows a name only while plugged in (PortsAt): a newcomer's name, sent when the
         // host takes it in, matters from its plug frame, which is still to come (or not even
         // decided).
+        // An older broadcast than what this player holds (a keyframe offer's, or a later one's):
+        // nothing new.
+        if (event.keyframe.names_version < match.names_version)
+          continue;
         const std::vector<Orca::Net::KeyframeInfo::Name> before = AllNames(match);
         int earliest = INT32_MAX;
         for (const auto& name : event.keyframe.names)
@@ -1948,7 +2040,7 @@ std::optional<int> Boundary(Core::System& system,
             continue;
           earliest = std::min(earliest, from);
         }
-        SetNames(match, event.keyframe.names);
+        SetNames(match, event.keyframe);
         if (earliest <= match.running)
         {
           if (match.session->RerunFrom(earliest))
