@@ -947,6 +947,8 @@ struct DirectLink::Impl
     std::vector<u8> datagram;
   };
 
+  // Winsock stays up for the link thread's name lookups (a no-op elsewhere).
+  Common::SocketContext socket_context;
   DirectOptions options;
   std::thread thread;
   std::atomic<bool> started{false};
@@ -1400,9 +1402,14 @@ struct DirectLink::Impl
       }
       if (!peer.low)
       {
-        // An offer: a new link, unless it is the one this side already answered.
-        if (*generation < peer.generation || (*generation == peer.generation && peer.link))
+        // An offer: a new link, unless it is the one this side already answered, or one came
+        // less than half a second ago (an honest peer offers at most once a second; its own rules
+        // offer again if this one goes unanswered).
+        if (*generation < peer.generation || (*generation == peer.generation && peer.link) ||
+            (peer.link && Clock::now() - peer.built_at < 500ms))
+        {
           return;
+        }
         peer.generation = static_cast<u16>(*generation);
         Build(peer, "offer", &message);
         return;
