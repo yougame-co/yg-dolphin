@@ -29,8 +29,8 @@
 //   - the words the loader relocates against sora_melee (module 27, kSoraMeleeRelocations): they
 //     hold the game's values while sora_melee is loaded, and the loader would rewrite them if it
 //     ever relinked that module;
-//   - 0x806F3DA4, a word Project+'s codeset nops ("Online Handicap Disable"), so that every cave
-//     word is the same in both games.
+//   - 0x806F3DA4, which Project+'s codeset nops ("Online Handicap Disable"): leaving it out keeps
+//     every cave word the same in both games.
 // - Proven under the harness, in both games: unchanged from boot through the main menu, both
 //   Online picks and the back out, character and stage select, two whole matches and their
 //   results; filled with illegal instructions right after boot, the same runs reach the same scenes
