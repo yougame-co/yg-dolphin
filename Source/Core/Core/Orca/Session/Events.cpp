@@ -15,6 +15,7 @@ std::mutex s_lock;
 PlugInCallback s_plug_in;
 LinkStats s_stats;
 LocalPadSource s_pad_source;
+InputAgeSource s_input_age;
 FrameCallback s_frame;
 StallCallback s_stall;
 BoundaryCallback s_boundary;
@@ -46,14 +47,30 @@ void SetLocalPadSource(LocalPadSource source)
   s_pad_source = std::move(source);
 }
 
-std::optional<GCPadStatus> LocalPad()
+std::optional<GCPadStatus> LocalPad(bool for_frame)
 {
   LocalPadSource source;
   {
     std::lock_guard lk(s_lock);
     source = s_pad_source;
   }
-  return source ? source() : std::nullopt;
+  return source ? source(for_frame) : std::nullopt;
+}
+
+void SetInputAgeSource(InputAgeSource source)
+{
+  std::lock_guard lk(s_lock);
+  s_input_age = std::move(source);
+}
+
+InputAge GetInputAge()
+{
+  InputAgeSource source;
+  {
+    std::lock_guard lk(s_lock);
+    source = s_input_age;
+  }
+  return source ? source() : InputAge{};
 }
 
 void NotifyPlugIn(int frame, const std::vector<PortInfo>& ports)

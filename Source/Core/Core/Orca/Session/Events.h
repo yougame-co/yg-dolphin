@@ -63,10 +63,27 @@ LinkStats GetLinkStats();
 // The local player's controller, if something other than Dolphin's own pad input supplies it (the
 // YouGame app's controller stream). Called on the CPU thread once per frame boundary, solo or in a
 // session; it must not block. nullopt: use Dolphin's pad. The session records what it returns, so
-// a re-run frame replays it and never asks again.
-using LocalPadSource = std::function<std::optional<GCPadStatus>()>;
+// a re-run frame replays it and never asks again. `for_frame`: this read is a frame's own input (a
+// first run's boundary; not a re-run's or a catch-up's, whose reads nothing uses), so the source
+// times it (InputAge).
+using LocalPadSource = std::function<std::optional<GCPadStatus>(bool for_frame)>;
 void SetLocalPadSource(LocalPadSource source);
-std::optional<GCPadStatus> LocalPad();
+std::optional<GCPadStatus> LocalPad(bool for_frame = false);
+
+// How old the local controller's input was when frames read it (ORCA.md, "Controller input age"):
+// running totals from the pad source, which counts only a device whose reports carry their arrival
+// time (a GameCube adapter through the app's helper). A reader takes differences; the totals start
+// again from zero when the app's stream does. Any thread.
+struct InputAge
+{
+  u64 frames = 0;     // frames that read such a device
+  u64 reports = 0;    // reports that came in from it across those frames
+  u64 changes = 0;    // frames whose pad differed from the frame before's: the age samples
+  double age_ms = 0;  // summed over the changes: the input age at that read (ControllerSource.h)
+};
+using InputAgeSource = std::function<InputAge()>;
+void SetInputAgeSource(InputAgeSource source);
+InputAge GetInputAge();
 
 // Every frame boundary, on every machine, solo or online, first runs and re-runs alike: before
 // anything is saved at this boundary (a rollback snapshot, a keyframe), so what it writes is in
