@@ -43,8 +43,9 @@ u16 AllowedFor(const Ruleset& rules, const Plan& plan, const Step& step, const P
       return dsr;
     if (open != 0)
       return open;
-    return static_cast<u16>(legal & ~plan.excluded) != 0 ? static_cast<u16>(legal & ~plan.excluded) :
-                                                           legal;
+    return static_cast<u16>(legal & ~plan.excluded) != 0 ?
+               static_cast<u16>(legal & ~plan.excluded) :
+               legal;
   }
   default:
     return 0;
@@ -135,7 +136,8 @@ Plan PlanGame(const Ruleset& rules, const SetView& set, u8 coin, std::array<int,
   // Later games: the winner bans (or strikes), the loser picks with full DSR.
   const u8 winner = static_cast<u8>(set.last_winner & 1);
   const u8 loser = static_cast<u8>(1 - winner);
-  plan.steps[0] = {Kind::Ban, winner, rules.later_bans, rules.ban_frames, rules.later_bans_optional};
+  plan.steps[0] = {Kind::Ban, winner, rules.later_bans, rules.ban_frames,
+                   rules.later_bans_optional};
   plan.steps[1] = {Kind::Pick, loser, 1, rules.pick_frames, false};
   plan.count = 2;
   return plan;
@@ -187,8 +189,7 @@ bool Skip(const Plan& plan, Progress* progress)
   return true;
 }
 
-bool Pick(const Ruleset& rules, const Plan& plan, Progress* progress, const SetView& set,
-          int stage)
+bool Pick(const Ruleset& rules, const Plan& plan, Progress* progress, const SetView& set, int stage)
 {
   const Step* step = Current(plan, *progress);
   if (!step || step->kind != Kind::Pick || stage < 0 || stage >= rules.stages)

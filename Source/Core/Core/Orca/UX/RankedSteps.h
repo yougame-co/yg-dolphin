@@ -88,8 +88,8 @@ struct Plan
 // What the set knows between games.
 struct SetView
 {
-  u8 game = 1;           // 1-based
-  s8 last_winner = -1;   // port 0 or 1 of the previous decided game; -1 in game 1
+  u8 game = 1;                   // 1-based
+  s8 last_winner = -1;           // port 0 or 1 of the previous decided game; -1 in game 1
   std::array<u16, PORTS> won{};  // the stages each port has won on this set (full DSR)
 };
 

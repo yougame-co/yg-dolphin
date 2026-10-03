@@ -40,8 +40,8 @@ enum Offset : u32
   O_STEP = 0x0F,
   O_DONE = 0x10,
   O_PICKED = 0x11,
-  O_STRUCK = 0x12,  // u16
-  O_FRAMES = 0x14,  // u16
+  O_STRUCK = 0x12,      // u16
+  O_FRAMES = 0x14,      // u16
   O_CHARACTERS = 0x16,  // s8 x 2
   O_BUTTONS = 0x18,     // u16 x 2
   O_CLOCK = 0x1C,       // u32
@@ -278,7 +278,17 @@ const RS::Ruleset& Rules()
 
 RS::Plan PlanOf(const State& s)
 {
-  return RS::PlanGame(Rules(), s.set, s.coin == 0xFF ? 0 : s.coin, {s.characters[0], s.characters[1]});
+  return RS::PlanGame(Rules(), s.set, s.coin == 0xFF ? 0 : s.coin,
+                      {s.characters[0], s.characters[1]});
+}
+
+// The port whose turn it is, or the last step's once the steps are done (it drives the cursor
+// while the steps make the pick).
+int TurnPort(const RS::Plan& plan, const RS::Progress& progress)
+{
+  if (const RS::Step* step = RS::Current(plan, progress))
+    return step->port;
+  return plan.count > 0 ? plan.steps[plan.count - 1].port : 0;
 }
 
 State Fresh()
@@ -361,8 +371,7 @@ void SelectFrame(GuestMemory& m, const View& v, State* s)
   s->buttons = {PadButtons(m, 0), PadButtons(m, 1)};
 
   // The screen: whose turn, the grey tiles, and the cursor while the steps make the pick.
-  const RS::Step* step = RS::Current(plan, s->progress);
-  const u32 port = step ? step->port : (s->progress.picked >= 0 ? PORT_ANY : PORT_ANY);
+  const u32 port = static_cast<u32>(TurnPort(plan, s->progress));
   if (m.Read32(v.task + TASK_PORT) != port)
     m.Write32(v.task + TASK_PORT, port);
   const u16 allowed = s->progress.picked >= 0 ? Bit(s->progress.picked) :
@@ -440,18 +449,10 @@ namespace Orca::UX::BrawlStages
 {
 namespace
 {
-// The port whose turn it is, or the last step's once the steps are done (it drives the cursor
-// while the steps make the pick).
-int TurnPort(const RS::Plan& plan, const RS::Progress& progress)
-{
-  if (const RS::Step* step = RS::Current(plan, progress))
-    return step->port;
-  return plan.count > 0 ? plan.steps[plan.count - 1].port : 0;
-}
 
 constexpr std::array<const char*, RS::BRAWL_STAGES> kStageNames{
-    "Battlefield",       "Pokemon Stadium", "Lylat Cruise",  "Smashville",
-    "Yoshi's Island",    "Final Destination", "Delfino Plaza",
+    "Battlefield",    "Pokemon Stadium",   "Lylat Cruise",  "Smashville",
+    "Yoshi's Island", "Final Destination", "Delfino Plaza",
 };
 
 bool VanillaBrawl()
@@ -577,8 +578,8 @@ std::pair<std::string, std::string> Lines(const GuestMemory& m,
     }
     return fmt::format("P{}", port + 1);
   };
-  std::string score = fmt::format("Game {} · {} {}–{} {}", s->set.game, who(0),
-                                  s->score[0], s->score[1], who(1));
+  std::string score =
+      fmt::format("Game {} · {} {}–{} {}", s->set.game, who(0), s->score[0], s->score[1], who(1));
   if (!v.present || s->phase != Phase::Select)
     return {score, {}};
   const RS::Plan plan = PlanOf(*s);

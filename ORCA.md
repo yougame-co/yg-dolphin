@@ -1815,6 +1815,65 @@ frame 267 on.
 - `ORCA_TEST_GATE=1:START`: Brawl never leaves the character select (port 1's scripted Start never
   reaches the game).
 
+## Ranked stages (Brawl)
+
+A ranked set's stage flow on vanilla Brawl's own stage select (RSBE01 rev 2, Supernova 2025 as
+Luis confirmed it; `Core/Orca/UX/BrawlStages.*`, the steps in `RankedSteps.*`). Project+ has its
+own track. Casual and friends games are untouched.
+
+- **Game 1:** characters first, as the beta picks them. On the stage select the five starters
+  (Battlefield, Pokemon Stadium on the Melee page, Lylat Cruise, Smashville, Yoshi's Island) are
+  struck 1-2-1, the first striker a fair coin from the game's own RNG seed (`0x805A00BC`, through
+  a full avalanche: the same on both machines, nobody's port). The last starter is the stage: the
+  flow selects it.
+- **Later games:** the previous game's winner may ban one of the seven legal stages (X), or skip
+  (Y, or let the timer run out); then the loser picks with full DSR (never a stage the loser has
+  won on this set; if that leaves nothing, DSR is dropped).
+- **MK clause:** exactly one Meta Knight (gmCharacterKind `0x18`): the other player picks any
+  legal stage, over strikes, the ban and DSR. **IC/FD:** with an Ice Climbers (`0x10`) on either
+  port, Final Destination is never allowed.
+- **Turns:** the stage select's own controller field (task `+0x278`) is the turn's port, and the
+  input gate leaves every other port nothing; the turn's port loses B (back to the character
+  select), Start, Z, L and R. A is only for the page button, and in a pick step for an allowed
+  stage the cursor has rested on for a frame.
+- **Grey tiles:** every stage the current step doesn't allow (struck, banned, DSR, IC/FD, not
+  legal) shows as a plain grey tile (its icon's frame set to 0.0), re-applied every frame on
+  whichever page shows. Allowed sets only shrink within one stage select, so nothing is restored.
+- **Timers:** strikes 30, 30 and 10 s, the ban 30 s, the pick 30 s, each with 3 s of grace at
+  0:00. When one runs out: the first remaining starters are struck in list order, the ban is
+  skipped, the pick takes the first allowed stage. A stage the steps pick (the last starter, a
+  timer's default) is selected by the flow: it moves the cursor there (through the page button
+  when the stage is on the other page) and the gate presses A for the turn's port on every other
+  frame until the game takes it.
+- **Overlay:** one line on the character and stage selects, "Game 2 · You 1–0 Ada", and under it
+  on the stage select whose turn it is and the timer ("Ada strikes 2 (X) · 0:24").
+
+**Determinism.** Everything is in the match block (FreeSpace.h), this flow's region
+`0x806F2500`-`0x806F2580`: the set (game, score, last winner, stages won per port, the coin), the
+phase, the step, its strikes and timer, the characters, each port's last buttons, the stage
+select's clock and the hovered stage. The frame hook writes it as a pure function of memory and
+only the bytes that differ, and is idempotent at its boundary (a boundary run again after a load
+changes nothing): presses are edges against the buttons the block kept, and the timer and the
+cursor's rest count tick only when the stage select's own frame counter (task `+0x250`) moved.
+The gate source reads the block back. The set's results come from the result info at the first
+results-screen boundary after a fight (the same reading as "Results"); a draw or a void game
+plays the same steps again. `UX::kCompatVersion` 8.
+
+**Activation.** MERGE NOTE: whether a game is a ranked Brawl set's is the match block header's
+(the casual track); until it lands only `ORCA_TEST_RANKED=brawl` (a test override) turns the flow
+on, so no production session runs it. Without it the region is cleared and nothing is masked.
+
+**Where (from the probes, empty save):** the stage select task is the scene's `+0x3AC`: `+0x8C`
+the icons, `+0x200` the cursor (`+0x3C`/`+0x40` x and y), `+0x224` the select state (0 choosing),
+`+0x228` the page, `+0x230` the icons on the page, `+0x244` the hovered item (`0x35` the page
+button, `0x36` Random, `0x37` Back), `+0x248` the hovered slot, `+0x250` frames since it opened,
+`+0x278` the cursor's port (`0xF0` any). gfPadSystem `[0x805A0040]+0x40`, 0x40 per port: the
+buttons the game read. Characters for the coming game: gmGlobalModeMelee `+0x98`, 0x5C per port.
+
+Tests: `OrcaRankedSteps*` and `OrcaBrawlStages*` unit tests (the steps, the coin, DSR, the MK
+clause, IC/FD, timers and defaults; the flow through a fake of the game's memory with every
+boundary run twice).
+
 ## Embedding
 
 The YouGame desktop app shows Orca inside its own window, at the page's player box, the way it runs
