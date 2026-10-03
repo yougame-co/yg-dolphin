@@ -281,20 +281,29 @@ TEST(OrcaInputGateTestKnob, Parses)
   ASSERT_EQ(rules->size(), 4u);
   EXPECT_EQ((*rules)[0].port, 0);
   EXPECT_EQ((*rules)[0].mask, (Mask{PAD_BUTTON_A, true, false}));
-  EXPECT_TRUE((*rules)[0].on_memory);
+  EXPECT_EQ((*rules)[0].every, 2);
   EXPECT_EQ((*rules)[1].port, 1);
   EXPECT_EQ((*rules)[1].mask, (Mask{PAD_BUTTON_START, false, false}));
-  EXPECT_FALSE((*rules)[1].on_memory);
+  EXPECT_EQ((*rules)[1].every, 0);
   EXPECT_EQ((*rules)[2].port, 3);
   EXPECT_EQ((*rules)[2].mask, ALL);
-  EXPECT_FALSE((*rules)[2].on_memory);
+  EXPECT_EQ((*rules)[2].every, 0);
   EXPECT_EQ((*rules)[3].mask, (Mask{PAD_TRIGGER_L | PAD_TRIGGER_R | PAD_BUTTON_UP, false, true}));
 }
 
 TEST(OrcaInputGateTestKnob, Refuses)
 {
-  for (const char* bad : {"", "1", "0:A", "5:A", "1:Q", "1:A:sometimes", "1:A:mem:x", "1:A,",
-                          "12:A", "1:", "1:A+", "1:A,,2:B", "1:a", " 1:A"})
+  for (const char* bad : {"",           "1",
+                          "0:A",        "5:A",
+                          "1:Q",        "1:A:sometimes",
+                          "1:A:mem:x",  "1:A,",
+                          "12:A",       "1:",
+                          "1:A+",       "1:A,,2:B",
+                          "1:a",        " 1:A",
+                          "1:A:mem/1",  "1:A:mem/65",
+                          "1:A:mem/",   "1:A:mem/x",
+                          "1:A:mem/-2", "1:A:mem/1000",
+                          "1:A:mem8"})
   {
     std::string error;
     EXPECT_FALSE(ParseTestSpec(bad, &error)) << bad;
@@ -305,22 +314,31 @@ TEST(OrcaInputGateTestKnob, Refuses)
 TEST(OrcaInputGateTestKnob, MemoryRulesFollowTheHash)
 {
   std::string error;
-  const auto rules = ParseTestSpec("1:A:mem,2:B:mem,3:X", &error);
+  const auto rules = ParseTestSpec("1:A:mem,2:B:mem/8,3:X", &error);
   ASSERT_TRUE(rules) << error;
-  // Bit 0 of the hash for port 1, bit 1 for port 2; port 3's rule always applies.
-  Masks m = TestMasks(*rules, 0b00);
+  EXPECT_EQ((*rules)[0].every, 2);
+  EXPECT_EQ((*rules)[1].every, 8);
+  // Byte 0 of the hash decides port 1's rule (masked when even), byte 1 port 2's (masked when a
+  // multiple of 8); port 3's rule always applies.
+  Masks m = TestMasks(*rules, 0x0000);
+  EXPECT_EQ(m[0].buttons, PAD_BUTTON_A);
+  EXPECT_EQ(m[1].buttons, PAD_BUTTON_B);
+  EXPECT_EQ(m[2].buttons, PAD_BUTTON_X);
+  m = TestMasks(*rules, 0x0401);
   EXPECT_TRUE(m[0].Empty());
   EXPECT_TRUE(m[1].Empty());
   EXPECT_EQ(m[2].buttons, PAD_BUTTON_X);
-  m = TestMasks(*rules, 0b01);
+  m = TestMasks(*rules, 0x1802);
   EXPECT_EQ(m[0].buttons, PAD_BUTTON_A);
-  EXPECT_TRUE(m[1].Empty());
-  m = TestMasks(*rules, 0b10);
-  EXPECT_TRUE(m[0].Empty());
   EXPECT_EQ(m[1].buttons, PAD_BUTTON_B);
+  // One frame in n, over every byte value.
+  int masked = 0;
+  for (u64 byte = 0; byte < 256; ++byte)
+    masked += TestMasks(*rules, byte << 8)[1].Empty() ? 0 : 1;
+  EXPECT_EQ(masked, 32);
   // Two rules for one port add up.
   const auto two = ParseTestSpec("1:A,1:STICK:mem", &error);
   ASSERT_TRUE(two) << error;
-  EXPECT_EQ(TestMasks(*two, 1)[0], (Mask{PAD_BUTTON_A, true, false}));
-  EXPECT_EQ(TestMasks(*two, 0)[0], (Mask{PAD_BUTTON_A, false, false}));
+  EXPECT_EQ(TestMasks(*two, 0)[0], (Mask{PAD_BUTTON_A, true, false}));
+  EXPECT_EQ(TestMasks(*two, 1)[0], (Mask{PAD_BUTTON_A, false, false}));
 }

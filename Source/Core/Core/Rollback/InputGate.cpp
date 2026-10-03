@@ -3,6 +3,7 @@
 
 #include "Core/Rollback/InputGate.h"
 
+#include <algorithm>
 #include <mutex>
 #include <utility>
 
@@ -34,7 +35,7 @@ bool s_any = false;  // some mask in s_current is not empty
 struct TestKnob
 {
   std::vector<TestRule> rules;
-  bool memory = false;  // some rule is `mem`
+  bool memory = false;  // some rule is `mem/<n>`
 };
 const std::optional<TestKnob>& Knob()
 {
@@ -52,7 +53,7 @@ const std::optional<TestKnob>& Knob()
     TestKnob knob;
     knob.rules = std::move(*rules);
     for (const TestRule& rule : knob.rules)
-      knob.memory = knob.memory || rule.on_memory;
+      knob.memory = knob.memory || rule.every != 0;
     NOTICE_LOG_FMT(ROLLBACK, "Input gate: test masks ORCA_TEST_GATE={}", spec);
     return knob;
   }();
@@ -245,13 +246,25 @@ std::optional<std::vector<TestRule>> ParseTestSpec(std::string_view spec, std::s
     }
     if (parts.size() == 3)
     {
-      if (parts[2] == "mem")
+      const std::string& when = parts[2];
+      if (when == "mem")
       {
-        rule.on_memory = true;
+        rule.every = 2;
       }
-      else if (parts[2] != "always")
+      else if (when.starts_with("mem/") && when.size() >= 5 && when.size() <= 6 &&
+               std::all_of(when.begin() + 4, when.end(),
+                           [](char c) { return c >= '0' && c <= '9'; }))
       {
-        *error = fmt::format("'{}': <when> is always or mem", rule_text);
+        rule.every = std::stoi(when.substr(4));
+        if (rule.every < 2 || rule.every > 64)
+        {
+          *error = fmt::format("'{}': mem/<n> takes n from 2 to 64", rule_text);
+          return std::nullopt;
+        }
+      }
+      else if (when != "always")
+      {
+        *error = fmt::format("'{}': <when> is always, mem or mem/<n>", rule_text);
         return std::nullopt;
       }
     }
@@ -275,7 +288,7 @@ Masks TestMasks(const std::vector<TestRule>& rules, u64 memory_hash)
   Masks masks{};
   for (const TestRule& rule : rules)
   {
-    if (rule.on_memory && ((memory_hash >> rule.port) & 1) == 0)
+    if (rule.every != 0 && ((memory_hash >> (8 * rule.port)) & 0xFF) % rule.every != 0)
       continue;
     Mask& mask = masks[rule.port];
     mask.buttons |= rule.mask.buttons;

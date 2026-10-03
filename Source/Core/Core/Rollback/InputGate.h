@@ -84,15 +84,17 @@ GCPadStatus GatePad(int port, const GCPadStatus& pad);
 
 // ---- Test knob: ORCA_TEST_GATE (a test override, Orca::TestOverridesActive) ----
 // Comma-separated rules `<port 1-4>:<what>[:<when>]`. <what> joins with '+' any of A B X Y Z L R
-// START UP DOWN LEFT RIGHT STICK CSTICK ALL. <when>: `always` (the default), or `mem`: only on
-// frames where bit (port - 1) of an XXH3 of 1 MB of the game's memory (0x80500000-0x80600000, its
-// static data in both games) is 1, which changes from frame to frame, so a mask computed from the
-// wrong frame's memory shows up in a sync test or a drop-in. Example: `1:A+STICK:mem,2:START`.
+// START UP DOWN LEFT RIGHT STICK CSTICK ALL. <when>: `always` (the default), or `mem/<n>` (n 2-64;
+// `mem` is `mem/2`): on one frame in n, those where byte (port - 1) of an XXH3 of 1 MB of the
+// game's memory (0x80500000-0x80600000, its static data in both games) is a multiple of n. That
+// changes from frame to frame, so masks computed from the wrong frame's memory show up in a sync
+// test, a keyframe test or a drop-in; a larger n leaves scripted menu presses mostly intact.
+// Example: `1:A+STICK:mem/8,2:START`.
 struct TestRule
 {
   int port = 0;  // 0-based
   Mask mask;
-  bool on_memory = false;  // `mem`
+  int every = 0;  // `mem/<n>`: n; 0 for `always`
 };
 std::optional<std::vector<TestRule>> ParseTestSpec(std::string_view spec, std::string* error);
 // The rules' masks for a frame whose memory hashes to `memory_hash`.

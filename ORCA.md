@@ -1588,11 +1588,12 @@ the game reads its controllers, so no game code has to be found and patched for 
 **Test knob** `ORCA_TEST_GATE` (a test override: the compatibility key says so; set the same value
 in both processes). Comma-separated rules `<port 1-4>:<what>[:<when>]`: `<what>` joins with `+` any
 of `A B X Y Z L R START UP DOWN LEFT RIGHT STICK CSTICK ALL`; `<when>` is `always` (the default)
-or `mem`, only on frames where bit (port - 1) of an XXH3 of the game's static data
-(0x80500000-0x80600000, both games) is 1. That changes from frame to frame, so masks computed from
-the wrong frame's memory show in a sync test, a keyframe test or a drop-in. Every 600 first-run
-boundaries the log says how many each port was masked and how often the masks changed. Example:
-`ORCA_TEST_GATE=1:STICK+CSTICK+X:mem,2:STICK+CSTICK+B:mem`.
+or `mem/<n>` (n 2-64; `mem` is `mem/2`), on one frame in n: those where byte (port - 1) of an XXH3
+of the game's static data (0x80500000-0x80600000, both games) is a multiple of n. That changes
+from frame to frame, so masks computed from the wrong frame's memory show in a sync test, a
+keyframe test or a drop-in; a larger n leaves the scripts' menu presses mostly intact. Every 600
+first-run boundaries the log says how many each port was masked and how often the masks changed.
+Example: `ORCA_TEST_GATE=1:A+STICK+CSTICK+X+Y+Z+R:mem/8,2:START`.
 
 Tests: `OrcaInputGate*` unit tests (what a mask does, masks that follow the state at every
 boundary and nothing else, the game's read gated and the raw read not, the knob's parser).
