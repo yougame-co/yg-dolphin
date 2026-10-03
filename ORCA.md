@@ -1616,9 +1616,10 @@ frame 267 on.
 - `YG_PADREC` keeps the raw pads: Brawl's recording under the masks has the same pads as one
   without them on every frame before the stage select (164 with port 1 pressed), while their RAM
   checksums differ from frame 99 on.
-- Two Orcas over a real room, `dropin-commands.py --env ORCA_TEST_GATE=...`: Brawl passes (a
+- Two Orcas over a real room, `dropin-commands.py --env ORCA_TEST_GATE=...`, pass in both games: a
   keyframe at the character select, a match together, the friend leaving and rejoining mid-match
-  from a second keyframe, the host leaving; 116 and 20 checksums matched, no desync).
+  from a second keyframe, the host leaving. Checksums matched 116 and 20 (Brawl), 83 and 21
+  (Project+), no desync.
 - A negative control: the same Brawl sync test with the masks evaluated where the frame callback
   runs (an experiment build, never committed) fails, 385 RAM mismatches in 4,851 re-run frames
   from the character select's frame 1756.
