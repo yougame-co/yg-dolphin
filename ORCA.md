@@ -1598,6 +1598,35 @@ Example: `ORCA_TEST_GATE=1:A+STICK+CSTICK+X+Y+Z+R:mem/8,2:START`.
 Tests: `OrcaInputGate*` unit tests (what a mask does, masks that follow the state at every
 boundary and nothing else, the game's read gated and the raw read not, the knob's parser).
 
+Checked 2026-10-03 on an M4 Pro with `bf-mario-link-results.txt` (Brawl) and `pplus-1v1.txt`
+(Project+), under `ORCA_TEST_GATE=1:A+STICK+CSTICK+X+Y+Z+R:mem/8,2:A+STICK+CSTICK+B+X+Y+Z:mem/8`
+unless said otherwise: both ports masked on about one frame in eight, the masks changing on about
+40% of frames, and the game's RAM apart from an ungated run's from Brawl's frame 99 and Project+'s
+frame 267 on.
+- `YG_SYNCTEST=7` across the whole loop (character select, stage select, a match, results,
+  character select again): Brawl frames 1600-10600, 62,951 re-run frames; Project+ 150-5600,
+  38,101; 0 RAM mismatches. With `YG_SYNCTEST_SECTIONS=1` (Project+) the SerialInterface section
+  never differs; the device-state-only differences are the usual ones (icache, GPU managers).
+- `YG_KEYFRAME_TEST` at the character select, stage select, match and results: Brawl 1760, 1930,
+  3000, 10000; Project+ 300, 420, 450, 1500, 5000. All pass. 450's window crosses the stage
+  select's exit: a keyframe test's load now restores the harness's scene as a sync test's does,
+  without which it failed 30 of 30 frames with or without the gate.
+- A recording made under the masks replays through a loopback session with rollbacks: Brawl to
+  frame 4000 (186 rollbacks, 399 checksums matched), Project+ to 2400 (208, 239).
+- `YG_PADREC` keeps the raw pads: Brawl's recording under the masks has the same pads as one
+  without them on every frame before the stage select (164 with port 1 pressed), while their RAM
+  checksums differ from frame 99 on.
+- Two Orcas over a real room, `dropin-commands.py --env ORCA_TEST_GATE=...`: Brawl passes (a
+  keyframe at the character select, a match together, the friend leaving and rejoining mid-match
+  from a second keyframe, the host leaving; 116 and 20 checksums matched, no desync).
+- A negative control: the same Brawl sync test with the masks evaluated where the frame callback
+  runs (an experiment build, never committed) fails, 385 RAM mismatches in 4,851 re-run frames
+  from the character select's frame 1756.
+- With no source and no knob, `YG_HASHLOG` equals the base build's (`51987e7894`) on every frame:
+  Brawl 10,606 frames, Project+ 8,010.
+- `ORCA_TEST_GATE=1:START`: Brawl never leaves the character select (port 1's scripted Start never
+  reaches the game).
+
 ## Embedding
 
 The YouGame desktop app shows Orca inside its own window, at the page's player box, the way it runs
