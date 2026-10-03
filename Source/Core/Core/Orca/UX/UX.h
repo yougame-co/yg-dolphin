@@ -12,9 +12,9 @@ namespace Orca::UX
 // are applied too, PPLUS32.patches; 4: the main menu's text about going online, MenuText.h; 5: the
 // menu's description box's copy of that text too; 6: a matchmade host's rules preset, Results.h;
 // 7: each player's own controls in their name tag, and the port label for a player with controls
-// and no name, NameTags.h): the session hashes it into the compatibility key as `ux=<n>`, so two
+// and no name, NameTags.h; 8: the match block and Project+'s ranked stage flow, RankedPPlus.h): the session hashes it into the compatibility key as `ux=<n>`, so two
 // builds that would write different bytes never meet in a room.
-constexpr int kCompatVersion = 7;
+constexpr int kCompatVersion = 8;
 
 // Once, before the game boots in a session: registers the local pad source, the overlay, and the
 // session's plug-in, frame and stall callbacks, and puts kCompatVersion in the compatibility key.

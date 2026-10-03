@@ -41,6 +41,7 @@
 #include "Core/Orca/Session/PadCodec.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/OnlineMenu.h"
+#include "Core/Orca/UX/RankedPPlus.h"
 #include "Core/Orca/UX/Results.h"
 #include "Core/Rollback/SessionPort.h"
 #include "Core/System.h"
@@ -1475,6 +1476,8 @@ void HostInPlay(Match& match, const std::string& code)
   Orca::UX::Search::Matched(true);
   // Brawl's rules for a matchmade game, at the next boundary (UX/Results.h).
   Orca::UX::RequestQueueRules();
+  // The match block's header, a new set (UX/MatchBlock.h), at the next boundary too.
+  Orca::UX::RankedPPlus::RequestHeader(Orca::UX::Search::Ranked(), code);
   NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: hosting room {} from frame {}", code, match.running + 1);
 }
 

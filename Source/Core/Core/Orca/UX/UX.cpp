@@ -17,7 +17,9 @@
 #include "Core/Orca/UX/OnlineMenu.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/UX/Probe.h"
+#include "Core/Orca/UX/RankedPPlus.h"
 #include "Core/Orca/UX/Results.h"
+#include "Core/Rollback/InputGate.h"
 
 namespace Orca::UX
 {
@@ -27,6 +29,11 @@ void Init()
   Orca::Events::SetLocalPadSource([](bool for_frame) { return LocalPad(for_frame); });
   Orca::Events::SetInputAgeSource([] { return GetInputAge(); });
   InitOverlay();
+  // The input gate's masks: the ranked stage flow's turns (RankedPPlus.h), from memory alone.
+  Rollback::InputGate::SetSource([](const Core::CPUThreadGuard& guard) {
+    GuardMemory memory(guard);
+    return RankedPPlus::Masks(memory);
+  });
   // The name tags write emulated memory: the compatibility key carries their version.
   Orca::Events::SetUXCompatVersion(kCompatVersion);
   // At every frame boundary, first runs and re-runs, before the session saves anything there, with
@@ -47,6 +54,9 @@ void Init()
     // A host that just took a matchmade room presets Brawl's rules, alone, before any keyframe.
     if (!resimulating)
       ApplyQueueRules(guard, alone);
+    // The match block's header and Project+'s ranked stage flow (RankedPPlus.h): game logic, a
+    // pure function of memory, the frame number and the synced ports, first runs and re-runs.
+    RankedPPlus::Frame(guard, frame, resimulating, ports, alone);
     ProbeFrame(guard, frame);
     // This player's own controls in its own game, for the session to carry into a game it joins or
     // hosts (reads only; only while this game is its player's alone, so never a friend's game).
@@ -101,6 +111,7 @@ void Init()
 
 void Shutdown()
 {
+  Rollback::InputGate::SetSource({});
   Orca::Events::SetStallCallback({});
   Orca::Events::SetBoundaryCallback({});
   Orca::Events::SetFrameCallback({});

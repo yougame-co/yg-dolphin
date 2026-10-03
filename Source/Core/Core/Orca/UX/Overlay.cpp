@@ -18,6 +18,7 @@
 #include "Common/HookableEvent.h"
 #include "Core/Core.h"
 #include "Core/Orca/UX/OnlineMenu.h"
+#include "Core/Orca/UX/RankedPPlus.h"
 #include "VideoCommon/AsyncRequests.h"
 #include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/Present.h"
@@ -425,8 +426,10 @@ void Draw()
                                                s_perf.load(std::memory_order_relaxed));
   // The matchmaking search (UX/OnlineMenu.h), while the player waits on the character select.
   const auto [search, search_note] = Search::Lines();
+  // A ranked set's score and, on the stage select, whose turn it is (RankedPPlus.h).
+  const RankedPPlus::Lines ranked = RankedPPlus::CurrentLines();
   if (!f.show_signal && f.waiting.empty() && f.toasts.empty() && f.stats.empty() &&
-      f.perf.empty() && search.empty())
+      f.perf.empty() && search.empty() && ranked.set.empty())
   {
     return;
   }
@@ -482,6 +485,20 @@ void Draw()
   {
     OutlinedText(dl, text_size, ImVec2(margin, y), t.alpha, t.text);
     y += TextSize(text_size, t.text).y + unit;
+  }
+  if (search.empty() && !ranked.set.empty())
+  {
+    // Top centre, as the search's lines: the set, then the turn in the highlight colour.
+    const float size = 3.0f * unit;
+    const ImVec2 s = TextSize(size, ranked.set);
+    float line_y = margin;
+    OutlinedText(dl, size, ImVec2((screen.x - s.x) / 2, line_y), 1, ranked.set);
+    if (!ranked.turn.empty())
+    {
+      line_y += s.y + 0.5f * unit;
+      const ImVec2 n = TextSize(size, ranked.turn);
+      OutlinedText(dl, size, ImVec2((screen.x - n.x) / 2, line_y), 1, ranked.turn, Signal::Ok);
+    }
   }
   if (!search.empty())
   {

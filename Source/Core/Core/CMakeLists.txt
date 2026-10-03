@@ -540,6 +540,8 @@ add_library(core
   Orca/UX/FreeSpace.h
   Orca/UX/GamePatches.cpp
   Orca/UX/GamePatches.h
+  Orca/UX/MatchBlock.cpp
+  Orca/UX/MatchBlock.h
   Orca/UX/MenuText.cpp
   Orca/UX/MenuText.h
   Orca/UX/NameTags.cpp
@@ -550,6 +552,10 @@ add_library(core
   Orca/UX/Overlay.h
   Orca/UX/Probe.cpp
   Orca/UX/Probe.h
+  Orca/UX/RankedPPlus.cpp
+  Orca/UX/RankedPPlus.h
+  Orca/UX/RankedSteps.cpp
+  Orca/UX/RankedSteps.h
   Orca/UX/Results.cpp
   Orca/UX/Results.h
   Orca/UX/UX.cpp

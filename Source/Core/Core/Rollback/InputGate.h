@@ -45,8 +45,12 @@ struct Mask
   u16 buttons = 0;
   bool main_stick = false;
   bool c_stick = false;
+  // Buttons the game sees pressed whatever the player does (a rule acting for a player whose
+  // timer ran out: the ranked stage flow's default pick). Applied after the mask; A, B, L and R
+  // also read fully pressed.
+  u16 press = 0;
 
-  bool Empty() const { return buttons == 0 && !main_stick && !c_stick; }
+  bool Empty() const { return buttons == 0 && !main_stick && !c_stick && press == 0; }
   bool operator==(const Mask&) const = default;
 };
 // Everything: the port reads as a connected pad with nothing pressed.
