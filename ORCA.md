@@ -1342,8 +1342,8 @@ word per line, in hex; three kinds:
 character select while a queue match's header says casual or ranked; friends games untouched):
 
 ```
-when 9017B96C == 59474D31               # the word is 'YGM1'
-when 9017B970 & FF000000 != 00000000    # and its masked word isn't 0
+when 806F2380 == 59474D31               # the match block's first word is 'YGM1'
+when 806F2384 & FF000000 != 00000000    # and its masked word isn't 0
 8119A120 2C030000 2C030000              # (an example) cmpwi r3, 0 (guard)
 8119A124 4082000C 4800000C              # bne -> b while both hold
 end
@@ -1372,7 +1372,8 @@ end
   originals, so a lone word would match other code by chance twice as often as a guarded one: the
   words around a flip go in as guards. A group never spans a `when` or an `end`.
 - Meant for branch flips in the game's own code; real code goes into a cave. Conditions read fixed
-  addresses only (no pointer chains): the match block's header is meant to be at one.
+  addresses only (no pointer chains): the match block's header is at one ("Free space":
+  `FreeSpace::kMatchBlock`, 0x806F2380 in both games).
 - Never on a word that game code also writes. Project+'s Gecko code handler writes its hooks again
   every frame (a C2 code's branch, such as its lag fix's at `0x8002AD8C`): a group toggled there
   lands at every boundary and is undone within the frame, and which of the two words the JIT runs
