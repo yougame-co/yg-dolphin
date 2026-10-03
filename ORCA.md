@@ -1146,34 +1146,68 @@ characters, the stage, the countdown's effects). Orca sessions force (`Orca/Prof
   copy pipelines are in no Dolphin disk cache and no ubershader covers them, so each kind compiled
   at its first copy, in every run: Brawl's first two (R8 and RGBA8) come at the countdown. Their
   UIDs are kept in `Cache/<game>.efbcopy.uidcache`.
-- **A limit on that wait** (`ShaderCache::WaitForBootCompile`, sessions only). The first boot after
-  an update compiles every pipeline in the UID cache (below), and the desktop app kills a boot that
-  hasn't drawn in 120 s (`desktop/src/orca.ts`), a timer installed apps keep. After 40 s the wait
-  ends as soon as the ubershaders are compiled; at 60 s it ends whatever is left. What is left
-  compiles in the background on the runtime thread count and is drawn with an ubershader until it
-  is ready; an ubershader still compiling at 60 s is compiled again at its first draw (a stall,
-  not a failed start). The log says which: "Orca: compiled N pipelines (K ubershader) before the
-  first frame in X s" or "Orca: stopped waiting for shaders after X s, ...". While the wait lasts
-  more than a second, Orca prints `orca shaders <compiled> <total>` once a second, before
-  `ready`, so an app can tell a slow boot from a hung one. `ORCA_TEST_SHADER_WAIT_MS=N` sets both
-  limits to N ms. Dolphin's shader workers slept through work already queued when their count
-  changed; they no longer do (`AsyncShaderCompiler::WorkerThreadRun`).
+- **The UID cache before the ubershaders** (`ShaderCache::CompileMissingPipelines`, sessions
+  only): its pipelines queue at priority 150, ahead of the ubershaders (200), instead of after them
+  (300). They are what the match draws and take a fraction of the time (FXC on Luis's PC: the
+  ubershaders ~35 s, Brawl's 451 pipelines ~1 s after them), so a boot that stops waiting has them.
+- **A limit on that wait** (`ShaderCache::WaitForBootCompile`, sessions only). The wait ends when
+  everything is compiled, ubershaders and UID cache alike, or at its limit: 60 s, or the app's
+  `ORCA_SHADER_WAIT_S` (60-900 s). Desktop apps installed before that variable kill a boot that
+  hasn't drawn in 120 s (`desktop/src/orca.ts`), so Orca keeps to 60 s unless the app says it
+  keeps a boot alive while `orca shaders` lines arrive (it then sets the variable and restarts its
+  timer on each line). Before 2026-10-03 the wait also ended at 40 s as soon as the ubershaders
+  were done: P+ on Windows stopped there with its 1,331 UID-cache pipelines left (seconds of work:
+  Brawl's 451 took about one), and they compiled beside its first match (VI over 33 ms for 9 s). What is left at the
+  limit compiles in the background on the runtime thread count. The log says which: "Orca:
+  compiled N pipelines (K ubershader) before the first frame in X s on T threads" or "Orca:
+  stopped waiting for shaders after X s (limit L s), ...". While the wait lasts more than a
+  second, Orca prints `orca shaders <done> <total>` once a second, before `ready`, so an app can
+  tell a slow boot from a hung one; the units are pipelines plus the shader stages they wait on (a
+  pipeline completes only after every stage of its priority, so pipelines alone read 0 until the
+  end: 0 of 1,493 for 30 s on Windows). `ORCA_TEST_SHADER_WAIT_MS=N` sets the limit to N ms.
+  Dolphin's shader workers slept through work already queued when their count changed; they no
+  longer do (`AsyncShaderCompiler::WorkerThreadRun`).
+- **No ubershader compiled on the emulation thread** (`ShaderCache::GetUberPipelineForUidIfReady`,
+  `VertexManagerBase::UpdatePipelineObject`, sessions only). A draw whose specialized pipeline
+  isn't ready is drawn with an ubershader; when that ubershader is itself still compiling in the
+  background (a boot that hit its limit), Dolphin compiled it again right there, a freeze of as
+  long as FXC takes (seconds). The draw is skipped instead, as Dolphin's "skip drawing" mode does,
+  until the ubershader or the specialized pipeline (ONDEMAND, first in the queue) is ready; the log
+  says so once ("Orca: skipping draws whose ubershader is still compiling ..."). Mac test, P+ with
+  an empty UID cache, the limit at 0 and each pixel ubershader slowed by 3 s: the first 600 frames'
+  worst was 51.6 ms with the skip and 3,012 ms without it.
+- **FXC's output kept across builds** (`D3DCommon/FxcCache.*`, D3D11 and D3D12, whenever Dolphin's
+  shader cache setting is on). `Cache/Shaders/D3D-fxc.cache` maps a SHA-1 of exactly what FXC is
+  given (a SHA-1 of `d3dcompiler_47.dll`'s bytes, the target, the flags, the macros and the HLSL
+  text) to the DXBC it returned. FXC is a pure function of that input, so a build whose shader
+  generators and GLSL-to-HLSL path write the same text gets its shaders without compiling; any
+  change to the text, the flags or the compiler is another key, so a binary is only ever used for
+  the compile that made it. Each record also carries a SHA-1 of its key and DXBC: a torn or
+  interleaved write ends the read and the file is written again from the records before it. One
+  file for every game, started over past 128 MB. No release from 0.3.4 to 0.3.9 changed a shader
+  generator, glslang, SPIRV-Cross or `D3DCommon/Shader.cpp`, while each touched other video files,
+  so a key on the generator sources or the VideoCommon tree would have lost the cache every time
+  and been only as safe as its file list. The log names every FXC compile of 250 ms or more ("Orca:
+  FXC compiled a ps_5_0 in N ms (K KB of HLSL, from GLSL in M ms; ...)") and, at shutdown, "Orca:
+  FXC cache: R shaders read from ..., F compiles found there, A compiled and added".
+  `ORCA_TEST_FXC_FLAGS=<hex>` replaces FXC's `D3DCOMPILE_*` flags (rendering only, not in the lobby
+  key), to time other optimization levels.
 
 Rendering only: nothing drawn reaches RAM (EFB/XFB copies stay on the GPU, EFB access and bbox are
 off), so none of this can make two players' games differ.
 
 Why it came back after every update: Dolphin's compiled-shader files (`Cache/Shaders/*.cache`, D3D's
 DXBC on Windows) carry the build's git commit in their header and are emptied by any other build;
-the pipeline UID cache survives. Without the boot compile, that cache was recompiled on one
-background thread (`ShaderCompilerThreads` defaults to 1), and a pipeline still queued at the
-countdown compiled again on the emulation thread. macOS adds Apple's own Metal cache, kept per
-binary (Metal keeps no `Cache/Shaders` file). Until this change only the desktop app's macOS
-command line asked for the first two settings. The app's `-u` is `<userData>/orca/user`
-(`%APPDATA%\yougame-desktop\orca\user` on Windows, `~/Library/Application
-Support/yougame-desktop/orca/user` on macOS), one folder for every Orca version: the UID caches,
-the EFB copy cache and the JIT list survive updates, the compiled shaders don't. The app passes no
-`-v`, so Windows draws with Dolphin's default, D3D11 (`D3D`), unless the folder's `Dolphin.ini`
-says otherwise; the forced-settings line names it (`GFXBackend=`).
+the pipeline UID cache survives (and, from 2026-10-03, D3D's `D3D-fxc.cache`). Without the boot
+compile, that cache was recompiled on one background thread (`ShaderCompilerThreads` defaults to 1),
+and a pipeline still queued at the countdown compiled again on the emulation thread. macOS adds
+Apple's own Metal cache, kept per binary (Metal keeps no `Cache/Shaders` file). Until this change
+only the desktop app's macOS command line asked for the first two settings. The app's `-u` is
+`<userData>/orca/user` (`%APPDATA%\yougame-desktop\orca\user` on Windows, `~/Library/Application
+Support/yougame-desktop/orca/user` on macOS), one folder for every Orca version: the UID caches, the
+EFB copy cache and the JIT list survive updates, the compiled shaders don't. The app passes no `-v`,
+so Windows draws with Dolphin's default, D3D11 (`D3D`), unless the folder's `Dolphin.ini` says
+otherwise; the forced-settings line names it (`GFXBackend=`).
 
 Measured 2026-10-03 (M4, Metal, 871x434 window, scripted Brawl Mario vs Link on Battlefield and
 P+ 1v1, `YG_SHADERLOG=1` probe build): VI stalls from 0.6 s before scMelee to 12 s after.
@@ -1195,7 +1229,14 @@ The boot compile costs, on the M4 after an update: 2.9 s with an empty UID cache
 With the wait cut to 2 s (`ORCA_TEST_SHADER_WAIT_MS=2000`) it stopped with 772 left (63
 ubershaders): the game ran, the menus had one 216 ms stall (ubershaders compiled at their first
 draw), and the match started as it did without the limit. Windows compiles each shader through
-glslang, SPIRV-Cross and FXC: its time after an update is unmeasured. New textures cost 3-5 ms in the same window
+glslang, SPIRV-Cross and FXC; on Luis's PC (RTX 2080, D3D11, 0.3.9 on copies of his folder) the
+first boot after the update compiled Brawl's 613 pipelines (162 ubershader) in 38-39 s and stopped
+P+'s 1,493 at 40 s. Of that, the 63 ubershader stages (54 pixel, 9 vertex: 9 texgen counts x
+early/late/per-pixel depth x uint output on D3D) took about 30-37 s with every thread in FXC, and
+Brawl's 451 UID-cache pipelines then about one second. The progress read 0 for the first 30 s
+because pipelines complete only after every stage of their priority is compiled (fixed above).
+The boot compiles on Dolphin's precompile thread count (logical cores - 2 unless `GFX.ini` sets
+`ShaderPrecompilerThreads`), not the runtime 1-4. New textures cost 3-5 ms in the same window
 (the hires lookup for Orca's own pack 0.1 ms). What is left with everything warm (about 100 + 60 ms
 at the countdown and 45 ms at 4 s, no compile, no texture work) is not shaders.
 
