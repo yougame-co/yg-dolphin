@@ -49,14 +49,14 @@ constexpr u32 MAX_RANGE_BYTES = 0x10000;
 constexpr u32 SCENE_MANAGER = 0x805A0060;
 constexpr std::string_view MATCH_SCENE = "scMelee";
 
-// Warm-up: from a match's first frame for WARM_FRAMES frames at most, BUDGET_US per frame boundary
-// (the loading frames run ~1-2 ms of emulation each); a block whose words aren't in RAM yet is looked
-// at again every SWEEP_EVERY frames, and one the game's code keeps destroying is compiled at most
-// MAX_ATTEMPTS times.
+// Warm-up: from a match's first frame for WARM_FRAMES frames at most. The first sweep over the
+// known blocks gets BUDGET_US per frame boundary (the loading frames run ~1-2 ms of emulation each);
+// the blocks whose words weren't in RAM are looked at again every SWEEP_EVERY frames, LATE_BUDGET_US
+// per boundary, since that happens during play.
 constexpr int WARM_FRAMES = 600;
-constexpr int SWEEP_EVERY = 20;
+constexpr int SWEEP_EVERY = 30;
 constexpr int BUDGET_US = 8000;
-constexpr u8 MAX_ATTEMPTS = 3;
+constexpr int LATE_BUDGET_US = 1000;
 // Recording: the blocks the game compiles in a match's first RECORD_FRAMES frames; one counts when
 // its words are unchanged STABLE_AFTER frames after its compile (so never a block whose code was
 // rewritten after its compile without an invalidation: compiling it ahead could run other words
@@ -161,7 +161,7 @@ enum class Status : u8
   Waiting,   // its words aren't in RAM (yet): looked at again next sweep
   Present,   // the JIT already had it
   Compiled,  // compiled here
-  GivenUp,   // no block came out, or one with other ranges, or MAX_ATTEMPTS compiles
+  GivenUp,   // no block came out, or one spanning other ranges (erased unused)
 };
 
 struct Fresh
@@ -209,10 +209,11 @@ private:
 
   // The blocks known before this match, and what this match did with them.
   std::vector<Block> m_known;
-  std::vector<u32> m_order;  // by `when`: what a match runs first, first
   std::vector<Status> m_status;
-  std::vector<u8> m_attempts;
   std::vector<bool> m_seen;
+  // The blocks this sweep looks at, by `when` (what a match runs first, first), and those still
+  // waiting for the next sweep.
+  std::vector<u32> m_queue, m_waiting;
   std::size_t m_cursor = 0;
   int m_next_sweep = 0;
   bool m_warming = false;
@@ -310,12 +311,12 @@ void State::StartMatch()
   m_in_match = true;
   m_match_frame = 0;
   ++m_matches;
-  m_order.resize(m_known.size());
-  std::iota(m_order.begin(), m_order.end(), 0u);
-  std::stable_sort(m_order.begin(), m_order.end(),
+  m_queue.resize(m_known.size());
+  std::iota(m_queue.begin(), m_queue.end(), 0u);
+  std::stable_sort(m_queue.begin(), m_queue.end(),
                    [this](u32 a, u32 b) { return m_known[a].when < m_known[b].when; });
+  m_waiting.clear();
   m_status.assign(m_known.size(), Status::Waiting);
-  m_attempts.assign(m_known.size(), 0);
   m_seen.assign(m_known.size(), false);
   m_cursor = 0;
   m_next_sweep = 0;
@@ -415,8 +416,8 @@ void State::FinishRecording()
   m_seen.clear();
   m_stable.clear();
   m_status.clear();
-  m_order.clear();
-  m_attempts.clear();
+  m_queue.clear();
+  m_waiting.clear();
 }
 
 void State::Warm(const Core::CPUThreadGuard& guard)
@@ -433,14 +434,20 @@ void State::Warm(const Core::CPUThreadGuard& guard)
   const CPUEmuFeatureFlags flags = ppc_state.feature_flags;
   const auto mem1 = Mem1(), mem2 = Mem2();
   const auto start = std::chrono::steady_clock::now();
-  const auto deadline = start + std::chrono::microseconds(m_budget_us);
+  // The first sweep compiles nearly everything, during the loading; a later one mostly finds the
+  // other blocks still not in RAM, during play.
+  const auto deadline =
+      start + std::chrono::microseconds(m_sweeps == 0 ? m_budget_us : LATE_BUDGET_US);
   bool compiled_here = false;
   const int compiled_before = m_compiled, discarded_before = m_discarded;
   int not_in_ram = 0;
   while (true)
   {
-    if (m_cursor == m_order.size())
+    if (m_cursor == m_queue.size())
     {
+      // What is still waiting is looked at again in SWEEP_EVERY frames.
+      m_queue.swap(m_waiting);
+      m_waiting.clear();
       m_cursor = 0;
       m_next_sweep = m_match_frame + SWEEP_EVERY;
       ++m_sweeps;
@@ -448,41 +455,37 @@ void State::Warm(const Core::CPUThreadGuard& guard)
     }
     if (std::chrono::steady_clock::now() >= deadline)
       break;
-    const u32 index = m_order[m_cursor++];
+    const u32 index = m_queue[m_cursor];
     const Block& b = m_known[index];
     Status& status = m_status[index];
-    if (status == Status::GivenUp || b.flags != flags ||
-        mmu.InstructionBATTranslate(b.effective) != b.physical)
+    if (b.flags != flags || mmu.InstructionBATTranslate(b.effective) != b.physical)
     {
+      m_waiting.push_back(index);
+      ++m_cursor;
       continue;
     }
     if (cache.GetBlockFromStartAddress(b.effective, flags))
     {
-      if (status == Status::Waiting)
-      {
-        status = Status::Present;
-        ++m_present;
-      }
+      status = Status::Present;
+      ++m_present;
       m_seen[index] = true;
+      ++m_cursor;
       continue;
     }
     if (HashRanges(mem1, mem2, b.ranges) != b.hash)
     {
+      // Not loaded (yet), or other code at that address this match.
       ++not_in_ram;
-      continue;  // not loaded (yet), or other code at that address this match
-    }
-    if (m_attempts[index] >= MAX_ATTEMPTS)
-    {
-      status = Status::GivenUp;
+      m_waiting.push_back(index);
+      ++m_cursor;
       continue;
     }
     if (!jit->CanCompileFromHook())
     {
       ++m_no_room;
-      --m_cursor;
-      break;
+      break;  // this block again at the next boundary
     }
-    ++m_attempts[index];
+    ++m_cursor;
     // The dispatcher compiles with the guest's floating-point mode in force; so does this.
     m_compiling = true;
     PowerPC::RoundingModeUpdated(ppc_state);
@@ -515,29 +518,29 @@ void State::Warm(const Core::CPUThreadGuard& guard)
       status = Status::GivenUp;
       continue;
     }
-    if (status != Status::Compiled)
-      ++m_compiled;
+    ++m_compiled;
     status = Status::Compiled;
     m_seen[index] = true;
   }
+  const double ms =
+      std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+  m_ms += ms;
+  m_max_frame_ms = std::max(m_max_frame_ms, ms);
   if (compiled_here)
   {
-    const double ms =
-        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
-            .count();
-    m_ms += ms;
-    m_max_frame_ms = std::max(m_max_frame_ms, ms);
     if (m_first_frame < 0)
       m_first_frame = m_match_frame;
     m_last_frame = m_match_frame;
-    if (m_log_frames)
-    {
-      NOTICE_LOG_FMT(ROLLBACK,
-                     "JIT warm-up: frame {}: {} compiled, {} discarded, {} not in RAM, {:.2f} ms",
-                     m_match_frame, m_compiled - compiled_before, m_discarded - discarded_before,
-                     not_in_ram, ms);
-    }
   }
+  if (m_log_frames)
+  {
+    NOTICE_LOG_FMT(ROLLBACK,
+                   "JIT warm-up: frame {}: {} compiled, {} discarded, {} not in RAM, {:.2f} ms",
+                   m_match_frame, m_compiled - compiled_before, m_discarded - discarded_before,
+                   not_in_ram, ms);
+  }
+  if (m_queue.empty())
+    StopWarm();  // nothing left waiting
 }
 
 void State::OnBoundary(const Core::CPUThreadGuard& guard)

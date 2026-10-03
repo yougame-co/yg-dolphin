@@ -1037,9 +1037,11 @@ match in the same process compiles little (its blocks are still there).
   is young again, the others age a match, and one unused for 24 matches (or past 200,000) goes.
 - **Warm-up.** From the next match's first frame, at each boundary before a first pass, up to
   8 ms (`ORCA_JITWARM_BUDGET_US`): blocks the JIT doesn't have, whose words are in RAM again, are
-  compiled, earliest-run first; the rest are looked at again every 20 frames, for 600 frames. In
-  Brawl it all fits in the loading image's ~165 frames; in Project+ the earliest-run blocks are done
-  before the stage appears.
+  compiled, earliest-run first. Those not in RAM (another fighter's code at that address) are
+  looked at again every 30 frames, 1 ms per boundary, until frame 600. Both games have the match's
+  code loaded at scMelee's first frame, and both show a still loading image ("Ready to fight") for
+  a while after it: Brawl ~165 frames, Project+ ~28. On the M4 the warm-up takes 37 frames (Brawl,
+  30,000 blocks) and 35 (Project+, 28,000), the blocks the stage's first frames run first.
 - **Why it can't change the game.** A block compiled early is the block the game's first run would
   compile: the same words at the same addresses (the hash), the same feature flags, compiled in the
   guest's floating-point mode as the dispatcher compiles, and kept only if its instructions span
