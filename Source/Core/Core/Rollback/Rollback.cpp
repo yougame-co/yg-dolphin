@@ -38,6 +38,7 @@
 #include "Core/Rollback/Cow.h"
 #include "Core/Rollback/Diag.h"
 #include "Core/Rollback/Harness.h"
+#include "Core/Rollback/InputGate.h"
 #include "Core/Rollback/OnlineMatch.h"
 #include "Core/Rollback/SessionPort.h"
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
@@ -466,6 +467,13 @@ std::span<const u8> SnapshotRing::LastState() const
 
 std::optional<GCPadStatus> InputOverride(int port)
 {
+  if (const auto pad = RawInputOverride(port))
+    return InputGate::GatePad(port, *pad);
+  return std::nullopt;
+}
+
+std::optional<GCPadStatus> RawInputOverride(int port)
+{
   if (const RingPort* session_port = RingPort::Active())
     return session_port->Pad(port);
   if (auto pad = Harness::InputOverride(port))
@@ -542,6 +550,7 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
   if (const Orca::Profile* profile = Orca::ActiveProfile();
       profile && !Orca::FrameHookLive(guard, *profile))
   {
+    InputGate::Clear();
     return;
   }
   Orca::Status::GameStarted();
@@ -584,6 +593,11 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
   }
 
   Harness::OnFrameBoundary(guard);
+
+  // The input gate's masks for the frame about to run (ORCA.md, "Input gate"): from memory as it
+  // is now, after any snapshot or keyframe of this boundary was saved or loaded, on every pass.
+  // Before the relatch below, which reads the ports through them.
+  InputGate::OnBoundary(guard);
 
   // Latency (ORCA.md, "Input latency"): the pads just set for the frame about to run go into the SI
   // input buffers now. The game reads them a few ms into the frame from what the SI's last poll

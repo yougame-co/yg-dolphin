@@ -367,11 +367,16 @@ std::optional<int> TestShaderWaitMs()
   return std::clamp(std::atoi(value.c_str()), 0, 600'000);
 }
 
+std::string TestGateSpec()
+{
+  return SessionActive() ? GetEnv("ORCA_TEST_GATE") : std::string();
+}
+
 bool TestOverridesActive()
 {
   return TestPads() != 0 || TestSkipRender() || TestNetDelayMs().has_value() ||
          TestSnapshotEvery() != 0 || TestFullSnapshots() || TestNoAfp() ||
-         TestCpuCore().has_value();
+         TestCpuCore().has_value() || !TestGateSpec().empty();
 }
 
 const Sram* SessionSram()

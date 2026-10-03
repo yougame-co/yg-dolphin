@@ -125,11 +125,14 @@ private:
 // XXH3 over MEM1 then MEM2: the state checksum players compare to detect a desync.
 u64 RamChecksum(std::span<const u8> mem1, std::span<const u8> mem2);
 
-// The complete status a GameCube controller port (0-based) reports for the current frame: the
-// session's pads, the test harness's, or, in a session that has not supplied pads yet (the boot), a
-// neutral pad. It replaces the host controller's status entirely (analog A/B, origin), so nothing
-// local leaks into the emulated machine.
+// The complete status a GameCube controller port (0-based) reports for the current frame, as the
+// game reads it (SI_DeviceGCController): RawInputOverride through the input gate's masks for this
+// frame (InputGate.h). It replaces the host controller's status entirely (analog A/B, origin), so
+// nothing local leaks into the emulated machine.
 std::optional<GCPadStatus> InputOverride(int port);
+// The same before the input gate: the session's pads, the test harness's, or, in a session that has
+// not supplied pads yet (the boot), a neutral pad. What a recording keeps (YG_PADREC).
+std::optional<GCPadStatus> RawInputOverride(int port);
 
 // Called by the game profile's frame-boundary hook once per game frame. Runs in the host's
 // floating-point mode and leaves the guest's set again (from its FPSCR) on the way out.
