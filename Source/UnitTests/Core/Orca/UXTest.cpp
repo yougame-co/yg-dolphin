@@ -1138,12 +1138,12 @@ TEST(OrcaUXFreeSpace, TheBlockAndTheCavesFitAndNoShippedPatchStraysIntoThem)
   EXPECT_EQ(cave_bytes, 16908u);
   // The dead runs the block and the caves come from: the online sequences' methods.
   constexpr std::array<FreeSpace::Range, 7> dead{{{0x806F22EC, 0x806F2D24},
-                                                   {0x806F2D74, 0x806F30E0},
-                                                   {0x806F3130, 0x806F3FA0},
-                                                   {0x806F3FF0, 0x806F4C70},
-                                                   {0x806F4CC0, 0x806F58B4},
-                                                   {0x806F6C74, 0x806F76F8},
-                                                   {0x806F7748, 0x806F82A4}}};
+                                                  {0x806F2D74, 0x806F30E0},
+                                                  {0x806F3130, 0x806F3FA0},
+                                                  {0x806F3FF0, 0x806F4C70},
+                                                  {0x806F4CC0, 0x806F58B4},
+                                                  {0x806F6C74, 0x806F76F8},
+                                                  {0x806F7748, 0x806F82A4}}};
   const auto within_dead = [&](const FreeSpace::Range& range) {
     return std::any_of(dead.begin(), dead.end(), [&](const FreeSpace::Range& run) {
       return range.begin >= run.begin && range.end <= run.end;
@@ -1167,10 +1167,9 @@ TEST(OrcaUXFreeSpace, TheBlockAndTheCavesFitAndNoShippedPatchStraysIntoThem)
           std::any_of(kCodeCaves.begin(), kCodeCaves.end(),
                       [&](const FreeSpace::Range& cave) { return cave.Contains(p.address); });
       EXPECT_TRUE(!in_dead || in_cave) << std::hex << p.address;
-      EXPECT_FALSE(std::any_of(kSequenceCreates.begin(), kSequenceCreates.end(),
-                               [&](const FreeSpace::Range& create) {
-                                 return create.Contains(p.address);
-                               }))
+      EXPECT_FALSE(
+          std::any_of(kSequenceCreates.begin(), kSequenceCreates.end(),
+                      [&](const FreeSpace::Range& create) { return create.Contains(p.address); }))
           << std::hex << p.address;
     }
   }

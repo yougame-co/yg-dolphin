@@ -34,7 +34,7 @@
 // - Proven under the harness, in both games: unchanged from boot through the main menu, both
 //   Online picks and the back out, character and stage select, two whole matches and their
 //   results; filled with illegal instructions right after boot, the same runs reach the same scenes
-//   with every other byte of RAM the same (ORCA.md "Free space").
+//   with every other byte of RAM the same (Tools/orca/free-space.py, ORCA.md "Free space").
 //
 // Before Orca writes them these addresses hold the game's dead code (the block's first word is
 // kMatchBlockOriginalWord), never zeros: a reader of the block checks its magic. A cave is written
