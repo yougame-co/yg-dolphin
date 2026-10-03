@@ -7,7 +7,8 @@
 //                           <from> <to> <port 1-4> <buttons/axes...>     hold during frames from..to
 //                           mash <from> <to> <port> <period> <buttons/axes...>   3 frames per period
 //                           fuzz <from> <to> <port> <seed>      pseudo-random play, new every 8 frames
-//                         Prefix a rule with @<scene> to count from/to from entry into that scene.
+//                         Prefix a rule with @<scene> to count from/to from entry into that scene,
+//                         @<scene>:<n> to apply it on the n-th entry only (1 is the first).
 //                         Buttons A B X Y Z L R START UP DOWN LEFT RIGHT; axes SX= SY= CX= CY=
 //                         (0-255, 128 centre). Frames are the harness frame counter, which rewinds
 //                         on a rollback load, so re-run frames read the same input.

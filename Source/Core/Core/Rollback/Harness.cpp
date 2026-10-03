@@ -211,6 +211,7 @@ struct InputRule
   int from = 0, to = 0, port = 0, period = 0;
   u32 fuzz_seed = 0;  // nonzero: pseudo-random input, new every 8 frames
   std::string scene;  // nonempty: from/to count frames since this scene was entered
+  int visit = 0;      // nonzero: only on that entry into the scene (1 is the first)
   u16 buttons = 0;
   int sx = -1, sy = -1, cx = -1, cy = -1;
 };
@@ -236,6 +237,11 @@ std::vector<InputRule> LoadInputScript()
     if (first.size() > 1 && first[0] == '@')
     {
       r.scene = first.substr(1);
+      if (const auto colon = r.scene.find(':'); colon != std::string::npos)
+      {
+        r.visit = std::atoi(r.scene.c_str() + colon + 1);
+        r.scene.resize(colon);
+      }
       if (!(words >> first))
         continue;
     }
@@ -291,8 +297,29 @@ int s_max_frame = -1;  // highest frame reached on a first pass
 bool s_stop_queued = false;
 std::string s_scene;
 int s_scene_start = 0;
-// (scene, entry frame) at the end of each recent frame, so a load can restore them.
-std::map<int, std::pair<std::string, int>> s_scene_history;
+int s_scene_visit = 0;  // which entry into s_scene this is (1 for the first)
+// Every entry into a scene so far (frame -> scene), for visit numbers; a load drops later ones.
+std::map<int, std::string> s_scene_entries;
+struct SceneAt
+{
+  std::string scene;
+  int start = 0;
+  int visit = 0;
+};
+// The scene, its entry frame and visit at the end of each recent frame, so a load can restore them.
+std::map<int, SceneAt> s_scene_history;
+
+// After a load to the end of `frame`: the scene as it was then, and no entry after it.
+void RestoreScene(int frame)
+{
+  if (auto history = s_scene_history.find(frame); history != s_scene_history.end())
+  {
+    s_scene = history->second.scene;
+    s_scene_start = history->second.start;
+    s_scene_visit = history->second.visit;
+  }
+  s_scene_entries.erase(s_scene_entries.upper_bound(frame), s_scene_entries.end());
+}
 
 // ---- Hashing ----
 
@@ -684,11 +711,7 @@ void SyncTest(Core::System& system)
         system.GetJitInterface().ClearSafe();
       s_frame = target;
       s_frame_events.clear();
-      if (auto history = s_scene_history.find(s_frame); history != s_scene_history.end())
-      {
-        s_scene = history->second.first;
-        s_scene_start = history->second.second;
-      }
+      RestoreScene(s_frame);
     }
   }
 
@@ -985,7 +1008,7 @@ std::optional<GCPadStatus> InputOverride(int port)
     int rf = f;  // the frame the rule's from/to are measured in
     if (!r.scene.empty())
     {
-      if (r.scene != s_scene)
+      if (r.scene != s_scene || (r.visit && r.visit != s_scene_visit))
         continue;
       rf = f - s_scene_start;
     }
@@ -1061,8 +1084,12 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
         NOTICE_LOG_FMT(ROLLBACK, "Scene frame {}: {} -> {}", s_frame, s_scene, scene);
       s_scene = std::move(scene);
       s_scene_start = s_frame;
+      s_scene_entries[s_frame] = s_scene;
+      s_scene_visit = static_cast<int>(
+          std::count_if(s_scene_entries.begin(), s_scene_entries.end(),
+                        [](const auto& entry) { return entry.second == s_scene; }));
     }
-    s_scene_history[s_frame] = {s_scene, s_scene_start};
+    s_scene_history[s_frame] = {s_scene, s_scene_start, s_scene_visit};
     if (s_scene_history.size() > 128)
       s_scene_history.erase(s_scene_history.begin());
   }
@@ -1182,11 +1209,7 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
   if (s_rewind_to >= 0)
   {
     s_frame = s_rewind_to;
-    if (auto history = s_scene_history.find(s_rewind_to); history != s_scene_history.end())
-    {
-      s_scene = history->second.first;
-      s_scene_start = history->second.second;
-    }
+    RestoreScene(s_rewind_to);
     s_rewind_to = -1;
   }
   // A load above rewound s_frame; the next frame end is the frame after it.

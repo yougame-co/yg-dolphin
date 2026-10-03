@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <thread>
 #include <fstream>
+#include <map>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -29,6 +30,7 @@
 // ORCA_UX_PROBE=<file> runs one command per line at a frame boundary, counted from entry into a
 // scene (Brawl rev 2's scene manager), like the harness's input scripts:
 //   @<scene> <frame> write <addr> <hex bytes>      e.g. @muMenuMain 20 write 90180c10 0000
+//                                                  (@<scene>:<n>: on the scene's n-th entry only)
 //   @<scene> <frame> utf16 <addr> <text>           text as UTF-16BE with a 0 terminator
 //   @<scene> <frame> dump <addr> <length> <name>   to <user dir>/probe-<name>.bin
 //   @* 0 watch <addr> <name>                       every frame: log the u32 there when it changes
@@ -43,6 +45,7 @@ namespace
 struct Command
 {
   std::string scene;
+  int visit = 0;  // nonzero: only on that entry into the scene (1 is the first)
   int frame = 0;
   std::string verb;
   std::string addr;
@@ -72,6 +75,11 @@ std::vector<Command> Load()
       c.arg2.erase(0, 1);
     if (c.scene.starts_with("@"))
       c.scene.erase(0, 1);
+    if (const auto colon = c.scene.find(':'); colon != std::string::npos)
+    {
+      c.visit = std::atoi(c.scene.c_str() + colon + 1);
+      c.scene.resize(colon);
+    }
     out.push_back(c);
   }
   return out;
@@ -172,11 +180,13 @@ void ProbeFrame(const Core::CPUThreadGuard& guard, int frame)
     return;
   static std::string scene;
   static int scene_start = 0;
+  static std::map<std::string, int> visits;  // entries per scene (first passes and re-runs alike)
   const std::string now = SceneName(guard);
   if (now != scene)
   {
     scene = now;
     scene_start = frame;
+    ++visits[scene];
   }
   const int rel = frame - scene_start;
   for (Command& c : commands)
@@ -194,7 +204,7 @@ void ProbeFrame(const Core::CPUThreadGuard& guard, int frame)
       }
       continue;
     }
-    if (c.done || c.scene != scene || c.frame != rel)
+    if (c.done || c.scene != scene || c.frame != rel || (c.visit && c.visit != visits[scene]))
       continue;
     c.done = true;
     if (c.verb == "stall")
