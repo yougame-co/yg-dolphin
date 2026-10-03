@@ -1485,8 +1485,9 @@ void PublishStats(Match& match)
   num("hi", stats.hitches);
   num("phi", stats.peer_hitches);
   // The local controller's input age over the interval (ControllerSource.h): the mean age of the
-  // newest adapter report at the frames whose pad changed ("pa", ms), and the adapter's reports
-  // per frame ("rpf"); -1 when no frame read an adapter. A restarted stream counts from zero.
+  // newest adapter report at the frames whose pad changed, less its hop from the app ("pa", ms),
+  // and the adapter's reports per frame ("rpf"); -1 when no frame read an adapter. A restarted
+  // stream counts from zero.
   const Orca::Events::InputAge input = Orca::Events::GetInputAge();
   const Orca::Events::InputAge& input_last =
       input.frames < match.stats_input.frames ? Orca::Events::InputAge{} : match.stats_input;

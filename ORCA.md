@@ -114,21 +114,37 @@ controller settings. A session never runs Dolphin's own adapter code: its ports 
 How stale the game's view of an adapter is when a frame reads it (`ControllerSource.h`). Only a
 frame's own read counts (re-runs and a joiner's catch-up don't), and only reads whose pad differs
 from the frame before's (an unchanged pad's age says nothing). The age is that of the newest adapter
-report, split at the helper's send: the helper's part (on its own clock) and the app's (the trip
-through the app on the two epoch clocks, plus the wait in Orca's cache).
+report, made of two spans that are each timed on a single clock: the helper's (from the USB report
+to the snapshot leaving the helper, on its steady clock) and the wait in Orca's cache (on Orca's).
 
-- With every report published, the mean is about half the USB report interval plus the transport
-  (0.1-0.3 ms through the app). So the 125 Hz the official adapter reports at shows as a little over
-  4 ms, and 1 kHz as under 1 ms. Not counted: the adapter's own controller poll (its data is up to
-  ~1.2 ms old when a report leaves) and the host's USB stack.
+- The hop through the app between them is not in the age. Its two ends are different processes'
+  wall clocks: the helper reads the wall clock once at start and counts on its steady clock from
+  there, and Orca reads its wall clock at each arrival. Those drift apart (this Mac's wall clock
+  gains 4.5 ppm on its steady clock, 0.27 ms a minute) and step (NTP, w32time on Windows), so an
+  hour-old helper would add about 16 ms to every sample. Instead the ROLLBACK lines carry the hop's
+  jitter: each hop above the fastest of the second before it, where the clocks' offset cancels and
+  their drift is microseconds. A clock step that lengthens the hops shows there for a second, never
+  in the age. The whole transport, helper and hop together, is what the latency check measures:
+  0.1-0.3 ms on loopback (`Tools/orca/controller-latency.mjs`; its scripted helper starts with the
+  run, so its clock has had no time to drift).
+- With every report published, the mean is about half the USB report interval plus the helper's
+  part. So the 125 Hz the official adapter reports at shows as a little over 4 ms, and 1 kHz as a
+  little over 0.5 ms. Not counted besides the hop: the adapter's own controller poll (its data is
+  up to ~1.2 ms old when a report leaves) and the host's USB stack.
 - Each `orca stats` line carries `pa`, the mean age over the interval in ms, and `rpf`, the adapter
-  reports per frame (2.1 at 125 Hz, 16.7 at 1 kHz); both are -1 when no frame read an adapter. The
-  app keeps only the stats keys it knows (`STATS_KEYS` in `desktop/src/orca-policy.ts`): netlog
+  reports per frame (2.1 at 125 Hz, 16.7 at 1 kHz; fewer than the adapter sends means the helper
+  merged reports while the app was slow to take them); both are -1 when no frame read an adapter.
+  The app keeps only the stats keys it knows (`STATS_KEYS` in `desktop/src/orca-policy.ts`): netlog
   shows these two once it lists them.
-- The ROLLBACK log has a line every 10 s with the percentiles and the split, and one for the run
-  when the stream stops.
+- The ROLLBACK log has a line every 10 s with the percentiles, the split and the hop, and one for
+  the run when the stream stops.
 - Without an adapter: `Tools/orca/fake_bridge.py` with `FAKE_PAD_HZ` and `FAKE_PAD_NOISE`, and the
-  `OrcaUXLatency.BoundaryInputAge` test (commands in the test).
+  `OrcaUXLatency.BoundaryInputAge` test (commands in the test). `FAKE_HELPER_SKEW_MS` and
+  `FAKE_HELPER_DRIFT_PPM` give the fake helper a clock like the real one's. On this Mac, 10 s at
+  59.94 reads a second: 125 Hz, 4.44 ms (helper 0.00, cache 4.34; hop p50 0.06); a helper an hour
+  behind and losing 1000 ppm, 4.35 ms (the hop's p50 1.01: that drift over its one-second floor);
+  1 kHz, 0.59 ms, and 0.62 ms with that clock. Before the split, the same clock read 60004 ms for a
+  helper one minute behind and 9.68 ms for one losing 1000 ppm.
 
 ## Drop-in
 

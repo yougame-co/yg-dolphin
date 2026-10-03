@@ -40,17 +40,21 @@ std::optional<GCPadStatus> LatestPad();
 
 // Transport timing, for the latency check: per snapshot that carried a new adapter report, the
 // time from the helper receiving the USB report to this process having it parsed in the cache
-// (both epoch ms; the helper anchors its clock to the wall clock once at start).
+// (both epoch ms; the helper anchors its clock to the wall clock once at start, so this carries the
+// two clocks' offset and drift: fine for that check's short runs, not for a long session).
 //
 // Input age at the frame boundary (ORCA.md, "Controller input age"), from each frame's own read of
 // an adapter port (LocalPad(true)): how old the newest adapter report was at that read. Sampled
 // only at reads whose pad differs from the previous read's (a change): an unchanged pad's age says
-// nothing, and grows wherever reports pause. Split at the helper's send: the helper's part
-// (sent_at - received_at, its own clock) and the app's (the snapshot's trip through the app, epoch
-// ms on both sides, plus how long it sat in this process's cache). With every report published,
-// this is how stale the game's view of the controller is: about half the report interval plus the
-// transport, so faster USB polling shows here. Not counted: the adapter's own controller poll (a
-// report's data is up to ~1.2 ms old when it leaves the adapter) and the host's USB stack.
+// nothing, and grows wherever reports pause. Made of two spans, each timed on one clock: the
+// helper's (sent_at - received_at, from the USB report to the snapshot leaving the helper, or the
+// app for a snapshot it held) and how long the snapshot then sat in this process's cache. With
+// every report published, that is about half the report interval, so faster USB polling shows
+// here. Not counted: the hop through the app into this process (its two ends are different
+// processes' wall clocks, whose offset and drift would land in it in full; its jitter, above the
+// fastest hop of the last second, is reported beside the age as "hop"), the adapter's own
+// controller poll (a report's data is up to ~1.2 ms old when it leaves the adapter) and the host's
+// USB stack.
 struct ControllerTiming
 {
   u64 snapshots = 0;
@@ -63,7 +67,10 @@ struct ControllerTiming
   Orca::Events::InputAge input;
   u64 age_samples = 0;
   double age_p50_ms = 0, age_p95_ms = 0, age_p99_ms = 0, age_max_ms = 0;
-  double helper_p50_ms = 0, app_p50_ms = 0;
+  double helper_p50_ms = 0, cache_p50_ms = 0;
+  // The hops of the snapshots those changes read, above the fastest of the second before each.
+  u64 hop_samples = 0;
+  double hop_p50_ms = 0, hop_p95_ms = 0;
 };
 ControllerTiming GetControllerTiming();
 void ResetControllerTiming();

@@ -1532,7 +1532,8 @@ TEST(OrcaUXControllerStream, InputAgeAtFrameReads)
   EXPECT_EQ(t.input.changes, 0u);
   EXPECT_EQ(t.age_samples, 0u);
 
-  // Another pad, read by a frame 20 ms after it arrived: one age, 3 ms of it the helper's.
+  // Another pad, read by a frame 20 ms after it arrived: one age, 3 ms of it the helper's and the
+  // rest the wait in the cache. Its hop is reported apart: above the faster of the two, so small.
   send(0x02);
   ASSERT_TRUE(Eventually(pad_is(PAD_BUTTON_B)));
   std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -1543,10 +1544,13 @@ TEST(OrcaUXControllerStream, InputAgeAtFrameReads)
   EXPECT_EQ(t.input.changes, 1u);
   EXPECT_EQ(t.age_samples, 1u);
   EXPECT_NEAR(t.helper_p50_ms, 3.0, 0.01);
-  EXPECT_GE(t.app_p50_ms, 20.0);
-  EXPECT_LT(t.app_p50_ms, 250.0);
-  EXPECT_NEAR(t.age_p50_ms, t.helper_p50_ms + t.app_p50_ms, 0.01);
+  EXPECT_GE(t.cache_p50_ms, 20.0);
+  EXPECT_LT(t.cache_p50_ms, 250.0);
+  EXPECT_NEAR(t.age_p50_ms, t.helper_p50_ms + t.cache_p50_ms, 0.01);
   EXPECT_NEAR(t.input.age_ms, t.age_p50_ms, 0.01);
+  EXPECT_EQ(t.hop_samples, 1u);
+  EXPECT_GE(t.hop_p50_ms, 0.0);
+  EXPECT_LT(t.hop_p50_ms, 100.0);
   EXPECT_EQ(GetInputAge().changes, 1u);
 
   // Stale (no report for 250 ms): neutral, not timed, and the next read starts afresh, so its pad
@@ -1579,6 +1583,49 @@ TEST(OrcaUXControllerStream, InputAgeAtFrameReads)
   EXPECT_EQ(GetInputAge().frames, 0u);
 }
 
+// The helper's clock is its wall clock read once at start, then its own steady clock: hours into a
+// session it is off from Orca's wall clock by drift, and by any step either one takes. None of
+// that is in the age; only the hop's floor would see it, and that moves with it.
+TEST(OrcaUXControllerStream, InputAgeIgnoresTheHelpersClock)
+{
+  FakeBridge bridge;
+  StartControllerStream(bridge.Url(), "t0ken");
+  ASSERT_TRUE(bridge.WaitConnected());
+  const auto now_ms = [] {
+    return std::chrono::duration<double, std::milli>(
+               std::chrono::system_clock::now().time_since_epoch())
+        .count();
+  };
+  double skew = -60000;  // a minute behind
+  const auto send = [&](int buttons) {
+    const double t = now_ms() + skew;
+    bridge.Send(Event(true, FourPorts(PortJson(0, 0, "wired", buttons)), "", t, t - 3));
+  };
+  const auto read_after = [&](int buttons, u16 pad) {
+    send(buttons);
+    ASSERT_TRUE(Eventually([pad] {
+      const auto p = LatestPad();
+      return p && p->button == pad;
+    }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    LocalPad(true);
+  };
+  read_after(0x01, PAD_BUTTON_A);
+  read_after(0x02, PAD_BUTTON_B);
+  // Then a minute ahead: the trip shortens by two minutes, so it is the hop's new floor at once.
+  skew = 60000;
+  read_after(0x04, PAD_BUTTON_X);
+  const ControllerTiming t = GetControllerTiming();
+  EXPECT_EQ(t.input.changes, 2u);
+  EXPECT_NEAR(t.helper_p50_ms, 3.0, 0.01);
+  EXPECT_GE(t.input.age_ms / t.input.changes, 23.0);
+  EXPECT_LT(t.input.age_ms / t.input.changes, 253.0);
+  EXPECT_LT(t.age_max_ms, 253.0);
+  EXPECT_EQ(t.hop_samples, 2u);
+  EXPECT_LT(t.hop_p95_ms, 100.0);
+  StopControllerStream();
+}
+
 // The transport's added latency against the real desktop app (bridge.ts + controllers.ts) with a
 // scripted helper: Tools/orca/controller-latency.mjs sets these and runs this test alone.
 TEST(OrcaUXLatency, BridgeTransport)
@@ -1609,8 +1656,10 @@ TEST(OrcaUXLatency, BridgeTransport)
 //   FAKE_PAD_HZ=1000 FAKE_PAD_NOISE=1 python3 ../Tools/orca/fake_bridge.py   # prints its port
 //   ORCA_UX_LATENCY_BRIDGE=http://127.0.0.1:<port> ORCA_UX_LATENCY_TOKEN=t0ken \
 //     ./Binaries/Tests/tests --gtest_filter=OrcaUXLatency.BoundaryInputAge
-// Expected mean: about half the report interval plus the transport (a little over 4 ms at 125 Hz,
-// under 1 ms at 1 kHz).
+// Expected mean: about half the report interval (4.0 ms at 125 Hz, 0.5 ms at 1 kHz), a little more
+// when a loaded machine sends the fake's reports unevenly. FAKE_HELPER_SKEW_MS and
+// FAKE_HELPER_DRIFT_PPM (say -3600000 and -1000) must not move it; the drift does show in the hop,
+// at its rate times the floor's second (1 ms at -1000 ppm, microseconds at a real clock's few ppm).
 TEST(OrcaUXLatency, BoundaryInputAge)
 {
   const char* bridge = std::getenv("ORCA_UX_LATENCY_BRIDGE");
@@ -1635,10 +1684,11 @@ TEST(OrcaUXLatency, BoundaryInputAge)
   const ControllerTiming t = GetControllerTiming();
   const Orca::Events::InputAge& in = t.input;
   fmt::print("orca ux input age frames={} changes={} reports/frame={:.2f} mean={:.3f} p50={:.3f} "
-             "p95={:.3f} p99={:.3f} max={:.3f} ms (helper p50 {:.3f}, app p50 {:.3f})\n",
+             "p95={:.3f} p99={:.3f} max={:.3f} ms (helper p50 {:.3f}, cache p50 {:.3f}); hop "
+             "above its floor p50={:.3f} p95={:.3f} ms\n",
              in.frames, in.changes, in.frames ? double(in.reports) / in.frames : 0.0,
              in.changes ? in.age_ms / in.changes : 0.0, t.age_p50_ms, t.age_p95_ms, t.age_p99_ms,
-             t.age_max_ms, t.helper_p50_ms, t.app_p50_ms);
+             t.age_max_ms, t.helper_p50_ms, t.cache_p50_ms, t.hop_p50_ms, t.hop_p95_ms);
   EXPECT_GT(in.changes, 0u);
   StopControllerStream();
 }

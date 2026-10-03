@@ -75,7 +75,7 @@ struct InputAge
   u64 frames = 0;     // frames that read such a device
   u64 reports = 0;    // reports that came in from it across those frames
   u64 changes = 0;    // frames whose pad differed from the frame before's: the age samples
-  double age_ms = 0;  // summed over the changes: how old the newest report was at that read
+  double age_ms = 0;  // summed over the changes: the input age at that read (ControllerSource.h)
 };
 using InputAgeSource = std::function<InputAge()>;
 void SetInputAgeSource(InputAgeSource source);

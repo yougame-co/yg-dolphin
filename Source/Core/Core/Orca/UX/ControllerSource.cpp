@@ -7,6 +7,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -36,6 +37,8 @@ constexpr auto DETACHED_FALLBACK = std::chrono::seconds(1);
 constexpr size_t TIMING_SAMPLES = 4096;
 // The input age's log line covers the frames since the last one, at most this often.
 constexpr auto AGE_LOG_PERIOD = std::chrono::seconds(10);
+// A snapshot's hop through the app is timed against the fastest over this long (Stream::Cached).
+constexpr auto HOP_FLOOR_PERIOD = std::chrono::seconds(1);
 
 double EpochMs()
 {
@@ -115,15 +118,18 @@ struct AgeWindow
   Clock::time_point start{};
   u64 frames = 0;
   u64 reports = 0;
-  std::vector<double> age, helper, app;
+  std::vector<double> age, helper, cache, hop;
 
-  void Add(double helper_ms, double app_ms)
+  // `hop_ms` < 0: none for this read.
+  void Add(double helper_ms, double cache_ms, double hop_ms)
   {
     if (age.size() >= TIMING_SAMPLES)
       return;
-    age.push_back(helper_ms + app_ms);
+    age.push_back(helper_ms + cache_ms);
     helper.push_back(helper_ms);
-    app.push_back(app_ms);
+    cache.push_back(cache_ms);
+    if (hop_ms >= 0)
+      hop.push_back(hop_ms);
   }
 
   std::string Describe(std::string_view over) const
@@ -138,9 +144,16 @@ struct AgeWindow
         sum += a;
       const Percentiles p = Summarize(age);
       line += fmt::format("; newest report at the read: mean {:.2f}, p50 {:.1f}, p95 {:.1f}, p99 "
-                          "{:.1f}, max {:.1f} ms (p50 helper {:.1f}, app {:.1f})",
+                          "{:.1f}, max {:.1f} ms (p50 helper {:.2f}, in Orca's cache {:.2f})",
                           sum / age.size(), p.p50, p.p95, p.p99, p.max, Summarize(helper).p50,
-                          Summarize(app).p50);
+                          Summarize(cache).p50);
+    }
+    if (!hop.empty())
+    {
+      const Percentiles h = Summarize(hop);
+      line += fmt::format("; the hop through the app, not in the age, above its fastest in the "
+                          "last second: p50 {:.2f}, p95 {:.2f}, max {:.2f} ms",
+                          h.p50, h.p95, h.max);
     }
     if (frames > 0)
       line += fmt::format("; {:.2f} reports per frame", static_cast<double>(reports) / frames);
@@ -170,8 +183,14 @@ public:
   struct Cached
   {
     std::shared_ptr<const Snapshot> snapshot;
-    double age_ms = 0;      // since this process took it in (its own steady clock)
-    double transit_ms = 0;  // from the helper's send to this process taking it in (epoch ms)
+    double age_ms = 0;  // since this process took it in (its own steady clock)
+    // Its hop through the app, from sent_at to this process taking it in, above the fastest such
+    // hop of the last HOP_FLOOR_PERIOD; -1 for a snapshot without an adapter report. The hop's own
+    // length can't be had: its ends are the helper's clock (its wall clock read once at start, then
+    // its own steady clock) and this process's wall clock, which drift apart (a few ppm) and step
+    // (NTP, w32time). Over a second their drift is microseconds and their offset cancels, so this
+    // is the hop's jitter: how much later than its best this one came.
+    double hop_ms = -1;
   };
 
   // The newest snapshot; nullopt when there is none to use (never attached, or detached for longer
@@ -183,7 +202,7 @@ public:
     if (!m_latest || (!m_attached && now - m_detached_at > DETACHED_FALLBACK))
       return std::nullopt;
     return Cached{m_latest, std::chrono::duration<double, std::milli>(now - m_arrived).count(),
-                  m_arrived_epoch - m_latest->sent_at};
+                  m_latest_hop};
   }
 
   // A frame's own read (LocalPad(true)) took `choice` (nullptr: no pad from the app) from `cached`:
@@ -213,16 +232,20 @@ public:
     const Orca::Net::Pad pad = Orca::Net::EncodePad(choice->pad);
     if (m_last_pad && *m_last_pad != pad)
     {
-      // The helper's part on its own clock; the app's from the two epoch clocks (a negative trip is
-      // a clock step, not time) plus the wait in the cache on this process's.
+      // Two spans, each on one clock, never one process's time against another's: the helper's
+      // (sent_at - received_at: its steady clock, plus the app's own monotonic clock for a snapshot
+      // it held) and the wait in this process's cache (its steady clock). The hop between them is
+      // left out (Cached::hop_ms) and reported beside the age.
       const double helper = std::max(0.0, snapshot.sent_at - snapshot.received_at);
-      const double app = std::max(0.0, cached.transit_ms) + cached.age_ms;
+      const double cache = cached.age_ms;
       ++m_input.changes;
-      m_input.age_ms += helper + app;
-      m_age.Add(helper + app);
+      m_input.age_ms += helper + cache;
+      m_age.Add(helper + cache);
       m_helper.Add(helper);
-      m_app.Add(app);
-      m_window.Add(helper, app);
+      m_cache.Add(cache);
+      if (cached.hop_ms >= 0)
+        m_hop.Add(cached.hop_ms);
+      m_window.Add(helper, cache, cached.hop_ms);
     }
     m_last_pad = pad;
     if (now - m_window.start < AGE_LOG_PERIOD)
@@ -249,7 +272,8 @@ public:
       run.reports = m_input.reports;
       run.age = m_age.Values();
       run.helper = m_helper.Values();
-      run.app = m_app.Values();
+      run.cache = m_cache.Values();
+      run.hop = m_hop.Values();
     }
     if (run.frames == 0)
       return {};
@@ -260,7 +284,7 @@ public:
   ControllerTiming Timing() const
   {
     ControllerTiming t;
-    std::vector<double> transport, age, helper, app;
+    std::vector<double> transport, age, helper, cache, hop;
     {
       std::lock_guard lk(m_lock);
       t = m_timing;
@@ -269,7 +293,8 @@ public:
       transport = m_samples.Values();
       age = m_age.Values();
       helper = m_helper.Values();
-      app = m_app.Values();
+      cache = m_cache.Values();
+      hop = m_hop.Values();
     }
     t.samples = transport.size();
     const Percentiles tp = Summarize(std::move(transport));
@@ -284,7 +309,11 @@ public:
     t.age_p99_ms = ap.p99;
     t.age_max_ms = ap.max;
     t.helper_p50_ms = Summarize(std::move(helper)).p50;
-    t.app_p50_ms = Summarize(std::move(app)).p50;
+    t.cache_p50_ms = Summarize(std::move(cache)).p50;
+    t.hop_samples = hop.size();
+    const Percentiles hp = Summarize(std::move(hop));
+    t.hop_p50_ms = hp.p50;
+    t.hop_p95_ms = hp.p95;
     return t;
   }
 
@@ -296,7 +325,8 @@ public:
     m_input = {};
     m_age.Clear();
     m_helper.Clear();
-    m_app.Clear();
+    m_cache.Clear();
+    m_hop.Clear();
     m_window = {};
     m_last_pad.reset();
     m_reports_at_frame = m_reports;
@@ -386,11 +416,26 @@ private:
       ++m_reports;
       m_samples.Add(arrived_epoch - parsed->received_at);
     }
+    m_latest_hop =
+        parsed->received_at > 0 ? HopAboveFloor(arrived, arrived_epoch - parsed->sent_at) : -1;
     ++m_timing.snapshots;
     m_latest = std::make_shared<const Snapshot>(std::move(*parsed));
     m_arrived = arrived;
-    m_arrived_epoch = arrived_epoch;
     m_attached = true;
+  }
+
+  // `trip`: a snapshot's arrival here less its send, across the two clocks (Cached::hop_ms). Only
+  // adapter snapshots count: their sent_at is always on the helper's clock (the app stamps its own
+  // snapshots with its own). A clock step that lengthens the trips shows in full until the floor
+  // from before it is a second old; one that shortens them is the new floor at once. Under m_lock.
+  double HopAboveFloor(Clock::time_point arrived, double trip)
+  {
+    while (!m_hop_floor.empty() && m_hop_floor.back().second >= trip)
+      m_hop_floor.pop_back();
+    m_hop_floor.emplace_back(arrived, trip);
+    while (arrived - m_hop_floor.front().first > HOP_FLOOR_PERIOD)
+      m_hop_floor.pop_front();
+    return trip - m_hop_floor.front().second;
   }
 
   void Detach()
@@ -479,7 +524,10 @@ private:
   mutable std::mutex m_lock;
   std::shared_ptr<const Snapshot> m_latest;
   Clock::time_point m_arrived{};
-  double m_arrived_epoch = 0;
+  double m_latest_hop = -1;  // m_latest's Cached::hop_ms
+  // The adapter snapshots' trips of the last HOP_FLOOR_PERIOD that a later one hasn't beaten, in
+  // arrival order: the front is the fastest (HopAboveFloor).
+  std::deque<std::pair<Clock::time_point, double>> m_hop_floor;
   Clock::time_point m_detached_at{};
   bool m_attached = false;
   double m_last_report = 0;
@@ -488,9 +536,10 @@ private:
   // Adapter reports taken in (distinct received_at), and the count at the last frame's read.
   u64 m_reports = 0;
   u64 m_reports_at_frame = 0;
-  // The input age: totals, the newest changes, the log line's frames, and the last frame's pad.
+  // The input age: totals, the newest changes (and their hops), the log line's frames, and the last
+  // frame's pad.
   Orca::Events::InputAge m_input;
-  Samples m_age, m_helper, m_app;
+  Samples m_age, m_helper, m_cache, m_hop;
   AgeWindow m_window;
   std::optional<Orca::Net::Pad> m_last_pad;
 
