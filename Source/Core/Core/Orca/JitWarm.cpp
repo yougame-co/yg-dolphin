@@ -133,6 +133,32 @@ std::string FilePath()
   return File::GetUserPath(D_CACHE_IDX) + (profile ? profile->game_id : "unknown") + ".jitwarm";
 }
 
+// Orca's own list (Data/Sys/Orca/<profile>.jitwarm), for a player who has none yet: a first
+// install, or the first match after an update from a build without the warm-up (0.3.8 and before),
+// whose first match would otherwise compile its whole start itself (Brawl on Luis's PC: 160, 117
+// and 326 ms at the stage's first frames). Recorded from reference matches (ORCA.md, "Match
+// start"), and hash-checked like the player's own: a block whose words aren't this game's in RAM is
+// never compiled. The player's list takes over after the first match. ORCA_JITWARM_SEED=0: none.
+std::string SeedPath()
+{
+  const Profile* profile = ActiveProfile();
+  if (!profile || GetEnv("ORCA_JITWARM_SEED") == "0")
+    return {};
+  return File::GetSysDirectory() + "Orca/" + profile->game_id + ".jitwarm";
+}
+
+std::vector<u8> ReadWhole(const std::string& path)
+{
+  std::vector<u8> bytes;
+  if (File::IOFile in(path, "rb"); in)
+  {
+    bytes.resize(in.GetSize());
+    if (!in.ReadBytes(bytes.data(), bytes.size()))
+      bytes.clear();
+  }
+  return bytes;
+}
+
 // The running game is one whose scenes Orca can read: Brawl rev 2, or a launcher profile booting it.
 bool KnownGame()
 {
@@ -218,6 +244,7 @@ private:
   bool m_log_frames = false;  // ORCA_JITWARM_LOG=1: a line per frame boundary that compiled
   bool m_log_presence = false;  // ORCA_JITWARM_LOG=2: also which listed blocks are in RAM before
   std::string m_path;
+  std::string m_seed_path;  // Orca's own list, when the player has none (SeedPath)
 
   // Scenes.
   bool m_seen_other_scene = false;  // a match starts only from another scene, not on a join
@@ -285,6 +312,7 @@ bool State::Enabled()
   m_log_frames = log == "1" || log == "2";
   m_log_presence = log == "2";
   m_path = FilePath();
+  m_seed_path = SeedPath();
   if (m_enabled)
     NOTICE_LOG_FMT(ROLLBACK, "JIT warm-up: on ({}, {} us per frame)", m_path, m_budget_us);
   return m_enabled;
@@ -692,16 +720,20 @@ void State::OnBoundary(const Core::CPUThreadGuard& guard)
   {
     m_load_started = true;
     m_io = std::thread([this] {
-      std::vector<u8> bytes;
-      if (File::IOFile in(m_path, "rb"); in)
-      {
-        bytes.resize(in.GetSize());
-        if (!in.ReadBytes(bytes.data(), bytes.size()))
-          bytes.clear();
-      }
+      const std::vector<u8> bytes = ReadWhole(m_path);
       std::optional<std::vector<Block>> blocks = bytes.empty() ? std::nullopt : Decode(bytes);
       if (!bytes.empty() && !blocks)
         WARN_LOG_FMT(ROLLBACK, "JIT warm-up: {} is not readable, starting over", m_path);
+      if (!blocks && !m_seed_path.empty())
+      {
+        blocks = Decode(ReadWhole(m_seed_path));
+        if (blocks)
+        {
+          NOTICE_LOG_FMT(ROLLBACK,
+                         "JIT warm-up: no list of this player's yet; Orca's {} ({} blocks)",
+                         m_seed_path, blocks->size());
+        }
+      }
       std::lock_guard lock(m_mutex);
       if (!m_ready)
         m_ready = blocks ? std::move(*blocks) : std::vector<Block>{};
