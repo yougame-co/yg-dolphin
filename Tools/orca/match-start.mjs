@@ -19,11 +19,18 @@ const VI_MS = 1000 / 59.94;
 const BEFORE_S = 0.6;
 const AFTER_S = 12;
 
+// Windows PowerShell's `*>` writes UTF-16 with a byte order mark; everything else here is 8-bit.
+function readText(file) {
+  const bytes = fs.readFileSync(file);
+  if (bytes[0] === 0xff && bytes[1] === 0xfe) return bytes.subarray(2).toString("utf16le");
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf)
+    return bytes.subarray(3).toString("utf8");
+  return bytes.toString("latin1");
+}
+
 function readMeta(dir) {
   const meta = {};
-  for (const line of fs
-    .readFileSync(path.join(dir, "meta.txt"), "utf8")
-    .split(/\r?\n/)) {
+  for (const line of readText(path.join(dir, "meta.txt")).split(/\r?\n/)) {
     const m = /^(\S+)\s+(.*)$/.exec(line.trim());
     if (m) meta[m[1]] = m[2];
   }
@@ -58,9 +65,7 @@ function run(dir) {
   const scenes = [];
   let diagT = null;
   let boot = null;
-  for (const line of fs
-    .readFileSync(path.join(dir, "stdout.log"), "latin1")
-    .split(/\r?\n/)) {
+  for (const line of readText(path.join(dir, "stdout.log")).split(/\r?\n/)) {
     let m = /^(\d+:\d+:\d+) .*Scene frame (\d+): (\S*) -> (\S+)/.exec(line);
     if (m) scenes.push({ t: logTime(m[1], t0), frame: Number(m[2]), to: m[4] });
     m = /^(\d+:\d+:\d+) .*Diag frame times/.exec(line);
@@ -70,8 +75,7 @@ function run(dir) {
   }
   const vbPath = path.join(dir, "vblank_times.txt");
   const vb = fs.existsSync(vbPath)
-    ? fs
-        .readFileSync(vbPath, "utf8")
+    ? readText(vbPath)
         .split(/\r?\n/)
         .filter((x) => x.trim())
         .map(Number)
