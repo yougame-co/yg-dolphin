@@ -148,14 +148,15 @@ namespace
 {
 // ---- The stage select's layout (Brawl rev 2, an empty save; from the probes) ----
 // The task: +0x200 the cursor (+0x3C x, +0x40 y, floats), +0x224 the select state (0 choosing),
-// +0x228 the page (0 Brawl's stages, 1 Melee's), +0x230 the icons on the page (u8), +0x250 frames
+// +0x228 the page (0 Brawl's stages, 1 Melee's), +0x250 frames
 // since the screen opened, +0x615C the stage kind it took.
 constexpr u32 TASK_CURSOR = 0x200;
 constexpr u32 CURSOR_X = 0x3C;
 constexpr u32 CURSOR_Y = 0x40;
 constexpr u32 TASK_STATE = 0x224;
 constexpr u32 TASK_PAGE = 0x228;
-constexpr u32 TASK_ICON_COUNT = 0x230;
+// MuStageTblAccess's table (sora_menu_sel_stage): per page {the page's stage ids, u8 count}.
+constexpr u32 PAGE_TABLE = 0x806B9298;
 constexpr u32 TASK_CLOCK = 0x250;
 // The hovered item's special ids.
 constexpr u32 ITEM_PAGE = 0x35;
@@ -174,8 +175,8 @@ constexpr u32 GREY = 0x00000000;  // 0.0f
 // (up is +y); icons are about 6.2 wide. The points are inside each icon where the probes' cursor
 // sweeps hovered it.
 constexpr std::array<Tile, RS::BRAWL_STAGES> kTiles{{
-    {0, 0, -1.5f, 15.74f},   // Battlefield (stage id 0x00)
-    {1, 5, 0, 0},            // Pokemon Stadium (0x24) TBD(probe)
+    {0, 0, -1.5f, 15.74f},   // Battlefield (the select's stage id 0x00)
+    {1, 9, 22.0f, -8.7f},    // Pokemon Stadium (0x28), the Melee page's bottom right
     {0, 13, 11.2f, 4.46f},   // Lylat Cruise (0x0E)
     {0, 20, 23.0f, -3.06f},  // Smashville (0x1A)
     {0, 11, -1.6f, 4.46f},   // Yoshi's Island (0x0C)
@@ -383,7 +384,9 @@ void SelectFrame(GuestMemory& m, const View& v, State* s)
   const u16 allowed = s->progress.picked >= 0 ? Bit(s->progress.picked) :
                                                 RS::Allowed(Rules(), plan, s->progress, s->set);
   const u32 page = m.Read32(v.task + TASK_PAGE);
-  const u32 count = std::min<u32>(m.Read8(v.task + TASK_ICON_COUNT), 64);
+  // The page's icons (MuStageTblAccess: 31 and 10; the task's own count stays 31).
+  const u32 table = PAGE_TABLE + 8 * std::min<u32>(page, 2) + 4;
+  const u32 count = std::min<u32>(m.Valid(table) ? m.Read8(table) : 0, 40);
   for (u32 slot = 0; slot < count; ++slot)
   {
     const int stage = StageAt(page, static_cast<s32>(slot));

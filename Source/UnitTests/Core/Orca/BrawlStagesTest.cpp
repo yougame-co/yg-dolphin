@@ -91,7 +91,9 @@ FakeMemory Game(std::string_view scene, u32 page = 0)
   m.Fill(TASK, 0x300);
   m.Write32(TASK + 0x200, CURSOR);
   m.Write32(TASK + 0x228, page);
-  m.Write8(TASK + 0x230, SLOTS);
+  m.Fill(0x806B9298, 0x18);
+  m.Write8(0x806B9298 + 4, 31);
+  m.Write8(0x806B9298 + 8 + 4, 10);
   m.Write32(TASK + 0x244, 0);
   m.Write32(TASK + 0x248, 0xFFFFFFFF);
   m.Write32(TASK + 0x278, 0xF0);
