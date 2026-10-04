@@ -30,7 +30,8 @@ class CPUThreadGuard;
 //   off, handicap off, team attack on, ratio 1.0, pause off), the stage choice (casual: Random,
 //   from the legal stages; ranked: Choose), the legal list (Brawl's Random Stage Switch without
 //   Final Destination while someone is Ice Climbers; Project+'s 2024 Proposed list), and the input
-//   gate's masks (no B on the character select, so no way back to the menus; no B on the stage
+//   gate's masks (no B on the character select, so no way back to the menus, and A only in the
+//   character grid, so no player-type, name, team, rules or BACK button; no B on the stage
 //   select; no Start in a fight, so no pause; Project+'s D-pad on the character select (its Code
 //   Menu) and L, R and Z on the stage select (alternate stages, hazards, L+R+A)).
 // - Ranked's character select timer: once one player has a character and the other hasn't, 60 s;
@@ -75,6 +76,50 @@ int ApplyLocks(GuestMemory& memory, int frame);
 
 // What the input gate masks for the frame about to run (reads only).
 Rollback::InputGate::Masks GateMasks(const GuestMemory& memory);
+
+// ---- The character select's hands (both games; found under the harness, ORCA.md "The character
+// select's buttons") ----
+// Each player area (the character select's task +0x44 + 4 x port) has its hand at +0x1A8
+// (muSelCharHand). The hand keeps what it points at, as of the frame that just ran: a kind of
+// target (+0x80), the button when that is a button (+0xAC), and where it is (+0x90 x, +0x94 y, in
+// screen units with y up; the character grid spans about y -5 to 16, the panels and their buttons
+// are below it, the BACK, BRAWL tab, rules bar and Rules button above).
+//
+// A acts on whatever the hand points at once the frame's stick has moved it (probed: A pressed on
+// the frame the hand arrives on a panel's player-type button switches that panel), so the gate
+// passes A only to a hand in the grid or on its own token, and at least one frame's travel inside
+// the grid's top and bottom edges (0.83 a frame in Brawl, 1.0 in Project+): no single frame can
+// carry it onto a button with A down. Everything else on the screen is a button nobody needs in a
+// queue match (the player-type buttons, which make a CPU of a player or of an empty panel; the
+// name buttons; the panel's picture, a costume; the BRAWL tab, the team switch; the rules bar's
+// arrows; Rules and BACK). Costumes still change with X and Y, and a player joins by moving the
+// hand into the grid.
+constexpr u32 CSS_HAND_NOTHING = 0;
+constexpr u32 CSS_HAND_BUTTON = 1;  // the button at +0xAC: 0x1D a player-type button, 0x1C name, ...
+constexpr u32 CSS_HAND_GRID = 2;    // the grid, the token down
+constexpr u32 CSS_HAND_OWN_TOKEN = 3;  // A takes it up
+constexpr u32 CSS_HAND_EXIT = 4;       // BACK (+0xAC 2) or Rules (4)
+constexpr u32 CSS_HAND_TAKING = 6;     // the token on its way into the hand
+constexpr u32 CSS_HAND_GRID_HOLDING = 7;  // the grid, the token in the hand (A puts it down)
+constexpr u32 CSS_HAND_PLACING = 8;       // the token on its way down
+constexpr u32 CSS_BUTTON_PLAYER_TYPE = 0x1D;
+// A passes only strictly between these (one frame's travel inside the grid's edges, both games).
+constexpr float CSS_A_TOP = 15.0f;
+constexpr float CSS_A_BOTTOM = -3.0f;
+
+struct CssHand
+{
+  bool valid = false;  // the hand could be read
+  u32 target = CSS_HAND_NOTHING;
+  u32 button = 0;
+  float x = 0;
+  float y = 0;
+  bool operator==(const CssHand&) const = default;
+};
+// Port `port`'s (0-3) hand, on the character select; invalid anywhere else or before it is built.
+CssHand ReadCssHand(const GuestMemory& memory, int port);
+// Whether A may reach the game from this hand while the locks hold. An unreadable hand may not.
+bool CssHandMayPressA(const CssHand& hand);
 
 // Brawl's Random Stage Switch for the legal stages (Supernova 2025): the Brawl page's mask
 // (record menu data +0x24) and the Melee page's (+0x20), without Final Destination when

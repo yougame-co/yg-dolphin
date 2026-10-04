@@ -25,8 +25,8 @@ class CPUThreadGuard;
 //
 // How it plays, on the game's own character select (no new screen):
 //   - first, the winner's turn: the loser's controller does nothing, the winner can't take the token
-//     back (B) or leave (Start), and locks the pick in with A (on a character, or anywhere to keep
-//     the one the token is on);
+//     back (B) or leave (Start), and locks the pick in with A (on a character, or anywhere in the
+//     grid to keep the one the token is on: the online rules pass A only there, OnlineRules.h);
 //   - then the loser's turn: the winner's controller does nothing, the loser can't take the token
 //     back, and locks in with A or goes on with Start;
 //   - then Orca presses Start for the loser (every other frame until the screen goes), so the game

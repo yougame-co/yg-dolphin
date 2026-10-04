@@ -1708,7 +1708,8 @@ beta: a best of 3, rated once per set, with the host's rules (YouGame `docs/ORCA
    only its own game changes, and the next keyframe carries it. Once the room's welcome says its
    queue, the host's next alone boundary writes the match block's header, and the locks follow
    ("Online rules": the ruleset's rules in both games, casual's random legal stage, no way out of
-   the character and stage select; `ux=8`, which replaced the beta's Brawl-only rules preset). A
+   the character and stage select; `ux=8`, which replaced the beta's Brawl-only rules preset; `ux=9`
+   adds the character select's A gate). A
    keyframe for the opponent waits for that header. The overlay says "Opponent found · waiting for
    <name>…" until the opponent plugs in.
 4. `join <code>` is the existing drop-in: the joiner lands on port 2 of the host's character
@@ -2036,7 +2037,7 @@ only a queue room's host writes one (`Core/Orca/UX/OnlineRules.*`, `MatchBlock.h
 | Items | frequency None, every item off (record menu data `+0x00`, `+0x08`, `+0x0C`) | the same |
 | Stage choice | casual Random, ranked Choose | the same |
 | Legal stages | Random Stage Switch: Brawl page `0x04005007` (BF, FD, Delfino, YI, Lylat, Smashville), Melee page `0x00020000` (Pokemon Stadium); FD's bit off while a human player's pick is Ice Climbers (`0x10`): the match's init data (gmGlobalModeMelee +0x98, 0x5C per port: the character select writes each pick there as it is made; the panel's own +0x1B8 is only the hovered character), on the character select and on the way to the fight (a Random character resolved) | the 2024 Proposed list as its preset 3 (`Switch03.rss`) holds it: its first `0xA8` bytes of RSS_EXDATA (`0x8042C4E8`: page 0 the 9 legal stages, all in the random set, hazards off), written on the character select; casual also clears the strike table |
-| Input gate | character select: B; stage select: B; fight: Start | the same, plus the D-pad on the character select (its Code Menu) and L, R and Z on the stage select (alternates, hazards, L+R+A) |
+| Input gate | character select: B, and A unless the hand is in the grid (below); stage select: B; fight: Start | the same, plus the D-pad on the character select (its Code Menu) and L, R and Z on the stage select (alternates, hazards, L+R+A) |
 
 - Casual's Start: Random stage choice skips the stage select (two frames in scSelStage), and the
   game's own RNG (in memory, the same on both machines) picks from the legal list. Probed: the
@@ -2052,7 +2053,57 @@ only a queue room's host writes one (`Core/Orca/UX/OnlineRules.*`, `MatchBlock.h
   also takes B away on the character select, so held B does nothing at all. Nothing needs B to
   pick. Project+'s own hooks in sqVsMelee (MusicSelect, SSSButtons, css.asm) are elsewhere.
 - Pause off: Brawl's rule, and no Start in a fight for Project+'s hold-Start pause.
-- The rules screen still opens, but whatever is changed there goes back at the next boundary.
+- The rules screen no longer opens (A on Rules is masked, below); were it to, whatever is changed
+  there goes back at the next boundary.
+
+### The character select's buttons (A only in the grid)
+
+On a later game's character select the hands come back on the bottom panels, each on its own
+player-type button, where A makes the player a CPU (the first ranked e2e played game 2 CPU against
+CPU, a voided game). The same A on an empty panel's button adds a CPU, and the screen's other
+buttons change the rules, teams or names. So while the header locks, the gate passes A to a port
+only when its hand is in the character grid or on its own token (`OnlineRules.h`, "The character
+select's hands"); B was already masked there.
+
+- **The hand** (both games; found under the harness with `ORCA_UX_PROBE` watches over full-screen
+  rasters): player area i's `+0x1A8` is its hand (`muSelCharHand`). `+0x80` is what it points at as
+  of the frame that just ran: 0 nothing, 1 a button (`+0xAC` says which: 0x1D a player-type button,
+  any panel's; 0x1C a name button; 0x1B the own panel's picture, a costume; 0x03 the BRAWL tab,
+  teams; 0x05, 0x06, 0x07 the rules bar's arrows and value), 2 the grid with the token down, 3 the
+  player's own token, 4 a button that leaves (0x02 BACK, 0x04 Rules), 5 a spot under the grid's
+  bottom edge (`+0xAC` 8, not identified), 6 and 8 the token on its way up or down, 7 the grid with
+  the token in the hand. `+0x90`/`+0x94` are its x and y (y up; the grid spans about -5 to 16, the
+  buttons above 16.3 and below -17.4). Brawl moves the hand 0.83 a frame at full tilt, Project+ 1.0.
+- **A acts where the stick has just moved the hand.** A pressed on the frame the hand arrives on a
+  button acts on that button (probed: A with each step right along the bars' height made panel 3 a
+  CPU on the very frame the hand reached its button). The gate decides from the state before the
+  frame, so it passes A only to the targets 2, 3, 6, 7 and 8 and only for y strictly between -3.0
+  and 15.0: one frame's travel (1.0 at most) from there never leaves the grid. Its top edge lies
+  between 15.84 and 16.26 in both games and nothing above it starts lower than 16.26 (the rules
+  bar's value, Project+; Brawl's from 16.46); at the bottom the grid reaches -3.96 or lower
+  everywhere probed (target 5 starts between there and -4.79). The characters sit well inside:
+  Brawl's rows span about -4.1 to 15.5, Project+'s about 0 to 15. An unreadable hand gets no A.
+- **What still works.** Picking (A on a character with the token in the hand), taking the own token
+  up and putting it down, the character order's lock-in (A in the grid), costumes with X and Y.
+  Joining needs no A: a hand that moves into the grid joins its panel (probed: kind 0 to 1 as the
+  hand arrives, with A masked on the button).
+- **Proof** (2026-10-03, branch `orca-css-gate`, M4 Pro, headless, `-v Null`):
+  - Brawl: `bf-ranked-bo3.txt` now presses A on game 2's character select with both hands still on
+    their own player-type buttons, then port 1 moves onto panel 3's button and presses A, and port 2
+    goes up into the grid and locks in. Without the gate (rel-0.3.12's build) port 1 becomes a CPU at
+    frame 3963, port 2 at 3973, the order counts both presses as lock-ins and the stage select comes
+    at 3977 with two CPUs. With it, `YG_SYNCTEST=7 YG_SYNCTEST_FROM=1700` with `ORCA_TEST_QUEUE=ranked
+    ORCA_UX_TEST_NAMES=ada,bo ORCA_TEST_SET_RULES=1,8` to frame 9000: 51,051 re-run frames, **0 RAM
+    mismatches**; no panel's kind ever changes (an `ORCA_UX_PROBE` watch on +0x1B4); port 2's A in the
+    grid locks it in (frame 4093), port 1's time runs out, and the stage select comes at 6666 as before.
+    Game 1's players join by moving into the grid (their A on the buttons is masked).
+  - Project+: `pplus-ranked.txt` now presses A on game 2's buttons on each player's turn. Without the
+    gate the winner becomes a CPU at 5106 and its press counts as its lock-in. With it, `YG_SYNCTEST=7
+    YG_SYNCTEST_FROM=170` with `ORCA_PROFILE=PPLUS32 ORCA_TEST_QUEUE=ranked:1 ORCA_UX_TEST_NAMES=ada,bo`
+    to frame 15000: 103,761 re-run frames, **0 RAM mismatches**, no kind changes, the same 2-0 set
+    and order steps (5077, 7777, 10477) as the ranked sprint's run.
+  - Unit tests `OrcaOnlineRules.TheCharacterSelectPassesAOnlyInTheGrid` and `.TheHandsAreReadPerPort`;
+    1,345 tests pass.
 
 ### Ranked's character select timer and stalls
 
@@ -2070,7 +2121,8 @@ only a queue room's host writes one (`Core/Orca/UX/OnlineRules.*`, `MatchBlock.h
 
 ### Compatibility and tests
 
-`ux=8` (the rules preset of `ux=6` is gone), cap `locks`. Test knob `ORCA_TEST_QUEUE=casual|ranked`
+`ux=9` (8 brought the locks and the rules preset of `ux=6` went; 9 the character select's A
+gate), cap `locks`. Test knob `ORCA_TEST_QUEUE=casual|ranked`
 (a test override): the header as a queue room's host writes it, in a harness run or a dev game's
 room, both Orcas set alike. Unit tests `OrcaOnlineRules*` (the header's lifecycle and saved rules,
 each ruleset's bytes, Ice Climbers and FD, Project+'s list, the gate's masks, the ready timer,
@@ -2091,12 +2143,12 @@ Start, a second match, results, the character select. Ranked also presses B on t
 | Project+ ranked | 140-5000 | 33,971 | 0 | 0x06 (picked) |
 
 Also under the harness: A on the character select's BACK button with the header reloads the
-character select; held B for 30 frames without it goes to the menu (so the gate's B and the flip
-are what keep a queue match in).
+character select (before `ux=9`, which masks A there too); held B for 30 frames without it goes to
+the menu (so the gate's B and the flip are what keep a queue match in).
 
-Not yet (Phase 1 leftovers): the rules bar's arrows and the Rules, team (BRAWL tab) and name
-buttons still respond (the rules snap back at the next boundary; NameTags keeps the names), and A
-on a NONE panel can add a CPU (the game is then void "ports"); Giga Bowser and Wario-Man aren't
+Not yet (Phase 1 leftovers): nothing forces a panel back to a human or to empty if one ever
+became a CPU anyway (the game is then void "ports"; the A gate above leaves no way to make one);
+Giga Bowser and Wario-Man aren't
 refused in Project+; Project+'s Code Menu values (Auto L-Cancel, Stock Control, Input Assist,
 Debug) aren't forced (their defaults are off and the menu can't open); the ready timer's no-show
 and the stall claim were not run live; the room doesn't yet treat a stall claim as more than the
@@ -2390,8 +2442,9 @@ A ranked set's later games pick characters in order on the game's own character 
   casual or friends games.
 
 **How it plays.** On the winner's turn the loser's controller does nothing, and the winner can't
-take the token back (B) or go on (Start); A locks the pick in, on a character or anywhere else to
-keep the one the token is on (the tokens stay down from one game's character select to the next).
+take the token back (B) or go on (Start); A locks the pick in, on a character or anywhere in the
+grid to keep the one the token is on (the tokens stay down from one game's character select to the
+next; outside the grid the online rules mask A, "The character select's buttons").
 Then the loser's turn, the winner's controller doing nothing; A locks in, or Start goes on. When
 both have picked or the time is up, Orca presses Start for the loser, every other frame until the
 screen goes. Brawl: B and Start masked for both, each locks in with A and then can't change, Start
@@ -2518,9 +2571,7 @@ game, one queue e2e each way):
   timers, Smashville; game 2's loser's pick by its timer, Battlefield; Final Destination grey for Ice
   Climbers on the stage select, the set line and the turn line on screen).
 
-**Known gaps:** a later game's character select brings the hands back on the bottom panels, where
-A toggles the player type: a player who presses A there becomes a CPU (the first ranked e2e's game
-2 played CPU against CPU). The hint says "A in the grid"; nothing gates the toggle yet. Project+'s flow still counts its own score from the results screens of the fights it
+**Known gaps:** Project+'s flow still counts its own score from the results screens of the fights it
 started (it agrees with `SetBlock` for Project+: both take the results screen's winner, and a tie
 counts for neither). Brawl's exact Supernova order (ban, the loser's stage, then characters) is not
 built: Brawl's later games are characters (both at once, 45 s), then the ban, then the pick.
