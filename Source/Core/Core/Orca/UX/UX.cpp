@@ -25,6 +25,7 @@
 #include "Core/Orca/UX/RankedPPlus.h"
 #include "Core/Orca/UX/RankedSet.h"
 #include "Core/Orca/UX/Results.h"
+#include "Core/Orca/UX/StageCursors.h"
 #include "Core/Rollback/InputGate.h"
 
 namespace Orca::UX
@@ -87,6 +88,8 @@ void Init()
       [](const Core::CPUThreadGuard& guard,
          const std::array<std::optional<GCPadStatus>, Rollback::InputGate::PORTS>& raw) {
         Queue::LatchFrame(guard, raw);
+        // The stage select's two cursors (StageCursors.h): each player's stick moves their own.
+        StageCursors::LatchFrame(guard, raw);
       });
   // The name tags write emulated memory: the compatibility key carries their version.
   Orca::Events::SetUXCompatVersion(kCompatVersion);
@@ -115,6 +118,15 @@ void Init()
     RankedPPlus::Frame(guard, frame, resimulating, ports, alone);
     // A ranked set's stage flow on vanilla Brawl's stage select (a pure function of memory).
     BrawlStages::FrameHook(guard, resimulating, ports);
+    // What the overlay draws of the stage select's two cursors (reads only, first runs).
+    if (!resimulating && Rules::ProfileRuleset() != Rules::Ruleset::None)
+    {
+      GuardMemory memory(guard);
+      StageCursors::View view = Rules::ProfileRuleset() == Rules::Ruleset::Brawl ?
+                                    BrawlStages::CursorView(memory, ports) :
+                                    RankedPPlus::CursorView(memory, ports);
+      StageCursors::Publish(std::move(view));
+    }
     ProbeFrame(guard, frame);
     // This player's own controls in its own game, for the session to carry into a game it joins or
     // hosts (reads only; only while this game is its player's alone, so never a friend's game).

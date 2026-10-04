@@ -112,6 +112,7 @@ Plan PlanGame(const Ruleset& rules, const SetView& set)
   {
     const u8 other = is(0, rules.meta_knight) ? 1 : 0;
     plan.available = legal;
+    plan.agreeable = legal;
     plan.mk_clause = true;
     plan.steps.push_back({StepKind::Pick, other, 1, false, rules.pick_seconds});
     return plan;
@@ -120,6 +121,7 @@ Plan PlanGame(const Ruleset& rules, const SetView& set)
   {
     // Game 1 (or a set with no counted game yet): 1-2-1 on the starters, the last one a pick.
     plan.available = rules.starters & legal;
+    plan.agreeable = plan.available;
     const u8 first = static_cast<u8>(coin);
     const u8 second = static_cast<u8>(1 - coin);
     const int n = CountBits(plan.available);
@@ -139,6 +141,8 @@ Plan PlanGame(const Ruleset& rules, const SetView& set)
   const u8 winner = static_cast<u8>(set.last_winner);
   const u8 loser = static_cast<u8>(1 - set.last_winner);
   plan.available = legal;
+  // Agreement ignores DSR (Luis, 2026-10-04): any legal stage the winner hasn't banned or struck.
+  plan.agreeable = legal;
   if (rules.dsr)
     plan.available &= static_cast<StageMask>(~set.won_on[loser]);
   // Never more strikes than leave one stage to pick.
@@ -183,10 +187,9 @@ Plan PlanCasual(const Ruleset& rules, const SetView& set, u32 seed)
   };
   if (rules.ic_banned_stage >= 0 && (is(0, rules.ice_climbers) || is(1, rules.ice_climbers)))
     plan.available &= static_cast<StageMask>(~Bit(rules.ic_banned_stage));
-  const u8 first = set.coin == 1 ? 1 : 0;
-  plan.steps.push_back({StepKind::Prefer, first, 1, false, rules.casual_seconds});
-  plan.steps.push_back(
-      {StepKind::Prefer, static_cast<u8>(1 - first), 1, false, rules.casual_seconds});
+  plan.agreeable = plan.available;
+  // Both players at once (Luis, 2026-10-04): one step, one timer.
+  plan.steps.push_back({StepKind::Prefer, BOTH, 1, false, rules.casual_seconds});
   return plan;
 }
 
@@ -208,6 +211,19 @@ int CasualDefault(const Plan& plan, int port)
 int CasualChoice(const Plan& plan)
 {
   return static_cast<int>(Mix(plan.seed ^ 0x165667B1u) & 1);
+}
+
+int CasualResult(const Plan& plan, std::array<s8, 2> prefs)
+{
+  for (int port = 0; port < 2; ++port)
+  {
+    if (prefs[port] < 0)
+      prefs[port] = static_cast<s8>(CasualDefault(plan, port));
+  }
+  if (prefs[0] == prefs[1])
+    return prefs[0];
+  const int chosen = prefs[CasualChoice(plan)];
+  return chosen >= 0 ? chosen : std::max<int>(prefs[0], prefs[1]);
 }
 
 StageMask Allowed(const Plan& plan, int step, StageMask struck)
@@ -298,6 +314,12 @@ bool Strike(const Ruleset& rules, const Plan& plan, Progress* progress, int stag
     return false;
   progress->struck = static_cast<StageMask>(progress->struck | Bit(stage));
   ++progress->done;
+  // A proposal on a stage that is now out is gone.
+  for (s8& pref : progress->prefs)
+  {
+    if (pref == stage)
+      pref = -1;
+  }
   if (progress->done >= step->count || CountBits(Allowed(plan, *progress)) <= 1)
     Enter(rules, plan, progress, progress->step + 1);
   AutoPick(plan, progress);
@@ -325,26 +347,35 @@ bool Pick(const Plan& plan, Progress* progress, int stage)
   return true;
 }
 
-bool Prefer(const Ruleset& rules, const Plan& plan, Progress* progress, int stage)
+StageMask Proposable(const Plan& plan, const Progress& progress)
 {
-  const Step* step = Current(plan, *progress);
-  if (!step || step->kind != StepKind::Prefer || stage < 0 || stage >= MAX_STAGES ||
-      step->port > 1)
-  {
+  if (progress.picked >= 0)
+    return 0;
+  if (plan.casual)
+    return Allowed(plan, progress);
+  return static_cast<StageMask>(plan.agreeable & ~progress.struck);
+}
+
+bool Propose(const Plan& plan, Progress* progress, int port, int stage)
+{
+  if (port < 0 || port > 1 || stage < 0 || stage >= MAX_STAGES)
     return false;
-  }
-  if (!(Allowed(plan, *progress) & Bit(stage)))
+  if (!(Proposable(plan, *progress) & Bit(stage)) || progress->prefs[port] == stage)
     return false;
-  progress->prefs[step->port] = static_cast<s8>(stage);
-  Enter(rules, plan, progress, progress->step + 1);
-  if (progress->step >= plan.steps.size())
-  {
-    // Both named: the coin takes one (a turn that never came names the timer's default).
-    const int port = CasualChoice(plan);
-    const int chosen =
-        progress->prefs[port] >= 0 ? progress->prefs[port] : CasualDefault(plan, port);
-    progress->picked = static_cast<s8>(chosen >= 0 ? chosen : stage);
-  }
+  progress->prefs[port] = static_cast<s8>(stage);
+  const auto& prefs = progress->prefs;
+  if (plan.casual && prefs[0] >= 0 && prefs[1] >= 0)
+    progress->picked = static_cast<s8>(CasualResult(plan, prefs));
+  else if (!plan.casual && prefs[0] >= 0 && prefs[0] == prefs[1])
+    progress->picked = prefs[0];  // the same stage: the rest of the steps are skipped
+  return true;
+}
+
+bool Withdraw(Progress* progress, int port)
+{
+  if (port < 0 || port > 1 || progress->picked >= 0 || progress->prefs[port] < 0)
+    return false;
+  progress->prefs[port] = -1;
   return true;
 }
 
@@ -375,9 +406,15 @@ void Tick(const Ruleset& rules, const Plan& plan, Progress* progress)
   }
   if (step->kind == StepKind::Prefer)
   {
-    const int stage = CasualDefault(plan, step->port);
-    if (!Prefer(rules, plan, progress, stage >= 0 ? stage : DefaultPick(plan, progress->step, 0)))
-      progress->picked = static_cast<s8>(std::max(stage, 0));
+    // Time's up: whoever named nothing gets a random legal stage, then the coin between the two.
+    for (int port = 0; port < 2; ++port)
+    {
+      if (progress->prefs[port] < 0)
+        progress->prefs[port] = static_cast<s8>(CasualDefault(plan, port));
+    }
+    const int stage = CasualResult(plan, progress->prefs);
+    progress->picked =
+        static_cast<s8>(stage >= 0 ? stage : std::max(0, DefaultPick(plan, progress->step, 0)));
     return;
   }
   if (step->optional)

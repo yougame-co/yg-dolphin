@@ -11,6 +11,7 @@
 #include "Common/CommonTypes.h"
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/UX/RankedSteps.h"
+#include "Core/Orca/UX/StageCursors.h"
 #include "Core/Rollback/InputGate.h"
 
 namespace Core
@@ -44,13 +45,19 @@ class CPUThreadGuard;
 // - The step machine is the shared one (RankedSteps.h, Ranked::Brawl2025 and its Progress driver).
 // - The input gate has one source: UX.cpp ORs every rule's masks; this flow's are Masks.
 //
+// The two cursors (StageCursors.h, ORCA.md "The stage select's two cursors"): each player acts on
+// their own cursor, X strikes or bans on the turn's player's turn, Y skips the ban, the picker's A
+// picks, anyone's A proposes (the same stage from both: it is picked, RankedSteps.h Propose), B
+// takes a proposal back, A on the page button turns the page. The game's own cursor and pads are
+// the flow's: the gate masks every port, and the flow writes the cursor's position (the last
+// mover's, the page button, the picked stage) and presses A through the gate.
+//
 // Casual games (ORCA.md "Casual stage pick"): the same machinery on a casual header (mode casual,
-// ruleset Brawl) while both players are plugged in. No strikes: each player in turn, the header's
-// coin's port first, names a preferred stage with A (the gate masks A and reads it as X, which
-// vanilla's stage select ignores, so the screen stays; RankedSteps.h Prefer), 7 s each; a turn
-// that runs out names a random legal stage. Then a coin from the room, the header's coin and the
-// game number takes one of the two picks, and the flow moves the cursor there and presses A, as
-// for a ranked pick that timed out.
+// ruleset Brawl) while both players are plugged in. No strikes: both players name a preferred stage
+// at the same time with A, 15 s; the same stage is picked at once, two different ones by a coin
+// from the room, the header's coin and the game number; whoever named none when time runs out gets
+// a random legal stage. The flow moves the cursor there and presses A, as for a ranked pick that
+// timed out.
 namespace Orca::UX
 {
 class GuestMemory;
@@ -198,6 +205,11 @@ void Masks(const GuestMemory& memory, Rollback::InputGate::Masks* masks);
 // machine's own port (UI only).
 std::pair<std::string, std::string> Lines(const GuestMemory& memory,
                                           const std::vector<Orca::Events::PortInfo>& ports);
+
+// What the overlay draws of the two cursors (StageCursors.h) on this boundary (on: false, none).
+// UI only: `ports` for the names and which player is this machine's.
+StageCursors::View CursorView(const GuestMemory& memory,
+                              const std::vector<Orca::Events::PortInfo>& ports);
 
 // The CPU thread's frame hook and gate source.
 void FrameHook(const Core::CPUThreadGuard& guard, bool resimulating,

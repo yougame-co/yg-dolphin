@@ -20,6 +20,7 @@
 #include "Core/Orca/UX/OnlineMenu.h"
 #include "Core/Orca/UX/RankedPPlus.h"
 #include "Core/Orca/UX/RankedSet.h"
+#include "Core/Orca/UX/StageCursors.h"
 #include "VideoCommon/AsyncRequests.h"
 #include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/Present.h"
@@ -475,6 +476,112 @@ void FrameGraph(ImDrawList* dl, ImVec2 pos, ImVec2 size, const std::vector<float
               Rgba(255, 255, 255, 0.35f), std::max(1.0f, size.y / 40));
 }
 
+// A port's colour, as the games colour their players: red, blue, yellow, green.
+ImU32 PortColour(int port, float alpha)
+{
+  switch (port)
+  {
+  case 0:
+    return Rgba(236, 64, 64, alpha);
+  case 1:
+    return Rgba(64, 132, 255, alpha);
+  case 2:
+    return Rgba(240, 200, 40, alpha);
+  default:
+    return Rgba(60, 196, 90, alpha);
+  }
+}
+
+// The stage select's two cursors (StageCursors.h): each player's pointer in their colour with
+// their name, and the stage each proposes framed in their colour. Positions are the match block's
+// (published by the frame hook), mapped onto the picture with the layout's probed map.
+void DrawStageCursors(ImDrawList* dl, const StageCursors::View& v, float unit)
+{
+  const StageCursors::Layout* layout = StageCursors::LayoutFor(v.game);
+  if (!layout || !g_presenter)
+    return;
+  const MathUtil::Rectangle<int>& r = g_presenter->GetTargetRectangle();
+  const float left = static_cast<float>(r.left), top = static_cast<float>(r.top);
+  const float w = static_cast<float>(r.GetWidth()), h = static_cast<float>(r.GetHeight());
+  if (!(w >= 1 && h >= 1))
+    return;
+  const auto at = [&](float x, float y) {
+    return ImVec2(left + w * (layout->u0 + layout->du * x),
+                  top + h * (layout->v0 + layout->dv * y));
+  };
+  const auto at16 = [&](int x16, int y16) {
+    return at(static_cast<float>(x16) / 16.0f, static_cast<float>(y16) / 16.0f);
+  };
+  const float label = 2.6f * unit;
+  // The proposals: a frame round the tile in the proposer's colour, a second one inside it when
+  // both propose the same stage, and the name on a tab at its top.
+  for (int port = 0; port < 2; ++port)
+  {
+    const StageCursors::View::Player& p = v.players[port];
+    if (!p.present || p.proposal < 0)
+      continue;
+    const StageCursors::Tile* tile = StageCursors::TileOf(*layout, p.proposal, v.page);
+    if (!tile)
+      continue;
+    const bool both = v.players[1 - port].present && v.players[1 - port].proposal == p.proposal;
+    const ImVec2 c0 = at16(tile->rect.x0, tile->rect.y1);
+    const ImVec2 c1 = at16(tile->rect.x1, tile->rect.y0);
+    const float inset = both && port == 1 ? 0.9f * unit : 0.0f;
+    const ImVec2 a(std::min(c0.x, c1.x) + inset, std::min(c0.y, c1.y) + inset);
+    const ImVec2 b(std::max(c0.x, c1.x) - inset, std::max(c0.y, c1.y) - inset);
+    dl->AddRect(a, b, Rgba(10, 10, 16, 0.85f), 0.6f * unit, 0, 0.9f * unit);
+    dl->AddRect(a, b, PortColour(port, 1), 0.6f * unit, 0, 0.55f * unit);
+    const std::string tag = both ? (port == 0 ? p.name + " + " + v.players[1].name : "") :
+                                   p.name;
+    if (tag.empty())
+      continue;
+    const ImVec2 s = TextSize(label, tag);
+    const ImVec2 t(port == 0 ? a.x : b.x - s.x - unit, a.y - s.y - 0.4f * unit);
+    dl->AddRectFilled(ImVec2(t.x - 0.4f * unit, t.y - 0.1f * unit),
+                      ImVec2(t.x + s.x + 0.4f * unit, t.y + s.y + 0.1f * unit),
+                      both ? Rgba(250, 210, 60, 0.95f) : PortColour(port, 0.95f), 0.4f * unit);
+    dl->AddText(ImGui::GetFont(), TextPx(label), t,
+                both ? Rgba(20, 20, 20, 1) : Rgba(255, 255, 255, 1), tag.c_str());
+  }
+  // The cursors: a crosshair like the game's own (a light disc, a ring, four ticks) in the
+  // player's colour, opaque and a little larger than the game's, so the game's own crosshair (which
+  // sits on the cursor that moved last) never shows; a gold ring outside for the player whose turn
+  // it is; a tab with the port and the name, port 1's to the left and port 2's to the right so two
+  // cursors on one tile keep both.
+  const float radius = 1.7f * std::abs(layout->du) * w;
+  for (int port = 0; port < 2; ++port)
+  {
+    const StageCursors::View::Player& p = v.players[port];
+    if (!p.present)
+      continue;
+    const ImVec2 c = at16(p.x, p.y);
+    const float thick = std::max(2.0f, 0.24f * radius);
+    if (v.turn == port)
+    {
+      dl->AddCircle(c, radius + 0.55f * thick, Rgba(10, 10, 16, 0.9f), 40, 0.9f * thick);
+      dl->AddCircle(c, radius + 0.55f * thick, Rgba(250, 210, 60, 1), 40, 0.6f * thick);
+    }
+    dl->AddCircleFilled(c, radius, Rgba(10, 10, 16, 1), 40);
+    dl->AddCircleFilled(c, radius - 1.5f, Rgba(246, 246, 246, 1), 40);
+    dl->AddCircle(c, radius * 0.72f, PortColour(port, 1), 40, thick);
+    for (const ImVec2 d : {ImVec2(1, 0), ImVec2(-1, 0), ImVec2(0, 1), ImVec2(0, -1)})
+    {
+      dl->AddLine(ImVec2(c.x + d.x * radius * 0.86f, c.y + d.y * radius * 0.86f),
+                  ImVec2(c.x + d.x * radius * 0.30f, c.y + d.y * radius * 0.30f),
+                  PortColour(port, 1), 0.8f * thick);
+    }
+    const std::string tag = fmt::format("P{} {}", port + 1, p.name);
+    const ImVec2 ts = TextSize(label, tag);
+    const float ty = c.y + radius * 0.75f;
+    const float tx = port == 0 ? c.x - radius * 0.75f - ts.x : c.x + radius * 0.75f;
+    dl->AddRectFilled(ImVec2(tx - 0.4f * unit, ty - 0.1f * unit),
+                      ImVec2(tx + ts.x + 0.4f * unit, ty + ts.y + 0.1f * unit),
+                      PortColour(port, 0.95f), 0.4f * unit);
+    dl->AddText(ImGui::GetFont(), TextPx(label), ImVec2(tx, ty), Rgba(255, 255, 255, 1),
+                tag.c_str());
+  }
+}
+
 void Draw()
 {
   const double now = NowMs();
@@ -519,9 +626,10 @@ void Draw()
     rules = RankedSet::CurrentScoreLine();
   if (rules_note.empty())
     rules_note = rule_line;
+  const StageCursors::View cursors = StageCursors::Current();
   if (!f.show_signal && f.waiting.empty() && f.toasts.empty() && f.chats.empty() &&
       f.stats.empty() && f.perf.empty() && search.empty() && search_note.empty() &&
-      rules.empty() && rules_note.empty() && !any_label)
+      rules.empty() && rules_note.empty() && !any_label && !cursors.on)
   {
     return;
   }
@@ -533,6 +641,9 @@ void Draw()
   ImDrawList* dl = ImGui::GetForegroundDrawList();
   const float margin = 3 * unit;
   const float text_size = 3.0f * unit;
+  // The stage select's two cursors first: every line of text goes over them.
+  if (cursors.on)
+    DrawStageCursors(dl, cursors, unit);
   // Top left, where Brawl's matches and menus leave the screen empty: the circle, the ping beside
   // it on the circle's centre line (the frame meter under it), the meter alone when solo, its
   // graph, then the toasts under them.

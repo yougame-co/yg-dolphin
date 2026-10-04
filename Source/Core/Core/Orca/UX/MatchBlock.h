@@ -38,8 +38,10 @@
 //   (The casual stage pick needs no range of its own: casual and ranked never share a block, and
 //   +0x140..+0x17F, once offered for it, is Project+'s SAVED_RSS.)
 //   +0xC0..+0xCF  Phase 1's own (the ready timer)
-//   +0xD0..+0x1A7 the player's own rules, saved at the header's write (Project+'s stage switch
-//                 data from +0x100)
+//   +0xD0..+0xF3  the player's own rules, saved at the header's write
+//   +0xF4..+0xFF  the stage select's two cursors, shared (StageCursors.h)
+//   +0x100..+0x1A7 Project+'s stage switch data, saved at the header's write
+//   +0x1B4..+0x1BF the stage select's two cursors (StageCursors.h)
 //   +0x1C0..+0x1EF the queue's character select (Queue.h: ready flags, the ready timer, the raw
 //                 buttons, the opponent's pick)
 //   +0x1F0        the saved rules' flags
@@ -133,6 +135,14 @@ constexpr u32 SAVED_RSS = BASE + 0x100;
 constexpr u32 SAVED_RSS_SIZE = 0xA8;
 constexpr u32 SAVED_FLAGS = BASE + 0x1F0;  // u8: bit 0 rules saved, bit 1 RSS saved
 
+// ---- The stage select's two cursors (StageCursors.h) ----
+// The free bytes after the saved stages (+0xF4..+0xFF) and before the queue's region
+// (+0x1B4..+0x1BF; +0x1A8..+0x1B3 are the character select's).
+constexpr u32 STAGE_CURSORS_SHARED = BASE + 0xF4;
+constexpr u32 STAGE_CURSORS_SHARED_SIZE = 0x0C;
+constexpr u32 STAGE_CURSORS = BASE + 0x1B4;
+constexpr u32 STAGE_CURSORS_SIZE = 0x0C;
+
 // ---- The queue's character select (Queue.h), +0x1C0..+0x1EF ----
 // (The sprint assigned this track +0x100..+0x13F, which is Project+'s saved stage switch data,
 // SAVED_RSS; +0x1A8..+0x1EF is the free run before SAVED_FLAGS.)
@@ -164,6 +174,10 @@ constexpr u32 FRIENDS_MENU_SINCE = FRIENDS + 4;
 constexpr u32 FRIENDS_END = FRIENDS + 8;
 
 static_assert(SAVED_RSS + SAVED_RSS_SIZE <= SAVED_FLAGS);
+static_assert(SAVED_STAGES + 8 <= STAGE_CURSORS_SHARED &&
+              STAGE_CURSORS_SHARED + STAGE_CURSORS_SHARED_SIZE <= SAVED_RSS);
+static_assert(SAVED_RSS + SAVED_RSS_SIZE <= STAGE_CURSORS &&
+              STAGE_CURSORS + STAGE_CURSORS_SIZE <= QUEUE);
 static_assert(RANKED_SET + 0x80 <= FRIENDS && FRIENDS_END <= FreeSpace::kMatchBlockLimit);
 static_assert(FRIENDS_MENU_SINCE % 4 == 0);
 static_assert(SAVED_RSS + SAVED_RSS_SIZE <= QUEUE && QUEUE + QUEUE_SIZE <= SAVED_FLAGS);
@@ -191,6 +205,8 @@ static_assert(CSS_TIMER_START + 4 <= BASE + 0xC0 + PHASE1_SIZE);
 //            +0x88 u32 the step's deadline (the frame hook's frame number)
 //            +0x8C u8 the pick's timer ran out: the default pick is being made   +0x8D u8 its stage
 //            +0x8E u8 the default pick's A is pressed this frame
+//            +0x8F u8 why the flow is picking (AUTO_*): its timer, the player's pick, the two
+//            players' agreement, a casual game's result
 constexpr u32 STATE_SIZE = 0x90;
 static_assert(BASE + STATE_SIZE <= FreeSpace::kMatchBlock.end);
 
@@ -199,6 +215,11 @@ constexpr u8 MODE_CASUAL = 1;
 constexpr u8 MODE_RANKED = 2;
 
 constexpr u8 NONE = 0xFF;
+// Why the stage flow is picking a stage (State::auto_why).
+constexpr u8 AUTO_TIMER = 0;   // the pick's timer ran out: its default
+constexpr u8 AUTO_PICKED = 1;  // the picker's A on a stage
+constexpr u8 AUTO_AGREED = 2;  // both players proposed the same stage
+constexpr u8 AUTO_CASUAL = 3;  // a casual game's preferred stages (the same, or the coin's)
 constexpr int MAX_GAMES = 8;
 
 struct GameRecord
@@ -236,6 +257,7 @@ struct State
   bool auto_pick = false;
   u8 auto_stage = NONE;
   bool auto_press = false;  // the default pick's A, pressed 4 frames then released 4
+  u8 auto_why = 0;          // AUTO_TIMER, AUTO_PICKED, AUTO_AGREED or AUTO_CASUAL
   // A casual game's preferred stages (Project+'s casual stage pick, RankedPPlus.h).
   std::array<u8, 2> prefs{NONE, NONE};
   bool operator==(const State&) const = default;
