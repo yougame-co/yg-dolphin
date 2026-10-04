@@ -3,7 +3,12 @@
 // from 0.6 s before each scMelee scene to 12 s after it. Works on any Orca build, released ones too:
 // it needs only the log and the VI file.
 //
-//   node Tools/orca/match-start.mjs <run folder> [...]
+//   node Tools/orca/match-start.mjs [--from-frame N] <run folder> [...]
+//
+// --from-frame N also counts the VIs from the match's frame N on, placed by the run's
+// "JIT warm-up: frame N:" line (ORCA_JITWARM_LOG=1 logs one for each of a match's first 600
+// frames). What a player sees as the match starts after the loading image: Project+ shows it
+// through frame 27 (the stage from 28), Brawl through ~169 (the stage from ~170).
 //
 // A run folder holds:
 //   stdout.log         the run's whole output, with YG_SCENES=1 (its "Scene frame" lines) and
@@ -59,15 +64,19 @@ function stats(v) {
   };
 }
 
-function run(dir) {
+function run(dir, fromFrame) {
   const meta = readMeta(dir);
   const t0 = Number(meta.t_start);
   const scenes = [];
+  const frameLines = [];
   let diagT = null;
   let boot = null;
   for (const line of readText(path.join(dir, "stdout.log")).split(/\r?\n/)) {
     let m = /^(\d+:\d+:\d+) .*Scene frame (\d+): (\S*) -> (\S+)/.exec(line);
     if (m) scenes.push({ t: logTime(m[1], t0), frame: Number(m[2]), to: m[4] });
+    m = /^(\d+:\d+:\d+) .*JIT warm-up: frame (\d+): /.exec(line);
+    if (m && fromFrame !== null && Number(m[2]) === fromFrame)
+      frameLines.push(logTime(m[1], t0));
     m = /^(\d+:\d+:\d+) .*Diag frame times/.exec(line);
     if (m) diagT = logTime(m[1], t0);
     m = /Orca: (compiled .*|stopped waiting .*)$/.exec(line);
@@ -109,13 +118,36 @@ function run(dir) {
       out.push(
         `    VI over 33 ms (seconds after scMelee:ms): ${stalls.join(" ") || "none"}`,
       );
+      if (fromFrame === null) return;
+      // The boundary before frame N: the first such line after this scMelee.
+      const tf = frameLines.find((t) => t >= s.t - 0.002);
+      if (tf === undefined || tf >= s.t + AFTER_S) {
+        out.push(`    from frame ${fromFrame}: no "JIT warm-up: frame ${fromFrame}:" line`);
+        return;
+      }
+      const after = inWindow.filter((v) => v.end - v.ms / 1000 >= tf - 0.001);
+      const sa = stats(after.map((v) => v.ms));
+      const late = after
+        .filter((v) => v.ms > 25)
+        .map((v) => `${(v.end - v.ms / 1000 - s.t).toFixed(2)}s:${Math.round(v.ms)}`);
+      out.push(
+        `    from frame ${fromFrame} (+${(tf - s.t).toFixed(2)} s): VI n=${sa.n} >25 ms ${sa.over25}, ` +
+          `>33 ms ${sa.over33}, >50 ms ${sa.over50}, worst ${sa.max} ms; over 25 ms: ` +
+          `${late.join(" ") || "none"}`,
+      );
     });
   return out.join("\n");
 }
 
-const dirs = process.argv.slice(2);
-if (!dirs.length) {
-  console.error("usage: node Tools/orca/match-start.mjs <run folder> [...]");
+const args = process.argv.slice(2);
+let fromFrame = null;
+const at = args.indexOf("--from-frame");
+if (at >= 0) {
+  fromFrame = Number(args[at + 1]);
+  args.splice(at, 2);
+}
+if (!args.length || (fromFrame !== null && !Number.isInteger(fromFrame))) {
+  console.error("usage: node Tools/orca/match-start.mjs [--from-frame N] <run folder> [...]");
   process.exit(2);
 }
-for (const d of dirs) console.log(run(d));
+for (const d of args) console.log(run(d, fromFrame));

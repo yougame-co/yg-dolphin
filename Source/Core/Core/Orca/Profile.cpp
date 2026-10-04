@@ -382,6 +382,22 @@ std::string TestCharOrderSpec()
   return SessionActive() ? GetEnv("ORCA_TEST_CHAR_ORDER") : std::string();
 }
 
+std::optional<int> ShaderWaitLimitS()
+{
+  const std::string value = GetEnv("ORCA_SHADER_WAIT_S");
+  if (!SessionActive() || value.empty())
+    return std::nullopt;
+  return std::clamp(std::atoi(value.c_str()), 60, 900);
+}
+
+std::optional<u32> TestFxcFlags()
+{
+  const std::string value = GetEnv("ORCA_TEST_FXC_FLAGS");
+  if (!SessionActive() || value.empty())
+    return std::nullopt;
+  return static_cast<u32>(std::strtoul(value.c_str(), nullptr, 16));
+}
+
 bool TestOverridesActive()
 {
   return TestPads() != 0 || TestSkipRender() || TestNetDelayMs().has_value() ||

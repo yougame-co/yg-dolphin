@@ -526,17 +526,28 @@ async function queueUp(side, queue, from = 0) {
   const ws = new WebSocket(
     `${tk.url.replace(/^http/, "ws")}/match?ticket=${encodeURIComponent(tk.ticket)}`,
   );
+  side.queueWs = ws;
+  side.waiting = 0;
   return new Promise((resolve, reject) => {
     const timer = setTimeout(
       () => reject(new Error(`${side.name}: no match in 120 s`)),
       120000,
     );
+    ws.onclose = (e) => {
+      clearTimeout(timer);
+      if (side.queueWs === ws) side.queueWs = null;
+      reject(new Error(`${side.name}: /match closed (${e.code} ${e.reason})`));
+    };
     ws.onmessage = async (e) => {
       const m = JSON.parse(e.data);
-      if (m.t === "searching")
+      if (m.t === "searching") {
+        side.waiting = m.waiting;
         log(`${side.name}: searching, ${m.waiting} waiting`);
+      }
       if (m.t !== "matched") return;
       clearTimeout(timer);
+      ws.onclose = null;
+      side.queueWs = null;
       ws.close(1000, "matched");
       side.match = {
         room: m.room,
@@ -665,23 +676,135 @@ function mirrored(a, b) {
   return true;
 }
 
+// The page's Cancel (the band's button: /match closes, Orca hears `queue-cancel`), then the player's
+// own back-out of the character select while searching (`orca menu cancel`: the page closes /match
+// and says `queue-cancel` too). After both, a second player searching the same queue finds nobody
+// left in it: the cancelled tickets are gone.
 async function cancelScenario() {
   const a = new Side("ada", opt("--cookie-a"), opt("--id-a"));
+  const b = new Side("bo", opt("--cookie-b"), opt("--id-b"));
   sides.push(a);
   await a.startBridge();
   a.start();
   await a.expect(/^orca caps .*\bhost\b/, 120000);
   a.send("caps join leave stats pause delay perf direct host results");
   await menuToQueue(a, QUEUE);
-  const menu = await a.expect(/^orca menu online (casual|ranked)( local)?$/, 60000);
-  if (menu.m[2]) fail(`"${menu.line}": local with host on`);
+  // 1. Searching, then the page's Cancel.
+  let search = queueUp(a, QUEUE).catch((e) => e);
+  await waitFor(() => a.waiting >= 1, 30000, "ada: never searching");
+  await a.waitScene("scSelctCharacter", 30000);
+  await sleep(2000);
+  a.queueWs.close(1000, "cancelled");
+  a.send("queue-cancel");
+  await search;
+  await sleep(1500);
+  // Back on the menu after the page's Cancel: the search was already over, so no `orca menu cancel`.
+  let from = a.lines.length;
+  await a.press("B", 1500);
+  await a.waitScene("muMenuMain", 30000);
+  await sleep(4000);
+  if (a.lines.slice(from).some((l) => l === "orca menu cancel"))
+    fail("orca menu cancel after the page had cancelled the search");
+  log("PASS: the page's Cancel ended the search (queue-cancel); backing out after it printed nothing");
+  // 2. The same pick again, searching, then the player backs out of the character select.
+  from = a.lines.length;
+  await a.press("A");
+  search = queueUp(a, QUEUE, from).catch((e) => e);
+  await waitFor(() => a.waiting >= 1, 30000, "ada: never searching the second time");
   await a.waitScene("scSelctCharacter", 30000);
   await sleep(3000);
-  // B held out of the character select: back on the menu, the search is over.
-  const from = a.lines.length;
+  from = a.lines.length;
   await a.press("B", 1500);
   await a.expect(/^orca menu cancel$/, 30000, from);
+  a.queueWs.close(1000, "cancelled");
+  a.send("queue-cancel");
+  await search;
   log("PASS: backing out of the character select while searching printed orca menu cancel");
+  // 3. Nobody is left in the queue: a second searcher in the same queue waits alone.
+  const mode = `${a.lastOwn.mode}-${QUEUE}`;
+  const tk = await b.ticket({
+    players: 2,
+    mode,
+    lobby: a.lastOwn.lobby,
+    queue: QUEUE,
+    ...(QUEUE === "casual" ? { after_match: "stay" } : {}),
+  });
+  const seen = await new Promise((resolve) => {
+    const got = [];
+    const ws = new WebSocket(
+      `${tk.url.replace(/^http/, "ws")}/match?ticket=${encodeURIComponent(tk.ticket)}`,
+    );
+    ws.onmessage = (e) => got.push(JSON.parse(e.data));
+    setTimeout(() => {
+      ws.close(1000, "cancelled");
+      resolve(got);
+    }, 8000);
+  });
+  if (seen.some((m) => m.t === "matched"))
+    fail(`a cancelled ticket was still in the queue: ${JSON.stringify(seen)}`);
+  const waiting = seen.filter((m) => m.t === "searching").map((m) => m.waiting);
+  if (!waiting.length || Math.max(...waiting) !== 1)
+    fail(`the second searcher saw ${JSON.stringify(waiting)} searching, wanted 1`);
+  log("PASS: after both cancels, a second searcher waits alone (1 searching), never matched");
+}
+
+// The opponent never comes (their app closed the moment they were matched): the host's page gives
+// them ORCA_HOST_WAIT_MS (30 s), then sends `leave`; Orca leaves the matched room (`orca state
+// left`) for a fresh room of its own. No game began, so nothing is recorded.
+async function noShowScenario() {
+  const a = new Side("ada", opt("--cookie-a"), opt("--id-a"));
+  const b = new Side("bo", opt("--cookie-b"), opt("--id-b"));
+  sides.push(a, b);
+  for (const s of [a, b]) await s.startBridge();
+  a.start();
+  await sleep(4000);
+  b.start();
+  for (const s of [a, b]) {
+    await s.expect(/^orca caps .*\bhost\b/, 120000);
+    s.send("caps join leave stats pause delay perf direct host results");
+  }
+  const from = [a.lines.length, b.lines.length];
+  await menuToQueue(a, QUEUE);
+  const qa = queueUp(a, QUEUE, from[0]);
+  await sleep(6000);
+  await menuToQueue(b, QUEUE);
+  const qb = queueUp(b, QUEUE, from[1]);
+  const [ma, mb] = await Promise.all([qa, qb]);
+  if (ma.room !== mb.room) fail(`matched into different rooms: ${ma.room} ${mb.room}`);
+  const host = ma.slot === 0 ? a : b;
+  const gone = host === a ? b : a;
+  // The opponent's app closes: its Orca is gone before its page would have sent `join`.
+  gone.proc.kill("SIGKILL");
+  log(`${gone.name}'s app closed at the match; ${host.name} hosts ${ma.room} alone`);
+  const hostFrom = host.lines.length;
+  const roomsBefore = host.ownRooms.length;
+  host.send(`host ${ma.room}`);
+  // The page's no-show watch: nobody else in the room after 30 s.
+  await sleep(30000);
+  const me = host.mirror?.me ?? host.playerId;
+  const others = (host.mirror?.participants || []).filter((p) => p.id !== me);
+  if (host.mirror?.code && host.mirror.code !== ma.room)
+    log(`the host's mirror is room ${host.mirror.code}`);
+  if (others.length) fail(`someone is in the room: ${JSON.stringify(others)}`);
+  if (host.lines.slice(hostFrom).some((l) => l === "unsupported host")) fail("unsupported host");
+  host.send("leave");
+  await host.expect(/^orca state left$/, 30000, hostFrom);
+  await waitFor(
+    () => host.ownRooms.length > roomsBefore && host.ownRooms.at(-1) !== ma.room,
+    30000,
+    "the host opened no room of its own after leaving",
+  );
+  noErrors([host]);
+  log(`PASS: no-show: the host left ${ma.room} after 30 s and opened ${host.ownRooms.at(-1)}`);
+  console.log(`NOSHOW_ROOM ${ma.room}`);
+}
+
+async function waitFor(cond, ms, why) {
+  const end = Date.now() + ms;
+  while (!cond()) {
+    if (Date.now() > end) fail(why);
+    await sleep(250);
+  }
 }
 
 const sides = [];
@@ -740,6 +863,7 @@ async function pickAgain(side) {
 
 async function main() {
   if (SCENARIO === "cancel") return cancelScenario();
+  if (SCENARIO === "noshow") return noShowScenario();
   const a = new Side("ada", opt("--cookie-a"), opt("--id-a"));
   const b = new Side("bo", opt("--cookie-b"), opt("--id-b"));
   sides.push(a, b);

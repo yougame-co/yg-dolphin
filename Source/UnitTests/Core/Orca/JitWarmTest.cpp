@@ -1,9 +1,13 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <filesystem>
+#include <string>
 #include <vector>
 
 #include <gtest/gtest.h>
+
+#include "Common/FileUtil.h"
 
 #include "Core/Orca/JitWarm.h"
 
@@ -138,4 +142,59 @@ TEST(OrcaJitWarm, MergeKeepsTheYoungestPastTheCap)
   ASSERT_EQ(merged.size(), Orca::JitWarm::MAX_BLOCKS);
   for (const Block& b : merged)
     EXPECT_EQ(b.age, 2);  // the ten oldest went
+}
+
+TEST(OrcaJitWarm, PacedTargetMeetsEveryDeadline)
+{
+  using Orca::JitWarm::PacedTarget;
+  // Project+'s shape: 600 blocks first run in frame 0, 17,000 more by frame 24, 1,200 in frame 34.
+  const std::vector<std::pair<int, std::size_t>> due = {{0, 600}, {24, 17'600}, {34, 18'800}};
+  constexpr int LEAD = 3;
+  // Frame 0: frame 0's blocks are already late (all now), and 17,600 by boundary 21 is 800 a
+  // boundary, which covers them.
+  EXPECT_EQ(PacedTarget(due, 0, 0, LEAD), 800u);
+  // Walked boundary by boundary at exactly the pace, every deadline holds.
+  std::size_t cursor = 0;
+  for (int frame = 0; frame <= 40; ++frame)
+  {
+    cursor = PacedTarget(due, cursor, frame, LEAD);
+    for (const auto& [when, end] : due)
+    {
+      if (frame >= when - LEAD)
+        EXPECT_GE(cursor, end) << "frame " << frame << ", when " << when;
+    }
+  }
+  EXPECT_EQ(cursor, 18'800u);
+  // Far behind: what is late is due at once (the next deadline then has one boundary left).
+  EXPECT_EQ(PacedTarget(due, 100, 30, LEAD), 17'600u);
+  EXPECT_EQ(PacedTarget(due, 17'600, 31, LEAD), 18'800u);
+  EXPECT_EQ(PacedTarget(due, 100, 40, LEAD), 18'800u);
+  // Nothing left, or nothing listed: no work.
+  EXPECT_EQ(PacedTarget(due, 18'800, 5, LEAD), 18'800u);
+  EXPECT_EQ(PacedTarget({}, 0, 5, LEAD), 0u);
+  // Brawl's shape (30,000 by frame 165) asks little of each boundary: the budget does the rest.
+  EXPECT_EQ(PacedTarget(std::vector<std::pair<int, std::size_t>>{{165, 30'000}}, 0, 0, LEAD), 185u);
+}
+
+// The lists Orca ships for a player without one (Data/Sys/Orca/<profile>.jitwarm, JitWarm.cpp
+// SeedPath): they read (checksum, format), hold a match's start, and are in `when` order
+// enough to pace (some block first run in the loading frames).
+TEST(OrcaJitWarm, ShippedSeedListsRead)
+{
+  // The source tree's Data/Sys/Orca, found from this file (tests run from the build directory).
+  const auto dir = std::filesystem::path(__FILE__).parent_path() / "../../../../Data/Sys/Orca";
+  for (const char* name : {"RSBE01.jitwarm", "PPLUS32.jitwarm"})
+  {
+    std::string bytes;
+    ASSERT_TRUE(File::ReadFileToString((dir / name).string(), bytes)) << name;
+    const auto blocks =
+        Orca::JitWarm::Decode(std::span(reinterpret_cast<const u8*>(bytes.data()), bytes.size()));
+    ASSERT_TRUE(blocks.has_value()) << name;
+    EXPECT_GT(blocks->size(), 20'000u) << name;
+    EXPECT_LE(blocks->size(), Orca::JitWarm::MAX_BLOCKS) << name;
+    bool early = false;
+    for (const Block& b : *blocks)
+      early = early || b.when < 30;
+    EXPECT_TRUE(early) << name;
+  }
 }

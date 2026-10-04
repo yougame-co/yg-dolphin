@@ -69,6 +69,10 @@ public:
   // Accesses ShaderGen shader caches asynchronously.
   // The optional will be empty if this pipeline is now background compiling.
   std::optional<const AbstractPipeline*> GetPipelineForUidAsync(const GXPipelineUid& uid);
+  // Orca: GetUberPipelineForUid, except that it is empty while an ubershader the pipeline needs is
+  // still compiling in the background (a session's boot that stopped waiting): the draw is skipped
+  // instead of compiling that ubershader again on the emulation thread (D3D: seconds).
+  std::optional<const AbstractPipeline*> GetUberPipelineForUidIfReady(const GXUberPipelineUid& uid);
 
   // Shared shaders
   const AbstractShader* GetScreenQuadVertexShader() const
@@ -119,7 +123,7 @@ private:
 
   void WaitForAsyncCompiler();
   // Orca: WaitForAsyncCompiler for a session's boot, which gives up at a limit (ShaderCache.cpp,
-  // BOOT_WAIT_SOFT and BOOT_WAIT_HARD) and prints "orca shaders" lines while it waits.
+  // BOOT_WAIT, or the app's ORCA_SHADER_WAIT_S) and prints "orca shaders" lines while it waits.
   void WaitForBootCompile();
   void LoadCaches();
   void ClearCaches();
@@ -199,6 +203,8 @@ private:
   enum : u32
   {
     COMPILE_PRIORITY_ONDEMAND_PIPELINE = 100,
+    // Orca: the shader cache in a session (CompileMissingPipelines).
+    COMPILE_PRIORITY_SESSION_SHADERCACHE_PIPELINE = 150,
     COMPILE_PRIORITY_UBERSHADER_PIPELINE = 200,
     COMPILE_PRIORITY_SHADERCACHE_PIPELINE = 300
   };

@@ -15,6 +15,7 @@
 #include <thread>
 #include <unordered_map>
 
+#include <fmt/ranges.h>
 #include <xxh3.h>
 
 #include "Common/CommonPaths.h"
@@ -57,6 +58,24 @@ constexpr int WARM_FRAMES = 600;
 constexpr int SWEEP_EVERY = 30;
 constexpr int BUDGET_US = 8000;
 constexpr int LATE_BUDGET_US = 1000;
+// The first sweep's pace. A block the recorded match first ran in frame `when` is due by the
+// boundary LEAD frames before (a match can load a little faster than the one recorded): the sweep
+// goes past BUDGET_US as far as it must to pass every block by its boundary, evenly over the frames
+// left. Brawl's loading image (~165 frames) leaves room within the budget on any host; Project+
+// runs its match code 22-24 frames after scMelee (5,200 + 11,200 blocks), which on a host whose
+// JIT compiles 200 blocks in 8 ms (Jit64 on Luis's PC) is behind by ~12,000 blocks there, a
+// 374 ms frame. Paced, the loading frames run longer instead (the loading image is still).
+constexpr int LEAD = 3;
+// The most one boundary's first sweep may take, pace or not: a sweep that fell behind (boundaries
+// where the JIT had no room) catches up over several frames instead of in one long frame during
+// play. The PC's paced Project+ loading frames take 30-38 ms; this leaves room for a host at
+// ~2.5 times its ~40 us a block.
+constexpr int MAX_SWEEP_US = 100'000;
+// The JIT's room at a match's first frame (JitBase::ReserveForBlocks): a process's first match
+// compiles its whole start (Brawl ~30,000 blocks, Project+ ~28,000, listed or not); a later one
+// little, its blocks still there (2,700 with a stage and a fighter the first never loaded).
+constexpr std::size_t FIRST_MATCH_BLOCKS = 32'000;
+constexpr std::size_t LATER_MATCH_BLOCKS = 8'000;
 // Recording: the blocks the game compiles in a match's first RECORD_FRAMES frames; one counts when
 // its words are unchanged STABLE_AFTER frames after its compile (so never a block whose code was
 // rewritten after its compile without an invalidation: compiling it ahead could run other words
@@ -117,6 +136,32 @@ std::string FilePath()
 {
   const Profile* profile = ActiveProfile();
   return File::GetUserPath(D_CACHE_IDX) + (profile ? profile->game_id : "unknown") + ".jitwarm";
+}
+
+// Orca's own list (Data/Sys/Orca/<profile>.jitwarm), for a player who has none yet: a first
+// install, or the first match after an update from a build without the warm-up (0.3.8 and before),
+// whose first match would otherwise compile its whole start itself (Brawl on Luis's PC: 160, 117
+// and 326 ms at the stage's first frames). Recorded from reference matches (ORCA.md, "Match
+// start"), and hash-checked like the player's own: a block whose words aren't this game's in RAM is
+// never compiled. The player's list takes over after the first match. ORCA_JITWARM_SEED=0: none.
+std::string SeedPath()
+{
+  const Profile* profile = ActiveProfile();
+  if (!profile || GetEnv("ORCA_JITWARM_SEED") == "0")
+    return {};
+  return File::GetSysDirectory() + "Orca/" + profile->game_id + ".jitwarm";
+}
+
+std::vector<u8> ReadWhole(const std::string& path)
+{
+  std::vector<u8> bytes;
+  if (File::IOFile in(path, "rb"); in)
+  {
+    bytes.resize(in.GetSize());
+    if (!in.ReadBytes(bytes.data(), bytes.size()))
+      bytes.clear();
+  }
+  return bytes;
 }
 
 // The running game is one whose scenes Orca can read: Brawl rev 2, or a launcher profile booting it.
@@ -191,6 +236,8 @@ private:
   void CheckStable(int up_to_frame);
   void FinishRecording();
   void LogWarm();
+  void LogGame(int frame);
+  void LogPresence(const Core::CPUThreadGuard& guard);
   std::span<const u8> Mem1() const;
   std::span<const u8> Mem2() const;
 
@@ -198,8 +245,11 @@ private:
   bool m_checked = false;
   bool m_enabled = false;
   int m_budget_us = BUDGET_US;
+  int m_test_slow_us = 0;     // ORCA_TEST_JITWARM_SLOW_US: each compile here takes this much longer
   bool m_log_frames = false;  // ORCA_JITWARM_LOG=1: a line per frame boundary that compiled
+  bool m_log_presence = false;  // ORCA_JITWARM_LOG=2: also which listed blocks are in RAM before
   std::string m_path;
+  std::string m_seed_path;  // Orca's own list, when the player has none (SeedPath)
 
   // Scenes.
   bool m_seen_other_scene = false;  // a match starts only from another scene, not on a join
@@ -214,6 +264,8 @@ private:
   // waiting for the next sweep.
   std::vector<u32> m_queue, m_waiting;
   std::size_t m_cursor = 0;
+  // The first sweep's deadlines: each `when` in the queue and the queue index past its last block.
+  std::vector<std::pair<int, std::size_t>> m_due;
   int m_next_sweep = 0;
   bool m_warming = false;
   bool m_compiling = false;  // inside a warm-up compile: not the game's own
@@ -223,6 +275,15 @@ private:
   std::deque<Fresh> m_fresh;
   std::vector<Block> m_stable;
   int m_unstable = 0;
+
+  // ORCA_JITWARM_LOG: the game's own compiles since the last boundary, by what the warm-up had
+  // done with them (the listed blocks by start and flags).
+  std::unordered_map<u64, u32> m_index;
+  int m_game_total = 0, m_game_warmed = 0, m_game_unreached = 0, m_game_present = 0,
+      m_game_unlisted = 0;
+  std::vector<u32> m_game_gone;  // a few of the warmed blocks the game compiled again
+  int m_boundaries = 0;
+  bool m_logged_frame = false;  // this boundary's warm-up line is out
 
   // Warm-up figures for the log.
   int m_compiled = 0, m_present = 0, m_discarded = 0, m_no_room = 0, m_sweeps = 0;
@@ -250,8 +311,13 @@ bool State::Enabled()
   m_enabled = SessionActive() && KnownGame() && GetEnv("ORCA_JITWARM") != "0";
   if (const std::string budget = GetEnv("ORCA_JITWARM_BUDGET_US"); !budget.empty())
     m_budget_us = std::clamp(std::atoi(budget.c_str()), 0, 100'000);
-  m_log_frames = GetEnv("ORCA_JITWARM_LOG") == "1";
+  if (const std::string slow = GetEnv("ORCA_TEST_JITWARM_SLOW_US"); !slow.empty())
+    m_test_slow_us = std::clamp(std::atoi(slow.c_str()), 0, 10'000);
+  const std::string log = GetEnv("ORCA_JITWARM_LOG");
+  m_log_frames = log == "1" || log == "2";
+  m_log_presence = log == "2";
   m_path = FilePath();
+  m_seed_path = SeedPath();
   if (m_enabled)
     NOTICE_LOG_FMT(ROLLBACK, "JIT warm-up: on ({}, {} us per frame)", m_path, m_budget_us);
   return m_enabled;
@@ -271,6 +337,23 @@ std::span<const u8> State::Mem2() const
 
 void State::OnBlockFinalized(const JitBlock& jit_block)
 {
+  if (m_log_frames && m_in_match && !m_compiling)
+  {
+    ++m_game_total;
+    const auto it = m_index.find((u64{jit_block.effectiveAddress} << 32) | jit_block.feature_flags);
+    if (it == m_index.end() || it->second >= m_status.size())
+      ++m_game_unlisted;
+    else if (m_status[it->second] == Status::Compiled)
+    {
+      ++m_game_warmed;
+      if (m_game_gone.size() < 6)
+        m_game_gone.push_back(jit_block.effectiveAddress);
+    }
+    else if (m_status[it->second] == Status::Present)
+      ++m_game_present;
+    else
+      ++m_game_unreached;
+  }
   if (!m_recording || m_compiling)
     return;
   Block b;
@@ -314,6 +397,15 @@ void State::StartMatch()
   std::iota(m_queue.begin(), m_queue.end(), 0u);
   std::stable_sort(m_queue.begin(), m_queue.end(),
                    [this](u32 a, u32 b) { return m_known[a].when < m_known[b].when; });
+  m_due.clear();
+  for (std::size_t i = 0; i < m_queue.size(); ++i)
+  {
+    const int when = m_known[m_queue[i]].when;
+    if (m_due.empty() || m_due.back().first != when)
+      m_due.emplace_back(when, i + 1);
+    else
+      m_due.back().second = i + 1;
+  }
   m_waiting.clear();
   m_status.assign(m_known.size(), Status::Waiting);
   m_cursor = 0;
@@ -326,6 +418,13 @@ void State::StartMatch()
   m_fresh.clear();
   m_stable.clear();
   m_unstable = 0;
+  m_index.clear();
+  if (m_log_frames)
+  {
+    for (u32 i = 0; i < m_known.size(); ++i)
+      m_index.emplace((u64{m_known[i].effective} << 32) | m_known[i].flags, i);
+  }
+  m_game_total = m_game_warmed = m_game_unreached = m_game_present = m_game_unlisted = 0;
   NOTICE_LOG_FMT(ROLLBACK, "JIT warm-up: match {} starts, {} blocks known", m_matches,
                  m_known.size());
 }
@@ -360,6 +459,52 @@ void State::LogWarm()
                  "({} discarded), {} sweeps, {} boundaries without room",
                  m_matches, m_compiled, m_known.size(), m_ms, m_first_frame, m_last_frame,
                  m_max_frame_ms, m_present, waiting, given_up, m_discarded, m_sweeps, m_no_room);
+}
+
+void State::LogGame(int frame)
+{
+  if (m_game_total > 0)
+  {
+    NOTICE_LOG_FMT(
+        ROLLBACK,
+        "JIT warm-up: frame {}: the game compiled {} ({} warmed earlier and gone since, "
+        "{} not reached yet, {} found compiled earlier and gone since, {} not listed){}{:08x}",
+        frame, m_game_total, m_game_warmed, m_game_unreached, m_game_present, m_game_unlisted,
+        m_game_gone.empty() ? "" : ": ", fmt::join(m_game_gone, " "));
+  }
+  m_game_gone.clear();
+  m_game_total = m_game_warmed = m_game_unreached = m_game_present = m_game_unlisted = 0;
+}
+
+// ORCA_JITWARM_LOG=2, outside a match every 30 boundaries: how many listed blocks the warm-up could
+// compile now (their words in RAM, mapped as recorded) and how many the JIT already has.
+void State::LogPresence(const Core::CPUThreadGuard& guard)
+{
+  std::lock_guard lock(m_mutex);
+  const std::vector<Block>* known = m_ready ? &*m_ready : nullptr;
+  if (!known || known->empty())
+    return;
+  auto& system = guard.GetSystem();
+  auto* jit = static_cast<JitBase*>(system.GetJitInterface().GetCore());
+  if (!jit)
+    return;
+  JitBaseBlockCache& cache = *jit->GetBlockCache();
+  auto& mmu = system.GetMMU();
+  const u32 flags = system.GetPPCState().feature_flags;
+  const auto mem1 = Mem1(), mem2 = Mem2();
+  int in_ram = 0, compiled = 0;
+  for (const Block& b : *known)
+  {
+    if (b.flags != flags || mmu.InstructionBATTranslate(b.effective) != b.physical)
+      continue;
+    if (cache.GetBlockFromStartAddress(b.effective, static_cast<CPUEmuFeatureFlags>(flags)))
+      ++compiled;
+    else if (HashRanges(mem1, mem2, b.ranges) == b.hash)
+      ++in_ram;
+  }
+  NOTICE_LOG_FMT(ROLLBACK,
+                 "JIT warm-up: boundary {} (no match): of {} listed, {} compiled, {} more in RAM",
+                 m_boundaries, known->size(), compiled, in_ram);
 }
 
 void State::CheckStable(int up_to_frame)
@@ -419,6 +564,8 @@ void State::FinishRecording()
   m_status.clear();
   m_queue.clear();
   m_waiting.clear();
+  m_due.clear();
+  m_index.clear();
 }
 
 void State::Warm(const Core::CPUThreadGuard& guard)
@@ -439,8 +586,14 @@ void State::Warm(const Core::CPUThreadGuard& guard)
   // other blocks still not in RAM, during play.
   const auto deadline =
       start + std::chrono::microseconds(m_sweeps == 0 ? m_budget_us : LATE_BUDGET_US);
+  // The first sweep gets at least this far, past the budget if it must (LEAD above), but never
+  // past MAX_SWEEP_US.
+  const std::size_t must_reach =
+      m_sweeps == 0 ? PacedTarget(m_due, m_cursor, m_match_frame, LEAD) : m_cursor;
+  const auto hard_deadline = start + std::chrono::microseconds(std::max(m_budget_us, MAX_SWEEP_US));
   bool compiled_here = false;
   const int compiled_before = m_compiled, discarded_before = m_discarded;
+  const std::size_t cursor_before = m_cursor;
   int not_in_ram = 0;
   while (true)
   {
@@ -454,8 +607,11 @@ void State::Warm(const Core::CPUThreadGuard& guard)
       ++m_sweeps;
       break;
     }
-    if (std::chrono::steady_clock::now() >= deadline)
+    if (const auto now = std::chrono::steady_clock::now();
+        now >= hard_deadline || (m_cursor >= must_reach && now >= deadline))
+    {
       break;
+    }
     const u32 index = m_queue[m_cursor];
     const Block& b = m_known[index];
     Status& status = m_status[index];
@@ -488,10 +644,32 @@ void State::Warm(const Core::CPUThreadGuard& guard)
     ++m_cursor;
     // The dispatcher compiles with the guest's floating-point mode in force; so does this.
     m_compiling = true;
+    const auto compile_start = std::chrono::steady_clock::now();
     PowerPC::RoundingModeUpdated(ppc_state);
     jit->CompileFromHook(b.effective);
     Common::FPU::LoadDefaultSIMDState();
     m_compiling = false;
+    if (m_log_frames)
+    {
+      const double compile_ms = std::chrono::duration<double, std::milli>(
+                                    std::chrono::steady_clock::now() - compile_start)
+                                    .count();
+      if (compile_ms >= 4)
+      {
+        const JitBlock* slow = cache.GetBlockFromStartAddress(b.effective, flags);
+        NOTICE_LOG_FMT(ROLLBACK, "JIT warm-up: frame {}: {:08x} took {:.2f} ms ({} instructions)",
+                       m_match_frame, b.effective, compile_ms, slow ? slow->originalSize : 0);
+      }
+    }
+    if (m_test_slow_us > 0)
+    {
+      // A slower host's compile (a test of the schedule, not of the JIT).
+      const auto until =
+          std::chrono::steady_clock::now() + std::chrono::microseconds(m_test_slow_us);
+      while (std::chrono::steady_clock::now() < until)
+      {
+      }
+    }
     compiled_here = true;
     JitBlock* block = cache.GetBlockFromStartAddress(b.effective, flags);
     bool same = block != nullptr;
@@ -533,10 +711,12 @@ void State::Warm(const Core::CPUThreadGuard& guard)
   }
   if (m_log_frames)
   {
+    m_logged_frame = true;
     NOTICE_LOG_FMT(ROLLBACK,
-                   "JIT warm-up: frame {}: {} compiled, {} discarded, {} not in RAM, {:.2f} ms",
+                   "JIT warm-up: frame {}: {} compiled, {} discarded, {} not in RAM, {:.2f} ms ({} "
+                   "due)",
                    m_match_frame, m_compiled - compiled_before, m_discarded - discarded_before,
-                   not_in_ram, ms);
+                   not_in_ram, ms, must_reach - cursor_before);
   }
   if (m_queue.empty())
     StopWarm();  // nothing left waiting
@@ -550,22 +730,29 @@ void State::OnBoundary(const Core::CPUThreadGuard& guard)
   {
     m_load_started = true;
     m_io = std::thread([this] {
-      std::vector<u8> bytes;
-      if (File::IOFile in(m_path, "rb"); in)
-      {
-        bytes.resize(in.GetSize());
-        if (!in.ReadBytes(bytes.data(), bytes.size()))
-          bytes.clear();
-      }
+      const std::vector<u8> bytes = ReadWhole(m_path);
       std::optional<std::vector<Block>> blocks = bytes.empty() ? std::nullopt : Decode(bytes);
       if (!bytes.empty() && !blocks)
         WARN_LOG_FMT(ROLLBACK, "JIT warm-up: {} is not readable, starting over", m_path);
+      if (!blocks && !m_seed_path.empty())
+      {
+        blocks = Decode(ReadWhole(m_seed_path));
+        if (blocks)
+        {
+          NOTICE_LOG_FMT(ROLLBACK,
+                         "JIT warm-up: no list of this player's yet; Orca's {} ({} blocks)",
+                         m_seed_path, blocks->size());
+        }
+      }
       std::lock_guard lock(m_mutex);
       if (!m_ready)
         m_ready = blocks ? std::move(*blocks) : std::vector<Block>{};
     });
   }
 
+  ++m_boundaries;
+  if (m_log_frames && m_in_match && m_match_frame < RECORD_FRAMES)
+    LogGame(m_match_frame);
   const std::optional<bool> in_match = InMatch(guard);
   if (!in_match)
     return;
@@ -574,11 +761,27 @@ void State::OnBoundary(const Core::CPUThreadGuard& guard)
     if (!*in_match)
     {
       m_seen_other_scene = true;
+      if (m_log_presence && m_boundaries % 30 == 0)
+        LogPresence(guard);
       return;
     }
     if (!m_seen_other_scene)
       return;  // joined a match already running: its code is compiled as it runs
     StartMatch();
+    // The JIT's tables grow now, behind the loading image, not inside a compile during play.
+    if (auto* jit = static_cast<JitBase*>(guard.GetSystem().GetJitInterface().GetCore()))
+    {
+      const auto start = std::chrono::steady_clock::now();
+      jit->ReserveForBlocks(m_matches == 1 ? std::max(m_known.size(), FIRST_MATCH_BLOCKS) :
+                                             LATER_MATCH_BLOCKS);
+      if (m_log_frames)
+      {
+        NOTICE_LOG_FMT(
+            ROLLBACK, "JIT warm-up: frame 0: the JIT's tables made room in {:.2f} ms",
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
+                .count());
+      }
+    }
   }
   else if (!*in_match)
   {
@@ -597,6 +800,7 @@ void State::OnBoundary(const Core::CPUThreadGuard& guard)
     if (m_match_frame >= RECORD_FRAMES)
       FinishRecording();
   }
+  m_logged_frame = false;
   if (m_warming)
   {
     if (m_match_frame >= WARM_FRAMES)
@@ -604,6 +808,10 @@ void State::OnBoundary(const Core::CPUThreadGuard& guard)
     else
       Warm(guard);
   }
+  // Every boundary of a match's first frames has a line in this mode, which places each frame in
+  // time (Tools/orca/match-start.mjs --from-frame).
+  if (m_log_frames && m_in_match && m_match_frame < RECORD_FRAMES && !m_logged_frame)
+    NOTICE_LOG_FMT(ROLLBACK, "JIT warm-up: frame {}: nothing to warm", m_match_frame);
 }
 }  // namespace
 
@@ -627,6 +835,22 @@ std::optional<u64> HashRanges(std::span<const u8> mem1, std::span<const u8> mem2
     hash = XXH3_64bits_withSeed(p, end - start, hash ^ ((u64{start} << 32) | end));
   }
   return hash;
+}
+
+std::size_t PacedTarget(std::span<const std::pair<int, std::size_t>> due, std::size_t cursor,
+                        int frame, int lead)
+{
+  // Of every deadline still ahead, the share of its remaining blocks that falls on this boundary;
+  // the most pressing one sets the pace.
+  std::size_t target = cursor;
+  for (const auto& [when, end] : due)
+  {
+    if (end <= cursor)
+      continue;
+    const auto boundaries = static_cast<std::size_t>(std::max(1, when - lead - frame + 1));
+    target = std::max(target, cursor + (end - cursor + boundaries - 1) / boundaries);
+  }
+  return target;
 }
 
 std::vector<u8> Encode(const std::vector<Block>& blocks)

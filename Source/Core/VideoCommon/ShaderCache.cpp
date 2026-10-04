@@ -3,6 +3,7 @@
 
 #include "VideoCommon/ShaderCache.h"
 
+#include <algorithm>
 #include <chrono>
 #include <thread>
 #include <tuple>
@@ -41,18 +42,23 @@ namespace VideoCommon
 namespace
 {
 // Orca (ORCA.md, "Match start"): how long a session's boot waits for the shaders it compiles before
-// the first frame. Every Orca update empties the compiled shaders on disk, so the first boot after
-// one compiles every pipeline the player's games have drawn (Cache/<game>.uidcache) plus the
-// ubershaders, and the desktop app kills a boot that hasn't drawn in 120 s. Past BOOT_WAIT_SOFT the
-// wait ends as soon as the ubershaders are compiled (the rest compile in the background and are
-// drawn with an ubershader until they are ready); at BOOT_WAIT_HARD it ends whatever is left (an
-// ubershader still compiling then is compiled again at its first draw, a stall but not a failed
-// start).
-constexpr std::chrono::seconds BOOT_WAIT_SOFT{40};
-constexpr std::chrono::seconds BOOT_WAIT_HARD{60};
+// the first frame. The first boot after an Orca update compiles every pipeline the player's games
+// have drawn (Cache/<game>.uidcache) plus the ubershaders, unless the backend keeps its compiled
+// shaders across builds (D3D: D3DCommon/FxcCache). Desktop apps installed before ORCA_SHADER_WAIT_S
+// kill a boot that hasn't drawn in 120 s, so without it the wait ends at BOOT_WAIT; the app that
+// sets it keeps the boot alive while `orca shaders` lines arrive. Whatever is left then compiles in
+// the background: a pipeline the UID cache had is drawn with an ubershader until it is ready, and a
+// draw whose ubershader is itself still compiling is skipped rather than compiled on the emulation
+// thread (GetUberPipelineForUidIfReady).
+constexpr std::chrono::seconds BOOT_WAIT{60};
 
 void DrawCompileProgress(size_t completed, size_t total)
 {
+  // Orca: headless (-p headless with a real backend, the Mac's shader tests) has no ImGui context,
+  // and ImGui asserts without one.
+  if (!ImGui::GetCurrentContext())
+    return;
+
   const float center_x = ImGui::GetIO().DisplaySize.x * 0.5f;
   const float center_y = ImGui::GetIO().DisplaySize.y * 0.5f;
   const float scale = ImGui::GetIO().DisplayFramebufferScale.x;
@@ -248,25 +254,50 @@ void ShaderCache::WaitForBootCompile()
   using Clock = std::chrono::steady_clock;
   constexpr auto CHECK_INTERVAL = std::chrono::milliseconds(1000 / 30);
   constexpr auto SHOW_AFTER = std::chrono::seconds(1);
-  auto soft = std::chrono::duration_cast<Clock::duration>(BOOT_WAIT_SOFT);
-  auto hard = std::chrono::duration_cast<Clock::duration>(BOOT_WAIT_HARD);
+  Clock::duration limit = BOOT_WAIT;
+  if (const std::optional<int> app_s = Orca::ShaderWaitLimitS())
+    limit = std::chrono::seconds(*app_s);
   if (const std::optional<int> test_ms = Orca::TestShaderWaitMs())
-    soft = hard = std::chrono::milliseconds(*test_ms);
+    limit = std::chrono::milliseconds(*test_ms);
+  const size_t threads = g_ActiveConfig.GetShaderPrecompilerThreads();
 
   // Pipelines still compiling (the flag a pipeline's work item clears when retrieved): the ones
-  // from the UID cache, and the ubershaders.
+  // from the UID cache, and the ubershaders. And the shader stages they wait on, for the progress
+  // shown: a pipeline whose stages weren't ready queues itself again behind every stage of its
+  // priority, so the pipelines alone sat at 0 until the very end (D3D: 30 s, Metal: 8 s).
+  struct Pending
+  {
+    size_t specialized = 0;
+    size_t uber = 0;
+    size_t stages = 0;
+    size_t Sum() const { return specialized + uber + stages; }
+  };
   const auto pending = [this] {
-    std::pair<size_t, size_t> n{};
+    Pending n;
     for (const auto& [uid, entry] : m_gx_pipeline_cache)
-      n.first += entry.second;
+      n.specialized += entry.second;
     for (const auto& [uid, entry] : m_gx_uber_pipeline_cache)
-      n.second += entry.second;
+      n.uber += entry.second;
+    const auto stages = [&n](const auto& cache) {
+      for (const auto& [uid, entry] : cache.shader_map)
+        n.stages += entry.pending;
+    };
+    stages(m_vs_cache);
+    stages(m_ps_cache);
+    stages(m_uber_vs_cache);
+    stages(m_uber_ps_cache);
     return n;
   };
   const auto start = Clock::now();
-  const auto [first_specialized, first_uber] = pending();
-  const size_t total = first_specialized + first_uber;
-  size_t specialized = first_specialized, uber = first_uber;
+  const Pending first = pending();
+  const size_t total = first.specialized + first.uber;
+  Pending left = first;
+  // The total never shrinks between lines (stages queued after the first count raise it).
+  size_t max_units = first.Sum();
+  const auto progress = [&] {
+    max_units = std::max(max_units, left.Sum());
+    return std::pair{max_units - left.Sum(), max_units};
+  };
   auto next_line = start + SHOW_AFTER;
   bool said = false;
   bool done = false;
@@ -276,42 +307,52 @@ void ShaderCache::WaitForBootCompile()
     // Completed work is retrieved here, as each frame does at runtime: a pipeline whose shaders
     // weren't compiled yet queues itself again, and the flags above are cleared.
     m_async_shader_compiler->RetrieveWorkItems();
-    std::tie(specialized, uber) = pending();
+    left = pending();
     if (!m_async_shader_compiler->HasPendingWork() && !m_async_shader_compiler->HasCompletedWork())
     {
       done = true;
       break;
     }
+    // Everything, not just the ubershaders: a pipeline of the UID cache that isn't ready is drawn
+    // with an ubershader while it compiles in the background, beside the match (P+ on Windows
+    // stopped at the ubershaders with 1,331 left: VI over 33 ms for 9 s of its first match).
     const auto now = Clock::now();
-    if (now - start >= hard || (now - start >= soft && uber == 0))
+    if (now - start >= limit)
       break;
+    const auto [compiled, units] = progress();
     if (now - start >= SHOW_AFTER)
-      DrawCompileProgress(total - specialized - uber, total);
+      DrawCompileProgress(compiled, units);
     if (now >= next_line)
     {
-      Orca::Status::Shaders(total - specialized - uber, total);
+      Orca::Status::Shaders(compiled, units);
       said = true;
       next_line += SHOW_AFTER;
     }
     std::this_thread::sleep_for(CHECK_INTERVAL);
   }
   if (said)
-    Orca::Status::Shaders(total - specialized - uber, total);
+  {
+    const auto [compiled, units] = progress();
+    Orca::Status::Shaders(compiled, units);
+  }
 
   const double seconds = std::chrono::duration<double>(Clock::now() - start).count();
   if (done)
   {
     NOTICE_LOG_FMT(VIDEO,
                    "Orca: compiled {} pipelines ({} ubershader) before the first frame in "
-                   "{:.1f} s",
-                   total, first_uber, seconds);
+                   "{:.1f} s on {} threads",
+                   total, first.uber, seconds, threads);
   }
   else
   {
     NOTICE_LOG_FMT(VIDEO,
-                   "Orca: stopped waiting for shaders after {:.1f} s, {} of {} pipelines compiled; "
-                   "{} ({} ubershader) left to compile in the background",
-                   seconds, total - specialized - uber, total, specialized + uber, uber);
+                   "Orca: stopped waiting for shaders after {:.1f} s (limit {:.1f} s), {} of {} "
+                   "pipelines compiled on {} threads; {} ({} ubershader) left to compile in the "
+                   "background",
+                   seconds, std::chrono::duration<double>(limit).count(),
+                   total - left.specialized - left.uber, total, threads,
+                   left.specialized + left.uber, left.uber);
   }
 
   // An extra Present to clear the screen
@@ -536,11 +577,17 @@ void ShaderCache::ClearCaches()
 
 void ShaderCache::CompileMissingPipelines()
 {
+  // Orca: in a session the UID cache's pipelines come before the ubershaders. They are what the
+  // match draws, and each takes a fraction of an ubershader's time (D3D's FXC on Luis's PC: the 63
+  // ubershaders about 35 s, Brawl's 451 pipelines then about a second), so a boot that stops
+  // waiting has them ready rather than queued behind the ubershaders.
+  const u32 cache_priority = Orca::SessionActive() ? COMPILE_PRIORITY_SESSION_SHADERCACHE_PIPELINE :
+                                                     COMPILE_PRIORITY_SHADERCACHE_PIPELINE;
   // Queue all uids with a null pipeline for compilation.
   for (auto& it : m_gx_pipeline_cache)
   {
     if (!it.second.first)
-      QueuePipelineCompile(it.first, COMPILE_PRIORITY_SHADERCACHE_PIPELINE);
+      QueuePipelineCompile(it.first, cache_priority);
   }
   for (auto& it : m_gx_uber_pipeline_cache)
   {
@@ -852,6 +899,28 @@ ShaderCache::GetGXPipelineConfig(const GXUberPipelineUid& config_in)
   return GetGXPipelineConfig(config.vertex_format, vs, gs, ps, config.rasterization_state,
                              config.depth_state, config.blending_state,
                              AbstractPipelineUsage::GXUber);
+}
+
+std::optional<const AbstractPipeline*>
+ShaderCache::GetUberPipelineForUidIfReady(const GXUberPipelineUid& uid)
+{
+  const auto it = m_gx_uber_pipeline_cache.find(uid);
+  if (it != m_gx_uber_pipeline_cache.end() && !it->second.second)
+    return it->second.first.get();
+
+  // The stages GetGXPipelineConfig would otherwise compile on this thread, though the background
+  // compile of each is already queued or running.
+  const GXUberPipelineUid config = ApplyDriverBugs(uid);
+  const auto vs = m_uber_vs_cache.shader_map.find(config.vs_uid);
+  if (vs != m_uber_vs_cache.shader_map.end() && vs->second.pending)
+    return std::nullopt;
+  UberShader::PixelShaderUid ps_uid = config.ps_uid;
+  UberShader::ClearUnusedPixelShaderUidBits(m_api_type, m_host_config, &ps_uid);
+  const auto ps = m_uber_ps_cache.shader_map.find(ps_uid);
+  if (ps != m_uber_ps_cache.shader_map.end() && ps->second.pending)
+    return std::nullopt;
+
+  return GetUberPipelineForUid(uid);
 }
 
 const AbstractPipeline* ShaderCache::InsertGXPipeline(const GXPipelineUid& config,

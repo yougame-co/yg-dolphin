@@ -231,6 +231,10 @@ public:
   // unused until the next compile from the dispatcher.
   virtual bool CanCompileFromHook() const { return false; }
   void CompileFromHook(u32 em_address);
+  // Orca: room now for the bookkeeping of `count` more blocks, so that compiling them grows no
+  // table (a rehash that stalls a compile) on the way: called at a match's first frame, behind the
+  // loading image (JitWarm.cpp).
+  virtual void ReserveForBlocks(std::size_t /*count*/) {}
 
   virtual std::size_t DisassembleNearCode(const JitBlock& block, std::ostream& stream) const = 0;
   virtual std::size_t DisassembleFarCode(const JitBlock& block, std::ostream& stream) const = 0;
