@@ -245,10 +245,11 @@ TEST(OrcaCharOrder, StateBytesRoundTripAndWriteOnlyWhatDiffers)
 
 TEST(OrcaCharOrder, MetaKnightClause)
 {
-  EXPECT_EQ(MkFreePicker({kMetaKnight, 0x00}), 1);
-  EXPECT_EQ(MkFreePicker({0x10, kMetaKnight}), 0);
-  EXPECT_EQ(MkFreePicker({kMetaKnight, kMetaKnight}), -1);
-  EXPECT_EQ(MkFreePicker({0x00, 0x10}), -1);
+  constexpr int MK = 0x18;
+  EXPECT_EQ(MkFreePicker({MK, 0x00}, MK), 1);
+  EXPECT_EQ(MkFreePicker({0x10, MK}, MK), 0);
+  EXPECT_EQ(MkFreePicker({MK, MK}, MK), -1);
+  EXPECT_EQ(MkFreePicker({0x00, 0x10}, MK), -1);
 }
 
 TEST(OrcaCharOrder, TestKnob)

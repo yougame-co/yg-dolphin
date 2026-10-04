@@ -1826,7 +1826,8 @@ A ranked set's later games pick characters in order on the game's own character 
   once on later games, with the same 45 s. Supernova 2025's exact order (the ban, the loser's
   stage, then the winner may change character, then the loser) needs results -> stage select ->
   character select -> match, and the Meta Knight clause re-checked once both final characters are
-  known (`MkFreePicker`, unit-tested, not wired).
+  known (`MkFreePicker`, unit-tested, not wired; it takes Meta Knight's id in whichever id space the
+  caller's characters use).
 - Game 1 has no order (both pick at once, the ranked ready timer applies), and nothing here acts in
   casual or friends games.
 

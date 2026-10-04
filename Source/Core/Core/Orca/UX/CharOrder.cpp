@@ -257,10 +257,10 @@ std::string Line(const SetView& set, const CssView& css, const State& state,
                      state.step == Step::First ? "picks first" : "picks", left);
 }
 
-int MkFreePicker(const std::array<int, 2>& characters)
+int MkFreePicker(const std::array<int, 2>& characters, int meta_knight)
 {
-  const bool a = characters[0] == kMetaKnight;
-  const bool b = characters[1] == kMetaKnight;
+  const bool a = characters[0] == meta_knight;
+  const bool b = characters[1] == meta_knight;
   if (a == b)
     return -1;
   return a ? 1 : 0;

@@ -14,7 +14,8 @@
 @scSelctCharacter:1 265 268 2 B
 @scSelctCharacter:1 270 273 1 START
 @scSelctCharacter:1 280 283 1 B
-# Port 2 locks in (A with its token on a character); then its presses are masked.
+# Port 2's A on its own token picks it up (no lock-in); it moves right and puts it down: its
+# lock-in, after which its presses are masked.
 @scSelctCharacter:1 300 303 2 A
 @scSelctCharacter:1 320 326 2 SX=255
 @scSelctCharacter:1 340 343 2 A

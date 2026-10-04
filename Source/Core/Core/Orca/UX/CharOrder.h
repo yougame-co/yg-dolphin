@@ -171,9 +171,9 @@ std::string Line(const SetView& set, const CssView& css, const State& state,
 
 // Supernova 2025's Meta Knight clause, re-checked once both final characters are known (Brawl's
 // exact order): if exactly one player is Meta Knight, the other port picks any legal stage. -1:
-// the clause doesn't apply. Character values are the character select's.
-constexpr int kMetaKnight = 0x16;
-int MkFreePicker(const std::array<int, 2>& characters);
+// the clause doesn't apply. `meta_knight` is Meta Knight's id in the space `characters` uses (the
+// stage tracks' gmGlobalModeMelee id, or the character select's).
+int MkFreePicker(const std::array<int, 2>& characters, int meta_knight);
 
 // ---- Memory ----
 
