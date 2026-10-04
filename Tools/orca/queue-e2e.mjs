@@ -587,21 +587,29 @@ async function playGame(host, joiner, first) {
     await Promise.all([host.press("A"), joiner.press("A")]);
     await sleep(1500);
   }
+  // A ranked set's later games have a character order (Orca's CharOrder.h: each player locks in
+  // with A, Project+'s winner first, 45 s a pick, then Orca presses Start): both press A, then the
+  // host Start, for as long as the order can take.
+  const cssTries = QUEUE === "ranked" ? 120 : 25;
   for (let tries = 0; host.scene === "scSelctCharacter"; ++tries) {
-    if (tries >= 25) fail("the character select never started the match");
+    if (tries >= cssTries) fail("the character select never started the match");
+    if (QUEUE === "ranked" && !first) {
+      await Promise.all([host.press("A"), joiner.press("A")]);
+      await sleep(400);
+    }
     await host.press("START");
     await sleep(1200);
   }
-  await host.waitScene("scSelStage", 30000);
-  await sleep(1500);
-  // Brawl: up to the top row (Battlefield's); Project+: one step up.
-  await host.hold([128, 255, 128, 128], PPLUS ? 70 : 700);
-  await host.press("A");
-  for (let i = 0; i < 6 && host.scene === "scSelStage"; ++i) {
-    await sleep(1500);
-    await host.press("A");
+  if (QUEUE === "casual") {
+    // Casual's locked rules: Start goes to a random legal stage, no stage select (OnlineRules.h).
+    await host.waitScene("scMelee", 60000);
+  } else {
+    // Ranked: the stage select's strikes, ban and pick (RankedPPlus.h, BrawlStages.h). Nobody
+    // acts: every step's turn timer runs out and takes its default (game 1 about 80 s).
+    await host.waitScene("scSelStage", 60000);
+    log("ranked stage select: waiting for the turn timers' defaults");
+    await host.waitScene("scMelee", 200000);
   }
-  await host.waitScene("scMelee", 30000);
   await sleep(6000);
   // Port 2 walks off the left edge, again and again.
   joiner.pad.axes = [0, 128, 128, 128];

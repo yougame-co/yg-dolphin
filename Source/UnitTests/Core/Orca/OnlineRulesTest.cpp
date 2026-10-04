@@ -189,12 +189,27 @@ TEST(OrcaOnlineRules, ClearingGivesBackThePlayersRules)
   EXPECT_EQ(m.Read32(MENU_DATA + 0x00), 0x02000000u);
   EXPECT_EQ(m.Read32(MENU_DATA + 0x08), 0xFFFFFFFFu);
   EXPECT_EQ(m.Read32(MENU_DATA + 0x24), 0x7FFFFFFFu);
-  // The block is all zeros: nothing locks, and clearing again writes nothing.
-  for (u32 i = 0; i < MB::SIZE; ++i)
+  // The block is the dead code's first word, then zeros: nothing locks, clearing again writes
+  // nothing, and a new header may go there.
+  EXPECT_EQ(m.Read32(MB::BASE), 0x3A200000u);
+  for (u32 i = 4; i < MB::FULL_SIZE; ++i)
     ASSERT_EQ(m.Read8(MB::BASE + i), 0) << i;
   EXPECT_EQ(ApplyLocks(m, NextFrame()), 0);
   m.writes = 0;
   EXPECT_EQ(WriteHeader(m, Mode::None, Ruleset::Brawl), 0);
+  EXPECT_EQ(m.writes, 0);
+  EXPECT_GT(WriteHeader(m, Mode::Casual, Ruleset::Brawl), 0);
+  EXPECT_TRUE(ReadHeader(m).Locked());
+}
+
+TEST(OrcaOnlineRules, NoHeaderBeforeTheGameLoadsTheModule)
+{
+  // Before sora_scene is loaded the block's memory is something else's (zeros at boot).
+  FakeMemory m = Game("scSelctCharacter");
+  for (u32 i = 0; i < MB::FULL_SIZE; ++i)
+    m.Write8(MB::BASE + i, 0);
+  m.writes = 0;
+  EXPECT_EQ(WriteHeader(m, Mode::Ranked, Ruleset::Brawl, 1, 7), 0);
   EXPECT_EQ(m.writes, 0);
 }
 

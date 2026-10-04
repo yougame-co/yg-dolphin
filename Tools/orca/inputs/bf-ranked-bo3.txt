@@ -3,8 +3,10 @@
 # Stadium, which the flow selects on the Melee page; port 2 walks off; game 2's ban times out (33 s)
 # and port 2, the loser, picks Battlefield with A; port 2 walks off again (2-0).
 # Both ports always send the same menu inputs: only the turn's port acts (the input gate).
-# Run with ORCA_TEST_RANKED=brawl (or a ranked Brawl match block header), e.g. the sync test:
-#   ORCA_SESSION=1 ORCA_TEST_RANKED=brawl YG_INPUT=<this> YG_SYNCTEST=7 YG_SYNCTEST_FROM=1700 \
+# Run with ORCA_TEST_QUEUE=ranked (a ranked header as a queue room's host writes it), e.g. the sync
+# test (ranked-sprint: game 1's third step is the first striker's pick, which times out here):
+#   ORCA_SESSION=1 ORCA_TEST_QUEUE=ranked ORCA_TEST_SET_RULES=1,8 ORCA_UX_TEST_NAMES=ada,bo \
+#   YG_INPUT=<this> YG_SYNCTEST=7 YG_SYNCTEST_FROM=1700 \
 #   YG_EXIT_AFTER=6700 YG_RESULTS=1 dolphin-emu-nogui -p headless -v Null -e <disc>
 # The checked run also made the matches 1-stock with an ORCA_UX_PROBE file of two lines, written
 # before the sync test's window: `@scSelctCharacter:1 20 write 9017f362 0103` and

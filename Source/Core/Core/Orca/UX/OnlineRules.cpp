@@ -385,6 +385,9 @@ int WriteHeader(GuestMemory& m, Mode mode, Ruleset ruleset, u8 coin, u32 room)
     w.Zero(B::BASE, B::SIZE);
     // The character order and the ranked set past the 512 bytes too.
     w.Zero(B::CHAR_ORDER, B::FULL_SIZE - (B::CHAR_ORDER - B::BASE));
+    // The dead code's first word back: the block is sora_scene's again, and a new header may go
+    // there (never into memory the module hasn't loaded yet, whose first word is something else).
+    w.U32(B::MAGIC, FreeSpace::kMatchBlockOriginalWord);
     return w.changed;
   }
   coin &= 1;
@@ -393,6 +396,10 @@ int WriteHeader(GuestMemory& m, Mode mode, Ruleset ruleset, u8 coin, u32 room)
   {
     return 0;
   }
+  // Only over sora_scene's dead code (its first word; a cleared block puts it back) or a header:
+  // before the game loads the module this memory is something else's.
+  if (!now.present && m.Read32(B::MAGIC) != FreeSpace::kMatchBlockOriginalWord)
+    return 0;
   if (!now.present)
   {
     // From the game's dead code (or a cleared block): all zeros, then the player's own rules.

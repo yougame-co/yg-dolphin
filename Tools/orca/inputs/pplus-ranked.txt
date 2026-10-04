@@ -1,5 +1,5 @@
 # Project+ ranked set under the harness (ORCA.md "Ranked stage flow"): ORCA_PROFILE=PPLUS32,
-# ORCA_TEST_RANKED=1 (game 1's first striker is port 2), ORCA_UX_TEST_NAMES=ada,bo (ports 1 and 2
+# ORCA_TEST_QUEUE=ranked:1 (game 1's first striker is port 2), ORCA_UX_TEST_NAMES=ada,bo (ports 1 and 2
 # plugged in). No probe: every strike and pick is the game's own, through the cursor or a timer.
 # The stage select's cursor starts on Random; one short push up puts it on Battlefield, another on
 # Bowser's Castle (the 2024 Proposed preset's page 0).

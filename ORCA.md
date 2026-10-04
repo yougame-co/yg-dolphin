@@ -1980,7 +1980,8 @@ room (`host <code>`) asks for its queue's mode; any room of its own again (`Reop
 pairing, a set, a leave) asks for none. It is written at the next frame boundary where the game
 plays alone (no friend plugged in or on the way), so never in a frame anyone else replays: the
 joiner gets it with the host's keyframe. A new or different header starts a fresh set; none
-clears the block. `ORCA_TEST_MATCH_BLOCK=ranked|casual` (tests only, no real room) asks for a
+clears the block. `ORCA_TEST_MATCH_BLOCK=ranked|casual` (tests only, no real room; since the ranked-sprint
+integration, `ORCA_TEST_QUEUE=ranked|casual`, see "Ranked sprint integration") asks for a
 header at boot.
 
 ### Following a set
@@ -2109,7 +2110,8 @@ machine and block on its own track.
     with A · 0:09".
 - **Compatibility:** `UX::kCompatVersion` 8.
 
-**Test knob** `ORCA_TEST_RANKED=<0|1>` (a test override): a ranked header from the first frame for
+**Test knob** `ORCA_TEST_RANKED=<0|1>` (since the ranked-sprint integration
+`ORCA_TEST_QUEUE=ranked:<0|1>`; a test override): a ranked header from the first frame for
 the running game, game 1's first striker port 1 (0) or 2 (1), written on every pass. Set the same
 value in both processes. With `ORCA_UX_TEST_NAMES=ada,bo` the harness plugs in ports 1 and 2.
 
@@ -2144,7 +2146,8 @@ own flow. Casual and friends games are untouched.
 
 - **Game 1:** characters first, as the beta picks them. On the stage select the five starters
   (Battlefield, Pokemon Stadium on the Melee page, Lylat Cruise, Smashville, Yoshi's Island) are
-  struck 1-2-1 with X, the first striker a fair coin from the game's own RNG seed (`0x805A00BC`,
+  struck 1-2-1 with X (since the ranked-sprint integration: 1-2, then the first striker picks of
+  the last two with A, and the coin is the header's), the first striker a fair coin from the game's own RNG seed (`0x805A00BC`,
   through murmur3's finalizer: the same on both machines, nobody's port). The last starter is the
   stage, and the flow selects it.
 - **Later games:** the previous game's winner may ban one of the seven legal stages (X) or skip
@@ -2299,6 +2302,58 @@ same step changes as the plain runs, 0 RAM mismatches:
   the stage select at 2013): 5,201 re-run frames.
 In every run the masked presses (the off-turn port's, B and Start) did nothing. `OrcaCharOrder*`
 (18 tests) and every `Orca*` unit test pass.
+
+## Ranked sprint integration
+
+Branch `ranked-sprint`: `sp-casual` (Online rules), `sp-results` (Ranked sets), `sp-pplus-sss` (Ranked
+stage flow), `sp-brawl-sss` (Ranked stages (Brawl)) and `sp-char-order` (Character order) on
+`ranked-spec`, made into one. The sections above describe each track as built; where they differ,
+this section wins.
+
+**One header writer.** `OnlineRules::WriteHeader`, at an alone boundary only, is the only code that
+writes the match block's header (`MatchBlock.h`): magic, version, mode, ruleset, **coin** (+0x07:
+game 1's first striker, one bit of the FNV-1a hash of the room code, the same in both games and on
+both machines; the server makes the code, neither player picks it) and the **room's hash** (+0x08).
+It writes only over sora_scene's dead code (its first word) or a header, never into memory the game
+hasn't loaded the module into yet; a clear puts the dead code's first word back. Any new header
+(from none, or another mode, ruleset, coin or room) starts every track's state fresh: the Project+
+flow's `MatchBlock::State` (its "none" ports), `SetBlock`'s set and the character order. The tracks'
+own writers (`RankedPPlus::RequestHeader/ApplyHeader`, `RankedSet::SetRoomMode/ApplyRoomMode`) are
+gone, and so are their knobs (`ORCA_TEST_RANKED`, `ORCA_TEST_MATCH_BLOCK`): **`ORCA_TEST_QUEUE=casual`,
+`ranked` or `ranked:1`** (port 2 strikes first) turns on either game's flows in a harness run.
+
+**The block, by offset from `0x806F2380`:** +0x00 header; +0x10..+0x8F Project+'s flow
+(`MatchBlock::State`); +0x80..+0xBF Brawl's flow (`BrawlStages`, its own game); +0xC0..+0xCF Phase
+1 (the ready timer: `CSS_TIMER`, `CSS_NO_SHOW`, `FOUGHT`, `PLUGGED`, `CSS_TIMER_START`);
++0xD0..+0x1F0 the player's saved rules; +0x200..+0x20F the character order; +0x210..+0x28F the
+ranked set (`SetBlock`, authoritative: the room hears it, Brawl's flow and the character order
+read it).
+
+**One step machine.** `RankedSteps.{h,cpp}` (namespace `Ranked`) is the only one. Brawl's flow now
+runs on `Ranked::Brawl2025` through its `Progress` driver (`Begin`, `Strike`, `Skip`, `Pick`, `Tick`,
+`AutoPick`): game 1 is strike 1, strike 2, then the first striker picks one of the last two with A
+(the same as Project+); later games the winner may ban 1 (X, or Y to skip; the timer skips), then
+the loser picks with full DSR. Its coin is the header's, no longer the RNG seed's.
+
+**One input-gate source** (`UX.cpp`): the online rules' locks, Project+'s flow, Brawl's flow and the
+character order, ORed (a button or stick any rule takes is taken; presses add up).
+
+**One overlay slot**, top centre: Brawl's flow's lines, else Project+'s, else the set's score
+(`RankedSet`); under it the turn, else the character order's line.
+
+**Rules that changed in the merge:**
+- The ranked ready timer counts from a start frame (`CSS_TIMER_START`), not by adding one per
+  boundary, so a boundary run again after a load computes the same.
+- Ranked Brawl's stocks and time are `RankedSet`'s (3 and 8:00; 1 and 3:00 in a tiebreak game); the
+  locks no longer overwrite them every boundary.
+- Meta Knight is `0x18` in gmCharacterKind (BrawlHeaders `gm_lib.h`), in the set's ledge limit as in
+  the stage flows; `0x16` there is Ganondorf.
+- The character order reads the set at `SetBlock`'s offsets (+0x211, +0x213, +0x215).
+
+**Known gaps:** Project+'s flow still counts its own score from the results screens of the fights it
+started (it agrees with `SetBlock` for Project+: both take the results screen's winner, and a tie
+counts for neither). Brawl's exact Supernova order (ban, the loser's stage, then characters) is not
+built: Brawl's later games are characters (both at once, 45 s), then the ban, then the pick.
 
 ## Embedding
 

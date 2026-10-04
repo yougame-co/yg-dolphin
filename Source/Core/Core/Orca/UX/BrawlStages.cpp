@@ -740,9 +740,24 @@ void FrameHook(const Core::CPUThreadGuard& guard, bool resimulating,
   if (!VanillaBrawl())
     return;
   GuardMemory memory(guard);
+  const std::optional<State> before = resimulating ? std::nullopt : ReadState(memory);
   Frame(memory);
   if (!resimulating)
   {
+    // The flow's changes, first runs only (a re-run repeats them).
+    const std::optional<State> after = ReadState(memory);
+    if (after && (!before || before->phase != after->phase ||
+                  before->progress.step != after->progress.step ||
+                  before->progress.struck != after->progress.struck ||
+                  before->progress.picked != after->progress.picked))
+    {
+      NOTICE_LOG_FMT(ROLLBACK,
+                     "Brawl ranked stages: game {} phase {} step {} struck {:03x} picked {} coin {} "
+                     "score {}-{}",
+                     after->set.game, static_cast<int>(after->phase), after->progress.step,
+                     after->progress.struck, after->progress.picked, after->coin, after->score[0],
+                     after->score[1]);
+    }
     auto [line, note] = Lines(memory, ports);
     SetRulesLines(std::move(line), std::move(note));
   }
