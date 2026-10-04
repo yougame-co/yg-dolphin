@@ -2161,6 +2161,11 @@ std::optional<int> Boundary(Core::System& system,
     }
   }
 
+  // A room the queue made that is over for this player: its own game back first (UX/Queue.h), so
+  // a former joiner hosts a room of its own again rather than saying "no-room", and this boundary's
+  // frame hook already reads the player's own character select.
+  MaybeRestoreQueueImage(system, match);
+
   // Only once the room it left has finished leaving: its emptied mirror is the page's last word
   // about it, and the page must not see that room again after "no-room".
   if (match.tell_no_room && !Orca::Online::RoomsLeaving())
