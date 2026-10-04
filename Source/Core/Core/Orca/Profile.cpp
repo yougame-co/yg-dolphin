@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <functional>
+#include <sstream>
 
 #include <cctype>
 
@@ -428,12 +429,34 @@ bool s_seed_session_save = true;
 std::optional<Profile> s_active_profile;
 // First-run frame boundaries since boot, for jit_clear_frame.
 u32 s_boot_frames = 0;
+// The active profile's kept_code at physical addresses (MEM1: the effective address's low 29 bits,
+// the cached and uncached mirrors alike). Set at boot, before the CPU thread runs.
+std::vector<Profile::KeptCode> s_kept_code;
 }  // namespace
 
 void SetActiveProfile(std::optional<Profile> profile)
 {
   s_active_profile = std::move(profile);
   s_boot_frames = 0;
+  s_kept_code.clear();
+  if (s_active_profile)
+  {
+    for (Profile::KeptCode kept : s_active_profile->kept_code)
+    {
+      kept.address &= 0x1FFFFFFF;
+      s_kept_code.push_back(kept);
+    }
+  }
+}
+
+u32 KeptInstruction(u32 physical_address, u32 hex)
+{
+  for (const Profile::KeptCode& kept : s_kept_code)
+  {
+    if (kept.address == physical_address && kept.loader == hex)
+      return kept.game;
+  }
+  return hex;
 }
 
 bool JitClearDue()
@@ -516,7 +539,13 @@ bool SeedSessionSave()
 std::optional<Profile> LoadProfile(const std::string& game_id, std::optional<u16> revision,
                                    std::string* error)
 {
-  const std::string path = File::GetSysDirectory() + "Orca/" + game_id + ".ini";
+  return LoadProfileFrom(File::GetSysDirectory(), game_id, revision, error);
+}
+
+std::optional<Profile> LoadProfileFrom(const std::string& sys_directory, const std::string& game_id,
+                                       std::optional<u16> revision, std::string* error)
+{
+  const std::string path = sys_directory + "Orca/" + game_id + ".ini";
   // Through OpenFStream: the path is UTF-8, which std::ifstream would read as the ANSI code page on
   // Windows (an install path with any non-ASCII character would find no profile).
   std::ifstream in;
@@ -597,6 +626,30 @@ std::optional<Profile> LoadProfile(const std::string& game_id, std::optional<u16
       if (!value.starts_with("0x") || !TryParse(value.substr(2), &title, 16))
         return fail("SaveTitle must be a hex title ID (0x...)");
       profile.save_title = title;
+    }
+    else if (section == "Profile" && key == "KeepGameCode")
+    {
+      // <address> <the game's word> <the loader's word>, hex.
+      std::istringstream words(value);
+      std::string address, game, loader, extra;
+      Profile::KeptCode kept;
+      if (!(words >> address >> game >> loader) || (words >> extra) ||
+          !ParseNumber(address, &kept.address) || !ParseNumber(game, &kept.game) ||
+          !ParseNumber(loader, &kept.loader))
+      {
+        return fail("KeepGameCode must be <address> <game's word> <loader's word>");
+      }
+      if (kept.address < 0x80000000 || kept.address > 0x817FFFFC || kept.address % 4 != 0)
+        return fail("KeepGameCode's address must be a word in MEM1 (0x80000000-0x817FFFFC)");
+      if (kept.game == kept.loader)
+        return fail("KeepGameCode's two words are the same");
+      if (std::ranges::any_of(profile.kept_code, [&](const Profile::KeptCode& k) {
+            return k.address == kept.address;
+          }))
+      {
+        return fail(fmt::format("KeepGameCode {:#010x} twice", kept.address));
+      }
+      profile.kept_code.push_back(kept);
     }
     else if (section == "Profile")
     {

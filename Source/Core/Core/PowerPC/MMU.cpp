@@ -50,6 +50,7 @@
 #include "Core/HW/MMIO.h"
 #include "Core/HW/Memmap.h"
 #include "Core/HW/ProcessorInterface.h"
+#include "Core/Orca/Profile.h"
 #include "Core/PowerPC/GDBStub.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/PowerPC.h"
@@ -558,6 +559,9 @@ TryReadInstResult MMU::TryReadInstruction(u32 address)
   {
     hex = m_ppc_state.iCache.ReadInstruction(m_memory, m_ppc_state, address);
   }
+  // Orca: game code a loader rewrote that the session keeps running as the game's own (Profile.h
+  // kept_code). Every core fetches through here: the JITs' compiles and the interpreters.
+  hex = Orca::KeptInstruction(address, hex);
   return TryReadInstResult{true, from_bat, hex, address};
 }
 

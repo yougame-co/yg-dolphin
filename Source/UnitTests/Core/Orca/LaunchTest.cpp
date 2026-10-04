@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <system_error>
+#include <vector>
 
 #ifndef _WIN32
 #include <unistd.h>
@@ -153,4 +155,39 @@ TEST(OrcaLaunch, JitClearOnceABoot)
     EXPECT_FALSE(Orca::JitClearDue()) << frame;
   Orca::SetActiveProfile(std::nullopt);
   EXPECT_FALSE(Orca::JitClearDue());
+}
+
+// Profile.h kept_code: a fetch sees the game's word only while memory holds the loader's, at the
+// physical address (either MEM1 mirror); nothing without an active profile that keeps code.
+TEST(OrcaLaunch, KeptGameCode)
+{
+  Orca::Profile profile;
+  profile.kept_code = {{0x80023B88, 0x4182FF7C, 0x60000000}};
+  Orca::SetActiveProfile(profile);
+  EXPECT_EQ(Orca::KeptInstruction(0x00023B88, 0x60000000), 0x4182FF7Cu);
+  EXPECT_EQ(Orca::KeptInstruction(0x00023B88, 0x4182FF7C), 0x4182FF7Cu);
+  EXPECT_EQ(Orca::KeptInstruction(0x00023B88, 0x38600000), 0x38600000u);  // something else
+  EXPECT_EQ(Orca::KeptInstruction(0x00023B8C, 0x60000000), 0x60000000u);
+  Orca::SetActiveProfile(std::nullopt);
+  EXPECT_EQ(Orca::KeptInstruction(0x00023B88, 0x60000000), 0x60000000u);
+}
+
+// PPLUS32.ini keeps Brawl's own words where Project+'s codes rewrite its code in frame 1 (ORCA.md
+// "Code the JIT doesn't see"), and still clears the JIT once after they land.
+TEST(OrcaLaunch, ProjectPlusKeepsBrawlsCode)
+{
+  const std::string sys =
+      (std::filesystem::path(__FILE__).parent_path() / "../../../../Data/Sys/").string();
+  std::string error;
+  const std::optional<Orca::Profile> profile =
+      Orca::LoadProfileFrom(sys, "PPLUS32", std::nullopt, &error);
+  ASSERT_TRUE(profile) << error;
+  const std::vector<Orca::Profile::KeptCode> expected = {
+      {0x80023B88, 0x4182FF7C, 0x60000000}, {0x80024028, 0x4E800020, 0x481C4904},
+      {0x8001CD24, 0x38631198, 0x806311A0}, {0x8001CD2C, 0x80630008, 0x38630006},
+      {0x800266B8, 0x38672CAC, 0x38672CB2}, {0x8018CFC4, 0x2C000000, 0x28000030},
+      {0x8018CFC8, 0x41820034, 0x41800034},
+  };
+  EXPECT_EQ(profile->kept_code, expected);
+  EXPECT_EQ(profile->jit_clear_frame, 2u);
 }

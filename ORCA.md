@@ -1454,9 +1454,9 @@ itself (its thread-stack guard, MSVC): the same checks on the PC are what close 
 
 ## Code the JIT doesn't see
 
-Branch `pplus-jit-clear` (on `rel-0.3.14`), 2026-10-04. The canonical-start spike found Project+'s
-RAM changing the frame after a JIT clear (Brawl's never does). Traced, and fixed for the codes that
-do it.
+Branches `pplus-jit-clear` (the prototype, on `rel-0.3.14`) and `rel-0.3.15`, 2026-10-04. The
+canonical-start spike found Project+'s RAM changing the frame after a JIT clear (Brawl's never
+does). Traced, measured both ways, and fixed by keeping what 0.3.14 ran.
 
 **The cause.** Project+'s Gecko code handler applies `NETBOOST.GCT`'s RAM writes with plain stores
 (no `dcbst`/`icbi`), and the first time it writes them (frame 1, the first frame after the frame
@@ -1492,45 +1492,104 @@ far, 0.1 of 8 MB trampolines. A flush takes dozens of matches of new content, an
 fill at different rates: rare, but a desync from the next frame when it happens, and the same for
 any future Orca feature that clears the JIT.
 
-**The fix.** `JitClearFrame = 2` in `PPLUS32.ini` (`Profile.h` `jit_clear_frame`,
-`Rollback::OnFrameBoundary`): Orca drops every JIT block once, at the end of frame 2, after the
-codes have landed. Frames count at the end of their first run: a launch joiner's boot ahead runs
-under catch-up and counts (a first version skipped catch-up frames, so a joiner kept Brawl's words
-through the keyframe and desynced 2 s into the join), a rollback's re-run doesn't. From then on
-the JIT runs what RAM holds and a clear changes nothing:
+**What 0.3.14 ran.** Brawl's frame function (`0x80023AE4`, called from the main loop at
+`0x80017420`; the frame hook at `0x80017504` ends the loop) waits for a retrace before it draws,
+in a loop (`0x80023B04`, `VIWaitForRetrace` at `0x80023B1C`) left by the `beq` at `0x80023B88`
+while no XFB slot is free. Project+'s v-sync move never loops there (`nop`) and waits at the end
+instead (`b VIWaitForRetrace` for the `blr` at `0x80024028`), so a frame is drawn and copied right
+after the game's logic. Under a warm JIT 0.3.14 kept Brawl's wait: the one block compiled after
+the codes landed (`0x80023B00`, frame 1) holds the `nop` but reaches it only with a free slot, and
+the boot's blocks run the other six words as Brawl's. Its hash logs equal those of a build that
+fetches Brawl's word at all seven addresses (below), so that is what every Orca up to 0.3.14
+played.
 
-- Census (`YG_JITCODE_CENSUS`): 7 words compiled other than RAM at frame 1, 0 in the DOL and the
-  codes from frame 3 through five matches (the rest are heap blocks of modules the game unloaded,
-  never run again).
-- `pplus-1v1.txt`, 6,000 frames: the run with clears at 388, and the run with clears at 2,000 and
-  4,500, hash as the run without, frame by frame. Five matches (24,000 frames) with clears at
-  7,000, 15,000 and 20,000: the same.
-- Synctests from frame 300 to 4,000 (`YG_SYNCTEST=7`, 25,851 re-run frames): 0 RAM mismatches,
-  and 0 with `YG_SYNCTEST_CLEARJIT=1` (the whole JIT dropped after each of 3,694 loads; 0.3.14's
-  behaviour fails that one, 28 RAM mismatches in its first 500 frames).
-- The casual queue flow (`pplus-queue2-flow.txt`, the pick at 821): its steps as 0.3.14's checks
-  list them (ready, the room's header, the pick, the stage, the fight, results, game 2's character
-  select), runs with clears at 1,000 and 2,000 hash as the run without, and its synctest from frame
-  200 to 3,200 passes (20,951 re-run frames, 0 RAM mismatches).
-- Jit64 (x86-64 under Rosetta 2): the same hashes as JitArm64, with and without clears at 388 and
-  3,000.
-- Two Orcas over a real YouGame room (dev tickets): a launch join (`ORCA_JOIN=1`, boot ahead,
-  keyframe, catch-up) on the character select, 2,586 frames alike after the keyframe and no
-  desync; `dropin-identity.py --pplus` (a join from the character select, then a match) passes,
-  1,443 frames alike, 24 checksums matched.
-- Cost: one clear during the strap screen (a few thousand blocks compiled again).
-- What changes: Project+ runs those three codes as written, the v-sync move included (Brawl's frame
-  function no longer loops back at `80023b88` and ends in a tail call to `VIWaitForRetrace`,
-  `801e892c`), from frame 3. Its RAM differs from 0.3.14's from then on (the profile file is in the
-  compatibility key), the boot reaches the main menu at frame 194 instead of 197 (frame-numbered
-  test knobs move 3 frames earlier: the queue flow's pick at 821, not 824), and the input latency
-  and pacing should be measured again before it ships.
+**Measured, 2026-10-04** (M4 Pro, 120 Hz built-in screen, 871x434 Metal window, real time, the
+latency probe on `rel-0.3.14` + the prototype: "A" with `JitClearFrame = 2`, the codes running,
+against the same binary without it, which hashes as 0.3.14 over all 9,007 frames of
+`pplus-1v1.txt`). Latency: 82 jumps each (two runs, interleaved), the image changes in the copy of
+frame press+2 in both and the RAM at press+0:
+
+| Project+ | 0.3.14 | A (codes on) |
+|---|---|---|
+| sample -> XFB copy (emulated) | 49.10 ms (2.94 fr) | 34.44 ms (2.06 fr) |
+| sample -> present call: mean, p10 / p50 / p90 / max | 48.56; 47.92 / 48.52 / 49.30 / 50.72 | 35.52; 34.81 / 35.54 / 35.99 / 39.54 |
+| sample -> on glass: mean, p10 / p50 / p90 / max | 53.15; 51.55 / 52.77 / 54.81 / 56.90 | 40.13; 38.83 / 39.63 / 43.20 / 46.15 |
+| frame's boundary -> its present call (mean) | 15.10 ms | 2.28 ms |
+
+Pacing, solo (the probe runs, about 3,800 frames each, and whole fuzzed matches, 2,340 frames
+each, two of each per side): the same. Boundary-to-boundary p99 17.2-17.8 ms both, no frame over
+25 ms in A (0.3.14 up to three); on a simulated 60 Hz screen A repeats 0.9-1.2% of refreshes and drops
+0.9-1.2% of frames, 0.3.14 1.2-1.5% and 1.1-1.4%; on the 120 Hz glass A shows 8.2-9.6% of frames
+off the two-refresh rhythm, 0.3.14 6.5-8.5%.
+
+Rollback (`YG_LOOPBACK` of a recorded fuzzed match, `YG_THROTTLE=1`, input delay 2, in the window;
+the same rollbacks on both sides), per run:
+
+| | 0.3.14 | A |
+|---|---|---|
+| remote 6-9 frames late: 270 rollbacks, 1,143 re-run frames | | |
+| boundary -> present, frames without a rollback (mean) | 13.73 / 13.78 ms | 12.30 / 12.36 ms |
+| present-call gaps over 25 ms | 17 / 15 | 42 / 27 |
+| 60 Hz screen: repeats / drops | 2.2-2.3% / 2.1-2.2% | 3.4-3.9% / 3.3-3.8% |
+| remote 3-4 frames late: 133 one-frame rollbacks | | |
+| boundary -> present (mean) | 13.79 / 13.74 ms | 9.61 / 9.68 ms |
+| present-call gaps over 20 / 25 ms | 22 / 0 (each run) | 46, 40 / 7, 6 |
+| 60 Hz screen: repeats / drops | 1.0% / 0.9% | 2.0-2.1% / 1.9-2.0% |
+| 6-9 late with a 150 ms spike every 4 s (8 stalls): 60 Hz repeats / drops, gaps over 25 ms | 4.7% / 2.3%, 28 | 6.1% / 3.7%, 51 |
+
+Why: Smooth Early Presentation (`Presenter::GetUpdatedPresentationTime`) moves its offset half the
+way toward a late frame at once and only 1% a frame back toward early ones. A's frames come about
+13 ms before their VI time, so a rollback's re-run time lands on that frame's present, the offset
+jumps, and the frames after it wait (present sleep 9.8 ms on average against 2.2): with rollbacks
+A keeps 1-4 ms of its 13 ms and its presents follow the re-runs. 0.3.14's copy waits for the
+retrace anyway, which hides a re-run.
+
+**The decision** (rule: A only with equal or lower latency and no pacing regression): A has lower
+latency everywhere, but twice the 60 Hz repeats and drops and more long present gaps whenever
+there are rollbacks, so 0.3.15 keeps 0.3.14's behaviour. The 13 ms is real for solo play and for
+online play without rollbacks; taking it online needs a presentation that doesn't let a re-run
+frame drag the others (and vanilla Brawl has the same wait, `RSBE01`).
+
+**The fix (0.3.15).** `KeepGameCode = <address> <Brawl's word> <Project+'s word>` lines in
+`PPLUS32.ini` (`Profile.h` `kept_code`, `Orca::KeptInstruction`): every instruction fetch at those
+seven addresses (`MMU::TryReadInstruction`, so both JITs' compiles and the interpreters) gets
+Brawl's word while RAM holds Project+'s, so any JIT clear compiles what ran before. RAM is
+untouched: its hashes, the codes' own reads and the compatibility of everything else are as in
+0.3.14 (a guarded game patch writing Brawl's words back would have changed RAM, and with it every
+hash). Any other word at those addresses is fetched as it is. `JitClearFrame = 2` stays from the
+prototype as a safety net: one clear at the end of frame 2 (frames count at the end of their first
+run, a launch joiner's boot ahead and catch-up included, a rollback's re-run not), so every
+machine compiles what a fetch reads from then on, whatever its boot compiled, and the kept words
+go through a compile in every boot. Checks on `rel-0.3.15`:
+
+- `pplus-1v1.txt`, 9,000 frames: hashes equal to live 0.3.14's (`notes/r314/mac-pplus.hash`),
+  frame by frame (9,006 frames compared).
+- `jit-history.py` with clears at 388 (where the v-sync move used to show), 2,000, 4,500 and
+  7,000: the same 9,013 frames as the run without. Census (`YG_JITCODE_CENSUS`, against what a
+  fetch reads): 0 words in the DOL and the codes compiled other than that, at frames 1 and 3 and
+  through the match (0.3.14: the seven, at every census); the rest are heap blocks of modules the
+  game unloaded.
+- Synctests (`YG_SYNCTEST=7` from frame 300): to 4,000, 25,851 re-run frames, 0 RAM mismatches;
+  with `YG_SYNCTEST_CLEARJIT=1` (the JIT dropped after each load) to 2,500, 15,351 re-run frames,
+  0 (0.3.14 fails that one: 28 RAM mismatches in its first 500 frames).
+- Jit64 (x86-64 under Rosetta 2): hashes equal to live 0.3.14's on a PC (`pc-pplus.hash`, which
+  equals the Mac's), and the same with clears at 388 and 4,500.
+- Unit tests: `OrcaLaunch.KeptGameCode`, `OrcaLaunch.ProjectPlusKeepsBrawlsCode`.
+
+The prototype (A) passed the same kinds of checks with the codes running (clears at 388,
+2,000+4,500 and 7,000+15,000+20,000 over five matches hash as without, on JitArm64 and Jit64;
+synctests with and without `YG_SYNCTEST_CLEARJIT`; a launch join and `dropin-identity.py --pplus`
+over a real room); it boots to the main menu at frame 194 instead of 197. Measuring again: the
+latency probe (`Tools/orca/latency-probe.py`, `lat-probe`; its P+ scripts need the
+`@muMenuMain:1 mash 30 99999 1 40 A` line `pplus-1v1.txt` has since the boot goes to the menu),
+and for A a build without the `KeepGameCode` lines.
 
 **Checking a codeset** (a Project+ update, another launcher profile): `Tools/orca/jit-history.py
 <nogui> <disc> --pplus "<dir>/Project+ Netplay Launcher.dol"` runs the boot twice (as it comes, and
 with JIT clears at `--clear` frames), compares the RAM hash logs frame by frame and lists every
-word a live block runs that RAM no longer holds (a census at the profile's own clear frame runs
-after that clear). Harness knobs (`Rollback/Harness.cpp`,
+word a live block runs that a fetch no longer reads (RAM, or the profile's kept game code; a census
+at the profile's own clear frame runs after that clear). A codeset that rewrites game code in its
+first frames shows here as words at frame 1 or 3; list them in the profile as `KeepGameCode`. Harness knobs (`Rollback/Harness.cpp`,
 `Rollback/Diag.h`): `YG_CLEARJIT_AT=<frames>` / `YG_CLEARJIT_EVERY=N` (`YG_CLEARJIT_FROM`),
 `YG_JIT_INVALIDATE=<frame>:<address>`, `YG_WATCH=<addresses>`, and `YG_JITCODE_LOG=<file>` (every
 compile that read a word other than the last compile at that address, or than RAM, with what

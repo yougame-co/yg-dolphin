@@ -26,6 +26,7 @@
 #include "Common/Swap.h"
 #include "Core/Core.h"
 #include "Core/HW/Memmap.h"
+#include "Core/Orca/Profile.h"
 #include "Core/PowerPC/JitCommon/JitCache.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/Rollback/Cow.h"
@@ -373,6 +374,16 @@ std::optional<u32> RamWord(Memory::MemoryManager& memory, u32 address)
   }
   return std::nullopt;
 }
+
+// What an instruction fetch at that address reads now: memory's word, or the active profile's kept
+// game code (Orca::KeptInstruction) while memory holds the loader's.
+std::optional<u32> FetchWord(Memory::MemoryManager& memory, u32 address)
+{
+  const std::optional<u32> ram = RamWord(memory, address);
+  if (!ram)
+    return std::nullopt;
+  return Orca::KeptInstruction(address & 0x3FFFFFFF, *ram);
+}
 }  // namespace
 
 const bool g_jit_code_log = s_jit_code_file != nullptr;
@@ -391,7 +402,7 @@ void JitCodeCompiled(u32 block_start, const std::vector<std::pair<u32, u32>>& wo
   auto& memory = Core::System::GetInstance().GetMemory();
   for (const auto& [address, word] : words)
   {
-    const std::optional<u32> in_ram = RamWord(memory, address);
+    const std::optional<u32> in_ram = FetchWord(memory, address);
     if (!in_ram)
       continue;
     const u32 ram = *in_ram;
@@ -431,7 +442,7 @@ void JitCodeCensus(const Core::CPUThreadGuard& guard, const char* why)
       return;
     for (const auto& [address, word] : it->second)
     {
-      if (const std::optional<u32> ram = RamWord(memory, address); ram && *ram != word)
+      if (const std::optional<u32> ram = FetchWord(memory, address); ram && *ram != word)
         stale[address] = {word, *ram};
     }
   });

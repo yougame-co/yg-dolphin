@@ -53,8 +53,25 @@ struct Profile
   // whole-cache clear (its code space filling, at a different moment on each machine) makes it run
   // the new code, and the machines desync. Orca drops every JIT block once at the end of this frame
   // (the first frame boundary the hook takes ends frame 0), after the codes have landed, so every
-  // machine runs them from then on and a later clear changes nothing. Unset: no clear.
+  // machine compiles what an instruction fetch reads from then on (memory, or `kept_code`) and a
+  // later clear changes nothing. Unset: no clear.
   std::optional<u32> jit_clear_frame;
+  // Game code a loader's codes rewrite that Orca keeps running as the game's own (KeepGameCode
+  // lines): every instruction fetch at `address` (MMU::TryReadInstruction: the JITs' compiles and
+  // the interpreters) gets `game` while memory there holds `loader`. Project+'s codes rewrite seven
+  // words of Brawl's code in its first frame into functions the boot already compiled, and a warm
+  // JIT ran Brawl's words there for the whole process: what every Orca up to 0.3.14 played. Kept, a
+  // JIT clear compiles those same words again, whenever it comes. Memory keeps the loader's words
+  // (RAM, its hashes and the codes' own reads are as before); any other word there (another module
+  // loaded at that address) is fetched as it is.
+  struct KeptCode
+  {
+    u32 address = 0;  // effective, in MEM1 as the game runs it (0x80000000-0x817FFFFC)
+    u32 game = 0;
+    u32 loader = 0;
+    bool operator==(const KeptCode&) const = default;
+  };
+  std::vector<KeptCode> kept_code;
   // Game-specific additions to the universal settings, as <System>.<Section>.<Key> = <Value>.
   std::vector<std::pair<Config::Location, std::string>> forced;
 
@@ -198,6 +215,9 @@ bool TestOverridesActive();
 // line is malformed. Without a revision (a launcher boot) the caller checks the disc itself.
 std::optional<Profile> LoadProfile(const std::string& game_id, std::optional<u16> revision,
                                    std::string* error);
+// The same from another Sys folder (with its trailing slash; tests read the source tree's).
+std::optional<Profile> LoadProfileFrom(const std::string& sys_directory, const std::string& game_id,
+                                       std::optional<u16> revision, std::string* error);
 
 // ORCA_PROFILE: the launcher profile a session that boots an executable uses (empty when unset).
 std::string LauncherProfileName();
@@ -223,6 +243,10 @@ const Profile* ActiveProfile();
 // drop-in's catch-up frames are first runs, a rollback's re-runs are not): true exactly once a
 // boot, at the end of the active profile's jit_clear_frame.
 bool JitClearDue();
+// What an instruction fetch at a physical address sees, given the word `hex` memory holds there:
+// the game's word of the active profile's kept_code while memory holds the loader's, else `hex`.
+// A pure function of memory (the same on every machine, first runs and re-runs).
+u32 KeptInstruction(u32 physical_address, u32 hex);
 
 // A config layer forcing the universal session settings plus the profile's (the Netplay layer type:
 // Orca does not run Dolphin's own netplay, and refuses to start a session while it does).
