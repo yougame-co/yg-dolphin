@@ -377,6 +377,11 @@ std::string TestQueueSpec()
   return SessionActive() ? GetEnv("ORCA_TEST_QUEUE") : std::string();
 }
 
+std::string TestQueuePickSpec()
+{
+  return SessionActive() ? GetEnv("ORCA_TEST_QUEUE_PICK") : std::string();
+}
+
 std::string TestCharOrderSpec()
 {
   return SessionActive() ? GetEnv("ORCA_TEST_CHAR_ORDER") : std::string();
@@ -403,7 +408,7 @@ bool TestOverridesActive()
   return TestPads() != 0 || TestSkipRender() || TestNetDelayMs().has_value() ||
          TestSnapshotEvery() != 0 || TestFullSnapshots() || TestNoAfp() ||
          TestCpuCore().has_value() || !TestGateSpec().empty() || !TestQueueSpec().empty() ||
-         !TestCharOrderSpec().empty();
+         !TestCharOrderSpec().empty() || !TestQueuePickSpec().empty();
 }
 
 const Sram* SessionSram()

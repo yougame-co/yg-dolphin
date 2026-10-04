@@ -49,8 +49,17 @@ struct Mask
   // timer ran out: the ranked stage flow's default pick). Applied after the mask; A, B, L and R
   // also read fully pressed.
   u16 press = 0;
+  // The main stick held where a rule puts it, whatever the player does (the queue's character
+  // select steering a joiner's hand to the pick it made in its own game, UX/Queue.h). Applied after
+  // the mask.
+  bool steer = false;
+  u8 steer_x = GCPadStatus::MAIN_STICK_CENTER_X;
+  u8 steer_y = GCPadStatus::MAIN_STICK_CENTER_Y;
 
-  bool Empty() const { return buttons == 0 && !main_stick && !c_stick && press == 0; }
+  bool Empty() const
+  {
+    return buttons == 0 && !main_stick && !c_stick && press == 0 && !steer;
+  }
   bool operator==(const Mask&) const = default;
 };
 // Everything: the port reads as a connected pad with nothing pressed.
@@ -76,8 +85,22 @@ GCPadStatus Apply(const GCPadStatus& pad, const Mask& mask);
 using Source = std::function<Masks(const Core::CPUThreadGuard& guard)>;
 void SetSource(Source source);
 
+// The rules' raw view of the pads: called at every boundary right after the masks are decided,
+// with the raw pads of the frame about to run (Rollback::RawInputOverride: the session's, the
+// harness's), so a rule can see a press the gate keeps from the game (the queue's Start, B and Z,
+// UX/Queue.h). Unlike the source it may write emulated memory, and only as a pure function of that
+// memory and those pads: it runs after this boundary's snapshot or keyframe was saved or loaded, so
+// no snapshot holds its write, and every pass over the boundary (a first run, a rollback's or a
+// sync test's re-run, a joiner's first frame after a keyframe) writes it again from the state it
+// starts from and the same pads, before the frame runs. What it wrote is then the game's memory for
+// the next boundary's frame hook, saved in that boundary's snapshot like the rest. One latch;
+// setting it again replaces it, an empty function clears it. Any thread.
+using Latch = std::function<void(const Core::CPUThreadGuard& guard,
+                                 const std::array<std::optional<GCPadStatus>, PORTS>& raw)>;
+void SetLatch(Latch latch);
+
 // Rollback::OnFrameBoundary, last, before the SI relatch: the masks for the frame about to run
-// (the source's, with ORCA_TEST_GATE's added in a test run).
+// (the source's, with ORCA_TEST_GATE's added in a test run), then the latch.
 void OnBoundary(const Core::CPUThreadGuard& guard);
 // No masks (a boundary where the game isn't running yet). CPU thread.
 void Clear();

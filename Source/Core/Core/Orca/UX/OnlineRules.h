@@ -53,7 +53,12 @@ struct Header
   bool present = false;  // the magic and this version
   Mode mode = Mode::None;
   Ruleset ruleset = Ruleset::None;
+  u8 flags = 0;  // MatchBlock::FLAG_SOLO, FLAG_QUEUE2 (Queue.h)
   bool Locked() const { return present && mode != Mode::None && ruleset != Ruleset::None; }
+  // The queue's own character select before a match (Queue.h): no room of the queue's yet.
+  bool Solo() const { return Locked() && (flags & MatchBlock::FLAG_SOLO) != 0; }
+  // The Slippi-style character select (Queue.h): its ready flags and timer, solo or in the room.
+  bool Queue2() const { return Locked() && (flags & MatchBlock::FLAG_QUEUE2) != 0; }
   bool operator==(const Header&) const = default;
 };
 Header ReadHeader(const GuestMemory& memory);
@@ -63,11 +68,12 @@ Ruleset ProfileRuleset();
 
 // ---- The header, at an alone boundary ----
 // Writes the header for `mode` (None: clears it, and gives back the rules saved when it was
-// written), with game 1's first striker `coin` (0 or 1) and the room code's hash `room`. Entering a
-// mode from none saves the player's own rules first; any new header (from none, or another mode,
-// ruleset, coin or room) starts every track's set state fresh. Returns the bytes changed (0: it
-// already said so).
-int WriteHeader(GuestMemory& memory, Mode mode, Ruleset ruleset, u8 coin = 0, u32 room = 0);
+// written), with game 1's first striker `coin` (0 or 1), the room code's hash `room` and the queue's
+// `flags` (MatchBlock::FLAG_*). Entering a mode from none saves the player's own rules first; any
+// new header (from none, or another mode, ruleset, coin, room or flags) starts every track's set
+// state fresh. Returns the bytes changed (0: it already said so).
+int WriteHeader(GuestMemory& memory, Mode mode, Ruleset ruleset, u8 coin = 0, u32 room = 0,
+                u8 flags = 0);
 
 // ---- The locks, at every boundary ----
 // `frame`: the frame hook's (the ranked ready timer counts from it). Returns the bytes changed (0
@@ -146,9 +152,12 @@ constexpr int CSS_READY_FRAMES = 60 * 60;
 
 // ---- The session's side (Rollback/OnlineMatch.cpp, CPU thread) ----
 // The mode this machine's room calls for, set at every boundary before the frame hook: a queue
-// room's while this machine hosts it (or waits in a ranked one for the set's verdict), else none.
-void SetWanted(Mode mode);
+// room's while this machine hosts it (or waits in a ranked one for the set's verdict), the queue's
+// own character select's (FLAG_SOLO, with the app's `queue2`) while its player waits there for a
+// match, else none. `flags`: MatchBlock::FLAG_*.
+void SetWanted(Mode mode, u8 flags = 0);
 Mode Wanted();
+u8 WantedFlags();
 // Whether the last alone boundary left the header as Wanted() says (a keyframe for a queue room's
 // opponent waits for it).
 bool HeaderSettled();
@@ -169,13 +178,16 @@ std::optional<int> ConfirmNoShow(int confirmed);
 // tags are).
 void OnFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, bool alone,
              u8 plugged);
-// Test knob ORCA_TEST_QUEUE=casual|ranked[:<coin 0|1>] (a test override): the header a queue
-// room's host writes, in a harness run or a dev game's room, as if this game hosted such a room;
-// the coin is game 1's first striker (port 1 by default).
+// Test knob ORCA_TEST_QUEUE=casual|ranked[:<coin 0|1>][:q2|:solo] (a test override): the header a
+// queue room's host writes, in a harness run or a dev game's room, as if this game hosted such a
+// room; the coin is game 1's first striker (port 1 by default). `q2`: the Slippi-style character
+// select (Queue.h, FLAG_QUEUE2); `solo`: the queue's own character select before a match
+// (FLAG_SOLO | FLAG_QUEUE2).
 struct TestQueue
 {
   Mode mode = Mode::None;
   u8 coin = 0;
+  u8 flags = 0;
   bool operator==(const TestQueue&) const = default;
 };
 std::optional<TestQueue> ParseTestQueue(const std::string& spec);

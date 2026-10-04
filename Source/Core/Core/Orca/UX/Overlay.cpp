@@ -320,6 +320,9 @@ Common::EventHook s_state_hook;  // the core's pause and resume, for the frame m
 std::atomic<bool> s_visible{true};  // the app shows the game (embed hide/show)
 std::mutex s_rule_line_lock;
 std::string s_rule_line;  // SetRuleLine's
+std::mutex s_queue_lock;
+std::string s_queue_line, s_queue_note;  // SetQueueLines'
+std::array<std::string, 4> s_queue_labels;
 // ORCA_UX_OVERLAY_DEMO=1 (design checks only): a made-up friend whose link cycles good, ok, bad
 // with a stall, every 12 s, in place of the session's stats.
 bool s_demo = false;
@@ -430,8 +433,21 @@ void Draw()
   s_overlay.Update(s_demo ? DemoLink(now) : ViewOf(Events::GetLinkStats()), now);
   const OverlayModel::Frame f = s_overlay.View(now, s_stats.load(std::memory_order_relaxed),
                                                s_perf.load(std::memory_order_relaxed));
-  // The matchmaking search (UX/OnlineMenu.h), while the player waits on the character select.
-  const auto [search, search_note] = Search::Lines();
+  // The matchmaking search (UX/OnlineMenu.h), while the player waits on the character select; the
+  // queue's character select's lines (UX/Queue.h) in their place when it has any.
+  auto [search, search_note] = Search::Lines();
+  std::array<std::string, 4> labels;
+  {
+    std::lock_guard lk(s_queue_lock);
+    if (!s_queue_line.empty() || !s_queue_note.empty())
+    {
+      search = s_queue_line;
+      search_note = s_queue_note;
+    }
+    labels = s_queue_labels;
+  }
+  const bool any_label =
+      std::any_of(labels.begin(), labels.end(), [](const std::string& l) { return !l.empty(); });
   // A ranked set's lines, top centre: the stage flow's (Brawl's through SetRulesLines, Project+'s
   // RankedPPlus::CurrentLines), else the set's score on the menus (UX/RankedSet.h); under it the
   // turn (the stage flow's, else the character order's).
@@ -456,7 +472,8 @@ void Draw()
   if (rules_note.empty())
     rules_note = rule_line;
   if (!f.show_signal && f.waiting.empty() && f.toasts.empty() && f.stats.empty() &&
-      f.perf.empty() && search.empty() && rules.empty() && rules_note.empty())
+      f.perf.empty() && search.empty() && search_note.empty() && rules.empty() &&
+      rules_note.empty() && !any_label)
   {
     return;
   }
@@ -512,6 +529,20 @@ void Draw()
   {
     OutlinedText(dl, text_size, ImVec2(margin, y), t.alpha, t.text);
     y += TextSize(text_size, t.text).y + unit;
+  }
+  if (any_label)
+  {
+    // Each player's name over their panel at the bottom of the character select: four panels
+    // across the width, their tops at about 62% of the height in both games.
+    const float size = 3.2f * unit;
+    for (int port = 0; port < 4; ++port)
+    {
+      if (labels[port].empty())
+        continue;
+      const ImVec2 s = TextSize(size, labels[port]);
+      const float centre = screen.x * (0.125f + 0.25f * static_cast<float>(port));
+      OutlinedText(dl, size, ImVec2(centre - s.x / 2, screen.y * 0.585f), 1, labels[port]);
+    }
   }
   if (!search.empty())
   {
@@ -579,6 +610,14 @@ void FrameBoundary(bool shown)
 void ShowToast(std::string text)
 {
   s_overlay.AddToast(std::move(text), NowMs());
+}
+
+void SetQueueLines(std::string line, std::string note, std::array<std::string, 4> labels)
+{
+  std::lock_guard lk(s_queue_lock);
+  s_queue_line = std::move(line);
+  s_queue_note = std::move(note);
+  s_queue_labels = std::move(labels);
 }
 
 void SetRuleLine(std::string text)

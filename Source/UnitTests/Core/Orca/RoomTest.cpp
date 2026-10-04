@@ -173,8 +173,22 @@ TEST(OrcaRoom, PortValuesRoundTrip)
   EXPECT_TRUE(got[0].controls.empty());
   EXPECT_TRUE(got[1].controls.empty());
   EXPECT_EQ(got[2].controls, (std::vector<u8>{0x0a, 0x0b}));
-  // Five elements, a bad seat: skipped.
-  EXPECT_TRUE(read(R"({"nm":[[1,5,"ada","00",1],[9,5,"x"]]})").empty());
+  // Six elements, a bad seat: skipped.
+  EXPECT_TRUE(read(R"({"nm":[[1,5,"ada","00","01",1],[9,5,"x"]]})").empty());
+  // A queue identity (UX/Queue.h) is the fifth, after the controls (empty when none); one past
+  // MAX_QUEUE bytes, or not hex, is none.
+  const std::vector<u8> queue{1, 0x05, 0xFC, 0x10, 2, 0, 0, 0, 0, 0x41, 0x20, 0, 0};
+  const std::vector<KeyframeInfo::Name> with_queue{{1, 40, "bo", {}, queue},
+                                                   {1, 41, "bo", controls, queue}};
+  picojson::object qm;
+  qm["nm"] = NamesToJson(with_queue);
+  const std::string qtext = picojson::value(qm).serialize();
+  EXPECT_NE(qtext.find("[1,40,\"bo\",\"\",\"0105fc"), std::string::npos) << qtext;
+  EXPECT_EQ(read(qtext), with_queue);
+  const std::string long_queue(2 * (MAX_QUEUE + 1), 'b');
+  got = read(R"({"nm":[[1,5,"ada","",")" + long_queue + R"("]]})");
+  ASSERT_EQ(got.size(), 1u);
+  EXPECT_TRUE(got[0].queue.empty());
 
   // The players' acknowledgement of the newest values (Packet::values_ack).
   Packet packet = Sample();

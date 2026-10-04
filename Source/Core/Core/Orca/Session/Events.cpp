@@ -22,6 +22,7 @@ BoundaryCallback s_boundary;
 std::atomic<int> s_ux_compat{0};
 std::atomic<u64> s_resyncs{0};
 std::vector<u8> s_own_controls;
+std::vector<u8> s_own_queue;
 }  // namespace
 
 void SetOwnControls(std::vector<u8> controls)
@@ -34,6 +35,18 @@ std::vector<u8> OwnControls()
 {
   std::lock_guard lk(s_lock);
   return s_own_controls;
+}
+
+void SetOwnQueue(std::vector<u8> queue)
+{
+  std::lock_guard lk(s_lock);
+  s_own_queue = std::move(queue);
+}
+
+std::vector<u8> OwnQueue()
+{
+  std::lock_guard lk(s_lock);
+  return s_own_queue;
 }
 
 void SetPlugInCallback(PlugInCallback callback)
