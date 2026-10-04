@@ -38,7 +38,7 @@ class CPUThreadGuard;
 //   the costume (the input gate's synthesized stick and presses), and from then on game 1's
 //   characters are locked (no token pickup, no costume change).
 // - **The ready timer** (30 s): Start readies a player, B un-readies; both ready, Orca presses Start
-//   for port 1 and the game goes on (casual: the random legal stage; ranked: the stage select).
+//   for port 1 and the game goes on to the stage select (casual's two-turn pick, ranked's strikes).
 //   Casual: when time is up the players who weren't ready are named (`orca queue timeout me|them`,
 //   at a final frame) and nothing moves until the pages leave the room. Ranked: time up goes on
 //   with the picks as they are.

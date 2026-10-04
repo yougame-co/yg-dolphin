@@ -1814,9 +1814,9 @@ beta: a best of 3, rated once per set, with the host's rules (YouGame `docs/ORCA
    needs a ticket signed for that room). A former joiner moves its pad to port 1 first: solo, so
    only its own game changes, and the next keyframe carries it. Once the room's welcome says its
    queue, the host's next alone boundary writes the match block's header, and the locks follow
-   ("Online rules": the ruleset's rules in both games, casual's random legal stage, no way out of
-   the character and stage select; `ux=8`, which replaced the beta's Brawl-only rules preset; `ux=9`
-   adds the character select's A gate). A
+   ("Online rules": the ruleset's rules in both games, casual's stage pick ("Casual stage pick"), no
+   way out of the character and stage select; `ux=8`, which replaced the beta's Brawl-only rules
+   preset; `ux=9` adds the character select's A gate; `ux=10` queue2 and the casual stage pick). A
    keyframe for the opponent waits for that header. The overlay says "Opponent found · waiting for
    <name>…" until the opponent plugs in.
 4. `join <code>` is the existing drop-in: the joiner lands on port 2 of the host's character
@@ -2111,7 +2111,8 @@ frame 267 on.
 ## Online rules
 
 Phase 1 of the online rules for queue matches (YouGame `docs/ORCA_ONLINE_UX.md`; the design's
-phases and rulesets): rules locked in both games, casual's Start going to a random legal stage,
+phases and rulesets): rules locked in both games, casual's Start going to the stage select's
+two-turn pick ("Casual stage pick"; before Orca 0.3.14, a random legal stage),
 no way back from the character and stage select to the menus, ranked's no-ready timer and its
 stall rule. Friends rooms are unchanged: nothing here acts without the match block's header, and
 only a queue room's host writes one (`Core/Orca/UX/OnlineRules.*`, `MatchBlock.h`).
@@ -2876,8 +2877,8 @@ The page owns the room: Orca never leaves on a skip or a timeout by itself.
   at most, after which the player picks by hand. About 1.5 s in Brawl, 2 s in Project+. Then the ready timer, 30 s, once
   both are plugged in (a ranked later game's: once the character order is done, `CharOrder.h`,
   whose own Start is then not pressed): Start readies a player with a character down, B un-readies;
-  both ready, Orca presses Start for port 1 every other frame until the screen goes (casual: the
-  random legal stage; ranked: the stage select). Casual time up: the players who weren't ready are
+  both ready, Orca presses Start for port 1 every other frame until the screen goes (to the stage
+  select: casual's two-turn pick, ranked's strikes). Casual time up: the players who weren't ready are
   named (`orca queue timeout`) and every controller is masked until the pages leave. Ranked time up:
   on with the picks (without a character on both, Phase 1's no-show rule decides). Overlay: each
   player's name over their panel, with the rating in ranked ("ada · 1532", a ✓ once ready), "Press
@@ -2931,9 +2932,16 @@ button (Brawl x -22.5 + 15 a port, y -19.8; Project+ -23.4, -19.3), up is +y; Br
 **Test knobs** (test overrides, both processes alike): `ORCA_TEST_QUEUE=casual|ranked[:<coin>][:q2]`
 (the room's header with `FLAG_QUEUE2`) or `...:solo` (the queue's own character select);
 `ORCA_TEST_QUEUE_PICK=<frame>:<char>:<costume>:<x>:<y>[:<rating>]` (harness runs: port 2 plugs in at
-that frame with that queue identity, as a matched joiner's does). `Tools/orca/queue-e2e.mjs --q2
-[--scenario skip|timeout]` plays the page's half against yougame.co. Inputs:
-`Tools/orca/inputs/bf-queue2.txt`, `pplus-queue2.txt`.
+that frame with that queue identity, as a matched joiner's does). With `...:solo` and
+`ORCA_TEST_QUEUE_PICK` both, port 2's plug-in is the match the queue found: from that boundary the
+header is the room's (`FLAG_QUEUE2`, no longer solo), as a host's is once the page hosts, so one run
+goes from the player's own character select to the room's. The knob's header is a pure function of
+the knob and the synced ports, so it is written on every run of a boundary, re-runs too (a real
+host's header changes only at an alone boundary, which nothing re-runs). `Tools/orca/queue-e2e.mjs
+--q2 [--scenario skip|timeout]` plays the page's half against yougame.co. Inputs:
+`Tools/orca/inputs/bf-queue2.txt`, `pplus-queue2.txt`; the whole flow from the boot,
+`bf-queue2-flow.txt` and `pplus-queue2-flow.txt` (casual, two games), `bf-queue2-ranked.txt` and
+`pplus-queue2-ranked.txt` (ranked game 1: ready, strikes, pick).
 
 **Checked 2026-10-04** (branch `q2-queue-css` on `rel-0.3.13`, M4 Pro, headless, `-v Null`):
 - Unit tests: `OrcaQueue*` (ready, unready, the stopping B, the timer, casual and ranked timeouts,

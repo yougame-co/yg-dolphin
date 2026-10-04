@@ -684,7 +684,11 @@ void OnFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, bo
     return;
   }
   GuardMemory m(guard);
-  if (alone && !resimulating)
+  // The test knob's header is a pure function of the knob and the synced ports, so it is written on
+  // every run of a boundary, re-runs too: its solo-to-room change at port 2's plug frame lands alike
+  // on all of them (a real host's header changes at an alone boundary, which nothing re-runs).
+  const std::optional<TestQueue> test = TestQueueSpec();
+  if ((alone && !resimulating) || test)
   {
     Mode wanted = s_wanted;
     u8 flags = s_wanted_flags;
@@ -696,7 +700,7 @@ void OnFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, bo
         wanted == Mode::None || solo ? std::string() : Orca::Online::Code();
     u8 coin = solo ? 0 : MatchBlock::CoinFromCode(code);
     u32 room = solo ? 0 : MatchBlock::RoomHash(code);
-    if (const auto test = TestQueueSpec())
+    if (test)
     {
       wanted = test->mode;
       coin = test->coin;
@@ -708,7 +712,8 @@ void OnFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, bo
       if ((flags & B::FLAG_SOLO) && (plugged & 2) && !Orca::TestQueuePickSpec().empty())
         flags = B::FLAG_QUEUE2;
     }
-    if (const int changed = WriteHeader(m, wanted, ruleset, coin, room, flags); changed > 0)
+    if (const int changed = WriteHeader(m, wanted, ruleset, coin, room, flags);
+        changed > 0 && !resimulating)
     {
       NOTICE_LOG_FMT(ROLLBACK, "Online rules: header {}{} at frame {} ({} bytes), game 1's first "
                      "striker port {}",

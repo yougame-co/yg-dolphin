@@ -643,7 +643,8 @@ async function playGame(host, joiner, first) {
     await sleep(1200);
   }
   if (QUEUE === "casual") {
-    // Casual's locked rules: Start goes to a random legal stage, no stage select (OnlineRules.h).
+    // Casual's stage pick (ORCA.md "Casual stage pick"): nobody acts, so each player's 7 s turn
+    // names a random legal stage, and the coin takes one of the two (about 15 s).
     await host.waitScene("scMelee", 60000);
   } else {
     // Ranked: the stage select's strikes, ban and pick (RankedPPlus.h, BrawlStages.h). Nobody

@@ -6,6 +6,8 @@
 # takes and writes back clean); port 2 moves up onto Bowser's Castle and names it with A; the coin
 # takes one and the flow picks it (the selection set, A pressed). Port 2 walks off.
 @scBoot mash 30 99999 1 40 A
+# Orca boots Project+ to its main menu (PPLUS32.patches): A through VERSUS to its character select.
+@muMenuMain:1 mash 30 99999 1 40 A
 @scSelctCharacter:1 60 63 1 A
 @scSelctCharacter:1 70 73 2 A
 @scSelctCharacter:1 90 116 1 SY=255
