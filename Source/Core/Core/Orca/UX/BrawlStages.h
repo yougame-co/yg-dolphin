@@ -95,7 +95,8 @@ struct State
   std::array<u16, 2> buttons{};  // each port's buttons at the last boundary (X and Y edges)
   u32 clock = 0;                 // the stage select's frame counter at the last tick
   s8 hovered = -1;               // the stage under the cursor at the last boundary
-  u8 hovered_for = 0;            // boundaries it has been there (A needs 2)
+  u8 hovered_for = 0;            // frames the cursor has rested on what it is on (A needs 1)
+  u8 hover_key = 0xFF;           // what it is on: the page and the hovered item (0xFF nothing)
   bool operator==(const State&) const = default;
 };
 std::optional<State> ReadState(const GuestMemory& memory);

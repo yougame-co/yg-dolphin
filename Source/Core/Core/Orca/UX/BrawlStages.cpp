@@ -47,7 +47,8 @@ enum Offset : u32
   O_CLOCK = 0x1C,       // u32
   O_HOVERED = 0x20,
   O_HOVERED_FOR = 0x21,
-  O_END = 0x22,
+  O_HOVER_KEY = 0x22,
+  O_END = 0x23,
 };
 static_assert(O_END <= kRegionSize);
 
@@ -105,6 +106,7 @@ std::optional<State> ReadState(const GuestMemory& m)
   s.clock = m.Read32(kRegion + O_CLOCK);
   s.hovered = static_cast<s8>(r8(O_HOVERED));
   s.hovered_for = r8(O_HOVERED_FOR);
+  s.hover_key = r8(O_HOVER_KEY);
   return s;
 }
 
@@ -132,6 +134,7 @@ void WriteState(GuestMemory& m, const State& s)
   Put32(m, O_CLOCK, s.clock);
   Put8(m, O_HOVERED, static_cast<u8>(s.hovered));
   Put8(m, O_HOVERED_FOR, s.hovered_for);
+  Put8(m, O_HOVER_KEY, s.hover_key);
 }
 
 void ClearState(GuestMemory& m)
@@ -154,6 +157,11 @@ constexpr u32 TASK_CURSOR = 0x200;
 constexpr u32 CURSOR_X = 0x3C;
 constexpr u32 CURSOR_Y = 0x40;
 constexpr u32 TASK_STATE = 0x224;
+constexpr u32 STATE_CHOOSING = 0;
+constexpr u32 STATE_TAKEN = 2;  // A took a stage: the screen leaves about 6 frames later
+// The stage A took (srStageKind), set with STATE_TAKEN and copied out as the screen leaves: a write
+// in between changes the stage the match loads.
+constexpr u32 TASK_TAKEN_KIND = 0x258;
 constexpr u32 TASK_PAGE = 0x228;
 // MuStageTblAccess's table (sora_menu_sel_stage): per page {the page's stage ids, u8 count}.
 constexpr u32 PAGE_TABLE = 0x806B9298;
@@ -278,6 +286,14 @@ int HoveredStage(const GuestMemory& m, const View& v)
   return StageAt(m.Read32(v.task + TASK_PAGE), v.selected);
 }
 
+// What the cursor is on, as one byte: the page and the hovered item (0xFF nothing).
+u8 HoverKey(const GuestMemory& m, const View& v)
+{
+  if (!v.present || v.hovered_item == 0 || v.hovered_item > 0x3F)
+    return 0xFF;
+  return static_cast<u8>((m.Read32(v.task + TASK_PAGE) & 3) << 6 | v.hovered_item);
+}
+
 const RS::Ruleset& Rules()
 {
   return RS::BrawlSupernova2025();
@@ -341,9 +357,52 @@ void SelectFrame(GuestMemory& m, const View& v, State* s)
     s->buttons = {PadButtons(m, 0), PadButtons(m, 1)};
     s->hovered = -1;
     s->hovered_for = 0;
+    s->hover_key = 0xFF;
   }
   const RS::Plan plan = PlanOf(*s);
   const int hovered = HoveredStage(m, v);
+  const u8 key = HoverKey(m, v);
+  const u32 state = m.Read32(v.task + TASK_STATE);
+  if (state != STATE_CHOOSING)
+  {
+    // The game took a stage. The gate leaves A only where the steps allow it, but a press in the
+    // frame the cursor crosses onto another icon can still take that one: the stage the flow
+    // stands for replaces it (the player's rested stage in a pick, or what the steps' defaults
+    // leave), before the screen copies it out.
+    if (state == STATE_TAKEN)
+    {
+      if (const RS::Step* step = RS::Current(plan, s->progress))
+      {
+        const int taken = StageForStageId(static_cast<int>(m.Read32(v.task + TASK_TAKEN_KIND)));
+        if (step->kind == RS::Kind::Pick)
+        {
+          const u16 allowed = RS::Allowed(Rules(), plan, s->progress, s->set);
+          const int want = (taken >= 0 && (allowed & Bit(taken))) ? taken :
+                           (s->hovered >= 0 && (allowed & Bit(s->hovered))) ?
+                                                                    s->hovered :
+                                                                    std::countr_zero(allowed);
+          RS::Pick(Rules(), plan, &s->progress, s->set, want);
+        }
+        else
+        {
+          for (int i = 0; i < 16 && s->progress.picked < 0 && RS::Current(plan, s->progress); ++i)
+          {
+            s->progress.frames = 1;
+            RS::Tick(Rules(), plan, &s->progress, s->set);
+          }
+        }
+      }
+      if (s->progress.picked >= 0)
+      {
+        const u32 kind = static_cast<u32>(kStageKinds[s->progress.picked]);
+        if (m.Read32(v.task + TASK_TAKEN_KIND) != kind)
+          m.Write32(v.task + TASK_TAKEN_KIND, kind);
+      }
+    }
+    s->buttons = {PadButtons(m, 0), PadButtons(m, 1)};
+    s->clock = v.clock;
+    return;
+  }
   // The active port's presses since the last boundary (edges against what the block kept, so a
   // boundary run again after a load sees none).
   if (const RS::Step* step = RS::Current(plan, s->progress))
@@ -369,10 +428,11 @@ void SelectFrame(GuestMemory& m, const View& v, State* s)
   {
     s->clock = v.clock;
     RS::Tick(Rules(), plan, &s->progress, s->set);
-    if (hovered == s->hovered)
+    if (key == s->hover_key)
       s->hovered_for = static_cast<u8>(std::min(s->hovered_for + 1, 255));
     else
       s->hovered_for = 0;
+    s->hover_key = key;
     s->hovered = static_cast<s8>(hovered);
   }
   s->buttons = {PadButtons(m, 0), PadButtons(m, 1)};
@@ -406,7 +466,7 @@ void SelectFrame(GuestMemory& m, const View& v, State* s)
   }
   // The steps picked (the last starter, or a timer's default): the cursor goes there (through the
   // page button first when the stage is on the other page), and Masks presses A on it.
-  if (s->progress.picked >= 0 && m.Read32(v.task + TASK_STATE) == 0)
+  if (s->progress.picked >= 0)
   {
     const Tile& tile = kTiles[s->progress.picked];
     const bool other_page = page != tile.page;
@@ -547,14 +607,25 @@ void Masks(const GuestMemory& m, Rollback::InputGate::Masks* masks)
     if (!step || port != turn)
       add(port, ALL_BUTTONS, true);
   }
+  if (m.Read32(v.task + TASK_STATE) != STATE_CHOOSING)
+  {
+    // A stage is taken: nobody does anything until the screen leaves.
+    add(turn, ALL_BUTTONS, true);
+    return;
+  }
   if (step)
   {
     // Never back to the character select, and nothing but the cursor, X, Y and A.
     u16 off = PAD_BUTTON_B | PAD_BUTTON_START | PAD_TRIGGER_Z | PAD_TRIGGER_L | PAD_TRIGGER_R;
-    // A turns the page anywhere, and picks only an allowed stage the cursor has rested on.
-    bool a = v.hovered_item == ITEM_PAGE;
-    if (step->kind == RS::Kind::Pick && s->hovered >= 0 && s->hovered_for >= 1)
-      a = a || (RS::Allowed(Rules(), plan, s->progress, s->set) & Bit(s->hovered));
+    // A turns the page, and in a pick takes an allowed stage, once the cursor has rested there a
+    // frame.
+    bool a = false;
+    if (s->hovered_for >= 1 && s->hover_key == HoverKey(m, v))
+    {
+      a = v.hovered_item == ITEM_PAGE;
+      if (step->kind == RS::Kind::Pick && s->hovered >= 0)
+        a = a || (RS::Allowed(Rules(), plan, s->progress, s->set) & Bit(s->hovered));
+    }
     if (!a)
       off |= PAD_BUTTON_A;
     add(turn, off, false);
@@ -562,7 +633,7 @@ void Masks(const GuestMemory& m, Rollback::InputGate::Masks* masks)
   }
   // The steps picked: A on the stage (or on the page button first), every other frame so each
   // press is a new one.
-  if (s->progress.picked < 0 || m.Read32(v.task + TASK_STATE) != 0 || (v.clock & 1) != 0)
+  if (s->progress.picked < 0 || (v.clock & 1) != 0)
     return;
   const Tile& tile = kTiles[s->progress.picked];
   const bool on_page = m.Read32(v.task + TASK_PAGE) == tile.page;

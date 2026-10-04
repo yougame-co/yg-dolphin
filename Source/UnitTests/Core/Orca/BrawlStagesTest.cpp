@@ -271,7 +271,13 @@ TEST_F(OrcaBrawlStages, TheGateKeepsTheOffTurnPortOut)
   EXPECT_TRUE(mine.buttons & PAD_BUTTON_A);
   EXPECT_FALSE(mine.buttons & PAD_BUTTON_X);
   EXPECT_FALSE(mine.main_stick);
-  m.Write32(TASK + 0x244, 0x35);  // the page button
+  // A turns the page once the cursor has rested on the page button a frame.
+  m.Write32(TASK + 0x244, 0x35);
+  Boundary(m);
+  masks = {};
+  Masks(m, &masks);
+  EXPECT_TRUE(masks[first].buttons & PAD_BUTTON_A);
+  Boundary(m);
   masks = {};
   Masks(m, &masks);
   EXPECT_FALSE(masks[first].buttons & PAD_BUTTON_A);
@@ -329,4 +335,50 @@ TEST_F(OrcaBrawlStages, AFriendsGameClearsTheSet)
   SetRankedForTests(false);
   Boundary(m);
   EXPECT_FALSE(ReadState(m));
+}
+
+TEST_F(OrcaBrawlStages, ATakenStageTheStepsDontAllowIsReplaced)
+{
+  // Game 2: port 2 won on Smashville and skips its ban; port 1 picks.
+  FakeMemory m = Game("scSelStage");
+  State s;
+  s.set.game = 2;
+  s.set.last_winner = 1;
+  s.set.won = {1 << RS::FinalDestination, 1 << RS::Smashville};
+  s.score = {0, 1};
+  s.coin = 0;
+  s.phase = Phase::Recorded;
+  WriteState(m, s);
+  Boundary(m);
+  Press(m, 1, BrawlStages::GF_Y);
+  ASSERT_EQ(RS::Current(RS::PlanGame(RS::BrawlSupernova2025(), ReadState(m)->set, 0, {0, 2}),
+                        ReadState(m)->progress)
+                ->kind,
+            RS::Kind::Pick);
+  // The cursor rests on Delfino, then A lands on Final Destination (port 1 won there: DSR).
+  Hover(m, RS::DelfinoPlaza);
+  Boundary(m);
+  Boundary(m);
+  m.Write32(TASK + 0x224, 2);
+  m.Write32(TASK + 0x258, 0x02);
+  Boundary(m);
+  EXPECT_EQ(m.Read32(TASK + 0x258), 0x03u);  // Delfino Plaza
+  EXPECT_EQ(ReadState(m)->progress.picked, RS::DelfinoPlaza);
+  // Everybody's pads are off until the screen leaves.
+  Rollback::InputGate::Masks masks{};
+  Masks(m, &masks);
+  EXPECT_EQ(masks[0], Rollback::InputGate::ALL);
+  EXPECT_EQ(masks[1], Rollback::InputGate::ALL);
+}
+
+TEST_F(OrcaBrawlStages, AStageTakenDuringStrikesTakesTheDefaults)
+{
+  FakeMemory m = Game("scSelStage");
+  Boundary(m);
+  m.Write32(TASK + 0x224, 2);
+  m.Write32(TASK + 0x258, 0x01);  // Battlefield
+  Boundary(m);
+  // Strikes by default: Battlefield, then Pokemon Stadium and Lylat, then Smashville.
+  EXPECT_EQ(ReadState(m)->progress.picked, RS::YoshisIsland);
+  EXPECT_EQ(m.Read32(TASK + 0x258), 0x0Du);
 }
