@@ -537,6 +537,8 @@ add_library(core
   Orca/UX/BrawlStages.h
   Orca/UX/CharOrder.cpp
   Orca/UX/CharOrder.h
+  Orca/UX/Chat.cpp
+  Orca/UX/Chat.h
   Orca/UX/Controllers.cpp
   Orca/UX/Controllers.h
   Orca/UX/ControllerSource.cpp

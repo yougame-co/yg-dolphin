@@ -21,6 +21,7 @@
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Status.h"
+#include "Core/Orca/UX/Chat.h"
 #include "Core/Orca/UX/OnlineMenu.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Rollback/OnlineMatch.h"
@@ -333,6 +334,15 @@ void Platform::ProcessEmbedCommands()
                                                 Orca::UX::Perf::Off);
       else
         Embed::Out("unsupported perf");
+    }
+    else if (cmd == "chat")
+    {
+      // A line of the page's chat while Orca fills the screen (caps `chat`, UX/Chat.h): a toast.
+      // The player's own words: neither this nor anything after it prints or logs them.
+      if (std::optional<Orca::UX::Chat::Line> chat = Orca::UX::Chat::Parse(line))
+        Orca::UX::ShowChat(std::move(chat->name), std::move(chat->text));
+      else
+        Embed::Out("unsupported chat");
     }
     else if (cmd == "test-drop-room" && Orca::GetEnv("ORCA_TEST_COMMANDS") == "1")
     {

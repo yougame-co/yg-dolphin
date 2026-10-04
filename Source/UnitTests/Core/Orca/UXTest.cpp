@@ -27,6 +27,7 @@
 #include <gtest/gtest.h>
 
 #include "Core/Orca/UX/ControllerSource.h"
+#include "Core/Orca/UX/Chat.h"
 #include "Core/Orca/UX/Controllers.h"
 #include "Core/Orca/UX/FreeSpace.h"
 #include "Core/Orca/UX/GamePatches.h"
@@ -1962,3 +1963,117 @@ TEST(OrcaUXLatency, BoundaryInputAge)
   StopControllerStream();
 }
 #endif
+
+namespace
+{
+std::string Repeat(std::string_view piece, std::size_t n)
+{
+  std::string out;
+  for (std::size_t i = 0; i < n; ++i)
+    out += piece;
+  return out;
+}
+}  // namespace
+
+TEST(OrcaUXChat, DecodesBothFieldsAsUtf8)
+{
+  using Orca::UX::Chat::Parse;
+  auto line = Parse("chat Ada gg");
+  ASSERT_TRUE(line);
+  EXPECT_EQ(line->name, "Ada");
+  EXPECT_EQ(line->text, "gg");
+  // encodeURIComponent's output: spaces and punctuation escaped, its own set left as it is.
+  line = Parse("chat Ada%20Lovelace gg%20wp!%20(one%20more%3F)%20~_.*'-");
+  ASSERT_TRUE(line);
+  EXPECT_EQ(line->name, "Ada Lovelace");
+  EXPECT_EQ(line->text, "gg wp! (one more?) ~_.*'-");
+  // Multi-byte UTF-8, upper or lower case hex; "%25" is a percent sign, decoded once only.
+  line = Parse("chat %C3%89lodie caf%c3%a9%20%E2%80%A6%20%F0%9F%98%80%20100%25%2541");
+  ASSERT_TRUE(line);
+  EXPECT_EQ(line->name, "\xC3\x89lodie");
+  EXPECT_EQ(line->text, "caf\xC3\xA9 \xE2\x80\xA6 \xF0\x9F\x98\x80 100%%41");
+}
+
+TEST(OrcaUXChat, LengthLimitsInCodePointsAndEncodedCharacters)
+{
+  using namespace Orca::UX::Chat;
+  // 24 code points of name and 140 of text, the page's cut, pass; one more does not.
+  EXPECT_TRUE(Parse("chat " + Repeat("a", 24) + " " + Repeat("b", 140)));
+  EXPECT_FALSE(Parse("chat " + Repeat("a", 25) + " b"));
+  EXPECT_FALSE(Parse("chat a " + Repeat("b", 141)));
+  // Four-byte code points at the limits are exactly the app's 288 and 1680 encoded characters.
+  const std::string smile = "%F0%9F%98%80";
+  const std::string name = Repeat(smile, 24), text = Repeat(smile, 140);
+  EXPECT_EQ(name.size(), NAME_ENCODED);
+  EXPECT_EQ(text.size(), TEXT_ENCODED);
+  const auto line = Parse("chat " + name + " " + text);
+  ASSERT_TRUE(line);
+  EXPECT_EQ(line->name, Repeat("\xF0\x9F\x98\x80", 24));
+  EXPECT_FALSE(Parse("chat " + name + "a b"));
+  EXPECT_FALSE(Parse("chat a " + text + "b"));
+  // The encoded length alone: a field longer than the filter takes, whatever it decodes to.
+  EXPECT_FALSE(DecodeField(Repeat("%41", 97), NAME_ENCODED, 1000));
+  EXPECT_TRUE(DecodeField(Repeat("%41", 96), NAME_ENCODED, 1000));
+  // Empty fields.
+  EXPECT_FALSE(DecodeField("", NAME_ENCODED, NAME_POINTS));
+}
+
+TEST(OrcaUXChat, RefusesControlCharactersNewlinesAndBadEncodings)
+{
+  using Orca::UX::Chat::Parse;
+  const char* bad[] = {
+      // Control characters and line breaks, in either field.
+      "chat a b%0Ac", "chat a b%0Dc", "chat a b%00c", "chat a b%09c", "chat a b%7Fc",
+      "chat a%0A b", "chat a b%1B[2J",
+      "chat a b%C2%85c",      // NEL (C1)
+      "chat a b%C2%9Bc",      // CSI (C1)
+      "chat a b%E2%80%A8c",   // line separator
+      "chat a b%E2%80%A9c",   // paragraph separator
+      // Raw characters encodeURIComponent never leaves: spaces (a third field, an empty one),
+      // tabs, '+', '/', '%' alone, and anything past ASCII.
+      "chat a b c", "chat a  b", "chat  a b", "chat a b ", "chat a\tb", "chat a b\tc",
+      "chat a b+c", "chat a b/c", "chat a b\xC3\xA9", "chat a b\nquit",
+      // Bad escapes.
+      "chat a %", "chat a b%", "chat a b%4", "chat a b%G0", "chat a b%zz", "chat a%2 b",
+      // Bad UTF-8: a lone continuation byte, a truncated sequence, overlong forms, a surrogate,
+      // past U+10FFFF, bytes UTF-8 never uses.
+      "chat a %80", "chat a %C3", "chat a %E2%80", "chat a %C0%AF", "chat a %E0%80%AF",
+      "chat a %F0%80%80%AF", "chat a %ED%A0%80", "chat a %F4%90%80%80", "chat a %FF", "chat a %FE",
+      // Not the command at all.
+      "chat", "chat ", "chat a", "chat a ", "Chat a b", "chatty a b", " chat a b",
+  };
+  for (const char* line : bad)
+    EXPECT_FALSE(Parse(line)) << line;
+  EXPECT_TRUE(Parse("chat a %F4%8F%BF%BF"));  // U+10FFFF, the last code point, is fine
+}
+
+TEST(OrcaUXOverlay, ChatLinesStayEightSecondsTheNewestThree)
+{
+  OverlayModel m;
+  m.AddToast("ada joined on port 2", 0);
+  m.AddChat("ada", "hi", 0);
+  auto v = m.View(10, Stats::Off);
+  ASSERT_EQ(v.chats.size(), 1u);
+  EXPECT_EQ(v.chats[0].name, "ada");
+  EXPECT_EQ(v.chats[0].text, "hi");
+  EXPECT_FLOAT_EQ(v.chats[0].alpha, 1);
+  // Its own list: the toasts are untouched, and gone after 3 s while the chat stays.
+  ASSERT_EQ(v.toasts.size(), 1u);
+  v = m.View(5000, Stats::Off);
+  EXPECT_TRUE(v.toasts.empty());
+  ASSERT_EQ(v.chats.size(), 1u);
+  // It fades over its last half second and is gone after eight.
+  EXPECT_NEAR(m.View(7750, Stats::Off).chats[0].alpha, 0.5f, 1e-4);
+  EXPECT_TRUE(m.View(8001, Stats::Off).chats.empty());
+  // Four lines: the newest three, oldest first.
+  for (int i = 0; i < 4; ++i)
+    m.AddChat("bo", fmt::format("line {}", i), 9000 + i);
+  v = m.View(9100, Stats::Off);
+  ASSERT_EQ(v.chats.size(), 3u);
+  EXPECT_EQ(v.chats[0].text, "line 1");
+  EXPECT_EQ(v.chats[2].text, "line 3");
+  // The draw thread's Update drops the old ones.
+  LinkView link;
+  m.Update(link, 20000);
+  EXPECT_TRUE(m.View(20000, Stats::Off).chats.empty());
+}
