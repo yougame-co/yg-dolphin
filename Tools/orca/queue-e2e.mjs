@@ -593,12 +593,20 @@ async function playGame(host, joiner, first) {
     await sleep(1500);
   }
   // A ranked set's later games have a character order (Orca's CharOrder.h: each player locks in
-  // with A, Project+'s winner first, 45 s a pick, then Orca presses Start): both press A, then the
-  // host Start, for as long as the order can take.
+  // with A in the grid, Project+'s winner first, 45 s a pick, then Orca presses Start). The hands
+  // come back on the bottom panels, where A switches the player to a CPU: up into the grid first,
+  // then A, then the host's Start, for as long as the order can take.
   const cssTries = QUEUE === "ranked" ? 120 : 25;
+  if (QUEUE === "ranked" && !first) {
+    await Promise.all([
+      host.hold([128, 255, 128, 128], 450),
+      joiner.hold([128, 255, 128, 128], 450),
+    ]);
+    await sleep(300);
+  }
   for (let tries = 0; host.scene === "scSelctCharacter"; ++tries) {
     if (tries >= cssTries) fail("the character select never started the match");
-    if (QUEUE === "ranked" && !first) {
+    if (QUEUE === "ranked" && !first && tries < 3) {
       await Promise.all([host.press("A"), joiner.press("A")]);
       await sleep(400);
     }

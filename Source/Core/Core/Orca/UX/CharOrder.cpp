@@ -246,12 +246,12 @@ std::string Line(const SetView& set, const CssView& css, const State& state,
       return fmt::format("Characters · {}", left);
     if (state.locked & (1 << local))
       return fmt::format("Waiting for {} · {}", names[1 - local], left);
-    return fmt::format("Pick your character · {} · A locks it in", left);
+    return fmt::format("Pick your character · {} · A in the grid locks it in", left);
   }
   const int port = state.step == Step::First ? state.first : 1 - state.first;
   if (port == local)
   {
-    return fmt::format("{} · {} · A locks it in",
+    return fmt::format("{} · {} · A in the grid locks it in",
                        state.step == Step::First ? "You pick first" : "Your pick", left);
   }
   return fmt::format("{} {} · {}", names[port],
