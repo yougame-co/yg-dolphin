@@ -4,6 +4,8 @@
 // The online rules for queue matches, Phase 1 (Core/Orca/UX/OnlineRules.h): the match block's
 // header and what it locks, over a fake of the game's memory.
 
+#include <bit>
+#include <cmath>
 #include <map>
 #include <string>
 #include <string_view>
@@ -89,6 +91,39 @@ void SetPick(FakeMemory& m, int port, u8 type, u8 character)
 }
 constexpr u8 HUMAN = 0, CPU = 1, NOBODY = 3, NONE = 0x3E;
 
+// The character select's task, its player areas and their hands (muSelCharHand), at addresses of
+// the fake's own: the scene's +0x400 is the task, the task's +0x44 + 4 x port an area, the area's
+// +0x1A8 its hand (OnlineRules.h, "The character select's hands").
+constexpr u32 CSS_TASK = 0x80930000;
+constexpr u32 CSS_AREA = 0x80940000;  // + port x 0x1000
+constexpr u32 CSS_HAND = 0x80950000;  // + port x 0x100
+
+void SetHand(FakeMemory& m, int port, u32 target, float y, u32 button = 0, float x = 0)
+{
+  const u32 hand = CSS_HAND + static_cast<u32>(port) * 0x100;
+  m.Write32(hand + 0x80, target);
+  m.Write32(hand + 0x90, std::bit_cast<u32>(x));
+  m.Write32(hand + 0x94, std::bit_cast<u32>(y));
+  m.Write32(hand + 0xAC, button);
+}
+
+void BuildHands(FakeMemory& m)
+{
+  m.Write32(SCENE + 0x400, CSS_TASK);
+  m.Fill(CSS_TASK, 0x60);
+  for (u32 port = 0; port < 4; ++port)
+  {
+    const u32 area = CSS_AREA + port * 0x1000;
+    const u32 hand = CSS_HAND + port * 0x100;
+    m.Write32(CSS_TASK + 0x44 + 4 * port, area);
+    m.Fill(area, 0x1B0);
+    m.Write32(area + 0x1A8, hand);
+    m.Fill(hand, 0xE0);
+    // In the grid with the token down, mid-screen.
+    SetHand(m, static_cast<int>(port), CSS_HAND_GRID, 5.0f);
+  }
+}
+
 // Brawl's memory as the probes found it: the scene manager and its scene, g_GameGlobal with the
 // rules and the match's init data, the record's menu data with the fresh save's defaults, and the
 // match block holding the game's dead code.
@@ -129,6 +164,7 @@ FakeMemory Game(std::string_view scene)
     m.Write32(MB::BASE + i, 0x3A200000 + i);  // the game's dead code
   m.Fill(PPLUS_RSS, 0x320, 0x11);
   m.Fill(PPLUS_STRIKES, 0x1E, 0x01);
+  BuildHands(m);
   m.writes = 0;
   return m;
 }
@@ -348,6 +384,95 @@ TEST(OrcaOnlineRules, TheGateLocksTheMenusOnlyUnderAHeader)
   SetScene(p, "scSelStage");
   for (const auto& mask : GateMasks(p))
     EXPECT_EQ(mask.buttons, PAD_BUTTON_B | PAD_TRIGGER_L | PAD_TRIGGER_R | PAD_TRIGGER_Z);
+}
+
+TEST(OrcaOnlineRules, TheCharacterSelectPassesAOnlyInTheGrid)
+{
+  constexpr u16 B = PAD_BUTTON_B, A = PAD_BUTTON_A;
+  FakeMemory m = Game("scSelctCharacter");
+  // The later games' trap: the hands come back on the panels' player-type buttons.
+  for (int port = 0; port < 4; ++port)
+    SetHand(m, port, CSS_HAND_BUTTON, -19.8f, CSS_BUTTON_PLAYER_TYPE, -22.5f + 15.0f * port);
+  // A friends game: nothing masked, the buttons work.
+  for (const auto& mask : GateMasks(m))
+    EXPECT_TRUE(mask.Empty());
+  WriteHeader(m, Mode::Ranked, Ruleset::Brawl);
+  // Own and others' player-type buttons (ports 3-4's would add a CPU): no A.
+  for (const auto& mask : GateMasks(m))
+    EXPECT_EQ(mask.buttons, B | A);
+  // Every other button and the empty space: no A.
+  const struct
+  {
+    u32 target, button;
+  } blocked[] = {
+      {CSS_HAND_NOTHING, 0}, {CSS_HAND_BUTTON, 0x1C},  // name
+      {CSS_HAND_BUTTON, 0x1B},                          // the panel's picture (a costume)
+      {CSS_HAND_BUTTON, 0x03},                          // the BRAWL tab (teams)
+      {CSS_HAND_BUTTON, 0x05}, {CSS_HAND_BUTTON, 0x06}, {CSS_HAND_BUTTON, 0x07},  // rules bar
+      {CSS_HAND_EXIT, 0x02}, {CSS_HAND_EXIT, 0x04},                                // BACK, Rules
+      {5, 0x08},                                                                   // unknown
+  };
+  for (const auto& b : blocked)
+  {
+    SetHand(m, 0, b.target, 5.0f, b.button);
+    EXPECT_EQ(GateMasks(m)[0].buttons, B | A) << b.target << " " << b.button;
+  }
+  // The grid and the player's own token: A passes.
+  for (const u32 target : {CSS_HAND_GRID, CSS_HAND_OWN_TOKEN, CSS_HAND_TAKING,
+                           CSS_HAND_GRID_HOLDING, CSS_HAND_PLACING})
+  {
+    SetHand(m, 0, target, 5.0f, target == CSS_HAND_OWN_TOKEN ? 1 : 0);
+    EXPECT_EQ(GateMasks(m)[0].buttons, B) << target;
+    EXPECT_EQ(GateMasks(m)[1].buttons, B | A);  // port 2 still on its button
+  }
+  // Within one frame's travel of the grid's top or bottom edge: no A (a press arriving on the
+  // rules bar or the panel would act there).
+  SetHand(m, 0, CSS_HAND_GRID_HOLDING, 14.9f);
+  EXPECT_EQ(GateMasks(m)[0].buttons, B);
+  SetHand(m, 0, CSS_HAND_GRID_HOLDING, CSS_A_TOP);
+  EXPECT_EQ(GateMasks(m)[0].buttons, B | A);
+  SetHand(m, 0, CSS_HAND_GRID, 15.9f);
+  EXPECT_EQ(GateMasks(m)[0].buttons, B | A);
+  SetHand(m, 0, CSS_HAND_GRID, -2.9f);
+  EXPECT_EQ(GateMasks(m)[0].buttons, B);
+  SetHand(m, 0, CSS_HAND_GRID, -3.4f);
+  EXPECT_EQ(GateMasks(m)[0].buttons, B | A);
+  SetHand(m, 0, CSS_HAND_GRID, CSS_A_BOTTOM);
+  EXPECT_EQ(GateMasks(m)[0].buttons, B | A);
+  SetHand(m, 0, CSS_HAND_GRID, std::nanf(""));
+  EXPECT_EQ(GateMasks(m)[0].buttons, B | A);
+  // A hand that can't be read: no A.
+  SetHand(m, 0, CSS_HAND_GRID, 5.0f);
+  m.Write32(CSS_TASK + 0x44, 0);
+  EXPECT_FALSE(ReadCssHand(m, 0).valid);
+  EXPECT_EQ(GateMasks(m)[0].buttons, B | A);
+  // Off the character select the hands mean nothing.
+  SetScene(m, "scSelStage");
+  for (const auto& mask : GateMasks(m))
+    EXPECT_EQ(mask.buttons, B);
+  // Casual and Project+ alike (Project+ also loses the D-pad there).
+  FakeMemory p = Locked(Mode::Casual, Ruleset::PPlus);
+  SetHand(p, 1, CSS_HAND_BUTTON, -19.8f, CSS_BUTTON_PLAYER_TYPE);
+  constexpr u16 DPAD = PAD_BUTTON_UP | PAD_BUTTON_DOWN | PAD_BUTTON_LEFT | PAD_BUTTON_RIGHT;
+  EXPECT_EQ(GateMasks(p)[0].buttons, B | DPAD);
+  EXPECT_EQ(GateMasks(p)[1].buttons, B | DPAD | A);
+}
+
+TEST(OrcaOnlineRules, TheHandsAreReadPerPort)
+{
+  FakeMemory m = Game("scSelctCharacter");
+  SetHand(m, 2, CSS_HAND_BUTTON, -19.8f, CSS_BUTTON_PLAYER_TYPE, 7.5f);
+  const CssHand hand = ReadCssHand(m, 2);
+  EXPECT_TRUE(hand.valid);
+  EXPECT_EQ(hand.target, CSS_HAND_BUTTON);
+  EXPECT_EQ(hand.button, CSS_BUTTON_PLAYER_TYPE);
+  EXPECT_EQ(hand.x, 7.5f);
+  EXPECT_EQ(hand.y, -19.8f);
+  EXPECT_EQ(ReadCssHand(m, 1).target, CSS_HAND_GRID);
+  EXPECT_FALSE(ReadCssHand(m, 4).valid);
+  EXPECT_FALSE(ReadCssHand(m, -1).valid);
+  SetScene(m, "scMelee");
+  EXPECT_FALSE(ReadCssHand(m, 2).valid);
 }
 
 TEST(OrcaOnlineRules, FriendsGamesAreUntouched)

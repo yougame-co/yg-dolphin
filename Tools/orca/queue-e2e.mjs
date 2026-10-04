@@ -604,9 +604,9 @@ async function playGame(host, joiner, first) {
     await sleep(1500);
   }
   // A ranked set's later games have a character order (Orca's CharOrder.h: each player locks in
-  // with A in the grid, Project+'s winner first, 45 s a pick, then Orca presses Start). The hands
-  // come back on the bottom panels, where A switches the player to a CPU: up into the grid first,
-  // then A, then the host's Start, for as long as the order can take.
+  // with A, Project+'s winner first, 45 s a pick, then Orca presses Start). The hands come back on
+  // the bottom panels, where the online rules mask A (it would make the player a CPU): up into the
+  // grid first, then A, then the host's Start, for as long as the order can take.
   const cssTries = QUEUE === "ranked" ? 120 : 25;
   if (QUEUE === "ranked" && !first) {
     await Promise.all([

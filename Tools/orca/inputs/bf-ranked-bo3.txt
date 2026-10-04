@@ -52,6 +52,17 @@
 @scVsResult mash 620 99999 2 40 START
 # Game 2: back on the character select, P1 starts.
 @scSelctCharacter:2 mash 60 99999 1 45 START
+# The hands come back on the bottom panels, each on its own player-type button, where A would make
+# the player a CPU (and A on an empty panel's button would add one). The online rules pass A only in
+# the grid (OnlineRules.h), so both stay human: A on their own buttons, then port 1 moves onto
+# panel 3's button and presses A, and port 2 goes up into the grid (below its token, which A would
+# take up) and locks its pick in with A.
+@scSelctCharacter:2 30 33 1 A
+@scSelctCharacter:2 40 43 2 A
+@scSelctCharacter:2 100 135 1 SX=255
+@scSelctCharacter:2 150 153 1 A
+@scSelctCharacter:2 100 133 2 SY=255
+@scSelctCharacter:2 160 163 2 A
 # Port 1 won: its ban times out (33 s, no ban); then port 2 picks Battlefield (A).
 @scSelStage:2 2060 2079 1 SY=255
 @scSelStage:2 2060 2079 2 SY=255

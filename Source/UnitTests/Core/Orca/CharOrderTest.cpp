@@ -211,14 +211,14 @@ TEST(OrcaCharOrder, LineSaysWhoseTurnAndTheTimeLeft)
 {
   std::vector<Orca::Events::PortInfo> ports{{0, "ADA", false, {}}, {1, "BO", true, {}}};
   EXPECT_EQ(Line(kGame2, Css(), St(2, Step::First, 0, 0, 0), ports),
-            "You pick first · 0:45 · A in the grid locks it in");
+            "You pick first · 0:45 · A locks it in");
   EXPECT_EQ(Line(kGame2, Css(), St(2, Step::Second, 0, 0, 61), ports), "BO picks · 0:44");
   ports[0].remote = true;
   ports[1].remote = false;
   EXPECT_EQ(Line(kGame2, Css(), St(2, Step::First, 0, 0, 2700 - 59), ports),
             "ADA picks first · 0:01");
   EXPECT_EQ(Line(kGame2, Css(), St(2, Step::Second, 0, 0, 0), ports),
-            "Your pick · 0:45 · A in the grid locks it in");
+            "Your pick · 0:45 · A locks it in");
   EXPECT_EQ(Line(kGame2, Css(), St(2, Step::Done, 0, 0, 0), ports), "");
   EXPECT_EQ(Line(SetView{}, Css(), St(2, Step::First, 0, 0, 0), ports), "");
   // No names: the port.
@@ -298,7 +298,7 @@ TEST(OrcaCharOrder, BrawlLine)
 {
   std::vector<Orca::Events::PortInfo> ports{{0, "ADA", false, {}}, {1, "BO", true, {}}};
   EXPECT_EQ(Line(kBrawl2, Css(), St(2, Step::Both, 1, 0, 0), ports),
-            "Pick your character · 0:45 · A in the grid locks it in");
+            "Pick your character · 0:45 · A locks it in");
   EXPECT_EQ(Line(kBrawl2, Css(), St(2, Step::Both, 1, 0, 600, 1), ports),
             "Waiting for BO · 0:35");
   EXPECT_EQ(Line(kBrawl2, Css(), St(2, Step::Both, 1, 0, 0, 2), {}), "Characters · 0:45");

@@ -4,6 +4,7 @@
 #include "Core/Orca/UX/OnlineRules.h"
 
 #include <atomic>
+#include <bit>
 #include <map>
 #include <mutex>
 #include <utility>
@@ -84,6 +85,18 @@ constexpr std::array<u8, B::SAVED_RSS_SIZE> PPLUS_2024_RSS{
     0x34, 0x25, 0x3E, 0x0E, 0x22, 0x19, 0x14, 0x12, 0x26, 0x11, 0x13, 0x17, 0x16, 0x37, 0x2F, 0x1D,
     0x3A, 0x2C, 0x1B, 0x1E, 0x30, 0x2B, 0x00, 0x00,
 };
+
+// The character select's player areas and their hands (OnlineRules.h, "The character select's
+// hands"; CharOrder.h has the areas too).
+constexpr u32 SCENE_MANAGER = 0x805A0060;
+constexpr u32 MANAGER_SCENE = 0x04;
+constexpr u32 SCENE_SELCHAR_TASK = 0x400;
+constexpr u32 TASK_AREAS = 0x44;
+constexpr u32 AREA_HAND = 0x1A8;
+constexpr u32 HAND_TARGET = 0x80;
+constexpr u32 HAND_X = 0x90;
+constexpr u32 HAND_Y = 0x94;
+constexpr u32 HAND_BUTTON = 0xAC;
 
 constexpr const char* SCENE_CSS = "scSelctCharacter";
 constexpr const char* SCENE_SSS = "scSelStage";
@@ -467,6 +480,14 @@ Rollback::InputGate::Masks GateMasks(const GuestMemory& m)
     // Project+'s Code Menu opens from the character select with the D-pad.
     if (h.ruleset == Ruleset::PPlus)
       buttons |= PAD_BUTTON_UP | PAD_BUTTON_DOWN | PAD_BUTTON_LEFT | PAD_BUTTON_RIGHT;
+    // A only in the grid: never on a player-type button (a CPU), or any other button.
+    for (int port = 0; port < Rollback::InputGate::PORTS; ++port)
+    {
+      masks[port].buttons = buttons;
+      if (!CssHandMayPressA(ReadCssHand(m, port)))
+        masks[port].buttons |= PAD_BUTTON_A;
+    }
+    return masks;
   }
   else if (scene == SCENE_SSS)
   {
@@ -484,6 +505,56 @@ Rollback::InputGate::Masks GateMasks(const GuestMemory& m)
   for (Rollback::InputGate::Mask& mask : masks)
     mask.buttons = buttons;
   return masks;
+}
+
+CssHand ReadCssHand(const GuestMemory& m, int port)
+{
+  CssHand hand;
+  if (port < 0 || port >= 4 || ReadSceneName(m) != SCENE_CSS || !Pointer(m, SCENE_MANAGER))
+    return hand;
+  const u32 manager = m.Read32(SCENE_MANAGER);
+  if (!Pointer(m, manager + MANAGER_SCENE))
+    return hand;
+  const u32 scene = m.Read32(manager + MANAGER_SCENE);
+  if (!Pointer(m, scene + SCENE_SELCHAR_TASK))
+    return hand;
+  const u32 task = m.Read32(scene + SCENE_SELCHAR_TASK);
+  const u32 area_at = task + TASK_AREAS + 4 * static_cast<u32>(port);
+  if (!Pointer(m, area_at))
+    return hand;
+  const u32 area = m.Read32(area_at);
+  if (!Pointer(m, area + AREA_HAND))
+    return hand;
+  const u32 p = m.Read32(area + AREA_HAND);
+  if (!Pointer(m, p + HAND_TARGET) || !Pointer(m, p + HAND_X) || !Pointer(m, p + HAND_Y) ||
+      !Pointer(m, p + HAND_BUTTON))
+  {
+    return hand;
+  }
+  hand.valid = true;
+  hand.target = m.Read32(p + HAND_TARGET);
+  hand.button = m.Read32(p + HAND_BUTTON);
+  hand.x = std::bit_cast<float>(m.Read32(p + HAND_X));
+  hand.y = std::bit_cast<float>(m.Read32(p + HAND_Y));
+  return hand;
+}
+
+bool CssHandMayPressA(const CssHand& hand)
+{
+  if (!hand.valid)
+    return false;
+  switch (hand.target)
+  {
+  case CSS_HAND_GRID:
+  case CSS_HAND_OWN_TOKEN:
+  case CSS_HAND_TAKING:
+  case CSS_HAND_GRID_HOLDING:
+  case CSS_HAND_PLACING:
+    // A NaN fails both comparisons: no A.
+    return hand.y < CSS_A_TOP && hand.y > CSS_A_BOTTOM;
+  default:
+    return false;
+  }
 }
 
 void SetWanted(Mode mode)

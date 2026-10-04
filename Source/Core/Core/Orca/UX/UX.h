@@ -14,10 +14,11 @@ namespace Orca::UX
 // 7: each player's own controls in their name tag, and the port label for a player with controls
 // and no name, NameTags.h; 8: the online rules for queue matches (OnlineRules.h, which replace 6)
 // and the ranked set's stage, character and result flows (RankedPPlus.h, BrawlStages.h,
-// CharOrder.h, RankedSet.h), with their input masks): the session hashes it into the compatibility
-// key as `ux=<n>`, so two
-// builds that would write different bytes never meet in a room.
-constexpr int kCompatVersion = 8;
+// CharOrder.h, RankedSet.h), with their input masks; 9: A on the character select only in the
+// grid while the online rules lock, OnlineRules.h): the session hashes it into the compatibility
+// key as `ux=<n>`, so two builds that would write different bytes (or mask different inputs) never
+// meet in a room.
+constexpr int kCompatVersion = 9;
 
 // Once, before the game boots in a session: registers the local pad source, the overlay, and the
 // session's plug-in, frame and stall callbacks, and puts kCompatVersion in the compatibility key.
