@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <deque>
 #include <mutex>
 #include <string>
@@ -19,7 +20,9 @@
 //   - beside the circle, the ping: "32 ms" with embed `ping on` (the YouGame page's default) or
 //     ORCA_UX_STATS=1; with `ping full` or ORCA_UX_STATS=2, also the delay and rollbacks/s;
 //   - the frame meter, solo too: "60 fps · 17 ms", the frames shown in the last second and the
-//     longest of them, coloured while the game misses its pace (embed `perf`, on until it says).
+//     longest of them, coloured while the game misses its pace (embed `perf`, on until it says);
+//   - the page's chat while Orca fills the screen (embed `chat`, Chat.h): "<name>: <text>" for 8 s,
+//     wrapped to under half the width, the last three, under the toasts.
 // It is drawn by the host's OSD layer over the presented image (ImGui), never into the emulated
 // framebuffer, and reads no game state: nothing in it can change emulation or desync.
 namespace Orca::UX
@@ -83,8 +86,18 @@ public:
   // More unseen frames in a row than any rollback re-runs: a joiner's catch-up.
   static constexpr int PERF_MAX_UNSHOWN = 60;
 
+  // A chat line (Chat.h) stays this long, fading like a toast, and the newest CHAT_KEEP show.
+  static constexpr double CHAT_MS = 8000;
+  static constexpr std::size_t CHAT_KEEP = 3;
+
   struct Toast
   {
+    std::string text;
+    float alpha;
+  };
+  struct ChatToast
+  {
+    std::string name;
     std::string text;
     float alpha;
   };
@@ -94,6 +107,7 @@ public:
     Signal signal = Signal::Good;
     std::string waiting;  // empty: not shown
     std::vector<Toast> toasts;
+    std::vector<ChatToast> chats;  // oldest first
     std::string stats;  // empty: not shown
     std::string perf;   // the frame meter; empty: not shown
     Signal perf_level = Signal::Good;  // Good: plain text
@@ -105,6 +119,8 @@ public:
   void OnPorts(int frame, const std::vector<Events::PortInfo>& ports, double now_ms);
   // A toast of its own (a matchmade game's result: "You won game 2 · 1–1"). Any thread.
   void AddToast(std::string text, double now_ms);
+  // A line of the page's chat (embed `chat`, Chat.h), already decoded. Any thread.
+  void AddChat(std::string name, std::string text, double now_ms);
   // The newest link stats (the drawing thread, each frame).
   void Update(const LinkView& link, double now_ms);
   // Every frame boundary (the CPU thread): `shown` says the frame that just ended ran rendered, a
@@ -130,6 +146,13 @@ private:
   bool m_seen_ports = false;
   std::vector<Events::PortInfo> m_ports;
   std::deque<std::pair<double, std::string>> m_toasts;
+  struct ChatEntry
+  {
+    double at;
+    std::string name;
+    std::string text;
+  };
+  std::deque<ChatEntry> m_chats;
   LinkView m_link;
   std::deque<std::pair<double, int>> m_stall_history;  // (time, total stalls)
   // The frame meter, on its own clock (RunningMs): shown frames (boundary, frame time ms) of the
@@ -160,6 +183,8 @@ void SetPerf(Perf perf);
 void FrameBoundary(bool shown);
 // A short toast under the circle (OverlayModel::AddToast, now). Any thread.
 void ShowToast(std::string text);
+// A line of the page's chat (OverlayModel::AddChat, now). Never logged. Any thread.
+void ShowChat(std::string name, std::string text);
 // A ranked set's lines (BrawlStages.h), top centre: the set score, and under it whose turn it is
 // on the stage select with its timer. Empty: not shown. Any thread (the frame hook, first runs).
 void SetRulesLines(std::string line, std::string note);

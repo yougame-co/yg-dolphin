@@ -139,6 +139,14 @@ void OverlayModel::AddToast(std::string text, double now_ms)
     m_toasts.pop_front();
 }
 
+void OverlayModel::AddChat(std::string name, std::string text, double now_ms)
+{
+  std::lock_guard lk(m_lock);
+  m_chats.push_back({now_ms, std::move(name), std::move(text)});
+  while (m_chats.size() > CHAT_KEEP)
+    m_chats.pop_front();
+}
+
 void OverlayModel::Update(const LinkView& link, double now_ms)
 {
   std::lock_guard lk(m_lock);
@@ -148,6 +156,8 @@ void OverlayModel::Update(const LinkView& link, double now_ms)
     m_stall_history.pop_front();
   while (!m_toasts.empty() && m_toasts.front().first < now_ms - TOAST_MS)
     m_toasts.pop_front();
+  while (!m_chats.empty() && m_chats.front().at < now_ms - CHAT_MS)
+    m_chats.pop_front();
 }
 
 Signal OverlayModel::Quality(double) const
@@ -293,6 +303,14 @@ OverlayModel::Frame OverlayModel::View(double now_ms, Stats stats, Perf perf) co
     f.toasts.push_back(
         {text, static_cast<float>(std::clamp(left / TOAST_FADE_MS, 0.0, 1.0))});
   }
+  for (const ChatEntry& c : m_chats)
+  {
+    const double left = c.at + CHAT_MS - now_ms;
+    if (left <= 0)
+      continue;
+    f.chats.push_back(
+        {c.name, c.text, static_cast<float>(std::clamp(left / TOAST_FADE_MS, 0.0, 1.0))});
+  }
   if (stats != Stats::Off && m_link.online)
   {
     const std::string ping = m_link.round_trip_ms >= 0 ?
@@ -375,6 +393,25 @@ void OutlinedText(ImDrawList* dl, float size, ImVec2 pos, float alpha, const std
 ImVec2 TextSize(float size, const std::string& text)
 {
   return ImGui::GetFont()->CalcTextSizeA(size, FLT_MAX, 0, text.c_str());
+}
+
+// A chat line, "<name>: <text>" wrapped at `wrap` pixels, outlined like the rest, with the name in
+// the circle's blue (drawn over the white in the same place: a prefix wraps as it does in the whole
+// line). Returns its height.
+float ChatLine(ImDrawList* dl, float size, ImVec2 pos, float wrap, const OverlayModel::ChatToast& c)
+{
+  const std::string prefix = c.name + ":";
+  const std::string line = prefix + " " + c.text;
+  ImFont* font = ImGui::GetFont();
+  const float o = std::max(1.0f, size / 14);
+  for (const ImVec2 d : {ImVec2(-o, 0), ImVec2(o, 0), ImVec2(0, -o), ImVec2(0, o), ImVec2(o, o)})
+  {
+    dl->AddText(font, size, ImVec2(pos.x + d.x, pos.y + d.y), Rgba(16, 16, 24, c.alpha * 0.85f),
+                line.c_str(), nullptr, wrap);
+  }
+  dl->AddText(font, size, pos, Rgba(255, 255, 255, c.alpha), line.c_str(), nullptr, wrap);
+  dl->AddText(font, size, pos, Rgba(80, 200, 255, c.alpha), prefix.c_str(), nullptr, wrap);
+  return font->CalcTextSizeA(size, FLT_MAX, wrap, line.c_str()).y;
 }
 
 // Brawl's Wi-Fi connection circle: a dark disc with a dot and three arcs, lit by quality.
@@ -471,9 +508,9 @@ void Draw()
     rules = RankedSet::CurrentScoreLine();
   if (rules_note.empty())
     rules_note = rule_line;
-  if (!f.show_signal && f.waiting.empty() && f.toasts.empty() && f.stats.empty() &&
-      f.perf.empty() && search.empty() && search_note.empty() && rules.empty() &&
-      rules_note.empty() && !any_label)
+  if (!f.show_signal && f.waiting.empty() && f.toasts.empty() && f.chats.empty() &&
+      f.stats.empty() && f.perf.empty() && search.empty() && search_note.empty() &&
+      rules.empty() && rules_note.empty() && !any_label)
   {
     return;
   }
@@ -544,18 +581,28 @@ void Draw()
       OutlinedText(dl, size, ImVec2(centre - s.x / 2, screen.y * 0.585f), 1, labels[port]);
     }
   }
+  // How far down the top-centre lines reach, and how far left the widest goes (the chat keeps
+  // clear of them).
+  float centre_bottom = 0;
+  float centre_left = screen.x;
+  const auto centred = [&](float size, float line_y, const std::string& text, Signal level) {
+    const ImVec2 s = TextSize(size, text);
+    const float x = (screen.x - s.x) / 2;
+    OutlinedText(dl, size, ImVec2(x, line_y), 1, text, level);
+    centre_bottom = std::max(centre_bottom, line_y + s.y);
+    centre_left = std::min(centre_left, x);
+    return s;
+  };
   if (!search.empty())
   {
     // Top centre, clear of the circle and the meter in the top-left corner.
     const float size = 3.0f * unit;
-    const ImVec2 s = TextSize(size, search);
     float line_y = margin;
-    OutlinedText(dl, size, ImVec2((screen.x - s.x) / 2, line_y), 1, search);
+    const ImVec2 s = centred(size, line_y, search, Signal::Good);
     if (!search_note.empty())
     {
       line_y += s.y + 0.5f * unit;
-      const ImVec2 n = TextSize(size, search_note);
-      OutlinedText(dl, size, ImVec2((screen.x - n.x) / 2, line_y), 1, search_note, Signal::Ok);
+      centred(size, line_y, search_note, Signal::Ok);
     }
   }
   if (!rules.empty() || !rules_note.empty())
@@ -567,14 +614,24 @@ void Draw()
       line_y += 2 * (TextSize(size, search).y + 0.5f * unit);
     if (!rules.empty())
     {
-      const ImVec2 s = TextSize(size, rules);
-      OutlinedText(dl, size, ImVec2((screen.x - s.x) / 2, line_y), 1, rules);
+      const ImVec2 s = centred(size, line_y, rules, Signal::Good);
       line_y += s.y + 0.5f * unit;
     }
     if (!rules_note.empty())
+      centred(size, line_y, rules_note, Signal::Ok);
+  }
+  if (!f.chats.empty())
+  {
+    // Under the toasts, wrapped to under half the width; below the top-centre lines where they
+    // would meet.
+    const float wrap = 0.45f * screen.x;
+    if (centre_bottom > 0 && centre_left < margin + wrap)
+      y = std::max(y, centre_bottom + 1.5f * unit);
+    for (const OverlayModel::ChatToast& c : f.chats)
     {
-      const ImVec2 n = TextSize(size, rules_note);
-      OutlinedText(dl, size, ImVec2((screen.x - n.x) / 2, line_y), 1, rules_note, Signal::Ok);
+      if (y >= screen.y - margin)
+        break;
+      y += ChatLine(dl, text_size, ImVec2(margin, y), wrap, c) + unit;
     }
   }
 }
@@ -618,6 +675,11 @@ void SetQueueLines(std::string line, std::string note, std::array<std::string, 4
   s_queue_line = std::move(line);
   s_queue_note = std::move(note);
   s_queue_labels = std::move(labels);
+}
+
+void ShowChat(std::string name, std::string text)
+{
+  s_overlay.AddChat(std::move(name), std::move(text), NowMs());
 }
 
 void SetRuleLine(std::string text)

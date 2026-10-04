@@ -54,9 +54,11 @@ void Report(std::string_view code, std::string_view sentence);
 // "direct": the app may send "direct on|off", the player's switch for direct links (ORCA.md).
 // "host": the app may send "host <code>" (host the room the queue matched this game into) and
 // "queue-cancel" (the search ended); the Online menu's Casual and Ranked print without "local".
+// "chat": the app may send "chat <name> <text>", a line of the page's chat shown as a toast while
+// Orca fills the screen (UX/Chat.h; never printed or logged).
 // "results": "orca result" lines, offered only for a profile whose result reader is verified
 // (UX/Results.h, ResultsVerified); the room hears the results either way (ORCA.md "Matchmaking").
-inline constexpr const char* CAPS = "join leave stats pause delay perf direct host";
+inline constexpr const char* CAPS = "join leave stats pause delay perf direct host chat";
 inline constexpr const char* RESULTS_CAP = "results";
 // "locks": a queue room's game carries the online rules (UX/OnlineRules.h: rules locked, casual's
 // random legal stage, no way out of the character and stage select), offered for a profile with a
