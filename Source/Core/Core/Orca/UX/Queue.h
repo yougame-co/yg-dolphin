@@ -46,8 +46,14 @@ class CPUThreadGuard;
 //   2026-10-04: more time to talk).
 // - **Skip:** holding Z 1.5 s on the room's character select prints `orca queue skip` (the page
 //   leaves the room and searches again). Local only: it changes nothing in the game.
-// - **Later games:** casual comes back to the room's character select, characters free, ready
-//   again with no timer; ranked runs the character order first (CharOrder.h), then the ready timer.
+// - **Later games:** casual comes back to the room's character select, characters free: A picks, B
+//   (with the token down) takes the token back up, Start locks in (ready), B while locked in
+//   unlocks; both locked in, on to the stage select at once, with no timer (Luis, 2026-10-04: "press
+//   A to select character and then press start after to lock in and ready up"). Ranked runs the
+//   character order (CharOrder.h: the same buttons, the winner's lock-in final, then the loser's),
+//   and the moment the second lock-in lands the stage select comes, with no ready step after it.
+// - **Locked in** is what ready means here: a locked-in player's A, B (the game's), X and Y do
+//   nothing (B only unlocks), and the overlay shows a LOCKED IN badge on their panel.
 // - **After the room** (skip, timeout, the opponent gone, a set over): the session puts back this
 //   player's own game as it was when the match came (OnlineMatch's queue image), so each player is
 //   on their own queue character select with their pick, on port 1, and Orca prints
@@ -151,6 +157,10 @@ struct View
   bool css = false;      // on the character select
   bool game1 = true;     // no fight since the header was written
   bool order_done = true;  // ranked later games: the character order is done (CharOrder.h)
+  // Ranked later games: the character order's picks are locked in (its Done step), so the stage
+  // select comes at once; and which ports have locked in so far (bit p, the overlay's badges).
+  bool order_locked_in = false;
+  u8 order_locked = 0;
   u8 plugged = 0;        // the ports in play (MatchBlock::PLUGGED)
   std::array<CssPort, 2> ports{};
   std::array<u16, 2> raw{};
@@ -184,6 +194,8 @@ struct State
 // The room's character select with both players in: the ready step (game 1, and later games once
 // ranked's character order is done).
 bool ReadyPhase(const View& view);
+// Ranked's later games once the character order has both lock-ins: on without a ready step.
+bool OrderLockedIn(const View& view);
 
 // Whether the ready step has its 30 s timer: every ranked game, and casual's first only (game 1:
 // strangers who just met). Casual's later games with the same opponent wait for both Starts, with
@@ -243,7 +255,9 @@ State ReadState(const GuestMemory& memory);
 // Writes the region's state fields (not RAW/RAW_PREV: the latch's), only where they differ.
 int WriteState(GuestMemory& memory, const State& state);
 // The latch (InputGate::SetLatch): ports 1 and 2's raw buttons into RAW, the old RAW into RAW_PREV,
-// and port 2's hand into HAND_PREV, while the header is the queue's. Returns bytes changed.
+// and port 2's hand into HAND_PREV, while a header locks (the queue's, and any queue room's: the
+// character select's B and the character order's Start read RAW too; and with the character
+// order's test knob, on its character select). Returns bytes changed.
 int Latch(GuestMemory& memory, const std::array<std::optional<GCPadStatus>, 4>& raw);
 
 // ---- The frame hook's part (UX.cpp), after the character order ----

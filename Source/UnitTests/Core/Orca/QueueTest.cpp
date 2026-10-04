@@ -323,6 +323,73 @@ TEST(OrcaQueue, RankedLaterGamesWaitForTheCharacterOrder)
   EXPECT_TRUE(s.flags & FLAG_GO);
 }
 
+TEST(OrcaQueue, RankedLaterGamesGoOnTheMomentTheOrderHasBothLockIns)
+{
+  // Luis, 2026-10-04: "after you lock in opponent chooses and presses start to lock in and
+  // immediately we go to stage select". The character order's Start was each one's lock-in.
+  View v = Room(true);
+  v.game1 = false;
+  v.order_done = false;
+  v.order_locked = 1;  // the winner's lock-in, the loser's turn
+  State s = Step(v, State{}, 6000);
+  EXPECT_FALSE(s.flags & FLAG_GO);
+  EXPECT_EQ(s.ready, 0);
+  v.order_done = true;
+  v.order_locked = 3;
+  v.order_locked_in = true;
+  EXPECT_TRUE(OrderLockedIn(v));
+  EXPECT_FALSE(Timed(v));
+  s = Step(v, s, 6001);
+  EXPECT_EQ(s.ready, 3);
+  EXPECT_TRUE(s.flags & FLAG_GO);
+  const Masks m = Gate(v, s);
+  EXPECT_EQ(m[0].press & START, s.timer % 2 == 0 ? START : 0);
+  // A token still in a hand (a turn that ran out with it there): on once it is down.
+  View up = v;
+  up.ports[1].placed = false;
+  State t = Step(up, State{}, 7000);
+  EXPECT_FALSE(t.flags & FLAG_GO);
+  t = Step(up, t, 7000 + READY_FRAMES * 2);
+  EXPECT_FALSE(t.flags & (FLAG_GO | FLAG_TIMED_OUT));
+  t = Step(v, t, 7000 + READY_FRAMES * 2 + 1);
+  EXPECT_TRUE(t.flags & FLAG_GO);
+  // Game 1 never: its ready step is the picks' (OrderLockedIn needs a later game).
+  View one = v;
+  one.game1 = true;
+  EXPECT_FALSE(OrderLockedIn(one));
+}
+
+TEST(OrcaQueue, ALockedInPlayerKeepsTheirPickAndBUnlocks)
+{
+  // Casual's later games: A picks and B takes the token up (the game's, OnlineRules.h); Start
+  // locks in. Locked in, A, B, X and Y never reach the game, and B unlocks.
+  View v = Room();
+  v.game1 = false;
+  State s = Step(v, State{}, 100);
+  Masks m = Gate(v, s);
+  EXPECT_EQ(m[0].buttons & (A | B | X | Y), 0);
+  EXPECT_EQ(m[1].buttons & (A | B | X | Y), 0);
+  s = Step(Press(v, START), s, 101);
+  EXPECT_EQ(s.ready, 1);
+  m = Gate(v, s);
+  EXPECT_EQ(m[0].buttons & (A | B | X | Y), A | B | X | Y);
+  EXPECT_EQ(m[1].buttons & (A | B | X | Y), 0);
+  // Start with the token in the hand locks nothing in.
+  View up = v;
+  up.ports[1].placed = false;
+  s = Step(Press(up, 0, START), s, 102);
+  EXPECT_EQ(s.ready, 1);
+  // B unlocks (the game doesn't see it: masked while locked in, and held on after it the online
+  // rules pass none of it).
+  s = Step(Press(v, B), s, 103);
+  EXPECT_EQ(s.ready, 0);
+  EXPECT_EQ(Gate(v, s)[0].buttons & (A | X | Y), 0);
+  // Both lock in: on at once, no clock.
+  s = Step(Press(v, START, START), s, 104);
+  EXPECT_EQ(s.ready, 3);
+  EXPECT_TRUE(s.flags & FLAG_GO);
+}
+
 TEST(OrcaQueue, CasualLaterGamesWaitForBothStartsWithNoTimer)
 {
   // Game 2 on with the same opponent (Luis, 2026-10-04): no clock, no timeout, nobody frozen.
@@ -385,7 +452,7 @@ TEST(OrcaQueue, Game1PicksLockOnceIn)
   s = Step(later, s, 8001);
   EXPECT_EQ(s.locked, 0);
   m = Gate(later, s);
-  EXPECT_EQ(m[0].buttons & (A | X | Y), 0);
+  EXPECT_EQ(m[0].buttons & (A | B | X | Y), 0);
 }
 
 TEST(OrcaQueue, ThePort2PickIsSteeredIn)
@@ -743,10 +810,21 @@ TEST(OrcaQueue, TheLatchKeepsTheRawButtons)
   EXPECT_EQ(m.Read16(RAW + 2), 0);
   EXPECT_EQ(m.Read16(RAW_PREV), START | Z);
   EXPECT_EQ(m.Read16(RAW_PREV + 2), B);
-  // Without the queue's header (a friends game, an older page's room): never written.
+  // Any queue room's header (an older page's, without queue2): written too (the character
+  // select's B and the character order's Start read it, OnlineRules.h, CharOrder.h).
   FakeMemory plain = Block(0);
-  EXPECT_EQ(Latch(plain, {Pad(START), Pad(START), std::nullopt, std::nullopt}), 0);
-  EXPECT_EQ(plain.Read16(RAW), 0);
+  EXPECT_GT(Latch(plain, {Pad(START), Pad(B), std::nullopt, std::nullopt}), 0);
+  EXPECT_EQ(plain.Read16(RAW), START);
+  EXPECT_EQ(plain.Read16(RAW + 2), B);
+  // No header (a friends game, solo play): never written.
+  FakeMemory none = Block(0);
+  none.Write32(MB::MAGIC, 0x3A200000);
+  EXPECT_EQ(Latch(none, {Pad(START), Pad(START), std::nullopt, std::nullopt}), 0);
+  EXPECT_EQ(none.Read16(RAW), 0);
+  // Mode none (never written so): no header that locks, never written.
+  FakeMemory unlocked = Block(0);
+  unlocked.Write8(MB::MODE, MB::MODE_NONE);
+  EXPECT_EQ(Latch(unlocked, {Pad(START), Pad(START), std::nullopt, std::nullopt}), 0);
 }
 
 TEST(OrcaQueue, TheStateRoundTripsThroughTheBlock)

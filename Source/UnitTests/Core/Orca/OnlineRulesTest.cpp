@@ -17,6 +17,7 @@
 #include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/OnlineRules.h"
 #include "Core/Orca/UX/SetBlock.h"
+#include "Core/Orca/UX/Queue.h"
 #include "Core/Rollback/OnlineMatch.h"
 #include "InputCommon/GCPadStatus.h"
 
@@ -499,6 +500,77 @@ TEST(OrcaOnlineRules, TheCharacterSelectPassesAOnlyInTheGrid)
   constexpr u16 DPAD = PAD_BUTTON_UP | PAD_BUTTON_DOWN | PAD_BUTTON_LEFT | PAD_BUTTON_RIGHT;
   EXPECT_EQ(GateMasks(p)[0].buttons, B | DPAD);
   EXPECT_EQ(GateMasks(p)[1].buttons, B | DPAD | A);
+}
+
+TEST(OrcaOnlineRules, BReachesTheCharacterSelectOnlyToTakeTheTokenUp)
+{
+  constexpr u16 B = PAD_BUTTON_B;
+  FakeMemory m = Game("scSelctCharacter");
+  // Each area's player: a human, the token down on a character (Brawl's Mario, 0x00).
+  const auto token = [&m](int port, bool in_hand, bool flying, u32 character = 0x00) {
+    const u32 area = CSS_AREA + static_cast<u32>(port) * 0x1000;
+    m.Fill(area + 0x1B0, 0x50);
+    m.Write32(area + 0x1B4, 1);
+    m.Write32(area + 0x1B8, character);
+    m.Write8(area + 0x1F8, in_hand ? 1 : 0);
+    m.Write8(area + 0x1F9, flying ? 1 : 0);
+  };
+  for (int port = 0; port < 4; ++port)
+    token(port, false, false);
+  // A friends game: nothing masked.
+  for (const auto& mask : GateMasks(m))
+    EXPECT_TRUE(mask.Empty());
+  WriteHeader(m, Mode::Casual, Ruleset::Brawl);
+  // The latch's raw buttons, ports 1 and 2: nothing held on the frame that just ran.
+  m.Write16(Queue::RAW, 0);
+  m.Write16(Queue::RAW + 2, 0);
+  EXPECT_TRUE(ReadCssToken(m, 0).Down());
+  EXPECT_FALSE(GateMasks(m)[0].buttons & B);
+  EXPECT_FALSE(GateMasks(m)[1].buttons & B);
+  // Ports 3 and 4 never play a queue match: no B.
+  EXPECT_TRUE(GateMasks(m)[2].buttons & B);
+  EXPECT_TRUE(GateMasks(m)[3].buttons & B);
+  // B held on the frame that just ran: the game had its one frame of it.
+  m.Write16(Queue::RAW, B);
+  EXPECT_TRUE(GateMasks(m)[0].buttons & B);
+  EXPECT_FALSE(GateMasks(m)[1].buttons & B);
+  m.Write16(Queue::RAW, PAD_BUTTON_A);
+  EXPECT_FALSE(GateMasks(m)[0].buttons & B);
+  // The token in the hand (held B there backs out to the menus), on its way up or down, or on no
+  // character: no B.
+  token(0, true, false);
+  EXPECT_FALSE(ReadCssToken(m, 0).Down());
+  EXPECT_TRUE(GateMasks(m)[0].buttons & B);
+  token(0, false, true);
+  EXPECT_TRUE(GateMasks(m)[0].buttons & B);
+  token(0, true, true);
+  EXPECT_TRUE(GateMasks(m)[0].buttons & B);
+  token(0, false, false, 0x28);
+  EXPECT_TRUE(GateMasks(m)[0].buttons & B);
+  // A CPU's token (the area isn't a human's): no B.
+  token(0, false, false);
+  m.Write32(CSS_AREA + 0x1B4, 0);
+  EXPECT_TRUE(GateMasks(m)[0].buttons & B);
+  m.Write32(CSS_AREA + 0x1B4, 1);
+  EXPECT_FALSE(GateMasks(m)[0].buttons & B);
+  // The pure rule.
+  CssToken down;
+  down.valid = down.human = true;
+  down.character = 0x05;
+  down.in_hand = false;
+  EXPECT_TRUE(CssBUnpicks(down, false));
+  EXPECT_FALSE(CssBUnpicks(down, true));
+  EXPECT_FALSE(CssBUnpicks(CssToken{}, false));
+  // The queue's own character select before a match: B is the game's (it backs out), the rules
+  // don't take it.
+  FakeMemory solo = Game("scSelctCharacter");
+  WriteHeader(solo, Mode::Casual, Ruleset::Brawl, 0, 0, MB::FLAG_SOLO | MB::FLAG_QUEUE2);
+  for (const auto& mask : GateMasks(solo))
+    EXPECT_FALSE(mask.buttons & B);
+  // The stage select: never B.
+  SetScene(m, "scSelStage");
+  for (const auto& mask : GateMasks(m))
+    EXPECT_TRUE(mask.buttons & B);
 }
 
 TEST(OrcaOnlineRules, TheHandsAreReadPerPort)

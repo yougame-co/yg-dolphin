@@ -154,6 +154,39 @@ CssHand ReadCssHand(const GuestMemory& memory, int port);
 // Whether A may reach the game from this hand while the locks hold. An unreadable hand may not.
 bool CssHandMayPressA(const CssHand& hand);
 
+// ---- B on the character select: only to take the token back up (ORCA.md "The character
+// select's buttons") ----
+// Both games take a player's token back into the hand on a B pressed while it is down (a pick
+// undone), and back out to the menus once B is held with the token in the hand (probed under the
+// harness, ORCA.md). So while the locks hold B reaches the game only as the first frame of a press
+// and only while that player's token is down: a B held on gets one frame of it, and a B with the
+// token in the hand none, so the back out never starts. Whether the press is new comes from the
+// queue's latch (Queue.h RAW: the raw buttons of the frame that just ran, written whenever a
+// header locks), never from host state. The rules on top (a game-1 pick, a ready player, the
+// character order's turns, Queue.h and CharOrder.h) mask B further.
+struct CssToken
+{
+  bool valid = false;  // the player's area could be read
+  bool human = false;
+  int character = 0x28;  // under the hand while the token is in it, else the token's (0x28 none)
+  bool in_hand = true;   // +0x1F8
+  bool flying = false;   // +0x1F9: on its way up or down
+  // On a character and still: B takes it up.
+  bool Down() const { return valid && human && character != 0x28 && !in_hand && !flying; }
+  bool operator==(const CssToken&) const = default;
+};
+// Port `port`'s (0-3) token, on the character select; invalid anywhere else.
+CssToken ReadCssToken(const GuestMemory& memory, int port);
+// Whether B may reach the game from a port whose token is `token`, its raw B held (`b_held`) on
+// the frame that just ran or not. Pure.
+constexpr bool CssBUnpicks(const CssToken& token, bool b_held)
+{
+  return token.Down() && !b_held;
+}
+// The same from memory: port `port`'s token, and its raw B from the latch (ports 1 and 2 only; 3
+// and 4 never play a queue match).
+bool CssBMayUnpick(const GuestMemory& memory, int port);
+
 // Brawl's Random Stage Switch for the legal stages (Supernova 2025): the Brawl page's mask
 // (record menu data +0x24) and the Melee page's (+0x20), without Final Destination when
 // `no_final_destination`.

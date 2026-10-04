@@ -192,10 +192,18 @@ void SetRulesLines(std::string line, std::string note);
 // picks first · 0:42"); empty: none. Display only: computed from memory on first runs. Any thread.
 void SetRuleLine(std::string text);
 // The queue's character select (Queue.h), top centre in place of the search's lines: "Casual ·
-// Searching for an opponent…", "Press Start when you're ready · 0:24"; and each port's label near
-// its panel at the bottom ("ada · 1532 ✓"). Empty: not shown. Display only: computed from memory on
-// first runs. Any thread.
-void SetQueueLines(std::string line, std::string note, std::array<std::string, 4> labels);
+// Searching for an opponent…", "ada locked in · Your pick: Start locks it in"; each port's label
+// near its panel at the bottom ("ada · 1532"); and a LOCKED IN badge in the port's colour over the
+// panel of each player who has locked in (`locked`). Empty: not shown. Display only: computed from
+// memory on first runs. Any thread.
+void SetQueueLines(std::string line, std::string note, std::array<std::string, 4> labels,
+                   std::array<bool, 4> locked = {});
+// The colour of port `port` (0-3), as the games draw their panels: red, blue, yellow, green.
+struct PortColour
+{
+  int r, g, b;
+};
+PortColour PortColourOf(int port);
 OverlayModel& Overlay();
 // The overlay's unit, 1% of the picture's height (it scales with the window), or 0 below
 // OVERLAY_MIN_HEIGHT pixels: then it draws nothing. ImGui rounds a text size to whole pixels and
