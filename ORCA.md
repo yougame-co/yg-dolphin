@@ -2525,10 +2525,12 @@ own writers (`RankedPPlus::RequestHeader/ApplyHeader`, `RankedSet::SetRoomMode/A
 gone, and so are their knobs (`ORCA_TEST_RANKED`, `ORCA_TEST_MATCH_BLOCK`): **`ORCA_TEST_QUEUE=casual`,
 `ranked` or `ranked:1`** (port 2 strikes first) turns on either game's flows in a harness run.
 
-**The block, by offset from `0x806F2380`:** +0x00 header; +0x10..+0x8F Project+'s flow
+**The block, by offset from `0x806F2380`:** +0x00 header (+0x0C the queue's flags, "The queue's
+character select"); +0x10..+0x8F Project+'s flow
 (`MatchBlock::State`); +0x80..+0xBF Brawl's flow (`BrawlStages`, its own game); +0xC0..+0xCF Phase
 1 (the ready timer: `CSS_TIMER`, `CSS_NO_SHOW`, `FOUGHT`, `PLUGGED`, `CSS_TIMER_START`);
-+0xD0..+0x1F0 the player's saved rules; +0x200..+0x20F the character order; +0x210..+0x28F the
++0xD0..+0x1A7 the player's saved rules (Project+'s stage switch data from +0x100); +0x1C0..+0x1EF
+the queue's character select; +0x1F0 the saved rules' flags; +0x200..+0x20F the character order; +0x210..+0x28F the
 ranked set (`SetBlock`, authoritative: the room hears it, Brawl's flow and the character order
 read it).
 
@@ -2575,6 +2577,103 @@ game, one queue e2e each way):
 started (it agrees with `SetBlock` for Project+: both take the results screen's winner, and a tie
 counts for neither). Brawl's exact Supernova order (ban, the loser's stage, then characters) is not
 built: Brawl's later games are characters (both at once, 45 s), then the ban, then the pick.
+
+## The queue's character select
+
+Luis's spec of 2026-10-04 (Slippi's flow): Casual and Ranked land on a character select where the
+player sees only their own panel, picks, and presses Start; only then does the page search. The
+opponent arrives with their character already picked; both press Start to ready up (30 s); a long Z
+finds someone else. Orca's half of the `queue2` contract with the YouGame page (its half:
+`lib/orca-queue.ts`, `OrcaEmbed.tsx`); code in `Core/Orca/UX/Queue.*`, the session's part in
+`Rollback/OnlineMatch.cpp` (the queue image), tests `OrcaQueue*`.
+
+| stdout (with `caps queue2`) | When |
+|---|---|
+| `orca queue ready <casual\|ranked> <char> <costume>` | On the queue's own character select the player has a character down and pressed Start: search with this pick. Printed again with a new pick, and again when the player is back on that character select still ready after a room (below). `<char>` is the character select's own id (`muSelCharPlayerArea` +0x1B8, 0x28 none), `<costume>` its colour number (+0x1BC). |
+| `orca queue unready` | The player pressed B, took the token up, or the page's `queue-cancel` came, while ready: stop searching. Still on the character select. |
+| `orca menu cancel` | (unchanged) B while not ready backs out to the menus, as the game does: the search is over. |
+| `orca queue skip` | Z held 1.5 s on the room's character select (both players in, before the game goes on): the page leaves the room and searches again. Local only: nothing in the game changes. |
+| `orca queue timeout me\|them` | Casual: the 30 s ready timer ran out (at a final frame, the same on both machines). `me`: this player wasn't ready (the page leaves and stops searching); `them`: the opponent wasn't (the page leaves and searches again). Nothing moves on the character select meanwhile. |
+
+The page owns the room: Orca never leaves on a skip or a timeout by itself.
+
+### How it plays
+
+- **The queue's own character select.** With Anyone > Casual or Ranked, with the app's `queue2`,
+  starts `Queue::Begin`; the session then asks for a header with `FLAG_SOLO | FLAG_QUEUE2` (the
+  header's +0x0C) at the player's alone boundaries (`WantedRulesMode`: no queue room, port 1, no
+  session). The rules lock as in a queue room (`OnlineRules.h`), A only in the grid; ports 2-4 are
+  masked entirely; Start never reaches the game (one player couldn't start a versus match anyway):
+  it readies the player, through the raw latch below. While ready, B only un-readies. B while not
+  ready reaches the game, and the loop lock's toggled group stands aside for `FLAG_SOLO` (`when
+  806F238C & 01000000 == 00000000` in both patch files), so held B backs out to the menus.
+  Overlay: "Casual" / "Pick your character, then press Start to search", then "Casual ·
+  Searching for an opponent…" / "B to cancel". Panels 2-4 still show (as empty "N/A" panels): no
+  cheap layout patch was looked for.
+- **The pick's identity.** At `ready`, Orca keeps the pick (character, costume, and where its hand
+  held the token over that character when it put it down) and the page's `queue rating`, as the
+  player's queue identity (`Queue::Identity`, 13 bytes): it rides the session's value channel with
+  the player's name and controls (`Events::PortInfo::queue`, the `nm`/`kf` entries' fifth element,
+  the joiner's hello `qi`), so every machine has the joiner's at its plug frame.
+- **The room's character select** (header `FLAG_QUEUE2`, written by the host with the app's
+  `queue2`). Game 1: the host's pick is locked once down (A, B, X, Y masked); port 2's pick is put
+  in from its identity by the input gate (`Mask::steer`, a held stick, and synthesized presses):
+  its own controller does nothing, the stick takes its hand to where it held the token in its own
+  game, A puts the token down once the hand is over that character with the token in it, X turns
+  the costume until it matches, B takes a token down on another character back up; then it is
+  locked too. 10 s at most, after which the player picks by hand. Then the ready timer, 30 s, once
+  both are plugged in (a ranked later game's: once the character order is done, `CharOrder.h`,
+  whose own Start is then not pressed): Start readies a player with a character down, B un-readies;
+  both ready, Orca presses Start for port 1 every other frame until the screen goes (casual: the
+  random legal stage; ranked: the stage select). Casual time up: the players who weren't ready are
+  named (`orca queue timeout`) and every controller is masked until the pages leave. Ranked time up:
+  on with the picks (without a character on both, Phase 1's no-show rule decides). Overlay: each
+  player's name over their panel, with the rating in ranked ("ada · 1532", a ✓ once ready), "Press
+  Start when you're ready · 0:24" / "bo is ready · Hold Z to find someone else", a bar while Z is
+  held, "Time's up".
+- **After the room** (a skip, a timeout, the opponent gone, a set over, a leave): the session puts
+  back this player's own game as it was when `host` or `join` came (the **queue image**: a machine
+  image and the NAND, taken at that boundary while the player was on the queue's own character
+  select; armed once the room was really entered, its welcome as host or a session in it as
+  joiner). Once the room is over for this player and nothing of drop-in is under way, the image is
+  loaded as the state of the next frame (as a keyframe is: a new ring, the NAND replaced), the pad
+  goes to port 1 and a room of its own opens (a former joiner had none: no more `no-room`). The
+  player is ready again, so Orca prints `orca queue ready` again, unless their own ready timer ran
+  out (`timeout me`). A `host` or `join` that comes before the restore waits for it at the same
+  boundary. Backing out to the menus drops the image.
+- **Later games:** casual comes back to the room's character select with the same opponent,
+  characters free (no locks), ready again with the 30 s timer.
+
+### Determinism
+
+The region at `MatchBlock::QUEUE` (`+0x1C0..+0x1EF`; the sprint assigned `+0x100..+0x13F`, which is
+Project+'s saved stage switch data): +0x00 the ready flags (bit per port), +0x01 go / timed out,
++0x02 who wasn't ready, +0x03 game 1's locked picks, +0x04 the ready timer's start (hook frame + 1),
++0x08 ports 1-2's raw buttons in the frame that just ran and +0x0C the frame before's, +0x10 the
+timer, +0x12 the steering's frames, +0x14 port 2's pick (character, costume, x, y), +0x20 the
+steering's start. `Queue::Frame` (after the character order) advances it at every boundary, first
+runs and re-runs, as a pure and idempotent function of memory, the hook's frame number and the
+synced ports (`Queue::Advance`); the gate's masks come from memory alone (`Queue::Gate`). Any new
+header (another mode, room or flags) zeroes the region.
+
+**The raw latch** (`InputGate::SetLatch`): the presses the queue reads are ones the gate keeps from
+the game (Start, B, Z), so the gate, right after deciding a frame's masks, hands the latch the raw
+pads of the frame about to run (`RawInputOverride`: the session's or the harness's), and the latch
+writes ports 1-2's buttons into the region (the old ones one slot down). It runs after the
+boundary's snapshot or keyframe was saved or loaded, so no snapshot holds its write, and every pass
+over the boundary (a first run, a rollback's or sync test's re-run, a joiner's first frame after
+its keyframe) writes it again from the state it starts from and the same pads before the frame
+runs: the next boundary's frame hook reads the same bytes on every machine. Only while the header is
+the queue's; friends games are never written.
+
+**Local only** (first runs, never memory): the stdout lines (the timeout's at a final frame, through
+`ConfirmResults`), the Z hold (this player's own raw buttons, never a guess), the overlay.
+
+**Test knobs** (test overrides, both processes alike): `ORCA_TEST_QUEUE=casual|ranked[:<coin>][:q2]`
+(the room's header with `FLAG_QUEUE2`) or `...:solo` (the queue's own character select);
+`ORCA_TEST_QUEUE_PICK=<frame>:<char>:<costume>:<x>:<y>[:<rating>]` (harness runs: port 2 plugs in at
+that frame with that queue identity, as a matched joiner's does). `Tools/orca/queue-e2e.mjs --q2
+[--scenario skip|timeout]` plays the page's half against yougame.co.
 
 ## Embedding
 
@@ -2636,7 +2735,8 @@ window (layout, scroll, resize, full screen). Moving, minimizing or hiding the w
 | `reset` | The console's reset button. Answers `unsupported reset` in a session or before the game runs. |
 | `prepare-join` | The host invited a friend to drop in. It calls `Orca::Online::PrepareJoin()`: the next frame boundary captures a keyframe ("Drop-in"). |
 | `join <code>` / `leave` | With `caps join` / `caps leave`: into a friend's game, or out of one ("Drop-in"). Both are also taken while a launch join waits for the keyframe. |
-| `host <code>` / `queue-cancel` | With `caps host` (Orca 0.4.0 on): host the room the queue matched this game into, or the search ended ("Matchmaking"). `unsupported host` when refused. |
+| `host <code>` / `queue-cancel` | With `caps host` (Orca 0.4.0 on): host the room the queue matched this game into, or the search ended ("Matchmaking"). `unsupported host` when refused. With `caps queue2`, `queue-cancel` also un-readies the player on the queue's own character select (`orca queue unready` follows). |
+| `queue rating <n\|->` | With `caps queue2`: this player's rating in the current queue (ranked; 0-65534) or none (`-`), sent before `host` or `join`. It rides the player's queue identity to the other Orca, which shows it by the player's panel ("The queue's character select"). Anything else answers `unsupported queue`. |
 | `direct on` / `direct off` | With `caps direct` (Orca 0.3.9 on): the player's switch for direct links to the other players ("Direct links"). On until the app says; the choice stays for the run and applies while the `caps` line has `direct`. `off` drops every link at the room's next tick and sends every input through the relay (as YouGame's ticket switch does); `on` builds them anew. The `orca stats` line's `tx` shows the path in use. Anything else answers `unsupported direct`. |
 | `delay auto` / `delay N` | With `caps delay` (Orca 0.3.5 on): this player's input delay. `N` from 1 to 6 frames is exactly that, never adapted; `auto` is the adaptive delay ("Input delay" below). The choice stays for the run, so it may come before a session and holds for every session after; until the app's `caps` line turns `delay` on, it waits. Mid-match it applies from this player's next frame and the friend needs nothing: each player's delay is its own, and every input travels explicitly. Anything else answers `unsupported delay`. The `orca stats` line's `delay` is the delay in use. |
 | `quit` | Stops at once (no power-button shutdown, also outside a session), then exits. |
@@ -2656,6 +2756,7 @@ Any other line goes to stderr. The app's `EMBED_COMMAND` filter must add `blur` 
 | `orca state <state>` / `orca error <code> <sentence>` | Session status (`Core/Orca/Status.h`). New states, such as drop-in's `joining`, `friend-joined` and `no-room`, come through unchanged: forward every line that starts with `orca `. |
 | `orca menu <event>` | The player picked something in the game's own Online menu: `online casual`, `online ranked` (with `caps host`; `... local` without), `online friends`, or backed out of searching: `cancel` ("Online menu", "Matchmaking"). An event, printed once per pick, only while the player's game is alone. |
 | `orca result <json>` | With `caps results`: a matchmade room's verdict on a game or a ranked set ("Matchmaking"). |
+| `orca queue ready <casual\|ranked> <char> <costume>` / `orca queue unready` / `orca queue skip` / `orca queue timeout me\|them` | With `caps queue2`: the queue's character select ("The queue's character select"). |
 | `exit <code>` | Always the last line, on every exit path: 0 after a normal stop, 1 after a reported error, 2 for bad arguments. |
 
 Embedded, Orca keeps fd 1 for the protocol and points the process's stdout at stderr. So the Dolphin

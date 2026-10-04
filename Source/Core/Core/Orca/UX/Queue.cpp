@@ -542,7 +542,8 @@ struct Local
   Identity printed;
   SkipHold skip;
   std::map<int, std::pair<float, float>> holding;  // character -> the hand's last place over it
-  bool was_placed = false;
+  std::array<bool, 2> was_placed{};
+  std::array<std::pair<float, float>, 2> last_holding{};
 };
 Local& L()
 {
@@ -826,6 +827,21 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
       local = p.port;
   }
   Local& l = L();
+  // The log: where each port's hand put its token down (the queue identity's place).
+  for (int p = 0; p < 2 && v.queue2 && v.css; ++p)
+  {
+    const CssPort& port = v.ports[p];
+    if (!port.placed && port.hand_target == Rules::CSS_HAND_GRID_HOLDING)
+      l.last_holding[p] = {port.hand_x, port.hand_y};
+    if (port.placed && !l.was_placed[p])
+    {
+      NOTICE_LOG_FMT(ROLLBACK, "Queue: frame {}: port {} put its token on character {:#x} costume "
+                     "{} (the hand held it at {:.2f}, {:.2f})",
+                     frame, p + 1, port.character, port.costume, l.last_holding[p].first,
+                     l.last_holding[p].second);
+    }
+    l.was_placed[p] = port.placed;
+  }
   const bool solo_css = v.queue2 && v.solo && v.css;
   s_on_solo_css = solo_css && alone;
   if (solo_css && alone)
