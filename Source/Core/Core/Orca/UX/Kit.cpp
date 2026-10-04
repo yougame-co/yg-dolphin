@@ -644,15 +644,25 @@ Box Banner(ImDrawList* dl, float left, float right, float top, float height, flo
        Rgb(255, 255, 255, 0.03f * alpha));
   // The title (and the note under it), centred.
   const float centre = (left + right) / 2;
+  // A short title in the heavy face; a sentence in the body face, which reads at that size.
+  std::size_t letters = 0;
+  for (std::size_t i = 0; i < title.size();)
+  {
+    GameFont::NextCodePoint(title, &i);
+    ++letters;
+  }
+  const bool heavy = letters <= 18;
   if (note.empty())
   {
-    const TextLook look = TitleLook(unit, height * 0.6f / unit);
+    const TextLook look = heavy ? TitleLook(unit, height * 0.6f / unit) :
+                                  LabelLook(unit, height * 0.5f / unit);
     Text(dl, ImVec2(centre, top + (height - look.px) / 2 + look.px * 0.05f), look, title, alpha,
          Align::Centre);
   }
   else
   {
-    const TextLook look = TitleLook(unit, height * 0.48f / unit);
+    const TextLook look = heavy ? TitleLook(unit, height * 0.48f / unit) :
+                                  LabelLook(unit, height * 0.44f / unit);
     const TextLook small = LabelLook(unit, height * 0.3f / unit);
     const float y = top + height * 0.1f;
     Text(dl, ImVec2(centre, y), look, title, alpha, Align::Centre);
@@ -841,13 +851,13 @@ void UseAtlasForTests(Face face, const GameFont::Atlas* atlas, ImTextureID textu
   s_test_faces[static_cast<int>(face)] = {atlas, texture};
 }
 
-bool DemoOn()
+int DemoMode()
 {
-  static const bool on = [] {
+  static const int mode = [] {
     const char* v = std::getenv("ORCA_UX_KIT_DEMO");
-    return v && v[0] == '1';
+    return v && (v[0] == '1' || v[0] == '2') ? v[0] - '0' : 0;
   }();
-  return on;
+  return mode;
 }
 
 void DrawDemo(ImDrawList* dl, ImVec2 o, ImVec2 size, float u, double now_s)

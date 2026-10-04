@@ -100,7 +100,8 @@ std::optional<std::vector<u8>> DecompressLz10(std::span<const u8> d)
 {
   if (d.size() < 4 || d[0] != 0x10)
     return std::nullopt;
-  const std::size_t size = d[1] | (d[2] << 8) | (d[3] << 16);
+  const std::size_t size = static_cast<std::size_t>(d[1]) | (static_cast<std::size_t>(d[2]) << 8) |
+                           (static_cast<std::size_t>(d[3]) << 16);
   std::vector<u8> out;
   out.reserve(size);
   std::size_t i = 4;
@@ -148,11 +149,11 @@ char32_t NextCodePoint(std::string_view s, std::size_t* at)
     return c;
   }
   if ((c & 0xE0) == 0xC0)
-    extra = 1, code = c & 0x1F;
+    extra = 1, code = static_cast<char32_t>(c & 0x1F);
   else if ((c & 0xF0) == 0xE0)
-    extra = 2, code = c & 0x0F;
+    extra = 2, code = static_cast<char32_t>(c & 0x0F);
   else if ((c & 0xF8) == 0xF0)
-    extra = 3, code = c & 0x07;
+    extra = 3, code = static_cast<char32_t>(c & 0x07);
   else
   {
     *at = i + 1;
@@ -171,7 +172,7 @@ char32_t NextCodePoint(std::string_view s, std::size_t* at)
       *at = i + static_cast<std::size_t>(k);
       return 0xFFFD;
     }
-    code = (code << 6) | (cc & 0x3F);
+    code = static_cast<char32_t>((code << 6) | static_cast<char32_t>(cc & 0x3F));
   }
   *at = i + static_cast<std::size_t>(extra) + 1;
   return code;
@@ -482,8 +483,8 @@ Atlas BuildAtlas(const Rfnt& font, std::span<const char32_t> codes, int pad, int
   for (std::size_t n = 0; n < present.size(); ++n)
   {
     const auto [code, index] = present[n];
-    const int x0 = static_cast<int>(n % per_row) * cw + pad;
-    const int y0 = static_cast<int>(n / per_row) * ch + pad;
+    const int x0 = static_cast<int>(n) % per_row * cw + pad;
+    const int y0 = static_cast<int>(n) / per_row * ch + pad;
     if (!font.GlyphAlpha(index, &alpha))
       continue;
     for (int y = 0; y < font.CellHeight(); ++y)

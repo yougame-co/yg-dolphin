@@ -13,6 +13,7 @@
 #include <imgui.h>
 
 #include "Common/CommonTypes.h"
+#include "Common/IOFile.h"
 #include "Core/Orca/UX/GameFont.h"
 #include "Core/Orca/UX/Kit.h"
 
@@ -393,10 +394,8 @@ TEST(OrcaKitDraw, DumpTheDemoForDesignChecks)
   ImTextureID next = 100;
   const std::string out(dir);
   const auto write = [](const std::string& path, const void* bytes, std::size_t size) {
-    std::FILE* f = std::fopen(path.c_str(), "wb");
-    ASSERT_TRUE(f) << path;
-    std::fwrite(bytes, 1, size, f);
-    std::fclose(f);
+    File::IOFile f(path, "wb");
+    ASSERT_TRUE(f.WriteBytes(bytes, size)) << path;
   };
   std::string index = "";
   if (data->Textures)

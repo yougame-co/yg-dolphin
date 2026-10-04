@@ -614,25 +614,198 @@ void DrawStageCursors(ImDrawList* dl, const StageCursors::View& v, float unit)
   }
 }
 
-// ORCA_UX_KIT_DEMO=1: the kit's primitives over the game's picture (Kit.h), for design checks.
-void DrawKitDemo()
+// The game's picture in the window (the presenter's target rectangle: the window can letterbox or
+// pillarbox it), the whole display when the presenter has none.
+void PictureRect(ImVec2* pic, ImVec2* pic_size)
 {
-  const ImVec2 screen = ImGui::GetIO().DisplaySize;
-  const float unit = OverlayUnit(screen.y);
-  if (unit <= 0 || !(screen.x >= 1))
-    return;
-  ImVec2 pic(0, 0), pic_size = screen;
+  *pic = ImVec2(0, 0);
+  *pic_size = ImGui::GetIO().DisplaySize;
   if (g_presenter)
   {
     const MathUtil::Rectangle<int>& r = g_presenter->GetTargetRectangle();
     if (r.GetWidth() > 0 && r.GetHeight() > 0)
     {
-      pic = ImVec2(static_cast<float>(r.left), static_cast<float>(r.top));
-      pic_size = ImVec2(static_cast<float>(r.GetWidth()), static_cast<float>(r.GetHeight()));
+      *pic = ImVec2(static_cast<float>(r.left), static_cast<float>(r.top));
+      *pic_size = ImVec2(static_cast<float>(r.GetWidth()), static_cast<float>(r.GetHeight()));
     }
   }
+}
+
+// ORCA_UX_KIT_DEMO=1: the kit's primitives over the game's picture (Kit.h), for design checks.
+void DrawKitDemo()
+{
+  const ImVec2 screen = ImGui::GetIO().DisplaySize;
+  if (OverlayUnit(screen.y) <= 0 || !(screen.x >= 1))
+    return;
+  ImVec2 pic, pic_size;
+  PictureRect(&pic, &pic_size);
   Kit::DrawDemo(ImGui::GetForegroundDrawList(), pic, pic_size, OverlayUnit(pic_size.y),
                 ImGui::GetTime());
+}
+
+// A line's trailing " · m:ss" (the turn's timer), taken off it: the seconds, or -1 with none.
+int TakeTimer(std::string* line)
+{
+  static const std::string sep = " \u00b7 ";
+  const std::size_t at = line->rfind(sep);
+  if (at == std::string::npos)
+    return -1;
+  const std::string tail = line->substr(at + sep.size());
+  const std::size_t colon = tail.find(':');
+  if (colon == std::string::npos || colon == 0 || tail.size() != colon + 3)
+    return -1;
+  int minutes = 0;
+  for (std::size_t i = 0; i < colon; ++i)
+  {
+    if (tail[i] < '0' || tail[i] > '9')
+      return -1;
+    minutes = minutes * 10 + (tail[i] - '0');
+  }
+  if (tail[colon + 1] < '0' || tail[colon + 1] > '5' || tail[colon + 2] < '0' || tail[colon + 2] > '9')
+    return -1;
+  line->resize(at);
+  return minutes * 60 + (tail[colon + 1] - '0') * 10 + (tail[colon + 2] - '0');
+}
+
+// ORCA_UX_KIT_DEMO=2: the overlay's own elements, each drawn with the kit (Kit.h), for design
+// checks: what the convert stage makes of them. The same data as Draw's, nothing else.
+void DrawKitPreview(const OverlayModel::Frame& f, std::string search, std::string search_note,
+                    const std::array<std::string, 4>& labels, const std::array<bool, 4>& locked,
+                    std::string rules, std::string rules_note, const StageCursors::View& cursors)
+{
+  const ImVec2 screen = ImGui::GetIO().DisplaySize;
+  if (OverlayUnit(screen.y) <= 0 || !(screen.x >= 1))
+    return;
+  ImVec2 pic, pic_size;
+  PictureRect(&pic, &pic_size);
+  const float unit = OverlayUnit(pic_size.y);
+  if (unit <= 0)
+    return;
+  ImDrawList* dl = ImGui::GetForegroundDrawList();
+  const double now_s = ImGui::GetTime();
+  // The stage select: each player's pointer, each proposal framed.
+  if (const StageCursors::Layout* layout = StageCursors::LayoutFor(cursors.game); cursors.on && layout)
+  {
+    const auto at16 = [&](int x16, int y16) {
+      return ImVec2(pic.x + pic_size.x * (layout->u0 + layout->du * static_cast<float>(x16) / 16.0f),
+                    pic.y + pic_size.y * (layout->v0 + layout->dv * static_cast<float>(y16) / 16.0f));
+    };
+    for (int port = 0; port < 2; ++port)
+    {
+      const StageCursors::View::Player& p = cursors.players[port];
+      if (!p.present || p.proposal < 0)
+        continue;
+      const StageCursors::Tile* tile = StageCursors::TileOf(*layout, p.proposal, cursors.page);
+      if (!tile)
+        continue;
+      const bool both = cursors.players[1 - port].present &&
+                        cursors.players[1 - port].proposal == p.proposal;
+      if (both && port == 1)
+        continue;
+      const ImVec2 c0 = at16(tile->rect.x0, tile->rect.y1), c1 = at16(tile->rect.x1, tile->rect.y0);
+      Kit::Frame(dl, ImVec2(std::min(c0.x, c1.x), std::min(c0.y, c1.y)),
+                 ImVec2(std::max(c0.x, c1.x), std::max(c0.y, c1.y)), unit,
+                 both ? Kit::Tone::Gold : Kit::PortTone(port),
+                 both ? p.name + " + " + cursors.players[1].name : p.name, port == 0);
+    }
+    const float radius = 1.7f * std::abs(layout->du) * pic_size.x;
+    for (int port = 0; port < 2; ++port)
+    {
+      const StageCursors::View::Player& p = cursors.players[port];
+      if (p.present)
+      {
+        Kit::Pointer(dl, at16(p.x, p.y), radius, unit, port,
+                     fmt::format("P{} {}", port + 1, p.name), cursors.turn == port, port == 0,
+                     now_s);
+      }
+    }
+  }
+  // Top left: the connection circle as before, the ping and the meter beside it, the toasts and the
+  // chat on plates under them.
+  const float margin = 2.5f * unit;
+  float y = margin;
+  if (f.show_signal)
+  {
+    const float r = 3.0f * unit;
+    SignalCircle(dl, ImVec2(margin + r, margin + r), r, f.signal);
+    float ty = margin + r - 1.5f * unit;
+    if (!f.stats.empty())
+      ty = Kit::Label(dl, ImVec2(margin + 2 * r + unit, ty), unit, f.stats, 2.6f).max.y;
+    if (!f.perf.empty())
+      Kit::Label(dl, ImVec2(margin + 2 * r + unit, ty), unit, f.perf, 2.6f);
+    y = margin + 2 * r + 1.5f * unit;
+  }
+  else if (!f.perf.empty())
+  {
+    y = Kit::Label(dl, ImVec2(margin, y), unit, f.perf, 2.6f).max.y + unit;
+  }
+  if (!f.toasts.empty() || !f.chats.empty())
+    y = std::max(y, OSD::MessagesBottom() + unit);
+  for (const OverlayModel::Toast& t : f.toasts)
+  {
+    y = Kit::LabelPlate(dl, ImVec2(margin, y), unit, t.text, 2.7f, Kit::Align::Left,
+                        Kit::Tone::Navy, t.alpha)
+            .max.y +
+        0.9f * unit;
+  }
+  for (const OverlayModel::ChatToast& c : f.chats)
+  {
+    const Kit::TextLook look = Kit::LabelLook(unit, 2.7f);
+    for (const std::string& line : Kit::Wrap(look, c.name + ": " + c.text, 0.4f * pic_size.x))
+    {
+      y = Kit::LabelPlate(dl, ImVec2(margin, y), unit, line, 2.7f, Kit::Align::Left,
+                          Kit::Tone::Navy, c.alpha)
+              .max.y +
+          0.5f * unit;
+    }
+    y += 0.4f * unit;
+  }
+  // Top centre: the search's or the set's lines on a banner, the turn's timer beside it.
+  std::vector<std::string> lines;
+  for (std::string* l : {&search, &search_note, &rules, &rules_note})
+  {
+    if (!l->empty())
+      lines.push_back(*l);
+  }
+  int seconds = -1;
+  for (std::string& l : lines)
+  {
+    if (seconds < 0)
+      seconds = TakeTimer(&l);
+  }
+  float banner_top = 2.0f * unit;
+  for (std::size_t i = 0; i < lines.size(); i += 2)
+  {
+    const std::string& title = lines[i];
+    const std::string note = i + 1 < lines.size() ? lines[i + 1] : std::string();
+    const float h = note.empty() ? 6.5f * unit : 9.0f * unit;
+    const float w = std::max(Kit::Measure(Kit::LabelLook(unit, h * 0.44f / unit), title).x,
+                             Kit::Measure(Kit::LabelLook(unit, h * 0.3f / unit), note).x) +
+                    10 * unit;
+    const float cx = pic.x + pic_size.x / 2;
+    const Kit::Box b = Kit::Banner(dl, cx - w / 2, cx + w / 2, banner_top, h, unit,
+                                   Kit::Tone::Navy, title, note);
+    if (i == 0 && seconds >= 0)
+      Kit::Timer(dl, ImVec2(b.max.x + 6.5f * unit, (b.min.y + b.max.y) / 2), unit, seconds, now_s);
+    banner_top = b.max.y + 1.2f * unit;
+  }
+  // The character select's panels: each name on a plate in the port's colour, LOCKED IN under it.
+  for (int port = 0; port < 4; ++port)
+  {
+    if (labels[port].empty())
+      continue;
+    const float centre = pic.x + pic_size.x * PanelCentre(port);
+    Kit::LabelPlate(dl, ImVec2(centre, pic.y + pic_size.y * 0.575f), unit, labels[port], 2.8f,
+                    Kit::Align::Centre, Kit::PortTone(port));
+    if (locked[port])
+    {
+      Kit::Badge(dl, ImVec2(centre, pic.y + pic_size.y * LOCKED_BADGE_Y), unit, "LOCKED IN",
+                 Kit::PortTone(port), 3.2f);
+    }
+  }
+  if (!f.waiting.empty())
+    Kit::Title(dl, ImVec2(pic.x + pic_size.x / 2, pic.y + pic_size.y * 0.18f), unit, f.waiting, 5.0f,
+               Kit::Align::Centre);
 }
 
 void Draw()
@@ -683,10 +856,15 @@ void Draw()
   if (rules_note.empty())
     rules_note = rule_line;
   const StageCursors::View cursors = StageCursors::Current();
-  // The kit's demo in place of everything else.
-  if (Kit::DemoOn())
+  // The kit's demo or preview in place of everything else.
+  if (Kit::DemoMode() == 1)
   {
     DrawKitDemo();
+    return;
+  }
+  if (Kit::DemoMode() == 2)
+  {
+    DrawKitPreview(f, search, search_note, labels, locked, rules, rules_note, cursors);
     return;
   }
   if (!f.show_signal && f.waiting.empty() && f.toasts.empty() && f.chats.empty() &&

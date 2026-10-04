@@ -141,7 +141,8 @@ void Frame(ImDrawList* dl, ImVec2 min, ImVec2 max, float unit, Tone tone, std::s
 // the GPU's). The atlas must outlive its use.
 void UseAtlasForTests(Face face, const GameFont::Atlas* atlas, ImTextureID texture);
 
-// ORCA_UX_KIT_DEMO=1 (design checks only): every primitive over the picture, in place of nothing.
-bool DemoOn();
+// ORCA_UX_KIT_DEMO (design checks only): 1, every primitive over the picture (DrawDemo) in place
+// of the overlay; 2, the overlay's own elements drawn with the kit (Overlay.cpp); 0 (unset): off.
+int DemoMode();
 void DrawDemo(ImDrawList* dl, ImVec2 picture_min, ImVec2 picture_size, float unit, double now_s);
 }  // namespace Orca::UX::Kit

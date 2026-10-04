@@ -65,6 +65,17 @@ const int s_synctest_from = EnvInt("YG_SYNCTEST_FROM", 300);
 const int s_exit_after = EnvInt("YG_EXIT_AFTER", 0);
 const int s_shot_every = EnvInt("YG_SHOT_EVERY", 0);
 const int s_shot_from = EnvInt("YG_SHOT_FROM", 0);
+// YG_SHOT_AT=<frame>[,<frame>...]: a screenshot at each of these first-pass frames too.
+const std::vector<int> s_shot_at = [] {
+  std::vector<int> frames;
+  std::istringstream list(Orca::GetEnv("YG_SHOT_AT"));
+  for (std::string word; std::getline(list, word, ',');)
+  {
+    if (!word.empty())
+      frames.push_back(std::atoi(word.c_str()));
+  }
+  return frames;
+}();
 const int s_diag = EnvInt("YG_SYNCTEST_DIAG", 0);
 // YG_SYNCTEST_SECTIONS=1: compare each re-run frame's device state with its first pass section by
 // section (the DoState markers) and count the frames each section differed in. The device-state
@@ -1046,9 +1057,10 @@ void RewindTo(int frame)
 bool Active()
 {
   return s_scenes || s_synctest_k > 0 || s_exit_after > 0 || !Input().empty() ||
-         s_shot_every > 0 || s_hashlog != nullptr || s_bench_k > 0 || s_padrec != nullptr ||
-         s_loopback != nullptr || s_save_only_from >= 0 || s_dump_ram_at >= 0 ||
-         s_dump_frames_from >= 0 || !s_nand_hashes_at.empty() || !s_clear_jit_at.empty() ||
+         s_shot_every > 0 || !s_shot_at.empty() || s_hashlog != nullptr || s_bench_k > 0 ||
+         s_padrec != nullptr || s_loopback != nullptr || s_save_only_from >= 0 ||
+         s_dump_ram_at >= 0 || s_dump_frames_from >= 0 || !s_nand_hashes_at.empty() ||
+         !s_clear_jit_at.empty() ||
          s_clear_jit_every > 0 || !s_watch.empty() || !s_jit_invalidate.empty() ||
          !s_jit_census_at.empty();
 }
@@ -1315,8 +1327,9 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
     if (frame_here % 60 == 0)
       std::fflush(s_hashlog);
   }
-  if (s_shot_every > 0 && frame_here >= s_shot_from && first_pass_here &&
-      frame_here % s_shot_every == 0)
+  if (first_pass_here &&
+      ((s_shot_every > 0 && frame_here >= s_shot_from && frame_here % s_shot_every == 0) ||
+       std::find(s_shot_at.begin(), s_shot_at.end(), frame_here) != s_shot_at.end()))
   {
     Core::SaveScreenShot(fmt::format("f{:06d}", frame_here));
   }
