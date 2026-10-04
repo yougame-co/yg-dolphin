@@ -2350,7 +2350,27 @@ character order, ORed (a button or stick any rule takes is taken; presses add up
   the stage flows; `0x16` there is Ganondorf.
 - The character order reads the set at `SetBlock`'s offsets (+0x211, +0x213, +0x215).
 
-**Known gaps:** Project+'s flow still counts its own score from the results screens of the fights it
+**Checked 2026-10-03** (M4 Pro, Mac build; the sprint's gates: build, unit tests, one sync test per
+game, one queue e2e each way):
+- Unit tests: 1,332 pass (`Binaries/Tests/tests`, run from `build/`).
+- Brawl, `YG_SYNCTEST=7 YG_SYNCTEST_FROM=1700` with `ORCA_TEST_QUEUE=ranked ORCA_UX_TEST_NAMES=ada,bo
+  ORCA_TEST_SET_RULES=1,8` over `Tools/orca/inputs/bf-ranked-bo3.txt` to frame 9000 (character
+  select, game 1's strikes and pick, the fight, results, game 2's character order): 51,051 re-run
+  frames, **0 RAM mismatches**.
+- Project+, `YG_SYNCTEST=7 YG_SYNCTEST_FROM=170` with `ORCA_PROFILE=PPLUS32 ORCA_TEST_QUEUE=ranked:1
+  ORCA_UX_TEST_NAMES=ada,bo` over `Tools/orca/inputs/pplus-ranked.txt` to frame 15000 (a whole 2-0
+  set: game 1's X strike, timed strikes and pick, game 2's character order winner then loser, the
+  winner's two strikes, the loser's timed pick): 103,761 re-run frames, **0 RAM mismatches**; the
+  flow's score and `SetBlock`'s agreed at every game.
+- `Tools/orca/queue-e2e.mjs` against yougame.co with dev tickets, Brawl: `--queue casual --games 2`
+  PASS (Start went to Yoshi's Island, then Lylat Cruise; Ice Climbers in the match); `--queue
+  ranked` PASS (2-0 set, 3 verdicts the same on both sides; game 1's stage by the strike and pick
+  timers, Smashville; game 2's loser's pick by its timer, Battlefield; Final Destination grey for Ice
+  Climbers on the stage select, the set line and the turn line on screen).
+
+**Known gaps:** a later game's character select brings the hands back on the bottom panels, where
+A toggles the player type: a player who presses A there becomes a CPU (the first ranked e2e's game
+2 played CPU against CPU). The hint says "A in the grid"; nothing gates the toggle yet. Project+'s flow still counts its own score from the results screens of the fights it
 started (it agrees with `SetBlock` for Project+: both take the results screen's winner, and a tie
 counts for neither). Brawl's exact Supernova order (ban, the loser's stage, then characters) is not
 built: Brawl's later games are characters (both at once, 45 s), then the ban, then the pick.
