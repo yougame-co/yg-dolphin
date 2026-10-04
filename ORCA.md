@@ -2506,6 +2506,62 @@ same step changes as the plain runs, 0 RAM mismatches:
 In every run the masked presses (the off-turn port's, B and Start) did nothing. `OrcaCharOrder*`
 (18 tests) and every `Orca*` unit test pass.
 
+## The character select's title
+
+Luis (2026-10-04): the part of the character select that says "versus" reads CASUAL or RANKED in a
+queue match, and FRIENDS with friends (`Core/Orca/UX/CssTitle.*`).
+
+**What it is.** The logo at the top left of the Versus character select, Brawl's brushed BRAWL and
+Project+'s VERSUS, is a texture, not text: `MenSelchrPanelRule3.1` (Brawl 132x48, Project+ 128x56,
+C8 with an RGB5A3 palette), one frame of the tab's pattern animation (3.2 is TEAM BATTLE, 3.3
+SPECIAL BRAWL / SPECIAL VERSUS), in the character select's archive (`sc_selcharacter_en`, MiscData
+30's bres; Project+ ships its own copy on the SD card). The character select's message files hold
+only "PLAYER", "CPU", the handicap and the Wi-Fi texts. So no text to rewrite, and the pixels are
+the game's art.
+
+**How.** Orca marks the texture's palette and its texture pack draws each mark. The texture's
+background is one transparent palette entry (Brawl's entry 0, `0x0EEE`; Project+'s entry 7,
+`0x0000`). For a mode Orca moves that entry's blue by one to three steps (Brawl `0x0EED` CASUAL,
+`0x0EEC` RANKED, `0x0EEB` FRIENDS; Project+ `0x0001`, `0x0002`, `0x0003`): alpha stays zero, so
+nobody sees the colour, but the palette's hash changes, so Dolphin names the texture differently
+for each mode (`tex1_132x48_44a1dd712ec999f0_<palette hash>_9`, `tex1_128x56_57564f7b1ba3bc1c_..._9`)
+and the pack has a label for each: our own art (`Tools/orca/textures/make-labels.py`, SIL OFL
+fonts), Brawl's in the gold of its other rule titles with small capitals like WINNER OUT's (Archivo
+Black), Project+'s in VERSUS's mint with a black outline where VERSUS's letters sit (Anton), each
+4x with mip levels like the Online menu's labels. A session always loads the pack ("Online menu");
+without it the game's own title shows, unchanged to the eye (a tint of one blue step can reach the
+letters' edges through filtering, at most).
+
+**What it says**, a pure function of emulated memory and the ports in effect at the boundary (the
+session's synced plan), so both machines write the same word at the same frame:
+
+1. the match block's header: a casual or ranked queue room, CASUAL or RANKED;
+2. the main menu's pick Orca keeps in sqVsMelee for the back out ("Online menu": `+0x18`, 24-27):
+   a With Friends button, FRIENDS;
+3. two ports or more (another machine's player plugged in) and no queue header: a friends room,
+   FRIENDS (a friend who dropped into Group > Brawl or Project+'s boot character select too);
+4. the pick again: With Anyone's Casual (30) or Ranked (31), CASUAL or RANKED (the character select
+   a search waits on, before a room and after one);
+5. else the game's own (Group > Brawl, Project+'s boot, everything offline).
+
+The friends flag needed no new state: the pick is already in sqVsMelee's object (sora_scene's
+sequences are made once at boot; the running one is the scene manager's `+0x10`), every snapshot
+and keyframe carries it (a joiner's title is its host's), and the back out zeroes it. Friends
+rooms' game behaviour is unchanged: the word is a colour the game only draws.
+
+**Where** (Brawl rev 2 and Project+, from harness RAM dumps): the scene manager `0x805A0060` +4 is
+the scene (`scSelctCharacter`), whose `+0x410` is the character select's gfArchive; one of its first
+32 words is the archive image (`ARC\0`, named `sc_selcharacter_en` at +0x10). MiscData 30 is the
+bres; its root group names `Palettes(NW4R)`, which names the PLT0 `MenSelchrPanelRule3.1` (format
+RGB5A3; 96 entries in Brawl, 256 in Project+). The frame hook writes the word at every boundary,
+first runs and re-runs, after the rules (so a header written at this boundary counts), only while
+it holds the game's value or a mark and only when it differs. The archive loads fresh each time the
+character select starts, so a mark never outlives it, and the game's value is written back when
+nothing calls for one. It changes emulated memory: the UX compatibility version covers it (the
+integrator's bump to `ux=10`).
+
+**Proof**: PROOF_HERE
+
 ## Ranked sprint integration
 
 Branch `ranked-sprint`: `sp-casual` (Online rules), `sp-results` (Ranked sets), `sp-pplus-sss` (Ranked

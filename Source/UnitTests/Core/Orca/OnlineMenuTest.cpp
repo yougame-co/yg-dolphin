@@ -11,6 +11,7 @@
 #include <filesystem>
 #include <map>
 #include <optional>
+#include <set>
 #include <span>
 #include <string>
 #include <tuple>
@@ -266,22 +267,39 @@ std::optional<std::pair<u32, u32>> PngSize(const std::string& path)
 struct TextureName
 {
   u32 width = 0, height = 0;
-  std::string hash, format;
+  std::string hash, tlut, format;
 };
 
-// Dolphin's name for a texture without mipmaps or a palette: tex1_<w>x<h>_<16 hex>_<format>.
+// Dolphin's name for a texture without mipmaps: tex1_<w>x<h>_<16 hex>_<format>, or with a
+// palette's hash (C4, C8, C14X2: formats 8, 9, 10) tex1_<w>x<h>_<16 hex>_<16 hex>_<format>.
 std::optional<TextureName> ParseTextureName(const std::string& stem)
 {
   TextureName n;
-  char hash[17] = {}, format[4] = {};
+  char hash[17] = {}, tlut[17] = {}, format[4] = {};
   int used = 0;
-  if (std::sscanf(stem.c_str(), "tex1_%ux%u_%16[0-9a-f]_%3[0-9]%n", &n.width, &n.height, hash,
-                  format, &used) != 4 ||
-      used != static_cast<int>(stem.size()) || std::string(hash).size() != 16 || n.width == 0 ||
-      n.height == 0 || n.width > 1024 || n.height > 1024)
+  const bool plain = std::sscanf(stem.c_str(), "tex1_%ux%u_%16[0-9a-f]_%3[0-9]%n", &n.width,
+                                 &n.height, hash, format, &used) == 4 &&
+                     used == static_cast<int>(stem.size());
+  if (!plain)
+  {
+    used = 0;
+    if (std::sscanf(stem.c_str(), "tex1_%ux%u_%16[0-9a-f]_%16[0-9a-f]_%3[0-9]%n", &n.width,
+                    &n.height, hash, tlut, format, &used) != 5 ||
+        used != static_cast<int>(stem.size()) || std::string(tlut).size() != 16)
+    {
+      return std::nullopt;
+    }
+    n.tlut = tlut;
+  }
+  if (std::string(hash).size() != 16 || n.width == 0 || n.height == 0 || n.width > 1024 ||
+      n.height > 1024)
   {
     return std::nullopt;
   }
+  // A palette's hash with a paletted format, and only then.
+  const std::string f = format;
+  if (n.tlut.empty() == (f == "8" || f == "9" || f == "10"))
+    return std::nullopt;
   n.hash = hash;
   n.format = format;
   return n;
@@ -291,6 +309,11 @@ std::optional<TextureName> ParseTextureName(const std::string& stem)
 TEST(OrcaOnlineMenuTextures, TextureNamesParse)
 {
   EXPECT_TRUE(ParseTextureName("tex1_127x96_fdd5334e5af7357c_2").has_value());
+  EXPECT_TRUE(ParseTextureName("tex1_132x48_44a1dd712ec999f0_159b390ed5eec04d_9").has_value());
+  // A palette's hash goes with a paletted format, and a paletted format with one.
+  EXPECT_FALSE(ParseTextureName("tex1_132x48_44a1dd712ec999f0_159b390ed5eec04d_5").has_value());
+  EXPECT_FALSE(ParseTextureName("tex1_132x48_44a1dd712ec999f0_9").has_value());
+  EXPECT_FALSE(ParseTextureName("tex1_132x48_44a1dd712ec999f0_159b390ed5eec04_9").has_value());
   for (const char* bad : {"tex1_127x96_fdd5334e5af7357_2", "tex1_127x96_m_fdd5334e5af7357c_2",
                           "tex1_127x96_fdd5334e5af7357C_2", "tex1_0x96_fdd5334e5af7357c_2",
                           "tex1_127x96_fdd5334e5af7357c_2_arb", "tex1_127x96_fdd5334e5af7357c_",
@@ -325,8 +348,8 @@ TEST(OrcaOnlineMenuTextures, EveryShippedTextureIsAnIntegerMultipleOfItsName)
     }
     const auto name = ParseTextureName(stem);
     ASSERT_TRUE(name.has_value());
-    // Formats without a palette (I4 0, IA4 2, RGB5A3 5, ...): their names carry no TLUT hash.
-    EXPECT_TRUE(name->format != "8" && name->format != "9" && name->format != "10");
+    // A palette's hash only for the character select's title (C8, 9): its marks (CssTitle.h).
+    EXPECT_EQ(!name->tlut.empty(), name->format == "9");
     const auto [w, h] = *size;
     EXPECT_EQ(w % name->width, 0u);
     EXPECT_EQ(h % name->height, 0u);
@@ -334,8 +357,25 @@ TEST(OrcaOnlineMenuTextures, EveryShippedTextureIsAnIntegerMultipleOfItsName)
     EXPECT_GE(w / name->width, 1u);
     bases[stem] = *size;
   }
-  // Brawl's PLAY ONLINE, ONLINE breadcrumb, CASUAL and RANKED; Project+'s CASUAL and RANKED.
-  EXPECT_EQ(bases.size(), 6u);
+  // Brawl's PLAY ONLINE, ONLINE breadcrumb, CASUAL and RANKED; Project+'s CASUAL and RANKED; the
+  // character select's title in each game, CASUAL, RANKED and FRIENDS, one name per mark: the
+  // game's texture (Brawl's BRAWL, Project+'s VERSUS) with its palette marked for that mode.
+  EXPECT_EQ(bases.size(), 12u);
+  std::map<std::pair<u32, u32>, std::set<std::string>> titles;
+  for (const auto& [stem, size] : bases)
+  {
+    const auto name = ParseTextureName(stem);
+    if (name && !name->tlut.empty())
+      titles[{name->width, name->height}].insert(name->hash);
+  }
+  // Brawl's 132x48 and Project+'s 128x56, three marks of one texture each.
+  ASSERT_EQ(titles.size(), 2u);
+  EXPECT_EQ(titles[std::pair(132u, 48u)].size(), 1u);
+  EXPECT_EQ(titles[std::pair(128u, 56u)].size(), 1u);
+  size_t marked = 0;
+  for (const auto& [stem, size] : bases)
+    marked += !ParseTextureName(stem)->tlut.empty();
+  EXPECT_EQ(marked, 6u);
   // Each has its mip levels, every one half the last (Dolphin drops a level of any other size),
   // down to the game's own size, so a label drawn small is never the 4x one read every fourth
   // texel. No level without its texture.
@@ -391,11 +431,11 @@ TEST(OrcaOnlineMenuTextures, OrcasPackKeepsItsOwnNamesAndThePlayersPackTheRest)
         std::filesystem::path(directory + "/").lexically_normal().string());
   };
 
-  // In a session: Orca's six names are Orca's, wherever else they are; every other name is the
+  // In a session: Orca's twelve names are Orca's, wherever else they are; every other name is the
   // player's. Mip level files (<name>_mip<N>) load with their texture, never as one of their own.
   {
     const auto files = by_id(CollectHiresTextureFiles({player, player2}, {orca}));
-    ASSERT_EQ(files.size(), 7u);
+    ASSERT_EQ(files.size(), 13u);
     for (const auto& [id, f] : files)
     {
       SCOPED_TRACE(id);
@@ -420,7 +460,7 @@ TEST(OrcaOnlineMenuTextures, OrcasPackKeepsItsOwnNamesAndThePlayersPackTheRest)
     EXPECT_FALSE(files.at(title).has_arbitrary_mipmaps);
   }
   // A session with no pack of the player's: Orca's alone.
-  EXPECT_EQ(CollectHiresTextureFiles({}, {orca}).size(), 6u);
+  EXPECT_EQ(CollectHiresTextureFiles({}, {orca}).size(), 12u);
 }
 
 namespace

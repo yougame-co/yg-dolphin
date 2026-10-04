@@ -4,7 +4,7 @@
 """Orca's Online menu labels: our own art, drawn in each game's style with open-licence fonts.
 
 Writes the texture pack Orca loads in every session (Data/Sys/Orca/Textures/RSBE01, see ORCA.md
-"Online menu"): Dolphin's hires texture names, so each PNG replaces one of the game's textures on
+"Online menu" and "The character select's title"): Dolphin's hires texture names, so each PNG replaces one of the game's textures on
 screen and nothing else (texture replacement never touches emulated memory). Brawl and Project+
 both load textures as RSBE01; their labels hash differently, so one folder serves both.
 
@@ -40,7 +40,8 @@ SCALE = 4
 #   name: Dolphin's name for the game's texture (tex1_<w>x<h>_<XXH64 of its data>_<GX format>)
 #   lines: the text, one string per line
 #   box: where the game's own letters sit in its texture (x0, y0, x1, y1), native pixels
-#   style: brawl (black, white rim and soft halo), pplus (black, white outline), title (white)
+#   style: brawl (black, white rim and soft halo), pplus (black, white outline), title (white),
+#          brawl-css and pplus-css (the character select's mode title: a gradient fill, black outline)
 LABELS = [
     # Brawl's main menu: the Wi-Fi button's label (MenMainFrTop15, "NINTENDO Wi-Fi CONNECTION").
     dict(name="tex1_127x96_fdd5334e5af7357c_2", lines=["Play", "Online"], box=(7, 12, 119, 84),
@@ -61,12 +62,57 @@ LABELS = [
          style="pplus"),
     dict(name="tex1_160x80_5b8f52ac0127b2a8_5", lines=["RANKED"], box=(24, 14, 136, 66),
          style="pplus"),
+    # The character select's mode title (MenSelchrPanelRule3.1: Brawl's BRAWL logo, Project+'s
+    # VERSUS), as the game draws it with Orca's mark for a mode in its palette (UX/CssTitle.h: the
+    # transparent entry the texture's background uses, a value nobody sees, so each mode hashes to
+    # its own name). Brawl's in the gold of its other rule titles (Special Brawl, Winner Out), small
+    # capitals like theirs; Project+'s in its mint like VERSUS, where VERSUS's letters sit.
+    dict(name="tex1_132x48_44a1dd712ec999f0_159b390ed5eec04d_9", lines=["Casual"],
+         box=(8, 12, 124, 36), style="brawl-css"),
+    dict(name="tex1_132x48_44a1dd712ec999f0_4d236969243ec2d8_9", lines=["Ranked"],
+         box=(8, 12, 124, 36), style="brawl-css"),
+    dict(name="tex1_132x48_44a1dd712ec999f0_952be74b413d03a4_9", lines=["Friends"],
+         box=(8, 12, 124, 36), style="brawl-css"),
+    dict(name="tex1_128x56_57564f7b1ba3bc1c_96a987e9e0ec657e_9", lines=["CASUAL"],
+         box=(16, 17, 113, 39), style="pplus-css"),
+    dict(name="tex1_128x56_57564f7b1ba3bc1c_e2dffeab0d95d424_9", lines=["RANKED"],
+         box=(16, 17, 113, 39), style="pplus-css"),
+    dict(name="tex1_128x56_57564f7b1ba3bc1c_faaf2c3553d21273_9", lines=["FRIENDS"],
+         box=(13, 17, 116, 39), style="pplus-css"),
 ]
+
+# The character select titles' fills, top to bottom (position 0-1 down the letters, RGB): measured
+# on the game's own rule titles, a gold with a white band through the middle (Brawl's) and a teal
+# to white to green (Project+'s VERSUS).
+GRADIENTS = {
+    "brawl-css": [(0.0, (221, 204, 102)), (0.3, (221, 204, 110)), (0.42, (238, 221, 170)),
+                  (0.5, (255, 246, 220)), (0.56, (255, 255, 255)), (0.62, (255, 246, 220)),
+                  (0.7, (238, 221, 170)), (0.8, (221, 204, 112)), (1.0, (221, 204, 102))],
+    "pplus-css": [(0.0, (65, 222, 189)), (0.25, (148, 230, 205)), (0.45, (222, 246, 230)),
+                  (0.55, (222, 246, 230)), (0.75, (139, 230, 172)), (1.0, (74, 213, 123))],
+}
 
 
 def size_of(name):
     w, h = name.split("_")[1].split("x")
     return int(w), int(h)
+
+
+def gradient(style, top, bottom, w, h):
+    """An RGBA image of the style's fill, its stops spread from row `top` to row `bottom`."""
+    stops = GRADIENTS[style]
+    out = Image.new("RGBA", (w, h))
+    px = out.load()
+    for y in range(h):
+        t = min(1.0, max(0.0, (y - top) / max(1, bottom - top)))
+        for (t0, c0), (t1, c1) in zip(stops, stops[1:]):
+            if t0 <= t <= t1:
+                k = (t - t0) / (t1 - t0) if t1 > t0 else 0
+                c = tuple(round(a + (b - a) * k) for a, b in zip(c0, c1))
+                break
+        for x in range(w):
+            px[x, y] = c + (255,)
+    return out
 
 
 def small_caps_runs(word, font_path, size):
@@ -108,9 +154,9 @@ def text_mask(label, w, h):
     big = 400
     lines = []
     for text in label["lines"]:
-        if style == "brawl":
+        if style in ("brawl", "brawl-css"):
             lines.append(line_mask(small_caps_runs(text, ARCHIVO, big), big * 0.01))
-        elif style == "pplus":
+        elif style in ("pplus", "pplus-css"):
             lines.append(line_mask([(text, ImageFont.truetype(ANTON, big))], big * 0.02))
         else:
             # Anton as it comes (condensed, like the game's titles), with hardly any tracking.
@@ -128,7 +174,12 @@ def text_mask(label, w, h):
     k = min(bw / tw, bh / th)
     if style == "title":
         k = bh / th
-    block = block.resize((max(1, int(tw * k)), max(1, int(th * k))), Image.LANCZOS)
+    kx = k
+    if style == "pplus-css":
+        # Project+'s title letters are wider than Anton's: its full height, widened to the box.
+        k = bh / th
+        kx = min(bw / tw, k * 1.6)
+    block = block.resize((max(1, int(tw * kx)), max(1, int(th * k))), Image.LANCZOS)
     out = Image.new("L", (W, H), 0)
     out.paste(block, (x0 + (bw - block.width) // 2, y0 + (bh - block.height) // 2))
     return out
@@ -159,6 +210,14 @@ def draw(label):
         halo = grow(rim, 2.5 * SCALE).filter(ImageFilter.GaussianBlur(1.8 * SCALE))
         out = Image.composite(white, out, halo.point(lambda v: int(v * 0.6)))
         out = Image.composite(white, out, rim)
+    elif style in GRADIENTS:
+        # The letters in the style's fill, its stops down the letters' own height, inside a black
+        # outline about two and a half of the game's pixels wide, as the game's titles have.
+        box = mask.point(lambda v: 255 if v >= 128 else 0).getbbox()
+        fill = gradient(style, box[1], box[3], W, H)
+        outline = grow(mask, 2.4 * SCALE)
+        out = Image.composite(black, out, outline)
+        return Image.composite(fill, out, mask)
     else:
         rim = grow(mask, 2.6 * SCALE)
         edge = grow(rim, 0.8 * SCALE)
