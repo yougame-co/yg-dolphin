@@ -100,6 +100,10 @@ constexpr int READY_FRAMES = 30 * 60;
 constexpr int SKIP_FRAMES = 90;
 // Steering port 2's hand gives up after this long (the player then picks by hand).
 constexpr int STEER_LIMIT_FRAMES = 10 * 60;
+// Port 2's stick stays centred this long first: the game takes a newly plugged pad's stick as its
+// centre (the pad's origin), and a stick already steered then would read as pushed ever after (the
+// hand drifted with the stick let go).
+constexpr int STEER_SETTLE_FRAMES = 20;
 // Turning port 2's costume (X) gives up after this long: the character is in, whatever the colour.
 constexpr int COSTUME_LIMIT_FRAMES = 3 * 60;
 

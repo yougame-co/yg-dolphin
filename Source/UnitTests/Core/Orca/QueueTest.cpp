@@ -363,7 +363,11 @@ TEST(OrcaQueue, ThePort2PickIsSteeredIn)
   EXPECT_TRUE(s.pick_set);
   EXPECT_EQ(s.locked, 1);
   EXPECT_EQ(s.steer_start, 9001u);
+  // The first frames, the stick stays centred (the game takes the new pad's origin).
   Masks m = Gate(v, s);
+  EXPECT_EQ(m[1], ALL);
+  s = Step(v, s, 9000 + STEER_SETTLE_FRAMES);
+  m = Gate(v, s);
   // Its controller does nothing; the stick goes up and right, full tilt.
   EXPECT_EQ(m[1].buttons, Rollback::InputGate::ALL_BUTTONS);
   EXPECT_TRUE(m[1].steer);
@@ -371,7 +375,7 @@ TEST(OrcaQueue, ThePort2PickIsSteeredIn)
   EXPECT_GT(m[1].steer_y, CY + 40);
   EXPECT_EQ(m[1].press, 0);
   // It can't ready while being steered.
-  s = Step(Press(v, 0, START), s, 9001);
+  s = Step(Press(v, 0, START), s, 9021);
   EXPECT_EQ(s.ready & 2, 0);
   // Over the pick with the token in the hand: still, and A on every fourth frame.
   v.ports[1].hand_target = Rules::CSS_HAND_GRID_HOLDING;
@@ -382,11 +386,13 @@ TEST(OrcaQueue, ThePort2PickIsSteeredIn)
   // Still sliding (it stood elsewhere as the last frame began): no A yet.
   v.hand2_prev_x = 7.1f;
   v.hand2_prev_y = 6.2f;
-  for (int f = 9002; f < 9006; ++f)
+  for (int f = 9022; f < 9026; ++f)
     EXPECT_EQ(Gate(v, Step(v, s, f))[1].press, 0) << f;
-  v.hand2_prev_x = 7.5f;
+  // Creeping (Brawl's hand with the stick let go): as good as still.
+  v.hand2_prev_x = 7.47f;
+  v.hand2_prev_y = 6.23f;
   int presses = 0;
-  for (int f = 9002; f < 9010; ++f)
+  for (int f = 9022; f < 9030; ++f)
   {
     s = Step(v, s, f);
     m = Gate(v, s);
@@ -398,23 +404,23 @@ TEST(OrcaQueue, ThePort2PickIsSteeredIn)
   // Down with another costume: X turns it; on the right one: in, and locked.
   v.ports[1].placed = true;
   v.ports[1].costume = 0;
-  s = Step(v, s, 9012);
+  s = Step(v, s, 9032);
   m = Gate(v, s);
   EXPECT_EQ(s.locked & 2, 0);
   EXPECT_EQ(m[1].press, s.steer % 4 == 0 ? X : 0);
   // Down on another character: B takes it back.
   View wrong = v;
   wrong.ports[1].character = 0x11;
-  const State w = Step(wrong, s, 9016);
+  const State w = Step(wrong, s, 9036);
   EXPECT_EQ(Gate(wrong, w)[1].press, w.steer % 4 == 0 ? B : 0);
   v.ports[1].costume = 2;
-  s = Step(v, s, 9020);
+  s = Step(v, s, 9040);
   EXPECT_EQ(s.locked, 3);
   m = Gate(v, s);
   EXPECT_FALSE(m[1].steer);
   EXPECT_EQ(m[1].buttons & (A | X | Y), A | X | Y);
   // Now it may ready.
-  s = Step(Press(v, 0, START), s, 9021);
+  s = Step(Press(v, 0, START), s, 9041);
   EXPECT_EQ(s.ready & 2, 2);
 }
 

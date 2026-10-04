@@ -379,8 +379,12 @@ Masks Gate(const View& v, const State& s)
       two = ALL;
       const CssPort& p = v.ports[1];
       const bool edge = (s.steer & 3) == 0;  // a press every fourth frame, released between
-      two.steer = true;
-      if (p.placed)
+      two.steer = s.steer >= STEER_SETTLE_FRAMES;
+      if (!two.steer)
+      {
+        // Centred while the game takes the new pad's origin (ALL centres the stick).
+      }
+      else if (p.placed)
       {
         // Down on another character: back into the hand. On it with another costume: X turns it.
         if (p.character != s.pick_character)
@@ -391,8 +395,11 @@ Masks Gate(const View& v, const State& s)
       else if (p.hand_target == Rules::CSS_HAND_GRID_HOLDING && p.character == s.pick_character)
       {
         // Over the pick with the token in the hand: still, and A puts it down once the hand has
-        // stopped sliding (where it stood as the last frame began).
-        const bool still = p.hand_x == v.hand2_prev_x && p.hand_y == v.hand2_prev_y;
+        // all but stopped (since the last frame began: the character it reads lags the hand by a
+        // frame, so a hand still moving can put the token on the next one). With the stick let go
+        // Brawl's hand still creeps, about 0.03 a frame, which is fine.
+        const bool still = std::fabs(p.hand_x - v.hand2_prev_x) < 0.05f &&
+                           std::fabs(p.hand_y - v.hand2_prev_y) < 0.05f;
         two.press = edge && still ? PAD_BUTTON_A : 0;
       }
       else
