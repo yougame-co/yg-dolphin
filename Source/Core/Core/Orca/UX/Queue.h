@@ -81,7 +81,9 @@ constexpr u32 STEER = MatchBlock::QUEUE + 0x12;     // u16: frames port 2's pick
 constexpr u32 PICK = MatchBlock::QUEUE + 0x14;
 // u32: the hook frame + 1 port 2's steering began at (0: not steering).
 constexpr u32 STEER_START = MatchBlock::QUEUE + 0x20;
-constexpr u32 REGION_END = MatchBlock::QUEUE + 0x24;
+// u32: the hook frame + 1 port 2's token went down on its pick (0: not yet): the costume's turn.
+constexpr u32 COSTUME_START = MatchBlock::QUEUE + 0x24;
+constexpr u32 REGION_END = MatchBlock::QUEUE + 0x28;
 static_assert(REGION_END <= MatchBlock::QUEUE + MatchBlock::QUEUE_SIZE);
 
 constexpr u8 FLAG_GO = 0x01;         // both ready (or ranked's time up): Orca presses Start
@@ -92,6 +94,8 @@ constexpr int READY_FRAMES = 30 * 60;
 constexpr int SKIP_FRAMES = 90;
 // Steering port 2's hand gives up after this long (the player then picks by hand).
 constexpr int STEER_LIMIT_FRAMES = 10 * 60;
+// Turning port 2's costume (X) gives up after this long: the character is in, whatever the colour.
+constexpr int COSTUME_LIMIT_FRAMES = 3 * 60;
 
 // The character select's id for "no character" (muSelCharPlayerArea +0x1B8).
 constexpr int NO_CHARACTER = 0x28;
@@ -153,6 +157,7 @@ struct State
   u16 timer = 0;
   u16 steer = 0;
   u32 steer_start = 0;
+  u32 costume_start = 0;
   bool pick_set = false;
   u8 pick_character = 0;
   u8 pick_costume = 0;

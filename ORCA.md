@@ -2651,7 +2651,8 @@ Project+'s saved stage switch data): +0x00 the ready flags (bit per port), +0x01
 +0x02 who wasn't ready, +0x03 game 1's locked picks, +0x04 the ready timer's start (hook frame + 1),
 +0x08 ports 1-2's raw buttons in the frame that just ran and +0x0C the frame before's, +0x10 the
 timer, +0x12 the steering's frames, +0x14 port 2's pick (character, costume, x, y), +0x20 the
-steering's start. `Queue::Frame` (after the character order) advances it at every boundary, first
+steering's start, +0x24 the costume's start (3 s to turn it, then the character is in whatever the
+colour). `Queue::Frame` (after the character order) advances it at every boundary, first
 runs and re-runs, as a pure and idempotent function of memory, the hook's frame number and the
 synced ports (`Queue::Advance`); the gate's masks come from memory alone (`Queue::Gate`). Any new
 header (another mode, room or flags) zeroes the region.

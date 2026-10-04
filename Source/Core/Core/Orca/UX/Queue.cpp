@@ -215,9 +215,14 @@ State Advance(const View& v, const State& state, int frame)
       s.locked |= 1;
     const CssPort& two = v.ports[1];
     const bool steering_over = s.steer_start != 0 && s.steer >= STEER_LIMIT_FRAMES;
-    if (two.placed &&
-        (!s.pick_set || steering_over ||
-         (two.character == s.pick_character && two.costume == s.pick_costume)))
+    const bool on_pick = s.pick_set && two.placed && two.character == s.pick_character;
+    // The costume's own clock, from the first boundary the token is down on the pick.
+    if (on_pick && !(s.locked & 2) && s.costume_start == 0)
+      s.costume_start = now;
+    const bool costume_over =
+        s.costume_start != 0 && now - std::min(now, s.costume_start) >= COSTUME_LIMIT_FRAMES;
+    if (two.placed && (!s.pick_set || steering_over ||
+                       (on_pick && (two.costume == s.pick_costume || costume_over))))
     {
       s.locked |= 2;
     }
@@ -473,6 +478,7 @@ State ReadState(const GuestMemory& m)
   s.timer = m.Read16(TIMER);
   s.steer = m.Read16(STEER);
   s.steer_start = m.Read32(STEER_START);
+  s.costume_start = m.Read32(COSTUME_START);
   s.pick_set = m.Read8(PICK) == 1;
   s.pick_character = m.Read8(PICK + 1);
   s.pick_costume = m.Read8(PICK + 2);
@@ -494,6 +500,7 @@ int WriteState(GuestMemory& m, const State& s)
   w.U16(TIMER, s.timer);
   w.U16(STEER, s.steer);
   w.U32(STEER_START, s.steer_start);
+  w.U32(COSTUME_START, s.costume_start);
   w.U8(PICK, s.pick_set ? 1 : 0);
   w.U8(PICK + 1, s.pick_character);
   w.U8(PICK + 2, s.pick_costume);

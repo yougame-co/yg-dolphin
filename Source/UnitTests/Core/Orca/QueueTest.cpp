@@ -404,6 +404,26 @@ TEST(OrcaQueue, SteeringGivesUpAfterItsLimit)
   EXPECT_EQ(s.locked & 2, 2);
 }
 
+TEST(OrcaQueue, TheCostumeGivesUpAfterItsLimit)
+{
+  Identity pick;
+  pick.character = 0x10;
+  pick.costume = 4;
+  pick.x = 8.0f;
+  pick.y = 6.0f;
+  View v = Room();
+  v.pick2 = pick;
+  v.ports[1] = Placed(0x10, 0);  // down on the pick, in another colour
+  State s = Step(v, State{}, 200);
+  EXPECT_EQ(s.costume_start, 201u);
+  EXPECT_EQ(s.locked & 2, 0);
+  s = Step(v, s, 200 + COSTUME_LIMIT_FRAMES - 1);
+  EXPECT_EQ(s.locked & 2, 0);
+  s = Step(v, s, 200 + COSTUME_LIMIT_FRAMES);
+  EXPECT_EQ(s.locked & 2, 2);
+  EXPECT_FALSE(Gate(v, s)[1].steer);
+}
+
 TEST(OrcaQueue, SteeringAimsAtThePick)
 {
   const auto [cx, cy] = SteerToward(1, 1, 1.1f, 1.1f);
@@ -474,6 +494,7 @@ TEST(OrcaQueue, TheStateRoundTripsThroughTheBlock)
   s.timer = 77;
   s.steer = 12;
   s.steer_start = 0x0A0B0C0D;
+  s.costume_start = 0x11223344;
   s.pick_set = true;
   s.pick_character = 0x10;
   s.pick_costume = 3;
