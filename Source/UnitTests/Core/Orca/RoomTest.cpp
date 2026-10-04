@@ -588,6 +588,42 @@ TEST(OrcaLive, ArrivalIsPendingUntilTaken)
   EXPECT_FALSE(a.ArrivalPending());
 }
 
+// A joiner hears its host leave the room as a pending event (OnlineMatch ends a stall on its host's
+// inputs on it, rather than wait out the silence limit), and not before.
+TEST(OrcaLive, HostLeavingIsPendingUntilTaken)
+{
+  const char* live = std::getenv("ORCA_LIVE_TEST");
+  if (!live || std::string(live) != "1")
+    GTEST_SKIP() << "set ORCA_LIVE_TEST=1";
+  const ScopedEnv dev_game("ORCA_TEST_DEV_GAME", "orca-live-test");
+  RoomOptions options;
+  options.room_code =
+      "orcah" +
+      std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 10000000);
+  options.compatibility = "orca-live-test";
+  auto a = std::make_unique<YouGameRoom>(options);
+  for (int i = 0; i < 500 && a->GetState() == RoomState::Connecting; ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  ASSERT_EQ(a->GetState(), RoomState::Waiting) << a->Status();
+  options.joining = true;
+  YouGameRoom b(options);
+  ASSERT_TRUE(WaitArrived(*a)) << a->Status();
+  const auto host = WaitArrived(b);
+  ASSERT_TRUE(host) << b.Status();
+  EXPECT_TRUE(host->host);
+  EXPECT_FALSE(b.HostLeftPending());
+  // The host leaves: its room thread says goodbye on the way out.
+  a.reset();
+  for (int i = 0; i < 1000 && !b.HostLeftPending(); ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  ASSERT_TRUE(b.HostLeftPending()) << b.Status();
+  bool left = false;
+  for (const PeerEvent& event : b.TakePeerEvents())
+    left = left || (event.kind == PeerEvent::Kind::Left && event.host);
+  EXPECT_TRUE(left);
+  EXPECT_FALSE(b.HostLeftPending());
+}
+
 // The test network delay: one side holds every message 100 ms each way, the other sets the variable
 // to 0 (both are then test processes, so their keys match). The delayed side's round trip shows it.
 TEST(OrcaLive, TestNetworkDelayHoldsMessages)

@@ -219,7 +219,11 @@ host has played.
    the last friend on the way has plugged in, the host prints `orca state friend-joined`.
 5. **Leave.**
    - The friend asks to leave; the host picks an unplug frame L ahead in the same way. The
-     friend stops after its inputs before L are acknowledged.
+     friend stops after its inputs before L are acknowledged. The host's session runs 12 frames
+     more once the last friend is out, so that acknowledgement gets through even when a packet is
+     lost or a matchmade room's links close behind it (0.3.15). The friend's leave is also over
+     when the host leaves the room (a matchmade room's host does, at once), or after 3 s with no
+     word once past L. A leaving friend prints `orca state left`, never an error.
    - A friend whose connection drops is unplugged by the host after its last input, rolling back
      the frames that guessed otherwise.
    - A friend who stops answering is dropped after 10 s.
@@ -229,7 +233,7 @@ host has played.
      - A friend the host unplugs for a desync (or for going quiet) gets a `drop` message and
        ends with `orca error desync` (or `peer_left`).
      - A friend whose host left ends with `peer_left`, or with `desync` when the host's bye
-       said so.
+       said so. One stalled on the host's inputs hears that at once, not after the 10 s.
    - With nobody else plugged in, the host hands its log back and plays solo, with no input delay.
    - A third or fourth friend goes the same way on seats 3-4. Only two players have been tested.
 6. **Rooms.**

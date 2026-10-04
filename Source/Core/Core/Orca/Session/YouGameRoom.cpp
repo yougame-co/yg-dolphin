@@ -1527,6 +1527,13 @@ struct YouGameRoom::Impl
           OnMessage(*text);
         continue;
       }
+      // Under the test delay, what the server sent before it closed the socket is still on its way
+      // and comes first, as on a real link: a ranked set's verdict just ahead of its room's 4004.
+      if (!ws.IsOpen() && net_delay && !held_in.empty())
+      {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        continue;
+      }
       if (!ws.IsOpen())
       {
         // 4000: the server replaced this socket with a newer one for the same player (another run
@@ -1853,7 +1860,7 @@ struct YouGameRoom::Impl
     const auto now = Clock::now();
     while (!held_out.empty() && held_out.front().due <= now)
     {
-      if (!ws.SendText(held_out.front().text, std::chrono::seconds(2)))
+      if (ws.IsOpen() && !ws.SendText(held_out.front().text, std::chrono::seconds(2)))
         WARN_LOG_FMT(NETPLAY, "Orca room: send failed: {}", ws.Error());
       held_out.pop_front();
     }
@@ -3019,6 +3026,14 @@ bool YouGameRoom::ArrivalPending() const
   // As the host takes them (OnlineMatch's HostEvents): a friend on a seat after the host's.
   return std::ranges::any_of(m_impl->events, [](const PeerEvent& event) {
     return event.kind == PeerEvent::Kind::Arrived && event.seat > 0 && !event.host;
+  });
+}
+
+bool YouGameRoom::HostLeftPending() const
+{
+  std::lock_guard lock(m_impl->mutex);
+  return std::ranges::any_of(m_impl->events, [](const PeerEvent& event) {
+    return event.kind == PeerEvent::Kind::Left && event.host;
   });
 }
 
