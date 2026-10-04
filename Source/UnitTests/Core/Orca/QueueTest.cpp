@@ -319,6 +319,46 @@ TEST(OrcaQueue, RankedLaterGamesWaitForTheCharacterOrder)
   EXPECT_TRUE(s.flags & FLAG_GO);
 }
 
+TEST(OrcaQueue, CasualLaterGamesWaitForBothStartsWithNoTimer)
+{
+  // Game 2 on with the same opponent (Luis, 2026-10-04): no clock, no timeout, nobody frozen.
+  View v = Room();
+  v.game1 = false;
+  EXPECT_TRUE(ReadyPhase(v));
+  EXPECT_FALSE(Timed(v));
+  State s = Step(v, State{}, 9000);
+  s = Step(Press(v, START), s, 9001);
+  for (const int frame : {9000 + READY_FRAMES, 9000 + READY_FRAMES * 3, 9000 + READY_FRAMES * 10})
+  {
+    s = Step(v, s, frame);
+    EXPECT_FALSE(s.flags & (FLAG_TIMED_OUT | FLAG_GO)) << frame;
+    EXPECT_EQ(s.timeout_who, 0) << frame;
+    EXPECT_EQ(s.ready, 1) << frame;
+    EXPECT_NE(Gate(v, s)[1], ALL) << frame;
+  }
+  // Port 2's Start, however late: both ready, on, Start for port 1 every other frame.
+  s = Step(Press(v, 0, START), s, 9000 + READY_FRAMES * 10 + 1);
+  EXPECT_TRUE(s.flags & FLAG_GO);
+  const State next = Step(v, s, 9000 + READY_FRAMES * 10 + 2);
+  EXPECT_EQ((Gate(v, s)[0].press | Gate(v, next)[0].press) & START, START);
+  // Casual's game 1 and every ranked game keep the 30 s.
+  EXPECT_TRUE(Timed(Room()));
+  View ranked = Room(true);
+  ranked.game1 = false;
+  EXPECT_TRUE(Timed(ranked));
+  State r = Step(ranked, State{}, 12000);
+  r = Step(ranked, r, 12000 + READY_FRAMES);
+  EXPECT_TRUE(r.flags & FLAG_GO);
+  // From the match block: a fight since the room's header was written is game 2 on.
+  FakeMemory m = Block(MB::FLAG_QUEUE2);
+  EXPECT_TRUE(Timed(ReadView(m, {})));
+  m.Write8(MB::FOUGHT, 1);
+  EXPECT_FALSE(ReadView(m, {}).game1);
+  EXPECT_FALSE(Timed(ReadView(m, {})));
+  m.Write8(MB::MODE, MB::MODE_RANKED);
+  EXPECT_TRUE(Timed(ReadView(m, {})));
+}
+
 TEST(OrcaQueue, OnlyBothPlayersStartTheTimer)
 {
   View v = Room();

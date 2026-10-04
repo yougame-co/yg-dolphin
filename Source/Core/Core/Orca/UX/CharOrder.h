@@ -20,11 +20,13 @@ class CPUThreadGuard;
 // The character order of a ranked set's later games (ORCA.md "Character order"; the ranked rules'
 // Phase 4), on the character select of game 2 and on, in one of two orders (Order, one constant
 // for both games, kLaterGameOrder):
-//   - Free (Luis, 2026-10-04: "losing player chooses character first then winning player chooses.
-//     Winning player can choose right away if they want"): the loser is asked first; the winner
-//     may lock in at any time meanwhile, and if they haven't once the loser has, it is their turn.
-//   - WinnerFirst (the standard rulesets: Project+'s 2024 Recommended B.6, characters winner then
+//   - WinnerFirst, the one played (Luis, 2026-10-04: "Winner chooses character first", then the
+//     loser; the standard rulesets too: Project+'s 2024 Recommended B.6, characters winner then
 //     loser, then the stage): the winner picks first, and the loser, who sees that pick, second.
+//   - Free (Luis's earlier pick, 2026-10-04: "losing player chooses character first then winning
+//     player chooses. Winning player can choose right away if they want"): the loser is asked
+//     first; the winner may lock in at any time meanwhile, and if they haven't once the loser has,
+//     it is their turn.
 // Each turn has 45 seconds; a pick that runs out keeps the character the player's token is on,
 // which is the previous game's character unless they moved it.
 //
@@ -85,8 +87,8 @@ enum class Order : u8
   Free = 0,         // the loser is asked first; the winner may lock in at any time
   WinnerFirst = 1,  // the winner locks in first, then the loser picks
 };
-// The order both games play. Luis is asked which he wants: flip it here.
-constexpr Order kLaterGameOrder = Order::Free;
+// The order both games play (Luis, 2026-10-04: the winner chooses first). Flip it here.
+constexpr Order kLaterGameOrder = Order::WinnerFirst;
 
 // What the match block's set state says about the game about to be played: a ranked set that is
 // still open, the game number (one more than the games won: a tied game is played again), and the

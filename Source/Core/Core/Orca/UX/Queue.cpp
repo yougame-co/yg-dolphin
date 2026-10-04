@@ -146,6 +146,11 @@ bool ReadyPhase(const View& v)
   return v.queue2 && !v.solo && v.css && (v.plugged & 3) == 3 && (v.game1 || v.order_done);
 }
 
+bool Timed(const View& v)
+{
+  return v.ranked || v.game1;
+}
+
 State Advance(const View& v, const State& state, int frame)
 {
   State s = state;
@@ -254,7 +259,7 @@ State Advance(const View& v, const State& state, int frame)
     return s;
   }
   // A start from another frame numbering (later than now, or far longer ago than the timer runs)
-  // starts here.
+  // starts here. Untimed (casual's later games) it still counts: Start's every other frame below.
   if (s.timer_start == 0 || s.timer_start > now ||
       now - s.timer_start > static_cast<u32>(READY_FRAMES) * 4)
   {
@@ -272,7 +277,7 @@ State Advance(const View& v, const State& state, int frame)
   {
     s.flags |= FLAG_GO;
   }
-  else if (t >= static_cast<u32>(READY_FRAMES))
+  else if (Timed(v) && t >= static_cast<u32>(READY_FRAMES))
   {
     if (v.ranked)
     {
@@ -701,12 +706,22 @@ void Lines(const View& v, const State& s, const std::vector<Events::PortInfo>& p
     }
     else if (ReadyPhase(v))
     {
-      const std::string left = Clock(READY_FRAMES - s.timer);
       const bool mine = (s.ready >> local) & 1;
       const bool theirs = (s.ready >> other) & 1;
-      line = mine ? fmt::format("Ready · {}", left) :
-                    fmt::format("Press Start when you're ready · {}", left);
-      note = theirs ? fmt::format("{} is ready", them) : fmt::format("Waiting for {}", them);
+      if (Timed(v))
+      {
+        const std::string left = Clock(READY_FRAMES - s.timer);
+        line = mine ? fmt::format("Ready · {}", left) :
+                      fmt::format("Press Start when you're ready · {}", left);
+        note = theirs ? fmt::format("{} is ready", them) : fmt::format("Waiting for {}", them);
+      }
+      else
+      {
+        // Casual's later games: no clock; both press Start when they're done talking.
+        line = mine ? "Ready" : "Press Start when you're ready";
+        note = theirs ? fmt::format("{} is ready", them) :
+                        fmt::format("Waiting for {} to press Start", them);
+      }
       const Local& l = L();
       if (l.skip.Progress() > 0)
       {

@@ -41,11 +41,13 @@ class CPUThreadGuard;
 //   for port 1 and the game goes on to the stage select (casual's two-turn pick, ranked's strikes).
 //   Casual: when time is up the players who weren't ready are named (`orca queue timeout me|them`,
 //   at a final frame) and nothing moves until the pages leave the room. Ranked: time up goes on
-//   with the picks as they are.
+//   with the picks as they are. The timer runs in every ranked game but only in casual's first
+//   (Timed()): from game 2 on, casual waits for both Starts with no clock and no timeout (Luis,
+//   2026-10-04: more time to talk).
 // - **Skip:** holding Z 1.5 s on the room's character select prints `orca queue skip` (the page
 //   leaves the room and searches again). Local only: it changes nothing in the game.
 // - **Later games:** casual comes back to the room's character select, characters free, ready
-//   again; ranked runs the character order first (CharOrder.h), then the ready timer.
+//   again with no timer; ranked runs the character order first (CharOrder.h), then the ready timer.
 // - **After the room** (skip, timeout, the opponent gone, a set over): the session puts back this
 //   player's own game as it was when the match came (OnlineMatch's queue image), so each player is
 //   on their own queue character select with their pick, on port 1, and Orca prints
@@ -179,9 +181,15 @@ struct State
   bool operator==(const State&) const = default;
 };
 
-// The room's character select with both players in: the ready timer runs (game 1, and later games
-// once ranked's character order is done).
+// The room's character select with both players in: the ready step (game 1, and later games once
+// ranked's character order is done).
 bool ReadyPhase(const View& view);
+
+// Whether the ready step has its 30 s timer: every ranked game, and casual's first only (game 1:
+// strangers who just met). Casual's later games with the same opponent wait for both Starts, with
+// no clock and no timeout (Luis, 2026-10-04: "a little bit more time to be social"). A function of
+// the match block (the header's mode and FOUGHT), so the same on every machine and re-run.
+bool Timed(const View& view);
 
 // The state after this boundary, from the state before it, the view and the hook's frame number.
 // Pure and idempotent (the same view and state give the same result, and a result fed back in

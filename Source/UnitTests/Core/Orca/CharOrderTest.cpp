@@ -278,11 +278,11 @@ TEST(OrcaCharOrder, TestKnob)
   }
 }
 
-TEST(OrcaCharOrder, TheOrderIsOneConstantFreeByDefault)
+TEST(OrcaCharOrder, TheOrderIsOneConstantWinnerFirstByDefault)
 {
-  // Luis's order unless the integrator flips kLaterGameOrder; the set read from the match block
-  // carries it.
-  EXPECT_EQ(kLaterGameOrder, Order::Free);
+  // Luis's order (2026-10-04: "Winner chooses character first") unless the integrator flips
+  // kLaterGameOrder; the set read from the match block carries it.
+  EXPECT_EQ(kLaterGameOrder, Order::WinnerFirst);
   EXPECT_EQ(SetView{}.order, kLaterGameOrder);
   EXPECT_EQ(FirstPicker(SetView{Ruleset::PPlus, 2, 0, Order::Free}), 1);
   EXPECT_EQ(FirstPicker(SetView{Ruleset::PPlus, 2, 0, Order::WinnerFirst}), 0);
