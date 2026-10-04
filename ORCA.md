@@ -2607,21 +2607,29 @@ The page owns the room: Orca never leaves on a skip or a timeout by itself.
   it readies the player, through the raw latch below. While ready, B only un-readies. B while not
   ready reaches the game, and the loop lock's toggled group stands aside for `FLAG_SOLO` (`when
   806F238C & 01000000 == 00000000` in both patch files), so held B backs out to the menus.
+  The B that stops the search is kept from the game until it is let go, so the token stays down.
   Overlay: "Casual" / "Pick your character, then press Start to search", then "Casual ·
   Searching for an opponent…" / "B to cancel". Panels 2-4 still show (as empty "N/A" panels): no
   cheap layout patch was looked for.
 - **The pick's identity.** At `ready`, Orca keeps the pick (character, costume, and where its hand
-  held the token over that character when it put it down) and the page's `queue rating`, as the
+  was over that character: the middle of its way over it, from where the hand first read it to
+  where it put the token down, so inside the square even when the hand stopped on its edge) and the
+  page's `queue rating`, as the
   player's queue identity (`Queue::Identity`, 13 bytes): it rides the session's value channel with
   the player's name and controls (`Events::PortInfo::queue`, the `nm`/`kf` entries' fifth element,
   the joiner's hello `qi`), so every machine has the joiner's at its plug frame.
 - **The room's character select** (header `FLAG_QUEUE2`, written by the host with the app's
   `queue2`). Game 1: the host's pick is locked once down (A, B, X, Y masked); port 2's pick is put
   in from its identity by the input gate (`Mask::steer`, a held stick, and synthesized presses):
-  its own controller does nothing, the stick takes its hand to where it held the token in its own
-  game, A puts the token down once the hand is over that character with the token in it, X turns
-  the costume until it matches, B takes a token down on another character back up; then it is
-  locked too. 10 s at most, after which the player picks by hand. Then the ready timer, 30 s, once
+  its own controller does nothing; the stick stays centred 20 frames (the game takes a newly
+  plugged pad's stick as its centre, its origin: steered then, the stick would read as pushed ever
+  after), then takes the hand to that place (full tilt from 3 units out, the larger component never
+  under 30, past the dead zone); A puts the token down once the hand is over that character with the
+  token in it and has all but stopped (the character the hand reads lags it by a frame; Brawl's hand
+  creeps about 0.03 a frame with the stick let go, which counts as stopped); X turns the costume
+  until it matches (3 s at most; port 1's own colour on the same character can't be had, so any
+  colour does then); B takes a token down on another character back up; then it is locked too. 10 s
+  at most, after which the player picks by hand. About 1.5 s in Brawl, 2 s in Project+. Then the ready timer, 30 s, once
   both are plugged in (a ranked later game's: once the character order is done, `CharOrder.h`,
   whose own Start is then not pressed): Start readies a player with a character down, B un-readies;
   both ready, Orca presses Start for port 1 every other frame until the screen goes (casual: the
@@ -2652,7 +2660,8 @@ Project+'s saved stage switch data): +0x00 the ready flags (bit per port), +0x01
 +0x08 ports 1-2's raw buttons in the frame that just ran and +0x0C the frame before's, +0x10 the
 timer, +0x12 the steering's frames, +0x14 port 2's pick (character, costume, x, y), +0x20 the
 steering's start, +0x24 the costume's start (3 s to turn it, then the character is in whatever the
-colour). `Queue::Frame` (after the character order) advances it at every boundary, first
+colour), +0x28 port 2's hand as the frame that just ran began (the latch's, for "all but stopped").
+The +0x01 flags: go, timed out, and (the queue's own character select) the stopping B still held. `Queue::Frame` (after the character order) advances it at every boundary, first
 runs and re-runs, as a pure and idempotent function of memory, the hook's frame number and the
 synced ports (`Queue::Advance`); the gate's masks come from memory alone (`Queue::Gate`). Any new
 header (another mode, room or flags) zeroes the region.
@@ -2670,11 +2679,39 @@ the queue's; friends games are never written.
 **Local only** (first runs, never memory): the stdout lines (the timeout's at a final frame, through
 `ConfirmResults`), the Z hold (this player's own raw buttons, never a guess), the overlay.
 
+**Found under the harness** (`ORCA_UX_PROBE` watches, both games alike): the player area's +0x1BC
+is the costume (X one up, Y one down); the hand (OnlineRules.h) starts on its panel's player-type
+button (Brawl x -22.5 + 15 a port, y -19.8; Project+ -23.4, -19.3), up is +y; Brawl's hand moves
+0.83 a frame at full tilt, Project+'s 1.0; the token is down once +0x1F8 and +0x1F9 are both 0.
+
 **Test knobs** (test overrides, both processes alike): `ORCA_TEST_QUEUE=casual|ranked[:<coin>][:q2]`
 (the room's header with `FLAG_QUEUE2`) or `...:solo` (the queue's own character select);
 `ORCA_TEST_QUEUE_PICK=<frame>:<char>:<costume>:<x>:<y>[:<rating>]` (harness runs: port 2 plugs in at
 that frame with that queue identity, as a matched joiner's does). `Tools/orca/queue-e2e.mjs --q2
-[--scenario skip|timeout]` plays the page's half against yougame.co.
+[--scenario skip|timeout]` plays the page's half against yougame.co. Inputs:
+`Tools/orca/inputs/bf-queue2.txt`, `pplus-queue2.txt`.
+
+**Checked 2026-10-04** (branch `q2-queue-css` on `rel-0.3.13`, M4 Pro, headless, `-v Null`):
+- Unit tests: `OrcaQueue*` (ready, unready, the stopping B, the timer, casual and ranked timeouts,
+  game 1's locks, the steering and its limits, the costume, the skip's hold, the latch, the
+  identity, the region) and the rest: 313 `Orca*` tests pass.
+- Brawl, `YG_SYNCTEST=7 YG_SYNCTEST_FROM=1700` with `ORCA_TEST_QUEUE=casual:q2
+  ORCA_UX_TEST_NAMES=ada,bo ORCA_TEST_QUEUE_PICK=1817:3:2:-7.5:14.23` over `bf-queue2.txt` to frame
+  4400 (port 2's pick steered in, Link in costume 2, 94 frames with the 20-frame settle; both ready;
+  Orca's Start; the fight; results; game 2's character select, both ready, Orca's Start): 18,851
+  re-run frames, **0 RAM mismatches**.
+- Project+ under the harness, `pplus-queue2.txt`: port 2's pick in 58 frames, both ready, two games.
+- The queue's own character select under the harness (`casual:solo`): Start readies, B un-readies
+  with the token still down, Start again, B, then held B goes back to the menus.
+- `queue-e2e.mjs --q2` against yougame.co with dev tickets, Brawl casual PASS on the final build
+  (the joiner's pick in 1.5 s, verdicts the same, both back on their own character select with
+  `orca queue ready` again), and on the builds just before the last steering change (the settle and
+  "all but stopped"; the pick then took 3 s): casual 2 games PASS (back in 53 and 123 ms), `--scenario
+  skip` PASS, `--scenario timeout` PASS (both `timeout me`, back, not ready), ranked with 1-stock
+  games PASS (2-0 set, game 2's character order then the ready timer; back after the set in 40 ms),
+  Project+ casual PASS (pick in 2 s, back in 30 ms).
+- The queue image: its capture takes 20-30 ms (a machine image and the session NAND, 37.8 MB in
+  Brawl), the way back 30-140 ms.
 
 ## Embedding
 
