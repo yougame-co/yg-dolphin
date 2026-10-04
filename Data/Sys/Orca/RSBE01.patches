@@ -184,6 +184,20 @@
 806DCE3C 38A00001 4BFFFAB1    # li r5, 1 -> bl 0x806DC8EC (r5: the argument)
 806DCE40 4B950801 4B950801    # bl     setNextSequence (guard)
 
+# The online rules' lock on the way out (ORCA.md "Online rules"): while the match block's header
+# (UX/MatchBlock.h, 0x806F2380) says casual or ranked, sqVsMelee::setNext's state 5, which takes the
+# character select's result, sends anything but "go on" (its BACK button, held B) to state 4, the
+# character select again, the way the stage select's B comes back to it (state 7), instead of
+# state 16, the menu. No way out of the character select in a queue match; without a header
+# (friends, solo) the menu as before. A toggled group (GamePatches.h): r24 is 4 and r20 16 through
+# the whole function.
+when 806F2380 == 59474D31               # the block's magic, 'YGM1'
+when 806F2384 & 00FF0000 != 00000000    # its mode: casual or ranked
+806DCBFC 4182000C 4182000C    # beq    0x806DCC08 (go on: state 6, the stage select; guard)
+806DCC00 928F0008 930F0008    # stw    r20, 8(r15) (16) -> stw r24, 8(r15) (4)
+806DCC04 48000008 48000008    # b      0x806DCC0C (guard)
+end
+
 # --- Input: the game reads this frame's pads ------------------------------------------------------
 
 # "Controller Input Lag Fix" [Magus], the line `C202AD8C 00000002 7C630214 3863FBFC` of the

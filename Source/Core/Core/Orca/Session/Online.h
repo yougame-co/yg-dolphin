@@ -55,6 +55,9 @@ void SetOpponentPlugged(bool plugged);
 void ReportGame(const Net::GameReport& report);
 // The games went apart: the room's match in progress is void.
 void ReportDesync();
+// A ranked set whose opponent stopped sending inputs (15 s stalled, or silent): this player claims
+// the set (YouGameRoom::ReportStall). Nothing outside a ranked room's live match.
+void ReportStall();
 // The app's "delay auto|1..6" (embed mode; any thread, never blocks): this player's input delay
 // from now on, in frames, or nullopt for the adaptive one. It stays for every session after, and
 // counts only while the app's caps include "delay" (Rollback::OnlineMatch applies it at each
@@ -133,6 +136,11 @@ std::string StatusLine();
 // or the session's own error. Nothing for a normal leave. False when the game can't go on solo
 // (this machine's emulation failed: an "internal" error, always terminal).
 bool ReportSessionEnd(const std::string& session_error);
+
+// Why this Orca leaves its room, for its bye (the others' "friend-left <why>", the room's lobby):
+// "mismatch" (a queue room's header it wouldn't play), "no-show" (it never picked in time). Any
+// thread.
+void SetLeaveReason(const std::string& reason);
 
 // The friend stopped answering mid-match: reports peer_left with `sentence`, and tells the friend
 // on the way out that the connection stalled (for its own report, if its game wakes up).

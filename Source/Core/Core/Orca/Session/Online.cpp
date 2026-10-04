@@ -277,6 +277,12 @@ void ReportDesync()
     room->ReportDesync();
 }
 
+void ReportStall()
+{
+  if (const auto room = Room(); room && room->Queue() == "ranked" && room->MatchLive())
+    room->ReportStall();
+}
+
 void RequestLeave()
 {
   std::lock_guard lock(s_request_mutex);
@@ -562,6 +568,12 @@ bool ReportSessionEnd(const std::string& session_error)
   }
   Status::Error("internal", session_error);
   return false;
+}
+
+void SetLeaveReason(const std::string& reason)
+{
+  if (const auto room = Room())
+    room->SetLeaveReason(reason);
 }
 
 void ReportPeerStalled(std::string_view sentence)

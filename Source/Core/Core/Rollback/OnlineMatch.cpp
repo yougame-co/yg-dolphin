@@ -41,6 +41,7 @@
 #include "Core/Orca/Session/PadCodec.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/OnlineMenu.h"
+#include "Core/Orca/UX/OnlineRules.h"
 #include "Core/Orca/UX/Results.h"
 #include "Core/Rollback/SessionPort.h"
 #include "Core/System.h"
@@ -305,6 +306,9 @@ constexpr std::chrono::seconds ROOM_HOLD{90};
 // How long a player whose opponent left a ranked set waits in the room for its verdict (the room
 // awards a forfeit 15 s after the opponent went).
 constexpr std::chrono::seconds VERDICT_WAIT{30};
+// A ranked set whose opponent's inputs stop this long while this game waits on them: this player
+// claims the set (Online::ReportStall), as a disconnect would hand it over.
+constexpr std::chrono::seconds RANKED_STALL_LIMIT{15};
 
 // The input delay the player chose ("delay N" from the app, with "caps delay"), or nullopt for the
 // adaptive one.
@@ -651,6 +655,36 @@ void ResetDropIn(Match& match)
   match.store = MakeStore();
 }
 
+// The online rules' mode for a room's queue (UX/OnlineRules.h): casual or ranked, else none.
+Orca::UX::Rules::Mode QueueMode(const std::string& queue)
+{
+  if (queue == "casual")
+    return Orca::UX::Rules::Mode::Casual;
+  if (queue == "ranked")
+    return Orca::UX::Rules::Mode::Ranked;
+  return Orca::UX::Rules::Mode::None;
+}
+
+// The header this machine's game should carry (written only at its alone boundaries): a queue
+// room's while this game hosts it (port 1, not joining), or while it waits in a ranked room for the
+// set's verdict; none otherwise (a friends room, a search from its own room, no room).
+Orca::UX::Rules::Mode WantedRulesMode(const Match& match)
+{
+  if (match.joining || Orca::Online::RoomEnded())
+    return Orca::UX::Rules::Mode::None;
+  const Orca::UX::Rules::Mode mode = QueueMode(Orca::Online::RoomQueue());
+  if (match.local_seat == 0 || (match.linger_until && mode == Orca::UX::Rules::Mode::Ranked))
+    return mode;
+  return Orca::UX::Rules::Mode::None;
+}
+
+// Boundaries the header has waited to be written since the room called for another: a keyframe
+// for a queue room's opponent waits for it (HostEvents), at most HEADER_WAIT_BOUNDARIES (the
+// header is written at the first alone boundary after the room's welcome, long before anyone can
+// arrive; the bound only keeps an arrival from waiting forever if it never is).
+int s_header_waiting = 0;
+constexpr int HEADER_WAIT_BOUNDARIES = 120;
+
 // A room this player left on purpose (or for a friend's): whatever KeepRoomOpen knew of the old one
 // is over.
 void ForgetRoom(Match& match)
@@ -936,7 +970,12 @@ void HostEvents(Core::System& system, Match& match)
   const int next = match.running + 1;
   const bool fresh = match.keyframe && next - match.keyframe->frame <= KEYFRAME_FRESH_FRAMES;
   bool capture_failed = false;
-  if (match.keyframe_wanted && !match.job && match.store)
+  // A queue room's opponent replays this game from a keyframe that carries the room's header.
+  const bool header_ready =
+      Orca::UX::Rules::HeaderSettled() || s_header_waiting > HEADER_WAIT_BOUNDARIES;
+  if (!header_ready && match.keyframe_wanted)
+    NOTICE_LOG_FMT(ROLLBACK, "Online rules: a keyframe waits for the room's header");
+  if (match.keyframe_wanted && !match.job && match.store && header_ready)
   {
     if (fresh)
       match.keyframe_wanted = false;
@@ -1298,6 +1337,9 @@ Load LoadKeyframe(Core::System& system, Match& match, int* frame_out)
   match.running = frame - 1;
   // The stats line's frame rate starts over: the frames up to the keyframe were never run here.
   match.stats_frame = -1;
+  // The host's game must carry the header this room's queue calls for (none for a friends room):
+  // checked at the next frame hook (UX/OnlineRules.h).
+  Orca::UX::Rules::ExpectHeader(QueueMode(Orca::Online::RoomQueue()));
   *frame_out = frame;
   return Load::Done;
 }
@@ -1473,8 +1515,8 @@ void HostInPlay(Match& match, const std::string& code)
   Orca::Online::ShutdownInBackground();
   Orca::Online::StartRoom(code, false);
   Orca::UX::Search::Matched(true);
-  // Brawl's rules for a matchmade game, at the next boundary (UX/Results.h).
-  Orca::UX::RequestQueueRules();
+  // The room's header and its locks follow at this game's next alone boundary, once the room's
+  // welcome says its queue (UX/OnlineRules.h).
   NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: hosting room {} from frame {}", code, match.running + 1);
 }
 
@@ -1504,6 +1546,21 @@ void TakeCommands(Match& match)
     if (const auto code = Orca::Online::TakeHostRequest())
       HostInPlay(match, *code);
   }
+}
+
+// A joiner whose host's game carries another header than this room's queue calls for (another
+// mode or ruleset, or none: UX/OnlineRules.h) leaves at once, before it plays a frame of it.
+void LeaveOnMismatch(Match& match)
+{
+  if (match.session && match.session->Resimulating())
+    return;
+  const auto why = Orca::UX::Rules::TakeMismatch();
+  if (!why)
+    return;
+  WARN_LOG_FMT(ROLLBACK, "Online rules: leaving room {}: {}", Orca::Online::Code(), *why);
+  Orca::Online::SetLeaveReason(*why);
+  Orca::Status::Report(*why, "That match couldn't start");
+  Leave(match);
 }
 
 // ---- Ports, for the in-game UX ----
@@ -1783,6 +1840,25 @@ void ConfirmResults(Match& match)
     if (plugged >= 2)
       plug = latest;
   }
+  // Ranked's character select: a player who never picked in time before the set's first game
+  // (UX/OnlineRules.h, both machines alike at the same final frame). That player's own game leaves
+  // the room, which the room counts as the set's forfeit; the other waits there for the verdict.
+  if (const auto no_show = Orca::UX::Rules::ConfirmNoShow(confirmed))
+  {
+    const bool mine = *no_show == match.local_seat;
+    NOTICE_LOG_FMT(ROLLBACK, "Online rules: port {} didn't pick a character in time{}",
+                   *no_show + 1, mine ? ": leaving the set" : "");
+    if (mine && Orca::Online::RoomQueue() == "ranked" && plug != INT32_MAX)
+    {
+      Orca::Online::SetLeaveReason("no-show");
+      Core::DisplayMessage("You didn't pick a character in time: the set is lost", 6000);
+      Orca::Online::RequestLeave();
+    }
+    else if (!mine)
+    {
+      Core::DisplayMessage("Your opponent didn't pick a character in time", 6000);
+    }
+  }
   for (const Orca::UX::GameResult& r : Orca::UX::Tracker().Confirm(confirmed, plug))
   {
     Orca::Net::GameReport report;
@@ -1902,6 +1978,10 @@ std::optional<int> Boundary(Core::System& system,
     Orca::Status::State("no-room");
   }
 
+  // The online rules' header this game's room calls for, written at its alone boundaries.
+  Orca::UX::Rules::SetWanted(WantedRulesMode(match));
+  s_header_waiting = Orca::UX::Rules::HeaderSettled() ? 0 : s_header_waiting + 1;
+
   // The in-game UX's frame hook: before this boundary's snapshot or keyframe, so what it writes is
   // in them, and on re-runs too.
   {
@@ -1920,6 +2000,7 @@ std::optional<int> Boundary(Core::System& system,
   }
 
   TakeCommands(match);
+  LeaveOnMismatch(match);
 
   if (match.joining && !match.session && match.join_in_play)
   {
@@ -2116,6 +2197,7 @@ std::optional<int> Boundary(Core::System& system,
     const auto step_start = Clock::now();
     auto stall_published = step_start;
     bool stall_shown = false;
+    bool stall_claimed = false;
     const int stalls_before = match.session->GetStats().stalls;
     const int running_before = match.running;
     const Orca::Net::Step step = StepSession(
@@ -2128,6 +2210,16 @@ std::optional<int> Boundary(Core::System& system,
             stall_shown = true;
             PublishStall(match, MsSince(step_start));
             Orca::Events::NotifyStall(static_cast<int>(MsSince(step_start)));
+            if (!stall_claimed && now - step_start >= RANKED_STALL_LIMIT &&
+                Orca::Online::RoomQueue() == "ranked" && Orca::Online::MatchLive())
+            {
+              stall_claimed = true;
+              WARN_LOG_FMT(ROLLBACK, "Matchmaking: the opponent's inputs stopped for {} s: "
+                                     "claiming the set",
+                           RANKED_STALL_LIMIT.count());
+              Orca::Online::ReportStall();
+              Core::DisplayMessage("Your opponent stopped playing: the set is yours", 6000);
+            }
           }
           return Stopping(system);
         },
@@ -2263,7 +2355,9 @@ std::optional<int> Boundary(Core::System& system,
       }
       if (error.empty())
       {
-        // Silent friends: unplug them and step again (the session still runs).
+        // Silent friends: unplug them and step again (the session still runs). A ranked set's
+        // opponent who went silent loses it (Online::ReportStall).
+        Orca::Online::ReportStall();
         DropFriends(match, "stalled");
         continue;
       }
@@ -2295,6 +2389,20 @@ std::optional<int> Boundary(Core::System& system,
       // port 1, with a room of its own.
       NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: the room closed after its result");
       BecomeSolo(match, "match over", "host-left match-over", true);
+      RunSolo(match, local_pad);
+      return rewound_to;
+    }
+    if (Soft() && survivable && match.joining && Orca::Online::RoomQueue() == "ranked" &&
+        Orca::Online::MatchLive() && !Orca::Online::RoomEnded())
+    {
+      // A ranked set whose host went quiet: this player stays in the room (leaving it would be
+      // its own forfeit) and waits for the room's verdict on the host's absence.
+      NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: the host went quiet mid-set: waiting for the verdict");
+      if (peer_silent)
+        Orca::Online::ReportStall();
+      Core::DisplayMessage(PEER_SILENT_SENTENCE, 6000);
+      BecomeSolo(match, "the session ended", "host-left", false, true);
+      match.linger_until = Clock::now() + VERDICT_WAIT;
       RunSolo(match, local_pad);
       return rewound_to;
     }
