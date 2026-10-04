@@ -132,7 +132,7 @@ void Init()
     CharOrder::Frame(guard, frame, resimulating, ports);
     // The character select's title (CssTitle.h): CASUAL, RANKED or FRIENDS, from the header the
     // rules just wrote, the menu's pick and the ports (a pure function of them).
-    CssTitle::Frame(guard, ports);
+    CssTitle::Frame(guard, resimulating, ports);
     // Last, after every other writer here: a toggled patch group follows its condition as this
     // boundary's writers left it, so the hook run again at this boundary (a re-run from the
     // snapshot saved here) decides the same and writes nothing new (GamePatches.h).

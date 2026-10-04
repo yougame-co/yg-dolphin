@@ -2560,7 +2560,25 @@ character select starts, so a mark never outlives it, and the game's value is wr
 nothing calls for one. It changes emulated memory: the UX compatibility version covers it (the
 integrator's bump to `ux=10`).
 
-**Proof**: PROOF_HERE
+**Proof** (2026-10-04, branch `q2-css-title` on `rel-0.3.13`, Apple Silicon, headless):
+`Tools/orca/inputs/bf-css-title.txt` (Brawl: With Friends > FIGHT!, B out, Casual, B out, Ranked, B
+out, Group > Brawl) and `pplus-css-title.txt` (Project+: its boot character select, then the same
+three picks). The log's `the character select's title reads ...` lines give the word at each
+character select: Brawl FRIENDS `0x0EEB` (frame 1707), CASUAL `0x0EED` (2262), RANKED `0x0EEC`
+(2717), nothing written at Group > Brawl (3322, the game's `0x0EEE`); Project+ nothing at the boot
+(163), FRIENDS `0x0003` (718), CASUAL `0x0001` (1273), RANKED `0x0002` (1728). Screenshots (`-v
+Metal`, deleted after) show the labels in both games at each of them, and BRAWL / VERSUS where
+nothing is marked, so the pack's names are the textures' real hashes. `YG_SYNCTEST=7` over the same
+walks: Brawl frames 1500-4700, 22,351 re-run frames, Project+ 150-3600, 24,101; **0 RAM mismatches**
+in both. `OrcaCssTitle*` unit tests (what the title says in each room, the pick read only from a
+running sqVsMelee, the slot and its checks, the marks' values, idempotence and only that word
+written) and the texture pack's (`OrcaOnlineMenuTextures*`, now with paletted names); 299 `Orca*`
+tests pass.
+
+Not yet: the header case (a queue room's) is proven by the unit tests only, not under the harness
+(`ORCA_TEST_QUEUE` locks the way back out of the walk); team mode's TEAM BATTLE frame (3.2) is never
+marked (online rooms don't use teams); a Project+ update that redraws VERSUS changes its hash, and the
+game's title then shows until the pack is regenerated.
 
 ## Ranked sprint integration
 

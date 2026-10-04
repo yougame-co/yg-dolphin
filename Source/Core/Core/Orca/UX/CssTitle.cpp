@@ -231,7 +231,8 @@ int Apply(GuestMemory& m, int players, Title* shown)
   return 1;
 }
 
-void Frame(const Core::CPUThreadGuard& guard, const std::vector<Orca::Events::PortInfo>& ports)
+void Frame(const Core::CPUThreadGuard& guard, bool resimulating,
+           const std::vector<Orca::Events::PortInfo>& ports)
 {
   if (Rules::ProfileRuleset() == Rules::Ruleset::None)
     return;
@@ -243,9 +244,9 @@ void Frame(const Core::CPUThreadGuard& guard, const std::vector<Orca::Events::Po
   }
   GuardMemory memory(guard);
   Title shown = Title::Game;
-  if (Apply(memory, players, &shown))
+  // Logged on first runs: a re-run from a snapshot before the write writes it again.
+  if (Apply(memory, players, &shown) && !resimulating)
   {
-    // Once per character select and mode: the word is already there on every re-run.
     const Slot slot = FindSlot(memory);
     NOTICE_LOG_FMT(ROLLBACK, "Orca: the character select's title reads {} ({:08x} = {:04x})",
                    TitleName(shown), slot.address, memory.Read16(slot.address));

@@ -100,6 +100,8 @@ Slot FindSlot(const GuestMemory& memory);
 // there is no slot).
 int Apply(GuestMemory& memory, int players, Title* shown = nullptr);
 
-// The frame hook's part (Brawl rev 2 and Project+ only), with the ports in effect at the boundary.
-void Frame(const Core::CPUThreadGuard& guard, const std::vector<Orca::Events::PortInfo>& ports);
+// The frame hook's part (Brawl rev 2 and Project+ only), first runs and re-runs, with the ports in
+// effect at the boundary.
+void Frame(const Core::CPUThreadGuard& guard, bool resimulating,
+           const std::vector<Orca::Events::PortInfo>& ports);
 }  // namespace Orca::UX::CssTitle
