@@ -502,8 +502,9 @@ void SelectFrame(GuestMemory& m, const View& v, State* s, bool casual)
       c.page_frames = static_cast<u8>(std::min(c.page_frames + 1, 255));
   }
   // A page turn ends once the page is another (or after a while: the game never took it).
-  if (c.page_turn && ((page & 1) != ((c.page_turn >> 1) & 1) || c.page_frames >= TURN_FRAMES ||
-                      s->progress.picked >= 0))
+  if (c.page_turn &&
+      ((page & 1) != static_cast<u32>((c.page_turn >> 1) & 1) || c.page_frames >= TURN_FRAMES ||
+       s->progress.picked >= 0))
   {
     c.page_turn = 0;
     c.page_frames = 0;
