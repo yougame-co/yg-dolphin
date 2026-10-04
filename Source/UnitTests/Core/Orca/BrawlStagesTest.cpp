@@ -382,3 +382,76 @@ TEST_F(OrcaBrawlStages, AStageTakenDuringStrikesTakesTheDefaults)
   EXPECT_EQ(ReadState(m)->progress.picked, RS::YoshisIsland);
   EXPECT_EQ(m.Read32(TASK + 0x258), 0x0Du);
 }
+
+TEST_F(OrcaBrawlStages, TheMatchBlocksHeaderTurnsTheFlowOn)
+{
+  SetRankedForTests(std::nullopt);
+  FakeMemory m = Game("scSelStage");
+  m.Fill(kBlock, 0x300, 0x60);
+  Boundary(m);
+  EXPECT_FALSE(ReadState(m));  // no header: friends or solo
+  m.Write32(kBlock, kHeaderMagic);
+  m.Write8(kBlock + 4, kHeaderVersion);
+  m.Write8(kBlock + 5, kModeRanked);
+  m.Write8(kBlock + 6, 2);  // Project+'s ruleset
+  Boundary(m);
+  EXPECT_FALSE(ReadState(m));
+  m.Write8(kBlock + 5, 1);  // casual
+  m.Write8(kBlock + 6, kRulesetBrawl);
+  Boundary(m);
+  EXPECT_FALSE(ReadState(m));
+  m.Write8(kBlock + 5, kModeRanked);
+  Boundary(m);
+  ASSERT_TRUE(ReadState(m));
+  EXPECT_EQ(ReadState(m)->phase, Phase::Select);
+  // The header goes (the opponent left a casual game, the host is alone again): so does the flow.
+  m.Write32(kBlock, 0);
+  Boundary(m);
+  EXPECT_FALSE(ReadState(m));
+}
+
+TEST_F(OrcaBrawlStages, TheResultsTracksSetDrivesTheSteps)
+{
+  FakeMemory m = Game("scSelStage");
+  m.Fill(kBlock, 0x300, 0x60);
+  m.Write32(kBlock, kHeaderMagic);
+  m.Write8(kBlock + 4, kHeaderVersion);
+  m.Write8(kBlock + 5, kModeRanked);
+  m.Write8(kBlock + 6, kRulesetBrawl);
+  // One game recorded: port 2 won on Smashville.
+  m.Fill(kResultsSet, 0x80);
+  m.Write8(kResultsSet + 0, 1);
+  m.Write8(kResultsSet + 2, 1);
+  m.Write8(kResultsSet + 4, 0xFF);
+  m.Write8(kResultsSet + 5, 1);
+  m.Write8(kResultsSet + 0x20 + 4, 1);
+  m.Write8(kResultsSet + 0x20 + 6, 0x21);
+  Boundary(m);
+  std::array<u8, 2> score{};
+  const RS::SetView set = SetOf(m, *ReadState(m), &score);
+  EXPECT_EQ(set.game, 2);
+  EXPECT_EQ(set.last_winner, 1);
+  EXPECT_EQ(set.won[1], 1 << RS::Smashville);
+  EXPECT_EQ(score[1], 1);
+  // Port 2 won: its ban comes first.
+  EXPECT_EQ(m.Read32(TASK + 0x278), 1u);
+  // A block whose set bytes aren't a set (the results track isn't there): this flow's own record.
+  m.Write8(kResultsSet + 0, 0x60);
+  EXPECT_EQ(SetOf(m, *ReadState(m)).game, 1);
+}
+
+TEST_F(OrcaBrawlStages, ANewStageSelectStartsTheStepsAgain)
+{
+  FakeMemory m = Game("scSelStage");
+  for (int i = 0; i < 50; ++i)
+    Boundary(m);
+  Hover(m, RS::Battlefield);
+  Press(m, ReadState(m)->coin, BrawlStages::GF_X);
+  ASSERT_NE(ReadState(m)->progress.struck, 0);
+  // The set ended mid-select and another began on a new stage select: its frame counter is back
+  // at the start.
+  m.Write32(TASK + 0x250, 0);
+  Boundary(m);
+  EXPECT_EQ(ReadState(m)->progress.struck, 0);
+  EXPECT_EQ(ReadState(m)->progress.step, 0);
+}

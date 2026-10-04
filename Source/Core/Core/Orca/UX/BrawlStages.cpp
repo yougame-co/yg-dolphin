@@ -19,8 +19,10 @@
 
 namespace Orca::UX::BrawlStages
 {
+static_assert(kBlock == FreeSpace::kMatchBlock.begin);
 static_assert(kRegion >= FreeSpace::kMatchBlock.begin &&
               kRegion + kRegionSize <= FreeSpace::kMatchBlock.end);
+static_assert(kResultsSet + 0x80 <= FreeSpace::kMatchBlockLimit);
 
 namespace RS = RankedSteps;
 
@@ -299,9 +301,9 @@ const RS::Ruleset& Rules()
   return RS::BrawlSupernova2025();
 }
 
-RS::Plan PlanOf(const State& s)
+RS::Plan PlanOf(const State& s, const RS::SetView& set)
 {
-  return RS::PlanGame(Rules(), s.set, s.coin == 0xFF ? 0 : s.coin,
+  return RS::PlanGame(Rules(), set, s.coin == 0xFF ? 0 : s.coin,
                       {s.characters[0], s.characters[1]});
 }
 
@@ -342,16 +344,19 @@ void Record(const GuestMemory& m, State* s)
 // The stage select's part of a boundary.
 void SelectFrame(GuestMemory& m, const View& v, State* s)
 {
-  if (s->phase != Phase::Select)
+  const RS::SetView set = SetOf(m, *s);
+  // A new stage select: this game's (its frame counter starts again on every visit, so steps left
+  // from a set that ended mid-select never carry over).
+  if (s->phase != Phase::Select || v.clock < s->clock)
   {
     // This game's stage select opens: its steps start.
     const auto characters = ReadCharacters(m);
     s->characters = characters ? *characters : std::array<s8, 2>{-1, -1};
     if (s->coin == 0xFF && m.Valid(RNG_SEED))
       s->coin = RS::CoinFromSeed(m.Read32(RNG_SEED));
-    const RS::Plan plan = PlanOf(*s);
+    const RS::Plan plan = PlanOf(*s, set);
     s->progress = RS::Begin(plan);
-    RS::AutoPick(Rules(), plan, &s->progress, s->set);
+    RS::AutoPick(Rules(), plan, &s->progress, set);
     s->phase = Phase::Select;
     s->clock = v.clock;
     s->buttons = {PadButtons(m, 0), PadButtons(m, 1)};
@@ -359,7 +364,7 @@ void SelectFrame(GuestMemory& m, const View& v, State* s)
     s->hovered_for = 0;
     s->hover_key = 0xFF;
   }
-  const RS::Plan plan = PlanOf(*s);
+  const RS::Plan plan = PlanOf(*s, set);
   const int hovered = HoveredStage(m, v);
   const u8 key = HoverKey(m, v);
   const u32 state = m.Read32(v.task + TASK_STATE);
@@ -376,19 +381,19 @@ void SelectFrame(GuestMemory& m, const View& v, State* s)
         const int taken = StageForStageId(static_cast<int>(m.Read32(v.task + TASK_TAKEN_KIND)));
         if (step->kind == RS::Kind::Pick)
         {
-          const u16 allowed = RS::Allowed(Rules(), plan, s->progress, s->set);
+          const u16 allowed = RS::Allowed(Rules(), plan, s->progress, set);
           const int want = (taken >= 0 && (allowed & Bit(taken))) ? taken :
                            (s->hovered >= 0 && (allowed & Bit(s->hovered))) ?
                                                                     s->hovered :
                                                                     std::countr_zero(allowed);
-          RS::Pick(Rules(), plan, &s->progress, s->set, want);
+          RS::Pick(Rules(), plan, &s->progress, set, want);
         }
         else
         {
           for (int i = 0; i < 16 && s->progress.picked < 0 && RS::Current(plan, s->progress); ++i)
           {
             s->progress.frames = 1;
-            RS::Tick(Rules(), plan, &s->progress, s->set);
+            RS::Tick(Rules(), plan, &s->progress, set);
           }
         }
       }
@@ -413,12 +418,12 @@ void SelectFrame(GuestMemory& m, const View& v, State* s)
     if ((step->kind == RS::Kind::Strike || step->kind == RS::Kind::Ban) && (pressed & GF_X) &&
         hovered >= 0)
     {
-      RS::Strike(Rules(), plan, &s->progress, s->set, hovered);
+      RS::Strike(Rules(), plan, &s->progress, set, hovered);
     }
     else if (step->optional && (pressed & GF_Y))
     {
       RS::Skip(plan, &s->progress);
-      RS::AutoPick(Rules(), plan, &s->progress, s->set);
+      RS::AutoPick(Rules(), plan, &s->progress, set);
     }
   }
   // The turn timer runs on the stage select's own frames: once per frame, never twice at one
@@ -427,7 +432,7 @@ void SelectFrame(GuestMemory& m, const View& v, State* s)
   if (v.clock != s->clock)
   {
     s->clock = v.clock;
-    RS::Tick(Rules(), plan, &s->progress, s->set);
+    RS::Tick(Rules(), plan, &s->progress, set);
     if (key == s->hover_key)
       s->hovered_for = static_cast<u8>(std::min(s->hovered_for + 1, 255));
     else
@@ -442,7 +447,7 @@ void SelectFrame(GuestMemory& m, const View& v, State* s)
   if (m.Read32(v.task + TASK_PORT) != port)
     m.Write32(v.task + TASK_PORT, port);
   const u16 allowed = s->progress.picked >= 0 ? Bit(s->progress.picked) :
-                                                RS::Allowed(Rules(), plan, s->progress, s->set);
+                                                RS::Allowed(Rules(), plan, s->progress, set);
   const u32 page = m.Read32(v.task + TASK_PAGE);
   // The page's icons (MuStageTblAccess: 31 and 10; the task's own count stays 31).
   const u32 table = PAGE_TABLE + 8 * std::min<u32>(page, 2) + 4;
@@ -542,14 +547,51 @@ void SetRankedForTests(std::optional<bool> ranked)
   s_ranked_for_tests = ranked;
 }
 
-bool RankedBrawlMatch(const GuestMemory&)
+bool RankedBrawlMatch(const GuestMemory& m)
 {
   if (s_ranked_for_tests)
     return *s_ranked_for_tests;
-  // MERGE NOTE: the match block header (sp-casual) says ranked and Brawl's ruleset. Until it
-  // lands, only the test knob turns this flow on (the same in both processes of a test).
+  // The test knob: the same in both processes of a test.
   static const bool knob = Orca::TestRankedSpec() == "brawl";
-  return knob;
+  if (knob)
+    return true;
+  return m.Valid(kBlock + 7) && m.Read32(kBlock) == kHeaderMagic &&
+         m.Read8(kBlock + 4) == kHeaderVersion && m.Read8(kBlock + 5) == kModeRanked &&
+         m.Read8(kBlock + 6) == kRulesetBrawl;
+}
+
+RS::SetView SetOf(const GuestMemory& m, const State& s, std::array<u8, 2>* score)
+{
+  constexpr int MAX_RECORDS = 8;
+  constexpr u32 RECORDS = 0x20, RECORD_SIZE = 0x0C;
+  if (m.Valid(kBlock) && m.Read32(kBlock) == kHeaderMagic &&
+      m.Valid(kResultsSet + RECORDS + RECORD_SIZE * MAX_RECORDS))
+  {
+    const u8 games = m.Read8(kResultsSet), w0 = m.Read8(kResultsSet + 1),
+             w1 = m.Read8(kResultsSet + 2), done = m.Read8(kResultsSet + 3),
+             last = m.Read8(kResultsSet + 5);
+    if (games <= MAX_RECORDS && w0 + w1 <= games && done <= 2 &&
+        (last == 0 || last == 1 || last == 0xFF))
+    {
+      RS::SetView set;
+      set.game = static_cast<u8>(w0 + w1 + 1);
+      set.last_winner = last == 0xFF ? s8(-1) : static_cast<s8>(last);
+      for (u32 i = 0; i < games; ++i)
+      {
+        const u32 record = kResultsSet + RECORDS + RECORD_SIZE * i;
+        const u8 winner = m.Read8(record + 4);
+        const int stage = StageForStageId(m.Read8(record + 6));
+        if (winner <= 1 && stage >= 0)
+          set.won[winner] = static_cast<u16>(set.won[winner] | Bit(stage));
+      }
+      if (score)
+        *score = {w0, w1};
+      return set;
+    }
+  }
+  if (score)
+    *score = s.score;
+  return s.set;
 }
 
 void Frame(GuestMemory& m)
@@ -592,7 +634,8 @@ void Masks(const GuestMemory& m, Rollback::InputGate::Masks* masks)
   if (!v.present)
     return;
   using namespace Rollback::InputGate;
-  const RS::Plan plan = PlanOf(*s);
+  const RS::SetView set = SetOf(m, *s);
+  const RS::Plan plan = PlanOf(*s, set);
   const RS::Step* step = RS::Current(plan, s->progress);
   const int turn = TurnPort(plan, s->progress);
   const auto add = [&](int port, u16 buttons, bool sticks) {
@@ -624,7 +667,7 @@ void Masks(const GuestMemory& m, Rollback::InputGate::Masks* masks)
     {
       a = v.hovered_item == ITEM_PAGE;
       if (step->kind == RS::Kind::Pick && s->hovered >= 0)
-        a = a || (RS::Allowed(Rules(), plan, s->progress, s->set) & Bit(s->hovered));
+        a = a || (RS::Allowed(Rules(), plan, s->progress, set) & Bit(s->hovered));
     }
     if (!a)
       off |= PAD_BUTTON_A;
@@ -650,6 +693,8 @@ std::pair<std::string, std::string> Lines(const GuestMemory& m,
   const View v = ReadView(m);
   if (!v.present && ReadSceneName(m) != "scSelctCharacter")
     return {};
+  std::array<u8, 2> wins{};
+  const RS::SetView set = SetOf(m, *s, &wins);
   const auto who = [&](int port) -> std::string {
     for (const Orca::Events::PortInfo& p : ports)
     {
@@ -659,10 +704,10 @@ std::pair<std::string, std::string> Lines(const GuestMemory& m,
     return fmt::format("P{}", port + 1);
   };
   std::string score =
-      fmt::format("Game {} · {} {}–{} {}", s->set.game, who(0), s->score[0], s->score[1], who(1));
+      fmt::format("Game {} · {} {}–{} {}", set.game, who(0), wins[0], wins[1], who(1));
   if (!v.present || s->phase != Phase::Select)
     return {score, {}};
-  const RS::Plan plan = PlanOf(*s);
+  const RS::Plan plan = PlanOf(*s, set);
   const RS::Step* step = RS::Current(plan, s->progress);
   std::string turn;
   if (step)

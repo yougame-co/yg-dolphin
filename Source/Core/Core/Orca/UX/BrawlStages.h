@@ -33,14 +33,20 @@ class CPUThreadGuard;
 //
 // MERGE NOTES (sp-brawl-sss):
 // - Whether this game plays a ranked Brawl set comes from the match block's header, which the
-//   casual track (sp-casual) writes. Until it lands, only the test knob ORCA_TEST_RANKED=brawl
-//   turns the flow on (RankedBrawlMatch); production never activates it.
-// - The set state (games, score, last winner, stages won) is kept here, in this flow's own region
-//   of the block (kRegion). If the results track's set state lands, read it instead, and clear this
-//   region wherever the header's alone rule clears the set.
+//   casual track (sp-casual, MatchBlock.h) writes at the alone boundary: read here by its pushed
+//   layout (kBlock), so the flow runs as soon as that track lands; until then only the test knob
+//   ORCA_TEST_RANKED=brawl turns it on.
+// - The set (game, last winner, stages won for DSR) is the results track's (sp-results,
+//   SetBlock.h, kResultsSet) when the block holds a valid one; this flow keeps its own record of
+//   the results screens only for a block without it (the knob's runs). After the merge SetOf can
+//   read SetBlock::ReadSet directly.
+// - This flow's state is the block's step-state range (+0x80..+0xBF), as MatchBlock.h reserves
+//   it; the Project+ flow keeps its own there, in its own game. A new stage select (its frame
+//   counter back to the start) starts the game's steps again, so stale bytes from a set that ended
+//   mid-select never carry into the next.
 // - The step machine is this track's own (RankedSteps.h).
 // - The input gate has one source: UX.cpp registers one that ORs every rule's masks; this flow's
-//   are BrawlStages::Masks.
+//   are BrawlStages::Masks (the casual track's gate source must be ORed in the same place).
 namespace Orca::UX
 {
 class GuestMemory;
@@ -69,9 +75,22 @@ constexpr u32 TASK_SELECTED = 0x248;
 constexpr u32 TASK_PORT = 0x278;
 constexpr u32 PORT_ANY = 0xF0;
 
-// ---- This flow's region of the match block ----
-constexpr u32 kRegion = 0x806F2500;
-constexpr u32 kRegionSize = 0x80;
+// ---- The match block (FreeSpace.h; the casual track's MatchBlock.h, the results track's
+// SetBlock.h) ----
+constexpr u32 kBlock = 0x806F2380;
+// The header: 'YGM1', version 1, then the mode (2 ranked) and the ruleset (1 Brawl).
+constexpr u32 kHeaderMagic = 0x59474D31;
+constexpr u8 kHeaderVersion = 1;
+constexpr u8 kModeRanked = 2;
+constexpr u8 kRulesetBrawl = 1;
+// The results track's set (SetBlock.h), +0x210: +0x00 games recorded, +0x01 wins of ports 1 and 2,
+// +0x03 done, +0x05 the last decided game's winner (0xFF none), +0x20 the games' records, 12 bytes
+// each (+0x04 the winner, +0x06 the stage kind), 8 at most.
+constexpr u32 kResultsSet = kBlock + 0x210;
+// This flow's region: the block's step state (+0x80..+0xBF, MatchBlock.h; the Project+ flow keeps
+// its own there in its own game).
+constexpr u32 kRegion = kBlock + 0x80;
+constexpr u32 kRegionSize = 0x40;
 constexpr u32 kMagic = 0x59474253;  // 'YGBS'
 constexpr u8 kVersion = 1;
 
@@ -86,6 +105,8 @@ enum class Phase : u8
 // What the region holds.
 struct State
 {
+  // The set as this flow records it from the results screens, for a match block without the
+  // results track's set (SetOf).
   RankedSteps::SetView set;
   std::array<u8, 2> score{};
   u8 coin = 0xFF;  // game 1's first striker; 0xFF until drawn
@@ -130,8 +151,13 @@ struct View
 };
 View ReadView(const GuestMemory& memory);
 
-// Whether this game is a ranked Brawl set's (see MERGE NOTES).
+// Whether this game is a ranked Brawl set's: the match block's header says so (mode ranked,
+// ruleset Brawl), or ORCA_TEST_RANKED=brawl in a test.
 bool RankedBrawlMatch(const GuestMemory& memory);
+// The set the steps follow: the results track's (SetBlock.h) when the block holds a valid one,
+// else this flow's own record in `state`. `score`: the games won by ports 1 and 2.
+RankedSteps::SetView SetOf(const GuestMemory& memory, const State& state,
+                           std::array<u8, 2>* score = nullptr);
 // Unit tests: RankedBrawlMatch's answer instead of the knob's (nullopt: the knob again).
 void SetRankedForTests(std::optional<bool> ranked);
 
