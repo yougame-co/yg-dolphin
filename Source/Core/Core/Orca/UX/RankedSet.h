@@ -44,7 +44,9 @@ constexpr int LEDGE_LIMIT = 35;
 constexpr int LEDGE_LIMIT_MK = 20;
 constexpr int LEDGE_LIMIT_TIEBREAK = 11;
 constexpr int LEDGE_LIMIT_TIEBREAK_MK = 6;
-constexpr u8 META_KNIGHT = 0x16;  // the result info's character id (gmCharacterKind)
+// The result info's character id (gmCharacterKind, BrawlHeaders gm_lib.h: 0x18 Meta Knight; 0x16 is
+// Ganondorf there).
+constexpr u8 META_KNIGHT = 0x18;
 
 // The fight as one frame shows it, where the game's own structures can be read (LiveFight below).
 struct Live
@@ -94,14 +96,6 @@ Facts ReadFacts(const GuestMemory& memory, bool live);
 // The frame hook's part (first runs and re-runs alike; `resimulating` only quiets the log): follows
 // the set in a ranked block.
 void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating);
-
-// The header's lifecycle: what this game's current room calls for. The host of a queue room asks
-// for its queue's mode when it takes the room; any other room (its own private room again, a
-// friend's game) for none. Written at the next boundary where the game plays alone (never while a
-// friend is plugged in or on the way, so never in a frame anyone else replays), only when the
-// block says something else: a different header starts a fresh set, none clears the block.
-void SetRoomMode(SetBlock::Mode mode);
-void ApplyRoomMode(const Core::CPUThreadGuard& guard, bool alone);
 
 // The set score line for the overlay (local UI only): "Game 2 · 1–0", the local player's score
 // first; "Tiebreak game · 1–1"; "Set over · 2–1". Empty outside a ranked set.

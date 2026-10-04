@@ -62,11 +62,6 @@ int LedgeLimit(bool tiebreak, u8 character)
 // the wins, the game number.
 std::atomic<u32> s_published{0};
 std::atomic<int> s_local_port{0};
-// SetRoomMode's wish: -1 nothing asked yet, else a SetBlock::Mode; and a count of wishes, so a
-// new queue room starts a fresh set even with the same header (the CPU thread's last one applied).
-std::atomic<int> s_room_mode{-1};
-std::atomic<u32> s_room_wish{0};
-u32 s_room_applied = 0;
 }  // namespace
 
 std::optional<GameRecord> Judge(Ruleset ruleset, const SetState& set, const ResultBlock& block,
@@ -468,61 +463,6 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating)
                      (after.tiebreak ? 1u << 23 : 0) | (u32(after.wins[0]) << 16) |
                      (u32(after.wins[1]) << 8) | u32(std::min(after.GameNumber(), 255));
   s_published.store(packed, std::memory_order_relaxed);
-}
-
-void SetRoomMode(SetBlock::Mode mode)
-{
-  s_room_mode.store(static_cast<int>(mode));
-  s_room_wish.fetch_add(1);
-}
-
-void ApplyRoomMode(const Core::CPUThreadGuard& guard, bool alone)
-{
-  // Test only, ORCA_TEST_MATCH_BLOCK=ranked|casual: a queue room's header with no room (harness
-  // runs, a dev game's room), as if this game hosted one.
-  static const int s_test = [] {
-    const char* v = std::getenv("ORCA_TEST_MATCH_BLOCK");
-    if (!v)
-      return -1;
-    return std::strcmp(v, "ranked") == 0 ? static_cast<int>(SetBlock::Mode::Ranked) :
-           std::strcmp(v, "casual") == 0 ? static_cast<int>(SetBlock::Mode::Casual) :
-                                           -1;
-  }();
-  if (s_test >= 0 && s_room_mode.load() < 0 && TestKnobsAllowed())
-  {
-    WARN_LOG_FMT(ROLLBACK, "Match block: TEST header from ORCA_TEST_MATCH_BLOCK");
-    s_room_mode.store(s_test);
-  }
-  const int wanted = s_room_mode.load();
-  if (wanted < 0 || !alone || !ResultsVerified())
-    return;
-  const u32 wish = s_room_wish.load();
-  const bool fresh = wish != s_room_applied;
-  s_room_applied = wish;
-  GuardMemory memory(guard);
-  const std::optional<SetBlock::Header> have = SetBlock::ReadHeader(memory);
-  const auto mode = static_cast<SetBlock::Mode>(wanted);
-  if (mode == SetBlock::Mode::None)
-  {
-    if (!have)
-      return;
-    const int changed = SetBlock::Clear(memory);
-    NOTICE_LOG_FMT(ROLLBACK, "Match block: cleared ({} byte(s))", changed);
-    return;
-  }
-  const Orca::Profile* profile = Orca::ActiveProfile();
-  SetBlock::Header header;
-  header.mode = mode;
-  header.ruleset = profile && profile->IsLauncher() ? Ruleset::PPlus : Ruleset::Brawl;
-  if (have == header && !fresh)
-    return;
-  int changed = SetBlock::WriteHeader(memory, header);
-  // A new queue room's set starts from nothing, whatever the block held.
-  if (fresh)
-    changed += SetBlock::WriteSet(memory, SetState{});
-  NOTICE_LOG_FMT(ROLLBACK, "Match block: header {} {} ({} byte(s))",
-                 mode == SetBlock::Mode::Ranked ? "ranked" : "casual",
-                 header.ruleset == Ruleset::PPlus ? "Project+" : "Brawl", changed);
 }
 
 std::string ScoreLine(const SetState& set, int local_port)

@@ -531,3 +531,89 @@ TEST(OrcaRankedPPlus, OverlayLines)
   SetScene(m, "scMelee");
   EXPECT_EQ(RankedPPlus::Describe(m, 100, ports), RankedPPlus::Lines{});
 }
+
+// The shared machine's Progress driver (Brawl's stage select glue drives the steps one action and
+// one screen frame at a time).
+TEST(OrcaRankedSteps, ProgressDrivesGameOneOneTwoOneThenThePick)
+{
+  const Ranked::Ruleset& rules = Ranked::Brawl2025();
+  Ranked::SetView set;
+  set.coin = 1;
+  const Ranked::Plan plan = Ranked::PlanGame(rules, set);
+  Ranked::Progress p = Ranked::Begin(rules, plan);
+  ASSERT_NE(Ranked::Current(plan, p), nullptr);
+  EXPECT_EQ(Ranked::Current(plan, p)->port, 1);
+  EXPECT_EQ(p.frames, Ranked::StepFrames(rules, plan.steps[0]));
+  // A counterpick can't be struck in game 1; a starter can.
+  EXPECT_FALSE(Ranked::Strike(rules, plan, &p, 5));
+  EXPECT_TRUE(Ranked::Strike(rules, plan, &p, 0));
+  EXPECT_EQ(Ranked::Current(plan, p)->port, 0);
+  EXPECT_TRUE(Ranked::Strike(rules, plan, &p, 1));
+  EXPECT_TRUE(Ranked::Strike(rules, plan, &p, 2));
+  // The coin's port picks from the last two; a strike is no pick.
+  ASSERT_EQ(Ranked::Current(plan, p)->kind, StepKind::Pick);
+  EXPECT_EQ(Ranked::Current(plan, p)->port, 1);
+  EXPECT_FALSE(Ranked::Strike(rules, plan, &p, 3));
+  EXPECT_EQ(Ranked::Allowed(plan, p), static_cast<StageMask>((1 << 3) | (1 << 4)));
+  EXPECT_FALSE(Ranked::Pick(plan, &p, 0));
+  EXPECT_TRUE(Ranked::Pick(plan, &p, 4));
+  EXPECT_EQ(p.picked, 4);
+  EXPECT_EQ(Ranked::Current(plan, p), nullptr);
+}
+
+TEST(OrcaRankedSteps, ProgressTimersTakeTheDefaults)
+{
+  const Ranked::Ruleset& rules = Ranked::Brawl2025();
+  const Ranked::Plan plan = Ranked::PlanGame(rules, {});
+  Ranked::Progress p = Ranked::Begin(rules, plan);
+  // Every step's timer runs out: the first starters struck in list order, then the first allowed
+  // stage picked.
+  for (int i = 0; i < 100000 && p.picked < 0; ++i)
+    Ranked::Tick(rules, plan, &p);
+  EXPECT_EQ(p.struck, static_cast<StageMask>(0x07));
+  EXPECT_EQ(p.picked, 3);
+  // A timer shows 0:00 through its grace.
+  EXPECT_EQ(Ranked::SecondsShown(rules, rules.grace_frames), 0);
+  EXPECT_EQ(Ranked::SecondsShown(rules, rules.grace_frames + 1), 1);
+  EXPECT_EQ(Ranked::SecondsShown(rules, rules.grace_frames + 60 * 30), 30);
+}
+
+TEST(OrcaRankedSteps, ProgressLaterGamesBanIsOptionalAndThePickHasFullDsr)
+{
+  const Ranked::Ruleset& rules = Ranked::Brawl2025();
+  Ranked::SetView set;
+  set.game = 2;
+  set.last_winner = 1;
+  set.won_on = {1 << 5, 1 << 3};  // port 1 won on FD, port 2 on Smashville
+  const Ranked::Plan plan = Ranked::PlanGame(rules, set);
+  Ranked::Progress p = Ranked::Begin(rules, plan);
+  ASSERT_EQ(Ranked::Current(plan, p)->kind, StepKind::Ban);
+  EXPECT_EQ(Ranked::Current(plan, p)->port, 1);
+  // Port 1 (the loser) never picks FD, where it won.
+  EXPECT_FALSE(Ranked::Allowed(plan, p) & (1 << 5));
+  EXPECT_TRUE(Ranked::Skip(rules, plan, &p));
+  ASSERT_EQ(Ranked::Current(plan, p)->kind, StepKind::Pick);
+  EXPECT_EQ(Ranked::Current(plan, p)->port, 0);
+  EXPECT_FALSE(Ranked::Pick(plan, &p, 5));
+  EXPECT_TRUE(Ranked::Pick(plan, &p, 6));
+  // The ban's timer running out bans nothing.
+  Ranked::Progress q = Ranked::Begin(rules, plan);
+  for (u32 i = 0; i < Ranked::StepFrames(rules, plan.steps[0]); ++i)
+    Ranked::Tick(rules, plan, &q);
+  EXPECT_EQ(q.struck, 0);
+  EXPECT_EQ(Ranked::Current(plan, q)->kind, StepKind::Pick);
+}
+
+TEST(OrcaRankedSteps, ProgressMetaKnightClauseIsOnePickOfAnyLegalStage)
+{
+  const Ranked::Ruleset& rules = Ranked::Brawl2025();
+  Ranked::SetView set;
+  set.characters = {rules.meta_knight, 0x10};  // Meta Knight against Ice Climbers
+  const Ranked::Plan plan = Ranked::PlanGame(rules, set);
+  EXPECT_TRUE(plan.mk_clause);
+  Ranked::Progress p = Ranked::Begin(rules, plan);
+  ASSERT_EQ(Ranked::Current(plan, p)->kind, StepKind::Pick);
+  EXPECT_EQ(Ranked::Current(plan, p)->port, 1);
+  // Any legal stage but FD (Ice Climbers).
+  EXPECT_EQ(Ranked::Allowed(plan, p), static_cast<StageMask>(0x7F & ~(1 << 5)));
+}

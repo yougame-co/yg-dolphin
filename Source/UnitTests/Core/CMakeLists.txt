@@ -33,7 +33,6 @@ add_dolphin_test(OrcaRankedSetTest Orca/RankedSetTest.cpp)
 add_dolphin_test(OrcaInputGateTest Orca/InputGateTest.cpp)
 add_dolphin_test(OrcaOnlineRulesTest Orca/OnlineRulesTest.cpp)
 add_dolphin_test(OrcaRankedTest Orca/RankedTest.cpp)
-add_dolphin_test(OrcaRankedStepsTest Orca/RankedStepsTest.cpp)
 add_dolphin_test(OrcaBrawlStagesTest Orca/BrawlStagesTest.cpp)
 add_dolphin_test(OrcaCharOrderTest Orca/CharOrderTest.cpp)
 

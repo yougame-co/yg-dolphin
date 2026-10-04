@@ -17,7 +17,7 @@
 
 using namespace Orca::UX;
 using namespace Orca::UX::BrawlStages;
-namespace RS = Orca::UX::RankedSteps;
+namespace RS = Orca::UX::Ranked;
 
 namespace
 {
@@ -117,6 +117,8 @@ FakeMemory Game(std::string_view scene, u32 page = 0)
   m.Write8(MELEE + 0x98, MARIO);
   m.Write8(MELEE + 0x98 + 0x5C, LINK);
   m.Fill(RESULT, 0x24 + 4 * 0x2AC + 4);
+  m.Fill(kBlock, 0x10);
+  m.Write8(kBlock + 7, 1);  // the header's coin: port 2 strikes first
   m.Fill(kRegion, kRegionSize, 0x60);  // the dead code that's there before Orca writes it
   return m;
 }
@@ -197,7 +199,7 @@ TEST_F(OrcaBrawlStages, GameOneStrikesOnTheStageSelect)
   EXPECT_EQ(s->phase, Phase::Select);
   EXPECT_EQ(s->set.game, 1);
   ASSERT_NE(s->coin, 0xFF);
-  EXPECT_EQ(s->coin, RS::CoinFromSeed(0x12345678));
+  EXPECT_EQ(s->coin, 1);  // the header's (the room code's)
   EXPECT_EQ(s->characters[0], MARIO);
   EXPECT_EQ(s->characters[1], LINK);
   const int first = s->coin;
@@ -206,36 +208,45 @@ TEST_F(OrcaBrawlStages, GameOneStrikesOnTheStageSelect)
   EXPECT_EQ(m.Read32(TASK + 0x278), static_cast<u32>(first));
 
   // The other port's X does nothing; the striker's X on a starter strikes it.
-  Hover(m, RS::Battlefield);
+  Hover(m, Battlefield);
   Press(m, second, BrawlStages::GF_X);
   EXPECT_EQ(ReadState(m)->progress.struck, 0);
   Press(m, first, BrawlStages::GF_X);
   s = ReadState(m);
-  EXPECT_EQ(s->progress.struck, 1 << RS::Battlefield);
+  EXPECT_EQ(s->progress.struck, 1 << Battlefield);
   EXPECT_EQ(m.Read32(TASK + 0x278), static_cast<u32>(second));
   // A held X is one strike.
-  Hover(m, RS::Smashville);
+  Hover(m, Smashville);
   Pad(m, second, BrawlStages::GF_X);
   Boundary(m);
-  Hover(m, RS::LylatCruise);
+  Hover(m, LylatCruise);
   Boundary(m);
-  EXPECT_EQ(ReadState(m)->progress.struck, (1 << RS::Battlefield) | (1 << RS::Smashville));
+  EXPECT_EQ(ReadState(m)->progress.struck, (1 << Battlefield) | (1 << Smashville));
   Pad(m, second, 0);
   Boundary(m);
   // A counterpick can't be struck in game 1.
-  Hover(m, RS::FinalDestination);
+  Hover(m, FinalDestination);
   Press(m, second, BrawlStages::GF_X);
-  EXPECT_EQ(ReadState(m)->progress.struck, (1 << RS::Battlefield) | (1 << RS::Smashville));
-  Hover(m, RS::LylatCruise);
+  EXPECT_EQ(ReadState(m)->progress.struck, (1 << Battlefield) | (1 << Smashville));
+  Hover(m, LylatCruise);
   Press(m, second, BrawlStages::GF_X);
-  Hover(m, RS::YoshisIsland);
+  // The first striker picks from the last two (X strikes nothing more).
+  Hover(m, YoshisIsland);
   Press(m, first, BrawlStages::GF_X);
   s = ReadState(m);
-  EXPECT_EQ(s->progress.picked, RS::PokemonStadium);
+  EXPECT_EQ(s->progress.struck,
+            (1 << Battlefield) | (1 << Smashville) | (1 << LylatCruise));
+  EXPECT_EQ(s->progress.picked, -1);
+  EXPECT_EQ(m.Read32(TASK + 0x278), static_cast<u32>(first));
   // The struck stages' icons are grey on their page.
-  m.Write32(TASK + 0x228, TileFor(RS::Battlefield).page);
+  m.Write32(TASK + 0x228, TileFor(Battlefield).page);
   Boundary(m);
-  EXPECT_EQ(IconFrame(m, TileFor(RS::Battlefield).slot), 0u);
+  EXPECT_EQ(IconFrame(m, TileFor(Battlefield).slot), 0u);
+  // The game takes Pokemon Stadium for the picker.
+  m.Write32(TASK + 0x224, 2);
+  m.Write32(TASK + 0x258, 0x2E);
+  Boundary(m);
+  EXPECT_EQ(ReadState(m)->progress.picked, PokemonStadium);
 }
 
 TEST_F(OrcaBrawlStages, TheTimerCountsTheScreensFrames)
@@ -252,7 +263,7 @@ TEST_F(OrcaBrawlStages, TheTimerCountsTheScreensFrames)
   // Run out: the first starter is struck by default.
   for (int i = 0; i < start; ++i)
     Boundary(m, false);
-  EXPECT_EQ(ReadState(m)->progress.struck, 1 << RS::Battlefield);
+  EXPECT_EQ(ReadState(m)->progress.struck, 1 << Battlefield);
 }
 
 TEST_F(OrcaBrawlStages, TheGateKeepsTheOffTurnPortOut)
@@ -307,7 +318,7 @@ TEST_F(OrcaBrawlStages, ResultsMakeTheSetAndLaterGamesBanThenPick)
   EXPECT_EQ(s->score[0], 0);
   EXPECT_EQ(s->score[1], 1);
   EXPECT_EQ(s->set.last_winner, 1);
-  EXPECT_EQ(s->set.won[1], 1 << RS::Smashville);
+  EXPECT_EQ(s->set.won_on[1], 1 << Smashville);
   // Game 2: port 2 may ban, then port 1 picks.
   Scene(m, "scSelctCharacter");
   Boundary(m);
@@ -319,7 +330,7 @@ TEST_F(OrcaBrawlStages, ResultsMakeTheSetAndLaterGamesBanThenPick)
   Press(m, 1, BrawlStages::GF_Y);  // no ban
   EXPECT_EQ(m.Read32(TASK + 0x278), 0u);
   // A picks only an allowed stage the cursor rested on.
-  Hover(m, RS::DelfinoPlaza);
+  Hover(m, DelfinoPlaza);
   Boundary(m);
   Boundary(m);
   Rollback::InputGate::Masks masks{};
@@ -344,26 +355,27 @@ TEST_F(OrcaBrawlStages, ATakenStageTheStepsDontAllowIsReplaced)
   State s;
   s.set.game = 2;
   s.set.last_winner = 1;
-  s.set.won = {1 << RS::FinalDestination, 1 << RS::Smashville};
+  s.set.won_on = {1 << FinalDestination, 1 << Smashville};
   s.score = {0, 1};
   s.coin = 0;
   s.phase = Phase::Recorded;
   WriteState(m, s);
   Boundary(m);
   Press(m, 1, BrawlStages::GF_Y);
-  ASSERT_EQ(RS::Current(RS::PlanGame(RS::BrawlSupernova2025(), ReadState(m)->set, 0, {0, 2}),
-                        ReadState(m)->progress)
-                ->kind,
-            RS::Kind::Pick);
+  RS::SetView view = ReadState(m)->set;
+  view.characters = {0, 2};
+  const RS::Plan plan = RS::PlanGame(RS::Brawl2025(), view);
+  ASSERT_NE(RS::Current(plan, ReadState(m)->progress), nullptr);
+  ASSERT_EQ(RS::Current(plan, ReadState(m)->progress)->kind, RS::StepKind::Pick);
   // The cursor rests on Delfino, then A lands on Final Destination (port 1 won there: DSR).
-  Hover(m, RS::DelfinoPlaza);
+  Hover(m, DelfinoPlaza);
   Boundary(m);
   Boundary(m);
   m.Write32(TASK + 0x224, 2);
   m.Write32(TASK + 0x258, 0x02);
   Boundary(m);
   EXPECT_EQ(m.Read32(TASK + 0x258), 0x03u);  // Delfino Plaza
-  EXPECT_EQ(ReadState(m)->progress.picked, RS::DelfinoPlaza);
+  EXPECT_EQ(ReadState(m)->progress.picked, DelfinoPlaza);
   // Everybody's pads are off until the screen leaves.
   Rollback::InputGate::Masks masks{};
   Masks(m, &masks);
@@ -378,9 +390,10 @@ TEST_F(OrcaBrawlStages, AStageTakenDuringStrikesTakesTheDefaults)
   m.Write32(TASK + 0x224, 2);
   m.Write32(TASK + 0x258, 0x01);  // Battlefield
   Boundary(m);
-  // Strikes by default: Battlefield, then Pokemon Stadium and Lylat, then Smashville.
-  EXPECT_EQ(ReadState(m)->progress.picked, RS::YoshisIsland);
-  EXPECT_EQ(m.Read32(TASK + 0x258), 0x0Du);
+  // Strikes by default: Battlefield, then Pokemon Stadium and Lylat, then the pick's default, the
+  // first of the last two (Smashville).
+  EXPECT_EQ(ReadState(m)->progress.picked, Smashville);
+  EXPECT_EQ(m.Read32(TASK + 0x258), 0x21u);
 }
 
 TEST_F(OrcaBrawlStages, TheMatchBlocksHeaderTurnsTheFlowOn)
@@ -431,7 +444,7 @@ TEST_F(OrcaBrawlStages, TheResultsTracksSetDrivesTheSteps)
   const RS::SetView set = SetOf(m, *ReadState(m), &score);
   EXPECT_EQ(set.game, 2);
   EXPECT_EQ(set.last_winner, 1);
-  EXPECT_EQ(set.won[1], 1 << RS::Smashville);
+  EXPECT_EQ(set.won_on[1], 1 << Smashville);
   EXPECT_EQ(score[1], 1);
   // Port 2 won: its ban comes first.
   EXPECT_EQ(m.Read32(TASK + 0x278), 1u);
@@ -445,7 +458,7 @@ TEST_F(OrcaBrawlStages, ANewStageSelectStartsTheStepsAgain)
   FakeMemory m = Game("scSelStage");
   for (int i = 0; i < 50; ++i)
     Boundary(m);
-  Hover(m, RS::Battlefield);
+  Hover(m, Battlefield);
   Press(m, ReadState(m)->coin, BrawlStages::GF_X);
   ASSERT_NE(ReadState(m)->progress.struck, 0);
   // The set ended mid-select and another began on a new stage select: its frame counter is back

@@ -112,6 +112,7 @@ Plan PlanGame(const Ruleset& rules, const SetView& set)
   {
     const u8 other = is(0, rules.meta_knight) ? 1 : 0;
     plan.available = legal;
+    plan.mk_clause = true;
     plan.steps.push_back({StepKind::Pick, other, 1, false, rules.pick_seconds});
     return plan;
   }
@@ -189,5 +190,125 @@ int DefaultPick(const Plan& plan, int step, StageMask struck)
 u32 StepFrames(const Ruleset& rules, const Step& step)
 {
   return static_cast<u32>(step.seconds) * 60 + rules.grace_frames;
+}
+
+namespace
+{
+void Enter(const Ruleset& rules, const Plan& plan, Progress* progress, size_t step)
+{
+  progress->step = static_cast<u8>(step);
+  progress->done = 0;
+  progress->frames =
+      step < plan.steps.size() ? static_cast<u16>(StepFrames(rules, plan.steps[step])) : u16(0);
+}
+}  // namespace
+
+Progress Begin(const Ruleset& rules, const Plan& plan)
+{
+  Progress progress;
+  Enter(rules, plan, &progress, 0);
+  AutoPick(plan, &progress);
+  return progress;
+}
+
+const Step* Current(const Plan& plan, const Progress& progress)
+{
+  if (progress.picked >= 0 || progress.step >= plan.steps.size())
+    return nullptr;
+  return &plan.steps[progress.step];
+}
+
+StageMask Allowed(const Plan& plan, const Progress& progress)
+{
+  return Current(plan, progress) ? Allowed(plan, progress.step, progress.struck) : StageMask(0);
+}
+
+bool Strike(const Ruleset& rules, const Plan& plan, Progress* progress, int stage)
+{
+  const Step* step = Current(plan, *progress);
+  if (!step || step->kind == StepKind::Pick || stage < 0 || stage >= MAX_STAGES)
+    return false;
+  const StageMask allowed = Allowed(plan, *progress);
+  if (!(allowed & Bit(stage)) || CountBits(allowed) <= 1)
+    return false;
+  progress->struck = static_cast<StageMask>(progress->struck | Bit(stage));
+  ++progress->done;
+  if (progress->done >= step->count || CountBits(Allowed(plan, *progress)) <= 1)
+    Enter(rules, plan, progress, progress->step + 1);
+  AutoPick(plan, progress);
+  return true;
+}
+
+bool Skip(const Ruleset& rules, const Plan& plan, Progress* progress)
+{
+  const Step* step = Current(plan, *progress);
+  if (!step || !step->optional)
+    return false;
+  Enter(rules, plan, progress, progress->step + 1);
+  AutoPick(plan, progress);
+  return true;
+}
+
+bool Pick(const Plan& plan, Progress* progress, int stage)
+{
+  const Step* step = Current(plan, *progress);
+  if (!step || step->kind != StepKind::Pick || stage < 0 || stage >= MAX_STAGES)
+    return false;
+  if (!(Allowed(plan, *progress) & Bit(stage)))
+    return false;
+  progress->picked = static_cast<s8>(stage);
+  return true;
+}
+
+void AutoPick(const Plan& plan, Progress* progress)
+{
+  const Step* step = Current(plan, *progress);
+  if (!step || step->kind != StepKind::Pick)
+    return;
+  const StageMask allowed = Allowed(plan, *progress);
+  if (CountBits(allowed) == 1)
+    progress->picked = static_cast<s8>(DefaultPick(plan, progress->step, progress->struck));
+}
+
+void Tick(const Ruleset& rules, const Plan& plan, Progress* progress)
+{
+  const Step* step = Current(plan, *progress);
+  if (!step)
+    return;
+  if (progress->frames > 0)
+    --progress->frames;
+  if (progress->frames > 0)
+    return;
+  if (step->kind == StepKind::Pick)
+  {
+    const int stage = DefaultPick(plan, progress->step, progress->struck);
+    progress->picked = static_cast<s8>(stage >= 0 ? stage : 0);
+    return;
+  }
+  if (step->optional)
+  {
+    Skip(rules, plan, progress);
+    return;
+  }
+  const StageMask defaults =
+      DefaultStrikes(plan, progress->step, progress->struck, progress->done);
+  for (int i = 0; i < MAX_STAGES; ++i)
+  {
+    if ((defaults & Bit(i)) && Current(plan, *progress) == step)
+      Strike(rules, plan, progress, i);
+  }
+  // Nothing left to strike: the step ends anyway.
+  if (Current(plan, *progress) == step)
+  {
+    Enter(rules, plan, progress, progress->step + 1);
+    AutoPick(plan, progress);
+  }
+}
+
+int SecondsShown(const Ruleset& rules, u16 frames)
+{
+  if (frames <= rules.grace_frames)
+    return 0;
+  return (frames - rules.grace_frames + 59) / 60;
 }
 }  // namespace Orca::UX::Ranked

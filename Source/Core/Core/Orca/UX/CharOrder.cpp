@@ -14,6 +14,7 @@
 #include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/OnlineMenu.h"
 #include "Core/Orca/UX/Overlay.h"
+#include "Core/Orca/UX/SetBlock.h"
 #include "InputCommon/GCPadStatus.h"
 
 namespace Orca::UX::CharOrder
@@ -265,6 +266,10 @@ int MkFreePicker(const std::array<int, 2>& characters, int meta_knight)
     return -1;
   return a ? 1 : 0;
 }
+
+static_assert(Block::SET_WINS == SetBlock::SET_WINS && Block::SET_DONE == SetBlock::SET_DONE &&
+              Block::SET_LAST_WINNER == SetBlock::SET_LAST_WINNER);
+static_assert(kArea == FreeSpace::kMatchBlock.begin + 0x200);
 
 SetView ReadSet(const GuestMemory& memory)
 {

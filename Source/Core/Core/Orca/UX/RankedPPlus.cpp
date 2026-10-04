@@ -582,110 +582,18 @@ Lines Describe(const GuestMemory& m, int frame, const std::vector<Events::PortIn
   return lines;
 }
 
-// ---- Header ----
 namespace
 {
-struct HeaderRequest
-{
-  u8 mode = MatchBlock::MODE_NONE;
-  u8 coin = 0;
-  std::string code;
-};
-std::mutex s_header_mutex;
-std::optional<HeaderRequest> s_header_pending;
-std::string s_hosted_code;
-
 std::mutex s_lines_mutex;
 Lines s_lines;
-
-// The running game's ruleset: Project+ (its launcher on Brawl rev 2), else vanilla Brawl rev 2.
-u8 RunningRuleset()
-{
-  const Orca::Profile* profile = Orca::ActiveProfile();
-  if (!profile || !ResultsVerified())
-    return Ranked::RULESET_NONE;
-  return profile->IsLauncher() ? Ranked::RULESET_PPLUS_2024 : Ranked::RULESET_BRAWL_SUPERNOVA_2025;
-}
-
-// ORCA_TEST_RANKED=<coin 0|1> in a session (a test override): a ranked set from the first frame.
-std::optional<u8> TestRanked()
-{
-  static const std::optional<u8> coin = []() -> std::optional<u8> {
-    const std::string v = Orca::TestRankedSpec();
-    if (v.empty())
-      return std::nullopt;
-    return static_cast<u8>(v == "1" ? 1 : 0);
-  }();
-  return coin;
-}
 }  // namespace
 
-void RequestHeader(bool ranked, const std::string& code)
-{
-  std::lock_guard lock(s_header_mutex);
-  s_header_pending = HeaderRequest{ranked ? MatchBlock::MODE_RANKED : MatchBlock::MODE_CASUAL,
-                                   MatchBlock::CoinFromCode(code), code};
-}
-
-void ApplyHeader(GuestMemory& m, bool resimulating, bool alone)
-{
-  if (const std::optional<u8> coin = TestRanked())
-  {
-    // Every pass: the same header on every machine with the same override.
-    const u8 ruleset = RunningRuleset();
-    const std::optional<MatchBlock::State> s = MatchBlock::Read(m);
-    if (ruleset != Ranked::RULESET_NONE &&
-        (!s || s->mode != MatchBlock::MODE_RANKED || s->ruleset != ruleset || s->coin != *coin))
-    {
-      MatchBlock::Write(m, MatchBlock::State::Fresh(MatchBlock::MODE_RANKED, ruleset, *coin));
-    }
-    return;
-  }
-  if (resimulating || !alone)
-    return;
-  std::optional<HeaderRequest> request;
-  {
-    std::lock_guard lock(s_header_mutex);
-    request = std::exchange(s_header_pending, std::nullopt);
-    if (request)
-      s_hosted_code = request->code;
-  }
-  if (request)
-  {
-    const u8 ruleset = RunningRuleset();
-    MatchBlock::Write(m, MatchBlock::State::Fresh(request->mode, ruleset, request->coin));
-    NOTICE_LOG_FMT(ROLLBACK, "Ranked: a new {} block, ruleset {}, game 1's first striker port {}",
-                   request->mode == MatchBlock::MODE_RANKED ? "ranked" : "casual", ruleset,
-                   request->coin + 1);
-    return;
-  }
-  const std::optional<MatchBlock::State> s = MatchBlock::Read(m);
-  if (!s)
-    return;
-  std::string hosted;
-  {
-    std::lock_guard lock(s_header_mutex);
-    hosted = s_hosted_code;
-  }
-  // Still in the matchmade room it hosts, or playing in one: the set stays.
-  const std::string code = Orca::Online::Code();
-  if ((!hosted.empty() && code == hosted) || Orca::Online::RoomQueue() != "private")
-    return;
-  MatchBlock::Clear(m);
-  {
-    std::lock_guard lock(s_header_mutex);
-    s_hosted_code.clear();
-  }
-  NOTICE_LOG_FMT(ROLLBACK, "Ranked: the match block cleared (no matchmade room)");
-}
-
 void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
-           const std::vector<Events::PortInfo>& ports, bool alone)
+           const std::vector<Events::PortInfo>& ports, bool /*alone*/)
 {
   if (!ResultsVerified())
     return;
   GuardMemory memory(guard);
-  ApplyHeader(memory, resimulating, alone);
   bool p1 = false, p2 = false;
   for (const Events::PortInfo& p : ports)
   {

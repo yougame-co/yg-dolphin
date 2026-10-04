@@ -40,21 +40,10 @@ class CPUThreadGuard;
 // - Results: the results screen's winner of a fight started from the flow counts (Results.h
 //   Judge); a draw or a void doesn't. Two wins take the set.
 //
-// MERGE NOTES (sp-pplus-sss), for the integration with the other rules tracks:
-// - The header: the casual track (sp-casual, OnlineRules WriteHeader) writes the same header at
-//   the same alone boundary and saves and restores the player's rules and preset. Keep that one,
-//   add the coin (+0x07, MatchBlock::CoinFromCode of the room's code) to it, and drop this file's
-//   RequestHeader/ApplyHeader request and clear paths (ORCA_TEST_RANKED can map to its
-//   ORCA_TEST_QUEUE=ranked plus a coin).
-// - The set: the results track (sp-results, SetBlock.h at +0x210) keeps the authoritative set with
-//   Phase 3's verdicts. Once it lands, build ViewOf()'s SetView (games, last winner, stages won)
-//   from it and drop this file's result counting (Step1's scVsResult branch); the flow's own
-//   fight/stage bookkeeping can stay.
-// - The input gate has one source: UX.cpp registers this flow's Masks; with other rules' masks,
-//   register one source that ORs them.
-// - RankedSteps.h is the shared step machine (namespace Ranked); the Brawl track (sp-brawl-sss)
-//   wrote its own minimal one under the same file name (namespace RankedSteps) before this one was
-//   pushed, and says it can be replaced by this one.
+// Integration (ranked-sprint): the header is OnlineRules' (with the coin); the set's score here is
+// this flow's own count of the results screens of fights it started, which agrees with the results
+// track's set (SetBlock.h) for Project+ (both take the results screen's winner; ties count for
+// neither); the input gate ORs these masks with every other rule's (UX.cpp).
 namespace Orca::UX
 {
 class GuestMemory;
@@ -106,16 +95,7 @@ struct Lines
 };
 Lines Describe(const GuestMemory& memory, int frame, const std::vector<Events::PortInfo>& ports);
 
-// ---- The match block's header (both games) ----
-// A host that takes a matchmade room: its block gets this mode and the running game's ruleset at
-// the next alone boundary (a new set), with the coin from the room's code.
-void RequestHeader(bool ranked, const std::string& code);
-// The frame hook's part for the header (MatchBlock.h): the requested header at an alone boundary;
-// the header cleared at an alone boundary once this game is in no matchmade room; with
-// ORCA_TEST_RANKED (a test override), a ranked header on every pass.
-void ApplyHeader(GuestMemory& memory, bool resimulating, bool alone);
-
-// The whole frame hook part (header, flow, overlay lines).
+// The whole frame hook part (flow, overlay lines). The header is OnlineRules' (MatchBlock.h).
 void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
            const std::vector<Events::PortInfo>& ports, bool alone);
 // The overlay's lines, as the frame hook last published them. Any thread.

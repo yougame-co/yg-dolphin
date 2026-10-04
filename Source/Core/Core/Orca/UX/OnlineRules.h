@@ -62,13 +62,16 @@ Ruleset ProfileRuleset();
 
 // ---- The header, at an alone boundary ----
 // Writes the header for `mode` (None: clears it, and gives back the rules saved when it was
-// written). Entering a mode from none saves the player's own rules first. Returns the bytes
-// changed (0: it already said so).
-int WriteHeader(GuestMemory& memory, Mode mode, Ruleset ruleset);
+// written), with game 1's first striker `coin` (0 or 1) and the room code's hash `room`. Entering a
+// mode from none saves the player's own rules first; any new header (from none, or another mode,
+// ruleset, coin or room) starts every track's set state fresh. Returns the bytes changed (0: it
+// already said so).
+int WriteHeader(GuestMemory& memory, Mode mode, Ruleset ruleset, u8 coin = 0, u32 room = 0);
 
 // ---- The locks, at every boundary ----
-// Returns the bytes changed (0 without a header that locks).
-int ApplyLocks(GuestMemory& memory);
+// `frame`: the frame hook's (the ranked ready timer counts from it). Returns the bytes changed (0
+// without a header that locks).
+int ApplyLocks(GuestMemory& memory, int frame);
 
 // What the input gate masks for the frame about to run (reads only).
 Rollback::InputGate::Masks GateMasks(const GuestMemory& memory);
@@ -121,12 +124,17 @@ std::optional<int> ConfirmNoShow(int confirmed);
 // tags are).
 void OnFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, bool alone,
              u8 plugged);
-// Registers the input gate's source (UX::Init) and removes it (UX::Shutdown).
-void Install();
-void Uninstall();
-
-// Test knob ORCA_TEST_QUEUE=casual|ranked (a test override): the header a queue room's host
-// writes, in a harness run or a dev game's room, as if this game hosted such a room.
+// Test knob ORCA_TEST_QUEUE=casual|ranked[:<coin 0|1>] (a test override): the header a queue
+// room's host writes, in a harness run or a dev game's room, as if this game hosted such a room;
+// the coin is game 1's first striker (port 1 by default).
+struct TestQueue
+{
+  Mode mode = Mode::None;
+  u8 coin = 0;
+  bool operator==(const TestQueue&) const = default;
+};
+std::optional<TestQueue> ParseTestQueue(const std::string& spec);
+std::optional<TestQueue> TestQueueSpec();
 std::optional<Mode> TestQueueMode();
 }  // namespace Rules
 }  // namespace Orca::UX

@@ -308,7 +308,7 @@ TEST(OrcaCharOrder, ReadsTheSetFromTheMatchBlock)
 {
   FakeMemory m;
   const u32 base = Orca::UX::FreeSpace::kMatchBlock.begin;
-  for (u32 i = 0; i < 0x40; ++i)
+  for (u32 i = 0; i < 0x290; ++i)
     m.bytes[base + i] = 0;
   EXPECT_EQ(ReadSet(m), SetView{});  // no magic: friends, solo
   m.Write32(base + Block::MAGIC, Block::MAGIC_VALUE);

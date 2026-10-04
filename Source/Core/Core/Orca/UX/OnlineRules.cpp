@@ -11,9 +11,11 @@
 #include "Common/Logging/Log.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Events.h"
+#include "Core/Orca/Session/Online.h"
 #include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/OnlineMenu.h"
 #include "Core/Orca/UX/Probe.h"
+#include "Core/Orca/UX/SetBlock.h"
 #include "InputCommon/GCPadStatus.h"
 
 namespace Orca::UX::Rules
@@ -177,11 +179,16 @@ void ForceRules(Writer& w, const Header& h)
   if (rule && w.m.Valid(rule + RULE_PAUSE))
   {
     w.U8(rule + RULE_MODE, static_cast<u8>((w.m.Read8(rule + RULE_MODE) & 0xF8) | 1));
-    w.U8(rule + RULE_STOCKS, StocksFor(h.ruleset));
+    // A ranked Brawl set's stocks and time are the set's (RankedSet::WriteSetRules: 1 stock and
+    // 3:00 in a tiebreak game), written by its hook earlier at the same boundary.
+    const bool set_rules = h.mode == Mode::Ranked && h.ruleset == Ruleset::Brawl;
+    if (!set_rules)
+      w.U8(rule + RULE_STOCKS, StocksFor(h.ruleset));
     w.U8(rule + RULE_HANDICAP, 0);
     w.U8(rule + RULE_RATIO, 10);
     w.U8(rule + RULE_STAGE_CHOICE, h.mode == Mode::Casual ? STAGE_RANDOM : STAGE_CHOOSE);
-    w.U8(rule + RULE_STOCK_MINUTES, 8);
+    if (!set_rules)
+      w.U8(rule + RULE_STOCK_MINUTES, 8);
     w.U8(rule + RULE_TEAM_ATTACK, 1);
     w.U8(rule + RULE_PAUSE, 0);
   }
@@ -216,14 +223,20 @@ void ForceStages(Writer& w, const Header& h, const std::string& scene)
   }
 }
 
-// Ranked's character select: the no-ready timer (MatchBlock CSS_TIMER, CSS_NO_SHOW).
-void ReadyTimer(Writer& w, const Header& h, const std::string& scene)
+// Ranked's character select: the no-ready timer (MatchBlock CSS_TIMER, CSS_NO_SHOW). The time is
+// the frame number less the frame it started at (CSS_TIMER_START), never a count kept by adding
+// one: a boundary run again (a re-run after a load) computes the same.
+void ReadyTimer(Writer& w, const Header& h, const std::string& scene, int frame)
 {
+  const auto stop = [&] {
+    w.U16(B::CSS_TIMER, 0);
+    w.U32(B::CSS_TIMER_START, 0);
+  };
   if (scene == SCENE_FIGHT)
     w.U8(B::FOUGHT, static_cast<u8>(w.m.Read8(B::FOUGHT) | 1));
   if (scene != SCENE_CSS)
   {
-    w.U16(B::CSS_TIMER, 0);
+    stop();
     w.U8(B::CSS_NO_SHOW, 0);
     return;
   }
@@ -232,7 +245,7 @@ void ReadyTimer(Writer& w, const Header& h, const std::string& scene)
   // The two players of a queue match, ports 1 and 2, both plugged in.
   if ((w.m.Read8(B::PLUGGED) & 3) != 3)
   {
-    w.U16(B::CSS_TIMER, 0);
+    stop();
     return;
   }
   const std::array<PlayerPick, 4> picks = Picks(w.m);
@@ -246,13 +259,22 @@ void ReadyTimer(Writer& w, const Header& h, const std::string& scene)
   }
   if (ready == 0 || waiting < 0)
   {
-    w.U16(B::CSS_TIMER, 0);
+    stop();
     return;
   }
-  const int t = w.m.Read16(B::CSS_TIMER) + 1;
-  if (t >= CSS_READY_FRAMES)
+  const u32 now = static_cast<u32>(frame) + 1;
+  u32 start = w.m.Read32(B::CSS_TIMER_START);
+  // Not running yet, or a start from another frame numbering (later than now, or longer ago than
+  // the limit allows): it starts here.
+  if (start == 0 || start > now || now - start > static_cast<u32>(CSS_READY_FRAMES) * 2)
   {
-    w.U16(B::CSS_TIMER, 0);
+    start = now;
+    w.U32(B::CSS_TIMER_START, start);
+  }
+  const u32 t = now - start;
+  if (t >= static_cast<u32>(CSS_READY_FRAMES))
+  {
+    stop();
     w.U8(B::CSS_NO_SHOW, static_cast<u8>(waiting + 1));
     return;
   }
@@ -314,7 +336,23 @@ std::array<PlayerPick, 4> ReadPicks(const GuestMemory& m)
   return Picks(m);
 }
 
-int WriteHeader(GuestMemory& m, Mode mode, Ruleset ruleset)
+namespace
+{
+// Every track's state of a new set past the header: the stage flow's (MatchBlock::State, its NONE
+// fields), the ranked set's (SetBlock, its NO_PORT fields), the character order's (cleared).
+void FreshSet(Writer& w, Mode mode, Ruleset ruleset, u8 coin)
+{
+  w.Zero(B::SET, B::SET_SIZE);
+  w.Zero(B::STEP, B::STEP_SIZE);
+  w.Zero(B::CSS_TIMER, B::PHASE1_SIZE);
+  w.Zero(B::CHAR_ORDER, B::CHAR_ORDER_SIZE);
+  w.changed += MatchBlock::Write(
+      w.m, MatchBlock::State::Fresh(static_cast<u8>(mode), static_cast<u8>(ruleset), coin));
+  w.changed += SetBlock::WriteSet(w.m, SetBlock::SetState{});
+}
+}  // namespace
+
+int WriteHeader(GuestMemory& m, Mode mode, Ruleset ruleset, u8 coin, u32 room)
 {
   if (!BlockMapped(m))
     return 0;
@@ -345,14 +383,20 @@ int WriteHeader(GuestMemory& m, Mode mode, Ruleset ruleset)
         w.U8(PPLUS_RSS + i, m.Read8(B::SAVED_RSS + i));
     }
     w.Zero(B::BASE, B::SIZE);
+    // The character order and the ranked set past the 512 bytes too.
+    w.Zero(B::CHAR_ORDER, B::FULL_SIZE - (B::CHAR_ORDER - B::BASE));
     return w.changed;
   }
-  if (now.present && now.mode == mode && now.ruleset == ruleset)
+  coin &= 1;
+  if (now.present && now.mode == mode && now.ruleset == ruleset && m.Read8(B::COIN) == coin &&
+      m.Read32(B::ROOM) == room)
+  {
     return 0;
+  }
   if (!now.present)
   {
     // From the game's dead code (or a cleared block): all zeros, then the player's own rules.
-    w.Zero(B::BASE, B::SIZE);
+    w.Zero(B::BASE, B::FULL_SIZE);
     u8 flags = 0;
     if (const u32 rule = GlobalField(m, GLOBAL_SET_RULE); rule && m.Valid(rule + RULE_PAUSE))
     {
@@ -376,21 +420,19 @@ int WriteHeader(GuestMemory& m, Mode mode, Ruleset ruleset)
     }
     w.U8(B::SAVED_FLAGS, flags);
   }
-  else
-  {
-    // Another queue room's header (the saved rules stay the player's own): a new set.
-    w.Zero(B::SET, B::SET_SIZE);
-    w.Zero(B::STEP, B::STEP_SIZE);
-    w.Zero(B::CSS_TIMER, B::PHASE1_SIZE);
-  }
-  w.U32(B::MAGIC, B::MAGIC_VALUE);
+  // The header (the magic last: a reader never sees one over the dead code's other bytes), then a
+  // new set, whatever the block held (another queue room's header keeps the player's saved rules).
   w.U8(B::VERSION, B::VERSION_VALUE);
   w.U8(B::MODE, static_cast<u8>(mode));
   w.U8(B::RULESET, static_cast<u8>(ruleset));
+  w.U8(B::COIN, coin);
+  w.U32(B::ROOM, room);
+  w.U32(B::MAGIC, B::MAGIC_VALUE);
+  FreshSet(w, mode, ruleset, coin);
   return w.changed;
 }
 
-int ApplyLocks(GuestMemory& m)
+int ApplyLocks(GuestMemory& m, int frame)
 {
   const Header h = ReadHeader(m);
   if (!h.Locked())
@@ -399,7 +441,7 @@ int ApplyLocks(GuestMemory& m)
   const std::string scene = ReadSceneName(m);
   ForceRules(w, h);
   ForceStages(w, h, scene);
-  ReadyTimer(w, h, scene);
+  ReadyTimer(w, h, scene, frame);
   return w.changed;
 }
 
@@ -465,19 +507,32 @@ std::optional<std::string> TakeMismatch()
   return std::exchange(s_mismatch, std::nullopt);
 }
 
+std::optional<TestQueue> ParseTestQueue(const std::string& v)
+{
+  const size_t colon = v.find(':');
+  const std::string mode = v.substr(0, colon);
+  const std::string coin = colon == std::string::npos ? "0" : v.substr(colon + 1);
+  if ((mode != "casual" && mode != "ranked") || (coin != "0" && coin != "1"))
+    return std::nullopt;
+  return TestQueue{mode == "casual" ? Mode::Casual : Mode::Ranked, static_cast<u8>(coin == "1")};
+}
+
+std::optional<TestQueue> TestQueueSpec()
+{
+  static const std::optional<TestQueue> spec = []() -> std::optional<TestQueue> {
+    const std::string v = Orca::TestQueueSpec();
+    const auto parsed = ParseTestQueue(v);
+    if (!parsed && !v.empty())
+      ERROR_LOG_FMT(ROLLBACK, "Online rules: ORCA_TEST_QUEUE={}: not casual or ranked[:0|1]", v);
+    return parsed;
+  }();
+  return TestKnobsAllowed() ? spec : std::nullopt;
+}
+
 std::optional<Mode> TestQueueMode()
 {
-  static const std::optional<Mode> mode = []() -> std::optional<Mode> {
-    const std::string v = Orca::TestQueueSpec();
-    if (v == "casual")
-      return Mode::Casual;
-    if (v == "ranked")
-      return Mode::Ranked;
-    if (!v.empty())
-      ERROR_LOG_FMT(ROLLBACK, "Online rules: ORCA_TEST_QUEUE={}: not casual or ranked", v);
-    return std::nullopt;
-  }();
-  return TestKnobsAllowed() ? mode : std::nullopt;
+  const auto spec = TestQueueSpec();
+  return spec ? std::optional<Mode>(spec->mode) : std::nullopt;
 }
 
 std::optional<int> ConfirmNoShow(int confirmed)
@@ -508,22 +563,32 @@ void OnFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, bo
   if (alone && !resimulating)
   {
     Mode wanted = s_wanted;
-    if (const auto test = TestQueueMode())
-      wanted = *test;
-    if (const int changed = WriteHeader(m, wanted, ruleset); changed > 0)
+    // The room's code: game 1's first striker (one bit of its hash: the server makes it, neither
+    // player chooses it) and a new room's fresh set. The test knob: its coin, no room.
+    const std::string code = wanted == Mode::None ? std::string() : Orca::Online::Code();
+    u8 coin = MatchBlock::CoinFromCode(code);
+    u32 room = MatchBlock::RoomHash(code);
+    if (const auto test = TestQueueSpec())
     {
-      NOTICE_LOG_FMT(ROLLBACK, "Online rules: header {} at frame {} ({} bytes)",
+      wanted = test->mode;
+      coin = test->coin;
+      room = 0;
+    }
+    if (const int changed = WriteHeader(m, wanted, ruleset, coin, room); changed > 0)
+    {
+      NOTICE_LOG_FMT(ROLLBACK, "Online rules: header {} at frame {} ({} bytes), game 1's first "
+                     "striker port {}",
                      wanted == Mode::Casual ? "casual" :
                      wanted == Mode::Ranked ? "ranked" :
                                               "cleared",
-                     frame, changed);
+                     frame, changed, coin + 1);
     }
     s_settled = true;
   }
   // The ports in play, for the ready timer: synced data, the same at this frame on every machine.
   if (ReadHeader(m).Locked() && m.Read8(B::PLUGGED) != plugged)
     m.Write8(B::PLUGGED, plugged);
-  const int locked = ApplyLocks(m);
+  const int locked = ApplyLocks(m, frame);
   if (locked > 0 && !resimulating)
     DEBUG_LOG_FMT(ROLLBACK, "Online rules: {} bytes forced at frame {}", locked, frame);
   // A joiner's check, once its keyframe is in.
@@ -572,18 +637,4 @@ void OnFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, bo
   }
 }
 
-void Install()
-{
-  Rollback::InputGate::SetSource([](const Core::CPUThreadGuard& guard) {
-    if (ProfileRuleset() == Ruleset::None)
-      return Rollback::InputGate::Masks{};
-    GuardMemory m(guard);
-    return GateMasks(m);
-  });
-}
-
-void Uninstall()
-{
-  Rollback::InputGate::SetSource({});
-}
 }  // namespace Orca::UX::Rules

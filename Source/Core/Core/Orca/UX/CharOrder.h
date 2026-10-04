@@ -138,8 +138,8 @@ static_assert(kArea % 16 == 0 && kArea + kAreaSize <= FreeSpace::kMatchBlockLimi
               FreeSpace::Detail::Free({kArea, kArea + kAreaSize}));
 
 // The match block's header and the ranked set's state, as ReadSet() reads them (offsets from
-// FreeSpace::kMatchBlock.begin; the header as every rules track writes it, the set state as the
-// ranked sets track lays it out, its MatchBlock.h).
+// FreeSpace::kMatchBlock.begin; the header as OnlineRules writes it, MatchBlock.h; the set as the
+// ranked set track keeps it, SetBlock.h).
 namespace Block
 {
 constexpr u32 MAGIC = 0x00;  // u32 "YGM1"
@@ -147,9 +147,10 @@ constexpr u32 MAGIC_VALUE = 0x59474D31;
 constexpr u32 VERSION = 0x04;  // u8 1
 constexpr u32 MODE = 0x05;     // u8: 2 ranked
 constexpr u32 RULESET = 0x06;  // u8: 1 Brawl (Supernova 2025), 2 Project+ (2024)
-constexpr u32 SET_WINS = 0x21;         // u8[2]: games won by ports 1 and 2
-constexpr u32 SET_DONE = 0x23;         // u8: 0 the set is open
-constexpr u32 SET_LAST_WINNER = 0x25;  // u8: the last decided game's winning port, 0xFF none
+// The ranked set's (SetBlock.h, +0x210).
+constexpr u32 SET_WINS = 0x211;         // u8[2]: games won by ports 1 and 2
+constexpr u32 SET_DONE = 0x213;         // u8: 0 the set is open
+constexpr u32 SET_LAST_WINNER = 0x215;  // u8: the last decided game's winning port, 0xFF none
 constexpr u8 MODE_RANKED = 2;
 }  // namespace Block
 

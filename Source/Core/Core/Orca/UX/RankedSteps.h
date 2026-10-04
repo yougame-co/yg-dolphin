@@ -97,6 +97,7 @@ struct SetView
   int coin = 0;          // game 1's first striker (port 0 or 1), the fair coin in the match block
   std::array<StageMask, 2> won_on{};      // the stages each port won a game on
   std::array<int, 2> characters{-1, -1};  // gmGlobalModeMelee character kinds; -1 unknown
+  bool operator==(const SetView&) const = default;
 };
 
 struct Plan
@@ -106,6 +107,8 @@ struct Plan
   StageMask available = 0;
   // Also never pickable in the pick step (DSR), on top of the strikes.
   StageMask pick_excluded = 0;
+  // Brawl's Meta Knight clause decided this game: one pick of any legal stage.
+  bool mk_clause = false;
 };
 
 Plan PlanGame(const Ruleset& rules, const SetView& set);
@@ -123,4 +126,41 @@ u32 StepFrames(const Ruleset& rules, const Step& step);
 int CountBits(StageMask mask);
 // The lowest `n` set bits of `mask`.
 StageMask FirstBits(StageMask mask, int n);
+
+// ---- A game's steps driven one action and one frame at a time ----
+// For a stage select whose glue sees each strike, ban, skip and pick as it happens and counts the
+// screen's own frames (Brawl's, BrawlStages.h): where the steps stand, kept in the match block. The
+// same rules as above (Allowed, DefaultStrikes, DefaultPick, StepFrames); Project+'s glue keeps its
+// own deadline instead (RankedPPlus.h).
+struct Progress
+{
+  u8 step = 0;           // index into the plan; plan.steps.size(): done
+  u8 done = 0;           // strikes or bans made in this step
+  StageMask struck = 0;  // stages struck or banned this game
+  u16 frames = 0;        // left in this step's timer, grace included
+  s8 picked = -1;        // the stage picked (-1: not yet)
+  bool operator==(const Progress&) const = default;
+};
+
+// A game's first step, its timer started (and the pick made when only one stage is left).
+Progress Begin(const Ruleset& rules, const Plan& plan);
+// The step under way; nullptr once the stage is picked or the steps are done.
+const Step* Current(const Plan& plan, const Progress& progress);
+// The stages the current step allows; 0 when there is none.
+StageMask Allowed(const Plan& plan, const Progress& progress);
+// The current step's player strikes or bans `stage`: false (nothing changes) unless the step is a
+// strike or a ban that allows it, and it isn't the last stage standing. A step whose count is made
+// ends, and a pick with one stage left makes itself.
+bool Strike(const Ruleset& rules, const Plan& plan, Progress* progress, int stage);
+// The current step's player leaves an optional ban out. False if it isn't optional.
+bool Skip(const Ruleset& rules, const Plan& plan, Progress* progress);
+// The current step's player picked `stage` (the game took it). False if the step doesn't allow it.
+bool Pick(const Plan& plan, Progress* progress, int stage);
+// A pick step with exactly one stage allowed picks it.
+void AutoPick(const Plan& plan, Progress* progress);
+// One frame of the current step's timer; when it runs out, its default: the strikes still owed
+// (DefaultStrikes), an optional ban left out, the first allowed stage picked (DefaultPick).
+void Tick(const Ruleset& rules, const Plan& plan, Progress* progress);
+// Whole seconds a step's timer shows (0 through the grace).
+int SecondsShown(const Ruleset& rules, u16 frames);
 }  // namespace Orca::UX::Ranked

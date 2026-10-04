@@ -32,21 +32,17 @@ class CPUThreadGuard;
 // and a drop-in's keyframe compute the same.
 //
 // MERGE NOTES (sp-brawl-sss):
-// - Whether this game plays a ranked Brawl set comes from the match block's header, which the
-//   casual track (sp-casual, MatchBlock.h) writes at the alone boundary: read here by its pushed
-//   layout (kBlock), so the flow runs as soon as that track lands; until then only the test knob
-//   ORCA_TEST_RANKED=brawl turns it on.
-// - The set (game, last winner, stages won for DSR) is the results track's (sp-results,
-//   SetBlock.h, kResultsSet) when the block holds a valid one; this flow keeps its own record of
-//   the results screens only for a block without it (the knob's runs). After the merge SetOf can
-//   read SetBlock::ReadSet directly.
-// - This flow's state is the block's step-state range (+0x80..+0xBF), as MatchBlock.h reserves
-//   it; the Project+ flow keeps its own there, in its own game. A new stage select (its frame
-//   counter back to the start) starts the game's steps again, so stale bytes from a set that ended
-//   mid-select never carry into the next.
-// - The step machine is this track's own (RankedSteps.h).
-// - The input gate has one source: UX.cpp registers one that ORs every rule's masks; this flow's
-//   are BrawlStages::Masks (the casual track's gate source must be ORed in the same place).
+// - Whether this game plays a ranked Brawl set comes from the match block's header (MatchBlock.h,
+//   written by OnlineRules at the alone boundary; ORCA_TEST_QUEUE=ranked in a test). Game 1's
+//   first striker is the header's coin (one bit of the room code's hash).
+// - The set (game, last winner, stages won for DSR) is the results track's (SetBlock.h) when the
+//   block holds a valid one; this flow keeps its own record of the results screens only for a
+//   block without it.
+// - This flow's state is the block's step-state range (+0x80..+0xBF); the Project+ flow keeps its
+//   own there, in its own game. A new stage select (its frame counter back to the start) starts the
+//   game's steps again, so stale bytes from a set that ended mid-select never carry into the next.
+// - The step machine is the shared one (RankedSteps.h, Ranked::Brawl2025 and its Progress driver).
+// - The input gate has one source: UX.cpp ORs every rule's masks; this flow's are Masks.
 namespace Orca::UX
 {
 class GuestMemory;
@@ -54,6 +50,19 @@ class GuestMemory;
 
 namespace Orca::UX::BrawlStages
 {
+// Supernova 2025's legal stages, in Ranked::Brawl2025's order (its stage indices).
+enum Stage : u8
+{
+  Battlefield,
+  PokemonStadium,  // the Melee page's
+  LylatCruise,
+  Smashville,
+  YoshisIsland,  // Brawl's
+  FinalDestination,
+  DelfinoPlaza,
+  kStages,
+};
+
 // ---- The game's memory (Brawl rev 2) ----
 constexpr u32 SCENE_MANAGER = 0x805A0060;  // gfSceneManager*: +4 the scene
 constexpr u32 PAD_SYSTEM = 0x805A0040;     // gfPadSystem*
@@ -107,11 +116,11 @@ struct State
 {
   // The set as this flow records it from the results screens, for a match block without the
   // results track's set (SetOf).
-  RankedSteps::SetView set;
+  Ranked::SetView set;
   std::array<u8, 2> score{};
-  u8 coin = 0xFF;  // game 1's first striker; 0xFF until drawn
+  u8 coin = 0xFF;  // game 1's first striker (the header's coin); 0xFF until read
   Phase phase = Phase::Idle;
-  RankedSteps::Progress progress;
+  Ranked::Progress progress;
   std::array<s8, 2> characters{-1, -1};
   std::array<u16, 2> buttons{};  // each port's buttons at the last boundary (X and Y edges)
   u32 clock = 0;                 // the stage select's frame counter at the last tick
@@ -152,11 +161,11 @@ struct View
 View ReadView(const GuestMemory& memory);
 
 // Whether this game is a ranked Brawl set's: the match block's header says so (mode ranked,
-// ruleset Brawl), or ORCA_TEST_RANKED=brawl in a test.
+// ruleset Brawl).
 bool RankedBrawlMatch(const GuestMemory& memory);
 // The set the steps follow: the results track's (SetBlock.h) when the block holds a valid one,
 // else this flow's own record in `state`. `score`: the games won by ports 1 and 2.
-RankedSteps::SetView SetOf(const GuestMemory& memory, const State& state,
+Ranked::SetView SetOf(const GuestMemory& memory, const State& state,
                            std::array<u8, 2>* score = nullptr);
 // Unit tests: RankedBrawlMatch's answer instead of the knob's (nullopt: the knob again).
 void SetRankedForTests(std::optional<bool> ranked);
