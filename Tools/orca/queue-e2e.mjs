@@ -1080,11 +1080,13 @@ async function q2Main() {
   }
   // The match: game after game until the set (ranked) or --games (casual), then the joiner leaves.
   for (let g = 0; g < GAMES; ++g) {
+    // A ranked set's room closes right after its last game: the way back starts during it.
+    if (QUEUE === "ranked") marks();
     await q2Css(host, joiner, g === 0);
     await q2Fight(host, joiner);
     if (QUEUE === "ranked" && host.results.some((r) => r.k === "set")) break;
   }
-  marks();
+  if (QUEUE !== "ranked") marks();
   if (QUEUE === "ranked") {
     await host.expect(/^orca result \{"q":"ranked","k":"set"/, 60000);
     await joiner.expect(/^orca result \{"q":"ranked","k":"set"/, 60000);
