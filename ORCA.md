@@ -2228,8 +2228,10 @@ select's hands"); B was already masked there.
 
 ### Compatibility and tests
 
-`ux=9` (8 brought the locks and the rules preset of `ux=6` went; 9 the character select's A
-gate), cap `locks`. Test knob `ORCA_TEST_QUEUE=casual|ranked`
+`ux=10` (8 brought the locks and the rules preset of `ux=6` went; 9 the character select's A
+gate; 10, Orca 0.3.14, queue2's character select, Project+'s boot to the main menu with friends
+dropping in from the menus, the character select's title, and the casual stage pick), caps `locks`
+and `queue2`. Test knob `ORCA_TEST_QUEUE=casual|ranked`
 (a test override): the header as a queue room's host writes it, in a harness run or a dev game's
 room, both Orcas set alike. Unit tests `OrcaOnlineRules*` (the header's lifecycle and saved rules,
 each ruleset's bytes, Ice Climbers and FD, Project+'s list, the gate's masks, the ready timer,

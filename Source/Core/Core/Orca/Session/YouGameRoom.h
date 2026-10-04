@@ -107,10 +107,10 @@ struct PeerEvent
   KeyframeInfo keyframe;
   // Left: why it said it was going ("desync" or "stalled", from its bye; empty: it just left).
   std::string reason;
-  // Hold: whether the host holds the join now.
-  bool holding = false;
   // Arrived: the joiner's queue identity from its hello (RoomOptions::queue; empty: none).
   std::vector<u8> queue;
+  // Hold: whether the host holds the join now.
+  bool holding = false;
 };
 
 // How the other players' inputs reach this one (DirectLink.h): the worst of them.

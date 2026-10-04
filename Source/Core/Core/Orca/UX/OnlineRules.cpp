@@ -702,6 +702,11 @@ void OnFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, bo
       coin = test->coin;
       room = 0;
       flags = test->flags;
+      // ORCA_TEST_QUEUE=<mode>:solo with ORCA_TEST_QUEUE_PICK: port 2 plugging in is the match the
+      // queue found, so from then on the header is the room's (queue2, no longer solo), as a host's
+      // is once the page hosts: the whole flow, own character select to the room's, in one run.
+      if ((flags & B::FLAG_SOLO) && (plugged & 2) && !Orca::TestQueuePickSpec().empty())
+        flags = B::FLAG_QUEUE2;
     }
     if (const int changed = WriteHeader(m, wanted, ruleset, coin, room, flags); changed > 0)
     {
