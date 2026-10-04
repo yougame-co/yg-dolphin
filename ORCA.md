@@ -325,6 +325,46 @@ hook writes into the port's name tag on the character select:
 - The synctest (0 RAM mismatches over 6,384 re-run frames) and the loopback (PASS, 899
   checksums) are unchanged. As defence in depth, "never" is still `0x3fffffff`.
 
+**Host arithmetic** (0.3.15, `Core/Orca/UX/Queue.*`, `Source/Core/Core/CMakeLists.txt`). What
+Orca's own C++ works out from emulated memory on every machine (the input gate's masks, presses and
+sticks, whatever a hook writes to RAM) is integer arithmetic. The frame hook runs in the host's
+default FP mode (above), but the builds still differ: Apple clang contracts `a * b + c` into one
+fused multiply-add on ARM64 by default, which rounds once where MSVC's x86-64 code rounds twice.
+Through 0.3.14 the queue's steering (`Queue::SteerToward`) put the joiner's stick in from
+`sqrt(dx * dx + dy * dy)` in floats, and the Mac build fused it (`fmadd s1, s2, s2, s1`): 12 of 20
+million random (hand, pick) pairs gave a Mac and a PC sticks a unit apart, a desync during game 1's
+steered pick that no synctest on one machine can see. Since 0.3.15:
+- The steering is fixed point: `Queue::ToFixed` reads a float's value in 1/65536 units from its bits
+  alone (NaN, infinity and 4,096 units or more are no place: centred), `IntSqrt` is exact, the
+  divisions truncate and the axis rounds half up. Same behaviour: over 2 million pairs on the
+  character select every stick is within a unit of the float formula worked out in double
+  precision, 99.98% equal (the rest within rounding of a half). The "all but stopped" test before A
+  (`Queue::HandStill`) is integer too.
+- `OrcaQueue.SteeringIsTheSameOnEveryHost` pins golden sticks every host must give (the real flows'
+  picks, the near cases, and the pairs where the old version split Mac from PC). The same code
+  hashed 5 million sticks identically built for arm64, x86-64, and x86-64 with FMA and
+  `-ffp-contract=fast`; the old float version, on the same inputs, did not (arm64 and x86-64).
+- The Orca and Rollback sources (`Orca/`, `Rollback/` in `core`) build with `-ffp-contract=off` on
+  clang and gcc, as a belt to those braces. Without it the Mac build also fused in
+  `DirectLink::Deliver` (the flood limit), `Session` (stall accounting, the snapshot spacing) and
+  the overlay, all one machine's own; with it none of the 43 objects has a fused op. MSVC needs no
+  equivalent: `/fp:precise` (root `CMakeLists.txt`) never contracts in VS 2022 and later, and the
+  x86-64 baseline (no `/arch:AVX2`) has no FMA instruction to emit.
+
+What is still float in `Core/Orca/UX`, `Core/Orca/Session` and `Core/Rollback` (swept 2026-10-04):
+on values every machine shares, only operations without rounding, whose answers no compiler or FP
+mode changes: compares of a float from RAM against a constant (`CssHandMayPressA`'s grid edges,
+the queue identity's "finite and within 100", the ranked set's damage `> 0 && < 10000`), the
+truncation of that in-range damage to the percent, bit copies (`std::bit_cast`, the pick's place
+into the queue block), and constant floats written to RAM (the stage select's cursor). The rest is
+one machine's own and never has to agree: the joiner's pick place (worked out on its own machine
+and sent as bits in the queue identity), the controller snapshot to pad conversion (the pad travels
+as PadCodec's 8 bytes and both machines decode their own from those), timing, pacing, the
+adaptive delay and stall accounting (the host's plug-in frame is sent, not recomputed), stats, the
+overlay, and the harness's fault injection. No `sqrt`, `pow`, trig, `hypot` or rounding that every
+machine works out for itself reaches emulated memory or inputs (the controller conversion's
+`lround` runs on the player's own machine only).
+
 **Floating point on every host** (2026-10-02). Every Mac and PC computes the same game, whatever
 the CPU. Three hosts are in play, and each one's own floating point differs from PowerPC's in the
 guest's non-IEEE mode (FPSCR.NI, which Brawl and Project+ run in):

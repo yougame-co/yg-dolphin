@@ -211,9 +211,31 @@ struct SkipHold
   float Progress() const;
 };
 
+// ---- Fixed point (the steering's arithmetic) ----
+// Every machine computes port 2's stick from the hand's place in emulated memory, so the steering
+// is integer arithmetic only (ORCA.md "Host arithmetic"): host floating point differs between the
+// builds. Apple clang fused the old float version's dx * dx + dy * dy into one FMA on ARM64, which
+// MSVC rounds as two products and a sum on x86-64; 12 of 20 million random (hand, pick) pairs then
+// gave sticks a unit apart, a desync no synctest on one machine can see. A place is in FIXED_ONEs,
+// 1/65536 of a unit.
+constexpr int FIXED_BITS = 16;
+constexpr s64 FIXED_ONE = s64{1} << FIXED_BITS;
+// Places this far out or more are no place (the character select spans about -30..30, -20..20).
+constexpr s64 FIXED_LIMIT = s64{4096} << FIXED_BITS;
+// A float's value in FIXED_ONEs, truncated toward zero, worked out from its bits alone (no float
+// instruction, so every host and compiler agrees); nullopt for a NaN, an infinity, or a magnitude
+// of FIXED_LIMIT or more.
+std::optional<s64> ToFixed(float value);
+// floor(sqrt(n)), exactly.
+u64 IntSqrt(u64 n);
+
 // Where port 2's stick goes to take its hand from (x, y) to (tx, ty): full tilt when far, gentler
-// near, centred within reach. Pure.
+// near, centred within reach (or when a place is no place). Pure, and integer only: the same bytes
+// on every host.
 std::pair<u8, u8> SteerToward(float x, float y, float tx, float ty);
+// Whether port 2's hand has all but stopped: under 0.05 a frame on both axes since the frame began
+// (Brawl's hand creeps about 0.03 a frame with the stick let go). Integer only, as SteerToward.
+bool HandStill(float x, float y, float prev_x, float prev_y);
 
 // ---- Memory ----
 View ReadView(const GuestMemory& memory, const std::vector<Events::PortInfo>& ports);
