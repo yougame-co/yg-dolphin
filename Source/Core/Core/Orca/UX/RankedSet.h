@@ -91,8 +91,9 @@ Live ReadLiveFight(const GuestMemory& memory);
 // Facts from memory (reads only); the fight's live state only with `live`.
 Facts ReadFacts(const GuestMemory& memory, bool live);
 
-// The frame hook's part (first runs and re-runs): follows the set in a ranked block.
-void Frame(const Core::CPUThreadGuard& guard, int frame);
+// The frame hook's part (first runs and re-runs alike; `resimulating` only quiets the log): follows
+// the set in a ranked block.
+void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating);
 
 // The header's lifecycle: what this game's current room calls for. The host of a queue room asks
 // for its queue's mode when it takes the room; any other room (its own private room again, a

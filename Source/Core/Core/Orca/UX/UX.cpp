@@ -44,7 +44,7 @@ void Init()
     // Reads only: the app hears what the player picked in the game's Online menu.
     ReadOnlineMenu(guard, resimulating, alone);
     // A ranked queue match's set, followed in the match block (a pure function of memory).
-    RankedSet::Frame(guard, frame);
+    RankedSet::Frame(guard, frame, resimulating);
     // Reads only: each game's result in a matchmade room, once its frames are final (Results.h).
     ReadResultsFrame(guard, frame);
     // A host that just took a matchmade room presets Brawl's rules, alone, before any keyframe;

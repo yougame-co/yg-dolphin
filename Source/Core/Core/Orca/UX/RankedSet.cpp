@@ -413,7 +413,7 @@ Facts ReadFacts(const GuestMemory& memory, bool live)
   return f;
 }
 
-void Frame(const Core::CPUThreadGuard& guard, int frame)
+void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating)
 {
   if (!ResultsVerified())
     return;
@@ -432,7 +432,7 @@ void Frame(const Core::CPUThreadGuard& guard, int frame)
   if (after != before)
   {
     SetBlock::WriteSet(memory, after);
-    if (after.games != before.games)
+    if (after.games != before.games && !resimulating)
     {
       const GameRecord& r = after.records[std::min(after.games, u8(SetBlock::MAX_RECORDS)) - 1];
       NOTICE_LOG_FMT(ROLLBACK,
