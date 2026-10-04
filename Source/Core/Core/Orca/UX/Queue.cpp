@@ -319,28 +319,100 @@ float SkipHold::Progress() const
   return std::min(1.0f, static_cast<float>(frames) / SKIP_FRAMES);
 }
 
+std::optional<s64> ToFixed(float value)
+{
+  const u32 bits = std::bit_cast<u32>(value);
+  const u32 exponent = (bits >> 23) & 0xFF;
+  if (exponent == 0xFF)
+    return std::nullopt;  // an infinity or a NaN
+  if (exponent == 0)
+    return 0;  // zero, or a denormal (far under one FIXED_ONE)
+  // value = mantissa * 2^(exponent - 150), so value * 2^FIXED_BITS = mantissa * 2^shift.
+  const u64 mantissa = (bits & 0x7FFFFF) | 0x800000;
+  const int shift = static_cast<int>(exponent) - 150 + FIXED_BITS;
+  u64 magnitude;
+  if (shift >= 0)
+  {
+    if (shift > 16)
+      return std::nullopt;  // 2^40 and more: far past FIXED_LIMIT
+    magnitude = mantissa << shift;
+  }
+  else
+  {
+    magnitude = shift <= -24 ? 0 : mantissa >> -shift;  // truncated toward zero
+  }
+  if (magnitude >= static_cast<u64>(FIXED_LIMIT))
+    return std::nullopt;
+  const s64 v = static_cast<s64>(magnitude);
+  return (bits >> 31) ? -v : v;
+}
+
+u64 IntSqrt(u64 n)
+{
+  // Digit by digit, two bits at a time.
+  u64 root = 0;
+  u64 bit = u64{1} << 62;
+  while (bit > n)
+    bit >>= 2;
+  while (bit != 0)
+  {
+    if (n >= root + bit)
+    {
+      n -= root + bit;
+      root = (root >> 1) + bit;
+    }
+    else
+    {
+      root >>= 1;
+    }
+    bit >>= 2;
+  }
+  return root;
+}
+
 std::pair<u8, u8> SteerToward(float x, float y, float tx, float ty)
 {
-  const float dx = tx - x, dy = ty - y;
-  const float d = std::sqrt(dx * dx + dy * dy);
-  if (!std::isfinite(d) || d < 0.1f)
-    return {GCPadStatus::MAIN_STICK_CENTER_X, GCPadStatus::MAIN_STICK_CENTER_Y};
+  constexpr std::pair<u8, u8> centred{static_cast<u8>(GCPadStatus::MAIN_STICK_CENTER_X),
+                                      static_cast<u8>(GCPadStatus::MAIN_STICK_CENTER_Y)};
+  const std::optional<s64> fx = ToFixed(x), fy = ToFixed(y), ftx = ToFixed(tx), fty = ToFixed(ty);
+  if (!fx || !fy || !ftx || !fty)
+    return centred;
+  // In FIXED_ONEs: |dx|, |dy| < 2^29, so dx * dx + dy * dy < 2^59.
+  const s64 dx = *ftx - *fx, dy = *fty - *fy;
+  const s64 d = static_cast<s64>(IntSqrt(static_cast<u64>(dx * dx) + static_cast<u64>(dy * dy)));
+  if (d * 10 < FIXED_ONE)  // within 0.1
+    return centred;
   // Full tilt (the hand's 0.83 or 1.0 a frame) from 3 units out, slower nearer. The larger
   // component is at least 30, past the game's dead zone (30 moves Brawl's hand about 0.06 a frame,
   // fine enough to stop on a spot), so the hand always closes in; a smaller one the dead zone
-  // swallows is taken up once it is the larger.
-  const float mag = std::clamp(100.0f * d / 3.0f, 30.0f, 100.0f);
-  float cx = dx / d * mag, cy = dy / d * mag;
-  const float larger = std::max(std::fabs(cx), std::fabs(cy));
-  if (larger < 30.0f)
+  // swallows is taken up once it is the larger. The stick's components are in FIXED_ONEs too
+  // (|dx * mag| < 2^29 * 2^23), divisions truncate toward zero.
+  const s64 mag = std::clamp(100 * d / 3, 30 * FIXED_ONE, 100 * FIXED_ONE);
+  s64 cx = dx * mag / d, cy = dy * mag / d;
+  const s64 larger = std::max(cx < 0 ? -cx : cx, cy < 0 ? -cy : cy);
+  if (larger > 0 && larger < 30 * FIXED_ONE)
   {
-    cx *= 30.0f / larger;
-    cy *= 30.0f / larger;
+    cx = cx * (30 * FIXED_ONE) / larger;
+    cy = cy * (30 * FIXED_ONE) / larger;
   }
-  const auto axis = [](float c, u8 centre) {
-    return static_cast<u8>(std::clamp(static_cast<int>(std::lround(centre + c)), 1, 255));
+  // centre + c rounded half up (centre + c is above 0, so as lround does): an arithmetic shift is
+  // floor.
+  const auto axis = [](s64 c, u8 centre) {
+    const s64 v = (static_cast<s64>(centre) * FIXED_ONE + c + FIXED_ONE / 2) >> FIXED_BITS;
+    return static_cast<u8>(std::clamp<s64>(v, 1, 255));
   };
   return {axis(cx, GCPadStatus::MAIN_STICK_CENTER_X), axis(cy, GCPadStatus::MAIN_STICK_CENTER_Y)};
+}
+
+bool HandStill(float x, float y, float prev_x, float prev_y)
+{
+  const std::optional<s64> fx = ToFixed(x), fy = ToFixed(y), px = ToFixed(prev_x),
+                           py = ToFixed(prev_y);
+  if (!fx || !fy || !px || !py)
+    return false;
+  // Under 0.05: 20 * |d| under one unit.
+  const auto under = [](s64 d) { return 20 * (d < 0 ? -d : d) < FIXED_ONE; };
+  return under(*fx - *px) && under(*fy - *py);
 }
 
 Masks Gate(const View& v, const State& s)
@@ -403,8 +475,7 @@ Masks Gate(const View& v, const State& s)
         // all but stopped (since the last frame began: the character it reads lags the hand by a
         // frame, so a hand still moving can put the token on the next one). With the stick let go
         // Brawl's hand still creeps, about 0.03 a frame, which is fine.
-        const bool still = std::fabs(p.hand_x - v.hand2_prev_x) < 0.05f &&
-                           std::fabs(p.hand_y - v.hand2_prev_y) < 0.05f;
+        const bool still = HandStill(p.hand_x, p.hand_y, v.hand2_prev_x, v.hand2_prev_y);
         two.press = edge && still ? PAD_BUTTON_A : 0;
       }
       else

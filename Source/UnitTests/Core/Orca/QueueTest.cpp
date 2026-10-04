@@ -4,10 +4,14 @@
 // The queue's character select (Core/Orca/UX/Queue.h): ready, unready, the ready timer and its
 // timeouts, game 1's locks, the joiner's pick steered in, the skip's hold, the raw latch.
 
+#include <algorithm>
 #include <array>
+#include <bit>
 #include <cmath>
+#include <limits>
 #include <map>
 #include <optional>
+#include <random>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -532,6 +536,174 @@ TEST(OrcaQueue, SteeringAimsAtThePick)
   const auto [dx, dy] = SteerToward(-22.22f, 1.49f, -22.5f, 1.78f);
   EXPECT_LE(std::min(dx - CX, dy - CY), -1);
   EXPECT_TRUE(dx <= CX - 29 || dy >= CY + 29) << int(dx) << " " << int(dy);
+}
+
+TEST(OrcaQueue, FixedPointIsTheFloatsValueTruncated)
+{
+  // Read from the bits alone; on this host, v * 65536 is exact and the cast truncates, so the two
+  // must agree everywhere ToFixed gives a place.
+  const auto reference = [](float v) -> std::optional<s64> {
+    if (!std::isfinite(v) || !(std::fabs(v) < 4096.0f))
+      return std::nullopt;
+    return static_cast<s64>(v * 65536.0f);
+  };
+  const float edges[] = {0.0f,
+                         -0.0f,
+                         1.0f,
+                         -1.0f,
+                         0.5f,
+                         -7.5f,
+                         14.23f,
+                         1.0f / 65536,
+                         -1.0f / 65536,
+                         1.0f / 131072,
+                         std::numeric_limits<float>::denorm_min(),
+                         -std::numeric_limits<float>::min(),
+                         4095.9998f,
+                         -4095.9998f,
+                         4096.0f,
+                         -4096.0f,
+                         1e30f,
+                         std::numeric_limits<float>::max(),
+                         std::numeric_limits<float>::infinity(),
+                         -std::numeric_limits<float>::infinity(),
+                         std::numeric_limits<float>::quiet_NaN(),
+                         std::bit_cast<float>(0xFFC00001u)};
+  for (const float v : edges)
+    EXPECT_EQ(ToFixed(v), reference(v)) << v;
+  EXPECT_EQ(ToFixed(-7.5f), -7 * FIXED_ONE - FIXED_ONE / 2);
+  EXPECT_EQ(ToFixed(1.0f / 131072), 0);
+  EXPECT_EQ(ToFixed(-1.0f / 65536), -1);
+  std::mt19937 rng(11);
+  for (int i = 0; i < 1000000; ++i)
+  {
+    const float v = std::bit_cast<float>(static_cast<u32>(rng()));
+    ASSERT_EQ(ToFixed(v), reference(v)) << std::bit_cast<u32>(v);
+  }
+}
+
+TEST(OrcaQueue, IntSqrtIsExact)
+{
+  const auto check = [](u64 n) {
+    const u64 r = IntSqrt(n);
+    EXPECT_LE(r * r, n) << n;
+    EXPECT_GT((r + 1) * (r + 1), n) << n;
+  };
+  for (u64 n = 0; n < 5000; ++n)
+    check(n);
+  for (u64 k : {u64{65535}, u64{65536}, u64{1} << 29, (u64{1} << 30) - 1, u64{3037000499}})
+  {
+    check(k * k - 1);
+    check(k * k);
+    check(k * k + 1);
+  }
+  std::mt19937_64 rng(5);
+  for (int i = 0; i < 200000; ++i)
+    check(rng() >> 2);  // under 2^62: (r + 1)^2 can't overflow
+}
+
+TEST(OrcaQueue, SteeringIsTheSameOnEveryHost)
+{
+  // Golden sticks: a Mac and a PC must both give exactly these (integer arithmetic only). The last
+  // rows include (hand, pick) pairs where the old float version gave a Mac (Apple clang fused
+  // dx * dx + dy * dy into one FMA) and a PC (MSVC, two products and a sum) sticks a unit apart.
+  struct Row
+  {
+    float x, y, tx, ty;
+    int sx, sy;
+  };
+  const Row rows[] = {
+      // Brawl's joiner after the settle, the room's real flows' picks, near and nearer.
+      {-10.0f, -20.0f, 8.0f, 6.0f, 185, 210},
+      {0.0f, -19.8f, -7.5f, 14.23f, 106, 226},
+      {-7.0f, 13.5f, -7.5f, 14.23f, 107, 158},
+      {-7.4f, 14.1f, -7.5f, 14.23f, 105, 158},
+      {-7.45f, 14.2f, -7.5f, 14.23f, 128, 128},  // within 0.1: centred
+      {-23.4f, -19.3f, -7.4f, 7.7f, 179, 214},   // Project+
+      {-6.9f, 7.2f, -7.4f, 7.7f, 98, 158},
+      {-22.22f, 1.49f, -22.5f, 1.78f, 99, 158},  // the larger component taken up to 30
+      {10.0f, 0.0f, 0.0f, 0.0f, 28, 128},
+      {0.0f, 0.0f, 0.0f, -1.0f, 128, 95},
+      {1.0f, 1.0f, 1.05f, 1.05f, 128, 128},
+      {29.5f, -19.5f, -29.5f, 19.5f, 45, 183},
+      {3.0f, 4.0f, 3.6f, 4.8f, 151, 158},  // exactly 150.5: half rounds up
+      // The old float version, Mac (fused) / PC: 41 177 / 41 178, 52 193 / 52 194, 226 111 /
+      // 227 111, 29 138 / 28 138, 227 138 / 228 138.
+      {20.1365986f, 11.0321474f, 17.4719582f, 12.5501671f, 41, 178},
+      {-8.26101685f, -3.44133377f, -27.370079f, 13.1229248f, 52, 194},
+      {-4.39935303f, 15.3992043f, 11.6091461f, 12.5947876f, 227, 111},
+      {6.56852341f, -13.0638084f, -1.84294319f, -12.2194958f, 28, 138},
+      {-28.3290997f, 5.4784584f, -19.0617294f, 6.40869331f, 227, 138},
+  };
+  for (const Row& r : rows)
+  {
+    const auto [sx, sy] = SteerToward(r.x, r.y, r.tx, r.ty);
+    EXPECT_EQ(sx, r.sx) << r.x << ", " << r.y << " -> " << r.tx << ", " << r.ty;
+    EXPECT_EQ(sy, r.sy) << r.x << ", " << r.y << " -> " << r.tx << ", " << r.ty;
+  }
+  // No place (a NaN, an infinity, far off the screen): centred.
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  const float inf = std::numeric_limits<float>::infinity();
+  for (const auto& [x, y] : {std::pair{nan, 0.0f}, std::pair{0.0f, inf}, std::pair{5000.0f, 0.0f}})
+  {
+    EXPECT_EQ(SteerToward(x, y, 8.0f, 6.0f), std::make_pair(u8{CX}, u8{CY})) << x << " " << y;
+    EXPECT_EQ(SteerToward(8.0f, 6.0f, x, y), std::make_pair(u8{CX}, u8{CY})) << x << " " << y;
+  }
+}
+
+TEST(OrcaQueue, SteeringFollowsTheFloatFormula)
+{
+  // The same steering as the float version (worked out here in double precision): over the
+  // character select, every stick within a unit of it (only where the exact value sits on a half),
+  // pointing the same way, and its larger component past the dead zone.
+  const auto reference = [](double x, double y, double tx, double ty) {
+    const double dx = tx - x, dy = ty - y;
+    const double d = std::sqrt(dx * dx + dy * dy);
+    if (d < 0.1)
+      return std::pair<int, int>{CX, CY};
+    const double mag = std::clamp(100.0 * d / 3.0, 30.0, 100.0);
+    double cx = dx / d * mag, cy = dy / d * mag;
+    const double larger = std::max(std::fabs(cx), std::fabs(cy));
+    if (larger < 30.0)
+    {
+      cx *= 30.0 / larger;
+      cy *= 30.0 / larger;
+    }
+    return std::pair<int, int>{static_cast<int>(std::lround(CX + cx)),
+                               static_cast<int>(std::lround(CY + cy))};
+  };
+  std::mt19937 rng(7);
+  std::uniform_real_distribution<float> across(-30, 30), down(-20, 20), near(-3, 3);
+  int same = 0;
+  constexpr int N = 200000;
+  for (int i = 0; i < N; ++i)
+  {
+    const float tx = across(rng), ty = down(rng);
+    // Half anywhere, half within 3 units (where the steering spends its last frames).
+    const float x = (i & 1) ? across(rng) : tx + near(rng);
+    const float y = (i & 1) ? down(rng) : ty + near(rng);
+    const auto [sx, sy] = SteerToward(x, y, tx, ty);
+    const auto [rx, ry] = reference(x, y, tx, ty);
+    ASSERT_LE(std::abs(sx - rx), 1) << x << ", " << y << " -> " << tx << ", " << ty;
+    ASSERT_LE(std::abs(sy - ry), 1) << x << ", " << y << " -> " << tx << ", " << ty;
+    same += sx == rx && sy == ry;
+    if (sx == CX && sy == CY)
+      continue;
+    // Never away from the pick, and the larger component past the dead zone.
+    EXPECT_GE((sx - CX) * (tx - x), 0.0f);
+    EXPECT_GE((sy - CY) * (ty - y), 0.0f);
+    EXPECT_GE(std::max(std::abs(sx - CX), std::abs(sy - CY)), 30);
+  }
+  EXPECT_GT(same, N - N / 1000);
+}
+
+TEST(OrcaQueue, TheHandIsStillUnderAFrameOfCreep)
+{
+  EXPECT_TRUE(HandStill(7.5f, 6.2f, 7.47f, 6.23f));
+  EXPECT_TRUE(HandStill(-7.5f, 14.23f, -7.46f, 14.27f));
+  EXPECT_FALSE(HandStill(7.5f, 6.2f, 7.1f, 6.2f));
+  EXPECT_FALSE(HandStill(7.5f, 6.2f, 7.5f, 6.26f));
+  EXPECT_FALSE(HandStill(7.5f, std::numeric_limits<float>::quiet_NaN(), 7.5f, 6.2f));
 }
 
 TEST(OrcaQueue, HoldingZSkipsOnce)
