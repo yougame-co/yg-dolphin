@@ -314,20 +314,24 @@ std::pair<u8, u8> SteerToward(float x, float y, float tx, float ty)
 {
   const float dx = tx - x, dy = ty - y;
   const float d = std::sqrt(dx * dx + dy * dy);
-  if (!std::isfinite(d) || d < 0.3f)
+  if (!std::isfinite(d) || d < 0.1f)
     return {GCPadStatus::MAIN_STICK_CENTER_X, GCPadStatus::MAIN_STICK_CENTER_Y};
-  // Full tilt (the hand's 0.83 or 1.0 a frame) from 6 units out, slower nearer; a component that
-  // moves at all is at least past the game's dead zone.
-  const float mag = d >= 6.0f ? 100.0f : std::max(30.0f, 100.0f * d / 6.0f);
-  const auto axis = [&](float delta, u8 centre) {
-    float c = delta / d * mag;
-    if (std::fabs(delta) > 0.3f && std::fabs(c) < 30.0f)
-      c = delta > 0 ? 30.0f : -30.0f;
-    if (std::fabs(delta) <= 0.3f)
-      c = 0;
+  // Full tilt (the hand's 0.83 or 1.0 a frame) from 3 units out, slower nearer. The larger
+  // component is at least 30, past the game's dead zone (30 moves Brawl's hand about 0.06 a frame,
+  // fine enough to stop on a spot), so the hand always closes in; a smaller one the dead zone
+  // swallows is taken up once it is the larger.
+  const float mag = std::clamp(100.0f * d / 3.0f, 30.0f, 100.0f);
+  float cx = dx / d * mag, cy = dy / d * mag;
+  const float larger = std::max(std::fabs(cx), std::fabs(cy));
+  if (larger < 30.0f)
+  {
+    cx *= 30.0f / larger;
+    cy *= 30.0f / larger;
+  }
+  const auto axis = [](float c, u8 centre) {
     return static_cast<u8>(std::clamp(static_cast<int>(std::lround(centre + c)), 1, 255));
   };
-  return {axis(dx, GCPadStatus::MAIN_STICK_CENTER_X), axis(dy, GCPadStatus::MAIN_STICK_CENTER_Y)};
+  return {axis(cx, GCPadStatus::MAIN_STICK_CENTER_X), axis(cy, GCPadStatus::MAIN_STICK_CENTER_Y)};
 }
 
 Masks Gate(const View& v, const State& s)
@@ -561,9 +565,24 @@ struct Local
   bool printed_ready = false;
   Identity printed;
   SkipHold skip;
-  std::map<int, std::pair<float, float>> holding;  // character -> the hand's last place over it
   std::array<bool, 2> was_placed{};
-  std::array<std::pair<float, float>, 2> last_holding{};
+  // Each port's hand while it holds its token over one character: that character, where the hand
+  // first read it and where it last did. The pick's place is the middle of the two, inside the
+  // character's square (the hand's own place can sit on its edge, and the character read lags the
+  // hand by a frame).
+  struct Hover
+  {
+    int character = -1;
+    std::pair<float, float> first{}, last{};
+    std::pair<float, float> Middle() const
+    {
+      return {(first.first + last.first) / 2, (first.second + last.second) / 2};
+    }
+  };
+  std::array<Hover, 2> hover{};
+  // The place the solo character select's pick went down at (its hover's middle).
+  std::pair<float, float> pick_place{};
+  int pick_place_character = -1;
 };
 Local& L()
 {
@@ -613,6 +632,12 @@ std::string NameFor(const std::vector<Events::PortInfo>& ports, int port, int* r
       return p.name;
   }
   return fmt::format("Player {}", port + 1);
+}
+
+// The queue's own character select, where the player's pick (and its place) is taken.
+bool solo_css_for_pick(const View& v)
+{
+  return v.queue2 && v.solo && v.css;
 }
 
 void Lines(const View& v, const State& s, const std::vector<Events::PortInfo>& ports, int local)
@@ -840,6 +865,18 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
 
   if (resimulating)
     return;
+  // While port 2's pick is being put in: where its hand is, every 10th frame (the log).
+  if (after.pick_set && !(after.locked & 2) && after.steer_start != 0 && after.steer % 10 == 0 &&
+      after.steer <= STEER_LIMIT_FRAMES)
+  {
+    const Rollback::InputGate::Masks g = Gate(v, after);
+    const CssPort& two = v.ports[1];
+    NOTICE_LOG_FMT(ROLLBACK, "Queue: frame {}: steering port 2 ({} frames): hand {} at {:.2f}, "
+                   "{:.2f} (was {:.2f}, {:.2f}) over {:#x}{}, stick {} {}, press {:#x}",
+                   frame, after.steer, two.hand_target, two.hand_x, two.hand_y, v.hand2_prev_x,
+                   v.hand2_prev_y, two.character, two.placed ? " (down)" : "", g[1].steer_x,
+                   g[1].steer_y, g[1].press);
+  }
   int local = 0;
   for (const Events::PortInfo& p : ports)
   {
@@ -851,14 +888,29 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
   for (int p = 0; p < 2 && v.queue2 && v.css; ++p)
   {
     const CssPort& port = v.ports[p];
-    if (!port.placed && port.hand_target == Rules::CSS_HAND_GRID_HOLDING)
-      l.last_holding[p] = {port.hand_x, port.hand_y};
+    Local::Hover& hover = l.hover[p];
+    if (!port.placed && port.hand_target == Rules::CSS_HAND_GRID_HOLDING &&
+        port.character != NO_CHARACTER)
+    {
+      if (hover.character != port.character)
+      {
+        hover.character = port.character;
+        hover.first = {port.hand_x, port.hand_y};
+      }
+      hover.last = {port.hand_x, port.hand_y};
+    }
     if (port.placed && !l.was_placed[p])
     {
+      const auto middle = hover.character == port.character ? hover.Middle() : hover.last;
       NOTICE_LOG_FMT(ROLLBACK, "Queue: frame {}: port {} put its token on character {:#x} costume "
-                     "{} (the hand held it at {:.2f}, {:.2f})",
-                     frame, p + 1, port.character, port.costume, l.last_holding[p].first,
-                     l.last_holding[p].second);
+                     "{} (the hand held it at {:.2f}, {:.2f}; over it from {:.2f}, {:.2f})",
+                     frame, p + 1, port.character, port.costume, hover.last.first,
+                     hover.last.second, hover.first.first, hover.first.second);
+      if (p == 0 && solo_css_for_pick(v))
+      {
+        l.pick_place = middle;
+        l.pick_place_character = port.character;
+      }
     }
     l.was_placed[p] = port.placed;
   }
@@ -872,21 +924,16 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
   if (solo_css && alone)
   {
     const CssPort& own = v.ports[0];
-    // Where the hand held the token over each character, and so where it put it down.
-    if (!own.placed && own.hand_target == Rules::CSS_HAND_GRID_HOLDING &&
-        own.character != NO_CHARACTER)
-    {
-      l.holding[own.character] = {own.hand_x, own.hand_y};
-    }
     const bool ready = after.ready & 1;
     s_solo_ready = ready;
     Identity pick;
     pick.character = own.placed ? own.character : -1;
     pick.costume = own.costume;
-    if (const auto it = l.holding.find(own.character); own.placed && it != l.holding.end())
+    // Where the hand put it down (the middle of its way over that character).
+    if (own.placed && l.pick_place_character == own.character)
     {
-      pick.x = it->second.first;
-      pick.y = it->second.second;
+      pick.x = l.pick_place.first;
+      pick.y = l.pick_place.second;
     }
     if (ready && (!l.printed_ready || l.printed.character != pick.character ||
                   l.printed.costume != pick.costume))

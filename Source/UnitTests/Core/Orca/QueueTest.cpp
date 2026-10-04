@@ -445,7 +445,7 @@ TEST(OrcaQueue, PortOnesColourIsAnyColour)
 
 TEST(OrcaQueue, SteeringAimsAtThePick)
 {
-  const auto [cx, cy] = SteerToward(1, 1, 1.1f, 1.1f);
+  const auto [cx, cy] = SteerToward(1, 1, 1.05f, 1.05f);
   EXPECT_EQ(cx, CX);
   EXPECT_EQ(cy, CY);
   const auto [lx, ly] = SteerToward(10, 0, 0, 0);
@@ -456,6 +456,10 @@ TEST(OrcaQueue, SteeringAimsAtThePick)
   EXPECT_EQ(nx, CX);
   EXPECT_LE(ny, CY - 30);
   EXPECT_GT(ny, CY - 60);
+  // A short way off on both axes still moves: the larger component past the dead zone.
+  const auto [dx, dy] = SteerToward(-22.22f, 1.49f, -22.5f, 1.78f);
+  EXPECT_LE(std::min(dx - CX, dy - CY), -1);
+  EXPECT_TRUE(dx <= CX - 29 || dy >= CY + 29) << int(dx) << " " << int(dy);
 }
 
 TEST(OrcaQueue, HoldingZSkipsOnce)
