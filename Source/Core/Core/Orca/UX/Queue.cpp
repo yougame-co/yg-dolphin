@@ -175,11 +175,15 @@ State Advance(const View& v, const State& state, int frame)
 
   if (v.solo)
   {
-    // The queue's own character select: port 1 alone.
+    // The queue's own character select: port 1 alone. The B that stops the search is swallowed
+    // until it is let go.
     const u8 ready = s.ready;
+    const bool swallowing = (s.flags & FLAG_SWALLOW_B) && (v.raw[0] & BUTTON_B);
     s = State{};
     s.ready = ready & 1;
     follow(0, true);
+    if (swallowing || ((ready & 1) && !(s.ready & 1) && (newly[0] & BUTTON_B)))
+      s.flags |= FLAG_SWALLOW_B;
     return s;
   }
 
@@ -343,7 +347,8 @@ Masks Gate(const View& v, const State& s)
   {
     // Port 1 alone: Start readies (Orca's, never the game's), Z is the room's skip, and while
     // ready B only stops the search.
-    masks[0].buttons = BUTTON_START | BUTTON_Z | ((s.ready & 1) ? BUTTON_B : 0);
+    masks[0].buttons =
+        BUTTON_START | BUTTON_Z | ((s.ready & 1) || (s.flags & FLAG_SWALLOW_B) ? BUTTON_B : 0);
     for (int port = 1; port < Rollback::InputGate::PORTS; ++port)
       masks[port] = ALL;
     return masks;

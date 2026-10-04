@@ -91,6 +91,9 @@ static_assert(REGION_END <= MatchBlock::QUEUE + MatchBlock::QUEUE_SIZE);
 
 constexpr u8 FLAG_GO = 0x01;         // both ready (or ranked's time up): Orca presses Start
 constexpr u8 FLAG_TIMED_OUT = 0x02;  // casual's time up: frozen until the pages leave the room
+// The queue's own character select: the B that stopped the search is still held, and the game
+// doesn't see it until it is let go (else the token would come back up).
+constexpr u8 FLAG_SWALLOW_B = 0x04;
 
 // 30 s to ready up, 1.5 s of Z to skip, at the game's 60 frames a second.
 constexpr int READY_FRAMES = 30 * 60;

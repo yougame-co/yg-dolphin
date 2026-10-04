@@ -189,6 +189,32 @@ TEST(OrcaQueue, OnItsOwnCharacterSelectStartReadiesAndBUnreadies)
   EXPECT_EQ(s.timer_start, 0u);
 }
 
+TEST(OrcaQueue, TheBThatStopsTheSearchIsSwallowedUntilLetGo)
+{
+  State s = Step(Press(Solo(), START), State{}, 400);
+  ASSERT_EQ(s.ready, 1);
+  // B: not ready, and B stays from the game while it is held (the token stays down).
+  s = Step(Press(Solo(), B), s, 401);
+  EXPECT_EQ(s.ready, 0);
+  EXPECT_TRUE(s.flags & FLAG_SWALLOW_B);
+  View held = Solo();
+  held.raw = {B, 0};
+  held.raw_prev = {B, 0};
+  s = Step(held, s, 402);
+  EXPECT_TRUE(s.flags & FLAG_SWALLOW_B);
+  EXPECT_TRUE(Gate(held, s)[0].buttons & B);
+  // Let go: the game has B again (held B backs out to the menus).
+  View free = Solo();
+  free.raw_prev = {B, 0};
+  s = Step(free, s, 403);
+  EXPECT_FALSE(s.flags & FLAG_SWALLOW_B);
+  EXPECT_FALSE(Gate(free, s)[0].buttons & B);
+  // A B pressed while not ready is the game's from the first frame.
+  s = Step(Press(Solo(), B), s, 404);
+  EXPECT_FALSE(s.flags & FLAG_SWALLOW_B);
+  EXPECT_FALSE(Gate(Solo(), s)[0].buttons & B);
+}
+
 TEST(OrcaQueue, ItsOwnCharacterSelectsMasks)
 {
   State s;
