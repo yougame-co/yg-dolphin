@@ -216,13 +216,18 @@ State Advance(const View& v, const State& state, int frame)
     const CssPort& two = v.ports[1];
     const bool steering_over = s.steer_start != 0 && s.steer >= STEER_LIMIT_FRAMES;
     const bool on_pick = s.pick_set && two.placed && two.character == s.pick_character;
+    // The same character as port 1 can't wear port 1's colour: the game skips it, so any colour
+    // will do then.
+    const bool colour_taken = v.ports[0].placed && v.ports[0].character == s.pick_character &&
+                              v.ports[0].costume == s.pick_costume;
     // The costume's own clock, from the first boundary the token is down on the pick.
     if (on_pick && !(s.locked & 2) && s.costume_start == 0)
       s.costume_start = now;
     const bool costume_over =
         s.costume_start != 0 && now - std::min(now, s.costume_start) >= COSTUME_LIMIT_FRAMES;
     if (two.placed && (!s.pick_set || steering_over ||
-                       (on_pick && (two.costume == s.pick_costume || costume_over))))
+                       (on_pick &&
+                        (two.costume == s.pick_costume || colour_taken || costume_over))))
     {
       s.locked |= 2;
     }
@@ -376,8 +381,10 @@ Masks Gate(const View& v, const State& s)
       }
       else if (p.hand_target == Rules::CSS_HAND_GRID_HOLDING && p.character == s.pick_character)
       {
-        // Over the pick with the token in the hand: still, and A puts it down.
-        two.press = edge ? PAD_BUTTON_A : 0;
+        // Over the pick with the token in the hand: still, and A puts it down once the hand has
+        // stopped sliding (where it stood as the last frame began).
+        const bool still = p.hand_x == v.hand2_prev_x && p.hand_y == v.hand2_prev_y;
+        two.press = edge && still ? PAD_BUTTON_A : 0;
       }
       else
       {
@@ -414,6 +421,8 @@ View ReadView(const GuestMemory& m, const std::vector<Events::PortInfo>& ports)
     v.raw[p] = m.Read16(RAW + 2 * static_cast<u32>(p));
     v.raw_prev[p] = m.Read16(RAW_PREV + 2 * static_cast<u32>(p));
   }
+  v.hand2_prev_x = std::bit_cast<float>(m.Read32(HAND_PREV));
+  v.hand2_prev_y = std::bit_cast<float>(m.Read32(HAND_PREV + 4));
   if (v.ranked && !v.game1)
   {
     const CharOrder::Step step = CharOrder::ReadState(m).step;
@@ -524,6 +533,10 @@ int Latch(GuestMemory& m, const std::array<std::optional<GCPadStatus>, 4>& raw)
     w.U16(RAW_PREV + 2 * p, old);
     w.U16(RAW + 2 * p, now);
   }
+  // Port 2's hand as this frame starts (the steering's A waits for it to stand still).
+  const Rules::CssHand hand = Rules::ReadCssHand(m, 1);
+  w.U32(HAND_PREV, std::bit_cast<u32>(hand.valid ? hand.x : 0.0f));
+  w.U32(HAND_PREV + 4, std::bit_cast<u32>(hand.valid ? hand.y : 0.0f));
   return w.changed;
 }
 
@@ -850,7 +863,12 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
     l.was_placed[p] = port.placed;
   }
   const bool solo_css = v.queue2 && v.solo && v.css;
-  s_on_solo_css = solo_css && alone;
+  // As the last alone boundary saw it: a boundary that isn't (the app's `host` or `join` waiting
+  // to be taken) says nothing new.
+  if (!solo_css)
+    s_on_solo_css = false;
+  else if (alone)
+    s_on_solo_css = true;
   if (solo_css && alone)
   {
     const CssPort& own = v.ports[0];

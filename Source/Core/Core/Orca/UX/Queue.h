@@ -83,7 +83,10 @@ constexpr u32 PICK = MatchBlock::QUEUE + 0x14;
 constexpr u32 STEER_START = MatchBlock::QUEUE + 0x20;
 // u32: the hook frame + 1 port 2's token went down on its pick (0: not yet): the costume's turn.
 constexpr u32 COSTUME_START = MatchBlock::QUEUE + 0x24;
-constexpr u32 REGION_END = MatchBlock::QUEUE + 0x28;
+// f32[2]: port 2's hand as the frame that just ran started (the latch's): A goes down only on a
+// hand that stands still, since the hand slides on a little after the stick lets go.
+constexpr u32 HAND_PREV = MatchBlock::QUEUE + 0x28;
+constexpr u32 REGION_END = MatchBlock::QUEUE + 0x30;
 static_assert(REGION_END <= MatchBlock::QUEUE + MatchBlock::QUEUE_SIZE);
 
 constexpr u8 FLAG_GO = 0x01;         // both ready (or ranked's time up): Orca presses Start
@@ -143,6 +146,9 @@ struct View
   std::array<CssPort, 2> ports{};
   std::array<u16, 2> raw{};
   std::array<u16, 2> raw_prev{};
+  // Port 2's hand where the frame that just ran started (the latch's HAND_PREV).
+  float hand2_prev_x = 0;
+  float hand2_prev_y = 0;
   std::optional<Identity> pick2;  // port 2's queue identity's pick, from its plug frame on
   bool operator==(const View&) const = default;
 };
@@ -200,7 +206,7 @@ State ReadState(const GuestMemory& memory);
 // Writes the region's state fields (not RAW/RAW_PREV: the latch's), only where they differ.
 int WriteState(GuestMemory& memory, const State& state);
 // The latch (InputGate::SetLatch): ports 1 and 2's raw buttons into RAW, the old RAW into RAW_PREV,
-// while the header is the queue's. Returns bytes changed.
+// and port 2's hand into HAND_PREV, while the header is the queue's. Returns bytes changed.
 int Latch(GuestMemory& memory, const std::array<std::optional<GCPadStatus>, 4>& raw);
 
 // ---- The frame hook's part (UX.cpp), after the character order ----

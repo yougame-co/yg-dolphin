@@ -353,6 +353,12 @@ TEST(OrcaQueue, ThePort2PickIsSteeredIn)
   v.ports[1].character = 0x10;
   v.ports[1].hand_x = 7.5f;
   v.ports[1].hand_y = 6.2f;
+  // Still sliding (it stood elsewhere as the last frame began): no A yet.
+  v.hand2_prev_x = 7.1f;
+  v.hand2_prev_y = 6.2f;
+  for (int f = 9002; f < 9006; ++f)
+    EXPECT_EQ(Gate(v, Step(v, s, f))[1].press, 0) << f;
+  v.hand2_prev_x = 7.5f;
   int presses = 0;
   for (int f = 9002; f < 9010; ++f)
   {
@@ -422,6 +428,19 @@ TEST(OrcaQueue, TheCostumeGivesUpAfterItsLimit)
   s = Step(v, s, 200 + COSTUME_LIMIT_FRAMES);
   EXPECT_EQ(s.locked & 2, 2);
   EXPECT_FALSE(Gate(v, s)[1].steer);
+}
+
+TEST(OrcaQueue, PortOnesColourIsAnyColour)
+{
+  // The same character as port 1 in port 1's colour: the game skips that colour, so any will do.
+  Identity pick;
+  pick.character = 0x05;
+  pick.costume = 2;
+  View v = Room();
+  v.pick2 = pick;
+  v.ports[1] = Placed(0x05, 3);
+  const State s = Step(v, State{}, 300);
+  EXPECT_EQ(s.locked & 2, 2);
 }
 
 TEST(OrcaQueue, SteeringAimsAtThePick)
