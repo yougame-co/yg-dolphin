@@ -12,8 +12,10 @@ namespace Orca::UX
 // are applied too, PPLUS32.patches; 4: the main menu's text about going online, MenuText.h; 5: the
 // menu's description box's copy of that text too; 6: a matchmade host's rules preset, Results.h;
 // 7: each player's own controls in their name tag, and the port label for a player with controls
-// and no name, NameTags.h; 8: the online rules' header and locks for queue matches, which replace
-// 6, and their input masks, OnlineRules.h): the session hashes it into the compatibility key as `ux=<n>`, so two
+// and no name, NameTags.h; 8: the online rules for queue matches (OnlineRules.h, which replace 6)
+// and the ranked set's stage, character and result flows (RankedPPlus.h, BrawlStages.h,
+// CharOrder.h, RankedSet.h), with their input masks): the session hashes it into the compatibility
+// key as `ux=<n>`, so two
 // builds that would write different bytes never meet in a room.
 constexpr int kCompatVersion = 8;
 

@@ -134,6 +134,16 @@ GCPadStatus Apply(const GCPadStatus& pad, const Mask& mask)
     out.substickX = GCPadStatus::C_STICK_CENTER_X;
     out.substickY = GCPadStatus::C_STICK_CENTER_Y;
   }
+  const u16 press = mask.press & ALL_BUTTONS;
+  out.button = static_cast<u16>(out.button | press);
+  if (press & PAD_TRIGGER_L)
+    out.triggerLeft = 0xFF;
+  if (press & PAD_TRIGGER_R)
+    out.triggerRight = 0xFF;
+  if (press & PAD_BUTTON_A)
+    out.analogA = 0xFF;
+  if (press & PAD_BUTTON_B)
+    out.analogB = 0xFF;
   return out;
 }
 
@@ -159,6 +169,7 @@ void OnBoundary(const Core::CPUThreadGuard& guard)
     for (int port = 0; port < PORTS; ++port)
     {
       masks[port].buttons |= test[port].buttons;
+      masks[port].press |= test[port].press;
       masks[port].main_stick = masks[port].main_stick || test[port].main_stick;
       masks[port].c_stick = masks[port].c_stick || test[port].c_stick;
     }

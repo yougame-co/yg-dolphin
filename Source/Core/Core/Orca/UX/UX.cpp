@@ -18,19 +18,45 @@
 #include "Core/Orca/UX/OnlineMenu.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/UX/Probe.h"
+#include "Core/Orca/UX/RankedPPlus.h"
 #include "Core/Orca/UX/RankedSet.h"
 #include "Core/Orca/UX/Results.h"
+#include "Core/Rollback/InputGate.h"
 
 namespace Orca::UX
 {
+namespace
+{
+// Adds `more`'s masks to `masks`: a button, stick or press any rule takes is taken.
+void Merge(Rollback::InputGate::Masks& masks, const Rollback::InputGate::Masks& more)
+{
+  for (int port = 0; port < Rollback::InputGate::PORTS; ++port)
+  {
+    masks[port].buttons |= more[port].buttons;
+    masks[port].press |= more[port].press;
+    masks[port].main_stick = masks[port].main_stick || more[port].main_stick;
+    masks[port].c_stick = masks[port].c_stick || more[port].c_stick;
+  }
+}
+}  // namespace
+
 void Init()
 {
   StartControllerStreamFromEnvironment();
   Orca::Events::SetLocalPadSource([](bool for_frame) { return LocalPad(for_frame); });
   Orca::Events::SetInputAgeSource([] { return GetInputAge(); });
   InitOverlay();
-  // The online rules' input masks (a queue match's locks), evaluated at every boundary.
-  Rules::Install();
+  // The input gate's one source: every rule's masks for the frame about to run, ORed (the online
+  // rules' locks, the ranked flows' turns), from memory alone.
+  Rollback::InputGate::SetSource([](const Core::CPUThreadGuard& guard) {
+    Rollback::InputGate::Masks masks{};
+    if (Rules::ProfileRuleset() == Rules::Ruleset::None)
+      return masks;
+    GuardMemory memory(guard);
+    Merge(masks, Rules::GateMasks(memory));
+    Merge(masks, RankedPPlus::Masks(memory));
+    return masks;
+  });
   // The name tags write emulated memory: the compatibility key carries their version.
   Orca::Events::SetUXCompatVersion(kCompatVersion);
   // At every frame boundary, first runs and re-runs, before the session saves anything there, with
@@ -50,6 +76,9 @@ void Init()
     RankedSet::Frame(guard, frame, resimulating);
     // Reads only: each game's result in a matchmade room, once its frames are final (Results.h).
     ReadResultsFrame(guard, frame);
+    // Project+'s ranked stage flow (RankedPPlus.h): game logic, a pure function of memory, the
+    // frame number and the synced ports, first runs and re-runs.
+    RankedPPlus::Frame(guard, frame, resimulating, ports, alone);
     ProbeFrame(guard, frame);
     // This player's own controls in its own game, for the session to carry into a game it joins or
     // hosts (reads only; only while this game is its player's alone, so never a friend's game).
@@ -113,7 +142,7 @@ void Init()
 
 void Shutdown()
 {
-  Rules::Uninstall();
+  Rollback::InputGate::SetSource({});
   Orca::Events::SetStallCallback({});
   Orca::Events::SetBoundaryCallback({});
   Orca::Events::SetFrameCallback({});

@@ -135,6 +135,9 @@ void PrioritizeThread(LatencyThread thread);
 //   ORCA_TEST_QUEUE=casual|ranked  the online rules' header (UX/OnlineRules.h) as a queue room's
 //                            host writes it, in a harness run or a dev game's room: the locks
 //                            without the queue. Set the same value in both processes.
+//   ORCA_TEST_RANKED=<0|1>   a ranked set from the first frame (UX/RankedPPlus.h): the match
+//                            block's header written on every pass, game 1's first striker port
+//                            1 (0) or 2 (1). Set the same value in both processes.
 // Not in TestOverridesActive (it can't change the game, so the key stays):
 //   ORCA_TEST_SHADER_WAIT_MS=N  the boot's wait for shaders (VideoCommon/ShaderCache.cpp,
 //                            WaitForBootCompile) gives up after N ms instead of its two limits.
@@ -169,6 +172,7 @@ std::optional<PowerPC::CPUCore> TestCpuCore();
 std::optional<int> TestShaderWaitMs();
 std::string TestGateSpec();  // ORCA_TEST_GATE in a session, else empty
 std::string TestQueueSpec();  // ORCA_TEST_QUEUE in a session, else empty
+std::string TestRankedSpec();  // ORCA_TEST_RANKED in a session, else empty
 bool TestOverridesActive();
 
 // Loads the profile for a game; nullopt and a reason when there is none, the revision differs or a

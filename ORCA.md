@@ -2044,6 +2044,98 @@ decision turning 1 at time-up, sudden death staying in `scMelee`); a harness set
 and one more game win the set 2-0, a fourth game isn't recorded), also under `YG_SYNCTEST=7`, and
 Project+'s 2-0 under `YG_SYNCTEST=7`. Not checked live: a real ledge grab count.
 
+## Ranked stage flow
+
+A ranked set is a real best of three on the game's own stage select: game 1's strikes, later
+games' strikes or bans and the loser's pick, turn by turn, with timers, and the set's score kept
+in the game's memory. Project+ first (`Core/Orca/UX/RankedPPlus.*`); Brawl reuses the same step
+machine and block on its own track.
+
+- **The step machine** (`Core/Orca/UX/RankedSteps.*`, shared by both games): pure functions of a
+  ruleset and the set so far. Stages are the ruleset's legal list, starters first, as bit masks.
+  - Game 1: the coin's port strikes 1 starter, the other strikes 2, then the coin's port picks one
+    of the last two (the same as striking one: "1-2-1, and the first striker picks from the last
+    two").
+  - Later games: the last game's winner strikes 2 (Project+) or may ban 1 (Brawl, optional), then
+    the loser picks; stages the loser already won on are out from the start (full DSR).
+  - Brawl only: the Meta Knight clause (exactly one Meta Knight: the other player picks any legal
+    stage, game 1 too) and Ice Climbers never on Final Destination. Project+'s list has neither.
+  - Timers: game 1's steps 30, 30 and 10 s, a later strike, ban or pick 30 s, each with 3 s of
+    grace (the clock shows 0:00 meanwhile). Defaults: the strikes still owed fall on the first
+    allowed stages in list order; Brawl's optional ban is none; a pick is the first allowed stage.
+- **The match block** (`Core/Orca/UX/MatchBlock.*`): 0x90 bytes at the start of FreeSpace.h's block, in the ranges the casual track reserves (header +0x00, set +0x10, steps +0x80).
+  - Header: magic `YGM1`, version, mode (none, casual, ranked), ruleset (1 Brawl Supernova 2025,
+    2 Project+ 2024), and the coin: game 1's first striker, one bit of an FNV-1a hash of the
+    room's code. The server makes the code, neither player picks it, and both games read the coin
+    from memory.
+  - Set: games counted, the score, the last winner, the stages each port won on, done and the
+    winner, the fight in progress and its stage, a record per game.
+  - Steps: the flow (idle or running on the stage select), the step, the active port, strikes made
+    in the step, the stages struck this game, the step's deadline (the frame hook's frame number),
+    and the default pick when a pick's timer ran out.
+  - Lifecycle: the host of a matchmade room writes a new header (a new set) at the first alone
+    boundary after it takes the room (`HostInPlay` -> `RequestHeader`), before any keyframe a
+    joiner loads. At an alone boundary where the game neither still hosts that room nor plays in
+    a matchmade room, the header is cleared, so a friend who drops in later meets no block.
+    Everything else is game logic: a pure, idempotent function of memory, the frame number and
+    whether ports 1 and 2 are both plugged in (the session's synced plan), first runs and re-runs
+    alike (a rollback runs the hook again on the loaded state: a second pass changes nothing).
+- **Project+** (`RankedPPlus.*`), while the block says ranked and Project+:
+  - Outside the stage select, `RSS_EXDATA` (0x8042C4E8; its first 0xA8 bytes, past which every preset Project+ ships is the same) holds the 2024 Proposed preset
+    (`pf/stage/switch/Switch03.rss`): page 0 is the 9 legal stages, hazards off. Its page-0 slots
+    give each position's stage kind through the preset's slot table (+0x104): positions 0-8 are
+    GHZ, Bowser's Castle, Frigate Husk, Dream Land, Temple of Time, Smashville, Battlefield, PS2,
+    Luigi's Mansion (kinds 0x23, 06, 0C, 2D, 09, 21, 01, 2E, 04, `pf/stage/stageslot/<kind>.asl`).
+  - On the stage select, Project+'s own Stage Striking (the hook at 0x806B586C, untouched) strikes
+    with X and draws the struck art. At each boundary the hook counts the active player's new bits
+    in `STAGE_STRIKE_TABLE` (0x8042C822, page 0's positions 0-30 at +2/+4) into the block, then
+    writes the table the block calls for: stages not in play (game 1's counterpicks, the loser's
+    won stages), the strikes so far, and every stage of pages 1-4. A change it makes is redrawn by
+    Project+'s code, which redraws the page's struck art whenever `PAGE_INDEX` (0x8042C821) isn't
+    `CURRENT_PAGE` (0x80496000): the hook sets it to 0xFF. Project+'s own check then refuses a
+    struck stage (it clears the selection).
+  - Turns: the stage select's controller field (task +0x278) is the active port, and the gate
+    masks every other port entirely. The active port keeps its stick and the step's button, X to
+    strike or A to pick; B (clears strikes, back to the characters), L and R (alternate stages,
+    and L+R+A back to the characters, which reads every port), Z (hazards), Start and Y are masked,
+    and A and X on Random (it would strike every stage outside the random set, or pick for them).
+  - A pick whose timer ran out: every other stage shown struck, the selection (+0x248) set to the
+    default, and the gate presses A for the player (`Mask::press`, new) with everything else masked.
+  - Results: a fight entered from the flow counts at its results screen (Results.h `Judge`): the
+    winner's score, the stage won on, the record. A draw or a void counts nothing (the same game
+    again). Two wins decide the set, and the stage select is free again.
+  - The overlay's top-centre lines (UI only, published from first runs): "Ranked · Game 2 · ada
+    1–0 bo", and on the stage select "bo strikes 2 stages · 0:24" or "Your turn: pick the stage
+    with A · 0:09".
+- **Compatibility:** `UX::kCompatVersion` 8.
+
+**Test knob** `ORCA_TEST_RANKED=<0|1>` (a test override): a ranked header from the first frame for
+the running game, game 1's first striker port 1 (0) or 2 (1), written on every pass. Set the same
+value in both processes. With `ORCA_UX_TEST_NAMES=ada,bo` the harness plugs in ports 1 and 2.
+
+Tests: `OrcaRanked*` and `OrcaMatchBlock*` unit tests (both rulesets' steps, DSR, the clauses, the
+timer defaults, the coin's balance; the block's round trip; Project+'s flow over a fake of its
+memory: the preset, game 1's turns, a strike on a struck stage, the fight and its result, game 2's
+winner strikes, the timers' defaults and the default pick, the set's end, an opponent who leaves,
+the overlay's lines, and every boundary applied twice).
+
+Checked 2026-10-03 on an M4 Pro, Project+ (`Tools/orca/inputs/pplus-ranked.txt`, `ORCA_PROFILE=PPLUS32
+ORCA_TEST_RANKED=1 ORCA_UX_TEST_NAMES=ada,bo`):
+- `YG_SYNCTEST=7 YG_SYNCTEST_FROM=170` over the whole set, frames 170-8656: 57,561 re-run frames
+  checked to frame 8400, **0 RAM mismatches**. It covers the character select, game 1's stage
+  select (port 2's X strike on Battlefield through the cursor, port 1's two strikes and port 2's
+  pick by their timers, the pick made with the gate's pressed A on Luigi's Mansion), the fight, the
+  results counted into the set, game 2's stage select (the winner's two X strikes, Battlefield and
+  Bowser's Castle, then the loser's pick by its timer, PS2), the second fight and the 2-0 set.
+- Without the sync test, the same set with a probe that set the selection (+0x248) before each X
+  and A: every strike and both picks through the players' presses, the table and the struck art
+  as the block said (page 0 bits 0x0F for the counterpicks at game 1's start, then 0x2F, 0x6F,
+  0x7F), Project+'s own check refusing a struck stage under the cursor (Bowser's Castle), and the
+  stage the fight loaded the one picked.
+- The probe tool's one-shot writes don't repeat on a sync test's re-runs: a rules write from a
+  probe at the character select shows as RAM mismatches at that frame, so the sync test runs
+  without one.
+
 ## Embedding
 
 The YouGame desktop app shows Orca inside its own window, at the page's player box, the way it runs
