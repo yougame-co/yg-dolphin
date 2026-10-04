@@ -8,7 +8,7 @@
 # With Anyone > Casual, B out of the character select (Orca's back out), Ranked, two whole matches
 # with their results, B out, the top page, Group > Brawl, B out.
 #   observe  watches every word of the block and every 64th byte of the caves at every frame
-#            boundary, and dumps MEM1 at 16 points (17 in Project+; MEM2 at 5);
+#            boundary, and dumps MEM1 at 16 points and MEM2 at 5 (6 in Project+);
 #   trap     the same, after filling the block and every cave with illegal instructions (primary
 #            opcode 0, each word different) 5 frames into the first scene, once sora_scene is
 #            loaded; with a drop-in keyframe test (YG_KEYFRAME_TEST) in the first match.
@@ -71,18 +71,17 @@ def sentinel(address):
 # ---- The loop ----
 
 if PPLUS:
-    # Project+ boots to its character select; holding B goes to the menu's VERSUS page, B again to
-    # the top page (online-menu.py). Its first character select is the boot's.
-    CSS = ["scSelctCharacter:3", "scSelctCharacter:4", "scSelctCharacter:5", "scSelctCharacter:6"]
-    BOOT = ["285 330 1 B", "@muMenuMain:1 120 124 1 B"]
-    FIRST = 200
+    # Project+ boots to its main menu's top page, as Brawl (PPLUS32.patches).
+    CSS = ["scSelctCharacter:2", "scSelctCharacter:3", "scSelctCharacter:4", "scSelctCharacter:5"]
+    BOOT = []
+    FIRST = 120
     PICK = [(60, 1, "A"), (70, 2, "A"), (140, 1, "A"), (150, 2, "A"), (200, 1, "START")]
     UP_FRAMES = (90, 116)
     SSS1 = ["@scSelStage:1 40 44 1 SY=255", "@scSelStage:1 60 63 1 A"]
     FUZZ_FROM = 300
     EXIT_AFTER = 13000
     KEYFRAME_AT = 4000
-    CSS_POINTS = ["scSelctCharacter:1 60 css-boot mem2", "scSelctCharacter:2 100 css-casual"]
+    CSS_POINTS = ["scSelctCharacter:1 100 css-casual mem2"]
 else:
     CSS = ["scSelctCharacter:2", "scSelctCharacter:3", "scSelctCharacter:4", "scSelctCharacter:5"]
     BOOT = ["@scStrap mash 30 99999 1 40 A", "@scBoot mash 30 99999 1 40 A",
@@ -96,7 +95,7 @@ else:
     EXIT_AFTER = 22000
     KEYFRAME_AT = 5000
     CSS_POINTS = ["scSelctCharacter:1 100 css-casual"]
-CASUAL_CSS = "scSelctCharacter:2" if PPLUS else "scSelctCharacter:1"
+CASUAL_CSS = "scSelctCharacter:1"
 RANKED_CSS, NEXT_CSS, OUT_CSS, VERSUS_CSS = CSS
 
 

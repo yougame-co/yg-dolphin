@@ -76,6 +76,9 @@ void Init()
     WriteMenuText(guard);
     // Reads only: the app hears what the player picked in the game's Online menu.
     ReadOnlineMenu(guard, resimulating, alone);
+    // A friend who plugged in while the host is in the menus: both go to With Friends' character
+    // select (game logic, a pure function of memory and the synced ports, first runs and re-runs).
+    FriendsMove::Frame(guard, frame, resimulating, ports);
     // A ranked queue match's set, followed in the match block (a pure function of memory).
     RankedSet::Frame(guard, frame, resimulating);
     // Reads only: each game's result in a matchmade room, once its frames are final (Results.h).

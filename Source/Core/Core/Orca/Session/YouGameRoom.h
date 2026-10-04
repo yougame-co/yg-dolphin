@@ -85,6 +85,9 @@ struct PeerEvent
     Keyframe,
     // The host's port names changed (a friend was taken in): `keyframe.names` only.
     Names,
+    // The host holds this joiner's join (its game is in a single-player mode, UX/OnlineMenu.h
+    // SequenceHoldsDropIn) or no longer does: `holding`. Sent to a joiner that has no keyframe yet.
+    Hold,
   };
   Kind kind = Kind::Arrived;
   int seat = -1;
@@ -96,6 +99,8 @@ struct PeerEvent
   KeyframeInfo keyframe;
   // Left: why it said it was going ("desync" or "stalled", from its bye; empty: it just left).
   std::string reason;
+  // Hold: whether the host holds the join now.
+  bool holding = false;
 };
 
 // How the other players' inputs reach this one (DirectLink.h): the worst of them.
@@ -167,6 +172,9 @@ public:
   // Host: tell `seat`'s player it was unplugged and why ("desync", "stalled", "network"), so its
   // own report says the same. Its room ends with that code.
   void DropPeer(int seat, const std::string& reason);
+  // Host: whether it holds every join that has no keyframe yet (its game is in a single-player
+  // mode). Joiners hear it at once and again every second while it holds, and once when it ends.
+  void HoldJoins(bool holding);
   // A ticket for this room (with `fresh`, a newly minted one: the store refused the last), and the
   // keyframe store's address for it (".../api/orca/keyframes/<room>"). Any thread; minting blocks
   // on an HTTP request.

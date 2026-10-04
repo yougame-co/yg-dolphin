@@ -10,6 +10,8 @@
 # winner) strikes Battlefield and Bowser's Castle with X; port 2's pick runs out (PS2). Port 1 wins
 # again: 2-0, and the third stage select is free.
 @scBoot mash 30 99999 1 40 A
+# Orca boots Project+ to its main menu (PPLUS32.patches): A through VERSUS to its character select.
+@muMenuMain:1 mash 30 99999 1 40 A
 @scSelctCharacter:1 60 63 1 A
 @scSelctCharacter:1 70 73 2 A
 @scSelctCharacter:1 90 116 1 SY=255

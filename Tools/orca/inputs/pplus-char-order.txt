@@ -2,6 +2,8 @@
 # pplus:2:1 (port 1 picks first) or pplus:2:2 (port 2 first). Port 2 joins and puts its token on a
 # character; port 1 joins later, which starts the order with port 1's token in its hand.
 @scBoot mash 30 99999 1 40 A
+# Orca boots Project+ to its main menu (PPLUS32.patches): A through VERSUS to its character select.
+@muMenuMain:1 mash 30 99999 1 40 A
 @scSelctCharacter:1 60 63 2 A
 @scSelctCharacter:1 90 116 2 SY=255
 @scSelctCharacter:1 150 153 2 A

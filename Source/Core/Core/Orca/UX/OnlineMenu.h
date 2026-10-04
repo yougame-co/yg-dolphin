@@ -7,8 +7,10 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "Common/CommonTypes.h"
+#include "Core/Orca/Session/Events.h"
 
 namespace Core
 {
@@ -118,4 +120,91 @@ private:
 // The frame hook's part: reads the menu and prints "orca menu ..." (Orca::Status::Menu). Reads
 // emulated memory only.
 void ReadOnlineMenu(const Core::CPUThreadGuard& guard, bool resimulating, bool alone);
+
+// ---- Friends drop in from the menus (ORCA.md "Online menu", "Drop-in") ----
+//
+// Both games boot to the main menu (Data/Sys/Orca/<profile>.patches). A friend who plugs in while
+// the host is in the menus goes with the host to With Friends' character select, the place friends
+// play, as if the host had picked With Friends > FIGHT!; one who arrives while the host plays a
+// single-player mode waits until the host is back (the session holds the join: Rollback/
+// OnlineMatch.cpp, `orca state friend-holding` / `friend-waiting`).
+//
+// The scene manager (gfSceneManager, 0x805A0060): +0x4 the scene, +0x10 the sequence (each with its
+// name at +0), +0x284 the exit code a scene leaves with, +0x288 its process step. Every menu exit
+// in the game (muMenuMain's included) is those two stores: the code, then step 2, after which the
+// manager ends the scene and the sequence's setNext reads the code (sqMenuMain's sends 24-27 to
+// sqVsMelee through Orca's block, ORCA.md "Online menu").
+
+// The current sequence's name ("sqMenuMain", "sqVsMelee", ...; "" when there is none to read).
+std::string ReadSequenceName(const GuestMemory& memory);
+
+// A sequence a friend never drops into: the single-player modes (Classic, All-Star, Boss Battles,
+// Events, Training, Home-Run Contest, Target Smash, Multi-Man Brawl, the Subspace Emissary) and
+// the Vault's screens. Everything else takes a friend in (the menus, Versus and its relatives, the
+// boot); a friend who plugged in during the boot goes to With Friends once the main menu runs.
+bool SequenceHoldsDropIn(std::string_view sequence);
+
+// The host's game, as its last first-run boundary read it: in a sequence that holds a drop-in.
+// Any thread (the session reads it at the next boundary, after the frame hook).
+bool DropInHeld();
+
+namespace FriendsMove
+{
+// The manager's process step while a scene runs, and the step that ends it (the menu's own exit).
+constexpr u32 STEP_RUNNING = 1;
+constexpr u32 STEP_EXIT = 2;
+// With Friends > FIGHT! (the friend list's Brawl): sqVsMelee, and B from its character select comes
+// back to With Friends with FIGHT! selected.
+constexpr u32 EXIT_WITH_FRIENDS = 25;
+// No friend plugs in before this frame: a host's keyframe is never of its first 300 frames
+// (Rollback/OnlineMatch.cpp FIRST_KEYFRAME_FRAME), and a friend plugs in after replaying from one.
+constexpr int FIRST_FRIEND_FRAME = 300;
+// Frames the main menu runs with a friend waiting before both go: the friend's game shows the
+// host's menu for a moment first, and a menu that has just started has drawn its pages.
+constexpr u32 MENU_SETTLE_FRAMES = 30;
+
+// What one boundary reads.
+struct Inputs
+{
+  // The block's memory is there (MatchBlock::Present and the friends bytes mapped).
+  bool present = false;
+  // The ports plugged in at this frame (bit n: port n+1).
+  u8 plugged = 0;
+  // A queue room's header (casual or ranked): its opponent plugs in on the character select, and a
+  // queue match never goes to With Friends.
+  bool queue = false;
+  std::string scene;
+  std::string sequence;
+  u32 step = 0;
+  u32 exit_code = 0;
+  int frame = 0;
+  // The block's friends bytes (MatchBlock FRIENDS_*).
+  u8 tag = 0;
+  u8 seen = 0;
+  u8 pending = 0;
+  u32 menu_since = 0;
+};
+
+// What that boundary writes.
+struct Outputs
+{
+  // Write the friends bytes (with the tag): false while nothing was kept and no friend is plugged in
+  // (solo play never writes them).
+  bool keep = false;
+  u8 seen = 0;
+  u8 pending = 0;
+  u32 menu_since = 0;
+  // Leave the main menu for With Friends: the exit code and STEP_EXIT, as the menu's own exit.
+  bool move = false;
+};
+
+// Game logic, a pure function of what it reads: run again at the same boundary on what it wrote, it
+// writes the same (a rollback's re-run from the snapshot saved there).
+Outputs Decide(const Inputs& in);
+
+// The frame hook's part, first runs and re-runs alike, Brawl rev 2 and Project+ only. Returns
+// whether the host left the main menu for With Friends at this boundary.
+bool Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
+           const std::vector<Events::PortInfo>& ports);
+}  // namespace FriendsMove
 }  // namespace Orca::UX

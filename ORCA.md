@@ -94,8 +94,9 @@ address. Its `Title` (Project+) names the game in the window title instead of th
 from then on, as guarded groups only (code groups, and the one data group that starts the rules'
 items at None once, as `RSBE01.patches` does for Brawl): `PPLUS32.patches` skips Project+'s "Create
 save file for Project+?" prompt the way `RSBE01.patches` skips Brawl's (Project+ loads Brawl's boot
-module unchanged), so a session with no save goes straight to character select at frame 150 and
-writes no save; answering Yes cost 13 s of save writing (character select at frame ~925). None of a
+module unchanged), so a session with no save writes none (answering Yes cost 13 s of save
+writing), and its codeset's "Boot Directly to CSS" takes the title's path instead: the session
+reaches the main menu at frame 197 ("Boot and friends from the menus"). None of a
 mod's files are in this repository; the player's machine downloads the official release. Example
 (Project+'s `Project+ Netplay Launcher.dol` and `sd.raw` side by side in `<dir>`):
 
@@ -1592,8 +1593,7 @@ the matched room in "Matchmaking" below):
   the way the game comes back from its own online modes): With Friends on FIGHT! (or whichever of
   its buttons), With Anyone on Casual or Ranked; one more B is the ONLINE page. It holds after
   matches too: the results come back to the same character select, and B from there goes back to
-  the same page. From Group > Brawl (Project+'s VERSUS, and its boot character select) B still
-  opens Group.
+  the same page. From Group > Brawl (Project+'s VERSUS) B still opens Group.
 
 ### How (`Data/Sys/Orca/RSBE01.patches`, `PPLUS32.patches`; `Core/Orca/UX/MenuText.h`, `OnlineMenu.h`)
 
@@ -1675,13 +1675,120 @@ The lines print once per pick, only while the player is alone, and never carry s
 Tests: `OrcaOnlineMenu*` unit tests (the gates, the textures and their precedence, the text rewrite,
 the reader's edges and `AloneAt`); `Tools/orca/online-menu.py <nogui> <disc> [--pplus <dol>]
 [--video Metal --shots <dir> [--scale 4]]` (every way through the menu, solo, offline);
-`Tools/orca/online-menu-dropin.py` (a friend drops into a host on the ONLINE page; the pick that
-follows is both players', and nothing prints; with `--invite`, a pick within 30 s of an invite's
+`Tools/orca/online-menu-dropin.py` (a friend drops into a host on the ONLINE page and both go to
+With Friends' character select at the same frame, nothing printed; with `--hold`, the join is held
+first, "Boot and friends from the menus" below; with `--invite`, a pick within 30 s of an invite's
 stored keyframe prints nothing and one after it prints). online-menu.py's `back-*` scenarios hold B
 out of the character select and press A on the page that comes back: the same pick (exit code) again
 proves the page and the cursor (`back-friends-N`, `back-casual`, `back-ranked`), `back-chain` walks
 B to ONLINE and the top page and picks Casual, `back-versus` checks Group > Brawl still comes back to
 Group. They use the harness's per-visit rules (`@muMenuMain:2 ...`: only on the scene's second entry).
+
+### Boot and friends from the menus
+
+Luis, 2026-10-04: booting Brawl or Project+ lands on the game's main menu (the home menu), never on
+Versus' character select; a friend who joins from the YouGame page meets the host there and both go
+to With Friends' character select together.
+
+**What sent each game to the character select at boot** (proved before changing anything):
+
+- **Project+: its own codeset.** "Boot Directly to CSS v5.4" (`Source/Project+/BootToCSS.asm` on
+  the SD card, assembled into `NETBOOST.GCT`, which the codeset's expansion loader reads to
+  `0x80550010`) hooks `sqBoot::setNext` at `0x806DD5F8` and starts `sqVsMelee` in place of the
+  game's `sqPrizeCheck` unless a pad holds L/R (Training), Start (the title) or Z (Replays) right
+  then. With Orca's save-prompt group the session went "straight to character select at frame 150".
+- **Brawl: nothing.** `RSBE01.patches` already skipped the strap, the save prompt and the title, so
+  Brawl reached the main menu by itself (frame 1,430 with no input: the strap scene waits for
+  its 38.7 MB `/tmp` copy until 1,244, the title is gone by 1,413). Luis's recent sessions were
+  Project+.
+- **Not the background room.** The room a host's Orca opens at boot (`lobby`, for the page's invite
+  panel) changes nothing in the game: solo, every other port reports no controller, nothing is
+  written to memory for it, and no command from the page moves the game.
+
+**Boot** (`PPLUS32.patches`): one guarded group over `NETBOOST.GCT`'s words in memory
+(`0x80559C20`, four words, the middle two changed) makes the code's no-special-input case its Start
+case: `sqPrizeCheck` with `0x14`, which goes on to `sqTitle` and the main menu as vanilla Brawl
+does.
+The hook's branch and the `nop` after it are the code handler's, written again every frame; the C2
+code's own words are not (only its last word, the branch back), so the group lands once, like any
+guarded group ("Game patches"). The title is skipped as in Brawl (the same two `scTitle` words of
+sora_scene, which Project+ keeps); the prizes were already skipped by the codeset's own
+`Netplay.asm`. No save prompt, no save written, everything unlocked as before. Project+ reaches its
+main menu at frame 197 (scBoot 122-159, the title 163-180), where its character select used to
+come at ~150-163. The harness's Project+ inputs press A through VERSUS
+(`@muMenuMain:1 mash ...`), as Brawl's always did, and `online-menu.py`, `free-space.py` and
+`queue-e2e.mjs` start Project+ from the top page.
+
+**A friend from the menus** (`UX/OnlineMenu.h` `FriendsMove`): the frame hook, first runs and
+re-runs, as a pure function of memory and the session's synced ports, both games:
+
+- A friend plugs in (a port 2-4 newly in the synced plan) while the host's game is anywhere but
+  Versus (`sqVsMelee`, `sqSpMelee`, `sqToMelee`, `sqQuMelee`): pending. Once the main menu has run
+  for `MENU_SETTLE_FRAMES` (30) with a friend pending, the hook does what every menu exit in the
+  game does (`muMenuMain`'s at `0x81176828` included): the scene manager's exit code (`+0x284`) 25,
+  With Friends > FIGHT!, then its process step (`+0x288`) 2. The manager ends the menu and
+  `sqMenuMain::setNext` sends 25 through Orca's block to the local Versus character select ("Online
+  menu"), so B from there comes back to With Friends with FIGHT! selected. Both machines do it at
+  the same boundary; the friend's game shows the host's menu for half a second first.
+- A friend who plugged in during the boot is taken along once the menu has run 30 frames; one who
+  plugged in on Versus' character select (or in a Versus match) is already where friends play, and
+  nothing happens. B back to the main menu with the friend still in stays there: only a newly
+  plugged port counts.
+- Never in a queue room (a header of casual or ranked): its opponent plugs in on the character
+  select. What happens with a friend plugged in is never announced (`orca menu`), as before.
+- State in the match block's last free bytes, `+0x290..+0x297` (`MatchBlock.h` `FRIENDS_*`: a tag,
+  the ports seen at the last boundary, the pending flag, the frame the menu started running with a
+  friend pending). `+0x180..+0x18F`, first planned for this, is Project+'s `SAVED_RSS`. Solo play
+  never writes them (nothing kept and no friend: no write), so `free-space.py`'s runs are untouched;
+  the first friend to plug in is news from the dead code's bytes on. Ports plugged in before frame
+  300 (`FIRST_FRIEND_FRAME`; no friend plugs in that early, a keyframe is never of the host's first
+  300 frames) were there from the start: a harness's `ORCA_UX_TEST_NAMES` ports never move a run.
+  Run again at the same boundary on what it wrote, the hook writes the same (`OrcaOnlineMenuDropIn`
+  tests).
+
+**A join held in a single-player mode** (`Rollback/OnlineMatch.cpp` `HostEvents`): while the host's
+game is in Classic, All-Star, Boss Battles, Events, Training, Home-Run Contest, Target Smash,
+Multi-Man Brawl, the Subspace Emissary or the Vault's screens (`SequenceHoldsDropIn`, the scene
+manager's sequence at `+0x10`), a friend who arrives waits: no keyframe is made and nobody is taken
+in. The host prints `orca state friend-holding`; the room tells every joiner without a keyframe
+(`{"k":"hold","on":true}`, again every second while it holds, `false` once), and the joiner prints
+`orca state friend-waiting` and shows "<host> is playing a single-player mode: you'll join when
+they're back in the menus". The join's 90 s limit doesn't run while held. Back in the menus the
+host prints `orca state friend-joining` again and the join goes on (the joiner: `orca state joining
+0`, then its percentages); the friend lands on the main menu with the host, then both go to With
+Friends.
+
+| stdout | Who | When |
+|---|---|---|
+| `orca state friend-holding` | host | A friend waits to join while this game plays a single-player mode. |
+| `orca state friend-waiting` | joiner | The host's game is in a single-player mode: this join waits. |
+
+Harness knobs (test runs only): `ORCA_UX_TEST_PLUG_AT=<frame>` plugs the ports after the first in
+from that frame (port 1 alone before), as a friend's drop-in does at its frame S, for synctests of
+the move; `ORCA_TEST_HOLD=<from>-<to>` holds joins over those frames as if the host played a
+single-player mode (`online-menu-dropin.py --hold`).
+
+Measured 2026-10-04 (M4, headless, fresh user folders):
+
+- A friend's plug-in on the main menu (`ORCA_UX_TEST_PLUG_AT=1600` in Brawl, `320` in Project+)
+  moves both games 30 frames later (1,630; 350) and the character select comes 4 frames after
+  that (1,634; 354). `YG_SYNCTEST=7` over the plug-in, the move, the character select, the stage
+  select and the match start: Brawl 1,550-2,800 (8,701 re-run frames), Project+ 300-1,500 (8,351),
+  **0 RAM mismatches** (the device-state-only ones are the usual icache).
+- `online-menu-dropin.py` over a real dev room, Brawl: PASS (the friend loaded the host's keyframe
+  of frame 2,149 on the ONLINE page; both moved at 2,248 and reached the character select at 2,253;
+  12 checksums matched; nothing printed). `--hold`: PASS (held ~34 s, from the friend's arrival to
+  the host's frame 4,200; then the keyframe, the join and the move at 4,305 on both).
+- `online-menu.py --pplus` from the new boot: casual, ranked, friends-0, back-casual and
+  back-versus PASS.
+- The JIT warm-up's seed lists apply whole on the new paths (no synctest, through With Friends to a
+  match): Brawl 31,534 of 32,625 blocks compiled ahead, 66 already compiled, 1,025 not in RAM (the
+  list's Donkey Kong and Final Destination, as before); Project+ 27,752 of 28,054 ahead and the
+  other 302 already compiled. What the game compiled itself were blocks no list holds (none "not
+  reached yet" but 9): in Brawl's loading frames (0-169) 106, 90 of them at frame 169; in
+  Project+'s loading image (frames 0-27) 154, 101 at frame 18; afterwards a few a frame, and
+  ~1,000-1,400 more once the scripts' fuzz begins (moves the recorded matches never made, there
+  with either boot). Nothing here needs the lists re-recorded.
 
 ## Matchmaking
 

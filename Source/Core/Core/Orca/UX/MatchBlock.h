@@ -37,6 +37,7 @@
 //   +0xD0..+0x1F0 the player's own rules, saved at the header's write
 //   +0x200..+0x20F the character order (CharOrder.h)
 //   +0x210..+0x28F the ranked set as the results track follows it (SetBlock.h, authoritative)
+//   +0x290..+0x297 a friend's drop-in from the menus (OnlineMenu.h FriendsMove)
 namespace Orca::UX
 {
 class GuestMemory;
@@ -121,7 +122,28 @@ constexpr u32 CHAR_ORDER = BASE + 0x200;  // 16 bytes (CharOrder.h)
 constexpr u32 CHAR_ORDER_SIZE = 0x10;
 constexpr u32 RANKED_SET = BASE + 0x210;  // SetBlock.h's set (+0x210..+0x28F)
 
+// ---- A friend's drop-in from the menus (OnlineMenu.h FriendsMove), +0x290..+0x297 ----
+// The last free bytes before kMatchBlockLimit (+0x180..+0x18F, first planned for this, is Project+'s
+// SAVED_RSS). Unlike the rest of the block these are kept in every session, solo and friends rooms
+// alike, with or without a header (a queue room's header only stops the move), wherever the block's
+// memory is Present.
+constexpr u32 FRIENDS = BASE + 0x290;
+// u8: FRIENDS_TAG_VALUE once Orca's; anything else is the dead code's byte (nothing kept yet).
+constexpr u32 FRIENDS_TAG = FRIENDS + 0;
+constexpr u8 FRIENDS_TAG_VALUE = 0xF5;
+// u8: the ports plugged in at the last boundary (bit n: port n+1), from the session's synced plan.
+constexpr u32 FRIENDS_SEEN = FRIENDS + 1;
+// u8: 1 while a friend who plugged in waits for the host's main menu, to go to With Friends'
+// character select together.
+constexpr u32 FRIENDS_PENDING = FRIENDS + 2;
+// u32: the frame hook's frame number + 1 from which the main menu has been running (0: it isn't),
+// so how long it has run is a function of the frame number, the same however often a boundary runs.
+constexpr u32 FRIENDS_MENU_SINCE = FRIENDS + 4;
+constexpr u32 FRIENDS_END = FRIENDS + 8;
+
 static_assert(SAVED_RSS + SAVED_RSS_SIZE <= SAVED_FLAGS);
+static_assert(RANKED_SET + 0x80 <= FRIENDS && FRIENDS_END <= FreeSpace::kMatchBlockLimit);
+static_assert(FRIENDS_MENU_SINCE % 4 == 0);
 static_assert(SAVED_FLAGS < BASE + SIZE);
 static_assert(CHAR_ORDER + CHAR_ORDER_SIZE <= RANKED_SET);
 static_assert(CSS_TIMER_START + 4 <= BASE + 0xC0 + PHASE1_SIZE);

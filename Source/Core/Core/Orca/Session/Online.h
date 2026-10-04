@@ -86,6 +86,8 @@ bool InRoom();
 bool FreshTicket(bool fresh, std::string* ticket, std::string* store_url, std::string* error);
 // Host: tell a friend it was unplugged and why ("desync", "stalled", "network").
 void DropPeer(int seat, const std::string& reason);
+// Host: whether it holds the joins that wait for a keyframe (YouGameRoom::HoldJoins).
+void HoldJoins(bool holding);
 // Whether a session error means the games went apart (inputs or a checksum that disagree, or a
 // correction that came too late to apply).
 bool IsDesync(const std::string& session_error);
