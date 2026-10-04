@@ -546,8 +546,12 @@ add_library(core
   Orca/UX/ControllerSource.cpp
   Orca/UX/ControllerSource.h
   Orca/UX/FreeSpace.h
+  Orca/UX/GameFont.cpp
+  Orca/UX/GameFont.h
   Orca/UX/GamePatches.cpp
   Orca/UX/GamePatches.h
+  Orca/UX/Kit.cpp
+  Orca/UX/Kit.h
   Orca/UX/SetBlock.cpp
   Orca/UX/SetBlock.h
   Orca/UX/MatchBlock.cpp

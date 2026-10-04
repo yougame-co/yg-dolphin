@@ -497,7 +497,18 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
   UICommon::InitControllers(wsi);
   // The in-game UX: the YouGame app's controllers as the local pad, overlay, name tags.
   if (Orca::SessionActive())
+  {
+    // The overlay's kit reads the game's own fonts from the game's disc (Kit.h): the boot's, or the
+    // default disc a launcher boots with.
+    std::string disc = Config::Get(Config::MAIN_DEFAULT_ISO);
+    if (boot)
+    {
+      if (const auto* d = std::get_if<BootParameters::Disc>(&boot->parameters))
+        disc = d->path;
+    }
+    Orca::UX::SetGameDisc(std::move(disc));
     Orca::UX::Init();
+  }
 
   Common::ScopeGuard ui_common_guard([] {
     Orca::UX::Shutdown();

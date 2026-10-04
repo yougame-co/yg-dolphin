@@ -17,6 +17,7 @@
 
 #include "Common/HookableEvent.h"
 #include "Core/Core.h"
+#include "Core/Orca/UX/Kit.h"
 #include "Core/Orca/UX/OnlineMenu.h"
 #include "Core/Orca/UX/RankedPPlus.h"
 #include "Core/Orca/UX/RankedSet.h"
@@ -613,8 +614,30 @@ void DrawStageCursors(ImDrawList* dl, const StageCursors::View& v, float unit)
   }
 }
 
+// ORCA_UX_KIT_DEMO=1: the kit's primitives over the game's picture (Kit.h), for design checks.
+void DrawKitDemo()
+{
+  const ImVec2 screen = ImGui::GetIO().DisplaySize;
+  const float unit = OverlayUnit(screen.y);
+  if (unit <= 0 || !(screen.x >= 1))
+    return;
+  ImVec2 pic(0, 0), pic_size = screen;
+  if (g_presenter)
+  {
+    const MathUtil::Rectangle<int>& r = g_presenter->GetTargetRectangle();
+    if (r.GetWidth() > 0 && r.GetHeight() > 0)
+    {
+      pic = ImVec2(static_cast<float>(r.left), static_cast<float>(r.top));
+      pic_size = ImVec2(static_cast<float>(r.GetWidth()), static_cast<float>(r.GetHeight()));
+    }
+  }
+  Kit::DrawDemo(ImGui::GetForegroundDrawList(), pic, pic_size, OverlayUnit(pic_size.y),
+                ImGui::GetTime());
+}
+
 void Draw()
 {
+  Kit::BeginFrame();
   const double now = NowMs();
   s_overlay.Update(s_demo ? DemoLink(now) : ViewOf(Events::GetLinkStats()), now);
   const OverlayModel::Frame f = s_overlay.View(now, s_stats.load(std::memory_order_relaxed),
@@ -660,6 +683,12 @@ void Draw()
   if (rules_note.empty())
     rules_note = rule_line;
   const StageCursors::View cursors = StageCursors::Current();
+  // The kit's demo in place of everything else.
+  if (Kit::DemoOn())
+  {
+    DrawKitDemo();
+    return;
+  }
   if (!f.show_signal && f.waiting.empty() && f.toasts.empty() && f.chats.empty() &&
       f.stats.empty() && f.perf.empty() && search.empty() && search_note.empty() &&
       rules.empty() && rules_note.empty() && !any_label && !cursors.on)
@@ -897,6 +926,7 @@ void SetRuleLine(std::string text)
 void ShutdownOverlay()
 {
   OSD::SetHostOverlay({});
+  Kit::Shutdown();
   s_state_hook.reset();
 }
 

@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <string>
+
 // Orca's in-game UX for online play (docs: YouGame docs/ORCA_ONLINE_UX.md): the local controller
 // from the YouGame app, the minimal overlay, the players' names in the game's own name tags.
 namespace Orca::UX
@@ -29,6 +31,9 @@ namespace Orca::UX
 // different inputs) never meet in a room.
 constexpr int kCompatVersion = 12;
 
+// The disc the game runs from (the boot's disc, or the default disc a launcher boots with): the
+// overlay's kit reads the game's own fonts from it (Kit.h). Before Init.
+void SetGameDisc(std::string path);
 // Once, before the game boots in a session: registers the local pad source, the overlay, and the
 // session's plug-in, frame and stall callbacks, and puts kCompatVersion in the compatibility key.
 void Init();
