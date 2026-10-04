@@ -16,6 +16,58 @@ by the Dolphin project. Builds do not use Dolphin's name or logo.
 
 No disc images, NAND dumps or save data belong in this repository.
 
+## Release checklist
+
+Every Orca release candidate (a `rel-0.3.x` branch) passes these on the Mac before it ships; its
+dated **Checked** entry (for 0.3.14 and 0.3.15, at the end of "The queue's character select") gives
+the numbers. Runs are headless (`-v Null`), muted (`No Audio Output`), nice'd, under `flock
+orca-run-solo.lock` (two-Orca runs under `orca-run.lock` too), never while Luis plays (`ps -axo
+comm= | grep -q yougame-desktop/orca/apps`), with the 1-minute load under 18.
+
+1. **Build** `dolphin-emu-nogui` and `tests` (Release, the release's CMake flags): no new warnings.
+2. **Unit tests:** `Binaries/Tests/tests --gtest_filter='Orca*'`, none failing (the live, network
+   and disc tests skip without their switches; `ORCA_LIVE_TEST=1` runs `OrcaLive.*` against
+   yougame.co).
+3. **Hashlogs** (`YG_HASHLOG=<out>`) of the default inputs equal to the live release's, frame by
+   frame over the frames both logs have: Brawl `Tools/orca/inputs/bf-mario-link-results.txt` with
+   `YG_EXIT_AFTER=10800`, Project+ `pplus-1v1.txt` with `YG_EXIT_AFTER=9000` (for 0.3.14:
+   `notes/r314/mac-brawl.hash` and `mac-pplus.hash` beside the checkouts). A release that changes
+   emulation on purpose says which frames move and why.
+4. **Synctests** (`YG_SYNCTEST=7`), 0 RAM mismatches: the Brawl and the Project+ casual whole flows,
+   with the env of Orca 0.3.14's checks ("The queue's character select").
+5. **Two-Orca checks.** Luis, 2026-10-04, asked why two-machine bugs slip through: a synctest runs
+   one game against itself, so a race between two peers' messages (the queue room's header, 0.3.15)
+   or two games drifting apart never shows there. Two Orcas on this Mac go through the real flows
+   over yougame.co (dev tickets, nothing recorded), for Project+ and for Brawl, and each run must
+   PASS with **every session's checksums matched**: both Orcas' "Drop-in: back to solo play at frame
+   N (why): R rollbacks, K checksums matched" lines with K > 0 (both tools print them on the PASS
+   line), no `Desync at frame`, no failed session, no `orca error`:
+
+   ```
+   BIN=build/Binaries/dolphin-emu-nogui
+   DISC=~/Documents/ROMs/Wii/"Super Smash Bros. Brawl (USA, Canada) (Rev 2).wbfs"
+   DOL=~/Documents/brawl-dolphin/pplus/run/"Project+ Netplay Launcher.dol"
+   # Project+: queue2 casual, 2 games in the matchmade room; skip, then the quick rematch and a
+   # game in the new room; a friend dropping in on the main menu's ONLINE page
+   node Tools/orca/queue-e2e.mjs "$BIN" "$DISC" --pplus "$DOL" --queue casual --q2
+   node Tools/orca/queue-e2e.mjs "$BIN" "$DISC" --pplus "$DOL" --queue casual --q2 --scenario rematch
+   python3 Tools/orca/online-menu-dropin.py "$BIN" "$DISC" --pplus "$DOL"
+   # Brawl: the same three
+   node Tools/orca/queue-e2e.mjs "$BIN" "$DISC" --queue casual --q2
+   node Tools/orca/queue-e2e.mjs "$BIN" "$DISC" --queue casual --q2 --scenario rematch
+   python3 Tools/orca/online-menu-dropin.py "$BIN" "$DISC"
+   ```
+
+   One to three minutes each. `queue-e2e.mjs --q2` also checks that both Orcas print the same verdicts
+   and come back on their own character select ready; `online-menu-dropin.py` that both games
+   reach With Friends' character select at the same frame and nothing prints `orca menu`.
+6. **Mac <-> PC**, by the release lead with the PC: the same kind of match with one Orca on each
+   machine, `Tools/orca/xplat.py` (host on one, `--role join` on the other, the same `--room`, a
+   sandbox player's cookie on each; `--pplus "<dol>"` for Project+), for Brawl and for Project+, each
+   side's `XPLAT` summary `"ok": true` with `checksums_matched` above 0. Two Orcas on one Mac share
+   a compiler, an architecture and a JIT, so only this run can see the two builds disagree
+   (**Host arithmetic** under "Drop-in": Apple clang's fused multiply-adds against MSVC's x64).
+
 ## Running a session
 
 A session is `ORCA_SESSION=1` plus a disc whose profile is in `Data/Sys/Orca/` (boot refuses anything
@@ -3219,6 +3271,34 @@ host's header changes only at an alone boundary, which nothing re-runs). `Tools/
   mismatches**. An `ORCA_TEST_PRESENT=1280x720 YG_THROTTLE=1` screenshot with `chat` lines and
   "Screenshot saved" rows showing: the chat starts under the OSD rows (the frame meter, top left,
   still shares the first OSD row's line, as before).
+
+**Checked 2026-10-04, Orca 0.3.15** (`rel-0.3.15`: `q3-steer-int`, `q3-header-flags` and
+`q3-imgui-font` merged `--no-ff` on `efa260448b`, no conflicts; M4 Pro, headless, `-v Null`, the
+release checklist above):
+- Build: `dolphin-emu-nogui` and `tests`, no compiler warnings (only the usual Homebrew dylib
+  deployment-target notes from `ld`).
+- Unit tests: 372 `Orca*`, 355 pass, 17 skipped (the live, network and disc ones; one more than
+  0.3.14's 16, the new `OrcaLive.AHostsMismatchReachesItsJoiner`), 0 fail. With `ORCA_LIVE_TEST=1`
+  against yougame.co, 12 `OrcaLive.*` pass (`BridgeMirrorsTheRoomAndTakesLeave` skips without its
+  bridge).
+- Hashlogs against live 0.3.14's: Brawl `bf-mario-link-results.txt` to 10,800, 10,815 frames
+  compared, **0 differ** (`notes/r314/mac-brawl.hash`); Project+ `pplus-1v1.txt` to 9,000, 9,011
+  frames compared, **0 differ** (`mac-pplus.hash`).
+- Synctests, the 0.3.14 env: Brawl's whole casual flow (`YG_SYNCTEST_FROM=1440` to 4700) 22,771
+  re-run frames, **0 RAM mismatches**; Project+'s (`YG_SYNCTEST_FROM=200` to 3200) 20,951, **0**. The
+  steps are 0.3.14's frame for frame: the room's header at 2057 (104 bytes) and 824 (93 bytes), the
+  pick in at 2151 (94 frames) and 902 (78), both ready 2378 and 1145, game 2 both ready 4561 and
+  3118, and every "steering port 2" line the same as 0.3.14's.
+- Two-Orca checks, all PASS, every session's checksums matched, no desync:
+
+  | | Project+ | Brawl |
+  |---|---|---|
+  | `--q2` casual, 2 games | verdicts 4-0, 4-0 the same on both; pick in 77 frames; back in 23 ms; **99 / 99** checksums (0 / 0 rollbacks) | verdicts 3-0, 3-0; pick in 85 frames; back in 31 ms; **103 / 103** (1 / 0) |
+  | `--q2 --scenario rematch` | bo skipped (Z 90 frames) the room after the pick: **4 / 4**; bo then hosted the new room from port 1 (pick in 73 frames), 1 game the same on both: **52 / 52** | skip: **4 / 4**; bo hosted the rematch (85 frames), 1 game: **50 / 50** |
+  | `online-menu-dropin.py` | keyframe of frame 1003, both to With Friends' character select at 1095; **13 / 12** | keyframe of 2287, both at 2383; **12 / 12** |
+
+  (host / joiner; the counts are each side's compared pairs, so they can differ by one.) The
+  Mac <-> PC run (`xplat.py`, checklist item 6) is the release lead's, with the PC.
 
 ## Embedding
 

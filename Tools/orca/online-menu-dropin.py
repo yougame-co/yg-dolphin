@@ -16,6 +16,8 @@
 #    Orca prints any "orca menu" line (what happens while friends play is theirs too, never an
 #    event).
 # 4. The friend leaves: the host plays on alone ("friend-left left"), still printing nothing.
+# 5. The checksum gate: the session's end on each side ("Drop-in: back to solo play ... N checksums
+#    matched") matched checksums with the other (N > 0), and neither logged a desync.
 # Fails on a desync, a timeout, an "orca error", or any "orca menu" line.
 #
 # --hold: the same, with the host's game held as if it played a single-player mode until its frame
@@ -313,9 +315,23 @@ for o in orcas:
         fail(f"{o.name} stopped")
     if o.menu:
         fail(f"{o.name} printed {o.menu} while not alone")
-    desync = o.log_lines("desync") + o.log_lines("doesn't match the host's")
+    desync = (o.log_lines("desync") + o.log_lines("Desync at frame") +
+              o.log_lines("the session failed") + o.log_lines("doesn't match the host's"))
     if desync:
         fail(f"{o.name}: {desync[0]}")
+SOLO_RE = re.compile(r"Drop-in: back to solo play at frame (\d+) \(([^)]*)\): (\d+) rollbacks, "
+                     r"(\d+) checksums matched")
+sums = []
+for o in orcas:
+    ends = [m for m in (SOLO_RE.search(l) for l in o.log_lines("Drop-in: back to solo play")) if m]
+    if not ends:
+        fail(f"{o.name}: its session never ended (no 'back to solo play' line)")
+    for m in ends:
+        if int(m.group(4)) <= 0:
+            fail(f"{o.name}: the session that ended at frame {m.group(1)} ({m.group(2)}) matched "
+                 f"no checksums")
+    sums.append(f"{o.name} " + " + ".join(f"{m.group(4)} ({m.group(2)}, {m.group(3)} rollbacks)"
+                                          for m in ends))
 for o in orcas:
     o.stop()
 KEYS = ("Scene frame", "Drop-in: keyframe of frame", "Drop-in: loaded keyframe", "Online match",
@@ -324,7 +340,7 @@ for o in orcas:
     for line in o.log_lines(""):
         if any(k in line for k in KEYS):
             log(f"{o.name}: {line[line.find('N[') if 'N[' in line else 0:]}")
-log("PASS")
+log(f"PASS; checksums: {'; '.join(sums)}")
 if os.environ.get("ORCA_TEST_KEEP") == "1":
     log(f"logs kept in {WORK}")
 else:

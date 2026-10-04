@@ -23,8 +23,13 @@
 // (`queue rating` first); matched, the joiner's pick is put into the host's game (its log says so),
 // both press Start to ready and the match goes on. Scenarios with --q2: match (the default), skip
 // (the joiner holds Z: `orca queue skip`, it leaves, and both are back on their own character
-// select, ready again), timeout (casual: nobody readies, both print `orca queue timeout me`, leave,
-// and are back on their own character select, not ready).
+// select, ready again), rematch (casual: skip, then both search again at once, as the page does, and
+// meet in a new room, the skipper first so it hosts from port 1: the quick rematch; a game there,
+// the joiner leaves, both back and ready), timeout (casual: nobody readies, both print `orca queue
+// timeout me`, leave, and are back on their own character select, not ready).
+// Every --q2 scenario ends with the checksum gate: each session either Orca ended (its "Drop-in:
+// back to solo play ... N checksums matched" line) matched checksums with the other (N > 0), and
+// neither logged a desync or a failed session.
 //
 //   node Tools/orca/queue-e2e.mjs <dolphin-emu-nogui> <disc> [--pplus <launcher.dol>]
 //       [--queue ranked|casual] [--games <n>] [--site <url>] [--keep] [--alarm <s>]
@@ -125,6 +130,8 @@ class Side {
     this.pad = { buttons: 0, axes: [128, 128, 128, 128] };
     this.results = [];
     this.queueLog = []; // Orca's "Queue: ..." log lines (UX/Queue.h, OnlineMatch's queue image)
+    this.sessions = []; // each session's end: { frame, why, rollbacks, checksums }
+    this.desyncs = []; // "Desync at frame ..." and "the session failed" log lines
   }
 
   async startBridge() {
@@ -358,6 +365,23 @@ class Side {
         if (q) {
           this.queueLog.push(q[1]);
           log(`${this.name}~ ${q[1]}`);
+        }
+        const solo =
+          /Drop-in: back to solo play at frame (\d+) \(([^)]*)\): (\d+) rollbacks, (\d+) checksums matched/.exec(
+            line,
+          );
+        if (solo) {
+          this.sessions.push({
+            frame: Number(solo[1]),
+            why: solo[2],
+            rollbacks: Number(solo[3]),
+            checksums: Number(solo[4]),
+          });
+          log(`${this.name}~ ${solo[0]}`);
+        }
+        if (/Desync at frame|the session failed/.test(line)) {
+          this.desyncs.push(line);
+          log(`${this.name}~ ${line}`);
         }
         if (
           /Matchmaking:|Orca room: (report|room match|game|the set|casual|beginning|a matchmade|\{)/.test(
@@ -862,6 +886,26 @@ function sameVerdicts(host, joiner, fromHost = 0, fromJoiner = 0) {
   return ga.length;
 }
 
+// The checksum gate: every session each Orca ended matched checksums with the other (each end's
+// "back to solo play" line counts more than 0), at least `want` sessions each, and no desync or
+// failed session in either log. Returns a summary for the PASS line.
+function checksumsMatched(sides, want = 1) {
+  for (const s of sides) {
+    if (s.desyncs.length) fail(`${s.name}: ${s.desyncs[0]}`);
+    if (s.sessions.length < want)
+      fail(`${s.name}: ${s.sessions.length} session(s) ended, wanted ${want}`);
+    const none = s.sessions.find((x) => x.checksums <= 0);
+    if (none)
+      fail(`${s.name}: the session that ended at frame ${none.frame} (${none.why}) matched no checksums`);
+  }
+  return sides
+    .map(
+      (s) =>
+        `${s.name} ${s.sessions.map((x) => `${x.checksums} (${x.why}, ${x.rollbacks} rollbacks)`).join(" + ")}`,
+    )
+    .join("; ");
+}
+
 function noErrors(sides, allowed = /^$/) {
   for (const s of sides) {
     const errors = s.lines.filter(
@@ -934,12 +978,12 @@ async function q2Meet(first, second, queue, pick) {
 
 // The room's character select: game 1, the joiner's pick goes into the host's game by itself; then
 // both press Start (ready) until the game goes on. Ranked later games: the character order first.
-async function q2Css(host, joiner, first) {
+async function q2Css(host, joiner, first, queueFrom = 0) {
   await host.waitScene("scSelctCharacter", 120000);
   if (first) {
     const at = Date.now();
     await waitFor(
-      () => host.queueLog.some((l) => /port 2's pick is in/.test(l)),
+      () => host.queueLog.slice(queueFrom).some((l) => /port 2's pick is in/.test(l)),
       30000,
       "the joiner's pick never went into the host's game",
     );
@@ -1035,7 +1079,8 @@ async function q2Main() {
       s.linesAtBack = s.lines.length;
     }
   };
-  if (SCENARIO === "skip") {
+  if (SCENARIO === "skip" || SCENARIO === "rematch") {
+    if (SCENARIO === "rematch" && QUEUE !== "casual") fail("rematch is a casual scenario");
     await host.waitScene("scSelctCharacter", 120000);
     await waitFor(
       () => host.queueLog.some((l) => /port 2's pick is in/.test(l)),
@@ -1052,7 +1097,46 @@ async function q2Main() {
     await host.expect(/^orca state friend-left /, 60000, host.linesAtBack);
     await Promise.all([q2Back(host, host.queueAt, true), q2Back(joiner, joiner.queueAt, true)]);
     noErrors([a, b]);
-    log(`PASS: skip: ${joiner.name} held Z, left ${room}; both back on their own character select, ready`);
+    if (SCENARIO === "skip") {
+      const sums = checksumsMatched([a, b]);
+      log(`PASS: skip: ${joiner.name} held Z, left ${room}; both back on their own character select, ready; checksums: ${sums}`);
+      return;
+    }
+    log(`skip: ${joiner.name} held Z, left ${room}; both back on their own character select, ready`);
+    // The quick rematch: the skipper's page searches again at once, the other's on its `orca queue
+    // ready` (both printed again, q2Back). With dev tickets nothing holds the two apart, so they
+    // meet again, in a new room; the skipper waited longest, so it hosts, from port 1.
+    const sessionsBefore = [a.sessions.length, b.sessions.length];
+    const s1 = search(joiner, QUEUE);
+    await sleep(3000);
+    const s2 = search(host, QUEUE);
+    const [m1, m2] = await Promise.all([s1, s2]);
+    if (m1.room !== m2.room) fail(`rematched into different rooms: ${m1.room} ${m2.room}`);
+    if (m1.room === room) fail(`rematched into the skipped room ${room}`);
+    const host2 = m1.slot === 0 ? joiner : host;
+    const joiner2 = host2 === joiner ? host : joiner;
+    log(`rematch: host ${host2.name}, joiner ${joiner2.name}, room ${m1.room}`);
+    const host2From = host2.lines.length;
+    const queueFrom = host2.queueLog.length;
+    const results = [host2.results.length, joiner2.results.length];
+    await Promise.all([
+      hostOrJoin(joiner, m1.room, m1.slot),
+      hostOrJoin(host, m2.room, m2.slot),
+    ]);
+    await host2.expect(/^orca state friend-joined$/, 120000, host2From);
+    if (host2.lines.slice(host2From).some((l) => l === "unsupported host")) fail("unsupported host");
+    await q2Css(host2, joiner2, true, queueFrom);
+    await q2Fight(host2, joiner2);
+    marks();
+    joiner2.send("leave");
+    await host2.expect(/^orca state friend-left /, 60000, host2.linesAtBack);
+    await Promise.all([q2Back(host2, host2.queueAt, true), q2Back(joiner2, joiner2.queueAt, true)]);
+    const n = sameVerdicts(host2, joiner2, results[0], results[1]);
+    noErrors([a, b]);
+    if (a.sessions.length < sessionsBefore[0] + 1 || b.sessions.length < sessionsBefore[1] + 1)
+      fail("the rematch's session never ended on both sides");
+    const sums = checksumsMatched([a, b], 2);
+    log(`PASS: rematch: skipped ${room}, then ${host2.name} hosted ${m1.room}: ${n} verdict(s) the same on both sides; both back on their own character select, ready; checksums: ${sums}`);
     return;
   }
   if (SCENARIO === "timeout") {
@@ -1066,7 +1150,8 @@ async function q2Main() {
     joiner.send("leave");
     await Promise.all([q2Back(host, host.queueAt, false), q2Back(joiner, joiner.queueAt, false)]);
     noErrors([a, b]);
-    log("PASS: timeout: nobody readied; both printed timeout me, left, and are back, not ready");
+    const sums = checksumsMatched([a, b]);
+    log(`PASS: timeout: nobody readied; both printed timeout me, left, and are back, not ready; checksums: ${sums}`);
     return;
   }
   // The match: game after game until the set (ranked) or --games (casual), then the joiner leaves.
@@ -1088,7 +1173,8 @@ async function q2Main() {
   await Promise.all([q2Back(host, host.queueAt, true), q2Back(joiner, joiner.queueAt, true)]);
   const n = sameVerdicts(host, joiner);
   noErrors([a, b]);
-  log(`PASS: q2 ${QUEUE}: ${n} verdicts the same on both sides; both back on their own character select`);
+  const sums = checksumsMatched([a, b]);
+  log(`PASS: q2 ${QUEUE}: ${n} verdicts the same on both sides; both back on their own character select; checksums: ${sums}`);
 }
 
 // Back out of the character select to the With Anyone page (the cursor comes back on the pick),
