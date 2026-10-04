@@ -50,6 +50,38 @@ constexpr int KEYFRAME_FRESH_FRAMES = 30 * 60;
 // friend's too.
 bool AloneAt(int frame, bool solo_idle, bool drop_in_pending, std::optional<int> stored_keyframe);
 
+// Whether the frame hook may write the online rules' header at the first run of `frame` though the
+// frame may not be this player's alone (UX/OnlineRules.h SetHeaderFree): no other game runs this
+// frame from a state before it. This game plays solo with nothing a friend would replay
+// (`solo_quiet`: no session, not joining, no keyframe being made or downloaded, nobody plugging in,
+// not catching up), and no keyframe it stored for the header it calls for now (`stored_keyframe`,
+// its frame) is still fresh. A friend's arrival, a prepare-join or a keyframe wanted don't stop it,
+// as they stop AloneAt: their keyframe is made at this boundary or later, after the hook, so it
+// carries what the hook wrote. So the room's header lands at the boundary after the room's welcome
+// even when the opponent's hello comes with it.
+bool HeaderFreeAt(int frame, bool solo_quiet, std::optional<int> stored_keyframe);
+
+// The host's wait for the header its room calls for, before it makes or offers a keyframe
+// (HostEvents): a keyframe carries the header in this game's memory, and the joiner replays it.
+enum class HeaderWait
+{
+  Ready,  // make or offer the keyframe
+  Wait,   // not yet: the header lands at a boundary SetHeaderFree allows
+  Fail,   // a queue room: the match can't start (`orca error mismatch`, the room left)
+};
+// A friends room whose game never carries the header it calls for (a session already running when
+// it changed) makes its keyframe anyway after this many boundaries with a friend waiting (the
+// joiner refuses a header that locks, as before): 2 s.
+constexpr int HEADER_WAIT_BOUNDARIES = 120;
+// A queue room never makes a keyframe without the room's header: after this many boundaries with
+// the opponent waiting (the header lands within one; a keyframe already being made first finishes),
+// 5 s, the join fails.
+constexpr int HEADER_FAIL_BOUNDARIES = 300;
+// One boundary of the wait: `in_place`, UX/OnlineRules.h HeaderInPlace; `someone_waiting`, a friend
+// waits for a keyframe; `queue_room`, this game hosts a room the queue made. `*waited` counts the
+// boundaries a friend has waited for the header.
+HeaderWait StepHeaderWait(int* waited, bool in_place, bool someone_waiting, bool queue_room);
+
 // True while this process plays online (solo in its room, or with friends).
 bool Active();
 // Logs the session's stats ("Online match <when>: ...").

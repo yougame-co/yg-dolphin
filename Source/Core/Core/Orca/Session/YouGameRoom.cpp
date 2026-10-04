@@ -2817,9 +2817,15 @@ struct YouGameRoom::Impl
     const std::string kind = Str(d, "k");
     if (kind == "bye")
     {
-      // Only known reasons, so a peer can't put text in this player's report.
-      if (const std::string reason = Str(d, "r"); reason == "desync" || reason == "stalled")
+      // Only known reasons, so a peer can't put text in this player's report. "mismatch" only from
+      // the host this player is joining: its game never carried the queue room's header, so the
+      // match can't start (OnlineMatch's FailHeaderWait).
+      if (const std::string reason = Str(d, "r");
+          reason == "desync" || reason == "stalled" ||
+          (reason == "mismatch" && peer.drop_in_host && joining))
+      {
         peer.bye = reason;
+      }
       return;
     }
     if (kind == "drop")

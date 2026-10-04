@@ -105,7 +105,8 @@ struct PeerEvent
   // Arrived: the joiner's own controls from its hello (RoomOptions::controls; empty: none).
   std::vector<u8> controls;
   KeyframeInfo keyframe;
-  // Left: why it said it was going ("desync" or "stalled", from its bye; empty: it just left).
+  // Left: why it said it was going ("desync" or "stalled", from its bye; "mismatch" from the host
+  // a joiner waits for: the queue room's match can't start; empty: it just left).
   std::string reason;
   // Arrived: the joiner's queue identity from its hello (RoomOptions::queue; empty: none).
   std::vector<u8> queue;

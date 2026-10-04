@@ -76,6 +76,9 @@ struct KeyframeJob
   u64 raw_size = 0;
   // NAND bytes named by hash, not sent (the joiner's boot writes them).
   u64 referenced = 0;
+  // The header called for when it was captured (UX/OnlineRules.h WantedGeneration), with the
+  // game's memory carrying it.
+  u64 generation = 0;
   std::string error;
   ~KeyframeJob()
   {
@@ -152,8 +155,12 @@ struct Match
   std::deque<Pad> queued_local;
   std::unique_ptr<KeyframeJob> job;
   std::optional<Orca::Net::KeyframeInfo> keyframe;
+  // The header called for when `keyframe` was captured (KeyframeJob::generation).
+  u64 keyframe_generation = 0;
   double keyframe_capture_ms = 0;
   bool keyframe_wanted = false;
+  // Boundaries a friend has waited for the header this game's room calls for (StepHeaderWait).
+  int header_waited = 0;
   // Players who arrived and wait for a keyframe before the session takes them in, and the seats
   // the session took in (until the room says they left).
   std::map<int, Arrival> waiting;
@@ -670,6 +677,7 @@ void ResetDropIn(Match& match)
   match.seated.clear();
   match.plugging.clear();
   match.keyframe_wanted = false;
+  match.header_waited = 0;
   // A keyframe being packed, a download, and the old store's transfers (a delete retries for
   // seconds) wind down off this thread, which never waits for them: the job and the download first,
   // since both use the store.
@@ -692,7 +700,15 @@ Orca::UX::Rules::Mode QueueMode(const std::string& queue)
   return Orca::UX::Rules::Mode::None;
 }
 
-// The header this machine's game should carry (written only at its alone boundaries): a queue
+// The queue's flags of the header a queue room's game carries: the Slippi-style character select
+// with the app's `queue2`. Both its host's (WantedRulesMode) and what its joiner checks for.
+u8 RoomFlags()
+{
+  return Orca::Status::Cap("queue2") ? Orca::UX::MatchBlock::FLAG_QUEUE2 : u8{0};
+}
+
+// The header this machine's game should carry (written only where no other game runs the frame:
+// its alone boundaries, or before a friend's keyframe is made, HeaderFreeAt): a queue
 // room's while this game hosts it (port 1, not joining), or while it waits in a ranked room for the
 // set's verdict (with the app's `queue2`, the Slippi-style character select: FLAG_QUEUE2); the
 // queue's own character select's while the player waits there for a match (UX/Queue.h: With Anyone
@@ -709,7 +725,7 @@ std::pair<Orca::UX::Rules::Mode, u8> WantedRulesMode(const Match& match)
   if (mode != Mode::None &&
       (match.local_seat == 0 || (match.linger_until && mode == Mode::Ranked)))
   {
-    return {mode, Orca::Status::Cap("queue2") ? MB::FLAG_QUEUE2 : u8{0}};
+    return {mode, RoomFlags()};
   }
   if (mode == Mode::None && Orca::UX::Queue::Active() && Orca::Status::Cap("queue2") &&
       match.local_seat == 0 && !match.session && !match.linger_until)
@@ -720,12 +736,63 @@ std::pair<Orca::UX::Rules::Mode, u8> WantedRulesMode(const Match& match)
   return {Mode::None, 0};
 }
 
-// Boundaries the header has waited to be written since the room called for another: a keyframe
-// for a queue room's opponent waits for it (HostEvents), at most HEADER_WAIT_BOUNDARIES (the
-// header is written at the first alone boundary after the room's welcome, long before anyone can
-// arrive; the bound only keeps an arrival from waiting forever if it never is).
-int s_header_waiting = 0;
-constexpr int HEADER_WAIT_BOUNDARIES = 120;
+// Tells the online rules the header this game's room calls for now (WantedRulesMode, and a room's
+// header carries the room's code). At every boundary before the frame hook, and again before a
+// keyframe is made: a room's welcome that came in after the hook ran (its opponent's hello right
+// behind it) changes it.
+void UpdateWanted(const Match& match)
+{
+  const auto [mode, flags] = WantedRulesMode(match);
+  const bool room = mode != Orca::UX::Rules::Mode::None &&
+                    (flags & Orca::UX::MatchBlock::FLAG_SOLO) == 0;
+  if (Orca::UX::Rules::SetWanted(mode, flags, room ? Orca::Online::Code() : std::string()))
+  {
+    DEBUG_LOG_FMT(ROLLBACK, "Online rules: header {} flags {:#04x} wanted from frame {}",
+                  static_cast<int>(mode), flags, match.running + 1);
+  }
+}
+
+// A keyframe nobody took yet (no session), stored under another header than the one this game's
+// room calls for now (a room it left, its own character select's before the queue's room), is no
+// use: a friend would replay a game set up for another match. Dropped; whoever waits gets a new one.
+void DropStaleKeyframe(Match& match)
+{
+  if (!match.keyframe || match.session ||
+      match.keyframe_generation == Orca::UX::Rules::WantedGeneration())
+  {
+    return;
+  }
+  NOTICE_LOG_FMT(ROLLBACK, "Drop-in: keyframe of frame {} dropped: made for another header",
+                 match.keyframe->frame);
+  if (match.store)
+    match.store->Delete(match.keyframe->id);
+  match.keyframe.reset();
+  if (!match.waiting.empty())
+    match.keyframe_wanted = true;
+}
+
+// Nothing a friend would replay holds this boundary's frame (HeaderFreeAt's `solo_quiet`).
+bool SoloQuiet(const Match& match)
+{
+  return match.started && !match.finished && match.port && !match.session && !match.joining &&
+         !match.download && !match.job && match.plugging.empty() && !match.port->CatchingUp();
+}
+
+// Host, a queue room: its game never carried the room's header while the opponent waited (a
+// keyframe would start the match on another header, which the joiner refuses), so the match can't
+// start. As a joiner does on a mismatch (LeaveOnMismatch): the opponent hears why (the bye: its own
+// `orca error mismatch`), the app hears `orca error mismatch`, and this game leaves the room for one
+// of its own (the queue image puts back its own character select). Both pages search again.
+void FailHeaderWait(Match& match)
+{
+  WARN_LOG_FMT(ROLLBACK,
+               "Online rules: room {}: this game's header isn't the room's after {} boundaries "
+               "with the opponent waiting, frame {}: leaving (mismatch)",
+               Orca::Online::Code(), HEADER_FAIL_BOUNDARIES, match.running + 1);
+  Orca::Online::SetLeaveReason("mismatch");
+  Orca::Status::Report("mismatch", "That match couldn't start");
+  Leave(match);
+}
 
 // A room this player left on purpose (or for a friend's): whatever KeepRoomOpen knew of the old one
 // is over.
@@ -930,6 +997,8 @@ void BecomeSolo(Match& match, const char* why, const char* state, bool own_boot 
     Orca::Status::State(state);
 }
 
+bool InQueueRoom();
+
 void HostEvents(Core::System& system, Match& match)
 {
   for (const Orca::Net::PeerEvent& event : Orca::Online::TakePeerEvents())
@@ -973,6 +1042,10 @@ void HostEvents(Core::System& system, Match& match)
   }
   if (Orca::Online::TakePrepareJoin())
     match.keyframe_wanted = true;
+  // The header the room calls for as of now: its welcome may have come in after this boundary's
+  // frame hook ran, with the opponent's hello right behind it (then the hook's header is no longer
+  // the one called for, and the keyframe waits for the next boundary's).
+  UpdateWanted(match);
 
   // A finished keyframe: offer it to whoever waits, and drop the solo log before it.
   if (match.job && match.job->done)
@@ -999,6 +1072,7 @@ void HostEvents(Core::System& system, Match& match)
       if (match.keyframe && match.store)
         match.store->Delete(match.keyframe->id);
       match.keyframe = job->info;
+      match.keyframe_generation = job->generation;
       if (!match.session && job->frame >= match.log_base &&
           job->frame <= match.log_base + static_cast<int>(match.log.size()))
       {
@@ -1029,16 +1103,37 @@ void HostEvents(Core::System& system, Match& match)
   if (hold)
     return;
 
-  // Capture a keyframe once one is wanted and the newest is stale (or missing). In a session, only
-  // at a boundary whose earlier frames are all final.
+  // A queue room's opponent replays this game from a keyframe that carries the room's header: none
+  // is made, and none made for another header is offered, until the game's memory carries it (it
+  // lands at the next boundary HeaderFreeAt allows). A queue room that never gets it fails the join
+  // cleanly rather than start the match on another header (its own character select's: both games
+  // would sit on a character select with port 2 masked).
+  DropStaleKeyframe(match);
+  const u64 generation = Orca::UX::Rules::WantedGeneration();
+  const bool in_place = Orca::UX::Rules::HeaderInPlace();
+  const HeaderWait header = StepHeaderWait(&match.header_waited, in_place,
+                                           !match.waiting.empty(), InQueueRoom());
+  if (header == HeaderWait::Fail)
+  {
+    FailHeaderWait(match);
+    return;
+  }
+  const bool header_ready = header == HeaderWait::Ready;
+  if (!in_place && match.keyframe_wanted && match.header_waited % 60 == 1)
+  {
+    NOTICE_LOG_FMT(ROLLBACK, "Online rules: a keyframe waits for the room's header (frame {}{})",
+                   match.running + 1,
+                   header_ready ? "; a friends room's, made anyway" : "");
+  }
+
+  // Capture a keyframe once one is wanted and the newest is stale (or missing), or made for another
+  // header. In a session, only at a boundary whose earlier frames are all final.
   const int next = match.running + 1;
-  const bool fresh = match.keyframe && next - match.keyframe->frame <= KEYFRAME_FRESH_FRAMES;
+  // Made under the header called for now (in a session one made before isn't dropped: it may be
+  // on its way to a friend; the next is made anew).
+  const bool usable = match.keyframe && match.keyframe_generation == generation;
+  const bool fresh = usable && next - match.keyframe->frame <= KEYFRAME_FRESH_FRAMES;
   bool capture_failed = false;
-  // A queue room's opponent replays this game from a keyframe that carries the room's header.
-  const bool header_ready =
-      Orca::UX::Rules::HeaderSettled() || s_header_waiting > HEADER_WAIT_BOUNDARIES;
-  if (!header_ready && match.keyframe_wanted)
-    NOTICE_LOG_FMT(ROLLBACK, "Online rules: a keyframe waits for the room's header");
   if (match.keyframe_wanted && !match.job && match.store && header_ready)
   {
     if (fresh)
@@ -1047,7 +1142,11 @@ void HostEvents(Core::System& system, Match& match)
     {
       match.keyframe_wanted = false;
       StartKeyframe(system, match, next);
-      if (!match.job)
+      if (match.job)
+      {
+        match.job->generation = generation;
+      }
+      else
       {
         capture_failed = true;
         match.keyframe_wanted = !match.waiting.empty();
@@ -1064,7 +1163,7 @@ void HostEvents(Core::System& system, Match& match)
   // alone (AloneAt). The capture is tried again at the next boundary. (A keyframe that went stale
   // while it was packed and stored is fine: no frame since its capture was alone, SoloIdle.)
   if (!match.keyframe || match.waiting.empty() || match.job || s_pausing ||
-      (capture_failed && !match.session))
+      (capture_failed && !match.session) || !header_ready || !usable)
   {
     return;
   }
@@ -1198,6 +1297,17 @@ JoinPump PumpJoin(Match& match, std::string* last_status)
       }
       else if (event.kind == Orca::Net::PeerEvent::Kind::Left && event.host)
       {
+        // A queue room's host whose game never carried the room's header (FailHeaderWait): the
+        // match can't start, as a mismatch this side found (LeaveOnMismatch); the page searches
+        // again.
+        if (event.reason == "mismatch")
+        {
+          WARN_LOG_FMT(ROLLBACK, "Online rules: the host left room {}: its game wasn't set up for "
+                       "this match (mismatch)", Orca::Online::Code());
+          match.join_error_code = "mismatch";
+          match.join_error = "That match couldn't start";
+          return JoinPump::Failed;
+        }
         match.join_error_code = "peer_left";
         match.join_error = "Your friend left before you could join";
         return JoinPump::Failed;
@@ -1436,9 +1546,11 @@ Load LoadKeyframe(Core::System& system, Match& match, int* frame_out)
   match.running = frame - 1;
   // The stats line's frame rate starts over: the frames up to the keyframe were never run here.
   match.stats_frame = -1;
-  // The host's game must carry the header this room's queue calls for (none for a friends room):
-  // checked at the next frame hook (UX/OnlineRules.h).
-  Orca::UX::Rules::ExpectHeader(QueueMode(Orca::Online::RoomQueue()));
+  // The host's game must carry the header this room calls for (none for a friends room; a queue
+  // room's own: its mode, its code's coin and hash, the queue flags this app plays): checked at
+  // the next frame hook (UX/OnlineRules.h).
+  Orca::UX::Rules::ExpectHeader(QueueMode(Orca::Online::RoomQueue()), Orca::Online::Code(),
+                                RoomFlags());
   *frame_out = frame;
   return Load::Done;
 }
@@ -1765,6 +1877,8 @@ bool MaybeRestoreQueueImage(Core::System& system, Match& match)
     return false;
   }
   Orca::Events::NoteResync();
+  // The header the frame hook read is the room's game's: this game's own is read at the next.
+  Orca::UX::Rules::MemoryReplaced();
   match.log.clear();
   match.log_base = frame;
   match.queued_local.clear();
@@ -2239,12 +2353,13 @@ std::optional<int> Boundary(Core::System& system,
     Orca::Status::State("no-room");
   }
 
-  // The online rules' header this game's room calls for, written at its alone boundaries.
-  {
-    const auto [mode, flags] = WantedRulesMode(match);
-    Orca::UX::Rules::SetWanted(mode, flags);
-  }
-  s_header_waiting = Orca::UX::Rules::HeaderSettled() ? 0 : s_header_waiting + 1;
+  // The online rules' header this game's room calls for, written where no other game runs the
+  // frame: its alone boundaries, or one before a friend's keyframe is made (HeaderFreeAt).
+  UpdateWanted(match);
+  DropStaleKeyframe(match);
+  Orca::UX::Rules::SetHeaderFree(
+      HeaderFreeAt(match.running + 1, SoloQuiet(match),
+                   match.keyframe ? std::optional(match.keyframe->frame) : std::nullopt));
 
   // The in-game UX's frame hook: before this boundary's snapshot or keyframe, so what it writes is
   // in them, and on re-runs too.
@@ -2760,6 +2875,29 @@ bool AloneAt(int frame, bool solo_idle, bool drop_in_pending, std::optional<int>
 {
   return solo_idle && !drop_in_pending &&
          !(stored_keyframe && frame - *stored_keyframe <= KEYFRAME_FRESH_FRAMES);
+}
+
+bool HeaderFreeAt(int frame, bool solo_quiet, std::optional<int> stored_keyframe)
+{
+  return solo_quiet && !(stored_keyframe && frame - *stored_keyframe <= KEYFRAME_FRESH_FRAMES);
+}
+
+HeaderWait StepHeaderWait(int* waited, bool in_place, bool someone_waiting, bool queue_room)
+{
+  if (in_place || !someone_waiting)
+  {
+    *waited = 0;
+    return in_place ? HeaderWait::Ready : HeaderWait::Wait;
+  }
+  ++*waited;
+  if (queue_room)
+  {
+    if (*waited <= HEADER_FAIL_BOUNDARIES)
+      return HeaderWait::Wait;
+    *waited = 0;
+    return HeaderWait::Fail;
+  }
+  return *waited > HEADER_WAIT_BOUNDARIES ? HeaderWait::Ready : HeaderWait::Wait;
 }
 
 bool SoloPauseAllowed()
