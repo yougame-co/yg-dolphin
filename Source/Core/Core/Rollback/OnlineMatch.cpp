@@ -159,6 +159,9 @@ struct Match
   // Seats taken in whose controller hasn't plugged in yet: the app hears "friend-joined" once the
   // last of them has.
   std::set<int> plugging;
+  // Host: the friends waiting are held while its game is in a single-player mode
+  // (Orca::UX::DropInHeld): no keyframe, nobody taken in, until it is back in the menus.
+  bool holding = false;
   // Host: its room ended without this player leaving it (a dropped connection, a server gone quiet,
   // someone else hosting the code). Said once, then another room opens after a backoff that grows
   // until one works; `home_code` is the code of the last room that did.
@@ -178,6 +181,8 @@ struct Match
   int host_seat = 0;
   std::string host_name;
   bool host_here = false;
+  // The host holds this join (its game is in a single-player mode) until it is back in the menus.
+  bool host_holding = false;
   Clock::time_point boot_time{}, offered_time{}, loaded_time{};
   double load_ms = 0;
   bool joined = false;
@@ -876,6 +881,7 @@ void BecomeSolo(Match& match, const char* why, const char* state, bool own_boot 
   match.join_in_play = false;
   match.joined = false;
   match.host_here = false;
+  match.host_holding = false;
   match.leave_requested = false;
   match.leave_at = -1;
   match.last_percent = -1;
@@ -969,6 +975,27 @@ void HostEvents(Core::System& system, Match& match)
       }
     }
   }
+
+  // A host in a single-player mode (Classic, Training, Events...) holds whoever waits until its
+  // game is back in the menus (UX/OnlineMenu.h SequenceHoldsDropIn): no keyframe is made and nobody
+  // is taken in meanwhile, and the friends hear why. From the menus, a friend who plugs in goes with
+  // the host to With Friends' character select (OnlineMenu.h FriendsMove).
+  const bool hold = Orca::UX::DropInHeld() && !match.waiting.empty();
+  if (hold != match.holding)
+  {
+    match.holding = hold;
+    Orca::Online::HoldJoins(hold);
+    NOTICE_LOG_FMT(ROLLBACK, "Drop-in: {} at frame {}",
+                   hold ? "the game is in a single-player mode, the join waits" :
+                          "the join goes on",
+                   match.running + 1);
+    if (hold)
+      Orca::Status::State("friend-holding");
+    else if (!match.waiting.empty())
+      Orca::Status::State("friend-joining");
+  }
+  if (hold)
+    return;
 
   // Capture a keyframe once one is wanted and the newest is stale (or missing). In a session, only
   // at a boundary whose earlier frames are all final.
@@ -1143,6 +1170,36 @@ JoinPump PumpJoin(Match& match, std::string* last_status)
         match.join_error = "Your friend left before you could join";
         return JoinPump::Failed;
       }
+      else if (event.kind == Orca::Net::PeerEvent::Kind::Hold && !match.download)
+      {
+        // The host's game is in a single-player mode: this join waits until it is back in the
+        // menus, however long that takes (the join's time limit starts again when it ends).
+        if (event.holding != match.host_holding)
+        {
+          match.host_holding = event.holding;
+          NOTICE_LOG_FMT(ROLLBACK, "Drop-in: the host {}",
+                         event.holding ? "is in a single-player mode: the join waits" :
+                                         "is back in the menus: the join goes on");
+          if (event.holding)
+          {
+            Orca::Status::State("friend-waiting");
+            ShowJoinMessage(
+                fmt::format("{} is playing a single-player mode: you'll join when they're back in "
+                            "the menus",
+                            match.host_name.empty() ? "Your friend" : match.host_name),
+                static_cast<u32>(std::chrono::milliseconds(JOIN_LIMIT).count()));
+          }
+          else
+          {
+            Orca::Status::State("joining 0");
+            match.last_percent = std::max(match.last_percent, 0);
+            ShowJoinMessage(fmt::format("Joining {}'s game...", match.host_name.empty() ?
+                                                                    "your friend" :
+                                                                    match.host_name),
+                            static_cast<u32>(std::chrono::milliseconds(JOIN_LIMIT).count()));
+          }
+        }
+      }
       else if (event.kind == Orca::Net::PeerEvent::Kind::Names)
       {
         // The host took another friend in while this one downloads: newer than the offer's values,
@@ -1152,6 +1209,8 @@ JoinPump PumpJoin(Match& match, std::string* last_status)
       }
       else if (event.kind == Orca::Net::PeerEvent::Kind::Keyframe && !match.download)
       {
+        // Offered: whatever the host holds now is another friend's join.
+        match.host_holding = false;
         match.offered_time = Clock::now();
         match.host_seat = event.seat;
         NOTICE_LOG_FMT(ROLLBACK, "Drop-in: the host offers keyframe {} (frame {}, {:.1f} MB)",
@@ -1184,6 +1243,9 @@ JoinPump PumpJoin(Match& match, std::string* last_status)
       if (match.download->done)
         return JoinPump::Ready;
     }
+    // A held join has no time limit; the limit counts from when the host lets it go on.
+    if (match.host_holding)
+      match.boot_time = Clock::now();
     if (Clock::now() - match.boot_time > JOIN_LIMIT)
     {
       match.join_error_code = "network";
@@ -1377,6 +1439,7 @@ std::optional<int> JoinHost(Core::System& system, Match& match)
         match.boot_time = Clock::now();
         match.offered_time = match.boot_time;
         match.host_here = false;
+        match.host_holding = false;
         match.last_percent = -1;
         match.join_status.clear();
         match.later_names.reset();
@@ -1478,6 +1541,7 @@ void JoinInPlay(Match& match, const std::string& code)
   match.boot_time = Clock::now();
   match.offered_time = match.boot_time;
   match.host_here = false;
+  match.host_holding = false;
   match.joined = false;
   match.leave_requested = false;
   match.last_percent = -1;

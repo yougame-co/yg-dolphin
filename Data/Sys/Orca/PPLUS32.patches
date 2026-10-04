@@ -27,6 +27,27 @@
 811A6440 7C030378 90030078    # stw   r0, 0x78(r3)
 811A6444 4AF193ED 48001204    # b     0x811A7648 (the process's end)
 
+# Boot to the main menu, not the character select (Luis, 2026-10-04: booting should land on the
+# home menu, as Brawl's does). Project+'s codeset boots straight to its VERSUS character select:
+# "Boot Directly to CSS v5.4" (Source/Project+/BootToCSS.asm on the SD card, in NETBOOST.GCT, which
+# the codeset's expansion loader reads to 0x80550010) hooks sqBoot::setNext at 0x806DD5F8 and,
+# unless a pad holds L/R (Training), Start (the title) or Z (Replays) right then, starts sqVsMelee
+# in place of the game's sqPrizeCheck. The hook's branch and the nop after it are the code
+# handler's, written again every frame; the code they reach is NETBOOST.GCT's own words, which
+# nothing writes after the load. Its "no special input" case takes the Start case's path instead:
+# sqPrizeCheck with 0x14, which goes on to the title and the main menu as vanilla Brawl does (the
+# title is skipped below, the prizes by the codeset's own Netplay.asm).
+80559C20 41A0FF84 41A0FF84    # blt   the pad loop (guard)
+80559C24 38951B54 38951C94    # addi  r4, r21, 0x1B54 ("sqVsMelee") -> 0x1C94 ("sqPrizeCheck")
+80559C28 38A00000 38A00014    # li    r5, 0 -> 0x14 (as the Start case)
+80559C2C 48000038 48000038    # b     the hook's end (guard)
+
+# scTitle (sora_scene, which Project+ keeps), skipped as RSBE01.patches skips it for Brawl: the
+# opening movie and the "press Start" logo both become state 16, the title's exit with result 0,
+# which sqTitle takes to the main menu.
+806CA1F8 38000003 38000010    # li r0, 3 -> 16 (the opening movie)
+806CA204 3800000C 38000010    # li r0, 12 -> 16 (the "press Start" logo)
+
 # The main menu's Play Online (RSBE01.patches describes these groups for Brawl): the game's own
 # ONLINE page with no connection, and every way on from it to the local Versus character select.
 # Project+ replaces sora_menu_main with its own build of the module (/Project+/pf/module), loaded at

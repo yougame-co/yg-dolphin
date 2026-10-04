@@ -758,6 +758,9 @@ struct YouGameRoom::Impl
   std::map<int, KeyframeInfo> keyframe_offers;
   std::vector<std::pair<int, std::string>> pending_drops;
   std::optional<std::pair<std::vector<KeyframeInfo::Name>, int>> pending_names;
+  // Host: joins held (HoldJoins), and a change not told yet.
+  bool holding = false;
+  bool hold_told = true;
   // Whether this Orca joins someone else's game (RoomOptions::joining, or the app's invite), known
   // once the ticket is in (role_known, under mutex).
   bool joining = false;
@@ -2426,6 +2429,27 @@ struct YouGameRoom::Impl
         SendTo(id, d);
       }
     }
+    // A held join (HoldJoins): every joiner without a keyframe hears it when it changes, and again
+    // every second while it holds (one that arrives later, or reconnects).
+    {
+      bool hold_now, hold_changed;
+      {
+        std::lock_guard lock(mutex);
+        hold_now = holding;
+        hold_changed = !std::exchange(hold_told, true);
+      }
+      if (!joining && (hold_changed || (hold_now && now - last_hello >= HELLO_EVERY)))
+      {
+        picojson::object d;
+        d["k"] = picojson::value("hold");
+        d["on"] = picojson::value(hold_now);
+        for (const auto& [id, peer] : peers)
+        {
+          if (peer.heard && !peer.drop_in_host && !peer.sent_packet)
+            SendTo(id, d);
+        }
+      }
+    }
 
     // Say hello to every other Orca in the room until it answers, so neither side treats the other
     // as a player before both programs are up and agree on the build. Then the host offers each
@@ -2857,6 +2881,16 @@ struct YouGameRoom::Impl
       }
       return;
     }
+    if (kind == "hold")
+    {
+      // Only from the host, to a joiner.
+      if (!peer.drop_in_host || !joining)
+        return;
+      PeerEvent event{PeerEvent::Kind::Hold, peer.slot, true, peer.name, {}, {}};
+      event.holding = d.count("on") && d.at("on").evaluate_as_boolean();
+      Emit(std::move(event));
+      return;
+    }
     if (kind == "nm")
     {
       // Only from the host, to a player of its game.
@@ -2988,6 +3022,15 @@ void YouGameRoom::DropPeer(int seat, const std::string& reason)
   std::lock_guard lock(m_impl->mutex);
   if (m_impl->pending_drops.size() < 16)
     m_impl->pending_drops.emplace_back(seat, reason);
+}
+
+void YouGameRoom::HoldJoins(bool holding)
+{
+  std::lock_guard lock(m_impl->mutex);
+  if (m_impl->holding == holding)
+    return;
+  m_impl->holding = holding;
+  m_impl->hold_told = false;
 }
 
 void YouGameRoom::BroadcastNames(const std::vector<KeyframeInfo::Name>& names, int version)

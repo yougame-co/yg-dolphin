@@ -370,6 +370,12 @@ void DropPeer(int seat, const std::string& reason)
     room->DropPeer(seat, reason);
 }
 
+void HoldJoins(bool holding)
+{
+  if (const auto room = Room())
+    room->HoldJoins(holding);
+}
+
 bool IsDesync(const std::string& session_error)
 {
   return session_error.starts_with("Desync") ||

@@ -1150,8 +1150,14 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
         ports.push_back({0, "", false, {}});
       return ports;
     }();
-    Orca::Events::NotifyFrame(guard, frame_here + 1, !first_pass_here, s_test_ports,
-                              first_pass_here);
+    // ORCA_UX_TEST_PLUG_AT=<frame>: the ports after the first plug in at that frame (port 1 alone
+    // before it), as a friend's drop-in plugs in at its frame S (UX/OnlineMenu.h FriendsMove).
+    static const int s_plug_at = EnvInt("ORCA_UX_TEST_PLUG_AT", -1);
+    const bool early = s_plug_at >= 0 && frame_here + 1 < s_plug_at && s_test_ports.size() > 1;
+    const std::vector<Orca::Events::PortInfo> ports =
+        early ? std::vector<Orca::Events::PortInfo>(s_test_ports.begin(), s_test_ports.begin() + 1) :
+                s_test_ports;
+    Orca::Events::NotifyFrame(guard, frame_here + 1, !first_pass_here, ports, first_pass_here);
     // YG_RESULTS=1: the matchmaking result reader (Orca/UX/Results.h) over this run, every frame
     // final at its first pass (a sync test's re-runs come after and change nothing).
     static const bool s_results = Orca::GetEnv("YG_RESULTS") == "1";

@@ -10,7 +10,9 @@
 
 // Machine-readable status for the YouGame desktop app, one line each on stdout in a session:
 //   orca state booting|lobby|playing|ended, and drop-in's (ORCA.md "Drop-in"): joining <percent>,
-//   friend-joining, friend-joined, friend-left <why>, host-left, left, no-room
+//   friend-joining, friend-joined, friend-left <why>, host-left, left, no-room, and a held join's
+//   (ORCA.md "Boot and friends from the menus"): friend-holding (the host: a friend waits until its
+//   game is back in the menus), friend-waiting (the joiner: the host plays a single-player mode)
 //   orca error <code> <sentence for the player>
 //   orca menu <event>, a pick in the game's own Online menu: online casual, online ranked (with the
 //   app's "host"; "... local" without it), online friends, cancel (ORCA.md "Matchmaking")

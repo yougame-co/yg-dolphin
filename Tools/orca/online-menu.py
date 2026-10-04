@@ -76,14 +76,13 @@ STEP = 50
 # Booting to the main menu's top page, and the first press there (frames of the main menu scene).
 # Menu presses are for the menu's first visit (`@muMenuMain:1`), a back scenario's for its second.
 if PPLUS:
-    # Project+ boots to its character select (frame ~163); holding B goes to the main menu's VERSUS
-    # page, B again to the top page. The hold counts from the boot, not the scene: the character
-    # select the menu leaves for later must not send the game back to the menu. The scenario's
-    # character select is then the second.
-    BOOT = ["285 330 1 B", "@muMenuMain:1 120 124 1 B"]
-    FIRST = 200
-    CSS_VISIT = 2
+    # Orca boots Project+ to its main menu's top page, as Brawl (PPLUS32.patches: its codeset's
+    # "Boot Directly to CSS" takes the title's path instead).
+    BOOT = []
+    FIRST = 120
+    CSS_VISIT = 1
     EXIT_FRAMES = 700  # after the last press: out of the menu to character select
+    PPLUS_MENU = 600  # the menu scene starts at frame 197; room to spare
 else:
     BOOT = ["@scStrap mash 30 99999 1 40 A", "@scBoot mash 30 99999 1 40 A",
             "@scTitle mash 30 99999 1 40 A"]
@@ -208,8 +207,8 @@ def run(name, steps, expected, codes, back, css_count):
     input_path, last = write_input(name, steps, back)
     user = os.path.join(WORK, f"user-{name}")
     os.makedirs(user)
-    # The menu scene starts at about frame 1430 in Brawl and 330 in Project+.
-    exit_after = (1430 if not PPLUS else 330) + last + EXIT_FRAMES
+    # The menu scene starts at about frame 1430 in Brawl and 197 in Project+.
+    exit_after = (1430 if not PPLUS else PPLUS_MENU) + last + EXIT_FRAMES
     env = {
         "HOME": os.environ["HOME"],
         "PATH": os.environ["PATH"],

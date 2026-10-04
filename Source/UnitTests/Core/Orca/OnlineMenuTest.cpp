@@ -1147,3 +1147,264 @@ TEST(OrcaOnlineMenuText, WritesNothingUnlessItIsTheMenusOwnText)
     EXPECT_EQ(FindArchiveFile(n, IMAGE, 5), 0u);
   }
 }
+
+// Both games boot to the main menu (Luis, 2026-10-04). Brawl's boot goes there through its own
+// sequences; Project+'s codeset's "Boot Directly to CSS" takes its Start case's path instead (the
+// title, then the main menu), and the title is skipped the same way in both.
+TEST(OrcaOnlineMenuBoot, BothGamesBootToTheMainMenu)
+{
+  const auto brawl = Shipped("RSBE01.patches");
+  const auto pplus = Shipped("PPLUS32.patches");
+  for (const u32 at : {0x806CA1F8u, 0x806CA204u})
+  {
+    SCOPED_TRACE(at);
+    const auto b = GroupAt(brawl, at);
+    const auto p = GroupAt(pplus, at);
+    ASSERT_EQ(b.size(), 1u);
+    EXPECT_EQ(Originals(b), Originals(p));
+    EXPECT_EQ(Values(b), Values(p));
+    EXPECT_EQ(b[0].value, 0x38000010u);  // li r0, 16: the title's exit
+  }
+  // NETBOOST.GCT's "Boot Directly to CSS" in Project+'s memory (0x80550010 + 0x9C10): its
+  // no-special-input case becomes its Start case (sqPrizeCheck with 0x14), between two guards.
+  const auto boot = GroupAt(pplus, 0x80559C20);
+  ASSERT_EQ(boot.size(), 4u);
+  EXPECT_EQ(Originals(boot), (std::vector<u32>{0x41A0FF84, 0x38951B54, 0x38A00000, 0x48000038}));
+  EXPECT_EQ(Values(boot), (std::vector<u32>{0x41A0FF84, 0x38951C94, 0x38A00014, 0x48000038}));
+  // The code's own Start case, which the new words copy (addi r4, r21, 0x1C94; li r5, 0x14).
+  EXPECT_FALSE(AnyLineIn(brawl, 0x80550000, 0x80570000));
+}
+
+TEST(OrcaOnlineMenuDropIn, SingleTrackModesHoldAFriendsJoin)
+{
+  for (const char* held : {"sqSingleSimple", "sqSingleAllstar", "sqSingleBoss", "sqEvent",
+                           "sqTraining", "sqHomerun", "sqTargetBreak", "sqKumite", "sqAdventure",
+                           "sqCoinShooter", "sqEdit", "sqReplay", "sqTyFigDisp"})
+  {
+    EXPECT_TRUE(SequenceHoldsDropIn(held)) << held;
+  }
+  for (const char* open : {"sqMenuMain", "sqVsMelee", "sqSpMelee", "sqToMelee", "sqQuMelee",
+                           "sqPrizeCheck", "sqTitle", "sqBoot", "sqButton", ""})
+  {
+    EXPECT_FALSE(SequenceHoldsDropIn(open)) << open;
+  }
+}
+
+namespace
+{
+using FriendsMove::Decide;
+using FriendsMove::Inputs;
+using FriendsMove::Outputs;
+
+// The main menu running, port 1 alone, the block's bytes kept.
+Inputs OnMenu(int frame)
+{
+  Inputs in;
+  in.present = true;
+  in.plugged = 0x01;
+  in.scene = "muMenuMain";
+  in.sequence = "sqMenuMain";
+  in.step = FriendsMove::STEP_RUNNING;
+  in.frame = frame;
+  in.tag = 0xF5;
+  in.seen = 0x01;
+  return in;
+}
+
+// The next boundary's inputs: what `out` wrote (and the menu's exit, if it moved).
+Inputs After(Inputs in, const Outputs& out, int frames = 1)
+{
+  if (!out.keep)
+  {
+    in.frame += frames;
+    return in;
+  }
+  in.tag = 0xF5;
+  in.seen = out.seen;
+  in.pending = out.pending;
+  in.menu_since = out.menu_since;
+  if (out.move)
+  {
+    in.exit_code = FriendsMove::EXIT_WITH_FRIENDS;
+    in.step = FriendsMove::STEP_EXIT;
+  }
+  in.frame += frames;
+  return in;
+}
+
+// The same boundary run again on what it wrote (a re-run from the snapshot saved there): the same
+// writes, and no second move.
+void ExpectIdempotent(const Inputs& in, const Outputs& out)
+{
+  Inputs again = After(in, out, 0);
+  const Outputs second = Decide(again);
+  EXPECT_EQ(second.keep, out.keep);
+  EXPECT_EQ(second.seen, out.seen);
+  EXPECT_EQ(second.pending, out.pending);
+  EXPECT_EQ(second.menu_since, out.menu_since);
+  EXPECT_FALSE(second.move);
+}
+}  // namespace
+
+namespace
+{
+// Runs boundaries from `in` until a move (at most `limit`); the frame it moved at, or -1.
+int RunUntilMove(Inputs& in, int limit)
+{
+  for (int i = 0; i < limit; ++i)
+  {
+    const Outputs out = Decide(in);
+    ExpectIdempotent(in, out);
+    const int frame = in.frame;
+    in = After(in, out);
+    if (out.move)
+      return frame;
+  }
+  return -1;
+}
+}  // namespace
+
+TEST(OrcaOnlineMenuDropIn, AFriendOnTheMainMenuTakesTheHostToWithFriends)
+{
+  Inputs in = OnMenu(1000);
+  Outputs out = Decide(in);
+  EXPECT_TRUE(out.keep);
+  EXPECT_EQ(out.menu_since, 0u);  // nobody waiting: nothing counted
+  EXPECT_FALSE(out.move);
+  ExpectIdempotent(in, out);
+  // The friend plugs in at 1100: both see the menu for MENU_SETTLE_FRAMES, then go.
+  in = After(in, out, 100);
+  in.plugged = 0x03;
+  out = Decide(in);
+  EXPECT_EQ(out.pending, 1);
+  EXPECT_EQ(out.seen, 0x03);
+  EXPECT_EQ(out.menu_since, 1101u);
+  EXPECT_FALSE(out.move);
+  ExpectIdempotent(in, out);
+  in = After(in, out);
+  EXPECT_EQ(RunUntilMove(in, 100), 1100 + static_cast<int>(FriendsMove::MENU_SETTLE_FRAMES));
+  // The scene change: nothing more, with the friend still in.
+  in.scene = "scMemoryChange";
+  out = Decide(in);
+  EXPECT_FALSE(out.move);
+  EXPECT_EQ(out.pending, 0);
+  in = After(in, out);
+  in.scene = "scSelctCharacter";
+  in.sequence = "sqVsMelee";
+  in.step = FriendsMove::STEP_RUNNING;
+  in.exit_code = 0;
+  out = Decide(in);
+  EXPECT_FALSE(out.move);
+  // B back to the main menu with the friend still plugged in: they stay there.
+  in = After(in, out, 600);
+  in.scene = "muMenuMain";
+  in.sequence = "sqMenuMain";
+  EXPECT_EQ(RunUntilMove(in, 120), -1);
+}
+
+TEST(OrcaOnlineMenuDropIn, AFriendWhoPluggedInDuringTheBootWaitsForTheMenu)
+{
+  // The friend plugged in during the boot (pending), and the main menu starts at 2000.
+  Inputs in = OnMenu(1500);
+  in.tag = 0x3A;  // nothing kept yet: the friend's first boundary
+  in.scene = "scStrap";
+  in.sequence = "sqBoot";
+  in.plugged = 0x01;
+  Outputs out = Decide(in);
+  EXPECT_FALSE(out.keep);  // solo: nothing written
+  in.plugged = 0x03;
+  out = Decide(in);
+  EXPECT_TRUE(out.keep);
+  EXPECT_EQ(out.pending, 1);
+  EXPECT_FALSE(out.move);
+  ExpectIdempotent(in, out);
+  in = After(in, out, 500);
+  in.scene = "muMenuMain";
+  in.sequence = "sqMenuMain";
+  EXPECT_EQ(RunUntilMove(in, 100), 2000 + static_cast<int>(FriendsMove::MENU_SETTLE_FRAMES));
+}
+
+TEST(OrcaOnlineMenuDropIn, NoMoveForQueueRoomsVersusOrAFriendWhoLeft)
+{
+  {
+    // A queue room's header: never.
+    Inputs in = OnMenu(1000);
+    in.menu_since = 1;
+    in.pending = 1;
+    in.plugged = 0x03;
+    in.queue = true;
+    const Outputs out = Decide(in);
+    EXPECT_FALSE(out.move);
+    EXPECT_EQ(out.pending, 0);
+  }
+  {
+    // Plugged in on Versus' character select: already there; nothing later on the menu.
+    Inputs in = OnMenu(1000);
+    in.scene = "scSelctCharacter";
+    in.sequence = "sqVsMelee";
+    in.plugged = 0x03;
+    Outputs out = Decide(in);
+    EXPECT_EQ(out.pending, 0);
+    in = After(in, out, 300);
+    in.scene = "muMenuMain";
+    in.sequence = "sqMenuMain";
+    for (int i = 0; i < 60; ++i)
+    {
+      out = Decide(in);
+      EXPECT_FALSE(out.move);
+      in = After(in, out);
+    }
+  }
+  {
+    // Pending, then the friend leaves before the host's menu: nothing.
+    Inputs in = OnMenu(1000);
+    in.scene = "scMelee";
+    in.sequence = "sqSingleSimple";
+    in.plugged = 0x03;
+    Outputs out = Decide(in);
+    EXPECT_EQ(out.pending, 1);
+    in = After(in, out, 100);
+    in.plugged = 0x01;
+    out = Decide(in);
+    EXPECT_EQ(out.pending, 0);
+  }
+  {
+    // The block's bytes not kept yet (the dead code, as in every solo game): a friend who plugs in
+    // is news, kept from then on.
+    Inputs in = OnMenu(1000);
+    in.tag = 0x3A;
+    in.seen = 0x20;
+    in.pending = 0x00;
+    in.menu_since = 0x3A200000;
+    in.plugged = 0x03;
+    Outputs out = Decide(in);
+    EXPECT_TRUE(out.keep);
+    EXPECT_EQ(out.seen, 0x03);
+    EXPECT_EQ(out.pending, 1);
+    EXPECT_EQ(out.menu_since, 1001u);
+    EXPECT_FALSE(out.move);
+    ExpectIdempotent(in, out);
+    // Ports plugged in before FIRST_FRIEND_FRAME were there from the start (test ports): no news.
+    in.frame = FriendsMove::FIRST_FRIEND_FRAME - 1;
+    out = Decide(in);
+    EXPECT_TRUE(out.keep);
+    EXPECT_EQ(out.seen, 0x03);
+    EXPECT_EQ(out.pending, 0);
+    // Solo, nothing kept: nothing written at all.
+    in.frame = 1000;
+    in.plugged = 0x01;
+    EXPECT_FALSE(Decide(in).keep);
+  }
+  {
+    // The menu already leaving (its own exit, or a step that isn't running): no move over it.
+    Inputs in = OnMenu(1000);
+    in.menu_since = 1;
+    in.pending = 1;
+    in.plugged = 0x03;
+    in.exit_code = 1;
+    EXPECT_FALSE(Decide(in).move);
+    in.exit_code = 0;
+    in.step = FriendsMove::STEP_EXIT;
+    EXPECT_FALSE(Decide(in).move);
+  }
+}

@@ -7,6 +7,8 @@
 # Rules count frames from entry into each scene (@scene).
 # A build without PPLUS32.patches first asks "Create save file for Project+?": P1 answers Yes.
 @scBoot mash 30 99999 1 40 A
+# Orca boots Project+ to its main menu (PPLUS32.patches): A through VERSUS to its character select.
+@muMenuMain:1 mash 30 99999 1 40 A
 @scSelctCharacter 6000 6003 1 A
 @scSelctCharacter 6010 6013 2 A
 @scSelctCharacter 6030 6056 1 SY=255

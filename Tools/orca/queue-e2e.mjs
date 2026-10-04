@@ -468,25 +468,15 @@ class Side {
 
 // The Online menu's path to With Anyone > Casual or Ranked (Tools/orca/online-menu.py).
 async function menuToQueue(side, queue) {
-  if (PPLUS) {
-    // Project+ boots to its character select: B (held) to the main menu's VERSUS page, B to the top.
-    await side.waitScene("scSelctCharacter", 120000);
-    await sleep(3000);
-    await side.press("B", 900);
-    await side.waitScene("muMenuMain", 30000);
-    await sleep(2500);
-    await side.press("B");
-    await sleep(1500);
-  } else {
-    // Brawl: past the strap, boot and title screens to the main menu (no press once the title
-    // leaves: a stray A on the main menu would pick Group).
-    const mash = setInterval(() => {
-      if (["", "scStrap", "scBoot", "scTitle"].includes(side.scene)) side.press("A");
-    }, 700);
-    await side.waitScene("muMenuMain", 120000);
-    clearInterval(mash);
-    await sleep(2500);
-  }
+  // Both games boot to the main menu (Project+ through its title, PPLUS32.patches): past the strap,
+  // boot and title screens (no press once the title leaves: a stray A on the main menu would pick
+  // Group, VERSUS in Project+).
+  const mash = setInterval(() => {
+    if (["", "scStrap", "scBoot", "scTitle"].includes(side.scene)) side.press("A");
+  }, 700);
+  await side.waitScene("muMenuMain", 120000);
+  clearInterval(mash);
+  await sleep(2500);
   for (const b of [
     "DOWN",
     "A",

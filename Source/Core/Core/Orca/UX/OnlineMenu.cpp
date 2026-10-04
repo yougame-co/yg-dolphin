@@ -3,6 +3,11 @@
 
 #include "Core/Orca/UX/OnlineMenu.h"
 
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
 #include <mutex>
 #include <string>
 
@@ -13,7 +18,9 @@
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Status.h"
+#include "Core/Orca/UX/MatchBlock.h"
 #include "Core/Orca/UX/NameTags.h"
+#include "Core/Orca/UX/Probe.h"
 
 namespace Orca::UX
 {
@@ -21,7 +28,9 @@ namespace
 {
 constexpr u32 SCENE_MANAGER = 0x805A0060;
 constexpr u32 MANAGER_SCENE = 0x4;
+constexpr u32 MANAGER_SEQUENCE = 0x10;
 constexpr u32 MANAGER_EXIT_CODE = 0x284;
+constexpr u32 MANAGER_STEP = 0x288;
 constexpr u32 SCENE_NAME_MAX = 32;
 
 bool Pointer(const GuestMemory& m, u32 p)
@@ -29,19 +38,18 @@ bool Pointer(const GuestMemory& m, u32 p)
   return p % 4 == 0 && m.Valid(p);
 }
 
-}  // namespace
-
-std::string ReadSceneName(const GuestMemory& m)
+// The name of the object (a scene or a sequence) the manager's field at `field` points to.
+std::string ReadManagerName(const GuestMemory& m, u32 field)
 {
   if (!Pointer(m, SCENE_MANAGER))
     return {};
   const u32 manager = m.Read32(SCENE_MANAGER);
-  if (!Pointer(m, manager + MANAGER_SCENE))
+  if (!Pointer(m, manager + field))
     return {};
-  const u32 scene = m.Read32(manager + MANAGER_SCENE);
-  if (!Pointer(m, scene))
+  const u32 object = m.Read32(manager + field);
+  if (!Pointer(m, object))
     return {};
-  const u32 name = m.Read32(scene);
+  const u32 name = m.Read32(object);
   std::string out;
   for (u32 i = 0; i < SCENE_NAME_MAX && m.Valid(name + i); ++i)
   {
@@ -51,6 +59,26 @@ std::string ReadSceneName(const GuestMemory& m)
     out.push_back(c);
   }
   return {};  // not a name
+}
+
+// Brawl rev 2 itself or a launcher profile booting it (Project+): the addresses are that
+// executable's.
+bool BrawlExecutable()
+{
+  const Orca::Profile* profile = Orca::ActiveProfile();
+  return profile && profile->revision == 2 &&
+         (profile->IsLauncher() ? profile->disc == "RSBE01" : profile->game_id == "RSBE01");
+}
+}  // namespace
+
+std::string ReadSceneName(const GuestMemory& m)
+{
+  return ReadManagerName(m, MANAGER_SCENE);
+}
+
+std::string ReadSequenceName(const GuestMemory& m)
+{
+  return ReadManagerName(m, MANAGER_SEQUENCE);
 }
 
 MenuState ReadMenuState(const GuestMemory& m)
@@ -143,16 +171,8 @@ std::optional<OnlinePick> OnlineMenuReader::Boundary(const MenuState& state, boo
 
 void ReadOnlineMenu(const Core::CPUThreadGuard& guard, bool resimulating, bool alone)
 {
-  if (resimulating)
+  if (resimulating || !BrawlExecutable())
     return;
-  // Brawl rev 2 itself or a launcher profile booting it (Project+): the addresses are that
-  // executable's.
-  const Orca::Profile* profile = Orca::ActiveProfile();
-  if (!profile || profile->revision != 2 ||
-      (profile->IsLauncher() ? profile->disc != "RSBE01" : profile->game_id != "RSBE01"))
-  {
-    return;
-  }
   static OnlineMenuReader s_reader;
   GuardMemory memory(guard);
   const MenuState state = ReadMenuState(memory);
@@ -244,4 +264,153 @@ std::pair<std::string, std::string> Lines()
   return {};
 }
 }  // namespace Search
+
+namespace
+{
+std::atomic<bool> s_drop_in_held{false};
+
+// Versus and its relatives: a friend who plugs in there is already where friends play (the
+// character select comes round again after a match).
+bool IsVersusSequence(std::string_view sequence)
+{
+  constexpr std::array<std::string_view, 4> versus{"sqVsMelee", "sqSpMelee", "sqToMelee",
+                                                    "sqQuMelee"};
+  return std::ranges::find(versus, sequence) != versus.end();
+}
+}  // namespace
+
+bool SequenceHoldsDropIn(std::string_view sequence)
+{
+  // sora_scene's sequences (Project+ keeps them all): the solo modes, the Subspace Emissary, and
+  // the Vault's screens (trophies, the stage builder, replays, the coin launcher).
+  constexpr std::array<std::string_view, 16> held{
+      "sqSingleSimple", "sqSingleAllstar", "sqSingleBoss",  "sqEvent",
+      "sqTraining",     "sqHomerun",       "sqTargetBreak", "sqKumite",
+      "sqAdventure",    "sqCoinShooter",   "sqCoinshooter", "sqEdit",
+      "sqReplay",       "sqTyFigDisp",     "sqChallenger",  "sqDebugDefault"};
+  return std::ranges::find(held, sequence) != held.end();
+}
+
+bool DropInHeld()
+{
+  return s_drop_in_held.load();
+}
+
+namespace FriendsMove
+{
+Outputs Decide(const Inputs& in)
+{
+  namespace B = MatchBlock;
+  // Ports 2-4: a friend's.
+  constexpr u8 FRIEND_PORTS = 0x0E;
+  Outputs out;
+  // Nothing kept yet (the dead code's bytes) and no friend: nothing to keep. Solo play never writes
+  // these bytes.
+  const bool kept = in.tag == B::FRIENDS_TAG_VALUE;
+  if (!kept && !(in.plugged & FRIEND_PORTS))
+    return out;
+  out.keep = true;
+  // Kept from now on. Nothing seen yet: the host's own port, so a friend who plugs in now is news;
+  // ports plugged in before FIRST_FRIEND_FRAME were there from the start (a harness's test ports),
+  // since no friend ever plugs in that early.
+  const u8 seen = kept                                ? in.seen :
+                  in.frame < FIRST_FRIEND_FRAME ? in.plugged :
+                                                        static_cast<u8>(in.plugged & ~FRIEND_PORTS);
+  bool pending = kept && in.pending != 0;
+  if (in.plugged & ~seen & FRIEND_PORTS)
+    pending = true;
+  // Nobody to take along, a queue match, or already on Versus' way to its character select.
+  if (!(in.plugged & FRIEND_PORTS) || in.queue || IsVersusSequence(in.sequence))
+    pending = false;
+  const bool menu =
+      in.scene == "muMenuMain" && in.step == STEP_RUNNING && in.exit_code == 0 && in.frame >= 0;
+  const u32 since = kept ? in.menu_since : 0;
+  // How long the main menu has run with a friend waiting for it.
+  out.menu_since = pending && menu ? (since != 0 ? since : static_cast<u32>(in.frame) + 1) : 0;
+  if (out.menu_since != 0 &&
+      static_cast<u32>(in.frame) + 1 - out.menu_since >= MENU_SETTLE_FRAMES)
+  {
+    out.move = true;
+    pending = false;
+    out.menu_since = 0;
+  }
+  out.seen = in.plugged;
+  out.pending = pending ? 1 : 0;
+  return out;
+}
+
+bool Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
+           const std::vector<Events::PortInfo>& ports)
+{
+  namespace B = MatchBlock;
+  if (!BrawlExecutable())
+    return false;
+  GuardMemory m(guard);
+  Inputs in;
+  in.sequence = ReadSequenceName(m);
+  // What the session's drop-in reads at this boundary (first runs only: a re-run's view of an older
+  // frame is not where the game is). Tests only, ORCA_TEST_HOLD=<from>-<to>: held over those frames
+  // too, as if the host played a single-player mode there.
+  static const std::pair<int, int> s_test_hold = [] {
+    const char* v = std::getenv("ORCA_TEST_HOLD");
+    int from = -1, to = -1;
+    if (v && std::sscanf(v, "%d-%d", &from, &to) != 2)
+      from = to = -1;
+    return std::pair(from, to);
+  }();
+  if (!resimulating)
+  {
+    const bool test_hold =
+        frame >= s_test_hold.first && frame < s_test_hold.second && TestKnobsAllowed();
+    s_drop_in_held = SequenceHoldsDropIn(in.sequence) || test_hold;
+  }
+  in.present = B::Present(m) && m.Valid(B::FRIENDS) && m.Valid(B::FRIENDS_END - 1);
+  if (!in.present || !Pointer(m, SCENE_MANAGER))
+    return false;
+  const u32 manager = m.Read32(SCENE_MANAGER);
+  if (!Pointer(m, manager + MANAGER_EXIT_CODE) || !Pointer(m, manager + MANAGER_STEP))
+    return false;
+  for (const Events::PortInfo& p : ports)
+  {
+    if (p.port >= 0 && p.port < 4)
+      in.plugged |= static_cast<u8>(1 << p.port);
+  }
+  in.queue = m.Read32(B::MAGIC) == B::MAGIC_VALUE && m.Read8(B::VERSION) == B::VERSION_VALUE &&
+             m.Read8(B::MODE) != B::MODE_NONE;
+  in.scene = ReadSceneName(m);
+  in.step = m.Read32(manager + MANAGER_STEP);
+  in.exit_code = m.Read32(manager + MANAGER_EXIT_CODE);
+  in.frame = frame;
+  in.tag = m.Read8(B::FRIENDS_TAG);
+  in.seen = m.Read8(B::FRIENDS_SEEN);
+  in.pending = m.Read8(B::FRIENDS_PENDING);
+  in.menu_since = m.Read32(B::FRIENDS_MENU_SINCE);
+  const Outputs out = Decide(in);
+  if (!out.keep)
+    return false;
+  // Only the bytes that differ.
+  const auto put8 = [&](u32 address, u8 value) {
+    if (m.Read8(address) != value)
+      m.Write8(address, value);
+  };
+  put8(B::FRIENDS_SEEN, out.seen);
+  put8(B::FRIENDS_PENDING, out.pending);
+  if (m.Read32(B::FRIENDS_MENU_SINCE) != out.menu_since)
+    m.Write32(B::FRIENDS_MENU_SINCE, out.menu_since);
+  put8(B::FRIENDS_TAG, B::FRIENDS_TAG_VALUE);
+  if (!out.move)
+    return false;
+  // The main menu's own exit (muMenuMain, 0x81176828): the code, then the step.
+  m.Write32(manager + MANAGER_EXIT_CODE, EXIT_WITH_FRIENDS);
+  m.Write32(manager + MANAGER_STEP, STEP_EXIT);
+  if (!resimulating)
+  {
+    NOTICE_LOG_FMT(ROLLBACK,
+                   "Online menu: frame {}: a friend plugged in, the main menu goes to With Friends' "
+                   "character select (exit code {})",
+                   frame, EXIT_WITH_FRIENDS);
+  }
+  return true;
+}
+}  // namespace FriendsMove
 }  // namespace Orca::UX

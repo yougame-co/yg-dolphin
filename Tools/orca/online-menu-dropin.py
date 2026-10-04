@@ -1,19 +1,27 @@
 #!/usr/bin/env python3
 # online-menu-dropin.py: a friend drops into a host who sits on the game's own ONLINE page
-# (ORCA.md "Online menu"), over a real YouGame dev room, headless and muted. Two Orcas at most.
+# (ORCA.md "Online menu", "Drop-in"), over a real YouGame dev room, headless and muted. Two Orcas at
+# most.
 #
 #   Tools/orca/online-menu-dropin.py <dolphin-emu-nogui> <disc> [--pplus <launcher.dol>] [--invite]
+#                                    [--hold]
 #
 # 1. Host boots to the main menu and opens PLAY ONLINE: the ONLINE page (With Friends / With
 #    Anyone), and stays there.
 # 2. Friend sends "join <host's room>": the host's keyframe is taken on the ONLINE page, the friend
 #    loads it, catches up and plugs into port 2 ("playing" / "friend-joined").
-# 3. With the friend plugged in, the host's script picks With Anyone > Casual: both games leave the
-#    menu for the local Versus character select at the same frame, and neither Orca prints any
-#    "orca menu" line (a pick while friends play is theirs too, never an event).
-# 4. The friend leaves: the host plays on alone ("friend-left left"), still printing nothing (the
-#    pick was made while not alone and is never announced later).
+# 3. With the friend plugged in, both games leave the menu for With Friends' character select at the
+#    same frame, half a second after the friend plugged in (UX/OnlineMenu.h FriendsMove: "a friend
+#    plugged in, the main menu goes to With Friends' character select" in both logs), and neither
+#    Orca prints any "orca menu" line (what happens while friends play is theirs too, never an
+#    event).
+# 4. The friend leaves: the host plays on alone ("friend-left left"), still printing nothing.
 # Fails on a desync, a timeout, an "orca error", or any "orca menu" line.
+#
+# --hold: the same, with the host's game held as if it played a single-player mode until its frame
+# HOLD_UNTIL (ORCA_TEST_HOLD): the host prints "friend-holding" and the friend "friend-waiting" (and
+# waits past the join's 90 s limit if need be); from HOLD_UNTIL the join goes on ("friend-joining",
+# "joining 0") and step 3 follows.
 #
 # --invite (one Orca at a time, two boots): the app invites a friend who hasn't arrived yet. The
 # host, on the ONLINE page, gets "prepare-join" and stores its keyframe; nobody takes it.
@@ -42,6 +50,10 @@ if len(sys.argv) < 3:
 BIN, DISC = sys.argv[1], sys.argv[2]
 PPLUS = sys.argv[sys.argv.index("--pplus") + 1] if "--pplus" in sys.argv else None
 INVITE = "--invite" in sys.argv
+HOLD = "--hold" in sys.argv
+# --hold: the host's frame its hold ends at (it reaches the menu at about 1,430 in Brawl, and the
+# friend arrives some 15 s later).
+HOLD_UNTIL = 4200
 ROOM = "olm" + "".join(random.choice(string.ascii_lowercase + string.digits) for _ in range(6))
 WORK = tempfile.mkdtemp(prefix="orca-online-dropin-")
 T0 = time.time()
@@ -53,13 +65,11 @@ PICK_AT = 7200
 # after the menu shows, and taken about 800 frames into the menu).
 INVITE_PICKS = {"fresh": 1500, "stale": 3600}
 
-if PPLUS:
-    HOST_INPUT = ["285 330 1 B", "@muMenuMain 120 124 1 B",
-                  "@muMenuMain 200 203 1 DOWN", "@muMenuMain 250 253 1 A"]
-else:
-    HOST_INPUT = ["@scStrap mash 30 99999 1 40 A", "@scBoot mash 30 99999 1 40 A",
-                  "@scTitle mash 30 99999 1 40 A",
-                  "@muMenuMain 120 123 1 DOWN", "@muMenuMain 170 173 1 A"]
+# Both games boot to the main menu (Project+ through its title, PPLUS32.patches); the boot screens'
+# presses do nothing in Project+.
+HOST_INPUT = ["@scStrap mash 30 99999 1 40 A", "@scBoot mash 30 99999 1 40 A",
+              "@scTitle mash 30 99999 1 40 A",
+              "@muMenuMain 120 123 1 DOWN", "@muMenuMain 170 173 1 A"]
 
 
 def pick_at(frame):
@@ -181,8 +191,9 @@ def fail(why):
     sys.exit(1)
 
 
-def start_host(room, picks, label="Host"):
-    host = Orca(label, {"ORCA_ROOM": room}, write(f"{label}.txt", HOST_INPUT + pick_at(picks)))
+def start_host(room, picks, label="Host", env_extra=None):
+    host = Orca(label, {"ORCA_ROOM": room, **(env_extra or {})},
+                write(f"{label}.txt", HOST_INPUT + pick_at(picks)))
     orcas.append(host)
     host.expect("orca caps", 30)
     host.send("caps join leave stats")
@@ -255,7 +266,7 @@ if INVITE:
         shutil.rmtree(WORK, ignore_errors=True)
     sys.exit(0)
 
-host = start_host(ROOM, PICK_AT)
+host = start_host(ROOM, PICK_AT, env_extra={"ORCA_TEST_HOLD": f"0-{HOLD_UNTIL}"} if HOLD else None)
 
 friend = Orca("Friend", {}, write("friend.txt", ["# no presses: port 2 stays still"]))
 orcas.append(friend)
@@ -264,20 +275,34 @@ friend.expect("orca caps", 30)
 friend.send("caps join leave stats")
 friend.expect("orca state joining", 60)
 host.expect("orca state friend-joining", 60)
+if HOLD:
+    host.expect("orca state friend-holding", 30)
+    friend.expect("orca state friend-waiting", 30)
+    log("held: the host's game is in a single-player mode")
+    friend.expect("orca state joining 0", 180)
+    host.expect("orca state friend-joining", 30)
+    held = host.wait_log("Drop-in: the join goes on at frame", 10)
+    log(f"Host: {held[held.find('Drop-in'):]}")
 friend.expect("orca state playing", 120)
 host.expect("orca state friend-joined", 60)
 keyframe = host.wait_log("Drop-in: keyframe of frame", 10)
 log(f"Host: {keyframe}")
 
-# The host's pick: both leave the menu for character select, at the same frame.
+# The friend plugged in on the ONLINE page: both go to With Friends' character select, at the same
+# frame.
+MOVE = "the main menu goes to With Friends' character select"
 before = {o.name: len(o.log_lines("-> scSelctCharacter")) for o in orcas}
 frames = {}
 for o in orcas:
+    moved = o.wait_log(MOVE, 60)
+    log(f"{o.name}: {moved[moved.find('Online menu'):]}")
     line = o.wait_log("-> scSelctCharacter", 240, after=before[o.name])
     frames[o.name] = int(line.split("Scene frame ")[1].split(":")[0])
     log(f"{o.name}: {line[line.find('Scene frame'):]}")
 if frames["Host"] != frames["Friend"]:
     fail(f"character select at frame {frames['Host']} (host) and {frames['Friend']} (friend)")
+if len(host.log_lines(MOVE)) != 1:
+    fail(f"the host moved {len(host.log_lines(MOVE))} times")
 time.sleep(10)
 friend.send("leave")
 friend.expect("orca state left", 30)
