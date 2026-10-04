@@ -1892,7 +1892,35 @@ only a queue room's host writes one (`Core/Orca/UX/OnlineRules.*`, `MatchBlock.h
 
 `ux=8` (the rules preset of `ux=6` is gone), cap `locks`. Test knob `ORCA_TEST_QUEUE=casual|ranked`
 (a test override): the header as a queue room's host writes it, in a harness run or a dev game's
-room, both Orcas set alike. Unit tests `OrcaOnlineRules*`.
+room, both Orcas set alike. Unit tests `OrcaOnlineRules*` (the header's lifecycle and saved rules,
+each ruleset's bytes, Ice Climbers and FD, Project+'s list, the gate's masks, the ready timer,
+idempotence, friends games untouched); `OrcaOnlineMenu*` and `OrcaGamePatches*` cover the toggled
+group in the shipped files. 225 `Orca*` tests pass.
+
+Checked 2026-10-03 (branch `sp-casual`, Apple Silicon, `-v Null`), `YG_SYNCTEST=7` under
+`ORCA_TEST_QUEUE`: character select, Start, a match that port 2 ends by running off the stage,
+results, the character select again with both ports holding B for 150 frames (nothing happens),
+Start, a second match, results, the character select. Ranked also presses B on the stage select
+(nothing happens) before picking.
+
+| Run | Frames | Re-run frames | RAM mismatches | Stages |
+|---|---|---|---|---|
+| Brawl casual | 1500-6500 | 31,451 to frame 6000 | 0 | 0x01 Battlefield, 0x13 Lylat Cruise (Random, no stage select) |
+| Brawl ranked | 1500-6500 | 34,951 | 0 | 0x02 Final Destination (picked) |
+| Project+ casual | 140-5000 | 33,971 | 0 | 0x0C, 0x2D (Random, from the 2024 Proposed list: Frigate Husk, Dream Land) |
+| Project+ ranked | 140-5000 | 33,971 | 0 | 0x06 (picked) |
+
+Also under the harness: A on the character select's BACK button with the header reloads the
+character select; held B for 30 frames without it goes to the menu (so the gate's B and the flip
+are what keep a queue match in).
+
+Not yet (Phase 1 leftovers): the rules bar's arrows and the Rules, team (BRAWL tab) and name
+buttons still respond (the rules snap back at the next boundary; NameTags keeps the names), and A
+on a NONE panel can add a CPU (the game is then void "ports"); Giga Bowser and Wario-Man aren't
+refused in Project+; Project+'s Code Menu values (Auto L-Cancel, Stock Control, Input Assist,
+Debug) aren't forced (their defaults are off and the menu can't open); the ready timer's no-show
+and the stall claim were not run live; the room doesn't yet treat a stall claim as more than the
+survivor's word (YouGame rooms).
 
 ## Embedding
 
