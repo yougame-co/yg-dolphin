@@ -2294,7 +2294,8 @@ the game reads its controllers, so no game code has to be found and patched for 
   callback writes into memory earlier at the same boundary, and the source reads it back.
 - **Compatibility.** No source is registered yet, so this build computes exactly what one without
   the gate does. A source changes what the game computes: bump `UX::kCompatVersion` with it.
-  Friends rooms register none, or one that returns no masks.
+  Friends rooms register none, or one that returns no masks. (Since `ux=11` every session's game,
+  friends and solo too, masks one thing: Z on the results screen, "The results screen's replay".)
 - **A read as another button** (`Mask::a_as`, q2-stages): while the player holds A the game sees
   these buttons pressed (after the mask, like `press`). The casual stage pick masks A and reads it
   as X, which vanilla Brawl's stage select ignores and Project+'s marks as a strike, so the rule
@@ -2343,6 +2344,44 @@ frame 267 on.
   Brawl 10,606 frames, Project+ 8,010.
 - `ORCA_TEST_GATE=1:START`: Brawl never leaves the character select (port 1's scripted Start never
   reaches the game).
+
+## The results screen's replay
+
+In both games the results screen's Z saves the fight's replay (the "Z REPLAY" under each player's
+panel). A session can't save one: its NAND has no save file (a session starts from an empty NAND,
+and both profiles' patches skip the game's "create a save file?" prompt), Brawl's SD card is absent
+and Project+'s read-only. Z still opened the save: "There is no save file. Unable to load or save
+data.", then the save's destination picker with both destinations crossed out ("Please insert an SD
+Card" or "This SD Card is locked", and "There is no save file" for the Wii). A and Start never leave
+that picker; only B does, any player's. Players who press A or Start after a game, the way they
+leave a results screen, stayed on it for good, both games alike (game logic over the synced pads,
+the same on both machines).
+
+- **Found** while reproducing a two-Orca `queue-e2e.mjs --q2 --queue casual` failure (Project+, a
+  simulated bad link, `--fuzz 25`: both pads pressing A, B, X, Y or Z at random, sticks too; game 1
+  ended while the fuzz still pressed). Mashing A with Z on the results screen opens it, as the fuzz
+  can; Z alone, A alone (both players' A leave the screen as before) or A then Z at a few chosen
+  frames did not.
+- **Vanilla, not Orca's rules:** the same with no header at all (`pplus-1v1.txt` and
+  `bf-mario-link-results.txt` with the mash added, as in a friends game or solo play), with the
+  queue's header (`ORCA_TEST_QUEUE=casual:solo`), and in both games. Nothing Orca writes or masks
+  acts on the results screen (the results reader, the locks, the toggled character select patch,
+  the gate's masks, the character order, the set block, the queue's Start, the casual stage pick's
+  `a_as`); 0.3.13's gate masked nothing there either.
+- **The fix** (`ux=11`): the input gate masks Z on the results screen (`scVsResult`) for every port
+  in every session's game, header or not (`Rules::SessionMasks`, merged into the gate's one source
+  in `UX.cpp`). Nothing else reads Z there; the queue's Z hold (its skip) reads the raw latch, on its
+  own character select. The "Z REPLAY" labels still show.
+- **Checked 2026-10-04** (branch `q3-results-hang` on `rel-0.3.15`, M4 Pro, headless, `-v Null`):
+  `Tools/orca/inputs/pplus-queue2-results-z.txt` and `bf-queue2-results-z.txt` (the whole casual
+  flows with both players mashing A, B, X, Y and Z from game 1's results screen's first frame) stay
+  on the results screen with rel-0.3.15's build and reach game 2's character select and its stage
+  select with this one (Project+ results 2558-2854, character select at 2857; Brawl 4001-4297, at
+  4300); so do the 1v1 inputs with the mash, without a header (Project+ results 3035-3411, Brawl
+  9861-10237). `YG_SYNCTEST=7` over both new inputs, the 0.3.14 env: Project+ 200-3200 20,951
+  re-run frames, Brawl 1440-4700 22,771, **0 RAM mismatches**. Hashlogs of the default inputs equal
+  rel-0.3.15's on every frame (Brawl 10,816, Project+ 9,011). Unit test
+  `OrcaOnlineRules.TheResultsScreenNeverTakesZ`; 373 `Orca*` tests, 356 pass, 17 skipped.
 
 ## Online rules
 
@@ -2490,9 +2529,10 @@ select's hands"); B was already masked there.
 
 ### Compatibility and tests
 
-`ux=10` (8 brought the locks and the rules preset of `ux=6` went; 9 the character select's A
+`ux=11` (8 brought the locks and the rules preset of `ux=6` went; 9 the character select's A
 gate; 10, Orca 0.3.14, queue2's character select, Project+'s boot to the main menu with friends
-dropping in from the menus, the character select's title, and the casual stage pick), caps `locks`
+dropping in from the menus, the character select's title, and the casual stage pick; 11, Orca
+0.3.15, no Z on the results screen in any session, "The results screen's replay"), caps `locks`
 and `queue2`. Test knob `ORCA_TEST_QUEUE=casual|ranked`
 (a test override): the header as a queue room's host writes it, in a harness run or a dev game's
 room, both Orcas set alike. Unit tests `OrcaOnlineRules*` (the header's lifecycle and saved rules,

@@ -105,6 +105,7 @@ constexpr const char* SCENE_CSS = "scSelctCharacter";
 constexpr const char* SCENE_SSS = "scSelStage";
 constexpr const char* SCENE_FIGHT = "scMelee";
 constexpr const char* SCENE_BETWEEN = "scMemoryChange";
+constexpr const char* SCENE_RESULTS = "scVsResult";
 
 bool Pointer(const GuestMemory& m, u32 p)
 {
@@ -563,6 +564,18 @@ Rollback::InputGate::Masks GateMasks(const GuestMemory& m)
   }
   for (Rollback::InputGate::Mask& mask : masks)
     mask.buttons = buttons;
+  return masks;
+}
+
+Rollback::InputGate::Masks SessionMasks(const GuestMemory& m)
+{
+  Rollback::InputGate::Masks masks{};
+  // The results screen's Z is its replay save, which no session can make (OnlineRules.h).
+  if (ReadSceneName(m) == SCENE_RESULTS)
+  {
+    for (Rollback::InputGate::Mask& mask : masks)
+      mask.buttons = PAD_TRIGGER_Z;
+  }
   return masks;
 }
 
