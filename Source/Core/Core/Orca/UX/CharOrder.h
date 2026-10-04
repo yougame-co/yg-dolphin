@@ -30,19 +30,28 @@ class CPUThreadGuard;
 // Each turn has 45 seconds; a pick that runs out keeps the character the player's token is on,
 // which is the previous game's character unless they moved it.
 //
-// How it plays, on the game's own character select (no new screen):
-//   - first, the first picker's turn: they can't take the token back (B) or leave (Start), and lock
-//     the pick in with A (on a character, or anywhere in the grid to keep the one the token is on:
-//     the online rules pass A only there, OnlineRules.h). WinnerFirst: the other player's
-//     controller does nothing. Free: the winner can lock in too (then does nothing more);
+// How it plays, on the game's own character select (no new screen; Luis, 2026-10-04: "press A to
+// select character and then press start after to lock in and ready up"):
+//   - on a player's turn, A on a character puts the token there (a pick), B with the token down
+//     takes it back up to pick again (the online rules let B reach the game only for that, never
+//     as the held B that backs out to the menus, OnlineRules.h CssBUnpicks), and Start with the
+//     token down locks the pick in: final, the turn is over. Start is never the game's here (the
+//     input gate keeps it; the raw latch, Queue.h RAW, shows it to the order);
+//   - first the first picker's turn; WinnerFirst: the other player's controller does nothing.
+//     Free: the winner may pick and lock in too (then does nothing more);
 //   - then the second picker's turn (unless they locked in already, Free): the first picker's
-//     controller does nothing, the second can't take the token back, and locks in with A or goes
-//     on with Start;
-//   - then Orca presses Start for the second picker (every other frame until the screen goes), so
-//     the game goes on to the stage select with both picks. A player who picked the token up (A on
-//     it) and let the time run out can only move and put it down, and Orca puts it on the character
-//     under the hand, if any, before it presses Start.
-// The overlay says whose turn it is and the time left ("Ada picks first · 0:42").
+//     controller does nothing;
+//   - then the stage select: in a queue2 room the queue goes on at once (Queue.h, no ready step
+//     after the order); else Orca presses Start for the second picker (every other frame until
+//     the screen goes). A player whose time ran out with the token in the hand can only move and
+//     put it down, and Orca puts it on the character under the hand, if any.
+// The overlay says whose turn it is, what to do and the time left ("ada locked in · bo: pick and
+// press Start · 0:42").
+//
+// Orca 0.3.14 and 0.3.15 locked a pick in with A anywhere in the grid and masked B: a player whose
+// token was still down from the last game (the tokens stay down from one character select to the
+// next) and who pressed A on another character to take it locked the old one in instead, and their
+// controller then did nothing at all (Luis's "stuck", 2026-10-04).
 //
 // Everything is a pure function of emulated memory and the hook's frame number, the same on both
 // machines and on every re-run: the state lives in the match block (kArea), written only from the
@@ -111,8 +120,14 @@ struct CssPort
 {
   bool human = false;  // a human has joined this port's area
   int character = kNoCharacter;  // under the hand while the token is in it, else the token's
-  bool placed = false;  // its token is on a character
-  u16 pressed = 0;      // PAD_* bits newly pressed on the frame that just ran (the game's view)
+  bool placed = false;  // its token is out of the hand (on a character, or on its way down)
+  bool flying = false;  // the token is on its way up or down
+  // The player's raw buttons (PAD_* bits) as the latch kept them (Queue.h RAW, RAW_PREV): held on
+  // the frame that just ran, and newly pressed on it. The game never sees Start here.
+  u16 raw = 0;
+  u16 raw_new = 0;
+  // On a character and still: Start locks it in, B takes it up.
+  bool Down() const { return human && placed && !flying && character != kNoCharacter; }
   bool operator==(const CssPort&) const = default;
 };
 struct CssView
@@ -174,19 +189,25 @@ constexpr u8 MODE_RANKED = 2;
 
 // The step machine: the state after this boundary, from the state before it. Pure. On the
 // character select of a ranked set's game 2 or later it starts the order (FirstPicker first), moves
-// on when the player whose turn it is locks in (A newly pressed on a frame of the step, with the
-// token on a character) or the pick's time is up (Free: past the second picker's turn when they
-// locked in already); it clears a stale order on the character select of any game it doesn't apply
-// to; off the character select it changes nothing.
+// on when the player whose turn it is locks in (Start newly pressed on a frame of the step, raw,
+// with the token down on a character) or the pick's time is up (Free: past the second picker's
+// turn when they locked in already); it clears a stale order on the character select of any game
+// it doesn't apply to; off the character select it changes nothing.
 State Advance(const SetView& set, const CssView& css, const State& state, int frame);
 
 // The gate's masks and presses for the frame about to run, from the state the hook left. Pure.
 Rollback::InputGate::Masks Gate(const SetView& set, const CssView& css, const State& state);
 
-// The overlay's line ("Ada picks first · 0:42"; "Your pick · 0:42 · A locks it in"), empty when
-// nothing is on. `ports` names the players and says which is this machine's (UI only).
+// The overlay's line ("ada picks first · 0:42"; "ada locked in · bo: pick and press Start ·
+// 0:31"), empty when nothing is on. `ports` names the players and says which is this machine's (UI
+// only).
 std::string Line(const SetView& set, const CssView& css, const State& state,
                  const std::vector<Events::PortInfo>& ports);
+
+// Which ports have locked in (bit p) on this state: the first picker's once its turn is over
+// (Free: the winner's own lock too), both once the order is done. 0 while the order isn't on.
+// Display only (the overlay's LOCKED IN badges).
+u8 LockedPorts(const SetView& set, const CssView& css, const State& state);
 
 // Supernova 2025's Meta Knight clause, re-checked once both final characters are known (Brawl's
 // exact order): if exactly one player is Meta Knight, the other port picks any legal stage. -1:
@@ -214,4 +235,7 @@ Rollback::InputGate::Masks GateFrame(const Core::CPUThreadGuard& guard);
 // behind it, so `pplus:2:1` runs the order on the boot's character select once both players have
 // joined; the order is kLaterGameOrder unless given. Parsed for tests.
 bool ParseTestSpec(const std::string& spec, SetView* out);
+// Whether ORCA_TEST_CHAR_ORDER is on (the latch then keeps the raw buttons on its character select
+// too, Queue.h).
+bool TestActive();
 }  // namespace Orca::UX::CharOrder

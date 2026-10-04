@@ -146,9 +146,14 @@ bool ReadyPhase(const View& v)
   return v.queue2 && !v.solo && v.css && (v.plugged & 3) == 3 && (v.game1 || v.order_done);
 }
 
+bool OrderLockedIn(const View& v)
+{
+  return ReadyPhase(v) && v.ranked && !v.game1 && v.order_locked_in;
+}
+
 bool Timed(const View& v)
 {
-  return v.ranked || v.game1;
+  return (v.ranked || v.game1) && !OrderLockedIn(v);
 }
 
 State Advance(const View& v, const State& state, int frame)
@@ -269,6 +274,18 @@ State Advance(const View& v, const State& state, int frame)
   s.timer = static_cast<u16>(std::min<u32>(t, 0xFFFF));
   if (s.flags & (FLAG_TIMED_OUT | FLAG_GO))
     return s;
+  if (OrderLockedIn(v))
+  {
+    // Ranked's later games: each player's Start in the character order was their lock-in, so the
+    // stage select comes at once (Luis, 2026-10-04: "after you lock in opponent chooses and presses
+    // start to lock in and immediately we go to stage select"), once both tokens are down.
+    if (v.ports[0].placed && v.ports[1].placed)
+    {
+      s.ready = 3;
+      s.flags |= FLAG_GO;
+    }
+    return s;
+  }
   // A joiner whose pick is still being put in can't ready yet.
   const bool steering = v.game1 && s.pick_set && !(s.locked & 2);
   follow(0, true);
@@ -486,6 +503,14 @@ Masks Gate(const View& v, const State& s)
       }
     }
   }
+  // A player who locked in (ready): their pick stays as it is (A would take the token up, X and Y
+  // turn the costume); B only unlocks them (the game never sees it: the online rules pass only a
+  // press's first frame, and this one is gone by the next).
+  for (int p = 0; p < 2; ++p)
+  {
+    if (s.ready & (1 << p))
+      masks[p].buttons |= PAD_BUTTON_A | PAD_BUTTON_B | PAD_BUTTON_X | PAD_BUTTON_Y;
+  }
   if (s.flags & FLAG_GO)
   {
     // Both ready: Start for port 1, every other frame until the character select goes.
@@ -517,8 +542,10 @@ View ReadView(const GuestMemory& m, const std::vector<Events::PortInfo>& ports)
   v.hand2_prev_y = std::bit_cast<float>(m.Read32(HAND_PREV + 4));
   if (v.ranked && !v.game1)
   {
-    const CharOrder::Step step = CharOrder::ReadState(m).step;
-    v.order_done = step != CharOrder::Step::First && step != CharOrder::Step::Second;
+    const CharOrder::State order = CharOrder::ReadState(m);
+    v.order_done = order.step != CharOrder::Step::First && order.step != CharOrder::Step::Second;
+    v.order_locked = CharOrder::LockedPorts(CharOrder::ReadSet(m), CharOrder::ReadCss(m), order);
+    v.order_locked_in = order.step == CharOrder::Step::Done && v.order_locked == 3;
   }
   for (const Events::PortInfo& info : ports)
   {
@@ -612,8 +639,15 @@ int WriteState(GuestMemory& m, const State& s)
 
 int Latch(GuestMemory& m, const std::array<std::optional<GCPadStatus>, 4>& raw)
 {
-  if (!Rules::ReadHeader(m).Queue2() || !RegionMapped(m))
+  // Under any header that locks (the character select's B and the character order's Start read
+  // it, OnlineRules.h, CharOrder.h), and with the character order's test knob on its character
+  // select.
+  if (!RegionMapped(m) ||
+      !(Rules::ReadHeader(m).Locked() ||
+        (CharOrder::TestActive() && MatchBlock::Present(m) && CharOrder::ReadCss(m).on_css)))
+  {
     return 0;
+  }
   Writer w{m};
   for (u32 p = 0; p < 2; ++p)
   {
@@ -731,6 +765,7 @@ void Lines(const View& v, const State& s, const std::vector<Events::PortInfo>& p
 {
   std::string line, note;
   std::array<std::string, 4> labels;
+  std::array<bool, 4> locked{};
   const std::string mode = v.ranked ? "Ranked" : "Casual";
   if (v.queue2 && v.css && v.solo)
   {
@@ -747,7 +782,8 @@ void Lines(const View& v, const State& s, const std::vector<Events::PortInfo>& p
   }
   else if (v.queue2 && v.css)
   {
-    // Each player's name near their panel; in ranked, their rating too ("ada · 1532").
+    // Each player's name near their panel; in ranked, their rating too ("ada · 1532"). A player
+    // who locked in (ready, or the character order's lock-in) wears a LOCKED IN badge.
     for (int p = 0; p < 2; ++p)
     {
       if (!(v.plugged & (1 << p)))
@@ -755,8 +791,7 @@ void Lines(const View& v, const State& s, const std::vector<Events::PortInfo>& p
       int rating = -1;
       const std::string name = NameFor(ports, p, &rating);
       labels[p] = v.ranked && rating >= 0 ? fmt::format("{} · {}", name, rating) : name;
-      if (s.ready & (1 << p))
-        labels[p] += " ✓";
+      locked[p] = ((s.ready | v.order_locked) >> p) & 1;
     }
     const int other = local == 0 ? 1 : 0;
     const std::string them = NameFor(ports, other, nullptr);
@@ -773,26 +808,33 @@ void Lines(const View& v, const State& s, const std::vector<Events::PortInfo>& p
     }
     else if (s.flags & FLAG_GO)
     {
-      line = fmt::format("{} · Here we go", mode);
+      line = fmt::format("{} · Both locked in · Here we go", mode);
     }
-    else if (ReadyPhase(v))
+    else if (ReadyPhase(v) && !OrderLockedIn(v))
     {
       const bool mine = (s.ready >> local) & 1;
       const bool theirs = (s.ready >> other) & 1;
-      if (Timed(v))
-      {
-        const std::string left = Clock(READY_FRAMES - s.timer);
-        line = mine ? fmt::format("Ready · {}", left) :
-                      fmt::format("Press Start when you're ready · {}", left);
-        note = theirs ? fmt::format("{} is ready", them) : fmt::format("Waiting for {}", them);
-      }
+      // Game 1's picks are in already: only Start. Later games pick first (A), then Start.
+      const bool picks = !v.game1;
+      const std::string clock = Timed(v) ? " · " + Clock(READY_FRAMES - s.timer) : std::string();
+      if (mine && theirs)
+        line = "Both locked in";
+      else if (mine)
+        line = fmt::format("You're locked in · {}: {}{}", them,
+                           picks ? "pick and press Start" : "press Start", clock);
+      else if (theirs && !picks)
+        line = fmt::format("{} locked in · Press Start to lock in{}", them, clock);
+      else if (theirs)
+        line = fmt::format("{} locked in · Your pick: {}{}", them,
+                           v.ports[local].placed ? "Start locks it in" :
+                                                   "A on a character, then Start",
+                           clock);
       else
-      {
-        // Casual's later games: no clock; both press Start when they're done talking.
-        line = mine ? "Ready" : "Press Start when you're ready";
-        note = theirs ? fmt::format("{} is ready", them) :
-                        fmt::format("Waiting for {} to press Start", them);
-      }
+        line = (picks ? (v.ports[local].placed ? "Start locks in your pick · B to change" :
+                                                  "Pick with A, then press Start to lock in") :
+                        "Press Start to lock in") +
+               clock;
+      note = mine && picks ? "B to change" : "";
       const Local& l = L();
       if (l.skip.Progress() > 0)
       {
@@ -802,11 +844,11 @@ void Lines(const View& v, const State& s, const std::vector<Events::PortInfo>& p
       }
       else
       {
-        note += " · Hold Z to find someone else";
+        note += note.empty() ? "Hold Z to find someone else" : " · Hold Z to find someone else";
       }
     }
   }
-  SetQueueLines(std::move(line), std::move(note), std::move(labels));
+  SetQueueLines(std::move(line), std::move(note), std::move(labels), locked);
 }
 }  // namespace
 

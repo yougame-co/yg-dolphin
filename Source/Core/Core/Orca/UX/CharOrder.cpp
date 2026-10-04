@@ -13,7 +13,9 @@
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/OnlineMenu.h"
+#include "Core/Orca/UX/OnlineRules.h"
 #include "Core/Orca/UX/Overlay.h"
+#include "Core/Orca/UX/Queue.h"
 #include "Core/Orca/UX/SetBlock.h"
 #include "InputCommon/GCPadStatus.h"
 
@@ -32,12 +34,10 @@ constexpr u32 SCENE_SELCHAR_TASK = 0x400;
 constexpr u32 TASK_AREAS = 0x44;
 constexpr u32 AREA_KIND = 0x1B4;
 constexpr u32 AREA_CHARACTER = 0x1B8;
-// The area's own controller: +0x10 the buttons newly pressed on the frame that just ran (PAD_*
-// bits, the stick's directions as the D-pad's), as the game saw them through the input gate.
-constexpr u32 AREA_PRESSED = 0x10;
 // u8: 1 while the token is in the hand (just joined, taken back with B, or picked up with A on it),
 // 0 once it is on a character (the next byte is 1 while it flies there).
 constexpr u32 AREA_IN_HAND = 0x1F8;
+constexpr u32 AREA_FLYING = 0x1F9;
 constexpr u32 KIND_HUMAN = 1;
 
 // The state's bytes at kArea.
@@ -130,11 +130,11 @@ State Advance(const SetView& set, const CssView& css, const State& state, int fr
   s.elapsed = static_cast<u16>(std::min<u32>(elapsed, 0xFFFF));
   if (elapsed == 0 || s.step == Step::Done)
     return s;
-  // A lock-in: A newly pressed on a frame of this step with the token on a character (A on a
-  // character picks it, A anywhere else keeps the one the token is on).
+  // A lock-in: Start newly pressed (raw: the game never sees it) on a frame of this step with the
+  // token down on a character. A only picks, B only takes the token back up.
   const auto locks_in = [&css](int port) {
     const CssPort& p = css.ports[port];
-    return (p.pressed & PAD_BUTTON_A) != 0 && p.placed;
+    return (p.raw_new & PAD_BUTTON_START) != 0 && p.Down();
   };
   const bool timed_out = elapsed >= static_cast<u32>(PICK_FRAMES);
   const int first = s.first & 1;
@@ -168,42 +168,59 @@ Masks Gate(const SetView& set, const CssView& css, const State& state)
     return masks;
   const int first = state.first & 1;
   const int second = 1 - first;
+  const bool even = state.elapsed % 2 == 0;  // a synthesized press is new every other frame
+  // The player whose turn it is: A picks, B (a press's first frame, the token down) takes the token
+  // back up, Start locks in, never the game's. The online rules take B the same way while the locks
+  // hold (OnlineRules.h); the order does too, so its test knob's runs without a header play alike.
+  const auto picking = [&css](int port) {
+    const CssPort& p = css.ports[port];
+    Mask mask;
+    mask.buttons = PAD_BUTTON_START;
+    Rules::CssToken token;
+    token.valid = true;
+    token.human = p.human;
+    token.character = p.character;
+    token.in_hand = !p.placed;
+    token.flying = p.flying;
+    if (!Rules::CssBUnpicks(token, (p.raw & PAD_BUTTON_B) != 0))
+      mask.buttons |= PAD_BUTTON_B;
+    return mask;
+  };
+  // A player whose turn is over: nothing, unless the token is still in the hand (the time ran out
+  // with it there): then they can move and put it down, and Orca puts it on the character under the
+  // hand, if there is one.
+  const auto done = [&css, even](int port) {
+    const CssPort& p = css.ports[port];
+    if (p.placed)
+      return ALL;
+    Mask mask;
+    mask.buttons = Rollback::InputGate::ALL_BUTTONS & ~PAD_BUTTON_A;
+    if (even && p.character != kNoCharacter)
+      mask.press = PAD_BUTTON_A;
+    return mask;
+  };
   switch (state.step)
   {
   case Step::First:
-    masks[first].buttons = PAD_BUTTON_B | PAD_BUTTON_START;
-    // WinnerFirst: the other waits. Free: the winner may lock in (no B, no Start), then waits.
+    masks[first] = picking(first);
+    // WinnerFirst: the other waits. Free: the winner may pick and lock in, then waits.
     if (set.order == Order::WinnerFirst || (state.locked & (1 << second)))
-      masks[second] = ALL;
+      masks[second] = set.order == Order::WinnerFirst ? ALL : done(second);
     else
-      masks[second].buttons = PAD_BUTTON_B | PAD_BUTTON_START;
+      masks[second] = picking(second);
     break;
   case Step::Second:
-    masks[first] = ALL;
-    masks[second].buttons = PAD_BUTTON_B;
+    masks[first] = done(first);
+    masks[second] = picking(second);
     break;
   case Step::Done:
-  {
-    const bool even = state.elapsed % 2 == 0;  // a synthesized press is new every other frame
-    for (const int port : {first, second})
-    {
-      const CssPort& p = css.ports[port];
-      if (p.placed)
-      {
-        masks[port] = ALL;
-        continue;
-      }
-      // A token still in the hand (picked up with A, then the time ran out): the player can move
-      // and put it down, and Orca puts it on the character under the hand, if there is one.
-      masks[port].buttons = Rollback::InputGate::ALL_BUTTONS & ~PAD_BUTTON_A;
-      if (even && p.character != kNoCharacter)
-        masks[port].press = PAD_BUTTON_A;
-    }
-    // Start for the second picker once both tokens are down, until the screen goes.
+    masks[first] = done(first);
+    masks[second] = done(second);
+    // Start for the second picker once both tokens are down, until the screen goes (a queue2
+    // room's queue gives its own instead, UX.cpp).
     if (even && css.ports[0].placed && css.ports[1].placed)
-      masks[second].press = PAD_BUTTON_START;
+      masks[second].press |= PAD_BUTTON_START;
     break;
-  }
   case Step::Idle:
     break;
   }
@@ -242,21 +259,50 @@ std::string Line(const SetView& set, const CssView& css, const State& state,
   }
   const std::string left = Clock(PICK_FRAMES - state.elapsed);
   const int first = state.first & 1;
-  if (state.step == Step::First && set.order == Order::Free && local == 1 - first)
+  const int second = 1 - first;
+  // What the player whose turn it is does next: a pick (A), then Start.
+  const auto todo = [&css](int port) {
+    return css.ports[port].Down() ? "Start locks it in · B to change" : "A on a character, then Start";
+  };
+  if (state.step == Step::First && set.order == Order::Free && local == second)
   {
     // The winner, while the loser is asked first.
     if (state.locked & (1 << local))
-      return fmt::format("Waiting for {} · {}", names[first], left);
-    return fmt::format("{} picks first · {} · A locks yours in any time", names[first], left);
+      return fmt::format("You're locked in · Waiting for {} · {}", names[first], left);
+    return fmt::format("{} picks first · {} · Start locks yours in any time", names[first], left);
   }
-  const int port = state.step == Step::First ? first : 1 - first;
-  if (port == local)
+  if (state.step == Step::First)
   {
-    return fmt::format("{} · {} · A locks it in",
-                       state.step == Step::First ? "You pick first" : "Your pick", left);
+    if (local == first)
+      return fmt::format("Your pick · {} · {}", todo(first), left);
+    return fmt::format("{} picks first · {}", names[first], left);
   }
-  return fmt::format("{} {} · {}", names[port],
-                     state.step == Step::First ? "picks first" : "picks", left);
+  // The second picker's turn, the first picker locked in.
+  if (local == second)
+    return fmt::format("{} locked in · Your pick: {} · {}", names[first], todo(second), left);
+  if (local == first)
+    return fmt::format("You're locked in · {} picks · {}", names[second], left);
+  return fmt::format("{} locked in · {}: pick and press Start · {}", names[first], names[second],
+                     left);
+}
+
+u8 LockedPorts(const SetView& set, const CssView& css, const State& state)
+{
+  if (!Active(set, css, state))
+    return 0;
+  const int first = state.first & 1;
+  switch (state.step)
+  {
+  case Step::First:
+    return set.order == Order::Free ? static_cast<u8>(state.locked & (1 << (1 - first))) : 0;
+  case Step::Second:
+    return static_cast<u8>(1 << first);
+  case Step::Done:
+    return 3;
+  case Step::Idle:
+    break;
+  }
+  return 0;
 }
 
 int MkFreePicker(const std::array<int, 2>& characters, int meta_knight)
@@ -318,13 +364,20 @@ CssView ReadCss(const GuestMemory& m)
   {
     const u32 area = m.Read32(task + TASK_AREAS + 4 * i);
     CssPort& p = css.ports[i];
-    if (Pointer(m, area + AREA_PRESSED) && Pointer(m, area + AREA_KIND) &&
-        Pointer(m, area + AREA_CHARACTER) && m.Valid(area + AREA_IN_HAND))
+    if (Pointer(m, area + AREA_KIND) && Pointer(m, area + AREA_CHARACTER) &&
+        m.Valid(area + AREA_FLYING))
     {
       p.human = m.Read32(area + AREA_KIND) == KIND_HUMAN;
       p.character = static_cast<int>(m.Read32(area + AREA_CHARACTER));
       p.placed = m.Read8(area + AREA_IN_HAND) == 0;
-      p.pressed = static_cast<u16>(m.Read32(area + AREA_PRESSED));
+      p.flying = m.Read8(area + AREA_FLYING) != 0;
+    }
+    // The raw buttons as the latch kept them (zero without it: no header, no test knob).
+    const u32 raw = Queue::RAW + 2 * i, prev = Queue::RAW_PREV + 2 * i;
+    if (m.Valid(raw + 1) && m.Valid(prev + 1))
+    {
+      p.raw = m.Read16(raw);
+      p.raw_new = static_cast<u16>(p.raw & ~m.Read16(prev));
     }
   }
   return css;
@@ -407,6 +460,11 @@ Masks GateFrame(const Core::CPUThreadGuard& guard)
   if (set.ruleset == Ruleset::None)
     return {};
   return Gate(set, ReadCss(m), ReadState(m));
+}
+
+bool TestActive()
+{
+  return TestSet().ruleset != Ruleset::None;
 }
 
 bool ParseTestSpec(const std::string& spec, SetView* out)

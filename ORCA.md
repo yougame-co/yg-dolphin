@@ -2468,7 +2468,7 @@ only a queue room's host writes one (`Core/Orca/UX/OnlineRules.*`, `MatchBlock.h
 | Items | frequency None, every item off (record menu data `+0x00`, `+0x08`, `+0x0C`) | the same |
 | Stage choice | Choose (casual's turns, "Casual stage pick"; ranked's strikes) | the same |
 | Legal stages | Random Stage Switch: Brawl page `0x04005007` (BF, FD, Delfino, YI, Lylat, Smashville), Melee page `0x00020000` (Pokemon Stadium); FD's bit off while a human player's pick is Ice Climbers (`0x10`): the match's init data (gmGlobalModeMelee +0x98, 0x5C per port: the character select writes each pick there as it is made; the panel's own +0x1B8 is only the hovered character), on the character select and on the way to the fight (a Random character resolved) | the 2024 Proposed list as its preset 3 (`Switch03.rss`) holds it: its first `0xA8` bytes of RSS_EXDATA (`0x8042C4E8`: page 0 the 9 legal stages, all in the random set, hazards off), written on the character select; casual also clears the strike table |
-| Input gate | character select: B, and A unless the hand is in the grid (below); stage select: B; fight: Start | the same, plus the D-pad on the character select (its Code Menu) and L, R and Z on the stage select (alternates, hazards, L+R+A) |
+| Input gate | character select: B but a press's first frame with that player's token down (it takes the token back up, below), and A unless the hand is in the grid (below); stage select: B; fight: Start | the same, plus the D-pad on the character select (its Code Menu) and L, R and Z on the stage select (alternates, hazards, L+R+A) |
 
 - Casual's Start: since q2-stages, the stage select and its two preferred-stage turns ("Casual
   stage pick"). Before, Random skipped it (the game's own RNG picking from the legal list).
@@ -2478,8 +2478,10 @@ only a queue room's host writes one (`Core/Orca/UX/OnlineRules.*`, `MatchBlock.h
   the character select again, the way the stage select's B comes back to it: the BACK button (and
   held B) reload the character select instead (checked under the harness: A on BACK with
   `ORCA_TEST_QUEUE=casual` brings back a fresh character select; without it, the menu). The gate
-  also takes B away on the character select, so held B does nothing at all. Nothing needs B to
-  pick. Project+'s own hooks in sqVsMelee (MusicSelect, SSSButtons, css.asm) are elsewhere.
+  also lets B reach the character select only as the first frame of a press with that player's
+  token down, which takes the token back up ("B only takes the token back up" below), so held B
+  never backs out (before `ux=12` it took B away there entirely). Project+'s own hooks in
+  sqVsMelee (MusicSelect, SSSButtons, css.asm) are elsewhere.
 - Pause off: Brawl's rule, and no Start in a fight for Project+'s hold-Start pause.
 - The rules screen no longer opens (A on Rules is masked, below); were it to, whatever is changed
   there goes back at the next boundary.
@@ -2512,7 +2514,8 @@ select's hands"); B was already masked there.
   everywhere probed (target 5 starts between there and -4.79). The characters sit well inside:
   Brawl's rows span about -4.1 to 15.5, Project+'s about 0 to 15. An unreadable hand gets no A.
 - **What still works.** Picking (A on a character with the token in the hand), taking the own token
-  up and putting it down, the character order's lock-in (A in the grid), costumes with X and Y.
+  up and putting it down, the character order's lock-in (A in the grid until `ux=12`, Start since),
+  costumes with X and Y.
   Joining needs no A: a hand that moves into the grid joins its panel (probed: kind 0 to 1 as the
   hand arrives, with A masked on the button).
 - **Proof** (2026-10-03, branch `orca-css-gate`, M4 Pro, headless, `-v Null`):
@@ -2533,6 +2536,37 @@ select's hands"); B was already masked there.
   - Unit tests `OrcaOnlineRules.TheCharacterSelectPassesAOnlyInTheGrid` and `.TheHandsAreReadPerPort`;
     1,345 tests pass.
 
+### B only takes the token back up (`ux=12`)
+
+Luis, 2026-10-04: "Pressing the B button should still work for me getting off my character and
+choosing another" (B had been masked on the character select since `ux=8`, so a pick could only be
+undone with A on the own token, which nothing on screen says). Both games tell the two B's apart
+by the token, not by any state of their own worth patching:
+
+- **Found under the harness** (Brawl rev 2 and Project+ alike, no header, `ORCA_UX_PROBE` watches
+  on port 1's area +0x1F8, +0x1B8 and its hand's +0x80; `Tools/orca/inputs/bf-css-b.txt` and
+  `pplus-css-b.txt` on the Versus character select): a B pressed with the token down puts it back in the hand at once (+0x1F8 0 to
+  1 on the next boundary, the hand's target 0x0A, "on its way back", for 3 frames, then 7, holding);
+  one frame of B is enough, and a second frame changes nothing. B held from there on backs out to
+  the menus 31 frames after the press began (Brawl: pressed at the character select's frame 430,
+  the scene gone at 461; Project+: 400 and 431). Shorter B's (1 and 2 frames) with the token in the
+  hand afterwards never back out. A down token's flight takes 19 frames (+0x1F9 1).
+- **So the gate** (`OnlineRules.h` `CssBUnpicks`, while a header locks, not on the queue's own
+  character select) passes B to a port only when its token is down (+0x1F8 and +0x1F9 0, on a
+  character, a human's area) and its raw B wasn't held on the frame that just ran (the queue's
+  latch, `MatchBlock::QUEUE` +0x08: since `ux=12` written under every header that locks). The game
+  then sees at most one frame of any press, and only while the token is down: it takes the token
+  up, and the held B that backs out never reaches it. Ports 3 and 4 get no B. The rules on top mask
+  it further: game 1's locked picks and a locked-in (ready) player (Queue.h), the waiting player in
+  the character order (CharOrder.h, which applies the same rule to its pickers, so its test knob's
+  header-less runs play alike).
+- **Proof** (2026-10-04, branch `q4-css-lockin`): in `pplus-css-lockin.txt` and `bf-css-lockin.txt`
+  (game 2 of a ranked queue2 set) each player holds B 60 and 140 frames from a token down: the token
+  comes up once, on the press's first frame, and the character select stays; in `*-css-casual.txt`
+  the same in casual's game 2. Unit tests
+  `OrcaOnlineRules.BReachesTheCharacterSelectOnlyToTakeTheTokenUp`,
+  `OrcaCharOrder.BReachesTheGameOnlyAsAPressWithTheTokenDown`.
+
 ### Ranked's character select timer and stalls
 
 - **No-ready timer** (block `+0xC0`): before the set's first fight, with ports 1 and 2 plugged in
@@ -2549,10 +2583,12 @@ select's hands"); B was already masked there.
 
 ### Compatibility and tests
 
-`ux=11` (8 brought the locks and the rules preset of `ux=6` went; 9 the character select's A
+`ux=12` (8 brought the locks and the rules preset of `ux=6` went; 9 the character select's A
 gate; 10, Orca 0.3.14, queue2's character select, Project+'s boot to the main menu with friends
 dropping in from the menus, the character select's title, and the casual stage pick; 11, Orca
-0.3.15, no Z on the results screen in any session, "The results screen's replay"), caps `locks`
+0.3.15, no Z on the results screen in any session, "The results screen's replay"; 12, the
+character select's A to pick, B to take the token back up and Start to lock in, "B only takes the
+token back up", "Character order", "The queue's character select"), caps `locks`
 and `queue2`. Test knob `ORCA_TEST_QUEUE=casual|ranked`
 (a test override): the header as a queue room's host writes it, in a harness run or a dev game's
 room, both Orcas set alike. Unit tests `OrcaOnlineRules*` (the header's lifecycle and saved rules,
@@ -2933,20 +2969,34 @@ A ranked set's later games pick characters in order on the game's own character 
 - Game 1 has no order (both pick at once, the ranked ready timer applies), and nothing here acts in
   casual or friends games.
 
-**How it plays** (WinnerFirst; Free is the same with the loser first and the winner's controller
-free to lock in during the loser's turn, B and Start masked, then nothing once locked in). On the
-winner's turn the loser's controller does nothing, and the winner can't take the token back (B) or
-go on (Start); A locks the pick in, on a character or anywhere in the grid to keep the one the
-token is on (the tokens stay down from one game's character select to the next; outside the grid
-the online rules mask A, "The character select's buttons"). Then the loser's turn, the winner's
-controller doing nothing; A locks in, or Start goes on. When both have picked or the time is up,
-Orca presses Start for the second picker, every other frame until the screen goes. The overlay's
-top line says whose turn it is and the time left ("Ada picks first · 0:42", "Your pick · 0:42 · A
-locks it in").
+**How it plays** (WinnerFirst, since `ux=12`; Luis, 2026-10-04: "press A to select character and
+then press start after to lock in and ready up. Then after you lock in opponent chooses and presses
+start to lock in and immediately we go to stage select"; Free is the same with the loser first and
+the winner free to pick and lock in during the loser's turn, then nothing once locked in). On the
+winner's turn the loser's controller does nothing. The winner picks as the game does: A on a
+character puts the token there, B with the token down takes it back up (the game's B, which the
+online rules pass only for that, "B only takes the token back up"), A on the own token takes it up
+too. **Start locks the pick in**, with the token down on a character: final, the winner's
+controller then does nothing (the game never sees that Start: the order reads it from the queue's
+raw latch, "The queue's character select"). Then the loser's turn, with the same buttons; their
+Start locks in, and the stage select comes at once: in a queue2 room the queue goes on with no
+ready step after the order ("The queue's character select"), elsewhere Orca presses Start for the
+second picker, every other frame until the screen goes. The tokens stay down from one game's
+character select to the next, so Start alone keeps last game's character. The overlay's top line
+says whose turn it is, what to do and the time left ("Your pick · Start locks it in · B to change ·
+0:42", "ada locked in · bo: pick and press Start · 0:31"), and a LOCKED IN badge in the player's
+colour sits on each locked-in player's panel.
 
-A player who picks the token up (A on their own token) and lets the time run out can only move and
-put it down; Orca puts it on the character under the hand if there is one, and presses Start only
-once both tokens are down ("Waiting for Ada to put the token down").
+A player whose 45 s run out with the token in the hand (taken up with B or A) can only move and put
+it down; Orca puts it on the character under the hand if there is one, and the stage select waits
+until both tokens are down ("Waiting for ada to put the token down").
+
+**Before `ux=12` (Orca 0.3.14 and 0.3.15), A anywhere in the grid locked the pick in and B was
+masked: Luis's "stuck" (2026-10-04).** The tokens are still down on last game's characters, so a
+player who moved onto another character and pressed A to take it locked the old one in (the game
+does nothing with A there), and their controller went dead for the rest of the order; B, the
+game's way to take a token back up, did nothing at all. Reproduced under the harness with the
+build before this change (below, "Checked").
 
 **Determinism.** The state is 16 bytes right after the match block (`kArea` = `0x806F2580`, the
 same dead code of `sqNetAnyOkiraku::setNext`, short of `kMatchBlockLimit`, so the rules tracks' own
@@ -2955,7 +3005,11 @@ port that picks first, the lock-ins, the hook frame the step began at and the fr
 frame hook advances it at every boundary, first runs and re-runs (a re-run at the same boundary
 finds its own write and writes nothing new: no press counts on a step's first boundary, and every
 change resets the step's frames to 0), and the input gate's masks and presses come from that
-state and the character select's memory alone. The gate's masks gained a synthesized press
+state and the character select's memory alone. The lock-in's Start (and whether B was held on the
+frame that just ran) is the queue's raw latch, `MatchBlock::QUEUE` +0x08 and +0x0C ("The queue's
+character select", Determinism), which since `ux=12` runs under every header that locks, and with
+`ORCA_TEST_CHAR_ORDER` on its character select: memory too. The gate's masks gained a synthesized
+press
 (`Mask::press`, applied after the mask), which Done uses for Start and the put-down A.
 
 **Where it reads the set.** The match block's header (`YGM1`, version 1, mode 2 ranked, ruleset 1
@@ -2998,7 +3052,9 @@ same step changes as the plain runs, 0 RAM mismatches:
   own token picks it up and counts for nothing, its next A locks in at 1929, port 1's at 2009,
   the stage select at 2013): 5,201 re-run frames.
 In every run the masked presses (the off-turn port's, B and Start) did nothing. `OrcaCharOrder*`
-(18 tests) and every `Orca*` unit test pass.
+(18 tests) and every `Orca*` unit test pass. (That proof is of the A lock-in before `ux=12`; the
+Start lock-in's is "Checked 2026-10-04, the character select's buttons" under "The queue's
+character select".)
 
 ## The character select's title
 
@@ -3205,9 +3261,10 @@ The page owns the room: Orca never leaves on a skip or a timeout by itself.
   select: casual's two-turn pick, ranked's strikes). Casual time up: the players who weren't ready are
   named (`orca queue timeout`) and every controller is masked until the pages leave. Ranked time up:
   on with the picks (without a character on both, Phase 1's no-show rule decides). Overlay: each
-  player's name over their panel, with the rating in ranked ("ada · 1532", a ✓ once ready), "Press
-  Start when you're ready · 0:24" / "bo is ready · Hold Z to find someone else", a bar while Z is
-  held, "Time's up".
+  player's name over their panel, with the rating in ranked ("ada · 1532"; since `ux=12` a LOCKED
+  IN badge on the panel once ready, before it a ✓), "Press Start to lock in · 0:24" / "bo locked in
+  · Press Start to lock in · 0:24", "Hold Z to find someone else", a bar while Z is held, "Time's
+  up".
 - **After the room** (a skip, a timeout, the opponent gone, a set over, a leave): the session puts
   back this player's own game as it was when `host` or `join` came (the **queue image**: a machine
   image and the NAND, taken at that boundary while the player was on the queue's own character
@@ -3221,11 +3278,34 @@ The page owns the room: Orca never leaves on a skip or a timeout by itself.
 - **Later games:** casual comes back to the room's character select with the same opponent,
   characters free (no locks), ready again, but with **no timer** (Luis, 2026-10-04: "I kind of like
   that players can message each other and have a little bit more time to be social"): the
-  character select waits until both press Start, never times out (no `orca queue timeout`), and a
-  long Z still finds someone else. Overlay: "Press Start when you're ready" / "Waiting for bo to
-  press Start · Hold Z to find someone else", no clock. `Queue::Timed` decides, from the match
-  block alone (ranked, or no fight since the room's header: `FOUGHT`), so it is the same on both
-  machines and every re-run. Ranked keeps the 30 s timer, going on with the picks, in every game.
+  character select waits until both lock in, never times out (no `orca queue timeout`), and a
+  long Z still finds someone else. `Queue::Timed` decides, from the match block alone (ranked, or
+  no fight since the room's header: `FOUGHT`), so it is the same on both machines and every
+  re-run.
+- **A picks, B takes it back, Start locks in** (`ux=12`; Luis, 2026-10-04: "press A to select
+  character and then press start after to lock in and ready up ... The UI needs to make it clear
+  when you're ready/locked in"). Locked in is what ready has always been here, with these buttons:
+  - casual's later games, both at once: A on a character puts the token there, B with the token
+    down takes it back up (the game's B, which the online rules pass only for that, "B only takes
+    the token back up"), Start with the token down locks in. A locked-in player's A, B, X and Y
+    never reach the game (no token taken up, no costume turned); their B unlocks. Both locked in:
+    Orca's Start at once, to the stage select (no countdown).
+  - ranked's later games: the character order (`CharOrder.h`, "Character order") with the same
+    buttons, the winner's lock-in final, then the loser's; the moment the loser locks in the queue
+    goes on (`Queue::OrderLockedIn`: the order's Done step with both lock-ins, both tokens down),
+    with no ready step and no 30 s after it. Before `ux=12` the order's A lock-in was followed by
+    the 30 s ready step again.
+  - game 1, both games and modes: unchanged (the picks put in and locked, Start locks in, B
+    unlocks, the 30 s timer).
+- **What the screen says.** Each player's name over their panel (with the rating in ranked) and,
+  once they are locked in, a **LOCKED IN** badge on their panel: a pill in the port's colour (red,
+  blue) with a white rim and white capitals across the panel's picture (the overlay's
+  `SetQueueLines` `locked`, `PortColourOf`; display only, from memory on first runs). The top line
+  says who is locked in and what the other does next: "Pick with A, then press Start to lock in",
+  "ada locked in · Your pick: Start locks it in", "You're locked in · bo: pick and press Start"
+  (with " · 0:24" while timed, "B to change" under it for a locked-in player of a later game), "Both
+  locked in", and "Casual · Both locked in · Here we go" as the screen goes. The character order's
+  turns keep their own line under the set's score ("Character order").
 
 ### Determinism
 
@@ -3271,7 +3351,10 @@ host's header changes only at an alone boundary, which nothing re-runs). `Tools/
 --q2 [--scenario skip|timeout]` plays the page's half against yougame.co. Inputs:
 `Tools/orca/inputs/bf-queue2.txt`, `pplus-queue2.txt`; the whole flow from the boot,
 `bf-queue2-flow.txt` and `pplus-queue2-flow.txt` (casual, two games), `bf-queue2-ranked.txt` and
-`pplus-queue2-ranked.txt` (ranked game 1: ready, strikes, pick).
+`pplus-queue2-ranked.txt` (ranked game 1: ready, strikes, pick); the character select's buttons
+(`ux=12`), `bf-css-lockin.txt` and `pplus-css-lockin.txt` (ranked through game 2's character order
+and stage select) and `bf-css-casual.txt` and `pplus-css-casual.txt` (casual through game 2's
+lock-ins and stage pick).
 
 **Checked 2026-10-04** (branch `q2-queue-css` on `rel-0.3.13`, M4 Pro, headless, `-v Null`):
 - Unit tests: `OrcaQueue*` (ready, unready, the stopping B, the timer, casual and ranked timeouts,
@@ -3359,6 +3442,58 @@ release checklist above):
 
   (host / joiner; the counts are each side's compared pairs, so they can differ by one.) The
   Mac <-> PC run (`xplat.py`, checklist item 6) is the release lead's, with the PC.
+
+**Checked 2026-10-04, the character select's buttons** (branch `q4-css-lockin` on `rel-0.3.15` at
+`20032d9f0b`, `ux=12`; M4 Pro, headless, `-v Null` unless said):
+- **Luis's "stuck", reproduced** with the build before (`rel-0.3.15` at `ef24886f39`, the same
+  character order as 0.3.14) over `pplus-css-lockin.txt` (`ORCA_TEST_QUEUE=ranked:solo
+  ORCA_UX_TEST_NAMES=ada,bo YG_RESULTS=1 ORCA_TEST_QUEUE_PICK=874:43:2:-7.4:7.7:1532`, `ORCA_UX_PROBE`
+  watches on both areas' +0x1B8 and +0x1F8): game 2's order begins at 5905 with port 1's token still
+  on last game's character (0x08); port 1 moves onto another character and presses A, and that A
+  is its lock-in at 5994, 88 frames into its turn, of the old 0x08; its B, A, held B and Start after
+  it change nothing (its character and token never move again). Port 2's B is masked; its A over its
+  own token takes the token up (6404), after which nothing it does is a lock-in (its Start isn't the
+  game's, B is masked) until its 45 s run out at 8694 and Orca puts the token down where the hand
+  is (8715); then the 30 s ready step on top (the run ends at 9000, inside it). Brawl
+  (`bf-css-lockin.txt`, `ORCA_TEST_SET_RULES=1,8`, the pick at 2106): port 1's A on another character locks Mario (0x00) in at 3929, 70 frames in; port
+  2's A with its token down locks its old character in at 4349; the stage select only at 6153, after
+  the ready step's 30 s ran out with port 1 never ready.
+- The same inputs with this build: Project+ game 2's order at 5905, port 1's A on the new
+  character does nothing, its B takes the token up (6014), A puts it on Mewtwo (0x2E, down at 6053),
+  B held 60 frames takes it up once and never backs out, A, then Start: locked in at 6163 (step
+  second); its B and A after it do nothing; port 2's B takes its token up (6244) and stays held 140
+  frames with it in the hand (the character select stays), A, Start: the order is done at 6423 and
+  the queue goes on at the same frame, the stage select at 6427 (4 frames, no ready step). Brawl:
+  port 1 up at 3949, Link (0x02) down at 3988, held B 60 frames, locked in at 4098; port 2 up at
+  4188, held 140 frames, down on 0x17, locked in at 4368 and on at once, the stage select at 4372.
+  Casual's game 2 (`pplus-css-casual.txt`, `bf-css-casual.txt`, the 0.3.14 checks' env): port 1's B,
+  A on another character, Start (locked in: Project+ 3098, Brawl 4551), A on its own token does
+  nothing, B unlocks (3138, 4591) with the token still down, Start again (3158, 4611); port 2's B,
+  A, Start: both locked in and the stage select at once (3238 to 3242, 4691 to 4695).
+- `YG_SYNCTEST=7`, **0 RAM mismatches** in all four: Project+ ranked (`pplus-css-lockin.txt`,
+  `YG_SYNCTEST_FROM=200` to 8600) 58,751 re-run frames; Brawl ranked (`bf-css-lockin.txt`, 1440 to
+  5300) 26,971; Project+ casual (`pplus-css-casual.txt`, 200 to 4200) 27,951; Brawl casual
+  (`bf-css-casual.txt`, 1440 to 5600) 29,071; the steps at the plain runs' frames.
+- Screenshots (`-v Metal`, `ORCA_TEST_PRESENT=1280x720`, `YG_SHOT_EVERY`; looked at, then deleted):
+  Project+ ranked game 1 with ada ready: a red LOCKED IN pill across ada's panel, "You're locked in ·
+  bo: press Start · 0:25"; game 2's winner's turn: "Your pick · Start locks it in · B to change ·
+  0:45" under the set's score; the loser's turn: LOCKED IN on ada's panel, "You're locked in · bo
+  picks · 0:42"; Brawl the same two turns; Project+ casual game 2 with both locked in: a red and a
+  blue pill, "Casual · Both locked in · Here we go". The players' names and the badges now sit on
+  the panels (before, the names were at 1/8 and 3/8 of the width, left of both games' widescreen
+  panels).
+- Unit tests: 380 `Orca*`, 362 pass, 18 skipped, 0 fail (new:
+  `OrcaCharOrder.APicksBTakesTheTokenUpAndNeitherLocksIn`,
+  `.BReachesTheGameOnlyAsAPressWithTheTokenDown`, `.LockedPortsFollowTheTurns`,
+  `.WinnerLocksInWithStartThenTheLoser`; `OrcaOnlineRules.BReachesTheCharacterSelectOnlyToTakeTheTokenUp`;
+  `OrcaQueue.RankedLaterGamesGoOnTheMomentTheOrderHasBothLockIns`,
+  `.ALockedInPlayerKeepsTheirPickAndBUnlocks`).
+- Not run here: the two-Orca and Mac <-> PC checks (the release's), and the hashlogs (no header
+  in their inputs, so nothing here acts on them).
+- Match block: no new bytes. The order keeps its 16 bytes at +0x200 (its lock-ins are its steps),
+  the queue its region at +0x1C0 (ready is the lock-in); +0x1A8..+0x1B3, offered for this track, is
+  still free. What changed is who writes the raw latch (+0x1C8..+0x1CF, +0x1E8..+0x1EF): every
+  header that locks, not only queue2's.
 
 ## Embedding
 

@@ -341,6 +341,7 @@ std::string s_rule_line;  // SetRuleLine's
 std::mutex s_queue_lock;
 std::string s_queue_line, s_queue_note;  // SetQueueLines'
 std::array<std::string, 4> s_queue_labels;
+std::array<bool, 4> s_queue_locked{};
 // ORCA_UX_OVERLAY_DEMO=1 (design checks only): a made-up friend whose link cycles good, ok, bad
 // with a stall, every 12 s, in place of the session's stats.
 bool s_demo = false;
@@ -475,6 +476,45 @@ void FrameGraph(ImDrawList* dl, ImVec2 pos, ImVec2 size, const std::vector<float
               Rgba(255, 255, 255, 0.35f), std::max(1.0f, size.y / 40));
 }
 
+// The centre of port `port`'s panel on the character select, as a fraction of the game's picture's
+// width (both games, widescreen: ports 1 and 2 at 0.236 and 0.413 of a 1280x720 picture, 0.177
+// apart).
+float PanelCentre(int port)
+{
+  return 0.236f + 0.177f * static_cast<float>(port);
+}
+
+// Where the LOCKED IN badge sits, as a fraction of the picture's height: across the panel's
+// picture, under the name label.
+constexpr float LOCKED_BADGE_Y = 0.71f;
+
+// A player's LOCKED IN badge, centred on `centre`: a pill in the port's colour with a white rim and
+// white bold-looking capitals, so it reads over any character's portrait.
+void LockedBadge(ImDrawList* dl, float unit, ImVec2 centre, PortColour colour)
+{
+  static const std::string text = "LOCKED IN";
+  const float size = TextPx(4.6f * unit);
+  const ImVec2 s = TextSize(size, text);
+  const float pad_x = 1.8f * unit, pad_y = 0.8f * unit;
+  const ImVec2 min(centre.x - s.x / 2 - pad_x, centre.y - s.y / 2 - pad_y);
+  const ImVec2 max(centre.x + s.x / 2 + pad_x, centre.y + s.y / 2 + pad_y);
+  const float round = (max.y - min.y) / 2;
+  dl->AddRectFilled(ImVec2(min.x + 0.4f * unit, min.y + 0.5f * unit),
+                    ImVec2(max.x + 0.4f * unit, max.y + 0.5f * unit), Rgba(0, 0, 0, 0.45f), round);
+  dl->AddRectFilled(min, max, Rgba(colour.r, colour.g, colour.b, 0.95f), round);
+  dl->AddRect(min, max, Rgba(255, 255, 255, 0.95f), round, ImDrawFlags_None,
+              std::max(1.0f, 0.45f * unit));
+  // A heavier face from the same font: the text drawn twice, a hair apart.
+  const ImVec2 at(centre.x - s.x / 2, centre.y - s.y / 2);
+  ImFont* font = ImGui::GetFont();
+  const float o = std::max(1.0f, size / 14);
+  for (const ImVec2 d : {ImVec2(-o, 0), ImVec2(o, 0), ImVec2(0, -o), ImVec2(0, o), ImVec2(o, o)})
+    dl->AddText(font, size, ImVec2(at.x + d.x, at.y + d.y), Rgba(16, 16, 24, 0.7f), text.c_str());
+  dl->AddText(font, size, at, Rgba(255, 255, 255, 1), text.c_str());
+  dl->AddText(font, size, ImVec2(at.x + std::max(1.0f, size / 24), at.y), Rgba(255, 255, 255, 1),
+              text.c_str());
+}
+
 void Draw()
 {
   const double now = NowMs();
@@ -485,6 +525,7 @@ void Draw()
   // queue's character select's lines (UX/Queue.h) in their place when it has any.
   auto [search, search_note] = Search::Lines();
   std::array<std::string, 4> labels;
+  std::array<bool, 4> locked{};
   {
     std::lock_guard lk(s_queue_lock);
     if (!s_queue_line.empty() || !s_queue_note.empty())
@@ -493,6 +534,7 @@ void Draw()
       search_note = s_queue_note;
     }
     labels = s_queue_labels;
+    locked = s_queue_locked;
   }
   const bool any_label =
       std::any_of(labels.begin(), labels.end(), [](const std::string& l) { return !l.empty(); });
@@ -587,16 +629,34 @@ void Draw()
   }
   if (any_label)
   {
-    // Each player's name over their panel at the bottom of the character select: four panels
-    // across the width, their tops at about 62% of the height in both games.
+    // Each player's name over their panel at the bottom of the character select, and a locked-in
+    // player's badge across the panel's picture, in the game's picture (the window can letterbox
+    // or pillarbox it): both games' widescreen panels sit at PanelCentre's fractions of its width,
+    // their tops at about 60% of its height (measured on 1280x720 screenshots, 2026-10-04).
+    ImVec2 pic(0, 0), pic_size = screen;
+    if (g_presenter)
+    {
+      const MathUtil::Rectangle<int>& r = g_presenter->GetTargetRectangle();
+      if (r.GetWidth() > 0 && r.GetHeight() > 0)
+      {
+        pic = ImVec2(static_cast<float>(r.left), static_cast<float>(r.top));
+        pic_size = ImVec2(static_cast<float>(r.GetWidth()), static_cast<float>(r.GetHeight()));
+      }
+    }
     const float size = 3.2f * unit;
     for (int port = 0; port < 4; ++port)
     {
       if (labels[port].empty())
         continue;
       const ImVec2 s = TextSize(size, labels[port]);
-      const float centre = screen.x * (0.125f + 0.25f * static_cast<float>(port));
-      OutlinedText(dl, size, ImVec2(centre - s.x / 2, screen.y * 0.585f), 1, labels[port]);
+      const float centre = pic.x + pic_size.x * PanelCentre(port);
+      OutlinedText(dl, size, ImVec2(centre - s.x / 2, pic.y + pic_size.y * 0.585f), 1,
+                   labels[port]);
+      if (locked[port])
+      {
+        LockedBadge(dl, unit, ImVec2(centre, pic.y + pic_size.y * LOCKED_BADGE_Y),
+                    PortColourOf(port));
+      }
     }
   }
   // How far down the top-centre lines reach, and how far left the widest goes (the chat keeps
@@ -660,6 +720,22 @@ OverlayModel& Overlay()
   return s_overlay;
 }
 
+PortColour PortColourOf(int port)
+{
+  // Brawl's and Project+'s port colours (the panels, the tokens).
+  switch (port)
+  {
+  case 0:
+    return {224, 44, 44};
+  case 1:
+    return {40, 104, 236};
+  case 2:
+    return {232, 180, 24};
+  default:
+    return {44, 168, 64};
+  }
+}
+
 float OverlayUnit(float display_height)
 {
   // !(>=) also turns a NaN height away.
@@ -695,12 +771,14 @@ void ShowToast(std::string text)
   s_overlay.AddToast(std::move(text), NowMs());
 }
 
-void SetQueueLines(std::string line, std::string note, std::array<std::string, 4> labels)
+void SetQueueLines(std::string line, std::string note, std::array<std::string, 4> labels,
+                   std::array<bool, 4> locked)
 {
   std::lock_guard lk(s_queue_lock);
   s_queue_line = std::move(line);
   s_queue_note = std::move(note);
   s_queue_labels = std::move(labels);
+  s_queue_locked = locked;
 }
 
 void ShowChat(std::string name, std::string text)

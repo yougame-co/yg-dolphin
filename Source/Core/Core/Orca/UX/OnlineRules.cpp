@@ -20,6 +20,7 @@
 #include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/OnlineMenu.h"
 #include "Core/Orca/UX/Probe.h"
+#include "Core/Orca/UX/Queue.h"
 #include "Core/Orca/UX/SetBlock.h"
 #include "InputCommon/GCPadStatus.h"
 
@@ -96,6 +97,13 @@ constexpr u32 MANAGER_SCENE = 0x04;
 constexpr u32 SCENE_SELCHAR_TASK = 0x400;
 constexpr u32 TASK_AREAS = 0x44;
 constexpr u32 AREA_HAND = 0x1A8;
+// The area's player (CharOrder.h, Queue.h): +0x1B4 the kind (1 a human), +0x1B8 the character under
+// the hand or the token's, +0x1F8 u8 1 while the token is in the hand, +0x1F9 u8 1 while it flies.
+constexpr u32 AREA_KIND = 0x1B4;
+constexpr u32 AREA_KIND_HUMAN = 1;
+constexpr u32 AREA_CHARACTER = 0x1B8;
+constexpr u32 AREA_IN_HAND = 0x1F8;
+constexpr u32 AREA_FLYING = 0x1F9;
 constexpr u32 HAND_TARGET = 0x80;
 constexpr u32 HAND_X = 0x90;
 constexpr u32 HAND_Y = 0x94;
@@ -533,17 +541,19 @@ Rollback::InputGate::Masks GateMasks(const GuestMemory& m)
   u16 buttons = 0;
   if (scene == SCENE_CSS)
   {
-    // No B: holding it is the way back to the menus (and B is never needed to pick). On the queue's
-    // own character select before a match B backs out of the search (Queue.h masks it while the
-    // player is ready, when it only stops the search).
-    buttons = h.Solo() ? 0 : PAD_BUTTON_B;
     // Project+'s Code Menu opens from the character select with the D-pad.
     if (h.ruleset == Ruleset::PPlus)
       buttons |= PAD_BUTTON_UP | PAD_BUTTON_DOWN | PAD_BUTTON_LEFT | PAD_BUTTON_RIGHT;
-    // A only in the grid: never on a player-type button (a CPU), or any other button.
     for (int port = 0; port < Rollback::InputGate::PORTS; ++port)
     {
       masks[port].buttons = buttons;
+      // B only to take the token back up (a press's first frame, the token down): held with the
+      // token in the hand it is the way back to the menus. On the queue's own character select
+      // before a match B backs out of the search (Queue.h masks it while the player is ready,
+      // when it only stops the search).
+      if (!h.Solo() && !CssBMayUnpick(m, port))
+        masks[port].buttons |= PAD_BUTTON_B;
+      // A only in the grid: never on a player-type button (a CPU), or any other button.
       if (!CssHandMayPressA(ReadCssHand(m, port)))
         masks[port].buttons |= PAD_BUTTON_A;
     }
@@ -627,6 +637,44 @@ bool CssHandMayPressA(const CssHand& hand)
   default:
     return false;
   }
+}
+
+CssToken ReadCssToken(const GuestMemory& m, int port)
+{
+  CssToken token;
+  if (port < 0 || port >= 4 || ReadSceneName(m) != SCENE_CSS || !Pointer(m, SCENE_MANAGER))
+    return token;
+  const u32 manager = m.Read32(SCENE_MANAGER);
+  if (!Pointer(m, manager + MANAGER_SCENE))
+    return token;
+  const u32 scene = m.Read32(manager + MANAGER_SCENE);
+  if (!Pointer(m, scene + SCENE_SELCHAR_TASK))
+    return token;
+  const u32 task = m.Read32(scene + SCENE_SELCHAR_TASK);
+  const u32 area_at = task + TASK_AREAS + 4 * static_cast<u32>(port);
+  if (!Pointer(m, area_at))
+    return token;
+  const u32 area = m.Read32(area_at);
+  if (!Pointer(m, area + AREA_KIND) || !Pointer(m, area + AREA_CHARACTER) ||
+      !m.Valid(area + AREA_FLYING))
+  {
+    return token;
+  }
+  token.valid = true;
+  token.human = m.Read32(area + AREA_KIND) == AREA_KIND_HUMAN;
+  token.character = static_cast<int>(m.Read32(area + AREA_CHARACTER));
+  token.in_hand = m.Read8(area + AREA_IN_HAND) != 0;
+  token.flying = m.Read8(area + AREA_FLYING) != 0;
+  return token;
+}
+
+bool CssBMayUnpick(const GuestMemory& m, int port)
+{
+  // The latch keeps ports 1 and 2's raw buttons (Queue.h); nobody else plays a queue match.
+  if (port < 0 || port > 1 || !m.Valid(Queue::RAW + 2 * static_cast<u32>(port) + 1))
+    return false;
+  const bool held = (m.Read16(Queue::RAW + 2 * static_cast<u32>(port)) & PAD_BUTTON_B) != 0;
+  return CssBUnpicks(ReadCssToken(m, port), held);
 }
 
 bool SetWanted(Mode mode, u8 flags, std::string_view code)
