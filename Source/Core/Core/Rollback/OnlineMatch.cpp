@@ -240,6 +240,8 @@ struct Match
   std::vector<Orca::Events::PortInfo> told_ports;
   // A joiner's host left during a re-run: handled at the next boundary that isn't one.
   std::optional<std::string> host_gone;
+  // Host: frames its session has run with nobody else in it (IDLE_GRACE_FRAMES).
+  int idle_frames = 0;
 
   // A ranked room whose match is still being decided after the opponent went (ORCA.md
   // "Matchmaking"): this game stays in it, solo, until the room's verdict closes it or this time
@@ -320,6 +322,14 @@ constexpr std::chrono::microseconds HITCH_TIME{33'334};
 // this long, the host unplugs it and plays on; a joiner stops.
 constexpr std::chrono::seconds PEER_SILENCE_LIMIT{10};
 constexpr char PEER_SILENT_SENTENCE[] = "Your friend's game stopped responding";
+// A joiner that left and ran past its unplug frame waits only for the host's word that every input
+// before it arrived (Session::LeftDone): after this long without any, the leave is over anyway.
+constexpr std::chrono::seconds LEAVE_SILENCE_LIMIT{3};
+// Host: frames its session runs on once nobody else is in it, before it plays solo. A friend who
+// left hears the host's last acknowledgement in these frames' packets (Session::LeftDone): one that
+// was lost, or still on its way when a matchmade room is left (its links close), must not keep that
+// friend waiting.
+constexpr int IDLE_GRACE_FRAMES = 12;
 // The session's rollback window (Config::max_rollback): RingPort keeps this many snapshots and two.
 constexpr int MAX_ROLLBACK = 7;
 // No keyframe of a boot's first frames: Project+'s first frames after its launcher hands over (3-9)
@@ -642,6 +652,7 @@ void GoSolo(Match& match, const char* why, const char* state = "playing")
                  match.running + 1, why, stats.rollbacks, stats.checksums_matched);
   match.session.reset();
   match.plugging.clear();
+  match.idle_frames = 0;
   match.port->SetCatchingUp(false);
   // A session that ended mid re-run left the port in re-run mode (unthrottled, unrendered, muted).
   match.port->SetResimulating(false);
@@ -2268,6 +2279,129 @@ void PublishStall(Match& match, double stalled_ms)
 
 namespace
 {
+// A joining player's events from its room: the host's port names, and the host leaving
+// (match.host_gone, handled by HostGone at a boundary that isn't a re-run).
+void JoinerEvents(Match& match)
+{
+  for (const Orca::Net::PeerEvent& event : Orca::Online::TakePeerEvents())
+  {
+    if (event.kind == Orca::Net::PeerEvent::Kind::Names)
+    {
+      // A name that applies to frames already run (it arrived after its plug frame): those frames
+      // ran without it, and the host's with it. Re-run them; the frame hook writes it as it goes.
+      // A port shows a name only while plugged in (PortsAt): a newcomer's name, sent when the
+      // host takes it in, matters from its plug frame, which is still to come (or not even
+      // decided).
+      // An older broadcast than what this player holds (a keyframe offer's, or a later one's):
+      // nothing new.
+      if (event.keyframe.names_version < match.names_version)
+        continue;
+      const std::vector<Orca::Net::KeyframeInfo::Name> before = AllNames(match);
+      int earliest = INT32_MAX;
+      for (const auto& name : event.keyframe.names)
+      {
+        if (std::find(before.begin(), before.end(), name) != before.end())
+          continue;
+        const Orca::Net::SeatPlan& plan = match.session->Plan()[name.seat];
+        const int from = std::max(name.from, plan.plug_from);
+        if (plan.plug_from == Orca::Net::NEVER || from > match.running || from >= plan.unplug_from)
+          continue;
+        earliest = std::min(earliest, from);
+      }
+      SetNames(match, event.keyframe);
+      if (earliest <= match.running)
+      {
+        if (match.session->RerunFrom(earliest))
+        {
+          NOTICE_LOG_FMT(ROLLBACK, "Drop-in: a name for frame {} arrived at frame {}: re-running",
+                         earliest, match.running + 1);
+        }
+        else
+        {
+          WARN_LOG_FMT(ROLLBACK,
+                       "Drop-in: a name for frame {} arrived at frame {}, too late to re-run",
+                       earliest, match.running + 1);
+        }
+      }
+    }
+    else if (event.kind == Orca::Net::PeerEvent::Kind::Left && event.host)
+      match.host_gone = event.reason;
+  }
+}
+
+// A joiner has left (Session::LeftDone, or as good as: HostGone, LEAVE_SILENCE_LIMIT): it plays on
+// solo, and the app hears "left" (the page's own Leave, so no error and no "host-left").
+void FinishLeave(Match& match)
+{
+  LogStats("at leave");
+  Core::DisplayMessage(fmt::format("You left {}'s game", match.host_name), 4000);
+  BecomeSolo(match, "left", nullptr);
+  Orca::Status::Event("left");
+}
+
+// A joiner that asked to leave, whose controller the host unplugged at a frame both know, and that
+// has run past it: it waits only for the host's word that every input before it arrived.
+bool LeavingPastUnplug(const Match& match)
+{
+  if (!match.joining || !match.leave_requested || !match.session)
+    return false;
+  const int unplug = match.session->Plan()[match.local_seat].unplug_from;
+  return unplug != Orca::Net::NEVER && match.running >= unplug;
+}
+
+// A joiner whose host left the room (match.host_gone), at a boundary that isn't a re-run: the game
+// it joined is gone, and this one plays on solo (with "caps join") or stops. The boundary's frame
+// has its pads set either way.
+void HostGone(Core::System& system, Match& match, const std::function<Pad(int)>& local_pad)
+{
+  Orca::Net::PeerEvent event;
+  event.reason = *std::exchange(match.host_gone, std::nullopt);
+  // This player had asked to leave: the host going is that leave over (a matchmade room's host
+  // leaves it as soon as the leaver's last inputs are in, AfterFriendsGone), whether or not the
+  // host's last acknowledgement got here first (Session::LeftDone).
+  if (Soft() && match.leave_requested && event.reason != "desync")
+  {
+    NOTICE_LOG_FMT(ROLLBACK, "Drop-in: the host left the room as this player left, frame {}",
+                   match.running + 1);
+    FinishLeave(match);
+    RunSolo(match, local_pad);
+    return;
+  }
+  LogStats("host left");
+  if (event.reason == "desync")
+    ++s_desyncs;
+  if (Soft())
+  {
+    // The host's game is gone, this one goes on: every other controller unplugs.
+    if (event.reason == "desync")
+    {
+      Orca::Online::ReportDesync();
+      Orca::Status::Report("desync", "Your games went out of sync, so the match ended");
+    }
+    Core::DisplayMessage(fmt::format("{} left: you play on", match.host_name), 6000);
+    // A ranked set still being decided: this game waits in the room for its verdict (the
+    // room awards the forfeit only while someone is still in it).
+    const bool linger = Orca::Online::RoomQueue() == "ranked" && Orca::Online::MatchLive() &&
+                        !Orca::Online::RoomEnded();
+    BecomeSolo(match, "host left", "host-left", false, linger);
+    if (linger)
+    {
+      NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: the host went mid-set: waiting for the verdict");
+      match.linger_until = Clock::now() + VERDICT_WAIT;
+    }
+    RunSolo(match, local_pad);
+    return;
+  }
+  if (event.reason == "desync")
+    Orca::Status::Error("desync", "Your games went out of sync, so the match ended");
+  else
+    Orca::Status::Error("peer_left", "Your friend's game ended");
+  End("host left");
+  StopEmulation(system, event.reason == "desync" ?
+                            "Your games went out of sync, so the match ended" :
+                            "Your friend's game ended");
+}
+
 std::optional<int> Boundary(Core::System& system,
                             const std::function<Orca::Net::Pad(int local_seat)>& local_pad,
                             const FrameHook& on_frame)
@@ -2475,91 +2609,14 @@ std::optional<int> Boundary(Core::System& system,
     match.session->OnLocalHitch();
 
   // A joiner whose host left: the game it joined is gone. The host's bye says whether their games
-  // went apart.
+  // went apart. Only at a boundary that isn't a re-run: going solo mid re-run would leave
+  // half-replayed frames.
   if (match.joining)
   {
-    for (const Orca::Net::PeerEvent& event : Orca::Online::TakePeerEvents())
-    {
-      if (event.kind == Orca::Net::PeerEvent::Kind::Names)
-      {
-        // A name that applies to frames already run (it arrived after its plug frame): those frames
-        // ran without it, and the host's with it. Re-run them; the frame hook writes it as it goes.
-        // A port shows a name only while plugged in (PortsAt): a newcomer's name, sent when the
-        // host takes it in, matters from its plug frame, which is still to come (or not even
-        // decided).
-        // An older broadcast than what this player holds (a keyframe offer's, or a later one's):
-        // nothing new.
-        if (event.keyframe.names_version < match.names_version)
-          continue;
-        const std::vector<Orca::Net::KeyframeInfo::Name> before = AllNames(match);
-        int earliest = INT32_MAX;
-        for (const auto& name : event.keyframe.names)
-        {
-          if (std::find(before.begin(), before.end(), name) != before.end())
-            continue;
-          const Orca::Net::SeatPlan& plan = match.session->Plan()[name.seat];
-          const int from = std::max(name.from, plan.plug_from);
-          if (plan.plug_from == Orca::Net::NEVER || from > match.running ||
-              from >= plan.unplug_from)
-            continue;
-          earliest = std::min(earliest, from);
-        }
-        SetNames(match, event.keyframe);
-        if (earliest <= match.running)
-        {
-          if (match.session->RerunFrom(earliest))
-          {
-            NOTICE_LOG_FMT(ROLLBACK, "Drop-in: a name for frame {} arrived at frame {}: re-running",
-                           earliest, match.running + 1);
-          }
-          else
-          {
-            WARN_LOG_FMT(ROLLBACK, "Drop-in: a name for frame {} arrived at frame {}, too late to "
-                         "re-run", earliest, match.running + 1);
-          }
-        }
-      }
-      else if (event.kind == Orca::Net::PeerEvent::Kind::Left && event.host)
-        match.host_gone = event.reason;
-    }
-    // Only at a boundary that isn't a re-run: going solo mid re-run would leave half-replayed frames.
+    JoinerEvents(match);
     if (match.host_gone && !match.session->Resimulating())
     {
-      Orca::Net::PeerEvent event;
-      event.reason = *std::exchange(match.host_gone, std::nullopt);
-      LogStats("host left");
-      if (event.reason == "desync")
-        ++s_desyncs;
-      if (Soft())
-      {
-        // The host's game is gone, this one goes on: every other controller unplugs.
-        if (event.reason == "desync")
-        {
-          Orca::Online::ReportDesync();
-          Orca::Status::Report("desync", "Your games went out of sync, so the match ended");
-        }
-        Core::DisplayMessage(fmt::format("{} left: you play on", match.host_name), 6000);
-        // A ranked set still being decided: this game waits in the room for its verdict (the
-        // room awards the forfeit only while someone is still in it).
-        const bool linger = Orca::Online::RoomQueue() == "ranked" && Orca::Online::MatchLive() &&
-                            !Orca::Online::RoomEnded();
-        BecomeSolo(match, "host left", "host-left", false, linger);
-        if (linger)
-        {
-          NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: the host went mid-set: waiting for the verdict");
-          match.linger_until = Clock::now() + VERDICT_WAIT;
-        }
-        RunSolo(match, local_pad);
-        return rewound_to;
-      }
-      if (event.reason == "desync")
-        Orca::Status::Error("desync", "Your games went out of sync, so the match ended");
-      else
-        Orca::Status::Error("peer_left", "Your friend's game ended");
-      End("host left");
-      StopEmulation(system, event.reason == "desync" ?
-                                "Your games went out of sync, so the match ended" :
-                                "Your friend's game ended");
+      HostGone(system, match, local_pad);
       return rewound_to;
     }
   }
@@ -2575,6 +2632,9 @@ std::optional<int> Boundary(Core::System& system,
   for (int attempt = 0; attempt < 2; ++attempt)
   {
     bool peer_silent = false;
+    // A joiner stalled on its host's inputs stops waiting once the host has left the room (said
+    // at once below, not after the silence limit).
+    bool host_left = false;
     // A stall (waiting on a friend's input) is shown as it lasts: StepSession polls `stopping`
     // while it waits.
     const auto step_start = Clock::now();
@@ -2604,9 +2664,12 @@ std::optional<int> Boundary(Core::System& system,
               Core::DisplayMessage("Your opponent stopped playing: the set is yours", 6000);
             }
           }
-          return Stopping(system);
+          if (match.joining && Orca::Online::HostLeftPending())
+            host_left = true;
+          return host_left || Stopping(system);
         },
-        std::chrono::milliseconds{1}, PEER_SILENCE_LIMIT, &peer_silent);
+        std::chrono::milliseconds{1},
+        LeavingPastUnplug(match) ? LEAVE_SILENCE_LIMIT : PEER_SILENCE_LIMIT, &peer_silent);
     match.last_return = Clock::now();
     if (stall_shown)
       PublishStall(match, 0);
@@ -2671,16 +2734,12 @@ std::optional<int> Boundary(Core::System& system,
         {
           NOTICE_LOG_FMT(ROLLBACK, "Drop-in: unplugged at frame {}",
                          match.session->Plan()[match.local_seat].unplug_from);
-          LogStats("at leave");
           if (Soft())
           {
-            Core::DisplayMessage(fmt::format("You left {}'s game", match.host_name), 4000);
-            BecomeSolo(match, "left", nullptr);
-            Orca::Status::Event("left");
-            if (step.kind == Orca::Net::StepKind::Rollback)
-              return step.frame;
+            FinishLeave(match);
             return rewound_to;
           }
+          LogStats("at leave");
           End("left");
           StopEmulation(system, "You left your friend's game");
           return rewound_to;
@@ -2701,10 +2760,20 @@ std::optional<int> Boundary(Core::System& system,
           Orca::Online::SetOpponentPlugged(true);
           Orca::UX::Search::End();
         }
+        // Nobody else in the session: the host plays solo IDLE_GRACE_FRAMES later, so a friend who
+        // left hears its last acknowledgement. Not with "playing" if the app has already heard
+        // that friend go (its room leave came first): that would wipe the line.
         if (match.session->Idle() && match.waiting.empty())
         {
-          GoSolo(match, "no friends left");
-          AfterFriendsGone(match);
+          if (++match.idle_frames >= IDLE_GRACE_FRAMES)
+          {
+            GoSolo(match, "no friends left", match.friend_left_told ? nullptr : "playing");
+            AfterFriendsGone(match);
+          }
+        }
+        else
+        {
+          match.idle_frames = 0;
         }
       }
       if (step.kind == Orca::Net::StepKind::Rollback)
@@ -2721,6 +2790,16 @@ std::optional<int> Boundary(Core::System& system,
     if (Stopping(system))
       return rewound_to;
     const std::string error = match.session->Error();
+    if (host_left && error.empty() && !match.session->Resimulating())
+    {
+      // The stall ended because the host left the room: the game it joined is gone (or, after
+      // this player's own leave, the leave is over).
+      JoinerEvents(match);
+      if (!match.host_gone)
+        match.host_gone = "";
+      HostGone(system, match, local_pad);
+      return rewound_to;
+    }
     if (!match.joining && match.session->CurrentFrame() == match.running + 1 &&
         (attempt == 0 || !error.empty()))
     {
@@ -2728,6 +2807,18 @@ std::optional<int> Boundary(Core::System& system,
       // host's own room went away, that is what happened to them all: KeepRoomOpen says so (once)
       // and opens another, so the app doesn't hear "your friend left" about it.
       const bool room_gone = Orca::Online::RoomEnded();
+      if (room_gone && Orca::Online::RoomErrorCode() == "match-over" &&
+          !Orca::Online::IsDesync(error))
+      {
+        // A matchmade room closed after its result (a ranked set's, 4004): the session ends with
+        // it, as it should, and nothing failed. KeepRoomOpen tells the app ("friend-left
+        // match-over") and opens a room of this game's own; the joiner says "host-left
+        // match-over".
+        DropFriends(match, "network", false);
+        GoSolo(match, "match over", nullptr);
+        RunSolo(match, local_pad);
+        return rewound_to;
+      }
       WARN_LOG_FMT(ROLLBACK, "Drop-in: unplugging every friend at frame {}: {}", match.running + 1,
                    peer_silent ? "no word from them" : error);
       if (!room_gone)
@@ -2751,6 +2842,16 @@ std::optional<int> Boundary(Core::System& system,
       GoSolo(match, "the session failed");
       if (!room_gone)
         AfterFriendsGone(match);
+      RunSolo(match, local_pad);
+      return rewound_to;
+    }
+    if (Soft() && match.joining && peer_silent && error.empty() && LeavingPastUnplug(match))
+    {
+      // This player left and is past its unplug frame: only the host's word that it has every
+      // input before it was still to come. The leave is over all the same.
+      NOTICE_LOG_FMT(ROLLBACK, "Drop-in: no word from the host for {} s after leaving, frame {}",
+                     LEAVE_SILENCE_LIMIT.count(), match.running + 1);
+      FinishLeave(match);
       RunSolo(match, local_pad);
       return rewound_to;
     }

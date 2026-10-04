@@ -344,6 +344,12 @@ std::vector<Net::PeerEvent> TakePeerEvents()
   return room ? room->TakePeerEvents() : std::vector<Net::PeerEvent>{};
 }
 
+bool HostLeftPending()
+{
+  const auto room = Room();
+  return room && room->HostLeftPending();
+}
+
 bool RoomEnded()
 {
   const auto room = Room();

@@ -1160,7 +1160,15 @@ async function q2Main() {
     if (QUEUE === "ranked") marks();
     await q2Css(host, joiner, g === 0);
     await q2Fight(host, joiner);
-    if (QUEUE === "ranked" && host.results.some((r) => r.k === "set")) break;
+    // The set is over once its verdict came, or once its room closed after its result: a room
+    // that closed with no verdict fails on the verdict below, not on a character select that is
+    // already the player's own (which no Start moves on).
+    if (
+      QUEUE === "ranked" &&
+      (host.results.some((r) => r.k === "set") ||
+        host.lines.slice(host.linesAtBack).includes("orca state friend-left match-over"))
+    )
+      break;
   }
   if (QUEUE !== "ranked") marks();
   if (QUEUE === "ranked") {

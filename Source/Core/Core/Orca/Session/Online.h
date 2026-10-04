@@ -79,6 +79,8 @@ std::optional<bool> Joining();
 Net::Transport* Transport();
 int Seat();
 std::vector<Net::PeerEvent> TakePeerEvents();
+// Whether those events, not taken yet, include the game's host leaving the room (any thread).
+bool HostLeftPending();
 bool RoomEnded();
 // This Orca is in its room: the welcome came and the room hasn't ended.
 bool InRoom();

@@ -175,6 +175,9 @@ public:
   // Whether those events, not taken yet, include a friend arriving (Kind::Arrived on a seat after
   // the host's, from a player that isn't the game's host).
   bool ArrivalPending() const;
+  // Whether those events include the game's host leaving (Kind::Left from the host): a joiner
+  // stalled on the host's inputs hears it at once rather than after its silence limit.
+  bool HostLeftPending() const;
   // Host: offer `seat`'s player the keyframe (sent every second until its first packet arrives).
   void OfferKeyframe(int seat, const KeyframeInfo& info);
   // Host: every port's values so far (KeyframeInfo::names) and their version, to every player in
