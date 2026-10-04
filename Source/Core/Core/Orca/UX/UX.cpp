@@ -134,6 +134,9 @@ void Init()
       StageCursors::Publish(std::move(view));
     }
     ProbeFrame(guard, frame);
+    // The overlay kit dresses as the session's game (local display only).
+    Kit::SetLook(Rules::ProfileRuleset() == Rules::Ruleset::PPlus ? Kit::Look::ProjectPlus :
+                                                                    Kit::Look::Brawl);
     // This player's own controls in its own game, for the session to carry into a game it joins or
     // hosts (reads only; only while this game is its player's alone, so never a friend's game).
     if (alone)

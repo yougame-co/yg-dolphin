@@ -57,6 +57,7 @@ struct GpuFace
 };
 std::array<GpuFace, FACES> s_gpu;
 std::atomic<int> s_faces_ready{0};  // bit per face
+std::atomic<Look> s_look{Look::Brawl};
 
 void ReadFonts(std::string path)
 {
@@ -152,44 +153,56 @@ void Recolour(ImDrawList* dl, int first, float y0, float y1, ImU32 top, ImU32 bo
   }
 }
 
-// A tone as Brawl's own buttons paint it (the character select's "Friend Registration Requested!",
-// "Unable to register.", "Awaiting reply...", the ITEM and STAGE tags): a light rim lit from above,
-// a dark line inside it, the body's gradient, and the text's ink.
+// A tone as the game's own buttons paint it (Brawl's character select: "Friend Registration
+// Requested!", "Awaiting reply...", the ITEM and STAGE tags, the RANKED plate; Project+'s
+// RANDOM and PAGE 2): a rim lit from above, a dark line inside it, the body's gradient, a gloss
+// over its top half, and the text's ink.
 struct Paint
 {
   ImU32 top, bottom;          // the body
   ImU32 rim_top, rim_bottom;  // the rim
   ImU32 line;                 // between rim and body
-  ImU32 ink, ink_outline;     // text on it; an outline of 0 alpha: none
+  ImU32 ink, ink_bottom;      // text on it, top to bottom
+  ImU32 ink_outline;          // an outline of 0 alpha: none
+  float gloss = 0.3f;         // the gloss's alpha at its top
 };
 
 Paint PaintOf(Tone tone)
 {
   const ImU32 rim_top = Rgb(255, 255, 255), rim_bottom = Rgb(186, 190, 202);
+  const ImU32 white = Rgb(255, 255, 255), white_bottom = Rgb(236, 236, 240);
   switch (tone)
   {
   case Tone::Gold:
     return {Rgb(255, 236, 96), Rgb(244, 164, 0), rim_top, rim_bottom, Rgb(44, 26, 0),
-            Rgb(24, 16, 0), Rgb(0, 0, 0, 0)};
+            Rgb(24, 16, 0), Rgb(24, 16, 0), Rgb(0, 0, 0, 0)};
   case Tone::Yellow:
     return {Rgb(255, 226, 70), Rgb(226, 150, 0), rim_top, rim_bottom, Rgb(44, 26, 0),
-            Rgb(24, 16, 0), Rgb(0, 0, 0, 0)};
+            Rgb(24, 16, 0), Rgb(24, 16, 0), Rgb(0, 0, 0, 0)};
   case Tone::Grey:
     return {Rgb(240, 240, 244), Rgb(196, 198, 206), rim_top, Rgb(206, 208, 216),
-            Rgb(150, 152, 160), Rgb(138, 140, 150), Rgb(255, 255, 255, 0.9f)};
+            Rgb(150, 152, 160), Rgb(138, 140, 150), Rgb(138, 140, 150), Rgb(255, 255, 255, 0.9f)};
   case Tone::Red:
-    return {Rgb(255, 112, 98), Rgb(204, 18, 22), rim_top, rim_bottom, Rgb(36, 0, 0),
-            Rgb(255, 255, 255), Rgb(90, 0, 0)};
+    return {Rgb(255, 112, 98), Rgb(204, 18, 22), rim_top, rim_bottom, Rgb(36, 0, 0), white,
+            white_bottom, Rgb(90, 0, 0)};
   case Tone::Blue:
-    return {Rgb(104, 176, 255), Rgb(18, 72, 214), rim_top, rim_bottom, Rgb(0, 8, 40),
-            Rgb(255, 255, 255), Rgb(0, 20, 90)};
+    return {Rgb(104, 176, 255), Rgb(18, 72, 214), rim_top, rim_bottom, Rgb(0, 8, 40), white,
+            white_bottom, Rgb(0, 20, 90)};
   case Tone::Green:
-    return {Rgb(118, 232, 112), Rgb(22, 146, 40), rim_top, rim_bottom, Rgb(0, 30, 4),
-            Rgb(255, 255, 255), Rgb(0, 60, 10)};
-  case Tone::Navy:
+    return {Rgb(118, 232, 112), Rgb(22, 146, 40), rim_top, rim_bottom, Rgb(0, 30, 4), white,
+            white_bottom, Rgb(0, 60, 10)};
+  case Tone::Panel:
   default:
-    return {Rgb(44, 70, 140, 0.95f), Rgb(12, 22, 62, 0.95f), Rgb(236, 240, 250),
-            Rgb(150, 162, 186), Rgb(4, 8, 22), Rgb(255, 255, 255), Rgb(4, 8, 22)};
+    if (CurrentLook() == Look::ProjectPlus)
+    {
+      // Project+'s buttons: flat teal in a black edge, white letters.
+      return {Rgb(28, 174, 128, 0.97f), Rgb(8, 122, 88, 0.97f), Rgb(22, 30, 30),
+              Rgb(4, 8, 8), Rgb(0, 0, 0), white, Rgb(222, 244, 236), Rgb(0, 30, 22), 0.1f};
+    }
+    // Brawl's RANKED plate: rose in a white rim and a black line, cream letters.
+    return {Rgb(182, 104, 110, 0.96f), Rgb(120, 56, 62, 0.96f), Rgb(252, 250, 250),
+            Rgb(194, 188, 188), Rgb(18, 8, 8), Rgb(255, 252, 240), Rgb(246, 224, 168),
+            Rgb(30, 10, 10)};
   }
 }
 
@@ -344,15 +357,36 @@ TextLook TitleLook(float unit, float size)
   TextLook look;
   look.face = Face::Heavy;
   look.px = std::max(1.0f, size * unit);
-  look.top = IM_COL32_WHITE;
-  look.bottom = Rgb(212, 222, 244);
+  if (CurrentLook() == Look::ProjectPlus)
+  {
+    // Project+'s RANKED title: white into mint.
+    look.top = Rgb(240, 248, 248);
+    look.bottom = Rgb(96, 226, 196);
+    look.outline_colour = Rgb(0, 0, 0);
+  }
+  else
+  {
+    // Brawl's RANKED plate's letters: cream into gold.
+    look.top = Rgb(255, 250, 226);
+    look.bottom = Rgb(238, 186, 72);
+    look.outline_colour = Rgb(22, 8, 8);
+  }
   look.outline = std::max(1.0f, look.px * 0.085f);
-  look.outline_colour = Rgb(10, 10, 16);
   look.shadow = ImVec2(look.px * 0.03f, look.px * 0.07f);
   look.shadow_colour = IM_COL32(0, 0, 0, 120);
   look.italic = 0.1f;
   look.tracking = look.px * 0.01f;
   return look;
+}
+
+void SetLook(Look look)
+{
+  s_look.store(look, std::memory_order_relaxed);
+}
+
+Look CurrentLook()
+{
+  return s_look.load(std::memory_order_relaxed);
 }
 
 void SetGameDisc(std::string path)
@@ -574,17 +608,20 @@ void Slab(ImDrawList* dl, ImVec2 min, ImVec2 max, float radius, float unit, cons
   const ImVec2 bmin(lmin.x + line, lmin.y + line), bmax(lmax.x - line, lmax.y - line);
   const float r = std::max(0.0f, radius - rim - line);
   FillRounded(dl, bmin, bmax, r, Fade(p.top, alpha), Fade(p.bottom, alpha));
-  FillRounded(dl, bmin, ImVec2(bmax.x, bmin.y + (bmax.y - bmin.y) * 0.5f), r,
-              Rgb(255, 255, 255, 0.3f * alpha), Rgb(255, 255, 255, 0.04f * alpha),
-              ImDrawFlags_RoundCornersTop);
+  if (p.gloss > 0)
+  {
+    FillRounded(dl, bmin, ImVec2(bmax.x, bmin.y + (bmax.y - bmin.y) * 0.5f), r,
+                Rgb(255, 255, 255, p.gloss * alpha), Rgb(255, 255, 255, 0.13f * p.gloss * alpha),
+                ImDrawFlags_RoundCornersTop);
+  }
 }
 
-// The ink a tone's text takes: white outlined in the tone's dark (black on gold and yellow, grey
+// The ink a tone's text takes: light outlined in the tone's dark (black on gold and yellow, grey
 // outlined in white on grey).
 TextLook Inked(TextLook look, const Paint& p)
 {
   look.top = p.ink;
-  look.bottom = Mix(p.ink, Rgb(0, 0, 0), (p.ink & 0xFFFFFF) == 0xFFFFFF ? 0.08f : 0.0f);
+  look.bottom = p.ink_bottom;
   look.outline_colour = p.ink_outline;
   if (((p.ink_outline >> IM_COL32_A_SHIFT) & 0xFF) == 0)
   {
@@ -640,11 +677,15 @@ Box Banner(ImDrawList* dl, float left, float right, float top, float height, flo
   const std::array<ImVec2, 4> shine = {body[0], body[1],
                                        ImVec2(body[1].x - k * bh * 0.48f, body[0].y + bh * 0.48f),
                                        ImVec2(body[0].x - k * bh * 0.48f, body[0].y + bh * 0.48f)};
-  fill(shine, body[0].y, body[0].y + bh * 0.48f, Rgb(255, 255, 255, 0.26f * alpha),
-       Rgb(255, 255, 255, 0.03f * alpha));
+  if (p.gloss > 0)
+  {
+    fill(shine, body[0].y, body[0].y + bh * 0.48f, Rgb(255, 255, 255, 0.87f * p.gloss * alpha),
+         Rgb(255, 255, 255, 0.1f * p.gloss * alpha));
+  }
   // The title (and the note under it), centred.
   const float centre = (left + right) / 2;
-  // A short title in the heavy face; a sentence in the body face, which reads at that size.
+  // A short title in the heavy face, in the look's title colours; a sentence in the body face, in
+  // the tone's ink, which reads at that size.
   std::size_t letters = 0;
   for (std::size_t i = 0; i < title.size();)
   {
@@ -655,15 +696,15 @@ Box Banner(ImDrawList* dl, float left, float right, float top, float height, flo
   if (note.empty())
   {
     const TextLook look = heavy ? TitleLook(unit, height * 0.6f / unit) :
-                                  LabelLook(unit, height * 0.5f / unit);
+                                  Inked(LabelLook(unit, height * 0.5f / unit), p);
     Text(dl, ImVec2(centre, top + (height - look.px) / 2 + look.px * 0.05f), look, title, alpha,
          Align::Centre);
   }
   else
   {
     const TextLook look = heavy ? TitleLook(unit, height * 0.48f / unit) :
-                                  LabelLook(unit, height * 0.44f / unit);
-    const TextLook small = LabelLook(unit, height * 0.3f / unit);
+                                  Inked(LabelLook(unit, height * 0.44f / unit), p);
+    const TextLook small = Inked(LabelLook(unit, height * 0.3f / unit), p);
     const float y = top + height * 0.1f;
     Text(dl, ImVec2(centre, y), look, title, alpha, Align::Centre);
     Text(dl, ImVec2(centre, y + look.px * 0.95f), small, note, alpha, Align::Centre);
@@ -714,6 +755,10 @@ Box Timer(ImDrawList* dl, ImVec2 centre, float unit, int seconds, double now_s, 
   look.italic = 0.08f;
   const bool urgent = seconds <= 5;
   const bool soon = seconds <= 10;
+  // White while there is time (the look's gold is the last ten seconds' colour), then gold, then
+  // red.
+  look.top = Rgb(255, 255, 255);
+  look.bottom = Rgb(214, 220, 232);
   if (urgent)
   {
     look.top = Rgb(255, 170, 160);
@@ -729,7 +774,7 @@ Box Timer(ImDrawList* dl, ImVec2 centre, float unit, int seconds, double now_s, 
   const float pad_x = 1.3f * unit, pad_y = 0.45f * unit;
   const float w = widest.x + 2 * pad_x, h = widest.y + 2 * pad_y;
   const Box box{ImVec2(centre.x - w / 2, centre.y - h / 2), ImVec2(centre.x + w / 2, centre.y + h / 2)};
-  Plate(dl, box.min, box.max, unit, Tone::Navy, alpha);
+  Plate(dl, box.min, box.max, unit, Tone::Panel, alpha);
   if (urgent)
   {
     const float grow = 0.14f * Pulse(now_s);
@@ -846,6 +891,55 @@ void Frame(ImDrawList* dl, ImVec2 min, ImVec2 max, float unit, Tone tone, std::s
   }
 }
 
+void Connection(ImDrawList* dl, ImVec2 c, float radius, float unit, int bars, float alpha)
+{
+  if (radius <= 0 || alpha <= 0)
+    return;
+  bars = std::clamp(bars, 1, 3);
+  const Paint p = PaintOf(Tone::Panel);
+  const float rim = std::clamp(radius * 0.12f, 1.0f, 0.55f * unit);
+  const float line = std::clamp(radius * 0.06f, 1.0f, 0.3f * unit);
+  // A panel disc, built like the buttons: shadow, rim, line, body, gloss.
+  dl->AddCircleFilled(ImVec2(c.x + 0.15f * unit, c.y + 0.4f * unit), radius,
+                      Rgb(0, 0, 0, 0.34f * alpha), 40);
+  int first = dl->VtxBuffer.Size;
+  dl->AddCircleFilled(c, radius, IM_COL32_WHITE, 40);
+  Recolour(dl, first, c.y - radius, c.y + radius, Fade(p.rim_top, alpha),
+           Fade(p.rim_bottom, alpha));
+  dl->AddCircleFilled(c, radius - rim, Fade(p.line, alpha), 40);
+  const float body = radius - rim - line;
+  first = dl->VtxBuffer.Size;
+  dl->AddCircleFilled(c, body, IM_COL32_WHITE, 40);
+  Recolour(dl, first, c.y - body, c.y + body, Fade(p.top, alpha), Fade(p.bottom, alpha));
+  if (p.gloss > 0)
+  {
+    first = dl->VtxBuffer.Size;
+    dl->AddEllipseFilled(ImVec2(c.x, c.y - body * 0.42f), ImVec2(body * 0.78f, body * 0.5f),
+                         IM_COL32_WHITE, 0, 32);
+    Recolour(dl, first, c.y - body * 0.92f, c.y + body * 0.08f, Rgb(255, 255, 255, p.gloss * alpha),
+             Rgb(255, 255, 255, 0.1f * p.gloss * alpha));
+  }
+  // The arcs, each in a dark line so they read on any panel: lit in the link's colour.
+  const ImU32 on = bars == 3 ? Rgb(96, 206, 255, alpha) :
+                   bars == 2 ? Rgb(255, 210, 64, alpha) :
+                               Rgb(255, 76, 64, alpha);
+  const ImU32 off = Rgb(255, 255, 255, 0.28f * alpha);
+  const ImU32 dark = Rgb(0, 0, 0, 0.7f * alpha);
+  const ImVec2 base(c.x, c.y + body * 0.5f);
+  const float w = std::max(1.5f, body * 0.13f);
+  const float pi = std::numbers::pi_v<float>;
+  for (int i = 0; i < 3; ++i)
+  {
+    const float r = body * (0.36f + 0.24f * static_cast<float>(i));
+    dl->PathArcTo(base, r, pi * 1.25f, pi * 1.75f, 16);
+    dl->PathStroke(dark, ImDrawFlags_None, w + std::max(1.0f, 0.5f * w));
+    dl->PathArcTo(base, r, pi * 1.25f, pi * 1.75f, 16);
+    dl->PathStroke(i < bars ? on : off, ImDrawFlags_None, w);
+  }
+  dl->AddCircleFilled(base, w * 0.95f + std::max(0.5f, 0.25f * w), dark, 16);
+  dl->AddCircleFilled(base, w * 0.95f, on, 16);
+}
+
 void UseAtlasForTests(Face face, const GameFont::Atlas* atlas, ImTextureID texture)
 {
   s_test_faces[static_cast<int>(face)] = {atlas, texture};
@@ -869,7 +963,7 @@ void DrawDemo(ImDrawList* dl, ImVec2 o, ImVec2 size, float u, double now_s)
   };
   // Top centre: the set's banner, the turn's timer beside it, and one about to run out.
   const Box banner = Banner(dl, at(0.29f, 0).x, at(0.71f, 0).x, o.y + 2.2f * u, 9.0f * u, u,
-                            Tone::Navy, "RANKED  GAME 2", "ada 1 – 0 bo · bo bans a stage");
+                            Tone::Panel, "RANKED  GAME 2", "ada 1 – 0 bo · bo bans a stage");
   caption(ImVec2((banner.min.x + banner.max.x) / 2, banner.max.y + 0.4f * u), "Banner");
   const float mid = (banner.min.y + banner.max.y) / 2;
   const Box t1 = Timer(dl, ImVec2(banner.max.x + 7.0f * u, mid), u, 24, now_s);
@@ -882,6 +976,12 @@ void DrawDemo(ImDrawList* dl, ImVec2 o, ImVec2 size, float u, double now_s)
       0.3f * u;
   caption(ImVec2(o.x + 2.5f * u, y), "LabelPlate", Align::Left);
   y += 2.8f * u;
+  const float lamp = 3.0f * u;
+  Connection(dl, ImVec2(o.x + 2.5f * u + lamp, y + lamp), lamp, u, 3);
+  Connection(dl, ImVec2(o.x + 4.0f * u + 3 * lamp, y + lamp), lamp, u, 2);
+  Connection(dl, ImVec2(o.x + 5.5f * u + 5 * lamp, y + lamp), lamp, u, 1);
+  caption(ImVec2(o.x + 2.5f * u, y + 2 * lamp + 0.3f * u), "Connection", Align::Left);
+  y += 2 * lamp + 3.1f * u;
   y = Label(dl, ImVec2(o.x + 2.5f * u, y), u, "32 ms · 60 fps", 2.6f).max.y;
   caption(ImVec2(o.x + 2.5f * u, y), "Label", Align::Left);
   // The middle: a title over a label, two pointers, two framed tiles.
@@ -897,7 +997,7 @@ void DrawDemo(ImDrawList* dl, ImVec2 o, ImVec2 size, float u, double now_s)
   caption(ImVec2(at(0.60f, 0).x + 1.5f * u, at(0, 0.40f).y), "Pointer", Align::Left);
   // The lower middle: a results card.
   const ImVec2 c0 = at(0.335f, 0.475f), c1 = at(0.665f, 0.565f);
-  Plate(dl, c0, c1, u, Tone::Navy);
+  Plate(dl, c0, c1, u, Tone::Panel);
   caption(ImVec2(c1.x + 1.5f * u, c0.y + 1.0f * u), "Plate", Align::Left);
   const float cy = (c0.y + c1.y) / 2;
   Title(dl, ImVec2(c0.x + 2.0f * u, cy - 2.4f * u), u, "VICTORY", 4.8f);

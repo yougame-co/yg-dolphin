@@ -299,7 +299,17 @@ TEST(OrcaKitDraw, EveryPrimitiveDrawsWithoutTheGamesFont)
     EXPECT_GT(s.y, 0);
     const ImVec2 drawn = Kit::Text(dl, ImVec2(10, 10), look, "ada · 1532", 1, Kit::Align::Centre);
     EXPECT_FLOAT_EQ(drawn.x, s.x);
-    Kit::DrawDemo(dl, ImVec2(0, 0), io.DisplaySize, u, 3.25);
+    // Both looks, every primitive.
+    for (const Kit::Look look_now : {Kit::Look::Brawl, Kit::Look::ProjectPlus})
+    {
+      Kit::SetLook(look_now);
+      const int demo = dl->VtxBuffer.Size;
+      Kit::DrawDemo(dl, ImVec2(0, 0), io.DisplaySize, u, 3.25);
+      EXPECT_GT(dl->VtxBuffer.Size, demo);
+      for (int bars = 0; bars <= 4; ++bars)
+        Kit::Connection(dl, ImVec2(50, 50), 3 * u, u, bars);
+    }
+    Kit::SetLook(Kit::Look::Brawl);
     EXPECT_GT(dl->VtxBuffer.Size, before);
     // Wrapping: every line within the width but a lone long word, the words all kept in order.
     const std::string chat = "bo: that was close, one more? supercalifragilisticexpialidocious ok";
@@ -321,6 +331,26 @@ TEST(OrcaKitDraw, EveryPrimitiveDrawsWithoutTheGamesFont)
   }
   EXPECT_EQ(ImGuiAssertFailures(), failures);
   ImGui::DestroyContext(context);
+}
+
+// Each game's look: Brawl's titles cream into gold, Project+'s white into mint; the labels white in
+// both, and the look follows the last SetLook.
+TEST(OrcaKitDraw, TitlesFollowTheLook)
+{
+  Kit::SetLook(Kit::Look::Brawl);
+  EXPECT_EQ(Kit::CurrentLook(), Kit::Look::Brawl);
+  const Kit::TextLook brawl = Kit::TitleLook(7.2f);
+  Kit::SetLook(Kit::Look::ProjectPlus);
+  EXPECT_EQ(Kit::CurrentLook(), Kit::Look::ProjectPlus);
+  const Kit::TextLook pplus = Kit::TitleLook(7.2f);
+  Kit::SetLook(Kit::Look::Brawl);
+  const auto channel = [](ImU32 c, int shift) { return static_cast<int>((c >> shift) & 0xFF); };
+  // Gold: more red than blue at the bottom. Mint: more green and blue than red.
+  EXPECT_GT(channel(brawl.bottom, IM_COL32_R_SHIFT), channel(brawl.bottom, IM_COL32_B_SHIFT) + 100);
+  EXPECT_GT(channel(pplus.bottom, IM_COL32_G_SHIFT), channel(pplus.bottom, IM_COL32_R_SHIFT) + 100);
+  EXPECT_GT(channel(pplus.bottom, IM_COL32_B_SHIFT), channel(pplus.bottom, IM_COL32_R_SHIFT) + 50);
+  EXPECT_EQ(brawl.px, pplus.px);
+  EXPECT_EQ(Kit::LabelLook(7.2f).top, IM_COL32_WHITE);
 }
 
 // The player's own disc (ORCA_TEST_DISC): both faces read, unpacked and parsed, with every letter

@@ -720,14 +720,15 @@ void DrawKitPreview(const OverlayModel::Frame& f, std::string search, std::strin
       }
     }
   }
-  // Top left: the connection circle as before, the ping and the meter beside it, the toasts and the
-  // chat on plates under them.
+  // Top left: the connection's lamp, the ping and the meter beside it, the toasts and the chat on
+  // plates under them.
   const float margin = 2.5f * unit;
   float y = margin;
   if (f.show_signal)
   {
     const float r = 3.0f * unit;
-    SignalCircle(dl, ImVec2(margin + r, margin + r), r, f.signal);
+    Kit::Connection(dl, ImVec2(margin + r, margin + r), r, unit,
+                    f.signal == Signal::Good ? 3 : f.signal == Signal::Ok ? 2 : 1);
     float ty = margin + r - 1.5f * unit;
     if (!f.stats.empty())
       ty = Kit::Label(dl, ImVec2(margin + 2 * r + unit, ty), unit, f.stats, 2.6f).max.y;
@@ -744,7 +745,7 @@ void DrawKitPreview(const OverlayModel::Frame& f, std::string search, std::strin
   for (const OverlayModel::Toast& t : f.toasts)
   {
     y = Kit::LabelPlate(dl, ImVec2(margin, y), unit, t.text, 2.7f, Kit::Align::Left,
-                        Kit::Tone::Navy, t.alpha)
+                        Kit::Tone::Panel, t.alpha)
             .max.y +
         0.9f * unit;
   }
@@ -754,7 +755,7 @@ void DrawKitPreview(const OverlayModel::Frame& f, std::string search, std::strin
     for (const std::string& line : Kit::Wrap(look, c.name + ": " + c.text, 0.4f * pic_size.x))
     {
       y = Kit::LabelPlate(dl, ImVec2(margin, y), unit, line, 2.7f, Kit::Align::Left,
-                          Kit::Tone::Navy, c.alpha)
+                          Kit::Tone::Panel, c.alpha)
               .max.y +
           0.5f * unit;
     }
@@ -784,7 +785,7 @@ void DrawKitPreview(const OverlayModel::Frame& f, std::string search, std::strin
                     10 * unit;
     const float cx = pic.x + pic_size.x / 2;
     const Kit::Box b = Kit::Banner(dl, cx - w / 2, cx + w / 2, banner_top, h, unit,
-                                   Kit::Tone::Navy, title, note);
+                                   Kit::Tone::Panel, title, note);
     if (i == 0 && seconds >= 0)
       Kit::Timer(dl, ImVec2(b.max.x + 6.5f * unit, (b.min.y + b.max.y) / 2), unit, seconds, now_s);
     banner_top = b.max.y + 1.2f * unit;
