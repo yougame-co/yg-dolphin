@@ -2019,12 +2019,12 @@ void ConfirmResults(Match& match)
     if (plugged >= 2)
       plug = latest;
   }
-  // Ranked's character select: a player who never picked in time before the set's first game
-  // (UX/OnlineRules.h, both machines alike at the same final frame). That player's own game leaves
-  // the room, which the room counts as the set's forfeit; the other waits there for the verdict.
   // The queue's casual ready timer that ran out (UX/Queue.h), at the same final frame on both
   // machines: the page leaves the room.
   Orca::UX::Queue::ConfirmTimeout(confirmed, match.local_seat);
+  // Ranked's character select: a player who never picked in time before the set's first game
+  // (UX/OnlineRules.h, both machines alike at the same final frame). That player's own game leaves
+  // the room, which the room counts as the set's forfeit; the other waits there for the verdict.
   if (const auto no_show = Orca::UX::Rules::ConfirmNoShow(confirmed))
   {
     const bool mine = *no_show == match.local_seat;
