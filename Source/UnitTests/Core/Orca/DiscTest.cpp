@@ -4,6 +4,11 @@
 #include <cstdlib>
 #include <string>
 
+#ifndef _WIN32
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 #include <gtest/gtest.h>
 
 #include "Common/CommonTypes.h"
@@ -48,6 +53,46 @@ TEST(OrcaDisc, NonDiscFileIsRefused)
   EXPECT_EQ(check.code, "disc_revision");
   File::DeleteDirRecursively(path.substr(0, path.rfind('/')));
 }
+
+// The -e file is checked before the boot reads it: a path with nothing there, or a file that won't
+// open, is named on one line instead of a panic alert that waits forever.
+TEST(OrcaDisc, BootFileThatIsGoneIsNamed)
+{
+  const Orca::DiscCheck gone = Orca::CheckBootFile("/nonexistent/brawl.iso");
+  EXPECT_FALSE(gone.ok);
+  EXPECT_EQ(gone.code, "disc_missing");
+  EXPECT_EQ(gone.sentence, "/nonexistent/brawl.iso");
+  EXPECT_EQ(Orca::CheckBootFile("").code, "disc_missing");
+}
+
+TEST(OrcaDisc, BootFileThatOpensPasses)
+{
+  const std::string dir = File::CreateTempDir();
+  const std::string path = dir + "/brawl.iso";
+  ASSERT_TRUE(File::WriteStringToFile(path, "x"));
+  EXPECT_TRUE(Orca::CheckBootFile(path).ok);
+  // A folder is the boot's own business (an extracted disc), not a missing file.
+  EXPECT_TRUE(Orca::CheckBootFile(dir).ok);
+  File::DeleteDirRecursively(dir);
+}
+
+#ifndef _WIN32
+TEST(OrcaDisc, BootFileThatWontOpenIsNamed)
+{
+  if (geteuid() == 0)
+    GTEST_SKIP() << "root reads any file";
+  const std::string dir = File::CreateTempDir();
+  const std::string path = dir + "/brawl.iso";
+  ASSERT_TRUE(File::WriteStringToFile(path, "x"));
+  ASSERT_EQ(chmod(path.c_str(), 0), 0);
+  const Orca::DiscCheck locked = Orca::CheckBootFile(path);
+  EXPECT_FALSE(locked.ok);
+  EXPECT_EQ(locked.code, "disc_unreadable");
+  EXPECT_EQ(locked.sentence, path);
+  chmod(path.c_str(), 0600);
+  File::DeleteDirRecursively(dir);
+}
+#endif
 
 // With ORCA_TEST_DISC set to the player's own Brawl image: it passes, and it isn't some other game.
 TEST(OrcaDisc, TheRightDiscPasses)

@@ -57,6 +57,13 @@ holds; Brawl makes its save in-session on both machines. A session with no `Conf
 gets `Sys/Orca/Input/GCPadNew.ini`: port 1 on the keyboard (Dolphin's default keys) and the first
 SDL gamepad of any model (`SDL/0/*`, a device name Orca matches as a wildcard).
 
+A file given with `-e` (the app's disc, or a launcher profile's loader) is checked before anything
+else starts: nothing at the path prints `orca error disc_missing <path>`, a file that won't open
+`orca error disc_unreadable <path>`, and Orca exits 1 within a second (outside a session the same
+goes to stderr). Dolphin's own check raised a panic alert there, before Orca's alert handler was
+in place: on Windows a message box nobody saw behind the app's window, and the run waited on it
+with nothing on stdout. Orca's handler is now registered before the boot file is read.
+
 Two friends meet when both use the same code and the same compatibility key: the Orca build, the
 game profile and data files, every forced setting (FMA included), the disc and the seeded save.
 Not the host CPU: an Apple Silicon Mac and an x86-64 PC compute the same game (a 12,001-frame

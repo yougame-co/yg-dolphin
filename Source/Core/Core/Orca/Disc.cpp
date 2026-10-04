@@ -9,6 +9,7 @@
 #include <fmt/format.h>
 
 #include "Common/FileUtil.h"
+#include "Common/IOFile.h"
 #include "Core/Orca/Profile.h"
 #include "DiscIO/Volume.h"
 
@@ -45,6 +46,16 @@ DiscCheck CheckDisc(const std::string& path, std::string_view game_id)
                               "disc), so both players have the same game.",
                               revision));
   }
+  return DiscCheck{true, {}, {}};
+}
+
+DiscCheck CheckBootFile(const std::string& path)
+{
+  if (path.empty() || !File::Exists(path))
+    return DiscCheck{false, "disc_missing", path};
+  // A folder is left to the boot's own rules (an extracted disc), which say what is wrong with it.
+  if (!File::IsDirectory(path) && !File::IOFile(path, "rb").IsOpen())
+    return DiscCheck{false, "disc_unreadable", path};
   return DiscCheck{true, {}, {}};
 }
 }  // namespace Orca

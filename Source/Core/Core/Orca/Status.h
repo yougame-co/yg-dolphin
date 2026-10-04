@@ -16,8 +16,9 @@
 //   app's "host"; "... local" without it), online friends, cancel (ORCA.md "Matchmaking")
 //   orca result <json>, a verdict of the room in a matchmade room (with the app's "results")
 //   orca shaders <compiled> <total>, while the boot compiles shaders before the first frame
-// Codes: boot, cancelled (Orca.app's disc picker closed without a disc), disc_revision, profile,
-// settings, room_mismatch, room_full, kicked, network, peer_left, desync, internal.
+// Codes: boot, cancelled (Orca.app's disc picker closed without a disc), disc_missing and
+// disc_unreadable (the -e file isn't there, or won't open: the sentence is its path), disc_revision,
+// profile, settings, room_mismatch, room_full, kicked, network, peer_left, desync, internal.
 // Only the first error is printed: it is the one that explains the exit. Outside a session these
 // print nothing.
 namespace Orca::Status

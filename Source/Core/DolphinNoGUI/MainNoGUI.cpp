@@ -290,6 +290,18 @@ static std::optional<std::string> ChooseSessionDisc(const std::string& user_dire
 #define main app_main
 #endif
 
+// A boot file that isn't there or won't open (Orca::CheckBootFile) ends the run before anything
+// else starts: "orca error disc_missing <path>" (or disc_unreadable) in a session, stderr outside.
+static int RefuseBootFile(const Orca::DiscCheck& check)
+{
+  if (Orca::SessionActive())
+    Orca::Status::Error(check.code, check.sentence);
+  else
+    fmt::print(stderr, "Orca: {} {}\n", check.code, check.sentence);
+  Orca::Status::Finish();
+  return 1;
+}
+
 // Everything after the embed arguments were taken out; returns the exit code.
 static int Run(const int argc, char* argv[], const Embed::Options& embed)
 {
@@ -327,6 +339,10 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
   optparse::Values& options = CommandLineParse::ParseArguments(parser.get(), argc, argv);
   std::vector<std::string> args = parser->args();
 
+  // Before the boot file is read: an alert there (a file Dolphin can't recognise) goes to stderr
+  // when embedded, never to a message box that waits, unseen, behind the app's window.
+  Common::RegisterMsgAlertHandler(MsgAlertHandler);
+
   std::optional<std::string> save_state_path;
   if (options.is_set("save_state"))
   {
@@ -351,6 +367,8 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
     const std::list<std::string> paths_list = options.all("exec");
     const std::vector<std::string> paths{std::make_move_iterator(std::begin(paths_list)),
                                          std::make_move_iterator(std::end(paths_list))};
+    if (const Orca::DiscCheck check = Orca::CheckBootFile(paths.front()); !check.ok)
+      return RefuseBootFile(check);
     boot = BootParameters::GenerateFromFile(
         paths, BootSessionData(save_state_path, DeleteSavestateAfterBoot::No));
     game_specified = true;
@@ -369,6 +387,8 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
   }
   else if (args.size())
   {
+    if (const Orca::DiscCheck check = Orca::CheckBootFile(args.front()); !check.ok)
+      return RefuseBootFile(check);
     boot = BootParameters::GenerateFromFile(
         args.front(), BootSessionData(save_state_path, DeleteSavestateAfterBoot::No));
     args.erase(args.begin());
@@ -413,7 +433,15 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
     return 0;
   }
 
-  Common::RegisterMsgAlertHandler(MsgAlertHandler);
+  // A boot file Dolphin couldn't make sense of (its alert said why): no window is opened for it.
+  if (game_specified && !boot)
+  {
+    fprintf(stderr, "Could not boot the specified file\n");
+    if (embed.enabled && !Orca::SessionActive())
+      Embed::Out("error Orca couldn't start the game");
+    Orca::Status::Finish();
+    return 1;
+  }
 
   s_platform = GetPlatform(options);
   if (s_platform && embed.enabled)
