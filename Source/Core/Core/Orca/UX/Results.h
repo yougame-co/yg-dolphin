@@ -5,10 +5,12 @@
 
 #include <array>
 #include <map>
+#include <optional>
 #include <string>
 #include <vector>
 
 #include "Common/CommonTypes.h"
+#include "Core/Orca/UX/SetBlock.h"
 
 namespace Core
 {
@@ -28,7 +30,8 @@ class CPUThreadGuard;
 //         first frame):
 //         +0x01 u8 the rules' mode (0 time, 1 stock); +0x04 u32 time limit (minutes); +0x08 u32
 //         stocks; +0x0C u16 the stage id; +0x0E u16 how the fight ended (1 normally, by stocks or
-//         by time; 2 a "no contest", the pause menu's L+R+A+Start)
+//         by time; 2 a "no contest", the pause menu's L+R+A+Start); +0x1378 u8 the decision
+//         (BrawlHeaders' gmResultInfo::DecisionKind: 1 time up, 2 a win, 9 no contest)
 //         one record per port at +0x24 + port * 0x2AC: +0x00 u8 character, +0x01 u8 player type
 //         (as above), +0x0A u8 stocks left (0xFF in a timed match), +0x0E u8 place (0 the
 //         winner; a 1v1's loser 1), +0x10 u32 KOs, +0x14 u32 falls, +0x18 u16 self-destructs
@@ -55,7 +58,10 @@ struct ResultBlock
 {
   int mode = -1;  // 0 time, 1 stock
   int stage = -1;
-  int end = 0;  // 1 normal, 2 no contest
+  // +0x0E..+0x0F: read as how the fight ended (1 normally, 2 a no contest) by the beta; it is the
+  // count of players tied for first (BrawlHeaders' m_numWinners at +0x0F).
+  int end = 0;
+  int decision = 0;  // gmResultInfo +0x1378: 1 time up, 2 a KO win, 9 no contest (0: not read)
   std::array<PortResult, 4> ports{};
   bool operator==(const ResultBlock&) const = default;
 };
@@ -72,6 +78,8 @@ struct Reading
   Scene scene = Scene::Other;
   // In the results scene only.
   ResultBlock block;
+  // A ranked match block's set (RankedSet.h), at every boundary of a ranked queue match.
+  std::optional<SetBlock::SetState> set;
   bool operator==(const Reading&) const = default;
 };
 
@@ -100,11 +108,26 @@ struct GameResult
   std::array<int, 2> characters{-1, -1};
   std::array<int, 2> stocks{-1, -1};
   bool timeout = false;
+  // A ranked set's game (from the match block): its fight's first frame (the report's id, the same
+  // on both machines), its number in the set, how it was decided (SetBlock::How), a tiebreak
+  // game, each port's ledge grabs; and, for the game that ended the set, the set's end (1 won by
+  // `set_winner`, 2 void).
+  int start = -1;
+  int number = 0;
+  int how = 0;
+  bool tiebreak = false;
+  std::array<int, 2> ledge{-1, -1};
+  int set_done = 0;
+  int set_winner = -1;
   bool operator==(const GameResult&) const = default;
 
-  // {"f":F,"st":S,"c":[c1,c2],"s":[s1,s2],"to":0|1}: integers only, port order, this key order.
+  // {"f":F,"st":S,"c":[c1,c2],"s":[s1,s2],"to":0|1}: integers only, port order, this key order; a
+  // ranked set's game adds "k":how,"lg":[l1,l2],"tb":0|1 (F is then its fight's first frame).
   std::string DetailJson() const;
 };
+
+// A ranked set's game as the match block recorded it (index `index` of `set`).
+GameResult FromRecord(const SetBlock::SetState& set, int index);
 
 // A results screen's verdict: exactly two human players on ports 1 and 2 (else void "ports"), a
 // fight that ended normally (else void "nocontest"), one of them placed first (a win) or both (a
@@ -139,6 +162,10 @@ private:
   // A counted fight is on (or between it and its results screen).
   bool m_in_game = false;
   bool m_after_fight = false;
+  // A ranked match block's set: how many of its games were seen (at a final reading) and whether
+  // that count is known yet (the first final reading after a reset only sets it).
+  bool m_have_set = false;
+  int m_set_games = 0;
 };
 
 // The process's tracker (CPU thread only).

@@ -18,6 +18,7 @@
 #include "Common/HookableEvent.h"
 #include "Core/Core.h"
 #include "Core/Orca/UX/OnlineMenu.h"
+#include "Core/Orca/UX/RankedSet.h"
 #include "VideoCommon/AsyncRequests.h"
 #include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/Present.h"
@@ -425,8 +426,10 @@ void Draw()
                                                s_perf.load(std::memory_order_relaxed));
   // The matchmaking search (UX/OnlineMenu.h), while the player waits on the character select.
   const auto [search, search_note] = Search::Lines();
+  // A ranked set's score on the menus (UX/RankedSet.h): "Game 2 · 1–0".
+  const std::string set_line = search.empty() ? RankedSet::CurrentScoreLine() : std::string();
   if (!f.show_signal && f.waiting.empty() && f.toasts.empty() && f.stats.empty() &&
-      f.perf.empty() && search.empty())
+      f.perf.empty() && search.empty() && set_line.empty())
   {
     return;
   }
@@ -496,6 +499,13 @@ void Draw()
       const ImVec2 n = TextSize(size, search_note);
       OutlinedText(dl, size, ImVec2((screen.x - n.x) / 2, line_y), 1, search_note, Signal::Ok);
     }
+  }
+  else if (!set_line.empty())
+  {
+    // Top centre, where the search lines were.
+    const float size = 3.0f * unit;
+    const ImVec2 s = TextSize(size, set_line);
+    OutlinedText(dl, size, ImVec2((screen.x - s.x) / 2, margin), 1, set_line);
   }
 }
 }  // namespace

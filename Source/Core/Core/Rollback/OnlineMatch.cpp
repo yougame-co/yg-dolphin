@@ -42,6 +42,7 @@
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/OnlineMenu.h"
 #include "Core/Orca/UX/OnlineRules.h"
+#include "Core/Orca/UX/RankedSet.h"
 #include "Core/Orca/UX/Results.h"
 #include "Core/Rollback/SessionPort.h"
 #include "Core/System.h"
@@ -596,9 +597,13 @@ void DropFriends(Match& match, const std::string& reason, bool announce = true)
   }
 }
 
+void ConfirmResults(Match& match);
+
 void GoSolo(Match& match, const char* why, const char* state = "playing")
 {
-  // The frames the UX's readers saw with friends ran on guessed inputs too: they start over.
+  // Games already decided at final frames go to the room before the session ends (a leave, an
+  // unplug): what the readers saw after them ran on guessed inputs too, and starts over.
+  ConfirmResults(match);
   Orca::Events::NoteResync();
   match.log = match.session->TakeLog(&match.log_base);
   const std::vector<Pad> pending = match.session->PendingLocal();
@@ -1869,6 +1874,16 @@ void ConfirmResults(Match& match)
     report.why = r.why;
     if (report.kind != Orca::Net::GameReport::Kind::Void)
       report.detail = r.DetailJson();
+    report.start = r.start;
+    report.number = r.number;
+    report.set_done = r.set_done;
+    report.set_winner_seat = r.set_winner;
+    if (r.set_done)
+    {
+      NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: the set ended with game {}: {}", r.number,
+                     r.set_done == 1 ? fmt::format("port {} won", r.set_winner + 1) :
+                                       std::string("void"));
+    }
     NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: a game ended at frame {}: {}", r.frame,
                    report.kind == Orca::Net::GameReport::Kind::Win ?
                        fmt::format("port {} won, {}", r.winner_port + 1, report.detail) :
@@ -2433,6 +2448,7 @@ std::optional<int> OnBoundary(Core::System& system,
   s_solo_idle = false;
   const std::optional<int> rewound_to = Boundary(system, local_pad, on_frame);
   ConfirmResults(TheMatch());
+  Orca::UX::RankedSet::SetLocalPort(TheMatch().local_seat);
   s_solo_idle = SoloIdle(TheMatch());
   return rewound_to;
 }

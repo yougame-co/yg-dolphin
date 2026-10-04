@@ -820,6 +820,9 @@ struct YouGameRoom::Impl
     int slot = -1;
   };
   std::vector<LobbyParticipant> lobby_participants;
+  // The room match's participants as its `start` named them: ports map to these slots for the
+  // whole match, whoever leaves the room later.
+  std::vector<LobbyParticipant> match_participants;
   bool someone_away = false;
   std::optional<Clock::time_point> begin_sent;
   int begin_tries = 0;
@@ -834,6 +837,17 @@ struct YouGameRoom::Impl
   // "c<n>" for a casual game, "$final").
   std::map<std::string, std::string> void_why;
   std::map<std::string, std::string> sent_detail;
+  // A ranked set's reports from the match block, by report id: the game's number in the set, and
+  // for the game that ended the set, the end (UX/RankedSet.h) as the finish names it.
+  std::map<std::string, int> game_numbers;
+  struct SetEnd
+  {
+    int done = 0;
+    std::string winner;
+  };
+  std::map<std::string, SetEnd> set_ends;
+  // The reports that came from the match block: the block alone ends their set.
+  std::set<std::string> block_ids;
 
   // Direct links to the other Orcas (DirectLink.h), unless ORCA_DIRECT=0. The pointer never
   // changes after construction; the link thread starts with the welcome.
@@ -1890,9 +1904,15 @@ struct YouGameRoom::Impl
     begin_wait_roster = false;
   }
 
+  // The participants results name: the room match's, once it started, else the room's.
+  const std::vector<LobbyParticipant>& Participants() const
+  {
+    return match_participants.empty() ? lobby_participants : match_participants;
+  }
+
   std::string ParticipantAt(int slot) const
   {
-    for (const auto& p : lobby_participants)
+    for (const auto& p : Participants())
     {
       if (p.slot == slot)
         return p.id;
@@ -1903,7 +1923,7 @@ struct YouGameRoom::Impl
   // This player's participant id and slot, and the opponent's id.
   std::string MyId() const
   {
-    for (const auto& p : lobby_participants)
+    for (const auto& p : Participants())
     {
       if (p.connection == me)
         return p.id;
@@ -1912,7 +1932,7 @@ struct YouGameRoom::Impl
   }
   int MySlot() const
   {
-    for (const auto& p : lobby_participants)
+    for (const auto& p : Participants())
     {
       if (p.connection == me)
         return p.slot;
@@ -1921,7 +1941,7 @@ struct YouGameRoom::Impl
   }
   std::string TheirId() const
   {
-    for (const auto& p : lobby_participants)
+    for (const auto& p : Participants())
     {
       if (p.connection != me)
         return p.id;
@@ -1975,7 +1995,24 @@ struct YouGameRoom::Impl
   {
     const bool ranked = room_queue == "ranked";
     const int n = ranked ? ++ranked_sent : ++casual_sent;
-    const std::string id = fmt::format("{}{}", ranked ? "g" : "c", n);
+    // A ranked set's game from the match block is named by its fight's first frame: the same on
+    // both machines whatever either missed.
+    const std::string id = ranked && report.start >= 0 ? fmt::format("g{}", report.start) :
+                                                         fmt::format("{}{}", ranked ? "g" : "c", n);
+    if (ranked)
+    {
+      game_numbers[id] = report.number > 0 ? report.number : n;
+      if (report.start >= 0)
+        block_ids.insert(id);
+      if (report.set_done)
+      {
+        SetEnd end;
+        end.done = report.set_done;
+        if (report.set_done == 1)
+          end.winner = ParticipantAt(report.set_winner_seat);
+        set_ends[id] = end;
+      }
+    }
     std::string winner;
     GameReport r = report;
     if (r.kind == GameReport::Kind::Win)
@@ -2198,10 +2235,23 @@ struct YouGameRoom::Impl
       return;
     }
     const Verdict v = ReadVerdict(m, id);
-    const std::optional<SetTally::End> end = tally.Game(v.winner);
+    std::optional<SetTally::End> end = tally.Game(v.winner);
     int n = 0;
-    if (id.size() > 1 && id[0] == 'g')
+    if (const auto it = game_numbers.find(id); it != game_numbers.end())
+      n = it->second;
+    else if (id.size() > 1 && id[0] == 'g')
       n = std::atoi(id.c_str() + 1);
+    // A game from the match block: the block ends the set (both games decided it the same way),
+    // whatever the room's tally of agreed games says.
+    if (block_ids.count(id))
+    {
+      end.reset();
+      if (const auto it = set_ends.find(id); it != set_ends.end())
+      {
+        end = SetTally::End{it->second.done == 1 ? it->second.winner : "",
+                            it->second.done == 1 && !it->second.winner.empty() ? "" : "limit"};
+      }
+    }
     const std::string d = LocalDetail(m, id);
     Orca::Status::Result(
         fmt::format("{{\"q\":\"ranked\",\"k\":\"game\",\"n\":{},\"out\":\"{}\"{},\"score\":{}{}}}",
@@ -2308,7 +2358,12 @@ struct YouGameRoom::Impl
     ranked_sent = 0;
     tally.Reset();
     finish_sent = false;
+    game_numbers.clear();
+    set_ends.clear();
+    block_ids.clear();
+    match_participants.clear();
     LobbyFields(m);
+    match_participants = lobby_participants;
   }
 
   void Tick()

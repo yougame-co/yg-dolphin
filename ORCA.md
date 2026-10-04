@@ -1649,10 +1649,13 @@ scripted matches won by each port, a timed match, a quit, two stages):
   stage, +0x20 the time limit in frames, +0x98 the players' init data, 4 x 0x5C: +0x00 character,
   +0x01 player type 0 human / 1 CPU / 3 none, +0x04 starting stocks, 0xFF in a timed match);
   +0x18 the result info (`0x9017F420`); +0x1C the rules (`0x9017F360`).
-- The result info, filled as the fight ends (before the results screen's first frame): +0x01 mode
-  (0 time, 1 stock), +0x04 time limit (minutes, u32), +0x08 stocks (u32), +0x0C the stage (u16),
-  +0x0E how the fight ended (u16: 1 normally, by stocks or time; 2 no contest). One record per port
-  at +0x24 + port x 0x2AC: +0x00 character, +0x01 player type, +0x0A stocks left (0xFF timed),
+- The result info, filled as the fight ends (before the results screen's first frame), much of it
+  live during the fight: +0x01 mode (0 time, 1 stock), +0x04 time limit (minutes, u32), +0x08
+  stocks (u32), +0x0C the stage (u16), +0x0E..+0x0F the count of players tied for first (read by
+  the beta as how the fight ended, 1 normally and 2 a no contest; a level time-up's sudden death
+  also leaves 2, so the no contest is now the decision's), +0x1378 the decision (9 from the fight's
+  start, so a no contest; 1 the frame time runs out; 2 a deciding KO). One record per port at
+  +0x24 + port x 0x2AC: +0x00 character, +0x01 player type, +0x0A stocks left (0xFF timed),
   +0x0E place (0 first; a 1v1's loser 1), +0x10 KOs (u32), +0x14 falls (u32), +0x18
   self-destructs (u16).
 - The rules (gmSetRule): +0x02 mode (0 time, 1 stock), +0x03 a timed match's minutes, +0x04
@@ -1948,6 +1951,98 @@ refused in Project+; Project+'s Code Menu values (Auto L-Cancel, Stock Control, 
 Debug) aren't forced (their defaults are off and the menu can't open); the ready timer's no-show
 and the stall claim were not run live; the room doesn't yet treat a stall claim as more than the
 survivor's word (YouGame rooms).
+
+## Ranked sets
+
+A ranked queue match is a best-of-3 set followed in the game's own memory, so both Orcas, every
+rollback re-run and every drop-in keyframe see the same score (`Core/Orca/UX/RankedSet.*`,
+`Core/Orca/UX/SetBlock.*`). The room hears each game from there once its frames are final, and
+rates the set once.
+
+### The match block
+
+`FreeSpace::kMatchBlock` (`0x806F2380`, both games) and its free tail up to `kMatchBlockLimit`
+(`0x806F2618`). Only Orca's frame hook writes it, as a pure function of memory and the frame
+number, first runs and re-runs alike, and only the bytes that differ. Every rules track writes the
+same header; the set as this track follows it sits at `+0x210`, past the 512-byte block, clear of
+the other tracks' sets, steps, saved rules (`+0x10`-`+0x1FF`) and the character order (`+0x200`).
+Layout (big-endian):
+
+| Offset | |
+|---|---|
+| `+0x00` | Header: `u32` magic `YGM1`, `u8` version 1, `u8` mode (0 none, 1 casual, 2 ranked), `u8` ruleset (1 Brawl / Supernova 2025, 2 Project+ 2024). Nothing else below `+0x210` is touched here. |
+| `+0x210` | Set: `u8` games recorded, `u8[2]` wins (ports 1, 2), `u8` done (1 won, 2 void), `u8` winner port, `u8` last game's winner, `u8` tiebreak next, `u8` ties in a row. |
+| `+0x218` | The fight being followed: `u8` on, `u8` flags (1 between scenes, 2 sudden death, 4 time ran out), `u8[2]` ledge grabs, `u32` its first frame (the game's id), `u8[2]` stocks and `u16[2]` percent when time ran out, `u8[2]` on the ledge last frame. |
+| `+0x230` | 8 game records of 12 bytes: `u32` first frame, `u8` winner port (`0xFF` a tie), `u8` how (bits 0-3: 1 results screen, 2 stocks, 3 percent, 4 ledge limit, 5 tie; `0x10` a tiebreak game, `0x20` time ran out), `u8` stage, `u8[2]` characters, `u8` stocks left (port 1 high nibble, port 2 low; `0xF` unknown), `u8[2]` ledge grabs. |
+
+The header follows the room this game is in (`RankedSet::SetRoomMode`). A host that takes a queue
+room (`host <code>`) asks for its queue's mode; any room of its own again (`ReopenRoom`: after a
+pairing, a set, a leave) asks for none. It is written at the next frame boundary where the game
+plays alone (no friend plugged in or on the way), so never in a frame anyone else replays: the
+joiner gets it with the host's keyframe. A new or different header starts a fresh set; none
+clears the block. `ORCA_TEST_MATCH_BLOCK=ranked|casual` (tests only, no real room) asks for a
+header at boot.
+
+### Following a set
+
+At every boundary of a ranked block, `RankedSet::Step` reads the scene (`scMelee` fight,
+`scMemoryChange` between, `scVsResult` results):
+- a fight scene starts a fight (its first frame is the game's id). Brawl's sudden death stays in
+  `scMelee`: the fighters are gone for a few frames and come back with 1 stock each, which is how
+  it is told (also a way back into a fight from between scenes);
+- during the fight (Brawl), `RankedSet::ReadLiveFight` reads the fighters: sora_melee's
+  `g_ftEntryManager` (module 27's section 6 + `0x2E88`, through the OS module list at
+  `0x800030C8`), each entry (`0x244` bytes: `+0x0A` active instance, `+0x28` ftOwner, `+0x30`
+  instances, `+0x58` the port); the owner's data `+0x34` stocks (`u32`) and `+0x24` damage (`f32`);
+  the fighter `+0x60` -> `+0xD8` -> `+0x70` the status module, `+0x34` the status (`0x73`-`0x75`
+  catching or holding the ledge). The result info's decision (`+0x1378`) is 9 during the fight and
+  turns 1 the frame time runs out (the game freezes on "TIME!"), 2 at the deciding KO. It counts
+  each player's ledge grabs (entries into those statuses) and keeps stocks and percent as they were
+  when time ran out; nothing after time-up or in a sudden death counts;
+- the results screen judges the game (`RankedSet::Judge`) and records it; any other scene ends a
+  fight without a game.
+
+The verdict:
+- not exactly two humans on ports 1 and 2, or a no contest: no game.
+- Brawl (Supernova 2025): a KO is the results screen's winner. Out of time: the ledge-grab limit
+  first (over 35 grabs loses, Meta Knight over 20; both over, ignored; 11 and 6 in a tiebreak
+  game), then more stocks, then lower percent, as they were when time ran out (the game's own
+  sudden death is ignored). A sudden death the clock didn't cause (a simultaneous last-stock loss),
+  or a time-out still level, is a tie: the next game is a tiebreak game with 1 stock and 3:00
+  (`RankedSet::WriteSetRules`, on the menus; 3 stocks and 8:00 otherwise). Five ties in a row void
+  the set.
+- Project+ (2024): the results screen's winner. Its codeset already decides a time-out by stocks
+  then percent and gives an exact tie overtime ("Tiebreaker v2.0", "RoA Overtime v2.1").
+
+Two wins end the set; 8 games without that void it. What the other tracks read: the score
+(`+0x211`), the last winner (`+0x215`, the loser picks next), the stages each port won on (the
+records' winner and stage, for Dave's Stupid Rule), the tiebreak flag (`+0x216`: the next game is
+played on the last record's stage with its characters; locking those is the stage select's and
+the input gate's part, not done here) and the set's end (`+0x213`). The menus (character and stage select, the
+results screen) show the score at the top centre: "Game 2 · 1–0", "Tiebreak game · 1–1",
+"Set over · 2–1" (`RankedSet::ScoreLine`, the local player's wins first).
+
+### Reports
+
+The results tracker (`Results.h`) reads the block at every boundary and, once a frame is final,
+reports each game the block recorded since: `{"t":"game-report","id":"g<first frame>",...}`, the
+winner named by the room match's participants as `start` gave them (port s is slot s, whoever left
+the room since). The detail adds `"k"` how, `"lg"` ledge grabs and `"tb"` a tiebreak game (`"f"` is
+the fight's first frame). A game whose fight began before the opponent's plug frame isn't
+reported. A tie is a draw. When the block ended the set with a game, both Orcas send `finish` with
+that winner (or void) once the room's verdict on that game is in. The room agrees on the outcome
+only (YouGame `rooms/src/game-lobby.ts`): a detail that differs is stored, not compared. A game
+already final when a session ends (a leave, an unplug) is confirmed before the readers start over.
+Leaving, quitting the app or losing the connection mid-set is the room's forfeit (15 s).
+
+Checked: `OrcaSetBlock*`, `OrcaRankedSet*` unit tests (layout, a Bo3, void games, the Brawl
+time-out order with the ledge limit, sudden death in the fight scene, ties and tiebreak games,
+Project+, the score line, the tracker's reports); RAM probes of Brawl fights (the fighter chain,
+stocks and damage, statuses `0xBD` dead and `0xBE` rebirth as BrawlHeaders names them, the
+decision turning 1 at time-up, sudden death staying in `scMelee`); a harness set with
+`ORCA_TEST_MATCH_BLOCK=ranked ORCA_TEST_SET_RULES=1,1` (a level time-up is a tie, the tiebreak game
+and one more game win the set 2-0, a fourth game isn't recorded), also under `YG_SYNCTEST=7`, and
+Project+'s 2-0 under `YG_SYNCTEST=7`. Not checked live: a real ledge grab count.
 
 ## Embedding
 

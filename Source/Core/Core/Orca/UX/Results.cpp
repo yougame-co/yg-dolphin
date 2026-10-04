@@ -23,6 +23,7 @@ constexpr u32 GLOBAL_SET_RULE = 0x1C;
 constexpr u32 RESULT_MODE = 0x01;
 constexpr u32 RESULT_STAGE = 0x0C;
 constexpr u32 RESULT_END = 0x0E;
+constexpr u32 RESULT_DECISION = 0x1378;
 constexpr u32 RESULT_PORTS = 0x24;
 constexpr u32 RESULT_PORT_SIZE = 0x2AC;
 constexpr u32 PORT_CHARACTER = 0x00;
@@ -62,8 +63,50 @@ std::atomic<bool> s_rules_pending{false};
 
 std::string GameResult::DetailJson() const
 {
-  return fmt::format("{{\"f\":{},\"st\":{},\"c\":[{},{}],\"s\":[{},{}],\"to\":{}}}", frame, stage,
-                     characters[0], characters[1], stocks[0], stocks[1], timeout ? 1 : 0);
+  std::string out =
+      fmt::format("{{\"f\":{},\"st\":{},\"c\":[{},{}],\"s\":[{},{}],\"to\":{}", frame, stage,
+                  characters[0], characters[1], stocks[0], stocks[1], timeout ? 1 : 0);
+  if (start >= 0)
+  {
+    out += fmt::format(",\"k\":{},\"lg\":[{},{}],\"tb\":{}", how, ledge[0], ledge[1],
+                       tiebreak ? 1 : 0);
+  }
+  return out + "}";
+}
+
+GameResult FromRecord(const SetBlock::SetState& set, int index)
+{
+  GameResult g;
+  if (index < 0 || index >= SetBlock::MAX_RECORDS)
+  {
+    g.why = "limit";
+    return g;
+  }
+  const SetBlock::GameRecord& r = set.records[index];
+  const auto value = [](u8 v) { return v == 0xFF ? -1 : int(v); };
+  g.start = static_cast<int>(r.start & 0x7FFFFFFF);
+  g.frame = g.start;
+  g.number = index + 1;
+  g.how = static_cast<int>(r.how);
+  g.tiebreak = r.tiebreak;
+  g.timeout = r.timeout;
+  g.stage = value(r.stage);
+  for (int i = 0; i < 2; ++i)
+  {
+    g.characters[i] = value(r.characters[i]);
+    g.stocks[i] = value(r.stocks[i]);
+    g.ledge[i] = r.ledge[i];
+  }
+  if (r.winner < 2)
+  {
+    g.kind = GameResult::Kind::Win;
+    g.winner_port = r.winner;
+  }
+  else
+  {
+    g.kind = GameResult::Kind::Draw;
+  }
+  return g;
 }
 
 Reading ReadResults(const GuestMemory& m)
@@ -84,6 +127,8 @@ Reading ReadResults(const GuestMemory& m)
   r.block.mode = m.Read8(info + RESULT_MODE);
   r.block.stage = m.Read16(info + RESULT_STAGE);
   r.block.end = m.Read16(info + RESULT_END);
+  if (m.Valid(info + RESULT_DECISION))
+    r.block.decision = m.Read8(info + RESULT_DECISION);
   for (u32 port = 0; port < 4; ++port)
   {
     const u32 rec = info + RESULT_PORTS + port * RESULT_PORT_SIZE;
@@ -105,7 +150,10 @@ GameResult Judge(const ResultBlock& block, int frame)
 {
   GameResult g;
   g.frame = frame;
-  if (block.end != 1)
+  // A no contest: the decision still 9 (the fight's start value; the pause menu's quit leaves it).
+  // Without a decision read, the older reading: +0x0E..+0x0F other than 1 (it is the count of
+  // players tied for first, so this also voided a level time-up's sudden death).
+  if (block.decision == 9 || (block.decision == 0 && block.end != 1))
   {
     g.why = "nocontest";
     return g;
@@ -149,6 +197,8 @@ void ResultsTracker::Reset()
   m_last = {};
   m_in_game = false;
   m_after_fight = false;
+  m_have_set = false;
+  m_set_games = 0;
 }
 
 void ResultsTracker::Store(int frame, const Reading& reading, u64 resyncs)
@@ -185,6 +235,37 @@ std::vector<GameResult> ResultsTracker::Confirm(int confirmed, int plug_frame)
       m_after_fight = false;
     }
     const Scene before = follows ? m_last.scene : Scene::Other;
+    if (r.set)
+    {
+      // A ranked set: its games are the match block's (RankedSet.h), judged in the game itself.
+      // Only games whose fight began after the opponent's plug frame are reported (on both
+      // machines the same), and none seen before the tracker's first final reading.
+      const SetBlock::SetState& set = *r.set;
+      if (!m_have_set || set.games < m_set_games)
+      {
+        m_have_set = true;
+        m_set_games = set.games;
+      }
+      for (; m_set_games < set.games; ++m_set_games)
+      {
+        GameResult g = FromRecord(set, m_set_games);
+        if (m_set_games + 1 == set.games && set.done)
+        {
+          g.set_done = set.done;
+          g.set_winner = set.done == 1 && set.winner < 2 ? set.winner : -1;
+        }
+        if (g.start >= 0 && g.start - 1 <= plug_frame)
+          continue;
+        out.push_back(std::move(g));
+      }
+      m_in_game = false;
+      m_after_fight = false;
+      m_last = r;
+      m_last_frame = frame;
+      m_have_last = true;
+      continue;
+    }
+    m_have_set = false;
     switch (r.scene)
     {
     case Scene::Fight:
@@ -256,7 +337,13 @@ void ReadResultsFrame(const Core::CPUThreadGuard& guard, int frame)
   if (!ResultsVerified())
     return;
   GuardMemory memory(guard);
-  Tracker().Store(frame, ReadResults(memory), Orca::Events::Resyncs());
+  Reading reading = ReadResults(memory);
+  if (const auto header = SetBlock::ReadHeader(memory);
+      header && header->mode == SetBlock::Mode::Ranked)
+  {
+    reading.set = SetBlock::ReadSet(memory);
+  }
+  Tracker().Store(frame, reading, Orca::Events::Resyncs());
 }
 
 void RequestQueueRules()
