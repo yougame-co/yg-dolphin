@@ -50,12 +50,12 @@ const std::optional<TestKnob>& Knob()
       ERROR_LOG_FMT(ROLLBACK, "Input gate: ORCA_TEST_GATE={}: {}; no test masks", spec, error);
       return std::nullopt;
     }
-    TestKnob knob;
-    knob.rules = std::move(*rules);
-    for (const TestRule& rule : knob.rules)
-      knob.memory = knob.memory || rule.every != 0;
+    TestKnob parsed;
+    parsed.rules = std::move(*rules);
+    for (const TestRule& rule : parsed.rules)
+      parsed.memory = parsed.memory || rule.every != 0;
     NOTICE_LOG_FMT(ROLLBACK, "Input gate: test masks ORCA_TEST_GATE={}", spec);
-    return knob;
+    return parsed;
   }();
   return knob;
 }
