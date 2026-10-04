@@ -162,5 +162,8 @@ void ShowToast(std::string text);
 // A ranked set's lines (BrawlStages.h), top centre: the set score, and under it whose turn it is
 // on the stage select with its timer. Empty: not shown. Any thread (the frame hook, first runs).
 void SetRulesLines(std::string line, std::string note);
+// The character order's line (CharOrder.h), under the set's score on the character select ("Ada
+// picks first · 0:42"); empty: none. Display only: computed from memory on first runs. Any thread.
+void SetRuleLine(std::string text);
 OverlayModel& Overlay();
 }  // namespace Orca::UX

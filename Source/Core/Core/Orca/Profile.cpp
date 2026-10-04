@@ -377,9 +377,9 @@ std::string TestQueueSpec()
   return SessionActive() ? GetEnv("ORCA_TEST_QUEUE") : std::string();
 }
 
-std::string TestRankedSpec()
+std::string TestCharOrderSpec()
 {
-  return SessionActive() ? GetEnv("ORCA_TEST_RANKED") : std::string();
+  return SessionActive() ? GetEnv("ORCA_TEST_CHAR_ORDER") : std::string();
 }
 
 bool TestOverridesActive()
@@ -387,7 +387,7 @@ bool TestOverridesActive()
   return TestPads() != 0 || TestSkipRender() || TestNetDelayMs().has_value() ||
          TestSnapshotEvery() != 0 || TestFullSnapshots() || TestNoAfp() ||
          TestCpuCore().has_value() || !TestGateSpec().empty() || !TestQueueSpec().empty() ||
-         !TestRankedSpec().empty();
+         !TestCharOrderSpec().empty();
 }
 
 const Sram* SessionSram()

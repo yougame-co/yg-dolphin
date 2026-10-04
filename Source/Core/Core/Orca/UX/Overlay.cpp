@@ -318,6 +318,8 @@ std::atomic<Stats> s_stats{Stats::Off};
 std::atomic<Perf> s_perf{Perf::Fps};
 Common::EventHook s_state_hook;  // the core's pause and resume, for the frame meter
 std::atomic<bool> s_visible{true};  // the app shows the game (embed hide/show)
+std::mutex s_rule_line_lock;
+std::string s_rule_line;  // SetRuleLine's
 // ORCA_UX_OVERLAY_DEMO=1 (design checks only): a made-up friend whose link cycles good, ok, bad
 // with a stall, every 12 s, in place of the session's stats.
 bool s_demo = false;
@@ -431,12 +433,17 @@ void Draw()
   // The matchmaking search (UX/OnlineMenu.h), while the player waits on the character select.
   const auto [search, search_note] = Search::Lines();
   // A ranked set's lines, top centre: the stage flow's (Brawl's through SetRulesLines, Project+'s
-  // RankedPPlus::CurrentLines), else the set's score on the menus (UX/RankedSet.h).
-  std::string rules, rules_note;
+  // RankedPPlus::CurrentLines), else the set's score on the menus (UX/RankedSet.h); under it the
+  // turn (the stage flow's, else the character order's).
+  std::string rules, rules_note, rule_line;
   {
     std::lock_guard lk(s_rules_lock);
     rules = s_rules_line;
     rules_note = s_rules_note;
+  }
+  {
+    std::lock_guard lk(s_rule_line_lock);
+    rule_line = s_rule_line;
   }
   if (rules.empty() && rules_note.empty())
   {
@@ -446,6 +453,8 @@ void Draw()
   }
   if (rules.empty())
     rules = RankedSet::CurrentScoreLine();
+  if (rules_note.empty())
+    rules_note = rule_line;
   if (!f.show_signal && f.waiting.empty() && f.toasts.empty() && f.stats.empty() &&
       f.perf.empty() && search.empty() && rules.empty() && rules_note.empty())
   {
@@ -570,6 +579,12 @@ void FrameBoundary(bool shown)
 void ShowToast(std::string text)
 {
   s_overlay.AddToast(std::move(text), NowMs());
+}
+
+void SetRuleLine(std::string text)
+{
+  std::lock_guard lk(s_rule_line_lock);
+  s_rule_line = std::move(text);
 }
 
 void ShutdownOverlay()

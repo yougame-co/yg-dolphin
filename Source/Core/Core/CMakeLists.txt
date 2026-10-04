@@ -535,6 +535,8 @@ add_library(core
   Orca/Session/YouGameRoom.h
   Orca/UX/BrawlStages.cpp
   Orca/UX/BrawlStages.h
+  Orca/UX/CharOrder.cpp
+  Orca/UX/CharOrder.h
   Orca/UX/Controllers.cpp
   Orca/UX/Controllers.h
   Orca/UX/ControllerSource.cpp

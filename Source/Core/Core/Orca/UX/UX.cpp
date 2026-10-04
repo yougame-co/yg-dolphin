@@ -11,6 +11,7 @@
 #include "Common/Logging/Log.h"
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/UX/BrawlStages.h"
+#include "Core/Orca/UX/CharOrder.h"
 #include "Core/Orca/UX/ControllerSource.h"
 #include "Core/Orca/UX/GamePatches.h"
 #include "Core/Orca/UX/MenuText.h"
@@ -57,6 +58,7 @@ void Init()
     Merge(masks, Rules::GateMasks(memory));
     Merge(masks, RankedPPlus::Masks(memory));
     BrawlStages::GateMasks(guard, &masks);
+    Merge(masks, CharOrder::GateFrame(guard));
     return masks;
   });
   // The name tags write emulated memory: the compatibility key carries their version.
@@ -124,6 +126,9 @@ void Init()
         plugged |= static_cast<u8>(1 << p.port);
     }
     Rules::OnFrame(guard, frame, resimulating, alone, plugged);
+    // A ranked set's character order on later games' character select (CharOrder.h): its state
+    // in the match block, which the input gate reads for the frame about to run.
+    CharOrder::Frame(guard, frame, resimulating, ports);
     // Last, after every other writer here: a toggled patch group follows its condition as this
     // boundary's writers left it, so the hook run again at this boundary (a re-run from the
     // snapshot saved here) decides the same and writes nothing new (GamePatches.h).
