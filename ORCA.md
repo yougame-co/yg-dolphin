@@ -2965,6 +2965,36 @@ host's header changes only at an alone boundary, which nothing re-runs). `Tools/
 - The queue image: its capture takes 20-30 ms (a machine image and the session NAND, 37.8 MB in
   Brawl), the way back 30-140 ms.
 
+**Checked 2026-10-04, Orca 0.3.14** (`rel-0.3.14`: `q2-boot-menu`, `q2-css-title`, `q2-stages` and
+`q2-queue-css` merged on `rel-0.3.13`, `ux=10`; M4 Pro, headless, `-v Null`):
+- Unit tests: 334 `Orca*` pass (16 skipped: the live and network ones).
+- Brawl, the whole casual flow from the boot (`bf-queue2-flow.txt`, `ORCA_TEST_QUEUE=casual:solo
+  ORCA_UX_TEST_NAMES=ada,bo ORCA_TEST_QUEUE_PICK=2057:3:2:-7.5:14.23 YG_RESULTS=1`), `YG_SYNCTEST=7
+  YG_SYNCTEST_FROM=1440` to frame 4700: the main menu at 1430, With Anyone > Casual (exit code 30)
+  to the character select at 1757 (title CASUAL), port 1 ready at 1988 (`orca queue ready casual 0
+  0`), the room's header at 2057, Link's pick in at 2151 (94 frames), both ready at 2378, the casual
+  stage pick (port 1 Battlefield, port 2 another; the coin took Battlefield), the fight (port 1 won,
+  3-0), results, game 2's character select at 4420 (CASUAL), both ready at 4561: 22,771 re-run
+  frames, **0 RAM mismatches**.
+- Brawl, ranked game 1 (`bf-queue2-ranked.txt`, `ranked:solo`, the pick at 2106 with rating 1532),
+  `YG_SYNCTEST=7 YG_SYNCTEST_FROM=1440` to 2900: Ranked (exit code 31, title RANKED), ready, the
+  room's header, the pick in, both ready, strikes by X (port 1 one, port 2 two), port 1's pick with
+  A, the fight from 2616: 10,171 re-run frames, **0 RAM mismatches**.
+- Project+, the whole casual flow (`pplus-queue2-flow.txt`, the pick at 824:43:2:-7.4:7.7),
+  `YG_SYNCTEST=7 YG_SYNCTEST_FROM=200` to 3200: the main menu at 197, Casual's character select at 524
+  (title CASUAL), ready at 725, the room's header at 824, the pick in at 902 (78 frames), both ready
+  at 1145, the casual stage pick (both named, the coin took port 1's), the fight (4-0), results, game
+  2's character select, both ready at 3118: 20,951 re-run frames, **0 RAM mismatches**.
+- Project+, ranked game 1 (`pplus-queue2-ranked.txt`, the pick at 874), `YG_SYNCTEST=7
+  YG_SYNCTEST_FROM=200` to 4300: ready, the pick in, port 1's strike by X, port 2's two by its timer,
+  port 1's pick by its timer, the fight from 4031: 28,651 re-run frames, **0 RAM mismatches**.
+- Plain harness runs of the Project+ inputs after the boot change: `pplus-css-title.txt` (FRIENDS,
+  CASUAL, RANKED, then VERSUS untouched), `pplus-casual-pick.txt` (prefs 0/6, the coin took 0) and
+  `pplus-queue2.txt` (the pick in, both ready, both turns run out, the coin's stage).
+- `queue-e2e.mjs --q2` against yougame.co with dev tickets, Brawl: casual PASS (2 games, the pick in,
+  verdicts the same, both back on their own character select in 33 and 51 ms, `orca queue ready`
+  again); ranked with `ORCA_TEST_SET_RULES=1,8` PASS (3 verdicts the same, back in 35 and 46 ms).
+
 ## Embedding
 
 The YouGame desktop app shows Orca inside its own window, at the page's player box, the way it runs
