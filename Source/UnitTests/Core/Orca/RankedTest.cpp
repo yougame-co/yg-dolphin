@@ -5,6 +5,7 @@
 // the match block (MatchBlock.h) and Project+'s flow on its stage select (RankedPPlus.h), over a
 // fake of the game's memory.
 
+#include <array>
 #include <map>
 #include <string>
 #include <string_view>
@@ -522,14 +523,259 @@ TEST(OrcaRankedPPlus, OverlayLines)
   FakeMemory m = RankedSss(1);
   RankedPPlus::Apply(m, 100, true);
   const std::vector<Orca::Events::PortInfo> ports{{0, "ada", false, {}}, {1, "bo", true, {}}};
+  // The top line: the set, whose turn, how many stages, the time left; the keys for the player
+  // whose turn it is under it.
   RankedPPlus::Lines l = RankedPPlus::Describe(m, 100, ports);
-  EXPECT_EQ(l.set, "Ranked · Game 1 · ada 0–0 bo");
-  EXPECT_EQ(l.turn, "bo strikes 1 stage · 0:30");
+  EXPECT_EQ(l.set, "Ranked · Game 1 · ada 0–0 bo · bo strikes 1 · 0:30");
+  EXPECT_EQ(l.turn, "");
   const std::vector<Orca::Events::PortInfo> theirs{{0, "ada", true, {}}, {1, "bo", false, {}}};
   l = RankedPPlus::Describe(m, 100 + 6 * 60, theirs);
-  EXPECT_EQ(l.turn, "Your turn: strike 1 stage with X · 0:24");
+  EXPECT_EQ(l.set, "Ranked · Game 1 · ada 0–0 bo · bo strikes 1 · 0:24");
+  EXPECT_EQ(l.turn, "Your turn: X on a stage strikes it");
+  // Port 1's two strikes: the count says how many are left.
+  StrikeAt(m, 2);
+  RankedPPlus::Apply(m, 101, true);
+  EXPECT_EQ(RankedPPlus::Describe(m, 101, ports).set,
+            "Ranked · Game 1 · ada 0–0 bo · ada strikes 2 · 0:30");
+  StrikeAt(m, 0);
+  RankedPPlus::Apply(m, 102, true);
+  EXPECT_EQ(RankedPPlus::Describe(m, 102, ports).set,
+            "Ranked · Game 1 · ada 0–0 bo · ada strikes 1 · 0:30");
+  // On the character select, the set alone.
+  SetScene(m, "scSelctCharacter");
+  EXPECT_EQ(RankedPPlus::Describe(m, 103, ports).set, "Ranked · Game 1 · ada 0–0 bo");
   SetScene(m, "scMelee");
   EXPECT_EQ(RankedPPlus::Describe(m, 100, ports), RankedPPlus::Lines{});
+}
+
+namespace
+{
+// A casual Project+ game on the stage select (ORCA.md "Casual stage pick"): each player names a
+// preferred stage in turn, then the coin takes one.
+FakeMemory CasualSss(u8 coin)
+{
+  FakeMemory m = Game("scSelctCharacter");
+  MatchBlock::Write(
+      m, MatchBlock::State::Fresh(MatchBlock::MODE_CASUAL, Ranked::RULESET_PPLUS_2024, coin));
+  m.Write32(MatchBlock::ROOM, 0x5EED1234);
+  // The casual lock's preset (OnlineRules writes it on the character select).
+  for (u32 i = 0; i < RankedPPlus::PRESET_BYTES; ++i)
+    m.Write8(RankedPPlus::RSS_EXDATA + i, RankedPPlus::kSwitch03[i]);
+  RankedPPlus::Apply(m, 1, true);
+  SetScene(m, "scSelStage");
+  return m;
+}
+}  // namespace
+
+TEST(OrcaRankedPPlus, CasualTurnsNameStagesThenTheCoinPicks)
+{
+  FakeMemory m = CasualSss(1);  // port 2 names first
+  int frame = 200;
+  EXPECT_GT(RankedPPlus::Apply(m, frame, true), 0);
+  MatchBlock::State s = Block(m);
+  EXPECT_EQ(s.flow, 1);
+  EXPECT_EQ(s.step, 0);
+  EXPECT_EQ(s.active, 1);
+  EXPECT_EQ(m.Read32(TASK + RankedPPlus::SSS_CONTROLLER), 1u);
+  // Every legal stage in play: nothing struck on page 0; the other pages all struck.
+  EXPECT_EQ(Page0Bits(m), 0u);
+  EXPECT_EQ(m.Read16(RankedPPlus::STAGE_STRIKE_TABLE + 6), 0xFFFF);
+  EXPECT_EQ(RankedPPlus::Apply(m, frame, true), 0);
+  // Port 1 does nothing; port 2's A reads as X (it never takes the stage), its own X is off.
+  auto masks = RankedPPlus::Masks(m);
+  EXPECT_EQ(masks[0], Rollback::InputGate::ALL);
+  EXPECT_TRUE(masks[1].buttons & PAD_BUTTON_A);
+  EXPECT_TRUE(masks[1].buttons & PAD_BUTTON_X);
+  EXPECT_TRUE(masks[1].buttons & PAD_BUTTON_B);
+  EXPECT_EQ(masks[1].a_as, PAD_BUTTON_X);
+  EXPECT_FALSE(masks[1].main_stick);
+  // On the page button A turns the page; on Random nothing.
+  m.Write32(TASK + RankedPPlus::SSS_HOVERED, RankedPPlus::PAGE_ITEM);
+  masks = RankedPPlus::Masks(m);
+  EXPECT_FALSE(masks[1].buttons & PAD_BUTTON_A);
+  EXPECT_EQ(masks[1].a_as, 0);
+  m.Write32(TASK + RankedPPlus::SSS_HOVERED, RankedPPlus::RANDOM_ITEM);
+  masks = RankedPPlus::Masks(m);
+  EXPECT_TRUE(masks[1].buttons & PAD_BUTTON_A);
+  EXPECT_EQ(masks[1].a_as, 0);
+  m.Write32(TASK + RankedPPlus::SSS_HOVERED, 0);
+
+  // Port 2's A on Smashville: Project+ marks it struck; the flow takes it as port 2's stage and
+  // writes the table back clean (a redraw).
+  StrikeAt(m, 2);
+  m.Write8(RankedPPlus::PAGE_INDEX, 0);
+  RankedPPlus::Apply(m, ++frame, true);
+  s = Block(m);
+  EXPECT_EQ(s.prefs[1], 2);
+  EXPECT_EQ(s.prefs[0], MatchBlock::NONE);
+  EXPECT_EQ(s.step, 1);
+  EXPECT_EQ(s.active, 0);
+  EXPECT_EQ(Page0Bits(m), 0u);
+  EXPECT_EQ(m.Read8(RankedPPlus::PAGE_INDEX), 0xFF);
+  EXPECT_EQ(m.Read32(TASK + RankedPPlus::SSS_CONTROLLER), 0u);
+  EXPECT_EQ(RankedPPlus::Apply(m, frame, true), 0);
+  const std::vector<Orca::Events::PortInfo> ports{{0, "ada", false, {}}, {1, "bo", true, {}}};
+  RankedPPlus::Lines l = RankedPPlus::Describe(m, frame, ports);
+  EXPECT_EQ(l.set, "Stage pick · your turn · 0:07");
+  EXPECT_EQ(l.turn, "A on the stage you want · then one of the two picks, at random");
+
+  // Port 1's 7 s (and its short grace) run out: a random legal stage for it.
+  const Ranked::Plan plan = Ranked::PlanCasual(
+      Ranked::PPlus2024(), Ranked::SetView{1, -1, 1, {}, {-1, -1}},
+      Ranked::CasualSeed(0x5EED1234, 1, 1));
+  frame += 7 * 60 + 30;
+  RankedPPlus::Apply(m, frame, true);
+  s = Block(m);
+  EXPECT_EQ(s.prefs[0], Ranked::CasualDefault(plan, 0));
+  // Both named: the coin's pick is made for its player, everything else shown struck.
+  const int port = Ranked::CasualChoice(plan);
+  EXPECT_TRUE(s.auto_pick);
+  EXPECT_EQ(s.active, port);
+  EXPECT_EQ(s.auto_stage, s.prefs[port]);
+  EXPECT_EQ(m.Read32(TASK + RankedPPlus::SSS_SELECTED), static_cast<u32>(PosOf(s.auto_stage)));
+  EXPECT_EQ(Page0Bits(m), BitsOf(0x01FF & ~(1 << s.auto_stage)));
+  masks = RankedPPlus::Masks(m);
+  EXPECT_EQ(masks[port].press, PAD_BUTTON_A);
+  EXPECT_TRUE(masks[port].main_stick);
+  EXPECT_EQ(masks[1 - port], Rollback::InputGate::ALL);
+  EXPECT_EQ(RankedPPlus::Apply(m, frame, true), 0);
+  l = RankedPPlus::Describe(m, frame, ports);
+  EXPECT_NE(l.set.find(std::string(Ranked::PPlus2024().stage_names[s.auto_stage])),
+            std::string::npos);
+  // The fight: a game counted (the next coin is another), the flow idle again.
+  SetScene(m, "scMelee");
+  RankedPPlus::Apply(m, ++frame, true);
+  s = Block(m);
+  EXPECT_EQ(s.flow, 0);
+  EXPECT_EQ(s.games, 1);
+  EXPECT_FALSE(s.auto_pick);
+  EXPECT_EQ(s.prefs[0], MatchBlock::NONE);
+  EXPECT_FALSE(s.done);
+  EXPECT_TRUE(RankedPPlus::Masks(m)[0].Empty());
+  EXPECT_EQ(RankedPPlus::Describe(m, frame, ports), RankedPPlus::Lines{});
+  // The preset isn't the flow's to write in casual (the casual lock writes it on the characters).
+  SetScene(m, "scSelctCharacter");
+  m.Write8(RankedPPlus::RSS_EXDATA, 0x77);
+  RankedPPlus::Apply(m, ++frame, true);
+  EXPECT_EQ(m.Read8(RankedPPlus::RSS_EXDATA), 0x77);
+}
+
+TEST(OrcaRankedPPlus, CasualPickWaitsForTwoPlayers)
+{
+  FakeMemory m = CasualSss(0);
+  RankedPPlus::Apply(m, 10, false);
+  EXPECT_EQ(Block(m).flow, 0);
+  for (const auto& mask : RankedPPlus::Masks(m))
+    EXPECT_TRUE(mask.Empty());
+  RankedPPlus::Apply(m, 11, true);
+  EXPECT_EQ(Block(m).flow, 1);
+  EXPECT_EQ(Block(m).active, 0);
+  RankedPPlus::Apply(m, 12, false);
+  EXPECT_EQ(Block(m).flow, 0);
+  // The cursor is the remaining player's again.
+  EXPECT_EQ(m.Read32(TASK + RankedPPlus::SSS_CONTROLLER), 0xF0u);
+  EXPECT_EQ(RankedPPlus::Apply(m, 12, false), 0);
+}
+
+TEST(OrcaRankedSteps, CasualIsTwoPreferTurnsOnTheWholeList)
+{
+  const Ranked::Ruleset& rules = Ranked::Brawl2025();
+  Ranked::SetView set;
+  set.coin = 1;
+  Ranked::Plan plan = Ranked::PlanCasual(rules, set, 1234);
+  EXPECT_TRUE(plan.casual);
+  EXPECT_EQ(plan.seed, 1234u);
+  EXPECT_EQ(plan.available, static_cast<StageMask>(0x7F));
+  ASSERT_EQ(plan.steps.size(), 2u);
+  EXPECT_EQ(plan.steps[0], (Ranked::Step{StepKind::Prefer, 1, 1, false, 7}));
+  EXPECT_EQ(plan.steps[1], (Ranked::Step{StepKind::Prefer, 0, 1, false, 7}));
+  // 7 s and a half-second grace each: two turns and the hand-off come to about 15 s.
+  EXPECT_EQ(Ranked::StepFrames(rules, plan.steps[0]), 7u * 60 + 30);
+  // Never FD with an Ice Climbers; Meta Knight changes nothing in casual.
+  set.characters = {rules.ice_climbers, rules.meta_knight};
+  plan = Ranked::PlanCasual(rules, set, 1);
+  EXPECT_EQ(plan.available, static_cast<StageMask>(0x7F & ~(1 << 5)));
+  EXPECT_FALSE(plan.mk_clause);
+  EXPECT_EQ(plan.steps.size(), 2u);
+  // Project+: the 2024 Proposed list's 9.
+  EXPECT_EQ(Ranked::PlanCasual(Ranked::PPlus2024(), {}, 1).available,
+            static_cast<StageMask>(0x1FF));
+}
+
+TEST(OrcaRankedSteps, CasualCoinIsTheSameEverywhereAndFair)
+{
+  const Ranked::Ruleset& rules = Ranked::Brawl2025();
+  // The same room, coin and game: the same seed; another game: another.
+  EXPECT_EQ(Ranked::CasualSeed(77, 1, 2), Ranked::CasualSeed(77, 1, 2));
+  EXPECT_NE(Ranked::CasualSeed(77, 1, 2), Ranked::CasualSeed(77, 1, 3));
+  std::array<int, 2> chosen{};
+  std::array<int, 7> defaults{};
+  for (u32 room = 0; room < 500; ++room)
+  {
+    for (int game = 1; game <= 4; ++game)
+    {
+      const Ranked::Plan plan =
+          Ranked::PlanCasual(rules, {}, Ranked::CasualSeed(room * 2654435761u, room & 1, game));
+      ++chosen[Ranked::CasualChoice(plan)];
+      const int d = Ranked::CasualDefault(plan, game & 1);
+      ASSERT_GE(d, 0);
+      ASSERT_LT(d, 7);
+      ++defaults[d];
+    }
+  }
+  EXPECT_GT(chosen[0], 900);
+  EXPECT_GT(chosen[1], 900);
+  for (const int n : defaults)
+    EXPECT_GT(n, 180);
+  // A default is always an allowed stage (FD out with an Ice Climbers).
+  Ranked::SetView ic;
+  ic.characters = {rules.ice_climbers, 0};
+  for (u32 seed = 0; seed < 200; ++seed)
+  {
+    const Ranked::Plan plan = Ranked::PlanCasual(rules, ic, seed);
+    EXPECT_NE(Ranked::CasualDefault(plan, 0), 5);
+    EXPECT_NE(Ranked::CasualDefault(plan, 1), 5);
+  }
+}
+
+TEST(OrcaRankedSteps, ProgressCasualPreferThenTheCoin)
+{
+  const Ranked::Ruleset& rules = Ranked::Brawl2025();
+  Ranked::SetView set;
+  set.coin = 0;
+  const Ranked::Plan plan = Ranked::PlanCasual(rules, set, 99);
+  Ranked::Progress p = Ranked::Begin(rules, plan);
+  EXPECT_EQ(p.frames, 7 * 60 + 30);
+  EXPECT_EQ(Ranked::SecondsShown(rules, *Ranked::Current(plan, p), p.frames), 7);
+  EXPECT_EQ(Ranked::SecondsShown(rules, *Ranked::Current(plan, p), 30), 0);
+  // No strikes, bans or picks in a Prefer turn.
+  EXPECT_FALSE(Ranked::Strike(rules, plan, &p, 0));
+  EXPECT_FALSE(Ranked::Skip(rules, plan, &p));
+  EXPECT_FALSE(Ranked::Pick(plan, &p, 0));
+  EXPECT_TRUE(Ranked::Prefer(rules, plan, &p, 3));
+  EXPECT_EQ(p.prefs[0], 3);
+  ASSERT_NE(Ranked::Current(plan, p), nullptr);
+  EXPECT_EQ(Ranked::Current(plan, p)->port, 1);
+  EXPECT_EQ(p.frames, 7 * 60 + 30);
+  EXPECT_EQ(p.picked, -1);
+  // Port 2 names the same stage: that's the stage either way.
+  EXPECT_TRUE(Ranked::Prefer(rules, plan, &p, 3));
+  EXPECT_EQ(p.picked, 3);
+  EXPECT_EQ(Ranked::Current(plan, p), nullptr);
+  EXPECT_FALSE(Ranked::Prefer(rules, plan, &p, 4));
+  // Both turns run out: each a random legal stage, then the coin's.
+  Ranked::Progress q = Ranked::Begin(rules, plan);
+  for (int i = 0; i < 10000 && q.picked < 0; ++i)
+    Ranked::Tick(rules, plan, &q);
+  EXPECT_EQ(q.prefs[0], Ranked::CasualDefault(plan, 0));
+  EXPECT_EQ(q.prefs[1], Ranked::CasualDefault(plan, 1));
+  EXPECT_EQ(q.picked, q.prefs[Ranked::CasualChoice(plan)]);
+  // A stage not allowed (FD with an Ice Climbers) isn't named.
+  set.characters = {rules.ice_climbers, 0};
+  const Ranked::Plan ic = Ranked::PlanCasual(rules, set, 99);
+  Ranked::Progress r = Ranked::Begin(rules, ic);
+  EXPECT_FALSE(Ranked::Prefer(rules, ic, &r, 5));
+  EXPECT_EQ(r.prefs[0], -1);
 }
 
 // The shared machine's Progress driver (Brawl's stage select glue drives the steps one action and

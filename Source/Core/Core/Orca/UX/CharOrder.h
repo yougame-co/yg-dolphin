@@ -18,21 +18,28 @@ class CPUThreadGuard;
 }
 
 // The character order of a ranked set's later games (ORCA.md "Character order"; the ranked rules'
-// Phase 4): on the character select of game 2 and on, the previous game's winner picks first, and
-// the loser, who sees that pick, picks second. Each pick has 45 seconds; a pick that runs out keeps
-// the character the player's token is on, which is the previous game's character unless they moved
-// it. Project+'s 2024 Recommended order (B.6: characters, winner then loser, then the stage).
+// Phase 4), on the character select of game 2 and on, in one of two orders (Order, one constant
+// for both games, kLaterGameOrder):
+//   - Free (Luis, 2026-10-04: "losing player chooses character first then winning player chooses.
+//     Winning player can choose right away if they want"): the loser is asked first; the winner
+//     may lock in at any time meanwhile, and if they haven't once the loser has, it is their turn.
+//   - WinnerFirst (the standard rulesets: Project+'s 2024 Recommended B.6, characters winner then
+//     loser, then the stage): the winner picks first, and the loser, who sees that pick, second.
+// Each turn has 45 seconds; a pick that runs out keeps the character the player's token is on,
+// which is the previous game's character unless they moved it.
 //
 // How it plays, on the game's own character select (no new screen):
-//   - first, the winner's turn: the loser's controller does nothing, the winner can't take the token
-//     back (B) or leave (Start), and locks the pick in with A (on a character, or anywhere in the
-//     grid to keep the one the token is on: the online rules pass A only there, OnlineRules.h);
-//   - then the loser's turn: the winner's controller does nothing, the loser can't take the token
-//     back, and locks in with A or goes on with Start;
-//   - then Orca presses Start for the loser (every other frame until the screen goes), so the game
-//     goes on to the stage select with both picks. A player who picked the token up (A on it) and
-//     let the time run out can only move and put it down, and Orca puts it on the character under
-//     the hand, if any, before it presses Start.
+//   - first, the first picker's turn: they can't take the token back (B) or leave (Start), and lock
+//     the pick in with A (on a character, or anywhere in the grid to keep the one the token is on:
+//     the online rules pass A only there, OnlineRules.h). WinnerFirst: the other player's
+//     controller does nothing. Free: the winner can lock in too (then does nothing more);
+//   - then the second picker's turn (unless they locked in already, Free): the first picker's
+//     controller does nothing, the second can't take the token back, and locks in with A or goes
+//     on with Start;
+//   - then Orca presses Start for the second picker (every other frame until the screen goes), so
+//     the game goes on to the stage select with both picks. A player who picked the token up (A on
+//     it) and let the time run out can only move and put it down, and Orca puts it on the character
+//     under the hand, if any, before it presses Start.
 // The overlay says whose turn it is and the time left ("Ada picks first · 0:42").
 //
 // Everything is a pure function of emulated memory and the hook's frame number, the same on both
@@ -40,11 +47,9 @@ class CPUThreadGuard;
 // frame hook (idempotent: a re-run at the same boundary finds it written and writes nothing new),
 // and the input gate's masks and presses are computed from that memory (Rollback/InputGate.h).
 //
-// Brawl keeps the interim order until its stage pick moves before characters (Supernova 2025
-// §3.3: the ban, the loser's stage, then the winner may change character, then the loser): both
-// pick at once on later games, with the same 45 seconds; neither can take the token back or go on
-// with Start, each locks in with A (and then can't change), and once both have, or the time is up,
-// Orca presses Start. MkFreePicker() is the exact order's Meta Knight re-check, for when it lands.
+// Brawl plays the same order as Project+ (Supernova 2025's exact one, §3.3: the ban, the loser's
+// stage, then the winner may change character, then the loser, needs the stage pick before the
+// characters). MkFreePicker() is that order's Meta Knight re-check, for when it lands.
 //
 // Found under the harness (ORCA_UX_PROBE watches and dumps, Brawl rev 2 and Project+ alike):
 //   - the character select: scene "scSelctCharacter", whose +0x400 is muSelCharTask; player area i
@@ -74,6 +79,15 @@ enum class Ruleset : u8
   PPlus = 2,  // Project+ 2024 Recommended
 };
 
+// Who picks first on a later game (above).
+enum class Order : u8
+{
+  Free = 0,         // the loser is asked first; the winner may lock in at any time
+  WinnerFirst = 1,  // the winner locks in first, then the loser picks
+};
+// The order both games play. Luis is asked which he wants: flip it here.
+constexpr Order kLaterGameOrder = Order::Free;
+
 // What the match block's set state says about the game about to be played: a ranked set that is
 // still open, the game number (one more than the games won: a tied game is played again), and the
 // last decided game's winner. ReadSet() is the one place that reads it.
@@ -82,8 +96,11 @@ struct SetView
   Ruleset ruleset = Ruleset::None;  // None: no ranked set on this game; nothing here acts
   int game = 0;                     // 1-based: the game about to be played
   int last_winner = -1;             // the previous game's winning port (0 or 1), from game 2 on
+  Order order = kLaterGameOrder;
   bool operator==(const SetView&) const = default;
 };
+// The port that is asked first: the winner (WinnerFirst) or the loser (Free). -1 without a winner.
+int FirstPicker(const SetView& set);
 
 // One port's part of the character select at a frame boundary.
 constexpr int kNoCharacter = 0x28;
@@ -106,10 +123,9 @@ struct CssView
 enum class Step : u8
 {
   Idle = 0,    // no order on this game
-  First = 1,   // Project+: the previous game's winner picks
-  Second = 2,  // Project+: the loser picks
-  Done = 3,    // both picked: Orca presses Start for the loser until the screen goes
-  Both = 4,    // Brawl (interim): both pick at once, each locking in with A
+  First = 1,   // the first picker's turn (Free: the winner may lock in meanwhile)
+  Second = 2,  // the second picker's turn
+  Done = 3,    // both picked: Orca presses Start for the second picker until the screen goes
 };
 
 // The order's state, in the match block at kArea.
@@ -117,8 +133,8 @@ struct State
 {
   u8 game = 0;  // the set's game it belongs to (0: none)
   Step step = Step::Idle;
-  u8 first = 0;      // the port that picks first (the previous game's winner)
-  u8 locked = 0;     // Both: bit p set once port p locked in
+  u8 first = 0;      // the port that picks first (FirstPicker)
+  u8 locked = 0;     // Free: bit p set once port p locked in
   u32 since = 0;     // the hook frame its step began at
   u16 elapsed = 0;   // frames into the step, as of the last boundary (what the gate reads)
   bool operator==(const State&) const = default;
@@ -155,11 +171,11 @@ constexpr u8 MODE_RANKED = 2;
 }  // namespace Block
 
 // The step machine: the state after this boundary, from the state before it. Pure. On the
-// character select of a ranked set's game 2 or later it starts the order (Project+: the winner
-// first; Brawl: both at once), moves on when the player whose turn it is locks in (A newly pressed
-// on a frame of the step, with the token on a character) or the pick's time is up; it clears a
-// stale order on the character select of any game it doesn't apply to; off the character select it
-// changes nothing.
+// character select of a ranked set's game 2 or later it starts the order (FirstPicker first), moves
+// on when the player whose turn it is locks in (A newly pressed on a frame of the step, with the
+// token on a character) or the pick's time is up (Free: past the second picker's turn when they
+// locked in already); it clears a stale order on the character select of any game it doesn't apply
+// to; off the character select it changes nothing.
 State Advance(const SetView& set, const CssView& css, const State& state, int frame);
 
 // The gate's masks and presses for the frame about to run, from the state the hook left. Pure.
@@ -191,9 +207,9 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
 // The input gate's part (Rollback::InputGate::SetSource): masks from memory alone.
 Rollback::InputGate::Masks GateFrame(const Core::CPUThreadGuard& guard);
 
-// Test knob ORCA_TEST_CHAR_ORDER=<pplus|brawl>:<game>:<winner port 1-2> (a test override, both
-// processes alike): that set view on every character select, with no match block behind it, so
-// `pplus:2:1` runs the order on the boot's character select once both players have joined. Parsed
-// for tests.
+// Test knob ORCA_TEST_CHAR_ORDER=<pplus|brawl>:<game>:<winner port 1-2>[:free|winnerfirst] (a test
+// override, both processes alike): that set view on every character select, with no match block
+// behind it, so `pplus:2:1` runs the order on the boot's character select once both players have
+// joined; the order is kLaterGameOrder unless given. Parsed for tests.
 bool ParseTestSpec(const std::string& spec, SetView* out);
 }  // namespace Orca::UX::CharOrder

@@ -52,7 +52,9 @@ enum Offset : u32
   O_HOVERED = 0x20,
   O_HOVERED_FOR = 0x21,
   O_HOVER_KEY = 0x22,
-  O_END = 0x23,
+  O_PREFS = 0x23,  // s8 x 2: a casual game's preferred stages
+  O_SEED = 0x28,   // u32: a casual game's coin (State::seed)
+  O_END = 0x2C,
 };
 static_assert(O_END <= kRegionSize);
 
@@ -111,6 +113,8 @@ std::optional<State> ReadState(const GuestMemory& m)
   s.hovered = static_cast<s8>(r8(O_HOVERED));
   s.hovered_for = r8(O_HOVERED_FOR);
   s.hover_key = r8(O_HOVER_KEY);
+  s.progress.prefs = {static_cast<s8>(r8(O_PREFS)), static_cast<s8>(r8(O_PREFS + 1))};
+  s.seed = m.Read32(kRegion + O_SEED);
   return s;
 }
 
@@ -139,6 +143,9 @@ void WriteState(GuestMemory& m, const State& s)
   Put8(m, O_HOVERED, static_cast<u8>(s.hovered));
   Put8(m, O_HOVERED_FOR, s.hovered_for);
   Put8(m, O_HOVER_KEY, s.hover_key);
+  Put8(m, O_PREFS, static_cast<u8>(s.progress.prefs[0]));
+  Put8(m, O_PREFS + 1, static_cast<u8>(s.progress.prefs[1]));
+  Put32(m, O_SEED, s.seed);
 }
 
 void ClearState(GuestMemory& m)
@@ -303,12 +310,14 @@ const RS::Ruleset& Rules()
   return RS::Brawl2025();
 }
 
-RS::Plan PlanOf(const State& s, const RS::SetView& set)
+// `casual`: a casual game's two preferred-stage turns (RankedSteps.h PlanCasual) instead of the
+// ranked set's steps.
+RS::Plan PlanOf(const State& s, const RS::SetView& set, bool casual)
 {
   RS::SetView v = set;
   v.coin = s.coin == 0xFF ? 0 : (s.coin & 1);
   v.characters = {s.characters[0], s.characters[1]};
-  return RS::PlanGame(Rules(), v);
+  return casual ? RS::PlanCasual(Rules(), v, s.seed) : RS::PlanGame(Rules(), v);
 }
 
 // The port whose turn it is, or the last step's once the steps are done (it drives the cursor
@@ -346,9 +355,9 @@ void Record(const GuestMemory& m, State* s)
 }
 
 // The stage select's part of a boundary.
-void SelectFrame(GuestMemory& m, const View& v, State* s)
+void SelectFrame(GuestMemory& m, const View& v, State* s, bool casual)
 {
-  const RS::SetView set = SetOf(m, *s);
+  const RS::SetView set = casual ? s->set : SetOf(m, *s);
   // A new stage select: this game's (its frame counter starts again on every visit, so steps left
   // from a set that ended mid-select never carry over).
   if (s->phase != Phase::Select || v.clock < s->clock)
@@ -359,7 +368,11 @@ void SelectFrame(GuestMemory& m, const View& v, State* s)
     // Game 1's first striker: the header's coin (the room code's, the same on both machines).
     if (m.Valid(MatchBlock::COIN))
       s->coin = static_cast<u8>(m.Read8(MatchBlock::COIN) & 1);
-    const RS::Plan plan = PlanOf(*s, set);
+    // A casual game's coin for its random choices: the room's, the header's coin, the game.
+    s->seed = casual && m.Valid(MatchBlock::ROOM + 3) ?
+                  RS::CasualSeed(m.Read32(MatchBlock::ROOM), s->coin, s->set.game) :
+                  0;
+    const RS::Plan plan = PlanOf(*s, set, casual);
     s->progress = RS::Begin(Rules(), plan);
     s->phase = Phase::Select;
     s->clock = v.clock;
@@ -368,7 +381,7 @@ void SelectFrame(GuestMemory& m, const View& v, State* s)
     s->hovered_for = 0;
     s->hover_key = 0xFF;
   }
-  const RS::Plan plan = PlanOf(*s, set);
+  const RS::Plan plan = PlanOf(*s, set, casual);
   const int hovered = HoveredStage(m, v);
   const u8 key = HoverKey(m, v);
   const u32 state = m.Read32(v.task + TASK_STATE);
@@ -423,6 +436,11 @@ void SelectFrame(GuestMemory& m, const View& v, State* s)
         hovered >= 0)
     {
       RS::Strike(Rules(), plan, &s->progress, hovered);
+    }
+    else if (step->kind == RS::StepKind::Prefer && (pressed & GF_X) && hovered >= 0)
+    {
+      // The player's A, which the gate read as X (Masks): this turn's preferred stage.
+      RS::Prefer(Rules(), plan, &s->progress, hovered);
     }
     else if (step->optional && (pressed & GF_Y))
     {
@@ -543,20 +561,38 @@ bool VanillaBrawl()
 namespace
 {
 std::optional<bool> s_ranked_for_tests;
+std::optional<bool> s_casual_for_tests;
+
+bool HeaderSays(const GuestMemory& m, u8 mode)
+{
+  return m.Valid(kBlock + 7) && m.Read32(kBlock) == kHeaderMagic &&
+         m.Read8(kBlock + 4) == kHeaderVersion && m.Read8(kBlock + 5) == mode &&
+         m.Read8(kBlock + 6) == kRulesetBrawl;
 }
+}  // namespace
 
 void SetRankedForTests(std::optional<bool> ranked)
 {
   s_ranked_for_tests = ranked;
 }
 
+void SetCasualForTests(std::optional<bool> casual)
+{
+  s_casual_for_tests = casual;
+}
+
 bool RankedBrawlMatch(const GuestMemory& m)
 {
   if (s_ranked_for_tests)
     return *s_ranked_for_tests;
-  return m.Valid(kBlock + 7) && m.Read32(kBlock) == kHeaderMagic &&
-         m.Read8(kBlock + 4) == kHeaderVersion && m.Read8(kBlock + 5) == kModeRanked &&
-         m.Read8(kBlock + 6) == kRulesetBrawl;
+  return HeaderSays(m, kModeRanked);
+}
+
+bool CasualBrawlMatch(const GuestMemory& m)
+{
+  if (s_casual_for_tests)
+    return *s_casual_for_tests;
+  return HeaderSays(m, kModeCasual);
 }
 
 RS::SetView SetOf(const GuestMemory& m, const State& s, std::array<u8, 2>* score)
@@ -589,31 +625,45 @@ RS::SetView SetOf(const GuestMemory& m, const State& s, std::array<u8, 2>* score
   return s.set;
 }
 
-void Frame(GuestMemory& m)
+void Frame(GuestMemory& m, bool two_players)
 {
   const std::optional<State> stored = ReadState(m);
-  if (!RankedBrawlMatch(m))
+  const bool ranked = RankedBrawlMatch(m);
+  const bool casual = !ranked && two_players && CasualBrawlMatch(m);
+  if (!ranked && !casual)
   {
     if (stored)
+    {
+      // Left mid-select (the opponent gone, the header cleared): the cursor is anyone's again.
+      if (const View v = ReadView(m); v.present && stored->phase == Phase::Select &&
+                                      m.Read32(v.task + TASK_PORT) != PORT_ANY)
+      {
+        m.Write32(v.task + TASK_PORT, PORT_ANY);
+      }
       ClearState(m);
+    }
     return;
   }
   State s = stored ? *stored : Fresh();
   const View v = ReadView(m);
   if (v.present)
   {
-    SelectFrame(m, v, &s);
+    SelectFrame(m, v, &s, casual);
   }
   else
   {
     const std::string scene = ReadSceneName(m);
     if (scene == "scMelee")
     {
+      // A casual game counts its fights (the next stage select's coin is another).
+      if (casual && s.phase == Phase::Select)
+        s.set.game = static_cast<u8>(std::min(s.set.game + 1, 255));
       s.phase = Phase::Fight;
     }
     else if (scene == "scVsResult" && s.phase == Phase::Fight)
     {
-      Record(m, &s);
+      if (!casual)
+        Record(m, &s);
       s.phase = Phase::Recorded;
     }
   }
@@ -629,8 +679,9 @@ void Masks(const GuestMemory& m, Rollback::InputGate::Masks* masks)
   if (!v.present)
     return;
   using namespace Rollback::InputGate;
-  const RS::SetView set = SetOf(m, *s);
-  const RS::Plan plan = PlanOf(*s, set);
+  const bool casual = !RankedBrawlMatch(m) && CasualBrawlMatch(m);
+  const RS::SetView set = casual ? s->set : SetOf(m, *s);
+  const RS::Plan plan = PlanOf(*s, set, casual);
   const RS::Step* step = RS::Current(plan, s->progress);
   const int turn = TurnPort(plan, s->progress);
   const auto add = [&](int port, u16 buttons, bool sticks) {
@@ -658,11 +709,21 @@ void Masks(const GuestMemory& m, Rollback::InputGate::Masks* masks)
     // A turns the page, and in a pick takes an allowed stage, once the cursor has rested there a
     // frame.
     bool a = false;
-    if (s->hovered_for >= 1 && s->hover_key == HoverKey(m, v))
+    const bool rested = s->hovered_for >= 1 && s->hover_key == HoverKey(m, v);
+    if (rested)
     {
       a = v.hovered_item == ITEM_PAGE;
       if (step->kind == RS::StepKind::Pick && s->hovered >= 0)
         a = a || (RS::Allowed(plan, s->progress) & Bit(s->hovered));
+    }
+    if (step->kind == RS::StepKind::Prefer)
+    {
+      // A casual pick: A never takes the stage (that would leave the screen); the game reads it
+      // as X, which vanilla's stage select ignores and Frame takes as the turn's preferred stage.
+      // The player's own X and Y are off, so only A names one. On the page button A turns it.
+      off |= PAD_BUTTON_X | PAD_BUTTON_Y;
+      if (!a)
+        (*masks)[turn].a_as |= PAD_BUTTON_X;
     }
     if (!a)
       off |= PAD_BUTTON_A;
@@ -688,8 +749,17 @@ std::pair<std::string, std::string> Lines(const GuestMemory& m,
   const View v = ReadView(m);
   if (!v.present && ReadSceneName(m) != "scSelctCharacter")
     return {};
+  const bool casual = !RankedBrawlMatch(m) && CasualBrawlMatch(m);
   std::array<u8, 2> wins{};
-  const RS::SetView set = SetOf(m, *s, &wins);
+  const RS::SetView set = casual ? s->set : SetOf(m, *s, &wins);
+  const auto local = [&](int port) {
+    for (const Orca::Events::PortInfo& p : ports)
+    {
+      if (p.port == port)
+        return !p.remote;
+    }
+    return false;
+  };
   const auto who = [&](int port) -> std::string {
     for (const Orca::Events::PortInfo& p : ports)
     {
@@ -698,40 +768,77 @@ std::pair<std::string, std::string> Lines(const GuestMemory& m,
     }
     return fmt::format("P{}", port + 1);
   };
-  std::string score =
+  const auto name = [&](int port) -> std::string {
+    for (const Orca::Events::PortInfo& p : ports)
+    {
+      if (p.port == port && !p.name.empty())
+        return p.name;
+    }
+    return fmt::format("P{}", port + 1);
+  };
+  const RS::Plan plan = PlanOf(*s, set, casual);
+  const RS::Step* step =
+      v.present && s->phase == Phase::Select ? RS::Current(plan, s->progress) : nullptr;
+  if (casual)
+  {
+    // Casual: only the stage select's turns and the stage they come to.
+    if (!v.present || s->phase != Phase::Select)
+      return {};
+    if (step && step->kind == RS::StepKind::Prefer)
+    {
+      const int seconds = RS::SecondsShown(Rules(), *step, s->progress.frames);
+      if (local(step->port))
+        return {fmt::format("Stage pick · your turn · 0:{:02}", seconds),
+                "A on the stage you want · then one of the two picks, at random"};
+      return {fmt::format("Stage pick · {} · 0:{:02}", name(step->port), seconds), {}};
+    }
+    if (s->progress.picked < 0)
+      return {};
+    const int chosen = RS::CasualChoice(plan);
+    const auto& prefs = s->progress.prefs;
+    const std::string whose = prefs[0] == prefs[1]    ? "both picks" :
+                              local(chosen)           ? "your pick" :
+                                                        fmt::format("{}'s pick", name(chosen));
+    return {fmt::format("{} ({})", kStageNames[s->progress.picked], whose), {}};
+  }
+  // Ranked: the set on the character and stage selects; on the stage select, after it, whose turn
+  // it is, how many stages they strike or ban, and the time left; under it the turn's buttons for
+  // the player whose turn it is.
+  const std::string score =
       fmt::format("Game {} · {} {}–{} {}", set.game, who(0), wins[0], wins[1], who(1));
   if (!v.present || s->phase != Phase::Select)
     return {score, {}};
-  const RS::Plan plan = PlanOf(*s, set);
-  const RS::Step* step = RS::Current(plan, s->progress);
-  std::string turn;
   if (step)
   {
-    const std::string name = who(step->port);
-    const bool you = name == "You";
+    const std::string player = who(step->port);
+    const bool you = local(step->port);
     const int left = step->count - s->progress.done;
+    const std::string clock =
+        fmt::format("0:{:02}", RS::SecondsShown(Rules(), *step, s->progress.frames));
+    std::string turn, keys;
     switch (step->kind)
     {
     case RS::StepKind::Strike:
-      turn = fmt::format("{} {} {} (X)", name, you ? "strike" : "strikes", left);
+      turn = fmt::format("{} {} {}", player, you ? "strike" : "strikes", left);
+      keys = "X on a stage strikes it";
       break;
     case RS::StepKind::Ban:
-      turn = fmt::format("{} may ban a stage (X) or skip (Y)", name);
+      turn = fmt::format("{} may ban {}", player, left);
+      keys = "X on a stage bans it · Y skips";
       break;
     case RS::StepKind::Pick:
-      turn = fmt::format("{}{} {} the stage (A)", plan.mk_clause ? "MK clause: " : "", name,
-                         you ? "pick" : "picks");
+      turn = fmt::format("{}{} {}{}", plan.mk_clause ? "MK clause: " : "", player,
+                         you ? "pick" : "picks", plan.mk_clause ? " any stage" : "");
+      keys = "A on a stage picks it";
       break;
-    default:
+    case RS::StepKind::Prefer:
       break;
     }
-    turn += fmt::format(" · 0:{:02}", RS::SecondsShown(Rules(), s->progress.frames));
+    return {fmt::format("{} · {} · {}", score, turn, clock), you ? keys : std::string()};
   }
-  else if (s->progress.picked >= 0)
-  {
-    turn = fmt::format("Stage: {}", kStageNames[s->progress.picked]);
-  }
-  return {score, turn};
+  if (s->progress.picked >= 0)
+    return {fmt::format("{} · Stage: {}", score, kStageNames[s->progress.picked]), {}};
+  return {score, {}};
 }
 
 void FrameHook(const Core::CPUThreadGuard& guard, bool resimulating,
@@ -740,8 +847,14 @@ void FrameHook(const Core::CPUThreadGuard& guard, bool resimulating,
   if (!VanillaBrawl())
     return;
   GuardMemory memory(guard);
+  bool p1 = false, p2 = false;
+  for (const Orca::Events::PortInfo& p : ports)
+  {
+    p1 = p1 || p.port == 0;
+    p2 = p2 || p.port == 1;
+  }
   const std::optional<State> before = resimulating ? std::nullopt : ReadState(memory);
-  Frame(memory);
+  Frame(memory, p1 && p2);
   if (!resimulating)
   {
     // The flow's changes, first runs only (a re-run repeats them).
@@ -749,14 +862,16 @@ void FrameHook(const Core::CPUThreadGuard& guard, bool resimulating,
     if (after && (!before || before->phase != after->phase ||
                   before->progress.step != after->progress.step ||
                   before->progress.struck != after->progress.struck ||
-                  before->progress.picked != after->progress.picked))
+                  before->progress.picked != after->progress.picked ||
+                  before->progress.prefs != after->progress.prefs))
     {
       NOTICE_LOG_FMT(ROLLBACK,
-                     "Brawl ranked stages: game {} phase {} step {} struck {:03x} picked {} coin {} "
-                     "score {}-{}",
-                     after->set.game, static_cast<int>(after->phase), after->progress.step,
-                     after->progress.struck, after->progress.picked, after->coin, after->score[0],
-                     after->score[1]);
+                     "Brawl {} stages: game {} phase {} step {} struck {:03x} prefs {}/{} picked {} "
+                     "coin {} score {}-{}",
+                     RankedBrawlMatch(memory) ? "ranked" : "casual", after->set.game,
+                     static_cast<int>(after->phase), after->progress.step, after->progress.struck,
+                     after->progress.prefs[0], after->progress.prefs[1], after->progress.picked,
+                     after->coin, after->score[0], after->score[1]);
     }
     auto [line, note] = Lines(memory, ports);
     SetRulesLines(std::move(line), std::move(note));

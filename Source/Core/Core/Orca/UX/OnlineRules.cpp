@@ -49,7 +49,6 @@ constexpr u32 RULE_PAUSE = 0x0A;
 constexpr u32 RULE_SAVED_FROM = 0x02;
 constexpr u32 RULE_SAVED_SIZE = 10;  // +0x02..+0x0B
 constexpr u8 STAGE_CHOOSE = 0;
-constexpr u8 STAGE_RANDOM = 1;
 
 // gmGlobalRecord's menu data (0x9017B640 + 0x810, both games; RSBE01.patches "Rules"): +0x00 the
 // item frequency (u8, 0 None), +0x08 the item switch (64 bits), +0x20 the Random Stage Switch's
@@ -199,7 +198,9 @@ void ForceRules(Writer& w, const Header& h)
       w.U8(rule + RULE_STOCKS, StocksFor(h.ruleset));
     w.U8(rule + RULE_HANDICAP, 0);
     w.U8(rule + RULE_RATIO, 10);
-    w.U8(rule + RULE_STAGE_CHOICE, h.mode == Mode::Casual ? STAGE_RANDOM : STAGE_CHOOSE);
+    // Both modes show the stage select: casual's two preferred-stage turns and the coin between
+    // them (BrawlStages.h, RankedPPlus.h), ranked's strikes and picks.
+    w.U8(rule + RULE_STAGE_CHOICE, STAGE_CHOOSE);
     if (!set_rules)
       w.U8(rule + RULE_STOCK_MINUTES, 8);
     w.U8(rule + RULE_TEAM_ATTACK, 1);
@@ -230,7 +231,7 @@ void ForceStages(Writer& w, const Header& h, const std::string& scene)
     // Before the stage select builds its pages from it (and before Random picks from it).
     for (u32 i = 0; i < B::SAVED_RSS_SIZE; ++i)
       w.U8(PPLUS_RSS + i, PPLUS_2024_RSS[i]);
-    // Casual's Random never shows the stage select, so nothing clears strikes left from before.
+    // Casual's stage pick reads a strike mark as a preferred stage: none left from before.
     if (h.mode == Mode::Casual)
       w.Zero(PPLUS_STRIKES, PPLUS_STRIKES_SIZE);
   }
