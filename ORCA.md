@@ -2593,14 +2593,16 @@ A ranked set's later games pick characters in order on the game's own character 
 (`Core/Orca/UX/CharOrder.*`; the ranked rules' Phase 4, Luis's spec of 2026-10-03):
 
 - **The order is one constant** (since q2-stages: `CharOrder::kLaterGameOrder`, both games):
-  - `Order::Free`, the default (Luis, 2026-10-04: "losing player chooses character first then
+  - `Order::WinnerFirst`, the default since Orca 0.3.14 (Luis, 2026-10-04: "Winner chooses
+    character first", then the loser; also the standard rulesets: Project+ 2024 Recommended B.6):
+    the previous game's winner picks first ("Ada picks first · 0:42"), the loser sees that pick and
+    picks second. 45 s each.
+  - `Order::Free` (Luis's earlier pick the same day: "losing player chooses character first then
     winning player chooses. Winning player can choose right away if they want"): the loser is asked
     first ("Bo picks first · 0:42"); meanwhile the winner may lock in at any time ("Bo picks first ·
     0:42 · A locks yours in any time", then "Waiting for Bo"), and nothing blocks either of them.
     Once the loser has locked in (or their 45 s are up), the winner's own turn with 45 s, unless
     they locked in already: then straight on.
-  - `Order::WinnerFirst` (the standard rulesets: Project+ 2024 Recommended B.6): the previous
-    game's winner picks first, the loser sees that pick and picks second. 45 s each.
   Flipping it is the one line `constexpr Order kLaterGameOrder`. Brawl used to pick both at once
   (the interim order): it now plays the same order as Project+. Supernova 2025's exact order (the
   ban, the loser's stage, then the winner may change character, then the loser) still needs
@@ -2827,8 +2829,8 @@ built: Brawl's later games are characters (both at once, 45 s), then the ban, th
 
 Luis's spec of 2026-10-04 (Slippi's flow): Casual and Ranked land on a character select where the
 player sees only their own panel, picks, and presses Start; only then does the page search. The
-opponent arrives with their character already picked; both press Start to ready up (30 s); a long Z
-finds someone else. Orca's half of the `queue2` contract with the YouGame page (its half:
+opponent arrives with their character already picked; both press Start to ready up (30 s in ranked
+and in casual's first game; casual's later games wait); a long Z finds someone else. Orca's half of the `queue2` contract with the YouGame page (its half:
 `lib/orca-queue.ts`, `OrcaEmbed.tsx`); code in `Core/Orca/UX/Queue.*`, the session's part in
 `Rollback/OnlineMatch.cpp` (the queue image), tests `OrcaQueue*`.
 
@@ -2838,7 +2840,7 @@ finds someone else. Orca's half of the `queue2` contract with the YouGame page (
 | `orca queue unready` | The player pressed B, took the token up, or the page's `queue-cancel` came, while ready: stop searching. Still on the character select. |
 | `orca menu cancel` | (unchanged) B while not ready backs out to the menus, as the game does: the search is over. |
 | `orca queue skip` | Z held 1.5 s on the room's character select (both players in, before the game goes on): the page leaves the room and searches again. Local only: nothing in the game changes. |
-| `orca queue timeout me\|them` | Casual: the 30 s ready timer ran out (at a final frame, the same on both machines). `me`: this player wasn't ready (the page leaves and stops searching); `them`: the opponent wasn't (the page leaves and searches again). Nothing moves on the character select meanwhile. |
+| `orca queue timeout me\|them` | Casual's first game with this opponent: the 30 s ready timer ran out (at a final frame, the same on both machines; casual's later games have no timer, so never then). `me`: this player wasn't ready (the page leaves and stops searching); `them`: the opponent wasn't (the page leaves and searches again). Nothing moves on the character select meanwhile. |
 
 The page owns the room: Orca never leaves on a skip or a timeout by itself.
 
@@ -2895,7 +2897,13 @@ The page owns the room: Orca never leaves on a skip or a timeout by itself.
   out (`timeout me`). A `host` or `join` that comes before the restore waits for it at the same
   boundary. Backing out to the menus drops the image.
 - **Later games:** casual comes back to the room's character select with the same opponent,
-  characters free (no locks), ready again with the 30 s timer.
+  characters free (no locks), ready again, but with **no timer** (Luis, 2026-10-04: "I kind of like
+  that players can message each other and have a little bit more time to be social"): the
+  character select waits until both press Start, never times out (no `orca queue timeout`), and a
+  long Z still finds someone else. Overlay: "Press Start when you're ready" / "Waiting for bo to
+  press Start · Hold Z to find someone else", no clock. `Queue::Timed` decides, from the match
+  block alone (ranked, or no fight since the room's header: `FOUGHT`), so it is the same on both
+  machines and every re-run. Ranked keeps the 30 s timer, going on with the picks, in every game.
 
 ### Determinism
 
@@ -2994,6 +3002,13 @@ host's header changes only at an alone boundary, which nothing re-runs). `Tools/
 - `queue-e2e.mjs --q2` against yougame.co with dev tickets, Brawl: casual PASS (2 games, the pick in,
   verdicts the same, both back on their own character select in 33 and 51 ms, `orca queue ready`
   again); ranked with `ORCA_TEST_SET_RULES=1,8` PASS (3 verdicts the same, back in 35 and 46 ms).
+- After the last merges (`orca-chat-toast`, `kLaterGameOrder` WinnerFirst, casual's later games
+  with no ready timer, the toasts and chat under Dolphin's OSD rows): 355 `Orca*` tests, 339 pass
+  (16 skipped); the Brawl and Project+ whole casual flows above re-run with the same env, the same
+  steps (game 2 both ready at 4561 and 3118, no timeout), 22,771 and 20,951 re-run frames, **0 RAM
+  mismatches**. An `ORCA_TEST_PRESENT=1280x720 YG_THROTTLE=1` screenshot with `chat` lines and
+  "Screenshot saved" rows showing: the chat starts under the OSD rows (the frame meter, top left,
+  still shares the first OSD row's line, as before).
 
 ## Embedding
 
@@ -3059,7 +3074,7 @@ window (layout, scroll, resize, full screen). Moving, minimizing or hiding the w
 | `queue rating <n\|->` | With `caps queue2`: this player's rating in the current queue (ranked; 0-65534) or none (`-`), sent before `host` or `join`. It rides the player's queue identity to the other Orca, which shows it by the player's panel ("The queue's character select"). Anything else answers `unsupported queue`. |
 | `direct on` / `direct off` | With `caps direct` (Orca 0.3.9 on): the player's switch for direct links to the other players ("Direct links"). On until the app says; the choice stays for the run and applies while the `caps` line has `direct`. `off` drops every link at the room's next tick and sends every input through the relay (as YouGame's ticket switch does); `on` builds them anew. The `orca stats` line's `tx` shows the path in use. Anything else answers `unsupported direct`. |
 | `delay auto` / `delay N` | With `caps delay` (Orca 0.3.5 on): this player's input delay. `N` from 1 to 6 frames is exactly that, never adapted; `auto` is the adaptive delay ("Input delay" below). The choice stays for the run, so it may come before a session and holds for every session after; until the app's `caps` line turns `delay` on, it waits. Mid-match it applies from this player's next frame and the friend needs nothing: each player's delay is its own, and every input travels explicitly. Anything else answers `unsupported delay`. The `orca stats` line's `delay` is the delay in use. |
-| `chat <name> <text>` | With `caps chat`: a line someone else wrote in the YouGame page's chat, which the page sends only while Orca fills the screen (its own chat can't be seen then). Each field is `encodeURIComponent` of UTF-8, so only `A-Z a-z 0-9 - _ . ! ~ * ' ( )` and `%XX`: the name at most 24 code points (288 encoded), the text at most 140 (1680), the page cutting longer ones with "…". Orca shows `<name>: <text>` at the top left, under the toasts and clear of the top-centre lines, the name in the circle's blue, wrapped to 45% of the width, for 8 s, the newest three (`UX/Chat.h`, `UX/Overlay.h`). Host-only drawing: never game memory, no compatibility key change, and the text is never printed to stdout or stderr or logged. A malformed line (a bad escape, bad UTF-8, a control character or line break, a field too long or empty, a third field) answers `unsupported chat` and nothing more. Glyphs the OSD font lacks (emoji) show as `?`. |
+| `chat <name> <text>` | With `caps chat`: a line someone else wrote in the YouGame page's chat, which the page sends only while Orca fills the screen (its own chat can't be seen then). Each field is `encodeURIComponent` of UTF-8, so only `A-Z a-z 0-9 - _ . ! ~ * ' ( )` and `%XX`: the name at most 24 code points (288 encoded), the text at most 140 (1680), the page cutting longer ones with "…". Orca shows `<name>: <text>` at the top left, under the toasts and clear of the top-centre lines and of Dolphin's own messages (OSD rows such as "Screenshot saved" push the toasts and the chat down, `OSD::MessagesBottom`), the name in the circle's blue, wrapped to 45% of the width, for 8 s, the newest three (`UX/Chat.h`, `UX/Overlay.h`). Host-only drawing: never game memory, no compatibility key change, and the text is never printed to stdout or stderr or logged. A malformed line (a bad escape, bad UTF-8, a control character or line break, a field too long or empty, a third field) answers `unsupported chat` and nothing more. Glyphs the OSD font lacks (emoji) show as `?`. |
 | `quit` | Stops at once (no power-button shutdown, also outside a session), then exits. |
 
 Any other line goes to stderr. The app's `EMBED_COMMAND` filter must add `blur` and `prepare-join`.
