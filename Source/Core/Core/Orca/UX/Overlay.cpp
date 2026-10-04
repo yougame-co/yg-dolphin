@@ -562,6 +562,10 @@ void Draw()
     const ImVec2 s = TextSize(size, f.waiting);
     OutlinedText(dl, size, ImVec2((screen.x - s.x) / 2, screen.y * 0.18f), 1, f.waiting);
   }
+  // Dolphin's own messages (OSD rows such as "Screenshot saved...", drawn at the top left just
+  // before this) push the toasts and the chat under them down: never drawn over them.
+  if (!f.toasts.empty() || !f.chats.empty())
+    y = std::max(y, OSD::MessagesBottom() + unit);
   for (const OverlayModel::Toast& t : f.toasts)
   {
     OutlinedText(dl, text_size, ImVec2(margin, y), t.alpha, t.text);

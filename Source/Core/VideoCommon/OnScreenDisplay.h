@@ -58,6 +58,9 @@ void DiscardTypedMessage(MessageType type);
 // presented frame, over the final image. Empty clears it.
 void SetHostOverlay(std::function<void()> draw);
 void DrawHostOverlay();
+// Orca: how far down the messages DrawMessages() drew this frame reach (pixels: the last one's
+// bottom and its padding), 0 with none, so the host overlay, drawn after them, keeps clear of them.
+float MessagesBottom();
 
 void SetObscuredPixelsLeft(int width);
 void SetObscuredPixelsTop(int height);
