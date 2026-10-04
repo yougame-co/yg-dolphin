@@ -26,6 +26,7 @@
 #include <fmt/format.h>
 #include "Common/FileUtil.h"
 #include <gtest/gtest.h>
+#include <imgui.h>
 
 #include "Core/Orca/UX/ControllerSource.h"
 #include "Core/Orca/UX/Chat.h"
@@ -35,6 +36,7 @@
 #include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "InputCommon/GCPadStatus.h"
+#include "VideoCommon/OnScreenDisplay.h"
 
 using namespace Orca::UX;
 
@@ -467,6 +469,89 @@ TEST(OrcaUXOverlay, NothingInAPictureTooThinForText)
   // Wherever it draws, its smallest text (3 units) is at least a whole pixel once ImGui rounds it.
   for (float h = OVERLAY_MIN_HEIGHT; h < 4000; h += 0.5f)
     ASSERT_GE(std::floor(3 * OverlayUnit(h) + 0.5f), 1.0f) << h;
+}
+
+// The overlay as Orca draws it (InitOverlay's Draw, through OSD::DrawHostOverlay) into ImGui
+// frames set up the way OnScreenUI sets them up: the renderer builds the font atlas
+// (RendererHasTextures) and the display is the backbuffer's size. A toast gives it text to set.
+class OrcaUXOverlayDraw : public ::testing::Test
+{
+protected:
+  void SetUp() override
+  {
+    m_context = ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.BackendFlags |=
+        ImGuiBackendFlags_RendererHasTextures | ImGuiBackendFlags_RendererHasVtxOffset;
+    io.Fonts->AddFontDefault();
+    InitOverlay();
+    ShowToast("ada joined on port 2");
+  }
+  void TearDown() override
+  {
+    ShutdownOverlay();
+    ImGui::DestroyContext(m_context);
+  }
+  // The frame's vertices: the overlay's (nothing else draws in it).
+  static int Frame(float width, float height)
+  {
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(width, height);
+    io.DeltaTime = 1.0f / 60;
+    ImGui::NewFrame();
+    OSD::DrawHostOverlay();
+    ImGui::Render();
+    return ImGui::GetDrawData()->TotalVtxCount;
+  }
+  ImGuiContext* m_context = nullptr;
+};
+
+// Orca 0.3.13 trapped (SIGTRAP) four times on 2026-10-04: the YouGame page clipped the player box to
+// its visible part, so scrolling sent rects down to 0 px tall, the window shrank to 1 px, and the
+// overlay's text (3% of the height) rounded to 0 px, which ImGui asserts on (ImFontAtlasBakedGetOrAdd:
+// font_size > 0.0f). Any picture, an empty one included, draws without an ImGui assert (a debug
+// build's goes to the alert handler, which fails the test; a release build's is counted), and the
+// overlay draws in every picture at least OVERLAY_MIN_HEIGHT tall, nothing in a thinner one.
+TEST_F(OrcaUXOverlayDraw, AnyPictureSizeDrawsWithoutAnImGuiAssert)
+{
+  const std::size_t failures = ImGuiAssertFailures();
+  // The backbuffer's height (unsigned: ImGui itself asserts on a negative DisplaySize).
+  for (const float h : {480.0f, 0.0f, 1.0f, 10.0f, 16.0f, 17.0f, 33.0f, 99.0f, 100.0f, 1080.0f})
+  {
+    SCOPED_TRACE(h);
+    const int vertices = Frame(640, h);
+    if (h >= OVERLAY_MIN_HEIGHT)
+      EXPECT_GT(vertices, 0);
+    else
+      EXPECT_EQ(vertices, 0);
+    EXPECT_EQ(Frame(0, h), 0);
+  }
+  EXPECT_EQ(ImGuiAssertFailures(), failures);
+}
+
+// A release build's ImGui assert carries on (Externals/imgui/imgui_user_config.h): counted, said
+// once for its place, and never the alert handler's question, which a nogui Orca answers with no
+// and traps on.
+TEST(OrcaUXOverlay, ReleaseBuildImGuiAssertCarriesOn)
+{
+#if defined(_DEBUG) || defined(DEBUGFAST)
+  GTEST_SKIP() << "a debug build stops on an ImGui assert";
+#else
+  const std::size_t failures = ImGuiAssertFailures();
+  ::testing::internal::CaptureStderr();
+  for (int i = 0; i < 3; ++i)
+    IM_ASSERT(i < 0 && "the test's own assert");
+  const std::string said = ::testing::internal::GetCapturedStderr();
+  EXPECT_EQ(ImGuiAssertFailures(), failures + 3);
+  std::size_t times = 0;
+  for (std::size_t at = said.find("ImGui assert failed"); at != std::string::npos;
+       at = said.find("ImGui assert failed", at + 1))
+  {
+    ++times;
+  }
+  EXPECT_EQ(times, 1u) << said;
+  EXPECT_NE(said.find("the test's own assert"), std::string::npos) << said;
+#endif
 }
 
 TEST(OrcaUXOverlay, WaitingOnlyAfterAQuarterSecondOfStall)

@@ -141,8 +141,9 @@ bool Presenter::Initialize()
   {
     // Orca tests: a headless run presents into an image of its own, OSD included, so screenshots
     // (YG_SHOT_EVERY) show what a window would. Not with the Software renderer (no UI drawing).
+    // Down to 1x1: a window the app squeezed to a sliver (Orca 0.3.13 trapped in one under 17 px).
     int width = 0, height = 0;
-    if (std::sscanf(size, "%dx%d", &width, &height) != 2 || width < 64 || height < 64 ||
+    if (std::sscanf(size, "%dx%d", &width, &height) != 2 || width < 1 || height < 1 ||
         width > 7680 || height > 4320)
     {
       PanicAlertFmt("ORCA_TEST_PRESENT must be WxH");

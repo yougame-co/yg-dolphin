@@ -378,12 +378,21 @@ ImU32 LevelColour(Signal level, float alpha)
                                 Rgba(255, 255, 255, alpha);
 }
 
+// The size every text below hands ImGui: at least 1 px. ImGui rounds a size to whole pixels and
+// asserts on 0 (ImFontAtlasBakedGetOrAdd: font_size > 0.0f), which Orca 0.3.13 trapped on in a
+// window under ~17 px tall; !(>=) also turns a NaN away. Draw already returns in a picture that
+// thin (OverlayUnit): this keeps any size it computes from reaching ImGui under a pixel.
+float TextPx(float size)
+{
+  return size >= 1.0f ? size : 1.0f;
+}
+
 // Text the way Brawl's HUD sets it: white, with a dark outline so it reads on any stage.
 void OutlinedText(ImDrawList* dl, float size, ImVec2 pos, float alpha, const std::string& text,
                   Signal level = Signal::Good)
 {
   ImFont* font = ImGui::GetFont();
-  size = std::max(size, 1.0f);  // ImGui aborts on text that rounds to 0 px
+  size = TextPx(size);
   const float o = std::max(1.0f, size / 14);
   for (const ImVec2 d : {ImVec2(-o, 0), ImVec2(o, 0), ImVec2(0, -o), ImVec2(0, o), ImVec2(o, o)})
     dl->AddText(font, size, ImVec2(pos.x + d.x, pos.y + d.y), Rgba(16, 16, 24, alpha * 0.85f),
@@ -393,7 +402,7 @@ void OutlinedText(ImDrawList* dl, float size, ImVec2 pos, float alpha, const std
 
 ImVec2 TextSize(float size, const std::string& text)
 {
-  return ImGui::GetFont()->CalcTextSizeA(std::max(size, 1.0f), FLT_MAX, 0, text.c_str());
+  return ImGui::GetFont()->CalcTextSizeA(TextPx(size), FLT_MAX, 0, text.c_str());
 }
 
 // A chat line, "<name>: <text>" wrapped at `wrap` pixels, outlined like the rest, with the name in
@@ -404,6 +413,7 @@ float ChatLine(ImDrawList* dl, float size, ImVec2 pos, float wrap, const Overlay
   const std::string prefix = c.name + ":";
   const std::string line = prefix + " " + c.text;
   ImFont* font = ImGui::GetFont();
+  size = TextPx(size);
   const float o = std::max(1.0f, size / 14);
   for (const ImVec2 d : {ImVec2(-o, 0), ImVec2(o, 0), ImVec2(0, -o), ImVec2(0, o), ImVec2(o, o)})
   {
@@ -517,7 +527,8 @@ void Draw()
   }
   const ImVec2 screen = ImGui::GetIO().DisplaySize;
   const float unit = OverlayUnit(screen.y);
-  if (unit <= 0)
+  // No picture to draw on (no backbuffer yet, a window the app squeezed to a sliver): nothing.
+  if (unit <= 0 || !(screen.x >= 1))
     return;
   ImDrawList* dl = ImGui::GetForegroundDrawList();
   const float margin = 3 * unit;
