@@ -4,6 +4,7 @@
 #include "Core/Orca/UX/RankedPPlus.h"
 
 #include <algorithm>
+#include <bit>
 #include <mutex>
 #include <optional>
 #include <utility>
@@ -126,6 +127,11 @@ bool IsRankedPPlus(const MatchBlock::State& s)
   return s.mode == MatchBlock::MODE_RANKED && s.ruleset == Ranked::RULESET_PPLUS_2024;
 }
 
+bool IsCasualPPlus(const MatchBlock::State& s)
+{
+  return s.mode == MatchBlock::MODE_CASUAL && s.ruleset == Ranked::RULESET_PPLUS_2024;
+}
+
 Ranked::SetView ViewOf(const MatchBlock::State& s)
 {
   Ranked::SetView v;
@@ -136,6 +142,20 @@ Ranked::SetView ViewOf(const MatchBlock::State& s)
   v.characters = {s.characters[0] == MatchBlock::NONE ? -1 : s.characters[0],
                   s.characters[1] == MatchBlock::NONE ? -1 : s.characters[1]};
   return v;
+}
+
+// A casual game's steps (two Prefer turns), its coin from the room's hash in the header, the
+// header's coin and the game (fights begun from the stage select, + 1).
+Plan CasualPlan(const GuestMemory& m, const MatchBlock::State& s)
+{
+  const u32 room = m.Valid(MatchBlock::ROOM + 3) ? m.Read32(MatchBlock::ROOM) : 0;
+  return Ranked::PlanCasual(Ranked::PPlus2024(), ViewOf(s),
+                            Ranked::CasualSeed(room, s.coin, s.games + 1));
+}
+
+Plan PlanFor(const GuestMemory& m, const MatchBlock::State& s)
+{
+  return IsCasualPPlus(s) ? CasualPlan(m, s) : Ranked::PlanGame(Ranked::PPlus2024(), ViewOf(s));
 }
 
 // The stages shown struck: not in play this game, struck or banned so far, and while the pick's
@@ -289,6 +309,92 @@ void StageSelect(GuestMemory& m, const Ranked::Ruleset& rules, MatchBlock::State
   }
 }
 
+// A step's fields back to none (a stage select left, a fight begun).
+void ResetSteps(MatchBlock::State& s)
+{
+  s.flow = 0;
+  s.step = 0;
+  s.struck = 0;
+  s.step_done = 0;
+  s.active = MatchBlock::NONE;
+  s.auto_pick = false;
+  s.auto_stage = MatchBlock::NONE;
+  s.auto_press = false;
+  s.prefs = {MatchBlock::NONE, MatchBlock::NONE};
+}
+
+// A casual game's stage select (ORCA.md "Casual stage pick"): each player in turn names a
+// preferred stage with A (the gate reads it as X, Project+'s strike, which marks the stage in the
+// strike table; the flow takes the mark as the preference and the table is written back clean);
+// a turn that runs out names a random legal stage; then the coin takes one of the two and the
+// flow picks it for its player (the selection set and A pressed through the gate).
+void CasualSelect(GuestMemory& m, const Ranked::Ruleset& rules, MatchBlock::State& s, int frame,
+                  const std::vector<int>& page0)
+{
+  if (s.flow == 0)
+  {
+    // The turns begin; nothing marked before them counts.
+    ResetSteps(s);
+    s.flow = 1;
+    StartStep(rules, CasualPlan(m, s), s, frame);
+    return;
+  }
+  const Plan plan = CasualPlan(m, s);
+  if (s.step >= plan.steps.size() || s.auto_pick)
+    return;
+  const Step& now = plan.steps[s.step];
+  const u32 full = Ranked::StepFrames(rules, now);
+  if (s.deadline > static_cast<u32>(frame) + full)
+    s.deadline = static_cast<u32>(frame) + full;
+  const bool expired = static_cast<u32>(frame) >= s.deadline;
+  const u32 bits = ReadPage0Bits(m);
+  StageMask table = 0;
+  for (size_t pos = 0; pos < page0.size() && pos < 31; ++pos)
+  {
+    if (page0[pos] >= 0 && (bits & (1u << pos)))
+      table |= Bit(page0[pos]);
+  }
+  const StageMask fresh = table & Ranked::Allowed(plan, s.step, 0);
+  int named = -1;
+  if (fresh)
+    named = std::countr_zero(fresh);
+  else if (expired)
+    named = Ranked::CasualDefault(plan, now.port);
+  if (named < 0)
+    return;
+  s.prefs[now.port & 1] = static_cast<u8>(named);
+  ++s.step;
+  StartStep(rules, plan, s, frame);
+  if (s.step >= plan.steps.size())
+  {
+    // Both named: the coin takes one, and the flow picks it for its player.
+    const int port = Ranked::CasualChoice(plan);
+    const u8 chosen = s.prefs[port] < Ranked::MAX_STAGES ? s.prefs[port] : static_cast<u8>(named);
+    s.auto_pick = true;
+    s.auto_stage = chosen;
+    s.active = static_cast<u8>(port);
+    s.deadline = static_cast<u32>(frame);
+  }
+}
+
+// One boundary of a casual Project+ game. `task` is the stage select's (0 elsewhere).
+void CasualStep(GuestMemory& m, MatchBlock::State& s, int frame, bool two_players,
+                const std::string& scene, u32 task)
+{
+  if (scene == "scMelee" && s.flow == 1)
+  {
+    // The fight from the stage the flow picked: the next game's coin is another.
+    ResetSteps(s);
+    s.games = static_cast<u8>(std::min<int>(s.games + 1, 0xFF));
+  }
+  if (scene == "scSelctCharacter" && s.flow != 0)
+    ResetSteps(s);
+  if (task && two_players)
+    CasualSelect(m, Ranked::PPlus2024(), s, frame, PageZero(m));
+  else if (task && s.flow == 1)
+    ResetSteps(s);
+}
+
 // One boundary's set and flow, Project+ ranked. `task` is the stage select's (0 elsewhere).
 void Step1(GuestMemory& m, MatchBlock::State& s, int frame, bool two_players,
            const std::string& scene, u32 task)
@@ -410,16 +516,18 @@ std::vector<int> PageZero(const GuestMemory& m)
 int Apply(GuestMemory& m, int frame, bool two_players)
 {
   const std::optional<MatchBlock::State> read = MatchBlock::Read(m);
-  if (!read || !IsRankedPPlus(*read))
+  if (!read || (!IsRankedPPlus(*read) && !IsCasualPPlus(*read)))
     return 0;
   MatchBlock::State s = *read;
+  const bool casual = IsCasualPPlus(s);
   const std::string scene = ReadSceneName(m);
   const u32 task = StageSelectTask(m, scene);
   int changed = 0;
   // Outside the stage select, the 2024 Proposed preset: the stage select builds its pages from it.
   // Every preset Project+ ships is the same past PRESET_BYTES (the random masks, the hazards and
   // the pages' stages are before it), the range the casual track saves and gives back too.
-  if (scene != "scSelStage" && m.Valid(RSS_EXDATA) && m.Valid(RSS_EXDATA + PRESET_BYTES - 1))
+  if (!casual && scene != "scSelStage" && m.Valid(RSS_EXDATA) &&
+      m.Valid(RSS_EXDATA + PRESET_BYTES - 1))
   {
     for (u32 i = 0; i < PRESET_BYTES; ++i)
     {
@@ -430,11 +538,21 @@ int Apply(GuestMemory& m, int frame, bool two_players)
       }
     }
   }
-  Step1(m, s, frame, two_players, scene, task);
+  if (casual)
+    CasualStep(m, s, frame, two_players, scene, task);
+  else
+    Step1(m, s, frame, two_players, scene, task);
+  // The flow stopped on the stage select (the opponent went, the set ended): its cursor is
+  // anyone's again.
+  if (task && read->flow == 1 && s.flow == 0 && m.Read32(task + SSS_CONTROLLER) != 0xF0)
+  {
+    m.Write32(task + SSS_CONTROLLER, 0xF0);
+    changed += 4;
+  }
   if (task && s.flow == 1 && !s.done && two_players)
   {
     const Ranked::Ruleset& rules = Ranked::PPlus2024();
-    const Plan plan = Ranked::PlanGame(rules, ViewOf(s));
+    const Plan plan = PlanFor(m, s);
     const std::vector<int> page0 = PageZero(m);
     const int table = WriteStrikeTable(m, page0, ShownStruck(rules, plan, s));
     if (table > 0 && m.Valid(PAGE_INDEX))
@@ -474,14 +592,19 @@ Rollback::InputGate::Masks Masks(const GuestMemory& m)
 {
   Rollback::InputGate::Masks masks{};
   const std::optional<MatchBlock::State> s = MatchBlock::Read(m);
-  if (!s || !IsRankedPPlus(*s) || s->done || s->flow != 1 || s->active > 1)
+  if (!s || (!IsRankedPPlus(*s) && !IsCasualPPlus(*s)) || s->done || s->flow != 1 ||
+      s->active > 1)
+  {
     return masks;
+  }
+  const bool casual = IsCasualPPlus(*s);
   const std::string scene = ReadSceneName(m);
   const u32 task = StageSelectTask(m, scene);
   if (!task)
     return masks;
-  const Plan plan = Ranked::PlanGame(Ranked::PPlus2024(), ViewOf(*s));
-  if (s->step >= plan.steps.size())
+  const Plan plan = PlanFor(m, *s);
+  // A casual game's pick is made after its last turn (auto_pick): the steps are all done then.
+  if (s->step >= plan.steps.size() && !(casual && s->auto_pick))
     return masks;
   for (int port = 0; port < Rollback::InputGate::PORTS; ++port)
   {
@@ -498,13 +621,28 @@ Rollback::InputGate::Masks Masks(const GuestMemory& m)
   }
   mine.buttons = PAD_BUTTON_B | PAD_TRIGGER_L | PAD_TRIGGER_R | PAD_TRIGGER_Z | PAD_BUTTON_START |
                  PAD_BUTTON_Y;
+  const u32 hovered = m.Read32(task + SSS_HOVERED);
+  mine.c_stick = true;
+  if (casual)
+  {
+    // A names the preferred stage: the game reads it as X (Project+'s strike, which the flow takes
+    // as the preference and writes back clean), never as A (that would take the stage and leave
+    // the screen). The player's own X is off. On the page button A turns the page; on Random, the
+    // items past it and the stage builder's page, nothing.
+    mine.buttons |= PAD_BUTTON_X;
+    if (hovered != PAGE_ITEM)
+    {
+      mine.buttons |= PAD_BUTTON_A;
+      if (hovered <= PAGE_ITEM && m.Read32(task + SSS_PAGE) != CUSTOM_PAGE)
+        mine.a_as = PAD_BUTTON_X;
+    }
+    return masks;
+  }
   const bool pick = plan.steps[s->step].kind == StepKind::Pick;
   mine.buttons |= pick ? PAD_BUTTON_X : PAD_BUTTON_A;
-  mine.c_stick = true;
   // Past the page button, the screen's other items: Random (it would strike every stage outside
   // the random set, or pick for the player) and the rest. A on the page button turns the page
   // (every page but the first is all struck); on the stage builder's page A picks nothing.
-  const u32 hovered = m.Read32(task + SSS_HOVERED);
   if (hovered > PAGE_ITEM)
     mine.buttons |= PAD_BUTTON_A | PAD_BUTTON_X;
   if (m.Read32(task + SSS_PAGE) == CUSTOM_PAGE && hovered != PAGE_ITEM)
@@ -516,7 +654,7 @@ Lines Describe(const GuestMemory& m, int frame, const std::vector<Events::PortIn
 {
   Lines lines;
   const std::optional<MatchBlock::State> s = MatchBlock::Read(m);
-  if (!s || !IsRankedPPlus(*s))
+  if (!s || (!IsRankedPPlus(*s) && !IsCasualPPlus(*s)))
     return lines;
   const std::string scene = ReadSceneName(m);
   if (scene == "scMelee")
@@ -538,47 +676,82 @@ Lines Describe(const GuestMemory& m, int frame, const std::vector<Events::PortIn
     return false;
   };
   const Ranked::Ruleset& rules = Ranked::PPlus2024();
+  const auto clock = [&](const Step& step) {
+    const int left = std::max<int>(
+        0, static_cast<int>(s->deadline) - Ranked::GraceFrames(rules, step) - frame);
+    const int seconds = (left + 59) / 60;
+    return fmt::format("{}:{:02}", seconds / 60, seconds % 60);
+  };
+  if (IsCasualPPlus(*s))
+  {
+    // Casual: only the stage select's turns and the stage they come to.
+    if (scene != "scSelStage" || s->flow != 1)
+      return lines;
+    if (s->auto_pick && s->auto_stage < Ranked::MAX_STAGES && s->active <= 1)
+    {
+      const std::string whose = s->prefs[0] == s->prefs[1] ? std::string("both picks") :
+                                local(s->active)           ? std::string("your pick") :
+                                                   fmt::format("{}'s pick", name(s->active));
+      lines.set = fmt::format("{} ({})", rules.stage_names[s->auto_stage], whose);
+      return lines;
+    }
+    const Plan plan = CasualPlan(m, *s);
+    if (s->step >= plan.steps.size() || s->active > 1)
+      return lines;
+    const Step& step = plan.steps[s->step];
+    if (local(s->active))
+    {
+      lines.set = fmt::format("Stage pick · your turn · {}", clock(step));
+      lines.turn = "A on the stage you want · then one of the two picks, at random";
+    }
+    else
+    {
+      lines.set = fmt::format("Stage pick · {} · {}", name(s->active), clock(step));
+    }
+    return lines;
+  }
   if (s->done && s->set_winner <= 1)
   {
     lines.set = fmt::format("Ranked · {} won the set {}–{}", name(s->set_winner),
                             std::max(s->score[0], s->score[1]), std::min(s->score[0], s->score[1]));
     return lines;
   }
-  lines.set = fmt::format("Ranked · Game {} · {} {}–{} {}", s->games + 1, name(0), s->score[0],
-                          s->score[1], name(1));
+  const std::string set = fmt::format("Ranked · Game {} · {} {}–{} {}", s->games + 1, name(0),
+                                      s->score[0], s->score[1], name(1));
+  lines.set = set;
   if (scene != "scSelStage" || s->flow != 1 || s->active > 1)
     return lines;
   const Plan plan = Ranked::PlanGame(rules, ViewOf(*s));
   if (s->step >= plan.steps.size())
     return lines;
   const Step& step = plan.steps[s->step];
-  const int left = std::max<int>(0, static_cast<int>(s->deadline) - rules.grace_frames - frame);
-  const int seconds = (left + 59) / 60;
-  const std::string clock = fmt::format("{}:{:02}", seconds / 60, seconds % 60);
   if (s->auto_pick && s->auto_stage < Ranked::MAX_STAGES)
   {
-    lines.turn = fmt::format("Time's up · {}", rules.stage_names[s->auto_stage]);
+    lines.set = fmt::format("{} · Time's up · {}", set, rules.stage_names[s->auto_stage]);
     return lines;
   }
+  // The top line: the set, whose turn it is, how many stages they still strike or ban, the time.
   const int owed = std::max(1, step.count - s->step_done);
-  const bool mine = local(s->active);
-  std::string what;
+  std::string turn, keys;
   switch (step.kind)
   {
   case StepKind::Strike:
-    what = mine ? fmt::format("strike {} stage{} with X", owed, owed == 1 ? "" : "s") :
-                  fmt::format("strikes {} stage{}", owed, owed == 1 ? "" : "s");
+    turn = fmt::format("{} strikes {}", name(s->active), owed);
+    keys = "X on a stage strikes it";
     break;
   case StepKind::Ban:
-    what = mine ? fmt::format("ban {} stage{} with X", owed, owed == 1 ? "" : "s") :
-                  fmt::format("bans {} stage{}", owed, owed == 1 ? "" : "s");
+    turn = fmt::format("{} bans {}", name(s->active), owed);
+    keys = "X on a stage bans it";
     break;
   case StepKind::Pick:
-    what = mine ? std::string("pick the stage with A") : std::string("picks the stage");
+  case StepKind::Prefer:
+    turn = fmt::format("{} picks", name(s->active));
+    keys = "A on a stage picks it";
     break;
   }
-  lines.turn = mine ? fmt::format("Your turn: {} · {}", what, clock) :
-                      fmt::format("{} {} · {}", name(s->active), what, clock);
+  lines.set = fmt::format("{} · {} · {}", set, turn, clock(step));
+  if (local(s->active))
+    lines.turn = fmt::format("Your turn: {}", keys);
   return lines;
 }
 
@@ -607,23 +780,25 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
   {
     // The flow's changes, first runs only (a re-run repeats them).
     const std::optional<MatchBlock::State> after = MatchBlock::Read(memory);
-    if (after && IsRankedPPlus(*after) && (!before || *before != *after))
+    if (after && (IsRankedPPlus(*after) || IsCasualPPlus(*after)) &&
+        (!before || *before != *after))
     {
       const MatchBlock::State& a = *after;
       const MatchBlock::State b = before.value_or(MatchBlock::State{});
       if (a.flow != b.flow || a.step != b.step || a.struck != b.struck ||
           a.auto_pick != b.auto_pick || a.games != b.games || a.fight != b.fight ||
-          a.done != b.done)
+          a.done != b.done || a.prefs != b.prefs)
       {
         NOTICE_LOG_FMT(
             ROLLBACK,
-            "Ranked: frame {}: game {} score {}-{} flow {} step {} port {} struck {:03x} "
-            "made {} auto {} fight {} stage {} won {:03x}/{:03x}{}",
-            frame, a.games + 1, a.score[0], a.score[1], a.flow, a.step,
+            "{}: frame {}: game {} score {}-{} flow {} step {} port {} struck {:03x} "
+            "made {} auto {} fight {} stage {} won {:03x}/{:03x} prefs {}/{}{}",
+            IsCasualPPlus(a) ? "Casual" : "Ranked", frame, a.games + 1, a.score[0], a.score[1], a.flow, a.step,
             a.active <= 1 ? a.active + 1 : 0, a.struck, a.step_done,
             a.auto_pick ? static_cast<int>(a.auto_stage) : -1, a.fight ? 1 : 0,
             a.stage == MatchBlock::NONE ? -1 : a.stage, a.won_on[0], a.won_on[1],
-            a.done ? fmt::format(" SET port {}", a.set_winner + 1) : std::string());
+            a.prefs[0] == MatchBlock::NONE ? -1 : a.prefs[0],
+            a.prefs[1] == MatchBlock::NONE ? -1 : a.prefs[1], a.done ? fmt::format(" SET port {}", a.set_winner + 1) : std::string());
       }
     }
     Lines lines = Describe(memory, frame, ports);

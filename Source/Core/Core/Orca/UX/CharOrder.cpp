@@ -67,7 +67,7 @@ bool SetApplies(const SetView& set)
 bool Active(const SetView& set, const CssView& css, const State& state)
 {
   return css.on_css && SetApplies(set) && state.step != Step::Idle && state.game == set.game &&
-         state.first == set.last_winner;
+         state.first == FirstPicker(set);
 }
 
 std::string Clock(int frames)
@@ -86,7 +86,7 @@ const SetView& TestSet()
     {
       ERROR_LOG_FMT(ROLLBACK,
                     "Character order: ORCA_TEST_CHAR_ORDER={} is not "
-                    "<pplus|brawl>:<game>:<winner port 1-2>; ignored",
+                    "<pplus|brawl>:<game>:<winner port 1-2>[:free|winnerfirst]; ignored",
                     spec);
       out = {};
     }
@@ -101,6 +101,13 @@ const SetView& TestSet()
 
 }  // namespace
 
+int FirstPicker(const SetView& set)
+{
+  if (set.last_winner != 0 && set.last_winner != 1)
+    return -1;
+  return set.order == Order::WinnerFirst ? set.last_winner : 1 - set.last_winner;
+}
+
 State Advance(const SetView& set, const CssView& css, const State& state, int frame)
 {
   if (!css.on_css)
@@ -109,14 +116,13 @@ State Advance(const SetView& set, const CssView& css, const State& state, int fr
     return state == State{} ? state : State{};
   if (!Active(set, css, state))
   {
-    // A new game's character select: the winner first (Project+), both at once (Brawl), once both
-    // players have joined. No press counts on this boundary (it was made before the order began),
-    // which also keeps a re-run here writing nothing new.
+    // A new game's character select: the first picker's turn, once both players have joined. No
+    // press counts on this boundary (it was made before the order began), which also keeps a
+    // re-run here writing nothing new.
     if (!css.ports[0].human || !css.ports[1].human)
       return state == State{} ? state : State{};
-    return State{static_cast<u8>(set.game),
-                 set.ruleset == Ruleset::PPlus ? Step::First : Step::Both,
-                 static_cast<u8>(set.last_winner), 0, static_cast<u32>(frame), 0};
+    return State{static_cast<u8>(set.game), Step::First, static_cast<u8>(FirstPicker(set)), 0,
+                 static_cast<u32>(frame), 0};
   }
   State s = state;
   const u32 now = static_cast<u32>(frame);
@@ -131,23 +137,24 @@ State Advance(const SetView& set, const CssView& css, const State& state, int fr
     return (p.pressed & PAD_BUTTON_A) != 0 && p.placed;
   };
   const bool timed_out = elapsed >= static_cast<u32>(PICK_FRAMES);
+  const int first = s.first & 1;
+  const int second = 1 - first;
   bool next = timed_out;
-  if (s.step == Step::Both)
+  if (s.step == Step::First)
   {
-    for (int port = 0; port < 2; ++port)
-    {
-      if (locks_in(port))
-        s.locked = static_cast<u8>(s.locked | (1 << port));
-    }
-    next = next || s.locked == 3;
+    // Free: the second picker (the winner) may lock in on the first picker's turn.
+    if (set.order == Order::Free && locks_in(second))
+      s.locked = static_cast<u8>(s.locked | (1 << second));
+    next = next || locks_in(first);
   }
   else
   {
-    next = next || locks_in(s.step == Step::First ? s.first : 1 - s.first);
+    next = next || locks_in(second);
   }
   if (next)
   {
-    s.step = s.step == Step::First ? Step::Second : Step::Done;
+    // Past the second picker's turn when they locked in already.
+    s.step = s.step == Step::First && !(s.locked & (1 << second)) ? Step::Second : Step::Done;
     s.since = now;
     s.elapsed = 0;
   }
@@ -159,32 +166,26 @@ Masks Gate(const SetView& set, const CssView& css, const State& state)
   Masks masks{};
   if (!Active(set, css, state))
     return masks;
-  const int winner = state.first;
-  const int loser = 1 - winner;
+  const int first = state.first & 1;
+  const int second = 1 - first;
   switch (state.step)
   {
   case Step::First:
-    masks[loser] = ALL;
-    masks[winner].buttons = PAD_BUTTON_B | PAD_BUTTON_START;
+    masks[first].buttons = PAD_BUTTON_B | PAD_BUTTON_START;
+    // WinnerFirst: the other waits. Free: the winner may lock in (no B, no Start), then waits.
+    if (set.order == Order::WinnerFirst || (state.locked & (1 << second)))
+      masks[second] = ALL;
+    else
+      masks[second].buttons = PAD_BUTTON_B | PAD_BUTTON_START;
     break;
   case Step::Second:
-    masks[winner] = ALL;
-    masks[loser].buttons = PAD_BUTTON_B;
-    break;
-  case Step::Both:
-    // Neither takes the token back or goes on; a player who locked in can't change.
-    for (int port = 0; port < 2; ++port)
-    {
-      if (state.locked & (1 << port))
-        masks[port] = ALL;
-      else
-        masks[port].buttons = PAD_BUTTON_B | PAD_BUTTON_START;
-    }
+    masks[first] = ALL;
+    masks[second].buttons = PAD_BUTTON_B;
     break;
   case Step::Done:
   {
     const bool even = state.elapsed % 2 == 0;  // a synthesized press is new every other frame
-    for (const int port : {winner, loser})
+    for (const int port : {first, second})
     {
       const CssPort& p = css.ports[port];
       if (p.placed)
@@ -198,9 +199,9 @@ Masks Gate(const SetView& set, const CssView& css, const State& state)
       if (even && p.character != kNoCharacter)
         masks[port].press = PAD_BUTTON_A;
     }
-    // Start for the loser once both tokens are down, until the screen goes.
+    // Start for the second picker once both tokens are down, until the screen goes.
     if (even && css.ports[0].placed && css.ports[1].placed)
-      masks[loser].press = PAD_BUTTON_START;
+      masks[second].press = PAD_BUTTON_START;
     break;
   }
   case Step::Idle:
@@ -240,15 +241,15 @@ std::string Line(const SetView& set, const CssView& css, const State& state,
     return {};
   }
   const std::string left = Clock(PICK_FRAMES - state.elapsed);
-  if (state.step == Step::Both)
+  const int first = state.first & 1;
+  if (state.step == Step::First && set.order == Order::Free && local == 1 - first)
   {
-    if (local < 0)
-      return fmt::format("Characters · {}", left);
+    // The winner, while the loser is asked first.
     if (state.locked & (1 << local))
-      return fmt::format("Waiting for {} · {}", names[1 - local], left);
-    return fmt::format("Pick your character · {} · A locks it in", left);
+      return fmt::format("Waiting for {} · {}", names[first], left);
+    return fmt::format("{} picks first · {} · A locks yours in any time", names[first], left);
   }
-  const int port = state.step == Step::First ? state.first : 1 - state.first;
+  const int port = state.step == Step::First ? first : 1 - first;
   if (port == local)
   {
     return fmt::format("{} · {} · A locks it in",
@@ -335,7 +336,7 @@ State ReadState(const GuestMemory& m)
   if (!m.Valid(kArea) || !m.Valid(kArea + kAreaSize - 1) || m.Read32(kArea + AT_MAGIC) != kMagic)
     return s;
   const u8 step = m.Read8(kArea + AT_STEP);
-  if (step > static_cast<u8>(Step::Both))
+  if (step > static_cast<u8>(Step::Done))
     return s;
   s.game = m.Read8(kArea + AT_GAME);
   s.step = static_cast<Step>(step);
@@ -390,7 +391,7 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
   SetRuleLine(Line(set, css, after, ports));
   if (after.step != before.step || after.game != before.game || after.locked != before.locked)
   {
-    static constexpr const char* STEPS[] = {"idle", "first", "second", "done", "both"};
+    static constexpr const char* STEPS[] = {"idle", "first", "second", "done"};
     NOTICE_LOG_FMT(ROLLBACK,
                    "Character order: frame {} game {} step {} (port {} first, locked {}), was {} "
                    "after {} frames",
@@ -412,11 +413,15 @@ bool ParseTestSpec(const std::string& spec, SetView* out)
 {
   const size_t a = spec.find(':');
   const size_t b = a == std::string::npos ? a : spec.find(':', a + 1);
-  if (b == std::string::npos || spec.find(':', b + 1) != std::string::npos)
+  if (b == std::string::npos)
+    return false;
+  const size_t c = spec.find(':', b + 1);
+  if (c != std::string::npos && spec.find(':', c + 1) != std::string::npos)
     return false;
   const std::string_view rules = std::string_view(spec).substr(0, a);
   const std::string game = spec.substr(a + 1, b - a - 1);
-  const std::string winner = spec.substr(b + 1);
+  const std::string winner = spec.substr(b + 1, c == std::string::npos ? c : c - b - 1);
+  const std::string order = c == std::string::npos ? std::string() : spec.substr(c + 1);
   SetView set;
   if (rules == "pplus")
     set.ruleset = Ruleset::PPlus;
@@ -431,6 +436,12 @@ bool ParseTestSpec(const std::string& spec, SetView* out)
   if (set.game < 1 || winner.size() != 1 || winner[0] < '1' || winner[0] > '2')
     return false;
   set.last_winner = winner[0] - '1';
+  if (order == "free")
+    set.order = Order::Free;
+  else if (order == "winnerfirst")
+    set.order = Order::WinnerFirst;
+  else if (c != std::string::npos)
+    return false;
   *out = set;
   return true;
 }

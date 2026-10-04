@@ -24,6 +24,11 @@
 // Brawl's Meta Knight clause: when exactly one player is Meta Knight, the other picks any legal
 // stage (no strikes, bans or DSR), game 1 included. Brawl's Ice Climbers rule: Final Destination
 // is never available while either player is Ice Climbers.
+//
+// Casual games (PlanCasual, ORCA.md "Casual stage pick"): no strikes. Each player in turn names a
+// preferred stage from the whole legal list (the header's coin's port first, CASUAL_SECONDS each;
+// a turn that runs out names a random legal stage for that player), then a coin from the room and
+// the game number takes one of the two, and the match starts there.
 namespace Orca::UX::Ranked
 {
 using StageMask = u16;
@@ -34,6 +39,8 @@ enum class StepKind : u8
   Strike = 1,
   Ban = 2,
   Pick = 3,
+  // A casual game's preferred stage: A on any allowed stage names it, and the turn passes on.
+  Prefer = 4,
 };
 
 struct Step
@@ -70,6 +77,10 @@ struct Ruleset
   u16 pick_seconds = 30;
   // Every timer also has this much grace before its default applies (shown as 0:00 meanwhile).
   u16 grace_frames = 180;
+  // A casual game's two preferred-stage turns (Prefer): seconds each, and their own short grace
+  // (two turns and the hand-off come to about 15 s).
+  u16 casual_seconds = 7;
+  u16 casual_grace_frames = 30;
   // The stages' short names, for the overlay and logs.
   std::array<std::string_view, MAX_STAGES> stage_names{};
 
@@ -109,9 +120,27 @@ struct Plan
   StageMask pick_excluded = 0;
   // Brawl's Meta Knight clause decided this game: one pick of any legal stage.
   bool mk_clause = false;
+  // A casual game's (PlanCasual): the coin its random choices come from (CasualSeed).
+  bool casual = false;
+  u32 seed = 0;
 };
 
 Plan PlanGame(const Ruleset& rules, const SetView& set);
+
+// ---- Casual games ----
+// The coin a casual game's random choices come from: the room code's hash (MatchBlock ROOM), the
+// header's coin and the game number (1-based; a fight from the stage select counts one), mixed
+// (murmur3's finalizer), so neither player can tell which way it falls, and both machines, every
+// re-run and a drop-in's keyframe compute the same.
+u32 CasualSeed(u32 room, u8 coin, int game);
+// A casual game's steps: two Prefer turns, the coin's port (set.coin) first, on the whole legal
+// list (Brawl: never Final Destination with an Ice Climbers; no Meta Knight clause).
+Plan PlanCasual(const Ruleset& rules, const SetView& set, u32 seed);
+// The stage a Prefer turn names when its timer runs out: a legal stage at random (the plan's seed
+// and the port). -1 when nothing is allowed.
+int CasualDefault(const Plan& plan, int port);
+// Whose preferred stage the match is played on (0 or 1): one bit of the plan's seed.
+int CasualChoice(const Plan& plan);
 
 // The stages the player at `step` may act on, given what was struck or banned so far this game.
 StageMask Allowed(const Plan& plan, int step, StageMask struck);
@@ -120,7 +149,8 @@ StageMask Allowed(const Plan& plan, int step, StageMask struck);
 // stage. 0 when nothing is allowed.
 StageMask DefaultStrikes(const Plan& plan, int step, StageMask struck, int done);
 int DefaultPick(const Plan& plan, int step, StageMask struck);
-// A step's timer in frames, grace included.
+// A step's grace (Prefer's own, else the ruleset's), and its timer in frames, grace included.
+u16 GraceFrames(const Ruleset& rules, const Step& step);
 u32 StepFrames(const Ruleset& rules, const Step& step);
 
 int CountBits(StageMask mask);
@@ -139,6 +169,9 @@ struct Progress
   StageMask struck = 0;  // stages struck or banned this game
   u16 frames = 0;        // left in this step's timer, grace included
   s8 picked = -1;        // the stage picked (-1: not yet)
+  // A casual game's preferred stages, by port (-1: not named yet). Once both are, `picked` is the
+  // one CasualChoice takes.
+  std::array<s8, 2> prefs{-1, -1};
   bool operator==(const Progress&) const = default;
 };
 
@@ -156,11 +189,17 @@ bool Strike(const Ruleset& rules, const Plan& plan, Progress* progress, int stag
 bool Skip(const Ruleset& rules, const Plan& plan, Progress* progress);
 // The current step's player picked `stage` (the game took it). False if the step doesn't allow it.
 bool Pick(const Plan& plan, Progress* progress, int stage);
+// The current Prefer turn's player names `stage`: false (nothing changes) unless the step is a
+// Prefer that allows it. The turn passes on; after the last one, `picked` is CasualChoice's.
+bool Prefer(const Ruleset& rules, const Plan& plan, Progress* progress, int stage);
 // A pick step with exactly one stage allowed picks it.
 void AutoPick(const Plan& plan, Progress* progress);
 // One frame of the current step's timer; when it runs out, its default: the strikes still owed
-// (DefaultStrikes), an optional ban left out, the first allowed stage picked (DefaultPick).
+// (DefaultStrikes), an optional ban left out, the first allowed stage picked (DefaultPick), a
+// random legal stage named (CasualDefault).
 void Tick(const Ruleset& rules, const Plan& plan, Progress* progress);
-// Whole seconds a step's timer shows (0 through the grace).
+// Whole seconds a step's timer shows (0 through the grace). The first form is for the ruleset's
+// own grace (strikes, bans, picks).
 int SecondsShown(const Ruleset& rules, u16 frames);
+int SecondsShown(const Ruleset& rules, const Step& step, u16 frames);
 }  // namespace Orca::UX::Ranked

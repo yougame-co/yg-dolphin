@@ -31,8 +31,12 @@
 //
 // Layout (offsets from BASE):
 //   +0x00..+0x0F  header: magic, version, mode, ruleset, coin, the room's hash
-//   +0x10..+0x7F  Project+'s stage flow's set (State below)
-//   +0x80..+0xBF  the stage flows' steps (State below for Project+; BrawlStages.h for Brawl)
+//   +0x10..+0x7F  Project+'s stage flow's set (State below; a casual game's preferred stages at
+//                 +0x40, its fight count at +0x10)
+//   +0x80..+0xBF  the stage flows' steps (State below for Project+; BrawlStages.h for Brawl, whose
+//                 casual pick keeps its preferred stages at +0xA3 and its coin at +0xA8)
+//   (The casual stage pick needs no range of its own: casual and ranked never share a block, and
+//   +0x140..+0x17F, once offered for it, is Project+'s SAVED_RSS.)
 //   +0xC0..+0xCF  Phase 1's own (the ready timer)
 //   +0xD0..+0x1F0 the player's own rules, saved at the header's write
 //   +0x200..+0x20F the character order (CharOrder.h)
@@ -137,6 +141,9 @@ static_assert(CSS_TIMER_START + 4 <= BASE + 0xC0 + PHASE1_SIZE);
 //            +0x1B u8 its stage (ruleset index, 0xFF unknown)
 //            +0x1C u8 port 1's character, +0x1D port 2's (gmCharacterKind, 0xFF unknown)
 //            +0x20 4 bytes per counted game (up to 8): winner, stage, port 1's and 2's characters
+//            (casual: +0x10 counts the fights begun from the stage select instead, and nothing
+//            else of the set is used)
+//            +0x40 u8 port 1's preferred stage, +0x41 port 2's (casual; ruleset index, 0xFF none)
 //   steps    +0x80 u8 the stage flow: 0 idle, 1 running on the stage select
 //            +0x81 u8 step   +0x82 u8 the port whose turn it is (0xFF none)
 //            +0x83 u8 strikes or bans made in this step   +0x84 u16 struck or banned this game
@@ -188,6 +195,8 @@ struct State
   bool auto_pick = false;
   u8 auto_stage = NONE;
   bool auto_press = false;  // the default pick's A, pressed 4 frames then released 4
+  // A casual game's preferred stages (Project+'s casual stage pick, RankedPPlus.h).
+  std::array<u8, 2> prefs{NONE, NONE};
   bool operator==(const State&) const = default;
 
   // A new set: the header's fields and nothing else.

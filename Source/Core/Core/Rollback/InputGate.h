@@ -49,8 +49,16 @@ struct Mask
   // timer ran out: the ranked stage flow's default pick). Applied after the mask; A, B, L and R
   // also read fully pressed.
   u16 press = 0;
+  // Buttons the game sees pressed while the player holds A (applied after the mask, so a rule
+  // masks A and reads the press as another button): a casual stage pick's A on vanilla Brawl's
+  // and Project+'s stage select reads as X, which the rule sees and the screen doesn't act on
+  // (taking the stage would leave the screen).
+  u16 a_as = 0;
 
-  bool Empty() const { return buttons == 0 && !main_stick && !c_stick && press == 0; }
+  bool Empty() const
+  {
+    return buttons == 0 && !main_stick && !c_stick && press == 0 && a_as == 0;
+  }
   bool operator==(const Mask&) const = default;
 };
 // Everything: the port reads as a connected pad with nothing pressed.

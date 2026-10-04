@@ -273,7 +273,7 @@ TEST(OrcaOnlineRules, BrawlsCasualRules)
   EXPECT_EQ(m.Read8(SET_RULE + 0x04), 3);
   EXPECT_EQ(m.Read8(SET_RULE + 0x05), 0);
   EXPECT_EQ(m.Read8(SET_RULE + 0x06), 10);
-  EXPECT_EQ(m.Read8(SET_RULE + 0x07), 1);  // Random
+  EXPECT_EQ(m.Read8(SET_RULE + 0x07), 0);  // Choose: the casual stage pick's turns
   EXPECT_EQ(m.Read8(SET_RULE + 0x08), 8);
   EXPECT_EQ(m.Read8(SET_RULE + 0x09), 1);
   EXPECT_EQ(m.Read8(SET_RULE + 0x0A), 0);
@@ -306,7 +306,7 @@ TEST(OrcaOnlineRules, RankedChoosesTheStageAndProjectPlusPlaysFourStocks)
   FakeMemory pplus = Locked(Mode::Casual, Ruleset::PPlus);
   ApplyLocks(pplus, NextFrame());
   EXPECT_EQ(pplus.Read8(SET_RULE + 0x04), 4);
-  EXPECT_EQ(pplus.Read8(SET_RULE + 0x07), 1);
+  EXPECT_EQ(pplus.Read8(SET_RULE + 0x07), 0);  // casual shows the stage select too
   // Project+'s stage list is its own: Brawl's Random Stage Switch is left alone.
   EXPECT_EQ(pplus.Read32(MENU_DATA + 0x24), 0x7FFFFFFFu);
 }

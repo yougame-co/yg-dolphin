@@ -43,6 +43,14 @@ class CPUThreadGuard;
 //   game's steps again, so stale bytes from a set that ended mid-select never carry into the next.
 // - The step machine is the shared one (RankedSteps.h, Ranked::Brawl2025 and its Progress driver).
 // - The input gate has one source: UX.cpp ORs every rule's masks; this flow's are Masks.
+//
+// Casual games (ORCA.md "Casual stage pick"): the same machinery on a casual header (mode casual,
+// ruleset Brawl) while both players are plugged in. No strikes: each player in turn, the header's
+// coin's port first, names a preferred stage with A (the gate masks A and reads it as X, which
+// vanilla's stage select ignores, so the screen stays; RankedSteps.h Prefer), 7 s each; a turn
+// that runs out names a random legal stage. Then a coin from the room, the header's coin and the
+// game number takes one of the two picks, and the flow moves the cursor there and presses A, as
+// for a ranked pick that timed out.
 namespace Orca::UX
 {
 class GuestMemory;
@@ -90,6 +98,7 @@ constexpr u32 kBlock = 0x806F2380;
 // The header: 'YGM1', version 1, then the mode (2 ranked) and the ruleset (1 Brawl).
 constexpr u32 kHeaderMagic = 0x59474D31;
 constexpr u8 kHeaderVersion = 1;
+constexpr u8 kModeCasual = 1;
 constexpr u8 kModeRanked = 2;
 constexpr u8 kRulesetBrawl = 1;
 // The results track's set (SetBlock.h), +0x210: +0x00 games recorded, +0x01 wins of ports 1 and 2,
@@ -127,6 +136,9 @@ struct State
   s8 hovered = -1;               // the stage under the cursor at the last boundary
   u8 hovered_for = 0;            // frames the cursor has rested on what it is on (A needs 1)
   u8 hover_key = 0xFF;           // what it is on: the page and the hovered item (0xFF nothing)
+  // A casual game's: this stage select's coin for its random choices (Ranked::CasualSeed of the
+  // room, the header's coin and set.game, which counts the casual fights begun from here + 1).
+  u32 seed = 0;
   bool operator==(const State&) const = default;
 };
 std::optional<State> ReadState(const GuestMemory& memory);
@@ -163,16 +175,22 @@ View ReadView(const GuestMemory& memory);
 // Whether this game is a ranked Brawl set's: the match block's header says so (mode ranked,
 // ruleset Brawl).
 bool RankedBrawlMatch(const GuestMemory& memory);
+// Whether it is a casual Brawl queue match's (mode casual, ruleset Brawl).
+bool CasualBrawlMatch(const GuestMemory& memory);
 // The set the steps follow: the results track's (SetBlock.h) when the block holds a valid one,
 // else this flow's own record in `state`. `score`: the games won by ports 1 and 2.
 Ranked::SetView SetOf(const GuestMemory& memory, const State& state,
                            std::array<u8, 2>* score = nullptr);
-// Unit tests: RankedBrawlMatch's answer instead of the knob's (nullopt: the knob again).
+// Unit tests: RankedBrawlMatch's (CasualBrawlMatch's) answer instead of the header's (nullopt:
+// the header again).
 void SetRankedForTests(std::optional<bool> ranked);
+void SetCasualForTests(std::optional<bool> casual);
 
 // The frame hook's part, at every boundary (first runs and re-runs): follows the set and the
 // stage steps, and writes the stage select's turn, grey tiles and the stage the steps pick.
-void Frame(GuestMemory& memory);
+// `two_players`: ports 1 and 2 are both in play (the session's synced plan); a casual game's pick
+// runs only then (alone, the stage select is the player's own).
+void Frame(GuestMemory& memory, bool two_players = true);
 // The input gate's part (reads only): what each port may not press on the stage select.
 void Masks(const GuestMemory& memory, Rollback::InputGate::Masks* masks);
 // The overlay's lines for this boundary (empty: none): the set score on the character and stage

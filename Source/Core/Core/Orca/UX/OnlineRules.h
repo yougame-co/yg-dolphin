@@ -27,8 +27,8 @@ class CPUThreadGuard;
 //   room keeps it while the set is open, whoever is plugged in. A joiner checks it once its
 //   keyframe is in: another mode or ruleset than its own queue's leaves the room ("mismatch").
 // - The locks, while the header says casual or ranked: the ruleset's rules (stocks, time, items
-//   off, handicap off, team attack on, ratio 1.0, pause off), the stage choice (casual: Random,
-//   from the legal stages; ranked: Choose), the legal list (Brawl's Random Stage Switch without
+//   off, handicap off, team attack on, ratio 1.0, pause off), the stage choice (Choose: casual's
+//   two preferred-stage turns and ranked's strikes run on the stage select), the legal list (Brawl's Random Stage Switch without
 //   Final Destination while someone is Ice Climbers; Project+'s 2024 Proposed list), and the input
 //   gate's masks (no B on the character select, so no way back to the menus, and A only in the
 //   character grid, so no player-type, name, team, rules or BACK button; no B on the stage

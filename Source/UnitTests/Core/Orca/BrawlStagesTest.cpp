@@ -6,7 +6,10 @@
 // boundary, the timer counts the screen's own frames, the gate keeps the off-turn port out.
 
 #include <map>
+#include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #include <gtest/gtest.h>
 
@@ -409,14 +412,20 @@ TEST_F(OrcaBrawlStages, TheMatchBlocksHeaderTurnsTheFlowOn)
   m.Write8(kBlock + 6, 2);  // Project+'s ruleset
   Boundary(m);
   EXPECT_FALSE(ReadState(m));
-  m.Write8(kBlock + 5, 1);  // casual
+  m.Write8(kBlock + 5, kModeCasual);
   m.Write8(kBlock + 6, kRulesetBrawl);
-  Boundary(m);
+  // Casual: its own stage pick, once both players are in.
+  Frame(m, false);
   EXPECT_FALSE(ReadState(m));
+  Boundary(m);
+  ASSERT_TRUE(ReadState(m));
+  EXPECT_NE(ReadState(m)->seed, 0u);
   m.Write8(kBlock + 5, kModeRanked);
+  m.Write32(TASK + 0x250, 0);  // a new stage select
   Boundary(m);
   ASSERT_TRUE(ReadState(m));
   EXPECT_EQ(ReadState(m)->phase, Phase::Select);
+  EXPECT_EQ(ReadState(m)->seed, 0u);
   // The header goes (the opponent left a casual game, the host is alone again): so does the flow.
   m.Write32(kBlock, 0);
   Boundary(m);
@@ -467,4 +476,194 @@ TEST_F(OrcaBrawlStages, ANewStageSelectStartsTheStepsAgain)
   Boundary(m);
   EXPECT_EQ(ReadState(m)->progress.struck, 0);
   EXPECT_EQ(ReadState(m)->progress.step, 0);
+}
+
+TEST_F(OrcaBrawlStages, TheOverlaysTopLineHasTheSetTheTurnTheCountAndTheTime)
+{
+  FakeMemory m = Game("scSelStage");  // the header's coin: port 2 strikes first
+  std::vector<Orca::Events::PortInfo> ports{{0, "ada", false, {}}, {1, "bo", true, {}}};
+  Scene(m, "scSelctCharacter");
+  Boundary(m);
+  EXPECT_EQ(Lines(m, ports), (std::pair<std::string, std::string>{"Game 1 · You 0–0 bo", ""}));
+  Scene(m, "scSelStage");
+  Boundary(m);
+  EXPECT_EQ(Lines(m, ports),
+            (std::pair<std::string, std::string>{"Game 1 · You 0–0 bo · bo strikes 1 · 0:30", ""}));
+  Hover(m, Battlefield);
+  Press(m, 1, BrawlStages::GF_X);
+  // Port 1's two strikes, its keys under the line.
+  EXPECT_EQ(Lines(m, ports), (std::pair<std::string, std::string>{
+                                 "Game 1 · You 0–0 bo · You strike 2 · 0:30",
+                                 "X on a stage strikes it"}));
+  Hover(m, Smashville);
+  Press(m, 0, BrawlStages::GF_X);
+  EXPECT_EQ(Lines(m, ports).first, "Game 1 · You 0–0 bo · You strike 1 · 0:30");
+}
+
+namespace
+{
+class OrcaBrawlCasual : public ::testing::Test
+{
+protected:
+  void SetUp() override
+  {
+    SetRankedForTests(false);
+    SetCasualForTests(true);
+  }
+  void TearDown() override
+  {
+    SetRankedForTests(std::nullopt);
+    SetCasualForTests(std::nullopt);
+  }
+};
+
+constexpr u32 ROOM = 0x5EED1234;
+
+RS::Plan CasualPlanOf(const State& s)
+{
+  RS::SetView v;
+  v.coin = s.coin;
+  v.characters = {s.characters[0], s.characters[1]};
+  return RS::PlanCasual(RS::Brawl2025(), v, s.seed);
+}
+}  // namespace
+
+TEST_F(OrcaBrawlCasual, EachPlayerNamesAStageThenTheCoinTakesOne)
+{
+  FakeMemory m = Game("scSelStage");  // the header's coin: port 2 names first
+  m.Write32(kBlock + 8, ROOM);
+  Boundary(m);
+  auto s = ReadState(m);
+  ASSERT_TRUE(s);
+  EXPECT_EQ(s->phase, Phase::Select);
+  EXPECT_EQ(s->coin, 1);
+  EXPECT_EQ(s->set.game, 1);
+  EXPECT_EQ(s->seed, RS::CasualSeed(ROOM, 1, 1));
+  EXPECT_EQ(s->progress.frames, 7 * 60 + 30);
+  EXPECT_EQ(m.Read32(TASK + 0x278), 1u);
+  // Port 1 does nothing. Port 2: no B, Start, Z, L, R, X or Y; its A reads as X.
+  Rollback::InputGate::Masks masks{};
+  Masks(m, &masks);
+  EXPECT_EQ(masks[0], Rollback::InputGate::ALL);
+  for (const u16 off : {PAD_BUTTON_A, PAD_BUTTON_B, PAD_BUTTON_X, PAD_BUTTON_Y, PAD_BUTTON_START,
+                        PAD_TRIGGER_Z, PAD_TRIGGER_L, PAD_TRIGGER_R})
+  {
+    EXPECT_TRUE(masks[1].buttons & off) << off;
+  }
+  EXPECT_EQ(masks[1].a_as, PAD_BUTTON_X);
+  EXPECT_FALSE(masks[1].main_stick);
+  // What the game reads from port 2's A: X, which vanilla's stage select ignores.
+  GCPadStatus pad{};
+  pad.isConnected = true;
+  pad.button = PAD_BUTTON_A;
+  EXPECT_EQ(Rollback::InputGate::Apply(pad, masks[1]).button, PAD_BUTTON_X);
+  std::vector<Orca::Events::PortInfo> ports{{0, "ada", false, {}}, {1, "bo", true, {}}};
+  EXPECT_EQ(Lines(m, ports),
+            (std::pair<std::string, std::string>{"Stage pick · bo · 0:07", ""}));
+
+  // Port 1's press does nothing; port 2's on Smashville names it, and it's port 1's turn.
+  Hover(m, Smashville);
+  Press(m, 0, BrawlStages::GF_X);
+  EXPECT_EQ(ReadState(m)->progress.prefs[1], -1);
+  Press(m, 1, BrawlStages::GF_X);
+  s = ReadState(m);
+  EXPECT_EQ(s->progress.prefs[1], Smashville);
+  EXPECT_EQ(s->progress.step, 1);
+  EXPECT_EQ(s->progress.picked, -1);
+  EXPECT_EQ(m.Read32(TASK + 0x278), 0u);
+  EXPECT_EQ(Lines(m, ports), (std::pair<std::string, std::string>{
+                                 "Stage pick · your turn · 0:07",
+                                 "A on the stage you want · then one of the two picks, at random"}));
+  // On the page button (rested a frame) A turns the page, no X.
+  m.Write32(TASK + 0x244, 0x35);
+  Boundary(m);
+  Boundary(m);
+  masks = {};
+  Masks(m, &masks);
+  EXPECT_FALSE(masks[0].buttons & PAD_BUTTON_A);
+  EXPECT_EQ(masks[0].a_as, 0);
+  Hover(m, Battlefield);
+
+  // Port 1's 7 s run out: a random legal stage for it, then the coin's pick.
+  for (int i = 0; i < 7 * 60 + 30 && ReadState(m)->progress.picked < 0; ++i)
+    Boundary(m, false);
+  s = ReadState(m);
+  const RS::Plan plan = CasualPlanOf(*s);
+  EXPECT_EQ(s->progress.prefs[0], RS::CasualDefault(plan, 0));
+  const int chosen = RS::CasualChoice(plan);
+  ASSERT_GE(s->progress.picked, 0);
+  EXPECT_EQ(s->progress.picked, s->progress.prefs[chosen]);
+  const std::string whose = s->progress.prefs[0] == s->progress.prefs[1] ? "both picks" :
+                            chosen == 0                                  ? "your pick" :
+                                                                           "bo's pick";
+  EXPECT_NE(Lines(m, ports).first.find("(" + whose + ")"), std::string::npos);
+  // The flow takes it for the last turn's port: everyone's pad off, the cursor to the stage (or
+  // the page button first), A pressed on it every other frame.
+  Boundary(m);
+  masks = {};
+  Masks(m, &masks);
+  EXPECT_EQ(masks[1], Rollback::InputGate::ALL);
+  EXPECT_TRUE(masks[0].main_stick);
+  const Tile& tile = TileFor(s->progress.picked);
+  m.Write32(TASK + 0x228, tile.page);
+  Hover(m, s->progress.picked);
+  bool pressed = false;
+  for (int i = 0; i < 3; ++i)
+  {
+    Boundary(m);
+    masks = {};
+    Masks(m, &masks);
+    pressed = pressed || masks[0].press == PAD_BUTTON_A;
+  }
+  EXPECT_TRUE(pressed);
+  // The game takes another stage in that frame: the flow's stands.
+  m.Write32(TASK + 0x224, 2);
+  m.Write32(TASK + 0x258, s->progress.picked == Battlefield ? 0x02 : 0x01);
+  Boundary(m);
+  EXPECT_EQ(StageForStageId(static_cast<int>(m.Read32(TASK + 0x258))), s->progress.picked);
+
+  // The fight counts a game: the next stage select's coin is another.
+  Scene(m, "scMelee");
+  Boundary(m);
+  EXPECT_EQ(ReadState(m)->set.game, 2);
+  Scene(m, "scVsResult");
+  Boundary(m);
+  EXPECT_EQ(ReadState(m)->set.game, 2);
+  EXPECT_EQ(ReadState(m)->score[0] + ReadState(m)->score[1], 0);
+  Scene(m, "scSelStage");
+  m.Write32(TASK + 0x224, 0);
+  m.Write32(TASK + 0x250, 0);
+  Boundary(m);
+  s = ReadState(m);
+  EXPECT_EQ(s->seed, RS::CasualSeed(ROOM, 1, 2));
+  EXPECT_EQ(s->progress.prefs[0], -1);
+  EXPECT_EQ(s->progress.prefs[1], -1);
+  EXPECT_EQ(s->progress.step, 0);
+}
+
+TEST_F(OrcaBrawlCasual, NoFinalDestinationForAnIceClimbersAndNothingAlone)
+{
+  FakeMemory m = Game("scSelStage");
+  m.Write8(MELEE + 0x98, 0x10);  // port 1 plays Ice Climbers
+  Boundary(m);
+  const auto s = ReadState(m);
+  ASSERT_TRUE(s);
+  EXPECT_FALSE(RS::Allowed(CasualPlanOf(*s), s->progress) & (1 << FinalDestination));
+  Hover(m, FinalDestination);
+  Press(m, 1, BrawlStages::GF_X);
+  EXPECT_EQ(ReadState(m)->progress.prefs[1], -1);
+  // FD's tile is grey.
+  m.Write32(TASK + 0x228, 0);
+  Boundary(m);
+  EXPECT_EQ(IconFrame(m, TileFor(FinalDestination).slot), 0u);
+  EXPECT_NE(IconFrame(m, TileFor(Battlefield).slot), 0u);
+  // The opponent gone: the stage select is the player's own again, its cursor anyone's.
+  EXPECT_EQ(m.Read32(TASK + 0x278), 1u);
+  Frame(m, false);
+  EXPECT_FALSE(ReadState(m));
+  EXPECT_EQ(m.Read32(TASK + 0x278), 0xF0u);
+  Rollback::InputGate::Masks masks{};
+  Masks(m, &masks);
+  for (const auto& mask : masks)
+    EXPECT_TRUE(mask.Empty());
 }

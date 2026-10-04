@@ -24,6 +24,8 @@ constexpr u32 OFF_FIGHT = 0x1A;
 constexpr u32 OFF_STAGE = 0x1B;
 constexpr u32 OFF_CHARACTERS = 0x1C;
 constexpr u32 OFF_RECORDS = 0x20;
+constexpr u32 OFF_PREFS = 0x40;
+static_assert(OFF_RECORDS + 4 * MAX_GAMES <= OFF_PREFS);
 constexpr u32 OFF_FLOW = 0x80;
 constexpr u32 OFF_STEP = 0x81;
 constexpr u32 OFF_ACTIVE = 0x82;
@@ -72,6 +74,8 @@ std::array<u8, STATE_SIZE> Bytes(const State& s)
     b[at + 2] = r.characters[0];
     b[at + 3] = r.characters[1];
   }
+  b[OFF_PREFS] = s.prefs[0];
+  b[OFF_PREFS + 1] = s.prefs[1];
   b[OFF_FLOW] = s.flow;
   b[OFF_STEP] = s.step;
   b[OFF_ACTIVE] = s.active;
@@ -120,6 +124,7 @@ std::optional<State> Read(const GuestMemory& m)
     const u32 at = OFF_RECORDS + 4 * i;
     s.records[i] = {r8(at), r8(at + 1), {r8(at + 2), r8(at + 3)}};
   }
+  s.prefs = {r8(OFF_PREFS), r8(OFF_PREFS + 1)};
   s.flow = r8(OFF_FLOW);
   s.step = r8(OFF_STEP);
   s.active = r8(OFF_ACTIVE);

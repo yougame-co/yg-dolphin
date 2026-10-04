@@ -115,6 +115,33 @@ TEST(OrcaInputGate, SticksCentredSeparately)
   EXPECT_EQ(out.substickY, int{GCPadStatus::C_STICK_CENTER_Y});
 }
 
+TEST(OrcaInputGate, AReadsAsAnotherButtonWhileHeld)
+{
+  // A casual stage pick: A masked, and held A reads as X (the rule sees it, the screen doesn't take
+  // a stage); the player's own X masked too, so only A makes the press.
+  GCPadStatus pad{};
+  pad.isConnected = true;
+  pad.button = PAD_BUTTON_A | PAD_BUTTON_X;
+  pad.analogA = 0xC0;
+  Mask mask{PAD_BUTTON_A | PAD_BUTTON_X, false, false};
+  mask.a_as = PAD_BUTTON_X;
+  EXPECT_FALSE(mask.Empty());
+  GCPadStatus out = Apply(pad, mask);
+  EXPECT_EQ(out.button, PAD_BUTTON_X);
+  EXPECT_EQ(out.analogA, 0);
+  // X alone (no A): nothing.
+  pad.button = PAD_BUTTON_X;
+  out = Apply(pad, mask);
+  EXPECT_EQ(out.button, 0);
+  // Without A held the remap adds nothing; with it and nothing masked, both.
+  pad.button = PAD_BUTTON_A;
+  Mask only;
+  only.a_as = PAD_BUTTON_X;
+  EXPECT_EQ(Apply(pad, only).button, PAD_BUTTON_A | PAD_BUTTON_X);
+  pad.button = 0;
+  EXPECT_EQ(Apply(pad, only).button, 0);
+}
+
 TEST(OrcaInputGate, AllIsANeutralConnectedPadButOriginBitsStay)
 {
   const GCPadStatus out = Apply(Busy(), ALL);

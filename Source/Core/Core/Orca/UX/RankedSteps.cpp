@@ -153,6 +153,63 @@ Plan PlanGame(const Ruleset& rules, const SetView& set)
   return plan;
 }
 
+namespace
+{
+// murmur3's 32-bit finalizer.
+constexpr u32 Mix(u32 h)
+{
+  h ^= h >> 16;
+  h *= 0x85EBCA6Bu;
+  h ^= h >> 13;
+  h *= 0xC2B2AE35u;
+  h ^= h >> 16;
+  return h;
+}
+}  // namespace
+
+u32 CasualSeed(u32 room, u8 coin, int game)
+{
+  return Mix(room ^ Mix(static_cast<u32>(game) * 2u + (coin & 1u) + 0x9E3779B9u));
+}
+
+Plan PlanCasual(const Ruleset& rules, const SetView& set, u32 seed)
+{
+  Plan plan;
+  plan.casual = true;
+  plan.seed = seed;
+  plan.available = rules.All();
+  const auto is = [&](int port, int character) {
+    return character >= 0 && set.characters[port] == character;
+  };
+  if (rules.ic_banned_stage >= 0 && (is(0, rules.ice_climbers) || is(1, rules.ice_climbers)))
+    plan.available &= static_cast<StageMask>(~Bit(rules.ic_banned_stage));
+  const u8 first = set.coin == 1 ? 1 : 0;
+  plan.steps.push_back({StepKind::Prefer, first, 1, false, rules.casual_seconds});
+  plan.steps.push_back(
+      {StepKind::Prefer, static_cast<u8>(1 - first), 1, false, rules.casual_seconds});
+  return plan;
+}
+
+int CasualDefault(const Plan& plan, int port)
+{
+  const int n = CountBits(plan.available);
+  if (n == 0)
+    return -1;
+  int k = static_cast<int>(Mix(plan.seed ^ (0x27D4EB2Fu * static_cast<u32>(port + 1))) %
+                           static_cast<u32>(n));
+  for (int i = 0; i < MAX_STAGES; ++i)
+  {
+    if ((plan.available & Bit(i)) && k-- == 0)
+      return i;
+  }
+  return -1;
+}
+
+int CasualChoice(const Plan& plan)
+{
+  return static_cast<int>(Mix(plan.seed ^ 0x165667B1u) & 1);
+}
+
 StageMask Allowed(const Plan& plan, int step, StageMask struck)
 {
   if (step < 0 || step >= static_cast<int>(plan.steps.size()))
@@ -168,7 +225,7 @@ StageMask DefaultStrikes(const Plan& plan, int step, StageMask struck, int done)
   if (step < 0 || step >= static_cast<int>(plan.steps.size()))
     return 0;
   const Step& s = plan.steps[step];
-  if (s.kind == StepKind::Pick || s.optional)
+  if (s.kind == StepKind::Pick || s.kind == StepKind::Prefer || s.optional)
     return 0;
   const StageMask allowed = Allowed(plan, step, struck);
   // Never strike the last stage standing.
@@ -187,9 +244,14 @@ int DefaultPick(const Plan& plan, int step, StageMask struck)
   return -1;
 }
 
+u16 GraceFrames(const Ruleset& rules, const Step& step)
+{
+  return step.kind == StepKind::Prefer ? rules.casual_grace_frames : rules.grace_frames;
+}
+
 u32 StepFrames(const Ruleset& rules, const Step& step)
 {
-  return static_cast<u32>(step.seconds) * 60 + rules.grace_frames;
+  return static_cast<u32>(step.seconds) * 60 + GraceFrames(rules, step);
 }
 
 namespace
@@ -226,8 +288,11 @@ StageMask Allowed(const Plan& plan, const Progress& progress)
 bool Strike(const Ruleset& rules, const Plan& plan, Progress* progress, int stage)
 {
   const Step* step = Current(plan, *progress);
-  if (!step || step->kind == StepKind::Pick || stage < 0 || stage >= MAX_STAGES)
+  if (!step || step->kind == StepKind::Pick || step->kind == StepKind::Prefer || stage < 0 ||
+      stage >= MAX_STAGES)
+  {
     return false;
+  }
   const StageMask allowed = Allowed(plan, *progress);
   if (!(allowed & Bit(stage)) || CountBits(allowed) <= 1)
     return false;
@@ -260,6 +325,29 @@ bool Pick(const Plan& plan, Progress* progress, int stage)
   return true;
 }
 
+bool Prefer(const Ruleset& rules, const Plan& plan, Progress* progress, int stage)
+{
+  const Step* step = Current(plan, *progress);
+  if (!step || step->kind != StepKind::Prefer || stage < 0 || stage >= MAX_STAGES ||
+      step->port > 1)
+  {
+    return false;
+  }
+  if (!(Allowed(plan, *progress) & Bit(stage)))
+    return false;
+  progress->prefs[step->port] = static_cast<s8>(stage);
+  Enter(rules, plan, progress, progress->step + 1);
+  if (progress->step >= plan.steps.size())
+  {
+    // Both named: the coin takes one (a turn that never came names the timer's default).
+    const int port = CasualChoice(plan);
+    const int chosen =
+        progress->prefs[port] >= 0 ? progress->prefs[port] : CasualDefault(plan, port);
+    progress->picked = static_cast<s8>(chosen >= 0 ? chosen : stage);
+  }
+  return true;
+}
+
 void AutoPick(const Plan& plan, Progress* progress)
 {
   const Step* step = Current(plan, *progress);
@@ -283,6 +371,13 @@ void Tick(const Ruleset& rules, const Plan& plan, Progress* progress)
   {
     const int stage = DefaultPick(plan, progress->step, progress->struck);
     progress->picked = static_cast<s8>(stage >= 0 ? stage : 0);
+    return;
+  }
+  if (step->kind == StepKind::Prefer)
+  {
+    const int stage = CasualDefault(plan, step->port);
+    if (!Prefer(rules, plan, progress, stage >= 0 ? stage : DefaultPick(plan, progress->step, 0)))
+      progress->picked = static_cast<s8>(std::max(stage, 0));
     return;
   }
   if (step->optional)
@@ -310,5 +405,13 @@ int SecondsShown(const Ruleset& rules, u16 frames)
   if (frames <= rules.grace_frames)
     return 0;
   return (frames - rules.grace_frames + 59) / 60;
+}
+
+int SecondsShown(const Ruleset& rules, const Step& step, u16 frames)
+{
+  const u16 grace = GraceFrames(rules, step);
+  if (frames <= grace)
+    return 0;
+  return (frames - grace + 59) / 60;
 }
 }  // namespace Orca::UX::Ranked

@@ -1952,8 +1952,11 @@ the game reads its controllers, so no game code has to be found and patched for 
 - **Compatibility.** No source is registered yet, so this build computes exactly what one without
   the gate does. A source changes what the game computes: bump `UX::kCompatVersion` with it.
   Friends rooms register none, or one that returns no masks.
-- **Not yet.** Synthesized presses (a Start the rules press for a player), and a raw view of a
-  masked button for the rules (a press the game didn't see).
+- **A read as another button** (`Mask::a_as`, q2-stages): while the player holds A the game sees
+  these buttons pressed (after the mask, like `press`). The casual stage pick masks A and reads it
+  as X, which vanilla Brawl's stage select ignores and Project+'s marks as a strike, so the rule
+  sees the press in the game's own pad memory and the screen never takes the stage.
+- **Not yet.** A raw view of a masked button for the rules (a press the game didn't see).
 
 **Test knob** `ORCA_TEST_GATE` (a test override: the compatibility key says so; set the same value
 in both processes). Comma-separated rules `<port 1-4>:<what>[:<when>]`: `<what>` joins with `+` any
@@ -2035,15 +2038,12 @@ only a queue room's host writes one (`Core/Orca/UX/OnlineRules.*`, `MatchBlock.h
 |---|---|---|
 | gmSetRule | stock, 3 stocks, 8:00, handicap off, ratio 1.0, team attack on, pause off | the same with 4 stocks |
 | Items | frequency None, every item off (record menu data `+0x00`, `+0x08`, `+0x0C`) | the same |
-| Stage choice | casual Random, ranked Choose | the same |
+| Stage choice | Choose (casual's turns, "Casual stage pick"; ranked's strikes) | the same |
 | Legal stages | Random Stage Switch: Brawl page `0x04005007` (BF, FD, Delfino, YI, Lylat, Smashville), Melee page `0x00020000` (Pokemon Stadium); FD's bit off while a human player's pick is Ice Climbers (`0x10`): the match's init data (gmGlobalModeMelee +0x98, 0x5C per port: the character select writes each pick there as it is made; the panel's own +0x1B8 is only the hovered character), on the character select and on the way to the fight (a Random character resolved) | the 2024 Proposed list as its preset 3 (`Switch03.rss`) holds it: its first `0xA8` bytes of RSS_EXDATA (`0x8042C4E8`: page 0 the 9 legal stages, all in the random set, hazards off), written on the character select; casual also clears the strike table |
 | Input gate | character select: B, and A unless the hand is in the grid (below); stage select: B; fight: Start | the same, plus the D-pad on the character select (its Code Menu) and L, R and Z on the stage select (alternates, hazards, L+R+A) |
 
-- Casual's Start: Random stage choice skips the stage select (two frames in scSelStage), and the
-  game's own RNG (in memory, the same on both machines) picks from the legal list. Probed: the
-  Brawl page's Smashville bit alone gave stage 0x21 (Smashville), the Melee page's 0x00020000 alone
-  0x2E (Pokemon Stadium). Project+'s random never repeats the last
-  stage (its own rule).
+- Casual's Start: since q2-stages, the stage select and its two preferred-stage turns ("Casual
+  stage pick"). Before, Random skipped it (the game's own RNG picking from the legal list).
 - No way back to the menus: sqVsMelee::setNext's state 5 takes the character select's result and
   sends anything but "go on" to state 16, the menu. A toggled group (`RSBE01.patches`,
   `PPLUS32.patches`, conditions on the header's magic and mode) flips that one store to state 4,
@@ -2308,8 +2308,9 @@ machine and block on its own track.
     winner's score, the stage won on, the record. A draw or a void counts nothing (the same game
     again). Two wins decide the set, and the stage select is free again.
   - The overlay's top-centre lines (UI only, published from first runs): "Ranked · Game 2 · ada
-    1–0 bo", and on the stage select "bo strikes 2 stages · 0:24" or "Your turn: pick the stage
-    with A · 0:09".
+    1–0 bo"; on the stage select the top line also says whose turn it is, how many stages they
+    still strike or ban, and the time ("Ranked · Game 1 · ada 0–0 bo · bo strikes 2 · 0:24"), and
+    under it, for the player whose turn it is, the keys ("Your turn: X on a stage strikes it").
 - **Compatibility:** `UX::kCompatVersion` 8.
 
 **Test knob** `ORCA_TEST_RANKED=<0|1>` (since the ranked-sprint integration
@@ -2375,8 +2376,11 @@ own flow. Casual and friends games are untouched.
   icon): the game's choice is replaced before the screen copies it out, by the stage the player had
   rested on in a pick, or by what the steps' defaults leave if it happens during strikes. While a
   stage is taken nobody's pad does anything.
-- **Overlay:** "Game 2 · You 1–0 Ada" on the character and stage selects, and under it on the
-  stage select whose turn it is with the timer ("Ada strikes 2 (X) · 0:24").
+- **Overlay:** "Game 2 · You 1–0 Ada" on the character select; on the stage select the same top
+  line also says whose turn it is, how many stages are left to strike or ban, and the timer
+  ("Game 1 · You 0–0 Ada · Ada strikes 2 · 0:24", "Game 2 · You 1–0 Ada · You may ban 1 · 0:30",
+  "Game 2 · You 1–0 Ada · Ada picks · 0:30"), and under it, for the player whose turn it is, the
+  keys ("X on a stage strikes it", "X on a stage bans it · Y skips", "A on a stage picks it").
 
 **Where it runs.** The match block's header (the casual track's MatchBlock.h layout, read by
 offset: `'YGM1'`, version 1, mode 2 ranked, ruleset 1 Brawl) turns it on; `ORCA_TEST_RANKED=brawl`
@@ -2425,31 +2429,87 @@ select X, Y, Z, L and R do nothing, and Start takes a stage.
 **Not yet:** a screenshot check of the grey tiles and the overlay lines (Luis tests the look); a
 two-Orca drop-in mid-select; Brawl's exact Supernova order (Phase 4).
 
+## Casual stage pick
+
+A casual queue match's stage (Luis, 2026-10-04: "A stage is picked at random between the two
+player's preferences. Players have 15 seconds to select stage."), both games, on the game's own
+stage select (`RankedSteps.h` Prefer steps and `PlanCasual`; Brawl's glue in `BrawlStages.*`,
+Project+'s in `RankedPPlus.*`). Since q2-stages casual's stage choice is Choose: Start on the
+character select goes to the stage select, as in ranked.
+
+- **Turns.** The stage select has one cursor, so the players take turns: the header's coin's port
+  first, then the other, 7 s each (`Ruleset::casual_seconds`, one constant) with half a second of
+  grace (`casual_grace_frames` 30), about 15 s with the hand-off. The stage select's controller field
+  (task `+0x278`) is the turn's port and the gate leaves every other port nothing; the turn's port
+  loses B, Start, Z, L, R, X and Y.
+- **A names the turn's stage** and never takes it (taking it would leave the screen): the gate masks
+  A and reads it as X (`Mask::a_as`, "Input gate"). Brawl: vanilla's stage select ignores X, and the
+  flow takes an X edge in the game's pads (gfPadSystem) on a hovered stage the plan allows. Project+:
+  X is its own Stage Striking, which marks the stage in `STAGE_STRIKE_TABLE`; the flow takes the new
+  mark as the preference and writes the table back clean (a redraw). On the page button (rested a
+  frame, Brawl) A turns the page as usual (Pokemon Stadium is on Brawl's Melee page).
+- **A turn that runs out** names a random legal stage for that player (`CasualDefault`).
+- **Then the coin** (`CasualChoice`) takes one of the two, and the flow picks it for the last turn's
+  port (Brawl: the cursor moved there, through the page button when needed, and A pressed every
+  other frame; Project+: the selection set and A pressed 4 frames in 8, every other stage shown
+  struck), as for a ranked pick whose timer ran out.
+- **The coin and the random stages** come from `CasualSeed(room, coin, game)`: the room code's hash
+  (header `+0x08`), the header's coin and the game number (fights begun from the stage select, + 1),
+  through murmur3's finalizer, so neither player can tell which way it falls and both machines, every
+  re-run and a drop-in's keyframe compute the same.
+- **Legal stages** as the locks have them: Brawl's 7 (BF, FD, Delfino, YI, Lylat, Smashville, PS1;
+  never FD while either player is Ice Climbers, no Meta Knight clause), grey tiles for the rest;
+  Project+'s 2024 Proposed 9.
+- **Only with both players in** (ports 1 and 2 in the session's synced plan): alone, the stage
+  select is the player's own.
+- **Overlay** (top centre, UI only): "Stage pick · ada · 0:07", or for the player whose turn it is
+  "Stage pick · your turn · 0:07" with "A on the stage you want · then one of the two picks, at
+  random" under it; then "Smashville (bo's pick)", "(your pick)" or "(both picks)".
+- **State.** Brawl: `BrawlStages`' region (`+0x80..+0xBF`, the block's step state; its own game):
+  `+0xA3`/`+0xA4` the two preferred stages, `+0xA8` the seed, `set.game` counting casual fights.
+  Project+: `MatchBlock::State` (`+0x10..+0x8F`): `+0x10` counts casual fights, `+0x40`/`+0x41` the
+  preferred stages, the steps' fields at `+0x80` as ranked uses them. The region the integrator
+  assigned this track (`+0x140..+0x17F`) lies inside Project+'s saved stage switch data
+  (`SAVED_RSS`, `+0x100..+0x1A7`), so nothing new went there: casual and ranked never share a block,
+  and these are the stage flows' own ranges.
+
+Tests: `OrcaRankedSteps.Casual*`, `.ProgressCasualPreferThenTheCoin`, `OrcaBrawlCasual.*`,
+`OrcaRankedPPlus.Casual*`, `OrcaInputGate.AReadsAsAnotherButtonWhileHeld`.
+Input script: `Tools/orca/inputs/bf-casual-pick.txt`.
+
 ## Character order
 
 A ranked set's later games pick characters in order on the game's own character select
 (`Core/Orca/UX/CharOrder.*`; the ranked rules' Phase 4, Luis's spec of 2026-10-03):
 
-- **Project+** (2024 Recommended, B.6): the previous game's winner picks first; the loser sees that
-  pick and picks second. 45 s each. Then the stage select as the stage tracks run it.
-- **Brawl** keeps the interim order until its stage pick can move before characters: both pick at
-  once on later games, with the same 45 s. Supernova 2025's exact order (the ban, the loser's
-  stage, then the winner may change character, then the loser) needs results -> stage select ->
-  character select -> match, and the Meta Knight clause re-checked once both final characters are
-  known (`MkFreePicker`, unit-tested, not wired; it takes Meta Knight's id in whichever id space the
-  caller's characters use).
+- **The order is one constant** (since q2-stages: `CharOrder::kLaterGameOrder`, both games):
+  - `Order::Free`, the default (Luis, 2026-10-04: "losing player chooses character first then
+    winning player chooses. Winning player can choose right away if they want"): the loser is asked
+    first ("Bo picks first · 0:42"); meanwhile the winner may lock in at any time ("Bo picks first ·
+    0:42 · A locks yours in any time", then "Waiting for Bo"), and nothing blocks either of them.
+    Once the loser has locked in (or their 45 s are up), the winner's own turn with 45 s, unless
+    they locked in already: then straight on.
+  - `Order::WinnerFirst` (the standard rulesets: Project+ 2024 Recommended B.6): the previous
+    game's winner picks first, the loser sees that pick and picks second. 45 s each.
+  Flipping it is the one line `constexpr Order kLaterGameOrder`. Brawl used to pick both at once
+  (the interim order): it now plays the same order as Project+. Supernova 2025's exact order (the
+  ban, the loser's stage, then the winner may change character, then the loser) still needs
+  results -> stage select -> character select -> match, and the Meta Knight clause re-checked once
+  both final characters are known (`MkFreePicker`, unit-tested, not wired).
+- Then the stage select as the stage tracks run it.
 - Game 1 has no order (both pick at once, the ranked ready timer applies), and nothing here acts in
   casual or friends games.
 
-**How it plays.** On the winner's turn the loser's controller does nothing, and the winner can't
-take the token back (B) or go on (Start); A locks the pick in, on a character or anywhere in the
-grid to keep the one the token is on (the tokens stay down from one game's character select to the
-next; outside the grid the online rules mask A, "The character select's buttons").
-Then the loser's turn, the winner's controller doing nothing; A locks in, or Start goes on. When
-both have picked or the time is up, Orca presses Start for the loser, every other frame until the
-screen goes. Brawl: B and Start masked for both, each locks in with A and then can't change, Start
-once both have or the time is up. The overlay's top line says whose turn it is and the time left
-("Ada picks first · 0:42", "Your pick · 0:42 · A locks it in").
+**How it plays** (WinnerFirst; Free is the same with the loser first and the winner's controller
+free to lock in during the loser's turn, B and Start masked, then nothing once locked in). On the
+winner's turn the loser's controller does nothing, and the winner can't take the token back (B) or
+go on (Start); A locks the pick in, on a character or anywhere in the grid to keep the one the
+token is on (the tokens stay down from one game's character select to the next; outside the grid
+the online rules mask A, "The character select's buttons"). Then the loser's turn, the winner's
+controller doing nothing; A locks in, or Start goes on. When both have picked or the time is up,
+Orca presses Start for the second picker, every other frame until the screen goes. The overlay's
+top line says whose turn it is and the time left ("Ada picks first · 0:42", "Your pick · 0:42 · A
+locks it in").
 
 A player who picks the token up (A on their own token) and lets the time run out can only move and
 put it down; Orca puts it on the character under the hand if there is one, and presses Start only
@@ -2488,9 +2548,10 @@ B takes it back to the hand; A elsewhere with the token down changes nothing (bo
 `gfPadSystem` (`0x805A0040` ->) keeps only held buttons (port i at `+0x40 + 0x40 * i`), no newly
 pressed ones.
 
-**Test knob** `ORCA_TEST_CHAR_ORDER=<pplus|brawl>:<game>:<winner port 1-2>` (a test override, both
-processes alike): that set on every character select with no match block behind it, so the order
-runs on the boot's character select once both players have joined.
+**Test knob** `ORCA_TEST_CHAR_ORDER=<pplus|brawl>:<game>:<winner port 1-2>[:free|winnerfirst]` (a
+test override, both processes alike): that set on every character select with no match block behind
+it, so the order runs on the boot's character select once both players have joined; the order is
+`kLaterGameOrder` unless given.
 
 **Proof** (2026-10-03, `ORCA_TEST_CHAR_ORDER`, headless): `YG_SYNCTEST=7` from the boot's
 character select through the order, Orca's Start, the stage select and the match's start, the
