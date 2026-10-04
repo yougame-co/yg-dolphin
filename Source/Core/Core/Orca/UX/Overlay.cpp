@@ -309,6 +309,9 @@ OverlayModel::Frame OverlayModel::View(double now_ms, Stats stats, Perf perf) co
 
 namespace
 {
+std::mutex s_rules_lock;
+std::string s_rules_line;
+std::string s_rules_note;
 OverlayModel s_overlay;
 std::atomic<Stats> s_stats{Stats::Off};
 // On until the app says otherwise (Luis wants it while testing).
@@ -427,13 +430,24 @@ void Draw()
                                                s_perf.load(std::memory_order_relaxed));
   // The matchmaking search (UX/OnlineMenu.h), while the player waits on the character select.
   const auto [search, search_note] = Search::Lines();
-  // A ranked set's score and, on the stage select, whose turn it is (RankedPPlus.h); else the
-  // set's score on the menus (UX/RankedSet.h): "Game 2 · 1–0".
-  const RankedPPlus::Lines ranked = RankedPPlus::CurrentLines();
-  const std::string set_line =
-      search.empty() && ranked.set.empty() ? RankedSet::CurrentScoreLine() : std::string();
+  // A ranked set's lines, top centre: the stage flow's (Brawl's through SetRulesLines, Project+'s
+  // RankedPPlus::CurrentLines), else the set's score on the menus (UX/RankedSet.h).
+  std::string rules, rules_note;
+  {
+    std::lock_guard lk(s_rules_lock);
+    rules = s_rules_line;
+    rules_note = s_rules_note;
+  }
+  if (rules.empty() && rules_note.empty())
+  {
+    const RankedPPlus::Lines ranked = RankedPPlus::CurrentLines();
+    rules = ranked.set;
+    rules_note = ranked.turn;
+  }
+  if (rules.empty())
+    rules = RankedSet::CurrentScoreLine();
   if (!f.show_signal && f.waiting.empty() && f.toasts.empty() && f.stats.empty() &&
-      f.perf.empty() && search.empty() && ranked.set.empty() && set_line.empty())
+      f.perf.empty() && search.empty() && rules.empty() && rules_note.empty())
   {
     return;
   }
@@ -490,20 +504,6 @@ void Draw()
     OutlinedText(dl, text_size, ImVec2(margin, y), t.alpha, t.text);
     y += TextSize(text_size, t.text).y + unit;
   }
-  if (search.empty() && !ranked.set.empty())
-  {
-    // Top centre, as the search's lines: the set, then the turn in the highlight colour.
-    const float size = 3.0f * unit;
-    const ImVec2 s = TextSize(size, ranked.set);
-    float line_y = margin;
-    OutlinedText(dl, size, ImVec2((screen.x - s.x) / 2, line_y), 1, ranked.set);
-    if (!ranked.turn.empty())
-    {
-      line_y += s.y + 0.5f * unit;
-      const ImVec2 n = TextSize(size, ranked.turn);
-      OutlinedText(dl, size, ImVec2((screen.x - n.x) / 2, line_y), 1, ranked.turn, Signal::Ok);
-    }
-  }
   if (!search.empty())
   {
     // Top centre, clear of the circle and the meter in the top-left corner.
@@ -518,12 +518,24 @@ void Draw()
       OutlinedText(dl, size, ImVec2((screen.x - n.x) / 2, line_y), 1, search_note, Signal::Ok);
     }
   }
-  else if (!set_line.empty())
+  if (!rules.empty() || !rules_note.empty())
   {
-    // Top centre, where the search lines were.
+    // Top centre too (the search lines are gone once the opponent is in).
     const float size = 3.0f * unit;
-    const ImVec2 s = TextSize(size, set_line);
-    OutlinedText(dl, size, ImVec2((screen.x - s.x) / 2, margin), 1, set_line);
+    float line_y = margin;
+    if (!search.empty())
+      line_y += 2 * (TextSize(size, search).y + 0.5f * unit);
+    if (!rules.empty())
+    {
+      const ImVec2 s = TextSize(size, rules);
+      OutlinedText(dl, size, ImVec2((screen.x - s.x) / 2, line_y), 1, rules);
+      line_y += s.y + 0.5f * unit;
+    }
+    if (!rules_note.empty())
+    {
+      const ImVec2 n = TextSize(size, rules_note);
+      OutlinedText(dl, size, ImVec2((screen.x - n.x) / 2, line_y), 1, rules_note, Signal::Ok);
+    }
   }
 }
 }  // namespace
@@ -531,6 +543,13 @@ void Draw()
 OverlayModel& Overlay()
 {
   return s_overlay;
+}
+
+void SetRulesLines(std::string line, std::string note)
+{
+  std::lock_guard lk(s_rules_lock);
+  s_rules_line = std::move(line);
+  s_rules_note = std::move(note);
 }
 
 void SetStats(Stats stats)

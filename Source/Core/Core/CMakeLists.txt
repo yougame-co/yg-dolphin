@@ -533,6 +533,8 @@ add_library(core
   Orca/Session/Session.h
   Orca/Session/YouGameRoom.cpp
   Orca/Session/YouGameRoom.h
+  Orca/UX/BrawlStages.cpp
+  Orca/UX/BrawlStages.h
   Orca/UX/Controllers.cpp
   Orca/UX/Controllers.h
   Orca/UX/ControllerSource.cpp

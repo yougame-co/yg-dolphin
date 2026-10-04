@@ -10,6 +10,7 @@
 
 #include "Common/Logging/Log.h"
 #include "Core/Orca/Session/Events.h"
+#include "Core/Orca/UX/BrawlStages.h"
 #include "Core/Orca/UX/ControllerSource.h"
 #include "Core/Orca/UX/GamePatches.h"
 #include "Core/Orca/UX/MenuText.h"
@@ -55,6 +56,7 @@ void Init()
     GuardMemory memory(guard);
     Merge(masks, Rules::GateMasks(memory));
     Merge(masks, RankedPPlus::Masks(memory));
+    BrawlStages::GateMasks(guard, &masks);
     return masks;
   });
   // The name tags write emulated memory: the compatibility key carries their version.
@@ -79,6 +81,8 @@ void Init()
     // Project+'s ranked stage flow (RankedPPlus.h): game logic, a pure function of memory, the
     // frame number and the synced ports, first runs and re-runs.
     RankedPPlus::Frame(guard, frame, resimulating, ports, alone);
+    // A ranked set's stage flow on vanilla Brawl's stage select (a pure function of memory).
+    BrawlStages::FrameHook(guard, resimulating, ports);
     ProbeFrame(guard, frame);
     // This player's own controls in its own game, for the session to carry into a game it joins or
     // hosts (reads only; only while this game is its player's alone, so never a friend's game).

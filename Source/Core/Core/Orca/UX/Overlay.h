@@ -159,5 +159,8 @@ void SetPerf(Perf perf);
 void FrameBoundary(bool shown);
 // A short toast under the circle (OverlayModel::AddToast, now). Any thread.
 void ShowToast(std::string text);
+// A ranked set's lines (BrawlStages.h), top centre: the set score, and under it whose turn it is
+// on the stage select with its timer. Empty: not shown. Any thread (the frame hook, first runs).
+void SetRulesLines(std::string line, std::string note);
 OverlayModel& Overlay();
 }  // namespace Orca::UX
