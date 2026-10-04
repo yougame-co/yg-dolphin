@@ -342,6 +342,9 @@ int s_online_stop_at = -1;  // online: the first-pass frame at which emulation s
 int s_max_frame = -1;  // highest frame reached on a first pass
 bool s_stop_queued = false;
 std::string s_scene;
+// The scene YG_SCENES last logged: the first passes' view, which a rollback's re-run can leave
+// behind (a re-run that enters or leaves a scene logs nothing itself).
+std::string s_logged_scene;
 int s_scene_start = 0;
 int s_scene_visit = 0;  // which entry into s_scene this is (1 for the first)
 // Every entry into a scene so far (frame -> scene), for visit numbers; a load drops later ones.
@@ -1137,8 +1140,6 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
     std::string scene = s_scene_reader(guard);
     if (scene != s_scene)
     {
-      if (s_scenes && s_frame > s_max_frame)
-        NOTICE_LOG_FMT(ROLLBACK, "Scene frame {}: {} -> {}", s_frame, s_scene, scene);
       s_scene = std::move(scene);
       s_scene_start = s_frame;
       s_scene_entries[s_frame] = s_scene;
@@ -1149,6 +1150,18 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
     s_scene_history[s_frame] = {s_scene, s_scene_start, s_scene_visit};
     if (s_scene_history.size() > 128)
       s_scene_history.erase(s_scene_history.begin());
+    // At first-pass boundaries, against the scene last logged, with the frame the scene was
+    // entered: without rollbacks, each change as it happens; after a re-run that changed the scene
+    // (a first pass's guess undone), the scene the re-run left, at the next first pass. Not where
+    // an online session has just rolled back (OnlineMatch loads before this hook runs, so memory is
+    // already the start of the frame it rewound to, not the end of this one). Comparing with the
+    // re-run's own scene, and logging that loaded state, left an online run's log on a scene the
+    // game had left (an e2e reported a results screen as "at scMemoryChange" for 14,000 frames).
+    if (s_scenes && s_frame > s_max_frame && s_rewind_to < 0 && s_scene != s_logged_scene)
+    {
+      NOTICE_LOG_FMT(ROLLBACK, "Scene frame {}: {} -> {}", s_scene_start, s_logged_scene, s_scene);
+      s_logged_scene = s_scene;
+    }
   }
 
   const int frame_here = s_frame;

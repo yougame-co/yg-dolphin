@@ -2362,6 +2362,22 @@ the same on both machines).
   ended while the fuzz still pressed). Mashing A with Z on the results screen opens it, as the fuzz
   can; Z alone, A alone (both players' A leave the screen as before) or A then Z at a few chosen
   frames did not.
+- **That failure itself was the harness's scene log** (`YG_SCENES`), which the e2e scripts follow.
+  The run said "ada: never reached scVsResult (at scMemoryChange)", and bo's log had the results
+  screen for two frames, then `scMemoryChange` for good; both Orcas' hashlogs had both games on
+  `scVsResult` for the run's last 14,559 frames, every checksum matched. The log compared each
+  first pass's reading with the scene a rollback's re-run had just left, so a scene a re-run
+  entered (ada's results screen) was never logged; and at a boundary where an online session had
+  just rolled back (OnlineMatch loads before the harness's hook runs) it logged the loaded state's
+  scene as the frame just run's (bo's `scMemoryChange` at 4911, whose RAM hash is frame 4906's).
+  The e2e waits for the host's `scVsResult` line before it presses anything on the results screen,
+  so it waited out its 240 s with nobody pressing: both games simply sat on the results screen.
+  Live 0.3.14's friends drop-in run with the fuzz failed the same way (its "never reached
+  scVsResult" 240 s after the game ended). The harness now logs at first passes that didn't just
+  roll back, against the scene it last logged, with the frame the scene was entered: a run without
+  rollbacks logs exactly as before (the runs above, plain and under the sync test, print the same
+  lines), and a re-run's scene shows at the next first pass. (`YG_HASHLOG` is unchanged: at such a
+  boundary it still hashes the loaded state under the frame just run's number.)
 - **Vanilla, not Orca's rules:** the same with no header at all (`pplus-1v1.txt` and
   `bf-mario-link-results.txt` with the mash added, as in a friends game or solo play), with the
   queue's header (`ORCA_TEST_QUEUE=casual:solo`), and in both games. Nothing Orca writes or masks
@@ -2370,8 +2386,8 @@ the same on both machines).
   `a_as`); 0.3.13's gate masked nothing there either.
 - **The fix** (`ux=11`): the input gate masks Z on the results screen (`scVsResult`) for every port
   in every session's game, header or not (`Rules::SessionMasks`, merged into the gate's one source
-  in `UX.cpp`). Nothing else reads Z there; the queue's Z hold (its skip) reads the raw latch, on its
-  own character select. The "Z REPLAY" labels still show.
+  in `UX.cpp`). Nothing else reads Z there; the queue's Z hold (its skip) reads the raw latch, on
+  its own character select. The "Z REPLAY" labels still show.
 - **Checked 2026-10-04** (branch `q3-results-hang` on `rel-0.3.15`, M4 Pro, headless, `-v Null`):
   `Tools/orca/inputs/pplus-queue2-results-z.txt` and `bf-queue2-results-z.txt` (the whole casual
   flows with both players mashing A, B, X, Y and Z from game 1's results screen's first frame) stay
