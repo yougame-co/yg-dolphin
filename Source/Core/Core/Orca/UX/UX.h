@@ -21,10 +21,12 @@ namespace Orca::UX
 // (CssTitle.h), the casual stage pick and the later-game character order (RankedSteps.h,
 // BrawlStages.h, RankedPPlus.h, CharOrder.h) with the gate's a_as and steer; 11, Orca 0.3.15: no
 // Z on the results screen in any session, its replay save's dead end, OnlineRules.h SessionMasks;
-// 12: the character select's A to pick, B to take the token back up and Start to lock in
-// (OnlineRules.h CssBUnpicks, CharOrder.h, Queue.h; the raw latch under every header that locks)):
-// the session hashes it into the compatibility key as `ux=<n>`, so two builds that would write
-// different bytes (or mask different inputs) never meet in a room.
+// 12, Orca 0.3.16: the character select's A to pick, B to take the token back up and Start to
+// lock in (OnlineRules.h CssBUnpicks, CharOrder.h, Queue.h; the raw latch under every header that
+// locks), and the stage select's two cursors, proposals and agreement, and casual's simultaneous
+// 15 s pick (StageCursors.h, RankedSteps.h, BrawlStages.h, RankedPPlus.h): the session hashes it
+// into the compatibility key as `ux=<n>`, so two builds that would write different bytes (or mask
+// different inputs) never meet in a room.
 constexpr int kCompatVersion = 12;
 
 // Once, before the game boots in a session: registers the local pad source, the overlay, and the

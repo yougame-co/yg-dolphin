@@ -9,6 +9,7 @@
 
 #include "Common/CommonTypes.h"
 #include "Core/Orca/Session/Events.h"
+#include "Core/Orca/UX/StageCursors.h"
 #include "Core/Rollback/InputGate.h"
 
 namespace Core
@@ -22,18 +23,16 @@ class CPUThreadGuard;
 //
 // - Outside the stage select, the 2024 Proposed preset (Switch03.rss) is in RSS_EXDATA: page 0 is
 //   the 9 legal stages, hazards off. The game builds its stage select from it.
-// - On the stage select, Project+'s own Stage Striking does the striking: the player whose turn it
-//   is presses X on a stage (the hook at 0x806B586C, untouched), the game marks it in
-//   STAGE_STRIKE_TABLE and draws its struck art. At each boundary the frame hook counts the new
-//   strikes into the block, then writes the table the block calls for: stages not in play this
-//   game (game 1's counterpicks, the loser's won stages) and every stage of the other pages shown
-//   struck, so Project+'s own check refuses them. A change it makes is redrawn by Project+'s code
-//   (PAGE_INDEX set apart from CURRENT_PAGE).
-// - Turns: the stage select's controller field (+0x278) is the active port, and the input gate
-//   leaves only that port's stick and the step's button (X to strike, A to pick); B, L, R, Z,
-//   Start, Y and the C-stick are masked (no clearing strikes, no L+R+A back to the characters, no
-//   alternate stages, no hazards), as are A and X on Random and the items past it, and on the
-//   stage builder's page.
+// - On the stage select each player acts on their own cursor (StageCursors.h, ORCA.md "The stage
+//   select's two cursors"): the striker's X strikes, the picker's A picks, anyone's A proposes (the
+//   same stage from both: it is picked), B takes a proposal back. At each boundary the frame hook
+//   writes STAGE_STRIKE_TABLE as the block calls for: stages not in play this game (game 1's
+//   counterpicks, the loser's won stages), the strikes so far, and every stage of the other pages
+//   shown struck, so Project+'s own check refuses them. A change it makes is redrawn by Project+'s
+//   code (PAGE_INDEX set apart from CURRENT_PAGE).
+// - The game's own cursor and pads are the flow's: the input gate masks every port (no strikes of
+//   Project+'s own, no L+R+A back to the characters, no alternate stages, hazards, Random or page
+//   turns), and the flow writes the cursor's position (the last mover's, the picked stage).
 // - Timers: a strike step that runs out strikes the first remaining stages in list order; a pick
 //   that runs out picks the first allowed stage (the selection set to it and A pressed through the
 //   gate).
@@ -64,6 +63,9 @@ constexpr u32 CURRENT_PAGE = 0x80496000;
 constexpr u32 SSS_HOVERED = 0x244;     // the item under the cursor (RANDOM_ITEM: Random)
 constexpr u32 SSS_SELECTED = 0x248;    // the page position selected, -1 none
 constexpr u32 SSS_CONTROLLER = 0x278;  // 0xF0 every port, 0-3 that port only
+constexpr u32 SSS_CURSOR = 0x200;      // the cursor: +0x3C x, +0x40 y (floats, up is +y)
+constexpr u32 SSS_CURSOR_X = 0x3C;
+constexpr u32 SSS_CURSOR_Y = 0x40;
 constexpr u32 SSS_PAGE = 0x228;        // Brawl's page: CUSTOM_PAGE the stage builder's
 constexpr u32 CUSTOM_PAGE = 2;
 // The hovered item's values: 0 nothing, 1-0x34 a stage, then these.
@@ -94,6 +96,11 @@ struct Lines
   bool operator==(const Lines&) const = default;
 };
 Lines Describe(const GuestMemory& memory, int frame, const std::vector<Events::PortInfo>& ports);
+
+// What the overlay draws of the two cursors (StageCursors.h) on this boundary (on: false, none).
+// UI only.
+StageCursors::View CursorView(const GuestMemory& memory,
+                              const std::vector<Events::PortInfo>& ports);
 
 // The whole frame hook part (flow, overlay lines). The header is OnlineRules' (MatchBlock.h).
 void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,

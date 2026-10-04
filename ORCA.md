@@ -2301,10 +2301,12 @@ the game reads its controllers, so no game code has to be found and patched for 
   Friends rooms register none, or one that returns no masks. (Since `ux=11` every session's game,
   friends and solo too, masks one thing: Z on the results screen, "The results screen's replay".)
 - **A read as another button** (`Mask::a_as`, q2-stages): while the player holds A the game sees
-  these buttons pressed (after the mask, like `press`). The casual stage pick masks A and reads it
-  as X, which vanilla Brawl's stage select ignores and Project+'s marks as a strike, so the rule
-  sees the press in the game's own pad memory and the screen never takes the stage.
-- **Not yet.** A raw view of a masked button for the rules (a press the game didn't see).
+  these buttons pressed (after the mask, like `press`). The casual stage pick masked A and read it
+  as X, which vanilla Brawl's stage select ignores and Project+'s marks as a strike, so the rule saw
+  the press in the game's own pad memory and the screen never took the stage. Since `ux=12` nothing
+  uses it: the stage select's two cursors read the raw pads through the latch.
+- **The raw view of a masked button** is the latch (`InputGate::SetLatch`, "The queue's character
+  select", "The stage select's two cursors"): the rules see a press the game didn't.
 
 **Test knob** `ORCA_TEST_GATE` (a test override: the compatibility key says so; set the same value
 in both processes). Comma-separated rules `<port 1-4>:<what>[:<when>]`: `<what>` joins with `+` any
@@ -2756,19 +2758,23 @@ machine and block on its own track.
     give each position's stage kind through the preset's slot table (+0x104): positions 0-8 are
     GHZ, Bowser's Castle, Frigate Husk, Dream Land, Temple of Time, Smashville, Battlefield, PS2,
     Luigi's Mansion (kinds 0x23, 06, 0C, 2D, 09, 21, 01, 2E, 04, `pf/stage/stageslot/<kind>.asl`).
-  - On the stage select, Project+'s own Stage Striking (the hook at 0x806B586C, untouched) strikes
-    with X and draws the struck art. At each boundary the hook counts the active player's new bits
-    in `STAGE_STRIKE_TABLE` (0x8042C822, page 0's positions 0-30 at +2/+4) into the block, then
-    writes the table the block calls for: stages not in play (game 1's counterpicks, the loser's
+  - On the stage select (since `ux=12`, with the two cursors: "The stage select's two cursors")
+    the striker's X on their own cursor strikes, and the flow draws the struck art through
+    Project+'s Stage Striking table (before, Project+'s own Stage Striking, the hook at 0x806B586C,
+    struck with X and the hook counted the active player's new bits in `STAGE_STRIKE_TABLE`; the
+    game's X is now masked). At each boundary the hook writes the table (0x8042C822, page 0's
+    positions 0-30 at +2/+4) the block calls for: stages not in play (game 1's counterpicks, the loser's
     won stages), the strikes so far, and every stage of pages 1-4. A change it makes is redrawn by
     Project+'s code, which redraws the page's struck art whenever `PAGE_INDEX` (0x8042C821) isn't
     `CURRENT_PAGE` (0x80496000): the hook sets it to 0xFF. Project+'s own check then refuses a
     struck stage (it clears the selection).
-  - Turns: the stage select's controller field (task +0x278) is the active port, and the gate
-    masks every other port entirely. The active port keeps its stick and the step's button, X to
-    strike or A to pick; B (clears strikes, back to the characters), L and R (alternate stages,
-    and L+R+A back to the characters, which reads every port), Z (hazards), Start and Y are masked,
-    and A and X on Random (it would strike every stage outside the random set, or pick for them).
+  - Turns (before `ux=12`; since, "The stage select's two cursors"): the stage select's controller
+    field (task +0x278) was the active port, and the gate masked every other port entirely. The
+    active port kept its stick and the step's button, X to strike or A to pick; B (clears strikes,
+    back to the characters), L and R (alternate stages, and L+R+A back to the characters, which
+    reads every port), Z (hazards), Start and Y were masked, and A and X on Random (it would strike
+    every stage outside the random set, or pick for them). Now every port is masked and the flow
+    acts through the game's cursor, so none of those can reach the game.
   - A pick whose timer ran out: every other stage shown struck, the selection (+0x248) set to the
     default, and the gate presses A for the player (`Mask::press`, new) with everything else masked.
   - Results: a fight entered from the flow counts at its results screen (Results.h `Judge`): the
@@ -2826,10 +2832,10 @@ own flow. Casual and friends games are untouched.
 - **MK clause:** exactly one Meta Knight (gmCharacterKind `0x18`): the other player picks any
   legal stage, over strikes, the ban and DSR. **IC/FD:** with Ice Climbers (`0x10`) on either
   port, Final Destination is never allowed.
-- **Turns:** the stage select's own controller field (task `+0x278`) is the turn's port, and the
-  input gate leaves every other port nothing; the turn's port loses B (back to the character
-  select), Start (it takes a stage), Z, L and R. A works only once the cursor has rested a frame:
-  on the page button, and in a pick on an allowed stage.
+- **Turns:** since `ux=12` each player acts on their own cursor ("The stage select's two
+  cursors"): X strikes or bans on the turn's player's own turn, Y skips the ban, the picker's A
+  picks, anyone's A proposes. The game's own cursor and pads are the flow's (the gate masks every
+  port; before, the controller field was the turn's port and the gate left the others nothing).
 - **Grey tiles:** every stage the current step doesn't allow (struck, banned, DSR, IC/FD, not
   legal) is a plain grey tile (its icon's frame 0.0), re-applied every frame on whichever page
   shows. Allowed sets only shrink within one stage select, so nothing is restored.
@@ -2900,26 +2906,22 @@ two-Orca drop-in mid-select; Brawl's exact Supernova order (Phase 4).
 
 A casual queue match's stage (Luis, 2026-10-04: "A stage is picked at random between the two
 player's preferences. Players have 15 seconds to select stage."), both games, on the game's own
-stage select (`RankedSteps.h` Prefer steps and `PlanCasual`; Brawl's glue in `BrawlStages.*`,
-Project+'s in `RankedPPlus.*`). Since q2-stages casual's stage choice is Choose: Start on the
-character select goes to the stage select, as in ranked.
+stage select with the two cursors ("The stage select's two cursors"; `RankedSteps.h` Prefer and
+`PlanCasual`; Brawl's glue in `BrawlStages.*`, Project+'s in `RankedPPlus.*`). Since q2-stages
+casual's stage choice is Choose: Start on the character select goes to the stage select, as in
+ranked.
 
-- **Turns.** The stage select has one cursor, so the players take turns: the header's coin's port
-  first, then the other, 7 s each (`Ruleset::casual_seconds`, one constant) with half a second of
-  grace (`casual_grace_frames` 30), about 15 s with the hand-off. The stage select's controller field
-  (task `+0x278`) is the turn's port and the gate leaves every other port nothing; the turn's port
-  loses B, Start, Z, L, R, X and Y.
-- **A names the turn's stage** and never takes it (taking it would leave the screen): the gate masks
-  A and reads it as X (`Mask::a_as`, "Input gate"). Brawl: vanilla's stage select ignores X, and the
-  flow takes an X edge in the game's pads (gfPadSystem) on a hovered stage the plan allows. Project+:
-  X is its own Stage Striking, which marks the stage in `STAGE_STRIKE_TABLE`; the flow takes the new
-  mark as the preference and writes the table back clean (a redraw). On the page button (rested a
-  frame, Brawl) A turns the page as usual (Pokemon Stadium is on Brawl's Melee page).
-- **A turn that runs out** names a random legal stage for that player (`CasualDefault`).
-- **Then the coin** (`CasualChoice`) takes one of the two, and the flow picks it for the last turn's
-  port (Brawl: the cursor moved there, through the page button when needed, and A pressed every
-  other frame; Project+: the selection set and A pressed 4 frames in 8, every other stage shown
-  struck), as for a ranked pick whose timer ran out.
+- **Both at once** (since `ux=12`; before, two 7 s turns, the header's coin's port first): one step
+  for both players (`Step::port` `BOTH`), 15 s (`Ruleset::casual_seconds`) with half a second of
+  grace (`casual_grace_frames` 30). Each player's A on a legal stage under their own cursor names it
+  (a marker in their colour on the tile), B takes it back, A on another stage changes it.
+- **The same stage starts the match at once.** Two different ones: the coin (`CasualChoice`) takes
+  one (`CasualResult`), the moment the second player names theirs.
+- **Time's up:** a player who named nothing gets a random legal stage (`CasualDefault`), then the
+  same rule.
+- **The flow picks it** for one player (Brawl: the game's cursor moved there, through the page
+  button when needed, and A pressed every other frame; Project+: the selection set and A pressed 4
+  frames in 8, every other stage shown struck), as for a ranked pick whose timer ran out.
 - **The coin and the random stages** come from `CasualSeed(room, coin, game)`: the room code's hash
   (header `+0x08`), the header's coin and the game number (fights begun from the stage select, + 1),
   through murmur3's finalizer, so neither player can tell which way it falls and both machines, every
@@ -2929,20 +2931,156 @@ character select goes to the stage select, as in ranked.
   Project+'s 2024 Proposed 9.
 - **Only with both players in** (ports 1 and 2 in the session's synced plan): alone, the stage
   select is the player's own.
-- **Overlay** (top centre, UI only): "Stage pick · ada · 0:07", or for the player whose turn it is
-  "Stage pick · your turn · 0:07" with "A on the stage you want · then one of the two picks, at
-  random" under it; then "Smashville (bo's pick)", "(your pick)" or "(both picks)".
+- **Overlay** (top centre, UI only): "Stage pick · 0:15", under it for each player "A on the stage
+  you want · the same pick plays there, else a coin takes one of the two", then "You want
+  Smashville", and what the other wants ("bo wants Battlefield · A on it to agree"); then
+  "Smashville (bo's pick)", "(your pick)" or "(both picks)".
 - **State.** Brawl: `BrawlStages`' region (`+0x80..+0xBF`, the block's step state; its own game):
   `+0xA3`/`+0xA4` the two preferred stages, `+0xA8` the seed, `set.game` counting casual fights.
   Project+: `MatchBlock::State` (`+0x10..+0x8F`): `+0x10` counts casual fights, `+0x40`/`+0x41` the
-  preferred stages, the steps' fields at `+0x80` as ranked uses them. The region the integrator
-  assigned this track (`+0x140..+0x17F`) lies inside Project+'s saved stage switch data
-  (`SAVED_RSS`, `+0x100..+0x1A7`), so nothing new went there: casual and ranked never share a block,
-  and these are the stage flows' own ranges.
+  preferred stages, the steps' fields at `+0x80` as ranked uses them, `+0x8F` why the flow picks
+  (`AUTO_CASUAL`). The cursors: "The stage select's two cursors".
 
-Tests: `OrcaRankedSteps.Casual*`, `.ProgressCasualPreferThenTheCoin`, `OrcaBrawlCasual.*`,
-`OrcaRankedPPlus.Casual*`, `OrcaInputGate.AReadsAsAnotherButtonWhileHeld`.
-Input script: `Tools/orca/inputs/bf-casual-pick.txt`.
+Tests: `OrcaRankedSteps.CasualIsOnePreferStepForBothOnTheWholeList`,
+`.ProgressCasualBothNameThenTheSameOrTheCoin`, `OrcaBrawlCasual.*`, `OrcaRankedPPlus.Casual*`.
+
+## The stage select's two cursors
+
+Luis, 2026-10-04: "it'd also be really helpful if each player had their own cursor in stage
+select ... People should also be able to just preselect stage with A and skip the formal banning
+process if they'd like." Queue matches only (a casual or ranked header and both players in); friends
+rooms and solo play keep the game's own stage select (`Core/Orca/UX/StageCursors.*`, the flows in
+`BrawlStages.*` and `RankedPPlus.*`, the steps' `Propose` in `RankedSteps.*`, the drawing in
+`Overlay.cpp`).
+
+**How it plays** (both games):
+- Each player has a cursor of their own, moved by their own stick, both at once, drawn by Orca's
+  overlay in the player's colour (port 1 red, port 2 blue) with a tab "P1 ada"; the player whose
+  turn the steps say it is has a white ring round theirs.
+- **A on a stage proposes it** (a frame round the tile in the proposer's colour with their name);
+  B takes the proposal back. When both players propose the same stage, the match starts on it at
+  once, whatever steps are left (game 1's strikes, a later game's ban and counterpick). Agreement
+  takes any legal stage in play this game that isn't struck or banned (game 1: the starters; later
+  games: all seven or nine, DSR ignored; never FD with an Ice Climbers in Brawl). A strike or ban on
+  a proposed stage takes the proposal off.
+- **The steps are the same as before**, on the turn's player's own cursor: X strikes (game 1's
+  1-2-1, Project+'s later strikes) or bans (Brawl's later ban), Y skips Brawl's optional ban, and in
+  the pick step the picker's A picks (a stage DSR keeps from them still proposes). Turn timers and
+  their defaults as before. Casual: "Casual stage pick".
+- **Example** (Luis's): game 2, the loser's A on Battlefield (a proposal), the winner's Y (no ban),
+  then the winner's A on Battlefield: Battlefield.
+- **Brawl's pages:** A on the page button (Melee Stages / Brawl Stages) turns the page for both
+  (Pokemon Stadium is on the Melee page); a proposal on the other page is in the top line, not drawn.
+  Project+'s nine are all on page 0: no page turns.
+- **The game's own cursor** is nobody's: the gate masks every port entirely on the stage select
+  while the cursors run (Project+'s own strikes, L, R, Z, Random and B never reach it). The flow
+  writes its position at every boundary: where the cursor that moved last is (its hover shows that
+  stage's preview and name), on the page button while a page turn waits, on the stage once it is
+  picked; the task's controller field (`+0x278`) is that port, and the gate's synthesized A
+  (`Mask::press`) is the flow's only press: the page turn's, and the pick's (Brawl every other frame
+  once the game's hover reads the stage; Project+ the selection set and A 4 frames in 8).
+- **Top line** (UI only): whose turn, what to do, how many and the timer as before
+  ("Game 2 · You 1–0 bo · bo may ban 1 · 0:30"); under it the keys for the turn's player, then
+  what the other proposes ("bo wants Battlefield · A on it to agree"), or else "A proposes a
+  stage"; "Agreed: Battlefield" once both did.
+
+**Determinism.** The cursors are synced state in the match block (free bytes on rel-0.3.15, the
+integrator's assignment to this track), written only as a pure function of memory and the synced
+pads, integer math only:
+
+| Where | What |
+|---|---|
+| `+0xF4` | u8 tag `0xC2` while the cursors run (anything else: off; read only under the block's magic) |
+| `+0xF5` | u8 the layout's game (1 Brawl, 2 Project+) |
+| `+0xF6` | u8 the follower: the port whose cursor the game's cursor follows (the last one that moved) |
+| `+0xF7` | u8 a page turn: bit 7 on, bit 0 the port that asked, bit 1 the page it was on |
+| `+0xF8` | u8 frames the page turn has waited (gives up after 90) |
+| `+0xF9..+0xFF` | free |
+| `+0x1B4`, `+0x1BA` | port 1's, port 2's cursor: s16 x, s16 y (1/16 of the stage select's own cursor units, up is +y), u8 the buttons of the frame that just ran, u8 the buttons the frame hook has seen |
+
+- **The latch** (`InputGate::SetLatch`, after Queue's): at every boundary, right after the masks,
+  with ports 1-2's raw pads of the frame about to run (the session's or the harness's), each stick
+  moves its own cursor: past a dead zone of 24 (of 128), the deflection clamped to 100, times the
+  layout's speed over 100 (truncated), clamped to the cursor's range; and the buttons (A, B, X, Y,
+  Start, Z) go into the cursor's "now". The latch runs after the boundary's snapshot or keyframe was
+  saved or loaded, on every pass (first runs, re-runs, a joiner's first frame after its keyframe),
+  from the state that boundary starts from, so the next boundary's frame hook reads the same cursors
+  on every machine. Only while the tag is on and the scene is the stage select.
+- **The frame hook** takes each port's presses as edges of "now" against "seen" and marks them
+  seen, so a boundary run again (a rollback's load) sees none and writes nothing new; every action
+  it takes is a pure function of the block and the game's memory. The flows turn the cursors on
+  when a stage select's steps begin (both at the layout's start points) and off when they stop (off
+  the stage select, the opponent gone, the header gone); a new header clears both ranges
+  (`OnlineRules` FreshSet).
+- **Which tile** a cursor is on: the layout's tile rectangles (`StageCursors::Layout`, integers in
+  the cursor's units x 16), probed in each game (below). The overlay maps the cursor's units onto
+  the picture (the presenter's target rectangle) with the layout's probed linear map, floats, UI only.
+- **Overlay:** the frame hook publishes the cursors, the proposals and whose turn it is on first
+  runs (`StageCursors::Publish`); `Overlay.cpp` draws them before its text. Nothing it draws reads
+  emulated memory.
+
+**Found under the harness** (2026-10-04, `ORCA_UX_PROBE` writes and watches, no header, two
+players; the Project+ runs with the 2024 Proposed preset written on the character select):
+- **The game's cursor** (the task's `+0x200` -> `+0x3C`/`+0x40`, floats, both games): a write moves
+  it and the hover follows; the game clamps a write to its range (Brawl x -30..30, y -19.5..19.5;
+  Project+ x -31..31, y -23.5..20.5), so it can't be parked off the screen. Brawl's moves 1.6 a
+  frame at full tilt (the two cursors use the same speed, 26/16). It is a pulsing red crosshair
+  whatever the controller field says, and starts on Random (Brawl 3.5, -17.5). Writing its picture's
+  frame or a scale to hide it was not found in the time there was: the overlay draws each player's
+  crosshair opaque and a little larger over the follower's position instead.
+- **The tiles:** a sweep of the cursor over each page, 0.5 apart, two frames a point, the hovered
+  item (`+0x244`) read at each: Brawl's page 0 is 31 stages in six staggered rows (item = slot + 2),
+  page 1 (Melee) ten; the page button (`0x35`) is x 15.5..30, y -19.5..-17.5 on both, Random
+  (`0x36`) left of it, Back (`0x37`) top left. Project+'s page 0 is two rows under the preview:
+  positions 0-3 (GHZ, BC, FH, DL) at y -11..-3.5, 4-8 (ToT, SV, BF, PS2, LM) at y -17.5..-11.5,
+  item = position + 2 (`+0x248` the position). The layouts' rectangles (`StageCursors.cpp`) are the
+  swept extents a quarter unit out.
+- **The picture:** with the cursor written at known points under `ORCA_TEST_PRESENT=1280x720`, its
+  ring's middle in the screenshots: the cursor's (0, 0) at (639.8, 358.4) in a 1250 x 720 picture
+  (bars at x 15 and 1265), 15.18 pixels a unit across and 14.42 down, the same in both games. The
+  overlay maps through the presenter's target rectangle, so other window sizes and aspect modes
+  follow. The picture a frame shows is the game's drawing of the frame before (the follower's
+  crosshair peeked out a frame's travel ahead of the overlay's while moving), so the overlay draws
+  the view published at the boundary before the last.
+
+**Checked** (2026-10-04, branch `q4-sss-cursors` on `rel-0.3.15` with the clean-leave and
+results-hang merges, M4 Pro, headless):
+- Unit tests: 386 `Orca*`, 368 pass, 18 skipped (the live, network and disc ones), 0 fail; new:
+  `OrcaStageCursors.*` (the latch: dead zone, speed, bounds, each stick its own cursor, the
+  follower, off the stage select; edges seen once; every legal tile reads its own stage, none
+  overlap), `OrcaBrawlStages.ThePickersAPicks`, `.AgreementSkipsTheStepsButNeverTakesAStruckStage`,
+  `.LaterGamesAgreementIgnoresDsrNotTheBan`, `.TheWinnerSkipsTheBanWithYAndBothAgree`,
+  `.APageTurnGoesThroughThePageButton`, `.TheGamesCursorFollowsWhoeverMovedLast`,
+  `.TheGameSeesNoPadWhileTheCursorsRunAndTheFlowPressesForIt`, `OrcaBrawlCasual.BothPickAtOnce*`,
+  `.TwoStagesTheCoinTakesOneAndTimeRunsOut`, `OrcaRankedPPlus.BothProposingOneStageSkipsTheSteps`,
+  `.CasualBothNameAStageAtOnce`, `.CasualTwoStagesTheCoinAndTimeRunsOut`,
+  `OrcaRankedSteps.AgreementIsLegalInPlayAndNotStruck`, `.ProgressCasualBothNameThenTheSameOrTheCoin`
+  (every boundary run twice, the second changing nothing).
+- Brawl, `Tools/orca/inputs/bf-sss-cursors.txt` with `ORCA_TEST_QUEUE=ranked ORCA_TEST_SET_RULES=1,8
+  ORCA_UX_TEST_NAMES=ada,bo YG_RESULTS=1`, `YG_SYNCTEST=7 YG_SYNCTEST_FROM=1700` to frame 9000:
+  game 1's stage select at 1824, both cursors moving at once, port 2's proposal (Smashville), port 1's
+  strike (Battlefield), port 2's strike (Yoshi's Island) while port 1 turns the page, port 1's and
+  port 2's proposals of Pokemon Stadium on the Melee page: agreed, the fight on it; game 2 (port 1
+  won): the loser proposes Battlefield, the winner skips its ban with Y and proposes Battlefield:
+  agreed. 51,051 re-run frames, **0 RAM mismatches**, the same steps as the plain run.
+- Project+, `pplus-sss-cursors.txt` with `ORCA_PROFILE=PPLUS32 ORCA_TEST_QUEUE=casual`,
+  `YG_SYNCTEST_FROM=170` to 2700: game 1 both name Smashville (the second after moving over): played
+  there at once; game 2 Battlefield against Dream Land: the coin took Battlefield. 17,661 re-run
+  frames, **0 RAM mismatches**. `pplus-sss-cursors-ranked.txt` (`ORCA_TEST_QUEUE=ranked`) to 1200:
+  port 1 strikes Temple of Time, port 2 Luigi's Mansion, both propose Battlefield: agreed, the
+  fight on it; 7,161 re-run frames, **0 RAM mismatches**.
+- Screenshots (`-v Metal ORCA_TEST_PRESENT=1280x720`, deleted after): both crosshairs in their
+  colours with their tabs, the gold ring on the turn's player, the proposal frames and tabs ("ada",
+  "bo", "ada + bo" in gold once agreed), the game's own crosshair covered by the follower's while it
+  moves, Brawl's grey tiles and Project+'s struck art as before, and the top lines ("Game 1 · You 0–0
+  bo · bo strikes 2 · 0:30" / "bo wants Smashville · A on it to agree", "Agreed: Pokemon Stadium",
+  "Stage pick · 0:14" / "You want Smashville").
+
+**Not yet:** the two cursors in a real two-Orca room and Mac <-> PC (the release checklist's); a
+drop-in keyframe mid-select (the cursors are block bytes like the rest, the latch's write comes
+after the keyframe); the game's own crosshair is covered, not hidden; a long harness run's
+screenshots went black from about frame 8000 on whatever was drawn (the game 2 stage select wasn't
+shot; its steps are in the sync test).
 
 ## Character order
 
@@ -3154,8 +3292,9 @@ gone, and so are their knobs (`ORCA_TEST_RANKED`, `ORCA_TEST_MATCH_BLOCK`): **`O
 character select"); +0x10..+0x8F Project+'s flow
 (`MatchBlock::State`); +0x80..+0xBF Brawl's flow (`BrawlStages`, its own game); +0xC0..+0xCF Phase
 1 (the ready timer: `CSS_TIMER`, `CSS_NO_SHOW`, `FOUGHT`, `PLUGGED`, `CSS_TIMER_START`);
-+0xD0..+0x1A7 the player's saved rules (Project+'s stage switch data from +0x100); +0x1C0..+0x1EF
-the queue's character select; +0x1F0 the saved rules' flags; +0x200..+0x20F the character order; +0x210..+0x28F the
++0xD0..+0x1A7 the player's saved rules (Project+'s stage switch data from +0x100), except
++0xF4..+0xFF, the stage select's two cursors' shared bytes; +0x1B4..+0x1BF the two cursors (since
+`ux=12`, "The stage select's two cursors"); +0x1C0..+0x1EF the queue's character select; +0x1F0 the saved rules' flags; +0x200..+0x20F the character order; +0x210..+0x28F the
 ranked set (`SetBlock`, authoritative: the room hears it, Brawl's flow and the character order
 read it).
 

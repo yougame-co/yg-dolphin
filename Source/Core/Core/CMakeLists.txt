@@ -574,6 +574,8 @@ add_library(core
   Orca/UX/RankedSteps.h
   Orca/UX/Results.cpp
   Orca/UX/Results.h
+  Orca/UX/StageCursors.cpp
+  Orca/UX/StageCursors.h
   Orca/UX/UX.cpp
   Orca/UX/UX.h
   NetworkCaptureLogger.cpp

@@ -423,6 +423,8 @@ void FreshSet(Writer& w, Mode mode, Ruleset ruleset, u8 coin)
   w.Zero(B::CSS_TIMER, B::PHASE1_SIZE);
   w.Zero(B::CHAR_ORDER, B::CHAR_ORDER_SIZE);
   w.Zero(B::QUEUE, B::QUEUE_SIZE);
+  w.Zero(B::STAGE_CURSORS_SHARED, B::STAGE_CURSORS_SHARED_SIZE);
+  w.Zero(B::STAGE_CURSORS, B::STAGE_CURSORS_SIZE);
   w.changed += MatchBlock::Write(
       w.m, MatchBlock::State::Fresh(static_cast<u8>(mode), static_cast<u8>(ruleset), coin));
   w.changed += SetBlock::WriteSet(w.m, SetBlock::SetState{});
