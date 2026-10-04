@@ -23,6 +23,7 @@
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/OnlineMenu.h"
 #include "Core/Orca/UX/Overlay.h"
+#include "Core/Orca/UX/Queue.h"
 #include "Core/Rollback/OnlineMatch.h"
 #include "Core/System.h"
 
@@ -273,8 +274,26 @@ void Platform::ProcessEmbedCommands()
     else if (cmd == "queue-cancel")
     {
       // The app's search ended (cancelled, failed, or the match never came): the overlay stops
-      // saying it searches.
+      // saying it searches, and on the queue's own character select the player isn't ready any
+      // more (Start searches again; `orca queue unready` follows).
       Orca::UX::Search::End();
+      Orca::UX::Queue::ClearReady();
+    }
+    else if (cmd == "queue")
+    {
+      // "queue rating <n|->": this player's rating in the current queue (ranked) or none, before
+      // host or join; it rides the player's queue identity to the other Orca (UX/Queue.h).
+      std::string what, value;
+      in >> what >> value;
+      int rating = 0;
+      const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), rating);
+      if (what == "rating" && value == "-")
+        Orca::UX::Queue::SetOwnRating(-1);
+      else if (what == "rating" && error == std::errc{} && end == value.data() + value.size() &&
+               rating >= 0 && rating <= 0xFFFE)
+        Orca::UX::Queue::SetOwnRating(rating);
+      else
+        Embed::Out("unsupported queue");
     }
     else if (cmd == "leave")
     {

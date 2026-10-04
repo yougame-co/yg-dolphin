@@ -33,6 +33,10 @@ struct PortInfo
   // The player's own controls, as their own game held them (UX/NameTags.h, ControlsProfile:
   // rumble, then the name tag's layout); empty: none carried (the port's tag keeps what it has).
   std::vector<u8> controls;
+  // The player's queue identity (UX/Queue.h QueueIdentity: the rating the page gave, the pick made
+  // on the queue's own character select); empty: none. The host's value like the rest, so a
+  // joiner's pick is written into the host's game at the same frame on every machine.
+  std::vector<u8> queue;
   bool operator==(const PortInfo&) const = default;
 };
 
@@ -41,6 +45,10 @@ struct PortInfo
 // carry into a game this player joins or hosts. Any thread.
 void SetOwnControls(std::vector<u8> controls);
 std::vector<u8> OwnControls();
+// This machine's player's queue identity (UX/Queue.h), for the session to carry like the controls.
+// Any thread.
+void SetOwnQueue(std::vector<u8> queue);
+std::vector<u8> OwnQueue();
 
 // The plugged-in ports changed (a friend plugged in or out): on the CPU thread at the boundary of
 // `frame`, first runs only, for the UI (toasts, the overlay). Not for memory writes: a re-run never

@@ -27,6 +27,7 @@ namespace
 {
 std::mutex s_lock;
 Source s_source;
+Latch s_latch;
 // CPU thread only (set at the boundary, read by the SI's polls).
 Masks s_current{};
 bool s_any = false;  // some mask in s_current is not empty
@@ -134,6 +135,11 @@ GCPadStatus Apply(const GCPadStatus& pad, const Mask& mask)
     out.substickX = GCPadStatus::C_STICK_CENTER_X;
     out.substickY = GCPadStatus::C_STICK_CENTER_Y;
   }
+  if (mask.steer)
+  {
+    out.stickX = mask.steer_x;
+    out.stickY = mask.steer_y;
+  }
   u16 press = mask.press & ALL_BUTTONS;
   if (pad.button & PAD_BUTTON_A)
     press |= mask.a_as & ALL_BUTTONS;
@@ -155,12 +161,20 @@ void SetSource(Source source)
   s_source = std::move(source);
 }
 
+void SetLatch(Latch latch)
+{
+  std::lock_guard lk(s_lock);
+  s_latch = std::move(latch);
+}
+
 void OnBoundary(const Core::CPUThreadGuard& guard)
 {
   Source source;
+  Latch latch;
   {
     std::lock_guard lk(s_lock);
     source = s_source;
+    latch = s_latch;
   }
   Masks masks{};
   if (source)
@@ -182,6 +196,13 @@ void OnBoundary(const Core::CPUThreadGuard& guard)
   s_any = false;
   for (const Mask& mask : s_current)
     s_any = s_any || !mask.Empty();
+  if (latch)
+  {
+    std::array<std::optional<GCPadStatus>, PORTS> raw;
+    for (int port = 0; port < PORTS; ++port)
+      raw[port] = RawInputOverride(port);
+    latch(guard, raw);
+  }
 }
 
 void Clear()

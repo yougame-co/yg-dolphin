@@ -42,6 +42,7 @@
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/OnlineMenu.h"
 #include "Core/Orca/UX/OnlineRules.h"
+#include "Core/Orca/UX/Queue.h"
 #include "Core/Orca/UX/RankedSet.h"
 #include "Core/Orca/UX/Results.h"
 #include "Core/Rollback/SessionPort.h"
@@ -126,6 +127,7 @@ struct Arrival
 {
   std::string name;
   std::vector<u8> controls;
+  std::vector<u8> queue;
 };
 
 struct Match
@@ -238,6 +240,21 @@ struct Match
   std::optional<Clock::time_point> linger_until;
   // Host: the app heard that the opponent went ("friend-left <why>"), since they joined.
   bool friend_left_told = false;
+
+  // The queue's character select (UX/Queue.h): this player's own game as it was when the queue
+  // matched it (its own character select, its pick, port 1), put back once that room is over for
+  // this player, so the next match finds it as before ("queue image"). Taken at the boundary after
+  // `host` or `join`, armed once the room was really entered (hosting the queue's room, or a session
+  // in it).
+  struct QueueImage
+  {
+    MachineImage image;
+    std::vector<Orca::Net::NandEntry> nand;
+    bool armed = false;
+    Clock::time_point taken{};
+  };
+  std::unique_ptr<QueueImage> queue_image;
+  bool want_queue_image = false;
 };
 
 // Desyncs this process saw, every match (the stats line's "ds").
@@ -677,15 +694,30 @@ Orca::UX::Rules::Mode QueueMode(const std::string& queue)
 
 // The header this machine's game should carry (written only at its alone boundaries): a queue
 // room's while this game hosts it (port 1, not joining), or while it waits in a ranked room for the
-// set's verdict; none otherwise (a friends room, a search from its own room, no room).
-Orca::UX::Rules::Mode WantedRulesMode(const Match& match)
+// set's verdict (with the app's `queue2`, the Slippi-style character select: FLAG_QUEUE2); the
+// queue's own character select's while the player waits there for a match (UX/Queue.h: With Anyone
+// picked with `queue2`, port 1, nobody plugged in; FLAG_SOLO); none otherwise (a friends room, a
+// search from its own room, no room).
+std::pair<Orca::UX::Rules::Mode, u8> WantedRulesMode(const Match& match)
 {
-  if (match.joining || Orca::Online::RoomEnded())
-    return Orca::UX::Rules::Mode::None;
-  const Orca::UX::Rules::Mode mode = QueueMode(Orca::Online::RoomQueue());
-  if (match.local_seat == 0 || (match.linger_until && mode == Orca::UX::Rules::Mode::Ranked))
-    return mode;
-  return Orca::UX::Rules::Mode::None;
+  using Orca::UX::Rules::Mode;
+  namespace MB = Orca::UX::MatchBlock;
+  if (match.joining)
+    return {Mode::None, 0};
+  const Mode mode =
+      Orca::Online::RoomEnded() ? Mode::None : QueueMode(Orca::Online::RoomQueue());
+  if (mode != Mode::None &&
+      (match.local_seat == 0 || (match.linger_until && mode == Mode::Ranked)))
+  {
+    return {mode, Orca::Status::Cap("queue2") ? MB::FLAG_QUEUE2 : u8{0}};
+  }
+  if (mode == Mode::None && Orca::UX::Queue::Active() && Orca::Status::Cap("queue2") &&
+      match.local_seat == 0 && !match.session && !match.linger_until)
+  {
+    return {Orca::UX::Queue::Ranked() ? Mode::Ranked : Mode::Casual,
+            static_cast<u8>(MB::FLAG_SOLO | MB::FLAG_QUEUE2)};
+  }
+  return {Mode::None, 0};
 }
 
 // Boundaries the header has waited to be written since the room called for another: a keyframe
@@ -912,7 +944,7 @@ void HostEvents(Core::System& system, Match& match)
       }
       NOTICE_LOG_FMT(ROLLBACK, "Drop-in: {} arrived for port {}", event.name, event.seat + 1);
       Core::DisplayMessage(fmt::format("{} is joining on port {}", event.name, event.seat + 1), 4000);
-      match.waiting[event.seat] = {event.name, event.controls};
+      match.waiting[event.seat] = {event.name, event.controls, event.queue};
       match.keyframe_wanted = true;
       Orca::Status::State("friend-joining");
     }
@@ -1075,7 +1107,7 @@ void HostEvents(Core::System& system, Match& match)
     match.plugging.insert(seat);
     NOTICE_LOG_FMT(ROLLBACK, "Drop-in: port {} is {} from frame {}{}", seat + 1, it->second.name,
                    next, it->second.controls.empty() ? "" : ", with their own controls");
-    AddName(match, {seat, next, it->second.name, it->second.controls});
+    AddName(match, {seat, next, it->second.name, it->second.controls, it->second.queue});
     // The newcomer plugs in only once every player holds its values: its plug frame, which every
     // player hears of before running it, then comes after them.
     match.session->RequireValues(seat, match.names_version);
@@ -1589,9 +1621,11 @@ void HostInPlay(Match& match, const std::string& code)
   NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: hosting room {} from frame {}", code, match.running + 1);
 }
 
+bool MaybeRestoreQueueImage(Core::System& system, Match& match);
+
 // Takes the app's commands at a boundary where the game may change hands: never mid re-run, never
 // during a launch join.
-void TakeCommands(Match& match)
+void TakeCommands(Core::System& system, Match& match)
 {
   // A command sent before the app's "caps" line waits here (queued in Online) until it arrives.
   if (!Orca::Status::Cap("join") && !Orca::Status::Cap("leave") && !Orca::Status::Cap("host"))
@@ -1605,16 +1639,151 @@ void TakeCommands(Match& match)
     return;
   if (Orca::Status::Cap("leave") && Orca::Online::TakeLeaveRequest())
     Leave(match);
+  // A room the queue made that is over for this player puts its own game back before the next one
+  // (UX/Queue.h): a quick pairing must not start from the last opponent's character select.
+  const bool restored = MaybeRestoreQueueImage(system, match);
+  // On the queue's own character select (or just put back there), the game as it is now is the one
+  // to come back to.
+  const bool queue_css =
+      Orca::Status::Cap("queue2") && (restored || Orca::UX::Queue::OnSoloCss());
   if (Orca::Status::Cap("join"))
   {
     if (const auto code = Orca::Online::TakeJoinRequest())
+    {
+      match.want_queue_image = queue_css && !match.session && !match.joining;
       JoinInPlay(match, *code);
+    }
   }
   if (Orca::Status::Cap("host"))
   {
     if (const auto code = Orca::Online::TakeHostRequest())
+    {
+      match.want_queue_image = queue_css && !match.session && !match.joining;
       HostInPlay(match, *code);
+    }
   }
+}
+
+// ---- The queue image (UX/Queue.h) ----
+
+// This player's own game at this boundary (the start of the frame about to run), with its NAND:
+// what the queue's room is over for it puts back.
+void CaptureQueueImage(Core::System& system, Match& match)
+{
+  match.want_queue_image = false;
+  auto qi = std::make_unique<Match::QueueImage>();
+  const auto start = Clock::now();
+  if (!SnapshotRing::Capture(system, &qi->image, false))
+  {
+    ERROR_LOG_FMT(ROLLBACK, "Queue: capturing this player's own game failed");
+    return;
+  }
+  if (IOS::HLE::FS::HostFileSystem* nand = HostNand(system))
+  {
+    nand->CloseHostFiles();
+    const bool ok = Orca::Net::ReadNandTree(nand->HostRoot(), &qi->nand);
+    nand->ReopenHostFiles();
+    if (!ok)
+    {
+      ERROR_LOG_FMT(ROLLBACK, "Queue: reading the NAND for this player's own game failed");
+      return;
+    }
+  }
+  qi->taken = Clock::now();
+  u64 nand_bytes = 0;
+  for (const Orca::Net::NandEntry& e : qi->nand)
+    nand_bytes += e.data.size();
+  NOTICE_LOG_FMT(ROLLBACK, "Queue: this player's own game kept at frame {} ({:.0f} ms, NAND {} "
+                 "KB)",
+                 match.running + 1, MsSince(start), nand_bytes / 1024);
+  match.queue_image = std::move(qi);
+}
+
+// Whether this game is in a room the queue made (its welcome said casual or ranked).
+bool InQueueRoom()
+{
+  return !Orca::Online::RoomEnded() && QueueMode(Orca::Online::RoomQueue()) !=
+                                           Orca::UX::Rules::Mode::None;
+}
+
+// Puts this player's own game back (the queue image) once the queue's room is over for it: solo,
+// nothing of drop-in under way, not waiting in a ranked room for its verdict. On port 1, in a room
+// of its own; the player is ready again unless their own ready timer ran out.
+bool MaybeRestoreQueueImage(Core::System& system, Match& match)
+{
+  if (!match.queue_image)
+    return false;
+  Match::QueueImage& qi = *match.queue_image;
+  // Armed once the room was really entered: hosting it (its welcome), or a session in it.
+  if (!qi.armed && InQueueRoom() &&
+      ((match.local_seat == 0 && !match.joining) || (match.joining && match.session)))
+  {
+    qi.armed = true;
+    NOTICE_LOG_FMT(ROLLBACK, "Queue: in room {} ({})", Orca::Online::Code(),
+                   Orca::Online::RoomQueue());
+  }
+  // Out of the queue (backed out to the menus): nothing to come back to.
+  if (!Orca::UX::Queue::Active())
+  {
+    match.queue_image.reset();
+    return false;
+  }
+  if (!qi.armed || match.session || match.joining || match.download || match.job ||
+      match.linger_until || !match.waiting.empty() || !match.plugging.empty() || InQueueRoom() ||
+      !match.port || match.port->CatchingUp())
+  {
+    return false;
+  }
+  std::unique_ptr<Match::QueueImage> image = std::move(match.queue_image);
+  const auto start = Clock::now();
+  IOS::HLE::FS::HostFileSystem* nand = HostNand(system);
+  if (!nand || !Core::WiiRootIsTemporary())
+  {
+    ERROR_LOG_FMT(ROLLBACK, "Queue: no session NAND to put this player's own game back into");
+    return false;
+  }
+  nand->CloseHostFiles();
+  // A new ring (the old one's snapshots and its NAND journal are of the room's game) before the
+  // NAND changes under it, as a keyframe's load does.
+  match.port.reset();
+  match.port = std::make_unique<RingPort>(system, MAX_ROLLBACK);
+  if (!Orca::Net::ReplaceNandTree(nand->HostRoot(), image->nand))
+  {
+    StopEmulation(system, "Couldn't go back to your own game: its save folder couldn't be "
+                          "replaced");
+    Orca::Status::Error("internal", "Couldn't go back to your own game");
+    End("queue image");
+    return false;
+  }
+  nand->ReloadFst();
+  const int frame = match.running + 1;
+  if (!match.port->LoadImage(std::move(image->image), frame))
+  {
+    StopEmulation(system, "Couldn't go back to your own game");
+    Orca::Status::Error("internal", "Couldn't go back to your own game");
+    End("queue image");
+    return false;
+  }
+  Orca::Events::NoteResync();
+  match.log.clear();
+  match.log_base = frame;
+  match.queued_local.clear();
+  match.keyframe.reset();
+  // This player's own game plays port 1; a room of its own opens (a former joiner had none).
+  Reseat(match);
+  if (match.tell_no_room)
+  {
+    match.tell_no_room = false;
+    match.reopen_pending = Clock::now() + REOPEN_DELAY;
+  }
+  const bool mine = Orca::UX::Queue::TakeTimeoutWasMine();
+  Orca::UX::Queue::AfterRestore(!mine);
+  NOTICE_LOG_FMT(ROLLBACK, "Queue: back on this player's own character select at frame {} in {:.0f} "
+                 "ms ({:.1f} s after the room's game was kept){}",
+                 frame, MsSince(start),
+                 std::chrono::duration<double>(start - image->taken).count(),
+                 mine ? "; not ready (the ready timer ran out on us)" : "");
+  return true;
 }
 
 // A joiner whose host's game carries another header than this room's queue calls for (another
@@ -1712,11 +1881,15 @@ void RefreshOwnValues(Match& match, int frame)
   if (own.empty() && now)
     own = now->name;
   std::vector<u8> controls = Orca::Events::OwnControls();
-  if (now ? now->name == own && now->controls == controls : own.empty() && controls.empty())
+  std::vector<u8> queue = Orca::Events::OwnQueue();
+  if (now ? now->name == own && now->controls == controls && now->queue == queue :
+            own.empty() && controls.empty() && queue.empty())
+  {
     return;
+  }
   NOTICE_LOG_FMT(ROLLBACK, "Drop-in: port {} is {} from frame {}{}", match.local_seat + 1, own,
                  frame, controls.empty() ? "" : ", with their own controls");
-  AddName(match, {match.local_seat, frame, std::move(own), std::move(controls)});
+  AddName(match, {match.local_seat, frame, std::move(own), std::move(controls), std::move(queue)});
 }
 
 // The controllers plugged in at `frame`: in a session, by its synced plan; solo, this player's own.
@@ -1738,6 +1911,7 @@ std::vector<Orca::Events::PortInfo> PortsAt(Match& match, int frame)
     {
       info.name = entry->name;
       info.controls = entry->controls;
+      info.queue = entry->queue;
     }
     return info;
   };
@@ -1909,6 +2083,9 @@ void ConfirmResults(Match& match)
     if (plugged >= 2)
       plug = latest;
   }
+  // The queue's casual ready timer that ran out (UX/Queue.h), at the same final frame on both
+  // machines: the page leaves the room.
+  Orca::UX::Queue::ConfirmTimeout(confirmed, match.local_seat);
   // Ranked's character select: a player who never picked in time before the set's first game
   // (UX/OnlineRules.h, both machines alike at the same final frame). That player's own game leaves
   // the room, which the room counts as the set's forfeit; the other waits there for the verdict.
@@ -2048,6 +2225,11 @@ std::optional<int> Boundary(Core::System& system,
     }
   }
 
+  // A room the queue made that is over for this player: its own game back first (UX/Queue.h), so
+  // a former joiner hosts a room of its own again rather than saying "no-room", and this boundary's
+  // frame hook already reads the player's own character select.
+  MaybeRestoreQueueImage(system, match);
+
   // Only once the room it left has finished leaving: its emptied mirror is the page's last word
   // about it, and the page must not see that room again after "no-room".
   if (match.tell_no_room && !Orca::Online::RoomsLeaving())
@@ -2058,7 +2240,10 @@ std::optional<int> Boundary(Core::System& system,
   }
 
   // The online rules' header this game's room calls for, written at its alone boundaries.
-  Orca::UX::Rules::SetWanted(WantedRulesMode(match));
+  {
+    const auto [mode, flags] = WantedRulesMode(match);
+    Orca::UX::Rules::SetWanted(mode, flags);
+  }
   s_header_waiting = Orca::UX::Rules::HeaderSettled() ? 0 : s_header_waiting + 1;
 
   // The in-game UX's frame hook: before this boundary's snapshot or keyframe, so what it writes is
@@ -2078,8 +2263,12 @@ std::optional<int> Boundary(Core::System& system,
     }
   }
 
-  TakeCommands(match);
+  TakeCommands(system, match);
   LeaveOnMismatch(match);
+  if (match.want_queue_image)
+    CaptureQueueImage(system, match);
+  else
+    MaybeRestoreQueueImage(system, match);
 
   if (match.joining && !match.session && match.join_in_play)
   {

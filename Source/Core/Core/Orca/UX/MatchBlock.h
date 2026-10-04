@@ -30,7 +30,7 @@
 //   CharOrder.h).
 //
 // Layout (offsets from BASE):
-//   +0x00..+0x0F  header: magic, version, mode, ruleset, coin, the room's hash
+//   +0x00..+0x0F  header: magic, version, mode, ruleset, coin, the room's hash, the queue flags
 //   +0x10..+0x7F  Project+'s stage flow's set (State below; a casual game's preferred stages at
 //                 +0x40, its fight count at +0x10)
 //   +0x80..+0xBF  the stage flows' steps (State below for Project+; BrawlStages.h for Brawl, whose
@@ -38,7 +38,11 @@
 //   (The casual stage pick needs no range of its own: casual and ranked never share a block, and
 //   +0x140..+0x17F, once offered for it, is Project+'s SAVED_RSS.)
 //   +0xC0..+0xCF  Phase 1's own (the ready timer)
-//   +0xD0..+0x1F0 the player's own rules, saved at the header's write
+//   +0xD0..+0x1A7 the player's own rules, saved at the header's write (Project+'s stage switch
+//                 data from +0x100)
+//   +0x1C0..+0x1EF the queue's character select (Queue.h: ready flags, the ready timer, the raw
+//                 buttons, the opponent's pick)
+//   +0x1F0        the saved rules' flags
 //   +0x200..+0x20F the character order (CharOrder.h)
 //   +0x210..+0x28F the ranked set as the results track follows it (SetBlock.h, authoritative)
 //   +0x290..+0x297 a friend's drop-in from the menus (OnlineMenu.h FriendsMove)
@@ -67,7 +71,15 @@ constexpr u32 COIN = BASE + 0x07;
 // u32: the room code's hash (RoomHash): a new queue room with the same mode and ruleset still
 // starts a fresh set.
 constexpr u32 ROOM = BASE + 0x08;
-// +0x0C..+0x0F: reserved (zero).
+// u8: the queue's flags (Queue.h). FLAG_SOLO: this game is its player's own, on the queue's
+// character select before a match (no room of the queue's; the "With Anyone" pick with an app that
+// has `queue2`). FLAG_QUEUE2: the Slippi-style character select (ready with Start, the 30 s ready
+// timer, the opponent's pick written in): the host's app has `queue2`. A toggled patch group reads
+// the word at FLAGS (`when 806F238C & 01000000 == 00000000`: not solo).
+constexpr u32 FLAGS = BASE + 0x0C;
+constexpr u8 FLAG_SOLO = 0x01;
+constexpr u8 FLAG_QUEUE2 = 0x02;
+// +0x0D..+0x0F: reserved (zero).
 constexpr u32 HEADER_SIZE = 0x10;
 
 // What the header's mode byte says. A toggled patch group reads it as the word at VERSION
@@ -121,6 +133,12 @@ constexpr u32 SAVED_RSS = BASE + 0x100;
 constexpr u32 SAVED_RSS_SIZE = 0xA8;
 constexpr u32 SAVED_FLAGS = BASE + 0x1F0;  // u8: bit 0 rules saved, bit 1 RSS saved
 
+// ---- The queue's character select (Queue.h), +0x1C0..+0x1EF ----
+// (The sprint assigned this track +0x100..+0x13F, which is Project+'s saved stage switch data,
+// SAVED_RSS; +0x1A8..+0x1EF is the free run before SAVED_FLAGS.)
+constexpr u32 QUEUE = BASE + 0x1C0;
+constexpr u32 QUEUE_SIZE = 0x30;
+
 // ---- Past the 512 bytes, in the same dead code up to kMatchBlockLimit ----
 constexpr u32 CHAR_ORDER = BASE + 0x200;  // 16 bytes (CharOrder.h)
 constexpr u32 CHAR_ORDER_SIZE = 0x10;
@@ -148,6 +166,7 @@ constexpr u32 FRIENDS_END = FRIENDS + 8;
 static_assert(SAVED_RSS + SAVED_RSS_SIZE <= SAVED_FLAGS);
 static_assert(RANKED_SET + 0x80 <= FRIENDS && FRIENDS_END <= FreeSpace::kMatchBlockLimit);
 static_assert(FRIENDS_MENU_SINCE % 4 == 0);
+static_assert(SAVED_RSS + SAVED_RSS_SIZE <= QUEUE && QUEUE + QUEUE_SIZE <= SAVED_FLAGS);
 static_assert(SAVED_FLAGS < BASE + SIZE);
 static_assert(CHAR_ORDER + CHAR_ORDER_SIZE <= RANKED_SET);
 static_assert(CSS_TIMER_START + 4 <= BASE + 0xC0 + PHASE1_SIZE);
@@ -231,8 +250,8 @@ std::optional<State> Read(const GuestMemory& memory);
 // FreeSpace.h kMatchBlockOriginalWord) or a block already. Before the game loads sora_scene this
 // memory is something else's.
 bool Present(const GuestMemory& memory);
-// Writes `state`'s bytes (+0x00..+0x8F; the header's room hash is not State's), only the bytes
-// that differ, and only where Present. Returns how many bytes changed.
+// Writes `state`'s bytes (+0x00..+0x8F; the header's room hash and the queue's flags are not
+// State's), only the bytes that differ, and only where Present. Returns how many bytes changed.
 int Write(GuestMemory& memory, const State& state);
 // No header: the dead code's first word back in place of the magic (nothing else is read without
 // it). Returns bytes changed.

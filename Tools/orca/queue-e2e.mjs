@@ -17,6 +17,15 @@
 //     port 2 walks off the stage until it has no stocks left.
 // It checks the stdout sequence and that both Orcas print the same verdicts (each from its side).
 //
+// --q2: the queue2 flow (ORCA.md "The queue's character select", the page's half in YouGame
+// lib/orca-queue.ts): the bridge also answers `queue2`; on the queue's own character select each
+// side picks and presses Start, and only `orca queue ready <q> <char> <costume>` starts its search
+// (`queue rating` first); matched, the joiner's pick is put into the host's game (its log says so),
+// both press Start to ready and the match goes on. Scenarios with --q2: match (the default), skip
+// (the joiner holds Z: `orca queue skip`, it leaves, and both are back on their own character
+// select, ready again), timeout (casual: nobody readies, both print `orca queue timeout me`, leave,
+// and are back on their own character select, not ready).
+//
 //   node Tools/orca/queue-e2e.mjs <dolphin-emu-nogui> <disc> [--pplus <launcher.dol>]
 //       [--queue ranked|casual] [--games <n>] [--site <url>] [--keep] [--alarm <s>]
 //       [--slug <listing> --cookie-a <file> --cookie-b <file> --id-a <id> --id-b <id>]
@@ -63,6 +72,7 @@ const SCENARIO = opt("--scenario", "match");
 // (its user folder's ScreenShots), from --shots-from (default 1500).
 const SHOTS = opt("--shots");
 const SHOTS_FROM = opt("--shots-from", "1500");
+const Q2 = argv.includes("--q2");
 const PROFILE = PPLUS ? "pplus32" : "rsbe01";
 const DEV_GAME = `orca-queue-e2e-${PROFILE}`;
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), "orca-queue-e2e-"));
@@ -114,6 +124,7 @@ class Side {
     this.ownRooms = [];
     this.pad = { buttons: 0, axes: [128, 128, 128, 128] };
     this.results = [];
+    this.queueLog = []; // Orca's "Queue: ..." log lines (UX/Queue.h, OnlineMatch's queue image)
   }
 
   async startBridge() {
@@ -343,6 +354,11 @@ class Side {
         err = err.slice(i + 1);
         const s = /Scene frame \d+: \S* -> (\S+)/.exec(line);
         if (s) this.onScene(s[1]);
+        const q = /(Queue: .*)$/.exec(line);
+        if (q) {
+          this.queueLog.push(q[1]);
+          log(`${this.name}~ ${q[1]}`);
+        }
         if (
           /Matchmaking:|Orca room: (report|room match|game|the set|casual|beginning|a matchmade|\{)/.test(
             line,
@@ -443,6 +459,13 @@ class Side {
     });
   }
 
+  async pressAll(buttons, ms = 120) {
+    for (const b of buttons) this.pad.buttons |= BTN[b];
+    await sleep(ms);
+    for (const b of buttons) this.pad.buttons &= ~BTN[b];
+    await sleep(120);
+  }
+
   async press(button, ms = 120) {
     this.pad.buttons |= BTN[button];
     await sleep(ms);
@@ -501,6 +524,11 @@ async function queueUp(side, queue, from = 0) {
     fail(`${side.name}: "${menu.line}": Orca says local with host on`);
   if (menu.m[2] !== queue)
     fail(`${side.name}: picked ${menu.m[2]}, wanted ${queue}`);
+  return search(side, queue);
+}
+
+// The page's search: a queue ticket in Orca's own mode and lobby, then /match until matched.
+async function search(side, queue) {
   if (!side.lastOwn) fail(`${side.name}: no ticket of Orca's own yet`);
   const mode = `${side.lastOwn.mode}-${queue}`;
   const tk = await side.ticket({
@@ -842,6 +870,226 @@ function noErrors(sides, allowed = /^$/) {
   }
 }
 
+// ---- queue2 (--q2) ----
+
+const CAPS_Q2 = "caps join leave stats pause delay perf direct host results queue2";
+
+// On the queue's own character select: up into the grid (that joins the panel), A on a character,
+// then Start until Orca says the player is ready.
+async function q2Ready(side, queue) {
+  await side.waitScene("scSelctCharacter", 60000);
+  await sleep(2500);
+  await side.hold([128, 255, 128, 128], 450);
+  await sleep(300);
+  await side.press("A");
+  await sleep(1500);
+  for (let tries = 0; ; ++tries) {
+    const at = side.lines.length;
+    await side.press("START");
+    const r = await side
+      .expect(/^orca queue ready (casual|ranked) (\d+) (\d+)$/, 4000, at)
+      .catch(() => null);
+    if (r) {
+      if (r.m[1] !== queue) fail(`${side.name}: ${r.line}, wanted ${queue}`);
+      return r;
+    }
+    if (tries >= 4) fail(`${side.name}: Start on its own character select never readied it`);
+  }
+}
+
+// The page's half (lib/orca-queue.ts with queue2): `orca menu online <q>` alone searches nothing;
+// `orca queue ready` does, after the player's rating.
+async function q2Search(side, queue, from) {
+  const menu = await side.expect(/^orca menu online (casual|ranked)( local)?$/, 60000, from);
+  if (menu.m[2]) fail(`${side.name}: "${menu.line}": Orca says local with host on`);
+  if (menu.m[1] !== queue) fail(`${side.name}: picked ${menu.m[1]}, wanted ${queue}`);
+  await sleep(1500);
+  if (side.lines.slice(from).some((l) => l && l.startsWith("orca queue ready")))
+    fail(`${side.name}: ready before the player pressed Start`);
+  const ready = await q2Ready(side, queue);
+  side.pick = [Number(ready.m[2]), Number(ready.m[3])];
+  side.send(`queue rating ${queue === "ranked" ? (side.name === "ada" ? 1532 : 1488) : "-"}`);
+  return search(side, queue);
+}
+
+async function q2Meet(first, second, queue, pick) {
+  const from = [first.lines.length, second.lines.length];
+  await pick(first);
+  const q1 = q2Search(first, queue, from[0]);
+  await sleep(6000);
+  await pick(second);
+  const q2 = q2Search(second, queue, from[1]);
+  const [m1, m2] = await Promise.all([q1, q2]);
+  if (m1.room !== m2.room) fail(`matched into different rooms: ${m1.room} ${m2.room}`);
+  const host = m1.slot === 0 ? first : second;
+  const joiner = host === first ? second : first;
+  log(`host ${host.name}, joiner ${joiner.name}, room ${m1.room}`);
+  const hostFrom = host.lines.length;
+  await Promise.all([hostOrJoin(first, m1.room, m1.slot), hostOrJoin(second, m2.room, m2.slot)]);
+  await host.expect(/^orca state friend-joined$/, 120000, hostFrom);
+  if (host.lines.slice(hostFrom).some((l) => l === "unsupported host")) fail("unsupported host");
+  return { host, joiner, room: m1.room };
+}
+
+// The room's character select: game 1, the joiner's pick goes into the host's game by itself; then
+// both press Start (ready) until the game goes on. Ranked later games: the character order first.
+async function q2Css(host, joiner, first) {
+  await host.waitScene("scSelctCharacter", 120000);
+  if (first) {
+    const at = Date.now();
+    await waitFor(
+      () => host.queueLog.some((l) => /port 2's pick is in/.test(l)),
+      30000,
+      "the joiner's pick never went into the host's game",
+    );
+    log(`the joiner's pick went in (${((Date.now() - at) / 1000).toFixed(1)} s on the host)`);
+  }
+  await sleep(1500);
+  if (QUEUE === "ranked" && !first) {
+    await Promise.all([
+      host.hold([128, 255, 128, 128], 450),
+      joiner.hold([128, 255, 128, 128], 450),
+    ]);
+    await sleep(300);
+  }
+  for (let tries = 0; host.scene === "scSelctCharacter"; ++tries) {
+    if (tries >= (QUEUE === "ranked" ? 120 : 30)) fail("the character select never went on");
+    if (QUEUE === "ranked" && !first && tries < 3) {
+      await Promise.all([host.press("A"), joiner.press("A")]);
+      await sleep(400);
+    }
+    await Promise.all([host.press("START"), joiner.press("START")]);
+    await sleep(1200);
+  }
+}
+
+async function q2Fight(host, joiner) {
+  if (QUEUE === "casual") {
+    await host.waitScene("scMelee", 60000);
+  } else {
+    await host.waitScene("scSelStage", 60000);
+    log("ranked stage select: waiting for the turn timers' defaults");
+    await host.waitScene("scMelee", 200000);
+  }
+  await sleep(6000);
+  joiner.pad.axes = [0, 128, 128, 128];
+  const hostFrom = host.lines.length;
+  await host
+    .waitScene("scVsResult", 240000)
+    .finally(() => (joiner.pad.axes = [128, 128, 128, 128]));
+  await sleep(4000);
+  const presser = setInterval(() => {
+    if (host.scene !== "scVsResult") return;
+    host.press(Date.now() % 2 ? "A" : "START");
+    joiner.press("A");
+  }, 900);
+  try {
+    await Promise.race([
+      host.waitScene("scSelctCharacter", 60000),
+      host.expect(/^orca state friend-left match-over$/, 60000, hostFrom),
+    ]);
+  } finally {
+    clearInterval(presser);
+  }
+}
+
+// After the room: each side back on its own character select (the queue image), and `orca queue
+// ready` again unless its own ready timer ran out.
+async function q2Back(side, from, ready) {
+  await waitFor(
+    () => side.queueLog.some((l, i) => i >= from && /back on this player's own character select/.test(l)),
+    30000,
+    `${side.name}: never back on its own character select`,
+  );
+  const back = side.queueLog.slice(from).find((l) => /back on this player's own/.test(l));
+  log(`${side.name}: ${back}`);
+  if (ready) {
+    await side.expect(/^orca queue ready (casual|ranked) (\d+) (\d+)$/, 15000, side.linesAtBack);
+  } else {
+    await sleep(5000);
+    if (side.lines.slice(side.linesAtBack).some((l) => l && l.startsWith("orca queue ready")))
+      fail(`${side.name}: ready again after its own ready timer ran out`);
+  }
+}
+
+async function q2Main() {
+  const a = new Side("ada", opt("--cookie-a"), opt("--id-a"));
+  const b = new Side("bo", opt("--cookie-b"), opt("--id-b"));
+  sides.push(a, b);
+  for (const s of [a, b]) await s.startBridge();
+  log(`work ${WORK}; ${SLUG ? `listing ${SLUG}` : `dev game ${DEV_GAME}`}; ${QUEUE}; q2 ${SCENARIO}`);
+  a.start();
+  await sleep(4000);
+  b.start();
+  for (const s of [a, b]) {
+    await s.expect(/^orca caps .*\bhost\b/, 120000);
+    if (!s.lines.some((l) => l && /^orca caps .*\bqueue2\b/.test(l)))
+      fail(`${s.name}: Orca offers no queue2`);
+    s.send(CAPS_Q2);
+  }
+  const { host, joiner, room } = await q2Meet(a, b, QUEUE, (s) => menuToQueue(s, QUEUE));
+  const marks = () => {
+    for (const s of [host, joiner]) {
+      s.queueAt = s.queueLog.length;
+      s.linesAtBack = s.lines.length;
+    }
+  };
+  if (SCENARIO === "skip") {
+    await host.waitScene("scSelctCharacter", 120000);
+    await waitFor(
+      () => host.queueLog.some((l) => /port 2's pick is in/.test(l)),
+      30000,
+      "the joiner's pick never went into the host's game",
+    );
+    marks();
+    const from = joiner.lines.length;
+    joiner.pad.buttons |= BTN.Z;
+    await joiner.expect(/^orca queue skip$/, 6000, from).finally(() => {
+      joiner.pad.buttons &= ~BTN.Z;
+    });
+    joiner.send("leave");
+    await host.expect(/^orca state friend-left /, 60000, host.linesAtBack);
+    await Promise.all([q2Back(host, host.queueAt, true), q2Back(joiner, joiner.queueAt, true)]);
+    noErrors([a, b]);
+    log(`PASS: skip: ${joiner.name} held Z, left ${room}; both back on their own character select, ready`);
+    return;
+  }
+  if (SCENARIO === "timeout") {
+    if (QUEUE !== "casual") fail("timeout is a casual scenario");
+    marks();
+    await Promise.all([
+      host.expect(/^orca queue timeout me$/, 60000, host.linesAtBack),
+      joiner.expect(/^orca queue timeout me$/, 60000, joiner.linesAtBack),
+    ]);
+    host.send("leave");
+    joiner.send("leave");
+    await Promise.all([q2Back(host, host.queueAt, false), q2Back(joiner, joiner.queueAt, false)]);
+    noErrors([a, b]);
+    log("PASS: timeout: nobody readied; both printed timeout me, left, and are back, not ready");
+    return;
+  }
+  // The match: game after game until the set (ranked) or --games (casual), then the joiner leaves.
+  for (let g = 0; g < GAMES; ++g) {
+    // A ranked set's room closes right after its last game: the way back starts during it.
+    if (QUEUE === "ranked") marks();
+    await q2Css(host, joiner, g === 0);
+    await q2Fight(host, joiner);
+    if (QUEUE === "ranked" && host.results.some((r) => r.k === "set")) break;
+  }
+  if (QUEUE !== "ranked") marks();
+  if (QUEUE === "ranked") {
+    await host.expect(/^orca result \{"q":"ranked","k":"set"/, 60000);
+    await joiner.expect(/^orca result \{"q":"ranked","k":"set"/, 60000);
+  } else {
+    joiner.send("leave");
+    await host.expect(/^orca state friend-left /, 60000, host.linesAtBack);
+  }
+  await Promise.all([q2Back(host, host.queueAt, true), q2Back(joiner, joiner.queueAt, true)]);
+  const n = sameVerdicts(host, joiner);
+  noErrors([a, b]);
+  log(`PASS: q2 ${QUEUE}: ${n} verdicts the same on both sides; both back on their own character select`);
+}
+
 // Back out of the character select to the With Anyone page (the cursor comes back on the pick),
 // then pick it again.
 async function pickAgain(side) {
@@ -852,6 +1100,7 @@ async function pickAgain(side) {
 }
 
 async function main() {
+  if (Q2) return q2Main();
   if (SCENARIO === "cancel") return cancelScenario();
   if (SCENARIO === "noshow") return noShowScenario();
   const a = new Side("ada", opt("--cookie-a"), opt("--id-a"));

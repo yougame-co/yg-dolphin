@@ -21,6 +21,7 @@
 #include "Core/Orca/UX/OnlineMenu.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/UX/Probe.h"
+#include "Core/Orca/UX/Queue.h"
 #include "Core/Orca/UX/RankedPPlus.h"
 #include "Core/Orca/UX/RankedSet.h"
 #include "Core/Orca/UX/Results.h"
@@ -40,6 +41,12 @@ void Merge(Rollback::InputGate::Masks& masks, const Rollback::InputGate::Masks& 
     masks[port].a_as |= more[port].a_as;
     masks[port].main_stick = masks[port].main_stick || more[port].main_stick;
     masks[port].c_stick = masks[port].c_stick || more[port].c_stick;
+    if (more[port].steer)
+    {
+      masks[port].steer = true;
+      masks[port].steer_x = more[port].steer_x;
+      masks[port].steer_y = more[port].steer_y;
+    }
   }
 }
 }  // namespace
@@ -60,9 +67,25 @@ void Init()
     Merge(masks, Rules::GateMasks(memory));
     Merge(masks, RankedPPlus::Masks(memory));
     BrawlStages::GateMasks(guard, &masks);
-    Merge(masks, CharOrder::GateFrame(guard));
+    Rollback::InputGate::Masks order = CharOrder::GateFrame(guard);
+    // On a queue2 room's character select the ready timer gives the Start that goes on (Queue.h):
+    // the character order's own Start, once its picks are in, is not pressed.
+    if (Queue::OwnsStart(guard))
+    {
+      for (Rollback::InputGate::Mask& mask : order)
+        mask.press &= static_cast<u16>(~PAD_BUTTON_START);
+    }
+    Merge(masks, order);
+    Merge(masks, Queue::GateFrame(guard));
     return masks;
   });
+  // The queue's character select sees the presses the gate keeps from the game (Start, B, Z):
+  // each frame's raw buttons go into the match block before it runs (InputGate.h, Queue.h).
+  Rollback::InputGate::SetLatch(
+      [](const Core::CPUThreadGuard& guard,
+         const std::array<std::optional<GCPadStatus>, Rollback::InputGate::PORTS>& raw) {
+        Queue::LatchFrame(guard, raw);
+      });
   // The name tags write emulated memory: the compatibility key carries their version.
   Orca::Events::SetUXCompatVersion(kCompatVersion);
   // At every frame boundary, first runs and re-runs, before the session saves anything there, with
@@ -134,6 +157,9 @@ void Init()
     // A ranked set's character order on later games' character select (CharOrder.h): its state
     // in the match block, which the input gate reads for the frame about to run.
     CharOrder::Frame(guard, frame, resimulating, ports);
+    // The queue's character select (Queue.h): its ready flags and timer, the joiner's pick put in,
+    // after the character order (a ranked later game's ready timer waits for it).
+    Queue::Frame(guard, frame, resimulating, ports, alone);
     // The character select's title (CssTitle.h): CASUAL, RANKED or FRIENDS, from the header the
     // rules just wrote, the menu's pick and the ports (a pure function of them).
     CssTitle::Frame(guard, resimulating, ports);
@@ -160,6 +186,7 @@ void Init()
 void Shutdown()
 {
   Rollback::InputGate::SetSource({});
+  Rollback::InputGate::SetLatch({});
   Orca::Events::SetStallCallback({});
   Orca::Events::SetBoundaryCallback({});
   Orca::Events::SetFrameCallback({});

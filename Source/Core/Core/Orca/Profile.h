@@ -174,6 +174,9 @@ std::optional<PowerPC::CPUCore> TestCpuCore();
 std::optional<int> TestShaderWaitMs();
 std::string TestGateSpec();  // ORCA_TEST_GATE in a session, else empty
 std::string TestQueueSpec();      // ORCA_TEST_QUEUE in a session, else empty
+// ORCA_TEST_QUEUE_PICK in a session, else empty: <frame>:<char>:<costume>:<x>:<y>[:<rating>], port
+// 2 plugged in from that frame with that queue identity (UX/Queue.h), in a harness run.
+std::string TestQueuePickSpec();
 std::string TestCharOrderSpec();  // ORCA_TEST_CHAR_ORDER in a session, else empty
 // ORCA_SHADER_WAIT_S: how long the app lets a session's boot wait for its shaders, in seconds (60 to
 // 900). An app sets it when it keeps a boot alive while `orca shaders` lines arrive; without it the

@@ -36,6 +36,9 @@ struct RoomOptions
   // A joiner's own controls (Orca::Events::OwnControls), told to the host in its hello: the host
   // puts them in the joiner's port (KeyframeInfo::Name::controls). Empty: none.
   std::vector<u8> controls;
+  // A joiner's queue identity (Orca::Events::OwnQueue), told to the host in its hello like the
+  // controls (KeyframeInfo::Name::queue). Empty: none.
+  std::vector<u8> queue;
   // With no room_code, ask the desktop app whether the player opened an invite (only at launch: a
   // room opened later, after a leave, is always a new one).
   bool ask_app_for_room = true;
@@ -61,6 +64,9 @@ struct KeyframeInfo
     // The player's own controls (Orca::Events::PortInfo::controls; at most MAX_CONTROLS bytes,
     // empty: none).
     std::vector<u8> controls;
+    // The player's queue identity (Orca::Events::PortInfo::queue; at most MAX_QUEUE bytes, empty:
+    // none).
+    std::vector<u8> queue;
     bool operator==(const Name&) const = default;
   };
   std::vector<Name> names;
@@ -71,6 +77,8 @@ struct KeyframeInfo
 
 // The most bytes a port's controls may have on the wire (UX/NameTags.h's profile is 46).
 constexpr size_t MAX_CONTROLS = 64;
+// The most bytes a port's queue identity may have on the wire (UX/Queue.h's is 13).
+constexpr size_t MAX_QUEUE = 32;
 
 // Something another player in the room did.
 struct PeerEvent
@@ -101,6 +109,8 @@ struct PeerEvent
   std::string reason;
   // Hold: whether the host holds the join now.
   bool holding = false;
+  // Arrived: the joiner's queue identity from its hello (RoomOptions::queue; empty: none).
+  std::vector<u8> queue;
 };
 
 // How the other players' inputs reach this one (DirectLink.h): the worst of them.
@@ -267,8 +277,9 @@ private:
 std::string EncodePacket(const Packet& packet);
 bool DecodePacket(const std::string& json, Packet* packet);
 // Port values in the room's "nm" and "kf" messages (exposed for tests): each [seat, from, name]
-// and, for a port with controls, their hex; at most 16 entries are read, and controls longer than
-// MAX_CONTROLS bytes, or not hex, are none.
+// and, for a port with controls or a queue identity, the controls' hex (empty for none), then for
+// one with a queue identity its hex; at most 16 entries are read, and controls longer than
+// MAX_CONTROLS bytes, a queue identity longer than MAX_QUEUE, or either not hex, are none.
 picojson::value NamesToJson(const std::vector<KeyframeInfo::Name>& names);
 std::vector<KeyframeInfo::Name> NamesFromJson(const picojson::object& message);
 // A packet from a direct link to the player at `slot`: as through the relay, only for that player's

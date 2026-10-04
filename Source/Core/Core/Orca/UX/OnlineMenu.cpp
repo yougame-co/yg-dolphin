@@ -21,6 +21,7 @@
 #include "Core/Orca/UX/MatchBlock.h"
 #include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/Probe.h"
+#include "Core/Orca/UX/Queue.h"
 
 namespace Orca::UX
 {
@@ -184,19 +185,34 @@ void ReadOnlineMenu(const Core::CPUThreadGuard& guard, bool resimulating, bool a
     NOTICE_LOG_FMT(ROLLBACK, "Online menu: exit code {}: orca menu {}", state.exit_code,
                    MenuEventText(*pick, queue));
     Orca::Status::Menu(MenuEventText(*pick, queue));
-    if (queue && *pick != OnlinePick::Friends)
-      Search::Begin(*pick == OnlinePick::Ranked);
-    else
+    // With the app's `queue2` the player waits on the queue's own character select, and the page
+    // searches once they are ready (UX/Queue.h); before it, as soon as they pick.
+    if (queue && *pick != OnlinePick::Friends && Orca::Status::Cap("queue2"))
+    {
       Search::End();
+      Queue::Begin(*pick == OnlinePick::Ranked);
+    }
+    else if (queue && *pick != OnlinePick::Friends)
+    {
+      Queue::End();
+      Search::Begin(*pick == OnlinePick::Ranked);
+    }
+    else
+    {
+      Queue::End();
+      Search::End();
+    }
     return;
   }
   // Backed out of the character select to the main menu while searching (or matched and still
-  // alone): the search is over.
-  if (alone && state.where == MenuState::Where::Menu && Search::Current() != Search::State::None)
+  // alone), or out of the queue's own character select: the search is over.
+  if (alone && state.where == MenuState::Where::Menu &&
+      (Search::Current() != Search::State::None || Queue::Active()))
   {
     NOTICE_LOG_FMT(ROLLBACK,
                    "Online menu: back on the main menu while searching: orca menu cancel");
     Search::End();
+    Queue::End();
     Orca::Status::Menu("cancel");
   }
 }

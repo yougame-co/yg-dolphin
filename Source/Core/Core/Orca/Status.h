@@ -17,6 +17,8 @@
 //   orca menu <event>, a pick in the game's own Online menu: online casual, online ranked (with the
 //   app's "host"; "... local" without it), online friends, cancel (ORCA.md "Matchmaking")
 //   orca result <json>, a verdict of the room in a matchmade room (with the app's "results")
+//   orca queue ready <casual|ranked> <char> <costume> | unready | skip | timeout me|them, the
+//   queue's character select (with the app's "queue2", UX/Queue.h; through Line())
 //   orca shaders <compiled> <total>, while the boot compiles shaders before the first frame
 // Codes: boot, cancelled (Orca.app's disc picker closed without a disc), disc_missing and
 // disc_unreadable (the -e file isn't there, or won't open: the sentence is its path), disc_revision,
@@ -60,6 +62,11 @@ inline constexpr const char* RESULTS_CAP = "results";
 // random legal stage, no way out of the character and stage select), offered for a profile with a
 // ruleset (Brawl rev 2, Project+). Information for the page: the locks don't wait for its answer.
 inline constexpr const char* LOCKS_CAP = "locks";
+// "queue2": the queue's character select, Slippi-style (UX/Queue.h): With Anyone lands on the
+// player's own character select, `orca queue ready|unready|skip|timeout` lines, the app's
+// `queue rating <n|->`, and a matchmade room's ready timer. Offered with "locks" (a ruleset); with
+// the app's answer the Casual and Ranked picks wait for `orca queue ready` instead of searching.
+inline constexpr const char* QUEUE2_CAP = "queue2";
 // What this build offers for the running profile: CAPS, "results" where its reader is verified,
 // and "locks" where it has a ruleset.
 std::string OfferedCaps();

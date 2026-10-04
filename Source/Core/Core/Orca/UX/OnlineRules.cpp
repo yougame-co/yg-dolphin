@@ -8,6 +8,7 @@
 #include <map>
 #include <mutex>
 #include <utility>
+#include <vector>
 
 #include "Common/Logging/Log.h"
 #include "Core/Orca/Profile.h"
@@ -297,6 +298,7 @@ void ReadyTimer(Writer& w, const Header& h, const std::string& scene, int frame)
 
 // ---- Session state (CPU thread) ----
 std::atomic<Mode> s_wanted{Mode::None};
+std::atomic<u8> s_wanted_flags{0};
 std::atomic<bool> s_settled{true};
 std::mutex s_mutex;
 std::optional<Mode> s_expect;
@@ -331,6 +333,7 @@ Header ReadHeader(const GuestMemory& m)
   const u8 ruleset = m.Read8(B::RULESET);
   h.mode = mode <= 2 ? static_cast<Mode>(mode) : Mode::None;
   h.ruleset = ruleset <= 2 ? static_cast<Ruleset>(ruleset) : Ruleset::None;
+  h.flags = m.Read8(B::FLAGS) & (B::FLAG_SOLO | B::FLAG_QUEUE2);
   return h;
 }
 
@@ -360,13 +363,14 @@ void FreshSet(Writer& w, Mode mode, Ruleset ruleset, u8 coin)
   w.Zero(B::STEP, B::STEP_SIZE);
   w.Zero(B::CSS_TIMER, B::PHASE1_SIZE);
   w.Zero(B::CHAR_ORDER, B::CHAR_ORDER_SIZE);
+  w.Zero(B::QUEUE, B::QUEUE_SIZE);
   w.changed += MatchBlock::Write(
       w.m, MatchBlock::State::Fresh(static_cast<u8>(mode), static_cast<u8>(ruleset), coin));
   w.changed += SetBlock::WriteSet(w.m, SetBlock::SetState{});
 }
 }  // namespace
 
-int WriteHeader(GuestMemory& m, Mode mode, Ruleset ruleset, u8 coin, u32 room)
+int WriteHeader(GuestMemory& m, Mode mode, Ruleset ruleset, u8 coin, u32 room, u8 queue_flags)
 {
   if (!BlockMapped(m))
     return 0;
@@ -405,8 +409,9 @@ int WriteHeader(GuestMemory& m, Mode mode, Ruleset ruleset, u8 coin, u32 room)
     return w.changed;
   }
   coin &= 1;
+  queue_flags &= B::FLAG_SOLO | B::FLAG_QUEUE2;
   if (now.present && now.mode == mode && now.ruleset == ruleset && m.Read8(B::COIN) == coin &&
-      m.Read32(B::ROOM) == room)
+      m.Read32(B::ROOM) == room && m.Read8(B::FLAGS) == queue_flags)
   {
     return 0;
   }
@@ -448,6 +453,7 @@ int WriteHeader(GuestMemory& m, Mode mode, Ruleset ruleset, u8 coin, u32 room)
   w.U8(B::RULESET, static_cast<u8>(ruleset));
   w.U8(B::COIN, coin);
   w.U32(B::ROOM, room);
+  w.U8(B::FLAGS, queue_flags);
   w.U32(B::MAGIC, B::MAGIC_VALUE);
   FreshSet(w, mode, ruleset, coin);
   return w.changed;
@@ -476,8 +482,10 @@ Rollback::InputGate::Masks GateMasks(const GuestMemory& m)
   u16 buttons = 0;
   if (scene == SCENE_CSS)
   {
-    // No B: holding it is the way back to the menus (and B is never needed to pick).
-    buttons = PAD_BUTTON_B;
+    // No B: holding it is the way back to the menus (and B is never needed to pick). On the queue's
+    // own character select before a match B backs out of the search (Queue.h masks it while the
+    // player is ready, when it only stops the search).
+    buttons = h.Solo() ? 0 : PAD_BUTTON_B;
     // Project+'s Code Menu opens from the character select with the D-pad.
     if (h.ruleset == Ruleset::PPlus)
       buttons |= PAD_BUTTON_UP | PAD_BUTTON_DOWN | PAD_BUTTON_LEFT | PAD_BUTTON_RIGHT;
@@ -558,15 +566,23 @@ bool CssHandMayPressA(const CssHand& hand)
   }
 }
 
-void SetWanted(Mode mode)
+void SetWanted(Mode mode, u8 flags)
 {
-  if (s_wanted.exchange(mode) != mode)
+  if (mode == Mode::None)
+    flags = 0;
+  const bool changed = s_wanted_flags.exchange(flags) != flags;
+  if (s_wanted.exchange(mode) != mode || changed)
     s_settled = false;
 }
 
 Mode Wanted()
 {
   return s_wanted;
+}
+
+u8 WantedFlags()
+{
+  return s_wanted_flags;
 }
 
 bool HeaderSettled()
@@ -588,12 +604,40 @@ std::optional<std::string> TakeMismatch()
 
 std::optional<TestQueue> ParseTestQueue(const std::string& v)
 {
-  const size_t colon = v.find(':');
-  const std::string mode = v.substr(0, colon);
-  const std::string coin = colon == std::string::npos ? "0" : v.substr(colon + 1);
-  if ((mode != "casual" && mode != "ranked") || (coin != "0" && coin != "1"))
+  std::vector<std::string> parts;
+  for (size_t start = 0;;)
+  {
+    const size_t colon = v.find(':', start);
+    parts.push_back(v.substr(start, colon == std::string::npos ? std::string::npos : colon - start));
+    if (colon == std::string::npos)
+      break;
+    start = colon + 1;
+  }
+  if (parts.empty() || (parts[0] != "casual" && parts[0] != "ranked") || parts.size() > 3)
     return std::nullopt;
-  return TestQueue{mode == "casual" ? Mode::Casual : Mode::Ranked, static_cast<u8>(coin == "1")};
+  TestQueue out{parts[0] == "casual" ? Mode::Casual : Mode::Ranked, 0, 0};
+  bool coin_seen = false;
+  for (size_t i = 1; i < parts.size(); ++i)
+  {
+    if ((parts[i] == "0" || parts[i] == "1") && !coin_seen && out.flags == 0)
+    {
+      coin_seen = true;
+      out.coin = static_cast<u8>(parts[i] == "1");
+    }
+    else if (parts[i] == "q2" && out.flags == 0)
+    {
+      out.flags = B::FLAG_QUEUE2;
+    }
+    else if (parts[i] == "solo" && out.flags == 0)
+    {
+      out.flags = B::FLAG_SOLO | B::FLAG_QUEUE2;
+    }
+    else
+    {
+      return std::nullopt;
+    }
+  }
+  return out;
 }
 
 std::optional<TestQueue> TestQueueSpec()
@@ -602,7 +646,8 @@ std::optional<TestQueue> TestQueueSpec()
     const std::string v = Orca::TestQueueSpec();
     const auto parsed = ParseTestQueue(v);
     if (!parsed && !v.empty())
-      ERROR_LOG_FMT(ROLLBACK, "Online rules: ORCA_TEST_QUEUE={}: not casual or ranked[:0|1]", v);
+      ERROR_LOG_FMT(ROLLBACK,
+                    "Online rules: ORCA_TEST_QUEUE={}: not casual or ranked[:0|1][:q2|:solo]", v);
     return parsed;
   }();
   return TestKnobsAllowed() ? spec : std::nullopt;
@@ -642,24 +687,33 @@ void OnFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, bo
   if (alone && !resimulating)
   {
     Mode wanted = s_wanted;
+    u8 flags = s_wanted_flags;
     // The room's code: game 1's first striker (one bit of its hash: the server makes it, neither
-    // player chooses it) and a new room's fresh set. The test knob: its coin, no room.
-    const std::string code = wanted == Mode::None ? std::string() : Orca::Online::Code();
-    u8 coin = MatchBlock::CoinFromCode(code);
-    u32 room = MatchBlock::RoomHash(code);
+    // player chooses it) and a new room's fresh set. The queue's own character select is no
+    // room's: no coin, no room. The test knob: its coin and flags, no room.
+    const bool solo = (flags & B::FLAG_SOLO) != 0;
+    const std::string code =
+        wanted == Mode::None || solo ? std::string() : Orca::Online::Code();
+    u8 coin = solo ? 0 : MatchBlock::CoinFromCode(code);
+    u32 room = solo ? 0 : MatchBlock::RoomHash(code);
     if (const auto test = TestQueueSpec())
     {
       wanted = test->mode;
       coin = test->coin;
       room = 0;
+      flags = test->flags;
     }
-    if (const int changed = WriteHeader(m, wanted, ruleset, coin, room); changed > 0)
+    if (const int changed = WriteHeader(m, wanted, ruleset, coin, room, flags); changed > 0)
     {
-      NOTICE_LOG_FMT(ROLLBACK, "Online rules: header {} at frame {} ({} bytes), game 1's first "
+      NOTICE_LOG_FMT(ROLLBACK, "Online rules: header {}{} at frame {} ({} bytes), game 1's first "
                      "striker port {}",
                      wanted == Mode::Casual ? "casual" :
                      wanted == Mode::Ranked ? "ranked" :
                                               "cleared",
+                     wanted == Mode::None          ? "" :
+                     (flags & B::FLAG_SOLO) != 0   ? " (the queue's own character select)" :
+                     (flags & B::FLAG_QUEUE2) != 0 ? " (queue2)" :
+                                                     "",
                      frame, changed, coin + 1);
     }
     s_settled = true;

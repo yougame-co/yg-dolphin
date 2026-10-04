@@ -156,8 +156,9 @@ int Write(GuestMemory& m, const State& s)
   // The magic last, so a reader never sees a header over the dead code's other bytes.
   for (u32 i = STATE_SIZE; i-- > 0;)
   {
-    // The header's room hash (+0x08..+0x0B) is the header writer's, not State's.
-    if (i >= ROOM - BASE && i < ROOM - BASE + 4)
+    // The header's room hash and the queue's flags (+0x08..+0x0F) are the header writer's, not
+    // State's.
+    if (i >= ROOM - BASE && i < HEADER_SIZE)
       continue;
     if (m.Read8(BASE + i) != b[i])
     {

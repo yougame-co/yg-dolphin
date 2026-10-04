@@ -605,6 +605,14 @@ TEST(OrcaOnlineRules, TheTestQueueKnobTakesACoin)
   EXPECT_EQ(ParseTestQueue("ranked:1"), (TestQueue{Mode::Ranked, 1}));
   EXPECT_EQ(ParseTestQueue("casual:0"), (TestQueue{Mode::Casual, 0}));
   EXPECT_FALSE(ParseTestQueue("ranked:2").has_value());
+  // The queue's character select (Queue.h): q2 in a room, solo its own.
+  EXPECT_EQ(ParseTestQueue("casual:q2"), (TestQueue{Mode::Casual, 0, MB::FLAG_QUEUE2}));
+  EXPECT_EQ(ParseTestQueue("ranked:1:q2"), (TestQueue{Mode::Ranked, 1, MB::FLAG_QUEUE2}));
+  EXPECT_EQ(ParseTestQueue("casual:solo"),
+            (TestQueue{Mode::Casual, 0, MB::FLAG_SOLO | MB::FLAG_QUEUE2}));
+  EXPECT_FALSE(ParseTestQueue("casual:q2:1").has_value());
+  EXPECT_FALSE(ParseTestQueue("casual:q2:solo").has_value());
+  EXPECT_FALSE(ParseTestQueue("casual:0:1").has_value());
   EXPECT_FALSE(ParseTestQueue("brawl").has_value());
   EXPECT_FALSE(ParseTestQueue("").has_value());
 }
@@ -618,4 +626,37 @@ TEST(OrcaOnlineRules, LocksArePureFunctionsOfMemory)
   SetPick(b, 0, HUMAN, CHARACTER_ICE_CLIMBERS);
   EXPECT_EQ(ApplyLocks(a, 500), ApplyLocks(b, 500));
   EXPECT_EQ(a.bytes, b.bytes);
+}
+
+// The queue's flags (Queue.h): part of the header, so another flag is a new header (a fresh set,
+// the queue's region cleared); the queue's own character select lets B back out.
+TEST(OrcaOnlineRules, TheQueuesFlagsAreTheHeaders)
+{
+  constexpr u16 B = PAD_BUTTON_B;
+  FakeMemory m = Game("scSelctCharacter");
+  EXPECT_GT(WriteHeader(m, Mode::Casual, Ruleset::Brawl, 0, 0, MB::FLAG_SOLO | MB::FLAG_QUEUE2),
+            0);
+  Header h = ReadHeader(m);
+  EXPECT_TRUE(h.Locked());
+  EXPECT_TRUE(h.Solo());
+  EXPECT_TRUE(h.Queue2());
+  EXPECT_EQ(m.Read8(MB::FLAGS), MB::FLAG_SOLO | MB::FLAG_QUEUE2);
+  // B passes there (it backs out of the search); A still only in the grid.
+  for (const auto& mask : GateMasks(m))
+    EXPECT_EQ(mask.buttons & B, 0);
+  EXPECT_EQ(WriteHeader(m, Mode::Casual, Ruleset::Brawl, 0, 0, MB::FLAG_SOLO | MB::FLAG_QUEUE2),
+            0);
+  // The queue's own region, written meanwhile, then the room's header: fresh.
+  m.Write8(MB::QUEUE, 1);
+  EXPECT_GT(WriteHeader(m, Mode::Casual, Ruleset::Brawl, 1, 0x77, MB::FLAG_QUEUE2), 0);
+  h = ReadHeader(m);
+  EXPECT_FALSE(h.Solo());
+  EXPECT_TRUE(h.Queue2());
+  EXPECT_EQ(m.Read8(MB::QUEUE), 0);
+  for (const auto& mask : GateMasks(m))
+    EXPECT_EQ(mask.buttons & B, B);
+  // The player's own rules were saved once, from before the first header, and come back.
+  EXPECT_GT(WriteHeader(m, Mode::None, Ruleset::Brawl), 0);
+  EXPECT_EQ(m.Read8(SET_RULE + 0x0A), 1);
+  EXPECT_EQ(m.Read32(MENU_DATA + 0x08), 0xFFFFFFFFu);
 }

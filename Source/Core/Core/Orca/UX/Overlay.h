@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <array>
 #include <deque>
 #include <mutex>
 #include <string>
@@ -165,5 +166,10 @@ void SetRulesLines(std::string line, std::string note);
 // The character order's line (CharOrder.h), under the set's score on the character select ("Ada
 // picks first · 0:42"); empty: none. Display only: computed from memory on first runs. Any thread.
 void SetRuleLine(std::string text);
+// The queue's character select (Queue.h), top centre in place of the search's lines: "Casual ·
+// Searching for an opponent…", "Press Start when you're ready · 0:24"; and each port's label near
+// its panel at the bottom ("ada · 1532 ✓"). Empty: not shown. Display only: computed from memory on
+// first runs. Any thread.
+void SetQueueLines(std::string line, std::string note, std::array<std::string, 4> labels);
 OverlayModel& Overlay();
 }  // namespace Orca::UX

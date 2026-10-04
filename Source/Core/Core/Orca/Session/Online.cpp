@@ -170,7 +170,10 @@ void StartLocked(Net::RoomOptions options)
   // A joiner's own controls, for its port in the host's game (a launch join's game hasn't run
   // yet: none).
   if (options.joining)
+  {
     options.controls = Events::OwnControls();
+    options.queue = Events::OwnQueue();
+  }
   NOTICE_LOG_FMT(NETPLAY, "Orca: joining a YouGame room ({}), compatibility {}",
                  options.joining ? "to join a friend's game" : "as the host",
                  options.compatibility);

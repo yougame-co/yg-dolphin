@@ -562,6 +562,8 @@ add_library(core
   Orca/UX/Overlay.h
   Orca/UX/Probe.cpp
   Orca/UX/Probe.h
+  Orca/UX/Queue.cpp
+  Orca/UX/Queue.h
   Orca/UX/RankedSet.cpp
   Orca/UX/RankedSet.h
   Orca/UX/RankedPPlus.cpp

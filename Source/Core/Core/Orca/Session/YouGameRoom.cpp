@@ -130,10 +130,10 @@ bool FromHex(const std::string& hex, std::vector<u8>* out);
 
 // A port's controls from the wire: hex, at most MAX_CONTROLS bytes; anything else is none. The
 // host keeps exactly what a joiner then reads back from it (the same bound on both sides).
-std::vector<u8> ControlsFromHex(const picojson::value& v)
+std::vector<u8> ControlsFromHex(const picojson::value& v, size_t max = MAX_CONTROLS)
 {
   std::vector<u8> bytes;
-  if (!v.is<std::string>() || v.get<std::string>().size() > MAX_CONTROLS * 2 ||
+  if (!v.is<std::string>() || v.get<std::string>().size() > max * 2 ||
       !FromHex(v.get<std::string>(), &bytes))
   {
     return {};
@@ -151,8 +151,10 @@ picojson::value NamesToJson(const std::vector<KeyframeInfo::Name>& names)
   {
     picojson::array entry{picojson::value(static_cast<double>(n.seat)),
                           picojson::value(static_cast<double>(n.from)), picojson::value(n.name)};
-    if (!n.controls.empty())
+    if (!n.controls.empty() || !n.queue.empty())
       entry.push_back(picojson::value(ToHex(n.controls.data(), n.controls.size())));
+    if (!n.queue.empty())
+      entry.push_back(picojson::value(ToHex(n.queue.data(), n.queue.size())));
     out.push_back(picojson::value(std::move(entry)));
   }
   return picojson::value(out);
@@ -170,7 +172,7 @@ std::vector<KeyframeInfo::Name> NamesFromJson(const picojson::object& d)
     if (!entry.is<picojson::array>() || names.size() >= 16)
       continue;
     const auto& a = entry.get<picojson::array>();
-    if ((a.size() != 3 && a.size() != 4) || !a[0].is<double>() || !a[1].is<double>() ||
+    if (a.size() < 3 || a.size() > 5 || !a[0].is<double>() || !a[1].is<double>() ||
         !a[2].is<std::string>())
     {
       continue;
@@ -180,7 +182,8 @@ std::vector<KeyframeInfo::Name> NamesFromJson(const picojson::object& d)
       continue;
     names.push_back({static_cast<int>(seat), static_cast<int>(from),
                      CleanName(a[2].get<std::string>()),
-                     a.size() == 4 ? ControlsFromHex(a[3]) : std::vector<u8>{}});
+                     a.size() >= 4 ? ControlsFromHex(a[3]) : std::vector<u8>{},
+                     a.size() == 5 ? ControlsFromHex(a[4], MAX_QUEUE) : std::vector<u8>{}});
   }
   return names;
 }
@@ -743,6 +746,8 @@ struct YouGameRoom::Impl
     bool sent_packet = false;
     // A joiner's own controls, from its hello ("ct"; empty: none).
     std::vector<u8> controls;
+    // A joiner's queue identity, from its hello ("qi"; empty: none).
+    std::vector<u8> queue;
     // Its hello offered direct links (`dl`), and one is being built with it.
     bool direct = false;
     bool linked = false;
@@ -2476,6 +2481,9 @@ struct YouGameRoom::Impl
           // A joiner tells the host its own controls, for its port in the host's game.
           if (joining && !options.controls.empty() && options.controls.size() <= MAX_CONTROLS)
             d["ct"] = picojson::value(ToHex(options.controls.data(), options.controls.size()));
+          // And its queue identity (its rating, its pick), for its port in the host's game.
+          if (joining && !options.queue.empty() && options.queue.size() <= MAX_QUEUE)
+            d["qi"] = picojson::value(ToHex(options.queue.data(), options.queue.size()));
           SendTo(id, d);
         }
         if (const auto offer = offers.find(peer.slot);
@@ -2861,6 +2869,8 @@ struct YouGameRoom::Impl
       // A joiner's own controls (none from the game's host: its own are in its port already).
       if (!peer.drop_in_host && d.count("ct"))
         peer.controls = ControlsFromHex(d.at("ct"));
+      if (!peer.drop_in_host && d.count("qi"))
+        peer.queue = ControlsFromHex(d.at("qi"), MAX_QUEUE);
       host_seen = host_seen || peer.drop_in_host;
       if (!was_heard)
         last_hello = {};  // answer at once rather than on the next hello tick
@@ -2875,7 +2885,8 @@ struct YouGameRoom::Impl
         }
         SetStatus(fmt::format("Room {}: {} is here", room, peer.name.empty() ? "a friend" : peer.name));
         Emit(
-            {PeerEvent::Kind::Arrived, peer.slot, peer.drop_in_host, peer.name, peer.controls, {}});
+            {PeerEvent::Kind::Arrived, peer.slot, peer.drop_in_host, peer.name, peer.controls,
+             {}, {}, peer.queue});
         // The page's lobby shows the room ready now, not at its next roster change.
         Publish();
       }

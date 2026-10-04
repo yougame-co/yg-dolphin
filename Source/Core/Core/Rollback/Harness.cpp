@@ -38,6 +38,7 @@
 #include "Core/Orca/Session/Keyframe.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Session/PadCodec.h"
+#include "Core/Orca/UX/Queue.h"
 #include "Core/Orca/UX/Results.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/MMU.h"
@@ -1154,10 +1155,76 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
     // before it), as a friend's drop-in plugs in at its frame S (UX/OnlineMenu.h FriendsMove).
     static const int s_plug_at = EnvInt("ORCA_UX_TEST_PLUG_AT", -1);
     const bool early = s_plug_at >= 0 && frame_here + 1 < s_plug_at && s_test_ports.size() > 1;
-    const std::vector<Orca::Events::PortInfo> ports =
+    const std::vector<Orca::Events::PortInfo> base_ports =
         early ? std::vector<Orca::Events::PortInfo>(s_test_ports.begin(), s_test_ports.begin() + 1) :
                 s_test_ports;
-    Orca::Events::NotifyFrame(guard, frame_here + 1, !first_pass_here, ports, first_pass_here);
+    // ORCA_TEST_QUEUE_PICK=<frame>:<char>:<costume>:<x>:<y>[:<rating>]: port 2 plugs in at that
+    // frame with that queue identity (UX/Queue.h), as a matched joiner's does from its plug frame.
+    struct TestPick
+    {
+      int from = -1;
+      std::vector<u8> queue;
+    };
+    static const TestPick s_test_pick = [] {
+      TestPick out;
+      const std::string spec = Orca::TestQueuePickSpec();
+      if (spec.empty())
+        return out;
+      std::vector<std::string> f;
+      for (size_t start = 0;;)
+      {
+        const size_t colon = spec.find(':', start);
+        f.push_back(spec.substr(start, colon == std::string::npos ? colon : colon - start));
+        if (colon == std::string::npos)
+          break;
+        start = colon + 1;
+      }
+      if (f.size() < 5 || f.size() > 6)
+      {
+        ERROR_LOG_FMT(ROLLBACK, "ORCA_TEST_QUEUE_PICK={}: not <frame>:<char>:<costume>:<x>:<y>"
+                      "[:<rating>]",
+                      spec);
+        return out;
+      }
+      Orca::UX::Queue::Identity id;
+      id.character = std::atoi(f[1].c_str());
+      id.costume = std::atoi(f[2].c_str());
+      id.x = std::strtof(f[3].c_str(), nullptr);
+      id.y = std::strtof(f[4].c_str(), nullptr);
+      id.rating = f.size() == 6 ? std::atoi(f[5].c_str()) : -1;
+      out.from = std::atoi(f[0].c_str());
+      out.queue = Orca::UX::Queue::EncodeIdentity(id);
+      NOTICE_LOG_FMT(ROLLBACK, "ORCA_TEST_QUEUE_PICK: port 2 from frame {}: character {} costume "
+                     "{} at ({}, {})",
+                     out.from, id.character, id.costume, id.x, id.y);
+      return out;
+    }();
+    if (s_test_pick.from >= 0)
+    {
+      std::vector<Orca::Events::PortInfo> ports;
+      for (const Orca::Events::PortInfo& p : base_ports)
+      {
+        if (p.port != 1)
+          ports.push_back(p);
+        else if (frame_here + 1 >= s_test_pick.from)
+          ports.emplace_back(p).queue = s_test_pick.queue;
+      }
+      if (std::none_of(ports.begin(), ports.end(), [](const auto& p) { return p.port == 1; }) &&
+          frame_here + 1 >= s_test_pick.from)
+      {
+        ports.push_back({1, "bo", true, {}, s_test_pick.queue});
+      }
+      Orca::Events::NotifyFrame(guard, frame_here + 1, !first_pass_here, ports, first_pass_here);
+    }
+    else
+    {
+      Orca::Events::NotifyFrame(guard, frame_here + 1, !first_pass_here, base_ports,
+                                first_pass_here);
+    }
+    // The queue's casual ready timer (Orca/UX/Queue.h), every frame final at its first pass: the
+    // log says when it ran out, for port 1.
+    if (first_pass_here && !Orca::TestQueueSpec().empty())
+      Orca::UX::Queue::ConfirmTimeout(frame_here + 1, 0);
     // YG_RESULTS=1: the matchmaking result reader (Orca/UX/Results.h) over this run, every frame
     // final at its first pass (a sync test's re-runs come after and change nothing).
     static const bool s_results = Orca::GetEnv("YG_RESULTS") == "1";
