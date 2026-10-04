@@ -29,6 +29,8 @@ struct Options
   // HWND on Windows, CGWindowID (the window number) on macOS, as a decimal number.
   unsigned long long parent = 0;
   Rect rect;
+  // The --rect asked for was TooSmall (and rect is that one at MIN_SIDE): the view starts hidden.
+  bool too_small = false;
 };
 
 // Takes --embed, --parent and --rect out of argv (so the regular parser never sees them). Returns
@@ -37,6 +39,13 @@ std::optional<Options> TakeArguments(std::vector<char*>* argv, std::string* erro
 
 // "rect X Y W H" (also "X,Y,W,H"); w and h at least 1.
 std::optional<Rect> ParseRect(const std::string& text);
+
+// A rect with a side under MIN_SIDE pixels is no place for the game: a `rect` command that small
+// hides it (the window keeps its last size) until a big enough one arrives, and a --rect that small
+// opens the window at MIN_SIDE, hidden. Pages that clipped the player box to its visible part used to
+// shrink the window to nothing while scrolling, and the overlay aborted in a window that thin.
+constexpr int MIN_SIDE = 32;
+bool TooSmall(const Rect& rect);
 
 // The protocol gets stdout to itself: fd 1 is duplicated for it, then pointed at stderr, so the
 // log (Windows writes it to stdout) and anything else printed never lands among the replies.

@@ -78,6 +78,11 @@ std::optional<Rect> ParseRect(const std::string& text)
   return r;
 }
 
+bool TooSmall(const Rect& rect)
+{
+  return rect.w < MIN_SIDE || rect.h < MIN_SIDE;
+}
+
 std::optional<Options> TakeArguments(std::vector<char*>* argv, std::string* error)
 {
   Options options;
@@ -139,6 +144,9 @@ std::optional<Options> TakeArguments(std::vector<char*>* argv, std::string* erro
       kept.push_back(arg);
     }
   }
+  options.too_small = options.enabled && TooSmall(options.rect);
+  options.rect.w = std::max(options.rect.w, MIN_SIDE);
+  options.rect.h = std::max(options.rect.h, MIN_SIDE);
   if (options.enabled && !have_parent)
   {
     *error = "--embed needs --parent";
