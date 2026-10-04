@@ -19,10 +19,11 @@ namespace Orca::UX
 // steered pick (Queue.h, the header's queue flags), Project+ booting to its main menu and a friend's
 // drop-in from the menus (PPLUS32.patches, OnlineMenu.h FriendsMove), the character select's title
 // (CssTitle.h), the casual stage pick and the later-game character order (RankedSteps.h,
-// BrawlStages.h, RankedPPlus.h, CharOrder.h) with the gate's a_as and steer): the session hashes it
-// into the compatibility key as `ux=<n>`, so two builds that would write different bytes (or mask
-// different inputs) never meet in a room.
-constexpr int kCompatVersion = 10;
+// BrawlStages.h, RankedPPlus.h, CharOrder.h) with the gate's a_as and steer; 11, Orca 0.3.15: no
+// Z on the results screen in any session, its replay save's dead end, OnlineRules.h SessionMasks):
+// the session hashes it into the compatibility key as `ux=<n>`, so two builds that would write
+// different bytes (or mask different inputs) never meet in a room.
+constexpr int kCompatVersion = 11;
 
 // Once, before the game boots in a session: registers the local pad source, the overlay, and the
 // session's plug-in, frame and stall callbacks, and puts kCompatVersion in the compatibility key.

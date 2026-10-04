@@ -388,6 +388,47 @@ TEST(OrcaOnlineRules, TheGateLocksTheMenusOnlyUnderAHeader)
     EXPECT_EQ(mask.buttons, PAD_BUTTON_B | PAD_TRIGGER_L | PAD_TRIGGER_R | PAD_TRIGGER_Z);
 }
 
+// The results screen's Z (its replay save, a dead end in a session) is masked in every session's
+// game, with a header or without (a friends game, solo play), and nowhere else.
+TEST(OrcaOnlineRules, TheResultsScreenNeverTakesZ)
+{
+  FakeMemory m = Game("scVsResult");
+  for (const auto& mask : SessionMasks(m))
+  {
+    EXPECT_EQ(mask.buttons, PAD_TRIGGER_Z);
+    EXPECT_EQ(mask.press, 0);
+    EXPECT_FALSE(mask.main_stick);
+    EXPECT_FALSE(mask.c_stick);
+  }
+  for (const auto& mask : GateMasks(m))
+    EXPECT_TRUE(mask.Empty());
+  for (const char* scene : {"scSelctCharacter", "scSelStage", "scMelee", "scMemoryChange",
+                            "muMenuMain", ""})
+  {
+    SetScene(m, scene);
+    for (const auto& mask : SessionMasks(m))
+      EXPECT_TRUE(mask.Empty()) << scene;
+  }
+  for (Mode mode : {Mode::Casual, Mode::Ranked})
+  {
+    for (Ruleset ruleset : {Ruleset::Brawl, Ruleset::PPlus})
+    {
+      FakeMemory locked = Locked(mode, ruleset, "scVsResult");
+      for (const auto& mask : SessionMasks(locked))
+        EXPECT_EQ(mask.buttons, PAD_TRIGGER_Z);
+      SetScene(locked, "scMelee");
+      for (const auto& mask : SessionMasks(locked))
+        EXPECT_TRUE(mask.Empty());
+    }
+  }
+  // Reads only.
+  EXPECT_EQ(m.writes, 0);
+  // No scene manager yet (the game still loading): nothing.
+  FakeMemory empty;
+  for (const auto& mask : SessionMasks(empty))
+    EXPECT_TRUE(mask.Empty());
+}
+
 TEST(OrcaOnlineRules, TheCharacterSelectPassesAOnlyInTheGrid)
 {
   constexpr u16 B = PAD_BUTTON_B, A = PAD_BUTTON_A;

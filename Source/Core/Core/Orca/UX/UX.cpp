@@ -64,6 +64,8 @@ void Init()
     if (Rules::ProfileRuleset() == Rules::Ruleset::None)
       return masks;
     GuardMemory memory(guard);
+    // Every session's: no Z on the results screen (its replay save, a dead end in a session).
+    Merge(masks, Rules::SessionMasks(memory));
     Merge(masks, Rules::GateMasks(memory));
     Merge(masks, RankedPPlus::Masks(memory));
     BrawlStages::GateMasks(guard, &masks);

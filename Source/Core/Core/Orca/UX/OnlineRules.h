@@ -43,7 +43,8 @@ class CPUThreadGuard;
 //   before the set's first fight, the one who still hasn't is a no-show and forfeits.
 // Everything but the header is a pure function of emulated memory (the block included), written
 // only where it differs, on first runs and re-runs alike: the same on both machines, idempotent.
-// Friends rooms have no header, so nothing here touches their games.
+// Friends rooms have no header, so nothing here touches their games, but for SessionMasks (no Z on
+// the results screen in any session, below).
 namespace Orca::UX
 {
 class GuestMemory;
@@ -98,6 +99,16 @@ int ApplyLocks(GuestMemory& memory, int frame);
 
 // What the input gate masks for the frame about to run (reads only).
 Rollback::InputGate::Masks GateMasks(const GuestMemory& memory);
+
+// ---- Every session, with or without a header ----
+// What the input gate masks in every session's game, friends and solo included (reads only): Z
+// on the results screen (`scVsResult`), every port. Z there saves the fight's replay, in Brawl and
+// in Project+ alike, and a session can't save one: its NAND has no save file and its SD card is
+// absent (Brawl) or read-only (Project+). So Z only ever led to "There is no save file", then to
+// the save's destination picker with both destinations crossed out, which A and Start never leave
+// (only B does): players pressing A or Start after a game sat on the results screen for good, in
+// both games (ORCA.md "The results screen's replay").
+Rollback::InputGate::Masks SessionMasks(const GuestMemory& memory);
 
 // ---- The character select's hands (both games; found under the harness, ORCA.md "The character
 // select's buttons") ----
