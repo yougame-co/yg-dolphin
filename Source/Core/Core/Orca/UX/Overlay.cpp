@@ -383,6 +383,7 @@ void OutlinedText(ImDrawList* dl, float size, ImVec2 pos, float alpha, const std
                   Signal level = Signal::Good)
 {
   ImFont* font = ImGui::GetFont();
+  size = std::max(size, 1.0f);  // ImGui aborts on text that rounds to 0 px
   const float o = std::max(1.0f, size / 14);
   for (const ImVec2 d : {ImVec2(-o, 0), ImVec2(o, 0), ImVec2(0, -o), ImVec2(0, o), ImVec2(o, o)})
     dl->AddText(font, size, ImVec2(pos.x + d.x, pos.y + d.y), Rgba(16, 16, 24, alpha * 0.85f),
@@ -392,7 +393,7 @@ void OutlinedText(ImDrawList* dl, float size, ImVec2 pos, float alpha, const std
 
 ImVec2 TextSize(float size, const std::string& text)
 {
-  return ImGui::GetFont()->CalcTextSizeA(size, FLT_MAX, 0, text.c_str());
+  return ImGui::GetFont()->CalcTextSizeA(std::max(size, 1.0f), FLT_MAX, 0, text.c_str());
 }
 
 // A chat line, "<name>: <text>" wrapped at `wrap` pixels, outlined like the rest, with the name in
@@ -514,9 +515,11 @@ void Draw()
   {
     return;
   }
-  ImDrawList* dl = ImGui::GetForegroundDrawList();
   const ImVec2 screen = ImGui::GetIO().DisplaySize;
-  const float unit = screen.y / 100;  // 1% of the height: the overlay scales with the window
+  const float unit = OverlayUnit(screen.y);
+  if (unit <= 0)
+    return;
+  ImDrawList* dl = ImGui::GetForegroundDrawList();
   const float margin = 3 * unit;
   const float text_size = 3.0f * unit;
   // Top left, where Brawl's matches and menus leave the screen empty: the circle, the ping beside
@@ -644,6 +647,14 @@ void Draw()
 OverlayModel& Overlay()
 {
   return s_overlay;
+}
+
+float OverlayUnit(float display_height)
+{
+  // !(>=) also turns a NaN height away.
+  if (!(display_height >= OVERLAY_MIN_HEIGHT))
+    return 0;
+  return display_height / 100;
 }
 
 void SetRulesLines(std::string line, std::string note)

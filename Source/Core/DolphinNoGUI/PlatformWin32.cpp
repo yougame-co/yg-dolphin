@@ -110,7 +110,9 @@ bool PlatformWin32::CreateRenderWindow()
       fprintf(stderr, "Orca: CreateWindowEx under the app's window failed (%lu)\n", GetLastError());
       return false;
     }
-    ShowWindow(m_hwnd, SW_SHOWNA);
+    m_embed_visible = !m_embed.too_small;  // too small: hidden until a big enough rect (Embed.h)
+    if (m_embed_visible)
+      ShowWindow(m_hwnd, SW_SHOWNA);
     UpdateEmbedFocus();
     return true;
   }

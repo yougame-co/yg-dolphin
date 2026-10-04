@@ -39,7 +39,7 @@ public:
   void Stop();
 
   // Embed mode (Embed.h): set before Init. The window is drawn inside the parent's.
-  void SetEmbed(const Embed::Options& options) { m_embed = options; }
+  void SetEmbed(const Embed::Options& options);
   bool IsEmbedded() const { return m_embed.enabled; }
   // Tests: take the embed protocol's commands on stdin without embedding (ORCA_TEST_COMMANDS=1).
   void EnableTestCommands() { m_test_commands = true; }
@@ -82,6 +82,8 @@ protected:
   virtual void EmbedSetRect(const Embed::Rect& rect) {}
   virtual void EmbedSetVisible(bool visible) {}
   virtual void EmbedSetFocus(bool focus) {}
+  // EmbedSetVisible (and the overlay's host visibility) from the app's show/hide and the rect size.
+  void ApplyEmbedVisible();
   // Applies the newest requested title on the main loop's thread. Orca: in a session, also asks
   // for the title again (every 250 ms at most) so it follows the room status.
   void UpdateTitle();
@@ -108,6 +110,10 @@ private:
   std::mutex m_ready_lock;
   std::optional<std::string> m_ready_line;
   bool m_ready_sent = false;
+  // Shown: the app's last "show" / "hide". Too small: the last rect was (Embed::TooSmall), so the
+  // game is hidden until a big enough one arrives. Visible only when shown and not too small.
+  bool m_embed_shown = true;
+  bool m_embed_too_small = false;
   // A "pause" before the game runs (Core::SetState only pauses a running core), applied once it is.
   // Never in a session: it pauses only a game it can see is alone.
   bool m_pause_pending = false;

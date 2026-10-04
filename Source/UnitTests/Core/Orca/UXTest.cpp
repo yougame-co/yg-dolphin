@@ -8,6 +8,7 @@
 #include <set>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -452,6 +453,20 @@ TEST(OrcaUXOverlay, ToastsFollowThePortListOnceEach)
   joiner.OnPorts(0, Ports({{0, "luis", true}, {1, "ada", false}}), 0);
   ASSERT_EQ(joiner.View(1, Stats::Off).toasts.size(), 1u);
   EXPECT_EQ(joiner.View(1, Stats::Off).toasts[0].text, "luis is on port 1");
+}
+
+// The YouGame page used to clip the player box to its visible part, so scrolling sent rects down to
+// 0 px tall; the overlay's text (3 units) then rounded to 0 px and ImGui aborted
+// (ImFontAtlasBakedGetOrAdd: font_size > 0.0f). Under the minimum height it draws nothing.
+TEST(OrcaUXOverlay, NothingInAPictureTooThinForText)
+{
+  for (const float h : {0.0f, 1.0f, 2.0f, 16.0f, 17.0f, 99.0f, -5.0f, std::nanf("")})
+    EXPECT_EQ(OverlayUnit(h), 0.0f) << h;
+  EXPECT_FLOAT_EQ(OverlayUnit(OVERLAY_MIN_HEIGHT), OVERLAY_MIN_HEIGHT / 100);
+  EXPECT_FLOAT_EQ(OverlayUnit(1080), 10.8f);
+  // Wherever it draws, its smallest text (3 units) is at least a whole pixel once ImGui rounds it.
+  for (float h = OVERLAY_MIN_HEIGHT; h < 4000; h += 0.5f)
+    ASSERT_GE(std::floor(3 * OverlayUnit(h) + 0.5f), 1.0f) << h;
 }
 
 TEST(OrcaUXOverlay, WaitingOnlyAfterAQuarterSecondOfStall)

@@ -137,6 +137,21 @@ void Platform::EmbedTeardown()
   EmbedSetVisible(false);
 }
 
+void Platform::SetEmbed(const Embed::Options& options)
+{
+  m_embed = options;
+  // A --rect too small for the game: the platform creates the view hidden (Embed.h).
+  m_embed_too_small = options.too_small;
+  Orca::UX::SetHostVisible(!m_embed_too_small);
+}
+
+void Platform::ApplyEmbedVisible()
+{
+  const bool visible = m_embed_shown && !m_embed_too_small;
+  EmbedSetVisible(visible);
+  Orca::UX::SetHostVisible(visible);
+}
+
 void Platform::ProcessEmbedCommands()
 {
   if (!m_embed.enabled && !m_test_commands)
@@ -184,8 +199,18 @@ void Platform::ProcessEmbedCommands()
       std::getline(in, rest);
       if (const std::optional<Embed::Rect> rect = Embed::ParseRect(rest))
       {
-        m_embed.rect = *rect;
-        EmbedSetRect(*rect);
+        // Too small for the game: hidden at its last size, never shrunk to a sliver (Embed.h).
+        const bool too_small = Embed::TooSmall(*rect);
+        if (!too_small)
+        {
+          m_embed.rect = *rect;
+          EmbedSetRect(*rect);
+        }
+        if (too_small != m_embed_too_small)
+        {
+          m_embed_too_small = too_small;
+          ApplyEmbedVisible();
+        }
       }
     }
     else if (cmd == "pause")
@@ -213,8 +238,8 @@ void Platform::ProcessEmbedCommands()
     }
     else if (cmd == "hide" || cmd == "show")
     {
-      EmbedSetVisible(cmd == "show");
-      Orca::UX::SetHostVisible(cmd == "show");
+      m_embed_shown = cmd == "show";
+      ApplyEmbedVisible();
     }
     else if (cmd == "volume")
     {

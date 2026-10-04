@@ -3167,7 +3167,7 @@ the Mac: `Tools/orca/embed-test-host.m` (instructions at its top).
 Orca --embed --parent <handle> --rect X Y W H [-u <user>] -e <disc> [-C ...]
 ```
 
-- `--rect X,Y,W,H` (one argument) works too. W and H below 1 count as 1.
+- `--rect X,Y,W,H` (one argument) works too. A W or H below 32 (`Embed::MIN_SIDE`) opens the view hidden, at 32, until a big enough `rect`.
 - **`--parent` on Windows:** the HWND as a decimal number. That is what the app already passes for
   libretro (`getNativeWindowHandle()` read as a 64-bit integer).
 - **`--parent` on macOS:** the window's **CGWindowID** (its window number), as a decimal number.
@@ -3203,7 +3203,7 @@ window (layout, scroll, resize, full screen). Moving, minimizing or hiding the w
 
 | Command | Effect |
 |---|---|
-| `rect X Y W H` | Moves and resizes the view (units above). A rect while hidden doesn't show it. |
+| `rect X Y W H` | Moves and resizes the view (units above). A rect while hidden doesn't show it. A rect with W or H under 32 hides the view instead, at its last size, until a rect at least 32 by 32 arrives (then it shows again unless the app said `hide`): Orca 0.3.13 and earlier shrank the window to it instead, and under about 17 pixels tall the overlay's text rounded to 0 px and ImGui aborted Orca (`font_size > 0.0f`). The overlay also draws nothing in a picture under 100 pixels tall (`Orca::UX::OverlayUnit`). |
 | `hide` / `show` | Takes the view off screen and puts it back. Hidden also means no input. |
 | `focus` / `blur` | The game gets the input, or gives it back to the page. See "Focus" below. `blur` is new: the libretro host has no `blur`. |
 | `pause` / `resume` | Answers `state paused` or `state running`. A `pause` before the game runs is held until it does, so `ready` waits for `resume`. **In a session** (Orca with `orca caps ... pause`) `pause` pauses only while the player's game is alone in it: no friend plugged in or on the way, not joining or catching up, no keyframe wanted or being made, and no `prepare-join`, `join` or `leave` waiting for a frame (`Rollback::OnlineMatch::SoloPauseAllowed`). Otherwise, and before the game runs, it answers `unsupported pause` then `state running`: the game keeps running (the friend's does), and nothing waits. A solo pause ends by itself, with `state running`, as soon as drop-in needs the game: a friend arriving in the room, `prepare-join`, `join` or `leave`. While paused, the room's connection stays up (its thread pings the server every second whatever the game does), but a room that drops meanwhile is reopened only after the resume (that happens at frame boundaries), so a pause longer than the server's 90 s hold on a dropped player's seat comes back to a new code. The pause stops the emulated machine between two instructions and changes nothing it computes; the `orca stats` line leaves the paused time out of its `fps`. An Orca without `pause` in its caps answers `unsupported pause` to every `pause` in a session. |

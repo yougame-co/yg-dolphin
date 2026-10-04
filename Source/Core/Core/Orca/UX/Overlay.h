@@ -197,4 +197,10 @@ void SetRuleLine(std::string text);
 // first runs. Any thread.
 void SetQueueLines(std::string line, std::string note, std::array<std::string, 4> labels);
 OverlayModel& Overlay();
+// The overlay's unit, 1% of the picture's height (it scales with the window), or 0 below
+// OVERLAY_MIN_HEIGHT pixels: then it draws nothing. ImGui rounds a text size to whole pixels and
+// aborts on 0, which a window under ~17 px tall (the app's player box scrolled nearly out of view)
+// used to reach, and nothing would read in a sliver that thin anyway.
+constexpr float OVERLAY_MIN_HEIGHT = 100;
+float OverlayUnit(float display_height);
 }  // namespace Orca::UX

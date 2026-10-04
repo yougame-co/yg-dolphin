@@ -383,6 +383,7 @@ bool PlatformMacOS::InitEmbedded()
   [[m_window contentView] setWantsLayer:YES];
 
   m_window_focus = false;
+  m_embed_visible = !m_embed.too_small;  // too small: hidden until a big enough rect (Embed.h)
   // A window the app made a moment ago may not be in the window list yet.
   while (TrackParent() && m_parent_missing_since)
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
