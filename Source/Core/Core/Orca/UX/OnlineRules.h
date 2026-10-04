@@ -6,6 +6,7 @@
 #include <array>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "Common/CommonTypes.h"
 #include "Core/Orca/UX/MatchBlock.h"
@@ -21,11 +22,15 @@ class CPUThreadGuard;
 // queue made, and the locks that follow from it at every boundary in both games.
 //
 // - The header: the host of a casual or ranked queue room writes mode and ruleset while its game
-//   is its player's alone (no peer plugged in or on the way, nothing anyone replays). Anything
+//   is its player's alone (no peer plugged in or on the way, nothing anyone replays), or while a
+//   peer on the way still waits for a keyframe not yet made (SetHeaderFree). Anything
 //   else (a friends room, solo play, a search still going, the queue room left) clears it at the
 //   next such boundary, giving back the player's own rules saved when it was written. A ranked
-//   room keeps it while the set is open, whoever is plugged in. A joiner checks it once its
-//   keyframe is in: another mode or ruleset than its own queue's leaves the room ("mismatch").
+//   room keeps it while the set is open, whoever is plugged in. A host makes no keyframe for a
+//   queue room's opponent until its game carries that room's header (HeaderInPlace), and a joiner
+//   checks it once its keyframe is in: anything but its room's own header (its queue's mode, its
+//   ruleset, the room's coin and hash, its app's queue flags; never the host's own character
+//   select's FLAG_SOLO) leaves the room ("mismatch").
 // - The locks, while the header says casual or ranked: the ruleset's rules (stocks, time, items
 //   off, handicap off, team attack on, ratio 1.0, pause off), the stage choice (Choose: casual's
 //   two preferred-stage turns and ranked's strikes run on the stage select), the legal list (Brawl's Random Stage Switch without
@@ -54,6 +59,8 @@ struct Header
   Mode mode = Mode::None;
   Ruleset ruleset = Ruleset::None;
   u8 flags = 0;  // MatchBlock::FLAG_SOLO, FLAG_QUEUE2 (Queue.h)
+  u8 coin = 0;   // game 1's first striker (MatchBlock::COIN)
+  u32 room = 0;  // the room code's hash (MatchBlock::ROOM)
   bool Locked() const { return present && mode != Mode::None && ruleset != Ruleset::None; }
   // The queue's own character select before a match (Queue.h): no room of the queue's yet.
   bool Solo() const { return Locked() && (flags & MatchBlock::FLAG_SOLO) != 0; }
@@ -74,6 +81,15 @@ Ruleset ProfileRuleset();
 // state fresh. Returns the bytes changed (0: it already said so).
 int WriteHeader(GuestMemory& memory, Mode mode, Ruleset ruleset, u8 coin = 0, u32 room = 0,
                 u8 flags = 0);
+
+// The header a game whose room calls for `mode` carries (none for Mode::None or no ruleset): with
+// a queue room's `code`, game 1's first striker and the room's hash come from it, and `flags` are
+// the queue's (FLAG_QUEUE2 or none); with FLAG_SOLO (the queue's own character select, no room's)
+// there is no coin and no room. What the host writes (OnFrame) and what a joiner checks for.
+Header HeaderFor(Mode mode, Ruleset ruleset, std::string_view code, u8 flags);
+// Whether the header in memory, `in_memory`, is `wanted` (HeaderFor): the same header, every
+// field; no header that locks when none is wanted.
+bool HeaderIs(const Header& in_memory, const Header& wanted);
 
 // ---- The locks, at every boundary ----
 // `frame`: the frame hook's (the ranked ready timer counts from it). Returns the bytes changed (0
@@ -151,19 +167,38 @@ std::array<PlayerPick, 4> ReadPicks(const GuestMemory& memory);
 constexpr int CSS_READY_FRAMES = 60 * 60;
 
 // ---- The session's side (Rollback/OnlineMatch.cpp, CPU thread) ----
-// The mode this machine's room calls for, set at every boundary before the frame hook: a queue
-// room's while this machine hosts it (or waits in a ranked one for the set's verdict), the queue's
-// own character select's (FLAG_SOLO, with the app's `queue2`) while its player waits there for a
-// match, else none. `flags`: MatchBlock::FLAG_*.
-void SetWanted(Mode mode, u8 flags = 0);
+// The header this machine's room calls for, set at every boundary before the frame hook (and again
+// before a keyframe is made: a room's welcome can come in between): a queue room's while this
+// machine hosts it (or waits in a ranked one for the set's verdict), `code` the room's code; the
+// queue's own character select's (FLAG_SOLO, with the app's `queue2`) while its player waits there
+// for a match; else none. `flags`: MatchBlock::FLAG_*. Returns whether that changed the header
+// called for (WantedGeneration counts one more).
+bool SetWanted(Mode mode, u8 flags = 0, std::string_view code = {});
 Mode Wanted();
 u8 WantedFlags();
-// Whether the last alone boundary left the header as Wanted() says (a keyframe for a queue room's
-// opponent waits for it).
-bool HeaderSettled();
-// A joiner whose keyframe just loaded, into a room of this queue: the header is checked at the
-// next frame hook.
-void ExpectHeader(Mode mode);
+// Counts every change of the header called for (SetWanted): a keyframe made under another count
+// carries another header than the one called for now.
+u64 WantedGeneration();
+// Whether the game's memory carries the header called for (HeaderFor of SetWanted's), as the last
+// first-run frame hook read it, with nothing changed since (SetWanted, MemoryReplaced). A host
+// makes or offers no keyframe for a queue room until it does: the joiner would replay a game set
+// up for another match (its own character select's header, another room's).
+bool HeaderInPlace();
+// The game's memory was replaced after this boundary's frame hook (the queue image): what the
+// hook read of the header is stale until the next.
+void MemoryReplaced();
+// Whether this boundary's frame hook may write the header even though the frame isn't this
+// player's alone (a friend's arrival or a prepare-join waits for a keyframe): set before the hook
+// at every boundary (OnlineMatch's HeaderFreeAt). The header only: the rest of the UX keeps
+// `alone`.
+void SetHeaderFree(bool free);
+// A joiner whose keyframe just loaded, into a room of the queue `mode` (none: a friends room) with
+// code `code`, whose app plays the queue with `flags` (FLAG_QUEUE2 or none): the host's header is
+// checked at the next frame hook. A friends room's game carries none; a queue room's carries that
+// room's own (HeaderFor: never FLAG_SOLO, the room's coin and hash).
+void ExpectHeader(Mode mode, std::string_view code = {}, u8 flags = 0);
+// Whether a joiner of a room accepts the host's header `h` (ExpectHeader's check, pure).
+bool HeaderFitsRoom(const Header& h, Mode mode, Ruleset ruleset, std::string_view code, u8 flags);
 // "mismatch" once the check failed: the joiner leaves.
 std::optional<std::string> TakeMismatch();
 // The ranked no-show, once its frame is final: the port (0-based) that didn't ready in time.
@@ -172,7 +207,8 @@ std::optional<int> ConfirmNoShow(int confirmed);
 
 // ---- The frame hook's part (UX.cpp) ----
 // At every boundary, after the name tags and before the toggled patch groups: the header at an
-// alone boundary (first runs only), then the locks (first runs and re-runs).
+// alone boundary or one SetHeaderFree allows (first runs only), then the locks (first runs and
+// re-runs).
 // `plugged`: the ports in play at `frame` (the session's synced plan, Events::PortInfo): written
 // into the block while it locks, for the ready timer (a pure function of synced data, as the name
 // tags are).

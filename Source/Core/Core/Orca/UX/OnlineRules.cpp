@@ -7,8 +7,11 @@
 #include <bit>
 #include <map>
 #include <mutex>
+#include <string>
 #include <utility>
 #include <vector>
+
+#include <fmt/format.h>
 
 #include "Common/Logging/Log.h"
 #include "Core/Orca/Profile.h"
@@ -299,9 +302,20 @@ void ReadyTimer(Writer& w, const Header& h, const std::string& scene, int frame)
 // ---- Session state (CPU thread) ----
 std::atomic<Mode> s_wanted{Mode::None};
 std::atomic<u8> s_wanted_flags{0};
-std::atomic<bool> s_settled{true};
+std::atomic<u64> s_generation{0};
+std::atomic<bool> s_in_place{true};
+std::atomic<bool> s_header_free{false};
+// A joiner's room, for its check of the host's header (ExpectHeader).
+struct Expectation
+{
+  Mode mode = Mode::None;
+  std::string code;
+  u8 flags = 0;
+};
 std::mutex s_mutex;
-std::optional<Mode> s_expect;
+// The room code the wanted header is for (SetWanted), under s_mutex.
+std::string s_wanted_code;
+std::optional<Expectation> s_expect;
 std::optional<std::string> s_mismatch;
 
 // The no-show byte per frame, until its frame is final (as Results.h's tracker).
@@ -334,7 +348,34 @@ Header ReadHeader(const GuestMemory& m)
   h.mode = mode <= 2 ? static_cast<Mode>(mode) : Mode::None;
   h.ruleset = ruleset <= 2 ? static_cast<Ruleset>(ruleset) : Ruleset::None;
   h.flags = m.Read8(B::FLAGS) & (B::FLAG_SOLO | B::FLAG_QUEUE2);
+  h.coin = m.Read8(B::COIN);
+  h.room = m.Read32(B::ROOM);
   return h;
+}
+
+Header HeaderFor(Mode mode, Ruleset ruleset, std::string_view code, u8 flags)
+{
+  if (mode == Mode::None || ruleset == Ruleset::None)
+    return {};
+  Header h;
+  h.present = true;
+  h.mode = mode;
+  h.ruleset = ruleset;
+  h.flags = flags & (B::FLAG_SOLO | B::FLAG_QUEUE2);
+  // The queue's own character select is no room's: no coin, no room.
+  if ((h.flags & B::FLAG_SOLO) == 0)
+  {
+    h.coin = MatchBlock::CoinFromCode(code);
+    h.room = MatchBlock::RoomHash(code);
+  }
+  return h;
+}
+
+bool HeaderIs(const Header& in_memory, const Header& wanted)
+{
+  if (!wanted.Locked())
+    return !in_memory.Locked();
+  return in_memory == wanted;
 }
 
 Ruleset ProfileRuleset()
@@ -355,6 +396,15 @@ std::array<PlayerPick, 4> ReadPicks(const GuestMemory& m)
 
 namespace
 {
+// A header for the log: its mode, ruleset, flags, coin and room hash.
+std::string Describe(const Header& h)
+{
+  if (!h.present)
+    return "no header";
+  return fmt::format("mode {} ruleset {} flags {:#04x} coin {} room {:08x}", static_cast<int>(h.mode),
+                     static_cast<int>(h.ruleset), h.flags, h.coin, h.room);
+}
+
 // Every track's state of a new set past the header: the stage flow's (MatchBlock::State, its NONE
 // fields), the ranked set's (SetBlock, its NO_PORT fields), the character order's (cleared).
 void FreshSet(Writer& w, Mode mode, Ruleset ruleset, u8 coin)
@@ -566,13 +616,29 @@ bool CssHandMayPressA(const CssHand& hand)
   }
 }
 
-void SetWanted(Mode mode, u8 flags)
+bool SetWanted(Mode mode, u8 flags, std::string_view code)
 {
   if (mode == Mode::None)
     flags = 0;
-  const bool changed = s_wanted_flags.exchange(flags) != flags;
-  if (s_wanted.exchange(mode) != mode || changed)
-    s_settled = false;
+  // A room's code only for a room's header: none for the queue's own character select or none.
+  if (mode == Mode::None || (flags & B::FLAG_SOLO) != 0)
+    code = {};
+  bool changed = s_wanted_flags.exchange(flags) != flags;
+  changed = s_wanted.exchange(mode) != mode || changed;
+  {
+    std::lock_guard lock(s_mutex);
+    if (s_wanted_code != code)
+    {
+      s_wanted_code = code;
+      changed = true;
+    }
+  }
+  if (changed)
+  {
+    ++s_generation;
+    s_in_place = false;
+  }
+  return changed;
 }
 
 Mode Wanted()
@@ -585,15 +651,36 @@ u8 WantedFlags()
   return s_wanted_flags;
 }
 
-bool HeaderSettled()
+u64 WantedGeneration()
 {
-  return s_settled;
+  return s_generation;
 }
 
-void ExpectHeader(Mode mode)
+bool HeaderInPlace()
+{
+  return s_in_place;
+}
+
+void MemoryReplaced()
+{
+  s_in_place = false;
+}
+
+void SetHeaderFree(bool free)
+{
+  s_header_free = free;
+}
+
+void ExpectHeader(Mode mode, std::string_view code, u8 flags)
 {
   std::lock_guard lock(s_mutex);
-  s_expect = mode;
+  s_expect = Expectation{mode, std::string(code), flags};
+}
+
+bool HeaderFitsRoom(const Header& h, Mode mode, Ruleset ruleset, std::string_view code, u8 flags)
+{
+  // A room's header is never the queue's own character select's.
+  return HeaderIs(h, HeaderFor(mode, ruleset, code, static_cast<u8>(flags & ~B::FLAG_SOLO)));
 }
 
 std::optional<std::string> TakeMismatch()
@@ -680,54 +767,63 @@ void OnFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, bo
   const Ruleset ruleset = ProfileRuleset();
   if (ruleset == Ruleset::None)
   {
-    s_settled = true;
+    // No ruleset, no header: nothing for a keyframe to wait for.
+    if (!resimulating)
+      s_in_place = true;
     return;
   }
   GuardMemory m(guard);
+  // The header called for: the room's code gives game 1's first striker (one bit of its hash: the
+  // server makes it, neither player chooses it) and a new room's fresh set. The queue's own
+  // character select is no room's: no coin, no room.
+  Header wanted;
+  {
+    std::string code;
+    {
+      std::lock_guard lock(s_mutex);
+      code = s_wanted_code;
+    }
+    wanted = HeaderFor(s_wanted, ruleset, code, s_wanted_flags);
+  }
   // The test knob's header is a pure function of the knob and the synced ports, so it is written on
   // every run of a boundary, re-runs too: its solo-to-room change at port 2's plug frame lands alike
-  // on all of them (a real host's header changes at an alone boundary, which nothing re-runs).
+  // on all of them (a real host's header changes only where no other game runs the frame: an alone
+  // boundary, or one SetHeaderFree allows, and nothing re-runs those). Its coin and flags, no room.
   const std::optional<TestQueue> test = TestQueueSpec();
-  if ((alone && !resimulating) || test)
+  if (test)
   {
-    Mode wanted = s_wanted;
-    u8 flags = s_wanted_flags;
-    // The room's code: game 1's first striker (one bit of its hash: the server makes it, neither
-    // player chooses it) and a new room's fresh set. The queue's own character select is no
-    // room's: no coin, no room. The test knob: its coin and flags, no room.
-    const bool solo = (flags & B::FLAG_SOLO) != 0;
-    const std::string code =
-        wanted == Mode::None || solo ? std::string() : Orca::Online::Code();
-    u8 coin = solo ? 0 : MatchBlock::CoinFromCode(code);
-    u32 room = solo ? 0 : MatchBlock::RoomHash(code);
-    if (test)
-    {
-      wanted = test->mode;
-      coin = test->coin;
-      room = 0;
-      flags = test->flags;
-      // ORCA_TEST_QUEUE=<mode>:solo with ORCA_TEST_QUEUE_PICK: port 2 plugging in is the match the
-      // queue found, so from then on the header is the room's (queue2, no longer solo), as a host's
-      // is once the page hosts: the whole flow, own character select to the room's, in one run.
-      if ((flags & B::FLAG_SOLO) && (plugged & 2) && !Orca::TestQueuePickSpec().empty())
-        flags = B::FLAG_QUEUE2;
-    }
-    if (const int changed = WriteHeader(m, wanted, ruleset, coin, room, flags);
+    u8 flags = test->flags;
+    // ORCA_TEST_QUEUE=<mode>:solo with ORCA_TEST_QUEUE_PICK: port 2 plugging in is the match the
+    // queue found, so from then on the header is the room's (queue2, no longer solo), as a host's
+    // is once the page hosts: the whole flow, own character select to the room's, in one run.
+    if ((flags & B::FLAG_SOLO) && (plugged & 2) && !Orca::TestQueuePickSpec().empty())
+      flags = B::FLAG_QUEUE2;
+    wanted = HeaderFor(test->mode, ruleset, {}, flags);
+    wanted.coin = test->coin;
+    wanted.room = 0;
+  }
+  if (((alone || s_header_free) && !resimulating) || test)
+  {
+    if (const int changed =
+            WriteHeader(m, wanted.mode, ruleset, wanted.coin, wanted.room, wanted.flags);
         changed > 0 && !resimulating)
     {
-      NOTICE_LOG_FMT(ROLLBACK, "Online rules: header {}{} at frame {} ({} bytes), game 1's first "
-                     "striker port {}",
-                     wanted == Mode::Casual ? "casual" :
-                     wanted == Mode::Ranked ? "ranked" :
-                                              "cleared",
-                     wanted == Mode::None          ? "" :
-                     (flags & B::FLAG_SOLO) != 0   ? " (the queue's own character select)" :
-                     (flags & B::FLAG_QUEUE2) != 0 ? " (queue2)" :
-                                                     "",
-                     frame, changed, coin + 1);
+      NOTICE_LOG_FMT(ROLLBACK, "Online rules: header {}{} at frame {} ({} bytes{}), game 1's "
+                     "first striker port {}",
+                     wanted.mode == Mode::Casual ? "casual" :
+                     wanted.mode == Mode::Ranked ? "ranked" :
+                                                   "cleared",
+                     wanted.mode == Mode::None            ? "" :
+                     (wanted.flags & B::FLAG_SOLO) != 0   ? " (the queue's own character select)" :
+                     (wanted.flags & B::FLAG_QUEUE2) != 0 ? " (queue2)" :
+                                                            "",
+                     frame, changed, alone ? "" : ", a friend on the way", wanted.coin + 1);
     }
-    s_settled = true;
   }
+  // What a keyframe made at this boundary would carry (the frame hook is the header's only writer,
+  // and it runs before the keyframe).
+  if (!resimulating)
+    s_in_place = test.has_value() || HeaderIs(ReadHeader(m), wanted);
   // The ports in play, for the ready timer: synced data, the same at this frame on every machine.
   if (ReadHeader(m).Locked() && m.Read8(B::PLUGGED) != plugged)
     m.Write8(B::PLUGGED, plugged);
@@ -741,25 +837,27 @@ void OnFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, bo
     if (s_expect)
     {
       const Header h = ReadHeader(m);
-      // ORCA_TEST_QUEUE in both Orcas: the host's header is the knob's, whatever the room.
-      const Mode expected = TestQueueMode().value_or(*s_expect);
+      const Expectation expect = std::move(*s_expect);
       s_expect.reset();
-      const bool ok = expected == Mode::None ?
-                          !h.Locked() :
-                          h.Locked() && h.mode == expected && h.ruleset == ruleset;
+      // ORCA_TEST_QUEUE in both Orcas: the host's header is the knob's, whatever the room.
+      const bool ok =
+          test ? h.Locked() && h.mode == test->mode && h.ruleset == ruleset :
+                 HeaderFitsRoom(h, expect.mode, ruleset, expect.code, expect.flags);
       if (!ok)
       {
+        const std::string room =
+            test ? std::string("the test knob's mode") :
+                   Describe(HeaderFor(expect.mode, ruleset, expect.code, expect.flags));
         WARN_LOG_FMT(ROLLBACK,
-                     "Online rules: the host's game says mode {} ruleset {}, this room wants "
-                     "mode {} ruleset {}: mismatch",
-                     static_cast<int>(h.mode), static_cast<int>(h.ruleset),
-                     static_cast<int>(expected), static_cast<int>(ruleset));
+                     "Online rules: the host's game says {}, this room wants {}{}: mismatch",
+                     Describe(h), room,
+                     h.Solo() ? " (the host's header is its own character select's)" : "");
         s_mismatch = "mismatch";
       }
       else
       {
-        NOTICE_LOG_FMT(ROLLBACK, "Online rules: the host's header matches this room (mode {})",
-                       static_cast<int>(expected));
+        NOTICE_LOG_FMT(ROLLBACK, "Online rules: the host's header matches this room ({})",
+                       Describe(h));
       }
     }
   }

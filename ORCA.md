@@ -1956,7 +1956,8 @@ beta: a best of 3, rated once per set, with the host's rules (YouGame `docs/ORCA
    `room: <code>`, which the page mints as the queue's ticket with `match_room` (the keyframe store
    needs a ticket signed for that room). A former joiner moves its pad to port 1 first: solo, so
    only its own game changes, and the next keyframe carries it. Once the room's welcome says its
-   queue, the host's next alone boundary writes the match block's header, and the locks follow
+   queue, the host's next boundary writes the match block's header (its next alone one, or one with
+   the opponent on the way: `HeaderFreeAt`), and the locks follow
    ("Online rules": the ruleset's rules in both games, casual's stage pick ("Casual stage pick"), no
    way out of the character and stage select; `ux=8`, which replaced the beta's Brawl-only rules
    preset; `ux=9` adds the character select's A gate; `ux=10` queue2 and the casual stage pick). A
@@ -2267,18 +2268,43 @@ only a queue room's host writes one (`Core/Orca/UX/OnlineRules.*`, `MatchBlock.h
   Then the set state (`+0x10`, Phases 2-3), the step state (`+0x80`, Phase 2), Phase 1's ready
   timer (`+0xC0`), and the player's own rules saved when the header was written (`+0xD0`, and
   Project+'s stage switch data at `+0x100`).
-- **Who writes it, and when:** only at a boundary where the game is its player's alone (Events.h
-  `alone`: nobody plugged in or on the way, nothing anyone replays), the header this machine's room
-  calls for (OnlineMatch `WantedRulesMode`): a casual or ranked queue room's mode while this game
-  hosts it (port 1), or waits in a ranked room for the set's verdict; none otherwise. None clears
-  it, gives back the saved rules and zeroes the block; a block that never had a header (the game's
-  dead code) is never touched. Everything else in the block is game logic at every boundary.
-- **The keyframe waits for it:** a keyframe for an arrival is captured only once the header is as
-  the room calls for (at most 120 boundaries, so an arrival never waits forever). The header lands
-  at the first alone boundary after the room's welcome, long before the opponent can arrive.
-- **The joiner checks it** at the first frame hook after its keyframe loads: the mode its room's
-  queue calls for (none for a friends room) and its own profile's ruleset. Anything else: it leaves
-  at once, with `orca error mismatch That match couldn't start` and the bye reason `mismatch`.
+- **Who writes it, and when:** only at a boundary no other game runs from a state before it: one
+  where the game is its player's alone (Events.h `alone`: nobody plugged in or on the way, nothing
+  anyone replays), or one where a friend on the way still waits for a keyframe not yet made
+  (OnlineMatch `HeaderFreeAt`: solo, no session, no keyframe being made, downloaded or stored for
+  this header and still fresh, nobody plugging in; the keyframe comes at that boundary or later,
+  after the frame hook, so it carries the header). The header this machine's room calls for
+  (OnlineMatch `WantedRulesMode`): a casual or ranked queue room's mode, coin and room hash while
+  this game hosts it (port 1), or waits in a ranked room for the set's verdict; the queue's own
+  character select's (`FLAG_SOLO`); none otherwise. None clears it, gives back the saved rules and
+  zeroes the block; a block that never had a header (the game's dead code) is never touched.
+  Everything else in the block is game logic at every boundary.
+- **The keyframe waits for it** (Orca 0.3.15): a keyframe for an arrival is made, and a stored one
+  offered, only while the game's memory carries the header the room calls for as the keyframe is
+  made (`Rules::HeaderInPlace`, read by the boundary's frame hook; the room's welcome can come in
+  after the hook, so the call is made again first) and was made under that header
+  (`Rules::WantedGeneration`: one that wasn't, nobody having taken it, is deleted). The header
+  lands at the boundary after the room's welcome, even with the opponent's hello right behind it.
+  A queue room never makes one without it: after 300 boundaries (5 s) with the opponent waiting the
+  host leaves the room with `orca error mismatch That match couldn't start` and the bye reason
+  `mismatch`, which the joiner, still waiting for its keyframe, reports as its own `orca error
+  mismatch` (both pages search again). Before 0.3.15 a keyframe went out after 120 boundaries
+  whatever the header said, so a host whose header was still its own character select's could
+  start the match on it (port 2 masked, Start withheld in both games). A friends room keeps that
+  bound: its joiner refuses a header that locks.
+- **The joiner checks it** at the first frame hook after its keyframe loads: its room's own header
+  (`Rules::HeaderFitsRoom`): the mode its room's queue calls for and its own profile's ruleset, the
+  coin and hash of the room's code, the queue flags its own app plays (`FLAG_QUEUE2` with
+  `queue2`), never `FLAG_SOLO`; none at all for a friends room. Anything else (before 0.3.15 only
+  the mode and ruleset were compared): it leaves at once, with `orca error mismatch That match
+  couldn't start` and the bye reason `mismatch`.
+- **Checked 2026-10-04** (branch `q3-header-flags` on `rel-0.3.15`, M4 Pro, headless): 347 `Orca*`
+  unit tests pass (the room's header, the joiner's refusals, the host's wait and its one failure);
+  `OrcaLive.AHostsMismatchReachesItsJoiner` with `ORCA_LIVE_TEST=1`; `queue-e2e.mjs --q2 --queue
+  casual` against yougame.co with dev tickets, Project+ and Brawl: PASS (the room's header written
+  before the keyframe, the joiner's check on every field, 2 verdicts the same, both back on their own
+  character select); the Project+ casual flow under `YG_SYNCTEST=7` (`pplus-queue2-flow.txt`, the
+  test knob's header): the room's header at 824 as before, 20,951 re-run frames, 0 RAM mismatches.
 - **Lifecycle:** casual unlocks when the opponent unplugs (the host leaves the queue room for a
   room of its own: header none). Ranked stays locked while the set is open, whoever is plugged in
   (the survivor waits in the room for the verdict), and clears once the room closes.
@@ -2903,7 +2929,8 @@ stage flow), `sp-brawl-sss` (Ranked stages (Brawl)) and `sp-char-order` (Charact
 `ranked-spec`, made into one. The sections above describe each track as built; where they differ,
 this section wins.
 
-**One header writer.** `OnlineRules::WriteHeader`, at an alone boundary only, is the only code that
+**One header writer.** `OnlineRules::WriteHeader`, at an alone boundary only (since 0.3.15 also
+one `HeaderFreeAt` allows: "The match block's header"), is the only code that
 writes the match block's header (`MatchBlock.h`): magic, version, mode, ruleset, **coin** (+0x07:
 game 1's first striker, one bit of the FNV-1a hash of the room code, the same in both games and on
 both machines; the server makes the code, neither player picks it) and the **room's hash** (+0x08).

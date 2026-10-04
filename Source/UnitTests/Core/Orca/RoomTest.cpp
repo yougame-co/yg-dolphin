@@ -841,6 +841,70 @@ TEST(OrcaLive, DesyncIsReportedOnBothSides)
   SetEnv("ORCA_TEST_DEV_GAME", nullptr);
 }
 
+// A queue room's host whose game never carried the room's header leaves with "mismatch"
+// (OnlineMatch's FailHeaderWait): the joiner waiting for its keyframe hears that reason with the
+// host's departure (and prints its own `orca error mismatch`). A joiner's "mismatch" bye (its own
+// LeaveOnMismatch) stays a plain leave for the host, as before.
+TEST(OrcaLive, AHostsMismatchReachesItsJoiner)
+{
+  const char* live = std::getenv("ORCA_LIVE_TEST");
+  if (!live || std::string(live) != "1")
+    GTEST_SKIP() << "set ORCA_LIVE_TEST=1";
+  SetEnv("ORCA_TEST_DEV_GAME", "orca-live-test");
+  RoomOptions options;
+  options.room_code =
+      "orcam" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count() % 10000000);
+  options.compatibility = "orca-live-test";
+  YouGameRoom host(options);
+  for (int i = 0; i < 500 && host.GetState() == RoomState::Connecting; ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  ASSERT_EQ(host.GetState(), RoomState::Waiting) << host.Status();
+  options.joining = true;
+
+  // 1. The joiner leaves on a mismatch: the host hears a plain leave.
+  {
+    YouGameRoom joiner(options);
+    ASSERT_TRUE(WaitArrived(host));
+    ASSERT_TRUE(WaitArrived(joiner));
+    joiner.SetLeaveReason("mismatch");
+    joiner.Leave();
+    std::optional<std::string> reason;
+    for (int i = 0; i < 500 && !reason; ++i)
+    {
+      for (const PeerEvent& event : host.TakePeerEvents())
+      {
+        if (event.kind == PeerEvent::Kind::Left)
+          reason = event.reason;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    EXPECT_EQ(reason, std::optional<std::string>(""));
+  }
+  // 2. The host leaves on a mismatch: the joiner hears the reason with the host's departure.
+  {
+    YouGameRoom joiner(options);
+    ASSERT_TRUE(WaitArrived(host));
+    ASSERT_TRUE(WaitArrived(joiner));
+    host.SetLeaveReason("mismatch");
+    host.Leave();
+    std::optional<PeerEvent> gone;
+    for (int i = 0; i < 500 && !gone; ++i)
+    {
+      for (const PeerEvent& event : joiner.TakePeerEvents())
+      {
+        if (event.kind == PeerEvent::Kind::Left)
+          gone = event;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    ASSERT_TRUE(gone);
+    EXPECT_TRUE(gone->host);
+    EXPECT_EQ(gone->reason, "mismatch");
+    EXPECT_EQ(host.ErrorCode(), "");
+  }
+  SetEnv("ORCA_TEST_DEV_GAME", nullptr);
+}
+
 // A player the room re-seats on a new socket ("back": its old one died without the room noticing)
 // is another run of Orca: the host unplugs the old one and greets the new one, which can then get
 // its own keyframe. A joiner whose host is there doesn't give up on it.

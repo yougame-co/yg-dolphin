@@ -7,6 +7,7 @@
 #include <bit>
 #include <cmath>
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -16,6 +17,7 @@
 #include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/OnlineRules.h"
 #include "Core/Orca/UX/SetBlock.h"
+#include "Core/Rollback/OnlineMatch.h"
 #include "InputCommon/GCPadStatus.h"
 
 using namespace Orca::UX;
@@ -659,4 +661,166 @@ TEST(OrcaOnlineRules, TheQueuesFlagsAreTheHeaders)
   EXPECT_GT(WriteHeader(m, Mode::None, Ruleset::Brawl), 0);
   EXPECT_EQ(m.Read8(SET_RULE + 0x0A), 1);
   EXPECT_EQ(m.Read32(MENU_DATA + 0x08), 0xFFFFFFFFu);
+}
+
+// The header a game carries for its room (HeaderFor): a queue room's coin and hash come from its
+// code; the queue's own character select is no room's.
+TEST(OrcaOnlineRules, TheRoomsHeaderComesFromItsCode)
+{
+  const Header room = HeaderFor(Mode::Casual, Ruleset::PPlus, "rfkyxp4s", MB::FLAG_QUEUE2);
+  EXPECT_TRUE(room.Locked());
+  EXPECT_FALSE(room.Solo());
+  EXPECT_TRUE(room.Queue2());
+  EXPECT_EQ(room.coin, MB::CoinFromCode("rfkyxp4s"));
+  EXPECT_EQ(room.room, MB::RoomHash("rfkyxp4s"));
+  const Header own = HeaderFor(Mode::Casual, Ruleset::PPlus, "rfkyxp4s",
+                               MB::FLAG_SOLO | MB::FLAG_QUEUE2);
+  EXPECT_TRUE(own.Solo());
+  EXPECT_EQ(own.coin, 0);
+  EXPECT_EQ(own.room, 0u);
+  EXPECT_FALSE(HeaderFor(Mode::None, Ruleset::PPlus, "rfkyxp4s", MB::FLAG_QUEUE2).present);
+  EXPECT_FALSE(HeaderFor(Mode::Casual, Ruleset::None, "rfkyxp4s", 0).present);
+  // What the host writes is what it reads back, every field.
+  for (const Header& h : {room, own})
+  {
+    FakeMemory m = Game("scSelctCharacter");
+    EXPECT_GT(WriteHeader(m, h.mode, Ruleset::PPlus, h.coin, h.room, h.flags), 0);
+    EXPECT_EQ(ReadHeader(m), h);
+    EXPECT_TRUE(HeaderIs(ReadHeader(m), h));
+  }
+}
+
+// The joiner's check (OnFrame, ExpectHeader): the host's own character select's header (the queue
+// CSS it waited on, before its header switched to the room's) has the room's mode and ruleset,
+// which was all the check compared before; it is refused now, as is any other room's.
+TEST(OrcaOnlineRules, AJoinerRefusesAHeaderThatIsNotItsRooms)
+{
+  const std::string code = "rfkyxp4s";
+  FakeMemory m = Game("scSelctCharacter");
+  WriteHeader(m, Mode::Casual, Ruleset::Brawl, 0, 0, MB::FLAG_SOLO | MB::FLAG_QUEUE2);
+  Header h = ReadHeader(m);
+  ASSERT_TRUE(h.Locked());
+  EXPECT_EQ(h.mode, Mode::Casual);
+  EXPECT_EQ(h.ruleset, Ruleset::Brawl);
+  EXPECT_FALSE(HeaderFitsRoom(h, Mode::Casual, Ruleset::Brawl, code, MB::FLAG_QUEUE2));
+  // Even a joiner that asked for FLAG_SOLO: a room's header never has it.
+  EXPECT_FALSE(HeaderFitsRoom(h, Mode::Casual, Ruleset::Brawl, code,
+                              MB::FLAG_SOLO | MB::FLAG_QUEUE2));
+
+  // The room's own header: accepted.
+  const Header room = HeaderFor(Mode::Casual, Ruleset::Brawl, code, MB::FLAG_QUEUE2);
+  WriteHeader(m, room.mode, Ruleset::Brawl, room.coin, room.room, room.flags);
+  h = ReadHeader(m);
+  EXPECT_TRUE(HeaderFitsRoom(h, Mode::Casual, Ruleset::Brawl, code, MB::FLAG_QUEUE2));
+  // Not another queue's, ruleset's or room's (the last room's header, never rewritten).
+  EXPECT_FALSE(HeaderFitsRoom(h, Mode::Ranked, Ruleset::Brawl, code, MB::FLAG_QUEUE2));
+  EXPECT_FALSE(HeaderFitsRoom(h, Mode::Casual, Ruleset::PPlus, code, MB::FLAG_QUEUE2));
+  EXPECT_FALSE(HeaderFitsRoom(h, Mode::Casual, Ruleset::Brawl, "zzzzzzzz", MB::FLAG_QUEUE2));
+  // A joiner without `queue2` in a queue2 room, and the other way round: the two games' character
+  // selects would differ in what the pages drive.
+  EXPECT_FALSE(HeaderFitsRoom(h, Mode::Casual, Ruleset::Brawl, code, 0));
+  WriteHeader(m, room.mode, Ruleset::Brawl, room.coin, room.room, 0);
+  EXPECT_TRUE(HeaderFitsRoom(ReadHeader(m), Mode::Casual, Ruleset::Brawl, code, 0));
+  EXPECT_FALSE(HeaderFitsRoom(ReadHeader(m), Mode::Casual, Ruleset::Brawl, code, MB::FLAG_QUEUE2));
+  // Another coin for the same room: not the room's.
+  WriteHeader(m, room.mode, Ruleset::Brawl, static_cast<u8>(room.coin ^ 1), room.room, room.flags);
+  EXPECT_FALSE(HeaderFitsRoom(ReadHeader(m), Mode::Casual, Ruleset::Brawl, code, MB::FLAG_QUEUE2));
+
+  // A friends room: no header at all.
+  EXPECT_FALSE(HeaderFitsRoom(ReadHeader(m), Mode::None, Ruleset::Brawl, code, MB::FLAG_QUEUE2));
+  WriteHeader(m, Mode::None, Ruleset::Brawl);
+  EXPECT_TRUE(HeaderFitsRoom(ReadHeader(m), Mode::None, Ruleset::Brawl, code, MB::FLAG_QUEUE2));
+  EXPECT_TRUE(HeaderFitsRoom(ReadHeader(Game("scSelctCharacter")), Mode::None, Ruleset::Brawl, "",
+                             0));
+  EXPECT_FALSE(HeaderFitsRoom(ReadHeader(Game("scSelctCharacter")), Mode::Casual, Ruleset::Brawl,
+                              code, MB::FLAG_QUEUE2));
+}
+
+// The header called for (SetWanted): each change counts once, and the game's memory is not known
+// to carry it until the next frame hook reads it.
+TEST(OrcaOnlineRules, EveryChangeOfTheHeaderCalledForCounts)
+{
+  SetWanted(Mode::None);
+  const u64 g = WantedGeneration();
+  EXPECT_FALSE(SetWanted(Mode::None, MB::FLAG_QUEUE2, "abcdefgh"));
+  EXPECT_EQ(WantedGeneration(), g);
+  // The queue's own character select: no room's code in it.
+  EXPECT_TRUE(SetWanted(Mode::Casual, MB::FLAG_SOLO | MB::FLAG_QUEUE2));
+  EXPECT_FALSE(HeaderInPlace());
+  EXPECT_FALSE(SetWanted(Mode::Casual, MB::FLAG_SOLO | MB::FLAG_QUEUE2, "abcdefgh"));
+  EXPECT_EQ(WantedGeneration(), g + 1);
+  // The room's: its flags, then its code.
+  EXPECT_TRUE(SetWanted(Mode::Casual, MB::FLAG_QUEUE2, "abcdefgh"));
+  EXPECT_FALSE(SetWanted(Mode::Casual, MB::FLAG_QUEUE2, "abcdefgh"));
+  EXPECT_TRUE(SetWanted(Mode::Casual, MB::FLAG_QUEUE2, "ijklmnop"));
+  EXPECT_TRUE(SetWanted(Mode::Ranked, MB::FLAG_QUEUE2, "ijklmnop"));
+  EXPECT_EQ(WantedGeneration(), g + 4);
+  EXPECT_EQ(Wanted(), Mode::Ranked);
+  EXPECT_EQ(WantedFlags(), MB::FLAG_QUEUE2);
+  MemoryReplaced();
+  EXPECT_FALSE(HeaderInPlace());
+  SetWanted(Mode::None);
+  EXPECT_TRUE(HeaderIs(ReadHeader(Game("scSelctCharacter")), Header{}));
+  EXPECT_FALSE(HeaderIs(ReadHeader(Locked(Mode::Casual, Ruleset::Brawl)), Header{}));
+}
+
+// The host's side (Rollback/OnlineMatch.h): the header may land with the opponent on the way, as
+// long as nobody replays the frame; and a queue room makes no keyframe before it has.
+TEST(OrcaOnlineRules, TheRoomsHeaderLandsWithTheOpponentOnTheWay)
+{
+  using Rollback::OnlineMatch::AloneAt;
+  using Rollback::OnlineMatch::HeaderFreeAt;
+  using Rollback::OnlineMatch::KEYFRAME_FRESH_FRAMES;
+  // The opponent's hello came with the room's welcome: not alone, but free for the header.
+  EXPECT_FALSE(AloneAt(5000, false, true, std::nullopt));
+  EXPECT_TRUE(HeaderFreeAt(5000, true, std::nullopt));
+  // A session, a keyframe being made or downloaded, a friend plugging in, catching up: no.
+  EXPECT_FALSE(HeaderFreeAt(5000, false, std::nullopt));
+  // A keyframe stored for this header that a friend would take, and replay every frame since.
+  EXPECT_FALSE(HeaderFreeAt(5000, true, 4000));
+  EXPECT_FALSE(HeaderFreeAt(4000 + KEYFRAME_FRESH_FRAMES, true, 4000));
+  EXPECT_TRUE(HeaderFreeAt(4000 + KEYFRAME_FRESH_FRAMES + 1, true, 4000));
+}
+
+TEST(OrcaOnlineRules, AQueueRoomNeverMakesAKeyframeWithoutItsHeader)
+{
+  using Rollback::OnlineMatch::HEADER_FAIL_BOUNDARIES;
+  using Rollback::OnlineMatch::HEADER_WAIT_BOUNDARIES;
+  using Rollback::OnlineMatch::HeaderWait;
+  using Rollback::OnlineMatch::StepHeaderWait;
+  int waited = 0;
+  // In place: at once.
+  EXPECT_EQ(StepHeaderWait(&waited, true, true, true), HeaderWait::Ready);
+  // Nobody waiting (a prepare-join): no keyframe, and nothing to fail.
+  for (int i = 0; i < 2 * HEADER_FAIL_BOUNDARIES; ++i)
+    EXPECT_EQ(StepHeaderWait(&waited, false, false, true), HeaderWait::Wait);
+  EXPECT_EQ(waited, 0);
+  // The opponent waits: never Ready until the header is there; then the join fails, once.
+  int ready = 0, fails = 0, fail_at = -1;
+  for (int i = 1; i <= HEADER_FAIL_BOUNDARIES + 1; ++i)
+  {
+    const HeaderWait w = StepHeaderWait(&waited, false, true, true);
+    ready += w == HeaderWait::Ready;
+    if (w == HeaderWait::Fail)
+    {
+      ++fails;
+      fail_at = i;
+    }
+  }
+  EXPECT_EQ(ready, 0);
+  EXPECT_EQ(fails, 1);
+  EXPECT_EQ(fail_at, HEADER_FAIL_BOUNDARIES + 1);
+  EXPECT_EQ(waited, 0);
+  // The header lands while the opponent waits: the keyframe follows.
+  for (int i = 0; i < 3; ++i)
+    EXPECT_EQ(StepHeaderWait(&waited, false, true, true), HeaderWait::Wait);
+  EXPECT_EQ(StepHeaderWait(&waited, true, true, true), HeaderWait::Ready);
+  EXPECT_EQ(waited, 0);
+  // A friends room keeps its bound: the keyframe is made anyway (the joiner refuses a header that
+  // locks), and the join never fails here.
+  for (int i = 1; i <= HEADER_WAIT_BOUNDARIES; ++i)
+    EXPECT_EQ(StepHeaderWait(&waited, false, true, false), HeaderWait::Wait);
+  EXPECT_EQ(StepHeaderWait(&waited, false, true, false), HeaderWait::Ready);
+  for (int i = 0; i < 2 * HEADER_FAIL_BOUNDARIES; ++i)
+    EXPECT_NE(StepHeaderWait(&waited, false, true, false), HeaderWait::Fail);
 }
