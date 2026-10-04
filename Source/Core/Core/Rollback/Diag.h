@@ -4,12 +4,15 @@
 #pragma once
 
 #include <cstddef>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "Common/CommonTypes.h"
 
 namespace Core
 {
+class CPUThreadGuard;
 class System;
 }
 
@@ -22,6 +25,12 @@ class System;
 //   YG_NTCOPY=1           copy MEM1/MEM2 into snapshots with non-temporal stores (x86-64 only)
 //   YG_PAGEDIFF=<frame>   from that frame, count the 4 KB pages of MEM1/MEM2 that differ from 1,
 //                         2 and 4 frames earlier, and where in MEM1/MEM2 (1 MB buckets) they are
+//   YG_JITCODE_LOG=<path> every instruction word a JIT compile reads that differs from the word
+//                         the last compile of that address read ("chg"), or from RAM ("stale": the
+//                         emulated instruction cache gave an old line), with what reached that
+//                         address in between: a guest invalidation (icbi, dcbst/dcbf), a
+//                         forced one (a rollback load's restored page), a whole-cache clear, or
+//                         nothing. Clears and the JIT's free code space are logged there too.
 // Results are logged (ROLLBACK, notice) when the harness stops at YG_EXIT_AFTER.
 namespace Rollback::Diag
 {
@@ -39,4 +48,16 @@ void AddCowSave(double state_ms, double protect_ms);
 void AddRingLoad(double ms, std::size_t changed_blocks);
 void AddPortSave(double ms);
 void AddPortLoad(double ms);
+
+// YG_JITCODE_LOG (above): g_jit_code_log is read on every compile and invalidation, one load each.
+extern const bool g_jit_code_log;
+void JitCodeSetFrame(int frame);
+void JitCodeCompiled(u32 block_start, const std::vector<std::pair<u32, u32>>& words);
+void JitCodeInvalidated(u32 address, u32 length, bool forced);
+void JitCodeCleared(const char* why);
+void JitCodeNote(const std::string& line);
+// Every word a live JIT block was compiled from that differs from RAM now: code the guest rewrote
+// without an invalidation, which the JIT keeps running in its old form until something drops the
+// block. Logged as "stalecode" lines, with a count.
+void JitCodeCensus(const Core::CPUThreadGuard& guard, const char* why);
 }  // namespace Rollback::Diag

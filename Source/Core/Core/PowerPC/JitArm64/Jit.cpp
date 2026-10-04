@@ -36,6 +36,7 @@
 #include "Core/PowerPC/JitCommon/ConstantPropagation.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/Rollback/Diag.h"
 #include "Core/System.h"
 
 using namespace Arm64Gen;
@@ -1086,6 +1087,8 @@ void JitArm64::Jit(u32 em_address, bool clear_cache_and_retry_on_failure)
     // Code generation failed due to not enough free space in either the near or far code regions.
     // Clear the entire JIT cache and retry.
     WARN_LOG_FMT(DYNA_REC, "flushing code caches, please report if this happens a lot");
+    if (Rollback::Diag::g_jit_code_log)
+      Rollback::Diag::JitCodeNote("code space full");
     ClearCache();
     Jit(em_address, false);
     return;

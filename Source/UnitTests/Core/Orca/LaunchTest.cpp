@@ -14,6 +14,7 @@
 #include "Common/FileUtil.h"
 #include "Common/StringUtil.h"
 #include "Core/Orca/Launch.h"
+#include "Core/Orca/Profile.h"
 
 namespace
 {
@@ -129,4 +130,27 @@ TEST(OrcaLaunch, ReadsTheFileNextToTheApp)
 #endif
 
   File::DeleteDirRecursively(dir);
+}
+
+// Profile.h jit_clear_frame: one JIT clear a boot, at the end of that frame (the first boundary
+// ends frame 0), and none for a profile without one.
+TEST(OrcaLaunch, JitClearOnceABoot)
+{
+  Orca::Profile profile;
+  profile.jit_clear_frame = 2;
+  for (int boot = 0; boot < 2; ++boot)
+  {
+    Orca::SetActiveProfile(profile);
+    EXPECT_FALSE(Orca::JitClearDue());  // frame 0
+    EXPECT_FALSE(Orca::JitClearDue());  // frame 1
+    EXPECT_TRUE(Orca::JitClearDue());   // frame 2
+    for (int frame = 3; frame < 1000; ++frame)
+      EXPECT_FALSE(Orca::JitClearDue()) << frame;
+  }
+  profile.jit_clear_frame.reset();
+  Orca::SetActiveProfile(profile);
+  for (int frame = 0; frame < 10; ++frame)
+    EXPECT_FALSE(Orca::JitClearDue()) << frame;
+  Orca::SetActiveProfile(std::nullopt);
+  EXPECT_FALSE(Orca::JitClearDue());
 }

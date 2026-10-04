@@ -426,11 +426,24 @@ namespace
 u64 s_seed_save_hash = 0;
 bool s_seed_session_save = true;
 std::optional<Profile> s_active_profile;
+// First-run frame boundaries since boot, for jit_clear_frame.
+u32 s_boot_frames = 0;
 }  // namespace
 
 void SetActiveProfile(std::optional<Profile> profile)
 {
   s_active_profile = std::move(profile);
+  s_boot_frames = 0;
+}
+
+bool JitClearDue()
+{
+  if (!s_active_profile || !s_active_profile->jit_clear_frame ||
+      s_boot_frames > *s_active_profile->jit_clear_frame)
+  {
+    return false;
+  }
+  return s_boot_frames++ == *s_active_profile->jit_clear_frame;
 }
 
 const Profile* ActiveProfile()
@@ -598,6 +611,8 @@ std::optional<Profile> LoadProfile(const std::string& game_id, std::optional<u16
         profile.frame_hook_word = number;
       else if (key == "BootNandFrame")
         profile.boot_nand_frame = number;
+      else if (key == "JitClearFrame")
+        profile.jit_clear_frame = number;
       else
         return fail(fmt::format("unknown key {}", key));
     }

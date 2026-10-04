@@ -51,6 +51,9 @@ public:
   // sound, until it has caught up (then pacing restarts from now).
   void SetCatchingUp(bool catching_up);
   bool CatchingUp() const { return m_catching_up; }
+  // The frame running now is a rollback's re-run (Rollback::IsResimulating() is that or a
+  // catch-up).
+  bool Resimulating() const { return m_resimulating; }
   // Drop-in: load the host's keyframe as the state at the start of `frame` (from the frame-boundary
   // hook, like Load).
   bool LoadImage(MachineImage image, int frame);

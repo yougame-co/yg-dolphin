@@ -48,6 +48,13 @@ struct Profile
   // player does (Brawl's packs), so a joining friend makes them by running its own boot to here and
   // the keyframe carries only their hashes (never a save). Unset: the keyframe carries every file.
   std::optional<u32> boot_nand_frame;
+  // A loader's codes that rewrite the game's code with plain stores (no icbi), as Project+'s Gecko
+  // codes do in the game's first frame: the JIT keeps running whatever it compiled before, until a
+  // whole-cache clear (its code space filling, at a different moment on each machine) makes it run
+  // the new code, and the machines desync. Orca drops every JIT block once at the end of this frame
+  // (the first frame boundary the hook takes ends frame 0), after the codes have landed, so every
+  // machine runs them from then on and a later clear changes nothing. Unset: no clear.
+  std::optional<u32> jit_clear_frame;
   // Game-specific additions to the universal settings, as <System>.<Section>.<Key> = <Value>.
   std::vector<std::pair<Config::Location, std::string>> forced;
 
@@ -212,6 +219,10 @@ bool FrameHookLive(const Core::CPUThreadGuard& guard, const Profile& profile);
 // frame boundary from it.
 void SetActiveProfile(std::optional<Profile> profile);
 const Profile* ActiveProfile();
+// Called at the end of each frame's first run once the frame hook is live (FrameHookLive; a
+// drop-in's catch-up frames are first runs, a rollback's re-runs are not): true exactly once a
+// boot, at the end of the active profile's jit_clear_frame.
+bool JitClearDue();
 
 // A config layer forcing the universal session settings plus the profile's (the Netplay layer type:
 // Orca does not run Dolphin's own netplay, and refuses to start a session while it does).

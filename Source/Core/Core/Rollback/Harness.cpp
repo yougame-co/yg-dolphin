@@ -120,6 +120,49 @@ const int s_save_only_from = EnvInt("YG_SAVE_ONLY_FROM", -1);
 // Diagnosis: at the first-pass boundary of this frame, write MEM1 and MEM2 to
 // <user dir>/ram-<frame>-mem1.bin / -mem2.bin.
 const int s_dump_ram_at = EnvInt("YG_DUMP_RAM_AT", -1);
+// A comma-separated list of numbers from an environment variable (base 10 or 16).
+std::vector<u32> EnvList(const char* name, int base)
+{
+  std::vector<u32> values;
+  std::istringstream list(Orca::GetEnv(name));
+  for (std::string word; std::getline(list, word, ',');)
+  {
+    if (!word.empty())
+      values.push_back(static_cast<u32>(std::strtoul(word.c_str(), nullptr, base)));
+  }
+  return values;
+}
+// Another JIT history for the same run (Dolphin clears its JIT when its code space fills, at
+// different moments on different machines; ORCA.md "Code the JIT doesn't see"):
+// YG_CLEARJIT_AT=<frame>[,<frame>...] drops every JIT block, and what the JIT learned about single
+// instructions, at the end of those first-pass frames; YG_CLEARJIT_EVERY=N at every Nth from frame
+// YG_CLEARJIT_FROM (default 0).
+const std::vector<u32> s_clear_jit_at = EnvList("YG_CLEARJIT_AT", 10);
+const int s_clear_jit_every = EnvInt("YG_CLEARJIT_EVERY", 0);
+const int s_clear_jit_from = EnvInt("YG_CLEARJIT_FROM", 0);
+// YG_JIT_INVALIDATE=<frame>:<address>[,...] (address in hex): at the end of that first-pass frame,
+// drop the JIT blocks holding that instruction (a narrower YG_CLEARJIT_AT).
+const std::vector<std::pair<int, u32>> s_jit_invalidate = [] {
+  std::vector<std::pair<int, u32>> items;
+  std::istringstream list(Orca::GetEnv("YG_JIT_INVALIDATE"));
+  for (std::string word; std::getline(list, word, ',');)
+  {
+    const std::size_t colon = word.find(':');
+    if (colon != std::string::npos)
+    {
+      items.emplace_back(std::atoi(word.c_str()),
+                         static_cast<u32>(std::strtoul(word.c_str() + colon + 1, nullptr, 16)));
+    }
+  }
+  return items;
+}();
+// YG_JITCODE_CENSUS=<frame>[,<frame>...] (with YG_JITCODE_LOG): at the end of those first-pass
+// frames, before the harness's own clears there (a profile's JitClearFrame comes earlier in the
+// boundary), list every word a live JIT block runs that RAM no longer holds (Diag::JitCodeCensus).
+const std::vector<u32> s_jit_census_at = EnvList("YG_JITCODE_CENSUS", 10);
+// YG_WATCH=<address>[,<address>...] (hex): log each word's value at the end of the first first-pass
+// frame and of every one in which it changed.
+const std::vector<u32> s_watch = EnvList("YG_WATCH", 16);
 // Diagnosis: at the first-pass boundaries of these frames (comma-separated), log every NAND file's
 // size and hash (the hash a drop-in keyframe names it by), to compare what different inputs leave
 // in the NAND (a profile's BootNandFrame).
@@ -716,7 +759,11 @@ void SyncTest(Core::System& system)
     {
       ++s_loads;
       if (s_clear_jit)
+      {
+        if (Diag::g_jit_code_log)
+          Diag::JitCodeNote("YG_SYNCTEST_CLEARJIT");
         system.GetJitInterface().ClearSafe();
+      }
       s_frame = target;
       s_frame_events.clear();
       RestoreScene(s_frame);
@@ -998,7 +1045,9 @@ bool Active()
   return s_scenes || s_synctest_k > 0 || s_exit_after > 0 || !Input().empty() ||
          s_shot_every > 0 || s_hashlog != nullptr || s_bench_k > 0 || s_padrec != nullptr ||
          s_loopback != nullptr || s_save_only_from >= 0 || s_dump_ram_at >= 0 ||
-         s_dump_frames_from >= 0 || !s_nand_hashes_at.empty();
+         s_dump_frames_from >= 0 || !s_nand_hashes_at.empty() || !s_clear_jit_at.empty() ||
+         s_clear_jit_every > 0 || !s_watch.empty() || !s_jit_invalidate.empty() ||
+         !s_jit_census_at.empty();
 }
 
 std::optional<GCPadStatus> InputOverride(int port)
@@ -1281,6 +1330,52 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
     File::IOFile(base + "-mem2.bin", "wb").WriteBytes(memory.GetEXRAM(), memory.GetExRamSize());
     NOTICE_LOG_FMT(ROLLBACK, "RAM at frame {} written to {}-mem*.bin", frame_here, base);
   }
+  const auto listed = [frame_here](const std::vector<u32>& frames) {
+    return std::find(frames.begin(), frames.end(), static_cast<u32>(frame_here)) != frames.end();
+  };
+  if (first_pass_here && listed(s_jit_census_at))
+    Diag::JitCodeCensus(guard, fmt::format("frame {}", frame_here).c_str());
+  for (const auto& [at, address] : s_jit_invalidate)
+  {
+    if (first_pass_here && frame_here == at)
+    {
+      system.GetJitInterface().InvalidateICache(address, 4, true);
+      NOTICE_LOG_FMT(ROLLBACK, "JIT blocks at {:08x} dropped at the end of frame {}", address, at);
+    }
+  }
+  if (first_pass_here &&
+      (listed(s_clear_jit_at) || (s_clear_jit_every > 0 && frame_here >= s_clear_jit_from &&
+                                  frame_here % s_clear_jit_every == 0)))
+  {
+    if (Diag::g_jit_code_log)
+      Diag::JitCodeNote("YG_CLEARJIT");
+    system.GetJitInterface().ClearSafe();
+    NOTICE_LOG_FMT(ROLLBACK, "JIT cleared at the end of frame {}", frame_here);
+  }
+  if (first_pass_here && !s_watch.empty())
+  {
+    static std::vector<u32> s_watched(s_watch.size(), 0);
+    static bool s_watch_started = false;
+    for (std::size_t i = 0; i < s_watch.size(); ++i)
+    {
+      const u32 value = PowerPC::MMU::HostRead<u32>(guard, s_watch[i]);
+      if (!s_watch_started || value != s_watched[i])
+      {
+        NOTICE_LOG_FMT(ROLLBACK, "Watch frame {} ({}): {:08x} = {:08x}", frame_here, s_scene,
+                       s_watch[i], value);
+      }
+      s_watched[i] = value;
+    }
+    s_watch_started = true;
+  }
+  if (Diag::g_jit_code_log && first_pass_here && frame_here % 600 == 0)
+  {
+    std::string stats;
+    for (const auto& [name, free] : system.GetJitInterface().GetMemoryStats())
+      stats += fmt::format(" {} {:.1f} MB free ({:.2f} fragmented)", name, free.first / 1048576.0,
+                           free.second);
+    Diag::JitCodeNote("JIT" + stats);
+  }
   if (first_pass_here && std::find(s_nand_hashes_at.begin(), s_nand_hashes_at.end(), frame_here) !=
                              s_nand_hashes_at.end())
   {
@@ -1338,6 +1433,8 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
   }
   // A load above rewound s_frame; the next frame end is the frame after it.
   ++s_frame;
+  if (Diag::g_jit_code_log)
+    Diag::JitCodeSetFrame(s_frame);
   s_max_frame = std::max(s_max_frame, frame_here);
   // The next frame is a re-run if it has been run before (a session decides that itself).
   if (!s_loopback && !RingPort::Active())

@@ -554,6 +554,18 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
     return;
   }
   Orca::Status::GameStarted();
+  // A loader's codes have rewritten game code without invalidating it (Profile.h,
+  // jit_clear_frame): from here on the JIT runs what RAM holds, on every machine. Each frame counts
+  // once, at the end of its first run: a joiner's boot ahead and catch-up are first runs (a launch
+  // join boots ahead to the profile's boot_nand_frame under catch-up), a rollback's re-run is not.
+  const RingPort* const port = RingPort::Active();
+  if (!(port ? port->Resimulating() : IsResimulating()) && Orca::JitClearDue())
+  {
+    if (Diag::g_jit_code_log)
+      Diag::JitCodeNote("the profile's JitClearFrame");
+    guard.GetSystem().GetJitInterface().ClearSafe();
+    NOTICE_LOG_FMT(ROLLBACK, "JIT cleared once: the loader's codes have landed");
+  }
   // The overlay's frame meter: the frame that just ended, shown unless the last boundary set it to
   // run as a re-run or a catch-up (below). Host time only.
   Orca::Events::NotifyBoundary(s_frame_shown);

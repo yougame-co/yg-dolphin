@@ -53,6 +53,7 @@
 #include "Core/PowerPC/GDBStub.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/Rollback/Diag.h"
 #include "Core/System.h"
 
 #include "VideoCommon/EFBInterface.h"
@@ -2033,6 +2034,8 @@ void MMU::DBATUpdated()
 #endif
 
   // IsOptimizable*Address and dcbz depends on the BAT mapping, so we need a flush here.
+  if (Rollback::Diag::g_jit_code_log)
+    Rollback::Diag::JitCodeNote("DBAT update");
   m_system.GetJitInterface().ClearSafe();
 }
 
@@ -2049,6 +2052,8 @@ void MMU::IBATUpdated()
     UpdateFakeMMUBat(m_ibat_table, 0x40000000);
     UpdateFakeMMUBat(m_ibat_table, 0x70000000);
   }
+  if (Rollback::Diag::g_jit_code_log)
+    Rollback::Diag::JitCodeNote("IBAT update");
   m_system.GetJitInterface().ClearSafe();
 }
 

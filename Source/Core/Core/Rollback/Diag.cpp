@@ -7,10 +7,14 @@
 #include <array>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <map>
+#include <optional>
 #include <string>
+#include <unordered_map>
 
 #include <fmt/format.h>
 
@@ -19,7 +23,11 @@
 #endif
 
 #include "Common/Logging/Log.h"
+#include "Common/Swap.h"
+#include "Core/Core.h"
 #include "Core/HW/Memmap.h"
+#include "Core/PowerPC/JitCommon/JitCache.h"
+#include "Core/PowerPC/JitInterface.h"
 #include "Core/Rollback/Cow.h"
 #include "Core/System.h"
 
@@ -329,6 +337,147 @@ void AddRingLoad(double ms, std::size_t changed_blocks)
 void AddPortSave(double ms)
 {
   s_snap.port_saves.push_back(static_cast<float>(ms));
+}
+
+namespace
+{
+struct JitCodeWord
+{
+  u32 word = 0;
+  u32 clears = 0;       // s_jit_clears when it was compiled
+  bool guest = false;   // a guest invalidation (icbi, dcbst/dcbf) covered it since
+  bool forced = false;  // a forced one (a rollback load's restored page) did
+};
+FILE* const s_jit_code_file = [] {
+  const char* path = std::getenv("YG_JITCODE_LOG");
+  return path && *path ? std::fopen(path, "w") : nullptr;
+}();
+std::unordered_map<u32, JitCodeWord> s_jit_words;
+// The words each block start's latest compile read.
+std::unordered_map<u32, std::vector<std::pair<u32, u32>>> s_jit_block_words;
+u32 s_jit_clears = 0;
+int s_jit_frame = 0;
+
+// The word at an effective address in MEM1 or MEM2 (mapped as the games run them), or nothing:
+// Memory::Read_U32 raises a panic alert anywhere else (the locked cache, a page-table mapping).
+std::optional<u32> RamWord(Memory::MemoryManager& memory, u32 address)
+{
+  const u32 physical = address & 0x3FFFFFFF;
+  if (physical <= memory.GetRamSizeReal() - 4)
+    return Common::swap32(memory.GetRAM() + physical);
+  const u32 offset = physical & 0x0FFFFFFF;
+  if (memory.GetEXRAM() && (physical >> 28) == 1 && memory.GetExRamSizeReal() >= 4 &&
+      offset <= memory.GetExRamSizeReal() - 4)
+  {
+    return Common::swap32(memory.GetEXRAM() + offset);
+  }
+  return std::nullopt;
+}
+}  // namespace
+
+const bool g_jit_code_log = s_jit_code_file != nullptr;
+
+void JitCodeSetFrame(int frame)
+{
+  s_jit_frame = frame;
+  if (s_jit_code_file && frame % 60 == 0)
+    std::fflush(s_jit_code_file);
+}
+
+void JitCodeCompiled(u32 block_start, const std::vector<std::pair<u32, u32>>& words)
+{
+  if (!s_jit_code_file)
+    return;
+  auto& memory = Core::System::GetInstance().GetMemory();
+  for (const auto& [address, word] : words)
+  {
+    const std::optional<u32> in_ram = RamWord(memory, address);
+    if (!in_ram)
+      continue;
+    const u32 ram = *in_ram;
+    auto [it, fresh] = s_jit_words.try_emplace(address);
+    JitCodeWord& w = it->second;
+    if (!fresh && w.word != word)
+    {
+      const char* why = w.guest  ? "guest" :
+                        w.forced ? "forced" :
+                        w.clears != s_jit_clears ? "clear" :
+                                                   "none";
+      std::fprintf(s_jit_code_file, "%d chg %08x %08x %08x %08x %s %08x\n", s_jit_frame, address,
+                   w.word, word, ram, why, block_start);
+    }
+    if (word != ram)
+    {
+      std::fprintf(s_jit_code_file, "%d stale %08x %08x %08x %08x - %08x\n", s_jit_frame, address,
+                   w.word, word, ram, block_start);
+    }
+    w = {word, s_jit_clears, false, false};
+  }
+  s_jit_block_words[block_start] = words;
+}
+
+void JitCodeCensus(const Core::CPUThreadGuard& guard, const char* why)
+{
+  if (!s_jit_code_file)
+    return;
+  Core::System& system = guard.GetSystem();
+  auto& memory = system.GetMemory();
+  std::map<u32, std::pair<u32, u32>> stale;  // address -> (compiled, RAM)
+  std::size_t blocks = 0;
+  system.GetJitInterface().RunOnBlocks(guard, [&](const JitBlock& block) {
+    ++blocks;
+    const auto it = s_jit_block_words.find(block.effectiveAddress);
+    if (it == s_jit_block_words.end())
+      return;
+    for (const auto& [address, word] : it->second)
+    {
+      if (const std::optional<u32> ram = RamWord(memory, address); ram && *ram != word)
+        stale[address] = {word, *ram};
+    }
+  });
+  for (const auto& [address, words] : stale)
+  {
+    std::fprintf(s_jit_code_file, "%d stalecode %08x %08x %08x %s\n", s_jit_frame, address,
+                 words.first, words.second, why);
+  }
+  std::fprintf(s_jit_code_file, "%d census %s: %zu blocks, %zu words compiled other than RAM\n",
+               s_jit_frame, why, blocks, stale.size());
+  std::fflush(s_jit_code_file);
+}
+
+void JitCodeInvalidated(u32 address, u32 length, bool forced)
+{
+  if (!s_jit_code_file || length == 0)
+    return;
+  const u64 end = static_cast<u64>(address) + length;
+  if (length <= 4096)
+  {
+    for (u64 a = address & ~3u; a < end; a += 4)
+    {
+      if (auto it = s_jit_words.find(static_cast<u32>(a)); it != s_jit_words.end())
+        (forced ? it->second.forced : it->second.guest) = true;
+    }
+    return;
+  }
+  for (auto& [a, w] : s_jit_words)
+  {
+    if (a >= address && a < end)
+      (forced ? w.forced : w.guest) = true;
+  }
+}
+
+void JitCodeCleared(const char* why)
+{
+  if (!s_jit_code_file)
+    return;
+  ++s_jit_clears;
+  std::fprintf(s_jit_code_file, "%d clear %s\n", s_jit_frame, why);
+}
+
+void JitCodeNote(const std::string& line)
+{
+  if (s_jit_code_file)
+    std::fprintf(s_jit_code_file, "%d note %s\n", s_jit_frame, line.c_str());
 }
 
 void AddPortLoad(double ms)

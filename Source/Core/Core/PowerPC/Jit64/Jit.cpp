@@ -46,6 +46,7 @@
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PPCAnalyst.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/Rollback/Diag.h"
 #include "Core/System.h"
 
 using namespace Gen;
@@ -802,6 +803,8 @@ void Jit64::Jit(u32 em_address, bool clear_cache_and_retry_on_failure)
     if (!SConfig::GetInstance().bJITNoBlockCache)
     {
       WARN_LOG_FMT(DYNA_REC, "flushing trampoline code cache, please report if this happens a lot");
+      if (Rollback::Diag::g_jit_code_log)
+        Rollback::Diag::JitCodeNote("trampolines full");
     }
     ClearCache();
   }
@@ -890,6 +893,8 @@ void Jit64::Jit(u32 em_address, bool clear_cache_and_retry_on_failure)
     // Code generation failed due to not enough free space in either the near or far code regions.
     // Clear the entire JIT cache and retry.
     WARN_LOG_FMT(DYNA_REC, "flushing code caches, please report if this happens a lot");
+    if (Rollback::Diag::g_jit_code_log)
+      Rollback::Diag::JitCodeNote("code space full");
     ClearCache();
     Jit(em_address, false);
     return;

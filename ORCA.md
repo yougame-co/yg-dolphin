@@ -1452,6 +1452,90 @@ synctests across the match start pass (4,851 re-run frames each) and so do loopb
 rollbacks, P+ 579). Rosetta translates Jit64's output, so this checks Jit64's logic, not Windows
 itself (its thread-stack guard, MSVC): the same checks on the PC are what close that.
 
+## Code the JIT doesn't see
+
+Branch `pplus-jit-clear` (on `rel-0.3.14`), 2026-10-04. The canonical-start spike found Project+'s
+RAM changing the frame after a JIT clear (Brawl's never does). Traced, and fixed for the codes that
+do it.
+
+**The cause.** Project+'s Gecko code handler applies `NETBOOST.GCT`'s RAM writes with plain stores
+(no `dcbst`/`icbi`), and the first time it writes them (frame 1, the first frame after the frame
+hook goes live) seven words of Brawl's code change, in functions the boot has already run and the
+JIT has already compiled:
+
+| Words | Code (`Project+/NETBOOST.TXT`, `Source/Extras/Netplay.asm` on the SD card) | Effect of a clear |
+|---|---|---|
+| `80023b88` beq -> nop, `80024028` blr -> b `801e892c` | Move v-sync call for Brawl/PM | RAM differs the next frame |
+| `8001cd24`, `8001cd2c`, `800266b8` | Fixed OSReport Syntax on File Reading | RAM differs at the next file read |
+| `8018cfc4`, `8018cfc8` cmpwi/beq -> cmplwi 0x30/blt | [Legacy TE] Extra null pointer catch | none seen |
+
+Nothing invalidates those blocks afterwards: no icbi, dcbst or dcbf reaches the lines (none in
+40,000 frames and five matches; DMA never drops JIT blocks in this Dolphin), a rollback load restores only the 4 KB blocks whose bytes changed
+and a keyframe only the pages that differ (the handler writes the same words every frame, so they
+never differ), and Dolphin's own workaround for code handlers that don't invalidate
+(`HLE_Misc::GeckoCodeHandlerICacheFlush`: an icache reset and a JIT clear on the handler's first
+five runs) is spent during the boot, before Project+'s codes start writing (its counter at
+`0x80001800` is already at five at frame 0). So a warm JIT runs Brawl's words there for the whole
+process, and the first whole-cache clear switches it to Project+'s: the v-sync move alone
+(dropping just the blocks at `80023b88` and `80024028` at frame 388) reproduces the spike's change
+at frame 389. The emulated instruction cache plays no part: no compile ever read a cached line that
+differed from RAM. Brawl has no such words (its RAM is the same after any number of clears).
+
+**Who clears, today.** Orca itself never does in a session: rollback loads and keyframe joins keep
+the JIT (only changed pages are dropped, `Rollback.cpp`), BAT reloads are skipped when the BATs
+are unchanged, and a session refuses savestates. Dolphin clears after the boot only when its code
+space or Jit64's trampoline space fills, after a stack-guard fault, or when a JIT setting changes;
+none happened in the runs below. Code space after five Project+ matches (five stages, other
+fighters each time; 24,000 frames): JitArm64 26 of 128 MB near and 46 of 128 MB far (the first
+far half 72% full, 1-5 MB more a match with new content), Jit64 24 of 128 MB near, 3.6 of 64 MB
+far, 0.1 of 8 MB trampolines. A flush takes dozens of matches of new content, and a Mac and a PC
+fill at different rates: rare, but a desync from the next frame when it happens, and the same for
+any future Orca feature that clears the JIT.
+
+**The fix.** `JitClearFrame = 2` in `PPLUS32.ini` (`Profile.h` `jit_clear_frame`,
+`Rollback::OnFrameBoundary`): Orca drops every JIT block once, at the end of frame 2, after the
+codes have landed. Frames count at the end of their first run: a launch joiner's boot ahead runs
+under catch-up and counts (a first version skipped catch-up frames, so a joiner kept Brawl's words
+through the keyframe and desynced 2 s into the join), a rollback's re-run doesn't. From then on
+the JIT runs what RAM holds and a clear changes nothing:
+
+- Census (`YG_JITCODE_CENSUS`): 7 words compiled other than RAM at frame 1, 0 in the DOL and the
+  codes from frame 3 through five matches (the rest are heap blocks of modules the game unloaded,
+  never run again).
+- `pplus-1v1.txt`, 6,000 frames: the run with clears at 388, and the run with clears at 2,000 and
+  4,500, hash as the run without, frame by frame. Five matches (24,000 frames) with clears at
+  7,000, 15,000 and 20,000: the same.
+- Synctests from frame 300 to 4,000 (`YG_SYNCTEST=7`, 25,851 re-run frames): 0 RAM mismatches,
+  and 0 with `YG_SYNCTEST_CLEARJIT=1` (the whole JIT dropped after each of 3,694 loads; 0.3.14's
+  behaviour fails that one, 28 RAM mismatches in its first 500 frames).
+- The casual queue flow (`pplus-queue2-flow.txt`, the pick at 821): its steps as 0.3.14's checks
+  list them (ready, the room's header, the pick, the stage, the fight, results, game 2's character
+  select), runs with clears at 1,000 and 2,000 hash as the run without, and its synctest from frame
+  200 to 3,200 passes (20,951 re-run frames, 0 RAM mismatches).
+- Jit64 (x86-64 under Rosetta 2): the same hashes as JitArm64, with and without clears at 388 and
+  3,000.
+- Two Orcas over a real YouGame room (dev tickets): a launch join (`ORCA_JOIN=1`, boot ahead,
+  keyframe, catch-up) on the character select, 2,586 frames alike after the keyframe and no
+  desync; `dropin-identity.py --pplus` (a join from the character select, then a match) passes,
+  1,443 frames alike, 24 checksums matched.
+- Cost: one clear during the strap screen (a few thousand blocks compiled again).
+- What changes: Project+ runs those three codes as written, the v-sync move included (Brawl's frame
+  function no longer loops back at `80023b88` and ends in a tail call to `VIWaitForRetrace`,
+  `801e892c`), from frame 3. Its RAM differs from 0.3.14's from then on (the profile file is in the
+  compatibility key), the boot reaches the main menu at frame 194 instead of 197 (frame-numbered
+  test knobs move 3 frames earlier: the queue flow's pick at 821, not 824), and the input latency
+  and pacing should be measured again before it ships.
+
+**Checking a codeset** (a Project+ update, another launcher profile): `Tools/orca/jit-history.py
+<nogui> <disc> --pplus "<dir>/Project+ Netplay Launcher.dol"` runs the boot twice (as it comes, and
+with JIT clears at `--clear` frames), compares the RAM hash logs frame by frame and lists every
+word a live block runs that RAM no longer holds (a census at the profile's own clear frame runs
+after that clear). Harness knobs (`Rollback/Harness.cpp`,
+`Rollback/Diag.h`): `YG_CLEARJIT_AT=<frames>` / `YG_CLEARJIT_EVERY=N` (`YG_CLEARJIT_FROM`),
+`YG_JIT_INVALIDATE=<frame>:<address>`, `YG_WATCH=<addresses>`, and `YG_JITCODE_LOG=<file>` (every
+compile that read a word other than the last compile at that address, or than RAM, with what
+reached the address in between; every clear and its source) with `YG_JITCODE_CENSUS=<frames>`.
+
 ## Game patches
 
 `Data/Sys/Orca/<profile>.patches` (`Core/Orca/UX/GamePatches.h`): Orca's own changes to the game's
