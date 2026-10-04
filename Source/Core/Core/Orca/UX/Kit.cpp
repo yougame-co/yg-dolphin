@@ -863,29 +863,42 @@ int DemoMode()
 void DrawDemo(ImDrawList* dl, ImVec2 o, ImVec2 size, float u, double now_s)
 {
   const auto at = [&](float fx, float fy) { return ImVec2(o.x + size.x * fx, o.y + size.y * fy); };
+  // Each primitive's name in small pale letters under it.
+  const auto caption = [&](ImVec2 p, std::string_view name, Align align = Align::Centre) {
+    Label(dl, p, u, name, 1.9f, align, Rgb(176, 206, 255));
+  };
   // Top centre: the set's banner, the turn's timer beside it, and one about to run out.
   const Box banner = Banner(dl, at(0.29f, 0).x, at(0.71f, 0).x, o.y + 2.2f * u, 9.0f * u, u,
                             Tone::Navy, "RANKED  GAME 2", "ada 1 – 0 bo · bo bans a stage");
+  caption(ImVec2((banner.min.x + banner.max.x) / 2, banner.max.y + 0.4f * u), "Banner");
   const float mid = (banner.min.y + banner.max.y) / 2;
   const Box t1 = Timer(dl, ImVec2(banner.max.x + 7.0f * u, mid), u, 24, now_s);
-  Timer(dl, ImVec2(t1.max.x + 7.5f * u, mid), u, 4, now_s);
+  const Box t2 = Timer(dl, ImVec2(t1.max.x + 7.5f * u, mid), u, 4, now_s);
+  caption(ImVec2((t1.min.x + t2.max.x) / 2, t1.max.y + 0.6f * u), "Timer");
   // Top left: the toasts and a chat line on plates, the ping under them.
   float y = o.y + 2.5f * u;
   y = LabelPlate(dl, ImVec2(o.x + 2.5f * u, y), u, "bo joined on port 2", 2.7f).max.y + 1.0f * u;
   y = LabelPlate(dl, ImVec2(o.x + 2.5f * u, y), u, "bo: gl hf … one more?", 2.7f).max.y +
-      1.0f * u;
-  Label(dl, ImVec2(o.x + 2.5f * u, y), u, "32 ms · 60 fps", 2.6f);
+      0.3f * u;
+  caption(ImVec2(o.x + 2.5f * u, y), "LabelPlate", Align::Left);
+  y += 2.8f * u;
+  y = Label(dl, ImVec2(o.x + 2.5f * u, y), u, "32 ms · 60 fps", 2.6f).max.y;
+  caption(ImVec2(o.x + 2.5f * u, y), "Label", Align::Left);
   // The middle: a title over a label, two pointers, two framed tiles.
-  Title(dl, at(0.5f, 0.19f), u, "Waiting for bo…", 5.5f, Align::Centre);
+  const Box title = Title(dl, at(0.5f, 0.19f), u, "Waiting for bo…", 5.5f, Align::Centre);
+  caption(ImVec2(title.max.x + 1.5f * u, title.min.y + 2.0f * u), "Title", Align::Left);
   Label(dl, Add(at(0.5f, 0.19f), ImVec2(0, 6.4f * u)), u, "bo forfeits in 0:18", 3.2f,
         Align::Centre, Rgb(255, 226, 120));
   Frame(dl, at(0.40f, 0.34f), at(0.48f, 0.44f), u, Tone::Red, "ada", true);
   Frame(dl, at(0.52f, 0.34f), at(0.60f, 0.44f), u, Tone::Gold, "ada + bo", true);
+  caption(ImVec2(at(0.60f, 0).x + 1.5f * u, at(0, 0.34f).y), "Frame", Align::Left);
   Pointer(dl, at(0.44f, 0.40f), 2.6f * u, u, 0, "P1 ada", true, true, now_s);
   Pointer(dl, at(0.585f, 0.415f), 2.6f * u, u, 1, "P2 bo", false, false, now_s);
+  caption(ImVec2(at(0.60f, 0).x + 1.5f * u, at(0, 0.40f).y), "Pointer", Align::Left);
   // The lower middle: a results card.
   const ImVec2 c0 = at(0.335f, 0.475f), c1 = at(0.665f, 0.565f);
   Plate(dl, c0, c1, u, Tone::Navy);
+  caption(ImVec2(c1.x + 1.5f * u, c0.y + 1.0f * u), "Plate", Align::Left);
   const float cy = (c0.y + c1.y) / 2;
   Title(dl, ImVec2(c0.x + 2.0f * u, cy - 2.4f * u), u, "VICTORY", 4.8f);
   Label(dl, ImVec2(c1.x - 2.0f * u, cy - 3.3f * u), u, "1532 → 1550", 3.2f, Align::Right);
@@ -899,7 +912,8 @@ void DrawDemo(ImDrawList* dl, ImVec2 o, ImVec2 size, float u, double now_s)
     Badge(dl, ImVec2(cx, o.y + size.y * 0.71f), u, "LOCKED IN", PortTone(port), 3.2f);
   }
   Badge(dl, at(0.62f, 0.71f), u, "READY", Tone::Gold, 3.2f);
-  Badge(dl, at(0.77f, 0.71f), u, "WAITING", Tone::Grey, 3.2f);
+  const Box waiting = Badge(dl, at(0.77f, 0.71f), u, "WAITING", Tone::Grey, 3.2f);
+  caption(ImVec2(waiting.max.x + 1.5f * u, waiting.min.y + 0.8f * u), "Badge", Align::Left);
   LabelPlate(dl, at(0.70f, 0.58f), u, "Hold Z to find someone else", 2.6f, Align::Centre, Tone::Green);
 }
 }  // namespace Orca::UX::Kit
