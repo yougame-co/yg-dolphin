@@ -1884,8 +1884,8 @@ game: gmGlobalModeMelee `+0x98`, 0x5C a port, already filled on the stage select
 select X, Y, Z, L and R do nothing, and Start takes a stage.
 
 **Checked** (2026-10-03, Apple Silicon, `-v Null`):
-- `YG_SYNCTEST=7` over a scripted set (`ORCA_TEST_RANKED=brawl`, 1-stock rules, port 2 walking
-  off): game 1's strikes by X with the turns, the flow's pick across pages onto Pokemon Stadium
+- `YG_SYNCTEST=7` over a scripted set (`Tools/orca/inputs/bf-ranked-bo3.txt`,
+  `ORCA_TEST_RANKED=brawl`, 1-stock rules, port 2 walking off): game 1's strikes by X with the turns, the flow's pick across pages onto Pokemon Stadium
   (the match's stage `0x2E`), the match, results; game 2's ban timing out, the loser's A on
   Battlefield, the match, results (2-0): frames 1,700-6,700, 34,951 re-run frames, 0 RAM
   mismatches.
