@@ -1881,7 +1881,19 @@ pressed ones.
 processes alike): that set on every character select with no match block behind it, so the order
 runs on the boot's character select once both players have joined.
 
-**Proof** (2026-10-03): see below.
+**Proof** (2026-10-03, `ORCA_TEST_CHAR_ORDER`, headless): `YG_SYNCTEST=7` from the boot's
+character select through the order, Orca's Start, the stage select and the match's start, the
+same step changes as the plain runs, 0 RAM mismatches:
+- Project+ `pplus:2:1` with `Tools/orca/inputs/pplus-char-order.txt` (port 2 down first, port 1
+  joins and picks first: its A locks in at frame 485, port 2's 45 s run out at 3185, Orca's Start,
+  the stage select at 3189): 21,651 re-run frames.
+- Project+ `pplus:2:2`, the same inputs (port 2 picks first and lets its time run out at 3065,
+  port 1 puts its token down at 3165, the stage select at 3169): 21,651 re-run frames.
+- Brawl `brawl:2:2` with `Tools/orca/inputs/bf-char-order.txt` (both at once; port 2's A on its
+  own token picks it up and counts for nothing, its next A locks in at 1929, port 1's at 2009,
+  the stage select at 2013): 5,201 re-run frames.
+In every run the masked presses (the off-turn port's, B and Start) did nothing. `OrcaCharOrder*`
+(18 tests) and every `Orca*` unit test pass.
 
 ## Embedding
 
