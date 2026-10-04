@@ -276,6 +276,11 @@ class Side {
       YG_SCENES: "1",
     };
     if (!SLUG) env.ORCA_TEST_KEYFRAME_DIR = path.join(WORK, "kf");
+    // Test overrides from this script's own environment, the same for both Orcas (for example
+    // ORCA_TEST_SET_RULES=1,8: a ranked Brawl set's games at 1 stock).
+    for (const [k, v] of Object.entries(process.env)) {
+      if (k.startsWith("ORCA_TEST_") && !(k in env)) env[k] = v;
+    }
     if (PPLUS) env.ORCA_PROFILE = "PPLUS32";
     const shots = SHOTS && this.name === "ada";
     if (shots)
