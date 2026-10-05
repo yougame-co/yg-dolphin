@@ -881,12 +881,15 @@ Tests:
 
 ### TURN only when needed (Orca 0.3.21)
 
-A link starts with host and STUN candidates only. One that never finds a path (`no path`: answered
-but not connected in CONNECT_TIMEOUT; or ICE `failed`) marks the pair `with_turn`, and every later
-link to that peer gathers the ticket's TURN server too; the offer (`dl`) and the request for a new
-link (`dlr`) carry `"t": 1` so the other side's next agent has it as well. A link that worked and
-went quiet (`silent`) does not add TURN. Until a TURN link is up the room's relay carries the
-inputs, as for any link that is down.
+A link starts with host and STUN candidates only. One that never came up (`no path`: answered but
+not connected in CONNECT_TIMEOUT; or ICE `failed` before it was ever up) marks the pair
+`with_turn`, and the next link to that peer gathers the ticket's TURN server too. The offering side
+decides: its offer (`dl`) carries `"t": 1` and the answering side's agent follows it; the answering
+side's request for a new link (`dlr`) always says `"t": 0|1`, and the offering side takes that. A
+link that worked and then failed (consent lost after 30 s, a socket error) or went quiet (`silent`)
+keeps going without TURN, and an `upgrade` to the LAN clears the flag on both sides, so a pair that
+needed TURN once (a firewall prompt still open) is not left with an allocation beside a host/host
+path. Until a TURN link is up the room's relay carries the inputs, as for any link that is down.
 
 Why: on 2026-10-05 Luis's PC (Realtek RTL8822BE) dropped off the air for 100-400 ms every 5.0 s for
 as long as a direct link with a TURN allocation lived, and the Mac stalled on its inputs each time
