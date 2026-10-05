@@ -62,7 +62,11 @@ if OVERLAY and not FRIEND:
     sys.exit("--overlay needs --friend: it is the friend's wait that it checks")
 SAMPLE = arg_value("--sample")
 SHOTS = arg_value("--shots")
-FROM_FRAME = int(arg_value("--from-frame") or 7300)
+FROM_FRAME = int(arg_value("--from-frame") or (3000 if OVERLAY else 7300))
+# With --overlay the friend drops in mid-fight, at this frame of the host's (the flow's match starts
+# at about 2134); dropping in on the main menu jumps both to With Friends' character select, which
+# this flow's scripted presses there crash on (0.3.18 too: Invalid read at PC 806cec6c).
+OVERLAY_JOIN_FRAME = int(arg_value("--join-frame") or 2400)
 HERE = os.path.dirname(os.path.abspath(__file__))
 INPUT = os.path.join(HERE, "inputs", "bf-mario-link-results.txt")
 ROOM = "occ" + "".join(random.choice(string.ascii_lowercase + string.digits) for _ in range(6))
@@ -292,6 +296,12 @@ def run():
     host.expect("orca state playing", 90)
     players = [host]
 
+    if FRIEND and OVERLAY:
+        end = time.time() + 300
+        while not (host.stats and host.stats[-1][1].get("f", 0) >= OVERLAY_JOIN_FRAME):
+            if time.time() > end or host.proc.poll() is not None:
+                raise Failed(f"the game didn't reach frame {OVERLAY_JOIN_FRAME} for the friend")
+            time.sleep(0.5)
     if FRIEND:
         friend = Proc("Friend", [BIN, "-p", "headless", "-v", "Null"] + common_args("Friend"),
                       dict(session_env("Friend", {}), ORCA_TEST_COMMANDS="1"))
