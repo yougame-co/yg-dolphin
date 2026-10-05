@@ -38,8 +38,13 @@
 # 8. The same, but the FRIEND presses With Anyone > Ranked in the shared menu (either player's press
 #    makes the pick there): the host, who pressed nothing, leaves for the queue all the same, and the
 #    friend comes home on its RANKED select, armed: both ready without backing out.
-#   --only rooms|page|home|lobby|guest[,...]: those steps alone (rooms: 1-4, page: 5, home: 6,
-#   lobby: 7, guest: 8).
+# 9. A friend drops into the room of a guest that came home: the pair on With Friends' character
+#    select, the host's app stops it, the friend goes home (port 1, a room of its own); a new Orca
+#    joins that room from the app's invite (a keyframe of a former joiner's game: the old host's port
+#    names cleared), both play 15 s, the new one's app leaves, and the session the former guest
+#    hosted ends having matched checksums ("friend-joined", then "friend-left", no error).
+#   --only rooms|page|home|lobby|guest|rejoin[,...]: those steps alone (rooms: 1-4, page: 5, home: 6,
+#   lobby: 7, guest: 8, rejoin: 9).
 # Each step waits for the lines it expects and fails on a timeout. Two Orca processes at most.
 import json
 import os
@@ -56,7 +61,7 @@ import time
 import urllib.request
 
 if len(sys.argv) < 3:
-    sys.exit("usage: dropin-rooms.py <nogui> <disc> [--only rooms,page,home,lobby,guest]")
+    sys.exit("usage: dropin-rooms.py <nogui> <disc> [--only rooms,page,home,lobby,guest,rejoin]")
 BIN, DISC = sys.argv[1], sys.argv[2]
 HERE = os.path.dirname(os.path.abspath(__file__))
 INPUT = os.path.join(HERE, "inputs", "bf-mario-link-results.txt")
@@ -448,6 +453,7 @@ def came_home(f, friend_log, room, since, after):
     own = wait_mirror(friend_log, lambda r: r["code"] != room and r["players"], 20,
                       f"{f.name}'s page was never shown a room of its own")
     log(f"{f.name}'s own room: {own['code']}")
+    return own["code"]
 
 
 try:
@@ -598,6 +604,63 @@ try:
     if run_step("guest"):
         # 8. The friend picks it.
         lobby_pick("gst", "friend")
+
+    if run_step("rejoin"):
+        # 9. The host's app stops it on With Friends' character select; the friend goes home there.
+        host, host_port, host_log, friend, friend_port, friend_log, room = pair_on_with_friends("rej")
+        since, after = len(friend.seen), friend.log_size()
+        host.send("leave")
+        host.send("quit")
+        friend.expect("orca state host-left", 15)
+        if host.proc.wait(timeout=20) != 0:
+            fail(f"the host exited with {host.proc.returncode}")
+        if friend.home_or_no_room(15, after, since) != "home":
+            fail("the friend didn't go home on With Friends' character select")
+        own = came_home(friend, friend_log, room, since, after)
+        # A new friend joins that room from the app's invite.
+        joiner_log = os.path.join(WORK, "bridge-rej-joiner.log")
+        joiner_port = start_bridge(joiner_log, own, FAKE_NO_LEAVE="1", FAKE_PAD_LIVE="1")
+        joiner = Orca("Joiner-rej", {"YOUGAME_BRIDGE": f"http://127.0.0.1:{joiner_port}",
+                                     "YOUGAME_TOKEN": "t0ken", "YOUGAME_GAME": "orca-test",
+                                     "YG_SCENES": "1"},
+                      script=False)
+        orcas.append(joiner)
+        joiner.expect("orca caps", 30)
+        joiner.send(CAPS_Q2)
+        friend.expect("orca state friend-joining", 90)
+        joiner.expect("orca state playing", 120)
+        friend.expect("orca state friend-joined", 60)
+        fafter, jafter = friend.log_size(), joiner.log_size()
+        # Both play: each moves its hand about the character select now and then.
+        end = time.time() + 15
+        while time.time() < end:
+            for p in (friend_port, joiner_port):
+                pad(p, 0, [128, random.choice([40, 128, 215]), random.choice([40, 128, 215]), 128])
+            time.sleep(0.4)
+        for p in (friend_port, joiner_port):
+            pad(p)
+        time.sleep(1)
+        joiner.send("leave")
+        joiner.expect("orca state left", 20)
+        friend.expect("orca state friend-left", 20)
+        solo = (r"Drop-in: back to solo play at frame (\d+) \(([^)]*)\): (\d+) rollbacks, "
+                r"(\d+) checksums matched")
+        m = friend.wait_log(solo, 20, after=fafter)
+        log(f"{friend.name}'s session as host ended at frame {m.group(1)} ({m.group(2)}): "
+            f"{m.group(3)} rollbacks, {m.group(4)} checksums matched")
+        if int(m.group(4)) <= 0:
+            fail(f"{friend.name}'s session matched no checksums")
+        m = joiner.wait_log(solo, 20, after=jafter)
+        log(f"{joiner.name}'s session ended at frame {m.group(1)} ({m.group(2)}): "
+            f"{m.group(4)} checksums matched")
+        if int(m.group(4)) <= 0:
+            fail(f"{joiner.name}'s session matched no checksums")
+        for o in orcas:
+            if o is not host:
+                o.alive()
+        for o in orcas:
+            o.stop()
+        orcas.clear()
 finally:
     for o in orcas:
         if o.proc.poll() is None:

@@ -3,20 +3,20 @@
 # frame, port 1 from it; the other reports no controller; the frame hook's ports follow) and
 # ORCA_UX_TEST_NAMES=bo. Port 1's rules here drive whichever port the player is on. Set the frame
 # about 250 frames into the first character select (from a run with YG_SCENES=1), e.g.
-#   ORCA_UX_TEST_RESEAT_AT=2010 YG_SYNCTEST=7 YG_SYNCTEST_FROM=1400 YG_EXIT_AFTER=<menu 3 + 100>
-# Boot -> the main menu -> PLAY ONLINE > With Friends > FIGHT! -> the character select on port 2: it
-# joins its panel and puts its token on a character -> the move: port 2 unplugs, port 1 plugs in ->
-# port 1 joins its panel, puts its token down, holds B (token up, then out to the With Friends page)
-# -> B to the ONLINE page, With Anyone > Ranked -> the character select again: join, a character,
-# Start, then held B back to the With Anyone page.
+#   ORCA_UX_TEST_RESEAT_AT=1910 YG_SYNCTEST=7 YG_SYNCTEST_FROM=1400 YG_EXIT_AFTER=<menu 3 + 100>
+# The ux=18 walk (With Friends goes straight to its character select, and B out of it lands on the
+# ONLINE page with With Friends selected): boot -> the main menu -> PLAY ONLINE > With Friends -> the
+# character select on port 2: it joins its panel and puts its token on a character -> the move:
+# port 2 unplugs, port 1 plugs in -> port 1 joins its panel, puts its token down, holds B (token up,
+# then out to the ONLINE page) -> With Anyone > Ranked -> the character select again: join, a
+# character, Start, then held B back to the With Anyone page.
 @scStrap mash 30 99999 1 40 A
 @scBoot mash 30 99999 1 40 A
 @scTitle mash 30 99999 1 40 A
-# PLAY ONLINE, With Friends, FIGHT! (on port 2).
+# PLAY ONLINE, With Friends (on port 2).
 @muMenuMain:1 120 123 1 DOWN
 @muMenuMain:1 170 173 1 A
 @muMenuMain:1 220 223 1 A
-@muMenuMain:1 270 273 1 A
 # The first character select: port 2 joins, up into the grid, A (its token down).
 @scSelctCharacter:1 53 56 1 A
 @scSelctCharacter:1 113 153 1 SY=255
@@ -26,8 +26,7 @@
 @scSelctCharacter:1 360 400 1 SY=255
 @scSelctCharacter:1 420 423 1 A
 @scSelctCharacter:1 500 800 1 B
-# The main menu again, on the With Friends page: B to the ONLINE page, With Anyone > Ranked.
-@muMenuMain:2 200 203 1 B
+# The main menu again, on the ONLINE page: With Anyone > Ranked.
 @muMenuMain:2 250 253 1 RIGHT
 @muMenuMain:2 300 303 1 A
 @muMenuMain:2 350 353 1 DOWN

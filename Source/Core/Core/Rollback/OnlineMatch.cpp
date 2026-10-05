@@ -1967,7 +1967,10 @@ bool MaybeRestoreQueueImage(Core::System& system, Match& match)
 void TakeLobbyPickNow(Match& match)
 {
   auto pick = Orca::UX::TakeLobbyPick();
-  if (!pick && match.lobby_pick)
+  // A fresh pick is the one that counts (one that waited would have been stale by then anyway).
+  if (pick)
+    match.lobby_pick.reset();
+  else if (match.lobby_pick)
   {
     pick = std::exchange(match.lobby_pick, std::nullopt);
     // One that waited is stale once the game has gone on from it (back on the main menu, on to a

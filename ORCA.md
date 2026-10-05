@@ -347,7 +347,13 @@ host has played.
      nothing at all (YouGame's 2026-10-05 "Start did nothing": a friends-room guest whose host
      stopped). Solo with no session, so the boundary is a first run nothing re-runs, and only this
      game changes: its pads (port 1 plugged in, the old port unplugged) and, from the next boundary,
-     the frame hook's ports; the next friend's keyframe carries it. A guest in a fight when its host
+     the frame hook's ports; the next friend's keyframe carries it. On a character select the move
+     comes a frame after the old host's port unplugged, before Brawl closes that panel, so port 1's
+     panel keeps what the old host put there (its character, token down) and the guest's hand now
+     drives it, while the guest's own panel (its old port, unplugged) closes: it picks again
+     (screenshots 2026-10-05, both tokens down on With Friends' select, then the host's app
+     stopped). Cosmetic, and only there: the select a With Anyone pick opens starts with nobody's
+     token down, so nothing carries over on the way to the queue. A guest in a fight when its host
      goes still prints `orca state no-room` once, after the room it left has told the page it is
      empty (and never mirrors that room again), and goes home once back on the menus. The app can
      still send `join` meanwhile (it wins over going home).
