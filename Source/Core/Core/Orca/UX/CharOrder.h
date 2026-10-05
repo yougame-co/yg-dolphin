@@ -204,9 +204,16 @@ Rollback::InputGate::Masks Gate(const SetView& set, const CssView& css, const St
 std::string Line(const SetView& set, const CssView& css, const State& state,
                  const std::vector<Events::PortInfo>& ports);
 
+// The port whose pick it is on this state (the first picker's turn, then the second's), -1 when
+// neither: no order on, done, or off the character select. Pure; display only (the overlay frames
+// that player's portrait).
+int Picker(const CssView& css, const State& state);
+// The frame hook's last Picker on a first run (any thread): the overlay's.
+int CurrentPicker();
+
 // Which ports have locked in (bit p) on this state: the first picker's once its turn is over
 // (Free: the winner's own lock too), both once the order is done. 0 while the order isn't on.
-// Display only (the overlay's LOCKED IN badges).
+// Display only (the overlay's LOCKED IN ribbons).
 u8 LockedPorts(const SetView& set, const CssView& css, const State& state);
 
 // Supernova 2025's Meta Knight clause, re-checked once both final characters are known (Brawl's

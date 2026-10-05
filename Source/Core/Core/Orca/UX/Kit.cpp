@@ -901,20 +901,37 @@ Box Tab(ImDrawList* dl, ImVec2 pos, float unit, std::string_view text, Tone tone
 }
 }  // namespace
 
+Beat TurnPulse(double now_s)
+{
+  const float t = static_cast<float>(now_s - std::floor(now_s));
+  return {0.5f - 0.5f * std::cos(2 * std::numbers::pi_v<float> * t), t};
+}
+
 void Pointer(ImDrawList* dl, ImVec2 c, float radius, float unit, int port, std::string_view tag,
              bool turn, bool tag_left, double now_s)
 {
   const Paint p = PaintOf(PortTone(port));
-  const float thick = std::max(2.0f, 0.26f * radius);
-  const float rim = std::max(1.0f, 0.12f * radius);
+  // The tab stays where the cursor's resting size puts it while the cursor itself pulses.
+  const float rest = radius;
   if (turn)
   {
-    // The turn's gold ring, breathing.
-    const float k = 0.65f + 0.35f * static_cast<float>(0.5 + 0.5 * std::sin(now_s * 5.0));
-    const float r = radius + 0.55f * thick + rim;
-    dl->AddCircle(c, r, Rgb(30, 18, 0, 0.9f), 48, 0.9f * thick);
-    dl->AddCircle(c, r, Rgb(255, 214, 40, k), 48, 0.55f * thick);
+    // Whoever has to act pulses (design F, 2026-10-05): a glow in their colour breathing with the
+    // beat, a ring rippling out and fading, and the cursor itself swelling 14%.
+    const Beat beat = TurnPulse(now_s);
+    for (int k = 3; k >= 1; --k)
+    {
+      dl->AddCircleFilled(c, rest * (1.1f + 0.16f * static_cast<float>(k)) * (1 + 0.14f * beat.swell),
+                          Fade(p.top, (0.1f + 0.08f * beat.swell) / static_cast<float>(k)), 48);
+    }
+    const float out = rest * (1.08f + 1.0f * beat.ripple);
+    const float fade = std::pow(1 - beat.ripple, 1.4f);
+    const float width = std::max(1.5f, rest * (0.2f * (1 - beat.ripple) + 0.04f));
+    dl->AddCircle(c, out, Rgb(0, 0, 0, 0.35f * fade), 48, width + std::max(1.0f, 0.25f * width));
+    dl->AddCircle(c, out, Fade(p.top, 0.95f * fade), 48, width);
+    radius = rest * (1 + 0.14f * beat.swell);
   }
+  const float thick = std::max(2.0f, 0.26f * radius);
+  const float rim = std::max(1.0f, 0.12f * radius);
   dl->AddCircleFilled(ImVec2(c.x + 0.15f * unit, c.y + 0.4f * unit), radius + rim,
                       Rgb(0, 0, 0, 0.36f), 48);
   int first = dl->VtxBuffer.Size;
@@ -940,10 +957,96 @@ void Pointer(ImDrawList* dl, ImVec2 c, float radius, float unit, int port, std::
   dl->AddCircleFilled(c, std::max(1.0f, 0.1f * radius), p.bottom, 16);
   if (!tag.empty())
   {
-    const float ty = c.y + radius * 0.55f;
-    Tab(dl, ImVec2(tag_left ? c.x - radius * 0.55f : c.x + radius * 0.55f, ty), unit, tag,
+    const float ty = c.y + rest * 0.55f;
+    Tab(dl, ImVec2(tag_left ? c.x - rest * 0.55f : c.x + rest * 0.55f, ty), unit, tag,
         PortTone(port), tag_left);
   }
+}
+
+void PortraitFrame(ImDrawList* dl, ImVec2 min, ImVec2 max, float unit, Tone tone)
+{
+  if (!(max.x > min.x && max.y > min.y))
+    return;
+  const Paint p = PaintOf(tone);
+  // The glow: rings round the frame, wider and fainter outwards.
+  for (int k = 3; k >= 1; --k)
+  {
+    const float g = 0.55f * unit * static_cast<float>(k);
+    dl->AddRect(ImVec2(min.x - g, min.y - g), ImVec2(max.x + g, max.y + g),
+                Fade(p.top, 0.22f / static_cast<float>(k)), 0.7f * unit + g, 0, 0.8f * unit);
+  }
+  Frame(dl, min, max, unit, tone, {}, false);
+}
+
+Box Ribbon(ImDrawList* dl, ImVec2 min, ImVec2 max, float unit, std::string_view text, Tone tone)
+{
+  const Box box{min, max};
+  if (!(max.x > min.x && max.y > min.y))
+    return box;
+  const Paint p = PaintOf(tone);
+  Slab(dl, min, max, (max.y - min.y) * 0.3f, unit, p, 1);
+  // White in the heavy face, outlined in the tone's dark (gold's: a deep brown), shrunk until it
+  // fits inside the ribbon's ends.
+  TextLook look = TitleLook(unit, (max.y - min.y) * 0.62f / unit);
+  look.italic = 0.08f;
+  look.top = Rgb(255, 255, 255);
+  look.bottom = Rgb(255, 242, 214);
+  look.outline_colour = tone == Tone::Gold || tone == Tone::Yellow ? Rgb(110, 60, 0) : p.line;
+  look.outline = std::max(1.0f, look.px * 0.1f);
+  look.shadow = ImVec2(0, 0);
+  const float room = (max.x - min.x) - 2.4f * unit;
+  for (int i = 0; i < 12 && Measure(look, text).x > room; ++i)
+  {
+    look.px *= 0.92f;
+    look.outline = std::max(1.0f, look.px * 0.1f);
+  }
+  Text(dl, ImVec2((min.x + max.x) / 2, (min.y + max.y) / 2 - look.px / 2 + look.px * 0.04f), look,
+       text, 1, Align::Centre);
+  return box;
+}
+
+Box SetDots(ImDrawList* dl, ImVec2 centre, float unit, const std::array<int, 3>& games, int current)
+{
+  const float r = 0.9f * unit, gap = 1.25f * unit;
+  const float span = 3 * 2 * r + 2 * gap;
+  const Box box{ImVec2(centre.x - span / 2, centre.y - r), ImVec2(centre.x + span / 2, centre.y + r)};
+  for (int i = 0; i < 3; ++i)
+  {
+    const ImVec2 c(box.min.x + r + static_cast<float>(i) * (2 * r + gap), centre.y);
+    const int won = games[static_cast<std::size_t>(i)];
+    if (won == 0 || won == 1)
+    {
+      // A decided game: a dot in its winner's colour (their cursor's), rimmed in white.
+      const Paint p = PaintOf(PortTone(won));
+      dl->AddCircleFilled(ImVec2(c.x, c.y + 0.15f * unit), r + 0.2f * unit, Rgb(0, 0, 0, 0.35f), 24);
+      dl->AddCircleFilled(c, r + 0.2f * unit, Rgb(255, 255, 255), 24);
+      const int first = dl->VtxBuffer.Size;
+      dl->AddCircleFilled(c, r, IM_COL32_WHITE, 24);
+      Recolour(dl, first, c.y - r, c.y + r, p.top, p.bottom);
+    }
+    else
+    {
+      // To play: hollow, its rim brighter for the game being played.
+      dl->AddCircleFilled(c, r, Rgb(0, 0, 0, 0.35f), 24);
+      dl->AddCircle(c, r, i == current ? Rgb(236, 236, 236) : Rgb(130, 130, 130), 24,
+                    std::max(1.0f, 0.2f * unit));
+    }
+  }
+  return box;
+}
+
+void SearchRing(ImDrawList* dl, ImVec2 c, float radius, float unit, double now_s)
+{
+  if (radius <= 0)
+    return;
+  const float w = std::max(2.0f, 0.75f * unit);
+  dl->AddCircle(c, radius, Rgb(255, 255, 255, 0.4f), 64, w);
+  const float pi = std::numbers::pi_v<float>;
+  const float a0 = static_cast<float>(std::fmod(now_s * 0.8, 1.0)) * 2 * pi - pi / 2;
+  dl->PathArcTo(c, radius, a0, a0 + 0.28f * 2 * pi, 32);
+  dl->PathStroke(Rgb(60, 36, 0, 0.6f), ImDrawFlags_None, w + std::max(1.0f, 0.3f * w));
+  dl->PathArcTo(c, radius, a0, a0 + 0.28f * 2 * pi, 32);
+  dl->PathStroke(Rgb(255, 214, 40), ImDrawFlags_None, w);
 }
 
 void Frame(ImDrawList* dl, ImVec2 min, ImVec2 max, float unit, Tone tone, std::string_view tag,
@@ -1162,5 +1265,17 @@ void DrawDemo(ImDrawList* dl, ImVec2 o, ImVec2 size, float u, double now_s)
   const Box waiting = Badge(dl, at(0.77f, 0.71f), u, "WAITING", Tone::Grey, 3.2f);
   caption(ImVec2(waiting.max.x + 1.5f * u, waiting.min.y + 0.8f * u), "Badge", Align::Left);
   LabelPlate(dl, at(0.70f, 0.58f), u, "Hold Z to find someone else", 2.6f, Align::Centre, Tone::Green);
+  // Design F's pieces: a framed portrait with LOCKED IN, the turn's frame, the set's dots, the
+  // searching ring on an empty seat.
+  const ImVec2 f0 = at(0.80f, 0.79f), f1 = at(0.88f, 0.95f);
+  PortraitFrame(dl, f0, f1, u, Tone::Gold);
+  Ribbon(dl, ImVec2(f0.x + 1.0f * u, f0.y + 1.2f * u), ImVec2(f1.x - 1.0f * u, f0.y + 5.2f * u), u,
+         "LOCKED IN", Tone::Gold);
+  PortraitFrame(dl, at(0.90f, 0.79f), at(0.98f, 0.95f), u, Tone::Blue);
+  caption(ImVec2(f0.x, f1.y + 0.4f * u), "PortraitFrame, Ribbon", Align::Left);
+  const Box dots = SetDots(dl, at(0.5f, 0.62f), u, {0, 1, -1}, 2);
+  caption(ImVec2(dots.max.x + 1.5f * u, dots.min.y), "SetDots", Align::Left);
+  SearchRing(dl, at(0.72f, 0.87f), 5.0f * u, u, now_s);
+  caption(ImVec2(at(0.72f, 0).x, at(0, 0.87f).y + 5.6f * u), "SearchRing");
 }
 }  // namespace Orca::UX::Kit

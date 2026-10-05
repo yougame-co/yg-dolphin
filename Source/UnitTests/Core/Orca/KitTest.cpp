@@ -16,6 +16,7 @@
 #include "Common/IOFile.h"
 #include "Core/Orca/UX/GameFont.h"
 #include "Core/Orca/UX/Kit.h"
+#include "Core/Orca/UX/YgCard.h"
 
 using namespace Orca::UX;
 
@@ -340,6 +341,98 @@ TEST(OrcaKitDraw, EveryPrimitiveDrawsWithoutTheGamesFont)
     // A fade to nothing draws nothing.
     const int faded = dl->VtxBuffer.Size;
     Kit::Text(dl, ImVec2(10, 10), look, "gone", 0);
+    EXPECT_EQ(dl->VtxBuffer.Size, faded);
+    ImGui::Render();
+  }
+  EXPECT_EQ(ImGuiAssertFailures(), failures);
+  ImGui::DestroyContext(context);
+}
+
+// Design F's pieces: the turn's pulse on a one-second beat, the portrait's ribbon keeping its words
+// inside it, the set's dots, the searching ring, and the YouGame layer's cards (the site's avatar
+// colours, the chat wrapped inside its card), all drawn in an ImGui frame without an assert.
+TEST(OrcaKitDraw, DesignFPieces)
+{
+  const Kit::Beat rest = Kit::TurnPulse(7.0), peak = Kit::TurnPulse(7.5), late = Kit::TurnPulse(7.9);
+  EXPECT_NEAR(rest.swell, 0, 1e-4);
+  EXPECT_NEAR(peak.swell, 1, 1e-4);
+  EXPECT_NEAR(rest.ripple, 0, 1e-4);
+  EXPECT_NEAR(late.ripple, 0.9, 1e-3);
+  EXPECT_NEAR(Kit::TurnPulse(8.25).swell, Kit::TurnPulse(1.25).swell, 1e-4);
+
+  // The site's avatarColor (web/src/lib/site.ts): ada #1D4ED8, bo #0F766E, case-blind; a Latin-1
+  // name hashed as JavaScript's UTF-16 units of its lower case (Ángel #DC2626, byte-wise it isn't).
+  EXPECT_EQ(Yg::AvatarColour("ada"), IM_COL32(29, 78, 216, 255));
+  EXPECT_EQ(Yg::AvatarColour("ADA"), IM_COL32(29, 78, 216, 255));
+  EXPECT_EQ(Yg::AvatarColour("bo"), IM_COL32(15, 118, 110, 255));
+  EXPECT_EQ(Yg::AvatarColour("\u00c1ngel"), IM_COL32(220, 38, 38, 255));
+  EXPECT_EQ(Yg::AvatarColour("\u00c1NGEL"), IM_COL32(220, 38, 38, 255));
+
+  ImGuiContext* context = ImGui::CreateContext();
+  ImGuiIO& io = ImGui::GetIO();
+  io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures | ImGuiBackendFlags_RendererHasVtxOffset;
+  io.Fonts->AddFontDefault();
+  const std::size_t failures = ImGuiAssertFailures();
+  for (const float h : {360.0f, 720.0f, 2160.0f})
+  {
+    io.DisplaySize = ImVec2(h * 16 / 9, h);
+    io.DeltaTime = 1.0f / 60;
+    ImGui::NewFrame();
+    Kit::BeginFrame();
+    ImDrawList* dl = ImGui::GetForegroundDrawList();
+    const float u = h / 100;
+    for (const Kit::Look look : {Kit::Look::Brawl, Kit::Look::ProjectPlus})
+    {
+      Kit::SetLook(look);
+      // On their turn the pointer draws its glow and ripple too.
+      const int a = dl->VtxBuffer.Size;
+      Kit::Pointer(dl, ImVec2(100, 100), 3 * u, u, 1, "P2 BO", false, false, 3.4);
+      const int idle = dl->VtxBuffer.Size - a;
+      const int b = dl->VtxBuffer.Size;
+      Kit::Pointer(dl, ImVec2(100, 100), 3 * u, u, 1, "P2 BO", true, false, 3.4);
+      EXPECT_GT(dl->VtxBuffer.Size - b, idle);
+      Kit::PortraitFrame(dl, ImVec2(10, 10), ImVec2(10 + 28 * u, 10 + 22 * u), u, Kit::Tone::Gold);
+      Kit::PortraitFrame(dl, ImVec2(10, 10), ImVec2(10 + 28 * u, 10 + 22 * u), u, Kit::Tone::Red);
+      // A ribbon narrower than its words still draws them (shrunk), the ribbon as asked.
+      for (const float w : {24.0f, 8.0f})
+      {
+        const Kit::Box r = Kit::Ribbon(dl, ImVec2(20, 20), ImVec2(20 + w * u, 20 + 4.4f * u), u,
+                                       "LOCKED IN", Kit::Tone::Gold);
+        EXPECT_NEAR(r.max.x - r.min.x, w * u, 0.01f);
+      }
+      const Kit::Box dots = Kit::SetDots(dl, ImVec2(300, 20), u, {0, 1, -1}, 2);
+      EXPECT_NEAR((dots.min.x + dots.max.x) / 2, 300, 0.01f);
+      EXPECT_NEAR(dots.max.y - dots.min.y, 1.8f * u, 0.01f);
+      Kit::SetDots(dl, ImVec2(300, 20), u, {-1, -1, -1}, -1);
+      Kit::SearchRing(dl, ImVec2(200, 200), 7 * u, u, 12.3);
+    }
+    Kit::SetLook(Kit::Look::Brawl);
+    // The chat's card: wider than nothing, no wider than asked, its lines within its width.
+    const float width = 0.36f * io.DisplaySize.x;
+    const std::string text = "gg, that last stock though. one more after this? rematch on Battlefield";
+    const Kit::Box card = Yg::ChatCard(dl, ImVec2(10, 10), u, "BO", text, width);
+    EXPECT_GT(card.max.x - card.min.x, 10 * u);
+    EXPECT_LE(card.max.x - card.min.x, width + 0.01f);
+    const std::vector<std::string> lines = Yg::Wrap(text, 1.95f * u, width - 9 * u);
+    EXPECT_GE(lines.size(), 1u);
+    const Kit::Box tall = Yg::ChatCard(dl, ImVec2(10, 10), u, "BO", text, 30 * u);
+    EXPECT_GT(tall.max.y - tall.min.y, card.max.y - card.min.y);
+    // A message without spaces (a link, a laugh) wraps through the word: every line fits.
+    const float room = 30 * u;
+    const std::vector<std::string> long_word = Yg::Wrap(std::string(140, 'h'), 1.95f * u, room);
+    EXPECT_GT(long_word.size(), 1u);
+    std::size_t letters = 0;
+    for (const std::string& line : long_word)
+    {
+      EXPECT_LE(Yg::TextWidth(line, 1.95f * u), room + 0.5f);
+      letters += line.size();
+    }
+    EXPECT_EQ(letters, 140u);
+    const Kit::Box notice = Yg::NoticeCard(dl, ImVec2(10, 10), u, "bo joined", width);
+    EXPECT_LE(notice.max.x - notice.min.x, width + 0.01f);
+    // Faded out: the box, nothing drawn.
+    const int faded = dl->VtxBuffer.Size;
+    Yg::ChatCard(dl, ImVec2(10, 10), u, "BO", "gone", width, 0);
     EXPECT_EQ(dl->VtxBuffer.Size, faded);
     ImGui::Render();
   }

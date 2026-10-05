@@ -125,6 +125,21 @@ TEST(OrcaCharOrder, NothingOnGameOneFriendsOrOffTheCharacterSelect)
   EXPECT_EQ(Gate(kGame2, off, on), Rollback::InputGate::Masks{});
 }
 
+// Design F frames the picker's portrait: the first picker's turn, then the second's; nobody before
+// the order starts, once it's done, or off the character select.
+TEST(OrcaCharOrder, PickerIsWhoseTurnItIs)
+{
+  EXPECT_EQ(Picker(Css(), State{}), -1);
+  EXPECT_EQ(Picker(Css(), St(2, Step::First, 0, 5, 0)), 0);
+  EXPECT_EQ(Picker(Css(), St(2, Step::First, 1, 5, 0)), 1);
+  EXPECT_EQ(Picker(Css(), St(2, Step::Second, 0, 5, 0)), 1);
+  EXPECT_EQ(Picker(Css(), St(3, Step::Second, 1, 5, 0)), 0);
+  EXPECT_EQ(Picker(Css(), St(2, Step::Done, 0, 5, 0)), -1);
+  EXPECT_EQ(Picker(CssView{}, St(2, Step::First, 0, 5, 0)), -1);
+  // The machine's own start: the winner (port 1 here) picks first.
+  EXPECT_EQ(Picker(Css(), Twice(kGame2, Css(), State{}, 1000)), 0);
+}
+
 TEST(OrcaCharOrder, StaleOrderClearsOnACharacterSelectItDoesNotApplyTo)
 {
   const State stale = St(2, Step::Done, 0, 5, 7);

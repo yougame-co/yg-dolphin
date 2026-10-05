@@ -588,6 +588,8 @@ add_library(core
   Orca/UX/UX.h
   Orca/UX/Widgets.cpp
   Orca/UX/Widgets.h
+  Orca/UX/YgCard.cpp
+  Orca/UX/YgCard.h
   NetworkCaptureLogger.cpp
   NetworkCaptureLogger.h
   PatchEngine.cpp

@@ -4,6 +4,7 @@
 #include "Core/Orca/UX/CharOrder.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <string_view>
 
@@ -429,6 +430,27 @@ int WriteState(GuestMemory& m, const State& s)
   return changed;
 }
 
+namespace
+{
+std::atomic<int> s_picker{-1};  // CurrentPicker's
+}  // namespace
+
+int Picker(const CssView& css, const State& state)
+{
+  if (!css.on_css || state.game == 0)
+    return -1;
+  if (state.step == Step::First)
+    return state.first & 1;
+  if (state.step == Step::Second)
+    return (state.first & 1) ^ 1;
+  return -1;
+}
+
+int CurrentPicker()
+{
+  return s_picker.load(std::memory_order_relaxed);
+}
+
 void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
            const std::vector<Events::PortInfo>& ports)
 {
@@ -442,6 +464,7 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
   if (resimulating)
     return;
   SetRuleLine(Line(set, css, after, ports));
+  s_picker.store(Picker(css, after), std::memory_order_relaxed);
   if (after.step != before.step || after.game != before.game || after.locked != before.locked)
   {
     static constexpr const char* STEPS[] = {"idle", "first", "second", "done"};

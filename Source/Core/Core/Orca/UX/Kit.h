@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <string>
 #include <string_view>
@@ -30,8 +31,12 @@
 //   - Label: a line in the body face, white, outlined, for everything smaller.
 //   - Timer: "0:24" in the heavy face on a small plate, gold under 10 s and red, pulsing, under 5.
 //   - Badge: a pill in a port's colour with a white rim ("LOCKED IN", a name tab).
-//   - Pointer: a player's cursor, a ring in their colour with ticks and their tab, a gold ring
-//     round it on their turn; Frame: a tile framed in a player's colour with their tab.
+//   - Pointer: a player's cursor, a ring in their colour with ticks and their tab, pulsing on
+//     their turn; Frame: a tile framed in a player's colour with their tab.
+//   - PortraitFrame and Ribbon: a character select portrait framed (gold when locked in, the port's
+//     colour on its player's pick) and LOCKED IN across its top.
+//   - SetDots: the set's three games as dots in their winners' colours; SearchRing: an empty
+//     seat's ring while the queue searches.
 //   - Connection: the link's lamp, a panel disc with one to three lit arcs.
 //
 // Everything is drawn with the host's ImGui over the presented picture: local display only, never
@@ -155,9 +160,31 @@ Box Timer(ImDrawList* dl, ImVec2 centre, float unit, int seconds, double now_s, 
 Box Badge(ImDrawList* dl, ImVec2 centre, float unit, std::string_view text, Tone tone,
           float size = 3.6f, float alpha = 1);
 // A player's cursor centred on `at`, `radius` pixels, in their port's colour, with `tag` on a tab
-// to its lower left (`tag_left`) or right; a gold ring round it on their turn.
+// to its lower left (`tag_left`) or right. On their turn it pulses (TurnPulse): it swells, glows,
+// and a ring in their colour ripples out of it once a beat.
 void Pointer(ImDrawList* dl, ImVec2 at, float radius, float unit, int port, std::string_view tag,
              bool turn, bool tag_left, double now_s);
+// The turn's pulse at `now_s` (ImGui's clock), one beat a second: `swell` 0..1..0 on a cosine,
+// `ripple` 0..1 through the beat (the ring's way out).
+struct Beat
+{
+  float swell = 0;
+  float ripple = 0;
+};
+Beat TurnPulse(double now_s);
+// A player's portrait on the character select, [min, max], framed in `tone` with a soft glow round
+// it: gold for a locked-in player, the port's colour for the player whose pick it is.
+void PortraitFrame(ImDrawList* dl, ImVec2 min, ImVec2 max, float unit, Tone tone);
+// A ribbon across [min, max] in `tone`, `text` centred on it in the heavy face, shrunk to fit
+// (LOCKED IN across the top of a portrait). Returns the ribbon.
+Box Ribbon(ImDrawList* dl, ImVec2 min, ImVec2 max, float unit, std::string_view text, Tone tone);
+// A best-of-three set's games as three small dots centred on `centre`: games[i] the port that won
+// game i (0 or 1), -1 for one not decided; `current` the game being played (0-based, its dot's rim
+// brighter), -1 for none. Returns the dots' box.
+Box SetDots(ImDrawList* dl, ImVec2 centre, float unit, const std::array<int, 3>& games, int current);
+// An empty seat's searching ring, centred on `centre`, `radius` pixels: a pale track with a gold
+// arc going round it.
+void SearchRing(ImDrawList* dl, ImVec2 centre, float radius, float unit, double now_s);
 // A tile [min, max] framed in `tone` with `tag` on a tab on its top edge (left or right end).
 void Frame(ImDrawList* dl, ImVec2 min, ImVec2 max, float unit, Tone tone, std::string_view tag,
            bool tag_left, float inset = 0);

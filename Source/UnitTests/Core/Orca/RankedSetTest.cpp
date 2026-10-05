@@ -4,6 +4,7 @@
 // Ranked sets (ORCA.md "Ranked sets"): the match block's layout, the set followed in the game's
 // memory, each ruleset's verdict, and the tracker's reports from the block.
 
+#include <array>
 #include <map>
 #include <vector>
 
@@ -413,6 +414,38 @@ TEST(OrcaRankedSet, ScoreLine)
   EXPECT_EQ(RankedSet::ScoreLine(s, 1), "Set over · 1–2");
   s.done = 2;
   EXPECT_EQ(RankedSet::ScoreLine(s, 0), "Set void · 2–1");
+}
+
+// Design F's set dots: each decided game's winner in order, a tied game skipped, the game being
+// played next; none once the set is over.
+TEST(OrcaRankedSet, DotsFollowTheDecidedGames)
+{
+  SetState s;
+  RankedSet::Dots d = RankedSet::DotsOf(s);
+  EXPECT_TRUE(d.on);
+  EXPECT_EQ(d.games, (std::array<int, 3>{-1, -1, -1}));
+  EXPECT_EQ(d.current, 0);
+  s.games = 1;
+  s.records[0].winner = 0;
+  s.wins = {1, 0};
+  d = RankedSet::DotsOf(s);
+  EXPECT_EQ(d.games, (std::array<int, 3>{0, -1, -1}));
+  EXPECT_EQ(d.current, 1);
+  // A tie, then port 2's win: the tie takes no dot.
+  s.games = 3;
+  s.records[1].winner = NO_PORT;
+  s.records[2].winner = 1;
+  s.wins = {1, 1};
+  d = RankedSet::DotsOf(s);
+  EXPECT_EQ(d.games, (std::array<int, 3>{0, 1, -1}));
+  EXPECT_EQ(d.current, 2);
+  s.games = 4;
+  s.records[3].winner = 0;
+  s.wins = {2, 1};
+  s.done = 1;
+  d = RankedSet::DotsOf(s);
+  EXPECT_EQ(d.games, (std::array<int, 3>{0, 1, 0}));
+  EXPECT_EQ(d.current, -1);
 }
 
 TEST(OrcaRankedSet, TrackerReportsTheBlocksGames)

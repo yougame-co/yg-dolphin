@@ -193,8 +193,8 @@ void SetRulesLines(std::string line, std::string note);
 void SetRuleLine(std::string text);
 // The queue's character select (Queue.h), top centre in place of the search's lines: "Casual ·
 // Searching for an opponent…", "ada locked in · Your pick: Start locks it in"; each port's label
-// near its panel at the bottom ("ada · 1532"); and a LOCKED IN badge in the port's colour over the
-// panel of each player who has locked in (`locked`). Empty: not shown. Display only: computed from
+// near its panel at the bottom ("ada · 1532"); and LOCKED IN on a ribbon across the portrait of
+// each player who has locked in, framed in gold (`locked`). Empty: not shown. Display only: computed from
 // memory on first runs. Any thread.
 void SetQueueLines(std::string line, std::string note, std::array<std::string, 4> labels,
                    std::array<bool, 4> locked = {});

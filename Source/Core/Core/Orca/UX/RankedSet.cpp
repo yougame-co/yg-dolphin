@@ -64,6 +64,9 @@ int LedgeLimit(bool tiebreak, u8 character)
 // the wins, the game number.
 std::atomic<u32> s_published{0};
 std::atomic<int> s_local_port{0};
+// The last published dots (CurrentDots): bit 31 a ranked set on the menus, bits 2i..2i+1 game i's
+// winner plus one (0 none), bits 8..9 the game being played (3 none).
+std::atomic<u32> s_dots{0};
 }  // namespace
 
 std::optional<GameRecord> Judge(Ruleset ruleset, const SetState& set, const ResultBlock& block,
@@ -419,6 +422,7 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating)
   if (!header || header->mode != SetBlock::Mode::Ranked)
   {
     s_published.store(0, std::memory_order_relaxed);
+    s_dots.store(0, std::memory_order_relaxed);
     return;
   }
   // Only Brawl's verdict needs the fight's clock, stocks, percent and ledge (Project+ decides its
@@ -475,6 +479,45 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating)
                      (after.tiebreak ? 1u << 23 : 0) | (u32(after.wins[0]) << 16) |
                      (u32(after.wins[1]) << 8) | u32(std::min(after.GameNumber(), 255));
   s_published.store(packed, std::memory_order_relaxed);
+  u32 dots = 0;
+  if (!fighting)
+  {
+    const Dots d = DotsOf(after);
+    dots = 0x80000000u | (u32(d.current < 0 ? 3 : d.current) << 8);
+    for (int i = 0; i < 3; ++i)
+      dots |= u32(d.games[static_cast<std::size_t>(i)] + 1) << (2 * i);
+  }
+  s_dots.store(dots, std::memory_order_relaxed);
+}
+
+Dots DotsOf(const SetState& set)
+{
+  Dots d;
+  d.on = true;
+  std::size_t decided = 0;
+  const int records = std::min<int>(set.games, SetBlock::MAX_RECORDS);
+  for (int i = 0; i < records && decided < d.games.size(); ++i)
+  {
+    const u8 winner = set.records[static_cast<std::size_t>(i)].winner;
+    if (winner == 0 || winner == 1)
+      d.games[decided++] = winner;
+  }
+  d.current = set.done || decided >= d.games.size() ? -1 : static_cast<int>(decided);
+  return d;
+}
+
+Dots CurrentDots()
+{
+  const u32 packed = s_dots.load(std::memory_order_relaxed);
+  Dots d;
+  if (!(packed & 0x80000000u))
+    return d;
+  d.on = true;
+  for (int i = 0; i < 3; ++i)
+    d.games[static_cast<std::size_t>(i)] = static_cast<int>((packed >> (2 * i)) & 3) - 1;
+  const int current = static_cast<int>((packed >> 8) & 3);
+  d.current = current == 3 ? -1 : current;
+  return d;
 }
 
 std::string ScoreLine(const SetState& set, int local_port)

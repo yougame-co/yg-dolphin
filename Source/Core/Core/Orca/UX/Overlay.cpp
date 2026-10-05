@@ -8,6 +8,8 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <string>
+#include <string_view>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -17,6 +19,7 @@
 
 #include "Common/HookableEvent.h"
 #include "Core/Core.h"
+#include "Core/Orca/UX/CharOrder.h"
 #include "Core/Orca/UX/Kit.h"
 #include "Core/Orca/UX/NativeText.h"
 #include "Core/Orca/UX/OnlineMenu.h"
@@ -25,6 +28,7 @@
 #include "Core/Orca/UX/RankedSet.h"
 #include "Core/Orca/UX/SetEnd.h"
 #include "Core/Orca/UX/StageCursors.h"
+#include "Core/Orca/UX/YgCard.h"
 #include "VideoCommon/AsyncRequests.h"
 #include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/Present.h"
@@ -437,10 +441,39 @@ float PanelCentre(int port)
   return 0.236f + 0.177f * static_cast<float>(port);
 }
 
-// Where the name tab sits over a panel (its top) and the LOCKED IN badge (its middle), as
-// fractions of the picture's height: the tab on the panel's top edge, the badge across its picture.
+// Where the name tab sits over a panel (its top), as a fraction of the picture's height.
 constexpr float NAME_TAB_Y = 0.575f;
-constexpr float LOCKED_BADGE_Y = 0.71f;
+
+// Port `port`'s portrait on the character select in a picture at `pic`, `pic_size` (design F's
+// frames and LOCKED IN ribbon go round it), measured on 1280x720 screenshots of both games
+// (2026-10-04): 200 pixels wide round the panel's centre; Brawl's from under the READY TO FIGHT
+// band (y 466) to its name plate (622), Project+'s from 432 to 628.
+Kit::Box PortraitRect(int port, ImVec2 pic, ImVec2 pic_size)
+{
+  const bool pplus = Kit::CurrentLook() == Kit::Look::ProjectPlus;
+  const float cx = pic.x + pic_size.x * PanelCentre(port);
+  const float half = pic_size.x * 0.078f;
+  return {ImVec2(cx - half, pic.y + pic_size.y * (pplus ? 0.6f : 0.647f)),
+          ImVec2(cx + half, pic.y + pic_size.y * (pplus ? 0.872f : 0.864f))};
+}
+
+// The set's dots' middle, from the picture's top: in both games' dark top band on the character
+// and the stage selects.
+constexpr float DOTS_Y = 1.9f;  // overlay units
+// Where the top centre's banners start: under the dots when they show.
+constexpr float TOP_FIRST = 1.6f, TOP_UNDER_DOTS = 3.9f;  // overlay units
+
+// A name in capitals as the game's own plates write them (ASCII letters only).
+std::string Upper(std::string_view name)
+{
+  std::string out(name);
+  for (char& c : out)
+  {
+    if (c >= 'a' && c <= 'z')
+      c = static_cast<char>(c - 'a' + 'A');
+  }
+  return out;
+}
 
 // The game's picture in the window (the presenter's target rectangle: the window can letterbox or
 // pillarbox it), the whole display when the presenter has none.
@@ -460,7 +493,7 @@ void PictureRect(ImVec2* pic, ImVec2* pic_size)
 }
 
 // The stage select's two cursors (StageCursors.h), in the kit: each player's pointer in their
-// colour with a tab naming them (a gold ring round it on their turn), and the stage each proposes
+// colour with a tab naming them (pulsing on their turn), and the stage each proposes
 // framed in their colour with their name on a tab; both on one stage, one gold frame with both
 // names. Positions are the match block's (published by the frame hook), mapped onto the picture
 // with the layout's probed map.
@@ -490,7 +523,7 @@ void DrawStageCursors(ImDrawList* dl, const StageCursors::View& v, ImVec2 pic, I
     Kit::Frame(dl, ImVec2(std::min(c0.x, c1.x), std::min(c0.y, c1.y)),
                ImVec2(std::max(c0.x, c1.x), std::max(c0.y, c1.y)), unit,
                both ? Kit::Tone::Gold : Kit::PortTone(port),
-               both ? p.name + " + " + v.players[1].name : p.name, port == 0);
+               both ? Upper(p.name) + " + " + Upper(v.players[1].name) : Upper(p.name), port == 0);
   }
   // Opaque and a little larger than the game's own crosshair (which sits on the cursor that moved
   // last), so it never shows; port 1's tab to the left and port 2's to the right, so two cursors on
@@ -501,8 +534,8 @@ void DrawStageCursors(ImDrawList* dl, const StageCursors::View& v, ImVec2 pic, I
     const StageCursors::View::Player& p = v.players[port];
     if (p.present)
     {
-      Kit::Pointer(dl, at16(p.x, p.y), radius, unit, port, fmt::format("P{} {}", port + 1, p.name),
-                   v.turn == port, port == 0, now_s);
+      Kit::Pointer(dl, at16(p.x, p.y), radius, unit, port,
+                   fmt::format("P{} {}", port + 1, Upper(p.name)), v.turn == port, port == 0, now_s);
     }
   }
 }
@@ -553,6 +586,11 @@ struct Scene
   std::array<std::string, 4> labels;
   std::array<bool, 4> locked{};
   StageCursors::View cursors;
+  // Design F: whose pick it is in the character order (-1 none), the set's dots, and the queue's
+  // own character select searching (a ring on the empty seat).
+  int picker = -1;
+  RankedSet::Dots dots;
+  bool searching = false;
 
   bool Empty() const
   {
@@ -562,7 +600,7 @@ struct Scene
            std::all_of(labels.begin(), labels.end(),
                        [](const std::string& l) { return l.empty(); }) &&
            std::none_of(locked.begin(), locked.end(), [](bool l) { return l; }) && !cursors.on &&
-           set_end.Empty();
+           picker < 0 && !dots.on && !searching && set_end.Empty();
   }
 };
 
@@ -591,7 +629,7 @@ Scene Gather(double now)
     s.locked = s_queue_locked;
   }
   // What the game's own text boxes already say (NativeText.h): a plate that names its player
-  // needs no tab over it (its LOCKED IN badge stays), and a rules bar that says the queue's line
+  // needs no tab over it (its LOCKED IN ribbon stays), and a rules bar that says the queue's line
   // takes the place of the top lines; this machine's own hints (Hold Z, B to change) stay, small.
   const u8 native = NativeText::Shown();
   for (int port = 0; port < 4; ++port)
@@ -637,6 +675,13 @@ Scene Gather(double now)
     s.rules_note.clear();
   }
   s.cursors = StageCursors::Current();
+  // The character and the stage selects only: the order's picker, the set's dots (not on the
+  // queue's own character select: no opponent, no set yet, though a ranked header is there).
+  if (Queue::OnQueueCss())
+    s.picker = CharOrder::CurrentPicker();
+  if ((Queue::OnQueueCss() && !Queue::OnSoloCss()) || s.cursors.on)
+    s.dots = RankedSet::CurrentDots();
+  s.searching = Queue::OnSoloCss() && Queue::SoloReady();
   return s;
 }
 
@@ -730,7 +775,7 @@ std::pair<std::string, float> FitBanner(const std::string& title, const std::str
 // turn's timer beside it on its plate), this machine's hint on a small plate under them. Returns
 // the lowest bottom and leftmost edge drawn (the toasts and the chat keep clear of them).
 Kit::Box DrawTopCentre(ImDrawList* dl, const Scene& s, ImVec2 pic, ImVec2 pic_size, float unit,
-                       double now_s)
+                       double now_s, float first_top)
 {
   Kit::Box drawn{ImVec2(pic.x + pic_size.x, pic.y), ImVec2(pic.x, pic.y)};
   const auto add = [&](const Kit::Box& b) {
@@ -792,7 +837,7 @@ Kit::Box DrawTopCentre(ImDrawList* dl, const Scene& s, ImVec2 pic, ImVec2 pic_si
     return drawn;
   }
   const float cx = pic.x + pic_size.x / 2;
-  float top = pic.y + 1.6f * unit;
+  float top = first_top;
   for (std::size_t i = 0; i < groups.size(); ++i)
   {
     const auto& [title, note] = groups[i];
@@ -847,7 +892,9 @@ void Draw()
   if (s.cursors.on)
     DrawStageCursors(dl, s.cursors, pic, pic_size, unit, now_s);
   // The character select's panels: a name tab in the port's colour on each panel the game's own
-  // plate doesn't name, LOCKED IN across a locked-in player's picture.
+  // plate doesn't name. Design F's portraits: a locked-in player's framed in gold with LOCKED IN
+  // across its top, the picker's in their port's colour; the empty seat's ring while the queue
+  // searches.
   for (int port = 0; port < 4; ++port)
   {
     const float centre = pic.x + pic_size.x * PanelCentre(port);
@@ -856,14 +903,33 @@ void Draw()
       Kit::LabelPlate(dl, ImVec2(centre, pic.y + pic_size.y * NAME_TAB_Y), unit, s.labels[port],
                       2.8f, Kit::Align::Centre, Kit::PortTone(port));
     }
+    const Kit::Box portrait = PortraitRect(port, pic, pic_size);
     if (s.locked[port])
     {
-      Kit::Badge(dl, ImVec2(centre, pic.y + pic_size.y * LOCKED_BADGE_Y), unit, "LOCKED IN",
-                 Kit::PortTone(port), 3.4f);
+      Kit::PortraitFrame(dl, portrait.min, portrait.max, unit, Kit::Tone::Gold);
+      Kit::Ribbon(dl, ImVec2(portrait.min.x + 1.9f * unit, portrait.min.y + 1.4f * unit),
+                  ImVec2(portrait.max.x - 1.9f * unit, portrait.min.y + 5.8f * unit), unit,
+                  "LOCKED IN", Kit::Tone::Gold);
+    }
+    else if (port == s.picker)
+    {
+      Kit::PortraitFrame(dl, portrait.min, portrait.max, unit, Kit::PortTone(port));
     }
   }
+  if (s.searching)
+  {
+    const Kit::Box seat = PortraitRect(1, pic, pic_size);
+    Kit::SearchRing(dl, ImVec2((seat.min.x + seat.max.x) / 2, (seat.min.y + seat.max.y) / 2),
+                    pic_size.y * 0.072f, unit, now_s);
+  }
+  if (s.dots.on)
+  {
+    Kit::SetDots(dl, ImVec2(pic.x + pic_size.x / 2, pic.y + DOTS_Y * unit), unit, s.dots.games,
+                 s.dots.current);
+  }
   // Top centre, then top left, where both games' matches and menus leave the screen empty.
-  const Kit::Box centre = DrawTopCentre(dl, s, pic, pic_size, unit, now_s);
+  const Kit::Box centre = DrawTopCentre(dl, s, pic, pic_size, unit, now_s,
+                                        pic.y + (s.dots.on ? TOP_UNDER_DOTS : TOP_FIRST) * unit);
   const float margin = 2.5f * unit;
   float y = DrawCorner(dl, f, ImVec2(pic.x + margin, pic.y + margin), unit);
   if (!f.waiting.empty())
@@ -882,24 +948,19 @@ void Draw()
     if (centre.max.y > pic.y && centre.min.x < pic.x + margin + wrap + 3.0f * unit)
       y = std::max(y, centre.max.y + 1.2f * unit);
     const float bottom = pic.y + pic_size.y - margin;
+    // In YouGame's own look (YgCard.h): the room's and the chat are YouGame's, not the game's.
     for (const OverlayModel::Toast& t : f.toasts)
     {
       if (y >= bottom)
         break;
-      y = Kit::LabelPlate(dl, ImVec2(pic.x + margin, y), unit, t.text, 2.7f, Kit::Align::Left,
-                          Kit::Tone::Panel, t.alpha)
-              .max.y +
+      y = Yg::NoticeCard(dl, ImVec2(pic.x + margin, y), unit, t.text, wrap, t.alpha).max.y +
           0.8f * unit;
     }
-    const Kit::TextLook look = Kit::InkLook(unit, 2.7f);
     for (const OverlayModel::ChatToast& c : f.chats)
     {
       if (y >= bottom)
         break;
-      const std::string line = c.name + ": " + c.text;
-      y = Kit::TextPlate(dl, ImVec2(pic.x + margin, y), unit, Kit::Wrap(look, line, wrap), 2.7f,
-                         c.name.size() + 1, Kit::Tone::Panel, c.alpha)
-              .max.y +
+      y = Yg::ChatCard(dl, ImVec2(pic.x + margin, y), unit, c.name, c.text, wrap, c.alpha).max.y +
           0.8f * unit;
     }
   }

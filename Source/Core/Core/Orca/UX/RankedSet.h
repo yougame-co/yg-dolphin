@@ -104,4 +104,19 @@ std::string ScoreLine(const SetBlock::SetState& set, int local_port);
 // during a fight.
 std::string CurrentScoreLine();
 void SetLocalPort(int port);
+
+// The set's games for the overlay's dots (local UI only): games[i] the port (0 or 1) that won the
+// set's i-th decided game, -1 for one still to play (a tied game isn't one); `current` the game
+// being played (0-based), -1 once the set is over. `on` in a ranked set on the menus only.
+struct Dots
+{
+  bool on = false;
+  std::array<int, 3> games{-1, -1, -1};
+  int current = -1;
+  bool operator==(const Dots&) const = default;
+};
+// The dots of `set` (pure; `on` set).
+Dots DotsOf(const SetBlock::SetState& set);
+// The last dots the hook published (any thread); off during a fight.
+Dots CurrentDots();
 }  // namespace Orca::UX::RankedSet
