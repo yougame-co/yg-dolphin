@@ -2075,6 +2075,25 @@ Ranked itself. Steps 1-5 PASS (their friend went home or said `no-room`, by wher
 character select, then port 1 out, With Anyone > Ranked, its character select, out again) to frame
 3200: 12,551 re-run frames, 0 RAM mismatches.
 
+Checked again after review, 2026-10-05 (branch `q11-lobby` merged with `rel-0.3.23`, `ux=18`, M4,
+headless): the `Orca*` unit tests (459 pass, none failed; new
+`OrcaOnlineMenuLobby.APickWithNobodyToLeaveIsAnnounced` and
+`AFriendHomeOnThePicksCharacterSelectTakesThePickToo`). `Tools/orca/dropin-rooms.py` over dev rooms,
+every step PASS: step 7, the host's Ranked pick with the friend in, and the new step 8, the
+FRIEND's press of Ranked in the shared menu, both end the same way: the host prints `left lobby`
+and `orca menu online ranked`, the friend `host-left` then `orca menu online ranked` from its way
+home ("Drop-in: home on the ranked character select"), and both are `orca queue ready ranked` 0.31 s
+after Start on the select they landed on, neither backing out. New step 9: a new Orca joined a
+came-home guest's own room from the app's invite and played 15 s on its With Friends select: 17
+checksums matched on each side, no error. Steps 1-6 as before. `queue-e2e.mjs --q2 --queue ranked`
+PASS: three verdicts the same on both sides, set over, both back not ready, 225 checksums matched on
+each side. The synctest over `inputs/bf-reseat.txt`, now the `ux=18` walk, with
+`ORCA_UX_TEST_RESEAT_AT=1907` (FRIENDS select at 1657, then RANKED at 2644) to frame 3097: 11,830
+re-run frames, 0 RAM mismatches. Screenshots of a host stopping with both tokens down on With
+Friends' select: the guest came home driving port 1's panel, still showing the old host's character
+("Drop-in"). Not run: Project+ (`dropin-rooms.py` has no Project+ mode), a live arrival racing the
+pick (`ArrivalPending`, unit-tested only), a pick that waits for a takeable boundary (`PickStands`).
+
 Tests: `OrcaOnlineMenu*` unit tests (the gates, the textures and their precedence, the text rewrite,
 the reader's edges and `AloneAt`); `Tools/orca/online-menu.py <nogui> <disc> [--pplus <dol>]
 [--video Metal --shots <dir> [--scale 4]]` (every way through the menu, solo, offline);

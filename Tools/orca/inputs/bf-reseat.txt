@@ -3,7 +3,7 @@
 # frame, port 1 from it; the other reports no controller; the frame hook's ports follow) and
 # ORCA_UX_TEST_NAMES=bo. Port 1's rules here drive whichever port the player is on. Set the frame
 # about 250 frames into the first character select (from a run with YG_SCENES=1), e.g.
-#   ORCA_UX_TEST_RESEAT_AT=1910 YG_SYNCTEST=7 YG_SYNCTEST_FROM=1400 YG_EXIT_AFTER=<menu 3 + 100>
+#   ORCA_UX_TEST_RESEAT_AT=1907 YG_SYNCTEST=7 YG_SYNCTEST_FROM=1400 YG_EXIT_AFTER=<menu 3 + 100>
 # The ux=18 walk (With Friends goes straight to its character select, and B out of it lands on the
 # ONLINE page with With Friends selected): boot -> the main menu -> PLAY ONLINE > With Friends -> the
 # character select on port 2: it joins its panel and puts its token on a character -> the move:
