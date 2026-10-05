@@ -14,6 +14,7 @@ using VideoCommon::LayoutChoice;
 using VideoCommon::LayoutBox;
 using VideoCommon::LayoutBoxIn;
 using VideoCommon::LayoutHint;
+using VideoCommon::PictureInBackbuffer;
 using VideoCommon::PlaceInBox;
 
 namespace
@@ -137,6 +138,29 @@ TEST(OrcaLayout, TheHintIsScaledToTheBackbuffer)
   EXPECT_FALSE(LayoutBoxIn(LayoutHint{0, 720, 0, 0, 1280, 720}, 840, 720));
   EXPECT_FALSE(LayoutBoxIn(LayoutHint{840, 720, 0, 0, 0, 720}, 840, 720));
   EXPECT_FALSE(LayoutBoxIn(CUT, 0, 720));
+}
+
+// A window cut to the box's pillarbox bar shows none of the picture. Cropping it to the backbuffer
+// would invert its rectangle (a negative viewport), so Present() draws no picture there, only the
+// black it clears the backbuffer to.
+TEST(OrcaLayout, AWindowOnlyOnTheBarDrawsNoPicture)
+{
+  using Rect = MathUtil::Rectangle<int>;
+  // A 4:3 picture in the 1280 box spans 160..1120 of it; the window is the box's right 120 pixels.
+  const LayoutHint bar{120, 720, -1160, 0, 1280, 720};
+  const Rect pic = PlaceInBox(ChooseLayoutBox(bar, std::nullopt, 120, 720), 960, 720);
+  EXPECT_EQ(pic, Rect(-1000, 0, -40, 720));
+  EXPECT_FALSE(PictureInBackbuffer(pic, 120, 720));
+  // Above, below or right of the backbuffer, or touching only its edge: none of it either.
+  EXPECT_FALSE(PictureInBackbuffer(Rect(0, -720, 1280, 0), 1280, 720));
+  EXPECT_FALSE(PictureInBackbuffer(Rect(0, 720, 1280, 1440), 1280, 720));
+  EXPECT_FALSE(PictureInBackbuffer(Rect(1280, 0, 2560, 720), 1280, 720));
+  EXPECT_FALSE(PictureInBackbuffer(Rect(0, 0, 0, 720), 1280, 720));
+  // One column in it is enough; the panel's cut and the whole window are drawn.
+  EXPECT_TRUE(PictureInBackbuffer(Rect(-1000, 0, 1, 720), 120, 720));
+  EXPECT_TRUE(
+      PictureInBackbuffer(PlaceInBox(ChooseLayoutBox(CUT, WHOLE, 840, 720), 960, 720), 840, 720));
+  EXPECT_TRUE(PictureInBackbuffer(Rect(0, 0, 1280, 720), 1280, 720));
 }
 
 // The overlay's own elements stay in the part of the picture the window shows.

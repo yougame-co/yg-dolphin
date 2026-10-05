@@ -12,8 +12,9 @@
 //   front           bring this program to the front
 //   where           print the window frame and the box, in global display points
 //   panel N         the YouGame menu's panel over the box's left N points, as the page does it:
-//                   `view <box>` then `rect <box less the panel>` (and again on every resize);
-//                   `panel 0`: `view <box>` and `rect <box>` (the page's `dim` goes with `send`)
+//                   `view <box>` then `rect <box less the panel>`; `panel 0`: `view <box>` and
+//                   `rect <box>`. After the first `panel` every resize sends both, as the page
+//                   does (the page's `dim` goes with `send`)
 //   send LINE       a raw line for Orca's stdin (rect, pause, hide, show, focus, blur, quit...)
 //   close           close Orca's stdin (the app died)
 //   closewin        close the window but keep Orca's stdin open
@@ -49,6 +50,9 @@ static NSRect BoxInContent(void)
 
 // The points of the box's left the menu's panel covers (`panel N`; 0: shut).
 static CGFloat g_panel = 0;
+// Whether a `panel` has sent a `view`: Orca keeps the last one across later rects, so from then on
+// every rect goes with the box's view, as the page sends them.
+static BOOL g_view_sent = NO;
 
 // What the app sends: the box in the window's pixels, from the top left of its frame, less `cut`
 // points on its left.
@@ -134,8 +138,9 @@ static NSRect GlobalTopLeft(NSRect cocoa)
 - (void)windowDidResize:(NSNotification*)n
 {
   [[g_window contentView] setNeedsDisplay:YES];
-  // With the panel open, the page lays the game out in the whole box and cuts the window.
-  if (g_panel > 0)
+  // As the page: the game laid out in the whole box (`view`, after the first `panel`), the window
+  // cut by the panel while it is open.
+  if (g_view_sent)
     Send([@"view " stringByAppendingString:BoxLine(0)]);
   Send([@"rect " stringByAppendingString:BoxLine(g_panel)]);
 }
@@ -179,6 +184,7 @@ static void Command(NSString* line)
   {
     // As YouGame's OrcaEmbed measure(): the view is always the whole box, sent before the rect.
     g_panel = MAX(p[1].doubleValue, 0);
+    g_view_sent = YES;
     Send([@"view " stringByAppendingString:BoxLine(0)]);
     Send([@"rect " stringByAppendingString:BoxLine(g_panel)]);
   }

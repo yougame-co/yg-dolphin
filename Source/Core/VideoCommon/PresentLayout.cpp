@@ -43,4 +43,10 @@ MathUtil::Rectangle<int> PlaceInBox(const LayoutBox& box, int draw_w, int draw_h
   const int top = static_cast<int>(std::round(box.y + box.h / 2.0 - draw_h / 2.0));
   return {left, top, left + draw_w, top + draw_h};
 }
+
+bool PictureInBackbuffer(const MathUtil::Rectangle<int>& picture, int bb_w, int bb_h)
+{
+  return picture.left < bb_w && picture.right > 0 && picture.top < bb_h && picture.bottom > 0 &&
+         picture.right > picture.left && picture.bottom > picture.top;
+}
 }  // namespace VideoCommon

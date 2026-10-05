@@ -1085,8 +1085,9 @@ void Presenter::Present(PresentInfo* present_info)
   const bool backbuffer_bound =
       m_test_framebuffer || g_gfx->BindBackbuffer({{0.0f, 0.0f, 0.0f, 1.0f}});
 
-  // Render the XFB to the screen.
-  if (backbuffer_bound && m_xfb_entry)
+  // Render the XFB to the screen (Orca: when any of the picture is in it, PresentLayout.h).
+  if (backbuffer_bound && m_xfb_entry &&
+      PictureInBackbuffer(GetTargetRectangle(), m_backbuffer_width, m_backbuffer_height))
   {
     // Adjust the source rectangle instead of using an oversized viewport to render the XFB.
     MathUtil::Rectangle<int> render_target_rc = GetTargetRectangle();

@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <deque>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -233,4 +234,8 @@ struct PictureArea
 // whole picture. The overlay's unit stays the whole picture's. The whole picture when none of it
 // is on the display.
 PictureArea VisiblePicture(const PictureArea& picture, float display_w, float display_h);
+// Tests only (unit tests have no presenter): the picture the overlay lays itself out in, in place
+// of the presenter's target rectangle; it can run past the display, as with an embed `view`.
+// nullopt: the presenter's again. Set it before drawing, from the drawing thread.
+void SetPictureForTests(std::optional<PictureArea> picture);
 }  // namespace Orca::UX

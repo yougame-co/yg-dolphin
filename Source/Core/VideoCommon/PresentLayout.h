@@ -65,4 +65,9 @@ LayoutChoice ChooseLayout(const std::optional<LayoutHint>& latest,
 // The picture, draw_w x draw_h whole pixels, centred in `box` as Dolphin centres it in the window.
 // It can run past the backbuffer: Present() crops it (AdjustRectanglesToFitBounds).
 MathUtil::Rectangle<int> PlaceInBox(const LayoutBox& box, int draw_w, int draw_h);
+
+// Whether any of the placed picture is in the backbuffer. With a `view` it can be none of it (a
+// window cut to the view's pillarbox bar): cropping it to the backbuffer would then give an
+// inverted rectangle, so Present() draws no picture (the backbuffer is cleared to black).
+bool PictureInBackbuffer(const MathUtil::Rectangle<int>& picture, int bb_w, int bb_h);
 }  // namespace VideoCommon

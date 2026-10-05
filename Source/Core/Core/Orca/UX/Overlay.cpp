@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <tuple>
@@ -352,6 +353,7 @@ std::atomic<bool> s_visible{true};  // the app shows the game (embed hide/show)
 std::atomic<int> s_dim{0};
 float s_dim_shown = 0;
 double s_dim_at = -1;
+std::optional<PictureArea> s_test_picture;  // SetPictureForTests's
 std::mutex s_rule_line_lock;
 std::string s_rule_line;  // SetRuleLine's
 std::mutex s_queue_lock;
@@ -503,7 +505,12 @@ void PictureRect(ImVec2* pic, ImVec2* pic_size)
 {
   *pic = ImVec2(0, 0);
   *pic_size = ImGui::GetIO().DisplaySize;
-  if (g_presenter)
+  if (s_test_picture)
+  {
+    *pic = ImVec2(s_test_picture->x, s_test_picture->y);
+    *pic_size = ImVec2(s_test_picture->w, s_test_picture->h);
+  }
+  else if (g_presenter)
   {
     const MathUtil::Rectangle<int>& r = g_presenter->GetTargetRectangle();
     if (r.GetWidth() > 0 && r.GetHeight() > 0)
@@ -909,10 +916,11 @@ Kit::Box DrawTopCentre(ImDrawList* dl, const Scene& s, ImVec2 pic, ImVec2 pic_si
     // picture wide (the timer goes beside it): a longer note takes more lines.
     const float row =
         i == 0 ? (note.empty() ? 6.4f : 8.6f) * unit : (note.empty() ? 5.0f : 7.0f) * unit;
-    const float max_w = 0.62f * vis_size.x;
+    // Never under the banner's least width (26 units): a window cut to a narrow part of the
+    // picture would otherwise leave the note no room and fit it one word a line.
+    const float max_w = std::max(0.62f * vis_size.x, 26.0f * unit);
     const auto [fitted, h] = FitBanner(title, note, row, max_w, unit);
-    const float w = std::clamp(Kit::BannerWidth(h, unit, title, fitted), 26.0f * unit,
-                               std::max(max_w, 26.0f * unit));
+    const float w = std::clamp(Kit::BannerWidth(h, unit, title, fitted), 26.0f * unit, max_w);
     const Kit::Box b = Kit::Banner(dl, cx - w / 2, cx + w / 2, top, h, unit, Kit::Tone::Panel,
                                    title, fitted);
     add(b);
@@ -1160,6 +1168,11 @@ PictureArea VisiblePicture(const PictureArea& picture, float display_w, float di
   return {x0, y0, x1 - x0, y1 - y0};
 }
 
+void SetPictureForTests(std::optional<PictureArea> picture)
+{
+  s_test_picture = picture;
+}
+
 void SetDim(int percent)
 {
   s_dim.store(std::clamp(percent, 0, 100), std::memory_order_relaxed);
@@ -1231,6 +1244,7 @@ void ShutdownOverlay()
   OSD::SetHostOverlay({});
   Kit::Shutdown();
   s_state_hook.reset();
+  s_test_picture.reset();
 }
 
 void SetHostVisible(bool visible)

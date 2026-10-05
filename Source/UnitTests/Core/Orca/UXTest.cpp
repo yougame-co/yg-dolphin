@@ -531,6 +531,80 @@ TEST_F(OrcaUXOverlayDraw, AnyPictureSizeDrawsWithoutAnImGuiAssert)
   EXPECT_EQ(ImGuiAssertFailures(), failures);
 }
 
+// An embed `view` lays the picture out past Orca's window: the page's panel cuts the window's left,
+// a toast over the page cuts its top, and the picture keeps its size and place. The overlay's unit
+// stays the whole picture's; Orca's own elements (the corner, the toasts, the top centre's banner
+// and its timer) stay in the part of the picture inside the window (VisiblePicture). However narrow
+// that part, nothing asserts; in a part at least two fifths of the picture wide (the panel is about
+// a quarter of it), nothing is drawn past the window. Narrower than that the banner keeps its least
+// width (26 units) and the toasts theirs, so they run past it.
+TEST_F(OrcaUXOverlayDraw, ACutWindowKeepsOrcasOwnElementsInIt)
+{
+  const std::size_t failures = ImGuiAssertFailures();
+  constexpr float PIC_W = 1280, PIC_H = 720;
+  // The window is the picture's bottom right part, `width` wide and `cut_top` short of its top;
+  // the bounds of everything drawn in it.
+  const auto drawn = [&](float width, float cut_top) {
+    SetPictureForTests(PictureArea{width - PIC_W, -cut_top, PIC_W, PIC_H});
+    EXPECT_GT(Frame(width, PIC_H - cut_top), 0);
+    ImVec2 min(0, 0), max(0, 0);
+    for (const ImDrawList* list : ImGui::GetDrawData()->CmdLists)
+    {
+      for (const ImDrawVert& v : list->VtxBuffer)
+      {
+        min = ImVec2(std::min(min.x, v.pos.x), std::min(min.y, v.pos.y));
+        max = ImVec2(std::max(max.x, v.pos.x), std::max(max.y, v.pos.y));
+      }
+    }
+    return std::pair{min, max};
+  };
+  // A banner, its note long enough to wrap, and the turn's timer beside it.
+  const auto banner = [](bool on) {
+    if (!on)
+      SetRulesLines("", "");
+    else
+      SetRulesLines("SET 1-0 \u00b7 GAME 2",
+                    "Ada strikes a stage \u00b7 then Bo strikes two \u00b7 Ada picks from the "
+                    "rest \u00b7 0:42");
+  };
+  // How far down the banner pushes everything (the toasts go under it): in a window under 300
+  // pixels (62% of it is under the banner's least width) no further than at 300. Fitting the note
+  // into 62% of the window there left it no room, one word a line, down past half the picture.
+  const auto banner_depth = [&](float width) {
+    banner(false);
+    const float without = drawn(width, 0).second.y;
+    banner(true);
+    return drawn(width, 0).second.y - without;
+  };
+  const float floor_depth = banner_depth(300);
+  EXPECT_GT(floor_depth, 0);
+  for (const float width : {33.0f, 40.0f, 100.0f, 180.0f})
+  {
+    SCOPED_TRACE(fmt::format("window {} wide", width));
+    EXPECT_LE(banner_depth(width), floor_depth + 1);
+  }
+  banner(true);
+  for (const float cut_top : {0.0f, 120.0f})
+  {
+    for (const float width :
+         {33.0f, 40.0f, 100.0f, 180.0f, 300.0f, 512.0f, 640.0f, 840.0f, 1280.0f})
+    {
+      SCOPED_TRACE(fmt::format("window {}x{}", width, PIC_H - cut_top));
+      const auto [min, max] = drawn(width, cut_top);
+      if (width < 0.4f * PIC_W)
+        continue;
+      // Every vertex in the window (a pixel of anti-aliasing fringe allowed).
+      EXPECT_GE(min.x, -1.0f);
+      EXPECT_GE(min.y, -1.0f);
+      EXPECT_LE(max.x, width + 1);
+      EXPECT_LE(max.y, PIC_H - cut_top + 1);
+    }
+  }
+  banner(false);
+  SetPictureForTests(std::nullopt);
+  EXPECT_EQ(ImGuiAssertFailures(), failures);
+}
+
 // The page's dim (embed `dim N`) is the last thing drawn, over the whole display: the foreground
 // list's last rectangle, N% black, eased in over DIM_EASE_S. It draws whatever the rest does, a
 // picture too thin for the overlay's text included, and `dim 0` takes it off the same way.
