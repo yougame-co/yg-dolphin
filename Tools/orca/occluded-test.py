@@ -24,8 +24,9 @@
 #
 # --overlay (with --friend): instead of hiding the window, the YouGame overlay opens and closes
 # mid-fight on the embedded side, with the lines the page sends (YouGame's OrcaEmbed): the button
-# (`orb …`), then `orb off` and `blur` while the overlay is open beside the game, then `focus`, the
-# button and a `notice`. Nothing may pause: the embedded side keeps its pace (its input goes neutral,
+# (`orb …`), then `orb off`, `blur`, the panel's cut (`view` the whole box, `rect` right of the
+# panel: the test host's `panel`) and `dim 50` while the overlay is open beside the game, then the
+# whole `rect`, `dim 0`, `focus`, the button and a `notice`. Nothing may pause: the embedded side keeps its pace (its input goes neutral,
 # and that is what it sends), and the friend never waits for it: no stall and no more hitches than
 # with the overlay shut.
 import json
@@ -334,8 +335,12 @@ def run():
         # Open: the menu beside the game takes the controls; the button goes.
         host.orca("orb off")
         host.orca("blur")
+        host.host("panel 300")
+        host.orca("dim 50")
         phase("ux-open", players, sample=True)
         # Shut: the game has the controls again, the button is back, a line beside it.
+        host.host("panel 0")
+        host.orca("dim 0")
         host.orca("focus")
         host.orca("orb 32 32 80 1 0 0")
         host.orca("notice voice Ada is%20on%20voice Shift%2BTab Join")

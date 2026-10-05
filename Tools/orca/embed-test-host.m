@@ -11,6 +11,9 @@
 //   mini | unmini   minimize / restore the window
 //   front           bring this program to the front
 //   where           print the window frame and the box, in global display points
+//   panel N         the YouGame menu's panel over the box's left N points, as the page does it:
+//                   `view <box>` then `rect <box less the panel>` (and again on every resize);
+//                   `panel 0`: `view <box>` and `rect <box>` (the page's `dim` goes with `send`)
 //   send LINE       a raw line for Orca's stdin (rect, pause, hide, show, focus, blur, quit...)
 //   close           close Orca's stdin (the app died)
 //   closewin        close the window but keep Orca's stdin open
@@ -44,17 +47,27 @@ static NSRect BoxInContent(void)
   return NSMakeRect(margin, header, w, h);  // top-left origin
 }
 
-// What the app sends: the box in the window's pixels, from the top left of its frame.
-static NSString* RectLine(void)
+// The points of the box's left the menu's panel covers (`panel N`; 0: shut).
+static CGFloat g_panel = 0;
+
+// What the app sends: the box in the window's pixels, from the top left of its frame, less `cut`
+// points on its left.
+static NSString* BoxLine(CGFloat cut)
 {
   const CGFloat scale = [g_window backingScaleFactor];
   const NSRect frame = [g_window frame];
   const CGFloat inset = frame.size.height - [g_window contentRectForFrameRect:frame].size.height;
   const NSRect b = BoxInContent();
-  return [NSString stringWithFormat:@"%d %d %d %d", (int)lround(b.origin.x * scale),
+  cut = MIN(MAX(cut, 0), b.size.width);
+  return [NSString stringWithFormat:@"%d %d %d %d", (int)lround((b.origin.x + cut) * scale),
                                     (int)lround((b.origin.y + inset) * scale),
-                                    (int)lround(b.size.width * scale),
+                                    (int)lround((b.size.width - cut) * scale),
                                     (int)lround(b.size.height * scale)];
+}
+
+static NSString* RectLine(void)
+{
+  return BoxLine(0);
 }
 
 static void Send(NSString* line)
@@ -121,7 +134,10 @@ static NSRect GlobalTopLeft(NSRect cocoa)
 - (void)windowDidResize:(NSNotification*)n
 {
   [[g_window contentView] setNeedsDisplay:YES];
-  Send([@"rect " stringByAppendingString:RectLine()]);
+  // With the panel open, the page lays the game out in the whole box and cuts the window.
+  if (g_panel > 0)
+    Send([@"view " stringByAppendingString:BoxLine(0)]);
+  Send([@"rect " stringByAppendingString:BoxLine(g_panel)]);
 }
 @end
 
@@ -158,6 +174,13 @@ static void Command(NSString* line)
            content.origin.y + b.origin.y, b.size.width, b.size.height,
            [g_window backingScaleFactor], (long)[g_window windowNumber]);
     fflush(stdout);
+  }
+  else if ([cmd isEqualToString:@"panel"] && p.count == 2)
+  {
+    // As YouGame's OrcaEmbed measure(): the view is always the whole box, sent before the rect.
+    g_panel = MAX(p[1].doubleValue, 0);
+    Send([@"view " stringByAppendingString:BoxLine(0)]);
+    Send([@"rect " stringByAppendingString:BoxLine(g_panel)]);
   }
   else if ([cmd isEqualToString:@"send"] && line.length > 5)
     Send([line substringFromIndex:5]);
