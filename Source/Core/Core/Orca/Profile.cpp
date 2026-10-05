@@ -520,6 +520,7 @@ void SetActiveProfile(std::optional<Profile> profile)
 {
   s_active_profile = std::move(profile);
   s_boot_frames = 0;
+  Mod::ResetGuards();
   s_kept_code.clear();
   if (s_active_profile)
   {

@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <memory>
 #include <set>
+#include <random>
 #include <system_error>
 
 #include <fmt/format.h>
@@ -78,6 +79,18 @@ std::optional<u32> HexWord(const picojson::value& v)
     return std::nullopt;
   }
   return static_cast<u32>(std::stoul(s.substr(2), nullptr, 16));
+}
+
+// One JSON value and nothing after it but whitespace (picojson's string parse ignores the rest).
+std::string ParseWhole(picojson::value* root, std::string_view json)
+{
+  std::string error;
+  const auto end = picojson::parse(*root, json.begin(), json.end(), &error);
+  if (!error.empty())
+    return error;
+  if (!std::all_of(end, json.end(), [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }))
+    return "something after the JSON value";
+  return {};
 }
 
 bool InMem1Word(u32 address)
@@ -227,7 +240,7 @@ std::optional<Tree> ParseTree(std::string_view json, std::string* error)
     return std::nullopt;
   };
   picojson::value root;
-  const std::string parse_error = picojson::parse(root, std::string(json));
+  const std::string parse_error = ParseWhole(&root, json);
   if (!parse_error.empty())
     return fail(parse_error);
   if (!root.is<picojson::object>())
@@ -344,7 +357,7 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
     return std::nullopt;
   };
   picojson::value root;
-  const std::string parse_error = picojson::parse(root, std::string(json));
+  const std::string parse_error = ParseWhole(&root, json);
   if (!parse_error.empty())
     return fail(parse_error);
   if (!root.is<picojson::object>())
@@ -498,9 +511,12 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
   if (!boot_nand)
     return fail("bootNandFrame must be an integer from 1 to 1000000");
   m.boot_nand_frame = *boot_nand;
-  const auto first_keyframe = frame("firstKeyframeFrame", 60, 36'000);
+  // Not below today's 300: a boot's first frames can run differently on a machine whose JIT holds
+  // other blocks (Project+'s 3-9; Rollback/OnlineMatch.cpp FIRST_KEYFRAME_FRAME), and a joiner's
+  // always does.
+  const auto first_keyframe = frame("firstKeyframeFrame", DEFAULT_FIRST_KEYFRAME_FRAME, 36'000);
   if (!first_keyframe)
-    return fail("firstKeyframeFrame must be an integer from 60 to 36000");
+    return fail("firstKeyframeFrame must be an integer from 300 to 36000");
   m.first_keyframe_frame = first_keyframe->value_or(DEFAULT_FIRST_KEYFRAME_FRAME);
   const auto jit_clear = frame("jitClearFrame", 0, 1'000'000);
   if (!jit_clear)
@@ -538,7 +554,10 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
   {
     u64 title = 0;
     if (!v->is<std::string>() || !v->get<std::string>().starts_with("0x") ||
-        v->get<std::string>().size() != 18 || !TryParse(v->get<std::string>().substr(2), &title, 16))
+        v->get<std::string>().size() != 18 ||
+        !std::all_of(v->get<std::string>().begin() + 2, v->get<std::string>().end(),
+                     [](unsigned char c) { return std::isxdigit(c); }) ||
+        !TryParse(v->get<std::string>().substr(2), &title, 16))
     {
       return fail("saveTitle must be a 16-digit hex title ID (\"0x0001000052534245\")");
     }
@@ -645,22 +664,52 @@ u32 FirstKeyframeFrame()
 
 namespace
 {
-// Keeps the newest `keep` cached images (by mtime) in `dir`, and drops the rest with their notes.
+// A name for this process's temporary files (host-only: never reaches the game).
+u64 ProcessId()
+{
+  static const u64 id = [] {
+    std::random_device device;
+    return (u64{device()} << 32) | device();
+  }();
+  return id;
+}
+
+// Keeps the newest `keep` cached images (by mtime) in `dir`, and drops the rest with their notes;
+// also what a build killed midway left (a .part over an hour old) and notes without an image.
 void PruneSdCache(const std::string& dir, size_t keep)
 {
   namespace fs = std::filesystem;
   std::error_code ec;
   std::vector<std::pair<fs::file_time_type, fs::path>> images;
+  std::vector<fs::path> notes;
+  const auto stale = fs::file_time_type::clock::now() - std::chrono::hours(1);
   for (const auto& entry : fs::directory_iterator(StringToPath(dir), ec))
   {
     const std::string name = PathToString(entry.path().filename());
-    // <64 hex>-<builder>.raw
+    // <64 hex>-<builder>.raw[.xxh3][.<pid>.part]
     if (name.size() < 70 || !IsLowerHex(std::string_view(name).substr(0, 64), 64) ||
-        name[64] != '-' || !name.ends_with(".raw"))
+        name[64] != '-')
     {
       continue;
     }
+    if (name.ends_with(".part") || name.ends_with(".xxx"))
+    {
+      if (entry.last_write_time(ec) < stale)
+        fs::remove(entry.path(), ec);
+      continue;
+    }
+    if (name.ends_with(".raw.xxh3"))
+      notes.push_back(entry.path());
+    if (!name.ends_with(".raw"))
+      continue;
     images.emplace_back(entry.last_write_time(ec), entry.path());
+  }
+  for (const fs::path& note : notes)
+  {
+    fs::path image = note;
+    image.replace_extension();
+    if (!fs::exists(image, ec))
+      fs::remove(note, ec);
   }
   std::ranges::sort(images, std::greater{});
   for (size_t i = keep; i < images.size(); ++i)
@@ -738,15 +787,22 @@ std::optional<SdImage> PrepareSdImage(const ModInfo& mod, const std::string& cac
     const auto start = std::chrono::steady_clock::now();
     std::string why;
     File::Delete(note, File::IfAbsentBehavior::NoConsoleWarning);
-    if (!BuildSdImage(files, bytes, image.path, &why))
+    // Built under this process's own name (two Orcas sharing the cache may build the same card),
+    // then hashed and moved into place, its hash recorded last.
+    const std::string building = fmt::format("{}.{:016x}.part", image.path, ProcessId());
+    if (!BuildSdImage(files, bytes, building, &why))
     {
+      File::Delete(building, File::IfAbsentBehavior::NoConsoleWarning);
       *error = fmt::format("Orca mod: couldn't build the SD card: {}", why);
       return std::nullopt;
     }
-    image.hash = HashFile(image.path);
-    if (image.hash.empty() || !File::WriteStringToFile(note + ".tmp", image.hash) ||
-        !File::Rename(note + ".tmp", note))
+    image.hash = HashFile(building);
+    const std::string note_part = fmt::format("{}.{:016x}.part", note, ProcessId());
+    if (image.hash.empty() || !File::Rename(building, image.path) ||
+        !File::WriteStringToFile(note_part, image.hash) || !File::Rename(note_part, note))
     {
+      File::Delete(building, File::IfAbsentBehavior::NoConsoleWarning);
+      File::Delete(note_part, File::IfAbsentBehavior::NoConsoleWarning);
       *error = fmt::format("Orca mod: couldn't hash or record the SD image {}", image.path);
       return std::nullopt;
     }
@@ -846,8 +902,8 @@ namespace
 // 0: failed, 1: held.
 std::atomic<int> s_guards{-1};
 std::atomic<bool> s_guards_failed{false};
+// CPU thread only.
 bool s_held_once = false;
-const ModInfo* s_guards_for = nullptr;
 
 void LogFirstBrokenGuard(const Core::CPUThreadGuard& guard, Builtin builtin)
 {
@@ -868,22 +924,25 @@ void LogFirstBrokenGuard(const Core::CPUThreadGuard& guard, Builtin builtin)
 }
 }  // namespace
 
+void ResetGuards()
+{
+  s_guards = -1;
+  s_guards_failed = false;
+  s_held_once = false;
+}
+
 void RefreshGuards(const Core::CPUThreadGuard& guard, std::optional<int> frame)
 {
   const Profile* profile = ActiveProfile();
   const ModInfo* mod = profile && profile->mod ? &*profile->mod : nullptr;
-  if (mod != s_guards_for)
-  {
-    s_guards_for = mod;
-    s_guards = -1;
-    s_guards_failed = false;
-    s_held_once = false;
-  }
   if (!mod || mod->manifest.builtin == Builtin::None)
     return;
-  // Before the game's code is live (a launcher still running), nothing to check.
+  // Before the game's code is live (a launcher still running), the modules stay off.
   if (!FrameHookLive(guard, *profile))
+  {
+    s_guards = -1;
     return;
+  }
   const Builtin builtin = mod->manifest.builtin;
   const bool held = GuardsHold(builtin, [&guard](u32 address) -> std::optional<u32> {
     if (!PowerPC::MMU::HostIsRAMAddress(guard, address))
@@ -915,8 +974,7 @@ void RefreshGuards(const Core::CPUThreadGuard& guard, std::optional<int> frame)
 bool BuiltinOn(Builtin builtin)
 {
   const ModInfo* mod = ActiveMod();
-  return mod && builtin != Builtin::None && mod->manifest.builtin == builtin &&
-         mod == s_guards_for && s_guards == 1;
+  return mod && builtin != Builtin::None && mod->manifest.builtin == builtin && s_guards == 1;
 }
 
 Builtin DeclaredBuiltin()
@@ -927,7 +985,7 @@ Builtin DeclaredBuiltin()
 
 bool GuardsFailed()
 {
-  return ActiveMod() == s_guards_for && s_guards_failed;
+  return ActiveMod() && s_guards_failed;
 }
 
 bool Offers(std::string_view cap)
@@ -978,6 +1036,22 @@ std::optional<Profile> LoadModProfile(const std::string& dir_in, std::string* er
   {
     *error = "Orca mod: the bundle has no mod.json";
     return std::nullopt;
+  }
+  // What reaches the game besides the SD card (whose built image's hash is in the key) is checked
+  // against tree.json's sha256 too: mod.json, the launcher, the game patches. Small files; a run
+  // folder edited in place since the app laid it out is refused rather than desyncing.
+  for (const Mod::TreeFile& f : tree->files)
+  {
+    const bool checked = f.path == "mod.json" || f.path.starts_with("orca/patches/") ||
+                         (f.path.find('/') == std::string::npos && f.path.ends_with(".dol")) ||
+                         (f.path.find('/') == std::string::npos && f.path.ends_with(".elf"));
+    std::string contents;
+    if (checked && (!File::ReadFileToString(dir + f.path, contents) ||
+                    Mod::Sha256Hex(contents) != f.sha256))
+    {
+      *error = fmt::format("Orca mod: {} is not the file tree.json names (sha256)", f.path);
+      return std::nullopt;
+    }
   }
   std::optional<Mod::Manifest> manifest = Mod::ParseManifest(text, error);
   if (!manifest)
@@ -1065,8 +1139,9 @@ namespace Orca
 {
 bool PrepareModBoot(Profile* profile, const std::string* executable_path,
                     const std::string& default_disc, const std::string& boot_game_id,
-                    u16 boot_revision, std::string* error)
+                    u16 boot_revision, std::string* error, bool* wrong_disc)
 {
+  *wrong_disc = false;
   Mod::ModInfo& mod = *profile->mod;
   const Mod::Manifest& m = mod.manifest;
   if (executable_path)
@@ -1077,8 +1152,10 @@ bool PrepareModBoot(Profile* profile, const std::string* executable_path,
       return false;
     }
     // Exactly the bundle's launcher (the app lays it out at <run folder>/<launcher>).
+    // By name too: a loader's game ID (which game INIs apply to it) comes from its file name.
     std::error_code ec;
-    if (!std::filesystem::equivalent(StringToPath(*executable_path),
+    if (PathToFileName(*executable_path) != m.launcher ||
+        !std::filesystem::equivalent(StringToPath(*executable_path),
                                      StringToPath(mod.dir + m.launcher), ec))
     {
       *error = fmt::format("Orca mod: {} is not this mod's launcher ({})", *executable_path,
@@ -1096,6 +1173,7 @@ bool PrepareModBoot(Profile* profile, const std::string* executable_path,
     const u16 revision = disc->GetRevision().value_or(0);
     if (disc->GetGameID() != m.disc_id || revision != m.disc_revision)
     {
+      *wrong_disc = true;
       *error = fmt::format("Orca mod: this mod needs {} revision {}; the disc is {} revision {}",
                            m.disc_id, m.disc_revision, disc->GetGameID(), revision);
       return false;
@@ -1110,6 +1188,7 @@ bool PrepareModBoot(Profile* profile, const std::string* executable_path,
     }
     if (boot_game_id != m.disc_id || boot_revision != m.disc_revision)
     {
+      *wrong_disc = true;
       *error = fmt::format("Orca mod: this mod needs {} revision {}; the disc is {} revision {}",
                            m.disc_id, m.disc_revision, boot_game_id, boot_revision);
       return false;

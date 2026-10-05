@@ -310,6 +310,13 @@ TEST(OrcaMod, RefusesAnythingElse)
   EXPECT_TRUE(Refused(BrawlWith("bootNandFrame", "0")));
   EXPECT_TRUE(Refused(BrawlWith("bootNandFrame", R"("600")")));
   EXPECT_TRUE(Refused(BrawlWith("firstKeyframeFrame", "10")));
+  EXPECT_TRUE(Refused(BrawlWith("firstKeyframeFrame", "299")));
+  EXPECT_FALSE(Refused(BrawlWith("firstKeyframeFrame", "300")));
+  EXPECT_TRUE(Refused(std::string(BRAWL_MOD) + "x"));
+  EXPECT_TRUE(Refused(std::string(BRAWL_MOD) + "{}"));
+  EXPECT_FALSE(Refused(std::string(BRAWL_MOD) + "\n\t \r\n"));
+  EXPECT_TRUE(Refused(BrawlWith("saveTitle", R"("0x+001000052534245")")));
+  EXPECT_TRUE(Refused(BrawlWith("saveTitle", R"("0x 001000052534245")")));
   EXPECT_TRUE(Refused(BrawlWith("jitClearFrame", "-1")));
   EXPECT_TRUE(Refused(BrawlWith("keepGameCode", R"([["0x80023B88", "0x1", "0x1"]])")));
   EXPECT_TRUE(Refused(BrawlWith("keepGameCode", R"([["0x80023B88", "0x1"]])")));
@@ -453,6 +460,16 @@ TEST(OrcaMod, RefusesABundleThatDiffersFromItsTree)
     ASSERT_TRUE(File::WriteStringToFile(b.dir + "orca/patches/a.patches", "# xy\n"));
     EXPECT_FALSE(Orca::LoadModProfile(b.dir, &error));
     EXPECT_NE(error.find("size"), std::string::npos) << error;
+    File::DeleteDirRecursively(b.dir);
+  }
+  {
+    // The same size, other bytes: refused for what reaches the game (mod.json, patches, launcher).
+    Bundle b = MakeBundle(BRAWL_MOD);
+    b.Add("orca/patches/a.patches", "# x\n");
+    b.WriteTree();
+    ASSERT_TRUE(File::WriteStringToFile(b.dir + "orca/patches/a.patches", "# y\n"));
+    EXPECT_FALSE(Orca::LoadModProfile(b.dir, &error));
+    EXPECT_NE(error.find("sha256"), std::string::npos) << error;
     File::DeleteDirRecursively(b.dir);
   }
   {

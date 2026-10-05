@@ -210,11 +210,11 @@ std::optional<Profile> LoadProfileFrom(const std::string& sys_directory, const s
 std::optional<Profile> LoadModProfile(const std::string& dir, std::string* error);
 // Mod mode's boot checks: a loader boot runs exactly the bundle's launcher with the mod's disc in the
 // drive (`default_disc`); a disc boot (`executable_path` null) runs the mod's disc (`boot_game_id`,
-// `boot_revision`). A mod with an SD card gets its image built or reused (ORCA_SD_CACHE), and
+// `boot_revision`); `wrong_disc` says a refusal was the disc's. A mod with an SD card gets its image built or reused (ORCA_SD_CACHE), and
 // `profile->sd_image_path` names it.
 bool PrepareModBoot(Profile* profile, const std::string* executable_path,
                     const std::string& default_disc, const std::string& boot_game_id,
-                    u16 boot_revision, std::string* error);
+                    u16 boot_revision, std::string* error, bool* wrong_disc);
 
 // ORCA_PROFILE: the launcher profile for a session that boots an executable; empty when unset.
 std::string LauncherProfileName();

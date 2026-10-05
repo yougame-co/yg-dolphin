@@ -88,6 +88,7 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
     // A disc boots with its own profile; a loader executable (a mod's launcher) only with the
     // launcher profile ORCA_PROFILE names, which checks the loader, the disc and the SD card.
     const auto* executable = std::get_if<BootParameters::Executable>(&boot->parameters);
+    bool mod_wrong_disc = false;
     if (Orca::Mod::Requested())
     {
       // Mod mode (ORCA_MOD_DIR): the game comes from the bundle, never from Data/Sys/Orca, and
@@ -96,7 +97,7 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
       if (orca_profile &&
           !Orca::PrepareModBoot(&*orca_profile, executable ? &executable->path : nullptr,
                                 Config::Get(Config::MAIN_DEFAULT_ISO), StartUp.GetGameID(),
-                                StartUp.GetRevision(), &error))
+                                StartUp.GetRevision(), &error, &mod_wrong_disc))
       {
         orca_profile.reset();
       }
@@ -140,7 +141,11 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
         orca_profile.reset();
       }
     }
-    const char* error_code = !orca_profile && error.find("revision") != std::string::npos ?
+    // A mod's refusal is the disc's only when PrepareModBoot says so (mod.json's own errors can
+    // name a revision too).
+    const char* error_code = !orca_profile && (Orca::Mod::Requested() ?
+                                                   mod_wrong_disc :
+                                                   error.find("revision") != std::string::npos) ?
                                  "disc_revision" :
                                  (!orca_profile ? "profile" : "settings");
     if (orca_profile && NetPlay::IsNetPlayRunning())

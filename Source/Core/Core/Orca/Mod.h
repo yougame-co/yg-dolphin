@@ -203,6 +203,8 @@ bool GuardsHold(Builtin builtin, const std::function<std::optional<u32>(u32)>& r
 // held before, or still at the frame callback's firstKeyframeFrame: until then a loader's codes may
 // not have landed yet.
 void RefreshGuards(const Core::CPUThreadGuard& guard, std::optional<int> frame = std::nullopt);
+// A new boot's profile: nothing checked yet (Profile.cpp SetActiveProfile).
+void ResetGuards();
 // Mod mode: the active mod's builtin is `builtin` and its guards held at the last refresh.
 bool BuiltinOn(Builtin builtin);
 // Mod mode: the active mod's builtin, guards or not (host-only readers: the JIT warm-up's and the
