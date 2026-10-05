@@ -114,11 +114,14 @@ struct CssBoxes
 CssBoxes FindCssBoxes(const GuestMemory& memory);
 
 // One boundary's writes. Returns how many boxes were written; `shown` gets which boxes now show
-// Orca's words (bit p a plate, bit 4 the rules bar).
-int Apply(GuestMemory& memory, const std::vector<Events::PortInfo>& ports, u8* shown = nullptr);
+// Orca's words (bit p a plate, bit 4 the rules bar). `rules_bar` false leaves the bar the game's
+// (Project+'s: its message has no width code, so a long line isn't drawn).
+int Apply(GuestMemory& memory, const std::vector<Events::PortInfo>& ports, u8* shown = nullptr,
+          bool rules_bar = true);
 constexpr u8 SHOWN_RULES = 0x10;
 
-// The frame hook's part (Brawl rev 2 only), first runs and re-runs. On first runs it also tells the
+// The frame hook's part (Brawl rev 2: the plates and the rules bar; Project+: the plates), first
+// runs and re-runs. On first runs it also tells the
 // overlay which of its lines the game now shows (Shown()).
 void Frame(const Core::CPUThreadGuard& guard, bool resimulating,
            const std::vector<Events::PortInfo>& ports);

@@ -14,6 +14,7 @@
 #include <numbers>
 #include <optional>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <fmt/format.h>
@@ -641,6 +642,78 @@ void Plate(ImDrawList* dl, ImVec2 min, ImVec2 max, float unit, Tone tone, float 
   Slab(dl, min, max, radius, unit, PaintOf(tone), alpha);
 }
 
+namespace
+{
+// A Banner's note line, as a share of its first row's height (each line past the first adds this).
+constexpr float BANNER_NOTE_ROW = 0.3f;
+
+// A Banner's title is short in the heavy face, a sentence in the body face.
+bool HeavyTitle(std::string_view title)
+{
+  std::size_t letters = 0;
+  for (std::size_t i = 0; i < title.size();)
+  {
+    GameFont::NextCodePoint(title, &i);
+    ++letters;
+  }
+  return letters <= 18;
+}
+
+// The looks a Banner `height` tall gives its title and note (`p` the tone's paint).
+std::pair<TextLook, TextLook> BannerLooks(float height, float unit, bool heavy, bool has_note,
+                                          const Paint& p)
+{
+  if (!has_note)
+  {
+    return {heavy ? TitleLook(unit, height * 0.6f / unit) :
+                    Inked(LabelLook(unit, height * 0.5f / unit), p),
+            TextLook{}};
+  }
+  return {heavy ? TitleLook(unit, height * 0.48f / unit) :
+                  Inked(LabelLook(unit, height * 0.44f / unit), p),
+          Inked(LabelLook(unit, height * BANNER_NOTE_ROW / unit), p)};
+}
+
+// A note's lines ('\n' between them).
+std::vector<std::string_view> NoteLines(std::string_view note)
+{
+  std::vector<std::string_view> lines;
+  while (!note.empty())
+  {
+    const std::size_t end = note.find('\n');
+    lines.push_back(note.substr(0, end));
+    if (end == std::string_view::npos)
+      break;
+    note.remove_prefix(end + 1);
+  }
+  return lines;
+}
+
+// The first row's height (the title and the first note line) of a banner `height` tall with
+// `lines` note lines.
+float RowHeight(float height, std::size_t lines)
+{
+  return lines > 1 ? height / (1 + BANNER_NOTE_ROW * static_cast<float>(lines - 1)) : height;
+}
+}  // namespace
+
+float BannerHeight(float row, std::size_t note_lines)
+{
+  return note_lines > 1 ? row * (1 + BANNER_NOTE_ROW * static_cast<float>(note_lines - 1)) : row;
+}
+
+float BannerWidth(float height, float unit, std::string_view title, std::string_view note)
+{
+  const std::vector<std::string_view> lines = NoteLines(note);
+  const float row = RowHeight(height, lines.size());
+  const auto [look, small] =
+      BannerLooks(row, unit, HeavyTitle(title), !note.empty(), PaintOf(Tone::Panel));
+  float w = Measure(look, title).x;
+  for (const std::string_view line : lines)
+    w = std::max(w, Measure(small, line).x);
+  return w + height * 0.42f + 4.0f * unit;
+}
+
 Box Banner(ImDrawList* dl, float left, float right, float top, float height, float unit, Tone tone,
            std::string_view title, std::string_view note, float alpha)
 {
@@ -686,28 +759,24 @@ Box Banner(ImDrawList* dl, float left, float right, float top, float height, flo
   const float centre = (left + right) / 2;
   // A short title in the heavy face, in the look's title colours; a sentence in the body face, in
   // the tone's ink, which reads at that size.
-  std::size_t letters = 0;
-  for (std::size_t i = 0; i < title.size();)
-  {
-    GameFont::NextCodePoint(title, &i);
-    ++letters;
-  }
-  const bool heavy = letters <= 18;
+  const std::vector<std::string_view> lines = NoteLines(note);
+  const float row = RowHeight(height, lines.size());
+  const auto [look, small] = BannerLooks(row, unit, HeavyTitle(title), !note.empty(), p);
   if (note.empty())
   {
-    const TextLook look = heavy ? TitleLook(unit, height * 0.6f / unit) :
-                                  Inked(LabelLook(unit, height * 0.5f / unit), p);
     Text(dl, ImVec2(centre, top + (height - look.px) / 2 + look.px * 0.05f), look, title, alpha,
          Align::Centre);
   }
   else
   {
-    const TextLook look = heavy ? TitleLook(unit, height * 0.48f / unit) :
-                                  Inked(LabelLook(unit, height * 0.44f / unit), p);
-    const TextLook small = Inked(LabelLook(unit, height * 0.3f / unit), p);
-    const float y = top + height * 0.1f;
+    float y = top + row * 0.1f;
     Text(dl, ImVec2(centre, y), look, title, alpha, Align::Centre);
-    Text(dl, ImVec2(centre, y + look.px * 0.95f), small, note, alpha, Align::Centre);
+    y += look.px * 0.95f;
+    for (const std::string_view note_line : lines)
+    {
+      Text(dl, ImVec2(centre, y), small, note_line, alpha, Align::Centre);
+      y += small.px;
+    }
   }
   return box;
 }
@@ -786,17 +855,27 @@ Box Timer(ImDrawList* dl, ImVec2 centre, float unit, int seconds, double now_s, 
   return box;
 }
 
-Box Badge(ImDrawList* dl, ImVec2 centre, float unit, std::string_view text, Tone tone, float size,
-          float alpha)
+namespace
 {
-  const Paint p = PaintOf(tone);
+// Badge's text look, for `tone`'s ink.
+TextLook BadgeLook(float unit, float size, const Paint& p)
+{
   TextLook look = TitleLook(unit, size);
   look.italic = 0.06f;
   look.outline = std::max(1.0f, look.px * 0.085f);
   look.shadow = ImVec2(0, std::max(1.0f, look.px * 0.05f));
-  look = Inked(look, p);
+  return Inked(look, p);
+}
+constexpr float BADGE_PAD_X = 1.5f, BADGE_PAD_Y = 0.55f;
+}  // namespace
+
+Box Badge(ImDrawList* dl, ImVec2 centre, float unit, std::string_view text, Tone tone, float size,
+          float alpha)
+{
+  const Paint p = PaintOf(tone);
+  const TextLook look = BadgeLook(unit, size, p);
   const ImVec2 s = Measure(look, text);
-  const float pad_x = 1.5f * unit, pad_y = 0.55f * unit;
+  const float pad_x = BADGE_PAD_X * unit, pad_y = BADGE_PAD_Y * unit;
   const ImVec2 min(centre.x - s.x / 2 - pad_x, centre.y - s.y / 2 - pad_y);
   const ImVec2 max(centre.x + s.x / 2 + pad_x, centre.y + s.y / 2 + pad_y);
   Slab(dl, min, max, (max.y - min.y) * 0.34f, unit, p, alpha);
@@ -891,15 +970,13 @@ void Frame(ImDrawList* dl, ImVec2 min, ImVec2 max, float unit, Tone tone, std::s
   }
 }
 
-void Connection(ImDrawList* dl, ImVec2 c, float radius, float unit, int bars, float alpha)
+namespace
 {
-  if (radius <= 0 || alpha <= 0)
-    return;
-  bars = std::clamp(bars, 1, 3);
-  const Paint p = PaintOf(Tone::Panel);
+// Disc's, returning the body's radius.
+float DiscBody(ImDrawList* dl, ImVec2 c, float radius, float unit, const Paint& p, float alpha)
+{
   const float rim = std::clamp(radius * 0.12f, 1.0f, 0.55f * unit);
   const float line = std::clamp(radius * 0.06f, 1.0f, 0.3f * unit);
-  // A panel disc, built like the buttons: shadow, rim, line, body, gloss.
   dl->AddCircleFilled(ImVec2(c.x + 0.15f * unit, c.y + 0.4f * unit), radius,
                       Rgb(0, 0, 0, 0.34f * alpha), 40);
   int first = dl->VtxBuffer.Size;
@@ -919,6 +996,24 @@ void Connection(ImDrawList* dl, ImVec2 c, float radius, float unit, int bars, fl
     Recolour(dl, first, c.y - body * 0.92f, c.y + body * 0.08f, Rgb(255, 255, 255, p.gloss * alpha),
              Rgb(255, 255, 255, 0.1f * p.gloss * alpha));
   }
+  return body;
+}
+}  // namespace
+
+void Disc(ImDrawList* dl, ImVec2 centre, float radius, float unit, Tone tone, float alpha)
+{
+  if (radius <= 0 || alpha <= 0)
+    return;
+  DiscBody(dl, centre, radius, unit, PaintOf(tone), alpha);
+}
+
+void Connection(ImDrawList* dl, ImVec2 c, float radius, float unit, int bars, float alpha)
+{
+  if (radius <= 0 || alpha <= 0)
+    return;
+  bars = std::clamp(bars, 1, 3);
+  // A panel disc, built like the buttons: shadow, rim, line, body, gloss.
+  const float body = DiscBody(dl, c, radius, unit, PaintOf(Tone::Panel), alpha);
   // The arcs, each in a dark line so they read on any panel: lit in the link's colour.
   const ImU32 on = bars == 3 ? Rgb(96, 206, 255, alpha) :
                    bars == 2 ? Rgb(255, 210, 64, alpha) :
@@ -938,6 +1033,58 @@ void Connection(ImDrawList* dl, ImVec2 c, float radius, float unit, int bars, fl
   }
   dl->AddCircleFilled(base, w * 0.95f + std::max(0.5f, 0.25f * w), dark, 16);
   dl->AddCircleFilled(base, w * 0.95f, on, 16);
+}
+
+ImU32 Accent()
+{
+  return CurrentLook() == Look::ProjectPlus ? Rgb(110, 236, 204) : Rgb(250, 204, 92);
+}
+
+TextLook InkLook(float unit, float size, Tone tone)
+{
+  return Inked(LabelLook(unit, size), PaintOf(tone));
+}
+
+ImVec2 BadgeSize(float unit, std::string_view text, Tone tone, float size)
+{
+  const ImVec2 s = Measure(BadgeLook(unit, size, PaintOf(tone)), text);
+  return ImVec2(s.x + 2 * BADGE_PAD_X * unit, s.y + 2 * BADGE_PAD_Y * unit);
+}
+
+Box TextPlate(ImDrawList* dl, ImVec2 pos, float unit, const std::vector<std::string>& lines,
+              float size, std::size_t lead, Tone tone, float alpha)
+{
+  const TextLook look = InkLook(unit, size, tone);
+  const float pad_x = 1.4f * unit, pad_y = 0.55f * unit, gap = 0.15f * unit;
+  float w = 0;
+  for (const std::string& l : lines)
+    w = std::max(w, Measure(look, l).x);
+  const float line_h = look.px + gap;
+  const float h = static_cast<float>(lines.size()) * line_h - gap + 2 * pad_y;
+  const Box box{pos, ImVec2(pos.x + w + 2 * pad_x, pos.y + h)};
+  if (lines.empty() || alpha <= 0)
+    return box;
+  Plate(dl, box.min, box.max, unit, tone, alpha);
+  float y = pos.y + pad_y;
+  for (std::size_t i = 0; i < lines.size(); ++i)
+  {
+    const std::string_view line = lines[i];
+    if (i == 0 && lead > 0 && lead <= line.size())
+    {
+      // The lead in the accent, the rest after it in the ink.
+      TextLook accent = look;
+      accent.top = Accent();
+      accent.bottom = Mix(Accent(), Rgb(0, 0, 0), 0.1f);
+      const ImVec2 s = Text(dl, ImVec2(pos.x + pad_x, y), accent, line.substr(0, lead), alpha);
+      Text(dl, ImVec2(pos.x + pad_x + s.x - 2 * look.outline, y), look, line.substr(lead), alpha);
+    }
+    else
+    {
+      Text(dl, ImVec2(pos.x + pad_x, y), look, line, alpha);
+    }
+    y += line_h;
+  }
+  return box;
 }
 
 void UseAtlasForTests(Face face, const GameFont::Atlas* atlas, ImTextureID texture)

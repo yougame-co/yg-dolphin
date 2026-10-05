@@ -5,12 +5,12 @@
 
 #include <algorithm>
 #include <atomic>
-#include <cfloat>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
-#include <numbers>
+#include <tuple>
 #include <utility>
+#include <vector>
 
 #include <fmt/format.h>
 #include <imgui.h>
@@ -386,7 +386,7 @@ ImU32 Rgba(int r, int g, int b, float a)
   return IM_COL32(r, g, b, static_cast<int>(std::lround(std::clamp(a, 0.0f, 1.0f) * 255)));
 }
 
-// The frame meter's colours: white while the game keeps its pace, then the circle's yellow and red.
+// The frame meter's colours: white while the game keeps its pace, then the lamp's yellow and red.
 ImU32 LevelColour(Signal level, float alpha)
 {
   return level == Signal::Bad ? Rgba(255, 72, 64, alpha) :
@@ -394,82 +394,20 @@ ImU32 LevelColour(Signal level, float alpha)
                                 Rgba(255, 255, 255, alpha);
 }
 
-// The size every text below hands ImGui: at least 1 px. ImGui rounds a size to whole pixels and
-// asserts on 0 (ImFontAtlasBakedGetOrAdd: font_size > 0.0f), which Orca 0.3.13 trapped on in a
-// window under ~17 px tall; !(>=) also turns a NaN away. Draw already returns in a picture that
-// thin (OverlayUnit): this keeps any size it computes from reaching ImGui under a pixel.
-float TextPx(float size)
-{
-  return size >= 1.0f ? size : 1.0f;
-}
-
-// Text the way Brawl's HUD sets it: white, with a dark outline so it reads on any stage.
-void OutlinedText(ImDrawList* dl, float size, ImVec2 pos, float alpha, const std::string& text,
-                  Signal level = Signal::Good)
-{
-  ImFont* font = ImGui::GetFont();
-  size = TextPx(size);
-  const float o = std::max(1.0f, size / 14);
-  for (const ImVec2 d : {ImVec2(-o, 0), ImVec2(o, 0), ImVec2(0, -o), ImVec2(0, o), ImVec2(o, o)})
-    dl->AddText(font, size, ImVec2(pos.x + d.x, pos.y + d.y), Rgba(16, 16, 24, alpha * 0.85f),
-                text.c_str());
-  dl->AddText(font, size, pos, LevelColour(level, alpha), text.c_str());
-}
-
-ImVec2 TextSize(float size, const std::string& text)
-{
-  return ImGui::GetFont()->CalcTextSizeA(TextPx(size), FLT_MAX, 0, text.c_str());
-}
-
-// A chat line, "<name>: <text>" wrapped at `wrap` pixels, outlined like the rest, with the name in
-// the circle's blue (drawn over the white in the same place: a prefix wraps as it does in the whole
-// line). Returns its height.
-float ChatLine(ImDrawList* dl, float size, ImVec2 pos, float wrap, const OverlayModel::ChatToast& c)
-{
-  const std::string prefix = c.name + ":";
-  const std::string line = prefix + " " + c.text;
-  ImFont* font = ImGui::GetFont();
-  size = TextPx(size);
-  const float o = std::max(1.0f, size / 14);
-  for (const ImVec2 d : {ImVec2(-o, 0), ImVec2(o, 0), ImVec2(0, -o), ImVec2(0, o), ImVec2(o, o)})
-  {
-    dl->AddText(font, size, ImVec2(pos.x + d.x, pos.y + d.y), Rgba(16, 16, 24, c.alpha * 0.85f),
-                line.c_str(), nullptr, wrap);
-  }
-  dl->AddText(font, size, pos, Rgba(255, 255, 255, c.alpha), line.c_str(), nullptr, wrap);
-  dl->AddText(font, size, pos, Rgba(80, 200, 255, c.alpha), prefix.c_str(), nullptr, wrap);
-  return font->CalcTextSizeA(size, FLT_MAX, wrap, line.c_str()).y;
-}
-
-// Brawl's Wi-Fi connection circle: a dark disc with a dot and three arcs, lit by quality.
-void SignalCircle(ImDrawList* dl, ImVec2 c, float r, Signal signal)
-{
-  const int lit = signal == Signal::Good ? 3 : signal == Signal::Ok ? 2 : 1;
-  const ImU32 on = signal == Signal::Good ? Rgba(80, 200, 255, 1) :
-                   signal == Signal::Ok   ? Rgba(255, 208, 64, 1) :
-                                            Rgba(255, 72, 64, 1);
-  const ImU32 off = Rgba(255, 255, 255, 0.22f);
-  dl->AddCircleFilled(c, r, Rgba(10, 14, 28, 0.62f), 40);
-  dl->AddCircle(c, r, Rgba(255, 255, 255, 0.55f), 40, std::max(1.0f, r * 0.07f));
-  const ImVec2 base(c.x, c.y + r * 0.45f);
-  dl->AddCircleFilled(base, r * 0.12f, on, 16);
-  const float pi = std::numbers::pi_v<float>;
-  for (int i = 0; i < 3; ++i)
-  {
-    const float radius = r * (0.32f + 0.22f * static_cast<float>(i));
-    dl->PathArcTo(base, radius, pi * 1.25f, pi * 1.75f, 16);
-    dl->PathStroke(i < lit ? on : off, ImDrawFlags_None, r * 0.12f);
-  }
-}
-
-// The frame meter's graph: a bar per shown frame of the last two seconds, newest on the right, up
-// to 50 ms tall, with a line at one frame period.
-void FrameGraph(ImDrawList* dl, ImVec2 pos, ImVec2 size, const std::vector<float>& frames)
+// The frame meter's graph on a panel plate: a bar per shown frame of the last two seconds, newest
+// on the right, up to 50 ms tall, with a line at one frame period.
+void FrameGraph(ImDrawList* dl, ImVec2 pos, ImVec2 size, float unit,
+                const std::vector<float>& frames)
 {
   constexpr float TOP_MS = 50;
   constexpr float SLOTS = OverlayModel::PERF_GRAPH_MS * 60 / 1000;
-  dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), Rgba(10, 14, 28, 0.62f),
-                    size.y * 0.12f);
+  Kit::Plate(dl, pos, ImVec2(pos.x + size.x, pos.y + size.y), unit, Kit::Tone::Panel, 0.9f);
+  // The bars inside the plate's rim.
+  const float pad = 0.9f * unit;
+  pos = ImVec2(pos.x + pad, pos.y + pad);
+  size = ImVec2(size.x - 2 * pad, size.y - 2 * pad);
+  dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), Rgba(0, 0, 0, 0.45f),
+                    0.4f * unit);
   const float slot = size.x / SLOTS;
   // Bars a few pixels wide get a gap; thinner ones touch (a gap would alias them away).
   const float gap = slot >= 3 ? slot * 0.2f : 0;
@@ -483,12 +421,12 @@ void FrameGraph(ImDrawList* dl, ImVec2 pos, ImVec2 size, const std::vector<float
                                                                 Signal::Good;
     const float h = std::max(1.0f, std::min(ms, TOP_MS) / TOP_MS * size.y);
     dl->AddRectFilled(ImVec2(x - slot, bottom - h), ImVec2(x - gap, bottom),
-                      level == Signal::Good ? Rgba(170, 200, 255, 0.7f) : LevelColour(level, 1));
+                      level == Signal::Good ? Rgba(170, 220, 255, 0.85f) : LevelColour(level, 1));
     x -= slot;
   }
   const float period_y = bottom - 1000.0f / 60 / TOP_MS * size.y;
   dl->AddLine(ImVec2(pos.x, period_y), ImVec2(pos.x + size.x, period_y),
-              Rgba(255, 255, 255, 0.35f), std::max(1.0f, size.y / 40));
+              Rgba(255, 255, 255, 0.4f), std::max(1.0f, size.y / 40));
 }
 
 // The centre of port `port`'s panel on the character select, as a fraction of the game's picture's
@@ -499,133 +437,10 @@ float PanelCentre(int port)
   return 0.236f + 0.177f * static_cast<float>(port);
 }
 
-// Where the LOCKED IN badge sits, as a fraction of the picture's height: across the panel's
-// picture, under the name label.
+// Where the name tab sits over a panel (its top) and the LOCKED IN badge (its middle), as
+// fractions of the picture's height: the tab on the panel's top edge, the badge across its picture.
+constexpr float NAME_TAB_Y = 0.575f;
 constexpr float LOCKED_BADGE_Y = 0.71f;
-
-// A player's LOCKED IN badge, centred on `centre`: a pill in the port's colour with a white rim and
-// white bold-looking capitals, so it reads over any character's portrait.
-void LockedBadge(ImDrawList* dl, float unit, ImVec2 centre, PortColour colour)
-{
-  static const std::string text = "LOCKED IN";
-  const float size = TextPx(4.6f * unit);
-  const ImVec2 s = TextSize(size, text);
-  const float pad_x = 1.8f * unit, pad_y = 0.8f * unit;
-  const ImVec2 min(centre.x - s.x / 2 - pad_x, centre.y - s.y / 2 - pad_y);
-  const ImVec2 max(centre.x + s.x / 2 + pad_x, centre.y + s.y / 2 + pad_y);
-  const float round = (max.y - min.y) / 2;
-  dl->AddRectFilled(ImVec2(min.x + 0.4f * unit, min.y + 0.5f * unit),
-                    ImVec2(max.x + 0.4f * unit, max.y + 0.5f * unit), Rgba(0, 0, 0, 0.45f), round);
-  dl->AddRectFilled(min, max, Rgba(colour.r, colour.g, colour.b, 0.95f), round);
-  dl->AddRect(min, max, Rgba(255, 255, 255, 0.95f), round, ImDrawFlags_None,
-              std::max(1.0f, 0.45f * unit));
-  // A heavier face from the same font: the text drawn twice, a hair apart.
-  const ImVec2 at(centre.x - s.x / 2, centre.y - s.y / 2);
-  ImFont* font = ImGui::GetFont();
-  const float o = std::max(1.0f, size / 14);
-  for (const ImVec2 d : {ImVec2(-o, 0), ImVec2(o, 0), ImVec2(0, -o), ImVec2(0, o), ImVec2(o, o)})
-    dl->AddText(font, size, ImVec2(at.x + d.x, at.y + d.y), Rgba(16, 16, 24, 0.7f), text.c_str());
-  dl->AddText(font, size, at, Rgba(255, 255, 255, 1), text.c_str());
-  dl->AddText(font, size, ImVec2(at.x + std::max(1.0f, size / 24), at.y), Rgba(255, 255, 255, 1),
-              text.c_str());
-}
-
-// A port's colour (PortColourOf: the games' red, blue, yellow, green) at `alpha`.
-ImU32 PortRgba(int port, float alpha)
-{
-  const PortColour c = PortColourOf(port);
-  return Rgba(c.r, c.g, c.b, alpha);
-}
-
-// The stage select's two cursors (StageCursors.h): each player's pointer in their colour with
-// their name, and the stage each proposes framed in their colour. Positions are the match block's
-// (published by the frame hook), mapped onto the picture with the layout's probed map.
-void DrawStageCursors(ImDrawList* dl, const StageCursors::View& v, float unit)
-{
-  const StageCursors::Layout* layout = StageCursors::LayoutFor(v.game);
-  if (!layout || !g_presenter)
-    return;
-  const MathUtil::Rectangle<int>& r = g_presenter->GetTargetRectangle();
-  const float left = static_cast<float>(r.left), top = static_cast<float>(r.top);
-  const float w = static_cast<float>(r.GetWidth()), h = static_cast<float>(r.GetHeight());
-  if (!(w >= 1 && h >= 1))
-    return;
-  const auto at = [&](float x, float y) {
-    return ImVec2(left + w * (layout->u0 + layout->du * x),
-                  top + h * (layout->v0 + layout->dv * y));
-  };
-  const auto at16 = [&](int x16, int y16) {
-    return at(static_cast<float>(x16) / 16.0f, static_cast<float>(y16) / 16.0f);
-  };
-  const float label = 2.6f * unit;
-  // The proposals: a frame round the tile in the proposer's colour, a second one inside it when
-  // both propose the same stage, and the name on a tab at its top.
-  for (int port = 0; port < 2; ++port)
-  {
-    const StageCursors::View::Player& p = v.players[port];
-    if (!p.present || p.proposal < 0)
-      continue;
-    const StageCursors::Tile* tile = StageCursors::TileOf(*layout, p.proposal, v.page);
-    if (!tile)
-      continue;
-    const bool both = v.players[1 - port].present && v.players[1 - port].proposal == p.proposal;
-    const ImVec2 c0 = at16(tile->rect.x0, tile->rect.y1);
-    const ImVec2 c1 = at16(tile->rect.x1, tile->rect.y0);
-    const float inset = both && port == 1 ? 0.9f * unit : 0.0f;
-    const ImVec2 a(std::min(c0.x, c1.x) + inset, std::min(c0.y, c1.y) + inset);
-    const ImVec2 b(std::max(c0.x, c1.x) - inset, std::max(c0.y, c1.y) - inset);
-    dl->AddRect(a, b, Rgba(10, 10, 16, 0.85f), 0.6f * unit, 0, 0.9f * unit);
-    dl->AddRect(a, b, PortRgba(port, 1), 0.6f * unit, 0, 0.55f * unit);
-    const std::string tag = both ? (port == 0 ? p.name + " + " + v.players[1].name : "") :
-                                   p.name;
-    if (tag.empty())
-      continue;
-    const ImVec2 s = TextSize(label, tag);
-    const ImVec2 t(port == 0 ? a.x : b.x - s.x - unit, a.y - s.y - 0.4f * unit);
-    dl->AddRectFilled(ImVec2(t.x - 0.4f * unit, t.y - 0.1f * unit),
-                      ImVec2(t.x + s.x + 0.4f * unit, t.y + s.y + 0.1f * unit),
-                      both ? Rgba(250, 210, 60, 0.95f) : PortRgba(port, 0.95f), 0.4f * unit);
-    dl->AddText(ImGui::GetFont(), TextPx(label), t,
-                both ? Rgba(20, 20, 20, 1) : Rgba(255, 255, 255, 1), tag.c_str());
-  }
-  // The cursors: a crosshair like the game's own (a light disc, a ring, four ticks) in the
-  // player's colour, opaque and a little larger than the game's, so the game's own crosshair (which
-  // sits on the cursor that moved last) never shows; a gold ring outside for the player whose turn
-  // it is; a tab with the port and the name, port 1's to the left and port 2's to the right so two
-  // cursors on one tile keep both.
-  const float radius = 1.7f * std::abs(layout->du) * w;
-  for (int port = 0; port < 2; ++port)
-  {
-    const StageCursors::View::Player& p = v.players[port];
-    if (!p.present)
-      continue;
-    const ImVec2 c = at16(p.x, p.y);
-    const float thick = std::max(2.0f, 0.24f * radius);
-    if (v.turn == port)
-    {
-      dl->AddCircle(c, radius + 0.55f * thick, Rgba(10, 10, 16, 0.9f), 40, 0.9f * thick);
-      dl->AddCircle(c, radius + 0.55f * thick, Rgba(250, 210, 60, 1), 40, 0.6f * thick);
-    }
-    dl->AddCircleFilled(c, radius, Rgba(10, 10, 16, 1), 40);
-    dl->AddCircleFilled(c, radius - 1.5f, Rgba(246, 246, 246, 1), 40);
-    dl->AddCircle(c, radius * 0.72f, PortRgba(port, 1), 40, thick);
-    for (const ImVec2 d : {ImVec2(1, 0), ImVec2(-1, 0), ImVec2(0, 1), ImVec2(0, -1)})
-    {
-      dl->AddLine(ImVec2(c.x + d.x * radius * 0.86f, c.y + d.y * radius * 0.86f),
-                  ImVec2(c.x + d.x * radius * 0.30f, c.y + d.y * radius * 0.30f),
-                  PortRgba(port, 1), 0.8f * thick);
-    }
-    const std::string tag = fmt::format("P{} {}", port + 1, p.name);
-    const ImVec2 ts = TextSize(label, tag);
-    const float ty = c.y + radius * 0.75f;
-    const float tx = port == 0 ? c.x - radius * 0.75f - ts.x : c.x + radius * 0.75f;
-    dl->AddRectFilled(ImVec2(tx - 0.4f * unit, ty - 0.1f * unit),
-                      ImVec2(tx + ts.x + 0.4f * unit, ty + ts.y + 0.1f * unit),
-                      PortRgba(port, 0.95f), 0.4f * unit);
-    dl->AddText(ImGui::GetFont(), TextPx(label), ImVec2(tx, ty), Rgba(255, 255, 255, 1),
-                tag.c_str());
-  }
-}
 
 // The game's picture in the window (the presenter's target rectangle: the window can letterbox or
 // pillarbox it), the whole display when the presenter has none.
@@ -644,22 +459,69 @@ void PictureRect(ImVec2* pic, ImVec2* pic_size)
   }
 }
 
+// The stage select's two cursors (StageCursors.h), in the kit: each player's pointer in their
+// colour with a tab naming them (a gold ring round it on their turn), and the stage each proposes
+// framed in their colour with their name on a tab; both on one stage, one gold frame with both
+// names. Positions are the match block's (published by the frame hook), mapped onto the picture
+// with the layout's probed map.
+void DrawStageCursors(ImDrawList* dl, const StageCursors::View& v, ImVec2 pic, ImVec2 pic_size,
+                      float unit, double now_s)
+{
+  const StageCursors::Layout* layout = StageCursors::LayoutFor(v.game);
+  if (!layout)
+    return;
+  const auto at16 = [&](int x16, int y16) {
+    return ImVec2(
+        pic.x + pic_size.x * (layout->u0 + layout->du * static_cast<float>(x16) / 16.0f),
+        pic.y + pic_size.y * (layout->v0 + layout->dv * static_cast<float>(y16) / 16.0f));
+  };
+  for (int port = 0; port < 2; ++port)
+  {
+    const StageCursors::View::Player& p = v.players[port];
+    if (!p.present || p.proposal < 0)
+      continue;
+    const StageCursors::Tile* tile = StageCursors::TileOf(*layout, p.proposal, v.page);
+    if (!tile)
+      continue;
+    const bool both = v.players[1 - port].present && v.players[1 - port].proposal == p.proposal;
+    if (both && port == 1)
+      continue;
+    const ImVec2 c0 = at16(tile->rect.x0, tile->rect.y1), c1 = at16(tile->rect.x1, tile->rect.y0);
+    Kit::Frame(dl, ImVec2(std::min(c0.x, c1.x), std::min(c0.y, c1.y)),
+               ImVec2(std::max(c0.x, c1.x), std::max(c0.y, c1.y)), unit,
+               both ? Kit::Tone::Gold : Kit::PortTone(port),
+               both ? p.name + " + " + v.players[1].name : p.name, port == 0);
+  }
+  // Opaque and a little larger than the game's own crosshair (which sits on the cursor that moved
+  // last), so it never shows; port 1's tab to the left and port 2's to the right, so two cursors on
+  // one tile keep both.
+  const float radius = 1.7f * std::abs(layout->du) * pic_size.x;
+  for (int port = 0; port < 2; ++port)
+  {
+    const StageCursors::View::Player& p = v.players[port];
+    if (p.present)
+    {
+      Kit::Pointer(dl, at16(p.x, p.y), radius, unit, port, fmt::format("P{} {}", port + 1, p.name),
+                   v.turn == port, port == 0, now_s);
+    }
+  }
+}
+
 // ORCA_UX_KIT_DEMO=1: the kit's primitives over the game's picture (Kit.h), for design checks.
 void DrawKitDemo()
 {
-  const ImVec2 screen = ImGui::GetIO().DisplaySize;
-  if (OverlayUnit(screen.y) <= 0 || !(screen.x >= 1))
-    return;
   ImVec2 pic, pic_size;
   PictureRect(&pic, &pic_size);
-  Kit::DrawDemo(ImGui::GetForegroundDrawList(), pic, pic_size, OverlayUnit(pic_size.y),
-                ImGui::GetTime());
+  const float unit = OverlayUnit(pic_size.y);
+  if (unit <= 0 || !(pic_size.x >= 1))
+    return;
+  Kit::DrawDemo(ImGui::GetForegroundDrawList(), pic, pic_size, unit, ImGui::GetTime());
 }
 
 // A line's trailing " · m:ss" (the turn's timer), taken off it: the seconds, or -1 with none.
 int TakeTimer(std::string* line)
 {
-  static const std::string sep = " \u00b7 ";
+  static const std::string sep = " · ";
   const std::size_t at = line->rfind(sep);
   if (at == std::string::npos)
     return -1;
@@ -680,406 +542,369 @@ int TakeTimer(std::string* line)
   return minutes * 60 + (tail[colon + 1] - '0') * 10 + (tail[colon + 2] - '0');
 }
 
-// ORCA_UX_KIT_DEMO=2: the overlay's own elements, each drawn with the kit (Kit.h), for design
-// checks: what the convert stage makes of them. The same data as Draw's, nothing else.
-void DrawKitPreview(const OverlayModel::Frame& f, std::string search, std::string search_note,
-                    const std::array<std::string, 4>& labels, const std::array<bool, 4>& locked,
-                    std::string rules, std::string rules_note, const StageCursors::View& cursors)
+// Everything the overlay shows this frame, gathered from the model and the UX's tracks.
+struct Scene
 {
-  const ImVec2 screen = ImGui::GetIO().DisplaySize;
-  if (OverlayUnit(screen.y) <= 0 || !(screen.x >= 1))
-    return;
-  ImVec2 pic, pic_size;
-  PictureRect(&pic, &pic_size);
-  const float unit = OverlayUnit(pic_size.y);
-  if (unit <= 0)
-    return;
-  ImDrawList* dl = ImGui::GetForegroundDrawList();
-  const double now_s = ImGui::GetTime();
-  // The stage select: each player's pointer, each proposal framed.
-  if (const StageCursors::Layout* layout = StageCursors::LayoutFor(cursors.game); cursors.on && layout)
+  OverlayModel::Frame f;
+  SetEnd::View set_end;
+  // Top centre: the search's or the queue's lines, then the set's (the stage flow's, the score,
+  // the turn); `hint` this machine's own (Hold Z, B to change) on a small plate under them.
+  std::string search, search_note, rules, rules_note, hint;
+  std::array<std::string, 4> labels;
+  std::array<bool, 4> locked{};
+  StageCursors::View cursors;
+
+  bool Empty() const
   {
-    const auto at16 = [&](int x16, int y16) {
-      return ImVec2(pic.x + pic_size.x * (layout->u0 + layout->du * static_cast<float>(x16) / 16.0f),
-                    pic.y + pic_size.y * (layout->v0 + layout->dv * static_cast<float>(y16) / 16.0f));
-    };
-    for (int port = 0; port < 2; ++port)
-    {
-      const StageCursors::View::Player& p = cursors.players[port];
-      if (!p.present || p.proposal < 0)
-        continue;
-      const StageCursors::Tile* tile = StageCursors::TileOf(*layout, p.proposal, cursors.page);
-      if (!tile)
-        continue;
-      const bool both = cursors.players[1 - port].present &&
-                        cursors.players[1 - port].proposal == p.proposal;
-      if (both && port == 1)
-        continue;
-      const ImVec2 c0 = at16(tile->rect.x0, tile->rect.y1), c1 = at16(tile->rect.x1, tile->rect.y0);
-      Kit::Frame(dl, ImVec2(std::min(c0.x, c1.x), std::min(c0.y, c1.y)),
-                 ImVec2(std::max(c0.x, c1.x), std::max(c0.y, c1.y)), unit,
-                 both ? Kit::Tone::Gold : Kit::PortTone(port),
-                 both ? p.name + " + " + cursors.players[1].name : p.name, port == 0);
-    }
-    const float radius = 1.7f * std::abs(layout->du) * pic_size.x;
-    for (int port = 0; port < 2; ++port)
-    {
-      const StageCursors::View::Player& p = cursors.players[port];
-      if (p.present)
-      {
-        Kit::Pointer(dl, at16(p.x, p.y), radius, unit, port,
-                     fmt::format("P{} {}", port + 1, p.name), cursors.turn == port, port == 0,
-                     now_s);
-      }
-    }
+    return !f.show_signal && f.waiting.empty() && f.toasts.empty() && f.chats.empty() &&
+           f.stats.empty() && f.perf.empty() && search.empty() && search_note.empty() &&
+           rules.empty() && rules_note.empty() && hint.empty() &&
+           std::all_of(labels.begin(), labels.end(), [](const std::string& l) { return l.empty(); }) &&
+           std::none_of(locked.begin(), locked.end(), [](bool l) { return l; }) && !cursors.on &&
+           set_end.Empty();
   }
-  // Top left: the connection's lamp, the ping and the meter beside it, the toasts and the chat on
-  // plates under them.
-  const float margin = 2.5f * unit;
-  float y = margin;
+};
+
+Scene Gather(double now)
+{
+  Scene s;
+  s_overlay.Update(s_demo ? DemoLink(now) : ViewOf(Events::GetLinkStats()), now);
+  s.f = s_overlay.View(now, s_stats.load(std::memory_order_relaxed),
+                       s_perf.load(std::memory_order_relaxed));
+  // The set's end and the opponent's disconnect (SetEnd.h): its notice says more than "Waiting
+  // for <name>…", which goes meanwhile.
+  s.set_end = SetEnd::Current().At(SetEnd::DemoFrame(now));
+  if (s.set_end.hides_waiting)
+    s.f.waiting.clear();
+  // The matchmaking search (UX/OnlineMenu.h), while the player waits on the character select; the
+  // queue's character select's lines (UX/Queue.h) in their place when it has any.
+  std::tie(s.search, s.search_note) = Search::Lines();
+  {
+    std::lock_guard lk(s_queue_lock);
+    if (!s_queue_line.empty() || !s_queue_note.empty())
+    {
+      s.search = s_queue_line;
+      s.search_note = s_queue_note;
+    }
+    s.labels = s_queue_labels;
+    s.locked = s_queue_locked;
+  }
+  // What the game's own text boxes already say (NativeText.h): a plate that names its player
+  // needs no tab over it (its LOCKED IN badge stays), and a rules bar that says the queue's line
+  // takes the place of the top lines; this machine's own hints (Hold Z, B to change) stay, small.
+  const u8 native = NativeText::Shown();
+  for (int port = 0; port < 4; ++port)
+  {
+    if (native & (1 << port))
+      s.labels[port].clear();
+  }
+  if (native & NativeText::SHOWN_RULES)
+  {
+    // On the queue's own character select the bar says it all (it is this player's alone).
+    s.hint = Queue::OnSoloCss() ? std::string() : std::move(s.search_note);
+    s.search.clear();
+    s.search_note.clear();
+  }
+  // A ranked set's lines, top centre: the stage flow's (Brawl's through SetRulesLines, Project+'s
+  // RankedPPlus::CurrentLines), else the set's score on the menus (UX/RankedSet.h); under it the
+  // turn (the stage flow's, else the character order's).
+  std::string rule_line;
+  {
+    std::lock_guard lk(s_rules_lock);
+    s.rules = s_rules_line;
+    s.rules_note = s_rules_note;
+  }
+  {
+    std::lock_guard lk(s_rule_line_lock);
+    rule_line = s_rule_line;
+  }
+  if (s.rules.empty() && s.rules_note.empty())
+  {
+    const RankedPPlus::Lines ranked = RankedPPlus::CurrentLines();
+    s.rules = ranked.set;
+    s.rules_note = ranked.turn;
+  }
+  if (s.rules.empty())
+    s.rules = RankedSet::CurrentScoreLine();
+  if (s.rules_note.empty())
+    s.rules_note = rule_line;
+  // The rules bar says the set's score and the character order's turn too; the queue's own
+  // character select has no set yet (a ranked header is there already).
+  if ((native & NativeText::SHOWN_RULES) || Queue::OnSoloCss())
+  {
+    s.rules.clear();
+    s.rules_note.clear();
+  }
+  s.cursors = StageCursors::Current();
+  return s;
+}
+
+// Top left: the link's lamp with the ping and the frame meter beside it (the meter alone when
+// solo), the meter's graph under them. Returns the bottom.
+float DrawCorner(ImDrawList* dl, const OverlayModel::Frame& f, ImVec2 at, float unit)
+{
+  constexpr float SIZE = 2.6f;
+  const float line_h = Kit::LabelLook(unit, SIZE).px;
+  float y = at.y;
   if (f.show_signal)
   {
     const float r = 3.0f * unit;
-    Kit::Connection(dl, ImVec2(margin + r, margin + r), r, unit,
-                    f.signal == Signal::Good ? 3 : f.signal == Signal::Ok ? 2 : 1);
-    float ty = margin + r - 1.5f * unit;
+    const ImVec2 c(at.x + r, at.y + r);
+    Kit::Connection(dl, c, r, unit,
+                    f.signal == Signal::Good ? 3 :
+                    f.signal == Signal::Ok   ? 2 :
+                                               1);
+    const int lines = (f.stats.empty() ? 0 : 1) + (f.perf.empty() ? 0 : 1);
+    float ty = c.y - static_cast<float>(lines) * line_h / 2;
+    const float tx = c.x + r + 0.9f * unit;
     if (!f.stats.empty())
-      ty = Kit::Label(dl, ImVec2(margin + 2 * r + unit, ty), unit, f.stats, 2.6f).max.y;
+      ty = Kit::Label(dl, ImVec2(tx, ty), unit, f.stats, SIZE).max.y;
     if (!f.perf.empty())
-      Kit::Label(dl, ImVec2(margin + 2 * r + unit, ty), unit, f.perf, 2.6f);
-    y = margin + 2 * r + 1.5f * unit;
+      ty = Kit::Label(dl, ImVec2(tx, ty), unit, f.perf, SIZE, Kit::Align::Left,
+                      LevelColour(f.perf_level, 1))
+               .max.y;
+    y = std::max(c.y + r, ty) + 1.2f * unit;
   }
   else if (!f.perf.empty())
   {
-    y = Kit::Label(dl, ImVec2(margin, y), unit, f.perf, 2.6f).max.y + unit;
-  }
-  if (!f.toasts.empty() || !f.chats.empty())
-    y = std::max(y, OSD::MessagesBottom() + unit);
-  for (const OverlayModel::Toast& t : f.toasts)
-  {
-    y = Kit::LabelPlate(dl, ImVec2(margin, y), unit, t.text, 2.7f, Kit::Align::Left,
-                        Kit::Tone::Panel, t.alpha)
+    y = Kit::Label(dl, at, unit, f.perf, SIZE, Kit::Align::Left, LevelColour(f.perf_level, 1))
             .max.y +
-        0.9f * unit;
+        0.8f * unit;
   }
-  for (const OverlayModel::ChatToast& c : f.chats)
+  if (!f.graph.empty())
   {
-    const Kit::TextLook look = Kit::LabelLook(unit, 2.7f);
-    for (const std::string& line : Kit::Wrap(look, c.name + ": " + c.text, 0.4f * pic_size.x))
-    {
-      y = Kit::LabelPlate(dl, ImVec2(margin, y), unit, line, 2.7f, Kit::Align::Left,
-                          Kit::Tone::Panel, c.alpha)
-              .max.y +
-          0.5f * unit;
-    }
-    y += 0.4f * unit;
+    const ImVec2 size(40 * unit, 9 * unit);
+    FrameGraph(dl, ImVec2(at.x, y), size, unit, f.graph);
+    y += size.y + 1.2f * unit;
   }
-  // Top centre: the search's or the set's lines on a banner, the turn's timer beside it.
+  return y;
+}
+
+// `note` in lines no wider than `width` in `look`, '\n' between them: broken at its " · " first,
+// at spaces inside a part still too wide.
+std::string FitNote(const Kit::TextLook& look, const std::string& note, float width)
+{
+  static const std::string sep = " \u00b7 ";
+  std::vector<std::string> parts;
+  for (std::size_t at = 0;;)
+  {
+    const std::size_t next = note.find(sep, at);
+    parts.push_back(note.substr(at, next == std::string::npos ? std::string::npos : next - at));
+    if (next == std::string::npos)
+      break;
+    at = next + sep.size();
+  }
   std::vector<std::string> lines;
-  for (std::string* l : {&search, &search_note, &rules, &rules_note})
+  for (const std::string& part : parts)
   {
-    if (!l->empty())
-      lines.push_back(*l);
+    const std::string longer = lines.empty() ? part : lines.back() + sep + part;
+    if (!lines.empty() && Kit::Measure(look, longer).x <= width)
+      lines.back() = longer;
+    else if (Kit::Measure(look, part).x <= width)
+      lines.push_back(part);
+    else
+      for (std::string& l : Kit::Wrap(look, part, width))
+        lines.push_back(std::move(l));
+  }
+  std::string out;
+  for (const std::string& l : lines)
+    out += (out.empty() ? "" : "\n") + l;
+  return out;
+}
+
+// A banner's note fitted into `width` (its words' room: the banner's width less its cut ends and
+// margin) for a banner whose first row is `row` tall: the note, and the banner's height.
+std::pair<std::string, float> FitBanner(const std::string& title, const std::string& note,
+                                        float row, float width, float unit)
+{
+  if (note.empty() || Kit::BannerWidth(row, unit, title, note) <= width)
+    return {note, row};
+  const std::string fitted =
+      FitNote(Kit::InkLook(unit, row * 0.3f / unit), note, width - row * 0.6f - 4.0f * unit);
+  const auto lines = static_cast<std::size_t>(std::count(fitted.begin(), fitted.end(), '\n') + 1);
+  return {fitted, Kit::BannerHeight(row, lines)};
+}
+
+// Top centre: each pair of lines on a banner (the first, the search's or the queue's, with the
+// turn's timer beside it on its plate), this machine's hint on a small plate under them. Returns
+// the lowest bottom and leftmost edge drawn (the toasts and the chat keep clear of them).
+Kit::Box DrawTopCentre(ImDrawList* dl, const Scene& s, ImVec2 pic, ImVec2 pic_size, float unit,
+                       double now_s)
+{
+  Kit::Box drawn{ImVec2(pic.x + pic_size.x, pic.y), ImVec2(pic.x, pic.y)};
+  const auto add = [&](const Kit::Box& b) {
+    drawn.min.x = std::min(drawn.min.x, b.min.x);
+    drawn.max.y = std::max(drawn.max.y, b.max.y);
+  };
+  std::vector<std::pair<std::string, std::string>> groups;
+  for (const auto& [title, note] : {std::pair{s.search, s.search_note},
+                                    std::pair{s.rules, s.rules_note}})
+  {
+    if (!title.empty())
+      groups.emplace_back(title, note);
+    else if (!note.empty())
+      groups.emplace_back(note, std::string());
   }
   int seconds = -1;
-  for (std::string& l : lines)
+  for (auto& [title, note] : groups)
   {
     if (seconds < 0)
-      seconds = TakeTimer(&l);
+      seconds = TakeTimer(&title);
+    if (seconds < 0)
+      seconds = TakeTimer(&note);
   }
-  float banner_top = 2.0f * unit;
-  for (std::size_t i = 0; i < lines.size(); i += 2)
+  if (Kit::CurrentLook() == Kit::Look::ProjectPlus && Queue::OnQueueCss() && !groups.empty())
   {
-    const std::string& title = lines[i];
-    const std::string note = i + 1 < lines.size() ? lines[i + 1] : std::string();
-    const float h = note.empty() ? 6.5f * unit : 9.0f * unit;
-    const float w = std::max(Kit::Measure(Kit::LabelLook(unit, h * 0.44f / unit), title).x,
-                             Kit::Measure(Kit::LabelLook(unit, h * 0.3f / unit), note).x) +
-                    10 * unit;
-    const float cx = pic.x + pic_size.x / 2;
-    const Kit::Box b = Kit::Banner(dl, cx - w / 2, cx + w / 2, banner_top, h, unit,
-                                   Kit::Tone::Panel, title, note);
-    if (i == 0 && seconds >= 0)
-      Kit::Timer(dl, ImVec2(b.max.x + 6.5f * unit, (b.min.y + b.max.y) / 2), unit, seconds, now_s);
-    banner_top = b.max.y + 1.2f * unit;
-  }
-  // The character select's panels: each name on a plate in the port's colour, LOCKED IN under it.
-  for (int port = 0; port < 4; ++port)
-  {
-    if (labels[port].empty())
-      continue;
-    const float centre = pic.x + pic_size.x * PanelCentre(port);
-    Kit::LabelPlate(dl, ImVec2(centre, pic.y + pic_size.y * 0.575f), unit, labels[port], 2.8f,
-                    Kit::Align::Centre, Kit::PortTone(port));
-    if (locked[port])
+    // Project+'s queue character select: the lines on its own rules bar (the band right of RANKED
+    // that says "-stock Smash!", locked in a queue room anyway), as Brawl's rules bar says them in
+    // the game's own text (NativeText.h): what happens now, the set under it; this machine's hint
+    // and the turn's timer under the bar's right end, over the grid's empty corner. The bar's place
+    // in the picture, measured on 1280x720 screenshots (2026-10-04): x 520..1265, y 42..105.
+    std::string title = groups[0].first, note, hint = s.hint;
+    if (!s.search.empty())
     {
-      Kit::Badge(dl, ImVec2(centre, pic.y + pic_size.y * LOCKED_BADGE_Y), unit, "LOCKED IN",
-                 Kit::PortTone(port), 3.2f);
+      note = s.rules;
+      const std::string& more = s.search_note.empty() ? s.rules_note : s.search_note;
+      hint = hint.empty() ? more : more.empty() ? hint : hint + " \u00b7 " + more;
     }
+    else
+    {
+      note = s.rules_note;
+    }
+    TakeTimer(&note);
+    TakeTimer(&hint);
+    const float left = pic.x + pic_size.x * 0.4f, right = pic.x + pic_size.x * 0.99f;
+    const float top = pic.y + pic_size.y * 0.056f;
+    const auto [fitted, h] = FitBanner(title, note, pic_size.y * 0.092f, right - left, unit);
+    add(Kit::Banner(dl, left, right, top, h, unit, Kit::Tone::Panel, title, fitted));
+    float x = right - 1.5f * unit;
+    const float y = top + h + 1.0f * unit;
+    if (seconds >= 0)
+    {
+      const Kit::Box t = Kit::Timer(dl, ImVec2(x - 5.5f * unit, y + 2.4f * unit), unit, seconds,
+                                    now_s);
+      add(t);
+      x = t.min.x - 1.0f * unit;
+    }
+    if (!hint.empty())
+      add(Kit::LabelPlate(dl, ImVec2(x, y + 0.2f * unit), unit, hint, 2.6f, Kit::Align::Right));
+    return drawn;
   }
-  if (!f.waiting.empty())
-    Kit::Title(dl, ImVec2(pic.x + pic_size.x / 2, pic.y + pic_size.y * 0.18f), unit, f.waiting, 5.0f,
-               Kit::Align::Centre);
+  const float cx = pic.x + pic_size.x / 2;
+  float top = pic.y + 1.6f * unit;
+  for (std::size_t i = 0; i < groups.size(); ++i)
+  {
+    const auto& [title, note] = groups[i];
+    // The first banner the larger: what happens now; the second the set's. At most 62% of the
+    // picture wide (the timer goes beside it): a longer note takes more lines.
+    const float row =
+        i == 0 ? (note.empty() ? 6.4f : 8.6f) * unit : (note.empty() ? 5.0f : 7.0f) * unit;
+    const float max_w = 0.62f * pic_size.x;
+    const auto [fitted, h] = FitBanner(title, note, row, max_w, unit);
+    const float w = std::clamp(Kit::BannerWidth(h, unit, title, fitted), 26.0f * unit,
+                               std::max(max_w, 26.0f * unit));
+    const Kit::Box b = Kit::Banner(dl, cx - w / 2, cx + w / 2, top, h, unit, Kit::Tone::Panel,
+                                   title, fitted);
+    add(b);
+    if (i == 0 && seconds >= 0)
+    {
+      add(Kit::Timer(dl, ImVec2(b.max.x + 6.0f * unit, (b.min.y + b.max.y) / 2), unit, seconds,
+                     now_s));
+    }
+    top = b.max.y + 1.0f * unit;
+  }
+  if (!s.hint.empty())
+    add(Kit::LabelPlate(dl, ImVec2(cx, top), unit, s.hint, 2.6f, Kit::Align::Centre));
+  return drawn;
 }
 
 void Draw()
 {
   Kit::BeginFrame();
   const double now = NowMs();
-  s_overlay.Update(s_demo ? DemoLink(now) : ViewOf(Events::GetLinkStats()), now);
-  OverlayModel::Frame f = s_overlay.View(now, s_stats.load(std::memory_order_relaxed),
-                                         s_perf.load(std::memory_order_relaxed));
-  // The set's end and the opponent's disconnect (SetEnd.h): its notice says more than "Waiting
-  // for <name>…", which goes meanwhile.
-  const SetEnd::View set_end = SetEnd::Current().At(SetEnd::DemoFrame(now));
-  if (set_end.hides_waiting)
-    f.waiting.clear();
-  // The matchmaking search (UX/OnlineMenu.h), while the player waits on the character select; the
-  // queue's character select's lines (UX/Queue.h) in their place when it has any.
-  auto [search, search_note] = Search::Lines();
-  std::array<std::string, 4> labels;
-  std::array<bool, 4> locked{};
-  {
-    std::lock_guard lk(s_queue_lock);
-    if (!s_queue_line.empty() || !s_queue_note.empty())
-    {
-      search = s_queue_line;
-      search_note = s_queue_note;
-    }
-    labels = s_queue_labels;
-    locked = s_queue_locked;
-  }
-  // What the game's own text boxes already say (NativeText.h): a plate that names its player
-  // needs no label over it (its LOCKED IN badge stays), and a rules bar that says the queue's line
-  // takes the place of the top line; this machine's own hints (Hold Z, B to change) move up.
-  const u8 native = NativeText::Shown();
-  for (int port = 0; port < 4; ++port)
-  {
-    if (native & (1 << port))
-      labels[port].clear();
-  }
-  if (native & NativeText::SHOWN_RULES)
-  {
-    // On the queue's own character select the bar says it all (it is this player's alone).
-    search = Queue::OnSoloCss() ? std::string() : std::move(search_note);
-    search_note.clear();
-  }
-  const bool any_label =
-      std::any_of(labels.begin(), labels.end(), [](const std::string& l) { return !l.empty(); }) ||
-      std::any_of(locked.begin(), locked.end(), [](bool l) { return l; });
-  // A ranked set's lines, top centre: the stage flow's (Brawl's through SetRulesLines, Project+'s
-  // RankedPPlus::CurrentLines), else the set's score on the menus (UX/RankedSet.h); under it the
-  // turn (the stage flow's, else the character order's).
-  std::string rules, rules_note, rule_line;
-  {
-    std::lock_guard lk(s_rules_lock);
-    rules = s_rules_line;
-    rules_note = s_rules_note;
-  }
-  {
-    std::lock_guard lk(s_rule_line_lock);
-    rule_line = s_rule_line;
-  }
-  if (rules.empty() && rules_note.empty())
-  {
-    const RankedPPlus::Lines ranked = RankedPPlus::CurrentLines();
-    rules = ranked.set;
-    rules_note = ranked.turn;
-  }
-  if (rules.empty())
-    rules = RankedSet::CurrentScoreLine();
-  if (rules_note.empty())
-    rules_note = rule_line;
-  // The rules bar says the set's score and the character order's turn too.
-  if (native & NativeText::SHOWN_RULES)
-  {
-    rules.clear();
-    rules_note.clear();
-  }
-  const StageCursors::View cursors = StageCursors::Current();
-  // The kit's demo or preview in place of everything else.
+  const Scene s = Gather(now);
+  // The kit's demo in place of everything else (design checks).
   if (Kit::DemoMode() == 1)
   {
     DrawKitDemo();
     return;
   }
-  if (Kit::DemoMode() == 2)
-  {
-    DrawKitPreview(f, search, search_note, labels, locked, rules, rules_note, cursors);
+  if (s.Empty())
     return;
-  }
-  if (!f.show_signal && f.waiting.empty() && f.toasts.empty() && f.chats.empty() &&
-      f.stats.empty() && f.perf.empty() && search.empty() && search_note.empty() &&
-      rules.empty() && rules_note.empty() && !any_label && !cursors.on && set_end.Empty())
-  {
-    return;
-  }
-  const ImVec2 screen = ImGui::GetIO().DisplaySize;
-  const float unit = OverlayUnit(screen.y);
+  // Everything is laid out in the game's picture (the window can letterbox or pillarbox it), in
+  // its units (1% of its height), drawn with the kit (Kit.h): the game's fonts, its plates.
+  ImVec2 pic, pic_size;
+  PictureRect(&pic, &pic_size);
+  const float unit = OverlayUnit(pic_size.y);
   // No picture to draw on (no backbuffer yet, a window the app squeezed to a sliver): nothing.
-  if (unit <= 0 || !(screen.x >= 1))
+  if (unit <= 0 || !(pic_size.x >= 1))
     return;
   ImDrawList* dl = ImGui::GetForegroundDrawList();
-  const float margin = 3 * unit;
-  const float text_size = 3.0f * unit;
+  const double now_s = ImGui::GetTime();
+  const OverlayModel::Frame& f = s.f;
   // The stage select's two cursors first: every line of text goes over them.
-  if (cursors.on)
-    DrawStageCursors(dl, cursors, unit);
-  // Top left, where Brawl's matches and menus leave the screen empty: the circle, the ping beside
-  // it on the circle's centre line (the frame meter under it), the meter alone when solo, its
-  // graph, then the toasts under them.
-  float y = margin;
-  if (f.show_signal)
+  if (s.cursors.on)
+    DrawStageCursors(dl, s.cursors, pic, pic_size, unit, now_s);
+  // The character select's panels: a name tab in the port's colour on each panel the game's own
+  // plate doesn't name, LOCKED IN across a locked-in player's picture.
+  for (int port = 0; port < 4; ++port)
   {
-    const float r = 3.0f * unit;
-    const ImVec2 c(margin + r, margin + r);
-    SignalCircle(dl, c, r, f.signal);
-    // The first line on the circle's centre line, as the ping alone always sat; the meter under it.
-    const float x = c.x + r + unit;
-    const float line = TextSize(text_size, "0").y;
-    float bottom = c.y + r;
-    float text_y = c.y - line / 2;
-    if (!f.stats.empty())
+    const float centre = pic.x + pic_size.x * PanelCentre(port);
+    if (!s.labels[port].empty())
     {
-      OutlinedText(dl, text_size, ImVec2(x, text_y), 1, f.stats);
-      text_y += line;
+      Kit::LabelPlate(dl, ImVec2(centre, pic.y + pic_size.y * NAME_TAB_Y), unit, s.labels[port],
+                      2.8f, Kit::Align::Centre, Kit::PortTone(port));
     }
-    if (!f.perf.empty())
+    if (s.locked[port])
     {
-      OutlinedText(dl, text_size, ImVec2(x, text_y), 1, f.perf, f.perf_level);
-      bottom = std::max(bottom, text_y + line);
+      Kit::Badge(dl, ImVec2(centre, pic.y + pic_size.y * LOCKED_BADGE_Y), unit, "LOCKED IN",
+                 Kit::PortTone(port), 3.4f);
     }
-    y = bottom + 1.5f * unit;
   }
-  else if (!f.perf.empty())
-  {
-    OutlinedText(dl, text_size, ImVec2(margin, y), 1, f.perf, f.perf_level);
-    y += TextSize(text_size, f.perf).y + unit;
-  }
-  if (!f.graph.empty())
-  {
-    const ImVec2 size(40 * unit, 8 * unit);
-    FrameGraph(dl, ImVec2(margin, y), size, f.graph);
-    y += size.y + 1.5f * unit;
-  }
+  // Top centre, then top left, where both games' matches and menus leave the screen empty.
+  const Kit::Box centre = DrawTopCentre(dl, s, pic, pic_size, unit, now_s);
+  const float margin = 2.5f * unit;
+  float y = DrawCorner(dl, f, ImVec2(pic.x + margin, pic.y + margin), unit);
   if (!f.waiting.empty())
   {
-    const float size = 4.4f * unit;
-    const ImVec2 s = TextSize(size, f.waiting);
-    OutlinedText(dl, size, ImVec2((screen.x - s.x) / 2, screen.y * 0.18f), 1, f.waiting);
+    // "Waiting for <name>…" under the top centre's banners.
+    const float top = std::max(pic.y + pic_size.y * 0.18f, centre.max.y + 1.5f * unit);
+    Kit::Title(dl, ImVec2(pic.x + pic_size.x / 2, top), unit, f.waiting, 5.0f, Kit::Align::Centre);
   }
-  // Dolphin's own messages (OSD rows such as "Screenshot saved...", drawn at the top left just
-  // before this) push the toasts and the chat under them down: never drawn over them.
+  // The toasts and the chat on plates under the corner: under Dolphin's own messages (OSD rows
+  // such as "Screenshot saved...", drawn at the top left just before this), and under the top
+  // centre's banners where a plate as wide as the chat's would reach them.
   if (!f.toasts.empty() || !f.chats.empty())
+  {
     y = std::max(y, OSD::MessagesBottom() + unit);
-  for (const OverlayModel::Toast& t : f.toasts)
-  {
-    OutlinedText(dl, text_size, ImVec2(margin, y), t.alpha, t.text);
-    y += TextSize(text_size, t.text).y + unit;
-  }
-  if (any_label)
-  {
-    // Each player's name over their panel at the bottom of the character select, and a locked-in
-    // player's badge across the panel's picture, in the game's picture (the window can letterbox
-    // or pillarbox it): both games' widescreen panels sit at PanelCentre's fractions of its width,
-    // their tops at about 60% of its height (measured on 1280x720 screenshots, 2026-10-04).
-    ImVec2 pic(0, 0), pic_size = screen;
-    if (g_presenter)
+    const float wrap = 0.36f * pic_size.x;
+    if (centre.max.y > pic.y && centre.min.x < pic.x + margin + wrap + 3.0f * unit)
+      y = std::max(y, centre.max.y + 1.2f * unit);
+    const float bottom = pic.y + pic_size.y - margin;
+    for (const OverlayModel::Toast& t : f.toasts)
     {
-      const MathUtil::Rectangle<int>& r = g_presenter->GetTargetRectangle();
-      if (r.GetWidth() > 0 && r.GetHeight() > 0)
-      {
-        pic = ImVec2(static_cast<float>(r.left), static_cast<float>(r.top));
-        pic_size = ImVec2(static_cast<float>(r.GetWidth()), static_cast<float>(r.GetHeight()));
-      }
+      if (y >= bottom)
+        break;
+      y = Kit::LabelPlate(dl, ImVec2(pic.x + margin, y), unit, t.text, 2.7f, Kit::Align::Left,
+                          Kit::Tone::Panel, t.alpha)
+              .max.y +
+          0.8f * unit;
     }
-    const float size = 3.2f * unit;
-    for (int port = 0; port < 4; ++port)
-    {
-      if (labels[port].empty() && !locked[port])
-        continue;
-      const float centre = pic.x + pic_size.x * PanelCentre(port);
-      if (!labels[port].empty())
-      {
-        const ImVec2 s = TextSize(size, labels[port]);
-        OutlinedText(dl, size, ImVec2(centre - s.x / 2, pic.y + pic_size.y * 0.585f), 1,
-                     labels[port]);
-      }
-      if (locked[port])
-      {
-        LockedBadge(dl, unit, ImVec2(centre, pic.y + pic_size.y * LOCKED_BADGE_Y),
-                    PortColourOf(port));
-      }
-    }
-  }
-  // How far down the top-centre lines reach, and how far left the widest goes (the chat keeps
-  // clear of them).
-  float centre_bottom = 0;
-  float centre_left = screen.x;
-  const auto centred = [&](float size, float line_y, const std::string& text, Signal level) {
-    const ImVec2 s = TextSize(size, text);
-    const float x = (screen.x - s.x) / 2;
-    OutlinedText(dl, size, ImVec2(x, line_y), 1, text, level);
-    centre_bottom = std::max(centre_bottom, line_y + s.y);
-    centre_left = std::min(centre_left, x);
-    return s;
-  };
-  if (!search.empty())
-  {
-    // Top centre, clear of the circle and the meter in the top-left corner.
-    const float size = 3.0f * unit;
-    float line_y = margin;
-    const ImVec2 s = centred(size, line_y, search, Signal::Good);
-    if (!search_note.empty())
-    {
-      line_y += s.y + 0.5f * unit;
-      centred(size, line_y, search_note, Signal::Ok);
-    }
-  }
-  if (!rules.empty() || !rules_note.empty())
-  {
-    // Top centre too (the search lines are gone once the opponent is in).
-    const float size = 3.0f * unit;
-    float line_y = margin;
-    if (!search.empty())
-      line_y += 2 * (TextSize(size, search).y + 0.5f * unit);
-    if (!rules.empty())
-    {
-      const ImVec2 s = centred(size, line_y, rules, Signal::Good);
-      line_y += s.y + 0.5f * unit;
-    }
-    if (!rules_note.empty())
-      centred(size, line_y, rules_note, Signal::Ok);
-  }
-  if (!f.chats.empty())
-  {
-    // Under the toasts, wrapped to under half the width; below the top-centre lines where they
-    // would meet.
-    const float wrap = 0.45f * screen.x;
-    if (centre_bottom > 0 && centre_left < margin + wrap)
-      y = std::max(y, centre_bottom + 1.5f * unit);
+    const Kit::TextLook look = Kit::InkLook(unit, 2.7f);
     for (const OverlayModel::ChatToast& c : f.chats)
     {
-      if (y >= screen.y - margin)
+      if (y >= bottom)
         break;
-      y += ChatLine(dl, text_size, ImVec2(margin, y), wrap, c) + unit;
+      const std::string line = c.name + ": " + c.text;
+      y = Kit::TextPlate(dl, ImVec2(pic.x + margin, y), unit, Kit::Wrap(look, line, wrap), 2.7f,
+                         c.name.size() + 1, Kit::Tone::Panel, c.alpha)
+              .max.y +
+          0.8f * unit;
     }
   }
-  // Over everything else, in the game's picture (the window can letterbox or pillarbox it).
-  if (!set_end.Empty())
-  {
-    ImVec2 pic(0, 0), pic_size = screen;
-    if (g_presenter)
-    {
-      const MathUtil::Rectangle<int>& r = g_presenter->GetTargetRectangle();
-      if (r.GetWidth() > 0 && r.GetHeight() > 0)
-      {
-        pic = ImVec2(static_cast<float>(r.left), static_cast<float>(r.top));
-        pic_size = ImVec2(static_cast<float>(r.GetWidth()), static_cast<float>(r.GetHeight()));
-      }
-    }
-    SetEnd::Draw(dl, unit, pic.x, pic.y, pic_size.x, pic_size.y, set_end);
-  }
+  // Over everything else: the set's end, the opponent's disconnect, set over's hint (SetEnd.h).
+  if (!s.set_end.Empty())
+    SetEnd::Draw(dl, unit, pic.x, pic.y, pic_size.x, pic_size.y, s.set_end);
 }
 }  // namespace
 

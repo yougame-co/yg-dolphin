@@ -323,6 +323,20 @@ TEST(OrcaKitDraw, EveryPrimitiveDrawsWithoutTheGamesFont)
       joined += (joined.empty() ? "" : " ") + line;
     }
     EXPECT_EQ(joined, chat);
+    // The chat's plate: one plate round every line, the sender's name in the accent.
+    const Kit::Box chat_plate = Kit::TextPlate(dl, ImVec2(10, 10), u, lines, 3.0f, 3);
+    EXPECT_GT(chat_plate.max.y - chat_plate.min.y,
+              static_cast<float>(lines.size()) * Kit::InkLook(u, 3.0f).px);
+    for (const std::string& line : lines)
+      EXPECT_GE(chat_plate.max.x - chat_plate.min.x, Kit::Measure(Kit::InkLook(u, 3.0f), line).x);
+    // A banner as wide as BannerWidth fits its words; a badge as big as BadgeSize says.
+    const float bw = Kit::BannerWidth(8 * u, u, "Press Start to lock in", "Ranked - Game 1");
+    EXPECT_GT(bw, Kit::Measure(Kit::InkLook(u, 8 * 0.44f), "Press Start to lock in").x);
+    const ImVec2 bs = Kit::BadgeSize(u, "+16", Kit::Tone::Green, 3.8f);
+    const Kit::Box badge = Kit::Badge(dl, ImVec2(100, 100), u, "+16", Kit::Tone::Green, 3.8f);
+    EXPECT_NEAR(badge.max.x - badge.min.x, bs.x, 0.01f);
+    EXPECT_NEAR(badge.max.y - badge.min.y, bs.y, 0.01f);
+    Kit::Disc(dl, ImVec2(60, 60), 5 * u, u, Kit::Tone::Panel);
     // A fade to nothing draws nothing.
     const int faded = dl->VtxBuffer.Size;
     Kit::Text(dl, ImVec2(10, 10), look, "gone", 0);

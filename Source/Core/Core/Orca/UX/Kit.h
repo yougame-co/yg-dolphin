@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -127,9 +128,16 @@ struct Box
 // The game's panel over [min, max] in `tone`.
 void Plate(ImDrawList* dl, ImVec2 min, ImVec2 max, float unit, Tone tone, float alpha = 1);
 // A band across [left, right] whose top is at `top`, `height` tall, with `title` centred in it
-// (and `note` under the title in the body face, when not empty). Returns the band.
+// (and `note` under the title in the body face, when not empty: several lines with '\n' between
+// them in a band BannerHeight(row, lines) tall). Returns the band.
 Box Banner(ImDrawList* dl, float left, float right, float top, float height, float unit,
            Tone tone, std::string_view title, std::string_view note = {}, float alpha = 1);
+// The height of a Banner whose title and first note line take `row` and whose note has
+// `note_lines` lines.
+float BannerHeight(float row, std::size_t note_lines);
+// The width a Banner `height` tall needs for `title` and `note`: its words, its cut ends and a
+// margin.
+float BannerWidth(float height, float unit, std::string_view title, std::string_view note = {});
 // The heavy italic title, top-left at `pos` (moved for `align`). Returns its box.
 Box Title(ImDrawList* dl, ImVec2 pos, float unit, std::string_view text, float size = 5.0f,
           Align align = Align::Left, float alpha = 1);
@@ -158,12 +166,29 @@ void Frame(ImDrawList* dl, ImVec2 min, ImVec2 max, float unit, Tone tone, std::s
 void Connection(ImDrawList* dl, ImVec2 centre, float radius, float unit, int bars,
                 float alpha = 1);
 
+// The look's accent: its titles' lower colour (Brawl's gold, Project+'s mint), for a name in a
+// line of text (a chat message's sender).
+ImU32 Accent();
+// The body face as text on a `tone` plate takes it (the plate's ink: cream on Brawl's rose, white
+// on Project+'s teal, outlined in the plate's dark), `size` overlay units tall.
+TextLook InkLook(float unit, float size, Tone tone = Tone::Panel);
+// The size Badge(`text`, `tone`, `size`) takes.
+ImVec2 BadgeSize(float unit, std::string_view text, Tone tone, float size = 3.6f);
+// Lines of label text on one panel plate, padded (a chat message wrapped to its width): the first
+// `lead` bytes of the first line in the look's accent (the sender's name). Returns the plate.
+Box TextPlate(ImDrawList* dl, ImVec2 pos, float unit, const std::vector<std::string>& lines,
+              float size = 3.0f, std::size_t lead = 0, Tone tone = Tone::Panel, float alpha = 1);
+// A disc in `tone` centred on `centre`, `radius` pixels, built like the buttons (shadow, rim, line,
+// body, gloss): the lamp's and the countdown's face.
+void Disc(ImDrawList* dl, ImVec2 centre, float radius, float unit, Tone tone, float alpha = 1);
+
 // Tests only: text in `face` drawn with `atlas` as if it were on the GPU as `texture` (null: back to
 // the GPU's). The atlas must outlive its use.
 void UseAtlasForTests(Face face, const GameFont::Atlas* atlas, ImTextureID texture);
 
-// ORCA_UX_KIT_DEMO (design checks only): 1, every primitive over the picture (DrawDemo) in place
-// of the overlay; 2, the overlay's own elements drawn with the kit (Overlay.cpp); 0 (unset): off.
+// ORCA_UX_KIT_DEMO=1 (design checks only): every primitive over the picture (DrawDemo) in place
+// of the overlay; 0 (unset): off. (The overlay's own elements are drawn with the kit since Orca
+// 0.3.18; 2, which showed that before, is the same as off.)
 int DemoMode();
 void DrawDemo(ImDrawList* dl, ImVec2 picture_min, ImVec2 picture_size, float unit, double now_s);
 }  // namespace Orca::UX::Kit

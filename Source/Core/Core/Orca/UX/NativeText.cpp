@@ -377,7 +377,7 @@ CssBoxes FindCssBoxes(const GuestMemory& m)
   return boxes;
 }
 
-int Apply(GuestMemory& m, const std::vector<Events::PortInfo>& ports, u8* shown)
+int Apply(GuestMemory& m, const std::vector<Events::PortInfo>& ports, u8* shown, bool rules_bar)
 {
   u8 now = 0;
   int written = 0;
@@ -396,7 +396,7 @@ int Apply(GuestMemory& m, const std::vector<Events::PortInfo>& ports, u8* shown)
         now |= static_cast<u8>(1 << port);
       }
     }
-    if (!w.rules.empty() && boxes.rules)
+    if (rules_bar && !w.rules.empty() && boxes.rules)
     {
       written += SetWords(m, *boxes.rules, w.rules);
       if (const auto box = ReadBox(m, boxes.rules->object); box && Words(m, *box) == w.rules)
@@ -411,15 +411,18 @@ int Apply(GuestMemory& m, const std::vector<Events::PortInfo>& ports, u8* shown)
 void Frame(const Core::CPUThreadGuard& guard, bool resimulating,
            const std::vector<Events::PortInfo>& ports)
 {
-  // Vanilla Brawl rev 2 only: Project+'s character select is its own (not yet read).
-  if (Rules::ProfileRuleset() != Rules::Ruleset::Brawl)
+  // Brawl rev 2: the plates and the rules bar. Project+ (the same boxes at the same offsets): the
+  // plates; its rules bar's message has no width code, so a line longer than the game's own isn't
+  // drawn (the overlay docks its lines on that bar instead).
+  const Rules::Ruleset ruleset = Rules::ProfileRuleset();
+  if (ruleset != Rules::Ruleset::Brawl && ruleset != Rules::Ruleset::PPlus)
   {
     s_shown.store(0, std::memory_order_relaxed);
     return;
   }
   GuardMemory memory(guard);
   u8 shown = 0;
-  const int written = Apply(memory, ports, &shown);
+  const int written = Apply(memory, ports, &shown, ruleset == Rules::Ruleset::Brawl);
   if (resimulating)
     return;
   const u8 before = s_shown.exchange(shown, std::memory_order_relaxed);
@@ -427,7 +430,8 @@ void Frame(const Core::CPUThreadGuard& guard, bool resimulating,
   {
     const CssWords w = Wanted(memory, ports);
     NOTICE_LOG_FMT(ROLLBACK, "Orca: native text: plates '{}' '{}', rules bar '{}' (shown {:02x})",
-                   w.plates[0], w.plates[1], w.rules, shown);
+                   w.plates[0], w.plates[1],
+                   ruleset == Rules::Ruleset::Brawl ? w.rules : std::string("the game's"), shown);
   }
 }
 

@@ -639,10 +639,9 @@ float DrawPanel(ImDrawList* dl, float unit, float cx, float top, const Panel& p)
   const float a = p.alpha;
   const Tone tone = ToneOf(p.out);
   const float pad = 2.2f * u;
-  const float title_h = p.ranked ? Widgets::Measure(Widgets::TITLE_SIZE * u, p.title).y :
-                                   Widgets::Measure(Widgets::HEADING_SIZE * u, p.title).y;
-  const float title_w = p.ranked ? Widgets::Measure(Widgets::TITLE_SIZE * u, p.title).x :
-                                   Widgets::Measure(Widgets::HEADING_SIZE * u, p.title).x;
+  const ImVec2 title_s = p.ranked ? Widgets::MeasureTitle(u, p.title) :
+                                    Widgets::Measure(Widgets::HEADING_SIZE * u, p.title);
+  const float title_h = title_s.y, title_w = title_s.x;
   const float score_size = (p.ranked ? Widgets::HEADING_SIZE : Widgets::LINE_SIZE * 1.2f) * u;
   const std::string score_line =
       p.ranked || p.detail.empty() ? p.score : fmt::format("{}  {}", p.score, p.detail);
@@ -651,7 +650,7 @@ float DrawPanel(ImDrawList* dl, float unit, float cx, float top, const Panel& p)
                               Widgets::Measure(Widgets::LINE_SIZE * u, p.detail) :
                               ImVec2(0, 0);
   // The rating row: the number, and the change beside it once it is in.
-  const float number_h = Widgets::Measure(Widgets::NUMBER_SIZE * u, "0").y;
+  const float number_h = Widgets::MeasureNumber(u, "0").y;
   const float small_h = Widgets::Measure(Widgets::SMALL_SIZE * u, "R").y;
   float height = pad + title_h + 0.4f * u + score_s.y;
   if (detail_s.y > 0)
@@ -697,7 +696,7 @@ float DrawPanel(ImDrawList* dl, float unit, float cx, float top, const Panel& p)
       const ImVec2 badge_s = badge ? Widgets::DeltaBadgeSize(u, r.delta) : ImVec2(0, 0);
       char digits[16];
       std::snprintf(digits, sizeof(digits), "%d", r.shown);
-      const float number_w = Widgets::Measure(Widgets::NUMBER_SIZE * u, digits).x;
+      const float number_w = Widgets::MeasureNumber(u, digits).x;
       // The number and the change centred together, the change clear of the number as both
       // swell; the number dims while it waits.
       const float gap = badge ? 2.0f * u : 0;

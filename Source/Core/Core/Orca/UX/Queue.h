@@ -295,6 +295,9 @@ int OwnRating();
 bool SoloReady();
 // The last alone first-run boundary saw the queue's own character select.
 bool OnSoloCss();
+// The last first-run boundary saw a queue's character select (its own, or a queue room's): the
+// overlay docks its lines on Project+'s rules bar there.
+bool OnQueueCss();
 // The session put back the player's own game after a room (OnlineMatch's queue image). `keep_ready`
 // false (this player's own ready timer ran out, or a ranked set was played there: Luis,
 // 2026-10-04, the player presses Start to search again): the ready flag is cleared at the next

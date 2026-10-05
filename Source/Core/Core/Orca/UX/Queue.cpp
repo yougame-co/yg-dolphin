@@ -684,6 +684,7 @@ int s_rating = -1;
 Identity s_pick;
 std::atomic<bool> s_solo_ready{false};
 std::atomic<bool> s_on_solo_css{false};
+std::atomic<bool> s_on_queue_css{false};  // OnQueueCss'
 std::atomic<bool> s_clear_ready{false};
 // Why (the log's): under s_mutex.
 std::string s_clear_ready_why;
@@ -920,6 +921,11 @@ bool OnSoloCss()
   return s_on_solo_css;
 }
 
+bool OnQueueCss()
+{
+  return s_on_queue_css;
+}
+
 void AfterRestore(bool keep_ready, const char* why)
 {
   if (keep_ready)
@@ -988,6 +994,8 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
     }
   }
   const View v = ReadView(m, ports);
+  if (!resimulating)
+    s_on_queue_css = v.queue2 && v.css;
   const State before = ReadState(m);
   const State after = Advance(v, before, frame);
   if (after != before)

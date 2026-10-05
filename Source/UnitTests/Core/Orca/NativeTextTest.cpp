@@ -392,6 +392,23 @@ TEST(OrcaNativeText, TheQueuesOwnCharacterSelect)
   EXPECT_EQ(WordsOf(m, RULES_BOX), "Ranked: searching for an opponent...  B to cancel");
 }
 
+// Project+ (the same boxes): the plates take the names, the rules bar keeps the game's words (its
+// message has no width code; the overlay docks its lines on the bar instead).
+TEST(OrcaNativeText, ProjectPlusKeepsItsRulesBar)
+{
+  FakeMemory m = Css(0b0011);
+  PutHeader(m, MB::FLAG_QUEUE2, true);
+  const std::vector<Orca::Events::PortInfo> ports{Port(0, "ada"), Port(1, "bo", 1532, true)};
+  u8 shown = 0;
+  EXPECT_EQ(NT::Apply(m, ports, &shown, false), 2);
+  EXPECT_EQ(WordsOf(m, 0), "ADA");
+  EXPECT_EQ(WordsOf(m, 1), "BO 1532");
+  EXPECT_EQ(WordsOf(m, RULES_BOX), "-man survival test!");
+  EXPECT_EQ(shown, 0b0011);
+  // Idempotent.
+  EXPECT_EQ(NT::Apply(m, ports, &shown, false), 0);
+}
+
 TEST(OrcaNativeText, TheCharacterOrderAndTheSetInTheThirdPerson)
 {
   // Ranked game 2 after ada won game 1: the character order, winner first.

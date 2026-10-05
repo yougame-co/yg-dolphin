@@ -2730,7 +2730,7 @@ shows the results and elo change ... when someone leaves, I'm just kind of stuck
 confused about what's going to happen ... maybe add a countdown that's like seconds until opponent
 forfeits". `Core/Orca/UX/SetEnd.*` (the model, pure, and its layout), drawn with the overlay's
 widgets (`Core/Orca/UX/Widgets.*`: panel, title, line, big number, countdown, rating change; every
-colour and shape is there, so restyling them to the game's look touches that file only). Local
+colour and shape is there, and since 0.3.18 each is drawn with the kit: "Seamless UI"). Local
 display: nothing is written to the game, and the compatibility key is unchanged.
 
 - **VICTORY / DEFEAT** (ranked). The match block's set over on the results screen (first runs,
@@ -3417,10 +3417,11 @@ the character order) and the synced ports (names, the queue identity's rating), 
 boundary, first runs and re-runs, only where they differ, after the other writers (`UX.cpp`, after
 `CssTitle`). Never "you": both machines write the same bytes. The game formats a plate again when a
 port joins, leaves or picks a tag; the next boundary puts the name back (one frame of the game's
-words). Not on for Project+ yet (`Rules::ProfileRuleset` gates it): a Project+ dump has the same
-boxes at the same offsets (the bar says "-stock Smash!", the plates "PLAYER 1"), but its bar's message
-has no width code (`0x12 0x02 0x0C 000000ff -stock Smash! 0x13`), so a line longer than the bar needs
-Orca to add one (Brawl's `0x11 0x29 ff ff ff`); check that on screen before turning it on.
+words). **Project+** (since 0.3.18, `ux=14`): the plates only. A Project+ dump has the same boxes at
+the same offsets (the bar says "-stock Smash!", the plates "PLAYER 1"), but its bar's message has no
+width code (`0x12 0x02 0x0C 000000ff -stock Smash! 0x13`), so a line longer than the bar would need
+Orca to add one (Brawl's `0x11 0x29 ff ff ff`); until that is checked on screen the bar stays the
+game's (`Apply`'s `rules_bar` false) and the overlay docks its lines on it ("Seamless UI").
 
 **The survey: each Orca UI element, and where the game could show it**
 
@@ -3452,10 +3453,69 @@ refused, the codes and length kept, idempotence, the capacity, ASCII, the friend
 nothing off the character select, the same bytes on both machines, each queue state's line, the
 character order and the set in the third person.
 
-Not yet: Project+ (the width code above); the results screen's
+Not yet: Project+'s rules bar (the width code above); the results screen's
 writes (the boxes are found, the writer is not); the plate tint for LOCKED IN; a header cleared while
 the character select stays up leaves the bar's last words (the queue image's restore brings the
 game's back in practice).
+
+## Seamless UI
+
+Luis, 2026-10-04: everything Orca puts on screen should look like the game drew it ("integrated into
+the games UI itself ... SEAMLESS"; "native menus, no custom UI"). Orca 0.3.18 (`rel-0.3.18`, `ux=14`)
+does that two ways, the same information as before in each place:
+
+- **Native text** ("Native text" above): where the game has a text box on screen and the words are
+  the same for both players, Orca writes them into the game's own message buffer, a pure function
+  of emulated memory and the synced ports (it writes memory, so it is in the compatibility key).
+- **The kit** (`Core/Orca/UX/Kit.*`): everything else is drawn by the host over the picture, local
+  display only, with the kit's few shapes in the game's own fonts (read at run time from the
+  player's disc, `system/font/`, never shipped) and the look of that game's menus: Brawl's rose
+  plates in a white rim and a black line with cream-to-gold titles (the character select's RANKED
+  plate), Project+'s flat teal slabs edged in black with white-to-mint titles (its RANDOM and PAGE 2
+  buttons, its RANKED title). The frame hook picks the look from the session's ruleset. Without the
+  disc (or before its fonts are read) the same shapes fall back to ImGui's font.
+
+Every element and how it is drawn now (before 0.3.18: plain outlined text, ImGui shapes):
+
+| Element | Brawl | Project+ |
+|---|---|---|
+| Queue character select's line (pick, searching, lock in, the ready timer, both locked in, time's up) | native: the rules bar, third person | kit: docked on its rules bar (below) |
+| This machine's hints (Hold Z to find someone else, B to change, the skip bar) | kit: a small plate under the top edge | kit: a plate under the docked bar's right end |
+| Names and ratings over the panels | native: the name plates ("BO 1532") | native: the name plates (since 0.3.18) |
+| LOCKED IN | kit: a badge in the port's colour across the panel's picture | the same |
+| Set score, character order's turn | native: the rules bar ("ADA 1-0 BO: BO picks, Start locks it in 0:45") | kit: the docked bar's second line |
+| Stage select lines, strikes and bans, whose turn | kit: a banner, top centre | the same |
+| Timers (ready, pick, strike) | native in the rules bar on the character select; kit timer plate on the stage select | kit timer plate (white, gold under 10 s, red and pulsing under 5) |
+| Stage select cursors, name tabs | kit pointers: a ring in the port's colour, its tab, a gold ring on the turn's player | the same |
+| Proposal markers | kit frames round the tile in the proposer's colour, gold with both names when both agree | the same |
+| Search (Online menu), "Opponent found" | kit banner | the same |
+| Results screen's set line ("Game 2 - 1-0", "Set over - 2-0") | kit banner | the same |
+| VICTORY / DEFEAT panel, the rating's count and change | kit: the look's panel, VICTORY in the heavy face in gold (DEFEAT red), the rating in the heavy face, the change on a green or red badge | the same |
+| Disconnect countdown | kit: a panel with the notice and a countdown disc | the same |
+| Set over's "Hold Z to leave" | kit: a panel plate with the hold's bar filling in gold | the same |
+| Toasts (joined, left) and chat | kit: panel plates, one per chat message, wrapped, the sender in the look's accent | the same |
+| "Waiting for <name>..." | kit title, under the top centre's banners | the same |
+| The link's lamp, ping and frame meter (and its graph) | kit: the panel disc with lit arcs, the lines beside it; the graph on a plate | the same |
+
+**Project+'s rules bar.** Project+'s bar has the same message buffer as Brawl's but no width code,
+so a line longer than the game's own isn't drawn ("Native text"). On a queue's character select
+(`Queue::OnQueueCss`, its own or a room's) the overlay instead docks its lines on that bar: a teal
+banner over the bar's place (x 520..1265, y 42..105 of a 1280x720 picture: 0.40..0.99 of the width,
+0.056..0.148 of the height), what happens now on its first line and the set's line under it; the
+hint and the timer sit on plates under the bar's right end, over the grid's empty corner. The
+stock count the bar showed is the queue's locked rule anyway.
+
+**Where the native boxes say it, the overlay doesn't.** `NativeText::Shown()` tells the overlay which
+plates name their player (it drops that panel's tab; LOCKED IN stays) and whether the rules bar says
+the queue's line (its top lines go; this machine's hint stays, small). The queue's own character
+select shows no set line (a ranked header is there before any set).
+
+**Design checks.** `ORCA_UX_KIT_DEMO=1` draws every primitive over the picture.
+`ORCA_UX_SETEND_DEMO=victory|defeat|countdown|casual|left|stay` plays a set-end screen; with
+`ORCA_UX_SETEND_DEMO_AT=<frame>` in a harness run it starts at that frame and runs on the game's
+frames (`Harness::ShownFrame`), so a screenshot at a frame always shows the same moment.
+`ORCA_UX_OVERLAY_DEMO=1` cycles a made-up friend's link (good, ok, bad with a stall) and adds a
+toast and two chat lines each round.
 
 ## Ranked sprint integration
 
