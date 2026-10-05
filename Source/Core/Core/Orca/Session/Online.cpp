@@ -262,6 +262,12 @@ bool MatchLive()
   return room && room->MatchLive();
 }
 
+bool SetOver()
+{
+  const auto room = Room();
+  return room && room->GetState() != Net::RoomState::Ended && room->SetOver();
+}
+
 void SetOpponentPlugged(bool plugged)
 {
   if (const auto room = Room())
@@ -348,6 +354,12 @@ bool HostLeftPending()
 {
   const auto room = Room();
   return room && room->HostLeftPending();
+}
+
+std::vector<int> LeftSeatsPending()
+{
+  const auto room = Room();
+  return room ? room->LeftSeatsPending() : std::vector<int>{};
 }
 
 bool RoomEnded()

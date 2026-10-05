@@ -178,6 +178,8 @@ public:
   // Whether those events include the game's host leaving (Kind::Left from the host): a joiner
   // stalled on the host's inputs hears it at once rather than after its silence limit.
   bool HostLeftPending() const;
+  // The seats of players whose leaving the room those events include (any thread).
+  std::vector<int> LeftSeatsPending() const;
   // Host: offer `seat`'s player the keyframe (sent every second until its first packet arrives).
   void OfferKeyframe(int seat, const KeyframeInfo& info);
   // Host: every port's values so far (KeyframeInfo::names) and their version, to every player in
@@ -221,6 +223,10 @@ public:
   std::string Queue() const;
   // A room match is running whose result isn't in yet (a ranked set until its result).
   bool MatchLive() const;
+  // A ranked set's room after its verdict (`set-over`, YouGame docs/ORCA_ONLINE_UX.md "3B set
+  // over"): it stays open, with the relay and the chat, until the players leave it (five minutes at
+  // most). Nothing is rated or forfeited any more.
+  bool SetOver() const;
   // Host: the opponent is plugged in past its catch-up ("friend-joined"), so the room's match may
   // begin; false once it unplugs.
   void SetOpponentPlugged(bool plugged);

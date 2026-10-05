@@ -49,6 +49,9 @@ std::optional<std::string> TakeHostRequest();
 std::string RoomQueue();
 // A room match is running whose result isn't in yet.
 bool MatchLive();
+// A ranked set's room after its verdict, still open (YouGameRoom::SetOver): the players stay
+// together on the results screen until each leaves it.
+bool SetOver();
 // Host: the opponent plays in this game (past its catch-up), or no longer does.
 void SetOpponentPlugged(bool plugged);
 // A game's result, for the room's match.
@@ -81,6 +84,8 @@ int Seat();
 std::vector<Net::PeerEvent> TakePeerEvents();
 // Whether those events, not taken yet, include the game's host leaving the room (any thread).
 bool HostLeftPending();
+// Host: the seats of players whose leaving the room those events include (any thread).
+std::vector<int> LeftSeatsPending();
 bool RoomEnded();
 // This Orca is in its room: the welcome came and the room hasn't ended.
 bool InRoom();

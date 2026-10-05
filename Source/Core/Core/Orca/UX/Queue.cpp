@@ -9,6 +9,7 @@
 #include <cmath>
 #include <map>
 #include <mutex>
+#include <string>
 #include <utility>
 
 #include <fmt/format.h>
@@ -186,14 +187,20 @@ State Advance(const View& v, const State& state, int frame)
   if (v.solo)
   {
     // The queue's own character select: port 1 alone. The B that stops the search is swallowed
-    // until it is let go.
+    // until it is let go, and so is a Start held since this player's own game came back not ready
+    // (FLAG_SWALLOW_START).
     const u8 ready = s.ready;
     const bool swallowing = (s.flags & FLAG_SWALLOW_B) && (v.raw[0] & BUTTON_B);
+    const bool swallowing_start = (s.flags & FLAG_SWALLOW_START) && (v.raw[0] & BUTTON_START);
+    if (swallowing_start)
+      newly[0] = static_cast<u16>(newly[0] & ~BUTTON_START);
     s = State{};
     s.ready = ready & 1;
     follow(0, true);
     if (swallowing || ((ready & 1) && !(s.ready & 1) && (newly[0] & BUTTON_B)))
       s.flags |= FLAG_SWALLOW_B;
+    if (swallowing_start)
+      s.flags |= FLAG_SWALLOW_START;
     return s;
   }
 
@@ -678,6 +685,8 @@ Identity s_pick;
 std::atomic<bool> s_solo_ready{false};
 std::atomic<bool> s_on_solo_css{false};
 std::atomic<bool> s_clear_ready{false};
+// Why (the log's): under s_mutex.
+std::string s_clear_ready_why;
 std::atomic<bool> s_last_timeout_mine{false};
 
 // First-run, local: what was printed, Z held for a skip, where the hand held the token.
@@ -911,10 +920,15 @@ bool OnSoloCss()
   return s_on_solo_css;
 }
 
-void AfterRestore(bool keep_ready)
+void AfterRestore(bool keep_ready, const char* why)
 {
-  if (!keep_ready)
-    s_clear_ready = true;
+  if (keep_ready)
+    return;
+  {
+    std::lock_guard lk(s_mutex);
+    s_clear_ready_why = why && *why ? why : "after the room";
+  }
+  s_clear_ready = true;
 }
 
 void ClearReady()
@@ -957,10 +971,20 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
   if (alone && !resimulating && s_clear_ready.exchange(false))
   {
     const Rules::Header h = Rules::ReadHeader(m);
-    if (h.Solo() && RegionMapped(m) && (m.Read8(READY) & 1))
+    if (h.Solo() && RegionMapped(m))
     {
-      m.Write8(READY, static_cast<u8>(m.Read8(READY) & ~1));
-      NOTICE_LOG_FMT(ROLLBACK, "Queue: not ready after the room (the ready timer ran out on us)");
+      // A Start still held from the room's last screen readies nobody until it is let go.
+      m.Write8(FLAGS, static_cast<u8>(m.Read8(FLAGS) | FLAG_SWALLOW_START));
+      if (m.Read8(READY) & 1)
+      {
+        m.Write8(READY, static_cast<u8>(m.Read8(READY) & ~1));
+        std::string why;
+        {
+          std::lock_guard lk(s_mutex);
+          why = s_clear_ready_why;
+        }
+        NOTICE_LOG_FMT(ROLLBACK, "Queue: not ready after the room ({})", why);
+      }
     }
   }
   const View v = ReadView(m, ports);

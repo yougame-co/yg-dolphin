@@ -45,6 +45,7 @@
 #include "Core/Orca/UX/Queue.h"
 #include "Core/Orca/UX/RankedSet.h"
 #include "Core/Orca/UX/Results.h"
+#include "Core/Orca/UX/SetEnd.h"
 #include "Core/Rollback/SessionPort.h"
 #include "Core/System.h"
 #include "Core/WiiRoot.h"
@@ -264,10 +265,27 @@ struct Match
   };
   std::unique_ptr<QueueImage> queue_image;
   bool want_queue_image = false;
+  // A fight was played in the ranked queue room this queue image is for (a set played there,
+  // finished or forfeited): the player's own character select comes back not ready, and Start
+  // searches again (Luis, 2026-10-04: no search by itself after a ranked set). A ranked room left
+  // before any fight comes back as before. Cleared with each queue image.
+  bool ranked_fought = false;
+
+  // Set over (YouGame docs/ORCA_ONLINE_UX.md "3B set over"): the room stays open after a ranked
+  // set's verdict and this game stays in it, session and all, until the player leaves it
+  // (SetOverLeave): whether that leave was asked for, since when Z is held on the results screen,
+  // and the buttons of the last local pad seen (a press is a button down now and not then).
+  bool set_over_left = false;
+  bool set_over_hint = false;  // the overlay's leave hint is up
+  std::optional<Clock::time_point> set_over_z_since;
+  u16 set_over_buttons = 0xFFFF;
 };
 
 // Desyncs this process saw, every match (the stats line's "ds").
 int s_desyncs = 0;
+
+// The local pad the last boundary read for the game (OnBoundary): set over's Z and Start.
+std::optional<Orca::Net::Pad> s_local_pad;
 
 // The solo pause (BeginPause). s_solo_idle: the last boundary left this game alone with nothing of
 // drop-in under way (false while a boundary runs). s_pausing: a pause went ahead and hasn't ended;
@@ -349,6 +367,9 @@ constexpr std::chrono::seconds VERDICT_WAIT{30};
 // A ranked set whose opponent's inputs stop this long while this game waits on them: this player
 // claims the set (Online::ReportStall), as a disconnect would hand it over.
 constexpr std::chrono::seconds RANKED_STALL_LIMIT{15};
+// Set over (the room after a ranked set): Z held this long on the results screen leaves the room,
+// as the queue's skip does on the character select (UX/Queue.h SKIP_FRAMES, 1.5 s).
+constexpr std::chrono::milliseconds SET_OVER_Z_HOLD{1500};
 
 // The input delay the player chose ("delay N" from the app, with "caps delay"), or nullopt for the
 // adaptive one.
@@ -721,7 +742,8 @@ u8 RoomFlags()
 // The header this machine's game should carry (written only where no other game runs the frame:
 // its alone boundaries, or before a friend's keyframe is made, HeaderFreeAt): a queue
 // room's while this game hosts it (port 1, not joining), or while it waits in a ranked room for the
-// set's verdict (with the app's `queue2`, the Slippi-style character select: FLAG_QUEUE2); the
+// set's verdict or stays after it (set over; with the app's `queue2`, the Slippi-style character
+// select: FLAG_QUEUE2); the
 // queue's own character select's while the player waits there for a match (UX/Queue.h: With Anyone
 // picked with `queue2`, port 1, nobody plugged in; FLAG_SOLO); none otherwise (a friends room, a
 // search from its own room, no room).
@@ -734,7 +756,8 @@ std::pair<Orca::UX::Rules::Mode, u8> WantedRulesMode(const Match& match)
   const Mode mode =
       Orca::Online::RoomEnded() ? Mode::None : QueueMode(Orca::Online::RoomQueue());
   if (mode != Mode::None &&
-      (match.local_seat == 0 || (match.linger_until && mode == Mode::Ranked)))
+      (match.local_seat == 0 ||
+       ((match.linger_until || Orca::Online::SetOver()) && mode == Mode::Ranked)))
   {
     return {mode, RoomFlags()};
   }
@@ -859,6 +882,14 @@ void AfterFriendsGone(Match& match)
   // this game won't be in the room to hear the room say so.
   if (!std::exchange(match.friend_left_told, true))
     Orca::Status::State("friend-left left");
+  // After a ranked set (set over) the room stays open for this player too: it leaves when its
+  // results screen is over, or Start or Z (SetOverLeave). Their leave is no forfeit.
+  if (queue == "ranked" && Orca::Online::SetOver())
+  {
+    NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: the opponent left the set's room (set over): this "
+                             "game stays until its player leaves");
+    return;
+  }
   if (queue == "ranked" && Orca::Online::MatchLive())
   {
     NOTICE_LOG_FMT(ROLLBACK,
@@ -1634,6 +1665,9 @@ std::optional<int> JoinHost(Core::System& system, Match& match)
 // new one, so it can still invite.
 void Leave(Match& match)
 {
+  // Leaving a ranked set loses it (the room's forfeit): the screen says so (UX/SetEnd.h).
+  if (Orca::Online::RoomQueue() == "ranked" && Orca::Online::MatchLive())
+    Orca::UX::SetEnd::Current().SelfLeft(false, Orca::UX::SetEnd::NowMs());
   Orca::UX::Search::End();
   match.linger_until.reset();
   if (match.joining && match.session && match.session->CatchingUp())
@@ -1794,6 +1828,7 @@ void TakeCommands(Core::System& system, Match& match)
 void CaptureQueueImage(Core::System& system, Match& match)
 {
   match.want_queue_image = false;
+  match.ranked_fought = false;
   auto qi = std::make_unique<Match::QueueImage>();
   const auto start = Clock::now();
   if (!SnapshotRing::Capture(system, &qi->image, false))
@@ -1902,12 +1937,15 @@ bool MaybeRestoreQueueImage(Core::System& system, Match& match)
     match.reopen_pending = Clock::now() + REOPEN_DELAY;
   }
   const bool mine = Orca::UX::Queue::TakeTimeoutWasMine();
-  Orca::UX::Queue::AfterRestore(!mine);
+  // After a ranked set (a fight was played in that room) the player presses Start to search again.
+  const bool fought = std::exchange(match.ranked_fought, false);
+  const char* why = mine ? "the ready timer ran out on us" : fought ? "a ranked set was played" : "";
+  Orca::UX::Queue::AfterRestore(!mine && !fought, why);
   NOTICE_LOG_FMT(ROLLBACK, "Queue: back on this player's own character select at frame {} in {:.0f} "
                  "ms ({:.1f} s after the room's game was kept){}",
                  frame, MsSince(start),
                  std::chrono::duration<double>(start - image->taken).count(),
-                 mine ? "; not ready (the ready timer ran out on us)" : "");
+                 *why ? fmt::format("; not ready ({})", why) : std::string());
   return true;
 }
 
@@ -2159,10 +2197,19 @@ void Linger(Match& match)
 {
   if (!match.linger_until)
     return;
+  // The verdict came and the room stays open (set over): SetOverLeave takes this game out of it.
+  if (Orca::Online::SetOver())
+  {
+    NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: the verdict came (set over): done waiting");
+    match.linger_until.reset();
+    return;
+  }
   const bool over = Orca::Online::RoomEnded();
   if (!over && Clock::now() < *match.linger_until)
     return;
   match.linger_until.reset();
+  // A verdict that came already took the countdown off the screen; none will come now.
+  Orca::UX::SetEnd::Current().NoVerdict(Orca::UX::SetEnd::NowMs());
   if (match.local_seat != 0)
   {
     NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: done waiting in the room ({})",
@@ -2222,7 +2269,7 @@ void ConfirmResults(Match& match)
     if (mine && Orca::Online::RoomQueue() == "ranked" && plug != INT32_MAX)
     {
       Orca::Online::SetLeaveReason("no-show");
-      Core::DisplayMessage("You didn't pick a character in time: the set is lost", 6000);
+      Orca::UX::SetEnd::Current().SelfLeft(true, Orca::UX::SetEnd::NowMs());
       Orca::Online::RequestLeave();
     }
     else if (!mine)
@@ -2334,7 +2381,9 @@ void JoinerEvents(Match& match)
 void FinishLeave(Match& match)
 {
   LogStats("at leave");
-  Core::DisplayMessage(fmt::format("You left {}'s game", match.host_name), 4000);
+  // A ranked set's leave has its own words on screen (UX/SetEnd.h).
+  if (Orca::Online::RoomQueue() != "ranked")
+    Core::DisplayMessage(fmt::format("You left {}'s game", match.host_name), 4000);
   BecomeSolo(match, "left", nullptr);
   Orca::Status::Event("left");
 }
@@ -2378,12 +2427,23 @@ void HostGone(Core::System& system, Match& match, const std::function<Pad(int)>&
       Orca::Online::ReportDesync();
       Orca::Status::Report("desync", "Your games went out of sync, so the match ended");
     }
-    Core::DisplayMessage(fmt::format("{} left: you play on", match.host_name), 6000);
+    // A queue room's screen says it (UX/SetEnd.h): the ranked forfeit's countdown, casual's
+    // "<name> left · Searching again".
+    if (Orca::Online::RoomQueue() == "private")
+      Core::DisplayMessage(fmt::format("{} left: you play on", match.host_name), 6000);
     // A ranked set still being decided: this game waits in the room for its verdict (the
     // room awards the forfeit only while someone is still in it).
     const bool linger = Orca::Online::RoomQueue() == "ranked" && Orca::Online::MatchLive() &&
                         !Orca::Online::RoomEnded();
-    BecomeSolo(match, "host left", "host-left", false, linger);
+    // After the set (set over) this player stays in the room on its results screen until it
+    // leaves too (SetOverLeave): the host's leave is no forfeit.
+    const bool stay = Orca::Online::RoomQueue() == "ranked" && Orca::Online::SetOver();
+    if (stay)
+    {
+      NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: the host left the set's room (set over): this game "
+                               "stays until its player leaves");
+    }
+    BecomeSolo(match, "host left", "host-left", false, linger || stay);
     if (linger)
     {
       NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: the host went mid-set: waiting for the verdict");
@@ -2400,6 +2460,24 @@ void HostGone(Core::System& system, Match& match, const std::function<Pad(int)>&
   StopEmulation(system, event.reason == "desync" ?
                             "Your games went out of sync, so the match ended" :
                             "Your friend's game ended");
+}
+
+// Host, a queue room: the seats the room says left (events not taken yet) that the session still
+// has in play. A friends room keeps the silence limit (its friends can be on their way back).
+std::vector<int> LeftSeatsInPlay(const Match& match)
+{
+  std::vector<int> seats;
+  if (!match.session || Orca::Online::RoomQueue() == "private")
+    return seats;
+  for (const int seat : Orca::Online::LeftSeatsPending())
+  {
+    if (seat >= 0 && seat < Orca::Net::MAX_SEATS && seat != match.local_seat &&
+        match.session->Plan()[seat].live_from != Orca::Net::NEVER)
+    {
+      seats.push_back(seat);
+    }
+  }
+  return seats;
 }
 
 std::optional<int> Boundary(Core::System& system,
@@ -2635,6 +2713,8 @@ std::optional<int> Boundary(Core::System& system,
     // A joiner stalled on its host's inputs stops waiting once the host has left the room (said
     // at once below, not after the silence limit).
     bool host_left = false;
+    // So does a queue room's host stalled on its opponent's: the seats that left, still in play.
+    std::vector<int> left_seats;
     // A stall (waiting on a friend's input) is shown as it lasts: StepSession polls `stopping`
     // while it waits.
     const auto step_start = Clock::now();
@@ -2653,6 +2733,12 @@ std::optional<int> Boundary(Core::System& system,
             stall_shown = true;
             PublishStall(match, MsSince(step_start));
             Orca::Events::NotifyStall(static_cast<int>(MsSince(step_start)));
+            // Mid ranked set, a stall long enough is the opponent's disconnect on screen, with
+            // the time left before their forfeit (UX/SetEnd.h).
+            Orca::UX::SetEnd::Current().Stall(static_cast<int>(MsSince(step_start)),
+                                              Orca::UX::SetEnd::NowMs());
+            if (!match.joining)
+              left_seats = LeftSeatsInPlay(match);
             if (!stall_claimed && now - step_start >= RANKED_STALL_LIMIT &&
                 Orca::Online::RoomQueue() == "ranked" && Orca::Online::MatchLive())
             {
@@ -2666,13 +2752,18 @@ std::optional<int> Boundary(Core::System& system,
           }
           if (match.joining && Orca::Online::HostLeftPending())
             host_left = true;
-          return host_left || Stopping(system);
+          return host_left || !left_seats.empty() || Stopping(system);
         },
         std::chrono::milliseconds{1},
         LeavingPastUnplug(match) ? LEAVE_SILENCE_LIMIT : PEER_SILENCE_LIMIT, &peer_silent);
     match.last_return = Clock::now();
     if (stall_shown)
+    {
       PublishStall(match, 0);
+      Orca::UX::SetEnd::Current().StallOver(step.kind == Orca::Net::StepKind::Run ||
+                                                step.kind == Orca::Net::StepKind::Rollback,
+                                            Orca::UX::SetEnd::NowMs());
+    }
     // Each change of the input delay, with why (Session.cpp, "Input delay").
     if (match.session)
     {
@@ -2800,6 +2891,20 @@ std::optional<int> Boundary(Core::System& system,
       HostGone(system, match, local_pad);
       return rewound_to;
     }
+    if (!left_seats.empty() && error.empty() && !match.session->Resimulating())
+    {
+      // The room says they left (their connection closed): unplugged now, as the silence limit
+      // would 10 s later, and the game plays on while the room's forfeit runs (UX/SetEnd.h shows
+      // it). HostEvents hears the leave at the next boundary as ever.
+      for (const int seat : left_seats)
+      {
+        NOTICE_LOG_FMT(ROLLBACK, "Drop-in: port {} left the room while this game waited on it: "
+                                 "unplugged at once, frame {}",
+                       seat + 1, match.running + 1);
+        match.session->DropSeat(seat);
+      }
+      continue;
+    }
     if (!match.joining && match.session->CurrentFrame() == match.running + 1 &&
         (attempt == 0 || !error.empty()))
     {
@@ -2821,7 +2926,14 @@ std::optional<int> Boundary(Core::System& system,
       }
       WARN_LOG_FMT(ROLLBACK, "Drop-in: unplugging every friend at frame {}: {}", match.running + 1,
                    peer_silent ? "no word from them" : error);
-      if (!room_gone)
+      // Mid ranked set the screen already counts their forfeit down (UX/SetEnd.h); after it (set
+      // over) they are only gone.
+      const bool ranked_stall = error.empty() && Orca::Online::RoomQueue() == "ranked" &&
+                                Orca::Online::MatchLive();
+      const bool set_over = error.empty() && Orca::Online::SetOver();
+      if (set_over)
+        Orca::UX::SetEnd::Current().OpponentLeftAfterSet(Orca::UX::SetEnd::NowMs());
+      if (!room_gone && !ranked_stall && !set_over)
       {
         Core::DisplayMessage(peer_silent ? std::string(PEER_SILENT_SENTENCE) :
                                            fmt::format("Your friend was disconnected: {}", error),
@@ -2831,6 +2943,8 @@ std::optional<int> Boundary(Core::System& system,
       {
         // Silent friends: unplug them and step again (the session still runs). A ranked set's
         // opponent who went silent loses it (Online::ReportStall).
+        if (ranked_stall)
+          Orca::UX::SetEnd::Current().OpponentDropped(Orca::UX::SetEnd::NowMs());
         Orca::Online::ReportStall();
         DropFriends(match, "stalled");
         continue;
@@ -2884,9 +2998,22 @@ std::optional<int> Boundary(Core::System& system,
       NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: the host went quiet mid-set: waiting for the verdict");
       if (peer_silent)
         Orca::Online::ReportStall();
-      Core::DisplayMessage(PEER_SILENT_SENTENCE, 6000);
+      // The screen counts their forfeit down (UX/SetEnd.h).
+      Orca::UX::SetEnd::Current().OpponentDropped(Orca::UX::SetEnd::NowMs());
       BecomeSolo(match, "the session ended", "host-left", false, true);
       match.linger_until = Clock::now() + VERDICT_WAIT;
+      RunSolo(match, local_pad);
+      return rewound_to;
+    }
+    if (Soft() && survivable && match.joining && Orca::Online::RoomQueue() == "ranked" &&
+        Orca::Online::SetOver())
+    {
+      // After the set (set over): the host is only gone. This player stays in the room on its
+      // results screen until it leaves too (SetOverLeave).
+      NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: the host's game ended after the set (set over): "
+                               "this game stays until its player leaves");
+      Orca::UX::SetEnd::Current().OpponentLeftAfterSet(Orca::UX::SetEnd::NowMs());
+      BecomeSolo(match, "the session ended", "host-left", false, true);
       RunSolo(match, local_pad);
       return rewound_to;
     }
@@ -2908,6 +3035,89 @@ std::optional<int> Boundary(Core::System& system,
   }
   return rewound_to;
 }
+
+// A ranked queue room's fight (UX/Results.h: the newest reading's scene) while this player's own
+// game waits to come back after it: a set was played there (MaybeRestoreQueueImage).
+void NoteRankedFight(Match& match)
+{
+  if (match.ranked_fought || !match.queue_image || Orca::Online::RoomEnded() ||
+      Orca::Online::RoomQueue() != "ranked")
+  {
+    return;
+  }
+  if (Orca::UX::Tracker().LatestScene() == Orca::UX::Reading::Scene::Fight)
+  {
+    match.ranked_fought = true;
+    NOTICE_LOG_FMT(ROLLBACK, "Queue: a ranked fight in room {} (frame {}): back not ready after it",
+                   Orca::Online::Code(), match.running + 1);
+  }
+}
+
+// Set over (the room after a ranked set's verdict, YouGame docs/ORCA_ONLINE_UX.md "3B set over"):
+// the players stay together on the results screen, in the room and the session, and can talk on
+// the page; each leaves when they are done. This player's game leaves the room (as the app's
+// `leave` does) once its results screen is over (the game went on, read at a final frame: both
+// pressed on in the game's own flow, or the verdict came with the game elsewhere, a forfeit's
+// mid-fight), when the player holds Z there for SET_OVER_Z_HOLD (Z never reaches the game there:
+// the gate masks it, OnlineRules.h SessionMasks), or, with the opponent's game gone, on Start or A.
+// The overlay shows the way out meanwhile (UX/SetEnd.h). Local: this player's own pad, as the
+// boundary read it for the game, raw, and when this game leaves its room; nothing in the game.
+void SetOverLeave(Match& match)
+{
+  Orca::UX::SetEnd::Model& set_end = Orca::UX::SetEnd::Current();
+  if (!Orca::Online::SetOver() || match.finished)
+  {
+    if (std::exchange(match.set_over_hint, false))
+      set_end.LeaveHint(false, false, 0);
+    match.set_over_left = false;
+    match.set_over_z_since.reset();
+    match.set_over_buttons = 0xFFFF;
+    return;
+  }
+  if (match.set_over_left)
+    return;
+  using Scene = Orca::UX::Reading::Scene;
+  const std::optional<Scene> final_scene = Orca::UX::Tracker().FinalScene();
+  const bool on_results = Orca::UX::Tracker().LatestScene() == Scene::Results;
+  // The opponent's game is gone: the host's session ended, or the joiner plays solo.
+  const bool alone = !match.session;
+  const u16 buttons = s_local_pad ? Orca::Net::DecodePad(*s_local_pad).button : u16{0};
+  const u16 pressed = static_cast<u16>(buttons & ~match.set_over_buttons);
+  match.set_over_buttons = buttons;
+  const auto now = Clock::now();
+  if (on_results && (buttons & PAD_TRIGGER_Z))
+  {
+    if (!match.set_over_z_since)
+      match.set_over_z_since = now;
+  }
+  else
+  {
+    match.set_over_z_since.reset();
+  }
+  const float held =
+      match.set_over_z_since ?
+          std::min(1.0f, static_cast<float>(std::chrono::duration<double>(
+                                                now - *match.set_over_z_since) /
+                                            SET_OVER_Z_HOLD)) :
+          0.0f;
+  const char* why = nullptr;
+  if (final_scene && *final_scene != Scene::Results)
+    why = "the game is off the results screen";
+  else if (match.set_over_z_since && now - *match.set_over_z_since >= SET_OVER_Z_HOLD)
+    why = "Z held";
+  else if (alone && on_results && (pressed & (PAD_BUTTON_START | PAD_BUTTON_A)))
+    why = "the opponent is gone and the player pressed on";
+  match.set_over_hint = on_results && !why;
+  set_end.LeaveHint(match.set_over_hint, alone, held);
+  if (!why)
+    return;
+  match.set_over_left = true;
+  match.set_over_z_since.reset();
+  set_end.LeavingSetRoom(Orca::UX::SetEnd::NowMs());
+  NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: set over: leaving room {} ({}), frame {}",
+                 Orca::Online::Code(), why, match.running + 1);
+  Orca::Online::RequestLeave();
+}
 }  // namespace
 
 std::optional<int> OnBoundary(Core::System& system,
@@ -2915,8 +3125,16 @@ std::optional<int> OnBoundary(Core::System& system,
                               const FrameHook& on_frame)
 {
   s_solo_idle = false;
-  const std::optional<int> rewound_to = Boundary(system, local_pad, on_frame);
+  // The local pad as this boundary read it for the game (set over's Z and Start, SetOverLeave).
+  const std::function<Orca::Net::Pad(int)> seen = [&local_pad](int local_seat) {
+    const Orca::Net::Pad pad = local_pad(local_seat);
+    s_local_pad = pad;
+    return pad;
+  };
+  const std::optional<int> rewound_to = Boundary(system, seen, on_frame);
   ConfirmResults(TheMatch());
+  NoteRankedFight(TheMatch());
+  SetOverLeave(TheMatch());
   Orca::UX::RankedSet::SetLocalPort(TheMatch().local_seat);
   s_solo_idle = SoloIdle(TheMatch());
   return rewound_to;
