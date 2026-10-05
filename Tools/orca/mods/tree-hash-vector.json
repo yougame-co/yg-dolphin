@@ -1,0 +1,65 @@
+{
+  "description": "Orca mods tree hash (YouGame docs/ORCA_MODS.md, Phase 1 contract): lowercase hex sha256 of the UTF-8 lines <path>\\t<sha256>\\t<bytes>\\n for every file except orca/jitwarm and anything under orca/test/, in byte order of path. Each case's files are as tree.json lists them (sorted by path); hashedText is what is hashed.",
+  "cases": [
+    {
+      "name": "desktop vector (mod.json \"{}\", sd/a.txt \"a\", orca/jitwarm \"x\")",
+      "files": [
+        {
+          "path": "mod.json",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "bytes": 2
+        },
+        {
+          "path": "orca/jitwarm",
+          "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+          "bytes": 1
+        },
+        {
+          "path": "sd/a.txt",
+          "sha256": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+          "bytes": 1
+        }
+      ],
+      "hashedText": "mod.json\t44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a\t2\nsd/a.txt\tca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb\t1\n",
+      "treeHash": "86a7f6c4a959028c0334ee254622d453a7993337703b41262080e1f1524abc1a"
+    },
+    {
+      "name": "host-only files and a nested path",
+      "files": [
+        {
+          "path": "mod.json",
+          "sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+          "bytes": 2
+        },
+        {
+          "path": "orca/jitwarm",
+          "sha256": "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+          "bytes": 1
+        },
+        {
+          "path": "orca/test/inputs.txt",
+          "sha256": "e3b98a4da31a127d4bde6e43033f66ba274cab0eb7eb1c70ec41402bf6273dd8",
+          "bytes": 1
+        },
+        {
+          "path": "sd/Project+/RSBE01.txt",
+          "sha256": "64a7994c6feb92d40f0c88d34e120cf1a01b6e36af329ab2f2444a8c0e4a2043",
+          "bytes": 5
+        },
+        {
+          "path": "sd/a.txt",
+          "sha256": "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+          "bytes": 1
+        }
+      ],
+      "hashedText": "mod.json\t44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a\t2\nsd/Project+/RSBE01.txt\t64a7994c6feb92d40f0c88d34e120cf1a01b6e36af329ab2f2444a8c0e4a2043\t5\nsd/a.txt\tca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb\t1\n",
+      "treeHash": "e1436d9442485cdd8c582d881762860d3dd93be78fe26792a021d2c9efd5dbaf"
+    },
+    {
+      "name": "empty tree",
+      "files": [],
+      "hashedText": "",
+      "treeHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ]
+}

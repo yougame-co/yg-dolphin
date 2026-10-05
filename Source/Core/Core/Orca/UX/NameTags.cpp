@@ -425,6 +425,12 @@ namespace
 // The addresses are Brawl rev 2's (RSBE01), also booted by Project+'s launcher.
 bool BrawlRev2()
 {
+  // Mod mode: the mod's builtin, while its guard words hold (Core/Orca/Mod.h).
+  if (Orca::Mod::ActiveMod())
+  {
+    return Orca::Mod::BuiltinOn(Orca::Mod::Builtin::BrawlRev2) ||
+           Orca::Mod::BuiltinOn(Orca::Mod::Builtin::BrawlRev2PPlus);
+  }
   const Orca::Profile* profile = Orca::ActiveProfile();
   return profile && profile->revision == 2 &&
          (profile->IsLauncher() ? profile->disc == "RSBE01" : profile->game_id == "RSBE01");

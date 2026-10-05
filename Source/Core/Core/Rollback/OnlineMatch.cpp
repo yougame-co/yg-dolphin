@@ -393,6 +393,12 @@ constexpr int MAX_ROLLBACK = 7;
 // No keyframe in a boot's first frames: Project+'s frames 3-9 after its launcher run differently
 // when the JIT holds other blocks, as a joiner's does. Early friends wait for frame 300 (5 s).
 constexpr int FIRST_KEYFRAME_FRAME = 300;
+// FIRST_KEYFRAME_FRAME, or a mod's own (mod.json firstKeyframeFrame, Core/Orca/Mod.h).
+int FirstKeyframeFrame()
+{
+  return Orca::Mod::ActiveMod() ? static_cast<int>(Orca::Mod::FirstKeyframeFrame()) :
+                                  FIRST_KEYFRAME_FRAME;
+}
 // A joiner far behind the host runs unthrottled.
 constexpr int CATCH_UP_BEHIND = 12;
 // How long a joiner waits for the host's keyframe before it gives up.
@@ -1464,7 +1470,7 @@ void HostEvents(Core::System& system, Match& match)
     // Not while a fresh start runs (its tail, the queue host's hold, its own pick being put back):
     // the session starts as soon as the keyframe is stored, and the player's pad then replaces the
     // steering, so the pick would be left half done.
-    else if (next >= FIRST_KEYFRAME_FRAME && OriginReady(match) && next > match.replay.first_frame &&
+    else if (next >= FirstKeyframeFrame() && OriginReady(match) && next > match.replay.first_frame &&
              !match.fresh && (!match.session || match.session->Settled()))
     {
       match.keyframe_wanted = false;

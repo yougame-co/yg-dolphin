@@ -227,6 +227,9 @@ SceneReader SceneReaderForRunningGame()
   const SConfig& config = SConfig::GetInstance();
   if (config.GetGameID() == "RSBE01" && config.GetRevision() == 2)
     return BrawlSceneName;
+  // Mod mode: a mod whose builtin is for Brawl rev 2 (Core/Orca/Mod.h).
+  if (Orca::Mod::DeclaredBuiltin() != Orca::Mod::Builtin::None)
+    return BrawlSceneName;
   // A launcher profile booting Brawl rev 2 (Project+): the reported revision comes from the TMD and
   // may not match, but the profile already verified the disc.
   if (const Orca::Profile* profile = Orca::ActiveProfile();

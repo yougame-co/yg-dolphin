@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "Common/Logging/Log.h"
+#include "Core/Orca/Mod.h"
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/UX/BrawlStages.h"
 #include "Core/Orca/UX/CharOrder.h"
@@ -72,6 +73,8 @@ void Init()
   // The input gate's masks for the frame about to run: every rule's masks ORed, from memory alone.
   Rollback::InputGate::SetSource([](const Core::CPUThreadGuard& guard) {
     Rollback::InputGate::Masks masks{};
+    // Mod mode: the builtin's guards, against memory as it is now (Core/Orca/Mod.h).
+    Orca::Mod::RefreshGuards(guard);
     if (Rules::ProfileRuleset() == Rules::Ruleset::None)
       return masks;
     GuardMemory memory(guard);
@@ -100,6 +103,7 @@ void Init()
   Rollback::InputGate::SetLatch(
       [](const Core::CPUThreadGuard& guard,
          const std::array<std::optional<GCPadStatus>, Rollback::InputGate::PORTS>& raw) {
+        Orca::Mod::RefreshGuards(guard);
         Queue::LatchFrame(guard, raw);
         // On the stage select, each player's stick moves their own cursor.
         StageCursors::LatchFrame(guard, raw);
@@ -113,6 +117,9 @@ void Init()
     static bool s_logged = false;
     if (!std::exchange(s_logged, true))
       NOTICE_LOG_FMT(ROLLBACK, "Orca UX: frame hook live at frame {}", frame);
+    // Mod mode: whether the builtin's modules run here, from its guard words in memory now (a pure
+    // function of memory, first runs and re-runs; Core/Orca/Mod.h).
+    Orca::Mod::RefreshGuards(guard);
     ApplyGamePatches(guard);
     // The main menu's text about going online.
     WriteMenuText(guard);

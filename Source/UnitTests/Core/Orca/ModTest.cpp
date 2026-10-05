@@ -1,0 +1,697 @@
+// Copyright 2026 YouGame
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#include <algorithm>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <vector>
+
+#include <fmt/format.h>
+#include <gtest/gtest.h>
+#include <picojson.h>
+#include <xxh3.h>
+
+#include "Common/FileUtil.h"
+#include "Common/IOFile.h"
+#include "Common/Version.h"
+#include "Core/Orca/Mod.h"
+#include "Core/Orca/Profile.h"
+#include "Core/Orca/Session/Online.h"
+#include "Core/Orca/Status.h"
+#include "Core/Orca/UX/OnlineMenu.h"
+#include "Core/Orca/UX/OnlineRules.h"
+#include "Core/Orca/UX/Results.h"
+
+namespace
+{
+using Orca::Mod::Builtin;
+
+std::string RepoPath(const std::string& relative)
+{
+  return (std::filesystem::path(__FILE__).parent_path() / "../../../../" / relative).string();
+}
+
+picojson::value ReadJson(const std::string& path)
+{
+  std::string text;
+  EXPECT_TRUE(File::ReadFileToString(path, text)) << path;
+  picojson::value v;
+  EXPECT_EQ(picojson::parse(v, text), "") << path;
+  return v;
+}
+
+// Project+'s mod.json as Tools/orca/mods/make-bundle.py writes it.
+constexpr char PPLUS_MOD[] = R"({
+  "format": 1,
+  "engine": {"api": 1, "minOrca": "0.4.0"},
+  "title": "Project+",
+  "disc": {"id": "RSBE01", "revision": 2},
+  "launcher": "launcher.dol",
+  "sd": {"bytes": 2097152000},
+  "frameHook": {"address": "0x80017504", "word": "0x90170100"},
+  "bootNandFrame": 600,
+  "firstKeyframeFrame": 300,
+  "jitClearFrame": 2,
+  "keepGameCode": [["0x80023B88", "0x4182FF7C", "0x60000000"],
+                   ["0x80024028", "0x4E800020", "0x481C4904"]],
+  "saveTitle": "0x0001000052534245",
+  "forced": {"Dolphin.Core.CustomRTCValue": 1735689600},
+  "builtin": "brawl-rev2-pplus",
+  "rulesets": ["pplus-2024"],
+  "offers": ["results", "locks", "queue2"]
+})";
+
+constexpr char BRAWL_MOD[] = R"({
+  "format": 1,
+  "engine": {"api": 1, "minOrca": "0.4.0"},
+  "disc": {"id": "RSBE01", "revision": 2},
+  "frameHook": {"address": "0x80017504", "word": "0x90170100"},
+  "bootNandFrame": 1800,
+  "builtin": "brawl-rev2",
+  "offers": ["results", "locks", "queue2"]
+})";
+
+// BRAWL_MOD with `key` replaced by (or, when absent, given) `json`.
+std::string BrawlWith(const std::string& key, const std::string& json)
+{
+  picojson::value v;
+  picojson::parse(v, BRAWL_MOD);
+  picojson::value field;
+  const std::string err = picojson::parse(field, json);
+  EXPECT_EQ(err, "") << json;
+  v.get<picojson::object>()[key] = field;
+  return v.serialize();
+}
+
+std::string BrawlWithout(const std::string& key)
+{
+  picojson::value v;
+  picojson::parse(v, BRAWL_MOD);
+  v.get<picojson::object>().erase(key);
+  return v.serialize();
+}
+
+bool Refused(const std::string& json)
+{
+  std::string error;
+  const bool refused = !Orca::Mod::ParseManifest(json, &error).has_value();
+  return refused && !error.empty();
+}
+
+// A bundle folder with these files and its tree.json.
+struct Bundle
+{
+  std::string dir;
+  std::vector<Orca::Mod::TreeFile> files;
+
+  void Add(const std::string& path, const std::string& contents)
+  {
+    const std::string full = dir + path;
+    File::CreateFullPath(full);
+    ASSERT_TRUE(File::WriteStringToFile(full, contents));
+    files.push_back({path, Orca::Mod::Sha256Hex(contents), contents.size()});
+  }
+
+  void WriteTree()
+  {
+    std::ranges::sort(files, {}, &Orca::Mod::TreeFile::path);
+    picojson::array list;
+    for (const auto& f : files)
+    {
+      picojson::object o;
+      o["path"] = picojson::value(f.path);
+      o["sha256"] = picojson::value(f.sha256);
+      o["bytes"] = picojson::value(static_cast<double>(f.bytes));
+      list.emplace_back(o);
+    }
+    picojson::object tree;
+    tree["tree"] = picojson::value(Orca::Mod::TreeHash(files));
+    tree["files"] = picojson::value(list);
+    ASSERT_TRUE(File::WriteStringToFile(dir + "tree.json", picojson::value(tree).serialize()));
+  }
+};
+
+Bundle MakeBundle(const std::string& mod_json)
+{
+  Bundle b{File::CreateTempDir() + "/", {}};
+  b.Add("mod.json", mod_json);
+  return b;
+}
+}  // namespace
+
+// The shared vector (Tools/orca/mods/tree-hash-vector.json; the app and the site check the same).
+TEST(OrcaMod, TreeHashVector)
+{
+  const picojson::value vector = ReadJson(RepoPath("Tools/orca/mods/tree-hash-vector.json"));
+  const picojson::array& cases = vector.get("cases").get<picojson::array>();
+  ASSERT_GE(cases.size(), 3u);
+  for (const picojson::value& c : cases)
+  {
+    std::vector<Orca::Mod::TreeFile> files;
+    for (const picojson::value& f : c.get("files").get<picojson::array>())
+    {
+      files.push_back({f.get("path").get<std::string>(), f.get("sha256").get<std::string>(),
+                       static_cast<u64>(f.get("bytes").get<double>())});
+    }
+    EXPECT_EQ(Orca::Mod::TreeHash(files), c.get("treeHash").get<std::string>())
+        << c.get("name").get<std::string>();
+    EXPECT_EQ(Orca::Mod::Sha256Hex(c.get("hashedText").get<std::string>()),
+              c.get("treeHash").get<std::string>());
+    // As a tree.json, it parses and its hash checks.
+    picojson::object tree;
+    tree["tree"] = c.get("treeHash");
+    tree["files"] = c.get("files");
+    std::string error;
+    const auto parsed = Orca::Mod::ParseTree(picojson::value(tree).serialize(), &error);
+    ASSERT_TRUE(parsed) << error;
+    EXPECT_EQ(parsed->files, files);
+  }
+  // The desktop app's vector (YouGame desktop, orca-mods-p1).
+  EXPECT_EQ(Orca::Mod::TreeHash(std::vector<Orca::Mod::TreeFile>{
+                {"mod.json", "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a", 2},
+                {"orca/jitwarm", "2d711642b726b04401627ca9fbac32f5c8530fb1903cc4db02258717921a4881",
+                 1},
+                {"sd/a.txt", "ca978112ca1bbdcafac231b39a23dc4da786eff8147c4e72b9807785afee48bb",
+                 1}}),
+            "86a7f6c4a959028c0334ee254622d453a7993337703b41262080e1f1524abc1a");
+}
+
+TEST(OrcaMod, PathRules)
+{
+  for (const char* good : {"mod.json", "sd/Project+/pf/sound/strm/Super Mario/Bowser's Galaxy (M&S).brstm",
+                           "orca/patches/a.patches", "launcher.dol", "sd/RSBE01.txt", "a b/c",
+                           "consoles.txt", "com10", "nul_x"})
+  {
+    EXPECT_EQ(Orca::Mod::PathProblem(good), std::nullopt) << good;
+  }
+  for (const char* bad :
+       {"", "/abs", "a//b", "a/", "../x", "a/../b", "./a", ".DS_Store", "sd/.hidden", "a./b", "a /b",
+        "a.", "CON", "con.txt", "sd/NUL", "Com1.dat", "lpt9", "a\\b", "a:b", "a*b", "a?b", "a\"b",
+        "a<b", "a|b", "caf\xc3\xa9", "tab\there"})
+  {
+    EXPECT_NE(Orca::Mod::PathProblem(bad), std::nullopt) << bad;
+  }
+  EXPECT_EQ(Orca::Mod::PathProblem(std::string(160, 'a')), std::nullopt);
+  EXPECT_NE(Orca::Mod::PathProblem(std::string(161, 'a')), std::nullopt);
+}
+
+TEST(OrcaMod, TreeRefusals)
+{
+  const auto tree_json = [](const std::vector<Orca::Mod::TreeFile>& files,
+                            std::optional<std::string> hash = std::nullopt) {
+    picojson::array list;
+    for (const auto& f : files)
+    {
+      picojson::object o;
+      o["path"] = picojson::value(f.path);
+      o["sha256"] = picojson::value(f.sha256);
+      o["bytes"] = picojson::value(static_cast<double>(f.bytes));
+      list.emplace_back(o);
+    }
+    picojson::object t;
+    t["tree"] = picojson::value(hash.value_or(Orca::Mod::TreeHash(files)));
+    t["files"] = picojson::value(list);
+    return picojson::value(t).serialize();
+  };
+  const std::string h(64, 'a');
+  std::string error;
+  EXPECT_TRUE(Orca::Mod::ParseTree(tree_json({{"a", h, 1}, {"b", h, 2}}), &error)) << error;
+  const auto refused = [&](const std::string& json) {
+    std::string why;
+    return !Orca::Mod::ParseTree(json, &why) && !why.empty();
+  };
+  EXPECT_TRUE(refused(tree_json({{"b", h, 1}, {"a", h, 2}})));            // out of order
+  EXPECT_TRUE(refused(tree_json({{"a", h, 1}, {"a", h, 2}})));            // twice
+  EXPECT_TRUE(refused(tree_json({{"A", h, 1}, {"a", h, 2}})));            // case
+  EXPECT_TRUE(refused(tree_json({{"a", h, 1}, {"a/b", h, 2}})));          // file and folder
+  EXPECT_TRUE(refused(tree_json({{"A", h, 1}, {"a/b", h, 2}})));          // ... ignoring case
+  EXPECT_TRUE(refused(tree_json({{"tree.json", h, 1}})));                  // itself
+  EXPECT_TRUE(refused(tree_json({{"../a", h, 1}})));                       // a bad path
+  EXPECT_TRUE(refused(tree_json({{"a", std::string(64, 'A'), 1}})));      // hash case
+  EXPECT_TRUE(refused(tree_json({{"a", h, 1}}, std::string(64, '0'))));    // wrong tree hash
+  EXPECT_TRUE(refused(tree_json({{"a", h, 0x100000000}})));                // over FAT's limit
+  EXPECT_TRUE(refused(R"({"tree": ")" + Orca::Mod::TreeHash({}) + R"(", "files": [], "x": 1})"));
+  EXPECT_TRUE(refused(R"({"tree": ")" + Orca::Mod::TreeHash({}) +
+                      R"(", "files": [{"path": "a", "sha256": ")" + h + R"(", "bytes": 1.5}]})"));
+  EXPECT_TRUE(refused("[]"));
+  EXPECT_TRUE(refused("{"));
+}
+
+TEST(OrcaMod, ParsesEveryField)
+{
+  std::string error;
+  const auto m = Orca::Mod::ParseManifest(PPLUS_MOD, &error);
+  ASSERT_TRUE(m) << error;
+  EXPECT_EQ(m->engine_api, 1);
+  EXPECT_EQ(m->min_orca, "0.4.0");
+  EXPECT_EQ(m->title, "Project+");
+  EXPECT_EQ(m->disc_id, "RSBE01");
+  EXPECT_EQ(m->disc_revision, 2);
+  EXPECT_EQ(m->launcher, "launcher.dol");
+  EXPECT_EQ(m->sd_bytes, 2097152000u);
+  EXPECT_EQ(m->frame_hook, 0x80017504u);
+  EXPECT_EQ(m->frame_hook_word, 0x90170100u);
+  EXPECT_EQ(m->boot_nand_frame, 600u);
+  EXPECT_EQ(m->first_keyframe_frame, 300u);
+  EXPECT_EQ(m->jit_clear_frame, 2u);
+  const std::vector<Orca::Mod::KeptWord> kept{{0x80023B88, 0x4182FF7C, 0x60000000},
+                                              {0x80024028, 0x4E800020, 0x481C4904}};
+  EXPECT_EQ(m->keep_game_code, kept);
+  EXPECT_EQ(m->save_title, 0x0001000052534245u);
+  ASSERT_EQ(m->forced.size(), 1u);
+  EXPECT_EQ(m->forced[0].first, "Dolphin.Core.CustomRTCValue");
+  EXPECT_EQ(m->forced[0].second, "1735689600");
+  EXPECT_EQ(m->builtin, Builtin::BrawlRev2PPlus);
+  EXPECT_EQ(m->rulesets, std::vector<std::string>{"pplus-2024"});
+  EXPECT_EQ(m->offers, (std::vector<std::string>{"results", "locks", "queue2"}));
+
+  const auto b = Orca::Mod::ParseManifest(BRAWL_MOD, &error);
+  ASSERT_TRUE(b) << error;
+  EXPECT_EQ(b->launcher, "");
+  EXPECT_EQ(b->sd_bytes, std::nullopt);
+  EXPECT_EQ(b->first_keyframe_frame, Orca::Mod::DEFAULT_FIRST_KEYFRAME_FRAME);
+  EXPECT_EQ(b->jit_clear_frame, std::nullopt);
+  EXPECT_EQ(b->builtin, Builtin::BrawlRev2);
+}
+
+TEST(OrcaMod, RefusesAnythingElse)
+{
+  EXPECT_TRUE(Refused(""));
+  EXPECT_TRUE(Refused("[]"));
+  EXPECT_TRUE(Refused(BrawlWith("unknown", "1")));
+  EXPECT_TRUE(Refused(BrawlWith("format", "2")));
+  EXPECT_TRUE(Refused(BrawlWithout("format")));
+  EXPECT_TRUE(Refused(BrawlWithout("engine")));
+  EXPECT_TRUE(Refused(BrawlWithout("disc")));
+  EXPECT_TRUE(Refused(BrawlWithout("frameHook")));
+  EXPECT_TRUE(Refused(BrawlWith("engine", R"({"api": 2, "minOrca": "0.4.0"})")));
+  EXPECT_TRUE(Refused(BrawlWith("engine", R"({"api": 1})")));
+  EXPECT_TRUE(Refused(BrawlWith("engine", R"({"api": 1, "minOrca": "0.4"})")));
+  EXPECT_TRUE(Refused(BrawlWith("engine", R"({"api": 1, "minOrca": "0.4.0", "x": 1})")));
+  EXPECT_TRUE(Refused(BrawlWith("title", R"("")")));
+  EXPECT_TRUE(Refused(BrawlWith("title", "\"" + std::string(49, 'x') + "\"")));
+  EXPECT_TRUE(Refused(BrawlWith("title", "\"caf\xc3\xa9\"")));
+  EXPECT_TRUE(Refused(BrawlWith("disc", R"({"id": "rsbe01", "revision": 2})")));
+  EXPECT_TRUE(Refused(BrawlWith("disc", R"({"id": "RSBE01", "revision": 256})")));
+  EXPECT_TRUE(Refused(BrawlWith("disc", R"({"id": "RSBE01"})")));
+  EXPECT_TRUE(Refused(BrawlWith("launcher", R"("dir/launcher.dol")")));
+  EXPECT_TRUE(Refused(BrawlWith("launcher", R"("launcher.exe")")));
+  EXPECT_TRUE(Refused(BrawlWith("launcher", R"("../launcher.dol")")));
+  EXPECT_TRUE(Refused(BrawlWith("sd", R"({"bytes": 2147516416})")));  // over 2 GiB: SDHC
+  EXPECT_TRUE(Refused(BrawlWith("sd", R"({"bytes": 100000000})")));   // not whole clusters
+  EXPECT_TRUE(Refused(BrawlWith("sd", R"({"bytes": 32768})")));       // too small for FAT32
+  EXPECT_TRUE(Refused(BrawlWith("sd", R"({"bytes": 2097152000, "sync": true})")));
+  EXPECT_FALSE(Refused(BrawlWith("sd", R"({"bytes": 2147483648})")));
+  EXPECT_TRUE(Refused(BrawlWith("frameHook", R"({"address": "0x80017506", "word": "0x1"})")));
+  EXPECT_TRUE(Refused(BrawlWith("frameHook", R"({"address": "0x90000000", "word": "0x1"})")));
+  EXPECT_TRUE(Refused(BrawlWith("frameHook", R"({"address": "80017504", "word": "0x1"})")));
+  EXPECT_TRUE(Refused(BrawlWith("frameHook", R"({"address": "0x80017504"})")));
+  EXPECT_TRUE(Refused(BrawlWith("bootNandFrame", "0")));
+  EXPECT_TRUE(Refused(BrawlWith("bootNandFrame", R"("600")")));
+  EXPECT_TRUE(Refused(BrawlWith("firstKeyframeFrame", "10")));
+  EXPECT_TRUE(Refused(BrawlWith("jitClearFrame", "-1")));
+  EXPECT_TRUE(Refused(BrawlWith("keepGameCode", R"([["0x80023B88", "0x1", "0x1"]])")));
+  EXPECT_TRUE(Refused(BrawlWith("keepGameCode", R"([["0x80023B88", "0x1"]])")));
+  EXPECT_TRUE(Refused(BrawlWith("keepGameCode", R"([["0x00023B88", "0x1", "0x2"]])")));
+  EXPECT_TRUE(Refused(
+      BrawlWith("keepGameCode", R"([["0x80023B88", "0x1", "0x2"], ["0x80023B88", "0x3", "0x4"]])")));
+  // saveTitle: only the disc's own.
+  EXPECT_FALSE(Refused(BrawlWith("saveTitle", R"("0x0001000052534245")")));
+  EXPECT_TRUE(Refused(BrawlWith("saveTitle", R"("0x0001000052534345")")));
+  EXPECT_TRUE(Refused(BrawlWith("saveTitle", R"("0x0000000100000002")")));
+  EXPECT_TRUE(Refused(BrawlWith("saveTitle", R"("0x52534245")")));
+  // forced: the allowlist only, never what determinism or safety depend on.
+  EXPECT_FALSE(Refused(BrawlWith("forced", R"({"Dolphin.Core.CustomRTCValue": 0})")));
+  for (const char* key :
+       {"Dolphin.Core.CPUThread", "Dolphin.Core.SyncOnSkipIdle", "Dolphin.Core.CustomRTCEnable",
+        "Dolphin.Core.WiiSDCard", "Dolphin.Core.WiiSDCardAllowWrites",
+        "Dolphin.Core.WiiSDCardEnableFolderSync", "Dolphin.Core.EnableCheats",
+        "GFX.Hacks.EFBToTextureEnable", "GFX.Settings.EnableMods", "Session.Core.FMA",
+        "Dolphin.Core.CustomRTCValue2"})
+  {
+    EXPECT_TRUE(Refused(BrawlWith("forced", fmt::format(R"({{"{}": 1}})", key)))) << key;
+  }
+  EXPECT_TRUE(Refused(BrawlWith("forced", R"({"Dolphin.Core.CustomRTCValue": "1735689600"})")));
+  EXPECT_TRUE(Refused(BrawlWith("forced", R"({"Dolphin.Core.CustomRTCValue": 4294967296})")));
+  EXPECT_TRUE(Refused(BrawlWith("builtin", R"("brawl")")));
+  EXPECT_TRUE(Refused(BrawlWith("disc", R"({"id": "RSBE01", "revision": 1})")));  // builtin's disc
+  EXPECT_TRUE(Refused(BrawlWith("rulesets", R"(["Pplus"])")));
+  EXPECT_TRUE(Refused(BrawlWith("rulesets", R"(["a", "a"])")));
+  EXPECT_TRUE(Refused(BrawlWith("offers", R"(["ranked"])")));
+  EXPECT_TRUE(Refused(BrawlWith("offers", R"(["results", "results"])")));
+  // A mod with no builtin offers nothing (BRAWL_MOD offers three caps).
+  EXPECT_TRUE(Refused(BrawlWithout("builtin")));
+}
+
+// The engine's lists equal the schema's (the site validates with the schema).
+TEST(OrcaMod, SchemaMatchesTheEngine)
+{
+  const picojson::value schema = ReadJson(RepoPath("Tools/orca/mods/mod.schema.json"));
+  const picojson::value& limits = schema.get("x-orca-limits");
+  const auto strings = [](const picojson::value& v) {
+    std::vector<std::string> out;
+    for (const picojson::value& s : v.get<picojson::array>())
+      out.push_back(s.get<std::string>());
+    return out;
+  };
+  EXPECT_EQ(limits.get("engineApi").get<double>(), static_cast<double>(Orca::Mod::ENGINE_API));
+  EXPECT_EQ(limits.get("sdBuilder").get<std::string>(), Orca::Mod::SD_BUILDER);
+  EXPECT_EQ(limits.get("maxPathBytes").get<double>(),
+            static_cast<double>(Orca::Mod::MAX_PATH_BYTES));
+  EXPECT_EQ(limits.get("maxFiles").get<double>(), static_cast<double>(Orca::Mod::MAX_FILES));
+  const auto allow = Orca::Mod::ForcedAllowlist();
+  EXPECT_EQ(strings(limits.get("forcedAllowlist")),
+            std::vector<std::string>(allow.begin(), allow.end()));
+  const auto caps = Orca::Mod::OfferableCaps();
+  EXPECT_EQ(strings(limits.get("offerableCaps")), std::vector<std::string>(caps.begin(), caps.end()));
+  EXPECT_EQ(strings(limits.get("builtins")),
+            (std::vector<std::string>{std::string(Orca::Mod::BuiltinName(Builtin::BrawlRev2)),
+                                      std::string(Orca::Mod::BuiltinName(Builtin::BrawlRev2PPlus))}));
+  // Every forced key of the schema's own list is on the allowlist, and nothing else is.
+  std::vector<std::string> forced_keys;
+  for (const auto& [key, value] : schema.get("properties").get("forced").get("properties").get<picojson::object>())
+    forced_keys.push_back(key);
+  EXPECT_EQ(forced_keys, std::vector<std::string>(allow.begin(), allow.end()));
+  // The schema's examples of limits agree with the parser's.
+  EXPECT_EQ(schema.get("properties").get("sd").get("properties").get("bytes").get("maximum").get<double>(),
+            static_cast<double>(Orca::Mod::SD_MAX_BYTES));
+}
+
+// The allowlist starts from what the shipped profiles force; the SD card is "sd" in a mod.
+TEST(OrcaMod, AllowlistCoversTheShippedProfiles)
+{
+  const std::string sys = RepoPath("Data/Sys/");
+  for (const char* name : {"RSBE01", "PPLUS32"})
+  {
+    std::string error;
+    const auto profile = Orca::LoadProfileFrom(sys, name, std::nullopt, &error);
+    ASSERT_TRUE(profile) << error;
+    for (const auto& [location, value] : profile->forced)
+    {
+      const std::string key = fmt::format("{}.{}.{}", Config::GetSystemName(location.system),
+                                          location.section, location.key);
+      const auto allow = Orca::Mod::ForcedAllowlist();
+      EXPECT_TRUE(key == "Dolphin.Core.WiiSDCard" ||
+                  std::ranges::find(allow, key) != allow.end())
+          << key;
+    }
+  }
+}
+
+TEST(OrcaMod, LoadsABundle)
+{
+  Bundle b = MakeBundle(PPLUS_MOD);
+  b.Add("launcher.dol", std::string(64, '\x01'));
+  b.Add("sd/Project+/RSBE01.txt", "codes");
+  b.Add("orca/patches/pplus.patches", "# none\n");
+  b.Add("orca/jitwarm", "warm");
+  b.WriteTree();
+  std::string error;
+  const auto profile = Orca::LoadModProfile(b.dir, &error);
+  ASSERT_TRUE(profile) << error;
+  EXPECT_EQ(profile->game_id, "PPLUS32");  // the legacy profile its builtin replaces (room mode)
+  EXPECT_EQ(profile->title, "Project+");
+  EXPECT_EQ(profile->revision, 2);
+  EXPECT_TRUE(profile->IsLauncher());
+  EXPECT_EQ(profile->disc, "RSBE01");
+  EXPECT_EQ(profile->frame_hook, 0x80017504u);
+  EXPECT_EQ(profile->boot_nand_frame, 600u);
+  EXPECT_EQ(profile->jit_clear_frame, 2u);
+  EXPECT_EQ(profile->kept_code.size(), 2u);
+  EXPECT_EQ(profile->save_title, 0x0001000052534245u);
+  // The card's switch from "sd", then mod.json's forced keys, in the legacy profile's order.
+  ASSERT_EQ(profile->forced.size(), 2u);
+  EXPECT_EQ(profile->forced[0].first.key, "WiiSDCard");
+  EXPECT_EQ(profile->forced[0].second, "True");
+  EXPECT_EQ(profile->forced[1].first.key, "CustomRTCValue");
+  EXPECT_EQ(profile->forced[1].second, "1735689600");
+  ASSERT_TRUE(profile->mod);
+  EXPECT_EQ(profile->mod->tree.hash, Orca::Mod::TreeHash(b.files));
+  EXPECT_EQ(profile->mod->tree.Under("sd/").size(), 1u);
+
+  // The same with a vanilla Brawl bundle: no launcher, no card.
+  Bundle v = MakeBundle(BRAWL_MOD);
+  v.WriteTree();
+  const auto brawl = Orca::LoadModProfile(v.dir, &error);
+  ASSERT_TRUE(brawl) << error;
+  EXPECT_EQ(brawl->game_id, "RSBE01");
+  EXPECT_FALSE(brawl->IsLauncher());
+  EXPECT_TRUE(brawl->forced.empty());
+  File::DeleteDirRecursively(b.dir);
+  File::DeleteDirRecursively(v.dir);
+}
+
+TEST(OrcaMod, RefusesABundleThatDiffersFromItsTree)
+{
+  std::string error;
+  {
+    // A file whose size isn't tree.json's.
+    Bundle b = MakeBundle(BRAWL_MOD);
+    b.Add("orca/patches/a.patches", "# x\n");
+    b.WriteTree();
+    ASSERT_TRUE(File::WriteStringToFile(b.dir + "orca/patches/a.patches", "# xy\n"));
+    EXPECT_FALSE(Orca::LoadModProfile(b.dir, &error));
+    EXPECT_NE(error.find("size"), std::string::npos) << error;
+    File::DeleteDirRecursively(b.dir);
+  }
+  {
+    // A listed file that isn't there.
+    Bundle b = MakeBundle(BRAWL_MOD);
+    b.Add("orca/textures/tex1_1x1_0.png", "png");
+    b.WriteTree();
+    File::Delete(b.dir + "orca/textures/tex1_1x1_0.png");
+    EXPECT_FALSE(Orca::LoadModProfile(b.dir, &error));
+    File::DeleteDirRecursively(b.dir);
+  }
+  {
+    // A launcher mod.json names that isn't in the tree.
+    Bundle b = MakeBundle(BrawlWith("launcher", R"("launcher.dol")"));
+    b.WriteTree();
+    EXPECT_FALSE(Orca::LoadModProfile(b.dir, &error));
+    File::DeleteDirRecursively(b.dir);
+  }
+  {
+    // Patches that don't parse.
+    Bundle b = MakeBundle(BRAWL_MOD);
+    b.Add("orca/patches/a.patches", "not a patch\n");
+    b.WriteTree();
+    EXPECT_FALSE(Orca::LoadModProfile(b.dir, &error));
+    EXPECT_NE(error.find("a.patches"), std::string::npos) << error;
+    File::DeleteDirRecursively(b.dir);
+  }
+  {
+    // No tree.json, or a malformed mod.json.
+    Bundle b = MakeBundle("{}");
+    EXPECT_FALSE(Orca::LoadModProfile(b.dir, &error));
+    b.WriteTree();
+    EXPECT_FALSE(Orca::LoadModProfile(b.dir, &error));
+    File::DeleteDirRecursively(b.dir);
+  }
+}
+
+// The card is built from the listed files only, and the same files and size give the same bytes.
+TEST(OrcaMod, SdImageIsDeterministic)
+{
+  const std::string dir = File::CreateTempDir() + "/";
+  ASSERT_TRUE(File::WriteStringToFile(dir + "a.txt", "alpha"));
+  ASSERT_TRUE(File::WriteStringToFile(dir + "b.bin", std::string(100000, 'b')));
+  ASSERT_TRUE(File::WriteStringToFile(dir + "stray", "not listed"));
+  const std::vector<Orca::Mod::SdSource> files{
+      {"Project+/pf/b.bin", dir + "b.bin", 100000},
+      {"Project+/RSBE01.txt", dir + "a.txt", 5},
+      {"z.txt", dir + "a.txt", 5},
+  };
+  constexpr u64 BYTES = 64 << 20;
+  std::string error;
+  ASSERT_TRUE(Orca::Mod::BuildSdImage(files, BYTES, dir + "one.raw", &error)) << error;
+  std::vector<Orca::Mod::SdSource> reversed(files.rbegin(), files.rend());
+  ASSERT_TRUE(Orca::Mod::BuildSdImage(reversed, BYTES, dir + "two.raw", &error)) << error;
+  EXPECT_EQ(File::GetSize(dir + "one.raw"), BYTES);
+  const std::string one = Orca::HashFile(dir + "one.raw");
+  EXPECT_FALSE(one.empty());
+  EXPECT_EQ(one, Orca::HashFile(dir + "two.raw"));
+  std::string bytes;
+  ASSERT_TRUE(File::ReadFileToString(dir + "one.raw", bytes));
+  EXPECT_NE(bytes.find("alpha"), std::string::npos);
+  EXPECT_EQ(bytes.find("not listed"), std::string::npos);
+  // A source whose size changed is refused.
+  const std::vector<Orca::Mod::SdSource> wrong{{"a.txt", dir + "a.txt", 6}};
+  EXPECT_FALSE(Orca::Mod::BuildSdImage(wrong, BYTES, dir + "three.raw", &error));
+  // Too small a card for the files.
+  const std::vector<Orca::Mod::SdSource> big{{"b.bin", dir + "b.bin", 100000}};
+  EXPECT_FALSE(Orca::Mod::BuildSdImage(big, 32768, dir + "four.raw", &error));
+  File::DeleteDirRecursively(dir);
+}
+
+// The cache: built once, then reused while it hashes as recorded; a damaged one is rebuilt; at
+// most the newest two images stay.
+TEST(OrcaMod, SdImageCache)
+{
+  Bundle b = MakeBundle(BrawlWith("sd", R"({"bytes": 67108864})"));
+  b.Add("sd/RSBE01.txt", "codes");
+  b.WriteTree();
+  std::string error;
+  auto profile = Orca::LoadModProfile(b.dir, &error);
+  ASSERT_TRUE(profile) << error;
+  const std::string cache = File::CreateTempDir() + "/sd";
+  const auto first = Orca::Mod::PrepareSdImage(*profile->mod, cache, &error);
+  ASSERT_TRUE(first) << error;
+  EXPECT_TRUE(first->built);
+  EXPECT_EQ(first->hash, Orca::HashFile(first->path));
+  EXPECT_NE(first->path.find(Orca::Mod::SdTreeHash(profile->mod->tree, 67108864)),
+            std::string::npos);
+  const auto again = Orca::Mod::PrepareSdImage(*profile->mod, cache, &error);
+  ASSERT_TRUE(again) << error;
+  EXPECT_FALSE(again->built);
+  EXPECT_EQ(again->hash, first->hash);
+  {
+    File::IOFile f(first->path, "r+b");
+    f.Seek(1 << 20, File::SeekOrigin::Begin);
+    f.WriteBytes("damage", 6);
+  }
+  const auto rebuilt = Orca::Mod::PrepareSdImage(*profile->mod, cache, &error);
+  ASSERT_TRUE(rebuilt) << error;
+  EXPECT_TRUE(rebuilt->built);
+  EXPECT_EQ(rebuilt->hash, first->hash);
+  // Two other cards: the oldest of three goes.
+  for (const char* size : {"67141632", "67174400"})
+  {
+    Bundle other = MakeBundle(BrawlWith("sd", fmt::format(R"({{"bytes": {}}})", size)));
+    other.WriteTree();
+    auto p = Orca::LoadModProfile(other.dir, &error);
+    ASSERT_TRUE(p) << error;
+    ASSERT_TRUE(Orca::Mod::PrepareSdImage(*p->mod, cache, &error)) << error;
+    File::DeleteDirRecursively(other.dir);
+  }
+  int images = 0;
+  for (const auto& e : std::filesystem::directory_iterator(cache))
+    images += e.path().extension() == ".raw";
+  EXPECT_EQ(images, 2);
+  EXPECT_FALSE(File::Exists(first->path));
+  // No cache folder: refused.
+  EXPECT_FALSE(Orca::Mod::PrepareSdImage(*profile->mod, "", &error));
+  File::DeleteDirRecursively(b.dir);
+  File::DeleteDirRecursively(cache);
+}
+
+TEST(OrcaMod, Guards)
+{
+  for (const Builtin builtin : {Builtin::BrawlRev2, Builtin::BrawlRev2PPlus})
+  {
+    const auto guards = Orca::Mod::BuiltinGuards(builtin);
+    ASSERT_GE(guards.size(), 4u);
+    const auto memory = [&guards](std::optional<u32> broken) {
+      return [&guards, broken](u32 address) -> std::optional<u32> {
+        for (const auto& g : guards)
+        {
+          if (g.address == address)
+            return broken == address ? g.word ^ 1 : g.word;
+        }
+        return std::nullopt;
+      };
+    };
+    EXPECT_TRUE(Orca::Mod::GuardsHold(builtin, memory(std::nullopt)));
+    for (const auto& g : guards)
+      EXPECT_FALSE(Orca::Mod::GuardsHold(builtin, memory(g.address))) << g.address;
+    EXPECT_FALSE(Orca::Mod::GuardsHold(builtin,
+                                       [](u32) -> std::optional<u32> { return std::nullopt; }));
+  }
+  EXPECT_FALSE(Orca::Mod::GuardsHold(Builtin::None,
+                                     [](u32) -> std::optional<u32> { return 0; }));
+}
+
+// Mod mode's gates: a builtin's modules stay off until its guards were checked against memory
+// (RefreshGuards, at the frame hook), and a mod's caps are what it offers.
+TEST(OrcaMod, ModeGates)
+{
+  Bundle b = MakeBundle(BRAWL_MOD);
+  b.WriteTree();
+  std::string error;
+  auto profile = Orca::LoadModProfile(b.dir, &error);
+  ASSERT_TRUE(profile) << error;
+  Orca::SetActiveProfile(profile);
+  ASSERT_NE(Orca::Mod::ActiveMod(), nullptr);
+  EXPECT_EQ(Orca::Mod::DeclaredBuiltin(), Builtin::BrawlRev2);
+  EXPECT_FALSE(Orca::Mod::BuiltinOn(Builtin::BrawlRev2));
+  EXPECT_EQ(Orca::UX::Rules::ProfileRuleset(), Orca::UX::Rules::Ruleset::None);
+  EXPECT_FALSE(Orca::UX::ResultsVerified());
+  EXPECT_EQ(Orca::Status::OfferedCaps(), std::string(Orca::Status::CAPS) + " results locks queue2");
+  EXPECT_EQ(Orca::UX::FriendsMove::FirstFriendFrame(), 300);
+
+  picojson::value plain;
+  picojson::parse(plain, BRAWL_MOD);
+  plain.get<picojson::object>().erase("builtin");
+  plain.get<picojson::object>().erase("offers");
+  plain.get<picojson::object>()["firstKeyframeFrame"] = picojson::value(600.0);
+  Bundle n = MakeBundle(plain.serialize());
+  n.WriteTree();
+  auto none = Orca::LoadModProfile(n.dir, &error);
+  ASSERT_TRUE(none) << error;
+  Orca::SetActiveProfile(none);
+  EXPECT_EQ(Orca::Mod::DeclaredBuiltin(), Builtin::None);
+  EXPECT_EQ(Orca::Status::OfferedCaps(), Orca::Status::CAPS);
+  EXPECT_EQ(Orca::Mod::FirstKeyframeFrame(), 600u);
+  EXPECT_EQ(Orca::UX::FriendsMove::FirstFriendFrame(), 600);
+
+  // Legacy: exactly today's.
+  const auto legacy = Orca::LoadProfileFrom(RepoPath("Data/Sys/"), "RSBE01", 2, &error);
+  ASSERT_TRUE(legacy) << error;
+  Orca::SetActiveProfile(legacy);
+  EXPECT_EQ(Orca::Mod::ActiveMod(), nullptr);
+  EXPECT_EQ(Orca::UX::Rules::ProfileRuleset(), Orca::UX::Rules::Ruleset::Brawl);
+  EXPECT_TRUE(Orca::UX::ResultsVerified());
+  EXPECT_EQ(Orca::UX::FriendsMove::FirstFriendFrame(), Orca::UX::FriendsMove::FIRST_FRIEND_FRAME);
+  Orca::SetActiveProfile(std::nullopt);
+  File::DeleteDirRecursively(b.dir);
+  File::DeleteDirRecursively(n.dir);
+}
+
+// The legacy key's inputs, pinned: with no ORCA_MOD_DIR the key is "orca1:" over exactly what
+// origin/main hashed (the profile and patches files, every game INI, the forced settings, the
+// universal settings, the disc and the UX version, in that order).
+TEST(OrcaMod, LegacyKeyIsUnchanged)
+{
+  std::string error;
+  // The key reads the files where a session finds them (Sys); the profile comes from the source tree.
+  const std::string sys = File::GetSysDirectory();
+  const auto legacy = Orca::LoadProfileFrom(RepoPath("Data/Sys/"), "RSBE01", 2, &error);
+  ASSERT_TRUE(legacy) << error;
+  Orca::SetActiveProfile(legacy);
+  const std::string parts = Orca::Online::CompatibilityKeyParts();
+  const auto file_hash = [](const std::string& path) {
+    std::string contents;
+    return File::ReadFileToString(path, contents) ?
+               fmt::format("{:016x}|", XXH3_64bits(contents.data(), contents.size())) :
+               std::string("-|");
+  };
+  const std::string head = fmt::format("orca|{}|RSBE01|2|{}{}", Common::GetScmRevGitStr(),
+                                       file_hash(sys + "Orca/RSBE01.ini"),
+                                       file_hash(sys + "Orca/RSBE01.patches"));
+  EXPECT_TRUE(parts.starts_with(head)) << parts;
+  EXPECT_NE(parts.find("|thread="), std::string::npos);
+  EXPECT_NE(parts.find("|sdcard="), std::string::npos);
+  EXPECT_NE(parts.find("|disc=" + Orca::GetEnv("ORCA_DISC_SHA1") + "|ux="), std::string::npos);
+  EXPECT_EQ(parts.find("orca2"), std::string::npos);
+  EXPECT_EQ(Orca::Online::CompatibilityKey(),
+            fmt::format("orca1:{:016x}", XXH3_64bits(parts.data(), parts.size())));
+
+  // Mod mode: "orca2" over the engine, the tree, the card and the disc.
+  Bundle b = MakeBundle(PPLUS_MOD);
+  b.Add("launcher.dol", "dol");
+  b.WriteTree();
+  auto mod = Orca::LoadModProfile(b.dir, &error);
+  ASSERT_TRUE(mod) << error;
+  mod->mod->sd_image_hash = std::string(32, 'c');
+  Orca::SetActiveProfile(mod);
+  const std::string mod_parts = Orca::Online::CompatibilityKeyParts();
+  const std::string disc = Orca::GetEnv("ORCA_DISC_SHA1");
+  EXPECT_TRUE(mod_parts.starts_with(fmt::format(
+      "orca2|{}|api={}|tree={}|sd={}|disc={}|0.Core.WiiSDCard=True|0.Core.CustomRTCValue=1735689600|thread=",
+      Common::GetScmRevGitStr(), Orca::Mod::ENGINE_API, Orca::Mod::TreeHash(b.files),
+      std::string(32, 'c'), disc.empty() ? "-" : disc)))
+      << mod_parts;
+  EXPECT_TRUE(Orca::Online::CompatibilityKey().starts_with("orca2:"));
+  Orca::SetActiveProfile(std::nullopt);
+  File::DeleteDirRecursively(b.dir);
+}

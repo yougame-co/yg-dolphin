@@ -377,6 +377,12 @@ ResultsTracker& Tracker()
 
 bool ResultsVerified()
 {
+  // Mod mode: the mod's builtin, while its guard words hold (Core/Orca/Mod.h).
+  if (Orca::Mod::ActiveMod())
+  {
+    return Orca::Mod::BuiltinOn(Orca::Mod::Builtin::BrawlRev2) ||
+           Orca::Mod::BuiltinOn(Orca::Mod::Builtin::BrawlRev2PPlus);
+  }
   const Orca::Profile* profile = Orca::ActiveProfile();
   if (!profile || profile->revision != 2)
     return false;
@@ -404,6 +410,13 @@ void ReadResultsFrame(const Core::CPUThreadGuard& guard, int frame)
 void RequestQueueRules()
 {
   const Orca::Profile* profile = Orca::ActiveProfile();
+  if (profile && profile->mod)
+  {
+    // Vanilla Brawl's rules screen only (Core/Orca/Mod.h).
+    if (Orca::Mod::BuiltinOn(Orca::Mod::Builtin::BrawlRev2))
+      s_rules_pending = true;
+    return;
+  }
   if (profile && !profile->IsLauncher() && profile->game_id == "RSBE01" && profile->revision == 2)
     s_rules_pending = true;
 }

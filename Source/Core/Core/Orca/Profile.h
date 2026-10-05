@@ -11,6 +11,7 @@
 
 #include "Common/CommonTypes.h"
 #include "Common/Config/Config.h"
+#include "Core/Orca/Mod.h"
 
 namespace PowerPC
 {
@@ -87,6 +88,9 @@ struct Profile
   // Set at boot: the game ID Dolphin gave the booted file (a loader's comes from its file name).
   // Its game settings INIs apply while the loader runs, the disc's after.
   std::string boot_game_id;
+  // Mod mode (ORCA_MOD_DIR, Core/Orca/Mod.h): the bundle this profile was read from. Unset for a
+  // legacy profile (Data/Sys/Orca/<name>.ini), whose sessions run exactly as before mods.
+  std::optional<Mod::ModInfo> mod;
 
   bool IsLauncher() const { return !launcher_hash.empty(); }
 };
@@ -200,6 +204,17 @@ std::optional<Profile> LoadProfile(const std::string& game_id, std::optional<u16
 // The same, from another Sys folder (with trailing slash; tests read the source tree's).
 std::optional<Profile> LoadProfileFrom(const std::string& sys_directory, const std::string& game_id,
                                        std::optional<u16> revision, std::string* error);
+
+// Mod mode: the profile a bundle's mod.json makes (Core/Orca/Mod.h), after checking its tree.json
+// (the hash of the list, every file there at its size). Anything malformed refuses (nullopt).
+std::optional<Profile> LoadModProfile(const std::string& dir, std::string* error);
+// Mod mode's boot checks: a loader boot runs exactly the bundle's launcher with the mod's disc in the
+// drive (`default_disc`); a disc boot (`executable_path` null) runs the mod's disc (`boot_game_id`,
+// `boot_revision`). A mod with an SD card gets its image built or reused (ORCA_SD_CACHE), and
+// `profile->sd_image_path` names it.
+bool PrepareModBoot(Profile* profile, const std::string* executable_path,
+                    const std::string& default_disc, const std::string& boot_game_id,
+                    u16 boot_revision, std::string* error);
 
 // ORCA_PROFILE: the launcher profile for a session that boots an executable; empty when unset.
 std::string LauncherProfileName();

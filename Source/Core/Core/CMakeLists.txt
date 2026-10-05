@@ -525,6 +525,8 @@ add_library(core
   Orca/JitWarm.h
   Orca/Launch.cpp
   Orca/Launch.h
+  Orca/Mod.cpp
+  Orca/Mod.h
   Orca/Music.cpp
   Orca/Music.h
   Orca/PanicDiag.cpp

@@ -332,6 +332,40 @@ const std::vector<GamePatch>& ActivePatches()
   static std::vector<GamePatch> s_patches;
   // e.g. RSBE01.patches for a disc, PPLUS32.patches for a launcher.
   const Orca::Profile* profile = Orca::ActiveProfile();
+  // Mod mode: the bundle's orca/patches/*.patches, in name order (keyed by its tree).
+  if (profile && profile->mod)
+  {
+    const std::string key = "mod:" + profile->mod->tree.hash;
+    if (key == s_for)
+      return s_patches;
+    s_for = key;
+    s_patches.clear();
+    for (const Orca::Mod::TreeFile* file : profile->mod->tree.Under("orca/patches/"))
+    {
+      if (!file->path.ends_with(".patches") ||
+          file->path.find('/', sizeof("orca/patches/") - 1) != std::string::npos)
+      {
+        continue;
+      }
+      const std::string path = profile->mod->dir + file->path;
+      std::string text, error;
+      std::optional<std::vector<GamePatch>> parsed;
+      if (File::ReadFileToString(path, text))
+        parsed = ParseGamePatches(text, &error);
+      else
+        error = "it can't be read";
+      if (!parsed)
+      {
+        ERROR_LOG_FMT(ROLLBACK, "Orca: {} refused, {}: no game patches", path, error);
+        Orca::Status::Error("profile", "This mod's game patches are damaged.");
+        s_patches.clear();
+        break;
+      }
+      NOTICE_LOG_FMT(ROLLBACK, "Orca: {} game patches from {}", parsed->size(), path);
+      s_patches.insert(s_patches.end(), parsed->begin(), parsed->end());
+    }
+    return s_patches;
+  }
   const std::string game = profile ? profile->game_id : std::string{};
   if (game != s_for)
   {

@@ -179,6 +179,10 @@ void Shutdown();
 
 // The lobby compatibility key: players with different keys can't share a room. Built from the Orca
 // build, game profile and data files, every forced setting both machines must share, the disc and
-// the seeded save. Not the host CPU, so Mac and PC players can meet.
+// the seeded save. Not the host CPU, so Mac and PC players can meet. "orca2:<xxh3>" in both modes;
+// in mod mode (Core/Orca/Mod.h) over the engine, the bundle's tree and its SD image instead of the
+// profile files.
 std::string CompatibilityKey();
+// What the key hashes (tests pin its legacy form).
+std::string CompatibilityKeyParts();
 }  // namespace Orca::Online

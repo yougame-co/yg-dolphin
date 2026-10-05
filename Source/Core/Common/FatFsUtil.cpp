@@ -5,6 +5,8 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <iterator>
+#include <span>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -485,37 +487,11 @@ static void SortFST(File::FSTEntry* root)
     SortFST(&child);
 }
 
-bool SyncSDFolderToSDImage(const std::function<bool()>& cancelled, bool deterministic)
+// A new FAT32 image of `size` bytes at `image_path` (written to a temporary file and renamed into
+// place) holding `root`'s tree.
+static bool WriteImage(const std::function<bool()>& cancelled, const File::FSTEntry& root, u64 size,
+                       const std::string& image_path, bool deterministic)
 {
-  const std::string source_dir = File::GetUserPath(D_WIISDCARDSYNCFOLDER_IDX);
-  const std::string image_path = File::GetUserPath(F_WIISDCARDIMAGE_IDX);
-  if (source_dir.empty() || image_path.empty())
-    return false;
-
-  INFO_LOG_FMT(COMMON, "Starting SD card conversion from folder {} to file {}", source_dir,
-               image_path);
-
-  if (!File::IsDirectory(source_dir))
-  {
-    ERROR_LOG_FMT(COMMON, "{} is not a directory, not converting", source_dir);
-    return false;
-  }
-
-  File::FSTEntry root = File::ScanDirectoryTree(source_dir, true);
-  if (deterministic)
-    SortFST(&root);
-  if (!CheckIfFATCompatible(root))
-    return false;
-
-  u64 size = Config::Get(Config::MAIN_WII_SD_CARD_FILESIZE);
-  if (size == 0)
-  {
-    size = GetSize(root);
-    // Allocate a reasonable amount of free space
-    size += std::clamp(size / 2, MebibytesToBytes(512), GibibytesToBytes(8));
-  }
-  size = AlignUp(size, MAX_CLUSTER_SIZE);
-
   std::lock_guard lk(s_fatfs_mutex);
   SDCardFatFsCallbacks callbacks;
   s_callbacks = &callbacks;
@@ -573,7 +549,7 @@ bool SyncSDFolderToSDImage(const std::function<bool()>& cancelled, bool determin
 
   if (!Pack(cancelled, root, true, tmp_buffer))
   {
-    ERROR_LOG_FMT(COMMON, "Failed to pack folder {} to SD image at {}", source_dir,
+    ERROR_LOG_FMT(COMMON, "Failed to pack folder {} to SD image at {}", root.physicalName,
                   temp_image_path);
     return false;
   }
@@ -593,8 +569,111 @@ bool SyncSDFolderToSDImage(const std::function<bool()>& cancelled, bool determin
   }
 
   image_delete_guard.Dismiss();  // no need to delete the temp file anymore after the rename
+  return true;
+}
+
+bool SyncSDFolderToSDImage(const std::function<bool()>& cancelled, bool deterministic)
+{
+  const std::string source_dir = File::GetUserPath(D_WIISDCARDSYNCFOLDER_IDX);
+  const std::string image_path = File::GetUserPath(F_WIISDCARDIMAGE_IDX);
+  if (source_dir.empty() || image_path.empty())
+    return false;
+
+  INFO_LOG_FMT(COMMON, "Starting SD card conversion from folder {} to file {}", source_dir,
+               image_path);
+
+  if (!File::IsDirectory(source_dir))
+  {
+    ERROR_LOG_FMT(COMMON, "{} is not a directory, not converting", source_dir);
+    return false;
+  }
+
+  File::FSTEntry root = File::ScanDirectoryTree(source_dir, true);
+  if (deterministic)
+    SortFST(&root);
+  if (!CheckIfFATCompatible(root))
+    return false;
+
+  u64 size = Config::Get(Config::MAIN_WII_SD_CARD_FILESIZE);
+  if (size == 0)
+  {
+    size = GetSize(root);
+    // Allocate a reasonable amount of free space
+    size += std::clamp(size / 2, MebibytesToBytes(512), GibibytesToBytes(8));
+  }
+  size = AlignUp(size, MAX_CLUSTER_SIZE);
+
+  if (!WriteImage(cancelled, root, size, image_path, deterministic))
+    return false;
 
   INFO_LOG_FMT(COMMON, "Successfully packed folder {} to SD image at {}", source_dir, image_path);
+  return true;
+}
+
+bool BuildSDImageFromFiles(std::span<const SDImageFile> files, u64 size,
+                           const std::string& image_path, std::string* error)
+{
+  if (size == 0 || size % MAX_CLUSTER_SIZE != 0)
+  {
+    *error = fmt::format("an SD image's size must be whole {}-byte clusters", +MAX_CLUSTER_SIZE);
+    return false;
+  }
+  // The tree exactly as listed: folders from the paths, each file its listed source and size.
+  File::FSTEntry root;
+  root.isDirectory = true;
+  root.physicalName = "(listed files)";
+  for (const SDImageFile& file : files)
+  {
+    File::FSTEntry* dir = &root;
+    std::string_view rest = file.image_path;
+    for (size_t slash; (slash = rest.find('/')) != std::string_view::npos;
+         rest.remove_prefix(slash + 1))
+    {
+      const std::string_view name = rest.substr(0, slash);
+      auto it = std::ranges::find_if(dir->children, [&](const File::FSTEntry& e) {
+        return e.virtualName == name;
+      });
+      if (it == dir->children.end())
+      {
+        File::FSTEntry folder;
+        folder.isDirectory = true;
+        folder.virtualName = std::string(name);
+        folder.physicalName = folder.virtualName;
+        dir->children.push_back(std::move(folder));
+        it = std::prev(dir->children.end());
+      }
+      else if (!it->isDirectory)
+      {
+        *error = fmt::format("{} is both a file and a folder", file.image_path);
+        return false;
+      }
+      dir = &*it;
+    }
+    if (rest.empty() || std::ranges::any_of(dir->children, [&](const File::FSTEntry& e) {
+          return e.virtualName == rest;
+        }))
+    {
+      *error = fmt::format("{} is listed twice or names a folder", file.image_path);
+      return false;
+    }
+    File::FSTEntry leaf;
+    leaf.virtualName = std::string(rest);
+    leaf.physicalName = file.source_path;
+    leaf.size = file.size;
+    dir->children.push_back(std::move(leaf));
+  }
+  SortFST(&root);
+  if (!CheckIfFATCompatible(root))
+  {
+    *error = "the files don't fit FAT (a name over 255 characters, a file of 4 GiB or more, or a "
+             "folder of more than 65,536 entries)";
+    return false;
+  }
+  if (!WriteImage([] { return false; }, root, size, image_path, /*deterministic*/ true))
+  {
+    *error = "packing the files failed (the log says why; the card may be too small for them)";
+    return false;
+  }
   return true;
 }
 

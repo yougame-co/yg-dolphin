@@ -118,6 +118,22 @@ std::string OfferedCaps()
   std::string caps = CAPS;
   if (Music::Supported())
     caps += fmt::format(" {}", MUSIC_CAP);
+  // Mod mode (Core/Orca/Mod.h): besides the music switch above (host-only, the same rule in both
+  // modes), what mod.json offers and its builtin carries, unless the builtin's guard words have
+  // already failed (they are checked once the game's code is live, which for a launcher can be after
+  // this line is printed: its modules then stay off and print nothing). The pick caps go with
+  // "locks", as for a legacy ruleset profile.
+  if (Mod::ActiveMod())
+  {
+    for (const char* cap : {RESULTS_CAP, LOCKS_CAP, QUEUE2_CAP})
+    {
+      if (Mod::Offers(cap) && !Mod::GuardsFailed())
+        caps += fmt::format(" {}", cap);
+    }
+    if (Mod::Offers(LOCKS_CAP) && !Mod::GuardsFailed())
+      caps += fmt::format(" {}", PICK_CAPS);
+    return caps;
+  }
   if (UX::ResultsVerified())
     caps += fmt::format(" {}", RESULTS_CAP);
   if (UX::Rules::ProfileRuleset() != UX::Rules::Ruleset::None)

@@ -140,6 +140,9 @@ std::string SeedPath()
   const Profile* profile = ActiveProfile();
   if (!profile || GetEnv("ORCA_JITWARM_SEED") == "0")
     return {};
+  // Mod mode: the bundle's orca/jitwarm, when it has one (host-only: not in the tree hash).
+  if (profile->mod)
+    return profile->mod->tree.Find("orca/jitwarm") ? profile->mod->dir + "orca/jitwarm" : "";
   return File::GetSysDirectory() + "Orca/" + profile->game_id + ".jitwarm";
 }
 
@@ -159,6 +162,10 @@ std::vector<u8> ReadWhole(const std::string& path)
 bool KnownGame()
 {
   const Profile* profile = ActiveProfile();
+  // Mod mode: a mod whose builtin is for Brawl rev 2 (host-only: guards aren't needed to read
+  // scenes for the warm-up's timing, and its blocks are hash-checked against RAM).
+  if (profile && profile->mod)
+    return Mod::DeclaredBuiltin() != Mod::Builtin::None;
   if (!profile || profile->revision != 2)
     return false;
   return profile->IsLauncher() ? profile->disc == "RSBE01" : profile->game_id == "RSBE01";

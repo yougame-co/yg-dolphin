@@ -88,7 +88,30 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
     // A disc boots with its own profile; a loader executable (a mod's launcher) only with the
     // launcher profile ORCA_PROFILE names, which checks the loader, the disc and the SD card.
     const auto* executable = std::get_if<BootParameters::Executable>(&boot->parameters);
-    if (executable)
+    if (Orca::Mod::Requested())
+    {
+      // Mod mode (ORCA_MOD_DIR): the game comes from the bundle, never from Data/Sys/Orca, and
+      // ORCA_PROFILE is ignored.
+      orca_profile = Orca::LoadModProfile(Orca::Mod::Dir(), &error);
+      if (orca_profile &&
+          !Orca::PrepareModBoot(&*orca_profile, executable ? &executable->path : nullptr,
+                                Config::Get(Config::MAIN_DEFAULT_ISO), StartUp.GetGameID(),
+                                StartUp.GetRevision(), &error))
+      {
+        orca_profile.reset();
+      }
+      if (orca_profile)
+      {
+        const Orca::Mod::ModInfo& mod = *orca_profile->mod;
+        NOTICE_LOG_FMT(BOOT, "Orca mod: {} ({} {} rev {}), tree {}, builtin {}, SD {}",
+                       mod.manifest.title.empty() ? "untitled" : mod.manifest.title,
+                       mod.manifest.launcher.empty() ? "disc" : "launcher on",
+                       mod.manifest.disc_id, mod.manifest.disc_revision, mod.tree.hash,
+                       Orca::Mod::BuiltinName(mod.manifest.builtin),
+                       mod.sd_image_hash.empty() ? "none" : mod.sd_image_hash);
+      }
+    }
+    else if (executable)
     {
       const std::string name = Orca::LauncherProfileName();
       if (name.empty())
