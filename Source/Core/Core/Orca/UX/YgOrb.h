@@ -18,8 +18,9 @@
 // under Orca's window, where nothing on the page can be seen; so Orca draws it in its place, and
 // the overlay's lines beside it in YouGame's cards (YgCard.h):
 //   orb <x> <y> <size> <lit> <away> <badge>
-//       the button: a disc `size` pixels across, its top left at (x, y) in the view's pixels (the
-//       page's own button's rectangle); lit 1 at full strength (0: half, at rest), away 1 with the
+//       the button: a disc `size` pixels across, its top left at (x, y) in the view's device pixels
+//       (the page's own button's rectangle, in the units of `rect`; drawn scaled to the backbuffer,
+//       which on a Retina Mac need not be in those units: ScaledPlace); lit 1 at full strength (0: half, at rest), away 1 with the
 //       amber dot of a held seat, badge 0..99 unread (shown "9+" past 9).
 //   orb blink    a white ring grows out of it three times (something from outside the lobby).
 //   orb off      not drawn (the play menu is open, or the game no longer fills the screen).
@@ -83,6 +84,11 @@ std::optional<Notice> ParseNotice(std::string_view line);
 // The hint's fields, decoded: at most this many code points each.
 inline constexpr std::size_t HINT_POINTS = 24;
 
+// `place` (device pixels, as the page sends it) in the overlay's ImGui units: scaled by the
+// backbuffer's width over the view's width in device pixels (the last `rect`), unscaled while no
+// rect is known (headless, tests).
+Place ScaledPlace(const Place& place, float view_width, float display_width);
+
 // How long a notice stays, as the page's own line does (PlayOrb.tsx DWELL): ms.
 double DwellMs(const Notice& notice);
 
@@ -116,10 +122,14 @@ public:
     // The lines' generation (a new one with each line), and whether any is showing now.
     std::uint64_t generation = 0;
     bool showing = false;
+    // The view's width in device pixels (the app's last `rect`); 0: none yet.
+    float view_width = 0;
   };
 
   void Apply(const Command& command, double now_ms);
   void Add(Notice notice, double now_ms);
+  // The app's `rect`: the view's size in device pixels, the units of `orb`.
+  void SetView(int width, int height);
   View At(double now_ms) const;
   // The newest KEEP lines, oldest first, into `out` when `generation` is not the current one (a
   // copy once per change). Returns the current generation.
@@ -134,6 +144,7 @@ private:
   double m_blink_at = -1;
   std::deque<Entry> m_lines;
   std::uint64_t m_generation = 0;
+  int m_view_width = 0;
 };
 
 // The process's button (the stdin thread applies, the video thread draws), on the overlay's clock
@@ -143,4 +154,5 @@ double NowMs();
 // The app's `orb` and `notice` lines, now. Any thread.
 void Apply(const Command& command);
 void Show(Notice notice);
+void SetViewSize(int width, int height);
 }  // namespace Orca::UX::YgOrb

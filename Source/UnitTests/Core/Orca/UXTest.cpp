@@ -2394,3 +2394,29 @@ TEST(OrcaUXOrbCombo, TheLocalPadKeepsItsStateWhileUnfocusedAndOnReRuns)
   EXPECT_EQ(FilterLocalPad(with(START), true, true).button, START);
   FilterLocalPad(with(0), true, true);
 }
+
+TEST(OrcaUXYgOrb, ThePlaceScalesFromThePagesPixelsToTheBackbuffer)
+{
+  using namespace Orca::UX::YgOrb;
+  Place p;
+  p.x = 32;
+  p.y = 32;
+  p.size = 80;
+  // A Retina Mac whose backbuffer is in points: half the page's device pixels.
+  Place q = ScaledPlace(p, 3456, 1728);
+  EXPECT_EQ(q.x, 16);
+  EXPECT_EQ(q.y, 16);
+  EXPECT_EQ(q.size, 40);
+  // Windows (the view's pixels are the backbuffer's), and no rect yet (headless): as sent.
+  q = ScaledPlace(p, 1920, 1920);
+  EXPECT_EQ(q.size, 80);
+  q = ScaledPlace(p, 0, 1280);
+  EXPECT_EQ(q.x, 32);
+  EXPECT_EQ(q.size, 80);
+  // The model keeps the view's width from the app's rect.
+  Model m;
+  m.SetView(3456, 2168);
+  EXPECT_EQ(m.At(0).view_width, 3456);
+  m.SetView(0, 0);
+  EXPECT_EQ(m.At(0).view_width, 0);
+}

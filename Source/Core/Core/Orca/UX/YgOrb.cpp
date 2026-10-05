@@ -135,6 +135,18 @@ std::optional<Notice> ParseNotice(std::string_view line)
   return n;
 }
 
+Place ScaledPlace(const Place& place, float view_width, float display_width)
+{
+  if (!(view_width > 0) || !(display_width > 0))
+    return place;
+  const float k = display_width / view_width;
+  Place p = place;
+  p.x *= k;
+  p.y *= k;
+  p.size *= k;
+  return p;
+}
+
 double DwellMs(const Notice& notice)
 {
   switch (notice.kind)
@@ -213,10 +225,17 @@ Model::View Model::At(double now_ms) const
       v.ring = static_cast<float>(std::fmod(age, RING_MS) / RING_MS);
   }
   v.generation = m_generation;
+  v.view_width = static_cast<float>(m_view_width);
   v.showing = std::any_of(m_lines.begin(), m_lines.end(), [&](const Entry& e) {
     return LineAlpha(e.notice, e.at, now_ms) > 0;
   });
   return v;
+}
+
+void Model::SetView(int width, int height)
+{
+  std::lock_guard lock(m_lock);
+  m_view_width = width > 0 && height > 0 ? width : 0;
 }
 
 std::uint64_t Model::Lines(std::uint64_t generation, std::vector<Entry>* out) const
@@ -258,5 +277,10 @@ void Apply(const Command& command)
 void Show(Notice notice)
 {
   Current().Add(std::move(notice), NowMs());
+}
+
+void SetViewSize(int width, int height)
+{
+  Current().SetView(width, height);
 }
 }  // namespace Orca::UX::YgOrb

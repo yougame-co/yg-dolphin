@@ -45,9 +45,9 @@ Kit::Box BadgeBox(const Place& p, float k)
 
 Kit::Box ButtonBox(const Model::View& view)
 {
-  const Place& p = view.place;
-  if (!view.on || p.size <= 0)
+  if (!view.on || view.place.size <= 0)
     return Kit::Box{ImVec2(0, 0), ImVec2(0, 0)};
+  const Place p = ScaledPlace(view.place, view.view_width, ImGui::GetIO().DisplaySize.x);
   const float k = p.size / 40;
   Kit::Box box{ImVec2(p.x, p.y), ImVec2(p.x + p.size, p.y + p.size)};
   if (p.away)
@@ -66,9 +66,9 @@ Kit::Box ButtonBox(const Model::View& view)
 
 void DrawButton(ImDrawList* dl, const Model::View& view)
 {
-  const Place& p = view.place;
-  if (!view.on || p.size <= 0)
+  if (!view.on || view.place.size <= 0)
     return;
+  const Place p = ScaledPlace(view.place, view.view_width, ImGui::GetIO().DisplaySize.x);
   const float k = p.size / 40, alpha = ButtonAlpha(p);
   const ImVec2 c(p.x + p.size / 2, p.y + p.size / 2);
   Yg::RoundLogo(dl, ImVec2(p.x, p.y), p.size, alpha);

@@ -210,6 +210,8 @@ void Platform::ProcessEmbedCommands()
         {
           m_embed.rect = *rect;
           EmbedSetRect(*rect);
+          // The YouGame button's units: the page's device pixels (UX/YgOrb.h ScaledPlace).
+          Orca::UX::YgOrb::SetViewSize(rect->w, rect->h);
         }
         if (too_small != m_embed_too_small)
         {
