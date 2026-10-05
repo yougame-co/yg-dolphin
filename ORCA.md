@@ -2030,27 +2030,35 @@ re-runs, as a pure function of memory and the session's synced ports, both games
 
 - A friend plugs in (a port 2-4 newly in the synced plan) while the host's game is anywhere but
   Versus (`sqVsMelee`, `sqSpMelee`, `sqToMelee`, `sqQuMelee`): pending. Once the main menu has run
-  for `MENU_SETTLE_FRAMES` (30) with a friend pending, the hook does what every menu exit in the
-  game does (`muMenuMain`'s at `0x81176828` included): the scene manager's exit code (`+0x284`) 25,
-  With Friends > FIGHT!, then its process step (`+0x288`) 2. The manager ends the menu and
-  `sqMenuMain::setNext` sends 25 through Orca's block to the local Versus character select ("Online
-  menu"), so B from there comes back to With Friends with FIGHT! selected. Both machines do it at
-  the same boundary; the friend's game shows the host's menu for half a second first.
-- A friend who plugged in during the boot is taken along once the menu has run 30 frames; one who
-  plugged in on Versus' character select (or in a Versus match) is already where friends play, and
-  nothing happens. B back to the main menu with the friend still in stays there: only a newly
-  plugged port counts.
+  for `MENU_SETTLE_FRAMES` (30) with its pages built (`MENU_BUILT`, below) and a friend pending, the
+  hook does what every menu exit in the game does (`muMenuMain`'s at `0x81176828` included): the
+  scene manager's exit code (`+0x284`) 25, With Friends > FIGHT!, then its process step (`+0x288`)
+  2. The manager ends the menu and `sqMenuMain::setNext` sends 25 through Orca's block to the local
+  Versus character select ("Online menu"), so B from there comes back to With Friends with FIGHT!
+  selected. Both machines do it at the same boundary; the friend's game shows the host's menu for
+  half a second first.
+- A friend who plugged in during the boot is taken along once the menu has built and run 30 frames;
+  one who plugged in on Versus' character select (or in a Versus match) is already where friends
+  play, and nothing happens. B back to the main menu with the friend still in stays there: only a
+  newly plugged port counts.
 - Never in a queue room (a header of casual or ranked): its opponent plugs in on the character
   select. What happens with a friend plugged in is never announced (`orca menu`), as before.
+- **Never before the menu has built its pages** (branch `q9-friends-jump`, `ux=17`). The main menu
+  loads its files for a while after it starts, then builds every page in one frame: muMenuMain's
+  byte `+0xAC8` (`MENU_BUILT`) is 0 from its start (the step going 1) and 1 from that frame on.
+  Through 0.3.19 the 30 frames counted from the step: a friend who plugged in during the host's boot
+  (or while a menu coming back from the character select loaded) moved both games before the build,
+  and both froze for good (below). Now they count from the build: the move comes 30 frames after it,
+  so the friend sees the host's menu, drawn, for half a second.
 - State in the match block's last free bytes, `+0x290..+0x297` (`MatchBlock.h` `FRIENDS_*`: a tag,
-  the ports seen at the last boundary, the pending flag, the frame the menu started running with a
-  friend pending). `+0x180..+0x18F`, first planned for this, is Project+'s `SAVED_RSS`. Solo play
-  never writes them (nothing kept and no friend: no write), so `free-space.py`'s runs are untouched;
-  the first friend to plug in is news from the dead code's bytes on. Ports plugged in before frame
-  300 (`FIRST_FRIEND_FRAME`; no friend plugs in that early, a keyframe is never of the host's first
-  300 frames) were there from the start: a harness's `ORCA_UX_TEST_NAMES` ports never move a run.
-  Run again at the same boundary on what it wrote, the hook writes the same (`OrcaOnlineMenuDropIn`
-  tests).
+  the ports seen at the last boundary, the pending flag, the frame the menu was first seen built and
+  running with a friend pending). `+0x180..+0x18F`, first planned for this, is Project+'s
+  `SAVED_RSS`. Solo play never writes them (nothing kept and no friend: no write), so
+  `free-space.py`'s runs are untouched; the first friend to plug in is news from the dead code's
+  bytes on. Ports plugged in before frame 300 (`FIRST_FRIEND_FRAME`; no friend plugs in that early,
+  a keyframe is never of the host's first 300 frames) were there from the start: a harness's
+  `ORCA_UX_TEST_NAMES` ports never move a run. Run again at the same boundary on what it wrote, the
+  hook writes the same (`OrcaOnlineMenuDropIn` tests).
 
 **A join held in a single-player mode** (`Rollback/OnlineMatch.cpp` `HostEvents`): while the host's
 game is in Classic, All-Star, Boss Battles, Events, Training, Home-Run Contest, Target Smash,
@@ -2095,6 +2103,51 @@ Measured 2026-10-04 (M4, headless, fresh user folders):
   Project+'s loading image (frames 0-27) 154, 101 at frame 18; afterwards a few a frame, and
   ~1,000-1,400 more once the scripts' fuzz begins (moves the recorded matches never made, there
   with either boot). Nothing here needs the lists re-recorded.
+
+**The freeze when a friend joined during the boot** (0.3.18 and 0.3.19, Brawl; branch
+`q9-friends-jump`). A friend who dropped in while the host booted (`occluded-test.py --friend`
+plugs in at 314, `direct-link.py --quick` at ~980) stopped both games at frame 1,474: the move at
+1,473, then `Invalid read from 0x00000008, PC = 0x806cec6c`, and no frame after it. Proved under
+the harness, one Orca, `ORCA_UX_TEST_NAMES=ada,bo ORCA_UX_TEST_PLUG_AT=314` (the same freeze at
+the same point, in two seconds of emulation; a session's frame hook numbers that boundary one
+lower than the harness, whose move is at 1,474), with `ORCA_UX_PROBE` watches and a dump of
+sora_scene's code read at run time:
+
+- `0x806CEC6C` is in muMenuMain's exit (`0x806CEBF8`), which the manager runs once the step is 2.
+  It frees three objects (`+0x7B4..+0x7BC`), then for each of the 29 page procs at `+0x35C` that
+  isn't 0 calls its destructor through the vtable at proc `+0x668`, then releases the tables at
+  `+0x738` and `+0x3E0`.
+- At the move (the menu's frame 43, its step 1 since frame 13) every proc slot still held the
+  heap's fill, `0xCCCCCCCC`: not 0, so the exit called through it, read a null vtable and faulted.
+  The menu's process (`0x806CE730`) calls its build (`0x806CD510`) every frame until its files are
+  in; the build makes every page, the procs and the rest in one frame and sets `+0xAC8` to 1
+  (`0x806CE194`). Watched with no move: built at frame 1,502, 58 frames after the step went 1 at
+  1,444; coming back from the character select 121 frames after it (1,862 to 1,983); Project+ 1
+  frame after it (its files load at once), so Project+ never froze, though its move runs the same
+  code. Before the step is 1 the byte is the last menu's (1), which the start zeroes.
+- Not a page transition: an idle host froze the same way (no press on the menu at all), and with the
+  fix, moves landing in every page transition and on the game's own exit pass (below). Not the
+  settle being short as such: no fixed count is right when the load takes 1, 58 or 121 frames.
+- The same freeze, by other addresses, on a menu coming back from the character select with a
+  friend plugging in while it loads (`ORCA_UX_TEST_PLUG_AT=1850` over a B out of the character
+  select): 0.3.18 moved at 1,892, its exit freed the last menu's leftovers (`0x8002DF50`,
+  `0x8019D8EC`); the fix moves at 2,013, 30 frames after the build at 1,983.
+
+Checked 2026-10-05 (M4, `ux=17`): `OrcaOnlineMenuDropIn.AMenuStillLoadingIsNeverLeft` and the other
+419 `Orca*` tests pass. Harness (its frame numbers), Brawl: the boot plug-in moves at 1,532 (built
+1,502) with the host idle or mashing A (20 placements of A, B and DOWN around it; the boot's first
+menu takes no press before about 1,540 anyway). 30 plug-ins from 1,505 to 1,562 (moves at
+1,535-1,592) land the move in the Group page's way in (A at 1,540, the page's proc at 1,542), its
+way back out with B (1,562), a cursor move, A on Solo (1,592), and the frames around the game's own
+exit at 1,583: no invalid access, every one reaches the character select. Project+: a plug-in at 300
+still moves at 330, one on a menu coming back from the character select at 649 (built 619).
+`YG_SYNCTEST=7 YG_SYNCTEST_FROM=1400` over the boot plug-in, the move, the character select, the
+stage select and the match to 2,800: 9,751 re-run frames, **0 RAM mismatches**. Two Orcas over a
+real dev room: `direct-link.py --quick` PASS (the friend in at 981, both moved at 1,531, the match
+at 2,081, 59 checksums matched each), `occluded-test.py --friend` PASS (in at 314, moved at 1,531,
+every phase 59.9 fps, 201 checksums matched each), `online-menu-dropin.py` PASS (the ONLINE page:
+moved at 2,248, as before, 12 checksums). A host on Versus' character select, or a queue room's
+header (`ORCA_TEST_QUEUE=casual`), still never moves.
 
 ## Matchmaking
 

@@ -168,8 +168,9 @@ constexpr u32 FRIENDS_SEEN = FRIENDS + 1;
 // u8: 1 while a friend who plugged in waits for the host's main menu, to go to With Friends'
 // character select together.
 constexpr u32 FRIENDS_PENDING = FRIENDS + 2;
-// u32: the frame hook's frame number + 1 from which the main menu has been running (0: it isn't),
-// so how long it has run is a function of the frame number, the same however often a boundary runs.
+// u32: the frame hook's frame number + 1 from which the main menu has been running with its pages
+// built and a friend pending (0: it isn't), so how long it has run is a function of the frame
+// number, the same however often a boundary runs.
 constexpr u32 FRIENDS_MENU_SINCE = FRIENDS + 4;
 constexpr u32 FRIENDS_END = FRIENDS + 8;
 
