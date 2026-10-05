@@ -100,7 +100,7 @@ std::optional<FaceRef> GameFace(Face face)
   const GpuFace& g = s_gpu[static_cast<int>(face)];
   if (!g.texture || !g_gfx || g.gfx != g_gfx.get())
     return std::nullopt;
-  return FaceRef{&g.atlas, static_cast<ImTextureRef>(*g.texture)};
+  return FaceRef{&g.atlas, *g.texture};
 }
 
 // The ImGui pass samples its textures with a point sampler; the game's glyphs are drawn smaller
