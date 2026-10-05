@@ -18,7 +18,9 @@
 #include "Common/HookableEvent.h"
 #include "Core/Core.h"
 #include "Core/Orca/UX/Kit.h"
+#include "Core/Orca/UX/NativeText.h"
 #include "Core/Orca/UX/OnlineMenu.h"
+#include "Core/Orca/UX/Queue.h"
 #include "Core/Orca/UX/RankedPPlus.h"
 #include "Core/Orca/UX/RankedSet.h"
 #include "Core/Orca/UX/SetEnd.h"
@@ -838,8 +840,24 @@ void Draw()
     labels = s_queue_labels;
     locked = s_queue_locked;
   }
+  // What the game's own text boxes already say (NativeText.h): a plate that names its player
+  // needs no label over it (its LOCKED IN badge stays), and a rules bar that says the queue's line
+  // takes the place of the top line; this machine's own hints (Hold Z, B to change) move up.
+  const u8 native = NativeText::Shown();
+  for (int port = 0; port < 4; ++port)
+  {
+    if (native & (1 << port))
+      labels[port].clear();
+  }
+  if (native & NativeText::SHOWN_RULES)
+  {
+    // On the queue's own character select the bar says it all (it is this player's alone).
+    search = Queue::OnSoloCss() ? std::string() : std::move(search_note);
+    search_note.clear();
+  }
   const bool any_label =
-      std::any_of(labels.begin(), labels.end(), [](const std::string& l) { return !l.empty(); });
+      std::any_of(labels.begin(), labels.end(), [](const std::string& l) { return !l.empty(); }) ||
+      std::any_of(locked.begin(), locked.end(), [](bool l) { return l; });
   // A ranked set's lines, top centre: the stage flow's (Brawl's through SetRulesLines, Project+'s
   // RankedPPlus::CurrentLines), else the set's score on the menus (UX/RankedSet.h); under it the
   // turn (the stage flow's, else the character order's).
@@ -863,6 +881,12 @@ void Draw()
     rules = RankedSet::CurrentScoreLine();
   if (rules_note.empty())
     rules_note = rule_line;
+  // The rules bar says the set's score and the character order's turn too.
+  if (native & NativeText::SHOWN_RULES)
+  {
+    rules.clear();
+    rules_note.clear();
+  }
   const StageCursors::View cursors = StageCursors::Current();
   // The kit's demo or preview in place of everything else.
   if (Kit::DemoMode() == 1)
@@ -963,12 +987,15 @@ void Draw()
     const float size = 3.2f * unit;
     for (int port = 0; port < 4; ++port)
     {
-      if (labels[port].empty())
+      if (labels[port].empty() && !locked[port])
         continue;
-      const ImVec2 s = TextSize(size, labels[port]);
       const float centre = pic.x + pic_size.x * PanelCentre(port);
-      OutlinedText(dl, size, ImVec2(centre - s.x / 2, pic.y + pic_size.y * 0.585f), 1,
-                   labels[port]);
+      if (!labels[port].empty())
+      {
+        const ImVec2 s = TextSize(size, labels[port]);
+        OutlinedText(dl, size, ImVec2(centre - s.x / 2, pic.y + pic_size.y * 0.585f), 1,
+                     labels[port]);
+      }
       if (locked[port])
       {
         LockedBadge(dl, unit, ImVec2(centre, pic.y + pic_size.y * LOCKED_BADGE_Y),

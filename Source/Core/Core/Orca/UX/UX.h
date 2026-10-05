@@ -29,10 +29,12 @@ namespace Orca::UX
 // 15 s pick (StageCursors.h, RankedSteps.h, BrawlStages.h, RankedPPlus.h); 13, Orca 0.3.17: a
 // ranked set's room stays open after its verdict and both games stay in their session on the
 // results screen until each player leaves it (OnlineMatch's SetOverLeave; an older build would end
-// its session at the verdict while the other plays on): the session hashes it into the
-// compatibility key as `ux=<n>`, so two builds that would write different bytes (or mask different
-// inputs, or part differently) never meet in a room.
-constexpr int kCompatVersion = 13;
+// its session at the verdict while the other plays on); 14, Orca 0.3.18: Orca's words in the
+// game's own text boxes, the players' names and ratings on their character select plates and the
+// queue's line in the rules bar (NativeText.h): the session hashes it into the compatibility key
+// as `ux=<n>`, so two builds that would write different bytes (or mask different inputs, or part
+// differently) never meet in a room.
+constexpr int kCompatVersion = 14;
 
 // The disc the game runs from (the boot's disc, or the default disc a launcher boots with): the
 // overlay's kit reads the game's own fonts from it (Kit.h). Before Init.
