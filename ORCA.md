@@ -2719,14 +2719,16 @@ by the token, not by any state of their own worth patching:
 
 ### Compatibility and tests
 
-`ux=15` (8 brought the locks and the rules preset of `ux=6` went; 9 the character select's A
+`ux=17` (8 brought the locks and the rules preset of `ux=6` went; 9 the character select's A
 gate; 10, Orca 0.3.14, queue2's character select, Project+'s boot to the main menu with friends
 dropping in from the menus, the character select's title, and the casual stage pick; 11, Orca
 0.3.15, no Z on the results screen in any session, "The results screen's replay"; 12, the
 character select's A to pick, B to take the token back up and Start to lock in, "B only takes the
 token back up", "Character order", "The queue's character select"; 13, Orca 0.3.17, the set over;
 14, Orca 0.3.18, native text; 15, Orca 0.3.19, Random as a pick and no skip in ranked, "Random and
-ranked's no skip"), caps `locks`
+ranked's no skip"; 16 is design F's, branch `q6-ui-f`; 17, branch `q9-friends-jump`, a friend's
+drop-in from the menus waits for the main menu's build, "Boot and friends from the menus"), caps
+`locks`
 and `queue2`. Test knob `ORCA_TEST_QUEUE=casual|ranked`
 (a test override): the header as a queue room's host writes it, in a harness run or a dev game's
 room, both Orcas set alike. Unit tests `OrcaOnlineRules*` (the header's lifecycle and saved rules,

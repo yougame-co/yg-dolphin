@@ -1372,10 +1372,10 @@ TEST(OrcaOnlineMenuDropIn, AFriendWhoPluggedInDuringTheBootWaitsForTheMenu)
 
 TEST(OrcaOnlineMenuDropIn, AMenuStillLoadingIsNeverLeft)
 {
-  // The boot's case (Brawl, measured): the friend plugged in during the boot, the menu's step is 1
-  // from 1444 and it builds its pages at 1502. Leaving it before then destroys a proc table of the
-  // heap's fill (Brawl's invalid read at 0x806CEC6C). The menu counts from its build: the move
-  // comes MENU_SETTLE_FRAMES after 1502, never at 1444 + MENU_SETTLE_FRAMES.
+  // The boot's case (Brawl, measured): the friend plugged in during the boot, the menu starts (its
+  // step goes 1) around 1444 and builds its pages at 1502. Leaving it before then destroys a proc
+  // table of the heap's fill (Brawl's invalid read at 0x806CEC6C). The menu counts from its build:
+  // the move comes MENU_SETTLE_FRAMES after 1502, never MENU_SETTLE_FRAMES after the start.
   Inputs in = OnMenu(1000);
   in.scene = "scTitle";
   in.sequence = "sqTitle";
@@ -1420,7 +1420,10 @@ TEST(OrcaOnlineMenuDropIn, AMenuStillLoadingIsNeverLeft)
   for (int i = 0; i < 120; ++i)
   {
     out = Decide(in);
-    EXPECT_FALSE(out.move);
+    ExpectIdempotent(in, out);
+    EXPECT_FALSE(out.move) << in.frame;
+    EXPECT_EQ(out.menu_since, 0u) << in.frame;
+    EXPECT_EQ(out.pending, 1) << in.frame;
     in = After(in, out);
   }
   in.menu_built = true;
