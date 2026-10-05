@@ -201,6 +201,20 @@ void ResultsTracker::Reset()
   m_set_games = 0;
 }
 
+std::optional<Reading::Scene> ResultsTracker::FinalScene() const
+{
+  if (!m_have_last)
+    return std::nullopt;
+  return m_last.scene;
+}
+
+std::optional<Reading::Scene> ResultsTracker::LatestScene() const
+{
+  if (!m_pending.empty())
+    return m_pending.rbegin()->second.scene;
+  return FinalScene();
+}
+
 void ResultsTracker::Store(int frame, const Reading& reading, u64 resyncs)
 {
   if (!m_started || resyncs != m_resyncs)

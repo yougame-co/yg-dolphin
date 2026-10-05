@@ -30,6 +30,8 @@
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/Overlay.h"
+#include "Core/Orca/UX/Queue.h"
+#include "Core/Orca/UX/SetEnd.h"
 
 namespace Orca::Net
 {
@@ -809,6 +811,8 @@ struct YouGameRoom::Impl
   int room_size = MAX_SEATS;
   std::string match_id;
   bool set_done = false;
+  // The room's `set-over` came: it stays open after the set's verdict until the players leave.
+  bool set_over = false;
   bool opponent_plugged = false;
   struct HeldReport
   {
@@ -838,6 +842,8 @@ struct YouGameRoom::Impl
   int ranked_sent = 0;
   int casual_sent = 0;
   int casual_results = 0;
+  // The casual sitting with this opponent so far (this room's games): this player's wins, theirs.
+  int casual_mine = 0, casual_theirs = 0;
   SetTally tally;
   bool finish_sent = false;
   std::set<std::string> verdicts_seen;
@@ -2190,6 +2196,16 @@ struct YouGameRoom::Impl
                        st[0], st[1], to);
   }
 
+  // A verdict's "out", as the screen shows it (UX/SetEnd.h).
+  static Orca::UX::SetEnd::Outcome OutcomeOf(const std::string& out)
+  {
+    using Orca::UX::SetEnd::Outcome;
+    return out == "won"  ? Outcome::Won :
+           out == "lost" ? Outcome::Lost :
+           out == "draw" ? Outcome::Draw :
+                           Outcome::Void;
+  }
+
   // How a verdict came out for this player: won, lost, draw or void (and why it doesn't count).
   struct Verdict
   {
@@ -2300,6 +2316,7 @@ struct YouGameRoom::Impl
       const bool forfeit = Str(m, "disposition") == "forfeit";
       std::string extra;
       const std::string my_id = MyId();
+      int rating_before = -1, rating_after = -1;
       if (const auto r = m.find("ratings"); r != m.end() && r->second.is<picojson::object>() &&
                                             r->second.get<picojson::object>().count(my_id))
       {
@@ -2309,6 +2326,8 @@ struct YouGameRoom::Impl
           const auto& o = mine.get<picojson::object>();
           const auto before = ClampedInt(o, "before", 0, 1 << 20);
           const auto after = ClampedInt(o, "after", 0, 1 << 20);
+          rating_before = before.value_or(-1);
+          rating_after = after.value_or(-1);
           if (before && after)
             extra += fmt::format(",\"r\":[{},{}]", *before, *after);
           if (const auto rank = o.find("rank");
@@ -2326,11 +2345,11 @@ struct YouGameRoom::Impl
           forfeit ? "forfeit" : "games", v.why.empty() ? "" : fmt::format(",\"why\":\"{}\"", v.why),
           Score(), extra));
       const int mine = tally.Wins(my_id), theirs = tally.Wins(TheirId());
-      Orca::UX::ShowToast(v.out == "void" ? std::string("This set doesn't count") :
-                          forfeit && v.out == "won" ?
-                                            std::string("Opponent left: you win the set") :
-                          v.out == "won" ? fmt::format("You won the set {}–{}", mine, theirs) :
-                                           fmt::format("You lost the set {}–{}", mine, theirs));
+      // On screen: VICTORY or DEFEAT with the rating's change, or "<name> forfeited" first
+      // (UX/SetEnd.h).
+      Orca::UX::SetEnd::Current().SetVerdict(
+          OutcomeOf(v.out), forfeit, mine, theirs, rating_before, rating_after,
+          Orca::UX::Queue::OwnRating(), Orca::UX::SetEnd::NowMs());
       NOTICE_LOG_FMT(NETPLAY, "Orca room: the set: {} {} ({})", v.out, Score(),
                      Str(m, "disposition"));
       std::lock_guard lock(mutex);
@@ -2354,10 +2373,13 @@ struct YouGameRoom::Impl
         fmt::format("{{\"q\":\"casual\",\"k\":\"game\",\"n\":{},\"out\":\"{}\"{}{}}}", n, v.out,
                     v.why.empty() ? "" : fmt::format(",\"why\":\"{}\"", v.why),
                     d.empty() ? "" : ",\"d\":" + d));
-    Orca::UX::ShowToast(v.out == "won"  ? std::string("You won") :
-                        v.out == "lost" ? std::string("You lost") :
-                        v.out == "draw" ? std::string("That game was a draw") :
-                                          std::string("That game didn't count"));
+    // On screen: YOU WON or YOU LOST with the sitting's score (UX/SetEnd.h).
+    if (v.out == "won")
+      ++casual_mine;
+    else if (v.out == "lost")
+      ++casual_theirs;
+    Orca::UX::SetEnd::Current().CasualGame(OutcomeOf(v.out), casual_mine, casual_theirs,
+                                           Orca::UX::SetEnd::NowMs());
     NOTICE_LOG_FMT(NETPLAY, "Orca room: casual game {} {} for this player", n, v.out);
     // The room stays: the host begins the next match (TryBegin).
     finish_sent = false;
@@ -2379,6 +2401,24 @@ struct YouGameRoom::Impl
     match_participants.clear();
     LobbyFields(m);
     match_participants = lobby_participants;
+    // On screen (UX/SetEnd.h): a queue room's set, or casual game, against this opponent.
+    std::string room_queue, opponent;
+    {
+      std::lock_guard lock(mutex);
+      room_queue = queue;
+      for (const auto& p : match_participants)
+      {
+        if (p.connection == me)
+          continue;
+        if (const auto name = seat_names.find(p.slot); name != seat_names.end())
+          opponent = name->second;
+      }
+    }
+    if (room_queue != "private")
+    {
+      Orca::UX::SetEnd::Current().MatchBegan(room_queue == "ranked", opponent,
+                                             Orca::UX::SetEnd::NowMs());
+    }
   }
 
   void Tick()
@@ -2589,6 +2629,34 @@ struct YouGameRoom::Impl
   }
 
   // The lobby roster rides on welcome, join, leave, back, away and lobby messages.
+  // Whether connection `id` plays in the room's match (its `start` named it).
+  bool InMatch(const std::string& id) const
+  {
+    return std::ranges::any_of(match_participants,
+                               [&](const LobbyParticipant& p) { return p.connection == id; });
+  }
+
+  // A player of the game left the room (connection `id`): mid ranked set, the opponent's forfeit
+  // counts down on screen; in casual, the page searches again (UX/SetEnd.h).
+  void OpponentGone(const std::string& id)
+  {
+    std::string room_queue;
+    bool live = false, over = false;
+    {
+      std::lock_guard lock(mutex);
+      room_queue = queue;
+      live = !match_id.empty() && !set_done;
+      over = set_over;
+    }
+    // After the set (set over) a leave is only that: "<name> left", never a forfeit.
+    if (room_queue == "ranked" && over && InMatch(id))
+      Orca::UX::SetEnd::Current().OpponentLeftAfterSet(Orca::UX::SetEnd::NowMs());
+    else if (room_queue == "ranked" && live && InMatch(id))
+      Orca::UX::SetEnd::Current().OpponentLeft(Orca::UX::SetEnd::NowMs());
+    else if (room_queue == "casual")
+      Orca::UX::SetEnd::Current().CasualOpponentLeft(Orca::UX::SetEnd::NowMs());
+  }
+
   void Roster(const picojson::object& m)
   {
     LobbyFields(m);
@@ -2663,6 +2731,7 @@ struct YouGameRoom::Impl
               {},
               {},
               p->second.bye});
+        OpponentGone(p->first);
       }
       {
         // An offer was for that player only: the next one in the seat gets its own keyframe.
@@ -2755,6 +2824,9 @@ struct YouGameRoom::Impl
             if (t != "away")
               last_hello = {};  // greet it at once
           }
+          // The opponent of a set whose forfeit was counting down is back in the room.
+          if (t != "away" && InMatch(id))
+            Orca::UX::SetEnd::Current().OpponentBack(Orca::UX::SetEnd::NowMs());
         }
       }
       Roster(m);
@@ -2798,6 +2870,22 @@ struct YouGameRoom::Impl
     else if (t == "result")
     {
       OnResult(m);
+    }
+    else if (t == "set-over")
+    {
+      // A ranked set's room after its verdict: it stays open (relay, chat) until the players leave
+      // it, each when their results screen is over or they hold Z (OnlineMatch's SetOverLeave), or
+      // `ms` passes and it closes with 4004. Nothing is rated or forfeited any more, and every lobby
+      // command is refused ("The set is over").
+      const int ms = Int(m, "ms", 0, 3600000).value_or(0);
+      {
+        std::lock_guard lock(mutex);
+        set_over = true;
+      }
+      NOTICE_LOG_FMT(NETPLAY, "Orca room: set over: the room stays open until the players leave "
+                              "({} s at most)",
+                     ms / 1000);
+      Orca::UX::SetEnd::Current().SetOver(Orca::UX::SetEnd::NowMs());
     }
     else if (t == "command-error")
     {
@@ -3035,6 +3123,18 @@ bool YouGameRoom::ArrivalPending() const
   });
 }
 
+std::vector<int> YouGameRoom::LeftSeatsPending() const
+{
+  std::lock_guard lock(m_impl->mutex);
+  std::vector<int> seats;
+  for (const PeerEvent& event : m_impl->events)
+  {
+    if (event.kind == PeerEvent::Kind::Left && !event.host && event.seat > 0)
+      seats.push_back(event.seat);
+  }
+  return seats;
+}
+
 bool YouGameRoom::HostLeftPending() const
 {
   std::lock_guard lock(m_impl->mutex);
@@ -3220,6 +3320,12 @@ bool YouGameRoom::MatchLive() const
 {
   std::lock_guard lock(m_impl->mutex);
   return !m_impl->match_id.empty() && !m_impl->set_done;
+}
+
+bool YouGameRoom::SetOver() const
+{
+  std::lock_guard lock(m_impl->mutex);
+  return m_impl->set_over;
 }
 
 void YouGameRoom::SetOpponentPlugged(bool plugged)

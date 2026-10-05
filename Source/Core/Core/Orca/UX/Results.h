@@ -150,6 +150,10 @@ public:
   // re-run is pending): the games they finish, in order.
   std::vector<GameResult> Confirm(int confirmed, int plug_frame);
   void Reset();
+  // The scene of the last final reading (none since the last reset), and of the newest reading
+  // stored (a first run's guess until it is final).
+  std::optional<Reading::Scene> FinalScene() const;
+  std::optional<Reading::Scene> LatestScene() const;
 
 private:
   std::map<int, Reading> m_pending;

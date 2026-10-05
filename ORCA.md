@@ -82,7 +82,7 @@ Online play is drop-in, through a private YouGame room of up to four (`Source/Co
 | `ORCA_JOIN` | `1`: join the friend's game in that room (also implied when the app opened an invite). |
 | `ORCA_TEST_KEYFRAME_DIR` | Tests only: keyframes go through this folder instead of YouGame. |
 | `ORCA_TEST_LEAVE_AT` | Tests only: a joined friend leaves at this frame. |
-| `ORCA_TEST_COMMANDS` | Tests only: `1` takes the embed protocol's stdin commands without embedding, `test-drop-room` (the room's connection drops once, as a network failure would) and `test-direct off\|on\|in\|out\|rebuild` (direct links drop every datagram, only incoming or outgoing ones, none again, or are built anew; "Direct links"). |
+| `ORCA_TEST_COMMANDS` | Tests only: `1` takes the embed protocol's stdin commands without embedding, `test-drop-room` (the room's connection drops once, as a network failure would), `test-direct off\|on\|in\|out\|rebuild` (direct links drop every datagram, only incoming or outgoing ones, none again, or are built anew; "Direct links") and `test-shot <name>` (a screenshot `ScreenShots/<name>.png` at the next present, a stall's redraws included; with `ORCA_TEST_PRESENT` the overlay is in it). |
 | `ORCA_DIRECT` | `0`: no direct links, the relay only (the hello stops offering them, so the friend's Orca uses the relay too). Default: on. |
 | `ORCA_DIRECT_FORCE` | Tests only: `turn` offers and accepts relayed candidates only (a link through Cloudflare TURN); `srflx` nothing on a host interface. |
 | `ORCA_DIRECT_LOOPBACK` | Tests only: `1` also offers loopback candidates, for two Orcas on one machine whose LAN address refuses a send to itself. |
@@ -2072,13 +2072,17 @@ beta: a best of 3, rated once per set, with the host's rules (YouGame `docs/ORCA
    {void}` ("limit"). The room settles each report by agreement on the outcome (winner, draw,
    void): different outcomes void the game; a detail read differently does not (since YouGame PR
    #489 the room keeps the lowest slot's, the host's, and logs both). It rates the set once.
-7. A ranked room closes with 4004 "match-over" after its result: a clean end. The host prints
-   `orca state friend-left match-over` and opens a fresh private room (never the closed code); the
-   joiner prints `orca state host-left match-over`, moves to port 1 and opens its own room too.
+7. After a ranked set's verdict the room stays open (`set-over`, Orca 0.3.17, `ux=13`: "Set over"
+   under "Set end on screen"): both games stay in their session on the results screen, with the
+   page's chat, until each player leaves; each Orca leaves the room by itself (as the app's `leave`
+   does) and its own character select comes back not ready. Only a room still open five minutes on
+   closes with 4004 "match-over": a clean end. The host then prints `orca state friend-left
+   match-over` and opens a fresh private room (never the closed code); the joiner prints `orca
+   state host-left match-over`, moves to port 1 and opens its own room too.
 
 Leaving: `leave` in a ranked set is a forfeit (the room's rule, 15 s). The survivor of a ranked set
 whose opponent went (the room still holds a match without a verdict) stays in the room with no
-session until the room's verdict (a forfeit or void, then 4004) or 30 s, then opens a room of its
+session until the room's verdict (a forfeit or void, then `set-over`, and it leaves) or 30 s, then opens a room of its
 own. In casual the host leaves the queue's room for a fresh private one as soon as the opponent is
 gone. A desync voids the match in progress (`finish {void}`) before the players part.
 
@@ -2096,7 +2100,7 @@ gone. A desync voids the match in progress (`finish {void}`) before the players 
 | `orca menu cancel` | The player backed out of searching (above). |
 | `unsupported host` | The `host` was refused. |
 | `orca result <json>` | With `results` agreed: the room's verdict, when it arrives (not at this Orca's own read). At most 300 bytes. |
-| `orca state friend-left match-over` / `orca state host-left match-over` | A ranked room closed after its result. |
+| `orca state friend-left match-over` / `orca state host-left match-over` | A ranked room closed after its result (since 0.3.17 only at set over's five-minute cap). |
 
 `orca result` shapes (the local player first; `n` the game's number in the casual pairing or the
 ranked set; `score` agreed wins; `d` the settled detail, the host's):
@@ -2104,8 +2108,9 @@ ranked set; `score` agreed wins; `d` the settled detail, the host's):
 - ranked game: `{"q":"ranked","k":"game","n":2,"out":...,"why"?:...,"score":[mine,theirs],"d"?:{...}}`
 - ranked set: `{"q":"ranked","k":"set","out":"won"|"lost"|"void","by":"games"|"forfeit","why"?:"desync"|"limit"|"unrecorded","score":[mine,theirs],"r"?:[before,after],"rank"?:"<24 chars>"}`
 
-The overlay toasts the same: "You won game 2 · 1–1", "You won the set 2–1", "Opponent left: you
-win the set", "This set doesn't count".
+The overlay toasts a ranked game's: "You won game 2 · 1–1". A set's verdict, and a casual game's,
+show as panels instead: VICTORY or DEFEAT with the rating's change, "<name> forfeited", "No contest"
+("Set end on screen").
 
 ### Room messages (queue rooms only: the welcome's `room.queue` casual or ranked)
 
@@ -2121,8 +2126,9 @@ win the set", "This set doesn't count".
   ran out of time. A report waits for the room's match (60 s at most). Friends rooms never begin
   or report.
 - Handled: `start` (the match id), `game-result` (a ranked game's verdict: the set's tally),
-  `result` (a set's or a casual game's verdict), `command-error` (logged; a refused begin tries
-  again), the socket's 4004 close.
+  `result` (a set's or a casual game's verdict), `set-over` (the room stays open after the set:
+  "Set over" under "Set end on screen"), `command-error` (logged; a refused begin tries again; in
+  set over every lobby command is refused, "The set is over"), the socket's 4004 close.
 
 ### Results (`Core/Orca/UX/Results.*`, read only)
 
@@ -2169,7 +2175,8 @@ latter also under `YG_SYNCTEST=7` (0 RAM mismatches, the same result); `OrcaResu
 
 ### Tests
 
-`Tools/orca/queue-e2e.mjs <nogui> <disc> [--pplus <dol>] [--queue ranked|casual] [--scenario cancel]`:
+`Tools/orca/queue-e2e.mjs <nogui> <disc> [--pplus <dol>] [--queue ranked|casual] [--scenario cancel]`
+(and with `--q2`, `--scenario kill`: "Set end on screen"):
 two headless Orcas (one for `cancel`), each behind a stand-in for the desktop app's bridge that
 plays the page's part exactly (caps, Orca's own tickets, the queue ticket and `/match`,
 `host`/`join`, the `match_room` rewrite) and serves the app's controller stream, whose pad the
@@ -2715,6 +2722,110 @@ decision turning 1 at time-up, sudden death staying in `scMelee`); a harness set
 `ORCA_TEST_MATCH_BLOCK=ranked ORCA_TEST_SET_RULES=1,1` (a level time-up is a tie, the tiebreak game
 and one more game win the set 2-0, a fourth game isn't recorded), also under `YG_SYNCTEST=7`, and
 Project+'s 2-0 under `YG_SYNCTEST=7`. Not checked live: a real ledge grab count.
+
+## Set end on screen
+
+Luis, 2026-10-04: "after winning or losing a set, we should get a victory or loss overlay that
+shows the results and elo change ... when someone leaves, I'm just kind of stuck in the match
+confused about what's going to happen ... maybe add a countdown that's like seconds until opponent
+forfeits". `Core/Orca/UX/SetEnd.*` (the model, pure, and its layout), drawn with the overlay's
+widgets (`Core/Orca/UX/Widgets.*`: panel, title, line, big number, countdown, rating change; every
+colour and shape is there, so restyling them to the game's look touches that file only). Local
+display: nothing is written to the game, and the compatibility key is unchanged.
+
+- **VICTORY / DEFEAT** (ranked). The match block's set over on the results screen (first runs,
+  `RankedSet::Frame`) opens the panel at once: the title, the set's score with the player's games
+  first ("2–1"), "vs <name>", and the rating. The room's verdict on the set opens it too when the
+  block didn't (and settles the score). The rating counts from the old number (the page's `queue
+  rating` going in, or the room's `before`) to the new one over 1 s, eased, then pops (the number
+  and a "+16" green / "–15" red / "±0" grey badge swell 28% and settle in 0.45 s). The new number is
+  the room's (its `result` carries the site's ratings) or the page's second `queue rating`; the
+  page's old number sent again is ignored. "Rating updating…" under the old number until it comes,
+  and no rating at all after 10 s. The panel stays 7 s, or 3 s after the count lands, 15 s at most.
+- **Set over** (Orca 0.3.17, `ux=13`; YouGame `docs/ORCA_ONLINE_UX.md` "3B set over", PRs #521 and
+  #522). Luis, 2026-10-04: the players stay connected on the victory screen and can talk there;
+  only leaving it disconnects them, and each can hold Z to leave at once. After a ranked set's
+  verdict the room sends `{"t":"set-over","matchId","until","ms":300000}` and stays open, relay and
+  chat, for five minutes at most (then 4004). Orca keeps the session running through the results
+  screen (nobody goes solo at the verdict) and each game leaves the room by itself
+  (`OnlineMatch.cpp` `SetOverLeave`, the app's `leave` path), once:
+  - its results screen is over: the newest final reading's scene (`ResultsTracker::FinalScene`) is
+    no longer the results screen. Both players pressing on in the game's own flow moves both games
+    on at the same frame, so both leave together; a verdict that finds the game elsewhere (a
+    forfeit's, mid-fight) leaves at once;
+  - the player holds Z 1.5 s on the results screen (this player's own pad as the boundary read it
+    for the game, before the input gate, which keeps Z from the game there since `ux=11`). The
+    overlay shows "Hold Z to leave" near the bottom, with a bar that fills as Z is held;
+  - with the opponent's game gone (their leave, the host's session idle, or a joiner solo), Start
+    or A ("Press Start to continue · Hold Z to leave").
+  Nothing is a forfeit in set over: the opponent leaving the room shows "<name> left" (the room's
+  leave, or their game going quiet; gone once this player leaves too), the game that stays keeps the room
+  (`AfterFriendsGone`, `HostGone`) and leaves the same way, no stall is claimed (`MatchLive` is
+  false once the set is decided) and no countdown shows. A host still waiting for a forfeit's
+  verdict (`Linger`) stops waiting at `set-over`. The joiner's game keeps the room's header while
+  it stays (`WantedRulesMode`). Inputs still stream through set over: the results screen is a
+  session frame like any other (the room relays for up to five minutes).
+- **No search by itself after a ranked set** (Luis, 2026-10-04). A ranked queue room where a fight
+  was played (a set played there, finished or forfeited; `NoteRankedFight`, the newest reading's
+  scene) puts back the player's own character select **not ready** (`Queue::AfterRestore(false)`):
+  no `orca queue ready`, so the page doesn't search; Start does. The Start (or A) that left the
+  results screen is often still held as the player's own game comes back: it readies nobody until
+  it is let go (`Queue::FLAG_SWALLOW_START`, written at that game's first alone boundary, as the
+  ready flag's clearing is). Casual searches again by itself as before, and so does a ranked room
+  left before any fight (a no-show, a mismatch).
+- **Casual:** each game's verdict shows a smaller YOU WON / YOU LOST / DRAW with the sitting's
+  score in this room ("2–1  vs bo"), 6 s.
+- **The opponent disconnected** (ranked, mid-set): a centred notice, "<name> disconnected · They
+  forfeit in" with a ring that drains round the seconds left ("0:09"). The truth end to end:
+  - The room's `leave` (their socket closed: a quit, a crash, a killed app): the room awards the
+    forfeit its GRACE, 15 s, after it (`rooms/src/game-lobby.ts`, `tick`), unless they come back in
+    time. The countdown runs from the leave reaching this Orca. A queue room's host that was waiting
+    on their inputs unplugs them at once (`LeftSeatsInPlay`; before, it waited out the 10 s
+    silence limit frozen) and plays on meanwhile; HostEvents hears the leave at the next boundary.
+  - No leave, just silence (a frozen game, a dead network that keeps the socket): the session's
+    stall gives up after 10 s (`PEER_SILENCE_LIMIT`) and claims the set (`ReportStall`), which the
+    room lets stand at once, since it too has heard nothing for 9 s (`STALL_SILENCE_MS`) by then.
+    Shown once the stall is 1.5 s long (so "0:09"); their inputs coming again take it away.
+  - A leave during a stall counts from the leave. Past zero the notice stays at 0:00 until the
+    verdict, 20 s at most; the end of `VERDICT_WAIT` without one takes it away.
+  - The verdict, a forfeit won: "<name> forfeited · You win the set" for 2.5 s, then VICTORY "by
+    forfeit" with the rating.
+  The plain OSD lines this replaces in queue rooms ("Your friend's game stopped responding", "<name>
+  left: you play on", "You left <name>'s game") are no longer shown there.
+- **Casual leave:** "<name> left · Searching again", 4 s.
+- **This player left** a ranked set (the app's `leave`, or no character picked in time): "You left ·
+  This set counts as a loss" ("Time's up · You didn't pick in time..."), 4 s, over its own character
+  select.
+- `ORCA_UX_SETEND_DEMO=victory|defeat|countdown|casual|left|stay` (tests only, with test knobs
+  allowed) plays one of them through every 16 s from the first overlay frame, for design checks
+  (`stay`: set over's VICTORY, the hint, Z held, the opponent leaving).
+
+Checked 2026-10-04 (Orca 0.3.17, M4 Pro, headless, Project+): 396 `Orca*` unit tests pass (18
+skipped): `OrcaSetEnd*` (the count's phases, easing, pop and retargeting, whole seconds left, the
+leave and stall countdowns and which wins, back in time, only mid ranked set, the block's panel
+once, the room's and the page's ratings, the waits, void sets, a new match, leaving, casual, set
+over: no forfeit after the verdict, "<name> left", the leave hint and Z's bar, and every screen
+drawn at every stage without an ImGui assert) and
+`OrcaQueue.AStartHeldThroughTheWayBackIsSwallowedUntilLetGo`. `YG_SYNCTEST=7 YG_SYNCTEST_FROM=170`
+over `pplus-ranked.txt` (`ORCA_TEST_QUEUE=ranked:1 ORCA_UX_TEST_NAMES=ada,bo YG_RESULTS=1`, to frame
+9400): 61,761 re-run frames, 0 RAM mismatches, through game 1 and its results screen into game 2's
+stage select (the input predates the stage select's two cursors, so game 2's fight isn't reached).
+Two Orcas over yougame.co (`Tools/orca/queue-e2e.mjs --q2 --queue ranked --pplus <dol>`, dev
+tickets, with `--shots 0 --shots-who ada,bo --shots-size 1280x720 --shots-out <dir>` for the
+screenshots):
+- the set (`--scenario match`): 2-0, VICTORY on one side and DEFEAT on the other, the page's ratings
+  counted in (1532 to 1548, 1488 to 1473); `set-over` on both with the verdict; both stayed on the
+  results screen (3 s and more, nobody leaving by itself), then both pressed on and both games left
+  the room at the same frame; both back on their own character select not ready; 231 checksums
+  matched on each side;
+- `--scenario zleave`: the joiner held Z on the results screen and left (1.5 s); the host showed
+  "bo left", no forfeit, stayed, and left on Start; both back not ready, with no `orca queue ready`
+  in the 5 s after (the first run of it caught the Start that left the results screen readying the
+  host's own character select: `FLAG_SWALLOW_START`); 230 checksums matched on each side;
+- `--scenario kill`: the joiner's Orca killed mid-fight in game 2; the host's countdown from the
+  room's leave (heard 108 ms after the kill), the forfeit verdict 14,963 ms after it (the countdown
+  said 15 s), `set-over`, the host out of the room at once, VICTORY by forfeit with the page's
+  rating over its own character select, not ready.
 
 ## Ranked stage flow
 
@@ -3412,8 +3523,9 @@ The page owns the room: Orca never leaves on a skip or a timeout by itself.
   loaded as the state of the next frame (as a keyframe is: a new ring, the NAND replaced), the pad
   goes to port 1 and a room of its own opens (a former joiner had none: no more `no-room`). The
   player is ready again, so Orca prints `orca queue ready` again, unless their own ready timer ran
-  out (`timeout me`). A `host` or `join` that comes before the restore waits for it at the same
-  boundary. Backing out to the menus drops the image.
+  out (`timeout me`) or a ranked set was played in that room (since 0.3.17: "No search by itself
+  after a ranked set" under "Set end on screen"). A `host` or `join` that comes before the restore
+  waits for it at the same boundary. Backing out to the menus drops the image.
 - **Later games:** casual comes back to the room's character select with the same opponent,
   characters free (no locks), ready again, but with **no timer** (Luis, 2026-10-04: "I kind of like
   that players can message each other and have a little bit more time to be social"): the
@@ -3695,7 +3807,7 @@ window (layout, scroll, resize, full screen). Moving, minimizing or hiding the w
 | `prepare-join` | The host invited a friend to drop in. It calls `Orca::Online::PrepareJoin()`: the next frame boundary captures a keyframe ("Drop-in"). |
 | `join <code>` / `leave` | With `caps join` / `caps leave`: into a friend's game, or out of one ("Drop-in"). Both are also taken while a launch join waits for the keyframe. |
 | `host <code>` / `queue-cancel` | With `caps host` (Orca 0.4.0 on): host the room the queue matched this game into, or the search ended ("Matchmaking"). `unsupported host` when refused. With `caps queue2`, `queue-cancel` also un-readies the player on the queue's own character select (`orca queue unready` follows). |
-| `queue rating <n\|->` | With `caps queue2`: this player's rating in the current queue (ranked; 0-65534) or none (`-`), sent before `host` or `join`. It rides the player's queue identity to the other Orca, which shows it by the player's panel ("The queue's character select"). Anything else answers `unsupported queue`. |
+| `queue rating <n\|->` | With `caps queue2`: this player's rating in the current queue (ranked; 0-65534) or none (`-`), sent before `host` or `join`. It rides the player's queue identity to the other Orca, which shows it by the player's panel ("The queue's character select"). Sent again after a ranked set, once the site rated it: the VICTORY / DEFEAT panel counts to the new number ("Set end on screen"). Anything else answers `unsupported queue`. |
 | `direct on` / `direct off` | With `caps direct` (Orca 0.3.9 on): the player's switch for direct links to the other players ("Direct links"). On until the app says; the choice stays for the run and applies while the `caps` line has `direct`. `off` drops every link at the room's next tick and sends every input through the relay (as YouGame's ticket switch does); `on` builds them anew. The `orca stats` line's `tx` shows the path in use. Anything else answers `unsupported direct`. |
 | `delay auto` / `delay N` | With `caps delay` (Orca 0.3.5 on): this player's input delay. `N` from 1 to 6 frames is exactly that, never adapted; `auto` is the adaptive delay ("Input delay" below). The choice stays for the run, so it may come before a session and holds for every session after; until the app's `caps` line turns `delay` on, it waits. Mid-match it applies from this player's next frame and the friend needs nothing: each player's delay is its own, and every input travels explicitly. Anything else answers `unsupported delay`. The `orca stats` line's `delay` is the delay in use. |
 | `chat <name> <text>` | With `caps chat`: a line someone else wrote in the YouGame page's chat, which the page sends only while Orca fills the screen (its own chat can't be seen then). Each field is `encodeURIComponent` of UTF-8, so only `A-Z a-z 0-9 - _ . ! ~ * ' ( )` and `%XX`: the name at most 24 code points (288 encoded), the text at most 140 (1680), the page cutting longer ones with "…". Orca shows `<name>: <text>` at the top left, under the toasts and clear of the top-centre lines and of Dolphin's own messages (OSD rows such as "Screenshot saved" push the toasts and the chat down, `OSD::MessagesBottom`), the name in the circle's blue, wrapped to 45% of the width, for 8 s, the newest three (`UX/Chat.h`, `UX/Overlay.h`). Host-only drawing: never game memory, no compatibility key change, and the text is never printed to stdout or stderr or logged. A malformed line (a bad escape, bad UTF-8, a control character or line break, a field too long or empty, a third field) answers `unsupported chat` and nothing more. Glyphs the OSD font lacks (emoji) show as `?`. |

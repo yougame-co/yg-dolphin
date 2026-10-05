@@ -20,6 +20,7 @@
 #include "Core/Orca/UX/OnlineMenu.h"
 #include "Core/Orca/UX/RankedPPlus.h"
 #include "Core/Orca/UX/RankedSet.h"
+#include "Core/Orca/UX/SetEnd.h"
 #include "Core/Orca/UX/StageCursors.h"
 #include "VideoCommon/AsyncRequests.h"
 #include "VideoCommon/OnScreenDisplay.h"
@@ -617,8 +618,14 @@ void Draw()
 {
   const double now = NowMs();
   s_overlay.Update(s_demo ? DemoLink(now) : ViewOf(Events::GetLinkStats()), now);
-  const OverlayModel::Frame f = s_overlay.View(now, s_stats.load(std::memory_order_relaxed),
-                                               s_perf.load(std::memory_order_relaxed));
+  OverlayModel::Frame f = s_overlay.View(now, s_stats.load(std::memory_order_relaxed),
+                                         s_perf.load(std::memory_order_relaxed));
+  // The set's end and the opponent's disconnect (SetEnd.h): its notice says more than "Waiting
+  // for <name>…", which goes meanwhile.
+  SetEnd::DemoFrame(now);
+  const SetEnd::View set_end = SetEnd::Current().At(now);
+  if (set_end.hides_waiting)
+    f.waiting.clear();
   // The matchmaking search (UX/OnlineMenu.h), while the player waits on the character select; the
   // queue's character select's lines (UX/Queue.h) in their place when it has any.
   auto [search, search_note] = Search::Lines();
@@ -662,7 +669,7 @@ void Draw()
   const StageCursors::View cursors = StageCursors::Current();
   if (!f.show_signal && f.waiting.empty() && f.toasts.empty() && f.chats.empty() &&
       f.stats.empty() && f.perf.empty() && search.empty() && search_note.empty() &&
-      rules.empty() && rules_note.empty() && !any_label && !cursors.on)
+      rules.empty() && rules_note.empty() && !any_label && !cursors.on && set_end.Empty())
   {
     return;
   }
@@ -813,6 +820,21 @@ void Draw()
         break;
       y += ChatLine(dl, text_size, ImVec2(margin, y), wrap, c) + unit;
     }
+  }
+  // Over everything else, in the game's picture (the window can letterbox or pillarbox it).
+  if (!set_end.Empty())
+  {
+    ImVec2 pic(0, 0), pic_size = screen;
+    if (g_presenter)
+    {
+      const MathUtil::Rectangle<int>& r = g_presenter->GetTargetRectangle();
+      if (r.GetWidth() > 0 && r.GetHeight() > 0)
+      {
+        pic = ImVec2(static_cast<float>(r.left), static_cast<float>(r.top));
+        pic_size = ImVec2(static_cast<float>(r.GetWidth()), static_cast<float>(r.GetHeight()));
+      }
+    }
+    SetEnd::Draw(dl, unit, pic.x, pic.y, pic_size.x, pic_size.y, set_end);
   }
 }
 }  // namespace

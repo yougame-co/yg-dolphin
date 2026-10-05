@@ -971,7 +971,16 @@ void Presenter::RepresentLast()
   // Present() flushes a pending vertex batch: only when there is none, so this host-timed redraw
   // never changes when the emulated GPU's work is submitted.
   if (m_xfb_entry && g_vertex_manager->IsFlushed())
+  {
     Present();
+    // Orca tests (ORCA_TEST_PRESENT): a screenshot asked for while the game waits for a friend
+    // takes this redraw, overlay and all (never a frame dump's extra frame).
+    if (m_test_target && !Config::Get(Config::MAIN_MOVIE_DUMP_FRAMES) &&
+        g_frame_dumper->IsFrameDumping())
+    {
+      ProcessFrameDumping(m_last_xfb_ticks);
+    }
+  }
 }
 
 void Presenter::Present(PresentInfo* present_info)

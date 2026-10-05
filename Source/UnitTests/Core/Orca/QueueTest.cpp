@@ -219,6 +219,44 @@ TEST(OrcaQueue, TheBThatStopsTheSearchIsSwallowedUntilLetGo)
   EXPECT_FALSE(Gate(Solo(), s)[0].buttons & B);
 }
 
+// Back on its own character select not ready after a room (a ranked set played there): the Start
+// that left the results screen, still held, readies nobody; a new Start does.
+TEST(OrcaQueue, AStartHeldThroughTheWayBackIsSwallowedUntilLetGo)
+{
+  State s;
+  s.flags = FLAG_SWALLOW_START;
+  // Its press lands on the restored game: Start in this frame, not in the image's last.
+  s = Step(Press(Solo(), START), s, 500);
+  EXPECT_EQ(s.ready, 0);
+  EXPECT_TRUE(s.flags & FLAG_SWALLOW_START);
+  View held = Solo();
+  held.raw = {START, 0};
+  held.raw_prev = {START, 0};
+  s = Step(held, s, 501);
+  EXPECT_EQ(s.ready, 0);
+  EXPECT_TRUE(s.flags & FLAG_SWALLOW_START);
+  // Let go: over; the next Start readies.
+  View free = Solo();
+  free.raw_prev = {START, 0};
+  s = Step(free, s, 502);
+  EXPECT_FALSE(s.flags & FLAG_SWALLOW_START);
+  EXPECT_EQ(s.ready, 0);
+  s = Step(Press(Solo(), START), s, 503);
+  EXPECT_EQ(s.ready, 1);
+  // Not held at all when it came back: the first Start readies.
+  State t;
+  t.flags = FLAG_SWALLOW_START;
+  t = Step(Solo(), t, 600);
+  EXPECT_FALSE(t.flags & FLAG_SWALLOW_START);
+  t = Step(Press(Solo(), START), t, 601);
+  EXPECT_EQ(t.ready, 1);
+  // Idempotent (a boundary run again computes the same).
+  State u;
+  u.flags = FLAG_SWALLOW_START;
+  const State once = Step(Press(Solo(), START), u, 700);
+  EXPECT_EQ(Step(Press(Solo(), START), once, 700), once);
+}
+
 TEST(OrcaQueue, ItsOwnCharacterSelectsMasks)
 {
   State s;

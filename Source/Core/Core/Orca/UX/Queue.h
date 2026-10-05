@@ -57,7 +57,9 @@ class CPUThreadGuard;
 // - **After the room** (skip, timeout, the opponent gone, a set over): the session puts back this
 //   player's own game as it was when the match came (OnlineMatch's queue image), so each player is
 //   on their own queue character select with their pick, on port 1, and Orca prints
-//   `orca queue ready` again if they were ready.
+//   `orca queue ready` again if they were ready: casual searches again by itself. Not after a
+//   ranked room where a set was played (a fight there, finished or forfeited) or after this
+//   player's own ready timer ran out: they are back not ready and press Start to search again.
 //
 // What decides anything in the game is a pure function of emulated memory, the hook's frame number
 // and the session's synced values (the plugged ports, each port's queue identity), written only
@@ -102,6 +104,10 @@ constexpr u8 FLAG_TIMED_OUT = 0x02;  // casual's time up: frozen until the pages
 // The queue's own character select: the B that stopped the search is still held, and the game
 // doesn't see it until it is let go (else the token would come back up).
 constexpr u8 FLAG_SWALLOW_B = 0x04;
+// The queue's own character select, put back not ready after a room (AfterRestore): the Start (or
+// A) that left the room's results screen may still be held, and it readies nobody until it is let
+// go (else that press would start a search the player never asked for).
+constexpr u8 FLAG_SWALLOW_START = 0x08;
 
 // 30 s to ready up, 1.5 s of Z to skip, at the game's 60 frames a second.
 constexpr int READY_FRAMES = 30 * 60;
@@ -290,9 +296,10 @@ bool SoloReady();
 // The last alone first-run boundary saw the queue's own character select.
 bool OnSoloCss();
 // The session put back the player's own game after a room (OnlineMatch's queue image). `keep_ready`
-// false (this player's own ready timer ran out): the ready flag is cleared at the next boundary, so
-// the search doesn't start again by itself.
-void AfterRestore(bool keep_ready);
+// false (this player's own ready timer ran out, or a ranked set was played there: Luis,
+// 2026-10-04, the player presses Start to search again): the ready flag is cleared at the next
+// boundary, so the search doesn't start again by itself. `why` is for the log.
+void AfterRestore(bool keep_ready, const char* why = "");
 // The app's `queue-cancel`: its search ended, so on the queue's own character select the player
 // isn't ready any more (cleared at the next alone boundary; `orca queue unready` follows).
 void ClearReady();

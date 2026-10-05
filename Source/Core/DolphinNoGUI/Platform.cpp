@@ -11,6 +11,8 @@
 #include <fmt/format.h>
 
 #include "AudioCommon/AudioCommon.h"
+#include "Common/CommonPaths.h"
+#include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
@@ -25,8 +27,10 @@
 #include "Core/Orca/UX/OnlineMenu.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/UX/Queue.h"
+#include "Core/Orca/UX/SetEnd.h"
 #include "Core/Rollback/OnlineMatch.h"
 #include "Core/System.h"
+#include "VideoCommon/FrameDumper.h"
 
 Platform::~Platform() = default;
 
@@ -317,7 +321,12 @@ void Platform::ProcessEmbedCommands()
         Orca::UX::Queue::SetOwnRating(-1);
       else if (what == "rating" && error == std::errc{} && end == value.data() + value.size() &&
                rating >= 0 && rating <= 0xFFFE)
+      {
         Orca::UX::Queue::SetOwnRating(rating);
+        // After a set, the page's second line: the new rating, once the site rated the set (the
+        // VICTORY / DEFEAT panel counts to it, UX/SetEnd.h).
+        Orca::UX::SetEnd::Current().QueueRating(rating, Orca::UX::SetEnd::NowMs());
+      }
       else
         Embed::Out("unsupported queue");
     }
@@ -387,6 +396,23 @@ void Platform::ProcessEmbedCommands()
         Orca::UX::ShowChat(std::move(chat->name), std::move(chat->text));
       else
         Embed::Out("unsupported chat");
+    }
+    else if (cmd == "test-shot" && Orca::GetEnv("ORCA_TEST_COMMANDS") == "1")
+    {
+      // Tests only: a screenshot named <name> (a-z 0-9 - _) at the next present, into the user
+      // folder's ScreenShots; with ORCA_TEST_PRESENT the overlay is in it, a stall's redraws too.
+      std::string name;
+      in >> name;
+      const bool valid = !name.empty() && name.size() <= 64 &&
+                         std::all_of(name.begin(), name.end(), [](char c) {
+                           return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' ||
+                                  c == '_';
+                         });
+      const std::string dir = File::GetUserPath(D_SCREENSHOTS_IDX);
+      if (valid && g_frame_dumper && File::CreateFullPath(dir))
+        g_frame_dumper->SaveScreenshot(dir + name + ".png");
+      else
+        Embed::Out("unsupported test-shot");
     }
     else if (cmd == "test-drop-room" && Orca::GetEnv("ORCA_TEST_COMMANDS") == "1")
     {

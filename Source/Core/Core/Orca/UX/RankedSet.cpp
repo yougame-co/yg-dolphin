@@ -15,6 +15,8 @@
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/Probe.h"
+#include "Core/Orca/UX/Queue.h"
+#include "Core/Orca/UX/SetEnd.h"
 
 namespace Orca::UX::RankedSet
 {
@@ -457,6 +459,16 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating)
       return std::pair<u8, u8>(3, 8);
     }();
     WriteSetRules(memory, after, s_rules.first, s_rules.second);
+  }
+  // The set's end on screen (SetEnd.h, local display on first runs only): VICTORY or DEFEAT on the
+  // results screen of the game that decided it.
+  if (!resimulating && after.done == 1 && facts.scene == Scene::Results && after.games > 0 &&
+      after.winner != NO_PORT)
+  {
+    const int me = s_local_port.load(std::memory_order_relaxed) == 1 ? 1 : 0;
+    const GameRecord& last = after.records[std::min(after.games, u8(SetBlock::MAX_RECORDS)) - 1];
+    SetEnd::Current().BlockSetOver(last.start, after.winner == me, after.wins[me],
+                                   after.wins[1 - me], Queue::OwnRating(), SetEnd::NowMs());
   }
   const bool fighting = facts.scene == Scene::Fight || facts.scene == Scene::Between;
   const u32 packed = 0x80000000u | (fighting ? 1u << 30 : 0) | (u32(after.done & 3) << 24) |

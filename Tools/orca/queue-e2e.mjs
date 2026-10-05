@@ -27,6 +27,15 @@
 // meet in a new room, the skipper first so it hosts from port 1: the quick rematch; a game there,
 // the joiner leaves, both back and ready), timeout (casual: nobody readies, both print `orca queue
 // timeout me`, leave, and are back on their own character select, not ready).
+// kill (ranked): after game 1 the joiner's Orca is killed mid-fight in game 2; the host counts the
+// forfeit down from the room's leave (15 s), the verdict comes when it said, VICTORY by forfeit;
+// leave (ranked): the same with the joiner's own `leave` ("You left" on its screen). A ranked set
+// to its end also checks VICTORY on one side and DEFEAT on the other, with the page's new rating
+// (`queue rating` again, --rating-after ms after the verdict) counted in ("Set end on screen"), and
+// the room after it (set over): both stay in the room on the results screen until each leaves it,
+// by pressing on through the results screen (match), or, zleave (ranked), the joiner by holding Z
+// there ("<name> left" on the host's, which then presses Start); no forfeit either way, and after a
+// ranked set both are back on their own character select not ready (Start searches again).
 // Every --q2 scenario ends with the checksum gate: each session either Orca ended (its "Drop-in:
 // back to solo play ... N checksums matched" line) matched checksums with the other (N > 0), and
 // neither logged a desync or a failed session.
@@ -74,9 +83,18 @@ const ALARM = Number(opt("--alarm", "900"));
 // queues first, hosts from port 1, and they play another game.
 const SCENARIO = opt("--scenario", "match");
 // --shots <every>: the first Orca renders with Metal and saves a screenshot every that many frames
-// (its user folder's ScreenShots), from --shots-from (default 1500).
+// (its user folder's ScreenShots), from --shots-from (default 1500); 0: only the scenario's own
+// (`test-shot`: the set's end on screen, the disconnect's countdown). --shots-who ada|bo|ada,bo:
+// which Orcas render (default ada); --shots-size WxH (default 640x528); --shots-out <dir>: the
+// scenario's own shots are copied there at the end.
 const SHOTS = opt("--shots");
 const SHOTS_FROM = opt("--shots-from", "1500");
+const SHOTS_WHO = (opt("--shots-who", "ada") || "").split(",");
+const SHOTS_SIZE = opt("--shots-size", "640x528");
+const SHOTS_OUT = opt("--shots-out");
+// The page's second `queue rating` (ranked, --q2): the new rating, this long after the set's
+// verdict (the YouGame page sends it once the site rated the set; +16 a win, -15 a loss here).
+const RATING_AFTER_MS = Number(opt("--rating-after", "1500"));
 const Q2 = argv.includes("--q2");
 const PROFILE = PPLUS ? "pplus32" : "rsbe01";
 const DEV_GAME = `orca-queue-e2e-${PROFILE}`;
@@ -132,6 +150,16 @@ class Side {
     this.queueLog = []; // Orca's "Queue: ..." log lines (UX/Queue.h, OnlineMatch's queue image)
     this.sessions = []; // each session's end: { frame, why, rollbacks, checksums }
     this.desyncs = []; // "Desync at frame ..." and "the session failed" log lines
+    this.setEndLog = []; // { at, line }: "Set end: ..." (UX/SetEnd.h) and the host's stall break
+    this.rating = -1; // the rating the page gave (`queue rating`)
+    this.shots = []; // the scenario's own screenshots (test-shot)
+  }
+
+  // The scenario's own screenshot (`test-shot`), when this Orca renders.
+  shot(name) {
+    if (!SHOTS || !SHOTS_WHO.includes(this.name)) return;
+    this.send(`test-shot ${name}`);
+    this.shots.push(name);
   }
 
   async startBridge() {
@@ -300,12 +328,12 @@ class Side {
       if (k.startsWith("ORCA_TEST_") && !(k in env)) env[k] = v;
     }
     if (PPLUS) env.ORCA_PROFILE = "PPLUS32";
-    const shots = SHOTS && this.name === "ada";
+    const shots = SHOTS && SHOTS_WHO.includes(this.name);
     if (shots)
       Object.assign(env, {
         YG_SHOT_EVERY: SHOTS,
         YG_SHOT_FROM: SHOTS_FROM,
-        ORCA_TEST_PRESENT: "640x528",
+        ORCA_TEST_PRESENT: SHOTS_SIZE,
       });
     const args = [
       "-n",
@@ -334,6 +362,9 @@ class Side {
       "Logger.Options.Verbosity=3",
       "-C",
       "Logger.Options.WriteToConsole=True",
+      // The scenario's own shots only (--shots 0): Dolphin's own OSD rows ("Screenshot saved
+      // to ...") stay out of them.
+      ...(shots && SHOTS === "0" ? ["-C", "Dolphin.Interface.OnScreenDisplayMessages=False"] : []),
       ...(PPLUS
         ? ["-C", `Dolphin.Core.DefaultISO=${DISC}`, "-e", PPLUS]
         : ["-e", DISC]),
@@ -379,6 +410,14 @@ class Side {
           });
           log(`${this.name}~ ${solo[0]}`);
         }
+        const se =
+          /(Set end: .*|Drop-in: port \d left the room while .*|Matchmaking: set over: .*|Orca room: set over.*)$/.exec(
+            line,
+          );
+        if (se) {
+          this.setEndLog.push({ at: Date.now(), line: se[1] });
+          log(`${this.name}~ ${se[1]}`);
+        }
         if (/Desync at frame|the session failed/.test(line)) {
           this.desyncs.push(line);
           log(`${this.name}~ ${line}`);
@@ -406,8 +445,18 @@ class Side {
         fail(`${this.name}: a line over 300 bytes: ${line}`);
       log(`${this.name}> ${line}`);
       if (line.startsWith("orca error desync")) fail(`${this.name}: desync`);
-      if (line.startsWith("orca result "))
-        this.results.push(JSON.parse(line.slice(12)));
+      if (line.startsWith("orca result ")) {
+        const r = JSON.parse(line.slice(12));
+        this.results.push(r);
+        // The page's second `queue rating`: the new rating, once the site rated the set.
+        if (Q2 && r.q === "ranked" && r.k === "set" && r.out !== "void" && this.rating >= 0) {
+          const after = this.rating + (r.out === "won" ? 16 : -15);
+          setTimeout(() => {
+            if (this.exited === undefined) this.send(`queue rating ${after}`);
+          }, RATING_AFTER_MS);
+          this.rating = after;
+        }
+      }
     }
     this.lines.push(line);
     for (const w of [...this.waiters]) w();
@@ -953,7 +1002,8 @@ async function q2Search(side, queue, from) {
     fail(`${side.name}: ready before the player pressed Start`);
   const ready = await q2Ready(side, queue);
   side.pick = [Number(ready.m[2]), Number(ready.m[3])];
-  side.send(`queue rating ${queue === "ranked" ? (side.name === "ada" ? 1532 : 1488) : "-"}`);
+  side.rating = queue === "ranked" ? (side.name === "ada" ? 1532 : 1488) : -1;
+  side.send(`queue rating ${side.rating >= 0 ? side.rating : "-"}`);
   return search(side, queue);
 }
 
@@ -1019,9 +1069,15 @@ async function q2Fight(host, joiner) {
   await sleep(6000);
   joiner.pad.axes = [0, 128, 128, 128];
   const hostFrom = host.lines.length;
+  const setEndFrom = [host.setEndLog.length, joiner.setEndLog.length];
+  const resultsFrom = [host.results.length, joiner.results.length];
   await host
     .waitScene("scVsResult", 240000)
     .finally(() => (joiner.pad.axes = [128, 128, 128, 128]));
+  // The set's last game: VICTORY on one side, DEFEAT on the other (UX/SetEnd.h); then the room
+  // after the set, until both left it.
+  if (QUEUE === "ranked" && (await setEndPanels([host, joiner], setEndFrom, resultsFrom)))
+    return setOverLeave(host, joiner, setEndFrom);
   await sleep(4000);
   const presser = setInterval(() => {
     if (host.scene !== "scVsResult") return;
@@ -1035,6 +1091,119 @@ async function q2Fight(host, joiner) {
     ]);
   } finally {
     clearInterval(presser);
+  }
+}
+
+// The first "Set end: ..." line from `from` on that matches, within `ms`.
+async function waitSetEnd(side, re, ms, from = 0) {
+  const end = Date.now() + ms;
+  for (;;) {
+    const hit = side.setEndLog.slice(from).find((e) => re.test(e.line));
+    if (hit) return hit;
+    if (Date.now() > end) return null;
+    await sleep(100);
+  }
+}
+
+// On the results screen of a ranked game: if the match block ended the set there, each side's
+// panel opened (VICTORY for the winner, DEFEAT for the loser) and the room's verdict came; with
+// shots, each rendering side's panel as it waits for the rating, counts and lands.
+async function setEndPanels(sides, from, resultsFrom) {
+  const opened = await Promise.all(
+    sides.map((s, i) => waitSetEnd(s, /^Set end: (VICTORY|DEFEAT) /, 4000, from[i])),
+  );
+  if (!opened.some((x) => x)) return false; // not the set's last game
+  for (let i = 0; i < sides.length; ++i)
+    if (!opened[i]) fail(`${sides[i].name}: no VICTORY or DEFEAT panel at the set's end`);
+  const titles = opened.map((x) => /^Set end: (\w+)/.exec(x.line)[1]);
+  if (titles[0] === titles[1]) fail(`both sides show ${titles[0]}`);
+  log(`set end on screen: ${sides.map((s, i) => `${s.name} ${titles[i]}`).join(", ")}`);
+  await Promise.all(
+    sides.map(async (s, i) => {
+      await sleep(400);
+      s.shot(`${s.name}-set-open`);
+      await waitFor(
+        () => s.results.slice(resultsFrom[i]).some((r) => r.k === "set"),
+        15000,
+        `${s.name}: no verdict on the set`,
+      );
+      const verdict = Date.now();
+      await sleep(Math.max(0, verdict + RATING_AFTER_MS + 450 - Date.now()));
+      s.shot(`${s.name}-set-count`);
+      await sleep(700);
+      s.shot(`${s.name}-set-land`);
+      await sleep(1600);
+      s.shot(`${s.name}-set-settled`);
+      if (!(await waitSetEnd(s, /^Set end: the page's rating/, 4000, from[i])))
+        fail(`${s.name}: the page's new rating never reached the panel`);
+    }),
+  );
+  return true;
+}
+
+// The room after a ranked set (set over, YouGame docs/ORCA_ONLINE_UX.md "3B set over"): the room
+// said so to both, both stay on the results screen in the room and the session, and each leaves
+// it by itself: by pressing on through the results screen (both), or (zleave) the joiner by holding
+// Z there, after which the host hears "<name> left" (no forfeit) and leaves with Start. Nothing
+// counts a forfeit down after the set.
+async function setOverLeave(host, joiner, from) {
+  const sides = [host, joiner];
+  for (let i = 0; i < 2; ++i)
+    if (!(await waitSetEnd(sides[i], /^Set end: set over/, 15000, from[i])))
+      fail(`${sides[i].name}: the room never said the set is over`);
+  // Together a while on the results screen: nobody leaves by itself.
+  await sleep(3000);
+  for (let i = 0; i < 2; ++i)
+    if (sides[i].setEndLog.slice(from[i]).some((e) => /set over: leaving/.test(e.line)))
+      fail(`${sides[i].name}: left the set's room before its player did anything`);
+  if (host.scene !== "scVsResult") fail(`${host.name}: off the results screen by itself (${host.scene})`);
+  for (const s of sides) s.shot(`${s.name}-set-over`);
+  if (SCENARIO === "zleave") {
+    joiner.pad.buttons |= BTN.Z;
+    await sleep(900);
+    joiner.shot(`${joiner.name}-set-over-hold`);
+    const z = await waitSetEnd(joiner, /set over: leaving room \S+ \(Z held\)/, 5000, from[1]).finally(
+      () => (joiner.pad.buttons &= ~BTN.Z),
+    );
+    if (!z) fail(`${joiner.name}: held Z on the results screen and stayed in the room`);
+    log(`${joiner.name}: ${z.line}`);
+    const gone = await waitSetEnd(host, /^Set end: \S+ left the set's room/, 20000, from[0]);
+    if (!gone) fail(`${host.name}: never heard ${joiner.name} leave the set's room`);
+    log(`${host.name}: ${gone.line}`);
+    await sleep(1200);
+    host.shot(`${host.name}-set-over-left`);
+    await sleep(1500);
+    if (host.setEndLog.slice(from[0]).some((e) => /set over: leaving/.test(e.line)))
+      fail(`${host.name}: left the set's room when ${joiner.name} did`);
+    // Alone on its results screen: Start leaves.
+    const presser = setInterval(() => host.press("START"), 900);
+    try {
+      const left = await waitSetEnd(host, /set over: leaving room/, 30000, from[0]);
+      if (!left) fail(`${host.name}: Start never left the set's room`);
+      log(`${host.name}: ${left.line}`);
+    } finally {
+      clearInterval(presser);
+    }
+  } else {
+    // Both press on through the results screen, in the game's own flow.
+    const presser = setInterval(() => {
+      for (const s of sides) s.press(Date.now() % 2 ? "A" : "START");
+    }, 900);
+    try {
+      for (const s of sides) {
+        const left = await waitSetEnd(s, /set over: leaving room/, 60000, from[sides.indexOf(s)]);
+        if (!left) fail(`${s.name}: never left the set's room`);
+        log(`${s.name}: ${left.line}`);
+      }
+    } finally {
+      clearInterval(presser);
+    }
+  }
+  for (let i = 0; i < 2; ++i) {
+    const log_ = sides[i].setEndLog.slice(from[i]);
+    const at = log_.findIndex((e) => /^Set end: set over/.test(e.line));
+    const bad = log_.slice(at).find((e) => /forfeit in|disconnected|unplugged after the stall/.test(e.line));
+    if (bad) fail(`${sides[i].name}: a forfeit after the set: ${bad.line}`);
   }
 }
 
@@ -1139,6 +1308,71 @@ async function q2Main() {
     log(`PASS: rematch: skipped ${room}, then ${host2.name} hosted ${m1.room}: ${n} verdict(s) the same on both sides; both back on their own character select, ready; checksums: ${sums}`);
     return;
   }
+  if (SCENARIO === "kill" || SCENARIO === "leave") {
+    // kill: the joiner's Orca dies mid-set (its socket closes, as a crash or a closed app does).
+    // leave: the joiner's page leaves mid-set ("You left · This set counts as a loss" there).
+    // The host counts the forfeit down from the room's leave (the room's GRACE, 15 s), plays on
+    // meanwhile, and wins the set by forfeit: "bo forfeited", then VICTORY with the new rating.
+    if (QUEUE !== "ranked") fail(`${SCENARIO} is a ranked scenario`);
+    const kill = SCENARIO === "kill";
+    marks();
+    await q2Css(host, joiner, true);
+    await q2Fight(host, joiner);
+    await host.expect(/^orca result \{"q":"ranked","k":"game","n":1/, 60000);
+    await q2Css(host, joiner, false);
+    await host.waitScene("scSelStage", 60000);
+    await host.waitScene("scMelee", 200000);
+    await sleep(6000);
+    const seFrom = host.setEndLog.length;
+    const joinerFrom = joiner.setEndLog.length;
+    const killed = Date.now();
+    if (kill) {
+      joiner.proc.kill("SIGKILL");
+      log(`${joiner.name}'s Orca killed mid-fight`);
+    } else {
+      joiner.send("leave");
+      if (!(await waitSetEnd(joiner, /^Set end: this player left the set/, 5000, joinerFrom)))
+        fail(`${joiner.name}: left the set with nothing on screen`);
+      await sleep(900);
+      joiner.shot("self-left");
+    }
+    const left = await waitSetEnd(
+      host,
+      /left the room mid-set: their forfeit in (\d+) s/,
+      10000,
+      seFrom,
+    );
+    if (!left) fail(`${host.name}: never counted ${joiner.name}'s forfeit down`);
+    log(`${host.name} heard the leave ${left.at - killed} ms after the kill: countdown from 15 s`);
+    await sleep(3000);
+    host.shot("countdown");
+    await sleep(5000);
+    host.shot("countdown-late");
+    const set = await host.expect(/^orca result (\{"q":"ranked","k":"set".*)$/, 40000);
+    const r = JSON.parse(set.m[1]);
+    if (r.out !== "won" || r.by !== "forfeit") fail(`the set: ${set.m[1]}`);
+    const after = Date.now() - left.at;
+    log(`the forfeit verdict came ${after} ms after the leave reached ${host.name} (the countdown said 15000)`);
+    if (after < 14000 || after > 17500) fail(`the countdown was off by ${after - 15000} ms`);
+    const broke = host.setEndLog.slice(seFrom).find((e) => /left the room while/.test(e.line));
+    log(broke ? `the host's stall ended at the leave: ${broke.line}` : "the host wasn't stalled at the leave");
+    await sleep(600);
+    host.shot("forfeited");
+    // The panel 2.5 s after the verdict, the page's rating 1.5 s after it: the count lands 3.5 s in.
+    await sleep(3300);
+    host.shot("victory-forfeit");
+    await sleep(1500);
+    host.shot("victory-forfeit-settled");
+    if (!(await waitSetEnd(host, /^Set end: the page's rating/, 5000, seFrom)))
+      fail(`${host.name}: the page's new rating never reached the panel`);
+    // A set was played (game 1): back not ready.
+    await q2Back(host, host.queueAt, false);
+    if (!kill) await q2Back(joiner, joiner.queueAt, false);
+    noErrors(kill ? [host] : [host, joiner]);
+    const sums = checksumsMatched(kill ? [host] : [host, joiner]);
+    log(`PASS: ${SCENARIO}: ${joiner.name} ${kill ? "died" : "left"} mid-set; ${host.name} counted 15 s from the leave, the forfeit came ${after} ms after it, VICTORY; back on its own character select; checksums: ${sums}`);
+    return;
+  }
   if (SCENARIO === "timeout") {
     if (QUEUE !== "casual") fail("timeout is a casual scenario");
     marks();
@@ -1178,11 +1412,13 @@ async function q2Main() {
     joiner.send("leave");
     await host.expect(/^orca state friend-left /, 60000, host.linesAtBack);
   }
-  await Promise.all([q2Back(host, host.queueAt, true), q2Back(joiner, joiner.queueAt, true)]);
+  // Casual searches again by itself; after a ranked set the player presses Start for that.
+  const ready = QUEUE !== "ranked";
+  await Promise.all([q2Back(host, host.queueAt, ready), q2Back(joiner, joiner.queueAt, ready)]);
   const n = sameVerdicts(host, joiner);
   noErrors([a, b]);
   const sums = checksumsMatched([a, b]);
-  log(`PASS: q2 ${QUEUE}: ${n} verdicts the same on both sides; both back on their own character select; checksums: ${sums}`);
+  log(`PASS: q2 ${QUEUE}${SCENARIO === "zleave" ? " zleave" : ""}: ${n} verdicts the same on both sides; ${QUEUE === "ranked" ? "set over: both stayed, then left; " : ""}both back on their own character select${ready ? ", ready" : ", not ready"}; checksums: ${sums}`);
 }
 
 // Back out of the character select to the With Anyone page (the cursor comes back on the pick),
@@ -1294,6 +1530,17 @@ try {
 }
 // Both Orcas stop (quit, then killed after 8 s), then the work folder goes unless kept.
 await sleep(9000);
+if (SHOTS_OUT) {
+  fs.mkdirSync(SHOTS_OUT, { recursive: true });
+  for (const s of sides) {
+    for (const name of s.shots) {
+      const from = path.join(WORK, `user-${s.name}`, "ScreenShots", `${name}.png`);
+      if (fs.existsSync(from)) fs.copyFileSync(from, path.join(SHOTS_OUT, `${name}.png`));
+      else log(`no screenshot ${from}`);
+    }
+  }
+  log(`screenshots in ${SHOTS_OUT}`);
+}
 if (!KEEP && code === 0) fs.rmSync(WORK, { recursive: true, force: true });
 else log(`logs in ${WORK}`);
 process.exit(code);
