@@ -48,8 +48,9 @@ inline constexpr std::size_t PILL_ROWS = 3;
 // Current()'s notices together, oldest first. Nothing when the button is off or no row shows.
 // No allocation: the notices are copied out once per change (Model::Lines), words are cut to fit
 // by measuring, never by building strings. Returns the slab (empty when none).
+// `right_limit`: where it must end (the top centre's banners' left edge when they are up).
 Kit::Box DrawPill(ImDrawList* dl, const Model::View& view, std::span<const PillRow> rows,
-                  double now_ms);
+                  double now_ms, float right_limit);
 
 // The longest start of `text` that `measure` (a width) keeps within `width`, at a UTF-8 character
 // boundary, after a space when one fits in its second half (a word is never split unless it alone
@@ -82,6 +83,9 @@ std::size_t FitPrefix(std::string_view text, float width, Measure&& measure)
     else
       hi = mid;
   }
+  // The word ends right at the limit: it stays.
+  if (lo < text.size() && text[lo] == ' ')
+    return lo;
   const std::size_t space = text.substr(0, lo).rfind(' ');
   if (space != std::string_view::npos && space > lo / 2)
     return space;

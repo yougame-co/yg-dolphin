@@ -2572,4 +2572,6 @@ TEST(OrcaUXYgOrb, ThePillsWordsAreCutAfterASpaceAndNeverInsideACharacter)
   // "caf" and half of a two-byte e acute fit four: the cut stays before the e.
   EXPECT_EQ(FitPrefix("caf\xC3\xA9s", 4, w), 3u);
   EXPECT_EQ(FitPrefix("ab", 0, w), 0u);
+  // A word that ends right at the limit stays ("abcde fg" is eight).
+  EXPECT_EQ(FitPrefix("abcde fg hij", 8, w), 8u);
 }

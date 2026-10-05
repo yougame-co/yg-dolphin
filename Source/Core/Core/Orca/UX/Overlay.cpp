@@ -1031,15 +1031,25 @@ void DrawScene()
   const float margin = 2.5f * unit;
   const Kit::Box orb = YgOrb::ButtonBox(yg);
   const bool yg_top = orb.max.x > orb.min.x;
+  // The corner's width grows at once and shrinks only once it has been narrower for a few
+  // seconds: its readouts' digits change every second, and neither it nor Project+'s bar moves.
+  static float s_corner_w = 0;
+  static double s_corner_at = 0;
+  const float corner_now = CornerWidth(f, unit);
+  if (corner_now >= s_corner_w || now - s_corner_at > 4000)
+    s_corner_w = corner_now;
+  if (corner_now >= s_corner_w)
+    s_corner_at = now;
+  const bool corner_right = yg_top && s_corner_w > 0;
   const float corner_x =
-      yg_top ? vis.x + vis_size.x - margin - CornerWidth(f, unit) : vis.x + margin;
+      corner_right ? vis.x + vis_size.x - margin - s_corner_w : vis.x + margin;
   // Top centre, then top left, where both games' matches and menus leave the screen empty.
   std::string guide;
   const Kit::Box centre =
       DrawTopCentre(dl, s, pic, pic_size, vis, vis_size, unit, now_s,
                     std::max(pic.y + (s.dots.on ? TOP_UNDER_DOTS : TOP_FIRST) * unit,
                              vis.y + TOP_FIRST * unit),
-                    &guide, yg_top ? corner_x - 1.0f * unit : pic.x + pic_size.x);
+                    &guide, corner_right ? corner_x - 1.0f * unit : pic.x + pic_size.x);
   // Design F: the turn's timer in the lettering of the game's words that say whose turn it is,
   // and this machine's buttons in the games' own corner for them.
   const bool pplus = Kit::CurrentLook() == Kit::Look::ProjectPlus;
@@ -1112,7 +1122,11 @@ void DrawScene()
         rows[n++] = YgOrb::PillRow{YgOrb::PillRow::Type::Chat, c.name, c.text, {}, {},
                                    YgOrb::Kind::Join, c.alpha, c.at};
     }
-    YgOrb::DrawPill(dl, yg, std::span<const YgOrb::PillRow>(rows.data(), n), now);
+    // It ends short of the top centre's banners (the search, the rules, Project+'s queue bar).
+    const float pill_right = centre.max.y > vis.y && centre.min.x > orb.min.x ?
+                                 centre.min.x - 1.2f * unit :
+                                 vis.x + vis_size.x;
+    YgOrb::DrawPill(dl, yg, std::span<const YgOrb::PillRow>(rows.data(), n), now, pill_right);
   }
   else if (!f.toasts.empty() || !f.chats.empty())
   {

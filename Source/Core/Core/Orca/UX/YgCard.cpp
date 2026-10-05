@@ -320,4 +320,20 @@ void Avatar(ImDrawList* dl, ImVec2 centre, float r, std::string_view name, float
   Put(dl, ImVec2(centre.x - is.x / 2, centre.y - is.y / 2), ipx, Rgba(255, 255, 255, alpha),
       initial);
 }
+
+std::string InitialOf(std::string_view name)
+{
+  return Initial(name);
+}
+
+void AvatarOf(ImDrawList* dl, ImVec2 centre, float r, ImU32 colour, std::string_view initial,
+              float alpha)
+{
+  const ImU32 a = static_cast<ImU32>(std::lround(std::clamp(alpha, 0.0f, 1.0f) * 255));
+  dl->AddCircleFilled(centre, r, (colour & ~IM_COL32_A_MASK) | (a << IM_COL32_A_SHIFT), 32);
+  const float ipx = 1.1f * r;
+  const ImVec2 is = Measure(initial, ipx);
+  Put(dl, ImVec2(centre.x - is.x / 2, centre.y - is.y / 2), ipx, Rgba(255, 255, 255, alpha),
+      initial);
+}
 }  // namespace Orca::UX::Yg

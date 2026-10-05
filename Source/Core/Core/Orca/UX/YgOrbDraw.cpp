@@ -115,6 +115,35 @@ struct NoticeCache
 };
 NoticeCache s_notices;
 
+// The avatars drawn lately: each person's colour and initial worked out once (Yg::Avatar converts
+// the name every call), the oldest replaced. The video thread only.
+struct AvatarMemo
+{
+  std::string name;
+  ImU32 colour = 0;
+  std::string initial;
+};
+std::array<AvatarMemo, 8> s_avatars;
+std::size_t s_avatar_next = 0;
+const AvatarMemo& AvatarFor(std::string_view name)
+{
+  for (const AvatarMemo& a : s_avatars)
+  {
+    if (!a.name.empty() && a.name == name)
+      return a;
+  }
+  AvatarMemo& a = s_avatars[s_avatar_next++ % s_avatars.size()];
+  a.name = name;
+  a.colour = Yg::AvatarColour(name);
+  a.initial = Yg::InitialOf(name);
+  return a;
+}
+void DrawAvatar(ImDrawList* dl, ImVec2 c, float r, std::string_view name, float alpha)
+{
+  const AvatarMemo& a = AvatarFor(name);
+  Yg::AvatarOf(dl, c, r, a.colour, a.initial, alpha);
+}
+
 // The page's Pill (globals.css .play-orb .play-peek), in its 40-pixel grid scaled by `k`: a slab 40
 // high at least, its words 54 in from its left (right of the button over it), rows 6 apart, a 26
 // avatar 10 from the words, the name at 13.5 and the words at 14.5 (lines 1.35 apart), the hint's
@@ -218,11 +247,13 @@ struct RowLayout
   // its words.
   std::string_view a, b;
   bool cut = false;
+  bool name_cut = false;
+  TwoLines body;  // a chat's words
 };
 }  // namespace
 
 Kit::Box DrawPill(ImDrawList* dl, const Model::View& view, std::span<const PillRow> rows,
-                  double now_ms)
+                  double now_ms, float right_limit)
 {
   const Kit::Box none{ImVec2(0, 0), ImVec2(0, 0)};
   if (!view.on || view.place.size <= 0)
@@ -259,7 +290,9 @@ Kit::Box DrawPill(ImDrawList* dl, const Model::View& view, std::span<const PillR
   const Place p = ScaledPlace(view.place, view.view_width, ImGui::GetIO().DisplaySize.x);
   const Pill m = PillFor(p.size / 40);
   const float display_w = ImGui::GetIO().DisplaySize.x;
-  const float max_w = std::min(m.max_width, std::max(m.pad_left + 80 * m.k, display_w - p.x - 24 * m.k));
+  const float max_w = std::max(
+      m.pad_left + 120 * m.k,
+      std::min({m.max_width, display_w - p.x - 24 * m.k, right_limit - p.x}));
 
   // The hint: the newest row with an action (the page's Pill shows one, its peek's verb).
   const PillRow* hint = nullptr;
@@ -284,12 +317,15 @@ Kit::Box DrawPill(ImDrawList* dl, const Model::View& view, std::span<const PillR
     float words = 0;
     if (r.type == PillRow::Type::Chat)
     {
-      const std::string_view name = OneLine(r.name, m.name_px, words_room).first;
+      const auto [name, name_cut] = OneLine(r.name, m.name_px, words_room);
       const TwoLines body = Wrap2(r.text, m.text_px, words_room);
       l.a = name;
+      l.name_cut = name_cut;
       l.b = body.first;
       l.cut = body.cut;
-      words = std::max(Yg::TextWidth(name, m.name_px), Yg::TextWidth(body.first, m.text_px));
+      l.body = body;
+      words = std::max(Yg::TextWidth(name, m.name_px) + (name_cut ? Yg::TextWidth(ELLIPSIS, m.name_px) : 0),
+                       Yg::TextWidth(body.first, m.text_px));
       if (!body.second.empty())
         words = std::max(words, Yg::TextWidth(body.second, m.text_px) +
                                     (body.cut ? Yg::TextWidth(ELLIPSIS, m.text_px) : 0));
@@ -299,10 +335,15 @@ Kit::Box DrawPill(ImDrawList* dl, const Model::View& view, std::span<const PillR
     else
     {
       // "<name> <words>" on one line (a notice), or the words alone (a toast).
-      const float name_w = r.type == PillRow::Type::Notice ? Yg::TextWidth(r.name, m.name_px) : 0;
-      const float space = r.type == PillRow::Type::Notice ? Yg::TextWidth(" ", m.text_px) : 0;
+      const bool named = r.type == PillRow::Type::Notice;
+      const auto [nm, nm_cut] =
+          named ? OneLine(r.name, m.name_px, words_room / 2) : std::pair<std::string_view, bool>{};
+      const float name_w =
+          named ? Yg::TextWidth(nm, m.name_px) + (nm_cut ? Yg::TextWidth(ELLIPSIS, m.name_px) : 0) : 0;
+      const float space = named ? Yg::TextWidth(" ", m.text_px) : 0;
       const auto [said, cut] = OneLine(r.text, m.text_px, std::max(20 * m.k, words_room - name_w - space));
-      l.a = r.type == PillRow::Type::Notice ? r.name : std::string_view{};
+      l.a = nm;
+      l.name_cut = nm_cut;
       l.b = said;
       l.cut = cut;
       words = name_w + space + Yg::TextWidth(said, m.text_px) +
@@ -338,10 +379,10 @@ Kit::Box DrawPill(ImDrawList* dl, const Model::View& view, std::span<const PillR
     {
       // The avatar at the row's top, the name, the words under it.
       const ImVec2 c(x0 + r_av, y + r_av);
-      Yg::Avatar(dl, c, r_av, r.name, a);
-      Yg::Text(dl, ImVec2(tx, y), m.name_px, Yg::Ink(a), l.a);
+      DrawAvatar(dl, c, r_av, r.name, a);
+      TextWithEllipsis(dl, ImVec2(tx, y), m.name_px, Yg::Ink(a), l.a, l.name_cut);
       const float by = y + m.name_px * m.line;
-      const TwoLines body = Wrap2(r.text, m.text_px, words_room);
+      const TwoLines& body = l.body;
       if (body.second.empty())
       {
         Yg::Text(dl, ImVec2(tx, by), m.text_px, Yg::Ink2(a), body.first);
@@ -368,7 +409,7 @@ Kit::Box DrawPill(ImDrawList* dl, const Model::View& view, std::span<const PillR
           dl->AddCircle(c, r_av + 3 * m.k, Rgba(43, 166, 64, a), 32, 2 * m.k);
         if (r.kind == Kind::Away)
           dl->AddCircle(c, r_av + 3 * m.k, Rgba(242, 161, 20, a), 32, 2 * m.k);
-        Yg::Avatar(dl, c, r_av, r.name, r.kind == Kind::Leave ? 0.45f * a : a);
+        DrawAvatar(dl, c, r_av, r.name, r.kind == Kind::Leave ? 0.45f * a : a);
         if (r.kind == Kind::Join || r.kind == Kind::Back)
         {
           const ImVec2 mark(c.x + r_av * 0.75f, c.y + r_av * 0.75f);
@@ -387,8 +428,9 @@ Kit::Box DrawPill(ImDrawList* dl, const Model::View& view, std::span<const PillR
       float x = tx;
       if (!l.a.empty())
       {
-        Yg::Text(dl, ImVec2(x, ty + (m.text_px - m.name_px) * 0.6f), m.name_px, Yg::Ink(a), l.a);
-        x += Yg::TextWidth(l.a, m.name_px) + Yg::TextWidth(" ", m.text_px);
+        x += TextWithEllipsis(dl, ImVec2(x, ty + (m.text_px - m.name_px) * 0.6f), m.name_px,
+                              Yg::Ink(a), l.a, l.name_cut) +
+             Yg::TextWidth(" ", m.text_px);
       }
       TextWithEllipsis(dl, ImVec2(x, ty), m.text_px, Yg::Ink2(a), l.b, l.cut);
     }
