@@ -7,7 +7,7 @@
 # more than a second in one.
 #
 #   clang -fobjc-arc -framework AppKit -o embed-test-host Tools/orca/embed-test-host.m
-#   Tools/orca/occluded-test.py <embed-test-host> <dolphin-emu-nogui> <disc> [--friend]
+#   Tools/orca/occluded-test.py <embed-test-host> <dolphin-emu-nogui> <disc> [--friend [--overlay]]
 #                               [--from-frame N] [--sample DIR] [--shots DIR]
 #
 # --friend: a second, headless Orca drops into the embedded one's game first (a real YouGame room,
@@ -21,6 +21,13 @@
 # It takes the screen for two minutes or so: the test host's window comes to the front. Two Orca
 # processes at most; hold ~/Documents/brawl-dolphin/orca-run.lock around it on a shared Mac.
 # ORCA_TEST_KEEP=1 keeps the logs.
+#
+# --overlay (with --friend): instead of hiding the window, the YouGame overlay opens and closes
+# mid-fight on the embedded side, with the lines the page sends (YouGame's OrcaEmbed): the button
+# (`orb …`), then `orb off` and `blur` while the overlay is open beside the game, then `focus`, the
+# button and a `notice`. Nothing may pause: the embedded side keeps its pace (its input goes neutral,
+# and that is what it sends), and the friend never waits for it: no stall and no more hitches than
+# with the overlay shut.
 import json
 import os
 import queue
@@ -47,9 +54,12 @@ def arg_value(name):
 
 if len(sys.argv) < 4:
     sys.exit("usage: occluded-test.py <embed-test-host> <dolphin-emu-nogui> <disc> "
-             "[--friend] [--sample DIR] [--shots DIR]")
+             "[--friend [--overlay]] [--sample DIR] [--shots DIR]")
 HOST_APP, BIN, DISC = sys.argv[1], sys.argv[2], sys.argv[3]
 FRIEND = "--friend" in sys.argv
+OVERLAY = "--overlay" in sys.argv
+if OVERLAY and not FRIEND:
+    sys.exit("--overlay needs --friend: it is the friend's wait that it checks")
 SAMPLE = arg_value("--sample")
 SHOTS = arg_value("--shots")
 FROM_FRAME = int(arg_value("--from-frame") or 7300)
@@ -61,6 +71,10 @@ T0 = time.time()
 PHASE_S = 12
 MIN_FPS = 55
 MAX_FRIEND_STALL_MS = 1000
+# With --overlay: what the friend may wait for the embedded side while its overlay is open or just
+# shut, and how many more hitches either side may have than with it never opened.
+MAX_OVERLAY_STALL_MS = 100
+MAX_OVERLAY_EXTRA_HITCHES = 1
 
 
 def log(text):
@@ -274,7 +288,7 @@ def run():
                     [BIN, "-p", "macos", "-v", "Metal"] + common_args("Host"))
     procs.append(host)
     host.expect("orca caps", 60)
-    host.orca("caps join leave stats")
+    host.orca("caps join leave stats yougame" if OVERLAY else "caps join leave stats")
     host.expect("orca state playing", 90)
     players = [host]
 
@@ -302,6 +316,26 @@ def run():
         if time.time() > end or host.proc.poll() is not None:
             raise Failed(f"the game didn't reach frame {FROM_FRAME}")
         time.sleep(0.5)
+
+    if OVERLAY:
+        # The YouGame button where the page's stands (OrcaEmbed syncOrb), the overlay shut.
+        host.orca("orb 32 32 80 0 0 0")
+        phase("visible", players)
+        # Open: the menu beside the game takes the controls; the button goes.
+        host.orca("orb off")
+        host.orca("blur")
+        phase("ux-open", players, sample=True)
+        # Shut: the game has the controls again, the button is back, a line beside it.
+        host.orca("focus")
+        host.orca("orb 32 32 80 1 0 0")
+        host.orca("notice voice Ada is%20on%20voice Shift%2BTab Join")
+        phase("ux-closed", players)
+        friend.stop("quit")
+        host.orca("quit")
+        time.sleep(2)
+        host.stop("exit")
+        occluder.stop("exit")
+        return
 
     phase("visible", players)
     host.host("mini")
@@ -374,6 +408,18 @@ for name, start, end, row in phases:
             problems.append(f"{name}: {who} at {s['fps_mean']} fps")
         elif who == "Friend" and s["stall_ms"] > MAX_FRIEND_STALL_MS:
             problems.append(f"{name}: the friend waited {s['stall_ms']} ms")
+if OVERLAY:
+    base = next((row for name, _, _, row in phases if name == "visible"), None)
+    for name, _, _, row in phases:
+        if name not in ("ux-open", "ux-closed"):
+            continue
+        friend_row = row.get("Friend", {})
+        if friend_row.get("seconds") and friend_row["stall_ms"] > MAX_OVERLAY_STALL_MS:
+            problems.append(f"{name}: the friend waited {friend_row['stall_ms']} ms")
+        for who, s in row.items():
+            was = (base or {}).get(who, {}).get("hi", 0)
+            if s.get("seconds") and s["hi"] > was + MAX_OVERLAY_EXTRA_HITCHES:
+                problems.append(f"{name}: {who} had {s['hi']} hitches ({was} with it shut)")
 for p in problems:
     log(f"FAIL: {p}")
 if problems or os.environ.get("ORCA_TEST_KEEP") == "1":
