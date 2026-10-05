@@ -4,6 +4,7 @@
 #include "Core/Rollback/Harness.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cctype>
 #include <chrono>
@@ -39,6 +40,7 @@
 #include "Core/Orca/Session/Keyframe.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Session/PadCodec.h"
+#include "Core/Orca/UX/OrbCombo.h"
 #include "Core/Orca/UX/Queue.h"
 #include "Core/Orca/UX/Results.h"
 #include "Core/PowerPC/JitInterface.h"
@@ -1072,6 +1074,33 @@ int ShownFrame()
   return s_shown_frame.load(std::memory_order_relaxed);
 }
 
+namespace
+{
+// The shortcut on port 1's script, stepped at each frame's first read and kept for its re-runs:
+// a re-run reads the script again, and must get what the first run got.
+struct ComboFrame
+{
+  int frame = -1;
+  u16 buttons = 0;
+};
+std::array<ComboFrame, 256> s_combo_frames;
+int s_combo_last = -1;  // the last frame stepped
+Orca::UX::OrbCombo s_combo;
+
+u16 ComboButtons(int frame, u16 buttons)
+{
+  ComboFrame& slot = s_combo_frames[static_cast<std::size_t>(frame) % s_combo_frames.size()];
+  if (frame <= s_combo_last)
+    return slot.frame == frame ? slot.buttons : buttons;
+  const Orca::UX::OrbCombo::Step step = s_combo.Next(buttons);
+  slot = ComboFrame{frame, step.buttons};
+  s_combo_last = frame;
+  if (step.fired)
+    NOTICE_LOG_FMT(ROLLBACK, "Harness: the YouGame shortcut (Up + Start) at frame {}", frame);
+  return step.buttons;
+}
+}  // namespace
+
 std::optional<GCPadStatus> InputOverride(int port)
 {
   if (Input().empty())
@@ -1139,7 +1168,13 @@ std::optional<GCPadStatus> InputOverride(int port)
   pad.analogB = 0;
   pad.isConnected = true;
   // Through the session wire form, so a recording replays exactly what this run's ports reported.
-  return Orca::Net::DecodePad(Orca::Net::EncodePad(pad));
+  GCPadStatus out = Orca::Net::DecodePad(Orca::Net::EncodePad(pad));
+  // Without an online match (a synctest, a bench, a loopback), port 1's script is the local
+  // player's pad: the YouGame shortcut (Up + Start, UX/OrbCombo.h) comes out of it as the session's
+  // read takes it out of a real one (Rollback.cpp). An online match's read does that itself.
+  if (port == 0 && !Orca::Online::Enabled())
+    out.button = ComboButtons(f, out.button);
+  return out;
 }
 
 void OnFrameBoundary(const Core::CPUThreadGuard& guard)

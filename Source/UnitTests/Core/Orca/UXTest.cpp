@@ -35,6 +35,7 @@
 #include "Core/Orca/UX/GamePatches.h"
 #include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/Overlay.h"
+#include "Core/Orca/UX/OrbCombo.h"
 #include "Core/Orca/UX/YgOrbDraw.h"
 #include "InputCommon/GCPadStatus.h"
 #include "VideoCommon/OnScreenDisplay.h"
@@ -2312,4 +2313,79 @@ TEST(OrcaUXYgOrb, TheButtonShowsBlinksAndTakesPressesOnItsDisc)
   EXPECT_FALSE(m.Hit(72, 72));
   const Kit::Box none = ButtonBox(m.At(4200));
   EXPECT_EQ(none.max.x, none.min.x);
+}
+
+TEST(OrcaUXOrbCombo, UpThenStartFiresOnceAndMasksStartAndTheDpadUntilBothAreLetGo)
+{
+  using Orca::UX::OrbCombo;
+  constexpr u16 UP = PAD_BUTTON_UP, START = PAD_BUTTON_START, A = PAD_BUTTON_A,
+                LEFT = PAD_BUTTON_LEFT;
+  OrbCombo c;
+  // Up alone reaches the game (a taunt in a fight).
+  auto s = c.Next(UP);
+  EXPECT_FALSE(s.fired);
+  EXPECT_EQ(s.buttons, UP);
+  // Start pressed while Up is down: once, and neither reaches the game; A still does.
+  s = c.Next(UP | START | A);
+  EXPECT_TRUE(s.fired);
+  EXPECT_EQ(s.buttons, A);
+  s = c.Next(UP | START);
+  EXPECT_FALSE(s.fired);
+  EXPECT_EQ(s.buttons, 0);
+  // Start let go, Up still held: still masked (no new Up press for the game), and so is the rest of
+  // the D-pad.
+  s = c.Next(UP | LEFT);
+  EXPECT_FALSE(s.fired);
+  EXPECT_EQ(s.buttons, 0);
+  // Both let go: the player's own again.
+  EXPECT_EQ(c.Next(0).buttons, 0);
+  EXPECT_FALSE(c.Held());
+  EXPECT_EQ(c.Next(LEFT).buttons, LEFT);
+  // Again: it fires every time.
+  c.Next(0);
+  c.Next(UP);
+  EXPECT_TRUE(c.Next(UP | START).fired);
+  c.Next(0);
+}
+
+TEST(OrcaUXOrbCombo, StartFirstOrStartHeldIsNotTheShortcut)
+{
+  using Orca::UX::OrbCombo;
+  constexpr u16 UP = PAD_BUTTON_UP, START = PAD_BUTTON_START, DOWN = PAD_BUTTON_DOWN;
+  OrbCombo c;
+  // Start, then Up while Start is held: Start already reached the game; no shortcut.
+  EXPECT_EQ(c.Next(START).buttons, START);
+  auto s = c.Next(START | UP);
+  EXPECT_FALSE(s.fired);
+  EXPECT_EQ(s.buttons, START | UP);
+  c.Next(0);
+  // Another direction with Start: no shortcut.
+  c.Next(DOWN);
+  s = c.Next(DOWN | START);
+  EXPECT_FALSE(s.fired);
+  EXPECT_EQ(s.buttons, DOWN | START);
+}
+
+TEST(OrcaUXOrbCombo, TheLocalPadKeepsItsStateWhileUnfocusedAndOnReRuns)
+{
+  using Orca::UX::FilterLocalPad;
+  constexpr u16 UP = PAD_BUTTON_UP, START = PAD_BUTTON_START;
+  GCPadStatus pad;
+  const auto with = [&pad](u16 buttons) {
+    GCPadStatus p = pad;
+    p.button = buttons;
+    return p;
+  };
+  // Fired on a frame's own read; a re-run's read of the same moment is masked too, not stepped.
+  EXPECT_EQ(FilterLocalPad(with(UP), true, true).button, UP);
+  EXPECT_EQ(FilterLocalPad(with(UP | START), true, true).button, 0);
+  EXPECT_EQ(FilterLocalPad(with(UP | START), false, true).button, 0);
+  // The overlay opened and the game lost focus: neutral pads must not count as letting go, so the
+  // shortcut still held on return does not fire again (the menu would reopen).
+  EXPECT_EQ(FilterLocalPad(with(0), true, false).button, 0);
+  EXPECT_EQ(FilterLocalPad(with(UP | START), true, true).button, 0);
+  // Let go: plain again.
+  EXPECT_EQ(FilterLocalPad(with(0), true, true).button, 0);
+  EXPECT_EQ(FilterLocalPad(with(START), true, true).button, START);
+  FilterLocalPad(with(0), true, true);
 }

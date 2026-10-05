@@ -32,6 +32,7 @@
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Session/PadCodec.h"
+#include "Core/Orca/UX/OrbCombo.h"
 #include "Core/PowerPC/JitCommon/JitBase.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/PowerPC.h"
@@ -41,6 +42,7 @@
 #include "Core/Rollback/InputGate.h"
 #include "Core/Rollback/OnlineMatch.h"
 #include "Core/Rollback/SessionPort.h"
+#include "InputCommon/ControlReference/ControlReference.h"
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
 #include "Core/State.h"
 #include "Core/System.h"
@@ -587,14 +589,17 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
     const auto local_pad = [](int local_seat) {
       // A test script plays the seat this player was given; otherwise the host's first
       // controller, whatever the seat. A re-run's or a catch-up's read is never used: the app's
-      // stream times only a frame's own (its input age).
+      // stream times only a frame's own (its input age). Whichever it is, the YouGame shortcut
+      // (Up + Start, UX/OrbCombo.h) is taken out before the pad is recorded and sent.
+      const bool first_run = !IsResimulating();
       if (const auto scripted = Harness::InputOverride(local_seat))
-        return Orca::Net::EncodePad(*scripted);
-      if (const auto from_app = Orca::Events::LocalPad(!IsResimulating()))
-        return Orca::Net::EncodePad(*from_app);
+        return Orca::Net::EncodePad(Orca::UX::FilterLocalPad(*scripted, first_run, true));
+      const bool live = ControlReference::GetInputGate();
+      if (const auto from_app = Orca::Events::LocalPad(first_run))
+        return Orca::Net::EncodePad(Orca::UX::FilterLocalPad(*from_app, first_run, live));
       g_controller_interface.SetCurrentInputChannel(ciface::InputChannel::SerialInterface);
       g_controller_interface.UpdateInput();
-      return Orca::Net::EncodePad(Pad::GetStatus(0));
+      return Orca::Net::EncodePad(Orca::UX::FilterLocalPad(Pad::GetStatus(0), first_run, live));
     };
     const auto on_frame = [&guard](int frame, bool resimulating,
                                    const std::vector<Orca::Events::PortInfo>& ports, bool alone) {

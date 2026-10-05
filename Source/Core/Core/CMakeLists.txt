@@ -592,6 +592,8 @@ add_library(core
   Orca/UX/Widgets.h
   Orca/UX/YgCard.cpp
   Orca/UX/YgCard.h
+  Orca/UX/OrbCombo.cpp
+  Orca/UX/OrbCombo.h
   Orca/UX/YgOrb.cpp
   Orca/UX/YgOrb.h
   Orca/UX/YgOrbDraw.cpp
