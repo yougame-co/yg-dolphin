@@ -119,7 +119,7 @@ void Init()
       NOTICE_LOG_FMT(ROLLBACK, "Orca UX: frame hook live at frame {}", frame);
     // Mod mode: whether the builtin's modules run here, from its guard words in memory now (a pure
     // function of memory, first runs and re-runs; Core/Orca/Mod.h).
-    Orca::Mod::RefreshGuards(guard);
+    Orca::Mod::RefreshGuards(guard, frame);
     ApplyGamePatches(guard);
     // The main menu's text about going online.
     WriteMenuText(guard);

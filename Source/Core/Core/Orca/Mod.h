@@ -197,9 +197,12 @@ struct GuardWord
 std::span<const GuardWord> BuiltinGuards(Builtin builtin);
 // Whether every guard word holds, reading memory through `read` (nullopt: not mapped).
 bool GuardsHold(Builtin builtin, const std::function<std::optional<u32>(u32)>& read);
-// Mod mode, on the CPU thread at every entry into the UX modules (the frame callback, the input
-// gate's source and latch): checks the active mod's guards against memory as it is now.
-void RefreshGuards(const Core::CPUThreadGuard& guard);
+// Mod mode, on the CPU thread at every entry into the UX modules (the frame callback, with its
+// frame, and the input gate's source and latch): checks the active mod's guards against memory as
+// it is now. The modules run only while they hold. Not holding is a failure (GuardsFailed) once they
+// held before, or still at the frame callback's firstKeyframeFrame: until then a loader's codes may
+// not have landed yet.
+void RefreshGuards(const Core::CPUThreadGuard& guard, std::optional<int> frame = std::nullopt);
 // Mod mode: the active mod's builtin is `builtin` and its guards held at the last refresh.
 bool BuiltinOn(Builtin builtin);
 // Mod mode: the active mod's builtin, guards or not (host-only readers: the JIT warm-up's and the

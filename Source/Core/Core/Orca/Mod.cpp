@@ -842,13 +842,33 @@ bool GuardsHold(Builtin builtin, const std::function<std::optional<u32>(u32)>& r
 
 namespace
 {
-// -1: not checked since boot (the game's code isn't live yet), 0: failed, 1: held.
+// -1: not held yet since boot (the game's code isn't live, or a loader's codes haven't landed),
+// 0: failed, 1: held.
 std::atomic<int> s_guards{-1};
 std::atomic<bool> s_guards_failed{false};
+bool s_held_once = false;
 const ModInfo* s_guards_for = nullptr;
+
+void LogFirstBrokenGuard(const Core::CPUThreadGuard& guard, Builtin builtin)
+{
+  for (const GuardWord& g : BuiltinGuards(builtin))
+  {
+    const u32 word = PowerPC::MMU::HostIsRAMAddress(guard, g.address) ?
+                         PowerPC::MMU::HostRead<u32>(guard, g.address) :
+                         0;
+    if (word != g.word)
+    {
+      WARN_LOG_FMT(BOOT,
+                   "Orca mod: builtin {} off: {:08x} holds {:08x}, not {:08x} (this mod's code "
+                   "moved what the builtin's modules rely on)",
+                   BuiltinName(builtin), g.address, word, g.word);
+      return;
+    }
+  }
+}
 }  // namespace
 
-void RefreshGuards(const Core::CPUThreadGuard& guard)
+void RefreshGuards(const Core::CPUThreadGuard& guard, std::optional<int> frame)
 {
   const Profile* profile = ActiveProfile();
   const ModInfo* mod = profile && profile->mod ? &*profile->mod : nullptr;
@@ -857,45 +877,39 @@ void RefreshGuards(const Core::CPUThreadGuard& guard)
     s_guards_for = mod;
     s_guards = -1;
     s_guards_failed = false;
+    s_held_once = false;
   }
   if (!mod || mod->manifest.builtin == Builtin::None)
     return;
   // Before the game's code is live (a launcher still running), nothing to check.
   if (!FrameHookLive(guard, *profile))
     return;
-  const bool held = GuardsHold(mod->manifest.builtin, [&guard](u32 address) -> std::optional<u32> {
+  const Builtin builtin = mod->manifest.builtin;
+  const bool held = GuardsHold(builtin, [&guard](u32 address) -> std::optional<u32> {
     if (!PowerPC::MMU::HostIsRAMAddress(guard, address))
       return std::nullopt;
     return PowerPC::MMU::HostRead<u32>(guard, address);
   });
-  const int now = held ? 1 : 0;
-  if (s_guards.exchange(now) != now)
+  if (held)
   {
-    if (held)
-    {
-      NOTICE_LOG_FMT(BOOT, "Orca mod: builtin {} on (its guard words hold)",
-                     BuiltinName(mod->manifest.builtin));
-    }
-    else
-    {
-      for (const GuardWord& g : BuiltinGuards(mod->manifest.builtin))
-      {
-        const u32 word = PowerPC::MMU::HostIsRAMAddress(guard, g.address) ?
-                             PowerPC::MMU::HostRead<u32>(guard, g.address) :
-                             0;
-        if (word != g.word)
-        {
-          WARN_LOG_FMT(BOOT,
-                       "Orca mod: builtin {} off: {:08x} holds {:08x}, not {:08x} (this mod's "
-                       "code moved what the builtin's modules rely on)",
-                       BuiltinName(mod->manifest.builtin), g.address, word, g.word);
-          break;
-        }
-      }
-    }
+    if (s_guards.exchange(1) != 1)
+      NOTICE_LOG_FMT(BOOT, "Orca mod: builtin {} on (its guard words hold)", BuiltinName(builtin));
+    s_held_once = true;
+    return;
   }
-  if (!held)
-    s_guards_failed = true;
+  // Not (yet) holding: the modules stay off. A loader's codes land in the game's first frames
+  // (Project+'s in frame 1), so this is a failure only once the guards held and then stopped, or
+  // when they still don't hold by the first frame a friend could join from.
+  const bool failed =
+      s_held_once || (frame && *frame >= static_cast<int>(mod->manifest.first_keyframe_frame));
+  if (!failed)
+  {
+    s_guards = -1;
+    return;
+  }
+  if (s_guards.exchange(0) != 0)
+    LogFirstBrokenGuard(guard, builtin);
+  s_guards_failed = true;
 }
 
 bool BuiltinOn(Builtin builtin)
