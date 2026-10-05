@@ -120,6 +120,15 @@ bool Pointer(const GuestMemory& m, u32 p)
   return p % 4 == 0 && m.Valid(p);
 }
 
+// Whether port `port` (0 or 1) held `button` on the frame that just ran: the queue's latch (Queue.h
+// RAW, written under every header that locks). Ports 3 and 4 (and an unmapped region) never did.
+bool RawHeld(const GuestMemory& m, int port, u16 button)
+{
+  if (port < 0 || port > 1 || !m.Valid(Queue::RAW + 2 * static_cast<u32>(port) + 1))
+    return false;
+  return (m.Read16(Queue::RAW + 2 * static_cast<u32>(port)) & button) != 0;
+}
+
 u32 GlobalField(const GuestMemory& m, u32 field)
 {
   if (!Pointer(m, GAME_GLOBAL))
@@ -557,8 +566,14 @@ Rollback::InputGate::Masks GateMasks(const GuestMemory& m)
       // when it only stops the search).
       if (!h.Solo() && !CssBMayUnpick(m, port))
         masks[port].buttons |= PAD_BUTTON_B;
-      // A only in the grid: never on a player-type button (a CPU), or any other button.
-      if (!CssHandMayPressA(ReadCssHand(m, port), a_bottom))
+      // A only in the grid: never on a player-type button (a CPU), or any other button. On the
+      // queue's own character select, port 1's new press on BACK too (CssBackTakesA), with the
+      // stick centred while A is down.
+      const CssHand hand = ReadCssHand(m, port);
+      if (h.Solo() && port == 0 && m.Valid(Queue::RAW + 1) &&
+          CssBackTakesA(hand, RawHeld(m, port, PAD_BUTTON_A)))
+        masks[port].a_centres_stick = true;
+      else if (!CssHandMayPressA(hand, a_bottom))
         masks[port].buttons |= PAD_BUTTON_A;
     }
     return masks;
@@ -677,8 +692,7 @@ bool CssBMayUnpick(const GuestMemory& m, int port)
   // The latch keeps ports 1 and 2's raw buttons (Queue.h); nobody else plays a queue match.
   if (port < 0 || port > 1 || !m.Valid(Queue::RAW + 2 * static_cast<u32>(port) + 1))
     return false;
-  const bool held = (m.Read16(Queue::RAW + 2 * static_cast<u32>(port)) & PAD_BUTTON_B) != 0;
-  return CssBUnpicks(ReadCssToken(m, port), held);
+  return CssBUnpicks(ReadCssToken(m, port), RawHeld(m, port, PAD_BUTTON_B));
 }
 
 bool SetWanted(Mode mode, u8 flags, std::string_view code)

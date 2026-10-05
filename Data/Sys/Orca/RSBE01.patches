@@ -74,10 +74,40 @@
 81178C34 28000002 28000002    # cmplwi r0, 2 (guard)
 81178C38 4082007C 4800007C    # bne +0x7C -> b +0x7C
 
-# muProcWifi (the ONLINE page): B would open the same window in mode 1, "Disconnect from Nintendo
-# WFC?", and go back once it closed. Instead what the game does when that window returns: the back
-# animation (0x806A5A58), next proc 0 (the top page), sub-state 3, return 1. Two copies (two input
-# paths), one nine-word group each.
+# muProcWifi (the ONLINE page), its update (0x81179CB0), two copies of its input handling (two
+# input paths), one group each, from A's path through B's into the dead code after it:
+# - A on With Friends (cursor 0) would set the next proc to 0x1A, the With Friends page, whose four
+#   buttons all went to the same character select (Luis, 2026-10-05: "every single button in with
+#   friends menu does the exact same thing ... just have with friends and get rid of that extra
+#   submenu"). Instead it leaves the menu as that page's FIGHT! does (0x81191904): the proc's exit
+#   with code 25 (0x806A5604, which plays the button's decided animation and has the menu leave two
+#   frames later, the procs no longer running meanwhile), the same sound (0x800742B0 with 0x13),
+#   return 0. The code sits in the window code B no longer reaches (below), and 25 takes the usual
+#   way: Orca's block to the local Versus character select, `orca menu online friends`, FRIENDS on
+#   the character select's title. With Anyone (0x1B) and Options (0x1C, never shown) are as before.
+# - B would open the same window in mode 1, "Disconnect from Nintendo WFC?", and go back once it
+#   closed. Instead what the game does when that window returns: the back animation (0x806A5A58),
+#   next proc 0 (the top page), sub-state 3, return 1.
+# Found under the harness (q10-runs: next proc +0x634 watched, the module disassembled from a RAM
+# dump; nothing branches into the window code after B's path, and its last word is already the
+# branch to the function's `li r3, 0`). One group, so the redirect never lands without its code.
+81179F04 3800001A 48000068    # li r0, 0x1A -> b 0x81179F6C (With Friends: leave the menu)
+81179F08 901D0634 901D0634    # stw  r0, 0x634(r29) (guard)
+81179F0C 48000018 48000018    # (guard)
+81179F10 3800001B 3800001B    # li   r0, 0x1B (With Anyone; guard)
+81179F14 901D0634 901D0634    # (guard)
+81179F18 4800000C 4800000C    # (guard)
+81179F1C 3800001C 3800001C    # li   r0, 0x1C (Options; guard)
+81179F20 901D0634 901D0634    # (guard)
+81179F24 7FA3EB78 7FA3EB78    # mr   r3, r29 (into the page; guard)
+81179F28 38800001 38800001    # (guard)
+81179F2C 4B52BB2D 4B52BB2D    # bl   0x806A5A58 (guard)
+81179F30 38000003 38000003    # (guard)
+81179F34 38600002 38600002    # (guard)
+81179F38 901D0664 901D0664    # (guard)
+81179F3C 48000298 48000298    # (guard)
+81179F40 57C006B5 57C006B5    # rlwinm. r0, r30, 0, 26, 26 (B; guard)
+81179F44 4182028C 4182028C    # (guard)
 81179F48 4AEB30D1 7FA3EB78    # mr   r3, r29
 81179F4C 3CA0811A 38800000    # li   r4, 0
 81179F50 3CC0811A 4B52BB09    # bl   0x806A5A58 (the back animation)
@@ -87,7 +117,37 @@
 81179F60 38800004 901D0664    # stw  r0, 0x664(r29) (sub-state)
 81179F64 38E00000 38600001    # li   r3, 1
 81179F68 4B276FDD 4800026C    # b    0x8117A1D4 (the function's end)
+81179F6C 7C7E1B78 7FA3EB78    # mr   r3, r29 (With Friends, from 0x81179F04)
+81179F70 38800009 38800019    # li   r4, 25 (With Friends > FIGHT!)
+81179F74 4BFFC801 38A00000    # li   r5, 0 (the decided animation first)
+81179F78 80DD0654 4B52B68D    # bl   0x806A5604 (the proc's exit)
+81179F7C 7C651B78 3C60805A    # lis  r3, 0x805A
+81179F80 389E0A94 38800013    # li   r4, 0x13
+81179F84 38600001 806301D0    # lwz  r3, 0x1D0(r3) (the sound manager)
+81179F88 38E00029 38A0FFFF    # li   r5, -1
+81179F8C 39000000 38C00000    # li   r6, 0
+81179F90 39200000 38E00000    # li   r7, 0
+81179F94 48021DE9 3900FFFF    # li   r8, -1
+81179F98 907D066C 4AEFA319    # bl   0x800742B0 (the sound)
+81179F9C 48000234 48000234    # b    0x8117A1D0 (li r3, 0; the end; guard)
 
+8117A104 3800001A 48000068    # li r0, 0x1A -> b 0x8117A16C
+8117A108 901D0634 901D0634    # (guard)
+8117A10C 48000018 48000018    # (guard)
+8117A110 3800001B 3800001B    # (guard)
+8117A114 901D0634 901D0634    # (guard)
+8117A118 4800000C 4800000C    # (guard)
+8117A11C 3800001C 3800001C    # (guard)
+8117A120 901D0634 901D0634    # (guard)
+8117A124 7FA3EB78 7FA3EB78    # (guard)
+8117A128 38800001 38800001    # (guard)
+8117A12C 4B52B92D 4B52B92D    # (guard)
+8117A130 38000003 38000003    # (guard)
+8117A134 38600002 38600002    # (guard)
+8117A138 901D0664 901D0664    # (guard)
+8117A13C 48000098 48000098    # (guard)
+8117A140 57C006B5 57C006B5    # (guard)
+8117A144 4182008C 4182008C    # (guard)
 8117A148 4AEB2ED1 7FA3EB78    # mr   r3, r29
 8117A14C 3CA0811A 38800000    # li   r4, 0
 8117A150 3CC0811A 4B52B909    # bl   0x806A5A58
@@ -97,6 +157,19 @@
 8117A160 38800004 901D0664    # stw  r0, 0x664(r29)
 8117A164 38E00000 38600001    # li   r3, 1
 8117A168 4B276DDD 4800006C    # b    0x8117A1D4
+8117A16C 7C7E1B78 7FA3EB78    # mr   r3, r29 (With Friends, from 0x8117A104)
+8117A170 38800009 38800019    # li   r4, 25
+8117A174 4BFFC601 38A00000    # li   r5, 0
+8117A178 80DD0654 4B52B48D    # bl   0x806A5604
+8117A17C 7C651B78 3C60805A    # lis  r3, 0x805A
+8117A180 389E0A94 38800013    # li   r4, 0x13
+8117A184 38600001 806301D0    # lwz  r3, 0x1D0(r3)
+8117A188 38E00029 38A0FFFF    # li   r5, -1
+8117A18C 39000000 38C00000    # li   r6, 0
+8117A190 39200000 38E00000    # li   r7, 0
+8117A194 48021BE9 3900FFFF    # li   r8, -1
+8117A198 907D066C 4AEFA119    # bl   0x800742B0
+8117A19C 48000034 48000034    # b    0x8117A1D0 (guard)
 
 # The ONLINE page's third button (Options, proc 28: muProcOptWifi, which runs WiiConnect24 jobs)
 # and With Anyone's Spectator (exit code 29) show only when nteGlobal says the service allows them
@@ -137,17 +210,20 @@
 # Back out of that character select to where the player was, as the game does when it comes back
 # from an online mode. sqVsMelee (sora_scene) leaves its character select for the menu in one place,
 # setNext's state 16, always with setNextSequence("sqMenuMain", 1) (0x806DCE3C). sqMenuMain turns
-# that argument into the menu's mode through its own table (0x80701A4C: 0-22 stay, 23-26 become
-# 24-27, 27-29 become 29-31), muMenuMain::start (0x806CC038) reads the mode at [0x805A0060]+0x280,
-# and the mode is the exit code of the button to come back to: its page from a table (0x806F9228)
-# and the cursor on that button. Mode 1 is Group with Brawl selected; 24-27 the With Friends page
-# on that button, 29-31 With Anyone on Spectator, Casual (Basic Brawl) or Ranked (Team Battle).
-# So the block that starts sqVsMelee for an online code keeps that code in the sequence object, at
-# +0x18 (sqVsMelee is 0x18 bytes in a 0x20-byte block; +0x18 to +0x1F keep the heap's fill through
-# boots, menus and whole matches, in both games), and the back out takes it, once: an online code
-# (24-31) goes back as its argument (24-27 -> 23-26, 29-31 -> 27-29), anything else (0, the heap's
-# fill, a code already used) is 1 as before. Group > Brawl never sets it, so from there B still
-# opens Group. A match in between keeps it: the results come back through sqPrizeCheck, which
+# that argument into the menu's mode through its own switch (0x80701A4C: 0-22 stay, 23-26 become
+# 24-27, 27-29 become 29-31, 30 and 31 become 34 and 35), muMenuMain::start (0x806CC038) reads the
+# mode at [0x805A0060]+0x280, and the mode says where the menu opens: its page from a table
+# (0x806F9228, a byte per mode) and the cursor on that page's button for it. Mode 1 is Group with
+# Brawl selected; 29-31 With Anyone on Spectator, Casual (Basic Brawl) or Ranked (Team Battle);
+# 34 and 35 the ONLINE page (proc 3) on With Friends or With Anyone (muProcWifi's init, 0x81179C2C,
+# puts the cursor there for them); 24-27 were the With Friends page, which nothing opens any more
+# (A on With Friends leaves the menu at once, above). So the block that starts sqVsMelee for an
+# online code keeps that code in the sequence object, at +0x18 (sqVsMelee is 0x18 bytes in a
+# 0x20-byte block; +0x18 to +0x1F keep the heap's fill through boots, menus and whole matches, in
+# both games), and the back out takes it, once: an online code (24-31) goes back as its argument
+# (With Friends' 24-27 as 30, the ONLINE page on With Friends; 29-31 -> 27-29), anything else (0,
+# the heap's fill, a code already used) is 1 as before. Group > Brawl never sets it, so from there B
+# still opens Group. A match in between keeps it: the results come back through sqPrizeCheck, which
 # restarts sqVsMelee with 255 and leaves the object alone. Emulated code and memory only: both
 # players run it, a rollback re-runs it, a drop-in keyframe carries the object.
 #
@@ -170,11 +246,11 @@
 806DC8F8 7E439378 3805FFE8    # subi   r0, r5, 24
 806DC8FC 38930180 28000007    # cmplwi r0, 7
 806DC900 38A00000 41810018    # bgt    0x806DC918 (not an online code)
-806DC904 4B950D3D 38A5FFFF    # subi   r5, r5, 1
+806DC904 4B950D3D 38A5FFFE    # subi   r5, r5, 2
 806DC908 93CF0008 28000004    # cmplwi r0, 4
-806DC90C 480000C4 4D800020    # bltlr  (24-27: With Friends, 23-26)
-806DC910 7E439378 38A5FFFF    # subi   r5, r5, 1
-806DC914 38930190 4E800020    # blr    (29-31: With Anyone, 27-29)
+806DC90C 480000C4 4C800020    # bgelr  (29-31: With Anyone, 27-29)
+806DC910 7E439378 38A0001E    # li     r5, 30 (24-27: the ONLINE page on With Friends)
+806DC914 38930190 4E800020    # blr
 806DC918 38A00000 38A00001    # li     r5, 1 (Group, as before)
 806DC91C 4B950D25 4E800020    # blr
 

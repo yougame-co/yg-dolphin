@@ -1903,16 +1903,21 @@ the matched room in "Matchmaking" below):
   `orca menu online casual` or `orca menu online ranked` (with the app's `host`: the page's queue
   searches while the player waits there, "Matchmaking"), else `orca menu online casual local` or
   `orca menu online ranked local`.
-- **With Friends**: each of its buttons goes to the local Versus character select, where friends
-  drop in ("Drop-in"), and Orca prints `orca menu online friends`. Their descriptions say so (a
-  brawl, or in Project+ a fight, with the friends you invite, 2-4 players); none promises a roster
-  or a mode that isn't there.
+- **With Friends** goes straight to the local Versus character select, where friends drop in
+  ("Drop-in"), and Orca prints `orca menu online friends` (since `ux=18`; Luis, 2026-10-05: "every
+  single button in with friends menu does the exact same thing ... just have with friends and get
+  rid of that extra submenu"). The game's own With Friends page (FIGHT!, Friend Roster, Team
+  Multi-Man, Home-Run Contest) never opens: its four buttons all went to that same character
+  select (exit codes 24-27 through Orca's one block), so nothing was lost. The button's description
+  says "Play with friends you invite! (2-4 players)" (the game's "Play with people you've registered
+  as Friends!" named a roster that isn't there).
 - **B out of that character select** goes back to the page the pick was made on, with the cursor
   on the button picked, the way B after Group > Brawl comes back to Group with Brawl selected (and
-  the way the game comes back from its own online modes): With Friends on FIGHT! (or whichever of
-  its buttons), With Anyone on Casual or Ranked; one more B is the ONLINE page. It holds after
-  matches too: the results come back to the same character select, and B from there goes back to
-  the same page. From Group > Brawl (Project+'s VERSUS) B still opens Group.
+  the way the game comes back from its own online modes): the ONLINE page on With Friends, With
+  Anyone on Casual or Ranked (one more B is the ONLINE page); from the ONLINE page one more B is the
+  top page. It holds after matches too: the results come back to the same character select, and B
+  from there goes back to the same page. From Group > Brawl (Project+'s VERSUS) B still opens
+  Group.
 
 ### How (`Data/Sys/Orca/RSBE01.patches`, `PPLUS32.patches`; `Core/Orca/UX/MenuText.h`, `OnlineMenu.h`)
 
@@ -1925,6 +1930,15 @@ the matched room in "Matchmaking" below):
     network interface task, check the save's Wi-Fi data and connect.
   - The ONLINE page's B does what the game does once its disconnect window says OK, without the
     window.
+  - The ONLINE page's A on With Friends (muProcWifi's update, `0x81179CB0`; two copies of its
+    input handling) leaves the menu as the With Friends page's FIGHT! did (`0x81191904`): the
+    proc's exit with code 25 (`0x806A5604`: the button's decided animation, then the menu leaves
+    two frames later, its procs no longer running), the same sound, return 0. It used to set the
+    next proc to `0x1A`, the With Friends page (found under the harness: the proc's next proc,
+    `+0x634`, watched; With Anyone is `0x1B`, Options `0x1C`). The code sits in the disconnect
+    window's creation, which B's path above no longer reaches (nothing else branches there, and its
+    last word already branches to the function's `li r3, 0`); the redirect, B's path and that code
+    are one group, so none lands without the others.
   - The ONLINE page's Options (`muProcOptWifi`, WiiConnect24 jobs) and With Anyone's Spectator are
     never enabled (`isEnableButton` answers no; they also stay hidden without a connection).
   - sqMenuMain's exit table: codes 24-27 (With Friends), 29 (Spectator), 30 (Casual, was Basic
@@ -1935,9 +1949,12 @@ the matched room in "Matchmaking" below):
   - The back out (sora_scene, both games): sqVsMelee always went back to sqMenuMain with argument 1,
     which the menu opens as Group with Brawl selected. The block keeps the exit code in sqVsMelee's
     object (+0x18, slack in its heap block) and the back out's helper (in the online entries' old
-    blocks) turns it into sqMenuMain's argument for that button (24-27 -> 23-26, 29-31 -> 27-29;
-    sqMenuMain's own table maps them to menu modes 24-27 and 29-31, and a mode is the exit code of
-    the button the menu opens on), once; anything else is 1, as before. sqPrizeCheck restarts
+    blocks) turns it into sqMenuMain's argument for that button, once (With Friends' 24-27 -> 30,
+    29-31 -> 27-29; anything else is 1, as before). sqMenuMain's own switch (`0x80701A4C`) maps
+    them to menu modes: 30 to 34, the ONLINE page (proc 3) with the cursor on With Friends
+    (muProcWifi's init puts it there for 34, on With Anyone for 35; the mode's page from the table
+    at `0x806F9228`), and 27-29 to 29-31, With Anyone on that button. Until `ux=18` With Friends'
+    codes went back as 23-26, the With Friends page on that button. sqPrizeCheck restarts
     sqVsMelee after a match without touching the object, so the code outlives matches. Game code and
     memory: rollback re-runs it and a drop-in keyframe carries it.
   - The IOS refusals of every session stay as the backstop: NET_KD_REQ, IP/Top and SSL refuse
@@ -1945,8 +1962,9 @@ the matched room in "Matchmaking" below):
 - **Text** (`MenuText.h`): the main menu's message files, found through the menu scene's archive
   (`mu_menumain_en`, MiscData 5 and 10), are rewritten in emulated memory: Brawl's footer ("...
   while connected to Nintendo WFC."), Project+'s "(Discontinued)" and "(Project M not compatible!)",
-  With Anyone's descriptions (Casual, Ranked), With Friends' (Friend Roster, Team Multi-Man,
-  Home-Run Contest, and the Boss Battles text no button shows) and the records' "Nintendo WFC"
+  the ONLINE page's With Friends (message 18, since `ux=18`), With Anyone's descriptions (Casual,
+  Ranked), the old With Friends page's (Friend Roster, Team Multi-Man, Home-Run Contest, and the
+  Boss Battles text no button shows; that page no longer opens) and the records' "Nintendo WFC"
   mentions. A message is rewritten only while its bytes are exactly the game's own, into the same
   slot (never longer, zeros after), at every frame boundary on both machines: a pure function of
   emulated memory, covered by the UX's compatibility version (`ux=5`). The description box at the
@@ -1986,7 +2004,7 @@ the matched room in "Matchmaking" below):
 |---|---|
 | `orca menu online casual` / `orca menu online ranked` | With Anyone > Casual or Ranked, with the app's `host`: the game went to the local Versus character select and the page's queue searches ("Matchmaking"). |
 | `orca menu online casual local` / `orca menu online ranked local` | The same without `host` (an older app or page): nothing searches. |
-| `orca menu online friends` | Any With Friends button: the local Versus character select, where friends drop in. |
+| `orca menu online friends` | With Friends: the local Versus character select, where friends drop in. |
 | `orca menu cancel` | Searching (or matched as the host, with nobody plugged in yet), the player backed out of the character select to the main menu, alone: the search is over. Once. |
 
 The lines print once per pick, only while the player is alone, and never carry state.
@@ -2033,11 +2051,64 @@ the reader's edges and `AloneAt`); `Tools/orca/online-menu.py <nogui> <disc> [--
 `Tools/orca/online-menu-dropin.py` (a friend drops into a host on the ONLINE page and both go to
 With Friends' character select at the same frame, nothing printed; with `--hold`, the join is held
 first, "Boot and friends from the menus" below; with `--invite`, a pick within 30 s of an invite's
-stored keyframe prints nothing and one after it prints). online-menu.py's `back-*` scenarios hold B
+stored keyframe prints nothing and one after it prints). online-menu.py's `friends` scenario is A on
+With Friends straight to the character select (exit code 25); its `back-*` scenarios hold B
 out of the character select and press A on the page that comes back: the same pick (exit code) again
-proves the page and the cursor (`back-friends-N`, `back-casual`, `back-ranked`), `back-chain` walks
-B to ONLINE and the top page and picks Casual, `back-versus` checks Group > Brawl still comes back to
-Group. They use the harness's per-visit rules (`@muMenuMain:2 ...`: only on the scene's second entry).
+proves the page and the cursor (`back-friends`: the ONLINE page on With Friends; `back-casual`,
+`back-ranked`), `back-chain` walks B from the ONLINE page to the top page and picks Casual,
+`back-versus` checks Group > Brawl still comes back to Group. They use the harness's per-visit
+rules (`@muMenuMain:2 ...`: only on the scene's second entry).
+
+**Checked 2026-10-05, `ux=18`** (branch `q10-menus` on `9611b74874`, live 0.3.21; M4, headless,
+`-v Null` unless said; runs and inputs in `q10-runs` beside the checkouts):
+- **Found under the harness** (`ORCA_UX_PROBE` watches and two RAM dumps on the ONLINE page, both
+  games; the module disassembled from them): A on With Friends set muProcWifi's next proc
+  (`+0x634`) to `0x1A` the frame after the press, With Anyone `0x1B`, Options `0x1C`; the With
+  Friends page's A (`0x811918A4`) leaves with 24-27 by its cursor through the proc's exit
+  (`0x806A5604`, which stores the code and a two-frame delay in the menu, `+0xAB0`/`+0xAB4`; the
+  menu's process does the exit once the delay runs out, `0x806CE67C`); sqMenuMain's argument 30 is
+  mode 34, whose page byte is 3 (the ONLINE page), and muProcWifi's init puts the cursor on With
+  Friends for 34 (`0x81179C2C`). Project+'s module is Brawl's at `+0x1480` word for word but for
+  its calls into sora_scene.
+- With the build: A on With Friends at the ONLINE page's frame 220 (Brawl 1,651) left the menu two
+  frames later with 25 (the next proc never moved), the character select titled FRIENDS; B held out
+  of it opened the menu in mode 34 on the ONLINE page with the cursor on With Friends (0) and its
+  description "Play with friends you invite! (2-4 players)" (Metal screenshots, both games).
+- `online-menu.py`, Brawl and `--pplus`: all nine scenarios PASS (tour, casual, ranked, friends,
+  back-friends, back-casual, back-ranked, back-chain, back-versus; the groups at `0x81179F04` and
+  `0x8117A104`, Project+ `0x8117B384` and `0x8117B584`, 39 words each, landed on the main menu; no
+  network or save access).
+- A on BACK, the queue's own character select (`ORCA_TEST_QUEUE=casual:solo`, the app's `caps host
+  queue2 locks` on stdin): not ready, a new A on BACK left for the menus (Brawl at the select's frame
+  203; Project+ 183) and printed `orca menu cancel`; ready (`orca queue ready casual 0 0`, Project+
+  `8 0`), one A on BACK printed `orca queue unready` at the press's boundary (the gate kept it from
+  the game, `FLAG_BACK_A` set for one boundary) and the game left on the next frame (Brawl 2,088 then
+  2,091; Project+ 825 then 828), then `orca menu cancel`. An A held since before the hand reached
+  BACK did nothing on it, its next press backed out; a casual room's header (`ORCA_TEST_QUEUE=casual`)
+  kept A masked on BACK (the select stayed).
+- `YG_SYNCTEST=7`, **0 RAM mismatches** (no `ram DIFF` line in any run; the device-state-only ones
+  are the usual icache): Brawl from 1,440 to 2,400 (6,671 re-run frames each) over ONLINE > With
+  Friends > the character select > B > the ONLINE page > With Friends again; over A on BACK idle;
+  over ready then A on BACK; and over a friend's plug-in on the ONLINE page (`ORCA_UX_TEST_NAMES=ada,bo
+  ORCA_UX_TEST_PLUG_AT=1650`: the move at 1,680, B back to the ONLINE page on With Friends, no second
+  move). Project+ the same four from 200 to 1,200 (6,951 each; the move at 450).
+- Unit tests: 463 `Orca*`, 443 pass, 20 skipped, 0 fail (new `OrcaOnlineRules
+  .AOnBackBacksOutOfTheQueuesOwnCharacterSelectOnly`, `OrcaQueue.AOnBackWhileSearchingUnreadiesThenBacksOut`,
+  `OrcaInputGate.TheStickCentresWhileAIsDown`, `OrcaOnlineMenuText.TheOnlinePagesWithFriendsPromisesNoRoster`;
+  `OrcaOnlineMenuGates` checks the 39-word groups and the helper's new words).
+- `online-menu-dropin.py` over a real dev room (two Orcas): Brawl PASS (the friend loaded the host's
+  keyframe of frame 2,163 on the ONLINE page; both moved at 2,261; 12 checksums matched each, 0
+  rollbacks, nothing printed), Project+ PASS (keyframe 1,211, both moved at 1,300, 12 each).
+- After review, an A held onto BACK while ready (searching): the queue centres the stick only for a
+  new A (raw A up on the frame that just ran), as the rules do, so the hand moves on. Ready, A
+  pressed off BACK and held, the hand slid onto BACK and off it again, A let go: the next A there did
+  nothing (the hand had left), and a later move onto BACK and A backed out (Brawl `orca queue
+  unready` at 2,248, Project+ 985). The same walk without the slide off backed out at that next A
+  (Brawl 2,188, Project+ 925), so the hand had been on BACK with A held. `YG_SYNCTEST=7` over the
+  first walk: Brawl 1,440-2,500 (7,371 re-run frames), Project+ 200-1,100 (6,251), 0 RAM mismatches.
+- Not run here: the two-Orca perf gate (`perf-gate.py` against 0.3.21, the release's: this touches
+  the frame hook's masks and the `.patches`), `--hold`/`--invite`, the queue's own select under a
+  real queue (`queue-e2e.mjs`), and Mac <-> PC.
 
 ### Boot and friends from the menus
 
@@ -2083,9 +2154,9 @@ re-runs, as a pure function of memory and the session's synced ports, both games
   hook does what every menu exit in the game does (`muMenuMain`'s at `0x81176828` included): the
   scene manager's exit code (`+0x284`) 25, With Friends > FIGHT!, then its process step (`+0x288`)
   2. The manager ends the menu and `sqMenuMain::setNext` sends 25 through Orca's block to the local
-  Versus character select ("Online menu"), so B from there comes back to With Friends with FIGHT!
-  selected. Both machines do it at the same boundary; the friend's game shows the host's menu for
-  half a second first.
+  Versus character select ("Online menu"), so B from there comes back to the ONLINE page with With
+  Friends selected (before `ux=18`, the With Friends page with FIGHT! selected). Both machines do it
+  at the same boundary; the friend's game shows the host's menu for half a second first.
 - A friend who plugged in during the boot is taken along once the menu has built and run 30 frames;
   one who plugged in on Versus' character select (or in a Versus match) is already where friends
   play, and nothing happens. B back to the main menu with the friend still in stays there: only a
@@ -2476,6 +2547,9 @@ the game reads its controllers, so no game code has to be found and patched for 
   the gate does. A source changes what the game computes: bump `UX::kCompatVersion` with it.
   Friends rooms register none, or one that returns no masks. (Since `ux=11` every session's game,
   friends and solo too, masks one thing: Z on the results screen, "The results screen's replay".)
+- **The stick centred while A is down** (`Mask::a_centres_stick`, `ux=18`): while the player holds A
+  (the raw pad's, masked or not) or the rule presses it, the main stick reads centred. The queue's
+  own character select's BACK takes A only where the hand stood ("The character select's buttons").
 - **A read as another button** (`Mask::a_as`, q2-stages): while the player holds A the game sees
   these buttons pressed (after the mask, like `press`). The casual stage pick masked A and read it
   as X, which vanilla Brawl's stage select ignores and Project+'s marks as a strike, so the rule saw
@@ -2646,7 +2720,7 @@ only a queue room's host writes one (`Core/Orca/UX/OnlineRules.*`, `MatchBlock.h
 | Items | frequency None, every item off (record menu data `+0x00`, `+0x08`, `+0x0C`) | the same |
 | Stage choice | Choose (casual's turns, "Casual stage pick"; ranked's strikes) | the same |
 | Legal stages | Random Stage Switch: Brawl page `0x04005007` (BF, FD, Delfino, YI, Lylat, Smashville), Melee page `0x00020000` (Pokemon Stadium); FD's bit off while a human player's pick is Ice Climbers (`0x10`): the match's init data (gmGlobalModeMelee +0x98, 0x5C per port: the character select writes each pick there as it is made; the panel's own +0x1B8 is only the hovered character), on the character select and on the way to the fight (a Random character resolved) | the 2024 Proposed list as its preset 3 (`Switch03.rss`) holds it: its first `0xA8` bytes of RSS_EXDATA (`0x8042C4E8`: page 0 the 9 legal stages, all in the random set, hazards off), written on the character select; casual also clears the strike table |
-| Input gate | character select: B but a press's first frame with that player's token down (it takes the token back up, below), and A unless the hand is in the grid (below); stage select: B; fight: Start | the same, plus the D-pad on the character select (its Code Menu) and L, R and Z on the stage select (alternates, hazards, L+R+A) |
+| Input gate | character select: B but a press's first frame with that player's token down (it takes the token back up, below), and A unless the hand is in the grid (below; on the queue's own select also a new press on BACK); stage select: B; fight: Start | the same, plus the D-pad on the character select (its Code Menu) and L, R and Z on the stage select (alternates, hazards, L+R+A) |
 
 - Casual's Start: since q2-stages, the stage select and its two preferred-stage turns ("Casual
   stage pick"). Before, Random skipped it (the game's own RNG picking from the legal list).
@@ -2703,6 +2777,23 @@ select's hands"); B was already masked there.
   costumes with X and Y.
   Joining needs no A: a hand that moves into the grid joins its panel (probed: kind 0 to 1 as the
   hand arrives, with A masked on the button).
+- **BACK on the queue's own character select** (`ux=18`, `OnlineRules.h` `CssBackTakesA`). Luis,
+  2026-10-05: "anytime you could press B to go back right now, clicking A over the back button
+  should also work". Held B backs out of that select (`FLAG_SOLO`: the rules leave B alone and the
+  loop lock stands aside), so A on BACK does too: port 1's A reaches the game when its hand points
+  at BACK (target 4, button 0x02) and A is a new press (not held on the frame that just ran, the
+  queue's latch), so a held A sliding onto BACK never backs out, as the game itself wants a press
+  there. While A is down the main stick reads centred (the gate's `a_centres_stick`), so the press
+  acts on BACK where the hand stood. Nothing else is within one frame's travel of BACK anyway (the
+  2026-10-03 rasters, `css-gate-runs/raster.log` and `pplus-map.log`: BACK spans x -32 to -23.6
+  and y 18.3 to 21.5 in Brawl, x -32 to -23 and y 17.8 to 21.5 in Project+; the BRAWL tab starts at
+  x -20.4, the grid ends at y 15.85, the space between is nothing). While the player is ready
+  (searching) the queue keeps that press from the game for one frame: it un-readies (`orca queue
+  unready`), and the next frame Orca presses A for the game, which backs out (`orca menu cancel`):
+  one press, and the page never sees the game leave while it still searches ("The queue's
+  character select"). Queue rooms keep A masked on BACK (casual finds someone else with a long Z,
+  ranked is played), Rules (0x04) never takes A, and friends rooms and local play have no header,
+  so their BACK was always the game's.
 - **Proof** (2026-10-03, branch `orca-css-gate`, M4 Pro, headless, `-v Null`):
   - Brawl: `bf-ranked-bo3.txt` now presses A on game 2's character select with both hands still on
     their own player-type buttons, then port 1 moves onto panel 3's button and presses A, and port 2
@@ -2768,7 +2859,7 @@ by the token, not by any state of their own worth patching:
 
 ### Compatibility and tests
 
-`ux=17` (8 brought the locks and the rules preset of `ux=6` went; 9 the character select's A
+`ux=18` (8 brought the locks and the rules preset of `ux=6` went; 9 the character select's A
 gate; 10, Orca 0.3.14, queue2's character select, Project+'s boot to the main menu with friends
 dropping in from the menus, the character select's title, and the casual stage pick; 11, Orca
 0.3.15, no Z on the results screen in any session, "The results screen's replay"; 12, the
@@ -2776,7 +2867,10 @@ character select's A to pick, B to take the token back up and Start to lock in, 
 token back up", "Character order", "The queue's character select"; 13, Orca 0.3.17, the set over;
 14, Orca 0.3.18, native text; 15, Orca 0.3.19, Random as a pick and no skip in ranked, "Random and
 ranked's no skip"; 16 is design F's, branch `q6-ui-f`; 17, branch `q9-friends-jump`, a friend's
-drop-in from the menus waits for the main menu's build, "Boot and friends from the menus"), caps
+drop-in from the menus waits for the main menu's build, "Boot and friends from the menus"; 18,
+branch `q10-menus`, With Friends straight to the character select and B from there back to the
+ONLINE page, "Online menu", and A on BACK on the queue's own character select, "The character
+select's buttons"), caps
 `locks`
 and `queue2`. Test knob `ORCA_TEST_QUEUE=casual|ranked`
 (a test override): the header as a queue room's host writes it, in a harness run or a dev game's
@@ -3554,6 +3648,12 @@ running sqVsMelee, the slot and its checks, the marks' values, idempotence and o
 written) and the texture pack's (`OrcaOnlineMenuTextures*`, now with paletted names); 299 `Orca*`
 tests pass.
 
+**Rechecked** 2026-10-05 at `ux=18` (branch `q10-menus`, headless): With Friends now goes straight
+to its character select and B out of it lands on ONLINE, so both scripts lost the old page's FIGHT!
+and one B. Brawl: FRIENDS `0x0EEB` (select from frame 1657), CASUAL `0x0EED` (2212), RANKED
+`0x0EEC` (2667), nothing written at Group > Brawl (3272). Project+: FRIENDS `0x0003` (424), CASUAL
+`0x0001` (980), RANKED `0x0002` (1435), nothing written at VERSUS (2040).
+
 Not yet: the header case (a queue room's) is proven by the unit tests only, not under the harness
 (`ORCA_TEST_QUEUE` locks the way back out of the walk); team mode's TEAM BATTLE frame (3.2) is never
 marked (online rooms don't use teams); a Project+ update that redraws VERSUS changes its hash, and the
@@ -3870,8 +3970,8 @@ has no skip: Luis, 2026-10-05, "You are forced to play a ranked match"). Orca's 
 | stdout (with `caps queue2`) | When |
 |---|---|
 | `orca queue ready <casual\|ranked> <char> <costume>` | On the queue's own character select the player has a character down and pressed Start: search with this pick. Printed again with a new pick, and again when the player is back on that character select still ready after a room (below). `<char>` is the character select's own id (`muSelCharPlayerArea` +0x1B8, 0x28 none), `<costume>` its colour number (+0x1BC). |
-| `orca queue unready` | The player pressed B, took the token up, or the page's `queue-cancel` came, while ready: stop searching. Still on the character select. |
-| `orca menu cancel` | (unchanged) B while not ready backs out to the menus, as the game does: the search is over. |
+| `orca queue unready` | The player pressed B, took the token up, or the page's `queue-cancel` came, while ready: stop searching. Still on the character select, except after A on BACK (next line). |
+| `orca menu cancel` | B while not ready backs out to the menus, as the game does, and so does A on BACK (`ux=18`): the search is over. A on BACK while ready prints `orca queue unready` first, then this. |
 | `orca queue skip` | Casual only: Z held 1.5 s on the room's character select (both players in, before the game goes on): the page leaves the room and searches again. Local only: nothing in the game changes. Never in ranked (since 0.3.19, `Queue::MaySkip`): no line, no bar, no hint in any game of a set. |
 | `orca queue timeout me\|them` | Casual's first game with this opponent: the 30 s ready timer ran out (at a final frame, the same on both machines; casual's later games have no timer, so never then). `me`: this player wasn't ready (the page leaves and stops searching); `them`: the opponent wasn't (the page leaves and searches again). Nothing moves on the character select meanwhile. |
 
@@ -3888,6 +3988,10 @@ The page owns the room: Orca never leaves on a skip or a timeout by itself.
   ready reaches the game, and the loop lock's toggled group stands aside for `FLAG_SOLO` (`when
   806F238C & 01000000 == 00000000` in both patch files), so held B backs out to the menus.
   The B that stops the search is kept from the game until it is let go, so the token stays down.
+  A on BACK backs out as held B does (`ux=18`, "The character select's buttons"); while ready the
+  queue keeps it from the game for its first frame and un-readies (`FLAG_BACK_A`), then presses A
+  for the game the frame after, so one press stops the search (`orca queue unready`) and backs out
+  (`orca menu cancel`), in that order.
   Overlay: "Casual" / "Pick your character, then press Start to search", then "Casual ·
   Searching for an opponent…" / "B to cancel". Panels 2-4 still show (as empty "N/A" panels): no
   cheap layout patch was looked for.
@@ -4013,7 +4117,9 @@ Project+'s saved stage switch data): +0x00 the ready flags (bit per port), +0x01
 timer, +0x12 the steering's frames, +0x14 port 2's pick (character, costume, x, y), +0x20 the
 steering's start, +0x24 the costume's start (3 s to turn it, then the character is in whatever the
 colour), +0x28 port 2's hand as the frame that just ran began (the latch's, for "all but stopped").
-The +0x01 flags: go, timed out, and (the queue's own character select) the stopping B still held. `Queue::Frame` (after the character order) advances it at every boundary, first
+The +0x01 flags: go, timed out, and (the queue's own character select) the stopping B still held,
+a Start held since the way back from a room (`FLAG_SWALLOW_START`), and A on BACK that just stopped
+the search (`FLAG_BACK_A`, 0x10: one boundary, after which the gate presses that A for the game). `Queue::Frame` (after the character order) advances it at every boundary, first
 runs and re-runs, as a pure and idempotent function of memory, the hook's frame number and the
 synced ports (`Queue::Advance`); the gate's masks come from memory alone (`Queue::Gate`). Any new
 header (another mode, room or flags) zeroes the region.

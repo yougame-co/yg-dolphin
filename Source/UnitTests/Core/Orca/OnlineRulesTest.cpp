@@ -516,6 +516,85 @@ TEST(OrcaOnlineRules, TheCharacterSelectPassesAOnlyInTheGrid)
   EXPECT_EQ(GateMasks(p)[0].buttons, B | DPAD | A);
 }
 
+// Luis, 2026-10-05: "anytime you could press B to go back right now, clicking A over the back
+// button should also work". Held B backs out of the queue's own character select (FLAG_SOLO), so
+// A on BACK does too there: port 1's new press, the stick centred while A is down. Queue rooms
+// (casual and ranked) keep it masked, Rules never takes A, and friends games mask nothing.
+TEST(OrcaOnlineRules, AOnBackBacksOutOfTheQueuesOwnCharacterSelectOnly)
+{
+  constexpr u16 A = PAD_BUTTON_A;
+  FakeMemory m = Game("scSelctCharacter");
+  m.Write16(Queue::RAW, 0);
+  m.Write16(Queue::RAW + 2, 0);
+  for (int port = 0; port < 4; ++port)
+    SetHand(m, port, CSS_HAND_EXIT, 19.5f, CSS_BUTTON_BACK, -28.0f);
+  // Friends (no header): the game's own BACK, nothing masked.
+  for (const auto& mask : GateMasks(m))
+    EXPECT_TRUE(mask.Empty());
+  // The queue's own character select: port 1's A reaches the game, the stick centred while it is
+  // down; nobody else's (ports 2-4 don't play there; Queue.h masks them entirely anyway).
+  WriteHeader(m, Mode::Casual, Ruleset::Brawl, 0, 0, MB::FLAG_SOLO | MB::FLAG_QUEUE2);
+  Rollback::InputGate::Masks masks = GateMasks(m);
+  EXPECT_FALSE(masks[0].buttons & A);
+  EXPECT_TRUE(masks[0].a_centres_stick);
+  for (int port = 1; port < 4; ++port)
+  {
+    EXPECT_TRUE(masks[port].buttons & A) << port;
+    EXPECT_FALSE(masks[port].a_centres_stick) << port;
+  }
+  // Only a new press: an A held on the frame that just ran (sliding onto BACK) stays masked.
+  m.Write16(Queue::RAW, A);
+  EXPECT_TRUE(GateMasks(m)[0].buttons & A);
+  EXPECT_FALSE(GateMasks(m)[0].a_centres_stick);
+  m.Write16(Queue::RAW, PAD_BUTTON_B);  // another button held: still a new A
+  EXPECT_FALSE(GateMasks(m)[0].buttons & A);
+  m.Write16(Queue::RAW, 0);
+  // Ranked's own character select too; Project+'s alike.
+  WriteHeader(m, Mode::Ranked, Ruleset::Brawl, 0, 0, MB::FLAG_SOLO | MB::FLAG_QUEUE2);
+  EXPECT_FALSE(GateMasks(m)[0].buttons & A);
+  FakeMemory p = Game("scSelctCharacter");
+  p.Write16(Queue::RAW, 0);
+  p.Write16(Queue::RAW + 2, 0);
+  SetHand(p, 0, CSS_HAND_EXIT, 19.5f, CSS_BUTTON_BACK, -28.0f);
+  WriteHeader(p, Mode::Casual, Ruleset::PPlus, 0, 0, MB::FLAG_SOLO | MB::FLAG_QUEUE2);
+  EXPECT_FALSE(GateMasks(p)[0].buttons & A);
+  EXPECT_TRUE(GateMasks(p)[0].a_centres_stick);
+  // Rules (the other leaving button) never takes A; nor does anything else that isn't the grid.
+  WriteHeader(m, Mode::Casual, Ruleset::Brawl, 0, 0, MB::FLAG_SOLO | MB::FLAG_QUEUE2);
+  SetHand(m, 0, CSS_HAND_EXIT, 19.5f, 0x04, 20.0f);
+  EXPECT_TRUE(GateMasks(m)[0].buttons & A);
+  SetHand(m, 0, CSS_HAND_BUTTON, 19.5f, 0x03, -14.0f);  // the BRAWL tab
+  EXPECT_TRUE(GateMasks(m)[0].buttons & A);
+  SetHand(m, 0, CSS_HAND_NOTHING, 19.5f, 0, -22.0f);  // between BACK and the tab
+  EXPECT_TRUE(GateMasks(m)[0].buttons & A);
+  // A queue room's character select, casual or ranked: BACK keeps A masked (no way back there:
+  // casual finds someone else with Z, ranked is played).
+  SetHand(m, 0, CSS_HAND_EXIT, 19.5f, CSS_BUTTON_BACK, -28.0f);
+  for (const Mode mode : {Mode::Casual, Mode::Ranked})
+  {
+    for (const u8 flags : {u8{0}, u8{MB::FLAG_QUEUE2}})
+    {
+      WriteHeader(m, mode, Ruleset::Brawl, 0, 0, flags);
+      EXPECT_TRUE(GateMasks(m)[0].buttons & A) << static_cast<int>(mode) << " " << int{flags};
+      EXPECT_FALSE(GateMasks(m)[0].a_centres_stick);
+    }
+  }
+  // The pure rule.
+  CssHand back;
+  back.valid = true;
+  back.target = CSS_HAND_EXIT;
+  back.button = CSS_BUTTON_BACK;
+  EXPECT_TRUE(CssBackTakesA(back, false));
+  EXPECT_FALSE(CssBackTakesA(back, true));
+  back.button = 0x04;
+  EXPECT_FALSE(CssBackTakesA(back, false));
+  back.button = CSS_BUTTON_BACK;
+  back.valid = false;
+  EXPECT_FALSE(CssBackTakesA(back, false));
+  EXPECT_TRUE(CssHandOnBack(CSS_HAND_EXIT, CSS_BUTTON_BACK));
+  EXPECT_FALSE(CssHandOnBack(CSS_HAND_BUTTON, CSS_BUTTON_BACK));
+}
+
 TEST(OrcaOnlineRules, BReachesTheCharacterSelectOnlyToTakeTheTokenUp)
 {
   constexpr u16 B = PAD_BUTTON_B;

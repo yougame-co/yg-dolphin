@@ -36,10 +36,14 @@ namespace Orca::UX
 // RANDOM_CHARACTER), and no skip in ranked; 16, design F: the plates without the rating and
 // SEARCHING on the queue's own select, the rules bar without the timer the band shows, the
 // relabels' marks (Relabel.h); 17: a friend's drop-in from the menus waits for the main menu to
-// have built its pages (OnlineMenu.h FriendsMove MENU_BUILT), so the move comes at a later frame:
+// have built its pages (OnlineMenu.h FriendsMove MENU_BUILT), so the move comes at a later frame;
+// 18: A on the ONLINE page's With Friends goes straight to the character select and B from there
+// back to the ONLINE page on With Friends (no With Friends page: RSBE01.patches, PPLUS32.patches
+// muProcWifi and the back out's helper), and A on BACK on the queue's own character select
+// (OnlineRules.h CssBackTakesA, Queue.h FLAG_BACK_A, InputGate a_centres_stick):
 // the session hashes it into the compatibility key as `ux=<n>`, so two builds that would write
 // different bytes (or mask different inputs, or part differently) never meet in a room.
-constexpr int kCompatVersion = 17;
+constexpr int kCompatVersion = 18;
 
 // The disc the game runs from (the boot's disc, or the default disc a launcher boots with): the
 // overlay's kit reads the game's own fonts from it (Kit.h). Before Init.

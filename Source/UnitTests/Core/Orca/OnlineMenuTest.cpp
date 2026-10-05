@@ -114,28 +114,64 @@ void ExpectOnlineGates(const std::vector<GamePatch>& patches, u32 module)
     EXPECT_TRUE(GroupApplies(g, Originals(g)));
     EXPECT_FALSE(GroupApplies(g, Values(g)));
   }
-  // G3: B on the ONLINE page goes back with no disconnect window (two copies of nine words):
-  // the back animation, next proc 0, sub-state 3, return 1, at the function's end.
-  for (const u32 at : {0x81179F48u, 0x8117A148u})
+  // G3: the ONLINE page's update, two copies of one 39-word group each, so the redirect never
+  // lands without its code. A on With Friends (cursor 0) leaves the menu as With Friends > FIGHT!
+  // did (code 25), from the window code B no longer reaches: no With Friends page, whose buttons
+  // all went to the same character select. B goes back with no disconnect window: the back
+  // animation, next proc 0, sub-state 3, return 1, at the function's end.
+  for (const u32 at : {0x81179F04u, 0x8117A104u})
   {
     SCOPED_TRACE(at);
+    const u32 copy = at - 0x81179F04;  // the second copy sits 0x200 after the first
     const auto g = GroupAt(patches, at + module);
-    ASSERT_EQ(g.size(), 9u);
+    ASSERT_EQ(g.size(), 39u);
     for (const GamePatch& p : g)
       EXPECT_TRUE(p.original.has_value());
-    EXPECT_EQ(g[0].value, 0x7FA3EB78u);  // mr r3, r29
-    EXPECT_EQ(g[1].value, 0x38800000u);  // li r4, 0
-    EXPECT_EQ(BranchTarget(g[2].address, g[2].value), std::optional<u32>(0x806A5A58));
-    EXPECT_EQ(g[2].value & 1, 1u);       // bl
-    EXPECT_EQ(g[3].value, 0x38000000u);  // li r0, 0
-    EXPECT_EQ(g[4].value, 0x901D0634u);  // stw r0, 0x634(r29): the top page
-    EXPECT_EQ(g[5].value, 0x38000003u);  // li r0, 3
-    EXPECT_EQ(g[6].value, 0x901D0664u);  // stw r0, 0x664(r29)
-    EXPECT_EQ(g[7].value, 0x38600001u);  // li r3, 1
-    EXPECT_EQ(BranchTarget(g[8].address, g[8].value), std::optional<u32>(0x8117A1D4 + module));
-    EXPECT_EQ(g[8].value & 1, 0u);  // b, not bl
+    // A on With Friends: `li r0, 0x1A` (next proc: the With Friends page) branches to the code.
+    EXPECT_EQ(*g[0].original, 0x3800001Au);
+    EXPECT_EQ(BranchTarget(g[0].address, g[0].value), std::optional<u32>(g[26].address));
+    EXPECT_EQ(g[0].value & 1, 0u);  // b, not bl
+    // With Anyone (0x1B) and Options (0x1C) still go into their pages: guards up to B's path.
+    EXPECT_EQ(*g[3].original, 0x3800001Bu);
+    EXPECT_EQ(*g[6].original, 0x3800001Cu);
+    for (size_t i = 1; i < 17; ++i)
+      EXPECT_EQ(g[i].value, *g[i].original) << i;
+    // B's path.
+    EXPECT_EQ(g[17].address, 0x81179F48u + copy + module);
+    EXPECT_EQ(g[17].value, 0x7FA3EB78u);  // mr r3, r29
+    EXPECT_EQ(g[18].value, 0x38800000u);  // li r4, 0
+    EXPECT_EQ(BranchTarget(g[19].address, g[19].value), std::optional<u32>(0x806A5A58));
+    EXPECT_EQ(g[19].value & 1, 1u);       // bl
+    EXPECT_EQ(g[20].value, 0x38000000u);  // li r0, 0
+    EXPECT_EQ(g[21].value, 0x901D0634u);  // stw r0, 0x634(r29): the top page
+    EXPECT_EQ(g[22].value, 0x38000003u);  // li r0, 3
+    EXPECT_EQ(g[23].value, 0x901D0664u);  // stw r0, 0x664(r29)
+    EXPECT_EQ(g[24].value, 0x38600001u);  // li r3, 1
+    EXPECT_EQ(BranchTarget(g[25].address, g[25].value), std::optional<u32>(0x8117A1D4 + module));
+    EXPECT_EQ(g[25].value & 1, 0u);  // b, not bl
     // The original was the window's creation: a bl too, to the connection window.
-    EXPECT_TRUE(BranchTarget(g[0].address, *g[0].original).has_value());
+    EXPECT_TRUE(BranchTarget(g[17].address, *g[17].original).has_value());
+    // With Friends' way out, in that window's dead code: the proc's exit with 25 after the
+    // button's decided animation (r5 0), the page's sound, then `li r3, 0` and the end (the window
+    // code's own last word already branches there).
+    EXPECT_EQ(g[26].value, 0x7FA3EB78u);  // mr r3, r29
+    EXPECT_EQ(g[27].value, 0x38800019u);  // li r4, 25
+    EXPECT_EQ(g[28].value, 0x38A00000u);  // li r5, 0
+    EXPECT_EQ(BranchTarget(g[29].address, g[29].value), std::optional<u32>(0x806A5604));
+    EXPECT_EQ(g[29].value & 1, 1u);
+    EXPECT_EQ(g[30].value, 0x3C60805Au);  // lis r3, 0x805A
+    EXPECT_EQ(g[31].value, 0x38800013u);  // li r4, 0x13
+    EXPECT_EQ(g[32].value, 0x806301D0u);  // lwz r3, 0x1D0(r3)
+    EXPECT_EQ(g[33].value, 0x38A0FFFFu);  // li r5, -1
+    EXPECT_EQ(g[34].value, 0x38C00000u);  // li r6, 0
+    EXPECT_EQ(g[35].value, 0x38E00000u);  // li r7, 0
+    EXPECT_EQ(g[36].value, 0x3900FFFFu);  // li r8, -1
+    EXPECT_EQ(BranchTarget(g[37].address, g[37].value), std::optional<u32>(0x800742B0));
+    EXPECT_EQ(g[37].value & 1, 1u);
+    EXPECT_EQ(g[38].value, *g[38].original);
+    EXPECT_EQ(BranchTarget(g[38].address, g[38].value), std::optional<u32>(0x8117A1D0 + module));
+    EXPECT_TRUE(GroupApplies(g, Originals(g)));
+    EXPECT_FALSE(GroupApplies(g, Values(g)));
   }
   // The ONLINE page's Options (proc 28) and With Anyone's Spectator (code 29) never show: their
   // isEnableButton checks (0x8014FEDC) answer no.
@@ -191,6 +227,14 @@ void ExpectOnlineGates(const std::vector<GamePatch>& patches, u32 module)
     EXPECT_EQ(block[9].address, 0x806DC8ECu);
     EXPECT_EQ(block[9].value, 0x80AF0018u);   // lwz r5, 0x18(r15)
     EXPECT_EQ(block[11].value, 0x900F0018u);  // stw r0, 0x18(r15), r0 = 0
+    // With Anyone's 29-31 go back as 27-29 (its page on that button); With Friends' 24-27 as 30,
+    // which sqMenuMain makes mode 34: the ONLINE page with the cursor on With Friends (there is no
+    // With Friends page to come back to).
+    EXPECT_EQ(block[15].value, 0x38A5FFFEu);  // subi r5, r5, 2
+    EXPECT_EQ(block[16].value, 0x28000004u);  // cmplwi r0, 4
+    EXPECT_EQ(block[17].value, 0x4C800020u);  // bgelr
+    EXPECT_EQ(block[18].value, 0x38A0001Eu);  // li r5, 30
+    EXPECT_EQ(block[19].value, 0x4E800020u);  // blr
     EXPECT_EQ(block[20].value, 0x38A00001u);  // li r5, 1
     EXPECT_EQ(block[21].value, 0x4E800020u);  // blr
     const auto back = GroupAt(patches, 0x806DCE34);
@@ -933,8 +977,8 @@ constexpr char PPLUS_COLOUR[] = "\x12\x02\x0c\xbf\xc7\xc4\xff";
 constexpr const char* TAKEN_OUT[] = {
     "Nintendo WFC",   "(Discontinued)",   "(Project M not compatible!)",
     "(No names)",     "2-on-2",           "Register",
-    "defeat enemies", "Home-Run Contest", "10 bosses",
-    "(2 players)"};
+    "registered",     "defeat enemies",   "Home-Run Contest",
+    "10 bosses",      "(2 players)"};
 }  // namespace
 
 TEST(OrcaOnlineMenuText, EveryEditFitsItsSlotAndSaysNothingOfNintendo)
@@ -961,6 +1005,28 @@ TEST(OrcaOnlineMenuText, EveryEditFitsItsSlotAndSaysNothingOfNintendo)
     EXPECT_TRUE(names_it);
     for (const char* what : TAKEN_OUT)
       EXPECT_EQ(e.text.find(what), std::string_view::npos) << what;
+  }
+}
+
+TEST(OrcaOnlineMenuText, TheOnlinePagesWithFriendsPromisesNoRoster)
+{
+  // The ONLINE page's With Friends (message 18) goes straight to the local Versus character select
+  // since ux=18, where the friends you invite drop in: 'Play with people you've registered as
+  // Friends!' named a roster that isn't there. Both games, the same words.
+  for (const char* colour : {BRAWL_COLOUR, PPLUS_COLOUR})
+  {
+    SCOPED_TRACE(colour == BRAWL_COLOUR ? "Brawl" : "Project+");
+    const MenuTextEdit& e = Edit(5, 18, colour);
+    EXPECT_EQ(e.original,
+              std::string(colour) + "Play with people you've registered as Friends!\x13");
+    EXPECT_EQ(e.text, std::string(colour) + "Play with friends you invite! (2-4 players)\x13");
+    std::vector<std::string> five = Placeholders(50);
+    five[18] = std::string(e.original);
+    FakeMemory m = MainMenu();
+    const auto where = WriteArchive(m, {{5, five}});
+    EXPECT_EQ(ApplyMenuText(m, MenuTextEdits()), 1);
+    const u32 file = where.at(5);
+    EXPECT_EQ(Bytes(m, file + m.Read32(file + 4 * 18), e.text.size()), e.text);
   }
 }
 

@@ -279,6 +279,81 @@ TEST(OrcaQueue, ItsOwnCharacterSelectsMasks)
   EXPECT_EQ(Advance(no, s, 5), State{});
 }
 
+// Luis, 2026-10-05: A on the character select's BACK works wherever B backs out. On the queue's own
+// character select while not ready the rules pass it (OnlineRulesTest); while ready (searching)
+// the one press first stops the search (`orca queue unready`), then the frame after it the game
+// gets that A and backs out (`orca menu cancel`), so the page never sees a back out mid-search.
+TEST(OrcaQueue, AOnBackWhileSearchingUnreadiesThenBacksOut)
+{
+  const auto on_back = [](View v) {
+    v.ports[0].hand_target = Rules::CSS_HAND_EXIT;
+    v.ports[0].hand_button = Rules::CSS_BUTTON_BACK;
+    return v;
+  };
+  State s = Step(Press(Solo(), START), State{}, 800);
+  ASSERT_EQ(s.ready, 1);
+  // Hovering BACK while ready: A stays from the game (the search goes on until it stops), and the
+  // stick reads centred while A is down so the hand stays there.
+  Masks m = Gate(on_back(Solo()), s);
+  EXPECT_TRUE(m[0].buttons & A);
+  EXPECT_TRUE(m[0].a_centres_stick);
+  EXPECT_EQ(m[0].press, 0);
+  // An A already held when the hand slid onto BACK: still kept from the game, but the stick is
+  // left alone, so the hand can move on.
+  View slid = on_back(Solo());
+  slid.raw = {A, 0};
+  slid.raw_prev = {A, 0};
+  m = Gate(slid, s);
+  EXPECT_TRUE(m[0].buttons & A);
+  EXPECT_FALSE(m[0].a_centres_stick);
+  // The press: not ready, and the next frame presses A for the game (idempotent: Step checks the
+  // boundary run again on its own result).
+  s = Step(Press(on_back(Solo()), A), s, 801);
+  EXPECT_EQ(s.ready, 0);
+  EXPECT_TRUE(s.flags & FLAG_BACK_A);
+  m = Gate(on_back(Solo()), s);
+  EXPECT_EQ(m[0].press, A);
+  EXPECT_TRUE(m[0].a_centres_stick);
+  EXPECT_FALSE(m[0].buttons & A);
+  // A hand that left BACK meanwhile gets no press (an A anywhere else is the game's own business).
+  EXPECT_EQ(Gate(Solo(), s)[0].press, 0);
+  // The boundary after: the press is over (still held, not new), nothing more is pressed.
+  View held = on_back(Solo());
+  held.raw = {A, 0};
+  held.raw_prev = {A, 0};
+  s = Step(held, s, 802);
+  EXPECT_FALSE(s.flags & FLAG_BACK_A);
+  EXPECT_EQ(s.ready, 0);
+  EXPECT_EQ(Gate(held, s)[0].press, 0);
+  // Not ready: nothing of the queue's (the rules pass a new A on BACK as the game's own).
+  s = Step(Press(on_back(Solo()), A), s, 803);
+  EXPECT_FALSE(s.flags & FLAG_BACK_A);
+  m = Gate(on_back(Solo()), s);
+  EXPECT_FALSE(m[0].buttons & A);
+  EXPECT_EQ(m[0].press, 0);
+  // Ready, A on Rules (the other leaving button) or in the grid: no stop, no press for the game.
+  s = Step(Press(Solo(), START), s, 804);
+  ASSERT_EQ(s.ready, 1);
+  View rules = on_back(Solo());
+  rules.ports[0].hand_button = 0x04;
+  State t = Step(Press(rules, A), s, 805);
+  EXPECT_EQ(t.ready, 1);
+  EXPECT_FALSE(t.flags & FLAG_BACK_A);
+  EXPECT_FALSE(Gate(rules, t)[0].buttons & A);
+  t = Step(Press(Solo(), A), s, 805);
+  EXPECT_EQ(t.ready, 1);
+  EXPECT_FALSE(t.flags & FLAG_BACK_A);
+  // A queue room's character select: none of it (BACK keeps the rules' A mask, OnlineRulesTest).
+  View room = Room();
+  room.ports[0].hand_target = Rules::CSS_HAND_EXIT;
+  room.ports[0].hand_button = Rules::CSS_BUTTON_BACK;
+  State r;
+  r.ready = 1;
+  r = Step(Press(room, A), r, 806);
+  EXPECT_FALSE(r.flags & FLAG_BACK_A);
+  EXPECT_FALSE(Gate(room, r)[0].a_centres_stick);
+}
+
 TEST(OrcaQueue, BothReadyGoOnAndPort1PressesStart)
 {
   State s;

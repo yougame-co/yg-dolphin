@@ -198,6 +198,12 @@ State Advance(const View& v, const State& state, int frame)
     const u8 ready = s.ready;
     const bool swallowing = (s.flags & FLAG_SWALLOW_B) && (v.raw[0] & BUTTON_B);
     const bool swallowing_start = (s.flags & FLAG_SWALLOW_START) && (v.raw[0] & BUTTON_START);
+    // A new A on BACK while ready (the gate kept it from the game): it stops the search, and the
+    // next frame gives it to the game (FLAG_BACK_A, the gate's press), which backs out. Kept when
+    // this boundary's own result is fed back (the flag set, the same press).
+    const bool back_press = Rules::CssHandOnBack(v.ports[0].hand_target, v.ports[0].hand_button) &&
+                            (newly[0] & PAD_BUTTON_A);
+    const bool back_a = back_press && ((ready & 1) || (s.flags & FLAG_BACK_A));
     if (swallowing_start)
       newly[0] = static_cast<u16>(newly[0] & ~BUTTON_START);
     s = State{};
@@ -207,6 +213,11 @@ State Advance(const View& v, const State& state, int frame)
       s.flags |= FLAG_SWALLOW_B;
     if (swallowing_start)
       s.flags |= FLAG_SWALLOW_START;
+    if (back_a)
+    {
+      s.ready = 0;
+      s.flags |= FLAG_BACK_A;
+    }
     return s;
   }
 
@@ -457,6 +468,25 @@ Masks Gate(const View& v, const State& s)
     // skip in the room; nothing in ranked), and while ready B only stops the search.
     masks[0].buttons =
         BUTTON_START | BUTTON_Z | ((s.ready & 1) || (s.flags & FLAG_SWALLOW_B) ? BUTTON_B : 0);
+    // A on BACK (Rules::CssBackTakesA passes a new press there): while ready it only stops the
+    // search (Advance), then the frame after it the game gets it (FLAG_BACK_A), so the page hears
+    // `orca queue unready` before the game leaves. The stick stays centred while a new A is down,
+    // so the hand is still on BACK for that frame; an A already held when the hand got there
+    // (raw, the frame that just ran) leaves the stick alone, so the hand can move on.
+    if (Rules::CssHandOnBack(v.ports[0].hand_target, v.ports[0].hand_button))
+    {
+      if (s.ready & 1)
+      {
+        masks[0].buttons |= PAD_BUTTON_A;
+        if (!(v.raw[0] & PAD_BUTTON_A))
+          masks[0].a_centres_stick = true;
+      }
+      if (s.flags & FLAG_BACK_A)
+      {
+        masks[0].press |= PAD_BUTTON_A;
+        masks[0].a_centres_stick = true;
+      }
+    }
     for (int port = 1; port < Rollback::InputGate::PORTS; ++port)
       masks[port] = ALL;
     return masks;
@@ -600,6 +630,7 @@ View ReadView(const GuestMemory& m, const std::vector<Events::PortInfo>& ports)
     if (hand.valid)
     {
       p.hand_target = hand.target;
+      p.hand_button = hand.button;
       p.hand_x = hand.x;
       p.hand_y = hand.y;
     }

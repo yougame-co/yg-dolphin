@@ -21,9 +21,10 @@ class CPUThreadGuard;
 // Data/Sys/Orca/<profile>.patches): Brawl's Wi-Fi button, Project+'s Play Online, opens the
 // game's ONLINE page with no connection, and every way on from it leaves the main menu through the
 // game's exit to the local Versus character select, with the main menu's exit code telling which:
-// 30 Casual (With Anyone's Basic Brawl / Basic Versus), 31 Ranked (Team Battle), 24-27 a With
-// Friends mode. The app hears of the pick on stdout ("orca menu online casual local", ...), so the
-// page can say what comes next; nothing here changes the game.
+// 30 Casual (With Anyone's Basic Brawl / Basic Versus), 31 Ranked (Team Battle), 25 With Friends
+// (24-27 were the With Friends page's buttons, all alike; since `ux=18` A on With Friends leaves
+// with 25 and that page never opens). The app hears of the pick on stdout ("orca menu online
+// casual local", ...), so the page can say what comes next; nothing here changes the game.
 //
 // The reader follows the menu at every frame boundary that runs a frame for the first time (never a
 // re-run: what a rollback undoes was never decided) and announces a pick only when it happens while
@@ -154,7 +155,7 @@ void ReadOnlineMenu(const Core::CPUThreadGuard& guard, bool resimulating, bool a
 //
 // Both games boot to the main menu (Data/Sys/Orca/<profile>.patches). A friend who plugs in while
 // the host is in the menus goes with the host to With Friends' character select, the place friends
-// play, as if the host had picked With Friends > FIGHT!; one who arrives while the host plays a
+// play, as if the host had picked With Friends; one who arrives while the host plays a
 // single-player mode waits until the host is back (the session holds the join: Rollback/
 // OnlineMatch.cpp, `orca state friend-holding` / `friend-waiting`).
 //
@@ -182,8 +183,9 @@ namespace FriendsMove
 // The manager's process step while a scene runs, and the step that ends it (the menu's own exit).
 constexpr u32 STEP_RUNNING = 1;
 constexpr u32 STEP_EXIT = 2;
-// With Friends > FIGHT! (the friend list's Brawl): sqVsMelee, and B from its character select comes
-// back to With Friends with FIGHT! selected.
+// With Friends (once the With Friends page's FIGHT!, the friend list's Brawl, the code A on the
+// ONLINE page's With Friends leaves with since `ux=18`): sqVsMelee, and B from its character select
+// comes back to the ONLINE page with With Friends selected.
 constexpr u32 EXIT_WITH_FRIENDS = 25;
 // No friend plugs in before this frame: a host's keyframe is never of its first 300 frames
 // (Rollback/OnlineMatch.cpp FIRST_KEYFRAME_FRAME), and a friend plugs in after replaying from one.
