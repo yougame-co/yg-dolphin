@@ -834,6 +834,151 @@ TEST(OrcaQueue, HoldingZSkipsOnce)
   EXPECT_FALSE(other.Step(true, true));
 }
 
+TEST(OrcaQueue, RankedHasNoSkip)
+{
+  // Luis, 2026-10-05: "you should not be able to click Z to escape a ranked match. You are forced
+  // to play a ranked match." Casual keeps the skip: the hint, then the bar while Z is held.
+  State s = Step(Room(), State{}, 100);
+  ASSERT_TRUE(ReadyPhase(Room()));
+  EXPECT_TRUE(MaySkip(Room(), s));
+  Text t = TextFor(Room(), s, {}, 0, 0.0f);
+  EXPECT_NE(t.note.find("Hold Z to find someone else"), std::string::npos) << t.note;
+  t = TextFor(Room(), s, {}, 1, 0.5f);
+  EXPECT_NE(t.note.find("Finding someone else |||||....."), std::string::npos) << t.note;
+  // Casual's later games too (no timer), and with a player locked in.
+  View later = Room();
+  later.game1 = false;
+  State ls = Step(Press(later, START), State{}, 200);
+  ASSERT_EQ(ls.ready, 1);
+  EXPECT_TRUE(MaySkip(later, ls));
+  EXPECT_NE(TextFor(later, ls, {}, 0, 0.0f).note.find("Hold Z"), std::string::npos);
+  // Not once it goes on, nor after a timeout, nor on the player's own character select.
+  State go = s;
+  go.flags |= FLAG_GO;
+  EXPECT_FALSE(MaySkip(Room(), go));
+  State out = s;
+  out.flags |= FLAG_TIMED_OUT;
+  EXPECT_FALSE(MaySkip(Room(), out));
+  EXPECT_FALSE(MaySkip(Solo(), State{}));
+
+  // Ranked: game 1 and later games (the order done), either port, ready or not, Z held or not:
+  // no skip, and nothing on screen says Z.
+  for (const bool game1 : {true, false})
+  {
+    View v = Room(true);
+    v.game1 = game1;
+    v.order_done = true;
+    for (const u16 presses : {u16{0}, START, Z})
+    {
+      for (int port = 0; port < 2; ++port)
+      {
+        State rs = Step(Press(v, port == 0 ? presses : 0, port == 1 ? presses : 0), State{},
+                        300 + port);
+        EXPECT_FALSE(MaySkip(v, rs)) << game1 << " " << port;
+        for (const float progress : {0.0f, 0.4f, 1.0f})
+        {
+          for (int local = 0; local < 2; ++local)
+          {
+            const Text rt = TextFor(v, rs, {}, local, progress);
+            EXPECT_FALSE(rt.line.empty());
+            EXPECT_EQ(rt.line.find('Z'), std::string::npos) << rt.line;
+            EXPECT_EQ(rt.note.find('Z'), std::string::npos) << rt.note;
+            EXPECT_EQ(rt.note.find("someone else"), std::string::npos) << rt.note;
+          }
+        }
+      }
+    }
+  }
+  // Z stays kept from the game in both modes alike (nothing emulated changed with the rule).
+  EXPECT_EQ(Gate(Room(true), State{})[0].buttons & Z, Z);
+  EXPECT_EQ(Gate(Room(false), State{})[0].buttons & Z, Z);
+}
+
+TEST(OrcaQueue, RandomIsAPickLikeAnyCharacter)
+{
+  // Luis, 2026-10-05: "for both casual and ranked, I should be able to select random if I want to."
+  // Random is the character select's 0x29 in both games (Selch_Random), never "no character".
+  ASSERT_NE(RANDOM_CHARACTER, NO_CHARACTER);
+  Identity id;
+  id.character = RANDOM_CHARACTER;
+  id.x = 0.5f;
+  id.y = 0.5f;
+  id.rating = 1532;
+  ASSERT_TRUE(id.HasPick());
+  ASSERT_EQ(DecodeIdentity(EncodeIdentity(id)), id);
+
+  // The queue's own character select: the token down on RANDOM, Start readies (and searches).
+  View solo = Solo();
+  solo.ports[0] = Placed(RANDOM_CHARACTER, 0);
+  State s = Step(Press(solo, START), State{}, 100);
+  EXPECT_EQ(s.ready, 1);
+
+  // The room's character select, game 1: the joiner's Random is steered onto its panel.
+  for (const bool ranked : {false, true})
+  {
+    Identity pick = id;
+    pick.costume = 3;  // whatever colour its own game showed: Random takes any
+    View v = Room(ranked);
+    v.ports[0] = Placed(RANDOM_CHARACTER, 0);  // the host on Random too
+    v.pick2 = pick;
+    v.ports[1] = CssPort{};
+    v.ports[1].readable = true;
+    v.ports[1].human = true;
+    v.ports[1].hand_target = Rules::CSS_HAND_GRID_HOLDING;
+    v.ports[1].character = RANDOM_CHARACTER;  // the hand over the RANDOM tile, the token in it
+    v.ports[1].hand_x = 0.45f;
+    v.ports[1].hand_y = 0.52f;
+    v.hand2_prev_x = 0.45f;
+    v.hand2_prev_y = 0.52f;
+    State r = Step(v, State{}, 1000);
+    EXPECT_TRUE(r.pick_set);
+    EXPECT_EQ(r.pick_character, RANDOM_CHARACTER);
+    EXPECT_EQ(r.locked, 1);  // the host's Random is in
+    int presses = 0;
+    for (int f = 1000 + STEER_SETTLE_FRAMES; f < 1008 + STEER_SETTLE_FRAMES; ++f)
+    {
+      r = Step(v, r, f);
+      presses += (Gate(v, r)[1].press & A) != 0;
+    }
+    EXPECT_EQ(presses, 2);
+    // Down on RANDOM in another colour: in and locked at once, no X turning it.
+    v.ports[1] = Placed(RANDOM_CHARACTER, 0);
+    r = Step(v, r, 1030);
+    EXPECT_EQ(r.locked, 3) << ranked;
+    EXPECT_EQ(Gate(v, r)[1].press & X, 0);
+    EXPECT_FALSE(Gate(v, r)[1].steer);
+    // Both lock in with Start: on to the stage select, the picks Random (the game resolves them).
+    r = Step(Press(v, START, START), r, 1031);
+    EXPECT_EQ(r.ready, 3);
+    EXPECT_TRUE(r.flags & FLAG_GO);
+    const Text t = TextFor(Press(v, START, START), r, {}, 0, 0);
+    EXPECT_TRUE(t.locked[0] && t.locked[1]);
+  }
+
+  // Casual's later games: A put the token on RANDOM, Start locks it in, B unlocks.
+  View later = Room();
+  later.game1 = false;
+  later.ports[0] = Placed(RANDOM_CHARACTER, 0);
+  State c = Step(Press(later, START), State{}, 2000);
+  EXPECT_EQ(c.ready, 1);
+  EXPECT_EQ(Gate(later, c)[0].buttons & (A | B | X | Y), A | B | X | Y);
+  c = Step(Press(later, B), c, 2001);
+  EXPECT_EQ(c.ready, 0);
+
+  // Ranked's later games: the character order's two lock-ins on RANDOM go on at once.
+  View order = Room(true);
+  order.game1 = false;
+  order.order_done = true;
+  order.order_locked_in = true;
+  order.order_locked = 3;
+  order.ports[0] = Placed(RANDOM_CHARACTER, 0);
+  order.ports[1] = Placed(RANDOM_CHARACTER, 1);
+  ASSERT_TRUE(OrderLockedIn(order));
+  const State o = Step(order, State{}, 3000);
+  EXPECT_EQ(o.ready, 3);
+  EXPECT_TRUE(o.flags & FLAG_GO);
+}
+
 TEST(OrcaQueue, TheLatchKeepsTheRawButtons)
 {
   FakeMemory m = Block(MB::FLAG_QUEUE2);

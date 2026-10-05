@@ -31,10 +31,12 @@ namespace Orca::UX
 // results screen until each player leaves it (OnlineMatch's SetOverLeave; an older build would end
 // its session at the verdict while the other plays on); 14, Orca 0.3.18: Orca's words in the
 // game's own text boxes, the players' names and ratings on their character select plates and the
-// queue's line in the rules bar (NativeText.h): the session hashes it into the compatibility key
-// as `ux=<n>`, so two builds that would write different bytes (or mask different inputs, or part
+// queue's line in the rules bar (NativeText.h); 15, Orca 0.3.19: Random a pick like any
+// character's, the joiner's Random steered in without turning its colour (Queue.h
+// RANDOM_CHARACTER), and no skip in ranked: the session hashes it into the compatibility key as
+// `ux=<n>`, so two builds that would write different bytes (or mask different inputs, or part
 // differently) never meet in a room.
-constexpr int kCompatVersion = 14;
+constexpr int kCompatVersion = 15;
 
 // The disc the game runs from (the boot's disc, or the default disc a launcher boots with): the
 // overlay's kit reads the game's own fonts from it (Kit.h). Before Init.

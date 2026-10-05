@@ -136,9 +136,15 @@ constexpr u32 CSS_HAND_TAKING = 6;     // the token on its way into the hand
 constexpr u32 CSS_HAND_GRID_HOLDING = 7;  // the grid, the token in the hand (A puts it down)
 constexpr u32 CSS_HAND_PLACING = 8;       // the token on its way down
 constexpr u32 CSS_BUTTON_PLAYER_TYPE = 0x1D;
-// A passes only strictly between these (one frame's travel inside the grid's edges, both games).
+// A passes only strictly between these (one frame's travel inside the grid's edges). The top and
+// Project+'s bottom: both games. Brawl's bottom row (RANDOM at its right end, Lucas, ...) reaches
+// down to -4.07, and its grid goes on below it to -5.35 or lower, over nothing until the player's
+// own panel picture (a button, 0x1B: from about -5.8): one frame's travel (0.83) from above -4.2
+// stays in the grid, so Brawl's A reaches the whole of that row (Orca 0.3.19; with -3.0 the bottom
+// quarter of every tile in it swallowed A, RANDOM's too: ORCA.md "Random and ranked's no skip").
 constexpr float CSS_A_TOP = 15.0f;
 constexpr float CSS_A_BOTTOM = -3.0f;
+constexpr float CSS_A_BOTTOM_BRAWL = -4.2f;
 
 struct CssHand
 {
@@ -151,8 +157,9 @@ struct CssHand
 };
 // Port `port`'s (0-3) hand, on the character select; invalid anywhere else or before it is built.
 CssHand ReadCssHand(const GuestMemory& memory, int port);
-// Whether A may reach the game from this hand while the locks hold. An unreadable hand may not.
-bool CssHandMayPressA(const CssHand& hand);
+// Whether A may reach the game from this hand while the locks hold, `bottom` the game's lower edge
+// (CSS_A_BOTTOM, Brawl's CSS_A_BOTTOM_BRAWL). An unreadable hand may not.
+bool CssHandMayPressA(const CssHand& hand, float bottom = CSS_A_BOTTOM);
 
 // ---- B on the character select: only to take the token back up (ORCA.md "The character
 // select's buttons") ----

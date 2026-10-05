@@ -44,8 +44,9 @@ class CPUThreadGuard;
 //   with the picks as they are. The timer runs in every ranked game but only in casual's first
 //   (Timed()): from game 2 on, casual waits for both Starts with no clock and no timeout (Luis,
 //   2026-10-04: more time to talk).
-// - **Skip:** holding Z 1.5 s on the room's character select prints `orca queue skip` (the page
-//   leaves the room and searches again). Local only: it changes nothing in the game.
+// - **Skip (casual only):** holding Z 1.5 s on a casual room's character select prints `orca queue
+//   skip` (the page leaves the room and searches again). Local only: it changes nothing in the
+//   game. Ranked has none (MaySkip): a ranked match is played.
 // - **Later games:** casual comes back to the room's character select, characters free: A picks, B
 //   (with the token down) takes the token back up, Start locks in (ready), B while locked in
 //   unlocks; both locked in, on to the stage select at once, with no timer (Luis, 2026-10-04: "press
@@ -121,8 +122,14 @@ constexpr int STEER_SETTLE_FRAMES = 20;
 // Turning port 2's costume (X) gives up after this long: the character is in, whatever the colour.
 constexpr int COSTUME_LIMIT_FRAMES = 3 * 60;
 
-// The character select's id for "no character" (muSelCharPlayerArea +0x1B8).
+// The character select's id for "no character" (muSelCharPlayerArea +0x1B8, Selch_SelectNone).
 constexpr int NO_CHARACTER = 0x28;
+// Its id for Random (Selch_Random; the same in Project+): a pick like any character's, on the
+// queue's own character select, steered onto the joiner's panel, locked in, in every game (ORCA.md
+// "Random and ranked's no skip"). The game resolves it to a character itself as the character
+// select ends, from its own random number generator, which is emulated state: the same on every
+// machine of a session. X never turns RANDOM's colour, so the steering takes it in any colour.
+constexpr int RANDOM_CHARACTER = 0x29;
 
 // ---- The queue identity (Events::PortInfo::queue), 13 bytes, big-endian ----
 //   +0 version 1   +1 u16 rating (0xFFFF none)   +3 u8 character (0xFF none)   +4 u8 costume
@@ -209,6 +216,13 @@ bool OrderLockedIn(const View& view);
 // the match block (the header's mode and FOUGHT), so the same on every machine and re-run.
 bool Timed(const View& view);
 
+// Whether a player may hold Z to find someone else (`orca queue skip`): a casual room's character
+// select with both players in, before the go or a timeout. Never in ranked (Luis, 2026-10-05: "you
+// should not be able to click Z to escape a ranked match. You are forced to play a ranked match"):
+// no line, no bar, no hint in any game of a set; leaving a set any other way is a forfeit. Local
+// only (the line and the overlay): Z is masked from the game in both modes alike.
+bool MaySkip(const View& view, const State& state);
+
 // The state after this boundary, from the state before it, the view and the hook's frame number.
 // Pure and idempotent (the same view and state give the same result, and a result fed back in
 // changes nothing).
@@ -228,6 +242,20 @@ struct SkipHold
   // 0..1 of the way to a skip, for the overlay (0 while nothing is held or once it fired).
   float Progress() const;
 };
+
+// The overlay's queue lines on this machine (local, display only): the top line, the note under it
+// (this player's own hints: "B to change", casual's "Hold Z to find someone else" or the skip's
+// bar at `skip_progress`), each port's name label and LOCKED IN badge. `local` is this machine's
+// port. Pure.
+struct Text
+{
+  std::string line;
+  std::string note;
+  std::array<std::string, 4> labels;
+  std::array<bool, 4> locked{};
+};
+Text TextFor(const View& view, const State& state, const std::vector<Events::PortInfo>& ports,
+             int local, float skip_progress);
 
 // ---- Fixed point (the steering's arithmetic) ----
 // Every machine computes port 2's stick from the hand's place in emulated memory, so the steering

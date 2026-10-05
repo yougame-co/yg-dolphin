@@ -2522,6 +2522,13 @@ select's hands"); B was already masked there.
   bar's value, Project+; Brawl's from 16.46); at the bottom the grid reaches -3.96 or lower
   everywhere probed (target 5 starts between there and -4.79). The characters sit well inside:
   Brawl's rows span about -4.1 to 15.5, Project+'s about 0 to 15. An unreadable hand gets no A.
+  **Brawl's bottom edge is -4.2** since Orca 0.3.19 (`CSS_A_BOTTOM_BRAWL`): its bottom row (RANDOM
+  at the right end, x 22.8..28.7) reaches -4.07, so -3.0 swallowed A over the bottom quarter of
+  every tile in it, which is how a player coming up from the panels first meets them. Brawl's grid
+  goes on below that row to -5.35 or lower (`css-gate-runs/bottomscan.log`: target 2 down to -5.35
+  at x -27.48, nothing at -5.70, the own panel's picture, 0x1B, from about -5.8; the raster's row at
+  -4.98 is grid all the way across), so one frame's travel (0.83) from above -4.2 still never leaves
+  the grid. Project+ keeps -3.0 (its rows end above -1.5).
 - **What still works.** Picking (A on a character with the token in the hand), taking the own token
   up and putting it down, the character order's lock-in (A in the grid until `ux=12`, Start since),
   costumes with X and Y.
@@ -2592,12 +2599,14 @@ by the token, not by any state of their own worth patching:
 
 ### Compatibility and tests
 
-`ux=12` (8 brought the locks and the rules preset of `ux=6` went; 9 the character select's A
+`ux=15` (8 brought the locks and the rules preset of `ux=6` went; 9 the character select's A
 gate; 10, Orca 0.3.14, queue2's character select, Project+'s boot to the main menu with friends
 dropping in from the menus, the character select's title, and the casual stage pick; 11, Orca
 0.3.15, no Z on the results screen in any session, "The results screen's replay"; 12, the
 character select's A to pick, B to take the token back up and Start to lock in, "B only takes the
-token back up", "Character order", "The queue's character select"), caps `locks`
+token back up", "Character order", "The queue's character select"; 13, Orca 0.3.17, the set over;
+14, Orca 0.3.18, native text; 15, Orca 0.3.19, Random as a pick and no skip in ranked, "Random and
+ranked's no skip"), caps `locks`
 and `queue2`. Test knob `ORCA_TEST_QUEUE=casual|ranked`
 (a test override): the header as a queue room's host writes it, in a harness run or a dev game's
 room, both Orcas set alike. Unit tests `OrcaOnlineRules*` (the header's lifecycle and saved rules,
@@ -3409,8 +3418,8 @@ Proven by probe writes (`ORCA_UX_PROBE` `write`): one write, still on screen 150
   "Game 1: Press Start to lock in  0:27", "Game 1: ADA locked in, BO to press Start  0:24",
   "ADA 1-0 BO: ADA picks, A then Start  0:43" (later games give the score in place of the game),
   "ADA wins the set 2-0". The overlay's top line, the set's score line and the character order's
-  line go; this machine's own hints ("Hold Z to find someone else", "B to change") move up to the
-  top line.
+  line go; this machine's own hints ("Hold Z to find someone else" in casual, "B to change") move
+  up to the top line.
 
 Both are a pure function of emulated memory (the header, the queue's ready flags and timer, the set,
 the character order) and the synced ports (names, the queue identity's rating), written at every
@@ -3438,7 +3447,7 @@ game's (`Apply`'s `rules_bar` false) and the overlay docks its lines on it ("Sea
 | Stage proposal markers, cursor owner | overlay rings and tags | the game has one cursor model, driven by one port; a second needs game code | model | n/a | **kit** |
 | Victory / defeat, rating change | overlay panel (q5-set-end) | the results screen's winner name ("Mario" took "ADA"), mode ("Brawl" took "Ranked") and rule panel are message buffers; but VICTORY and DEFEAT differ per player and the new rating comes from the server after the frames are final | message buffers | the shared facts only | **hybrid**: "ADA wins the set 2-0" native on the results screen; VICTORY/DEFEAT and the rating count in the kit |
 | Disconnect countdown | overlay notice (q5-set-end) | none: during a stall the CPU waits, no frame runs, the game draws nothing new, and only one side knows | — | no | **kit** (host-drawn, RepresentDuringStall) |
-| "Hold Z to find someone else", "B to change", the skip bar | overlay | per-machine hints | — | no (local hold) | overlay, one small line |
+| "Hold Z to find someone else" (casual only), "B to change", the skip bar | overlay | per-machine hints | — | no (local hold) | overlay, one small line |
 | READY TO FIGHT banner, the mode title | the game's | textures (MenSelchr...) | texture | a palette mark + Orca's pack (CssTitle's way) | keep the game's |
 
 **Proof** (2026-10-04, `q5-ui-native` on `rel-0.3.16`, Apple Silicon, headless):
@@ -3619,7 +3628,8 @@ built: Brawl's later games are characters (both at once, 45 s), then the ban, th
 Luis's spec of 2026-10-04 (Slippi's flow): Casual and Ranked land on a character select where the
 player sees only their own panel, picks, and presses Start; only then does the page search. The
 opponent arrives with their character already picked; both press Start to ready up (30 s in ranked
-and in casual's first game; casual's later games wait); a long Z finds someone else. Orca's half of the `queue2` contract with the YouGame page (its half:
+and in casual's first game; casual's later games wait); in casual a long Z finds someone else (ranked
+has no skip: Luis, 2026-10-05, "You are forced to play a ranked match"). Orca's half of the `queue2` contract with the YouGame page (its half:
 `lib/orca-queue.ts`, `OrcaEmbed.tsx`); code in `Core/Orca/UX/Queue.*`, the session's part in
 `Rollback/OnlineMatch.cpp` (the queue image), tests `OrcaQueue*`.
 
@@ -3628,7 +3638,7 @@ and in casual's first game; casual's later games wait); a long Z finds someone e
 | `orca queue ready <casual\|ranked> <char> <costume>` | On the queue's own character select the player has a character down and pressed Start: search with this pick. Printed again with a new pick, and again when the player is back on that character select still ready after a room (below). `<char>` is the character select's own id (`muSelCharPlayerArea` +0x1B8, 0x28 none), `<costume>` its colour number (+0x1BC). |
 | `orca queue unready` | The player pressed B, took the token up, or the page's `queue-cancel` came, while ready: stop searching. Still on the character select. |
 | `orca menu cancel` | (unchanged) B while not ready backs out to the menus, as the game does: the search is over. |
-| `orca queue skip` | Z held 1.5 s on the room's character select (both players in, before the game goes on): the page leaves the room and searches again. Local only: nothing in the game changes. |
+| `orca queue skip` | Casual only: Z held 1.5 s on the room's character select (both players in, before the game goes on): the page leaves the room and searches again. Local only: nothing in the game changes. Never in ranked (since 0.3.19, `Queue::MaySkip`): no line, no bar, no hint in any game of a set. |
 | `orca queue timeout me\|them` | Casual's first game with this opponent: the 30 s ready timer ran out (at a final frame, the same on both machines; casual's later games have no timer, so never then). `me`: this player wasn't ready (the page leaves and stops searching); `them`: the opponent wasn't (the page leaves and searches again). Nothing moves on the character select meanwhile. |
 
 The page owns the room: Orca never leaves on a skip or a timeout by itself.
@@ -3664,7 +3674,7 @@ The page owns the room: Orca never leaves on a skip or a timeout by itself.
   token in it and has all but stopped (the character the hand reads lags it by a frame; Brawl's hand
   creeps about 0.03 a frame with the stick let go, which counts as stopped); X turns the costume
   until it matches (3 s at most; port 1's own colour on the same character can't be had, so any
-  colour does then); B takes a token down on another character back up; then it is locked too. 10 s
+  colour does then, and RANDOM, whose colour X never turns, takes any since 0.3.19); B takes a token down on another character back up; then it is locked too. 10 s
   at most, after which the player picks by hand. About 1.5 s in Brawl, 2 s in Project+. Then the ready timer, 30 s, once
   both are plugged in (a ranked later game's: once the character order is done, `CharOrder.h`,
   whose own Start is then not pressed): Start readies a player with a character down, B un-readies;
@@ -3674,8 +3684,8 @@ The page owns the room: Orca never leaves on a skip or a timeout by itself.
   on with the picks (without a character on both, Phase 1's no-show rule decides). Overlay: each
   player's name over their panel, with the rating in ranked ("ada · 1532"; since `ux=12` a LOCKED
   IN badge on the panel once ready, before it a ✓), "Press Start to lock in · 0:24" / "bo locked in
-  · Press Start to lock in · 0:24", "Hold Z to find someone else", a bar while Z is held, "Time's
-  up".
+  · Press Start to lock in · 0:24", in casual "Hold Z to find someone else" and a bar while Z is
+  held (never in ranked), "Time's up".
 - **After the room** (a skip, a timeout, the opponent gone, a set over, a leave): the session puts
   back this player's own game as it was when `host` or `join` came (the **queue image**: a machine
   image and the NAND, taken at that boundary while the player was on the queue's own character
@@ -3719,6 +3729,47 @@ The page owns the room: Orca never leaves on a skip or a timeout by itself.
   locked in", and "Casual · Both locked in · Here we go" as the screen goes. The character order's
   turns keep their own line under the set's score ("Character order").
 
+### Random and ranked's no skip (Orca 0.3.19)
+
+Luis, 2026-10-05: "you should not be able to click Z to escape a ranked match. You are forced to
+play a ranked match. Also, for both casual and ranked, I should be able to select random if I want
+to."
+
+- **Ranked has no skip** (`Queue::MaySkip`): holding Z to find someone else is casual's only. In a
+  ranked room no game of the set has it: no `orca queue skip`, no bar, no "Hold Z to find someone
+  else" (the overlay's lines come from `Queue::TextFor`; the rules bar's native line never named Z).
+  Z stays kept from the game on both modes' character selects, so nothing emulated changed with
+  this. The set over's "Hold Z to leave" (after the verdict) stays, and leaving a set any other way
+  is the forfeit it always was.
+- **Random is a pick like any character's.** Both games' character select calls it 0x29
+  (`Queue::RANDOM_CHARACTER`, Brawl's `Selch_Random`; Project+ reads the same under the harness),
+  never "no character" (0x28): the queue identity carries it, `orca queue ready <q> 41 <colour>`
+  prints it, the joiner's Random is steered onto its panel, game 1 locks it, the character order
+  and casual's later games lock it in with Start, the LOCKED IN badge shows on it. Brawl's RANDOM is
+  the right end of the grid's bottom row (x 22.8..28.7, y -4.07..0.08), Project+'s the middle of
+  its bottom row (about x -3..4, y -1.5..2.5); with the token in the hand over either, the hand's
+  target is the grid (7), as over any character. The game resolves Random itself as the character
+  select ends, from its own random number generator, which is emulated state: both machines of a
+  session resolve the same character (the synctests and the two-Orca run below), and each game of a
+  set draws again (Project+ `pplus-css-random.txt`: game 1 resolved to 50 and 51, game 2 to 0 and
+  43). The opponent sees RANDOM on the panel until the fight, as the game shows it.
+- **What was in the way** (found under the harness with 0.3.18's code, `q7-runs`, probe watches on
+  both areas' +0x1B8, +0x1BC, +0x1F8 and the hands):
+  - **Brawl: the A gate's bottom edge.** It was -3.0 in both games, and Brawl's bottom row reaches
+    -4.07, so A was swallowed over the bottom quarter of RANDOM (and of every tile in that row),
+    which is where a hand coming up from the panels meets it first: A at (25.64, -4.03) over RANDOM
+    did nothing, two frames higher (-2.37) the token went down. Brawl's edge is -4.2 now ("The
+    character select's buttons (A only in the grid)"), Project+'s stays -3.0.
+  - **The joiner's colour.** X never turns RANDOM's colour (+0x1BC stays, both games), and RANDOM's
+    colour number isn't always 0: after a fight the tokens come back on RANDOM with the resolved
+    character's (8 and 10 in the Project+ run). The steering pressed X until the colour matched,
+    which it never did, so the joiner's Random counted as in, and the joiner could ready, only after
+    the 3 s costume limit. Random now takes any colour, as port 1's own colour does.
+  - **Nothing else**: 0x29 was already a character to every check (`HasPick`, `placed`,
+    `CssToken::Down`, `CharOrder::CssPort::Down`). With 0.3.18's code Project+'s RANDOM went down
+    with A, Start printed `orca queue ready ranked 41 0`, the joiner's Random was steered in in 65
+    frames and both readied (Brawl: 85 frames, from where A still worked).
+
 ### Determinism
 
 The region at `MatchBlock::QUEUE` (`+0x1C0..+0x1EF`; the sprint assigned `+0x100..+0x13F`, which is
@@ -3760,13 +3811,17 @@ header is the room's (`FLAG_QUEUE2`, no longer solo), as a host's is once the pa
 goes from the player's own character select to the room's. The knob's header is a pure function of
 the knob and the synced ports, so it is written on every run of a boundary, re-runs too (a real
 host's header changes only at an alone boundary, which nothing re-runs). `Tools/orca/queue-e2e.mjs
---q2 [--scenario skip|timeout]` plays the page's half against yougame.co. Inputs:
+--q2 [--scenario skip|timeout|noskip] [--pick random]` plays the page's half against yougame.co
+(`noskip`, ranked: both hold Z 3 s on every game's character select and nobody skips; `--pick
+random`: every pick RANDOM). Inputs:
 `Tools/orca/inputs/bf-queue2.txt`, `pplus-queue2.txt`; the whole flow from the boot,
 `bf-queue2-flow.txt` and `pplus-queue2-flow.txt` (casual, two games), `bf-queue2-ranked.txt` and
 `pplus-queue2-ranked.txt` (ranked game 1: ready, strikes, pick); the character select's buttons
 (`ux=12`), `bf-css-lockin.txt` and `pplus-css-lockin.txt` (ranked through game 2's character order
 and stage select) and `bf-css-casual.txt` and `pplus-css-casual.txt` (casual through game 2's
-lock-ins and stage pick).
+lock-ins and stage pick); Random (`ux=15`), `bf-css-random.txt` and `pplus-css-random.txt` (ranked
+with every pick RANDOM: the own character select, the joiner's steered in, game 2's character order,
+the two cursors' stage selects).
 
 **Checked 2026-10-04** (branch `q2-queue-css` on `rel-0.3.13`, M4 Pro, headless, `-v Null`):
 - Unit tests: `OrcaQueue*` (ready, unready, the stopping B, the timer, casual and ranked timeouts,
@@ -3906,6 +3961,53 @@ release checklist above):
   the queue its region at +0x1C0 (ready is the lock-in); +0x1A8..+0x1B3, offered for this track, is
   still free. What changed is who writes the raw latch (+0x1C8..+0x1CF, +0x1E8..+0x1EF): every
   header that locks, not only queue2's.
+
+**Checked 2026-10-05, Orca 0.3.19** (`q7-ranked-random` on `rel-0.3.18` at `17007aa28e`, `ux=15`;
+M4 Pro, headless, `-v Null` unless said; logs in `q7-runs` beside the checkouts):
+- Build: `dolphin-emu-nogui` and `tests`, no compiler warnings (only the usual Homebrew dylib
+  deployment-target notes from `ld`).
+- Unit tests: 439 `Orca*`, 419 pass, 20 skipped (the live, network, disc and design-dump ones), 0
+  fail; new `OrcaQueue.RankedHasNoSkip` (casual's hint, bar and skip; ranked's none in game 1 and
+  later games, either port, ready or not, Z still kept from the game), `.RandomIsAPickLikeAnyCharacter`
+  (the identity, the own character select's ready, the joiner's Random steered in and locked in any
+  colour with no X, both locked in, casual's later games, ranked's order), `OrcaCharOrder
+  .RandomLocksInLikeAnyCharacter`, and `OrcaOnlineRules.TheCharacterSelectPassesAOnlyInTheGrid`'s
+  Brawl (-4.2) and Project+ (-3.0) bottom edges.
+- Under the harness with 0.3.18's code (`ORCA_UX_PROBE` watches, `ORCA_TEST_QUEUE=ranked:solo`, the
+  joiner's pick `ORCA_TEST_QUEUE_PICK=<frame>:41:0:<x>:<y>:1532`): Project+'s RANDOM down with A at
+  (0.60, 0.70), `orca queue ready ranked 41 0`, port 2's Random in 65 frames, both ready, the
+  stage select, the fight (`pp-probe`); Brawl the same from (25.64, -0.71), port 2's in 85 frames
+  (`bf-probe`); Brawl's A at (25.64, -4.03) over RANDOM changed nothing and two frames higher
+  (-2.37) put the token down (`bf-low`); X on RANDOM never moved +0x1BC in either game.
+- `YG_SYNCTEST=7`, **0 RAM mismatches**, every pick RANDOM:
+  - Project+ `pplus-css-random.txt` (`ORCA_TEST_QUEUE=ranked:solo ORCA_UX_TEST_NAMES=ada,bo
+    YG_RESULTS=1 ORCA_TEST_QUEUE_PICK=874:41:3:0.5:0.5:1532`, `YG_SYNCTEST_FROM=200` to 4900):
+    32,851 re-run frames. Port 1's RANDOM down at 745, `orca queue ready ranked 41 0` at 775; port
+    2's Random (colour 3 in its identity) in at 939, 65 frames, no X; both ready at 1195; the two
+    cursors agreed on Battlefield; game 1 fought as 50 and 51 (port 1 won 4-0); game 2's order:
+    port 1's B, RANDOM again with A, Start at 3266, port 2's Start on the RANDOM left from game 1
+    at 3316 and the stage select at once; game 2 fought as 0 and 43.
+  - Brawl `bf-css-random.txt` (the same with `ORCA_TEST_SET_RULES=1,8` and the pick
+    `2106:41:3:25.7:-1.5:1532`, `YG_SYNCTEST_FROM=1440` to 5000): 24,871 re-run frames. Port 1's A
+    at (25.64, -3.20) over RANDOM, under 0.3.18's edge, put the token down at 2032; `orca queue
+    ready ranked 41 0`; port 2's Random in 89 frames; both ready at 2427; game 1 fought as 37 and
+    26 on Pokemon Stadium; game 2's order on RANDOM (4022, 4072), fought as 25 and 1 on
+    Battlefield.
+  The plain runs of both inputs (to 9000) took the same steps at the same frames.
+- Two-Orca, Project+ ranked over yougame.co with dev tickets (`queue-e2e.mjs --pplus <dol>
+  --queue ranked --q2 --scenario noskip --pick random`): **PASS**. Both picked RANDOM on their own
+  character select (`orca queue ready ranked 41 0` on both), bo's Random went into ada's game in 65
+  frames (1.3 s); on each game's character select both held Z for 3 s and neither printed `orca
+  queue skip`; 2-0 for ada, the 3 verdicts the same on both sides, the characters too (game 1 38 and
+  35, game 2 3 and 38: each machine resolved the same Randoms); VICTORY and DEFEAT, the set over,
+  both back on their own character select not ready; **235 / 235** checksums matched, 0
+  rollbacks, no desync.
+- Screenshots (`-v Metal ORCA_TEST_PRESENT=1280x720`, Project+ `pplus-css-random.txt`), kept in
+  `ui-shots/0.3.19` beside the checkouts with a README: the queue's own character select searching
+  with RANDOM down; the ranked room's character select, game 1, with no "Hold Z" hint or bar; ada
+  LOCKED IN on RANDOM; game 2's character order with ada's Random locked in.
+- Not run here: the Brawl two-Orca run, the casual two-Orca runs, the hashlogs (nothing here acts
+  without a queue header) and Mac <-> PC (the release lead's).
 
 ## Embedding
 

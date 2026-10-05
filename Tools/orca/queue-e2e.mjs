@@ -36,6 +36,8 @@
 // by pressing on through the results screen (match), or, zleave (ranked), the joiner by holding Z
 // there ("<name> left" on the host's, which then presses Start); no forfeit either way, and after a
 // ranked set both are back on their own character select not ready (Start searches again).
+// noskip (ranked): the set as `match`, with both players holding Z 3 s on every game's character
+// select: no `orca queue skip` (a ranked match has no skip). --pick random: every pick is RANDOM.
 // Every --q2 scenario ends with the checksum gate: each session either Orca ended (its "Drop-in:
 // back to solo play ... N checksums matched" line) matched checksums with the other (N > 0), and
 // neither logged a desync or a failed session.
@@ -96,6 +98,17 @@ const SHOTS_OUT = opt("--shots-out");
 // verdict (the YouGame page sends it once the site rated the set; +16 a win, -15 a loss here).
 const RATING_AFTER_MS = Number(opt("--rating-after", "1500"));
 const Q2 = argv.includes("--q2");
+// --pick random (--q2): each side puts its token on the RANDOM tile on its own character select
+// (Orca 0.3.19, ORCA.md "Random and ranked's no skip"): `orca queue ready <q> 41 <costume>`, the
+// joiner's pick steered onto the host's RANDOM tile, and the game resolving both at the fight (the
+// verdicts' characters compared on both sides).
+const PICK = opt("--pick", "character");
+// The character select's id for Random (Brawl's Selch_Random, and Project+'s), and where each
+// game's RANDOM tile is from the hand's start on panel 1 (frames of full tilt up, then right):
+// Project+ 1.0 a frame from (-23.4, -19.3) to (0.6, 0.7), the tile about -3..4, -1.5..2.5; Brawl
+// 0.83 a frame from (-22.5, -19.8) to (25.6, -1.5), the tile 22.8..28.7, -4.1..0.1.
+const RANDOM_CHAR = 41;
+const RANDOM_PATH = PPLUS ? { up: 20, right: 24 } : { up: 22, right: 58 };
 const PROFILE = PPLUS ? "pplus32" : "rsbe01";
 const DEV_GAME = `orca-queue-e2e-${PROFILE}`;
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), "orca-queue-e2e-"));
@@ -973,7 +986,13 @@ const CAPS_Q2 = "caps join leave stats pause delay perf direct host results queu
 async function q2Ready(side, queue) {
   await side.waitScene("scSelctCharacter", 60000);
   await sleep(2500);
-  await side.hold([128, 255, 128, 128], 450);
+  if (PICK === "random") {
+    // Up into the grid's bottom row, then right onto RANDOM (frames at 60 a second).
+    await side.hold([128, 255, 128, 128], Math.round((RANDOM_PATH.up * 1000) / 60));
+    await side.hold([255, 128, 128, 128], Math.round((RANDOM_PATH.right * 1000) / 60));
+  } else {
+    await side.hold([128, 255, 128, 128], 450);
+  }
   await sleep(300);
   await side.press("A");
   await sleep(1500);
@@ -985,6 +1004,8 @@ async function q2Ready(side, queue) {
       .catch(() => null);
     if (r) {
       if (r.m[1] !== queue) fail(`${side.name}: ${r.line}, wanted ${queue}`);
+      if (PICK === "random" && Number(r.m[2]) !== RANDOM_CHAR)
+        fail(`${side.name}: ${r.line}, wanted Random (${RANDOM_CHAR})`);
       return r;
     }
     if (tries >= 4) fail(`${side.name}: Start on its own character select never readied it`);
@@ -1037,9 +1058,13 @@ async function q2Css(host, joiner, first, queueFrom = 0) {
       30000,
       "the joiner's pick never went into the host's game",
     );
-    log(`the joiner's pick went in (${((Date.now() - at) / 1000).toFixed(1)} s on the host)`);
+    const line = host.queueLog.slice(queueFrom).find((l) => /port 2's pick is in/.test(l));
+    log(`the joiner's pick went in (${((Date.now() - at) / 1000).toFixed(1)} s on the host): ${line}`);
+    if (PICK === "random" && !/character 0x29\b/.test(line))
+      fail(`the joiner's Random pick went in as another character: ${line}`);
   }
   await sleep(1500);
+  if (SCENARIO === "noskip") await noSkip([host, joiner]);
   if (QUEUE === "ranked" && !first) {
     await Promise.all([
       host.hold([128, 255, 128, 128], 450),
@@ -1057,6 +1082,25 @@ async function q2Css(host, joiner, first, queueFrom = 0) {
     await sleep(1200);
   }
 }
+
+// --scenario noskip (ranked; Luis, 2026-10-05: "you should not be able to click Z to escape a
+// ranked match"): on every game's character select both players hold Z for 3 s, twice the casual
+// skip's 1.5 s, and neither Orca prints `orca queue skip`; the set then goes on as `match`.
+async function noSkip(sides) {
+  if (QUEUE !== "ranked") fail("noskip is a ranked scenario");
+  const from = sides.map((s) => s.lines.length);
+  for (const s of sides) s.pad.buttons |= BTN.Z;
+  await sleep(3000);
+  for (const s of sides) s.pad.buttons &= ~BTN.Z;
+  await sleep(500);
+  sides.forEach((s, i) => {
+    if (s.lines.slice(from[i]).some((l) => l === "orca queue skip"))
+      fail(`${s.name}: held Z on a ranked character select and printed orca queue skip`);
+  });
+  ++noSkipHolds;
+  log(`noskip: both held Z 3 s on the ranked character select; no orca queue skip`);
+}
+let noSkipHolds = 0;
 
 async function q2Fight(host, joiner) {
   if (QUEUE === "casual") {
@@ -1418,7 +1462,17 @@ async function q2Main() {
   const n = sameVerdicts(host, joiner);
   noErrors([a, b]);
   const sums = checksumsMatched([a, b]);
-  log(`PASS: q2 ${QUEUE}${SCENARIO === "zleave" ? " zleave" : ""}: ${n} verdicts the same on both sides; ${QUEUE === "ranked" ? "set over: both stayed, then left; " : ""}both back on their own character select${ready ? ", ready" : ", not ready"}; checksums: ${sums}`);
+  if (SCENARIO === "noskip") {
+    if (!noSkipHolds) fail("noskip: Z was never held");
+    for (const s of [a, b])
+      if (s.lines.some((l) => l === "orca queue skip")) fail(`${s.name}: printed orca queue skip`);
+  }
+  // The characters each game was fought with (a Random pick resolved), from the host's verdicts.
+  const fought = host.results
+    .filter((r) => r.d && Array.isArray(r.d.c))
+    .map((r) => r.d.c.join("/"))
+    .join(", ");
+  log(`PASS: q2 ${QUEUE}${SCENARIO !== "match" ? ` ${SCENARIO}` : ""}${PICK !== "character" ? ` pick ${PICK}` : ""}: ${n} verdicts the same on both sides${fought ? ` (characters ${fought})` : ""}; ${SCENARIO === "noskip" ? `Z held on ${noSkipHolds} character select(s), no skip; ` : ""}${QUEUE === "ranked" ? "set over: both stayed, then left; " : ""}both back on their own character select${ready ? ", ready" : ", not ready"}; checksums: ${sums}`);
 }
 
 // Back out of the character select to the With Anyone page (the cursor comes back on the pick),

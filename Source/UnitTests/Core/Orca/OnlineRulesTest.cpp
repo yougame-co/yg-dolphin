@@ -479,9 +479,15 @@ TEST(OrcaOnlineRules, TheCharacterSelectPassesAOnlyInTheGrid)
   EXPECT_EQ(GateMasks(m)[0].buttons, B | A);
   SetHand(m, 0, CSS_HAND_GRID, -2.9f);
   EXPECT_EQ(GateMasks(m)[0].buttons, B);
-  SetHand(m, 0, CSS_HAND_GRID, -3.4f);
+  // Brawl's bottom row reaches -4.07 (RANDOM at its right end): A all the way down it (Orca 0.3.19;
+  // before, -3.0 swallowed A over the bottom quarter of every tile in that row).
+  SetHand(m, 0, CSS_HAND_GRID_HOLDING, -3.4f);
+  EXPECT_EQ(GateMasks(m)[0].buttons, B);
+  SetHand(m, 0, CSS_HAND_GRID_HOLDING, -4.07f);
+  EXPECT_EQ(GateMasks(m)[0].buttons, B);
+  SetHand(m, 0, CSS_HAND_GRID, -4.3f);
   EXPECT_EQ(GateMasks(m)[0].buttons, B | A);
-  SetHand(m, 0, CSS_HAND_GRID, CSS_A_BOTTOM);
+  SetHand(m, 0, CSS_HAND_GRID, CSS_A_BOTTOM_BRAWL);
   EXPECT_EQ(GateMasks(m)[0].buttons, B | A);
   SetHand(m, 0, CSS_HAND_GRID, std::nanf(""));
   EXPECT_EQ(GateMasks(m)[0].buttons, B | A);
@@ -500,6 +506,14 @@ TEST(OrcaOnlineRules, TheCharacterSelectPassesAOnlyInTheGrid)
   constexpr u16 DPAD = PAD_BUTTON_UP | PAD_BUTTON_DOWN | PAD_BUTTON_LEFT | PAD_BUTTON_RIGHT;
   EXPECT_EQ(GateMasks(p)[0].buttons, B | DPAD);
   EXPECT_EQ(GateMasks(p)[1].buttons, B | DPAD | A);
+  // Project+'s bottom edge stays -3.0 (its rows end above -1.5; RANDOM is the bottom row's middle,
+  // about -1.5..2.5).
+  SetHand(p, 0, CSS_HAND_GRID_HOLDING, 0.5f);
+  EXPECT_EQ(GateMasks(p)[0].buttons, B | DPAD);
+  SetHand(p, 0, CSS_HAND_GRID, -2.9f);
+  EXPECT_EQ(GateMasks(p)[0].buttons, B | DPAD);
+  SetHand(p, 0, CSS_HAND_GRID, -3.4f);
+  EXPECT_EQ(GateMasks(p)[0].buttons, B | DPAD | A);
 }
 
 TEST(OrcaOnlineRules, BReachesTheCharacterSelectOnlyToTakeTheTokenUp)

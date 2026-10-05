@@ -157,6 +157,12 @@ bool Timed(const View& v)
   return (v.ranked || v.game1) && !OrderLockedIn(v);
 }
 
+bool MaySkip(const View& v, const State& s)
+{
+  return v.queue2 && !v.solo && !v.ranked && v.css && (v.plugged & 3) == 3 &&
+         !(s.flags & (FLAG_TIMED_OUT | FLAG_GO));
+}
+
 State Advance(const View& v, const State& state, int frame)
 {
   State s = state;
@@ -237,10 +243,11 @@ State Advance(const View& v, const State& state, int frame)
     const CssPort& two = v.ports[1];
     const bool steering_over = s.steer_start != 0 && s.steer >= STEER_LIMIT_FRAMES;
     const bool on_pick = s.pick_set && two.placed && two.character == s.pick_character;
-    // The same character as port 1 can't wear port 1's colour: the game skips it, so any colour
-    // will do then.
-    const bool colour_taken = v.ports[0].placed && v.ports[0].character == s.pick_character &&
-                              v.ports[0].costume == s.pick_costume;
+    // Any colour will do where the pick's own can't be had: the same character as port 1 can't
+    // wear port 1's colour (the game skips it), and Random has no colour to turn.
+    const bool any_colour = (v.ports[0].placed && v.ports[0].character == s.pick_character &&
+                             v.ports[0].costume == s.pick_costume) ||
+                            s.pick_character == RANDOM_CHARACTER;
     // The costume's own clock, from the first boundary the token is down on the pick.
     if (on_pick && !(s.locked & 2) && s.costume_start == 0)
       s.costume_start = now;
@@ -248,7 +255,7 @@ State Advance(const View& v, const State& state, int frame)
         s.costume_start != 0 && now - std::min(now, s.costume_start) >= COSTUME_LIMIT_FRAMES;
     if (two.placed && (!s.pick_set || steering_over ||
                        (on_pick &&
-                        (two.costume == s.pick_costume || colour_taken || costume_over))))
+                        (two.costume == s.pick_costume || any_colour || costume_over))))
     {
       s.locked |= 2;
     }
@@ -446,8 +453,8 @@ Masks Gate(const View& v, const State& s)
     return masks;
   if (v.solo)
   {
-    // Port 1 alone: Start readies (Orca's, never the game's), Z is the room's skip, and while
-    // ready B only stops the search.
+    // Port 1 alone: Start readies (Orca's, never the game's), Z is kept from the game (casual's
+    // skip in the room; nothing in ranked), and while ready B only stops the search.
     masks[0].buttons =
         BUTTON_START | BUTTON_Z | ((s.ready & 1) || (s.flags & FLAG_SWALLOW_B) ? BUTTON_B : 0);
     for (int port = 1; port < Rollback::InputGate::PORTS; ++port)
@@ -487,10 +494,11 @@ Masks Gate(const View& v, const State& s)
       }
       else if (p.placed)
       {
-        // Down on another character: back into the hand. On it with another costume: X turns it.
+        // Down on another character: back into the hand. On it with another costume: X turns it
+        // (not on Random, which takes any).
         if (p.character != s.pick_character)
           two.press = edge ? BUTTON_B : 0;
-        else if (p.costume != s.pick_costume)
+        else if (p.costume != s.pick_costume && s.pick_character != RANDOM_CHARACTER)
           two.press = edge ? PAD_BUTTON_X : 0;
       }
       else if (p.hand_target == Rules::CSS_HAND_GRID_HOLDING && p.character == s.pick_character)
@@ -771,11 +779,16 @@ bool solo_css_for_pick(const View& v)
   return v.queue2 && v.solo && v.css;
 }
 
-void Lines(const View& v, const State& s, const std::vector<Events::PortInfo>& ports, int local)
+}  // namespace
+
+Text TextFor(const View& v, const State& s, const std::vector<Events::PortInfo>& ports, int local,
+             float skip_progress)
 {
-  std::string line, note;
-  std::array<std::string, 4> labels;
-  std::array<bool, 4> locked{};
+  Text out;
+  std::string& line = out.line;
+  std::string& note = out.note;
+  std::array<std::string, 4>& labels = out.labels;
+  std::array<bool, 4>& locked = out.locked;
   const std::string mode = v.ranked ? "Ranked" : "Casual";
   if (v.queue2 && v.css && v.solo)
   {
@@ -845,22 +858,22 @@ void Lines(const View& v, const State& s, const std::vector<Events::PortInfo>& p
                         "Press Start to lock in") +
                clock;
       note = mine && picks ? "B to change" : "";
-      const Local& l = L();
-      if (l.skip.Progress() > 0)
+      // Casual only: a ranked match is played (Luis, 2026-10-05: "You are forced to play a ranked
+      // match"), so ranked never offers the skip, its bar or its hint.
+      if (MaySkip(v, s) && skip_progress > 0)
       {
-        const int bars = std::clamp(static_cast<int>(l.skip.Progress() * 10), 0, 10);
+        const int bars = std::clamp(static_cast<int>(skip_progress * 10), 0, 10);
         note = "Finding someone else " + std::string(static_cast<size_t>(bars), '|') +
                std::string(static_cast<size_t>(10 - bars), '.');
       }
-      else
+      else if (MaySkip(v, s))
       {
         note += note.empty() ? "Hold Z to find someone else" : " · Hold Z to find someone else";
       }
     }
   }
-  SetQueueLines(std::move(line), std::move(note), std::move(labels), locked);
+  return out;
 }
-}  // namespace
 
 void Begin(bool ranked)
 {
@@ -1141,17 +1154,17 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
     s_solo_ready = false;
   }
 
-  // Skip: Z held 1.5 s on the room's character select (this player's own controller, as it was in
-  // the frame that just ran: never a guess).
-  const bool may_skip = v.queue2 && !v.solo && v.css && (v.plugged & 3) == 3 &&
-                        !(after.flags & (FLAG_TIMED_OUT | FLAG_GO)) && local >= 0 && local < 2;
+  // Skip: Z held 1.5 s on a casual room's character select (this player's own controller, as it
+  // was in the frame that just ran: never a guess). Never in ranked (MaySkip).
+  const bool may_skip = MaySkip(v, after) && local >= 0 && local < 2;
   if (l.skip.Step(may_skip, may_skip && (v.raw[local] & BUTTON_Z) != 0))
   {
     NOTICE_LOG_FMT(ROLLBACK, "Queue: frame {}: Z held {} frames: orca queue skip", frame,
                    l.skip.frames);
     Orca::Status::Line("orca queue skip");
   }
-  Lines(v, after, ports, local);
+  Text text = TextFor(v, after, ports, local, l.skip.Progress());
+  SetQueueLines(std::move(text.line), std::move(text.note), std::move(text.labels), text.locked);
 }
 
 Masks GateFrame(const Core::CPUThreadGuard& guard)

@@ -172,6 +172,23 @@ TEST(OrcaCharOrder, WinnerLocksInWithStartThenTheLoser)
   EXPECT_EQ(s, (St(2, Step::Done, 0, 160, 10)));
 }
 
+TEST(OrcaCharOrder, RandomLocksInLikeAnyCharacter)
+{
+  // A token down on RANDOM (the character select's 0x29, never "none"): Start locks it in, B takes
+  // it back up, and the order goes on as with a character (the game resolves Random at the fight).
+  CssView random = Css();
+  random.ports[0].character = Orca::UX::Queue::RANDOM_CHARACTER;
+  random.ports[1].character = Orca::UX::Queue::RANDOM_CHARACTER;
+  ASSERT_TRUE(random.ports[0].Down());
+  State s = Twice(kGame2, random, State{}, 100);
+  EXPECT_EQ(Gate(kGame2, random, s)[0].buttons, START);  // B reaches the game: the token is down
+  s = Twice(kGame2, Press(random, 0, START), s, 101);
+  EXPECT_EQ(s.step, Step::Second);
+  s = Twice(kGame2, Press(random, 1, START), s, 130);
+  EXPECT_EQ(s.step, Step::Done);
+  EXPECT_EQ(LockedPorts(kGame2, random, s), 3);
+}
+
 TEST(OrcaCharOrder, APicksBTakesTheTokenUpAndNeitherLocksIn)
 {
   // Luis's "stuck" (Orca 0.3.14, 2026-10-04): the winner's token was down on last game's

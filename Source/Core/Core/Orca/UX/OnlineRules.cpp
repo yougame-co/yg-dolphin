@@ -546,6 +546,8 @@ Rollback::InputGate::Masks GateMasks(const GuestMemory& m)
     // Project+'s Code Menu opens from the character select with the D-pad.
     if (h.ruleset == Ruleset::PPlus)
       buttons |= PAD_BUTTON_UP | PAD_BUTTON_DOWN | PAD_BUTTON_LEFT | PAD_BUTTON_RIGHT;
+    // The grid's lower edge for A: Brawl's bottom row sits lower than Project+'s.
+    const float a_bottom = h.ruleset == Ruleset::Brawl ? CSS_A_BOTTOM_BRAWL : CSS_A_BOTTOM;
     for (int port = 0; port < Rollback::InputGate::PORTS; ++port)
     {
       masks[port].buttons = buttons;
@@ -556,7 +558,7 @@ Rollback::InputGate::Masks GateMasks(const GuestMemory& m)
       if (!h.Solo() && !CssBMayUnpick(m, port))
         masks[port].buttons |= PAD_BUTTON_B;
       // A only in the grid: never on a player-type button (a CPU), or any other button.
-      if (!CssHandMayPressA(ReadCssHand(m, port)))
+      if (!CssHandMayPressA(ReadCssHand(m, port), a_bottom))
         masks[port].buttons |= PAD_BUTTON_A;
     }
     return masks;
@@ -623,7 +625,7 @@ CssHand ReadCssHand(const GuestMemory& m, int port)
   return hand;
 }
 
-bool CssHandMayPressA(const CssHand& hand)
+bool CssHandMayPressA(const CssHand& hand, float bottom)
 {
   if (!hand.valid)
     return false;
@@ -635,7 +637,7 @@ bool CssHandMayPressA(const CssHand& hand)
   case CSS_HAND_GRID_HOLDING:
   case CSS_HAND_PLACING:
     // A NaN fails both comparisons: no A.
-    return hand.y < CSS_A_TOP && hand.y > CSS_A_BOTTOM;
+    return hand.y < CSS_A_TOP && hand.y > bottom;
   default:
     return false;
   }
