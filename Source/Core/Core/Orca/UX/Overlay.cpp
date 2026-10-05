@@ -967,6 +967,11 @@ void DrawScene()
   Yg::Warm();
   // The YouGame button and its lines (YgOrb.h, embed cap `yougame`), drawn with the rest.
   const YgOrb::Model::View yg = YgOrb::Current().At(now);
+  // Dolphin's own messages (OSD rows: a join's line, "N cheat(s) enabled", a graphics change) are
+  // drawn at the top left just before this: under the YouGame button and its pill while the button
+  // is there (the offset is set below, for the next frame), at the top as before without it.
+  if (!yg.on)
+    OSD::SetObscuredPixelsTop(0);
   if (s.Empty() && !yg.on && !yg.showing)
     return;
   // Everything is laid out in the game's picture (the window can letterbox or pillarbox it), in
@@ -1095,6 +1100,10 @@ void DrawScene()
   }
   const float left = vis.x + margin;
   float y = DrawCorner(dl, f, ImVec2(corner_x, vis.y + margin), unit);
+  // Without the button, Dolphin's messages start under the corner (it is at the top left then,
+  // where they are drawn; in a cut view the two met).
+  if (!yg_top && corner_now > 0)
+    OSD::SetObscuredPixelsTop(static_cast<int>(y));
   if (!f.waiting.empty())
   {
     // "Waiting for <name>…" under the top centre's banners.
@@ -1126,7 +1135,10 @@ void DrawScene()
     const float pill_right = centre.max.y > vis.y && centre.min.x > orb.min.x ?
                                  centre.min.x - 1.2f * unit :
                                  vis.x + vis_size.x;
-    YgOrb::DrawPill(dl, yg, std::span<const YgOrb::PillRow>(rows.data(), n), now, pill_right);
+    const Kit::Box pill =
+        YgOrb::DrawPill(dl, yg, std::span<const YgOrb::PillRow>(rows.data(), n), now, pill_right);
+    const float under = std::max(orb.max.y, pill.max.y > pill.min.y ? pill.max.y : 0.0f);
+    OSD::SetObscuredPixelsTop(static_cast<int>(under + 0.8f * unit));
   }
   else if (!f.toasts.empty() || !f.chats.empty())
   {
