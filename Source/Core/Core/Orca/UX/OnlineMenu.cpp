@@ -134,6 +134,7 @@ std::string_view MenuEventText(OnlinePick pick, bool queue)
 std::optional<OnlinePick> OnlineMenuReader::Boundary(const MenuState& state, bool resimulating,
                                                      bool alone, u64 resyncs)
 {
+  m_busy.reset();
   // A re-run frame repeats a frame whose first run was already read (or that a rollback undid).
   if (resimulating)
     return std::nullopt;
@@ -165,44 +166,95 @@ std::optional<OnlinePick> OnlineMenuReader::Boundary(const MenuState& state, boo
     return std::nullopt;
   m_seen = true;
   const std::optional<OnlinePick> pick = PickForExitCode(state.exit_code);
-  if (!pick || !alone)
+  if (!pick)
     return std::nullopt;
+  // Made while friends play (or one is about to land): never announced, now or later; the session
+  // hears of it once (TakeBusyPick).
+  if (!alone)
+  {
+    m_busy = pick;
+    return std::nullopt;
+  }
   return pick;
+}
+
+std::optional<OnlinePick> OnlineMenuReader::TakeBusyPick()
+{
+  return std::exchange(m_busy, std::nullopt);
+}
+
+namespace
+{
+// The frame hook's last first-run reading (CPU thread: the hook and the session's boundary).
+bool s_on_menus = false;
+std::optional<OnlinePick> s_lobby_pick;
+}  // namespace
+
+void AnnounceOnlinePick(OnlinePick pick)
+{
+  // With the app's "host" the queue searches for Casual and Ranked while the player waits on the
+  // character select.
+  const bool queue = Orca::Status::Cap("host");
+  Orca::Status::Menu(MenuEventText(pick, queue));
+  // With the app's `queue2` the player waits on the queue's own character select, and the page
+  // searches once they are ready (UX/Queue.h); before it, as soon as they pick.
+  if (queue && pick != OnlinePick::Friends && Orca::Status::Cap("queue2"))
+  {
+    Search::End();
+    Queue::Begin(pick == OnlinePick::Ranked);
+  }
+  else if (queue && pick != OnlinePick::Friends)
+  {
+    Queue::End();
+    Search::Begin(pick == OnlinePick::Ranked);
+  }
+  else
+  {
+    Queue::End();
+    Search::End();
+  }
+}
+
+std::optional<OnlinePick> TakeLobbyPick()
+{
+  return std::exchange(s_lobby_pick, std::nullopt);
+}
+
+bool MenusScene(std::string_view scene, std::string_view sequence)
+{
+  return (scene == "muMenuMain" || scene == "scSelctCharacter") && !SequenceHoldsDropIn(sequence);
+}
+
+bool OnTheMenus()
+{
+  return s_on_menus;
 }
 
 void ReadOnlineMenu(const Core::CPUThreadGuard& guard, bool resimulating, bool alone)
 {
+  // Whatever the session didn't take at the boundary it was seen is stale.
+  s_lobby_pick.reset();
   if (resimulating || !BrawlExecutable())
     return;
   static OnlineMenuReader s_reader;
   GuardMemory memory(guard);
   const MenuState state = ReadMenuState(memory);
-  // With the app's "host" the queue searches for Casual and Ranked while the player waits on the
-  // character select.
-  const bool queue = Orca::Status::Cap("host");
+  s_on_menus = MenusScene(ReadSceneName(memory), ReadSequenceName(memory));
   if (const auto pick = s_reader.Boundary(state, false, alone, Orca::Events::Resyncs()))
   {
     NOTICE_LOG_FMT(ROLLBACK, "Online menu: exit code {}: orca menu {}", state.exit_code,
-                   MenuEventText(*pick, queue));
-    Orca::Status::Menu(MenuEventText(*pick, queue));
-    // With the app's `queue2` the player waits on the queue's own character select, and the page
-    // searches once they are ready (UX/Queue.h); before it, as soon as they pick.
-    if (queue && *pick != OnlinePick::Friends && Orca::Status::Cap("queue2"))
-    {
-      Search::End();
-      Queue::Begin(*pick == OnlinePick::Ranked);
-    }
-    else if (queue && *pick != OnlinePick::Friends)
-    {
-      Queue::End();
-      Search::Begin(*pick == OnlinePick::Ranked);
-    }
-    else
-    {
-      Queue::End();
-      Search::End();
-    }
+                   MenuEventText(*pick, Orca::Status::Cap("host")));
+    AnnounceOnlinePick(*pick);
     return;
+  }
+  // Casual or Ranked picked with friends in this game (or one about to land): the session decides
+  // at this boundary, after the hook (a host leaves its friends lobby for the queue, then
+  // announces it). With Friends while friends play stays theirs, as before.
+  if (const auto busy = s_reader.TakeBusyPick(); busy && *busy != OnlinePick::Friends)
+  {
+    NOTICE_LOG_FMT(ROLLBACK, "Online menu: exit code {} ({}) while this game isn't alone",
+                   state.exit_code, MenuEventText(*busy, true));
+    s_lobby_pick = busy;
   }
   // Backed out of the character select to the main menu while searching (or matched and still
   // alone), or out of the queue's own character select: the search is over.

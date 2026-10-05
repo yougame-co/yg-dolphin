@@ -1949,6 +1949,104 @@ bool MaybeRestoreQueueImage(Core::System& system, Match& match)
   return true;
 }
 
+// ---- The friends lobby and the queue (Luis, 2026-10-05) ----
+
+// A With Anyone pick (Casual or Ranked) the frame hook saw at this boundary while this game wasn't
+// alone (UX/OnlineMenu.h TakeLobbyPick), after the app's commands: Casual and Ranked drop the
+// friends lobby for a 2-player room the matchmaker fills. A host leaves its room as the app's Leave
+// does (its friends play on without it, hear `host-left`, and go home: ComeHome), prints `orca state
+// left lobby`, and then the pick as if made alone (`orca menu online casual|ranked`: the queue's own
+// character select once this game is alone on port 1, from the next boundary). Only at a boundary
+// the app's commands may take (never mid re-run), which the hook's first run is. Local: the session
+// ends here, so nothing of this reaches the friends' games but the room's leave.
+void TakeLobbyPickNow(Match& match)
+{
+  const auto pick = Orca::UX::TakeLobbyPick();
+  if (!pick)
+    return;
+  const char* const queue = *pick == Orca::UX::OnlinePick::Ranked ? "ranked" : "casual";
+  if (match.session &&
+      (match.session->Resimulating() || match.session->CurrentFrame() != match.running + 1))
+  {
+    WARN_LOG_FMT(ROLLBACK, "Online menu: {} picked mid re-run, frame {}: left alone", queue,
+                 match.running + 1);
+    return;
+  }
+  const bool friends = match.session || !match.waiting.empty() || !match.plugging.empty() ||
+                       !match.seated.empty() || match.keyframe_wanted || match.job ||
+                       match.keyframe || Orca::Online::DropInPending();
+  switch (DecideLobbyPick(match.joining, match.local_seat, InQueueRoom(),
+                          Orca::Status::Cap("host"), friends))
+  {
+  case LobbyPickStep::Ignore:
+    NOTICE_LOG_FMT(ROLLBACK, "Online menu: {} picked in a game that isn't this player's alone "
+                             "({}): nothing to do here",
+                   queue, match.joining ? "its host's" : "with friends");
+    return;
+  case LobbyPickStep::Announce:
+    break;
+  case LobbyPickStep::Leave:
+    NOTICE_LOG_FMT(ROLLBACK, "Online menu: {} picked with friends in room {}: leaving it for the "
+                             "queue, frame {}",
+                   queue, Orca::Online::Code(), match.running + 1);
+    match.linger_until.reset();
+    if (match.session)
+      GoSolo(match, "left for the queue", nullptr);
+    ResetDropIn(match);
+    ReopenRoom(match);
+    Core::DisplayMessage(fmt::format("You left your friends to play {}", queue), 4000);
+    Orca::Status::Event("left lobby");
+    break;
+  }
+  NOTICE_LOG_FMT(ROLLBACK, "Online menu: orca menu {}",
+                 Orca::UX::MenuEventText(*pick, Orca::Status::Cap("host")));
+  Orca::UX::AnnounceOnlinePick(*pick);
+}
+
+// A former joiner on another port than 1 with no room (MayComeHome), at its first alone boundary
+// on the menus: port 1 from the next frame and a room of its own a moment later, as after the
+// queue's room (MaybeRestoreQueueImage). Solo with no session, so nothing re-runs this boundary and
+// only this game changes (its pads: port 1 plugged in, the old port unplugged; the frame hook's
+// ports from the next boundary); the next friend's keyframe carries it. No `no-room`: invites reach
+// the new room, and the queue's own character select gets its header (WantedRulesMode).
+void ComeHome(Match& match)
+{
+  // Every boundary: the common case (port 1, or not solo) asks the room nothing.
+  if (match.local_seat == 0 || match.joining || match.session)
+    return;
+  HomeInputs in;
+  in.local_seat = match.local_seat;
+  in.joining = match.joining;
+  in.session = match.session != nullptr;
+  in.room_up = !Orca::Online::RoomEnded();
+  in.solo_idle = SoloIdle(match);
+  in.drop_in_pending = Orca::Online::DropInPending();
+  in.on_menus = Orca::UX::OnTheMenus();
+  in.queue_image = match.queue_image != nullptr;
+  in.lingering = match.linger_until.has_value();
+  if (!MayComeHome(in))
+    return;
+  NOTICE_LOG_FMT(ROLLBACK, "Drop-in: back to a game of its own on the menus (frame {}): a room of "
+                           "its own opens",
+                 match.running + 1);
+  Reseat(match);
+  match.tell_no_room = false;
+  match.reopen_pending = Clock::now() + REOPEN_DELAY;
+}
+
+// A player on another port than 1 that didn't come home at this boundary (in a fight, say) has no
+// room of its own: the app hears so once, after the room it left has told the page it is empty
+// (its emptied mirror is the page's last word about it, and the page must not see that room again
+// after "no-room"). It still comes home once it is back on the menus.
+void TellNoRoom(Match& match)
+{
+  if (!match.tell_no_room || Orca::Online::RoomsLeaving())
+    return;
+  match.tell_no_room = false;
+  NOTICE_LOG_FMT(ROLLBACK, "Drop-in: no room of its own on port {}", match.local_seat + 1);
+  Orca::Status::State("no-room");
+}
+
 // A joiner whose host's game carries another header than this room's queue calls for (another
 // mode or ruleset, or none: UX/OnlineRules.h) leaves at once, before it plays a frame of it.
 void LeaveOnMismatch(Match& match)
@@ -2556,15 +2654,6 @@ std::optional<int> Boundary(Core::System& system,
   // frame hook already reads the player's own character select.
   MaybeRestoreQueueImage(system, match);
 
-  // Only once the room it left has finished leaving: its emptied mirror is the page's last word
-  // about it, and the page must not see that room again after "no-room".
-  if (match.tell_no_room && !Orca::Online::RoomsLeaving())
-  {
-    match.tell_no_room = false;
-    NOTICE_LOG_FMT(ROLLBACK, "Drop-in: no room of its own on port {}", match.local_seat + 1);
-    Orca::Status::State("no-room");
-  }
-
   // The online rules' header this game's room calls for, written where no other game runs the
   // frame: its alone boundaries, or one before a friend's keyframe is made (HeaderFreeAt).
   UpdateWanted(match);
@@ -2596,6 +2685,12 @@ std::optional<int> Boundary(Core::System& system,
     CaptureQueueImage(system, match);
   else
     MaybeRestoreQueueImage(system, match);
+  // Casual or Ranked picked with friends in this game (after the app's commands: its own leave or
+  // join goes first), then a former joiner's way home, and only then "no-room" for one that didn't
+  // come home here (all three after the frame hook, which read the pick and the scene).
+  TakeLobbyPickNow(match);
+  ComeHome(match);
+  TellNoRoom(match);
 
   if (match.joining && !match.session && match.join_in_play)
   {
@@ -3199,6 +3294,24 @@ bool AloneAt(int frame, bool solo_idle, bool drop_in_pending, std::optional<int>
 bool HeaderFreeAt(int frame, bool solo_quiet, std::optional<int> stored_keyframe)
 {
   return solo_quiet && !(stored_keyframe && frame - *stored_keyframe <= KEYFRAME_FRESH_FRAMES);
+}
+
+bool MayComeHome(const HomeInputs& in)
+{
+  return in.local_seat != 0 && !in.joining && !in.session && !in.room_up && in.solo_idle &&
+         !in.drop_in_pending && in.on_menus && !in.queue_image && !in.lingering;
+}
+
+LobbyPickStep DecideLobbyPick(bool joining, int local_seat, bool queue_room, bool host_cap,
+                              bool friends)
+{
+  if (joining || queue_room)
+    return LobbyPickStep::Ignore;
+  if (!friends)
+    return LobbyPickStep::Announce;
+  if (!host_cap || local_seat != 0)
+    return LobbyPickStep::Ignore;
+  return LobbyPickStep::Leave;
 }
 
 HeaderWait StepHeaderWait(int* waited, bool in_place, bool someone_waiting, bool queue_room)

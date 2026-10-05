@@ -332,9 +332,22 @@ host has played.
      still sent, since the process waits up to 2 s at exit for rooms it is leaving. A friend hears
      the host went at once, not after its silence limit.
    - A player on another port than 1 (it joined a friend's game and then went solo: it left, its
-     host did, or the session failed) has no room of its own until seats map to ports, and prints
-     `orca state no-room` once, after the room it left has told the page it is empty (and never
-     mirrors that room again). The app can still send `join`.
+     host did, or the session failed) goes home (Luis, 2026-10-05: "a guest whose host left goes
+     back to their own lobby"; `OnlineMatch.cpp` `ComeHome`): at its first alone boundary on the
+     menus (the main menu, any page of it, or a character select; never a fight, a stage select, a
+     results screen, the moment between two scenes or a single-player mode: `UX/OnlineMenu.h`
+     `MenusScene`), with no session, nothing of drop-in under way, the room it was in gone and no
+     queue image to put back, it moves to port 1 ("Drop-in: back to a game of its own on the menus")
+     and a room of its own opens a second later, as after a queue room. Before branch `q11-lobby` it
+     stayed on its port with no room: nobody could drop in, and the queue's own character select
+     never got its header there (it wants port 1), so With Anyone > Casual or Ranked and Start did
+     nothing at all (YouGame's 2026-10-05 "Start did nothing": a friends-room guest whose host
+     stopped). Solo with no session, so the boundary is a first run nothing re-runs, and only this
+     game changes: its pads (port 1 plugged in, the old port unplugged) and, from the next boundary,
+     the frame hook's ports; the next friend's keyframe carries it. A guest in a fight when its host
+     goes still prints `orca state no-room` once, after the room it left has told the page it is
+     empty (and never mirrors that room again), and goes home once back on the menus. The app can
+     still send `join` meanwhile (it wins over going home).
    - A friend that leaves while it still catches up (never plugged in) just leaves the room at
      once; the host drops the seat (`friend-left left`).
 
@@ -1977,6 +1990,22 @@ the matched room in "Matchmaking" below):
 | `orca menu cancel` | Searching (or matched as the host, with nobody plugged in yet), the player backed out of the character select to the main menu, alone: the search is over. Once. |
 
 The lines print once per pick, only while the player is alone, and never carry state.
+
+**Casual or Ranked with friends in the game** (Luis, 2026-10-05: "Ranked/Casual under With Anyone =
+drop the friends lobby and join a 2-player room the matchmaker fills"; `OnlineMatch.cpp`
+`TakeLobbyPickNow`, `DecideLobbyPick`; branch `q11-lobby`). Before it a pick made while friends
+played was never announced, so With Anyone > Casual or Ranked from a shared lobby did nothing and
+said nothing. Now the reader hands such a pick (never With Friends) to the session at the boundary
+that saw it, after the app's commands (`TakeLobbyPick`); a host with friends in its room or on their
+way, with the app's `host`, leaves its room as the app's Leave does (its friends play on without it
+and hear `orca state host-left`, then go home: "Drop-in"), prints `orca state left lobby` and shows
+"You left your friends to play ranked", then announces the pick (`orca menu online casual|ranked`):
+from the next boundary it plays alone on port 1, so the queue's own character select gets its header
+and Start readies (`orca queue ready`). A joiner lets it go (the game is its host's); without the
+app's `host` nothing would search, so the friends' game stays theirs, as before. Either player's
+press picks in a shared menu, so a friend's pick of Ranked takes the host to the queue too. Local:
+the session ends at this boundary, so nothing of it reaches the friends' games but the room's leave
+(no compatibility change).
 
 Tests: `OrcaOnlineMenu*` unit tests (the gates, the textures and their precedence, the text rewrite,
 the reader's edges and `AloneAt`); `Tools/orca/online-menu.py <nogui> <disc> [--pplus <dol>]

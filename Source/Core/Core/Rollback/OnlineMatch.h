@@ -82,6 +82,59 @@ constexpr int HEADER_FAIL_BOUNDARIES = 300;
 // boundaries a friend has waited for the header.
 HeaderWait StepHeaderWait(int* waited, bool in_place, bool someone_waiting, bool queue_room);
 
+// A former joiner's way home (ORCA.md "Drop-in"; Luis, 2026-10-05: a guest whose host left goes back
+// to their own lobby). A player that joined a friend's game and then went solo (its host left, it
+// left, its session ended) plays on the port it was given, with no room: nobody can drop in, and the
+// queue's own character select never gets its header there (it wants port 1), so Start would do
+// nothing. At its first alone boundary on the menus it moves to port 1 and a room of its own opens.
+struct HomeInputs
+{
+  // The port it plays (0: port 1, nothing to do).
+  int local_seat = 0;
+  // Joining a friend's game, or in a session: not alone.
+  bool joining = false;
+  bool session = false;
+  // The room it was in is still up (a ranked room it waits in for the verdict, or stays in after
+  // the set): that room's own ending takes it home (Linger, SetOverLeave).
+  bool room_up = false;
+  // SoloIdle, and nothing of drop-in the next boundary will take (Orca::Online::DropInPending: the
+  // app's join wins).
+  bool solo_idle = false;
+  bool drop_in_pending = false;
+  // The game is on the menus at this boundary (UX/OnlineMenu.h OnTheMenus): the main menu or a
+  // character select, never a fight, a stage select, a results screen, between two scenes, or a
+  // single-player mode.
+  bool on_menus = false;
+  // The queue's room left this player's own game to put back (MaybeRestoreQueueImage), which moves
+  // it to port 1 itself.
+  bool queue_image = false;
+  // Waiting in a ranked room for its verdict (Linger).
+  bool lingering = false;
+};
+bool MayComeHome(const HomeInputs& in);
+
+// What the session does with a With Anyone pick (Casual or Ranked) the frame hook saw while the
+// game wasn't alone (UX/OnlineMenu.h TakeLobbyPick), at the same boundary. Luis, 2026-10-05: Casual
+// and Ranked drop the friends lobby for a 2-player room the matchmaker fills.
+enum class LobbyPickStep
+{
+  // Nothing: a joiner's game is its host's (the host leaves, and this game hears host-left); a
+  // queue room's menus are locked; without the app's "host" nothing would search ("... local"), so
+  // the friends' game stays theirs, as before.
+  Ignore,
+  // The game is alone by now (the app's leave or join went first): just announce the pick.
+  Announce,
+  // A host with friends in its room or on their way: it leaves the room (its friends play on
+  // without it: `orca state host-left`), prints `orca state left lobby`, and announces the pick.
+  Leave,
+};
+// `joining`: a joiner's game; `local_seat`: the port it plays (a former joiner hosts nobody);
+// `queue_room`: in a room the queue made; `host_cap`: the app's "host"; `friends`: a session, or a
+// friend waiting, plugging in or seated, a keyframe for one wanted, being made or stored, or
+// drop-in work pending.
+LobbyPickStep DecideLobbyPick(bool joining, int local_seat, bool queue_room, bool host_cap,
+                              bool friends);
+
 // True while this process plays online (solo in its room, or with friends).
 bool Active();
 // Logs the session's stats ("Online match <when>: ...").

@@ -587,6 +587,43 @@ TEST(OrcaOnlineMenuReader, APickMadeWhileNotAloneIsNeverAnnouncedLater)
   EXPECT_EQ(r.picks, std::vector<OnlinePick>{OnlinePick::Friends});
 }
 
+TEST(OrcaOnlineMenuReader, APickMadeWithFriendsGoesToTheSessionOnce)
+{
+  // Casual or Ranked picked while friends play: nothing announced, and the session hears of it
+  // once, at the boundary that saw it (a host leaves its friends lobby for the queue, then
+  // announces it: Rollback/OnlineMatch.cpp).
+  Feed r;
+  r.Step(Menu(), false);
+  EXPECT_FALSE(r.reader.TakeBusyPick());
+  r.Step(Leaving(31), false);
+  EXPECT_TRUE(r.picks.empty());
+  EXPECT_EQ(r.reader.TakeBusyPick(), OnlinePick::Ranked);
+  EXPECT_FALSE(r.reader.TakeBusyPick());
+  // The same exit at the next boundaries: no second hand-over, alone or not.
+  r.Step(Leaving(31), false);
+  EXPECT_FALSE(r.reader.TakeBusyPick());
+  r.Step(Leaving(31), true);
+  EXPECT_FALSE(r.reader.TakeBusyPick());
+  r.Step(Other());
+  EXPECT_TRUE(r.picks.empty());
+  // One not taken at its boundary is gone at the next.
+  r.Step(Menu(), false);
+  r.Step(Leaving(30), false);
+  r.Step(Other(), false);
+  EXPECT_FALSE(r.reader.TakeBusyPick());
+  // Never on a re-run; With Friends goes over too (the frame hook keeps it to itself).
+  r.Step(Menu(), false);
+  r.Step(Leaving(30), false, true);
+  EXPECT_FALSE(r.reader.TakeBusyPick());
+  r.Step(Leaving(25), false);
+  EXPECT_EQ(r.reader.TakeBusyPick(), OnlinePick::Friends);
+  // Alone, a pick is announced as before and never handed over.
+  r.Step(Menu());
+  r.Step(Leaving(30));
+  EXPECT_EQ(r.picks, std::vector<OnlinePick>{OnlinePick::Casual});
+  EXPECT_FALSE(r.reader.TakeBusyPick());
+}
+
 TEST(OrcaOnlineMenuReader, AloneMeansNoFriendIsAboutToLand)
 {
   using Rollback::OnlineMatch::AloneAt;
@@ -1512,5 +1549,123 @@ TEST(OrcaOnlineMenuDropIn, NoMoveForQueueRoomsVersusOrAFriendWhoLeft)
     in.exit_code = 0;
     in.step = FriendsMove::STEP_EXIT;
     EXPECT_FALSE(Decide(in).move);
+  }
+}
+
+// ---- The friends lobby and the queue (Luis, 2026-10-05; ORCA.md "Drop-in", "Online menu") ----
+
+TEST(OrcaOnlineMenuLobby, TheMenusAreTheMainMenuAndACharacterSelect)
+{
+  EXPECT_TRUE(MenusScene("muMenuMain", "sqMenuMain"));
+  EXPECT_TRUE(MenusScene("scSelctCharacter", "sqVsMelee"));
+  EXPECT_TRUE(MenusScene("scSelctCharacter", "sqSpMelee"));
+  // Never a fight, a stage select, a results screen or between two scenes.
+  for (const char* scene : {"scMelee", "scSelStage", "scVsResult", "scMemoryChange", "", "scTitle"})
+  {
+    SCOPED_TRACE(scene);
+    EXPECT_FALSE(MenusScene(scene, "sqVsMelee"));
+  }
+  // Never inside a single-player mode, its own character select included.
+  EXPECT_FALSE(MenusScene("scSelctCharacter", "sqSingleSimple"));
+  EXPECT_FALSE(MenusScene("scSelctCharacter", "sqTraining"));
+  EXPECT_FALSE(MenusScene("muMenuMain", "sqHomerun"));
+}
+
+TEST(OrcaOnlineMenuLobby, AFormerJoinerComesHomeOnTheMenusAlone)
+{
+  using Rollback::OnlineMatch::HomeInputs;
+  using Rollback::OnlineMatch::MayComeHome;
+  // Port 2, its host gone, no room, solo with nothing under way, on the menus: home.
+  HomeInputs in;
+  in.local_seat = 1;
+  in.solo_idle = true;
+  in.on_menus = true;
+  EXPECT_TRUE(MayComeHome(in));
+  // Port 3 or 4 likewise.
+  in.local_seat = 3;
+  EXPECT_TRUE(MayComeHome(in));
+  in.local_seat = 1;
+  const auto without = [&in](auto change) {
+    HomeInputs other = in;
+    change(other);
+    return MayComeHome(other);
+  };
+  // Already on port 1 (a host): nothing to do.
+  EXPECT_FALSE(without([](HomeInputs& i) { i.local_seat = 0; }));
+  // Not alone: joining, in a session, drop-in under way or the app's join waiting (it wins).
+  EXPECT_FALSE(without([](HomeInputs& i) { i.joining = true; }));
+  EXPECT_FALSE(without([](HomeInputs& i) { i.session = true; }));
+  EXPECT_FALSE(without([](HomeInputs& i) { i.solo_idle = false; }));
+  EXPECT_FALSE(without([](HomeInputs& i) { i.drop_in_pending = true; }));
+  // In a fight, a stage select, a results screen, between scenes or a single-player mode: later.
+  EXPECT_FALSE(without([](HomeInputs& i) { i.on_menus = false; }));
+  // Still in the room (a ranked room's verdict, set over): that room's end takes it home.
+  EXPECT_FALSE(without([](HomeInputs& i) { i.room_up = true; }));
+  EXPECT_FALSE(without([](HomeInputs& i) { i.lingering = true; }));
+  // The queue's room put its own game back instead (port 1 and a room of its own already).
+  EXPECT_FALSE(without([](HomeInputs& i) { i.queue_image = true; }));
+}
+
+TEST(OrcaOnlineMenuLobby, CasualOrRankedWithFriendsLeavesTheFriendsLobby)
+{
+  using Rollback::OnlineMatch::DecideLobbyPick;
+  using Rollback::OnlineMatch::LobbyPickStep;
+  // DecideLobbyPick(joining, local_seat, queue_room, host_cap, friends)
+  // A host with friends in its room (or on their way), the page's queue on: it leaves for it.
+  EXPECT_EQ(DecideLobbyPick(false, 0, false, true, true), LobbyPickStep::Leave);
+  // A joiner: the pick is its host's game's; the host leaves and this game hears host-left.
+  EXPECT_EQ(DecideLobbyPick(true, 1, false, true, true), LobbyPickStep::Ignore);
+  EXPECT_EQ(DecideLobbyPick(true, 1, false, true, false), LobbyPickStep::Ignore);
+  // A queue room's menus are locked: never.
+  EXPECT_EQ(DecideLobbyPick(false, 0, true, true, true), LobbyPickStep::Ignore);
+  // No page queue ("... local": nothing would search): the friends' game stays theirs.
+  EXPECT_EQ(DecideLobbyPick(false, 0, false, false, true), LobbyPickStep::Ignore);
+  // Nobody to leave by now (the app's own leave went first): announced as an alone pick.
+  EXPECT_EQ(DecideLobbyPick(false, 0, false, true, false), LobbyPickStep::Announce);
+  EXPECT_EQ(DecideLobbyPick(false, 0, false, false, false), LobbyPickStep::Announce);
+  EXPECT_EQ(DecideLobbyPick(false, 1, false, true, false), LobbyPickStep::Announce);
+  // A former joiner hosts nobody.
+  EXPECT_EQ(DecideLobbyPick(false, 1, false, true, true), LobbyPickStep::Ignore);
+}
+
+TEST(OrcaOnlineMenuLobby, AFormerJoinersMoveToPort1NeverTakesTheMenuToWithFriends)
+{
+  // The friend's game was the host's (the block's friends bytes kept, ports 1-2 seen). Its host
+  // left: solo on port 2, then home on port 1. Neither port change is a friend plugging in.
+  {
+    // On the main menu with a move still pending from the shared game (the friend had just plugged
+    // in): port 1 alone ends it, so the game stays on the menu.
+    Inputs in = OnMenu(5000);
+    in.seen = 0x03;
+    in.pending = 1;
+    in.menu_since = 4990;
+    in.plugged = 0x01;
+    const Outputs out = Decide(in);
+    EXPECT_FALSE(out.move);
+    EXPECT_EQ(out.pending, 0);
+    EXPECT_EQ(out.menu_since, 0u);
+    ExpectIdempotent(in, out);
+    Inputs next = After(in, out);
+    EXPECT_EQ(RunUntilMove(next, 120), -1);
+  }
+  {
+    // On the character select, solo on port 2, then port 1 (the menu after it): nothing news.
+    Inputs in = OnMenu(5000);
+    in.scene = "scSelctCharacter";
+    in.sequence = "sqVsMelee";
+    in.seen = 0x03;
+    in.plugged = 0x02;
+    Outputs out = Decide(in);
+    EXPECT_EQ(out.pending, 0);
+    in = After(in, out);
+    in.plugged = 0x01;
+    out = Decide(in);
+    EXPECT_EQ(out.pending, 0);
+    EXPECT_EQ(out.seen, 0x01);
+    ExpectIdempotent(in, out);
+    in = After(in, out, 300);
+    in.scene = "muMenuMain";
+    in.sequence = "sqMenuMain";
+    EXPECT_EQ(RunUntilMove(in, 120), -1);
   }
 }

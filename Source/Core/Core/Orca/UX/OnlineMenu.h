@@ -107,6 +107,9 @@ public:
   // One frame boundary. `resyncs` is Events::Resyncs(). Returns the pick to announce, if any.
   std::optional<OnlinePick> Boundary(const MenuState& state, bool resimulating, bool alone,
                                      u64 resyncs);
+  // The pick the last Boundary saw made while this game was not alone, which it never announces
+  // (the session decides what it means: TakeLobbyPick below). Once; the next Boundary forgets it.
+  std::optional<OnlinePick> TakeBusyPick();
 
 private:
   bool m_started = false;
@@ -115,7 +118,33 @@ private:
   bool m_from_menu = false;
   // This exit's code was seen (announced or not).
   bool m_seen = false;
+  std::optional<OnlinePick> m_busy;
 };
+
+// ---- Leaving the friends lobby for the queue, and coming home (ORCA.md "Drop-in", "Online
+// menu"; Luis, 2026-10-05: Casual and Ranked under With Anyone drop the friends lobby for a
+// 2-player room the matchmaker fills, and a guest whose host left goes back to their own lobby) ----
+
+// Prints "orca menu online ..." for a pick (with the app's "host": "online casual" / "online
+// ranked", else "... local") and starts what it means: the queue's own character select (with the
+// app's "queue2"), the search, or neither (Friends). The reader's own announcement, and the
+// session's for a pick it took out of the friends lobby (TakeLobbyPick).
+void AnnounceOnlinePick(OnlinePick pick);
+
+// A With Anyone pick (Casual or Ranked) the frame hook saw at this boundary while the game was not
+// alone (friends in it or about to land), which nothing printed: the session takes it at the same
+// boundary, after the hook (Rollback/OnlineMatch.cpp). A host leaves its friends lobby for the queue
+// and then announces it; a joiner's game is its host's, so it lets it go. Once. CPU thread.
+std::optional<OnlinePick> TakeLobbyPick();
+
+// Whether a scene is "the menus" for a former joiner to move to port 1 there (Rollback/
+// OnlineMatch.cpp ComeHome): the main menu (every page of it) or a character select, never a fight,
+// a stage select, a results screen or the moment between two scenes, and never inside a
+// single-player mode (SequenceHoldsDropIn). Pure.
+bool MenusScene(std::string_view scene, std::string_view sequence);
+// MenusScene as the frame hook read it at this boundary (first runs; false before the first, and
+// for any game but Brawl rev 2 and Project+). CPU thread.
+bool OnTheMenus();
 
 // The frame hook's part: reads the menu and prints "orca menu ..." (Orca::Status::Menu). Reads
 // emulated memory only.

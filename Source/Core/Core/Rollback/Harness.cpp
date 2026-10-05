@@ -63,6 +63,19 @@ int EnvInt(const char* name, int fallback)
 }
 
 const int s_scenes = EnvInt("YG_SCENES", 0);
+// ORCA_UX_TEST_RESEAT_AT=<frame> (harness runs, not online): the player plays port 2 until that frame
+// and port 1 from it, the other of the two reporting no controller, as a former joiner whose host
+// left plays solo on port 2 and moves to port 1 at its first boundary on the menus
+// (Rollback/OnlineMatch.cpp ComeHome). The script's port-1 rules drive whichever port the player is
+// on, and the frame hook's ports follow (the test names' first, alone). The player's port (0 or 1)
+// for `frame`, or -1 without the knob.
+int ReseatLocalPort(int frame)
+{
+  static const int s_at = EnvInt("ORCA_UX_TEST_RESEAT_AT", -1);
+  if (s_at < 0 || Orca::Online::Enabled())
+    return -1;
+  return frame < s_at ? 1 : 0;
+}
 const int s_synctest_k = EnvInt("YG_SYNCTEST", 0);
 const int s_synctest_from = EnvInt("YG_SYNCTEST_FROM", 300);
 const int s_exit_after = EnvInt("YG_EXIT_AFTER", 0);
@@ -1107,11 +1120,19 @@ std::optional<GCPadStatus> InputOverride(int port)
     return std::nullopt;
   // The frame being run is the one after the last frame end.
   const int f = s_frame;
+  // ORCA_UX_TEST_RESEAT_AT: port 1's rules play the player's port; the other reports no controller.
+  int rules_port = port;
+  if (const int local = ReseatLocalPort(f); local >= 0 && port < 2)
+  {
+    if (port != local)
+      return Orca::Net::DecodePad(Orca::Net::UNPLUGGED_PAD);
+    rules_port = 0;
+  }
   u16 buttons = 0;
   int sx = 128, sy = 128, cx = 128, cy = 128;
   for (const InputRule& r : Input())
   {
-    if (r.port != port)
+    if (r.port != rules_port)
       continue;
     int rf = f;  // the frame the rule's from/to are measured in
     if (!r.scene.empty())
@@ -1273,9 +1294,17 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
     // before it), as a friend's drop-in plugs in at its frame S (UX/OnlineMenu.h FriendsMove).
     static const int s_plug_at = EnvInt("ORCA_UX_TEST_PLUG_AT", -1);
     const bool early = s_plug_at >= 0 && frame_here + 1 < s_plug_at && s_test_ports.size() > 1;
-    const std::vector<Orca::Events::PortInfo> base_ports =
+    std::vector<Orca::Events::PortInfo> base_ports =
         early ? std::vector<Orca::Events::PortInfo>(s_test_ports.begin(), s_test_ports.begin() + 1) :
                 s_test_ports;
+    // ORCA_UX_TEST_RESEAT_AT: the player's one port, as a former joiner's solo game has it.
+    if (const int local = ReseatLocalPort(frame_here + 1); local >= 0)
+    {
+      Orca::Events::PortInfo own = s_test_ports.front();
+      own.port = local;
+      own.remote = false;
+      base_ports = {own};
+    }
     // ORCA_TEST_QUEUE_PICK=<frame>:<char>:<costume>:<x>:<y>[:<rating>]: port 2 plugs in at that
     // frame with that queue identity (UX/Queue.h), as a matched joiner's does from its plug frame.
     struct TestPick
