@@ -594,6 +594,8 @@ add_library(core
   Orca/UX/YgCard.h
   Orca/UX/YgOrb.cpp
   Orca/UX/YgOrb.h
+  Orca/UX/YgOrbDraw.cpp
+  Orca/UX/YgOrbDraw.h
   NetworkCaptureLogger.cpp
   NetworkCaptureLogger.h
   PatchEngine.cpp

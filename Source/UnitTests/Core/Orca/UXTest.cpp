@@ -35,7 +35,7 @@
 #include "Core/Orca/UX/GamePatches.h"
 #include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/Overlay.h"
-#include "Core/Orca/UX/YgOrb.h"
+#include "Core/Orca/UX/YgOrbDraw.h"
 #include "InputCommon/GCPadStatus.h"
 #include "VideoCommon/OnScreenDisplay.h"
 
@@ -2249,21 +2249,30 @@ TEST(OrcaUXYgOrb, LinesStayAsLongAsThePagesTheNewestThree)
   EXPECT_EQ(DwellMs(notice(Kind::Leave, "left")), 2500);
   EXPECT_EQ(DwellMs(notice(Kind::Dm, "gg")), 4120);
   EXPECT_EQ(DwellMs(notice(Kind::Dm, std::string(200, 'a'))), 9000);
-  m.Add(notice(Kind::Join, "joined"), 0);
-  auto v = m.At(1000);
-  ASSERT_EQ(v.lines.size(), 1u);
-  EXPECT_EQ(v.lines[0].alpha, 1.0f);
-  // Fading out over its last 400 ms, then gone.
-  v = m.At(3300);
-  ASSERT_EQ(v.lines.size(), 1u);
-  EXPECT_NEAR(v.lines[0].alpha, 0.5f, 0.01f);
-  EXPECT_TRUE(m.At(3500).lines.empty());
+  // A join: whole for 3.1 s, fading over its last 400 ms, then gone.
+  const Notice join = notice(Kind::Join, "joined");
+  EXPECT_EQ(LineAlpha(join, 0, 1000), 1.0f);
+  EXPECT_NEAR(LineAlpha(join, 0, 3300), 0.5f, 0.01f);
+  EXPECT_EQ(LineAlpha(join, 0, 3500), 0.0f);
+  EXPECT_FALSE(m.At(0).showing);
+  m.Add(join, 0);
+  EXPECT_TRUE(m.At(1000).showing);
+  EXPECT_FALSE(m.At(3500).showing);
+  // The lines are copied out only when they changed; the newest three.
+  std::vector<Model::Entry> lines;
+  std::uint64_t generation = m.Lines(0, &lines);
+  ASSERT_EQ(lines.size(), 1u);
+  lines.clear();
+  EXPECT_EQ(m.Lines(generation, &lines), generation);
+  EXPECT_TRUE(lines.empty());
   for (int i = 0; i < 5; ++i)
     m.Add(notice(Kind::Voice, std::to_string(i)), 4000 + i);
-  v = m.At(4010);
-  ASSERT_EQ(v.lines.size(), Model::KEEP);
-  EXPECT_EQ(v.lines.front().notice.text, "2");
-  EXPECT_EQ(v.lines.back().notice.text, "4");
+  EXPECT_EQ(m.At(4010).generation, generation + 5);
+  generation = m.Lines(generation, &lines);
+  ASSERT_EQ(lines.size(), Model::KEEP);
+  EXPECT_EQ(lines.front().notice.text, "2");
+  EXPECT_EQ(lines.back().notice.text, "4");
+  EXPECT_EQ(lines.back().at, 4004);
 }
 
 TEST(OrcaUXYgOrb, TheButtonShowsBlinksAndTakesPressesOnItsDisc)
@@ -2286,11 +2295,20 @@ TEST(OrcaUXYgOrb, TheButtonShowsBlinksAndTakesPressesOnItsDisc)
   EXPECT_NEAR(m.At(1350).ring, 0.5f, 0.01f);
   EXPECT_NEAR(m.At(2050).ring, 0.5f, 0.01f);
   EXPECT_LT(m.At(3100).ring, 0);
-  // Off: not drawn, no presses, no ring left over.
+  // Off: not drawn, no presses, no ring or line left over.
+  Notice n;
+  n.kind = Kind::Voice;
+  n.name = "Ada";
+  n.text = "is on voice";
+  m.Add(n, 4000);
   m.Apply(*ParseOrb("orb blink"), 4000);
+  const std::uint64_t before = m.At(4050).generation;
+  EXPECT_TRUE(m.At(4050).showing);
   m.Apply(*ParseOrb("orb off"), 4100);
   EXPECT_FALSE(m.At(4200).on);
   EXPECT_LT(m.At(4200).ring, 0);
+  EXPECT_FALSE(m.At(4200).showing);
+  EXPECT_GT(m.At(4200).generation, before);
   EXPECT_FALSE(m.Hit(72, 72));
   const Kit::Box none = ButtonBox(m.At(4200));
   EXPECT_EQ(none.max.x, none.min.x);

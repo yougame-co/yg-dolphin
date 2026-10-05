@@ -30,7 +30,7 @@
 #include "Core/Orca/UX/SetEnd.h"
 #include "Core/Orca/UX/StageCursors.h"
 #include "Core/Orca/UX/YgCard.h"
-#include "Core/Orca/UX/YgOrb.h"
+#include "Core/Orca/UX/YgOrbDraw.h"
 #include "VideoCommon/AsyncRequests.h"
 #include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/Present.h"
@@ -934,7 +934,7 @@ void Draw()
   Yg::Warm();
   // The YouGame button and its lines (YgOrb.h, embed cap `yougame`), drawn with the rest.
   const YgOrb::Model::View yg = YgOrb::Current().At(now);
-  if (s.Empty() && !yg.on && yg.lines.empty())
+  if (s.Empty() && !yg.on && !yg.showing)
     return;
   // Everything is laid out in the game's picture (the window can letterbox or pillarbox it), in
   // its units (1% of its height), drawn with the kit (Kit.h): the game's fonts, its plates.
@@ -1044,7 +1044,7 @@ void Draw()
   // The toasts and the chat on plates under the corner: under Dolphin's own messages (OSD rows
   // such as "Screenshot saved...", drawn at the top left just before this), and under the top
   // centre's banners where a plate as wide as the chat's would reach them.
-  if (!f.toasts.empty() || !f.chats.empty() || !yg.lines.empty())
+  if (!f.toasts.empty() || !f.chats.empty() || yg.showing)
   {
     y = std::max(y, OSD::MessagesBottom() + unit);
     const float wrap = 0.36f * pic_size.x;
@@ -1052,7 +1052,7 @@ void Draw()
       y = std::max(y, centre.max.y + 1.2f * unit);
     const float bottom = pic.y + pic_size.y - margin;
     // The YouGame button's lines first, the nearest to it.
-    y = YgOrb::DrawLines(dl, yg, ImVec2(left, y), unit, wrap, bottom);
+    y = YgOrb::DrawLines(dl, yg, ImVec2(left, y), unit, wrap, bottom, now);
     // In YouGame's own look (YgCard.h): the room's and the chat are YouGame's, not the game's.
     for (const OverlayModel::Toast& t : f.toasts)
     {
