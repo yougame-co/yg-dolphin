@@ -94,6 +94,7 @@ else:
     args += ["-e", a.disc]
 
 errlog = open(os.path.join(work, "orca.log"), "w")
+statlog = open(os.path.join(work, "stats.jsonl"), "w")
 # UTF-8 explicitly: Orca prints UTF-8, and Windows' default text encoding is the ANSI code page.
 orca = subprocess.Popen(args, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errlog,
                         text=True, bufsize=1, encoding="utf-8", errors="replace")
@@ -109,6 +110,8 @@ def reader():
             orca.stdin.flush()
         if line.startswith("orca stats "):
             stats.append(json.loads(line[len("orca stats "):]))
+            statlog.write(json.dumps({"t": round(time.time(), 3), **stats[-1]}) + "\n")
+            statlog.flush()
             continue
         if line.startswith("orca state "):
             st = line[len("orca state "):]

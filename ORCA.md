@@ -876,6 +876,39 @@ Tests:
   fetches both Orcas' tickets through a local proxy that adds `"direct": false`. `Tools/orca/xplat.py` passes the `ORCA_DIRECT*` switches through and reports the
   transport.
 
+### Wi-Fi
+
+A machine whose Wi-Fi radio leaves the air loses or delays everything sent to it, and everything it
+sends, for that long. Rollback hides up to `input_delay + max_rollback` frames of it (167 ms at
+3 + 7); past that the other side stalls, and a stall is a dropped frame on its screen (fps 57-58
+over the second it happened in). Orca's build has nothing to do with it, and no build fixes it.
+
+Found 2026-10-05 (Luis: "significantly more stutters and frame drops today than yesterday", Mac and
+PC on one LAN, both on Wi-Fi on 5 GHz channel 36): five xplat rounds, Mac hosting, PC joining, two
+on 0.3.13 and three on 0.3.18, all alike. Each lost 0.9-1.6% of the PC's datagrams on the way to
+the Mac (the Mac's socket buffers dropped a few dozen at most) and stalled the Mac 36-54 times in
+about 160 s at delay 2; the Mac's to the PC lost 0-0.15%. The Mac's per-second stats (xplat's
+`stats.jsonl`) put every stall on a five-second beat, the same beat as the PC's router ping
+(100-400 ms replies or timeouts every 5.0 s under traffic, 1% lost), while the Mac's own router ping
+stayed clean (2 of 40 stall seconds near a blip, against 5 of 159 seconds overall). The PC's radio
+(Realtek RTL8822BE, a Wi-Fi and Bluetooth combo card) has periodic dead time; the night before, the
+same pair lost 0.05-0.1%.
+
+- Turning the PC's background scans off and media streaming mode on through the WLAN API (what
+  Steam's streaming and Moonlight do) changed nothing on that card: same spikes, same rate
+  (2026-10-05; the code is on the unmerged `q8-wifi` branch).
+- A Mac's own off-channel time is AWDL (AirDrop, Handoff, Sidecar, Universal Control, AirPlay); it
+  was not the cause here, but it is the first suspect when a Mac's router ping spikes.
+- **What fixes it is the player's:** a cable on the machine whose radio drops out (on either one,
+  it takes that radio off the path); then Bluetooth off, or the adapter's power saving off
+  (Windows: the power plan's Wireless Adapter Settings, the driver's own Advanced settings), or
+  another channel or band. Both machines on Wi-Fi on one channel is the worst case.
+
+To find whose radio it is: run xplat on both sides with a 10 Hz router ping on each machine (macOS
+`ping -i 0.1 --apple-time <gateway>`; Windows a `System.Net.NetworkInformation.Ping` loop with
+timestamps) and line the stall seconds in the stalling side's `stats.jsonl` up against each ping's
+spikes and timeouts. Stalls follow the radio that drops out.
+
 ## Input delay
 
 `Orca/Session/Session.cpp` ("Input delay") has the rule; it changed in 0.3.5, and again for drop-ins
