@@ -2376,13 +2376,18 @@ TEST(OrcaUXOrbCombo, TheLocalPadKeepsItsStateWhileUnfocusedAndOnReRuns)
     p.button = buttons;
     return p;
   };
-  // Fired on a frame's own read; a re-run's read of the same moment is masked too, not stepped.
+  // Fired on a frame's own read; a re-run's read of the same moment is masked too.
   EXPECT_EQ(FilterLocalPad(with(UP), true, true).button, UP);
   EXPECT_EQ(FilterLocalPad(with(UP | START), true, true).button, 0);
   EXPECT_EQ(FilterLocalPad(with(UP | START), false, true).button, 0);
-  // The overlay opened and the game lost focus: neutral pads must not count as letting go, so the
-  // shortcut still held on return does not fire again (the menu would reopen).
+  // A re-run's read never steps: a neutral one there is not a release, so Start alone next is
+  // still masked (stepped, it would have let go and Start would reach the game).
+  EXPECT_EQ(FilterLocalPad(with(0), false, true).button, 0);
+  EXPECT_EQ(FilterLocalPad(with(START), true, true).button, 0);
+  // The overlay opened and the game lost focus: a neutral pad there is not a release either.
   EXPECT_EQ(FilterLocalPad(with(0), true, false).button, 0);
+  EXPECT_EQ(FilterLocalPad(with(START), true, true).button, 0);
+  // Nor does Up + Start still held on return fire again (the menu would reopen).
   EXPECT_EQ(FilterLocalPad(with(UP | START), true, true).button, 0);
   // Let go: plain again.
   EXPECT_EQ(FilterLocalPad(with(0), true, true).button, 0);

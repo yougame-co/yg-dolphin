@@ -39,9 +39,9 @@ private:
   bool m_start = false;  // Start was down in the last sample
 };
 
-// The local player's pad as the session will send it: the shortcut stepped once per frame's own
-// read (`first_run`; a re-run's or catch-up's read is never used) while `live` (the input gate is
-// open: an unfocused pad is neutral and must not look like a release), and `orca orb` printed when
-// it fires. CPU thread; no allocation.
+// The local player's pad as the session will send it: the shortcut stepped on every read a session
+// can send (`first_run`: not a rollback's re-run, whose read is thrown away; a joiner's catch-up
+// does send) while `live` (the input gate is open: an unfocused pad is neutral and must not look
+// like a release), and `orca orb` printed when it fires. CPU thread; no allocation.
 GCPadStatus FilterLocalPad(GCPadStatus pad, bool first_run, bool live);
 }  // namespace Orca::UX

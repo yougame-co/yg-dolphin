@@ -588,14 +588,17 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
   {
     const auto local_pad = [](int local_seat) {
       // A test script plays the seat this player was given; otherwise the host's first
-      // controller, whatever the seat. A re-run's or a catch-up's read is never used: the app's
-      // stream times only a frame's own (its input age). Whichever it is, the YouGame shortcut
-      // (Up + Start, UX/OrbCombo.h) is taken out before the pad is recorded and sent.
-      const bool first_run = !IsResimulating();
+      // controller, whatever the seat. The app's stream times only a frame's own read (its input
+      // age: not a re-run's or a catch-up's). Whichever it is, the YouGame shortcut (Up + Start,
+      // UX/OrbCombo.h) is taken out before the pad is recorded and sent: on every read a session
+      // can send, a joiner's catch-up included (the session's own flag says re-run alone, as the
+      // JIT clear above reads it).
+      const RingPort* const ring = RingPort::Active();
+      const bool first_run = ring ? !ring->Resimulating() : !IsResimulating();
       if (const auto scripted = Harness::InputOverride(local_seat))
         return Orca::Net::EncodePad(Orca::UX::FilterLocalPad(*scripted, first_run, true));
       const bool live = ControlReference::GetInputGate();
-      if (const auto from_app = Orca::Events::LocalPad(first_run))
+      if (const auto from_app = Orca::Events::LocalPad(!IsResimulating()))
         return Orca::Net::EncodePad(Orca::UX::FilterLocalPad(*from_app, first_run, live));
       g_controller_interface.SetCurrentInputChannel(ciface::InputChannel::SerialInterface);
       g_controller_interface.UpdateInput();
