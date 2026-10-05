@@ -2050,6 +2050,13 @@ rules (`@muMenuMain:2 ...`: only on the scene's second entry).
 - `online-menu-dropin.py` over a real dev room (two Orcas): Brawl PASS (the friend loaded the host's
   keyframe of frame 2,163 on the ONLINE page; both moved at 2,261; 12 checksums matched each, 0
   rollbacks, nothing printed), Project+ PASS (keyframe 1,211, both moved at 1,300, 12 each).
+- After review, an A held onto BACK while ready (searching): the queue centres the stick only for a
+  new A (raw A up on the frame that just ran), as the rules do, so the hand moves on. Ready, A
+  pressed off BACK and held, the hand slid onto BACK and off it again, A let go: the next A there did
+  nothing (the hand had left), and a later move onto BACK and A backed out (Brawl `orca queue
+  unready` at 2,248, Project+ 985). The same walk without the slide off backed out at that next A
+  (Brawl 2,188, Project+ 925), so the hand had been on BACK with A held. `YG_SYNCTEST=7` over the
+  first walk: Brawl 1,440-2,500 (7,371 re-run frames), Project+ 200-1,100 (6,251), 0 RAM mismatches.
 - Not run here: the two-Orca perf gate (`perf-gate.py` against 0.3.21, the release's: this touches
   the frame hook's masks and the `.patches`), `--hold`/`--invite`, the queue's own select under a
   real queue (`queue-e2e.mjs`), and Mac <-> PC.
