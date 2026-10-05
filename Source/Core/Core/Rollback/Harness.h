@@ -16,6 +16,7 @@
 //   YG_EXIT_AFTER=<n>     stop emulation at the end of first-pass frame n
 //   YG_HASHLOG=<file>     per-frame RAM hash (T0); ignored while YG_SYNCTEST is on
 //   YG_SHOT_EVERY=<n>     screenshot every n first-pass frames from YG_SHOT_FROM (real backend)
+//   YG_SHOT_AT=<f>[,<f>...]  a screenshot at each of these first-pass frames too
 //   YG_SYNCTEST=<k>       T1: save every frame, rewind k, re-run, compare RAM and device-state hashes
 //   YG_SYNCTEST_FROM=<n>  first frame of the sync test (default 300)
 //   YG_SYNCTEST_DIAG=1    byte-level RAM diffs, DoState section diffs and a CoreTiming event trace
