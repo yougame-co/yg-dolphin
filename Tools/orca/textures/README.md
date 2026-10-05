@@ -22,6 +22,14 @@ textures as `RSBE01`; their labels hash differently, so one folder serves both.
 
 Project+'s own button already reads PLAY ONLINE and its title ONLINE.
 
+Design F's relabels (`Core/Orca/UX/Relabel.h`, ORCA.md "Relabelled words") are 38 more names, listed
+with their words in `RELABELS` in the script: READY TO FIGHT! (C4 352x36, a palette entry's blue
+marked: PRESS START TO LOCK IN!, WINNER PICKS FIRST!, LOSER PICKS NOW!), STAGE SELECT (I4, Brawl
+128x16, Project+ 189x30, the first texel marked: P1 STRIKES 1 ... PICK A STAGE, right-aligned so the
+overlay's timer follows them), the stage select's BRAWL / VERSUS (I4 120x24: RANKED, CASUAL) and
+Project+'s stage select legend (CornerInfo I4 245x53: STRIKE, PROPOSE, TAKE BACK with their signs;
+CornerButtons IA8 150x50: X, A, B).
+
 The character select's titles are paletted (C8), so their names carry the palette's hash too. Orca
 never draws into the game's texture: in an online room it moves the blue of the palette entry the
 texture's background uses (a transparent colour) by one to three steps, one per mode
@@ -50,14 +58,16 @@ The output is byte-identical for the same Pillow (11.3.0 made the committed file
 
 ## Fonts
 
-Both fonts are from [google/fonts](https://github.com/google/fonts) and are licensed under the
+The fonts are from [google/fonts](https://github.com/google/fonts) and are licensed under the
 SIL Open Font License, Version 1.1. Their licence texts, with the copyright notices, are next to
-them in `fonts/`. Neither is shipped with Orca: only the PNGs drawn with them are.
+them in `fonts/`. None is shipped with Orca: only the PNGs drawn with them are.
 
 | Font                             | Use                              | Licence                                                                         | Source              | SHA-256                                                            |
 | -------------------------------- | -------------------------------- | ------------------------------------------------------------------------------- | ------------------- | ------------------------------------------------------------------ |
 | `fonts/ArchivoBlack-Regular.ttf` | Brawl's labels                   | `fonts/OFL-ArchivoBlack.txt` (Copyright 2017 The Archivo Black Project Authors) | `ofl/archivoblack/` | `dd9a89a019b4849f66ab75455fe7bdf931311042cbb0f0f97acc061539703180` |
 | `fonts/Anton-Regular.ttf`        | Project+'s labels, Brawl's title | `fonts/OFL-Anton.txt` (Copyright 2020 The Anton Project Authors)                | `ofl/anton/`        | `a4ba3a92350ebb031da0cb47630ac49eb265082ca1bc0450442f4a83ab947cab` |
+| `fonts/RussoOne-Regular.ttf`     | READY TO FIGHT!'s relabels       | `fonts/OFL-RussoOne.txt` (Copyright 2011-2012 Jovanny Lemonad)                  | `ofl/russoone/`     | `bc0abcc660bd8b7ad3000ecb2898a27c58a29a50f7ec81652fa12e75148d09df` |
+| `fonts/Cinzel[wght].ttf`         | Brawl's stage select title       | `fonts/OFL-Cinzel.txt` (Copyright 2020 The Cinzel Project Authors)              | `ofl/cinzel/`       | `f4d83d34d1f6c741193e4acf4b3dff9531e5a67b6aa65228d00a7db72a4e0f34` |
 
 ## Rules
 

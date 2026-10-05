@@ -4,7 +4,7 @@
 """Orca's Online menu labels: our own art, drawn in each game's style with open-licence fonts.
 
 Writes the texture pack Orca loads in every session (Data/Sys/Orca/Textures/RSBE01, see ORCA.md
-"Online menu" and "The character select's title"): Dolphin's hires texture names, so each PNG replaces one of the game's textures on
+"Online menu", "The character select's title" and "Relabelled words"): Dolphin's hires texture names, so each PNG replaces one of the game's textures on
 screen and nothing else (texture replacement never touches emulated memory). Brawl and Project+
 both load textures as RSBE01; their labels hash differently, so one folder serves both.
 
@@ -12,7 +12,9 @@ both load textures as RSBE01; their labels hash differently, so one folder serve
 
 Needs Pillow. The fonts are next to this script, with their licences (SIL Open Font License 1.1):
 Archivo Black for Brawl's heavy, wide labels, Anton for Project+'s condensed ones and for Brawl's
-title bar (the game's own titles there are a light condensed sans: SELECT MODE, / WITH ANYONE).
+title bar (the game's own titles there are a light condensed sans: SELECT MODE, / WITH ANYONE), and
+for the relabels: Russo One for READY TO FIGHT!'s band, Cinzel for Brawl's stage select title,
+Anton for STAGE SELECT and Project+'s legend.
 Nothing here is derived from the game's art: the sizes and boxes below are numbers measured on the
 game's own textures (where its letters sit), so ours sit in the same place.
 
@@ -34,6 +36,8 @@ REPO = os.path.normpath(os.path.join(HERE, "..", "..", ".."))
 FONTS = os.path.join(HERE, "fonts")
 ARCHIVO = os.path.join(FONTS, "ArchivoBlack-Regular.ttf")
 ANTON = os.path.join(FONTS, "Anton-Regular.ttf")
+RUSSO = os.path.join(FONTS, "RussoOne-Regular.ttf")
+CINZEL = os.path.join(FONTS, "Cinzel[wght].ttf")
 SCALE = 4
 
 # One entry per replaced texture:
@@ -80,6 +84,156 @@ LABELS = [
     dict(name="tex1_128x56_57564f7b1ba3bc1c_faaf2c3553d21273_9", lines=["FRIENDS"],
          box=(13, 17, 116, 39), style="pplus-css"),
 ]
+
+# Design F's relabels (Core/Orca/UX/Relabel.h, ORCA.md "Relabelled words"): the game's big words
+# say what to do now. Each is one of the game's textures with Orca's mark in it (a palette entry's
+# blue, a first texel: values nobody sees), so each label hashes to its own name:
+#   band-<game>-<n>   READY TO FIGHT! (MenSelchrReady01_2, C4 352x36): 1 PRESS START TO LOCK IN!,
+#                     2 WINNER PICKS FIRST!, 3 LOSER PICKS NOW!
+#   line-<game>-<n>   STAGE SELECT (MenSelmapBack07, I4; Brawl 128x16, Project+ 189x30): whose
+#                     turn and what, Relabel::LineFor's numbering
+#   title-<game>-<n>  the stage select's BRAWL / VERSUS (MenSelchrRtitle.30, I4 120x24): 1 RANKED,
+#                     2 CASUAL
+#   legend-info       Project+'s stage select legend's words and icons (CornerInfo, I4 245x53)
+#   legend-buttons    its buttons (CornerButtons, IA8 150x50): X, A, B
+# The names were computed with Dolphin's hash from the marked textures (as the title's above).
+RELABELS = [
+    ("band-brawl-1", "tex1_352x36_260eae27613f7b8a_0f0d1db67c43a0e3_8", "PRESS START TO LOCK IN!"),
+    ("band-pplus-1", "tex1_352x36_ca0167082a3a208f_d479558876e2417e_8", "PRESS START TO LOCK IN!"),
+    ("band-brawl-2", "tex1_352x36_260eae27613f7b8a_666aa1e6e564359f_8", "WINNER PICKS FIRST!"),
+    ("band-pplus-2", "tex1_352x36_ca0167082a3a208f_93e0d76a7dbd4ba2_8", "WINNER PICKS FIRST!"),
+    ("band-brawl-3", "tex1_352x36_260eae27613f7b8a_b25d489bffb02296_8", "LOSER PICKS NOW!"),
+    ("band-pplus-3", "tex1_352x36_ca0167082a3a208f_dbed1c4865ad6bc6_8", "LOSER PICKS NOW!"),
+    ("line-brawl-1", "tex1_128x16_79a80b5f41fb3faf_0", "P1 STRIKES 1"),
+    ("line-pplus-1", "tex1_189x30_5ff5c75022995de6_0", "P1 STRIKES 1"),
+    ("line-brawl-2", "tex1_128x16_4d669b592545413a_0", "P1 STRIKES 2"),
+    ("line-pplus-2", "tex1_189x30_d1303babebb83c7a_0", "P1 STRIKES 2"),
+    ("line-brawl-3", "tex1_128x16_76c379d19487a91b_0", "P1 STRIKES 3"),
+    ("line-pplus-3", "tex1_189x30_e81fc524332deea9_0", "P1 STRIKES 3"),
+    ("line-brawl-4", "tex1_128x16_8f915d2039abe0b3_0", "P2 STRIKES 1"),
+    ("line-pplus-4", "tex1_189x30_028f53f3362a11c8_0", "P2 STRIKES 1"),
+    ("line-brawl-5", "tex1_128x16_29d872a8b2573932_0", "P2 STRIKES 2"),
+    ("line-pplus-5", "tex1_189x30_4b347d5515f6b6b6_0", "P2 STRIKES 2"),
+    ("line-brawl-6", "tex1_128x16_08fc7a7f0e79bc3a_0", "P2 STRIKES 3"),
+    ("line-pplus-6", "tex1_189x30_876c88de030de85a_0", "P2 STRIKES 3"),
+    ("line-brawl-7", "tex1_128x16_d109656f148b9555_0", "P1 BANS 1"),
+    ("line-pplus-7", "tex1_189x30_5f998e28cdb67a31_0", "P1 BANS 1"),
+    ("line-brawl-8", "tex1_128x16_7562692397982484_0", "P1 BANS 2"),
+    ("line-pplus-8", "tex1_189x30_3a09724fd5016586_0", "P1 BANS 2"),
+    ("line-brawl-9", "tex1_128x16_a2448cb4b7da1b3c_0", "P2 BANS 1"),
+    ("line-pplus-9", "tex1_189x30_f0cfeb3c53e07be7_0", "P2 BANS 1"),
+    ("line-brawl-10", "tex1_128x16_318db95cc34a3886_0", "P2 BANS 2"),
+    ("line-pplus-10", "tex1_189x30_9702d00c0e686aa2_0", "P2 BANS 2"),
+    ("line-brawl-11", "tex1_128x16_c5f131b811d425d3_0", "P1 PICKS"),
+    ("line-pplus-11", "tex1_189x30_79f7db5ce7c05cef_0", "P1 PICKS"),
+    ("line-brawl-12", "tex1_128x16_cf81f52a3b1d38d7_0", "P2 PICKS"),
+    ("line-pplus-12", "tex1_189x30_0e65069734c8504f_0", "P2 PICKS"),
+    ("line-brawl-13", "tex1_128x16_bd1aa1d7e611c8d2_0", "PICK A STAGE"),
+    ("line-pplus-13", "tex1_189x30_392ed36467f522bc_0", "PICK A STAGE"),
+    ("title-brawl-1", "tex1_120x24_8c349c96744f9bc7_0", "RANKED"),
+    ("title-pplus-1", "tex1_120x24_1604ccdc8de0780d_0", "RANKED"),
+    ("title-brawl-2", "tex1_120x24_8e68a6bb69e7335c_0", "CASUAL"),
+    ("title-pplus-2", "tex1_120x24_0ec8c86664faeefc_0", "CASUAL"),
+    ("legend-info", "tex1_245x53_c522515513a179c6_0", "STRIKE PROPOSE TAKE BACK"),
+    ("legend-buttons", "tex1_150x50_fca24ef397f2d1e0_3", "X A B"),
+]
+
+
+def fitted(mask, box, w, h, align="centre", max_squash=0.62):
+    """`mask` scaled to the box's height (native pixels, drawn at 4x) and squeezed sideways, to
+    `max_squash` of its width at most, when too wide (then smaller); placed in the box."""
+    W, H = w * SCALE, h * SCALE
+    x0, y0, x1, y1 = (v * SCALE for v in box)
+    bw, bh = x1 - x0, y1 - y0
+    k = bh / mask.height
+    kx = k
+    if mask.width * kx > bw:
+        kx = max(bw / mask.width, k * max_squash)
+        if mask.width * kx > bw:
+            k *= bw / (mask.width * kx)
+            kx = bw / mask.width
+    r = mask.resize((max(1, int(mask.width * kx)), max(1, int(mask.height * k))), Image.LANCZOS)
+    out = Image.new("L", (W, H), 0)
+    x = x0 + (bw - r.width) // 2 if align == "centre" else x1 - r.width
+    out.paste(r, (x, y0 + (bh - r.height) // 2))
+    return out
+
+
+def font_mask(text, path, tracking, weight=None):
+    """`text` in the font at 400 px as a tight L mask; `weight` a variable font's wght axis."""
+    f = ImageFont.truetype(path, 400)
+    if weight:
+        f.set_variation_by_axes([weight])
+    return line_mask([(text, f)], 400 * tracking)
+
+
+def slanted(mask, slant):
+    """`mask` in italics: each row moved right by `slant` times its height above the bottom."""
+    w, h = mask.size
+    extra = int(round(slant * h))
+    return mask.transform((w + extra, h), Image.AFFINE, (1, slant, -extra, 0, 1, 0),
+                          resample=Image.BICUBIC)
+
+
+def intensity(mask):
+    """An I4 texture's art: the game draws intensity as both colour and alpha."""
+    return Image.merge("RGBA", (mask, mask, mask, mask))
+
+
+def draw_relabel(key, name, text):
+    w, h = size_of(name)
+    W, H = w * SCALE, h * SCALE
+    kind, game = key.split("-")[0], (key.split("-")[1] if key.count("-") == 2 else "")
+    if kind == "band":
+        # The game tints READY TO FIGHT! (its texture is white letters in a dark outline): ours
+        # the same, in Russo One, a heavy italic-free face like the band's own.
+        m = fitted(font_mask(text, RUSSO, 0.02), (4, 4, 348, 32), w, h)
+        out = Image.new("RGBA", (W, H), (255, 255, 255, 0))
+        out = Image.composite(Image.new("RGBA", (W, H), (33, 33, 33, 255)), out,
+                              grow(m, 2.6 * SCALE))
+        return Image.composite(Image.new("RGBA", (W, H), (255, 255, 255, 255)), out, m)
+    if kind == "line":
+        # In italics like the game's STAGE SELECT, right-aligned: the overlay's timer follows the
+        # texture's right end (Overlay.cpp).
+        box = (1, 1, 127, 15) if game == "brawl" else (1, 2, 188, 28)
+        return intensity(fitted(slanted(font_mask(text, ANTON, 0.03), 0.22), box, w, h,
+                                align="right"))
+    if kind == "title":
+        # Brawl's BRAWL is a serif in capitals; Project+'s VERSUS a condensed sans.
+        if game == "brawl":
+            m = fitted(font_mask(text, CINZEL, 0.0, weight=900), (17, 3, 103, 21), w, h)
+        else:
+            m = fitted(font_mask(text, ANTON, 0.03), (2, 3, 68, 22), w, h)
+        return intensity(m)
+    if key == "legend-info":
+        m = Image.new("L", (W, H), 0)
+        for word, box in (("STRIKE", (1, 1, 67, 21)), ("PROPOSE", (84, 1, 150, 21)),
+                          ("TAKE BACK", (166, 1, 244, 21))):
+            m = ImageChops.lighter(m, fitted(font_mask(word, ANTON, 0.03), box, w, h))
+        d = ImageDraw.Draw(m)
+        s, lw = SCALE, int(4.2 * SCALE)
+        # Under each word its sign: a cross, a tick, an arrow curling back.
+        d.line([(8 * s, 27 * s), (33 * s, 48 * s)], fill=255, width=lw)
+        d.line([(33 * s, 27 * s), (8 * s, 48 * s)], fill=255, width=lw)
+        d.line([(88 * s, 38 * s), (96 * s, 47 * s), (110 * s, 27 * s)], fill=255, width=lw,
+               joint="curve")
+        d.arc([(170 * s, 27 * s), (196 * s, 50 * s)], 200, 450, fill=255, width=lw)
+        d.polygon([(166 * s, 31 * s), (178 * s, 26 * s), (176 * s, 39 * s)], fill=255)
+        return intensity(m)
+    # legend-buttons: the GameCube's X, A and B where the game's own buttons sit.
+    s = SCALE
+    out = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(out)
+    f = ImageFont.truetype(ANTON, int(26 * s))
+    for letter, cx, r in (("X", 17.5, 15.5), ("A", 61.5, 23), ("B", 119, 20)):
+        c = (cx * s, 25 * s)
+        d.ellipse([c[0] - r * s, c[1] - r * s, c[0] + r * s, c[1] + r * s], fill=(60, 60, 60, 255))
+        rr = r - 2.2
+        d.ellipse([c[0] - rr * s, c[1] - rr * s, c[0] + rr * s, c[1] + rr * s],
+                  fill=(222, 222, 222, 255))
+        d.text(c, letter, font=f, fill=(56, 56, 56, 255), anchor="mm")
+    return out
+
 
 # The character select titles' fills, top to bottom (position 0-1 down the letters, RGB): measured
 # on the game's own rule titles, a gold with a white band through the middle (Brawl's) and a teal
@@ -229,13 +383,14 @@ def draw(label):
 
 def mips(label, im):
     """The label's mip levels, each half the last (box filter), down to the game's size. Pillow
-    averages RGBA premultiplied; the title (I4: intensity is colour and alpha) halves its mask."""
+    averages RGBA premultiplied; an I4 texture (intensity is colour and alpha: the title, and the
+    relabels' lines, titles and legend words) halves its mask."""
     assert SCALE & (SCALE - 1) == 0, "mip levels halve down to the game's size: SCALE is 2^n"
     w, h = size_of(label["name"])
     out = []
     while im.width > w:
         size = (im.width // 2, im.height // 2)
-        if label["style"] == "title":
+        if label["style"] in ("title", "intensity"):
             a = im.getchannel("A").resize(size, Image.BOX)
             im = Image.merge("RGBA", (a, a, a, a))
         else:
@@ -251,8 +406,14 @@ def main():
     a = p.parse_args()
     os.makedirs(a.out, exist_ok=True)
     images = []
-    for label in LABELS:
-        im = draw(label)
+    work = [(label, lambda label=label: draw(label)) for label in LABELS]
+    for key, name, text in RELABELS:
+        kind = key.split("-")[0]
+        style = "intensity" if kind in ("line", "title") or key == "legend-info" else "relabel"
+        work.append((dict(name=name, style=style),
+                     lambda key=key, name=name, text=text: draw_relabel(key, name, text)))
+    for label, make in work:
+        im = make()
         path = os.path.join(a.out, label["name"] + ".png")
         im.save(path, optimize=True)
         images.append((label, im))

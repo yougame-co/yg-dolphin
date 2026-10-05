@@ -26,6 +26,7 @@
 #include "Core/Orca/UX/Queue.h"
 #include "Core/Orca/UX/RankedPPlus.h"
 #include "Core/Orca/UX/RankedSet.h"
+#include "Core/Orca/UX/Relabel.h"
 #include "Core/Orca/UX/Results.h"
 #include "Core/Orca/UX/StageCursors.h"
 #include "Core/Rollback/InputGate.h"
@@ -187,10 +188,13 @@ void Init()
     // The character select's title (CssTitle.h): CASUAL, RANKED or FRIENDS, from the header the
     // rules just wrote, the menu's pick and the ports (a pure function of them).
     CssTitle::Frame(guard, resimulating, ports);
+    // The game's big words relabelled (Relabel.h): READY TO FIGHT!, STAGE SELECT, the stage
+    // select's mode title and Project+'s legend, from the same block and ports (pure).
+    const Relabel::Shown labels = Relabel::Frame(guard, resimulating, ports);
     // Orca's words in the character select's own text boxes (NativeText.h): each named player's
     // plate, and the rules bar's line in a queue room, from the block the writers above just left
     // and the synced ports (a pure function of them, first runs and re-runs).
-    NativeText::Frame(guard, resimulating, ports);
+    NativeText::Frame(guard, resimulating, ports, Relabel::ClockInBand(labels));
     // Last, after every other writer here: a toggled patch group follows its condition as this
     // boundary's writers left it, so the hook run again at this boundary (a re-run from the
     // snapshot saved here) decides the same and writes nothing new (GamePatches.h).

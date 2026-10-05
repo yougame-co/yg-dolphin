@@ -41,6 +41,7 @@ add_dolphin_test(OrcaRankedTest Orca/RankedTest.cpp)
 add_dolphin_test(OrcaBrawlStagesTest Orca/BrawlStagesTest.cpp)
 add_dolphin_test(OrcaCharOrderTest Orca/CharOrderTest.cpp)
 add_dolphin_test(OrcaCssTitleTest Orca/CssTitleTest.cpp)
+add_dolphin_test(OrcaRelabelTest Orca/RelabelTest.cpp)
 add_dolphin_test(OrcaSetEndTest Orca/SetEndTest.cpp)
 # Its draw test sets up ImGui frames of its own.
 target_link_libraries(OrcaSetEndTest PRIVATE imgui)

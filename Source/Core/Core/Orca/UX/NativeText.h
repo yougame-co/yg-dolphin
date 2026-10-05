@@ -39,14 +39,17 @@ class CPUThreadGuard;
 // Two places on the Versus character select (muSelCharTask, scene +0x400):
 //   - each panel's name plate ("PLAYER 1", "NONE"): player area i (task +0x44 + 4i, whose +0x1B0
 //     is i) +0x174 -> its message buffer. A named player's plate reads their YouGame name, in
-//     capitals like the game's plates; in a ranked queue room with their rating ("ADA 1532").
+//     capitals like the game's plates, and nothing else (Luis, 2026-10-05: no rating by the name).
+//     On the queue's own select, while it searches, the opponent's empty seat reads SEARCHING
+//     (the game's NONE again when it stops).
 //   - the rules bar at the top, right of the mode title ("3-man survival test!", after the stock
 //     count): task +0x538 -> its message buffer. In a queue room (and on the queue's own character
 //     select) it says what happens now, in the third person, with the timer: "Game 1: ADA locked
-//     in, BO to press Start  0:24", "ADA 1-0 BO: BO picks, A then Start  0:45".
+//     in, BO to press Start  0:24", "ADA 1-0 BO: BO picks, A then Start  0:45". While READY TO
+//     FIGHT! is up and relabelled (Relabel::ClockInBand) the timer is the band's, not the bar's.
 // Both are a pure function of emulated memory (the match block's header, the queue's ready flags
-// and timer, the ranked set, the character order) and the session's synced ports (names, the queue
-// identity's rating): the same bytes on both machines at the same frame, first runs and re-runs
+// and timer, the ranked set, the character order, the tokens) and the session's synced ports
+// (names): the same bytes on both machines at the same frame, first runs and re-runs
 // alike, written only where they differ, before the session saves the boundary. Never "you": one
 // text for both players. The game formats a plate again when a port joins, leaves or picks a tag;
 // the next boundary puts the name back (one frame of the game's own words).
@@ -103,7 +106,10 @@ struct CssWords
   std::array<std::string, 4> plates;
   std::string rules;
 };
-CssWords Wanted(const GuestMemory& memory, const std::vector<Events::PortInfo>& ports);
+// `band_clock`: Relabel::ClockInBand for this boundary, when the caller has it (the frame hook:
+// Relabel's own Apply just computed it), else computed here.
+CssWords Wanted(const GuestMemory& memory, const std::vector<Events::PortInfo>& ports,
+                std::optional<bool> band_clock = std::nullopt);
 
 // The boxes themselves (nullopt where the character select has none this knows).
 struct CssBoxes
@@ -117,14 +123,14 @@ CssBoxes FindCssBoxes(const GuestMemory& memory);
 // Orca's words (bit p a plate, bit 4 the rules bar). `rules_bar` false leaves the bar the game's
 // (Project+'s: its message has no width code, so a long line isn't drawn).
 int Apply(GuestMemory& memory, const std::vector<Events::PortInfo>& ports, u8* shown = nullptr,
-          bool rules_bar = true);
+          bool rules_bar = true, std::optional<bool> band_clock = std::nullopt);
 constexpr u8 SHOWN_RULES = 0x10;
 
 // The frame hook's part (Brawl rev 2: the plates and the rules bar; Project+: the plates), first
 // runs and re-runs. On first runs it also tells the
 // overlay which of its lines the game now shows (Shown()).
 void Frame(const Core::CPUThreadGuard& guard, bool resimulating,
-           const std::vector<Events::PortInfo>& ports);
+           const std::vector<Events::PortInfo>& ports, std::optional<bool> band_clock = std::nullopt);
 // What the last first-run boundary showed (Apply's `shown`), for the overlay: it drops a port's
 // label over a plate that names the player, and its top lines over a rules bar that says them.
 u8 Shown();

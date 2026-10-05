@@ -591,6 +591,8 @@ TEST(OrcaRankedPPlus, OverlayLines)
   RankedPPlus::Lines l = RankedPPlus::Describe(m, 100, ports);
   EXPECT_EQ(l.set, "Ranked · Game 1 · ada 0–0 bo · bo strikes 1 · 0:30");
   EXPECT_EQ(l.turn, "A proposes a stage");
+  // The turn as STAGE SELECT's relabel names it (Relabel.h): the same step as the line's.
+  EXPECT_EQ(RankedPPlus::CurrentTurn(m), (Ranked::Turn{StepKind::Strike, 1, 1}));
   const std::vector<Orca::Events::PortInfo> theirs{{0, "ada", true, {}}, {1, "bo", false, {}}};
   l = RankedPPlus::Describe(m, 100 + 6 * 60, theirs);
   EXPECT_EQ(l.set, "Ranked · Game 1 · ada 0–0 bo · bo strikes 1 · 0:24");
@@ -599,6 +601,7 @@ TEST(OrcaRankedPPlus, OverlayLines)
   Press(m, 1, 2, BTN_X, &frame);
   EXPECT_EQ(RankedPPlus::Describe(m, frame, ports).set,
             "Ranked · Game 1 · ada 0–0 bo · ada strikes 2 · 0:30");
+  EXPECT_EQ(RankedPPlus::CurrentTurn(m), (Ranked::Turn{StepKind::Strike, 0, 2}));
   Press(m, 0, 0, BTN_X, &frame);
   EXPECT_EQ(RankedPPlus::Describe(m, frame, ports).set,
             "Ranked · Game 1 · ada 0–0 bo · ada strikes 1 · 0:30");
@@ -614,6 +617,7 @@ TEST(OrcaRankedPPlus, OverlayLines)
   // On the character select, the set alone.
   SetScene(m, "scSelctCharacter");
   EXPECT_EQ(RankedPPlus::Describe(m, frame, ports).set, "Ranked · Game 1 · ada 0–0 bo");
+  EXPECT_EQ(RankedPPlus::CurrentTurn(m), std::nullopt);
   SetScene(m, "scMelee");
   EXPECT_EQ(RankedPPlus::Describe(m, frame, ports), RankedPPlus::Lines{});
 }
@@ -655,6 +659,7 @@ TEST(OrcaRankedPPlus, CasualBothNameAStageAtOnce)
   const std::vector<Orca::Events::PortInfo> ports{{0, "ada", false, {}}, {1, "bo", true, {}}};
   RankedPPlus::Lines l = RankedPPlus::Describe(m, frame, ports);
   EXPECT_EQ(l.set, "Stage pick · 0:15");
+  EXPECT_EQ(RankedPPlus::CurrentTurn(m), (Ranked::Turn{StepKind::Prefer, Ranked::BOTH, 1}));
   EXPECT_EQ(l.turn,
             "A on the stage you want · the same pick plays there, else a coin takes one of the "
             "two");

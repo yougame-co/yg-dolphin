@@ -4,6 +4,7 @@
 #include "Core/Orca/UX/NativeText.h"
 
 #include <atomic>
+#include <string_view>
 
 #include <fmt/format.h>
 
@@ -13,6 +14,7 @@
 #include "Core/Orca/UX/OnlineMenu.h"
 #include "Core/Orca/UX/OnlineRules.h"
 #include "Core/Orca/UX/Queue.h"
+#include "Core/Orca/UX/Relabel.h"
 #include "Core/Orca/UX/SetBlock.h"
 
 namespace Orca::UX::NativeText
@@ -33,6 +35,9 @@ constexpr u8 SETUP_FIRST = 0x17;
 constexpr u8 CODE_WIDTH = 0x11;  // + 4 bytes
 constexpr u8 CODE_COLOUR = 0x12;  // 0x02 0x0C r g b a
 constexpr size_t PLATE_CHARS = 10;
+// The queue's own select's opponent seat while it searches, and the game's word for an empty seat.
+constexpr std::string_view SEARCHING = "SEARCHING";
+constexpr std::string_view NONE_SEAT = "  NONE";  // as the game formats it (RAM dumps)
 
 std::atomic<u8> s_shown{0};
 
@@ -86,20 +91,12 @@ std::string NameOf(const std::vector<Events::PortInfo>& ports, int port)
   return name.empty() ? fmt::format("P{}", port + 1) : name;
 }
 
-int RatingOf(const std::vector<Events::PortInfo>& ports, int port)
-{
-  const Events::PortInfo* p = PortOf(ports, port);
-  if (!p)
-    return -1;
-  const auto id = Queue::DecodeIdentity(p->queue);
-  return id ? id->rating : -1;
-}
-
 // The character order's turn (ranked later games, CharOrder.h) in the third person, with what the
-// picker does next: "ADA picks, A then Start  0:43" (the one who picked wears LOCKED IN). Empty when
-// the order isn't on.
+// picker does next: "ADA picks, A then Start  0:43" (the one who picked wears LOCKED IN), without
+// the timer when the band has it (`band_clock`, Relabel::ClockInBand). Empty when the order isn't
+// on.
 std::string OrderLine(const GuestMemory& m, const std::array<std::string, 2>& names,
-                      const std::vector<Events::PortInfo>& ports)
+                      const std::vector<Events::PortInfo>& ports, bool band_clock)
 {
   const CharOrder::SetView set = CharOrder::ReadSet(m);
   const CharOrder::CssView css = CharOrder::ReadCss(m);
@@ -109,16 +106,17 @@ std::string OrderLine(const GuestMemory& m, const std::array<std::string, 2>& na
   const auto todo = [&css](int port) {
     return css.ports[port].Down() ? std::string("Start locks it in") : std::string("A then Start");
   };
-  const std::string left = Clock(CharOrder::PICK_FRAMES - state.elapsed);
+  const std::string left =
+      band_clock ? std::string() : "  " + Clock(CharOrder::PICK_FRAMES - state.elapsed);
   if (set.ruleset != CharOrder::Ruleset::None && css.on_css && state.game == set.game)
   {
     if (state.step == CharOrder::Step::First && !(set.order == CharOrder::Order::Free &&
                                                    (state.locked & (1 << second))))
     {
-      return fmt::format("{} picks, {}  {}", names[first], todo(first), left);
+      return fmt::format("{} picks, {}{}", names[first], todo(first), left);
     }
     if (state.step == CharOrder::Step::Second)
-      return fmt::format("{} picks, {}  {}", names[second], todo(second), left);
+      return fmt::format("{} picks, {}{}", names[second], todo(second), left);
   }
   // Anything else the order says (the winner locked in early, a token still in a hand), as its
   // own line has it with no port this machine's.
@@ -134,8 +132,10 @@ std::string OrderLine(const GuestMemory& m, const std::array<std::string, 2>& na
 
 // The rules bar's line in a queue room, the same on both machines (no "you").
 std::string RoomLine(const GuestMemory& m, const Queue::View& v, const Queue::State& s,
-                     const std::vector<Events::PortInfo>& ports)
+                     const std::vector<Events::PortInfo>& ports, std::optional<bool> band_clock_in)
 {
+  // Design F: with READY TO FIGHT! up and relabelled, its right end has the timer.
+  const bool band_clock = band_clock_in ? *band_clock_in : Relabel::ClockInBand(m, ports);
   const std::array<std::string, 2> names{NameOf(ports, 0), NameOf(ports, 1)};
   std::string prefix;
   if (v.ranked)
@@ -163,14 +163,15 @@ std::string RoomLine(const GuestMemory& m, const Queue::View& v, const Queue::St
     return prefix + "Both locked in, here we go!";
   if (v.ranked && !v.game1 && !v.order_done)
   {
-    if (const std::string order = OrderLine(m, names, ports); !order.empty())
+    if (const std::string order = OrderLine(m, names, ports, band_clock); !order.empty())
       return prefix + order;
   }
   if (Queue::ReadyPhase(v) && !Queue::OrderLockedIn(v))
   {
     const bool picks = !v.game1;
-    const std::string clock =
-        Queue::Timed(v) ? "  " + Clock(Queue::READY_FRAMES - s.timer) : std::string();
+    const std::string clock = Queue::Timed(v) && !band_clock ?
+                                  "  " + Clock(Queue::READY_FRAMES - s.timer) :
+                                  std::string();
     const int ready = s.ready & 3;
     if (ready == 3)
       return prefix + "Both locked in";
@@ -324,7 +325,8 @@ std::string Clock(int frames)
   return fmt::format("{}:{:02}", seconds / 60, seconds % 60);
 }
 
-CssWords Wanted(const GuestMemory& m, const std::vector<Events::PortInfo>& ports)
+CssWords Wanted(const GuestMemory& m, const std::vector<Events::PortInfo>& ports,
+                std::optional<bool> band_clock)
 {
   CssWords w;
   const u32 task = Task(m);
@@ -332,18 +334,14 @@ CssWords Wanted(const GuestMemory& m, const std::vector<Events::PortInfo>& ports
     return w;
   w.on_css = true;
   const Queue::View v = Queue::ReadView(m, ports);
-  const bool ranked_room = v.queue2 && !v.solo && v.ranked;
   for (int port = 0; port < 4; ++port)
   {
     const u32 area = Area(m, task, port);
     const Events::PortInfo* p = PortOf(ports, port);
     if (!area || !p || m.Read32(area + AREA_KIND) != KIND_HUMAN)
       continue;
-    std::string name = PlateName(p->name);
-    if (name.empty())
-      continue;
-    const int rating = RatingOf(ports, port);
-    w.plates[port] = ranked_room && rating >= 0 ? fmt::format("{} {}", name, rating) : name;
+    // The name alone (Luis, 2026-10-05: no rating by the name; the set's end shows it).
+    w.plates[port] = PlateName(p->name);
   }
   if (v.queue2 && v.css)
   {
@@ -353,10 +351,17 @@ CssWords Wanted(const GuestMemory& m, const std::vector<Events::PortInfo>& ports
     {
       w.rules = (s.ready & 1) ? mode + ": searching for an opponent...  B to cancel" :
                                 mode + ": pick, then press Start to search";
+      // Design F: while it searches, the opponent's empty seat says so (Apply puts the game's
+      // NONE back when the search stops).
+      if (const u32 area = Area(m, task, 1);
+          (s.ready & 1) && area && m.Read32(area + AREA_KIND) != KIND_HUMAN)
+      {
+        w.plates[1] = std::string(SEARCHING);
+      }
     }
     else
     {
-      w.rules = Ascii(RoomLine(m, v, s, ports));
+      w.rules = Ascii(RoomLine(m, v, s, ports, band_clock));
     }
   }
   return w;
@@ -377,16 +382,23 @@ CssBoxes FindCssBoxes(const GuestMemory& m)
   return boxes;
 }
 
-int Apply(GuestMemory& m, const std::vector<Events::PortInfo>& ports, u8* shown, bool rules_bar)
+int Apply(GuestMemory& m, const std::vector<Events::PortInfo>& ports, u8* shown, bool rules_bar,
+          std::optional<bool> band_clock)
 {
   u8 now = 0;
   int written = 0;
-  const CssWords w = Wanted(m, ports);
+  const CssWords w = Wanted(m, ports, band_clock);
   if (w.on_css)
   {
     const CssBoxes boxes = FindCssBoxes(m);
     for (int port = 0; port < 4; ++port)
     {
+      // The opponent's empty seat that said SEARCHING says the game's NONE again.
+      if (port == 1 && w.plates[port].empty() && boxes.plates[port] &&
+          Words(m, *boxes.plates[port]) == SEARCHING)
+      {
+        written += SetWords(m, *boxes.plates[port], NONE_SEAT);
+      }
       if (w.plates[port].empty() || !boxes.plates[port])
         continue;
       written += SetWords(m, *boxes.plates[port], w.plates[port]);
@@ -409,7 +421,7 @@ int Apply(GuestMemory& m, const std::vector<Events::PortInfo>& ports, u8* shown,
 }
 
 void Frame(const Core::CPUThreadGuard& guard, bool resimulating,
-           const std::vector<Events::PortInfo>& ports)
+           const std::vector<Events::PortInfo>& ports, std::optional<bool> band_clock)
 {
   // Brawl rev 2: the plates and the rules bar. Project+ (the same boxes at the same offsets): the
   // plates; its rules bar's message has no width code, so a line longer than the game's own isn't
@@ -422,13 +434,13 @@ void Frame(const Core::CPUThreadGuard& guard, bool resimulating,
   }
   GuardMemory memory(guard);
   u8 shown = 0;
-  const int written = Apply(memory, ports, &shown, ruleset == Rules::Ruleset::Brawl);
+  const int written = Apply(memory, ports, &shown, ruleset == Rules::Ruleset::Brawl, band_clock);
   if (resimulating)
     return;
   const u8 before = s_shown.exchange(shown, std::memory_order_relaxed);
   if (written && shown != before)
   {
-    const CssWords w = Wanted(memory, ports);
+    const CssWords w = Wanted(memory, ports, band_clock);
     NOTICE_LOG_FMT(ROLLBACK, "Orca: native text: plates '{}' '{}', rules bar '{}' (shown {:02x})",
                    w.plates[0], w.plates[1],
                    ruleset == Rules::Ruleset::Brawl ? w.rules : std::string("the game's"), shown);

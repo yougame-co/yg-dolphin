@@ -33,10 +33,12 @@ namespace Orca::UX
 // game's own text boxes, the players' names and ratings on their character select plates and the
 // queue's line in the rules bar (NativeText.h); 15, Orca 0.3.19: Random a pick like any
 // character's, the joiner's Random steered in without turning its colour (Queue.h
-// RANDOM_CHARACTER), and no skip in ranked: the session hashes it into the compatibility key as
-// `ux=<n>`, so two builds that would write different bytes (or mask different inputs, or part
-// differently) never meet in a room.
-constexpr int kCompatVersion = 15;
+// RANDOM_CHARACTER), and no skip in ranked; 16, design F: the plates without the rating and
+// SEARCHING on the queue's own select, the rules bar without the timer the band shows, the
+// relabels' marks (Relabel.h): the session hashes it into the compatibility key as `ux=<n>`, so
+// two builds that would write different bytes (or mask different inputs, or part differently)
+// never meet in a room.
+constexpr int kCompatVersion = 16;
 
 // The disc the game runs from (the boot's disc, or the default disc a launcher boots with): the
 // overlay's kit reads the game's own fonts from it (Kit.h). Before Init.

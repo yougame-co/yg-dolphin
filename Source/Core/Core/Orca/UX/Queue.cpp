@@ -805,15 +805,14 @@ Text TextFor(const View& v, const State& s, const std::vector<Events::PortInfo>&
   }
   else if (v.queue2 && v.css)
   {
-    // Each player's name near their panel; in ranked, their rating too ("ada · 1532"). A player
-    // who locked in (ready, or the character order's lock-in) wears a LOCKED IN badge.
+    // Each player's name near their panel (the name alone, as the plates: Luis, 2026-10-05, no
+    // rating by the name). A player who locked in (ready, or the character order's lock-in) wears
+    // a LOCKED IN ribbon.
     for (int p = 0; p < 2; ++p)
     {
       if (!(v.plugged & (1 << p)))
         continue;
-      int rating = -1;
-      const std::string name = NameFor(ports, p, &rating);
-      labels[p] = v.ranked && rating >= 0 ? fmt::format("{} · {}", name, rating) : name;
+      labels[p] = NameFor(ports, p, nullptr);
       locked[p] = ((s.ready | v.order_locked) >> p) & 1;
     }
     const int other = local == 0 ? 1 : 0;

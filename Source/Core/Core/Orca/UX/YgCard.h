@@ -19,6 +19,10 @@
 // which ImGui rasterizes at any size. Local display only, like the kit: nothing here reads emulated memory.
 namespace Orca::UX::Yg
 {
+// Loads the cards' face into ImGui's atlas now (once; cheap after): the overlay calls it every
+// frame, so the font file is read on the first frame the overlay draws (the menus), not at the
+// first chat message, mid-match. The video thread, in the ImGui frame.
+void Warm();
 // The site's avatar colour for `name` (web/src/lib/site.ts avatarColor: FNV-1a of the lowercased
 // name's UTF-16 units over seven colours; the same for every ASCII and Latin-1 name).
 ImU32 AvatarColour(std::string_view name);

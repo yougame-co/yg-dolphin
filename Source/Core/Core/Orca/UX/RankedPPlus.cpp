@@ -690,6 +690,22 @@ Rollback::InputGate::Masks Masks(const GuestMemory& m)
   return masks;
 }
 
+std::optional<Ranked::Turn> CurrentTurn(const GuestMemory& m)
+{
+  // Describe's turn (the same state, plan and step), without the names and the clock.
+  const std::optional<MatchBlock::State> s = MatchBlock::Read(m);
+  if (!s || (!IsRankedPPlus(*s) && !IsCasualPPlus(*s)) || s->flow != 1 || s->auto_pick ||
+      (!IsCasualPPlus(*s) && s->done) || ReadSceneName(m) != "scSelStage")
+  {
+    return std::nullopt;
+  }
+  const Plan plan = PlanFor(m, *s);
+  if (s->step >= plan.steps.size())
+    return std::nullopt;
+  const Step& step = plan.steps[s->step];
+  return Ranked::Turn{step.kind, step.port, std::max(1, step.count - s->step_done)};
+}
+
 Lines Describe(const GuestMemory& m, int frame, const std::vector<Events::PortInfo>& ports)
 {
   Lines lines;

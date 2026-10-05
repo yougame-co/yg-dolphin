@@ -26,6 +26,7 @@
 #include "Core/Orca/UX/Queue.h"
 #include "Core/Orca/UX/RankedPPlus.h"
 #include "Core/Orca/UX/RankedSet.h"
+#include "Core/Orca/UX/Relabel.h"
 #include "Core/Orca/UX/SetEnd.h"
 #include "Core/Orca/UX/StageCursors.h"
 #include "Core/Orca/UX/YgCard.h"
@@ -463,6 +464,21 @@ constexpr float DOTS_Y = 1.9f;  // overlay units
 // Where the top centre's banners start: under the dots when they show.
 constexpr float TOP_FIRST = 1.6f, TOP_UNDER_DOTS = 3.9f;  // overlay units
 
+// Design F's timers in the game's lettering (Kit::GameTimer), measured on 1280x720 screenshots of
+// both games (2026-10-05). READY TO FIGHT!'s: centred on the band's right end, past its words
+// (Brawl x 1186 y 441, Project+ x 1180 y 408). STAGE SELECT's: its left edge just past the
+// texture's right end (Brawl x 475, y 673; Project+ x 530, y 46; the labels' art ends there).
+struct GameTimerPlace
+{
+  float x, y, size;
+};
+constexpr GameTimerPlace BAND_TIMER_BRAWL{0.927f, 0.6125f, 5.2f};
+constexpr GameTimerPlace BAND_TIMER_PPLUS{0.922f, 0.567f, 5.2f};
+constexpr GameTimerPlace LINE_TIMER_BRAWL{0.371f, 0.935f, 4.4f};
+constexpr GameTimerPlace LINE_TIMER_PPLUS{0.414f, 0.064f, 5.4f};
+// The control guide's right end and middle: the games' own corner for their button legends.
+constexpr float GUIDE_RIGHT = 0.975f, GUIDE_Y = 0.969f;
+
 // A name in capitals as the game's own plates write them (ASCII letters only).
 std::string Upper(std::string_view name)
 {
@@ -581,8 +597,13 @@ struct Scene
   OverlayModel::Frame f;
   SetEnd::View set_end;
   // Top centre: the search's or the queue's lines, then the set's (the stage flow's, the score,
-  // the turn); `hint` this machine's own (Hold Z, B to change) on a small plate under them.
+  // the turn); `hint` this machine's own (Hold Z, B to change) as the control guide, bottom right.
   std::string search, search_note, rules, rules_note, hint;
+  // Design F (Relabel.h): the turn's timer at READY TO FIGHT!'s right end and beside STAGE
+  // SELECT's label when those say Orca's words (-1: not there).
+  int band_seconds = -1;
+  int line_seconds = -1;
+  bool legend = false;  // Project+'s stage select legend says X, A and B (Relabel.h)
   std::array<std::string, 4> labels;
   std::array<bool, 4> locked{};
   StageCursors::View cursors;
@@ -600,7 +621,8 @@ struct Scene
            std::all_of(labels.begin(), labels.end(),
                        [](const std::string& l) { return l.empty(); }) &&
            std::none_of(locked.begin(), locked.end(), [](bool l) { return l; }) && !cursors.on &&
-           picker < 0 && !dots.on && !searching && set_end.Empty();
+           picker < 0 && !dots.on && !searching && band_seconds < 0 && line_seconds < 0 &&
+           set_end.Empty();
   }
 };
 
@@ -628,9 +650,24 @@ Scene Gather(double now)
     s.labels = s_queue_labels;
     s.locked = s_queue_locked;
   }
+  // Design F (Relabel.h): with READY TO FIGHT! up and saying Orca's words, the turn's timer is
+  // the band's (the lines lose theirs; the rules bar already has, NativeText.h).
+  const Relabel::Shown words = Relabel::Current();
+  const bool band_clock = words.band != Relabel::Band::Game && words.band_up;
+  const auto take = [](int* seconds, std::string* line) {
+    const int t = TakeTimer(line);
+    if (*seconds < 0)
+      *seconds = t;
+  };
+  if (band_clock)
+  {
+    take(&s.band_seconds, &s.search);
+    take(&s.band_seconds, &s.search_note);
+  }
   // What the game's own text boxes already say (NativeText.h): a plate that names its player
   // needs no tab over it (its LOCKED IN ribbon stays), and a rules bar that says the queue's line
-  // takes the place of the top lines; this machine's own hints (Hold Z, B to change) stay, small.
+  // takes the place of the top lines; this machine's own hints (Hold Z, B to change) stay, in the
+  // control guide.
   const u8 native = NativeText::Shown();
   for (int port = 0; port < 4; ++port)
   {
@@ -667,6 +704,29 @@ Scene Gather(double now)
     s.rules = RankedSet::CurrentScoreLine();
   if (s.rules_note.empty())
     s.rules_note = rule_line;
+  if (band_clock)
+  {
+    take(&s.band_seconds, &s.rules);
+    take(&s.band_seconds, &s.rules_note);
+  }
+  // With STAGE SELECT saying whose turn it is, the stage select's lines go: its timer beside the
+  // label, the set's score in the dots, the turn's buttons in the guide.
+  if (words.line != Relabel::LINE_GAME)
+  {
+    take(&s.line_seconds, &s.rules);
+    take(&s.line_seconds, &s.rules_note);
+    const auto join = [](std::string* to, const std::string& more) {
+      if (!more.empty())
+        *to = to->empty() ? more : *to + " \u00b7 " + more;
+    };
+    join(&s.hint, s.rules_note);
+    // The label says P1 PICKS; Brawl's Meta Knight clause is why it may be any stage.
+    if (s.rules.find("MK clause") != std::string::npos)
+      join(&s.hint, "Meta Knight clause: any legal stage");
+    s.rules.clear();
+    s.rules_note.clear();
+  }
+  s.legend = words.legend;
   // The rules bar says the set's score and the character order's turn too; the queue's own
   // character select has no set yet (a ranked header is there already).
   if ((native & NativeText::SHOWN_RULES) || Queue::OnSoloCss())
@@ -772,11 +832,12 @@ std::pair<std::string, float> FitBanner(const std::string& title, const std::str
 }
 
 // Top centre: each pair of lines on a banner (the first, the search's or the queue's, with the
-// turn's timer beside it on its plate), this machine's hint on a small plate under them. Returns
-// the lowest bottom and leftmost edge drawn (the toasts and the chat keep clear of them).
+// turn's timer beside it on its plate). `guide` gets this machine's hint (the control guide's).
+// Returns the lowest bottom and leftmost edge drawn (the toasts and the chat keep clear of them).
 Kit::Box DrawTopCentre(ImDrawList* dl, const Scene& s, ImVec2 pic, ImVec2 pic_size, float unit,
-                       double now_s, float first_top)
+                       double now_s, float first_top, std::string* guide)
 {
+  *guide = s.hint;
   Kit::Box drawn{ImVec2(pic.x + pic_size.x, pic.y), ImVec2(pic.x, pic.y)};
   const auto add = [&](const Kit::Box& b) {
     drawn.min.x = std::min(drawn.min.x, b.min.x);
@@ -803,9 +864,10 @@ Kit::Box DrawTopCentre(ImDrawList* dl, const Scene& s, ImVec2 pic, ImVec2 pic_si
   {
     // Project+'s queue character select: the lines on its own rules bar (the band right of RANKED
     // that says "-stock Smash!", locked in a queue room anyway), as Brawl's rules bar says them in
-    // the game's own text (NativeText.h): what happens now, the set under it; this machine's hint
-    // and the turn's timer under the bar's right end, over the grid's empty corner. The bar's place
-    // in the picture, measured on 1280x720 screenshots (2026-10-04): x 520..1265, y 42..105.
+    // the game's own text (NativeText.h): what happens now, the set under it; the turn's timer
+    // under the bar's right end, over the grid's empty corner (the band's own when it has it), and
+    // this machine's hint in the guide. The bar's place in the picture, measured on 1280x720
+    // screenshots (2026-10-04): x 520..1265, y 42..105.
     std::string title = groups[0].first, note, hint = s.hint;
     if (!s.search.empty())
     {
@@ -823,17 +885,11 @@ Kit::Box DrawTopCentre(ImDrawList* dl, const Scene& s, ImVec2 pic, ImVec2 pic_si
     const float top = pic.y + pic_size.y * 0.056f;
     const auto [fitted, h] = FitBanner(title, note, pic_size.y * 0.092f, right - left, unit);
     add(Kit::Banner(dl, left, right, top, h, unit, Kit::Tone::Panel, title, fitted));
-    float x = right - 1.5f * unit;
+    const float x = right - 1.5f * unit;
     const float y = top + h + 1.0f * unit;
     if (seconds >= 0)
-    {
-      const Kit::Box t = Kit::Timer(dl, ImVec2(x - 5.5f * unit, y + 2.4f * unit), unit, seconds,
-                                    now_s);
-      add(t);
-      x = t.min.x - 1.0f * unit;
-    }
-    if (!hint.empty())
-      add(Kit::LabelPlate(dl, ImVec2(x, y + 0.2f * unit), unit, hint, 2.6f, Kit::Align::Right));
+      add(Kit::Timer(dl, ImVec2(x - 5.5f * unit, y + 2.4f * unit), unit, seconds, now_s));
+    *guide = hint;
     return drawn;
   }
   const float cx = pic.x + pic_size.x / 2;
@@ -859,8 +915,6 @@ Kit::Box DrawTopCentre(ImDrawList* dl, const Scene& s, ImVec2 pic, ImVec2 pic_si
     }
     top = b.max.y + 1.0f * unit;
   }
-  if (!s.hint.empty())
-    add(Kit::LabelPlate(dl, ImVec2(cx, top), unit, s.hint, 2.6f, Kit::Align::Centre));
   return drawn;
 }
 
@@ -875,6 +929,8 @@ void Draw()
     DrawKitDemo();
     return;
   }
+  // The chat cards' font, loaded before any chat needs it (YgCard.h).
+  Yg::Warm();
   if (s.Empty())
     return;
   // Everything is laid out in the game's picture (the window can letterbox or pillarbox it), in
@@ -928,8 +984,48 @@ void Draw()
                  s.dots.current);
   }
   // Top centre, then top left, where both games' matches and menus leave the screen empty.
+  std::string guide;
   const Kit::Box centre = DrawTopCentre(dl, s, pic, pic_size, unit, now_s,
-                                        pic.y + (s.dots.on ? TOP_UNDER_DOTS : TOP_FIRST) * unit);
+                                        pic.y + (s.dots.on ? TOP_UNDER_DOTS : TOP_FIRST) * unit,
+                                        &guide);
+  // Design F: the turn's timer in the lettering of the game's words that say whose turn it is,
+  // and this machine's buttons in the games' own corner for them.
+  const bool pplus = Kit::CurrentLook() == Kit::Look::ProjectPlus;
+  if (s.band_seconds >= 0)
+  {
+    const GameTimerPlace& at = pplus ? BAND_TIMER_PPLUS : BAND_TIMER_BRAWL;
+    Kit::GameTimer(dl, ImVec2(pic.x + pic_size.x * at.x, pic.y + pic_size.y * at.y), unit,
+                   s.band_seconds, now_s, Kit::Lettering::Band, at.size);
+  }
+  if (s.line_seconds >= 0)
+  {
+    const GameTimerPlace& at = pplus ? LINE_TIMER_PPLUS : LINE_TIMER_BRAWL;
+    const float half = Kit::Measure(Kit::TitleLook(unit, at.size), "0:00").x / 2;
+    Kit::GameTimer(dl, ImVec2(pic.x + pic_size.x * at.x + half, pic.y + pic_size.y * at.y), unit,
+                   s.line_seconds, now_s, Kit::Lettering::Line, at.size);
+  }
+  if (!guide.empty())
+  {
+    // One line along the bottom edge, the buttons and the words without one (a proposal, the
+    // casual pick's rule) in the hint's order, drawn smaller when longer than the picture is wide
+    // (never over the games' own buttons). Project+'s relabelled legend already says X, A and B on
+    // its stage select. Parsed once per hint (it changes a few times a screen; the video thread).
+    static std::string s_hint;
+    static std::vector<Kit::GuideItem> s_items;
+    if (guide != s_hint)
+    {
+      s_hint = guide;
+      s_items = Kit::GuideOf(guide);
+    }
+    std::vector<Kit::GuideItem> items;
+    for (const Kit::GuideItem& item : s_items)
+    {
+      if (!(s.legend && (item.button == "X" || item.button == "A" || item.button == "B")))
+        items.push_back(item);
+    }
+    Kit::Guide(dl, pic.x + pic_size.x * GUIDE_RIGHT, pic.y + pic_size.y * GUIDE_Y, unit, items, 1,
+               pic_size.x * (GUIDE_RIGHT - 0.025f));
+  }
   const float margin = 2.5f * unit;
   float y = DrawCorner(dl, f, ImVec2(pic.x + margin, pic.y + margin), unit);
   if (!f.waiting.empty())

@@ -405,6 +405,36 @@ TEST(OrcaKitDraw, DesignFPieces)
       EXPECT_NEAR(dots.max.y - dots.min.y, 1.8f * u, 0.01f);
       Kit::SetDots(dl, ImVec2(300, 20), u, {-1, -1, -1}, -1);
       Kit::SearchRing(dl, ImVec2(200, 200), 7 * u, u, 12.3);
+      // The timers in the game's lettering: the box of "0:00" round the centre, the same box in
+      // the last seconds' swell.
+      for (const Kit::Lettering lettering : {Kit::Lettering::Band, Kit::Lettering::Line})
+      {
+        const int before = dl->VtxBuffer.Size;
+        const Kit::Box t = Kit::GameTimer(dl, ImVec2(400, 300), u, 43, 5.0, lettering);
+        EXPECT_GT(dl->VtxBuffer.Size, before);
+        EXPECT_NEAR((t.min.x + t.max.x) / 2, 400, 0.01f);
+        const Kit::Box urgent = Kit::GameTimer(dl, ImVec2(400, 300), u, 3, 5.0, lettering);
+        EXPECT_NEAR(urgent.max.x - urgent.min.x, t.max.x - t.min.x, 0.01f);
+      }
+      // The control guide ends where asked and grows leftwards.
+      const Kit::Box guide = Kit::Guide(dl, 600, 100, u, Kit::GuideOf("Pick with A, then press Start to lock in"));
+      EXPECT_NEAR(guide.max.x, 600, 0.01f);
+      EXPECT_LT(guide.min.x, 600 - 10 * u);
+      EXPECT_LE(guide.max.y - guide.min.y, 3.4f * u);
+      // Longer than allowed: the line drawn smaller (to 70%), its right end where asked.
+      const std::vector<Kit::GuideItem> long_hint = Kit::GuideOf(
+          "A on the stage you want \u00b7 the same pick plays there, else a coin takes one of the "
+          "two \u00b7 bo wants Final Destination \u00b7 A on it to agree");
+      const Kit::Box wide = Kit::Guide(dl, 600, 100, u, long_hint);
+      const float room = 0.8f * (600 - wide.min.x);
+      const Kit::Box capped = Kit::Guide(dl, 600, 100, u, long_hint, 1, room);
+      EXPECT_NEAR(capped.max.x, 600, 0.01f);
+      EXPECT_LE(600 - capped.min.x, room + 0.01f);
+      EXPECT_GT(600 - capped.min.x, 0.9f * room);
+      // Never under 70%: then it is the line at 70% of the size.
+      const Kit::Box floor = Kit::Guide(dl, 600, 100, u, long_hint, 1, 0.1f * (600 - wide.min.x));
+      const Kit::Box seventy = Kit::Guide(dl, 600, 100, 0.7f * u, long_hint);
+      EXPECT_NEAR(floor.min.x, seventy.min.x, 0.5f);
     }
     Kit::SetLook(Kit::Look::Brawl);
     // The chat's card: wider than nothing, no wider than asked, its lines within its width.
@@ -438,6 +468,32 @@ TEST(OrcaKitDraw, DesignFPieces)
   }
   EXPECT_EQ(ImGuiAssertFailures(), failures);
   ImGui::DestroyContext(context);
+}
+
+// Orca's hints as the control guide's buttons and words (design F's bottom-right legend).
+TEST(OrcaKit, GuideOfOrcasHints)
+{
+  using G = Kit::GuideItem;
+  EXPECT_EQ(Kit::GuideOf("B to change \u00b7 Hold Z to find someone else"),
+            (std::vector<G>{{"B", "Change"}, {"Z", "Hold: find someone else"}}));
+  EXPECT_EQ(Kit::GuideOf("Pick with A, then press Start to lock in"),
+            (std::vector<G>{{"A", "Pick"}, {"Start", "Lock in"}}));
+  EXPECT_EQ(Kit::GuideOf("Press Start to lock in"), (std::vector<G>{{"Start", "Lock in"}}));
+  EXPECT_EQ(Kit::GuideOf("Start locks it in \u00b7 B to change"),
+            (std::vector<G>{{"Start", "Lock it in"}, {"B", "Change"}}));
+  EXPECT_EQ(Kit::GuideOf("A on a character, then Start"),
+            (std::vector<G>{{"A", "Pick a character"}, {"Start", ""}}));
+  // The stage select's: strikes, bans, skips, proposals.
+  EXPECT_EQ(Kit::GuideOf("X on a stage strikes it \u00b7 A proposes a stage"),
+            (std::vector<G>{{"X", "Strike"}, {"A", "Propose a stage"}}));
+  EXPECT_EQ(Kit::GuideOf("X on a stage bans it \u00b7 Y skips"),
+            (std::vector<G>{{"X", "Ban"}, {"Y", "Skip"}}));
+  EXPECT_EQ(Kit::GuideOf("bo wants Smashville \u00b7 A on it to agree"),
+            (std::vector<G>{{"", "bo wants Smashville"}, {"A", "Agree"}}));
+  EXPECT_EQ(Kit::GuideOf("Hold Z to leave"), (std::vector<G>{{"Z", "Hold: leave"}}));
+  EXPECT_EQ(Kit::GuideOf("Your turn: X on a stage strikes it \u00b7 A proposes a stage"),
+            (std::vector<G>{{"X", "Strike"}, {"A", "Propose a stage"}}));
+  EXPECT_TRUE(Kit::GuideOf("").empty());
 }
 
 // Each game's look: Brawl's titles cream into gold, Project+'s white into mint; the labels white in

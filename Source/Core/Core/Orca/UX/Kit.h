@@ -185,6 +185,34 @@ Box SetDots(ImDrawList* dl, ImVec2 centre, float unit, const std::array<int, 3>&
 // An empty seat's searching ring, centred on `centre`, `radius` pixels: a pale track with a gold
 // arc going round it.
 void SearchRing(ImDrawList* dl, ImVec2 centre, float radius, float unit, double now_s);
+// The game's words a timer sits beside (design F: the timer joins the relabelled words).
+enum class Lettering
+{
+  Band,  // READY TO FIGHT!: Brawl's orange in white and a dark edge, Project+'s mint in black
+  Line,  // the stage select's STAGE SELECT: Brawl's rose, Project+'s grey, no outline
+};
+// A turn's timer in `lettering`, no plate: "m:ss" in the heavy face, centred on `centre`; it swells
+// on each of the last five seconds. Returns the box of "0:00" at `size` (it never moves).
+Box GameTimer(ImDrawList* dl, ImVec2 centre, float unit, int seconds, double now_s,
+              Lettering lettering, float size = 4.2f);
+// One entry of a control guide: a GameCube button ("A", "B", "X", "Y", "Z", "L", "R", "Start";
+// empty for words alone) and what it does.
+struct GuideItem
+{
+  std::string button;
+  std::string label;
+  bool operator==(const GuideItem&) const = default;
+};
+// Orca's hints as guide entries: "B to change · Hold Z to find someone else" is B "Change" and
+// Z "Hold: find someone else", "Pick with A, then press Start to lock in" A "Pick" and Start
+// "Lock in", "Start locks it in" Start "Lock it in"; a part that names no button stays words.
+std::vector<GuideItem> GuideOf(std::string_view hint);
+// The control guide the games keep in a corner of their menus, its right end at `right` and
+// centred on `cy`: each button in its GameCube colours (A green, B red, Z violet, the rest grey;
+// Start a pill), what it does beside it in white, words without a button as they are. Wider than
+// `max_width` (0: any width), the line is drawn smaller, to 70%. Returns its box.
+Box Guide(ImDrawList* dl, float right, float cy, float unit, const std::vector<GuideItem>& items,
+          float alpha = 1, float max_width = 0);
 // A tile [min, max] framed in `tone` with `tag` on a tab on its top edge (left or right end).
 void Frame(ImDrawList* dl, ImVec2 min, ImVec2 max, float unit, Tone tone, std::string_view tag,
            bool tag_left, float inset = 0);

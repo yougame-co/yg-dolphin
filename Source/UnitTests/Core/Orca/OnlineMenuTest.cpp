@@ -348,8 +348,9 @@ TEST(OrcaOnlineMenuTextures, EveryShippedTextureIsAnIntegerMultipleOfItsName)
     }
     const auto name = ParseTextureName(stem);
     ASSERT_TRUE(name.has_value());
-    // A palette's hash only for the character select's title (C8, 9): its marks (CssTitle.h).
-    EXPECT_EQ(!name->tlut.empty(), name->format == "9");
+    // A palette's hash only for the character select's title (C8, 9) and READY TO FIGHT! (C4, 8):
+    // their marks (CssTitle.h, Relabel.h).
+    EXPECT_EQ(!name->tlut.empty(), name->format == "9" || name->format == "8");
     const auto [w, h] = *size;
     EXPECT_EQ(w % name->width, 0u);
     EXPECT_EQ(h % name->height, 0u);
@@ -359,8 +360,10 @@ TEST(OrcaOnlineMenuTextures, EveryShippedTextureIsAnIntegerMultipleOfItsName)
   }
   // Brawl's PLAY ONLINE, ONLINE breadcrumb, CASUAL and RANKED; Project+'s CASUAL and RANKED; the
   // character select's title in each game, CASUAL, RANKED and FRIENDS, one name per mark: the
-  // game's texture (Brawl's BRAWL, Project+'s VERSUS) with its palette marked for that mode.
-  EXPECT_EQ(bases.size(), 12u);
+  // game's texture (Brawl's BRAWL, Project+'s VERSUS) with its palette marked for that mode. And
+  // design F's relabels (Relabel.h): READY TO FIGHT!'s three in each game, STAGE SELECT's
+  // thirteen in each, the stage select's RANKED and CASUAL in each, Project+'s legend's two.
+  EXPECT_EQ(bases.size(), 12u + 6u + 26u + 4u + 2u);
   std::map<std::pair<u32, u32>, std::set<std::string>> titles;
   for (const auto& [stem, size] : bases)
   {
@@ -368,14 +371,16 @@ TEST(OrcaOnlineMenuTextures, EveryShippedTextureIsAnIntegerMultipleOfItsName)
     if (name && !name->tlut.empty())
       titles[{name->width, name->height}].insert(name->hash);
   }
-  // Brawl's 132x48 and Project+'s 128x56, three marks of one texture each.
-  ASSERT_EQ(titles.size(), 2u);
+  // Brawl's 132x48 and Project+'s 128x56, three marks of one texture each; READY TO FIGHT!, 352x36
+  // in both games, each game's own texture with three marks.
+  ASSERT_EQ(titles.size(), 3u);
   EXPECT_EQ(titles[std::pair(132u, 48u)].size(), 1u);
   EXPECT_EQ(titles[std::pair(128u, 56u)].size(), 1u);
+  EXPECT_EQ(titles[std::pair(352u, 36u)].size(), 2u);
   size_t marked = 0;
   for (const auto& [stem, size] : bases)
     marked += !ParseTextureName(stem)->tlut.empty();
-  EXPECT_EQ(marked, 6u);
+  EXPECT_EQ(marked, 12u);
   // Each has its mip levels, every one half the last (Dolphin drops a level of any other size),
   // down to the game's own size, so a label drawn small is never the 4x one read every fourth
   // texel. No level without its texture.
@@ -431,11 +436,11 @@ TEST(OrcaOnlineMenuTextures, OrcasPackKeepsItsOwnNamesAndThePlayersPackTheRest)
         std::filesystem::path(directory + "/").lexically_normal().string());
   };
 
-  // In a session: Orca's twelve names are Orca's, wherever else they are; every other name is the
+  // In a session: Orca's fifty names are Orca's, wherever else they are; every other name is the
   // player's. Mip level files (<name>_mip<N>) load with their texture, never as one of their own.
   {
     const auto files = by_id(CollectHiresTextureFiles({player, player2}, {orca}));
-    ASSERT_EQ(files.size(), 13u);
+    ASSERT_EQ(files.size(), 51u);
     for (const auto& [id, f] : files)
     {
       SCOPED_TRACE(id);
@@ -460,7 +465,7 @@ TEST(OrcaOnlineMenuTextures, OrcasPackKeepsItsOwnNamesAndThePlayersPackTheRest)
     EXPECT_FALSE(files.at(title).has_arbitrary_mipmaps);
   }
   // A session with no pack of the player's: Orca's alone.
-  EXPECT_EQ(CollectHiresTextureFiles({}, {orca}).size(), 12u);
+  EXPECT_EQ(CollectHiresTextureFiles({}, {orca}).size(), 50u);
 }
 
 namespace

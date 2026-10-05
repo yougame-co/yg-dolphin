@@ -129,6 +129,11 @@ std::string Initial(std::string_view name)
 }
 }  // namespace
 
+void Warm()
+{
+  Face();
+}
+
 ImU32 AvatarColour(std::string_view name)
 {
   static constexpr std::array<std::array<int, 3>, 7> COLOURS{{{124, 58, 237},

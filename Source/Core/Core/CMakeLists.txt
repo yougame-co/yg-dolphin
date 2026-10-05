@@ -578,6 +578,8 @@ add_library(core
   Orca/UX/RankedPPlus.h
   Orca/UX/RankedSteps.cpp
   Orca/UX/RankedSteps.h
+  Orca/UX/Relabel.cpp
+  Orca/UX/Relabel.h
   Orca/UX/Results.cpp
   Orca/UX/Results.h
   Orca/UX/SetEnd.cpp

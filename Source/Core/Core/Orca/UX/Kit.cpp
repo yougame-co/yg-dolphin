@@ -1049,6 +1049,275 @@ void SearchRing(ImDrawList* dl, ImVec2 c, float radius, float unit, double now_s
   dl->PathStroke(Rgb(255, 214, 40), ImDrawFlags_None, w);
 }
 
+Box GameTimer(ImDrawList* dl, ImVec2 centre, float unit, int seconds, double now_s,
+               Lettering lettering, float size)
+{
+  seconds = std::max(0, seconds);
+  const std::string text = fmt::format("{}:{:02}", seconds / 60, seconds % 60);
+  TextLook look = TitleLook(unit, size);
+  look.shadow = ImVec2(0, 0);
+  const bool pplus = CurrentLook() == Look::ProjectPlus;
+  // The game's own letters' colours, measured on 1280x720 frames (2026-10-05).
+  ImU32 edge = 0;
+  if (lettering == Lettering::Band)
+  {
+    look.italic = 0.2f;
+    look.top = pplus ? Rgb(210, 255, 238) : Rgb(255, 150, 80);
+    look.bottom = pplus ? Rgb(14, 140, 108) : Rgb(240, 70, 36);
+    look.outline_colour = pplus ? Rgb(6, 30, 28) : Rgb(255, 255, 255);
+    if (!pplus)
+      edge = Rgb(70, 20, 10);
+  }
+  else
+  {
+    look.italic = 0.25f;
+    look.top = pplus ? Rgb(150, 162, 164) : Rgb(176, 112, 104);
+    look.bottom = pplus ? Rgb(118, 132, 134) : Rgb(156, 94, 88);
+    look.outline = 0;
+  }
+  if (seconds <= 5)
+    look.px *= 1 + 0.14f * Pulse(now_s);
+  if (lettering == Lettering::Band)
+    look.outline = std::max(1.0f, look.px * 0.09f);
+  const ImVec2 widest = Measure(TitleLook(unit, size), "0:00");
+  const Box box{ImVec2(centre.x - widest.x / 2, centre.y - widest.y / 2),
+                ImVec2(centre.x + widest.x / 2, centre.y + widest.y / 2)};
+  const ImVec2 at(centre.x, centre.y - look.px / 2 + look.px * 0.04f);
+  if (edge)
+  {
+    // Brawl's band letters: a dark edge round the white one.
+    TextLook outer = look;
+    outer.outline = look.outline + std::max(1.0f, look.px * 0.06f);
+    outer.outline_colour = edge;
+    Text(dl, at, outer, text, 1, Align::Centre);
+  }
+  Text(dl, at, look, text, 1, Align::Centre);
+  return box;
+}
+
+namespace
+{
+constexpr std::array<std::string_view, 8> BUTTONS{"A", "B", "X", "Y", "Z", "L", "R", "Start"};
+
+bool IsButton(std::string_view word)
+{
+  return std::find(BUTTONS.begin(), BUTTONS.end(), word) != BUTTONS.end();
+}
+
+std::string Capital(std::string_view text)
+{
+  std::string out(text);
+  if (!out.empty() && out[0] >= 'a' && out[0] <= 'z')
+    out[0] = static_cast<char>(out[0] - 'a' + 'A');
+  return out;
+}
+
+bool Starts(std::string_view text, std::string_view prefix)
+{
+  return text.substr(0, prefix.size()) == prefix;
+}
+
+// A verb as its plain form ("strikes" "strike", "locks" "lock").
+std::string Plain(std::string_view verb)
+{
+  if (verb.size() > 2 && verb.back() == 's')
+    verb.remove_suffix(1);
+  return std::string(verb);
+}
+
+// One clause of a hint, in the shapes Orca's hints take:
+//   "[Press |Hold ]<button> to <what>"   B to change, Hold Z to find someone else
+//   "<button> on <thing> to <what>"      A on it to agree
+//   "<button> on <thing> <does> it"      X on a stage strikes it
+//   "<button> on <thing>"                A on a character (a pick)
+//   "<button> <does> [<what>]"           Start locks it in, A proposes a stage, Y skips
+//   "<what> with <button>"               Pick with A
+// after a "Your turn: " or the like; anything else is words alone.
+GuideItem ClauseOf(std::string_view clause)
+{
+  // "Your turn: X on a stage strikes it": the buttons after the colon say it.
+  if (const std::size_t colon = clause.find(": "); colon != std::string_view::npos)
+  {
+    const std::string_view after = clause.substr(colon + 2);
+    if (IsButton(after.substr(0, after.find(' '))))
+      clause = after;
+  }
+  bool hold = false;
+  if (Starts(clause, "Press ") || Starts(clause, "press "))
+    clause.remove_prefix(6);
+  else if (Starts(clause, "Hold ") || Starts(clause, "hold "))
+    hold = true, clause.remove_prefix(5);
+  const std::size_t space = clause.find(' ');
+  const std::string_view first = clause.substr(0, space);
+  if (IsButton(first))
+  {
+    const std::string button(first);
+    if (space == std::string_view::npos)
+      return {button, hold ? std::string("Hold") : std::string()};
+    std::string_view rest = clause.substr(space + 1);
+    const auto label = [&](std::string_view what) {
+      return hold ? "Hold: " + std::string(what) : Capital(what);
+    };
+    if (Starts(rest, "to "))
+      return {button, label(rest.substr(3))};
+    if (Starts(rest, "on "))
+    {
+      rest.remove_prefix(3);
+      if (const std::size_t to = rest.find(" to "); to != std::string_view::npos)
+        return {button, label(rest.substr(to + 4))};
+      if (rest.size() > 3 && rest.substr(rest.size() - 3) == " it")
+      {
+        const std::string_view head = rest.substr(0, rest.size() - 3);
+        const std::size_t verb = head.rfind(' ');
+        if (verb != std::string_view::npos)
+          return {button, label(Plain(head.substr(verb + 1)))};
+      }
+      return {button, label("pick " + std::string(rest))};
+    }
+    const std::size_t verb_end = rest.find(' ');
+    const std::string verb = Plain(rest.substr(0, verb_end));
+    return {button, label(verb_end == std::string_view::npos ?
+                              verb :
+                              verb + std::string(rest.substr(verb_end)))};
+  }
+  if (const std::size_t with = clause.rfind(" with "); with != std::string_view::npos &&
+                                                        IsButton(clause.substr(with + 6)))
+  {
+    return {std::string(clause.substr(with + 6)), Capital(clause.substr(0, with))};
+  }
+  return {std::string(), std::string(hold ? "Hold " : "") + std::string(clause)};
+}
+}  // namespace
+
+std::vector<GuideItem> GuideOf(std::string_view hint)
+{
+  std::vector<GuideItem> items;
+  const auto clauses = [&items](std::string_view part) {
+    // "Pick with A, then press Start to lock in": each clause its own entry.
+    for (;;)
+    {
+      const std::size_t then = part.find(", then ");
+      const std::string_view clause = part.substr(0, then);
+      if (!clause.empty())
+        items.push_back(ClauseOf(clause));
+      if (then == std::string_view::npos)
+        break;
+      part.remove_prefix(then + 7);
+    }
+  };
+  constexpr std::string_view DOT = " · ";
+  for (;;)
+  {
+    const std::size_t dot = hint.find(DOT);
+    clauses(hint.substr(0, dot));
+    if (dot == std::string_view::npos)
+      break;
+    hint.remove_prefix(dot + DOT.size());
+  }
+  return items;
+}
+
+namespace
+{
+// A GameCube button's face `h` pixels high: its height (Start's is lower) and width.
+ImVec2 ButtonSize(float h, std::string_view button)
+{
+  if (button == "Start")
+    return ImVec2(0.82f * h * 1.9f, 0.82f * h);
+  return ImVec2(h * (button == "Z" || button == "L" || button == "R" ? 1.5f : 1.0f), h);
+}
+
+// A GameCube button's face centred on `c`, `h` pixels high (ButtonSize).
+void ButtonFace(ImDrawList* dl, ImVec2 c, float h, float unit, std::string_view button, float alpha)
+{
+  const bool start = button == "Start", z = button == "Z";
+  const ImVec2 size = ButtonSize(h, button);
+  const float w = size.x;
+  h = size.y;
+  ImU32 top = Rgb(240, 240, 244, alpha), bottom = Rgb(160, 160, 170, alpha);
+  if (button == "A")
+    top = Rgb(90, 214, 140, alpha), bottom = Rgb(20, 140, 70, alpha);
+  else if (button == "B")
+    top = Rgb(250, 110, 110, alpha), bottom = Rgb(190, 30, 40, alpha);
+  else if (z)
+    top = Rgb(170, 120, 250, alpha), bottom = Rgb(90, 50, 190, alpha);
+  const ImVec2 min(c.x - w / 2, c.y - h / 2), max(c.x + w / 2, c.y + h / 2);
+  const float r = h / 2;
+  dl->AddRectFilled(ImVec2(min.x, min.y + 0.12f * h), ImVec2(max.x, max.y + 0.12f * h),
+                    Rgb(0, 0, 0, 0.45f * alpha), r);
+  dl->AddRectFilled(min, max, Rgb(40, 40, 44, alpha), r);
+  const float in = std::max(1.5f, h / 12);
+  FillRounded(dl, ImVec2(min.x + in, min.y + in), ImVec2(max.x - in, max.y - in), r - in, top,
+              bottom);
+  TextLook look = TitleLook(unit, (h * (button.size() == 1 ? 0.62f : 0.4f)) / unit);
+  look.italic = 0;
+  look.top = look.bottom = button == "A" || button == "B" || z ? Rgb(255, 255, 255) :
+                                                                  Rgb(60, 60, 66);
+  look.outline = 0;
+  look.shadow = ImVec2(0, 0);
+  look.tracking = 0;
+  const std::string text = start ? std::string("START") : std::string(button);
+  Text(dl, ImVec2(c.x, c.y - look.px / 2 + look.px * 0.06f), look, text, alpha, Align::Centre);
+}
+}  // namespace
+
+namespace
+{
+// The guide right to left from `right`, at `unit`; draws nothing when `dl` is null. Returns its box.
+Box LayGuide(ImDrawList* dl, float right, float cy, float unit,
+             const std::vector<GuideItem>& items, float alpha)
+{
+  const float h = 3.3f * unit;
+  TextLook look = LabelLook(unit, 2.6f);
+  look.outline = std::max(1.0f, look.px * 0.1f);
+  look.outline_colour = Rgb(20, 20, 20);
+  Box box{ImVec2(right, cy - h / 2), ImVec2(right, cy + h / 2)};
+  float x = right;
+  // Right to left: the last entry's words end at `right`.
+  for (auto it = items.rbegin(); it != items.rend(); ++it)
+  {
+    if (!it->label.empty())
+    {
+      const ImVec2 size = Measure(look, it->label);
+      if (dl)
+        Text(dl, ImVec2(x - size.x, cy - look.px / 2), look, it->label, alpha);
+      x -= size.x + (it->button.empty() ? 0.0f : 1.0f * unit);
+    }
+    if (!it->button.empty())
+    {
+      const float w = ButtonSize(h, it->button).x;
+      if (dl)
+        ButtonFace(dl, ImVec2(x - w / 2, cy), h, unit, it->button, alpha);
+      x -= w;
+    }
+    box.min.x = x;
+    x -= 2.6f * unit;
+  }
+  return box;
+}
+}  // namespace
+
+Box Guide(ImDrawList* dl, float right, float cy, float unit, const std::vector<GuideItem>& items,
+          float alpha, float max_width)
+{
+  // Wider than allowed: the whole line smaller, to 70% at most (the games shrink their own
+  // legends' words the same way).
+  // (Measured again after each step: the words' outlines and the fonts' sizes don't scale
+  // exactly.)
+  if (max_width > 0)
+  {
+    const float full = unit;
+    for (int i = 0; i < 4; ++i)
+    {
+      const float width = right - LayGuide(nullptr, right, cy, unit, items, alpha).min.x;
+      if (width <= max_width || unit <= 0.7f * full)
+        break;
+      unit = std::max(0.7f * full, unit * max_width / width * 0.995f);
+    }
+  }
+  return LayGuide(dl, right, cy, unit, items, alpha);
+}
+
 void Frame(ImDrawList* dl, ImVec2 min, ImVec2 max, float unit, Tone tone, std::string_view tag,
            bool tag_left, float inset)
 {

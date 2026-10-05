@@ -770,6 +770,20 @@ void Masks(const GuestMemory& m, Rollback::InputGate::Masks* masks)
     (*masks)[c->page_turn & 1].press |= PAD_BUTTON_A;
 }
 
+std::optional<Ranked::Turn> CurrentTurn(const GuestMemory& m)
+{
+  // Lines' turn (the same state, plan and step), without the names.
+  const std::optional<State> s = ReadState(m);
+  if (!s || s->phase != Phase::Select || !ReadView(m).present)
+    return std::nullopt;
+  const bool casual = !RankedBrawlMatch(m) && CasualBrawlMatch(m);
+  const RS::Plan plan = PlanOf(*s, casual ? s->set : SetOf(m, *s), casual);
+  const RS::Step* step = RS::Current(plan, s->progress);
+  if (!step)
+    return std::nullopt;
+  return Ranked::Turn{step->kind, step->port, std::max(1, step->count - s->progress.done)};
+}
+
 std::pair<std::string, std::string> Lines(const GuestMemory& m,
                                           const std::vector<Orca::Events::PortInfo>& ports)
 {

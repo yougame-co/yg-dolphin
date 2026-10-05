@@ -60,6 +60,16 @@ struct Step
   bool operator==(const Step&) const = default;
 };
 
+// Whose turn it is on a stage select and what they do: a step as the screen's words name it
+// (Relabel.h's STAGE SELECT: "P2 STRIKES 2", "P1 PICKS", "PICK A STAGE").
+struct Turn
+{
+  StepKind kind = StepKind::Pick;
+  u8 port = 0;   // 0, 1, or BOTH
+  int left = 1;  // the strikes or bans still to make in the step (1 for a pick)
+  bool operator==(const Turn&) const = default;
+};
+
 struct Ruleset
 {
   u8 id = 0;  // MatchBlock's ruleset byte

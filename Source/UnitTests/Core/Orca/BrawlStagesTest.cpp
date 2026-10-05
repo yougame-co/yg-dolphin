@@ -724,20 +724,25 @@ TEST_F(OrcaBrawlStages, TheOverlaysTopLineHasTheSetTheTurnTheCountAndTheTime)
   Scene(m, "scSelctCharacter");
   Boundary(m);
   EXPECT_EQ(Lines(m, ports), (std::pair<std::string, std::string>{"Game 1 · You 0–0 bo", ""}));
+  EXPECT_EQ(CurrentTurn(m), std::nullopt);
   Scene(m, "scSelStage");
   Boundary(m);
   EXPECT_EQ(Lines(m, ports), (std::pair<std::string, std::string>{
                                  "Game 1 · You 0–0 bo · bo strikes 1 · 0:30",
                                  "A proposes a stage"}));
+  // The turn as STAGE SELECT's relabel names it (Relabel.h): the same step as the line's.
+  EXPECT_EQ(CurrentTurn(m), (Ranked::Turn{Ranked::StepKind::Strike, 1, 1}));
   Aim(m, 1, Battlefield);
   Push(m, 1, X);
   // Port 1's two strikes, its keys under the line.
   EXPECT_EQ(Lines(m, ports), (std::pair<std::string, std::string>{
                                  "Game 1 · You 0–0 bo · You strike 2 · 0:30",
                                  "X on a stage strikes it · A proposes a stage"}));
+  EXPECT_EQ(CurrentTurn(m), (Ranked::Turn{Ranked::StepKind::Strike, 0, 2}));
   Aim(m, 0, Smashville);
   Push(m, 0, X);
   EXPECT_EQ(Lines(m, ports).first, "Game 1 · You 0–0 bo · You strike 1 · 0:30");
+  EXPECT_EQ(CurrentTurn(m), (Ranked::Turn{Ranked::StepKind::Strike, 0, 1}));
   // What the other player proposes.
   Aim(m, 1, YoshisIsland);
   Push(m, 1, A);
@@ -803,6 +808,7 @@ TEST_F(OrcaBrawlCasual, BothPickAtOnceTheSameStagePlays)
                 "Stage pick · 0:15",
                 "A on the stage you want · the same pick plays there, else a coin takes one of the "
                 "two"}));
+  EXPECT_EQ(CurrentTurn(m), (Ranked::Turn{Ranked::StepKind::Prefer, Ranked::BOTH, 1}));
   // Port 2 names Smashville, then changes its mind to Battlefield; port 1 names Battlefield too.
   Aim(m, 1, Smashville);
   Push(m, 1, A);

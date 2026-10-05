@@ -206,6 +206,10 @@ void Masks(const GuestMemory& memory, Rollback::InputGate::Masks* masks);
 std::pair<std::string, std::string> Lines(const GuestMemory& memory,
                                           const std::vector<Orca::Events::PortInfo>& ports);
 
+// The step under way on the stage select (nullopt: none, the stage picked, or not a queue game's
+// stage select). A pure function of emulated memory (Relabel.h writes it into the screen).
+std::optional<Ranked::Turn> CurrentTurn(const GuestMemory& memory);
+
 // What the overlay draws of the two cursors (StageCursors.h) on this boundary (on: false, none).
 // UI only: `ports` for the names and which player is this machine's.
 StageCursors::View CursorView(const GuestMemory& memory,

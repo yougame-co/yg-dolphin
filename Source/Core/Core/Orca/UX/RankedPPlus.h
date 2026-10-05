@@ -3,12 +3,14 @@
 
 #pragma once
 
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "Common/CommonTypes.h"
 #include "Core/Orca/Session/Events.h"
+#include "Core/Orca/UX/RankedSteps.h"
 #include "Core/Orca/UX/StageCursors.h"
 #include "Core/Rollback/InputGate.h"
 
@@ -96,6 +98,10 @@ struct Lines
   bool operator==(const Lines&) const = default;
 };
 Lines Describe(const GuestMemory& memory, int frame, const std::vector<Events::PortInfo>& ports);
+
+// The step under way on the stage select (nullopt: none, the stage decided, or not a queue game's
+// stage select). A pure function of emulated memory (Relabel.h writes it into the screen).
+std::optional<Ranked::Turn> CurrentTurn(const GuestMemory& memory);
 
 // What the overlay draws of the two cursors (StageCursors.h) on this boundary (on: false, none).
 // UI only.

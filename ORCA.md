@@ -3442,8 +3442,8 @@ Proven by probe writes (`ORCA_UX_PROBE` `write`): one write, still on screen 150
 **Built (Brawl, the Versus character select, muSelCharTask = scene `+0x400`):**
 - **Name plates.** Player area i (task `+0x44 + 4i`, whose `+0x1B0` is i) `+0x174` is its plate's
   buffer ("PLAYER 1", "NONE"). A joined port with a name shows it in capitals like the game's plates;
-  in a ranked queue room with the rating from its queue identity ("BO 1532"). Any session with
-  names (friends rooms too). The overlay's label over that panel goes; the LOCKED IN badge stays.
+  until design F also in a ranked queue room with the rating from its queue identity ("BO 1532"),
+  since then the name alone ("Design F" below). Any session with names (friends rooms too). The overlay's label over that panel goes; the LOCKED IN badge stays.
 - **The rules bar** (task `+0x538`, the white bar right of CASUAL / RANKED that says "3-man
   survival test!" after the stock count): in a queue room and on the queue's own character select
   it says what happens now, for both players in the third person, with the timer:
@@ -3581,6 +3581,69 @@ toast and two chat lines each round.
 Not yet: the results screen's native words (its boxes take text, the writer isn't built), a native
 LOCKED IN (the plate's colour codes), Project+'s rules bar (the width code). No two-Orca or Mac<->PC
 run for these changes: they come after the release, as for every release.
+
+## Design F
+
+Luis, 2026-10-05, after five directions and three rounds of renders
+(`~/Documents/brawl-dolphin/ui-design/`, private): "relabelled for almost everything", B's character
+portraits, the stage select's turn cursor pulsing, a subtle set count at the top; the results screen
+as 0.3.18 has it; no rating by the names. Chat and the room's notices in YouGame's own look. Built on
+`q6-ui-f` (`ux=16`):
+
+- **Portraits** (kit): whoever picks now in the character order gets a frame in their port's colour
+  with a soft glow round the portrait (`CharOrder::Picker`, pure, published as `CurrentPicker`); a
+  locked-in player's is gold with a LOCKED IN ribbon across its top (it replaces the badge). On the
+  queue's own select, while it searches, a gold arc goes round the empty seat.
+- **The turn's cursor pulses** (kit `Pointer`, `TurnPulse`): it swells 14% on a cosine beat, a glow in
+  the player's colour breathes with it, a ring ripples out once a second. No more gold ring.
+- **The set's dots** (kit `SetDots`, `RankedSet::DotsOf`): three dots at the top centre of the
+  queue's character select and the stage select, each decided game's filled in its winner's port
+  colour, the game being played rimmed brighter.
+- **Names alone on the plates** ("BO", not "BO 1532"). On the queue's own select, while it searches,
+  the opponent's empty seat reads SEARCHING (the game's "  NONE" back when it stops).
+- **Relabelled words** (`Core/Orca/UX/Relabel.*`): the game's big words say what to do now, through
+  the texture pack (`Tools/orca/textures/README.md`), CssTitle's way: Orca marks a texture with a
+  value nobody sees so it hashes to another name, one per label, and the pack has our art for each.
+  - READY TO FIGHT! (`MenSelchrReady01_2`, C4 352x36, in the character select's archive): its
+    transparent palette entry's blue (Brawl entry 0, `0x0222`; Project+ entry 15, `0x0000`) plus
+    the label: PRESS START TO LOCK IN! (a queue room's ready step, until both are in, the match
+    starts or the time runs out), WINNER PICKS FIRST! and LOSER PICKS NOW! (the character order;
+    under its Free order the loser's turn alone has words).
+  - STAGE SELECT (`MenSelmapBack07`, I4, Brawl 128x16 under the stage list, Project+ 189x30 over the
+    preview, in `sc_selmap_en`'s MiscData 20, found by scanning the scene object's words for the
+    archive): its first texel's high nibble plus the label (Brawl's is 1, Project+'s 0). Dolphin's
+    texture cache always samples a texture's first 8 bytes (`GetHash64`), so the change is seen at
+    once. P1 STRIKES 1-3, P2 STRIKES 1-3, P1/P2 BANS 1-2, P1/P2 PICKS, PICK A STAGE (a casual game's
+    both-at-once pick): the step under way (`BrawlStages::CurrentTurn`, `RankedPPlus::CurrentTurn`,
+    `Ranked::Turn`), the count the strikes or bans still to make.
+  - The stage select's BRAWL / VERSUS (`MenSelchrRtitle.30`, I4 120x24): RANKED or CASUAL from the
+    header.
+  - Project+'s stage select legend (`CornerInfo` I4, `CornerButtons` IA8): STRIKE, PROPOSE, TAKE BACK
+    over X, A, B while a ranked set's two cursors run (not casual's: X does nothing there).
+  Each slot is written only when it holds the game's value or one of its marks (anything else is not
+  the texture this knows), only where it differs, first runs and re-runs, a pure function of the
+  block, the queue, the character order, the stage flows' steps and the synced ports. The archives
+  load fresh each time their screen starts; with nothing to say the game's value goes back. Without
+  the pack the game's words show (an I4 mark is one texel in a corner, up to 14 of 15 bright).
+- **Timers in the game's lettering** (kit `GameTimer`): with READY TO FIGHT! up (both tokens down)
+  and relabelled, the turn's timer sits at the band's right end in the band's lettering, and the
+  rules bar leaves its own out (`Relabel::ClockInBand`, pure); with STAGE SELECT relabelled, the
+  timer follows the label in its rose (Brawl) or grey (Project+), and the stage select's banners go
+  (the label, the dots and the guide say it).
+- **The control guide** (kit `Guide`, `GuideOf`): this machine's hints ("B to change", "Hold Z to
+  find someone else", "X on a stage strikes it") as GameCube buttons and short words in the games'
+  own corner for them, bottom right, in place of the small plate at the top; one line along the
+  bottom edge, words without a button (a proposal, the casual pick's rule) in it too, drawn smaller
+  (to 70%) when longer than the picture is wide. On Project+'s ranked stage select the relabelled
+  legend says X, A and B, so the guide leaves them out.
+- **YouGame's layer** (`Core/Orca/UX/YgCard.*`): chat and the room's notices as the SDK's slate cards
+  (web/public/sdk.js), the sender's avatar in the site's colour and initial, YouGame's mark, in Roboto
+  (`Data/Sys/Orca/Fonts`, Apache 2.0, ImGui's own copy). Not the game's look on purpose: they are
+  YouGame's, in every game, like Steam's overlay.
+- Stage select tabs read in capitals ("P1 ADA").
+
+Not in F: the results screen, VICTORY/DEFEAT, the rating's count and the disconnect countdown are
+0.3.18's.
 
 ## Ranked sprint integration
 
