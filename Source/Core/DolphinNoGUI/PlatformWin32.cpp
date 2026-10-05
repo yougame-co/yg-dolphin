@@ -281,10 +281,15 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
       if (lParam & (1 << 30))
         break;
       // The page can't see keys while Orca has the focus: the ones that mean something to it.
+      // Shift+Tab is the YouGame overlay's key (the page's PlayOrb): the same line as a press on
+      // the YouGame button, so the page opens it and the app takes the keyboard back.
       if (wParam == VK_ESCAPE)
         Embed::Out("key escape");
       else if (wParam == VK_F11)
         Embed::Out("key fullscreen");
+      else if (wParam == VK_TAB && (GetKeyState(VK_SHIFT) & 0x8000) &&
+               !(GetKeyState(VK_CONTROL) & 0x8000) && !(GetKeyState(VK_MENU) & 0x8000))
+        Embed::Out("orca orb");
     }
     else if (wParam == VK_ESCAPE)
     {

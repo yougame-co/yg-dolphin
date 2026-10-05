@@ -313,7 +313,7 @@ OverlayModel::Frame OverlayModel::View(double now_ms, Stats stats, Perf perf) co
     if (left <= 0)
       continue;
     f.toasts.push_back(
-        {text, static_cast<float>(std::clamp(left / TOAST_FADE_MS, 0.0, 1.0))});
+        {text, static_cast<float>(std::clamp(left / TOAST_FADE_MS, 0.0, 1.0)), at});
   }
   for (const ChatEntry& c : m_chats)
   {
@@ -321,7 +321,7 @@ OverlayModel::Frame OverlayModel::View(double now_ms, Stats stats, Perf perf) co
     if (left <= 0)
       continue;
     f.chats.push_back(
-        {c.name, c.text, static_cast<float>(std::clamp(left / TOAST_FADE_MS, 0.0, 1.0))});
+        {c.name, c.text, static_cast<float>(std::clamp(left / TOAST_FADE_MS, 0.0, 1.0)), c.at});
   }
   if (stats != Stats::Off && m_link.online)
   {
@@ -799,6 +799,22 @@ float DrawCorner(ImDrawList* dl, const OverlayModel::Frame& f, ImVec2 at, float 
   return y;
 }
 
+// DrawCorner's width: the lamp and its readouts, or its graph when wider.
+float CornerWidth(const OverlayModel::Frame& f, float unit)
+{
+  constexpr float SIZE = 2.6f;
+  const Kit::TextLook look = Kit::LabelLook(unit, SIZE);
+  float text = 0;
+  if (!f.stats.empty())
+    text = std::max(text, Kit::Measure(look, f.stats).x);
+  if (!f.perf.empty())
+    text = std::max(text, Kit::Measure(look, f.perf).x);
+  float w = f.show_signal ? 2 * 3.0f * unit + 0.9f * unit + text : text;
+  if (!f.graph.empty())
+    w = std::max(w, 40 * unit);
+  return w;
+}
+
 // `note` in lines no wider than `width` in `look`, '\n' between them: broken at its " · " first,
 // at spaces inside a part still too wide.
 std::string FitNote(const Kit::TextLook& look, const std::string& note, float width)
@@ -849,7 +865,7 @@ std::pair<std::string, float> FitBanner(const std::string& title, const std::str
 // Returns the lowest bottom and leftmost edge drawn (the toasts and the chat keep clear of them).
 Kit::Box DrawTopCentre(ImDrawList* dl, const Scene& s, ImVec2 pic, ImVec2 pic_size, ImVec2 vis,
                        ImVec2 vis_size, float unit, double now_s, float first_top,
-                       std::string* guide)
+                       std::string* guide, float right_edge)
 {
   *guide = s.hint;
   Kit::Box drawn{ImVec2(vis.x + vis_size.x, vis.y), ImVec2(vis.x, vis.y)};
@@ -895,7 +911,9 @@ Kit::Box DrawTopCentre(ImDrawList* dl, const Scene& s, ImVec2 pic, ImVec2 pic_si
     }
     TakeTimer(&note);
     TakeTimer(&hint);
-    const float left = pic.x + pic_size.x * 0.4f, right = pic.x + pic_size.x * 0.99f;
+    // It ends short of Orca's corner when the YouGame button sends that to the top right.
+    const float left = pic.x + pic_size.x * 0.4f;
+    const float right = std::min(pic.x + pic_size.x * 0.99f, right_edge);
     const float top = pic.y + pic_size.y * 0.056f;
     const auto [fitted, h] = FitBanner(title, note, pic_size.y * 0.092f, right - left, unit);
     add(Kit::Banner(dl, left, right, top, h, unit, Kit::Tone::Panel, title, fitted));
@@ -1006,13 +1024,22 @@ void DrawScene()
     Kit::SetDots(dl, ImVec2(pic.x + pic_size.x / 2, pic.y + DOTS_Y * unit), unit, s.dots.games,
                  s.dots.current);
   }
+  // The YouGame button (YgOrb.h) holds the top left with its pill along its row, as the page's
+  // does (Luis, 2026-10-05: "stay up top nice and neat"): Orca's corner then hugs the top right,
+  // clear of the match clock, and Project+'s queue bar ends short of it. Without the button, all
+  // as before.
+  const float margin = 2.5f * unit;
+  const Kit::Box orb = YgOrb::ButtonBox(yg);
+  const bool yg_top = orb.max.x > orb.min.x;
+  const float corner_x =
+      yg_top ? vis.x + vis_size.x - margin - CornerWidth(f, unit) : vis.x + margin;
   // Top centre, then top left, where both games' matches and menus leave the screen empty.
   std::string guide;
   const Kit::Box centre =
       DrawTopCentre(dl, s, pic, pic_size, vis, vis_size, unit, now_s,
                     std::max(pic.y + (s.dots.on ? TOP_UNDER_DOTS : TOP_FIRST) * unit,
                              vis.y + TOP_FIRST * unit),
-                    &guide);
+                    &guide, yg_top ? corner_x - 1.0f * unit : pic.x + pic_size.x);
   // Design F: the turn's timer in the lettering of the game's words that say whose turn it is,
   // and this machine's buttons in the games' own corner for them.
   const bool pplus = Kit::CurrentLook() == Kit::Look::ProjectPlus;
@@ -1056,12 +1083,8 @@ void DrawScene()
     Kit::Guide(dl, right, cy, unit, items, 1,
                std::max(right - vis.x - pic_size.x * 0.025f, 1.0f));
   }
-  const float margin = 2.5f * unit;
-  // The corner and the column under it start right of the YouGame button when it is there.
-  const Kit::Box orb = YgOrb::ButtonBox(yg);
-  const float left =
-      orb.max.x > orb.min.x ? std::max(vis.x + margin, orb.max.x + 1.2f * unit) : vis.x + margin;
-  float y = DrawCorner(dl, f, ImVec2(left, vis.y + margin), unit);
+  const float left = vis.x + margin;
+  float y = DrawCorner(dl, f, ImVec2(corner_x, vis.y + margin), unit);
   if (!f.waiting.empty())
   {
     // "Waiting for <name>…" under the top centre's banners.
@@ -1071,7 +1094,27 @@ void DrawScene()
   // The toasts and the chat on plates under the corner: under Dolphin's own messages (OSD rows
   // such as "Screenshot saved...", drawn at the top left just before this), and under the top
   // centre's banners where a plate as wide as the chat's would reach them.
-  if (!f.toasts.empty() || !f.chats.empty() || yg.showing)
+  if (yg_top)
+  {
+    // Orca's toasts and the chat in the button's pill with its notices (no copies: views of
+    // this frame's lines).
+    std::array<YgOrb::PillRow, 12> rows;
+    std::size_t n = 0;
+    for (const OverlayModel::Toast& t : f.toasts)
+    {
+      if (n < rows.size())
+        rows[n++] = YgOrb::PillRow{YgOrb::PillRow::Type::Toast, {}, t.text, {}, {},
+                                   YgOrb::Kind::Join, t.alpha, t.at};
+    }
+    for (const OverlayModel::ChatToast& c : f.chats)
+    {
+      if (n < rows.size())
+        rows[n++] = YgOrb::PillRow{YgOrb::PillRow::Type::Chat, c.name, c.text, {}, {},
+                                   YgOrb::Kind::Join, c.alpha, c.at};
+    }
+    YgOrb::DrawPill(dl, yg, std::span<const YgOrb::PillRow>(rows.data(), n), now);
+  }
+  else if (!f.toasts.empty() || !f.chats.empty())
   {
     y = std::max(y, OSD::MessagesBottom() + unit);
     // No wider than the window's part of the picture leaves right of the corner.
@@ -1080,8 +1123,6 @@ void DrawScene()
     if (centre.max.y > vis.y && centre.min.x < left + wrap + 3.0f * unit)
       y = std::max(y, centre.max.y + 1.2f * unit);
     const float bottom = vis.y + vis_size.y - margin;
-    // The YouGame button's lines first, the nearest to it.
-    y = YgOrb::DrawLines(dl, yg, ImVec2(left, y), unit, wrap, bottom, now);
     // In YouGame's own look (YgCard.h): the room's and the chat are YouGame's, not the game's.
     for (const OverlayModel::Toast& t : f.toasts)
     {

@@ -4,6 +4,9 @@
 #include "Core/Orca/UX/YgOrbDraw.h"
 
 #include <algorithm>
+#include <array>
+#include <cstdint>
+#include <utility>
 #include <cmath>
 #include <string>
 #include <string_view>
@@ -104,152 +107,305 @@ void DrawButton(ImDrawList* dl, const Model::View& view)
 
 namespace
 {
-// A line laid out for a unit and a width: its words wrapped, its card's size, its hint's widths.
-struct Laid
-{
-  Model::Entry entry;
-  std::string said;  // "<name> <text>"
-  std::vector<std::string> lines;
-  float text_w = 0;
-  float key_w = 0;   // the keycap, 0 without a hint
-  float hint_w = 0;  // the gap, the keycap and the verb
-  float h = 0;
-};
-
-struct Metrics
-{
-  float pad, px, r, gap, kpx, line_h, text_x;
-};
-
-Metrics MetricsFor(float unit)
-{
-  Metrics m;
-  m.pad = 1.2f * unit;
-  m.px = 1.95f * unit;
-  m.r = 1.45f * unit;
-  m.gap = 0.9f * unit;
-  m.kpx = 1.6f * unit;
-  m.line_h = m.px * 1.28f;
-  m.text_x = m.pad + 2 * m.r + m.gap;
-  return m;
-}
-
-Laid Layout(const Model::Entry& e, const Metrics& m, float unit, float width)
-{
-  Laid l;
-  l.entry = e;
-  const Notice& n = e.notice;
-  if (!n.key.empty())
-  {
-    l.key_w = Yg::TextWidth(n.key, m.kpx) + 1.4f * unit;
-    l.hint_w = m.gap + l.key_w + 0.6f * unit + Yg::TextWidth(n.verb, m.kpx);
-  }
-  l.said = n.name + " " + n.text;
-  l.lines = Yg::Wrap(l.said, m.px, std::max(10.0f * unit, width - m.text_x - m.pad - l.hint_w));
-  for (const std::string& s : l.lines)
-    l.text_w = std::max(l.text_w, Yg::TextWidth(s, m.px));
-  l.h = std::max(2 * m.r, m.line_h * static_cast<float>(std::max<std::size_t>(l.lines.size(), 1))) +
-        2 * m.pad;
-  return l;
-}
-
-// The lines as last laid out (the video thread only).
-struct LineCache
+// The notices as last copied out (Model::Lines; the video thread only).
+struct NoticeCache
 {
   std::uint64_t generation = 0;
   std::vector<Model::Entry> entries;
-  float unit = 0;
-  float width = 0;
-  std::vector<Laid> laid;
 };
-LineCache s_cache;
+NoticeCache s_notices;
+
+// The page's Pill (globals.css .play-orb .play-peek), in its 40-pixel grid scaled by `k`: a slab 40
+// high at least, its words 54 in from its left (right of the button over it), rows 6 apart, a 26
+// avatar 10 from the words, the name at 13.5 and the words at 14.5 (lines 1.35 apart), the hint's
+// keycap at 11 in an 18-high cap, its verb at 12.5, and at most 480 wide.
+struct Pill
+{
+  float k, pad_left, pad_right, pad_y, gap, avatar, avatar_gap, name_px, text_px, line, hint_gap,
+      key_px, key_h, key_pad, verb_px, max_width, radius;
+};
+Pill PillFor(float k)
+{
+  Pill m;
+  m.k = k;
+  m.pad_left = 54 * k;
+  m.pad_right = 12 * k;
+  m.pad_y = 7 * k;
+  m.gap = 6 * k;
+  m.avatar = 26 * k;
+  m.avatar_gap = 10 * k;
+  m.name_px = 13.5f * k;
+  m.text_px = 14.5f * k;
+  m.line = 1.35f;
+  m.hint_gap = 12 * k;
+  m.key_px = 11 * k;
+  m.key_h = 18 * k;
+  m.key_pad = 5 * k;
+  m.verb_px = 12.5f * k;
+  m.max_width = 480 * k;
+  m.radius = 20 * k;
+  return m;
+}
+
+constexpr std::string_view ELLIPSIS = "…";
+
+// `text` within `width` at `px` on one line: its start, and whether it was cut (then "…" follows).
+std::pair<std::string_view, bool> OneLine(std::string_view text, float px, float width)
+{
+  const auto measure = [px](std::string_view t) { return Yg::TextWidth(t, px); };
+  if (measure(text) <= width)
+    return {text, false};
+  const float room = std::max(0.0f, width - measure(ELLIPSIS));
+  std::string_view head = text.substr(0, FitPrefix(text, room, measure));
+  while (!head.empty() && head.back() == ' ')
+    head.remove_suffix(1);
+  return {head, true};
+}
+
+// A chat line's words in at most two lines within `width`.
+struct TwoLines
+{
+  std::string_view first, second;
+  bool cut = false;
+};
+TwoLines Wrap2(std::string_view text, float px, float width)
+{
+  const auto measure = [px](std::string_view t) { return Yg::TextWidth(t, px); };
+  TwoLines out;
+  std::size_t n = FitPrefix(text, width, measure);
+  // Not even one character fits: the first goes on its own (never half a UTF-8 sequence).
+  if (n == 0 && !text.empty())
+  {
+    n = 1;
+    while (n < text.size() && (static_cast<unsigned char>(text[n]) & 0xC0) == 0x80)
+      ++n;
+  }
+  out.first = text.substr(0, n);
+  std::string_view rest = text.substr(out.first.size());
+  while (!out.first.empty() && out.first.back() == ' ')
+    out.first.remove_suffix(1);
+  while (!rest.empty() && rest.front() == ' ')
+    rest.remove_prefix(1);
+  if (!rest.empty())
+  {
+    const auto [line, cut] = OneLine(rest, px, width);
+    out.second = line;
+    out.cut = cut;
+  }
+  return out;
+}
+
+float TextWithEllipsis(ImDrawList* dl, ImVec2 pos, float px, ImU32 colour, std::string_view text,
+                       bool cut)
+{
+  Yg::Text(dl, pos, px, colour, text);
+  float w = Yg::TextWidth(text, px);
+  if (cut)
+  {
+    Yg::Text(dl, ImVec2(pos.x + w, pos.y), px, colour, ELLIPSIS);
+    w += Yg::TextWidth(ELLIPSIS, px);
+  }
+  return w;
+}
+
+// One laid-out row (string views into the frame's own lines and the notice cache: no copies).
+struct RowLayout
+{
+  const PillRow* row = nullptr;
+  float height = 0;
+  float width = 0;  // the avatar, its gap and the words
+  // Chat: the name, then up to two lines; a notice: the name and its words on one line; a toast:
+  // its words.
+  std::string_view a, b;
+  bool cut = false;
+};
 }  // namespace
 
-float DrawLines(ImDrawList* dl, const Model::View& view, ImVec2 pos, float unit, float width,
-                float bottom, double now_ms)
+Kit::Box DrawPill(ImDrawList* dl, const Model::View& view, std::span<const PillRow> rows,
+                  double now_ms)
 {
-  if (!view.showing)
-    return pos.y;
-  // One line each, in the Pill's words: the person's avatar with what happened as a mark on it,
-  // their name, the line, and the action's key and verb in grey when there is one. Laid out once
-  // per new line (or a new size), then only drawn.
-  LineCache& c = s_cache;
-  const Metrics m = MetricsFor(unit);
-  if (view.generation != c.generation)
+  const Kit::Box none{ImVec2(0, 0), ImVec2(0, 0)};
+  if (!view.on || view.place.size <= 0)
+    return none;
+  // The notices, copied out once per change.
+  if (view.generation != s_notices.generation)
+    s_notices.generation = Current().Lines(s_notices.generation, &s_notices.entries);
+  // Every row that shows, oldest first: the frame's (Orca's toasts, the chat), then the notices.
+  std::array<PillRow, 16> all;
+  std::size_t n = 0;
+  for (const PillRow& r : rows)
   {
-    c.generation = Current().Lines(c.generation, &c.entries);
-    c.unit = 0;  // laid out again below
+    if (r.alpha > 0 && n < all.size())
+      all[n++] = r;
   }
-  if (unit != c.unit || width != c.width)
+  for (const Model::Entry& e : s_notices.entries)
   {
-    c.unit = unit;
-    c.width = width;
-    c.laid.clear();
-    for (const Model::Entry& e : c.entries)
-      c.laid.push_back(Layout(e, m, unit, width));
-  }
-  float y = pos.y;
-  for (const Laid& l : c.laid)
-  {
-    if (y >= bottom)
-      break;
-    const float a = LineAlpha(l.entry.notice, l.entry.at, now_ms);
-    if (a <= 0)
+    const float a = LineAlpha(e.notice, e.at, now_ms);
+    if (a <= 0 || n >= all.size())
       continue;
-    const Notice& n = l.entry.notice;
-    const ImVec2 min(pos.x, y);
-    const ImVec2 max(pos.x + std::min(width, m.text_x + l.text_w + l.hint_w + m.pad), y + l.h);
-    Yg::CardSlab(dl, min, max, unit, a);
-    // The avatar, and the mark of what happened (the page's: a voice or call ring, a join's plus,
-    // a leaver greyed, a dropped player's amber dot, a returning one's green dot).
-    const ImVec2 ctr(pos.x + m.pad + m.r, y + l.h / 2);
-    if (n.kind == Kind::Voice || n.kind == Kind::Call)
-      dl->AddCircle(ctr, m.r + 0.35f * unit, Rgba(74, 222, 128, a), 32, 0.3f * unit);
-    Yg::Avatar(dl, ctr, m.r, n.name, n.kind == Kind::Leave ? 0.45f * a : a);
-    const ImVec2 mark(ctr.x + m.r * 0.72f, ctr.y + m.r * 0.72f);
-    if (n.kind == Kind::Join || n.kind == Kind::Back || n.kind == Kind::Away)
+    all[n++] = PillRow{PillRow::Type::Notice, e.notice.name, e.notice.text, e.notice.key,
+                       e.notice.verb, e.notice.kind, a, e.at};
+  }
+  if (n == 0)
+    return none;
+  // In the order they came (a few rows: an insertion sort, stable for rows that came together).
+  for (std::size_t i = 1; i < n; ++i)
+  {
+    for (std::size_t j = i; j > 0 && all[j - 1].at > all[j].at; --j)
+      std::swap(all[j - 1], all[j]);
+  }
+  const std::size_t first = n > PILL_ROWS ? n - PILL_ROWS : 0;
+
+  const Place p = ScaledPlace(view.place, view.view_width, ImGui::GetIO().DisplaySize.x);
+  const Pill m = PillFor(p.size / 40);
+  const float display_w = ImGui::GetIO().DisplaySize.x;
+  const float max_w = std::min(m.max_width, std::max(m.pad_left + 80 * m.k, display_w - p.x - 24 * m.k));
+
+  // The hint: the newest row with an action (the page's Pill shows one, its peek's verb).
+  const PillRow* hint = nullptr;
+  for (std::size_t i = first; i < n; ++i)
+  {
+    if (!all[i].key.empty() && !all[i].verb.empty())
+      hint = &all[i];
+  }
+  const float key_w = hint ? Yg::TextWidth(hint->key, m.key_px) + 2 * m.key_pad : 0;
+  const float hint_w = hint ? m.hint_gap + key_w + 5 * m.k + Yg::TextWidth(hint->verb, m.verb_px) : 0;
+  const float words_room =
+      std::max(60 * m.k, max_w - m.pad_left - m.pad_right - hint_w - m.avatar - m.avatar_gap);
+
+  std::array<RowLayout, PILL_ROWS> laid;
+  std::size_t count = 0;
+  float content_h = 0, content_w = 0, alpha = 0;
+  for (std::size_t i = first; i < n; ++i)
+  {
+    const PillRow& r = all[i];
+    RowLayout l;
+    l.row = &r;
+    float words = 0;
+    if (r.type == PillRow::Type::Chat)
     {
-      dl->AddCircleFilled(mark, m.r * 0.42f, Rgba(15, 23, 42, a), 16);
-      dl->AddCircleFilled(mark, m.r * 0.3f,
-                          n.kind == Kind::Away ? Rgba(242, 161, 20, a) : Rgba(74, 222, 128, a),
-                          16);
-      if (n.kind == Kind::Join)
-      {
-        const float s = m.r * 0.17f, t = std::max(1.0f, 0.12f * unit);
-        dl->AddLine(ImVec2(mark.x - s, mark.y), ImVec2(mark.x + s, mark.y), Rgba(15, 23, 42, a), t);
-        dl->AddLine(ImVec2(mark.x, mark.y - s), ImVec2(mark.x, mark.y + s), Rgba(15, 23, 42, a), t);
-      }
+      const std::string_view name = OneLine(r.name, m.name_px, words_room).first;
+      const TwoLines body = Wrap2(r.text, m.text_px, words_room);
+      l.a = name;
+      l.b = body.first;
+      l.cut = body.cut;
+      words = std::max(Yg::TextWidth(name, m.name_px), Yg::TextWidth(body.first, m.text_px));
+      if (!body.second.empty())
+        words = std::max(words, Yg::TextWidth(body.second, m.text_px) +
+                                    (body.cut ? Yg::TextWidth(ELLIPSIS, m.text_px) : 0));
+      const int lines = body.second.empty() ? 1 : 2;
+      l.height = std::max(m.avatar, m.name_px * m.line + lines * m.text_px * m.line);
     }
-    // The words: the name bright, the rest of the line softer.
-    const float tx = pos.x + m.text_x;
-    float ty = y + (l.h - m.line_h * static_cast<float>(l.lines.size())) / 2 + 0.1f * unit;
-    for (std::size_t i = 0; i < l.lines.size(); ++i)
+    else
     {
-      const std::string& s = l.lines[i];
-      if (i == 0 && s.starts_with(n.name))
+      // "<name> <words>" on one line (a notice), or the words alone (a toast).
+      const float name_w = r.type == PillRow::Type::Notice ? Yg::TextWidth(r.name, m.name_px) : 0;
+      const float space = r.type == PillRow::Type::Notice ? Yg::TextWidth(" ", m.text_px) : 0;
+      const auto [said, cut] = OneLine(r.text, m.text_px, std::max(20 * m.k, words_room - name_w - space));
+      l.a = r.type == PillRow::Type::Notice ? r.name : std::string_view{};
+      l.b = said;
+      l.cut = cut;
+      words = name_w + space + Yg::TextWidth(said, m.text_px) +
+              (cut ? Yg::TextWidth(ELLIPSIS, m.text_px) : 0);
+      l.height = std::max(m.avatar, m.text_px * m.line);
+    }
+    l.width = m.avatar + m.avatar_gap + words;
+    content_w = std::max(content_w, l.width);
+    content_h += l.height + (count ? m.gap : 0);
+    alpha = std::max(alpha, r.alpha);
+    laid[count++] = l;
+  }
+
+  const float w = std::min(max_w, m.pad_left + content_w + hint_w + m.pad_right);
+  const float h = std::max(p.size, content_h + 2 * m.pad_y);
+  const ImVec2 min(p.x, p.y), max(p.x + w, p.y + h);
+  // The slab: a soft shadow, the cards' slate, a hairline edge; YouGame's look (YgCard.h).
+  dl->AddRectFilled(ImVec2(min.x, min.y + 3 * m.k), ImVec2(max.x, max.y + 6 * m.k),
+                    Rgba(0, 0, 0, 0.35f * alpha), m.radius);
+  dl->AddRectFilled(min, max, Rgba(15, 23, 42, 0.95f * alpha), m.radius);
+  dl->AddRect(min, max, Yg::Edge(0.22f * alpha), m.radius, 0, std::max(1.0f, m.k));
+
+  float y = p.y + (h - content_h) / 2;
+  const float x0 = p.x + m.pad_left;
+  const float r_av = m.avatar / 2;
+  for (std::size_t i = 0; i < count; ++i)
+  {
+    const RowLayout& l = laid[i];
+    const PillRow& r = *l.row;
+    const float a = r.alpha;
+    const float tx = x0 + m.avatar + m.avatar_gap;
+    if (r.type == PillRow::Type::Chat)
+    {
+      // The avatar at the row's top, the name, the words under it.
+      const ImVec2 c(x0 + r_av, y + r_av);
+      Yg::Avatar(dl, c, r_av, r.name, a);
+      Yg::Text(dl, ImVec2(tx, y), m.name_px, Yg::Ink(a), l.a);
+      const float by = y + m.name_px * m.line;
+      const TwoLines body = Wrap2(r.text, m.text_px, words_room);
+      if (body.second.empty())
       {
-        Yg::Text(dl, ImVec2(tx, ty), m.px, Yg::Ink(a), n.name);
-        Yg::Text(dl, ImVec2(tx + Yg::TextWidth(n.name, m.px), ty), m.px, Yg::Ink2(a),
-                 std::string_view(s).substr(n.name.size()));
+        Yg::Text(dl, ImVec2(tx, by), m.text_px, Yg::Ink2(a), body.first);
       }
       else
       {
-        Yg::Text(dl, ImVec2(tx, ty), m.px, Yg::Ink2(a), s);
+        Yg::Text(dl, ImVec2(tx, by), m.text_px, Yg::Ink2(a), body.first);
+        TextWithEllipsis(dl, ImVec2(tx, by + m.text_px * m.line), m.text_px, Yg::Ink2(a),
+                         body.second, body.cut);
       }
-      ty += m.line_h;
     }
-    // The hint, grey, at the right of the last line: the key in a keycap, then the verb.
-    if (l.key_w > 0)
+    else
     {
-      const float hy = ty - m.line_h + (m.px - m.kpx) / 2;
-      const float kx = max.x - m.pad - l.hint_w + m.gap;
-      const ImVec2 kmin(kx, hy - 0.25f * unit), kmax(kx + l.key_w, hy + m.kpx + 0.25f * unit);
-      dl->AddRect(kmin, kmax, Yg::Edge(0.7f * a), 0.5f * unit, 0, std::max(1.0f, 0.12f * unit));
-      Yg::Text(dl, ImVec2(kx + 0.7f * unit, hy), m.kpx, Yg::Ink2(0.85f * a), n.key);
-      Yg::Text(dl, ImVec2(kmax.x + 0.6f * unit, hy), m.kpx, Yg::Ink2(0.85f * a), n.verb);
+      const ImVec2 c(x0 + r_av, y + l.height / 2);
+      if (r.type == PillRow::Type::Toast)
+      {
+        Yg::Logo(dl, ImVec2(c.x - r_av, c.y - r_av), m.avatar, a);
+      }
+      else
+      {
+        // The avatar, and the Pill's mark of what happened: a voice or call ring, a join's plus,
+        // a leaver greyed, a dropped player's amber ring, a returning one's green dot.
+        if (r.kind == Kind::Voice || r.kind == Kind::Call)
+          dl->AddCircle(c, r_av + 3 * m.k, Rgba(43, 166, 64, a), 32, 2 * m.k);
+        if (r.kind == Kind::Away)
+          dl->AddCircle(c, r_av + 3 * m.k, Rgba(242, 161, 20, a), 32, 2 * m.k);
+        Yg::Avatar(dl, c, r_av, r.name, r.kind == Kind::Leave ? 0.45f * a : a);
+        if (r.kind == Kind::Join || r.kind == Kind::Back)
+        {
+          const ImVec2 mark(c.x + r_av * 0.75f, c.y + r_av * 0.75f);
+          dl->AddCircleFilled(mark, 9 * m.k, Rgba(15, 23, 42, a), 16);
+          dl->AddCircleFilled(mark, 7 * m.k, Rgba(43, 166, 64, a), 16);
+          if (r.kind == Kind::Join)
+          {
+            const float s = 3.5f * m.k, t = std::max(1.0f, 1.6f * m.k);
+            dl->AddLine(ImVec2(mark.x - s, mark.y), ImVec2(mark.x + s, mark.y), Rgba(255, 255, 255, a), t);
+            dl->AddLine(ImVec2(mark.x, mark.y - s), ImVec2(mark.x, mark.y + s), Rgba(255, 255, 255, a), t);
+          }
+        }
+      }
+      // The words on the row's centre line: the name bright, the rest softer.
+      const float ty = c.y - m.text_px * m.line / 2 + (m.text_px * (m.line - 1)) / 2;
+      float x = tx;
+      if (!l.a.empty())
+      {
+        Yg::Text(dl, ImVec2(x, ty + (m.text_px - m.name_px) * 0.6f), m.name_px, Yg::Ink(a), l.a);
+        x += Yg::TextWidth(l.a, m.name_px) + Yg::TextWidth(" ", m.text_px);
+      }
+      TextWithEllipsis(dl, ImVec2(x, ty), m.text_px, Yg::Ink2(a), l.b, l.cut);
     }
-    y = max.y + 0.8f * unit;
+    // The hint, grey, at the pill's end on its row's centre line: the key in a keycap, the verb.
+    if (hint == &r)
+    {
+      const float cy = y + l.height / 2;
+      const float hx = max.x - m.pad_right - hint_w + m.hint_gap;
+      const ImVec2 kmin(hx, cy - m.key_h / 2), kmax(hx + key_w, cy + m.key_h / 2);
+      dl->AddRectFilled(kmin, kmax, Rgba(255, 255, 255, 0.16f * a), 5 * m.k);
+      Yg::Text(dl, ImVec2(hx + m.key_pad, cy - m.key_px * 0.62f), m.key_px, Rgba(255, 255, 255, a),
+               r.key);
+      Yg::Text(dl, ImVec2(kmax.x + 5 * m.k, cy - m.verb_px * 0.62f), m.verb_px, Yg::Ink2(0.9f * a),
+               r.verb);
+    }
+    y += l.height + m.gap;
   }
-  return y;
+  return Kit::Box{min, max};
 }
 }  // namespace Orca::UX::YgOrb
