@@ -531,6 +531,70 @@ TEST_F(OrcaUXOverlayDraw, AnyPictureSizeDrawsWithoutAnImGuiAssert)
   EXPECT_EQ(ImGuiAssertFailures(), failures);
 }
 
+// The page's dim (embed `dim N`) is the last thing drawn, over the whole display: the foreground
+// list's last rectangle, N% black, eased in over DIM_EASE_S. It draws whatever the rest does, a
+// picture too thin for the overlay's text included, and `dim 0` takes it off the same way.
+TEST_F(OrcaUXOverlayDraw, DimIsTheLastThingDrawnOverTheWholeDisplay)
+{
+  // The last rectangle's alpha when it covers the display, else -1.
+  const auto dim_alpha = [](float width, float height) {
+    Frame(width, height);
+    const ImDrawData* data = ImGui::GetDrawData();
+    if (data->CmdLists.Size == 0)
+      return -1;
+    const ImDrawList* list = data->CmdLists.back();
+    if (list->VtxBuffer.Size < 4)
+      return -1;
+    const ImDrawVert* v = &list->VtxBuffer[list->VtxBuffer.Size - 4];
+    float x0 = v[0].pos.x, y0 = v[0].pos.y, x1 = x0, y1 = y0;
+    for (int i = 1; i < 4; ++i)
+    {
+      x0 = std::min(x0, v[i].pos.x);
+      y0 = std::min(y0, v[i].pos.y);
+      x1 = std::max(x1, v[i].pos.x);
+      y1 = std::max(y1, v[i].pos.y);
+    }
+    const ImU32 col = v[0].col;
+    if (x0 != 0 || y0 != 0 || x1 != width || y1 != height || (col & 0x00FFFFFF) != 0)
+      return -1;
+    return static_cast<int>(col >> IM_COL32_A_SHIFT);
+  };
+  EXPECT_EQ(Dim(), 0);
+  EXPECT_EQ(dim_alpha(1280, 720), -1);
+
+  SetDim(50);
+  EXPECT_EQ(Dim(), 50);
+  // Eased: a frame (1/60 s) in, part of the way; DIM_EASE_S in, half black.
+  const int first = dim_alpha(1280, 720);
+  EXPECT_GT(first, 0);
+  EXPECT_LT(first, 64);
+  int alpha = first;
+  for (int i = 0; i < 20; ++i)
+  {
+    const int next = dim_alpha(1280, 720);
+    EXPECT_GE(next, alpha);
+    alpha = next;
+  }
+  EXPECT_EQ(alpha, 128);
+  // Over a picture too thin for the overlay (which then draws nothing of its own) too.
+  EXPECT_EQ(dim_alpha(640, 40), 128);
+
+  // `focus` and `dim 0` take it off, eased the same way.
+  SetDim(0);
+  const int fading = dim_alpha(1280, 720);
+  EXPECT_GT(fading, 0);
+  EXPECT_LT(fading, 128);
+  for (int i = 0; i < 20; ++i)
+    Frame(1280, 720);
+  EXPECT_EQ(dim_alpha(1280, 720), -1);
+
+  // Out of range: clamped.
+  SetDim(250);
+  EXPECT_EQ(Dim(), 100);
+  SetDim(-4);
+  EXPECT_EQ(Dim(), 0);
+}
+
 // A release build's ImGui assert carries on (Externals/imgui/imgui_user_config.h): counted, said
 // once for its place, and never the alert handler's question, which a nogui Orca answers with no
 // and traps on.

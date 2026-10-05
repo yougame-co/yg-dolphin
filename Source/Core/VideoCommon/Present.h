@@ -7,6 +7,7 @@
 #include "Common/MathUtil.h"
 
 #include "VideoCommon/OnScreenUIKeyMap.h"
+#include "VideoCommon/PresentLayout.h"
 #include "VideoCommon/TextureCacheBase.h"
 #include "VideoCommon/TextureConfig.h"
 #include "VideoCommon/VideoCommon.h"
@@ -14,6 +15,7 @@
 #include <array>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <tuple>
 
 class AbstractTexture;
@@ -114,6 +116,14 @@ public:
   // drawable (a frame without one isn't shown), so the screen can't slow the game. Host only.
   static void SetSurfaceRefreshRate(int hz);
   static int SurfaceRefreshRate();
+  // Orca (embed `view`, VideoCommon/PresentLayout.h): the box the picture is laid out in, relative
+  // to the window, from now on; nullopt: the window itself (Dolphin's layout). Any thread, before
+  // or after the presenter exists; the next present takes it. Host only: the picture is placed and
+  // cropped differently, the emulated frame and the internal resolution are the same.
+  static void SetLayoutHint(std::optional<LayoutHint> hint);
+  // Orca tests (ORCA_TEST_PRESENT, headless): the test image takes this size at the next present,
+  // as a `rect` sizes the window (any thread).
+  static void RequestTestPresentSize(int width, int height);
 
   void SetKeyMap(const DolphinKeyMap& key_map);
 
@@ -133,6 +143,8 @@ private:
   bool FetchXFB(u32 xfb_addr, u32 fb_width, u32 fb_stride, u32 fb_height, u64 ticks);
 
   void ProcessFrameDumping(u64 ticks) const;
+  // Orca tests: the test image to the size RequestTestPresentSize asked for, if it asked.
+  void ApplyTestPresentSize();
 
   void OnBackBufferSizeChanged();
 
@@ -166,6 +178,12 @@ private:
   // Width and height correspond to the final output resolution.
   // Offsets imply black borders (if the window aspect ratio doesn't match the game's one).
   MathUtil::Rectangle<int> m_target_rectangle = {};
+  // Orca: the box the picture is fitted into and centred in (UpdateDrawRectangle), in backbuffer
+  // pixels: the whole backbuffer unless an embed `view` lays it out elsewhere (SetLayoutHint).
+  LayoutBox m_layout_box = {};
+  // The layout hint the last UpdateDrawRectangle used (none: the window), kept while a newer one
+  // waits for the backbuffer to follow the window's resize.
+  std::optional<LayoutHint> m_layout_applied;
 
   u32 m_auto_resolution_scale = 1;
 

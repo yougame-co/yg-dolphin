@@ -32,6 +32,7 @@
 #include "Core/Rollback/OnlineMatch.h"
 #include "Core/System.h"
 #include "VideoCommon/FrameDumper.h"
+#include "VideoCommon/Present.h"
 
 Platform::~Platform() = default;
 
@@ -145,6 +146,7 @@ void Platform::EmbedTeardown()
 void Platform::SetEmbed(const Embed::Options& options)
 {
   m_embed = options;
+  m_embed_rect_known = options.enabled;
   // A --rect too small for the game: the platform creates the view hidden (Embed.h).
   m_embed_too_small = options.too_small;
   Orca::UX::SetHostVisible(!m_embed_too_small);
@@ -155,6 +157,19 @@ void Platform::ApplyEmbedVisible()
   const bool visible = m_embed_shown && !m_embed_too_small;
   EmbedSetVisible(visible);
   Orca::UX::SetHostVisible(visible);
+}
+
+void Platform::ApplyEmbedView()
+{
+  if (!m_embed_view || !m_embed_rect_known)
+  {
+    VideoCommon::Presenter::SetLayoutHint(std::nullopt);
+    return;
+  }
+  const Embed::Rect& r = m_embed.rect;
+  const Embed::Rect& v = *m_embed_view;
+  VideoCommon::Presenter::SetLayoutHint(
+      VideoCommon::LayoutHint{r.w, r.h, v.x - r.x, v.y - r.y, v.w, v.h});
 }
 
 void Platform::ProcessEmbedCommands()
@@ -209,6 +224,10 @@ void Platform::ProcessEmbedCommands()
         if (!too_small)
         {
           m_embed.rect = *rect;
+          m_embed_rect_known = true;
+          // The layout first: until the window system resizes the surface, the presenter keeps
+          // the layout of the window it still has (PresentLayout.h ChooseLayout).
+          ApplyEmbedView();
           EmbedSetRect(*rect);
           // The YouGame button's units: the page's device pixels (UX/YgOrb.h ScaledPlace).
           Orca::UX::YgOrb::SetViewSize(rect->w, rect->h);
@@ -218,6 +237,54 @@ void Platform::ProcessEmbedCommands()
           m_embed_too_small = too_small;
           ApplyEmbedVisible();
         }
+      }
+    }
+    else if (cmd == "view")
+    {
+      // Where the picture is laid out, in `rect`'s units and origin; `rect` stays the window. The
+      // page keeps the game in the whole player box while its menu's panel covers the left of it
+      // (the window starts right of the panel), so the game neither shrinks nor moves. `view off`:
+      // the window again. No cap (YouGame forces the latest Orca): an older one says it doesn't
+      // know the line.
+      std::string rest;
+      std::getline(in, rest);
+      std::istringstream words(rest);
+      std::string first, more;
+      words >> first;
+      if (first == "off" && !(words >> more))
+      {
+        m_embed_view.reset();
+        ApplyEmbedView();
+      }
+      else if (const std::optional<Embed::Rect> view = Embed::ParseRect(rest);
+               view && !Embed::TooSmall(*view))
+      {
+        m_embed_view = *view;
+        ApplyEmbedView();
+      }
+      else
+      {
+        Embed::Out("unsupported view");
+      }
+    }
+    else if (cmd == "dim")
+    {
+      // The page's dim while its menu is open over the game: N percent black (0-100, 0 off) over
+      // everything Orca draws (UX/Overlay.h SetDim). No cap, as `view`.
+      std::string value;
+      in >> value;
+      int percent = 0;
+      const auto [end, error] =
+          std::from_chars(value.data(), value.data() + value.size(), percent);
+      std::string more;
+      if (error == std::errc{} && end == value.data() + value.size() && percent >= 0 &&
+          percent <= 100 && !(in >> more))
+      {
+        Orca::UX::SetDim(percent);
+      }
+      else
+      {
+        Embed::Out("unsupported dim");
       }
     }
     else if (cmd == "pause")
@@ -241,6 +308,10 @@ void Platform::ProcessEmbedCommands()
     }
     else if (cmd == "focus" || cmd == "blur")
     {
+      // The game has the input again only with the page's menu shut: never dimmed then, whatever
+      // `dim 0` the page may have missed.
+      if (cmd == "focus")
+        Orca::UX::SetDim(0);
       EmbedSetFocus(cmd == "focus");
     }
     else if (cmd == "hide" || cmd == "show")

@@ -177,6 +177,14 @@ void ShutdownOverlay();
 void RepresentDuringStall(int stalled_ms);
 // The app hid or showed the game (embed `hide` / `show`): no stall redraws while hidden.
 void SetHostVisible(bool visible);
+// The page's dim (embed `dim N`): N percent black (0-100, clamped; 0: off) over Orca's whole frame
+// while the YouGame menu is open over the game, as the page dims a web game behind its panel. Drawn
+// last, over the picture, Dolphin's messages and everything of the overlay, on every present (a
+// stall's redraws too), easing to the new level over DIM_EASE_S. Host-only drawing: screenshots and
+// frame dumps of the game never have it. Any thread.
+void SetDim(int percent);
+int Dim();
+constexpr double DIM_EASE_S = 0.2;
 void SetStats(Stats stats);
 void SetPerf(Perf perf);
 // The game's frame boundary (Orca::Events' boundary callback), for the frame meter.
@@ -211,4 +219,18 @@ OverlayModel& Overlay();
 // used to reach, and nothing would read in a sliver that thin anyway.
 constexpr float OVERLAY_MIN_HEIGHT = 100;
 float OverlayUnit(float display_height);
+// A box on the display, in pixels.
+struct PictureArea
+{
+  float x = 0, y = 0, w = 0, h = 0;
+};
+// The part of the game's picture inside the display (0, 0, display_w, display_h). With an embed
+// `view` the picture can run past Orca's window (the page's panel covers the window's left, the
+// picture keeps its place), so the overlay's own elements (the corner's circle, ping and frame
+// meter, the toasts and the chat, the top centre's banners, "Waiting for", the set's end, the
+// control guide) stay in this part, while what marks the game's own art (the panels' tabs and
+// frames, the stage select's cursors, the set's dots, the timers in the game's lettering) keeps the
+// whole picture. The overlay's unit stays the whole picture's. The whole picture when none of it
+// is on the display.
+PictureArea VisiblePicture(const PictureArea& picture, float display_w, float display_h);
 }  // namespace Orca::UX

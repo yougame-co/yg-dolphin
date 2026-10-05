@@ -7,6 +7,7 @@
 #include "Core/Core.h"
 #include "Core/System.h"
 #include "DolphinNoGUI/Platform.h"
+#include "VideoCommon/Present.h"
 
 namespace
 {
@@ -17,7 +18,17 @@ public:
   void MainLoop() override;
 
   WindowSystemInfo GetWindowSystemInfo() const override;
+
+protected:
+  // Orca tests (ORCA_TEST_COMMANDS with ORCA_TEST_PRESENT): a `rect` sizes the test image as it
+  // would size the window, so `view` and the overlay are tried as a window would show them.
+  void EmbedSetRect(const Embed::Rect& rect) override;
 };
+
+void PlatformHeadless::EmbedSetRect(const Embed::Rect& rect)
+{
+  VideoCommon::Presenter::RequestTestPresentSize(rect.w, rect.h);
+}
 
 void PlatformHeadless::SetTitle(const std::string& title)
 {

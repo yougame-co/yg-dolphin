@@ -3,8 +3,12 @@
 
 #include "VideoCommon/Present.h"
 
+#include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
+#include <mutex>
+#include <optional>
 
 #include "Common/ChunkFile.h"
 #include "Core/Config/GraphicsSettings.h"
@@ -529,8 +533,11 @@ float Presenter::CalculateDrawAspectRatio(bool allow_stretch) const
   // If stretch is enabled, we prefer the aspect ratio of the window.
   if (aspect_mode == AspectMode::Stretch)
   {
+    // Orca: the layout box's (the window's unless an embed `view` lays the picture out elsewhere).
     resulting_aspect_ratio =
-        (static_cast<float>(m_backbuffer_width) / static_cast<float>(m_backbuffer_height));
+        m_layout_box.w > 0 && m_layout_box.h > 0 ?
+            m_layout_box.w / m_layout_box.h :
+            (static_cast<float>(m_backbuffer_width) / static_cast<float>(m_backbuffer_height));
   }
   else
   {
@@ -657,6 +664,50 @@ int Presenter::SurfaceRefreshRate()
   return s_surface_refresh_rate.load(std::memory_order_relaxed);
 }
 
+// Orca (embed `view`): the newest layout hint. A `rect` changes it at once but the backbuffer only
+// once the window system resized the surface (a present or two later): meanwhile the presenter
+// keeps the one it used last (ChooseLayout, m_layout_applied).
+static std::mutex s_layout_lock;
+static std::optional<LayoutHint> s_layout_latest;
+
+void Presenter::SetLayoutHint(std::optional<LayoutHint> hint)
+{
+  std::lock_guard lock(s_layout_lock);
+  s_layout_latest = hint;
+}
+
+// Orca tests: the size asked for, width << 32 | height (0: none pending).
+static std::atomic<u64> s_test_present_size{0};
+
+void Presenter::RequestTestPresentSize(int width, int height)
+{
+  width = std::clamp(width, 1, 7680);
+  height = std::clamp(height, 1, 4320);
+  s_test_present_size.store(static_cast<u64>(width) << 32 | static_cast<u32>(height),
+                            std::memory_order_relaxed);
+}
+
+void Presenter::ApplyTestPresentSize()
+{
+  const u64 size = s_test_present_size.exchange(0, std::memory_order_relaxed);
+  if (!size || !m_test_target)
+    return;
+  const u32 width = static_cast<u32>(size >> 32), height = static_cast<u32>(size);
+  if (width == m_test_target->GetWidth() && height == m_test_target->GetHeight())
+    return;
+  // Never the framebuffer in use: presents end with the EFB's bound (EndUtilityDrawing).
+  auto target = g_gfx->CreateTexture(
+      TextureConfig(width, height, 1, 1, 1, AbstractTextureFormat::RGBA8,
+                    AbstractTextureFlag_RenderTarget, AbstractTextureType::Texture_2DArray),
+      "Orca test present");
+  auto framebuffer = target ? g_gfx->CreateFramebuffer(target.get(), nullptr) : nullptr;
+  if (!framebuffer)
+    return;
+  m_test_framebuffer = std::move(framebuffer);
+  m_test_target = std::move(target);
+  SetBackbuffer(static_cast<int>(width), static_cast<int>(height));
+}
+
 void Presenter::ResizeSurface()
 {
   std::lock_guard<std::mutex> lock(m_swap_mutex);
@@ -770,6 +821,21 @@ std::tuple<float, float> Presenter::ApplyStandardAspectCrop(float width, float h
 
 void Presenter::UpdateDrawRectangle()
 {
+  // Orca: the box the picture is laid out in, the window unless an embed `view` says otherwise
+  // (PresentLayout.h). Everything below fits the picture into it as Dolphin fits it into the
+  // window, so AutoIntegralScale follows the box too: a window cut by the page's panel keeps the
+  // internal resolution.
+  {
+    std::optional<LayoutHint> latest;
+    {
+      std::lock_guard lock(s_layout_lock);
+      latest = s_layout_latest;
+    }
+    LayoutChoice layout =
+        ChooseLayout(latest, m_layout_applied, m_backbuffer_width, m_backbuffer_height);
+    m_layout_box = layout.box;
+    m_layout_applied = std::move(layout.hint);
+  }
   const float draw_aspect_ratio = CalculateDrawAspectRatio();
 
   // Update aspect ratio hack values
@@ -805,9 +871,9 @@ void Presenter::UpdateDrawRectangle()
     g_Config.fAspectRatioHackH = 1;
   }
 
-  // The rendering window size
-  const float win_width = static_cast<float>(m_backbuffer_width);
-  const float win_height = static_cast<float>(m_backbuffer_height);
+  // The rendering window size (Orca: the layout box's)
+  const float win_width = m_layout_box.w;
+  const float win_height = m_layout_box.h;
   const float win_aspect_ratio = win_width / win_height;
 
   // FIXME: this breaks at very low widget sizes
@@ -872,10 +938,8 @@ void Presenter::UpdateDrawRectangle()
     int_draw_height = rect.GetHeight();
   }
 
-  m_target_rectangle.left = static_cast<int>(std::round(win_width / 2.0 - int_draw_width / 2.0));
-  m_target_rectangle.top = static_cast<int>(std::round(win_height / 2.0 - int_draw_height / 2.0));
-  m_target_rectangle.right = m_target_rectangle.left + int_draw_width;
-  m_target_rectangle.bottom = m_target_rectangle.top + int_draw_height;
+  // Centred in the box; past the backbuffer when the box is (Present crops it).
+  m_target_rectangle = PlaceInBox(m_layout_box, int_draw_width, int_draw_height);
 }
 
 std::tuple<float, float> Presenter::ScaleToDisplayAspectRatio(const int width, const int height,
@@ -1011,6 +1075,8 @@ void Presenter::Present(PresentInfo* present_info)
   // with the loader, and it has not been unmapped yet. Force a pipeline flush to avoid this.
   g_vertex_manager->Flush();
 
+  if (m_test_target)
+    ApplyTestPresentSize();
   UpdateDrawRectangle();
 
   g_gfx->BeginUtilityDrawing();

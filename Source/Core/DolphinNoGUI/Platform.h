@@ -84,6 +84,9 @@ protected:
   virtual void EmbedSetFocus(bool focus) {}
   // EmbedSetVisible (and the overlay's host visibility) from the app's show/hide and the rect size.
   void ApplyEmbedVisible();
+  // The presenter's layout (VideoCommon/PresentLayout.h) from the window (`rect`) and the box the
+  // picture is laid out in (`view`): the view relative to the window, or none (the window itself).
+  void ApplyEmbedView();
   // Applies the newest requested title on the main loop's thread. Orca: in a session, also asks
   // for the title again (every 250 ms at most) so it follows the room status.
   void UpdateTitle();
@@ -114,6 +117,11 @@ private:
   // game is hidden until a big enough one arrives. Visible only when shown and not too small.
   bool m_embed_shown = true;
   bool m_embed_too_small = false;
+  // The app's `view` (same units and origin as `rect`): where the picture is laid out, while `rect`
+  // is the window, which the page cuts to start right of its menu's panel; none: the window
+  // (`view off`, and until the first `view`). Known rect: --embed's, or a `rect` command (tests).
+  std::optional<Embed::Rect> m_embed_view;
+  bool m_embed_rect_known = false;
   // A "pause" before the game runs (Core::SetState only pauses a running core), applied once it is.
   // Never in a session: it pauses only a game it can see is alone.
   bool m_pause_pending = false;

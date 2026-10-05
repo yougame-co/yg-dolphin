@@ -46,6 +46,7 @@ add_dolphin_test(OrcaSetEndTest Orca/SetEndTest.cpp)
 # Its draw test sets up ImGui frames of its own.
 target_link_libraries(OrcaSetEndTest PRIVATE imgui)
 add_dolphin_test(OrcaNativeTextTest Orca/NativeTextTest.cpp)
+add_dolphin_test(OrcaLayoutTest Orca/LayoutTest.cpp)
 
 add_dolphin_test(SkylandersTest IOS/USB/SkylandersTest.cpp)
 

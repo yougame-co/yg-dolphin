@@ -347,6 +347,11 @@ std::atomic<Stats> s_stats{Stats::Off};
 std::atomic<Perf> s_perf{Perf::Fps};
 Common::EventHook s_state_hook;  // the core's pause and resume, for the frame meter
 std::atomic<bool> s_visible{true};  // the app shows the game (embed hide/show)
+// The page's dim (embed `dim N`, percent), and the level drawn last (eased toward it on the video
+// thread, `s_dim_at` the ImGui time it was drawn at; -1: not yet).
+std::atomic<int> s_dim{0};
+float s_dim_shown = 0;
+double s_dim_at = -1;
 std::mutex s_rule_line_lock;
 std::string s_rule_line;  // SetRuleLine's
 std::mutex s_queue_lock;
@@ -835,11 +840,12 @@ std::pair<std::string, float> FitBanner(const std::string& title, const std::str
 // Top centre: each pair of lines on a banner (the first, the search's or the queue's, with the
 // turn's timer beside it on its plate). `guide` gets this machine's hint (the control guide's).
 // Returns the lowest bottom and leftmost edge drawn (the toasts and the chat keep clear of them).
-Kit::Box DrawTopCentre(ImDrawList* dl, const Scene& s, ImVec2 pic, ImVec2 pic_size, float unit,
-                       double now_s, float first_top, std::string* guide)
+Kit::Box DrawTopCentre(ImDrawList* dl, const Scene& s, ImVec2 pic, ImVec2 pic_size, ImVec2 vis,
+                       ImVec2 vis_size, float unit, double now_s, float first_top,
+                       std::string* guide)
 {
   *guide = s.hint;
-  Kit::Box drawn{ImVec2(pic.x + pic_size.x, pic.y), ImVec2(pic.x, pic.y)};
+  Kit::Box drawn{ImVec2(vis.x + vis_size.x, vis.y), ImVec2(vis.x, vis.y)};
   const auto add = [&](const Kit::Box& b) {
     drawn.min.x = std::min(drawn.min.x, b.min.x);
     drawn.max.y = std::max(drawn.max.y, b.max.y);
@@ -893,7 +899,8 @@ Kit::Box DrawTopCentre(ImDrawList* dl, const Scene& s, ImVec2 pic, ImVec2 pic_si
     *guide = hint;
     return drawn;
   }
-  const float cx = pic.x + pic_size.x / 2;
+  // The banners are Orca's own: centred on the part of the picture in the window (VisiblePicture).
+  const float cx = vis.x + vis_size.x / 2;
   float top = first_top;
   for (std::size_t i = 0; i < groups.size(); ++i)
   {
@@ -902,7 +909,7 @@ Kit::Box DrawTopCentre(ImDrawList* dl, const Scene& s, ImVec2 pic, ImVec2 pic_si
     // picture wide (the timer goes beside it): a longer note takes more lines.
     const float row =
         i == 0 ? (note.empty() ? 6.4f : 8.6f) * unit : (note.empty() ? 5.0f : 7.0f) * unit;
-    const float max_w = 0.62f * pic_size.x;
+    const float max_w = 0.62f * vis_size.x;
     const auto [fitted, h] = FitBanner(title, note, row, max_w, unit);
     const float w = std::clamp(Kit::BannerWidth(h, unit, title, fitted), 26.0f * unit,
                                std::max(max_w, 26.0f * unit));
@@ -919,7 +926,7 @@ Kit::Box DrawTopCentre(ImDrawList* dl, const Scene& s, ImVec2 pic, ImVec2 pic_si
   return drawn;
 }
 
-void Draw()
+void DrawScene()
 {
   Kit::BeginFrame();
   const double now = NowMs();
@@ -944,6 +951,11 @@ void Draw()
   // No picture to draw on (no backbuffer yet, a window the app squeezed to a sliver): nothing.
   if (unit <= 0 || !(pic_size.x >= 1))
     return;
+  // Its part in the window (all of it unless an embed `view` lays it out past the window): Orca's
+  // own elements stay there; what marks the game's art keeps the whole picture (VisiblePicture).
+  const PictureArea visible = VisiblePicture({pic.x, pic.y, pic_size.x, pic_size.y},
+                                      ImGui::GetIO().DisplaySize.x, ImGui::GetIO().DisplaySize.y);
+  const ImVec2 vis(visible.x, visible.y), vis_size(visible.w, visible.h);
   ImDrawList* dl = ImGui::GetForegroundDrawList();
   const double now_s = ImGui::GetTime();
   const OverlayModel::Frame& f = s.f;
@@ -988,9 +1000,11 @@ void Draw()
   }
   // Top centre, then top left, where both games' matches and menus leave the screen empty.
   std::string guide;
-  const Kit::Box centre = DrawTopCentre(dl, s, pic, pic_size, unit, now_s,
-                                        pic.y + (s.dots.on ? TOP_UNDER_DOTS : TOP_FIRST) * unit,
-                                        &guide);
+  const Kit::Box centre =
+      DrawTopCentre(dl, s, pic, pic_size, vis, vis_size, unit, now_s,
+                    std::max(pic.y + (s.dots.on ? TOP_UNDER_DOTS : TOP_FIRST) * unit,
+                             vis.y + TOP_FIRST * unit),
+                    &guide);
   // Design F: the turn's timer in the lettering of the game's words that say whose turn it is,
   // and this machine's buttons in the games' own corner for them.
   const bool pplus = Kit::CurrentLook() == Kit::Look::ProjectPlus;
@@ -1026,20 +1040,25 @@ void Draw()
       if (!(s.legend && (item.button == "X" || item.button == "A" || item.button == "B")))
         items.push_back(item);
     }
-    Kit::Guide(dl, pic.x + pic_size.x * GUIDE_RIGHT, pic.y + pic_size.y * GUIDE_Y, unit, items, 1,
-               pic_size.x * (GUIDE_RIGHT - 0.025f));
+    // Its place in the picture's corner, kept inside the window's part of it.
+    const float right = std::min(pic.x + pic_size.x * GUIDE_RIGHT,
+                                 vis.x + vis_size.x - pic_size.x * (1 - GUIDE_RIGHT));
+    const float cy =
+        std::min(pic.y + pic_size.y * GUIDE_Y, vis.y + vis_size.y - pic_size.y * (1 - GUIDE_Y));
+    Kit::Guide(dl, right, cy, unit, items, 1,
+               std::max(right - vis.x - pic_size.x * 0.025f, 1.0f));
   }
   const float margin = 2.5f * unit;
   // The corner and the column under it start right of the YouGame button when it is there.
   const Kit::Box orb = YgOrb::ButtonBox(yg);
   const float left =
-      orb.max.x > orb.min.x ? std::max(pic.x + margin, orb.max.x + 1.2f * unit) : pic.x + margin;
-  float y = DrawCorner(dl, f, ImVec2(left, pic.y + margin), unit);
+      orb.max.x > orb.min.x ? std::max(vis.x + margin, orb.max.x + 1.2f * unit) : vis.x + margin;
+  float y = DrawCorner(dl, f, ImVec2(left, vis.y + margin), unit);
   if (!f.waiting.empty())
   {
     // "Waiting for <name>…" under the top centre's banners.
-    const float top = std::max(pic.y + pic_size.y * 0.18f, centre.max.y + 1.5f * unit);
-    Kit::Title(dl, ImVec2(pic.x + pic_size.x / 2, top), unit, f.waiting, 5.0f, Kit::Align::Centre);
+    const float top = std::max(vis.y + vis_size.y * 0.18f, centre.max.y + 1.5f * unit);
+    Kit::Title(dl, ImVec2(vis.x + vis_size.x / 2, top), unit, f.waiting, 5.0f, Kit::Align::Centre);
   }
   // The toasts and the chat on plates under the corner: under Dolphin's own messages (OSD rows
   // such as "Screenshot saved...", drawn at the top left just before this), and under the top
@@ -1047,10 +1066,12 @@ void Draw()
   if (!f.toasts.empty() || !f.chats.empty() || yg.showing)
   {
     y = std::max(y, OSD::MessagesBottom() + unit);
-    const float wrap = 0.36f * pic_size.x;
-    if (centre.max.y > pic.y && centre.min.x < left + wrap + 3.0f * unit)
+    // No wider than the window's part of the picture leaves right of the corner.
+    const float wrap =
+        std::max(std::min(0.36f * pic_size.x, vis.x + vis_size.x - margin - left), 12.0f * unit);
+    if (centre.max.y > vis.y && centre.min.x < left + wrap + 3.0f * unit)
       y = std::max(y, centre.max.y + 1.2f * unit);
-    const float bottom = pic.y + pic_size.y - margin;
+    const float bottom = vis.y + vis_size.y - margin;
     // The YouGame button's lines first, the nearest to it.
     y = YgOrb::DrawLines(dl, yg, ImVec2(left, y), unit, wrap, bottom, now);
     // In YouGame's own look (YgCard.h): the room's and the chat are YouGame's, not the game's.
@@ -1071,9 +1092,39 @@ void Draw()
   }
   // Over everything else: the set's end, the opponent's disconnect, set over's hint (SetEnd.h).
   if (!s.set_end.Empty())
-    SetEnd::Draw(dl, unit, pic.x, pic.y, pic_size.x, pic_size.y, s.set_end);
+    SetEnd::Draw(dl, unit, vis.x, vis.y, vis_size.x, vis_size.y, s.set_end);
   // The YouGame button over everything: it stands where the page's own is.
   YgOrb::DrawButton(dl, yg);
+}
+
+// The page's dim (SetDim) over the whole display, last on the foreground list, so over the picture,
+// Dolphin's messages (windows, drawn under the foreground list) and everything above; eased toward
+// the level asked for, half black in DIM_EASE_S.
+void DrawDim()
+{
+  const float target = static_cast<float>(s_dim.load(std::memory_order_relaxed)) / 100.0f;
+  const double now = ImGui::GetTime();
+  const double since = s_dim_at < 0 || now < s_dim_at ? DIM_EASE_S : now - s_dim_at;
+  s_dim_at = now;
+  const float step = static_cast<float>(since / DIM_EASE_S * 0.5);
+  s_dim_shown = s_dim_shown < target ? std::min(target, s_dim_shown + step) :
+                                       std::max(target, s_dim_shown - step);
+  if (!(s_dim_shown > 0))
+    return;
+  const ImVec2 display = ImGui::GetIO().DisplaySize;
+  if (!(display.x > 0 && display.y > 0))
+    return;
+  ImGui::GetForegroundDrawList()->AddRectFilled(
+      ImVec2(0, 0), display,
+      IM_COL32(0, 0, 0, static_cast<int>(std::lround(255.0f * std::min(s_dim_shown, 1.0f)))));
+}
+
+// The host overlay (OSD::SetHostOverlay): the scene, then the dim over all of it, whatever the
+// scene drew (or returned early on: nothing to say, a picture too thin, the kit's demo).
+void Draw()
+{
+  DrawScene();
+  DrawDim();
 }
 }  // namespace
 
@@ -1096,6 +1147,27 @@ PortColour PortColourOf(int port)
   default:
     return {44, 168, 64};
   }
+}
+
+PictureArea VisiblePicture(const PictureArea& picture, float display_w, float display_h)
+{
+  const float x0 = std::max(picture.x, 0.0f), y0 = std::max(picture.y, 0.0f);
+  const float x1 = std::min(picture.x + picture.w, display_w);
+  const float y1 = std::min(picture.y + picture.h, display_h);
+  // !(>) also turns NaN away.
+  if (!(x1 > x0 && y1 > y0))
+    return picture;
+  return {x0, y0, x1 - x0, y1 - y0};
+}
+
+void SetDim(int percent)
+{
+  s_dim.store(std::clamp(percent, 0, 100), std::memory_order_relaxed);
+}
+
+int Dim()
+{
+  return s_dim.load(std::memory_order_relaxed);
 }
 
 float OverlayUnit(float display_height)
@@ -1202,6 +1274,9 @@ void RepresentDuringStall(int stalled_ms)
 
 void InitOverlay()
 {
+  s_dim = 0;
+  s_dim_shown = 0;
+  s_dim_at = -1;
   if (const char* v = std::getenv("ORCA_UX_STATS"); v && (v[0] == '1' || v[0] == '2'))
     s_stats = v[0] == '2' ? Stats::Full : Stats::Ping;
   if (const char* v = std::getenv("ORCA_UX_OVERLAY_DEMO"); v && v[0] == '1')
