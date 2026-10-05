@@ -341,7 +341,8 @@ host has played.
      and a room of its own opens a second later (`ReopenRoom`, as after a queue room). Home on the
      character select a With Anyone pick opened (its host left the friends lobby for the queue at
      that pick: "Online menu", "Casual or Ranked with friends in the game"), it announces that pick
-     too (`orca menu online casual|ranked`), so its Start readies it on its own queue select. Before branch `q11-lobby` it
+     too (`orca menu online casual|ranked`, whatever its page can search: alone, the page answers it
+     as any pick), so its Start readies it on its own queue select. Before branch `q11-lobby` it
      stayed on its port with no room: nobody could drop in, and the queue's own character select
      never got its header there (it wants port 1), so With Anyone > Casual or Ranked and Start did
      nothing at all (YouGame's 2026-10-05 "Start did nothing": a friends-room guest whose host
@@ -2013,6 +2014,7 @@ the matched room in "Matchmaking" below):
 | stdout | When |
 |---|---|
 | `orca menu online casual` / `orca menu online ranked` | With Anyone > Casual or Ranked, with the app's `host`: the game went to the local Versus character select and the page's queue searches ("Matchmaking"). |
+| `orca menu online casual kept` / `orca menu online ranked kept` | The same picked with friends in a host's game, which kept them because its page can't search that queue now (no `pick-casual` / `pick-ranked`): nothing armed, the page says why, never a search. Armed (the line again, unmarked) once the friends are gone (below). |
 | `orca menu online casual local` / `orca menu online ranked local` | The same without `host` (an older app or page): nothing searches. |
 | `orca menu online friends` | With Friends: the local Versus character select, where friends drop in. |
 | `orca menu cancel` | Searching (or matched as the host, with nobody plugged in yet), the player backed out of the character select to the main menu, alone: the search is over. Once. |
@@ -2028,9 +2030,10 @@ shared lobby did nothing and said nothing. Now the reader hands such a pick (nev
 the session at the boundary that saw it, after the app's commands (`TakeLobbyPick`). Either
 player's press picks in a shared menu, and every game sees it at the same frame and goes to the
 same Versus character select (titled CASUAL or RANKED once alone: "The character select's title").
-- **The host** (port 1, the app's `host`), with friends in its game, waiting for their keyframe, or
-  arriving in the room and not taken in yet, leaves its room as the app's Leave does, prints `orca
-  state left lobby` and shows "Left the lobby for Ranked" (or Casual: said as what happened, since
+- **The host** (port 1, the app's `host`, and the picked queue's cap: `pick-casual` or
+  `pick-ranked`, its page can search that queue now), with friends in its game, waiting for their
+  keyframe, or arriving in the room and not taken in yet, leaves its room as the app's Leave does,
+  prints `orca state left lobby` and shows "Left the lobby for Ranked" (or Casual: said as what happened, since
   the friend may have pressed it), then announces the pick (`orca menu online casual|ranked`): from
   the next boundary it plays alone on port 1, so the queue's own character select gets its header
   and Start readies (`orca queue ready`). An arrival not taken in counts as a friend: left in, it
@@ -2042,13 +2045,34 @@ same Versus character select (titled CASUAL or RANKED once alone: "The character
   `UX/OnlineMenu.h` `CssPick`) and announces it too, so its Start readies it on its own queue
   select without backing out ("Drop-in: home on the ranked character select"). Before this it came
   home on a RANKED select where nothing was armed, and Start did nothing: the same dead end as
-  YouGame's "Start did nothing", for whoever had not been host.
+  YouGame's "Start did nothing", for whoever had not been host. Whatever its own page can search
+  (its pick caps): it is alone, and its page answers the pick as any alone pick (its reason, or the
+  search).
+- **A queue the page can't search now** (YouGame, 2026-10-05: Ranked needs a signed-in player, and
+  both queues sit behind the site's `orca_queue` and `orca_ranked` switches; the page answers
+  `pick-casual` / `pick-ranked` in its `caps` only for a queue it can search, `lib/orca.ts`
+  `orcaCapsAnswer`): leaving would drop the friends for nothing, since the page would only say
+  "needs an account" or "coming soon" and cancel. The host keeps them and prints the pick in place,
+  unarmed and marked (`orca menu online ranked kept`, logged "staying with them"): no queue select,
+  no search lines, no queue header (a friend on the way would refuse it: `orca error mismatch`),
+  and a kept keyframe stays. Its page answers with its reason and `queue-cancel`, which changes
+  nothing; every game stays on the Versus character select the pick opened, the friends with it.
+  A `kept` pick never searches, even if the page could by now: it says "Leave your friends' lobby
+  first" (`orcaMenuPlan` `friends-first`). Once the friends are gone and the host's game is alone
+  on that select (`ArmKeptPick`, `DecideKeptPick`), the pick is armed as an alone pick is (`orca
+  menu online ranked`, unmarked: the queue's own select, so Start readies it); it is dropped once
+  the game has gone on from that select (`PickStands`) or a queue or search is under way anyway.
+  The page sends its `caps` again when what it can search changes mid-run (signed in, a switch
+  flipped): Orca takes a later `caps` line whole (`Status::SetAppCaps`), and every feature is read
+  where it acts, so the next pick follows the new answer. The switches and the sign-in are the
+  page's server props: a change reaches a running page on its next router refresh (signing in in
+  place does one), and a reload starts a new run that answers afresh.
 - **Nobody to leave by now** (the app's own leave went first, the last friend has gone and the
   session only idles out its last frames, or only a keyframe is kept for an invite nobody took yet
   or a prepare-join): announced in place, no `left lobby`; a kept keyframe is dropped (a friend who
   comes later gets one under the queue's header), never while a session still runs.
-- Without the app's `host` nothing would search, so the friends' game stays theirs, as before; a
-  queue room's menus are locked.
+- Without the app's `host` nothing would search, so the friends' game stays theirs, as before
+  (nothing printed); a queue room's menus are locked.
 - A pick seen at a boundary the commands can't take (a session's frame not the next one) waits for
   the next, while it still stands (the frame hook last read the way out of the main menu, or the
   character select that pick opened: `PickStands`); once the game has gone on from it (back on the
@@ -2093,6 +2117,22 @@ re-run frames, 0 RAM mismatches. Screenshots of a host stopping with both tokens
 Friends' select: the guest came home driving port 1's panel, still showing the old host's character
 ("Drop-in"). Not run: Project+ (`dropin-rooms.py` has no Project+ mode), a live arrival racing the
 pick (`ArrivalPending`, unit-tested only), a pick that waits for a takeable boundary (`PickStands`).
+
+The pick caps, checked 2026-10-05 (branch `q11-lobby`, M4, headless): the `Orca*` unit tests (462
+pass; new `OrcaOnlineMenuLobby.WithFriendsAQueueThePageCantSearchKeepsThem`,
+`APickKeptWithFriendsIsArmedOnceTheyAreGone` and `EveryCapFitsTheAppsCapsLine`, and the pick cap in
+`CasualOrRankedWithFriendsLeavesTheFriendsLobby`). Before it, the branch's own run of step 7 (caps
+`join leave stats host results queue2`, no word of the page's searchability) printed `left lobby`:
+the leave depended on `host` alone. `Tools/orca/dropin-rooms.py --only lobby,guest,stay` PASS: steps 7
+and 8 with both pick caps as before (`left lobby`, `orca menu online ranked` on both, both `orca
+queue ready ranked` 0.31 s after Start); new step 10 without `pick-ranked`: the host printed `orca
+menu online ranked kept` and no `left lobby`, no queue header or queue select, the friend heard
+nothing, and the page's `queue-cancel` changed nothing for 8 s; then the friend's app left, the
+session ended at frame 2739 with 40 checksums matched, the host, alone on the RANKED select, armed
+the kept pick (`orca menu online ranked`) and was `orca queue ready ranked` 0.31 s after Start, and
+the friend came home there, took the pick without `pick-ranked` and readied it too. Step 6 PASS on
+the first build of this change (before review put the guest's rule back and added `kept`). Not run: a page re-sending `caps` mid-run against a live Orca (the handler replaces the
+set; unit-tested through `SetAppCaps` elsewhere).
 
 Tests: `OrcaOnlineMenu*` unit tests (the gates, the textures and their precedence, the text rewrite,
 the reader's edges and `AloneAt`); `Tools/orca/online-menu.py <nogui> <disc> [--pplus <dol>]
@@ -2384,7 +2424,8 @@ gone. A desync voids the match in progress (`finish {void}`) before the players 
 
 | stdout | |
 |---|---|
-| `orca caps ... host results locks` | `results` only where the result reader is verified (Brawl rev 2, Project+); the room hears the results either way. `locks` where the profile has a ruleset (the same two): queue rooms play the online rules ("Online rules"). Information only: the locks don't wait for the app's answer. |
+| `orca caps ... host results locks queue2 pick-casual pick-ranked` | `results` only where the result reader is verified (Brawl rev 2, Project+); the room hears the results either way. `locks` where the profile has a ruleset (the same two): queue rooms play the online rules ("Online rules"). Information only: the locks don't wait for the app's answer. `queue2` and the pick caps with `locks`: the page answers `pick-casual` / `pick-ranked` only for a queue it can search right now, and again on a later `caps` line when that changes ("Casual or Ranked with friends in the game"). 15 words at most; the app's filter passes 16, and more takes a desktop release first (`OrcaOnlineMenuLobby.EveryCapFitsTheAppsCapsLine`). |
+| `orca menu online casual\|ranked kept` | A host kept its friends for the pick (no pick cap): nothing armed, never a search. |
 | `orca menu online casual\|ranked` | The pick, with `host` agreed (`... local` without). |
 | `orca menu cancel` | The player backed out of searching (above). |
 | `unsupported host` | The `host` was refused. |

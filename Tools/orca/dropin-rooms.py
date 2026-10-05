@@ -43,8 +43,15 @@
 #    joins that room from the app's invite (a keyframe of a former joiner's game: the old host's port
 #    names cleared), both play 15 s, the new one's app leaves, and the session the former guest
 #    hosted ends having matched checksums ("friend-joined", then "friend-left", no error).
-#   --only rooms|page|home|lobby|guest|rejoin[,...]: those steps alone (rooms: 1-4, page: 5, home: 6,
-#   lobby: 7, guest: 8, rejoin: 9).
+# 10. The same pair, but the host's page can't search Ranked now (signed out, or its switch off: the
+#    caps answer has no pick-ranked): the host's Ranked pick keeps the friend. The host prints `orca
+#    menu online ranked kept` (unarmed: no queue header, no queue select) and no `left lobby`, the
+#    friend hears nothing, and the page's `queue-cancel` changes nothing; 8 s on both still play
+#    together. Then the friend's app leaves: the session ends with checksums matched, the host,
+#    alone on that RANKED select, arms the kept pick (`orca menu online ranked`, then `orca queue
+#    ready ranked` after Start), and the friend goes home there and takes the pick too.
+#   --only rooms|page|home|lobby|guest|rejoin|stay[,...]: those steps alone (rooms: 1-4, page: 5,
+#   home: 6, lobby: 7, guest: 8, rejoin: 9, stay: 10).
 # Each step waits for the lines it expects and fails on a timeout. Two Orca processes at most.
 import json
 import os
@@ -61,7 +68,7 @@ import time
 import urllib.request
 
 if len(sys.argv) < 3:
-    sys.exit("usage: dropin-rooms.py <nogui> <disc> [--only rooms,page,home,lobby,guest,rejoin]")
+    sys.exit("usage: dropin-rooms.py <nogui> <disc> [--only rooms,page,home,lobby,guest,rejoin,stay]")
 BIN, DISC = sys.argv[1], sys.argv[2]
 HERE = os.path.dirname(os.path.abspath(__file__))
 INPUT = os.path.join(HERE, "inputs", "bf-mario-link-results.txt")
@@ -317,8 +324,11 @@ paged = code("pge")
 bridge_log = os.path.join(WORK, "bridge.log")
 friend_bridge_log = os.path.join(WORK, "bridge-friend.log")
 bridges = []
-# The app's caps with the queue's character select (YouGame's page answers these).
-CAPS_Q2 = "caps join leave stats host results queue2"
+# The app's caps with the queue's character select (YouGame's page answers these), the page able to
+# search both queues (pick-casual, pick-ranked: signed in, both switches on).
+CAPS_Q2 = "caps join leave stats host results queue2 pick-casual pick-ranked"
+# The same page unable to search Ranked now (signed out, or orca_ranked off).
+CAPS_Q2_NO_RANKED = "caps join leave stats host results queue2 pick-casual"
 # GameCube adapter wire mask (fake_bridge.py).
 WIRE = {"A": 1, "B": 2, "X": 4, "Y": 8, "LEFT": 16, "RIGHT": 32, "DOWN": 64, "UP": 128, "START": 256,
         "Z": 512}
@@ -411,11 +421,11 @@ def pick_and_start(o, port, queue_name, mark):
     log(f"{o.name}: ready {time.time() - sent:.2f} s after Start: {line}")
 
 
-def pair_on_with_friends(tag):
+def pair_on_with_friends(tag, caps=CAPS_Q2):
     """A host on its main menu and a friend joining it from the app's invite, both under bridges
-    with live pads and the queue's caps: both on With Friends' character select (the drop-in from
-    the menus). Returns (host, host's bridge port, host's bridge log, friend, its port, its log,
-    the room)."""
+    with live pads and the queue's caps (`caps`, both): both on With Friends' character select (the
+    drop-in from the menus). Returns (host, host's bridge port, host's bridge log, friend, its port,
+    its log, the room)."""
     room = code(tag)
     host_log = os.path.join(WORK, f"bridge-{tag}-host.log")
     friend_log = os.path.join(WORK, f"bridge-{tag}-friend.log")
@@ -425,7 +435,7 @@ def pair_on_with_friends(tag):
              script=False)
     orcas.append(h)
     h.expect("orca caps", 30)
-    h.send(CAPS_Q2)
+    h.send(caps)
     h.expect("orca state playing", 90)
     wait_mirror(host_log, lambda r: r["code"] == room, 20, "the host's room never mirrored")
     friend_port = start_bridge(friend_log, room, FAKE_NO_LEAVE="1", FAKE_PAD_LIVE="1")
@@ -435,7 +445,7 @@ def pair_on_with_friends(tag):
              script=False)
     orcas.append(f)
     f.expect("orca caps", 30)
-    f.send(CAPS_Q2)
+    f.send(caps)
     h.expect("orca state friend-joining", 90)
     f.expect("orca state playing", 120)
     h.expect("orca state friend-joined", 60)
@@ -604,6 +614,76 @@ try:
     if run_step("guest"):
         # 8. The friend picks it.
         lobby_pick("gst", "friend")
+
+    if run_step("stay"):
+        # 10. The host picks With Anyone > Ranked with the friend in, its page unable to search Ranked.
+        host, host_port, host_log, friend, friend_port, friend_log, room = pair_on_with_friends(
+            "sty", CAPS_Q2_NO_RANKED)
+        back_to_menu(host, host_port)
+        mark = host.log_size()
+        hsince = len(host.seen)
+        since, after = len(friend.seen), friend.log_size()
+        walk(host_port, TO_RANKED)
+        kept = host.expect("orca menu online ranked", 20, forbid=("orca error", "orca state left"))
+        if kept != "orca menu online ranked kept":
+            fail(f"the host's pick wasn't marked kept: {kept}")
+        host.wait_log(r"Online menu: ranked picked with friends in room \S+, which the page can't "
+                      r"search now \(no pick-ranked\): staying with them", 1, after=mark)
+        host.wait_log(CSS_SCENE, 10, after=mark)
+        # The page's answer to a pick it can't search: its band says why, and `queue-cancel`.
+        host.send("queue-cancel")
+        time.sleep(8)
+        for o, start, bad in ((host, hsince, ("orca state left", "orca state friend-left",
+                                              "orca error", "orca queue", "orca menu")),
+                              (friend, since, ("orca state host-left", "orca menu", "orca error",
+                                               "orca queue"))):
+            o.alive()
+            hit = [l for l in o.seen[start:] if l.startswith(bad) and l != kept]
+            if hit:
+                fail(f"{o.name} after the unsearchable pick: {hit}")
+        with open(host.log_path, errors="replace") as f:
+            f.seek(mark)
+            text = f.read()
+        if re.search(r"Online rules: header ranked|Queue: on the ranked queue's own character select",
+                     text):
+            fail("the host armed the queue with its friend in the game")
+        log("the host kept its friend: no left lobby, nothing armed, the session plays on")
+        # The friend's app leaves: the session ran on in sync to its end, and the host, alone now on
+        # the RANKED select its kept pick opened, arms that pick (its page answers it as any pick).
+        fafter = friend.log_size()
+        hafter = host.log_size()
+        hleft = len(host.seen)
+        friend.send("leave")
+        friend.expect("orca state left", 15)
+        host.expect("orca state friend-left", 15)
+        solo = (r"Drop-in: back to solo play at frame (\d+) \(([^)]*)\): (\d+) rollbacks, "
+                r"(\d+) checksums matched")
+        m = host.wait_log(solo, 20, after=hafter)
+        log(f"{host.name}'s session ended at frame {m.group(1)} ({m.group(2)}): "
+            f"{m.group(4)} checksums matched")
+        if int(m.group(4)) <= 0:
+            fail(f"{host.name}'s session matched no checksums")
+        end = time.time() + 15
+        while "orca menu online ranked" not in host.seen[hleft:] and time.time() < end:
+            time.sleep(0.1)
+        menus = [l for l in host.seen[hleft:] if l.startswith("orca menu")]
+        if menus != ["orca menu online ranked"]:
+            fail(f"the host's kept pick wasn't armed once: {menus}")
+        host.wait_log(r"Online menu: the ranked pick kept with friends, alone now", 1, after=hafter)
+        pick_and_start(host, host_port, "ranked", mark)
+        host.wait_log(r"Online rules: header ranked .*the queue's own character select", 1,
+                      after=hafter)
+        # The friend, home on that RANKED select, takes the pick too (whatever its page can search:
+        # alone, its page answers it as any pick).
+        friend.home_or_no_room(15, fafter, since)
+        friend.expect("orca menu online ranked", 10)
+        friend.wait_log(r"Drop-in: home on the ranked character select", 1, after=fafter)
+        pick_and_start(friend, friend_port, "ranked", after)
+        for o in orcas:
+            o.alive()
+        for o in orcas:
+            o.stop()
+        orcas.clear()
 
     if run_step("rejoin"):
         # 9. The host's app stops it on With Friends' character select; the friend goes home there.

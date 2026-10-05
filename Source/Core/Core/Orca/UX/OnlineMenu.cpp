@@ -194,11 +194,17 @@ std::optional<OnlinePick> s_css_pick;
 std::optional<OnlinePick> s_lobby_pick;
 }  // namespace
 
-void AnnounceOnlinePick(OnlinePick pick)
+void AnnounceOnlinePick(OnlinePick pick, bool arm)
 {
   // With the app's "host" the queue searches for Casual and Ranked while the player waits on the
   // character select.
   const bool queue = Orca::Status::Cap("host");
+  if (!arm)
+  {
+    // Kept: the friends stay, nothing starts, and the page knows this pick never searches here.
+    Orca::Status::Menu(fmt::format("{} kept", MenuEventText(pick, queue)));
+    return;
+  }
   Orca::Status::Menu(MenuEventText(pick, queue));
   // With the app's `queue2` the player waits on the queue's own character select, and the page
   // searches once they are ready (UX/Queue.h); before it, as soon as they pick.
@@ -217,6 +223,20 @@ void AnnounceOnlinePick(OnlinePick pick)
     Queue::End();
     Search::End();
   }
+}
+
+bool PickSearchable(OnlinePick pick)
+{
+  switch (pick)
+  {
+  case OnlinePick::Casual:
+    return Orca::Status::Cap("pick-casual");
+  case OnlinePick::Ranked:
+    return Orca::Status::Cap("pick-ranked");
+  case OnlinePick::Friends:
+    break;
+  }
+  return false;
 }
 
 std::optional<OnlinePick> TakeLobbyPick()

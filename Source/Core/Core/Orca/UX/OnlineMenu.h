@@ -33,9 +33,12 @@ class CPUThreadGuard;
 // stored keyframe that a friend who arrives would replay from; or the app's own join or leave
 // waits) is never printed later by the reader, now or once the game is alone again. Casual or
 // Ranked made so goes to the session once, at the boundary that saw it (TakeLobbyPick below, Luis
-// 2026-10-05: they drop the friends lobby): a host leaves its friends and announces it
-// (AnnounceOnlinePick), a joiner lets it go, and its host's leaving brings it home on the character
-// select that pick took both games to, where it announces the pick that select holds (CssPick).
+// 2026-10-05: they drop the friends lobby): a host whose page can search that queue now (the app's
+// "pick-casual" / "pick-ranked": PickSearchable) leaves its friends and announces it
+// (AnnounceOnlinePick), one whose page can't keeps them and announces it unarmed (`... kept`: the
+// page says why; armed once the friends are gone), a joiner lets it go, and its host's leaving
+// brings it home on the character select that pick took both games to, where it announces the pick
+// that select holds (CssPick).
 // Acting on a first run's pick while the session's inputs may still be guessed is safe there: the
 // session ends at that boundary, so what the host's solo game does next follows its own view of the
 // game. With Friends while friends play stays theirs. Whenever the game stops following on from
@@ -136,13 +139,23 @@ private:
 // Prints "orca menu online ..." for a pick (with the app's "host": "online casual" / "online
 // ranked", else "... local") and starts what it means: the queue's own character select (with the
 // app's "queue2"), the search, or neither (Friends). The reader's own announcement, and the
-// session's for a pick it took out of the friends lobby (TakeLobbyPick).
-void AnnounceOnlinePick(OnlinePick pick);
+// session's for a pick it took out of the friends lobby (TakeLobbyPick). `arm` false prints the
+// line alone, marked "kept" ("online ranked kept"): a host that keeps its friends because its page
+// can't search that queue now (PickSearchable; Rollback/OnlineMatch.h DecideLobbyPick), so the page
+// says why and cancels (never a search: the friends are in) and nothing of the queue comes near the
+// friends' game (its own character select's header, which a friend on the way would refuse; the
+// search's lines).
+void AnnounceOnlinePick(OnlinePick pick, bool arm = true);
+
+// Whether the app said its page can search this pick's queue right now (Casual "pick-casual",
+// Ranked "pick-ranked": Orca::Status PICK_CAPS); never Friends. Any thread.
+bool PickSearchable(OnlinePick pick);
 
 // A With Anyone pick (Casual or Ranked) the frame hook saw at this boundary while the game was not
 // alone (friends in it or about to land), which nothing printed: the session takes it at the same
 // boundary, after the hook (Rollback/OnlineMatch.cpp). A host leaves its friends lobby for the queue
-// and then announces it; a joiner's game is its host's, so it lets it go. Once. CPU thread.
+// and then announces it (with the pick's cap; without, it stays, announces it unarmed and arms it
+// once they are gone); a joiner's game is its host's, so it lets it go. Once. CPU thread.
 std::optional<OnlinePick> TakeLobbyPick();
 
 // Whether a scene is "the menus" for a former joiner to move to port 1 there (Rollback/

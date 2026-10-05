@@ -279,6 +279,9 @@ struct Match
   // the app's commands may not take: tried again at the next one, while it still stands
   // (UX/OnlineMenu.h PickStands).
   std::optional<Orca::UX::OnlinePick> lobby_pick;
+  // A pick this host announced unarmed to keep its friends (LobbyPickPlan::arm), armed once they are
+  // gone and it still stands (ArmKeptPick).
+  std::optional<Orca::UX::OnlinePick> kept_pick;
   bool set_over_left = false;
   bool set_over_hint = false;  // the overlay's leave hint is up
   std::optional<Clock::time_point> set_over_z_since;
@@ -1957,11 +1960,14 @@ bool MaybeRestoreQueueImage(Core::System& system, Match& match)
 
 // A With Anyone pick (Casual or Ranked) the frame hook saw at this boundary while this game wasn't
 // alone (UX/OnlineMenu.h TakeLobbyPick), after the app's commands: Casual and Ranked drop the
-// friends lobby for a 2-player room the matchmaker fills (DecideLobbyPick). A host leaves its room
-// as the app's Leave does (its friends play on without it, hear `host-left`, and go home on the
-// character select the pick took every game to, where they announce it too: ComeHome), prints `orca
-// state left lobby`, and then the pick as if made alone (`orca menu online casual|ranked`: the
-// queue's own character select once this game is alone on port 1, from the next boundary). Only at
+// friends lobby for a 2-player room the matchmaker fills (DecideLobbyPick). A host whose page can
+// search that queue now (the app's pick cap) leaves its room as the app's Leave does (its friends
+// play on without it, hear `host-left`, and go home on the character select the pick took every
+// game to, where they announce it too: ComeHome), prints `orca state left lobby`, and then the pick
+// as if made alone (`orca menu online casual|ranked`: the queue's own character select once this
+// game is alone on port 1, from the next boundary). Without the cap it keeps its friends and prints
+// the pick's line alone (unarmed: `orca menu online <queue> kept`), so its page says why it can't
+// search and cancels; ArmKeptPick arms it once they are gone. Only at
 // a boundary the app's commands may take (never mid re-run), which the hook's first run is. Local:
 // the session ends here, so nothing of this reaches the friends' games but the room's leave.
 void TakeLobbyPickNow(Match& match)
@@ -2001,6 +2007,7 @@ void TakeLobbyPickNow(Match& match)
   in.local_seat = match.local_seat;
   in.queue_room = InQueueRoom();
   in.host_cap = Orca::Status::Cap("host");
+  in.pick_cap = Orca::UX::PickSearchable(*pick);
   in.session = match.session != nullptr;
   in.session_idle = match.session && match.session->Idle();
   in.drop_in_friends =
@@ -2008,6 +2015,8 @@ void TakeLobbyPickNow(Match& match)
   in.arrival_pending = Orca::Online::ArrivalPending();
   in.keyframe_kept = match.keyframe || match.job || match.keyframe_wanted;
   const LobbyPickPlan plan = DecideLobbyPick(in);
+  // A newer pick replaces one kept earlier, whatever it comes to.
+  match.kept_pick.reset();
   if (plan.drop_keyframe)
     ResetDropIn(match);
   switch (plan.step)
@@ -2018,6 +2027,13 @@ void TakeLobbyPickNow(Match& match)
                    queue, match.joining ? "its host's" : "with friends");
     return;
   case LobbyPickStep::Announce:
+    if (!plan.arm)
+    {
+      NOTICE_LOG_FMT(ROLLBACK, "Online menu: {} picked with friends in room {}, which the page "
+                               "can't search now (no pick-{}): staying with them, frame {}",
+                     queue, Orca::Online::Code(), queue, match.running + 1);
+      match.kept_pick = pick;
+    }
     break;
   case LobbyPickStep::Leave:
     NOTICE_LOG_FMT(ROLLBACK, "Online menu: {} picked with friends in room {}: leaving it for the "
@@ -2036,9 +2052,10 @@ void TakeLobbyPickNow(Match& match)
     Orca::Status::Event("left lobby");
     break;
   }
-  NOTICE_LOG_FMT(ROLLBACK, "Online menu: orca menu {}",
-                 Orca::UX::MenuEventText(*pick, Orca::Status::Cap("host")));
-  Orca::UX::AnnounceOnlinePick(*pick);
+  NOTICE_LOG_FMT(ROLLBACK, "Online menu: orca menu {}{}",
+                 Orca::UX::MenuEventText(*pick, Orca::Status::Cap("host")),
+                 plan.arm ? "" : " (unarmed)");
+  Orca::UX::AnnounceOnlinePick(*pick, plan.arm);
 }
 
 // A former joiner on another port than 1 with no room (MayComeHome), at its first alone boundary
@@ -2073,6 +2090,7 @@ void ComeHome(Match& match)
   // Home on the character select a With Anyone pick opened (its host left the friends lobby for the
   // queue at that pick, whoever pressed it): this player takes the same way, so Start readies it on
   // the queue's own character select (its header from the next boundary) rather than doing nothing.
+  // Whatever its page can search: alone, the page answers it as any alone pick.
   const std::optional<Orca::UX::OnlinePick> pick = Orca::UX::CssPick();
   if (AnnounceHomePick(pick.has_value(), Orca::Status::Cap("host"),
                        Orca::UX::Queue::Active() ||
@@ -2082,6 +2100,46 @@ void ComeHome(Match& match)
                    *pick == Orca::UX::OnlinePick::Ranked ? "ranked" : "casual",
                    Orca::UX::MenuEventText(*pick, true));
     Orca::UX::AnnounceOnlinePick(*pick);
+  }
+}
+
+// A pick this host announced unarmed to keep its friends (TakeLobbyPickNow), at each boundary after
+// it: once the friends are gone and the game is alone on the character select that pick opened, it
+// is armed as an alone pick is (`orca menu online <queue>`: the queue's own character select from the
+// next boundary, so Start readies it; the page answers it as any pick). Dropped once the game has gone
+// on from it (back on the main menu, a stage select, a fight) or a queue or search is under way.
+// First runs only (a session's re-run never gets here alone).
+void ArmKeptPick(Match& match)
+{
+  if (!match.kept_pick || (match.session && match.session->Resimulating()))
+    return;
+  KeptPickInputs in;
+  in.stands = Orca::UX::PickStands(*match.kept_pick);
+  in.alone = match.local_seat == 0 && !match.joining && match.seated.empty() &&
+             AloneAt(match.running + 1, SoloIdle(match), Orca::Online::DropInPending(),
+                     match.keyframe ? std::optional(match.keyframe->frame) : std::nullopt);
+  in.queue_or_search = Orca::UX::Queue::Active() ||
+                       Orca::UX::Search::Current() != Orca::UX::Search::State::None;
+  const Orca::UX::OnlinePick pick = *match.kept_pick;
+  const char* const queue = pick == Orca::UX::OnlinePick::Ranked ? "ranked" : "casual";
+  switch (DecideKeptPick(in))
+  {
+  case KeptPickStep::Wait:
+    return;
+  case KeptPickStep::Drop:
+    match.kept_pick.reset();
+    NOTICE_LOG_FMT(ROLLBACK, "Online menu: the {} pick kept with friends is over by frame {}: "
+                             "dropped",
+                   queue, match.running + 1);
+    return;
+  case KeptPickStep::Arm:
+    match.kept_pick.reset();
+    NOTICE_LOG_FMT(ROLLBACK, "Online menu: the {} pick kept with friends, alone now (frame {}): "
+                             "orca menu {}",
+                   queue, match.running + 1,
+                   Orca::UX::MenuEventText(pick, Orca::Status::Cap("host")));
+    Orca::UX::AnnounceOnlinePick(pick);
+    return;
   }
 }
 
@@ -2740,6 +2798,7 @@ std::optional<int> Boundary(Core::System& system,
   // join goes first), then a former joiner's way home, and only then "no-room" for one that didn't
   // come home here (all three after the frame hook, which read the pick and the scene).
   TakeLobbyPickNow(match);
+  ArmKeptPick(match);
   ComeHome(match);
   TellNoRoom(match);
 
@@ -3366,14 +3425,28 @@ LobbyPickPlan DecideLobbyPick(const LobbyPickInputs& in)
     plan.drop_keyframe = in.keyframe_kept && !in.session;
     return plan;
   }
-  if (in.host_cap && in.local_seat == 0)
+  if (!in.host_cap || in.local_seat != 0)
+    return plan;
+  if (in.pick_cap)
+  {
     plan.step = LobbyPickStep::Leave;
+    return plan;
+  }
+  plan.step = LobbyPickStep::Announce;
+  plan.arm = false;
   return plan;
 }
 
 bool AnnounceHomePick(bool css_pick, bool host_cap, bool queue_or_search)
 {
   return css_pick && host_cap && !queue_or_search;
+}
+
+KeptPickStep DecideKeptPick(const KeptPickInputs& in)
+{
+  if (!in.stands || in.queue_or_search)
+    return KeptPickStep::Drop;
+  return in.alone ? KeptPickStep::Arm : KeptPickStep::Wait;
 }
 
 HeaderWait StepHeaderWait(int* waited, bool in_place, bool someone_waiting, bool queue_room)
