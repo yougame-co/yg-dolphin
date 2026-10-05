@@ -2912,8 +2912,9 @@ dropped in, wherever the host was, even onto Group > Brawl's select).
   1.0 a frame, so no frame's stick takes it there with A down). Brawl's panel picture (a costume,
   0x1B) ends at -17.4, Project+'s at -16.6: A loses its bottom edge only (X and Y still turn the
   costume). Under a header the online rules already pass A only in the grid ("The character
-  select's buttons"). Joining needs no A. The gate reads the plugged ports from the friends bytes
-  the frame hook keeps (`MatchBlock::FRIENDS_SEEN`).
+  select's buttons"). Joining needs no A: a hand moved into the grid joins its panel (A on the
+  player's own empty panel, which also joined, no longer reaches the game there). The gate reads the
+  plugged ports from the friends bytes the frame hook keeps (`MatchBlock::FRIENDS_SEEN`).
 - **The seats**, on any character select: an empty panel (kind 0) whose port nobody plugged in is
   hidden while the select is online, except the opponent's seat of a queue select (panel 2: always
   in a queue room, and on the queue's own select while it searches). Each panel is player area i's
@@ -2947,6 +2948,47 @@ pick, the record, the areas, the queue's ready flag) and the session's synced po
 hook (the record and panels after the online rules, the seats after the native text); the gate's
 masks read memory alone. A joiner loads the host's keyframe, which carries all of it.
 `ux=19`.
+
+**Checked 2026-10-05** (branch `q12-no-cpu` on `rel-0.3.23`, M4, headless, muted, under the solo
+lock; scripts and summaries in `~/Documents/brawl-dolphin/q12-nocpu-runs`, screenshots in
+`ui-shots/q12-no-cpu`):
+
+- Unit tests `OrcaOnlineSeats.*` (16: what is online, the record's and the panels' states in every
+  mode, the entries past the fourth untouched, only between scenes, idempotence, which seats hide in the queue's own
+  select, a room and With Friends, a select that stops being online, only known models, the A
+  mask by hand and mode); 468 `Orca*` tests pass.
+- Luis's bug, Project+, no test knob (`Tools/orca/inputs/pplus-cpu-online.txt`): local Versus makes a
+  CPU on panel 3 (kind 2 at 496), the stage select saves it (record `1E 01`), B rebuilds it (local
+  keeps its CPUs); then PLAY ONLINE > Ranked: the pick (31) at 1304, where the record's CPU is cleared
+  (`1E 03`), the select's panels at 1310 are port 1's alone (kinds 1 0 0 0, panels 2-4 hidden), and
+  A on panel 4's player-type button does nothing (before: a CPU at 1434). Casual (1254/1260) and
+  With Friends (1154/1160) the same.
+- Brawl, With Friends (`bf-cpu-friends.txt`) and Ranked: the game's own reset at the menu's exit,
+  panels 2-4 hidden from the select's first readable frame (2538, 2688), A on panel 4's button
+  nothing (before: a CPU at 2634), port 1 joins by moving into the grid. Local control (Group >
+  Brawl again): A on panel 4 makes a CPU and the stage select takes it (record `24 01`); no model
+  flag written on a local select.
+- Queue rooms, the test knob (`ORCA_TEST_QUEUE=ranked:solo`, `pplus-queue2-ranked.txt`, the pick at
+  874) with CPUs written into the record at the main menu (ports 2 and 3, 3 alone, 2 alone): the
+  record cleared at 571, the select at 577 with the player alone, the opponent's seat at 775
+  (searching), the room's header at 874, the joiner's pick in at 952 (78 frames, as without CPUs),
+  both ready at 1195, the stage select at 1200, the fight at 4030 with two players (ports 3 and 4
+  `3E 03`). Before, a CPU on 3 fought game 1 and one on 2 kept the room on its select. Brawl
+  (`bf-queue2-ranked.txt`, the pick at 2106): hidden at 1837, the seat at 2037, the pick in at 2200
+  (94 frames), both ready 2427, the stage select 2432, the same frames as rel-0.3.23's run.
+- `YG_SYNCTEST=7`, **0 RAM mismatches**: Project+ Luis's walk, 300-1700 (local CPU, its stage
+  select and rebuild, the record cleared on the way into Ranked, the hidden seats, A on panel 4):
+  9,751 re-run frames; Project+ queue room with the CPU record, 400-4300 (the clear, solo, searching,
+  room, stage select, fight): 27,251; Brawl With Friends' walk, 1500-2950: 10,101; Brawl queue room,
+  1500-3200: 11,851.
+- Two Orcas over yougame.co, dev tickets: `queue-e2e.mjs --pplus --queue ranked --q2 --probe
+  Tools/orca/inputs/pplus-cpu-record-probe.txt` (both players' games carry CPUs on ports 2 and 3
+  from the main menu): **PASS**, both records cleared before their own selects (frames 623 and
+  1258), a 2-0 set with every fight two players on both machines, 3 verdicts alike, **231 checksums
+  matched** on each side, both back on their own select. `online-menu-dropin.py` (With Friends with
+  a friend dropping in), Project+ and Brawl: PASS, 12 checksums matched each.
+- Not run: Mac <-> PC (`xplat.py`), the release's hashlogs (local Versus inputs, which this leaves
+  untouched).
 
 ## Ranked sets
 
