@@ -39,6 +39,7 @@ add_dolphin_test(OrcaRankedTest Orca/RankedTest.cpp)
 add_dolphin_test(OrcaBrawlStagesTest Orca/BrawlStagesTest.cpp)
 add_dolphin_test(OrcaCharOrderTest Orca/CharOrderTest.cpp)
 add_dolphin_test(OrcaCssTitleTest Orca/CssTitleTest.cpp)
+add_dolphin_test(OrcaNativeTextTest Orca/NativeTextTest.cpp)
 
 add_dolphin_test(SkylandersTest IOS/USB/SkylandersTest.cpp)
 

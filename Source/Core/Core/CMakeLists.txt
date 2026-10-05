@@ -556,6 +556,8 @@ add_library(core
   Orca/UX/MenuText.h
   Orca/UX/NameTags.cpp
   Orca/UX/NameTags.h
+  Orca/UX/NativeText.cpp
+  Orca/UX/NativeText.h
   Orca/UX/OnlineMenu.cpp
   Orca/UX/OnlineMenu.h
   Orca/UX/OnlineRules.cpp

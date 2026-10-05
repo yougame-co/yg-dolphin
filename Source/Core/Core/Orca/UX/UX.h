@@ -24,10 +24,11 @@ namespace Orca::UX
 // 12, Orca 0.3.16: the character select's A to pick, B to take the token back up and Start to
 // lock in (OnlineRules.h CssBUnpicks, CharOrder.h, Queue.h; the raw latch under every header that
 // locks), and the stage select's two cursors, proposals and agreement, and casual's simultaneous
-// 15 s pick (StageCursors.h, RankedSteps.h, BrawlStages.h, RankedPPlus.h): the session hashes it
-// into the compatibility key as `ux=<n>`, so two builds that would write different bytes (or mask
-// different inputs) never meet in a room.
-constexpr int kCompatVersion = 12;
+// 15 s pick (StageCursors.h, RankedSteps.h, BrawlStages.h, RankedPPlus.h); 13: Orca's words in the
+// character select's own text boxes, the players' names on their plates and the queue's line in the
+// rules bar (NativeText.h): the session hashes it into the compatibility key as `ux=<n>`, so two
+// builds that would write different bytes (or mask different inputs) never meet in a room.
+constexpr int kCompatVersion = 13;
 
 // Once, before the game boots in a session: registers the local pad source, the overlay, and the
 // session's plug-in, frame and stall callbacks, and puts kCompatVersion in the compatibility key.

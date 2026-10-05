@@ -3268,6 +3268,84 @@ Not yet: the header case (a queue room's) is proven by the unit tests only, not 
 marked (online rooms don't use teams); a Project+ update that redraws VERSUS changes its hash, and the
 game's title then shows until the pack is regenerated.
 
+## Native text
+
+Luis: Orca's UI must look native. Brawl draws its menu words from **message buffers**: a window
+formats a message into a buffer of its own once, then draws that buffer every frame until the game
+formats that window again. A buffer Orca rewrites is drawn in the game's font, size, colour and
+place from the next frame on (`Core/Orca/UX/NativeText.*`, branch `q5-ui-native`, `ux=13`).
+
+**The buffer** (Brawl rev 2, from one-frame RAM dumps of the character select, the stage select and
+the results screen): an object whose first word is its vtable `0x804540E0`; `+0x28` capacity,
+`+0x2C` length, `+0x30` the buffer, `0x01` after the length. The buffer is the window's set-up
+(`0x17 ...`, ending with its colours `0x02 n 0x0C rgba`, `0x04 rgba`, then `0x03 0x00 0x00`, 43
+bytes for the menus' windows), then the message: UTF-8 words between inline codes (`0x11` + 4
+bytes, a width, it seems: a 44-character line written without the rules bar's codes was not drawn
+at all; `0x12 0x02 0x0C rgba` a colour, `0x13` its end). Orca replaces only the words and keeps every code, so its text gets the
+game's colour and fit (a longer line is squeezed to the box, as the game's own are). The font has
+ASCII and Latin-1 (`Pokémon`, the full-width `１`) but no middle dot or en dash: the words are ASCII.
+Proven by probe writes (`ORCA_UX_PROBE` `write`): one write, still on screen 150 frames later.
+
+**Built (Brawl, the Versus character select, muSelCharTask = scene `+0x400`):**
+- **Name plates.** Player area i (task `+0x44 + 4i`, whose `+0x1B0` is i) `+0x174` is its plate's
+  buffer ("PLAYER 1", "NONE"). A joined port with a name shows it in capitals like the game's plates;
+  in a ranked queue room with the rating from its queue identity ("BO 1532"). Any session with
+  names (friends rooms too). The overlay's label over that panel goes; the LOCKED IN badge stays.
+- **The rules bar** (task `+0x538`, the white bar right of CASUAL / RANKED that says "3-man
+  survival test!" after the stock count): in a queue room and on the queue's own character select
+  it says what happens now, for both players in the third person, with the timer:
+  "Ranked: pick, then press Start to search", "Ranked: searching for an opponent...  B to cancel",
+  "Game 1: Press Start to lock in  0:27", "Game 1: ADA locked in, BO to press Start  0:24",
+  "ADA 1-0 BO: ADA picks, A then Start  0:43" (later games give the score in place of the game),
+  "ADA wins the set 2-0". The overlay's top line, the set's score line and the character order's
+  line go; this machine's own hints ("Hold Z to find someone else", "B to change") move up to the
+  top line.
+
+Both are a pure function of emulated memory (the header, the queue's ready flags and timer, the set,
+the character order) and the synced ports (names, the queue identity's rating), written at every
+boundary, first runs and re-runs, only where they differ, after the other writers (`UX.cpp`, after
+`CssTitle`). Never "you": both machines write the same bytes. The game formats a plate again when a
+port joins, leaves or picks a tag; the next boundary puts the name back (one frame of the game's
+words). Not on for Project+ yet (`Rules::ProfileRuleset` gates it): a Project+ dump has the same
+boxes at the same offsets (the bar says "-stock Smash!", the plates "PLAYER 1"), but its bar's message
+has no width code (`0x12 0x02 0x0C 000000ff -stock Smash! 0x13`), so a line longer than the bar needs
+Orca to add one (Brawl's `0x11 0x29 ff ff ff`); check that on screen before turning it on.
+
+**The survey: each Orca UI element, and where the game could show it**
+
+| Element | Orca today | In the game | Stored as | Deterministic from the block? | Recommendation |
+|---|---|---|---|---|---|
+| Top status line on the character select (whose turn, what to do) | overlay, top centre | the rules bar | message buffer (task `+0x538`) | yes, third person | **native, built** |
+| Timers (ready 0:30, character pick 0:45) | overlay, in the line | in the rules bar's line | message buffer | yes (block frames) | **native, built** |
+| Searching / pick then Start (the queue's own character select) | overlay | the rules bar | message buffer | yes (alone) | **native, built** |
+| Player names | overlay labels over the panels | the panels' name plates | message buffer (area `+0x174`) | yes (synced names) | **native, built** |
+| Ratings | overlay labels ("ada · 1532") | the name plates ("BO 1532") | message buffer | yes (queue identity, synced) | **native, built** |
+| Set score | overlay ("Game 2 · You 1–0 bo") | the rules bar ("ADA 1-0 BO: ..."); the results screen's rule panel (its "Brawl", "Stock" and "1" took "Ranked", "Set" and "1-0" in a probe write; an en dash drew as a box) | message buffers | yes (SetBlock) | **native**: built on the character select, next on the results screen |
+| LOCKED IN | overlay badge over the panel | no per-player word; the plate's colour codes (`0x02`/`0x04` rgba in its set-up) could tint a locked-in player's plate; READY TO FIGHT is one texture for both | message buffer set-up | yes | kit badge now; next: tint the locked-in plate (native) |
+| Stage select's top lines (strikes left, whose turn, timer) | overlay, top centre | none on screen: its only window is the Stage Builder name (hidden unless a custom stage is hovered); the stage name and BRAWL are textures, the stock count a digit model | message buffer (hidden) | yes | **game-styled kit** |
+| Stage proposal markers, cursor owner | overlay rings and tags | the game has one cursor model, driven by one port; a second needs game code | model | n/a | **kit** |
+| Victory / defeat, rating change | overlay panel (q5-set-end) | the results screen's winner name ("Mario" took "ADA"), mode ("Brawl" took "Ranked") and rule panel are message buffers; but VICTORY and DEFEAT differ per player and the new rating comes from the server after the frames are final | message buffers | the shared facts only | **hybrid**: "ADA wins the set 2-0" native on the results screen; VICTORY/DEFEAT and the rating count in the kit |
+| Disconnect countdown | overlay notice (q5-set-end) | none: during a stall the CPU waits, no frame runs, the game draws nothing new, and only one side knows | — | no | **kit** (host-drawn, RepresentDuringStall) |
+| "Hold Z to find someone else", "B to change", the skip bar | overlay | per-machine hints | — | no (local hold) | overlay, one small line |
+| READY TO FIGHT banner, the mode title | the game's | textures (MenSelchr...) | texture | a palette mark + Orca's pack (CssTitle's way) | keep the game's |
+
+**Proof** (2026-10-04, `q5-ui-native` on `rel-0.3.16`, Apple Silicon, headless):
+`Tools/orca/inputs/bf-native-text.txt` (a ranked queue2 set: the player's own character select,
+Samus steered in for port 2, game 1, the character order of game 2, game 3's character select).
+`YG_SYNCTEST=7 YG_SYNCTEST_FROM=1440` over it to frame 8000 (the menus, both character selects of
+game 1, the stage select, two fights and results, game 2's character order, game 3's select after the
+set): 45,871 re-run frames, **0 RAM mismatches** (PASS; the device-state-only count is the usual host
+noise). Screenshots `~/Documents/brawl-dolphin/ui-shots/native/` (before: `rel-0.3.16`; after:
+this branch). `OrcaNativeText*` unit tests (11): the boxes as the game formats them, anything else
+refused, the codes and length kept, idempotence, the capacity, ASCII, the friends room's plates,
+nothing off the character select, the same bytes on both machines, each queue state's line, the
+character order and the set in the third person.
+
+Not yet: Project+ (the width code above); the results screen's
+writes (the boxes are found, the writer is not); the plate tint for LOCKED IN; a header cleared while
+the character select stays up leaves the bar's last words (the queue image's restore brings the
+game's back in practice).
+
 ## Ranked sprint integration
 
 Branch `ranked-sprint`: `sp-casual` (Online rules), `sp-results` (Ranked sets), `sp-pplus-sss` (Ranked
