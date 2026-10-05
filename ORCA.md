@@ -28,6 +28,7 @@ and why. Paths are relative to `Source/Core/Core/` unless they start with `Sourc
 
 - [Building](#building)
 - [Running a session](#running-a-session)
+- [Mods (phase 1)](#mods-phase-1)
 - [Testing](#testing)
 - [Rollback and snapshots](#rollback-and-snapshots)
 - [Determinism across hosts](#determinism-across-hosts)
@@ -216,6 +217,101 @@ clock per span (the helper's, then Orca's); the hop between processes is left ou
 clocks drift and step, and its jitter is logged separately. `Tools/orca/controller-latency.mjs`
 measures the whole transport (0.1-0.3 ms on loopback); `Tools/orca/fake_bridge.py` with
 `FAKE_PAD_HZ` stands in for an adapter.
+
+## Mods (phase 1)
+
+Branch `mods-p1`, not on main: nothing ships until Luis flips to this architecture. Design: YouGame
+`docs/ORCA_MODS.md` ("Phase 1 contract" and its adjustments). A session reads its game from a mod
+bundle laid out as a run folder instead of `Data/Sys/Orca/<profile>.*`, chosen only by
+`ORCA_MOD_DIR`. Without it every legacy code path runs exactly as on main (each mod branch keys on
+`Profile::mod`, set only by `LoadModProfile`).
+
+| Variable | Meaning |
+|---|---|
+| `ORCA_MOD_DIR` | The run folder: `mod.json`, `tree.json`, the launcher, `sd/...`, `orca/patches/*.patches`, `orca/textures/`, `orca/jitwarm`. Mod mode. `ORCA_PROFILE` is ignored. |
+| `ORCA_SD_CACHE` | Where a mod's SD image is built (required when `mod.json` has `sd`). |
+| `ORCA_DISC_SHA1` | The dump's canonical SHA-1, in the `orca2` key (`-` when unset). Legacy's `orca1` key already mixes it in; the app sets it in mod mode only. |
+
+- **`mod.json`** (`Core/Orca/Mod.cpp` `ParseManifest`, `Tools/orca/mods/mod.schema.json` for the
+  site): every field of the design's example, unknown keys and malformed values refuse the session,
+  so do trailing text after the JSON value. `forced` takes only `Dolphin.Core.CustomRTCValue`
+  (what PPLUS32.ini forces besides the card); the card itself follows `sd`. `saveTitle` only the
+  disc's own. `firstKeyframeFrame` (default and least 300) replaces `FIRST_KEYFRAME_FRAME` and
+  `FriendsMove::FIRST_FRIEND_FRAME`. `engine.api` above `Mod::ENGINE_API` (1) refuses; `minOrca` is
+  checked for form only (the build has no version of its own: the app compares it).
+- **`tree.json`** (written by the app): sorted, unique also without case, no file that is also a
+  folder, paths of at most 100 bytes of printable ASCII with no `..`, leading dots, trailing dots or
+  spaces, Windows device names or `<>:"\|?*`. `tree` must be the contract's hash of the list
+  (`Tools/orca/mods/tree-hash-vector.json`, the vector the app and site share). Every file must be
+  there at its size; `mod.json`, the launcher and `orca/patches/*` also at their sha256.
+- **The SD card** is built from exactly the tree's `sd/` files (`Common::BuildSDImageFromFiles`:
+  FatFsUtil's FAT32 format, the tree sorted, FAT times zero) at `sd.bytes` (a multiple of 32 KiB, 64
+  MiB to 2 GiB, so SDSC), into `ORCA_SD_CACHE/<sdTreeHash>-fat1.raw` (sha256 of `bytes=<n>` and the
+  `sd/` lines) under a temporary name, then renamed, with its XXH3-128 in a `.xxh3` note. It is
+  reused while it hashes as its note says (a damaged one is rebuilt), the newest two are kept, and
+  it is mounted exactly like a legacy `sd.raw` (read-only, writes and folder sync forced off). Its
+  hash is `sd=` in the key.
+- **The key**: `orca2:<xxh3>` over `orca2|<commit>|api=1|tree=<treeHash>|sd=<image or ->|disc=<sha1 or
+  ->|`, the forced settings (the card's switch, then `forced`), the universal settings, `|ux=`. The
+  player's `User/GameSettings` INIs never load in mod mode (`GameConfigLoader`).
+- **Builtins** replace the game-id checks (`ProfileRuleset`, `ResultsVerified`, `BrawlExecutable`,
+  NameTags, MenuText, `VanillaBrawl`, `RequestQueueRules`; JitWarm's `KnownGame` and the harness's
+  scene reader take the declared builtin, host-only). `brawl-rev2` and `brawl-rev2-pplus` run only
+  while their guard words hold (`Mod::BuiltinGuards`: the frame loop's word, r13's base, the scene
+  manager / g_GameGlobal / pad system loads, the message buffer's vtable; vanilla's v-sync call for
+  `brawl-rev2`; Project+'s stage select routines at 0x80553594, 0x80554320, 0x805518D0 for
+  `brawl-rev2-pplus`), checked against memory at every entry into the UX (frame callback, input gate
+  source and latch), first runs and re-runs alike. Project+'s codes land in frame 1, so its guards
+  hold from frame 2; not holding counts as a failure (a warning, no gated caps) only after they held,
+  or still at `firstKeyframeFrame`. Caps: `mod.json` `offers` ∩ the builtin, unless failed.
+- **Bundles**: `Tools/orca/mods/make-bundle.py RSBE01|PPLUS32 <out> [--pplus-user <release user/>]
+  [--tree]` (no `tree.json` in a bundle; `--tree` makes a local run folder, `--tree <folder>` alone
+  rewrites one). Local run folders: `~/Documents/brawl-dolphin/mods/rsbe01` (153 files, tree
+  `ffcd31eb…7281`) and `mods/pplus32` (4,033 files, 3,878 on the card, tree `cab2942b…6498`).
+
+Launch (what the desktop app does with `YOUGAME_ORCA_DEV_MOD=<folder>`):
+
+```bash
+ORCA_SESSION=1 ORCA_MOD_DIR=<run folder> ORCA_SD_CACHE=<cache> [ORCA_DISC_SHA1=<sha1>] \
+  dolphin-emu-nogui -p headless -u <user> -v Null -e <disc>                       # no launcher
+  ... -C Dolphin.Core.DefaultISO=<disc> -e <run folder>/launcher.dol                # mod.json "launcher"
+```
+
+**Checked 2026-10-05** (`mods-p1` f4988c5302, M4 Pro, headless, `-v Null`; runs in
+`~/Documents/brawl-dolphin/mods-p1-runs`):
+- Unit tests: 486 `Orca*`, 466 pass, 20 skipped (live, network, disc), 0 fail; 14 new `OrcaMod.*`
+  (the tree-hash vector, path and tree refusals, every mod.json field and refusal, the schema's
+  lists against the engine's, bundles that differ from their tree, the SD image built twice, the
+  cache, guards, the gates, the legacy key's inputs).
+- Legacy unchanged: a build of this branch (e34e4138ed's tree) with origin/main's commit string (before the first
+  commit, so `GetScmRevGitStr()` matched) gives origin/main's keys exactly: Brawl
+  `orca1:4745bca65f8fe1ef`, Project+ `orca1:83ef3563709cc4b1`. Hashlogs of the default inputs in
+  legacy mode equal an origin/main 5103d50a85 build's: Brawl 10,803 frames, Project+ 9,006, 0 differ.
+- Vanilla Brawl from the bundle: T0 equals legacy, 10,801 frames, 0 differ (`orca2:a3f4a49c5a222cb1`
+  without `ORCA_DISC_SHA1`). T1 (`bf-queue2-flow.txt`, the 0.3.14 env, `YG_SYNCTEST=7` 1440-4700):
+  22,771 re-run frames, 0 RAM mismatches, the same steps as legacy frame for frame.
+- Project+ from the bundle (SD built from the tree, `16abfce070288e17dffb09e0c826cd92`, 8.2 s; a
+  second build into another cache is byte-identical): two T0 runs equal (9,006 frames), but not
+  legacy's, from frame 0. With the official `sd.raw` put in the cache instead, mod mode equals legacy
+  on every frame but frame 0 (9,006 compared, 1 differs). Frame 0: legacy's input latch writes 32
+  bytes into the match block (0x806F2540) while the launcher still runs, before the game is in RAM;
+  mod mode's builtin is off until the hook is live, and the boot overwrites the bytes by frame 1. The
+  built card's difference is the FAT reaching RAM: P+'s file structs hold other short names
+  (FatFs's `~1` forms), start clusters and zero times, and the boot's SD reads finish 14 frames
+  sooner (scBoot at 108 instead of 122; FatFs picks 16 KiB clusters where the official image has 2
+  KiB, so fewer cluster reads, most likely), so the fuzzed match then plays out differently. T1
+  (`pplus-queue2-flow.txt`, the 0.3.14 env, 200-3200): 20,951 re-run frames, 0 RAM mismatches, on
+  the built card and on the official one (the latter the same steps as legacy).
+- JIT (design section 7), Project+ from the bundle: `jit-history.py` with clears at
+  388/2000/4500/7000 and at 1/3/5/700/1234/3333/6001: the same 9,002 and 9,017 frames as without;
+  census 0 stale words below 0x80800000. Cold (`ORCA_JITWARM=0`) against warm: 9,006 frames, 0 differ.
+- Drop-in: NAND at `bootNandFrame` the same with and without input, from the bundles (Brawl 1800: 35
+  files; Project+ 600: 33).
+
+Open: Mac <-> PC (a PC builds its own card: it must hash `16abfce0…`); caps print before Project+'s
+guards are checked (a guard failure after that leaves the cap offered and the module silent); a P+
+fork whose codeset moves the stage select routines loses `brawl-rev2-pplus` until phase 3's labels;
+duplicate JSON keys are last-wins (as in JavaScript; the site refuses them).
 
 ## Testing
 
