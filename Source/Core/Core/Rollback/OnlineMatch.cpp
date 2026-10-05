@@ -275,6 +275,9 @@ struct Match
   // set's verdict and this game stays in it, session and all, until the player leaves it
   // (SetOverLeave): whether that leave was asked for, since when Z is held on the results screen,
   // and the buttons of the last local pad seen (a press is a button down now and not then).
+  // A With Anyone pick handed over while this game wasn't alone (TakeLobbyPickNow) at a boundary
+  // the app's commands may not take: tried again at the next one.
+  std::optional<Orca::UX::OnlinePick> lobby_pick;
   bool set_over_left = false;
   bool set_over_hint = false;  // the overlay's leave hint is up
   std::optional<Clock::time_point> set_over_z_since;
@@ -1961,20 +1964,29 @@ bool MaybeRestoreQueueImage(Core::System& system, Match& match)
 // ends here, so nothing of this reaches the friends' games but the room's leave.
 void TakeLobbyPickNow(Match& match)
 {
-  const auto pick = Orca::UX::TakeLobbyPick();
+  auto pick = Orca::UX::TakeLobbyPick();
+  if (!pick)
+    pick = std::exchange(match.lobby_pick, std::nullopt);
   if (!pick)
     return;
   const char* const queue = *pick == Orca::UX::OnlinePick::Ranked ? "ranked" : "casual";
   if (match.session &&
       (match.session->Resimulating() || match.session->CurrentFrame() != match.running + 1))
   {
-    WARN_LOG_FMT(ROLLBACK, "Online menu: {} picked mid re-run, frame {}: left alone", queue,
-                 match.running + 1);
+    // The game already left the menu for the character select: never dropped, or Start there
+    // would do nothing.
+    NOTICE_LOG_FMT(ROLLBACK, "Online menu: {} picked mid re-run, frame {}: at the next boundary",
+                   queue, match.running + 1);
+    match.lobby_pick = pick;
     return;
   }
+  // Players in the game or on their way. A keyframe kept for an invite nobody took yet, or a
+  // prepare-join, is no player: the pick is this game's alone, and that keyframe (made under the
+  // header before the pick) goes, so a friend who comes later gets one of the queue's select.
   const bool friends = match.session || !match.waiting.empty() || !match.plugging.empty() ||
-                       !match.seated.empty() || match.keyframe_wanted || match.job ||
-                       match.keyframe || Orca::Online::DropInPending();
+                       !match.seated.empty();
+  if (!friends && !match.joining && (match.keyframe || match.job || match.keyframe_wanted))
+    ResetDropIn(match);
   switch (DecideLobbyPick(match.joining, match.local_seat, InQueueRoom(),
                           Orca::Status::Cap("host"), friends))
   {

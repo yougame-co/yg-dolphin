@@ -1996,8 +1996,8 @@ drop the friends lobby and join a 2-player room the matchmaker fills"; `OnlineMa
 `TakeLobbyPickNow`, `DecideLobbyPick`; branch `q11-lobby`). Before it a pick made while friends
 played was never announced, so With Anyone > Casual or Ranked from a shared lobby did nothing and
 said nothing. Now the reader hands such a pick (never With Friends) to the session at the boundary
-that saw it, after the app's commands (`TakeLobbyPick`); a host with friends in its room or on their
-way, with the app's `host`, leaves its room as the app's Leave does (its friends play on without it
+that saw it, after the app's commands (`TakeLobbyPick`); a host with friends in its game or waiting
+for their keyframe, with the app's `host`, leaves its room as the app's Leave does (its friends play on without it
 and hear `orca state host-left`, then go home: "Drop-in"), prints `orca state left lobby` and shows
 "You left your friends to play ranked", then announces the pick (`orca menu online casual|ranked`):
 from the next boundary it plays alone on port 1, so the queue's own character select gets its header
@@ -2005,7 +2005,10 @@ and Start readies (`orca queue ready`). A joiner lets it go (the game is its hos
 app's `host` nothing would search, so the friends' game stays theirs, as before. Either player's
 press picks in a shared menu, so a friend's pick of Ranked takes the host to the queue too. Local:
 the session ends at this boundary, so nothing of it reaches the friends' games but the room's leave
-(no compatibility change).
+(no compatibility change). A pick that was not alone only for a keyframe kept for an invite nobody
+took yet (or a prepare-join) is announced in place, the keyframe dropped (a friend who comes later
+gets one under the queue's header); one seen at a boundary the commands can't take waits for the
+next.
 
 Tests: `OrcaOnlineMenu*` unit tests (the gates, the textures and their precedence, the text rewrite,
 the reader's edges and `AloneAt`); `Tools/orca/online-menu.py <nogui> <disc> [--pplus <dol>]

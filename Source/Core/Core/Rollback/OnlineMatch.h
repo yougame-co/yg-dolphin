@@ -130,8 +130,8 @@ enum class LobbyPickStep
 };
 // `joining`: a joiner's game; `local_seat`: the port it plays (a former joiner hosts nobody);
 // `queue_room`: in a room the queue made; `host_cap`: the app's "host"; `friends`: a session, or a
-// friend waiting, plugging in or seated, a keyframe for one wanted, being made or stored, or
-// drop-in work pending.
+// friend waiting for its keyframe, plugging in or seated (a keyframe kept for an invite nobody took
+// yet is no player: that pick is announced, and the keyframe dropped).
 LobbyPickStep DecideLobbyPick(bool joining, int local_seat, bool queue_room, bool host_cap,
                               bool friends);
 
