@@ -559,7 +559,8 @@ struct Scene
     return !f.show_signal && f.waiting.empty() && f.toasts.empty() && f.chats.empty() &&
            f.stats.empty() && f.perf.empty() && search.empty() && search_note.empty() &&
            rules.empty() && rules_note.empty() && hint.empty() &&
-           std::all_of(labels.begin(), labels.end(), [](const std::string& l) { return l.empty(); }) &&
+           std::all_of(labels.begin(), labels.end(),
+                       [](const std::string& l) { return l.empty(); }) &&
            std::none_of(locked.begin(), locked.end(), [](bool l) { return l; }) && !cursors.on &&
            set_end.Empty();
   }

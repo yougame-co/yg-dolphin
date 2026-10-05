@@ -3517,6 +3517,29 @@ frames (`Harness::ShownFrame`), so a screenshot at a frame always shows the same
 `ORCA_UX_OVERLAY_DEMO=1` cycles a made-up friend's link (good, ok, bad with a stall) and adds a
 toast and two chat lines each round.
 
+**Checked 2026-10-04** (`rel-0.3.18`, M4 Pro, Mac build, headless, nice'd, under the run locks):
+- Build: `dolphin-emu-nogui` and `tests`, no new warnings. Unit tests: `Orca*`: 417 pass, none fail (
+  the disc, live and network ones skip without their switches; the kit's font test read both
+  faces from the disc), including `OrcaNativeText.ProjectPlusKeepsItsRulesBar` and the kit's
+  chat plate, banner width and badge size checks.
+- Brawl, `YG_SYNCTEST=7 YG_SYNCTEST_FROM=1440` with `ORCA_TEST_QUEUE=ranked:solo
+  ORCA_UX_TEST_NAMES=ada,bo ORCA_TEST_SET_RULES=1,8 ORCA_TEST_QUEUE_PICK=2106:3:2:-7.5:14.23:1532`
+  over `bf-native-text.txt` to frame 8000 (the queue's own and the room's character selects with
+  the plates and the rules bar written, two stage selects, two fights and results, game 2's
+  character order, the select after the set): 45,871 re-run frames, **0 RAM mismatches**.
+- Project+, `YG_SYNCTEST=7 YG_SYNCTEST_FROM=200` with `ORCA_PROFILE=PPLUS32
+  ORCA_TEST_QUEUE=ranked:solo ORCA_UX_TEST_NAMES=ada,bo
+  ORCA_TEST_QUEUE_PICK=874:43:2:-7.4:7.7:1532` over `pplus-css-lockin.txt` to frame 6700 (the
+  plates written on the queue's own and the room's character selects and on game 2's, the stage
+  selects, the fight, the results): 45,451 re-run frames, **0 RAM mismatches**.
+- On screen: before/after pairs of every screen in both games,
+  `~/Documents/brawl-dolphin/ui-shots/convert/` (README.txt there); 10-letter names with a rating
+  ("CRUNCHYTES 1532") fit both games' plates, squeezed as the game squeezes its own.
+
+Not yet: the results screen's native words (its boxes take text, the writer isn't built), a native
+LOCKED IN (the plate's colour codes), Project+'s rules bar (the width code). No two-Orca or Mac<->PC
+run for these changes: they come after the release, as for every release.
+
 ## Ranked sprint integration
 
 Branch `ranked-sprint`: `sp-casual` (Online rules), `sp-results` (Ranked sets), `sp-pplus-sss` (Ranked

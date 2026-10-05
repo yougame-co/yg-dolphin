@@ -170,7 +170,8 @@ float Countdown(ImDrawList* dl, ImVec2 centre, float unit, int seconds, float fr
   // The panel's disc, a dark track round its body, and what is left of the wait lit in the tone.
   Kit::Disc(dl, centre, r, unit, Kit::Tone::Panel, alpha);
   const float track_r = r * 0.74f, thick = 0.9f * unit;
-  dl->AddCircle(centre, track_r, Rgba(0, 0, 0, 0.45f * alpha), 48, thick + std::max(1.0f, 0.3f * unit));
+  dl->AddCircle(centre, track_r, Rgba(0, 0, 0, 0.45f * alpha), 48,
+                thick + std::max(1.0f, 0.3f * unit));
   const float f = std::clamp(fraction, 0.0f, 1.0f);
   if (f > 0)
   {
