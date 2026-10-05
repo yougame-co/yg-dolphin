@@ -770,13 +770,49 @@ std::optional<SdImage> PrepareSdImage(const ModInfo& mod, const std::string& cac
 
 namespace
 {
-// Brawl rev 2's executable (main.dol, NTSC-U), as every builtin module reads it: code that loads
-// the globals the modules follow (the scene manager, g_GameGlobal, the pad system, the message
-// buffer's vtable, the controls template), and the frame boundary. Words of the DOL's text and
-// data, never written while the game runs (the same in vanilla and Project+ from the first frame on).
+// Brawl rev 2's executable (main.dol, NTSC-U), as every builtin module reads it: the frame boundary,
+// the small-data base (r13) and the code that loads the globals the modules follow through it (the
+// scene manager, g_GameGlobal, the pad system), and the message buffer's vtable (NativeText). Words of
+// the DOL's text and data, never written while the game runs: the same in vanilla and Project+ at
+// every frame boundary from the hook's first (picked from RAM at frame 1,000 of both, 2026-10-05).
 constexpr auto BRAWL_REV2_GUARDS = std::to_array<GuardWord>({
-    {0x80017504, 0x90170100},  // the frame boundary: stw r0,0x100(r23)
+    {0x80017504, 0x90170100},  // the frame loop's end: stw r0,0x100(r23)
+    {0x8000422C, 0x3DA0805A},  // __init_registers: lis r13,0x805A
+    {0x80004230, 0x61AD4420},  // ori r13,r13,0x4420
+    {0x8002D018, 0x806DBC40},  // gfSceneManager::getInstance: lwz r3,-0x43C0(r13) (0x805A0060)
+    {0x8000D8F4, 0x806DBCC0},  // lwz r3,-0x4340(r13): g_GameGlobal (0x805A00E0)
+    {0x80017538, 0x83EDBC20},  // the frame loop: lwz r31,-0x43E0(r13): gfPadSystem (0x805A0040)
+    {0x804540E8, 0x80069820},  // the message buffer's vtable (0x804540E0), +8
+    {0x804540EC, 0x8004755C},  // and +C
 });
+// Project+ v3.2 adds its codeset's code that reads and writes the stage select data RankedPPlus and
+// the online rules use (Source/Netplay/Net-Random.asm: the data at 0x8042C4E8, its page index at
+// 0x8042C821, the current page at 0x80496000). A codeset built with those routines elsewhere loses
+// the builtin (phase 3's labels name them instead).
+constexpr auto PPLUS_GUARDS = std::to_array<GuardWord>({
+    {0x80553594, 0x3CA08042},  // lis r5,0x8042
+    {0x80553598, 0x60A5C4E8},  // ori r5,r5,0xC4E8: the stage select data
+    {0x80554320, 0x3C608042},  // lis r3,0x8042
+    {0x80554324, 0x6063C821},  // ori r3,r3,0xC821: its page index
+    {0x805518D0, 0x3E008049},  // lis r16,0x8049
+    {0x805518D4, 0x62106000},  // ori r16,r16,0x6000: the current page
+});
+// Vanilla's own: Brawl's v-sync call, which Project+'s codes replace (PPLUS32 keepGameCode), so the
+// vanilla modules (BrawlStages' stage flow, the rules screen) never run on Project+.
+constexpr auto VANILLA_GUARDS = std::to_array<GuardWord>({
+    {0x80023B88, 0x4182FF7C},  // beq- (Project+: nop)
+});
+template <size_t A, size_t B>
+constexpr std::array<GuardWord, A + B> Join(const std::array<GuardWord, A>& a,
+                                            const std::array<GuardWord, B>& b)
+{
+  std::array<GuardWord, A + B> all{};
+  std::ranges::copy(a, all.begin());
+  std::ranges::copy(b, all.begin() + A);
+  return all;
+}
+constexpr auto VANILLA_BRAWL_GUARDS = Join(BRAWL_REV2_GUARDS, VANILLA_GUARDS);
+constexpr auto BRAWL_REV2_PPLUS_GUARDS = Join(BRAWL_REV2_GUARDS, PPLUS_GUARDS);
 }  // namespace
 
 std::span<const GuardWord> BuiltinGuards(Builtin builtin)
@@ -784,8 +820,9 @@ std::span<const GuardWord> BuiltinGuards(Builtin builtin)
   switch (builtin)
   {
   case Builtin::BrawlRev2:
+    return VANILLA_BRAWL_GUARDS;
   case Builtin::BrawlRev2PPlus:
-    return BRAWL_REV2_GUARDS;
+    return BRAWL_REV2_PPLUS_GUARDS;
   default:
     return {};
   }

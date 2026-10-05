@@ -138,10 +138,10 @@
       "pattern": "^0[xX]0*8(0[0-9a-fA-F]|1[0-7])[0-9a-fA-F]{4}[048cC]$"
     },
     "path": {
-      "description": "A bundle path: printable ASCII without <>:\"\\|?*, '/' between components, none empty, '.', '..', starting with a dot, ending in a dot or a space, or a Windows device name; at most 160 bytes.",
+      "description": "A bundle path: printable ASCII without <>:\"\\|?*, '/' between components, none empty, '.', '..', starting with a dot, ending in a dot or a space, or a Windows device name; at most 100 bytes.",
       "type": "string",
       "minLength": 1,
-      "maxLength": 160,
+      "maxLength": 100,
       "pattern": "^(?!.*(^|/)\\.)(?!.*[. ](/|$))(?!.*(^|/)([cC][oO][nN]|[pP][rR][nN]|[aA][uU][xX]|[nN][uU][lL]|[cC][oO][mM][0-9]|[lL][pP][tT][0-9]) *(\\.|/|$))[\\x20-\\x7e]+$",
       "not": { "pattern": "[<>:\"\\\\|?*]|//|^/|/$" }
     },
@@ -176,7 +176,7 @@
   "x-orca-limits": {
     "engineApi": 1,
     "sdBuilder": "fat1",
-    "maxPathBytes": 160,
+    "maxPathBytes": 100,
     "maxFiles": 20000,
     "forcedAllowlist": ["Dolphin.Core.CustomRTCValue"],
     "offerableCaps": ["results", "locks", "queue2"],

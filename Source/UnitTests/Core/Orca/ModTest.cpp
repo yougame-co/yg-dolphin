@@ -145,7 +145,7 @@ TEST(OrcaMod, TreeHashVector)
 {
   const picojson::value vector = ReadJson(RepoPath("Tools/orca/mods/tree-hash-vector.json"));
   const picojson::array& cases = vector.get("cases").get<picojson::array>();
-  ASSERT_GE(cases.size(), 3u);
+  ASSERT_EQ(cases.size(), 1u);
   for (const picojson::value& c : cases)
   {
     std::vector<Orca::Mod::TreeFile> files;
@@ -192,8 +192,8 @@ TEST(OrcaMod, PathRules)
   {
     EXPECT_NE(Orca::Mod::PathProblem(bad), std::nullopt) << bad;
   }
-  EXPECT_EQ(Orca::Mod::PathProblem(std::string(160, 'a')), std::nullopt);
-  EXPECT_NE(Orca::Mod::PathProblem(std::string(161, 'a')), std::nullopt);
+  EXPECT_EQ(Orca::Mod::PathProblem(std::string(100, 'a')), std::nullopt);
+  EXPECT_NE(Orca::Mod::PathProblem(std::string(101, 'a')), std::nullopt);
 }
 
 TEST(OrcaMod, TreeRefusals)

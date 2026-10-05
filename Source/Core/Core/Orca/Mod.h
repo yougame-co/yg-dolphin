@@ -39,9 +39,9 @@ inline constexpr std::string_view SD_BUILDER = "fat1";
 inline constexpr u64 SD_MAX_BYTES = u64{2} << 30;
 inline constexpr u64 SD_MIN_BYTES = u64{64} << 20;
 inline constexpr u64 SD_ALIGN = 32768;
-// A bundle path, as the app lays it out under userData/orca/run/<slug>/<treeHash>/ (Windows'
-// 260-character limit with a long user name and slug leaves about this much).
-inline constexpr size_t MAX_PATH_BYTES = 160;
+// A bundle path (the contract's 100 characters: the run folder userData\orca\run\<slug>\<hash>\
+// takes about 135 on Windows, and laid-out paths stay under 240).
+inline constexpr size_t MAX_PATH_BYTES = 100;
 inline constexpr size_t MAX_FILES = 20000;
 // FAT's limit for one file.
 inline constexpr u64 MAX_FILE_BYTES = (u64{4} << 30) - 1;
@@ -70,7 +70,8 @@ struct Tree
 
 // Why a bundle path is refused, or nullopt when it is fine: printable ASCII without <>:"\|?*, '/'
 // between non-empty components, none of them `.`/`..`, starting with a dot, ending in a dot or a
-// space, or a Windows device name (CON, NUL, COM1, ...), at most MAX_PATH_BYTES bytes.
+// space, or a Windows device name (CON, NUL, COM1, ...), at most MAX_PATH_BYTES bytes. A bundle never
+// holds a tree.json of its own (the app writes the run folder's), so ParseTree refuses one listed.
 std::optional<std::string> PathProblem(std::string_view path);
 // Files the tree hash leaves out: orca/jitwarm and orca/test/... (host-only).
 bool HostOnly(std::string_view path);

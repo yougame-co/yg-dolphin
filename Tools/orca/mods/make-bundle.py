@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
 """Turn one of Orca's legacy profiles into a mod bundle (YouGame docs/ORCA_MODS.md, Phase 1).
 
-  make-bundle.py RSBE01 <out>
-  make-bundle.py PPLUS32 <out> --pplus-user <Project+ release's user/ folder>
+  make-bundle.py RSBE01 <out> [--tree]
+  make-bundle.py PPLUS32 <out> --pplus-user <Project+ release's user/ folder> [--tree]
+  make-bundle.py --tree <folder>        (tree.json for an existing bundle folder)
 
 Reads Data/Sys/Orca/<profile>.ini, .patches, .jitwarm and Textures/RSBE01/ from this checkout (or
 --sys), and for Project+ the official release's files: Launcher/Project+ Netplay Launcher.dol and the
-files inside Wii/sd.raw (unpacked with 7-Zip, --7z), plus its license.txt. Writes <out>/ as the app
-lays out a run folder: mod.json, launcher.dol, sd/..., orca/patches/<profile>.patches,
-orca/textures/..., orca/jitwarm, and tree.json with the tree hash. <out> must not exist yet.
+files inside Wii/sd.raw (unpacked with 7-Zip, --7z), plus its license.txt. Writes the bundle to
+<out>/ (which must not exist yet): mod.json, launcher.dol, sd/..., orca/patches/<profile>.patches,
+orca/textures/..., orca/jitwarm. A bundle never holds tree.json (the app writes it into the run
+folder it lays out); --tree also writes one, making <out> a run folder for local mod-mode runs
+(ORCA_MOD_DIR, or the desktop app's YOUGAME_ORCA_DEV_MOD).
 
 None of Project+'s files belong in this repository: write P+ bundles outside it.
 """
@@ -26,7 +29,7 @@ import tempfile
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", "..", ".."))
 
-MAX_PATH_BYTES = 160
+MAX_PATH_BYTES = 100
 DEVICES = {"con", "prn", "aux", "nul"}
 # What each legacy profile becomes.
 BUILTIN = {"RSBE01": "brawl-rev2", "PPLUS32": "brawl-rev2-pplus"}
@@ -77,6 +80,30 @@ def tree_hash(files):
     return hashlib.sha256(text.encode()).hexdigest()
 
 
+def write_tree(folder):
+    """tree.json for a bundle folder: every file but tree.json (and .DS_Store), sorted by path."""
+    files = []
+    for root, dirs, names in os.walk(folder):
+        for name in names:
+            full = os.path.join(root, name)
+            rel = os.path.relpath(full, folder).replace(os.sep, "/")
+            if rel == "tree.json" or name == ".DS_Store":
+                continue
+            problem = path_problem(rel)
+            if problem:
+                sys.exit(f"{rel}: {problem}")
+            files.append({"path": rel, "sha256": sha256_file(full), "bytes": os.path.getsize(full)})
+    files.sort(key=lambda f: f["path"].encode())
+    lower = [f["path"].lower() for f in files]
+    if len(set(lower)) != len(lower):
+        sys.exit("two paths differ only in case")
+    tree = {"tree": tree_hash(files), "files": files}
+    with open(os.path.join(folder, "tree.json"), "w") as f:
+        json.dump(tree, f, indent=1)
+        f.write("\n")
+    return tree
+
+
 def read_profile(path):
     """Data/Sys/Orca/<profile>.ini: {"Profile": [(key, value)], "Forced": [(key, value)]}."""
     sections = {"Profile": [], "Forced": []}
@@ -107,8 +134,9 @@ def hex_word(value):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("profile", choices=sorted(BUILTIN))
+    ap.add_argument("profile", nargs="?", choices=sorted(BUILTIN))
     ap.add_argument("out")
+    ap.add_argument("--tree", action="store_true", help="also write tree.json (a local run folder)")
     ap.add_argument("--sys", default=os.path.join(REPO, "Data", "Sys"), help="the Sys folder (default: this checkout's)")
     ap.add_argument("--pplus-user", help="Project+ release's user/ folder (Launcher/, Wii/sd.raw)")
     ap.add_argument("--7z", dest="sevenzip", default=shutil.which("7zz") or "/opt/homebrew/bin/7zz")
@@ -116,6 +144,12 @@ def main():
     args = ap.parse_args()
 
     out = os.path.abspath(args.out)
+    if args.profile is None:
+        if not args.tree or not os.path.isdir(out):
+            sys.exit("give a profile, or --tree <existing bundle folder>")
+        tree = write_tree(out)
+        print(f"{out}/tree.json: {len(tree['files'])} files, tree {tree['tree']}")
+        return
     if os.path.exists(out):
         sys.exit(f"{out} exists; give a new folder")
     if os.path.commonpath([out, REPO]) == REPO and args.profile == "PPLUS32":
@@ -222,23 +256,10 @@ def main():
 
         put("mod.json", data=(json.dumps(mod, indent=2) + "\n").encode())
 
-        files = []
-        for root, dirs, names in os.walk(tmp):
-            for name in names:
-                full = os.path.join(root, name)
-                rel = os.path.relpath(full, tmp).replace(os.sep, "/")
-                problem = path_problem(rel)
-                if problem:
-                    sys.exit(f"{rel}: {problem}")
-                files.append({"path": rel, "sha256": sha256_file(full), "bytes": os.path.getsize(full)})
-        files.sort(key=lambda f: f["path"].encode())
-        lower = [f["path"].lower() for f in files]
-        if len(set(lower)) != len(lower):
-            sys.exit("two paths differ only in case")
-        tree = {"tree": tree_hash(files), "files": files}
-        with open(os.path.join(tmp, "tree.json"), "w") as f:
-            json.dump(tree, f, indent=1)
-            f.write("\n")
+        tree = write_tree(tmp)
+        files = tree["files"]
+        if not args.tree:
+            os.remove(os.path.join(tmp, "tree.json"))
         os.rename(tmp, out)
     except BaseException:
         shutil.rmtree(tmp, ignore_errors=True)
