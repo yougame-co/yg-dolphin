@@ -25,7 +25,7 @@
 #    both under the app with the queue's character select (caps host queue2) and live pads, no input
 #    script. The friend joins the host on the main menu, both go to With Friends' character select,
 #    the host's app stops it ("leave", "quit"). The friend hears "host-left", backs out (held B), and
-#    picks With Anyone > Ranked from the ONLINE page, a character, Start: "orca queue ready ranked"
+#    picks With Anyone > Ranked from the ONLINE page (through the With Friends page before ux=18), a character, Start: "orca queue ready ranked"
 #    within 10 s (through Orca 0.3.22 nothing: port 2, no room, no header). Then: it came home on
 #    the character select (port 1), never said "no-room", and its page was shown a room of its own.
 # 7. With Anyone with a friend in the game (Luis, 2026-10-05: Casual and Ranked drop the friends
@@ -313,6 +313,14 @@ CAPS_Q2 = "caps join leave stats host results queue2"
 # GameCube adapter wire mask (fake_bridge.py).
 WIRE = {"A": 1, "B": 2, "X": 4, "Y": 8, "LEFT": 16, "RIGHT": 32, "DOWN": 64, "UP": 128, "START": 256,
         "Z": 512}
+# The way from With Friends' character select (B held out) to With Anyone > Ranked: through the With
+# Friends page (B to the ONLINE page) until `ux=18`, which has no With Friends page (B out of its
+# character select lands on the ONLINE page). This tree's compatibility version says which
+# (DROPIN_UX=<n> for a binary built from another tree).
+with open(os.path.join(HERE, "..", "..", "Source", "Core", "Core", "Orca", "UX", "UX.h")) as _f:
+    UX_VERSION = int(os.environ.get("DROPIN_UX") or
+                     re.search(r"kCompatVersion = (\d+);", _f.read()).group(1))
+TO_RANKED = (["B"] if UX_VERSION < 18 else []) + ["RIGHT", "A", "DOWN", "A"]
 CSS_SCENE = r"Scene frame \d+: \S* -> scSelctCharacter"
 MENU_SCENE = r"Scene frame \d+: \S* -> muMenuMain"
 
@@ -524,7 +532,7 @@ try:
         # Back out (With Friends, then the ONLINE page), With Anyone > Ranked, a character, Start.
         back_to_menu(friend, friend_port)
         mark = friend.log_size()
-        walk(friend_port, ["B", "RIGHT", "A", "DOWN", "A"])
+        walk(friend_port, TO_RANKED)
         friend.expect("orca menu online ranked", 15)
         pick_and_start(friend, friend_port, "ranked", mark)
         came_home(friend, friend_log, room, since, after)
@@ -541,7 +549,7 @@ try:
         back_to_menu(host, host_port)
         mark = host.log_size()
         since, after = len(friend.seen), friend.log_size()
-        walk(host_port, ["B", "RIGHT", "A", "DOWN", "A"])
+        walk(host_port, TO_RANKED)
         host.expect("orca state left lobby", 20)
         host.expect("orca menu online ranked", 5)
         friend.expect("orca state host-left", 15)

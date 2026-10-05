@@ -2010,6 +2010,23 @@ took yet (or a prepare-join) is announced in place, the keyframe dropped (a frie
 gets one under the queue's header); one seen at a boundary the commands can't take waits for the
 next.
 
+Checked 2026-10-05 (branch `q11-lobby` on `rel-0.3.22`, M4, headless): the `Orca*` unit tests (453
+pass, 20 skipped: the live and network ones; new
+`OrcaOnlineMenuReader.APickMadeWithFriendsGoesToTheSessionOnce`, `OrcaOnlineMenuLobby.*`).
+`Tools/orca/dropin-rooms.py --only home,lobby` over dev rooms PASS: step 6, the guest whose host's
+app stopped heard `host-left`, came home on With Friends' character select (no `no-room`, its page
+shown its own room), picked Ranked and was `orca queue ready ranked` 0.30 s after Start; the same
+step against the 0.3.23 build (no fix) FAILs as Luis saw it: `no-room`, `orca menu online ranked`,
+then nothing for 10 s after Start. Step 7: the host's Ranked pick with the friend in printed `orca
+state left lobby` and `orca menu online ranked`, its queue select got its header and it was ready
+0.30 s after Start; the friend came home on the character select the pick took it to and readied
+Ranked itself. Steps 1-5 PASS (their friend went home or said `no-room`, by where it was).
+`queue-e2e.mjs --q2 --queue ranked` (dev tickets) PASS: a 2-0 set, set over, both back not ready,
+222 checksums matched on each side. `YG_SYNCTEST=7 YG_SYNCTEST_FROM=1400` over
+`inputs/bf-reseat.txt` with `ORCA_UX_TEST_RESEAT_AT=1957` (port 2 to port 1 on With Friends'
+character select, then port 1 out, With Anyone > Ranked, its character select, out again) to frame
+3200: 12,551 re-run frames, 0 RAM mismatches.
+
 Tests: `OrcaOnlineMenu*` unit tests (the gates, the textures and their precedence, the text rewrite,
 the reader's edges and `AloneAt`); `Tools/orca/online-menu.py <nogui> <disc> [--pplus <dol>]
 [--video Metal --shots <dir> [--scale 4]]` (every way through the menu, solo, offline);
