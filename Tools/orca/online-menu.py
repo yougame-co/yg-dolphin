@@ -7,25 +7,26 @@
 #                             [--keep] [--sandbox]
 #
 # Scenarios (each a boot of its own, in a fresh user folder):
-#   tour       PLAY ONLINE, the ONLINE page, B back to the top page and in again, With Friends
-#              (every direction), B back, With Anyone (both buttons), B back, in again and Casual
+#   tour       PLAY ONLINE, the ONLINE page, B back to the top page and in again, every direction
+#              on it, With Anyone (both buttons), B back, in again and Casual
 #   casual     With Anyone > Casual
 #   ranked     With Anyone > Ranked
-#   friends-N  With Friends' button N (0-3)
-#   back-friends-N  With Friends' button N, B out of the character select: the menu comes back on
-#              the With Friends page with N selected, and A there picks N again
+#   friends    With Friends: straight to the character select (no With Friends page since ux=18;
+#              its buttons all went to the same place)
+#   back-friends  With Friends, B out of the character select: the menu comes back on the ONLINE
+#              page with With Friends selected, and A there picks it again
 #   back-casual, back-ranked  the same from With Anyone: back on With Anyone, Casual (Ranked)
 #              selected, A picks it again
-#   back-chain With Friends > FIGHT!, B out: then B to the ONLINE page, B to the top page, in again,
-#              With Anyone > Casual (the pages work after a menu that started on one of them)
+#   back-chain With Friends, B out: then B to the top page, in again, With Anyone > Casual (the
+#              pages work after a menu that started on one of them)
 #   back-versus  Group (VERSUS) > Brawl, B out: back on Group with Brawl selected, A goes to the
 #              character select again, nothing printed
 #
 # Each run must show:
 #   - stdout: exactly the scenario's "orca menu ..." lines ("online casual local", "online ranked
 #     local", "online friends"), nothing for the pages and the B-backs; the log, the menu's exit
-#     code for each (24-27 the With Friends buttons, 30 Casual, 31 Ranked), so a back scenario's
-#     second pick proves the cursor came back on the same button;
+#     code for each (25 With Friends, 30 Casual, 31 Ranked), so a back scenario's second pick
+#     proves the cursor came back on the same button;
 #   - the scenes: the main menu, then the local Versus character select (scSelctCharacter), never an
 #     online scene; a back scenario reaches the character select twice;
 #   - the log: Orca's sora_scene groups (the table, the block and the back out) landed once each;
@@ -98,23 +99,15 @@ CSS_FRAMES = 600
 
 # The top page's cursor starts on Group / VERSUS; Play Online is below it. On the ONLINE page the
 # cursor starts on With Friends; With Anyone is to its right. With Anyone's cursor starts on Casual,
-# Ranked is below it. With Friends' four buttons, from the cursor's start: 0 Brawl / FIGHT! (the big
-# one), 1 Friend Roster (right of it), 2 Team Multi-Man (below left), 3 Home-Run Contest (below
-# right); right, down, left, up goes round them in that order (Brawl and Project+ alike).
+# Ranked is below it. A on With Friends leaves the menu at once (RSBE01.patches, PPLUS32.patches:
+# muProcWifi), as the With Friends page's FIGHT! did.
 TO_ONLINE = [("DOWN", "top-play-online"), ("A", "online")]
-FRIENDS_PATH = {0: [], 1: ["RIGHT"], 2: ["RIGHT", "DOWN", "LEFT"], 3: ["RIGHT", "DOWN"]}
-# The menu's exit code for each With Friends button (the button's mode: 25 is FIGHT!, the friend
-# list's Brawl, 24 Friend Roster, 26 Team Multi-Man, 27 Home-Run Contest), Casual's and Ranked's.
-FRIENDS_CODE = {0: 25, 1: 24, 2: 26, 3: 27}
-CASUAL_CODE, RANKED_CODE = 30, 31
+# The menu's exit code for With Friends (the old page's FIGHT!, the friend list's Brawl), Casual's
+# and Ranked's.
+FRIENDS_CODE, CASUAL_CODE, RANKED_CODE = 25, 30, 31
+FRIENDS = TO_ONLINE + [("A", None)]
 CASUAL = TO_ONLINE + [("RIGHT", None), ("A", "with-anyone"), ("A", None)]
 RANKED = TO_ONLINE + [("RIGHT", None), ("A", "with-anyone"), ("DOWN", "ranked-selected"), ("A", None)]
-
-
-def friends(n):
-    path = TO_ONLINE + [("A", "with-friends")]
-    path += [(b, f"with-friends-{n}-{i}") for i, b in enumerate(FRIENDS_PATH[n])]
-    return path + [("A", None)]
 
 
 # name: (menu presses, stdout lines, exit codes, presses on the menu's next visit after B out of
@@ -128,12 +121,6 @@ SCENARIOS = {
             ("LEFT", "online-with-friends"),
             ("UP", "online-up"),
             ("DOWN", "online-down"),
-            ("A", "with-friends"),
-            ("RIGHT", "with-friends-right"),
-            ("DOWN", "with-friends-down"),
-            ("LEFT", "with-friends-left"),
-            ("UP", "with-friends-up"),
-            ("B", "with-friends-b-online"),
             ("RIGHT", "online-with-anyone-2"),
             ("A", "with-anyone"),
             ("DOWN", "with-anyone-ranked"),
@@ -146,30 +133,28 @@ SCENARIOS = {
     "casual": (CASUAL, ["online casual local"], [CASUAL_CODE], None, 1),
     "ranked": (RANKED, ["online ranked local"], [RANKED_CODE], None, 1),
 }
-for n in FRIENDS_PATH:
-    SCENARIOS[f"friends-{n}"] = (friends(n), ["online friends"], [FRIENDS_CODE[n]], None, 1)
-for n in FRIENDS_PATH:
-    SCENARIOS[f"back-friends-{n}"] = (friends(n), ["online friends"] * 2, [FRIENDS_CODE[n]] * 2,
-                                      [("A", "back-with-friends")], 2)
+SCENARIOS["friends"] = (FRIENDS, ["online friends"], [FRIENDS_CODE], None, 1)
+SCENARIOS["back-friends"] = (FRIENDS, ["online friends"] * 2, [FRIENDS_CODE] * 2,
+                             [("A", "back-online-with-friends")], 2)
 SCENARIOS["back-casual"] = (CASUAL, ["online casual local"] * 2, [CASUAL_CODE] * 2,
                             [("A", "back-with-anyone")], 2)
 SCENARIOS["back-ranked"] = (RANKED, ["online ranked local"] * 2, [RANKED_CODE] * 2,
                             [("A", "back-with-anyone-ranked")], 2)
 SCENARIOS["back-chain"] = (
-    friends(0), ["online friends", "online casual local"], [FRIENDS_CODE[0], CASUAL_CODE],
-    [("B", "back-with-friends"), ("B", "back-online"), ("A", "back-top"),
-     ("RIGHT", "back-online-again"), ("A", "back-online-with-anyone"), ("A", "back-with-anyone")],
+    FRIENDS, ["online friends", "online casual local"], [FRIENDS_CODE, CASUAL_CODE],
+    [("B", "back-online"), ("A", "back-top"), ("RIGHT", "back-online-again"),
+     ("A", "back-online-with-anyone"), ("A", "back-with-anyone")],
     2)
 SCENARIOS["back-versus"] = ([("A", "top"), ("A", "group")], [], [], [("A", "back-group")], 2)
-# The back scenarios whose page comes back on a button with a rewritten description (Friend Roster,
-# Team Multi-Man, Home-Run Contest, Casual, Ranked; MenuText.h): the menu formats it in the frame its
-# archive loads, so the description box's copy must be rewritten as well, at that boundary.
-BOX_REWRITE = {"back-friends-1", "back-friends-2", "back-friends-3", "back-casual", "back-ranked"}
+# The back scenarios whose page comes back on a button with a rewritten description (the ONLINE
+# page's With Friends, Casual, Ranked; MenuText.h): the menu formats it in the frame its archive
+# loads, so the description box's copy must be rewritten as well, at that boundary.
+BOX_REWRITE = {"back-friends", "back-chain", "back-casual", "back-ranked"}
 
 # The main menu module's online groups (RSBE01.patches; Project+'s module sits 0x1480 higher): each
 # must land on the main menu (or the scene change into it, while the module loads) and nowhere else.
 MENU_GROUPS = [a + (0x1480 if PPLUS else 0) for a in
-               (0x81178A58, 0x81178C30, 0x81179F48, 0x8117A148, 0x81179A04, 0x81191D7C)]
+               (0x81178A58, 0x81178C30, 0x81179F04, 0x8117A104, 0x81179A04, 0x81191D7C)]
 # Orca's groups in sora_scene (resident, the same in both games): sqMenuMain::setNext's table, its
 # block for the online codes and the back out's helper, sqVsMelee's back out. Each lands once.
 SCENE_GROUPS = [0x80701A04, 0x806DC8C8, 0x806DCE34]

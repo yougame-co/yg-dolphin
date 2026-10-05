@@ -136,6 +136,7 @@ constexpr u32 CSS_HAND_TAKING = 6;     // the token on its way into the hand
 constexpr u32 CSS_HAND_GRID_HOLDING = 7;  // the grid, the token in the hand (A puts it down)
 constexpr u32 CSS_HAND_PLACING = 8;       // the token on its way down
 constexpr u32 CSS_BUTTON_PLAYER_TYPE = 0x1D;
+constexpr u32 CSS_BUTTON_BACK = 0x02;  // with CSS_HAND_EXIT: BACK (Rules is 0x04)
 // A passes only strictly between these (one frame's travel inside the grid's edges). The top and
 // Project+'s bottom: both games. Brawl's bottom row (RANDOM at its right end, Lucas, ...) reaches
 // down to -4.07, and its grid goes on below it to -5.35 or lower, over nothing until the player's
@@ -160,6 +161,30 @@ CssHand ReadCssHand(const GuestMemory& memory, int port);
 // Whether A may reach the game from this hand while the locks hold, `bottom` the game's lower edge
 // (CSS_A_BOTTOM, Brawl's CSS_A_BOTTOM_BRAWL). An unreadable hand may not.
 bool CssHandMayPressA(const CssHand& hand, float bottom = CSS_A_BOTTOM);
+
+// ---- A on BACK, the queue's own character select only (ORCA.md "The queue's character select")
+// ----
+// Luis, 2026-10-05: "anytime you could press B to go back right now, clicking A over the back
+// button should also work". Held B backs out of the queue's own character select (FLAG_SOLO: the
+// rules leave B alone there and the loop lock stands aside), so A on BACK does too: port 1's A
+// reaches the game when its hand points at BACK and A is a new press (not held on the frame that
+// just ran, the queue's latch), the way the game itself wants a press there: a held A sliding
+// onto BACK never backs out. The stick reads centred while A is down (InputGate a_centres_stick),
+// so the hand stays on BACK through the press; nothing else is in one frame's travel of it anyway
+// (found under the harness, both games: BACK spans x -32 to -23.6, y 17.8 to 21.5, the BRAWL tab
+// starts at x -20.4 and the grid ends at y 15.85). While the player is ready (searching) Queue.h
+// keeps A from the game for that press: it stops the search first (`orca queue unready`), and the
+// next frame presses it for the game, so one press both stops the search and backs out. Never in a
+// queue room (casual's way out is Z, ranked has none), never Rules (0x04). Pure.
+// The hand points at BACK (its target and button, CssHand's).
+constexpr bool CssHandOnBack(u32 target, u32 button)
+{
+  return target == CSS_HAND_EXIT && button == CSS_BUTTON_BACK;
+}
+constexpr bool CssBackTakesA(const CssHand& hand, bool a_held)
+{
+  return hand.valid && CssHandOnBack(hand.target, hand.button) && !a_held;
+}
 
 // ---- B on the character select: only to take the token back up (ORCA.md "The character
 // select's buttons") ----

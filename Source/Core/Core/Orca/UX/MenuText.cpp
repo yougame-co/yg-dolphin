@@ -29,13 +29,20 @@ using namespace std::string_view_literals;
 
 // Read from the disc's and Project+'s mu_menumain archives (MiscData 5 and 10), each original
 // checked byte for byte there. Grouped by file (one archive walk per file per boundary).
-constexpr std::array<MenuTextEdit, 17> EDITS{{
+constexpr std::array<MenuTextEdit, 19> EDITS{{
     // The main menu's footer under the Online button. Brawl: 'Play different modes while
     // connected to Nintendo WFC.'; Project+: 'Play different modes online. (Discontinued)'.
     {5, 2, BRAWL "Play different modes while connected to " BRAWL "Nintendo WFC." END END ""sv,
      BRAWL "Play different modes online." END ""sv},
     {5, 2, PPLUS "Play different modes online. (Discontinued)" END ""sv,
      PPLUS "Play different modes online." END ""sv},
+    // The ONLINE page's With Friends: 'Play with people you've registered as Friends!' (a roster
+    // that isn't there). A on it goes straight to the local Versus character select, where the
+    // friends you invite drop in (RSBE01.patches, muProcWifi).
+    {5, 18, BRAWL "Play with people you've registered as Friends!" END ""sv,
+     BRAWL "Play with friends you invite! (2-4 players)" END ""sv},
+    {5, 18, PPLUS "Play with people you've registered as Friends!" END ""sv,
+     PPLUS "Play with friends you invite! (2-4 players)" END ""sv},
     // The ONLINE page's With Anyone (Project+ only: 'Play against random people! (Project M not
     // compatible!)'; Brawl's names no one).
     {5, 19, PPLUS "Play against random people! (Project M not compatible!)" END ""sv,
@@ -51,9 +58,11 @@ constexpr std::array<MenuTextEdit, 17> EDITS{{
      BRAWL "Brawl someone at your level for a higher rank!" END ""sv},
     {5, 52, PPLUS "Form a team with someone, somewhere for a 2-on-2 battle!" END ""sv,
      PPLUS "Fight someone at your level for a higher rank!" END ""sv},
-    // The ONLINE page's With Friends: every button goes to the local Versus character select, where
-    // friends drop in (Brawl calls it a brawl, Project+ a fight), so none may promise another mode
-    // or a roster. Its Brawl / FIGHT! button keeps 'Take on your friends! (2-4 players)'.
+    // The With Friends page's buttons (no menu opens that page since `ux=18`: A on With Friends
+    // leaves for the character select at once; kept so nothing could ever promise these): every
+    // button went to the local Versus character select, where friends drop in (Brawl calls it a
+    // brawl, Project+ a fight), so none may promise another mode or a roster. Its Brawl / FIGHT!
+    // button keeps 'Take on your friends! (2-4 players)'.
     // Friend Roster: 'Register friends here to simplify playing with them.'
     {5, 45, BRAWL "Register friends here to simplify playing with them." END ""sv,
      BRAWL "Friends you invite join your brawl! (2-4 players)" END ""sv},

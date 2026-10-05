@@ -29,8 +29,10 @@ class CPUThreadGuard;
 //   Start make the player ready: Orca prints `orca queue ready <casual|ranked> <char> <costume>`
 //   and stays on the character select ("Searching for an opponent... B to cancel"); the page
 //   searches. B (or another pick) while ready: `orca queue unready`, still on the character select.
-//   B while not ready backs out to the menus as the game does (`orca menu cancel`). Start never
-//   reaches the game here (one player can't start a versus match anyway).
+//   B while not ready backs out to the menus as the game does (`orca menu cancel`), and so does A
+//   on BACK (Rules::CssBackTakesA); A on BACK while ready stops the search first (`orca queue
+//   unready`) and the next frame gives that press to the game, which backs out (FLAG_BACK_A): one
+//   press. Start never reaches the game here (one player can't start a versus match anyway).
 // - **The match.** The page hosts or joins as before. The joiner's queue identity (QueueIdentity:
 //   its pick, where its hand put the token in its own game, and the rating the page gave) rides the
 //   session's value channel with its name, so from its plug frame on every machine has it at the
@@ -109,6 +111,11 @@ constexpr u8 FLAG_SWALLOW_B = 0x04;
 // A) that left the room's results screen may still be held, and it readies nobody until it is let
 // go (else that press would start a search the player never asked for).
 constexpr u8 FLAG_SWALLOW_START = 0x08;
+// The queue's own character select: a new A on BACK while ready stopped the search at this
+// boundary (B's job, done by A; Rules::CssBackTakesA): the game sees that A in the frame about to
+// run, after `orca queue unready`, so the one press also backs out. One boundary only (the press's
+// first after the one that un-readied); fed back at that boundary it stays (idempotent).
+constexpr u8 FLAG_BACK_A = 0x10;
 
 // 30 s to ready up, 1.5 s of Z to skip, at the game's 60 frames a second.
 constexpr int READY_FRAMES = 30 * 60;
@@ -157,6 +164,7 @@ struct CssPort
   int costume = 0;
   // The hand (OnlineRules.h CssHand): what it points at and where.
   u32 hand_target = 0;
+  u32 hand_button = 0;
   float hand_x = 0;
   float hand_y = 0;
   bool operator==(const CssPort&) const = default;

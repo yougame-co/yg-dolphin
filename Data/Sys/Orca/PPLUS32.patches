@@ -66,8 +66,30 @@
 8117A0B4 28000002 28000002    # cmplwi r0, 2 (guard)
 8117A0B8 4082007C 4800007C    # bne +0x7C -> b +0x7C
 
-# muProcWifi (the ONLINE page): B goes back to the top page as the game does once its "Disconnect
-# from Wiimmfi?" window returns, with no window. Two copies.
+# muProcWifi (the ONLINE page), two copies of its input handling, one group each, as
+# RSBE01.patches describes them for Brawl: A on With Friends leaves the menu for the local Versus
+# character select as With Friends > FIGHT! did (code 25: no With Friends page any more, whose
+# buttons all went to the same place), its code in the dead window code after B's path; B goes back
+# to the top page as the game does once its "Disconnect from Wiimmfi?" window returns, with no
+# window. The original words read in Project+'s RAM on its ONLINE page (q10-runs, 2026-10-05): the
+# same as Brawl's but for the calls into sora_scene.
+8117B384 3800001A 48000068    # li r0, 0x1A -> b 0x8117B3EC (With Friends: leave the menu)
+8117B388 901D0634 901D0634    # stw  r0, 0x634(r29) (guard)
+8117B38C 48000018 48000018    # (guard)
+8117B390 3800001B 3800001B    # li   r0, 0x1B (With Anyone; guard)
+8117B394 901D0634 901D0634    # (guard)
+8117B398 4800000C 4800000C    # (guard)
+8117B39C 3800001C 3800001C    # li   r0, 0x1C (Options; guard)
+8117B3A0 901D0634 901D0634    # (guard)
+8117B3A4 7FA3EB78 7FA3EB78    # mr   r3, r29 (into the page; guard)
+8117B3A8 38800001 38800001    # (guard)
+8117B3AC 4B52A6AD 4B52A6AD    # bl   0x806A5A58 (guard)
+8117B3B0 38000003 38000003    # (guard)
+8117B3B4 38600002 38600002    # (guard)
+8117B3B8 901D0664 901D0664    # (guard)
+8117B3BC 48000298 48000298    # (guard)
+8117B3C0 57C006B5 57C006B5    # rlwinm. r0, r30, 0, 26, 26 (B; guard)
+8117B3C4 4182028C 4182028C    # (guard)
 8117B3C8 4AEB1C51 7FA3EB78    # mr   r3, r29
 8117B3CC 3CA0811A 38800000    # li   r4, 0
 8117B3D0 3CC0811A 4B52A689    # bl   0x806A5A58 (the back animation)
@@ -77,7 +99,37 @@
 8117B3E0 38800004 901D0664    # stw  r0, 0x664(r29) (sub-state)
 8117B3E4 38E00000 38600001    # li   r3, 1
 8117B3E8 4B275B5D 4800026C    # b    0x8117B654 (the function's end)
+8117B3EC 7C7E1B78 7FA3EB78    # mr   r3, r29 (With Friends, from 0x8117B384)
+8117B3F0 38800009 38800019    # li   r4, 25 (With Friends > FIGHT!)
+8117B3F4 4BFFC801 38A00000    # li   r5, 0 (the decided animation first)
+8117B3F8 80DD0654 4B52A20D    # bl   0x806A5604 (the proc's exit)
+8117B3FC 7C651B78 3C60805A    # lis  r3, 0x805A
+8117B400 389E0A94 38800013    # li   r4, 0x13
+8117B404 38600001 806301D0    # lwz  r3, 0x1D0(r3) (the sound manager)
+8117B408 38E00029 38A0FFFF    # li   r5, -1
+8117B40C 39000000 38C00000    # li   r6, 0
+8117B410 39200000 38E00000    # li   r7, 0
+8117B414 48021DE9 3900FFFF    # li   r8, -1
+8117B418 907D066C 4AEF8E99    # bl   0x800742B0 (the sound)
+8117B41C 48000234 48000234    # b    0x8117B650 (li r3, 0; the end; guard)
 
+8117B584 3800001A 48000068    # li r0, 0x1A -> b 0x8117B5EC
+8117B588 901D0634 901D0634    # (guard)
+8117B58C 48000018 48000018    # (guard)
+8117B590 3800001B 3800001B    # (guard)
+8117B594 901D0634 901D0634    # (guard)
+8117B598 4800000C 4800000C    # (guard)
+8117B59C 3800001C 3800001C    # (guard)
+8117B5A0 901D0634 901D0634    # (guard)
+8117B5A4 7FA3EB78 7FA3EB78    # (guard)
+8117B5A8 38800001 38800001    # (guard)
+8117B5AC 4B52A4AD 4B52A4AD    # (guard)
+8117B5B0 38000003 38000003    # (guard)
+8117B5B4 38600002 38600002    # (guard)
+8117B5B8 901D0664 901D0664    # (guard)
+8117B5BC 48000098 48000098    # (guard)
+8117B5C0 57C006B5 57C006B5    # (guard)
+8117B5C4 4182008C 4182008C    # (guard)
 8117B5C8 4AEB1A51 7FA3EB78    # mr   r3, r29
 8117B5CC 3CA0811A 38800000    # li   r4, 0
 8117B5D0 3CC0811A 4B52A489    # bl   0x806A5A58
@@ -87,6 +139,19 @@
 8117B5E0 38800004 901D0664    # stw  r0, 0x664(r29)
 8117B5E4 38E00000 38600001    # li   r3, 1
 8117B5E8 4B27595D 4800006C    # b    0x8117B654
+8117B5EC 7C7E1B78 7FA3EB78    # mr   r3, r29 (With Friends, from 0x8117B584)
+8117B5F0 38800009 38800019    # li   r4, 25
+8117B5F4 4BFFC601 38A00000    # li   r5, 0
+8117B5F8 80DD0654 4B52A00D    # bl   0x806A5604
+8117B5FC 7C651B78 3C60805A    # lis  r3, 0x805A
+8117B600 389E0A94 38800013    # li   r4, 0x13
+8117B604 38600001 806301D0    # lwz  r3, 0x1D0(r3)
+8117B608 38E00029 38A0FFFF    # li   r5, -1
+8117B60C 39000000 38C00000    # li   r6, 0
+8117B610 39200000 38E00000    # li   r7, 0
+8117B614 48021BE9 3900FFFF    # li   r8, -1
+8117B618 907D066C 4AEF8C99    # bl   0x800742B0
+8117B61C 48000034 48000034    # b    0x8117B650 (guard)
 
 # The ONLINE page's Options and With Anyone's Spectator never show (isEnableButton is always no).
 8117AE84 38600020 38600020    # li r3, 0x20 (guard)
@@ -114,8 +179,8 @@
 80701A1C 806DC8F8 806DC8C8    # code 30 (sqNetAnyOkiraku)
 80701A20 806DC910 806DC8C8    # code 31 (sqNetAnyTeamMelee)
 
-# B out of that character select goes back to the ONLINE page it came from (With Friends on the
-# button picked, With Anyone on Casual or Ranked), not to VERSUS: RSBE01.patches describes these
+# B out of that character select goes back to the page it came from (the ONLINE page on With
+# Friends, With Anyone on Casual or Ranked), not to VERSUS: RSBE01.patches describes these
 # groups for Brawl. Project+ keeps Brawl's sqMenuMain, sqVsMelee and their tables (the original
 # words read in Project+'s RAM on its character select and main menu, 2026-10-03), but its codeset
 # makes sqVsMelee::start always keep the character select as it was (0x806DCA90 is a `b`), so the
@@ -136,11 +201,11 @@
 806DC8F8 7E439378 3805FFE8    # subi   r0, r5, 24
 806DC8FC 38930180 28000007    # cmplwi r0, 7
 806DC900 38A00000 41810018    # bgt    0x806DC918 (not an online code)
-806DC904 4B950D3D 38A5FFFF    # subi   r5, r5, 1
+806DC904 4B950D3D 38A5FFFE    # subi   r5, r5, 2
 806DC908 93CF0008 28000004    # cmplwi r0, 4
-806DC90C 480000C4 4D800020    # bltlr  (24-27: With Friends, 23-26)
-806DC910 7E439378 38A5FFFF    # subi   r5, r5, 1
-806DC914 38930190 4E800020    # blr    (29-31: With Anyone, 27-29)
+806DC90C 480000C4 4C800020    # bgelr  (29-31: With Anyone, 27-29)
+806DC910 7E439378 38A0001E    # li     r5, 30 (24-27: the ONLINE page on With Friends)
+806DC914 38930190 4E800020    # blr
 806DC918 38A00000 38A00001    # li     r5, 1 (VERSUS, as before)
 806DC91C 4B950D25 4E800020    # blr
 

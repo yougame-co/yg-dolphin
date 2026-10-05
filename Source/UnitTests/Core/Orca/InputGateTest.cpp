@@ -142,6 +142,49 @@ TEST(OrcaInputGate, AReadsAsAnotherButtonWhileHeld)
   EXPECT_EQ(Apply(pad, only).button, 0);
 }
 
+TEST(OrcaInputGate, TheStickCentresWhileAIsDown)
+{
+  // The queue's own character select's BACK (OnlineRules.h CssBackTakesA): while the player holds
+  // A, or the rule presses it, the main stick reads centred, so the hand stays on BACK through the
+  // press; with A up the stick is the player's. The C-stick and the buttons are left alone.
+  GCPadStatus pad = Busy();
+  pad.button = PAD_BUTTON_A | PAD_BUTTON_Y;
+  Mask mask;
+  mask.a_centres_stick = true;
+  EXPECT_FALSE(mask.Empty());
+  GCPadStatus out = Apply(pad, mask);
+  EXPECT_EQ(out.stickX, int{GCPadStatus::MAIN_STICK_CENTER_X});
+  EXPECT_EQ(out.stickY, int{GCPadStatus::MAIN_STICK_CENTER_Y});
+  EXPECT_EQ(out.substickX, pad.substickX);
+  EXPECT_EQ(out.button, pad.button);
+  // A masked from the game (a ready player's press that stops the search first): still centred,
+  // it is the player's A that freezes the hand.
+  Mask masked = mask;
+  masked.buttons = PAD_BUTTON_A;
+  out = Apply(pad, masked);
+  EXPECT_EQ(out.button, PAD_BUTTON_Y);
+  EXPECT_EQ(out.stickX, int{GCPadStatus::MAIN_STICK_CENTER_X});
+  // A up: the stick moves the hand as ever.
+  pad.button = PAD_BUTTON_Y;
+  out = Apply(pad, mask);
+  EXPECT_EQ(out.stickX, pad.stickX);
+  EXPECT_EQ(out.stickY, pad.stickY);
+  // A pressed by the rule (the frame after that stop): centred too.
+  Mask press = mask;
+  press.press = PAD_BUTTON_A;
+  out = Apply(pad, press);
+  EXPECT_EQ(out.button, PAD_BUTTON_A | PAD_BUTTON_Y);
+  EXPECT_EQ(out.analogA, 0xFF);
+  EXPECT_EQ(out.stickX, int{GCPadStatus::MAIN_STICK_CENTER_X});
+  EXPECT_EQ(out.stickY, int{GCPadStatus::MAIN_STICK_CENTER_Y});
+  // An unplugged port stays as it is.
+  GCPadStatus none{};
+  none.isConnected = false;
+  none.button = PAD_BUTTON_A;
+  none.stickX = 200;
+  EXPECT_EQ(Apply(none, mask).stickX, 200);
+}
+
 TEST(OrcaInputGate, AllIsANeutralConnectedPadButOriginBitsStay)
 {
   const GCPadStatus out = Apply(Busy(), ALL);

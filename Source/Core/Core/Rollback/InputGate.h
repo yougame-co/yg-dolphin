@@ -60,10 +60,16 @@ struct Mask
   bool steer = false;
   u8 steer_x = GCPadStatus::MAIN_STICK_CENTER_X;
   u8 steer_y = GCPadStatus::MAIN_STICK_CENTER_Y;
+  // The main stick reads centred while the player holds A (the raw pad's A, masked or not) or the
+  // rule presses it: the hand of the queue's own character select stays on BACK through the press
+  // that takes it (UX/OnlineRules.h CssBackTakesA), since A acts where the frame's stick has just
+  // moved the hand. Applied last.
+  bool a_centres_stick = false;
 
   bool Empty() const
   {
-    return buttons == 0 && !main_stick && !c_stick && press == 0 && a_as == 0 && !steer;
+    return buttons == 0 && !main_stick && !c_stick && press == 0 && a_as == 0 && !steer &&
+           !a_centres_stick;
   }
   bool operator==(const Mask&) const = default;
 };
