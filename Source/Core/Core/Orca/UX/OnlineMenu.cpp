@@ -18,6 +18,7 @@
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Status.h"
+#include "Core/Orca/UX/CssTitle.h"
 #include "Core/Orca/UX/MatchBlock.h"
 #include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/Probe.h"
@@ -187,6 +188,8 @@ namespace
 {
 // The frame hook's last first-run reading (CPU thread: the hook and the session's boundary).
 bool s_on_menus = false;
+bool s_between_scenes = false;
+std::optional<OnlinePick> s_css_pick;
 std::optional<OnlinePick> s_lobby_pick;
 }  // namespace
 
@@ -230,6 +233,24 @@ bool OnTheMenus()
   return s_on_menus;
 }
 
+std::optional<OnlinePick> QueuePickForCssCode(u32 code)
+{
+  const std::optional<OnlinePick> pick = PickForExitCode(code);
+  if (pick == OnlinePick::Friends)
+    return std::nullopt;
+  return pick;
+}
+
+std::optional<OnlinePick> CssPick()
+{
+  return s_css_pick;
+}
+
+bool PickStands(OnlinePick pick)
+{
+  return s_between_scenes || s_css_pick == pick;
+}
+
 void ReadOnlineMenu(const Core::CPUThreadGuard& guard, bool resimulating, bool alone)
 {
   // Whatever the session didn't take at the boundary it was seen is stale.
@@ -239,7 +260,11 @@ void ReadOnlineMenu(const Core::CPUThreadGuard& guard, bool resimulating, bool a
   static OnlineMenuReader s_reader;
   GuardMemory memory(guard);
   const MenuState state = ReadMenuState(memory);
-  s_on_menus = MenusScene(ReadSceneName(memory), ReadSequenceName(memory));
+  const std::string scene = ReadSceneName(memory);
+  s_on_menus = MenusScene(scene, ReadSequenceName(memory));
+  s_between_scenes = state.where == MenuState::Where::Leaving;
+  s_css_pick = scene == "scSelctCharacter" ? QueuePickForCssCode(CssTitle::ReadPick(memory)) :
+                                             std::nullopt;
   if (const auto pick = s_reader.Boundary(state, false, alone, Orca::Events::Resyncs()))
   {
     NOTICE_LOG_FMT(ROLLBACK, "Online menu: exit code {}: orca menu {}", state.exit_code,

@@ -115,25 +115,60 @@ bool MayComeHome(const HomeInputs& in);
 
 // What the session does with a With Anyone pick (Casual or Ranked) the frame hook saw while the
 // game wasn't alone (UX/OnlineMenu.h TakeLobbyPick), at the same boundary. Luis, 2026-10-05: Casual
-// and Ranked drop the friends lobby for a 2-player room the matchmaker fills.
+// and Ranked drop the friends lobby for a 2-player room the matchmaker fills. In a shared menu
+// either player's press makes the pick, and every game sees it at the same frame.
 enum class LobbyPickStep
 {
-  // Nothing: a joiner's game is its host's (the host leaves, and this game hears host-left); a
-  // queue room's menus are locked; without the app's "host" nothing would search ("... local"), so
-  // the friends' game stays theirs, as before.
+  // Nothing: a joiner's game is its host's (the host leaves, and this game hears host-left, then
+  // comes home on that pick's character select and announces it there: AnnounceHomePick); a queue
+  // room's menus are locked; without the app's "host" nothing would search ("... local"), so the
+  // friends' game stays theirs, as before.
   Ignore,
-  // The game is alone by now (the app's leave or join went first): just announce the pick.
+  // Nobody to leave by now (the app's leave or join went first, or the last friend has gone and the
+  // session only idles out its last frames): just announce the pick.
   Announce,
-  // A host with friends in its room or on their way: it leaves the room (its friends play on
+  // A host with friends in its game or on their way: it leaves the room (its friends play on
   // without it: `orca state host-left`), prints `orca state left lobby`, and announces the pick.
   Leave,
 };
-// `joining`: a joiner's game; `local_seat`: the port it plays (a former joiner hosts nobody);
-// `queue_room`: in a room the queue made; `host_cap`: the app's "host"; `friends`: a session, or a
-// friend waiting for its keyframe, plugging in or seated (a keyframe kept for an invite nobody took
-// yet is no player: that pick is announced, and the keyframe dropped).
-LobbyPickStep DecideLobbyPick(bool joining, int local_seat, bool queue_room, bool host_cap,
-                              bool friends);
+struct LobbyPickInputs
+{
+  // A joiner's game; the port it plays (a former joiner hosts nobody); in a room the queue made;
+  // the app's "host".
+  bool joining = false;
+  int local_seat = 0;
+  bool queue_room = false;
+  bool host_cap = false;
+  // A session, and whether it only idles out its last frames with nobody else in it or on the way
+  // (Session::Idle: the last friend went, IDLE_GRACE_FRAMES).
+  bool session = false;
+  bool session_idle = false;
+  // A friend waiting for its keyframe, plugging in or seated.
+  bool drop_in_friends = false;
+  // A friend's arrival the room has and the host hasn't taken yet (Online::ArrivalPending): left
+  // in, it would be taken into a game under the queue's header and refuse it (`orca error
+  // mismatch`).
+  bool arrival_pending = false;
+  // Kept for an invite nobody has taken yet: a stored keyframe, one being made, or one wanted (a
+  // prepare-join). No player.
+  bool keyframe_kept = false;
+};
+struct LobbyPickPlan
+{
+  LobbyPickStep step = LobbyPickStep::Ignore;
+  // An announced pick drops what drop-in kept for an invite (made under the header before the
+  // pick): a friend who comes later gets a keyframe of the queue's own character select. Never
+  // with a session still running.
+  bool drop_keyframe = false;
+};
+LobbyPickPlan DecideLobbyPick(const LobbyPickInputs& in);
+
+// A former joiner coming home (ComeHome) on a character select a With Anyone pick opened (UX/
+// OnlineMenu.h CssPick: its host left the friends lobby at that pick, whoever pressed it): whether
+// it announces that pick there (AnnounceOnlinePick: the queue's own character select, so its Start
+// readies it as it does its host's). Only with the app's "host" (without it nothing would search),
+// and never over a queue or search already under way.
+bool AnnounceHomePick(bool css_pick, bool host_cap, bool queue_or_search);
 
 // True while this process plays online (solo in its room, or with friends).
 bool Active();

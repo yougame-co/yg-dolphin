@@ -32,10 +32,14 @@
 #    lobby): the same pair on With Friends' character select; the host backs out and picks With
 #    Anyone > Ranked with the friend still plugged in: "orca state left lobby", then "orca menu online
 #    ranked"; the friend hears "host-left" and goes home on the character select the pick took both
-#    games to; the host picks and presses Start: "orca queue ready ranked", on the queue's own
-#    character select (its header). The friend backs out (With Anyone, Ranked selected), picks Ranked
-#    again, a character, Start: "orca queue ready ranked" too.
-#   --only rooms|page|home|lobby[,...]: those steps alone (rooms: 1-4, page: 5, home: 6, lobby: 7).
+#    games to, where it takes the pick too ("orca menu online ranked" after its "host-left"). Neither
+#    backs out: each picks a character and presses Start on the select it landed on, and both say
+#    "orca queue ready ranked", each on the queue's own character select (its header).
+# 8. The same, but the FRIEND presses With Anyone > Ranked in the shared menu (either player's press
+#    makes the pick there): the host, who pressed nothing, leaves for the queue all the same, and the
+#    friend comes home on its RANKED select, armed: both ready without backing out.
+#   --only rooms|page|home|lobby|guest[,...]: those steps alone (rooms: 1-4, page: 5, home: 6,
+#   lobby: 7, guest: 8).
 # Each step waits for the lines it expects and fails on a timeout. Two Orca processes at most.
 import json
 import os
@@ -52,7 +56,7 @@ import time
 import urllib.request
 
 if len(sys.argv) < 3:
-    sys.exit("usage: dropin-rooms.py <nogui> <disc> [--only rooms,page,home,lobby]")
+    sys.exit("usage: dropin-rooms.py <nogui> <disc> [--only rooms,page,home,lobby,guest]")
 BIN, DISC = sys.argv[1], sys.argv[2]
 HERE = os.path.dirname(os.path.abspath(__file__))
 INPUT = os.path.join(HERE, "inputs", "bf-mario-link-results.txt")
@@ -543,38 +547,57 @@ try:
             o.stop()
         orcas.clear()
 
-    if run_step("lobby"):
-        # 7. The host picks With Anyone > Ranked with the friend still in its game.
-        host, host_port, host_log, friend, friend_port, friend_log, room = pair_on_with_friends("lob")
+    def friend_took_the_pick(f, since, queue_name):
+        """The friend's `orca menu online <queue>` came after its "host-left", never before (the
+        reader never announces a pick made with friends in the game), and from its way home."""
+        seen = f.seen[since:]
+        menu = f"orca menu online {queue_name}"
+        f.expect(menu, 10)
+        seen = f.seen[since:]
+        left = next((i for i, l in enumerate(seen) if l.startswith("orca state host-left")), None)
+        first = next(i for i, l in enumerate(seen) if l.startswith("orca menu"))
+        if left is None or first < left or not seen[first].startswith(menu):
+            fail(f"{f.name}'s menu line isn't its way home's: {seen}")
+
+    def lobby_pick(tag, presser):
+        """Steps 7 and 8: the pair on With Friends' character select, the host backs out (the shared
+        game to the menus), and `presser` ("host" or "friend") picks With Anyone > Ranked."""
+        host, host_port, host_log, friend, friend_port, friend_log, room = pair_on_with_friends(tag)
         back_to_menu(host, host_port)
         mark = host.log_size()
         since, after = len(friend.seen), friend.log_size()
-        walk(host_port, TO_RANKED)
+        walk(host_port if presser == "host" else friend_port, TO_RANKED)
         host.expect("orca state left lobby", 20)
         host.expect("orca menu online ranked", 5)
         friend.expect("orca state host-left", 15)
         host.wait_log(r"Online menu: ranked picked with friends in room", 1, after=mark)
+        friend.home_or_no_room(15, after, since)
+        came_home(friend, friend_log, room, since, after)
+        friend_took_the_pick(friend, since, "ranked")
+        friend.wait_log(r"Drop-in: home on the ranked character select", 1, after=after)
+        # Neither backs out: a character and Start on the select each landed on.
         pick_and_start(host, host_port, "ranked", mark)
         host.wait_log(r"Online rules: header ranked .*the queue's own character select", 1,
                       after=mark)
-        if any(l.startswith("orca menu") for l in friend.seen[since:]):
-            fail(f"the friend printed a menu line for its host's pick: {friend.seen[since:]}")
-        friend.home_or_no_room(15, after, since)
-        came_home(friend, friend_log, room, since, after)
+        pick_and_start(friend, friend_port, "ranked", after)
+        friend.wait_log(r"Online rules: header ranked .*the queue's own character select", 1,
+                        after=after)
         # The host's own new room, with nobody else in it.
         wait_mirror(host_log, lambda r: r["code"] != room and r["players"], 20,
                     "the host's page was never shown its new room")
-        # The friend backs out (With Anyone, Ranked selected) and picks Ranked itself.
-        back_to_menu(friend, friend_port)
-        fmark = friend.log_size()
-        walk(friend_port, ["A"])
-        friend.expect("orca menu online ranked", 15)
-        pick_and_start(friend, friend_port, "ranked", fmark)
         for o in orcas:
             o.alive()
         for o in orcas:
             o.stop()
         orcas.clear()
+
+    if run_step("lobby"):
+        # 7. The host picks With Anyone > Ranked with the friend still in its game.
+        lobby_pick("lob", "host")
+
+    if run_step("guest"):
+        # 8. The friend picks it.
+        lobby_pick("gst", "friend")
 finally:
     for o in orcas:
         if o.proc.poll() is None:

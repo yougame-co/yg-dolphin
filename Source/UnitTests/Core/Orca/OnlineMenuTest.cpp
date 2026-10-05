@@ -1675,23 +1675,134 @@ TEST(OrcaOnlineMenuLobby, AFormerJoinerComesHomeOnTheMenusAlone)
 TEST(OrcaOnlineMenuLobby, CasualOrRankedWithFriendsLeavesTheFriendsLobby)
 {
   using Rollback::OnlineMatch::DecideLobbyPick;
+  using Rollback::OnlineMatch::LobbyPickInputs;
   using Rollback::OnlineMatch::LobbyPickStep;
-  // DecideLobbyPick(joining, local_seat, queue_room, host_cap, friends)
-  // A host with friends in its room (or on their way), the page's queue on: it leaves for it.
-  EXPECT_EQ(DecideLobbyPick(false, 0, false, true, true), LobbyPickStep::Leave);
-  // A joiner: the pick is its host's game's; the host leaves and this game hears host-left.
-  EXPECT_EQ(DecideLobbyPick(true, 1, false, true, true), LobbyPickStep::Ignore);
-  EXPECT_EQ(DecideLobbyPick(true, 1, false, true, false), LobbyPickStep::Ignore);
+  // A host (port 1) in a session with a friend in it, the page's queue on.
+  LobbyPickInputs host;
+  host.host_cap = true;
+  host.session = true;
+  const auto step = [](const LobbyPickInputs& in) { return DecideLobbyPick(in).step; };
+  const auto with = [&host](auto change) {
+    LobbyPickInputs other = host;
+    change(other);
+    return other;
+  };
+  // Friends in its game (or on their way): it leaves for the queue.
+  EXPECT_EQ(step(host), LobbyPickStep::Leave);
+  EXPECT_FALSE(DecideLobbyPick(host).drop_keyframe);
+  // A friend waiting for its keyframe, plugging in or seated with no session yet: on their way.
+  EXPECT_EQ(step(with([](LobbyPickInputs& i) {
+              i.session = false;
+              i.drop_in_friends = true;
+            })),
+            LobbyPickStep::Leave);
+  // A friend's arrival the room has and the host hasn't taken yet: a friend too (left in, it
+  // would be taken into the queue's game and refuse it), and so in an idling session.
+  EXPECT_EQ(step(with([](LobbyPickInputs& i) {
+              i.session = false;
+              i.arrival_pending = true;
+            })),
+            LobbyPickStep::Leave);
+  EXPECT_EQ(step(with([](LobbyPickInputs& i) {
+              i.session_idle = true;
+              i.arrival_pending = true;
+            })),
+            LobbyPickStep::Leave);
+  // A joiner: the pick is its host's game's (the host leaves, this game hears host-left and comes
+  // home on that pick's character select: AnnounceHomePick).
+  EXPECT_EQ(step(with([](LobbyPickInputs& i) {
+              i.joining = true;
+              i.local_seat = 1;
+            })),
+            LobbyPickStep::Ignore);
+  EXPECT_EQ(step(with([](LobbyPickInputs& i) {
+              i.joining = true;
+              i.local_seat = 1;
+              i.session = false;
+            })),
+            LobbyPickStep::Ignore);
   // A queue room's menus are locked: never.
-  EXPECT_EQ(DecideLobbyPick(false, 0, true, true, true), LobbyPickStep::Ignore);
+  EXPECT_EQ(step(with([](LobbyPickInputs& i) { i.queue_room = true; })), LobbyPickStep::Ignore);
+  EXPECT_EQ(step(with([](LobbyPickInputs& i) {
+              i.queue_room = true;
+              i.session = false;
+            })),
+            LobbyPickStep::Ignore);
   // No page queue ("... local": nothing would search): the friends' game stays theirs.
-  EXPECT_EQ(DecideLobbyPick(false, 0, false, false, true), LobbyPickStep::Ignore);
-  // Nobody to leave by now (the app's own leave went first): announced as an alone pick.
-  EXPECT_EQ(DecideLobbyPick(false, 0, false, true, false), LobbyPickStep::Announce);
-  EXPECT_EQ(DecideLobbyPick(false, 0, false, false, false), LobbyPickStep::Announce);
-  EXPECT_EQ(DecideLobbyPick(false, 1, false, true, false), LobbyPickStep::Announce);
+  EXPECT_EQ(step(with([](LobbyPickInputs& i) { i.host_cap = false; })), LobbyPickStep::Ignore);
   // A former joiner hosts nobody.
-  EXPECT_EQ(DecideLobbyPick(false, 1, false, true, true), LobbyPickStep::Ignore);
+  EXPECT_EQ(step(with([](LobbyPickInputs& i) { i.local_seat = 1; })), LobbyPickStep::Ignore);
+}
+
+TEST(OrcaOnlineMenuLobby, APickWithNobodyToLeaveIsAnnounced)
+{
+  using Rollback::OnlineMatch::DecideLobbyPick;
+  using Rollback::OnlineMatch::LobbyPickInputs;
+  using Rollback::OnlineMatch::LobbyPickStep;
+  // Nobody to leave by now (the app's own leave went first): announced as an alone pick, with the
+  // page's queue or without it, on any port.
+  LobbyPickInputs in;
+  in.host_cap = true;
+  EXPECT_EQ(DecideLobbyPick(in).step, LobbyPickStep::Announce);
+  in.host_cap = false;
+  EXPECT_EQ(DecideLobbyPick(in).step, LobbyPickStep::Announce);
+  in.local_seat = 1;
+  EXPECT_EQ(DecideLobbyPick(in).step, LobbyPickStep::Announce);
+  // The last friend has gone and the session only idles out its last frames: nobody is left
+  // behind, so no "left lobby" and no new room; the session ends a few frames later as ever.
+  in = {};
+  in.host_cap = true;
+  in.session = true;
+  in.session_idle = true;
+  EXPECT_EQ(DecideLobbyPick(in).step, LobbyPickStep::Announce);
+  // Never drops a keyframe with the session still running.
+  in.keyframe_kept = true;
+  EXPECT_FALSE(DecideLobbyPick(in).drop_keyframe);
+  // A keyframe kept for an invite nobody took yet (or a prepare-join's) is no player: the pick is
+  // announced and that keyframe (made under the header before the pick) goes.
+  in = {};
+  in.host_cap = true;
+  in.keyframe_kept = true;
+  EXPECT_EQ(DecideLobbyPick(in).step, LobbyPickStep::Announce);
+  EXPECT_TRUE(DecideLobbyPick(in).drop_keyframe);
+  // Nothing kept: nothing to drop. And a pick that is ignored drops nothing.
+  in.keyframe_kept = false;
+  EXPECT_FALSE(DecideLobbyPick(in).drop_keyframe);
+  in.keyframe_kept = true;
+  in.queue_room = true;
+  EXPECT_EQ(DecideLobbyPick(in).step, LobbyPickStep::Ignore);
+  EXPECT_FALSE(DecideLobbyPick(in).drop_keyframe);
+  in.queue_room = false;
+  in.joining = true;
+  EXPECT_FALSE(DecideLobbyPick(in).drop_keyframe);
+  // A host leaving its friends drops everything of drop-in anyway (the room goes).
+  in = {};
+  in.host_cap = true;
+  in.drop_in_friends = true;
+  in.keyframe_kept = true;
+  EXPECT_EQ(DecideLobbyPick(in).step, LobbyPickStep::Leave);
+}
+
+TEST(OrcaOnlineMenuLobby, AFriendHomeOnThePicksCharacterSelectTakesThePickToo)
+{
+  using Rollback::OnlineMatch::AnnounceHomePick;
+  // Home on the character select With Anyone > Casual or Ranked opened (its host left the friends
+  // lobby at that pick, whoever pressed it): announced, so Start readies it.
+  EXPECT_TRUE(AnnounceHomePick(true, true, false));
+  // Any other character select (With Friends', a Versus one opened otherwise) or the main menu.
+  EXPECT_FALSE(AnnounceHomePick(false, true, false));
+  // Without the page's queue nothing would search.
+  EXPECT_FALSE(AnnounceHomePick(true, false, false));
+  // A queue or search already under way (the reader announced it, alone by then): never twice.
+  EXPECT_FALSE(AnnounceHomePick(true, true, true));
+  // The pick a character select was opened for: Casual (30) and Ranked (31) only.
+  EXPECT_EQ(QueuePickForCssCode(30), OnlinePick::Casual);
+  EXPECT_EQ(QueuePickForCssCode(31), OnlinePick::Ranked);
+  for (const u32 code : {0u, 24u, 25u, 26u, 27u, 28u, 29u, 32u, 0xCCCCCCCCu})
+  {
+    SCOPED_TRACE(code);
+    EXPECT_FALSE(QueuePickForCssCode(code));
+  }
 }
 
 TEST(OrcaOnlineMenuLobby, AFormerJoinersMoveToPort1NeverTakesTheMenuToWithFriends)

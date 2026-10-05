@@ -338,7 +338,10 @@ host has played.
      results screen, the moment between two scenes or a single-player mode: `UX/OnlineMenu.h`
      `MenusScene`), with no session, nothing of drop-in under way, the room it was in gone and no
      queue image to put back, it moves to port 1 ("Drop-in: back to a game of its own on the menus")
-     and a room of its own opens a second later, as after a queue room. Before branch `q11-lobby` it
+     and a room of its own opens a second later (`ReopenRoom`, as after a queue room). Home on the
+     character select a With Anyone pick opened (its host left the friends lobby for the queue at
+     that pick: "Online menu", "Casual or Ranked with friends in the game"), it announces that pick
+     too (`orca menu online casual|ranked`), so its Start readies it on its own queue select. Before branch `q11-lobby` it
      stayed on its port with no room: nobody could drop in, and the queue's own character select
      never got its header there (it wants port 1), so With Anyone > Casual or Ranked and Start did
      nothing at all (YouGame's 2026-10-05 "Start did nothing": a friends-room guest whose host
@@ -1992,8 +1995,9 @@ the matched room in "Matchmaking" below):
   (`SoloIdle`), nothing of drop-in waiting for the boundary to take it (a friend's arrival, a
   prepare-join, the app's join or leave: `Online::DropInPending`), and no keyframe stored for an
   invite nobody took yet while it is fresh (30 s: a friend who arrives then replays every frame
-  since). A pick made while friends play, or while one is about to land, is theirs too and is never
-  announced, not even once the game is alone again. Going solo after a session, or loading a
+  since). A pick made while friends play, or while one is about to land, is theirs too: the reader
+  never announces it, not even once the game is alone again (Casual and Ranked go to the session at
+  that boundary instead: "Casual or Ranked with friends in the game" below). Going solo after a session, or loading a
   friend's keyframe, starts the reader over (`Events::NoteResync`), so nothing stale is ever
   printed. It only reads memory.
 - **No network, proven per run**: `Tools/orca/online-menu.py` drives every page in both games and
@@ -2007,26 +2011,46 @@ the matched room in "Matchmaking" below):
 | `orca menu online friends` | With Friends: the local Versus character select, where friends drop in. |
 | `orca menu cancel` | Searching (or matched as the host, with nobody plugged in yet), the player backed out of the character select to the main menu, alone: the search is over. Once. |
 
-The lines print once per pick, only while the player is alone, and never carry state.
+The reader prints each line once per pick, only while the player is alone, and never carries
+state. A Casual or Ranked pick made with friends in the game is the session's to announce (below).
 
 **Casual or Ranked with friends in the game** (Luis, 2026-10-05: "Ranked/Casual under With Anyone =
 drop the friends lobby and join a 2-player room the matchmaker fills"; `OnlineMatch.cpp`
-`TakeLobbyPickNow`, `DecideLobbyPick`; branch `q11-lobby`). Before it a pick made while friends
-played was never announced, so With Anyone > Casual or Ranked from a shared lobby did nothing and
-said nothing. Now the reader hands such a pick (never With Friends) to the session at the boundary
-that saw it, after the app's commands (`TakeLobbyPick`); a host with friends in its game or waiting
-for their keyframe, with the app's `host`, leaves its room as the app's Leave does (its friends play on without it
-and hear `orca state host-left`, then go home: "Drop-in"), prints `orca state left lobby` and shows
-"You left your friends to play ranked", then announces the pick (`orca menu online casual|ranked`):
-from the next boundary it plays alone on port 1, so the queue's own character select gets its header
-and Start readies (`orca queue ready`). A joiner lets it go (the game is its host's); without the
-app's `host` nothing would search, so the friends' game stays theirs, as before. Either player's
-press picks in a shared menu, so a friend's pick of Ranked takes the host to the queue too. Local:
-the session ends at this boundary, so nothing of it reaches the friends' games but the room's leave
-(no compatibility change). A pick that was not alone only for a keyframe kept for an invite nobody
-took yet (or a prepare-join) is announced in place, the keyframe dropped (a friend who comes later
-gets one under the queue's header); one seen at a boundary the commands can't take waits for the
-next.
+`TakeLobbyPickNow`, `DecideLobbyPick`, `ComeHome`, `AnnounceHomePick`; branch `q11-lobby`). Before it
+a pick made while friends played was never announced, so With Anyone > Casual or Ranked from a
+shared lobby did nothing and said nothing. Now the reader hands such a pick (never With Friends) to
+the session at the boundary that saw it, after the app's commands (`TakeLobbyPick`). Either
+player's press picks in a shared menu, and every game sees it at the same frame and goes to the
+same Versus character select (titled CASUAL or RANKED once alone: "The character select's title").
+- **The host** (port 1, the app's `host`), with friends in its game, waiting for their keyframe, or
+  arriving in the room and not taken in yet, leaves its room as the app's Leave does, prints `orca
+  state left lobby` and shows "Left the lobby for Ranked" (or Casual: said as what happened, since
+  the friend may have pressed it), then announces the pick (`orca menu online casual|ranked`): from
+  the next boundary it plays alone on port 1, so the queue's own character select gets its header
+  and Start readies (`orca queue ready`). An arrival not taken in counts as a friend: left in, it
+  would be taken into a game under the queue's header and refuse it (`orca error mismatch`); now it
+  hears the host left.
+- **Each friend** lets the pick go at that boundary (the game is its host's), hears `orca state
+  host-left`, and comes home on that character select ("Drop-in"): there it reads the pick the
+  select was opened for (the sqVsMelee word `CssTitle::ReadPick` reads, 30 or 31:
+  `UX/OnlineMenu.h` `CssPick`) and announces it too, so its Start readies it on its own queue
+  select without backing out ("Drop-in: home on the ranked character select"). Before this it came
+  home on a RANKED select where nothing was armed, and Start did nothing: the same dead end as
+  YouGame's "Start did nothing", for whoever had not been host.
+- **Nobody to leave by now** (the app's own leave went first, the last friend has gone and the
+  session only idles out its last frames, or only a keyframe is kept for an invite nobody took yet
+  or a prepare-join): announced in place, no `left lobby`; a kept keyframe is dropped (a friend who
+  comes later gets one under the queue's header), never while a session still runs.
+- Without the app's `host` nothing would search, so the friends' game stays theirs, as before; a
+  queue room's menus are locked.
+- A pick seen at a boundary the commands can't take (a session's frame not the next one) waits for
+  the next, while it still stands (the frame hook last read the way out of the main menu, or the
+  character select that pick opened: `PickStands`); once the game has gone on from it (back on the
+  main menu, a stage select, a fight) it is dropped, so nobody leaves their friends for a pick that
+  is over.
+
+Local: the session ends at the pick's boundary, so nothing of it reaches the friends' games but the
+room's leave (no compatibility change).
 
 Checked 2026-10-05 (branch `q11-lobby` on `rel-0.3.22`, M4, headless): the `Orca*` unit tests (453
 pass, 20 skipped: the live and network ones; new

@@ -27,14 +27,21 @@ class CPUThreadGuard;
 // casual local", ...), so the page can say what comes next; nothing here changes the game.
 //
 // The reader follows the menu at every frame boundary that runs a frame for the first time (never a
-// re-run: what a rollback undoes was never decided) and announces a pick only when it happens while
-// this game plays alone (Events' `alone`): a pick while friends play is theirs too, so is one made
-// while a friend is about to land (an arrival or a prepare-join not taken yet, or an invite's
-// stored keyframe that a friend who arrives would replay from), and one made while the app's own
-// join or leave waits, or seen while a friend catches up or a session runs on guessed inputs, is
-// not news once the game is alone again. Whenever the game stops following on from what the reader
-// saw (Events NoteResync: back to solo after a session, a friend's keyframe loaded) it starts over
-// from the next boundary without announcing anything, so nothing stale is ever printed.
+// re-run: what a rollback undoes was never decided) and announces a pick itself only when it
+// happens while this game plays alone (Events' `alone`). A pick made while the game isn't alone
+// (friends play, or one is about to land: an arrival or a prepare-join not taken yet, an invite's
+// stored keyframe that a friend who arrives would replay from; or the app's own join or leave
+// waits) is never printed later by the reader, now or once the game is alone again. Casual or
+// Ranked made so goes to the session once, at the boundary that saw it (TakeLobbyPick below, Luis
+// 2026-10-05: they drop the friends lobby): a host leaves its friends and announces it
+// (AnnounceOnlinePick), a joiner lets it go, and its host's leaving brings it home on the character
+// select that pick took both games to, where it announces the pick that select holds (CssPick).
+// Acting on a first run's pick while the session's inputs may still be guessed is safe there: the
+// session ends at that boundary, so what the host's solo game does next follows its own view of the
+// game. With Friends while friends play stays theirs. Whenever the game stops following on from
+// what the reader saw (Events NoteResync: back to solo after a session, a friend's keyframe loaded)
+// it starts over from the next boundary without announcing anything, so nothing stale is ever
+// printed.
 //
 // Found under the harness (ORCA_UX_PROBE watches, Brawl rev 2 and Project+ alike, which run the
 // same executable and scene code): the scene manager (0x805A0060) +4 -> the scene, whose +0 is its
@@ -146,6 +153,22 @@ bool MenusScene(std::string_view scene, std::string_view sequence);
 // MenusScene as the frame hook read it at this boundary (first runs; false before the first, and
 // for any game but Brawl rev 2 and Project+). CPU thread.
 bool OnTheMenus();
+
+// The With Anyone pick (Casual or Ranked) the character select the frame hook read at this boundary
+// was opened for (the main menu's exit code Orca keeps in the running sqVsMelee,
+// CssTitle::ReadPick: 30, 31), nullopt anywhere else (another scene, With Friends' character
+// select, a Versus one opened otherwise). Where a former joiner that comes home there picks up that
+// pick (Rollback/ OnlineMatch.cpp ComeHome). First runs, as OnTheMenus. CPU thread.
+std::optional<OnlinePick> CssPick();
+// Whether a Casual or Ranked pick the session couldn't take at the boundary that saw it (Rollback/
+// OnlineMatch.cpp TakeLobbyPickNow) still stands where the frame hook last read the game: on the
+// way out of the main menu (between two scenes) or on the character select that pick opened
+// (CssPick). Anywhere else (back on the main menu, a stage select, a fight) it is stale. CPU
+// thread.
+bool PickStands(OnlinePick pick);
+// The pick a character select's kept exit code stands for when it is Casual or Ranked (30, 31).
+// Pure.
+std::optional<OnlinePick> QueuePickForCssCode(u32 code);
 
 // The frame hook's part: reads the menu and prints "orca menu ..." (Orca::Status::Menu). Reads
 // emulated memory only.
