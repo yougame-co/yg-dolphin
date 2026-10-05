@@ -162,12 +162,12 @@ bool OnTheMenus();
 std::optional<OnlinePick> CssPick();
 // Whether a Casual or Ranked pick the session couldn't take at the boundary that saw it (Rollback/
 // OnlineMatch.cpp TakeLobbyPickNow) still stands where the frame hook last read the game: on the
-// way out of the main menu (between two scenes) or on the character select that pick opened
-// (CssPick). Anywhere else (back on the main menu, a stage select, a fight) it is stale. CPU
-// thread.
+// way out of the main menu with that pick's exit code (between two scenes), or on the character
+// select that pick opened (CssPick). Anywhere else (back on the main menu, a stage select, a fight)
+// it is stale. CPU thread.
 bool PickStands(OnlinePick pick);
-// The pick a character select's kept exit code stands for when it is Casual or Ranked (30, 31).
-// Pure.
+// The pick a main menu exit code (the one the menu leaves with, or the one a character select keeps)
+// stands for when it is Casual or Ranked (30, 31). Pure.
 std::optional<OnlinePick> QueuePickForCssCode(u32 code);
 
 // The frame hook's part: reads the menu and prints "orca menu ..." (Orca::Status::Menu). Reads

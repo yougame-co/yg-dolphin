@@ -188,7 +188,8 @@ namespace
 {
 // The frame hook's last first-run reading (CPU thread: the hook and the session's boundary).
 bool s_on_menus = false;
-bool s_between_scenes = false;
+// The main menu's exit to Casual or Ranked, while the game is between that menu and its next scene.
+std::optional<OnlinePick> s_leaving_pick;
 std::optional<OnlinePick> s_css_pick;
 std::optional<OnlinePick> s_lobby_pick;
 }  // namespace
@@ -248,7 +249,7 @@ std::optional<OnlinePick> CssPick()
 
 bool PickStands(OnlinePick pick)
 {
-  return s_between_scenes || s_css_pick == pick;
+  return s_leaving_pick == pick || s_css_pick == pick;
 }
 
 void ReadOnlineMenu(const Core::CPUThreadGuard& guard, bool resimulating, bool alone)
@@ -262,7 +263,9 @@ void ReadOnlineMenu(const Core::CPUThreadGuard& guard, bool resimulating, bool a
   const MenuState state = ReadMenuState(memory);
   const std::string scene = ReadSceneName(memory);
   s_on_menus = MenusScene(scene, ReadSequenceName(memory));
-  s_between_scenes = state.where == MenuState::Where::Leaving;
+  s_leaving_pick = state.where == MenuState::Where::Leaving ?
+                       QueuePickForCssCode(state.exit_code) :
+                       std::nullopt;
   s_css_pick = scene == "scSelctCharacter" ? QueuePickForCssCode(CssTitle::ReadPick(memory)) :
                                              std::nullopt;
   if (const auto pick = s_reader.Boundary(state, false, alone, Orca::Events::Resyncs()))
