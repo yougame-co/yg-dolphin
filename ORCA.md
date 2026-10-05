@@ -3592,6 +3592,12 @@ running sqVsMelee, the slot and its checks, the marks' values, idempotence and o
 written) and the texture pack's (`OrcaOnlineMenuTextures*`, now with paletted names); 299 `Orca*`
 tests pass.
 
+**Rechecked** 2026-10-05 at `ux=18` (branch `q10-menus`, headless): With Friends now goes straight
+to its character select and B out of it lands on ONLINE, so both scripts lost the old page's FIGHT!
+and one B. Brawl: FRIENDS `0x0EEB` (select from frame 1657), CASUAL `0x0EED` (2212), RANKED
+`0x0EEC` (2667), nothing written at Group > Brawl (3272). Project+: FRIENDS `0x0003` (424), CASUAL
+`0x0001` (980), RANKED `0x0002` (1435), nothing written at VERSUS (2040).
+
 Not yet: the header case (a queue room's) is proven by the unit tests only, not under the harness
 (`ORCA_TEST_QUEUE` locks the way back out of the walk); team mode's TEAM BATTLE frame (3.2) is never
 marked (online rooms don't use teams); a Project+ update that redraws VERSUS changes its hash, and the

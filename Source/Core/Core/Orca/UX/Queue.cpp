@@ -470,14 +470,16 @@ Masks Gate(const View& v, const State& s)
         BUTTON_START | BUTTON_Z | ((s.ready & 1) || (s.flags & FLAG_SWALLOW_B) ? BUTTON_B : 0);
     // A on BACK (Rules::CssBackTakesA passes a new press there): while ready it only stops the
     // search (Advance), then the frame after it the game gets it (FLAG_BACK_A), so the page hears
-    // `orca queue unready` before the game leaves. The stick stays centred while A is down, so the
-    // hand is still on BACK for that frame.
+    // `orca queue unready` before the game leaves. The stick stays centred while a new A is down,
+    // so the hand is still on BACK for that frame; an A already held when the hand got there
+    // (raw, the frame that just ran) leaves the stick alone, so the hand can move on.
     if (Rules::CssHandOnBack(v.ports[0].hand_target, v.ports[0].hand_button))
     {
       if (s.ready & 1)
       {
         masks[0].buttons |= PAD_BUTTON_A;
-        masks[0].a_centres_stick = true;
+        if (!(v.raw[0] & PAD_BUTTON_A))
+          masks[0].a_centres_stick = true;
       }
       if (s.flags & FLAG_BACK_A)
       {

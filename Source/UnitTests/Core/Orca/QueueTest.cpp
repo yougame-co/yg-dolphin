@@ -298,6 +298,14 @@ TEST(OrcaQueue, AOnBackWhileSearchingUnreadiesThenBacksOut)
   EXPECT_TRUE(m[0].buttons & A);
   EXPECT_TRUE(m[0].a_centres_stick);
   EXPECT_EQ(m[0].press, 0);
+  // An A already held when the hand slid onto BACK: still kept from the game, but the stick is
+  // left alone, so the hand can move on.
+  View slid = on_back(Solo());
+  slid.raw = {A, 0};
+  slid.raw_prev = {A, 0};
+  m = Gate(slid, s);
+  EXPECT_TRUE(m[0].buttons & A);
+  EXPECT_FALSE(m[0].a_centres_stick);
   // The press: not ready, and the next frame presses A for the game (idempotent: Step checks the
   // boundary run again on its own result).
   s = Step(Press(on_back(Solo()), A), s, 801);
