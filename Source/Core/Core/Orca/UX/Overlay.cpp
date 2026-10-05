@@ -361,6 +361,16 @@ LinkView DemoLink(double now)
     s_overlay.OnPorts(1, {{0, "luis", false}, {1, "ada", true}}, now);
   }
   const double t = std::fmod(now - s_demo_start, 12000);
+  // A toast and two chat lines each round, the second long enough to wrap.
+  static int s_chat_round = -1;
+  const int round = static_cast<int>((now - s_demo_start) / 12000);
+  if (round != s_chat_round && t >= 1500)
+  {
+    s_chat_round = round;
+    s_overlay.AddToast("ada joined on port 2", now);
+    s_overlay.AddChat("ada", "gl hf!", now);
+    s_overlay.AddChat("ada", "one more after this? I want a rematch on Battlefield", now);
+  }
   LinkView v;
   v.online = true;
   v.delay = 2;
@@ -821,8 +831,7 @@ void Draw()
                                          s_perf.load(std::memory_order_relaxed));
   // The set's end and the opponent's disconnect (SetEnd.h): its notice says more than "Waiting
   // for <name>…", which goes meanwhile.
-  SetEnd::DemoFrame(now);
-  const SetEnd::View set_end = SetEnd::Current().At(now);
+  const SetEnd::View set_end = SetEnd::Current().At(SetEnd::DemoFrame(now));
   if (set_end.hides_waiting)
     f.waiting.clear();
   // The matchmaking search (UX/OnlineMenu.h), while the player waits on the character select; the

@@ -18,6 +18,7 @@
 #include "Common/Logging/Log.h"
 #include "Core/Orca/UX/Probe.h"
 #include "Core/Orca/UX/Widgets.h"
+#include "Core/Rollback/Harness.h"
 
 namespace Orca::UX::SetEnd
 {
@@ -787,14 +788,26 @@ void Draw(ImDrawList* dl, float unit, float pic_x, float pic_y, float pic_w, flo
 
 // ---- The demo (tests only) ----
 
-void DemoFrame(double now)
+double DemoFrame(double now)
 {
   static const std::string s_demo = [] {
     const char* v = std::getenv("ORCA_UX_SETEND_DEMO");
     return v && TestKnobsAllowed() ? std::string(v) : std::string();
   }();
+  static const int s_demo_at = [] {
+    const char* v = std::getenv("ORCA_UX_SETEND_DEMO_AT");
+    return v ? std::atoi(v) : -1;
+  }();
   if (s_demo.empty())
-    return;
+    return now;
+  if (s_demo_at >= 0)
+  {
+    // The game's frames as the clock, from the frame asked for.
+    const int frame = Rollback::Harness::ShownFrame();
+    if (frame < s_demo_at)
+      return now;
+    now = 1e6 + (frame - s_demo_at) * (1000.0 / 60.0);
+  }
   static double s_start = -1;
   static int s_step = 0;
   static int s_loop = -1;
@@ -864,5 +877,6 @@ void DemoFrame(double now)
     const float held = t >= 8000 && t < 9500 ? static_cast<float>((t - 8000) / 1500) : 0.0f;
     m.LeaveHint(t >= 500 && t < 15500, alone, held);
   }
+  return now;
 }
 }  // namespace Orca::UX::SetEnd

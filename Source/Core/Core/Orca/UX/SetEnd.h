@@ -285,6 +285,9 @@ void Draw(ImDrawList* dl, float unit, float pic_x, float pic_y, float pic_w, flo
 
 // Tests only (ORCA_UX_SETEND_DEMO=victory|defeat|countdown|casual|left|stay, with test knobs allowed):
 // the model plays that screen through, again every 16 s, from the first overlay frame, for design
-// checks and screenshots. The overlay calls it every frame; nothing without the variable.
-void DemoFrame(double now);
+// checks and screenshots. With ORCA_UX_SETEND_DEMO_AT=<frame> in a harness run it starts at that
+// frame of the game and runs on the game's frames (60 a second) in place of the host's clock, so a
+// screenshot at a given frame always shows the same moment. The overlay calls it every frame and
+// views the model at the time it returns (`now` itself without the variables).
+double DemoFrame(double now);
 }  // namespace Orca::UX::SetEnd

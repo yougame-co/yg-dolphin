@@ -75,4 +75,7 @@ std::optional<GCPadStatus> InputOverride(int port);
 // A session (online or loopback) rolled back to the start of `frame` at the current boundary.
 void RewindTo(int frame);
 void OnFrameBoundary(const Core::CPUThreadGuard& guard);
+// The last first-pass frame a harness run reached (-1: no harness run yet). Any thread: test knobs
+// that pace a design demo by the game's frames read it (SetEnd's ORCA_UX_SETEND_DEMO_AT).
+int ShownFrame();
 }  // namespace Rollback::Harness

@@ -4,6 +4,7 @@
 #include "Core/Rollback/Harness.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cctype>
 #include <chrono>
 #include <cstdio>
@@ -348,6 +349,7 @@ const std::vector<InputRule>& Input()
 // ---- Frame and scene bookkeeping ----
 
 int s_frame = 0;       // the frame being run, or whose end we are at (rewinds on a load)
+std::atomic<int> s_shown_frame{-1};  // ShownFrame's
 int s_rewind_to = -1;  // a session rolled back to the start of this frame at this boundary
 int s_online_stop_at = -1;  // online: the first-pass frame at which emulation stops
 int s_max_frame = -1;  // highest frame reached on a first pass
@@ -1065,6 +1067,11 @@ bool Active()
          !s_jit_census_at.empty();
 }
 
+int ShownFrame()
+{
+  return s_shown_frame.load(std::memory_order_relaxed);
+}
+
 std::optional<GCPadStatus> InputOverride(int port)
 {
   if (Input().empty())
@@ -1178,6 +1185,8 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
 
   const int frame_here = s_frame;
   const bool first_pass_here = frame_here > s_max_frame;  // false while re-running after a load
+  if (first_pass_here)
+    s_shown_frame.store(frame_here, std::memory_order_relaxed);
   // The in-game UX's frame hook, as an online match calls it (OnlineMatch::OnBoundary): before this
   // boundary saves anything, and on re-runs, for the frame about to run. The ports are the test's
   // (ORCA_UX_TEST_NAMES, comma-separated names for ports 1, 2...; else port 1 alone), each with
