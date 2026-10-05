@@ -85,6 +85,8 @@ Online play is drop-in, through a private YouGame room of up to four (`Source/Co
 | `ORCA_TEST_COMMANDS` | Tests only: `1` takes the embed protocol's stdin commands without embedding, `test-drop-room` (the room's connection drops once, as a network failure would), `test-direct off\|on\|in\|out\|rebuild` (direct links drop every datagram, only incoming or outgoing ones, none again, or are built anew; "Direct links") and `test-shot <name>` (a screenshot `ScreenShots/<name>.png` at the next present, a stall's redraws included; with `ORCA_TEST_PRESENT` the overlay is in it). |
 | `ORCA_DIRECT` | `0`: no direct links, the relay only (the hello stops offering them, so the friend's Orca uses the relay too). Default: on. |
 | `ORCA_DIRECT_FORCE` | Tests only: `turn` offers and accepts relayed candidates only (a link through Cloudflare TURN); `srflx` nothing on a host interface. |
+| `ORCA_DIRECT_ICE_LOG` | Tests only: `1` logs every libjuice line (its debug level, no per-second cap) at notice level, each distinct address as `<addrN>`, so the log's timestamps show what the ICE agent sent when ("Wi-Fi"). |
+| `ORCA_DIRECT_STUN`, `ORCA_DIRECT_TURN` | Tests only: `0` leaves the ticket's STUN or TURN server out of the agent, to tell which of them a network reacts to ("Wi-Fi"). |
 | `ORCA_DIRECT_LOOPBACK` | Tests only: `1` also offers loopback candidates, for two Orcas on one machine whose LAN address refuses a send to itself. |
 | `ORCA_DIRECT_LOSS`, `ORCA_DIRECT_BLOCK` | Tests only: drop this percentage of the datagrams sent; `1` starts with every datagram dropped (as `test-direct off`). |
 | `ORCA_NAME` | Name shown in the room. |
@@ -903,6 +905,18 @@ same pair lost 0.05-0.1%.
   it takes that radio off the path); then Bluetooth off, or the adapter's power saving off
   (Windows: the power plan's Wireless Adapter Settings, the driver's own Advanced settings), or
   another channel or band. Both machines on Wi-Fi on one channel is the worst case.
+
+Later the same night (rounds R6-R9 and T-tests, PC router ping at 10 Hz throughout) narrowed it
+further: the PC's dead time comes only with a direct link. A match on 0.3.19 over a direct link
+showed 7.9% bad pings on a strict 5.0 s beat starting within 0.2 s of the link coming up (the beat
+keeps its phase for minutes, so it is no libjuice timer: consent checks are a random 4-6 s); the
+same match relay-only (`ORCA_DIRECT=0`) 0.1% and no beat. Orca alone with no room: clean. Plain UDP
+at Orca's rate and sizes from the PC, to the PC (up to 250/s, EF or not), and both ways on one
+socket with EF echoes: all clean. What is left is libjuice's own work on the PC (its ICE checks,
+consent, the STUN binding and the TURN allocation, its socket); `ORCA_DIRECT_ICE_LOG`,
+`ORCA_DIRECT_STUN=0` and `ORCA_DIRECT_TURN=0` exist to take that apart. Separately the PC (or its
+router) drops everything for about 3 s once every 3616 s (seen at 20:44:01, 21:44:17, 23:44:49 and
+04:46:10), which fits an hourly group-key rekey a driver handles badly.
 
 To find whose radio it is: run xplat on both sides with a 10 Hz router ping on each machine (macOS
 `ping -i 0.1 --apple-time <gateway>`; Windows a `System.Net.NetworkInformation.Ping` loop with

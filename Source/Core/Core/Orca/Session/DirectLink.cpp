@@ -116,7 +116,9 @@ std::atomic<u64> s_link_serial{0};
 // ---- Logging: libjuice's lines go to Dolphin's log, never to stdout (the desktop app reads
 // Orca's stdout line by line), with addresses and credentials taken out (logs get uploaded). ----
 
-std::string Scrub(std::string_view message)
+// `labels`: each distinct address becomes "<addrN>" (the same N for the same address within the
+// process) instead of "<address>", so a verbose log tells the paths apart without holding any.
+std::string Scrub(std::string_view message, std::map<std::string, int>* labels = nullptr)
 {
   std::string out;
   for (size_t i = 0; i < message.size();)
@@ -146,7 +148,16 @@ std::string Scrub(std::string_view message)
     }
     if (j > i && (dots >= 2 || colons >= 2))
     {
-      out += "<address>";
+      if (labels)
+      {
+        const auto [it, added] = labels->try_emplace(std::string(message.substr(i, j - i)),
+                                                     static_cast<int>(labels->size()) + 1);
+        out += fmt::format("<addr{}>", it->second);
+      }
+      else
+      {
+        out += "<address>";
+      }
       i = j;
       continue;
     }
@@ -162,8 +173,24 @@ std::string Scrub(std::string_view message)
   return out;
 }
 
+// Tests only, ORCA_DIRECT_ICE_LOG=1: libjuice's every line (its debug level, no per-second cap), at
+// notice level so the log's timestamps show what the agent sent when (ORCA.md "Wi-Fi").
+bool IceLogVerbose()
+{
+  static const bool verbose = GetEnv("ORCA_DIRECT_ICE_LOG") == "1";
+  return verbose;
+}
+
 void JuiceLog(juice_log_level_t level, const char* message)
 {
+  if (IceLogVerbose())
+  {
+    // libjuice logs under its own lock, one thread at a time.
+    static std::map<std::string, int> labels;
+    NOTICE_LOG_FMT(NETPLAY, "Orca direct link (ICE {}): {}", static_cast<int>(level),
+                   Scrub(message ? message : "", &labels));
+    return;
+  }
   // A dead path makes every send fail: at most 10 lines a second (libjuice logs under its own lock,
   // one thread at a time).
   static Clock::time_point second{};
@@ -195,7 +222,7 @@ void SetUpJuiceLogging()
   static std::once_flag once;
   std::call_once(once, [] {
     juice_set_log_handler(&JuiceLog);
-    juice_set_log_level(JUICE_LOG_LEVEL_WARN);
+    juice_set_log_level(IceLogVerbose() ? JUICE_LOG_LEVEL_DEBUG : JUICE_LOG_LEVEL_WARN);
   });
 }
 
@@ -1729,10 +1756,14 @@ struct DirectLink::Impl
     }
     juice_config_t config{};
     config.concurrency_mode = JUICE_CONCURRENCY_MODE_POLL;
-    config.stun_server_host = stun ? stun->c_str() : nullptr;
+    // Tests only: ORCA_DIRECT_STUN=0 / ORCA_DIRECT_TURN=0 leave the ticket's STUN or TURN server
+    // out of the agent, to tell which of them a network reacts to (ORCA.md "Wi-Fi").
+    const bool use_stun = GetEnv("ORCA_DIRECT_STUN") != "0";
+    const bool use_turn = GetEnv("ORCA_DIRECT_TURN") != "0";
+    config.stun_server_host = stun && use_stun ? stun->c_str() : nullptr;
     config.stun_server_port = ice.stun_port;
     juice_turn_server_t turn_server{};
-    if (turn && !ice.turn_user.empty())
+    if (turn && use_turn && !ice.turn_user.empty())
     {
       turn_server.host = turn->c_str();
       turn_server.port = ice.turn_port;
