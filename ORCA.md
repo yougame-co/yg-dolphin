@@ -86,7 +86,8 @@ Online play is drop-in, through a private YouGame room of up to four (`Source/Co
 | `ORCA_DIRECT` | `0`: no direct links, the relay only (the hello stops offering them, so the friend's Orca uses the relay too). Default: on. |
 | `ORCA_DIRECT_FORCE` | Tests only: `turn` offers and accepts relayed candidates only (a link through Cloudflare TURN); `srflx` nothing on a host interface. |
 | `ORCA_DIRECT_ICE_LOG` | Tests only: `1` logs every libjuice line (its debug level, no per-second cap) at notice level, each distinct address as `<addrN>`, so the log's timestamps show what the ICE agent sent when ("Wi-Fi"). |
-| `ORCA_DIRECT_STUN`, `ORCA_DIRECT_TURN` | Tests only: `0` leaves the ticket's STUN or TURN server out of the agent, to tell which of them a network reacts to ("Wi-Fi"). |
+| `ORCA_DIRECT_STUN` | Tests only: `0` leaves the ticket's STUN server out of the agent ("Wi-Fi"). |
+| `ORCA_DIRECT_TURN` | Tests only: `0` never uses the ticket's TURN server, `1` from the first link (before 0.3.21 every link had it). Default: only after a link found no path ("Direct links", "TURN only when needed"). |
 | `ORCA_DIRECT_LOOPBACK` | Tests only: `1` also offers loopback candidates, for two Orcas on one machine whose LAN address refuses a send to itself. |
 | `ORCA_DIRECT_LOSS`, `ORCA_DIRECT_BLOCK` | Tests only: drop this percentage of the datagrams sent; `1` starts with every datagram dropped (as `test-direct off`). |
 | `ORCA_NAME` | Name shown in the room. |
@@ -877,6 +878,22 @@ Tests:
   `--both ORCA_DIRECT_FORCE=turn --expect turn` and similar run the variants; `--ticket-direct off`
   fetches both Orcas' tickets through a local proxy that adds `"direct": false`. `Tools/orca/xplat.py` passes the `ORCA_DIRECT*` switches through and reports the
   transport.
+
+### TURN only when needed (Orca 0.3.21)
+
+A link starts with host and STUN candidates only. One that never finds a path (`no path`: answered
+but not connected in CONNECT_TIMEOUT; or ICE `failed`) marks the pair `with_turn`, and every later
+link to that peer gathers the ticket's TURN server too; the offer (`dl`) and the request for a new
+link (`dlr`) carry `"t": 1` so the other side's next agent has it as well. A link that worked and
+went quiet (`silent`) does not add TURN. Until a TURN link is up the room's relay carries the
+inputs, as for any link that is down.
+
+Why: on 2026-10-05 Luis's PC (Realtek RTL8822BE) dropped off the air for 100-400 ms every 5.0 s for
+as long as a direct link with a TURN allocation lived, and the Mac stalled on its inputs each time
+(42-57 stalls in 160 s at delay 2). The same direct link without TURN (`ORCA_DIRECT_TURN=0`, R11):
+4 stalls, PC router ping 0.5% bad with no beat; with TURN (R6) 7.9% bad on the beat. Most pairs
+connect host/host or through STUN and never needed the allocation; it also costs Cloudflare TURN
+traffic for nothing.
 
 ### Wi-Fi
 

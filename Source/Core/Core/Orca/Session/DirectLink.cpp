@@ -969,6 +969,9 @@ struct DirectLink::Impl
     std::optional<Clock::time_point> connected_at, up_since;
     std::string pair;
     bool turn = false;
+    // Whether this pair's links include the ticket's TURN server ("TURN only after a failure"
+    // below): set once a link to this peer found no path, or the other side asked for TURN.
+    bool with_turn = false;
     bool was_up = false;
     // This link was up at some point (a link that never came up isn't "silent").
     bool ever_up = false;
@@ -1568,6 +1571,13 @@ struct DirectLink::Impl
     }
     if (kind == "dlr" && peer.low)
     {
+      // The other side found no path without TURN: the next offer includes it.
+      if (Int(message, "t", 0, 1) == 1 && !peer.with_turn)
+      {
+        peer.with_turn = true;
+        NOTICE_LOG_FMT(NETPLAY, "Orca direct link: seat {} asks for TURN; the next link has it",
+                       peer.slot + 1);
+      }
       if (*generation > peer.generation)
       {
         // The answering side holds a newer generation than this side's newest: this side started
@@ -1756,10 +1766,20 @@ struct DirectLink::Impl
     }
     juice_config_t config{};
     config.concurrency_mode = JUICE_CONCURRENCY_MODE_POLL;
-    // Tests only: ORCA_DIRECT_STUN=0 / ORCA_DIRECT_TURN=0 leave the ticket's STUN or TURN server
-    // out of the agent, to tell which of them a network reacts to (ORCA.md "Wi-Fi").
+    // Tests only: ORCA_DIRECT_STUN=0 leaves the ticket's STUN server out of the agent
+    // (ORCA.md "Wi-Fi").
     const bool use_stun = GetEnv("ORCA_DIRECT_STUN") != "0";
-    const bool use_turn = GetEnv("ORCA_DIRECT_TURN") != "0";
+    // TURN only after a failure (ORCA.md "Direct links", "TURN only when needed"): a TURN allocation
+    // kept beside a working host or STUN path made a Realtek Wi-Fi card drop out every 5 s for as
+    // long as the link lived (2026-10-05), and most pairs never need one. A link includes TURN once
+    // one to this peer found no path (Timers), or the other side's offer or request says it does.
+    // Tests only: ORCA_DIRECT_TURN=0 never, =1 from the first link (as before 0.3.21); a forced
+    // TURN path always.
+    if (offer && Int(*offer, "t", 0, 1) == 1)
+      peer.with_turn = true;
+    const std::string turn_env = GetEnv("ORCA_DIRECT_TURN");
+    const bool use_turn = turn_env != "0" && (turn_env == "1" || options.force == "turn" ||
+                                              peer.with_turn);
     config.stun_server_host = stun && use_stun ? stun->c_str() : nullptr;
     config.stun_server_port = ice.stun_port;
     juice_turn_server_t turn_server{};
@@ -1823,9 +1843,12 @@ struct DirectLink::Impl
     }
     NOTICE_LOG_FMT(NETPLAY, "Orca direct link: seat {}: {} link {} ({}{}{})", peer.slot + 1,
                  peer.low ? "offering" : "answering", peer.generation, reason,
-                 turn ? ", TURN" : "", options.force.empty() ? "" : ", forced " + options.force);
+                 config.turn_servers_count > 0 ? ", TURN" : "",
+                 options.force.empty() ? "" : ", forced " + options.force);
     picojson::object d;
     d["k"] = picojson::value("dl");
+    if (config.turn_servers_count > 0)
+      d["t"] = picojson::value(1.0);
     d["v"] = picojson::value(1.0);
     d["g"] = picojson::value(static_cast<double>(peer.generation));
     d["key"] = picojson::value(Hex(peer.my_half.data(), peer.my_half.size()));
@@ -1856,6 +1879,8 @@ struct DirectLink::Impl
     picojson::object d;
     d["k"] = picojson::value("dlr");
     d["g"] = picojson::value(static_cast<double>(peer.generation));
+    if (peer.with_turn)
+      d["t"] = picojson::value(1.0);
     Signal(peer, std::move(d));
   }
 
@@ -1999,6 +2024,15 @@ struct DirectLink::Impl
       {
         reason = "upgrade";
         peer.upgrade_tried = true;
+      }
+      // A link that never found a path tries again with TURN (a strict NAT on either side). One
+      // that worked and went quiet (a radio's dead time) does not: its next link is as before.
+      if ((reason == "failed" || reason == "no path") && !peer.with_turn &&
+          GetEnv("ORCA_DIRECT_TURN") != "0" && !options.ice.turn_user.empty())
+      {
+        peer.with_turn = true;
+        NOTICE_LOG_FMT(NETPLAY, "Orca direct link: seat {}: no path without TURN; the next link has it",
+                       peer.slot + 1);
       }
       if (!reason.empty())
         Rebuild(peer, reason, reason == "upgrade");
