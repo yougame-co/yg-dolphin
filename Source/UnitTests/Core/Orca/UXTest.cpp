@@ -35,6 +35,7 @@
 #include "Core/Orca/UX/GamePatches.h"
 #include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/Overlay.h"
+#include "Core/Orca/UX/YgOrb.h"
 #include "InputCommon/GCPadStatus.h"
 #include "VideoCommon/OnScreenDisplay.h"
 
@@ -2176,4 +2177,121 @@ TEST(OrcaUXOverlay, ChatLinesStayEightSecondsTheNewestThree)
   LinkView link;
   m.Update(link, 20000);
   EXPECT_TRUE(m.View(20000, Stats::Off).chats.empty());
+}
+
+TEST(OrcaUXYgOrb, ParsesTheButtonsPlaceAndItsOffAndBlink)
+{
+  using namespace Orca::UX::YgOrb;
+  auto c = ParseOrb("orb 32 32 80 0 1 3");
+  ASSERT_TRUE(c);
+  EXPECT_EQ(c->type, Command::Type::Place);
+  EXPECT_EQ(c->place.x, 32);
+  EXPECT_EQ(c->place.y, 32);
+  EXPECT_EQ(c->place.size, 80);
+  EXPECT_FALSE(c->place.lit);
+  EXPECT_TRUE(c->place.away);
+  EXPECT_EQ(c->place.badge, 3);
+  c = ParseOrb("orb off");
+  ASSERT_TRUE(c);
+  EXPECT_EQ(c->type, Command::Type::Off);
+  c = ParseOrb("orb blink");
+  ASSERT_TRUE(c);
+  EXPECT_EQ(c->type, Command::Type::Blink);
+  for (const char* bad :
+       {"orb", "orb ", "orb on", "orb 32 32 80 0 1", "orb 32 32 80 0 1 3 4", "orb -1 32 80 0 0 0",
+        "orb 32 32 4 0 0 0", "orb 32 32 80 2 0 0", "orb 32 32 80 0 0 100", "orb 32  32 80 0 0 0",
+        "orb 32 32 80 0 0 0 ", "orb 1e3 32 80 0 0 0", "orb 99999 32 80 0 0 0", "orbs off",
+        "orb off blink"})
+  {
+    EXPECT_FALSE(ParseOrb(bad)) << bad;
+  }
+}
+
+TEST(OrcaUXYgOrb, ParsesNoticesWithAndWithoutAHint)
+{
+  using namespace Orca::UX::YgOrb;
+  auto n = ParseNotice("notice voice Ada is%20on%20voice");
+  ASSERT_TRUE(n);
+  EXPECT_EQ(n->kind, Kind::Voice);
+  EXPECT_EQ(n->name, "Ada");
+  EXPECT_EQ(n->text, "is on voice");
+  EXPECT_TRUE(n->key.empty());
+  n = ParseNotice("notice dm Bo%20Li hey%20%F0%9F%91%8B Shift%2BTab Reply");
+  ASSERT_TRUE(n);
+  EXPECT_EQ(n->kind, Kind::Dm);
+  EXPECT_EQ(n->name, "Bo Li");
+  EXPECT_EQ(n->text, "hey \xF0\x9F\x91\x8B");
+  EXPECT_EQ(n->key, "Shift+Tab");
+  EXPECT_EQ(n->verb, "Reply");
+  for (const char* kind : {"join", "leave", "away", "back", "voice", "call", "dm", "invite"})
+    EXPECT_TRUE(ParseNotice(std::string("notice ") + kind + " Ada x")) << kind;
+  for (const char* bad :
+       {"notice", "notice join", "notice join Ada", "notice wave Ada hi", "notice join Ada hi PS",
+        "notice join Ada hi PS Join extra", "notice join Ada%0A hi", "notice join Ada hi%",
+        "notice join Ada a b", "notice  join Ada hi", "Notice join Ada hi"})
+  {
+    EXPECT_FALSE(ParseNotice(bad)) << bad;
+  }
+}
+
+TEST(OrcaUXYgOrb, LinesStayAsLongAsThePagesTheNewestThree)
+{
+  using namespace Orca::UX::YgOrb;
+  Model m;
+  const auto notice = [](Kind kind, std::string text) {
+    Notice n;
+    n.kind = kind;
+    n.name = "Ada";
+    n.text = std::move(text);
+    return n;
+  };
+  EXPECT_EQ(DwellMs(notice(Kind::Voice, "is on voice")), 8000);
+  EXPECT_EQ(DwellMs(notice(Kind::Leave, "left")), 2500);
+  EXPECT_EQ(DwellMs(notice(Kind::Dm, "gg")), 4120);
+  EXPECT_EQ(DwellMs(notice(Kind::Dm, std::string(200, 'a'))), 9000);
+  m.Add(notice(Kind::Join, "joined"), 0);
+  auto v = m.At(1000);
+  ASSERT_EQ(v.lines.size(), 1u);
+  EXPECT_EQ(v.lines[0].alpha, 1.0f);
+  // Fading out over its last 400 ms, then gone.
+  v = m.At(3300);
+  ASSERT_EQ(v.lines.size(), 1u);
+  EXPECT_NEAR(v.lines[0].alpha, 0.5f, 0.01f);
+  EXPECT_TRUE(m.At(3500).lines.empty());
+  for (int i = 0; i < 5; ++i)
+    m.Add(notice(Kind::Voice, std::to_string(i)), 4000 + i);
+  v = m.At(4010);
+  ASSERT_EQ(v.lines.size(), Model::KEEP);
+  EXPECT_EQ(v.lines.front().notice.text, "2");
+  EXPECT_EQ(v.lines.back().notice.text, "4");
+}
+
+TEST(OrcaUXYgOrb, TheButtonShowsBlinksAndTakesPressesOnItsDisc)
+{
+  using namespace Orca::UX::YgOrb;
+  Model m;
+  EXPECT_FALSE(m.At(0).on);
+  EXPECT_FALSE(m.Hit(50, 50));
+  m.Apply(*ParseOrb("orb 32 32 80 1 0 0"), 0);
+  auto v = m.At(0);
+  EXPECT_TRUE(v.on);
+  EXPECT_LT(v.ring, 0);
+  // The disc, not its square's corners.
+  EXPECT_TRUE(m.Hit(72, 72));
+  EXPECT_TRUE(m.Hit(33, 72));
+  EXPECT_FALSE(m.Hit(34, 34));
+  EXPECT_FALSE(m.Hit(120, 72));
+  // A blink: three rings of 700 ms each.
+  m.Apply(*ParseOrb("orb blink"), 1000);
+  EXPECT_NEAR(m.At(1350).ring, 0.5f, 0.01f);
+  EXPECT_NEAR(m.At(2050).ring, 0.5f, 0.01f);
+  EXPECT_LT(m.At(3100).ring, 0);
+  // Off: not drawn, no presses, no ring left over.
+  m.Apply(*ParseOrb("orb blink"), 4000);
+  m.Apply(*ParseOrb("orb off"), 4100);
+  EXPECT_FALSE(m.At(4200).on);
+  EXPECT_LT(m.At(4200).ring, 0);
+  EXPECT_FALSE(m.Hit(72, 72));
+  const Kit::Box none = ButtonBox(m.At(4200));
+  EXPECT_EQ(none.max.x, none.min.x);
 }

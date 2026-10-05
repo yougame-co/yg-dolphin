@@ -6,9 +6,11 @@
 #include "Core/Config/MainSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
+#include "Core/Orca/UX/YgOrb.h"
 #include "Core/System.h"
 
 #include <windows.h>
+#include <windowsx.h>
 #include <climits>
 #include <cstdio>
 #include <dwmapi.h>
@@ -307,12 +309,18 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
 
   // Embedded, a press on the game's picture lands here, not in the app's page: the app hears of it
   // and decides whether the game gets the input back (its "focus"). Nothing else changes here.
-  // Once per press: the class has no CS_DBLCLKS, so a double click is two presses.
+  // Once per press: the class has no CS_DBLCLKS, so a double click is two presses. A left press on
+  // the YouGame button Orca draws for the page (UX/YgOrb.h) is the button's: "orca orb".
   case WM_LBUTTONDOWN:
   case WM_RBUTTONDOWN:
   case WM_MBUTTONDOWN:
     if (platform && platform->IsEmbedded())
-      Embed::Out("orca click");
+    {
+      const bool orb = msg == WM_LBUTTONDOWN &&
+                       Orca::UX::YgOrb::Current().Hit(static_cast<float>(GET_X_LPARAM(lParam)),
+                                                      static_cast<float>(GET_Y_LPARAM(lParam)));
+      Embed::Out(orb ? "orca orb" : "orca click");
+    }
     return DefWindowProc(hwnd, msg, wParam, lParam);
 
   // Embedded, the keyboard stays with the app: if anything hands this window the focus, it goes

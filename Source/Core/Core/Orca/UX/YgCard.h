@@ -41,4 +41,19 @@ Kit::Box NoticeCard(ImDrawList* dl, ImVec2 pos, float unit, std::string_view tex
                     float alpha = 1);
 // YouGame's mark, `size` pixels square, top-left at `pos` (web/src/app/icon.svg's shapes).
 void Logo(ImDrawList* dl, ImVec2 pos, float size, float alpha = 1);
+
+// For the YouGame button and its lines (YgOrb.h), in the same look:
+// The round mark the page's button shows over a game (PlayOrb.tsx RoundLogo: the logo's controller
+// on a red disc), `size` pixels across, top-left at `pos`.
+void RoundLogo(ImDrawList* dl, ImVec2 pos, float size, float alpha = 1);
+// A line of text in the cards' face, top-left at `pos`, `px` pixels high.
+void Text(ImDrawList* dl, ImVec2 pos, float px, ImU32 colour, std::string_view text);
+// A card's slab over [min, max].
+void CardSlab(ImDrawList* dl, ImVec2 min, ImVec2 max, float unit, float alpha = 1);
+// The cards' colours: the main text, the secondary text, the hairline edge.
+ImU32 Ink(float alpha = 1);
+ImU32 Ink2(float alpha = 1);
+ImU32 Edge(float alpha = 1);
+// An avatar: `name`'s initial on its colour, a disc of radius `r` round `centre`.
+void Avatar(ImDrawList* dl, ImVec2 centre, float r, std::string_view name, float alpha = 1);
 }  // namespace Orca::UX::Yg

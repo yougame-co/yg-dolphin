@@ -462,7 +462,8 @@ TEST(OrcaMatchmakingMenu, TheSearchLinesFollowTheQueue)
 TEST(OrcaMatchmakingMenu, HostIsACapResultsOnlyWithAVerifiedReader)
 {
   // No profile here: host is offered, results is not.
-  EXPECT_EQ(Orca::Status::OfferedCaps(), "join leave stats pause delay perf direct host chat");
+  EXPECT_EQ(Orca::Status::OfferedCaps(),
+            "join leave stats pause delay perf direct host chat yougame");
   Orca::Status::SetAppCaps("join host results");
   EXPECT_TRUE(Orca::Status::Cap("host"));
   EXPECT_FALSE(Orca::Status::Cap("results"));

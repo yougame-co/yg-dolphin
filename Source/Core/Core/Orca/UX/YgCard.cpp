@@ -271,4 +271,53 @@ Kit::Box NoticeCard(ImDrawList* dl, ImVec2 pos, float unit, std::string_view tex
   }
   return box;
 }
+
+void RoundLogo(ImDrawList* dl, ImVec2 pos, float size, float alpha)
+{
+  // RoundLogo's SVG on a 40 grid: a red disc, a white pill, a red cross and two red buttons on it.
+  const float k = size / 40;
+  const auto at = [&](float x, float y) { return ImVec2(pos.x + x * k, pos.y + y * k); };
+  const ImU32 red = Rgba(255, 0, 0, alpha), white = Rgba(255, 255, 255, alpha);
+  dl->AddCircleFilled(at(20, 20), 20 * k, red, 48);
+  dl->AddRectFilled(at(8, 14), at(32, 26), white, 6 * k);
+  dl->AddRectFilled(at(13.67f, 16.67f), at(15.67f, 23.34f), red, 0.8f * k);
+  dl->AddRectFilled(at(11.33f, 19), at(18, 21), red, 0.8f * k);
+  dl->AddCircleFilled(at(24.5f, 18.3f), 1.47f * k, red, 12);
+  dl->AddCircleFilled(at(27.7f, 21.7f), 1.47f * k, red, 12);
+}
+
+void Text(ImDrawList* dl, ImVec2 pos, float px, ImU32 colour, std::string_view text)
+{
+  Put(dl, pos, px, colour, text);
+}
+
+void CardSlab(ImDrawList* dl, ImVec2 min, ImVec2 max, float unit, float alpha)
+{
+  Slab(dl, min, max, unit, alpha);
+}
+
+ImU32 Ink(float alpha)
+{
+  return Of(INK, alpha);
+}
+ImU32 Ink2(float alpha)
+{
+  return Of(INK2, alpha);
+}
+ImU32 Edge(float alpha)
+{
+  return Of(EDGE, alpha);
+}
+
+void Avatar(ImDrawList* dl, ImVec2 centre, float r, std::string_view name, float alpha)
+{
+  const ImU32 a = static_cast<ImU32>(std::lround(std::clamp(alpha, 0.0f, 1.0f) * 255));
+  dl->AddCircleFilled(centre, r, (AvatarColour(name) & ~IM_COL32_A_MASK) | (a << IM_COL32_A_SHIFT),
+                      32);
+  const std::string initial = Initial(name);
+  const float ipx = 1.1f * r;
+  const ImVec2 is = Measure(initial, ipx);
+  Put(dl, ImVec2(centre.x - is.x / 2, centre.y - is.y / 2), ipx, Rgba(255, 255, 255, alpha),
+      initial);
+}
 }  // namespace Orca::UX::Yg

@@ -30,6 +30,7 @@
 #include "Core/Orca/UX/SetEnd.h"
 #include "Core/Orca/UX/StageCursors.h"
 #include "Core/Orca/UX/YgCard.h"
+#include "Core/Orca/UX/YgOrb.h"
 #include "VideoCommon/AsyncRequests.h"
 #include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/Present.h"
@@ -931,7 +932,9 @@ void Draw()
   }
   // The chat cards' font, loaded before any chat needs it (YgCard.h).
   Yg::Warm();
-  if (s.Empty())
+  // The YouGame button and its lines (YgOrb.h, embed cap `yougame`), drawn with the rest.
+  const YgOrb::Model::View yg = YgOrb::Current().At(now);
+  if (s.Empty() && !yg.on && yg.lines.empty())
     return;
   // Everything is laid out in the game's picture (the window can letterbox or pillarbox it), in
   // its units (1% of its height), drawn with the kit (Kit.h): the game's fonts, its plates.
@@ -1027,7 +1030,11 @@ void Draw()
                pic_size.x * (GUIDE_RIGHT - 0.025f));
   }
   const float margin = 2.5f * unit;
-  float y = DrawCorner(dl, f, ImVec2(pic.x + margin, pic.y + margin), unit);
+  // The corner and the column under it start right of the YouGame button when it is there.
+  const Kit::Box orb = YgOrb::ButtonBox(yg);
+  const float left =
+      orb.max.x > orb.min.x ? std::max(pic.x + margin, orb.max.x + 1.2f * unit) : pic.x + margin;
+  float y = DrawCorner(dl, f, ImVec2(left, pic.y + margin), unit);
   if (!f.waiting.empty())
   {
     // "Waiting for <name>…" under the top centre's banners.
@@ -1037,32 +1044,36 @@ void Draw()
   // The toasts and the chat on plates under the corner: under Dolphin's own messages (OSD rows
   // such as "Screenshot saved...", drawn at the top left just before this), and under the top
   // centre's banners where a plate as wide as the chat's would reach them.
-  if (!f.toasts.empty() || !f.chats.empty())
+  if (!f.toasts.empty() || !f.chats.empty() || !yg.lines.empty())
   {
     y = std::max(y, OSD::MessagesBottom() + unit);
     const float wrap = 0.36f * pic_size.x;
-    if (centre.max.y > pic.y && centre.min.x < pic.x + margin + wrap + 3.0f * unit)
+    if (centre.max.y > pic.y && centre.min.x < left + wrap + 3.0f * unit)
       y = std::max(y, centre.max.y + 1.2f * unit);
     const float bottom = pic.y + pic_size.y - margin;
+    // The YouGame button's lines first, the nearest to it.
+    y = YgOrb::DrawLines(dl, yg, ImVec2(left, y), unit, wrap, bottom);
     // In YouGame's own look (YgCard.h): the room's and the chat are YouGame's, not the game's.
     for (const OverlayModel::Toast& t : f.toasts)
     {
       if (y >= bottom)
         break;
-      y = Yg::NoticeCard(dl, ImVec2(pic.x + margin, y), unit, t.text, wrap, t.alpha).max.y +
+      y = Yg::NoticeCard(dl, ImVec2(left, y), unit, t.text, wrap, t.alpha).max.y +
           0.8f * unit;
     }
     for (const OverlayModel::ChatToast& c : f.chats)
     {
       if (y >= bottom)
         break;
-      y = Yg::ChatCard(dl, ImVec2(pic.x + margin, y), unit, c.name, c.text, wrap, c.alpha).max.y +
+      y = Yg::ChatCard(dl, ImVec2(left, y), unit, c.name, c.text, wrap, c.alpha).max.y +
           0.8f * unit;
     }
   }
   // Over everything else: the set's end, the opponent's disconnect, set over's hint (SetEnd.h).
   if (!s.set_end.Empty())
     SetEnd::Draw(dl, unit, pic.x, pic.y, pic_size.x, pic_size.y, s.set_end);
+  // The YouGame button over everything: it stands where the page's own is.
+  YgOrb::DrawButton(dl, yg);
 }
 }  // namespace
 

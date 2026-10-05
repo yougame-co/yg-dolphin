@@ -24,6 +24,7 @@
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/Chat.h"
+#include "Core/Orca/UX/YgOrb.h"
 #include "Core/Orca/UX/OnlineMenu.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/UX/Queue.h"
@@ -396,6 +397,23 @@ void Platform::ProcessEmbedCommands()
         Orca::UX::ShowChat(std::move(chat->name), std::move(chat->text));
       else
         Embed::Out("unsupported chat");
+    }
+    else if (cmd == "orb")
+    {
+      // The YouGame button where the page's own stands under Orca (caps `yougame`, UX/YgOrb.h).
+      if (std::optional<Orca::UX::YgOrb::Command> orb = Orca::UX::YgOrb::ParseOrb(line))
+        Orca::UX::YgOrb::Apply(*orb);
+      else
+        Embed::Out("unsupported orb");
+    }
+    else if (cmd == "notice")
+    {
+      // A line beside the YouGame button (caps `yougame`): someone joined, is on voice, wrote. A
+      // player's words: neither this nor anything after it prints or logs them.
+      if (std::optional<Orca::UX::YgOrb::Notice> notice = Orca::UX::YgOrb::ParseNotice(line))
+        Orca::UX::YgOrb::Show(std::move(*notice));
+      else
+        Embed::Out("unsupported notice");
     }
     else if (cmd == "test-shot" && Orca::GetEnv("ORCA_TEST_COMMANDS") == "1")
     {
