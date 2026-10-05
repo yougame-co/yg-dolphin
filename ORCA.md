@@ -1143,6 +1143,22 @@ revision every build carries), so builds with and without them never meet.
   flicker) plus a present and a `nextDrawable` inside the rollback. Rollback snapshots now skip it
   (`VideoCommon_LoadRedisplays`); savestates and drop-in keyframes (`SnapshotRing::LoadImage`) still
   show their frame. Host only.
+- **Rollback and the EFB.** Rollback snapshots leave the EFB alone (no readback per save, no upload
+  per load), and re-run frames draw nothing and skip their EFB clears. The GPU's frame straddles the
+  frame boundary: at the SI poll Brawl and P+ are 170-350 draws past their last XFB copy (80% of
+  Brawl's synctest loads, 98% of P+'s), so the frame shown after a rollback is the abandoned
+  timeline's draws before the boundary and the corrected timeline's after it. Clearing the EFB on
+  re-run frames would blank that first part, so it stays. What went wrong was the batch still
+  buffered in the vertex manager at the boundary (23% of Brawl's loads, 55% of P+'s; anything from a
+  4-vertex HUD quad to a 1,200-index character mesh): `VertexManagerBase::DoState` flushed it after
+  `VideoCommon_DoState` had restored the snapshot's XF matrices, projection and TEV state, so it was
+  drawn through the wrong position matrices (solid triangles fanning out from a character for
+  exactly one frame, as hits land: a P+ player on Windows, 2026-10-05) and was missing from the
+  frame it belonged to. Loads now flush it first, under the registers it was buffered with. Proof:
+  `YG_SYNCTEST=7` on Metal with `ORCA_TEST_PRESENT=1280x720` and a shot every 10 frames, against the
+  same inputs without synctest: P+ 46 of 70 shots differed outside the stats line before (missing
+  damage digits, stray glyphs), 0 after; Brawl 29 of 90 before (white and orange spikes shooting out
+  of Mario and Samus), 0 of 91 after. Host only: no RAM change.
 - **Slow screens** (Metal). With VSync off `nextDrawable` only waits for a free drawable, but a 50
   Hz screen frees one every 20 ms: the game waited ~17 ms every frame and ran at 50 fps (83% speed),
   dragging an online friend down too. Drawables now come from a background acquire, and a frame

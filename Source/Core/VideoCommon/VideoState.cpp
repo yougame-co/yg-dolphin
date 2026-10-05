@@ -81,6 +81,14 @@ void VideoCommon_DoState(PointerWrap& p)
     p.SetVerifyMode();
   }
 
+  // A load first draws the vertices still buffered on the timeline it abandons, under that
+  // timeline's registers, before any of them are overwritten. Drawn after the restore (by the
+  // vertex manager's DoState), they went through the snapshot's matrices and TEV state: garbage
+  // triangles in the next frame shown, which a rollback snapshot (no EFB restore) leaves on
+  // screen, and the batch itself missing from that frame (ORCA.md, "Rollback and the EFB").
+  if (p.IsReadMode())
+    g_vertex_manager->Flush();
+
   // BP Memory
   p.Do(bpmem);
   p.DoMarker("BP Memory");
@@ -128,8 +136,8 @@ void VideoCommon_DoState(PointerWrap& p)
   system.GetGeometryShaderManager().DoState(p);
   p.DoMarker("GeometryShaderManager");
 
-  // Always: on a load it flushes the vertices buffered on the abandoned timeline, and it holds
-  // emulated GX state (z slope, the vertex loader's normal/tangent/binormal caches).
+  // Always: it holds emulated GX state (z slope, the vertex loader's normal/tangent/binormal
+  // caches). Its own flush on a load finds nothing left (above).
   g_vertex_manager->DoState(p);
   p.DoMarker("VertexManager");
 
