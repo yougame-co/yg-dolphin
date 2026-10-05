@@ -1241,7 +1241,7 @@ using FriendsMove::Decide;
 using FriendsMove::Inputs;
 using FriendsMove::Outputs;
 
-// The main menu running, port 1 alone, the block's bytes kept.
+// The main menu running with its pages built, port 1 alone, the block's bytes kept.
 Inputs OnMenu(int frame)
 {
   Inputs in;
@@ -1250,6 +1250,7 @@ Inputs OnMenu(int frame)
   in.scene = "muMenuMain";
   in.sequence = "sqMenuMain";
   in.step = FriendsMove::STEP_RUNNING;
+  in.menu_built = true;
   in.frame = frame;
   in.tag = 0xF5;
   in.seen = 0x01;
@@ -1367,6 +1368,63 @@ TEST(OrcaOnlineMenuDropIn, AFriendWhoPluggedInDuringTheBootWaitsForTheMenu)
   in.scene = "muMenuMain";
   in.sequence = "sqMenuMain";
   EXPECT_EQ(RunUntilMove(in, 100), 2000 + static_cast<int>(FriendsMove::MENU_SETTLE_FRAMES));
+}
+
+TEST(OrcaOnlineMenuDropIn, AMenuStillLoadingIsNeverLeft)
+{
+  // The boot's case (Brawl, measured): the friend plugged in during the boot, the menu's step is 1
+  // from 1444 and it builds its pages at 1502. Leaving it before then destroys a proc table of the
+  // heap's fill (Brawl's invalid read at 0x806CEC6C). The menu counts from its build: the move
+  // comes MENU_SETTLE_FRAMES after 1502, never at 1444 + MENU_SETTLE_FRAMES.
+  Inputs in = OnMenu(1000);
+  in.scene = "scTitle";
+  in.sequence = "sqTitle";
+  in.plugged = 0x03;
+  Outputs out = Decide(in);
+  EXPECT_EQ(out.pending, 1);
+  in = After(in, out, 444);
+  // The menu's scene before its start (step 0): the last menu's byte may still read built.
+  in.scene = "muMenuMain";
+  in.sequence = "sqMenuMain";
+  in.step = 0;
+  in.menu_built = true;
+  out = Decide(in);
+  EXPECT_EQ(out.menu_since, 0u);
+  EXPECT_EQ(out.pending, 1);
+  in = After(in, out);
+  // Running and loading: never left, however long it takes.
+  in.step = FriendsMove::STEP_RUNNING;
+  in.menu_built = false;
+  for (; in.frame < 1502;)
+  {
+    out = Decide(in);
+    ExpectIdempotent(in, out);
+    EXPECT_FALSE(out.move) << in.frame;
+    EXPECT_EQ(out.menu_since, 0u) << in.frame;
+    EXPECT_EQ(out.pending, 1) << in.frame;
+    in = After(in, out);
+  }
+  // Built: half a second of it, then both go.
+  in.menu_built = true;
+  EXPECT_EQ(RunUntilMove(in, 100), 1502 + static_cast<int>(FriendsMove::MENU_SETTLE_FRAMES));
+
+  // A menu coming back from the character select took 121 frames to build: the same, from its
+  // build, with the friend who plugged in on the way back.
+  in = OnMenu(3000);
+  in.menu_built = false;
+  in.plugged = 0x03;
+  out = Decide(in);
+  EXPECT_EQ(out.pending, 1);
+  EXPECT_EQ(out.menu_since, 0u);
+  in = After(in, out);
+  for (int i = 0; i < 120; ++i)
+  {
+    out = Decide(in);
+    EXPECT_FALSE(out.move);
+    in = After(in, out);
+  }
+  in.menu_built = true;
+  EXPECT_EQ(RunUntilMove(in, 100), 3121 + static_cast<int>(FriendsMove::MENU_SETTLE_FRAMES));
 }
 
 TEST(OrcaOnlineMenuDropIn, NoMoveForQueueRoomsVersusOrAFriendWhoLeft)

@@ -35,10 +35,11 @@ namespace Orca::UX
 // character's, the joiner's Random steered in without turning its colour (Queue.h
 // RANDOM_CHARACTER), and no skip in ranked; 16, design F: the plates without the rating and
 // SEARCHING on the queue's own select, the rules bar without the timer the band shows, the
-// relabels' marks (Relabel.h): the session hashes it into the compatibility key as `ux=<n>`, so
-// two builds that would write different bytes (or mask different inputs, or part differently)
-// never meet in a room.
-constexpr int kCompatVersion = 16;
+// relabels' marks (Relabel.h); 17: a friend's drop-in from the menus waits for the main menu to
+// have built its pages (OnlineMenu.h FriendsMove MENU_BUILT), so the move comes at a later frame:
+// the session hashes it into the compatibility key as `ux=<n>`, so two builds that would write
+// different bytes (or mask different inputs, or part differently) never meet in a room.
+constexpr int kCompatVersion = 17;
 
 // The disc the game runs from (the boot's disc, or the default disc a launcher boots with): the
 // overlay's kit reads the game's own fonts from it (Kit.h). Before Init.

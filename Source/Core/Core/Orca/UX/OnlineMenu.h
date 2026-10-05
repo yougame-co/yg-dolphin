@@ -159,9 +159,19 @@ constexpr u32 EXIT_WITH_FRIENDS = 25;
 // No friend plugs in before this frame: a host's keyframe is never of its first 300 frames
 // (Rollback/OnlineMatch.cpp FIRST_KEYFRAME_FRAME), and a friend plugs in after replaying from one.
 constexpr int FIRST_FRIEND_FRAME = 300;
-// Frames the main menu runs with a friend waiting before both go: the friend's game shows the
-// host's menu for a moment first, and a menu that has just started has drawn its pages.
+// Frames the main menu runs, built, with a friend waiting before both go: the friend's game shows
+// the host's menu for half a second first.
 constexpr u32 MENU_SETTLE_FRAMES = 30;
+// muMenuMain's byte at +0xAC8 (sora_scene, the same in both games; found under the harness): its
+// start sets it 0, and the menu's process loads its files first, frame after frame, then builds
+// every page in one frame (the 29 page procs at +0x35C and the rest it destroys on its exit) and
+// sets it 1. Leaving a menu that hasn't built yet runs its exit (0x806CEBF8) over a proc table
+// that still holds the heap's fill (0xCCCCCCCC), which calls through a null vtable: Brawl reads
+// 0x00000008 at 0x806CEC6C and never draws another frame. How long the files take is the game's
+// own: 58 frames from the step going 1 on the boot's first menu, 121 on one coming back from the
+// character select, 1 in Project+. It means nothing at step 0 (a menu that hasn't started still
+// has the last menu's byte there).
+constexpr u32 MENU_BUILT = 0xAC8;
 
 // What one boundary reads.
 struct Inputs
@@ -177,11 +187,14 @@ struct Inputs
   std::string sequence;
   u32 step = 0;
   u32 exit_code = 0;
+  // On muMenuMain: its MENU_BUILT byte is set (the pages are built; only then can it be left).
+  bool menu_built = false;
   int frame = 0;
   // The block's friends bytes (MatchBlock FRIENDS_*).
   u8 tag = 0;
   u8 seen = 0;
   u8 pending = 0;
+  // The frame + 1 from which the main menu has run, built, with a friend pending (0: it hasn't).
   u32 menu_since = 0;
 };
 

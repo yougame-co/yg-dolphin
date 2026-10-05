@@ -338,10 +338,12 @@ Outputs Decide(const Inputs& in)
   // Nobody to take along, a queue match, or already on Versus' way to its character select.
   if (!(in.plugged & FRIEND_PORTS) || in.queue || IsVersusSequence(in.sequence))
     pending = false;
-  const bool menu =
-      in.scene == "muMenuMain" && in.step == STEP_RUNNING && in.exit_code == 0 && in.frame >= 0;
+  // The main menu running with its pages built (MENU_BUILT): one still loading its files can't be
+  // left, and its pages aren't on screen yet anyway.
+  const bool menu = in.scene == "muMenuMain" && in.step == STEP_RUNNING && in.menu_built &&
+                    in.exit_code == 0 && in.frame >= 0;
   const u32 since = kept ? in.menu_since : 0;
-  // How long the main menu has run with a friend waiting for it.
+  // How long the main menu has run, built, with a friend waiting for it.
   out.menu_since = pending && menu ? (since != 0 ? since : static_cast<u32>(in.frame) + 1) : 0;
   if (out.menu_since != 0 &&
       static_cast<u32>(in.frame) + 1 - out.menu_since >= MENU_SETTLE_FRAMES)
@@ -396,6 +398,12 @@ bool Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
   in.scene = ReadSceneName(m);
   in.step = m.Read32(manager + MANAGER_STEP);
   in.exit_code = m.Read32(manager + MANAGER_EXIT_CODE);
+  if (in.scene == "muMenuMain")
+  {
+    // ReadSceneName read the scene's name through this pointer, so it is one.
+    const u32 menu = m.Read32(manager + MANAGER_SCENE);
+    in.menu_built = m.Valid(menu + MENU_BUILT) && m.Read8(menu + MENU_BUILT) != 0;
+  }
   in.frame = frame;
   in.tag = m.Read8(B::FRIENDS_TAG);
   in.seen = m.Read8(B::FRIENDS_SEEN);
