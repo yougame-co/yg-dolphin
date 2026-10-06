@@ -19,6 +19,7 @@
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/OnlineMenu.h"
+#include "Core/Orca/UX/OnlineSeats.h"
 #include "Core/Orca/UX/Probe.h"
 #include "Core/Orca/UX/Queue.h"
 #include "Core/Orca/UX/SetBlock.h"
@@ -355,23 +356,55 @@ void ForceCodeMenu(Writer& w)
     w.U32(word.address, word.value);
 }
 
-// Project+'s banned fighters become Bowser and Wario in the match's init data, from the character
-// select until the fight loads.
+// gmSelCharData, the character select's record: each port's slot at +0x0A + 4 x port, its
+// character at OnlineSeats::RECORD_PLAYERS + port x RECORD_PLAYER_SIZE. Project+'s character select
+// writes Giga Bowser or Wario-Man there as it ends, when the player holds shield (L; R is a costume
+// button) on a Bowser or Wario pick. On the way to the fight the record's characters are copied
+// into the init data again.
+constexpr u32 RECORD_SLOTS = 0x0A;
+constexpr u32 RECORD_SLOT_SIZE = 4;
+constexpr u8 SLOT_BOWSER = 0x0C;
+constexpr u8 SLOT_WARIO = 0x15;
+constexpr u8 SLOT_GIGA_BOWSER = 0x38;
+constexpr u8 SLOT_WARIO_MAN = 0x36;
+
+// `v` with `from` replaced by `to`.
+u8 Swap(u8 v, u8 from, u8 to)
+{
+  return v == from ? to : v;
+}
+
+// Project+'s banned fighters become Bowser and Wario, from the character select until the fight
+// loads: in the match's init data and in the record the init data is copied from.
 void ForceLegalFighters(Writer& w, const std::string& scene)
 {
   if (scene != SCENE_CSS && scene != SCENE_SSS && scene != SCENE_BETWEEN)
     return;
-  const u32 melee = GlobalField(w.m, GLOBAL_MODE_MELEE);
-  if (!melee || !w.m.Valid(melee + MELEE_PLAYERS + 4 * MELEE_PLAYER_SIZE - 1))
-    return;
-  for (u32 i = 0; i < 4; ++i)
+  const auto legal = [](u8 c) {
+    return Swap(Swap(c, CHARACTER_GIGA_BOWSER, CHARACTER_BOWSER), CHARACTER_WARIO_MAN,
+                CHARACTER_WARIO);
+  };
+  if (const u32 melee = GlobalField(w.m, GLOBAL_MODE_MELEE);
+      melee && w.m.Valid(melee + MELEE_PLAYERS + 4 * MELEE_PLAYER_SIZE - 1))
   {
-    const u32 p = melee + MELEE_PLAYERS + i * MELEE_PLAYER_SIZE;
-    const u8 character = w.m.Read8(p);
-    if (character == CHARACTER_GIGA_BOWSER)
-      w.U8(p, CHARACTER_BOWSER);
-    else if (character == CHARACTER_WARIO_MAN)
-      w.U8(p, CHARACTER_WARIO);
+    for (u32 i = 0; i < 4; ++i)
+    {
+      const u32 p = melee + MELEE_PLAYERS + i * MELEE_PLAYER_SIZE;
+      w.U8(p, legal(w.m.Read8(p)));
+    }
+  }
+  namespace S = OnlineSeats;
+  if (const u32 record = GlobalField(w.m, S::GLOBAL_SEL_CHAR);
+      record && w.m.Valid(record + S::RECORD_PLAYERS + 4 * S::RECORD_PLAYER_SIZE - 1))
+  {
+    for (u32 i = 0; i < 4; ++i)
+    {
+      const u32 p = record + S::RECORD_PLAYERS + i * S::RECORD_PLAYER_SIZE;
+      w.U8(p, legal(w.m.Read8(p)));
+      const u32 slot = record + RECORD_SLOTS + i * RECORD_SLOT_SIZE;
+      w.U8(slot, Swap(Swap(w.m.Read8(slot), SLOT_GIGA_BOWSER, SLOT_BOWSER), SLOT_WARIO_MAN,
+                      SLOT_WARIO));
+    }
   }
 }
 

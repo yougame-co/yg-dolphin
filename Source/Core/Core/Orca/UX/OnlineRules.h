@@ -182,8 +182,8 @@ constexpr u32 BRAWL_FINAL_DESTINATION_BIT = 0x00000002;
 // gmCharacterKind values. The character select writes each pick into the match's init data.
 constexpr int CHARACTER_ICE_CLIMBERS = 0x10;
 constexpr int CHARACTER_NONE = 0x3E;
-// Project+'s banned fighters (its character select makes them from a Bowser or Wario pick with
-// shield held) and the fighters the locks play instead.
+// Project+'s banned fighters (its character select makes them from a Bowser or Wario pick with L
+// held as it ends) and the fighters the locks play instead.
 constexpr int CHARACTER_BOWSER = 0x0C;
 constexpr int CHARACTER_WARIO = 0x17;
 constexpr int CHARACTER_GIGA_BOWSER = 0x2C;

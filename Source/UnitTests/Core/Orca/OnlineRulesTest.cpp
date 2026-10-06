@@ -1249,8 +1249,33 @@ TEST(OrcaOnlineRules, ClearingGivesBackTheCodeMenusActivation)
 }
 
 // Giga Bowser and Wario-Man (Project+'s character select makes them from a Bowser or Wario pick
-// with shield held) go to the fight as Bowser and Wario: on the character select, the stage select
-// and between. The fight itself and other characters are left alone.
+// with shield held as it ends) go to the fight as Bowser and Wario: in the init data and in the
+// character select's record (gmSelCharData: slots at +0x0A + 4 x port, characters at +0xB8 + port x
+// 0x5C), on the character select, the stage select and between. The fight itself and other
+// characters are left alone.
+namespace
+{
+constexpr u32 RECORD = 0x90180B40;
+u32 RecordCharacter(int port)
+{
+  return RECORD + 0xB8 + static_cast<u32>(port) * 0x5C;
+}
+u32 RecordSlot(int port)
+{
+  return RECORD + 0x0A + static_cast<u32>(port) * 4;
+}
+void BuildRecord(FakeMemory& m)
+{
+  m.Write32(0x90181300 + 0x10, RECORD);
+  m.Fill(RECORD, 0xB8 + 4 * 0x5C);
+  for (int port = 0; port < 4; ++port)
+  {
+    m.Write8(RecordCharacter(port), NONE);
+    m.Write8(RecordSlot(port), 0x28);
+  }
+}
+}  // namespace
+
 TEST(OrcaOnlineRules, ProjectPlusBannedFightersPlayAsTheirBaseFighters)
 {
   for (Mode mode : {Mode::Casual, Mode::Ranked})
@@ -1258,21 +1283,37 @@ TEST(OrcaOnlineRules, ProjectPlusBannedFightersPlayAsTheirBaseFighters)
     for (const char* scene : {"scSelctCharacter", "scSelStage", "scMemoryChange"})
     {
       FakeMemory m = Locked(mode, Ruleset::PPlus, scene);
+      BuildRecord(m);
       SetPick(m, 0, HUMAN, CHARACTER_GIGA_BOWSER);
       SetPick(m, 1, HUMAN, CHARACTER_WARIO_MAN);
       SetPick(m, 2, NOBODY, 0x11);  // Sopo stays
+      m.Write8(RecordCharacter(0), CHARACTER_GIGA_BOWSER);
+      m.Write8(RecordCharacter(1), CHARACTER_WARIO_MAN);
+      m.Write8(RecordCharacter(2), 0x11);
+      m.Write8(RecordSlot(0), 0x38);
+      m.Write8(RecordSlot(1), 0x36);
+      m.Write8(RecordSlot(2), 0x37);  // Sopo's slot stays
       ApplyLocks(m, NextFrame());
       EXPECT_EQ(ReadPicks(m)[0].character, CHARACTER_BOWSER) << scene;
       EXPECT_EQ(ReadPicks(m)[1].character, CHARACTER_WARIO) << scene;
       EXPECT_EQ(m.Read8(MELEE + 0x98 + 2 * 0x5C), 0x11);
+      EXPECT_EQ(m.Read8(RecordCharacter(0)), CHARACTER_BOWSER) << scene;
+      EXPECT_EQ(m.Read8(RecordCharacter(1)), CHARACTER_WARIO) << scene;
+      EXPECT_EQ(m.Read8(RecordCharacter(2)), 0x11);
+      EXPECT_EQ(m.Read8(RecordSlot(0)), 0x0C) << scene;
+      EXPECT_EQ(m.Read8(RecordSlot(1)), 0x15) << scene;
+      EXPECT_EQ(m.Read8(RecordSlot(2)), 0x37);
       m.writes = 0;
       EXPECT_EQ(ApplyLocks(m, NextFrame()), 0);
     }
   }
   FakeMemory fight = Locked(Mode::Ranked, Ruleset::PPlus, "scMelee");
+  BuildRecord(fight);
   SetPick(fight, 0, HUMAN, CHARACTER_GIGA_BOWSER);
+  fight.Write8(RecordSlot(0), 0x38);
   ApplyLocks(fight, NextFrame());
   EXPECT_EQ(ReadPicks(fight)[0].character, CHARACTER_GIGA_BOWSER);
+  EXPECT_EQ(fight.Read8(RecordSlot(0)), 0x38);
   FakeMemory brawl = Locked(Mode::Ranked, Ruleset::Brawl);
   SetPick(brawl, 0, HUMAN, CHARACTER_GIGA_BOWSER);
   ApplyLocks(brawl, NextFrame());
