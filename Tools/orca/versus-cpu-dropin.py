@@ -7,8 +7,8 @@
 #
 # 1. Host boots to Group > Brawl's character select, makes CPUs of panels 2 and 3 (A on their
 #    player-type buttons: nobody's controller is in either), picks, and waits there.
-# 2. Friend sends "join <host's room>": the host's keyframe is taken on that select, the friend loads
-#    it, catches up and plugs into port 2, whose panel is a CPU's.
+# 2. Friend sends "join <host's room>": the host's keyframe is taken on that select, the friend
+#    loads it, catches up and plugs into port 2, whose panel is a CPU's.
 # 3. At the plug-in both games empty both CPU panels at the same frame ("Online seats: ... 2
 #    panel(s) cleared"), and the friend's panel becomes theirs (kind 1, "a2-kind = 00000001" in
 #    both logs at the same frame) with no input from the friend: Orca presses A for port 2 on its

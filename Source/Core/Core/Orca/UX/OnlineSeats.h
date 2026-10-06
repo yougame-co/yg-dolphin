@@ -57,12 +57,12 @@ class CPUThreadGuard;
 //   Ranked before the queue's header lands), A never reaches a player-type button (0x1D: a CPU of an
 //   empty panel, or of a human's own) or a name button (0x1C), nor anywhere within one frame's
 //   travel of them (TYPE_BUTTONS_A_FLOOR). Under a header the online rules already pass A only in
-//   the grid. Joining a fresh panel needs no A: a hand that moves into the grid with its token joins
-//   it. A panel a CPU had (its token left on the grid, gone with the CPU) can't be joined that way:
-//   Orca presses A for its port while that port's hand rests on the panel's own player-type button
-//   (PressesJoin), which the game turns into the player's panel, as a local player rejoins after
-//   removing a CPU. So a friend who plugs into a live select whose CPU was on their panel takes it
-//   at once.
+//   the grid. Joining a fresh panel needs no A: a hand that moves into the grid with its token
+//   joins it. A panel a CPU had (its token left on the grid, gone with the CPU) can't be joined
+//   that way: Orca presses A for its port while that port's hand rests on the panel's own
+//   player-type button (PressesJoin), which the game turns into the player's panel, as a local
+//   player rejoins after removing a CPU. So a friend who plugs into a live select whose CPU was on
+//   their panel takes it at once.
 // - **The seats** (ApplySeats), on the character select: an empty panel (kind 0) whose port nobody
 //   plugged in is hidden, its 39 game models (MuObjects at area +0xB0..+0x14C; each one's nw4r
 //   ScnMdl at +0xC) drawn neither opaque nor translucent (ScnObj flags +0xCC, 0x60 over the game's

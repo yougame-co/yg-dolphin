@@ -2111,7 +2111,8 @@ re-runs, as a pure function of memory and the session's synced ports, both games
 - A friend who plugged in during the boot is taken along once the menu has built and run 30 frames;
   one who plugged in on Versus' character select (or in a Versus match) is already where friends
   play, and nothing happens. B back to the main menu with the friend still in stays there: only a
-  newly plugged port counts.
+  newly plugged port counts. Since `ux=19` that select is online: its CPUs go and a friend whose
+  panel had one takes it at once ("No CPUs online", the join).
 - Never in a queue room (a header of casual or ranked): its opponent plugs in on the character
   select. What happens with a friend plugged in is never announced (`orca menu`), as before.
 - **Never before the menu has built its pages** (branch `q9-friends-jump`, `ux=17`). The main menu
@@ -2150,7 +2151,13 @@ Friends.
 
 Harness knobs (test runs only): `ORCA_UX_TEST_PLUG_AT=<frame>` plugs the ports after the first in
 from that frame (port 1 alone before), as a friend's drop-in does at its frame S, for synctests of
-the move; `ORCA_TEST_HOLD=<from>-<to>` holds joins over those frames as if the host played a
+the move; `ORCA_UX_TEST_UNPLUG_AT=<frame>:<port 2-4>` (`ux=19`) unplugs that port from that frame,
+as a friend's leave does: out of the frame hook's ports, and its pad reports no controller (the
+session's `UNPLUGGED_PAD`); `ORCA_UX_TEST_PADS_FOLLOW_PLUGS=1` makes every test port outside the
+frame hook's ports for a frame (beyond `ORCA_UX_TEST_NAMES`, or before `ORCA_UX_TEST_PLUG_AT`)
+report no controller, as a session's do, so a friend's controller appears to the game as they plug
+in (without it the harness's four pads are always connected; not with `ORCA_TEST_QUEUE_PICK`);
+`ORCA_TEST_HOLD=<from>-<to>` holds joins over those frames as if the host played a
 single-player mode (`online-menu-dropin.py --hold`).
 
 Measured 2026-10-04 (M4, headless, fresh user folders):
@@ -2902,19 +2909,43 @@ dropped in, wherever the host was, even onto Group > Brawl's select).
   fight's players change at that boundary), so no fight ever loses a player to this (a friend who
   leaves during the stage select still fights idle, as before). The characters stay; only states.
 - **The panels**, on the character select: a CPU's (kind 2) becomes empty (0). The select saves that
-  kind as it leaves, so the CPU plays no fight. The panel's picture isn't redrawn (its CPU plate
-  stays, under the harness), so the seats below hide it. With the record cleared first this only
-  acts on a select a friend dropped into while it had a CPU, or any path not yet found.
+  kind as it leaves, so the CPU plays no fight. The panel's picture isn't redrawn (a CPU's plate
+  stays), so the seats below hide it, or, on a port someone plugged into, the join below makes it
+  theirs. With the record cleared first this only acts on a select a friend dropped into while it
+  had a CPU, or any path not yet found. A human's panel whose port nobody plugged in (a friend who
+  left) is the game's: it empties one itself 17 frames after the controller goes, its token back
+  in the hand and its highlight off the grid (both games, under the harness with the session's
+  unplugged pad, `ORCA_UX_TEST_UNPLUG_AT`), and builds none for a port with no controller
+  (Project+'s record, the stage select's B). Orca writing it first (tried in review) left the
+  leaver's highlight on the grid, so it doesn't.
+- **The join** (the input gate, `OnlineSeats::PressesJoin`): a panel a CPU had can't be joined by
+  moving the hand into the grid: its token went down with the CPU and is gone with it, so the hand
+  finds the grid with no token (target 2, never 7, holding). The game's own way back is A on the
+  panel's player-type button (with that port's controller in, empty becomes the player's: HMN),
+  as a local player rejoins after removing a CPU (found under the harness, both games, local
+  Versus: the button goes empty, HMN, CPU, empty with that port's controller in, empty to CPU
+  without one; after CPU to empty, by A or by Orca, the hand reaches the grid at target 2 and never
+  joins, and A on the button makes it HMN, the token where the CPU left it). So on an online
+  select without a header, Orca presses A for a plugged port whose own panel is empty with its
+  token neither in the hand nor flying while its hand rests on that panel's own player-type
+  button, where a hand starts (hand `+0xB0`: the panel whose button it points at). A friend who
+  drops into Group > Brawl's select whose CPU was on their panel takes it at once, the game's
+  PLAYER plate and their token where the CPU's was (on Random: they play Random until they move
+  it); one who plugs into a panel whose CPU was emptied while hidden finds the same state and the
+  same press. A fresh empty panel holds its token in the hand and is joined in the grid as before;
+  a player's or a CPU's panel never gets the press (A there makes a CPU).
 - **The buttons** (the input gate): where no header locks (With Friends, a friend's drop-in, Casual
   or Ranked before the queue's header lands), A never reaches a player-type button (0x1D: a CPU of
   an empty panel, or of a human's own) or a name button (0x1C), nor any hand at y below -16.4 (the
   buttons start between -17.4 and -18.3 in both games, the 2026-10-03 rasters; a hand moves at most
   1.0 a frame, so no frame's stick takes it there with A down). Brawl's panel picture (a costume,
   0x1B) ends at -17.4, Project+'s at -16.6: A loses its bottom edge only (X and Y still turn the
-  costume). Under a header the online rules already pass A only in the grid ("The character
-  select's buttons"). Joining needs no A: a hand moved into the grid joins its panel (A on the
-  player's own empty panel, which also joined, no longer reaches the game there). The gate reads the
-  plugged ports from the friends bytes the frame hook keeps (`MatchBlock::FRIENDS_SEEN`).
+  costume). An unreadable hand (the select being built or torn down) gets no A either, as under a
+  header. Under a header the online rules already pass A only in the grid ("The character
+  select's buttons"). Joining a fresh panel needs no A: a hand moved into the grid joins it (the
+  player's own A on their empty panel, which also joined, no longer reaches the game there; the
+  join above presses it where it is needed). The gate reads the plugged ports from the friends
+  bytes the frame hook keeps (`MatchBlock::FRIENDS_SEEN`).
 - **The seats**, on any character select: an empty panel (kind 0) whose port nobody plugged in is
   hidden while the select is online, except the opponent's seat of a queue select (panel 2: always
   in a queue room, and on the queue's own select while it searches). Each panel is player area i's
@@ -2946,8 +2977,25 @@ dropped in, wherever the host was, even onto Group > Brawl's select).
 **Determinism:** every write is a pure, idempotent function of emulated memory (the header, the
 pick, the record, the areas, the queue's ready flag) and the session's synced ports, at the frame
 hook (the record and panels after the online rules, the seats after the native text); the gate's
-masks read memory alone. A joiner loads the host's keyframe, which carries all of it.
-`ux=19`.
+masks and its join press read memory alone (the hands, the areas, the friends bytes). A joiner
+loads the host's keyframe, which carries all of it. `ux=19`.
+
+**Test inputs.** The default two-player inputs (`bf-mario-link-results.txt`: A at the character
+select's 53 and 83; `pplus-1v1.txt`: 60 and 70) join with A on the player's own player-type
+button, with no visit qualifier, so on every character select. In a session two ports are plugged
+in, so the select is online, and since `ux=19` that A is masked: each player joins when the
+stick's climb takes the hand into the grid (from 113 in Brawl, 90 in Project+). Two-Orca runs of
+these inputs (`xplat.py`, `selfmatch.mjs`, `direct-link.py`, `dropin-rooms.py`,
+`occluded-test.py`) therefore play differently from a pre-19 build's from the first character
+select on (the joins later, and that A on later selects no longer reaching the game): their frames
+and hashes don't compare with a pre-19 run's. Harness-only runs (`perf.mjs`, the release's
+hashlogs: port 1 plugged in alone, a local select) are unchanged, so the hashlogs still compare
+with the live release's, and the inputs stay as they are for that reason. A harness walk that
+plays ports 2-4 from its script on an online select needs those ports plugged in
+(`ORCA_UX_TEST_NAMES`, and `ORCA_TEST_PADS=4` for ports 3 and 4): a port the frame hook doesn't
+have is nobody's there (its record entry emptied between scenes, so the next select has no panel
+for it), and `ORCA_UX_TEST_PADS_FOLLOW_PLUGS=1` gives such a port no controller, as a session
+does.
 
 **Checked 2026-10-05** (branch `q12-no-cpu` on `rel-0.3.23`, M4, headless, muted, under the solo
 lock; scripts and summaries in `~/Documents/brawl-dolphin/q12-nocpu-runs`, screenshots in
@@ -2989,6 +3037,44 @@ lock; scripts and summaries in `~/Documents/brawl-dolphin/q12-nocpu-runs`, scree
   a friend dropping in), Project+ and Brawl: PASS, 12 checksums matched each.
 - Not run: Mac <-> PC (`xplat.py`), the release's hashlogs (local Versus inputs, which this leaves
   untouched).
+
+**After review, checked 2026-10-05** (same branch; harness ports with
+`ORCA_UX_TEST_PADS_FOLLOW_PLUGS=1`, so a port nobody plugged in has no controller, as in a session;
+summaries and scripts in `~/Documents/brawl-dolphin/q12-fix-runs`, screenshots `fix-*` in
+`ui-shots/q12-no-cpu`):
+
+- A friend into Group > Brawl's live select with CPUs on panels 2 and 3 (`bf-cpu-dropin-live.txt`,
+  `pplus-cpu-dropin-live.txt`). Without the join (ux=19 as first written) both CPUs went at the
+  plug-in but the friend's panel kept its CPU plate and their hand never took it (target 2, no
+  token): stuck. With it: Brawl, CPUs cleared at 1866, the friend's panel theirs at 1871 (BO's
+  plate, their token on Random), the fight at 2202 with ports 1 and 2 only (3 and 4 `3E 03`);
+  Project+ 634, 639, the fight at 889 the same.
+- A friend who leaves With Friends' select (`bf-friend-leaves.txt`, `pplus-friend-leaves.txt`, three
+  players, `ORCA_UX_TEST_UNPLUG_AT`): the game empties the leaver's panel 17 frames after the
+  controller goes (Brawl 1834 to 1851, Project+ 554 to 571; the same with no online rule at all, a
+  local control), Orca hides it then, and the fight has ports 1 and 2 only. Orca emptying it at
+  once (the review's suggestion, tried) left the leaver's highlight on the grid and was dropped.
+  A select built from the record for a port with no controller has no panel there (Project+, the
+  stage select's B), so the record race the review raised never shows a human either.
+- `YG_SYNCTEST=7`, **0 RAM mismatches**, the final build: the friend into a live select with CPUs,
+  Brawl 1700-2450 (5,201 re-run frames), Project+ 450-1150 (4,851); the friend who leaves, Brawl
+  1650-2300 (4,501), Project+ 300-950 (4,501); Luis's walk, Project+ 300-1700 (9,751; the record
+  cleared at 1304, the panels hidden at 1310 as before). With the leaver's write still in (the same
+  join and masks) also the Project+ queue room with CPUs in the record (27,251; the pick in at
+  952, both ready 1195, the fight at 4030 with two players) and Brawl's queue room (11,851; pick
+  2200, ready 2427), at the frames of the first round.
+- Two Orcas over yougame.co (dev tickets), the final build: `Tools/orca/versus-cpu-dropin.py`
+  (new: the host makes CPUs of panels 2 and 3 on Group > Brawl's select, the friend drops in
+  there; both machines clear the CPUs at the same frame and give the friend panel 2 at the same
+  frame with no input from them), Brawl **PASS** (cleared 2239, theirs 2244, 14 checksums matched
+  each), Project+ **PASS** (1156, 1161, 13); `queue-e2e.mjs --pplus --queue ranked --q2 --probe
+  pplus-cpu-record-probe.txt` **PASS** (2-0 set, 3 verdicts alike, 229 checksums each);
+  `queue-e2e.mjs --queue ranked --q2` (Brawl) **PASS** (224 each); `online-menu-dropin.py`, both
+  games, **PASS** (12 each).
+- Unit tests: 18 `OrcaOnlineSeats` (the join's press by hand, panel, kind and token; the leaver's
+  panel left to the game); 470 `Orca*` pass.
+- Not run: Mac <-> PC (`xplat.py`, needs the PC), the release's hashlogs (local selects get no
+  writes, presses or masks from this).
 
 ## Ranked sets
 
