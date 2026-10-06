@@ -5515,3 +5515,38 @@ struct LobbyPickPlan
 # runs (with ORCA_TEST_QUEUE=ranked:solo and pplus-queue2-ranked.txt) and two-Orca runs
 # (queue-e2e.mjs --probe, dev tickets). The watches log what the select and the fight make of it.
 ```
+
+
+# Moved from ORCA_ARCHITECTURE.md (2026-10-06): internal messaging guidance, not public
+
+## Explaining it to people (internal)
+
+**One sentence:**
+
+> "Rollback means rewinding the console a few frames and replaying them. We rewind all of it, at
+> one exact moment, so a replayed frame comes out identical to the original."
+
+**Thirty seconds:**
+
+> "When your opponent's input arrives late, the game rewinds a few frames and replays them with the
+> right input. That only works if the replay is identical to the original. Earlier approaches for
+> Brawl rewound most of the console and patched the gaps with hooks inside the game. We rewind the
+> whole console at one exact point, and we test it by rewinding every frame of full matches and
+> checking memory byte for byte. Once that passes, the game needs no changes at all."
+
+**An analogy:**
+
+> "Imagine rewinding a chess game. One approach puts the pieces back but leaves the clocks and the
+> scoresheet as they were, then adds house rules to cover the mismatches. We put back the pieces,
+> the clocks and the scoresheet, so no house rules are needed."
+
+**If someone asks what the new idea was:**
+
+> "There wasn't a new technique. Restoring the whole machine exactly is the textbook way to do
+> rollback in an emulator. The difference was testing: we made the emulator prove a rewound frame is
+> byte-for-byte identical before writing any netcode. That turned vague desyncs into specific bugs
+> we could fix."
+
+**What not to say:** that Brawlback "did it wrong", or that Orca is faster per frame. Brawlback's
+research informed the experiments that led to Orca's design, and we haven't measured the speed
+claim.
