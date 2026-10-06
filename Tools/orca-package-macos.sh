@@ -123,7 +123,7 @@ RESOURCES="$APP/Contents/Resources"
 if [ "$INTERNAL" = 1 ]; then
   SOURCE_LINE="Internal test build of Orca $COMMIT from a private repository. Not for public distribution."
 else
-  SOURCE_LINE="Source:  ${ORCA_SOURCE_URL:-https://github.com/Lrosias/orca-netplay/tree/orca-$VERSION}"
+  SOURCE_LINE="Source:  ${ORCA_SOURCE_URL:-not published (a development build)}"
 fi
 cat >"$RESOURCES/SOURCE.txt" <<EOF
 Orca $VERSION for macOS (arm64)
