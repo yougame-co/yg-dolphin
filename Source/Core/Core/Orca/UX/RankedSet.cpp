@@ -475,7 +475,10 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating)
                                    after.wins[1 - me], Queue::OwnRating(), SetEnd::NowMs());
   }
   const bool fighting = facts.scene == Scene::Fight || facts.scene == Scene::Between;
-  const u32 packed = 0x80000000u | (fighting ? 1u << 30 : 0) | (u32(after.done & 3) << 24) |
+  // Bit 29: the results screen (ScoreLine names the game just played there).
+  const bool results = facts.scene == Scene::Results;
+  const u32 packed = 0x80000000u | (fighting ? 1u << 30 : 0) | (results ? 1u << 29 : 0) |
+                     (u32(after.done & 3) << 24) |
                      (after.tiebreak ? 1u << 23 : 0) | (u32(after.wins[0]) << 16) |
                      (u32(after.wins[1]) << 8) | u32(std::min(after.GameNumber(), 255));
   s_published.store(packed, std::memory_order_relaxed);
@@ -520,7 +523,7 @@ Dots CurrentDots()
   return d;
 }
 
-std::string ScoreLine(const SetState& set, int local_port)
+std::string ScoreLine(const SetState& set, int local_port, bool results)
 {
   const int me = local_port == 1 ? 1 : 0;
   const int mine = set.wins[me], theirs = set.wins[1 - me];
@@ -530,8 +533,14 @@ std::string ScoreLine(const SetState& set, int local_port)
     return fmt::format("Set over · {}–{}", mine, theirs);
   if (set.tiebreak)
     return fmt::format("Tiebreak game · {}–{}", mine, theirs);
-  // An ordinary game: nothing (Luis, 2026-10-05: "it says game 2 on top which is weird"; the dots
-  // say which game it is, the result's toast the score).
+  // An ordinary game's results screen: the game just played (the set already counts it there), so
+  // game 1's says "Game 1 · 1–0". A draw counts nothing (the same game again), and before any win
+  // there is no game to name.
+  const int played = set.wins[0] + set.wins[1];
+  if (results && played > 0)
+    return fmt::format("Game {} · {}–{}", played, mine, theirs);
+  // Anywhere else nothing (Luis, 2026-10-05: "it says game 2 on top which is weird"; the dots say
+  // which game it is, the result's toast the score).
   return "";
 }
 
@@ -556,7 +565,7 @@ std::string CurrentScoreLine()
   s.done = static_cast<u8>((packed >> 24) & 3);
   s.tiebreak = packed & (1u << 23);
   s.wins = {static_cast<u8>((packed >> 16) & 0x7F), static_cast<u8>((packed >> 8) & 0xFF)};
-  return ScoreLine(s, s_local_port.load(std::memory_order_relaxed));
+  return ScoreLine(s, s_local_port.load(std::memory_order_relaxed), packed & (1u << 29));
 }
 
 void SetLocalPort(int port)

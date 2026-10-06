@@ -403,9 +403,17 @@ TEST(OrcaRankedSet, ScoreLine)
 {
   SetState s;
   EXPECT_EQ(RankedSet::ScoreLine(s, 0), "");
+  EXPECT_EQ(RankedSet::ScoreLine(s, 0, true), "");
   s.wins = {1, 0};
   EXPECT_EQ(RankedSet::ScoreLine(s, 0), "");
   EXPECT_EQ(RankedSet::ScoreLine(s, 1), "");
+  // The results screen names the game just played (Luis, 2026-10-05): game 1's says Game 1.
+  EXPECT_EQ(RankedSet::ScoreLine(s, 0, true), "Game 1 · 1–0");
+  EXPECT_EQ(RankedSet::ScoreLine(s, 1, true), "Game 1 · 0–1");
+  s.wins = {1, 1};
+  EXPECT_EQ(RankedSet::ScoreLine(s, 0, true), "Game 2 · 1–1");
+  EXPECT_EQ(RankedSet::ScoreLine(s, 0), "");
+  s.wins = {1, 0};
   s.tiebreak = true;
   EXPECT_EQ(RankedSet::ScoreLine(s, 1), "Tiebreak game · 0–1");
   s.tiebreak = false;

@@ -99,9 +99,12 @@ Facts ReadFacts(const GuestMemory& memory, bool live);
 void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating);
 
 // The set score line for the overlay (local UI only), the local player's score first:
-// "Tiebreak game · 1–1", "Set over · 2–1", "Set void · 1–0"; empty for an ordinary game (no
-// "Game N": the dots say which game it is) and outside a ranked set.
-std::string ScoreLine(const SetBlock::SetState& set, int local_port);
+// "Tiebreak game · 1–1", "Set over · 2–1", "Set void · 1–0"; on the results screen of an ordinary
+// game, the game just played and the score ("Game 1 · 1–0": that screen has no dots; Luis,
+// 2026-10-05: "it should correctly say game 1 and 2 respectively because we are on the victory
+// screens"); empty elsewhere for an ordinary game (the dots say which game it is) and outside a
+// ranked set.
+std::string ScoreLine(const SetBlock::SetState& set, int local_port, bool results = false);
 // A matchmade game's result toast (local UI only), the local player's score first: "You won ·
 // 1–0", "You lost · 0–1", "Draw · played again", "That game didn't count". `out` is the room's
 // verdict for this player: "won", "lost", "draw", anything else a void.
