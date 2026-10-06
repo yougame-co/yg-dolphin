@@ -58,7 +58,7 @@ public:
   // The 32 quiet bytes to play for the AI DMA's read at `address`, which finds `ram` there: only if
   // a kept frame covers that read and RAM still holds what the mixer wrote (a rollback load or the
   // game could have changed it). Otherwise null, and the DMA plays RAM.
-  const u8* Find(u32 address, const u8* ram) const;
+  const u8* Find(u32 address, const u8* ram);
   void Clear();
 
 private:
@@ -71,6 +71,8 @@ private:
   };
   std::array<Entry, KEPT> m_entries{};
   std::size_t m_next = 0;
+  u64 m_reads = 0;
+  u64 m_quiet_reads = 0;
 };
 
 // The emulator's one shadow, used on the CPU thread only (the AX HLE and the AI DMA both run there).

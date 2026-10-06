@@ -7,6 +7,7 @@
 #include <atomic>
 #include <cstring>
 
+#include "Common/Logging/Log.h"
 #include "Core/Orca/Profile.h"
 
 namespace Orca::Music
@@ -34,7 +35,8 @@ bool On()
 
 void SetOn(bool on)
 {
-  OnFlag().store(on, std::memory_order_relaxed);
+  if (OnFlag().exchange(on, std::memory_order_relaxed) != on)
+    NOTICE_LOG_FMT(ROLLBACK, "Music: {} on this machine", on ? "on" : "off");
 }
 
 Frame MixFrame(std::span<const int, FRAME_SAMPLES> main_left,
@@ -65,8 +67,14 @@ void Shadow::Put(u32 address, const Frame& written, const Frame& quiet)
   e.quiet = quiet;
 }
 
-const u8* Shadow::Find(u32 address, const u8* ram) const
+const u8* Shadow::Find(u32 address, const u8* ram)
 {
+  // About every 30 s of play, how much of it went out without the music.
+  if (++m_reads % (1u << 17) == 0)
+  {
+    NOTICE_LOG_FMT(ROLLBACK, "Music: off, {} of {} AI blocks played without it", m_quiet_reads,
+                   m_reads);
+  }
   // Newest first: after a rollback re-run the same buffer holds the re-run's frame.
   for (std::size_t n = 1; n <= KEPT; ++n)
   {
@@ -75,7 +83,10 @@ const u8* Shadow::Find(u32 address, const u8* ram) const
       continue;
     const std::size_t offset = address - e.address;
     if (std::memcmp(ram, &e.written[offset], DMA_BYTES) == 0)
+    {
+      ++m_quiet_reads;
       return &e.quiet[offset];
+    }
   }
   return nullptr;
 }
@@ -84,6 +95,8 @@ void Shadow::Clear()
 {
   m_entries = {};
   m_next = 0;
+  m_reads = 0;
+  m_quiet_reads = 0;
 }
 
 Shadow& GetShadow()
