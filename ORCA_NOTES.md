@@ -4916,8 +4916,10 @@ rooms Worker now keeps the joiner).
 
 **Keyframe refusals.** A final 4xx from the store (`LastRefusal`) used to make the host pack and
 upload a 22-27 MB keyframe every ~3.5 s while a friend waited (1,250 refused uploads on launch
-night). Now the waiting friend is dropped with `signed_out` or `refused` at once
-(`Tools/orca/dropin-refused.py`). 403 `signed_out` first retries with a fresh ticket.
+night). Now the waiting friend is dropped with `signed_out` or `refused` at once. 403 `signed_out`
+first retries with a fresh ticket. `Tools/orca/dropin-refused.py` (dev tickets, which the store
+refuses with 403 `dev_ticket`): PASS, the friend hears `orca error network` 2 s after joining (it
+used to wait out its 90 s join limit), and the host made one keyframe.
 
 **Logs.** `orca queue unready` now logs why (B, the token picked up, A on Back, cleared after the
 room); the compatibility key logs its inputs when they change, so a player alone in a queue shows
@@ -4925,7 +4927,8 @@ which input split them (FMA, files, settings).
 
 **Paused room.** `Platform::WatchRoomWhilePaused` runs `KeepRoomOpen` on the CPU thread every 2 s
 during the player's pause (`Core::RunOnCPUThread`), so an edge close while paused reopens the room
-instead of leaving it dead until the player unpauses.
+instead of leaving it dead until the player unpauses. `Tools/orca/pause-room.py`: PASS, paused,
+`test-drop-room`, `orca error network` 1 s later, the room open again 10 s later, never running.
 
 ## Code comments from 0.3.27, as written
 
