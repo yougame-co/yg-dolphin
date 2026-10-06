@@ -7,7 +7,8 @@
 
 Reads Data/Sys/Orca/<profile>.ini, .patches, .jitwarm and Textures/RSBE01/ from this checkout (or
 --sys), and for Project+ the official release's files: Launcher/Project+ Netplay Launcher.dol and the
-files inside Wii/sd.raw (unpacked with 7-Zip, --7z), plus its license.txt. Writes the bundle to
+files inside Wii/sd.raw (unpacked by fatread.py, standard library only; --7z <7-Zip> to
+unpack with 7-Zip instead), plus its license.txt. Writes the bundle to
 <out>/ (which must not exist yet): mod.json, launcher.dol, sd/..., orca/patches/<profile>.patches,
 orca/textures/..., orca/jitwarm. A bundle never holds tree.json (the app writes it into the run
 folder it lays out); --tree also writes one, making <out> a run folder for local mod-mode runs
@@ -139,7 +140,8 @@ def main():
     ap.add_argument("--tree", action="store_true", help="also write tree.json (a local run folder)")
     ap.add_argument("--sys", default=os.path.join(REPO, "Data", "Sys"), help="the Sys folder (default: this checkout's)")
     ap.add_argument("--pplus-user", help="Project+ release's user/ folder (Launcher/, Wii/sd.raw)")
-    ap.add_argument("--7z", dest="sevenzip", default=shutil.which("7zz") or "/opt/homebrew/bin/7zz")
+    ap.add_argument("--7z", dest="sevenzip", default=None,
+                    help="unpack sd.raw with this 7-Zip (7zz or 7z.exe); default: fatread.py, no 7-Zip needed")
     ap.add_argument("--min-orca", default="0.4.0")
     args = ap.parse_args()
 
@@ -247,7 +249,13 @@ def main():
             if os.path.getsize(image) != PPLUS_SD_BYTES:
                 sys.exit(f"{image} is not {PPLUS_SD_BYTES} bytes")
             unpacked = os.path.join(tmp, ".sd-unpack")
-            subprocess.run([args.sevenzip, "x", "-y", "-bso0", "-bsp0", f"-o{unpacked}", image], check=True)
+            if args.sevenzip:
+                subprocess.run([args.sevenzip, "x", "-y", "-bso0", "-bsp0", f"-o{unpacked}", image], check=True)
+            else:
+                sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+                import fatread
+
+                fatread.extract(image, unpacked)
             for root, dirs, names in os.walk(unpacked):
                 dirs.sort()
                 for name in sorted(names):
