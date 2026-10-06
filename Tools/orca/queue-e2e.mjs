@@ -135,6 +135,19 @@ if (PROBE && SLUG) {
 // hand from panel 1 onto the RANDOM tile in each game.
 const RANDOM_CHAR = 41;
 const RANDOM_PATH = PPLUS ? { up: 20, right: 24 } : { up: 22, right: 58 };
+// --pick bowser (Project+, --q2): both pick Bowser (up, then right from panel 1).
+const BOWSER_CHAR = 12;
+const BOWSER_PATH = { up: 33, right: 28 };
+if (PICK === "bowser" && !PPLUS) {
+  console.error("--pick bowser is for Project+");
+  process.exit(2);
+}
+// Project+'s Code Menu under a ranked or casual header (ORCA.md "Project+'s Code Menu and banned
+// fighters"). --giga: both hold L through the first character select's Start, which makes a Bowser
+// pick Giga Bowser unless Orca turns it back. --chord: both press L+R+D-pad Down every 2.5 s of
+// each fight and once on each results screen, which opens the menu unless Orca keeps it shut.
+const GIGA = argv.includes("--giga");
+const CHORD = argv.includes("--chord");
 const PROFILE = PPLUS ? "pplus32" : "rsbe01";
 const DEV_GAME = `orca-queue-e2e-${PROFILE}`;
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), "orca-queue-e2e-"));
@@ -166,6 +179,8 @@ const BTN = {
   UP: 128,
   START: 256,
   Z: 512,
+  R: 1024,
+  L: 2048,
 };
 
 class Side {
@@ -233,7 +248,10 @@ class Side {
           type: i === 0 ? "wired" : null,
           buttons: i === 0 ? this.pad.buttons : 0,
           axes: i === 0 ? this.pad.axes : [128, 128, 128, 128],
-          triggers: [0, 0],
+          triggers:
+            i === 0
+              ? [this.pad.buttons & BTN.L ? 255 : 0, this.pad.buttons & BTN.R ? 255 : 0]
+              : [0, 0],
           origin: [128, 128, 128, 128, 0, 0],
           calibrationRevision: 0,
         }));
@@ -594,6 +612,18 @@ class Side {
     this.pad.buttons |= BTN[button];
     await sleep(ms);
     this.pad.buttons &= ~BTN[button];
+    await sleep(120);
+  }
+
+  // L+R held, D-pad Down pressed: Project+'s Code Menu chord.
+  async chord() {
+    this.pad.buttons |= BTN.L | BTN.R;
+    await sleep(150);
+    this.pad.buttons |= BTN.DOWN;
+    await sleep(100);
+    this.pad.buttons &= ~BTN.DOWN;
+    await sleep(150);
+    this.pad.buttons &= ~(BTN.L | BTN.R);
     await sleep(120);
   }
 
@@ -1020,6 +1050,9 @@ async function q2Ready(side, queue) {
     // Up into the grid's bottom row, then right onto RANDOM (frames at 60 a second).
     await side.hold([128, 255, 128, 128], Math.round((RANDOM_PATH.up * 1000) / 60));
     await side.hold([255, 128, 128, 128], Math.round((RANDOM_PATH.right * 1000) / 60));
+  } else if (PICK === "bowser") {
+    await side.hold([128, 255, 128, 128], Math.round((BOWSER_PATH.up * 1000) / 60));
+    await side.hold([255, 128, 128, 128], Math.round((BOWSER_PATH.right * 1000) / 60));
   } else {
     await side.hold([128, 255, 128, 128], 450);
   }
@@ -1036,6 +1069,8 @@ async function q2Ready(side, queue) {
       if (r.m[1] !== queue) fail(`${side.name}: ${r.line}, wanted ${queue}`);
       if (PICK === "random" && Number(r.m[2]) !== RANDOM_CHAR)
         fail(`${side.name}: ${r.line}, wanted Random (${RANDOM_CHAR})`);
+      if (PICK === "bowser" && Number(r.m[2]) !== BOWSER_CHAR)
+        fail(`${side.name}: ${r.line}, wanted Bowser (${BOWSER_CHAR})`);
       return r;
     }
     if (tries >= 4) fail(`${side.name}: Start on its own character select never readied it`);
@@ -1102,6 +1137,11 @@ async function q2Css(host, joiner, first, queueFrom = 0) {
     ]);
     await sleep(300);
   }
+  const giga = GIGA && first;
+  if (giga) {
+    for (const s of [host, joiner]) s.pad.buttons |= BTN.L;
+    log("--giga: both hold L through the character select's Start");
+  }
   for (let tries = 0; host.scene === "scSelctCharacter"; ++tries) {
     if (tries >= (QUEUE === "ranked" ? 120 : 30)) fail("the character select never went on");
     if (QUEUE === "ranked" && !first && tries < 3) {
@@ -1111,6 +1151,7 @@ async function q2Css(host, joiner, first, queueFrom = 0) {
     await Promise.all([host.press("START"), joiner.press("START")]);
     await sleep(1200);
   }
+  if (giga) for (const s of [host, joiner]) s.pad.buttons &= ~BTN.L;
 }
 
 // --scenario noskip: ranked has no skip. On every character select both players hold Z for 3 s
@@ -1144,9 +1185,26 @@ async function q2Fight(host, joiner) {
   const hostFrom = host.lines.length;
   const setEndFrom = [host.setEndLog.length, joiner.setEndLog.length];
   const resultsFrom = [host.results.length, joiner.results.length];
+  let chords = 0;
+  const chorder =
+    CHORD &&
+    setInterval(() => {
+      if (host.scene !== "scMelee") return;
+      ++chords;
+      host.chord();
+      joiner.chord();
+    }, 2500);
   await host
     .waitScene("scVsResult", 240000)
-    .finally(() => (joiner.pad.axes = [128, 128, 128, 128]));
+    .finally(() => {
+      joiner.pad.axes = [128, 128, 128, 128];
+      if (chorder) clearInterval(chorder);
+    });
+  if (CHORD) {
+    await sleep(1500);
+    await Promise.all([host.chord(), joiner.chord()]);
+    log(`--chord: ${chords} chords by both in the fight, one each on the results screen`);
+  }
   // The set's last game: VICTORY on one side, DEFEAT on the other (UX/SetEnd.h); then the room
   // after the set, until both left it.
   if (QUEUE === "ranked" && (await setEndPanels([host, joiner], setEndFrom, resultsFrom)))
