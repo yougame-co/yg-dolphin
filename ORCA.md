@@ -408,8 +408,9 @@ A player's own controls are 46 bytes: rumble, then a tag's layout (`NameTags.h`)
 They come from `ORCA_CONTROLS` at boot, else the file Orca kept for this game
 (`<user>/Config/OrcaControls-<game>.txt`), and from the app's `controls <hex>` mid-run. While the
 player is alone, a change they make to the tag they wear (the controls menu, Project+'s name list)
-becomes their own controls: Orca prints `orca controls <hex>` and keeps the file. Orca's own writes
-and a save that isn't theirs (after a resync) never count.
+becomes their own controls: Orca prints `orca controls <hex>` and keeps the file. Orca's own writes,
+a save that isn't theirs (after a resync) and re-runs never count. Controls loaded from the file
+(no `ORCA_CONTROLS`) are printed the same way once at boot, so the page shows what Orca plays.
 
 - **Solo**, the own port's values carry them from the frame they change, so the YouGame tag gets them
   on every character select: Training, the queue's own select, With Friends. A friend who joins
@@ -1503,7 +1504,7 @@ never pauses Orca: the page sends `blur`, the player's pad goes neutral, and the
 | `error <sentence>` | Something failed. Each `orca error` also gets an `error` twin. |
 | `orca state <state>` / `orca error <code> <sentence>` | Session status (`Orca/Status.h`). Forward every line that starts with `orca `. |
 | `orca menu ...`, `orca result ...`, `orca queue ...` | See [Online menu](#online-menu) and [Matchmaking](#matchmaking-and-results). |
-| `orca controls <hex>` | The player changed their own controls in the game; the page keeps them. |
+| `orca controls <hex>` | The player's own controls: changed in the game, or loaded from Orca's file at boot. The page keeps them. |
 | `exit <code>` | Always last: 0 normal, 1 a reported error, 2 bad arguments. |
 
 ### Focus
