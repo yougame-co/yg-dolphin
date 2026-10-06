@@ -45,7 +45,7 @@ comm= | grep -q yougame-desktop/orca/apps`), with the 1-minute load under 18.
 
    ```
    BIN=build/Binaries/dolphin-emu-nogui
-   DISC=~/Documents/ROMs/Wii/"Super Smash Bros. Brawl (USA, Canada) (Rev 2).wbfs"
+   DISC=/path/to/your/brawl-rev2.wbfs   # your own Brawl (USA, Rev 2) disc image
    DOL=~/Documents/brawl-dolphin/pplus/run/"Project+ Netplay Launcher.dol"
    # Project+: queue2 casual, 2 games in the matchmade room; skip, then the quick rematch and a
    # game in the new room; a friend dropping in on the main menu's ONLINE page
