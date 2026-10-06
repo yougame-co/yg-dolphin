@@ -29,6 +29,9 @@ add_dolphin_test(OrcaCrashNoteTest Orca/CrashNoteTest.cpp)
 add_dolphin_test(OrcaBootLogsTest Orca/BootLogsTest.cpp)
 add_dolphin_test(OrcaLaunchTest Orca/LaunchTest.cpp)
 add_dolphin_test(OrcaModTest Orca/ModTest.cpp)
+# ModTest includes xxh3.h; core links xxhash PRIVATE, so the test needs it directly (MSVC has no
+# system copy on its include path to hide that).
+target_link_libraries(OrcaModTest PRIVATE xxhash::xxhash)
 add_dolphin_test(OrcaCowTest Orca/CowTest.cpp)
 add_dolphin_test(OrcaKeyframeTest Orca/KeyframeTest.cpp)
 add_dolphin_test(OrcaFreshStartTest Orca/FreshStartTest.cpp)
