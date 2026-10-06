@@ -126,13 +126,22 @@ void SetPick(FakeMemory& m, u32 pick)
 {
   m.Put32(SEQUENCE + 0x18, pick);
 }
-void SetHand(FakeMemory& m, int port, u32 target, float y, u32 button = 0)
+// `panel`: the panel whose button the hand points at (+0xB0; anything past 3 is none).
+void SetHand(FakeMemory& m, int port, u32 target, float y, u32 button = 0, u32 panel = 0xFFFFFFFF)
 {
   const u32 hand = HAND + static_cast<u32>(port) * 0x100;
   m.Put32(hand + 0x80, target);
   m.Put32(hand + 0x90, std::bit_cast<u32>(0.0f));
   m.Put32(hand + 0x94, std::bit_cast<u32>(y));
   m.Put32(hand + 0xAC, button);
+  m.Put32(hand + 0xB0, panel);
+}
+// The token of port `port`'s panel: in the hand (a fresh panel's), down, or flying.
+void SetToken(FakeMemory& m, int port, bool in_hand, bool flying = false)
+{
+  const u32 area = AREA + static_cast<u32>(port) * 0x1000;
+  m.bytes[area + 0x1F8] = in_hand ? 1 : 0;
+  m.bytes[area + 0x1F9] = flying ? 1 : 0;
 }
 
 // The Versus character select as both games build it: four player areas, each with its hand and
@@ -169,6 +178,7 @@ FakeMemory Game(std::string_view scene = "scSelctCharacter", u32 pick = 0xCCCCCC
     m.Put32(area + 0x1A8, HAND + port * 0x100);
     m.Fill(HAND + port * 0x100, 0xE0);
     SetHand(m, static_cast<int>(port), Rules::CSS_HAND_GRID, 5.0f);
+    SetToken(m, static_cast<int>(port), true);
     for (u32 slot = 0; slot < 40; ++slot)
     {
       if (slot == 36)
@@ -245,9 +255,12 @@ TEST(OrcaOnlineSeats, TheRecordKeepsNoCpuAndNoHumanWithoutAPort)
   EXPECT_EQ(RecordStateFor(NOBODY, true), NOBODY);
   // Anything else this doesn't know stays.
   EXPECT_EQ(RecordStateFor(2, false), 2);
+  // The panels: a CPU's becomes empty; a human's is the game's (it empties one whose controller
+  // went itself).
   EXPECT_EQ(PanelKindFor(AREA_KIND_CPU), AREA_KIND_NONE);
   EXPECT_EQ(PanelKindFor(AREA_KIND_HUMAN), AREA_KIND_HUMAN);
   EXPECT_EQ(PanelKindFor(AREA_KIND_NONE), AREA_KIND_NONE);
+  EXPECT_EQ(PanelKindFor(3), 3u);
 }
 
 TEST(OrcaOnlineSeats, ACpuFromLocalVersusNeverReachesRankedsCharacterSelect)
@@ -370,6 +383,31 @@ TEST(OrcaOnlineSeats, ACpuPanelOnAnOnlineSelectBecomesEmpty)
   EXPECT_EQ(Kind(room, 1), AREA_KIND_NONE);
 }
 
+TEST(OrcaOnlineSeats, AFriendWhoLeftIsTheGamesToEmpty)
+{
+  // With Friends' select, three players in, then port 3's friend leaves (unplugged). The game
+  // empties their panel itself 17 frames after the controller goes, its token back in the hand
+  // (both games, under the harness); a write here would come first and leave the token's highlight
+  // on the grid. So the panels' clear leaves every human's panel alone, plugged in or not, and the
+  // panel is hidden once the game has emptied it.
+  FakeMemory m = Game("scSelctCharacter", 25);
+  SetKind(m, 0, AREA_KIND_HUMAN);
+  SetKind(m, 1, AREA_KIND_HUMAN);
+  SetKind(m, 2, AREA_KIND_HUMAN);
+  EXPECT_EQ(ClearPanels(m, 0x3), 0);
+  EXPECT_EQ(m.writes, 0);
+  EXPECT_EQ(Kind(m, 2), AREA_KIND_HUMAN);
+  EXPECT_EQ(HiddenAfter(m, 0x3), 0b1000);
+  SetKind(m, 2, AREA_KIND_NONE);
+  EXPECT_EQ(HiddenAfter(m, 0x3), 0b1100);
+  // The record between two scenes still keeps nobody on a port nobody plugged in.
+  FakeMemory between = Game("scMemoryChange", 25);
+  SetRecordState(between, 0, 0x1E, STATE_HUMAN);
+  SetRecordState(between, 2, 0x10, STATE_HUMAN);
+  EXPECT_EQ(ClearRecord(between, 0x3), 1);
+  EXPECT_EQ(RecordState(between, 2), STATE_NOBODY);
+}
+
 TEST(OrcaOnlineSeats, WhichSeatsAreHidden)
 {
   const Header none{};
@@ -395,8 +433,8 @@ TEST(OrcaOnlineSeats, WhichSeatsAreHidden)
   EXPECT_TRUE(SeatHidden(true, none, 1, AREA_KIND_NONE, false, false));
   EXPECT_FALSE(SeatHidden(true, none, 1, AREA_KIND_NONE, true, false));
   EXPECT_FALSE(SeatHidden(true, none, 3, AREA_KIND_NONE, true, false));
-  // Never a panel someone plays: a human who left keeps theirs, and a CPU's shows until it is
-  // cleared (ClearPanels runs first at the same boundary).
+  // Never a panel with a player: a human's shows (a friend who left: until the game empties it), a
+  // CPU's until ClearPanels (which runs first at the same boundary) empties it.
   EXPECT_FALSE(SeatHidden(true, none, 1, AREA_KIND_HUMAN, false, false));
   EXPECT_FALSE(SeatHidden(true, room, 2, AREA_KIND_CPU, false, false));
 }
@@ -505,8 +543,8 @@ TEST(OrcaOnlineSeats, APlayerTypeButtonNeverTakesAOnAnOnlineSelectWithoutAHeader
   EXPECT_FALSE(
       HandMayPressA(CssHand{true, Rules::CSS_HAND_NOTHING, 0, 0,
                             std::numeric_limits<float>::quiet_NaN()}));
-  // A hand that can't be read: the game's own A, as before.
-  EXPECT_TRUE(HandMayPressA(CssHand{}));
+  // A hand that can't be read (the select being built or torn down): no A, as under a header.
+  EXPECT_FALSE(HandMayPressA(CssHand{}));
 }
 
 TEST(OrcaOnlineSeats, TheGateKeepsAOffTheButtonsOnlyWhereItShould)
@@ -516,7 +554,7 @@ TEST(OrcaOnlineSeats, TheGateKeepsAOffTheButtonsOnlyWhereItShould)
   };
   // With Friends: port 1 on panel 3's player-type button, port 2 in the grid.
   FakeMemory m = Game("scSelctCharacter", 25);
-  SetHand(m, 0, Rules::CSS_HAND_BUTTON, -19.8f, Rules::CSS_BUTTON_PLAYER_TYPE);
+  SetHand(m, 0, Rules::CSS_HAND_BUTTON, -19.8f, Rules::CSS_BUTTON_PLAYER_TYPE, 2);
   EXPECT_TRUE(a_masked(m, 0));
   EXPECT_FALSE(a_masked(m, 1));
   // Nothing else is masked by this rule.
@@ -539,6 +577,69 @@ TEST(OrcaOnlineSeats, TheGateKeepsAOffTheButtonsOnlyWhereItShould)
   // Off the character select: nothing.
   FakeMemory sss = Game("scSelStage", 25);
   EXPECT_TRUE(GateMasks(sss)[0].Empty());
+}
+
+TEST(OrcaOnlineSeats, APanelACpuLeftIsJoinedWithTheGamesOwnA)
+{
+  using Rules::CssHand;
+  const auto on_button = [](int panel, u32 button = Rules::CSS_BUTTON_PLAYER_TYPE) {
+    return CssHand{true, Rules::CSS_HAND_BUTTON, button, -7.5f, -19.8f, panel};
+  };
+  // Port 2's hand on its own panel's player-type button, the panel empty, its token on the grid (a
+  // CPU's, gone with it): A, the game's own way to make it the player's.
+  EXPECT_TRUE(PressesJoin(on_button(1), 1, AREA_KIND_NONE, false, false));
+  // Not a fresh panel (its token in the hand: moving into the grid joins it), nor one in flight.
+  EXPECT_FALSE(PressesJoin(on_button(1), 1, AREA_KIND_NONE, true, false));
+  EXPECT_FALSE(PressesJoin(on_button(1), 1, AREA_KIND_NONE, false, true));
+  // Never a player's or a CPU's panel (A there makes a CPU, or the next one), never another's panel
+  // (A there would make a CPU for a port nobody plays), never the name button or the grid.
+  EXPECT_FALSE(PressesJoin(on_button(1), 1, AREA_KIND_HUMAN, false, false));
+  EXPECT_FALSE(PressesJoin(on_button(1), 1, AREA_KIND_CPU, false, false));
+  EXPECT_FALSE(PressesJoin(on_button(2), 1, AREA_KIND_NONE, false, false));
+  EXPECT_FALSE(PressesJoin(on_button(-1), 1, AREA_KIND_NONE, false, false));
+  EXPECT_FALSE(PressesJoin(on_button(1, CSS_BUTTON_NAME), 1, AREA_KIND_NONE, false, false));
+  EXPECT_FALSE(PressesJoin(CssHand{true, Rules::CSS_HAND_GRID, 0, 0, 5.0f, 1}, 1, AREA_KIND_NONE,
+                           false, false));
+  EXPECT_FALSE(PressesJoin(CssHand{}, 1, AREA_KIND_NONE, false, false));
+
+  // A friend dropped into Group > Brawl's select (ports 1 and 2 plugged in), whose CPU on panel 2
+  // ClearPanels emptied: port 2's hand on its own button gets A pressed (and its own A stays off).
+  FakeMemory m = Game("scSelctCharacter");
+  m.bytes[MB::FRIENDS_TAG] = MB::FRIENDS_TAG_VALUE;
+  m.bytes[MB::FRIENDS_SEEN] = 0x3;
+  SetKind(m, 0, AREA_KIND_HUMAN);
+  SetKind(m, 1, AREA_KIND_CPU);
+  SetToken(m, 1, false);
+  SetHand(m, 1, Rules::CSS_HAND_BUTTON, -19.8f, Rules::CSS_BUTTON_PLAYER_TYPE, 1);
+  EXPECT_EQ(ClearPanels(m, 0x3), 4);
+  Rollback::InputGate::Masks masks = GateMasks(m);
+  EXPECT_EQ(masks[1].press, PAD_BUTTON_A);
+  EXPECT_EQ(masks[1].buttons, PAD_BUTTON_A);
+  EXPECT_EQ(masks[0].press, 0);
+  // Once the game made it the player's: nothing more.
+  SetKind(m, 1, AREA_KIND_HUMAN);
+  EXPECT_EQ(GateMasks(m)[1].press, 0);
+  // The same panel on a port nobody plugged in (a hand left from a harness pad): no press.
+  SetKind(m, 1, AREA_KIND_NONE);
+  m.bytes[MB::FRIENDS_SEEN] = 0x5;
+  EXPECT_EQ(GateMasks(m)[1].press, 0);
+  // A fresh panel (With Friends' own): the hand joins it in the grid, no press.
+  FakeMemory friends = Game("scSelctCharacter", 25);
+  friends.bytes[MB::FRIENDS_TAG] = MB::FRIENDS_TAG_VALUE;
+  friends.bytes[MB::FRIENDS_SEEN] = 0x3;
+  SetHand(friends, 1, Rules::CSS_HAND_BUTTON, -19.8f, Rules::CSS_BUTTON_PLAYER_TYPE, 1);
+  EXPECT_EQ(GateMasks(friends)[1].press, 0);
+  // Local Versus alone, and the queue's selects (a header): never.
+  FakeMemory local = Game("scSelctCharacter");
+  SetToken(local, 1, false);
+  SetHand(local, 1, Rules::CSS_HAND_BUTTON, -19.8f, Rules::CSS_BUTTON_PLAYER_TYPE, 1);
+  EXPECT_EQ(GateMasks(local)[1].press, 0);
+  FakeMemory room = QueueSelect(Mode::Casual, ROOM);
+  room.bytes[MB::FRIENDS_TAG] = MB::FRIENDS_TAG_VALUE;
+  room.bytes[MB::FRIENDS_SEEN] = 0x3;
+  SetToken(room, 1, false);
+  SetHand(room, 1, Rules::CSS_HAND_BUTTON, -19.8f, Rules::CSS_BUTTON_PLAYER_TYPE, 1);
+  EXPECT_TRUE(GateMasks(room)[1].Empty());
 }
 
 TEST(OrcaOnlineSeats, PluggedInMemoryReadsTheFriendsBytes)

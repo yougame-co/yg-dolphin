@@ -3,10 +3,7 @@
 
 #pragma once
 
-#include <vector>
-
 #include "Common/CommonTypes.h"
-#include "Core/Orca/Session/Events.h"
 #include "Core/Orca/UX/OnlineRules.h"
 #include "Core/Rollback/InputGate.h"
 
@@ -51,12 +48,21 @@ class CPUThreadGuard;
 // - **The panels** (ClearPanels), on the character select: a CPU's panel (its area's kind +0x1B4, 2)
 //   becomes an empty one (0). The select saves that kind into the record as it leaves, so the CPU
 //   plays no fight. The panel's own picture isn't the game's empty one then (its CPU plate stays),
-//   which is why the seats below hide it.
+//   which is why the seats below hide it, or the join below makes it a player's. A human's panel
+//   whose port nobody plugged in is the game's: it empties one itself 17 frames after its
+//   controller goes (both games, the token back in the hand and off the grid), and builds none for
+//   a port without a controller; a write here would come first and leave the token's highlight on
+//   the grid (found under the harness, q12).
 // - **The buttons** (GateMasks): where no header locks (With Friends, a friend's drop-in, Casual or
 //   Ranked before the queue's header lands), A never reaches a player-type button (0x1D: a CPU of an
 //   empty panel, or of a human's own) or a name button (0x1C), nor anywhere within one frame's
 //   travel of them (TYPE_BUTTONS_A_FLOOR). Under a header the online rules already pass A only in
-//   the grid. Joining needs no A: a hand that moves into the grid joins its panel.
+//   the grid. Joining a fresh panel needs no A: a hand that moves into the grid with its token joins
+//   it. A panel a CPU had (its token left on the grid, gone with the CPU) can't be joined that way:
+//   Orca presses A for its port while that port's hand rests on the panel's own player-type button
+//   (PressesJoin), which the game turns into the player's panel, as a local player rejoins after
+//   removing a CPU. So a friend who plugs into a live select whose CPU was on their panel takes it
+//   at once.
 // - **The seats** (ApplySeats), on the character select: an empty panel (kind 0) whose port nobody
 //   plugged in is hidden, its 39 game models (MuObjects at area +0xB0..+0x14C; each one's nw4r
 //   ScnMdl at +0xC) drawn neither opaque nor translucent (ScnObj flags +0xCC, 0x60 over the game's
@@ -117,7 +123,7 @@ constexpr u8 RecordStateFor(u8 state, bool plugged)
 {
   return state == STATE_CPU || (state == STATE_HUMAN && !plugged) ? STATE_NOBODY : state;
 }
-// A panel's kind while online: a CPU's becomes empty.
+// A panel's kind while online: a CPU's becomes empty; a human's stays, plugged in or not (above).
 constexpr u32 PanelKindFor(u32 kind)
 {
   return kind == AREA_KIND_CPU ? AREA_KIND_NONE : kind;
@@ -128,8 +134,17 @@ constexpr u32 PanelKindFor(u32 kind)
 bool SeatHidden(bool online, const Rules::Header& header, int port, u32 kind, bool plugged,
                 bool searching);
 // Whether A may reach the game from this hand on an online select without a header (above). An
-// unreadable hand may: the game's own A then, as before this rule.
+// unreadable hand may not (the select being built or torn down), as under a header
+// (Rules::CssHandMayPressA).
 bool HandMayPressA(const Rules::CssHand& hand);
+// Whether Orca presses A for port `port` (0-3, plugged in) on an online select without a header:
+// its own panel is empty (`kind` 0) with its token neither in the hand nor flying (a CPU's panel
+// once it is empty, whether the game or ClearPanels emptied it; a fresh empty panel holds its token
+// in the hand), and the port's hand rests on that panel's own player-type button (where a
+// player's hand starts). A there makes the panel the player's (HMN), the game's own way back from a
+// CPU's; nothing else joins it (the hand moving into the grid doesn't, with no token in it).
+bool PressesJoin(const Rules::CssHand& hand, int port, u32 kind, bool token_in_hand,
+                 bool token_flying);
 
 // ---- Memory ----
 // The ports plugged in (bit n: port n+1) as `memory` keeps them for the input gate: the friends
@@ -149,11 +164,11 @@ int ApplySeats(GuestMemory& memory, u8 plugged, u8* hidden = nullptr);
 Rollback::InputGate::Masks GateMasks(const GuestMemory& memory);
 
 // ---- The frame hook's parts (UX.cpp), first runs and re-runs, Brawl rev 2 and Project+ ----
+// `plugged`: the session's ports for the frame about to run (bit n: port n+1), as the online rules
+// take them.
 // After the online rules (the header this boundary called for is in memory): the record and the
 // panels.
-void ClearFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
-                const std::vector<Events::PortInfo>& ports);
+void ClearFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, u8 plugged);
 // After the queue (its ready flag says whether the queue's own select searches): the seats.
-void SeatsFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
-                const std::vector<Events::PortInfo>& ports);
+void SeatsFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, u8 plugged);
 }  // namespace Orca::UX::OnlineSeats

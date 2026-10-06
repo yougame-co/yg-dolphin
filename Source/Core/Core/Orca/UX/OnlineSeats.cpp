@@ -21,10 +21,6 @@ namespace
 namespace B = MatchBlock;
 
 constexpr u32 GAME_GLOBAL = 0x805A00E0;
-constexpr u32 SCENE_MANAGER = 0x805A0060;
-constexpr u32 MANAGER_SCENE = 0x04;
-constexpr u32 SCENE_SELCHAR_TASK = 0x400;
-constexpr u32 TASK_AREAS = 0x44;
 constexpr u32 AREA_KIND = 0x1B4;
 
 // Where the executable's vtables are (both games run the same one).
@@ -51,33 +47,12 @@ u32 Record(const GuestMemory& m)
   return Pointer(m, record) ? record : 0;
 }
 
-// The character select's player area of port `port` (0-3), on the character select only.
+// The character select's player area of port `port` (0-3) with its kind readable, on the
+// character select only.
 u32 Area(const GuestMemory& m, int port)
 {
-  if (!Pointer(m, SCENE_MANAGER))
-    return 0;
-  const u32 manager = m.Read32(SCENE_MANAGER);
-  if (!Pointer(m, manager + MANAGER_SCENE))
-    return 0;
-  const u32 scene = m.Read32(manager + MANAGER_SCENE);
-  if (!Pointer(m, scene + SCENE_SELCHAR_TASK))
-    return 0;
-  const u32 task = m.Read32(scene + SCENE_SELCHAR_TASK);
-  if (!Pointer(m, task + TASK_AREAS + 4 * static_cast<u32>(port)))
-    return 0;
-  const u32 area = m.Read32(task + TASK_AREAS + 4 * static_cast<u32>(port));
+  const u32 area = Rules::ReadCssArea(m, port);
   return Pointer(m, area) && Pointer(m, area + AREA_KIND) ? area : 0;
-}
-
-u8 PluggedOf(const std::vector<Events::PortInfo>& ports)
-{
-  u8 plugged = 0;
-  for (const Events::PortInfo& p : ports)
-  {
-    if (p.port >= 0 && p.port < 4)
-      plugged |= static_cast<u8>(1 << p.port);
-  }
-  return plugged;
 }
 
 bool Supported()
@@ -112,8 +87,9 @@ bool SeatHidden(bool online, const Rules::Header& header, int port, u32 kind, bo
 
 bool HandMayPressA(const Rules::CssHand& hand)
 {
+  // An unreadable hand (the select being built or torn down) gets no A, as under a header.
   if (!hand.valid)
-    return true;
+    return false;
   if (hand.target == Rules::CSS_HAND_BUTTON &&
       (hand.button == Rules::CSS_BUTTON_PLAYER_TYPE || hand.button == CSS_BUTTON_NAME))
   {
@@ -121,6 +97,14 @@ bool HandMayPressA(const Rules::CssHand& hand)
   }
   // A NaN is no place: no A.
   return hand.y >= TYPE_BUTTONS_A_FLOOR;
+}
+
+bool PressesJoin(const Rules::CssHand& hand, int port, u32 kind, bool token_in_hand,
+                 bool token_flying)
+{
+  return hand.valid && hand.target == Rules::CSS_HAND_BUTTON &&
+         hand.button == Rules::CSS_BUTTON_PLAYER_TYPE && hand.panel == port &&
+         kind == AREA_KIND_NONE && !token_in_hand && !token_flying;
 }
 
 u8 PluggedInMemory(const GuestMemory& m)
@@ -238,23 +222,30 @@ Rollback::InputGate::Masks GateMasks(const GuestMemory& m)
     return masks;
   const Rules::Header header = Rules::ReadHeader(m);
   // Under a header the online rules pass A only in the grid (OnlineRules.h).
-  if (header.Locked() || !Online(header, CssTitle::ReadPick(m), std::popcount(PluggedInMemory(m))))
+  const u8 plugged = PluggedInMemory(m);
+  if (header.Locked() || !Online(header, CssTitle::ReadPick(m), std::popcount(plugged)))
     return masks;
   for (int port = 0; port < Rollback::InputGate::PORTS; ++port)
   {
-    if (!HandMayPressA(Rules::ReadCssHand(m, port)))
+    const Rules::CssHand hand = Rules::ReadCssHand(m, port);
+    if (!HandMayPressA(hand))
       masks[port].buttons |= PAD_BUTTON_A;
+    const u32 area = Area(m, port);
+    const Rules::CssToken token = Rules::ReadCssToken(m, port);
+    if (((plugged >> port) & 1) && area && token.valid &&
+        PressesJoin(hand, port, m.Read32(area + AREA_KIND), token.in_hand, token.flying))
+    {
+      masks[port].press |= PAD_BUTTON_A;
+    }
   }
   return masks;
 }
 
-void ClearFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
-                const std::vector<Events::PortInfo>& ports)
+void ClearFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, u8 plugged)
 {
   if (!Supported())
     return;
   GuardMemory m(guard);
-  const u8 plugged = PluggedOf(ports);
   const int record = ClearRecord(m, plugged);
   const int panels = ClearPanels(m, plugged);
   // Logged on first runs: a re-run from a snapshot before the write writes it again.
@@ -267,14 +258,13 @@ void ClearFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
   }
 }
 
-void SeatsFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
-                const std::vector<Events::PortInfo>& ports)
+void SeatsFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, u8 plugged)
 {
   if (!Supported())
     return;
   GuardMemory m(guard);
   u8 hidden = 0;
-  const int written = ApplySeats(m, PluggedOf(ports), &hidden);
+  const int written = ApplySeats(m, plugged, &hidden);
   if (written > 0 && !resimulating)
   {
     NOTICE_LOG_FMT(ROLLBACK, "Online seats: frame {}: panels hidden {:#x} ({} model flags written)",

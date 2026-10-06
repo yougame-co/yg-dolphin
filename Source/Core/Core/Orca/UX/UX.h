@@ -42,8 +42,9 @@ namespace Orca::UX
 // muProcWifi and the back out's helper), and A on BACK on the queue's own character select
 // (OnlineRules.h CssBackTakesA, Queue.h FLAG_BACK_A, InputGate a_centres_stick); 19: no CPUs
 // online and only the seats in use (OnlineSeats.h: the character select's record and panels
-// cleared of CPUs, A kept off the player-type and name buttons on With Friends and a friend's
-// drop-in, empty panels nobody plugged into hidden):
+// cleared of CPUs, A kept off the player-type and name buttons on
+// With Friends and a friend's drop-in and pressed for a player whose panel a CPU left, empty
+// panels nobody plugged into hidden):
 // the session hashes it into the compatibility key as `ux=<n>`, so two builds that would write
 // different bytes (or mask different inputs, or part differently) never meet in a room.
 constexpr int kCompatVersion = 19;
