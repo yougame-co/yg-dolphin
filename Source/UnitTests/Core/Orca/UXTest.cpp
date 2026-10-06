@@ -29,6 +29,7 @@
 #include <gtest/gtest.h>
 #include <imgui.h>
 
+#include "Core/Orca/Session/Events.h"
 #include "Core/Orca/UX/ControllerSource.h"
 #include "Core/Orca/UX/Chat.h"
 #include "Core/Orca/UX/Controllers.h"
@@ -1032,6 +1033,127 @@ TEST(OrcaUXOverlay, FrameMeterStartsAfterTheFirstBoundarysWait)
   const auto f = m.View(p.Until(m, 2000), Stats::Off, Perf::Fps);
   EXPECT_EQ(f.perf, "60 fps · 17 ms");
   EXPECT_EQ(f.perf_level, Signal::Good);
+}
+
+TEST(OrcaUXOverlay, GameHeldTimeIsWhatTheGameTookPastOneFrame)
+{
+  using Orca::Events::GameHeldFrames;
+  using Orca::Events::GameHeldMs;
+  constexpr double frame = 1000 / 59.94;
+  EXPECT_EQ(GameHeldMs(frame, 100, frame), 0);
+  EXPECT_EQ(GameHeldMs(16.4, 100, frame), 0);
+  // Jitter around the hook and a slow frame under 1.5 frames are the host's to explain.
+  EXPECT_EQ(GameHeldMs(24, 100, frame), 0);
+  EXPECT_NEAR(GameHeldMs(2 * frame, 100, frame), frame, 1e-9);
+  // Project+'s match end: 306 ms of emulated time at one boundary.
+  EXPECT_NEAR(GameHeldMs(306.1, 320, frame), 306.1 - frame, 1e-9);
+  // Never more than this machine took: a load it ran ahead of real time, and a jump in emulated
+  // time outside the hook, hold only what the frame took here.
+  EXPECT_NEAR(GameHeldMs(314.5, 260.9, frame), 260.9 - frame, 1e-9);
+  EXPECT_NEAR(GameHeldMs(60000, 17, frame), 17 - frame, 1e-9);
+  EXPECT_EQ(GameHeldMs(300, 10, frame), 0);
+  EXPECT_EQ(GameHeldMs(100, 100, 0), 0);
+
+  double carry = 0;
+  EXPECT_EQ(GameHeldFrames(306.1 - frame, frame, carry), 17);
+  EXPECT_EQ(GameHeldFrames(0, frame, carry), 0);
+  // Project+'s results then character select (306, 60 and 122 ms) add up to the 26 frames they
+  // held.
+  EXPECT_EQ(GameHeldFrames(60 - frame, frame, carry) + GameHeldFrames(122 - frame, frame, carry),
+            9);
+  // The fraction a hold rounds away goes to the next (at 50 Hz, to keep the sums exact).
+  carry = 0;
+  EXPECT_EQ(GameHeldFrames(20, 20, carry), 1);
+  EXPECT_EQ(GameHeldFrames(30, 20, carry), 2);
+  EXPECT_EQ(GameHeldFrames(30, 20, carry), 1);
+  EXPECT_EQ(GameHeldFrames(30, 20, carry), 2);
+  EXPECT_EQ(GameHeldFrames(10, 20, carry), 0);
+  EXPECT_EQ(GameHeldFrames(10, 20, carry), 1);
+  EXPECT_EQ(GameHeldFrames(10, 20, carry), 0);
+  EXPECT_EQ(carry, 0);
+  EXPECT_EQ(GameHeldFrames(100, 0, carry), 0);
+}
+
+TEST(OrcaUXOverlay, FrameMeterLeavesOutWhatTheGameItselfHeld)
+{
+  constexpr double frame = 1000 / 59.94;
+  // A boundary `wall` ms after the last that the game took `emulated` ms over, as the hook reports
+  // it.
+  double carry = 0;
+  const auto boundary = [&](OverlayModel& m, Pacer& p, double emulated, double wall) {
+    p.t += wall;
+    const double held = Orca::Events::GameHeldMs(emulated, wall, frame);
+    m.OnFrame(p.t, true, held, Orca::Events::GameHeldFrames(held, frame, carry));
+  };
+  const auto fps = [](const OverlayModel::Frame& f) { return std::stoi(f.perf); };
+  // The game loads for 300 ms (18 video frames at one boundary) and this machine keeps pace: the
+  // same on every machine and on a Wii, so plain 60 fps, no hitch.
+  {
+    OverlayModel m;
+    Pacer p;
+    p.Until(m, 3000);
+    boundary(m, p, 300, 300);
+    const double load = p.t;
+    for (double later : {200.0, 500.0, 900.0})
+    {
+      const auto f = m.View(p.Until(m, load + later), Stats::Off, Perf::Detailed);
+      EXPECT_EQ(f.perf, "60 fps · 17 ms") << later;
+      EXPECT_EQ(f.perf_level, Signal::Good) << later;
+      EXPECT_LE(*std::max_element(f.graph.begin(), f.graph.end()), 17.0f) << later;
+    }
+  }
+  // Three loads inside one second (results, then character select) still read 60 fps.
+  {
+    OverlayModel m;
+    Pacer p;
+    p.Until(m, 3000);
+    for (double load : {306.0, 60.0, 122.0})
+    {
+      boundary(m, p, load, load);
+      p.Until(m, p.t + 100);
+    }
+    for (double later : {0.0, 300.0, 800.0})
+    {
+      const auto f = m.View(p.Until(m, p.t + later), Stats::Off, Perf::Fps);
+      EXPECT_GE(fps(f), 59) << later << ": " << f.perf;
+      EXPECT_LE(fps(f), 61) << later << ": " << f.perf;
+      EXPECT_EQ(f.perf_level, Signal::Good) << later << ": " << f.perf;
+    }
+  }
+  // A load this machine ran ahead of real time (314 ms of the game's in 261 ms here) counts only
+  // the frames that fit, and a jump in emulated time adds none.
+  {
+    OverlayModel m;
+    Pacer p;
+    p.Until(m, 3000);
+    boundary(m, p, 314.5, 260.9);
+    auto f = m.View(p.Until(m, p.t + 500), Stats::Off, Perf::Fps);
+    EXPECT_LE(fps(f), 61) << f.perf;
+    EXPECT_EQ(f.perf_level, Signal::Good) << f.perf;
+    boundary(m, p, 60000, 17);
+    f = m.View(p.Until(m, p.t + 500), Stats::Off, Perf::Fps);
+    EXPECT_EQ(f.perf, "60 fps · 17 ms");
+  }
+  // The same load, but this machine took 200 ms more than the game did: still a hitch, timed
+  // without the load.
+  {
+    OverlayModel m;
+    Pacer p;
+    p.Until(m, 3000);
+    boundary(m, p, 300, 500);
+    const auto f = m.View(p.Until(m, p.t + 300), Stats::Off, Perf::Fps);
+    EXPECT_EQ(f.perf, "48 fps · 217 ms");
+    EXPECT_EQ(f.perf_level, Signal::Bad);
+  }
+  // Re-runs never carry a hold, and a hold on an unshown frame changes nothing.
+  {
+    OverlayModel m;
+    Pacer p;
+    double t = p.Until(m, 3000);
+    m.OnFrame(t + 2, false, 200, 12);
+    const auto f = m.View(p.Until(m, t + 500), Stats::Off, Perf::Fps);
+    EXPECT_EQ(f.perf, "60 fps · 17 ms");
+  }
 }
 
 TEST(OrcaUXOverlay, FrameMeterDetailedAddsTheGraphAndOnlineTheDelay)

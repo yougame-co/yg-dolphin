@@ -624,8 +624,10 @@ The adaptive delay rises only for what rollback can't cover, and only where a li
     seconds) raises the delay within half a minute or so.
   - Random spikes that outlast the window by anything up to six frames raise nothing: a frame more
     would spare only the shortest. They cost their stalls, as they would in Slippi.
-  - Stalls don't count around a hitch on either machine, when this player's own stall set them off,
-    while a controller is catching up, or in the first 10 s after a plug-in.
+  - Stalls don't count around a hitch on either machine (a frame that took this machine over a
+    frame period more than the game itself took) or a frame a game load slowed here, when this
+    player's own stall set them off, while a controller is catching up, or in the first 10 s after
+    a plug-in.
 - Rollbacks and time-sync waits never move the delay.
 - **Coming down.** A link-raised delay follows the link down after 3 s. A stall-raised one steps
   down after 5 quiet seconds, then a frame each further quiet second while each packet's reach (how
@@ -1543,7 +1545,7 @@ only when the box moves inside the window.
 | `focus` / `blur` | Give the game the input, or give it back to the page. |
 | `pause` / `resume` | Answers `state paused` / `state running`. In a session it pauses only while the player's game is alone, and ends by itself when drop-in needs the game; otherwise `unsupported pause`. |
 | `volume V` | 0 to 1, this run only. |
-| `perf off\|fps\|detailed` | The overlay's frame meter (frames shown in the last second and the longest; yellow under 59 fps or past 20 ms, red under 50 fps or past two frames). |
+| `perf off\|fps\|detailed` | The overlay's frame meter (frames shown in the last second and the longest; yellow under 59 fps or past 20 ms, red under 50 fps or past two frames). A frame the game itself holds in emulated time (Project+ loading between scenes) counts as the video frames it held, so the meter, `fps` and the `hi` hitch count in `orca stats` show only this machine falling behind; `hil` counts the frames a load alone made slow (`hi` + `hil` is the older builds' `hi`). |
 | `save N` / `load N` / `reset` | Refused in a session. |
 | `prepare-join` | The host invited a friend: capture a keyframe at the next boundary. |
 | `join <code>` / `leave` | Into or out of a friend's game. |
