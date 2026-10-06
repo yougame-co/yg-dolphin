@@ -26,9 +26,9 @@ No disc images, NAND dumps or save data belong in this repository.
 
 Every Orca release candidate (a `rel-0.3.x` branch) passes these on the Mac before it ships; its
 dated **Checked** entry (for 0.3.14 and 0.3.15, at the end of "The queue's character select") gives
-the numbers. Runs are headless (`-v Null`), muted (`No Audio Output`), nice'd, under `flock
-orca-run-solo.lock` (two-Orca runs under `orca-run.lock` too), never while Luis plays (`ps -axo
-comm= | grep -q yougame-desktop/orca/apps`), with the 1-minute load under 18.
+the numbers. Runs are headless (`-v Null`), muted (`No Audio Output`), nice'd, and go through the
+Mac's run queue (`Tools/orca/run-lock.py check -- <command>`, `perf` for anything timed: "Sharing the
+Mac: the run queue" below), which waits while Luis plays and while the machine is busy.
 
 1. **Build** `dolphin-emu-nogui` and `tests` (Release, the release's CMake flags): no new warnings.
 2. **Unit tests:** `Binaries/Tests/tests --gtest_filter='Orca*'`, none failing (the live, network
@@ -73,6 +73,39 @@ comm= | grep -q yougame-desktop/orca/apps`), with the 1-minute load under 18.
    side's `XPLAT` summary `"ok": true` with `checksums_matched` above 0. Two Orcas on one Mac share
    a compiler, an architecture and a JIT, so only this run can see the two builds disagree
    (**Host arithmetic** under "Drop-in": Apple clang's fused multiply-adds against MSVC's x64).
+
+## Sharing the Mac: the run queue
+
+2026-10-06. Every scripted Orca run on the Mac took `orca-run-solo.lock` (two-Orca runs
+`orca-run.lock` too) exclusively, so runs went one at a time: that afternoon 20-25 of them queued for
+over an hour, blocking releases and the crash investigations, while the load sat at 3-6 on 14 cores.
+Only two things need a run to be alone: a measurement needs a quiet machine, and two `queue-e2e.mjs`
+dev-ticket runs shared one dev game's queue (`orca-queue-e2e-<profile>`), so they could match each
+other. Now:
+
+- `queue-e2e.mjs` gives each run a dev game of its own, `orca-queue-e2e-<profile>-<8 hex>` (its
+  first log line names it; `QE2E_DEV_SUFFIX` picks the suffix, empty is the old shared game).
+- `Tools/orca/run-lock.py` is the queue. `check -- <command>` is for correctness runs (queue-e2e, the
+  drop-in tools, synctests, hashlogs): up to three at once while the 1-minute load is under 12 and
+  more than 30% of memory is free, one at a time under 20 and 20%, none above. `perf -- <command>`
+  is for anything timed (two-Orca perf gates, frame-time A/Bs, `perf.mjs`, `selfmatch.mjs`): it has
+  the machine to itself, waiting for the checks to finish, and no check starts while it waits or
+  runs. Both wait while Luis's Orca is open (`ps -axo comm=`: the app bundle's
+  `Resources/runtimes/orca` or the old `yougame-desktop/orca/apps/`), printing `waiting: Luis's Orca
+  is open`, and go first come, first served: one ticket per run in `orca-run-queue/` beside the
+  locks, locked by its run, so a run that dies leaves none behind. `--wait-max S` gives up (exit 9),
+  `--yield` stops the run if Luis opens his Orca (exit 10; a perf run without it notes the moment in
+  its output), `--serial NAME` keeps runs with the same NAME apart.
+- Runs that share accounts or a queue are kept apart without asking: `queue-e2e.mjs --slug` and
+  `page-e2e.mjs` (two signed-in players), and a `queue-e2e.mjs` from a checkout older than this one
+  (the shared dev game).
+- Old scripts keep working beside it: a check holds both old locks shared and a perf run holds them
+  exclusive, so a plain `flock orca-run-solo.lock ...` acts as a perf run, and while one waits no
+  new check starts. `luis-orca-guard.sh` works as before. Do not wrap a script that takes the old
+  locks itself: the run stops with exit 11, since it would wait for itself forever.
+- `run-lock.py status` shows who runs, who waits and why (`--json`; `--luis` exits 0 while runs
+  wait for Luis's Orca to close, for a lead to tell him). Tests: `python3
+  Tools/orca/run-lock-test.py` (a scratch lock folder, fake load and a fake "playing", ~30 s).
 
 ## Running a session
 
@@ -2541,9 +2574,10 @@ plays the page's part exactly (caps, Orca's own tickets, the queue ticket and `/
 `host`/`join`, the `match_room` rewrite) and serves the app's controller stream, whose pad the
 script presses through the menus, the character select and the stage; in the fight port 2 walks off
 the stage until it has no stocks left. It checks the stdout sequence and that both Orcas print the
-same verdicts, each from its side. Dev tickets by default (nothing recorded); `--slug <listing>
---cookie-a/--cookie-b <file> --id-a/--id-b <id>` uses real tickets as two signed-in players.
-Under `flock orca-run.lock`, never while Luis plays.
+same verdicts, each from its side. Dev tickets by default (nothing recorded; a dev game of the
+run's own, so checks at once never meet); `--slug <listing> --cookie-a/--cookie-b <file>
+--id-a/--id-b <id>` uses real tickets as two signed-in players. Run it as a check in the run queue
+(`Tools/orca/run-lock.py check -- node Tools/orca/queue-e2e.mjs ...`), never while Luis plays.
 
 ## Free space
 

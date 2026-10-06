@@ -30,7 +30,8 @@
 //       [--probe <file>]
 //       [--slug <listing> --cookie-a <file> --cookie-b <file> --id-a <id> --id-b <id>]
 //
-// Without --slug: dev tickets (an anonymous dev game, nothing recorded, keyframes in a local folder).
+// Without --slug: dev tickets (an anonymous dev game of this run's own, nothing recorded, keyframes
+// in a local folder).
 // With --slug: real tickets for that listing as two signed-in players (the cookie files hold a
 // session's Cookie header, mode 600, never printed), keyframes through YouGame's store.
 // Orca runs nice'd, muted, with Null video and a perl alarm. On a shared machine, don't run it
@@ -149,7 +150,18 @@ if (PICK === "bowser" && !PPLUS) {
 const GIGA = argv.includes("--giga");
 const CHORD = argv.includes("--chord");
 const PROFILE = PPLUS ? "pplus32" : "rsbe01";
-const DEV_GAME = `orca-queue-e2e-${PROFILE}`;
+// Each run gets a dev game of its own, so two runs at once never meet in the queue (correctness runs
+// share the Mac: Tools/orca/run-lock.py). QE2E_DEV_SUFFIX picks the suffix; empty means the old
+// shared game, orca-queue-e2e-<profile>, which two runs at once must not use.
+const DEV_SUFFIX = (
+  process.env.QE2E_DEV_SUFFIX ?? crypto.randomBytes(4).toString("hex")
+)
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, "-")
+  .replace(/^-+|-+$/g, "");
+const DEV_GAME = `orca-queue-e2e-${PROFILE}${DEV_SUFFIX ? `-${DEV_SUFFIX}` : ""}`
+  .slice(0, 60)
+  .replace(/-+$/, "");
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), "orca-queue-e2e-"));
 const T0 = Date.now();
 const UA =
