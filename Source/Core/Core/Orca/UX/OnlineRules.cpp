@@ -765,8 +765,7 @@ Rollback::InputGate::Masks GateMasks(const GuestMemory& m)
       {
         masks[port].a_centres_stick = true;
       }
-      else if (own_select && !(Queue::ReadState(m).ready & 1) &&
-               CssNameTakesA(hand, port, list))
+      else if (own_select && !(Queue::ReadState(m).ready & 1) && CssNameTakesA(hand, port, list))
       {
         masks[port].a_centres_stick = true;
         if (list)

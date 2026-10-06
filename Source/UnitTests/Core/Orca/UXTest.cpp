@@ -3,17 +3,17 @@
 
 #include <algorithm>
 #include <array>
-#include <filesystem>
-#include <map>
-#include <set>
 #include <atomic>
-#include <chrono>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
-#include <string>
+#include <filesystem>
+#include <map>
 #include <mutex>
+#include <set>
+#include <string>
 #include <thread>
 #include <utility>
 
@@ -30,14 +30,14 @@
 #include <imgui.h>
 
 #include "Core/Orca/Session/Events.h"
-#include "Core/Orca/UX/ControllerSource.h"
 #include "Core/Orca/UX/Chat.h"
+#include "Core/Orca/UX/ControllerSource.h"
 #include "Core/Orca/UX/Controllers.h"
 #include "Core/Orca/UX/FreeSpace.h"
 #include "Core/Orca/UX/GamePatches.h"
 #include "Core/Orca/UX/NameTags.h"
-#include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/UX/OrbCombo.h"
+#include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/UX/YgOrbDraw.h"
 #include "InputCommon/GCPadStatus.h"
 #include "VideoCommon/OnScreenDisplay.h"

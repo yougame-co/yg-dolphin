@@ -21,12 +21,12 @@
 #include "Common/Logging/Log.h"
 #include "Core/Core.h"
 #include "Core/Orca/Session/Online.h"
-#include "Core/PowerPC/MMU.h"
-#include "Core/PowerPC/PowerPC.h"
-#include "Core/System.h"
 #include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/UX/RankedSet.h"
+#include "Core/PowerPC/MMU.h"
+#include "Core/PowerPC/PowerPC.h"
+#include "Core/System.h"
 
 // Research tool for reverse-engineering Brawl's menus. Never active in a real session.
 // ORCA_UX_PROBE=<file> runs one command per line, at a frame counted from entry into a scene:

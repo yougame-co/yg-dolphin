@@ -2282,12 +2282,11 @@ std::vector<Orca::Events::PortInfo> PortsAt(Match& match, int frame)
     if (own.empty() && now)
       own = now->name;
     std::vector<u8> controls = Orca::Events::OwnControls();
-    if (now ? now->name != own || now->controls != controls :
-              !own.empty() || !controls.empty())
+    if (now ? now->name != own || now->controls != controls : !own.empty() || !controls.empty())
     {
       std::vector<u8> queue = now ? now->queue : std::vector<u8>{};
-      AddName(match, {match.local_seat, frame, std::move(own), std::move(controls),
-                      std::move(queue)});
+      AddName(match,
+              {match.local_seat, frame, std::move(own), std::move(controls), std::move(queue)});
     }
   }
   const auto port = [&](int seat) {
@@ -3343,9 +3342,9 @@ void LogStats(const char* when)
       stats.delay_fixed ? " (chosen)" : "", stats.delay_raises, stats.delay_lowers,
       stats.delay_reverts, stats.spared_stalls, stats.checksums_matched, stats.confirmed_frame,
       Orca::Online::RoundTripMs(), stats.rtt_median, stats.peer_rtt_median,
-      Orca::Online::Direct().line, stats.saves,
-      stats.snapshot_every, match.port ? match.port->SaveMs() : 0.0,
-      match.session->Error().empty() ? "" : "; ", match.session->Error());
+      Orca::Online::Direct().line, stats.saves, stats.snapshot_every,
+      match.port ? match.port->SaveMs() : 0.0, match.session->Error().empty() ? "" : "; ",
+      match.session->Error());
 }
 
 bool Active()
