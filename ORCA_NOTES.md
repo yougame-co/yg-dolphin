@@ -1436,6 +1436,42 @@ word). Headless Metal presents nothing, so presentation is measured in a `-p mac
 shader cache first (a cold Metal cache costs ~3.3 s at match start). A forced session setting
 (`Orca/Profile.cpp`) beats `-C`: comparing one needs a build that doesn't force it.
 
+## Music switch
+
+Approved 2026-10-06 (X report `no-music-toggle`: "no way to disable music", a P+ player's Discord
+list). Orca 0.3.29 candidate, branch `music-off`. ORCA.md "Music switch" has the design.
+
+**Where music and effects come apart.** An AX voice probe (every running parameter block once a
+second, harness, default inputs; a throwaway `ORCA_AX_PROBE` build, not committed) over menus,
+character and stage select and a match:
+
+- Brawl: the music is always the pair `pb=8049A5C0` (main L only, `mixer_control` 1) and
+  `pb=8049A480` (main R only, 2), `is_stream` 1, ADPCM, looping over ring buffers at nibble
+  addresses `0x204BC6C2..0x204F06BF` and `0x204F5EC2..0x20529EBF` (MEM2), ratio 1.0 (32 kHz), AUX
+  A/B/C volumes 0. Every other voice was `is_stream` 0: one-shot effects with AUX sends (reverb,
+  `mixer_control` 0x0003-0x0C63), and one looping effect, still type 0.
+- Project+: the same shape, with two stream pairs (ring buffers at `0x204AEB02`/`0x204E8302` and
+  `0x20521B02`/`0x2055B302`), again no AUX sends.
+- So the stream flag is the classifier, and no music reaches the AUX buses, whose returns the
+  game's CPU computes and Orca could not split.
+- The DSP issues `CMD_COMPRESSOR` every frame (the music's share gets the same gain).
+- AX writes its output frame to `0x804E84C0` / `0x804E8640` (384 bytes each, alternating); the AI
+  DMA reads them as `0x004E84C0` / `0x004E8640`. The shadow matches on the physical address.
+
+**Rejected.** Game RAM (Brawl's sound system volume, the Options menu, P+'s code menu): every peer
+hashes MEM1/MEM2 every 60 frames, a session starts from an empty NAND and a joiner plays on the
+host's save, so any in-game setting is the whole room's, never one player's. A synced "music off
+for the match" (the triage's first plan) would mute it for everyone.
+
+**A first build was wrong, and the checks caught it.** `AXUCode`'s main buffers hold 160 samples
+(AX GC's 5 ms); the first build copied all of them into 96-sample stack copies, writing past them on
+the stack of the voice loop (not traced further). With music off, hashlogs left 0.3.27's at
+the first menu music (Brawl frame 1513, Project+ frame 216) and two two-Orca runs desynced
+(Brawl: `bo` at 78 s; Project+: frame 3360 after 22 matched checksums). Sync tests of that build
+still passed (0 RAM mismatches): they compare a build with itself, so only a hashlog against the
+other setting, or two Orcas set differently, shows a switch that leaks into the game. The same
+build also never matched a frame (cached vs physical address), so it changed no sound at all.
+
 ## Match start
 
 Luis, 2026-10-03 (on his Windows PC): the first seconds of every match (the countdown and just

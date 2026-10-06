@@ -34,6 +34,7 @@ and why. Paths are relative to `Source/Core/Core/` unless they start with `Sourc
 - [Direct links](#direct-links)
 - [Input delay](#input-delay)
 - [Input latency](#input-latency)
+- [Music switch](#music-switch)
 - [Match start](#match-start)
 - [Code the JIT doesn't see](#code-the-jit-doesnt-see)
 - [Game patches](#game-patches)
@@ -94,6 +95,7 @@ game) is seat 0, controller port 1; a friend's seat is its room slot.
 | `ORCA_DIRECT` | `0`: no direct links, the relay only. Default on. |
 | `ORCA_THREAD_QOS` | `0`: no raised thread priority; `1`: also for a scripted harness run. |
 | `ORCA_JITWARM` | `0`: no JIT warm-up ([Match start](#match-start)). |
+| `ORCA_MUSIC` | `off`: start with the music off ([Music switch](#music-switch)), for harness runs. |
 | `ORCA_SHADER_WAIT_S` | Set by the app: how long boot may wait for shaders (60-900 s). |
 | `ORCA_CONTROLS` | Set by the app: the player's own controls, 92 hex ([Each player's own controls](#each-players-own-controls)). |
 
@@ -717,6 +719,30 @@ and timestamps from the sampling boundary to the present call and to CoreAnimati
 `presentedTime`. Presentation must be measured in a `-p macos` window (headless Metal presents
 nothing), with a warm shader cache.
 
+## Music switch
+
+`music on|off` on stdin (cap `music`), or `ORCA_MUSIC=off` for a harness run: the player's own
+Music switch. Off leaves the game's music out of what this machine plays and changes nothing the
+game sees, so two players with different switches stay in sync. It is not in the compatibility key.
+
+`Orca/Music.*`, `HW/DSPHLE/UCodes/AXWii.cpp`, `HW/DSP.cpp`:
+
+- **Music is the stream voices.** Brawl and Project+ play their music (BRSTM) on AX voices of type
+  stream (`AXPBWii::is_stream` 1): a looping stereo pair over a ring buffer in MEM2, one voice on
+  main left, one on main right, no AUX sends. Sound effects are normal voices (type 0), looping ones
+  too. Seen on every voice of the default Brawl and Project+ runs (menus, character and stage
+  select, a match).
+- **RAM gets the same mix.** AX HLE mixes every voice as before and writes the frame (96 samples,
+  3 ms) to RAM as before. With the switch off it also keeps what the stream voices added to the
+  main bus (a voice's share is additive, `MixAdd`), gives that the compressor's gain too, and mixes
+  the frame again without it: same volume ramp, same clamp.
+- **Only the speakers get the second mix.** The AI DMA reads the frame from RAM for the host mixer.
+  While RAM still holds the bytes the mixer wrote there (Brawl: `0x804E84C0` and `0x804E8640`,
+  read by the DMA as `0x004E84C0`), it plays the quiet copy instead; anything else (a rollback
+  load, a game write) plays RAM. The last 32 frames are kept.
+- **Not RAM.** The game's own volume or options would change memory every peer hashes, and a
+  session starts from an empty NAND where a joiner plays on the host's save.
+
 ## Match start
 
 The first seconds of a match (the countdown and just after) used to drop frames: two things compiled
@@ -1095,7 +1121,7 @@ before the players part.
 
 | stdout | |
 |---|---|
-| `orca caps ... host results locks queue2 pick-casual pick-ranked` | `results` where the result reader is verified; `locks`, `queue2` and the pick caps where the profile has a ruleset (Brawl rev 2 and Project+). The app answers a pick cap only for a queue it can search now. 15 caps at most: the app passes 16, and more needs a desktop release first (`OrcaOnlineMenuLobby.EveryCapFitsTheAppsCapsLine`). |
+| `orca caps ... host results locks queue2 pick-casual pick-ranked` | `results` where the result reader is verified; `locks`, `queue2` and the pick caps where the profile has a ruleset (Brawl rev 2 and Project+). The app answers a pick cap only for a queue it can search now. With `music` that is 16 caps, the most the app passes; more needs a desktop release first (`OrcaOnlineMenuLobby.EveryCapFitsTheAppsCapsLine`). |
 | `orca result <json>` | The room's verdict, when it arrives. At most 300 bytes. |
 | `orca state friend-left match-over` / `host-left match-over` | A ranked room closed after its set. |
 
@@ -1546,6 +1572,7 @@ only when the box moves inside the window.
 | `pause` / `resume` | Answers `state paused` / `state running`. In a session it pauses only while the player's game is alone, and ends by itself when drop-in needs the game; otherwise `unsupported pause`. |
 | `volume V` | 0 to 1, this run only. |
 | `perf off\|fps\|detailed` | The overlay's frame meter (frames shown in the last second and the longest; yellow under 59 fps or past 20 ms, red under 50 fps or past two frames). A frame the game itself holds in emulated time (Project+ loading between scenes) counts as the video frames it held, so the meter, `fps` and the `hi` hitch count in `orca stats` show only this machine falling behind; `hil` counts the frames a load alone made slow (`hi` + `hil` is the older builds' `hi`). |
+| `music on\|off` | The player's Music switch ([Music switch](#music-switch)), cap `music`. |
 | `save N` / `load N` / `reset` | Refused in a session. |
 | `prepare-join` | The host invited a friend: capture a keyframe at the next boundary. |
 | `join <code>` / `leave` | Into or out of a friend's game. |
