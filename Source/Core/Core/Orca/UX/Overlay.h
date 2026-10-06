@@ -95,12 +95,14 @@ public:
   {
     std::string text;
     float alpha;
+    double at = 0;  // when it came (the overlay's clock), for the YouGame pill's order
   };
   struct ChatToast
   {
     std::string name;
     std::string text;
     float alpha;
+    double at = 0;
   };
   struct Frame
   {

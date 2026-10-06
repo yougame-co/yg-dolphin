@@ -56,4 +56,9 @@ ImU32 Ink2(float alpha = 1);
 ImU32 Edge(float alpha = 1);
 // An avatar: `name`'s initial on its colour, a disc of radius `r` round `centre`.
 void Avatar(ImDrawList* dl, ImVec2 centre, float r, std::string_view name, float alpha = 1);
+// The same from a colour and an initial worked out before (AvatarColour, InitialOf), for a caller
+// that draws the same person every frame and keeps them (Avatar converts the name each time).
+std::string InitialOf(std::string_view name);
+void AvatarOf(ImDrawList* dl, ImVec2 centre, float r, ImU32 colour, std::string_view initial,
+              float alpha = 1);
 }  // namespace Orca::UX::Yg

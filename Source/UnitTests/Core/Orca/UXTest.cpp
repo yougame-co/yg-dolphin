@@ -2558,3 +2558,20 @@ TEST(OrcaUXYgOrb, ThePlaceScalesFromThePagesPixelsToTheBackbuffer)
   m.SetView(0, 0);
   EXPECT_EQ(m.At(0).view_width, 0);
 }
+
+TEST(OrcaUXYgOrb, ThePillsWordsAreCutAfterASpaceAndNeverInsideACharacter)
+{
+  using Orca::UX::YgOrb::FitPrefix;
+  // A byte a unit wide.
+  const auto w = [](std::string_view t) { return static_cast<float>(t.size()); };
+  EXPECT_EQ(FitPrefix("gg wp", 10, w), 5u);
+  // "are you r" fits nine: cut after "are you".
+  EXPECT_EQ(FitPrefix("are you ready", 9, w), 7u);
+  // One long word: at a character.
+  EXPECT_EQ(FitPrefix("supercalifragilistic", 6, w), 6u);
+  // "caf" and half of a two-byte e acute fit four: the cut stays before the e.
+  EXPECT_EQ(FitPrefix("caf\xC3\xA9s", 4, w), 3u);
+  EXPECT_EQ(FitPrefix("ab", 0, w), 0u);
+  // A word that ends right at the limit stays ("abcde fg" is eight).
+  EXPECT_EQ(FitPrefix("abcde fg hij", 8, w), 8u);
+}
