@@ -4924,7 +4924,9 @@ upload a 22-27 MB keyframe every ~3.5 s while a friend waited (1,250 refused upl
 night). Now the waiting friend is dropped with `signed_out` or `refused` at once. 403 `signed_out`
 first retries with a fresh ticket. `Tools/orca/dropin-refused.py` (dev tickets, which the store
 refuses with 403 `dev_ticket`): PASS, the friend hears `orca error network` 2 s after joining (it
-used to wait out its 90 s join limit), and the host made one keyframe.
+used to wait out its 90 s join limit), and the host made one keyframe. Only refusals with YouGame's
+`code` count: a bare 4xx (an edge page, a 408) fails that keyframe and the friend gets another, as
+before.
 
 **Logs.** `orca queue unready` now logs why (B, the token picked up, A on Back, cleared after the
 room); the compatibility key logs its inputs when they change, so a player alone in a queue shows

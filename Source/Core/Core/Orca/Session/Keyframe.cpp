@@ -669,11 +669,9 @@ private:
                                            result.status >= 500);
       if (!retry)
       {
+        // Only YouGame's own refusals carry a code; a bare 4xx (an edge page) may pass next time.
         if (result.status >= 400)
-        {
-          t_last_refusal =
-              result.code.empty() ? fmt::format("http_{}", result.status) : result.code;
-        }
+          t_last_refusal = result.code;
         return false;
       }
       WARN_LOG_FMT(NETPLAY, "Orca keyframe: {}; trying again", *error);

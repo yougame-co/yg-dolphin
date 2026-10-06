@@ -228,6 +228,10 @@ TEST(OrcaKeyframe, HttpStoreAgainstAFakeServer)
     EXPECT_EQ(minted, 1);
     EXPECT_NE(error.find("403"), std::string::npos) << error;
     EXPECT_EQ(LastRefusal(), "signed_out");
+    // A 4xx without YouGame's code (an edge page) fails this try but isn't a refusal.
+    EXPECT_FALSE(store_for("room4", "edge", "edge")->Put(info, blob, &error));
+    EXPECT_NE(error.find("403"), std::string::npos) << error;
+    EXPECT_EQ(LastRefusal(), "");
   }
   // A ticket the store refuses even when new: final.
   auto refused = store_for("room1", "bad", "bad");

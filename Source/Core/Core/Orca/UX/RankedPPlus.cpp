@@ -925,7 +925,14 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
       resimulating ? std::nullopt : MatchBlock::Read(memory);
   // Every Project+ session, not only the flows: a With Friends stage select blanks the same way.
   if (Rules::ProfileRuleset() == Rules::Ruleset::PPlus)
-    ClearStaleMusicSelect(memory);
+  {
+    const bool seen = memory.Valid(MUSIC_SELECT + 0x0B);
+    const u32 step = seen ? memory.Read32(MUSIC_SELECT) : 0;
+    const u32 song = seen ? memory.Read32(MUSIC_SELECT + 0x08) : 0;
+    if (ClearStaleMusicSelect(memory) && !resimulating)
+      NOTICE_LOG_FMT(ROLLBACK, "Project+: frame {}: cleared a leftover My Music step {} song {:x}",
+                     frame, step, song);
+  }
   Apply(memory, frame, p1 && p2);
   if (!resimulating)
   {

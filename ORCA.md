@@ -457,7 +457,8 @@ refuses dev tickets.
   decrypts. 404 `gone` means expired.
 - **DELETE** by the joiner after loading, best effort; by the host when replacing or leaving.
 - Network errors, 429 and 5xx retry 4 times with 0.5/1/2 s backoff; anything else is final. A host
-  whose keyframe is refused for good makes no more for the friends waiting: it drops them with
+  whose keyframe is refused for good (a refusal with YouGame's code; a bare 4xx from the edge only
+  fails that keyframe) makes no more for the friends waiting: it drops them with
   `signed_out` (YouGame's code) or `refused`, prints `orca state friend-left <that>`, and each of
   them ends with `orca error signed_out` or `network`. A joiner whose own download is refused with
   `signed_out` reports that code too.
@@ -1249,7 +1250,8 @@ the 2024 Proposed preset. On the stage select the hook writes Project+'s own Sta
 (`0x8042C822`) as the block calls for, and sets `PAGE_INDEX` to `0xFF` so Project+ redraws the struck
 art; Project+'s own check then refuses a struck stage. In every Project+ session the character
 select clears a My Music step (`0x80002810`, Project+'s `MusicSelect.asm`) left from an earlier stage
-select: step 1 hid every tile and turned the timer's pick into My Music, a softlock.
+select: step 1 hid every tile and turned the timer's pick into My Music, a softlock. The log says
+`cleared a leftover My Music step` when it does.
 
 ### Casual stage pick
 

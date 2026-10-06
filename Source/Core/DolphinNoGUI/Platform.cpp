@@ -91,7 +91,7 @@ void Platform::EndSoloPauseForDropIn()
 void Platform::WatchRoomWhilePaused()
 {
   auto& system = Core::System::GetInstance();
-  if (!Orca::SessionActive() || !Orca::Online::Enabled() || !Rollback::OnlineMatch::Pausing() ||
+  if (!Rollback::OnlineMatch::Pausing() || !Orca::SessionActive() || !Orca::Online::Enabled() ||
       Core::GetState(system) != Core::State::Paused)
   {
     return;
