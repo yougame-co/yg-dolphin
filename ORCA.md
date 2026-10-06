@@ -1247,9 +1247,9 @@ the match's stage).
 **Project+** (`Orca/UX/RankedPPlus.*`): outside the stage select, `RSS_EXDATA` (`0x8042C4E8`) holds
 the 2024 Proposed preset. On the stage select the hook writes Project+'s own Stage Striking table
 (`0x8042C822`) as the block calls for, and sets `PAGE_INDEX` to `0xFF` so Project+ redraws the struck
-art; Project+'s own check then refuses a struck stage. On the character select it clears a My Music
-step (`0x80002810`, Project+'s `MusicSelect.asm`) left from the player's own game: step 1 hid every
-tile and turned the timer's pick into My Music, a softlock.
+art; Project+'s own check then refuses a struck stage. In every Project+ session the character
+select clears a My Music step (`0x80002810`, Project+'s `MusicSelect.asm`) left from an earlier stage
+select: step 1 hid every tile and turned the timer's pick into My Music, a softlock.
 
 ### Casual stage pick
 

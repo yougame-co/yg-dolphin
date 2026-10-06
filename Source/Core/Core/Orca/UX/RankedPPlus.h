@@ -70,6 +70,11 @@ int LegalIndexOfKind(int kind);
 // The ruleset's stage at each position of page 0 in memory, -1 for none.
 std::vector<int> PageZero(const GuestMemory& memory);
 
+// On the character select, clears a My Music step left from an earlier stage select: step 1 hides
+// the next stage select's tiles and turns its pick into My Music. Every Project+ session runs it.
+// Pure and idempotent; returns bytes changed.
+int ClearStaleMusicSelect(GuestMemory& memory);
+
 // Runs the flow for one frame. Pure and idempotent; returns how many bytes changed.
 int Apply(GuestMemory& memory, int frame, bool two_players);
 // The input gate's masks for the next frame. Read-only.

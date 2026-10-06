@@ -17,6 +17,7 @@
 #include "Core/Orca/UX/MatchBlock.h"
 #include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/OnlineMenu.h"
+#include "Core/Orca/UX/OnlineRules.h"
 #include "Core/Orca/UX/RankedSteps.h"
 #include "Core/Orca/UX/Results.h"
 #include "Core/Orca/UX/StageCursors.h"
@@ -189,23 +190,6 @@ StageMask ShownStruck(const Ranked::Ruleset& rules, const Plan& plan, const Matc
   if (s.auto_pick && s.auto_stage < Ranked::MAX_STAGES)
     shown = static_cast<StageMask>(rules.All() & ~Bit(s.auto_stage));
   return shown;
-}
-
-// Clears a My Music step left from the player's own game, as its cleanup does. Y is masked on the
-// flow's stage select, so My Music never starts there. Returns bytes changed.
-int ClearMusicSelect(GuestMemory& m)
-{
-  int changed = 0;
-  for (const u32 offset : MUSIC_SELECT_WORDS)
-  {
-    const u32 at = MUSIC_SELECT + offset;
-    if (m.Valid(at) && m.Valid(at + 3) && m.Read32(at) != 0)
-    {
-      m.Write32(at, 0);
-      changed += 4;
-    }
-  }
-  return changed;
 }
 
 int WriteIfDifferent16(GuestMemory& m, u32 address, u16 value)
@@ -583,6 +567,25 @@ std::vector<int> PageZero(const GuestMemory& m)
   return page;
 }
 
+int ClearStaleMusicSelect(GuestMemory& m)
+{
+  // My Music's round trip goes from the stage select to My Music and straight back, never through
+  // the character select, so a step seen here is left over.
+  if (ReadSceneName(m) != "scSelctCharacter")
+    return 0;
+  int changed = 0;
+  for (const u32 offset : MUSIC_SELECT_WORDS)
+  {
+    const u32 at = MUSIC_SELECT + offset;
+    if (m.Valid(at) && m.Valid(at + 3) && m.Read32(at) != 0)
+    {
+      m.Write32(at, 0);
+      changed += 4;
+    }
+  }
+  return changed;
+}
+
 int Apply(GuestMemory& m, int frame, bool two_players)
 {
   const std::optional<MatchBlock::State> read = MatchBlock::Read(m);
@@ -607,10 +610,6 @@ int Apply(GuestMemory& m, int frame, bool two_players)
       }
     }
   }
-  // A My Music step on the stage select's way in would leave it without tiles and send its pick
-  // to My Music (a softlock), so the character select clears it.
-  if (scene == "scSelctCharacter")
-    changed += ClearMusicSelect(m);
   const std::optional<StageCursors::State> had = StageCursors::Read(m);
   StageCursors::State c = had.value_or(StageCursors::Start(StageCursors::PPlusLayout()));
   if (casual)
@@ -924,6 +923,9 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
   }
   const std::optional<MatchBlock::State> before =
       resimulating ? std::nullopt : MatchBlock::Read(memory);
+  // Every Project+ session, not only the flows: a With Friends stage select blanks the same way.
+  if (Rules::ProfileRuleset() == Rules::Ruleset::PPlus)
+    ClearStaleMusicSelect(memory);
   Apply(memory, frame, p1 && p2);
   if (!resimulating)
   {

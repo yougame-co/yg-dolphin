@@ -359,8 +359,8 @@ TEST(OrcaRankedPPlus, PresetOutsideTheStageSelectOnly)
   EXPECT_EQ(m.Read8(RankedPPlus::RSS_EXDATA), 0x77);
 }
 
-// A My Music step left from the player's own game (Y on a stage) hid the ranked stage select's
-// tiles and sent the pick to My Music.
+// A My Music step left from an earlier stage select hid the next one's tiles (the ranked strike
+// screen showed only Random) and sent the timer's pick to My Music.
 TEST(OrcaRankedPPlus, CharacterSelectClearsALeftoverMyMusicStep)
 {
   const auto leftover = [](FakeMemory& m) {
@@ -372,28 +372,29 @@ TEST(OrcaRankedPPlus, CharacterSelectClearsALeftoverMyMusicStep)
     m.Write32(RankedPPlus::MUSIC_SELECT + 0x04, 0x55);  // not My Music's
     m.Write32(RankedPPlus::MUSIC_SELECT + 0x1C, 0x66);  // not My Music's
   };
-  for (const u8 mode : {MatchBlock::MODE_RANKED, MatchBlock::MODE_CASUAL})
+  // Ranked, casual, and a session with no flow (With Friends, solo).
+  for (const int mode : {int{MatchBlock::MODE_RANKED}, int{MatchBlock::MODE_CASUAL}, -1})
   {
+    SCOPED_TRACE(mode);
     FakeMemory m = Game("scSelctCharacter");
     leftover(m);
-    MatchBlock::Write(m, MatchBlock::State::Fresh(mode, Ranked::RULESET_PPLUS_2024, 0));
-    EXPECT_GT(RankedPPlus::Apply(m, 1, true), 0);
+    if (mode >= 0)
+    {
+      MatchBlock::Write(
+          m, MatchBlock::State::Fresh(static_cast<u8>(mode), Ranked::RULESET_PPLUS_2024, 0));
+    }
+    EXPECT_EQ(RankedPPlus::ClearStaleMusicSelect(m), 16);
     for (const u32 offset : RankedPPlus::MUSIC_SELECT_WORDS)
       EXPECT_EQ(m.Read32(RankedPPlus::MUSIC_SELECT + offset), 0u) << "word +" << offset;
     EXPECT_EQ(m.Read32(RankedPPlus::MUSIC_SELECT + 0x04), 0x55u);
     EXPECT_EQ(m.Read32(RankedPPlus::MUSIC_SELECT + 0x1C), 0x66u);
-    EXPECT_EQ(RankedPPlus::Apply(m, 1, true), 0);
-    EXPECT_EQ(RankedPPlus::Apply(m, 2, true), 0);
+    EXPECT_EQ(RankedPPlus::ClearStaleMusicSelect(m), 0);
   }
-  // Not on the stage select, and not without a Project+ header.
+  // Never on the stage select, where My Music's own steps run.
   FakeMemory sss = RankedSss(0);
   leftover(sss);
-  RankedPPlus::Apply(sss, 2, true);
+  EXPECT_EQ(RankedPPlus::ClearStaleMusicSelect(sss), 0);
   EXPECT_EQ(sss.Read32(RankedPPlus::MUSIC_SELECT), 1u);
-  FakeMemory none = Game("scSelctCharacter");
-  leftover(none);
-  EXPECT_EQ(RankedPPlus::Apply(none, 1, true), 0);
-  EXPECT_EQ(none.Read32(RankedPPlus::MUSIC_SELECT), 1u);
 }
 
 TEST(OrcaRankedPPlus, GameOneStrikesInTurnsThenTheCoinPicks)
