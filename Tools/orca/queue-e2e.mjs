@@ -27,7 +27,7 @@
 //
 //   node Tools/orca/queue-e2e.mjs <dolphin-emu-nogui> <disc> [--pplus <launcher.dol>]
 //       [--queue ranked|casual] [--games <n>] [--site <url>] [--keep] [--alarm <s>]
-//       [--probe <file>] [--controls <ada>,<bo>]
+//       [--probe <file>] [--controls <ada>,<bo>] [--controls-mid <bo>]
 //       [--slug <listing> --cookie-a <file> --cookie-b <file> --id-a <id> --id-b <id>]
 //
 // Without --slug: dev tickets (an anonymous dev game, nothing recorded, keyframes in a local folder).
@@ -90,6 +90,9 @@ const PROBE = opt("--probe");
 // UX/NameTags.h, "-" for none), as the app passes the saved ones. Each fight then starts with both
 // pressing Z three times in turn, so a probe's `fighters` line shows what Z does on both screens.
 const CONTROLS = (opt("--controls", "") || "").split(",");
+// --controls-mid <hex> (--q2): bo's own controls from a `controls` line once Orca is up, as the page
+// sends a change made in its Controls panel.
+const CONTROLS_MID = opt("--controls-mid");
 if (PROBE && SLUG) {
   console.error("--probe is for dev tickets only");
   process.exit(2);
@@ -1096,7 +1099,7 @@ async function q2Fight(host, joiner) {
     await host.waitScene("scMelee", 200000);
   }
   await sleep(6000);
-  if (CONTROLS[0]) {
+  if (CONTROLS[0] || CONTROLS_MID) {
     for (let i = 0; i < 3; ++i) {
       await host.press("Z");
       await sleep(900);
@@ -1275,6 +1278,7 @@ async function q2Main() {
       fail(`${s.name}: Orca offers no queue2`);
     s.send(CAPS_Q2);
   }
+  if (CONTROLS_MID) b.send(`controls ${CONTROLS_MID}`);
   const { host, joiner, room } = await q2Meet(a, b, QUEUE, (s) => menuToQueue(s, QUEUE));
   const marks = () => {
     for (const s of [host, joiner]) {
