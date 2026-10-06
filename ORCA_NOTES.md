@@ -3018,11 +3018,11 @@ character select (before `ux=9`, which masks A there too); held B for 30 frames 
 the menu (so the gate's B and the flip are what keep a queue match in).
 
 Not yet (Phase 1 leftovers; since `ux=19` a CPU panel on any online select is made empty and the
-record it comes back from is cleared, "No CPUs online"): Giga Bowser and Wario-Man aren't
-refused in Project+; Project+'s Code Menu values (Auto L-Cancel, Stock Control, Input Assist,
-Debug) aren't forced (their defaults are off and the menu can't open); the ready timer's no-show
-and the stall claim were not run live; the room doesn't yet treat a stall claim as more than the
-survivor's word (YouGame rooms).
+record it comes back from is cleared, "No CPUs online"; since `ux=20` Project+'s Code Menu is off
+and at its defaults and Giga Bowser and Wario-Man play as Bowser and Wario, "Project+'s Code Menu"):
+the ready timer's no-show and the stall claim were not run live; the room doesn't yet treat a stall
+claim as more than the survivor's word (YouGame rooms). Until `ux=20` this paragraph said the Code
+Menu "can't open": wrong, it opened mid-fight in ranked on launch night.
 
 ## No CPUs online
 
@@ -3236,6 +3236,89 @@ summaries and scripts in `~/Documents/brawl-dolphin/q12-fix-runs`, screenshots `
   panel left to the game); 470 `Orca*` pass.
 - Not run: Mac <-> PC (`xplat.py`, needs the PC), the release's hashlogs (local selects get no
   writes, presses or masks from this).
+
+## Project+'s Code Menu
+
+`ux=20` (branch `fix-codemenu`, 2026-10-06). On launch night players reported "the debug menu" in
+ranked and casual: flight, infinite shield, Giga Bowser and Wario-Man, a frozen match. It is
+Project+'s own Code Menu (Netplay), in the pinned v3.2 SD card that Orca boots, not anything of
+Orca's. ORCA.md "Project+'s Code Menu and banned fighters" has the rules; this is how they were
+found and checked.
+
+**The menu** (`Source/Netplay/Net-CodeMenu.asm` in the SD card's source; `NETPLAY.txt` includes it):
+
+- "[CM: Control Codes] Load Code Menu" (hook `0x8002D4F4`) reads `pf/menu3/dnet.cmnu` as is to
+  `0x804E0000` (9,504 bytes to `0x804E2520`). It is there by the session's frame 2.
+- "[CM: Code Menu] Control Code Menu" (C2 hook `0x80029574`), every frame: ORs every GC pad's game
+  buttons (`0x805BAD04 + 0x40 x i`); `(buttons & 0x64) == 0x64` (L, R, D-pad Down) requests the
+  menu (state `0x804E0034` = 2). Wiimote and Classic paths exist but Orca forces Wiimotes off.
+- Code Menu Activation (`0x804E0C38`): 0 Default opens anywhere; 1 PM 3.6 refuses only while the
+  in-match flag `0x804E0758` is set; 2 OFF turns every request back into state 0. The P+ main menu's
+  own Code Menu button sets state 1, and A or Start then opens it **without** the activation check.
+- Open (state 4) it saves the pause word `0x805B8A08` at `0x804E006C`, writes 1 there every frame
+  (both games freeze: a pause in a mode where Start is masked), and reads every pad. Start, or B on
+  the root page, closes it: state 3, the pause word back; the same frame's hook then applies each
+  port's Character Select line to its fighter and sets the state from `0x804E0030` (0).
+- Every frame with the menu shut, the values apply on their own: per-port Infinite Shield, D-pad
+  percent, Disable DPad, Input Buffer, ALC; Flight (`[CM: DBZMode]`, `0x804E23BC`); the debug
+  bytes `0x80583FF7..FFF` copied from the Debug lines (skipped only in a match with activation 1 and
+  the menu shut); gameplay constants copied to `0x80B87AA8`.. by "Constant Overrides" (hook
+  `0x80023D60`, unconditional). So a value set offline, or by a joiner in an earlier set, carried
+  into the next locked match without anyone opening the menu.
+- Each line: `+0` size, `+2` type (0 selection, 1 integer, 2 float), `+4` colour flags (bit 3:
+  changed, drawn blue), `+8` value, `+0x10` default. The 73 forced words are every value line but
+  the four Character Select lines (`0x804E0F48`, `0x804E1424`, `0x804E1688`, `0x804E18EC`; "Add New
+  Character Buffer" syncs them to the fighters), Autosave Replays, Save Previous Replay (a state-3
+  file write), Tag-Based Costumes, Crowd Cheers, Tag Hex x4 and HUD colours x4. Checked word by word
+  against `dnet.cmnu` (SHA-256 `eea59cba...d479`); `0x804E1F88` is Walljump Horizontal Multiplier
+  (its float `0x3F666666` reads as text `?fff`).
+- Not reset: the colour flags and the pages' changed counts, so after a locked match a default value
+  the player had changed offline is drawn blue until X or Y resets it. Cosmetic.
+- `Source/Project+/Debug/modifiedDebug.asm` has its own L+R+Down debug toggle (`gr2 ^ 1` on the word
+  at `0x80583FFC`); the menu's per-frame copy of Debug Mode undoes it within the frame, and the gate's
+  `drop_with_lr` stops it reaching the game at all.
+
+**The lock** (`OnlineRules.cpp` `ForceCodeMenu`, every boundary under a Project+ header, first runs
+and re-runs): `Rules::CodeMenuPresent` checks the layout (page pointer inside the file, root page
+`0x804E07D8` at `+4` as the menu itself checks, Activation's line size `0x58` and self-pointer,
+Flight's line size `0x30` and its `+0x18` word `0x804E0F00`); then state 4 gives the pause word back
+from `0x804E006C`, the state becomes 0 whatever it was, and the 73 words take their defaults with
+activation 2. `WriteHeader` saves the activation at match block `+0xDA` (`SAVED_FLAGS` bit 2) when
+it writes a fresh header and the menu is present, and gives it back on clear. A joiner's block is
+the host's, so a joiner gets the host's saved activation back, as with the saved rules.
+
+**Banned fighters.** Project+'s "Hold Shield for Special Fighter" (`Source/ProjectM/CSS.asm`, hooks
+`0x806847BC`, `0x8068482C`, `0x80685BE4`) runs in the function that saves the panels into the
+record as the character select ends (`0x806846E0`): a Bowser (slot `0x0C`), Wario (`0x15`) or Ice
+Climbers (`0x10`) pick whose player holds the shield button becomes slot `0x38`, `0x36` or `0x37`,
+character `0x2C` Giga Bowser, `0x2D` Wario-Man or `0x11` Sopo. Legacy TE's AltCostume hook at
+`0x8068480C` takes R (`0x20`) out of the shield mask (R picks costumes), so on a GC pad it is L.
+Under the harness R held through Start did nothing; L held through Start made both specials.
+The init data gets the special character right there, and again from the record on the way from the
+stage select to the fight. `ForceLegalFighters` (character select, stage select, between) rewrites
+both: init data `+0x98 + 0x5C x port`, the record's characters (`+0xB8 + 0x5C x port`) and slots
+(`+0x0A + 4 x port`). With only the init data rewritten (first version), the transition copied
+`0x2C`/`0x2D` back in, the next boundary fixed it, the fight was still Bowser and Wario, but
+`scMemoryChange` took 56 frames instead of 1 (it had started loading the banned fighters' files).
+With the record rewritten too, it is 1 frame and nothing banned is ever loaded. Sopo is not banned.
+
+**Checked** (Mac, 2026-10-06, Release build of `fix-codemenu`, headless, under the solo run lock;
+inputs and probes in `~/ClaudeWorktrees/orca-codemenu-runs/`):
+
+| Run | What | Result |
+|---|---|---|
+| Control, offline, no header | `pplus-1v1`'s way to a fight; port 1 holds L+R, presses Down at fight frame 330, Start at 480 | state 4 and pause word 1 at frame 918, both back at 1068: the script opens the menu, and offline keeps it |
+| `ORCA_TEST_QUEUE=ranked:1`, `pplus-ranked` + the chord | L+R+Down by port 1 (twice) and port 2 mid-fight, and both on the results screen | activation 2 from frame 3; state and pause word never change; the fight runs to the results (port 1 won 4-0); screenshot at the chord: Pikachu shielding, timer running, no menu |
+| Same, cheats by probe | Flight, P1 Infinite Shield, P2 ALC, hitstun 1.0, activation 0 on the main menu; Flight, Infinite Shield, state 4 and pause 1 at fight frame 200 | every value back to its default at the next boundary; the open menu closed, pause word 0, the fight went on |
+| Same, Giga pick | port 1 on Bowser, port 2 on Wario, L held through Start | the select wrote `0x2C`/`0x2D` (init and record) and slots `0x38`/`0x36`; next boundary `0x0C`/`0x17` and `0x0C`/`0x15`; `scMemoryChange` 1 frame; results characters `[12, 23]`; screenshot: Bowser vs Wario |
+| `YG_SYNCTEST=7` from 170 to 5600 | the chord input; the Giga input | 37,961 re-run frames, 0 RAM mismatches (chord); Giga: see below |
+
+Unit tests: `OrcaOnlineRules.TheCodeMenu*`, `AnOpenCodeMenuClosesAndTheGameRunsAgain`,
+`ClearingGivesBackTheCodeMenusActivation`, `ProjectPlusBannedFightersPlayAsTheirBaseFighters`,
+`ProjectPlusNeverSeesTheCodeMenusChord`, `OrcaInputGate.DownDropsOnlyWhileLAndRAreBothHeld`.
+
+Open: friends rooms keep the menu (Luis's call). `TRIGGER_HELD` (a quarter press) is a guess at
+where the game counts an analog trigger as held; the activation lock does not depend on it.
 
 ## Ranked sets
 

@@ -857,7 +857,8 @@ so no game code has to be patched per control (`Rollback/InputGate.*`).
 - **A mask** makes buttons read released (L and R also zero their analog value) and sticks centred.
   An unplugged port stays unplugged. A mask can also **press** buttons for the game
   (`Mask::press`), **steer** a stick (`Mask::steer`), or read the stick centred while A is down
-  (`a_centres_stick`), so an A acts where the hand stood.
+  (`a_centres_stick`), so an A acts where the hand stood. `drop_with_lr` releases buttons only
+  while L and R are both held (pressed, or a quarter press): Project+'s Code Menu chord.
 - **Where.** `Rollback::InputOverride`, called for every SI poll and for the relatch. Everything else
   stays raw: the local pad sampled for the wire, the session's pads, the harness's recording. Both
   machines apply the same masks to the same pads, and a re-run applies them again.
@@ -1079,7 +1080,9 @@ opponent unplugs; ranked stays locked while the set is open.
 | Rules | stock, 3 stocks, 8:00, handicap off, team attack on, pause off | the same with 4 stocks |
 | Items | none | none |
 | Legal stages | Battlefield, Final Destination, Delfino, Yoshi's Island, Lylat, Smashville, Pokemon Stadium; FD off while a human picked Ice Climbers | the 2024 Proposed list (preset 3, `Switch03.rss`): 9 stages, hazards off |
-| Input gate | character select: A only in the grid, B only to take the token back up; stage select: every port while the two cursors run (they act instead); fight: Start | the same, plus the D-pad on the character select (its Code Menu) |
+| Input gate | character select: A only in the grid, B only to take the token back up; stage select: every port while the two cursors run (they act instead); fight: Start | the same, plus the D-pad on the character select, and D-pad Down while L and R are held in every scene (the Code Menu's chord) |
+| Code Menu | (none) | off, closed, every cheat and gameplay value at its default (below) |
+| Fighters | any | Giga Bowser and Wario-Man play as Bowser and Wario |
 
 - **No way back to the menus.** A toggled patch group conditioned on the header flips the character
   select's "back to the menu" exit to "character select again", so BACK reloads the select.
@@ -1092,8 +1095,31 @@ opponent unplugs; ranked stays locked while the set is open.
 Test knob: `ORCA_TEST_QUEUE=casual|ranked[:<coin>][:q2|:solo]` writes the header as a queue room's
 host would, in a harness run or a dev room. Tests: `OrcaOnlineRules*`.
 
-Not yet: Project+'s Giga Bowser and Wario-Man are not refused; its Code Menu values are not forced
-(their defaults are off and the menu can't open).
+### Project+'s Code Menu and banned fighters
+
+Project+'s netplay codeset carries its Code Menu (`pf/menu3/dnet.cmnu`, loaded as is to
+`0x804E0000`). Any port opens it with L+R+D-pad Down in any scene, mid-fight too, and it pauses both
+games while open; from it a player could turn on flight, infinite shield and debug displays, swap a
+port's character (Giga Bowser, Wario-Man) and change hitstun, shield and other constants, all in
+sync. Its character select also turns a Bowser or Wario pick into Giga Bowser or Wario-Man, both
+banned, when the player holds shield (L) as the select ends. Under any locking header (casual,
+ranked, the queue's own character select), since `ux=20`:
+
+- **The menu is off and closed.** Code Menu Activation is OFF, its state is closed (an open menu
+  closes as its own Start does and the game's pause word comes back), and 73 cheat and gameplay
+  values are held at the file's defaults at every boundary. The four Character Select lines follow
+  the fighters and are left alone; so are the replay, tag, costume, crowd and HUD colour lines.
+  Nothing is written unless the memory has the pinned release's layout (`Rules::CodeMenuPresent`).
+- **The chord never arrives:** the gate drops D-pad Down while L and R are held, in every scene
+  (`drop_with_lr`). That also stops the debug codes' own L+R+Down toggle.
+- **Banned fighters** become Bowser (`0x0C`) and Wario (`0x17`) on the character select, the stage
+  select and between scenes, in the match's init data and in the character select's record
+  (gmSelCharData), which the way to the fight copies into the init data again.
+- The header saves the player's own activation and its clear gives it back; the values stay at
+  Project+'s defaults afterwards. Friends rooms keep the menu as it is.
+
+Tests: `OrcaOnlineRules.*CodeMenu*`, `OrcaOnlineRules.ProjectPlus*`,
+`OrcaInputGate.DownDropsOnlyWhileLAndRAreBothHeld`. More in ORCA_NOTES.md, "Project+'s Code Menu".
 
 ## No CPUs online
 
