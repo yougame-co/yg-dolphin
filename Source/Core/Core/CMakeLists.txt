@@ -515,6 +515,8 @@ add_library(core
   Orca/JitWarm.h
   Orca/Launch.cpp
   Orca/Launch.h
+  Orca/Music.cpp
+  Orca/Music.h
   Orca/Profile.cpp
   Orca/Profile.h
   Orca/Status.cpp
