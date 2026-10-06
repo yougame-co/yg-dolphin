@@ -27,7 +27,7 @@
 //
 //   node Tools/orca/queue-e2e.mjs <dolphin-emu-nogui> <disc> [--pplus <launcher.dol>]
 //       [--queue ranked|casual] [--games <n>] [--site <url>] [--keep] [--alarm <s>]
-//       [--probe <file>]
+//       [--probe <file>] [--controls <ada>,<bo>]
 //       [--slug <listing> --cookie-a <file> --cookie-b <file> --id-a <id> --id-b <id>]
 //
 // Without --slug: dev tickets (an anonymous dev game, nothing recorded, keyframes in a local folder).
@@ -86,6 +86,10 @@ const PICK = opt("--pick", "character");
 // research knob), so its writes land in each player's own game before any session; for example a
 // Project+ record with CPUs written at the main menu (ORCA.md "No CPUs online").
 const PROBE = opt("--probe");
+// --controls <ada>,<bo>: each player's own controls at launch (ORCA_CONTROLS: the 92-hex profile of
+// UX/NameTags.h, "-" for none), as the app passes the saved ones. Each fight then starts with both
+// pressing Z three times in turn, so a probe's `fighters` line shows what Z does on both screens.
+const CONTROLS = (opt("--controls", "") || "").split(",");
 if (PROBE && SLUG) {
   console.error("--probe is for dev tickets only");
   process.exit(2);
@@ -326,6 +330,8 @@ class Side {
       if (k.startsWith("ORCA_TEST_") && !(k in env)) env[k] = v;
     }
     if (PPLUS) env.ORCA_PROFILE = "PPLUS32";
+    const own = CONTROLS[this.name === "ada" ? 0 : 1];
+    if (own && own !== "-") env.ORCA_CONTROLS = own;
     if (PROBE) {
       env.ORCA_UX_PROBE = path.resolve(PROBE);
       env.ORCA_TEST_DEV_GAME = DEV_GAME;
@@ -1090,6 +1096,14 @@ async function q2Fight(host, joiner) {
     await host.waitScene("scMelee", 200000);
   }
   await sleep(6000);
+  if (CONTROLS[0]) {
+    for (let i = 0; i < 3; ++i) {
+      await host.press("Z");
+      await sleep(900);
+      await joiner.press("Z");
+      await sleep(900);
+    }
+  }
   joiner.pad.axes = [0, 128, 128, 128];
   const hostFrom = host.lines.length;
   const setEndFrom = [host.setEndLog.length, joiner.setEndLog.length];
