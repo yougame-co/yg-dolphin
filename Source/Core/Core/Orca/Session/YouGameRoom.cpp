@@ -1054,10 +1054,10 @@ struct YouGameRoom::Impl
                              Common::HttpRequest::AllowedReturnCodes::All);
         if (response)
           break;
-        WARN_LOG_FMT(NETPLAY, "Orca room: no reply from {} in {} ms (HTTP {}, try {} of {})", target,
-                     std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start)
-                         .count(),
-                     http.GetLastResponseCode(), attempt, TICKET_TRIES);
+        WARN_LOG_FMT(
+            NETPLAY, "Orca room: no reply from {} in {} ms (HTTP {}, try {} of {})", target,
+            std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start).count(),
+            http.GetLastResponseCode(), attempt, TICKET_TRIES);
         const auto until = Clock::now() + std::chrono::seconds(1);
         while (attempt < TICKET_TRIES && !stop && Clock::now() < until)
           std::this_thread::sleep_for(std::chrono::milliseconds(20));

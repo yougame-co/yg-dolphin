@@ -359,13 +359,13 @@ TEST(OrcaRankedPPlus, PresetOutsideTheStageSelectOnly)
   EXPECT_EQ(m.Read8(RankedPPlus::RSS_EXDATA), 0x77);
 }
 
-// A My Music step left from the player's own game (Y on a stage) hid the ranked stage select's tiles
-// and sent the pick to My Music.
+// A My Music step left from the player's own game (Y on a stage) hid the ranked stage select's
+// tiles and sent the pick to My Music.
 TEST(OrcaRankedPPlus, CharacterSelectClearsALeftoverMyMusicStep)
 {
   const auto leftover = [](FakeMemory& m) {
     m.Fill(RankedPPlus::MUSIC_SELECT, 0x30, 0);
-    m.Write32(RankedPPlus::MUSIC_SELECT, 1);          // step 1: going to My Music
+    m.Write32(RankedPPlus::MUSIC_SELECT, 1);            // step 1: going to My Music
     m.Write32(RankedPPlus::MUSIC_SELECT + 0x08, 0x2A);  // song
     m.Write32(RankedPPlus::MUSIC_SELECT + 0x14, 0x01000000);
     m.Write32(RankedPPlus::MUSIC_SELECT + 0x2C, 7);
