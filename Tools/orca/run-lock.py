@@ -43,19 +43,43 @@
 # orca-run-queue/ beside the locks: one ticket file per run, locked by its owner for as long as it
 # lives, so a run that dies leaves no ticket behind.
 #
+# The external SSD (perf runs only, 2026-10-06): the USB SSD that holds the worktree image
+# (~/ClaudeWorktrees) and the discs stalls for 10-180 s while other agents copy GBs or run npm
+# installs on it, and an Orca read from it waits as long: Project+ streams its music from the SD
+# image on the emulation thread, so 0.3.28's Mac<->PC run froze for 36-44 s. A perf run therefore
+#  - runs Project+ from the internal copy (ORCA_PERF_PPLUS_DIR, default
+#    ~/Documents/brawl-dolphin/pplus-internal/run) when its command names the launcher on an
+#    external disk and the internal copy is the same release;
+#  - waits until the SSD has gone ORCA_SSD_QUIET_S (60) without a stall over ORCA_SSD_STALL_S (2):
+#    the kernel's APFS lines for the worktree image's disk ("disk11 tx ... took N us", written when
+#    a stall ends), and a timed 1 MB read around the page cache (one stuck now) of
+#    ~/ClaudeWorktrees/.orca-ssd-probe and of the largest file the command reads from any other
+#    external disk (the discs);
+#  - keeps timing those reads every 5 s while it runs, and when it ends prints "SSD: TAINTED ..."
+#    with every stall that overlapped it, or "SSD: no stall".
+#    Measured 2026-10-06 while 2 GB went into the image: APFS flushes of 2-5 s, reads of the probe
+#    file 32 ms -> 414 ms (median), the disc's on the exFAT side 26 -> 74 ms. The log is what sees a
+#    stall; a read over 2 s means a bad one is going on right now.
+# `status` shows the wait and a reminder to keep the SSD quiet while a perf run is queued or going.
+# ORCA_SSD_WATCH (paths, ':'-separated, default ~/ClaudeWorktrees) names the SSD's APFS disks to
+# watch, ORCA_SSD_PROBE adds files to time, ORCA_SSD_GUARD=0 turns all of this off.
+#
 # Environment: ORCA_LOCK_DIR (default ~/Documents/brawl-dolphin), ORCA_CHECK_SLOTS (3). Tests use
 # ORCA_RUN_LOCK_POLL (seconds between looks, 2), ORCA_RUN_LOCK_TEST_PLAYING (a file: Luis "plays"
-# while it exists) and ORCA_RUN_LOCK_TEST_LOAD (a file holding "<load> <free %>").
+# while it exists), ORCA_RUN_LOCK_TEST_LOAD (a file holding "<load> <free %>") and
+# ORCA_RUN_LOCK_TEST_SSD (a file of "<start> <end> <what>" stalls, read instead of the kernel log).
 import argparse
 import errno
 import fcntl
 import json
 import os
+import random
 import re
 import shlex
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 LOCK_DIR = os.environ.get("ORCA_LOCK_DIR") or os.path.expanduser("~/Documents/brawl-dolphin")
@@ -71,6 +95,15 @@ LUIS_RE = re.compile(r"Resources/runtimes/orca/Orca\.app/Contents/MacOS/Orca|you
 LUIS = "Luis's Orca is open"
 SERIAL_BUSY = "another run with --serial"
 EXIT_GAVE_UP, EXIT_YIELDED, EXIT_DEADLOCK = 9, 10, 11
+SSD_GUARD = os.environ.get("ORCA_SSD_GUARD", "1") != "0"
+SSD_STALL_S = float(os.environ.get("ORCA_SSD_STALL_S") or 2)
+SSD_QUIET_S = float(os.environ.get("ORCA_SSD_QUIET_S") or 60)
+SSD_PROBE_EVERY_S = 5
+SSD_LOG_EVERY_S = 10
+SSD_QUIET_HINT = ("a perf run is queued or going: keep the external SSD quiet (no multi-GB copies onto it, "
+                  "no npm installs in worktrees on it) until it is done")
+PPLUS_INTERNAL = os.environ.get("ORCA_PERF_PPLUS_DIR", "~/Documents/brawl-dolphin/pplus-internal/run")
+F_NOCACHE = 48  # fcntl.h: read around the page cache
 
 
 def say(text):
@@ -345,6 +378,313 @@ def scan(me=None):
     return tickets
 
 
+# ---- the external SSD (perf runs) ----
+
+def internal_devices():
+    devs = set()
+    for p in ("/", os.path.expanduser("~"), os.environ.get("TMPDIR") or "/tmp"):
+        try:
+            devs.add(os.stat(p).st_dev)
+        except OSError:
+            pass
+    return devs
+
+
+def on_external_disk(path, internal):
+    try:
+        return os.stat(path).st_dev not in internal
+    except OSError:
+        return False
+
+
+def command_files(cmd):
+    """Existing files the command names: its words, `--opt=<file>` and `VAR=<file>`, and the words
+    of a script string (`bash -c '...'`)."""
+    words = []
+    for arg in cmd:
+        words.append(arg)
+        if "=" in arg:
+            words.append(arg.split("=", 1)[1])
+        if any(c in arg for c in " \n;'\""):
+            try:
+                words.extend(shlex.split(arg, comments=True))
+            except ValueError:
+                pass
+    out = []
+    for w in words:
+        w = os.path.expanduser(w)
+        if os.path.isabs(w) and os.path.isfile(w) and w not in out:
+            out.append(w)
+    return out
+
+
+def disk_of(path):
+    """The whole disk an APFS volume sits on, as the kernel log names it: disk11s1 -> disk11."""
+    try:
+        dev = subprocess.run(["/usr/bin/stat", "-f", "%Sd", path], capture_output=True, text=True,
+                             timeout=10).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    m = re.match(r"(disk\d+)", dev)
+    return m.group(1) if m else None
+
+
+APFS_LINE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)(\.\d+)? .*?\(apfs\) (\w+):\d+: (disk\d+) .*?(\d+) us\b")
+
+
+def apfs_stalls(disks, since):
+    """[(start, end, what)]: the kernel's APFS lines for these disks ("disk11 tx xid N took M us to
+    flush", "... waited M us to open tx") of at least SSD_STALL_S that ended after `since`. The
+    kernel writes one when the wait is over, so a stall still going shows up only in the reads."""
+    fake = os.environ.get("ORCA_RUN_LOCK_TEST_SSD")
+    lines = []
+    if fake:
+        try:
+            with open(fake) as f:
+                for line in f:
+                    parts = line.split(None, 2)
+                    if len(parts) == 3:
+                        lines.append((float(parts[0]), float(parts[1]), parts[2].strip()))
+        except (OSError, ValueError):
+            pass
+        return [s for s in lines if s[1] >= since and s[1] - s[0] >= SSD_STALL_S]
+    if not disks:
+        return []
+    pred = 'process == "kernel" AND (' + " OR ".join(f'eventMessage CONTAINS "{d} "' for d in disks) + ")"
+    start = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(since - 1))
+    try:
+        out = subprocess.run(["/usr/bin/log", "show", "--style", "compact", "--start", start,
+                              "--predicate", pred], capture_output=True, text=True, timeout=120).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    for line in out.splitlines():
+        m = APFS_LINE.match(line)
+        if not m:
+            continue
+        end = time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")) + float(m.group(2) or 0)
+        secs = int(m.group(5)) / 1e6
+        if end >= since and secs >= SSD_STALL_S:
+            lines.append((end - secs, end, f"{m.group(4)} APFS {m.group(3)}"))
+    return lines
+
+
+def read_probe(path):
+    """One 1 MB read at a random offset around the page cache (on APFS a page already cached is
+    still served from memory; the SSD's exFAT side reads the drive every time)."""
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        try:
+            fcntl.fcntl(fd, F_NOCACHE, 1)
+        except OSError:
+            pass
+        size = os.fstat(fd).st_size
+        off = random.randrange(0, max(1, size >> 20)) << 20
+        try:
+            os.pread(fd, 1 << 20, off)
+        except OSError:
+            os.read(fd, 1 << 20)
+    finally:
+        os.close(fd)
+
+
+def size_of(path):
+    try:
+        return os.stat(path).st_size
+    except OSError:
+        return 0
+
+
+PROBE_NAME, PROBE_MB = ".orca-ssd-probe", 64
+
+
+def probe_file(folder):
+    """<folder>/.orca-ssd-probe, 64 MB written once around the page cache, so a timed read of it
+    always goes to the drive (a file Orca reads, like the SD image, sits in memory). None if it
+    cannot be made."""
+    path = os.path.join(folder, PROBE_NAME)
+    if size_of(path) >= PROBE_MB << 20:
+        return path
+    tmp = f"{path}.{os.getpid()}"
+    try:
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+        try:
+            fcntl.fcntl(fd, F_NOCACHE, 1)
+            for _ in range(PROBE_MB):
+                os.write(fd, os.urandom(1 << 20))
+        finally:
+            os.close(fd)
+        os.replace(tmp, path)
+        return path
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        return None
+
+
+def clock(t):
+    return time.strftime("%H:%M:%S", time.localtime(t))
+
+
+class SSD:
+    """The external SSD's stalls, for one perf run: what it waits for, and what it reports."""
+
+    def __init__(self, cmd):
+        internal = internal_devices()
+        self.external = [f for f in command_files(cmd) if on_external_disk(f, internal)]
+        for f in list(self.external):  # Orca reads the SD image next to a launcher
+            sd = os.path.join(os.path.dirname(f), "sd.raw")
+            if f.endswith(".dol") and os.path.isfile(sd) and sd not in self.external:
+                self.external.append(sd)
+        watch = [os.path.expanduser(p) for p in os.environ.get("ORCA_SSD_WATCH", "~/ClaudeWorktrees").split(":") if p]
+        watch = [p for p in watch if os.path.isdir(p) and on_external_disk(p, internal)]
+        # One file per disk to time: on a watched APFS disk a probe file of its own that nothing reads
+        # into the page cache, elsewhere the largest file the run reads from that disk.
+        per_dev = {}
+        for f in [probe_file(p) for p in watch] + sorted(self.external, key=size_of, reverse=True):
+            try:
+                per_dev.setdefault(os.stat(f).st_dev, f)
+            except (OSError, TypeError):
+                continue
+        self.files = list(per_dev.values())
+        self.files += [p for p in os.environ.get("ORCA_SSD_PROBE", "").split(":") if p and p not in self.files]
+        disks = [disk_of(p) for p in watch + self.external]
+        self.disks = sorted(set(d for d in disks if d))
+        self.active = bool(self.files or self.disks or os.environ.get("ORCA_RUN_LOCK_TEST_SSD"))
+        self.slow = []          # [(start, end, what)] timed reads that took SSD_STALL_S or more
+        self.inflight = None    # (start, file) of the read going now
+        self.lock = threading.Lock()
+        self.round_lock = threading.Lock()
+        self.logged = (0.0, [])  # (when, apfs_stalls) cache
+        self.on_slow = None
+        self.stop = threading.Event()
+        self.thread = None
+
+    def describe(self):
+        parts = []
+        if self.disks:
+            parts.append(f"the kernel's APFS lines for {', '.join(self.disks)}")
+        if self.files:
+            parts.append("timed reads of " + ", ".join(os.path.basename(f) for f in self.files))
+        return " and ".join(parts) or "a test log"
+
+    def _round(self):
+        """Time one read of each file, unless a round is still going (a stalled read)."""
+        if not self.round_lock.acquire(blocking=False):
+            return
+        try:
+            for f in self.files:
+                t0 = time.time()
+                with self.lock:
+                    self.inflight = (t0, f)
+                try:
+                    read_probe(f)
+                except OSError:
+                    pass  # gone (the drive dropped out?): the run's own reads will say so
+                t1 = time.time()
+                with self.lock:
+                    self.inflight = None
+                    if t1 - t0 >= SSD_STALL_S:
+                        what = f"a 1 MB read of {os.path.basename(f)} took {t1 - t0:.1f} s"
+                        self.slow.append((t0, t1, what))
+                        if self.on_slow:
+                            self.on_slow(t0, t1, what)
+        finally:
+            self.round_lock.release()
+
+    def stalling_now(self):
+        with self.lock:
+            if self.inflight and time.time() - self.inflight[0] >= SSD_STALL_S:
+                return self.inflight
+        return None
+
+    def recent(self, since):
+        now = time.time()
+        if now - self.logged[0] >= SSD_LOG_EVERY_S:
+            self.logged = (now, apfs_stalls(self.disks, now - SSD_QUIET_S - SSD_LOG_EVERY_S))
+        with self.lock:
+            slow = list(self.slow)
+        return [s for s in self.logged[1] + slow if s[1] >= since]
+
+    def why_wait(self):
+        """Why a perf run should not start yet, or None once the SSD has been quiet SSD_QUIET_S."""
+        if not self.active:
+            return None
+        if self.files:
+            t = threading.Thread(target=self._round, daemon=True)
+            t.start()
+            t.join(SSD_STALL_S)
+        going = self.stalling_now()
+        if going:
+            return (f"the external SSD is stalling now: a 1 MB read of {os.path.basename(going[1])} has "
+                    f"waited since {clock(going[0])}")
+        recent = self.recent(time.time() - SSD_QUIET_S)
+        if recent:
+            start, end, what = max(recent, key=lambda s: s[1])
+            return (f"the external SSD stalled {end - start:.0f} s at {clock(start)} ({what}); a perf run "
+                    f"waits for {SSD_QUIET_S:.0f} s without a stall over {SSD_STALL_S:g} s")
+        return None
+
+    def watch_run(self, on_slow):
+        self.on_slow = on_slow
+        if not self.files:
+            return
+
+        def loop():
+            while not self.stop.wait(SSD_PROBE_EVERY_S):
+                self._round()
+
+        self.thread = threading.Thread(target=loop, daemon=True)
+        self.thread.start()
+
+    def report(self, t0, t1):
+        """Every stall that overlapped [t0, t1], as one line for the run's output."""
+        self.stop.set()
+        stalls = [s for s in apfs_stalls(self.disks, t0) if s[0] <= t1]
+        with self.lock:
+            stalls += [s for s in self.slow if s[1] >= t0 and s[0] <= t1]
+        going = self.stalling_now()
+        if going:
+            stalls.append((going[0], time.time(),
+                           f"a 1 MB read of {os.path.basename(going[1])} still waiting at the end"))
+        if not stalls:
+            return f"SSD: no stall over {SSD_STALL_S:g} s during this perf run ({self.describe()})"
+        stalls.sort()
+        shown = "; ".join(f"{clock(s)} {e - s:.1f} s ({what})" for s, e, what in stalls[:6])
+        more = f"; and {len(stalls) - 6} more" if len(stalls) > 6 else ""
+        return (f"SSD: TAINTED: the external SSD stalled {len(stalls)} time(s) during this perf run, so its "
+                f"timings are suspect: {shown}{more}")
+
+
+def internal_pplus(cmd):
+    """The command with a Project+ launcher on an external disk swapped for the internal copy of the
+    same release (same launcher bytes, same SD image size and date), and what was swapped."""
+    if not PPLUS_INTERNAL:
+        return cmd, []
+    home = os.path.expanduser(PPLUS_INTERNAL)
+    internal = internal_devices()
+    out, swapped = [], []
+    for arg in cmd:
+        key, eq, path = arg.partition("=") if arg.startswith("-") and "=" in arg else ("", "", arg)
+        mine = os.path.join(home, os.path.basename(path))
+        if path.endswith(".dol") and os.path.isfile(path) and on_external_disk(path, internal) and \
+                os.path.isfile(mine) and not on_external_disk(mine, internal):
+            try:
+                theirs_sd, mine_sd = (os.stat(os.path.join(os.path.dirname(p), "sd.raw")) for p in (path, mine))
+                with open(path, "rb") as a, open(mine, "rb") as b:
+                    same = a.read() == b.read() and theirs_sd.st_size == mine_sd.st_size and \
+                        int(theirs_sd.st_mtime) == int(mine_sd.st_mtime)
+            except OSError:
+                same = False
+            if same:
+                out.append(key + eq + mine)
+                swapped.append((path, mine))
+                continue
+        out.append(arg)
+    return out, swapped
+
+
 # ---- one run ----
 
 class Run:
@@ -364,6 +704,7 @@ class Run:
             "since": time.time(),
             "reason": "",
         }
+        self.ssd = SSD(cmd) if cls == "perf" and SSD_GUARD else None
 
     def release(self):
         for fd in self.held:
@@ -425,6 +766,9 @@ class Run:
                 return f"the machine is busy (load {load:.1f}, {free}% memory free)"
             if checks:
                 return f"{len(checks)} check run(s) still going"
+            why = self.ssd.why_wait() if self.ssd else None
+            if why:
+                return why
         else:
             allowed = checks_allowed(load, free)
             if len(checks) >= allowed:
@@ -438,6 +782,8 @@ class Run:
         self.start_note = f"load {load:.1f}, {free}% memory free"
         if self.cls == "check":
             self.start_note = f"check {len(checks) + 1} of up to {checks_allowed(load, free)} ({self.start_note})"
+        elif self.ssd and self.ssd.active:
+            self.start_note += f", the external SSD quiet for {SSD_QUIET_S:.0f} s"
         return None
 
     def wait_turn(self):
@@ -496,7 +842,24 @@ class Run:
                 return pid, path
         return None
 
+    def note_ssd(self, start, end, what):
+        try:
+            self.ticket.write(ssd=f"tainted: the SSD stalled {end - start:.0f} s at {clock(start)} ({what})")
+        except (OSError, ValueError):
+            pass
+
     def run_command(self):
+        t0 = time.time()
+        watch = self.ssd is not None and self.ssd.active
+        if watch:
+            self.ssd.watch_run(self.note_ssd)
+        try:
+            return self.run_child()
+        finally:
+            if watch:
+                say(self.ssd.report(t0, time.time()))
+
+    def run_child(self):
         env = dict(os.environ, ORCA_RUN_LOCK=f"{self.cls}:{os.getpid()}")
         t0 = time.time()
         self.child = subprocess.Popen(self.cmd, env=env)
@@ -540,6 +903,10 @@ class Run:
             if signal.getsignal(s) != signal.SIG_IGN:  # nohup's ignored SIGHUP stays ignored
                 signal.signal(s, self.on_signal)
         try:
+            if self.ssd and self.ssd.external:
+                say("note: this perf run reads " + ", ".join(os.path.basename(f) for f in self.ssd.external)
+                    + " from an external disk; a stall there freezes Orca, so timed runs keep their files on the "
+                    "internal disk where they can (Project+: " + PPLUS_INTERNAL + ")")
             if not self.wait_turn():
                 return EXIT_GAVE_UP
             return self.run_command()
@@ -610,6 +977,10 @@ def status(as_json, luis_only):
         print(line)
         if t.get("cwd"):
             print(f"{'':26}in {t['cwd'].replace(os.path.expanduser('~'), '~')}")
+        if t.get("ssd"):
+            print(f"{'':26}{t['ssd']}")
+    if any(t["cls"] == "perf" for t in tickets):
+        print(SSD_QUIET_HINT)
     for o in outside:
         print(f"outside the queue: flock pid {o['pid']} on {o['file']} ({'shared' if o['shared'] else 'exclusive'})")
     return 0
@@ -659,6 +1030,11 @@ def main(argv):
             say(f"already inside a {ocls} run (pid {opid}): running as part of it")
             os.execvp(cmd[0], cmd)
 
+    if a.cls == "perf" and SSD_GUARD:
+        cmd, swapped = internal_pplus(cmd)
+        for theirs, mine in swapped:
+            say(f"Project+ from the internal copy {mine}, not {theirs} on the external SSD "
+                "(ORCA_PERF_PPLUS_DIR= keeps the path as given)")
     serials = list(dict.fromkeys(a.serial + auto_serials(cmd)))
     label = a.label or " ".join(os.path.basename(w) if i < 2 else w for i, w in enumerate(cmd))[:160]
     return Run(a.cls, cmd, label, serials, a.wait_max, a.yield_).main()

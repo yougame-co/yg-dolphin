@@ -73,6 +73,9 @@ Mac: the run queue" below), which waits while Luis plays and while the machine i
    side's `XPLAT` summary `"ok": true` with `checksums_matched` above 0. Two Orcas on one Mac share
    a compiler, an architecture and a JIT, so only this run can see the two builds disagree
    (**Host arithmetic** under "Drop-in": Apple clang's fused multiply-adds against MSVC's x64).
+   The Mac side runs under `Tools/orca/run-lock.py perf`, with Project+ from the internal disk
+   (`--pplus ~/Documents/brawl-dolphin/pplus-internal/run/"Project+ Netplay Launcher.dol"`; "The
+   external SSD" below).
 
 ## Sharing the Mac: the run queue
 
@@ -108,7 +111,34 @@ other. Now:
   locks itself: the run stops with exit 11, since it would wait for itself forever.
 - `run-lock.py status` shows who runs, who waits and why (`--json`; `--luis` exits 0 while runs
   wait for Luis's Orca to close, for a lead to tell him). Tests: `python3
-  Tools/orca/run-lock-test.py` (a scratch lock folder, fake load and a fake "playing", ~30 s).
+  Tools/orca/run-lock-test.py` (a scratch lock folder, fake load and a fake "playing", ~50 s).
+
+### The external SSD
+
+2026-10-06. The worktrees (`~/ClaudeWorktrees`, an APFS image) and the discs live on an external
+USB SSD. While other agents copied GBs or ran npm installs there, the image's APFS transactions took
+10-180 s to flush (the kernel logs each one: `disk11 tx xid N took M us to flush`), and Orca's reads
+from that drive waited as long: Project+ streams its music from `sd.raw` on the emulation thread, so
+0.3.28's Mac <-> PC run froze for 36-44 s with the SD image there. In a 117 s stall the discs' reads
+on the drive's exFAT side took 2-6 s per MB (25 ms normally). So:
+
+- Timed runs read Project+ from `~/Documents/brawl-dolphin/pplus-internal/run` (a copy of
+  `pplus/run`, same SHA-256: `sd.raw` cfe5d869...2d2d, the launcher 74a0decf...c0da). A perf run
+  whose command names the launcher on an external disk gets the internal copy instead when it is the
+  same release, and says so (`ORCA_PERF_PPLUS_DIR=` keeps the path as given). Checks may keep the
+  SSD paths. The discs stay on the SSD.
+- A perf run waits until the SSD has gone 60 s without a stall over 2 s: the kernel's APFS lines for
+  the image's disk (written when a stall ends) and a 1 MB read around the page cache, timed, of
+  `~/ClaudeWorktrees/.orca-ssd-probe` and of each disc the command names (a read stuck over 2 s is
+  a stall going on now). `status` shows that wait. It keeps timing those reads every 5 s while it
+  runs and ends with `SSD: TAINTED: ...` and every stall that overlapped it (rerun it), or `SSD: no
+  stall`. `ORCA_SSD_QUIET_S`, `ORCA_SSD_STALL_S`, `ORCA_SSD_WATCH`, `ORCA_SSD_PROBE`,
+  `ORCA_SSD_GUARD=0` change it; checks never look.
+- While `status` shows a perf run, nobody copies GBs onto the SSD or runs npm installs in worktrees
+  on it.
+- A new build's first launch waits for `syspolicyd`, which can take minutes when the SSD stalls:
+  `queue-e2e.mjs` and `page-e2e.mjs` give a first `orca caps` 120 s, the Python drop-in tools 30 s.
+  Launch a new build once before timing it.
 
 ## Running a session
 

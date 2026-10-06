@@ -4,7 +4,8 @@
 #
 #   python3 Tools/orca/run-lock-test.py [-v] [Test.test_name]
 #
-# About 40 s. Each test starts real run-lock.py processes whose commands log when they start and end.
+# About 50 s. Each test starts real run-lock.py processes whose commands log when they start and end.
+import importlib.util
 import json
 import os
 import shutil
@@ -39,8 +40,10 @@ class RunLock(unittest.TestCase):
         self.playing = os.path.join(self.dir, "playing")
         self.env = dict(os.environ, ORCA_LOCK_DIR=self.dir, ORCA_RUN_LOCK_POLL="0.1",
                         ORCA_RUN_LOCK_TEST_PLAYING=self.playing,
-                        ORCA_RUN_LOCK_TEST_LOAD=os.path.join(self.dir, "load"))
-        for k in ("ORCA_RUN_LOCK", "QE2E_DEV_SUFFIX", "ORCA_CHECK_SLOTS"):
+                        ORCA_RUN_LOCK_TEST_LOAD=os.path.join(self.dir, "load"),
+                        ORCA_RUN_LOCK_TEST_SSD=os.path.join(self.dir, "ssd"), ORCA_SSD_WATCH="")
+        for k in ("ORCA_RUN_LOCK", "QE2E_DEV_SUFFIX", "ORCA_CHECK_SLOTS", "ORCA_SSD_PROBE", "ORCA_SSD_GUARD",
+                  "ORCA_SSD_STALL_S", "ORCA_SSD_QUIET_S", "ORCA_PERF_PPLUS_DIR"):
             self.env.pop(k, None)
         self.set_load(3, 70)
         self.procs = []
@@ -58,6 +61,10 @@ class RunLock(unittest.TestCase):
     def set_load(self, load, free):
         with open(os.path.join(self.dir, "load"), "w") as f:
             f.write(f"{load} {free}\n")
+
+    def ssd_stall(self, start, end, what="disk11 APFS tx_flush"):
+        with open(os.path.join(self.dir, "ssd"), "a") as f:
+            f.write(f"{start} {end} {what}\n")
 
     def record(self, name, secs):
         return [sys.executable, "-c", RECORD, self.log, name, str(secs)]
@@ -432,6 +439,117 @@ class RunLock(unittest.TestCase):
         self.assertIn("the perf run", text)
         for p in (c, perf):
             self.assertEqual(self.finish(p)[0], 0)
+
+    # ---- the external SSD (perf runs) ----
+
+    def test_perf_waits_for_a_quiet_ssd(self):
+        now = time.time()
+        self.ssd_stall(now - 3, now)
+        perf = self.start("perf", self.record("p", 0.1), "--label", "timed", env={"ORCA_SSD_QUIET_S": "1.5"})
+        self.assertTrue(self.wait_for(lambda: len(self.tickets()) == 1))
+        time.sleep(0.4)
+        self.assertFalse(self.started("p"))
+        text = subprocess.run([sys.executable, TOOL, "status"], env=self.env, capture_output=True, text=True).stdout
+        self.assertIn("the external SSD stalled 3 s at", text)
+        self.assertIn("keep the external SSD quiet", text)
+        rc, _, err = self.finish(perf)
+        self.assertEqual(rc, 0)
+        self.assertGreaterEqual(self.spans()["p"][0], now + 1.5)
+        self.assertIn("waiting: the external SSD stalled 3 s", err)
+        self.assertIn("the external SSD quiet for 2 s", err)  # 1.5 rounds to 2 in the start line
+        self.assertIn("SSD: no stall over 2 s during this perf run", err)
+
+    def test_checks_do_not_wait_for_the_ssd(self):
+        now = time.time()
+        self.ssd_stall(now - 30, now)
+        rc, _, err = self.finish(self.start("check", self.record("c", 0.1)))
+        self.assertEqual(rc, 0)
+        self.assertNotIn("SSD", err)
+        self.assertNotIn("keep the external SSD quiet",
+                         subprocess.run([sys.executable, TOOL, "status"], env=self.env, capture_output=True,
+                                        text=True).stdout)
+
+    def test_perf_reports_stalls_during_the_run(self):
+        ssd = os.path.join(self.dir, "ssd")
+        stall = ("import sys, time\n"
+                 "time.sleep(0.3); t = time.time()\n"
+                 "open(sys.argv[1], 'a').write(f'{t - 2.5} {t} disk11 APFS tx_flush\\n')\n"
+                 "time.sleep(0.3)\n")
+        rc, _, err = self.finish(self.start("perf", [sys.executable, "-c", stall, ssd]))
+        self.assertEqual(rc, 0)
+        self.assertIn("SSD: TAINTED: the external SSD stalled 1 time(s) during this perf run", err)
+        self.assertIn("2.5 s (disk11 APFS tx_flush)", err)
+        # A stall that was over before the run started taints nothing; the next run waits it out.
+        rc, _, err = self.finish(self.start("perf", self.record("p", 0.1), env={"ORCA_SSD_QUIET_S": "0.5"}))
+        self.assertEqual(rc, 0)
+        self.assertIn("SSD: no stall", err)
+
+    def test_a_read_that_hangs_holds_perf_back(self):
+        fifo = os.path.join(self.dir, "drive")
+        os.mkfifo(fifo)  # opening it for reading blocks until a writer comes: a read that hangs
+        env = {"ORCA_SSD_PROBE": fifo, "ORCA_SSD_STALL_S": "0.3", "ORCA_SSD_QUIET_S": "0.5"}
+        perf = self.start("perf", self.record("p", 0.1), env=env)
+
+        def reason():
+            data = json.loads(subprocess.run([sys.executable, TOOL, "status", "--json"], env=self.env,
+                                             capture_output=True, text=True).stdout)
+            return data["tickets"][0].get("reason", "") if data["tickets"] else ""
+
+        self.assertTrue(self.wait_for(lambda: "is stalling now" in reason()))
+        time.sleep(0.5)
+        self.assertFalse(self.started("p"))
+        regular = os.path.join(self.dir, "drive.new")
+        with open(regular, "wb") as f:
+            f.write(b"x" * 4096)
+        w = os.open(fifo, os.O_WRONLY | os.O_NONBLOCK)  # lets the hung open through
+        os.replace(regular, fifo)  # later reads find a plain file
+        os.close(w)  # and the hung read ends
+        rc, _, err = self.finish(perf)
+        self.assertEqual(rc, 0)
+        self.assertIn("waiting: the external SSD is stalling now: a 1 MB read of drive", err)
+        self.assertIn("a 1 MB read of drive took", err)  # what it waited for once the read came back
+        self.assertIn("SSD: no stall", err)
+
+    def test_pplus_comes_from_the_internal_copy(self):
+        spec = importlib.util.spec_from_file_location("run_lock", TOOL)
+        rl = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rl)
+        ext, mine = os.path.join(self.dir, "ssd-pplus"), os.path.join(self.dir, "internal-pplus")
+        dol = "Project+ Netplay Launcher.dol"
+        for d in (ext, mine):
+            os.makedirs(d)
+            with open(os.path.join(d, dol), "wb") as f:
+                f.write(b"launcher")
+            with open(os.path.join(d, "sd.raw"), "wb") as f:
+                f.write(b"\0" * 1000)
+            os.utime(os.path.join(d, "sd.raw"), (1e9, 1e9))
+        rl.PPLUS_INTERNAL = mine
+        rl.on_external_disk = lambda path, _internal: path.startswith(ext)
+        cmd = ["node", "queue-e2e.mjs", "bin", "disc", "--pplus", os.path.join(ext, dol)]
+        out, swapped = rl.internal_pplus(cmd)
+        self.assertEqual(out, cmd[:-1] + [os.path.join(mine, dol)])
+        self.assertEqual(swapped, [(os.path.join(ext, dol), os.path.join(mine, dol))])
+        out, _ = rl.internal_pplus(["x", "--pplus=" + os.path.join(ext, dol)])
+        self.assertEqual(out, ["x", "--pplus=" + os.path.join(mine, dol)])
+        # Another release (a different SD image) keeps the path as given.
+        with open(os.path.join(mine, "sd.raw"), "ab") as f:
+            f.write(b"\0")
+        self.assertEqual(rl.internal_pplus(cmd), (cmd, []))
+        rl.PPLUS_INTERNAL = ""
+        self.assertEqual(rl.internal_pplus(cmd), (cmd, []))
+
+    def test_probe_file_is_made_once(self):
+        spec = importlib.util.spec_from_file_location("run_lock", TOOL)
+        rl = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rl)
+        path = rl.probe_file(self.dir)
+        self.assertEqual(path, os.path.join(self.dir, ".orca-ssd-probe"))
+        self.assertEqual(os.path.getsize(path), 64 << 20)
+        made = os.stat(path).st_mtime_ns
+        self.assertEqual(rl.probe_file(self.dir), path)
+        self.assertEqual(os.stat(path).st_mtime_ns, made)
+        rl.read_probe(path)
+        self.assertEqual(sorted(os.listdir(self.dir)), [".orca-ssd-probe", "load"])
 
 
 if __name__ == "__main__":
