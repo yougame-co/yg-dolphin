@@ -43,7 +43,7 @@
 // neither logged a desync or a failed session.
 //
 //   node Tools/orca/queue-e2e.mjs <dolphin-emu-nogui> <disc> [--pplus <launcher.dol>]
-//       [--queue ranked|casual] [--games <n>] [--site <url>] [--keep] [--alarm <s>]
+//       [--queue ranked|casual] [--games <n>] [--site <url>] [--keep] [--alarm <s>] [--probe <file>]
 //       [--slug <listing> --cookie-a <file> --cookie-b <file> --id-a <id> --id-b <id>]
 //
 // Without --slug: dev tickets (an anonymous dev game, nothing recorded, keyframes in a local folder).
@@ -103,6 +103,15 @@ const Q2 = argv.includes("--q2");
 // joiner's pick steered onto the host's RANDOM tile, and the game resolving both at the fight (the
 // verdicts' characters compared on both sides).
 const PICK = opt("--pick", "character");
+// --probe <file> (dev tickets only): both Orcas run that ORCA_UX_PROBE file (Orca/UX/Probe.cpp, a
+// research knob, allowed here through ORCA_TEST_DEV_GAME): for example a Project+ record with CPUs
+// written at the main menu, as a local Versus game leaves it, before the queue (ORCA.md "No CPUs
+// online"). Its writes land in each player's own game before any session.
+const PROBE = opt("--probe");
+if (PROBE && SLUG) {
+  console.error("--probe is for dev tickets only");
+  process.exit(2);
+}
 // The character select's id for Random (Brawl's Selch_Random, and Project+'s), and where each
 // game's RANDOM tile is from the hand's start on panel 1 (frames of full tilt up, then right):
 // Project+ 1.0 a frame from (-23.4, -19.3) to (0.6, 0.7), the tile about -3..4, -1.5..2.5; Brawl
@@ -341,6 +350,10 @@ class Side {
       if (k.startsWith("ORCA_TEST_") && !(k in env)) env[k] = v;
     }
     if (PPLUS) env.ORCA_PROFILE = "PPLUS32";
+    if (PROBE) {
+      env.ORCA_UX_PROBE = path.resolve(PROBE);
+      env.ORCA_TEST_DEV_GAME = DEV_GAME;
+    }
     const shots = SHOTS && SHOTS_WHO.includes(this.name);
     if (shots)
       Object.assign(env, {

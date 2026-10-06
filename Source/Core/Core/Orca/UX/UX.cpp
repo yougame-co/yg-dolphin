@@ -21,6 +21,7 @@
 #include "Core/Orca/UX/NativeText.h"
 #include "Core/Orca/UX/OnlineRules.h"
 #include "Core/Orca/UX/OnlineMenu.h"
+#include "Core/Orca/UX/OnlineSeats.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/UX/Probe.h"
 #include "Core/Orca/UX/Queue.h"
@@ -77,6 +78,10 @@ void Init()
     // Every session's: no Z on the results screen (its replay save, a dead end in a session).
     Merge(masks, Rules::SessionMasks(memory));
     Merge(masks, Rules::GateMasks(memory));
+    // No CPUs online (OnlineSeats.h): where no header locks (With Friends, a friend's drop-in), A
+    // never reaches a player-type or name button, and A is pressed for a plugged-in player whose
+    // own panel a CPU left (the game's own way to take it).
+    Merge(masks, OnlineSeats::GateMasks(memory));
     Merge(masks, RankedPPlus::Masks(memory));
     BrawlStages::GateMasks(guard, &masks);
     Rollback::InputGate::Masks order = CharOrder::GateFrame(guard);
@@ -180,6 +185,9 @@ void Init()
         plugged |= static_cast<u8>(1 << p.port);
     }
     Rules::OnFrame(guard, frame, resimulating, alone, plugged);
+    // No CPUs online (OnlineSeats.h): the record the character select builds its panels from, and
+    // the panels themselves, from the header just written, the menu's pick and the ports (pure).
+    OnlineSeats::ClearFrame(guard, frame, resimulating, plugged);
     // A ranked set's character order on later games' character select (CharOrder.h): its state
     // in the match block, which the input gate reads for the frame about to run.
     CharOrder::Frame(guard, frame, resimulating, ports);
@@ -196,6 +204,9 @@ void Init()
     // plate, and the rules bar's line in a queue room, from the block the writers above just left
     // and the synced ports (a pure function of them, first runs and re-runs).
     NativeText::Frame(guard, resimulating, ports, Relabel::ClockInBand(labels));
+    // Only the seats in use on an online character select (OnlineSeats.h): empty panels nobody
+    // plugged into are hidden, from the panels, the ports and the queue's ready flag (pure).
+    OnlineSeats::SeatsFrame(guard, frame, resimulating, plugged);
     // Last, after every other writer here: a toggled patch group follows its condition as this
     // boundary's writers left it, so the hook run again at this boundary (a re-run from the
     // snapshot saved here) decides the same and writes nothing new (GamePatches.h).

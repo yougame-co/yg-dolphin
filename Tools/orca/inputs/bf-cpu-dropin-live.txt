@@ -1,0 +1,25 @@
+# A friend drops into Group > Brawl's live character select while it has CPUs (ORCA.md "No CPUs
+# online": the panels and the join), Brawl. Port 1's hand onto panel 2's player-type button (A: a
+# CPU, nobody's controller in it), on to panel 3's (A: a second CPU), up, a pick. With
+# ORCA_UX_TEST_NAMES=ada,bo ORCA_UX_TEST_PLUG_AT=1866 ORCA_UX_TEST_PADS_FOLLOW_PLUGS=1 the friend's
+# controller comes in at 1866 (the select's frame 260): both CPUs go, and the friend's panel (port
+# 2's) becomes theirs at 1871 with no input (Orca's A on its own player-type button), their token on
+# Random; their hand goes up and A (nothing: the token is on Random), port 1 Start, the stage
+# select, the fight with two players (ports 3 and 4 3E 03). YG_EXIT_AFTER=2450.
+@scStrap mash 30 99999 1 40 A
+@scBoot mash 30 99999 1 40 A
+@scTitle mash 30 99999 1 40 A
+@muMenuMain:1 120 123 1 A
+@muMenuMain:1 170 173 1 A
+@scSelctCharacter:1 60 77 1 SX=255
+@scSelctCharacter:1 100 103 1 A
+@scSelctCharacter:1 110 127 1 SX=255
+@scSelctCharacter:1 150 153 1 A
+@scSelctCharacter:1 170 210 1 SY=255
+@scSelctCharacter:1 230 233 1 A
+@scSelctCharacter:1 300 340 2 SY=255
+@scSelctCharacter:1 370 373 2 A
+@scSelctCharacter:1 430 433 1 START
+@scSelctCharacter:1 470 473 1 START
+@scSelStage:1 60 63 1 A
+@scSelStage:1 100 103 1 A

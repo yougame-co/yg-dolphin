@@ -40,10 +40,14 @@ namespace Orca::UX
 // 18: A on the ONLINE page's With Friends goes straight to the character select and B from there
 // back to the ONLINE page on With Friends (no With Friends page: RSBE01.patches, PPLUS32.patches
 // muProcWifi and the back out's helper), and A on BACK on the queue's own character select
-// (OnlineRules.h CssBackTakesA, Queue.h FLAG_BACK_A, InputGate a_centres_stick):
+// (OnlineRules.h CssBackTakesA, Queue.h FLAG_BACK_A, InputGate a_centres_stick); 19: no CPUs
+// online and only the seats in use (OnlineSeats.h: the character select's record and panels
+// cleared of CPUs, A kept off the player-type and name buttons on
+// With Friends and a friend's drop-in and pressed for a player whose panel a CPU left, empty
+// panels nobody plugged into hidden):
 // the session hashes it into the compatibility key as `ux=<n>`, so two builds that would write
 // different bytes (or mask different inputs, or part differently) never meet in a room.
-constexpr int kCompatVersion = 18;
+constexpr int kCompatVersion = 19;
 
 // The disc the game runs from (the boot's disc, or the default disc a launcher boots with): the
 // overlay's kit reads the game's own fonts from it (Kit.h). Before Init.
