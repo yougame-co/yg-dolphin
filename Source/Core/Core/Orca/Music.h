@@ -26,6 +26,9 @@ inline constexpr std::size_t DMA_BYTES = 32;
 
 using Frame = std::array<u8, FRAME_BYTES>;
 
+// Brawl (any revision) and Project+, whose music is on stream voices.
+bool Supported();
+
 // On unless the player turned it off, or ORCA_MUSIC=off for a harness run.
 bool On();
 void SetOn(bool on);

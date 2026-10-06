@@ -724,6 +724,7 @@ nothing), with a warm shader cache.
 `music on|off` on stdin (cap `music`), or `ORCA_MUSIC=off` for a harness run: the player's own
 Music switch. Off leaves the game's music out of what this machine plays and changes nothing the
 game sees, so two players with different switches stay in sync. It is not in the compatibility key.
+Offered for Brawl (any revision) and Project+; without the cap the line answers `unsupported music`.
 
 `Orca/Music.*`, `HW/DSPHLE/UCodes/AXWii.cpp`, `HW/DSP.cpp`:
 

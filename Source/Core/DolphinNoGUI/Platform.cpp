@@ -357,7 +357,7 @@ void Platform::ProcessEmbedCommands()
       // (Orca/Music.h), so it never reaches the game, a friend or the checksums.
       std::string value, more;
       in >> value;
-      if ((value == "on" || value == "off") && !(in >> more))
+      if ((value == "on" || value == "off") && !(in >> more) && Orca::Status::Cap("music"))
         Orca::Music::SetOn(value == "on");
       else
         Embed::Out("unsupported music");

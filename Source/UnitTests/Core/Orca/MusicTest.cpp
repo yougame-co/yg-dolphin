@@ -197,11 +197,10 @@ TEST(OrcaMusic, OldFramesLeaveTheShadow)
   EXPECT_EQ(shadow.Find(0x90003000, &frame[0]), nullptr);
 }
 
-TEST(OrcaMusic, TheSwitchIsOffered)
+TEST(OrcaMusic, OnlyAProfileWithStreamedMusicOffersTheSwitch)
 {
-  std::istringstream caps{Orca::Status::CAPS};
-  bool found = false;
-  for (std::string cap; caps >> cap;)
-    found |= cap == "music";
-  EXPECT_TRUE(found);
+  // No profile here (a unit test): not offered, and "music off" is not taken without the cap.
+  EXPECT_FALSE(Orca::Music::Supported());
+  EXPECT_EQ(Orca::Status::OfferedCaps().find(Orca::Status::MUSIC_CAP), std::string::npos);
+  EXPECT_STREQ(Orca::Status::MUSIC_CAP, "music");
 }

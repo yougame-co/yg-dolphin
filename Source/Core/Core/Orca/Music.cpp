@@ -34,6 +34,14 @@ void PutBE16(u8* out, s32 value)
 }
 }  // namespace
 
+bool Supported()
+{
+  const Orca::Profile* profile = Orca::ActiveProfile();
+  if (!profile)
+    return false;
+  return (profile->IsLauncher() ? profile->disc : profile->game_id) == "RSBE01";
+}
+
 bool On()
 {
   return OnFlag().load(std::memory_order_relaxed);
