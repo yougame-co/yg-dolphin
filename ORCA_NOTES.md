@@ -3347,6 +3347,24 @@ where the game counts an analog trigger as held; the activation lock does not de
   results screens: the menu's state and the pause word never changed, activation 2 from the header
   on. Set 2-0, `orca result` game and set lines on both sides, characters `[12, 12]`, 238 checksums
   matched each, no desync, no `orca error`.
+- Two-Orca performance comparison against 0.3.27 (the released Orca.app), one run each, the same
+  conditions: a Project+ ranked set over prod rooms (`queue-e2e.mjs --pplus <dol> --q2 --queue
+  ranked --shots 0 --shots-who ada,bo`: both render with Metal), `ORCA_TEST_NET_DELAY_MS=40`,
+  `ORCA_TEST_NET_JITTER_MS=8`, Mac (arm64), load 6-13. Per side at the end (host, joiner):
+
+  | | candidate | 0.3.27 |
+  |---|---|---|
+  | frames | 14,401 / 16,087 | 14,401 / 16,031 |
+  | rollbacks, re-run frames, deepest | 26, 47, 2 / 30, 60, 3 | 27, 108, 5 / 30, 109, 5 |
+  | stalls | 3 / 6 | 8 / 18 |
+  | hitches here | 14 / 17 | 27 / 32 |
+  | snapshot ms each | 0.98 / 0.80 | 1.42 / 1.23 |
+  | input delay (the link chose it) | 4 / 4 | 2 / 3 |
+  | checksums matched | 204 / 233 | 203 / 231 |
+
+  No regression: the candidate is at or below 0.3.27 on every count. The input delay differs (each
+  run's link measured its own round trips), so the rollback counts aren't like for like; snapshot
+  time and hitches are. One run each on a shared machine: noisy.
 
 ## Ranked sets
 
