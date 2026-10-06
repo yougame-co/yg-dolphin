@@ -117,6 +117,7 @@ struct CssPort
   int character = NO_CHARACTER;  // under the hand while holding the token, else the token's
   bool placed = false;           // the token is down on a character
   int costume = 0;
+  bool name_list = false;  // its name list is open (Rules::ReadCssNameList)
   // The hand (OnlineRules.h CssHand).
   u32 hand_target = 0;
   u32 hand_button = 0;

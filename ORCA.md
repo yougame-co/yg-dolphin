@@ -95,6 +95,7 @@ game) is seat 0, controller port 1; a friend's seat is its room slot.
 | `ORCA_THREAD_QOS` | `0`: no raised thread priority; `1`: also for a scripted harness run. |
 | `ORCA_JITWARM` | `0`: no JIT warm-up ([Match start](#match-start)). |
 | `ORCA_SHADER_WAIT_S` | Set by the app: how long boot may wait for shaders (60-900 s). |
+| `ORCA_CONTROLS` | Set by the app: the player's own controls, 92 hex ([Each player's own controls](#each-players-own-controls)). |
 
 Test-only variables (most are "test overrides": they change the compatibility key, so only two Orcas
 with the same value meet):
@@ -412,6 +413,26 @@ port's name tag on the character select, and the game copies the layout into its
 The host decides each port's values and the frame they apply from; every machine holds them before
 it runs that frame (`Session::RequireValues`). Values from another machine reach the tag only as the
 game's own menus could have set them, at their exact size (64 bytes at most on the wire).
+
+### Each player's own controls
+
+A player's own controls are 46 bytes: rumble, then a tag's layout (`NameTags.h`), written as 92 hex.
+They come from `ORCA_CONTROLS` at boot, else the file Orca kept for this game
+(`<user>/Config/OrcaControls-<game>.txt`), and from the app's `controls <hex>` mid-run. While the
+player is alone, a change they make to the tag they wear (the controls menu, Project+'s name list)
+becomes their own controls: Orca prints `orca controls <hex>` and keeps the file. Orca's own writes,
+a save that isn't theirs (after a resync) and re-runs never count. Controls loaded from the file
+(no `ORCA_CONTROLS`) are printed the same way once at boot, so the page shows what Orca plays.
+
+- **Solo**, the own port's values carry them from the frame they change, so the YouGame tag gets them
+  on every character select: Training, the queue's own select, With Friends. A friend who joins
+  later gets those entries with the keyframe. A session's host and joiner carry them as before
+  (`RefreshOwnValues`, the hello).
+- **The name button** takes A on With Friends' selects (the hand's own panel) and on the queue's own
+  select while not searching, with the stick centred while A is down; its list takes A and the stick,
+  never L (Project+'s hold-L leaves for its controls scene). Start never readies with the list open.
+  A queue room's select keeps A in the grid: there each player wears their YouGame tag with their
+  own controls.
 
 ### Rooms
 
@@ -889,7 +910,7 @@ away.
 | `+0x290`-`+0x297` | A friend's move from the menus |
 
 Any new header (another mode, ruleset, coin or room) starts every track's state fresh. Compatibility:
-anything that changes what the game computes bumps `UX::kCompatVersion` (currently `ux=19`), which is
+anything that changes what the game computes bumps `UX::kCompatVersion` (currently `ux=21`), which is
 in the compatibility key.
 
 ## Input gate
@@ -1209,9 +1230,11 @@ host was).
   hand nor flying, while its hand rests on that panel's player-type button (hand `+0xB0`). A friend
   who drops into a select whose CPU was on their panel takes it at once.
 - **The buttons** (the input gate): where no header locks (With Friends, a friend's drop-in, Casual
-  or Ranked before the queue's header lands), A never reaches a player-type button (`0x1D`) or a
-  name button (`0x1C`), nor any hand below y = -16.4 (the buttons start between -17.4 and -18.3 in
-  both games, and a hand moves at most 1.0 a frame). An unreadable hand gets no A either. A fresh
+  or Ranked before the queue's header lands), A never reaches a player-type button (`0x1D`) or
+  another panel's name button (`0x1C`), nor any hand below y = -16.4 (the buttons start between
+  -17.4 and -18.3 in both games, and a hand moves at most 1.0 a frame). An unreadable hand gets no A
+  either. The hand's own name button and its list take A (`ux=21`, [Each player's own
+  controls](#each-players-own-controls)). A fresh
   panel needs no A: a hand moved into the grid joins it. The gate reads the plugged ports from the
   friends bytes the frame hook keeps (`MatchBlock::FRIENDS_SEEN`).
 - **The seats**, on any character select: an empty panel (kind 0) whose port nobody plugged in is
@@ -1361,8 +1384,8 @@ Not yet: the two cursors over a real two-Orca room and between a Mac and a PC; a
 On a later game's character select the hands come back on the bottom panels, each on its own
 player-type button, where A turns the player into a CPU. So while a header locks, the gate passes A
 only when the hand is in the character grid or on its own token (`OnlineRules.h`). Without a
-header, With Friends and a friend's drop-in keep A off the player-type and name buttons ([No CPUs
-online](#no-cpus-online)).
+header, With Friends and a friend's drop-in keep A off the player-type buttons and other panels'
+name buttons ([No CPUs online](#no-cpus-online)).
 
 - Player area i is the select task's (scene `+0x400`) `+0x44 + 4i`. `+0x1A8` is its hand: `+0x80`
   what it points at (2 or 7 the grid, 3 its own token, 6 and 8 the token moving, 4 a leave button,
@@ -1528,6 +1551,7 @@ only when the box moves inside the window.
 | `direct on\|off` | The player's switch for direct links. |
 | `delay auto` / `delay N` | Adaptive input delay, or a fixed 1-6 frames. |
 | `chat <name> <text>` | A line from the page's chat, shown while Orca fills the screen. Fields are `encodeURIComponent` of UTF-8 (name at most 24 code points, text 140). Never logged. |
+| `controls <hex>` | The player's own controls ([Each player's own controls](#each-players-own-controls)); the tag gets them at the next character select. A bad profile answers `unsupported controls`. |
 | `orb <x> <y> <size> <lit> <away> <badge>` / `orb blink` / `orb off` | YouGame's overlay button, drawn where the page's own stands under Orca's window. |
 | `notice <kind> <name> <text> [<key> <verb>]` | One of the YouGame overlay's lines (join, leave, invite, ...). Never logged. |
 | `quit` | Stop at once and exit. |
@@ -1556,6 +1580,7 @@ never pauses Orca: the page sends `blur`, the player's pad goes neutral, and the
 | `error <sentence>` | Something failed. Each `orca error` also gets an `error` twin. |
 | `orca state <state>` / `orca error <code> <sentence>` | Session status (`Orca/Status.h`). Forward every line that starts with `orca `. |
 | `orca menu ...`, `orca result ...`, `orca queue ...` | See [Online menu](#online-menu) and [Matchmaking](#matchmaking-and-results). |
+| `orca controls <hex>` | The player's own controls: changed in the game, or loaded from Orca's file at boot. The page keeps them. |
 | `exit <code>` | Always last: 0 normal, 1 a reported error, 2 bad arguments. |
 
 ### Focus

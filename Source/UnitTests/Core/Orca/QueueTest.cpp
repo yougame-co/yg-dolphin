@@ -193,6 +193,20 @@ TEST(OrcaQueue, OnItsOwnCharacterSelectStartReadiesAndBUnreadies)
   EXPECT_EQ(s.timer_start, 0u);
 }
 
+TEST(OrcaQueue, NeverReadyWithTheNameListOpen)
+{
+  View listing = Solo();
+  listing.ports[0].name_list = true;
+  State s = Step(Press(listing, START), State{}, 100);
+  EXPECT_EQ(s.ready, 0);
+  // Closed, Start readies as before.
+  s = Step(Press(Solo(), START), s, 101);
+  EXPECT_EQ(s.ready, 1);
+  // A list open while ready (it can't be opened then) un-readies.
+  s = Step(listing, s, 102);
+  EXPECT_EQ(s.ready, 0);
+}
+
 TEST(OrcaQueue, TheBThatStopsTheSearchIsSwallowedUntilLetGo)
 {
   State s = Step(Press(Solo(), START), State{}, 400);

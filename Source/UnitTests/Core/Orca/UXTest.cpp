@@ -8,6 +8,7 @@
 #include <set>
 #include <atomic>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -244,15 +245,26 @@ TEST(OrcaUXControllers, StandardPadOnAGameCubeLayout)
   EXPECT_EQ(only(8), 0);   // Back
   EXPECT_EQ(only(16), 0);  // Home
 
-  // Analog triggers: travel plus the digital click at the end.
+  // Analog triggers: travel, and the digital L/R (shield, air dodge) from half the travel, as in
+  // Dolphin, since most pads' triggers are never pulled to their end.
   StandardPad p;
-  p.buttons[6] = 0.5f;
+  p.buttons[6] = 0.45f;
   p.buttons[7] = 0.95f;
   p.pressed[7] = true;
   GCPadStatus s = MapStandardPad(p);
-  EXPECT_EQ(s.triggerLeft, 128);
+  EXPECT_EQ(s.triggerLeft, 115);
   EXPECT_EQ(s.triggerRight, 242);
   EXPECT_EQ(s.button, PAD_TRIGGER_R);
+  p.buttons[6] = 0.6f;
+  s = MapStandardPad(p);
+  EXPECT_EQ(s.triggerLeft, 153);
+  EXPECT_EQ(s.button, PAD_TRIGGER_L | PAD_TRIGGER_R);
+  // A bumper is Z, never the shield.
+  p = {};
+  p.buttons[4] = 1;
+  p.pressed[4] = true;
+  EXPECT_EQ(MapStandardPad(p).button, PAD_TRIGGER_Z);
+  EXPECT_EQ(MapStandardPad(p).triggerLeft, 0);
 
   // Sticks: the GameCube's Y axis grows upward, the standard pad's downward.
   p = {};
@@ -1615,8 +1627,8 @@ TEST(OrcaUXNameTags, ControlsOnlyAsTheGamesMenusSetThem)
   std::array<u8, 0x2D> wild = CustomLayout();
   wild[0] = 0x0F;     // L: no such action
   wild[8] = 0xFF;     // C-stick
-  wild[11] = 0xFF;    // GameCube tap jump: only 0x80
-  wild[0x1F] = 0xFF;  // Nunchuk tap jump and shake smash: only 0xC0
+  wild[11] = 0xFF;    // GameCube tap jump and set up: only 0xF0
+  wild[0x1F] = 0xFF;  // Nunchuk shake smash, tap jump and not set up: only 0xC3
   wild[0x2C] = 0x7F;  // Classic tap jump: only 0x80
   wild[0x20] = 0x0E;  // "none" is fine
   FakeBrawl m;
@@ -1626,8 +1638,8 @@ TEST(OrcaUXNameTags, ControlsOnlyAsTheGamesMenusSetThem)
   std::array<u8, 0x2D> want = wild;
   want[0] = FakeBrawl::CONTROLS[0];
   want[8] = FakeBrawl::CONTROLS[8];
-  want[11] = 0x80;
-  want[0x1F] = 0xC0;
+  want[11] = 0xF0;
+  want[0x1F] = 0xC3;
   want[0x2C] = 0x00;
   EXPECT_EQ(TagLayout(m, slot), want);
   EXPECT_EQ(m.Read8(FakeBrawl::Tag(slot) + 0x0C), 1);
@@ -1693,6 +1705,82 @@ TEST(OrcaUXNameTags, OwnControlsFollowTheTagThePlayerWears)
   EXPECT_EQ(ReadOwnControls(melee, 0, "cy", &last)[0], 0);
   EXPECT_EQ(ReadOwnControls(melee, 0, "cy", &last).size(), 46u);
   EXPECT_TRUE(melee.written.empty());
+}
+
+TEST(OrcaUXNameTags, AProfileAsTextRoundTripsAndOnlyAsTheMenusSetIt)
+{
+  const std::vector<u8> profile = Profile(0, CustomLayout());
+  const std::string hex = ControlsHex(profile);
+  EXPECT_EQ(hex.size(), 92u);
+  EXPECT_EQ(hex.substr(0, 6), "000303");
+  EXPECT_EQ(ParseControlsHex(hex), profile);
+  std::string upper = hex;
+  for (char& c : upper)
+    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+  EXPECT_EQ(ParseControlsHex(upper), profile);
+  EXPECT_TRUE(ControlsValid(profile));
+  EXPECT_TRUE(ControlsValid(Profile(1, FakeBrawl::CONTROLS)));
+  // Wrong size, not hex, rumble past 1, an action past "none", a stray flag bit: refused.
+  EXPECT_FALSE(ParseControlsHex(hex.substr(2)));
+  EXPECT_FALSE(ParseControlsHex(hex + "00"));
+  EXPECT_FALSE(ParseControlsHex(""));
+  EXPECT_FALSE(ParseControlsHex("zz" + hex.substr(2)));
+  EXPECT_FALSE(ParseControlsHex("02" + hex.substr(2)));
+  std::vector<u8> bad = profile;
+  bad[1] = 0x0F;
+  EXPECT_FALSE(ControlsValid(bad));
+  bad = profile;
+  bad[1 + 11] = 0x08;
+  EXPECT_FALSE(ControlsValid(bad));
+  bad[1 + 11] = 0xF0;
+  EXPECT_TRUE(ControlsValid(bad));
+  bad[1 + 0x1F] = 0xC3;
+  EXPECT_TRUE(ControlsValid(bad));
+}
+
+TEST(OrcaUXNameTags, OnlyThePlayersOwnChangesToTheirTagArePublished)
+{
+  const std::vector<u8> defaults = Profile(1, FakeBrawl::CONTROLS);
+  const std::vector<u8> custom = Profile(0, CustomLayout());
+  std::vector<u8> other = custom;
+  other[1] = 0x04;
+  {
+    // No profile yet: the auto-made tag's defaults are no change; their own edit is.
+    OwnControlsWatch w;
+    EXPECT_FALSE(w.Next({}, {}, false));
+    EXPECT_FALSE(w.Next(defaults, {}, true));
+    EXPECT_FALSE(w.Next(defaults, {}, true));
+    EXPECT_EQ(w.Next(custom, {}, false), custom);
+    // Read again: nothing new.
+    EXPECT_FALSE(w.Next(custom, custom, false));
+    // Back to the defaults: that is a change too, now that they have a profile.
+    EXPECT_EQ(w.Next(defaults, custom, true), defaults);
+  }
+  {
+    // A kept profile: Orca writes it into their tag, which reads back as no change.
+    OwnControlsWatch w;
+    EXPECT_FALSE(w.Next(custom, custom, false));
+    // A tag of their own they pick or edit: published.
+    EXPECT_EQ(w.Next(other, custom, false), other);
+    // Nothing readable never clears it.
+    EXPECT_FALSE(w.Next({}, other, false));
+    EXPECT_FALSE(w.Next(other, other, false));
+  }
+  {
+    // The app sets new controls while the old ones are still worn: the old read is no change, and
+    // the tag that gets the new ones at the next select reads back as none either.
+    OwnControlsWatch w;
+    EXPECT_FALSE(w.Next(custom, custom, false));
+    w.Rebase();
+    EXPECT_FALSE(w.Next({}, other, false));
+    EXPECT_FALSE(w.Next(custom, other, false));
+    EXPECT_FALSE(w.Next(custom, other, false));
+    EXPECT_FALSE(w.Next(other, other, false));
+    // After a resync, someone else's tag in the save they now run is no change.
+    w.Rebase();
+    EXPECT_FALSE(w.Next(defaults, other, true));
+    EXPECT_EQ(w.Next(custom, other, false), custom);
+  }
 }
 
 TEST(OrcaUXNameTags, UnmappedPointersWriteNothing)
