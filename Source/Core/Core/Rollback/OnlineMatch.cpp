@@ -79,6 +79,8 @@ struct KeyframeJob
   // The header generation wanted at capture (UX/OnlineRules.h WantedGeneration).
   u64 generation = 0;
   std::string error;
+  // The store refused it for good (Orca::Net::LastRefusal); empty if another try could work.
+  std::string refusal;
   ~KeyframeJob()
   {
     if (thread.joinable())
@@ -110,6 +112,8 @@ struct Download
   std::atomic<bool> cancel{false};
   bool ok = false;
   std::string error;
+  // The store refused the download for good (Orca::Net::LastRefusal).
+  std::string refusal;
   Orca::Net::KeyframeInfo info;
   int frame = -1;
   MachineImage image;
@@ -495,6 +499,8 @@ void StartKeyframe(Core::System& system, Match& match, int frame)
       raw->info.id = fmt::format("kf-{}-{}", raw->frame, raw->info.hash.substr(0, 8));
       const auto put_start = Clock::now();
       raw->ok = store->Put(raw->info, blob, &raw->error);
+      if (!raw->ok)
+        raw->refusal = Orca::Net::LastRefusal();
       raw->put_ms = MsSince(put_start);
     }
     raw->done = true;
@@ -1019,7 +1025,24 @@ void HostEvents(Core::System& system, Match& match)
     std::unique_ptr<KeyframeJob> job = std::move(match.job);
     if (job->thread.joinable())
       job->thread.join();
-    if (!job->ok)
+    if (!job->ok && !job->refusal.empty())
+    {
+      // Refused for good (say, a signed-out ticket): another keyframe gets the same answer, so
+      // whoever waits hears it now instead of after its join times out.
+      const std::string why = job->refusal == "signed_out" ? "signed_out" : "refused";
+      ERROR_LOG_FMT(ROLLBACK, "Drop-in: keyframe of frame {} refused ({}): {}; {} waiting told",
+                    job->frame, job->refusal, job->error, match.waiting.size());
+      for (const auto& [seat, arrival] : match.waiting)
+        Orca::Online::DropPeer(seat, why);
+      if (!match.waiting.empty())
+      {
+        match.waiting.clear();
+        Orca::Status::State("friend-left " + why);
+        match.friend_left_told = true;
+      }
+      match.keyframe_wanted = false;
+    }
+    else if (!job->ok)
     {
       ERROR_LOG_FMT(ROLLBACK, "Drop-in: keyframe of frame {} failed: {}", job->frame, job->error);
       // Whoever waits for it gets another try.
@@ -1204,6 +1227,7 @@ void StartDownload(Match& match, const Orca::Net::KeyframeInfo& info)
     if (!blob)
     {
       raw->error = error;
+      raw->refusal = Orca::Net::LastRefusal();
       raw->done = true;
       return;
     }
@@ -1389,9 +1413,18 @@ Load LoadKeyframe(Core::System& system, Match& match, int* frame_out)
     download->thread.join();
   if (!download->ok)
   {
-    ERROR_LOG_FMT(ROLLBACK, "Drop-in: keyframe {}: {}", download->info.id, download->error);
-    match.join_error_code = "network";
-    match.join_error = "Couldn't load your friend's game";
+    ERROR_LOG_FMT(ROLLBACK, "Drop-in: keyframe {}: {}{}", download->info.id, download->error,
+                  download->refusal.empty() ? "" : " (refused: " + download->refusal + ")");
+    if (download->refusal == "signed_out")
+    {
+      match.join_error_code = "signed_out";
+      match.join_error = "Sign in to YouGame to join your friend's game";
+    }
+    else
+    {
+      match.join_error_code = "network";
+      match.join_error = "Couldn't load your friend's game";
+    }
     return Load::Failed;
   }
 
@@ -3294,6 +3327,15 @@ void EndPause()
 bool Pausing()
 {
   return s_pausing;
+}
+
+void WatchRoomWhilePaused()
+{
+  Match& match = TheMatch();
+  // A pause only goes ahead solo (SoloPauseAllowed), so no session or join is under way.
+  if (!s_pausing || !match.started || match.finished || match.joining || match.session)
+    return;
+  KeepRoomOpen(match);
 }
 
 std::chrono::nanoseconds TakePausedTime()

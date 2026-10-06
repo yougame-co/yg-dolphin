@@ -49,6 +49,7 @@ void Platform::UpdateRunningFlag()
 {
   ProcessEmbedCommands();
   EndSoloPauseForDropIn();
+  WatchRoomWhilePaused();
   UpdateTitle();
   if (m_shutdown_requested.TestAndClear())
   {
@@ -85,6 +86,27 @@ void Platform::EndSoloPauseForDropIn()
   Core::SetState(system, Core::State::Running);
   if (m_embed.enabled || m_test_commands)
     Embed::Out("state running");
+}
+
+void Platform::WatchRoomWhilePaused()
+{
+  auto& system = Core::System::GetInstance();
+  if (!Orca::SessionActive() || !Orca::Online::Enabled() ||
+      !Rollback::OnlineMatch::Pausing() || Core::GetState(system) != Core::State::Paused)
+  {
+    return;
+  }
+  const auto now = std::chrono::steady_clock::now();
+  if (now < m_next_room_watch)
+    return;
+  m_next_room_watch = now + std::chrono::seconds(2);
+  // A room that ended gets the boundary's handling on the CPU thread, which the pause leaves idle;
+  // so does the one that replaced it, once, to clear the lost room's notice.
+  const bool ended = Orca::Online::RoomEnded();
+  if (!ended && !(m_room_watch_lost && Orca::Online::InRoom()))
+    return;
+  m_room_watch_lost = ended;
+  Core::RunOnCPUThread(system, [] { Rollback::OnlineMatch::WatchRoomWhilePaused(); });
 }
 
 void Platform::UpdateTitle()

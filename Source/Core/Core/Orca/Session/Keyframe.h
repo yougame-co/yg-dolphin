@@ -85,4 +85,9 @@ std::unique_ptr<KeyframeStore> MakeKeyframeStore(TicketSource tickets);
 
 // The HTTP store alone (tests point it at a local server).
 std::unique_ptr<KeyframeStore> MakeHttpKeyframeStore(TicketSource tickets);
+
+// After a Put or Get on this thread failed: why, when the store refused for good (YouGame's code,
+// such as "signed_out", else "http_<status>"). Empty when another try could work (a network error,
+// 429, 5xx) or the call was cancelled.
+std::string LastRefusal();
 }  // namespace Orca::Net
