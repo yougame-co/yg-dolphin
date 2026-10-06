@@ -28,8 +28,11 @@ struct SDImageFile
 // A new image of `size` bytes (whole 32 KiB clusters) at `image_path`, written to a temporary file
 // and renamed into place: FAT32 as SyncSDFolderToSDImage formats it, the tree sorted by name and
 // every FAT time zero, so the same files and size give the same bytes on every machine.
+// `cluster_bytes` (a power of two, 512 to 32768; 0: FatFs's choice for the size) and `fats` (1 or 2;
+// 0: one) pin the volume's geometry.
 bool BuildSDImageFromFiles(std::span<const SDImageFile> files, u64 size,
-                           const std::string& image_path, std::string* error);
+                           const std::string& image_path, std::string* error,
+                           u32 cluster_bytes = 0, u8 fats = 0);
 
 class FatFsCallbacks
 {

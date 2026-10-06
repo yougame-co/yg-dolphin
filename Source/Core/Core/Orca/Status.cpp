@@ -4,8 +4,10 @@
 #include "Core/Orca/Status.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
@@ -13,6 +15,7 @@
 #include <fmt/format.h>
 
 #include "Core/Orca/Activity.h"
+#include "Core/Orca/Mod.h"
 #include "Core/Orca/Music.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/UX/OnlineRules.h"
@@ -29,6 +32,10 @@ std::atomic<bool> s_started{false};
 std::atomic<bool> s_stopping{false};
 std::FILE* s_out = nullptr;
 std::set<std::string, std::less<>> s_app_caps;
+// The last `orca caps` list printed (nullopt: none yet), under s_mutex.
+std::optional<std::string> s_printed_caps;
+// When CapsSettled was first asked (host clock: when "ready" waits, never what the game computes).
+std::optional<std::chrono::steady_clock::time_point> s_settle_asked;
 void (*s_error_listener)(std::string_view, std::string_view) = nullptr;
 void (*s_first_frame_listener)() = nullptr;
 
@@ -119,18 +126,17 @@ std::string OfferedCaps()
   if (Music::Supported())
     caps += fmt::format(" {}", MUSIC_CAP);
   // Mod mode (Core/Orca/Mod.h): besides the music switch above (host-only, the same rule in both
-  // modes), what mod.json offers and its builtin carries, unless the builtin's guard words have
-  // already failed (they are checked once the game's code is live, which for a launcher can be after
-  // this line is printed: its modules then stay off and print nothing). The pick caps go with
-  // "locks", as for a legacy ruleset profile.
+  // modes), what mod.json offers and its builtin carries, only once the builtin's guard words have
+  // held and never after they failed (Mod::Offers). The pick caps go with "locks", as for a legacy
+  // ruleset profile.
   if (Mod::ActiveMod())
   {
     for (const char* cap : {RESULTS_CAP, LOCKS_CAP, QUEUE2_CAP})
     {
-      if (Mod::Offers(cap) && !Mod::GuardsFailed())
+      if (Mod::Offers(cap))
         caps += fmt::format(" {}", cap);
     }
-    if (Mod::Offers(LOCKS_CAP) && !Mod::GuardsFailed())
+    if (Mod::Offers(LOCKS_CAP))
       caps += fmt::format(" {}", PICK_CAPS);
     return caps;
   }
@@ -147,6 +153,36 @@ void PrintCaps()
     return;
   const std::string caps = OfferedCaps();
   std::lock_guard lock(s_mutex);
+  s_printed_caps = caps;
+  Print(fmt::format("orca caps {}\n", caps));
+}
+
+bool CapsSettled()
+{
+  if (!SessionActive() || Mod::GuardsDecided())
+    return true;
+  const auto now = std::chrono::steady_clock::now();
+  std::lock_guard lock(s_mutex);
+  if (!s_settle_asked)
+    s_settle_asked = now;
+  return now - *s_settle_asked >= CAPS_SETTLE_LIMIT;
+}
+
+void UpdateCaps()
+{
+  if (!SessionActive())
+    return;
+  const std::string caps = OfferedCaps();
+  std::lock_guard lock(s_mutex);
+  if (!s_printed_caps || *s_printed_caps == caps)
+    return;
+  s_printed_caps = caps;
+  // Withdrawn caps are off at once, before the app's new answer.
+  std::set<std::string, std::less<>> ours;
+  std::istringstream mine{caps};
+  for (std::string name; mine >> name;)
+    ours.insert(name);
+  std::erase_if(s_app_caps, [&ours](const std::string& name) { return !ours.contains(name); });
   Print(fmt::format("orca caps {}\n", caps));
 }
 

@@ -46,6 +46,7 @@
 #include "Core/Orca/Disc.h"
 #include "Core/Orca/DiscVerify.h"
 #include "Core/Orca/Launch.h"
+#include "Core/Orca/Mod.h"
 #include "Core/Orca/Perf.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Sandbox.h"
@@ -710,9 +711,15 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
     return 1;
   }
 
-  // Print the caps now that the boot has chosen a profile.
+  // Print the caps now that the boot has chosen a profile. Mod mode: from the main loop once they
+  // are settled (Status::CapsSettled: a builtin's caps wait for its guard words).
   if (test_commands)
-    Orca::Status::PrintCaps();
+  {
+    if (Orca::Mod::Requested())
+      s_platform->RequestTestCaps();
+    else
+      Orca::Status::PrintCaps();
+  }
 
 #ifdef USE_DISCORD_PRESENCE
   Discord::UpdateDiscordPresence();

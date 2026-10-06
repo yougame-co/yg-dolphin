@@ -60,7 +60,12 @@
           "minimum": 67108864,
           "maximum": 2147483648,
           "multipleOf": 32768
-        }
+        },
+        "clusterBytes": {
+          "description": "The FAT32 cluster size. Absent: FatFs's choice for the card's size (16 KiB at 2 GB).",
+          "enum": [512, 1024, 2048, 4096, 8192, 16384, 32768]
+        },
+        "fats": { "description": "Copies of the FAT. Absent: 1.", "enum": [1, 2] }
       }
     },
     "frameHook": {
@@ -176,6 +181,7 @@
   "x-orca-limits": {
     "engineApi": 1,
     "sdBuilder": "fat1",
+    "sdTreeHash": "sha256 of \"bytes=<bytes> cluster=<clusterBytes or 0> fats=<fats or 1>\\n\" followed by the tree lines of every file under sd/",
     "maxPathBytes": 100,
     "maxFiles": 20000,
     "forcedAllowlist": ["Dolphin.Core.CustomRTCValue"],
@@ -184,6 +190,7 @@
   },
   "x-orca-rules": [
     "mod.json and tree.json are one JSON value each, nothing after it; duplicate keys are last-wins in the engine as in JavaScript, and the site refuses them.",
+    "sd.clusterBytes, when set, leaves FAT32 more than 65,525 clusters: with S = bytes/512 sectors and C = clusterBytes/512, (S - 32 - ceil((floor(S/C)*4 + 8)/512) * fats) / C > 65525.",
     "saveTitle equals the disc's own title ID: 0x00010000 followed by the hex of disc.id's first 4 characters (RSBE01: 0x0001000052534245).",
     "builtin is only for disc RSBE01 revision 2.",
     "offers is empty unless builtin is set.",

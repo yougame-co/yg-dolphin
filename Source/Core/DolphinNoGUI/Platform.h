@@ -44,6 +44,8 @@ public:
   bool IsEmbedded() const { return m_embed.enabled; }
   // Tests: accept embed commands on stdin without embedding (ORCA_TEST_COMMANDS=1).
   void EnableTestCommands() { m_test_commands = true; }
+  // Test commands in mod mode: `orca caps` goes out from the main loop once the caps are settled.
+  void RequestTestCaps() { m_test_caps_pending = true; }
   // Called when the first frame is presented; "ready" is sent on the next main loop pass.
   void NotifyFirstFrame(int width, int height, double fps);
   // Hides the view and drops focus once the main loop ends, while emulation stops.
@@ -105,6 +107,7 @@ protected:
 
   Embed::Options m_embed;
   bool m_test_commands = false;
+  bool m_test_caps_pending = false;
 
 private:
   // Titles are set only on the main loop's thread. On Win32, setting one from the emulation thread

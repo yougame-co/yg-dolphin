@@ -225,9 +225,9 @@ std::string TreeHash(std::span<const TreeFile> files)
   return Sha256Hex(text);
 }
 
-std::string SdTreeHash(const Tree& tree, u64 bytes)
+std::string SdTreeHash(const Tree& tree, u64 bytes, u32 cluster_bytes, u8 fats)
 {
-  std::string text = fmt::format("bytes={}\n", bytes);
+  std::string text = fmt::format("bytes={} cluster={} fats={}\n", bytes, cluster_bytes, fats);
   for (const TreeFile* f : tree.Under("sd/"))
     text += fmt::format("{}\t{}\t{}\n", f->path, f->sha256, f->bytes);
   return Sha256Hex(text);
@@ -467,7 +467,7 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
     if (!v->is<picojson::object>())
       return fail("\"sd\" must be an object");
     const picojson::object& s = v->get<picojson::object>();
-    if (const auto key = UnknownKey(s, {"bytes"}))
+    if (const auto key = UnknownKey(s, {"bytes", "clusterBytes", "fats"}))
       return fail(fmt::format("unknown key sd.{}", *key));
     const auto bytes =
         s.contains("bytes") ? Integer(s.at("bytes"), SD_MIN_BYTES, SD_MAX_BYTES) : std::nullopt;
@@ -477,6 +477,30 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
                               SD_ALIGN, SD_MIN_BYTES, SD_MAX_BYTES));
     }
     m.sd_bytes = *bytes;
+    // The volume's geometry, for a card that must read as another (P+'s official image: 2 KiB
+    // clusters, two FATs). Absent: FatFs's cluster for the size, one FAT.
+    if (s.contains("clusterBytes"))
+    {
+      const auto cluster = Integer(s.at("clusterBytes"), 512, 32768);
+      if (!cluster || (*cluster & (*cluster - 1)) != 0)
+        return fail("sd.clusterBytes must be a power of two from 512 to 32768");
+      m.sd_cluster_bytes = static_cast<u32>(*cluster);
+    }
+    if (s.contains("fats"))
+    {
+      const auto fats = Integer(s.at("fats"), 1, 2);
+      if (!fats)
+        return fail("sd.fats must be 1 or 2");
+      m.sd_fats = static_cast<u8>(*fats);
+    }
+    // FAT32 needs more than 65,525 clusters (FatFs's f_mkfs, as it lays the volume out).
+    if (m.sd_cluster_bytes != 0)
+    {
+      const u64 sectors = *bytes / 512, per_cluster = m.sd_cluster_bytes / 512;
+      const u64 fat_sectors = ((sectors / per_cluster) * 4 + 8 + 511) / 512;
+      if ((sectors - 32 - fat_sectors * m.sd_fats) / per_cluster <= 65525)
+        return fail("sd.clusterBytes is too large for sd.bytes (FAT32 needs over 65,525 clusters)");
+    }
   }
 
   // frameHook
@@ -724,13 +748,13 @@ void PruneSdCache(const std::string& dir, size_t keep)
 }  // namespace
 
 bool BuildSdImage(std::span<const SdSource> files, u64 bytes, const std::string& out_path,
-                  std::string* error)
+                  std::string* error, u32 cluster_bytes, u8 fats)
 {
   std::vector<Common::SDImageFile> list;
   list.reserve(files.size());
   for (const SdSource& f : files)
     list.push_back({f.image_path, f.source_path, f.bytes});
-  return Common::BuildSDImageFromFiles(list, bytes, out_path, error);
+  return Common::BuildSDImageFromFiles(list, bytes, out_path, error, cluster_bytes, fats);
 }
 
 std::optional<SdImage> PrepareSdImage(const ModInfo& mod, const std::string& cache_dir,
@@ -756,7 +780,10 @@ std::optional<SdImage> PrepareSdImage(const ModInfo& mod, const std::string& cac
     return std::nullopt;
   }
   SdImage image;
-  image.path = fmt::format("{}{}-{}.raw", dir, SdTreeHash(mod.tree, bytes), SD_BUILDER);
+  const u32 cluster = mod.manifest.sd_cluster_bytes;
+  const u8 fats = mod.manifest.sd_fats;
+  image.path =
+      fmt::format("{}{}-{}.raw", dir, SdTreeHash(mod.tree, bytes, cluster, fats), SD_BUILDER);
   const std::string note = image.path + ".xxh3";
 
   // A cached image is reused while it hashes as when it was built (a damaged one is built again).
@@ -790,7 +817,7 @@ std::optional<SdImage> PrepareSdImage(const ModInfo& mod, const std::string& cac
     // Built under this process's own name (two Orcas sharing the cache may build the same card),
     // then hashed and moved into place, its hash recorded last.
     const std::string building = fmt::format("{}.{:016x}.part", image.path, ProcessId());
-    if (!BuildSdImage(files, bytes, building, &why))
+    if (!BuildSdImage(files, bytes, building, &why, cluster, fats))
     {
       File::Delete(building, File::IfAbsentBehavior::NoConsoleWarning);
       *error = fmt::format("Orca mod: couldn't build the SD card: {}", why);
@@ -902,8 +929,7 @@ namespace
 // 0: failed, 1: held.
 std::atomic<int> s_guards{-1};
 std::atomic<bool> s_guards_failed{false};
-// CPU thread only.
-bool s_held_once = false;
+std::atomic<bool> s_held_once{false};
 
 void LogFirstBrokenGuard(const Core::CPUThreadGuard& guard, Builtin builtin)
 {
@@ -949,26 +975,44 @@ void RefreshGuards(const Core::CPUThreadGuard& guard, std::optional<int> frame)
       return std::nullopt;
     return PowerPC::MMU::HostRead<u32>(guard, address);
   });
-  if (held)
+  const int before = s_guards;
+  NoteGuards(held, frame);
+  if (s_guards != before && s_guards == 1)
+    NOTICE_LOG_FMT(BOOT, "Orca mod: builtin {} on (its guard words hold)", BuiltinName(builtin));
+  else if (s_guards != before && s_guards == 0)
+    LogFirstBrokenGuard(guard, builtin);
+}
+
+void NoteGuards(bool held, std::optional<int> frame)
+{
+  const ModInfo* mod = ActiveMod();
+  if (!mod || mod->manifest.builtin == Builtin::None)
+    return;
+  if (held && !s_guards_failed)
   {
-    if (s_guards.exchange(1) != 1)
-      NOTICE_LOG_FMT(BOOT, "Orca mod: builtin {} on (its guard words hold)", BuiltinName(builtin));
+    s_guards = 1;
     s_held_once = true;
     return;
   }
   // Not (yet) holding: the modules stay off. A loader's codes land in the game's first frames
   // (Project+'s in frame 1), so this is a failure only once the guards held and then stopped, or
-  // when they still don't hold by the first frame a friend could join from.
-  const bool failed =
-      s_held_once || (frame && *frame >= static_cast<int>(mod->manifest.first_keyframe_frame));
+  // when they still don't hold by the first frame a friend could join from. A failure is for the
+  // rest of the boot (the caps it withdrew stay withdrawn).
+  const bool failed = s_guards_failed || s_held_once ||
+                      (frame && *frame >= static_cast<int>(mod->manifest.first_keyframe_frame));
   if (!failed)
   {
     s_guards = -1;
     return;
   }
-  if (s_guards.exchange(0) != 0)
-    LogFirstBrokenGuard(guard, builtin);
+  s_guards = 0;
   s_guards_failed = true;
+}
+
+bool GuardsDecided()
+{
+  const ModInfo* mod = ActiveMod();
+  return !mod || mod->manifest.builtin == Builtin::None || s_held_once || s_guards_failed;
 }
 
 bool BuiltinOn(Builtin builtin)
@@ -991,8 +1035,9 @@ bool GuardsFailed()
 bool Offers(std::string_view cap)
 {
   const ModInfo* mod = ActiveMod();
-  // Both builtins carry results, the online rules' locks and the queue's character select.
-  return mod && mod->manifest.builtin != Builtin::None &&
+  // Both builtins carry results, the online rules' locks and the queue's character select: offered
+  // only once their guards have held, and never again after they failed.
+  return mod && mod->manifest.builtin != Builtin::None && s_held_once && !s_guards_failed &&
          std::ranges::find(mod->manifest.offers, cap) != mod->manifest.offers.end();
 }
 }  // namespace Orca::Mod

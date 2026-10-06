@@ -78,8 +78,9 @@ bool HostOnly(std::string_view path);
 // The contract's treeHash: lowercase hex SHA-256 of "<path>\t<sha256>\t<bytes>\n" for every file
 // but the host-only ones, in the files' order (callers keep them sorted by path).
 std::string TreeHash(std::span<const TreeFile> files);
-// sha256 of the SD card's files and its size (the cached image's name).
-std::string SdTreeHash(const Tree& tree, u64 bytes);
+// sha256 of "bytes=<n> cluster=<c> fats=<f>\n" and the SD card's tree lines (the cached image's
+// name: everything the build depends on but the builder's version).
+std::string SdTreeHash(const Tree& tree, u64 bytes, u32 cluster_bytes = 0, u8 fats = 1);
 std::string Sha256Hex(std::string_view data);
 // tree.json: every path valid and unique (also without case, and never both a file and a folder),
 // sorted, and "tree" equal to the hash of the list.
@@ -116,6 +117,8 @@ struct Manifest
   u16 disc_revision = 0;
   std::string launcher;           // a file name at the bundle's root, or empty
   std::optional<u64> sd_bytes;    // the SD card's pinned size
+  u32 sd_cluster_bytes = 0;       // its cluster (0: FatFs's for the size)
+  u8 sd_fats = 1;                 // its FATs
   u32 frame_hook = 0;
   u32 frame_hook_word = 0;
   std::optional<u32> boot_nand_frame;
@@ -183,7 +186,7 @@ struct SdSource
   u64 bytes = 0;
 };
 bool BuildSdImage(std::span<const SdSource> files, u64 bytes, const std::string& out_path,
-                  std::string* error);
+                  std::string* error, u32 cluster_bytes = 0, u8 fats = 1);
 
 // --- Builtins and their guards -----------------------------------------------------------------
 
@@ -205,6 +208,11 @@ bool GuardsHold(Builtin builtin, const std::function<std::optional<u32>(u32)>& r
 void RefreshGuards(const Core::CPUThreadGuard& guard, std::optional<int> frame = std::nullopt);
 // A new boot's profile: nothing checked yet (Profile.cpp SetActiveProfile).
 void ResetGuards();
+// What RefreshGuards does with its reading of memory (tests drive it directly).
+void NoteGuards(bool held, std::optional<int> frame);
+// Mod mode: whether the builtin's caps are settled for now: no builtin, or its guards have held, or
+// they failed. Until then `orca caps` and "ready" wait (Status::CapsSettled).
+bool GuardsDecided();
 // Mod mode: the active mod's builtin is `builtin` and its guards held at the last refresh.
 bool BuiltinOn(Builtin builtin);
 // Mod mode: the active mod's builtin, guards or not (host-only readers: the JIT warm-up's and the
@@ -213,7 +221,8 @@ Builtin DeclaredBuiltin();
 // Mod mode: the guards were checked and failed at least once since boot (the caps they gate are
 // then not offered, if they haven't been printed yet).
 bool GuardsFailed();
-// Whether this mod offers `cap` (mod.json "offers") and its builtin supports it.
+// Whether this mod offers `cap` (mod.json "offers"), its builtin supports it, and its guards have
+// held since boot and never failed.
 bool Offers(std::string_view cap);
 
 // Today's FIRST_KEYFRAME_FRAME / FIRST_FRIEND_FRAME, or mod.json's firstKeyframeFrame.

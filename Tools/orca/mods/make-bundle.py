@@ -175,7 +175,9 @@ def main():
     if launcher:
         mod["launcher"] = "launcher.dol"
     if "SDImage" in p:
-        mod["sd"] = {"bytes": PPLUS_SD_BYTES}
+        # The official image's geometry (its boot sector: 2 KiB clusters, two FATs), so the game's
+        # SD reads take as many commands as on the official card.
+        mod["sd"] = {"bytes": PPLUS_SD_BYTES, "clusterBytes": 2048, "fats": 2}
     mod["frameHook"] = {"address": hex_word(p["FrameHook"]), "word": hex_word(p["FrameHookWord"])}
     if "BootNandFrame" in p:
         mod["bootNandFrame"] = int(p["BootNandFrame"], 0)

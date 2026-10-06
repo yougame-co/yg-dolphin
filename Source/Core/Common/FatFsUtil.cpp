@@ -490,7 +490,8 @@ static void SortFST(File::FSTEntry* root)
 // A new FAT32 image of `size` bytes at `image_path` (written to a temporary file and renamed into
 // place) holding `root`'s tree.
 static bool WriteImage(const std::function<bool()>& cancelled, const File::FSTEntry& root, u64 size,
-                       const std::string& image_path, bool deterministic)
+                       const std::string& image_path, bool deterministic, u32 cluster_bytes = 0,
+                       u8 fats = 0)
 {
   std::lock_guard lk(s_fatfs_mutex);
   SDCardFatFsCallbacks callbacks;
@@ -522,10 +523,10 @@ static bool WriteImage(const std::function<bool()>& cancelled, const File::FSTEn
 
   MKFS_PARM options = {};
   options.fmt = FM_FAT32 | FM_SFD;
-  options.n_fat = 0;    // Number of FATs: automatic
-  options.align = 1;    // Alignment of the data region (in sectors)
-  options.n_root = 0;   // Number of root directory entries: automatic (and unused for FAT32)
-  options.au_size = 0;  // Cluster size: automatic
+  options.n_fat = fats;            // Number of FATs (0: automatic, one)
+  options.align = 1;               // Alignment of the data region (in sectors)
+  options.n_root = 0;              // Number of root directory entries: automatic (and unused for FAT32)
+  options.au_size = cluster_bytes;  // Cluster size (0: automatic)
 
   std::vector<u8> tmp_buffer(MAX_CLUSTER_SIZE);
   const auto mkfs_error_code =
@@ -611,8 +612,21 @@ bool SyncSDFolderToSDImage(const std::function<bool()>& cancelled, bool determin
 }
 
 bool BuildSDImageFromFiles(std::span<const SDImageFile> files, u64 size,
-                           const std::string& image_path, std::string* error)
+                           const std::string& image_path, std::string* error, u32 cluster_bytes,
+                           u8 fats)
 {
+  if (cluster_bytes != 0 && (cluster_bytes < SECTOR_SIZE || cluster_bytes > MAX_CLUSTER_SIZE ||
+                             (cluster_bytes & (cluster_bytes - 1)) != 0))
+  {
+    *error = fmt::format("a cluster must be a power of two from {} to {} bytes", +SECTOR_SIZE,
+                         +MAX_CLUSTER_SIZE);
+    return false;
+  }
+  if (fats > 2)
+  {
+    *error = "a FAT32 volume has one or two FATs";
+    return false;
+  }
   if (size == 0 || size % MAX_CLUSTER_SIZE != 0)
   {
     *error = fmt::format("an SD image's size must be whole {}-byte clusters", +MAX_CLUSTER_SIZE);
@@ -669,7 +683,8 @@ bool BuildSDImageFromFiles(std::span<const SDImageFile> files, u64 size,
              "folder of more than 65,536 entries)";
     return false;
   }
-  if (!WriteImage([] { return false; }, root, size, image_path, /*deterministic*/ true))
+  if (!WriteImage([] { return false; }, root, size, image_path, /*deterministic*/ true,
+                  cluster_bytes, fats))
   {
     *error = "packing the files failed (the log says why; the card may be too small for them)";
     return false;

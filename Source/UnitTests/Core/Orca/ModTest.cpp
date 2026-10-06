@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <cstdlib>
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -26,6 +27,18 @@
 namespace
 {
 using Orca::Mod::Builtin;
+
+void SetEnv(const char* name, const std::string& value)
+{
+#ifdef _WIN32
+  _putenv_s(name, value.c_str());
+#else
+  if (value.empty())
+    unsetenv(name);
+  else
+    setenv(name, value.c_str(), 1);
+#endif
+}
 
 std::string RepoPath(const std::string& relative)
 {
@@ -303,6 +316,12 @@ TEST(OrcaMod, RefusesAnythingElse)
   EXPECT_TRUE(Refused(BrawlWith("sd", R"({"bytes": 32768})")));       // too small for FAT32
   EXPECT_TRUE(Refused(BrawlWith("sd", R"({"bytes": 2097152000, "sync": true})")));
   EXPECT_FALSE(Refused(BrawlWith("sd", R"({"bytes": 2147483648})")));
+  EXPECT_FALSE(Refused(BrawlWith("sd", R"({"bytes": 2097152000, "clusterBytes": 2048, "fats": 2})")));
+  EXPECT_TRUE(Refused(BrawlWith("sd", R"({"bytes": 2097152000, "clusterBytes": 3000})")));
+  EXPECT_TRUE(Refused(BrawlWith("sd", R"({"bytes": 2097152000, "clusterBytes": 65536})")));
+  EXPECT_TRUE(Refused(BrawlWith("sd", R"({"bytes": 2097152000, "fats": 3})")));
+  EXPECT_TRUE(Refused(BrawlWith("sd", R"({"bytes": 67108864, "clusterBytes": 2048})")));  // FAT16-sized
+  EXPECT_FALSE(Refused(BrawlWith("sd", R"({"bytes": 167772160, "clusterBytes": 2048})")));
   EXPECT_TRUE(Refused(BrawlWith("frameHook", R"({"address": "0x80017506", "word": "0x1"})")));
   EXPECT_TRUE(Refused(BrawlWith("frameHook", R"({"address": "0x90000000", "word": "0x1"})")));
   EXPECT_TRUE(Refused(BrawlWith("frameHook", R"({"address": "80017504", "word": "0x1"})")));
@@ -532,6 +551,22 @@ TEST(OrcaMod, SdImageIsDeterministic)
   ASSERT_TRUE(File::ReadFileToString(dir + "one.raw", bytes));
   EXPECT_NE(bytes.find("alpha"), std::string::npos);
   EXPECT_EQ(bytes.find("not listed"), std::string::npos);
+  // A pinned geometry: 2 KiB clusters and two FATs in the boot sector, the same bytes twice.
+  constexpr u64 GEOMETRY_BYTES = 160 << 20;  // FAT32 at 2 KiB clusters needs over 65,525 of them
+  ASSERT_TRUE(Orca::Mod::BuildSdImage(files, GEOMETRY_BYTES, dir + "g1.raw", &error, 2048, 2))
+      << error;
+  ASSERT_TRUE(Orca::Mod::BuildSdImage(reversed, GEOMETRY_BYTES, dir + "g2.raw", &error, 2048, 2))
+      << error;
+  EXPECT_EQ(Orca::HashFile(dir + "g1.raw"), Orca::HashFile(dir + "g2.raw"));
+  EXPECT_NE(Orca::HashFile(dir + "g1.raw"), one);
+  {
+    std::string boot;
+    ASSERT_TRUE(File::ReadFileToString(dir + "g1.raw", boot));
+    EXPECT_EQ(static_cast<u8>(boot[13]), 4);   // sectors per cluster
+    EXPECT_EQ(static_cast<u8>(boot[16]), 2);   // FATs
+  }
+  EXPECT_FALSE(Orca::Mod::BuildSdImage(files, GEOMETRY_BYTES, dir + "g3.raw", &error, 3000, 1));
+  EXPECT_FALSE(Orca::Mod::BuildSdImage(files, BYTES, dir + "g4.raw", &error, 2048, 2));
   // A source whose size changed is refused.
   const std::vector<Orca::Mod::SdSource> wrong{{"a.txt", dir + "a.txt", 6}};
   EXPECT_FALSE(Orca::Mod::BuildSdImage(wrong, BYTES, dir + "three.raw", &error));
@@ -633,7 +668,37 @@ TEST(OrcaMod, ModeGates)
   EXPECT_FALSE(Orca::Mod::BuiltinOn(Builtin::BrawlRev2));
   EXPECT_EQ(Orca::UX::Rules::ProfileRuleset(), Orca::UX::Rules::Ruleset::None);
   EXPECT_FALSE(Orca::UX::ResultsVerified());
-  EXPECT_EQ(Orca::Status::OfferedCaps(), std::string(Orca::Status::CAPS) + " results locks queue2");
+  // A builtin's caps are never offered before its guards hold (they are checked at the frame hook).
+  const std::string all = std::string(Orca::Status::CAPS) + " results locks queue2";
+  EXPECT_EQ(Orca::Status::OfferedCaps(), Orca::Status::CAPS);
+  EXPECT_FALSE(Orca::Mod::GuardsDecided());
+  // Not holding yet in the first frames (a loader's codes still landing): undecided, nothing offered.
+  Orca::Mod::NoteGuards(false, 1);
+  EXPECT_FALSE(Orca::Mod::GuardsDecided());
+  EXPECT_EQ(Orca::Status::OfferedCaps(), Orca::Status::CAPS);
+  // Held: decided, offered, the modules on.
+  Orca::Mod::NoteGuards(true, 2);
+  EXPECT_TRUE(Orca::Mod::GuardsDecided());
+  EXPECT_TRUE(Orca::Mod::BuiltinOn(Builtin::BrawlRev2));
+  EXPECT_EQ(Orca::Status::OfferedCaps(), all);
+  // Broken after holding (the mod rewrote what the modules rely on): withdrawn for the boot.
+  Orca::Mod::NoteGuards(false, 500);
+  EXPECT_TRUE(Orca::Mod::GuardsFailed());
+  EXPECT_FALSE(Orca::Mod::BuiltinOn(Builtin::BrawlRev2));
+  EXPECT_EQ(Orca::Status::OfferedCaps(), Orca::Status::CAPS);
+  Orca::Mod::NoteGuards(true, 501);
+  EXPECT_FALSE(Orca::Mod::BuiltinOn(Builtin::BrawlRev2));
+  EXPECT_EQ(Orca::Status::OfferedCaps(), Orca::Status::CAPS);
+  // A new boot: never holding by firstKeyframeFrame is a failure (decided, nothing offered).
+  Orca::SetActiveProfile(profile);
+  EXPECT_FALSE(Orca::Mod::GuardsDecided());
+  Orca::Mod::NoteGuards(false, 299);
+  EXPECT_FALSE(Orca::Mod::GuardsDecided());
+  Orca::Mod::NoteGuards(false, 300);
+  EXPECT_TRUE(Orca::Mod::GuardsDecided());
+  EXPECT_TRUE(Orca::Mod::GuardsFailed());
+  EXPECT_EQ(Orca::Status::OfferedCaps(), Orca::Status::CAPS);
+  Orca::SetActiveProfile(profile);
   EXPECT_EQ(Orca::UX::FriendsMove::FirstFriendFrame(), 300);
 
   picojson::value plain;
@@ -648,6 +713,7 @@ TEST(OrcaMod, ModeGates)
   Orca::SetActiveProfile(none);
   EXPECT_EQ(Orca::Mod::DeclaredBuiltin(), Builtin::None);
   EXPECT_EQ(Orca::Status::OfferedCaps(), Orca::Status::CAPS);
+  EXPECT_TRUE(Orca::Mod::GuardsDecided());  // nothing to wait for
   EXPECT_EQ(Orca::Mod::FirstKeyframeFrame(), 600u);
   EXPECT_EQ(Orca::UX::FriendsMove::FirstFriendFrame(), 600);
 
@@ -656,6 +722,7 @@ TEST(OrcaMod, ModeGates)
   ASSERT_TRUE(legacy) << error;
   Orca::SetActiveProfile(legacy);
   EXPECT_EQ(Orca::Mod::ActiveMod(), nullptr);
+  EXPECT_TRUE(Orca::Mod::GuardsDecided());
   EXPECT_EQ(Orca::UX::Rules::ProfileRuleset(), Orca::UX::Rules::Ruleset::Brawl);
   EXPECT_TRUE(Orca::UX::ResultsVerified());
   EXPECT_EQ(Orca::UX::FriendsMove::FirstFriendFrame(), Orca::UX::FriendsMove::FIRST_FRIEND_FRAME);
@@ -710,5 +777,36 @@ TEST(OrcaMod, LegacyKeyIsUnchanged)
       << mod_parts;
   EXPECT_TRUE(Orca::Online::CompatibilityKey().starts_with("orca2:"));
   Orca::SetActiveProfile(std::nullopt);
+  File::DeleteDirRecursively(b.dir);
+}
+
+// "ready" and `orca caps` wait until a builtin's guards are decided, and a cap withdrawn after the
+// first line is off at once (a second `orca caps` line, which the app takes as the new offer).
+TEST(OrcaMod, CapsWaitForTheGuards)
+{
+  const std::string session = Orca::GetEnv("ORCA_SESSION");
+  SetEnv("ORCA_SESSION", "1");
+  Bundle b = MakeBundle(BRAWL_MOD);
+  b.WriteTree();
+  std::string error;
+  auto profile = Orca::LoadModProfile(b.dir, &error);
+  ASSERT_TRUE(profile) << error;
+  Orca::SetActiveProfile(profile);
+  EXPECT_FALSE(Orca::Status::CapsSettled());
+  Orca::Mod::NoteGuards(true, 2);
+  EXPECT_TRUE(Orca::Status::CapsSettled());
+  Orca::Status::PrintCaps();
+  Orca::Status::SetAppCaps("join results locks queue2");
+  EXPECT_TRUE(Orca::Status::Cap("results"));
+  EXPECT_TRUE(Orca::Status::Cap("join"));
+  Orca::Mod::NoteGuards(false, 400);
+  Orca::Status::UpdateCaps();
+  EXPECT_FALSE(Orca::Status::Cap("results"));
+  EXPECT_FALSE(Orca::Status::Cap("locks"));
+  EXPECT_TRUE(Orca::Status::Cap("join"));
+  Orca::Status::SetAppCaps("");
+  Orca::SetActiveProfile(std::nullopt);
+  EXPECT_TRUE(Orca::Status::CapsSettled());  // legacy: never waits
+  SetEnv("ORCA_SESSION", session);
   File::DeleteDirRecursively(b.dir);
 }
