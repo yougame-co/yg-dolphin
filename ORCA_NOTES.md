@@ -3311,7 +3311,7 @@ inputs and probes in `~/ClaudeWorktrees/orca-codemenu-runs/`):
 | `ORCA_TEST_QUEUE=ranked:1`, `pplus-ranked` + the chord | L+R+Down by port 1 (twice) and port 2 mid-fight, and both on the results screen | activation 2 from frame 3; state and pause word never change; the fight runs to the results (port 1 won 4-0); screenshot at the chord: Pikachu shielding, timer running, no menu |
 | Same, cheats by probe | Flight, P1 Infinite Shield, P2 ALC, hitstun 1.0, activation 0 on the main menu; Flight, Infinite Shield, state 4 and pause 1 at fight frame 200 | every value back to its default at the next boundary; the open menu closed, pause word 0, the fight went on |
 | Same, Giga pick | port 1 on Bowser, port 2 on Wario, L held through Start | the select wrote `0x2C`/`0x2D` (init and record) and slots `0x38`/`0x36`; next boundary `0x0C`/`0x17` and `0x0C`/`0x15`; `scMemoryChange` 1 frame; results characters `[12, 23]`; screenshot: Bowser vs Wario |
-| `YG_SYNCTEST=7` from 170 to 5600 | the chord input; the Giga input | 37,961 re-run frames, 0 RAM mismatches (chord); Giga: see below |
+| `YG_SYNCTEST=7` from 170 to 5600, final build | the chord input; the Giga input (L through Start) | each 37,961 re-run frames, 0 RAM mismatches |
 
 Unit tests: `OrcaOnlineRules.TheCodeMenu*`, `AnOpenCodeMenuClosesAndTheGameRunsAgain`,
 `ClearingGivesBackTheCodeMenusActivation`, `ProjectPlusBannedFightersPlayAsTheirBaseFighters`,
