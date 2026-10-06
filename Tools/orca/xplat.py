@@ -155,6 +155,8 @@ summary = {
     "friend_ping_median": peers[-1].get("fpmed") if peers else None,
     "delay_max": max((s.get("delay", 0) for s in peers), default=None),
     "hitches": max((s.get("hi", 0) for s in stats), default=0),
+    # Slow frames a game load alone explained; hitches + these = what older builds counted.
+    "load_hitches": max((s.get("hil", 0) for s in stats), default=0),
     # How the friend's inputs came: seconds on each path ("tx": 0 relay, 1 direct, 2 TURN), and
     # the direct link's median round trip while it carried them.
     "transport_seconds": {name: sum(1 for s in peers if s.get("tx", 0) == k)

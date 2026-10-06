@@ -2225,6 +2225,8 @@ void PublishStats(Match& match)
       std::round((match.running - match.stats_frame + match.stats_held) / seconds * 10) / 10);
   num("hi", stats.hitches);
   num("phi", stats.peer_hitches);
+  // Slow frames a game load explained; "hi" plus this is what earlier builds counted as "hi".
+  num("hil", stats.load_hitches);
   num("tx", link.transport);
   num("lrtt", link.link_rtt_ms);
   // Input age (ControllerSource.h): "pa" is the mean age in ms of the newest adapter report at
@@ -2717,14 +2719,17 @@ std::optional<int> Boundary(Core::System& system,
     match.session->OnRoundTrip(*round_trip_ms);
   match.session->SetFixedDelay(ChosenDelay());
   // A frame over two frame periods was a local hitch (disc read, shader compile). Time the game
-  // itself held it (a load, the same on every machine) is not this machine's.
+  // itself held it (a load, the same on every machine) is not this machine's: a frame slow only by
+  // that is counted apart, so a gate can still compare the raw count with an older build's.
   const auto now = Clock::now();
   const auto held = std::chrono::duration_cast<Clock::duration>(
       std::chrono::duration<double, std::milli>(LastFrameHeldMs()));
-  if (match.last_return && now - *match.last_return - held > HITCH_TIME &&
-      !match.port->CatchingUp())
+  if (match.last_return && now - *match.last_return > HITCH_TIME && !match.port->CatchingUp())
   {
-    match.session->OnLocalHitch();
+    if (now - *match.last_return - held > HITCH_TIME)
+      match.session->OnLocalHitch();
+    else
+      match.session->OnLoadHitch();
   }
 
   // Handle a departed host only outside a re-run, or half-replayed frames would remain.
@@ -3163,13 +3168,14 @@ void LogStats(const char* when)
   NOTICE_LOG_FMT(
       ROLLBACK,
       "Online match {}: frame {}, {} rollbacks, {} re-run frames, deepest {}, {} stalls ({} "
-      "counted), {} waits, {} hitches here, {} there, frame advantage {:.2f}, input delay {}{} "
+      "counted), {} waits, {} hitches here ({} more in game loads), {} there, frame advantage "
+      "{:.2f}, input delay {}{} "
       "(+{} -{} reverted {}), {} counted stalls a frame more would have spared, {} checksums "
       "matched, confirmed frame {}, round trip {} ms (median {} ms here, {} ms there), link {}, "
       "{} snapshots (every {}, {:.2f} ms each){}{}",
       when, match.session->CurrentFrame(), stats.rollbacks, stats.resimulated_frames,
       stats.deepest_rollback, stats.stalls, stats.counted_stalls, stats.waits, stats.hitches,
-      stats.peer_hitches, stats.frame_advantage, stats.delay,
+      stats.load_hitches, stats.peer_hitches, stats.frame_advantage, stats.delay,
       stats.delay_fixed ? " (chosen)" : "", stats.delay_raises, stats.delay_lowers,
       stats.delay_reverts, stats.spared_stalls, stats.checksums_matched, stats.confirmed_frame,
       Orca::Online::RoundTripMs(), stats.rtt_median, stats.peer_rtt_median,

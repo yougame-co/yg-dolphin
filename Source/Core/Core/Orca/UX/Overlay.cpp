@@ -187,7 +187,7 @@ double OverlayModel::RunningMs(double now_ms) const
   return (m_paused ? m_paused_at : now_ms) - m_paused_ms;
 }
 
-void OverlayModel::OnFrame(double now_ms, bool shown, double game_held_ms)
+void OverlayModel::OnFrame(double now_ms, bool shown, double game_held_ms, int game_held_frames)
 {
   std::lock_guard lk(m_lock);
   if (!shown)
@@ -214,7 +214,7 @@ void OverlayModel::OnFrame(double now_ms, bool shown, double game_held_ms)
     // only time past the hold is this machine's.
     constexpr double frame_ms = 1000 / 59.94;
     const double ms = now - m_last_frame;
-    const int held = Events::GameHeldFrames(game_held_ms, frame_ms);
+    const int held = std::max(0, game_held_frames);
     for (int k = 1; k <= held; ++k)
       m_frames.emplace_back(m_last_frame + ms * k / (held + 1), std::min(ms, frame_ms));
     m_frames.emplace_back(now, std::max(ms - game_held_ms, std::min(ms, frame_ms)));
@@ -1305,9 +1305,9 @@ void SetPerf(Perf perf)
   s_perf = perf;
 }
 
-void FrameBoundary(bool shown, double game_held_ms)
+void FrameBoundary(bool shown, double game_held_ms, int game_held_frames)
 {
-  s_overlay.OnFrame(NowMs(), shown, game_held_ms);
+  s_overlay.OnFrame(NowMs(), shown, game_held_ms, game_held_frames);
 }
 
 void ShowToast(std::string text)

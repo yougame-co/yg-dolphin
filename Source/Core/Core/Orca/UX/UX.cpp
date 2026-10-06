@@ -202,8 +202,9 @@ void Init()
   });
   // While the game waits for a friend, re-present the last frame with "Waiting for <name>...".
   Orca::Events::SetStallCallback([](int stalled_ms) { RepresentDuringStall(stalled_ms); });
-  Orca::Events::SetBoundaryCallback(
-      [](bool shown, double game_held_ms) { FrameBoundary(shown, game_held_ms); });
+  Orca::Events::SetBoundaryCallback([](bool shown, double game_held_ms, int game_held_frames) {
+    FrameBoundary(shown, game_held_ms, game_held_frames);
+  });
   // For joined/left toasts only. Never a source for memory writes; those use the frame callback.
   Orca::Events::SetPlugInCallback([](int frame, const std::vector<Orca::Events::PortInfo>& ports) {
     const double now = std::chrono::duration<double, std::milli>(

@@ -59,11 +59,14 @@ std::atomic<bool> s_in_snapshot{false};
 std::atomic<bool> s_resimulating{false};
 // Whether the frame now running is rendered, for the overlay's frame meter. CPU thread only.
 bool s_frame_shown = true;
-// Emulated ticks when the frame now running began (after any load at its boundary), 0 if unknown;
-// and how long the game held the shown frame that just ended (Events::GameHeldMs). CPU thread only.
+// Emulated ticks and host time when the frame now running began (after any load at its boundary),
+// ticks 0 if unknown; how long the game held the shown frame that just ended (Events::GameHeldMs),
+// and the fraction of a frame held over to the next hold. CPU thread only.
 u64 s_frame_start_ticks = 0;
+std::chrono::steady_clock::time_point s_frame_start_wall{};
 double s_frame_held_ms = 0;
 int s_frame_held_frames = 0;
+double s_frame_held_carry = 0;
 
 // The emulated length of the frame that just ended, past one video frame, if it was shown.
 void TimeEndedFrame(Core::System& system)
@@ -77,8 +80,11 @@ void TimeEndedFrame(Core::System& system)
   const double frame_ms = 1000 / (rate > 0 ? rate : 59.94);
   const double emulated_ms = static_cast<double>(ticks - s_frame_start_ticks) * 1000 /
                              system.GetSystemTimers().GetTicksPerSecond();
-  s_frame_held_ms = Orca::Events::GameHeldMs(emulated_ms, frame_ms);
-  s_frame_held_frames = Orca::Events::GameHeldFrames(s_frame_held_ms, frame_ms);
+  const double wall_ms = std::chrono::duration<double, std::milli>(
+                             std::chrono::steady_clock::now() - s_frame_start_wall)
+                             .count();
+  s_frame_held_ms = Orca::Events::GameHeldMs(emulated_ms, wall_ms, frame_ms);
+  s_frame_held_frames = Orca::Events::GameHeldFrames(s_frame_held_ms, frame_ms, s_frame_held_carry);
 }
 
 constexpr std::size_t RESTORE_PAGE = 4096;
@@ -575,6 +581,7 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
   {
     InputGate::Clear();
     s_frame_start_ticks = 0;
+    s_frame_held_carry = 0;
     return;
   }
   Orca::Status::GameStarted();
@@ -591,7 +598,7 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
   }
   // Report the frame that just ended to the overlay's frame meter. Host time only.
   TimeEndedFrame(guard.GetSystem());
-  Orca::Events::NotifyBoundary(s_frame_shown, s_frame_held_ms);
+  Orca::Events::NotifyBoundary(s_frame_shown, s_frame_held_ms, s_frame_held_frames);
   // Inside a JIT block pc and npc are stale, and a snapshot would record and later resume at a
   // wrong address. Pin both to the hook address so every snapshot resumes here; the rest of the
   // block runs normally and updates them on exit.
@@ -653,5 +660,6 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
   VideoCommon_SetSkipRender(IsResimulating() || Orca::TestSkipRender());
   s_frame_shown = !IsResimulating();
   s_frame_start_ticks = guard.GetSystem().GetCoreTiming().GetTicks();
+  s_frame_start_wall = std::chrono::steady_clock::now();
 }
 }  // namespace Rollback
