@@ -26,9 +26,9 @@ No disc images, NAND dumps or save data belong in this repository.
 
 Every Orca release candidate (a `rel-0.3.x` branch) passes these on the Mac before it ships; its
 dated **Checked** entry (for 0.3.14 and 0.3.15, at the end of "The queue's character select") gives
-the numbers. Runs are headless (`-v Null`), muted (`No Audio Output`), nice'd, under `flock
-orca-run-solo.lock` (two-Orca runs under `orca-run.lock` too), never while Luis plays (`ps -axo
-comm= | grep -q yougame-desktop/orca/apps`), with the 1-minute load under 18.
+the numbers. Runs are headless (`-v Null`), muted (`No Audio Output`), nice'd, and go through the
+Mac's run queue (`Tools/orca/run-lock.py check -- <command>`, `perf` for anything timed: "Sharing the
+Mac: the run queue" below), which waits while Luis plays and while the machine is busy.
 
 1. **Build** `dolphin-emu-nogui` and `tests` (Release, the release's CMake flags): no new warnings.
 2. **Unit tests:** `Binaries/Tests/tests --gtest_filter='Orca*'`, none failing (the live, network
@@ -73,6 +73,42 @@ comm= | grep -q yougame-desktop/orca/apps`), with the 1-minute load under 18.
    side's `XPLAT` summary `"ok": true` with `checksums_matched` above 0. Two Orcas on one Mac share
    a compiler, an architecture and a JIT, so only this run can see the two builds disagree
    (**Host arithmetic** under "Drop-in": Apple clang's fused multiply-adds against MSVC's x64).
+
+## Sharing the Mac: the run queue
+
+2026-10-06. Every scripted Orca run on the Mac took `orca-run-solo.lock` (two-Orca runs
+`orca-run.lock` too) exclusively, so runs went one at a time: that afternoon 20-25 of them queued for
+over an hour, blocking releases and the crash investigations, while the load sat at 3-6 on 14 cores.
+Only two things need a run to be alone: a measurement needs a quiet machine, and two `queue-e2e.mjs`
+dev-ticket runs shared one dev game's queue (`orca-queue-e2e-<profile>`), so they could match each
+other. Now:
+
+- `queue-e2e.mjs` gives each run a dev game of its own, `orca-queue-e2e-<profile>-<8 hex>` (its
+  first log line names it; `QE2E_DEV_SUFFIX` picks the suffix, empty is the old shared game).
+- `Tools/orca/run-lock.py` is the queue. `check -- <command>` is for correctness runs (queue-e2e, the
+  drop-in tools, synctests, hashlogs): up to three at once while the 1-minute load is under 12 and
+  more than 30% of memory is free, one at a time under 20 and 20%, none above. `perf -- <command>`
+  is for anything timed (two-Orca perf gates, frame-time A/Bs, `perf.mjs`, `selfmatch.mjs`): it has
+  the machine to itself, waiting for the checks to finish, and no check starts while it waits or
+  runs. Both wait while Luis's Orca is open (`ps -axo comm=`: the app bundle's
+  `Resources/runtimes/orca` or the old `yougame-desktop/orca/apps/`), printing `waiting: Luis's Orca
+  is open`, and go first come, first served: one ticket per run in `orca-run-queue/` beside the
+  locks, locked by its run, so a run that dies leaves none behind. A check that is running when Luis
+  opens his Orca stops (exit 10: three checks are six test Orcas beside his game, enough to make it
+  stutter); `--no-yield` keeps one going that must finish, and `--yield` gives a perf run the same
+  stop (without it a perf run notes the moment in its output). `--wait-max S` gives up (exit 9),
+  `--serial NAME` keeps runs with the same NAME apart (a check waiting only for its key lets later
+  checks go past it).
+- Runs that share accounts or a queue are kept apart without asking: `queue-e2e.mjs --slug` and
+  `page-e2e.mjs` (two signed-in players), a `queue-e2e.mjs` from a checkout older than this one (the
+  shared dev game), and runs given the same `QE2E_DEV_SUFFIX`.
+- Old scripts keep working beside it: a check holds both old locks shared and a perf run holds them
+  exclusive, so a plain `flock orca-run-solo.lock ...` acts as a perf run, and while one waits no
+  new check starts. `luis-orca-guard.sh` works as before. Do not wrap a script that takes the old
+  locks itself: the run stops with exit 11, since it would wait for itself forever.
+- `run-lock.py status` shows who runs, who waits and why (`--json`; `--luis` exits 0 while runs
+  wait for Luis's Orca to close, for a lead to tell him). Tests: `python3
+  Tools/orca/run-lock-test.py` (a scratch lock folder, fake load and a fake "playing", ~30 s).
 
 ## Running a session
 
@@ -2541,9 +2577,10 @@ plays the page's part exactly (caps, Orca's own tickets, the queue ticket and `/
 `host`/`join`, the `match_room` rewrite) and serves the app's controller stream, whose pad the
 script presses through the menus, the character select and the stage; in the fight port 2 walks off
 the stage until it has no stocks left. It checks the stdout sequence and that both Orcas print the
-same verdicts, each from its side. Dev tickets by default (nothing recorded); `--slug <listing>
---cookie-a/--cookie-b <file> --id-a/--id-b <id>` uses real tickets as two signed-in players.
-Under `flock orca-run.lock`, never while Luis plays.
+same verdicts, each from its side. Dev tickets by default (nothing recorded; a dev game of the
+run's own, so checks at once never meet); `--slug <listing> --cookie-a/--cookie-b <file>
+--id-a/--id-b <id>` uses real tickets as two signed-in players. Run it as a check in the run queue
+(`Tools/orca/run-lock.py check -- node Tools/orca/queue-e2e.mjs ...`), never while Luis plays.
 
 ## Free space
 
@@ -3018,11 +3055,11 @@ character select (before `ux=9`, which masks A there too); held B for 30 frames 
 the menu (so the gate's B and the flip are what keep a queue match in).
 
 Not yet (Phase 1 leftovers; since `ux=19` a CPU panel on any online select is made empty and the
-record it comes back from is cleared, "No CPUs online"): Giga Bowser and Wario-Man aren't
-refused in Project+; Project+'s Code Menu values (Auto L-Cancel, Stock Control, Input Assist,
-Debug) aren't forced (their defaults are off and the menu can't open); the ready timer's no-show
-and the stall claim were not run live; the room doesn't yet treat a stall claim as more than the
-survivor's word (YouGame rooms).
+record it comes back from is cleared, "No CPUs online"; since `ux=20` Project+'s Code Menu is off
+and at its defaults and Giga Bowser and Wario-Man play as Bowser and Wario, "Project+'s Code Menu"):
+the ready timer's no-show and the stall claim were not run live; the room doesn't yet treat a stall
+claim as more than the survivor's word (YouGame rooms). Until `ux=20` this paragraph said the Code
+Menu "can't open": wrong, it opened mid-fight in ranked on launch night.
 
 ## No CPUs online
 
@@ -3236,6 +3273,135 @@ summaries and scripts in `~/Documents/brawl-dolphin/q12-fix-runs`, screenshots `
   panel left to the game); 470 `Orca*` pass.
 - Not run: Mac <-> PC (`xplat.py`, needs the PC), the release's hashlogs (local selects get no
   writes, presses or masks from this).
+
+## Project+'s Code Menu
+
+`ux=20` (branch `fix-codemenu`, 2026-10-06). On launch night players reported "the debug menu" in
+ranked and casual: flight, infinite shield, Giga Bowser and Wario-Man, a frozen match. It is
+Project+'s own Code Menu (Netplay), in the pinned v3.2 SD card that Orca boots, not anything of
+Orca's. ORCA.md "Project+'s Code Menu and banned fighters" has the rules; this is how they were
+found and checked.
+
+**The menu** (`Source/Netplay/Net-CodeMenu.asm` in the SD card's source; `NETPLAY.txt` includes it):
+
+- "[CM: Control Codes] Load Code Menu" (hook `0x8002D4F4`) reads `pf/menu3/dnet.cmnu` as is to
+  `0x804E0000` (9,504 bytes to `0x804E2520`). It is there by the session's frame 2.
+- "[CM: Code Menu] Control Code Menu" (C2 hook `0x80029574`), every frame: ORs every GC pad's game
+  buttons (`0x805BAD04 + 0x40 x i`); `(buttons & 0x64) == 0x64` (L, R, D-pad Down) requests the
+  menu (state `0x804E0034` = 2). Wiimote and Classic paths exist but Orca forces Wiimotes off.
+- Code Menu Activation (`0x804E0C38`): 0 Default opens anywhere; 1 PM 3.6 refuses only while the
+  in-match flag `0x804E0758` is set; 2 OFF turns every request back into state 0. The P+ main menu's
+  own Code Menu button sets state 1, and A or Start then opens it **without** the activation check.
+- Open (state 4) it saves the pause word `0x805B8A08` at `0x804E006C`, writes 1 there every frame
+  (both games freeze: a pause in a mode where Start is masked), and reads every pad. Start, or B on
+  the root page, closes it: state 3, the pause word back; the same frame's hook then applies each
+  port's Character Select line to its fighter and sets the state from `0x804E0030` (0).
+- Every frame with the menu shut, the values apply on their own: per-port Infinite Shield, D-pad
+  percent, Disable DPad, Input Buffer, ALC; Flight (`[CM: DBZMode]`, `0x804E23BC`); the debug
+  bytes `0x80583FF7..FFF` copied from the Debug lines (skipped only in a match with activation 1 and
+  the menu shut); gameplay constants copied to `0x80B87AA8`.. by "Constant Overrides" (hook
+  `0x80023D60`, unconditional). So a value set offline, or by a joiner in an earlier set, carried
+  into the next locked match without anyone opening the menu.
+- Each line: `+0` size, `+2` type (0 selection, 1 integer, 2 float), `+4` colour flags (bit 3:
+  changed, drawn blue), `+8` value, `+0x10` default. The 73 forced words are every value line but
+  the four Character Select lines (`0x804E0F48`, `0x804E1424`, `0x804E1688`, `0x804E18EC`; "Add New
+  Character Buffer" syncs them to the fighters), Autosave Replays, Save Previous Replay (a state-3
+  file write), Tag-Based Costumes, Crowd Cheers, Tag Hex x4 and HUD colours x4. Checked word by word
+  against `dnet.cmnu` (SHA-256 `eea59cba...d479`); `0x804E1F88` is Walljump Horizontal Multiplier
+  (its float `0x3F666666` reads as text `?fff`).
+- Not reset: the colour flags and the pages' changed counts, so after a locked match a default value
+  the player had changed offline is drawn blue until X or Y resets it. Cosmetic.
+- `Source/Project+/Debug/modifiedDebug.asm` has its own L+R+Down debug toggle (`gr2 ^ 1` on the word
+  at `0x80583FFC`); the menu's per-frame copy of Debug Mode undoes it within the frame, and the gate's
+  `drop_with_lr` stops it reaching the game at all.
+
+**The lock** (`OnlineRules.cpp` `ForceCodeMenu`, every boundary under a Project+ header, first runs
+and re-runs): `Rules::CodeMenuPresent` checks the layout (page pointer inside the file, root page
+`0x804E07D8` at `+4` as the menu itself checks, Activation's line size `0x58` and self-pointer,
+Flight's line size `0x30` and its `+0x18` word `0x804E0F00`); then state 4 gives the pause word back
+from `0x804E006C`, the state becomes 0 whatever it was, and the 73 words take their defaults with
+activation 2. `WriteHeader` saves the activation at match block `+0xDA` (`SAVED_FLAGS` bit 2) when
+it writes a fresh header and the menu is present, and gives it back on clear. A joiner's block is
+the host's, so a joiner gets the host's saved activation back, as with the saved rules.
+
+**Banned fighters.** Project+'s "Hold Shield for Special Fighter" (`Source/ProjectM/CSS.asm`, hooks
+`0x806847BC`, `0x8068482C`, `0x80685BE4`) runs in the function that saves the panels into the
+record as the character select ends (`0x806846E0`): a Bowser (slot `0x0C`), Wario (`0x15`) or Ice
+Climbers (`0x10`) pick whose player holds the shield button becomes slot `0x38`, `0x36` or `0x37`,
+character `0x2C` Giga Bowser, `0x2D` Wario-Man or `0x11` Sopo. Legacy TE's AltCostume hook at
+`0x8068480C` takes R (`0x20`) out of the shield mask (R picks costumes), so on a GC pad it is L.
+Under the harness R held through Start did nothing; L held through Start made both specials.
+The init data gets the special character right there, and again from the record on the way from the
+stage select to the fight. `ForceLegalFighters` (character select, stage select, between) rewrites
+both: init data `+0x98 + 0x5C x port`, the record's characters (`+0xB8 + 0x5C x port`) and slots
+(`+0x0A + 4 x port`). With only the init data rewritten (first version), the transition copied
+`0x2C`/`0x2D` back in, the next boundary fixed it, the fight was still Bowser and Wario, but
+`scMemoryChange` took 56 frames instead of 1 (it had started loading the banned fighters' files).
+With the record rewritten too, it is 1 frame and nothing banned is ever loaded. Sopo is not banned.
+
+**Checked** (Mac, 2026-10-06, Release build of `fix-codemenu`, headless, under the solo run lock;
+inputs and probes in `~/ClaudeWorktrees/orca-codemenu-runs/`):
+
+| Run | What | Result |
+|---|---|---|
+| Control, offline, no header | `pplus-1v1`'s way to a fight; port 1 holds L+R, presses Down at fight frame 330, Start at 480 | state 4 and pause word 1 at frame 918, both back at 1068: the script opens the menu, and offline keeps it |
+| `ORCA_TEST_QUEUE=ranked:1`, `pplus-ranked` + the chord | L+R+Down by port 1 (twice) and port 2 mid-fight, and both on the results screen | activation 2 from frame 3; state and pause word never change; the fight runs to the results (port 1 won 4-0); screenshot at the chord: Pikachu shielding, timer running, no menu |
+| Same, cheats by probe | Flight, P1 Infinite Shield, P2 ALC, hitstun 1.0, activation 0 on the main menu; Flight, Infinite Shield, state 4 and pause 1 at fight frame 200 | every value back to its default at the next boundary; the open menu closed, pause word 0, the fight went on |
+| Same, Giga pick | port 1 on Bowser, port 2 on Wario, L held through Start | the select wrote `0x2C`/`0x2D` (init and record) and slots `0x38`/`0x36`; next boundary `0x0C`/`0x17` and `0x0C`/`0x15`; `scMemoryChange` 1 frame; results characters `[12, 23]`; screenshot: Bowser vs Wario |
+| `YG_SYNCTEST=7` from 170 to 5600, final build | the chord input; the Giga input (L through Start) | each 37,961 re-run frames, 0 RAM mismatches |
+
+Unit tests: `OrcaOnlineRules.TheCodeMenu*`, `AnOpenCodeMenuClosesAndTheGameRunsAgain`,
+`ClearingGivesBackTheCodeMenusActivation`, `ProjectPlusBannedFightersPlayAsTheirBaseFighters`,
+`ProjectPlusNeverSeesTheCodeMenusChord`, `OrcaInputGate.DownDropsOnlyWhileLAndRAreBothHeld`.
+
+Open: friends rooms keep the menu (Luis's call). `TRIGGER_HELD` (a quarter press) is a guess at
+where the game counts an analog trigger as held; the activation lock does not depend on it.
+
+**Release review (2026-10-06, candidate `codemenu-q14`: `fix-codemenu` + `q14-play-again-clean`).**
+
+- `ForceCodeMenu` read each word through `Writer::U32` (4 `Valid` + 4 `Read8` per word, 584 MMU
+  calls a boundary, first runs and re-runs). It now reads each word once (`Read32`) and calls
+  `U32` only for one that differs: same writes, same `changed` count. A `static_assert` keeps every
+  word inside the range `CodeMenuPresent` checked, so the plain read is always mapped.
+- ORCA.md said "the chord never arrives": the gate drops Down only while both triggers read held
+  (button, or analog at 0x40); the game's own threshold isn't known. Activation OFF is the lock.
+- Kept as is: values a player set offline aren't given back after a queue (they come from the
+  file again at boot); a joiner gets the host's saved activation back, as with the saved rules;
+  Sopo stays legal (the spec; Luis to confirm for ranked).
+- Re-run on the candidate build (Mac, Release, headless, under the run locks):
+  - the cheats probe (`preset.probe`, ranked header): the same frames as before, every value back
+    at the next boundary, the forced-open menu closed and the pause word 0 at fight frame 201;
+  - the Giga pick (`giga3-ranked.txt`): `0x2C`/`0x2D` at frame 548, `0x0C`/`0x17` at 549, the
+    fight Bowser vs Wario (`[12, 23]`);
+  - `YG_SYNCTEST=7` from 170 to 5,600, the chord input and the Giga input: 37,961 re-run frames
+    each, 0 RAM mismatches;
+  - hashlogs against 0.3.27 (the released Orca.app): `pplus-1v1` frames 0-9,000 and
+    `bf-mario-link-results` 0-10,800 identical.
+- Two Orcas over prod rooms (`queue-e2e.mjs --pplus <dol> --q2 --queue ranked --pick bowser --giga
+  --chord --probe watch-cm.probe`, dev tickets): both readied Bowser (`orca queue ready ranked 12
+  0`) and held L through the shared select's Start. At frame 2,361 both games wrote `0x2C` for both
+  ports; at 2,362 both read `0x0C`. 17 L+R+Down chords by both mid-fight and one each on both
+  results screens: the menu's state and the pause word never changed, activation 2 from the header
+  on. Set 2-0, `orca result` game and set lines on both sides, characters `[12, 12]`, 238 checksums
+  matched each, no desync, no `orca error`.
+- Two-Orca performance comparison against 0.3.27 (the released Orca.app), one run each, the same
+  conditions: a Project+ ranked set over prod rooms (`queue-e2e.mjs --pplus <dol> --q2 --queue
+  ranked --shots 0 --shots-who ada,bo`: both render with Metal), `ORCA_TEST_NET_DELAY_MS=40`,
+  `ORCA_TEST_NET_JITTER_MS=8`, Mac (arm64), load 6-13. Per side at the end (host, joiner):
+
+  | | candidate | 0.3.27 |
+  |---|---|---|
+  | frames | 14,401 / 16,087 | 14,401 / 16,031 |
+  | rollbacks, re-run frames, deepest | 26, 47, 2 / 30, 60, 3 | 27, 108, 5 / 30, 109, 5 |
+  | stalls | 3 / 6 | 8 / 18 |
+  | hitches here | 14 / 17 | 27 / 32 |
+  | snapshot ms each | 0.98 / 0.80 | 1.42 / 1.23 |
+  | input delay (the link chose it) | 4 / 4 | 2 / 3 |
+  | checksums matched | 204 / 233 | 203 / 231 |
+
+  No regression: the candidate is at or below 0.3.27 on every count. The input delay differs (each
+  run's link measured its own round trips), so the rollback counts aren't like for like; snapshot
+  time and hitches are. One run each on a shared machine: noisy.
 
 ## Ranked sets
 
@@ -5565,6 +5731,71 @@ struct LobbyPickPlan
 
 
 # Moved from ORCA_ARCHITECTURE.md (2026-10-06): internal messaging guidance, not public
+
+## Play again after a ranked set (q14, 2026-10-06)
+
+Luis, 2026-10-06 (03:23 UTC, room `6qe4adpj`): "The flow where we finish a ranked match and I click
+play again, and that person accepts my invite, seems to fail ... make sure that this flow works
+smoothly". ORCA.md "Play again after a ranked set" (under "Drop-in") is the short version; this is
+the original write-up and the verify runs.
+
+**Play again after a ranked set** (branch `q14-play-again`; `OnlineMatch.cpp` `EndQueueForFriend`,
+`EndQueueForJoin`, `RearmFriendsPick`). Luis, 2026-10-06 (03:23 UTC, room `6qe4adpj`): "The flow
+where we finish a ranked match and I click play again, and that person accepts my invite, seems to
+fail ... make sure that this flow works smoothly". After a set both games are back on their own
+Ranked character select, not ready (the queue image), each hosting a friends room of its own. The
+page's Play again (YouGame's Play for fun) invites the opponent into the inviter's room and sends
+`prepare-join`; the opponent's page accepts and sends `join <code>`. Through 0.3.26 the join always
+failed: the inviter's game still carried the queue's own character select's header
+(`FLAG_SOLO | FLAG_QUEUE2`, which `WantedRulesMode` asks for while the queue is active, alone on port
+1), its keyframe carried it, and the friend refused it right after loading (`Online rules: ... this
+room wants no header (the host's header is its own character select's): mismatch`, `orca error
+mismatch`), whoever had left the set's room and whoever had hosted it
+(`Tools/orca/queue-e2e.mjs --scenario playagain --variant a|b|c|d`, `--scenario cssjoin --where
+ranked`: JOIN-FAILED on 0.3.25 and on `q11-lobby`). Inviting a friend from With Anyone's Casual or
+Ranked character select at any other time failed the same way. Now the newest intent wins, as With
+Friends does and as a lobby pick does the other way round:
+- **The host** (port 1, not joining, its room's welcome said `private`): a friend arriving, or the
+  app's `prepare-join` (an invite on its way), while its player is on the queue (its own character
+  select, or the app's search) ends the queue and the search at that boundary, before the header is
+  called for again, and prints `orca menu cancel` (the page drops its search and the player's
+  ready). The header goes back to none at the next boundary (`HeaderFreeAt` allows it with a friend
+  waiting; the player's own rules come back), a keyframe made under the old one is dropped
+  (`DropStaleKeyframe`), and the friend's keyframe carries none. At `prepare-join` that costs
+  nothing; at an arrival with no invite first, one more boundary before the keyframe. The select
+  stays the one the pick opened (titled RANKED until the friend plugs in, then FRIENDS: "The
+  character select's title"). Never in a room the queue made (its opponent is the match) or before
+  a room's welcome (a matched room's `host` just taken).
+- **Once the friends are gone** (one came in, all left, and the host's game is alone again on the
+  character select the queue's pick opened, a fight in between or not), the pick is armed again
+  if its page can search that queue now (its pick cap; `orca menu online ranked`): its queue's own character select, where Start searches, as for the
+  friend who went home on that same select (`ComeHome`, `AnnounceHomePick`). Never for an invite
+  nobody took yet: the player waits there for the friend, and Start would take them into a search.
+- **The friend** whose keyframe loads into a friends room ends its own queue the same way (`orca
+  menu cancel` if one was under way) and drops the game it kept for after a queue room (its own
+  character select, or the set's room's). Kept, that image was never put back (only a queue room's
+  end does that) and stopped the player going home when its host left (`MayComeHome`: `no-room`,
+  so its own invites failed), and the queue still active would have put the queue's own character
+  select's header on the friend's game once home on port 1. A join that fails before the keyframe
+  loads keeps the player's own game, its queue select and all.
+- The friend's way in needed nothing new: `join` from anywhere (its own select, or still in the
+  set's room as its host or its joiner, on the results screen or the select) leaves that room at a
+  clean boundary (`JoinInPlay`; a set already decided is no forfeit) and joins.
+
+Local: what changes is which header this host writes at its own solo boundaries before a keyframe,
+and its own process state; nothing a session runs on two machines (no compatibility change).
+
+**Verify (2026-10-06, two Orcas against prod, `Tools/orca/play-again-matrix.sh`, built from
+`q14-play-again` merged into rel-0.3.27):** released 0.3.27 fails `css-ranked` and `pa-d`
+(JOIN-FAILED: `orca error mismatch ... this room wants no header`). With q14: `css-ranked`, `pa-d`,
+`pa-dh`, `pa-a`, `pa-b`, `pa-c`, `pa-d-fl`, `pa-e` all pass: a game played together (129 s of
+fight), 156-170 checksums matched on both sides, no mismatched rollbacks, and the leaver hosts its own
+room ~1.9 s later (HOME); `pa-d-fl` shows the host re-armed (`orca menu online ranked`). Runs under
+`~/ClaudeWorktrees/orca-q14-0327-verify/out/`. The code was then re-applied on main's cleaned style
+(branch `q14-play-again-clean`); its own runs are logged below when done.
+
+Workaround for 0.3.27 players: the inviter presses B on the Ranked select (back to the menu) before
+pressing Play again; an invite already sent then gets a clean keyframe.
 
 ## Explaining it to people (internal)
 

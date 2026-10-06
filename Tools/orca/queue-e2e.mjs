@@ -30,7 +30,8 @@
 //       [--probe <file>]
 //       [--slug <listing> --cookie-a <file> --cookie-b <file> --id-a <id> --id-b <id>]
 //
-// Without --slug: dev tickets (an anonymous dev game, nothing recorded, keyframes in a local folder).
+// Without --slug: dev tickets (an anonymous dev game of this run's own, nothing recorded, keyframes
+// in a local folder).
 // With --slug: real tickets for that listing as two signed-in players (the cookie files hold a
 // session's Cookie header, mode 600, never printed), keyframes through YouGame's store.
 // Orca runs nice'd, muted, with Null video and a perl alarm. On a shared machine, don't run it
@@ -79,6 +80,47 @@ const SHOTS_OUT = opt("--shots-out");
 // How long after a ranked set's verdict the page sends the new rating (`queue rating`).
 const RATING_AFTER_MS = Number(opt("--rating-after", "1500"));
 const Q2 = argv.includes("--q2");
+// --scenario playagain (ranked, --q2): "Play again" after a ranked set. After the verdict, the
+// inviter's page invites the other player into the private room its Orca hosts (`prepare-join`) and
+// the invitee's page accepts it (`join <code>`, --invite-gap ms later). --variant picks where each
+// player is then:
+//   a: the invitee is still in the set's room as its host (the joiner, the inviter, left by holding
+//      Z on the results screen; the host stays there);
+//   b: the invitee is still in the set's room as its joiner (the host, the inviter, held Z);
+//   c: both are still in the set's room when the invite goes out: the inviter's page leaves the room
+//      (the app's `leave`) and invites at once, and the invitee accepts as soon as the code is known;
+//   d: both left together by pressing on through the results screen, each in a room of its own
+//      (--inviter joiner|host, default joiner);
+//   e: as d, but the inviter backs out of its queue's character select to the main menu first (the
+//      control: no queue header in the inviter's game).
+// The join either plugs in (the inviter prints `orca state friend-joined`, the invitee `orca state
+// playing`) or fails; the run prints a RESULT line and exits 0 (joined) or 3 (the join failed).
+// Once joined, the inviter leaves (`leave`) and the invitee must go home to a room of its own
+// (ORCA.md "Drop-in" ComeHome), never `orca state no-room` (q14: a joiner from its own queue select
+// kept that game for after a queue room, which stopped it going home); --no-after-leave skips it.
+// RESULT then says HOME or NO-ROOM; exit 4 for the latter.
+const AFTER_LEAVE = !argv.includes("--no-after-leave");
+// Once joined: --together <ms> (default 20000) together in the new room before the inviter leaves,
+// and with --fight they play a game there in that time (both pick on the inviter's character select,
+// its Start, a stage, port 2 walks off until the results, both press on back to the select). After
+// the leave, each side's session from the join on must have matched checksums (its "back to solo
+// play" line counts more than 0) over at least 15 s of frames (900 from the invitee's plug-in), with
+// no desync in either log: RESULT: TOGETHER ..., else TOGETHER-FAILED and exit 5.
+const TOGETHER_MS = Number(opt("--together", "20000"));
+const FIGHT = argv.includes("--fight");
+// --leaver invitee: after that time the friend (the invitee) leaves instead of the inviter, and the
+// inviter, alone again on the select its queue's pick opened, must have that pick armed again
+// (`orca menu online <queue>`, RearmFriendsPick) within 20 s while the friend goes home to a room of
+// its own: RESULT: REARMED / NOT-REARMED (exit 6) and HOME / NO-ROOM.
+const LEAVER = opt("--leaver", "inviter");
+const VARIANT = opt("--variant", "d");
+const INVITER = opt("--inviter", "");
+const INVITE_GAP_MS = Number(opt("--invite-gap", "4000"));
+// The page's answer to `orca caps` (YouGame lib/orca.ts orcaCapsAnswer): what Orca offers of these.
+const PAGE_CAPS = new Set([
+  "join", "leave", "stats", "pause", "delay", "perf", "direct", "host", "results", "locks", "queue2",
+  "pick-casual", "pick-ranked",
+]);
 // --pick random (--q2): both pick the RANDOM tile (ORCA.md "The queue's character select"); the
 // verdicts' resolved characters must match on both sides.
 const PICK = opt("--pick", "character");
@@ -94,8 +136,32 @@ if (PROBE && SLUG) {
 // hand from panel 1 onto the RANDOM tile in each game.
 const RANDOM_CHAR = 41;
 const RANDOM_PATH = PPLUS ? { up: 20, right: 24 } : { up: 22, right: 58 };
+// --pick bowser (Project+, --q2): both pick Bowser (up, then right from panel 1).
+const BOWSER_CHAR = 12;
+const BOWSER_PATH = { up: 33, right: 28 };
+if (PICK === "bowser" && !PPLUS) {
+  console.error("--pick bowser is for Project+");
+  process.exit(2);
+}
+// Project+'s Code Menu under a ranked or casual header (ORCA.md "Project+'s Code Menu and banned
+// fighters"). --giga: both hold L through the first character select's Start, which makes a Bowser
+// pick Giga Bowser unless Orca turns it back. --chord: both press L+R+D-pad Down every 2.5 s of
+// each fight and once on each results screen, which opens the menu unless Orca keeps it shut.
+const GIGA = argv.includes("--giga");
+const CHORD = argv.includes("--chord");
 const PROFILE = PPLUS ? "pplus32" : "rsbe01";
-const DEV_GAME = `orca-queue-e2e-${PROFILE}`;
+// Each run gets a dev game of its own, so two runs at once never meet in the queue (correctness runs
+// share the Mac: Tools/orca/run-lock.py). QE2E_DEV_SUFFIX picks the suffix; empty means the old
+// shared game, orca-queue-e2e-<profile>, which two runs at once must not use.
+const DEV_SUFFIX = (
+  process.env.QE2E_DEV_SUFFIX ?? crypto.randomBytes(4).toString("hex")
+)
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, "-")
+  .replace(/^-+|-+$/g, "");
+const DEV_GAME = `orca-queue-e2e-${PROFILE}${DEV_SUFFIX ? `-${DEV_SUFFIX}` : ""}`
+  .slice(0, 60)
+  .replace(/-+$/, "");
 const WORK = fs.mkdtempSync(path.join(os.tmpdir(), "orca-queue-e2e-"));
 const T0 = Date.now();
 const UA =
@@ -125,6 +191,8 @@ const BTN = {
   UP: 128,
   START: 256,
   Z: 512,
+  R: 1024,
+  L: 2048,
 };
 
 class Side {
@@ -151,6 +219,7 @@ class Side {
     this.setEndLog = []; // { at, line }: "Set end: ..." (UX/SetEnd.h) and the host's stall break
     this.rating = -1; // the rating the page gave (`queue rating`)
     this.shots = []; // the scenario's own screenshots (test-shot)
+    this.joinLog = []; // { at, line }: drop-in and room lines (--scenario playagain)
   }
 
   // The scenario's own screenshot (`test-shot`), when this Orca renders.
@@ -191,7 +260,10 @@ class Side {
           type: i === 0 ? "wired" : null,
           buttons: i === 0 ? this.pad.buttons : 0,
           axes: i === 0 ? this.pad.axes : [128, 128, 128, 128],
-          triggers: [0, 0],
+          triggers:
+            i === 0
+              ? [this.pad.buttons & BTN.L ? 255 : 0, this.pad.buttons & BTN.R ? 255 : 0]
+              : [0, 0],
           origin: [128, 128, 128, 128, 0, 0],
           calibrationRevision: 0,
         }));
@@ -419,6 +491,14 @@ class Side {
           this.setEndLog.push({ at: Date.now(), line: se[1] });
           log(`${this.name}~ ${se[1]}`);
         }
+        const pj =
+          /(Online rules: (the host's game says|the host's header|leaving room|header ).*|Drop-in: (left|loaded keyframe|the host offers|joining room|plugged into|playing solo|leaving|this boot's NAND|port \d (left|moves|is)|keyframe of frame|.* arrived for port|back to a game|home ).*|Couldn't .*|Orca room ended: .*|Orca: joining a YouGame room.*|Orca room: in room .*|Orca room: Room \S+: .*|Matchmaking: (the opponent|the host|done|no verdict|the room closed).*|Online: session ended.*)$/.exec(
+            line,
+          );
+        if (pj) {
+          this.joinLog.push({ at: Date.now(), line: pj[1] });
+          if (SCENARIO === "playagain") log(`${this.name}~ ${pj[1]}`);
+        }
         if (/Desync at frame|the session failed/.test(line)) {
           this.desyncs.push(line);
           log(`${this.name}~ ${line}`);
@@ -544,6 +624,18 @@ class Side {
     this.pad.buttons |= BTN[button];
     await sleep(ms);
     this.pad.buttons &= ~BTN[button];
+    await sleep(120);
+  }
+
+  // L+R held, D-pad Down pressed: Project+'s Code Menu chord.
+  async chord() {
+    this.pad.buttons |= BTN.L | BTN.R;
+    await sleep(150);
+    this.pad.buttons |= BTN.DOWN;
+    await sleep(100);
+    this.pad.buttons &= ~BTN.DOWN;
+    await sleep(150);
+    this.pad.buttons &= ~(BTN.L | BTN.R);
     await sleep(120);
   }
 
@@ -970,6 +1062,9 @@ async function q2Ready(side, queue) {
     // Up into the grid's bottom row, then right onto RANDOM (frames at 60 a second).
     await side.hold([128, 255, 128, 128], Math.round((RANDOM_PATH.up * 1000) / 60));
     await side.hold([255, 128, 128, 128], Math.round((RANDOM_PATH.right * 1000) / 60));
+  } else if (PICK === "bowser") {
+    await side.hold([128, 255, 128, 128], Math.round((BOWSER_PATH.up * 1000) / 60));
+    await side.hold([255, 128, 128, 128], Math.round((BOWSER_PATH.right * 1000) / 60));
   } else {
     await side.hold([128, 255, 128, 128], 450);
   }
@@ -986,6 +1081,8 @@ async function q2Ready(side, queue) {
       if (r.m[1] !== queue) fail(`${side.name}: ${r.line}, wanted ${queue}`);
       if (PICK === "random" && Number(r.m[2]) !== RANDOM_CHAR)
         fail(`${side.name}: ${r.line}, wanted Random (${RANDOM_CHAR})`);
+      if (PICK === "bowser" && Number(r.m[2]) !== BOWSER_CHAR)
+        fail(`${side.name}: ${r.line}, wanted Bowser (${BOWSER_CHAR})`);
       return r;
     }
     if (tries >= 4) fail(`${side.name}: Start on its own character select never readied it`);
@@ -1052,6 +1149,11 @@ async function q2Css(host, joiner, first, queueFrom = 0) {
     ]);
     await sleep(300);
   }
+  const giga = GIGA && first;
+  if (giga) {
+    for (const s of [host, joiner]) s.pad.buttons |= BTN.L;
+    log("--giga: both hold L through the character select's Start");
+  }
   for (let tries = 0; host.scene === "scSelctCharacter"; ++tries) {
     if (tries >= (QUEUE === "ranked" ? 120 : 30)) fail("the character select never went on");
     if (QUEUE === "ranked" && !first && tries < 3) {
@@ -1061,6 +1163,7 @@ async function q2Css(host, joiner, first, queueFrom = 0) {
     await Promise.all([host.press("START"), joiner.press("START")]);
     await sleep(1200);
   }
+  if (giga) for (const s of [host, joiner]) s.pad.buttons &= ~BTN.L;
 }
 
 // --scenario noskip: ranked has no skip. On every character select both players hold Z for 3 s
@@ -1094,9 +1197,26 @@ async function q2Fight(host, joiner) {
   const hostFrom = host.lines.length;
   const setEndFrom = [host.setEndLog.length, joiner.setEndLog.length];
   const resultsFrom = [host.results.length, joiner.results.length];
+  let chords = 0;
+  const chorder =
+    CHORD &&
+    setInterval(() => {
+      if (host.scene !== "scMelee") return;
+      ++chords;
+      host.chord();
+      joiner.chord();
+    }, 2500);
   await host
     .waitScene("scVsResult", 240000)
-    .finally(() => (joiner.pad.axes = [128, 128, 128, 128]));
+    .finally(() => {
+      joiner.pad.axes = [128, 128, 128, 128];
+      if (chorder) clearInterval(chorder);
+    });
+  if (CHORD) {
+    await sleep(1500);
+    await Promise.all([host.chord(), joiner.chord()]);
+    log(`--chord: ${chords} chords by both in the fight, one each on the results screen`);
+  }
   // The set's last game: VICTORY on one side, DEFEAT on the other (UX/SetEnd.h); then the room
   // after the set, until both left it.
   if (QUEUE === "ranked" && (await setEndPanels([host, joiner], setEndFrom, resultsFrom)))
@@ -1178,6 +1298,7 @@ async function setOverLeave(host, joiner, from) {
       fail(`${sides[i].name}: left the set's room before its player did anything`);
   if (host.scene !== "scVsResult") fail(`${host.name}: off the results screen by itself (${host.scene})`);
   for (const s of sides) s.shot(`${s.name}-set-over`);
+  if (SCENARIO === "playagain") return playAgainLeave(host, joiner, from);
   if (SCENARIO === "zleave") {
     joiner.pad.buttons |= BTN.Z;
     await sleep(900);
@@ -1259,8 +1380,12 @@ async function q2Main() {
     await s.expect(/^orca caps .*\bhost\b/, 120000);
     if (!s.lines.some((l) => l && /^orca caps .*\bqueue2\b/.test(l)))
       fail(`${s.name}: Orca offers no queue2`);
-    s.send(CAPS_Q2);
+    if (SCENARIO === "playagain" || SCENARIO === "cssjoin") {
+      const offered = s.lines.find((l) => l && /^orca caps /.test(l)).slice(10).split(" ");
+      s.send(`caps ${offered.filter((c) => PAGE_CAPS.has(c)).join(" ")}`);
+    } else s.send(CAPS_Q2);
   }
+  if (SCENARIO === "cssjoin") return cssJoin(a, b);
   const { host, joiner, room } = await q2Meet(a, b, QUEUE, (s) => menuToQueue(s, QUEUE));
   const marks = () => {
     for (const s of [host, joiner]) {
@@ -1428,6 +1553,7 @@ async function q2Main() {
     joiner.send("leave");
     await host.expect(/^orca state friend-left /, 60000, host.linesAtBack);
   }
+  if (SCENARIO === "playagain") return playAgainInvite(host, joiner, a, b);
   // Casual searches again by itself; after a ranked set the player presses Start for that.
   const ready = QUEUE !== "ranked";
   await Promise.all([q2Back(host, host.queueAt, ready), q2Back(joiner, joiner.queueAt, ready)]);
@@ -1445,6 +1571,359 @@ async function q2Main() {
     .map((r) => r.d.c.join("/"))
     .join(", ");
   log(`PASS: q2 ${QUEUE}${SCENARIO !== "match" ? ` ${SCENARIO}` : ""}${PICK !== "character" ? ` pick ${PICK}` : ""}: ${n} verdicts the same on both sides${fought ? ` (characters ${fought})` : ""}; ${SCENARIO === "noskip" ? `Z held on ${noSkipHolds} character select(s), no skip; ` : ""}${QUEUE === "ranked" ? "set over: both stayed, then left; " : ""}both back on their own character select${ready ? ", ready" : ", not ready"}; checksums: ${sums}`);
+}
+
+// ---- --scenario playagain ----
+
+let playAgain = null; // { inviter, invitee, room, how }
+
+// Set over, per --variant: who leaves the set's room, and how. The one who stays stays on its
+// results screen, in the room.
+async function playAgainLeave(host, joiner, from) {
+  const sides = [host, joiner];
+  const byRole = (r) => (r === "host" ? host : joiner);
+  let inviter = joiner;
+  if (VARIANT === "b") inviter = host;
+  else if ((VARIANT === "d" || VARIANT === "e") && INVITER) inviter = byRole(INVITER);
+  const invitee = inviter === host ? joiner : host;
+  const room = joiner.match?.room ?? host.match?.room;
+  playAgain = { inviter, invitee, room, how: "" };
+  const at = (s) => from[sides.indexOf(s)];
+  if (VARIANT === "a" || VARIANT === "b") {
+    inviter.pad.buttons |= BTN.Z;
+    const z = await waitSetEnd(inviter, /set over: leaving room \S+ \(Z held\)/, 6000, at(inviter)).finally(
+      () => (inviter.pad.buttons &= ~BTN.Z),
+    );
+    if (!z) fail(`${inviter.name}: held Z on the results screen and stayed in the room`);
+    log(`${inviter.name} (inviter): ${z.line}`);
+    await sleep(3000);
+    if (invitee.setEndLog.slice(at(invitee)).some((e) => /set over: leaving/.test(e.line)))
+      fail(`${invitee.name}: left the set's room when ${inviter.name} did`);
+    playAgain.how = `${inviter.name} held Z out of ${room}; ${invitee.name} stays there on its results screen`;
+  } else if (VARIANT === "c") {
+    inviter.send("leave");
+    playAgain.how = `${inviter.name}'s page left ${room} (leave) with both still in it; ${invitee.name} stays`;
+  } else {
+    // d, e: both press on through the results screen, in the game's own flow (tonight's).
+    const presser = setInterval(() => {
+      for (const s of sides) s.press(Date.now() % 2 ? "A" : "START");
+    }, 900);
+    try {
+      for (const s of sides) {
+        const left = await waitSetEnd(s, /set over: leaving room/, 60000, at(s));
+        if (!left) fail(`${s.name}: never left the set's room`);
+        log(`${s.name}: ${left.line}`);
+      }
+    } finally {
+      clearInterval(presser);
+    }
+    playAgain.how = `both pressed on out of ${room}`;
+  }
+  log(`play again: ${playAgain.how}; inviter ${inviter.name} (the set's ${inviter === host ? "host" : "joiner"}), invitee ${invitee.name}`);
+}
+
+// The invite and its acceptance; prints the RESULT line and exits 0 (joined) or 3 (failed).
+async function playAgainInvite(host, joiner) {
+  const pa = playAgain;
+  if (!pa) fail("playagain: the set's room was never left (no set over?)");
+  const { inviter, invitee, room } = pa;
+  // The inviter: back on its own character select, not ready (a ranked set was played).
+  await q2Back(inviter, inviter.queueAt, false);
+  if (VARIANT === "e") {
+    await inviter.press("B", 2500);
+    await inviter.waitScene("muMenuMain", 30000);
+    await sleep(2000);
+    log(`${inviter.name}: backed out to the main menu (the control)`);
+  }
+  return inviteAndJoin(inviter, invitee, room, `playagain ${VARIANT} (${pa.how}; inviter ${inviter.name}, invitee ${invitee.name})`);
+}
+
+// The inviter's page invites the invitee into the room its Orca hosts (`prepare-join`), and the
+// invitee's page accepts --invite-gap ms later (`join <code>`). RESULT: JOINED or JOIN-FAILED.
+async function inviteAndJoin(inviter, invitee, room, name) {
+  // Its own room, hosted (the page invites into the room its Orca is in: lib/orca-rooms.ts).
+  await waitFor(
+    () => {
+      const m = inviter.mirror;
+      return m && m.code && m.code !== room && m.me && m.host === m.me && (m.players || []).length >= 1;
+    },
+    30000,
+    `${inviter.name}: no room of its own after the set`,
+  );
+  const code = inviter.mirror.code;
+  const where = (s) => {
+    const m = s.mirror;
+    const inRoom = m && m.code && (m.players || []).length ? `room ${m.code}${m.host === m.me ? " (host)" : ""}` : "no room";
+    return `${s.name}: ${inRoom}, scene ${s.scene}`;
+  };
+  log(`invite: ${where(inviter)}; ${where(invitee)}`);
+  const fromInviter = inviter.lines.length;
+  inviter.send("prepare-join");
+  await sleep(SCENARIO === "playagain" && VARIANT === "c" ? 300 : INVITE_GAP_MS);
+  log(`accept: ${where(invitee)}`);
+  const fromInvitee = invitee.lines.length;
+  const joinLogFrom = invitee.joinLog.length;
+  const sent = Date.now();
+  invitee.send(`join ${code}`);
+  const ok = Promise.all([
+    inviter.expect(/^orca state friend-joined$/, 120000, fromInviter),
+    invitee.expect(/^orca state playing$/, 120000, fromInvitee),
+  ]).then(() => null);
+  const bad = Promise.race([
+    invitee.expect(/^orca (error \S+.*|state (host-left|no-room|left).*)$/, 120000, fromInvitee).then((x) => `${invitee.name}: ${x.line}`),
+    inviter.expect(/^orca state friend-left .*$/, 120000, fromInviter).then((x) => `${inviter.name}: ${x.line}`),
+  ]);
+  const why = await Promise.race([ok, bad]).catch((e) => `timeout: ${e.message}`);
+  let verdict = why;
+  if (!why) {
+    // Plugged in: still together a while later.
+    await sleep(8000);
+    const gone =
+      inviter.lines.slice(fromInviter).find((l) => l && /^orca state friend-left/.test(l)) ||
+      invitee.lines.slice(fromInvitee).find((l) => l && /^orca (error|state (host-left|left))/.test(l));
+    verdict = gone ? `left after plugging in: ${gone}` : null;
+  } else {
+    await sleep(3000);
+  }
+  const ms = Date.now() - sent;
+  const joinLines = invitee.joinLog.slice(joinLogFrom).map((e) => `+${e.at - sent} ms ${e.line}`);
+  log(`${invitee.name}'s join, from the join line on:`);
+  for (const l of joinLines) log(`  ${l}`);
+  const rules = invitee.joinLog.slice(joinLogFrom).find((e) => /Online rules: (the host's game says|leaving room)/.test(e.line));
+  if (!verdict) {
+    log(`RESULT: JOINED ${name}: ${invitee.name} plugged into ${inviter.name}'s room ${code}`);
+    const marks = [inviter, invitee].map((s) => ({ sessions: s.sessions.length, desyncs: s.desyncs.length }));
+    const plugged = invitee.joinLog
+      .slice(joinLogFrom)
+      .map((e) => /^Drop-in: plugged into port \d at frame (\d+)/.exec(e.line))
+      .find(Boolean);
+    const did = await stayTogether(inviter, invitee, fromInviter, fromInvitee);
+    if (AFTER_LEAVE) {
+      if (LEAVER === "invitee") await afterFriendLeaves(inviter, invitee, code);
+      else await afterHostLeaves(inviter, invitee, code);
+      await sessionGate([inviter, invitee], marks, plugged ? Number(plugged[1]) : null, did);
+    }
+    return;
+  }
+  log(`RESULT: JOIN-FAILED ${name}: ${verdict}${rules ? ` | ${rules.line}` : ""} (${ms} ms after the join)`);
+  joinFailed = true;
+}
+let joinFailed = false;
+let homeFailed = false;
+let togetherFailed = false;
+let rearmFailed = false;
+
+// The friend leaves the friends' game (`leave`): the host, alone again, gets its queue's pick armed
+// again (RearmFriendsPick), and the friend goes home to a room of its own.
+async function afterFriendLeaves(host, friend, code) {
+  const fromHost = host.lines.length;
+  const fromFriend = friend.lines.length;
+  const sent = Date.now();
+  friend.send("leave");
+  await host.expect(/^orca state friend-left/, 30000, fromHost);
+  const rearm = await host.expect(/^orca menu online (ranked|casual)$/, 20000, fromHost).catch(() => null);
+  let home = null;
+  for (const end = Date.now() + 20000; Date.now() < end; await sleep(250)) {
+    const m = friend.mirror;
+    if (m && m.code && m.code !== code && m.me && m.host === m.me && (m.players || []).length) {
+      home = m.code;
+      break;
+    }
+  }
+  const noRoom = friend.lines.slice(fromFriend).find((l) => l && /^orca state no-room/.test(l));
+  const hostRoom = host.mirror && host.mirror.host === host.mirror.me ? host.mirror.code : null;
+  if (rearm)
+    log(`RESULT: REARMED ${host.name}: ${rearm.line} ${Date.now() - sent} ms after ${friend.name} left; still hosts ${hostRoom ?? "no room"} on ${host.scene}`);
+  else {
+    rearmFailed = true;
+    const lines = host.lines.slice(fromHost).filter((l) => l && /^orca (menu|state|queue)/.test(l));
+    log(`RESULT: NOT-REARMED ${host.name} after ${friend.name} left (scene ${host.scene}, room ${hostRoom ?? "none"}): ${lines.join(" | ")}`);
+  }
+  if (home && !noRoom) log(`RESULT: HOME ${friend.name} hosts its own room ${home} after leaving ${code}`);
+  else {
+    homeFailed = true;
+    log(`RESULT: NO-ROOM ${friend.name} after leaving ${code}: ${noRoom ?? "no room of its own in 20 s"}; scene ${friend.scene}`);
+  }
+}
+
+// Joined: --together ms in the new room (--fight: a game played there in that time), nobody gone.
+async function stayTogether(inviter, invitee, fromInviter, fromInvitee) {
+  const t0 = Date.now();
+  let did = `${Math.round(TOGETHER_MS / 1000)} s together`;
+  if (FIGHT) did = await friendsGame(inviter, invitee);
+  const rest = TOGETHER_MS - (Date.now() - t0);
+  if (rest > 0) await sleep(rest);
+  const gone =
+    inviter.lines.slice(fromInviter).find((l) => l && /^orca state friend-left/.test(l)) ||
+    invitee.lines.slice(fromInvitee).find((l) => l && /^orca (error|state (host-left|left|no-room))/.test(l));
+  if (gone) {
+    togetherFailed = true;
+    log(`RESULT: TOGETHER-FAILED apart before the inviter left: ${gone}`);
+  }
+  return `${did}, ${((Date.now() - t0) / 1000).toFixed(0)} s in all`;
+}
+
+// A game in the friends' room (page-e2e.mjs playGame): both pick, the inviter (port 1) starts and
+// takes a stage, port 2 walks off the stage until the results, both press on to the select. Port 2
+// (the friend, a fresh hand on its panel) picks as on a fresh select: A, up into the grid, A. Port
+// 1's hand is wherever its last pick left it (after a ranked set: the grid's top row, where up
+// reaches the BACK bar), so it first tries Start as it is, then A in place, and only on a fresh
+// select (its hand still on its panel) the same A, up, A.
+async function friendsGame(host, joiner) {
+  try {
+    await host.waitScene("scSelctCharacter", 15000);
+  } catch {
+    log(`friends game: ${host.name} is not on a character select (${host.scene}); no game`);
+    return `no game (${host.name} on ${host.scene})`;
+  }
+  await sleep(2500);
+  await joiner.press("A");
+  await sleep(600);
+  await joiner.hold([128, 255, 128, 128], 450);
+  await sleep(300);
+  await joiner.press("A");
+  await sleep(1500);
+  const leftCss = async (n) => {
+    for (let i = 0; i < n && host.scene === "scSelctCharacter"; ++i) {
+      await host.press("START");
+      await sleep(1200);
+    }
+    if (host.scene === "muMenuMain") fail(`friends game: ${host.name} went back to the main menu`);
+    return host.scene !== "scSelctCharacter";
+  };
+  let how = "Start as it was";
+  if (!(await leftCss(3))) {
+    how = "A in place, then Start";
+    await host.press("A");
+    await sleep(800);
+    if (!(await leftCss(3))) {
+      how = "A, up, A, then Start";
+      await host.press("A");
+      await sleep(600);
+      await host.hold([128, 255, 128, 128], 450);
+      await sleep(300);
+      await host.press("A");
+      await sleep(1500);
+      if (!(await leftCss(20))) fail(`friends game: ${host.name}'s Start never left the character select`);
+    }
+  }
+  log(`friends game: ${host.name} picked (${how})`);
+  log(`friends game: the character select went on (${host.scene})`);
+  await host.waitScene("scSelStage", 30000);
+  await sleep(1500);
+  await host.hold([128, 255, 128, 128], PPLUS ? 70 : 700);
+  await host.press("A");
+  for (let i = 0; i < 6 && host.scene === "scSelStage"; ++i) {
+    await sleep(1500);
+    await host.press("A");
+  }
+  await host.waitScene("scMelee", 30000);
+  const fightAt = Date.now();
+  log(`friends game: fighting`);
+  await sleep(6000);
+  joiner.pad.axes = [0, 128, 128, 128];
+  await host.waitScene("scVsResult", 300000).finally(() => (joiner.pad.axes = [128, 128, 128, 128]));
+  const fought = Math.round((Date.now() - fightAt) / 1000);
+  log(`friends game: results after ${fought} s of fight`);
+  await sleep(4000);
+  const presser = setInterval(() => {
+    if (host.scene !== "scVsResult") return;
+    host.press(Date.now() % 2 ? "A" : "START");
+    joiner.press("A");
+  }, 900);
+  try {
+    await host.waitScene("scSelctCharacter", 60000);
+  } finally {
+    clearInterval(presser);
+  }
+  await sleep(1500);
+  return `a game played (${fought} s of fight), back on the select`;
+}
+
+// After the inviter's leave: each side's session from the join on matched checksums over 15 s or
+// more of frames, and no desync in either log since the join.
+async function sessionGate(sides, marks, pluggedAt, did) {
+  for (const end = Date.now() + 20000; Date.now() < end; await sleep(250))
+    if (sides.every((s, i) => s.sessions.length > marks[i].sessions)) break;
+  const parts = [];
+  let bad = null;
+  sides.forEach((s, i) => {
+    const desync = s.desyncs.slice(marks[i].desyncs)[0];
+    const ended = s.sessions.slice(marks[i].sessions);
+    const last = ended[ended.length - 1];
+    if (desync) bad ??= `${s.name}: ${desync}`;
+    if (!last) {
+      bad ??= `${s.name}: no session end after the join`;
+      return;
+    }
+    const frames = pluggedAt === null ? null : last.frame - pluggedAt;
+    parts.push(`${s.name} ${last.checksums} checksums matched over ${frames ?? "?"} frames (${last.why}, ${last.rollbacks} rollbacks)`);
+    if (last.checksums <= 0) bad ??= `${s.name}: the session matched no checksums (${last.why})`;
+    if (frames === null) bad ??= `${s.name}: no plug-in frame in the invitee's log`;
+    else if (frames < 900) bad ??= `${s.name}: ${frames} frames together, under 15 s`;
+  });
+  if (bad) {
+    togetherFailed = true;
+    log(`RESULT: TOGETHER-FAILED ${bad}; ${parts.join("; ")}`);
+    return;
+  }
+  log(`RESULT: TOGETHER ${did}; ${parts.join("; ")}`);
+}
+
+// The friends' game after Play again: its host (the inviter) leaves, and the invitee, alone on port
+// 2 of the inviter's game, goes home on the menus to port 1 and a room of its own within 20 s, with
+// no `orca state no-room` on the way.
+async function afterHostLeaves(inviter, invitee, code) {
+  const from = invitee.lines.length;
+  const sent = Date.now();
+  inviter.send("leave");
+  await invitee.expect(/^orca state host-left/, 30000, from);
+  let home = null;
+  const end = Date.now() + 20000;
+  while (Date.now() < end) {
+    const m = invitee.mirror;
+    if (m && m.code && m.code !== code && m.me && m.host === m.me && (m.players || []).length) {
+      home = m.code;
+      break;
+    }
+    await sleep(250);
+  }
+  const noRoom = invitee.lines.slice(from).find((l) => l && /^orca state no-room/.test(l));
+  if (home && !noRoom) {
+    log(`RESULT: HOME ${invitee.name} hosts its own room ${home} ${Date.now() - sent} ms after ${inviter.name} left`);
+    return;
+  }
+  homeFailed = true;
+  log(`RESULT: NO-ROOM ${invitee.name} after ${inviter.name} left: ${noRoom ?? "no room of its own in 20 s"}; scene ${invitee.scene}`);
+}
+
+// --scenario cssjoin (--q2): the shortest path to where a ranked set leaves the inviter: on the
+// queue's own character select (With Anyone > Ranked or Casual, not searching), hosting its own
+// private room. ada invites, bo (on its main menu) accepts. --where ranked|casual (the queue's own
+// character select), menu (ada stays on the main menu: the control).
+async function cssJoin(a, b) {
+  const where = opt("--where", "ranked");
+  const mash = (side) =>
+    setInterval(() => {
+      if (["", "scStrap", "scBoot", "scTitle"].includes(side.scene)) side.press("A");
+    }, 700);
+  const mb = mash(b);
+  if (where === "menu") {
+    const ma = mash(a);
+    await a.waitScene("muMenuMain", 120000);
+    clearInterval(ma);
+  } else {
+    const from = a.lines.length;
+    await menuToQueue(a, where);
+    const menu = await a.expect(/^orca menu online (casual|ranked)( local)?$/, 60000, from);
+    if (menu.m[1] !== where) fail(`${a.name}: picked ${menu.m[1]}, wanted ${where}`);
+    await a.waitScene("scSelctCharacter", 60000);
+  }
+  await b.waitScene("muMenuMain", 120000);
+  clearInterval(mb);
+  await sleep(4000);
+  log(`${a.name} on ${where === "menu" ? "the main menu" : `the ${where} queue's own character select (not searching)`}`);
+  return inviteAndJoin(a, b, null, `cssjoin ${where} (inviter ${a.name}, invitee ${b.name})`);
 }
 
 // Back out of the character select to the With Anyone page (the cursor comes back on the pick),
@@ -1567,6 +2046,8 @@ if (SHOTS_OUT) {
   }
   log(`screenshots in ${SHOTS_OUT}`);
 }
-if (!KEEP && code === 0) fs.rmSync(WORK, { recursive: true, force: true });
+if (!KEEP && code === 0 && !joinFailed && !homeFailed && !togetherFailed && !rearmFailed) fs.rmSync(WORK, { recursive: true, force: true });
 else log(`logs in ${WORK}`);
-process.exit(code);
+process.exit(
+  code !== 0 ? code : joinFailed ? 3 : homeFailed ? 4 : togetherFailed ? 5 : rearmFailed ? 6 : 0,
+);
