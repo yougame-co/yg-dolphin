@@ -141,7 +141,8 @@ void ReadOwnControlsFrame(const Core::CPUThreadGuard& guard,
                           const std::vector<Events::PortInfo>& ports);
 
 // The controls this player starts with, at boot: ORCA_CONTROLS=<hex> from the app, else the ones
-// kept from an earlier run of this game. Unset or invalid leaves none (the game's defaults).
+// kept from an earlier run of this game (printed as "orca controls <hex>" for the page). Unset or
+// invalid leaves none (the game's defaults).
 void LoadOwnControls();
 // "controls <hex>" from the app: the player changed them on the page. Returns false if invalid.
 bool SetOwnControlsFromApp(std::string_view hex);
