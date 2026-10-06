@@ -133,6 +133,16 @@ a missing file prints `orca error disc_missing <path>`, an unreadable one `orca 
 disc_unreadable <path>`, and Orca exits 1 within a second. Orca's alert handler is registered before
 the boot file is read, so no hidden message box can block a run.
 
+`Orca --verify <disc> [-u <user>]` checks a disc image and exits, without booting, a window, a
+session or the app's bridge (`Orca/DiscVerify.h`). It runs Dolphin's integrity check (the Wii hash
+tree; no Redump lookup, no whole-disc hashes) and prints `orca verify progress <done> <total>` in
+bytes at most once a second, one `orca verify problem <low|medium|high> <text>` per problem, then
+`orca verify ok` (exit 0) or `orca verify damaged <n>` for n Medium or High problems (exit 2). A
+file that isn't a disc image prints `orca verify unreadable <path>` (exit 1). The signature checks
+use a temporary NAND, never the player's. A GameCube disc has no hash tree, so only its structure is
+checked. A good scrubbed Brawl Rev 2 `.wbfs` reports 9 Low problems: no update partition, no stored
+image size, and errors in unused blocks (8088 in DATA, 1 in each Masterpiece partition).
+
 Sessions start from an empty NAND (save hash 0); the game makes its save in-session on both
 machines. A session with no `Config/GCPadNew.ini` gets `Sys/Orca/Input/GCPadNew.ini`: port 1 on the
 keyboard and the first SDL gamepad of any model.
