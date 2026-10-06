@@ -4903,8 +4903,13 @@ and the page button are masked, so the screen never recovers: the timer's A went
 Repro: `ORCA_UX_PROBE` writing `80002810 = 1` on the character select, `pplus-ranked.txt`: blank
 strike screen (shot identical to the report), then `scSelStage -> muMenuMain` (My Music) at the
 auto-pick. Fix: `RankedPPlus::ClearStaleMusicSelect`, every Project+ session, on the character
-select (My Music's real round trip never passes there). After: the set completes 2-0;
-`YG_SYNCTEST=7` over it, 0 RAM mismatches. The triage's other lead, `CURRENT_PAGE` (`0x80496000`)
+select (My Music's real round trip never passes there). After: the set completes 2-0, and the plain
+Versus stage select (no flow) that was blank the same way shows its tiles. Synctest: a probe write
+on the character select never lands under `YG_SYNCTEST` (each rewind re-enters the scene, so the
+`:1` visit's frame never comes), so write it on the main menu before `YG_SYNCTEST_FROM`
+(`@muMenuMain:1 60 write 80002810 00000001`, `YG_SYNCTEST_FROM=280`): every re-run of the
+character select's first frame clears it again, 81,991 re-run frames, 0 RAM mismatches, set 2-0.
+The triage's other lead, `CURRENT_PAGE` (`0x80496000`)
 left at 1, does not reproduce: Project+ resets it to 0 as the stage select opens (probe watch), and
 the strike screen shows its tiles.
 
