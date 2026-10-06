@@ -20,6 +20,12 @@ std::atomic<bool>& OnFlag()
   return on;
 }
 
+// The mixer is given the game's (cached) address and the AI DMA the physical one.
+constexpr u32 Physical(u32 address)
+{
+  return address & 0x1FFFFFFF;
+}
+
 void PutBE16(u8* out, s32 value)
 {
   const s16 sample = static_cast<s16>(std::clamp<s32>(value, -32768, 32767));
@@ -61,7 +67,7 @@ void Shadow::Put(u32 address, const Frame& written, const Frame& quiet)
 {
   Entry& e = m_entries[m_next];
   m_next = (m_next + 1) % KEPT;
-  e.address = address;
+  e.address = Physical(address);
   e.used = true;
   e.written = written;
   e.quiet = quiet;
@@ -75,6 +81,7 @@ const u8* Shadow::Find(u32 address, const u8* ram)
     NOTICE_LOG_FMT(ROLLBACK, "Music: off, {} of {} AI blocks played without it", m_quiet_reads,
                    m_reads);
   }
+  address = Physical(address);
   // Newest first: after a rollback re-run the same buffer holds the re-run's frame.
   for (std::size_t n = 1; n <= KEPT; ++n)
   {

@@ -153,6 +153,22 @@ TEST(OrcaMusic, TheDmaPlaysTheQuietFrameOnlyWhileRamHoldsWhatTheMixerWrote)
   EXPECT_EQ(shadow.Find(at, &written[0]), nullptr);
 }
 
+TEST(OrcaMusic, TheMixersAddressAndTheDmasAreTheSameFrame)
+{
+  // Brawl: AX writes its output at 0x804E84C0 (cached), the AI DMA reads 0x004E84C0 (physical).
+  Shadow shadow;
+  const Frame written = Filled(7), quiet = Filled(8);
+  shadow.Put(0x804E84C0, written, quiet);
+  const u8* got = shadow.Find(0x004E84C0 + 64, &written[64]);
+  ASSERT_NE(got, nullptr);
+  EXPECT_EQ(got[0], 8);
+  // MEM2 and uncached forms too.
+  shadow.Put(0x90001000, written, quiet);
+  EXPECT_NE(shadow.Find(0x10001000, &written[0]), nullptr);
+  shadow.Put(0xC0002000, written, quiet);
+  EXPECT_NE(shadow.Find(0x00002000, &written[0]), nullptr);
+}
+
 TEST(OrcaMusic, ARerunFrameReplacesTheFirstAndAnOlderOneStillMatchesAfterALoad)
 {
   Shadow shadow;

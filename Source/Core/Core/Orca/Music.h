@@ -9,16 +9,12 @@
 
 #include "Common/CommonTypes.h"
 
-// The player's Music switch (stdin "music on|off", cap "music"). Host only: with the music off, what
-// this machine plays leaves out the game's streamed music, and nothing the game sees changes.
+// The player's Music switch (stdin "music on|off", cap "music"). Host only: with it off this machine
+// plays the mix without the game's music, and nothing the game sees changes.
 //
-// The DSP (AX HLE) mixes every voice into one buffer per 3 ms frame and writes it to RAM, where the
-// AI DMA reads it for the speakers. Brawl and Project+ play their music as stream voices (an AX
-// parameter block with type 1, which no sound effect uses) and their effects as ordinary voices.
-// The mix written to RAM stays exactly as it was; the mixer also keeps the music voices' share of the
-// main bus, and the AI DMA plays the mix without it in place of the RAM bytes, while those bytes are
-// still the ones the mixer wrote. RAM, DSP state and timing are the same with the switch on or off,
-// so it can't desync. See ORCA.md, "Music switch".
+// Brawl and Project+ play their music on stream voices (AX type 1), their effects on normal ones.
+// AX HLE writes the full mix to RAM as always and keeps a second mix without the stream voices;
+// the AI DMA plays that one while RAM still holds what the mixer wrote. See ORCA.md "Music switch".
 namespace Orca::Music
 {
 // AX Wii mixes 96 samples (3 ms at 32 kHz) per frame and writes them as big-endian s16 pairs,
