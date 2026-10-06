@@ -27,6 +27,7 @@
 //
 //   node Tools/orca/queue-e2e.mjs <dolphin-emu-nogui> <disc> [--pplus <launcher.dol>]
 //       [--queue ranked|casual] [--games <n>] [--site <url>] [--keep] [--alarm <s>]
+//       [--probe <file>]
 //       [--slug <listing> --cookie-a <file> --cookie-b <file> --id-a <id> --id-b <id>]
 //
 // Without --slug: dev tickets (an anonymous dev game, nothing recorded, keyframes in a local folder).
@@ -81,6 +82,14 @@ const Q2 = argv.includes("--q2");
 // --pick random (--q2): both pick the RANDOM tile (ORCA.md "The queue's character select"); the
 // verdicts' resolved characters must match on both sides.
 const PICK = opt("--pick", "character");
+// --probe <file> (dev tickets only): both Orcas run that ORCA_UX_PROBE file (Orca/UX/Probe.cpp, a
+// research knob), so its writes land in each player's own game before any session; for example a
+// Project+ record with CPUs written at the main menu (ORCA.md "No CPUs online").
+const PROBE = opt("--probe");
+if (PROBE && SLUG) {
+  console.error("--probe is for dev tickets only");
+  process.exit(2);
+}
 // Random's character id (Selch_Random), and how many frames of full tilt up, then right, take the
 // hand from panel 1 onto the RANDOM tile in each game.
 const RANDOM_CHAR = 41;
@@ -317,6 +326,10 @@ class Side {
       if (k.startsWith("ORCA_TEST_") && !(k in env)) env[k] = v;
     }
     if (PPLUS) env.ORCA_PROFILE = "PPLUS32";
+    if (PROBE) {
+      env.ORCA_UX_PROBE = path.resolve(PROBE);
+      env.ORCA_TEST_DEV_GAME = DEV_GAME;
+    }
     const shots = SHOTS && SHOTS_WHO.includes(this.name);
     if (shots)
       Object.assign(env, {
