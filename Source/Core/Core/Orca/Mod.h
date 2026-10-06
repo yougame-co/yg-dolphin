@@ -32,7 +32,7 @@ namespace Orca::Mod
 // The script API version this engine implements; mod.json's engine.api must not be above it.
 inline constexpr int ENGINE_API = 1;
 // The SD image builder's version, in the cached image's name and the key (through the image hash).
-inline constexpr std::string_view SD_BUILDER = "fat1";
+inline constexpr std::string_view SD_BUILDER = "fat2";
 // An SD card is SDSC: at most 2 GiB (above, Dolphin presents SDHC, which needs the game's IOS to
 // support SDv2, and the card's size reaches emulated memory through the CSD). Its size is whole
 // 32 KiB clusters (FatFsUtil's largest cluster).

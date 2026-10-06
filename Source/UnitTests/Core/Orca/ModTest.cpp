@@ -565,6 +565,15 @@ TEST(OrcaMod, SdImageIsDeterministic)
     EXPECT_EQ(static_cast<u8>(boot[13]), 4);   // sectors per cluster
     EXPECT_EQ(static_cast<u8>(boot[16]), 2);   // FATs
   }
+  // Each folder's files, then its folders, by upper-cased name: z.txt before Project+ at the root.
+  {
+    std::string image;
+    ASSERT_TRUE(File::ReadFileToString(dir + "g1.raw", image));
+    const size_t z = image.find("Z       TXT"), project = image.find("PROJEC~1   ");
+    ASSERT_NE(z, std::string::npos);
+    ASSERT_NE(project, std::string::npos);
+    EXPECT_LT(z, project);
+  }
   EXPECT_FALSE(Orca::Mod::BuildSdImage(files, GEOMETRY_BYTES, dir + "g3.raw", &error, 3000, 1));
   EXPECT_FALSE(Orca::Mod::BuildSdImage(files, BYTES, dir + "g4.raw", &error, 2048, 2));
   // A source whose size changed is refused.

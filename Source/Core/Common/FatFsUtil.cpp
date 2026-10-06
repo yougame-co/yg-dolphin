@@ -10,6 +10,7 @@
 #include <mutex>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <vector>
 
 #include <fmt/format.h>
@@ -487,6 +488,27 @@ static void SortFST(File::FSTEntry* root)
     SortFST(&child);
 }
 
+// Orca mods' order: in each folder its files, then its folders, each by name with ASCII letters
+// upper-cased (then as bytes, for names that differ only in case), as Project+'s official SD image
+// lays most of its folders out (195 of 204), so a card built from the same files reads the same way.
+static void SortFSTFilesFirst(File::FSTEntry* root)
+{
+  const auto key = [](const File::FSTEntry& e) {
+    std::string upper = e.virtualName;
+    for (char& c : upper)
+    {
+      if (c >= 'a' && c <= 'z')
+        c = static_cast<char>(c - 'a' + 'A');
+    }
+    return std::tuple(e.isDirectory, std::move(upper), e.virtualName);
+  };
+  std::ranges::sort(root->children, [&key](const File::FSTEntry& a, const File::FSTEntry& b) {
+    return key(a) < key(b);
+  });
+  for (auto& child : root->children)
+    SortFSTFilesFirst(&child);
+}
+
 // A new FAT32 image of `size` bytes at `image_path` (written to a temporary file and renamed into
 // place) holding `root`'s tree.
 static bool WriteImage(const std::function<bool()>& cancelled, const File::FSTEntry& root, u64 size,
@@ -676,7 +698,7 @@ bool BuildSDImageFromFiles(std::span<const SDImageFile> files, u64 size,
     leaf.size = file.size;
     dir->children.push_back(std::move(leaf));
   }
-  SortFST(&root);
+  SortFSTFilesFirst(&root);
   if (!CheckIfFATCompatible(root))
   {
     *error = "the files don't fit FAT (a name over 255 characters, a file of 4 GiB or more, or a "
