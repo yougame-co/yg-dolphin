@@ -468,12 +468,12 @@ void AXWiiUCode::ProcessPBList(u32 pb_addr)
 
     // A music voice mixes as any other; its share of the main bus is what it added there.
     const bool music = m_music_split && pb.running == 1 && Orca::Music::IsMusicVoice(pb.is_stream);
+    // The main buffers are sized for AX GC's 5 ms; a Wii frame uses the first 3 ms.
     std::array<int, 32 * 3> left_before, right_before;
     if (music)
     {
-      std::copy(std::begin(m_samples_main_left), std::end(m_samples_main_left), left_before.begin());
-      std::copy(std::begin(m_samples_main_right), std::end(m_samples_main_right),
-                right_before.begin());
+      std::copy_n(m_samples_main_left, left_before.size(), left_before.begin());
+      std::copy_n(m_samples_main_right, right_before.size(), right_before.begin());
     }
 
     if (m_old_axwii &&
