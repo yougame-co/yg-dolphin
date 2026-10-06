@@ -610,7 +610,7 @@ void DrawStageCursors(ImDrawList* dl, const StageCursors::View& v, ImVec2 pic, I
     if (cue.mode == StageCursors::TurnCue::Mode::Waiting)
     {
       Kit::TurnTag(dl, at16(p.x, p.y), radius, unit, cue.title, {}, Kit::Tone::Grey, -1, now_s,
-                   port == 0, clamp_min, clamp_max, 0, 2.6f);
+                   port == 0, clamp_min, clamp_max, 0, 2.6f, true);
       continue;
     }
     const Kit::Blink blink = Kit::Attention(now_s, s_since[port]);

@@ -414,6 +414,10 @@ TEST(OrcaKitDraw, DesignFPieces)
                                         Kit::PortTone(1), -1, 3.4, false, lo, hi);
       EXPECT_GT(low.min.y, 5);
       EXPECT_GE(low.min.x, 0);
+      // A waiting player's tab goes under its cursor.
+      const Kit::Box under = Kit::TurnTag(dl, mid, 3 * u, u, "WAITING FOR BO", {},
+                                          Kit::Tone::Grey, -1, 3.4, true, lo, hi, 0, 2.6f, true);
+      EXPECT_GT(under.min.y, mid.y);
       Kit::PortraitFrame(dl, ImVec2(10, 10), ImVec2(10 + 28 * u, 10 + 22 * u), u, Kit::Tone::Gold);
       Kit::PortraitFrame(dl, ImVec2(10, 10), ImVec2(10 + 28 * u, 10 + 22 * u), u, Kit::Tone::Red);
       // A ribbon narrower than its words still draws them (shrunk), the ribbon as asked.

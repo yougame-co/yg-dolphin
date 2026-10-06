@@ -1001,7 +1001,7 @@ void Pointer(ImDrawList* dl, ImVec2 c, float radius, float unit, int port, std::
 
 Box TurnTag(ImDrawList* dl, ImVec2 at, float radius, float unit, std::string_view title,
             std::string_view detail, Tone tone, int seconds, double now_s, bool lean_left,
-            ImVec2 clamp_min, ImVec2 clamp_max, float rim, float size)
+            ImVec2 clamp_min, ImVec2 clamp_max, float rim, float size, bool below)
 {
   const Paint p = PaintOf(tone);
   const TextLook head = BadgeLook(unit, size, p);
@@ -1025,9 +1025,10 @@ Box TurnTag(ImDrawList* dl, ImVec2 at, float radius, float unit, std::string_vie
   // Above the cursor (and its blink's ring), leaning to its side; below it, clear of its name
   // tab, when the top is too near.
   float x = lean_left ? at.x + 0.6f * radius - total_w : at.x - 0.6f * radius;
-  float y = at.y - radius * 1.75f - total_h;
-  if (y < clamp_min.y)
-    y = at.y + radius * 0.55f + 3.6f * unit;
+  const float above = at.y - radius * 1.75f - total_h;
+  const float under = at.y + radius * 0.55f + 3.6f * unit;
+  float y = below ? (under + total_h > clamp_max.y ? above : under) :
+                    (above < clamp_min.y ? under : above);
   x = std::clamp(x, clamp_min.x, std::max(clamp_min.x, clamp_max.x - total_w));
   y = std::clamp(y, clamp_min.y, std::max(clamp_min.y, clamp_max.y - total_h));
   const ImVec2 min(x, y + (total_h - h) / 2), max(x + w, y + (total_h - h) / 2 + h);

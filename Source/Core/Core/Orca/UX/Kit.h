@@ -190,10 +190,13 @@ void Pointer(ImDrawList* dl, ImVec2 at, float radius, float unit, int port, std:
 // `detail` in the body face (when not empty) on a pill in `tone`, the turn's timer (Timer) at its
 // end when `seconds` >= 0. It sits above the cursor (below it, clear of its tab, near the top),
 // leaning left (`lean_left`) or right, kept inside [clamp_min, clamp_max]. `rim` 0..1 lights a
-// white rim round the pill (the local player's own turn, on the blink). Returns the pill.
+// white rim round the pill (the local player's own turn, on the blink). `below`: under the cursor
+// first (a waiting player's tab, clear of the acting player's tag when the cursors meet). Returns
+// the pill.
 Box TurnTag(ImDrawList* dl, ImVec2 at, float radius, float unit, std::string_view title,
             std::string_view detail, Tone tone, int seconds, double now_s, bool lean_left,
-            ImVec2 clamp_min, ImVec2 clamp_max, float rim = 0, float size = 3.4f);
+            ImVec2 clamp_min, ImVec2 clamp_max, float rim = 0, float size = 3.4f,
+            bool below = false);
 // The turn's pulse at `now_s` (ImGui's clock), one beat a second: `swell` 0..1..0 on a cosine,
 // `ripple` 0..1 through the beat (the ring's way out).
 struct Beat
