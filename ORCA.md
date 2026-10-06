@@ -418,13 +418,16 @@ game's own menus could have set them, at their exact size (64 bytes at most on t
 - Orca asks for 4-seat private rooms with a game-owned lobby. Seats are lobby slots. A hello carries
   the compatibility key and whether the sender is the host. The host must hold slot 0; one that
   finds itself elsewhere opens a fresh room.
+- The room's ticket (`mpTicket`, minted by the page) waits up to 30 s for a reply and is asked for
+  once more if none came; then the room ends with `network`.
 - A joiner that hears no host hello within 8 s of its welcome ends with `peer_left`.
 - The server answers a ping every second; 8 s without any message ends the room as a dropped
   connection (close code 4001), so the server holds the seat for 90 s. Not much less than 8 s: a
   keyframe upload can fill a home uplink and delay the pings.
 - A host whose room ends without it leaving prints `orca error network <why>` and reopens, backing
   off from 2 s to 30 s, trying the same code first. A socket the server replaced (close code 4000:
-  another run on the same account) is never taken back.
+  another run on the same account) is never taken back. During the player's pause the host loop
+  does the same every 2 s on the CPU thread (`WatchRoomWhilePaused`), so a paused game keeps a room.
 - A host that leaves always opens a new room. A player on a port other than 1 after a session (it
   joined someone and went solo) goes home ([Going home](#going-home)).
 - A rollback the joiner can't make (an engine fault, not a desync) ends its session as `network`.
@@ -483,13 +486,18 @@ refuses dev tickets.
 
 - `https://yougame.co/api/orca/keyframes/<room>/<id>`, `id` = `kf-<frame>-<8 hex of XXH3-64>`.
   Auth: `Authorization: Ticket <ticket>` with the room's ticket (accepted up to 6 h past expiry; on
-  401 `ticket` Orca mints a fresh one once).
+  401 `ticket` or 403 `signed_out` Orca mints a fresh one once).
 - **PUT** with `Content-Length` (at most 128 MB), `X-Orca-Frame`, `X-Orca-Hash`. 409 `exists` counts
   as done. 6 PUTs a minute per account.
 - **GET** streams with `Content-Length` (for join progress); Orca checks size and hash, then
   decrypts. 404 `gone` means expired.
 - **DELETE** by the joiner after loading, best effort; by the host when replacing or leaving.
-- Network errors, 429 and 5xx retry 4 times with 0.5/1/2 s backoff; anything else is final.
+- Network errors, 429 and 5xx retry 4 times with 0.5/1/2 s backoff; anything else is final. A host
+  whose keyframe is refused for good (a refusal with YouGame's code; a bare 4xx from the edge only
+  fails that keyframe) makes no more for the friends waiting: it drops them with
+  `signed_out` (YouGame's code) or `refused`, prints `orca state friend-left <that>`, and each of
+  them ends with `orca error signed_out` or `network`. A joiner whose own download is refused with
+  `signed_out` reports that code too.
 
 ### Room messages
 
@@ -1305,7 +1313,10 @@ the match's stage).
 **Project+** (`Orca/UX/RankedPPlus.*`): outside the stage select, `RSS_EXDATA` (`0x8042C4E8`) holds
 the 2024 Proposed preset. On the stage select the hook writes Project+'s own Stage Striking table
 (`0x8042C822`) as the block calls for, and sets `PAGE_INDEX` to `0xFF` so Project+ redraws the struck
-art; Project+'s own check then refuses a struck stage.
+art; Project+'s own check then refuses a struck stage. In every Project+ session the character
+select clears a My Music step (`0x80002810`, Project+'s `MusicSelect.asm`) left from an earlier stage
+select: step 1 hid every tile and turned the timer's pick into My Music, a softlock. The log says
+`cleared a leftover My Music step` when it does.
 
 ### Casual stage pick
 

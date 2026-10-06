@@ -5137,6 +5137,53 @@ pass Rev 2's hash for this dump, or Rev 1 and Rev 2 players get different keys.
   the external drive's APFS image logged one 81 s transaction stall (`disk11 ... took 81193606 us to
   close`) over the same minute both Orcas dropped to about 2 fps.
 
+## Launch-night fixes (w2-fixes, 2026-10-06)
+
+**Blank stage select (ranked and casual Project+, and With Friends).** The X screenshot (strike
+screen, "X strikes a stage", no tiles, only RANDOM) is Project+'s My Music step 1 (`0x80002810`,
+`Source/Community/MusicSelect.asm`): `HOOK @ $806b10d0` skips `dispPage` while the step is 1, so the
+stage select builds no tiles and no page button, and the transition hook turns the next pick into a
+trip to My Music. Y on a stage sets it; the main menu's cleanup (`HOOK @ $806dce4c`) skips step 1
+on purpose, and only a page change clears it, so a step set without the trip happening (Y on a tile
+the pick then refuses, a scene change mid-way) stays for every later stage select. In the flows Y
+and the page button are masked, so the screen never recovers: the timer's A went to My Music.
+Repro: `ORCA_UX_PROBE` writing `80002810 = 1` on the character select, `pplus-ranked.txt`: blank
+strike screen (shot identical to the report), then `scSelStage -> muMenuMain` (My Music) at the
+auto-pick. Fix: `RankedPPlus::ClearStaleMusicSelect`, every Project+ session, on the character
+select (My Music's real round trip never passes there). After: the set completes 2-0, and the plain
+Versus stage select (no flow) that was blank the same way shows its tiles. Synctest: a probe write
+on the character select never lands under `YG_SYNCTEST` (each rewind re-enters the scene, so the
+`:1` visit's frame never comes), so write it on the main menu before `YG_SYNCTEST_FROM`
+(`@muMenuMain:1 60 write 80002810 00000001`, `YG_SYNCTEST_FROM=280`): every re-run of the
+character select's first frame clears it again, 81,991 re-run frames, 0 RAM mismatches, set 2-0.
+The triage's other lead, `CURRENT_PAGE` (`0x80496000`)
+left at 1, does not reproduce: Project+ resets it to 0 as the stage select opens (probe watch), and
+the strike screen shows its tiles.
+
+**Room ticket.** `HttpRequest(10 s)` gave up at about 10-15 s while the page took 12-60 s during the
+outage; 30 s and one retry when no reply came. `fake_bridge.py FAKE_TICKET_DROP_FIRST=1` proves the
+retry (`OrcaLive.BridgeMirrorsTheRoomAndTakesLeave` gets its room after the dropped request; the
+test's last check, the joiner leaving after the host, fails the same with or without the drop: the
+rooms Worker now keeps the joiner).
+
+**Keyframe refusals.** A final 4xx from the store (`LastRefusal`) used to make the host pack and
+upload a 22-27 MB keyframe every ~3.5 s while a friend waited (1,250 refused uploads on launch
+night). Now the waiting friend is dropped with `signed_out` or `refused` at once. 403 `signed_out`
+first retries with a fresh ticket. `Tools/orca/dropin-refused.py` (dev tickets, which the store
+refuses with 403 `dev_ticket`): PASS, the friend hears `orca error network` 2 s after joining (it
+used to wait out its 90 s join limit), and the host made one keyframe. Only refusals with YouGame's
+`code` count: a bare 4xx (an edge page, a 408) fails that keyframe and the friend gets another, as
+before.
+
+**Logs.** `orca queue unready` now logs why (B, the token picked up, A on Back, cleared after the
+room); the compatibility key logs its inputs when they change, so a player alone in a queue shows
+which input split them (FMA, files, settings).
+
+**Paused room.** `Platform::WatchRoomWhilePaused` runs `KeepRoomOpen` on the CPU thread every 2 s
+during the player's pause (`Core::RunOnCPUThread`), so an edge close while paused reopens the room
+instead of leaving it dead until the player unpauses. `Tools/orca/pause-room.py`: PASS, paused,
+`test-drop-room`, `orca error network` 1 s later, the room open again 10 s later, never running.
+
 ## Code comments from 0.3.27, as written
 
 Merging rel-0.3.27 (`34897a118b`) into the cleaned main shortened its new code comments to main's
