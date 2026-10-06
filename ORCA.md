@@ -440,6 +440,30 @@ and only this game changes; the next friend's keyframe carries it.
 Harness knob: `ORCA_UX_TEST_RESEAT_AT=<frame>`: the player plays port 2 until that frame and port 1
 from it, as a guest going home does, for synctests of the move (`Tools/orca/inputs/bf-reseat.txt`).
 
+### Play again after a ranked set
+
+After a set both games are back on their own Ranked character select, each hosting a friends room.
+The page's Play again invites the opponent (`prepare-join` to the inviter, `join <code>` to the
+invitee). Through 0.3.27 that join failed: the inviter's game still carried the queue select's header,
+its keyframe carried it, and the friend refused it (`orca error mismatch`). The same happened to any
+invite from a With Anyone character select. Now the newest intent wins
+(`OnlineMatch.cpp` `EndQueueForFriend`, `EndQueueForJoin`, `RearmFriendsPick`):
+
+- **The host** (port 1, not joining, its room's welcome said `private`): a friend arriving, or a
+  `prepare-join`, while the player is on the queue (its own select, or searching) ends the queue and
+  the search and prints `orca menu cancel`. The header goes back to none at the next boundary, a
+  keyframe made under the old one is dropped, and the friend's keyframe has none. Never in a matched
+  room, nor before a room's welcome.
+- **Once the friends are gone** (one came in, all left, and the host is alone again on that pick's
+  character select), the pick is armed again if the page can search it (`orca menu online ranked`),
+  so Start searches. Never for an invite nobody took yet.
+- **The friend** whose keyframe loads into a friends room ends its own queue the same way and drops
+  the game it kept for after a queue room, which would otherwise block going home. A join that fails
+  before the keyframe loads keeps all of it.
+
+Local: only the host's own solo boundaries and process state change; nothing a session runs on two
+machines, so no compatibility change. Tests: `OrcaOnlineMenuLobby.*` (the three play-again tests).
+
 ### Keyframe store
 
 `HttpKeyframeStore` in `Orca/Session/Keyframe.cpp`. Tests use `ORCA_TEST_KEYFRAME_DIR`: the store
@@ -929,7 +953,7 @@ server is ever asked for anything; nothing about connecting looks like Nintendo'
 | `orca menu online casual kept` / `ranked kept` | The same with friends in a host's game, kept because the app can't search that queue now: nothing armed, never a search. Printed again unmarked once the friends are gone. |
 | `orca menu online casual local` / `ranked local` | The same without `host`: nothing searches. |
 | `orca menu online friends` | With Friends. |
-| `orca menu cancel` | The player backed out of searching, alone. Once. |
+| `orca menu cancel` | The player backed out of searching, alone. Once. Also when a friend on the way, or a friends room joined, ends the queue ([Play again](#play-again-after-a-ranked-set)). |
 
 ### Casual or Ranked with friends in the game
 
@@ -960,7 +984,8 @@ it at the same frame and goes to the same Versus character select.
   the whole answer (`Status::SetAppCaps`).
 - **Nobody to leave by now** (the app's own leave went first, the last friend has gone, or only a
   keyframe is kept for an invite): the pick is announced in place with no `left lobby`, and a kept
-  keyframe is dropped (never while a session still runs).
+  keyframe is dropped (never while a session still runs). A friend who comes later ends that queue
+  first ([Play again](#play-again-after-a-ranked-set)).
 - Without the app's `host` nothing would search, so the friends' game stays theirs and nothing is
   printed. A queue room's menus are locked.
 - A pick seen at a boundary the commands can't take (mid re-run) waits for the next while it still

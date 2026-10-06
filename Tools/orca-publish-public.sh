@@ -19,7 +19,8 @@ PUBLIC_URL=${ORCA_PUBLIC_URL:-https://github.com/Lrosias/orca-netplay.git}
 # Never published: private notes, this script, and test tools that drive YouGame's own site, app or
 # test accounts rather than Orca.
 EXCLUDE=(Tools/orca-publish-public.sh ORCA_NOTES.md Tools/orca/xplat.py Tools/orca/page-e2e.mjs
-  Tools/orca/queue-e2e.mjs Tools/orca/controller-latency.mjs Tools/orca/selfmatch.mjs)
+  Tools/orca/queue-e2e.mjs Tools/orca/controller-latency.mjs Tools/orca/selfmatch.mjs
+  Tools/orca/play-again-matrix.sh Tools/orca/play-again-run-two.sh)
 # Case-insensitive. Real names, handles, personal paths and home-network details.
 DENY='\bluis\b|rosias|(^|[^q])hbox|hungry ?box|\bcherl\b|\bcrunch|gmail\.com|/Users/|C:\\\\Users|~/Documents|\$HOME/Documents|brawl-dolphin/|xfinity|comcast'
 
