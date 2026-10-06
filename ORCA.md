@@ -246,7 +246,7 @@ bundle laid out as a run folder instead of `Data/Sys/Orca/<profile>.*`, chosen o
   there at its size; `mod.json`, the launcher and `orca/patches/*` also at their sha256.
 - **The SD card** is built from exactly the tree's `sd/` files (`Common::BuildSDImageFromFiles`:
   FatFsUtil's FAT32 format, the tree sorted, FAT times zero) at `sd.bytes` (a multiple of 32 KiB, 64
-  MiB to 2 GiB, so SDSC), into `ORCA_SD_CACHE/<sdTreeHash>-fat1.raw` (sha256 of `bytes=<n>` and the
+  MiB to 2 GiB, so SDSC), into `ORCA_SD_CACHE/<sdTreeHash>-fat2.raw` (sha256 of `bytes=<n> cluster=<c> fats=<f>` and the
   `sd/` lines) under a temporary name, then renamed, with its XXH3-128 in a `.xxh3` note. It is
   reused while it hashes as its note says (a damaged one is rebuilt), the newest two are kept, and
   it is mounted exactly like a legacy `sd.raw` (read-only, writes and folder sync forced off). Its
@@ -308,10 +308,40 @@ ORCA_SESSION=1 ORCA_MOD_DIR=<run folder> ORCA_SD_CACHE=<cache> [ORCA_DISC_SHA1=<
 - Drop-in: NAND at `bootNandFrame` the same with and without input, from the bundles (Brawl 1800: 35
   files; Project+ 600: 33).
 
-Open: Mac <-> PC (a PC builds its own card: it must hash `16abfce0…`); caps print before Project+'s
-guards are checked (a guard failure after that leaves the cap offered and the module silent); a P+
-fork whose codeset moves the stage select routines loses `brawl-rev2-pplus` until phase 3's labels;
-duplicate JSON keys are last-wins (as in JavaScript; the site refuses them).
+**Follow-ups, 2026-10-05** (`mods-p1` 1c663bc7f4):
+- **Caps wait for the guards.** In mod mode "ready" and the `orca caps` line before it wait until
+  the builtin's guards are decided (held, or failed by `firstKeyframeFrame`; at most 20 s, then the
+  line goes out without them), so a builtin cap is never offered before its guards hold; Project+'s
+  "ready" moves from the launcher's first frame to the game's frame 2. A failure after they held
+  withdraws them with a second `orca caps` line: the app already takes a later line as the new offer
+  (desktop `orca.ts` recomputes offered and agreed; the page answers it again), so no app change.
+  What is on follows each offer at once (`Status::UpdateCaps`). Legacy never waits.
+  `OrcaMod.ModeGates`, `OrcaMod.CapsWaitForTheGuards`. Checked headless: the one `orca caps` line
+  of both bundles and of legacy Project+ is `… results locks queue2`.
+- **SD geometry.** `sd.clusterBytes` and `sd.fats` pin the card's FAT32 geometry; make-bundle.py gives
+  Project+ its official image's (boot sector: 2 KiB clusters, two FATs, 32 reserved sectors), and the
+  builder (`fat2`) lays each folder out files first, by upper-cased name, as the official image does
+  195 of its 204 folders. Card `0615853dd38b01c51a3608d0199fa966` (tree `830384ca…34af4`), built
+  twice byte-identical.
+- **Project+ against legacy, `pplus-1v1.txt` to 9,000:** every scene change on the same frame as
+  legacy's (scBoot 122, the main menu 197, the match 587-3030, the results 3035-3451; before: scBoot
+  108, the match to 6082), the fuzzed match the same. RAM still differs on every frame: by frame 230
+  the game issued 7,495 SD reads against legacy's 7,717 (223 fewer one-sector FAT and directory
+  reads: the official image's clusters are scattered and 26 files fragmented, ours contiguous), and
+  at frame 1,000 296 KB of MEM1 and 1.2 MB of MEM2 differ (the FAT driver's state and caches, and
+  two 104 KB streamed-audio buffers filled at other moments). Byte-identical RAM would need the
+  official image's own cluster allocation and directory timestamps, which no tree carries. With
+  `pplus-queue2-flow.txt` the title screen ends one frame sooner (179, legacy 180), and every later
+  step is one frame sooner. Frame 0's 32 bytes (legacy's latch writing the match block while the
+  launcher runs) stay: a builtin's writes before its guards can be checked would defeat the guards.
+- T1 (`pplus-queue2-flow.txt`, 200-3200): 20,951 re-run frames, 0 RAM mismatches. JIT: clears at
+  388/2000/4500/7000 and 1/3/5/700/1234/3333/6001 the same as without (9,015 and 9,006 frames); cold
+  against warm, 0 of 9,010 differ. Brawl's bundle and legacy Project+ still equal origin/main's
+  hashlogs (10,806 and 9,001 frames, 0 differ).
+
+Open: Mac <-> PC (a PC builds its own card: it must hash `0615853d…`); a P+ fork whose codeset
+moves the stage select routines loses `brawl-rev2-pplus` until phase 3's labels; duplicate JSON keys
+are last-wins (as in JavaScript; the site refuses them).
 
 ## Testing
 
