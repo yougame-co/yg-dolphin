@@ -191,6 +191,23 @@ StageMask ShownStruck(const Ranked::Ruleset& rules, const Plan& plan, const Matc
   return shown;
 }
 
+// Clears a My Music step left from the player's own game, as its cleanup does. Y is masked on the
+// flow's stage select, so My Music never starts there. Returns bytes changed.
+int ClearMusicSelect(GuestMemory& m)
+{
+  int changed = 0;
+  for (const u32 offset : MUSIC_SELECT_WORDS)
+  {
+    const u32 at = MUSIC_SELECT + offset;
+    if (m.Valid(at) && m.Valid(at + 3) && m.Read32(at) != 0)
+    {
+      m.Write32(at, 0);
+      changed += 4;
+    }
+  }
+  return changed;
+}
+
 int WriteIfDifferent16(GuestMemory& m, u32 address, u16 value)
 {
   if (m.Read16(address) == value)
@@ -590,6 +607,10 @@ int Apply(GuestMemory& m, int frame, bool two_players)
       }
     }
   }
+  // A My Music step on the stage select's way in would leave it without tiles and send its pick
+  // to My Music (a softlock), so the character select clears it.
+  if (scene == "scSelctCharacter")
+    changed += ClearMusicSelect(m);
   const std::optional<StageCursors::State> had = StageCursors::Read(m);
   StageCursors::State c = had.value_or(StageCursors::Start(StageCursors::PPlusLayout()));
   if (casual)

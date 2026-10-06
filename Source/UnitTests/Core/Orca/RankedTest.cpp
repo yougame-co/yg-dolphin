@@ -359,6 +359,43 @@ TEST(OrcaRankedPPlus, PresetOutsideTheStageSelectOnly)
   EXPECT_EQ(m.Read8(RankedPPlus::RSS_EXDATA), 0x77);
 }
 
+// A My Music step left from the player's own game (Y on a stage) hid the ranked stage select's tiles
+// and sent the pick to My Music.
+TEST(OrcaRankedPPlus, CharacterSelectClearsALeftoverMyMusicStep)
+{
+  const auto leftover = [](FakeMemory& m) {
+    m.Fill(RankedPPlus::MUSIC_SELECT, 0x30, 0);
+    m.Write32(RankedPPlus::MUSIC_SELECT, 1);          // step 1: going to My Music
+    m.Write32(RankedPPlus::MUSIC_SELECT + 0x08, 0x2A);  // song
+    m.Write32(RankedPPlus::MUSIC_SELECT + 0x14, 0x01000000);
+    m.Write32(RankedPPlus::MUSIC_SELECT + 0x2C, 7);
+    m.Write32(RankedPPlus::MUSIC_SELECT + 0x04, 0x55);  // not My Music's
+    m.Write32(RankedPPlus::MUSIC_SELECT + 0x1C, 0x66);  // not My Music's
+  };
+  for (const u8 mode : {MatchBlock::MODE_RANKED, MatchBlock::MODE_CASUAL})
+  {
+    FakeMemory m = Game("scSelctCharacter");
+    leftover(m);
+    MatchBlock::Write(m, MatchBlock::State::Fresh(mode, Ranked::RULESET_PPLUS_2024, 0));
+    EXPECT_GT(RankedPPlus::Apply(m, 1, true), 0);
+    for (const u32 offset : RankedPPlus::MUSIC_SELECT_WORDS)
+      EXPECT_EQ(m.Read32(RankedPPlus::MUSIC_SELECT + offset), 0u) << "word +" << offset;
+    EXPECT_EQ(m.Read32(RankedPPlus::MUSIC_SELECT + 0x04), 0x55u);
+    EXPECT_EQ(m.Read32(RankedPPlus::MUSIC_SELECT + 0x1C), 0x66u);
+    EXPECT_EQ(RankedPPlus::Apply(m, 1, true), 0);
+    EXPECT_EQ(RankedPPlus::Apply(m, 2, true), 0);
+  }
+  // Not on the stage select, and not without a Project+ header.
+  FakeMemory sss = RankedSss(0);
+  leftover(sss);
+  RankedPPlus::Apply(sss, 2, true);
+  EXPECT_EQ(sss.Read32(RankedPPlus::MUSIC_SELECT), 1u);
+  FakeMemory none = Game("scSelctCharacter");
+  leftover(none);
+  EXPECT_EQ(RankedPPlus::Apply(none, 1, true), 0);
+  EXPECT_EQ(none.Read32(RankedPPlus::MUSIC_SELECT), 1u);
+}
+
 TEST(OrcaRankedPPlus, GameOneStrikesInTurnsThenTheCoinPicks)
 {
   FakeMemory m = RankedSss(1);  // port 2 strikes first
