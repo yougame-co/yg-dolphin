@@ -391,6 +391,29 @@ TEST(OrcaKitDraw, DesignFPieces)
       const int b = dl->VtxBuffer.Size;
       Kit::Pointer(dl, ImVec2(100, 100), 3 * u, u, 1, "P2 BO", true, false, 3.4);
       EXPECT_GT(dl->VtxBuffer.Size - b, idle);
+      // Acting draws its blink and its turn's burst; waiting draws no more than plain.
+      const int c = dl->VtxBuffer.Size;
+      Kit::Pointer(dl, ImVec2(100, 100), 3 * u, u, 1, "P2 BO", Kit::PointerMode::Acting, false,
+                   3.4, 3.3);
+      EXPECT_GT(dl->VtxBuffer.Size - c, idle);
+      const int d = dl->VtxBuffer.Size;
+      Kit::Pointer(dl, ImVec2(100, 100), 3 * u, u, 1, "P2 BO", Kit::PointerMode::Waiting, false,
+                   3.4, 0);
+      EXPECT_EQ(dl->VtxBuffer.Size - d, idle);
+      // The turn's tag: above the cursor, inside the clamp; below it near the top; the timer
+      // beside it.
+      const ImVec2 lo(0, 0), hi(h * 16 / 9, h);
+      const ImVec2 mid(hi.x / 2, hi.y / 2);
+      const Kit::Box tag = Kit::TurnTag(dl, mid, 3 * u, u, "YOUR TURN",
+                                        "X STRIKES A STAGE \u00b7 2 LEFT", Kit::Tone::Gold, 24,
+                                        3.4, true, lo, hi, 1.0f);
+      EXPECT_LT(tag.max.y, mid.y);
+      EXPECT_GE(tag.min.x, 0);
+      EXPECT_LT(tag.max.x, mid.x + 3 * u);
+      const Kit::Box low = Kit::TurnTag(dl, ImVec2(5, 5), 3 * u, u, "HBOX PICKS", {},
+                                        Kit::PortTone(1), -1, 3.4, false, lo, hi);
+      EXPECT_GT(low.min.y, 5);
+      EXPECT_GE(low.min.x, 0);
       Kit::PortraitFrame(dl, ImVec2(10, 10), ImVec2(10 + 28 * u, 10 + 22 * u), u, Kit::Tone::Gold);
       Kit::PortraitFrame(dl, ImVec2(10, 10), ImVec2(10 + 28 * u, 10 + 22 * u), u, Kit::Tone::Red);
       // A ribbon narrower than its words still draws them (shrunk), the ribbon as asked.
@@ -471,6 +494,27 @@ TEST(OrcaKitDraw, DesignFPieces)
 }
 
 // Orca's hints as the control guide's buttons and words (design F's bottom-right legend).
+// The acting player's blink: 2.5 beats a second from the turn's start, lit 60% of each beat, a
+// burst of three ripples in the first 0.8 s and none after.
+TEST(OrcaKit, AttentionBlinks)
+{
+  const Kit::Blink start = Kit::Attention(10.0, 10.0);
+  EXPECT_EQ(start.on, 1.0f);
+  EXPECT_NEAR(start.ripples[0], 0, 1e-4f);
+  EXPECT_EQ(start.ripples[1], -1);
+  EXPECT_NEAR(Kit::Attention(10.3, 10.0).on, 0.15f, 1e-4f);
+  EXPECT_EQ(Kit::Attention(10.42, 10.0).on, 1.0f);
+  const Kit::Blink burst = Kit::Attention(10.5, 10.0);
+  EXPECT_EQ(burst.ripples[0], -1);
+  EXPECT_GE(burst.ripples[1], 0);
+  EXPECT_GE(burst.ripples[2], 0);
+  const Kit::Blink later = Kit::Attention(11.0, 10.0);
+  for (const float r : later.ripples)
+    EXPECT_EQ(r, -1);
+  EXPECT_GT(Kit::Attention(10.12, 10.0).swell, 0.5f);
+  EXPECT_EQ(Kit::Attention(10.3, 10.0).swell, 0.0f);
+}
+
 TEST(OrcaKit, GuideOfOrcasHints)
 {
   using G = Kit::GuideItem;

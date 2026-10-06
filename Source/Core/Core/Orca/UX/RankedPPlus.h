@@ -104,9 +104,9 @@ Lines Describe(const GuestMemory& memory, int frame, const std::vector<Events::P
 std::optional<Ranked::Turn> CurrentTurn(const GuestMemory& memory);
 
 // What the overlay draws of the two cursors (StageCursors.h) on this boundary (on: false, none).
-// UI only.
+// UI only. `frame` is the frame hook's frame number (the turn's timer counts to it).
 StageCursors::View CursorView(const GuestMemory& memory,
-                              const std::vector<Events::PortInfo>& ports);
+                              const std::vector<Events::PortInfo>& ports, int frame);
 
 // The whole frame hook part (flow, overlay lines). The header is OnlineRules' (MatchBlock.h).
 void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,

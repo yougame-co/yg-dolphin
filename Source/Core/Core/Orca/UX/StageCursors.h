@@ -180,8 +180,42 @@ struct View
   std::array<Player, 2> players;
   s8 picked = -1;    // the stage the flow took (-1: not yet)
   s8 turn = -1;      // whose turn the steps say it is (-1: nobody's / both)
+  // The step under way (Luis, 2026-10-05: "very obvious whose turn it is"): its kind
+  // (Ranked::StepKind's number, 0: none), the strikes or bans its player still owes, a ban they may
+  // leave out, Brawl's Meta Knight clause (one pick of any legal stage), a step for both players at
+  // once (a casual game's pick), and the seconds its timer shows (-1: none).
+  u8 kind = 0;
+  u8 left = 0;
+  bool optional = false;
+  bool mk_clause = false;
+  bool both = false;
+  s16 seconds = -1;
   bool operator==(const View&) const = default;
 };
+
+// What a player's cursor says about the turn (the overlay's tag by it; UI only).
+struct TurnCue
+{
+  enum class Mode : u8
+  {
+    Idle,     // nothing to say: no tag, no blink
+    Acting,   // this player has to act: the cursor blinks, the tag says what to do
+    Waiting,  // the local player waits for the other: a small grey tab, no blink
+  };
+  Mode mode = Mode::Idle;
+  bool local = false;  // the cursor is this machine's player's
+  std::string title;   // "YOUR TURN", "HBOX'S TURN", "WAITING FOR HBOX"
+  std::string detail;  // "X STRIKES A STAGE · 2 LEFT" (may be empty)
+  int seconds = -1;    // the turn's timer (-1: none)
+  bool operator==(const TurnCue&) const = default;
+};
+// What `port`'s cursor (0 or 1) says, from this machine's side (the players' `local`): who acts in
+// the step under way and how, in the cursors' tab names in capitals.
+TurnCue TurnText(const View& view, int port);
+// Brawl's Meta Knight clause, said loudly at the stage select's start: the banner's line under
+// "META KNIGHT CLAUSE" ("HBOX PICKS ANY STAGE · NO STRIKES", or "YOU PICK ..." on the picker's
+// screen); empty when the clause doesn't apply or the stage is picked.
+std::string MkClauseNote(const View& view);
 // Publish: every first-run boundary. Current: the view published at the boundary before the last
 // (the frame the picture shows).
 void Publish(View view);

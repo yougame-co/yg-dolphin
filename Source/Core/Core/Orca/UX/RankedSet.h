@@ -6,6 +6,7 @@
 #include <array>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #include "Common/CommonTypes.h"
 #include "Core/Orca/UX/Results.h"
@@ -97,9 +98,14 @@ Facts ReadFacts(const GuestMemory& memory, bool live);
 // the set in a ranked block.
 void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating);
 
-// The set score line for the overlay (local UI only): "Game 2 · 1–0", the local player's score
-// first; "Tiebreak game · 1–1"; "Set over · 2–1". Empty outside a ranked set.
+// The set score line for the overlay (local UI only), the local player's score first:
+// "Tiebreak game · 1–1", "Set over · 2–1", "Set void · 1–0"; empty for an ordinary game (no
+// "Game N": the dots say which game it is) and outside a ranked set.
 std::string ScoreLine(const SetBlock::SetState& set, int local_port);
+// A matchmade game's result toast (local UI only), the local player's score first: "You won ·
+// 1–0", "You lost · 0–1", "Draw · played again", "That game didn't count". `out` is the room's
+// verdict for this player: "won", "lost", "draw", anything else a void.
+std::string ResultToast(std::string_view out, int mine, int theirs);
 // The last line the hook published (any thread), for this machine's player (SetLocalPort); empty
 // during a fight.
 std::string CurrentScoreLine();

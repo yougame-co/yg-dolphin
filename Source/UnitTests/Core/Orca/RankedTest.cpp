@@ -501,7 +501,7 @@ TEST(OrcaRankedPPlus, BothProposingOneStageSkipsTheSteps)
   EXPECT_EQ(Page0Bits(m), BitsOf(0x01FF & ~0x0001));
   const std::vector<Orca::Events::PortInfo> ports{{0, "ada", false, {}}, {1, "bo", true, {}}};
   EXPECT_EQ(RankedPPlus::Describe(m, frame, ports).set,
-            "Ranked · Game 2 · ada 1–0 bo · Agreed: Battlefield");
+            "Ranked · ada 1–0 bo · Agreed: Battlefield");
   const auto masks = RankedPPlus::Masks(m);
   EXPECT_EQ(masks[s.active].press, PAD_BUTTON_A);
   // Nothing more counts.
@@ -589,34 +589,40 @@ TEST(OrcaRankedPPlus, OverlayLines)
   // The top line: the set, whose turn, how many stages, the time left; under it the keys for the
   // player whose turn it is, A's proposal for both, what the other proposes.
   RankedPPlus::Lines l = RankedPPlus::Describe(m, 100, ports);
-  EXPECT_EQ(l.set, "Ranked · Game 1 · ada 0–0 bo · bo strikes 1 · 0:30");
+  EXPECT_EQ(l.set, "Ranked · ada 0–0 bo · bo strikes 1 · 0:30");
   EXPECT_EQ(l.turn, "A proposes a stage");
   // The turn as STAGE SELECT's relabel names it (Relabel.h): the same step as the line's.
   EXPECT_EQ(RankedPPlus::CurrentTurn(m), (Ranked::Turn{StepKind::Strike, 1, 1}));
   const std::vector<Orca::Events::PortInfo> theirs{{0, "ada", true, {}}, {1, "bo", false, {}}};
   l = RankedPPlus::Describe(m, 100 + 6 * 60, theirs);
-  EXPECT_EQ(l.set, "Ranked · Game 1 · ada 0–0 bo · bo strikes 1 · 0:24");
+  EXPECT_EQ(l.set, "Ranked · ada 0–0 bo · bo strikes 1 · 0:24");
   EXPECT_EQ(l.turn, "Your turn: X on a stage strikes it · A proposes a stage");
   // Port 1's two strikes: the count says how many are left.
   Press(m, 1, 2, BTN_X, &frame);
   EXPECT_EQ(RankedPPlus::Describe(m, frame, ports).set,
-            "Ranked · Game 1 · ada 0–0 bo · ada strikes 2 · 0:30");
+            "Ranked · ada 0–0 bo · ada strikes 2 · 0:30");
   EXPECT_EQ(RankedPPlus::CurrentTurn(m), (Ranked::Turn{StepKind::Strike, 0, 2}));
   Press(m, 0, 0, BTN_X, &frame);
   EXPECT_EQ(RankedPPlus::Describe(m, frame, ports).set,
-            "Ranked · Game 1 · ada 0–0 bo · ada strikes 1 · 0:30");
+            "Ranked · ada 0–0 bo · ada strikes 1 · 0:30");
   Press(m, 1, 3, BTN_A, &frame);
   EXPECT_EQ(RankedPPlus::Describe(m, frame, ports).turn,
             "Your turn: X on a stage strikes it · bo wants Luigi's Mansion · A on it to agree");
   // The overlay's view of the cursors.
-  const StageCursors::View v = RankedPPlus::CursorView(m, ports);
+  const StageCursors::View v = RankedPPlus::CursorView(m, ports, frame);
   EXPECT_TRUE(v.on);
   EXPECT_EQ(v.turn, 0);
+  // The step for the overlay's turn cues: ada strikes 1 more, the line's clock.
+  EXPECT_EQ(v.kind, static_cast<u8>(StepKind::Strike));
+  EXPECT_EQ(v.left, 1);
+  EXPECT_FALSE(v.both);
+  EXPECT_FALSE(v.mk_clause);
+  EXPECT_EQ(v.seconds, 30);
   EXPECT_EQ(v.players[1].proposal, 3);
   EXPECT_EQ(v.players[1].name, "bo");
   // On the character select, the set alone.
   SetScene(m, "scSelctCharacter");
-  EXPECT_EQ(RankedPPlus::Describe(m, frame, ports).set, "Ranked · Game 1 · ada 0–0 bo");
+  EXPECT_EQ(RankedPPlus::Describe(m, frame, ports).set, "Ranked · ada 0–0 bo");
   EXPECT_EQ(RankedPPlus::CurrentTurn(m), std::nullopt);
   SetScene(m, "scMelee");
   EXPECT_EQ(RankedPPlus::Describe(m, frame, ports), RankedPPlus::Lines{});

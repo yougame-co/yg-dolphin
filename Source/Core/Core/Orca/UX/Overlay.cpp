@@ -554,6 +554,30 @@ void DrawStageCursors(ImDrawList* dl, const StageCursors::View& v, ImVec2 pic, I
                both ? Kit::Tone::Gold : Kit::PortTone(port),
                both ? Upper(p.name) + " + " + Upper(v.players[1].name) : Upper(p.name), port == 0);
   }
+  // Whose turn it is (Luis, 2026-10-05: "very obvious whose turn it is ... a blinking cursor on who
+  // is supposed to be acting"): each cursor's cue (StageCursors::TurnText). The blink's phase
+  // starts when a cursor's turn does; a stage select that comes back after a gap starts afresh.
+  static std::array<StageCursors::TurnCue::Mode, 2> s_mode{};
+  static std::array<u8, 2> s_kind{};
+  static std::array<double, 2> s_since{};
+  static double s_last = -1, s_opened = 0;
+  if (s_last < 0 || now_s - s_last > 0.5)
+  {
+    s_mode = {};
+    s_kind = {};
+    s_opened = now_s;
+  }
+  s_last = now_s;
+  std::array<StageCursors::TurnCue, 2> cues;
+  for (int port = 0; port < 2; ++port)
+  {
+    cues[port] = StageCursors::TurnText(v, port);
+    const bool acting = cues[port].mode == StageCursors::TurnCue::Mode::Acting;
+    if (acting && (s_mode[port] != StageCursors::TurnCue::Mode::Acting || s_kind[port] != v.kind))
+      s_since[port] = now_s;
+    s_mode[port] = cues[port].mode;
+    s_kind[port] = v.kind;
+  }
   // Opaque and a little larger than the game's own crosshair (which sits on the cursor that moved
   // last), so it never shows; port 1's tab to the left and port 2's to the right, so two cursors on
   // one tile keep both.
@@ -563,9 +587,52 @@ void DrawStageCursors(ImDrawList* dl, const StageCursors::View& v, ImVec2 pic, I
     const StageCursors::View::Player& p = v.players[port];
     if (p.present)
     {
+      const Kit::PointerMode mode =
+          cues[port].mode == StageCursors::TurnCue::Mode::Acting  ? Kit::PointerMode::Acting :
+          cues[port].mode == StageCursors::TurnCue::Mode::Waiting ? Kit::PointerMode::Waiting :
+                                                                    Kit::PointerMode::Plain;
       Kit::Pointer(dl, at16(p.x, p.y), radius, unit, port,
-                   fmt::format("P{} {}", port + 1, Upper(p.name)), v.turn == port, port == 0, now_s);
+                   fmt::format("P{} {}", port + 1, Upper(p.name)), mode, port == 0, now_s,
+                   s_since[port]);
     }
+  }
+  // The tags over both cursors: the acting player's says what to do (gold on this player's own
+  // turn, its rim on the blink; the other player's in their colour, steady; both at once, each in
+  // their own colour); a waiting local player's, a small grey tab.
+  const ImVec2 clamp_min(pic.x + 1.0f * unit, pic.y + 1.0f * unit);
+  const ImVec2 clamp_max(pic.x + pic_size.x - 1.0f * unit, pic.y + pic_size.y - 1.0f * unit);
+  for (int port = 0; port < 2; ++port)
+  {
+    const StageCursors::View::Player& p = v.players[port];
+    const StageCursors::TurnCue& cue = cues[port];
+    if (!p.present || cue.mode == StageCursors::TurnCue::Mode::Idle)
+      continue;
+    if (cue.mode == StageCursors::TurnCue::Mode::Waiting)
+    {
+      Kit::TurnTag(dl, at16(p.x, p.y), radius, unit, cue.title, {}, Kit::Tone::Grey, -1, now_s,
+                   port == 0, clamp_min, clamp_max, 0, 2.6f);
+      continue;
+    }
+    const Kit::Blink blink = Kit::Attention(now_s, s_since[port]);
+    const bool gold = cue.local && !v.both;
+    Kit::TurnTag(dl, at16(p.x, p.y), radius, unit, cue.title, cue.detail,
+                 gold ? Kit::Tone::Gold : Kit::PortTone(port), cue.seconds, now_s, port == 0,
+                 clamp_min, clamp_max, cue.local ? blink.on : 0.0f);
+  }
+  // Brawl's Meta Knight clause, said loudly for the stage select's first 3 s: no strikes this game.
+  const std::string mk = StageCursors::MkClauseNote(v);
+  const double shown = now_s - s_opened;
+  if (!mk.empty() && shown < 3.0)
+  {
+    const float alpha = static_cast<float>(std::clamp(std::min(shown / 0.15, (3.0 - shown) / 0.4),
+                                                      0.0, 1.0));
+    const float height = 9.0f * unit;
+    const char* title = "META KNIGHT CLAUSE";
+    const float width = std::min(pic_size.x - 4.0f * unit,
+                                 Kit::BannerWidth(height, unit, title, mk) + 6.0f * unit);
+    const float cx = pic.x + pic_size.x / 2;
+    Kit::Banner(dl, cx - width / 2, cx + width / 2, pic.y + pic_size.y * 0.45f - height / 2,
+                height, unit, Kit::Tone::Panel, title, mk, alpha);
   }
 }
 
@@ -623,6 +690,7 @@ struct Scene
   // Design F: whose pick it is in the character order (-1 none), the set's dots, and the queue's
   // own character select searching (a ring on the empty seat).
   int picker = -1;
+  std::string picker_ribbon;  // "YOUR PICK" / "HBOX PICKS" on the picker's portrait
   RankedSet::Dots dots;
   bool searching = false;
 
@@ -751,7 +819,11 @@ Scene Gather(double now)
   // The character and the stage selects only: the order's picker, the set's dots (not on the
   // queue's own character select: no opponent, no set yet, though a ranked header is there).
   if (Queue::OnQueueCss())
+  {
     s.picker = CharOrder::CurrentPicker();
+    if (s.picker >= 0)
+      s.picker_ribbon = CharOrder::CurrentPickerRibbon();
+  }
   if ((Queue::OnQueueCss() && !Queue::OnSoloCss()) || s.cursors.on)
     s.dots = RankedSet::CurrentDots();
   s.searching = Queue::OnSoloCss() && Queue::SoloReady();
@@ -995,8 +1067,16 @@ void DrawScene()
     DrawStageCursors(dl, s.cursors, pic, pic_size, unit, now_s);
   // The character select's panels: a name tab in the port's colour on each panel the game's own
   // plate doesn't name. Design F's portraits: a locked-in player's framed in gold with LOCKED IN
-  // across its top, the picker's in their port's colour; the empty seat's ring while the queue
-  // searches.
+  // across its top, the picker's in their port's colour, blinking (Luis, 2026-10-05: "a blinking
+  // cursor on who is supposed to be acting") with YOUR PICK / HBOX PICKS where LOCKED IN goes; the
+  // empty seat's ring while the queue searches.
+  static int s_picker_was = -1;
+  static double s_picker_since = 0;
+  if (s.picker != s_picker_was)
+  {
+    s_picker_was = s.picker;
+    s_picker_since = now_s;
+  }
   for (int port = 0; port < 4; ++port)
   {
     const float centre = pic.x + pic_size.x * PanelCentre(port);
@@ -1015,7 +1095,23 @@ void DrawScene()
     }
     else if (port == s.picker)
     {
+      const Kit::Blink blink = Kit::Attention(now_s, s_picker_since);
+      const float g = 0.9f * unit;
+      dl->AddRect(ImVec2(portrait.min.x - g, portrait.min.y - g),
+                  ImVec2(portrait.max.x + g, portrait.max.y + g),
+                  IM_COL32(0, 0, 0, static_cast<int>(115 * blink.on)), 1.2f * unit, 0,
+                  0.9f * unit);
+      dl->AddRect(ImVec2(portrait.min.x - g, portrait.min.y - g),
+                  ImVec2(portrait.max.x + g, portrait.max.y + g),
+                  IM_COL32(255, 255, 255, static_cast<int>(255 * blink.on)), 1.2f * unit, 0,
+                  0.55f * unit);
       Kit::PortraitFrame(dl, portrait.min, portrait.max, unit, Kit::PortTone(port));
+      if (!s.picker_ribbon.empty())
+      {
+        Kit::Ribbon(dl, ImVec2(portrait.min.x + 1.9f * unit, portrait.min.y + 1.4f * unit),
+                    ImVec2(portrait.max.x - 1.9f * unit, portrait.min.y + 5.8f * unit), unit,
+                    s.picker_ribbon, Kit::PortTone(port));
+      }
     }
   }
   if (s.searching)

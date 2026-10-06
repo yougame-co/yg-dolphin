@@ -140,6 +140,17 @@ TEST(OrcaCharOrder, PickerIsWhoseTurnItIs)
   EXPECT_EQ(Picker(Css(), Twice(kGame2, Css(), State{}, 1000)), 0);
 }
 
+// The ribbon on the picker's portrait: YOUR PICK on their own screen, their name on the other's.
+TEST(OrcaCharOrder, PickerRibbonSaysWhoseTurnItIs)
+{
+  const std::vector<Orca::Events::PortInfo> ports{{0, "Crunch", false, {}},
+                                                  {1, "Hbox", true, {}}};
+  EXPECT_EQ(PickerRibbon(0, ports), "YOUR PICK");
+  EXPECT_EQ(PickerRibbon(1, ports), "HBOX PICKS");
+  EXPECT_EQ(PickerRibbon(1, {{0, "Crunch", false, {}}, {1, "", true, {}}}), "P2 PICKS");
+  EXPECT_EQ(PickerRibbon(-1, ports), "");
+}
+
 TEST(OrcaCharOrder, StaleOrderClearsOnACharacterSelectItDoesNotApplyTo)
 {
   const State stale = St(2, Step::Done, 0, 5, 7);

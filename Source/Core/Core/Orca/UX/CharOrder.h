@@ -210,6 +210,12 @@ std::string Line(const SetView& set, const CssView& css, const State& state,
 int Picker(const CssView& css, const State& state);
 // The frame hook's last Picker on a first run (any thread): the overlay's.
 int CurrentPicker();
+// The ribbon on the picker's portrait (Luis, 2026-10-05: "very obvious whose turn it is"): "YOUR
+// PICK" on the picker's own screen, else "<NAME> PICKS" in capitals ("P1 PICKS" without a name);
+// empty with no picker. UI only.
+std::string PickerRibbon(int picker, const std::vector<Events::PortInfo>& ports);
+// The frame hook's last PickerRibbon on a first run (any thread): the overlay's.
+std::string CurrentPickerRibbon();
 
 // Which ports have locked in (bit p) on this state: the first picker's once its turn is over
 // (Free: the winner's own lock too), both once the order is done. 0 while the order isn't on.

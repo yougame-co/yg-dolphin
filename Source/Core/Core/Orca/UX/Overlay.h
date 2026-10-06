@@ -120,7 +120,7 @@ public:
   // The session's plug-in callback (any thread; first runs only, when the list changes). A list equal
   // to the last one shows nothing new.
   void OnPorts(int frame, const std::vector<Events::PortInfo>& ports, double now_ms);
-  // A toast of its own (a matchmade game's result: "You won game 2 · 1–1"). Any thread.
+  // A toast of its own (a matchmade game's result: "You won · 1–1"). Any thread.
   void AddToast(std::string text, double now_ms);
   // A line of the page's chat (embed `chat`, Chat.h), already decoded. Any thread.
   void AddChat(std::string name, std::string text, double now_ms);

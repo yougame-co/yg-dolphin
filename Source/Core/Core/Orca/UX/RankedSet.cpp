@@ -530,7 +530,20 @@ std::string ScoreLine(const SetState& set, int local_port)
     return fmt::format("Set over · {}–{}", mine, theirs);
   if (set.tiebreak)
     return fmt::format("Tiebreak game · {}–{}", mine, theirs);
-  return fmt::format("Game {} · {}–{}", set.GameNumber(), mine, theirs);
+  // An ordinary game: nothing (Luis, 2026-10-05: "it says game 2 on top which is weird"; the dots
+  // say which game it is, the result's toast the score).
+  return "";
+}
+
+std::string ResultToast(std::string_view out, int mine, int theirs)
+{
+  if (out == "won")
+    return fmt::format("You won · {}–{}", mine, theirs);
+  if (out == "lost")
+    return fmt::format("You lost · {}–{}", mine, theirs);
+  if (out == "draw")
+    return "Draw · played again";
+  return "That game didn't count";
 }
 
 std::string CurrentScoreLine()

@@ -797,8 +797,9 @@ Lines Describe(const GuestMemory& m, int frame, const std::vector<Events::PortIn
                             std::max(s->score[0], s->score[1]), std::min(s->score[0], s->score[1]));
     return lines;
   }
-  const std::string set = fmt::format("Ranked · Game {} · {} {}–{} {}", s->games + 1, name(0),
-                                      s->score[0], s->score[1], name(1));
+  // No "Game N" (Luis, 2026-10-05: the dots say which game it is).
+  const std::string set =
+      fmt::format("Ranked · {} {}–{} {}", name(0), s->score[0], s->score[1], name(1));
   lines.set = set;
   if (scene != "scSelStage" || s->flow != 1)
     return lines;
@@ -847,7 +848,8 @@ Lines Describe(const GuestMemory& m, int frame, const std::vector<Events::PortIn
   return lines;
 }
 
-StageCursors::View CursorView(const GuestMemory& m, const std::vector<Events::PortInfo>& ports)
+StageCursors::View CursorView(const GuestMemory& m, const std::vector<Events::PortInfo>& ports,
+                              int frame)
 {
   StageCursors::View view;
   const std::optional<MatchBlock::State> s = MatchBlock::Read(m);
@@ -864,8 +866,20 @@ StageCursors::View CursorView(const GuestMemory& m, const std::vector<Events::Po
                     static_cast<s8>(s->auto_stage) :
                     s8(-1);
   const Plan plan = PlanFor(m, *s);
-  if (s->step < plan.steps.size() && plan.steps[s->step].port <= 1)
-    view.turn = static_cast<s8>(plan.steps[s->step].port);
+  if (s->step < plan.steps.size())
+  {
+    const Step& step = plan.steps[s->step];
+    if (step.port <= 1)
+      view.turn = static_cast<s8>(step.port);
+    // The step for the overlay's turn cues (UI only), its seconds as Describe's clock shows them.
+    view.kind = static_cast<u8>(step.kind);
+    view.left = static_cast<u8>(std::max(1, step.count - s->step_done));
+    view.optional = step.optional;
+    view.both = step.port == Ranked::BOTH;
+    const int left = std::max<int>(0, static_cast<int>(s->deadline) -
+                                          Ranked::GraceFrames(Ranked::PPlus2024(), step) - frame);
+    view.seconds = static_cast<s16>(std::min(9999, (left + 59) / 60));
+  }
   for (int port = 0; port < 2; ++port)
   {
     StageCursors::View::Player& p = view.players[port];

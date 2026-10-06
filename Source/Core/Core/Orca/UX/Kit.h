@@ -159,11 +159,41 @@ Box Timer(ImDrawList* dl, ImVec2 centre, float unit, int seconds, double now_s, 
 // A pill in `tone` with `text` in white capitals, centred on `centre`. Returns the pill.
 Box Badge(ImDrawList* dl, ImVec2 centre, float unit, std::string_view text, Tone tone,
           float size = 3.6f, float alpha = 1);
+// The blink on whoever has to act (Luis, 2026-10-05: "a blinking cursor on who is supposed to be
+// acting"): 2.5 beats a second from `since_s` (ImGui's clock when the turn began; under the 3
+// flashes a second limit), each beat lit for 60% of it (`on` 1, then 0.15) while the cursor swells
+// up to 15% and back (`swell` 0..1); the turn's first 0.8 s add a burst of three ripples
+// (`ripples[i]` 0..1 on its way out, -1 none), so the eye catches the handover.
+struct Blink
+{
+  float on = 0;
+  float swell = 0;
+  std::array<float, 3> ripples{-1, -1, -1};
+};
+Blink Attention(double now_s, double since_s);
+// A cursor's part in the turn: Plain (none), Acting (it blinks: Attention, a white ring, a glow in
+// its colour), Waiting (its ring greyed, its face still opaque).
+enum class PointerMode
+{
+  Plain,
+  Acting,
+  Waiting,
+};
 // A player's cursor centred on `at`, `radius` pixels, in their port's colour, with `tag` on a tab
-// to its lower left (`tag_left`) or right. On their turn it pulses (TurnPulse): it swells, glows,
-// and a ring in their colour ripples out of it once a beat.
+// to its lower left (`tag_left`) or right, blinking from `since_s` while Acting.
+void Pointer(ImDrawList* dl, ImVec2 at, float radius, float unit, int port, std::string_view tag,
+             PointerMode mode, bool tag_left, double now_s, double since_s);
+// The same, `turn` Acting since the clock's start (design checks, tests).
 void Pointer(ImDrawList* dl, ImVec2 at, float radius, float unit, int port, std::string_view tag,
              bool turn, bool tag_left, double now_s);
+// The turn's tag by a cursor centred on `at` (`radius` its size): `title` in the heavy face over
+// `detail` in the body face (when not empty) on a pill in `tone`, the turn's timer (Timer) at its
+// end when `seconds` >= 0. It sits above the cursor (below it, clear of its tab, near the top),
+// leaning left (`lean_left`) or right, kept inside [clamp_min, clamp_max]. `rim` 0..1 lights a
+// white rim round the pill (the local player's own turn, on the blink). Returns the pill.
+Box TurnTag(ImDrawList* dl, ImVec2 at, float radius, float unit, std::string_view title,
+            std::string_view detail, Tone tone, int seconds, double now_s, bool lean_left,
+            ImVec2 clamp_min, ImVec2 clamp_max, float rim = 0, float size = 3.4f);
 // The turn's pulse at `now_s` (ImGui's clock), one beat a second: `swell` 0..1..0 on a cosine,
 // `ripple` 0..1 through the beat (the ring's way out).
 struct Beat

@@ -3434,6 +3434,38 @@ after the keyframe); the game's own crosshair is covered, not hidden; a long har
 screenshots went black from about frame 8000 on whatever was drawn (the game 2 stage select wasn't
 shot; its steps are in the sync test).
 
+### Whose turn it is (Luis, 2026-10-05)
+
+Luis, 2026-10-05, after a ranked set where he was Meta Knight, so the Meta Knight clause made the
+stage select one pick by Hbox (no strikes, no ban) and nothing on screen said so: "for both brawl/P+
+I really want it to be very obvious whose turn it is to act both for character select and stage
+strike. We should have like a blinking cursor on who is supposed to be acting." Overlay only (no
+emulated memory, `ux` unchanged):
+
+- **The acting player's cursor blinks** (`Kit::Attention`): 2.5 beats a second (under the 3 flashes
+  a second limit), a white ring lit for 60% of each beat, a glow in their colour, the cursor swelling
+  15%, and a burst of three ripples for 0.8 s when the turn comes to them.
+- **A tag by it** (`Kit::TurnTag`, texts from the pure `StageCursors::TurnText`, names as the
+  cursors' tabs write them): "YOUR TURN" / "X STRIKES A STAGE · 2 LEFT" (the other screen: "HBOX'S
+  TURN" / "STRIKING 2"), "YOUR TURN" / "X BANS 1 · Y SKIPS" ("HBOX MAY BAN 1"), "YOUR PICK" / "A
+  PICKS THE STAGE" ("HBOX PICKS"), under the clause "YOUR PICK" / "ANY STAGE · META KNIGHT CLAUSE"
+  ("HBOX PICKS ANY STAGE" / "META KNIGHT CLAUSE"), with the turn's timer. Gold with a blinking rim
+  on this player's own turn, the other player's colour on theirs. A waiting local player's cursor
+  goes grey with a small "WAITING FOR HBOX" tab. A casual pick (both at once): each player who hasn't
+  named a stage blinks in their own colour until they have.
+- **The Meta Knight clause** is said for the stage select's first 3 s, centred: "META KNIGHT
+  CLAUSE" / "HBOX PICKS ANY STAGE · NO STRIKES" ("YOU PICK ANY STAGE · NO STRIKES" on the picker's
+  screen).
+- **Character order:** the picker's portrait frame blinks on the same beat, with "YOUR PICK" /
+  "HBOX PICKS" where LOCKED IN goes. Not yet: a ring on the game's hand (it needs the hand's
+  position measured), PRESS START on game 1's ready step.
+- **No "Game N"** (Luis: "After match 1, It says game 2 on top which is weird ... we have the 3 dot
+  UI on top"): the overlay's score line is empty for an ordinary game (tiebreak, set over and void
+  stay), Brawl's stage select line reads "You 1–0 Hbox", Project+'s "Ranked · ada 1–0 bo", the
+  result toast "You won · 1–0" / "You lost · 0–1" / "Draw · played again" / "That game didn't
+  count". Brawl's native rules bar still starts game 1 with "Game 1: " (NativeText writes the
+  game's memory: dropping it needs a `ux` bump).
+
 ## Character order
 
 A ranked set's later games pick characters in order on the game's own character select

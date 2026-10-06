@@ -7,9 +7,12 @@
 #include <mutex>
 #include <utility>
 
+#include <fmt/format.h>
+
 #include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/OnlineMenu.h"
 #include "Core/Orca/UX/OnlineRules.h"
+#include "Core/Orca/UX/RankedSteps.h"
 
 namespace Orca::UX::StageCursors
 {
@@ -340,6 +343,115 @@ void LatchFrame(const Core::CPUThreadGuard& guard,
     return;
   GuardMemory m(guard);
   Latch(m, raw);
+}
+
+namespace
+{
+// A cursor's tab name in capitals, as the tabs write it (ASCII letters only).
+std::string UpperName(const View& v, int port)
+{
+  std::string out = v.players[port].name.empty() ? fmt::format("P{}", port + 1) :
+                                                   v.players[port].name;
+  for (char& c : out)
+  {
+    if (c >= 'a' && c <= 'z')
+      c = static_cast<char>(c - 'a' + 'A');
+  }
+  return out;
+}
+}  // namespace
+
+TurnCue TurnText(const View& v, int port)
+{
+  TurnCue cue;
+  if (port < 0 || port > 1 || !v.on || v.picked >= 0 || v.kind == 0)
+    return cue;
+  const View::Player& p = v.players[port];
+  const View::Player& other = v.players[1 - port];
+  if (!p.present)
+    return cue;
+  cue.local = p.local;
+  const std::string name = UpperName(v, port);
+  const std::string them = UpperName(v, 1 - port);
+  // Both at once (a casual game's pick): whoever hasn't named a stage yet acts, each in their own
+  // colour; a local player who has waits for the other.
+  if (v.both)
+  {
+    if (p.proposal < 0)
+    {
+      cue.mode = TurnCue::Mode::Acting;
+      cue.title = p.local ? "YOUR PICK" : fmt::format("{} PICKS", name);
+      cue.detail = p.local ? "A PICKS A STAGE" : "";
+      cue.seconds = v.seconds;
+    }
+    else if (p.local && other.present && other.proposal < 0)
+    {
+      cue.mode = TurnCue::Mode::Waiting;
+      cue.title = fmt::format("WAITING FOR {}", them);
+    }
+    return cue;
+  }
+  if (v.turn != port)
+  {
+    if (p.local && v.turn == 1 - port && other.present)
+    {
+      cue.mode = TurnCue::Mode::Waiting;
+      cue.title = fmt::format("WAITING FOR {}", them);
+    }
+    return cue;
+  }
+  cue.mode = TurnCue::Mode::Acting;
+  cue.seconds = v.seconds;
+  const int left = std::max<int>(1, v.left);
+  switch (static_cast<Ranked::StepKind>(v.kind))
+  {
+  case Ranked::StepKind::Strike:
+    cue.title = p.local ? std::string("YOUR TURN") : fmt::format("{}'S TURN", name);
+    cue.detail = p.local ? fmt::format("X STRIKES A STAGE \u00b7 {} LEFT", left) :
+                           fmt::format("STRIKING {}", left);
+    break;
+  case Ranked::StepKind::Ban:
+    if (v.optional)
+    {
+      cue.title = p.local ? std::string("YOUR TURN") : fmt::format("{} MAY BAN {}", name, left);
+      cue.detail = p.local ? fmt::format("X BANS {} \u00b7 Y SKIPS", left) : "";
+    }
+    else
+    {
+      cue.title = p.local ? std::string("YOUR TURN") : fmt::format("{}'S TURN", name);
+      cue.detail = p.local ? fmt::format("X BANS A STAGE \u00b7 {} LEFT", left) :
+                             fmt::format("BANNING {}", left);
+    }
+    break;
+  case Ranked::StepKind::Pick:
+  case Ranked::StepKind::Prefer:
+    if (v.mk_clause)
+    {
+      cue.title = p.local ? std::string("YOUR PICK") : fmt::format("{} PICKS ANY STAGE", name);
+      cue.detail = p.local ? "ANY STAGE \u00b7 META KNIGHT CLAUSE" : "META KNIGHT CLAUSE";
+    }
+    else
+    {
+      cue.title = p.local ? std::string("YOUR PICK") : fmt::format("{} PICKS", name);
+      cue.detail = p.local ? "A PICKS THE STAGE" : "";
+    }
+    break;
+  default:
+    return TurnCue{};
+  }
+  return cue;
+}
+
+std::string MkClauseNote(const View& v)
+{
+  if (!v.on || !v.mk_clause || v.picked >= 0 || v.turn < 0 || v.turn > 1 ||
+      !v.players[v.turn].present)
+  {
+    return "";
+  }
+  if (v.players[v.turn].local)
+    return "YOU PICK ANY STAGE \u00b7 NO STRIKES";
+  return fmt::format("{} PICKS ANY STAGE \u00b7 NO STRIKES", UpperName(v, v.turn));
 }
 
 void Publish(View view)

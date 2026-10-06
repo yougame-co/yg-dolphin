@@ -31,6 +31,7 @@
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/UX/Queue.h"
+#include "Core/Orca/UX/RankedSet.h"
 #include "Core/Orca/UX/SetEnd.h"
 
 namespace Orca::Net
@@ -2290,10 +2291,8 @@ struct YouGameRoom::Impl
                     d.empty() ? "" : ",\"d\":" + d));
     const std::string score = Score();
     const int mine = tally.Wins(MyId()), theirs = tally.Wins(TheirId());
-    Orca::UX::ShowToast(v.out == "won"  ? fmt::format("You won game {} · {}–{}", n, mine, theirs) :
-                        v.out == "lost" ? fmt::format("You lost game {} · {}–{}", n, mine, theirs) :
-                        v.out == "draw" ? fmt::format("Game {} was a draw", n) :
-                                          fmt::format("Game {} didn't count", n));
+    // No "Game N" (Luis, 2026-10-05): the set's dots say which game it was.
+    Orca::UX::ShowToast(Orca::UX::RankedSet::ResultToast(v.out, mine, theirs));
     NOTICE_LOG_FMT(NETPLAY, "Orca room: game {} {} for this player, set {}", id, v.out, score);
     if (end && !finish_sent)
       SendFinish(current_match, end->winner, end->why);

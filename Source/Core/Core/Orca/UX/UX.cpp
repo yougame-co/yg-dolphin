@@ -133,7 +133,7 @@ void Init()
       GuardMemory memory(guard);
       StageCursors::View view = Rules::ProfileRuleset() == Rules::Ruleset::Brawl ?
                                     BrawlStages::CursorView(memory, ports) :
-                                    RankedPPlus::CursorView(memory, ports);
+                                    RankedPPlus::CursorView(memory, ports, frame);
       StageCursors::Publish(std::move(view));
     }
     ProbeFrame(guard, frame);

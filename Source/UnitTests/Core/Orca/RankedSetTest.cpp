@@ -402,10 +402,10 @@ TEST(OrcaRankedSet, ProjectPlusKeepsItsOwnTimeOutRules)
 TEST(OrcaRankedSet, ScoreLine)
 {
   SetState s;
-  EXPECT_EQ(RankedSet::ScoreLine(s, 0), "Game 1 · 0–0");
+  EXPECT_EQ(RankedSet::ScoreLine(s, 0), "");
   s.wins = {1, 0};
-  EXPECT_EQ(RankedSet::ScoreLine(s, 0), "Game 2 · 1–0");
-  EXPECT_EQ(RankedSet::ScoreLine(s, 1), "Game 2 · 0–1");
+  EXPECT_EQ(RankedSet::ScoreLine(s, 0), "");
+  EXPECT_EQ(RankedSet::ScoreLine(s, 1), "");
   s.tiebreak = true;
   EXPECT_EQ(RankedSet::ScoreLine(s, 1), "Tiebreak game · 0–1");
   s.tiebreak = false;
@@ -414,6 +414,16 @@ TEST(OrcaRankedSet, ScoreLine)
   EXPECT_EQ(RankedSet::ScoreLine(s, 1), "Set over · 1–2");
   s.done = 2;
   EXPECT_EQ(RankedSet::ScoreLine(s, 0), "Set void · 2–1");
+}
+
+// A matchmade game's result toast: no "Game N" (Luis, 2026-10-05), the local player's score first.
+TEST(OrcaRankedSet, ResultToast)
+{
+  EXPECT_EQ(RankedSet::ResultToast("won", 1, 0), "You won · 1–0");
+  EXPECT_EQ(RankedSet::ResultToast("lost", 0, 1), "You lost · 0–1");
+  EXPECT_EQ(RankedSet::ResultToast("draw", 1, 1), "Draw · played again");
+  EXPECT_EQ(RankedSet::ResultToast("void", 1, 0), "That game didn't count");
+  EXPECT_EQ(RankedSet::ResultToast("", 0, 0), "That game didn't count");
 }
 
 // Design F's set dots: each decided game's winner in order, a tied game skipped, the game being

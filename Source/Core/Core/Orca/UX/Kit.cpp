@@ -907,28 +907,64 @@ Beat TurnPulse(double now_s)
   return {0.5f - 0.5f * std::cos(2 * std::numbers::pi_v<float> * t), t};
 }
 
+Blink Attention(double now_s, double since_s)
+{
+  constexpr double PERIOD = 0.4;
+  const double t = std::max(0.0, now_s - since_s);
+  const float phase = static_cast<float>(std::fmod(t, PERIOD) / PERIOD);
+  Blink b;
+  b.on = phase < 0.6f ? 1.0f : 0.15f;
+  b.swell = phase < 0.6f ? std::sin(std::numbers::pi_v<float> * phase / 0.6f) : 0.0f;
+  // The burst: three ripples 0.2 s apart, each 0.4 s on its way out.
+  for (int i = 0; i < 3; ++i)
+  {
+    const double r = (t - 0.2 * i) / 0.4;
+    if (r >= 0 && r < 1)
+      b.ripples[static_cast<std::size_t>(i)] = static_cast<float>(r);
+  }
+  return b;
+}
+
 void Pointer(ImDrawList* dl, ImVec2 c, float radius, float unit, int port, std::string_view tag,
              bool turn, bool tag_left, double now_s)
 {
-  const Paint p = PaintOf(PortTone(port));
-  // The tab stays where the cursor's resting size puts it while the cursor itself pulses.
+  Pointer(dl, c, radius, unit, port, tag, turn ? PointerMode::Acting : PointerMode::Plain,
+          tag_left, now_s, 0);
+}
+
+void Pointer(ImDrawList* dl, ImVec2 c, float radius, float unit, int port, std::string_view tag,
+             PointerMode mode, bool tag_left, double now_s, double since_s)
+{
+  // A waiting player's ring goes grey; its face stays opaque, so the game's crosshair never shows.
+  const Paint p = PaintOf(mode == PointerMode::Waiting ? Tone::Grey : PortTone(port));
+  // The tab stays where the cursor's resting size puts it while the cursor itself blinks.
   const float rest = radius;
-  if (turn)
+  if (mode == PointerMode::Acting)
   {
-    // Whoever has to act pulses (design F, 2026-10-05): a glow in their colour breathing with the
-    // beat, a ring rippling out and fading, and the cursor itself swelling 14%.
-    const Beat beat = TurnPulse(now_s);
+    // Whoever has to act blinks (Luis, 2026-10-05): a glow in their colour, a white ring lit on
+    // each beat, the cursor swelling 15%, and a burst of ripples as the turn comes to them.
+    const Blink blink = Attention(now_s, since_s);
+    for (const float r : blink.ripples)
+    {
+      if (r < 0)
+        continue;
+      const float out = rest * (1.1f + 1.6f * r);
+      const float fade = std::pow(1 - r, 1.2f);
+      const float width = std::max(2.0f, rest * 0.22f * (1 - 0.6f * r));
+      dl->AddCircle(c, out, Rgb(0, 0, 0, 0.35f * fade), 48, width + std::max(1.0f, 0.3f * width));
+      dl->AddCircle(c, out, Fade(p.top, 0.95f * fade), 48, width);
+    }
     for (int k = 3; k >= 1; --k)
     {
-      dl->AddCircleFilled(c, rest * (1.1f + 0.16f * static_cast<float>(k)) * (1 + 0.14f * beat.swell),
-                          Fade(p.top, (0.1f + 0.08f * beat.swell) / static_cast<float>(k)), 48);
+      dl->AddCircleFilled(c,
+                          rest * (1.12f + 0.2f * static_cast<float>(k)) * (1 + 0.15f * blink.swell),
+                          Fade(p.top, (0.12f + 0.16f * blink.on) / static_cast<float>(k)), 48);
     }
-    const float out = rest * (1.08f + 1.0f * beat.ripple);
-    const float fade = std::pow(1 - beat.ripple, 1.4f);
-    const float width = std::max(1.5f, rest * (0.2f * (1 - beat.ripple) + 0.04f));
-    dl->AddCircle(c, out, Rgb(0, 0, 0, 0.35f * fade), 48, width + std::max(1.0f, 0.25f * width));
-    dl->AddCircle(c, out, Fade(p.top, 0.95f * fade), 48, width);
-    radius = rest * (1 + 0.14f * beat.swell);
+    radius = rest * (1 + 0.15f * blink.swell);
+    const float ring = radius * 1.32f;
+    const float width = std::max(2.0f, 0.2f * rest);
+    dl->AddCircle(c, ring, Rgb(0, 0, 0, 0.45f * blink.on), 48, width + std::max(1.5f, 0.35f * width));
+    dl->AddCircle(c, ring, Rgb(255, 255, 255, blink.on), 48, width);
   }
   const float thick = std::max(2.0f, 0.26f * radius);
   const float rim = std::max(1.0f, 0.12f * radius);
@@ -961,6 +997,57 @@ void Pointer(ImDrawList* dl, ImVec2 c, float radius, float unit, int port, std::
     Tab(dl, ImVec2(tag_left ? c.x - rest * 0.55f : c.x + rest * 0.55f, ty), unit, tag,
         PortTone(port), tag_left);
   }
+}
+
+Box TurnTag(ImDrawList* dl, ImVec2 at, float radius, float unit, std::string_view title,
+            std::string_view detail, Tone tone, int seconds, double now_s, bool lean_left,
+            ImVec2 clamp_min, ImVec2 clamp_max, float rim, float size)
+{
+  const Paint p = PaintOf(tone);
+  const TextLook head = BadgeLook(unit, size, p);
+  const TextLook small = Inked(LabelLook(unit, size * 0.72f), p);
+  const ImVec2 ts = Measure(head, title);
+  const ImVec2 ds = detail.empty() ? ImVec2(0, 0) : Measure(small, detail);
+  const float pad_x = 1.3f * unit, pad_y = 0.5f * unit;
+  const float w = std::max(ts.x, ds.x) + 2 * pad_x;
+  const float h = ts.y + ds.y + 2 * pad_y;
+  // The timer beside it, as wide as Timer's plate for "0:00".
+  const float gap = 0.7f * unit;
+  float chip_w = 0, chip_h = 0;
+  if (seconds >= 0)
+  {
+    const ImVec2 widest = Measure(TitleLook(unit, 4.2f), "0:00");
+    chip_w = widest.x + 2.6f * unit + 0.6f * unit;
+    chip_h = widest.y + 0.9f * unit;
+  }
+  const float total_w = w + (seconds >= 0 ? gap + chip_w : 0);
+  const float total_h = std::max(h, chip_h);
+  // Above the cursor (and its blink's ring), leaning to its side; below it, clear of its name
+  // tab, when the top is too near.
+  float x = lean_left ? at.x + 0.6f * radius - total_w : at.x - 0.6f * radius;
+  float y = at.y - radius * 1.75f - total_h;
+  if (y < clamp_min.y)
+    y = at.y + radius * 0.55f + 3.6f * unit;
+  x = std::clamp(x, clamp_min.x, std::max(clamp_min.x, clamp_max.x - total_w));
+  y = std::clamp(y, clamp_min.y, std::max(clamp_min.y, clamp_max.y - total_h));
+  const ImVec2 min(x, y + (total_h - h) / 2), max(x + w, y + (total_h - h) / 2 + h);
+  if (rim > 0)
+  {
+    const float g = 0.55f * unit;
+    const float r = (h + 2 * g) * 0.34f;
+    dl->AddRect(ImVec2(min.x - g, min.y - g), ImVec2(max.x + g, max.y + g),
+                Rgb(0, 0, 0, 0.45f * rim), r, 0, 0.75f * unit);
+    dl->AddRect(ImVec2(min.x - g, min.y - g), ImVec2(max.x + g, max.y + g),
+                Rgb(255, 255, 255, rim), r, 0, 0.45f * unit);
+  }
+  Slab(dl, min, max, h * 0.34f, unit, p, 1);
+  const float cx = (min.x + max.x) / 2;
+  Text(dl, ImVec2(cx, min.y + pad_y + head.px * 0.03f), head, title, 1, Align::Centre);
+  if (!detail.empty())
+    Text(dl, ImVec2(cx, min.y + pad_y + ts.y), small, detail, 1, Align::Centre);
+  if (seconds >= 0)
+    Timer(dl, ImVec2(max.x + gap + chip_w / 2, y + total_h / 2), unit, seconds, now_s);
+  return {min, max};
 }
 
 void PortraitFrame(ImDrawList* dl, ImVec2 min, ImVec2 max, float unit, Tone tone)

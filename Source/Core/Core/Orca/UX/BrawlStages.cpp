@@ -880,8 +880,8 @@ std::pair<std::string, std::string> Lines(const GuestMemory& m,
   // Ranked: the set on the character and stage selects; on the stage select, after it, whose turn
   // it is, how many stages they strike or ban, and the time left; under it the turn's buttons for
   // the player whose turn it is, A's proposal for both, and what the other player proposes.
-  const std::string score =
-      fmt::format("Game {} · {} {}–{} {}", set.game, who(0), wins[0], wins[1], who(1));
+  // No "Game N" (Luis, 2026-10-05: the dots say which game it is).
+  const std::string score = fmt::format("{} {}–{} {}", who(0), wins[0], wins[1], who(1));
   if (!v.present || s->phase != Phase::Select)
     return {score, {}};
   if (step)
@@ -948,8 +948,18 @@ StageCursors::View CursorView(const GuestMemory& m,
   view.game = StageCursors::GAME_BRAWL;
   view.page = m.Read32(v.task + TASK_PAGE);
   view.picked = s->progress.picked;
-  if (const RS::Step* step = RS::Current(plan, s->progress); step && step->port <= 1)
-    view.turn = static_cast<s8>(step->port);
+  view.mk_clause = plan.mk_clause;
+  if (const RS::Step* step = RS::Current(plan, s->progress))
+  {
+    if (step->port <= 1)
+      view.turn = static_cast<s8>(step->port);
+    // The step for the overlay's turn cues (UI only).
+    view.kind = static_cast<u8>(step->kind);
+    view.left = static_cast<u8>(std::max(1, step->count - s->progress.done));
+    view.optional = step->optional;
+    view.both = step->port == RS::BOTH;
+    view.seconds = static_cast<s16>(RS::SecondsShown(Rules(), *step, s->progress.frames));
+  }
   for (int port = 0; port < 2; ++port)
   {
     StageCursors::View::Player& p = view.players[port];

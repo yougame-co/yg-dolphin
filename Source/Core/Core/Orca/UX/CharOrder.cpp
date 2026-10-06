@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <mutex>
 #include <cstdlib>
 #include <string_view>
 
@@ -433,7 +434,37 @@ int WriteState(GuestMemory& m, const State& s)
 namespace
 {
 std::atomic<int> s_picker{-1};  // CurrentPicker's
+std::mutex s_ribbon_lock;
+std::string s_ribbon;  // CurrentPickerRibbon's
 }  // namespace
+
+std::string PickerRibbon(int picker, const std::vector<Events::PortInfo>& ports)
+{
+  if (picker < 0 || picker > 1)
+    return "";
+  std::string name = fmt::format("P{}", picker + 1);
+  for (const Events::PortInfo& p : ports)
+  {
+    if (p.port != picker)
+      continue;
+    if (!p.remote)
+      return "YOUR PICK";
+    if (!p.name.empty())
+      name = p.name;
+  }
+  for (char& c : name)
+  {
+    if (c >= 'a' && c <= 'z')
+      c = static_cast<char>(c - 'a' + 'A');
+  }
+  return name + " PICKS";
+}
+
+std::string CurrentPickerRibbon()
+{
+  std::lock_guard lk(s_ribbon_lock);
+  return s_ribbon;
+}
 
 int Picker(const CssView& css, const State& state)
 {
@@ -464,7 +495,12 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
   if (resimulating)
     return;
   SetRuleLine(Line(set, css, after, ports));
-  s_picker.store(Picker(css, after), std::memory_order_relaxed);
+  const int picker = Picker(css, after);
+  s_picker.store(picker, std::memory_order_relaxed);
+  {
+    std::lock_guard lk(s_ribbon_lock);
+    s_ribbon = PickerRibbon(picker, ports);
+  }
   if (after.step != before.step || after.game != before.game || after.locked != before.locked)
   {
     static constexpr const char* STEPS[] = {"idle", "first", "second", "done"};
