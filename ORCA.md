@@ -744,6 +744,20 @@ Offered for Brawl (any revision) and Project+; without the cap the line answers 
 - **Not RAM.** The game's own volume or options would change memory every peer hashes, and a
   session starts from an empty NAND where a joiner plays on the host's save.
 
+**Checked** (2026-10-06, Mac):
+
+- Hashlogs of the default inputs (Brawl to 10800, Project+ to 9000) with the music on, with it off,
+  and of 0.3.27: equal on every frame.
+- Sync tests (`YG_SYNCTEST=7`) with it off: 0 RAM mismatches (Brawl 73451 re-run frames, Project+
+  60851).
+- What Orca played (`Dolphin.DSP.DumpAudio`, the same run on and off, sample-aligned): where only
+  music plays (character select after the match) RMS 2000-4000 drops to 0.7, the floor of a silent
+  second; in the matches the effects stay (off/on RMS median 0.77 Brawl, 0.84 Project+); with no
+  music playing the two dumps are identical. 99.99% of AI blocks went out quiet.
+- Two Orcas, one with the music off (`queue-e2e.mjs --q2 --queue casual --music-off ada
+  --dump-audio`): Brawl passed with 102 checksums matched on each side, Project+ with 103, no
+  desync; the music-off side's dump was silent for 71 of 157 s (Brawl) against 25 for the other.
+
 ## Match start
 
 The first seconds of a match (the countdown and just after) used to drop frames: two things compiled

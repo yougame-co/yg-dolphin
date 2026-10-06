@@ -1472,6 +1472,17 @@ still passed (0 RAM mismatches): they compare a build with itself, so only a has
 other setting, or two Orcas set differently, shows a switch that leaks into the game. The same
 build also never matched a frame (cached vs physical address), so it changed no sound at all.
 
+**Checked with the fixed build** (`f46f76064a`; the cap and command gate after it change no
+emulation): hashlogs on = off = 0.3.27 (Brawl frames 0-10800, Project+ 0-9006); sync tests off 0 RAM
+mismatches (Brawl 73451 re-run frames / 10494 loads, Project+ 60851 / 8694); audio dumps
+sample-aligned on/off (`wavcmp.py`): music-only seconds 2000-4000 RMS to 0.7; match off/on RMS
+median 0.77 (Brawl) and 0.84 (P+); AI blocks quiet 524275 of 524288 (the misses are the first ones,
+before AX's first frame), 97% in a sync test (re-runs rewrite the buffers; their sound is dropped
+anyway). Two-Orca casual q2, ada off and bo on: P+ PASS 103/103 checksums; Brawl PASS 102/102. One
+earlier Brawl attempt failed before matching (bo never left its main menu in 60 s; bo had the music
+on, nothing music-related) and one died when the worktree SSD image dropped mid-run; the rerun ran
+from the internal disk.
+
 ## Match start
 
 Luis, 2026-10-03 (on his Windows PC): the first seconds of every match (the countdown and just
