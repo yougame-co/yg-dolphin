@@ -21,8 +21,11 @@
 
 #include "Common/FPURoundMode.h"
 #include "Common/Logging/Log.h"
+#include "Core/CoreTiming.h"
 #include "Core/HW/Memmap.h"
 #include "Core/HW/SI/SI.h"
+#include "Core/HW/SystemTimers.h"
+#include "Core/HW/VideoInterface.h"
 #include "Core/IOS/FS/HostBackend/FS.h"
 #include "Core/IOS/IOS.h"
 #include "Core/HW/GCPad.h"
@@ -56,6 +59,27 @@ std::atomic<bool> s_in_snapshot{false};
 std::atomic<bool> s_resimulating{false};
 // Whether the frame now running is rendered, for the overlay's frame meter. CPU thread only.
 bool s_frame_shown = true;
+// Emulated ticks when the frame now running began (after any load at its boundary), 0 if unknown;
+// and how long the game held the shown frame that just ended (Events::GameHeldMs). CPU thread only.
+u64 s_frame_start_ticks = 0;
+double s_frame_held_ms = 0;
+int s_frame_held_frames = 0;
+
+// The emulated length of the frame that just ended, past one video frame, if it was shown.
+void TimeEndedFrame(Core::System& system)
+{
+  s_frame_held_ms = 0;
+  s_frame_held_frames = 0;
+  const u64 ticks = system.GetCoreTiming().GetTicks();
+  if (!s_frame_shown || s_frame_start_ticks == 0 || ticks <= s_frame_start_ticks)
+    return;
+  const double rate = system.GetVideoInterface().GetTargetRefreshRate();
+  const double frame_ms = 1000 / (rate > 0 ? rate : 59.94);
+  const double emulated_ms = static_cast<double>(ticks - s_frame_start_ticks) * 1000 /
+                             system.GetSystemTimers().GetTicksPerSecond();
+  s_frame_held_ms = Orca::Events::GameHeldMs(emulated_ms, frame_ms);
+  s_frame_held_frames = Orca::Events::GameHeldFrames(s_frame_held_ms, frame_ms);
+}
 
 constexpr std::size_t RESTORE_PAGE = 4096;
 constexpr u32 MEM1_VIRTUAL = 0x80000000u;
@@ -531,6 +555,16 @@ u64 HostFloatControlForTests()
   return HostFloatControl();
 }
 
+double LastFrameHeldMs()
+{
+  return s_frame_held_ms;
+}
+
+int LastFrameHeldFrames()
+{
+  return s_frame_held_frames;
+}
+
 void OnFrameBoundary(const Core::CPUThreadGuard& guard)
 {
   HostFloatScope host_float(guard.GetSystem().GetPPCState());
@@ -540,6 +574,7 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
       profile && !Orca::FrameHookLive(guard, *profile))
   {
     InputGate::Clear();
+    s_frame_start_ticks = 0;
     return;
   }
   Orca::Status::GameStarted();
@@ -555,7 +590,8 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
     NOTICE_LOG_FMT(ROLLBACK, "JIT cleared once: the loader's codes have landed");
   }
   // Report the frame that just ended to the overlay's frame meter. Host time only.
-  Orca::Events::NotifyBoundary(s_frame_shown);
+  TimeEndedFrame(guard.GetSystem());
+  Orca::Events::NotifyBoundary(s_frame_shown, s_frame_held_ms);
   // Inside a JIT block pc and npc are stale, and a snapshot would record and later resume at a
   // wrong address. Pin both to the hook address so every snapshot resumes here; the rest of the
   // block runs normally and updates them on exit.
@@ -616,5 +652,6 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
   // Skip host rendering for re-run frames. The emulated GPU still runs, so RAM and timing match.
   VideoCommon_SetSkipRender(IsResimulating() || Orca::TestSkipRender());
   s_frame_shown = !IsResimulating();
+  s_frame_start_ticks = guard.GetSystem().GetCoreTiming().GetTicks();
 }
 }  // namespace Rollback

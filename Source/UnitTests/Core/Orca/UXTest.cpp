@@ -28,6 +28,7 @@
 #include <gtest/gtest.h>
 #include <imgui.h>
 
+#include "Core/Orca/Session/Events.h"
 #include "Core/Orca/UX/ControllerSource.h"
 #include "Core/Orca/UX/Chat.h"
 #include "Core/Orca/UX/Controllers.h"
@@ -1020,6 +1021,65 @@ TEST(OrcaUXOverlay, FrameMeterStartsAfterTheFirstBoundarysWait)
   const auto f = m.View(p.Until(m, 2000), Stats::Off, Perf::Fps);
   EXPECT_EQ(f.perf, "60 fps · 17 ms");
   EXPECT_EQ(f.perf_level, Signal::Good);
+}
+
+TEST(OrcaUXOverlay, GameHeldTimeIsWhatTheGameTookPastOneFrame)
+{
+  constexpr double frame = 1000 / 59.94;
+  EXPECT_EQ(Orca::Events::GameHeldMs(frame, frame), 0);
+  EXPECT_EQ(Orca::Events::GameHeldMs(16.4, frame), 0);
+  // Jitter around the hook and a slow frame under 1.5 frames are the host's to explain.
+  EXPECT_EQ(Orca::Events::GameHeldMs(24, frame), 0);
+  EXPECT_NEAR(Orca::Events::GameHeldMs(2 * frame, frame), frame, 1e-9);
+  // Project+'s match end: 306 ms of emulated time at one boundary.
+  EXPECT_NEAR(Orca::Events::GameHeldMs(306.1, frame), 306.1 - frame, 1e-9);
+  EXPECT_EQ(Orca::Events::GameHeldFrames(306.1 - frame, frame), 17);
+  EXPECT_EQ(Orca::Events::GameHeldFrames(frame, frame), 1);
+  EXPECT_EQ(Orca::Events::GameHeldFrames(0, frame), 0);
+  EXPECT_EQ(Orca::Events::GameHeldMs(100, 0), 0);
+}
+
+TEST(OrcaUXOverlay, FrameMeterLeavesOutWhatTheGameItselfHeld)
+{
+  constexpr double frame = 1000 / 59.94;
+  // The game loads for 300 ms (18 video frames at one boundary) and this machine keeps pace: the
+  // same on every machine and on a Wii, so plain 60 fps, no hitch.
+  {
+    OverlayModel m;
+    Pacer p;
+    p.Until(m, 3000);
+    p.t += 300;
+    m.OnFrame(p.t, true, Orca::Events::GameHeldMs(300, frame));
+    const double load = p.t;
+    for (double later : {200.0, 500.0, 900.0})
+    {
+      const auto f = m.View(p.Until(m, load + later), Stats::Off, Perf::Detailed);
+      EXPECT_EQ(f.perf, "60 fps · 17 ms") << later;
+      EXPECT_EQ(f.perf_level, Signal::Good) << later;
+      EXPECT_LE(*std::max_element(f.graph.begin(), f.graph.end()), 17.0f) << later;
+    }
+  }
+  // The same load, but this machine took 200 ms more than the game did: still a hitch, timed
+  // without the load.
+  {
+    OverlayModel m;
+    Pacer p;
+    p.Until(m, 3000);
+    p.t += 500;
+    m.OnFrame(p.t, true, Orca::Events::GameHeldMs(300, frame));
+    const auto f = m.View(p.Until(m, p.t + 300), Stats::Off, Perf::Fps);
+    EXPECT_EQ(f.perf, "48 fps · 217 ms");
+    EXPECT_EQ(f.perf_level, Signal::Bad);
+  }
+  // Re-runs never carry a hold, and a hold on an unshown frame changes nothing.
+  {
+    OverlayModel m;
+    Pacer p;
+    double t = p.Until(m, 3000);
+    m.OnFrame(t + 2, false, 200);
+    const auto f = m.View(p.Until(m, t + 500), Stats::Off, Perf::Fps);
+    EXPECT_EQ(f.perf, "60 fps · 17 ms");
+  }
 }
 
 TEST(OrcaUXOverlay, FrameMeterDetailedAddsTheGraphAndOnlineTheDelay)
