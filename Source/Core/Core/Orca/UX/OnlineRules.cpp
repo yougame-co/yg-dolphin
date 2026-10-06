@@ -3,6 +3,7 @@
 
 #include "Core/Orca/UX/OnlineRules.h"
 
+#include <algorithm>
 #include <atomic>
 #include <bit>
 #include <map>
@@ -341,6 +342,9 @@ constexpr std::array<CodeMenuWord, 73> CODE_MENU_DEFAULTS{{
     {0x804E24A0, 0x3F800000},
     {0x804E24E0, 0x3F800000},
 }};
+static_assert(std::ranges::all_of(CODE_MENU_DEFAULTS, [](const CodeMenuWord& word) {
+  return word.address >= CODE_MENU && word.address % 4 == 0 && word.address + 4 <= CODE_MENU_END;
+}));
 
 // Project+'s Code Menu under a locking header: off, closed, every value at its default.
 void ForceCodeMenu(Writer& w)
@@ -352,8 +356,12 @@ void ForceCodeMenu(Writer& w)
     w.U32(CODE_MENU_GAME_PAUSE, w.m.Read32(CODE_MENU_SAVED_PAUSE));
   // Every other state too: 1 opens without the activation check, 3 swaps characters.
   w.U32(CODE_MENU_STATE, 0);
+  // One read per word: CodeMenuPresent checked the range is mapped.
   for (const CodeMenuWord& word : CODE_MENU_DEFAULTS)
-    w.U32(word.address, word.value);
+  {
+    if (w.m.Read32(word.address) != word.value)
+      w.U32(word.address, word.value);
+  }
 }
 
 // gmSelCharData, the character select's record: each port's slot at +0x0A + 4 x port, its

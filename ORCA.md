@@ -1110,8 +1110,9 @@ ranked, the queue's own character select), since `ux=20`:
   values are held at the file's defaults at every boundary. The four Character Select lines follow
   the fighters and are left alone; so are the replay, tag, costume, crowd and HUD colour lines.
   Nothing is written unless the memory has the pinned release's layout (`Rules::CodeMenuPresent`).
-- **The chord never arrives:** the gate drops D-pad Down while L and R are held, in every scene
-  (`drop_with_lr`). That also stops the debug codes' own L+R+Down toggle.
+- **The chord is dropped:** the gate drops D-pad Down while L and R both read held (button, or
+  analog at a quarter press), in every scene (`drop_with_lr`). That also stops the debug codes' own
+  L+R+Down toggle. Activation OFF is what keeps the menu shut; the drop is a backup.
 - **Banned fighters** become Bowser (`0x0C`) and Wario (`0x17`) on the character select, the stage
   select and between scenes, in the match's init data and in the character select's record
   (gmSelCharData), which the way to the fight copies into the init data again.
