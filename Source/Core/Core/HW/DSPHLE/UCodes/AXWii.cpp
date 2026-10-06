@@ -11,6 +11,7 @@
 #include <iterator>
 #include <optional>
 #include <span>
+#include <type_traits>
 
 #include "Common/ChunkFile.h"
 #include "Common/CommonTypes.h"
@@ -466,10 +467,13 @@ void AXWiiUCode::ProcessPBList(u32 pb_addr)
 
     ReadPB(memory, pb_addr, pb);
 
-    // A music voice mixes as any other; its share of the main bus is what it added there.
-    const bool music = m_music_split && pb.running == 1 && Orca::Music::IsMusicVoice(pb.is_stream);
+    // A music voice mixes as any other; its share of the main bus is what it added there. Not
+    // checked for running: an old AXWii's per-ms updates can start it mid-frame.
+    const bool music = m_music_split && Orca::Music::IsMusicVoice(pb.is_stream);
     // The main buffers are sized for AX GC's 5 ms; a Wii frame uses the first 3 ms.
-    std::array<int, 32 * 3> left_before, right_before;
+    std::array<int, Orca::Music::FRAME_SAMPLES> left_before, right_before;
+    static_assert(Orca::Music::FRAME_SAMPLES <= std::extent_v<decltype(m_samples_main_left)> &&
+                  Orca::Music::FRAME_SAMPLES <= std::extent_v<decltype(m_samples_main_right)>);
     if (music)
     {
       std::copy_n(m_samples_main_left, left_before.size(), left_before.begin());
