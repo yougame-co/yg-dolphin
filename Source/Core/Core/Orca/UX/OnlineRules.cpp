@@ -538,8 +538,9 @@ bool CodeMenuPresent(const GuestMemory& m)
   // The page shown, within the file; the root page, as the menu itself checks; and two lines'
   // sizes and pointers (Code Menu Activation, Flight Mode).
   const u32 page = m.Read32(CODE_MENU);
-  return page >= 0x804E07D8 && page < CODE_MENU_END && m.Read32(CODE_MENU + 4) == 0x804E07D8 &&
-         m.Read16(0x804E0C30) == 0x0058 && m.Read32(0x804E0C48) == 0x804E0C30 &&
+  return page >= CODE_MENU_ROOT && page < CODE_MENU_END &&
+         m.Read32(CODE_MENU + 4) == CODE_MENU_ROOT && m.Read16(0x804E0C30) == 0x0058 &&
+         m.Read32(0x804E0C48) == 0x804E0C30 &&
          m.Read16(0x804E23B4) == 0x0030 && m.Read32(0x804E23CC) == 0x804E0F00;
 }
 
@@ -691,7 +692,7 @@ Rollback::InputGate::Masks GateMasks(const GuestMemory& m)
   if (!h.Locked())
     return masks;
   const std::string scene = ReadSceneName(m);
-  // Project+'s Code Menu and debug codes open on L+R+Down. Shield and taunts stay the player's.
+  // Project+'s Code Menu and debug codes open on L+R+Down: Down is dropped while both are held.
   if (h.ruleset == Ruleset::PPlus)
   {
     for (Rollback::InputGate::Mask& mask : masks)

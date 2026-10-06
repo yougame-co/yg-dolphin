@@ -1045,8 +1045,8 @@ constexpr u32 DEBUG_MODE = 0x804E0D3C;
 void LoadCodeMenu(FakeMemory& m, u32 activation = 0)
 {
   m.Fill(CODE_MENU, CODE_MENU_END - CODE_MENU);
-  m.Write32(CODE_MENU, 0x804E07D8);
-  m.Write32(CODE_MENU + 4, 0x804E07D8);
+  m.Write32(CODE_MENU, CODE_MENU_ROOT);
+  m.Write32(CODE_MENU + 4, CODE_MENU_ROOT);
   m.Write16(0x804E0C30, 0x0058);
   m.Write32(0x804E0C48, 0x804E0C30);
   m.Write16(0x804E23B4, 0x0030);
@@ -1097,7 +1097,7 @@ TEST(OrcaOnlineRules, TheCodeMenuDefaultsAreTheFilesWords)
   std::map<u32, u32> seen;
   for (const CodeMenuWord& word : defaults)
   {
-    EXPECT_GE(word.address, CODE_MENU + 0x7D8);
+    EXPECT_GE(word.address, CODE_MENU_ROOT);
     EXPECT_LT(word.address + 3, CODE_MENU_END);
     EXPECT_EQ(word.address % 4, 0u);
     EXPECT_TRUE(seen.emplace(word.address, word.value).second) << std::hex << word.address;

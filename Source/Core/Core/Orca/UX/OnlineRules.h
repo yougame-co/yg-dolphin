@@ -198,6 +198,8 @@ constexpr int CHARACTER_WARIO_MAN = 0x2D;
 // Character Select lines follow the fighters and are left alone. Friends rooms keep the menu.
 constexpr u32 CODE_MENU = 0x804E0000;
 constexpr u32 CODE_MENU_END = 0x804E2520;
+// The root page, the first after the file's header. The menu checks the word at CODE_MENU + 4.
+constexpr u32 CODE_MENU_ROOT = 0x804E07D8;
 // u32: 0 closed, 1 the main menu's button (A or Start opens), 2 opening, 3 closing, 4 open.
 constexpr u32 CODE_MENU_STATE = 0x804E0034;
 constexpr u32 CODE_MENU_OPEN = 4;
