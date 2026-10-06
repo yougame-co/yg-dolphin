@@ -40,6 +40,7 @@
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Session/PadCodec.h"
 #include "Core/Orca/Status.h"
+#include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/OnlineMenu.h"
 #include "Core/Orca/UX/OnlineRules.h"
 #include "Core/Orca/UX/Queue.h"
@@ -2118,13 +2119,23 @@ void RefreshOwnValues(Match& match, int frame)
 // Controllers plugged in at `frame` (the session's plan, or solo just this player).
 std::vector<Orca::Events::PortInfo> PortsAt(Match& match, int frame)
 {
-  // A host names its own port only while solo: in a session a friend may already have run this
-  // frame. A joiner takes all values from its host.
-  if (!match.joining && !match.session && !match.port_names.count(match.local_seat) &&
-      Orca::Online::Seat() == match.local_seat)
+  // A host names its own port, with its own controls, only while solo: in a session a friend may
+  // already have run this frame. A joiner takes all values from its host. Solo frames are never
+  // re-run, and a friend who joins later gets these entries with the keyframe.
+  if (!match.joining && !match.session && Orca::Online::Seat() == match.local_seat)
   {
-    if (std::string own = Orca::Online::SeatName(match.local_seat); !own.empty())
-      AddName(match, {match.local_seat, frame, std::move(own), {}});
+    const Orca::Net::KeyframeInfo::Name* now = EntryAt(match, match.local_seat, frame);
+    std::string own = Orca::Online::SeatName(match.local_seat);
+    if (own.empty() && now)
+      own = now->name;
+    std::vector<u8> controls = Orca::Events::OwnControls();
+    if (now ? now->name != own || now->controls != controls :
+              !own.empty() || !controls.empty())
+    {
+      std::vector<u8> queue = now ? now->queue : std::vector<u8>{};
+      AddName(match, {match.local_seat, frame, std::move(own), std::move(controls),
+                      std::move(queue)});
+    }
   }
   const auto port = [&](int seat) {
     Orca::Events::PortInfo info{seat, "", seat != match.local_seat, {}};
@@ -2552,6 +2563,8 @@ std::optional<int> Boundary(Core::System& system,
     match.store = MakeStore();
     if (const std::string leave = Orca::GetEnv("ORCA_TEST_LEAVE_AT"); !leave.empty())
       match.leave_at = std::atoi(leave.c_str());
+    // This player's own controls, before a launch join's hello carries them.
+    Orca::UX::LoadOwnControls();
     Orca::Online::Start();
     // The role (host plays, joiner waits) is known once the room has its ticket.
     std::optional<bool> joining;

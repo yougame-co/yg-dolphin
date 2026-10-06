@@ -25,6 +25,7 @@
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/Chat.h"
 #include "Core/Orca/UX/YgOrb.h"
+#include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/OnlineMenu.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/UX/Queue.h"
@@ -455,6 +456,15 @@ void Platform::ProcessEmbedCommands()
                                                 Orca::UX::Perf::Off);
       else
         Embed::Out("unsupported perf");
+    }
+    else if (cmd == "controls")
+    {
+      // The player's in-game controls from the page (UX/NameTags.h): their tag gets them at the
+      // next character select, and a game they join or host carries them.
+      std::string hex;
+      in >> hex;
+      if (!Orca::UX::SetOwnControlsFromApp(hex))
+        Embed::Out("unsupported controls");
     }
     else if (cmd == "chat")
     {
