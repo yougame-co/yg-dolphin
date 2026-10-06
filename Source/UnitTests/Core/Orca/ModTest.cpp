@@ -802,7 +802,12 @@ TEST(OrcaMod, CapsWaitForTheGuards)
   ASSERT_TRUE(profile) << error;
   Orca::SetActiveProfile(profile);
   EXPECT_FALSE(Orca::Status::CapsSettled());
+  // An app that answers early (a test tool) gets the builtin's caps once they are offered.
+  Orca::Status::SetAppCaps("join results locks queue2");
+  EXPECT_FALSE(Orca::Status::Cap("results"));
   Orca::Mod::NoteGuards(true, 2);
+  Orca::Status::UpdateCaps();
+  EXPECT_TRUE(Orca::Status::Cap("results"));
   EXPECT_TRUE(Orca::Status::CapsSettled());
   Orca::Status::PrintCaps();
   Orca::Status::SetAppCaps("join results locks queue2");

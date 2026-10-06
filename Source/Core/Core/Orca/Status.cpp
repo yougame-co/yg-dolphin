@@ -34,6 +34,26 @@ std::FILE* s_out = nullptr;
 std::set<std::string, std::less<>> s_app_caps;
 // The last `orca caps` list printed (nullopt: none yet), under s_mutex.
 std::optional<std::string> s_printed_caps;
+// The app's last `caps` line, and the offer s_app_caps was last agreed against (under s_mutex).
+std::string s_app_list;
+std::string s_offer_seen;
+
+// Both lists' names (under s_mutex).
+std::set<std::string, std::less<>> Agreed(std::string_view offered, std::string_view app)
+{
+  std::set<std::string, std::less<>> ours;
+  std::istringstream mine{std::string(offered)};
+  for (std::string name; mine >> name;)
+    ours.insert(name);
+  std::set<std::string, std::less<>> both;
+  std::istringstream theirs{std::string(app)};
+  for (std::string name; theirs >> name;)
+  {
+    if (ours.count(name))
+      both.insert(name);
+  }
+  return both;
+}
 // When CapsSettled was first asked (host clock: when "ready" waits, never what the game computes).
 std::optional<std::chrono::steady_clock::time_point> s_settle_asked;
 void (*s_error_listener)(std::string_view, std::string_view) = nullptr;
@@ -174,33 +194,26 @@ void UpdateCaps()
     return;
   const std::string caps = OfferedCaps();
   std::lock_guard lock(s_mutex);
-  if (!s_printed_caps || *s_printed_caps == caps)
+  if (s_offer_seen == caps)
     return;
-  s_printed_caps = caps;
-  // Withdrawn caps are off at once, before the app's new answer.
-  std::set<std::string, std::less<>> ours;
-  std::istringstream mine{caps};
-  for (std::string name; mine >> name;)
-    ours.insert(name);
-  std::erase_if(s_app_caps, [&ours](const std::string& name) { return !ours.contains(name); });
-  Print(fmt::format("orca caps {}\n", caps));
+  s_offer_seen = caps;
+  // What is on follows the offer at once (a withdrawn cap off, a cap the app already listed on),
+  // before any new answer from the app.
+  s_app_caps = Agreed(caps, s_app_list);
+  if (s_printed_caps && *s_printed_caps != caps)
+  {
+    s_printed_caps = caps;
+    Print(fmt::format("orca caps {}\n", caps));
+  }
 }
+
 
 void SetAppCaps(std::string_view list)
 {
-  std::set<std::string, std::less<>> ours;
-  std::istringstream mine{OfferedCaps()};
-  for (std::string name; mine >> name;)
-    ours.insert(name);
-  std::set<std::string, std::less<>> both;
-  std::istringstream theirs{std::string(list)};
-  for (std::string name; theirs >> name;)
-  {
-    if (ours.count(name))
-      both.insert(name);
-  }
+  const std::string offered = OfferedCaps();
   std::lock_guard lock(s_mutex);
-  s_app_caps = std::move(both);
+  s_app_list = std::string(list);
+  s_app_caps = Agreed(offered, list);
 }
 
 bool Cap(std::string_view name)
