@@ -71,7 +71,7 @@ inline constexpr const char* QUEUE2_CAP = "queue2";
 // Anyone pick only with that pick's cap; without it the pick prints in place, unarmed ("orca menu
 // online <queue> kept"), and arms once the friends are gone (Rollback/OnlineMatch.h
 // DecideLobbyPick, DecideKeptPick). Offered with "locks". A ruleset profile then offers 16 caps,
-// the most the app accepts.
+// the most an app before the Music switch's release accepts (that release takes 24).
 inline constexpr const char* PICK_CAPS = "pick-casual pick-ranked";
 // This build's caps for the running profile: CAPS, plus "music", "results", "locks", "queue2" and
 // the pick caps where supported.
