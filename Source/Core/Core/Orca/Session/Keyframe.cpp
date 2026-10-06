@@ -836,4 +836,9 @@ std::unique_ptr<KeyframeStore> MakeKeyframeStore(TicketSource tickets)
     return std::make_unique<LocalKeyframeStore>(dir);
   return MakeHttpKeyframeStore(std::move(tickets));
 }
+
+std::string LastRefusal()
+{
+  return t_last_refusal;
+}
 }  // namespace Orca::Net
