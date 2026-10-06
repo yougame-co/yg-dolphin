@@ -3320,6 +3320,34 @@ Unit tests: `OrcaOnlineRules.TheCodeMenu*`, `AnOpenCodeMenuClosesAndTheGameRunsA
 Open: friends rooms keep the menu (Luis's call). `TRIGGER_HELD` (a quarter press) is a guess at
 where the game counts an analog trigger as held; the activation lock does not depend on it.
 
+**Release review (2026-10-06, candidate `codemenu-q14`: `fix-codemenu` + `q14-play-again-clean`).**
+
+- `ForceCodeMenu` read each word through `Writer::U32` (4 `Valid` + 4 `Read8` per word, 584 MMU
+  calls a boundary, first runs and re-runs). It now reads each word once (`Read32`) and calls
+  `U32` only for one that differs: same writes, same `changed` count. A `static_assert` keeps every
+  word inside the range `CodeMenuPresent` checked, so the plain read is always mapped.
+- ORCA.md said "the chord never arrives": the gate drops Down only while both triggers read held
+  (button, or analog at 0x40); the game's own threshold isn't known. Activation OFF is the lock.
+- Kept as is: values a player set offline aren't given back after a queue (they come from the
+  file again at boot); a joiner gets the host's saved activation back, as with the saved rules;
+  Sopo stays legal (the spec; Luis to confirm for ranked).
+- Re-run on the candidate build (Mac, Release, headless, under the run locks):
+  - the cheats probe (`preset.probe`, ranked header): the same frames as before, every value back
+    at the next boundary, the forced-open menu closed and the pause word 0 at fight frame 201;
+  - the Giga pick (`giga3-ranked.txt`): `0x2C`/`0x2D` at frame 548, `0x0C`/`0x17` at 549, the
+    fight Bowser vs Wario (`[12, 23]`);
+  - `YG_SYNCTEST=7` from 170 to 5,600, the chord input and the Giga input: 37,961 re-run frames
+    each, 0 RAM mismatches;
+  - hashlogs against 0.3.27 (the released Orca.app): `pplus-1v1` frames 0-9,000 and
+    `bf-mario-link-results` 0-10,800 identical.
+- Two Orcas over prod rooms (`queue-e2e.mjs --pplus <dol> --q2 --queue ranked --pick bowser --giga
+  --chord --probe watch-cm.probe`, dev tickets): both readied Bowser (`orca queue ready ranked 12
+  0`) and held L through the shared select's Start. At frame 2,361 both games wrote `0x2C` for both
+  ports; at 2,362 both read `0x0C`. 17 L+R+Down chords by both mid-fight and one each on both
+  results screens: the menu's state and the pause word never changed, activation 2 from the header
+  on. Set 2-0, `orca result` game and set lines on both sides, characters `[12, 12]`, 238 checksums
+  matched each, no desync, no `orca error`.
+
 ## Ranked sets
 
 A ranked queue match is a best-of-3 set followed in the game's own memory, so both Orcas, every

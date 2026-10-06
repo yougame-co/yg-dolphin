@@ -1145,7 +1145,8 @@ ranked, the queue's own character select), since `ux=20`:
   Project+'s defaults afterwards. Friends rooms keep the menu as it is.
 
 Tests: `OrcaOnlineRules.*CodeMenu*`, `OrcaOnlineRules.ProjectPlus*`,
-`OrcaInputGate.DownDropsOnlyWhileLAndRAreBothHeld`. More in ORCA_NOTES.md, "Project+'s Code Menu".
+`OrcaInputGate.DownDropsOnlyWhileLAndRAreBothHeld`. Two Orcas: `queue-e2e.mjs --pplus <dol> --q2
+--queue ranked --pick bowser --giga --chord`. More in ORCA_NOTES.md, "Project+'s Code Menu".
 
 ## No CPUs online
 
