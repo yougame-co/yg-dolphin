@@ -1,4 +1,4 @@
-# The character select's buttons in a ranked queue2 set (ORCA.md "The character select's buttons",
+# The character select's buttons in a ranked queue2 set (ORCA.md "A only in the grid",
 # "Character order": A picks a character, Start locks it in), Brawl: game 1 as bf-queue2-ranked.txt
 # (the player's own character select, Link steered in for port 2, both ready, the strikes, port 2
 # walks off), the results, then game 2's character order, port 1 (the winner) first:

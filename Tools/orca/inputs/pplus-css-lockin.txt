@@ -1,4 +1,4 @@
-# The character select's buttons in a ranked queue2 set (ORCA.md "The character select's buttons",
+# The character select's buttons in a ranked queue2 set (ORCA.md "A only in the grid",
 # "Character order": A picks a character, Start locks it in), Project+ (ORCA_PROFILE=PPLUS32): game
 # 1 as pplus-queue2-ranked.txt (the player's own character select, the opponent's pick steered in,
 # both ready, the strikes, port 2 walks off), the results, then game 2's character order, port 1

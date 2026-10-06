@@ -4,7 +4,7 @@
 """Orca's Online menu labels: original art, drawn in each game's style with open-licence fonts.
 
 Writes the texture pack Orca loads in every session (Data/Sys/Orca/Textures/RSBE01; see ORCA.md
-"Online menu" and "Relabelled words"). Each PNG uses a Dolphin hires texture name, so it replaces
+"Online menu" and "On-screen UI"). Each PNG uses a Dolphin hires texture name, so it replaces
 one game texture on screen and never touches emulated memory. Brawl and Project+ both load
 textures as RSBE01, but their labels hash differently, so one folder serves both.
 
@@ -78,7 +78,7 @@ LABELS = [
          box=(13, 17, 116, 39), style="pplus-css"),
 ]
 
-# The relabels (Core/Orca/UX/Relabel.h, ORCA.md "Relabelled words"): the game's big words say what
+# The relabels (Core/Orca/UX/Relabel.h, ORCA.md "On-screen UI"): the game's big words say what
 # to do now. Orca marks each texture with an invisible value, so each label hashes to its own name:
 #   band-<game>-<n>   READY TO FIGHT! (MenSelchrReady01_2, C4 352x36): 1 PRESS START TO LOCK IN!,
 #                     2 WINNER PICKS FIRST!, 3 LOSER PICKS NOW!

@@ -83,7 +83,7 @@ void VideoCommon_DoState(PointerWrap& p)
 
   // Orca: on a load, draw any buffered vertices first, while the old registers are still in
   // place. Flushed after the restore, they would be drawn with the snapshot's matrices and TEV
-  // state and show up as garbage triangles. See ORCA.md, "Rollback and the EFB".
+  // state and show up as garbage triangles. See ORCA.md, "Rollback and snapshots".
   if (p.IsReadMode())
     g_vertex_manager->Flush();
 

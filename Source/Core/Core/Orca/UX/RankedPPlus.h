@@ -24,7 +24,7 @@ class CPUThreadGuard;
 // the input gate masks Project+'s own controls, each player acts on their own cursor, and the frame
 // hook writes the strike table so Project+'s own check refuses struck stages. Apply is a pure,
 // idempotent function of emulated memory and the frame, so rollback re-runs write nothing new.
-// See ORCA.md, "Ranked stage flow".
+// See ORCA.md, "Ranked steps".
 namespace Orca::UX
 {
 class GuestMemory;

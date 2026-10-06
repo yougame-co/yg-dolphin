@@ -71,7 +71,7 @@
 # character select as With Friends > FIGHT! did (code 25: no With Friends page any more, whose
 # buttons all went to the same place), its code in the dead window code after B's path; B goes back
 # to the top page as the game does once its "Disconnect from Wiimmfi?" window returns, with no
-# window. The original words read in Project+'s RAM on its ONLINE page (q10-runs, 2026-10-05): the
+# window. The original words read in Project+'s RAM on its ONLINE page: the
 # same as Brawl's but for the calls into sora_scene.
 8117B384 3800001A 48000068    # li r0, 0x1A -> b 0x8117B3EC (With Friends: leave the menu)
 8117B388 901D0634 901D0634    # stw  r0, 0x634(r29) (guard)

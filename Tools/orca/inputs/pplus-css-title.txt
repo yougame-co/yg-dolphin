@@ -1,4 +1,4 @@
-# The character select's title (ORCA.md "The character select's title", UX/CssTitle.h) on
+# The character select's title (ORCA.md "On-screen UI", UX/CssTitle.h) on
 # Project+ (ORCA_PROFILE=PPLUS32), which Orca boots to its main menu's top page (PPLUS32.patches):
 # Play Online > With Friends (FRIENDS; since ux=18 it goes straight to its character select), B out
 # to ONLINE on With Friends, With Anyone > Casual (CASUAL), B out to With Anyone, Ranked (RANKED),

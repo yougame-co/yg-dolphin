@@ -966,7 +966,7 @@ endif()
 # Orca and Rollback work out values every peer must agree on (the input gate's steering and
 # presses, what the hooks write to emulated memory) on different hosts and compilers, so no fused
 # multiply-adds there: Apple clang contracts a * b + c into one by default on ARM64, which rounds
-# once where x86-64 rounds twice. That code keeps to integers anyway (ORCA.md "Host arithmetic");
+# once where x86-64 rounds twice. That code keeps to integers anyway (ORCA.md "Determinism across hosts");
 # this is the belt to those braces. MSVC needs nothing: /fp:precise (CMakeLists.txt) never
 # contracts in VS 2022 and later, and the x86-64 baseline (no /arch:AVX2) has no FMA to emit.
 if(NOT MSVC)

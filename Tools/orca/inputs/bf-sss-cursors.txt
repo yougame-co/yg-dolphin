@@ -1,4 +1,4 @@
-# The stage select's two cursors (ORCA.md "The stage select's two cursors"), a ranked Brawl set,
+# The stage select's two cursors (ORCA.md "Two cursors"), a ranked Brawl set,
 # Mario (P1) vs Samus (P2). Run with ORCA_TEST_QUEUE=ranked (the header's coin 0: port 1 strikes
 # first), ORCA_TEST_SET_RULES=1,8 (1-stock games) and ORCA_UX_TEST_NAMES=ada,bo, e.g. the sync test:
 #   ORCA_SESSION=1 ORCA_TEST_QUEUE=ranked ORCA_TEST_SET_RULES=1,8 ORCA_UX_TEST_NAMES=ada,bo \

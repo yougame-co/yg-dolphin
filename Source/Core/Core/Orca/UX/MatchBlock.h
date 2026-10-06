@@ -13,7 +13,7 @@
 // The match block: a queue match's rules and set state, stored in the game's own memory at
 // FreeSpace::kMatchBlock (same address in Brawl rev 2 and Project+). Living in MEM1 means rollback
 // snapshots and drop-in keyframes carry it for free. Big-endian, like the game. See ORCA.md,
-// "Online rules", "Ranked stage flow" and "Ranked sets".
+// "Online rules", "Ranked steps" and "Ranked sets".
 //
 // Until Orca writes it the block holds dead game code, so readers check the magic. Friends rooms
 // and solo play never have a header.

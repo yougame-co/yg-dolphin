@@ -22,7 +22,7 @@ textures as `RSBE01`; their labels hash differently, so one folder serves both.
 
 Project+'s own button already reads PLAY ONLINE and its title ONLINE.
 
-The relabels (`Core/Orca/UX/Relabel.h`, ORCA.md "Relabelled words") add 38 more names, listed with
+The relabels (`Core/Orca/UX/Relabel.h`, ORCA.md "On-screen UI") add 38 more names, listed with
 their words in `RELABELS` in the script. They replace READY TO FIGHT! (with PRESS START TO LOCK IN!
 and similar), the STAGE SELECT title (with each strike or pick step, right-aligned so the overlay's
 timer follows), the stage select's BRAWL / VERSUS (RANKED, CASUAL) and Project+'s stage select

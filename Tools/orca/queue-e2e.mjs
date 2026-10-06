@@ -78,7 +78,7 @@ const SHOTS_OUT = opt("--shots-out");
 // How long after a ranked set's verdict the page sends the new rating (`queue rating`).
 const RATING_AFTER_MS = Number(opt("--rating-after", "1500"));
 const Q2 = argv.includes("--q2");
-// --pick random (--q2): both pick the RANDOM tile (ORCA.md "Random and ranked's no skip"); the
+// --pick random (--q2): both pick the RANDOM tile (ORCA.md "The queue's character select"); the
 // verdicts' resolved characters must match on both sides.
 const PICK = opt("--pick", "character");
 // Random's character id (Selch_Random), and how many frames of full tilt up, then right, take the

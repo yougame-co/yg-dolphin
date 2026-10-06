@@ -12,7 +12,7 @@
 // Stage striking, banning and picking for a ranked set, shared by Brawl and Project+. Pure logic
 // with no memory access or state. Each game's adapter keeps the set and step state in the match
 // block and maps the ruleset's stage indices to its own stage select. Bit i of a StageMask is the
-// ruleset's legal stage i, starters first. See ORCA.md, "Ranked stage flow".
+// ruleset's legal stage i, starters first. See ORCA.md, "Ranked steps".
 //
 // Game 1 is 1-2-1 on the starters. Later games, the winner strikes or bans, then the loser picks
 // (never a stage they already won on). Casual games skip strikes: both players name a stage at

@@ -40,7 +40,7 @@ std::optional<GCPadStatus> LatestPad();
 // Input age is how old the newest adapter report was when a frame read it, sampled only when the
 // pad changed. It sums two spans that are each timed on a single clock (time in the helper, time
 // in our cache). The hop between processes crosses clocks, so only its jitter is reported ("hop").
-// See ORCA.md, "Controller input age".
+// See ORCA.md, "Input latency".
 struct ControllerTiming
 {
   u64 snapshots = 0;

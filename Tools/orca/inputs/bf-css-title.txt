@@ -1,4 +1,4 @@
-# The character select's title (ORCA.md "The character select's title", UX/CssTitle.h) on Brawl:
+# The character select's title (ORCA.md "On-screen UI", UX/CssTitle.h) on Brawl:
 # PLAY ONLINE > With Friends (FRIENDS; since ux=18 it goes straight to its character select), B out
 # to ONLINE on With Friends, With Anyone > Casual (CASUAL), B out to With Anyone, Ranked (RANKED),
 # B out, B to ONLINE, B to the top page, Group > Brawl (the game's BRAWL). Each character select

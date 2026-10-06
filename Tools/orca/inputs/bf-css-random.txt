@@ -1,4 +1,4 @@
-# Random in a ranked queue2 set (ORCA.md "Random and ranked's no skip": Random is allowed in casual
+# Random in a ranked queue2 set (ORCA.md "The queue's character select": Random is allowed in casual
 # and ranked), Brawl, as bf-css-lockin.txt but every pick is RANDOM (character id 0x29,
 # Selch_Random; the tile at the right end of the grid's bottom row, about 22.8..28.7, -4.1..0.1):
 #   - game 1: on the player's own character select port 1 goes up 20 frames and right 58 (25.6,

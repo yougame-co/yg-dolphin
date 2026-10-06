@@ -88,7 +88,7 @@
 # - B would open the same window in mode 1, "Disconnect from Nintendo WFC?", and go back once it
 #   closed. Instead what the game does when that window returns: the back animation (0x806A5A58),
 #   next proc 0 (the top page), sub-state 3, return 1.
-# Found under the harness (q10-runs: next proc +0x634 watched, the module disassembled from a RAM
+# Found under the harness (next proc +0x634 watched, the module disassembled from a RAM
 # dump; nothing branches into the window code after B's path, and its last word is already the
 # branch to the function's `li r3, 0`). One group, so the redirect never lands without its code.
 81179F04 3800001A 48000068    # li r0, 0x1A -> b 0x81179F6C (With Friends: leave the menu)

@@ -1,4 +1,4 @@
-# Casual's later games on the character select (ORCA.md "The character select's buttons", "The
+# Casual's later games on the character select (ORCA.md "A only in the grid", "The
 # queue's character select": A picks a character, Start locks it in), Brawl: game 1 as
 # bf-queue2-flow.txt, then game 2, both picking at once: B takes a token up, A puts it down, Start
 # locks in (LOCKED IN on the panel), A on the own token while locked in does nothing, B unlocks,

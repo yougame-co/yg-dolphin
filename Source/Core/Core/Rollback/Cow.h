@@ -6,7 +6,7 @@
 // A snapshot write-protects guest RAM in every host mapping of it (host views and the JIT's fastmem
 // views). The first write to a page afterwards faults; the fault handler saves the page's old
 // contents in the newest snapshot's undo log, makes the page writable, and the write is retried.
-// So a snapshot costs only the pages that change after it, not all 96 MB.
+// So a snapshot costs only the pages that change after it, not all of RAM.
 //
 // Invariant: every page is either read-only in every view or already saved in the newest log.
 // Pages that change every frame stay writable and are copied up front at each snapshot ("hot

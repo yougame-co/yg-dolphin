@@ -1,7 +1,7 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-// The ranked stage flow (ORCA.md "Ranked stage flow"): the shared step machine (RankedSteps.h),
+// The ranked stage flow (ORCA.md "Ranked steps"): the shared step machine (RankedSteps.h),
 // the match block (MatchBlock.h) and Project+'s flow on its stage select (RankedPPlus.h), over a
 // fake of the game's memory.
 

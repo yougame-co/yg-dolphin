@@ -1,7 +1,7 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-// The character select's mode title (ORCA.md "The character select's title", UX/CssTitle.h): what
+// The character select's mode title (ORCA.md "On-screen UI", UX/CssTitle.h): what
 // it says in each room, where the mark lives (the title texture's palette in the character
 // select's archive), and that the word is written only as one of the values this knows.
 

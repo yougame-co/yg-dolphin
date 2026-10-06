@@ -1,7 +1,7 @@
 #!/bin/bash
 # Publish a snapshot of this private repo to the public one (github.com/Lrosias/orca-netplay).
 #
-#   Tools/orca-publish-public.sh [ref] [message]     # defaults: origin/main, "Orca <short sha>"
+#   Tools/orca-publish-public.sh [ref] [message]     # defaults: origin/main, "Orca source, <date>"
 #   DRY_RUN=1 Tools/orca-publish-public.sh ...       # build and check, don't push
 #
 # The public history is Dolphin's own, then one commit per published snapshot, authored as
@@ -43,7 +43,7 @@ if [ "$(git rev-parse "$parent^{tree}")" = "$tree" ]; then
   exit 0
 fi
 
-msg=${2:-"Orca $(git rev-parse --short "$src")"}
+msg=${2:-"Orca source, $(date -u +%Y-%m-%d)"} # no private hashes in public messages
 commit=$(GIT_AUTHOR_NAME=YouGame GIT_AUTHOR_EMAIL=noreply@yougame.co \
   GIT_COMMITTER_NAME=YouGame GIT_COMMITTER_EMAIL=noreply@yougame.co \
   git commit-tree "$tree" -p "$parent" -m "$msg")

@@ -16,7 +16,7 @@ class CPUThreadGuard;
 }
 
 // Swaps the Versus character select's title logo (Brawl's BRAWL, Project+'s VERSUS) for CASUAL,
-// RANKED or FRIENDS in an online room. See ORCA.md, "The character select's title".
+// RANKED or FRIENDS in an online room. See ORCA.md, "On-screen UI".
 //
 // The logo is a texture (MenSelchrPanelRule3.1), so Orca doesn't draw on it. Instead it nudges the
 // blue of the texture's fully transparent background palette entry by 1-3 steps. That change is

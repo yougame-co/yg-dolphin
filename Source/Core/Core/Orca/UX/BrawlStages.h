@@ -20,7 +20,7 @@ class CPUThreadGuard;
 }
 
 // Ranked stage selection on vanilla Brawl's own stage select (RSBE01 rev 2, Supernova 2025 rules).
-// See ORCA.md, "Ranked stages (Brawl)". Game 1 uses 1-2-1 strikes on the five starters, with the
+// See ORCA.md, "Ranked steps". Game 1 uses 1-2-1 strikes on the five starters, with the
 // first striker chosen by a coin flip. Later games: the winner may ban, then the loser picks
 // (with DSR). Also handles the Meta Knight clause, turn timers and their defaults, and greys out
 // struck or illegal stages.

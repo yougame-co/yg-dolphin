@@ -1,4 +1,4 @@
-# A ranked Brawl set's stage flow (ORCA.md "Ranked stages (Brawl)"), Mario (P1) vs Samus (P2):
+# A ranked Brawl set's stage flow (ORCA.md "Ranked steps"), Mario (P1) vs Samus (P2):
 # game 1's strikes by X (Battlefield, Yoshi's Island, Lylat Cruise, Smashville) leave Pokemon
 # Stadium, which the flow selects on the Melee page; port 2 walks off; game 2's ban times out (33 s)
 # and port 2, the loser, picks Battlefield with A; port 2 walks off again (2-0).

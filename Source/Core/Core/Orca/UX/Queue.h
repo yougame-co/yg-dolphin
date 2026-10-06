@@ -211,7 +211,7 @@ Text TextFor(const View& view, const State& state, const std::vector<Events::Por
 // ---- Fixed point (the steering's arithmetic) ----
 // Steering is integer-only because host floating point differs between compilers (for example
 // ARM64 clang fuses a multiply-add that x86-64 MSVC does not), which would desync the machines.
-// See ORCA.md, "Host arithmetic". Positions are in FIXED_ONEs, 1/65536 of a unit.
+// See ORCA.md, "Determinism across hosts". Positions are in FIXED_ONEs, 1/65536 of a unit.
 constexpr int FIXED_BITS = 16;
 constexpr s64 FIXED_ONE = s64{1} << FIXED_BITS;
 // Positions this far out are invalid (the character select spans about -30..30, -20..20).
