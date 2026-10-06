@@ -5602,6 +5602,71 @@ struct LobbyPickPlan
 
 # Moved from ORCA_ARCHITECTURE.md (2026-10-06): internal messaging guidance, not public
 
+## Play again after a ranked set (q14, 2026-10-06)
+
+Luis, 2026-10-06 (03:23 UTC, room `6qe4adpj`): "The flow where we finish a ranked match and I click
+play again, and that person accepts my invite, seems to fail ... make sure that this flow works
+smoothly". ORCA.md "Play again after a ranked set" (under "Drop-in") is the short version; this is
+the original write-up and the verify runs.
+
+**Play again after a ranked set** (branch `q14-play-again`; `OnlineMatch.cpp` `EndQueueForFriend`,
+`EndQueueForJoin`, `RearmFriendsPick`). Luis, 2026-10-06 (03:23 UTC, room `6qe4adpj`): "The flow
+where we finish a ranked match and I click play again, and that person accepts my invite, seems to
+fail ... make sure that this flow works smoothly". After a set both games are back on their own
+Ranked character select, not ready (the queue image), each hosting a friends room of its own. The
+page's Play again (YouGame's Play for fun) invites the opponent into the inviter's room and sends
+`prepare-join`; the opponent's page accepts and sends `join <code>`. Through 0.3.26 the join always
+failed: the inviter's game still carried the queue's own character select's header
+(`FLAG_SOLO | FLAG_QUEUE2`, which `WantedRulesMode` asks for while the queue is active, alone on port
+1), its keyframe carried it, and the friend refused it right after loading (`Online rules: ... this
+room wants no header (the host's header is its own character select's): mismatch`, `orca error
+mismatch`), whoever had left the set's room and whoever had hosted it
+(`Tools/orca/queue-e2e.mjs --scenario playagain --variant a|b|c|d`, `--scenario cssjoin --where
+ranked`: JOIN-FAILED on 0.3.25 and on `q11-lobby`). Inviting a friend from With Anyone's Casual or
+Ranked character select at any other time failed the same way. Now the newest intent wins, as With
+Friends does and as a lobby pick does the other way round:
+- **The host** (port 1, not joining, its room's welcome said `private`): a friend arriving, or the
+  app's `prepare-join` (an invite on its way), while its player is on the queue (its own character
+  select, or the app's search) ends the queue and the search at that boundary, before the header is
+  called for again, and prints `orca menu cancel` (the page drops its search and the player's
+  ready). The header goes back to none at the next boundary (`HeaderFreeAt` allows it with a friend
+  waiting; the player's own rules come back), a keyframe made under the old one is dropped
+  (`DropStaleKeyframe`), and the friend's keyframe carries none. At `prepare-join` that costs
+  nothing; at an arrival with no invite first, one more boundary before the keyframe. The select
+  stays the one the pick opened (titled RANKED until the friend plugs in, then FRIENDS: "The
+  character select's title"). Never in a room the queue made (its opponent is the match) or before
+  a room's welcome (a matched room's `host` just taken).
+- **Once the friends are gone** (one came in, all left, and the host's game is alone again on the
+  character select the queue's pick opened, a fight in between or not), the pick is armed again
+  if its page can search that queue now (its pick cap; `orca menu online ranked`): its queue's own character select, where Start searches, as for the
+  friend who went home on that same select (`ComeHome`, `AnnounceHomePick`). Never for an invite
+  nobody took yet: the player waits there for the friend, and Start would take them into a search.
+- **The friend** whose keyframe loads into a friends room ends its own queue the same way (`orca
+  menu cancel` if one was under way) and drops the game it kept for after a queue room (its own
+  character select, or the set's room's). Kept, that image was never put back (only a queue room's
+  end does that) and stopped the player going home when its host left (`MayComeHome`: `no-room`,
+  so its own invites failed), and the queue still active would have put the queue's own character
+  select's header on the friend's game once home on port 1. A join that fails before the keyframe
+  loads keeps the player's own game, its queue select and all.
+- The friend's way in needed nothing new: `join` from anywhere (its own select, or still in the
+  set's room as its host or its joiner, on the results screen or the select) leaves that room at a
+  clean boundary (`JoinInPlay`; a set already decided is no forfeit) and joins.
+
+Local: what changes is which header this host writes at its own solo boundaries before a keyframe,
+and its own process state; nothing a session runs on two machines (no compatibility change).
+
+**Verify (2026-10-06, two Orcas against prod, `Tools/orca/play-again-matrix.sh`, built from
+`q14-play-again` merged into rel-0.3.27):** released 0.3.27 fails `css-ranked` and `pa-d`
+(JOIN-FAILED: `orca error mismatch ... this room wants no header`). With q14: `css-ranked`, `pa-d`,
+`pa-dh`, `pa-a`, `pa-b`, `pa-c`, `pa-d-fl`, `pa-e` all pass: a game played together (129 s of
+fight), 156-170 checksums matched on both sides, no mismatched rollbacks, and the leaver hosts its own
+room ~1.9 s later (HOME); `pa-d-fl` shows the host re-armed (`orca menu online ranked`). Runs under
+`~/ClaudeWorktrees/orca-q14-0327-verify/out/`. The code was then re-applied on main's cleaned style
+(branch `q14-play-again-clean`); its own runs are logged below when done.
+
+Workaround for 0.3.27 players: the inviter presses B on the Ranked select (back to the menu) before
+pressing Play again; an invite already sent then gets a clean keyframe.
+
 ## Explaining it to people (internal)
 
 **One sentence:**
