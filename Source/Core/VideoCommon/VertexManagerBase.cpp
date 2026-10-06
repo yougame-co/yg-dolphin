@@ -911,11 +911,10 @@ void VertexManagerBase::UpdatePipelineObject()
       return;
     }
 
-    // Orca (ORCA.md, "Match start"): in a session, not an ubershader still compiling in the
-    // background (a boot that stopped waiting for its shaders): compiled here, on the emulation
-    // thread, it would freeze the game for as long as it takes (D3D's FXC: seconds). The draw is
-    // skipped instead, as in AsynchronousSkipRendering, until the ubershader or the specialized
-    // pipeline (queued ahead of the ubershaders) is ready. Nothing drawn reaches RAM in a session.
+    // Orca: in a session, never compile a missing ubershader here on the emulation thread; with
+    // D3D's FXC that freezes the game for seconds. Skip the draw instead, as in
+    // AsynchronousSkipRendering, until a pipeline is ready. This is safe for determinism because
+    // nothing drawn reaches RAM in a session. See ORCA.md, "Match start".
     static const bool session = Orca::SessionActive();
     if (g_ActiveConfig.iShaderCompilationMode == ShaderCompilationMode::AsynchronousUberShaders &&
         session)

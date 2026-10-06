@@ -77,7 +77,7 @@
 # muProcWifi (the ONLINE page), its update (0x81179CB0), two copies of its input handling (two
 # input paths), one group each, from A's path through B's into the dead code after it:
 # - A on With Friends (cursor 0) would set the next proc to 0x1A, the With Friends page, whose four
-#   buttons all went to the same character select (Luis, 2026-10-05: "every single button in with
+#   buttons all went to the same character select (player feedback: "every single button in with
 #   friends menu does the exact same thing ... just have with friends and get rid of that extra
 #   submenu"). Instead it leaves the menu as that page's FIGHT! does (0x81191904): the proc's exit
 #   with code 25 (0x806A5604, which plays the button's decided animation and has the menu leave two

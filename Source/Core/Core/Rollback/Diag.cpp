@@ -86,7 +86,7 @@ struct SnapTimes
   double state = 0, mem1 = 0, mem2 = 0;
   int saves = 0;
   std::vector<float> port_saves, port_loads;
-  // Copy-on-write saves, and what the frames between them cost.
+  // Copy-on-write saves and the faults between them.
   double cow_state = 0, cow_protect = 0;
   int cow_saves = 0;
   std::vector<float> cow_faults, cow_recorded, cow_copied;  // per first-pass frame
@@ -346,21 +346,21 @@ struct JitCodeWord
 {
   u32 word = 0;
   u32 clears = 0;       // s_jit_clears when it was compiled
-  bool guest = false;   // a guest invalidation (icbi, dcbst/dcbf) covered it since
-  bool forced = false;  // a forced one (a rollback load's restored page) did
+  bool guest = false;   // invalidated by the guest (icbi, dcbst/dcbf) since
+  bool forced = false;  // invalidated by a rollback restore since
 };
 FILE* const s_jit_code_file = [] {
   const char* path = std::getenv("YG_JITCODE_LOG");
   return path && *path ? std::fopen(path, "w") : nullptr;
 }();
 std::unordered_map<u32, JitCodeWord> s_jit_words;
-// The words each block start's latest compile read.
+// The words each block's latest compile read, by block start.
 std::unordered_map<u32, std::vector<std::pair<u32, u32>>> s_jit_block_words;
 u32 s_jit_clears = 0;
 int s_jit_frame = 0;
 
-// The word at an effective address in MEM1 or MEM2 (mapped as the games run them), or nothing:
-// Memory::Read_U32 raises a panic alert anywhere else (the locked cache, a page-table mapping).
+// The word at an address in MEM1 or MEM2, or nothing. Avoids Memory::Read_U32, which raises a
+// panic alert for other addresses.
 std::optional<u32> RamWord(Memory::MemoryManager& memory, u32 address)
 {
   const u32 physical = address & 0x3FFFFFFF;
@@ -375,8 +375,8 @@ std::optional<u32> RamWord(Memory::MemoryManager& memory, u32 address)
   return std::nullopt;
 }
 
-// What an instruction fetch at that address reads now: memory's word, or the active profile's kept
-// game code (Orca::KeptInstruction) while memory holds the loader's.
+// What an instruction fetch at `address` reads now, including the profile's kept game code
+// (Orca::KeptInstruction).
 std::optional<u32> FetchWord(Memory::MemoryManager& memory, u32 address)
 {
   const std::optional<u32> ram = RamWord(memory, address);

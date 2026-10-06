@@ -32,13 +32,12 @@ namespace
 {
 using Clock = std::chrono::steady_clock;
 
-// After the stream ends, its last snapshot goes neutral (stale) and, this long after, Orca falls
-// back to Dolphin's own mapping until the stream is back.
+// After the stream drops, input is neutral for this long, then falls back to Dolphin's mapping.
 constexpr auto DETACHED_FALLBACK = std::chrono::seconds(1);
 constexpr size_t TIMING_SAMPLES = 4096;
-// The input age's log line covers the frames since the last one, at most this often.
+// How often to log an input-age line.
 constexpr auto AGE_LOG_PERIOD = std::chrono::seconds(10);
-// A snapshot's hop through the app is timed against the fastest over this long (Stream::Cached).
+// Window for the fastest hop that hop jitter is measured against.
 constexpr auto HOP_FLOOR_PERIOD = std::chrono::seconds(1);
 
 double EpochMs()
@@ -48,7 +47,7 @@ double EpochMs()
       .count();
 }
 
-// The desktop app's bridge only: http://127.0.0.1:<port>, so the token goes nowhere else.
+// Only accept a loopback bridge, so the token is never sent anywhere else.
 bool LoopbackBridge(std::string_view bridge)
 {
   constexpr std::string_view prefix = "http://127.0.0.1:";
@@ -67,7 +66,7 @@ std::string Env(const char* name)
   return v ? v : "";
 }
 
-// The newest TIMING_SAMPLES values of one measure.
+// Ring buffer of the newest TIMING_SAMPLES values.
 class Samples
 {
 public:
@@ -95,8 +94,7 @@ struct Percentiles
   double p50 = 0, p95 = 0, p99 = 0, max = 0;
 };
 
-// Sorts its own copy: callers copy under their lock and call this outside it, so the stream thread
-// and the CPU thread never wait on a sort.
+// Takes a copy so callers can sort outside their lock.
 Percentiles Summarize(std::vector<double> values)
 {
   Percentiles p;
@@ -113,7 +111,7 @@ Percentiles Summarize(std::vector<double> values)
   return p;
 }
 
-// The input age's numbers over some frames (ControllerSource.h), and their log line.
+// Input-age numbers over a window of frames, plus their log line.
 struct AgeWindow
 {
   Clock::time_point start{};
@@ -121,7 +119,7 @@ struct AgeWindow
   u64 reports = 0;
   std::vector<double> age, helper, cache, hop;
 
-  // `hop_ms` < 0: none for this read.
+  // `hop_ms` < 0 means no hop for this read.
   void Add(double helper_ms, double cache_ms, double hop_ms)
   {
     if (age.size() >= TIMING_SAMPLES)
@@ -184,18 +182,14 @@ public:
   struct Cached
   {
     std::shared_ptr<const Snapshot> snapshot;
-    double age_ms = 0;  // since this process took it in (its own steady clock)
-    // Its hop through the app, from sent_at to this process taking it in, above the fastest such
-    // hop of the last HOP_FLOOR_PERIOD; -1 for a snapshot without an adapter report. The hop's own
-    // length can't be had: its ends are the helper's clock (its wall clock read once at start, then
-    // its own steady clock) and this process's wall clock, which drift apart (a few ppm) and step
-    // (NTP, w32time). Over a second their drift is microseconds and their offset cancels, so this
-    // is the hop's jitter: how much later than its best this one came.
+    double age_ms = 0;  // time since we received it, on our steady clock
+    // Hop jitter: this snapshot's trip minus the fastest trip of the last HOP_FLOOR_PERIOD, or -1
+    // without an adapter report. The raw trip spans two processes' clocks and can't be trusted, but
+    // over one second the clock offset cancels out.
     double hop_ms = -1;
   };
 
-  // The newest snapshot; nullopt when there is none to use (never attached, or detached for longer
-  // than DETACHED_FALLBACK).
+  // nullopt if never attached, or detached for longer than DETACHED_FALLBACK.
   std::optional<Cached> Latest() const
   {
     std::lock_guard lk(m_lock);
@@ -206,9 +200,8 @@ public:
                   m_latest_hop};
   }
 
-  // A frame's own read (LocalPad(true)) took `choice` (nullptr: no pad from the app) from `cached`:
-  // the input age at the boundary (ControllerSource.h). CPU thread. Returns the log line when one
-  // is due, for the caller to log outside the locks.
+  // Records the input age for a frame's read (`choice` is null when the app gave no pad).
+  // CPU thread. Returns a log line when one is due, for the caller to log outside the locks.
   std::string NoteFrame(const Cached& cached, const LocalChoice* choice)
   {
     const auto now = Clock::now();
@@ -216,8 +209,7 @@ public:
     const u64 reports = m_reports - m_reports_at_frame;
     m_reports_at_frame = m_reports;
     const Snapshot& snapshot = *cached.snapshot;
-    // Only an adapter port's reports carry the helper's receive time. A read of anything else, or
-    // a neutral one (stale, suspended), says nothing; the read after it starts afresh.
+    // Only adapter reports carry a receive time; skip gamepads and neutral reads.
     if (!choice || choice->source != PadSource::Adapter || choice->neutral ||
         snapshot.received_at <= 0)
     {
@@ -233,10 +225,8 @@ public:
     const Orca::Net::Pad pad = Orca::Net::EncodePad(choice->pad);
     if (m_last_pad && *m_last_pad != pad)
     {
-      // Two spans, each on one clock, never one process's time against another's: the helper's
-      // (sent_at - received_at: its steady clock, plus the app's own monotonic clock for a snapshot
-      // it held) and the wait in this process's cache (its steady clock). The hop between them is
-      // left out (Cached::hop_ms) and reported beside the age.
+      // Two spans, each timed on one clock: time in the helper and time in our cache. The
+      // cross-process hop is reported separately.
       const double helper = std::max(0.0, snapshot.sent_at - snapshot.received_at);
       const double cache = cached.age_ms;
       ++m_input.changes;
@@ -263,7 +253,7 @@ public:
     return m_input;
   }
 
-  // The whole stream's input age, for the log when it stops (empty: no frame read the adapter).
+  // Input-age summary for the log when the stream stops (empty if no frame read the adapter).
   std::string RunSummary() const
   {
     AgeWindow run;
@@ -339,8 +329,7 @@ private:
     auto* self = static_cast<Stream*>(user);
     if (self->m_done)
       return 0;  // aborts the transfer
-    // SSE lines end in LF, CRLF or CR (the app sends LF); a CR never appears inside the JSON, so
-    // dropping CRs and treating a lone CR as LF reads all three alike.
+    // SSE lines may end in LF, CRLF or CR; treat a lone CR as LF and drop the CR of a CRLF.
     for (size_t i = 0; i < size * count; ++i)
     {
       const char c = data[i];
@@ -360,8 +349,8 @@ private:
     }
     if (self->m_pending.size() > 256 * 1024)
       return 0;
-    // An event ends with a blank line. Its `data:` lines are joined with LF; comment lines
-    // (`: ping`, the app's keepalive) and other fields are ignored.
+    // A blank line ends an event. `data:` lines are joined with LF; keepalives and other fields
+    // are ignored.
     size_t end;
     while ((end = self->m_pending.find("\n\n")) != std::string::npos)
     {
@@ -403,9 +392,8 @@ private:
       ++m_timing.refused;
       return;
     }
-    // Sequence numbers count within one helper run (a restarted helper, or the app's own empty
-    // snapshot after a failure, starts again): order only within a session.
-    // Sequence 0 is the app's own snapshot (an idle or failed helper), never stale.
+    // Sequence numbers restart with each helper run, so only compare within one session.
+    // Sequence 0 is the app's own snapshot for an idle or failed helper and is never stale.
     if (m_latest && m_latest->session == parsed->session && parsed->sequence != 0 &&
         parsed->sequence < m_latest->sequence)
     {
@@ -425,10 +413,9 @@ private:
     m_attached = true;
   }
 
-  // `trip`: a snapshot's arrival here less its send, across the two clocks (Cached::hop_ms). Only
-  // adapter snapshots count: their sent_at is always on the helper's clock (the app stamps its own
-  // snapshots with its own). A clock step that lengthens the trips shows in full until the floor
-  // from before it is a second old; one that shortens them is the new floor at once. Under m_lock.
+  // `trip` is arrival time minus sent_at, across two clocks. Returns it minus the fastest trip of
+  // the last HOP_FLOOR_PERIOD. Only adapter snapshots count, since only they use the helper's
+  // clock. Call under m_lock.
   double HopAboveFloor(Clock::time_point arrived, double trip)
   {
     while (!m_hop_floor.empty() && m_hop_floor.back().second >= trip)
@@ -449,7 +436,7 @@ private:
 
   void Run()
   {
-    // The local player's pads arrive here from the app (Profile.h, PrioritizeThread).
+    // Local input arrives on this thread, so give it latency priority.
     Orca::PrioritizeThread(Orca::LatencyThread::Controllers);
     int backoff_ms = 500;
     while (!m_done)
@@ -470,11 +457,11 @@ private:
       curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 2000L);
       curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
       curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
-      // Loopback: no proxy, and Nagle off so a small event is never held back.
+      // Loopback: no proxy, and Nagle off so small events are sent at once.
       curl_easy_setopt(curl, CURLOPT_NOPROXY, "*");
       curl_easy_setopt(curl, CURLOPT_TCP_NODELAY, 1L);
-      // A hung bridge: nothing at all for 30 s (a running helper sends every 100 ms; a failed or
-      // missing one sends nothing, and reconnecting faster would only respawn it).
+      // Treat 30 s of silence as a hung bridge. A live helper sends every 100 ms, and reconnecting
+      // sooner would only respawn a failed one.
       curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1L);
       curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 30L);
       const CURLcode result = curl_easy_perform(curl);
@@ -485,7 +472,7 @@ private:
       Detach();
       if (m_done)
         return;
-      // A bridge that refuses the token, or has no such route, won't change its mind.
+      // These won't succeed on retry.
       if (status == 401 || status == 403 || status == 404)
       {
         ERROR_LOG_FMT(CONTROLLERINTERFACE,
@@ -503,7 +490,7 @@ private:
         wait_ms = backoff_ms = 500;  // the app restarted the stream
       else
         wait_ms = backoff_ms = std::min(backoff_ms * 2, 5000);
-      // Once per change, not once a second while another game holds the stream.
+      // Log only when the status changes.
       if (status != m_last_status || result != m_last_result)
       {
         WARN_LOG_FMT(CONTROLLERINTERFACE, "Orca: controller stream ended ({}, HTTP {})",
@@ -528,32 +515,30 @@ private:
   std::shared_ptr<const Snapshot> m_latest;
   Clock::time_point m_arrived{};
   double m_latest_hop = -1;  // m_latest's Cached::hop_ms
-  // The adapter snapshots' trips of the last HOP_FLOOR_PERIOD that a later one hasn't beaten, in
-  // arrival order: the front is the fastest (HopAboveFloor).
+  // Monotonic queue of recent trips; the front is the fastest of the last HOP_FLOOR_PERIOD.
   std::deque<std::pair<Clock::time_point, double>> m_hop_floor;
   Clock::time_point m_detached_at{};
   bool m_attached = false;
   double m_last_report = 0;
   ControllerTiming m_timing;
-  Samples m_samples;  // the transport's
-  // Adapter reports taken in (distinct received_at), and the count at the last frame's read.
+  Samples m_samples;  // transport timing
+  // Distinct adapter reports received, and the count at the last frame's read.
   u64 m_reports = 0;
   u64 m_reports_at_frame = 0;
-  // The input age: totals, the newest changes (and their hops), the log line's frames, and the last
-  // frame's pad.
+  // Input-age state.
   Orca::Events::InputAge m_input;
   Samples m_age, m_helper, m_cache, m_hop;
   AgeWindow m_window;
   std::optional<Orca::Net::Pad> m_last_pad;
 
-  std::thread m_thread;  // last: starts after everything above exists
+  std::thread m_thread;  // declared last so it starts after every member above is constructed
 };
 
 std::mutex s_stream_lock;
 std::unique_ptr<Stream> s_stream;
 
-// Swaps the stream out and joins it outside the lock. `log`: the run's input age goes to the log
-// first (not at static destruction, when the log may be gone).
+// Swaps the stream out and joins it outside the lock. `log` writes the input-age summary first;
+// skip it at static destruction, when the logger may be gone.
 void StopStream(bool log)
 {
   std::unique_ptr<Stream> stream;
@@ -573,13 +558,13 @@ struct Teardown
   ~Teardown() { StopStream(false); }
 } s_teardown;
 
-// The pad from the app's newest snapshot; with `for_frame`, timed (Stream::NoteFrame).
+// The pad from the newest snapshot; `for_frame` also records input age.
 std::optional<LocalChoice> Choose(bool for_frame)
 {
   std::optional<LocalChoice> choice;
   std::string age_line;
   {
-    // Held through the choice (pure and quick) so the stream can't go while it is noted.
+    // Hold the lock through the (quick) choice so the stream can't be torn down meanwhile.
     std::lock_guard lk(s_stream_lock);
     if (!s_stream)
       return std::nullopt;
@@ -601,8 +586,7 @@ void StartControllerStream(const std::string& bridge, const std::string& token)
   std::unique_ptr<Stream> next;
   if (LoopbackBridge(bridge) && !token.empty())
   {
-    // libcurl's global init, through Common::HttpRequest's own once-only path (the room client and
-    // the keyframe store use it too), before the stream thread's first curl_easy_init.
+    // Run libcurl's global init (via HttpRequest's once-only path) before the thread uses curl.
     { Common::HttpRequest init; }
     next = std::make_unique<Stream>(bridge, token);
   }
@@ -640,11 +624,11 @@ void StartControllerStreamFromEnvironment()
 
 std::optional<GCPadStatus> LocalPad(bool for_frame)
 {
-  // Timed before the focus gate: the gate decides what the game gets, not how fresh it was.
+  // Time the read before the focus check: focus changes what the game gets, not input age.
   const auto choice = Choose(for_frame);
   if (!choice)
     return std::nullopt;
-  // The same focus rule as the keyboard (Dolphin's input gate, set on the CPU thread each field).
+  // Same focus rule as the keyboard: no input while the window is unfocused.
   if (!ControlReference::GetInputGate())
     return NeutralPad();
   return choice->pad;

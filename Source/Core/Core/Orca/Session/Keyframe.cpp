@@ -38,11 +38,11 @@ constexpr char MAGIC[4] = {'O', 'K', 'F', '2'};
 // Long-distance matching over a 128 MB window: RAM and the NAND's /tmp share data far apart.
 constexpr int WINDOW_LOG = 27;
 constexpr int LEVEL = 3;
-// No section of a keyframe is near this (MEM2 is 64 MB; a Wii NAND is 512 MB at most).
+// Sanity limit per section (MEM2 is 64 MB; a Wii NAND is at most 512 MB).
 constexpr u64 MAX_SECTION = 512ull << 20;
 constexpr u64 MAX_RAW = 1ull << 30;
 constexpr u32 MAX_NAND_ENTRIES = 65536;
-// The site takes 128 MB at most (ORCA.md, "Keyframe store").
+// The site accepts at most 128 MB.
 constexpr u64 MAX_KEYFRAME_BYTES = 128ull << 20;
 
 class Writer
@@ -152,7 +152,7 @@ bool ReadNandTree(const std::string& root, std::vector<NandEntry>* entries)
 
 namespace
 {
-// Why a NAND replacement step failed, for the log (the OS's own error text).
+// The OS's error text, for logging a failed NAND replacement step.
 std::string LastOsError()
 {
 #ifdef _WIN32
@@ -237,7 +237,7 @@ std::vector<u8> PackKeyframe(int frame, const Rollback::MachineImage& image,
   ZSTD_CCtx_setParameter(cctx, ZSTD_c_compressionLevel, LEVEL);
   ZSTD_CCtx_setParameter(cctx, ZSTD_c_enableLongDistanceMatching, 1);
   ZSTD_CCtx_setParameter(cctx, ZSTD_c_windowLog, WINDOW_LOG);
-  // Uses every core when this zstd was built with threads; one otherwise.
+  // Uses several threads when zstd was built with them; one otherwise.
   ZSTD_CCtx_setParameter(cctx, ZSTD_c_nbWorkers, 4);
   std::vector<u8> out(ZSTD_compressBound(w.out.size()));
   const size_t size = ZSTD_compress2(cctx, out.data(), out.size(), w.out.data(), w.out.size());
@@ -455,7 +455,8 @@ std::string KeyframeHash(const std::vector<u8>& blob)
 
 namespace
 {
-// A folder both Orcas on one machine use (tests): the host writes <id>.okf, the friend reads it.
+// A folder shared by two Orcas on one machine (tests): the host writes <id>.okf, the joiner reads
+// it.
 class LocalKeyframeStore final : public KeyframeStore
 {
 public:
@@ -516,10 +517,10 @@ private:
   std::string m_dir;
 };
 
-// YouGame's keyframe endpoint (ORCA.md, "Keyframe store"): PUT, GET and DELETE on
-// <store_url>/<id> with "Authorization: Ticket <room ticket>". A 401 with code "ticket" gets a newly
-// minted ticket; network errors, 429 and 5xx are retried with backoff; other refusals are final. A
-// PUT answered 409 "exists" already landed (an earlier try whose reply was lost).
+// YouGame's keyframe endpoint: PUT, GET and DELETE on <store_url>/<id> with "Authorization: Ticket
+// <room ticket>". A 401 with code "ticket" retries with a new ticket; network errors, 429 and 5xx
+// retry with backoff; other refusals are final. A 409 "exists" on PUT means an earlier attempt
+// landed but its reply was lost.
 class HttpKeyframeStore final : public KeyframeStore
 {
 public:
@@ -575,8 +576,8 @@ public:
   void Delete(const std::string& id) override
   {
     // Best effort, off the caller's thread (the CPU thread calls this right after a load); the
-    // site's cleanup rule catches what this misses.
-    // The room's cached ticket now (the room may be gone by the time the thread runs).
+    // site's cleanup catches anything missed. Copy the ticket now, since the room may be gone when
+    // the thread runs.
     std::string ticket, base, error;
     if (!m_tickets || !m_tickets(false, &ticket, &base, &error))
     {
@@ -648,15 +649,15 @@ private:
       *error = result.status ? fmt::format("HTTP {}{}{}", result.status,
                                            result.error.empty() ? "" : ": ", result.error) :
                                result.error;
-      // An expired or unknown ticket: once more with a new one.
+      // Expired or unknown ticket: retry once with a new one.
       if (result.status == 401 && result.code == "ticket" && !fresh)
       {
         fresh = true;
         continue;
       }
       fresh = false;
-      // A refusal (wrong room, too large, gone, a full room) stays a refusal; 429 and 5xx and the
-      // network may pass.
+      // Refusals (wrong room, too large, gone, room full) are final; 429, 5xx and network errors
+      // retry.
       const bool retry = !result.final && (result.status == 0 || result.status == 429 ||
                                            result.status >= 500);
       if (!retry)
@@ -708,7 +709,7 @@ private:
       return n;
     }
     if (t->download->size() + n > t->limit)
-      return 0;  // aborts: more than any keyframe
+      return 0;  // abort: larger than any keyframe
     t->download->insert(t->download->end(), data, data + n);
     if (t->progress && !t->progress(t->download->size(), 0))
       return 0;
@@ -755,7 +756,7 @@ private:
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, 10000L);
-    // A transfer may take minutes on a slow link, but not stand still for 20 s.
+    // A transfer may take minutes on a slow link, but must not stall for 20 s.
     curl_easy_setopt(curl, CURLOPT_LOW_SPEED_LIMIT, 1024L);
     curl_easy_setopt(curl, CURLOPT_LOW_SPEED_TIME, 20L);
     curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, &OnWrite);
@@ -779,8 +780,7 @@ private:
     if (code != CURLE_OK)
     {
       result.error = curl_easy_strerror(code);
-      // An abort (the player gave up, emulation stopping, an oversized body) is not worth
-      // repeating.
+      // Aborts (the player gave up, emulation stopping, an oversized body) are not worth retrying.
       result.final = code == CURLE_WRITE_ERROR || code == CURLE_ABORTED_BY_CALLBACK ||
                      (cancel && cancel->load());
       if (result.status >= 200 && result.status < 300)

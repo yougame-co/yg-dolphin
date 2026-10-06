@@ -103,9 +103,9 @@ TEST(OrcaPause, OnlineSessionWaitsForItsFirstBoundary)
 
 TEST(OrcaPause, DropInRequestsWaitForTheNextBoundary)
 {
-  // Each of these needs a frame boundary, so a solo pause ends for it; taken, it no longer does.
-  // Only what a boundary will take counts: a join or leave once the app's caps allow it, an invite
-  // only with a room up.
+  // A pending request needs a frame boundary, so it ends a solo pause until it is taken. Only
+  // requests a boundary can act on count: join or leave once the app's caps allow them, and an
+  // invite only once a room is up.
   SessionEnv env(nullptr);
   Clear();
   Orca::Status::SetAppCaps("");

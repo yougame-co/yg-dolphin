@@ -62,8 +62,7 @@ std::string ReadManagerName(const GuestMemory& m, u32 field)
   return {};  // not a name
 }
 
-// Brawl rev 2 itself or a launcher profile booting it (Project+): the addresses are that
-// executable's.
+// Brawl rev 2, or a launcher profile that boots it (Project+). The addresses are for that build.
 bool BrawlExecutable()
 {
   const Orca::Profile* profile = Orca::ActiveProfile();
@@ -134,13 +133,13 @@ std::string_view MenuEventText(OnlinePick pick, bool queue)
 std::optional<OnlinePick> OnlineMenuReader::Boundary(const MenuState& state, bool resimulating,
                                                      bool alone, u64 resyncs)
 {
-  // A re-run frame repeats a frame whose first run was already read (or that a rollback undid).
+  // Re-runs repeat frames already read, or ones a rollback undid.
   if (resimulating)
     return std::nullopt;
   using Where = MenuState::Where;
   if (!m_started || resyncs != m_resyncs)
   {
-    // A new start: whatever this boundary shows is where the game is, not something that happened.
+    // Starting over: the current state is where the game is, not a new event.
     m_started = true;
     m_resyncs = resyncs;
     m_from_menu = state.where == Where::Menu;
@@ -160,7 +159,7 @@ std::optional<OnlinePick> OnlineMenuReader::Boundary(const MenuState& state, boo
   case Where::Leaving:
     break;
   }
-  // The menu's exit code shows from the first boundary between scenes; once per exit.
+  // The exit code shows from the first frame between scenes. Announce once per exit.
   if (!m_from_menu || m_seen || state.exit_code == 0)
     return std::nullopt;
   m_seen = true;
@@ -177,16 +176,16 @@ void ReadOnlineMenu(const Core::CPUThreadGuard& guard, bool resimulating, bool a
   static OnlineMenuReader s_reader;
   GuardMemory memory(guard);
   const MenuState state = ReadMenuState(memory);
-  // With the app's "host" the queue searches for Casual and Ranked while the player waits on the
-  // character select.
+  // With the app's "host" capability, the queue searches while the player waits on the character
+  // select.
   const bool queue = Orca::Status::Cap("host");
   if (const auto pick = s_reader.Boundary(state, false, alone, Orca::Events::Resyncs()))
   {
     NOTICE_LOG_FMT(ROLLBACK, "Online menu: exit code {}: orca menu {}", state.exit_code,
                    MenuEventText(*pick, queue));
     Orca::Status::Menu(MenuEventText(*pick, queue));
-    // With the app's `queue2` the player waits on the queue's own character select, and the page
-    // searches once they are ready (UX/Queue.h); before it, as soon as they pick.
+    // With `queue2` the app searches once the player is ready on the queue's own character select
+    // (UX/Queue.h). Without it, the search starts at the pick.
     if (queue && *pick != OnlinePick::Friends && Orca::Status::Cap("queue2"))
     {
       Search::End();
@@ -204,8 +203,7 @@ void ReadOnlineMenu(const Core::CPUThreadGuard& guard, bool resimulating, bool a
     }
     return;
   }
-  // Backed out of the character select to the main menu while searching (or matched and still
-  // alone), or out of the queue's own character select: the search is over.
+  // Back on the main menu while searching, or while matched but still alone: the search is over.
   if (alone && state.where == MenuState::Where::Menu &&
       (Search::Current() != Search::State::None || Queue::Active()))
   {
@@ -236,7 +234,7 @@ void Begin(bool ranked)
 void Matched(bool hosting)
 {
   std::lock_guard lock(s_mutex);
-  // A join's own messages ("Joining <name>'s game...") take over from the search's.
+  // When joining, the join's own messages replace the search's.
   s_state = hosting && s_state != State::None ? State::Found : State::None;
 }
 
@@ -285,8 +283,7 @@ namespace
 {
 std::atomic<bool> s_drop_in_held{false};
 
-// Versus and its relatives: a friend who plugs in there is already where friends play (the
-// character select comes round again after a match).
+// Versus sequences: a friend who joins there is already where friends play.
 bool IsVersusSequence(std::string_view sequence)
 {
   constexpr std::array<std::string_view, 4> versus{"sqVsMelee", "sqSpMelee", "sqToMelee",
@@ -297,8 +294,7 @@ bool IsVersusSequence(std::string_view sequence)
 
 bool SequenceHoldsDropIn(std::string_view sequence)
 {
-  // sora_scene's sequences (Project+ keeps them all): the solo modes, the Subspace Emissary, and
-  // the Vault's screens (trophies, the stage builder, replays, the coin launcher).
+  // Single-player modes, the Subspace Emissary and the Vault's screens (same names in Project+).
   constexpr std::array<std::string_view, 16> held{
       "sqSingleSimple", "sqSingleAllstar", "sqSingleBoss",  "sqEvent",
       "sqTraining",     "sqHomerun",       "sqTargetBreak", "sqKumite",
@@ -317,33 +313,30 @@ namespace FriendsMove
 Outputs Decide(const Inputs& in)
 {
   namespace B = MatchBlock;
-  // Ports 2-4: a friend's.
+  // Ports 2-4 are friends.
   constexpr u8 FRIEND_PORTS = 0x0E;
   Outputs out;
-  // Nothing kept yet (the dead code's bytes) and no friend: nothing to keep. Solo play never writes
-  // these bytes.
+  // Nothing kept yet and no friend plugged in: write nothing. Solo play never touches these bytes.
   const bool kept = in.tag == B::FRIENDS_TAG_VALUE;
   if (!kept && !(in.plugged & FRIEND_PORTS))
     return out;
   out.keep = true;
-  // Kept from now on. Nothing seen yet: the host's own port, so a friend who plugs in now is news;
-  // ports plugged in before FIRST_FRIEND_FRAME were there from the start (a harness's test ports),
-  // since no friend ever plugs in that early.
+  // First write: mark only the host's port as seen, so a friend plugged in now counts as new.
+  // Ports plugged in before FIRST_FRIEND_FRAME are test ports, never friends.
   const u8 seen = kept                                ? in.seen :
                   in.frame < FIRST_FRIEND_FRAME ? in.plugged :
                                                         static_cast<u8>(in.plugged & ~FRIEND_PORTS);
   bool pending = kept && in.pending != 0;
   if (in.plugged & ~seen & FRIEND_PORTS)
     pending = true;
-  // Nobody to take along, a queue match, or already on Versus' way to its character select.
+  // No friend, a queue match, or already in Versus: nothing to do.
   if (!(in.plugged & FRIEND_PORTS) || in.queue || IsVersusSequence(in.sequence))
     pending = false;
-  // The main menu running with its pages built (MENU_BUILT): one still loading its files can't be
-  // left, and its pages aren't on screen yet anyway.
+  // Only a built main menu (MENU_BUILT) can be left safely.
   const bool menu = in.scene == "muMenuMain" && in.step == STEP_RUNNING && in.menu_built &&
                     in.exit_code == 0 && in.frame >= 0;
   const u32 since = kept ? in.menu_since : 0;
-  // How long the main menu has run, built, with a friend waiting for it.
+  // When the built main menu started running with a friend waiting.
   out.menu_since = pending && menu ? (since != 0 ? since : static_cast<u32>(in.frame) + 1) : 0;
   if (out.menu_since != 0 &&
       static_cast<u32>(in.frame) + 1 - out.menu_since >= MENU_SETTLE_FRAMES)
@@ -366,9 +359,8 @@ bool Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
   GuardMemory m(guard);
   Inputs in;
   in.sequence = ReadSequenceName(m);
-  // What the session's drop-in reads at this boundary (first runs only: a re-run's view of an older
-  // frame is not where the game is). Tests only, ORCA_TEST_HOLD=<from>-<to>: held over those frames
-  // too, as if the host played a single-player mode there.
+  // Read by the session's drop-in logic; first runs only, since a re-run shows an older frame.
+  // Test override ORCA_TEST_HOLD=<from>-<to> holds drop-ins over those frames.
   static const std::pair<int, int> s_test_hold = [] {
     const char* v = std::getenv("ORCA_TEST_HOLD");
     int from = -1, to = -1;
@@ -400,7 +392,7 @@ bool Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
   in.exit_code = m.Read32(manager + MANAGER_EXIT_CODE);
   if (in.scene == "muMenuMain")
   {
-    // ReadSceneName read the scene's name through this pointer, so it is one.
+    // ReadSceneName already validated this pointer.
     const u32 menu = m.Read32(manager + MANAGER_SCENE);
     in.menu_built = m.Valid(menu + MENU_BUILT) && m.Read8(menu + MENU_BUILT) != 0;
   }
@@ -412,7 +404,7 @@ bool Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
   const Outputs out = Decide(in);
   if (!out.keep)
     return false;
-  // Only the bytes that differ.
+  // Write only bytes that differ.
   const auto put8 = [&](u32 address, u8 value) {
     if (m.Read8(address) != value)
       m.Write8(address, value);
@@ -424,7 +416,7 @@ bool Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
   put8(B::FRIENDS_TAG, B::FRIENDS_TAG_VALUE);
   if (!out.move)
     return false;
-  // The main menu's own exit (muMenuMain, 0x81176828): the code, then the step.
+  // Same as the menu's own exit (muMenuMain, 0x81176828): the code, then the step.
   m.Write32(manager + MANAGER_EXIT_CODE, EXIT_WITH_FRIENDS);
   m.Write32(manager + MANAGER_STEP, STEP_EXIT);
   if (!resimulating)

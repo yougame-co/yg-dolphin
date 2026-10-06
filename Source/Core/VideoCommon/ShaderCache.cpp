@@ -41,21 +41,15 @@ namespace VideoCommon
 {
 namespace
 {
-// Orca (ORCA.md, "Match start"): how long a session's boot waits for the shaders it compiles before
-// the first frame. The first boot after an Orca update compiles every pipeline the player's games
-// have drawn (Cache/<game>.uidcache) plus the ubershaders, unless the backend keeps its compiled
-// shaders across builds (D3D: D3DCommon/FxcCache). Desktop apps installed before ORCA_SHADER_WAIT_S
-// kill a boot that hasn't drawn in 120 s, so without it the wait ends at BOOT_WAIT; the app that
-// sets it keeps the boot alive while `orca shaders` lines arrive. Whatever is left then compiles in
-// the background: a pipeline the UID cache had is drawn with an ubershader until it is ready, and a
-// draw whose ubershader is itself still compiling is skipped rather than compiled on the emulation
-// thread (GetUberPipelineForUidIfReady).
+// Orca: default limit on how long a session's boot waits for shaders before the first frame.
+// Older desktop apps kill a boot that hasn't drawn within 120 s; newer ones set
+// ORCA_SHADER_WAIT_S instead. Anything left compiles in the background, with draws falling back
+// to ubershaders or being skipped. See ORCA.md, "Match start".
 constexpr std::chrono::seconds BOOT_WAIT{60};
 
 void DrawCompileProgress(size_t completed, size_t total)
 {
-  // Orca: headless (-p headless with a real backend, the Mac's shader tests) has no ImGui context,
-  // and ImGui asserts without one.
+  // Orca: headless runs have no ImGui context, and ImGui asserts without one.
   if (!ImGui::GetCurrentContext())
     return;
 
@@ -125,7 +119,7 @@ void ShaderCache::InitializeShaderCache()
   CompileMissingPipelines();
   if (g_ActiveConfig.bWaitForShadersBeforeStarting)
   {
-    // Orca: a session's boot waits a limited time (BOOT_WAIT_SOFT, BOOT_WAIT_HARD).
+    // Orca: in a session, the boot waits only up to a time limit.
     if (Orca::SessionActive())
       WaitForBootCompile();
     else
@@ -140,8 +134,7 @@ void ShaderCache::Reload()
 {
   WaitForAsyncCompiler();
   ClosePipelineUIDCache();
-  // Orca: the EFB copy pipelines in use are compiled again now, not at their next copy (ORCA.md,
-  // "Match start").
+  // Orca: recompile the EFB copy pipelines in use now rather than at their next copy.
   std::vector<TextureConversionShaderGen::TCShaderUid> efb_copy_uids;
   for (const auto& [uid, pipeline] : m_efb_copy_to_vram_pipelines)
     efb_copy_uids.push_back(uid);
@@ -261,10 +254,9 @@ void ShaderCache::WaitForBootCompile()
     limit = std::chrono::milliseconds(*test_ms);
   const size_t threads = g_ActiveConfig.GetShaderPrecompilerThreads();
 
-  // Pipelines still compiling (the flag a pipeline's work item clears when retrieved): the ones
-  // from the UID cache, and the ubershaders. And the shader stages they wait on, for the progress
-  // shown: a pipeline whose stages weren't ready queues itself again behind every stage of its
-  // priority, so the pipelines alone sat at 0 until the very end (D3D: 30 s, Metal: 8 s).
+  // Counts pipelines still compiling, plus the shader stages they wait on. Stages are counted too
+  // because a pipeline whose stages aren't ready requeues itself, so counting pipelines alone would
+  // show no progress until the very end.
   struct Pending
   {
     size_t specialized = 0;
@@ -292,7 +284,7 @@ void ShaderCache::WaitForBootCompile()
   const Pending first = pending();
   const size_t total = first.specialized + first.uber;
   Pending left = first;
-  // The total never shrinks between lines (stages queued after the first count raise it).
+  // The total only grows (stages queued later raise it), so progress never goes backward.
   size_t max_units = first.Sum();
   const auto progress = [&] {
     max_units = std::max(max_units, left.Sum());
@@ -304,8 +296,8 @@ void ShaderCache::WaitForBootCompile()
   auto& system = Core::System::GetInstance();
   while (Core::GetState(system) != Core::State::Stopping)
   {
-    // Completed work is retrieved here, as each frame does at runtime: a pipeline whose shaders
-    // weren't compiled yet queues itself again, and the flags above are cleared.
+    // Retrieve completed work as each frame does at runtime; this clears the pending flags and
+    // requeues pipelines whose shaders weren't ready.
     m_async_shader_compiler->RetrieveWorkItems();
     left = pending();
     if (!m_async_shader_compiler->HasPendingWork() && !m_async_shader_compiler->HasCompletedWork())
@@ -313,9 +305,8 @@ void ShaderCache::WaitForBootCompile()
       done = true;
       break;
     }
-    // Everything, not just the ubershaders: a pipeline of the UID cache that isn't ready is drawn
-    // with an ubershader while it compiles in the background, beside the match (P+ on Windows
-    // stopped at the ubershaders with 1,331 left: VI over 33 ms for 9 s of its first match).
+    // Wait for everything, not just the ubershaders: each cached pipeline left over compiles in
+    // the background during the match, which causes slow frames.
     const auto now = Clock::now();
     if (now - start >= limit)
       break;
@@ -577,10 +568,8 @@ void ShaderCache::ClearCaches()
 
 void ShaderCache::CompileMissingPipelines()
 {
-  // Orca: in a session the UID cache's pipelines come before the ubershaders. They are what the
-  // match draws, and each takes a fraction of an ubershader's time (D3D's FXC on Luis's PC: the 63
-  // ubershaders about 35 s, Brawl's 451 pipelines then about a second), so a boot that stops
-  // waiting has them ready rather than queued behind the ubershaders.
+  // Orca: in a session, compile the UID cache's pipelines before the ubershaders. They are what
+  // the match draws and are much faster to compile, so a boot that stops waiting has them ready.
   const u32 cache_priority = Orca::SessionActive() ? COMPILE_PRIORITY_SESSION_SHADERCACHE_PIPELINE :
                                                      COMPILE_PRIORITY_SHADERCACHE_PIPELINE;
   // Queue all uids with a null pipeline for compilation.
@@ -908,8 +897,8 @@ ShaderCache::GetUberPipelineForUidIfReady(const GXUberPipelineUid& uid)
   if (it != m_gx_uber_pipeline_cache.end() && !it->second.second)
     return it->second.first.get();
 
-  // The stages GetGXPipelineConfig would otherwise compile on this thread, though the background
-  // compile of each is already queued or running.
+  // Bail out if a stage is still compiling in the background; GetGXPipelineConfig would
+  // otherwise compile it again on this thread.
   const GXUberPipelineUid config = ApplyDriverBugs(uid);
   const auto vs = m_uber_vs_cache.shader_map.find(config.vs_uid);
   if (vs != m_uber_vs_cache.shader_map.end() && vs->second.pending)
@@ -1070,13 +1059,13 @@ void ShaderCache::LoadEFBCopyUIDCache()
       TCShaderUid uid;
       while (in.ReadBytes(uid.GetUidData(), sizeof(UidData)))
       {
-        // An entry no copy can have (a damaged file) is left out.
+        // Skip invalid entries from a damaged file.
         if (static_cast<u32>(uid.GetUidData()->dst_format) <= static_cast<u32>(EFBCopyFormat::XFB))
           uids.push_back(uid);
       }
     }
   }
-  // Compiled now, before the first frame; a broken or unknown entry only costs its compile.
+  // Compile them before the first frame. A bad entry only costs a wasted compile.
   for (const TCShaderUid& uid : uids)
     GetEFBCopyToVRAMPipeline(uid);
   OpenEFBCopyUIDCache();
@@ -1085,7 +1074,7 @@ void ShaderCache::LoadEFBCopyUIDCache()
 
 void ShaderCache::OpenEFBCopyUIDCache()
 {
-  // Written again whole (drops a torn last entry), then appended to as new copies show up.
+  // Rewrite the whole file (dropping any torn last entry), then append new copies as they appear.
   const std::string filename =
       File::GetUserPath(D_CACHE_IDX) + SConfig::GetInstance().GetGameID() + ".efbcopy.uidcache";
   if (!m_efb_copy_uid_cache_file.Open(filename, "wb"))

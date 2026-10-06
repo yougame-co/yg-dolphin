@@ -805,7 +805,7 @@ void EmulationKernel::EnqueueIPCReply(const Request& request, const s32 return_v
   memory.Write_U32(request.command, request.address + 8);
   // IOS also overwrites the command type with the reply type.
   memory.Write_U32(IPC_REPLY, request.address);
-  if (CoreTiming::g_rollback_event_trace)  // ORCA-DIAG
+  if (CoreTiming::g_rollback_event_trace)  // Orca: rollback diagnostics
   {
     const auto& device = request.fd < IPC_MAX_FDS ? m_fdmap[request.fd] : nullptr;
     CoreTiming::g_rollback_event_trace->push_back(fmt::format(

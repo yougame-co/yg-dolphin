@@ -94,7 +94,7 @@ TEST(OrcaDisc, BootFileThatWontOpenIsNamed)
 }
 #endif
 
-// With ORCA_TEST_DISC set to the player's own Brawl image: it passes, and it isn't some other game.
+// With ORCA_TEST_DISC pointing at a Brawl disc image: it passes, and no other game ID matches it.
 TEST(OrcaDisc, TheRightDiscPasses)
 {
   const char* disc = std::getenv("ORCA_TEST_DISC");

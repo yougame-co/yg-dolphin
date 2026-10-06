@@ -26,7 +26,7 @@ std::string PadHex(const Orca::Net::Pad& pad)
   return hex;
 }
 
-// The whole field as hex, or false (no exceptions: the build has them off).
+// Parses the whole field as hex; false on any error (the build has exceptions off).
 template <typename T>
 bool ParseHex(std::string_view text, T* value)
 {
@@ -127,8 +127,7 @@ void VirtualRemote::TickWhileWaiting()
     ++m_ticks;
     return;
   }
-  // The remote player runs at the frame rate, and no further than its rollback window allows
-  // past this player's inputs.
+  // The remote runs at frame rate, but no further ahead than its rollback window allows.
   constexpr std::chrono::microseconds FRAME{16'683};
   const auto now = std::chrono::steady_clock::now();
   if (now - m_last_tick < FRAME || m_lead >= m_max_lead)

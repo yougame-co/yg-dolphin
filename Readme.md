@@ -7,7 +7,9 @@ SI device, and re-run frames that skip host rendering, with per-game profiles.
 
 - **Play:** Orca ships inside the [YouGame desktop app](https://yougame.co/desktop) for Mac and
   Windows. Bring your own disc image; none are included or distributed here.
-- **Docs:** [ORCA.md](ORCA.md) covers the design, the release checklist, measurements and tests.
+- **How it works:** [ORCA_ARCHITECTURE.md](ORCA_ARCHITECTURE.md) explains the rollback design and how
+  it compares with Slippi and Brawlback. [ORCA.md](ORCA.md) has the engineering detail: building,
+  testing and each subsystem.
 - **License:** like Dolphin, GPL-2.0-or-later, with per-file SPDX tags; in aggregate the repository
   is GPLv3-compatible ([COPYING](COPYING), [LICENSES/](LICENSES)).
 

@@ -1,14 +1,12 @@
-// The first seconds of each match in a windowed harness run (ORCA.md, "Match start"): the host's
-// VI intervals (Graphics.Settings.LogRenderTimeToFile writes them to <user>/Logs/vblank_times.txt)
-// from 0.6 s before each scMelee scene to 12 s after it. Works on any Orca build, released ones too:
-// it needs only the log and the VI file.
+// Summarizes the first seconds of each match in a windowed harness run (ORCA.md, "Match start"):
+// the host's VI intervals from 0.6 s before each scMelee scene to 12 s after it. VI intervals come
+// from Graphics.Settings.LogRenderTimeToFile (<user>/Logs/vblank_times.txt), so this works on any
+// Orca build.
 //
 //   node Tools/orca/match-start.mjs [--from-frame N] <run folder> [...]
 //
-// --from-frame N also counts the VIs from the match's frame N on, placed by the run's
-// "JIT warm-up: frame N:" line (ORCA_JITWARM_LOG=1 logs one for each of a match's first 600
-// frames). What a player sees as the match starts after the loading image: Project+ shows it
-// through frame 27 (the stage from 28), Brawl through ~169 (the stage from ~170).
+// --from-frame N also counts VIs from the match's frame N on, located by the "JIT warm-up: frame N:"
+// line (needs ORCA_JITWARM_LOG=1). The stage first appears at frame 28 in Project+ and ~170 in Brawl.
 //
 // A run folder holds:
 //   stdout.log         the run's whole output, with YG_SCENES=1 (its "Scene frame" lines) and

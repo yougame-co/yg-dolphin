@@ -43,43 +43,36 @@ constexpr u32 MEM2_PHYSICAL = 0x10000000;
 constexpr std::size_t MAX_RANGES = 32;
 constexpr u32 MAX_RANGE_BYTES = 0x10000;
 
-// Super Smash Bros. Brawl (NTSC-U, revision 2), Project+ included: gfSceneManager* at 0x805a0060, its
-// current scene at +0x4, the scene's name (char*) at +0x0 (Rollback/Harness.cpp, Orca/UX/Probe.cpp).
-// A match is the scMelee scene, from the end of the loading that follows character and stage
-// select (the loading image stays up ~165 frames in Brawl, ~20 in Project+).
+// Brawl (NTSC-U, rev 2), Project+ included: gfSceneManager* at 0x805A0060, its current scene at
+// +0x4, and the scene's name (char*) at +0x0. A match is the scMelee scene, starting after the load
+// that follows character and stage select.
 constexpr u32 SCENE_MANAGER = 0x805A0060;
 constexpr std::string_view MATCH_SCENE = "scMelee";
 
-// Warm-up: from a match's first frame for WARM_FRAMES frames at most. The first sweep over the
-// known blocks gets BUDGET_US per frame boundary (the loading frames run ~1-2 ms of emulation each);
-// the blocks whose words weren't in RAM are looked at again every SWEEP_EVERY frames, LATE_BUDGET_US
-// per boundary, since that happens during play.
+// Warm-up runs for at most WARM_FRAMES from a match's first frame. The first sweep gets BUDGET_US
+// per frame boundary (loading frames are cheap to emulate). Blocks whose words weren't in RAM yet
+// are retried every SWEEP_EVERY frames with LATE_BUDGET_US, since that happens during play.
 constexpr int WARM_FRAMES = 600;
 constexpr int SWEEP_EVERY = 30;
 constexpr int BUDGET_US = 8000;
 constexpr int LATE_BUDGET_US = 1000;
-// The first sweep's pace. A block the recorded match first ran in frame `when` is due by the
-// boundary LEAD frames before (a match can load a little faster than the one recorded): the sweep
-// goes past BUDGET_US as far as it must to pass every block by its boundary, evenly over the frames
-// left. Brawl's loading image (~165 frames) leaves room within the budget on any host; Project+
-// runs its match code 22-24 frames after scMelee (5,200 + 11,200 blocks), which on a host whose
-// JIT compiles 200 blocks in 8 ms (Jit64 on Luis's PC) is behind by ~12,000 blocks there, a
-// 374 ms frame. Paced, the loading frames run longer instead (the loading image is still).
+// Each block is due LEAD frames before the frame it first ran in the recorded match, since a match
+// can load a little faster than the recorded one. The sweep may exceed BUDGET_US to meet deadlines,
+// spreading the work evenly over the frames left. This matters for Project+, which runs its match
+// code ~22 frames after scMelee starts: on a slow JIT, compiling it all at once would cost one very
+// long frame, while paced it lengthens loading frames that show a still image.
 constexpr int LEAD = 3;
-// The most one boundary's first sweep may take, pace or not: a sweep that fell behind (boundaries
-// where the JIT had no room) catches up over several frames instead of in one long frame during
-// play. The PC's paced Project+ loading frames take 30-38 ms; this leaves room for a host at
-// ~2.5 times its ~40 us a block.
+// Hard cap on one boundary's sweep: a sweep that fell behind catches up over several frames instead
+// of in one long frame during play. Leaves room for a host ~2.5x slower than a typical PC.
 constexpr int MAX_SWEEP_US = 100'000;
-// The JIT's room at a match's first frame (JitBase::ReserveForBlocks): a process's first match
-// compiles its whole start (Brawl ~30,000 blocks, Project+ ~28,000, listed or not); a later one
-// little, its blocks still there (2,700 with a stage and a fighter the first never loaded).
+// JIT space reserved at a match's first frame (JitBase::ReserveForBlocks): a process's first match
+// compiles its whole start (~30,000 blocks for Brawl, ~28,000 for Project+); later ones compile
+// little.
 constexpr std::size_t FIRST_MATCH_BLOCKS = 32'000;
 constexpr std::size_t LATER_MATCH_BLOCKS = 8'000;
-// Recording: the blocks the game compiles in a match's first RECORD_FRAMES frames; one counts when
-// its words are unchanged STABLE_AFTER frames after its compile (so never a block whose code was
-// rewritten after its compile without an invalidation: compiling it ahead could run other words
-// than the game's first run would).
+// Recording: blocks compiled in a match's first RECORD_FRAMES frames. A block counts only if its
+// words are unchanged STABLE_AFTER frames after compiling, so code rewritten without an
+// invalidation is never compiled ahead.
 constexpr int RECORD_FRAMES = 600;
 static_assert(WARM_FRAMES <= RECORD_FRAMES);
 constexpr int STABLE_AFTER = 60;
@@ -138,12 +131,10 @@ std::string FilePath()
   return File::GetUserPath(D_CACHE_IDX) + (profile ? profile->game_id : "unknown") + ".jitwarm";
 }
 
-// Orca's own list (Data/Sys/Orca/<profile>.jitwarm), for a player who has none yet: a first
-// install, or the first match after an update from a build without the warm-up (0.3.8 and before),
-// whose first match would otherwise compile its whole start itself (Brawl on Luis's PC: 160, 117
-// and 326 ms at the stage's first frames). Recorded from reference matches (ORCA.md, "Match
-// start"), and hash-checked like the player's own: a block whose words aren't this game's in RAM is
-// never compiled. The player's list takes over after the first match. ORCA_JITWARM_SEED=0: none.
+// Orca's shipped list (Data/Sys/Orca/<profile>.jitwarm) for a player who has none yet, so their
+// first match doesn't compile its whole start live. Recorded from reference matches and
+// hash-checked like the player's own; the player's list takes over after the first match.
+// ORCA_JITWARM_SEED=0 disables it.
 std::string SeedPath()
 {
   const Profile* profile = ActiveProfile();
@@ -164,7 +155,7 @@ std::vector<u8> ReadWhole(const std::string& path)
   return bytes;
 }
 
-// The running game is one whose scenes Orca can read: Brawl rev 2, or a launcher profile booting it.
+// A game whose scenes Orca can read: Brawl rev 2, or a launcher profile that boots it.
 bool KnownGame()
 {
   const Profile* profile = ActiveProfile();
@@ -173,7 +164,7 @@ bool KnownGame()
   return profile->IsLauncher() ? profile->disc == "RSBE01" : profile->game_id == "RSBE01";
 }
 
-// Whether the current scene is a match; nullopt while the scene can't be read (boot, a transition).
+// Whether the current scene is a match; nullopt while the scene can't be read (boot, transitions).
 std::optional<bool> InMatch(const Core::CPUThreadGuard& guard)
 {
   const auto mapped = [&guard](u32 address) {
@@ -203,10 +194,10 @@ std::optional<bool> InMatch(const Core::CPUThreadGuard& guard)
 
 enum class Status : u8
 {
-  Waiting,   // its words aren't in RAM (yet): looked at again next sweep
+  Waiting,   // words not in RAM yet; retried next sweep
   Present,   // the JIT already had it
   Compiled,  // compiled here
-  GivenUp,   // no block came out, or one spanning other ranges (erased unused)
+  GivenUp,   // no block came out, or one with other ranges (erased unused)
 };
 
 struct Fresh
@@ -241,34 +232,31 @@ private:
   std::span<const u8> Mem1() const;
   std::span<const u8> Mem2() const;
 
-  // Set once.
   bool m_checked = false;
   bool m_enabled = false;
   int m_budget_us = BUDGET_US;
-  int m_test_slow_us = 0;     // ORCA_TEST_JITWARM_SLOW_US: each compile here takes this much longer
-  bool m_log_frames = false;  // ORCA_JITWARM_LOG=1: a line per frame boundary that compiled
-  bool m_log_presence = false;  // ORCA_JITWARM_LOG=2: also which listed blocks are in RAM before
+  int m_test_slow_us = 0;     // ORCA_TEST_JITWARM_SLOW_US: adds this much to each compile
+  bool m_log_frames = false;  // ORCA_JITWARM_LOG=1: a line per boundary that compiled
+  bool m_log_presence = false;  // ORCA_JITWARM_LOG=2: also which listed blocks are in RAM
   std::string m_path;
-  std::string m_seed_path;  // Orca's own list, when the player has none (SeedPath)
+  std::string m_seed_path;  // Orca's shipped list, used when the player has none (SeedPath)
 
-  // Scenes.
   bool m_seen_other_scene = false;  // a match starts only from another scene, not on a join
   bool m_in_match = false;
   int m_match_frame = 0;
   int m_matches = 0;
 
-  // The blocks known before this match, and what this match did with them.
+  // Blocks known before this match, and what this match did with them.
   std::vector<Block> m_known;
   std::vector<Status> m_status;
-  // The blocks this sweep looks at, by `when` (what a match runs first, first), and those still
-  // waiting for the next sweep.
+  // Blocks this sweep looks at, earliest `when` first, and those left for the next sweep.
   std::vector<u32> m_queue, m_waiting;
   std::size_t m_cursor = 0;
-  // The first sweep's deadlines: each `when` in the queue and the queue index past its last block.
+  // First-sweep deadlines: each `when` in the queue and the queue index past its last block.
   std::vector<std::pair<int, std::size_t>> m_due;
   int m_next_sweep = 0;
   bool m_warming = false;
-  bool m_compiling = false;  // inside a warm-up compile: not the game's own
+  bool m_compiling = false;  // inside a warm-up compile, not the game's own
 
   // This match's own compiles.
   bool m_recording = false;
@@ -276,21 +264,21 @@ private:
   std::vector<Block> m_stable;
   int m_unstable = 0;
 
-  // ORCA_JITWARM_LOG: the game's own compiles since the last boundary, by what the warm-up had
-  // done with them (the listed blocks by start and flags).
+  // ORCA_JITWARM_LOG: the game's own compiles since the last boundary, grouped by what the warm-up
+  // did with them.
   std::unordered_map<u64, u32> m_index;
   int m_game_total = 0, m_game_warmed = 0, m_game_unreached = 0, m_game_present = 0,
       m_game_unlisted = 0;
-  std::vector<u32> m_game_gone;  // a few of the warmed blocks the game compiled again
+  std::vector<u32> m_game_gone;  // a few warmed blocks the game compiled again
   int m_boundaries = 0;
-  bool m_logged_frame = false;  // this boundary's warm-up line is out
+  bool m_logged_frame = false;  // this boundary's warm-up line is logged
 
-  // Warm-up figures for the log.
+  // Warm-up counts for the log.
   int m_compiled = 0, m_present = 0, m_discarded = 0, m_no_room = 0, m_sweeps = 0;
   int m_first_frame = -1, m_last_frame = -1;
   double m_ms = 0, m_max_frame_ms = 0;
 
-  // The file is read and written on m_io; StartMatch takes what it left in m_ready.
+  // The file is read and written on m_io; StartMatch picks up the result from m_ready.
   std::thread m_io;
   std::mutex m_mutex;
   std::optional<std::vector<Block>> m_ready;
@@ -476,8 +464,8 @@ void State::LogGame(int frame)
   m_game_total = m_game_warmed = m_game_unreached = m_game_present = m_game_unlisted = 0;
 }
 
-// ORCA_JITWARM_LOG=2, outside a match every 30 boundaries: how many listed blocks the warm-up could
-// compile now (their words in RAM, mapped as recorded) and how many the JIT already has.
+// ORCA_JITWARM_LOG=2, every 30 boundaries outside a match: how many listed blocks could be compiled
+// now and how many the JIT already has.
 void State::LogPresence(const Core::CPUThreadGuard& guard)
 {
   std::lock_guard lock(m_mutex);
@@ -523,10 +511,10 @@ void State::CheckStable(int up_to_frame)
 
 void State::FinishRecording()
 {
-  // The blocks known go to the merge: warming is over by now (WARM_FRAMES <= RECORD_FRAMES).
+  // Warming is over by now (WARM_FRAMES <= RECORD_FRAMES), so the known blocks go to the merge.
   StopWarm();
   m_recording = false;
-  // The youngest are checked now: at a match's end their code is still loaded.
+  // Check the youngest blocks now, while their code is still loaded.
   CheckStable(m_match_frame);
   NOTICE_LOG_FMT(ROLLBACK,
                  "JIT warm-up: match {} compiled {} blocks itself in its first {} frames ({} "
@@ -535,7 +523,7 @@ void State::FinishRecording()
   if (m_io.joinable())
     m_io.join();
   // Merged and written off the CPU thread; the next match takes the result.
-  // Found compiled this match, or compiled here: young again.
+  // Blocks found or compiled this match have their age reset.
   std::vector<bool> seen(m_status.size());
   for (std::size_t i = 0; i < m_status.size(); ++i)
     seen[i] = m_status[i] == Status::Present || m_status[i] == Status::Compiled;
@@ -582,12 +570,12 @@ void State::Warm(const Core::CPUThreadGuard& guard)
   const CPUEmuFeatureFlags flags = ppc_state.feature_flags;
   const auto mem1 = Mem1(), mem2 = Mem2();
   const auto start = std::chrono::steady_clock::now();
-  // The first sweep compiles nearly everything, during the loading; a later one mostly finds the
-  // other blocks still not in RAM, during play.
+  // The first sweep compiles nearly everything during loading; later sweeps mostly find the
+  // remaining blocks still not in RAM, during play.
   const auto deadline =
       start + std::chrono::microseconds(m_sweeps == 0 ? m_budget_us : LATE_BUDGET_US);
-  // The first sweep gets at least this far, past the budget if it must (LEAD above), but never
-  // past MAX_SWEEP_US.
+  // The first sweep gets at least this far, past the budget if it must (see LEAD), but never past
+  // MAX_SWEEP_US.
   const std::size_t must_reach =
       m_sweeps == 0 ? PacedTarget(m_due, m_cursor, m_match_frame, LEAD) : m_cursor;
   const auto hard_deadline = start + std::chrono::microseconds(std::max(m_budget_us, MAX_SWEEP_US));
@@ -599,7 +587,7 @@ void State::Warm(const Core::CPUThreadGuard& guard)
   {
     if (m_cursor == m_queue.size())
     {
-      // What is still waiting is looked at again in SWEEP_EVERY frames.
+      // Whatever is still waiting is retried in SWEEP_EVERY frames.
       m_queue.swap(m_waiting);
       m_waiting.clear();
       m_cursor = 0;
@@ -630,7 +618,7 @@ void State::Warm(const Core::CPUThreadGuard& guard)
     }
     if (HashRanges(mem1, mem2, b.ranges) != b.hash)
     {
-      // Not loaded (yet), or other code at that address this match.
+      // Not loaded yet, or different code at that address this match.
       ++not_in_ram;
       m_waiting.push_back(index);
       ++m_cursor;
@@ -639,10 +627,10 @@ void State::Warm(const Core::CPUThreadGuard& guard)
     if (!jit->CanCompileFromHook())
     {
       ++m_no_room;
-      break;  // this block again at the next boundary
+      break;  // retry this block at the next boundary
     }
     ++m_cursor;
-    // The dispatcher compiles with the guest's floating-point mode in force; so does this.
+    // Compile in the guest's float mode, as the dispatcher does.
     m_compiling = true;
     const auto compile_start = std::chrono::steady_clock::now();
     PowerPC::RoundingModeUpdated(ppc_state);
@@ -663,7 +651,7 @@ void State::Warm(const Core::CPUThreadGuard& guard)
     }
     if (m_test_slow_us > 0)
     {
-      // A slower host's compile (a test of the schedule, not of the JIT).
+      // Simulates a slower host's compile (tests the schedule, not the JIT).
       const auto until =
           std::chrono::steady_clock::now() + std::chrono::microseconds(m_test_slow_us);
       while (std::chrono::steady_clock::now() < until)
@@ -689,7 +677,7 @@ void State::Warm(const Core::CPUThreadGuard& guard)
     }
     if (!same)
     {
-      // Not the recorded block (its words came out other than RAM's): as if never compiled.
+      // Not the recorded block (its words differ from RAM's): discard it as if never compiled.
       if (block)
         cache.EraseSingleBlock(*block);
       ++m_discarded;
@@ -766,9 +754,9 @@ void State::OnBoundary(const Core::CPUThreadGuard& guard)
       return;
     }
     if (!m_seen_other_scene)
-      return;  // joined a match already running: its code is compiled as it runs
+      return;  // joined a match already running: its code compiles as it runs
     StartMatch();
-    // The JIT's tables grow now, behind the loading image, not inside a compile during play.
+    // Grow the JIT's tables now, behind the loading image, not inside a compile during play.
     if (auto* jit = static_cast<JitBase*>(guard.GetSystem().GetJitInterface().GetCore()))
     {
       const auto start = std::chrono::steady_clock::now();
@@ -808,8 +796,8 @@ void State::OnBoundary(const Core::CPUThreadGuard& guard)
     else
       Warm(guard);
   }
-  // Every boundary of a match's first frames has a line in this mode, which places each frame in
-  // time (Tools/orca/match-start.mjs --from-frame).
+  // In this mode every boundary of a match's first frames gets a line, so each frame can be placed
+  // in time (Tools/orca/match-start.mjs --from-frame).
   if (m_log_frames && m_in_match && m_match_frame < RECORD_FRAMES && !m_logged_frame)
     NOTICE_LOG_FMT(ROLLBACK, "JIT warm-up: frame {}: nothing to warm", m_match_frame);
 }
@@ -840,8 +828,8 @@ std::optional<u64> HashRanges(std::span<const u8> mem1, std::span<const u8> mem2
 std::size_t PacedTarget(std::span<const std::pair<int, std::size_t>> due, std::size_t cursor,
                         int frame, int lead)
 {
-  // Of every deadline still ahead, the share of its remaining blocks that falls on this boundary;
-  // the most pressing one sets the pace.
+  // For each deadline ahead, the share of its remaining blocks due at this boundary; the most
+  // pressing one sets the pace.
   std::size_t target = cursor;
   for (const auto& [when, end] : due)
   {
@@ -947,7 +935,7 @@ std::vector<Block> Merge(std::vector<Block> known, const std::vector<bool>& seen
   std::erase_if(known, [](const Block& b) { return b.age > MAX_AGE; });
   if (known.size() > MAX_BLOCKS)
   {
-    // The youngest first, and among them what a match runs first.
+    // Youngest first, and among them, what a match runs first.
     std::stable_sort(known.begin(), known.end(), [](const Block& a, const Block& b) {
       return a.age != b.age ? a.age < b.age : a.when < b.when;
     });

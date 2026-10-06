@@ -16,7 +16,7 @@
 #    ("left").
 # 4. Friend joins again, into the running match; then the host sends "leave": Friend sees
 #    "host-left" and plays on.
-# Each step waits for the states it expects and fails on a timeout. Two Orca processes at most.
+# Each step waits for the states it expects and fails on a timeout. Runs two Orca processes.
 import json
 import os
 import queue

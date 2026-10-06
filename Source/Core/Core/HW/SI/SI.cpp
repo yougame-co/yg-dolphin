@@ -555,13 +555,10 @@ void SerialInterfaceManager::UpdateDevices()
 
 void SerialInterfaceManager::RelatchInputs()
 {
-  // Orca: the game reads a channel's buffer once per frame, a few ms after the frame hook, and only
-  // when the channel's RDST bit says the poll before it (just before the hook) latched new data: a
-  // buffer written here, with that bit left as the poll set it, is what that read takes. No status
-  // bit, no interrupt, no extra read (ORCA.md, "Input latency"). GetData's host-side work runs once
-  // more per port per frame, and the 3 s button-combo timers (X+Y+Start origin, B+X+Start reset)
-  // start at the hook instead of the poll: both deterministic (session pads, emulated ticks).
-  // Validated for Brawl and Project+, the only profiles: a new game must show its reads check RDST.
+  // Orca: the game reads each channel's buffer a few ms after the frame hook, when the poll just
+  // before the hook set RDST. Writing the buffer here, without touching status bits or interrupts,
+  // puts this frame's session pads into that read. See ORCA.md, "Input latency".
+  // Verified for Brawl and Project+ only: a new game must be checked to read RDST the same way.
   for (u32 i = 0; i != MAX_SI_CHANNELS; ++i)
   {
     u32 hi = 0, lo = 0;

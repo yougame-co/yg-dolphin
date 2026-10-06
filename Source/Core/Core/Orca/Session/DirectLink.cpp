@@ -48,36 +48,34 @@ namespace
 using Clock = std::chrono::steady_clock;
 using namespace std::chrono_literals;
 
-// The datagram (all numbers big-endian):
+// Datagram layout (numbers big-endian):
 //   0      'o'
 //   1      version << 4 | kind
 //   2-3    the link's generation
-//   4-11   the sender's counter (the nonce: never twice under one key)
-//   12-15  the low 32 bits of the newest counter received from the peer (0: none yet)
+//   4-11   the sender's counter (the nonce: never reused under one key)
+//   12-15  low 32 bits of the newest counter received from the peer (0: none yet)
 //   16-17  how long ago that one arrived, in 0.1 ms
-//   18..   the payload, sealed with ChaCha20-Poly1305 (the header is its associated data)
+//   18..   the payload, sealed with ChaCha20-Poly1305 (the header is associated data)
 //   last   the 16-byte tag
-// The echo gives a round trip on the path the inputs take, like Slippi's pad acknowledgement
-// ping (SlippiNetplay.cpp), with no clock shared between the machines.
+// The echo measures the round trip on the inputs' own path without a shared clock, like Slippi's
+// pad acknowledgement ping.
 constexpr u8 MAGIC = 'o';
 constexpr u8 VERSION = 1;
 constexpr u8 KIND_PACKET = 1;
 constexpr u8 KIND_KEEPALIVE = 2;
-// DSCP EF (46) in the IP header's traffic-class byte, as Slippi marks its socket (IP_TOS 0xb8):
-// Wi-Fi puts it in the voice queue. libjuice writes the byte as given.
+// DSCP EF (46) in the traffic-class byte, as Slippi marks its socket (IP_TOS 0xB8), so Wi-Fi puts
+// it in the voice queue.
 constexpr int TOS_EXPEDITED = 0xB8;
 
-// A link is up while an authenticated datagram arrived this recently. Keepalives go out on an
-// idle link, so an up link never looks down between inputs.
+// A link is up while an authenticated datagram arrived this recently. Idle links send keepalives,
+// so an up link never looks down between inputs.
 constexpr auto UP_WINDOW = 500ms;
 constexpr auto KEEPALIVE_EVERY = 200ms;
-// Rebuild rules (the link never re-nominates once it chose a pair, and libjuice declares a pair
-// failed only after 30 s without consent): no answer to an offer in this long; no path this long
-// after both descriptions; no datagram this long while the relay still brings the peer's packets
-// (an interface that changed, a NAT mapping that expired); and once, this long after connecting,
-// a relayed or reflexive pair between two machines on one LAN (a local network permission
-// granted late; OneLan). Between rebuilds for a failure: 2, 4, 8 ... 30 s, back to 2 once a link stayed
-// up 30 s.
+// Rebuild rules. libjuice never re-nominates once it picks a pair and only fails one after 30 s
+// without consent, so Orca rebuilds when: an offer gets no answer in time; there is no path after
+// both descriptions; no datagram arrives while the relay still brings the peer's packets (a changed
+// interface, an expired NAT mapping); or, once, a relayed or reflexive pair connects two machines
+// on one LAN (OneLan). Backoff between failure rebuilds: 2, 4, 8 ... 30 s, reset after 30 s up.
 constexpr auto ANSWER_TIMEOUT = 5s;
 constexpr auto CONNECT_TIMEOUT = 10s;
 constexpr auto SILENT_LIMIT = 3s;
@@ -86,20 +84,19 @@ constexpr auto UPGRADE_AFTER = 10s;
 constexpr auto STABLE_AFTER = 30s;
 constexpr int FIRST_BACKOFF_S = 2;
 constexpr int MAX_BACKOFF_S = 30;
-// TURN credentials live 30 minutes and tickets hand them out with at least 15 left: older than
+// TURN credentials last 30 minutes and tickets hand them out with at least 15 left; older than
 // this, a new link asks for fresh ones first.
 constexpr auto ICE_FRESH_FOR = 10min;
-// A failed mint of fresh credentials (a ticket request, up to 10 s on the link thread) is tried
-// again no sooner than this, doubling to the most: the links meanwhile keep the ones they have.
+// After a failed mint of fresh credentials (a ticket request, up to 10 s on the link thread), wait
+// at least this long before retrying, doubling up to the max. Links keep their current ones.
 constexpr auto FRESH_ICE_RETRY_FIRST = 30s;
 constexpr auto FRESH_ICE_RETRY_MAX = 5min;
-// Packets a link delivers: a token bucket of this many a second and this burst. An honest peer
-// sends one a frame, and while it stalls one every 4 ms (YouGameRoom's DIRECT_STALL_GAP), well
-// under it; past it a datagram is dropped (the relay still carries its packet), so a modified
-// peer with the keys can't make Receive decode thousands a second on the emulator thread.
+// Token bucket on delivered packets. An honest peer sends one per frame, or one every 4 ms while
+// stalled, well under this. Excess datagrams are dropped (the relay still carries them), so a
+// modified peer holding the keys can't flood Receive on the emulator thread.
 constexpr double FLOOD_RATE = 300;
 constexpr double FLOOD_BURST = 64;
-// An offer refused for an old generation is answered with this side's (`dlr`) at most this often.
+// How often at most to answer an offer refused for an old generation with this side's (`dlr`).
 constexpr auto REFUSAL_ANSWER_GAP = 1s;
 // Candidates go out in batches at most this often (the room allows 120 messages a second).
 constexpr auto TRICKLE_EVERY = 100ms;
@@ -113,11 +110,11 @@ constexpr size_t SENT_RING = 64;
 
 std::atomic<u64> s_link_serial{0};
 
-// ---- Logging: libjuice's lines go to Dolphin's log, never to stdout (the desktop app reads
-// Orca's stdout line by line), with addresses and credentials taken out (logs get uploaded). ----
+// ---- Logging: libjuice's lines go to Dolphin's log, never stdout (the app parses Orca's stdout),
+// with addresses and credentials removed, since logs get uploaded. ----
 
-// `labels`: each distinct address becomes "<addrN>" (the same N for the same address within the
-// process) instead of "<address>", so a verbose log tells the paths apart without holding any.
+// With `labels`, each distinct address becomes "<addrN>" (stable within the process) instead of
+// "<address>", so a verbose log tells paths apart without revealing them.
 std::string Scrub(std::string_view message, std::map<std::string, int>* labels = nullptr)
 {
   std::string out;
@@ -136,7 +133,7 @@ std::string Scrub(std::string_view message, std::map<std::string, int>* labels =
       out += "<candidate>";
       break;
     }
-    // A run of hex digits, dots and colons with two dots or two colons in it: an address.
+    // A run of hex digits, dots and colons containing two dots or two colons: an address.
     size_t j = i;
     int dots = 0, colons = 0;
     while (j < message.size() && (std::isxdigit(static_cast<unsigned char>(message[j])) ||
@@ -173,8 +170,8 @@ std::string Scrub(std::string_view message, std::map<std::string, int>* labels =
   return out;
 }
 
-// Tests only, ORCA_DIRECT_ICE_LOG=1: libjuice's every line (its debug level, no per-second cap), at
-// notice level so the log's timestamps show what the agent sent when (ORCA.md "Wi-Fi").
+// Tests only, ORCA_DIRECT_ICE_LOG=1: every libjuice line (debug level, no rate cap), logged at
+// notice level so timestamps show what the ICE agent sent when.
 bool IceLogVerbose()
 {
   static const bool verbose = GetEnv("ORCA_DIRECT_ICE_LOG") == "1";
@@ -191,8 +188,7 @@ void JuiceLog(juice_log_level_t level, const char* message)
                    Scrub(message ? message : "", &labels));
     return;
   }
-  // A dead path makes every send fail: at most 10 lines a second (libjuice logs under its own lock,
-  // one thread at a time).
+  // A dead path makes every send fail: at most 10 lines a second.
   static Clock::time_point second{};
   static int lines = 0, dropped = 0;
   const auto now = Clock::now();
@@ -337,8 +333,8 @@ std::optional<Candidate> ParseCandidate(std::string_view line)
   return c;
 }
 
-// Which candidate types a forced test mode allows ("turn": relayed only; "srflx": nothing on a host
-// interface).
+// Which candidate types a forced test mode allows ("turn": relayed only; "srflx": no host
+// candidates).
 bool Allowed(const std::string& force, const std::string& type)
 {
   if (force == "turn")
@@ -348,9 +344,9 @@ bool Allowed(const std::string& force, const std::string& type)
   return true;
 }
 
-// A description as libjuice writes it, keeping only the ICE lines (and of the candidates only
-// those `force` allows). The host candidates' addresses go to `hosts` and the server-reflexive
-// ones' to `srflx` (for the one-LAN check; never logged).
+// A description as libjuice writes it, keeping only ICE lines and the candidates `force` allows.
+// Host candidate addresses go to `hosts` and server-reflexive ones to `srflx`, for the one-LAN
+// check; never logged.
 std::string FilterDescription(std::string_view description, const std::string& force,
                               std::vector<std::string>* hosts, std::vector<std::string>* srflx)
 {
@@ -388,9 +384,8 @@ std::string FilterDescription(std::string_view description, const std::string& f
   return out;
 }
 
-// Two Orcas on one machine: loopback candidates for the socket the host candidates name (libjuice
-// leaves loopback out, and a Mac's Local Network privacy may refuse a send to its own LAN
-// address).
+// Two Orcas on one machine: loopback candidates for the host candidates' socket. libjuice leaves
+// loopback out, and macOS Local Network privacy may refuse sends to the machine's own LAN address.
 std::string LoopbackCandidates(std::string_view description)
 {
   size_t start = 0;
@@ -412,8 +407,7 @@ std::string LoopbackCandidates(std::string_view description)
   return "";
 }
 
-// Whether two machines share a subnet: an IPv4 /24 or an IPv6 /64 in common among their host
-// candidates.
+// Whether two machines share an IPv4 /24 or IPv6 /64 among their host candidates.
 bool SameSubnet(const std::vector<std::string>& mine, const std::vector<std::string>& theirs)
 {
   const auto prefix = [](const std::string& address) -> std::string {
@@ -451,8 +445,8 @@ std::string TypeOf(const char* candidate)
   return c ? c->type : "?";
 }
 
-// One IPv4 address for a server name (libjuice then needs no resolver thread of its own, whose
-// join could hold up an agent's teardown). Cached for the life of the link thread.
+// Resolves a server name to one IPv4 address, so libjuice needs no resolver thread whose join could
+// delay an agent's teardown. Cached for the life of the link thread.
 std::optional<std::string> Resolve(const std::string& host)
 {
   addrinfo hints{};
@@ -476,7 +470,7 @@ std::optional<std::string> Resolve(const std::string& host)
   return out;
 }
 
-// A UDP socket bound on every interface, IPv4 and IPv6, then closed: the first such bind is what
+// Binds and closes a UDP socket on every interface, IPv4 and IPv6: the first such bind is what
 // makes Windows ask whether Orca may use the network.
 void PrimeFirewall()
 {
@@ -511,7 +505,7 @@ void PrimeFirewall()
     const bool bound = bind(s, reinterpret_cast<const sockaddr*>(&address), length) == 0;
     if (bound)
     {
-      // A receive too (nothing waits for it), as an application that listens does.
+      // Also a receive (nothing waits for it), as a listening application would.
 #ifdef _WIN32
       u_long nonblocking = 1;
       ioctlsocket(s, FIONBIO, &nonblocking);
@@ -605,8 +599,8 @@ std::vector<u8> Seal(const Key& key, const Header& header, std::string_view payl
   PutU64(&out[4], header.counter);
   PutU32(&out[12], header.echo);
   PutU16(&out[16], header.hold);
-  // Each direction of each link has its own key, and its counter only grows: a nonce is never
-  // used twice under one key.
+  // Each direction of each link has its own key and an ever-growing counter, so a nonce is never
+  // reused under one key.
   std::array<u8, 12> nonce{};
   PutU64(&nonce[4], header.counter);
   mbedtls_chachapoly_context context;
@@ -740,7 +734,7 @@ bool ParseIce(const picojson::value& ice, IceConfig* out)
     out->stun_host = stun->first;
     out->stun_port = stun->second;
   }
-  // One TURN allocation per link: 3478, else 53 (some networks let only DNS's port out), else any.
+  // One TURN allocation per link: port 3478, else 53 (some networks only let DNS out), else any.
   const auto pick = [&]() -> const Turn* {
     for (const u16 want : {u16{3478}, u16{53}})
     {
@@ -791,14 +785,14 @@ struct Link : std::enable_shared_from_this<Link>
   std::string peer;
   int slot = -1;
   u16 generation = 0;
-  // The peer's place in RemovePeer's count when this link was built (DirectLink::Impl::epochs).
+  // The peer's removal count when this link was built (DirectLink::Impl::epochs).
   u64 epoch = 0;
-  // Set before the agent can call back or be sent on; cleared (under the send mutex) before it is
+  // Set before the agent can call back or be sent on; cleared under the send mutex before it is
   // destroyed.
   juice_agent_t* agent = nullptr;
   std::atomic<int> state{JUICE_STATE_DISCONNECTED};
 
-  std::mutex m;  // everything below
+  std::mutex m;  // guards everything below
   bool keyed = false;
   DirectCrypto::Key tx_key{}, rx_key{};
   u64 tx_counter = 0;
@@ -807,19 +801,19 @@ struct Link : std::enable_shared_from_this<Link>
   u64 echo_counter = 0;
   Clock::time_point echo_at{};
   u32 last_echo_used = 0;
-  // When each recent counter went out (by counter % SENT_RING).
+  // When each recent counter went out (indexed by counter % SENT_RING).
   std::array<std::pair<u64, Clock::time_point>, SENT_RING> sent_at{};
   std::deque<int> rtt_us;
   std::optional<Clock::time_point> last_rx;
   Clock::time_point last_tx{};
   u64 sent = 0, received = 0, auth_drops = 0, replays = 0;
-  // Sends on the caller's thread (sealing included): the longest, the total, and how many took
-  // over a millisecond.
+  // Sends on the caller's thread, sealing included: the longest, the total, and how many took over
+  // a millisecond.
   int max_send_us = 0;
   u64 send_us_total = 0, sends_timed = 0, slow_sends = 0;
 
   // Deliver's token bucket (FLOOD_RATE), under DirectLink::Impl::inbox_mutex, and the authentic
-  // packets it dropped (read anywhere).
+  // packets it dropped (readable from anywhere).
   double tokens = FLOOD_BURST;
   std::optional<Clock::time_point> tokens_at;
   std::atomic<u64> flood_drops{0};
@@ -845,7 +839,7 @@ struct Link : std::enable_shared_from_this<Link>
     return s == JUICE_STATE_CONNECTED || s == JUICE_STATE_COMPLETED;
   }
 
-  // A datagram of `kind` carrying `payload`, or nothing before the keys are in.
+  // A datagram of `kind` carrying `payload`; nothing before the keys are in.
   std::optional<std::vector<u8>> Seal(u8 kind, std::string_view payload)
   {
     std::lock_guard lock(m);
@@ -871,7 +865,7 @@ struct Link : std::enable_shared_from_this<Link>
     return out;
   }
 
-  // The payload of an authentic datagram of this link not taken before (`kind` says which), else
+  // The payload of an authentic, not-yet-seen datagram on this link (`kind` says which); else
   // nothing.
   std::optional<std::string> Open(const u8* data, size_t size, u8* kind)
   {
@@ -879,8 +873,8 @@ struct Link : std::enable_shared_from_this<Link>
     if (!DirectCrypto::PeekHeader(data, size, &header))
       return std::nullopt;
     std::lock_guard lock(m);
-    // Before the keys are in (the answer is still on its way through the room while the peer's
-    // checks already succeeded): nothing to open yet, and nothing wrong.
+    // Keys not in yet (the answer is still travelling through the room while the peer's checks
+    // already succeeded): nothing to open, and nothing wrong.
     if (!keyed)
       return std::nullopt;
     if (header.generation != generation)
@@ -907,7 +901,7 @@ struct Link : std::enable_shared_from_this<Link>
       echo_counter = header.counter;
       echo_at = now;
     }
-    // Our datagram the peer last received, and how long it held it: the round trip.
+    // Our datagram the peer last received, and how long it held it, give the round trip.
     if (header.echo != 0 && header.echo != last_echo_used)
     {
       last_echo_used = header.echo;
@@ -943,12 +937,12 @@ struct Link : std::enable_shared_from_this<Link>
 
 struct DirectLink::Impl
 {
-  // A peer and its signalling, on the link thread only.
+  // A peer and its signalling; link thread only.
   struct Peer
   {
     std::string id;
     int slot = -1;
-    // This side has the lower connection id: it offers.
+    // This side has the lower connection id, so it offers.
     bool low = false;
     u16 generation = 0;
     std::shared_ptr<Link> link;
@@ -958,8 +952,8 @@ struct DirectLink::Impl
     bool early_done = false;
     size_t remote_candidates = 0;
     std::vector<std::string> my_hosts, their_hosts;
-    // The public addresses STUN saw (server-reflexive candidates): two machines behind one NAT
-    // share one, two homes never do.
+    // Public addresses seen by STUN (server-reflexive candidates): machines behind one NAT share
+    // one.
     std::vector<std::string> my_srflx, their_srflx;
     // Candidates to trickle, and whether gathering is done (sent with the last batch).
     std::vector<std::string> trickle;
@@ -969,10 +963,9 @@ struct DirectLink::Impl
     std::optional<Clock::time_point> connected_at, up_since;
     std::string pair;
     bool turn = false;
-    // Whether this pair's links include the ticket's TURN server (ORCA.md "TURN only when
-    // needed"): set once a link to this peer never came up; on the answering side the offer
-    // decides, the offering side follows the answering side's requests (`dlr` "t"), and an upgrade
-    // clears it.
+    // Whether this pair's links use the ticket's TURN server. Set once a link to this peer never
+    // came up; the answering side follows the offer, the offering side follows `dlr` "t" requests,
+    // and an upgrade clears it.
     bool with_turn = false;
     bool was_up = false;
     // This link was up at some point (a link that never came up isn't "silent").
@@ -982,10 +975,10 @@ struct DirectLink::Impl
     int backoff_s = FIRST_BACKOFF_S;
     int builds = 0;
     std::string reason;
-    // The offering side: a build the rules want as soon as the last is half a second old (the
-    // answering side said it holds a newer generation).
+    // Offering side: a build to start once the last is half a second old (the answering side said
+    // it holds a newer generation).
     std::string pending_build;
-    // The answering side: when it last answered a refused offer with its generation.
+    // Answering side: when it last answered a refused offer with its generation.
     Clock::time_point refusal_answered_at{};
   };
 
@@ -1026,8 +1019,8 @@ struct DirectLink::Impl
     std::vector<u8> datagram;
   };
 
-  // A datagram held by a test delay before it is opened (so the round trip it measures covers the
-  // delay both ways).
+  // A datagram held by a test delay before it is opened, so the measured round trip includes the
+  // delay both ways.
   struct HeldIn
   {
     Clock::time_point due;
@@ -1035,16 +1028,16 @@ struct DirectLink::Impl
     std::vector<u8> datagram;
   };
 
-  // Winsock stays up for the link thread's name lookups (a no-op elsewhere).
+  // Keeps Winsock up for the link thread's name lookups (no-op elsewhere).
   Common::SocketContext socket_context;
   DirectOptions options;
   std::thread thread;
   std::atomic<bool> started{false};
   std::atomic<bool> stopping{false};
 
-  // Locks, never one held while taking another unless listed here: send_mutex, then a link's m;
-  // libjuice's own lock (held around its callbacks, taken by a send through TURN), then a link's
-  // m, inbox_mutex or cmd_mutex. Nothing waits on send_mutex while holding cmd_mutex.
+  // Lock order (never hold one while taking another except as listed): send_mutex, then a link's m;
+  // libjuice's own lock (held around its callbacks, taken by a send through TURN), then a link's m,
+  // inbox_mutex or cmd_mutex. Nothing waits on send_mutex while holding cmd_mutex.
   //
   // Commands in, signals out, and the link thread's wake-up (under cmd_mutex).
   std::mutex cmd_mutex;
@@ -1063,8 +1056,8 @@ struct DirectLink::Impl
   bool stopped = false;
   u32 jitter_count = 0;
 
-  // Received packets (under inbox_mutex), and each peer's count of removals: a link built before
-  // its peer's latest removal delivers nothing.
+  // Received packets (under inbox_mutex), and each peer's removal count: a link built before its
+  // peer's latest removal delivers nothing.
   std::mutex inbox_mutex;
   std::deque<Received> inbox;
   std::deque<HeldIn> held_in;
@@ -1074,10 +1067,10 @@ struct DirectLink::Impl
   std::atomic<bool> block_in{false}, block_out{false};
   std::atomic<u32> loss_state{0x9e3779b9};
 
-  // The link thread's own.
+  // Owned by the link thread.
   std::map<std::string, Peer> peers;
   std::map<std::string, std::pair<std::string, Clock::time_point>> resolved;
-  // After a failed mint of fresh ICE credentials: no other try before this, and the wait after the
+  // After a failed mint of fresh ICE credentials: the earliest next try, and the wait after the
   // next failure.
   Clock::time_point fresh_ice_retry_at{};
   std::chrono::seconds fresh_ice_backoff = FRESH_ICE_RETRY_FIRST;
@@ -1136,11 +1129,11 @@ struct DirectLink::Impl
 
   void SendOn(Link& link, const std::vector<u8>& datagram)
   {
-    // Under send_mutex: the agent is alive.
+    // Under send_mutex, so the agent is alive.
     if (!link.agent)
       return;
 #ifdef _WIN32
-    // libjuice can't mark traffic on Windows (qWAVE would be needed, as Slippi uses).
+    // libjuice can't mark traffic on Windows (that would need qWAVE, as Slippi uses).
     juice_send(link.agent, reinterpret_cast<const char*>(datagram.data()), datagram.size());
 #else
     juice_send_diffserv(link.agent, reinterpret_cast<const char*>(datagram.data()),
@@ -1189,7 +1182,7 @@ struct DirectLink::Impl
     return out;
   }
 
-  // ---- libjuice's thread (callbacks: never a juice call, never the link thread's state) ----
+  // ---- libjuice's thread (callbacks: never call into juice or touch the link thread's state) ----
 
   static void OnState(juice_agent_t*, juice_state_t state, void* user)
   {
@@ -1239,7 +1232,7 @@ struct DirectLink::Impl
         Clock::time_point due = Hold(&inbound_jitter_count);
         if (!held_in.empty())
           due = std::max(due, held_in.back().due);
-        // The link outlives its agent's callbacks, and the shared pointer keeps it for this.
+        // The shared pointer keeps the link alive past its agent's callbacks.
         held_in.push_back({due, link.shared_from_this(), std::vector<u8>(data, data + size)});
       }
       wake.notify_all();
@@ -1300,8 +1293,8 @@ struct DirectLink::Impl
       std::deque<Command> cmds;
       std::deque<Event> evs;
       // Before taking cmd_mutex: NextWait takes the send and inbox locks, and libjuice's thread
-      // takes cmd_mutex from a callback while it holds its own lock, which a send through TURN
-      // waits for under the send lock.
+      // takes cmd_mutex from a callback while holding its own lock, which a send through TURN waits
+      // for under the send lock.
       const auto wait = NextWait();
       {
         std::unique_lock lock(cmd_mutex);
@@ -1430,7 +1423,7 @@ struct DirectLink::Impl
   {
     Peer* peer = PeerOf(event.serial);
     if (!peer)
-      return;  // a link destroyed since
+      return;  // the link was destroyed since
     switch (event.kind)
     {
     case Event::Kind::State:
@@ -1451,7 +1444,7 @@ struct DirectLink::Impl
       const auto c = ParseCandidate(event.candidate);
       if (c && c->type == "srflx")
         peer->my_srflx.push_back(c->address);
-      // Host candidates went out with the description.
+      // Host candidates already went out with the description.
       if (!c || c->type == "host" || !Allowed(options.force, c->type) ||
           event.candidate.size() > MAX_CANDIDATE_LENGTH)
       {
@@ -1466,9 +1459,9 @@ struct DirectLink::Impl
     }
   }
 
-  // The selected pair's candidate types. libjuice reports a pair sent from the agent's socket (any
-  // local candidate but a relayed one) with its first local candidate, normally "host": the remote
-  // half is the one that tells a LAN path from a NAT's.
+  // The selected pair's candidate types. libjuice reports a pair sent from the agent's socket with
+  // its first local candidate, normally "host", so the remote half is what tells a LAN path from a
+  // NAT's.
   void ReadPair(Peer& peer)
   {
     if (!peer.link || !peer.link->Selected())
@@ -1507,14 +1500,14 @@ struct DirectLink::Impl
       }
       if (!peer.low)
       {
-        // An offer: a new link, unless it is the one this side already answered, or one came
-        // less than half a second ago (an honest peer offers at most once a second; its own rules
-        // offer again if this one goes unanswered).
+        // An offer: build a new link, unless this side already answered it or one came less than
+        // half a second ago (an honest peer offers at most once a second and re-offers if
+        // unanswered).
         if (*generation < peer.generation)
         {
-          // From before this side's newest link: the offering side started over (it unlinked and
-          // linked again, a seat change or a switch turned off and on) and counts from 1 again.
-          // Tell it where this side is, so its next offer comes after (`dlr` below).
+          // Older than this side's newest link: the offering side started over (unlinked and
+          // relinked) and counts from 1 again. Tell it where this side is so its next offer comes
+          // after (`dlr` below).
           const auto now = Clock::now();
           if (now - peer.refusal_answered_at >= REFUSAL_ANSWER_GAP)
           {
@@ -1574,8 +1567,8 @@ struct DirectLink::Impl
     }
     if (kind == "dlr" && peer.low)
     {
-      // Whether the next offer includes TURN, as the answering side says: it found no path
-      // without (1), or its upgrade wants a link without (0).
+      // Whether the next offer includes TURN, as the answering side asks: it found no path without
+      // (1), or its upgrade wants a link without (0).
       if (const auto t = Int(message, "t", 0, 1); t && (*t == 1) != peer.with_turn)
       {
         peer.with_turn = *t == 1;
@@ -1585,8 +1578,8 @@ struct DirectLink::Impl
       if (*generation > peer.generation)
       {
         // The answering side holds a newer generation than this side's newest: this side started
-        // over (its count went back to 0) while that one kept its own, and refuses anything older.
-        // The next offer goes past it, as soon as the last build is half a second old.
+        // over and the other refuses anything older. The next offer skips past it once the last
+        // build is half a second old.
         if (*generation == 0xFFFF)
           return;
         INFO_LOG_FMT(NETPLAY, "Orca direct link: seat {} is at link {}, past this side's {}",
@@ -1596,10 +1589,9 @@ struct DirectLink::Impl
         peer.pending_build = "behind";
         return;
       }
-      // The answering side wants a new link: its own rules found this one dead, or it has none at
-      // all (generation 0: it never took an offer, or started over itself). Not twice in a second
-      // (both sides' rules may fire together). An older generation is a request from before this
-      // side's newest build.
+      // The answering side wants a new link: its rules found this one dead, or it has none
+      // (generation 0). Not twice in a second, since both sides' rules may fire together. An older
+      // generation is a stale request from before this side's newest build.
       if ((*generation == peer.generation || *generation == 0) &&
           Clock::now() - peer.built_at >= 1s)
       {
@@ -1633,7 +1625,7 @@ struct DirectLink::Impl
 
   void Answered(Peer& peer, const DirectCrypto::Key& their_half, const std::string& description)
   {
-    // Keys from both halves, the lower id's first; each direction its own.
+    // Keys from both halves, the lower id's first; each direction has its own.
     const bool low = peer.low;
     const auto [low_key, high_key] = DirectCrypto::DeriveKeys(
         low ? peer.my_half : their_half, low ? their_half : peer.my_half, options.room,
@@ -1686,8 +1678,8 @@ struct DirectLink::Impl
       std::erase(sending, link);
       agent = std::exchange(link->agent, nullptr);
     }
-    // libjuice's thread runs no callback for it once this returns (it holds the registry lock
-    // while it calls back).
+    // Once this returns, libjuice runs no more callbacks for it (it holds the registry lock while
+    // calling back).
     if (agent)
       juice_destroy(agent);
     peer.answered = false;
@@ -1744,8 +1736,8 @@ struct DirectLink::Impl
       }
       else
       {
-        // Not again on every build (each try can hold this thread 10 s): the links keep the
-        // credentials they have meanwhile (TURN only fails once those expire).
+        // Don't retry on every build (each try can block this thread 10 s); links keep their
+        // current credentials meanwhile, and TURN only fails once those expire.
         fresh_ice_retry_at = Clock::now() + fresh_ice_backoff;
         WARN_LOG_FMT(NETPLAY,
                      "Orca direct link: no fresh ICE servers; the next try in {} s, links keep "
@@ -1770,15 +1762,13 @@ struct DirectLink::Impl
     }
     juice_config_t config{};
     config.concurrency_mode = JUICE_CONCURRENCY_MODE_POLL;
-    // Tests only: ORCA_DIRECT_STUN=0 leaves the ticket's STUN server out of the agent
-    // (ORCA.md "Wi-Fi").
+    // Tests only: ORCA_DIRECT_STUN=0 leaves the ticket's STUN server out of the agent.
     const bool use_stun = GetEnv("ORCA_DIRECT_STUN") != "0";
-    // TURN only after a failure (ORCA.md "TURN only when needed"): a TURN allocation kept beside a
-    // working host or STUN path made a Realtek Wi-Fi card drop out every 5 s for as long as the
-    // link lived (2026-10-05), and most pairs never need one. A link includes TURN once one to this
-    // peer never came up (Timers), or the other side's offer or request says it should.
-    // Tests only: ORCA_DIRECT_TURN=0 never, =1 from the first link (as before 0.3.21); a forced
-    // TURN path always.
+    // TURN only after a failure: keeping a TURN allocation alongside a working host or STUN path
+    // can make some Wi-Fi chipsets drop out periodically, and most pairs never need it. A link
+    // includes TURN once one to this peer never came up, or when the other side's offer or request
+    // says so. Tests only: ORCA_DIRECT_TURN=0 never, =1 from the first link; a forced TURN path
+    // always. See ORCA.md, "TURN only when needed".
     if (offer)
       peer.with_turn = Int(*offer, "t", 0, 1) == 1;
     const std::string turn_env = GetEnv("ORCA_DIRECT_TURN");
@@ -1861,7 +1851,7 @@ struct DirectLink::Impl
     peer.last_trickle = Clock::now();
   }
 
-  // A new link when the rules allow one now (`now`: whatever the backoff says; a test).
+  // A new link when the rules allow one now (`now` skips the backoff; tests).
   void Rebuild(Peer& peer, const std::string& reason, bool now)
   {
     const auto t = Clock::now();
@@ -1899,7 +1889,7 @@ struct DirectLink::Impl
     const auto now = Clock::now();
     for (auto& [id, peer] : peers)
     {
-      // Candidates out, in batches.
+      // Send candidates in batches.
       if ((!peer.trickle.empty() || peer.trickle_done) && peer.link &&
           now - peer.last_trickle >= TRICKLE_EVERY)
       {
@@ -1923,8 +1913,8 @@ struct DirectLink::Impl
         peer.last_trickle = now;
       }
 
-      // Up and down, from the datagrams themselves.
-      // Up: datagrams arrive, and this side has a pair to send on.
+      // Up and down, judged from the datagrams themselves. Up: datagrams arrive, and this side has
+      // a pair to send on.
       bool up = false;
       if (peer.link && peer.link->Selected())
       {
@@ -1969,7 +1959,7 @@ struct DirectLink::Impl
       if (up && peer.up_since && now - *peer.up_since > STABLE_AFTER)
         peer.backoff_s = FIRST_BACKOFF_S;
 
-      // An idle link stays warm (and keeps the round trip measured).
+      // Keep an idle link warm (and its round trip measured).
       if (peer.link && peer.link->Selected())
       {
         bool idle;
@@ -2028,9 +2018,9 @@ struct DirectLink::Impl
         reason = "upgrade";
         peer.upgrade_tried = true;
       }
-      // A link that never came up tries again with TURN (a strict NAT on either side). One that
-      // worked and then failed (consent lost, a socket error) or went quiet (a radio's dead time)
-      // does not: its next link is as before. An upgrade to the LAN goes without TURN.
+      // A link that never came up retries with TURN (a strict NAT on either side). One that worked
+      // and then failed or went quiet keeps its previous setup. An upgrade to the LAN goes without
+      // TURN.
       if ((reason == "failed" || reason == "no path") && !peer.ever_up && !peer.with_turn &&
           GetEnv("ORCA_DIRECT_TURN") != "0" && !options.ice.turn_user.empty())
       {

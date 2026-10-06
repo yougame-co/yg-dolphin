@@ -81,11 +81,9 @@ void VideoCommon_DoState(PointerWrap& p)
     p.SetVerifyMode();
   }
 
-  // A load first draws the vertices still buffered on the timeline it abandons, under that
-  // timeline's registers, before any of them are overwritten. Drawn after the restore (by the
-  // vertex manager's DoState), they went through the snapshot's matrices and TEV state: garbage
-  // triangles in the next frame shown, which a rollback snapshot (no EFB restore) leaves on
-  // screen, and the batch itself missing from that frame (ORCA.md, "Rollback and the EFB").
+  // Orca: on a load, draw any buffered vertices first, while the old registers are still in
+  // place. Flushed after the restore, they would be drawn with the snapshot's matrices and TEV
+  // state and show up as garbage triangles. See ORCA.md, "Rollback and the EFB".
   if (p.IsReadMode())
     g_vertex_manager->Flush();
 
@@ -136,8 +134,8 @@ void VideoCommon_DoState(PointerWrap& p)
   system.GetGeometryShaderManager().DoState(p);
   p.DoMarker("GeometryShaderManager");
 
-  // Always: it holds emulated GX state (z slope, the vertex loader's normal/tangent/binormal
-  // caches). Its own flush on a load finds nothing left (above).
+  // Orca: always saved, even for rollback: it holds emulated GX state (z slope, cached
+  // normal/tangent/binormal). Its flush on load is a no-op after the flush above.
   g_vertex_manager->DoState(p);
   p.DoMarker("VertexManager");
 
@@ -171,9 +169,9 @@ void VideoCommon_DoState(PointerWrap& p)
     VertexLoaderManager::MarkAllDirty();
   }
 
-  // A full save used to submit the host's GPU work through the EFB readback. A rollback snapshot
-  // skips that readback, so submit what is encoded (no wait): some backends (Metal) otherwise
-  // submit only when a frame is presented, and re-run frames present nothing.
+  // Orca: a full save submits GPU work through its EFB readback, but a rollback snapshot skips
+  // that. Submit encoded work here (no wait): some backends (Metal) otherwise submit only on
+  // present, and re-run frames present nothing.
   if (s_rollback_snapshot && !p.IsMeasureMode())
     g_gfx->Flush();
 }

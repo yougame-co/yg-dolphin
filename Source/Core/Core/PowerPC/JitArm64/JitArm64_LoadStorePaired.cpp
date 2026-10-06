@@ -25,11 +25,10 @@ void JitArm64::psq_lXX(UGeckoInstruction inst)
   // If fastmem is enabled, the asm routines assume address translation is on.
   FALLBACK_IF(!js.assumeNoPairedQuantize && jo.fastmem &&
               !(m_ppc_state.feature_flags & FEATURE_FLAG_MSR_DR));
-  // Orca: in a session, the interpreter runs exactly the psq_l and psq_st that Jit64 sends there
+  // Orca: in a session, send to the interpreter exactly the psq_l and psq_st that Jit64 does
   // (address translation off, or rA = 0), so a Mac and a PC run each one on the same core. The
-  // interpreter's answers differ from both JITs' (psq_st truncates to single, flushes denormals
-  // whatever FPSCR.NI says and keeps an SNaN; psq_l keeps an SNaN). Project+'s codes do use rA = 0
-  // (psq_stx f14-f31 at 0x803f2e70, psq_lx at 0x801629bc), rarely enough to cost nothing.
+  // interpreter's results differ from both JITs' (SNaNs, denormal flushing). Rarely hit in
+  // practice.
   FALLBACK_IF(m_orca_session &&
               (inst.RA == 0 || !(m_ppc_state.feature_flags & FEATURE_FLAG_MSR_DR)));
 
@@ -131,13 +130,10 @@ void JitArm64::psq_lXX(UGeckoInstruction inst)
 
   if (m_orca_session)
   {
-    // Orca: Jit64 widens what psq_l loads with CVTPS2PD, which makes an SNaN quiet and keeps
-    // everything else exact (denormals too: MXCSR.DAZ is off). JitArm64 keeps the raw singles, so
-    // an SNaN pattern loaded by psq_l and stored again by stfs or stfd (or moved by fmr first)
-    // came out 0x7FC00001 on a PC and 0x7F800001 on a Mac. In a session the quiet bit of each NaN
-    // lane is set here, as on a PC. FCMEQ only reads (a denormal still equals itself when FPCR.FZ
-    // flushes it), so the other values stay bit for bit. Only a float type can load a NaN. About
-    // 1% of Brawl's frame time on an M4 (perf.mjs, within its noise).
+    // Orca: Jit64 widens psq_l's singles with CVTPS2PD, which quiets an SNaN and keeps everything
+    // else exact. JitArm64 keeps the raw bits, so in a session set the quiet bit of each NaN lane
+    // here to match. FCMEQ only compares (a denormal still equals itself under FPCR.FZ), so other
+    // values stay bit for bit. Only a float type can load a NaN.
     const ARM64Reg VS_d = EncodeRegToDouble(VS);
     const auto quiet_reg = fpr.GetScopedReg();
     const ARM64Reg quiet = EncodeRegToDouble(quiet_reg);

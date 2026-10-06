@@ -2,45 +2,28 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// queue-e2e.mjs: two headless Orcas matched by YouGame's real queue (ORCA.md "Matchmaking"), each
-// behind an in-process stand-in for the desktop app's bridge that plays the YouGame page's part
-// exactly as the page does (web/src/lib/orca-queue.ts, components/OrcaEmbed.tsx, Player.tsx):
-//   - answers `orca caps` with `caps join leave stats host results`;
-//   - mints Orca's own room tickets (it notes their mode and lobby, as noteOrcaTicket does);
-//   - on `orca menu online <q>` mints a queue ticket (orcaQueueRequest: 2 players, the queue's mode,
-//     Orca's lobby exactly, `stay` for casual) and opens the rooms Worker's /match;
-//   - on `matched`, slot 0 gets `host <code>`, the other `join <code>` 1.5 s later (retried on a soft
-//     failure, 3 times 1.5 s apart), and every Orca ticket for that room is minted as the queue's
-//     ticket with `match_room` (orcaMatchTicket);
-//   - serves the app's controller stream (/controllers/events), whose pad this script presses: the
-//     menu path to With Anyone > Casual or Ranked, the character select, the stage, and in the fight
-//     port 2 walks off the stage until it has no stocks left.
-// It checks the stdout sequence and that both Orcas print the same verdicts (each from its side).
+// queue-e2e.mjs: two headless Orcas matched by YouGame's real queue (ORCA.md "Matchmaking"). Each
+// sits behind an in-process stand-in for the desktop app's bridge that plays the YouGame page's
+// part (web/src/lib/orca-queue.ts, components/OrcaEmbed.tsx, Player.tsx): it answers `orca caps`,
+// mints room and queue tickets, opens the rooms Worker's /match, sends `host`/`join` once matched,
+// and serves the controller stream whose pad this script presses (menus, character select, stage,
+// and port 2 walking off the stage until it runs out of stocks). The test checks the stdout
+// sequence and that both Orcas print the same verdicts.
 //
-// --q2: the queue2 flow (ORCA.md "The queue's character select", the page's half in YouGame
-// lib/orca-queue.ts): the bridge also answers `queue2`; on the queue's own character select each
-// side picks and presses Start, and only `orca queue ready <q> <char> <costume>` starts its search
-// (`queue rating` first); matched, the joiner's pick is put into the host's game (its log says so),
-// both press Start to ready and the match goes on. Scenarios with --q2: match (the default), skip
-// (the joiner holds Z: `orca queue skip`, it leaves, and both are back on their own character
-// select, ready again), rematch (casual: skip, then both search again at once, as the page does, and
-// meet in a new room, the skipper first so it hosts from port 1: the quick rematch; a game there,
-// the joiner leaves, both back and ready), timeout (casual: nobody readies, both print `orca queue
-// timeout me`, leave, and are back on their own character select, not ready).
-// kill (ranked): after game 1 the joiner's Orca is killed mid-fight in game 2; the host counts the
-// forfeit down from the room's leave (15 s), the verdict comes when it said, VICTORY by forfeit;
-// leave (ranked): the same with the joiner's own `leave` ("You left" on its screen). A ranked set
-// to its end also checks VICTORY on one side and DEFEAT on the other, with the page's new rating
-// (`queue rating` again, --rating-after ms after the verdict) counted in ("Set end on screen"), and
-// the room after it (set over): both stay in the room on the results screen until each leaves it,
-// by pressing on through the results screen (match), or, zleave (ranked), the joiner by holding Z
-// there ("<name> left" on the host's, which then presses Start); no forfeit either way, and after a
-// ranked set both are back on their own character select not ready (Start searches again).
-// noskip (ranked): the set as `match`, with both players holding Z 3 s on every game's character
-// select: no `orca queue skip` (a ranked match has no skip). --pick random: every pick is RANDOM.
-// Every --q2 scenario ends with the checksum gate: each session either Orca ended (its "Drop-in:
-// back to solo play ... N checksums matched" line) matched checksums with the other (N > 0), and
-// neither logged a desync or a failed session.
+// --q2 runs the queue2 flow (ORCA.md "The queue's character select"): each side picks on its own
+// character select and `orca queue ready` starts the search; once matched, the joiner's pick is put
+// into the host's game. Scenarios with --q2 (--scenario):
+//   match    the default: a casual game or a ranked set to its end (VICTORY/DEFEAT, new rating),
+//            then both leave the room through the results screen
+//   skip     the joiner holds Z (`orca queue skip`); both end up back on their own character select
+//   rematch  casual: skip, then both search again and meet in a new room, the skipper hosting
+//   timeout  casual: nobody readies; both time out and are back on their own character select
+//   kill     ranked: the joiner's Orca is killed in game 2; the host wins by forfeit after 15 s
+//   leave    ranked: as kill, but the joiner sends `leave`
+//   zleave   ranked: after the set the joiner leaves by holding Z on the results screen
+//   noskip   ranked: both hold Z on every character select; ranked has no skip
+// --pick random makes every pick RANDOM. Every --q2 scenario ends with the checksum gate: each
+// session either Orca ended matched checksums with the other, and neither logged a desync.
 //
 //   node Tools/orca/queue-e2e.mjs <dolphin-emu-nogui> <disc> [--pplus <launcher.dol>]
 //       [--queue ranked|casual] [--games <n>] [--site <url>] [--keep] [--alarm <s>]
@@ -49,9 +32,8 @@
 // Without --slug: dev tickets (an anonymous dev game, nothing recorded, keyframes in a local folder).
 // With --slug: real tickets for that listing as two signed-in players (the cookie files hold a
 // session's Cookie header, mode 600, never printed), keyframes through YouGame's store.
-// Run rules (Luis's machine): never while he plays (`ps -axo comm= | grep -q
-// yougame-desktop/orca/apps`), 1-minute load under 18, under `flock orca-run.lock`; this script
-// runs Orca nice'd, muted, Null video, with a perl alarm.
+// Orca runs nice'd, muted, with Null video and a perl alarm. On a shared machine, don't run it
+// while someone is playing or the load is high.
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -78,35 +60,29 @@ const SITE = (opt("--site", "https://yougame.co") || "").replace(/\/$/, "");
 const SLUG = opt("--slug");
 const KEEP = argv.includes("--keep");
 const ALARM = Number(opt("--alarm", "900"));
-// match (default): the whole flow (ranked: a set; casual: --games games, then the joiner leaves).
-// cancel: one Orca picks, then backs out of the character select while searching
-// (`orca menu cancel`). forfeit (ranked): after game 1 the joiner's connection drops, and the host
-// wins the set by forfeit. rehost (casual): after a game and the joiner's leave, the former joiner
-// queues first, hosts from port 1, and they play another game.
+// Scenarios without --q2:
+//   match    the default: a ranked set, or --games casual games and then the joiner leaves
+//   cancel   one Orca picks, then backs out of the character select while searching
+//   forfeit  ranked: the joiner's connection drops after game 1; the host wins by forfeit
+//   rehost   casual: after the joiner leaves, it queues first, hosts, and they play again
+//   noshow   the opponent never arrives; the host moves on to a room of its own
 const SCENARIO = opt("--scenario", "match");
-// --shots <every>: the first Orca renders with Metal and saves a screenshot every that many frames
-// (its user folder's ScreenShots), from --shots-from (default 1500); 0: only the scenario's own
-// (`test-shot`: the set's end on screen, the disconnect's countdown). --shots-who ada|bo|ada,bo:
-// which Orcas render (default ada); --shots-size WxH (default 640x528); --shots-out <dir>: the
-// scenario's own shots are copied there at the end.
+// --shots <n>: render with Metal and save a screenshot every n frames from --shots-from; 0 saves
+// only the scenario's own shots (`test-shot`). --shots-who picks which Orcas render (ada, bo or
+// ada,bo), --shots-size sets the size, and --shots-out copies the scenario's shots to a folder.
 const SHOTS = opt("--shots");
 const SHOTS_FROM = opt("--shots-from", "1500");
 const SHOTS_WHO = (opt("--shots-who", "ada") || "").split(",");
 const SHOTS_SIZE = opt("--shots-size", "640x528");
 const SHOTS_OUT = opt("--shots-out");
-// The page's second `queue rating` (ranked, --q2): the new rating, this long after the set's
-// verdict (the YouGame page sends it once the site rated the set; +16 a win, -15 a loss here).
+// How long after a ranked set's verdict the page sends the new rating (`queue rating`).
 const RATING_AFTER_MS = Number(opt("--rating-after", "1500"));
 const Q2 = argv.includes("--q2");
-// --pick random (--q2): each side puts its token on the RANDOM tile on its own character select
-// (Orca 0.3.19, ORCA.md "Random and ranked's no skip"): `orca queue ready <q> 41 <costume>`, the
-// joiner's pick steered onto the host's RANDOM tile, and the game resolving both at the fight (the
-// verdicts' characters compared on both sides).
+// --pick random (--q2): both pick the RANDOM tile (ORCA.md "Random and ranked's no skip"); the
+// verdicts' resolved characters must match on both sides.
 const PICK = opt("--pick", "character");
-// The character select's id for Random (Brawl's Selch_Random, and Project+'s), and where each
-// game's RANDOM tile is from the hand's start on panel 1 (frames of full tilt up, then right):
-// Project+ 1.0 a frame from (-23.4, -19.3) to (0.6, 0.7), the tile about -3..4, -1.5..2.5; Brawl
-// 0.83 a frame from (-22.5, -19.8) to (25.6, -1.5), the tile 22.8..28.7, -4.1..0.1.
+// Random's character id (Selch_Random), and how many frames of full tilt up, then right, take the
+// hand from panel 1 onto the RANDOM tile in each game.
 const RANDOM_CHAR = 41;
 const RANDOM_PATH = PPLUS ? { up: 20, right: 24 } : { up: 22, right: 58 };
 const PROFILE = PPLUS ? "pplus32" : "rsbe01";
@@ -262,8 +238,8 @@ class Side {
       return {};
     }
     if (msg.type !== "mpTicket") throw new Error(`unknown ${msg.type}`);
-    // Player.tsx: Orca's own room's ticket notes its mode and lobby; one for the matched room is
-    // the queue's ticket, signed for that room only.
+    // As Player.tsx: note the mode and lobby of Orca's own room; the matched room gets the queue's
+    // ticket, signed for that room only.
     const m = this.match && msg.room === this.match.room ? this.match : null;
     if (!m && /^orca-[a-z0-9]+$/.test(msg.mode || "")) {
       this.lastOwn = { mode: msg.mode, lobby: msg.lobby };
@@ -375,8 +351,7 @@ class Side {
       "Logger.Options.Verbosity=3",
       "-C",
       "Logger.Options.WriteToConsole=True",
-      // The scenario's own shots only (--shots 0): Dolphin's own OSD rows ("Screenshot saved
-      // to ...") stay out of them.
+      // --shots 0: keep Dolphin's "Screenshot saved" OSD messages out of the scenario's shots.
       ...(shots && SHOTS === "0" ? ["-C", "Dolphin.Interface.OnScreenDisplayMessages=False"] : []),
       ...(PPLUS
         ? ["-C", `Dolphin.Core.DefaultISO=${DISC}`, "-e", PPLUS]
@@ -577,9 +552,8 @@ class Side {
 
 // The Online menu's path to With Anyone > Casual or Ranked (Tools/orca/online-menu.py).
 async function menuToQueue(side, queue) {
-  // Both games boot to the main menu (Project+ through its title, PPLUS32.patches): past the strap,
-  // boot and title screens (no press once the title leaves: a stray A on the main menu would pick
-  // Group, VERSUS in Project+).
+  // Mash past the strap, boot and title screens, but stop once the title leaves: a stray A on the
+  // main menu would pick Group (VERSUS in Project+).
   const mash = setInterval(() => {
     if (["", "scStrap", "scBoot", "scTitle"].includes(side.scene)) side.press("A");
   }, 700);
@@ -689,9 +663,9 @@ async function hostOrJoin(side, room, slot) {
   }
 }
 
-// One game, driven from the host's scenes (it never loads a keyframe, so its scene lines are
-// exact): both pick on the first visit to the character select, the host starts and picks the
-// stage, port 2 walks off the stage until the fight ends, both press on at the results.
+// One game, driven from the host's scenes (the host never loads a keyframe, so its scene lines are
+// exact): both pick, the host starts and picks the stage, port 2 walks off until the fight ends,
+// and both press on through the results.
 async function playGame(host, joiner, first) {
   await host.waitScene("scSelctCharacter", 120000);
   await sleep(2500);
@@ -707,10 +681,8 @@ async function playGame(host, joiner, first) {
     await Promise.all([host.press("A"), joiner.press("A")]);
     await sleep(1500);
   }
-  // A ranked set's later games have a character order (Orca's CharOrder.h: each player locks in
-  // with A, Project+'s winner first, 45 s a pick, then Orca presses Start). The hands come back on
-  // the bottom panels, where the online rules mask A (it would make the player a CPU): up into the
-  // grid first, then A, then the host's Start, for as long as the order can take.
+  // A ranked set's later games have a character order (CharOrder.h). The hands start on the bottom
+  // panels, where A is masked (it would make the player a CPU), so move up into the grid first.
   const cssTries = QUEUE === "ranked" ? 120 : 25;
   if (QUEUE === "ranked" && !first) {
     await Promise.all([
@@ -729,12 +701,11 @@ async function playGame(host, joiner, first) {
     await sleep(1200);
   }
   if (QUEUE === "casual") {
-    // Casual's stage pick (ORCA.md "Casual stage pick"): nobody acts, so when the 15 s run out each
-    // player gets a random legal stage, and the coin takes one of the two.
+    // Casual stage pick: nobody acts, so each player gets a random legal stage and a coin flip
+    // takes one.
     await host.waitScene("scMelee", 60000);
   } else {
-    // Ranked: the stage select's strikes, ban and pick (RankedPPlus.h, BrawlStages.h). Nobody
-    // acts: every step's turn timer runs out and takes its default (game 1 about 80 s).
+    // Ranked strikes, ban and pick: nobody acts, so every turn timer runs out and takes its default.
     await host.waitScene("scSelStage", 60000);
     log("ranked stage select: waiting for the turn timers' defaults");
     await host.waitScene("scMelee", 200000);
@@ -781,10 +752,8 @@ function mirrored(a, b) {
   return true;
 }
 
-// The page's Cancel (the band's button: /match closes, Orca hears `queue-cancel`), then the player's
-// own back-out of the character select while searching (`orca menu cancel`: the page closes /match
-// and says `queue-cancel` too). After both, a second player searching the same queue finds nobody
-// left in it: the cancelled tickets are gone.
+// Cancel a search twice, once from the page and once by backing out of the character select, then
+// check that a second searcher finds nobody: the cancelled tickets must be gone from the queue.
 async function cancelScenario() {
   const a = new Side("ada", opt("--cookie-a"), opt("--id-a"));
   const b = new Side("bo", opt("--cookie-b"), opt("--id-b"));
@@ -853,9 +822,8 @@ async function cancelScenario() {
   log("PASS: after both cancels, a second searcher waits alone (1 searching), never matched");
 }
 
-// The opponent never comes (their app closed the moment they were matched): the host's page gives
-// them ORCA_HOST_WAIT_MS (30 s), then sends `leave`; Orca leaves the matched room (`orca state
-// left`) for a fresh room of its own. No game began, so nothing is recorded.
+// The opponent's app closes the moment they are matched. After ORCA_HOST_WAIT_MS the host's page
+// sends `leave` and Orca moves to a fresh room of its own. No game began, so nothing is recorded.
 async function noShowScenario() {
   const a = new Side("ada", opt("--cookie-a"), opt("--id-a"));
   const b = new Side("bo", opt("--cookie-b"), opt("--id-b"));
@@ -948,9 +916,8 @@ function sameVerdicts(host, joiner, fromHost = 0, fromJoiner = 0) {
   return ga.length;
 }
 
-// The checksum gate: every session each Orca ended matched checksums with the other (each end's
-// "back to solo play" line counts more than 0), at least `want` sessions each, and no desync or
-// failed session in either log. Returns a summary for the PASS line.
+// The checksum gate: each Orca ended at least `want` sessions, every one matched checksums with the
+// other side, and neither log has a desync or failed session. Returns a summary for the PASS line.
 function checksumsMatched(sides, want = 1) {
   for (const s of sides) {
     if (s.desyncs.length) fail(`${s.name}: ${s.desyncs[0]}`);
@@ -1083,9 +1050,8 @@ async function q2Css(host, joiner, first, queueFrom = 0) {
   }
 }
 
-// --scenario noskip (ranked; Luis, 2026-10-05: "you should not be able to click Z to escape a
-// ranked match"): on every game's character select both players hold Z for 3 s, twice the casual
-// skip's 1.5 s, and neither Orca prints `orca queue skip`; the set then goes on as `match`.
+// --scenario noskip: ranked has no skip. On every character select both players hold Z for 3 s
+// (twice the casual skip's hold) and neither Orca may print `orca queue skip`.
 async function noSkip(sides) {
   if (QUEUE !== "ranked") fail("noskip is a ranked scenario");
   const from = sides.map((s) => s.lines.length);
@@ -1149,9 +1115,8 @@ async function waitSetEnd(side, re, ms, from = 0) {
   }
 }
 
-// On the results screen of a ranked game: if the match block ended the set there, each side's
-// panel opened (VICTORY for the winner, DEFEAT for the loser) and the room's verdict came; with
-// shots, each rendering side's panel as it waits for the rating, counts and lands.
+// On a ranked game's results screen: if the set ended, each side's panel shows VICTORY or DEFEAT
+// and the room's verdict arrives. With --shots, also capture the panel as the rating lands.
 async function setEndPanels(sides, from, resultsFrom) {
   const opened = await Promise.all(
     sides.map((s, i) => waitSetEnd(s, /^Set end: (VICTORY|DEFEAT) /, 4000, from[i])),
@@ -1185,11 +1150,9 @@ async function setEndPanels(sides, from, resultsFrom) {
   return true;
 }
 
-// The room after a ranked set (set over, YouGame docs/ORCA_ONLINE_UX.md "3B set over"): the room
-// said so to both, both stay on the results screen in the room and the session, and each leaves
-// it by itself: by pressing on through the results screen (both), or (zleave) the joiner by holding
-// Z there, after which the host hears "<name> left" (no forfeit) and leaves with Start. Nothing
-// counts a forfeit down after the set.
+// After a ranked set, both stay on the results screen until each leaves by pressing on, or
+// (zleave) the joiner holds Z and the host sees "<name> left" and leaves with Start. No forfeit
+// countdown runs after the set.
 async function setOverLeave(host, joiner, from) {
   const sides = [host, joiner];
   for (let i = 0; i < 2; ++i)
@@ -1316,9 +1279,8 @@ async function q2Main() {
       return;
     }
     log(`skip: ${joiner.name} held Z, left ${room}; both back on their own character select, ready`);
-    // The quick rematch: the skipper's page searches again at once, the other's on its `orca queue
-    // ready` (both printed again, q2Back). With dev tickets nothing holds the two apart, so they
-    // meet again, in a new room; the skipper waited longest, so it hosts, from port 1.
+    // The quick rematch: both search again and, with dev tickets, meet in a new room. The skipper
+    // waited longest, so it hosts from port 1.
     const sessionsBefore = [a.sessions.length, b.sessions.length];
     const s1 = search(joiner, QUEUE);
     await sleep(3000);
@@ -1353,10 +1315,8 @@ async function q2Main() {
     return;
   }
   if (SCENARIO === "kill" || SCENARIO === "leave") {
-    // kill: the joiner's Orca dies mid-set (its socket closes, as a crash or a closed app does).
-    // leave: the joiner's page leaves mid-set ("You left · This set counts as a loss" there).
-    // The host counts the forfeit down from the room's leave (the room's GRACE, 15 s), plays on
-    // meanwhile, and wins the set by forfeit: "bo forfeited", then VICTORY with the new rating.
+    // kill: the joiner's Orca dies mid-set, like a crash. leave: the joiner's page leaves mid-set.
+    // Either way the host plays on through the room's 15 s grace and wins the set by forfeit.
     if (QUEUE !== "ranked") fail(`${SCENARIO} is a ranked scenario`);
     const kill = SCENARIO === "kill";
     marks();
@@ -1438,9 +1398,8 @@ async function q2Main() {
     if (QUEUE === "ranked") marks();
     await q2Css(host, joiner, g === 0);
     await q2Fight(host, joiner);
-    // The set is over once its verdict came, or once its room closed after its result: a room
-    // that closed with no verdict fails on the verdict below, not on a character select that is
-    // already the player's own (which no Start moves on).
+    // The set is over once its verdict came or its room closed. A room that closed with no verdict
+    // fails on the verdict check below.
     if (
       QUEUE === "ranked" &&
       (host.results.some((r) => r.k === "set") ||

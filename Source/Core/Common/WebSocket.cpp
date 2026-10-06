@@ -22,7 +22,7 @@ namespace
 {
 constexpr size_t MAX_MESSAGE = 1024 * 1024;
 
-// Waits until the socket can be read (or written); false on timeout or error.
+// Waits until the socket is readable (or writable). Returns false on timeout or error.
 bool WaitSocket(curl_socket_t socket, bool for_write, std::chrono::milliseconds timeout)
 {
 #ifdef _WIN32
@@ -86,7 +86,7 @@ bool WebSocket::Connect(const std::string& url, std::chrono::milliseconds timeou
   CURL* curl = m_impl->curl;
   ConfigureCurlTLS(curl);
   curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-  // 2 = connect, then hand the socket to curl_ws_send/curl_ws_recv.
+  // 2: connect and upgrade, then leave the socket to curl_ws_send/curl_ws_recv.
   curl_easy_setopt(curl, CURLOPT_CONNECT_ONLY, 2L);
   curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, static_cast<long>(timeout.count()));
   curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, static_cast<long>(timeout.count()));
@@ -111,9 +111,8 @@ bool WebSocket::Connect(const std::string& url, std::chrono::milliseconds timeou
     m_impl->Release();
     return false;
   }
-  // CURLOPT_TIMEOUT_MS bounds the handshake only. libcurl keeps applying it to the transfer
-  // afterwards, and Schannel checks it on every send, so on Windows each send failed with
-  // "timed out sending data" once the socket was older than the connect timeout.
+  // The timeout was meant for the handshake only. libcurl keeps applying it afterwards, and on
+  // Windows (Schannel) every send fails once the socket is older than it, so clear it.
   curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 0L);
   m_impl->socket = socket;
   m_impl->open = true;
@@ -194,7 +193,7 @@ std::optional<std::string> WebSocket::ReceiveText(std::chrono::milliseconds time
                        std::string("WebSocket closed by the server"));
       return std::nullopt;
     }
-    // libcurl answers pings itself; only text (and its continuations) carries messages.
+    // libcurl answers pings itself. Only text frames and their continuations carry messages.
     if (!(meta->flags & (CURLWS_TEXT | CURLWS_CONT)))
       continue;
     m_impl->partial.append(buffer.data(), received);
@@ -235,9 +234,8 @@ void WebSocket::Close(u16 code)
     const std::array<char, 2> payload{static_cast<char>(code >> 8), static_cast<char>(code & 0xFF)};
     size_t sent = 0;
     curl_ws_send(m_impl->curl, payload.data(), payload.size(), &sent, 0, CURLWS_CLOSE);
-    // The closing handshake: read until the server's close frame (or half a second), so the socket
-    // isn't torn down with data unread. That tears it down with a reset, and a reset can drop what
-    // was sent just before (an Orca room's "leave": the room then holds the seat instead).
+    // Wait up to 500 ms for the server's close frame. Closing with unread data sends a TCP reset,
+    // which can drop the last message we sent (such as a room "leave").
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
     std::array<char, 4096> buffer;
     while (true)

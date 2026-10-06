@@ -44,8 +44,8 @@ using namespace Orca::UX;
 
 namespace
 {
-// Dolphin's adapter decoding written out from the wire layout (GCAdapter.cpp ProcessInputPayload,
-// before it was split into DecodeChannel): an independent reference for the parity test.
+// Dolphin's adapter decoding, written out independently from the wire layout
+// (GCAdapter.cpp ProcessInputPayload) as a reference for the parity test.
 GCPadStatus ReferenceDecode(const std::array<u8, 9>& c)
 {
   GCPadStatus pad = {};
@@ -180,7 +180,7 @@ TEST(OrcaUXControllers, EveryAxisByteIsPassedThroughUncalibrated)
     EXPECT_EQ(pad.substickY, v);
     EXPECT_EQ(pad.triggerLeft, v);
     EXPECT_EQ(pad.triggerRight, v);
-    // PAD_GET_ORIGIN and PAD_USE_ORIGIN are calibration state the session never sends.
+    // PAD_GET_ORIGIN and PAD_USE_ORIGIN are calibration state and never sent.
     EXPECT_EQ(pad.button & (PAD_GET_ORIGIN | PAD_USE_ORIGIN), 0);
   }
 }
@@ -244,7 +244,7 @@ TEST(OrcaUXControllers, StandardPadOnAGameCubeLayout)
   EXPECT_EQ(only(8), 0);   // Back
   EXPECT_EQ(only(16), 0);  // Home
 
-  // Analog triggers: travel, and the click at the end.
+  // Analog triggers: travel plus the digital click at the end.
   StandardPad p;
   p.buttons[6] = 0.5f;
   p.buttons[7] = 0.95f;
@@ -254,7 +254,7 @@ TEST(OrcaUXControllers, StandardPadOnAGameCubeLayout)
   EXPECT_EQ(s.triggerRight, 242);
   EXPECT_EQ(s.button, PAD_TRIGGER_R);
 
-  // Sticks: right and down on the pad are right and down on the GC (its Y grows upward).
+  // Sticks: the GameCube's Y axis grows upward, the standard pad's downward.
   p = {};
   p.axes = {1, 1, -1, -1};
   s = MapStandardPad(p);
@@ -383,29 +383,26 @@ TEST(OrcaUXControllers, StaleOrSuspendedInputIsNeutral)
 {
   const std::string pad = PadJson(0, "standard", "[1,0,0,0]", Buttons17(0));
   const std::string ports = FourPorts(PortJson(0, 0, "wired", 0x01, {200, 128, 128, 128}));
-  // Fresh: the report is 0.625 ms older than the snapshot.
   auto s = ParseSnapshotEvent(Event(true, ports, pad));
   EXPECT_FALSE(ChooseLocalPad(*s, 100)->neutral);
   EXPECT_EQ(ChooseLocalPad(*s, 100)->pad.stickX, 200);
-  // The snapshot itself is old here.
+  // The snapshot itself is stale.
   auto c = ChooseLocalPad(*s, 251);
   EXPECT_TRUE(c->neutral);
   EXPECT_EQ(c->source, PadSource::Adapter);
   EXPECT_EQ(c->pad.button, 0);
   EXPECT_EQ(c->pad.stickX, 128);
   EXPECT_TRUE(c->pad.isConnected);
-  // The adapter's last report is old even though the snapshot is new (USB stalled).
+  // The adapter's last report is stale even though the snapshot is new (USB stalled).
   s = ParseSnapshotEvent(Event(true, ports, pad, 1759370000500.0, 1759370000300.0));
   EXPECT_FALSE(ChooseLocalPad(*s, 40)->neutral);
   EXPECT_TRUE(ChooseLocalPad(*s, 60)->neutral);
-  // No report yet.
   s = ParseSnapshotEvent(Event(true, ports, pad, 1759370000500.0, 0));
   EXPECT_TRUE(ChooseLocalPad(*s, 0)->neutral);
-  // Suspended.
   s = ParseSnapshotEvent(Event(true, ports, pad, 1759370000500.0, 1759370000500.0, true));
   EXPECT_TRUE(ChooseLocalPad(*s, 0)->neutral);
-  // The helper failed (the app's fail(): suspended, every port emptied, no pads): Dolphin's own
-  // mapping takes over instead of leaving the player stuck neutral.
+  // The helper failed (suspended, every port empty, no pads): fall back to Dolphin's own mapping
+  // instead of leaving the player stuck neutral.
   s = ParseSnapshotEvent(Event(true, FourPorts(), "", 1759370000500.0, 1759370000400.0, true));
   ASSERT_TRUE(s);
   EXPECT_FALSE(ChooseLocalPad(*s, 0).has_value());
@@ -428,54 +425,51 @@ std::vector<Orca::Events::PortInfo> Ports(std::initializer_list<Orca::Events::Po
 TEST(OrcaUXOverlay, ToastsFollowThePortListOnceEach)
 {
   OverlayModel m;
-  // The solo host's own port at boot: no toast.
-  m.OnPorts(0, Ports({{0, "luis", false}}), 0);
+  // The host's own port at boot: no toast.
+  m.OnPorts(0, Ports({{0, "cy", false}}), 0);
   EXPECT_TRUE(m.View(10, Stats::Off).toasts.empty());
-  // A friend plugs in; a re-run of that frame gives the same list again: one toast.
-  m.OnPorts(300, Ports({{0, "luis", false}, {1, "ada", true}}), 1000);
-  m.OnPorts(300, Ports({{0, "luis", false}, {1, "ada", true}}), 1010);
+  // A friend plugs in; a rollback re-run of that frame repeats the list: still one toast.
+  m.OnPorts(300, Ports({{0, "cy", false}, {1, "ada", true}}), 1000);
+  m.OnPorts(300, Ports({{0, "cy", false}, {1, "ada", true}}), 1010);
   auto v = m.View(1100, Stats::Off);
   ASSERT_EQ(v.toasts.size(), 1u);
   EXPECT_EQ(v.toasts[0].text, "ada joined on port 2");
   EXPECT_FLOAT_EQ(v.toasts[0].alpha, 1);
-  // It fades over its last half second and is gone after three.
+  // Fades over its last half second, gone after three.
   EXPECT_NEAR(m.View(3750, Stats::Off).toasts[0].alpha, 0.5f, 1e-4);
   EXPECT_TRUE(m.View(4001, Stats::Off).toasts.empty());
-  // The friend unplugs.
-  m.OnPorts(900, Ports({{0, "luis", false}}), 5000);
+  m.OnPorts(900, Ports({{0, "cy", false}}), 5000);
   v = m.View(5001, Stats::Off);
   ASSERT_EQ(v.toasts.size(), 1u);
   EXPECT_EQ(v.toasts[0].text, "ada left");
-  // Joining a friend's game takes the frame number back to theirs: still shown.
-  m.OnPorts(120, Ports({{0, "bo", true}, {1, "luis", false}}), 5100);
+  // Joining a friend's game moves the frame number back to theirs: still shown.
+  m.OnPorts(120, Ports({{0, "bo", true}, {1, "cy", false}}), 5100);
   const auto joined = m.View(5101, Stats::Off).toasts;
   ASSERT_EQ(joined.size(), 2u);
   EXPECT_EQ(joined[1].text, "bo joined on port 1");
 
   // A joiner's first list already holds the host.
   OverlayModel joiner;
-  joiner.OnPorts(0, Ports({{0, "luis", true}, {1, "ada", false}}), 0);
+  joiner.OnPorts(0, Ports({{0, "cy", true}, {1, "ada", false}}), 0);
   ASSERT_EQ(joiner.View(1, Stats::Off).toasts.size(), 1u);
-  EXPECT_EQ(joiner.View(1, Stats::Off).toasts[0].text, "luis is on port 1");
+  EXPECT_EQ(joiner.View(1, Stats::Off).toasts[0].text, "cy is on port 1");
 }
 
-// The YouGame page used to clip the player box to its visible part, so scrolling sent rects down to
-// 0 px tall; the overlay's text (3 units) then rounded to 0 px and ImGui aborted
-// (ImFontAtlasBakedGetOrAdd: font_size > 0.0f). Under the minimum height it draws nothing.
+// Text in a very short picture would round to 0 px, which ImGui asserts on
+// (ImFontAtlasBakedGetOrAdd: font_size > 0.0f). Below the minimum height the overlay draws nothing.
 TEST(OrcaUXOverlay, NothingInAPictureTooThinForText)
 {
   for (const float h : {0.0f, 1.0f, 2.0f, 16.0f, 17.0f, 99.0f, -5.0f, std::nanf("")})
     EXPECT_EQ(OverlayUnit(h), 0.0f) << h;
   EXPECT_FLOAT_EQ(OverlayUnit(OVERLAY_MIN_HEIGHT), OVERLAY_MIN_HEIGHT / 100);
   EXPECT_FLOAT_EQ(OverlayUnit(1080), 10.8f);
-  // Wherever it draws, its smallest text (3 units) is at least a whole pixel once ImGui rounds it.
+  // Wherever it draws, its smallest text (3 units) rounds to at least one pixel.
   for (float h = OVERLAY_MIN_HEIGHT; h < 4000; h += 0.5f)
     ASSERT_GE(std::floor(3 * OverlayUnit(h) + 0.5f), 1.0f) << h;
 }
 
-// The overlay as Orca draws it (InitOverlay's Draw, through OSD::DrawHostOverlay) into ImGui
-// frames set up the way OnScreenUI sets them up: the renderer builds the font atlas
-// (RendererHasTextures) and the display is the backbuffer's size. A toast gives it text to set.
+// Draws the real overlay (via OSD::DrawHostOverlay) into ImGui frames set up like OnScreenUI's,
+// with a toast so there is text to draw.
 class OrcaUXOverlayDraw : public ::testing::Test
 {
 protected:
@@ -494,7 +488,7 @@ protected:
     ShutdownOverlay();
     ImGui::DestroyContext(m_context);
   }
-  // The frame's vertices: the overlay's (nothing else draws in it).
+  // The frame's vertex count; only the overlay draws.
   static int Frame(float width, float height)
   {
     ImGuiIO& io = ImGui::GetIO();
@@ -508,16 +502,13 @@ protected:
   ImGuiContext* m_context = nullptr;
 };
 
-// Orca 0.3.13 trapped (SIGTRAP) four times on 2026-10-04: the YouGame page clipped the player box to
-// its visible part, so scrolling sent rects down to 0 px tall, the window shrank to 1 px, and the
-// overlay's text (3% of the height) rounded to 0 px, which ImGui asserts on (ImFontAtlasBakedGetOrAdd:
-// font_size > 0.0f). Any picture, an empty one included, draws without an ImGui assert (a debug
-// build's goes to the alert handler, which fails the test; a release build's is counted), and the
-// overlay draws in every picture at least OVERLAY_MIN_HEIGHT tall, nothing in a thinner one.
+// Any picture size, even 0 px, draws without an ImGui assert: a window shrunk to a few pixels
+// would otherwise round the overlay's text to 0 px. The overlay draws only in pictures at least
+// OVERLAY_MIN_HEIGHT tall.
 TEST_F(OrcaUXOverlayDraw, AnyPictureSizeDrawsWithoutAnImGuiAssert)
 {
   const std::size_t failures = ImGuiAssertFailures();
-  // The backbuffer's height (unsigned: ImGui itself asserts on a negative DisplaySize).
+  // Backbuffer heights; no negatives, since ImGui itself asserts on a negative DisplaySize.
   for (const float h : {480.0f, 0.0f, 1.0f, 10.0f, 16.0f, 17.0f, 33.0f, 99.0f, 100.0f, 1080.0f})
   {
     SCOPED_TRACE(h);
@@ -531,19 +522,16 @@ TEST_F(OrcaUXOverlayDraw, AnyPictureSizeDrawsWithoutAnImGuiAssert)
   EXPECT_EQ(ImGuiAssertFailures(), failures);
 }
 
-// An embed `view` lays the picture out past Orca's window: the page's panel cuts the window's left,
-// a toast over the page cuts its top, and the picture keeps its size and place. The overlay's unit
-// stays the whole picture's; Orca's own elements (the corner, the toasts, the top centre's banner
-// and its timer) stay in the part of the picture inside the window (VisiblePicture). However narrow
-// that part, nothing asserts; in a part at least two fifths of the picture wide (the panel is about
-// a quarter of it), nothing is drawn past the window. Narrower than that the banner keeps its least
-// width (26 units) and the toasts theirs, so they run past it.
+// When an embedding page covers part of the picture, the overlay keeps its scale but draws its own
+// elements (corner, toasts, banner) inside the visible part. Nothing asserts at any width; from two
+// fifths of the picture wide up, nothing is drawn outside the window. Narrower than that, the
+// banner and toasts keep their minimum widths and may overflow.
 TEST_F(OrcaUXOverlayDraw, ACutWindowKeepsOrcasOwnElementsInIt)
 {
   const std::size_t failures = ImGuiAssertFailures();
   constexpr float PIC_W = 1280, PIC_H = 720;
-  // The window is the picture's bottom right part, `width` wide and `cut_top` short of its top;
-  // the bounds of everything drawn in it.
+  // Bounds of everything drawn when the window is the picture's bottom-right part, `width` wide
+  // and `cut_top` short of its top.
   const auto drawn = [&](float width, float cut_top) {
     SetPictureForTests(PictureArea{width - PIC_W, -cut_top, PIC_W, PIC_H});
     EXPECT_GT(Frame(width, PIC_H - cut_top), 0);
@@ -558,7 +546,7 @@ TEST_F(OrcaUXOverlayDraw, ACutWindowKeepsOrcasOwnElementsInIt)
     }
     return std::pair{min, max};
   };
-  // A banner, its note long enough to wrap, and the turn's timer beside it.
+  // A banner whose note is long enough to wrap, with the turn's timer.
   const auto banner = [](bool on) {
     if (!on)
       SetRulesLines("", "");
@@ -567,9 +555,8 @@ TEST_F(OrcaUXOverlayDraw, ACutWindowKeepsOrcasOwnElementsInIt)
                     "Ada strikes a stage \u00b7 then Bo strikes two \u00b7 Ada picks from the "
                     "rest \u00b7 0:42");
   };
-  // How far down the banner pushes everything (the toasts go under it): in a window under 300
-  // pixels (62% of it is under the banner's least width) no further than at 300. Fitting the note
-  // into 62% of the window there left it no room, one word a line, down past half the picture.
+  // How far down the banner pushes the toasts. Below 300 px it must go no deeper than at 300 px,
+  // so a narrow window doesn't wrap the note one word per line down the picture.
   const auto banner_depth = [&](float width) {
     banner(false);
     const float without = drawn(width, 0).second.y;
@@ -593,7 +580,7 @@ TEST_F(OrcaUXOverlayDraw, ACutWindowKeepsOrcasOwnElementsInIt)
       const auto [min, max] = drawn(width, cut_top);
       if (width < 0.4f * PIC_W)
         continue;
-      // Every vertex in the window (a pixel of anti-aliasing fringe allowed).
+      // Every vertex inside the window (one pixel of anti-aliasing allowed).
       EXPECT_GE(min.x, -1.0f);
       EXPECT_GE(min.y, -1.0f);
       EXPECT_LE(max.x, width + 1);
@@ -605,9 +592,8 @@ TEST_F(OrcaUXOverlayDraw, ACutWindowKeepsOrcasOwnElementsInIt)
   EXPECT_EQ(ImGuiAssertFailures(), failures);
 }
 
-// The page's dim (embed `dim N`) is the last thing drawn, over the whole display: the foreground
-// list's last rectangle, N% black, eased in over DIM_EASE_S. It draws whatever the rest does, a
-// picture too thin for the overlay's text included, and `dim 0` takes it off the same way.
+// The page's dim (embed `dim N`) is the last rectangle drawn, covering the whole display at N%
+// black, eased over DIM_EASE_S. It draws even when the overlay itself doesn't.
 TEST_F(OrcaUXOverlayDraw, DimIsTheLastThingDrawnOverTheWholeDisplay)
 {
   // The last rectangle's alpha when it covers the display, else -1.
@@ -638,7 +624,7 @@ TEST_F(OrcaUXOverlayDraw, DimIsTheLastThingDrawnOverTheWholeDisplay)
 
   SetDim(50);
   EXPECT_EQ(Dim(), 50);
-  // Eased: a frame (1/60 s) in, part of the way; DIM_EASE_S in, half black.
+  // Eased: partway after one frame, half black after DIM_EASE_S.
   const int first = dim_alpha(1280, 720);
   EXPECT_GT(first, 0);
   EXPECT_LT(first, 64);
@@ -650,10 +636,10 @@ TEST_F(OrcaUXOverlayDraw, DimIsTheLastThingDrawnOverTheWholeDisplay)
     alpha = next;
   }
   EXPECT_EQ(alpha, 128);
-  // Over a picture too thin for the overlay (which then draws nothing of its own) too.
+  // Also over a picture too short for the overlay.
   EXPECT_EQ(dim_alpha(640, 40), 128);
 
-  // `focus` and `dim 0` take it off, eased the same way.
+  // `dim 0` eases it off the same way.
   SetDim(0);
   const int fading = dim_alpha(1280, 720);
   EXPECT_GT(fading, 0);
@@ -662,16 +648,14 @@ TEST_F(OrcaUXOverlayDraw, DimIsTheLastThingDrawnOverTheWholeDisplay)
     Frame(1280, 720);
   EXPECT_EQ(dim_alpha(1280, 720), -1);
 
-  // Out of range: clamped.
   SetDim(250);
   EXPECT_EQ(Dim(), 100);
   SetDim(-4);
   EXPECT_EQ(Dim(), 0);
 }
 
-// A release build's ImGui assert carries on (Externals/imgui/imgui_user_config.h): counted, said
-// once for its place, and never the alert handler's question, which a nogui Orca answers with no
-// and traps on.
+// In a release build an ImGui assert is counted and logged once per call site, and never raises
+// the alert dialog (a headless Orca would answer it "no" and trap). See imgui_user_config.h.
 TEST(OrcaUXOverlay, ReleaseBuildImGuiAssertCarriesOn)
 {
 #if defined(_DEBUG) || defined(DEBUGFAST)
@@ -697,7 +681,7 @@ TEST(OrcaUXOverlay, ReleaseBuildImGuiAssertCarriesOn)
 TEST(OrcaUXOverlay, WaitingOnlyAfterAQuarterSecondOfStall)
 {
   OverlayModel m;
-  m.OnPorts(0, Ports({{0, "luis", false}, {1, "ada", true}}), 0);
+  m.OnPorts(0, Ports({{0, "cy", false}, {1, "ada", true}}), 0);
   LinkView link;
   link.online = true;
   link.round_trip_ms = 40;
@@ -709,7 +693,7 @@ TEST(OrcaUXOverlay, WaitingOnlyAfterAQuarterSecondOfStall)
   m.Update(link, 160);
   EXPECT_EQ(m.View(160, Stats::Off).waiting, "Waiting for ada\u2026");
   EXPECT_EQ(m.View(160, Stats::Off).signal, Signal::Bad);
-  // The session that doesn't report stall time yet (-1) never shows it.
+  // No stall time reported (-1): no waiting line.
   link.stalled_ms = -1;
   m.Update(link, 200);
   EXPECT_EQ(m.View(200, Stats::Off).waiting, "");
@@ -1345,9 +1329,8 @@ TEST(OrcaUXGamePatches, BrawlInputLagFixIsTheMagusCodeInPlace)
 
 TEST(OrcaUXGamePatches, TheShippedProjectPlusFileGuardsEveryLine)
 {
-  // Project+'s own codes own the memory around the disc's modules, and Project+ owns the game's
-  // data: its file may only hold groups guarded by the words they replace (code groups, and the one
-  // data group that sets the item default once), never a `*` line written every frame.
+  // Project+ owns the code and data around the disc's modules, so its file may only hold groups
+  // guarded by the words they replace, never a `*` line written every frame.
   const auto patches = ShippedPatches("PPLUS32.patches");
   ASSERT_FALSE(patches.empty());
   for (const GamePatch& p : patches)
@@ -1371,7 +1354,7 @@ TEST(OrcaUXGamePatches, ItemsOffIsOneGroupThatLandsOnlyOnTheGamesDefaults)
 TEST(OrcaUXFreeSpace, TheBlockAndTheCavesFitAndNoShippedPatchStraysIntoThem)
 {
   using namespace FreeSpace;
-  // Room for the design's ~96-byte header and set state, and code space for the lock patches.
+  // Room for the ~96-byte header and set state, and code space for the lock patches.
   EXPECT_GE(kMatchBlock.Size(), 96u);
   u32 cave_bytes = 0;
   for (const FreeSpace::Range& cave : kCodeCaves)
@@ -1419,15 +1402,15 @@ TEST(OrcaUXFreeSpace, TheBlockAndTheCavesFitAndNoShippedPatchStraysIntoThem)
 TEST(OrcaUXNameTags, UsernamesBecomeBrawlTags)
 {
   EXPECT_EQ(BrawlTag("ada"), u"ADA");
-  EXPECT_EQ(BrawlTag("crunchytester"), u"CRUNC");
+  EXPECT_EQ(BrawlTag("longusername"), u"LONGU");
   EXPECT_EQ(BrawlTag("sandbox-ada"), u"SANDB");
   EXPECT_EQ(BrawlTag("a_b c"), u"A-B-C");
   EXPECT_EQ(BrawlTag("x.y!?"), u"X.Y!?");
-  EXPECT_EQ(BrawlTag("L0u1s"), u"L0U1S");
+  EXPECT_EQ(BrawlTag("H4l9x"), u"H4L9X");
   EXPECT_EQ(BrawlTag("j\xc3\xa9r\xc3\xb4me"), u"JRME");  // non-ASCII dropped, never transliterated
   EXPECT_EQ(BrawlTag("@#$"), u"");
   EXPECT_EQ(BrawlTag(""), u"");
-  // The session's longest name (64 bytes of UTF-8): five characters, from the ASCII ones.
+  // The longest name (64 bytes of UTF-8): the first five ASCII characters.
   EXPECT_EQ(BrawlTag("\xe5\xb0\x8f\xe6\x98\x8e" + std::string(58, 'q')), u"QQQQQ");
   EXPECT_EQ(BrawlTag(std::string(64, '\xff')), u"");
 }
@@ -1449,7 +1432,7 @@ TEST(OrcaUXNameTags, TheRemoteFlagNeverChangesWhatIsWritten)
 TEST(OrcaUXNameTags, JoinedPortsGetTheirTagOnTheCharacterSelect)
 {
   FakeBrawl m;
-  const std::vector<Orca::Events::PortInfo> ports{{0, "luis", false}, {1, "ada", true}};
+  const std::vector<Orca::Events::PortInfo> ports{{0, "cy", false}, {1, "ada", true}};
   // Nobody has joined yet: nothing.
   EXPECT_EQ(ApplyNameTags(m, ports), 0);
   m.Join(0);
@@ -1457,7 +1440,7 @@ TEST(OrcaUXNameTags, JoinedPortsGetTheirTagOnTheCharacterSelect)
   EXPECT_EQ(ApplyNameTags(m, ports), 2);
   // The highest unused tags, in port order.
   EXPECT_EQ(m.NameId(0), 119);
-  EXPECT_EQ(m.TagName(119), u"LUIS");
+  EXPECT_EQ(m.TagName(119), u"CY");
   EXPECT_EQ(m.NameId(1), 118);
   EXPECT_EQ(m.TagName(118), u"ADA");
   EXPECT_EQ(m.NameId(2), -1);
@@ -1476,7 +1459,7 @@ TEST(OrcaUXNameTags, ReusesTheSameNameAndLeavesAChosenTagAlone)
   m.Join(1);
   // Port 0's player picked their own tag; port 1's name is already a tag.
   m.W32(FakeBrawl::Area(0) + 0x1C8, 0);
-  EXPECT_EQ(ApplyNameTags(m, {{0, "luis", false}, {1, "ada", true}}), 1);
+  EXPECT_EQ(ApplyNameTags(m, {{0, "cy", false}, {1, "ada", true}}), 1);
   EXPECT_EQ(m.NameId(0), 0);
   EXPECT_EQ(m.TagName(0), u"MINE");
   EXPECT_EQ(m.NameId(1), 3);
@@ -1491,9 +1474,9 @@ TEST(OrcaUXNameTags, ANewTagIsMadeAsTheGameMakesOneAndNothingElseIsWritten)
     m.Write16(a, 0xAAAA);
   m.Join(0);
   m.recording = true;
-  ASSERT_EQ(ApplyNameTags(m, {{0, "luis", false}}), 1);
+  ASSERT_EQ(ApplyNameTags(m, {{0, "cy", false}}), 1);
   const u32 tag = FakeBrawl::Tag(119);
-  EXPECT_EQ(m.TagName(119), u"LUIS");
+  EXPECT_EQ(m.TagName(119), u"CY");
   EXPECT_EQ(m.Read8(tag + 0x0C), 1);  // rumble on
   for (u32 i = 0; i < FakeBrawl::CONTROLS.size(); ++i)
     EXPECT_EQ(m.Read8(tag + 0x14 + i), FakeBrawl::CONTROLS[i]) << i;
@@ -1533,7 +1516,7 @@ TEST(OrcaUXNameTags, TwoPortsNeverShareATag)
   // One port joined, one not: only the joined one.
   FakeBrawl half;
   half.Join(1);
-  EXPECT_EQ(ApplyNameTags(half, {{0, "luis", false}, {1, "ada", true}}), 1);
+  EXPECT_EQ(ApplyNameTags(half, {{0, "cy", false}, {1, "ada", true}}), 1);
   EXPECT_EQ(half.NameId(0), -1);
   EXPECT_EQ(half.TagName(half.NameId(1)), u"ADA");
 }
@@ -1571,7 +1554,7 @@ TEST(OrcaUXNameTags, APortsOwnControlsGoIntoTheTagItGets)
   FakeBrawl m;
   m.Join(0);
   m.Join(1);
-  const std::vector<Orca::Events::PortInfo> ports{{0, "luis", false, {}},
+  const std::vector<Orca::Events::PortInfo> ports{{0, "cy", false, {}},
                                                   {1, "ada", true, Profile(0, CustomLayout())}};
   m.recording = true;
   EXPECT_EQ(ApplyNameTags(m, ports), 2);
@@ -1598,7 +1581,7 @@ TEST(OrcaUXNameTags, APortsOwnControlsGoIntoTheTagItGets)
   FakeBrawl other;
   other.Join(0);
   other.Join(1);
-  ApplyNameTags(other, {{0, "luis", true, {}}, {1, "ada", false, Profile(0, CustomLayout())}});
+  ApplyNameTags(other, {{0, "cy", true, {}}, {1, "ada", false, Profile(0, CustomLayout())}});
   EXPECT_EQ(m.bytes, other.bytes);
 }
 
@@ -1621,7 +1604,7 @@ TEST(OrcaUXNameTags, ControlsReplaceThoseOfATagAlreadyHoldingTheName)
   chosen.Join(0);
   chosen.W32(FakeBrawl::Area(0) + 0x1C8, 3);
   chosen.recording = true;
-  EXPECT_EQ(ApplyNameTags(chosen, {{0, "luis", false, Profile(0, CustomLayout())}}), 0);
+  EXPECT_EQ(ApplyNameTags(chosen, {{0, "cy", false, Profile(0, CustomLayout())}}), 0);
   EXPECT_TRUE(chosen.written.empty());
 }
 
@@ -1638,7 +1621,7 @@ TEST(OrcaUXNameTags, ControlsOnlyAsTheGamesMenusSetThem)
   wild[0x20] = 0x0E;  // "none" is fine
   FakeBrawl m;
   m.Join(0);
-  ASSERT_EQ(ApplyNameTags(m, {{0, "luis", false, Profile(5, wild)}}), 1);
+  ASSERT_EQ(ApplyNameTags(m, {{0, "cy", false, Profile(5, wild)}}), 1);
   const int slot = m.NameId(0);
   std::array<u8, 0x2D> want = wild;
   want[0] = FakeBrawl::CONTROLS[0];
@@ -1664,7 +1647,7 @@ TEST(OrcaUXNameTags, AProfileOfAnotherSizeIsNoneAndANamelessPlayerWithOneWearsIt
   FakeBrawl n;
   n.Join(0);
   n.Join(1);
-  EXPECT_EQ(ApplyNameTags(n, {{0, "luis", false, short_profile}, {1, "", true, short_profile}}), 1);
+  EXPECT_EQ(ApplyNameTags(n, {{0, "cy", false, short_profile}, {1, "", true, short_profile}}), 1);
   EXPECT_EQ(TagLayout(n, n.NameId(0)), FakeBrawl::CONTROLS);
   EXPECT_EQ(n.NameId(1), -1);
 }
@@ -1674,20 +1657,20 @@ TEST(OrcaUXNameTags, OwnControlsFollowTheTagThePlayerWears)
   FakeBrawl m;
   std::u16string last;
   // No tag anywhere: none.
-  EXPECT_TRUE(ReadOwnControls(m, 0, "luis", &last).empty());
+  EXPECT_TRUE(ReadOwnControls(m, 0, "cy", &last).empty());
   // Their YouGame tag exists (Orca made it): its controls.
-  m.SetTag(119, u"LUIS");
+  m.SetTag(119, u"CY");
   for (u32 i = 0; i < 0x2D; ++i)
     m.Write8(FakeBrawl::Tag(119) + 0x14 + i, FakeBrawl::CONTROLS[i]);
   m.Write8(FakeBrawl::Tag(119) + 0x0C, 1);
-  EXPECT_EQ(ReadOwnControls(m, 0, "luis", &last), Profile(1, FakeBrawl::CONTROLS));
+  EXPECT_EQ(ReadOwnControls(m, 0, "cy", &last), Profile(1, FakeBrawl::CONTROLS));
   // On the character select they wear a tag of their own: that one, from then on.
   m.SetTag(4, u"MINE");
   for (u32 i = 0; i < 0x2D; ++i)
     m.Write8(FakeBrawl::Tag(4) + 0x14 + i, CustomLayout()[i]);
   m.Join(0);
   m.W32(FakeBrawl::Area(0) + 0x1C8, 4);
-  EXPECT_EQ(ReadOwnControls(m, 0, "luis", &last), Profile(0, CustomLayout()));
+  EXPECT_EQ(ReadOwnControls(m, 0, "cy", &last), Profile(0, CustomLayout()));
   EXPECT_EQ(last, u"MINE");
   // Another port's tag is never this player's.
   FakeBrawl two;
@@ -1702,13 +1685,13 @@ TEST(OrcaUXNameTags, OwnControlsFollowTheTagThePlayerWears)
   melee.SetTag(4, u"MINE");
   for (u32 i = 0; i < 0x2D; ++i)
     melee.Write8(FakeBrawl::Tag(4) + 0x14 + i, CustomLayout()[i]);
-  melee.SetTag(119, u"LUIS");
-  EXPECT_EQ(ReadOwnControls(melee, 0, "luis", &last), Profile(0, CustomLayout()));
+  melee.SetTag(119, u"CY");
+  EXPECT_EQ(ReadOwnControls(melee, 0, "cy", &last), Profile(0, CustomLayout()));
   // That tag gone from the save: their YouGame tag again. Reads never write.
   melee.SetTag(4, u"");
   melee.recording = true;
-  EXPECT_EQ(ReadOwnControls(melee, 0, "luis", &last)[0], 0);
-  EXPECT_EQ(ReadOwnControls(melee, 0, "luis", &last).size(), 46u);
+  EXPECT_EQ(ReadOwnControls(melee, 0, "cy", &last)[0], 0);
+  EXPECT_EQ(ReadOwnControls(melee, 0, "cy", &last).size(), 46u);
   EXPECT_TRUE(melee.written.empty());
 }
 
@@ -1719,21 +1702,21 @@ TEST(OrcaUXNameTags, UnmappedPointersWriteNothing)
     m.Join(0);
     m.W32(FakeBrawl::TASK + 0x44, 0x83000000);  // area pointer to nowhere
     m.recording = true;
-    EXPECT_EQ(ApplyNameTags(m, {{0, "luis", false}}), 0);
+    EXPECT_EQ(ApplyNameTags(m, {{0, "cy", false}}), 0);
     EXPECT_TRUE(m.written.empty());
   }
   {
     FakeBrawl m;
     m.Join(0);
     m.W32(FakeBrawl::SCENE + 0x400, 0x83000000);  // no task
-    EXPECT_EQ(ApplyNameTags(m, {{0, "luis", false}}), 0);
+    EXPECT_EQ(ApplyNameTags(m, {{0, "cy", false}}), 0);
   }
   {
     // The records' end not mapped.
     FakeBrawl m;
     m.Join(0);
     m.bytes.erase(FakeBrawl::Tag(120) - 1);
-    EXPECT_EQ(ApplyNameTags(m, {{0, "luis", false}}), 0);
+    EXPECT_EQ(ApplyNameTags(m, {{0, "cy", false}}), 0);
   }
 }
 
@@ -1742,14 +1725,14 @@ TEST(OrcaUXNameTags, NothingOutsideTheCharacterSelectOrWhenItDoesNotLookRight)
   {
     FakeBrawl m("scMelee");
     m.Join(0);
-    EXPECT_EQ(ApplyNameTags(m, {{0, "luis", false}}), 0);
+    EXPECT_EQ(ApplyNameTags(m, {{0, "cy", false}}), 0);
   }
   {
     // An area that is not port 0's (another layout, a Project+ build that moved it): left alone.
     FakeBrawl m;
     m.Join(0);
     m.W32(FakeBrawl::Area(0) + 0x1B0, 2);
-    EXPECT_EQ(ApplyNameTags(m, {{0, "luis", false}}), 0);
+    EXPECT_EQ(ApplyNameTags(m, {{0, "cy", false}}), 0);
     EXPECT_EQ(m.NameId(0), -1);
   }
   {
@@ -1764,7 +1747,7 @@ TEST(OrcaUXNameTags, NothingOutsideTheCharacterSelectOrWhenItDoesNotLookRight)
     for (int i = 0; i < 120; ++i)
       m.SetTag(i, u"T");
     m.Join(0);
-    EXPECT_EQ(ApplyNameTags(m, {{0, "luis", false}}), 0);
+    EXPECT_EQ(ApplyNameTags(m, {{0, "cy", false}}), 0);
   }
 }
 
@@ -2042,8 +2025,8 @@ TEST(OrcaUXControllerStream, InputAgeAtFrameReads)
   EXPECT_EQ(t.input.changes, 0u);
   EXPECT_EQ(t.age_samples, 0u);
 
-  // Another pad, read by a frame 20 ms after it arrived: one age, 3 ms of it the helper's and the
-  // rest the wait in the cache. Its hop is reported apart: above the faster of the two, so small.
+  // A new pad read 20 ms after it arrived: its age is the helper's 3 ms plus the wait in the
+  // cache. The hop (transport time above its fastest sample) is reported separately and is small.
   send(0x02);
   ASSERT_TRUE(Eventually(pad_is(PAD_BUTTON_B)));
   std::this_thread::sleep_for(std::chrono::milliseconds(20));
@@ -2093,9 +2076,8 @@ TEST(OrcaUXControllerStream, InputAgeAtFrameReads)
   EXPECT_EQ(GetInputAge().frames, 0u);
 }
 
-// The helper's clock is its wall clock read once at start, then its own steady clock: hours into a
-// session it is off from Orca's wall clock by drift, and by any step either one takes. None of
-// that is in the age; only the hop's floor would see it, and that moves with it.
+// The helper's clock can drift from or jump against Orca's. The input age must not depend on it;
+// only the hop's floor sees the offset, and it follows the offset.
 TEST(OrcaUXControllerStream, InputAgeIgnoresTheHelpersClock)
 {
   FakeBridge bridge;
@@ -2122,7 +2104,7 @@ TEST(OrcaUXControllerStream, InputAgeIgnoresTheHelpersClock)
   };
   read_after(0x01, PAD_BUTTON_A);
   read_after(0x02, PAD_BUTTON_B);
-  // Then a minute ahead: the trip shortens by two minutes, so it is the hop's new floor at once.
+  // Jump to a minute ahead: the measured trip drops by two minutes and becomes the new floor.
   skew = 60000;
   read_after(0x04, PAD_BUTTON_X);
   const ControllerTiming t = GetControllerTiming();
@@ -2136,8 +2118,8 @@ TEST(OrcaUXControllerStream, InputAgeIgnoresTheHelpersClock)
   StopControllerStream();
 }
 
-// The transport's added latency against the real desktop app (bridge.ts + controllers.ts) with a
-// scripted helper: Tools/orca/controller-latency.mjs sets these and runs this test alone.
+// Manual benchmark: the transport's added latency through the real desktop app with a scripted
+// helper. Tools/orca/controller-latency.mjs sets the variables and runs this test.
 TEST(OrcaUXLatency, BridgeTransport)
 {
   const char* bridge = std::getenv("ORCA_UX_LATENCY_BRIDGE");
@@ -2159,17 +2141,13 @@ TEST(OrcaUXLatency, BridgeTransport)
   StopControllerStream();
 }
 
-// The input age at frame boundaries (ControllerSource.h) against a stream: reads like a frame
-// boundary, 59.94 times a second, for ORCA_UX_LATENCY_SECONDS (10) and prints the numbers. With
-// Tools/orca/fake_bridge.py (its helper side is 0) and a pad that changes on every report, from
-// build/:
+// Manual benchmark: input age when read at frame boundaries (59.94 Hz) for ORCA_UX_LATENCY_SECONDS
+// (default 10). From build/:
 //   FAKE_PAD_HZ=1000 FAKE_PAD_NOISE=1 python3 ../Tools/orca/fake_bridge.py   # prints its port
 //   ORCA_UX_LATENCY_BRIDGE=http://127.0.0.1:<port> ORCA_UX_LATENCY_TOKEN=t0ken \
 //     ./Binaries/Tests/tests --gtest_filter=OrcaUXLatency.BoundaryInputAge
-// Expected mean: about half the report interval (4.0 ms at 125 Hz, 0.5 ms at 1 kHz), a little more
-// when a loaded machine sends the fake's reports unevenly. FAKE_HELPER_SKEW_MS and
-// FAKE_HELPER_DRIFT_PPM (say -3600000 and -1000) must not move it; the drift does show in the hop,
-// at its rate times the floor's second (1 ms at -1000 ppm, microseconds at a real clock's few ppm).
+// Expect a mean of about half the report interval (0.5 ms at 1 kHz); FAKE_HELPER_SKEW_MS and
+// FAKE_HELPER_DRIFT_PPM must not change it.
 TEST(OrcaUXLatency, BoundaryInputAge)
 {
   const char* bridge = std::getenv("ORCA_UX_LATENCY_BRIDGE");
@@ -2237,7 +2215,7 @@ TEST(OrcaUXChat, DecodesBothFieldsAsUtf8)
 TEST(OrcaUXChat, LengthLimitsInCodePointsAndEncodedCharacters)
 {
   using namespace Orca::UX::Chat;
-  // 24 code points of name and 140 of text, the page's cut, pass; one more does not.
+  // The page's limits, 24 code points of name and 140 of text, pass; one more does not.
   EXPECT_TRUE(Parse("chat " + Repeat("a", 24) + " " + Repeat("b", 140)));
   EXPECT_FALSE(Parse("chat " + Repeat("a", 25) + " b"));
   EXPECT_FALSE(Parse("chat a " + Repeat("b", 141)));

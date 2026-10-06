@@ -43,7 +43,7 @@ Ruleset MakeBrawl()
   r.later_count = 1;
   r.later_optional = true;
   r.ic_banned_stage = 5;  // Final Destination
-  r.ice_climbers = 0x10;  // gmCharacterKind (BrawlHeaders gm_lib.h)
+  r.ice_climbers = 0x10;  // gmCharacterKind
   r.meta_knight = 0x18;
   r.stage_names = {"Battlefield",    "Pokémon Stadium",   "Lylat Cruise", "Smashville",
                    "Yoshi's Island", "Final Destination", "Delfino Plaza"};
@@ -119,14 +119,13 @@ Plan PlanGame(const Ruleset& rules, const SetView& set)
   }
   if (set.game <= 1 || (set.last_winner != 0 && set.last_winner != 1))
   {
-    // Game 1 (or a set with no counted game yet): 1-2-1 on the starters, the last one a pick.
+    // Game 1, or no counted game yet: 1-2-1 on the starters, ending in a pick.
     plan.available = rules.starters & legal;
     plan.agreeable = plan.available;
     const u8 first = static_cast<u8>(coin);
     const u8 second = static_cast<u8>(1 - coin);
     const int n = CountBits(plan.available);
-    // 5 starters: strike 1, strike 2, pick of the last two. Fewer (Ice Climbers' FD as a starter
-    // in another ruleset) keeps the order, each step no larger than what leaves one to pick.
+    // With fewer than 5 starters, each step shrinks so one stage is always left to pick.
     const int s1 = std::min(1, std::max(0, n - 1));
     const int s2 = std::min(2, std::max(0, n - 1 - s1));
     if (s1 > 0)
@@ -141,7 +140,7 @@ Plan PlanGame(const Ruleset& rules, const SetView& set)
   const u8 winner = static_cast<u8>(set.last_winner);
   const u8 loser = static_cast<u8>(1 - set.last_winner);
   plan.available = legal;
-  // Agreement ignores DSR (Luis, 2026-10-04): any legal stage the winner hasn't banned or struck.
+  // Agreement ignores DSR.
   plan.agreeable = legal;
   if (rules.dsr)
     plan.available &= static_cast<StageMask>(~set.won_on[loser]);
@@ -188,7 +187,7 @@ Plan PlanCasual(const Ruleset& rules, const SetView& set, u32 seed)
   if (rules.ic_banned_stage >= 0 && (is(0, rules.ice_climbers) || is(1, rules.ice_climbers)))
     plan.available &= static_cast<StageMask>(~Bit(rules.ic_banned_stage));
   plan.agreeable = plan.available;
-  // Both players at once (Luis, 2026-10-04): one step, one timer.
+  // Both players at once: one step, one timer.
   plan.steps.push_back({StepKind::Prefer, BOTH, 1, false, rules.casual_seconds});
   return plan;
 }
@@ -314,7 +313,7 @@ bool Strike(const Ruleset& rules, const Plan& plan, Progress* progress, int stag
     return false;
   progress->struck = static_cast<StageMask>(progress->struck | Bit(stage));
   ++progress->done;
-  // A proposal on a stage that is now out is gone.
+  // A proposal on a struck stage is dropped.
   for (s8& pref : progress->prefs)
   {
     if (pref == stage)
@@ -367,7 +366,7 @@ bool Propose(const Plan& plan, Progress* progress, int port, int stage)
   if (plan.casual && prefs[0] >= 0 && prefs[1] >= 0)
     progress->picked = static_cast<s8>(CasualResult(plan, prefs));
   else if (!plan.casual && prefs[0] >= 0 && prefs[0] == prefs[1])
-    progress->picked = prefs[0];  // the same stage: the rest of the steps are skipped
+    progress->picked = prefs[0];  // matching proposals skip the remaining steps
   return true;
 }
 
@@ -406,7 +405,7 @@ void Tick(const Ruleset& rules, const Plan& plan, Progress* progress)
   }
   if (step->kind == StepKind::Prefer)
   {
-    // Time's up: whoever named nothing gets a random legal stage, then the coin between the two.
+    // Whoever named nothing gets a random legal stage, then the coin decides between the two.
     for (int port = 0; port < 2; ++port)
     {
       if (progress->prefs[port] < 0)

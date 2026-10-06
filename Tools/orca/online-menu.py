@@ -11,8 +11,7 @@
 #              on it, With Anyone (both buttons), B back, in again and Casual
 #   casual     With Anyone > Casual
 #   ranked     With Anyone > Ranked
-#   friends    With Friends: straight to the character select (no With Friends page since ux=18;
-#              its buttons all went to the same place)
+#   friends    With Friends: straight to the character select (Orca skips the With Friends page)
 #   back-friends  With Friends, B out of the character select: the menu comes back on the ONLINE
 #              page with With Friends selected, and A there picks it again
 #   back-casual, back-ranked  the same from With Anyone: back on With Anyone, Casual (Ranked)
@@ -23,23 +22,16 @@
 #              character select again, nothing printed
 #
 # Each run must show:
-#   - stdout: exactly the scenario's "orca menu ..." lines ("online casual local", "online ranked
-#     local", "online friends"), nothing for the pages and the B-backs; the log, the menu's exit
-#     code for each (25 With Friends, 30 Casual, 31 Ranked), so a back scenario's second pick
-#     proves the cursor came back on the same button;
-#   - the scenes: the main menu, then the local Versus character select (scSelctCharacter), never an
-#     online scene; a back scenario reaches the character select twice;
-#   - the log: Orca's sora_scene groups (the table, the block and the back out) landed once each;
-#     the main menu module's online groups landed, each on the main menu (or the scene change into
-#     it) and nowhere else; the main menu's text rewritten (UX/MenuText.h); after the
-#     boot (from the first main menu frame on) no /dev/net device opened, no request to NET_KD_REQ,
-#     NCD, IP/Top or SSL (any IOS_NET, IOS_SSL or IOS_WC24 line), no NAND command on the game's
-#     save, WiiConnect24's or the network settings' folders; no invalid memory access.
-# --shots <dir>: with a real video backend (--video Metal), a screenshot of every page the scenario
-# visits, named <game>-<scenario>-<step>.png (each taken just before the next button). They show
-# the disc's art: keep them local.
-# --scale <n>: the internal resolution (1x by default; Orca's labels are drawn at 4x): the shots are
-# named <game>-<scenario>-<step>-<n>x.png.
+#   - stdout: exactly the scenario's "orca menu ..." lines, and nothing for page moves or B-backs;
+#     the log's menu exit codes prove a back scenario's second pick landed on the same button;
+#   - scenes: the main menu, then the local Versus character select, never an online scene;
+#   - the log: every Orca patch group landed where it should (once each in sora_scene, the main
+#     menu's online groups only on the main menu), the menu text was rewritten, and after boot the
+#     game touched no network device, no save/WiiConnect24/network-settings NAND folder, and made no
+#     invalid memory access.
+# --shots <dir>: with a real video backend (--video Metal), screenshot every page the scenario
+# visits. They show the disc's art: keep them local.
+# --scale <n>: the internal resolution (default 1x; Orca's labels are drawn at 4x).
 # --sandbox (macOS): run Orca under sandbox-exec with outbound and inbound IP denied.
 # Runs nice'd, muted, with a timeout; prints PASS or the first failure per scenario.
 import glob
@@ -100,10 +92,9 @@ CSS_FRAMES = 600
 # The top page's cursor starts on Group / VERSUS; Play Online is below it. On the ONLINE page the
 # cursor starts on With Friends; With Anyone is to its right. With Anyone's cursor starts on Casual,
 # Ranked is below it. A on With Friends leaves the menu at once (RSBE01.patches, PPLUS32.patches:
-# muProcWifi), as the With Friends page's FIGHT! did.
+# muProcWifi).
 TO_ONLINE = [("DOWN", "top-play-online"), ("A", "online")]
-# The menu's exit code for With Friends (the old page's FIGHT!, the friend list's Brawl), Casual's
-# and Ranked's.
+# The menu's exit codes for With Friends, Casual and Ranked.
 FRIENDS_CODE, CASUAL_CODE, RANKED_CODE = 25, 30, 31
 FRIENDS = TO_ONLINE + [("A", None)]
 CASUAL = TO_ONLINE + [("RIGHT", None), ("A", "with-anyone"), ("A", None)]

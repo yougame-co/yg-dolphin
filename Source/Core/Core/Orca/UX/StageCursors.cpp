@@ -45,14 +45,13 @@ constexpr Rect R(float x0, float y0, float x1, float y1)
   return Rect{U(x0), U(y0), U(x1), U(y1)};
 }
 
-// ---- Brawl rev 2 (an empty save): probed, ORCA.md "The stage select's two cursors" ----
-// The cursor's range is x -30..30, y -19.5..19.5 (the game clamps a write to it). A sweep of the
-// game's cursor over each page, 0.5 apart, gave where its hover reads each stage; each rectangle is
-// that, a quarter unit out all round (half way to the first point that read something else).
+// ---- Brawl rev 2 (empty save), probed ----
+// Cursor range is x -30..30, y -19.5..19.5 (the game clamps to it). Rectangles come from sweeping
+// the game's cursor in 0.5 steps and recording which stage it hovers, padded by a quarter unit.
 // Stage indices are Ranked::Brawl2025's: BF, PS1, LC, SV, YI, FD, Delfino.
 constexpr std::array<Tile, 7> kBrawlTiles{{
-    {0, 0, R(-4.75f, 13.25f, 1.25f, 19.25f)},  // Battlefield, page 0's slot 0 (item 0x02)
-    {1, 1, R(18.25f, -12.75f, 26.25f, -4.75f)},  // Pokemon Stadium, the Melee page's slot 9 (0x0B)
+    {0, 0, R(-4.75f, 13.25f, 1.25f, 19.25f)},  // Battlefield, page 0 slot 0 (item 0x02)
+    {1, 1, R(18.25f, -12.75f, 26.25f, -4.75f)},  // Pokemon Stadium, Melee page slot 9 (0x0B)
     {2, 0, R(8.75f, 1.75f, 14.75f, 7.75f)},    // Lylat Cruise, slot 13
     {3, 0, R(20.25f, -4.25f, 26.25f, 2.25f)},  // Smashville, slot 20
     {4, 0, R(-4.25f, 1.75f, 1.75f, 7.75f)},    // Yoshi's Island, slot 11
@@ -60,11 +59,9 @@ constexpr std::array<Tile, 7> kBrawlTiles{{
     {6, 0, R(7.75f, 13.25f, 13.75f, 19.25f)},  // Delfino Plaza, slot 2
 }};
 
-// ---- Project+ v3.2, the 2024 Proposed preset's page 0 (probed the same way) ----
-// The cursor's range is x -31..31, y -23.5..20.5; the nine tiles are two rows under the preview,
-// positions 0-3 above (GHZ, BC, FH, DL) and 4-8 below (ToT, SV, BF, PS2, LM), the hovered item the
-// position + 2. The lower row's outer tiles read a little further down where Random and the page
-// button aren't; the rectangles stop where every tile of the row reads.
+// ---- Project+ v3.2, 2024 Proposed preset, page 0 (probed the same way) ----
+// Cursor range is x -31..31, y -23.5..20.5. Nine tiles in two rows under the preview: positions
+// 0-3 on top (GHZ, BC, FH, DL), 4-8 below (ToT, SV, BF, PS2, LM). Hovered item = position + 2.
 // Stage indices are Ranked::PPlus2024's: BF, PS2, SV, LM, ToT, GHZ, BC, FH, DL.
 constexpr std::array<Tile, 9> kPPlusTiles{{
     {5, 0, R(-15.25f, -11.25f, -8.25f, -3.25f)},   // Green Hill Zone, position 0
@@ -78,10 +75,9 @@ constexpr std::array<Tile, 9> kPPlusTiles{{
     {3, 0, R(14.25f, -17.75f, 21.75f, -11.25f)},   // Luigi's Mansion, 8
 }};
 
-// The overlay's map from the cursor's units to the picture, the same in both games: screenshots
-// (ORCA_TEST_PRESENT=1280x720, the picture 1250 x 720 between bars at x 15 and 1265) with the
-// game's cursor written at known points, its ring's middle found in each: the cursor's (0, 0) at
-// (639.8, 358.4), 15.18 pixels a unit across and 14.42 down.
+// Maps cursor units to the picture for the overlay, the same in both games. Measured at 1280x720
+// (picture 1250 x 720 between bars at x 15 and 1265): cursor (0, 0) is at (639.8, 358.4), one unit
+// is 15.18 px across and 14.42 px down.
 void Map(Layout* l)
 {
   l->u0 = (639.8f - 15.0f) / 1250.0f;
@@ -95,12 +91,12 @@ Layout MakeBrawl()
   Layout l;
   l.game = GAME_BRAWL;
   l.bounds = R(-30.0f, -19.5f, 30.0f, 19.5f);
-  // The game's own cursor moves 1.6 a frame at full tilt.
+  // Matches the game's own cursor speed at full tilt.
   l.speed = U(1.6f);
   l.tiles = kBrawlTiles;
   l.pages = true;
   l.page_button = R(15.25f, -19.75f, 30.25f, -17.25f);
-  // On the Random bar at the bottom, where the game's own cursor starts (3.5, -17.5).
+  // On the Random bar, either side of the game's own cursor start (3.5, -17.5).
   l.start = {Point{U(-2.0f), U(-18.0f)}, Point{U(9.0f), U(-18.0f)}};
   Map(&l);
   return l;
@@ -114,7 +110,7 @@ Layout MakePPlus()
   l.speed = U(1.6f);
   l.tiles = kPPlusTiles;
   l.pages = false;
-  // Under the two rows, on the Random bar and the page button (neither is a cursor's here).
+  // Below the two rows of tiles.
   l.start = {Point{U(-6.0f), U(-21.0f)}, Point{U(6.0f), U(-21.0f)}};
   Map(&l);
   return l;
@@ -134,8 +130,8 @@ void Put16(GuestMemory& m, u32 a, u16 v, int* changed)
   Put8(m, a + 1, static_cast<u8>(v), changed);
 }
 
-// The bytes are there and the block is Orca's (its magic: before the game loads sora_scene this
-// memory is something else's, and a stray byte there is never a tag).
+// The bytes are mapped and hold Orca's block. Check the magic: before the game loads sora_scene
+// this memory belongs to something else.
 bool Mapped(const GuestMemory& m)
 {
   return m.Valid(MatchBlock::MAGIC) && m.Read32(MatchBlock::MAGIC) == MatchBlock::MAGIC_VALUE &&
@@ -143,8 +139,8 @@ bool Mapped(const GuestMemory& m)
          m.Valid(CURSORS + CURSORS_SIZE - 1);
 }
 
-// The stick's deflection as a speed: past the dead zone, a full tilt (100 of 128, about where a
-// GameCube stick's gate stops) moves `speed` a frame. Integer math, truncated toward zero.
+// Stick deflection to speed. Full tilt is 100 of 128, about where a GameCube stick's gate stops.
+// Integer math, truncated toward zero.
 int Velocity(u8 axis, const Layout& l)
 {
   int d = static_cast<int>(axis) - 128;
@@ -155,10 +151,8 @@ int Velocity(u8 axis, const Layout& l)
 }
 
 std::mutex s_view_lock;
-// The view the overlay draws is the one published at the boundary before the last: the picture a
-// frame shows is the one the game drew in the frame before (the video interface shows the next
-// field's copy), and its own crosshair, under the follower's, would otherwise peek out a frame's
-// travel ahead of it while it moves.
+// The overlay draws the view from the frame before the last, because the picture on screen is one
+// frame old. Otherwise the drawn cursor would run a frame ahead of the game's own crosshair.
 View s_view;
 View s_next;
 }  // namespace
@@ -271,7 +265,7 @@ int Write(GuestMemory& m, const State& s)
     Put8(m, c + C_NOW, s.cursors[p].now, &changed);
     Put8(m, c + C_SEEN, s.cursors[p].seen, &changed);
   }
-  // The tag last: a reader never sees it over stale bytes.
+  // Tag last, so a reader never sees it over stale bytes.
   Put8(m, SHARED + S_TAG, TAG_ON, &changed);
   return changed;
 }
@@ -330,7 +324,7 @@ int Latch(GuestMemory& m, const std::array<std::optional<GCPadStatus>, 4>& raw)
     c.x = static_cast<s16>(x);
     c.y = static_cast<s16>(y);
   }
-  // The game's own cursor follows the one that moved (both moving: it stays with the one it had).
+  // The game's own cursor follows whichever one moved. If both moved, it keeps its current one.
   if (moved[0] != moved[1])
     s->follower = moved[0] ? 0 : 1;
   return Write(m, *s);
@@ -347,7 +341,7 @@ void LatchFrame(const Core::CPUThreadGuard& guard,
 
 namespace
 {
-// A cursor's tab name in capitals, as the tabs write it (ASCII letters only).
+// The player's name in capitals (ASCII letters only).
 std::string UpperName(const View& v, int port)
 {
   std::string out = v.players[port].name.empty() ? fmt::format("P{}", port + 1) :
@@ -373,8 +367,7 @@ TurnCue TurnText(const View& v, int port)
   cue.local = p.local;
   const std::string name = UpperName(v, port);
   const std::string them = UpperName(v, 1 - port);
-  // Both at once (a casual game's pick): whoever hasn't named a stage yet acts, each in their own
-  // colour; a local player who has waits for the other.
+  // Both pick at once (casual): whoever hasn't proposed a stage acts. A local player who has waits.
   if (v.both)
   {
     if (p.proposal < 0)

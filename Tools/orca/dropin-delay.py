@@ -13,15 +13,13 @@
 # 3. From that (last) join, both play for --minutes (the input scripts pick, fight, and go round
 #    again). Each second's "orca stats" line with a friend plugged in gives the delay in use.
 #
-# PASS needs no error, no desync, and the delay as expected on both sides from the plug-in on:
-# never above --expect-max (default 2: what a clean link must hold), or with --expect-raise S1-S2
-# (a test link late from about S1 to S2 s after the join: ORCA_TEST_NET_SPIKES or
-# ORCA_TEST_NET_UPLINK, whose own window counts from its room's opening, a few seconds before the
-# join) above 2 at some point in that span (or up to 15 s after) and back to 2 for the last minute,
-# on the sides --raise-on names (default both; the other side must hold 2 throughout: a slow
-# uplink is the late side's delay's to answer, never the other's).
-# The log's "input delay A -> B" lines say why each change happened. Two Orca processes at most;
-# ORCA_TEST_KEEP=1 keeps the logs. The friend's test link (Profile.h), for instance:
+# PASS needs no error, no desync, and the expected delay on both sides after the plug-in:
+# - by default, never above --expect-max (default 2, what a clean link must hold);
+# - with --expect-raise S1-S2 (a test link that is late from about S1 to S2 s after the join), above
+#   2 at some point in that span (or up to 15 s after) and back to 2 for the last minute, on the
+#   sides --raise-on names. The other side must hold 2 throughout: only the late side should pay.
+# The log's "input delay A -> B" lines say why each change happened. Runs two Orca processes;
+# ORCA_TEST_KEEP=1 keeps the logs. Example test links (Profile.h):
 #
 #   a slow, bursty uplink for a minute and a half (raises the friend's delay, then back to 2):
 #     --friend-env ORCA_TEST_NET_UPLINK=90+120/60-210 --host-env ORCA_TEST_NET_DELAY_MS=0 \
@@ -62,11 +60,9 @@ INPUT = os.path.join(HERE, "inputs", "pplus-dropin.txt" if a.pplus else "bf-drop
 ROOM = "dly" + "".join(random.choice(string.ascii_lowercase + string.digits) for _ in range(6))
 WORK = tempfile.mkdtemp(prefix="orca-delay-")
 T0 = time.time()
-# The test link's spikes and slow uplink (ORCA_TEST_NET_SPIKES, ORCA_TEST_NET_UPLINK) shape only the
-# room relay: a direct link (on by default since 0.3.8) applies neither, so its copy of every input
-# would arrive on time and hide them, and the gate would test nothing (or --expect-raise fail).
-# Those runs, and every --expect-raise run, keep both Orcas on the relay (ORCA_DIRECT=0) unless a
-# --host-env/--friend-env names ORCA_DIRECT itself.
+# The test link's spikes and slow uplink only shape the room relay, so a direct link would hide them.
+# Those runs, and every --expect-raise run, stay on the relay (ORCA_DIRECT=0) unless the caller
+# sets ORCA_DIRECT itself.
 SHAPED = any(pair.partition("=")[0] in ("ORCA_TEST_NET_SPIKES", "ORCA_TEST_NET_UPLINK")
              for pair in a.host_env + a.friend_env)
 RELAY_ONLY = SHAPED or bool(a.expect_raise)

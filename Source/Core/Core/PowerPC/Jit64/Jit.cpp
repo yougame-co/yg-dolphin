@@ -1328,12 +1328,9 @@ bool Jit64::CanCompileFromHook() const
 
 void Jit64::ReserveForBlocks(std::size_t count)
 {
-  // One entry per fastmem load and store compiled, never erased before a cache clear: ~11 a block
-  // (Project+'s menus and match, ~36,000 blocks, ~411,000 entries). Each time it doubles the map
-  // rehashes inside a compile, 4, 12 and 26 ms at 100,000, 200,000 and 400,000 entries (Rosetta 2
-  // on an M4; the PC's warm-up logs show one 22-27 ms boundary a run, likely the same): during a
-  // match, a dropped frame. 16 a block leaves room for what rollbacks compile again after them.
-  // Only ever grown (a smaller reserve may shrink it, another rehash).
+  // One entry per compiled fastmem load or store, kept until the cache clears: about 11 per block.
+  // A rehash mid-match costs tens of ms (a dropped frame), so reserve 16 per block up front, which
+  // leaves room for blocks that rollbacks recompile. Only ever grown: shrinking would rehash too.
   constexpr std::size_t PER_BLOCK = 16;
   const std::size_t wanted = m_back_patch_info.size() + count * PER_BLOCK;
   if (static_cast<float>(wanted) >

@@ -1,4 +1,4 @@
-# Game 1 of a ranked queue2 set in one run (Orca 0.3.14's check), Brawl: boot -> the main menu ->
+# Game 1 of a ranked queue2 set in one run, Brawl: boot -> the main menu ->
 # PLAY ONLINE > With Anyone > Ranked -> the player's own character select (the solo header): port 1
 # takes Mario and presses Start (ready) -> from ORCA_TEST_QUEUE_PICK's frame port 2 plugs in with
 # its pick (Link) and rating, the header becomes the room's and the pick is steered in -> both ready

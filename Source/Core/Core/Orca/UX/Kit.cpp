@@ -32,10 +32,10 @@ namespace Orca::UX::Kit
 namespace
 {
 constexpr int FACES = 2;
-// Where each face is on the disc (Brawl's `system/font/`, which Project+ loads unchanged).
+// Font files on the disc (Project+ uses Brawl's unchanged).
 constexpr std::array<const char*, FACES> FONT_FILES = {
-    "system/font/font_latin1.arc",  // Body: the menus' rounded sans, LZ77
-    "system/font/font_hira.brfnt",  // Heavy: the heavy display face
+    "system/font/font_latin1.arc",  // Body: rounded sans, LZ77-compressed
+    "system/font/font_hira.brfnt",  // Heavy: display face
 };
 constexpr const char* GAME_ID = "RSBE01";
 constexpr int ATLAS_LEVELS = 4;
@@ -47,14 +47,14 @@ std::thread s_reader;
 std::atomic<bool> s_read{false};
 std::array<std::optional<GameFont::Atlas>, FACES> s_read_atlases;  // under s_lock
 
-// The video thread's: each face's atlas on the GPU. A texture made by a backend that is gone is
-// never freed (its device went with it); a new backend gets new ones.
+// Video thread only: each face's atlas on the GPU. Textures from a destroyed backend are leaked
+// on purpose, since their device is already gone.
 struct GpuFace
 {
   const AbstractGfx* gfx = nullptr;
   bool tried = false;
   std::unique_ptr<AbstractTexture> texture;
-  GameFont::Atlas atlas;  // its glyphs and metrics (no pixels)
+  GameFont::Atlas atlas;  // glyphs and metrics only, no pixels
 };
 std::array<GpuFace, FACES> s_gpu;
 std::atomic<int> s_faces_ready{0};  // bit per face
@@ -103,8 +103,8 @@ std::optional<FaceRef> GameFace(Face face)
   return FaceRef{&g.atlas, *g.texture};
 }
 
-// The ImGui pass samples its textures with a point sampler; the game's glyphs are drawn smaller
-// than they are stored, so they take a trilinear one, and the pass gets its own back after them.
+// ImGui uses a point sampler, but the game's glyphs are drawn downscaled, so switch to trilinear
+// for them and restore ImGui's sampler afterwards.
 void LinearSampler(const ImDrawList*, const ImDrawCmd*)
 {
   if (g_gfx)
@@ -121,7 +121,7 @@ ImU32 Rgb(int r, int g, int b, float a = 1)
   return IM_COL32(r, g, b, static_cast<int>(std::lround(std::clamp(a, 0.0f, 1.0f) * 255)));
 }
 
-// `c` with its alpha times `alpha`.
+// `c` with its alpha scaled by `alpha`.
 ImU32 Fade(ImU32 c, float alpha)
 {
   const float a = static_cast<float>((c >> IM_COL32_A_SHIFT) & 0xFF) * std::clamp(alpha, 0.0f, 1.0f);
@@ -141,8 +141,8 @@ ImU32 Mix(ImU32 a, ImU32 b, float t)
   return out;
 }
 
-// The vertices from `first` on, recoloured top to bottom (by their y from `y0` to `y1`), each
-// keeping its own alpha as a factor: ImGui's anti-aliased fringe fades out as it did in white.
+// Applies a vertical gradient to vertices from `first` on, keeping each vertex's alpha as a factor
+// so ImGui's anti-aliased edges still fade out.
 void Recolour(ImDrawList* dl, int first, float y0, float y1, ImU32 top, ImU32 bottom)
 {
   const float span = std::max(1e-3f, y1 - y0);
@@ -154,18 +154,16 @@ void Recolour(ImDrawList* dl, int first, float y0, float y1, ImU32 top, ImU32 bo
   }
 }
 
-// A tone as the game's own buttons paint it (Brawl's character select: "Friend Registration
-// Requested!", "Awaiting reply...", the ITEM and STAGE tags, the RANKED plate; Project+'s
-// RANDOM and PAGE 2): a rim lit from above, a dark line inside it, the body's gradient, a gloss
-// over its top half, and the text's ink.
+// How a tone is painted, matching the game's own buttons: a rim lit from above, a dark inner line,
+// a gradient body, a gloss over the top half, and the text colour.
 struct Paint
 {
-  ImU32 top, bottom;          // the body
-  ImU32 rim_top, rim_bottom;  // the rim
+  ImU32 top, bottom;          // body gradient
+  ImU32 rim_top, rim_bottom;  // rim gradient
   ImU32 line;                 // between rim and body
-  ImU32 ink, ink_bottom;      // text on it, top to bottom
-  ImU32 ink_outline;          // an outline of 0 alpha: none
-  float gloss = 0.3f;         // the gloss's alpha at its top
+  ImU32 ink, ink_bottom;      // text gradient
+  ImU32 ink_outline;          // zero alpha = no outline
+  float gloss = 0.3f;         // gloss alpha at the top
 };
 
 Paint PaintOf(Tone tone)
@@ -196,32 +194,32 @@ Paint PaintOf(Tone tone)
   default:
     if (CurrentLook() == Look::ProjectPlus)
     {
-      // Project+'s buttons: flat teal in a black edge, white letters.
+      // Project+: flat teal, black edge, white text.
       return {Rgb(28, 174, 128, 0.97f), Rgb(8, 122, 88, 0.97f), Rgb(22, 30, 30),
               Rgb(4, 8, 8), Rgb(0, 0, 0), white, Rgb(222, 244, 236), Rgb(0, 30, 22), 0.1f};
     }
-    // Brawl's RANKED plate: rose in a white rim and a black line, cream letters.
+    // Brawl: rose, white rim, black line, cream text.
     return {Rgb(182, 104, 110, 0.96f), Rgb(120, 56, 62, 0.96f), Rgb(252, 250, 250),
             Rgb(194, 188, 188), Rgb(18, 8, 8), Rgb(255, 252, 240), Rgb(246, 224, 168),
             Rgb(30, 10, 10)};
   }
 }
 
-// Text in ImGui's font where the game's isn't there (yet), drawn the same way.
+// Fallback to ImGui's font until the game's font is loaded.
 ImVec2 FallbackMeasure(const TextLook& look, std::string_view text)
 {
   return ImGui::GetFont()->CalcTextSizeA(std::max(1.0f, look.px), FLT_MAX, 0, text.data(),
                                          text.data() + text.size());
 }
 
-// Calls `emit(glyph, x)` for every glyph of `text` in the atlas (x in font pixels from the start,
-// before scaling), substituting what the face lacks; returns the advance of the whole line.
-// The word gap, at least this much of the line: the heavy face's own space is thin.
+// Minimum word gap as a fraction of line height; the heavy face's own space is too thin.
 float MinSpace(Face face)
 {
   return face == Face::Heavy ? 0.42f : 0.0f;
 }
 
+// Calls `emit(glyph, x)` for each glyph (x in unscaled font pixels), substituting missing ones.
+// Returns the line's total advance.
 template <typename Emit>
 float LayOut(const GameFont::Atlas& atlas, float tracking_font_px, float min_space,
              std::string_view text, Emit&& emit)
@@ -257,7 +255,7 @@ float LayOut(const GameFont::Atlas& atlas, float tracking_font_px, float min_spa
   return std::max(0.0f, x - tracking_font_px);
 }
 
-// One pass of `text`'s glyphs at `pos`: a quad each, `top` to `bottom`.
+// Draws one pass of glyph quads with a `top`-to-`bottom` gradient.
 void GlyphPass(ImDrawList* dl, const GameFont::Atlas& atlas, ImVec2 pos, float scale,
                const TextLook& look, std::string_view text, ImU32 top, ImU32 bottom)
 {
@@ -285,7 +283,7 @@ void GlyphPass(ImDrawList* dl, const GameFont::Atlas& atlas, ImVec2 pos, float s
   });
 }
 
-// The directions an outline is drawn in: 8 for a thin one, 12 past 2 pixels.
+// Outline offsets: 8 directions, or 12 when thicker than 2 pixels.
 template <typename F>
 void AroundOutline(float outline, F&& f)
 {
@@ -317,7 +315,7 @@ float Snap(float v)
   return std::floor(v + 0.5f);
 }
 
-// The last seconds' pulse: 1 as a second begins, easing to 0 by its middle.
+// Final-seconds pulse: 1 at the start of each second, easing to 0 by mid-second.
 float Pulse(double now_s)
 {
   const float t = static_cast<float>(now_s - std::floor(now_s));
@@ -360,14 +358,14 @@ TextLook TitleLook(float unit, float size)
   look.px = std::max(1.0f, size * unit);
   if (CurrentLook() == Look::ProjectPlus)
   {
-    // Project+'s RANKED title: white into mint.
+    // Project+: white to mint.
     look.top = Rgb(240, 248, 248);
     look.bottom = Rgb(96, 226, 196);
     look.outline_colour = Rgb(0, 0, 0);
   }
   else
   {
-    // Brawl's RANKED plate's letters: cream into gold.
+    // Brawl: cream to gold.
     look.top = Rgb(255, 250, 226);
     look.bottom = Rgb(238, 186, 72);
     look.outline_colour = Rgb(22, 8, 8);
@@ -414,7 +412,7 @@ void BeginFrame()
     GpuFace& g = s_gpu[face];
     if (g.gfx != g_gfx.get())
     {
-      (void)g.texture.release();  // the old backend's (see GpuFace)
+      (void)g.texture.release();  // leak the old backend's texture (see GpuFace)
       g.gfx = g_gfx.get();
       g.tried = false;
     }
@@ -518,9 +516,8 @@ ImVec2 Text(ImDrawList* dl, ImVec2 pos, const TextLook& look, std::string_view t
   else if (align == Align::Right)
     pos.x -= size.x;
   pos = ImVec2(Snap(pos.x + look.outline), Snap(pos.y));
-  // Passes drawn over each other add up: an outline (or a shadow) of n offset passes takes each at
-  // the alpha whose n-fold stack is the one asked for, so it fades with the rest and a shadow's
-  // edges come out soft.
+  // Overlapping passes stack, so each of n outline or shadow passes uses the alpha whose n-fold
+  // stack equals the requested one.
   const int passes = look.outline > 2.0f ? 12 : 8;
   const auto per_pass = [passes](float a) {
     a = std::clamp(a, 0.0f, 1.0f);
@@ -591,8 +588,7 @@ ImVec2 Text(ImDrawList* dl, ImVec2 pos, const TextLook& look, std::string_view t
 
 namespace
 {
-// Brawl's button over [min, max]: a soft shadow under it, the rim lit from above, the dark line
-// inside the rim, the body's gradient and a gloss over its top half.
+// A game-style button: soft shadow, lit rim, dark inner line, gradient body, top gloss.
 void Slab(ImDrawList* dl, ImVec2 min, ImVec2 max, float radius, float unit, const Paint& p,
           float alpha)
 {
@@ -617,8 +613,8 @@ void Slab(ImDrawList* dl, ImVec2 min, ImVec2 max, float radius, float unit, cons
   }
 }
 
-// The ink a tone's text takes: light outlined in the tone's dark (black on gold and yellow, grey
-// outlined in white on grey).
+// Text colour for a tone: light text outlined in the tone's dark shade (black on gold and yellow,
+// grey with a white outline on grey).
 TextLook Inked(TextLook look, const Paint& p)
 {
   look.top = p.ink;
@@ -644,10 +640,10 @@ void Plate(ImDrawList* dl, ImVec2 min, ImVec2 max, float unit, Tone tone, float 
 
 namespace
 {
-// A Banner's note line, as a share of its first row's height (each line past the first adds this).
+// Height of each extra note line, as a fraction of the first row.
 constexpr float BANNER_NOTE_ROW = 0.3f;
 
-// A Banner's title is short in the heavy face, a sentence in the body face.
+// Short titles use the heavy face; sentences use the body face.
 bool HeavyTitle(std::string_view title)
 {
   std::size_t letters = 0;
@@ -659,7 +655,7 @@ bool HeavyTitle(std::string_view title)
   return letters <= 18;
 }
 
-// The looks a Banner `height` tall gives its title and note (`p` the tone's paint).
+// Text styles for a Banner's title and note.
 std::pair<TextLook, TextLook> BannerLooks(float height, float unit, bool heavy, bool has_note,
                                           const Paint& p)
 {
@@ -674,7 +670,7 @@ std::pair<TextLook, TextLook> BannerLooks(float height, float unit, bool heavy, 
           Inked(LabelLook(unit, height * BANNER_NOTE_ROW / unit), p)};
 }
 
-// A note's lines ('\n' between them).
+// Splits a note on '\n'.
 std::vector<std::string_view> NoteLines(std::string_view note)
 {
   std::vector<std::string_view> lines;
@@ -689,8 +685,7 @@ std::vector<std::string_view> NoteLines(std::string_view note)
   return lines;
 }
 
-// The first row's height (the title and the first note line) of a banner `height` tall with
-// `lines` note lines.
+// Height of the first row (title plus first note line).
 float RowHeight(float height, std::size_t lines)
 {
   return lines > 1 ? height / (1 + BANNER_NOTE_ROW * static_cast<float>(lines - 1)) : height;
@@ -723,7 +718,7 @@ Box Banner(ImDrawList* dl, float left, float right, float top, float height, flo
   const Paint p = PaintOf(tone);
   const float cut = height * 0.42f;
   const float bottom = top + height;
-  // A slanted band (its ends cut parallel), built like the buttons: shadow, rim, line, body.
+  // A slanted band with parallel cut ends, layered like the buttons.
   const auto band = [&](float grow_x, float grow_y, ImVec2 d) {
     const float k = cut / height;
     return std::array<ImVec2, 4>{
@@ -755,10 +750,9 @@ Box Banner(ImDrawList* dl, float left, float right, float top, float height, flo
     fill(shine, body[0].y, body[0].y + bh * 0.48f, Rgb(255, 255, 255, 0.87f * p.gloss * alpha),
          Rgb(255, 255, 255, 0.1f * p.gloss * alpha));
   }
-  // The title (and the note under it), centred.
+  // Title and note, centred.
   const float centre = (left + right) / 2;
-  // A short title in the heavy face, in the look's title colours; a sentence in the body face, in
-  // the tone's ink, which reads at that size.
+  // Body text is used for sentences, since it stays readable at that size.
   const std::vector<std::string_view> lines = NoteLines(note);
   const float row = RowHeight(height, lines.size());
   const auto [look, small] = BannerLooks(row, unit, HeavyTitle(title), !note.empty(), p);
@@ -824,8 +818,7 @@ Box Timer(ImDrawList* dl, ImVec2 centre, float unit, int seconds, double now_s, 
   look.italic = 0.08f;
   const bool urgent = seconds <= 5;
   const bool soon = seconds <= 10;
-  // White while there is time (the look's gold is the last ten seconds' colour), then gold, then
-  // red.
+  // White normally, gold in the last 10 seconds, red in the last 5.
   look.top = Rgb(255, 255, 255);
   look.bottom = Rgb(214, 220, 232);
   if (urgent)
@@ -838,7 +831,7 @@ Box Timer(ImDrawList* dl, ImVec2 centre, float unit, int seconds, double now_s, 
     look.top = Rgb(255, 248, 180);
     look.bottom = Rgb(255, 196, 30);
   }
-  // A plate as wide as "0:00" always is, so the digits never make it jump.
+  // Size the plate for "0:00" so it never changes width.
   const ImVec2 widest = Measure(look, "0:00");
   const float pad_x = 1.3f * unit, pad_y = 0.45f * unit;
   const float w = widest.x + 2 * pad_x, h = widest.y + 2 * pad_y;
@@ -857,7 +850,7 @@ Box Timer(ImDrawList* dl, ImVec2 centre, float unit, int seconds, double now_s, 
 
 namespace
 {
-// Badge's text look, for `tone`'s ink.
+// Badge text style for `tone`.
 TextLook BadgeLook(float unit, float size, const Paint& p)
 {
   TextLook look = TitleLook(unit, size);
@@ -886,7 +879,7 @@ Box Badge(ImDrawList* dl, ImVec2 centre, float unit, std::string_view text, Tone
 
 namespace
 {
-// A small tab: the tone's button with the body face's text, top-left at `pos`.
+// A small tab button with body text, top-left at `pos`.
 Box Tab(ImDrawList* dl, ImVec2 pos, float unit, std::string_view text, Tone tone, bool right_aligned)
 {
   const Paint p = PaintOf(tone);
@@ -915,7 +908,7 @@ Blink Attention(double now_s, double since_s)
   Blink b;
   b.on = phase < 0.6f ? 1.0f : 0.15f;
   b.swell = phase < 0.6f ? std::sin(std::numbers::pi_v<float> * phase / 0.6f) : 0.0f;
-  // The burst: three ripples 0.2 s apart, each 0.4 s on its way out.
+  // Three ripples 0.2 s apart, each lasting 0.4 s.
   for (int i = 0; i < 3; ++i)
   {
     const double r = (t - 0.2 * i) / 0.4;
@@ -935,14 +928,14 @@ void Pointer(ImDrawList* dl, ImVec2 c, float radius, float unit, int port, std::
 void Pointer(ImDrawList* dl, ImVec2 c, float radius, float unit, int port, std::string_view tag,
              PointerMode mode, bool tag_left, double now_s, double since_s)
 {
-  // A waiting player's ring goes grey; its face stays opaque, so the game's crosshair never shows.
+  // A waiting ring goes grey; the face stays opaque so the game's crosshair never shows through.
   const Paint p = PaintOf(mode == PointerMode::Waiting ? Tone::Grey : PortTone(port));
-  // The tab stays where the cursor's resting size puts it while the cursor itself blinks.
+  // The tab stays put while the cursor swells.
   const float rest = radius;
   if (mode == PointerMode::Acting)
   {
-    // Whoever has to act blinks (Luis, 2026-10-05): a glow in their colour, a white ring lit on
-    // each beat, the cursor swelling 15%, and a burst of ripples as the turn comes to them.
+    // The acting player's cursor: a glow in their colour, a white ring lit on each beat, a 15%
+    // swell, and ripples when the turn starts.
     const Blink blink = Attention(now_s, since_s);
     for (const float r : blink.ripples)
     {
@@ -977,7 +970,7 @@ void Pointer(ImDrawList* dl, ImVec2 c, float radius, float unit, int port, std::
   first = dl->VtxBuffer.Size;
   dl->AddCircleFilled(c, radius - std::max(1.0f, 0.06f * radius), IM_COL32_WHITE, 48);
   Recolour(dl, first, c.y - radius, c.y + radius, p.top, p.bottom);
-  // The face: light, so the game's own crosshair under it never shows.
+  // Opaque light face, so the game's crosshair underneath never shows.
   dl->AddCircleFilled(c, radius - thick, p.line, 48);
   first = dl->VtxBuffer.Size;
   dl->AddCircleFilled(c, radius - thick - std::max(1.0f, 0.05f * radius), IM_COL32_WHITE, 48);
@@ -1011,7 +1004,7 @@ Box TurnTag(ImDrawList* dl, ImVec2 at, float radius, float unit, std::string_vie
   const float pad_x = 1.3f * unit, pad_y = 0.5f * unit;
   const float w = std::max(ts.x, ds.x) + 2 * pad_x;
   const float h = ts.y + ds.y + 2 * pad_y;
-  // The timer beside it, as wide as Timer's plate for "0:00".
+  // Reserve the timer's "0:00" width.
   const float gap = 0.7f * unit;
   float chip_w = 0, chip_h = 0;
   if (seconds >= 0)
@@ -1022,8 +1015,7 @@ Box TurnTag(ImDrawList* dl, ImVec2 at, float radius, float unit, std::string_vie
   }
   const float total_w = w + (seconds >= 0 ? gap + chip_w : 0);
   const float total_h = std::max(h, chip_h);
-  // Above the cursor (and its blink's ring), leaning to its side; below it, clear of its name
-  // tab, when the top is too near.
+  // Above the cursor, leaning to its side; below it, clear of its name tab, near the top edge.
   float x = lean_left ? at.x + 0.6f * radius - total_w : at.x - 0.6f * radius;
   const float above = at.y - radius * 1.75f - total_h;
   const float under = at.y + radius * 0.55f + 3.6f * unit;
@@ -1056,7 +1048,7 @@ void PortraitFrame(ImDrawList* dl, ImVec2 min, ImVec2 max, float unit, Tone tone
   if (!(max.x > min.x && max.y > min.y))
     return;
   const Paint p = PaintOf(tone);
-  // The glow: rings round the frame, wider and fainter outwards.
+  // Glow: rings around the frame, fainter further out.
   for (int k = 3; k >= 1; --k)
   {
     const float g = 0.55f * unit * static_cast<float>(k);
@@ -1073,8 +1065,7 @@ Box Ribbon(ImDrawList* dl, ImVec2 min, ImVec2 max, float unit, std::string_view 
     return box;
   const Paint p = PaintOf(tone);
   Slab(dl, min, max, (max.y - min.y) * 0.3f, unit, p, 1);
-  // White in the heavy face, outlined in the tone's dark (gold's: a deep brown), shrunk until it
-  // fits inside the ribbon's ends.
+  // White heavy text outlined in the tone's dark shade, shrunk to fit.
   TextLook look = TitleLook(unit, (max.y - min.y) * 0.62f / unit);
   look.italic = 0.08f;
   look.top = Rgb(255, 255, 255);
@@ -1104,7 +1095,7 @@ Box SetDots(ImDrawList* dl, ImVec2 centre, float unit, const std::array<int, 3>&
     const int won = games[static_cast<std::size_t>(i)];
     if (won == 0 || won == 1)
     {
-      // A decided game: a dot in its winner's colour (their cursor's), rimmed in white.
+      // Decided: filled in the winner's colour, white rim.
       const Paint p = PaintOf(PortTone(won));
       dl->AddCircleFilled(ImVec2(c.x, c.y + 0.15f * unit), r + 0.2f * unit, Rgb(0, 0, 0, 0.35f), 24);
       dl->AddCircleFilled(c, r + 0.2f * unit, Rgb(255, 255, 255), 24);
@@ -1114,7 +1105,7 @@ Box SetDots(ImDrawList* dl, ImVec2 centre, float unit, const std::array<int, 3>&
     }
     else
     {
-      // To play: hollow, its rim brighter for the game being played.
+      // Not yet played: hollow, brighter rim for the current game.
       dl->AddCircleFilled(c, r, Rgb(0, 0, 0, 0.35f), 24);
       dl->AddCircle(c, r, i == current ? Rgb(236, 236, 236) : Rgb(130, 130, 130), 24,
                     std::max(1.0f, 0.2f * unit));
@@ -1145,7 +1136,7 @@ Box GameTimer(ImDrawList* dl, ImVec2 centre, float unit, int seconds, double now
   TextLook look = TitleLook(unit, size);
   look.shadow = ImVec2(0, 0);
   const bool pplus = CurrentLook() == Look::ProjectPlus;
-  // The game's own letters' colours, measured on 1280x720 frames (2026-10-05).
+  // Colours sampled from the game's own lettering.
   ImU32 edge = 0;
   if (lettering == Lettering::Band)
   {
@@ -1173,7 +1164,7 @@ Box GameTimer(ImDrawList* dl, ImVec2 centre, float unit, int seconds, double now
   const ImVec2 at(centre.x, centre.y - look.px / 2 + look.px * 0.04f);
   if (edge)
   {
-    // Brawl's band letters: a dark edge round the white one.
+    // Brawl's band lettering has a dark edge outside the white one.
     TextLook outer = look;
     outer.outline = look.outline + std::max(1.0f, look.px * 0.06f);
     outer.outline_colour = edge;
@@ -1205,7 +1196,7 @@ bool Starts(std::string_view text, std::string_view prefix)
   return text.substr(0, prefix.size()) == prefix;
 }
 
-// A verb as its plain form ("strikes" "strike", "locks" "lock").
+// Strips a trailing "s" from a verb ("strikes" -> "strike").
 std::string Plain(std::string_view verb)
 {
   if (verb.size() > 2 && verb.back() == 's')
@@ -1213,17 +1204,17 @@ std::string Plain(std::string_view verb)
   return std::string(verb);
 }
 
-// One clause of a hint, in the shapes Orca's hints take:
+// Parses one hint clause. Recognised shapes (after an optional "Your turn: " prefix):
 //   "[Press |Hold ]<button> to <what>"   B to change, Hold Z to find someone else
 //   "<button> on <thing> to <what>"      A on it to agree
 //   "<button> on <thing> <does> it"      X on a stage strikes it
-//   "<button> on <thing>"                A on a character (a pick)
-//   "<button> <does> [<what>]"           Start locks it in, A proposes a stage, Y skips
+//   "<button> on <thing>"                A on a character
+//   "<button> <does> [<what>]"           Start locks it in, Y skips
 //   "<what> with <button>"               Pick with A
-// after a "Your turn: " or the like; anything else is words alone.
+// Anything else becomes plain words.
 GuideItem ClauseOf(std::string_view clause)
 {
-  // "Your turn: X on a stage strikes it": the buttons after the colon say it.
+  // "Your turn: X on a stage strikes it": parse what follows the colon.
   if (const std::size_t colon = clause.find(": "); colon != std::string_view::npos)
   {
     const std::string_view after = clause.substr(colon + 2);
@@ -1281,7 +1272,7 @@ std::vector<GuideItem> GuideOf(std::string_view hint)
 {
   std::vector<GuideItem> items;
   const auto clauses = [&items](std::string_view part) {
-    // "Pick with A, then press Start to lock in": each clause its own entry.
+    // "Pick with A, then press Start to lock in": one entry per clause.
     for (;;)
     {
       const std::size_t then = part.find(", then ");
@@ -1307,7 +1298,7 @@ std::vector<GuideItem> GuideOf(std::string_view hint)
 
 namespace
 {
-// A GameCube button's face `h` pixels high: its height (Start's is lower) and width.
+// Size of a GameCube button face `h` pixels high (Start is shorter).
 ImVec2 ButtonSize(float h, std::string_view button)
 {
   if (button == "Start")
@@ -1315,7 +1306,7 @@ ImVec2 ButtonSize(float h, std::string_view button)
   return ImVec2(h * (button == "Z" || button == "L" || button == "R" ? 1.5f : 1.0f), h);
 }
 
-// A GameCube button's face centred on `c`, `h` pixels high (ButtonSize).
+// Draws a GameCube button face centred on `c`.
 void ButtonFace(ImDrawList* dl, ImVec2 c, float h, float unit, std::string_view button, float alpha)
 {
   const bool start = button == "Start", z = button == "Z";
@@ -1351,7 +1342,7 @@ void ButtonFace(ImDrawList* dl, ImVec2 c, float h, float unit, std::string_view 
 
 namespace
 {
-// The guide right to left from `right`, at `unit`; draws nothing when `dl` is null. Returns its box.
+// Lays out the guide right to left from `right`. With a null `dl` it only measures.
 Box LayGuide(ImDrawList* dl, float right, float cy, float unit,
              const std::vector<GuideItem>& items, float alpha)
 {
@@ -1361,7 +1352,7 @@ Box LayGuide(ImDrawList* dl, float right, float cy, float unit,
   look.outline_colour = Rgb(20, 20, 20);
   Box box{ImVec2(right, cy - h / 2), ImVec2(right, cy + h / 2)};
   float x = right;
-  // Right to left: the last entry's words end at `right`.
+  // The last entry ends at `right`.
   for (auto it = items.rbegin(); it != items.rend(); ++it)
   {
     if (!it->label.empty())
@@ -1388,10 +1379,8 @@ Box LayGuide(ImDrawList* dl, float right, float cy, float unit,
 Box Guide(ImDrawList* dl, float right, float cy, float unit, const std::vector<GuideItem>& items,
           float alpha, float max_width)
 {
-  // Wider than allowed: the whole line smaller, to 70% at most (the games shrink their own
-  // legends' words the same way).
-  // (Measured again after each step: the words' outlines and the fonts' sizes don't scale
-  // exactly.)
+  // Too wide: shrink the whole line, down to 70%, as the games do with their own legends.
+  // Re-measure at each step, since outlines and font sizes don't scale exactly.
   if (max_width > 0)
   {
     const float full = unit;
@@ -1413,7 +1402,7 @@ void Frame(ImDrawList* dl, ImVec2 min, ImVec2 max, float unit, Tone tone, std::s
   min = ImVec2(min.x + inset, min.y + inset);
   max = ImVec2(max.x - inset, max.y - inset);
   const float round = 0.7f * unit;
-  // Built like the buttons, as a ring: shadow, rim, line, the tone, line.
+  // A ring layered like the buttons.
   dl->AddRect(ImVec2(min.x + 0.15f * unit, min.y + 0.35f * unit),
               ImVec2(max.x + 0.15f * unit, max.y + 0.35f * unit), Rgb(0, 0, 0, 0.32f), round, 0,
               1.2f * unit);
@@ -1432,7 +1421,7 @@ void Frame(ImDrawList* dl, ImVec2 min, ImVec2 max, float unit, Tone tone, std::s
 
 namespace
 {
-// Disc's, returning the body's radius.
+// Draws a disc's layers and returns the body's radius.
 float DiscBody(ImDrawList* dl, ImVec2 c, float radius, float unit, const Paint& p, float alpha)
 {
   const float rim = std::clamp(radius * 0.12f, 1.0f, 0.55f * unit);
@@ -1472,9 +1461,9 @@ void Connection(ImDrawList* dl, ImVec2 c, float radius, float unit, int bars, fl
   if (radius <= 0 || alpha <= 0)
     return;
   bars = std::clamp(bars, 1, 3);
-  // A panel disc, built like the buttons: shadow, rim, line, body, gloss.
+  // Panel disc, layered like the buttons.
   const float body = DiscBody(dl, c, radius, unit, PaintOf(Tone::Panel), alpha);
-  // The arcs, each in a dark line so they read on any panel: lit in the link's colour.
+  // Arcs with a dark outline so they read on any panel.
   const ImU32 on = bars == 3 ? Rgb(96, 206, 255, alpha) :
                    bars == 2 ? Rgb(255, 210, 64, alpha) :
                                Rgb(255, 76, 64, alpha);
@@ -1531,7 +1520,7 @@ Box TextPlate(ImDrawList* dl, ImVec2 pos, float unit, const std::vector<std::str
     const std::string_view line = lines[i];
     if (i == 0 && lead > 0 && lead <= line.size())
     {
-      // The lead in the accent, the rest after it in the ink.
+      // Sender's name in the accent colour, the rest in the ink colour.
       TextLook accent = look;
       accent.top = Accent();
       accent.bottom = Mix(Accent(), Rgb(0, 0, 0), 0.1f);
@@ -1564,11 +1553,11 @@ int DemoMode()
 void DrawDemo(ImDrawList* dl, ImVec2 o, ImVec2 size, float u, double now_s)
 {
   const auto at = [&](float fx, float fy) { return ImVec2(o.x + size.x * fx, o.y + size.y * fy); };
-  // Each primitive's name in small pale letters under it.
+  // Label each primitive with its name.
   const auto caption = [&](ImVec2 p, std::string_view name, Align align = Align::Centre) {
     Label(dl, p, u, name, 1.9f, align, Rgb(176, 206, 255));
   };
-  // Top centre: the set's banner, the turn's timer beside it, and one about to run out.
+  // Top centre: set banner and timers.
   const Box banner = Banner(dl, at(0.29f, 0).x, at(0.71f, 0).x, o.y + 2.2f * u, 9.0f * u, u,
                             Tone::Panel, "RANKED  GAME 2", "ada 1 – 0 bo · bo bans a stage");
   caption(ImVec2((banner.min.x + banner.max.x) / 2, banner.max.y + 0.4f * u), "Banner");
@@ -1576,7 +1565,7 @@ void DrawDemo(ImDrawList* dl, ImVec2 o, ImVec2 size, float u, double now_s)
   const Box t1 = Timer(dl, ImVec2(banner.max.x + 7.0f * u, mid), u, 24, now_s);
   const Box t2 = Timer(dl, ImVec2(t1.max.x + 7.5f * u, mid), u, 4, now_s);
   caption(ImVec2((t1.min.x + t2.max.x) / 2, t1.max.y + 0.6f * u), "Timer");
-  // Top left: the toasts and a chat line on plates, the ping under them.
+  // Top left: toasts, a chat line and the ping.
   float y = o.y + 2.5f * u;
   y = LabelPlate(dl, ImVec2(o.x + 2.5f * u, y), u, "bo joined on port 2", 2.7f).max.y + 1.0f * u;
   y = LabelPlate(dl, ImVec2(o.x + 2.5f * u, y), u, "bo: gl hf … one more?", 2.7f).max.y +
@@ -1591,7 +1580,7 @@ void DrawDemo(ImDrawList* dl, ImVec2 o, ImVec2 size, float u, double now_s)
   y += 2 * lamp + 3.1f * u;
   y = Label(dl, ImVec2(o.x + 2.5f * u, y), u, "32 ms · 60 fps", 2.6f).max.y;
   caption(ImVec2(o.x + 2.5f * u, y), "Label", Align::Left);
-  // The middle: a title over a label, two pointers, two framed tiles.
+  // Middle: title, label, pointers and framed tiles.
   const Box title = Title(dl, at(0.5f, 0.19f), u, "Waiting for bo…", 5.5f, Align::Centre);
   caption(ImVec2(title.max.x + 1.5f * u, title.min.y + 2.0f * u), "Title", Align::Left);
   Label(dl, Add(at(0.5f, 0.19f), ImVec2(0, 6.4f * u)), u, "bo forfeits in 0:18", 3.2f,
@@ -1602,7 +1591,7 @@ void DrawDemo(ImDrawList* dl, ImVec2 o, ImVec2 size, float u, double now_s)
   Pointer(dl, at(0.44f, 0.40f), 2.6f * u, u, 0, "P1 ada", true, true, now_s);
   Pointer(dl, at(0.585f, 0.415f), 2.6f * u, u, 1, "P2 bo", false, false, now_s);
   caption(ImVec2(at(0.60f, 0).x + 1.5f * u, at(0, 0.40f).y), "Pointer", Align::Left);
-  // The lower middle: a results card.
+  // Lower middle: a results card.
   const ImVec2 c0 = at(0.335f, 0.475f), c1 = at(0.665f, 0.565f);
   Plate(dl, c0, c1, u, Tone::Panel);
   caption(ImVec2(c1.x + 1.5f * u, c0.y + 1.0f * u), "Plate", Align::Left);
@@ -1610,7 +1599,7 @@ void DrawDemo(ImDrawList* dl, ImVec2 o, ImVec2 size, float u, double now_s)
   Title(dl, ImVec2(c0.x + 2.0f * u, cy - 2.4f * u), u, "VICTORY", 4.8f);
   Label(dl, ImVec2(c1.x - 2.0f * u, cy - 3.3f * u), u, "1532 → 1550", 3.2f, Align::Right);
   Badge(dl, ImVec2(c1.x - 6.0f * u, cy + 2.0f * u), u, "+18", Tone::Gold, 2.8f);
-  // Over the character select's panels: each name on a plate in the port's colour, LOCKED IN.
+  // Character select panels: name plates and LOCKED IN.
   for (int port = 0; port < 2; ++port)
   {
     const float cx = o.x + size.x * (0.236f + 0.177f * static_cast<float>(port));
@@ -1622,8 +1611,7 @@ void DrawDemo(ImDrawList* dl, ImVec2 o, ImVec2 size, float u, double now_s)
   const Box waiting = Badge(dl, at(0.77f, 0.71f), u, "WAITING", Tone::Grey, 3.2f);
   caption(ImVec2(waiting.max.x + 1.5f * u, waiting.min.y + 0.8f * u), "Badge", Align::Left);
   LabelPlate(dl, at(0.70f, 0.58f), u, "Hold Z to find someone else", 2.6f, Align::Centre, Tone::Green);
-  // Design F's pieces: a framed portrait with LOCKED IN, the turn's frame, the set's dots, the
-  // searching ring on an empty seat.
+  // Portrait frame, turn frame, set dots and the searching ring.
   const ImVec2 f0 = at(0.80f, 0.79f), f1 = at(0.88f, 0.95f);
   PortraitFrame(dl, f0, f1, u, Tone::Gold);
   Ribbon(dl, ImVec2(f0.x + 1.0f * u, f0.y + 1.2f * u), ImVec2(f1.x - 1.0f * u, f0.y + 5.2f * u), u,

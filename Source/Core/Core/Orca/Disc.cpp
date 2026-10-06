@@ -53,7 +53,7 @@ DiscCheck CheckBootFile(const std::string& path)
 {
   if (path.empty() || !File::Exists(path))
     return DiscCheck{false, "disc_missing", path};
-  // A folder is left to the boot's own rules (an extracted disc), which say what is wrong with it.
+  // A folder (an extracted disc) is left to the boot's own checks.
   if (!File::IsDirectory(path) && !File::IOFile(path, "rb").IsOpen())
     return DiscCheck{false, "disc_unreadable", path};
   return DiscCheck{true, {}, {}};

@@ -74,8 +74,8 @@ std::pair<std::string, bool> GetNameArbPair(const TextureInfo& texture_info)
 
 namespace
 {
-// A mip level of another file (<name>_mip<N>), which loads with it (TextureAssetUtils' LoadMips,
-// from the same folder): not a texture of its own.
+// True for a mip level file (<name>_mip<N>). It loads together with <name>, so it is not a
+// texture of its own.
 bool IsMipLevelFile(std::string_view filename)
 {
   const size_t at = filename.rfind("_mip");
@@ -91,7 +91,7 @@ CollectHiresTextureFiles(const std::vector<std::string>& player_directories,
 {
   constexpr auto extensions = std::to_array<std::string_view>({".png", ".dds"});
   std::vector<HiresTextureFile> files;
-  // Each name taken so far, and whether Orca's pack took it.
+  // Texture names seen so far, and whether each came from Orca's pack.
   std::unordered_map<std::string, bool> taken;
   const auto collect = [&](const std::string& texture_directory, bool orca_pack) {
     bool failed_insert = false;
@@ -157,8 +157,8 @@ void HiresTexture::Update()
   const std::vector<std::string> game_ids = SConfig::GetInstance().GetGameIDsForTextures();
   const std::set<std::string> user_directories =
       GetTextureDirectoriesForFirstMatchingGameId(File::GetUserPath(D_HIRESTEXTURES_IDX), game_ids);
-  // Orca: a session also loads Orca's own pack (Data/Sys/Orca/Textures/<game ID>, the Online
-  // menu's labels; ORCA.md "Online menu"), which keeps its own names (CollectHiresTextureFiles).
+  // Orca: in a session, also load Orca's own pack (Data/Sys/Orca/Textures/<game ID>), which
+  // replaces the Online menu's labels.
   std::set<std::string> orca_directories;
   if (Orca::SessionActive())
   {
@@ -176,8 +176,8 @@ void HiresTexture::Update()
        CollectHiresTextureFiles({user_directories.begin(), user_directories.end()},
                                 {orca_directories.begin(), orca_directories.end()}))
   {
-    // An earlier Update's file of the same name stays (as in Dolphin), unless this one is Orca's:
-    // Orca's pack keeps its names whatever an earlier Update registered.
+    // As in Dolphin, a name registered by an earlier Update keeps its file, except that Orca's
+    // pack always wins.
     if (file.orca_pack)
       s_hires_texture_id_to_arbmipmap.insert_or_assign(file.id, file.has_arbitrary_mipmaps);
     else if (!s_hires_texture_id_to_arbmipmap.emplace(file.id, file.has_arbitrary_mipmaps).second)
@@ -187,8 +187,8 @@ void HiresTexture::Update()
     s_file_library->SetAssetIDMapData(file.id, std::map<std::string, std::filesystem::path>{
                                                    {"texture", StringToPath(file.path)}});
 
-    // Orca's pack is always preloaded (a few small labels), so the game's own label never shows
-    // for a frame while ours loads; the player's follows the player's setting.
+    // Orca's pack (a few small labels) is always preloaded so the game's own label never flashes
+    // while ours loads. Player packs follow the cache setting.
     if (g_ActiveConfig.bCacheHiresTextures || file.orca_pack)
     {
       auto hires_texture =
@@ -216,8 +216,8 @@ void HiresTexture::Update()
     message = fmt::format("Found '{}' custom textures for '{}'",
                           s_hires_texture_id_to_arbmipmap.size(), game_id_display);
   }
-  // Orca: a session's top left is the online overlay's (the connection circle and ping); Orca's
-  // own pack is always there, so the count says nothing to the player.
+  // Orca: in a session the top left belongs to the online overlay, and Orca's pack is always
+  // loaded, so only log the count.
   if (Orca::SessionActive())
     INFO_LOG_FMT(VIDEO, "{}", message);
   else

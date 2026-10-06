@@ -17,34 +17,13 @@ namespace Core
 class CPUThreadGuard;
 }
 
-// The online rules for queue matches, Phase 1 (ORCA.md "Online rules"; YouGame
-// docs/ORCA_ONLINE_UX.md): the match block's header, written at the alone boundary for a room the
-// queue made, and the locks that follow from it at every boundary in both games.
-//
-// - The header: the host of a casual or ranked queue room writes mode and ruleset while its game
-//   is its player's alone (no peer plugged in or on the way, nothing anyone replays), or while a
-//   peer on the way still waits for a keyframe not yet made (SetHeaderFree). Anything
-//   else (a friends room, solo play, a search still going, the queue room left) clears it at the
-//   next such boundary, giving back the player's own rules saved when it was written. A ranked
-//   room keeps it while the set is open, whoever is plugged in. A host makes no keyframe for a
-//   queue room's opponent until its game carries that room's header (HeaderInPlace), and a joiner
-//   checks it once its keyframe is in: anything but its room's own header (its queue's mode, its
-//   ruleset, the room's coin and hash, its app's queue flags; never the host's own character
-//   select's FLAG_SOLO) leaves the room ("mismatch").
-// - The locks, while the header says casual or ranked: the ruleset's rules (stocks, time, items
-//   off, handicap off, team attack on, ratio 1.0, pause off), the stage choice (Choose: casual's
-//   two preferred-stage turns and ranked's strikes run on the stage select), the legal list (Brawl's Random Stage Switch without
-//   Final Destination while someone is Ice Climbers; Project+'s 2024 Proposed list), and the input
-//   gate's masks (no B on the character select, so no way back to the menus, and A only in the
-//   character grid, so no player-type, name, team, rules or BACK button; no B on the stage
-//   select; no Start in a fight, so no pause; Project+'s D-pad on the character select (its Code
-//   Menu) and L, R and Z on the stage select (alternate stages, hazards, L+R+A)).
-// - Ranked's character select timer: once one player has a character and the other hasn't, 60 s;
-//   before the set's first fight, the one who still hasn't is a no-show and forfeits.
-// Everything but the header is a pure function of emulated memory (the block included), written
-// only where it differs, on first runs and re-runs alike: the same on both machines, idempotent.
-// Friends rooms have no header, so nothing here touches their games, but for SessionMasks (no Z on
-// the results screen in any session, below).
+// Online rules for casual and ranked queue matches. The host writes a header (mode, ruleset, coin,
+// room hash) into the match block while its game is not yet shared, and the joiner checks it after
+// loading the keyframe. While the header locks, every frame enforces the ruleset's rules, the
+// stage choice, the legal stage list and the input gate's masks.
+// Everything except writing the header is a pure function of emulated memory, so it runs the same
+// on both machines and on rollback re-runs. Friends rooms have no header and only get SessionMasks.
+// See ORCA.md, "Online rules".
 namespace Orca::UX
 {
 class GuestMemory;
@@ -56,16 +35,16 @@ using MatchBlock::Ruleset;
 
 struct Header
 {
-  bool present = false;  // the magic and this version
+  bool present = false;  // magic and version match
   Mode mode = Mode::None;
   Ruleset ruleset = Ruleset::None;
-  u8 flags = 0;  // MatchBlock::FLAG_SOLO, FLAG_QUEUE2 (Queue.h)
-  u8 coin = 0;   // game 1's first striker (MatchBlock::COIN)
-  u32 room = 0;  // the room code's hash (MatchBlock::ROOM)
+  u8 flags = 0;  // MatchBlock::FLAG_SOLO, FLAG_QUEUE2
+  u8 coin = 0;   // game 1's first striker
+  u32 room = 0;  // hash of the room code
   bool Locked() const { return present && mode != Mode::None && ruleset != Ruleset::None; }
-  // The queue's own character select before a match (Queue.h): no room of the queue's yet.
+  // The queue's own character select, before a match is found.
   bool Solo() const { return Locked() && (flags & MatchBlock::FLAG_SOLO) != 0; }
-  // The Slippi-style character select (Queue.h): its ready flags and timer, solo or in the room.
+  // The Slippi-style character select with ready flags and a timer.
   bool Queue2() const { return Locked() && (flags & MatchBlock::FLAG_QUEUE2) != 0; }
   bool operator==(const Header&) const = default;
 };
@@ -74,75 +53,54 @@ Header ReadHeader(const GuestMemory& memory);
 // The ruleset the running profile plays: Brawl rev 2's, Project+'s, or none (no locks).
 Ruleset ProfileRuleset();
 
-// ---- The header, at an alone boundary ----
-// Writes the header for `mode` (None: clears it, and gives back the rules saved when it was
-// written), with game 1's first striker `coin` (0 or 1), the room code's hash `room` and the queue's
-// `flags` (MatchBlock::FLAG_*). Entering a mode from none saves the player's own rules first; any
-// new header (from none, or another mode, ruleset, coin, room or flags) starts every track's set
-// state fresh. Returns the bytes changed (0: it already said so).
+// ---- The header ----
+// Writes the header, or clears it for Mode::None and restores the player's own rules saved when it
+// was first written. Any new header resets every track's set state. Returns the bytes changed.
 int WriteHeader(GuestMemory& memory, Mode mode, Ruleset ruleset, u8 coin = 0, u32 room = 0,
                 u8 flags = 0);
 
-// The header a game whose room calls for `mode` carries (none for Mode::None or no ruleset): with
-// a queue room's `code`, game 1's first striker and the room's hash come from it, and `flags` are
-// the queue's (FLAG_QUEUE2 or none); with FLAG_SOLO (the queue's own character select, no room's)
-// there is no coin and no room. What the host writes (OnFrame) and what a joiner checks for.
+// The header a game in a room of `mode` should carry. A queue room's `code` gives the coin and room
+// hash. With FLAG_SOLO there is no room, so no coin and no hash.
 Header HeaderFor(Mode mode, Ruleset ruleset, std::string_view code, u8 flags);
-// Whether the header in memory, `in_memory`, is `wanted` (HeaderFor): the same header, every
-// field; no header that locks when none is wanted.
+// Whether `in_memory` matches `wanted` in every field. When none is wanted, any non-locking
+// header matches.
 bool HeaderIs(const Header& in_memory, const Header& wanted);
 
-// ---- The locks, at every boundary ----
-// `frame`: the frame hook's (the ranked ready timer counts from it). Returns the bytes changed (0
-// without a header that locks).
+// ---- The locks, every frame ----
+// `frame` drives the ranked ready timer. Returns the bytes changed (0 without a locking header).
 int ApplyLocks(GuestMemory& memory, int frame);
 
-// What the input gate masks for the frame about to run (reads only).
+// What the input gate masks for the frame about to run (read only).
 Rollback::InputGate::Masks GateMasks(const GuestMemory& memory);
 
 // ---- Every session, with or without a header ----
-// What the input gate masks in every session's game, friends and solo included (reads only): Z
-// on the results screen (`scVsResult`), every port. Z there saves the fight's replay, in Brawl and
-// in Project+ alike, and a session can't save one: its NAND has no save file and its SD card is
-// absent (Brawl) or read-only (Project+). So Z only ever led to "There is no save file", then to
-// the save's destination picker with both destinations crossed out, which A and Start never leave
-// (only B does): players pressing A or Start after a game sat on the results screen for good, in
-// both games (ORCA.md "The results screen's replay").
+// Masks Z on the results screen for every port. Z saves a replay, which no session can do (no save
+// file on the NAND, SD absent or read-only), and the save dialog it opens can only be left with B,
+// so players got stuck there. See ORCA.md, "The results screen's replay".
 Rollback::InputGate::Masks SessionMasks(const GuestMemory& memory);
 
-// ---- The character select's hands (both games; found under the harness, ORCA.md "The character
-// select's buttons") ----
-// Each player area (the character select's task +0x44 + 4 x port) has its hand at +0x1A8
-// (muSelCharHand). The hand keeps what it points at, as of the frame that just ran: a kind of
-// target (+0x80), the button when that is a button (+0xAC), and where it is (+0x90 x, +0x94 y, in
-// screen units with y up; the character grid spans about y -5 to 16, the panels and their buttons
-// are below it, the BACK, BRAWL tab, rules bar and Rules button above).
+// ---- The character select's hands ----
+// Each player area (character select task +0x44 + 4 * port) has its hand at +0x1A8. The hand
+// holds a target kind (+0x80), a button id (+0xAC) and a position (+0x90 x, +0x94 y, y up). The
+// grid spans about y -5 to 16.
 //
-// A acts on whatever the hand points at once the frame's stick has moved it (probed: A pressed on
-// the frame the hand arrives on a panel's player-type button switches that panel), so the gate
-// passes A only to a hand in the grid or on its own token, and at least one frame's travel inside
-// the grid's top and bottom edges (0.83 a frame in Brawl, 1.0 in Project+): no single frame can
-// carry it onto a button with A down. Everything else on the screen is a button nobody needs in a
-// queue match (the player-type buttons, which make a CPU of a player or of an empty panel; the
-// name buttons; the panel's picture, a costume; the BRAWL tab, the team switch; the rules bar's
-// arrows; Rules and BACK). Costumes still change with X and Y, and a player joins by moving the
-// hand into the grid.
+// A acts on whatever the hand points at after this frame's stick movement. So while the locks hold,
+// A passes only when the hand is in the grid or on its own token and at least one frame's travel
+// (0.83 in Brawl, 1.0 in Project+) inside the grid's edges. That keeps A off every other button
+// (player type, name, costume, teams, rules, BACK). X and Y still change costumes.
 constexpr u32 CSS_HAND_NOTHING = 0;
-constexpr u32 CSS_HAND_BUTTON = 1;  // the button at +0xAC: 0x1D a player-type button, 0x1C name, ...
-constexpr u32 CSS_HAND_GRID = 2;    // the grid, the token down
-constexpr u32 CSS_HAND_OWN_TOKEN = 3;  // A takes it up
-constexpr u32 CSS_HAND_EXIT = 4;       // BACK (+0xAC 2) or Rules (4)
-constexpr u32 CSS_HAND_TAKING = 6;     // the token on its way into the hand
-constexpr u32 CSS_HAND_GRID_HOLDING = 7;  // the grid, the token in the hand (A puts it down)
-constexpr u32 CSS_HAND_PLACING = 8;       // the token on its way down
+constexpr u32 CSS_HAND_BUTTON = 1;  // button id at +0xAC: 0x1D player type, 0x1C name, ...
+constexpr u32 CSS_HAND_GRID = 2;    // over the grid, token placed
+constexpr u32 CSS_HAND_OWN_TOKEN = 3;  // A picks it up
+constexpr u32 CSS_HAND_EXIT = 4;       // BACK (button 2) or Rules (4)
+constexpr u32 CSS_HAND_TAKING = 6;     // token moving into the hand
+constexpr u32 CSS_HAND_GRID_HOLDING = 7;  // over the grid, token in hand (A places it)
+constexpr u32 CSS_HAND_PLACING = 8;       // token moving down
 constexpr u32 CSS_BUTTON_PLAYER_TYPE = 0x1D;
-constexpr u32 CSS_BUTTON_BACK = 0x02;  // with CSS_HAND_EXIT: BACK (Rules is 0x04)
-// A passes only strictly between these (one frame's travel inside the grid's edges). The top and
-// Project+'s bottom: both games. Brawl's bottom row (RANDOM at its right end, Lucas, ...) reaches
-// down to -4.07, and its grid goes on below it to -5.35 or lower, over nothing until the player's
-// own panel picture (a button, 0x1B: from about -5.8): one frame's travel (0.83) from above -4.2
-// stays in the grid, so Brawl's A reaches the whole of that row (Orca 0.3.19; with -3.0 the bottom
-// quarter of every tile in it swallowed A, RANDOM's too: ORCA.md "Random and ranked's no skip").
+constexpr u32 CSS_BUTTON_BACK = 0x02;  // with CSS_HAND_EXIT (Rules is 0x04)
+// A passes only strictly between these y bounds. Brawl's bottom row reaches down to -4.07 and the
+// player's panel (a button) starts near -5.8, so -4.2 stays one frame's travel inside the grid
+// while still covering the whole bottom row, including RANDOM.
 constexpr float CSS_A_TOP = 15.0f;
 constexpr float CSS_A_BOTTOM = -3.0f;
 constexpr float CSS_A_BOTTOM_BRAWL = -4.2f;
@@ -156,27 +114,17 @@ struct CssHand
   float y = 0;
   bool operator==(const CssHand&) const = default;
 };
-// Port `port`'s (0-3) hand, on the character select; invalid anywhere else or before it is built.
+// Port `port`'s (0-3) hand on the character select; invalid anywhere else.
 CssHand ReadCssHand(const GuestMemory& memory, int port);
-// Whether A may reach the game from this hand while the locks hold, `bottom` the game's lower edge
-// (CSS_A_BOTTOM, Brawl's CSS_A_BOTTOM_BRAWL). An unreadable hand may not.
+// Whether A may reach the game from this hand while the locks hold. `bottom` is the game's lower
+// edge. An unreadable hand may not.
 bool CssHandMayPressA(const CssHand& hand, float bottom = CSS_A_BOTTOM);
 
-// ---- A on BACK, the queue's own character select only (ORCA.md "The queue's character select")
-// ----
-// Luis, 2026-10-05: "anytime you could press B to go back right now, clicking A over the back
-// button should also work". Held B backs out of the queue's own character select (FLAG_SOLO: the
-// rules leave B alone there and the loop lock stands aside), so A on BACK does too: port 1's A
-// reaches the game when its hand points at BACK and A is a new press (not held on the frame that
-// just ran, the queue's latch), the way the game itself wants a press there: a held A sliding
-// onto BACK never backs out. The stick reads centred while A is down (InputGate a_centres_stick),
-// so the hand stays on BACK through the press; nothing else is in one frame's travel of it anyway
-// (found under the harness, both games: BACK spans x -32 to -23.6, y 17.8 to 21.5, the BRAWL tab
-// starts at x -20.4 and the grid ends at y 15.85). While the player is ready (searching) Queue.h
-// keeps A from the game for that press: it stops the search first (`orca queue unready`), and the
-// next frame presses it for the game, so one press both stops the search and backs out. Never in a
-// queue room (casual's way out is Z, ranked has none), never Rules (0x04). Pure.
-// The hand points at BACK (its target and button, CssHand's).
+// ---- A on BACK, queue's own character select only ----
+// Wherever B could back out, A on the BACK button should too. On the queue's own character select
+// (FLAG_SOLO), port 1's A reaches the game when the hand is on BACK and A is a new press; a held A
+// sliding onto BACK never backs out. If the player is searching, Queue.h first stops the search and
+// passes A the next frame. Never in a queue room, never on Rules. Pure.
 constexpr bool CssHandOnBack(u32 target, u32 button)
 {
   return target == CSS_HAND_EXIT && button == CSS_BUTTON_BACK;
@@ -186,115 +134,87 @@ constexpr bool CssBackTakesA(const CssHand& hand, bool a_held)
   return hand.valid && CssHandOnBack(hand.target, hand.button) && !a_held;
 }
 
-// ---- B on the character select: only to take the token back up (ORCA.md "The character
-// select's buttons") ----
-// Both games take a player's token back into the hand on a B pressed while it is down (a pick
-// undone), and back out to the menus once B is held with the token in the hand (probed under the
-// harness, ORCA.md). So while the locks hold B reaches the game only as the first frame of a press
-// and only while that player's token is down: a B held on gets one frame of it, and a B with the
-// token in the hand none, so the back out never starts. Whether the press is new comes from the
-// queue's latch (Queue.h RAW: the raw buttons of the frame that just ran, written whenever a
-// header locks), never from host state. The rules on top (a game-1 pick, a ready player, the
-// character order's turns, Queue.h and CharOrder.h) mask B further.
+// ---- B on the character select: only to pick the token back up ----
+// B on a placed token undoes the pick, but B held with the token in hand backs out to the menus.
+// So while the locks hold, B reaches the game only on the first frame of a press and only while
+// that player's token is down. "New press" comes from the queue's raw-button latch in emulated
+// memory, never from host state. Queue.h and CharOrder.h may mask B further.
 struct CssToken
 {
   bool valid = false;  // the player's area could be read
   bool human = false;
-  int character = 0x28;  // under the hand while the token is in it, else the token's (0x28 none)
+  int character = 0x28;  // under the hand while held, else the token's (0x28 = none)
   bool in_hand = true;   // +0x1F8
-  bool flying = false;   // +0x1F9: on its way up or down
-  // On a character and still: B takes it up.
+  bool flying = false;   // +0x1F9: moving up or down
+  // Placed on a character and still: B picks it up.
   bool Down() const { return valid && human && character != 0x28 && !in_hand && !flying; }
   bool operator==(const CssToken&) const = default;
 };
-// Port `port`'s (0-3) token, on the character select; invalid anywhere else.
+// Port `port`'s (0-3) token on the character select; invalid anywhere else.
 CssToken ReadCssToken(const GuestMemory& memory, int port);
-// Whether B may reach the game from a port whose token is `token`, its raw B held (`b_held`) on
-// the frame that just ran or not. Pure.
+// Whether B may reach the game, given the token and whether B was held last frame. Pure.
 constexpr bool CssBUnpicks(const CssToken& token, bool b_held)
 {
   return token.Down() && !b_held;
 }
-// The same from memory: port `port`'s token, and its raw B from the latch (ports 1 and 2 only; 3
-// and 4 never play a queue match).
+// The same from memory, with B from the latch (ports 1 and 2 only; 3 and 4 never play a queue
+// match).
 bool CssBMayUnpick(const GuestMemory& memory, int port);
 
-// Brawl's Random Stage Switch for the legal stages (Supernova 2025): the Brawl page's mask
-// (record menu data +0x24) and the Melee page's (+0x20), without Final Destination when
-// `no_final_destination`.
+// Brawl's Random Stage Switch masks for the legal stages: the Brawl page (record menu data +0x24)
+// and the Melee page (+0x20).
 constexpr u32 BRAWL_LEGAL_BRAWL_PAGE = 0x04005007;  // BF, FD, Delfino, YI, Lylat, Smashville
 constexpr u32 BRAWL_LEGAL_MELEE_PAGE = 0x00020000;  // Pokemon Stadium
 constexpr u32 BRAWL_FINAL_DESTINATION_BIT = 0x00000002;
 
-// The characters this module knows, in the match's init data (gmCharacterKind: the character
-// select writes a port's pick there as it is made, and a Random pick resolved as it ends).
+// gmCharacterKind values. The character select writes each pick into the match's init data.
 constexpr int CHARACTER_ICE_CLIMBERS = 0x10;
 constexpr int CHARACTER_NONE = 0x3E;
 
-// One port's pick, from the match's init data (gmGlobalModeMelee +0x98 + port x 0x5C).
+// One port's pick, from the match's init data (gmGlobalModeMelee +0x98 + port * 0x5C).
 struct PlayerPick
 {
-  bool human = false;  // a human's pick (type 0), not a CPU's or nobody's
-  int character = -1;  // the character picked (gmCharacterKind), -1 none
+  bool human = false;  // type 0, not a CPU or empty
+  int character = -1;  // gmCharacterKind, -1 none
 };
 std::array<PlayerPick, 4> ReadPicks(const GuestMemory& memory);
 
-// The ranked character select's no-ready limit, in frames (60 s).
+// Ranked character select ready limit, in frames (60 s).
 constexpr int CSS_READY_FRAMES = 60 * 60;
 
-// ---- The session's side (Rollback/OnlineMatch.cpp, CPU thread) ----
-// The header this machine's room calls for, set at every boundary before the frame hook (and again
-// before a keyframe is made: a room's welcome can come in between): a queue room's while this
-// machine hosts it (or waits in a ranked one for the set's verdict), `code` the room's code; the
-// queue's own character select's (FLAG_SOLO, with the app's `queue2`) while its player waits there
-// for a match; else none. `flags`: MatchBlock::FLAG_*. Returns whether that changed the header
-// called for (WantedGeneration counts one more).
+// ---- Session side (Rollback/OnlineMatch.cpp, CPU thread) ----
+// Sets the header this machine's room calls for, every frame before the frame hook and again before
+// a keyframe is made. Returns whether it changed (WantedGeneration then increments).
 bool SetWanted(Mode mode, u8 flags = 0, std::string_view code = {});
 Mode Wanted();
 u8 WantedFlags();
-// Counts every change of the header called for (SetWanted): a keyframe made under another count
-// carries another header than the one called for now.
+// Counts changes to the wanted header, so a keyframe made under an older count is stale.
 u64 WantedGeneration();
-// Whether the game's memory carries the header called for (HeaderFor of SetWanted's), as the last
-// first-run frame hook read it, with nothing changed since (SetWanted, MemoryReplaced). A host
-// makes or offers no keyframe for a queue room until it does: the joiner would replay a game set
-// up for another match (its own character select's header, another room's).
+// Whether memory carried the wanted header at the last first-run frame hook, with no change since.
+// A host offers no keyframe for a queue room until it does.
 bool HeaderInPlace();
-// The game's memory was replaced after this boundary's frame hook (the queue image): what the
-// hook read of the header is stale until the next.
+// Memory was replaced after this frame's hook, so the header read is stale until the next one.
 void MemoryReplaced();
-// Whether this boundary's frame hook may write the header even though the frame isn't this
-// player's alone (a friend's arrival or a prepare-join waits for a keyframe): set before the hook
-// at every boundary (OnlineMatch's HeaderFreeAt). The header only: the rest of the UX keeps
-// `alone`.
+// Lets this frame's hook write the header even though a peer is joining and waiting for a keyframe.
+// Affects only the header; the rest of the UX still uses `alone`.
 void SetHeaderFree(bool free);
-// A joiner whose keyframe just loaded, into a room of the queue `mode` (none: a friends room) with
-// code `code`, whose app plays the queue with `flags` (FLAG_QUEUE2 or none): the host's header is
-// checked at the next frame hook. A friends room's game carries none; a queue room's carries that
-// room's own (HeaderFor: never FLAG_SOLO, the room's coin and hash).
+// A joiner just loaded its keyframe into a room of `mode` (None: friends room). The host's header
+// is checked at the next frame hook.
 void ExpectHeader(Mode mode, std::string_view code = {}, u8 flags = 0);
-// Whether a joiner of a room accepts the host's header `h` (ExpectHeader's check, pure).
+// Whether a joiner accepts the host's header `h` (pure).
 bool HeaderFitsRoom(const Header& h, Mode mode, Ruleset ruleset, std::string_view code, u8 flags);
-// "mismatch" once the check failed: the joiner leaves.
+// "mismatch" once the check failed; the joiner leaves.
 std::optional<std::string> TakeMismatch();
-// The ranked no-show, once its frame is final: the port (0-based) that didn't ready in time.
-// `confirmed`: frames through it are final (OnlineMatch's ConfirmResults).
+// The ranked no-show port (0-based), once frames through it are `confirmed` final.
 std::optional<int> ConfirmNoShow(int confirmed);
 
-// ---- The frame hook's part (UX.cpp) ----
-// At every boundary, after the name tags and before the toggled patch groups: the header at an
-// alone boundary or one SetHeaderFree allows (first runs only), then the locks (first runs and
-// re-runs).
-// `plugged`: the ports in play at `frame` (the session's synced plan, Events::PortInfo): written
-// into the block while it locks, for the ready timer (a pure function of synced data, as the name
-// tags are).
+// ---- Frame hook (UX.cpp) ----
+// Writes the header (first runs only, when alone or SetHeaderFree allows), then applies the locks
+// (first runs and re-runs). `plugged` is the synced set of ports in play, used by the ready timer.
 void OnFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, bool alone,
              u8 plugged);
-// Test knob ORCA_TEST_QUEUE=casual|ranked[:<coin 0|1>][:q2|:solo] (a test override): the header a
-// queue room's host writes, in a harness run or a dev game's room, as if this game hosted such a
-// room; the coin is game 1's first striker (port 1 by default). `q2`: the Slippi-style character
-// select (Queue.h, FLAG_QUEUE2); `solo`: the queue's own character select before a match
-// (FLAG_SOLO | FLAG_QUEUE2).
+// Test override ORCA_TEST_QUEUE=casual|ranked[:<coin 0|1>][:q2|:solo] makes this game act as the
+// host of such a queue room. `q2` sets FLAG_QUEUE2; `solo` sets FLAG_SOLO | FLAG_QUEUE2.
 struct TestQueue
 {
   Mode mode = Mode::None;

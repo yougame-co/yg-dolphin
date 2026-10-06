@@ -1,9 +1,8 @@
 # pplus-queue2-flow.txt (Project+'s whole casual queue2 flow) with both players mashing A, B, X, Y
 # and Z on game 1's results screen from its first frame (ORCA.md "The results screen's replay"). Z
-# there is the fight's replay save, which a session can't make: before the gate masked it, Z after
-# an A opened "There is no save file" and then the save's destination picker with both destinations
-# crossed out, which A and Start never leave, and both games stayed on the results screen. Now the
-# results screen ends as usual and game 2's character select comes, both ready. Run with
+# there saves a replay, which a session can't do, so it is masked; otherwise the save picker would
+# trap both games on the results screen. Expect the results screen to end as usual and game 2's
+# character select to come, both ready. Run with
 # ORCA_PROFILE=PPLUS32 ORCA_TEST_QUEUE=casual:solo ORCA_UX_TEST_NAMES=ada,bo
 # ORCA_TEST_QUEUE_PICK=824:43:2:-7.4:7.7, e.g. the sync test YG_SYNCTEST=7 YG_SYNCTEST_FROM=200 to
 # frame 3200.

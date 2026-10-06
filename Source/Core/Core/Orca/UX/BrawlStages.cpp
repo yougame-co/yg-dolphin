@@ -31,7 +31,7 @@ namespace RS = Ranked;
 
 namespace
 {
-// The region's layout (big-endian, as the game's memory).
+// Region layout (big-endian, like the game).
 enum Offset : u32
 {
   O_MAGIC = 0x00,    // u32
@@ -53,8 +53,8 @@ enum Offset : u32
   O_HOVERED = 0x20,
   O_HOVERED_FOR = 0x21,
   O_HOVER_KEY = 0x22,
-  O_PREFS = 0x23,  // s8 x 2: a casual game's preferred stages
-  O_SEED = 0x28,   // u32: a casual game's coin (State::seed)
+  O_PREFS = 0x23,  // s8 x 2: casual preferred stages
+  O_SEED = 0x28,   // u32: casual seed (State::seed)
   O_END = 0x2C,
 };
 static_assert(O_END <= kRegionSize);
@@ -75,7 +75,7 @@ void Put32(GuestMemory& m, u32 offset, u32 value)
   Put16(m, offset + 2, static_cast<u16>(value));
 }
 
-// A pointer the game holds, if it points into RAM.
+// Reads a pointer at `address`, if both are in RAM.
 std::optional<u32> Pointer(const GuestMemory& m, u32 address)
 {
   if (!m.Valid(address))
@@ -151,7 +151,7 @@ void WriteState(GuestMemory& m, const State& s)
 
 void ClearState(GuestMemory& m)
 {
-  // Only the magic: a reader treats anything else as no set.
+  // Clearing the magic is enough: readers treat anything else as no state.
   if (m.Valid(kRegion) && m.Read32(kRegion + O_MAGIC) == kMagic)
     Put32(m, O_MAGIC, 0);
 }
@@ -161,49 +161,46 @@ namespace Orca::UX::BrawlStages
 {
 namespace
 {
-// ---- The stage select's layout (Brawl rev 2, an empty save; from the probes) ----
-// The task: +0x200 the cursor (+0x3C x, +0x40 y, floats), +0x224 the select state (0 choosing),
-// +0x228 the page (0 Brawl's stages, 1 Melee's), +0x250 frames
-// since the screen opened, +0x615C the stage kind it took.
+// ---- Stage select task layout (Brawl rev 2, found with the probe tools) ----
+// +0x200 cursor (+0x3C x, +0x40 y, floats), +0x224 select state (0 choosing), +0x228 page
+// (0 Brawl, 1 Melee), +0x250 frames since the screen opened, +0x258 the chosen stage kind.
 constexpr u32 TASK_CURSOR = 0x200;
 constexpr u32 CURSOR_X = 0x3C;
 constexpr u32 CURSOR_Y = 0x40;
 constexpr u32 TASK_STATE = 0x224;
 constexpr u32 STATE_CHOOSING = 0;
-constexpr u32 STATE_TAKEN = 2;  // A took a stage: the screen leaves about 6 frames later
-// The stage A took (srStageKind), set with STATE_TAKEN and copied out as the screen leaves: a write
-// in between changes the stage the match loads.
+constexpr u32 STATE_TAKEN = 2;  // a stage was chosen; the screen exits about 6 frames later
+// The chosen stage (srStageKind). Copied out when the screen exits, so writing it before then
+// changes which stage loads.
 constexpr u32 TASK_TAKEN_KIND = 0x258;
 constexpr u32 TASK_PAGE = 0x228;
-// MuStageTblAccess's table (sora_menu_sel_stage): per page {the page's stage ids, u8 count}.
+// MuStageTblAccess's table (sora_menu_sel_stage): per page {stage id list, u8 count}.
 constexpr u32 PAGE_TABLE = 0x806B9298;
 constexpr u32 TASK_CLOCK = 0x250;
-// The hovered item's special ids.
+// Special hovered-item ids.
 constexpr u32 ITEM_PAGE = 0x35;
 constexpr u32 ITEM_RANDOM = 0x36;
 constexpr u32 ITEM_BACK = 0x37;
-// An icon (task +0x8C + 4 x slot) -> +0x14 -> +0x10 -> +0x18: the picture's frame (float);
-// 0.0 is a plain grey tile.
+// Icon (task +0x8C + 4 * slot) -> +0x14 -> +0x10 -> +0x18 is the image frame (float). 0.0 is a
+// plain grey tile.
 constexpr u32 ICON_A = 0x14;
 constexpr u32 ICON_B = 0x10;
 constexpr u32 ICON_FRAME = 0x18;
 constexpr u32 GREY = 0x00000000;  // 0.0f
 
-// Brawl rev 2's stage select (probes, empty save): page 0 holds Brawl's 31 stages in the order of
-// MuStageTblAccess's table (0x806B9298: per page a list of the select's stage ids, 0x806B99D8 for
-// page 0, 0x806B9A58 for page 1), page 1 Melee's 10. The cursor runs over x -30..30, y -19.5..19.5
-// (up is +y); icons are about 6.2 wide. The points are inside each icon where the probes' cursor
-// sweeps hovered it.
+// Page 0 holds Brawl's 31 stages and page 1 Melee's 10, in MuStageTblAccess order. The cursor
+// spans x -30..30 and y -19.5..19.5 (up is +y); icons are about 6.2 wide. Each point is inside its
+// icon, found by sweeping the cursor over the screen.
 constexpr std::array<Tile, kStages> kTiles{{
-    {0, 0, -1.5f, 15.74f},   // Battlefield (the select's stage id 0x00)
-    {1, 9, 22.0f, -8.7f},    // Pokemon Stadium (0x28), the Melee page's bottom right
+    {0, 0, -1.5f, 15.74f},   // Battlefield (stage select id 0x00)
+    {1, 9, 22.0f, -8.7f},    // Pokemon Stadium (0x28), bottom right of the Melee page
     {0, 13, 11.2f, 4.46f},   // Lylat Cruise (0x0E)
     {0, 20, 23.0f, -3.06f},  // Smashville (0x1A)
     {0, 11, -1.6f, 4.46f},   // Yoshi's Island (0x0C)
     {0, 1, 4.7f, 15.74f},    // Final Destination (0x01)
     {0, 2, 11.3f, 15.74f},   // Delfino Plaza (0x02)
 }};
-// The page button (Melee Stages / Brawl Stages), bottom right on both pages.
+// The page-switch button, bottom right on both pages.
 constexpr float PAGE_BUTTON_X = 23.0f;
 constexpr float PAGE_BUTTON_Y = -18.11f;
 }  // namespace
@@ -216,7 +213,7 @@ const Tile& TileFor(int stage)
 namespace
 {
 
-// The legal stages' stage kinds (srStageKind), in RankedSteps' order.
+// srStageKind of each legal stage, in RankedSteps order.
 constexpr std::array<int, kStages> kStageKinds{
     0x01,  // Battlefield
     0x2E,  // Pokemon Stadium (Melee)
@@ -227,9 +224,9 @@ constexpr std::array<int, kStages> kStageKinds{
     0x03,  // Delfino Plaza
 };
 
-// gmGlobalModeMelee (g_GameGlobal +0x08): +0x98 the players, 4 x 0x5C, +0x00 the character,
-// +0x01 the player type (0 human). TBD(probe): the character select fills them before the stage
-// select.
+// gmGlobalModeMelee (g_GameGlobal +0x08): +0x98 four players of 0x5C bytes; +0x00 character,
+// +0x01 player type (0 = human).
+// TODO: confirm the character select fills these before the stage select.
 constexpr u32 GLOBAL_MODE_MELEE = 0x08;
 constexpr u32 MELEE_PLAYERS = 0x98;
 constexpr u32 MELEE_PLAYER_SIZE = 0x5C;
@@ -240,7 +237,7 @@ u16 Bit(int stage)
   return static_cast<u16>(1u << stage);
 }
 
-// A field of a struct g_GameGlobal points to.
+// Reads a pointer field of g_GameGlobal.
 std::optional<u32> GlobalField(const GuestMemory& m, u32 field)
 {
   const auto global = Pointer(m, GAME_GLOBAL);
@@ -249,7 +246,7 @@ std::optional<u32> GlobalField(const GuestMemory& m, u32 field)
   return Pointer(m, *global + field);
 }
 
-// Ports 1 and 2's characters for the coming game, if both are human.
+// Ports 1 and 2's characters for the next game, if both are human.
 std::optional<std::array<s8, 2>> ReadCharacters(const GuestMemory& m)
 {
   const auto melee = GlobalField(m, GLOBAL_MODE_MELEE);
@@ -278,8 +275,7 @@ int StageAt(u32 page, s32 slot)
 
 int HoveredStage(const GuestMemory& m, const View& v)
 {
-  // +0x248 keeps the last slot after the cursor leaves the icons: only a stage item (not 0, the
-  // page button, Random or Back) means the cursor is on that slot.
+  // +0x248 keeps the last slot after the cursor leaves the icons, so check the hovered item too.
   if (!v.present || v.hovered_item == 0 || v.hovered_item == ITEM_PAGE ||
       v.hovered_item == ITEM_RANDOM || v.hovered_item == ITEM_BACK || v.selected < 0)
   {
@@ -288,7 +284,7 @@ int HoveredStage(const GuestMemory& m, const View& v)
   return StageAt(m.Read32(v.task + TASK_PAGE), v.selected);
 }
 
-// What the cursor is on, as one byte: the page and the hovered item (0xFF nothing).
+// Page and hovered item packed into one byte (0xFF = nothing).
 u8 HoverKey(const GuestMemory& m, const View& v)
 {
   if (!v.present || v.hovered_item == 0 || v.hovered_item > 0x3F)
@@ -301,8 +297,7 @@ const RS::Ruleset& Rules()
   return RS::Brawl2025();
 }
 
-// `casual`: a casual game's two preferred-stage turns (RankedSteps.h PlanCasual) instead of the
-// ranked set's steps.
+// `casual` plans the two preferred-stage turns instead of the ranked steps.
 RS::Plan PlanOf(const State& s, const RS::SetView& set, bool casual)
 {
   RS::SetView v = set;
@@ -311,9 +306,8 @@ RS::Plan PlanOf(const State& s, const RS::SetView& set, bool casual)
   return casual ? RS::PlanCasual(Rules(), v, s.seed) : RS::PlanGame(Rules(), v);
 }
 
-// The port whose turn it is, or the last step's once the steps are done (the game's cursor is
-// that port's while the flow makes the pick). A step that is both players' (a casual game's): port
-// 1's.
+// The port whose turn it is, or the last step's port once done (it drives the game's cursor while
+// the flow makes the pick). Port 1 for a step shared by both players.
 int TurnPort(const RS::Plan& plan, const RS::Progress& progress)
 {
   int port = 0;
@@ -332,7 +326,7 @@ State Fresh()
   return s;
 }
 
-// The result screen's verdict into the set.
+// Records the results screen's outcome in the set.
 void Record(const GuestMemory& m, State* s)
 {
   const Reading r = ReadResults(m);
@@ -340,7 +334,7 @@ void Record(const GuestMemory& m, State* s)
     return;
   const GameResult g = Judge(r.block, 0);
   if (g.kind != GameResult::Kind::Win || g.winner_port < 0 || g.winner_port > 1)
-    return;  // a draw or a void game is played again (RankedSteps: the same steps)
+    return;  // a draw or void game is replayed with the same steps
   const int w = g.winner_port;
   s->score[w] = static_cast<u8>(std::min(s->score[w] + 1, 255));
   s->set.last_winner = w;
@@ -349,8 +343,7 @@ void Record(const GuestMemory& m, State* s)
   s->set.game = static_cast<u8>(std::min(s->set.game + 1, 255));
 }
 
-// The game's cursor: written where the flow wants it (a write moves it; the hover follows the
-// next frame).
+// Moves the game's cursor. The hover catches up next frame.
 void PutCursor(GuestMemory& m, const View& v, float x, float y)
 {
   const auto cursor = Pointer(m, v.task + TASK_CURSOR);
@@ -363,15 +356,13 @@ void PutCursor(GuestMemory& m, const View& v, float x, float y)
     m.Write32(*cursor + CURSOR_Y, by);
 }
 
-// A page turn the two cursors asked for (StageCursors::State::page_turn): bit 7 set, bit 0 the port
-// that asked, bit 1 the page it was on.
+// StageCursors::State::page_turn: bit 7 set, bit 0 the requesting port, bit 1 its current page.
 constexpr u8 TURN_ON = 0x80;
-constexpr u8 TURN_FRAMES = 90;  // gives up after this many of the screen's frames
+constexpr u8 TURN_FRAMES = 90;  // give up after this many frames
 
-// Each player's presses on their own cursor (StageCursors.h): X strikes or bans on the turn's
-// player's own turn, Y skips an optional ban, A picks in the picker's pick step and otherwise
-// proposes (a casual game: names the preferred stage), B takes a proposal back, A on the page
-// button turns the page. Edges against what the hook saw, so a boundary run again sees none.
+// Handles each player's presses on their own cursor: X strikes or bans on your turn, Y skips an
+// optional ban, A picks on your pick step and proposes otherwise, B withdraws a proposal, A on the
+// page button turns the page. Presses are edges, so a resimulated frame sees none twice.
 void CursorPresses(const RS::Plan& plan, State* s, StageCursors::State* c, u32 page)
 {
   const StageCursors::Layout& layout = StageCursors::BrawlLayout();
@@ -393,7 +384,7 @@ void CursorPresses(const RS::Plan& plan, State* s, StageCursors::State* c, u32 p
     }
     else if (on >= 0 && (pressed & StageCursors::BTN_A))
     {
-      // The picker's A picks (a stage DSR keeps from them is still theirs to propose).
+      // The picker's A picks; a stage DSR blocks can still be proposed.
       if (!(my_turn && step->kind == RS::StepKind::Pick && RS::Pick(plan, &s->progress, on)))
         RS::Propose(plan, &s->progress, port, on);
     }
@@ -404,23 +395,22 @@ void CursorPresses(const RS::Plan& plan, State* s, StageCursors::State* c, u32 p
   }
 }
 
-// The stage select's part of a boundary.
+// Per-frame logic on the stage select.
 void SelectFrame(GuestMemory& m, const View& v, State* s, bool casual)
 {
   const RS::SetView set = casual ? s->set : SetOf(m, *s);
   const StageCursors::Layout& layout = StageCursors::BrawlLayout();
   std::optional<StageCursors::State> cursors = StageCursors::Read(m);
-  // A new stage select: this game's (its frame counter starts again on every visit, so steps left
-  // from a set that ended mid-select never carry over).
+  // The frame counter resets on every visit, so a lower clock means a new stage select.
   if (s->phase != Phase::Select || v.clock < s->clock)
   {
-    // This game's stage select opens: its steps start.
+    // Start this game's steps.
     const auto characters = ReadCharacters(m);
     s->characters = characters ? *characters : std::array<s8, 2>{-1, -1};
-    // Game 1's first striker: the header's coin (the room code's, the same on both machines).
+    // Game 1's first striker is the header's coin.
     if (m.Valid(MatchBlock::COIN))
       s->coin = static_cast<u8>(m.Read8(MatchBlock::COIN) & 1);
-    // A casual game's coin for its random choices: the room's, the header's coin, the game.
+    // Casual: seed random choices from the room, the coin and the game number.
     s->seed = casual && m.Valid(MatchBlock::ROOM + 3) ?
                   RS::CasualSeed(m.Read32(MatchBlock::ROOM), s->coin, s->set.game) :
                   0;
@@ -444,10 +434,8 @@ void SelectFrame(GuestMemory& m, const View& v, State* s, bool casual)
   const u32 page = m.Read32(v.task + TASK_PAGE);
   if (state != STATE_CHOOSING)
   {
-    // The game took a stage. Only the flow presses A, and only on the stage it stands for, but a
-    // press that still took another (the hover a frame behind the cursor) is replaced by the stage
-    // the flow stands for (the player's rested stage in a pick, or what the steps' defaults
-    // leave), before the screen copies it out.
+    // A stage was chosen. Since the hover lags the cursor by a frame, the game may have taken the
+    // wrong one; overwrite it with the flow's stage before the screen copies it out.
     if (state == STATE_TAKEN)
     {
       if (const RS::Step* step = RS::Current(plan, s->progress))
@@ -478,7 +466,7 @@ void SelectFrame(GuestMemory& m, const View& v, State* s, bool casual)
           m.Write32(v.task + TASK_TAKEN_KIND, kind);
       }
     }
-    // Presses made meanwhile count for nothing.
+    // Discard presses made meanwhile.
     StageCursors::TakePresses(&c, 0);
     StageCursors::TakePresses(&c, 1);
     StageCursors::Write(m, c);
@@ -486,8 +474,7 @@ void SelectFrame(GuestMemory& m, const View& v, State* s, bool casual)
     return;
   }
   CursorPresses(plan, s, &c, page);
-  // The turn timer runs on the stage select's own frames: once per frame, never twice at one
-  // boundary. So does how long the game's cursor has rested where it is, and a page turn's wait.
+  // Timers count the stage select's own frames, so a resimulated frame never ticks twice.
   if (v.clock != s->clock)
   {
     s->clock = v.clock;
@@ -501,7 +488,7 @@ void SelectFrame(GuestMemory& m, const View& v, State* s, bool casual)
     if (c.page_turn)
       c.page_frames = static_cast<u8>(std::min(c.page_frames + 1, 255));
   }
-  // A page turn ends once the page is another (or after a while: the game never took it).
+  // A page turn ends once the page changes, or times out.
   if (c.page_turn &&
       ((page & 1) != static_cast<u32>((c.page_turn >> 1) & 1) || c.page_frames >= TURN_FRAMES ||
        s->progress.picked >= 0))
@@ -512,9 +499,8 @@ void SelectFrame(GuestMemory& m, const View& v, State* s, bool casual)
   if (!c.page_turn)
     c.page_frames = 0;
 
-  // The game's cursor: on the stage the steps picked (through the page button first when it is on
-  // the other page), on the page button while a page turn waits, else where the follower's cursor
-  // is (its hover shows the stage's preview). The cursor's port is whose A the gate presses then.
+  // Place the game's cursor: on the picked stage (via the page button if needed), on the page
+  // button during a page turn, else on the follower's cursor so the game shows its preview.
   u32 port = c.follower;
   if (s->progress.picked >= 0)
   {
@@ -540,12 +526,12 @@ void SelectFrame(GuestMemory& m, const View& v, State* s, bool casual)
     m.Write32(v.task + TASK_PORT, port);
   StageCursors::Write(m, c);
 
-  // Grey tiles: every stage neither the current step nor an agreement can take.
+  // Grey out every stage the current step can't take.
   const u16 allowed = s->progress.picked >= 0 ?
                           Bit(s->progress.picked) :
                           static_cast<u16>(RS::Allowed(plan, s->progress) |
                                            RS::Proposable(plan, s->progress));
-  // The page's icons (MuStageTblAccess: 31 and 10; the task's own count stays 31).
+  // Icon count comes from MuStageTblAccess (the task's own count stays 31 on both pages).
   const u32 table = PAGE_TABLE + 8 * std::min<u32>(page, 2) + 4;
   const u32 count = std::min<u32>(m.Valid(table) ? m.Read8(table) : 0, 40);
   for (u32 slot = 0; slot < count; ++slot)
@@ -658,8 +644,7 @@ bool CasualBrawlMatch(const GuestMemory& m)
 
 RS::SetView SetOf(const GuestMemory& m, const State& s, std::array<u8, 2>* score)
 {
-  // The results track's set (SetBlock.h), the authoritative one, when the block holds a ranked
-  // header and a set that reads sane.
+  // Prefer SetBlock.h's authoritative set when it is ranked and looks sane.
   if (const auto header = SetBlock::ReadHeader(m); header && header->mode == SetBlock::Mode::Ranked)
   {
     const SetBlock::SetState b = SetBlock::ReadSet(m);
@@ -695,7 +680,7 @@ void Frame(GuestMemory& m, bool two_players)
   {
     if (stored)
     {
-      // Left mid-select (the opponent gone, the header cleared): the cursor is anyone's again.
+      // Left mid-select (header cleared): give the cursor back to every port.
       if (const View v = ReadView(m); v.present && stored->phase == Phase::Select &&
                                       m.Read32(v.task + TASK_PORT) != PORT_ANY)
       {
@@ -714,12 +699,12 @@ void Frame(GuestMemory& m, bool two_players)
   }
   else
   {
-    // Off the stage select the two cursors stop (the latch moves nothing).
+    // Off the stage select the two cursors are inactive.
     StageCursors::Clear(m);
     const std::string scene = ReadSceneName(m);
     if (scene == "scMelee")
     {
-      // A casual game counts its fights (the next stage select's coin is another).
+      // Casual: count fights so the next stage select gets a new seed.
       if (casual && s.phase == Phase::Select)
         s.set.game = static_cast<u8>(std::min(s.set.game + 1, 255));
       s.phase = Phase::Fight;
@@ -746,8 +731,7 @@ void Masks(const GuestMemory& m, Rollback::InputGate::Masks* masks)
   const bool casual = !RankedBrawlMatch(m) && CasualBrawlMatch(m);
   const RS::SetView set = casual ? s->set : SetOf(m, *s);
   const RS::Plan plan = PlanOf(*s, set, casual);
-  // The two cursors (StageCursors.h) are the players' own: the game's cursor and its buttons are
-  // nobody's. The flow acts through them.
+  // Players drive their own cursors (StageCursors.h); the game's cursor is driven only by the flow.
   for (int port = 0; port < PORTS; ++port)
     (*masks)[port] = ALL;
   if (m.Read32(v.task + TASK_STATE) != STATE_CHOOSING || (v.clock & 1) != 0)
@@ -756,8 +740,8 @@ void Masks(const GuestMemory& m, Rollback::InputGate::Masks* masks)
   const bool rested = s->hovered_for >= 1 && s->hover_key == HoverKey(m, v);
   if (s->progress.picked >= 0)
   {
-    // The steps (or the two players) picked: A on the stage (or on the page button first), every
-    // other frame so each press is a new one, for the cursor's port.
+    // A stage is picked: press A on it (or on the page button first) every other frame, so each
+    // press is new.
     const int turn = TurnPort(plan, s->progress);
     const Tile& tile = kTiles[s->progress.picked];
     const bool on_page = m.Read32(v.task + TASK_PAGE) == tile.page;
@@ -765,14 +749,14 @@ void Masks(const GuestMemory& m, Rollback::InputGate::Masks* masks)
       (*masks)[turn & 3].press |= PAD_BUTTON_A;
     return;
   }
-  // A page turn: A on the page button once the game's cursor has rested there.
+  // Page turn: press A once the game's cursor has rested on the page button.
   if (c && c->page_turn && v.hovered_item == ITEM_PAGE && rested)
     (*masks)[c->page_turn & 1].press |= PAD_BUTTON_A;
 }
 
 std::optional<Ranked::Turn> CurrentTurn(const GuestMemory& m)
 {
-  // Lines' turn (the same state, plan and step), without the names.
+  // Same as Lines(), without the names.
   const std::optional<State> s = ReadState(m);
   if (!s || s->phase != Phase::Select || !ReadView(m).present)
     return std::nullopt;
@@ -823,14 +807,14 @@ std::pair<std::string, std::string> Lines(const GuestMemory& m,
   const RS::Plan plan = PlanOf(*s, set, casual);
   const RS::Step* step =
       v.present && s->phase == Phase::Select ? RS::Current(plan, s->progress) : nullptr;
-  // The local player's port (-1: watching).
+  // Local player's port (-1 when spectating).
   int me = -1;
   for (const Orca::Events::PortInfo& p : ports)
   {
     if (!p.remote && (p.port == 0 || p.port == 1))
       me = p.port;
   }
-  // What the other player proposes, for the local player's line ("bo wants Smashville").
+  // The opponent's proposal, e.g. "bo wants Smashville".
   const auto proposal_note = [&]() -> std::string {
     const auto& prefs = s->progress.prefs;
     std::string out;
@@ -853,7 +837,7 @@ std::pair<std::string, std::string> Lines(const GuestMemory& m,
   };
   if (casual)
   {
-    // Casual: only the stage select's pick and the stage it comes to.
+    // Casual: only the pick and its result.
     if (!v.present || s->phase != Phase::Select)
       return {};
     if (step && step->kind == RS::StepKind::Prefer)
@@ -877,10 +861,8 @@ std::pair<std::string, std::string> Lines(const GuestMemory& m,
                                                         fmt::format("{}'s pick", name(chosen));
     return {fmt::format("{} ({})", kStageNames[s->progress.picked], whose), {}};
   }
-  // Ranked: the set on the character and stage selects; on the stage select, after it, whose turn
-  // it is, how many stages they strike or ban, and the time left; under it the turn's buttons for
-  // the player whose turn it is, A's proposal for both, and what the other player proposes.
-  // No "Game N" (Luis, 2026-10-05: the dots say which game it is).
+  // Ranked: the set score; on the stage select also whose turn it is, how many to strike or ban,
+  // and the time left, with a hint line below. No "Game N": the overlay's dots show that.
   const std::string score = fmt::format("{} {}–{} {}", who(0), wins[0], wins[1], who(1));
   if (!v.present || s->phase != Phase::Select)
     return {score, {}};
@@ -910,8 +892,7 @@ std::pair<std::string, std::string> Lines(const GuestMemory& m,
     case RS::StepKind::Prefer:
       break;
     }
-    // Under it: the turn's keys for its player, then what the other player proposes, or else that
-    // A proposes a stage.
+    // Hint line: your keys on your turn, else the opponent's proposal, else that A proposes.
     std::string note;
     if (you)
       note = keys;
@@ -953,7 +934,7 @@ StageCursors::View CursorView(const GuestMemory& m,
   {
     if (step->port <= 1)
       view.turn = static_cast<s8>(step->port);
-    // The step for the overlay's turn cues (UI only).
+    // Step info for the overlay's turn cues (UI only).
     view.kind = static_cast<u8>(step->kind);
     view.left = static_cast<u8>(std::max(1, step->count - s->progress.done));
     view.optional = step->optional;
@@ -996,7 +977,7 @@ void FrameHook(const Core::CPUThreadGuard& guard, bool resimulating,
   Frame(memory, p1 && p2);
   if (!resimulating)
   {
-    // The flow's changes, first runs only (a re-run repeats them).
+    // Log changes on first runs only.
     const std::optional<State> after = ReadState(memory);
     if (after && (!before || before->phase != after->phase ||
                   before->progress.step != after->progress.step ||

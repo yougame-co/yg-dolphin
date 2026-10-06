@@ -275,8 +275,8 @@ TEST(OrcaKitFont, OverlayPunctuationHasSubstitutes)
   EXPECT_TRUE(GameFont::Substitute(U'Q').empty());
 }
 
-// Without the game's fonts (no disc, no GPU here) every primitive draws in ImGui's font, in an ImGui
-// frame set up as OnScreenUI sets one up, without an ImGui assert.
+// Without the game's fonts (no disc or GPU here), every primitive draws in ImGui's font, in a frame
+// set up the way OnScreenUI does, without an ImGui assert.
 TEST(OrcaKitDraw, EveryPrimitiveDrawsWithoutTheGamesFont)
 {
   ImGuiContext* context = ImGui::CreateContext();
@@ -348,9 +348,9 @@ TEST(OrcaKitDraw, EveryPrimitiveDrawsWithoutTheGamesFont)
   ImGui::DestroyContext(context);
 }
 
-// Design F's pieces: the turn's pulse on a one-second beat, the portrait's ribbon keeping its words
-// inside it, the set's dots, the searching ring, and the YouGame layer's cards (the site's avatar
-// colours, the chat wrapped inside its card), all drawn in an ImGui frame without an assert.
+// The overlay's pieces: the turn pulse on a one-second beat, the portrait ribbon keeping its words
+// inside it, the set dots, the searching ring, and the YouGame cards (the site's avatar colours,
+// chat wrapped inside its card), all drawn in an ImGui frame without an assert.
 TEST(OrcaKitDraw, DesignFPieces)
 {
   const Kit::Beat rest = Kit::TurnPulse(7.0), peak = Kit::TurnPulse(7.5), late = Kit::TurnPulse(7.9);
@@ -410,7 +410,7 @@ TEST(OrcaKitDraw, DesignFPieces)
       EXPECT_LT(tag.max.y, mid.y);
       EXPECT_GE(tag.min.x, 0);
       EXPECT_LT(tag.max.x, mid.x + 3 * u);
-      const Kit::Box low = Kit::TurnTag(dl, ImVec2(5, 5), 3 * u, u, "HBOX PICKS", {},
+      const Kit::Box low = Kit::TurnTag(dl, ImVec2(5, 5), 3 * u, u, "BO PICKS", {},
                                         Kit::PortTone(1), -1, 3.4, false, lo, hi);
       EXPECT_GT(low.min.y, 5);
       EXPECT_GE(low.min.x, 0);
@@ -497,7 +497,7 @@ TEST(OrcaKitDraw, DesignFPieces)
   ImGui::DestroyContext(context);
 }
 
-// Orca's hints as the control guide's buttons and words (design F's bottom-right legend).
+// Orca's hints as the control guide's buttons and words (the bottom-right legend).
 // The acting player's blink: 2.5 beats a second from the turn's start, lit 60% of each beat, a
 // burst of three ripples in the first 0.8 s and none after.
 TEST(OrcaKit, AttentionBlinks)
@@ -564,8 +564,8 @@ TEST(OrcaKitDraw, TitlesFollowTheLook)
   EXPECT_EQ(Kit::LabelLook(7.2f).top, IM_COL32_WHITE);
 }
 
-// The player's own disc (ORCA_TEST_DISC): both faces read, unpacked and parsed, with every letter
-// and digit the overlay writes, nothing of them kept anywhere but this process.
+// With a Brawl disc image (ORCA_TEST_DISC): both font faces read, unpack and parse, with every
+// letter and digit the overlay writes, and nothing from them is kept outside this process.
 TEST(OrcaKitFont, ReadsBothFacesFromTheDisc)
 {
   const char* disc = std::getenv("ORCA_TEST_DISC");

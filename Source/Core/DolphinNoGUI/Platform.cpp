@@ -55,8 +55,8 @@ void Platform::UpdateRunningFlag()
     const auto& system = Core::System::GetInstance();
     const auto ios = system.GetIOS();
     const auto stm = ios ? ios->GetDeviceByName("/dev/stm/eventhook") : nullptr;
-    // Orca: an online session stops at once (the power button would reach only this player's game,
-    // and the game can't answer it while the session waits for the room).
+    // Orca: a session stops at once. The power button would reach only this player's game, which
+    // can't answer it while the session waits for the room.
     if (!Orca::SessionActive() && !m_tried_graceful_shutdown.IsSet() && stm &&
         std::static_pointer_cast<IOS::HLE::STMEventHookDevice>(stm)->HasHookInstalled())
     {
@@ -73,8 +73,8 @@ void Platform::UpdateRunningFlag()
 void Platform::EndSoloPauseForDropIn()
 {
   auto& system = Core::System::GetInstance();
-  // Only the player's own pause (BeginPause): the CPU also steps at boot, after an HLE reload and
-  // on a panic, and none of those is this one to end.
+  // Only end the player's own pause (BeginPause). The core also pauses at boot, after an HLE reload
+  // and on a panic, and those aren't ours to end.
   if (!Orca::SessionActive() || !Rollback::OnlineMatch::Pausing() ||
       Core::GetState(system) != Core::State::Paused || Rollback::OnlineMatch::SoloPauseAllowed())
   {
@@ -147,7 +147,7 @@ void Platform::SetEmbed(const Embed::Options& options)
 {
   m_embed = options;
   m_embed_rect_known = options.enabled;
-  // A --rect too small for the game: the platform creates the view hidden (Embed.h).
+  // If --rect was too small, the platform creates the view hidden (Embed.h).
   m_embed_too_small = options.too_small;
   Orca::UX::SetHostVisible(!m_embed_too_small);
 }
@@ -186,8 +186,8 @@ void Platform::ProcessEmbedCommands()
     }
     if (ready)
     {
-      // What this build can do beyond the base protocol, before "ready" (the app answers with
-      // "caps <list>"). Outside a session: nothing.
+      // Announce this build's extra features before "ready"; the app answers with "caps <list>".
+      // Prints nothing outside a session.
       Orca::Status::PrintCaps();
       Embed::Out(*ready);
     }
@@ -210,7 +210,7 @@ void Platform::ProcessEmbedCommands()
     in >> cmd;
     if (cmd == "quit")
     {
-      // At once, also outside a session: the app is closing the player (or has died).
+      // Stop at once, session or not: the app is closing the player or has died.
       Stop();
     }
     else if (cmd == "rect")
@@ -219,17 +219,17 @@ void Platform::ProcessEmbedCommands()
       std::getline(in, rest);
       if (const std::optional<Embed::Rect> rect = Embed::ParseRect(rest))
       {
-        // Too small for the game: hidden at its last size, never shrunk to a sliver (Embed.h).
+        // A rect too small for the game hides it at its last size instead (Embed.h).
         const bool too_small = Embed::TooSmall(*rect);
         if (!too_small)
         {
           m_embed.rect = *rect;
           m_embed_rect_known = true;
-          // The layout first: until the window system resizes the surface, the presenter keeps
-          // the layout of the window it still has (PresentLayout.h ChooseLayout).
+          // Update the layout first: the presenter keeps using it for the old surface until the
+          // window system resizes it.
           ApplyEmbedView();
           EmbedSetRect(*rect);
-          // The YouGame button's units: the page's device pixels (UX/YgOrb.h ScaledPlace).
+          // The YouGame button is placed in the page's device pixels (UX/YgOrb.h).
           Orca::UX::YgOrb::SetViewSize(rect->w, rect->h);
         }
         if (too_small != m_embed_too_small)
@@ -241,11 +241,10 @@ void Platform::ProcessEmbedCommands()
     }
     else if (cmd == "view")
     {
-      // Where the picture is laid out, in `rect`'s units and origin; `rect` stays the window. The
-      // page keeps the game in the whole player box while its menu's panel covers the left of it
-      // (the window starts right of the panel), so the game neither shrinks nor moves. `view off`:
-      // the window again. No cap (YouGame forces the latest Orca): an older one says it doesn't
-      // know the line.
+      // Where to lay out the picture, in `rect`'s units and origin, while `rect` stays the window.
+      // When the page's menu panel covers part of the player box, the window shrinks but the view
+      // keeps the whole box, so the game neither shrinks nor moves. `view off` uses the window
+      // again.
       std::string rest;
       std::getline(in, rest);
       std::istringstream words(rest);
@@ -269,8 +268,7 @@ void Platform::ProcessEmbedCommands()
     }
     else if (cmd == "dim")
     {
-      // The page's dim while its menu is open over the game: N percent black (0-100, 0 off) over
-      // everything Orca draws (UX/Overlay.h SetDim). No cap, as `view`.
+      // Dims everything Orca draws by N percent (0-100, 0 is off) while the page's menu is open.
       std::string value;
       in >> value;
       int percent = 0;
@@ -289,12 +287,12 @@ void Platform::ProcessEmbedCommands()
     }
     else if (cmd == "pause")
     {
-      // A session pauses only while this player's game is alone in it (Core::SetState asks
-      // Rollback::OnlineMatch::BeginPause): with a friend, the friend's game keeps going.
+      // A session pauses only while this player is alone in it (Core::SetState checks with
+      // Rollback::OnlineMatch::BeginPause), since a friend's game must keep going.
       if (Core::GetState(system) == Core::State::Running)
         Core::SetState(system, Core::State::Paused);
       else if (Core::GetState(system) != Core::State::Paused && !Orca::SessionActive())
-        m_pause_pending = true;  // still starting
+        m_pause_pending = true;  // Still starting.
       if (!m_pause_pending && Core::GetState(system) != Core::State::Paused)
         Embed::Out("unsupported pause");
       report_state();
@@ -308,8 +306,7 @@ void Platform::ProcessEmbedCommands()
     }
     else if (cmd == "focus" || cmd == "blur")
     {
-      // The game has the input again only with the page's menu shut: never dimmed then, whatever
-      // `dim 0` the page may have missed.
+      // Focus means the page's menu is closed, so clear the dim even if a `dim 0` was missed.
       if (cmd == "focus")
         Orca::UX::SetDim(0);
       EmbedSetFocus(cmd == "focus");
@@ -321,7 +318,7 @@ void Platform::ProcessEmbedCommands()
     }
     else if (cmd == "volume")
     {
-      // 0..1, linear, like the libretro host's gain. Only this run's layer: Dolphin.ini keeps its own.
+      // Linear 0..1. Set for this run only; Dolphin.ini keeps its own volume.
       float volume = 1.0f;
       if (in >> volume && std::isfinite(volume))
       {
@@ -332,29 +329,29 @@ void Platform::ProcessEmbedCommands()
     }
     else if (cmd == "save" || cmd == "load")
     {
-      // Save states are the app's libretro feature; Orca keeps the game's own saves in its NAND.
+      // Not supported: Orca keeps the game's own saves in its NAND.
       int slot = 0;
       in >> slot;
       Embed::Out(fmt::format("unsupported {} {}", cmd, slot));
     }
     else if (cmd == "caps")
     {
-      // The features the app understands (Orca::Status::CAPS lists ours).
+      // The features the app supports (Orca::Status::CAPS lists ours).
       std::string rest;
       std::getline(in, rest);
       Orca::Status::SetAppCaps(rest);
     }
     else if (cmd == "join")
     {
-      // Into a friend's game, from the running one (Orca::Online::ValidCode checks the code).
+      // Join a friend's game from the running one (Orca::Online::ValidCode checks the code too).
       std::string code;
       in >> code;
       const bool valid = code.size() >= 6 && code.size() <= 12 &&
                          std::all_of(code.begin(), code.end(), [](char c) {
                            return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9');
                          });
-      // Before the app's "caps" line arrives (it answers "orca caps", printed at the first frame), a
-      // join waits for it: the emulator thread takes it once "join" is on.
+      // A join sent before the app's "caps" line waits; the emulator thread takes it once the
+      // app's caps include "join".
       if (!valid)
         Embed::Out("unsupported join");
       else
@@ -362,8 +359,8 @@ void Platform::ProcessEmbedCommands()
     }
     else if (cmd == "host")
     {
-      // Host the room the queue matched this game into (ORCA.md "Matchmaking"), from the running
-      // game; taken once the app's "caps" line turns "host" on. The same code check as join's.
+      // Host the room matchmaking put this game into (see ORCA.md, "Matchmaking"). Taken once the
+      // app's caps include "host". Same code check as join.
       std::string code;
       in >> code;
       const bool valid = code.size() >= 6 && code.size() <= 12 &&
@@ -377,16 +374,15 @@ void Platform::ProcessEmbedCommands()
     }
     else if (cmd == "queue-cancel")
     {
-      // The app's search ended (cancelled, failed, or the match never came): the overlay stops
-      // saying it searches, and on the queue's own character select the player isn't ready any
-      // more (Start searches again; `orca queue unready` follows).
+      // The app's search ended without a match: stop showing the search and un-ready the player
+      // on the queue's character select (Start searches again).
       Orca::UX::Search::End();
       Orca::UX::Queue::ClearReady();
     }
     else if (cmd == "queue")
     {
-      // "queue rating <n|->": this player's rating in the current queue (ranked) or none, before
-      // host or join; it rides the player's queue identity to the other Orca (UX/Queue.h).
+      // "queue rating <n|->": this player's ranked rating, or none, sent before host or join. It is
+      // shared with the opponent along with the player's queue identity (UX/Queue.h).
       std::string what, value;
       in >> what >> value;
       int rating = 0;
@@ -397,8 +393,7 @@ void Platform::ProcessEmbedCommands()
                rating >= 0 && rating <= 0xFFFE)
       {
         Orca::UX::Queue::SetOwnRating(rating);
-        // After a set, the page's second line: the new rating, once the site rated the set (the
-        // VICTORY / DEFEAT panel counts to it, UX/SetEnd.h).
+        // After a set, this is the new rating; the end-of-set panel counts up to it (UX/SetEnd.h).
         Orca::UX::SetEnd::Current().QueueRating(rating, Orca::UX::SetEnd::NowMs());
       }
       else
@@ -406,14 +401,13 @@ void Platform::ProcessEmbedCommands()
     }
     else if (cmd == "leave")
     {
-      // As join: taken once the app's "caps" line turns "leave" on.
+      // Like join: taken once the app's caps include "leave".
       Orca::Online::RequestLeave();
     }
     else if (cmd == "delay")
     {
-      // This player's input delay: "auto" (adaptive) or a fixed 1 to max_delay (6) frames. Kept
-      // for the run and applied while the app's "caps" line has "delay" on; mid-match, from the
-      // next frame.
+      // This player's input delay: "auto" or a fixed 1 to max_delay frames. Applies while the
+      // app's caps include "delay"; mid-match, from the next frame.
       std::string value;
       in >> value;
       int frames = 0;
@@ -428,9 +422,9 @@ void Platform::ProcessEmbedCommands()
     }
     else if (cmd == "direct")
     {
-      // The player's switch for direct links to the other players ("direct on|off", ORCA.md
-      // "Direct links"): kept for the run and applied while the app's "caps" line has "direct" on;
-      // the room turns its links off or on at once (the relay carries every input either way).
+      // "direct on|off": the player's switch for direct links to other players. Applies at once
+      // while the app's caps include "direct"; the relay carries every input either way.
+      // See ORCA.md, "Direct links".
       std::string value;
       in >> value;
       if (value == "on" || value == "off")
@@ -440,8 +434,8 @@ void Platform::ProcessEmbedCommands()
     }
     else if (cmd == "ping")
     {
-      // The online overlay's ping beside its circle (off until the app asks): "on" the ping, "full"
-      // also the delay and rollbacks per second.
+      // Online stats in the overlay, off by default: "on" shows ping, "full" adds delay and
+      // rollbacks per second.
       std::string value;
       in >> value;
       if (value == "on" || value == "off" || value == "full")
@@ -451,8 +445,8 @@ void Platform::ProcessEmbedCommands()
     }
     else if (cmd == "perf")
     {
-      // The overlay's frame meter, solo too (on, "fps", until the app says): "fps" the frames shown
-      // in the last second and the longest, "detailed" also a graph of the last 2 s.
+      // The overlay's frame meter, solo too: "fps" shows frames in the last second and the longest
+      // frame, "detailed" adds a graph of the last 2 s.
       std::string value;
       in >> value;
       if (value == "off" || value == "fps" || value == "detailed")
@@ -464,8 +458,8 @@ void Platform::ProcessEmbedCommands()
     }
     else if (cmd == "chat")
     {
-      // A line of the page's chat while Orca fills the screen (caps `chat`, UX/Chat.h): a toast.
-      // The player's own words: neither this nor anything after it prints or logs them.
+      // A chat line from the page, shown as a toast while Orca fills the screen (UX/Chat.h).
+      // Players' words are never printed or logged.
       if (std::optional<Orca::UX::Chat::Line> chat = Orca::UX::Chat::Parse(line))
         Orca::UX::ShowChat(std::move(chat->name), std::move(chat->text));
       else
@@ -473,7 +467,7 @@ void Platform::ProcessEmbedCommands()
     }
     else if (cmd == "orb")
     {
-      // The YouGame button where the page's own stands under Orca (caps `yougame`, UX/YgOrb.h).
+      // Draws the YouGame button where the page's own sits under Orca (UX/YgOrb.h).
       if (std::optional<Orca::UX::YgOrb::Command> orb = Orca::UX::YgOrb::ParseOrb(line))
         Orca::UX::YgOrb::Apply(*orb);
       else
@@ -481,8 +475,8 @@ void Platform::ProcessEmbedCommands()
     }
     else if (cmd == "notice")
     {
-      // A line beside the YouGame button (caps `yougame`): someone joined, is on voice, wrote. A
-      // player's words: neither this nor anything after it prints or logs them.
+      // A notice beside the YouGame button, e.g. someone joined or wrote. Players' words are never
+      // printed or logged.
       if (std::optional<Orca::UX::YgOrb::Notice> notice = Orca::UX::YgOrb::ParseNotice(line))
         Orca::UX::YgOrb::Show(std::move(*notice));
       else
@@ -490,8 +484,8 @@ void Platform::ProcessEmbedCommands()
     }
     else if (cmd == "test-shot" && Orca::GetEnv("ORCA_TEST_COMMANDS") == "1")
     {
-      // Tests only: a screenshot named <name> (a-z 0-9 - _) at the next present, into the user
-      // folder's ScreenShots; with ORCA_TEST_PRESENT the overlay is in it, a stall's redraws too.
+      // Tests only: save a screenshot <name>.png (a-z 0-9 - _) at the next present into the user
+      // ScreenShots folder. With ORCA_TEST_PRESENT the overlay is included.
       std::string name;
       in >> name;
       const bool valid = !name.empty() && name.size() <= 64 &&
@@ -507,25 +501,25 @@ void Platform::ProcessEmbedCommands()
     }
     else if (cmd == "test-drop-room" && Orca::GetEnv("ORCA_TEST_COMMANDS") == "1")
     {
-      // Tests only: the room's connection drops as a network failure would.
+      // Tests only: drop the room connection as a network failure would.
       Orca::Online::TestDropRoom();
     }
     else if (cmd == "test-direct" && Orca::GetEnv("ORCA_TEST_COMMANDS") == "1")
     {
-      // Tests only: direct links drop datagrams ("off", "in", "out"), stop dropping ("on"), or are
-      // built anew ("rebuild").
+      // Tests only: make direct links drop datagrams ("off", "in", "out"), stop dropping ("on"),
+      // or reconnect ("rebuild").
       std::string value;
       in >> value;
       Orca::Online::TestDirect(value);
     }
     else if (cmd == "prepare-join")
     {
-      // The host invited a friend who will drop into this game (drop-in join).
+      // The host invited a friend who will drop into this game.
       Orca::Online::PrepareJoin();
     }
     else if (cmd == "reset")
     {
-      // A session refuses the reset button (it would reach one player's game only).
+      // Refused in a session: the reset button would reach only this player's game.
       if (Orca::SessionActive() || !Core::IsRunning(system))
         Embed::Out("unsupported reset");
       else

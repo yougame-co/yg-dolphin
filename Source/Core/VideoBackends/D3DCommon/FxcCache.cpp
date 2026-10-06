@@ -27,24 +27,21 @@ namespace D3DCommon::FxcCache
 {
 namespace
 {
-// The file: MAGIC and FORMAT, then one record per compile: its size (u32), its key, a SHA-1 of the
-// key and the bytecode together, and the bytecode. A record whose SHA-1 doesn't match (a torn
-// write, or two processes appending at once) ends the read, and the file is written again from the
-// records before it, so no bytecode is ever read back under another compile's key.
+// File layout: MAGIC, FORMAT, then one record per compile: bytecode size (u32), key, SHA-1 of key
+// plus bytecode, and the bytecode. A record that fails its check (torn write, or two processes
+// appending at once) ends the read, and the file is rewritten from the good records before it, so
+// bytecode is never read back under the wrong key.
 constexpr u32 MAGIC = 0x4358464f;  // "OFXC"
-// Another FORMAT must also change what RecordCheck hashes (fold FORMAT into it): an older Orca
-// still running on the same user folder keeps appending its records after a newer one wrote its
-// header.
+// Changing FORMAT must also change what RecordCheck hashes, since an older Orca sharing the user
+// folder may keep appending old-format records after a newer one rewrote the header.
 constexpr u32 FORMAT = 1;
-// A file past this starts over: the shaders of older builds pile up when the generators change,
-// and the whole file is in memory (Luis's Brawl and P+ specialized shaders: about 8 MB of DXBC).
+// A larger file starts over. Shaders from older builds pile up as the generators change, and the
+// whole file is held in memory (Brawl's and P+'s specialized shaders are about 8 MB).
 constexpr u64 MAX_FILE_SIZE = u64{64} << 20;
 constexpr u32 MAX_RECORD_SIZE = u32{16} << 20;
-// The file stays open for the whole run, and on Windows a plain open (_tfopen_s) shares nothing
-// once it writes: while one Orca had it open, a second on the same user folder could neither read
-// it nor keep anything in it, and no other program could read it. Every open here lets others read
-// and write it. Two Orcas writing at once can tear a record; its check keeps it from being read
-// (the records after it are lost to the next run, not misread).
+// The file stays open for the whole run. A plain open on Windows locks out other processes, so
+// every open here shares read and write access. Two instances writing at once can tear a record;
+// its check stops it being read, so later records are lost rather than misread.
 constexpr File::SharedAccess SHARED = File::SharedAccess::ReadWrite;
 
 using Digest = Common::SHA1::Digest;
@@ -74,8 +71,7 @@ Digest RecordCheck(const Key& key, std::span<const u8> bytecode)
   return context->Finish();
 }
 
-// Unbuffered, so each record (and the header) goes to the file in one write: no part of one sits
-// in a buffer while another Orca appends.
+// Unbuffered, so each record goes out in one write and can't interleave with another process's.
 bool OpenToWrite(File::IOFile& file, const std::string& path, const char* mode)
 {
   if (!file.Open(path, mode, SHARED))
@@ -86,7 +82,6 @@ bool OpenToWrite(File::IOFile& file, const std::string& path, const char* mode)
 
 void WriteRecord(File::IOFile& file, const Key& key, std::span<const u8> bytecode)
 {
-  // One write per record.
   const u32 size = static_cast<u32>(bytecode.size());
   const Digest check = RecordCheck(key, bytecode);
   std::vector<u8> record(sizeof(size) + key.size() + check.size() + bytecode.size());
@@ -103,11 +98,11 @@ void WriteRecord(File::IOFile& file, const Key& key, std::span<const u8> bytecod
 
 std::string FilePath()
 {
-  // Creates the folder if needed. No host config in the name: FXC's input already has it.
+  // Creates the folder if needed. No host config in the name: the key already covers it.
   return GetDiskShaderCacheFileName(APIType::D3D, "fxc", false, false);
 }
 
-// Reads every whole, matching record; false when the file doesn't end right after the last one.
+// Reads every valid record. Returns false unless the file ends right after the last one.
 bool ReadRecords(const std::string& path, std::map<Key, std::vector<u8>>* entries)
 {
   File::IOFile in(path, "rb", SHARED);
@@ -125,8 +120,8 @@ bool ReadRecords(const std::string& path, std::map<Key, std::vector<u8>>* entrie
     return false;
   for (;;)
   {
-    // Past it when another Orca's record was still being appended at the size read: that record
-    // read whole and checked.
+    // May be past the size measured at open if another process was appending; that record was
+    // still read whole and checked.
     if (in.Tell() >= file_size)
       return true;
     u32 size = 0;
@@ -159,7 +154,7 @@ void OpenLocked(State& state)
     return;
   }
 
-  // Missing, from another format, too big, or with a bad record: written again from what read.
+  // Missing, old format, too big, or a bad record: rewrite it from what was read.
   if (File::Exists(path))
   {
     WARN_LOG_FMT(VIDEO, "Orca: {} didn't read to its end; writing it again with {} shaders", path,
@@ -171,7 +166,7 @@ void OpenLocked(State& state)
   state.file.WriteArray(header, 2);
   for (const auto& [key, bytecode] : state.entries)
     WriteRecord(state.file, key, bytecode);
-  // Appended to from here: "wb" writes where it is, over anything another Orca appended since.
+  // Reopen to append: "wb" would overwrite anything another process appended meanwhile.
   OpenToWrite(state.file, path, "ab");
 }
 
@@ -195,8 +190,7 @@ std::optional<Digest> ReadCompilerDigest()
 #endif
 }
 
-// The compiler is loaded before the first compile (LoadLibraries) and is the same file for the
-// whole process.
+// The compiler DLL is loaded before the first compile and doesn't change during the process.
 const std::optional<Digest>& CompilerDigest()
 {
   static const std::optional<Digest> digest = ReadCompilerDigest();
@@ -218,7 +212,7 @@ std::optional<Key> MakeKey(std::string_view hlsl, std::string_view entry, std::s
 Key KeyFor(const Digest& compiler, std::string_view hlsl, std::string_view entry,
            std::string_view target, u32 flags, std::string_view macros)
 {
-  // Every part with its length, so no two inputs hash the same bytes.
+  // Prefix each part with its length so different inputs can't hash the same bytes.
   auto context = Common::SHA1::CreateContext();
   const auto part = [&context](const void* data, size_t size) {
     const u64 size64 = size;
@@ -259,7 +253,7 @@ void Store(const Key& key, std::span<const u8> bytecode)
   if (state.file.IsOpen())
   {
     WriteRecord(state.file, key, bytecode);
-    // A killed Orca (the app's startup timer, a closed window) keeps what it compiled.
+    // Flush so a killed process keeps what it compiled.
     state.file.Flush();
   }
 }

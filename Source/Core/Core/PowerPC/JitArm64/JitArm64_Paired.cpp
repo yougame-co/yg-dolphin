@@ -371,10 +371,9 @@ void JitArm64::ps_arith(UGeckoInstruction inst)
       const ARM64Reg nan_temp_reg = single ? EncodeRegToSingle(V1Q) : EncodeRegToDouble(V1Q);
       const ARM64Reg nan_temp_reg_paired = reg_encoder(V1Q);
 
-      // Check if we need to handle NaNs. Orca: the lanes' sum, not FMAXP: under FPCR.AH (an Apple
-      // M4 and later) FMAXP of a NaN and a number is the second operand, so a NaN in ps0 alone went
-      // unseen there. A sum is a NaN when either lane is (and for +inf beside -inf, which the far
-      // path below leaves as it is).
+      // Check if we need to handle NaNs. Orca: test the lanes' sum, not FMAXP, which under FPCR.AH
+      // returns the second operand for a NaN and a number. The sum is a NaN if either lane is (or
+      // for +inf and -inf, which the path below leaves as is).
       m_float_emit.FADDP(nan_temp_reg, result_reg);
       m_float_emit.FCMP(nan_temp_reg);
       FixupBranch no_nan = B(CCFlags::CC_VC);
@@ -384,10 +383,9 @@ void JitArm64::ps_arith(UGeckoInstruction inst)
       SwitchToFarCode();
       SetJumpTarget(nan);
 
-      // Orca: a lane the operation made NaN from no NaN input gets PowerPC's default NaN, which is
-      // positive; the host's (FPCR.AH: negative on an Apple M4 and later) differs from it only in
-      // the sign, so clearing the sign bit of every NaN lane makes it. A lane with a NaN input is
-      // replaced by that input just below.
+      // Orca: a NaN made from non-NaN inputs must be PowerPC's positive default NaN. The host's
+      // differs only in sign (negative under FPCR.AH), so clear the sign of every NaN lane. Lanes
+      // with a NaN input are replaced by that input below.
       m_float_emit.FCMEQ(size, nan_temp_reg_paired, result_reg, result_reg);
       m_float_emit.NOT(nan_temp_reg_paired, nan_temp_reg_paired);
       m_float_emit.SHL(size, nan_temp_reg_paired, nan_temp_reg_paired, size - 1);
@@ -533,10 +531,9 @@ void JitArm64::ps_sumX(UGeckoInstruction inst)
 
   if (m_accurate_nans)
   {
-    // PowerPC's NaN rules for a.ps0 + b.ps1, whatever the host's: the first NaN of the two, made
-    // quiet; with neither a NaN (inf + -inf), the positive default NaN, where the host's is
-    // negative under FPCR.AH (an Apple M4 and later). The sum goes through V0, since d can be a or
-    // b.
+    // PowerPC's NaN rules for a.ps0 + b.ps1: the first NaN of the two, made quiet, or for
+    // inf + -inf the positive default NaN (the host's is negative under FPCR.AH). The sum goes
+    // through V0, since d can be a or b.
     const auto V0 = fpr.GetScopedReg();
     const ARM64Reg S0 = scalar_reg_encoder(V0);
     const ARM64Reg SA = scalar_reg_encoder(VA);

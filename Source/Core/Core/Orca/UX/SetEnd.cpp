@@ -99,7 +99,7 @@ void RatingCount::Arrive(int after, double now, int before)
   }
   if (after == m_after)
     return;
-  // Another number: on from where the count stands.
+  // A different number: count on from where the count stands.
   m_from = At(now).shown;
   m_after = after;
   m_arrived = now;
@@ -292,7 +292,7 @@ void Model::SetVerdict(Outcome out, bool forfeit, int mine, int theirs, int befo
   }
   else
   {
-    // The block's panel: the room's word on the score and the outcome stands.
+    // The match block already opened the panel. The room's score and outcome take precedence.
     m_out = out;
     if (mine + theirs > 0)
     {
@@ -333,7 +333,7 @@ void Model::QueueRating(int rating, double now)
   {
     return;
   }
-  // The page's number before the set, sent again as it searches anew, is no news.
+  // The app resends the old rating when it searches again. Ignore it.
   if (!m_rating.Arrived() && rating == m_rating.Before())
     return;
   if (m_rating.At(now).phase == RatingCount::Phase::Gone)
@@ -450,7 +450,7 @@ void Model::SetOver(double now)
   if (m_set_over)
     return;
   m_set_over = true;
-  // The set is decided: whatever was counting down is over (the verdict took it already).
+  // The set is decided, so any forfeit countdown is over.
   m_ranked_live = false;
   m_left_at.reset();
   m_stall_at.reset();
@@ -463,7 +463,7 @@ void Model::OpponentLeftAfterSet(double now)
   std::lock_guard lk(m_lock);
   if (!m_set_over || m_set_over_leaving)
     return;
-  // Just that: the leave hint under it says the way out.
+  // No second line: the leave hint below says how to leave.
   m_note_title = fmt::format("{} left", Name());
   m_note_line.clear();
   m_note_tone = Widgets::Tone::Neutral;
@@ -515,8 +515,8 @@ std::optional<Notice> Model::NoticeAt(double now, bool* hides_waiting) const
   }
   if (m_ranked_live && (m_left_at || m_stall_at))
   {
-    // A leave's forfeit is the room's GRACE after it, whatever the stall says; a stall alone, the
-    // session's limit.
+    // After a leave, the room's grace period sets the forfeit. A stall alone uses the session's
+    // limit.
     const bool left = m_left_at.has_value();
     const double total = left ? LEAVE_FORFEIT_MS : STALL_FORFEIT_MS;
     const double deadline = (left ? *m_left_at : *m_stall_at) + total;
@@ -621,7 +621,7 @@ double NowMs()
       .count();
 }
 
-// ---- Drawing (the widgets only say how anything looks: Widgets.h) ----
+// ---- Drawing (styling lives in Widgets.h) ----
 
 namespace
 {
@@ -697,8 +697,8 @@ float DrawPanel(ImDrawList* dl, float unit, float cx, float top, const Panel& p)
       char digits[16];
       std::snprintf(digits, sizeof(digits), "%d", r.shown);
       const float number_w = Widgets::MeasureNumber(u, digits).x;
-      // The number and the change centred together, the change clear of the number as both
-      // swell; the number dims while it waits.
+      // Centre the number and the change together, keeping them apart as both swell. The number
+      // dims while it waits.
       const float gap = badge ? 2.0f * u : 0;
       const float left = cx - (number_w + gap + badge_s.x) / 2;
       const float na = r.phase == RatingCount::Phase::Updating ? a * 0.55f : a;
@@ -801,7 +801,7 @@ double DemoFrame(double now)
     return now;
   if (s_demo_at >= 0)
   {
-    // The game's frames as the clock, from the frame asked for.
+    // Use game frames as the clock, starting at the requested frame.
     const int frame = Rollback::Harness::ShownFrame();
     if (frame < s_demo_at)
       return now;
@@ -861,7 +861,7 @@ double DemoFrame(double now)
   }
   else if (s_demo == "stay")
   {
-    // Set over on the results screen: VICTORY, the hint, Z held, the opponent leaving.
+    // After the set on the results screen: VICTORY, the hint, Z held, the opponent leaving.
     if (at(0, 500))
     {
       m.BlockSetOver(static_cast<u32>(loop + 1), true, 2, 1, 1532, now);

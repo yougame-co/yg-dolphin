@@ -12,10 +12,9 @@
 // - a denormal single that was loaded (lfs, psq_l) counts as itself in arithmetic, compares and
 //   conversions, where an ARM CPU without FEAT_AFP (Apple M1 to M3) flushes it as an input;
 // - fctiw(z) of a NaN is 0x80000000; frsqrte of a negative number is the default NaN.
-// The FPSCR bits the JITs write themselves (ZX and VXSQRT, with FX) must match the interpreter's
-// too: mffs and an OS context save carry them into RAM. Data accesses run with address translation
-// on (a BAT maps the first 256 MB as itself), as games run, so Jit64 runs psq_l and psq_st itself
-// (it leaves them to the interpreter with translation off).
+// The FPSCR bits the JITs write themselves (ZX and VXSQRT, with FX) must match too: mffs and an OS
+// context save carry them into RAM. Address translation is on (a BAT maps the first 256 MB as
+// itself), as in games, so Jit64 compiles psq_l and psq_st instead of falling back.
 // On an Apple M4 or later, run it a second time with ORCA_TEST_NO_AFP=1 to cover an M1 to M3.
 
 #include <algorithm>
@@ -877,8 +876,7 @@ TEST_F(JitFloatSemantics, DenormalSingles)
 }
 
 // fres, ps_res, frsqrte and ps_rsqrte of +0 and -0: the infinity of the input's sign, and
-// FPSCR.ZX with FX. Jit64's fres saw -0.0 as nonzero (the sign bit) until 2026-10-02 and skipped
-// both bits, which an OS context save then carried into RAM.
+// FPSCR.ZX with FX. -0.0 counts as zero here; a missed bit would reach RAM via an OS context save.
 TEST_F(JitFloatSemantics, EstimatesOfZero)
 {
   for (const u64 zero : {ZERO, NEG_ZERO})
@@ -997,10 +995,9 @@ TEST_F(JitFloatSemantics, InterpreterSignsUnderHostMode)
   }
 }
 
-// psq_lx and psq_stx with rA = 0, which Project+'s codes use: Jit64 leaves them to the interpreter,
-// and in a session JitArm64 does too, so a Mac and a PC store the same truncated single (the
-// interpreter's psq_st truncates; both JITs round). JitArm64 used to stop on its register cache
-// here (an FPR flushed by the fallback, then flushed again as unused).
+// psq_lx and psq_stx with rA = 0, which Project+'s codes use: both JITs leave them to the
+// interpreter in a session, so every host stores the same truncated single (the interpreter's
+// psq_st truncates; the JITs round). Also covers JitArm64's register cache across the fallback.
 TEST_F(JitFloatSemantics, PairedRa0FallsBack)
 {
   Case store;

@@ -440,7 +440,7 @@ TEST(OrcaSetEndSetOver, NothingIsAForfeitAndTheOpponentLeavingIsOnlyThat)
   EXPECT_FALSE(m.InSetOver());
   m.SetOver(1500);
   EXPECT_TRUE(m.InSetOver());
-  // What used to count a forfeit down shows nothing now.
+  // Leaves, stalls and drops that would count a forfeit down mid-set show nothing here.
   m.OpponentLeft(2000);
   m.Stall(5000, 2000);
   m.OpponentDropped(2000);

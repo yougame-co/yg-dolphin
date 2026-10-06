@@ -27,22 +27,19 @@ std::set<std::string>
 GetTextureDirectoriesForFirstMatchingGameId(const std::string& root_directory,
                                             const std::vector<std::string>& game_ids);
 
-// One replacement file HiresTexture::Update registers.
+// A replacement texture file for HiresTexture::Update to register.
 struct HiresTextureFile
 {
-  std::string id;  // the texture's name, without "_arb"
+  std::string id;  // texture name, without "_arb"
   std::string path;
   bool has_arbitrary_mipmaps = false;
   bool orca_pack = false;  // from Orca's own pack (Data/Sys/Orca/Textures)
 };
 
-// Orca: the replacement files of `player_directories` (the player's own packs,
-// <user>/Load/Textures) and `orca_directories` (Orca's pack, given only in a session), one per
-// texture name. Orca's pack keeps the names it has, so no pack of the player's can bring back a
-// texture Orca replaces (the Online menu's labels: nothing about connecting may look like
-// Nintendo's, ORCA.md "Online menu"); the player's has every other name. Within each, the first
-// directory and file of a name win, as in Dolphin. A mip level file (<name>_mip<N>) is not a
-// texture of its own: it loads with its <name>.
+// Orca: lists the replacement files in the player's packs (<user>/Load/Textures) and in Orca's
+// pack (passed only during a session), one per texture name. Orca's pack wins every name it has,
+// so a player pack can't bring back a texture Orca replaces. Otherwise, as in Dolphin, the first
+// directory and file with a given name win. Mip level files (<name>_mip<N>) are skipped.
 std::vector<HiresTextureFile>
 CollectHiresTextureFiles(const std::vector<std::string>& player_directories,
                          const std::vector<std::string>& orca_directories);

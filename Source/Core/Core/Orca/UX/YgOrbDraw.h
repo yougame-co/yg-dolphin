@@ -12,18 +12,16 @@
 #include "Core/Orca/UX/Kit.h"
 #include "Core/Orca/UX/YgOrb.h"
 
-// Drawing the YouGame button and its lines (YgOrb.h) with the overlay's ImGui: only the overlay
-// (Overlay.cpp) includes this, since the platform layer has no ImGui.
+// Draws the YouGame button and its lines (YgOrb.h) with ImGui. Only Overlay.cpp includes this,
+// since the platform layer has no ImGui. Video thread only, inside the overlay's ImGui frame.
 namespace Orca::UX::YgOrb
 {
-// The button's box, its dot and badge included; an empty box (min == max) when off.
+// The button's bounds including its dot and badge; empty (min == max) when off.
 Kit::Box ButtonBox(const Model::View& view);
-// The button at its place with its ring, dot and badge (the video thread, in the overlay's ImGui
-// frame).
+// Draws the button with its blink ring, held-seat dot and unread badge.
 void DrawButton(ImDrawList* dl, const Model::View& view);
-// A row of the button's pill: a chat line (the name over the words, two lines at most), one of
-// Orca's own toasts (its words beside YouGame's mark), or a notice (Current()'s: "<name> <text>" on
-// one line, the Pill's mark on the avatar, the action's key and verb in grey at the pill's end).
+// One row of the pill beside the button: a chat line (name over up to two lines of text), an Orca
+// toast (text beside the logo), or a notice ("<name> <text>" on one line, with an optional hint).
 struct PillRow
 {
   enum class Type
@@ -37,24 +35,20 @@ struct PillRow
   std::string_view text;
   std::string_view key;
   std::string_view verb;
-  Kind kind = Kind::Join;  // a notice's
+  Kind kind = Kind::Join;  // notices only
   float alpha = 1;
-  double at = 0;  // when it came (the overlay's clock): the rows run oldest first
+  double at = 0;  // arrival time on the overlay's clock; rows are sorted by it
 };
 inline constexpr std::size_t PILL_ROWS = 3;
 
-// The button's pill, the page's own (PlayOrb's Pill) drawn where Orca covers it: a slab that
-// unrolls from under the button along its row at the top, with the newest PILL_ROWS of `rows` and
-// Current()'s notices together, oldest first. Nothing when the button is off or no row shows.
-// No allocation: the notices are copied out once per change (Model::Lines), words are cut to fit
-// by measuring, never by building strings. Returns the slab (empty when none).
-// `right_limit`: where it must end (the top centre's banners' left edge when they are up).
+// Draws the pill that extends right from under the button, showing the newest PILL_ROWS of `rows`
+// and Current()'s notices, oldest first. Does not allocate per frame. The pill ends before
+// `right_limit`. Returns its box, or an empty box when nothing is drawn.
 Kit::Box DrawPill(ImDrawList* dl, const Model::View& view, std::span<const PillRow> rows,
                   double now_ms, float right_limit);
 
-// The longest start of `text` that `measure` (a width) keeps within `width`, at a UTF-8 character
-// boundary, after a space when one fits in its second half (a word is never split unless it alone
-// is too wide). Pure, for the tests.
+// Length of the longest prefix of `text` that fits in `width`, cut at a UTF-8 character boundary.
+// Prefers to cut at a space in the second half, so words split only when one alone is too wide.
 template <typename Measure>
 std::size_t FitPrefix(std::string_view text, float width, Measure&& measure)
 {
@@ -63,7 +57,7 @@ std::size_t FitPrefix(std::string_view text, float width, Measure&& measure)
   const auto continuation = [&](std::size_t i) {
     return i < text.size() && (static_cast<unsigned char>(text[i]) & 0xC0) == 0x80;
   };
-  // The start of `lo` bytes fits, that of `hi` does not; both at character boundaries.
+  // Invariant: a prefix of `lo` bytes fits, `hi` does not; both are character boundaries.
   std::size_t lo = 0, hi = text.size();
   while (true)
   {
@@ -83,7 +77,7 @@ std::size_t FitPrefix(std::string_view text, float width, Measure&& measure)
     else
       hi = mid;
   }
-  // The word ends right at the limit: it stays.
+  // The word ends exactly at the limit, so keep it whole.
   if (lo < text.size() && text[lo] == ' ')
     return lo;
   const std::size_t space = text.substr(0, lo).rfind(' ');

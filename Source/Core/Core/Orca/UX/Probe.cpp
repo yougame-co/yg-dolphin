@@ -26,18 +26,15 @@
 #include "Core/System.h"
 #include "Core/Orca/UX/Overlay.h"
 
-// Research tool for the name tags (ORCA_ONLINE_UX.md 1C), never on in a real session:
-// ORCA_UX_PROBE=<file> runs one command per line at a frame boundary, counted from entry into a
-// scene (Brawl rev 2's scene manager), like the harness's input scripts:
+// Research tool for reverse-engineering Brawl's menus. Never active in a real session.
+// ORCA_UX_PROBE=<file> runs one command per line, at a frame counted from entry into a scene:
 //   @<scene> <frame> write <addr> <hex bytes>      e.g. @muMenuMain 20 write 90180c10 0000
-//                                                  (@<scene>:<n>: on the scene's n-th entry only)
-//   @<scene> <frame> utf16 <addr> <text>           text as UTF-16BE with a 0 terminator
-//   @<scene> <frame> dump <addr> <length> <name>   to <user dir>/probe-<name>.bin
-//   @* 0 watch <addr> <name>                       every frame: log the u32 there when it changes
-//                                                  (re-runs too: frame numbers can go backwards)
-//   @<scene> <frame> stall <ms> 0                  block the CPU thread like a session stall,
-//                                                  calling RepresentDuringStall every 10 ms
-// <addr> is hex, or [hex]+hex for one pointer hop (e.g. [805a00e0]+28).
+//   @<scene> <frame> utf16 <addr> <text>           UTF-16BE text with a 0 terminator
+//   @<scene> <frame> dump <addr> <length> <name>   writes <user dir>/probe-<name>.bin
+//   @* 0 watch <addr> <name>                       logs the u32 there whenever it changes
+//   @<scene> <frame> stall <ms> 0                  blocks the CPU thread like a session stall
+// @<scene>:<n> runs only on the n-th entry into the scene. <addr> is hex, or [hex]+hex for one
+// pointer hop (e.g. [805a00e0]+28).
 namespace Orca::UX
 {
 namespace
@@ -149,9 +146,8 @@ bool TestKnobsAllowed()
 
 void ProbeFrame(const Core::CPUThreadGuard& guard, int frame)
 {
-  // ORCA_UX_PROBE_WATCHDOG=1 (research): when no frame boundary comes for 2 s, sample the guest's
-  // pc and lr from a host thread (racy reads; inside a JIT block pc is the last block exit, so this
-  // only says roughly where the game waits). Test runs only, like every probe knob.
+  // ORCA_UX_PROBE_WATCHDOG=1: if no frame arrives for 2 s, log the guest's pc and lr from a host
+  // thread. The reads are racy and only show roughly where the game is waiting.
   static std::atomic<int> s_last_frame{0};
   s_last_frame = frame;
   static const bool s_dog = [] {
@@ -175,12 +171,12 @@ void ProbeFrame(const Core::CPUThreadGuard& guard, int frame)
   }();
   (void)s_dog;
   static std::vector<Command> commands = Load();
-  // Checked every frame: a host that boots solo can take a real friend's drop-in later.
+  // Checked every frame because a solo host can be joined by a real player later.
   if (commands.empty() || !TestKnobsAllowed())
     return;
   static std::string scene;
   static int scene_start = 0;
-  static std::map<std::string, int> visits;  // entries per scene (first passes and re-runs alike)
+  static std::map<std::string, int> visits;  // entries per scene, rollback re-runs included
   const std::string now = SceneName(guard);
   if (now != scene)
   {

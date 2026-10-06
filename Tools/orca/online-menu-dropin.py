@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 # online-menu-dropin.py: a friend drops into a host who sits on the game's own ONLINE page
-# (ORCA.md "Online menu", "Drop-in"), over a real YouGame dev room, headless and muted. Two Orcas at
-# most.
+# (ORCA.md "Online menu", "Drop-in"), over a real YouGame dev room, headless and muted.
 #
 #   Tools/orca/online-menu-dropin.py <dolphin-emu-nogui> <disc> [--pplus <launcher.dol>] [--invite]
 #                                    [--hold]
@@ -10,31 +9,25 @@
 #    Anyone), and stays there.
 # 2. Friend sends "join <host's room>": the host's keyframe is taken on the ONLINE page, the friend
 #    loads it, catches up and plugs into port 2 ("playing" / "friend-joined").
-# 3. With the friend plugged in, both games leave the menu for With Friends' character select at the
-#    same frame, half a second after the friend plugged in (UX/OnlineMenu.h FriendsMove: "a friend
-#    plugged in, the main menu goes to With Friends' character select" in both logs), and neither
-#    Orca prints any "orca menu" line (what happens while friends play is theirs too, never an
-#    event).
+# 3. Half a second after the friend plugs in, both games move to With Friends' character select
+#    at the same frame (UX/OnlineMenu.h FriendsMove). Neither Orca prints an "orca menu" line: menu
+#    moves while friends play are not events.
 # 4. The friend leaves: the host plays on alone ("friend-left left"), still printing nothing.
-# 5. The checksum gate: the session's end on each side ("Drop-in: back to solo play ... N checksums
-#    matched") matched checksums with the other (N > 0), and neither logged a desync.
+# 5. The checksum gate: each side's session matched checksums with the other, and neither logged a
+#    desync.
 # Fails on a desync, a timeout, an "orca error", or any "orca menu" line.
 #
-# --hold: the same, with the host's game held as if it played a single-player mode until its frame
-# HOLD_UNTIL (ORCA_TEST_HOLD): the host prints "friend-holding" and the friend "friend-waiting" (and
-# waits past the join's 90 s limit if need be); from HOLD_UNTIL the join goes on ("friend-joining",
-# "joining 0") and step 3 follows.
+# --hold: the host's game acts as if in a single-player mode until frame HOLD_UNTIL
+# (ORCA_TEST_HOLD), so the friend waits ("friend-waiting"), past the 90 s join limit if needed.
+# Then the join goes on and step 3 follows.
 #
 # --invite (one Orca at a time, two boots): the app invites a friend who hasn't arrived yet. The
 # host, on the ONLINE page, gets "prepare-join" and stores its keyframe; nobody takes it.
-#   fresh: the host picks With Anyone > Casual some 15 s later, alone in its room but within the
-#          30 s in which a friend who arrives would replay from that keyframe (and so replay the
-#          pick): nothing prints (OnlineMatch AloneAt).
-#   stale: the same, but the pick comes more than 30 s after the keyframe, which no longer serves
-#          an arrival (a friend would get a new one): "orca menu online casual local" prints, so the
-#          reader does run in a room and only the fresh keyframe kept the first one quiet.
-# Each checks that the keyframe was stored before the pick, so nothing else of drop-in was under
-# way when the menu was left.
+#   fresh: the host picks With Anyone > Casual about 15 s later. A friend arriving within 30 s
+#          would replay from that keyframe, pick included, so nothing prints.
+#   stale: the pick comes over 30 s after the keyframe, which a friend would no longer use, so
+#          "orca menu online casual local" prints.
+# Each checks that the keyframe was stored before the pick.
 import os
 import queue
 import random

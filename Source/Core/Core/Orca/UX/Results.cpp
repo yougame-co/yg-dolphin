@@ -32,13 +32,13 @@ constexpr u32 PORT_STOCKS = 0x0A;
 constexpr u32 PORT_PLACE = 0x0E;
 constexpr u8 TYPE_HUMAN = 0;
 constexpr u8 TYPE_NONE = 3;
-// The rules (gmSetRule): what the Rules menu sets.
+// gmSetRule offsets: what the Rules menu sets.
 constexpr u32 RULE_MODE = 0x02;
 constexpr u32 RULE_STOCKS = 0x04;
 constexpr u32 RULE_STOCK_MINUTES = 0x08;
 constexpr u32 RULE_ITEMS = 0x0C;
-// How many readings may wait for their frames to be final: far more than a rollback window or a
-// joiner's catch-up between two confirmations (a confirmation comes every boundary).
+// Readings waiting to become final. Far more than a rollback window or a joiner's catch-up, since
+// confirmations come every frame.
 constexpr size_t MAX_PENDING = 4096;
 
 bool Pointer(const GuestMemory& m, u32 p)
@@ -150,9 +150,9 @@ GameResult Judge(const ResultBlock& block, int frame)
 {
   GameResult g;
   g.frame = frame;
-  // A no contest: the decision still 9 (the fight's start value; the pause menu's quit leaves it).
-  // Without a decision read, the older reading: +0x0E..+0x0F other than 1 (it is the count of
-  // players tied for first, so this also voided a level time-up's sudden death).
+  // No contest: decision 9 is the fight's initial value, and quitting from pause leaves it. With
+  // no decision read, fall back to +0x0E..+0x0F != 1 (players tied for first, so a tied time-up
+  // is void too).
   if (block.decision == 9 || (block.decision == 0 && block.end != 1))
   {
     g.why = "nocontest";
@@ -223,7 +223,7 @@ void ResultsTracker::Store(int frame, const Reading& reading, u64 resyncs)
     m_started = true;
     m_resyncs = resyncs;
   }
-  // A frame already final here is never stored again (a rollback never reaches a confirmed frame).
+  // Final frames are never stored again: a rollback never reaches a confirmed frame.
   if (m_have_last && frame <= m_last_frame)
     return;
   m_pending[frame] = reading;
@@ -240,8 +240,7 @@ std::vector<GameResult> ResultsTracker::Confirm(int confirmed, int plug_frame)
   {
     const int frame = it->first;
     const Reading& r = it->second;
-    // Frames follow on from the last one: a gap (frames this machine never read) ends what was
-    // being followed.
+    // A gap (frames this machine never read) ends whatever game was being followed.
     const bool follows = m_have_last && frame == m_last_frame + 1;
     if (!follows)
     {
@@ -251,9 +250,9 @@ std::vector<GameResult> ResultsTracker::Confirm(int confirmed, int plug_frame)
     const Scene before = follows ? m_last.scene : Scene::Other;
     if (r.set)
     {
-      // A ranked set: its games are the match block's (RankedSet.h), judged in the game itself.
-      // Only games whose fight began after the opponent's plug frame are reported (on both
-      // machines the same), and none seen before the tracker's first final reading.
+      // Ranked set: the match block (RankedSet.h) judges games inside the game. Report only games
+      // whose fight began after the opponent's plug frame, and none from before the first final
+      // reading.
       const SetBlock::SetState& set = *r.set;
       if (!m_have_set || set.games < m_set_games)
       {
@@ -292,8 +291,7 @@ std::vector<GameResult> ResultsTracker::Confirm(int confirmed, int plug_frame)
         }
         else
         {
-          // A game: the fight starts here, with the frame before it read on both machines (after
-          // the opponent's plug frame).
+          // A new game, counted only if the previous frame was read on both machines.
           m_in_game = follows && frame - 1 > plug_frame;
           m_after_fight = false;
         }
@@ -342,7 +340,7 @@ bool ResultsVerified()
   const Orca::Profile* profile = Orca::ActiveProfile();
   if (!profile || profile->revision != 2)
     return false;
-  // Project+'s launcher boots Brawl rev 2's executable: the same scenes and result info.
+  // Project+'s launcher boots Brawl rev 2's executable, so scenes and result info match.
   return profile->IsLauncher() ? profile->disc == "RSBE01" : profile->game_id == "RSBE01";
 }
 
@@ -388,8 +386,8 @@ int WriteQueueRules(GuestMemory& memory)
 
 void ApplyQueueRules(const Core::CPUThreadGuard& guard, bool alone)
 {
-  // Only at the boundary after the host took its room: a later write could land after a keyframe
-  // a friend replays from.
+  // Only right after the host takes its room. A later write could land after a keyframe the
+  // joiner loads.
   if (!s_rules_pending.exchange(false))
     return;
   if (!alone)

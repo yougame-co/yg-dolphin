@@ -13,22 +13,13 @@
 
 #include "Core/Orca/Session/Events.h"
 
-// The minimal online overlay (ORCA_ONLINE_UX.md 1D), only what the game has nothing native for:
-//   - a small connection circle in the top-left corner while a friend is plugged in, styled after
-//     Brawl's own Wi-Fi connection circle: 3 arcs blue, 2 yellow, 1 red;
-//   - "Waiting for <name>…" while the game has been waiting for a friend's input for 250 ms;
-//   - short toasts, "<name> joined on port N" and "<name> left", under the circle;
-//   - beside the circle, the ping: "32 ms" with embed `ping on` (the YouGame page's default) or
-//     ORCA_UX_STATS=1; with `ping full` or ORCA_UX_STATS=2, also the delay and rollbacks/s;
-//   - the frame meter, solo too: "60 fps · 17 ms", the frames shown in the last second and the
-//     longest of them, coloured while the game misses its pace (embed `perf`, on until it says);
-//   - the page's chat while Orca fills the screen (embed `chat`, Chat.h): "<name>: <text>" for 8 s,
-//     wrapped to under half the width, the last three, under the toasts.
-// It is drawn by the host's OSD layer over the presented image (ImGui), never into the emulated
-// framebuffer, and reads no game state: nothing in it can change emulation or desync.
+// The online overlay: only what the game has nothing native for. A connection circle styled after
+// Brawl's Wi-Fi icon, "Waiting for <name>...", join/leave toasts, the ping, a frame meter and the
+// app's chat. It is drawn with ImGui over the presented image, never into the emulated framebuffer,
+// and reads no game state, so nothing in it can change emulation or desync.
 namespace Orca::UX
 {
-// What the readout beside the circle says.
+// The readout beside the circle.
 enum class Stats
 {
   Off,
@@ -36,12 +27,12 @@ enum class Stats
   Full,  // "32 ms · delay 2 · 1.2 rb/s"
 };
 
-// What the frame meter shows (embed `perf off|fps|detailed`; `fps` until the app says).
+// What the frame meter shows. Defaults to Fps.
 enum class Perf
 {
   Off,
   Fps,       // "60 fps · 17 ms"
-  Detailed,  // also the last 2 s of frame times as a graph, and online the delay and rollbacks/s
+  Detailed,  // adds a 2 s frame-time graph, and online the delay and rollbacks/s
 };
 
 enum class Signal
@@ -51,32 +42,30 @@ enum class Signal
   Bad,
 };
 
-// The link as the overlay needs it (from Events::LinkStats).
+// The link stats the overlay shows.
 struct LinkView
 {
   bool online = false;
   int delay = 0;
   double rollbacks_per_second = 0;
   int deepest_rollback = 0;
-  int stalls = 0;  // frames waited, in total
-  int round_trip_ms = -1;  // the input path's: the direct link's when one is up, else the relay's
-  int transport = 0;       // 0 relay, 1 direct, 2 TURN (Events::LinkStats::transport)
-  int stalled_ms = 0;     // the current stall (0: none); -1: the session doesn't say
-  int waiting_seat = -1;  // whose input it waits for (seat s plays on GameCube port s)
+  int stalls = 0;  // total frames waited
+  int round_trip_ms = -1;  // of the direct link when up, else of the relay
+  int transport = 0;       // 0 relay, 1 direct, 2 TURN
+  int stalled_ms = 0;     // current stall, 0 if none, -1 if unknown
+  int waiting_seat = -1;  // seat being waited for (seat s is GameCube port s)
 };
 LinkView ViewOf(const Events::LinkStats& stats);
 
-// What one frame of the overlay shows. Pure state machine, so the tests drive it with a clock.
+// What one frame of the overlay shows. A pure state machine, so tests can drive it with a clock.
 class OverlayModel
 {
 public:
   static constexpr double TOAST_MS = 3000;
   static constexpr double TOAST_FADE_MS = 500;
   static constexpr int WAITING_AFTER_MS = 250;
-  // The frame meter: fps and the longest frame over the last second, the graph over two. Coloured
-  // (Ok) under 59 fps or past 20 ms a frame; Bad under 50 fps or past two frame periods (a hitch,
-  // as OnlineMatch's HITCH_TIME counts them). The colour is the worst of the readouts at the
-  // boundaries of the last two seconds, so a single hitch stays coloured that much longer.
+  // Frame meter thresholds. Ok below 59 fps or a frame over 20 ms; Bad below 50 fps or a frame
+  // over two frame periods (a hitch). The colour holds the worst of the last two seconds.
   static constexpr double PERF_WINDOW_MS = 1000;
   static constexpr double PERF_GRAPH_MS = 2000;
   static constexpr double PERF_HOLD_MS = 2000;
@@ -84,10 +73,10 @@ public:
   static constexpr double PERF_OK_FRAME_MS = 20;
   static constexpr int PERF_BAD_FPS = 50;
   static constexpr double PERF_BAD_FRAME_MS = 2000.0 / 60;
-  // More unseen frames in a row than any rollback re-runs: a joiner's catch-up.
+  // More unshown frames in a row than any rollback re-runs means a joiner is catching up.
   static constexpr int PERF_MAX_UNSHOWN = 60;
 
-  // A chat line (Chat.h) stays this long, fading like a toast, and the newest CHAT_KEEP show.
+  // A chat line shows this long, fading like a toast. Only the newest CHAT_KEEP show.
   static constexpr double CHAT_MS = 8000;
   static constexpr std::size_t CHAT_KEEP = 3;
 
@@ -95,7 +84,7 @@ public:
   {
     std::string text;
     float alpha;
-    double at = 0;  // when it came (the overlay's clock), for the YouGame pill's order
+    double at = 0;  // arrival time on the overlay's clock, for ordering
   };
   struct ChatToast
   {
@@ -108,33 +97,28 @@ public:
   {
     bool show_signal = false;
     Signal signal = Signal::Good;
-    std::string waiting;  // empty: not shown
+    std::string waiting;  // empty if not shown
     std::vector<Toast> toasts;
     std::vector<ChatToast> chats;  // oldest first
-    std::string stats;  // empty: not shown
-    std::string perf;   // the frame meter; empty: not shown
-    Signal perf_level = Signal::Good;  // Good: plain text
-    std::vector<float> graph;          // Detailed: the last 2 s of frame times (ms), oldest first
+    std::string stats;  // empty if not shown
+    std::string perf;   // frame meter, empty if not shown
+    Signal perf_level = Signal::Good;  // Good means plain text
+    std::vector<float> graph;          // Detailed only: last 2 s of frame times (ms), oldest first
   };
 
-  // The session's plug-in callback (any thread; first runs only, when the list changes). A list equal
-  // to the last one shows nothing new.
+  // Called when the port list changes. Any thread. An unchanged list shows nothing new.
   void OnPorts(int frame, const std::vector<Events::PortInfo>& ports, double now_ms);
-  // A toast of its own (a matchmade game's result: "You won · 1–1"). Any thread.
+  // A custom toast, such as a match result. Any thread.
   void AddToast(std::string text, double now_ms);
-  // A line of the page's chat (embed `chat`, Chat.h), already decoded. Any thread.
+  // A decoded line of the app's chat. Any thread.
   void AddChat(std::string name, std::string text, double now_ms);
-  // The newest link stats (the drawing thread, each frame).
+  // The newest link stats. Drawing thread, each frame.
   void Update(const LinkView& link, double now_ms);
-  // Every frame boundary (the CPU thread): `shown` says the frame that just ended ran rendered, a
-  // first run (not a re-run, nor a joiner's catch-up). A frame's time is the host's wall time since
-  // the last shown frame's boundary, so re-runs in between lengthen it but never count as frames.
-  // The first shown boundary only arms the meter: the one before it can hold a wait (a session's
-  // first boundary waits for the room's ticket).
+  // Every frame boundary, on the CPU thread. `shown` is true for a rendered first run, not a
+  // rollback re-run or catch-up. Re-runs lengthen the measured frame time but never count as
+  // frames. The first shown boundary only arms the meter, since the one before may include a wait.
   void OnFrame(double now_ms, bool shown);
-  // The core paused / resumed (the host thread, around the CPU's own stop and start): the meter's
-  // clock stands still meanwhile, so a boundary that lands between a resume and its callback, or
-  // between a pause's callback and the CPU stopping, times only the running part of its frame.
+  // The core paused or resumed (host thread). The meter's clock stands still while paused.
   void Pause(double now_ms);
   void Resume(double now_ms);
   Frame View(double now_ms, Stats stats, Perf perf = Perf::Off) const;
@@ -142,7 +126,7 @@ public:
 private:
   Signal Quality(double now_ms) const;
   void Meter(double now_ms, Stats stats, Perf perf, Frame* f) const;
-  // The meter's clock: host time less the time paused, standing still while paused.
+  // Host time minus time spent paused.
   double RunningMs(double now_ms) const;
 
   mutable std::mutex m_lock;
@@ -158,68 +142,59 @@ private:
   std::deque<ChatEntry> m_chats;
   LinkView m_link;
   std::deque<std::pair<double, int>> m_stall_history;  // (time, total stalls)
-  // The frame meter, on its own clock (RunningMs): shown frames (boundary, frame time ms) of the
-  // last PERF_WINDOW_MS + PERF_HOLD_MS, enough to give the readout at every boundary the colour
-  // holds for.
+  // Shown frames (boundary, frame time ms) over the last PERF_WINDOW_MS + PERF_HOLD_MS, on the
+  // RunningMs clock.
   std::deque<std::pair<double, double>> m_frames;
-  double m_first_frame = -1;  // where the meter starts: no readout for its first second
-  double m_last_frame = -1;   // the last shown boundary (-1: not armed)
-  int m_unshown = 0;          // unseen frames since it
+  double m_first_frame = -1;  // meter start; no readout for the first second
+  double m_last_frame = -1;   // last shown boundary, -1 if not armed
+  int m_unshown = 0;          // unshown frames since then
   bool m_paused = false;
   double m_paused_at = 0;     // host time
-  double m_paused_ms = 0;     // host time paused, pauses that ended
+  double m_paused_ms = 0;     // total time in finished pauses
 };
 
-// The process's overlay: Init() registers it with the OSD layer and the session.
+// Registers the overlay with the OSD layer and the session.
 void InitOverlay();
 void ShutdownOverlay();
-// While the game waits for a friend the CPU thread is blocked, so no frame is presented and the
-// overlay could not say so: the session calls this from its stall wait (CPU thread), and once the
-// stall nears 250 ms the last frame is shown again with the overlay on it, about 15 times a second.
-// Host-only drawing: the emulated state is untouched.
+// Called from the session's stall wait on the CPU thread, which blocks presenting. Once the stall
+// nears 250 ms it re-presents the last frame with the overlay, about 15 times a second. Host-only.
 void RepresentDuringStall(int stalled_ms);
-// The app hid or showed the game (embed `hide` / `show`): no stall redraws while hidden.
+// The app hid or showed the game. No stall redraws while hidden.
 void SetHostVisible(bool visible);
-// The page's dim (embed `dim N`): N percent black (0-100, clamped; 0: off) over Orca's whole frame
-// while the YouGame menu is open over the game, as the page dims a web game behind its panel. Drawn
-// last, over the picture, Dolphin's messages and everything of the overlay, on every present (a
-// stall's redraws too), easing to the new level over DIM_EASE_S. Host-only drawing: screenshots and
-// frame dumps of the game never have it. Any thread.
+// Dims the frame N percent black (0-100, 0 is off) while the app's menu is open over the game.
+// Drawn last on every present and eased over DIM_EASE_S. Host-only, so screenshots and frame dumps
+// never include it. Any thread.
 void SetDim(int percent);
 int Dim();
 constexpr double DIM_EASE_S = 0.2;
 void SetStats(Stats stats);
 void SetPerf(Perf perf);
-// The game's frame boundary (Orca::Events' boundary callback), for the frame meter.
+// The game's frame boundary, for the frame meter.
 void FrameBoundary(bool shown);
-// A short toast under the circle (OverlayModel::AddToast, now). Any thread.
+// A short toast under the circle. Any thread.
 void ShowToast(std::string text);
-// A line of the page's chat (OverlayModel::AddChat, now). Never logged. Any thread.
+// A line of the app's chat. Never logged. Any thread.
 void ShowChat(std::string name, std::string text);
-// A ranked set's lines (BrawlStages.h), top centre: the set score, and under it whose turn it is
-// on the stage select with its timer. Empty: not shown. Any thread (the frame hook, first runs).
+// A ranked set's lines, top centre: the set score, and whose stage-select turn it is with its
+// timer. Empty hides them. Any thread.
 void SetRulesLines(std::string line, std::string note);
-// The character order's line (CharOrder.h), under the set's score on the character select ("Ada
-// picks first · 0:42"); empty: none. Display only: computed from memory on first runs. Any thread.
+// The character order line under the set score, e.g. "Ada picks first · 0:42". Empty hides it.
+// Display only. Any thread.
 void SetRuleLine(std::string text);
-// The queue's character select (Queue.h), top centre in place of the search's lines: "Casual ·
-// Searching for an opponent…", "ada locked in · Your pick: Start locks it in"; each port's label
-// near its panel at the bottom ("ada · 1532"); and LOCKED IN on a ribbon across the portrait of
-// each player who has locked in, framed in gold (`locked`). Empty: not shown. Display only: computed from
-// memory on first runs. Any thread.
+// The queue's character select: two top-centre lines, a label per port near its panel
+// ("ada · 1532"), and a LOCKED IN ribbon for each `locked` port. Empty hides. Display only. Any
+// thread.
 void SetQueueLines(std::string line, std::string note, std::array<std::string, 4> labels,
                    std::array<bool, 4> locked = {});
-// The colour of port `port` (0-3), as the games draw their panels: red, blue, yellow, green.
+// Port 0-3's panel colour in the games: red, blue, yellow, green.
 struct PortColour
 {
   int r, g, b;
 };
 PortColour PortColourOf(int port);
 OverlayModel& Overlay();
-// The overlay's unit, 1% of the picture's height (it scales with the window), or 0 below
-// OVERLAY_MIN_HEIGHT pixels: then it draws nothing. ImGui rounds a text size to whole pixels and
-// aborts on 0, which a window under ~17 px tall (the app's player box scrolled nearly out of view)
-// used to reach, and nothing would read in a sliver that thin anyway.
+// The overlay's unit, 1% of the picture's height, or 0 (draw nothing) below OVERLAY_MIN_HEIGHT.
+// ImGui aborts on a text size that rounds to 0 pixels, which a very short window would reach.
 constexpr float OVERLAY_MIN_HEIGHT = 100;
 float OverlayUnit(float display_height);
 // A box on the display, in pixels.
@@ -227,17 +202,10 @@ struct PictureArea
 {
   float x = 0, y = 0, w = 0, h = 0;
 };
-// The part of the game's picture inside the display (0, 0, display_w, display_h). With an embed
-// `view` the picture can run past Orca's window (the page's panel covers the window's left, the
-// picture keeps its place), so the overlay's own elements (the corner's circle, ping and frame
-// meter, the toasts and the chat, the top centre's banners, "Waiting for", the set's end, the
-// control guide) stay in this part, while what marks the game's own art (the panels' tabs and
-// frames, the stage select's cursors, the set's dots, the timers in the game's lettering) keeps the
-// whole picture. The overlay's unit stays the whole picture's. The whole picture when none of it
-// is on the display.
+// The part of the picture inside the display. The picture can extend past the window when the
+// app covers part of it. Free-standing overlay elements stay in the visible part; marks on the
+// game's own art use the whole picture. Returns the whole picture if none of it is visible.
 PictureArea VisiblePicture(const PictureArea& picture, float display_w, float display_h);
-// Tests only (unit tests have no presenter): the picture the overlay lays itself out in, in place
-// of the presenter's target rectangle; it can run past the display, as with an embed `view`.
-// nullopt: the presenter's again. Set it before drawing, from the drawing thread.
+// Tests only: overrides the presenter's target rectangle. nullopt restores it. Drawing thread.
 void SetPictureForTests(std::optional<PictureArea> picture);
 }  // namespace Orca::UX

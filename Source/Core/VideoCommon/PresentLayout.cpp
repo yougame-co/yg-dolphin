@@ -38,7 +38,7 @@ LayoutChoice ChooseLayout(const std::optional<LayoutHint>& latest,
 
 MathUtil::Rectangle<int> PlaceInBox(const LayoutBox& box, int draw_w, int draw_h)
 {
-  // As Dolphin's UpdateDrawRectangle in the window: round(w / 2 - draw / 2), from the box's corner.
+  // Same rounding as Dolphin's UpdateDrawRectangle, offset by the box's corner.
   const int left = static_cast<int>(std::round(box.x + box.w / 2.0 - draw_w / 2.0));
   const int top = static_cast<int>(std::round(box.y + box.h / 2.0 - draw_h / 2.0));
   return {left, top, left + draw_w, top + draw_h};

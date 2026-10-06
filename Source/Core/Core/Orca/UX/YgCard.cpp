@@ -24,7 +24,7 @@ ImU32 Rgba(int r, int g, int b, float a)
   return IM_COL32(r, g, b, static_cast<int>(std::lround(std::clamp(a, 0.0f, 1.0f) * 255)));
 }
 
-// The SDK overlay's slate (web/public/sdk.js) and the site's dark tokens.
+// The YouGame site's dark card colours.
 constexpr std::array<int, 3> CARD{15, 23, 42};
 constexpr std::array<int, 3> EDGE{148, 163, 184};
 constexpr std::array<int, 3> INK{248, 250, 252};
@@ -38,11 +38,9 @@ ImU32 Of(const std::array<int, 3>& c, float a)
 
 constexpr const char* FONT_NAME = "Orca YouGame Roboto";
 
-// Roboto from Orca's data, added to ImGui's atlas the first time a card is drawn (the renderer
-// owns the atlas's textures, so a font can join at any time); ImGui's own font without it. The
-// video backend can clear or replace the atlas (OnScreenUI's init), so the font is found by its name
-// in the current one and added again when it's gone; a file that is missing or won't load is
-// tried once. The video thread only.
+// Roboto, added to ImGui's atlas on first use, or ImGui's default font if it can't load. The video
+// backend can replace the atlas, so the font is looked up by name each time and re-added if gone.
+// A missing or broken file is tried once. Video thread only.
 ImFont* Face()
 {
   static bool s_unusable = false;
@@ -86,7 +84,7 @@ void Put(ImDrawList* dl, ImVec2 pos, float px, ImU32 colour, std::string_view te
   }
 }
 
-// The card's slab: a soft shadow, the slate, a hairline edge.
+// Card background: soft shadow, slate fill, hairline edge.
 void Slab(ImDrawList* dl, ImVec2 min, ImVec2 max, float unit, float alpha)
 {
   const float r = 1.9f * unit;
@@ -96,8 +94,7 @@ void Slab(ImDrawList* dl, ImVec2 min, ImVec2 max, float unit, float alpha)
   dl->AddRect(min, max, Of(EDGE, 0.28f * alpha), r, 0, std::max(1.0f, 0.14f * unit));
 }
 
-// The site's lowercasing for its hash and its uppercasing for the initial, for ASCII and Latin-1
-// (U+00C0..U+00DE but U+00D7, and their lower cases): JavaScript's for every name of those.
+// Case mapping for ASCII and Latin-1 (U+00C0..U+00DE except U+00D7), matching JavaScript's.
 char16_t Lower(char16_t c)
 {
   if ((c >= u'A' && c <= u'Z') || (c >= 0xC0 && c <= 0xDE && c != 0xD7))
@@ -111,8 +108,7 @@ char16_t Upper(char16_t c)
   return c;
 }
 
-// The site's initial (web/src/lib/site.ts initial): the trimmed name's first character in capitals,
-// "?" for none.
+// The site's avatar initial: the trimmed name's first character, uppercased, or "?".
 std::string Initial(std::string_view name)
 {
   const std::u16string wide = UTF8ToUTF16(name);
@@ -121,7 +117,7 @@ std::string Initial(std::string_view name)
     const char16_t c = wide[i];
     if (c == u' ' || c == u'\t' || c == u'\n' || c == u'\r')
       continue;
-    // A surrogate pair stays whole (an emoji's initial is the emoji).
+    // Keep a surrogate pair whole, so an emoji's initial is the emoji.
     const bool pair = c >= 0xD800 && c <= 0xDBFF && i + 1 < wide.size();
     return UTF16ToUTF8(pair ? wide.substr(i, 2) : std::u16string(1, Upper(c)));
   }
@@ -143,8 +139,8 @@ ImU32 AvatarColour(std::string_view name)
                                                               {180, 83, 9},
                                                               {220, 38, 38},
                                                               {14, 116, 144}}};
-  // The site hashes the lowercased name's UTF-16 code units (Math.imul, so mod 2^32). The page
-  // sends names cut to 24 characters, which the site hashes whole: those can differ.
+  // FNV-1a over UTF-16 code units, mod 2^32 like the site's Math.imul. Names the app truncated to 24
+  // characters may hash differently from the site.
   u32 h = 2166136261u;
   for (const char16_t c : UTF8ToUTF16(name))
   {
@@ -161,8 +157,7 @@ float TextWidth(std::string_view text, float px)
 
 std::vector<std::string> Wrap(std::string_view text, float px, float width)
 {
-  // ImGui's own word wrap: at spaces, after CJK punctuation, and through a word wider than the
-  // line (a link, "hahahaha...", a name with no spaces), so every line fits.
+  // ImGui's word wrap, which also breaks words wider than the line, so every line fits.
   std::vector<std::string> lines;
   const char* at = text.data();
   const char* const end = text.data() + text.size();
@@ -189,7 +184,7 @@ std::vector<std::string> Wrap(std::string_view text, float px, float width)
 
 void Logo(ImDrawList* dl, ImVec2 pos, float size, float alpha)
 {
-  // icon.svg on a 28 grid: a red tile, a white pill, a red cross and two red buttons on it.
+  // The site icon on a 28-unit grid: red tile, white pill, red cross and two red buttons.
   const float k = size / 28;
   const auto at = [&](float x, float y) { return ImVec2(pos.x + x * k, pos.y + y * k); };
   const ImU32 red = Rgba(255, 0, 0, alpha), white = Rgba(255, 255, 255, alpha);
@@ -219,7 +214,7 @@ Kit::Box ChatCard(ImDrawList* dl, ImVec2 pos, float unit, std::string_view name,
   if (alpha <= 0)
     return box;
   Slab(dl, box.min, box.max, unit, alpha);
-  // The avatar: their initial on their colour, the green dot of someone in the room.
+  // Avatar with a green online dot.
   const ImVec2 c(pos.x + pad + avatar, pos.y + pad + avatar);
   dl->AddCircleFilled(c, avatar,
                       (AvatarColour(name) & ~IM_COL32_A_MASK) |
@@ -233,7 +228,7 @@ Kit::Box ChatCard(ImDrawList* dl, ImVec2 pos, float unit, std::string_view name,
   const ImVec2 dot(c.x + avatar * 0.72f, c.y + avatar * 0.72f);
   dl->AddCircleFilled(dot, avatar * 0.34f, Of(CARD, alpha), 16);
   dl->AddCircleFilled(dot, avatar * 0.24f, Of(ONLINE, alpha), 16);
-  // The name, the mark at the card's right end, the message under them.
+  // Name, logo at the right end, message below.
   const float tx = pos.x + text_x;
   float y = pos.y + pad - 0.15f * unit;
   Put(dl, ImVec2(tx, y), px, Of(INK, alpha), name);
@@ -274,7 +269,7 @@ Kit::Box NoticeCard(ImDrawList* dl, ImVec2 pos, float unit, std::string_view tex
 
 void RoundLogo(ImDrawList* dl, ImVec2 pos, float size, float alpha)
 {
-  // RoundLogo's SVG on a 40 grid: a red disc, a white pill, a red cross and two red buttons on it.
+  // On a 40-unit grid: red disc, white pill, red cross and two red buttons.
   const float k = size / 40;
   const auto at = [&](float x, float y) { return ImVec2(pos.x + x * k, pos.y + y * k); };
   const ImU32 red = Rgba(255, 0, 0, alpha), white = Rgba(255, 255, 255, alpha);

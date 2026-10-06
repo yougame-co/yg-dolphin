@@ -134,8 +134,8 @@ TEST(OrcaLaunch, ReadsTheFileNextToTheApp)
   File::DeleteDirRecursively(dir);
 }
 
-// Profile.h jit_clear_frame: one JIT clear a boot, at the end of that frame (the first boundary
-// ends frame 0), and none for a profile without one.
+// Profile.h jit_clear_frame: the JIT is cleared once per boot, at the end of that frame (the first
+// boundary ends frame 0). A profile without one never clears it.
 TEST(OrcaLaunch, JitClearOnceABoot)
 {
   Orca::Profile profile;
@@ -157,8 +157,8 @@ TEST(OrcaLaunch, JitClearOnceABoot)
   EXPECT_FALSE(Orca::JitClearDue());
 }
 
-// Profile.h kept_code: a fetch sees the game's word only while memory holds the loader's, at the
-// physical address (either MEM1 mirror); nothing without an active profile that keeps code.
+// Profile.h kept_code: an instruction fetch sees the game's original word only while memory holds
+// the loader's word at that physical address (either MEM1 mirror), and only with such a profile.
 TEST(OrcaLaunch, KeptGameCode)
 {
   Orca::Profile profile;

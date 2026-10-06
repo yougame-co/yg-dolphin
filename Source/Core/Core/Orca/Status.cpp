@@ -81,7 +81,7 @@ void Result(std::string_view json)
   if (!SessionActive() || !Cap(RESULTS_CAP))
     return;
   std::string line = fmt::format("orca result {}", OneLine(json));
-  // The app forwards 300 characters of a line at most: a longer one would arrive cut.
+  // The app forwards at most 300 characters of a line.
   if (line.size() > 300)
     return;
   std::lock_guard lock(s_mutex);

@@ -6,16 +6,12 @@
 #include "Common/CommonTypes.h"
 #include "InputCommon/GCPadStatus.h"
 
-// The YouGame button's shortcut on a controller (Luis, 2026-10-05): hold the D-pad's Up and press
-// Start, and the YouGame overlay opens, as a click on the button Orca draws (YgOrb.h) does: Orca
-// prints `orca orb` and the page opens it. A GameCube pad has no Home button, and this works the
-// same on every controller and the keyboard, since it reads the local player's pad as the game will
-// get it, in every scene.
+// Controller shortcut for the YouGame overlay: hold D-pad Up and press Start. A GameCube pad has no
+// Home button. Orca prints `orca orb` and the app opens the overlay.
 //
-// While the shortcut is held, the game gets neither Start nor the D-pad (no pause, no second taunt),
-// from the press of Start until both are let go; Up before Start reaches the game as usual (a taunt
-// in a fight). The session records and sends the masked pad, so every machine plays the same input
-// and re-runs replay it: nothing here can desync.
+// From the Start press until both are released, the game sees neither Start nor the D-pad. The
+// session records and sends this masked pad, so every machine sees the same input and it cannot
+// desync.
 namespace Orca::UX
 {
 class OrbCombo
@@ -30,18 +26,17 @@ public:
     u16 buttons = 0;  // what the game gets
     bool fired = false;
   };
-  // One sample of the local player's buttons, a frame's own (a first run). Pure: no I/O.
+  // Feeds one frame's sample of the local buttons. Pure, no I/O.
   Step Next(u16 buttons);
   bool Held() const { return m_held; }
 
 private:
-  bool m_held = false;   // fired: Start and the D-pad masked until both are let go
+  bool m_held = false;   // fired; Start and the D-pad stay masked until both are released
   bool m_start = false;  // Start was down in the last sample
 };
 
-// The local player's pad as the session will send it: the shortcut stepped on every read a session
-// can send (`first_run`: not a rollback's re-run, whose read is thrown away; a joiner's catch-up
-// does send) while `live` (the input gate is open: an unfocused pad is neutral and must not look
-// like a release), and `orca orb` printed when it fires. CPU thread; no allocation.
+// Applies the shortcut to the local pad before the session sends it. The combo only advances on a
+// first run (rollback re-runs discard their reads) while `live`, because an unfocused pad reads as
+// neutral and must not look like a release. CPU thread only.
 GCPadStatus FilterLocalPad(GCPadStatus pad, bool first_run, bool live);
 }  // namespace Orca::UX

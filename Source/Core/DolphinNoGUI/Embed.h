@@ -8,11 +8,11 @@
 #include <string>
 #include <vector>
 
-// Embed mode (ORCA.md "Embedding"): Orca draws inside the YouGame desktop app's window instead of a
-// window of its own. The app starts it with
+// Embed mode: Orca draws inside the YouGame desktop app's window instead of its own. The app starts
+// it with
 //   --embed --parent <handle> --rect X Y W H     (or --rect X,Y,W,H)
-// steers it with one command per line on stdin and reads one event per line on stdout, the same
-// protocol as the app's libretro host (desktop/native/libretro/host.cpp).
+// then sends one command per line on stdin and reads one event per line on stdout.
+// See ORCA.md, "Embedding".
 namespace Embed
 {
 struct Rect
@@ -29,34 +29,32 @@ struct Options
   // HWND on Windows, CGWindowID (the window number) on macOS, as a decimal number.
   unsigned long long parent = 0;
   Rect rect;
-  // The --rect asked for was TooSmall (and rect is that one at MIN_SIDE): the view starts hidden.
+  // The requested --rect was TooSmall, so rect was raised to MIN_SIDE and the view starts hidden.
   bool too_small = false;
 };
 
-// Takes --embed, --parent and --rect out of argv (so the regular parser never sees them). Returns
-// nullopt with a message in *error when they are malformed.
+// Removes --embed, --parent and --rect from argv so the regular parser never sees them. Returns
+// nullopt and sets *error when they are malformed.
 std::optional<Options> TakeArguments(std::vector<char*>* argv, std::string* error);
 
-// "rect X Y W H" (also "X,Y,W,H"); w and h at least 1.
+// Parses "X Y W H" or "X,Y,W,H"; w and h are clamped to at least 1.
 std::optional<Rect> ParseRect(const std::string& text);
 
-// A rect with a side under MIN_SIDE pixels is no place for the game: a `rect` command that small
-// hides it (the window keeps its last size) until a big enough one arrives, and a --rect that small
-// opens the window at MIN_SIDE, hidden. Pages that clipped the player box to its visible part used to
-// shrink the window to nothing while scrolling, and the overlay aborted in a window that thin.
+// A rect with a side under MIN_SIDE pixels hides the game instead of resizing it, until a big
+// enough rect arrives. A --rect that small opens the window at MIN_SIDE, hidden. Very thin windows
+// can crash the overlay.
 constexpr int MIN_SIDE = 32;
 bool TooSmall(const Rect& rect);
 
-// The protocol gets stdout to itself: fd 1 is duplicated for it, then pointed at stderr, so the
-// log (Windows writes it to stdout) and anything else printed never lands among the replies.
-// Returns the protocol stream. Call once, first thing.
+// Gives the protocol a private copy of stdout and points fd 1 at stderr, so log output never mixes
+// with protocol lines. Returns the protocol stream. Call once, at startup.
 std::FILE* ClaimStdout();
 
-// One protocol line on stdout (a newline is added; embedded newlines become spaces).
+// Writes one protocol line. Adds the newline; embedded newlines become spaces.
 void Out(const std::string& line);
 
-// Reads stdin on a thread of its own; a closed stdin reads as "quit".
+// Reads stdin on its own thread. A closed stdin counts as "quit".
 void StartReading();
-// The commands read since the last call, oldest first.
+// Returns the commands read since the last call, oldest first.
 std::vector<std::string> TakeCommands();
 }  // namespace Embed

@@ -1,34 +1,27 @@
 #!/usr/bin/env python3
-# occluded-test.py: does a session keep its pace while nobody can see it? One Orca embedded in
-# Tools/orca/embed-test-host.m (Metal, muted), steered through what players do to the app's window:
-# minimized, hidden with "hide", and covered by another app's window. Each phase reports the
-# "orca stats" seconds it got (fps, frames lost, this machine's hitches) and what Orca's window
-# tracking said (Host log). PASS when every phase kept 55 fps or more, and a friend never waited
-# more than a second in one.
+# occluded-test.py: checks that a session keeps its pace while its window can't be seen. One Orca
+# runs embedded in Tools/orca/embed-test-host.m (Metal, muted) while the window is minimized,
+# hidden, and covered by another app. Each phase reports fps, frames lost and hitches from
+# "orca stats". PASS when every phase kept 55 fps or more and a friend never waited over a second.
 #
 #   clang -fobjc-arc -framework AppKit -o embed-test-host Tools/orca/embed-test-host.m
 #   Tools/orca/occluded-test.py <embed-test-host> <dolphin-emu-nogui> <disc> [--friend [--overlay]]
 #                               [--from-frame N] [--sample DIR] [--shots DIR]
 #
-# --friend: a second, headless Orca drops into the embedded one's game first (a real YouGame room,
-#   dev tickets, a local keyframe folder, as dropin-commands.py does). While the embedded one is out
-#   of sight, the friend's numbers show whether it had to wait for it (stalls, stall_ms).
-# --from-frame N: the phases start once the game is at frame N (default 7300: with a friend, 20 s
-#   into the match; a fresh user folder compiles shaders at each new scene, which is a hitch whether
-#   the window shows or not, so the phases stay clear of scene changes).
-# --sample DIR: `sample` the embedded Orca for 3 s in each out-of-sight phase (where it waits).
-# --shots DIR: a screenshot of the main display in each phase (what was in front of what).
-# It takes the screen for two minutes or so: the test host's window comes to the front. Two Orca
-# processes at most; hold ~/Documents/brawl-dolphin/orca-run.lock around it on a shared Mac.
+# --friend: a second, headless Orca drops into the game first (as dropin-commands.py does); its
+#   stall numbers show whether it had to wait for the hidden side.
+# --from-frame N: start the phases at frame N (default 7300, 20 s into the match), away from scene
+#   changes, whose shader compiles would hitch either way.
+# --sample DIR: `sample` the embedded Orca for 3 s in each out-of-sight phase.
+# --shots DIR: a screenshot of the main display in each phase.
+# It takes the screen for about two minutes (the test host's window comes to the front) and runs
+# two Orca processes.
 # ORCA_TEST_KEEP=1 keeps the logs.
 #
-# --overlay (with --friend): instead of hiding the window, the YouGame overlay opens and closes
-# mid-fight on the embedded side, with the lines the page sends (YouGame's OrcaEmbed): the button
-# (`orb …`), then `orb off`, `blur`, the panel's cut (`view` the whole box, `rect` right of the
-# panel: the test host's `panel`) and `dim 50` while the overlay is open beside the game, then the
-# whole `rect`, `dim 0`, `focus`, the button and a `notice`. Nothing may pause: the embedded side keeps its pace (its input goes neutral,
-# and that is what it sends), and the friend never waits for it: no stall and no more hitches than
-# with the overlay shut.
+# --overlay (with --friend): instead of hiding the window, open and close the YouGame overlay
+# mid-fight on the embedded side, sending the same lines the page does. Nothing may pause: the
+# embedded side keeps its pace with neutral input, and the friend sees no stalls and no more
+# hitches than with the overlay shut.
 import json
 import os
 import queue
@@ -64,9 +57,8 @@ if OVERLAY and not FRIEND:
 SAMPLE = arg_value("--sample")
 SHOTS = arg_value("--shots")
 FROM_FRAME = int(arg_value("--from-frame") or (3000 if OVERLAY else 7300))
-# With --overlay the friend drops in mid-fight, at this frame of the host's (the flow's match starts
-# at about 2134); dropping in on the main menu jumps both to With Friends' character select, which
-# this flow's scripted presses there crash on (0.3.18 too: Invalid read at PC 806cec6c).
+# With --overlay the friend drops in mid-fight at this host frame (the match starts at about 2134).
+# Dropping in on the main menu would move both to a character select this input script crashes on.
 OVERLAY_JOIN_FRAME = int(arg_value("--join-frame") or 2400)
 HERE = os.path.dirname(os.path.abspath(__file__))
 INPUT = os.path.join(HERE, "inputs", "bf-mario-link-results.txt")
@@ -76,8 +68,8 @@ T0 = time.time()
 PHASE_S = 12
 MIN_FPS = 55
 MAX_FRIEND_STALL_MS = 1000
-# With --overlay: what the friend may wait for the embedded side while its overlay is open or just
-# shut, and how many more hitches either side may have than with it never opened.
+# With --overlay: how long the friend may wait while the overlay is open or just shut, and how many
+# extra hitches either side may have.
 MAX_OVERLAY_STALL_MS = 100
 MAX_OVERLAY_EXTRA_HITCHES = 1
 
@@ -400,8 +392,8 @@ finally:
 
 events = window_events()
 problems = [failure] if failure else []
-# A build that reports its window (Orca's PlatformMacOS) must have had it out of sight in the
-# middle of each hiding phase (or since before it: another app can cover the test host any time).
+# A build that reports its window state (PlatformMacOS) must say it was out of sight mid-phase in
+# each hiding phase (or earlier: another app can cover the test host at any time).
 window = [(t, "out of sight" in text) for t, text in events if "the game's window is" in text]
 for name, start, end, row in phases:
     if window and name in ("minimized", "hidden", "covered"):

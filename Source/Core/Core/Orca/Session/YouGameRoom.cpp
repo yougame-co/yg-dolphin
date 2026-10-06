@@ -38,47 +38,46 @@ namespace Orca::Net
 {
 namespace
 {
-// The rooms Worker's lobby protocol (rooms/src/index.ts, rooms/src/game-lobby.ts in the YouGame
-// repo). Orca rooms are private game lobbies of up to four. The host plays from the moment it boots;
-// a friend who joins the room plugs into the next free port (drop-in). No room match is started:
-// a friends room keeps no results.
+// The rooms Worker's lobby protocol (rooms/src/index.ts and rooms/src/game-lobby.ts in the YouGame
+// repo). Orca rooms are private game lobbies of up to four. The host plays from boot; a friend who
+// joins plugs into the next free port (drop-in). A friends room starts no room match and keeps no
+// results.
 constexpr const char* CODE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
-// The room allows 120 messages a second per socket: packets go out at most every 10 ms (a stalled
-// session asks to send far more often), the newest replacing any not yet sent.
+// The room allows 120 messages a second per socket, so packets go out at most every 10 ms, the
+// newest replacing any not yet sent.
 constexpr auto SEND_GAP = std::chrono::milliseconds(10);
 constexpr auto PING_EVERY = std::chrono::seconds(1);
 constexpr auto HELLO_EVERY = std::chrono::seconds(1);
 constexpr size_t MAX_INBOX = 1024;
-// The server answers every ping (one a second): a connection that brings nothing back for this long
-// is dead, even though sends still succeed into the socket's buffer (a network that went away
-// without a reset, a laptop that slept). Not much less: a keyframe upload fills a home uplink, and
-// pings wait behind it in the modem's buffer (a second or two on many links).
+// The server answers every ping (one a second), so a connection silent this long is dead even if
+// sends still succeed into the socket buffer (the network vanished, the laptop slept). Not much
+// shorter: a keyframe upload can fill a home uplink and delay pings by a second or two.
 constexpr auto SERVER_SILENCE_LIMIT = std::chrono::seconds(8);
 // A joiner whose room has no host (a stale invite, a host that left or restarted) gives up this
-// long after its welcome; a host that is there says hello within about a second.
+// long after its welcome; a present host says hello within about a second.
 constexpr auto HOST_WAIT = std::chrono::seconds(8);
-// Matchmade rooms (ORCA.md "Matchmaking"): a game's report waits this long for the room's match to
-// start; the host's begin gets this many tries (one per roster change after a refusal), and one
-// unanswered for this long is sent again.
+// Matchmade rooms: a game's report waits this long for the room's match to start; the host's begin
+// gets this many tries (one per roster change after a refusal) and is resent if unanswered this
+// long.
 constexpr auto REPORT_HOLD = std::chrono::seconds(60);
 constexpr int BEGIN_TRIES = 5;
 constexpr auto BEGIN_ANSWER = std::chrono::seconds(5);
-// The room closed a matchmade room after its result (rooms/src/index.ts: 4004 "match-over").
+// The server closed a matchmade room after its result (rooms/src/index.ts: 4004 "match-over").
 constexpr int CLOSE_MATCH_OVER = 4004;
 // How long a teardown waits for the app to take the emptied room (loopback, normally milliseconds).
 constexpr auto MIRROR_END_TIMEOUT = std::chrono::seconds(1);
-// Direct links (DirectLink.h): a stalled session asks to send every millisecond; a direct copy
-// goes out for new inputs, a checksum or a leave, else at most this often. The summary for stats
-// is refreshed this often.
+// Direct links: a stalled session asks to send every millisecond, but a direct copy goes out only
+// for new inputs, a checksum or a leave, else at most this often. The stats summary refreshes this
+// often.
 constexpr auto DIRECT_STALL_GAP = std::chrono::milliseconds(4);
 constexpr auto DIRECT_SUMMARY_EVERY = std::chrono::milliseconds(250);
 
 using Clock = std::chrono::steady_clock;
 
-// Rooms come and go within one process (a host's reopened room, a join, a leave), each mirroring
-// itself to the page on threads of its own: the page must only ever get the newest room's updates,
-// never an older room's late one (its emptied room at teardown included). Each room has a
-// generation; a post from a room older than the newest that posted is dropped.
+// Rooms come and go within one process (reopened, joined, left), each mirroring itself to the page
+// on its own threads. The page must only get the newest room's updates, never a late one from an
+// older room. Each room has a generation; posts from a room older than the newest poster are
+// dropped.
 std::atomic<u64> s_room_generation{0};
 std::mutex s_mirror_mutex;
 u64 s_mirror_newest = 0;  // under s_mirror_mutex
@@ -102,8 +101,8 @@ bool ValidCode(const std::string& code)
                      [](char c) { return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9'); });
 }
 
-// A player name as it may reach game memory and line-based output: printable ASCII and whole UTF-8
-// sequences only, at most 64 bytes, never a character cut in half.
+// A player name safe for game memory and line-based output: printable ASCII and whole UTF-8
+// sequences only, at most 64 bytes, never a split character.
 std::string CleanName(const std::string& raw)
 {
   std::string out;
@@ -127,12 +126,12 @@ std::string CleanName(const std::string& raw)
   return out;
 }
 
-// Hex digits and back (defined below, with the packets').
+// Hex encoding and decoding (defined below, with the packets').
 std::string ToHex(const u8* data, size_t size);
 bool FromHex(const std::string& hex, std::vector<u8>* out);
 
-// A port's controls from the wire: hex, at most MAX_CONTROLS bytes; anything else is none. The
-// host keeps exactly what a joiner then reads back from it (the same bound on both sides).
+// A port's controls from the wire: hex, at most MAX_CONTROLS bytes; anything else is none. Both
+// sides apply the same bound, so the host keeps exactly what a joiner reads back.
 std::vector<u8> ControlsFromHex(const picojson::value& v, size_t max = MAX_CONTROLS)
 {
   std::vector<u8> bytes;
@@ -146,7 +145,7 @@ std::vector<u8> ControlsFromHex(const picojson::value& v, size_t max = MAX_CONTR
 
 }  // namespace
 
-// Each entry [seat, from, name] and, when the port carries controls, their hex.
+// Each entry [seat, from, name], plus the controls' hex when the port carries controls.
 picojson::value NamesToJson(const std::vector<KeyframeInfo::Name>& names)
 {
   picojson::array out;
@@ -253,8 +252,8 @@ std::optional<int> Int(const picojson::object& o, const std::string& key, int lo
   return static_cast<int>(v);
 }
 
-// A telemetry number: clamped into [lo, hi] rather than refused, since a bad one should not end
-// the match; nullopt when absent or not a number.
+// A telemetry number, clamped into [lo, hi] rather than refused, since a bad one should not end the
+// match; nullopt when absent or not a number.
 std::optional<int> ClampedInt(const picojson::object& o, const std::string& key, int lo, int hi)
 {
   const auto it = o.find(key);
@@ -273,14 +272,14 @@ std::string Str(const picojson::object& o, const std::string& key)
 }
 
 constexpr int MAX_FRAME = 1 << 30;
-// Telemetry bounds: re-simulated frames in one second, a lead in tenths of a frame, a round trip
-// in milliseconds, stalls and hitches in a match. Far beyond anything honest (the session clamps
-// further), small enough that no arithmetic on them overflows.
+// Telemetry bounds: re-run frames per second, lead in tenths of a frame, round trip in ms, stalls
+// and hitches per match. Far beyond anything honest (the session clamps further), yet small enough
+// that no arithmetic on them overflows.
 constexpr int MAX_RESIMULATED = 1 << 20;
 constexpr int MAX_STALLS = 1 << 20;
 constexpr int MAX_ADVANTAGE = 1 << 20;
 constexpr int MAX_RTT = 1 << 20;
-// Drop-in history in one packet (the session sends far less; CoalescePacket may join two).
+// Drop-in history runs per packet (the session sends far fewer; CoalescePacket may join two).
 constexpr size_t MAX_HISTORY_RUNS_IN_PACKET = 128;
 constexpr size_t MAX_HISTORY_FRAMES_IN_PACKET = MAX_HISTORY_IN_PACKET;
 
@@ -290,8 +289,8 @@ std::string JsonString(const std::string& text)
   return picojson::value(text).serialize();
 }
 
-// A label for a line the app shows (a rank's): printable ASCII, no quotes or backslashes, at most
-// `max` characters.
+// A label for a line the app shows (e.g. a rank): printable ASCII, no quotes or backslashes, at
+// most `max` characters.
 std::string CleanLabel(const std::string& raw, size_t max)
 {
   std::string out;
@@ -305,9 +304,9 @@ std::string CleanLabel(const std::string& raw, size_t max)
   return out;
 }
 
-// picojson has no nesting limit (deep arrays overflow the I/O thread's stack) and aborts on a number
-// that overflows a double. Nothing YouGame sends nests deeply, uses an exponent or has more than 17
-// digits in a row, so a message that does is refused before parsing.
+// picojson has no nesting limit (deep arrays overflow the I/O thread's stack) and aborts on numbers
+// that overflow a double. Nothing YouGame sends nests deeply, uses an exponent or has over 17
+// digits in a row, so such messages are refused before parsing.
 bool SafeToParse(const std::string& text)
 {
   int depth = 0, digits = 0;
@@ -375,7 +374,7 @@ picojson::object PacketToJson(const Packet& packet)
   d["c"] = picojson::value(static_cast<double>(packet.current_frame));
   if (packet.sequence > 0)
     d["q"] = picojson::value(static_cast<double>(packet.sequence));
-  // Optional, so a peer built before adaptive delay and time sync still parses these packets.
+  // Optional fields, so older peers' packets still parse.
   if (packet.resimulated >= 0)
     d["r"] = picojson::value(static_cast<double>(packet.resimulated));
   if (packet.advantage)
@@ -396,14 +395,14 @@ picojson::object PacketToJson(const Packet& packet)
   if (packet.checksum_frame)
   {
     d["x"] = picojson::value(static_cast<double>(*packet.checksum_frame));
-    // A u64 does not survive a JSON number.
+    // A u64 doesn't survive a JSON number.
     u8 bytes[8];
     for (int i = 0; i < 8; ++i)
       bytes[i] = static_cast<u8>(packet.checksum >> (56 - 8 * i));
     d["h"] = picojson::value(ToHex(bytes, 8));
   }
   // Drop-in (all optional): the roster as [plug, unplug, live] per seat (-1: never), the history
-  // acknowledgement, history as [count, pads hex] runs, and a leave request.
+  // ack, history as [count, pads hex] runs, and a leave request.
   if (packet.roster)
   {
     picojson::array roster;
@@ -497,7 +496,7 @@ bool PacketFromJson(const picojson::object& d, Packet* packet)
     }
     out.ack[s] = static_cast<int>(v.get<double>());
   }
-  // Telemetry for adaptive delay and time sync: optional (older peers send none) and clamped.
+  // Telemetry for adaptive delay and time sync: optional and clamped.
   if (const auto resimulated = ClampedInt(d, "r", 0, MAX_RESIMULATED))
     out.resimulated = *resimulated;
   out.advantage = ClampedInt(d, "v", -MAX_ADVANTAGE, MAX_ADVANTAGE);
@@ -507,7 +506,7 @@ bool PacketFromJson(const picojson::object& d, Packet* packet)
   if (const auto hitches = ClampedInt(d, "j", 0, MAX_STALLS))
     out.hitches = *hitches;
   // Stall lengths (Packet::spared): SPARED_FRAMES numbers, each clamped like the counts above, or
-  // none at all (a wrong length, or anything not a number in it).
+  // none at all if the length is wrong or anything isn't a number.
   if (const auto sp = d.find("sp"); sp != d.end() && sp->second.is<picojson::array>() &&
                                     sp->second.get<picojson::array>().size() == SPARED_FRAMES)
   {
@@ -615,7 +614,7 @@ bool PacketFromJson(const picojson::object& d, Packet* packet)
   return true;
 }
 
-// The desktop app's bridge: exactly http://127.0.0.1:<port>, so the token goes nowhere else.
+// The desktop app's bridge must be exactly http://127.0.0.1:<port>, so the token goes nowhere else.
 bool LoopbackBridge(std::string bridge)
 {
   if (bridge.ends_with("/"))
@@ -646,10 +645,9 @@ std::string WebSocketUrl(std::string url)
 }
 }  // namespace
 
-// Why the rooms Worker refused the WebSocket upgrade, for the player. The upgrade's body isn't
-// readable here, only its status (rooms/src/index.ts, the room's join checks): 401 an expired
-// ticket; 403 a room whose lobby key differs (another Orca build, disc or save, which for an
-// Orca room is the only kind of room it can be refused for) or a host's kick; 409 a full room.
+// Why the rooms Worker refused the WebSocket upgrade, for the player. Only the status is readable:
+// 401 an expired ticket; 403 a different lobby key (another Orca build, disc or save) or a host's
+// kick; 409 a full room.
 std::string RefusalCode(const std::string& connect_error)
 {
   if (connect_error.find("(HTTP 403)") != std::string::npos)
@@ -714,25 +712,24 @@ struct YouGameRoom::Impl
   RoomState state = RoomState::Connecting;
   std::string status = "Connecting to YouGame...";
   std::string error_code;
-  // Why this player leaves, told to the friend before going (Orca::Status code, e.g. "desync").
+  // Why this player leaves, told to the friend before going (an Orca::Status code, e.g. "desync").
   std::string leave_reason;
   std::string code;
   int seat = -1;
-  // Each seat's player name as the room's roster gives it (the same bytes on every machine; under
-  // mutex).
+  // Each seat's player name from the room's roster (the same bytes on every machine; under mutex).
   std::map<int, std::string> seat_names;
   int rtt = -1;
-  // Counts pongs, so a caller can tell a new measurement from the same one read again.
+  // Counts pongs, so a caller can tell a new measurement from a repeat read.
   u32 rtt_sequence = 0;
   // The latest RTT_SAMPLES measurements, oldest first.
   std::deque<int> recent_rtts;
   std::vector<Packet> inbox;
-  // Which connection sent each inbox packet: a player who left takes its unread packets with it
-  // (the next player in that seat must not read them as its own).
+  // Which connection sent each inbox packet, so a departing player's unread packets go with it and
+  // the next player in that seat doesn't read them as its own.
   std::vector<std::string> inbox_from;
   std::optional<Packet> outgoing;
 
-  // The I/O thread's own.
+  // Owned by the I/O thread.
   Common::WebSocket ws;
   std::string me, host;
   int revision = -1;
@@ -747,26 +744,26 @@ struct YouGameRoom::Impl
     bool announced = false;
     bool drop_in_host = false;
     bool sent_packet = false;
-    // A joiner's own controls, from its hello ("ct"; empty: none).
+    // A joiner's own controls from its hello ("ct"; empty: none).
     std::vector<u8> controls;
-    // A joiner's queue identity, from its hello ("qi"; empty: none).
+    // A joiner's queue identity from its hello ("qi"; empty: none).
     std::vector<u8> queue;
     // Its hello offered direct links (`dl`), and one is being built with it.
     bool direct = false;
     bool linked = false;
     std::optional<KeyframeInfo> keyframe;
-    // Why it said it was leaving (its "bye"), for this side's own report.
+    // The reason it gave for leaving (its "bye"), for this side's own report.
     std::string bye;
   };
   std::map<std::string, Peer> peers;
   Clock::time_point last_send{}, last_ping{}, last_hello{};
-  // Shared with the emulator thread (under mutex): what happened to other players, and the
-  // keyframe the host offers each joining seat.
+  // Shared with the emulator thread (under mutex): what happened to other players, and the keyframe
+  // the host offers each joining seat.
   std::vector<PeerEvent> events;
   std::map<int, KeyframeInfo> keyframe_offers;
   std::vector<std::pair<int, std::string>> pending_drops;
   std::optional<std::pair<std::vector<KeyframeInfo::Name>, int>> pending_names;
-  // Host: joins held (HoldJoins), and a change not told yet.
+  // Host: joins held (HoldJoins), and whether a change is still to be announced.
   bool holding = false;
   bool hold_told = true;
   // Whether this Orca joins someone else's game (RoomOptions::joining, or the app's invite), known
@@ -774,23 +771,23 @@ struct YouGameRoom::Impl
   bool joining = false;
   bool role_known = false;
   std::atomic<bool> offer_now{false};
-  // The room as the page draws it (welcome, join, leave, lobby and start carry these).
+  // The room as the page draws it (from welcome, join, leave, lobby and start).
   picojson::array room_participants, room_players;
-  // This room's place among the process's rooms (s_room_generation): its page mirror never
+  // This room's place among the process's rooms (s_room_generation), so its page mirror never
   // overwrites a newer room's.
   const u64 generation = ++s_room_generation;
-  // The I/O thread's: when the welcome came (a joiner waits HOST_WAIT for its host from then),
-  // whether the game's host ever said hello here, and when the server last sent anything.
+  // I/O thread: when the welcome came (a joiner waits HOST_WAIT for its host from then), whether
+  // the game's host ever said hello, and when the server last sent anything.
   std::optional<Clock::time_point> welcomed_at;
   bool host_seen = false;
   Clock::time_point last_heard{};
 
-  // Under the desktop app: the room is mirrored to the YouGame page through the app's bridge
-  // (mpRoom, the latest only), and the page's lobby commands come back on its event stream.
+  // Under the desktop app, the room is mirrored to the YouGame page through the app's bridge
+  // (mpRoom, latest only), and the page's lobby commands come back on its event stream.
   bool bridged = false;
   std::string bridge_url, bridge_token;
   // How tickets were minted (set once, before role_known): the dev site and player, and the
-  // keyframe store's address from the ticket reply (YouGame's "keyframes", else the default).
+  // keyframe store's URL from the ticket reply.
   std::string site, dev_player, keyframes_url;
   std::string current_ticket;  // under mutex
   std::thread bridge_thread, events_thread;
@@ -798,21 +795,21 @@ struct YouGameRoom::Impl
   std::mutex bridge_mutex;
   std::condition_variable bridge_wake;
   std::optional<std::string> bridge_pending;
-  std::string last_published;  // the I/O thread's
+  std::string last_published;  // I/O thread only
   bool mirror_closed = false;  // under s_mirror_mutex: the emptied room went out
   std::atomic<bool> leave_requested{false};
   std::atomic<bool> test_drop{false};
   std::vector<picojson::object> page_commands;  // guarded by bridge_mutex
 
-  // A matchmade room (ORCA.md "Matchmaking"): its queue from the welcome, the room match running
-  // (its id) and whether a ranked set finished here (under mutex); what the emulator thread says
-  // (under mutex): the host's opponent plugged in, game reports, a desync.
+  // A matchmade room: its queue from the welcome, the running room match (its id) and whether a
+  // ranked set finished here (under mutex); and, from the emulator thread (under mutex), the host's
+  // opponent plugged in, game reports, a desync.
   std::string queue = "private";
   bool stay = false;
   int room_size = MAX_SEATS;
   std::string match_id;
   bool set_done = false;
-  // The room's `set-over` came: it stays open after the set's verdict until the players leave.
+  // The room's `set-over` arrived: it stays open after the verdict until the players leave.
   bool set_over = false;
   bool opponent_plugged = false;
   struct HeldReport
@@ -824,17 +821,17 @@ struct YouGameRoom::Impl
   bool desync_pending = false;
   // The opponent stopped sending inputs mid ranked set (ReportStall): this player claims the set.
   bool stall_pending = false;
-  // The I/O thread's: the room's participants (id, connection, slot), whether anyone is away, the
-  // host's begin (sent and unanswered; tries; waiting for the roster after a refusal), what was
-  // reported and decided in this match.
+  // I/O thread: the room's participants (id, connection, slot), whether anyone is away, the host's
+  // begin state (sent and unanswered, tries, waiting for a roster change after a refusal), and what
+  // was reported and decided in this match.
   struct LobbyParticipant
   {
     std::string id, connection;
     int slot = -1;
   };
   std::vector<LobbyParticipant> lobby_participants;
-  // The room match's participants as its `start` named them: ports map to these slots for the
-  // whole match, whoever leaves the room later.
+  // The room match's participants as its `start` named them: ports map to these slots for the whole
+  // match, whoever leaves later.
   std::vector<LobbyParticipant> match_participants;
   bool someone_away = false;
   std::optional<Clock::time_point> begin_sent;
@@ -843,7 +840,7 @@ struct YouGameRoom::Impl
   int ranked_sent = 0;
   int casual_sent = 0;
   int casual_results = 0;
-  // The casual sitting with this opponent so far (this room's games): this player's wins, theirs.
+  // The casual sitting with this opponent so far: this player's wins and theirs.
   int casual_mine = 0, casual_theirs = 0;
   SetTally tally;
   bool finish_sent = false;
@@ -852,7 +849,7 @@ struct YouGameRoom::Impl
   // "c<n>" for a casual game, "$final").
   std::map<std::string, std::string> void_why;
   std::map<std::string, std::string> sent_detail;
-  // A ranked set's reports from the match block, by report id: the game's number in the set, and
+  // A ranked set's reports from the match block, by report id: the game's number in the set and,
   // for the game that ended the set, the end (UX/RankedSet.h) as the finish names it.
   std::map<std::string, int> game_numbers;
   struct SetEnd
@@ -861,26 +858,26 @@ struct YouGameRoom::Impl
     std::string winner;
   };
   std::map<std::string, SetEnd> set_ends;
-  // The reports that came from the match block: the block alone ends their set.
+  // Reports that came from the match block; only the block ends their set.
   std::set<std::string> block_ids;
 
-  // Direct links to the other Orcas (DirectLink.h), unless ORCA_DIRECT=0. The pointer never
-  // changes after construction; the link thread starts with the welcome.
+  // Direct links to the other Orcas, unless ORCA_DIRECT=0. The pointer never changes after
+  // construction; the link thread starts with the welcome.
   std::optional<DirectOptions> direct_options = DirectOptionsFromEnv();
   const std::unique_ptr<DirectLink> direct =
       direct_options ? std::make_unique<DirectLink>() : nullptr;
-  bool direct_started = false;  // the I/O thread's
-  // Whether links are on, as the I/O thread last saw it (DirectAllowed; logged when it changes).
+  bool direct_started = false;  // I/O thread only
+  // Whether links are on, as the I/O thread last saw it (DirectAllowed; logged on change).
   std::optional<bool> direct_on;
-  // The ticket reply's `direct` (TicketAllowsDirect): YouGame's own switch, read again from every
-  // ticket this room gets (under mutex).
+  // The ticket reply's `direct` (TicketAllowsDirect): YouGame's own switch, re-read from every
+  // ticket (under mutex).
   bool ticket_direct = true;
   Clock::time_point direct_summary_at{};
   DirectSummary direct_summary;  // under mutex
   // The ticket's ICE servers and when they were minted (under mutex).
   IceConfig ice;
   Clock::time_point ice_minted = Clock::now();
-  // The emulator thread's: the last direct copy, and the newest input it carried.
+  // Emulator thread: the last direct copy, and the newest input it carried.
   Clock::time_point direct_sent_at{};
   int direct_sent_newest = -1;
   bool direct_malformed_logged = false;
@@ -901,7 +898,7 @@ struct YouGameRoom::Impl
   Clock::time_point spike_from = net_opened;
   Clock::time_point spike_to = net_opened;
   u32 spike_count = 0;
-  // Test-only slow uplink (Orca::TestNetUplinkConfig): what this room sends waits longer.
+  // Test-only slow uplink (Orca::TestNetUplinkConfig): outgoing messages wait longer.
   std::optional<TestNetUplink> net_uplink = TestNetUplinkConfig();
   u32 uplink_count = 0;
 
@@ -935,8 +932,8 @@ struct YouGameRoom::Impl
 
   Clock::time_point HoldUntil(const std::deque<Held>& line)
   {
-    // A deterministic 0..jitter extra per message, after any spike (and on the way out, a slow
-    // uplink's hold); never earlier than the message before it.
+    // A deterministic 0..jitter extra per message, after any spike (and, outgoing, a slow uplink's
+    // hold); never earlier than the previous message.
     const auto now = Clock::now();
     const u32 extra = net_jitter ? (++net_count * 2654435761u) % static_cast<u32>(net_jitter + 1) : 0;
     auto due = RadioFree(now) + std::chrono::milliseconds(*net_delay + static_cast<int>(extra));
@@ -983,7 +980,7 @@ struct YouGameRoom::Impl
     status = std::move(line);
   }
 
-  // `app_code`: the desktop app's error code for this end (Orca::Status), empty for a normal leave.
+  // `app_code`: the app's error code for this end (Orca::Status); empty for a normal leave.
   void End(std::string why, std::string app_code = "network")
   {
     WARN_LOG_FMT(NETPLAY, "Orca room ended: {}", why);
@@ -995,7 +992,7 @@ struct YouGameRoom::Impl
     error_code = std::move(app_code);
   }
 
-  // `held`: through the test delay queue when one is configured (teardown messages skip it).
+  // `held`: go through the test delay queue when configured (teardown messages skip it).
   bool SendJson(const picojson::object& message,
                 std::chrono::milliseconds timeout = std::chrono::seconds(2), bool held = true)
   {
@@ -1010,7 +1007,7 @@ struct YouGameRoom::Impl
     return false;
   }
 
-  // The ticket for the room, and the room code, from the desktop app's bridge or (tests) the site.
+  // The room's ticket and code, from the desktop app's bridge or (tests) the site.
   bool Ticket(std::string* url, std::string* ticket)
   {
     picojson::object lobby;
@@ -1168,8 +1165,8 @@ struct YouGameRoom::Impl
     return true;
   }
 
-  // The keyframe store's base: what YouGame's ticket reply names (only a URL on the site the
-  // tickets come from: ORCA_SITE, else yougame.co), else the site's default.
+  // The keyframe store's base URL: what the ticket reply names, if it's on the site the tickets
+  // come from (ORCA_SITE, else yougame.co); otherwise the site's default.
   std::string KeyframesUrl(const std::string& named) const
   {
     if (!named.empty() && named.starts_with(site + "/"))
@@ -1177,8 +1174,8 @@ struct YouGameRoom::Impl
     return site + "/api/orca/keyframes";
   }
 
-  // A fresh ticket for this room (tickets live five minutes; a keyframe goes out much later), for
-  // the keyframe store. Any thread, once the room has its first ticket; no side effects.
+  // A fresh ticket for the keyframe store (tickets last five minutes; a keyframe goes out much
+  // later). Any thread, once the room has its first ticket; no side effects.
   bool FreshTicket(bool fresh, std::string* ticket, std::string* store_url, std::string* error)
   {
     std::string room;
@@ -1190,8 +1187,8 @@ struct YouGameRoom::Impl
         return false;
       }
       room = code;
-      // YouGame's keyframe store takes a room's ticket for hours past its expiry: mint another
-      // only when it refused this one.
+      // YouGame's keyframe store accepts a room ticket for hours past expiry, so only mint another
+      // when it refused this one.
       if (!fresh && !current_ticket.empty())
       {
         *ticket = current_ticket;
@@ -1268,8 +1265,8 @@ struct YouGameRoom::Impl
     return true;
   }
 
-  // Fresh TURN credentials (a new ticket for this room), for a direct link built long after the
-  // room opened. On the direct link's thread.
+  // Fresh TURN credentials (a new ticket) for a direct link built long after the room opened. Runs
+  // on the direct link's thread.
   std::optional<IceConfig> FreshIce()
   {
     std::string ticket, store, error;
@@ -1282,9 +1279,9 @@ struct YouGameRoom::Impl
     return ice;
   }
 
-  // Whether direct links may run now, and if not, why: YouGame's ticket can turn them off
-  // (`direct: false`, for everyone), and so can the player (the app's "direct off", with the
-  // "direct" cap). ORCA_DIRECT=0 builds no DirectLink at all.
+  // Whether direct links may run now, and if not, why: YouGame's ticket can turn them off for
+  // everyone (`direct: false`), and the player can too (the app's "direct off"). ORCA_DIRECT=0
+  // builds no DirectLink at all.
   bool DirectAllowed(std::string* why)
   {
     if (!direct)
@@ -1308,8 +1305,8 @@ struct YouGameRoom::Impl
     return true;
   }
 
-  // The direct links start with the welcome (this Orca's connection id is the link's identity),
-  // or later, when they are turned on.
+  // Direct links start with the welcome (this Orca's connection id is the link's identity), or
+  // later when turned on.
   void StartDirect()
   {
     if (!direct || direct_started || me.empty())
@@ -1329,8 +1326,8 @@ struct YouGameRoom::Impl
     direct->Start(std::move(o));
   }
 
-  // Each player whose hello offered direct links, once both sides heard each other: a link. While
-  // links are off (DirectAllowed), none: every player's goes, and the inputs take the relay.
+  // Link each player whose hello offered direct links, once both sides heard each other. While
+  // links are off, drop them all and inputs take the relay.
   void LinkPeers()
   {
     if (!direct || me.empty())
@@ -1378,7 +1375,7 @@ struct YouGameRoom::Impl
     if (now - direct_summary_at < DIRECT_SUMMARY_EVERY)
       return;
     direct_summary_at = now;
-    // The worst link among the players of the game: the relay, then TURN, then direct.
+    // The worst link among the game's players: relay, then TURN, then direct.
     const auto rank = [](LinkKind kind) {
       return kind == LinkKind::Relay ? 0 : kind == LinkKind::Turn ? 1 : 2;
     };
@@ -1414,8 +1411,8 @@ struct YouGameRoom::Impl
   }
 
   // The emulator thread's half of Send: a copy of the packet straight to every linked player, on
-  // this thread, without the room's lock. Never the drop-in history (the relay carries it, in
-  // order), and as many inputs as a datagram holds (the oldest, as the session's catch-up does).
+  // this thread, without the room's lock. Never drop-in history (the relay carries it, in order),
+  // and only as many inputs as a datagram holds (the oldest first, as catch-up needs).
   void SendDirect(const Packet& packet)
   {
     if (!direct)
@@ -1450,7 +1447,7 @@ struct YouGameRoom::Impl
 
   void Run()
   {
-    // Every input to and from the friend passes through here (Profile.h, PrioritizeThread).
+    // Every input to and from friends passes through this thread (see PrioritizeThread).
     Orca::PrioritizeThread(Orca::LatencyThread::Room);
     std::string url, ticket;
     if (!Ticket(&url, &ticket))
@@ -1505,7 +1502,7 @@ struct YouGameRoom::Impl
                    net_uplink->delay_ms, net_uplink->jitter_ms, net_uplink->from_s,
                    net_uplink->to_s);
     }
-    // The connection failed under the player (it went quiet, or a test drops it): see below.
+    // The connection failed under the player (went quiet, or a test dropped it): see below.
     bool dropped = false;
     while (!stop && State() != RoomState::Ended)
     {
@@ -1534,8 +1531,8 @@ struct YouGameRoom::Impl
           OnMessage(*text);
         continue;
       }
-      // Under the test delay, what the server sent before it closed the socket is still on its way
-      // and comes first, as on a real link: a ranked set's verdict just ahead of its room's 4004.
+      // Under the test delay, what the server sent before closing is still in flight and comes
+      // first, as on a real link (e.g. a ranked verdict just ahead of the room's 4004).
       if (!ws.IsOpen() && net_delay && !held_in.empty())
       {
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -1544,9 +1541,9 @@ struct YouGameRoom::Impl
       if (!ws.IsOpen())
       {
         // 4000: the server replaced this socket with a newer one for the same player (another run
-        // of this game, on this account, in the same room). A host leaves the room to it rather
-        // than take it back, which would replace that one in turn, and so on.
-        // 4004: a matchmade room closed after its result (a ranked set's): a clean end.
+        // of this game on this account in the same room). A host leaves the room to it rather than
+        // take it back, which would just replace that one in turn. 4004: a matchmade room closed
+        // after its result: a clean end.
         if (ws.CloseCode() == CLOSE_MATCH_OVER)
         {
           End("The match is over", "match-over");
@@ -1573,9 +1570,9 @@ struct YouGameRoom::Impl
     // Direct links close with the room (the session ends with it).
     if (direct)
       direct->Stop();
-    // The bridge threads wind down while the goodbyes go out. First the page learns the room is
-    // gone (Orca left it), ahead of the next room's mirror if there is one (else that one stands,
-    // and this is dropped: PostMirror).
+    // The bridge threads wind down while the goodbyes go out. First tell the page the room is gone,
+    // ahead of the next room's mirror if any (otherwise that one stands and this is dropped:
+    // PostMirror).
     bridge_done = true;
     bridge_wake.notify_all();
     if (bridged)
@@ -1585,9 +1582,9 @@ struct YouGameRoom::Impl
       std::lock_guard lock(mutex);
       reason = leave_reason;
     }
-    // A connection that failed under the player goes without a goodbye, and with a close the server
-    // reads as a dropped connection: it holds the seat (and the host's role) for the player's next
-    // connection, as it does for a real drop.
+    // A connection that failed under the player leaves without a goodbye and with a close the
+    // server reads as a drop, so it holds the seat (and host role) for the player's next
+    // connection.
     if (dropped)
     {
       ws.Close(4001);
@@ -1619,9 +1616,8 @@ struct YouGameRoom::Impl
   }
 
   // The lobby the page shows: the same mpRoom a web game's SDK publishes (Player.tsx parses it).
-  // `ended`: the room is gone (Orca left it, or lost it): its code with nobody in it, which the
-  // page reads as Orca having left the room (Player's gameRoom, OrcaEmbed's onRoom), so a later
-  // invite into the same room isn't taken for one Orca is already in.
+  // `ended`: the room's code with nobody in it, which the page reads as Orca having left, so a
+  // later invite into the same room isn't mistaken for one Orca is already in.
   picojson::object RoomMirror(bool ended)
   {
     picojson::object lobby;
@@ -1673,8 +1669,8 @@ struct YouGameRoom::Impl
     bridge_wake.notify_all();
   }
 
-  // At teardown, on the I/O thread: the emptied room, posted at once (the bridge thread is winding
-  // down), for a room the page was shown.
+  // At teardown, on the I/O thread: post the emptied room at once (the bridge thread is winding
+  // down), if the page was shown this room.
   void PublishEnded()
   {
     if (last_published.empty())
@@ -1684,9 +1680,9 @@ struct YouGameRoom::Impl
       WARN_LOG_FMT(NETPLAY, "Orca room: the app did not take the room's end");
   }
 
-  // One mirror update to the app, unless a newer room has already posted its own (then the page has
-  // that one, and this is stale) or this room already posted its end (`last`: this is the end).
-  // True once the app took it, or when there was nothing to send.
+  // One mirror update to the app, unless a newer room already posted (this one is stale) or this
+  // room already posted its end (`last` marks the end). True once the app took it, or if there was
+  // nothing to send.
   bool PostMirror(Common::HttpRequest& http, const std::string& body, bool last = false)
   {
     std::lock_guard lock(s_mirror_mutex);
@@ -1752,9 +1748,9 @@ struct YouGameRoom::Impl
     const std::string cmd = Str(e, "cmd");
     if (cmd == "leave")
     {
-      // The lobby's Leave is the app's "leave": a joiner unplugs at an agreed frame and plays on, a
-      // host gives its friends up and opens a new room (OnlineMatch's Leave, at a frame boundary).
-      // Only an app that never turned "leave" on gets the old meaning: this room just ends.
+      // The lobby's Leave is the app's "leave": a joiner unplugs at an agreed frame and plays on; a
+      // host gives up its friends and opens a new room (at a frame boundary). An app without the
+      // "leave" cap gets the old behaviour: the room just ends.
       if (Orca::Status::Cap("leave"))
         Orca::Online::RequestLeave();
       else
@@ -1784,7 +1780,7 @@ struct YouGameRoom::Impl
     auto* stream = static_cast<EventStream*>(user);
     stream->pending.append(data, size * count);
     if (stream->pending.size() > 65536)
-      return 0;  // aborts the transfer
+      return 0;  // abort the transfer
     size_t newline;
     while ((newline = stream->pending.find('\n')) != std::string::npos)
     {
@@ -1881,8 +1877,8 @@ struct YouGameRoom::Impl
 
   // ---- Matchmade rooms (ORCA.md "Matchmaking") ----
 
-  // The room's lobby fields that ride on welcome, join, leave, back, away, lobby and start: the
-  // participants (the ids results name) and the room match running.
+  // The lobby fields carried on welcome, join, leave, back, away, lobby and start: the participants
+  // (the ids results name) and the running room match.
   void LobbyFields(const picojson::object& m)
   {
     if (const auto it = m.find("matchId"); it != m.end())
@@ -1926,7 +1922,7 @@ struct YouGameRoom::Impl
     begin_wait_roster = false;
   }
 
-  // The participants results name: the room match's, once it started, else the room's.
+  // The participants results name: the room match's once it started, else the room's.
   const std::vector<LobbyParticipant>& Participants() const
   {
     return match_participants.empty() ? lobby_participants : match_participants;
@@ -2012,13 +2008,13 @@ struct YouGameRoom::Impl
     SendRaw(fmt::format("{{\"t\":\"begin\",\"revision\":{}}}", revision));
   }
 
-  // A game's report to the room's match, as both Orcas send it (the same bytes).
+  // A game's report to the room's match, identical from both Orcas.
   void SendReport(const GameReport& report, const std::string& match, const std::string& room_queue)
   {
     const bool ranked = room_queue == "ranked";
     const int n = ranked ? ++ranked_sent : ++casual_sent;
-    // A ranked set's game from the match block is named by its fight's first frame: the same on
-    // both machines whatever either missed.
+    // A ranked game from the match block is named by its fight's first frame, the same on both
+    // machines whatever either missed.
     const std::string id = ranked && report.start >= 0 ? fmt::format("g{}", report.start) :
                                                          fmt::format("{}{}", ranked ? "g" : "c", n);
     if (ranked)
@@ -2127,9 +2123,9 @@ struct YouGameRoom::Impl
       SendFinish(current_match, "", "desync");
       return;
     }
-    // The opponent's inputs stopped mid ranked set: this player names itself the set's winner.
-    // The room then never awards the set to the player who stalled (the survivor's word goes
-    // against them), and awards it here if they also went from the room.
+    // The opponent's inputs stopped mid ranked set: this player names itself the winner. The room
+    // never awards the set to the player who stalled, and awards it here if they also left the
+    // room.
     if (stall && room_queue == "ranked" && !finish_sent && !done)
     {
       if (const std::string mine = MyId(); !mine.empty())
@@ -2291,7 +2287,7 @@ struct YouGameRoom::Impl
                     d.empty() ? "" : ",\"d\":" + d));
     const std::string score = Score();
     const int mine = tally.Wins(MyId()), theirs = tally.Wins(TheirId());
-    // No "Game N" (Luis, 2026-10-05): the set's dots say which game it was.
+    // No "Game N": the set's dots show which game it was.
     Orca::UX::ShowToast(Orca::UX::RankedSet::ResultToast(v.out, mine, theirs));
     NOTICE_LOG_FMT(NETPLAY, "Orca room: game {} {} for this player, set {}", id, v.out, score);
     if (end && !finish_sent)
@@ -2344,7 +2340,7 @@ struct YouGameRoom::Impl
           forfeit ? "forfeit" : "games", v.why.empty() ? "" : fmt::format(",\"why\":\"{}\"", v.why),
           Score(), extra));
       const int mine = tally.Wins(my_id), theirs = tally.Wins(TheirId());
-      // On screen: VICTORY or DEFEAT with the rating's change, or "<name> forfeited" first
+      // On screen: VICTORY or DEFEAT with the rating change, or "<name> forfeited" first
       // (UX/SetEnd.h).
       Orca::UX::SetEnd::Current().SetVerdict(
           OutcomeOf(v.out), forfeit, mine, theirs, rating_before, rating_after,
@@ -2356,7 +2352,7 @@ struct YouGameRoom::Impl
       match_id.clear();
       return;
     }
-    // Casual: each game is the room's match.
+    // Casual: each game is its own room match.
     const int n = ++casual_results;
     const std::string id = fmt::format("c{}", n);
     Verdict v = ReadVerdict(m, id);
@@ -2400,7 +2396,7 @@ struct YouGameRoom::Impl
     match_participants.clear();
     LobbyFields(m);
     match_participants = lobby_participants;
-    // On screen (UX/SetEnd.h): a queue room's set, or casual game, against this opponent.
+    // On screen (UX/SetEnd.h): a queue room's set or casual game against this opponent.
     std::string room_queue, opponent;
     {
       std::lock_guard lock(mutex);
@@ -2423,9 +2419,9 @@ struct YouGameRoom::Impl
   void Tick()
   {
     const auto now = Clock::now();
-    // A joiner in a room its friend's game isn't in (a stale invite, a host that left, restarted or
-    // got here second) would wait for a keyframe that never comes: it gives up soon after its
-    // welcome, unless the host said hello by then. From then on the host's leave says it all.
+    // A joiner in a room without its friend's game (a stale invite, or a host that left, restarted
+    // or arrived second) would wait forever for a keyframe, so it gives up soon after its welcome
+    // unless the host has said hello. After that, the host's leave covers it.
     if (joining && !host_seen && welcomed_at && now - *welcomed_at >= HOST_WAIT)
     {
       End("Your friend isn't in that game any more", "peer_left");
@@ -2480,8 +2476,8 @@ struct YouGameRoom::Impl
         SendTo(id, d);
       }
     }
-    // A held join (HoldJoins): every joiner without a keyframe hears it when it changes, and again
-    // every second while it holds (one that arrives later, or reconnects).
+    // A held join (HoldJoins): every joiner without a keyframe hears it on change and every second
+    // while held (for late arrivals and reconnects).
     {
       bool hold_now, hold_changed;
       {
@@ -2502,9 +2498,9 @@ struct YouGameRoom::Impl
       }
     }
 
-    // Say hello to every other Orca in the room until it answers, so neither side treats the other
-    // as a player before both programs are up and agree on the build. Then the host offers each
-    // newcomer its keyframe, again every second until the newcomer's first packet arrives.
+    // Say hello to every other Orca until it answers, so neither side treats the other as a player
+    // before both are up and agree on the build. Then the host offers each newcomer its keyframe
+    // every second until the newcomer's first packet arrives.
     if (now - last_hello >= HELLO_EVERY || offer_now.exchange(false))
     {
       last_hello = now;
@@ -2524,10 +2520,10 @@ struct YouGameRoom::Impl
           d["h"] = picojson::value(!joining);
           if (direct)
             d["dl"] = picojson::value(1.0);
-          // A joiner tells the host its own controls, for its port in the host's game.
+          // A joiner sends the host its own controls, for its port in the host's game.
           if (joining && !options.controls.empty() && options.controls.size() <= MAX_CONTROLS)
             d["ct"] = picojson::value(ToHex(options.controls.data(), options.controls.size()));
-          // And its queue identity (its rating, its pick), for its port in the host's game.
+          // And its queue identity (rating, pick), for the same port.
           if (joining && !options.queue.empty() && options.queue.size() <= MAX_QUEUE)
             d["qi"] = picojson::value(ToHex(options.queue.data(), options.queue.size()));
           SendTo(id, d);
@@ -2564,8 +2560,8 @@ struct YouGameRoom::Impl
     if (!packet)
       return;
     last_send = now;
-    // One message to the whole room (the rooms Worker relays it to everyone else): every other
-    // player gets the same inputs, and a room message limit counts it once.
+    // One message to the whole room (the Worker relays it to everyone else): every player gets the
+    // same inputs, and the room's message limit counts it once.
     picojson::object message;
     message["t"] = picojson::value("msg");
     message["d"] = picojson::value(PacketToJson(*packet));
@@ -2581,7 +2577,7 @@ struct YouGameRoom::Impl
     SendJson(message);
   }
 
-  // A player left: its unread packets go too.
+  // A player left: drop its unread packets too.
   void ForgetPackets(const std::string& id)
   {
     std::lock_guard lock(mutex);
@@ -2602,9 +2598,9 @@ struct YouGameRoom::Impl
       events.push_back(std::move(event));
   }
 
-  // A connection that is out of the game while the room still lists it (gone away, or replaced by a
-  // new socket): a player of the game is unplugged, its keyframe offer and unread packets go, and
-  // whatever comes back on it is a stranger until it says hello again.
+  // A connection out of the game while the room still lists it (away, or replaced by a new socket):
+  // a game player is unplugged, its keyframe offer and unread packets go, and anything it sends is
+  // a stranger's until it says hello again.
   void ResetPeer(std::map<std::string, Peer>::iterator p)
   {
     if (p->second.announced)
@@ -2635,8 +2631,8 @@ struct YouGameRoom::Impl
                                [&](const LobbyParticipant& p) { return p.connection == id; });
   }
 
-  // A player of the game left the room (connection `id`): mid ranked set, the opponent's forfeit
-  // counts down on screen; in casual, the page searches again (UX/SetEnd.h).
+  // A game player left the room: mid ranked set the opponent's forfeit counts down on screen; in
+  // casual, the page searches again (UX/SetEnd.h).
   void OpponentGone(const std::string& id)
   {
     std::string room_queue;
@@ -2647,7 +2643,7 @@ struct YouGameRoom::Impl
       live = !match_id.empty() && !set_done;
       over = set_over;
     }
-    // After the set (set over) a leave is only that: "<name> left", never a forfeit.
+    // After the set, a leave is just "<name> left", never a forfeit.
     if (room_queue == "ranked" && over && InMatch(id))
       Orca::UX::SetEnd::Current().OpponentLeftAfterSet(Orca::UX::SetEnd::NowMs());
     else if (room_queue == "ranked" && live && InMatch(id))
@@ -2701,11 +2697,10 @@ struct YouGameRoom::Impl
       seat_names = std::move(names);
       my_seat = seat;
     }
-    // A hosting Orca holds the room's first seat and is the room's host: its game's port 1 is seat
-    // 0, and joiners trust only the room's host. A friend who got here first (an invite sent before
-    // this Orca reached its own room) holds both, so the room can't work for either: it ends, and
-    // the game opens a fresh one (OnlineMatch), which the page then mirrors. "taken" never reaches
-    // the app.
+    // A hosting Orca must hold the room's first seat and be the room's host: its port 1 is seat 0,
+    // and joiners trust only the room's host. If a friend got here first (an invite sent before
+    // this Orca reached its own room), the room can't work for either, so it ends and the game
+    // opens a fresh one. "taken" never reaches the app.
     if (!joining && !me.empty() && (my_seat != 0 || host != me))
     {
       WARN_LOG_FMT(NETPLAY, "Orca room: this game's host got seat {} of a room hosted by {}",
@@ -2713,7 +2708,7 @@ struct YouGameRoom::Impl
       End("Someone else was already hosting this room, so your game opened a new one", "taken");
       return;
     }
-    // Who left: a player of the game is unplugged by the host; the host leaving ends a joiner's.
+    // Who left: the host unplugs a game player; the host leaving ends a joiner's session.
     for (auto p = peers.begin(); p != peers.end();)
     {
       if (present.contains(p->first))
@@ -2744,7 +2739,7 @@ struct YouGameRoom::Impl
     for (const auto& [id, info] : present)
     {
       auto [p, inserted] = peers.try_emplace(id);
-      // A link speaks for one seat: another seat, another link.
+      // A link speaks for one seat: a different seat needs a different link.
       if (p->second.linked && p->second.slot != info.first)
         UnlinkPeer(p->first, p->second);
       p->second.slot = info.first;
@@ -2807,10 +2802,10 @@ struct YouGameRoom::Impl
     }
     else if (t == "join" || t == "back" || t == "leave" || t == "away" || t == "lobby")
     {
-      // A dropped connection ("away") is out of the game at once: its controller unplugs. So is the
-      // connection a player comes back on ("back", or "join" for an id still listed): the room
-      // replaced a socket that died without it noticing, and behind the new one is another run of
-      // Orca, which greets anew and needs its own keyframe.
+      // A dropped connection ("away") is out of the game at once and its controller unplugs. So is
+      // the connection a player comes back on ("back", or "join" for a listed id): the room
+      // replaced a dead socket, and behind the new one is another Orca run that greets anew and
+      // needs its own keyframe.
       if (t == "away" || t == "back" || t == "join")
       {
         if (const auto player = m.find("player");
@@ -2823,7 +2818,7 @@ struct YouGameRoom::Impl
             if (t != "away")
               last_hello = {};  // greet it at once
           }
-          // The opponent of a set whose forfeit was counting down is back in the room.
+          // The opponent of a set whose forfeit was counting down is back.
           if (t != "away" && InMatch(id))
             Orca::UX::SetEnd::Current().OpponentBack(Orca::UX::SetEnd::NowMs());
         }
@@ -2872,10 +2867,10 @@ struct YouGameRoom::Impl
     }
     else if (t == "set-over")
     {
-      // A ranked set's room after its verdict: it stays open (relay, chat) until the players leave
-      // it, each when their results screen is over or they hold Z (OnlineMatch's SetOverLeave), or
-      // `ms` passes and it closes with 4004. Nothing is rated or forfeited any more, and every lobby
-      // command is refused ("The set is over").
+      // A ranked set's room after its verdict stays open (relay, chat) until the players leave,
+      // each when their results screen ends or they hold Z, or until `ms` passes and it closes with
+      // 4004. Nothing more is rated or forfeited, and every lobby command is refused ("The set is
+      // over").
       const int ms = Int(m, "ms", 0, 3600000).value_or(0);
       {
         std::lock_guard lock(mutex);
@@ -2911,9 +2906,9 @@ struct YouGameRoom::Impl
     const std::string kind = Str(d, "k");
     if (kind == "bye")
     {
-      // Only known reasons, so a peer can't put text in this player's report. "mismatch" only from
-      // the host this player is joining: its game never carried the queue room's header, so the
-      // match can't start (OnlineMatch's FailHeaderWait).
+      // Only known reasons, so a peer can't inject text into this player's report. "mismatch" only
+      // from the host this player is joining: its game never carried the queue room's header, so
+      // the match can't start.
       if (const std::string reason = Str(d, "r");
           reason == "desync" || reason == "stalled" ||
           (reason == "mismatch" && peer.drop_in_host && joining))
@@ -2924,7 +2919,7 @@ struct YouGameRoom::Impl
     }
     if (kind == "drop")
     {
-      // The host unplugged this player: its report says why, as the host's does.
+      // The host unplugged this player: its report gives the host's reason.
       if (!peer.drop_in_host || !joining)
         return;
       const std::string reason = Str(d, "r");
@@ -2947,9 +2942,8 @@ struct YouGameRoom::Impl
     }
     if (kind == "hello")
     {
-      // A hello's "pf" (a float class, sent by 0.3.4 builds for Project+) is ignored: every Mac and
-      // PC computes the same game now (Online.cpp CompatibilityKey), and a build that differs in
-      // how has another compatibility key.
+      // A legacy hello field "pf" (a float class) is ignored: every Mac and PC computes the same
+      // game now, and a build that differs has another compatibility key.
       if (Str(d, "c") != options.compatibility)
       {
         // Not a player of this game; a joiner can't play it at all.
@@ -2963,10 +2957,10 @@ struct YouGameRoom::Impl
       // It offers direct links (an Orca with ORCA_DIRECT=0 doesn't).
       peer.direct = d.count("dl") && d.at("dl").is<double>() && d.at("dl").get<double>() == 1;
       peer.heard_us = peer.heard_us || (d.count("r") && d.at("r").evaluate_as_boolean());
-      // The game's host says so, and is the room's host (the first in): no other player can take
-      // a joiner's game over by claiming it.
+      // Only the game's host that is also the room's host (first in) counts, so no other player can
+      // take over a joiner's game by claiming it.
       peer.drop_in_host = d.count("h") && d.at("h").evaluate_as_boolean() && id == host;
-      // A joiner's own controls (none from the game's host: its own are in its port already).
+      // A joiner's own controls (the game's host sends none: its own are already in its port).
       if (!peer.drop_in_host && d.count("ct"))
         peer.controls = ControlsFromHex(d.at("ct"));
       if (!peer.drop_in_host && d.count("qi"))
@@ -2974,7 +2968,7 @@ struct YouGameRoom::Impl
       host_seen = host_seen || peer.drop_in_host;
       if (!was_heard)
         last_hello = {};  // answer at once rather than on the next hello tick
-      // A player of the game: a joiner at a seat other than the host's, or the host itself.
+      // A game player: a joiner at a seat other than the host's, or the host itself.
       if (!peer.announced && peer.slot >= 0)
       {
         peer.announced = true;
@@ -2987,7 +2981,7 @@ struct YouGameRoom::Impl
         Emit(
             {PeerEvent::Kind::Arrived, peer.slot, peer.drop_in_host, peer.name, peer.controls,
              {}, {}, peer.queue});
-        // The page's lobby shows the room ready now, not at its next roster change.
+        // Refresh the page's lobby now, not at the next roster change.
         Publish();
       }
       return;
@@ -3021,7 +3015,7 @@ struct YouGameRoom::Impl
         return;
       KeyframeInfo info;
       const auto frame = Int(d, "f", 0, MAX_FRAME);
-      // YouGame's store takes 128 MB at most.
+      // YouGame's store accepts at most 128 MB.
       const auto size = Int(d, "n", 1, 128 << 20);
       info.id = Str(d, "id");
       info.hash = Str(d, "x");
@@ -3044,9 +3038,9 @@ struct YouGameRoom::Impl
     }
     if (kind == "dl" || kind == "dlc" || kind == "dlr")
     {
-      // Direct link signalling, only from a player of this game (its hello had our compatibility
-      // key) that offered links, while links are on here. Its offer may come before this side
-      // linked it: link it now.
+      // Direct-link signalling, only from a game player (its hello had our compatibility key) that
+      // offered links, while links are on here. Its offer may arrive before this side linked it:
+      // link it now.
       if (!direct_started || !direct_on.value_or(false) || !peer.announced || !peer.direct)
         return;
       if (!peer.linked)
@@ -3069,8 +3063,8 @@ struct YouGameRoom::Impl
     if (peer.linked)
       direct->OnRelayPacket(id);
     std::lock_guard lock(mutex);
-    // Nobody read the inbox for a while (a long stall on this side). Each packet repeats every
-    // input the sender hasn't seen acknowledged, so the newer half says all the older half did.
+    // Nobody read the inbox for a while (a long stall here). Each packet repeats every input the
+    // sender hasn't seen acknowledged, so the newer half covers everything the older half did.
     if (inbox.size() >= MAX_INBOX)
     {
       WARN_LOG_FMT(NETPLAY, "Orca room: inbox full, dropping the {} oldest packets", MAX_INBOX / 2);
@@ -3175,7 +3169,7 @@ void YouGameRoom::OfferKeyframe(int seat, const KeyframeInfo& info)
 {
   std::lock_guard lock(m_impl->mutex);
   m_impl->keyframe_offers[seat] = info;
-  // Sent on the I/O thread's next turn, not its next hello tick: a friend waits on it.
+  // Sent on the I/O thread's next turn, not its next hello tick: a friend is waiting on it.
   m_impl->offer_now = true;
 }
 
@@ -3264,8 +3258,8 @@ void CoalescePacket(std::optional<Packet>* outgoing, const Packet& packet)
     pending = packet;
     return;
   }
-  // The newer packet replaces one not sent yet. Keep what only the older one carried: inputs
-  // before the newer one's first frame (both come from the same local history), and its checksum.
+  // The newer packet replaces one not yet sent. Keep what only the older one carried: inputs before
+  // the newer one's first frame (both come from the same local history), and its checksum.
   Packet merged = packet;
   const int old_last = pending->first_frame + static_cast<int>(pending->pads.size()) - 1;
   if (pending->first_frame < merged.first_frame && old_last >= merged.first_frame - 1)
@@ -3284,8 +3278,8 @@ void CoalescePacket(std::optional<Packet>* outgoing, const Packet& packet)
     merged.checksum_frame = pending->checksum_frame;
     merged.checksum = pending->checksum;
   }
-  // Drop-in history: the older packet's goes first when the newer one continues it (or has none);
-  // a gap is sent again once the joiner's acknowledgement stalls.
+  // Drop-in history: the older packet's goes first when the newer one continues it (or has none); a
+  // gap is resent once the joiner's ack stalls.
   if (!pending->history.empty())
   {
     if (merged.history.empty())
@@ -3363,8 +3357,8 @@ void YouGameRoom::Send(const Packet& packet)
     std::lock_guard lock(m_impl->mutex);
     CoalescePacket(&m_impl->outgoing, packet);
   }
-  // Every packet also goes straight to each linked player; whichever copy arrives first counts
-  // (Session::ReceivePackets takes both).
+  // Every packet also goes straight to each linked player; the first copy to arrive wins
+  // (Session::ReceivePackets handles both).
   m_impl->SendDirect(packet);
 }
 

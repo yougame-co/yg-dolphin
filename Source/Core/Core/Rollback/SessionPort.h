@@ -1,7 +1,7 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-// The emulator side of an Orca rollback session: Orca::Net::Game over the snapshot ring.
+// The emulator side of an Orca rollback session: implements Orca::Net::Game on the snapshot ring.
 
 #pragma once
 
@@ -24,12 +24,12 @@ class System;
 
 namespace Rollback
 {
-// Create and destroy on the CPU thread at a frame boundary, or after emulation has stopped: the
-// destructor resets the ring and the NAND journal, and SI polls read the active port's pads.
+// Create and destroy only on the CPU thread at a frame boundary, or after emulation stops: SI
+// polls read the active port's pads, and the destructor resets the ring and the NAND journal.
 class RingPort final : public Orca::Net::Game
 {
 public:
-  // `max_rollback` is the session's Config::max_rollback. `unthrottled` (tests) never throttles.
+  // `max_rollback` is the session's Config::max_rollback. `unthrottled` is for tests.
   RingPort(Core::System& system, int max_rollback, bool unthrottled = false);
   ~RingPort() override;
   RingPort(const RingPort&) = delete;
@@ -43,19 +43,18 @@ public:
   void ResetPacing() override;
   double SaveMs() const override { return m_save_ms; }
 
-  // What GameCube port `port` (0-3) reports while the current frame runs: decoded from the
-  // session's pads, the local player's included, so both machines see the same bytes.
+  // What port `port` (0-3) reports this frame. The local pad also comes from the session, so both
+  // machines see the same bytes.
   GCPadStatus Pad(int port) const { return m_pads[port]; }
 
-  // Drop-in: a joining player replays the host's frames as fast as it can, without rendering or
-  // sound, until it has caught up (then pacing restarts from now).
+  // Drop-in: a joining player replays the host's frames at full speed, without rendering or sound,
+  // until it catches up. Pacing restarts when it does.
   void SetCatchingUp(bool catching_up);
   bool CatchingUp() const { return m_catching_up; }
-  // The frame running now is a rollback's re-run (Rollback::IsResimulating() is that or a
-  // catch-up).
+  // True during a rollback re-run. Rollback::IsResimulating() also covers catch-up.
   bool Resimulating() const { return m_resimulating; }
-  // Drop-in: load the host's keyframe as the state at the start of `frame` (from the frame-boundary
-  // hook, like Load).
+  // Drop-in: loads the host's keyframe as the state at the start of `frame`. Call from the
+  // frame-boundary hook, like Load.
   bool LoadImage(MachineImage image, int frame);
 
   // The port of the running session, or null.
@@ -63,36 +62,30 @@ public:
 
 private:
   Core::System& m_system;
-  // The newest max_rollback + 2 saves. The session saves only unconfirmed frames and checksum
-  // frames, and stalls once the newest frame is max_rollback past the confirmed one, so a rollback
-  // target or a checksum frame is asked for before more than max_rollback newer frames are saved.
-  // Sparse snapshots (Config::snapshot_every) need no more: a rollback to the first wrong frame d
-  // loads the newest snapshot s <= d, and every snapshot newer than s is past d, so at most
-  // max_rollback of them (frames d + 1 to the newest) are newer than the one it loads.
+  // Holds the newest max_rollback + 2 saves. That is enough: the session stalls once it is
+  // max_rollback frames past the confirmed one, so any frame it loads or checksums has at most
+  // max_rollback newer saves. This also holds with sparse snapshots (Config::snapshot_every).
   SnapshotRing m_ring;
-  // Wall time of one Save, smoothed (0: none measured yet). Saves that allocate are not measured.
+  // Smoothed wall time of one Save; 0 until measured. Saves that allocate are skipped.
   double m_save_ms = 0;
   std::array<GCPadStatus, Orca::Net::MAX_SEATS> m_pads;
   bool m_unthrottled;
   bool m_resimulating = false;
   bool m_catching_up = false;
-  // The frame saved since the emulator last ran: a stalled boundary asks again for the same one.
+  // The frame saved since the emulator last ran, since a stalled boundary asks to save it again.
   int m_saved_since_run = -1;
-  // The throttle's reference before the rollback load, put back when the re-run catches up.
+  // The throttle reference from before a rollback load, restored when the re-run ends.
   std::optional<std::pair<s64, TimePoint>> m_reference_before_load;
 };
 
-// One frame boundary of a session: reports the frame that completed and the local pad, then does
-// what the session says. While it stalls, waits `stall_wait` and asks again; when it asks this
-// machine to wait (time sync), holds one frame period and asks again; until it moves on or
-// `stopping()` is true. Returns the last step: Run or Rollback (the next frame has its pads, and
-// after a Rollback the state is the start of step.frame), or Ended (Session::Error says why;
-// stopping also ends with Ended). A stall or wait that lasts longer than `give_up_after` of wall
-// time (zero: never) also ends with Ended and sets *gave_up: the other side stopped answering.
-// `sample_local` reads the local pad: once, and again after each wait, so the frame that runs after
-// a wait plays the pad as it is then, not one a frame old (the session decides a wait before it
-// samples). A stall's retries pass the first sample again: the session keeps a frame's first one.
-// `game` is the session's Game (the RingPort in a match).
+// Runs one session frame boundary: reports the completed frame and the local pad, then loops on
+// stalls (sleeping `stall_wait`) and time-sync waits (sleeping one frame) until the session moves
+// on or `stopping()` returns true.
+//
+// Returns Run or Rollback (after a Rollback the state is the start of step.frame), or Ended (see
+// Session::Error). Holding longer than `give_up_after` (zero = never) also returns Ended and sets
+// *gave_up. `sample_local` is called once, and again after each wait so the next frame uses a fresh
+// pad; stall retries reuse the first sample.
 Orca::Net::Step StepSession(Orca::Net::Session& session, Orca::Net::Game& game, int completed_frame,
                             const std::function<Orca::Net::Pad()>& sample_local,
                             const std::function<bool()>& stopping,

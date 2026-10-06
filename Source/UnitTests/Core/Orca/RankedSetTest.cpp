@@ -407,7 +407,7 @@ TEST(OrcaRankedSet, ScoreLine)
   s.wins = {1, 0};
   EXPECT_EQ(RankedSet::ScoreLine(s, 0), "");
   EXPECT_EQ(RankedSet::ScoreLine(s, 1), "");
-  // The results screen names the game just played (Luis, 2026-10-05): game 1's says Game 1.
+  // The results screen names the game just played: game 1's says Game 1.
   EXPECT_EQ(RankedSet::ScoreLine(s, 0, true), "Game 1 · 1–0");
   EXPECT_EQ(RankedSet::ScoreLine(s, 1, true), "Game 1 · 0–1");
   s.wins = {1, 1};
@@ -424,7 +424,7 @@ TEST(OrcaRankedSet, ScoreLine)
   EXPECT_EQ(RankedSet::ScoreLine(s, 0), "Set void · 2–1");
 }
 
-// A matchmade game's result toast: no "Game N" (Luis, 2026-10-05), the local player's score first.
+// A matchmade game's result toast: no "Game N", and the local player's score first.
 TEST(OrcaRankedSet, ResultToast)
 {
   EXPECT_EQ(RankedSet::ResultToast("won", 1, 0), "You won · 1–0");
@@ -434,8 +434,8 @@ TEST(OrcaRankedSet, ResultToast)
   EXPECT_EQ(RankedSet::ResultToast("", 0, 0), "That game didn't count");
 }
 
-// Design F's set dots: each decided game's winner in order, a tied game skipped, the game being
-// played next; none once the set is over.
+// The overlay's set dots: each decided game's winner in order, a tied game skipped, then the game
+// being played next; none once the set is over.
 TEST(OrcaRankedSet, DotsFollowTheDecidedGames)
 {
   SetState s;

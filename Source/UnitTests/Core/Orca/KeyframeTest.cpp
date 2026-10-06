@@ -119,9 +119,9 @@ TEST(OrcaKeyframe, EncryptionRoundTripsAndRefusesTampering)
   EXPECT_FALSE(DecryptKeyframe(77, key.substr(0, 63) + "g", &opened));
 }
 
-// The HTTP store against Tools/orca/fake_keyframes.py (ORCA_TEST_KEYFRAME_SERVER=http://127.0.0.1:<port>):
-// put, get with progress, delete; retries past 503s; a stale ticket refused with code "ticket" is
-// replaced once; a ticket refused again is final; a repeated PUT of the same id counts as done.
+// The HTTP store against Tools/orca/fake_keyframes.py (set ORCA_TEST_KEYFRAME_SERVER to its URL):
+// put, get with progress, delete, retries past 503s. A stale ticket is replaced once, a second
+// refusal is final, and a repeated PUT of the same id counts as done.
 TEST(OrcaKeyframe, HttpStoreAgainstAFakeServer)
 {
   const char* server = std::getenv("ORCA_TEST_KEYFRAME_SERVER");

@@ -279,10 +279,8 @@ TEST(OrcaQueue, ItsOwnCharacterSelectsMasks)
   EXPECT_EQ(Advance(no, s, 5), State{});
 }
 
-// Luis, 2026-10-05: A on the character select's BACK works wherever B backs out. On the queue's own
-// character select while not ready the rules pass it (OnlineRulesTest); while ready (searching)
-// the one press first stops the search (`orca queue unready`), then the frame after it the game
-// gets that A and backs out (`orca menu cancel`), so the page never sees a back out mid-search.
+// A on BACK works wherever B backs out. While searching, one press first stops the search, then
+// the next frame hands the game that A to back out, so the page never sees a back-out mid-search.
 TEST(OrcaQueue, AOnBackWhileSearchingUnreadiesThenBacksOut)
 {
   const auto on_back = [](View v) {
@@ -306,8 +304,7 @@ TEST(OrcaQueue, AOnBackWhileSearchingUnreadiesThenBacksOut)
   m = Gate(slid, s);
   EXPECT_TRUE(m[0].buttons & A);
   EXPECT_FALSE(m[0].a_centres_stick);
-  // The press: not ready, and the next frame presses A for the game (idempotent: Step checks the
-  // boundary run again on its own result).
+  // The press: not ready, and the next frame presses A for the game.
   s = Step(Press(on_back(Solo()), A), s, 801);
   EXPECT_EQ(s.ready, 0);
   EXPECT_TRUE(s.flags & FLAG_BACK_A);
@@ -438,8 +435,7 @@ TEST(OrcaQueue, RankedLaterGamesWaitForTheCharacterOrder)
 
 TEST(OrcaQueue, RankedLaterGamesGoOnTheMomentTheOrderHasBothLockIns)
 {
-  // Luis, 2026-10-04: "after you lock in opponent chooses and presses start to lock in and
-  // immediately we go to stage select". The character order's Start was each one's lock-in.
+  // Each player's Start in the character order is their lock-in: once both are in, go straight on.
   View v = Room(true);
   v.game1 = false;
   v.order_done = false;
@@ -492,8 +488,7 @@ TEST(OrcaQueue, ALockedInPlayerKeepsTheirPickAndBUnlocks)
   up.ports[1].placed = false;
   s = Step(Press(up, 0, START), s, 102);
   EXPECT_EQ(s.ready, 1);
-  // B unlocks (the game doesn't see it: masked while locked in, and held on after it the online
-  // rules pass none of it).
+  // B unlocks; the game never sees that B (masked while locked in, then held).
   s = Step(Press(v, B), s, 103);
   EXPECT_EQ(s.ready, 0);
   EXPECT_EQ(Gate(v, s)[0].buttons & (A | X | Y), 0);
@@ -505,7 +500,7 @@ TEST(OrcaQueue, ALockedInPlayerKeepsTheirPickAndBUnlocks)
 
 TEST(OrcaQueue, CasualLaterGamesWaitForBothStartsWithNoTimer)
 {
-  // Game 2 on with the same opponent (Luis, 2026-10-04): no clock, no timeout, nobody frozen.
+  // Later games with the same opponent: no clock, no timeout, nobody frozen.
   View v = Room();
   v.game1 = false;
   EXPECT_TRUE(ReadyPhase(v));
@@ -784,9 +779,8 @@ TEST(OrcaQueue, IntSqrtIsExact)
 
 TEST(OrcaQueue, SteeringIsTheSameOnEveryHost)
 {
-  // Golden sticks: a Mac and a PC must both give exactly these (integer arithmetic only). The last
-  // rows include (hand, pick) pairs where the old float version gave a Mac (Apple clang fused
-  // dx * dx + dy * dy into one FMA) and a PC (MSVC, two products and a sum) sticks a unit apart.
+  // Golden sticks every host must give exactly (integer arithmetic only). The last rows are cases
+  // where float math with a fused multiply-add and without one rounded a unit apart.
   struct Row
   {
     float x, y, tx, ty;
@@ -807,8 +801,7 @@ TEST(OrcaQueue, SteeringIsTheSameOnEveryHost)
       {1.0f, 1.0f, 1.05f, 1.05f, 128, 128},
       {29.5f, -19.5f, -29.5f, 19.5f, 45, 183},
       {3.0f, 4.0f, 3.6f, 4.8f, 151, 158},  // exactly 150.5: half rounds up
-      // The old float version, Mac (fused) / PC: 41 177 / 41 178, 52 193 / 52 194, 226 111 /
-      // 227 111, 29 138 / 28 138, 227 138 / 228 138.
+      // Fused and unfused float math disagreed by one on these.
       {20.1365986f, 11.0321474f, 17.4719582f, 12.5501671f, 41, 178},
       {-8.26101685f, -3.44133377f, -27.370079f, 13.1229248f, 52, 194},
       {-4.39935303f, 15.3992043f, 11.6091461f, 12.5947876f, 227, 111},
@@ -911,8 +904,8 @@ TEST(OrcaQueue, HoldingZSkipsOnce)
 
 TEST(OrcaQueue, RankedHasNoSkip)
 {
-  // Luis, 2026-10-05: "you should not be able to click Z to escape a ranked match. You are forced
-  // to play a ranked match." Casual keeps the skip: the hint, then the bar while Z is held.
+  // Ranked matches can't be skipped with Z. Casual keeps the skip: the hint, then the bar while Z
+  // is held.
   State s = Step(Room(), State{}, 100);
   ASSERT_TRUE(ReadyPhase(Room()));
   EXPECT_TRUE(MaySkip(Room(), s));
@@ -971,8 +964,8 @@ TEST(OrcaQueue, RankedHasNoSkip)
 
 TEST(OrcaQueue, RandomIsAPickLikeAnyCharacter)
 {
-  // Luis, 2026-10-05: "for both casual and ranked, I should be able to select random if I want to."
-  // Random is the character select's 0x29 in both games (Selch_Random), never "no character".
+  // Random is a valid pick in casual and ranked. It is the character select's 0x29 in both games
+  // (Selch_Random), never "no character".
   ASSERT_NE(RANDOM_CHARACTER, NO_CHARACTER);
   Identity id;
   id.character = RANDOM_CHARACTER;
@@ -1068,8 +1061,8 @@ TEST(OrcaQueue, TheLatchKeepsTheRawButtons)
   EXPECT_EQ(m.Read16(RAW + 2), 0);
   EXPECT_EQ(m.Read16(RAW_PREV), START | Z);
   EXPECT_EQ(m.Read16(RAW_PREV + 2), B);
-  // Any queue room's header (an older page's, without queue2): written too (the character
-  // select's B and the character order's Start read it, OnlineRules.h, CharOrder.h).
+  // Any queue room's header, even without queue2, is written too (OnlineRules.h and CharOrder.h
+  // read it).
   FakeMemory plain = Block(0);
   EXPECT_GT(Latch(plain, {Pad(START), Pad(B), std::nullopt, std::nullopt}), 0);
   EXPECT_EQ(plain.Read16(RAW), START);

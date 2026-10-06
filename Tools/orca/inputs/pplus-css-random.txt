@@ -1,7 +1,6 @@
-# Random in a ranked queue2 set (Orca 0.3.19, ORCA.md "Random and ranked's no skip"; Luis,
-# 2026-10-05: "for both casual and ranked, I should be able to select random if I want to"),
-# Project+ (ORCA_PROFILE=PPLUS32), as pplus-css-lockin.txt but every pick is RANDOM (the character
-# select's id 0x29; the tile in the grid's bottom row, about -3..4, -1.5..2.5):
+# Random in a ranked queue2 set (ORCA.md "Random and ranked's no skip": Random is allowed in casual
+# and ranked), Project+ (ORCA_PROFILE=PPLUS32), as pplus-css-lockin.txt but every pick is RANDOM
+# (character id 0x29; the tile in the grid's bottom row, about -3..4, -1.5..2.5):
 #   - game 1: on the player's own character select port 1 goes up 20 frames and right 24 (0.6, 0.7)
 #     onto RANDOM, A, Start: `orca queue ready ranked 41 0`; port 2's pick (ORCA_TEST_QUEUE_PICK) is
 #     Random too, steered onto the host's RANDOM tile; both ready (the game resolves both Randoms

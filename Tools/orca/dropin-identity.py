@@ -17,7 +17,7 @@
 #    controller (a GameCube controller's 12 bytes) into its per-port table (0x805B7480): both Orcas
 #    must show port 1 with Host's and port 2 with Friend's. No session may report a desync, and the
 #    frames both ran from the host's keyframe on must hash alike (YG_HASHLOG; only a frame first
-#    run on a guessed input may differ there, before its re-run). Two Orca processes at most.
+#    run on a guessed input may differ there, before its re-run). Runs two Orca processes.
 import os
 import queue
 import random

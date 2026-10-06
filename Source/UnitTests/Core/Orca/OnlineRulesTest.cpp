@@ -1,7 +1,7 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-// The online rules for queue matches, Phase 1 (Core/Orca/UX/OnlineRules.h): the match block's
+// The online rules for queue matches (Core/Orca/UX/OnlineRules.h): the match block's
 // header and what it locks, over a fake of the game's memory.
 
 #include <bit>
@@ -479,8 +479,8 @@ TEST(OrcaOnlineRules, TheCharacterSelectPassesAOnlyInTheGrid)
   EXPECT_EQ(GateMasks(m)[0].buttons, B | A);
   SetHand(m, 0, CSS_HAND_GRID, -2.9f);
   EXPECT_EQ(GateMasks(m)[0].buttons, B);
-  // Brawl's bottom row reaches -4.07 (RANDOM at its right end): A all the way down it (Orca 0.3.19;
-  // before, -3.0 swallowed A over the bottom quarter of every tile in that row).
+  // Brawl's bottom row reaches -4.07 (RANDOM at its right end), so A passes all the way down it.
+  // A -3.0 edge would swallow A over the bottom quarter of every tile in that row.
   SetHand(m, 0, CSS_HAND_GRID_HOLDING, -3.4f);
   EXPECT_EQ(GateMasks(m)[0].buttons, B);
   SetHand(m, 0, CSS_HAND_GRID_HOLDING, -4.07f);
@@ -516,10 +516,10 @@ TEST(OrcaOnlineRules, TheCharacterSelectPassesAOnlyInTheGrid)
   EXPECT_EQ(GateMasks(p)[0].buttons, B | DPAD | A);
 }
 
-// Luis, 2026-10-05: "anytime you could press B to go back right now, clicking A over the back
-// button should also work". Held B backs out of the queue's own character select (FLAG_SOLO), so
-// A on BACK does too there: port 1's new press, the stick centred while A is down. Queue rooms
-// (casual and ranked) keep it masked, Rules never takes A, and friends games mask nothing.
+// Wherever B backs out, A on the BACK button must too. Held B backs out of the queue's own
+// character select (FLAG_SOLO), so A on BACK works there: port 1's new press, with the stick
+// centred while A is down. Queue rooms (casual and ranked) keep it masked, Rules never takes A,
+// and friends games mask nothing.
 TEST(OrcaOnlineRules, AOnBackBacksOutOfTheQueuesOwnCharacterSelectOnly)
 {
   constexpr u16 A = PAD_BUTTON_A;
@@ -896,9 +896,9 @@ TEST(OrcaOnlineRules, TheRoomsHeaderComesFromItsCode)
   }
 }
 
-// The joiner's check (OnFrame, ExpectHeader): the host's own character select's header (the queue
-// CSS it waited on, before its header switched to the room's) has the room's mode and ruleset,
-// which was all the check compared before; it is refused now, as is any other room's.
+// The joiner's check (OnFrame, ExpectHeader): the header of the host's own queue character select
+// (before it switched to the room's) has the room's mode and ruleset, but is still refused, as is
+// any other room's header.
 TEST(OrcaOnlineRules, AJoinerRefusesAHeaderThatIsNotItsRooms)
 {
   const std::string code = "rfkyxp4s";

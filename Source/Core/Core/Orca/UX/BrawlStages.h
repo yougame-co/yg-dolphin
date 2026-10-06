@@ -19,45 +19,32 @@ namespace Core
 class CPUThreadGuard;
 }
 
-// A ranked set's stage flow on vanilla Brawl's own stage select (RSBE01 rev 2, Supernova 2025;
-// ORCA.md "Ranked stages (Brawl)"): game 1's 1-2-1 strikes on the five starters, the first striker
-// a coin from the game's own RNG; later games' optional ban by the winner, then the loser's pick
-// with full DSR; the MK clause; IC/FD; turns, turn timers and their defaults; struck and illegal
-// stages greyed and refused; the last stage selected by the flow.
+// Ranked stage selection on vanilla Brawl's own stage select (RSBE01 rev 2, Supernova 2025 rules).
+// See ORCA.md, "Ranked stages (Brawl)". Game 1 uses 1-2-1 strikes on the five starters, with the
+// first striker chosen by a coin flip. Later games: the winner may ban, then the loser picks
+// (with DSR). Also handles the Meta Knight clause, turn timers and their defaults, and greys out
+// struck or illegal stages.
 //
-// Everything is a pure function of emulated memory: the set and the steps live in the match block
-// (FreeSpace.h), the frame hook writes them from what the game shows (the scene, the stage
-// select's cursor, the pads the game read), and the input gate's source (Masks) reads them back.
-// Every write is idempotent at its boundary (a hook run again there, after a rollback's load,
-// changes nothing), and the turn timer counts the game's own frames, so both machines, every re-run
-// and a drop-in's keyframe compute the same.
+// Everything is a pure function of emulated memory. State lives in the match block's step region
+// (+0x80..+0xBF), the frame hook updates it from what the game shows, and the input gate reads it
+// back. Writes are idempotent and the turn timer counts game frames, so both machines, every
+// resimulation and a drop-in's keyframe all agree.
 //
-// MERGE NOTES (sp-brawl-sss):
-// - Whether this game plays a ranked Brawl set comes from the match block's header (MatchBlock.h,
-//   written by OnlineRules at the alone boundary; ORCA_TEST_QUEUE=ranked in a test). Game 1's
-//   first striker is the header's coin (one bit of the room code's hash).
-// - The set (game, last winner, stages won for DSR) is the results track's (SetBlock.h) when the
-//   block holds a valid one; this flow keeps its own record of the results screens only for a
-//   block without it.
-// - This flow's state is the block's step-state range (+0x80..+0xBF); the Project+ flow keeps its
-//   own there, in its own game. A new stage select (its frame counter back to the start) starts the
-//   game's steps again, so stale bytes from a set that ended mid-select never carry into the next.
-// - The step machine is the shared one (RankedSteps.h, Ranked::Brawl2025 and its Progress driver).
-// - The input gate has one source: UX.cpp ORs every rule's masks; this flow's are Masks.
+// - Ranked or casual comes from the match block header (written by OnlineRules); game 1's first
+//   striker is the header's coin.
+// - The set (game number, last winner, stages won) comes from SetBlock.h when valid; otherwise
+//   this flow keeps its own record from the results screens.
+// - A new stage select (frame counter reset) restarts the steps, so stale bytes never carry over.
+// - The step machine is shared with Project+ (RankedSteps.h). UX.cpp ORs all rules' gate masks.
 //
-// The two cursors (StageCursors.h, ORCA.md "The stage select's two cursors"): each player acts on
-// their own cursor, X strikes or bans on the turn's player's turn, Y skips the ban, the picker's A
-// picks, anyone's A proposes (the same stage from both: it is picked, RankedSteps.h Propose), B
-// takes a proposal back, A on the page button turns the page. The game's own cursor and pads are
-// the flow's: the gate masks every port, and the flow writes the cursor's position (the last
-// mover's, the page button, the picked stage) and presses A through the gate.
+// Each player has their own cursor (StageCursors.h). On your turn X strikes or bans and Y skips
+// the ban. The picker's A picks; anyone's A proposes, and matching proposals pick that stage
+// (RankedSteps.h Propose). B withdraws a proposal. The gate masks the game's own cursor and pads;
+// the flow moves the game's cursor and presses A itself.
 //
-// Casual games (ORCA.md "Casual stage pick"): the same machinery on a casual header (mode casual,
-// ruleset Brawl) while both players are plugged in. No strikes: both players name a preferred stage
-// at the same time with A, 15 s; the same stage is picked at once, two different ones by a coin
-// from the room, the header's coin and the game number; whoever named none when time runs out gets
-// a random legal stage. The flow moves the cursor there and presses A, as for a ranked pick that
-// timed out.
+// Casual games ("Casual stage pick" in ORCA.md) use the same machinery: both players name a
+// preferred stage with A within 15 s. Matching picks win; otherwise a coin seeded from the room
+// and game decides. A player who names none gets a random legal stage.
 namespace Orca::UX
 {
 class GuestMemory;
@@ -65,55 +52,53 @@ class GuestMemory;
 
 namespace Orca::UX::BrawlStages
 {
-// Supernova 2025's legal stages, in Ranked::Brawl2025's order (its stage indices).
+// Supernova 2025's legal stages, in Ranked::Brawl2025's index order.
 enum Stage : u8
 {
   Battlefield,
-  PokemonStadium,  // the Melee page's
+  PokemonStadium,  // Melee's
   LylatCruise,
   Smashville,
-  YoshisIsland,  // Brawl's
+  YoshisIsland,  // Brawl's, not Melee's
   FinalDestination,
   DelfinoPlaza,
   kStages,
 };
 
-// ---- The game's memory (Brawl rev 2) ----
-constexpr u32 SCENE_MANAGER = 0x805A0060;  // gfSceneManager*: +4 the scene
+// ---- Game memory (Brawl rev 2) ----
+constexpr u32 SCENE_MANAGER = 0x805A0060;  // gfSceneManager*: +4 is the current scene
 constexpr u32 PAD_SYSTEM = 0x805A0040;     // gfPadSystem*
 constexpr u32 RNG_SEED = 0x805A00BC;       // g_mtRandDefault's seed
 constexpr u32 GAME_GLOBAL = 0x805A00E0;    // g_GameGlobal*
-// gfPadSystem: the game's pads as it read them, 4 x 0x40 from +0x40; +0 the buttons held.
+// gfPadSystem: four 0x40-byte pads from +0x40; +0 is the held buttons.
 constexpr u32 PAD_SYSTEM_PADS = 0x40;
 constexpr u32 PAD_STRIDE = 0x40;
 // gfPadButtons bits.
 constexpr u16 GF_X = 0x0400;
 constexpr u16 GF_Y = 0x0800;
-// The stage select scene (scSelStage) +0x3AC: its task.
+// scSelStage +0x3AC is its task.
 constexpr u32 SCENE_SSS_TASK = 0x3AC;
-// The task: +0x8C the stage icons (u32 pointers), +0x244 the hovered item, +0x248 the selected
-// slot (-1 none), +0x278 the port that drives the cursor (0xF0 every port).
+// Task: +0x8C stage icon pointers, +0x244 hovered item, +0x248 selected slot (-1 none), +0x278 the
+// port driving the cursor (0xF0 = any port).
 constexpr u32 TASK_ICONS = 0x8C;
 constexpr u32 TASK_HOVER = 0x244;
 constexpr u32 TASK_SELECTED = 0x248;
 constexpr u32 TASK_PORT = 0x278;
 constexpr u32 PORT_ANY = 0xF0;
 
-// ---- The match block (FreeSpace.h; the casual track's MatchBlock.h, the results track's
-// SetBlock.h) ----
+// ---- Match block (MatchBlock.h, SetBlock.h) ----
 constexpr u32 kBlock = 0x806F2380;
-// The header: 'YGM1', version 1, then the mode (2 ranked) and the ruleset (1 Brawl).
+// Header: 'YGM1', version, mode, ruleset.
 constexpr u32 kHeaderMagic = 0x59474D31;
 constexpr u8 kHeaderVersion = 1;
 constexpr u8 kModeCasual = 1;
 constexpr u8 kModeRanked = 2;
 constexpr u8 kRulesetBrawl = 1;
-// The results track's set (SetBlock.h), +0x210: +0x00 games recorded, +0x01 wins of ports 1 and 2,
-// +0x03 done, +0x05 the last decided game's winner (0xFF none), +0x20 the games' records, 12 bytes
-// each (+0x04 the winner, +0x06 the stage kind), 8 at most.
+// Ranked set (SetBlock.h): +0x00 games recorded, +0x01 wins for ports 1 and 2, +0x03 done,
+// +0x05 last decided game's winner (0xFF none), +0x20 up to 8 game records of 12 bytes
+// (+0x04 winner, +0x06 stage kind).
 constexpr u32 kResultsSet = kBlock + 0x210;
-// This flow's region: the block's step state (+0x80..+0xBF, MatchBlock.h; the Project+ flow keeps
-// its own there in its own game).
+// This flow's state: the block's step region (Project+ uses the same bytes for its own flow).
 constexpr u32 kRegion = kBlock + 0x80;
 constexpr u32 kRegionSize = 0x40;
 constexpr u32 kMagic = 0x59474253;  // 'YGBS'
@@ -121,30 +106,28 @@ constexpr u8 kVersion = 1;
 
 enum class Phase : u8
 {
-  Idle = 0,      // on the character select, before a game's stage select
-  Select = 1,    // this game's stage steps are under way (or done) on the stage select
-  Fight = 2,     // the game is on
-  Recorded = 3,  // its result is in the set
+  Idle = 0,      // before this game's stage select
+  Select = 1,    // on the stage select (steps under way or done)
+  Fight = 2,     // in game
+  Recorded = 3,  // result recorded in the set
 };
 
-// What the region holds.
+// Contents of the step region.
 struct State
 {
-  // The set as this flow records it from the results screens, for a match block without the
-  // results track's set (SetOf).
+  // Fallback set record from the results screens, used when SetBlock.h has none (SetOf).
   Ranked::SetView set;
   std::array<u8, 2> score{};
-  u8 coin = 0xFF;  // game 1's first striker (the header's coin); 0xFF until read
+  u8 coin = 0xFF;  // game 1's first striker, 0xFF until read from the header
   Phase phase = Phase::Idle;
   Ranked::Progress progress;
   std::array<s8, 2> characters{-1, -1};
-  std::array<u16, 2> buttons{};  // each port's buttons at the last boundary (X and Y edges)
-  u32 clock = 0;                 // the stage select's frame counter at the last tick
-  s8 hovered = -1;               // the stage under the cursor at the last boundary
-  u8 hovered_for = 0;            // frames the cursor has rested on what it is on (A needs 1)
-  u8 hover_key = 0xFF;           // what it is on: the page and the hovered item (0xFF nothing)
-  // A casual game's: this stage select's coin for its random choices (Ranked::CasualSeed of the
-  // room, the header's coin and set.game, which counts the casual fights begun from here + 1).
+  std::array<u16, 2> buttons{};  // last frame's buttons per port, for X/Y edge detection
+  u32 clock = 0;                 // stage select frame counter at the last tick
+  s8 hovered = -1;               // stage under the cursor last frame
+  u8 hovered_for = 0;            // frames the cursor has rested there (A needs at least 1)
+  u8 hover_key = 0xFF;           // page and hovered item (0xFF = nothing)
+  // Casual: seed for random choices, from the room, the header's coin and the game number.
   u32 seed = 0;
   bool operator==(const State&) const = default;
 };
@@ -153,9 +136,8 @@ std::optional<State> ReadState(const GuestMemory& memory);
 void WriteState(GuestMemory& memory, const State& state);
 void ClearState(GuestMemory& memory);
 
-// Where a legal stage's icon is on the stage select: its page (0 Brawl's stages, 1 Melee's), its
-// slot on the page (the task's +0x248 while the cursor is on it), and a point inside it in the
-// cursor's coordinates.
+// A legal stage's icon: page (0 Brawl, 1 Melee), slot on the page, and a point inside it in
+// cursor coordinates.
 struct Tile
 {
   u8 page;
@@ -165,10 +147,10 @@ struct Tile
 };
 const Tile& TileFor(int stage);
 
-// A legal stage's id in the game's stage list (the result info's +0x0C), -1 none.
+// Maps the game's stage id (result info +0x0C) to a legal Stage, or -1.
 int StageForStageId(int stage_id);
 
-// The stage select as one boundary sees it.
+// The stage select as seen this frame.
 struct View
 {
   bool present = false;  // scSelStage with its task
@@ -179,43 +161,34 @@ struct View
 };
 View ReadView(const GuestMemory& memory);
 
-// Whether this game is a ranked Brawl set's: the match block's header says so (mode ranked,
-// ruleset Brawl).
+// Whether the match block header says ranked Brawl.
 bool RankedBrawlMatch(const GuestMemory& memory);
-// Whether it is a casual Brawl queue match's (mode casual, ruleset Brawl).
+// Whether the match block header says casual Brawl.
 bool CasualBrawlMatch(const GuestMemory& memory);
-// The set the steps follow: the results track's (SetBlock.h) when the block holds a valid one,
-// else this flow's own record in `state`. `score`: the games won by ports 1 and 2.
+// The set from SetBlock.h when valid, else this flow's own record. `score` gets games won per port.
 Ranked::SetView SetOf(const GuestMemory& memory, const State& state,
                            std::array<u8, 2>* score = nullptr);
-// Unit tests: RankedBrawlMatch's (CasualBrawlMatch's) answer instead of the header's (nullopt:
-// the header again).
+// Unit tests: override the header check (nullopt restores it).
 void SetRankedForTests(std::optional<bool> ranked);
 void SetCasualForTests(std::optional<bool> casual);
 
-// The frame hook's part, at every boundary (first runs and re-runs): follows the set and the
-// stage steps, and writes the stage select's turn, grey tiles and the stage the steps pick.
-// `two_players`: ports 1 and 2 are both in play (the session's synced plan); a casual game's pick
-// runs only then (alone, the stage select is the player's own).
+// Per-frame hook, including resimulation: tracks the set and steps and writes the turn, greyed
+// tiles and picked stage. A casual pick only runs when `two_players` (ports 1 and 2 both in play).
 void Frame(GuestMemory& memory, bool two_players = true);
-// The input gate's part (reads only): what each port may not press on the stage select.
+// Input gate: which buttons each port may not press on the stage select. Read only.
 void Masks(const GuestMemory& memory, Rollback::InputGate::Masks* masks);
-// The overlay's lines for this boundary (empty: none): the set score on the character and stage
-// selects, whose turn it is and its timer on the stage select. `ports` for the names, `local` this
-// machine's own port (UI only).
+// Overlay lines: set score, and on the stage select whose turn it is with its timer. UI only.
 std::pair<std::string, std::string> Lines(const GuestMemory& memory,
                                           const std::vector<Orca::Events::PortInfo>& ports);
 
-// The step under way on the stage select (nullopt: none, the stage picked, or not a queue game's
-// stage select). A pure function of emulated memory (Relabel.h writes it into the screen).
+// The current step on the stage select, or nullopt. Pure; Relabel.h draws it on screen.
 std::optional<Ranked::Turn> CurrentTurn(const GuestMemory& memory);
 
-// What the overlay draws of the two cursors (StageCursors.h) on this boundary (on: false, none).
-// UI only: `ports` for the names and which player is this machine's.
+// What the overlay draws for the two cursors (StageCursors.h). UI only.
 StageCursors::View CursorView(const GuestMemory& memory,
                               const std::vector<Orca::Events::PortInfo>& ports);
 
-// The CPU thread's frame hook and gate source.
+// CPU-thread frame hook and gate source.
 void FrameHook(const Core::CPUThreadGuard& guard, bool resimulating,
                const std::vector<Orca::Events::PortInfo>& ports);
 void GateMasks(const Core::CPUThreadGuard& guard, Rollback::InputGate::Masks* masks);

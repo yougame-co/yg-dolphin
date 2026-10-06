@@ -263,7 +263,7 @@ Shader::CompileShader(D3D_FEATURE_LEVEL feature_level, ShaderStage stage, std::s
   const UINT flags = Orca::TestFxcFlags().value_or(default_flags);
   const char* target = GetCompileTarget(feature_level, stage);
 
-  // Orca (ORCA.md, "Match start"): this very compile, from an earlier run of any Orca build.
+  // Orca: reuse the bytecode if an earlier run compiled this exact shader (see FxcCache.h).
   std::string macro_text;
   for (const D3D_SHADER_MACRO* macro = macros; macro->Name; ++macro)
     macro_text += fmt::format("{}={};", macro->Name, macro->Definition);
@@ -319,7 +319,7 @@ Shader::CompileShader(D3D_FEATURE_LEVEL feature_level, ShaderStage stage, std::s
   if (key)
     FxcCache::Store(*key, bytecode);
 
-  // Orca: the slow ones (the ubershaders), to see where a boot's shader time goes.
+  // Orca: log slow compiles (mostly ubershaders) to show where boot time goes.
   const auto ms = [](Clock::duration d) {
     return std::chrono::duration_cast<std::chrono::milliseconds>(d).count();
   };

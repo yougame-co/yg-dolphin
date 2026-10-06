@@ -30,7 +30,7 @@
     <string>${CMAKE_OSX_DEPLOYMENT_TARGET}</string>
     <key>NSHighResolutionCapable</key>
     <true/>
-    <!-- A session must keep its pace while another app is in front (App Nap would throttle it). -->
+    <!-- Keep full speed while another app is in front; App Nap would throttle it. -->
     <key>NSAppSleepDisabled</key>
     <true/>
     <key>CSResourcesFileMapped</key>

@@ -23,50 +23,44 @@ namespace Core
 class CPUThreadGuard;
 }
 
-// Orca per-game profiles and the settings every Orca rollback session forces. Both players of a
-// session must run identical emulated machines, so every setting that can change what the game sees
-// is pinned: the universal ones in code (ForcedConfigLoader), the game-specific ones in
+// Orca per-game profiles and the settings every rollback session forces. Both players must run
+// identical emulated machines, so every setting that can change what the game sees is pinned: the
+// universal ones in code (ForcedConfigLoader), the game-specific ones in
 // Data/Sys/Orca/<GameID>.ini, which also names the disc revision and the frame boundary.
 namespace Orca
 {
 struct Profile
 {
-  // The profile's name: the disc's game ID for a disc profile (RSBE01), the ORCA_PROFILE name for a
-  // launcher profile (PPLUS32).
+  // The profile's name: the disc's game ID for a disc profile (RSBE01), or the ORCA_PROFILE name
+  // for a launcher profile (PPLUS32).
   std::string game_id;
-  // What players call it, for the window title (a launcher profile's game is the mod, not the disc
-  // it boots). Empty: the disc's own title.
+  // The name players know it by, for the window title (a launcher profile's is the mod's). Empty
+  // means the disc's own title.
   std::string title;
-  // The disc's revision (a launcher profile: the revision of the disc the launcher boots).
+  // The disc's revision (for a launcher profile, that of the disc the launcher boots).
   u16 revision = 0;
   std::optional<u32> frame_hook;
-  // Instruction word expected at frame_hook. A disc profile checks it before installing the hook;
-  // a launcher profile installs the hook at boot (the game isn't in RAM yet) and the boundary
-  // ignores every pass while the word there differs.
+  // Instruction word expected at frame_hook. A disc profile checks it before installing the hook; a
+  // launcher profile installs the hook at boot (the game isn't in RAM yet) and ignores every pass
+  // while the word differs.
   std::optional<u32> frame_hook_word;
-  // Drop-in: by this frame the game's boot has written its NAND /tmp files, the same whatever the
-  // player does (Brawl's packs), so a joining friend makes them by running its own boot to here and
-  // the keyframe carries only their hashes (never a save). Unset: the keyframe carries every file.
+  // Drop-in: by this frame the game's boot has written its NAND /tmp files, identically whatever
+  // the player does, so a joiner recreates them by running its own boot this far and the keyframe
+  // carries only their hashes. Unset: the keyframe carries every file.
   std::optional<u32> boot_nand_frame;
-  // A loader's codes that rewrite the game's code with plain stores (no icbi), as Project+'s Gecko
-  // codes do in the game's first frame: the JIT keeps running whatever it compiled before, until a
-  // whole-cache clear (its code space filling, at a different moment on each machine) makes it run
-  // the new code, and the machines desync. Orca drops every JIT block once at the end of this frame
-  // (the first frame boundary the hook takes ends frame 0), after the codes have landed, so every
-  // machine compiles what an instruction fetch reads from then on (memory, or `kept_code`) and a
-  // later clear changes nothing. Unset: no clear.
+  // Some loaders (Project+'s Gecko codes) rewrite game code with plain stores and no icbi in the
+  // first frame. The JIT then keeps running stale blocks until a full cache clear, which happens at
+  // a different moment on each machine and desyncs them. So Orca drops every JIT block once, at the
+  // end of this frame, after the codes have landed. Unset: no clear.
   std::optional<u32> jit_clear_frame;
-  // Game code a loader's codes rewrite that Orca keeps running as the game's own (KeepGameCode
-  // lines): every instruction fetch at `address` (MMU::TryReadInstruction: the JITs' compiles and
-  // the interpreters) gets `game` while memory there holds `loader`. Project+'s codes rewrite seven
-  // words of Brawl's code in its first frame into functions the boot already compiled, and a warm
-  // JIT ran Brawl's words there for the whole process: what every Orca up to 0.3.14 played. Kept, a
-  // JIT clear compiles those same words again, whenever it comes. Memory keeps the loader's words
-  // (RAM, its hashes and the codes' own reads are as before); any other word there (another module
-  // loaded at that address) is fetched as it is.
+  // Game code a loader rewrites that Orca keeps running as the game's own (KeepGameCode lines):
+  // every instruction fetch at `address` (MMU::TryReadInstruction, used by the JITs and
+  // interpreters) gets `game` while memory there holds `loader`. Memory itself keeps the loader's
+  // words, so RAM hashes and the codes' own reads are unaffected; any other word there is fetched
+  // as is. This makes a JIT clear recompile the same code a warm JIT would have kept running.
   struct KeptCode
   {
-    u32 address = 0;  // effective, in MEM1 as the game runs it (0x80000000-0x817FFFFC)
+    u32 address = 0;  // effective address in MEM1 (0x80000000-0x817FFFFC)
     u32 game = 0;
     u32 loader = 0;
     bool operator==(const KeptCode&) const = default;
@@ -75,47 +69,43 @@ struct Profile
   // Game-specific additions to the universal settings, as <System>.<Section>.<Key> = <Value>.
   std::vector<std::pair<Config::Location, std::string>> forced;
 
-  // Launcher profiles (a mod that boots through its own loader program, such as Project+): the
-  // session boots a loader executable with exactly this XXH3-128 hash (32 hex digits), and the loader
-  // boots the disc named by `disc` (and `revision`) from the DVD drive (Dolphin's default disc).
+  // Launcher profiles (a mod that boots through its own loader, such as Project+): the session
+  // boots a loader executable with exactly this XXH3-128 hash (32 hex digits), and the loader boots
+  // the disc named by `disc` and `revision` from the DVD drive.
   std::string launcher_hash;
   std::string disc;
-  // The SD card image the loader reads its files from, next to the loader executable, and its
-  // XXH3-128 hash. A session opens it read-only.
+  // The SD card image the loader reads its files from, next to the loader, and its XXH3-128 hash. A
+  // session opens it read-only.
   std::string sd_image;
   std::string sd_image_hash;
-  // Set at boot: the verified image's full path. The session's config layer forces the SD card
-  // path to it (not part of the lobby key: the hash is).
+  // Set at boot: the verified image's full path, which the session forces as the SD card path. Not
+  // part of the lobby key; the hash is.
   std::string sd_image_path;
   // The title whose save seeds the session NAND (default: the booted title's own).
   std::optional<u64> save_title;
-  // Set at boot: the game ID Dolphin gave what it booted (a loader's is derived from its file name).
-  // Its game settings INIs apply while the loader runs, the disc's after it.
+  // Set at boot: the game ID Dolphin gave the booted file (a loader's comes from its file name).
+  // Its game settings INIs apply while the loader runs, the disc's after.
   std::string boot_game_id;
 
   bool IsLauncher() const { return !launcher_hash.empty(); }
 };
 
-// An environment variable as UTF-8, empty when unset. (On Windows std::getenv answers in the ANSI
-// code page, which can't hold every character of a path or a name, and Dolphin's file functions
-// expect UTF-8.)
+// An environment variable as UTF-8; empty when unset. On Windows std::getenv uses the ANSI code
+// page, which can't represent every path or name, and Dolphin's file functions expect UTF-8.
 std::string GetEnv(const char* name);
 
 // True when this process runs an Orca rollback session: ORCA_SESSION=1, which Orca.app sets for
-// itself unless the environment already says otherwise (ORCA_SESSION=0 turns it off).
+// itself unless the environment already sets it (ORCA_SESSION=0 turns it off).
 bool SessionActive();
 
-// Latency (ORCA.md, "Input latency"): the calling thread is one an input's way through Orca runs
-// on, and gets an interactive thread's scheduling, so a busy machine (a browser, a build, the app
-// itself) neither delays it nor moves it to an efficiency core: on macOS
-// QOS_CLASS_USER_INTERACTIVE, on Windows a raised priority and no power throttling (EcoQoS). In a
-// session only.
-// ORCA_THREAD_QOS=0 leaves every thread as it was; =1 raises the CPU thread in a scripted harness
-// run too, which otherwise keeps it as it was (an unthrottled run would hold a core at interactive
-// priority for minutes). Host only: when a thread runs never changes what it computes.
+// Gives the calling thread, which is on the input path, interactive scheduling so a busy machine
+// neither delays it nor moves it to an efficiency core: QOS_CLASS_USER_INTERACTIVE on macOS, raised
+// priority and no EcoQoS on Windows. Sessions only. See ORCA.md, "Input latency". ORCA_THREAD_QOS=0
+// disables it; =1 also raises the CPU thread in a scripted harness run. Scheduling never changes
+// what a thread computes, so this is host-side only.
 enum class LatencyThread
 {
-  Cpu,          // the CPU thread: emulation, the frame hook, the session
+  Cpu,          // emulation, the frame hook, the session
   Room,         // the YouGame room's network thread
   Controllers,  // the app's controller stream
 };
@@ -124,49 +114,40 @@ void PrioritizeThread(LatencyThread thread);
 // Test-only overrides for harness runs, honoured only inside a session. A process with any of them
 // active must never offer or join a lobby, and its compatibility key differs.
 //   ORCA_TEST_PADS=4         ports 3 and 4 connected too (4-player desync coverage)
-//   ORCA_TEST_SKIP_RENDER=1  host rendering skipped for the whole run
-//   ORCA_TEST_NET_DELAY_MS=N the YouGame room holds every message N ms (0-1000) each way, plus
-//   ORCA_TEST_NET_JITTER_MS=J a deterministic 0..J ms more per message, order kept. Set it (to 0
-//                            on the undelayed side) in both processes, so their keys match.
-//   ORCA_TEST_NET_SPIKES=G1-G2/L1-L2[/S1-S2]  the room's connection goes dark both ways (a Wi-Fi
-//                            radio off channel): after each gap of G1-G2 ms, for L1-L2 ms
-//                            (deterministic draws), from S1 to S2 s after the room opened
-//                            (default: always). What it sends and receives meanwhile goes at the
-//                            end, in order. Implies ORCA_TEST_NET_DELAY_MS (0 unless set). With
-//                            ~M for G1-G2, the gaps come at random, M ms on average (a Poisson
-//                            process: no least gap).
-//   ORCA_TEST_NET_UPLINK=D+J[/S1-S2]  what the room sends waits D ms plus a deterministic 0..J ms
-//                            more per message, order kept (a slow, bursty uplink; what it
-//                            receives is untouched), from S1 to S2 s after the room opened
-//                            (default: always). Implies ORCA_TEST_NET_DELAY_MS (0 unless set).
-//   ORCA_TEST_SNAPSHOT_EVERY=K  the session snapshots every K-th predicted frame (1-4) instead
-//                            of choosing from the measured save time; the synctest
-//                            (YG_SYNCTEST) then loads only frames that are multiples of K. Peers
-//                            may use different K, but both need some test override for their
-//                            keys to match.
-//   ORCA_TEST_FULL_SNAPSHOTS=1  rollback snapshots copy all of RAM, as before copy-on-write
-//                            snapshots (Rollback/Cow.h), to compare the two.
-//   ORCA_TEST_NO_AFP=1       an ARM CPU with FEAT_AFP (Apple M4 and later) behaves as one without
-//                            (M1 to M3): FPCR.AH is never set and the JIT takes its no-AFP paths.
-//                            Read where the CPU is detected (Common/ArmCPUDetect.cpp), so it acts
-//                            outside a session too; on x86-64 it only marks the key, so a PC with
-//                            it set meets a Mac with it set.
-//   ORCA_TEST_CPUCORE=N      the session runs CPU core N instead of the host's JIT: 0 the
-//                            interpreter, 5 the cached interpreter (a reference for the JITs).
-//   ORCA_TEST_GATE=<rules>   test masks in the input gate (Rollback/InputGate.h): ports whose
-//                            buttons or sticks the game doesn't see, always or on frames picked
-//                            from emulated memory. Set the same value in both processes.
-//   ORCA_TEST_QUEUE=casual|ranked[:<coin 0|1>]  the online rules' header (UX/OnlineRules.h) as a
-//                            queue room's host writes it, in a harness run or a dev game's room:
-//                            the locks and the ranked flows without the queue; `ranked:1` makes
-//                            port 2 game 1's first striker (default port 1). Set the same value in
+//   ORCA_TEST_SKIP_RENDER=1  skip host rendering for the whole run
+//   ORCA_TEST_NET_DELAY_MS=N the room holds every message N ms (0-1000) each way, plus
+//   ORCA_TEST_NET_JITTER_MS=J a deterministic 0..J ms more per message, order kept. Set both
+//                            processes (0 on the undelayed side) so their keys match.
+//   ORCA_TEST_NET_SPIKES=G1-G2/L1-L2[/S1-S2]  the connection goes dark both ways for L1-L2 ms
+//                            after each G1-G2 ms gap, from S1 to S2 s after the room opened
+//                            (default: always); queued traffic is delivered after, in order.
+//                            ~M for G1-G2 makes gaps random with mean M ms.
+//                            Implies ORCA_TEST_NET_DELAY_MS.
+//   ORCA_TEST_NET_UPLINK=D+J[/S1-S2]  outgoing messages wait D ms plus a deterministic 0..J ms,
+//                            order kept (a slow, bursty uplink), from S1 to S2 s after the room
+//                            opened. Implies ORCA_TEST_NET_DELAY_MS.
+//   ORCA_TEST_SNAPSHOT_EVERY=K  snapshot every K-th predicted frame (1-4) instead of choosing from
+//                            the measured save time; the synctest (YG_SYNCTEST) then loads only
+//                            multiples of K. Peers may differ in K.
+//   ORCA_TEST_FULL_SNAPSHOTS=1  snapshots copy all of RAM instead of copy-on-write
+//                            (Rollback/Cow.h), for comparison.
+//   ORCA_TEST_NO_AFP=1       an ARM CPU with FEAT_AFP (M4 and later) behaves as one without:
+//                            FPCR.AH is never set and the JIT takes its no-AFP paths. Read at CPU
+//                            detection (Common/ArmCPUDetect.cpp), so it applies outside sessions
+//                            too; on x86-64 it only marks the key.
+//   ORCA_TEST_CPUCORE=N      run CPU core N instead of the JIT: 0 interpreter, 5 cached interpreter
+//   ORCA_TEST_GATE=<rules>   input-gate test masks (Rollback/InputGate.h): ports whose buttons or
+//                            sticks the game doesn't see, always or on chosen frames. Same value in
 //                            both processes.
-//   ORCA_TEST_CHAR_ORDER=<rules>:<game>:<winner>  a ranked set's character order on the character
-//                            select (UX/CharOrder.h) with no match block behind it: `pplus:2:1`
-//                            is Project+'s game 2 after port 1 won. Set it in both processes.
-// Not in TestOverridesActive (it can't change the game, so the key stays):
-//   ORCA_TEST_SHADER_WAIT_MS=N  the boot's wait for shaders (VideoCommon/ShaderCache.cpp,
-//                            WaitForBootCompile) gives up after N ms instead of its two limits.
+//   ORCA_TEST_QUEUE=casual|ranked[:<coin 0|1>]  the online rules header (UX/OnlineRules.h) a queue
+//                            room's host writes, to test locks and ranked flows without the queue;
+//                            `ranked:1` makes port 2 the first striker. Same value in both
+//                            processes.
+//   ORCA_TEST_CHAR_ORDER=<rules>:<game>:<winner>  a ranked set's character order (UX/CharOrder.h)
+//                            without a match behind it: `pplus:2:1` is Project+'s game 2 after
+//                            port 1 won. Same value in both processes.
+// Not in TestOverridesActive, since it can't change the game:
+//   ORCA_TEST_SHADER_WAIT_MS=N  the boot's shader wait (WaitForBootCompile) gives up after N ms.
 int TestPads();
 bool TestSkipRender();
 std::optional<int> TestNetDelayMs();
@@ -179,7 +160,7 @@ struct TestNetSpikes
   int length_max_ms = 0;
   int from_s = 0;
   int to_s = 0x3fffffff;
-  // Gaps drawn around gap_min_ms on average (exponential), not between the bounds.
+  // Gaps are exponential around gap_min_ms on average, not between the bounds.
   bool poisson = false;
 };
 std::optional<TestNetSpikes> TestNetSpikesConfig();
@@ -198,73 +179,70 @@ std::optional<PowerPC::CPUCore> TestCpuCore();
 std::optional<int> TestShaderWaitMs();
 std::string TestGateSpec();  // ORCA_TEST_GATE in a session, else empty
 std::string TestQueueSpec();      // ORCA_TEST_QUEUE in a session, else empty
-// ORCA_TEST_QUEUE_PICK in a session, else empty: <frame>:<char>:<costume>:<x>:<y>[:<rating>], port
-// 2 plugged in from that frame with that queue identity (UX/Queue.h), in a harness run.
+// ORCA_TEST_QUEUE_PICK in a session, else empty: <frame>:<char>:<costume>:<x>:<y>[:<rating>]. Port
+// 2 plugs in at that frame with that queue identity (UX/Queue.h), in a harness run.
 std::string TestQueuePickSpec();
 std::string TestCharOrderSpec();  // ORCA_TEST_CHAR_ORDER in a session, else empty
-// ORCA_SHADER_WAIT_S: how long the app lets a session's boot wait for its shaders, in seconds (60 to
-// 900). An app sets it when it keeps a boot alive while `orca shaders` lines arrive; without it the
-// boot waits at most 60 s (the 120 s startup timer of the apps installed before it).
+// ORCA_SHADER_WAIT_S: how long the app lets a session's boot wait for shaders, in seconds (60-900).
+// Set by an app that keeps a boot alive while `orca shaders` lines arrive; otherwise the boot waits
+// at most 60 s.
 std::optional<int> ShaderWaitLimitS();
-// ORCA_TEST_FXC_FLAGS (hex): the D3DCOMPILE_* flags FXC compiles with (D3DCommon/Shader.cpp), to
-// time other optimization levels. Rendering only, like ORCA_TEST_SHADER_WAIT_MS: not in the lobby key.
+// ORCA_TEST_FXC_FLAGS (hex): the D3DCOMPILE_* flags FXC compiles with (D3DCommon/Shader.cpp), for
+// timing other optimization levels. Rendering only, so not in the lobby key.
 std::optional<u32> TestFxcFlags();
 bool TestOverridesActive();
 
-// Loads the profile for a game; nullopt and a reason when there is none, the revision differs or a
-// line is malformed. Without a revision (a launcher boot) the caller checks the disc itself.
+// Loads a game's profile; nullopt and a reason when there is none, the revision differs or a line
+// is malformed. Without a revision (a launcher boot) the caller checks the disc itself.
 std::optional<Profile> LoadProfile(const std::string& game_id, std::optional<u16> revision,
                                    std::string* error);
-// The same from another Sys folder (with its trailing slash; tests read the source tree's).
+// The same, from another Sys folder (with trailing slash; tests read the source tree's).
 std::optional<Profile> LoadProfileFrom(const std::string& sys_directory, const std::string& game_id,
                                        std::optional<u16> revision, std::string* error);
 
-// ORCA_PROFILE: the launcher profile a session that boots an executable uses (empty when unset).
+// ORCA_PROFILE: the launcher profile for a session that boots an executable; empty when unset.
 std::string LauncherProfileName();
 
 // XXH3-128 of a file as 32 lowercase hex digits; empty when it can't be read.
 std::string HashFile(const std::string& path);
 
-// A launcher profile's boot checks, for a session booting the executable at `executable_path` with
-// `disc_path` in the drive: the executable, the disc and the SD image must be the profile's. On
-// success `profile->sd_image_path` names the verified image; on failure, `error` says why.
+// A launcher profile's boot checks: the executable at `executable_path`, the disc at `disc_path`
+// and the SD image must match the profile. On success sets `profile->sd_image_path`; on failure,
+// `error` says why.
 bool PrepareLauncherBoot(Profile* profile, const std::string& executable_path,
                          const std::string& disc_path, std::string* error);
 
-// The running game's frame boundary is live: for a launcher profile, its instruction word is at the
-// hook (a disc profile's hook was checked before it was installed).
+// The frame boundary is live: for a launcher profile, its instruction word is at the hook (a disc
+// profile's hook was checked before install).
 bool FrameHookLive(const Core::CPUThreadGuard& guard, const Profile& profile);
 
-// The running session's profile, set at boot (null outside a session). The rollback core reads its
+// The running session's profile, set at boot; null outside a session. The rollback core reads the
 // frame boundary from it.
 void SetActiveProfile(std::optional<Profile> profile);
 const Profile* ActiveProfile();
-// Called at the end of each frame's first run once the frame hook is live (FrameHookLive; a
-// drop-in's catch-up frames are first runs, a rollback's re-runs are not): true exactly once a
-// boot, at the end of the active profile's jit_clear_frame.
+// Called at the end of each frame's first run once the hook is live (catch-up frames count;
+// rollback re-runs don't). True exactly once per boot, at the end of jit_clear_frame.
 bool JitClearDue();
-// What an instruction fetch at a physical address sees, given the word `hex` memory holds there:
-// the game's word of the active profile's kept_code while memory holds the loader's, else `hex`.
-// A pure function of memory (the same on every machine, first runs and re-runs).
+// What an instruction fetch at a physical address sees when memory holds `hex`: the game's word
+// from kept_code while memory holds the loader's, else `hex`. A pure function of memory, so it is
+// the same on every machine, first runs and re-runs.
 u32 KeptInstruction(u32 physical_address, u32 hex);
 
-// A config layer forcing the universal session settings plus the profile's (the Netplay layer type:
-// Orca does not run Dolphin's own netplay, and refuses to start a session while it does).
+// A config layer forcing the universal session settings plus the profile's. Uses the Netplay layer
+// type: Orca never runs Dolphin's own netplay, and refuses to start a session while it does.
 std::unique_ptr<Config::ConfigLayerLoader> GenerateConfigLoader(const Profile& profile);
 
 // The SRAM every session boots with (Dolphin's built-in default), instead of each player's own.
 const Sram* SessionSram();
 
-// A hash of the save the session NAND was seeded with (0 when there was none). Both players must
-// match; the lobby compatibility key will include it.
+// Hash of the save the session NAND was seeded with (0 if none). Both players must match.
 u64 HashSessionSave(u64 title_id);
 void SetSeedSaveHash(u64 hash);
 u64 GetSeedSaveHash();
 
 // Whether a session copies the title's save from the configured NAND into the session NAND (on by
-// default). Orca.app turns it off: until the canonical save exists (desktop plan O5), every app
-// session starts from an empty NAND (save hash 0), whatever the player's own NAND holds, and the
-// game makes its save in-session on both machines.
+// default). Orca.app turns it off, so every app session starts from an empty NAND (save hash 0) and
+// the game creates its save in-session on both machines.
 void SetSeedSessionSave(bool seed);
 bool SeedSessionSave();
 

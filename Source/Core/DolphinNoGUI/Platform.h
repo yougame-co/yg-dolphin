@@ -29,7 +29,7 @@ public:
 
   virtual WindowSystemInfo GetWindowSystemInfo() const = 0;
 
-  // Asks for this window title; the main loop applies it (from any thread).
+  // Requests a window title from any thread; the main loop applies it.
   void ShowTitle(const std::string& title);
 
   // Requests a graceful shutdown, from SIGINT/SIGTERM.
@@ -38,14 +38,14 @@ public:
   // Request an immediate shutdown.
   void Stop();
 
-  // Embed mode (Embed.h): set before Init. The window is drawn inside the parent's.
+  // Embed mode (Embed.h): draw inside the parent window. Call before Init.
   void SetEmbed(const Embed::Options& options);
   bool IsEmbedded() const { return m_embed.enabled; }
-  // Tests: take the embed protocol's commands on stdin without embedding (ORCA_TEST_COMMANDS=1).
+  // Tests: accept embed commands on stdin without embedding (ORCA_TEST_COMMANDS=1).
   void EnableTestCommands() { m_test_commands = true; }
-  // The first frame was presented: "ready" goes out on the next main loop pass.
+  // Called when the first frame is presented; "ready" is sent on the next main loop pass.
   void NotifyFirstFrame(int width, int height, double fps);
-  // The main loop ended: hidden and without the focus while emulation stops.
+  // Hides the view and drops focus once the main loop ends, while emulation stops.
   void EmbedTeardown();
 
   static std::unique_ptr<Platform> CreateHeadlessPlatform();
@@ -64,38 +64,38 @@ public:
 #ifdef __APPLE__
   static std::unique_ptr<Platform> CreateMacOSPlatform();
 
-  // Orca.app: native dialogs, shown before the game window opens. ChooseFileMacOS returns nullopt
-  // when the player cancels.
+  // Orca.app: native dialogs shown before the game window opens. ChooseFileMacOS returns nullopt
+  // if the player cancels.
   static std::optional<std::string> ChooseFileMacOS(const std::string& message);
   static void ShowErrorMacOS(const std::string& title, const std::string& message);
 #endif
 
 protected:
   void UpdateRunningFlag();
-  // Embed mode, on the main loop's thread: runs the commands read from stdin, prints "ready" once.
+  // On the main loop's thread: runs commands read from stdin and sends "ready" once.
   void ProcessEmbedCommands();
-  // Orca: a solo pause lasts only while nothing of drop-in needs the game (a friend arriving, an
-  // invite, the app's join or leave): then it runs again, and the app hears "state running".
+  // Ends a solo pause when drop-in needs the game running (a friend arriving, an invite, a join or
+  // leave) and tells the app "state running".
   void EndSoloPauseForDropIn();
-  // What the platform does for the window commands. rect: the parent-relative rectangle (units per
-  // OS, ORCA.md "Embedding"). visible: the app's "show"/"hide". focus: "focus"/"blur".
+  // Per-platform handlers for the window commands. The rect is relative to the parent; its units
+  // depend on the OS (see ORCA.md, "Embedding").
   virtual void EmbedSetRect(const Embed::Rect& rect) {}
   virtual void EmbedSetVisible(bool visible) {}
   virtual void EmbedSetFocus(bool focus) {}
-  // EmbedSetVisible (and the overlay's host visibility) from the app's show/hide and the rect size.
+  // Shows the view only when the app said "show" and the rect is big enough.
   void ApplyEmbedVisible();
-  // The presenter's layout (VideoCommon/PresentLayout.h) from the window (`rect`) and the box the
-  // picture is laid out in (`view`): the view relative to the window, or none (the window itself).
+  // Tells the presenter where to lay out the picture: the `view` box relative to the window
+  // (`rect`), or the whole window when there is no view.
   void ApplyEmbedView();
-  // Applies the newest requested title on the main loop's thread. Orca: in a session, also asks
-  // for the title again (every 250 ms at most) so it follows the room status.
+  // Applies the newest requested title on the main loop's thread. In a session it also refreshes
+  // the title (at most every 250 ms) to follow the room status.
   void UpdateTitle();
 
   Common::Flag m_running{true};
   Common::Flag m_shutdown_requested{false};
   Common::Flag m_tried_graceful_shutdown{false};
 
-  // Read by the CPU thread (the input gate, Host_RendererHasFocus).
+  // Atomic: the CPU thread reads it through Host_RendererHasFocus.
   std::atomic<bool> m_window_focus = true;
   bool m_window_fullscreen = false;
 
@@ -103,8 +103,8 @@ protected:
   bool m_test_commands = false;
 
 private:
-  // Titles are set only on the main loop's thread: on Win32 setting it from the emulation thread
-  // waits for the main thread, which could be waiting for this lock.
+  // Titles are set only on the main loop's thread. On Win32, setting one from the emulation thread
+  // blocks on the main thread, which could deadlock with this lock.
   std::mutex m_title_lock;
   std::optional<std::string> m_requested_title;
   std::string m_shown_title;
@@ -113,16 +113,14 @@ private:
   std::mutex m_ready_lock;
   std::optional<std::string> m_ready_line;
   bool m_ready_sent = false;
-  // Shown: the app's last "show" / "hide". Too small: the last rect was (Embed::TooSmall), so the
-  // game is hidden until a big enough one arrives. Visible only when shown and not too small.
+  // The view is visible only when the app's last command was "show" and the last rect wasn't
+  // TooSmall.
   bool m_embed_shown = true;
   bool m_embed_too_small = false;
-  // The app's `view` (same units and origin as `rect`): where the picture is laid out, while `rect`
-  // is the window, which the page cuts to start right of its menu's panel; none: the window
-  // (`view off`, and until the first `view`). Known rect: --embed's, or a `rect` command (tests).
+  // Where the picture is laid out, in `rect`'s units and origin. Unset means the whole window.
+  // m_embed_rect_known is false until --rect or a `rect` command gives one.
   std::optional<Embed::Rect> m_embed_view;
   bool m_embed_rect_known = false;
-  // A "pause" before the game runs (Core::SetState only pauses a running core), applied once it is.
-  // Never in a session: it pauses only a game it can see is alone.
+  // A "pause" that arrived before the game was running, applied once it is. Never set in a session.
   bool m_pause_pending = false;
 };

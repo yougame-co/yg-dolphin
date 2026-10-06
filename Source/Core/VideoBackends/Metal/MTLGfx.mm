@@ -454,28 +454,19 @@ void Metal::Gfx::DispatchComputeShader(const AbstractShader* shader,  //
   }
 }
 
-// Orca: the window system gives a layer's drawables back late while it isn't showing the layer (its
-// window minimized, ordered out or covered), and nextDrawable then waits up to its one second
-// timeout. In a single-core session that wait is on the CPU thread: the emulated machine stops with
-// it, and so does a friend's, which waits for this machine's inputs. So no drawable is taken while
-// the frontend says the surface isn't visible (Presenter::SetSurfaceVisible). Otherwise drawables
-// come from a background acquire, one frame ahead, whenever waiting for them would slow the game:
-// a frame whose drawable isn't there yet is not shown, and the CPU thread never waits. The emulated
-// GPU's work is the same either way. The reasons (Late), each with its way back:
-// - Covered: one nextDrawable waited longer than LATE_DRAWABLE (covered before the frontend heard
-//   of it, or drawables held for any other reason). Until the frontend next says the surface is
-//   hidden: promptness proves nothing here, a covered window gave drawables back promptly for
-//   seconds at a time between its one second waits.
-// - SlowScreen: the screen shows fewer than MIN_SCREEN_HZ frames a second
-//   (Presenter::SurfaceRefreshRate). With VSync off nextDrawable only waits for a free drawable,
-//   but a 50 Hz screen frees one every 20 ms: the game (16.7 ms a frame) waited ~17 ms in every
-//   frame and ran at 50 fps, 83% speed, and online it held the friend back too. Now about one
-//   frame in six isn't shown instead. Until the window is on a screen that keeps up.
-// - Paced: PACED_COUNT of the last PACED_WINDOW nextDrawable calls waited PACED_WAIT or more (a
-//   screen that can't keep up without saying so). Until PROMPT_ACQUIRES background acquires in a
-//   row were done in time without waiting, twice as many each time Paced comes back (up to 16
-//   times): a screen that paces only now and then doesn't make the game wait every few seconds. A
-//   lone slow wait (a burst of presents after a stall) changes nothing.
+// Orca: nextDrawable can block for up to a second when the layer isn't shown (window minimized
+// or covered) or the screen is slower than the game. In a single-core session that blocks the CPU
+// thread, stalling this game and the opponent's. So no drawable is taken while the surface is
+// hidden, and when waiting would slow the game, drawables come from a background acquire one frame
+// ahead instead: a frame with no drawable ready is simply not shown. Emulated GPU work is the same
+// either way. Reasons for background acquires (Late), and when each ends:
+// - Covered: a nextDrawable waited longer than LATE_DRAWABLE. Ends when the frontend next reports
+//   the surface hidden; quick acquires prove nothing, since covered windows return some promptly.
+// - SlowScreen: the screen refreshes below MIN_SCREEN_HZ, so waiting would slow the game to the
+//   screen's rate. Ends when the window is on a screen that keeps up.
+// - Paced: PACED_COUNT of the last PACED_WINDOW calls waited PACED_WAIT or more. Ends after
+//   PROMPT_ACQUIRES prompt background acquires in a row, doubling each time Paced recurs (up to
+//   16x). A single slow wait changes nothing.
 static constexpr std::chrono::milliseconds LATE_DRAWABLE{50};
 static constexpr int MIN_SCREEN_HZ = 59;
 static constexpr std::chrono::microseconds PACED_WAIT{4000};
@@ -487,8 +478,8 @@ struct Metal::Gfx::DrawableProbe
 {
   std::mutex mutex;
   bool running = false;
-  // The last background acquire's drawable (none after a timeout), until it is taken, and how long
-  // that nextDrawable waited.
+  // The last background acquire's drawable (null after a timeout) until taken, and how long its
+  // nextDrawable waited.
   bool done = false;
   MRCOwned<id<CAMetalDrawable>> drawable;
   std::chrono::steady_clock::duration waited{};
@@ -564,8 +555,7 @@ MRCOwned<id<CAMetalDrawable>> Metal::Gfx::AcquireDrawable()
     return nullptr;
   if (!VideoCommon::Presenter::IsSurfaceVisible())
   {
-    // Nothing to show it on. Once the surface shows again, nextDrawable again (unless its screen is
-    // slow, below).
+    // Nothing to show it on. Back to plain nextDrawable once the surface is visible again.
     if (m_late != Late::No)
       NOTICE_LOG_FMT(VIDEO, "Metal: the surface is hidden; nextDrawable again once it shows");
     m_late = Late::No;
@@ -595,7 +585,7 @@ MRCOwned<id<CAMetalDrawable>> Metal::Gfx::AcquireDrawable()
         m_drawable_probe->done = false;
       }
     }
-    // One for a size the surface no longer has goes back.
+    // Drop a drawable sized for the old surface.
     if (drawable && ([[drawable texture] width] != m_backbuffer->GetWidth() ||
                      [[drawable texture] height] != m_backbuffer->GetHeight()))
     {
@@ -617,11 +607,11 @@ MRCOwned<id<CAMetalDrawable>> Metal::Gfx::AcquireDrawable()
   if (m_drawable_probe)
   {
     std::lock_guard lock(m_drawable_probe->mutex);
-    // One nextDrawable on the layer at a time: a background acquire from before may still be
-    // waiting, and the first drawable back is its. This frame isn't shown.
+    // Only one nextDrawable at a time: an earlier background acquire may still be waiting, so
+    // this frame isn't shown.
     if (m_drawable_probe->running)
       return nullptr;
-    // One it got after late acquiring ended goes back.
+    // Drop any drawable the background acquire got after it was no longer needed.
     m_drawable_probe->drawable.Reset();
     m_drawable_probe->done = false;
   }
@@ -653,7 +643,7 @@ bool Metal::Gfx::BindBackbuffer(const ClearColor& clear_color)
     CheckForSurfaceChange();
     CheckForSurfaceResize();
     m_drawable = AcquireDrawable();
-    // Orca: without a drawable, no render pass either (one with no texture is invalid).
+    // Orca: no drawable, no render pass (a pass with no texture is invalid).
     if (!m_drawable)
       return false;
     m_backbuffer->UpdateBackbufferTexture([m_drawable texture]);
@@ -692,7 +682,7 @@ void Metal::Gfx::CheckForSurfaceChange()
   if (!g_presenter->SurfaceChangedTestAndClear())
     return;
   m_layer = MRCRetain(static_cast<CAMetalLayer*>(g_presenter->GetNewSurfaceHandle()));
-  // Orca: a background acquire still running is for the old layer.
+  // Orca: drop any background acquire still running on the old layer.
   m_drawable_probe.reset();
   m_late = Late::No;
   m_paced_waits = 0;

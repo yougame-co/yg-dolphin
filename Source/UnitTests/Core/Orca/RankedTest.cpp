@@ -757,7 +757,7 @@ TEST(OrcaRankedSteps, CasualIsOnePreferStepForBothOnTheWholeList)
   EXPECT_EQ(plan.agreeable, plan.available);
   ASSERT_EQ(plan.steps.size(), 1u);
   EXPECT_EQ(plan.steps[0], (Ranked::Step{StepKind::Prefer, Ranked::BOTH, 1, false, 15}));
-  // 15 s and a half-second grace (Luis: "Players have 15 seconds to select stage").
+  // Players get 15 s to pick, plus a half-second grace.
   EXPECT_EQ(Ranked::StepFrames(rules, plan.steps[0]), 15u * 60 + 30);
   // Never FD with an Ice Climbers; Meta Knight changes nothing in casual.
   set.characters = {rules.ice_climbers, rules.meta_knight};

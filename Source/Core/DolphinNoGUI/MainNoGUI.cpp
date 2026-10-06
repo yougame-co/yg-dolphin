@@ -54,7 +54,7 @@
 #include "UICommon/UICommon.h"
 
 static std::unique_ptr<Platform> s_platform;
-// Embed mode (Embed.h): drawn inside the YouGame app's window, steered over stdin.
+// True in embed mode (Embed.h): drawn inside the YouGame app's window, controlled over stdin.
 static bool s_embedded = false;
 
 static void signal_handler(int)
@@ -72,11 +72,11 @@ static void signal_handler(int)
 }
 
 #ifdef _WIN32
-// Alerts show a message box, as with the default handler, but name Orca in a session.
+// Like the default handler (a message box), but with Orca branding.
 static bool MsgAlertHandler(const char* caption, const char* text, bool yes_no,
                             Common::MsgType style)
 {
-  // Embedded, a message box would pop up over the app: the log has it instead.
+  // When embedded, log the alert instead of popping a message box over the app.
   if (s_embedded)
   {
     fmt::print(stderr, "{}\n", Orca::BrandText(text));
@@ -93,11 +93,11 @@ static bool MsgAlertHandler(const char* caption, const char* text, bool yes_no,
                              window_style | (yes_no ? MB_YESNO : MB_OK));
 }
 #else
-// Alerts go to stderr, as with the default handler, but name Orca in a session.
+// Like the default handler (print to stderr), but with Orca branding.
 static bool MsgAlertHandler(const char*, const char* text, bool, Common::MsgType)
 {
   fmt::print(stderr, "{}\n", Orca::BrandText(text));
-  // No to any question, like the default handler.
+  // Answer no to any question, like the default handler.
   return false;
 }
 #endif
@@ -238,9 +238,9 @@ static std::unique_ptr<Platform> GetPlatform(const optparse::Values& options)
 }
 
 #ifdef ORCA_MACOS_BUNDLE
-// Orca.app, started with no disc: the one remembered in <user>/Config/Orca.ini if it is still there
-// and still right, else the player picks one (asked again after a wrong one). nullopt, with the
-// "orca error" line printed, when they give up.
+// Orca.app started with no disc: use the disc remembered in <user>/Config/Orca.ini if it still
+// checks out, otherwise ask the player to pick one (again after a wrong revision). Returns nullopt,
+// after reporting the error, if they give up.
 static std::optional<std::string> ChooseSessionDisc(const std::string& user_directory)
 {
   const std::string ini_path = user_directory + DIR_SEP "Config" DIR_SEP "Orca.ini";
@@ -274,7 +274,7 @@ static std::optional<std::string> ChooseSessionDisc(const std::string& user_dire
       return path;
     }
     fmt::print(stderr, "Orca: {}: {}\n", *path, check.sentence);
-    // A broken profile isn't the disc's fault: asking again wouldn't help.
+    // Only a wrong disc revision is worth asking again; other errors won't change with a new pick.
     if (check.code != "disc_revision")
     {
       Orca::Status::Error(check.code, check.sentence);
@@ -290,8 +290,8 @@ static std::optional<std::string> ChooseSessionDisc(const std::string& user_dire
 #define main app_main
 #endif
 
-// A boot file that isn't there or won't open (Orca::CheckBootFile) ends the run before anything
-// else starts: "orca error disc_missing <path>" (or disc_unreadable) in a session, stderr outside.
+// Ends the run early when the boot file is missing or unreadable. Reports through the session
+// status when a session is active, otherwise on stderr.
 static int RefuseBootFile(const Orca::DiscCheck& check)
 {
   if (Orca::SessionActive())
@@ -302,12 +302,12 @@ static int RefuseBootFile(const Orca::DiscCheck& check)
   return 1;
 }
 
-// Everything after the embed arguments were taken out; returns the exit code.
+// The rest of main, after the embed arguments are removed. Returns the exit code.
 static int Run(const int argc, char* argv[], const Embed::Options& embed)
 {
 #ifdef ORCA_MACOS_BUNDLE
-  // Orca.app runs sessions: the YouGame app starts it with no arguments. ORCA_SESSION=0 (or any value
-  // already set) wins. Until the canonical save exists (O5), app sessions start from an empty NAND.
+  // Orca.app always runs a session unless ORCA_SESSION is already set. Sessions start from an empty
+  // NAND, not the player's save. TODO: seed from a canonical save once one exists.
   setenv("ORCA_SESSION", "1", 0);
   Orca::SetSeedSessionSave(false);
 #endif
@@ -339,8 +339,8 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
   optparse::Values& options = CommandLineParse::ParseArguments(parser.get(), argc, argv);
   std::vector<std::string> args = parser->args();
 
-  // Before the boot file is read: an alert there (a file Dolphin can't recognise) goes to stderr
-  // when embedded, never to a message box that waits, unseen, behind the app's window.
+  // Register before reading the boot file, so an embedded alert never becomes a message box hidden
+  // behind the app's window.
   Common::RegisterMsgAlertHandler(MsgAlertHandler);
 
   std::optional<std::string> save_state_path;
@@ -353,14 +353,14 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
   if (options.is_set("user"))
     user_directory = static_cast<const char*>(options.get("user"));
 #ifdef ORCA_MACOS_BUNDLE
-  // Its own user directory, never Dolphin's.
+  // Use Orca's own user directory, never Dolphin's.
   else if (const char* home = std::getenv("HOME"); home && *home)
     user_directory = std::string(home) + "/Library/Application Support/Orca";
 #endif
 
   std::unique_ptr<BootParameters> boot;
   bool game_specified = false;
-  // Orca.app booting a loader from orca-launch.ini: the disc it boots from the drive.
+  // When orca-launch.ini boots a loader, the disc that loader boots from the drive.
   [[maybe_unused]] std::string launch_disc;
   if (options.is_set("exec"))
   {
@@ -397,8 +397,8 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
 #ifdef ORCA_MACOS_BUNDLE
   else if (Orca::SessionActive() && !user_directory.empty())
   {
-    // A mod's build ships orca-launch.ini next to Orca.app (Core/Orca/Launch.h): its launcher
-    // profile and loader, booted with the player's disc as the default disc. Without one, the disc.
+    // A mod build ships orca-launch.ini next to Orca.app (Core/Orca/Launch.h), naming a profile and
+    // a loader to boot with the player's disc as the default disc. Without it, boot the disc.
     std::string bundle_parent;
     SplitPath(File::GetBundleDirectory(), &bundle_parent, nullptr, nullptr);
     std::string launch_error;
@@ -433,7 +433,7 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
     return 0;
   }
 
-  // A boot file Dolphin couldn't make sense of (its alert said why): no window is opened for it.
+  // Dolphin couldn't parse the boot file (its alert said why), so don't open a window.
   if (game_specified && !boot)
   {
     fprintf(stderr, "Could not boot the specified file\n");
@@ -459,10 +459,9 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
   UICommon::SetUserDirectory(user_directory);
   UICommon::CreateDirectories();
   UICommon::Init();
-  // Embedded in the YouGame app, the netplay and rollback logs are on by default at INFO (the
-  // console listener's lines reach stderr, which the app writes to the game's log): a player's
-  // report then says what the room, the direct links and the online match did. Small: a few lines
-  // per room event and one stats line every 30 s. A Logger.ini that asks for more keeps it.
+  // When embedded, turn on the netplay and rollback logs at INFO so a player's bug report shows
+  // what the room and match did. The app saves stderr to the game's log. A more verbose Logger.ini
+  // wins.
   if (embed.enabled)
   {
     auto* const logs = Common::Log::LogManager::GetInstance();
@@ -472,8 +471,8 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
       logs->SetConfigLogLevel(Common::Log::LogLevel::LINFO);
   }
 #ifdef ORCA_MACOS_BUNDLE
-  // The local controller is port 1: until the player has their own mapping, the keyboard and the
-  // first SDL gamepad (Sys/Orca/Input/GCPadNew.ini).
+  // Until the player has their own mapping, port 1 uses the keyboard and the first SDL gamepad
+  // (Sys/Orca/Input/GCPadNew.ini).
   if (Orca::SessionActive())
   {
     const std::string pad_ini = File::GetUserPath(D_CONFIG_IDX) + "GCPadNew.ini";
@@ -486,20 +485,20 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
   }
 #endif
 #ifdef ORCA_MACOS_BUNDLE
-  // Only for this run: the player's Dolphin.ini keeps whatever default disc it had.
+  // For this run only; the player's Dolphin.ini keeps its own default disc.
   if (!launch_disc.empty())
     Config::SetCurrent(Config::MAIN_DEFAULT_ISO, launch_disc);
 #endif
-  // Embedded, input counts only while the app gives the game the focus: never in the background
-  // (the keyboard is read from the HID state, chat typing included).
+  // When embedded, ignore input unless the game has focus. The keyboard is read from raw HID
+  // state, so typing in the app's chat would otherwise reach the game.
   if (embed.enabled)
     Config::SetCurrent(Config::MAIN_INPUT_BACKGROUND_INPUT, false);
   UICommon::InitControllers(wsi);
-  // The in-game UX: the YouGame app's controllers as the local pad, overlay, name tags.
+  // The in-game UI: overlay, name tags and the app's controllers as the local pad.
   if (Orca::SessionActive())
   {
-    // The overlay's kit reads the game's own fonts from the game's disc (Kit.h): the boot's, or the
-    // default disc a launcher boots with.
+    // The overlay reads the game's fonts from its disc: the boot disc, or the default disc a loader
+    // boots.
     std::string disc = Config::Get(Config::MAIN_DEFAULT_ISO);
     if (boot)
     {
@@ -542,7 +541,7 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
 
   DolphinAnalytics::Instance().ReportDolphinStart("nogui");
 
-  // "ready" once the first frame is on screen.
+  // Tell the app "ready" once the first frame is on screen.
   Common::EventHook first_frame_hook;
   if (embed.enabled)
   {
@@ -566,14 +565,14 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
   if (!BootManager::BootCore(Core::System::GetInstance(), std::move(boot), wsi))
   {
     fprintf(stderr, "Could not boot the specified file\n");
-    // In a session the "orca error boot" line (and its "error" twin) says it.
+    // In a session, the session status has already reported the error.
     if (embed.enabled && !Orca::SessionActive())
       Embed::Out("error Orca couldn't start the game");
     Orca::Status::Finish();
     return 1;
   }
 
-  // Test commands: the caps once the boot chose its profile (whether it offers "results").
+  // Print the caps now that the boot has chosen a profile.
   if (test_commands)
     Orca::Status::PrintCaps();
 
@@ -582,7 +581,7 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
 #endif
 
   s_platform->MainLoop();
-  // Stopping can take a while (a session leaves its room): out of the app's way first.
+  // Stopping can take a while (a session leaves its room), so get out of the app's way first.
   s_platform->EmbedTeardown();
   Core::Stop(Core::System::GetInstance());
 
@@ -590,13 +589,13 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
   first_frame_hook.reset();
   s_platform.reset();
 
-  // In an Orca session the "orca error" line explains a non-zero exit.
+  // In a session, the reported error explains a non-zero exit.
   return Orca::Status::Finish();
 }
 
 int main(const int raw_argc, char* raw_argv[])
 {
-  // --embed, --parent and --rect are taken out before the regular parser sees the arguments.
+  // Remove --embed, --parent and --rect before the regular parser sees the arguments.
   std::vector<char*> arg_list(raw_argv, raw_argv + raw_argc);
   std::string embed_error;
   const std::optional<Embed::Options> embed = Embed::TakeArguments(&arg_list, &embed_error);
@@ -611,7 +610,7 @@ int main(const int raw_argc, char* raw_argv[])
   if (s_embedded)
   {
     Orca::Status::SetOutput(Embed::ClaimStdout());
-    // The app reads errors as "error <sentence>"; the "orca error" line stays for the session.
+    // Also send every error to the app as "error <sentence>".
     Orca::Status::SetErrorListener([](std::string_view, std::string_view sentence) {
       Embed::Out(fmt::format("error {}", sentence));
     });
@@ -622,11 +621,11 @@ int main(const int raw_argc, char* raw_argv[])
   const int code = Run(argc, arg_list.data(), *embed);
   if (s_embedded)
   {
-    // Every exit path, after all of Run's cleanup.
+    // Covers every exit path, after all of Run's cleanup.
     Embed::Out(fmt::format("exit {}", code));
 #ifdef _WIN32
-    // The stdin reader may still hold stdin's lock inside ReadFile, and the CRT's exit-time flush
-    // would wait for it: everything that matters is written, so leave without that flush.
+    // The stdin reader may still hold stdin's lock, and the CRT's exit-time flush would wait on it.
+    // Everything that matters is written, so exit without that flush.
     std::fflush(stderr);
     _exit(code);
 #endif

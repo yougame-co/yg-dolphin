@@ -21,7 +21,7 @@ OrbCombo::Step OrbCombo::Next(u16 buttons)
   m_start = start;
   if (m_held)
   {
-    // Both let go: the next sample is the player's own again. Until then neither reaches the game.
+    // Unmask once both Start and the D-pad are released.
     if ((buttons & (START | DPAD)) == 0)
       m_held = false;
     buttons &= static_cast<u16>(~(START | DPAD));
@@ -32,7 +32,6 @@ OrbCombo::Step OrbCombo::Next(u16 buttons)
 
 GCPadStatus FilterLocalPad(GCPadStatus pad, bool first_run, bool live)
 {
-  // The CPU thread only (the frame boundary's read).
   static OrbCombo s_combo;
   if (first_run && live)
   {

@@ -15,12 +15,11 @@ namespace Orca::UX
 {
 namespace
 {
-// A snapshot is a few KB; the helper caps pads at 16 and the app refuses anything bigger.
+// A real snapshot is a few KB.
 constexpr size_t MAX_EVENT_BYTES = 64 * 1024;
 
-// picojson has no nesting limit and aborts on a number that overflows a double. A snapshot nests
-// four deep and its numbers are short (SDL axis values such as 0.00003051850947599719 are the
-// longest), so anything deeper, or a number token that could overflow, is refused unparsed.
+// picojson has no nesting limit and aborts on a number that overflows a double. Snapshots nest
+// four deep and use short numbers, so reject anything deeper or longer before parsing.
 bool SafeToParse(std::string_view text)
 {
   if (text.size() > MAX_EVENT_BYTES)
@@ -167,8 +166,7 @@ std::optional<AdapterPort> ParsePort(const picojson::value& v, int expected_port
   return p;
 }
 
-// nullopt: malformed (the snapshot is refused). A well-formed pad without the standard mapping
-// gives a StandardPad with index -1, which the caller skips: Orca has no per-model mapping.
+// nullopt if malformed. A pad without the standard mapping gets index -1 and is skipped.
 std::optional<StandardPad> ParsePad(const picojson::value& v)
 {
   if (!v.is<picojson::object>())
@@ -325,8 +323,7 @@ GCPadStatus NeutralPad()
 
 GCPadStatus MapAdapterPort(const AdapterPort& port)
 {
-  // The port's 9 bytes as the adapter sent them; the helper keeps the low nibble of byte 2, which
-  // is all Dolphin reads of it.
+  // Rebuild the port's 9 wire bytes (only byte 2's low nibble is used).
   const std::array<u8, 9> wire{port.wireless ? u8(0x20) : u8(0x10),
                                static_cast<u8>(port.buttons & 0xFF),
                                static_cast<u8>((port.buttons >> 8) & 0x0F),
@@ -407,7 +404,7 @@ std::optional<LocalChoice> ChooseLocalPad(const Snapshot& snapshot, double age_m
     }
     if (best)
     {
-      // The adapter's last report, aged on the helper's clock up to the snapshot and on ours since.
+      // Age of the last adapter report: helper clock until the snapshot, our clock after.
       const double report_age = snapshot.sent_at - snapshot.received_at + age_ms;
       const bool raw_stale = snapshot.received_at <= 0 || !(report_age <= STALE_MS);
       if (stale || raw_stale)

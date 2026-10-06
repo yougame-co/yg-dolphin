@@ -8,28 +8,21 @@ class PointerWrap;
 void VideoCommon_DoState(PointerWrap& p);
 
 // Orca: skip host rendering on throwaway re-run frames. The GX command stream is still parsed, so
-// BP/CP/XF registers, TMEM, PE tokens and interrupts and the emulated GPU timing stay exactly as in a
-// rendered frame; vertex loading, draws, EFB/XFB copies, clears and presentation are skipped. A
-// skipped texture-only copy still writes its constant placeholder to RAM, so RAM matches a rendered
-// frame. Refused in dual core. In single core the GPU still runs in time slots, so a change at the
-// frame boundary can also cover the tail of the previous frame's commands; RAM is unaffected.
+// registers, TMEM, PE tokens, interrupts and emulated GPU timing match a rendered frame; only
+// vertex loading, draws, copies, clears and presentation are skipped. Texture-only copies still
+// write their placeholder, so RAM matches too. Refused in dual core.
 void VideoCommon_SetSkipRender(bool skip);
 bool VideoCommon_IsSkippingRender();
 
-// Orca: true while a rollback snapshot is measured, saved or loaded (set around the snapshot's
-// DoState; must be the same for all three). Host GPU state is then left alone: no EFB readback,
-// no texture-cache save or reload, no bounding-box readback. None of it reaches emulated RAM in a
-// session (copies are texture-only), and skipping it saves a GPU sync per snapshot; after a load,
-// EFB-copy effects show the newest frame's copy for a frame. Encoded GPU work is submitted (no
-// wait) after each snapshot save or load.
+// Orca: set around a rollback snapshot's DoState (the same for measure, save and load). Host GPU
+// state is then skipped: no EFB readback, texture cache or bounding box. None of it reaches RAM in
+// a session, and skipping it saves a GPU sync per snapshot. After a load, EFB-copy effects may show
+// the newest frame's copy for one frame.
 void VideoCommon_SetRollbackSnapshot(bool snapshot);
 bool VideoCommon_IsRollbackSnapshot();
 
-// Orca: whether loading a state shows its last frame again (Presenter::DoState). A savestate does,
-// and so does a drop-in keyframe (SnapshotRing::LoadImage): nothing else would be on screen until
-// the game's next frame. A rollback snapshot does not: the re-run frames after the load end at the
-// corrected frame, which presents itself, so showing the snapshot's frame first put a stale one on
-// screen (often the frame before, a one-frame backward flicker) on almost every rollback, and
-// cost a present and a drawable inside the rollback.
+// Orca: whether loading a state shows its last frame again. Savestates and drop-in keyframes do,
+// so something is on screen until the next frame. Rollback snapshots don't: the re-run frames end
+// with the corrected frame, and showing the stale one first would flicker backward for a frame.
 void VideoCommon_SetSnapshotRedisplays(bool redisplays);
 bool VideoCommon_LoadRedisplays();

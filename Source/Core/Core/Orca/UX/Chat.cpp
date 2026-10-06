@@ -28,8 +28,7 @@ int HexValue(char c)
   return -1;
 }
 
-// A code point a toast may show: no control characters (they would move the text or break a line),
-// and none of Unicode's line or paragraph separators.
+// No control characters or Unicode line/paragraph separators: they would break the toast's layout.
 bool Shown(char32_t c)
 {
   if (c < 0x20 || c == 0x7f || (c >= 0x80 && c <= 0x9f))
@@ -69,7 +68,7 @@ long CountShown(std::string_view s)
     }
     else
     {
-      return -1;  // a continuation byte first, an overlong 2-byte lead (C0, C1), or past F4
+      return -1;  // stray continuation byte, overlong lead (C0, C1), or past F4
     }
     if (i + len > s.size())
       return -1;
@@ -80,7 +79,7 @@ long CountShown(std::string_view s)
         return -1;
       c = (c << 6) | (cont & 0x3f);
     }
-    // Overlong 3- and 4-byte forms, UTF-16 surrogates, and past U+10FFFF.
+    // Reject overlong 3- and 4-byte forms, surrogates, and code points past U+10FFFF.
     if ((len == 3 && c < 0x800) || (len == 4 && (c < 0x10000 || c > 0x10ffff)) ||
         (c >= 0xd800 && c <= 0xdfff))
     {
@@ -140,7 +139,7 @@ std::optional<Line> Parse(std::string_view line)
   const std::size_t space = rest.find(' ');
   if (space == std::string_view::npos)
     return std::nullopt;
-  // A second space (an empty field, a third field) fails the text's decoding: ' ' is never in it.
+  // A second space fails the text's decoding, since ' ' is never valid in an encoded field.
   std::optional<std::string> name = DecodeField(rest.substr(0, space), NAME_ENCODED, NAME_POINTS);
   std::optional<std::string> text = DecodeField(rest.substr(space + 1), TEXT_ENCODED, TEXT_POINTS);
   if (!name || !text)

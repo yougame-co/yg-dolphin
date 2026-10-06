@@ -68,7 +68,6 @@ const int s_synctest_from = EnvInt("YG_SYNCTEST_FROM", 300);
 const int s_exit_after = EnvInt("YG_EXIT_AFTER", 0);
 const int s_shot_every = EnvInt("YG_SHOT_EVERY", 0);
 const int s_shot_from = EnvInt("YG_SHOT_FROM", 0);
-// YG_SHOT_AT=<frame>[,<frame>...]: a screenshot at each of these first-pass frames too.
 const std::vector<int> s_shot_at = [] {
   std::vector<int> frames;
   std::istringstream list(Orca::GetEnv("YG_SHOT_AT"));
@@ -80,19 +79,12 @@ const std::vector<int> s_shot_at = [] {
   return frames;
 }();
 const int s_diag = EnvInt("YG_SYNCTEST_DIAG", 0);
-// YG_SYNCTEST_SECTIONS=1: compare each re-run frame's device state with its first pass section by
-// section (the DoState markers) and count the frames each section differed in. The device-state
-// hash differs on nearly every re-run frame anyway (host counters, the icache, GPU dirty flags), so
-// only a per-section count shows a change that adds a difference (the SI's, say).
 const int s_sections = EnvInt("YG_SYNCTEST_SECTIONS", 0);
 const int s_bench_k = EnvInt("YG_BENCH", 0);
-// Re-run frames skip host rendering, as they will in a match; YG_SYNCTEST_RENDER=1 renders them.
 const int s_render_reruns = EnvInt("YG_SYNCTEST_RENDER", 0);
-// YG_SYNCTEST_CLEARJIT=1 drops every JIT block after each load, as mainline's state loads do, so
-// re-runs compile blocks with other boundaries than the first pass (as a peer with another
-// rollback history would).
+// Clearing the JIT after each load makes re-runs compile blocks with different boundaries, as a
+// peer with another rollback history would.
 const int s_clear_jit = EnvInt("YG_SYNCTEST_CLEARJIT", 0);
-// Loopback session test (Loopback.h): a recording from YG_PADREC replayed through a real session.
 const std::string s_loopback_path = Orca::GetEnv("YG_LOOPBACK");
 const char* const s_loopback = s_loopback_path.empty() ? nullptr : s_loopback_path.c_str();
 const int s_lb_lag = std::max(0, EnvInt("YG_LOOPBACK_LAG", 6));
@@ -100,16 +92,13 @@ const int s_lb_jitter = std::max(0, EnvInt("YG_LOOPBACK_JITTER", 3));
 const int s_lb_delay = std::max(0, EnvInt("YG_LOOPBACK_DELAY", 2));
 const int s_lb_max_rollback = std::max(1, EnvInt("YG_LOOPBACK_MAX_ROLLBACK", 7));
 const int s_lb_checksum_every = std::max(1, EnvInt("YG_LOOPBACK_CHECKSUM_EVERY", 10));
-// 2 or 4 seats; seat 1 is local, the others virtual remotes (4 needs ORCA_TEST_PADS=4).
+// 2 or 4 seats; seat 1 is local (4 needs ORCA_TEST_PADS=4).
 const int s_lb_seats = EnvInt("YG_LOOPBACK_SEATS", 2) == 4 ? 4 : 2;
-// The remote seats go silent from this frame (a frozen friend); the session must give up after
-// _GIVE_UP_MS of stalling (default 10 s, as online; 0: never). With silence, PASS means it did.
-// Without silence, a stall that long ends the run too.
+// Remotes go silent from this frame; the session must give up after _GIVE_UP_MS of stalling
+// (default 10 s, as online; 0 is never).
 const int s_lb_silent_from = EnvInt("YG_LOOPBACK_SILENT_FROM", -1);
 const int s_lb_give_up_ms = std::max(0, EnvInt("YG_LOOPBACK_GIVE_UP_MS", 10'000));
-// Link spikes: "<period ms>,<length ms>[,<from frame>]". From that frame (default 0) on, every
-// period of wall time the remote seats' packets are held for length ms, then arrive at once
-// (Loopback.h, StartSpikes). Meant with YG_THROTTLE=1: stalls, then the catch-up after them.
+// Link spikes: "<period ms>,<length ms>[,<from frame>]" (see VirtualRemote::StartSpikes).
 struct LoopbackSpikes
 {
   int period_ms = 0;
@@ -128,13 +117,12 @@ const LoopbackSpikes s_lb_spikes = [] {
   }
   return spikes;
 }();
-// Diagnosis: save a snapshot at every boundary from this frame on and never load (does saving
-// alone change the run?).
+// Diagnosis: save a snapshot every frame from here on but never load, to check that saving alone
+// does not change the run.
 const int s_save_only_from = EnvInt("YG_SAVE_ONLY_FROM", -1);
-// Diagnosis: at the first-pass boundary of this frame, write MEM1 and MEM2 to
-// <user dir>/ram-<frame>-mem1.bin / -mem2.bin.
+// Diagnosis: at this first-pass frame, write MEM1 and MEM2 to <user dir>/ram-<frame>-mem{1,2}.bin.
 const int s_dump_ram_at = EnvInt("YG_DUMP_RAM_AT", -1);
-// A comma-separated list of numbers from an environment variable (base 10 or 16).
+// A comma-separated list of numbers from an environment variable.
 std::vector<u32> EnvList(const char* name, int base)
 {
   std::vector<u32> values;
@@ -146,16 +134,14 @@ std::vector<u32> EnvList(const char* name, int base)
   }
   return values;
 }
-// Another JIT history for the same run (Dolphin clears its JIT when its code space fills, at
-// different moments on different machines; ORCA.md "Code the JIT doesn't see"):
-// YG_CLEARJIT_AT=<frame>[,<frame>...] drops every JIT block, and what the JIT learned about single
-// instructions, at the end of those first-pass frames; YG_CLEARJIT_EVERY=N at every Nth from frame
-// YG_CLEARJIT_FROM (default 0).
+// Simulates another JIT history: Dolphin clears its JIT when code space fills, at different times
+// on different machines. YG_CLEARJIT_AT=<frame>[,...] clears the JIT at the end of those first-pass
+// frames; YG_CLEARJIT_EVERY=N clears every Nth frame from YG_CLEARJIT_FROM (default 0).
 const std::vector<u32> s_clear_jit_at = EnvList("YG_CLEARJIT_AT", 10);
 const int s_clear_jit_every = EnvInt("YG_CLEARJIT_EVERY", 0);
 const int s_clear_jit_from = EnvInt("YG_CLEARJIT_FROM", 0);
-// YG_JIT_INVALIDATE=<frame>:<address>[,...] (address in hex): at the end of that first-pass frame,
-// drop the JIT blocks holding that instruction (a narrower YG_CLEARJIT_AT).
+// YG_JIT_INVALIDATE=<frame>:<hex address>[,...]: at the end of that first-pass frame, drop only
+// the JIT blocks containing that instruction.
 const std::vector<std::pair<int, u32>> s_jit_invalidate = [] {
   std::vector<std::pair<int, u32>> items;
   std::istringstream list(Orca::GetEnv("YG_JIT_INVALIDATE"));
@@ -170,16 +156,14 @@ const std::vector<std::pair<int, u32>> s_jit_invalidate = [] {
   }
   return items;
 }();
-// YG_JITCODE_CENSUS=<frame>[,<frame>...] (with YG_JITCODE_LOG): at the end of those first-pass
-// frames, before the harness's own clears there (a profile's JitClearFrame comes earlier in the
-// boundary), list every word a live JIT block runs that RAM no longer holds (Diag::JitCodeCensus).
+// YG_JITCODE_CENSUS=<frame>[,...] (with YG_JITCODE_LOG): at the end of those first-pass frames,
+// list every instruction a live JIT block runs that no longer matches RAM.
 const std::vector<u32> s_jit_census_at = EnvList("YG_JITCODE_CENSUS", 10);
-// YG_WATCH=<address>[,<address>...] (hex): log each word's value at the end of the first first-pass
-// frame and of every one in which it changed.
+// YG_WATCH=<hex address>[,...]: log each word's value once, then on every first-pass frame where
+// it changes.
 const std::vector<u32> s_watch = EnvList("YG_WATCH", 16);
-// Diagnosis: at the first-pass boundaries of these frames (comma-separated), log every NAND file's
-// size and hash (the hash a drop-in keyframe names it by), to compare what different inputs leave
-// in the NAND (a profile's BootNandFrame).
+// Diagnosis: at these first-pass frames, log every NAND file's size and hash, to compare what
+// different inputs leave in the NAND.
 const std::vector<int> s_nand_hashes_at = [] {
   std::vector<int> frames;
   std::istringstream list(Orca::GetEnv("YG_NAND_HASHES_AT"));
@@ -190,23 +174,19 @@ const std::vector<int> s_nand_hashes_at = [] {
   }
   return frames;
 }();
-// Drop-in keyframes: at this first-pass frame, capture the machine as a joining friend's keyframe
-// (SnapshotRing::Capture), keep saving ring snapshots (copy-on-write in a session) for
-// KEYFRAME_TEST_FRAMES more, then load the keyframe into the ring (SnapshotRing::LoadImage, over a
-// slot whose copy-on-write snapshot is stale) and re-run: RAM must equal the capture, and every
-// re-run frame must hash as its first pass.
+// Keyframe test: capture a keyframe at this frame, keep saving ring snapshots for
+// KEYFRAME_TEST_FRAMES more, then load the keyframe and re-run. RAM must match the capture, and
+// every re-run frame must hash the same as its first pass.
 const int s_keyframe_test = EnvInt("YG_KEYFRAME_TEST", -1);
 constexpr int KEYFRAME_TEST_FRAMES = 30;
-// Visual checks: dump every presented frame (Dolphin's frame dump; pass
-// -C Graphics.Settings.DumpFramesAsImages=True for images) from this first-pass frame up to the
-// other. Re-run frames present nothing, so a rollback run's dumps pair 1:1 with a plain run's.
+// Dolphin frame dump between these first-pass frames (see Harness.h).
 const int s_dump_frames_from = EnvInt("YG_DUMP_FRAMES_FROM", -1);
 const int s_dump_frames_to = EnvInt("YG_DUMP_FRAMES_TO", -1);
 
 // ---- Scene names (scene-relative input and logs) ----
 
-// Super Smash Bros. Brawl (NTSC-U, revision 2): gfSceneManager* at 0x805a0060, its current scene at
-// +0x4, the scene's name (char*) at +0x0 (scTitle, muMenuMain, scSelctCharacter, scMelee...).
+// Super Smash Bros. Brawl (NTSC-U, revision 2): gfSceneManager* at 0x805a0060, its current scene
+// at +0x4, and the scene's name (char*) at +0x0, e.g. scTitle, scSelctCharacter, scMelee.
 std::string BrawlSceneName(const Core::CPUThreadGuard& guard)
 {
   const u32 manager = PowerPC::MMU::HostRead<u32>(guard, 0x805a0060);
@@ -236,8 +216,8 @@ SceneReader SceneReaderForRunningGame()
   const SConfig& config = SConfig::GetInstance();
   if (config.GetGameID() == "RSBE01" && config.GetRevision() == 2)
     return BrawlSceneName;
-  // A launcher profile booting Brawl rev 2 (Project+): the running metadata comes from the disc's
-  // TMD, whose version need not be the disc revision; the profile checked the disc at boot.
+  // A launcher profile booting Brawl rev 2 (Project+): the reported revision comes from the TMD and
+  // may not match, but the profile already verified the disc.
   if (const Orca::Profile* profile = Orca::ActiveProfile();
       profile && profile->IsLauncher() && profile->disc == "RSBE01" && profile->revision == 2)
   {
@@ -246,8 +226,7 @@ SceneReader SceneReaderForRunningGame()
   return nullptr;
 }
 
-// A file named by an environment variable, open for writing (null handle when unset). IOFile takes
-// UTF-8 paths on Windows too.
+// Opens the file named by an environment variable for writing; a null handle when unset.
 File::IOFile OpenEnvFile(const char* name)
 {
   const std::string path = Orca::GetEnv(name);
@@ -256,9 +235,9 @@ File::IOFile OpenEnvFile(const char* name)
 File::IOFile s_hashlog_file = OpenEnvFile("YG_HASHLOG");
 FILE* const s_hashlog = s_hashlog_file.GetHandle();
 
-// The modes that save or load snapshots or play their own session (YG_SYNCTEST, YG_BENCH,
-// YG_LOOPBACK, YG_SAVE_ONLY_FROM) can't run beside a real online match: they would load states under
-// it and share its ring and NAND journal. Scripted input, recording, hashing and exit still work.
+// Modes that save or load snapshots or run their own session (YG_SYNCTEST, YG_BENCH, YG_LOOPBACK,
+// YG_SAVE_ONLY_FROM) are off during an online match, which owns the ring and NAND journal.
+// Scripted input, recording, hashing and exit still work.
 bool SnapshotModesAllowed();
 
 File::IOFile s_padrec_file = OpenEnvFile("YG_PADREC");
@@ -269,8 +248,8 @@ FILE* const s_padrec = s_padrec_file.GetHandle();
 struct InputRule
 {
   int from = 0, to = 0, port = 0, period = 0;
-  u32 fuzz_seed = 0;  // nonzero: pseudo-random input, new every 8 frames
-  std::string scene;  // nonempty: from/to count frames since this scene was entered
+  u32 fuzz_seed = 0;  // nonzero: pseudo-random input
+  std::string scene;  // nonempty: from/to count from entering this scene
   int visit = 0;      // nonzero: only on that entry into the scene (1 is the first)
   u16 buttons = 0;
   int sx = -1, sy = -1, cx = -1, cy = -1;
@@ -341,7 +320,7 @@ std::vector<InputRule> LoadInputScript()
   return rules;
 }
 
-// Loaded on first use (after logging is up), so a bad path shows in the log.
+// Loaded on first use, after logging is up, so a bad path shows in the log.
 const std::vector<InputRule>& Input()
 {
   static const std::vector<InputRule> s_rules = LoadInputScript();
@@ -350,19 +329,19 @@ const std::vector<InputRule>& Input()
 
 // ---- Frame and scene bookkeeping ----
 
-int s_frame = 0;       // the frame being run, or whose end we are at (rewinds on a load)
-std::atomic<int> s_shown_frame{-1};  // ShownFrame's
-int s_rewind_to = -1;  // a session rolled back to the start of this frame at this boundary
+int s_frame = 0;       // the frame being run, or whose end we are at; rewinds on a load
+std::atomic<int> s_shown_frame{-1};  // for ShownFrame()
+int s_rewind_to = -1;  // set by RewindTo for this boundary
 int s_online_stop_at = -1;  // online: the first-pass frame at which emulation stops
 int s_max_frame = -1;  // highest frame reached on a first pass
 bool s_stop_queued = false;
 std::string s_scene;
-// The scene YG_SCENES last logged: the first passes' view, which a rollback's re-run can leave
-// behind (a re-run that enters or leaves a scene logs nothing itself).
+// The scene YG_SCENES last logged. Only first passes log, so this can differ from s_scene after a
+// re-run.
 std::string s_logged_scene;
 int s_scene_start = 0;
 int s_scene_visit = 0;  // which entry into s_scene this is (1 for the first)
-// Every entry into a scene so far (frame -> scene), for visit numbers; a load drops later ones.
+// Every scene entry so far (frame -> scene), for visit numbers; a load drops later ones.
 std::map<int, std::string> s_scene_entries;
 struct SceneAt
 {
@@ -370,10 +349,10 @@ struct SceneAt
   int start = 0;
   int visit = 0;
 };
-// The scene, its entry frame and visit at the end of each recent frame, so a load can restore them.
+// Scene state at the end of each recent frame, so a load can restore it.
 std::map<int, SceneAt> s_scene_history;
 
-// After a load to the end of `frame`: the scene as it was then, and no entry after it.
+// After a load to the end of `frame`, restores the scene state from then.
 void RestoreScene(int frame)
 {
   if (auto history = s_scene_history.find(frame); history != s_scene_history.end())
@@ -418,7 +397,7 @@ u32 RegionPhysical(std::size_t index, std::size_t mem1_regions)
 
 struct FrameRecord
 {
-  s64 ticks = 0;  // CoreTiming ticks right after the save
+  s64 ticks = 0;  // CoreTiming ticks just after the save
   u64 ram = 0;
   u64 dev = 0;
   std::vector<u64> regions;
@@ -431,10 +410,10 @@ struct FrameRecord
 std::map<int, FrameRecord> s_records;
 std::vector<std::string> s_frame_events;  // CoreTiming events since the last frame end
 u64 s_checked = 0, s_mismatches = 0, s_ram_mismatches = 0, s_loads = 0;
-std::map<std::string, u64> s_section_frames;  // YG_SYNCTEST_SECTIONS: re-run frames it differed in
+std::map<std::string, u64> s_section_frames;  // per section: re-run frames where it differed
 
-// YG_SYNCTEST_SECTIONS: which DoState sections of a re-run frame's device state differ from its
-// first pass, by name and occurrence (a section can change size without shifting the rest).
+// Counts which DoState sections of a re-run frame differ from its first pass. Sections are matched
+// by name and occurrence, so one section changing size does not misalign the rest.
 void CountSectionDiffs(const FrameRecord& want, const FrameRecord& got)
 {
   using Ranges = std::map<std::string, std::vector<std::pair<std::size_t, std::size_t>>>;
@@ -491,10 +470,9 @@ std::string DescribeSectionDiffs()
   return out;
 }
 
-// ORCA_TEST_SNAPSHOT_EVERY=K (in a session): the synctest loads only frames that are multiples of
-// K, so each rewind re-runs k to k + K - 1 frames, like a session's rollback from a sparse
-// snapshot. Every frame is still saved (its hashes come from the save), so this checks longer
-// re-runs, not frames that run unsaved in one pass and saved in another: YG_LOOPBACK does that.
+// With ORCA_TEST_SNAPSHOT_EVERY=K, the sync test loads only multiples of K, so each rewind re-runs
+// k to k + K - 1 frames, like a session rolling back from a sparse snapshot. Every frame is still
+// saved, so frames saved in one pass but not another are left to YG_LOOPBACK.
 int SyncTestLoadEvery()
 {
   return std::max(Orca::TestSnapshotEvery(), 1);
@@ -573,8 +551,7 @@ void KeyframeTest(Core::System& system, int f, bool first_pass)
     if (ok)
     {
       s_frame = from;
-      // As a sync test's load does: scene-relative input follows the loaded frame's scene, or a
-      // window that crosses a scene change re-runs with the inputs shifted.
+      // Restore the scene so scene-relative input does not shift across a scene change.
       RestoreScene(from);
     }
   }
@@ -618,7 +595,7 @@ void LogByteDiffs(const FrameRecord& want, const FrameRecord& got)
   ram_diffs(want.mem1, got.mem1, 0x80000000u, "MEM1");
   ram_diffs(want.mem2, got.mem2, 0x90000000u, "MEM2");
 
-  // DoState sections: attribute each differing byte to the section whose end marker follows it.
+  // Attribute each differing byte to the DoState section whose end marker follows it.
   std::map<std::string, std::size_t> per_section;
   std::map<std::string, std::string> detail;
   const std::size_t n = std::min(want.dev_buf.size(), got.dev_buf.size());
@@ -733,8 +710,8 @@ void SyncTest(Core::System& system)
       CountSectionDiffs(want, rec);
     if (want.ram != rec.ram || want.dev != rec.dev)
     {
-      // RAM decides pass or fail. Device state also holds the emulated icache (filled only when
-      // the JIT compiles) and GPU dirty flags, which differ on a re-run without reaching RAM.
+      // Only RAM decides pass or fail. Device state also holds the emulated icache (filled only
+      // when the JIT compiles) and GPU dirty flags, which differ on re-runs without reaching RAM.
       ++s_mismatches;
       const bool ram_bad = want.ram != rec.ram;
       if (ram_bad)
@@ -767,8 +744,8 @@ void SyncTest(Core::System& system)
     }
   }
 
-  // Once per new frame, rewind k frames (to a multiple of ORCA_TEST_SNAPSHOT_EVERY at or before
-  // that) so the last k or more frames are re-run and compared.
+  // On each new frame, rewind at least k frames (to a multiple of ORCA_TEST_SNAPSHOT_EVERY) so
+  // they are re-run and compared.
   const int every = SyncTestLoadEvery();
   const int target = f - s_synctest_k - ((f - s_synctest_k) % every + every) % every;
   if (first_pass && target >= 0 && ring.Has(target))
@@ -812,9 +789,9 @@ void Bench(Core::System& system, bool first_pass)
   static u64 s_first = 0, s_reruns = 0, s_saves = 0, s_bench_loads = 0;
   auto ms = [](clock::duration d) { return std::chrono::duration<double, std::milli>(d).count(); };
 
-  // The frame that just ended, since the previous boundary (save and load excluded).
+  // Time for the frame that just ended, excluding save and load.
   const double frame = ms(clock::now() - s_last);
-  if (s_frame >= 300)  // let the game boot first
+  if (s_frame >= 300)  // skip boot
   {
     double& total = first_pass ? s_first_ms : s_rerun_ms;
     double& max = first_pass ? s_first_max : s_rerun_max;
@@ -827,7 +804,7 @@ void Bench(Core::System& system, bool first_pass)
     ring.Save(system, s_frame);
     s_save_ms += ms(clock::now() - t0);
     ++s_saves;
-    // Rewind once per 60 new frames; the re-run passes this frame again without rewinding.
+    // Rewind once per 60 new frames; the re-run reaches this frame again without rewinding.
     if (first_pass && s_frame % 60 == 0 && ring.Has(s_frame - s_bench_k))
     {
       t0 = clock::now();
@@ -882,9 +859,9 @@ struct LoopbackRun
   double save_ms = 0;
   std::string error;
   bool started = false;
-  // The session gave up on a remote that stopped answering, at this frame (-1: it didn't).
+  // Frame at which the session gave up on a silent remote, or -1.
   int gave_up_at = -1;
-  int remote_spikes = 0;  // link spikes so far (YG_LOOPBACK_SPIKE)
+  int remote_spikes = 0;
   bool spikes_started = false;
 };
 
@@ -894,8 +871,8 @@ LoopbackRun& Lb()
   return run;
 }
 
-// Ends the session while emulation still runs (RingPort's destructor resets the ring and the NAND
-// journal).
+// Ends the session while emulation still runs, since RingPort's destructor resets the ring and
+// NAND journal.
 void EndLoopback()
 {
   LoopbackRun& run = Lb();
@@ -913,10 +890,10 @@ void EndLoopback()
 void LogLoopbackResult(int frame)
 {
   const LoopbackRun& run = Lb();
-  // Checksums must have kept flowing to the end, not just started.
+  // Checksums must have kept flowing until the end, not just started.
   const int expected = run.stats.confirmed_frame / s_lb_checksum_every - 2;
-  // A silent remote must end the session by the give-up rule, after the silence began; every
-  // checksum before it must still have matched.
+  // With a silent remote, the session must give up after the silence starts, and every checksum
+  // before that must still match.
   const bool pass = s_lb_silent_from >= 0 ? run.gave_up_at >= s_lb_silent_from &&
                                                 run.stats.checksums_matched >= expected :
                                             run.error.empty() && run.stats.checksums_matched > 0 &&
@@ -947,7 +924,6 @@ void LoopbackBoundary(Core::System& system, int frame_here, bool first_pass)
       ERROR_LOG_FMT(ROLLBACK, "Loopback: {}", run.error);
       return;
     }
-    // Ports 3 and 4 are GameCube pads only under ORCA_TEST_PADS=4.
     if (s_lb_seats == 4 && Orca::TestPads() != 4)
     {
       run.error = "YG_LOOPBACK_SEATS=4 needs ORCA_TEST_PADS=4";
@@ -955,7 +931,7 @@ void LoopbackBoundary(Core::System& system, int frame_here, bool first_pass)
       run.recording.clear();
       return;
     }
-    // With two seats, ports 3 and 4 would replay as neutral and read as a desync.
+    // With two seats, ports 3 and 4 would replay as neutral and cause a false desync.
     for (const Loopback::RecordedFrame& recorded : run.recording)
     {
       if (s_lb_seats == 2 &&
@@ -971,8 +947,8 @@ void LoopbackBoundary(Core::System& system, int frame_here, bool first_pass)
     config.seats = s_lb_seats;
     config.local_seat = 0;
     config.input_delay = s_lb_delay;
-    // The recording fixes which frame each local input lands on: no adaptive delay here (time sync
-    // stays on: its waits change only timing, never inputs).
+    // The recording fixes which frame each local input lands on, so the delay cannot adapt. Time
+    // sync stays on, since it only changes timing.
     config.max_delay = s_lb_delay;
     config.max_rollback = s_lb_max_rollback;
     config.checksum_every = s_lb_checksum_every;
@@ -984,8 +960,7 @@ void LoopbackBoundary(Core::System& system, int frame_here, bool first_pass)
                                                            0, s_lb_lag, s_lb_jitter, s_lb_delay,
                                                            s_lb_checksum_every);
     run.remote->SilenceFrom(s_lb_silent_from);
-    // YG_THROTTLE=1 paces the session in real time, as a match is (re-runs still run flat out):
-    // what a rollback's re-runs cost the frames on screen.
+    // YG_THROTTLE=1 runs the session in real time, as in a match, to show what re-runs cost.
     run.port = std::make_unique<RingPort>(system, config.max_rollback, !Diag::KeepThrottle());
     run.session = std::make_unique<Orca::Net::Session>(config, *run.port, *run.remote);
     NOTICE_LOG_FMT(ROLLBACK,
@@ -1011,8 +986,7 @@ void LoopbackBoundary(Core::System& system, int frame_here, bool first_pass)
     }
     run.remote->Tick();
   }
-  // The frame that runs next is frame_here (frame_here - 1 just completed); the local pad sampled
-  // now applies input_delay frames later.
+  // frame_here runs next; the local pad sampled now applies input_delay frames later.
   const std::size_t target = static_cast<std::size_t>(frame_here + s_lb_delay);
   const Orca::Net::Pad local =
       target < run.recording.size() ? run.recording[target].pads[0] : Orca::Net::Pad{};
@@ -1021,12 +995,12 @@ void LoopbackBoundary(Core::System& system, int frame_here, bool first_pass)
   const Orca::Net::Step step = StepSession(
       *run.session, *run.port, frame_here - 1, [&local] { return local; },
       [&] {
-        // The remote player keeps playing while this one waits, until its recording runs out.
+        // The remote keeps playing while we wait, until its recording runs out.
         ran_past_recording = run.remote->Exhausted();
         run.remote->TickWhileWaiting();
         return ran_past_recording;
       },
-      // With link spikes, poll as a match does rather than spin.
+      // With link spikes, poll like a match does instead of spinning.
       std::chrono::microseconds{s_lb_spikes.period_ms > 0 ? 1000 : 0},
       std::chrono::milliseconds{s_lb_give_up_ms}, &gave_up);
 
@@ -1076,8 +1050,8 @@ int ShownFrame()
 
 namespace
 {
-// The shortcut on port 1's script, stepped at each frame's first read and kept for its re-runs:
-// a re-run reads the script again, and must get what the first run got.
+// The YouGame shortcut applied to port 1's script. Each frame's result is kept so re-runs get
+// exactly what the first run got.
 struct ComboFrame
 {
   int frame = -1;
@@ -1105,7 +1079,6 @@ std::optional<GCPadStatus> InputOverride(int port)
 {
   if (Input().empty())
     return std::nullopt;
-  // The frame being run is the one after the last frame end.
   const int f = s_frame;
   u16 buttons = 0;
   int sx = 128, sy = 128, cx = 128, cy = 128;
@@ -1113,7 +1086,7 @@ std::optional<GCPadStatus> InputOverride(int port)
   {
     if (r.port != port)
       continue;
-    int rf = f;  // the frame the rule's from/to are measured in
+    int rf = f;  // frame in the rule's from/to terms
     if (!r.scene.empty())
     {
       if (r.scene != s_scene || (r.visit && r.visit != s_scene_visit))
@@ -1126,7 +1099,7 @@ std::optional<GCPadStatus> InputOverride(int port)
       continue;
     if (r.fuzz_seed)
     {
-      // Deterministic per (seed, port, 8-frame segment): a held stick direction plus mostly one
+      // Deterministic per (seed, port, 8-frame segment): a stick direction plus usually one
       // attack, jump or shield button, never Start.
       const u64 h = XXH3_64bits_withSeed(
           &f, 0, (u64{r.fuzz_seed} << 32) ^ (static_cast<u64>(port) << 24) ^ (f / 8));
@@ -1167,11 +1140,10 @@ std::optional<GCPadStatus> InputOverride(int port)
   pad.analogA = 0;
   pad.analogB = 0;
   pad.isConnected = true;
-  // Through the session wire form, so a recording replays exactly what this run's ports reported.
+  // Round-trip through the wire form so a recording replays exactly what the ports reported.
   GCPadStatus out = Orca::Net::DecodePad(Orca::Net::EncodePad(pad));
-  // Without an online match (a synctest, a bench, a loopback), port 1's script is the local
-  // player's pad: the YouGame shortcut (Up + Start, UX/OrbCombo.h) comes out of it as the session's
-  // read takes it out of a real one (Rollback.cpp). An online match's read does that itself.
+  // Outside an online match, port 1's script is the local pad, so filter the YouGame shortcut
+  // (Up + Start) here. An online match filters it in its own read.
   if (port == 0 && !Orca::Online::Enabled())
     out.button = ComboButtons(f, out.button);
   return out;
@@ -1182,7 +1154,7 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
   if (!Active())
     return;
   auto& system = guard.GetSystem();
-  // Harness modes run unthrottled, unless a session's port paces the run (an online match).
+  // Run unthrottled unless a session paces the run.
   if (!RingPort::Active() && !Diag::KeepThrottle())
     Core::SetIsThrottlerTempDisabled(true);
   if (s_diag && s_synctest_k > 0 && s_frame >= s_synctest_from - 1)
@@ -1204,13 +1176,9 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
     s_scene_history[s_frame] = {s_scene, s_scene_start, s_scene_visit};
     if (s_scene_history.size() > 128)
       s_scene_history.erase(s_scene_history.begin());
-    // At first-pass boundaries, against the scene last logged, with the frame the scene was
-    // entered: without rollbacks, each change as it happens; after a re-run that changed the scene
-    // (a first pass's guess undone), the scene the re-run left, at the next first pass. Not where
-    // an online session has just rolled back (OnlineMatch loads before this hook runs, so memory is
-    // already the start of the frame it rewound to, not the end of this one). Comparing with the
-    // re-run's own scene, and logging that loaded state, left an online run's log on a scene the
-    // game had left (an e2e reported a results screen as "at scMemoryChange" for 14,000 frames).
+    // Log only on first passes, against the last logged scene, so a scene a re-run undid gets
+    // corrected at the next first pass. Skip boundaries where an online session just rolled back:
+    // memory there is already the rewound frame's start, not this frame's end.
     if (s_scenes && s_frame > s_max_frame && s_rewind_to < 0 && s_scene != s_logged_scene)
     {
       NOTICE_LOG_FMT(ROLLBACK, "Scene frame {}: {} -> {}", s_scene_start, s_logged_scene, s_scene);
@@ -1219,14 +1187,12 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
   }
 
   const int frame_here = s_frame;
-  const bool first_pass_here = frame_here > s_max_frame;  // false while re-running after a load
+  const bool first_pass_here = frame_here > s_max_frame;  // false on re-runs
   if (first_pass_here)
     s_shown_frame.store(frame_here, std::memory_order_relaxed);
-  // The in-game UX's frame hook, as an online match calls it (OnlineMatch::OnBoundary): before this
-  // boundary saves anything, and on re-runs, for the frame about to run. The ports are the test's
-  // (ORCA_UX_TEST_NAMES, comma-separated names for ports 1, 2...; else port 1 alone), each with
-  // the controls in ORCA_UX_TEST_CONTROLS (comma-separated in the same order: a profile's hex, as
-  // UX/NameTags.h lays it out, or empty or "-" for none).
+  // Call the in-game UI's frame hook as an online match would, before any save and on re-runs too.
+  // Ports come from ORCA_UX_TEST_NAMES (comma-separated, else port 1 alone), with controls from
+  // ORCA_UX_TEST_CONTROLS (comma-separated hex profiles in UX/NameTags.h layout, "-" for none).
   if (SnapshotModesAllowed())
   {
     static const std::vector<Orca::Events::PortInfo> s_test_ports = [] {
@@ -1269,15 +1235,15 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
         ports.push_back({0, "", false, {}});
       return ports;
     }();
-    // ORCA_UX_TEST_PLUG_AT=<frame>: the ports after the first plug in at that frame (port 1 alone
-    // before it), as a friend's drop-in plugs in at its frame S (UX/OnlineMenu.h FriendsMove).
+    // ORCA_UX_TEST_PLUG_AT=<frame>: ports after the first plug in at that frame, as when a friend
+    // drops in.
     static const int s_plug_at = EnvInt("ORCA_UX_TEST_PLUG_AT", -1);
     const bool early = s_plug_at >= 0 && frame_here + 1 < s_plug_at && s_test_ports.size() > 1;
     const std::vector<Orca::Events::PortInfo> base_ports =
         early ? std::vector<Orca::Events::PortInfo>(s_test_ports.begin(), s_test_ports.begin() + 1) :
                 s_test_ports;
     // ORCA_TEST_QUEUE_PICK=<frame>:<char>:<costume>:<x>:<y>[:<rating>]: port 2 plugs in at that
-    // frame with that queue identity (UX/Queue.h), as a matched joiner's does from its plug frame.
+    // frame with that queue identity, as a matched player does.
     struct TestPick
     {
       int from = -1;
@@ -1339,12 +1305,11 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
       Orca::Events::NotifyFrame(guard, frame_here + 1, !first_pass_here, base_ports,
                                 first_pass_here);
     }
-    // The queue's casual ready timer (Orca/UX/Queue.h), every frame final at its first pass: the
-    // log says when it ran out, for port 1.
+    // The queue's casual ready timer for port 1; it logs when it runs out.
     if (first_pass_here && !Orca::TestQueueSpec().empty())
       Orca::UX::Queue::ConfirmTimeout(frame_here + 1, 0);
-    // YG_RESULTS=1: the matchmaking result reader (Orca/UX/Results.h) over this run, every frame
-    // final at its first pass (a sync test's re-runs come after and change nothing).
+    // YG_RESULTS=1: log the match results reader's output (UX/Results.h). Frames are final at
+    // their first pass here.
     static const bool s_results = Orca::GetEnv("YG_RESULTS") == "1";
     if (s_results && first_pass_here)
     {
@@ -1377,8 +1342,7 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
   {
     Core::SaveScreenShot(fmt::format("f{:06d}", frame_here));
   }
-  // Recording: the RAM checksum at the start of the frame about to run (the state a session
-  // snapshot of that frame holds); its pads are written below, once the counter points at it.
+  // For YG_PADREC: the RAM checksum at the start of the next frame. Its pads are written below.
   u64 recorded_checksum = 0;
   bool record_here = s_padrec && first_pass_here && s_rewind_to < 0;
   if (record_here)
@@ -1466,7 +1430,7 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
       NOTICE_LOG_FMT(ROLLBACK, "NAND at frame {}: {} bytes in files", frame_here, total);
     }
   }
-  // Not beside a session: both rings would trim and stop the same NAND journal.
+  // Not alongside a session: both rings would share the same NAND journal.
   if (s_save_only_from >= 0 && frame_here >= s_save_only_from && !s_loopback &&
       !RingPort::Active() && SnapshotModesAllowed())
   {
@@ -1474,7 +1438,7 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
   }
   if (!SnapshotModesAllowed())
   {
-    // An online match drives the session at this boundary.
+    // An online match drives its own session.
   }
   else if (s_loopback)
   {
@@ -1493,32 +1457,29 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
     Bench(system, first_pass_here);
   }
 
-  // A session rolled back here: the state is now the start of that frame, which the next boundary
-  // ends.
+  // A session rolled back here: the state is now the start of s_rewind_to.
   if (s_rewind_to >= 0)
   {
     s_frame = s_rewind_to;
     RestoreScene(s_rewind_to);
     s_rewind_to = -1;
   }
-  // A load above rewound s_frame; the next frame end is the frame after it.
   ++s_frame;
   if (Diag::g_jit_code_log)
     Diag::JitCodeSetFrame(s_frame);
   s_max_frame = std::max(s_max_frame, frame_here);
-  // The next frame is a re-run if it has been run before (a session decides that itself).
+  // The next frame is a re-run if it has run before. Sessions decide this themselves.
   if (!s_loopback && !RingPort::Active())
     SetResimulating(s_frame <= s_max_frame && !s_render_reruns);
 
-  // A session that rolled back at this boundary replaced the state and the pads: skip the line.
+  // Skip the line if a session rolled back here and replaced the state and pads.
   record_here = record_here && s_frame == frame_here + 1;
   if (record_here)
   {
     Orca::Net::Pads pads{};
     for (int port = 0; port < Orca::Net::MAX_SEATS; ++port)
     {
-      // What the port reports during the next frame (the session's pads in a loopback run), before
-      // the input gate: a recording keeps the raw pads, as the session's wire does.
+      // Record the raw pad for the next frame, before the input gate, as the session sends it.
       if (const auto pad = Rollback::RawInputOverride(port))
         pads[port] = Orca::Net::EncodePad(*pad);
     }
@@ -1528,8 +1489,8 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
       std::fflush(s_padrec);
   }
 
-  // Online: the stats were logged at the exit frame; stop a little later, so the other player
-  // reaches its own exit frame before this one leaves the room.
+  // Online: stats were logged at the exit frame. Stop a bit later so the other player reaches its
+  // own exit frame before this one leaves the room.
   if (s_online_stop_at >= 0 && first_pass_here && frame_here >= s_online_stop_at &&
       !s_stop_queued)
   {
@@ -1537,7 +1498,7 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
     Core::QueueHostJob([](Core::System& host_system) { Core::Stop(host_system); });
   }
 
-  // Stop at the end of first-pass frame n, in every mode.
+  // YG_EXIT_AFTER: stop at the end of this first-pass frame, in every mode.
   if (s_exit_after > 0 && first_pass_here && frame_here >= s_exit_after && !s_stop_queued &&
       s_online_stop_at < 0)
   {
@@ -1554,8 +1515,8 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
       NOTICE_LOG_FMT(ROLLBACK, "Synctest device-state sections differing (re-run frames): {}",
                      DescribeSectionDiffs());
     }
-    // The game's save on the session NAND: equal across runs with and without rollback when NAND
-    // writes inside rollback windows are undone correctly.
+    // Matches across runs with and without rollback if NAND writes inside rollback windows are
+    // undone correctly.
     if (Orca::SessionActive())
     {
       NOTICE_LOG_FMT(ROLLBACK, "Session save hash at exit: {:016x}",

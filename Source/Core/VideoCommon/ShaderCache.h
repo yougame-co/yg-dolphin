@@ -69,9 +69,9 @@ public:
   // Accesses ShaderGen shader caches asynchronously.
   // The optional will be empty if this pipeline is now background compiling.
   std::optional<const AbstractPipeline*> GetPipelineForUidAsync(const GXPipelineUid& uid);
-  // Orca: GetUberPipelineForUid, except that it is empty while an ubershader the pipeline needs is
-  // still compiling in the background (a session's boot that stopped waiting): the draw is skipped
-  // instead of compiling that ubershader again on the emulation thread (D3D: seconds).
+  // Orca: like GetUberPipelineForUid, but returns nullopt while a needed ubershader is still
+  // compiling in the background, so the caller can skip the draw instead of compiling it on the
+  // emulation thread.
   std::optional<const AbstractPipeline*> GetUberPipelineForUidIfReady(const GXUberPipelineUid& uid);
 
   // Shared shaders
@@ -122,16 +122,16 @@ private:
   static constexpr size_t NUM_PALETTE_CONVERSION_SHADERS = 3;
 
   void WaitForAsyncCompiler();
-  // Orca: WaitForAsyncCompiler for a session's boot, which gives up at a limit (ShaderCache.cpp,
-  // BOOT_WAIT, or the app's ORCA_SHADER_WAIT_S) and prints "orca shaders" lines while it waits.
+  // Orca: WaitForAsyncCompiler for a session's boot. Gives up after a time limit and reports
+  // progress to the app while it waits.
   void WaitForBootCompile();
   void LoadCaches();
   void ClearCaches();
   void LoadPipelineUIDCache();
   void ClosePipelineUIDCache();
-  // EFB/XFB copy pipelines are in no disk cache and never covered by ubershaders: without this, the
-  // first copy of each kind compiles on the emulation thread (a match's countdown, every run).
-  // Their UIDs are kept per game and compiled before the first frame.
+  // Orca: EFB/XFB copy pipelines have no disk cache or ubershader fallback, so the first copy of
+  // each kind would compile on the emulation thread mid-match. Their UIDs are saved per game and
+  // compiled before the first frame.
   void LoadEFBCopyUIDCache();
   void OpenEFBCopyUIDCache();
   static constexpr u32 EFB_COPY_UID_MAGIC = 0x59504345;  // ECPY
@@ -203,7 +203,7 @@ private:
   enum : u32
   {
     COMPILE_PRIORITY_ONDEMAND_PIPELINE = 100,
-    // Orca: the shader cache in a session (CompileMissingPipelines).
+    // Orca: shader cache pipelines in a session, ahead of the ubershaders.
     COMPILE_PRIORITY_SESSION_SHADERCACHE_PIPELINE = 150,
     COMPILE_PRIORITY_UBERSHADER_PIPELINE = 200,
     COMPILE_PRIORITY_SHADERCACHE_PIPELINE = 300

@@ -8,19 +8,16 @@
 #include <string>
 #include <string_view>
 
-// The page's chat in fullscreen (ORCA.md "stdin", YouGame's ORCA_ONLINE_UX.md "Fullscreen chat").
-// With the cap `chat` agreed, the YouGame page sends `chat <name> <text>` for a line someone else
-// wrote in the room's chat while Orca fills the screen (the page's own chat can't be seen then),
-// and Orca shows "<name>: <text>" as an overlay toast (Overlay.h, ShowChat). Each field is
-// encodeURIComponent of UTF-8, so a message has no spaces or control characters on the wire and can
-// never become a second command. The text is a player's own words: Orca never prints it to stdout,
-// stderr or its log. Host-only drawing, never game memory: it can't desync.
+// Room chat while Orca is fullscreen. The page sends `chat <name> <text>` on stdin and Orca shows
+// it as an overlay toast. Both fields are encodeURIComponent'd UTF-8, so a message can't contain a
+// space or newline and can never smuggle in a second command. Chat text is never logged. Drawn on
+// the host only, never into game memory, so it can't desync.
 namespace Orca::UX::Chat
 {
-// Code points once decoded (the page cuts to these, with "…").
+// Limits in code points after decoding (the page truncates to these).
 inline constexpr std::size_t NAME_POINTS = 24;
 inline constexpr std::size_t TEXT_POINTS = 140;
-// Encoded: every code point at most 4 UTF-8 bytes, each "%XX" (the app's filter takes these too).
+// Encoded limits: up to 4 UTF-8 bytes per code point, 3 characters ("%XX") per byte.
 inline constexpr std::size_t NAME_ENCODED = NAME_POINTS * 12;
 inline constexpr std::size_t TEXT_ENCODED = TEXT_POINTS * 12;
 
@@ -30,15 +27,12 @@ struct Line
   std::string text;
 };
 
-// One field, percent-decoded. Encoded it holds only what encodeURIComponent leaves as it is
-// (A-Z a-z 0-9 - _ . ! ~ * ' ( )) and "%XX", at most max_encoded characters; decoded it is valid
-// UTF-8 (no overlong forms, surrogates, or code points past U+10FFFF) of 1 to max_points code
-// points, with no control characters (C0, DEL, C1) and no line or paragraph separators. nullopt
-// otherwise.
+// Percent-decodes one field. Returns nullopt unless the input uses only encodeURIComponent's
+// output alphabet and decodes to valid UTF-8 of 1..max_points code points with no control
+// characters or line separators.
 std::optional<std::string> DecodeField(std::string_view field, std::size_t max_encoded,
                                        std::size_t max_points);
 
-// The whole stdin line, exactly "chat <name> <text>" (one space each). nullopt when it is
-// malformed: the caller answers "unsupported chat", and says nothing more.
+// Parses a full "chat <name> <text>" line. Returns nullopt if it is malformed.
 std::optional<Line> Parse(std::string_view line);
 }  // namespace Orca::UX::Chat

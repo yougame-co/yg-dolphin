@@ -2,24 +2,19 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// page-e2e.mjs: YouGame's own page drives two headless Orcas through the queue (ORCA.md
-// "Matchmaking"). Where queue-e2e.mjs plays the page's part itself, here the real page does: the
-// listing on the live site, opened by Playwright in two browser contexts signed in as two players,
-// whose window.yougameDesktop is a stand-in for the desktop app (its preload's shape: orca.play,
-// send, stop, features; discs; onProgress; onSdkRequest, sdkReply, sdkPush), with the app's own
-// rules for what reaches Orca (ORCA_COMMAND, featureAllows) and what reaches the page (`orca …`
-// lines unchanged, `caps`, `running` once Orca is up). So OrcaEmbed, Player.tsx, the ticket route,
-// the rooms Worker and Orca all run as they do in the app; this script only presses the pad (the
-// menu path to With Anyone, the character select, the stage, port 2 walking off the stage) and
-// reads the band under the game.
+// page-e2e.mjs: YouGame's real page drives two headless Orcas through the queue (ORCA.md
+// "Matchmaking"). Unlike queue-e2e.mjs, which plays the page's part itself, this opens the live
+// listing in two Playwright browser contexts signed in as two players. Each page gets a stand-in
+// for the desktop app's window.yougameDesktop that follows the app's rules for what passes between
+// page and Orca. This script only presses the pad and reads the band under the game.
 //
 //   node Tools/orca/page-e2e.mjs <dolphin-emu-nogui> <disc> --playwright <playwright/index.mjs>
 //       --slug <listing> --cookie-a <file> --cookie-b <file> [--queue ranked|casual]
 //       [--site <url>] [--pplus <launcher.dol>] [--alarm <s>] [--channel chrome] [--keep]
 //
-// The cookie files hold a session's Cookie header (mode 600, never printed). Run rules (Luis's
-// machine): never while he plays (`ps -axo comm= | grep -q yougame-desktop/orca/apps`), 1-minute
-// load under 18, under `flock orca-run.lock`; Orca runs nice'd, muted, Null video, with a perl alarm.
+// The cookie files hold a session's Cookie header (mode 600, never printed). Orca runs nice'd,
+// muted, with Null video and a perl alarm. On a shared machine, don't run it while someone is
+// playing or the load is high.
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
@@ -46,9 +41,9 @@ const PPLUS = opt("--pplus");
 const QUEUE = opt("--queue", "ranked");
 const SITE = (opt("--site", "https://yougame.co") || "").replace(/\/$/, "");
 const KEEP = argv.includes("--keep");
-// match (default): the whole flow. cancel: one player, the band's Cancel, then backing out of the
-// character select while searching. noshow: the opponent's app closes the moment the queue pairs
-// them, and the host's page gives up after its 30 s watch.
+// match (default): the whole flow. cancel: one player cancels from the band, then backs out of
+// the character select while searching. noshow: the opponent's app closes as soon as they are
+// paired, and the host's page gives up after 30 s.
 const SCENARIO = opt("--scenario", "match");
 const ALARM = Number(opt("--alarm", "1200"));
 const APP_VERSION = opt("--app-version", "0.12.18");
@@ -109,7 +104,7 @@ const BTN = {
   Z: 512,
 };
 
-// The listing's accepted dump, as the app's disc store would list it for this slug.
+// The listing's accepted disc, as the app's disc store would report it.
 const DISC_INFO = {
   key: "wii/super-smash-bros-brawl-usa",
   sha1: "59432f150bf6b871ab378bb5b28e92005e0862f6",
@@ -610,7 +605,7 @@ class Side {
     for (const w of [...this.sceneWaiters]) w();
   }
 
-  // The first stdout line (or, with `sent`, line the page sent Orca) from index `from` on that matches.
+  // The first matching stdout line from index `from` on (with `sent`, lines the page sent Orca).
   expect(re, ms, from = 0, sent = false) {
     return new Promise((resolve, reject) => {
       const end = setTimeout(() => {
@@ -746,8 +741,8 @@ async function menuToQueue(side, queue) {
   }
 }
 
-// One game (queue-e2e.mjs playGame): both pick on the first visit, the host starts and picks the
-// stage, port 2 walks off the stage until the fight ends, both press on at the results.
+// One game, as queue-e2e.mjs playGame: both pick, the host picks the stage, port 2 walks off until
+// the fight ends, and both press on through the results.
 async function playGame(host, joiner, first) {
   await host.waitScene("scSelctCharacter", 120000);
   await sleep(2500);
@@ -854,9 +849,8 @@ async function caps(s) {
     if (!line.split(" ").includes(c)) fail(`${s.name}: the page's caps lack ${c}`);
 }
 
-// One player: the band's Cancel (the page closes /match and tells Orca `queue-cancel`), backing out
-// after it (nothing more to say), then the same pick and backing out while searching (Orca's
-// `orca menu cancel`: the page ends the search and tells Orca too).
+// One player cancels from the band, then picks again and backs out of the character select while
+// searching (`orca menu cancel`).
 async function cancelScenario(browser, a) {
   const searching = QUEUE === "ranked" ? /^Searching for a ranked opponent \(beta\)/ : /^Searching for an opponent/;
   await a.startBridge();
@@ -897,8 +891,8 @@ async function cancelScenario(browser, a) {
   log("PASS: backing out while searching: orca menu cancel, the page ended the search (queue-cancel)");
 }
 
-// The opponent's app closes as the queue pairs them: the host's page waits 30 s for them, then
-// sends `leave` and says they didn't connect, with Find another match.
+// The opponent's app closes as they are paired: after 30 s the host's page sends `leave`, says
+// they didn't connect, and offers Find another match.
 async function noShowScenario(browser, a, b) {
   for (const s of [a, b]) {
     await s.startBridge();

@@ -3,28 +3,23 @@
 
 // Copy-on-write rollback snapshots of guest RAM (MEM1 and MEM2).
 //
-// A snapshot write-protects every page of guest RAM in every host mapping of it: the RAM views
-// host code uses, the fastmem arena's physical and logical views the JIT uses, and any page-table
-// mapping. The first write to a page after a snapshot faults, whoever makes it (JIT code, the
-// interpreter, a DMA's memcpy, IOS): the fault handler (MemTools.cpp) records the page's contents in
-// the newest snapshot's undo log (UndoLog.h), makes the page writable in the view that faulted, and
-// resumes the write, which runs again from the start. Later writes to that page cost nothing until
-// the next snapshot. A snapshot therefore costs what the frames after it changed, not 96 MB.
+// A snapshot write-protects guest RAM in every host mapping of it (host views and the JIT's fastmem
+// views). The first write to a page afterwards faults; the fault handler saves the page's old
+// contents in the newest snapshot's undo log, makes the page writable, and the write is retried.
+// So a snapshot costs only the pages that change after it, not all 96 MB.
 //
-// A fault costs far more than copying a page, and a game writes much the same pages every frame:
-// pages that keep changing stay writable across snapshots, their pre-images copied by the snapshot
-// itself ("hot pages" in Cow.cpp). Either way, every page is read-only in every view or has its
-// pre-image in the newest log.
+// Invariant: every page is either read-only in every view or already saved in the newest log.
+// Pages that change every frame stay writable and are copied up front at each snapshot ("hot
+// pages"), because a fault costs far more than a page copy.
 //
-// Pre-images are copied from, and restored into, a private mapping of RAM that nothing else uses
-// and that is never protected. RAM is tracked in host pages (4 KB on x86-64, 16 KB on Apple
-// Silicon).
+// Saves and restores go through a private, never-protected mapping of RAM. Pages are host pages
+// (4 KB on x86-64, 16 KB on Apple Silicon).
 //
-// Writes the kernel makes into guest RAM (a read() into an IOS buffer) do not fault: they fail.
-// Code that reads a file or socket straight into guest RAM calls PrepareHostWrite first.
+// Kernel writes into guest RAM (e.g. read() into an IOS buffer) fail instead of faulting, so such
+// code must call PrepareHostWrite first.
 //
-// One snapshot ring at a time owns the tracker. The CPU thread drives it; the fault handler may run
-// on any thread (the Mach exception thread on macOS), so the state is behind a lock.
+// Threading: the CPU thread drives this, but faults can arrive on any thread (the Mach exception
+// thread on macOS), so all state is behind a lock. One snapshot ring owns the tracker at a time.
 
 #pragma once
 
@@ -43,7 +38,7 @@ class System;
 
 namespace Rollback::Cow
 {
-// A tracked area of guest physical memory (MEM1, MEM2) and its private, never-protected mapping.
+// A tracked region of guest physical memory and its private, never-protected mapping.
 struct Area
 {
   u8* alias;
@@ -51,8 +46,8 @@ struct Area
   u32 size;
 };
 
-// One host mapping of guest physical memory. Views that are not writeable (read-only page-table
-// mappings) are left alone: Dolphin's own fault handling owns writes through them.
+// One host mapping of guest physical memory. Non-writeable views are ignored: Dolphin's own fault
+// handling owns writes through them.
 struct View
 {
   u8* base;
@@ -61,53 +56,51 @@ struct View
   bool writeable;
 };
 
-// The host's protection granularity (the page size the logs work in).
+// The host page size, which is the granularity of protection and of the undo logs.
 std::size_t PageSize();
 
-// Starts tracking `areas` through `views` for `owner` (a snapshot ring): every page becomes
-// read-only in every writeable view. False if another owner tracks, the platform has no fault
-// handler, or the layout does not fit (unaligned, or more than 64 views).
+// Starts tracking `areas` through `views` for `owner` (a snapshot ring) and write-protects them.
+// False if another owner is tracking, the platform has no fault handler, or the layout is unaligned
+// or has more than 64 views.
 bool Arm(const void* owner, const std::vector<Area>& areas, const std::vector<View>& views);
 // Arm over MEM1 and MEM2 of the running machine.
 bool ArmForSystem(Core::System& system, const void* owner);
-// Stops tracking for `owner` (nothing for anyone else): RAM is writable everywhere again and every
-// log is dropped.
+// Stops tracking if `owner` holds it: RAM is writable again and every log is dropped.
 void Disarm(const void* owner);
 bool IsArmedFor(const void* owner);
 
-// Takes a snapshot: protects again the pages written since the previous one and opens an empty
-// undo log. Returns the snapshot's id (never 0).
+// Takes a snapshot and opens an empty undo log for it. Returns its id (never 0).
 u64 Snapshot();
 bool Has(u64 id);
-// Puts RAM back as it was at snapshot `id`. Calls changed(physical_address, 4096) for each 4 KB
-// block whose bytes it changed. Snapshots newer than `id` are dropped and `id` is the newest again,
-// with an empty log. False if `id` is not held.
+// Puts RAM back as it was at snapshot `id`, calling changed() for each 4 KB block that differed.
+// Newer snapshots are dropped and `id` becomes the newest, with an empty log. False if `id` is
+// not held.
 bool Restore(u64 id, const std::function<void(u32 physical_address, u32 length)>& changed);
-// Forgets snapshot `id` (its pre-images merge into the next older snapshot's log).
+// Forgets snapshot `id`; its saved pages merge into the next older snapshot's log.
 void Drop(u64 id);
 // RamChecksum (Rollback.h) of RAM as it was at snapshot `id`, rebuilt from live RAM and the logs.
 std::optional<u64> Checksum(u64 id);
 
-// The fault handlers call this first. True when `address` is a write-protected page of tracked RAM:
-// its pre-image is recorded and it is writable again, so the faulting write can run again.
+// Called first by the fault handlers. True if `address` is a protected page of tracked RAM; the
+// page is then saved and made writable so the faulting write can be retried.
 bool HandleFault(uintptr_t address);
-// Before host code writes [ptr, ptr + size) of guest RAM through a system call (which fails on a
-// protected page instead of faulting): records and unprotects those pages.
+// Call before a system call writes [ptr, ptr + size) of guest RAM (the kernel fails on a protected
+// page instead of faulting). Saves and unprotects those pages.
 void PrepareHostWrite(const void* ptr, std::size_t size);
 
 // Memmap calls this when the host mappings of guest RAM change.
 void OnMappingsChanged(Core::System& system);
-// Stops tracking, whoever owns it: RAM writable in every view again, every snapshot dropped. Before
-// the mappings go away (Memmap) and before the fault handler does (the CPU thread exits).
+// Stops tracking regardless of owner. Must run before the mappings are removed and before the CPU
+// thread (and its fault handler) exits.
 void StopTracking();
 
 struct Counters
 {
-  u64 faults = 0;          // faults handled (a page written through another view faults again)
-  u64 pages_recorded = 0;  // pre-images recorded by faults
-  u64 pages_copied = 0;    // pre-images of hot pages copied up front by snapshots and loads
+  u64 faults = 0;
+  u64 pages_recorded = 0;  // saved by faults
+  u64 pages_copied = 0;    // hot pages copied up front
   u64 pages_reprotected = 0;
-  u64 remaps = 0;          // mapping changes while armed
+  u64 remaps = 0;  // mapping changes while armed
 };
 Counters GetCounters();
 }  // namespace Rollback::Cow

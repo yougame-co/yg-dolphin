@@ -1,9 +1,9 @@
 # Casual's later games on the character select (ORCA.md "The character select's buttons", "The
-# queue's character select"; Luis, 2026-10-04: "press A to select character and then press start
-# after to lock in"), Project+ (ORCA_PROFILE=PPLUS32): game 1 as pplus-queue2-flow.txt, then game 2,
-# both picking at once: B takes a token up, A puts it down, Start locks in (LOCKED IN on the
-# panel), A on the own token while locked in does nothing, B unlocks, Start locks in again; both
-# locked in, the stage select at once (no clock, no ready step). Then game 2's casual stage pick.
+# queue's character select": A picks a character, Start locks it in), Project+
+# (ORCA_PROFILE=PPLUS32): game 1 as pplus-queue2-flow.txt, then game 2, both picking at once: B
+# takes a token up, A puts it down, Start locks in (LOCKED IN on the panel), A on the own token
+# while locked in does nothing, B unlocks, Start locks in again; both locked in, the stage select at
+# once (no clock, no ready step). Then game 2's casual stage pick.
 # Run with ORCA_TEST_QUEUE=casual:solo ORCA_UX_TEST_NAMES=ada,bo
 # ORCA_TEST_QUEUE_PICK=<the solo character select's frame + 300>:43:2:-7.4:7.7, e.g. the sync test
 # from the main menu on (YG_SYNCTEST=7 YG_SYNCTEST_FROM=200).

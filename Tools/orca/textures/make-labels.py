@@ -1,28 +1,23 @@
 #!/usr/bin/env python3
 # Copyright 2026 YouGame
 # SPDX-License-Identifier: GPL-2.0-or-later
-"""Orca's Online menu labels: our own art, drawn in each game's style with open-licence fonts.
+"""Orca's Online menu labels: original art, drawn in each game's style with open-licence fonts.
 
-Writes the texture pack Orca loads in every session (Data/Sys/Orca/Textures/RSBE01, see ORCA.md
-"Online menu", "The character select's title" and "Relabelled words"): Dolphin's hires texture names, so each PNG replaces one of the game's textures on
-screen and nothing else (texture replacement never touches emulated memory). Brawl and Project+
-both load textures as RSBE01; their labels hash differently, so one folder serves both.
+Writes the texture pack Orca loads in every session (Data/Sys/Orca/Textures/RSBE01; see ORCA.md
+"Online menu" and "Relabelled words"). Each PNG uses a Dolphin hires texture name, so it replaces
+one game texture on screen and never touches emulated memory. Brawl and Project+ both load
+textures as RSBE01, but their labels hash differently, so one folder serves both.
 
   python3 Tools/orca/textures/make-labels.py [--out <dir>] [--sheet <preview.png>]
 
-Needs Pillow. The fonts are next to this script, with their licences (SIL Open Font License 1.1):
-Archivo Black for Brawl's heavy, wide labels, Anton for Project+'s condensed ones and for Brawl's
-title bar (the game's own titles there are a light condensed sans: SELECT MODE, / WITH ANYONE), and
-for the relabels: Russo One for READY TO FIGHT!'s band, Cinzel for Brawl's stage select title,
-Anton for STAGE SELECT and Project+'s legend.
-Nothing here is derived from the game's art: the sizes and boxes below are numbers measured on the
-game's own textures (where its letters sit), so ours sit in the same place.
+Needs Pillow. The fonts sit next to this script with their SIL Open Font License 1.1 texts: Archivo
+Black (Brawl's labels), Anton (Project+'s labels, Brawl's title bar, STAGE SELECT, Project+'s
+legend), Russo One (READY TO FIGHT!) and Cinzel (Brawl's stage select title). Nothing is derived
+from the game's art; the boxes below only record where the game's letters sit.
 
-Each label is drawn at 4x the game's size (Dolphin takes any integer multiple), with mip levels
-down to the game's own size (<name>_mip1.png at 2x, _mip2.png at 1x): a custom texture's sampler
-takes its mip levels even where the game's texture has none (TextureCacheBase::GetSamplerState
-lifts the LOD clamp for custom textures), so a label drawn at 1x internal resolution is a clean 1x
-image instead of the 4x one read every fourth texel, which breaks thin strokes (Anton's N).
+Labels are drawn at 4x with mip levels down to 1x (_mip1.png at 2x, _mip2.png at 1x). Dolphin
+samples a custom texture's mips even when the game's texture has none, so at 1x internal resolution
+thin strokes stay clean.
 """
 
 import argparse
@@ -66,11 +61,9 @@ LABELS = [
          style="pplus"),
     dict(name="tex1_160x80_5b8f52ac0127b2a8_5", lines=["RANKED"], box=(24, 14, 136, 66),
          style="pplus"),
-    # The character select's mode title (MenSelchrPanelRule3.1: Brawl's BRAWL logo, Project+'s
-    # VERSUS), as the game draws it with Orca's mark for a mode in its palette (UX/CssTitle.h: the
-    # transparent entry the texture's background uses, a value nobody sees, so each mode hashes to
-    # its own name). Brawl's in the gold of its other rule titles (Special Brawl, Winner Out), small
-    # capitals like theirs; Project+'s in its mint like VERSUS, where VERSUS's letters sit.
+    # The character select's mode title (MenSelchrPanelRule3.1), one per mode. Orca marks the mode
+    # in an invisible palette entry (UX/CssTitle.h), so each mode hashes to its own name. Brawl's
+    # uses the gold of its other rule titles; Project+'s the mint of its VERSUS.
     dict(name="tex1_132x48_44a1dd712ec999f0_159b390ed5eec04d_9", lines=["Casual"],
          box=(8, 12, 124, 36), style="brawl-css"),
     dict(name="tex1_132x48_44a1dd712ec999f0_4d236969243ec2d8_9", lines=["Ranked"],
@@ -85,9 +78,8 @@ LABELS = [
          box=(13, 17, 116, 39), style="pplus-css"),
 ]
 
-# Design F's relabels (Core/Orca/UX/Relabel.h, ORCA.md "Relabelled words"): the game's big words
-# say what to do now. Each is one of the game's textures with Orca's mark in it (a palette entry's
-# blue, a first texel: values nobody sees), so each label hashes to its own name:
+# The relabels (Core/Orca/UX/Relabel.h, ORCA.md "Relabelled words"): the game's big words say what
+# to do now. Orca marks each texture with an invisible value, so each label hashes to its own name:
 #   band-<game>-<n>   READY TO FIGHT! (MenSelchrReady01_2, C4 352x36): 1 PRESS START TO LOCK IN!,
 #                     2 WINNER PICKS FIRST!, 3 LOSER PICKS NOW!
 #   line-<game>-<n>   STAGE SELECT (MenSelmapBack07, I4; Brawl 128x16, Project+ 189x30): whose
@@ -96,7 +88,7 @@ LABELS = [
 #                     2 CASUAL
 #   legend-info       Project+'s stage select legend's words and icons (CornerInfo, I4 245x53)
 #   legend-buttons    its buttons (CornerButtons, IA8 150x50): X, A, B
-# The names were computed with Dolphin's hash from the marked textures (as the title's above).
+# Names are Dolphin's hashes of the marked textures.
 RELABELS = [
     ("band-brawl-1", "tex1_352x36_260eae27613f7b8a_0f0d1db67c43a0e3_8", "PRESS START TO LOCK IN!"),
     ("band-pplus-1", "tex1_352x36_ca0167082a3a208f_d479558876e2417e_8", "PRESS START TO LOCK IN!"),
@@ -185,8 +177,7 @@ def draw_relabel(key, name, text):
     W, H = w * SCALE, h * SCALE
     kind, game = key.split("-")[0], (key.split("-")[1] if key.count("-") == 2 else "")
     if kind == "band":
-        # The game tints READY TO FIGHT! (its texture is white letters in a dark outline): ours
-        # the same, in Russo One, a heavy italic-free face like the band's own.
+        # White letters in a dark outline, which the game tints, like its own READY TO FIGHT!.
         m = fitted(font_mask(text, RUSSO, 0.02), (4, 4, 348, 32), w, h)
         out = Image.new("RGBA", (W, H), (255, 255, 255, 0))
         out = Image.composite(Image.new("RGBA", (W, H), (33, 33, 33, 255)), out,
@@ -382,9 +373,8 @@ def draw(label):
 
 
 def mips(label, im):
-    """The label's mip levels, each half the last (box filter), down to the game's size. Pillow
-    averages RGBA premultiplied; an I4 texture (intensity is colour and alpha: the title, and the
-    relabels' lines, titles and legend words) halves its mask."""
+    """The label's mip levels, each half the last (box filter), down to the game's size. I4
+    textures (intensity is both colour and alpha) halve their mask instead of the RGBA image."""
     assert SCALE & (SCALE - 1) == 0, "mip levels halve down to the game's size: SCALE is 2^n"
     w, h = size_of(label["name"])
     out = []

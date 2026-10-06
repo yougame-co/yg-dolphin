@@ -33,16 +33,15 @@ namespace B = MatchBlock;
 constexpr u32 GAME_GLOBAL = 0x805A00E0;
 constexpr u32 GLOBAL_MODE_MELEE = 0x08;
 constexpr u32 GLOBAL_SET_RULE = 0x1C;
-// gmGlobalModeMelee: the players' init data, 4 x 0x5C from +0x98 (+0x00 character, +0x01 type:
-// 0 human, 1 CPU, 3 none).
+// gmGlobalModeMelee player init data: 4 x 0x5C from +0x98 (+0x00 character, +0x01 type: 0 human,
+// 1 CPU, 3 none).
 constexpr u32 MELEE_PLAYERS = 0x98;
 constexpr u32 MELEE_PLAYER_SIZE = 0x5C;
 constexpr u8 PLAYER_HUMAN = 0;
 
-// gmSetRule (BrawlHeaders gm_set_rule.h, the research's probes): +0x02 the rule in its low 3 bits
-// (0 time, 1 stock), +0x04 stocks, +0x05 handicap, +0x06 damage ratio x10, +0x07 stage choice
-// (0 Choose, 1 Random), +0x08 a stock match's time limit in minutes, +0x09 team attack, +0x0A
-// pause.
+// gmSetRule (BrawlHeaders gm_set_rule.h): +0x02 rule in the low 3 bits (0 time, 1 stock), +0x04
+// stocks, +0x05 handicap, +0x06 damage ratio x10, +0x07 stage choice (0 Choose, 1 Random), +0x08
+// stock match time limit in minutes, +0x09 team attack, +0x0A pause.
 constexpr u32 RULE_MODE = 0x02;
 constexpr u32 RULE_STOCKS = 0x04;
 constexpr u32 RULE_HANDICAP = 0x05;
@@ -55,9 +54,8 @@ constexpr u32 RULE_SAVED_FROM = 0x02;
 constexpr u32 RULE_SAVED_SIZE = 10;  // +0x02..+0x0B
 constexpr u8 STAGE_CHOOSE = 0;
 
-// gmGlobalRecord's menu data (0x9017B640 + 0x810, both games; RSBE01.patches "Rules"): +0x00 the
-// item frequency (u8, 0 None), +0x08 the item switch (64 bits), +0x20 the Random Stage Switch's
-// Melee page, +0x24 its Brawl page.
+// gmGlobalRecord menu data (0x9017B640 + 0x810, both games): +0x00 item frequency (u8, 0 None),
+// +0x08 item switch (64 bits), +0x20 Random Stage Switch Melee page, +0x24 its Brawl page.
 constexpr u32 MENU_DATA = 0x9017BE50;
 constexpr u32 MENU_ITEM_FREQUENCY = MENU_DATA + 0x00;
 constexpr u32 MENU_ITEM_SWITCH_HI = MENU_DATA + 0x08;
@@ -65,17 +63,14 @@ constexpr u32 MENU_ITEM_SWITCH_LO = MENU_DATA + 0x0C;
 constexpr u32 MENU_STAGES_MELEE = MENU_DATA + 0x20;
 constexpr u32 MENU_STAGES_BRAWL = MENU_DATA + 0x24;
 
-// Project+'s stage switch data (Net-Random.asm RSS_EXDATA, its preset loaded from the SD card) and
-// its strike table (STAGE_STRIKE_TABLE: 6 bytes per page, 5 pages).
+// Project+'s stage switch data (Net-Random.asm RSS_EXDATA) and strike table (STAGE_STRIKE_TABLE,
+// 6 bytes per page, 5 pages).
 constexpr u32 PPLUS_RSS = 0x8042C4E8;
 constexpr u32 PPLUS_STRIKES = 0x8042C822;
 constexpr u32 PPLUS_STRIKES_SIZE = 0x1E;
 
-// The 2024 Proposed stage list, as Project+'s own preset 3 (pf/stage/switch/Switch03.rss) holds it,
-// over the bytes where it differs from the netplay build's default preset: the pages' random
-// masks, the hazard switches (all off), and the three pages' layouts (page 0: Battlefield,
-// Pokemon Stadium 2, Smashville, Luigi's Mansion, Temple of Time, Green Hill Zone, Bowser's
-// Castle, Frigate Husk, Dream Land; every one of them in the random set).
+// The 2024 Proposed stage list, from Project+'s preset 3 (pf/stage/switch/Switch03.rss): random
+// masks, hazards off and page layouts. Page 0 holds the nine legal stages, all in the random set.
 constexpr std::array<u8, B::SAVED_RSS_SIZE> PPLUS_2024_RSS{
     0x00, 0x00, 0x00, 0x03, 0x01, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
     0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
@@ -90,15 +85,14 @@ constexpr std::array<u8, B::SAVED_RSS_SIZE> PPLUS_2024_RSS{
     0x3A, 0x2C, 0x1B, 0x1E, 0x30, 0x2B, 0x00, 0x00,
 };
 
-// The character select's player areas and their hands (OnlineRules.h, "The character select's
-// hands"; CharOrder.h has the areas too).
+// Character select player areas and hands (see OnlineRules.h).
 constexpr u32 SCENE_MANAGER = 0x805A0060;
 constexpr u32 MANAGER_SCENE = 0x04;
 constexpr u32 SCENE_SELCHAR_TASK = 0x400;
 constexpr u32 TASK_AREAS = 0x44;
 constexpr u32 AREA_HAND = 0x1A8;
-// The area's player (CharOrder.h, Queue.h): +0x1B4 the kind (1 a human), +0x1B8 the character under
-// the hand or the token's, +0x1F8 u8 1 while the token is in the hand, +0x1F9 u8 1 while it flies.
+// Area fields: +0x1B4 kind (1 human), +0x1B8 character under the hand or the token's, +0x1F8 u8 1
+// while the token is in the hand, +0x1F9 u8 1 while it is moving.
 constexpr u32 AREA_KIND = 0x1B4;
 constexpr u32 AREA_KIND_HUMAN = 1;
 constexpr u32 AREA_CHARACTER = 0x1B8;
@@ -120,8 +114,8 @@ bool Pointer(const GuestMemory& m, u32 p)
   return p % 4 == 0 && m.Valid(p);
 }
 
-// Whether port `port` (0 or 1) held `button` on the frame that just ran: the queue's latch (Queue.h
-// RAW, written under every header that locks). Ports 3 and 4 (and an unmapped region) never did.
+// Whether port `port` (0 or 1) held `button` on the previous frame, from the queue's raw-button
+// latch (Queue.h RAW). Other ports always return false.
 bool RawHeld(const GuestMemory& m, int port, u16 button)
 {
   if (port < 0 || port > 1 || !m.Valid(Queue::RAW + 2 * static_cast<u32>(port) + 1))
@@ -179,7 +173,7 @@ u8 StocksFor(Ruleset ruleset)
   return ruleset == Ruleset::PPlus ? 4 : 3;
 }
 
-// The picks as they stand (the match's init data: the character select writes each pick there).
+// Current picks from the match's init data.
 std::array<PlayerPick, 4> Picks(const GuestMemory& m)
 {
   std::array<PlayerPick, 4> out{};
@@ -213,22 +207,20 @@ void ForceRules(Writer& w, const Header& h)
   if (rule && w.m.Valid(rule + RULE_PAUSE))
   {
     w.U8(rule + RULE_MODE, static_cast<u8>((w.m.Read8(rule + RULE_MODE) & 0xF8) | 1));
-    // A ranked Brawl set's stocks and time are the set's (RankedSet::WriteSetRules: 1 stock and
-    // 3:00 in a tiebreak game), written by its hook earlier at the same boundary.
+    // Ranked Brawl sets own stocks and time (RankedSet::WriteSetRules), written earlier this frame.
     const bool set_rules = h.mode == Mode::Ranked && h.ruleset == Ruleset::Brawl;
     if (!set_rules)
       w.U8(rule + RULE_STOCKS, StocksFor(h.ruleset));
     w.U8(rule + RULE_HANDICAP, 0);
     w.U8(rule + RULE_RATIO, 10);
-    // Both modes show the stage select: casual's two preferred-stage turns and the coin between
-    // them (BrawlStages.h, RankedPPlus.h), ranked's strikes and picks.
+    // Both modes use the stage select: casual's preferred-stage turns, ranked's strikes and picks.
     w.U8(rule + RULE_STAGE_CHOICE, STAGE_CHOOSE);
     if (!set_rules)
       w.U8(rule + RULE_STOCK_MINUTES, 8);
     w.U8(rule + RULE_TEAM_ATTACK, 1);
     w.U8(rule + RULE_PAUSE, 0);
   }
-  // Items: none, and every item off.
+  // No items.
   w.U8(MENU_ITEM_FREQUENCY, 0);
   w.U32(MENU_ITEM_SWITCH_HI, 0);
   w.U32(MENU_ITEM_SWITCH_LO, 0);
@@ -238,8 +230,8 @@ void ForceStages(Writer& w, const Header& h, const std::string& scene)
 {
   if (h.ruleset == Ruleset::Brawl)
   {
-    // The picks as they stand, on the character select and on the way to the fight (a Random
-    // character resolved as the character select ends). In the fight the list stays as it is.
+    // Follow picks on the character select and on the way to the fight (Random resolves as the
+    // character select ends). The list is frozen during the fight.
     if (scene != SCENE_CSS && scene != SCENE_SSS && scene != SCENE_BETWEEN)
       return;
     const std::array<PlayerPick, 4> ports = Picks(w.m);
@@ -250,18 +242,17 @@ void ForceStages(Writer& w, const Header& h, const std::string& scene)
   }
   if (h.ruleset == Ruleset::PPlus && scene == SCENE_CSS)
   {
-    // Before the stage select builds its pages from it (and before Random picks from it).
+    // Write before the stage select builds its pages from it.
     for (u32 i = 0; i < B::SAVED_RSS_SIZE; ++i)
       w.U8(PPLUS_RSS + i, PPLUS_2024_RSS[i]);
-    // Casual's stage pick reads a strike mark as a preferred stage: none left from before.
+    // Casual reads strike marks as preferred stages, so clear any left over.
     if (h.mode == Mode::Casual)
       w.Zero(PPLUS_STRIKES, PPLUS_STRIKES_SIZE);
   }
 }
 
-// Ranked's character select: the no-ready timer (MatchBlock CSS_TIMER, CSS_NO_SHOW). The time is
-// the frame number less the frame it started at (CSS_TIMER_START), never a count kept by adding
-// one: a boundary run again (a re-run after a load) computes the same.
+// Ranked character select no-ready timer (MatchBlock CSS_TIMER, CSS_NO_SHOW). Elapsed time is the
+// frame number minus CSS_TIMER_START, never an incremented counter, so rollback re-runs agree.
 void ReadyTimer(Writer& w, const Header& h, const std::string& scene, int frame)
 {
   const auto stop = [&] {
@@ -278,7 +269,7 @@ void ReadyTimer(Writer& w, const Header& h, const std::string& scene, int frame)
   }
   if (h.mode != Mode::Ranked || (w.m.Read8(B::FOUGHT) & 1) || w.m.Read8(B::CSS_NO_SHOW) != 0)
     return;
-  // The two players of a queue match, ports 1 and 2, both plugged in.
+  // Ports 1 and 2, the queue match's players, must both be plugged in.
   if ((w.m.Read8(B::PLUGGED) & 3) != 3)
   {
     stop();
@@ -300,8 +291,7 @@ void ReadyTimer(Writer& w, const Header& h, const std::string& scene, int frame)
   }
   const u32 now = static_cast<u32>(frame) + 1;
   u32 start = w.m.Read32(B::CSS_TIMER_START);
-  // Not running yet, or a start from another frame numbering (later than now, or longer ago than
-  // the limit allows): it starts here.
+  // Not running, or a start from another frame numbering (in the future or far past): restart.
   if (start == 0 || start > now || now - start > static_cast<u32>(CSS_READY_FRAMES) * 2)
   {
     start = now;
@@ -323,7 +313,7 @@ std::atomic<u8> s_wanted_flags{0};
 std::atomic<u64> s_generation{0};
 std::atomic<bool> s_in_place{true};
 std::atomic<bool> s_header_free{false};
-// A joiner's room, for its check of the host's header (ExpectHeader).
+// The joiner's room, checked against the host's header (ExpectHeader).
 struct Expectation
 {
   Mode mode = Mode::None;
@@ -331,12 +321,12 @@ struct Expectation
   u8 flags = 0;
 };
 std::mutex s_mutex;
-// The room code the wanted header is for (SetWanted), under s_mutex.
+// Room code for the wanted header. Guarded by s_mutex.
 std::string s_wanted_code;
 std::optional<Expectation> s_expect;
 std::optional<std::string> s_mismatch;
 
-// The no-show byte per frame, until its frame is final (as Results.h's tracker).
+// No-show byte per frame until that frame is confirmed (like Results.h's tracker).
 struct NoShowTracker
 {
   std::map<int, u8> pending;
@@ -380,7 +370,7 @@ Header HeaderFor(Mode mode, Ruleset ruleset, std::string_view code, u8 flags)
   h.mode = mode;
   h.ruleset = ruleset;
   h.flags = flags & (B::FLAG_SOLO | B::FLAG_QUEUE2);
-  // The queue's own character select is no room's: no coin, no room.
+  // The queue's own character select has no room, so no coin and no hash.
   if ((h.flags & B::FLAG_SOLO) == 0)
   {
     h.coin = MatchBlock::CoinFromCode(code);
@@ -414,7 +404,7 @@ std::array<PlayerPick, 4> ReadPicks(const GuestMemory& m)
 
 namespace
 {
-// A header for the log: its mode, ruleset, flags, coin and room hash.
+// A header, for the log.
 std::string Describe(const Header& h)
 {
   if (!h.present)
@@ -423,8 +413,7 @@ std::string Describe(const Header& h)
                      static_cast<int>(h.ruleset), h.flags, h.coin, h.room);
 }
 
-// Every track's state of a new set past the header: the stage flow's (MatchBlock::State, its NONE
-// fields), the ranked set's (SetBlock, its NO_PORT fields), the character order's (cleared).
+// Resets every track's set state after the header: stage flow, ranked set and character order.
 void FreshSet(Writer& w, Mode mode, Ruleset ruleset, u8 coin)
 {
   w.Zero(B::SET, B::SET_SIZE);
@@ -448,7 +437,7 @@ int WriteHeader(GuestMemory& m, Mode mode, Ruleset ruleset, u8 coin, u32 room, u
   const Header now = ReadHeader(m);
   if (mode == Mode::None || ruleset == Ruleset::None)
   {
-    // Nothing of Orca's there (the game's own dead code, or zeros already): never touched.
+    // No Orca header (still the game's unused code, or zeros): leave it alone.
     if (!now.present)
       return 0;
     const u8 flags = m.Read8(B::SAVED_FLAGS);
@@ -471,10 +460,9 @@ int WriteHeader(GuestMemory& m, Mode mode, Ruleset ruleset, u8 coin, u32 room, u
         w.U8(PPLUS_RSS + i, m.Read8(B::SAVED_RSS + i));
     }
     w.Zero(B::BASE, B::SIZE);
-    // The character order and the ranked set past the 512 bytes too.
+    // Also clear the character order and ranked set beyond the first 512 bytes.
     w.Zero(B::CHAR_ORDER, B::FULL_SIZE - (B::CHAR_ORDER - B::BASE));
-    // The dead code's first word back: the block is sora_scene's again, and a new header may go
-    // there (never into memory the module hasn't loaded yet, whose first word is something else).
+    // Restore the original first word, which marks the block as free for a new header.
     w.U32(B::MAGIC, FreeSpace::kMatchBlockOriginalWord);
     return w.changed;
   }
@@ -485,13 +473,13 @@ int WriteHeader(GuestMemory& m, Mode mode, Ruleset ruleset, u8 coin, u32 room, u
   {
     return 0;
   }
-  // Only over sora_scene's dead code (its first word; a cleared block puts it back) or a header:
-  // before the game loads the module this memory is something else's.
+  // Write only over sora_scene's unused code (checked by its first word) or an existing header.
+  // Before the module loads, this memory belongs to something else.
   if (!now.present && m.Read32(B::MAGIC) != FreeSpace::kMatchBlockOriginalWord)
     return 0;
   if (!now.present)
   {
-    // From the game's dead code (or a cleared block): all zeros, then the player's own rules.
+    // Fresh block: zero it, then save the player's own rules for restoring later.
     w.Zero(B::BASE, B::FULL_SIZE);
     u8 flags = 0;
     if (const u32 rule = GlobalField(m, GLOBAL_SET_RULE); rule && m.Valid(rule + RULE_PAUSE))
@@ -516,8 +504,7 @@ int WriteHeader(GuestMemory& m, Mode mode, Ruleset ruleset, u8 coin, u32 room, u
     }
     w.U8(B::SAVED_FLAGS, flags);
   }
-  // The header (the magic last: a reader never sees one over the dead code's other bytes), then a
-  // new set, whatever the block held (another queue room's header keeps the player's saved rules).
+  // Write the magic last so a reader never sees a half-written header. Then start a fresh set.
   w.U8(B::VERSION, B::VERSION_VALUE);
   w.U8(B::MODE, static_cast<u8>(mode));
   w.U8(B::RULESET, static_cast<u8>(ruleset));
@@ -555,20 +542,17 @@ Rollback::InputGate::Masks GateMasks(const GuestMemory& m)
     // Project+'s Code Menu opens from the character select with the D-pad.
     if (h.ruleset == Ruleset::PPlus)
       buttons |= PAD_BUTTON_UP | PAD_BUTTON_DOWN | PAD_BUTTON_LEFT | PAD_BUTTON_RIGHT;
-    // The grid's lower edge for A: Brawl's bottom row sits lower than Project+'s.
+    // Brawl's bottom row sits lower than Project+'s.
     const float a_bottom = h.ruleset == Ruleset::Brawl ? CSS_A_BOTTOM_BRAWL : CSS_A_BOTTOM;
     for (int port = 0; port < Rollback::InputGate::PORTS; ++port)
     {
       masks[port].buttons = buttons;
-      // B only to take the token back up (a press's first frame, the token down): held with the
-      // token in the hand it is the way back to the menus. On the queue's own character select
-      // before a match B backs out of the search (Queue.h masks it while the player is ready,
-      // when it only stops the search).
+      // B only to pick the token back up; held B with the token in hand backs out to the menus.
+      // On the queue's own character select B may back out (Queue.h handles a ready player).
       if (!h.Solo() && !CssBMayUnpick(m, port))
         masks[port].buttons |= PAD_BUTTON_B;
-      // A only in the grid: never on a player-type button (a CPU), or any other button. On the
-      // queue's own character select, port 1's new press on BACK too (CssBackTakesA), with the
-      // stick centred while A is down.
+      // A only in the grid. On the queue's own character select, port 1 may also press BACK
+      // (CssBackTakesA), with the stick centred while A is down.
       const CssHand hand = ReadCssHand(m, port);
       if (h.Solo() && port == 0 && m.Valid(Queue::RAW + 1) &&
           CssBackTakesA(hand, RawHeld(m, port, PAD_BUTTON_A)))
@@ -588,7 +572,7 @@ Rollback::InputGate::Masks GateMasks(const GuestMemory& m)
   }
   else if (scene == SCENE_FIGHT)
   {
-    // Pause off (Brawl's rule says so; Project+ pauses on a held Start whatever the rule).
+    // No pause. Project+ pauses on a held Start regardless of the rule.
     buttons = PAD_BUTTON_START;
   }
   for (Rollback::InputGate::Mask& mask : masks)
@@ -599,7 +583,7 @@ Rollback::InputGate::Masks GateMasks(const GuestMemory& m)
 Rollback::InputGate::Masks SessionMasks(const GuestMemory& m)
 {
   Rollback::InputGate::Masks masks{};
-  // The results screen's Z is its replay save, which no session can make (OnlineRules.h).
+  // Z on the results screen saves a replay, which a session cannot do (see OnlineRules.h).
   if (ReadSceneName(m) == SCENE_RESULTS)
   {
     for (Rollback::InputGate::Mask& mask : masks)
@@ -651,7 +635,7 @@ bool CssHandMayPressA(const CssHand& hand, float bottom)
   case CSS_HAND_TAKING:
   case CSS_HAND_GRID_HOLDING:
   case CSS_HAND_PLACING:
-    // A NaN fails both comparisons: no A.
+    // NaN fails both comparisons, so no A.
     return hand.y < CSS_A_TOP && hand.y > bottom;
   default:
     return false;
@@ -689,7 +673,7 @@ CssToken ReadCssToken(const GuestMemory& m, int port)
 
 bool CssBMayUnpick(const GuestMemory& m, int port)
 {
-  // The latch keeps ports 1 and 2's raw buttons (Queue.h); nobody else plays a queue match.
+  // The latch holds only ports 1 and 2; nobody else plays a queue match.
   if (port < 0 || port > 1 || !m.Valid(Queue::RAW + 2 * static_cast<u32>(port) + 1))
     return false;
   return CssBUnpicks(ReadCssToken(m, port), RawHeld(m, port, PAD_BUTTON_B));
@@ -699,7 +683,7 @@ bool SetWanted(Mode mode, u8 flags, std::string_view code)
 {
   if (mode == Mode::None)
     flags = 0;
-  // A room's code only for a room's header: none for the queue's own character select or none.
+  // Only a room's header uses a code.
   if (mode == Mode::None || (flags & B::FLAG_SOLO) != 0)
     code = {};
   bool changed = s_wanted_flags.exchange(flags) != flags;
@@ -758,7 +742,7 @@ void ExpectHeader(Mode mode, std::string_view code, u8 flags)
 
 bool HeaderFitsRoom(const Header& h, Mode mode, Ruleset ruleset, std::string_view code, u8 flags)
 {
-  // A room's header is never the queue's own character select's.
+  // A room's header never has FLAG_SOLO.
   return HeaderIs(h, HeaderFor(mode, ruleset, code, static_cast<u8>(flags & ~B::FLAG_SOLO)));
 }
 
@@ -846,15 +830,13 @@ void OnFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, bo
   const Ruleset ruleset = ProfileRuleset();
   if (ruleset == Ruleset::None)
   {
-    // No ruleset, no header: nothing for a keyframe to wait for.
+    // No ruleset means no header, so keyframes never wait.
     if (!resimulating)
       s_in_place = true;
     return;
   }
   GuardMemory m(guard);
-  // The header called for: the room's code gives game 1's first striker (one bit of its hash: the
-  // server makes it, neither player chooses it) and a new room's fresh set. The queue's own
-  // character select is no room's: no coin, no room.
+  // The room code (made by the server) decides game 1's first striker, so neither player chooses.
   Header wanted;
   {
     std::string code;
@@ -864,17 +846,14 @@ void OnFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, bo
     }
     wanted = HeaderFor(s_wanted, ruleset, code, s_wanted_flags);
   }
-  // The test knob's header is a pure function of the knob and the synced ports, so it is written on
-  // every run of a boundary, re-runs too: its solo-to-room change at port 2's plug frame lands alike
-  // on all of them (a real host's header changes only where no other game runs the frame: an alone
-  // boundary, or one SetHeaderFree allows, and nothing re-runs those). Its coin and flags, no room.
+  // The test override's header depends only on the override and the synced ports, so it is safe to
+  // write on re-runs too. A real host's header changes only on frames nobody else runs.
   const std::optional<TestQueue> test = TestQueueSpec();
   if (test)
   {
     u8 flags = test->flags;
-    // ORCA_TEST_QUEUE=<mode>:solo with ORCA_TEST_QUEUE_PICK: port 2 plugging in is the match the
-    // queue found, so from then on the header is the room's (queue2, no longer solo), as a host's
-    // is once the page hosts: the whole flow, own character select to the room's, in one run.
+    // ORCA_TEST_QUEUE=<mode>:solo with ORCA_TEST_QUEUE_PICK: port 2 plugging in stands for the
+    // found match, so the header switches from solo to the room's, as when the app starts hosting.
     if ((flags & B::FLAG_SOLO) && (plugged & 2) && !Orca::TestQueuePickSpec().empty())
       flags = B::FLAG_QUEUE2;
     wanted = HeaderFor(test->mode, ruleset, {}, flags);
@@ -899,17 +878,16 @@ void OnFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, bo
                      frame, changed, alone ? "" : ", a friend on the way", wanted.coin + 1);
     }
   }
-  // What a keyframe made at this boundary would carry (the frame hook is the header's only writer,
-  // and it runs before the keyframe).
+  // Whether a keyframe made this frame would carry the wanted header. This hook is the only writer.
   if (!resimulating)
     s_in_place = test.has_value() || HeaderIs(ReadHeader(m), wanted);
-  // The ports in play, for the ready timer: synced data, the same at this frame on every machine.
+  // Synced ports in play, for the ready timer.
   if (ReadHeader(m).Locked() && m.Read8(B::PLUGGED) != plugged)
     m.Write8(B::PLUGGED, plugged);
   const int locked = ApplyLocks(m, frame);
   if (locked > 0 && !resimulating)
     DEBUG_LOG_FMT(ROLLBACK, "Online rules: {} bytes forced at frame {}", locked, frame);
-  // A joiner's check, once its keyframe is in.
+  // Joiner's header check, once its keyframe has loaded.
   if (!resimulating)
   {
     std::lock_guard lock(s_mutex);
@@ -918,7 +896,7 @@ void OnFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, bo
       const Header h = ReadHeader(m);
       const Expectation expect = std::move(*s_expect);
       s_expect.reset();
-      // ORCA_TEST_QUEUE in both Orcas: the host's header is the knob's, whatever the room.
+      // With ORCA_TEST_QUEUE on both sides, the host's header comes from the override.
       const bool ok =
           test ? h.Locked() && h.mode == test->mode && h.ruleset == ruleset :
                  HeaderFitsRoom(h, expect.mode, ruleset, expect.code, expect.flags);
@@ -940,7 +918,7 @@ void OnFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, bo
       }
     }
   }
-  // The no-show byte for this frame (a re-run's replaces the first run's), until it is final.
+  // Record this frame's no-show byte until it is confirmed. A re-run replaces the first run's.
   NoShowTracker& t = NoShows();
   const u64 resyncs = Orca::Events::Resyncs();
   if (!t.started || t.resyncs != resyncs)

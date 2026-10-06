@@ -85,22 +85,22 @@ private:
   u32 m_staging_texture_counter = 0;
   std::array<u32, 4> m_shader_counter = {};
 
-  // Orca: what BindBackbuffer would wait for while the window system isn't showing the layer, or
-  // shows it on a screen slower than the game (MTLGfx.mm, AcquireDrawable).
+  // Orca: background drawable acquire, used when nextDrawable would block the game (see
+  // AcquireDrawable in MTLGfx.mm).
   struct DrawableProbe;
   std::shared_ptr<DrawableProbe> m_drawable_probe;
-  // Why drawables come from a background acquire (No: nextDrawable on the CPU thread).
+  // Why drawables come from a background acquire (No: plain nextDrawable on the CPU thread).
   enum class Late
   {
     No,
-    Covered,     // a nextDrawable waited longer than LATE_DRAWABLE: until the surface hides
-    SlowScreen,  // the screen shows under MIN_SCREEN_HZ frames a second: until it shows more
-    Paced,       // nextDrawable kept waiting: until background acquires are prompt
+    Covered,     // a nextDrawable waited longer than LATE_DRAWABLE
+    SlowScreen,  // the screen refreshes below MIN_SCREEN_HZ
+    Paced,       // nextDrawable keeps waiting
   };
   Late m_late = Late::No;
-  u32 m_paced_waits = 0;  // bit i: whether the i-th last nextDrawable waited PACED_WAIT or more
+  u32 m_paced_waits = 0;  // bit i: the i-th most recent nextDrawable waited PACED_WAIT or more
   int m_prompt_acquires = 0;
-  int m_paced_rounds = 0;  // times Paced began on this surface (each wants twice the prompt run)
+  int m_paced_rounds = 0;  // times Paced began on this surface; each doubles the exit threshold
 
   void CheckForSurfaceChange();
   void CheckForSurfaceResize();

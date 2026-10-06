@@ -13,161 +13,154 @@
 #include "Core/Orca/Session/Session.h"
 #include "Core/Orca/Session/YouGameRoom.h"
 
-// Playing a friend over YouGame: the room this process plays in, for the rollback core that runs
-// the session at each frame boundary. One room per process; the room's I/O runs on its own thread.
+// Online play over YouGame: the room this process plays in, used by the rollback core at each frame
+// boundary. One room per process; its I/O runs on its own thread.
 namespace Orca::Online
 {
-// A session that plays a friend online: ORCA_SESSION=1 plus the desktop app's bridge
-// (YOUGAME_BRIDGE / YOUGAME_TOKEN), or ORCA_TEST_DEV_GAME for tests.
+// Online play is on: ORCA_SESSION=1 plus the desktop app's bridge (YOUGAME_BRIDGE / YOUGAME_TOKEN),
+// or ORCA_TEST_DEV_GAME for tests.
 bool Enabled();
 
-// Drop-in play. The room this process plays in starts at the first frame boundary (Start) and
-// runs on its own thread: the host keeps playing while friends come and go.
+// Starts the room at the first frame boundary. It runs on its own thread, so the host keeps playing
+// while friends come and go.
 void Start();
-// The room for this process from now on, after Shutdown: a friend's (`code`, joining), or a new one
-// of this player's own (empty code). Never asks the app for an invite. A joiner tells the host its
-// player's own controls as the in-game UX last read them (Orca::Events::OwnControls).
+// Switches to a new room after Shutdown: a friend's (`code`, joining) or this player's own (empty
+// code). Never asks the app for an invite. A joiner sends the host its own controls
+// (Orca::Events::OwnControls).
 void StartRoom(const std::string& code, bool joining);
-// The room's code, once known ("" before, or with no room).
+// The room's code once known; "" before that or with no room.
 std::string Code();
-// The room roster's name for a seat ("" when unknown or no room).
+// The roster's name for a seat; "" when unknown or with no room.
 std::string SeatName(int seat);
 
-// The app's "join <code>" and "leave" (embed mode; any thread, never blocks). The emulator thread
-// takes them at a frame boundary.
+// The app's "join <code>" and "leave" (embed mode). Any thread, never blocks; taken at the next
+// frame boundary.
 void RequestJoin(const std::string& code);
 std::optional<std::string> TakeJoinRequest();
 void RequestLeave();
 bool TakeLeaveRequest();
-// The app's "host <code>" (embed mode, with the app's "host"; any thread, never blocks): host the
-// room the queue matched this game into (ORCA.md "Matchmaking"). Taken at a frame boundary.
+// The app's "host <code>": host the room the queue matched this game into. Any thread, never
+// blocks; taken at a frame boundary.
 void RequestHost(const std::string& code);
 std::optional<std::string> TakeHostRequest();
 
-// ---- Matchmade rooms (ORCA.md "Matchmaking"; YouGameRoom's) ----
+// ---- Matchmade rooms ----
 // The room's queue: "private" (a friends room, or no room), "casual" or "ranked".
 std::string RoomQueue();
-// A room match is running whose result isn't in yet.
+// A room match is running and its result isn't in yet.
 bool MatchLive();
-// A ranked set's room after its verdict, still open (YouGameRoom::SetOver): the players stay
-// together on the results screen until each leaves it.
+// A ranked set's room after its verdict, still open: the players stay together on the results
+// screen until each leaves.
 bool SetOver();
-// Host: the opponent plays in this game (past its catch-up), or no longer does.
+// Host: the opponent is playing in this game (past catch-up), or no longer is.
 void SetOpponentPlugged(bool plugged);
-// A game's result, for the room's match.
+// Reports a game's result for the room's match.
 void ReportGame(const Net::GameReport& report);
-// The games went apart: the room's match in progress is void.
+// The games desynced: the room's match in progress is void.
 void ReportDesync();
-// A ranked set whose opponent stopped sending inputs (15 s stalled, or silent): this player claims
-// the set (YouGameRoom::ReportStall). Nothing outside a ranked room's live match.
+// In a ranked set whose opponent stopped sending inputs (15 s stalled, or silent), this player
+// claims the set. Does nothing outside a ranked room's live match.
 void ReportStall();
-// The app's "delay auto|1..6" (embed mode; any thread, never blocks): this player's input delay
-// from now on, in frames, or nullopt for the adaptive one. It stays for every session after, and
-// counts only while the app's caps include "delay" (Rollback::OnlineMatch applies it at each
-// frame boundary, and to a new session from its first frame).
+// The app's "delay auto|1..6": this player's input delay in frames, or nullopt for adaptive. Any
+// thread, never blocks. Persists across sessions, and applies only while the app's caps include
+// "delay".
 void SetChosenDelay(std::optional<int> frames);
 std::optional<int> ChosenDelay();
-// The app's "direct on|off" (embed mode; any thread, never blocks): whether this player allows
-// direct links to the other players (ORCA.md "Direct links"). On until the app says; it stays for
-// every room after, and counts only while the app's caps include "direct". The room turns its
-// links off or on at its next tick (YouGameRoom).
+// The app's "direct on|off": whether this player allows direct links to other players. On by
+// default; persists across rooms and applies only while the app's caps include "direct". The room
+// applies it at its next tick. Any thread, never blocks.
 void SetDirectWanted(bool on);
 bool DirectWanted();
-// Whether this Orca joins someone else's game (ORCA_JOIN=1, or the desktop app opened an invite),
-// once known; nullopt before, or if the room ended first.
+// Whether this Orca joins someone else's game (ORCA_JOIN=1, or the app opened an invite); nullopt
+// until known, or if the room ended first.
 std::optional<bool> Joining();
 // The room's transport (valid from Start until Shutdown, which must run on the emulator thread
-// after the session stopped using it), this Orca's seat (its room slot, -1 before it is in), what
-// other players did, and whether the room is gone.
+// after the session stops using it), this Orca's seat (-1 until it's in), other players' events,
+// and whether the room is gone.
 Net::Transport* Transport();
 int Seat();
 std::vector<Net::PeerEvent> TakePeerEvents();
-// Whether those events, not taken yet, include the game's host leaving the room (any thread).
+// Whether the untaken events include the game's host leaving the room. Any thread.
 bool HostLeftPending();
-// Host: the seats of players whose leaving the room those events include (any thread).
+// Host: seats of players whose leaving is among the untaken events. Any thread.
 std::vector<int> LeftSeatsPending();
 bool RoomEnded();
-// This Orca is in its room: the welcome came and the room hasn't ended.
+// This Orca is in its room: the welcome arrived and the room hasn't ended.
 bool InRoom();
-// A fresh ticket for the room and the keyframe store's address (YouGameRoom::FreshTicket).
+// A fresh ticket for the room and the keyframe store's URL (YouGameRoom::FreshTicket).
 bool FreshTicket(bool fresh, std::string* ticket, std::string* store_url, std::string* error);
-// Host: tell a friend it was unplugged and why ("desync", "stalled", "network").
+// Host: unplug a friend and tell them why ("desync", "stalled", "network").
 void DropPeer(int seat, const std::string& reason);
-// Host: whether it holds the joins that wait for a keyframe (YouGameRoom::HoldJoins).
+// Host: whether to hold joins that are waiting for a keyframe (YouGameRoom::HoldJoins).
 void HoldJoins(bool holding);
-// Whether a session error means the games went apart (inputs or a checksum that disagree, or a
-// correction that came too late to apply).
+// Whether a session error means the games desynced (disagreeing inputs or checksums, or a
+// correction that arrived too late to apply).
 bool IsDesync(const std::string& session_error);
 // Whether a session error is a rollback this machine couldn't make ("No snapshot to roll back",
-// "exceeds the limit"): an engine fault the player survives, reported in its own words.
+// "exceeds the limit"): an engine fault the player survives, reported as such.
 bool IsRollbackFailure(const std::string& session_error);
-// Host: every port's values so far and their version, to every player in the game
-// (YouGameRoom::BroadcastNames).
+// Host: send every port's values so far, with their version, to every player in the game.
 void BroadcastNames(const std::vector<Net::KeyframeInfo::Name>& names, int version);
-// Leaves the room like Shutdown, but on a thread of its own: the goodbye and the socket's close
-// take up to a second or two, which the emulator thread must not wait out mid-game.
+// Leaves the room like Shutdown, but on its own thread: the goodbye and socket close can take a
+// second or two, which the emulator thread must not wait for mid-game.
 void ShutdownInBackground();
-// Rooms ShutdownInBackground is still leaving (their page mirror may still post until then).
+// Rooms ShutdownInBackground is still leaving (their page mirror may still post until done).
 bool RoomsLeaving();
-// Host: offer a joining seat the keyframe.
+// Host: offer the keyframe to a joining seat.
 void OfferKeyframe(int seat, const Net::KeyframeInfo& info);
 
-// The YouGame app's "prepare-join" (embed mode, ORCA.md "Embedding"): the host invited a friend who
-// will drop into the running game. Starts a keyframe at the next frame boundary, while the friend
-// accepts. Any thread (embed mode calls it on the main thread); never blocks.
+// The app's "prepare-join": the host invited a friend who will drop into the running game, so start
+// a keyframe at the next frame boundary while the friend accepts. Any thread; never blocks.
 void PrepareJoin();
-// True once after a PrepareJoin (the emulator thread takes it at a frame boundary).
+// True once after a PrepareJoin; the emulator thread takes it at a frame boundary.
 bool TakePrepareJoin();
 
-// Drop-in work the next frame boundary will take: a friend arriving in the room (not taken yet) or
-// a PrepareJoin while the room is up, the app's join or leave once its caps allow them. A solo
-// pause ends for it (Rollback::OnlineMatch::SoloPauseAllowed). Any thread; never blocks for long.
+// Drop-in work waiting for the next frame boundary: a friend arriving, a PrepareJoin while the room
+// is up, or the app's join or leave once its caps allow them. Ends a solo pause
+// (Rollback::OnlineMatch::SoloPauseAllowed). Any thread; never blocks for long.
 bool DropInPending();
 
-// The latest round trip to the room server, in milliseconds (-1 before the first). `sequence`, if
-// given, changes with each new measurement: feed Session::OnRoundTrip only when it changed.
+// Latest round trip to the room server in ms (-1 before the first). `sequence`, if given, changes
+// with each new measurement: feed Session::OnRoundTrip only when it changed.
 int RoundTripMs(u32* sequence = nullptr);
-// The room's latest round trips, oldest first, for a session that starts now; `sequence` as above,
-// for the newest (unchanged with no room).
+// The room's recent round trips, oldest first, for a session starting now; `sequence` as above, for
+// the newest (unchanged with no room).
 std::vector<int> RecentRoundTrips(u32* sequence);
-// How the other players' inputs reach this one: the relay, or direct links (Net::DirectLink).
+// How other players' inputs reach this one: the relay or direct links (Net::DirectLink).
 Net::DirectSummary Direct();
-// Why the room ended, as an Orca::Status code ("" while it runs, or when it gave none).
+// Why the room ended, as an Orca::Status code ("" while running, or if none was given).
 std::string RoomErrorCode();
-// The room ended because someone else holds it: a hosting Orca that wasn't its host, or whose
-// socket the server replaced with another run's (YouGameRoom's "taken"; RoomErrorCode says
-// "network").
+// The room ended because someone else holds it: this Orca wasn't its host, or the server replaced
+// its socket with another run's. RoomErrorCode says "network".
 bool RoomTaken();
 // What the room is doing or why it ended, for the window title or log.
 std::string StatusLine();
 
-// Reports why the session ended to the desktop app (Orca::Status): a desync, the room's reason,
-// or the session's own error. Nothing for a normal leave. False when the game can't go on solo
-// (this machine's emulation failed: an "internal" error, always terminal).
+// Reports why the session ended to the desktop app (Orca::Status): a desync, the room's reason, or
+// the session's own error; nothing for a normal leave. False when the game can't continue solo
+// (this machine's emulation failed; "internal" is always terminal).
 bool ReportSessionEnd(const std::string& session_error);
 
-// Why this Orca leaves its room, for its bye (the others' "friend-left <why>", the room's lobby):
-// "mismatch" (a queue room's header it wouldn't play), "no-show" (it never picked in time). Any
-// thread.
+// Why this Orca leaves its room, sent in its goodbye: "mismatch" (a queue room's header it wouldn't
+// play) or "no-show" (it didn't pick in time). Any thread.
 void SetLeaveReason(const std::string& reason);
 
 // The friend stopped answering mid-match: reports peer_left with `sentence`, and tells the friend
-// on the way out that the connection stalled (for its own report, if its game wakes up).
+// on the way out that the connection stalled, in case its game recovers.
 void ReportPeerStalled(std::string_view sentence);
 
-// Tests only (ORCA_TEST_COMMANDS' "test-drop-room"): the room's connection drops as a network
-// failure would.
+// Tests only ("test-drop-room"): drops the room's connection as a network failure would.
 void TestDropRoom();
-// Tests only (ORCA_TEST_COMMANDS' "test-direct off|on|in|out|rebuild"): direct links drop every
-// datagram, or only incoming or outgoing ones, or none again; or every link is built anew.
+// Tests only ("test-direct off|on|in|out|rebuild"): direct links drop all, incoming or outgoing
+// datagrams, or none again; "rebuild" rebuilds every link.
 void TestDirect(const std::string& command);
 
-// Leaves the room (reporting a running match void) and stops its thread, then waits (2 s at most)
-// for rooms ShutdownInBackground is still leaving. Call when emulation stops.
+// Leaves the room (voiding a running match) and stops its thread, then waits up to 2 s for rooms
+// ShutdownInBackground is still leaving. Call when emulation stops.
 void Shutdown();
 
-// The lobby compatibility key: players whose keys differ can't share a room. Built from the Orca
-// build, the game profile and data files, every forced setting that two machines must share, the
-// disc and the seeded save. Not the host CPU: Mac and PC players meet.
+// The lobby compatibility key: players with different keys can't share a room. Built from the Orca
+// build, game profile and data files, every forced setting both machines must share, the disc and
+// the seeded save. Not the host CPU, so Mac and PC players can meet.
 std::string CompatibilityKey();
 }  // namespace Orca::Online

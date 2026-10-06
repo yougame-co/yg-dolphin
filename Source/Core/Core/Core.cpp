@@ -703,9 +703,8 @@ void SetState(Core::System& system, State state, bool report_state_change,
       if (!override_achievement_restrictions && !AchievementManager::GetInstance().CanPause())
         return;
 #endif  // USE_RETRO_ACHIEVEMENTS
-      // Orca: a session pauses only while this player's game is alone in it (with a friend, the
-      // friend's game keeps running, and the CPU thread may be waiting for the room, which a pause
-      // would wait on in turn).
+      // Orca: a session pauses only while this player is alone in it. With a friend, the other
+      // game keeps running and the CPU thread may be blocked waiting on the room.
       if (Orca::SessionActive() && !Rollback::OnlineMatch::BeginPause())
         return;
       // NOTE: GetState() will return State::Paused immediately, even before anything has

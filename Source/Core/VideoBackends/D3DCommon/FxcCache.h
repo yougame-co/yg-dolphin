@@ -11,37 +11,32 @@
 #include "Common/CommonTypes.h"
 #include "Common/Crypto/SHA1.h"
 
-// Orca (ORCA.md, "Match start"): what FXC compiled, kept across Orca builds.
+// Orca: a cache of FXC output that survives across builds.
 //
-// Dolphin's compiled-shader files (Cache/Shaders/D3D-*.cache) carry the build's commit, so every
-// Orca update compiled every shader again before the first frame, through glslang, SPIRV-Cross and
-// FXC (d3dcompiler_47.dll). FXC is most of that time (the 63 ubershaders alone took about 35 s on
-// Luis's PC) and a pure function of its input, so this keeps its output keyed by exactly
-// that input: the HLSL text, the target, the flags, the macros and a SHA-1 of the compiler DLL's
-// bytes. A build whose shader generators write the same HLSL finds its shaders here; any change to
-// the text, the compile or the compiler is another key, so a binary can only ever be used for the
-// very compile that made it. Cache/Shaders/D3D-fxc.cache, one file for every game; sessions and
-// plain Dolphin alike, when Dolphin's shader cache is on.
+// Dolphin's D3D shader caches are tied to the build, so every update recompiled every shader, and
+// FXC is most of that time. FXC is a pure function of its input, so its output is keyed by exactly
+// that input: the HLSL, entry point, target, flags, macros and a SHA-1 of the compiler DLL. Any
+// change to these gives a different key, so bytecode is only ever reused for an identical compile.
+// One file (Cache/Shaders/D3D-fxc.cache) for all games, used whenever the shader cache is on.
 namespace D3DCommon::FxcCache
 {
 using Key = Common::SHA1::Digest;
 
-// The key of one compile: everything D3DCompile is given that can vary (Shader.cpp passes no
-// source name, no include handler and no second flags) and the compiler's own bytes. Empty when the
-// cache is off (Dolphin's shader cache setting, or a compiler DLL that couldn't be read).
+// The key for one compile. nullopt when the cache is off (shader cache disabled, or the compiler
+// DLL couldn't be read).
 std::optional<Key> MakeKey(std::string_view hlsl, std::string_view entry, std::string_view target,
                            u32 flags, std::string_view macros);
 
-// MakeKey with the compiler's digest given (the loaded DLL's in MakeKey); for tests.
+// MakeKey with an explicit compiler digest, for tests.
 Key KeyFor(const Common::SHA1::Digest& compiler, std::string_view hlsl, std::string_view entry,
            std::string_view target, u32 flags, std::string_view macros);
 
-// FXC's output for this key from an earlier compile, of this run or an earlier one.
+// Cached FXC output for this key, from this run or an earlier one.
 std::optional<std::vector<u8>> Find(const Key& key);
 
-// Keeps a compile's output (in memory and appended to the file).
+// Caches a compile's output in memory and appends it to the file.
 void Store(const Key& key, std::span<const u8> bytecode);
 
-// Logs what the cache did and closes its file (UnloadLibraries).
+// Logs cache stats and closes the file.
 void Close();
 }  // namespace D3DCommon::FxcCache

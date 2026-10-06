@@ -2,19 +2,16 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 //
-// How much latency the YouGame app's controller stream adds between a GameCube adapter's USB report
-// and Orca having it as its local pad, measured through the real desktop code: this script runs the
-// app's ControllerService and Bridge (desktop/src/controllers.ts, bridge.ts) with a scripted helper
-// in place of the native one, and Orca's own stream client (Core/Orca/UX/ControllerSource) reads it
-// from the unit test binary. The helper stamps each report's receivedAt the way the real helper
-// does (an epoch-anchored monotonic clock) and follows its one-in-flight ack rule; Orca records
-// arrival - receivedAt per report. What Dolphin's own GCAdapter adds over the same USB read is a
-// mutex and a struct copy, so this number is the difference between the two paths.
+// Measures the latency the YouGame app's controller stream adds between a GameCube adapter's USB
+// report and Orca's local pad. It runs the app's real ControllerService and Bridge
+// (desktop/src/controllers.ts, bridge.ts) with a scripted stand-in for the native helper, and Orca's
+// stream client (Core/Orca/UX/ControllerSource) reads it from the unit test binary. Dolphin's own
+// GCAdapter path adds only a mutex and a struct copy, so the result is the cost of the app's path.
 //
-//   # once: the desktop sources as plain JS (any of these works)
-//   npm --prefix ~/Documents/YouGame/desktop run build            # -> desktop/dist
+//   # once: build the desktop sources as plain JS, in the YouGame repo
+//   npm --prefix <YouGame repo>/desktop run build                 # -> desktop/dist
 //   #   or: esbuild desktop/src/{bridge,controllers}.ts --outdir=/tmp/ygd --format=cjs --platform=node
-//   YOUGAME_DESKTOP_DIST=~/Documents/YouGame/desktop/dist RATE_HZ=1000 SECONDS=20 \
+//   YOUGAME_DESKTOP_DIST=<YouGame repo>/desktop/dist RATE_HZ=1000 SECONDS=20 \
 //     node Tools/orca/controller-latency.mjs build/Binaries/Tests/tests
 //
 // RATE_HZ is the adapter's report rate (125 stock, 1000 overclocked). Prints Orca's percentiles.
@@ -28,7 +25,7 @@ import { fileURLToPath } from "node:url";
 const epochNow = () => performance.timeOrigin + performance.now();
 
 if (process.env.ORCA_FAKE_HELPER === "1") {
-  // The scripted helper: the native helper's stdout protocol (desktop/native/src/main.cpp).
+  // The scripted helper speaks the native helper's stdout protocol (desktop/native/src/main.cpp).
   const session = process.argv[2];
   const rate = Number(process.env.RATE_HZ || 1000);
   let sequence = 0,
@@ -68,8 +65,8 @@ if (process.env.ORCA_FAKE_HELPER === "1") {
     };
     process.stdout.write(JSON.stringify({ type: "snapshot", snapshot }) + "\n");
   };
-  // A USB report: as the real helper, it marks the state dirty and publishes unless a snapshot is
-  // still waiting for its ack (then the next ack publishes the newest).
+  // Like the real helper: publish each report unless a snapshot still awaits its ack; the next ack
+  // then publishes the newest.
   setInterval(() => {
     receivedAt = epochNow();
     ++report;

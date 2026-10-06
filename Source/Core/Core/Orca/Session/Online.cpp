@@ -38,12 +38,12 @@ namespace Orca::Online
 {
 namespace
 {
-// How long Shutdown waits for rooms still being left in the background (a goodbye, a close
-// handshake and the page's emptied room take about a second).
+// How long Shutdown waits for rooms still being left in the background (goodbye, close handshake
+// and emptying the page's room take about a second).
 constexpr auto TEARDOWN_WAIT = std::chrono::seconds(2);
 std::mutex s_mutex;
-// Shared so that a caller still holding the room (WaitForMatch, a status poll) keeps it alive
-// while Shutdown runs on another thread.
+// Shared so a caller still holding the room (WaitForMatch, a status poll) keeps it alive while
+// Shutdown runs on another thread.
 std::shared_ptr<Net::YouGameRoom> s_room;
 
 std::string Env(const char* name)
@@ -72,9 +72,9 @@ std::string CompatibilityKey()
   if (const Profile* profile = ActiveProfile())
   {
     parts += fmt::format("{}|{}|", profile->game_id, profile->revision);
-    // The data files that reach emulation besides the code: the profile itself, and every game
-    // settings INI Dolphin loads for this disc, shipped and the player's own (a local edit there
-    // changes what the game runs with, so it must change the key).
+    // Data files that affect emulation besides code: the profile and every game settings INI
+    // Dolphin loads for this disc, shipped or the player's own (a local edit changes what the game
+    // runs with).
     std::vector<std::string> files{File::GetSysDirectory() + "Orca/" + profile->game_id + ".ini",
                                    // Orca's forced game patches (UX/GamePatches.h)
                                    File::GetSysDirectory() + "Orca/" + profile->game_id + ".patches"};
@@ -82,8 +82,8 @@ std::string CompatibilityKey()
     std::vector<std::pair<std::string, u16>> ini_games{{profile->game_id, profile->revision}};
     if (profile->IsLauncher())
     {
-      // The running metadata comes from the disc's TMD, whose version can differ from the disc
-      // header's revision: hash the INIs for both.
+      // The running metadata comes from the disc's TMD, whose version can differ from the header's
+      // revision: hash the INIs for both.
       const SConfig& running = SConfig::GetInstance();
       ini_games = {{profile->boot_game_id, 0},
                    {profile->disc, profile->revision},
@@ -97,8 +97,8 @@ std::string CompatibilityKey()
         files.push_back(File::GetUserPath(D_GAMESETTINGS_IDX) + name);
       }
     }
-    // The loader and SD card the boot verified (their hashes are in the profile too; stated here so
-    // the key never depends on a profile file staying in step with the check).
+    // The loader and SD card the boot verified. Their hashes are in the profile too, but stating
+    // them here keeps the key independent of the profile file.
     if (profile->IsLauncher())
     {
       parts += fmt::format("launcher={}|disc={}|sd={}|", profile->launcher_hash, profile->disc,
@@ -116,20 +116,14 @@ std::string CompatibilityKey()
       parts += fmt::format("{}.{}.{}={}|", static_cast<int>(location.system), location.section,
                            location.key, value);
   }
-  // Not the host CPU: JitArm64 and Jit64 compute identical results (12,001 frames of a scripted
-  // match hashed the same on an Apple Silicon Mac and an x86-64 Windows PC, 2026-10-01, after the
-  // ARM64 emitter and Jit64 ps1 fixes; Project+ too from 2026-10-02, after a launcher boot took a
-  // fixed region and JitArm64's sign operations went bitwise), so Mac and PC players meet. FMA,
-  // below, is in the key.
+  // The host CPU is not in the key: JitArm64 and Jit64 produce identical results, so Mac and PC
+  // players meet. FMA is in the key (below).
   //
-  // Nor whether an ARM CPU has FEAT_AFP. On 2026-10-02 Project+ was kept from players across that
-  // line for a few hours: the room's hello carried a float class ("ah" for x86-64 and an Apple M4
-  // or later, "noah" for an M1 to M3, where FPCR.AH does nothing) and a joiner of the other class
-  // was turned away with platform_mismatch, because Project+ makes a NaN (fnmsubs, inf * 0) as a
-  // match starts that the two classes gave opposite signs. Sessions now force accurate NaNs (one
-  // PowerPC answer on every host) and keep denormal single inputs exact on a CPU that flushes them
-  // (Profile.cpp MAIN_ACCURATE_NANS, JitArm64::DenormalInputsFlushed), so every Mac and PC plays
-  // every other; ORCA_TEST_NO_AFP stands in for an M1 to M3 on a newer Mac.
+  // Nor is whether an ARM CPU has FEAT_AFP: sessions force accurate NaNs and keep denormal single
+  // inputs exact on CPUs that flush them (Profile.cpp MAIN_ACCURATE_NANS,
+  // JitArm64::DenormalInputsFlushed), so every Mac and PC computes the same. ORCA_TEST_NO_AFP
+  // simulates an M1 to M3 on a newer Mac.
+  //
   // The universal forced settings that change what the game computes.
   parts += fmt::format(
       "thread={}|fma={}|rtc={}:{}|si={},{},{},{}|efb={}|xfb={}|access={}|bbox={}|save={:016x}|test={}"
@@ -145,12 +139,12 @@ std::string CompatibilityKey()
       Config::Get(Config::GFX_HACK_EFB_ACCESS_ENABLE), Config::Get(Config::GFX_HACK_BBOX_ENABLE),
       GetSeedSaveHash(), TestOverridesActive(), Config::Get(Config::MAIN_WII_SD_CARD),
       Config::Get(Config::MAIN_ALLOW_SD_WRITES));
-  // The disc image itself, when the desktop app hashed it (a modified disc with the right game ID
-  // and revision would otherwise desync instead of being refused).
+  // The disc image's hash, when the app computed it: a modified disc with the right ID and revision
+  // would otherwise desync instead of being refused.
   parts += "|disc=" + Env("ORCA_DISC_SHA1");
-  // What the in-game UX writes to emulated memory (name tags, mode locks), by its version.
+  // Version of what the in-game UX writes to emulated memory (name tags, mode locks).
   parts += fmt::format("|ux={}", Events::UXCompatVersion());
-  // The room allows 1-64 characters [a-zA-Z0-9._:-].
+  // The room allows 1-64 characters of [a-zA-Z0-9._:-].
   return fmt::format("orca1:{:016x}", XXH3_64bits(parts.data(), parts.size()));
 }
 
@@ -167,8 +161,8 @@ void StartLocked(Net::RoomOptions options)
   }
   if (!Env("ORCA_NAME").empty())
     options.player_name = Env("ORCA_NAME").substr(0, 32);
-  // A joiner's own controls, for its port in the host's game (a launch join's game hasn't run
-  // yet: none).
+  // A joiner's own controls, for its port in the host's game (none for a launch join, whose game
+  // hasn't run yet).
   if (options.joining)
   {
     options.controls = Events::OwnControls();
@@ -420,8 +414,8 @@ void BroadcastNames(const std::vector<Net::KeyframeInfo::Name>& names, int versi
 
 namespace
 {
-// Rooms being left in the background, until their goodbyes are out. Never destroyed: a teardown
-// still running when the process exits must not find these gone.
+// Rooms being left in the background, until their goodbyes are sent. Never destroyed, so a teardown
+// still running at process exit can't find them gone.
 struct Teardowns
 {
   std::mutex mutex;
@@ -488,8 +482,8 @@ bool TakePrepareJoin()
 
 bool DropInPending()
 {
-  // As the boundary takes them: a join or leave once the app's caps turn it on (OnlineMatch's
-  // TakeCommands), an invite or an arrival only while the room is up (HostEvents).
+  // Mirrors what the boundary will take: join or leave once the app's caps allow them (OnlineMatch
+  // TakeCommands), an invite or arrival only while the room is up (HostEvents).
   {
     std::lock_guard lock(s_request_mutex);
     if ((s_join_request && Status::Cap("join")) || (s_leave_request && Status::Cap("leave")) ||
@@ -524,7 +518,7 @@ std::vector<int> RecentRoundTrips(u32* sequence)
 
 namespace
 {
-// The room's own code as the app knows it: "taken" is the game's (it opens another room).
+// The room's code as the app knows it: "taken" is the game's (it opens another room).
 std::string AppCode(std::string code)
 {
   return code == "taken" ? "network" : code;
@@ -552,8 +546,8 @@ std::string StatusLine()
 bool ReportSessionEnd(const std::string& session_error)
 {
   const auto room = Room();
-  // Inputs that disagree, or a checksum that does: the games went apart. The friend hears it
-  // before this side leaves, so both report the same thing.
+  // Disagreeing inputs or checksums: the games desynced. Tell the friend before leaving, so both
+  // report the same thing.
   if (IsDesync(session_error))
   {
     if (room)
@@ -564,9 +558,8 @@ bool ReportSessionEnd(const std::string& session_error)
     Status::Report("desync", "Your games went out of sync, so the match ended");
     return true;
   }
-  // A rollback this machine couldn't make (an engine fault, not the games going apart): it leaves
-  // the match and plays on from where it is. Said in its own words, so a log tells it from a
-  // desync.
+  // A rollback this machine couldn't make (an engine fault, not a desync): leave the match and play
+  // on from here. Worded distinctly so logs tell it from a desync.
   if (IsRollbackFailure(session_error))
   {
     Status::Report(
@@ -574,19 +567,19 @@ bool ReportSessionEnd(const std::string& session_error)
         fmt::format("Your game couldn't roll back ({}), so you left the match", session_error));
     return true;
   }
-  // The session ends when the room does: the room says why, unless this player left. The state
+  // The session ends when the room does, and the room says why unless this player left. Check state
   // first: once Ended, the code is final.
   if (room && room->GetState() == Net::RoomState::Ended)
   {
-    // A matchmade room closed after its result: a clean end, which the caller says.
+    // A matchmade room closed after its result: a clean end, reported by the caller.
     if (const std::string code = AppCode(room->ErrorCode()); !code.empty() && code != "match-over")
       Status::Report(code, room->Status());
     return true;
   }
   if (session_error.empty())
     return true;
-  // The emulator side failed (a snapshot that wouldn't save or load, lost frame alignment), or
-  // the friend sent something no honest Orca sends.
+  // The emulator side failed (a snapshot that wouldn't save or load, lost frame alignment), or the
+  // friend sent something an honest Orca never sends.
   const bool from_peer = session_error.find("sent an invalid packet") != std::string::npos;
   if (from_peer)
   {
@@ -631,9 +624,9 @@ void Shutdown()
   }
   if (room)
     room->Leave();
-  // Rooms left in the background just before (a leave, then a quit at once) say their goodbyes
-  // too, so a friend hears at once that this player went rather than after its silence limit.
-  // Bounded: a teardown that hangs doesn't hold the exit.
+  // Rooms just left in the background (a leave, then an immediate quit) still send their goodbyes,
+  // so friends learn right away rather than after a timeout. Bounded, so a hung teardown can't hold
+  // the exit.
   Teardowns& teardowns = TheTeardowns();
   std::unique_lock lock(teardowns.mutex);
   if (!teardowns.done.wait_for(lock, TEARDOWN_WAIT, [&] { return teardowns.running == 0; }))

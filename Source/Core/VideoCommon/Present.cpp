@@ -143,9 +143,8 @@ bool Presenter::Initialize()
   else if (const char* size = std::getenv("ORCA_TEST_PRESENT");
            size && g_gfx->SupportsUtilityDrawing())
   {
-    // Orca tests: a headless run presents into an image of its own, OSD included, so screenshots
-    // (YG_SHOT_EVERY) show what a window would. Not with the Software renderer (no UI drawing).
-    // Down to 1x1: a window the app squeezed to a sliver (Orca 0.3.13 trapped in one under 17 px).
+    // Orca tests: a headless run presents into its own image, OSD included, so screenshots show
+    // what a window would. Sizes down to 1x1 are allowed to test very thin windows.
     int width = 0, height = 0;
     if (std::sscanf(size, "%dx%d", &width, &height) != 2 || width < 1 || height < 1 ||
         width > 7680 || height > 4320)
@@ -533,7 +532,7 @@ float Presenter::CalculateDrawAspectRatio(bool allow_stretch) const
   // If stretch is enabled, we prefer the aspect ratio of the window.
   if (aspect_mode == AspectMode::Stretch)
   {
-    // Orca: the layout box's (the window's unless an embed `view` lays the picture out elsewhere).
+    // Orca: use the layout box (the window, unless an embed `view` sets another box).
     resulting_aspect_ratio =
         m_layout_box.w > 0 && m_layout_box.h > 0 ?
             m_layout_box.w / m_layout_box.h :
@@ -664,9 +663,8 @@ int Presenter::SurfaceRefreshRate()
   return s_surface_refresh_rate.load(std::memory_order_relaxed);
 }
 
-// Orca (embed `view`): the newest layout hint. A `rect` changes it at once but the backbuffer only
-// once the window system resized the surface (a present or two later): meanwhile the presenter
-// keeps the one it used last (ChooseLayout, m_layout_applied).
+// Orca: the newest embed layout hint. The backbuffer catches up with a window resize a present or
+// two later; until then the presenter keeps using the previous hint (see ChooseLayout).
 static std::mutex s_layout_lock;
 static std::optional<LayoutHint> s_layout_latest;
 
@@ -676,7 +674,7 @@ void Presenter::SetLayoutHint(std::optional<LayoutHint> hint)
   s_layout_latest = hint;
 }
 
-// Orca tests: the size asked for, width << 32 | height (0: none pending).
+// Orca tests: requested size as width << 32 | height, or 0 when none is pending.
 static std::atomic<u64> s_test_present_size{0};
 
 void Presenter::RequestTestPresentSize(int width, int height)
@@ -695,7 +693,7 @@ void Presenter::ApplyTestPresentSize()
   const u32 width = static_cast<u32>(size >> 32), height = static_cast<u32>(size);
   if (width == m_test_target->GetWidth() && height == m_test_target->GetHeight())
     return;
-  // Never the framebuffer in use: presents end with the EFB's bound (EndUtilityDrawing).
+  // Safe to replace: presents end with the EFB framebuffer bound, not this one.
   auto target = g_gfx->CreateTexture(
       TextureConfig(width, height, 1, 1, 1, AbstractTextureFormat::RGBA8,
                     AbstractTextureFlag_RenderTarget, AbstractTextureType::Texture_2DArray),
@@ -821,10 +819,8 @@ std::tuple<float, float> Presenter::ApplyStandardAspectCrop(float width, float h
 
 void Presenter::UpdateDrawRectangle()
 {
-  // Orca: the box the picture is laid out in, the window unless an embed `view` says otherwise
-  // (PresentLayout.h). Everything below fits the picture into it as Dolphin fits it into the
-  // window, so AutoIntegralScale follows the box too: a window cut by the page's panel keeps the
-  // internal resolution.
+  // Orca: pick the box to lay the picture out in (the window, unless an embed `view` sets one; see
+  // PresentLayout.h). The code below fits the picture to this box as Dolphin fits it to the window.
   {
     std::optional<LayoutHint> latest;
     {
@@ -871,7 +867,7 @@ void Presenter::UpdateDrawRectangle()
     g_Config.fAspectRatioHackH = 1;
   }
 
-  // The rendering window size (Orca: the layout box's)
+  // The rendering window size (Orca: the layout box)
   const float win_width = m_layout_box.w;
   const float win_height = m_layout_box.h;
   const float win_aspect_ratio = win_width / win_height;
@@ -938,7 +934,7 @@ void Presenter::UpdateDrawRectangle()
     int_draw_height = rect.GetHeight();
   }
 
-  // Centred in the box; past the backbuffer when the box is (Present crops it).
+  // Orca: centre in the box; it may run past the backbuffer, and Present() crops it.
   m_target_rectangle = PlaceInBox(m_layout_box, int_draw_width, int_draw_height);
 }
 
@@ -1032,13 +1028,13 @@ void Presenter::RenderXFBToScreen(const MathUtil::Rectangle<int>& target_rc,
 
 void Presenter::RepresentLast()
 {
-  // Present() flushes a pending vertex batch: only when there is none, so this host-timed redraw
-  // never changes when the emulated GPU's work is submitted.
+  // Present() flushes any pending vertex batch, so only redraw when nothing is pending. Otherwise
+  // this host-timed redraw would change when emulated GPU work is submitted.
   if (m_xfb_entry && g_vertex_manager->IsFlushed())
   {
     Present();
-    // Orca tests (ORCA_TEST_PRESENT): a screenshot asked for while the game waits for a friend
-    // takes this redraw, overlay and all (never a frame dump's extra frame).
+    // Orca tests: a screenshot requested during a stall captures this redraw, overlay included.
+    // Never adds an extra frame to a real frame dump.
     if (m_test_target && !Config::Get(Config::MAIN_MOVIE_DUMP_FRAMES) &&
         g_frame_dumper->IsFrameDumping())
     {
@@ -1085,7 +1081,7 @@ void Presenter::Present(PresentInfo* present_info)
   const bool backbuffer_bound =
       m_test_framebuffer || g_gfx->BindBackbuffer({{0.0f, 0.0f, 0.0f, 1.0f}});
 
-  // Render the XFB to the screen (Orca: when any of the picture is in it, PresentLayout.h).
+  // Render the XFB to the screen (Orca: only if some of the picture is on it).
   if (backbuffer_bound && m_xfb_entry &&
       PictureInBackbuffer(GetTargetRectangle(), m_backbuffer_width, m_backbuffer_height))
   {
@@ -1198,8 +1194,8 @@ void Presenter::DoState(PointerWrap& p)
   p.Do(m_last_xfb_stride);
   p.Do(m_last_xfb_height);
 
-  // If we're loading and there is a last XFB, re-display it. (Orca: not after a rollback load,
-  // whose re-run frames end at the corrected frame: VideoCommon_LoadRedisplays.)
+  // If we're loading and there is a last XFB, re-display it. (Orca: not on a rollback load; the
+  // re-run frames present the corrected frame themselves.)
   if (p.IsReadMode() && m_last_xfb_stride != 0 && VideoCommon_LoadRedisplays())
   {
     // This technically counts as the end of the frame

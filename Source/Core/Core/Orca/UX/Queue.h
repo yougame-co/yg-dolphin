@@ -19,57 +19,19 @@ namespace Core
 class CPUThreadGuard;
 }
 
-// The queue's character select, Slippi-style (ORCA.md "The queue's character select"; YouGame
-// docs/ORCA_ONLINE_UX.md; the `queue2` capability, the page's half in lib/orca-queue.ts):
+// The matchmaking queue's character select, Slippi-style. See ORCA.md, "The queue's character
+// select".
 //
-// - **The queue's own character select.** With Anyone > Casual or Ranked lands on the local
-//   Versus character select, where only the player's own panel plays: every other port is masked
-//   entirely. The match block's header says so (MatchBlock::FLAG_SOLO, written at the player's
-//   alone boundaries while the app has `queue2`), so the rules lock as in a queue room. A pick and
-//   Start make the player ready: Orca prints `orca queue ready <casual|ranked> <char> <costume>`
-//   and stays on the character select ("Searching for an opponent... B to cancel"); the page
-//   searches. B (or another pick) while ready: `orca queue unready`, still on the character select.
-//   B while not ready backs out to the menus as the game does (`orca menu cancel`), and so does A
-//   on BACK (Rules::CssBackTakesA); A on BACK while ready stops the search first (`orca queue
-//   unready`) and the next frame gives that press to the game, which backs out (FLAG_BACK_A): one
-//   press. Start never reaches the game here (one player can't start a versus match anyway).
-// - **The match.** The page hosts or joins as before. The joiner's queue identity (QueueIdentity:
-//   its pick, where its hand put the token in its own game, and the rating the page gave) rides the
-//   session's value channel with its name, so from its plug frame on every machine has it at the
-//   same frame: the host's game steers port 2's hand to that spot, puts the token down and turns
-//   the costume (the input gate's synthesized stick and presses), and from then on game 1's
-//   characters are locked (no token pickup, no costume change).
-// - **The ready timer** (30 s): Start readies a player, B un-readies; both ready, Orca presses Start
-//   for port 1 and the game goes on to the stage select (casual's two-turn pick, ranked's strikes).
-//   Casual: when time is up the players who weren't ready are named (`orca queue timeout me|them`,
-//   at a final frame) and nothing moves until the pages leave the room. Ranked: time up goes on
-//   with the picks as they are. The timer runs in every ranked game but only in casual's first
-//   (Timed()): from game 2 on, casual waits for both Starts with no clock and no timeout (Luis,
-//   2026-10-04: more time to talk).
-// - **Skip (casual only):** holding Z 1.5 s on a casual room's character select prints `orca queue
-//   skip` (the page leaves the room and searches again). Local only: it changes nothing in the
-//   game. Ranked has none (MaySkip): a ranked match is played.
-// - **Later games:** casual comes back to the room's character select, characters free: A picks, B
-//   (with the token down) takes the token back up, Start locks in (ready), B while locked in
-//   unlocks; both locked in, on to the stage select at once, with no timer (Luis, 2026-10-04: "press
-//   A to select character and then press start after to lock in and ready up"). Ranked runs the
-//   character order (CharOrder.h: the same buttons, the winner's lock-in final, then the loser's),
-//   and the moment the second lock-in lands the stage select comes, with no ready step after it.
-// - **Locked in** is what ready means here: a locked-in player's A, B (the game's), X and Y do
-//   nothing (B only unlocks), and the overlay shows a LOCKED IN badge on their panel.
-// - **After the room** (skip, timeout, the opponent gone, a set over): the session puts back this
-//   player's own game as it was when the match came (OnlineMatch's queue image), so each player is
-//   on their own queue character select with their pick, on port 1, and Orca prints
-//   `orca queue ready` again if they were ready: casual searches again by itself. Not after a
-//   ranked room where a set was played (a fight there, finished or forfeited) or after this
-//   player's own ready timer ran out: they are back not ready and press Start to search again.
+// While searching, the player waits on the local Versus character select where only their own
+// panel works. Picking and pressing Start makes them ready (`orca queue ready <casual|ranked>
+// <char> <costume>`), and B un-readies (`orca queue unready`). Once matched, the joiner's pick is
+// steered onto port 2, and a ready timer runs before the stage select. Casual players can hold Z to
+// skip (`orca queue skip`). Ranked has no skip.
 //
-// What decides anything in the game is a pure function of emulated memory, the hook's frame number
-// and the session's synced values (the plugged ports, each port's queue identity), written only
-// where it differs, first runs and re-runs alike: the region at MatchBlock::QUEUE. Presses the
-// game never sees (Start, B and Z are masked) reach it through the input gate's latch, which writes
-// each frame's raw buttons of ports 1 and 2 into the region before the frame runs (InputGate.h).
-// The lines on stdout and the overlay are local, from first runs only.
+// Every in-game decision is a pure function of emulated memory, the frame number and the session's
+// synced values, written to the MatchBlock::QUEUE region only where it differs, so rollback re-runs
+// compute the same result. Masked presses reach the logic through the input gate's latch. Stdout
+// lines and the overlay are local and come from first runs only.
 namespace Orca::UX
 {
 class GuestMemory;
@@ -78,69 +40,61 @@ class GuestMemory;
 namespace Orca::UX::Queue
 {
 // ---- The region (MatchBlock::QUEUE, 0x30 bytes) ----
-constexpr u32 READY = MatchBlock::QUEUE + 0x00;        // u8: bit p, port p (0, 1) is ready
-constexpr u32 FLAGS = MatchBlock::QUEUE + 0x01;        // u8: GO, TIMED_OUT
-constexpr u32 TIMEOUT_WHO = MatchBlock::QUEUE + 0x02;  // u8: bit p, port p wasn't ready in time
-constexpr u32 LOCKED = MatchBlock::QUEUE + 0x03;       // u8: bit p, port p's game-1 pick is in
-// u32: the hook frame + 1 the ready timer started at (0: not running); a function of the frame
-// number, so a boundary run again computes the same.
+constexpr u32 READY = MatchBlock::QUEUE + 0x00;        // u8: bit p set when port p is ready
+constexpr u32 FLAGS = MatchBlock::QUEUE + 0x01;        // u8: FLAG_*
+constexpr u32 TIMEOUT_WHO = MatchBlock::QUEUE + 0x02;  // u8: bit p set when port p timed out
+constexpr u32 LOCKED = MatchBlock::QUEUE + 0x03;       // u8: bit p set when port p is locked in
+// u32: frame + 1 when the ready timer started (0 = not running).
 constexpr u32 TIMER_START = MatchBlock::QUEUE + 0x04;
 constexpr u32 RAW = MatchBlock::QUEUE + 0x08;       // u16[2]: ports 1, 2's raw buttons, last frame
 constexpr u32 RAW_PREV = MatchBlock::QUEUE + 0x0C;  // u16[2]: the frame before
 constexpr u32 TIMER = MatchBlock::QUEUE + 0x10;     // u16: frames into the ready timer (display)
 constexpr u32 STEER = MatchBlock::QUEUE + 0x12;     // u16: frames port 2's pick has been steered
-// Port 2's pick to put in (from its queue identity): u8 1, u8 character, u8 costume, u8 0, f32 x,
-// f32 y (where its hand put the token in its own game).
+// Port 2's pick: u8 1, u8 character, u8 costume, u8 0, f32 x, f32 y (the token's place).
 constexpr u32 PICK = MatchBlock::QUEUE + 0x14;
-// u32: the hook frame + 1 port 2's steering began at (0: not steering).
+// u32: frame + 1 when steering port 2 began (0 = not steering).
 constexpr u32 STEER_START = MatchBlock::QUEUE + 0x20;
-// u32: the hook frame + 1 port 2's token went down on its pick (0: not yet): the costume's turn.
+// u32: frame + 1 when port 2's token was placed, starting the costume step (0 = not yet).
 constexpr u32 COSTUME_START = MatchBlock::QUEUE + 0x24;
-// f32[2]: port 2's hand as the frame that just ran started (the latch's): A goes down only on a
-// hand that stands still, since the hand slides on a little after the stick lets go.
+// f32[2]: port 2's hand at the start of the last frame. A is only pressed once the hand is still,
+// because it keeps sliding briefly after the stick is released.
 constexpr u32 HAND_PREV = MatchBlock::QUEUE + 0x28;
 constexpr u32 REGION_END = MatchBlock::QUEUE + 0x30;
 static_assert(REGION_END <= MatchBlock::QUEUE + MatchBlock::QUEUE_SIZE);
 
-constexpr u8 FLAG_GO = 0x01;         // both ready (or ranked's time up): Orca presses Start
-constexpr u8 FLAG_TIMED_OUT = 0x02;  // casual's time up: frozen until the pages leave the room
-// The queue's own character select: the B that stopped the search is still held, and the game
-// doesn't see it until it is let go (else the token would come back up).
+constexpr u8 FLAG_GO = 0x01;         // both ready (or ranked timer expired): Orca presses Start
+constexpr u8 FLAG_TIMED_OUT = 0x02;  // casual timer expired: frozen until the players leave
+// The B that cancelled the search is still held. Hide it from the game until released, or the
+// token would be picked back up.
 constexpr u8 FLAG_SWALLOW_B = 0x04;
-// The queue's own character select, put back not ready after a room (AfterRestore): the Start (or
-// A) that left the room's results screen may still be held, and it readies nobody until it is let
-// go (else that press would start a search the player never asked for).
+// After returning from a room not ready, the Start or A that left the results screen may still be
+// held. It must not start a search until released.
 constexpr u8 FLAG_SWALLOW_START = 0x08;
-// The queue's own character select: a new A on BACK while ready stopped the search at this
-// boundary (B's job, done by A; Rules::CssBackTakesA): the game sees that A in the frame about to
-// run, after `orca queue unready`, so the one press also backs out. One boundary only (the press's
-// first after the one that un-readied); fed back at that boundary it stays (idempotent).
+// A on BACK while ready un-readies at this frame, then the game sees the same A on the next frame
+// and backs out, so one press does both. Idempotent if the frame is re-run.
 constexpr u8 FLAG_BACK_A = 0x10;
 
-// 30 s to ready up, 1.5 s of Z to skip, at the game's 60 frames a second.
+// 30 s to ready up, 1.5 s of Z to skip, at 60 frames per second.
 constexpr int READY_FRAMES = 30 * 60;
 constexpr int SKIP_FRAMES = 90;
-// Steering port 2's hand gives up after this long (the player then picks by hand).
+// Give up steering port 2's hand after this long; the player then picks by hand.
 constexpr int STEER_LIMIT_FRAMES = 10 * 60;
-// Port 2's stick stays centred this long first: the game takes a newly plugged pad's stick as its
-// centre (the pad's origin), and a stick already steered then would read as pushed ever after (the
-// hand drifted with the stick let go).
+// Keep port 2's stick centred this long first. The game calibrates a newly plugged pad's stick
+// centre from its first reading, so steering too early would leave the stick reading as pushed.
 constexpr int STEER_SETTLE_FRAMES = 20;
-// Turning port 2's costume (X) gives up after this long: the character is in, whatever the colour.
+// Give up turning port 2's costume (X) after this long; the pick stands in any colour.
 constexpr int COSTUME_LIMIT_FRAMES = 3 * 60;
 
 // The character select's id for "no character" (muSelCharPlayerArea +0x1B8, Selch_SelectNone).
 constexpr int NO_CHARACTER = 0x28;
-// Its id for Random (Selch_Random; the same in Project+): a pick like any character's, on the
-// queue's own character select, steered onto the joiner's panel, locked in, in every game (ORCA.md
-// "Random and ranked's no skip"). The game resolves it to a character itself as the character
-// select ends, from its own random number generator, which is emulated state: the same on every
-// machine of a session. X never turns RANDOM's colour, so the steering takes it in any colour.
+// The id for Random (Selch_Random, same in Project+). The game resolves it from its own emulated
+// RNG, so it is the same on every machine. X does not change Random's colour, so any costume is
+// accepted.
 constexpr int RANDOM_CHARACTER = 0x29;
 
 // ---- The queue identity (Events::PortInfo::queue), 13 bytes, big-endian ----
 //   +0 version 1   +1 u16 rating (0xFFFF none)   +3 u8 character (0xFF none)   +4 u8 costume
-//   +5 f32 x   +9 f32 y   (the hand's place when it put the token down in the player's own game)
+//   +5 f32 x   +9 f32 y   (where the player's token was placed in their own game)
 struct Identity
 {
   int rating = -1;  // -1: none ("queue rating -")
@@ -154,15 +108,15 @@ struct Identity
 std::vector<u8> EncodeIdentity(const Identity& identity);
 std::optional<Identity> DecodeIdentity(const std::vector<u8>& bytes);
 
-// ---- What a boundary sees ----
+// ---- What a frame sees ----
 struct CssPort
 {
   bool readable = false;  // the area could be read
   bool human = false;
-  int character = NO_CHARACTER;  // under the hand while the token is in it, else the token's
+  int character = NO_CHARACTER;  // under the hand while holding the token, else the token's
   bool placed = false;           // the token is down on a character
   int costume = 0;
-  // The hand (OnlineRules.h CssHand): what it points at and where.
+  // The hand (OnlineRules.h CssHand).
   u32 hand_target = 0;
   u32 hand_button = 0;
   float hand_x = 0;
@@ -172,24 +126,24 @@ struct CssPort
 
 struct View
 {
-  bool queue2 = false;  // the header is the queue's (FLAG_QUEUE2) and locks
+  bool queue2 = false;  // the header is the queue's (FLAG_QUEUE2) and locks the rules
   bool solo = false;    // the queue's own character select (FLAG_SOLO)
   bool ranked = false;
   bool css = false;      // on the character select
   bool game1 = true;     // no fight since the header was written
   bool order_done = true;  // ranked later games: the character order is done (CharOrder.h)
-  // Ranked later games: the character order's picks are locked in (its Done step), so the stage
-  // select comes at once; and which ports have locked in so far (bit p, the overlay's badges).
+  // Ranked later games: both picks are locked in, so the stage select comes at once. And which
+  // ports have locked in so far (bit p, for the overlay's badges).
   bool order_locked_in = false;
   u8 order_locked = 0;
   u8 plugged = 0;        // the ports in play (MatchBlock::PLUGGED)
   std::array<CssPort, 2> ports{};
   std::array<u16, 2> raw{};
   std::array<u16, 2> raw_prev{};
-  // Port 2's hand where the frame that just ran started (the latch's HAND_PREV).
+  // Port 2's hand at the start of the last frame (HAND_PREV).
   float hand2_prev_x = 0;
   float hand2_prev_y = 0;
-  std::optional<Identity> pick2;  // port 2's queue identity's pick, from its plug frame on
+  std::optional<Identity> pick2;  // port 2's queued pick, from its plug frame on
   bool operator==(const View&) const = default;
 };
 
@@ -212,49 +166,38 @@ struct State
   bool operator==(const State&) const = default;
 };
 
-// The room's character select with both players in: the ready step (game 1, and later games once
-// ranked's character order is done).
+// The room's character select with both players in, at the ready step.
 bool ReadyPhase(const View& view);
-// Ranked's later games once the character order has both lock-ins: on without a ready step.
+// Ranked later games once both character-order picks are locked in; no ready step.
 bool OrderLockedIn(const View& view);
 
-// Whether the ready step has its 30 s timer: every ranked game, and casual's first only (game 1:
-// strangers who just met). Casual's later games with the same opponent wait for both Starts, with
-// no clock and no timeout (Luis, 2026-10-04: "a little bit more time to be social"). A function of
-// the match block (the header's mode and FOUGHT), so the same on every machine and re-run.
+// Whether the ready step has a 30 s timer: every ranked game, and only casual's first game. Later
+// casual games wait for both Starts with no clock, to give players time to talk.
 bool Timed(const View& view);
 
-// Whether a player may hold Z to find someone else (`orca queue skip`): a casual room's character
-// select with both players in, before the go or a timeout. Never in ranked (Luis, 2026-10-05: "you
-// should not be able to click Z to escape a ranked match. You are forced to play a ranked match"):
-// no line, no bar, no hint in any game of a set; leaving a set any other way is a forfeit. Local
-// only (the line and the overlay): Z is masked from the game in both modes alike.
+// Whether holding Z may ask to skip this opponent: casual only, both players in, before the go or a
+// timeout. Ranked matches cannot be skipped; leaving any other way is a forfeit.
 bool MaySkip(const View& view, const State& state);
 
-// The state after this boundary, from the state before it, the view and the hook's frame number.
-// Pure and idempotent (the same view and state give the same result, and a result fed back in
-// changes nothing).
+// The state after this frame. Pure and idempotent: feeding the result back in changes nothing.
 State Advance(const View& view, const State& state, int frame);
 
 // The gate's masks and presses for the frame about to run. Pure.
 Rollback::InputGate::Masks Gate(const View& view, const State& state);
 
-// The skip's hold (local, first runs only): Z held SKIP_FRAMES boundaries in a row while a skip may
-// be asked for fires once; Z must be let go before the next.
+// Z held for SKIP_FRAMES in a row fires one skip; Z must be released before the next. Local only.
 struct SkipHold
 {
   int frames = 0;
   bool sent = false;
-  // One first-run boundary: whether a skip is asked for now.
+  // Returns whether a skip fires on this frame.
   bool Step(bool may_skip, bool z_held);
-  // 0..1 of the way to a skip, for the overlay (0 while nothing is held or once it fired).
+  // 0..1 progress toward a skip, for the overlay.
   float Progress() const;
 };
 
-// The overlay's queue lines on this machine (local, display only): the top line, the note under it
-// (this player's own hints: "B to change", casual's "Hold Z to find someone else" or the skip's
-// bar at `skip_progress`), each port's name label and LOCKED IN badge. `local` is this machine's
-// port. Pure.
+// The overlay's queue text: the top line, a hint under it, and each port's name label and LOCKED IN
+// badge. `local` is this machine's port. Pure, display only.
 struct Text
 {
   std::string line;
@@ -266,59 +209,51 @@ Text TextFor(const View& view, const State& state, const std::vector<Events::Por
              int local, float skip_progress);
 
 // ---- Fixed point (the steering's arithmetic) ----
-// Every machine computes port 2's stick from the hand's place in emulated memory, so the steering
-// is integer arithmetic only (ORCA.md "Host arithmetic"): host floating point differs between the
-// builds. Apple clang fused the old float version's dx * dx + dy * dy into one FMA on ARM64, which
-// MSVC rounds as two products and a sum on x86-64; 12 of 20 million random (hand, pick) pairs then
-// gave sticks a unit apart, a desync no synctest on one machine can see. A place is in FIXED_ONEs,
-// 1/65536 of a unit.
+// Steering is integer-only because host floating point differs between compilers (for example
+// ARM64 clang fuses a multiply-add that x86-64 MSVC does not), which would desync the machines.
+// See ORCA.md, "Host arithmetic". Positions are in FIXED_ONEs, 1/65536 of a unit.
 constexpr int FIXED_BITS = 16;
 constexpr s64 FIXED_ONE = s64{1} << FIXED_BITS;
-// Places this far out or more are no place (the character select spans about -30..30, -20..20).
+// Positions this far out are invalid (the character select spans about -30..30, -20..20).
 constexpr s64 FIXED_LIMIT = s64{4096} << FIXED_BITS;
-// A float's value in FIXED_ONEs, truncated toward zero, worked out from its bits alone (no float
-// instruction, so every host and compiler agrees); nullopt for a NaN, an infinity, or a magnitude
-// of FIXED_LIMIT or more.
+// A float in FIXED_ONEs, truncated toward zero, decoded from its bits with no float instructions.
+// nullopt for NaN, infinity, or a magnitude of FIXED_LIMIT or more.
 std::optional<s64> ToFixed(float value);
 // floor(sqrt(n)), exactly.
 u64 IntSqrt(u64 n);
 
-// Where port 2's stick goes to take its hand from (x, y) to (tx, ty): full tilt when far, gentler
-// near, centred within reach (or when a place is no place). Pure, and integer only: the same bytes
-// on every host.
+// Port 2's stick to move its hand from (x, y) to (tx, ty): full tilt when far, gentler when near,
+// centred when close enough or on an invalid position. Integer only.
 std::pair<u8, u8> SteerToward(float x, float y, float tx, float ty);
-// Whether port 2's hand has all but stopped: under 0.05 a frame on both axes since the frame began
-// (Brawl's hand creeps about 0.03 a frame with the stick let go). Integer only, as SteerToward.
+// Whether port 2's hand has nearly stopped: under 0.05 a frame on both axes (Brawl's hand creeps
+// about 0.03 a frame after the stick is released). Integer only.
 bool HandStill(float x, float y, float prev_x, float prev_y);
 
 // ---- Memory ----
 View ReadView(const GuestMemory& memory, const std::vector<Events::PortInfo>& ports);
 State ReadState(const GuestMemory& memory);
-// Writes the region's state fields (not RAW/RAW_PREV: the latch's), only where they differ.
+// Writes the state fields (not RAW/RAW_PREV, which the latch owns), only where they differ.
 int WriteState(GuestMemory& memory, const State& state);
-// The latch (InputGate::SetLatch): ports 1 and 2's raw buttons into RAW, the old RAW into RAW_PREV,
-// and port 2's hand into HAND_PREV, while a header locks (the queue's, and any queue room's: the
-// character select's B and the character order's Start read RAW too; and with the character
-// order's test knob, on its character select). Returns bytes changed.
+// The input gate's latch: ports 1 and 2's raw buttons into RAW, the old RAW into RAW_PREV, and
+// port 2's hand into HAND_PREV, while the header locks the rules. Returns bytes changed.
 int Latch(GuestMemory& memory, const std::array<std::optional<GCPadStatus>, 4>& raw);
 
 // ---- The frame hook's part (UX.cpp), after the character order ----
-// Reads, advances and writes the state (first runs and re-runs); on first runs prints the lines,
-// follows Z for a skip and gives the overlay its lines.
+// Reads, advances and writes the state on every run. On first runs it also prints lines, tracks Z
+// for a skip and updates the overlay.
 void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
            const std::vector<Events::PortInfo>& ports, bool alone);
-// The input gate's part: masks from memory alone.
+// The input gate's masks, from memory alone.
 Rollback::InputGate::Masks GateFrame(const Core::CPUThreadGuard& guard);
-// Whether the queue owns the character select's Start (a queue2 room's character select): the
-// character order's own Start is then the ready timer's to give.
+// Whether the queue owns the character select's Start (in a queue2 room). The character order's
+// own Start is then left to the ready timer.
 bool OwnsStart(const Core::CPUThreadGuard& guard);
 // The input gate's latch.
 void LatchFrame(const Core::CPUThreadGuard& guard,
                 const std::array<std::optional<GCPadStatus>, 4>& raw);
 
 // ---- The app's side (any thread) ----
-// With Anyone > Casual or Ranked picked with the app's `queue2`: the player waits on the queue's own
-// character select (the header the session asks for: OnlineMatch's WantedRulesMode).
+// The player picked Casual or Ranked and waits on the queue's own character select.
 void Begin(bool ranked);
 // Backed out to the menus (`orca menu cancel`).
 void End();
@@ -327,24 +262,23 @@ bool Ranked();
 // `queue rating <n|->`: this player's rating in the current queue (-1 none).
 void SetOwnRating(int rating);
 int OwnRating();
-// The last alone first-run boundary saw the queue's own character select with the player ready.
+// The last solo first run saw the queue's own character select with the player ready.
 bool SoloReady();
-// The last alone first-run boundary saw the queue's own character select.
+// The last solo first run saw the queue's own character select.
 bool OnSoloCss();
-// The last first-run boundary saw a queue's character select (its own, or a queue room's): the
-// overlay docks its lines on Project+'s rules bar there.
+// The last first run saw a queue character select (solo or in a room). The overlay then docks its
+// lines on Project+'s rules bar.
 bool OnQueueCss();
-// The session put back the player's own game after a room (OnlineMatch's queue image). `keep_ready`
-// false (this player's own ready timer ran out, or a ranked set was played there: Luis,
-// 2026-10-04, the player presses Start to search again): the ready flag is cleared at the next
-// boundary, so the search doesn't start again by itself. `why` is for the log.
+// The session restored the player's own game after a room. With `keep_ready` false (their own
+// timer ran out, or a ranked set was played), ready is cleared so the search does not restart by
+// itself. `why` is for the log.
 void AfterRestore(bool keep_ready, const char* why = "");
-// The app's `queue-cancel`: its search ended, so on the queue's own character select the player
-// isn't ready any more (cleared at the next alone boundary; `orca queue unready` follows).
+// The app's `queue-cancel`: the search ended, so the player is no longer ready
+// (`orca queue unready` follows).
 void ClearReady();
-// The casual ready timer that ran out and its frame is final (OnlineMatch's ConfirmResults): this
-// player's port didn't ready (`me`) or the opponent didn't (`them`); printed once.
+// The casual ready timer ran out and its frame is confirmed. Prints `orca queue timeout me|them`
+// once.
 void ConfirmTimeout(int confirmed, int local_port);
-// Whether the last `orca queue timeout` printed said `me` (once; cleared as it is read).
+// Whether the last `orca queue timeout` said `me`. Cleared when read.
 bool TakeTimeoutWasMine();
 }  // namespace Orca::UX::Queue

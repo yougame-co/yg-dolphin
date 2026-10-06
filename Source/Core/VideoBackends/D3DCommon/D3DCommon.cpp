@@ -67,7 +67,7 @@ bool LoadLibraries()
 
 void UnloadLibraries()
 {
-  // Orca: the FXC cache (FxcCache.h) closes with the compiler whose output it keeps.
+  // Orca: close the FXC cache along with the compiler it caches.
   FxcCache::Close();
   create_dxgi_factory = nullptr;
   create_dxgi_factory2 = nullptr;

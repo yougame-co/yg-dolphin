@@ -7,15 +7,14 @@
 
 #include "Common/MathUtil.h"
 
-// Orca (embed `view`, ORCA.md "Embedding"): the box the game's picture is laid out in when it is
-// not the window. The YouGame page opens its play menu over the left of the player box; nothing in
-// the page can draw over Orca's window, so the page cuts the window (`rect`) to start right of the
-// panel and keeps the picture laid out in the whole box (`view`): the game neither shrinks nor
-// moves, the panel covers its left part. Pure, so the tests drive it.
+// Layout for an embedded window whose picture box (`view`) differs from the window (`rect`).
+// When the YouGame page opens a side panel, it shrinks Orca's window to make room but keeps the
+// picture laid out in the full box, so the game doesn't shrink or move; the panel just covers
+// part of it. See ORCA.md, "Embedding". Pure functions, so tests can drive them.
 namespace VideoCommon
 {
-// The layout box in the window's own units (`rect`'s: physical pixels on Windows, backing pixels on
-// macOS), relative to the window's top left, and the window's size in those units.
+// The layout box relative to the window's top left, plus the window's size, in the window's own
+// units (physical pixels on Windows, backing pixels on macOS).
 struct LayoutHint
 {
   int win_w = 1;
@@ -28,7 +27,7 @@ struct LayoutHint
   constexpr bool operator==(const LayoutHint&) const = default;
 };
 
-// A box in backbuffer pixels (it may start left of or above the backbuffer and run past it).
+// A box in backbuffer pixels. It may extend past the backbuffer on any side.
 struct LayoutBox
 {
   float x = 0;
@@ -39,35 +38,32 @@ struct LayoutBox
   constexpr bool operator==(const LayoutBox&) const = default;
 };
 
-// How far the backbuffer's scale over the window may differ across and down for a hint still to be
-// for this backbuffer: macOS rounds a window of whole backing pixels to points and back.
+// How much the horizontal and vertical backbuffer/window scales may differ for a hint to still
+// match this backbuffer. macOS rounds window sizes between points and backing pixels.
 constexpr float LAYOUT_SHAPE_TOLERANCE = 0.02f;
 
-// `hint`'s box in a backbuffer of bb_w x bb_h: scaled by the backbuffer's size over the window's
-// (the units differ by the backing scale, and by rounding). nullopt when the hint is for a window
-// of another shape (the backbuffer hasn't followed a resize yet) or anything is empty.
+// `hint`'s box scaled into a bb_w x bb_h backbuffer. nullopt when the hint is for a window of a
+// different shape (the backbuffer hasn't caught up with a resize yet) or any size is empty.
 std::optional<LayoutBox> LayoutBoxIn(const LayoutHint& hint, int bb_w, int bb_h);
 
-// The layout a present uses: the box, and the hint it came from (none: the window).
+// The box a present uses and the hint it came from (nullopt: the whole window).
 struct LayoutChoice
 {
   LayoutBox box;
   std::optional<LayoutHint> hint;
 };
 
-// The box the picture is laid out in now: `latest`'s when it is for this backbuffer, else
-// `applied`'s, the one the last present used (the window was just resized and the backbuffer still
-// has the old size, for a frame or two), else the whole backbuffer. No `latest` (no `view`, or
-// `view off`): the whole backbuffer, the layout following the window as Dolphin's does.
+// Picks the layout box: `latest` if it matches this backbuffer, else `applied` (the last one used,
+// kept for the frame or two before the backbuffer follows a resize), else the whole backbuffer.
+// With no `latest`, the picture follows the window as in Dolphin.
 LayoutChoice ChooseLayout(const std::optional<LayoutHint>& latest,
                           const std::optional<LayoutHint>& applied, int bb_w, int bb_h);
 
-// The picture, draw_w x draw_h whole pixels, centred in `box` as Dolphin centres it in the window.
-// It can run past the backbuffer: Present() crops it (AdjustRectanglesToFitBounds).
+// Centres a draw_w x draw_h picture in `box` the way Dolphin centres it in the window. The result
+// may run past the backbuffer; Present() crops it.
 MathUtil::Rectangle<int> PlaceInBox(const LayoutBox& box, int draw_w, int draw_h);
 
-// Whether any of the placed picture is in the backbuffer. With a `view` it can be none of it (a
-// window cut to the view's pillarbox bar): cropping it to the backbuffer would then give an
-// inverted rectangle, so Present() draws no picture (the backbuffer is cleared to black).
+// Whether any part of the picture lies in the backbuffer. With a `view` it may not (the window
+// shows only a black bar), and cropping would give an inverted rectangle, so Present() skips it.
 bool PictureInBackbuffer(const MathUtil::Rectangle<int>& picture, int bb_w, int bb_h);
 }  // namespace VideoCommon

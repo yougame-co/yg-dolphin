@@ -156,10 +156,9 @@ double ApproximateReciprocal(double val)
   const s64 sign = integral & (1ULL << 63);
   s64 exponent = integral & (0x7FFLL << 52);
 
-  // Orca: the sign goes on with integer operations, not std::copysign. Clang builds copysign's
-  // 0x7FFF... mask on ARM64 as FNEG of all ones, a NaN, and under FPCR.AH (set while the guest's
-  // non-IEEE mode is, on an AFP CPU such as an Apple M4) FNEG leaves a NaN's sign alone: the mask
-  // came out all ones and fres(-0.0) returned +inf in the interpreter there.
+  // Orca: set the sign with integer operations, not std::copysign. On ARM64, Clang builds
+  // copysign's mask by FNEG of a NaN, which FPCR.AH (set in the guest's non-IEEE mode on AFP CPUs)
+  // leaves unchanged, so the mask comes out wrong.
   const auto with_sign = [sign](double magnitude) {
     return std::bit_cast<double>(std::bit_cast<s64>(magnitude) | sign);
   };

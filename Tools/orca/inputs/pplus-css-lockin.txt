@@ -1,11 +1,10 @@
 # The character select's buttons in a ranked queue2 set (ORCA.md "The character select's buttons",
-# "Character order"; Luis, 2026-10-04: "press A to select character and then press start after to
-# lock in"), Project+ (ORCA_PROFILE=PPLUS32): game 1 as pplus-queue2-ranked.txt (the player's own
-# character select, the opponent's pick steered in, both ready, the strikes, port 2 walks off), the
-# results, then game 2's character order, port 1 (the winner) first:
+# "Character order": A picks a character, Start locks it in), Project+ (ORCA_PROFILE=PPLUS32): game
+# 1 as pplus-queue2-ranked.txt (the player's own character select, the opponent's pick steered in,
+# both ready, the strikes, port 2 walks off), the results, then game 2's character order, port 1
+# (the winner) first:
 #   - port 1 goes up over its own token, then right onto another character and presses A: the
-#     token is down on last game's character, so nothing happens (Orca 0.3.14 and 0.3.15 took that
-#     A as the lock-in of the old character, and port 1's controller went dead: Luis's "stuck");
+#     token is down on last game's character, so nothing happens (it must not lock that one in);
 #   - port 1's B takes the token up (one frame), A puts it on the new character, B again holds on
 #     for 60 frames (the token comes up once, the held B never backs out), A again, then Start
 #     locks the pick in: final, port 2's turn; port 1's B and A then do nothing;

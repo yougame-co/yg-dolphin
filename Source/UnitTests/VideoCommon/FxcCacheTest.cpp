@@ -1,14 +1,11 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-// Orca (ORCA.md, "Match start"): D3D's FXC cache keeps compiled shaders across Orca builds. What
-// must hold: a binary only ever comes back for the very compile that made it (every input is in the
-// key), and a damaged file never hands back bytes under any key (each record checks its own key and
-// bytes; the read stops at the first that doesn't, and the file is written again from the ones
-// before it). The file stays open while a run lasts, and another Orca on the same user folder may
-// read it and append to it meanwhile (SharedWithAnotherOrca). On Windows a plain open of a file
-// that something else has open for writing fails, so the tests end the run (Reopen) before reading
-// the file the plain way or damaging it, and read it mid-run the way another Orca does.
+// Orca: tests for the D3D FXC shader cache, which keeps compiled shaders across runs. A binary only
+// comes back for the exact compile that made it (every input is in the key), and a damaged file
+// never returns bytes: reading stops at the first bad record and the file is rewritten from the
+// good ones. Another Orca may share the open file. On Windows a plain open fails while a run has
+// the file open for writing, so tests end the run (Reopen) before reading or damaging it that way.
 
 #include <string>
 #include <string_view>
@@ -79,8 +76,8 @@ protected:
 
   static std::string CachePath() { return File::GetUserPath(D_SHADERCACHE_IDX) + "D3D-fxc.cache"; }
 
-  // The file as any program reads it; on Windows only once no run has it open, which this checks
-  // too: Close lets it go.
+  // The file as any program reads it. On Windows this works only once no run has it open, which
+  // also checks that Close releases it.
   static std::string ReadCache()
   {
     std::string bytes;
@@ -88,8 +85,7 @@ protected:
     return bytes;
   }
 
-  // The file read while a run has it open, the way another Orca reads it: sharing it with the
-  // run's writes.
+  // The file read while a run has it open, sharing writes the way another Orca does.
   static std::string ReadCacheWhileOpen()
   {
     File::IOFile in(CachePath(), "rb", File::SharedAccess::ReadWrite);
@@ -107,7 +103,7 @@ protected:
   // A new run: what the last one wrote, read from the file.
   static void Reopen() { FxcCache::Close(); }
 
-  // One record as the cache writes it (FxcCache.cpp, "The file"): another Orca's.
+  // One record in the cache's own format, as another Orca would append it.
   static std::string Record(const FxcCache::Key& key, const std::vector<u8>& bytes)
   {
     auto context = Common::SHA1::CreateContext();
@@ -162,14 +158,14 @@ TEST_F(FxcCacheTest, KeptAcrossRuns)
   EXPECT_EQ(FxcCache::Find(KeyOf(2)), Bytes(3000, 2));
   // The same compile again adds nothing.
   FxcCache::Store(KeyOf(2), Bytes(3000, 2));
-  // On disk already, while the run goes on (a killed Orca keeps them), and readable meanwhile.
+  // Already on disk mid-run (so a killed Orca keeps it), and readable meanwhile.
   EXPECT_EQ(ReadCacheWhileOpen().size(), HEADER + 2 * RECORD + 100 + 3000);
 
   Reopen();
   EXPECT_EQ(FxcCache::Find(KeyOf(1)), Bytes(100, 1));
   EXPECT_EQ(FxcCache::Find(KeyOf(2)), Bytes(3000, 2));
   EXPECT_FALSE(FxcCache::Find(KeyOf(3)));
-  // A compile that differs in any input is another key (EveryInputIsInTheKey): a miss, compiled.
+  // A compile that differs in any input is a different key: a miss.
   EXPECT_FALSE(FxcCache::Find(
       FxcCache::KeyFor(Dll(2), std::string(HLSL) + "// 1", ENTRY, TARGET, FLAGS, MACROS)));
 }
@@ -206,9 +202,8 @@ TEST_F(FxcCacheTest, AlteredBytesAreNeverReturned)
   Reopen();
   const std::string whole = ReadCache();
 
-  // One byte of the second record's bytecode, then one of its key: neither record is used, nor
-  // anything after it, under any key. Two processes appending at once read the same way: the first
-  // record whose check fails ends the read.
+  // One flipped byte in the second record's bytecode, then in its key: that record and everything
+  // after it are ignored. The first failed check ends the read, as with concurrent appends.
   for (const std::size_t at : {HEADER + RECORD + 100 + RECORD + 50, HEADER + RECORD + 100 + 4 + 3})
   {
     std::string damaged = whole;
@@ -239,8 +234,8 @@ TEST_F(FxcCacheTest, ForeignFileStartsOver)
 
 TEST_F(FxcCacheTest, SharedWithAnotherOrca)
 {
-  // Another Orca on the same user folder has the file open to append the whole time this run reads
-  // it and appends to it: a whole file, then a foreign one this run writes again from the start.
+  // Another Orca on the same user folder keeps the file open for appending throughout this run:
+  // first with a valid file, then with one this run must rewrite from the start.
   for (const bool whole : {true, false})
   {
     if (whole)

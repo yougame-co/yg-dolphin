@@ -20,8 +20,8 @@ public:
   WindowSystemInfo GetWindowSystemInfo() const override;
 
 protected:
-  // Orca tests (ORCA_TEST_COMMANDS with ORCA_TEST_PRESENT): a `rect` sizes the test image as it
-  // would size the window, so `view` and the overlay are tried as a window would show them.
+  // Orca tests (ORCA_TEST_COMMANDS with ORCA_TEST_PRESENT): `rect` sizes the test image like a
+  // window, so `view` and the overlay render as they would on screen.
   void EmbedSetRect(const Embed::Rect& rect) override;
 };
 

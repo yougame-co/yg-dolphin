@@ -147,15 +147,15 @@ TEST(OrcaRoom, PortValuesRoundTrip)
   for (size_t i = 0; i < controls.size(); ++i)
     controls[i] = static_cast<u8>(i * 7);
   const std::vector<KeyframeInfo::Name> sent{
-      {0, 12, "luis", {}}, {1, 3600, "sandbox-ada", controls}, {0, 3601, "luis", controls}};
+      {0, 12, "cy", {}}, {1, 3600, "sandbox-ada", controls}, {0, 3601, "cy", controls}};
   picojson::object message;
   message["nm"] = NamesToJson(sent);
   const std::string text = picojson::value(message).serialize();
   picojson::value parsed;
   ASSERT_TRUE(picojson::parse(parsed, text).empty());
   EXPECT_EQ(NamesFromJson(parsed.get<picojson::object>()), sent);
-  // A port with no controls has no fourth element (as builds before them sent).
-  EXPECT_NE(text.find("[0,12,\"luis\"]"), std::string::npos) << text;
+  // A port with no controls has no fourth element, matching the older message format.
+  EXPECT_NE(text.find("[0,12,\"cy\"]"), std::string::npos) << text;
 
   // Controls past MAX_CONTROLS bytes, or not hex, are none; the name stays.
   const auto read = [](const std::string& json) {
@@ -226,9 +226,8 @@ TEST(OrcaRoom, RejectsMalformedPackets)
   EXPECT_FALSE(DecodePacket(with("[130,-1,-1,-1]", "[130,-1,-1]"), &got));
   EXPECT_FALSE(DecodePacket(with("[130,-1,-1,-1]", "[130,-2,-1,-1]"), &got));
   EXPECT_FALSE(DecodePacket(with("\"h\":\"fedcba9876543210\"", "\"h\":\"fedcba98\""), &got));
-  // Telemetry (re-simulation count, lead, round trip, stalls, hitches) never refuses a packet,
-  // which would end the match: out of range is clamped, a fraction truncated, anything not a number
-  // ignored. (Exponents never reach the parser: SafeToParse refuses them for every field.)
+  // Bad telemetry must never refuse a packet, since that would end the match: out-of-range values
+  // are clamped, fractions truncated, non-numbers ignored. (SafeToParse already rejects exponents.)
   const auto telemetry = [&](const std::string& from, const std::string& to) {
     Packet out;
     EXPECT_TRUE(DecodePacket(with(from, to), &out)) << to;
@@ -450,11 +449,9 @@ TEST(OrcaLive, TwoRoomsPlayEachOther)
   EXPECT_GE(a.RoundTripMs(), 0);
 }
 
-// Two Orcas in one dev room link directly (here, over this machine): both report a direct link
-// within seconds, a packet comes over it well ahead of the relay's copy, a test block puts the
-// inputs back on the relay and lifting it brings the link back, and a third Orca with
-// ORCA_DIRECT=0 never links (the room then reports the relay, the worst of its links).
-// ORCA_LIVE_TEST=1.
+// Two Orcas in one dev room open a direct link that beats the relay; blocking it falls back to the
+// relay and unblocking restores it. A third Orca with ORCA_DIRECT=0 never links (its room reports
+// the relay). ORCA_LIVE_TEST=1.
 TEST(OrcaLive, DirectLinkBetweenTwoRooms)
 {
   const char* live = std::getenv("ORCA_LIVE_TEST");
@@ -674,8 +671,8 @@ TEST(OrcaLive, TestNetworkDelayHoldsMessages)
   EXPECT_LT(b.RoundTripMs(), 200);
 }
 
-// Under the desktop app: one room through the app's bridge (YOUGAME_BRIDGE, YOUGAME_TOKEN,
-// YOUGAME_GAME, set by the test's caller to Tools/orca/fake_bridge.py), the other on a dev ticket. The bridged
+// Under the desktop app: one room goes through the app's bridge (YOUGAME_BRIDGE, YOUGAME_TOKEN,
+// YOUGAME_GAME, pointed at Tools/orca/fake_bridge.py), the other uses a dev ticket. The bridged
 // side mirrors the room to the page, and the page's Leave ends it. ORCA_LIVE_TEST=1 and
 // ORCA_TEST_BRIDGE_ROOM=<the fake bridge's room code>.
 TEST(OrcaLive, BridgeMirrorsTheRoomAndTakesLeave)
@@ -877,10 +874,9 @@ TEST(OrcaLive, DesyncIsReportedOnBothSides)
   SetEnv("ORCA_TEST_DEV_GAME", nullptr);
 }
 
-// A queue room's host whose game never carried the room's header leaves with "mismatch"
-// (OnlineMatch's FailHeaderWait): the joiner waiting for its keyframe hears that reason with the
-// host's departure (and prints its own `orca error mismatch`). A joiner's "mismatch" bye (its own
-// LeaveOnMismatch) stays a plain leave for the host, as before.
+// A queue-room host whose game never carried the room's header leaves with "mismatch"
+// (OnlineMatch's FailHeaderWait), and the waiting joiner hears that reason. A joiner's own
+// "mismatch" bye (LeaveOnMismatch) is just a plain leave to the host.
 TEST(OrcaLive, AHostsMismatchReachesItsJoiner)
 {
   const char* live = std::getenv("ORCA_LIVE_TEST");
@@ -1070,8 +1066,8 @@ TEST(OrcaLive, HostComesBackToItsRoom)
   EXPECT_EQ(again.Code(), options.room_code);
 }
 
-// A room waiting for a friend stays open for as long as the friend takes: half a minute of pings
-// and no other traffic. (Windows lost its socket after about 8 s of waiting, 2026-10-01.)
+// A room waiting for a friend stays open as long as the friend takes: half a minute with only
+// pings. Guards against an idle socket being dropped after a few seconds (seen on Windows).
 TEST(OrcaLive, WaitingRoomStaysOpen)
 {
   const char* live = std::getenv("ORCA_LIVE_TEST");

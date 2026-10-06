@@ -27,7 +27,7 @@
 811A6440 7C030378 90030078    # stw   r0, 0x78(r3)
 811A6444 4AF193ED 48001204    # b     0x811A7648 (the process's end)
 
-# Boot to the main menu, not the character select (Luis, 2026-10-04: booting should land on the
+# Boot to the main menu, not the character select (booting should land on the
 # home menu, as Brawl's does). Project+'s codeset boots straight to its VERSUS character select:
 # "Boot Directly to CSS v5.4" (Source/Project+/BootToCSS.asm on the SD card, in NETBOOST.GCT, which
 # the codeset's expansion loader reads to 0x80550010) hooks sqBoot::setNext at 0x806DD5F8 and,

@@ -20,7 +20,7 @@ namespace
 {
 RingPort* s_active = nullptr;
 
-// Brawl's frame period (NTSC, 60 Hz): how long a time-sync wait holds this machine.
+// How long a time-sync wait holds this machine: one NTSC (60 Hz) frame.
 constexpr std::chrono::microseconds FRAME_PERIOD{16'667};
 }  // namespace
 
@@ -28,7 +28,7 @@ RingPort::RingPort(Core::System& system, int max_rollback, bool unthrottled)
     : m_system(system), m_ring(static_cast<std::size_t>(max_rollback) + 2),
       m_unthrottled(unthrottled)
 {
-  // Until the session sets them: every port connected with nothing pressed, on both machines.
+  // Until the session sets them, every port reads as connected with nothing pressed.
   m_pads.fill(Orca::Net::DecodePad(Orca::Net::Pad{}));
   s_active = this;
   if (m_unthrottled)
@@ -52,7 +52,7 @@ RingPort* RingPort::Active()
 
 bool RingPort::Save(int frame)
 {
-  // A boundary the session stalls at asks for the same frame again; nothing ran since.
+  // A stalled boundary asks for the same frame again; nothing has run since.
   if (m_saved_since_run == frame)
     return true;
   const auto start = std::chrono::steady_clock::now();
@@ -61,9 +61,8 @@ bool RingPort::Save(int frame)
       std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
   if (Diag::SnapTime())
     Diag::AddPortSave(ms);
-  // A slot's first use allocates and faults in ~100 MB: not what a save costs. After that, an
-  // eighth of each sample, at most four times the estimate: one slow save (a busy machine) barely
-  // moves it.
+  // A slot's first use allocates ~100 MB, so it is not a representative sample. Otherwise blend in
+  // 1/8 of each sample, capped at 4x the estimate so one slow save barely moves it.
   if (!allocated)
   {
     if (m_save_ms > 0)
@@ -76,8 +75,8 @@ bool RingPort::Save(int frame)
 
 bool RingPort::Load(int frame)
 {
-  // Loading re-anchors the throttle at the loaded time; keep the reference the present frame was
-  // paced by, so the time the rollback takes is made up afterwards.
+  // Loading re-anchors the throttle. Keep the current reference so the time the rollback takes is
+  // made up afterwards.
   if (!m_resimulating && !m_reference_before_load)
     m_reference_before_load = m_system.GetCoreTiming().GetThrottleReference();
   m_saved_since_run = -1;
@@ -120,8 +119,7 @@ bool RingPort::LoadImage(MachineImage image, int frame)
 
 void RingPort::SetResimulating(bool resimulating)
 {
-  // While re-running, CoreTiming treats the speed as unlimited (Rollback::IsResimulating), host
-  // rendering is skipped and the Mixer drops the re-run's audio.
+  // While re-running, emulation is unthrottled, rendering is skipped and audio is dropped.
   m_resimulating = resimulating;
   Rollback::SetResimulating(resimulating || m_catching_up);
   if (!resimulating && m_reference_before_load)
@@ -152,9 +150,9 @@ Orca::Net::Step StepSession(Orca::Net::Session& session, Orca::Net::Game& game, 
   bool waited = false;
   std::optional<std::chrono::steady_clock::time_point> held_since;
   std::chrono::steady_clock::time_point last_poll;
-  // Whether this call has held the emulator longer than give_up_after. A gap between two polls
-  // much longer than the loop's own sleeps means this process wasn't running (stopped, or the Mac
-  // slept): that says nothing about the other side, so the count starts again.
+  // Whether this call has held the emulator longer than give_up_after. A gap of over a second
+  // between polls means this process was suspended (e.g. the computer slept), not that the other
+  // side went away, so the timer restarts.
   const auto held_too_long = [&] {
     const auto now = std::chrono::steady_clock::now();
     if (!held_since || now - last_poll > std::chrono::seconds(1))
@@ -171,13 +169,13 @@ Orca::Net::Step StepSession(Orca::Net::Session& session, Orca::Net::Game& game, 
     const Orca::Net::Step step = session.OnBoundary(completed_frame, local_pad);
     if (step.kind == Orca::Net::StepKind::Wait)
     {
-      // Time sync: this machine is ahead. Hold one frame, then pace from now (otherwise the
-      // throttle would race to make the held frame up).
+      // Time sync: this machine is ahead. Hold one frame, then pace from now so the throttle
+      // doesn't race to make up the held frame.
       if (stopping() || held_too_long())
         return {Orca::Net::StepKind::Ended, step.frame};
       std::this_thread::sleep_for(FRAME_PERIOD);
       waited = true;
-      // The wait came before this boundary sampled anything: its frame plays the pad read now.
+      // The session decides a wait before sampling, so the frame uses the pad read now.
       local_pad = sample_local();
       continue;
     }

@@ -12,7 +12,7 @@
 # with A; port 1 proposes Pokemon Stadium on the Melee page; port 2 moves there and proposes it too:
 # agreed, the rest of the strikes and the pick skipped, the match on Pokemon Stadium. Port 2 walks
 # off.
-# Game 2 (port 1 won): the character order as bf-ranked-bo3.txt has it; then Luis's example: the
+# Game 2 (port 1 won): the character order as bf-ranked-bo3.txt has it; then the
 # loser (port 2) proposes Battlefield, the winner (port 1) skips its ban with Y and proposes
 # Battlefield too: agreed.
 @scStrap mash 30 99999 1 40 A

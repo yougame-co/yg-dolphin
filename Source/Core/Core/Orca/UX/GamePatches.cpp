@@ -70,8 +70,8 @@ bool InRam(std::optional<u32> address)
           (*address >= 0x90000000 && *address < 0x94000000));
 }
 
-// `when <address> [& <mask>] ==|!= <value>`: nullopt for anything else, a mask of 0, or a value
-// with bits outside the mask (an == that could never hold).
+// Parses `when <address> [& <mask>] ==|!= <value>`. Rejects a zero mask, or a value with bits
+// outside the mask.
 std::optional<PatchCondition> ParseCondition(std::span<const std::string_view> words)
 {
   if (words.size() != 4 && words.size() != 6)
@@ -100,7 +100,7 @@ std::optional<PatchCondition> ParseCondition(std::span<const std::string_view> w
   return c;
 }
 
-// The end of the group that starts at `start` (one past its last line).
+// One past the last line of the group starting at `start`.
 size_t GroupEnd(std::span<const GamePatch> patches, size_t start)
 {
   size_t end = start + 1;
@@ -115,13 +115,13 @@ std::optional<std::vector<GamePatch>> ParseGamePatches(std::string_view text, st
   std::vector<GamePatch> patches;
   std::vector<int> lines;  // each patch's line number
   std::set<u32> seen;
-  // The open `when` block: its conditions, the line of its first `when`, whether a line followed.
+  // The open `when` block.
   std::vector<PatchCondition> when;
   int when_line = 0;
   bool block_has_lines = false;
-  // The next line starts a group whatever its address (it follows a `when` or an `end`).
+  // Set after `when` or `end`: the next line always starts a new group.
   bool group_break = false;
-  // Every condition's address and line, checked once every written address is known.
+  // Checked at the end, once every written address is known.
   std::vector<std::pair<u32, int>> condition_lines;
   const auto fail = [error](std::string message) {
     if (error)
@@ -129,7 +129,7 @@ std::optional<std::vector<GamePatch>> ParseGamePatches(std::string_view text, st
     return std::nullopt;
   };
   int number = 0;
-  if (text.starts_with("\xEF\xBB\xBF"))  // a UTF-8 BOM an editor may add
+  if (text.starts_with("\xEF\xBB\xBF"))  // UTF-8 BOM
     text.remove_prefix(3);
   while (!text.empty())
   {
@@ -178,7 +178,7 @@ std::optional<std::vector<GamePatch>> ParseGamePatches(std::string_view text, st
     const auto address = words.size() == 3 ? Hex32(words[0]) : std::nullopt;
     const auto value = words.size() == 3 ? Hex32(words[2]) : std::nullopt;
     const auto original = words.size() == 3 && words[1] != "*" ? Hex32(words[1]) : std::nullopt;
-    // A word-aligned address in MEM1 or MEM2, and an original that is either `*` or hex.
+    // Address must be word-aligned RAM; original must be `*` or hex.
     if (!InRam(address) || !value || (words[1] != "*" && !original))
       return fail(fmt::format("line {}: expected `<address> <original|*> <value>` in hex", number));
     if (!seen.insert(*address).second)
@@ -202,9 +202,8 @@ std::optional<std::vector<GamePatch>> ParseGamePatches(std::string_view text, st
                               address));
     }
   }
-  // A toggled group writes when memory holds its originals or its values, so one word alone would
-  // match some other module by chance twice as often as a guarded word: two words at least (the
-  // words around a flip as guards), and one that changes (a group of guards never toggles).
+  // A toggled group matches in two states, so require at least two words (to avoid matching
+  // unrelated code by chance) and at least one that changes.
   for (size_t start = 0; start < patches.size();)
   {
     const size_t end = GroupEnd(patches, start);
@@ -263,13 +262,13 @@ Toggle ToggleGroup(std::span<const GamePatch> group, std::span<const u32> now, b
   bool originals = true, values = true, changes = false;
   for (size_t i = 0; i < group.size(); ++i)
   {
-    if (!group[i].original)  // never so in a parsed file
+    if (!group[i].original)  // can't happen in a parsed file
       return Toggle::Leave;
     originals &= now[i] == *group[i].original;
     values &= now[i] == group[i].value;
     changes |= group[i].value != *group[i].original;
   }
-  // A group of guards only is both at once and never writes.
+  // A group of guards only never writes.
   if (!changes)
     return Toggle::Leave;
   if (holds && originals)
@@ -326,14 +325,12 @@ PatchPlan PlanGamePatches(std::span<const GamePatch> patches, const GuestMemory&
 
 namespace
 {
-// The active profile's patches, loaded when the profile changes (a process could boot a second
-// game), on the CPU thread only.
+// Reloaded when the profile changes. CPU thread only.
 const std::vector<GamePatch>& ActivePatches()
 {
   static std::string s_for;
   static std::vector<GamePatch> s_patches;
-  // A disc profile's file (RSBE01.patches) or a launcher profile's (PPLUS32.patches). A launcher's
-  // frame hook, which calls this, goes live only once the game it boots is in RAM.
+  // e.g. RSBE01.patches for a disc, PPLUS32.patches for a launcher.
   const Orca::Profile* profile = Orca::ActiveProfile();
   const std::string game = profile ? profile->game_id : std::string{};
   if (game != s_for)
@@ -367,9 +364,7 @@ void Apply(const Core::CPUThreadGuard& guard, bool toggled)
     return;
   GuardMemory memory(guard);
   const PatchPlan plan = PlanGamePatches(patches, memory, toggled);
-  // A guarded group lands once per load of its module, and again on a re-run that crosses that
-  // load (Tools/orca/online-menu.py checks where, reading "patch group <address> " as a landing);
-  // a toggled group switches at each change of its condition, and again on re-runs that cross one.
+  // Tools/orca/online-menu.py parses "patch group <address> " lines; keep the format.
   for (const PatchPlan::Group& g : plan.landed)
     INFO_LOG_FMT(ROLLBACK, "Orca: patch group {:08x} ({} words) landed", g.address, g.words);
   for (const PatchPlan::Group& g : plan.on)
@@ -379,7 +374,7 @@ void Apply(const Core::CPUThreadGuard& guard, bool toggled)
   for (const PatchWrite& w : plan.writes)
   {
     if (w.code)
-      ApplyMemoryPatch<u32>(guard, w.value, w.address);  // code: drop the JIT's copy
+      ApplyMemoryPatch<u32>(guard, w.value, w.address);  // invalidates the JIT's copy
     else
       PowerPC::MMU::HostWrite<u32>(guard, w.value, w.address);
   }

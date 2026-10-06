@@ -40,8 +40,8 @@ public:
 };
 }  // namespace
 
-// The 16-bit lane forms of ORR/BIC (vector, immediate) must act on every halfword. They used to be
-// encoded with a 32-bit cmode, so they acted on every word instead.
+// The 16-bit lane forms of ORR/BIC (vector, immediate) must act on every halfword. Encoding them
+// with a 32-bit cmode would act on every word instead.
 TEST(JitArm64, VectorModImm_16BitLanes)
 {
   TestVectorModImm test;

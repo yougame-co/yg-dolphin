@@ -1,8 +1,8 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-// Orca::PrioritizeThread (Profile.h): interactive scheduling for the threads an input's way through
-// Orca runs on. Kept apart from Profile.cpp so the platform headers it needs stay out of there.
+// Orca::PrioritizeThread (Profile.h): raises the priority of the threads on the input path. Kept
+// out of Profile.cpp so the platform headers stay out of there.
 
 #include "Core/Orca/Profile.h"
 
@@ -46,8 +46,8 @@ bool Wanted(LatencyThread thread)
     return false;
   if (knob == "1" || thread != LatencyThread::Cpu)
     return true;
-  // A scripted harness run goes as fast as it can unless something paces it (an online match, or
-  // YG_THROTTLE): left as it was, it can't hold a core at interactive priority for minutes.
+  // An unpaced harness run (no online match, no YG_THROTTLE) runs flat out, so it must not hold a
+  // core at interactive priority.
   return !Rollback::Harness::Active() || Online::Enabled() || Rollback::Diag::KeepThrottle();
 }
 }  // namespace
@@ -57,10 +57,9 @@ void PrioritizeThread(LatencyThread thread)
   if (!Wanted(thread))
     return;
 #if defined(_WIN32)
-  // The CPU thread runs flat out between throttles, a notch up; the two network threads mostly
-  // wait, and should run the moment their data arrives. Power throttling (EcoQoS) off for the
-  // thread too, as Dolphin already does for the process (Timer::IncreaseResolution): Orca's window
-  // is a child of the app's, so Windows never counts Orca as the foreground process.
+  // The CPU thread runs flat out, so one notch up; the network threads mostly wait and should wake
+  // at once. EcoQoS is also turned off per thread: Orca's window is a child of the app's, so
+  // Windows never treats Orca as the foreground process.
   const bool ok = SetThreadPriority(GetCurrentThread(), thread == LatencyThread::Cpu ?
                                                             THREAD_PRIORITY_ABOVE_NORMAL :
                                                             THREAD_PRIORITY_HIGHEST) != 0;

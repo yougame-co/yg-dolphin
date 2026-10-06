@@ -69,8 +69,7 @@ public:
   int writes = 0;
 };
 
-// The set-ups as the game formats them (harness RAM dumps, 2026-10-04): a name plate's and the
-// rules bar's, each 43 bytes.
+// The game's own 43-byte set-ups (from RAM dumps): a name plate's and the rules bar's.
 const std::vector<u8> kPlateSetup{0x17, 0xff, 0xbf, 0x00, 0x04, 0x00, 0x3e, 0xff, 0xf0, 0x18, 0x01,
                                   0x03, 0x18, 0x10, 0x30, 0x1d, 0x20, 0x1c, 0x00, 0xcc, 0x0d, 0x40,
                                   0x40, 0x0f, 0xff, 0x00, 0x05, 0x01, 0x02, 0x02, 0x0c, 0xed, 0xce,
@@ -79,8 +78,7 @@ const std::vector<u8> kRulesSetup{0x17, 0xff, 0x48, 0x00, 0x12, 0x00, 0xb8, 0xff
                                   0x03, 0x18, 0x10, 0x30, 0x1d, 0x20, 0x1c, 0x00, 0xcc, 0x0d, 0x40,
                                   0x40, 0x0f, 0xff, 0x00, 0x05, 0x01, 0x02, 0x01, 0x0c, 0xff, 0xff,
                                   0xff, 0xff, 0x04, 0xff, 0xff, 0xff, 0xff, 0x03, 0x00, 0x00};
-// The rules bar's message for a stock battle: a width, a colour, the words, the colour's end and a
-// width again.
+// The rules bar's stock-battle message: width and colour codes around the words.
 const std::vector<u8> kRulesBefore{0x11, 0x29, 0xff, 0xff, 0xff, 0x12, 0x02, 0x0c, 0x56, 0x54, 0x4f, 0xff};
 const std::vector<u8> kRulesAfter{0x13, 0x11, 0x00, 0x00, 0x00, 0x00};
 
@@ -98,7 +96,7 @@ u32 BoxAt(u32 k)
   return BOXES + k * 0x200;
 }
 
-// A message buffer object `k` holding `bytes` (the set-up and the message), with its end byte.
+// Message buffer object `k` holding `bytes` (set-up plus message), followed by the end byte.
 void PutBox(FakeMemory& m, u32 k, const std::vector<u8>& bytes, u32 capacity = 256)
 {
   const u32 object = BoxAt(k);
@@ -131,8 +129,8 @@ std::vector<u8> RulesMessage(std::string_view words)
   return Concat({kRulesSetup, kRulesBefore, Bytes(words), kRulesAfter});
 }
 
-// The Versus character select: four player areas (`joined` bit p: a human in area p), each with
-// its plate ("PLAYER n" or "  NONE"), and the rules bar.
+// The Versus character select: four player areas (bit p of `joined` = a human in area p), each
+// with its plate ("PLAYER n" or "  NONE"), plus the rules bar.
 FakeMemory Css(u8 joined)
 {
   FakeMemory m;
@@ -162,9 +160,8 @@ FakeMemory Css(u8 joined)
   return m;
 }
 
-// READY TO FIGHT! in the character select's archive (Relabel.h): the scene's gfArchive (+0x410)
-// whose image holds MiscData 30, a bres with the band's texture and Brawl's palette. Returns its
-// marked entry's address.
+// The READY TO FIGHT! band (Relabel.h): the scene's archive (+0x410) holds MiscData 30, a bres
+// with the band's texture and palette. Returns the palette data's address.
 constexpr u32 ARCHIVE_OBJECT = 0x934CDD80;
 constexpr u32 IMAGE = 0x92F67FA0;  // 32-byte aligned
 u32 PutReadyBand(FakeMemory& m)
@@ -218,14 +215,14 @@ u32 PutReadyBand(FakeMemory& m)
   return plt + 0x40;
 }
 
-// Ports 1 and 2's tokens down on a character (Queue::CssPort placed).
+// Ports 1 and 2 have placed their tokens on a character.
 void PlaceTokens(FakeMemory& m)
 {
   for (u32 p = 0; p < 2; ++p)
     m.Put32(AREAS + p * 0x500 + 0x1B8, 3);
 }
 
-// The match block with a queue header (`flags`: MB::FLAG_QUEUE2, FLAG_SOLO), casual or ranked.
+// A match block with a queue header (`flags`: MB::FLAG_QUEUE2, FLAG_SOLO), casual or ranked.
 void PutHeader(FakeMemory& m, u8 flags, bool ranked)
 {
   for (u32 i = 0; i < MB::FULL_SIZE; ++i)
@@ -303,14 +300,14 @@ TEST(OrcaNativeText, SetWordsKeepsTheCodesAndTheLength)
     EXPECT_EQ(m.Read8(buffer + static_cast<u32>(i)), want[i]) << i;
   EXPECT_EQ(m.Read8(buffer + static_cast<u32>(want.size())), NT::END);
   EXPECT_EQ(m.Read32(BoxAt(RULES_BOX) + NT::BUFFER_LENGTH), want.size());
-  // Read again, it is the same box with the new words; the same words again write nothing.
+  // Re-reading finds the new words; writing the same words again is a no-op.
   const auto again = NT::ReadBox(m, BoxAt(RULES_BOX));
   ASSERT_TRUE(again);
   EXPECT_EQ(NT::Words(m, *again), "Press Start to lock in  0:27");
   const int writes = m.writes;
   EXPECT_EQ(NT::SetWords(m, *again, "Press Start to lock in  0:27"), 0);
   EXPECT_EQ(m.writes, writes);
-  // Shorter: the length follows, the codes move up.
+  // Shorter words: the length shrinks and the trailing codes move up.
   EXPECT_EQ(NT::SetWords(m, *again, "Both locked in"), 1);
   EXPECT_EQ(WordsOf(m, RULES_BOX), "Both locked in");
   EXPECT_EQ(m.Read32(BoxAt(RULES_BOX) + NT::BUFFER_LENGTH), RulesMessage("Both locked in").size());
@@ -351,7 +348,7 @@ TEST(OrcaNativeText, TextTheFontCanDraw)
 
 TEST(OrcaNativeText, AFriendsRoomNamesItsPlayersOnTheirPlates)
 {
-  // No queue header: the plates of joined, named ports; the rules bar stays the game's.
+  // No queue header: joined, named ports get their names; the rules bar stays the game's.
   FakeMemory m = Css(0b0011);
   const std::vector<Orca::Events::PortInfo> ports{Port(0, "ada"), Port(1, "bo", -1, true),
                                                   Port(2, "cy")};
@@ -362,13 +359,12 @@ TEST(OrcaNativeText, AFriendsRoomNamesItsPlayersOnTheirPlates)
   EXPECT_EQ(WordsOf(m, 1), "BO");
   EXPECT_EQ(WordsOf(m, 2), "  NONE");  // port 3 hasn't joined its panel
   EXPECT_EQ(WordsOf(m, RULES_BOX), "-man survival test!");
-  // Idempotent: the same boundary again writes nothing.
+  // Idempotent: a second pass writes nothing.
   const int writes = m.writes;
   EXPECT_EQ(NT::Apply(m, ports, &shown), 0);
   EXPECT_EQ(m.writes, writes);
   EXPECT_EQ(shown, 0b0011);
-  // The game formats a plate again (a tag picked, a port rejoining): the next boundary puts the
-  // name back.
+  // The game reformats a plate (tag picked, port rejoined): the next pass puts the name back.
   PutBox(m, 0, Concat({kPlateSetup, Bytes("PLAYER 1")}));
   EXPECT_EQ(NT::Apply(m, ports, &shown), 1);
   EXPECT_EQ(WordsOf(m, 0), "ADA");
@@ -385,8 +381,8 @@ TEST(OrcaNativeText, NothingOffTheCharacterSelect)
 
 TEST(OrcaNativeText, TheSameWordsOnBothMachines)
 {
-  // Ranked queue room, game 1, port 1 locked in: each machine sees the other as remote, and both
-  // write the same bytes (no "you").
+  // Each machine sees the other player as remote, yet both must write identical bytes (no "you"),
+  // since the text lives in emulated memory, which must stay identical on both.
   const auto room = [](bool host) {
     FakeMemory m = Css(0b0011);
     PutHeader(m, MB::FLAG_QUEUE2, true);
@@ -401,7 +397,7 @@ TEST(OrcaNativeText, TheSameWordsOnBothMachines)
   const FakeMemory a = room(true);
   const FakeMemory b = room(false);
   EXPECT_EQ(a.bytes, b.bytes);
-  // The names alone, no rating by them (Luis, 2026-10-05).
+  // Plates show names only, no rating.
   EXPECT_EQ(WordsOf(a, 0), "ADA");
   EXPECT_EQ(WordsOf(a, 1), "BO");
   EXPECT_EQ(WordsOf(a, RULES_BOX), "Game 1: ADA locked in, BO to press Start  0:24");
@@ -409,9 +405,8 @@ TEST(OrcaNativeText, TheSameWordsOnBothMachines)
 
 TEST(OrcaNativeText, TheBandTakesTheTimerWhenItSaysLockIn)
 {
-  // Design F: a ranked room's ready step, both tokens down: READY TO FIGHT! is up and says PRESS
-  // START TO LOCK IN! (Relabel.h) with the timer at its end, so the rules bar leaves its own out.
-  // The same bytes on both machines, nothing more at the same boundary again.
+  // Ranked ready step with both tokens down: the band reads PRESS START TO LOCK IN! and shows
+  // the timer, so the rules bar drops its own.
   const auto room = [](bool host) {
     FakeMemory m = Css(0b0011);
     PutReadyBand(m);
@@ -434,7 +429,7 @@ TEST(OrcaNativeText, TheBandTakesTheTimerWhenItSaysLockIn)
   EXPECT_EQ(WordsOf(a, RULES_BOX), "Game 1: ADA locked in, BO to press Start");
   const std::vector<Orca::Events::PortInfo> ports{Port(0, "ada", 1532), Port(1, "bo", 1490, true)};
   EXPECT_TRUE(Relabel::ClockInBand(a, ports));
-  // The frame hook hands NativeText Relabel's own answer: the same one.
+  // The frame hook passes Relabel's answer to NativeText; it must match.
   Relabel::Shown labels;
   Relabel::Apply(a, ports, &labels);
   EXPECT_TRUE(Relabel::ClockInBand(labels));
@@ -442,7 +437,7 @@ TEST(OrcaNativeText, TheBandTakesTheTimerWhenItSaysLockIn)
   EXPECT_EQ(Relabel::Apply(a, ports), 0);
   EXPECT_EQ(NT::Apply(a, ports), 0);
   EXPECT_EQ(a.writes, writes);
-  // BO picks the token up: the band goes (the game's), the bar has the timer again.
+  // BO picks the token up: the band reverts to the game's and the bar shows the timer again.
   a.Write8(AREAS + 0x500 + 0x1F8, 1);
   EXPECT_FALSE(Relabel::ClockInBand(a, ports));
   Relabel::Apply(a, ports, &labels);
@@ -450,7 +445,7 @@ TEST(OrcaNativeText, TheBandTakesTheTimerWhenItSaysLockIn)
   NT::Apply(a, ports);
   EXPECT_EQ(WordsOf(a, RULES_BOX), "Game 1: ADA locked in, BO to press Start  0:24");
   a.Write8(AREAS + 0x500 + 0x1F8, 0);
-  // Time's up: no more PRESS START; the game's words.
+  // Time's up: the band goes back to the game's words.
   a.Write8(Queue::FLAGS, Queue::FLAG_TIMED_OUT);
   a.Write8(Queue::TIMEOUT_WHO, 2);
   Relabel::Apply(a, ports);
@@ -482,10 +477,10 @@ TEST(OrcaNativeText, TheRulesBarFollowsTheQueue)
             "Time's up, BO didn't lock in");
   EXPECT_EQ(line([](FakeMemory& m) { m.Write8(MB::PLUGGED, 1); }),
             "Opponent found, waiting for BO...");
-  // Casual's later games: a pick first, and no timer.
+  // Later casual games: pick first, no timer.
   EXPECT_EQ(line([](FakeMemory& m) { m.Write8(MB::FOUGHT, 1); }),
             "Pick with A, then Start to lock in");
-  // The plates carry the names alone.
+  // Plates show names only.
   FakeMemory m = Css(0b0011);
   PutHeader(m, MB::FLAG_QUEUE2, false);
   NT::Apply(m, ports);
@@ -503,7 +498,7 @@ TEST(OrcaNativeText, TheQueuesOwnCharacterSelect)
   EXPECT_EQ(WordsOf(m, 0), "ADA");
   EXPECT_EQ(WordsOf(m, 1), "  NONE");
   EXPECT_EQ(shown, 0x01 | NT::SHOWN_RULES);
-  // Searching: the opponent's empty seat says so (design F); the others stay the game's.
+  // Searching: the opponent's empty seat says SEARCHING; the others stay the game's.
   m.Write8(Queue::READY, 1);
   NT::Apply(m, ports, &shown);
   EXPECT_EQ(WordsOf(m, RULES_BOX), "Ranked: searching for an opponent...  B to cancel");
@@ -513,7 +508,7 @@ TEST(OrcaNativeText, TheQueuesOwnCharacterSelect)
   const int writes = m.writes;
   EXPECT_EQ(NT::Apply(m, ports, &shown), 0);
   EXPECT_EQ(m.writes, writes);
-  // Cancelled: the game's NONE again, as it formats it.
+  // Cancelled: back to the game's own NONE.
   m.Write8(Queue::READY, 0);
   NT::Apply(m, ports, &shown);
   EXPECT_EQ(WordsOf(m, 1), "  NONE");
@@ -521,8 +516,8 @@ TEST(OrcaNativeText, TheQueuesOwnCharacterSelect)
   EXPECT_EQ(NT::Apply(m, ports, &shown), 0);
 }
 
-// Project+ (the same boxes): the plates take the names, the rules bar keeps the game's words (its
-// message has no width code; the overlay docks its lines on the bar instead).
+// Project+: the plates take the names, but the rules bar keeps the game's words (its message has
+// no width code, so the overlay shows those lines instead).
 TEST(OrcaNativeText, ProjectPlusKeepsItsRulesBar)
 {
   FakeMemory m = Css(0b0011);
@@ -540,7 +535,7 @@ TEST(OrcaNativeText, ProjectPlusKeepsItsRulesBar)
 
 TEST(OrcaNativeText, TheCharacterOrderAndTheSetInTheThirdPerson)
 {
-  // Ranked game 2 after ada won game 1: the character order, winner first.
+  // Ranked game 2 after ada won game 1: the winner picks first.
   const auto room = [](CharOrder::Step step, int elapsed) {
     FakeMemory m = Css(0b0011);
     PutHeader(m, MB::FLAG_QUEUE2, true);
@@ -565,8 +560,8 @@ TEST(OrcaNativeText, TheCharacterOrderAndTheSetInTheThirdPerson)
   FakeMemory second = room(CharOrder::Step::Second, 0);
   NT::Apply(second, ports);
   EXPECT_EQ(WordsOf(second, RULES_BOX), "ADA 1-0 BO: BO picks, A then Start  0:45");
-  // READY TO FIGHT! names the turn (Relabel.h): the winner's, then the loser's. With both tokens
-  // down the band has the timer and the bar doesn't.
+  // The band names whose turn it is (Relabel.h). With both tokens down the band has the timer and
+  // the bar doesn't.
   for (const auto& [step, label] : {std::pair{CharOrder::Step::First, 0x0224},
                                     std::pair{CharOrder::Step::Second, 0x0225}})
   {
@@ -580,7 +575,7 @@ TEST(OrcaNativeText, TheCharacterOrderAndTheSetInTheThirdPerson)
                                          "ADA 1-0 BO: ADA picks, Start locks it in" :
                                          "ADA 1-0 BO: BO picks, Start locks it in");
   }
-  // The set over: who won it, nothing else.
+  // Set over: only the winner.
   FakeMemory over = room(CharOrder::Step::Idle, 0);
   over.Write8(MB::BASE + SetBlock::SET_WINS, 2);
   over.Write8(MB::BASE + SetBlock::SET_DONE, 1);

@@ -1,9 +1,8 @@
-# Random in a ranked queue2 set (Orca 0.3.19, ORCA.md "Random and ranked's no skip"; Luis,
-# 2026-10-05: "for both casual and ranked, I should be able to select random if I want to"), Brawl,
-# as bf-css-lockin.txt but every pick is RANDOM (the character select's id 0x29, Selch_Random; the
-# tile at the right end of the grid's bottom row, about 22.8..28.7, -4.1..0.1):
+# Random in a ranked queue2 set (ORCA.md "Random and ranked's no skip": Random is allowed in casual
+# and ranked), Brawl, as bf-css-lockin.txt but every pick is RANDOM (character id 0x29,
+# Selch_Random; the tile at the right end of the grid's bottom row, about 22.8..28.7, -4.1..0.1):
 #   - game 1: on the player's own character select port 1 goes up 20 frames and right 58 (25.6,
-#     -3.2) onto RANDOM's bottom quarter, where Orca 0.3.18's A gate (-3.0) swallowed A, A, Start:
+#     -3.2) onto RANDOM's bottom quarter (an A gate edge case), A, Start:
 #     `orca queue ready ranked 41 0`; port 2's pick (ORCA_TEST_QUEUE_PICK) is Random too, steered
 #     onto the host's RANDOM tile; both ready (the game resolves both Randoms as the character
 #     select ends), the stage select's two cursors (bf-sss-cursors.txt); port 2 walks off;

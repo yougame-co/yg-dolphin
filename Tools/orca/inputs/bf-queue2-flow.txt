@@ -1,5 +1,5 @@
-# The whole casual queue2 flow in one run (ORCA.md "The queue's character select", Orca 0.3.14's
-# check), Brawl: boot -> the main menu -> PLAY ONLINE > With Anyone > Casual -> the player's own
+# The whole casual queue2 flow in one run (ORCA.md "The queue's character select"),
+# Brawl: boot -> the main menu -> PLAY ONLINE > With Anyone > Casual -> the player's own
 # character select (the solo header): port 1 takes Mario and presses Start (ready) -> from
 # ORCA_TEST_QUEUE_PICK's frame port 2 plugs in with its pick (Link), the header becomes the room's
 # (queue2) and the pick is steered in -> both press Start (ready) -> Orca presses Start -> the

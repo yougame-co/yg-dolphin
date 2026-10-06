@@ -53,7 +53,7 @@ FakeMemory DeadArea()
 
 // Project+, game 2, port 1 won game 1, in the standard order (the winner first).
 const SetView kGame2{Ruleset::PPlus, 2, 0, Order::WinnerFirst};
-// Brawl, game 2, port 2 won game 1, in Luis's order (the loser asked first, the winner free).
+// Brawl, game 2, port 2 won game 1, in the Free order (the loser asked first, the winner free).
 const SetView kBrawl2{Ruleset::Brawl, 2, 1, Order::Free};
 
 State St(int game, Step step, int first, u32 since, int elapsed, int locked = 0)
@@ -125,8 +125,8 @@ TEST(OrcaCharOrder, NothingOnGameOneFriendsOrOffTheCharacterSelect)
   EXPECT_EQ(Gate(kGame2, off, on), Rollback::InputGate::Masks{});
 }
 
-// Design F frames the picker's portrait: the first picker's turn, then the second's; nobody before
-// the order starts, once it's done, or off the character select.
+// The overlay frames the current picker's portrait: first picker, then second. Nobody before the
+// order starts, after it's done, or off the character select.
 TEST(OrcaCharOrder, PickerIsWhoseTurnItIs)
 {
   EXPECT_EQ(Picker(Css(), State{}), -1);
@@ -143,11 +143,11 @@ TEST(OrcaCharOrder, PickerIsWhoseTurnItIs)
 // The ribbon on the picker's portrait: YOUR PICK on their own screen, their name on the other's.
 TEST(OrcaCharOrder, PickerRibbonSaysWhoseTurnItIs)
 {
-  const std::vector<Orca::Events::PortInfo> ports{{0, "Crunch", false, {}},
-                                                  {1, "Hbox", true, {}}};
+  const std::vector<Orca::Events::PortInfo> ports{{0, "Ada", false, {}},
+                                                  {1, "Bo", true, {}}};
   EXPECT_EQ(PickerRibbon(0, ports), "YOUR PICK");
-  EXPECT_EQ(PickerRibbon(1, ports), "HBOX PICKS");
-  EXPECT_EQ(PickerRibbon(1, {{0, "Crunch", false, {}}, {1, "", true, {}}}), "P2 PICKS");
+  EXPECT_EQ(PickerRibbon(1, ports), "BO PICKS");
+  EXPECT_EQ(PickerRibbon(1, {{0, "Ada", false, {}}, {1, "", true, {}}}), "P2 PICKS");
   EXPECT_EQ(PickerRibbon(-1, ports), "");
 }
 
@@ -217,9 +217,8 @@ TEST(OrcaCharOrder, RandomLocksInLikeAnyCharacter)
 
 TEST(OrcaCharOrder, APicksBTakesTheTokenUpAndNeitherLocksIn)
 {
-  // Luis's "stuck" (Orca 0.3.14, 2026-10-04): the winner's token was down on last game's
-  // character; A on another character locked that one in and the controller went dead. Now A and B
-  // are the game's, the order waits for Start.
+  // A and B belong to the game; only Start locks in. Otherwise A on another character, with the
+  // token still down on last game's pick, would lock that one in and leave the controller dead.
   State s = Twice(kGame2, Css(), State{}, 0);
   // The token down, A on another character (the game does nothing with it): still the turn.
   s = Twice(kGame2, Press(Css(), 0, A), s, 10);
@@ -407,8 +406,8 @@ TEST(OrcaCharOrder, TestKnob)
 
 TEST(OrcaCharOrder, TheOrderIsOneConstantWinnerFirstByDefault)
 {
-  // Luis's order (2026-10-04: "Winner chooses character first") unless the integrator flips
-  // kLaterGameOrder; the set read from the match block carries it.
+  // The winner chooses first unless kLaterGameOrder is changed; the set read from the match block
+  // carries the order.
   EXPECT_EQ(kLaterGameOrder, Order::WinnerFirst);
   EXPECT_EQ(SetView{}.order, kLaterGameOrder);
   EXPECT_EQ(FirstPicker(SetView{Ruleset::PPlus, 2, 0, Order::Free}), 1);

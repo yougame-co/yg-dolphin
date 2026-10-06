@@ -17,29 +17,26 @@ namespace Core
 class CPUThreadGuard;
 }
 
-// A matchmade game's result, read from the game's own memory (ORCA.md "Matchmaking"): which port
-// won, and the stage, characters and stocks, for the room's game reports. Read only: nothing here
-// writes emulated memory (except QueueRules below, a host's own solo frames before any keyframe).
+// Reads a matchmade game's result from the game's memory: which port won, plus the stage,
+// characters and stocks for the room's game reports. Read only, except QueueRules below, which a
+// host writes during solo frames before any keyframe.
 //
-// Found under the harness (ORCA_UX_PROBE dumps, Brawl rev 2 and Project+ alike, which run the same
-// executable and scene code), from g_GameGlobal (0x805A00E0 -> 0x90181300):
-//   +0x08 gmGlobalModeMelee (0x90180F20): +0x1B the stage id, +0x20 the time limit in frames;
-//         +0x98 the players' init data, 4 x 0x5C: +0x00 character, +0x01 player type (0 human,
-//         1 CPU, 3 none), +0x04 starting stocks (0xFF in a timed match)
-//   +0x18 the result info (0x9017F420), filled as the fight scene ends (before the results scene's
-//         first frame):
-//         +0x01 u8 the rules' mode (0 time, 1 stock); +0x04 u32 time limit (minutes); +0x08 u32
-//         stocks; +0x0C u16 the stage id; +0x0E u16 how the fight ended (1 normally, by stocks or
-//         by time; 2 a "no contest", the pause menu's L+R+A+Start); +0x1378 u8 the decision
-//         (BrawlHeaders' gmResultInfo::DecisionKind: 1 time up, 2 a win, 9 no contest)
-//         one record per port at +0x24 + port * 0x2AC: +0x00 u8 character, +0x01 u8 player type
-//         (as above), +0x0A u8 stocks left (0xFF in a timed match), +0x0E u8 place (0 the
-//         winner; a 1v1's loser 1), +0x10 u32 KOs, +0x14 u32 falls, +0x18 u16 self-destructs
-//   +0x1C the rules (0x9017F360): +0x02 u8 mode (0 time, 1 stock), +0x03 u8 a timed match's
-//         minutes, +0x04 u8 stocks, +0x08 u8 a stock match's time limit in minutes (0 none),
-//         +0x0C u8 item frequency (0 none)
-// The scene names (the scene manager 0x805A0060 +4 -> +0 name): "scMelee" the fight,
-// "scMemoryChange" between scenes, "scVsResult" the results screen.
+// Memory layout (Brawl rev 2; Project+ runs the same executable), from g_GameGlobal
+// (0x805A00E0 -> 0x90181300):
+//   +0x08 gmGlobalModeMelee (0x90180F20): +0x1B stage id, +0x20 time limit in frames,
+//         +0x98 players' init data, 4 x 0x5C: +0x00 character, +0x01 player type (0 human, 1 CPU,
+//         3 none), +0x04 starting stocks (0xFF in a timed match)
+//   +0x18 result info (0x9017F420), filled before the results scene's first frame:
+//         +0x01 u8 mode (0 time, 1 stock), +0x04 u32 time limit (minutes), +0x08 u32 stocks,
+//         +0x0C u16 stage id, +0x0E u16 how the fight ended, +0x1378 u8 decision (1 time up,
+//         2 win, 9 no contest)
+//         per port at +0x24 + port * 0x2AC: +0x00 u8 character, +0x01 u8 player type,
+//         +0x0A u8 stocks left (0xFF timed), +0x0E u8 place (0 winner), +0x10 u32 KOs,
+//         +0x14 u32 falls, +0x18 u16 self-destructs
+//   +0x1C rules (0x9017F360): +0x02 u8 mode, +0x03 u8 timed minutes, +0x04 u8 stocks,
+//         +0x08 u8 stock match time limit in minutes (0 none), +0x0C u8 item frequency (0 none)
+// Scene names (scene manager 0x805A0060 +4 -> +0 name): "scMelee" fight, "scMemoryChange" between
+// scenes, "scVsResult" results screen.
 namespace Orca::UX
 {
 class GuestMemory;
@@ -58,10 +55,9 @@ struct ResultBlock
 {
   int mode = -1;  // 0 time, 1 stock
   int stage = -1;
-  // +0x0E..+0x0F: read as how the fight ended (1 normally, 2 a no contest) by the beta; it is the
-  // count of players tied for first (BrawlHeaders' m_numWinners at +0x0F).
+  // Bytes +0x0E..+0x0F. +0x0F is the number of players tied for first (m_numWinners).
   int end = 0;
-  int decision = 0;  // gmResultInfo +0x1378: 1 time up, 2 a KO win, 9 no contest (0: not read)
+  int decision = 0;  // +0x1378: 1 time up, 2 KO win, 9 no contest (0: not read)
   std::array<PortResult, 4> ports{};
   bool operator==(const ResultBlock&) const = default;
 };
@@ -78,15 +74,15 @@ struct Reading
   Scene scene = Scene::Other;
   // In the results scene only.
   ResultBlock block;
-  // A ranked match block's set (RankedSet.h), at every boundary of a ranked queue match.
+  // The ranked match block's set state, on every frame of a ranked match.
   std::optional<SetBlock::SetState> set;
   bool operator==(const Reading&) const = default;
 };
 
-// One frame boundary's reading (reads only).
+// Reads one frame's state (read only).
 Reading ReadResults(const GuestMemory& memory);
 
-// One game, as both players' Orcas report it.
+// One game's result, as both players report it.
 struct GameResult
 {
   enum class Kind
@@ -100,18 +96,16 @@ struct GameResult
   int winner_port = -1;
   // Void: why ("nocontest", "ports").
   std::string why;
-  // The detail (Win and Draw): the frame of the first results-scene reading, the stage, ports 1
-  // and 2's characters and stocks left (-1 in a timed match), and whether the fight ran out of
-  // time.
+  // Win and Draw: first results-scene frame, stage, ports 1 and 2's characters and stocks left
+  // (-1 timed), and whether time ran out.
   int frame = -1;
   int stage = -1;
   std::array<int, 2> characters{-1, -1};
   std::array<int, 2> stocks{-1, -1};
   bool timeout = false;
-  // A ranked set's game (from the match block): its fight's first frame (the report's id, the same
-  // on both machines), its number in the set, how it was decided (SetBlock::How), a tiebreak
-  // game, each port's ledge grabs; and, for the game that ended the set, the set's end (1 won by
-  // `set_winner`, 2 void).
+  // Ranked set games only (from the match block): the fight's first frame (the report id, same on
+  // both machines), game number, how it was decided (SetBlock::How), tiebreak, each port's ledge
+  // grabs, and for the deciding game the set's end (1 won by `set_winner`, 2 void).
   int start = -1;
   int number = 0;
   int how = 0;
@@ -121,37 +115,33 @@ struct GameResult
   int set_winner = -1;
   bool operator==(const GameResult&) const = default;
 
-  // {"f":F,"st":S,"c":[c1,c2],"s":[s1,s2],"to":0|1}: integers only, port order, this key order; a
-  // ranked set's game adds "k":how,"lg":[l1,l2],"tb":0|1 (F is then its fight's first frame).
+  // {"f":F,"st":S,"c":[c1,c2],"s":[s1,s2],"to":0|1}: integers only, port order, this key order. A
+  // ranked set game adds "k":how,"lg":[l1,l2],"tb":0|1 (F is then the fight's first frame).
   std::string DetailJson() const;
 };
 
-// A ranked set's game as the match block recorded it (index `index` of `set`).
+// Game `index` of a ranked set, as the match block recorded it.
 GameResult FromRecord(const SetBlock::SetState& set, int index);
 
-// A results screen's verdict: exactly two human players on ports 1 and 2 (else void "ports"), a
-// fight that ended normally (else void "nocontest"), one of them placed first (a win) or both (a
-// draw).
+// Judges a results screen. Void "ports" unless exactly two humans are on ports 1 and 2, void
+// "nocontest" unless the fight ended normally. One player first is a win, both first a draw.
 GameResult Judge(const ResultBlock& block, int frame);
 
-// Follows the readings of the frames as they become final, the same on every machine: a game is a
-// fight scene entered at a frame after `plug_frame` (the opponent's plug frame, the same on both
-// machines, so a fight running when the joiner dropped in never counts) and ended by the results
-// scene (a result) or by any other scene (void "nocontest").
+// Turns per-frame readings into game results once those frames are final, identically on every
+// machine. A game is a fight entered after `plug_frame` (so a fight already running when the
+// opponent joined never counts) and ended by the results scene, or by any other scene (void).
 class ResultsTracker
 {
 public:
-  // A frame boundary's reading: `frame` is the frame about to run (the frame hook's), so the
-  // reading is of the state after the frames before it. A re-run's reading replaces the first
-  // run's. `resyncs` is Events::Resyncs(): when it changes the game stopped following on from what
-  // was read (a keyframe loaded, back to solo play), and everything stored is forgotten.
+  // Stores the reading taken at the start of `frame`. A rollback re-run replaces the earlier
+  // reading. When `resyncs` (Events::Resyncs()) changes, the state jumped (keyframe load, back to
+  // solo), so everything stored is dropped.
   void Store(int frame, const Reading& reading, u64 resyncs);
-  // Readings of frames through `confirmed` are final (their inputs were every player's own, and no
-  // re-run is pending): the games they finish, in order.
+  // Frames through `confirmed` are final (real inputs, no re-run pending). Returns the games they
+  // finish, in order.
   std::vector<GameResult> Confirm(int confirmed, int plug_frame);
   void Reset();
-  // The scene of the last final reading (none since the last reset), and of the newest reading
-  // stored (a first run's guess until it is final).
+  // Scene of the last final reading, and of the newest (possibly predicted) reading.
   std::optional<Reading::Scene> FinalScene() const;
   std::optional<Reading::Scene> LatestScene() const;
 
@@ -163,31 +153,28 @@ private:
   bool m_have_last = false;
   int m_last_frame = -1;
   Reading m_last;
-  // A counted fight is on (or between it and its results screen).
+  // A counted fight is on, or between it and its results screen.
   bool m_in_game = false;
   bool m_after_fight = false;
-  // A ranked match block's set: how many of its games were seen (at a final reading) and whether
-  // that count is known yet (the first final reading after a reset only sets it).
+  // Ranked set games seen so far. The first final reading after a reset only initializes the count.
   bool m_have_set = false;
   int m_set_games = 0;
 };
 
-// The process's tracker (CPU thread only).
+// The process-wide tracker (CPU thread only).
 ResultsTracker& Tracker();
 
-// The frame hook's part: stores this boundary's reading (first runs and re-runs).
+// Frame hook: stores this frame's reading (first runs and rollback re-runs).
 void ReadResultsFrame(const Core::CPUThreadGuard& guard, int frame);
 
-// Whether the running profile's results are read as above: Brawl rev 2, and Project+ (its
-// launcher boots Brawl rev 2's executable).
+// Whether the running game's results can be read as above: Brawl rev 2 and Project+.
 bool ResultsVerified();
 
-// A host that takes a matchmade room in Brawl presets its rules: 3 stocks, 8 minutes, items off
-// (ORCA.md "Matchmaking"). Requested at that boundary; written at the next frame hook while the
-// game is alone, before any keyframe of it (a joiner loads them with the host's state). Project+
-// keeps its own rules.
+// A Brawl host presets matchmade rules: 3 stocks, 8 minutes, items off. Written at the next frame
+// hook while the host is still alone, before any keyframe, so the joiner loads them with the
+// host's state. Project+ keeps its own rules.
 void RequestQueueRules();
 void ApplyQueueRules(const Core::CPUThreadGuard& guard, bool alone);
-// The rules' bytes as written (exposed for tests): returns how many bytes changed.
+// Writes the rules (exposed for tests). Returns how many bytes changed.
 int WriteQueueRules(GuestMemory& memory);
 }  // namespace Orca::UX

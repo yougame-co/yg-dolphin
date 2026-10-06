@@ -44,8 +44,8 @@ public:
   void SetNextSwapEstimatedTime(u64 ticks, TimePoint host_time);
 
   void Present(PresentInfo* present_info = nullptr);
-  // Orca: shows the last presented frame again (the online overlay during a stall, when the
-  // emulated machine presents nothing). No fetch, no frame dump, no present events.
+  // Orca: presents the last frame again, so the online overlay keeps updating during a stall.
+  // Doesn't fetch, dump frames or fire present events.
   void RepresentLast();
   void ClearLastXfbId() { m_last_xfb_id = std::numeric_limits<u64>::max(); }
 
@@ -102,27 +102,23 @@ public:
   bool SurfaceChangedTestAndClear() { return m_surface_changed.TestAndClear(); }
   void* GetNewSurfaceHandle();
 
-  // Orca: whether the window system shows the render surface at all. The frontend clears it, from
-  // any thread and before or after the backend exists, while the window is minimized, ordered out
-  // or entirely covered (DolphinNoGUI on macOS). The Metal backend then takes no drawable: its
-  // nextDrawable waits up to a second for a layer nobody sees, and a single-core session would wait
-  // with it. Host only: the emulated GPU's work, its timing and everything the game sees are the
-  // same either way.
+  // Orca: whether the render surface is visible at all. The frontend clears it (from any thread)
+  // while the window is minimized or fully covered. Metal then skips taking a drawable, since
+  // nextDrawable can block for up to a second on a hidden layer and stall the game. Host only:
+  // nothing the game sees changes.
   static void SetSurfaceVisible(bool visible);
   static bool IsSurfaceVisible();
-  // Orca: the most frames a second the screen showing the render surface can show (0: unknown),
-  // set by the frontend as the window moves between screens or a screen's mode changes. A screen
-  // below 59 Hz can't show every frame of a 59.94 Hz game; the Metal backend then never waits for a
-  // drawable (a frame without one isn't shown), so the screen can't slow the game. Host only.
+  // Orca: refresh rate of the screen showing the render surface (0 if unknown), set by the
+  // frontend. Below 59 Hz the Metal backend never waits for a drawable, so a slow screen can't slow
+  // a 59.94 Hz game; frames without a drawable are just not shown. Host only.
   static void SetSurfaceRefreshRate(int hz);
   static int SurfaceRefreshRate();
-  // Orca (embed `view`, VideoCommon/PresentLayout.h): the box the picture is laid out in, relative
-  // to the window, from now on; nullopt: the window itself (Dolphin's layout). Any thread, before
-  // or after the presenter exists; the next present takes it. Host only: the picture is placed and
-  // cropped differently, the emulated frame and the internal resolution are the same.
+  // Orca: sets the box the picture is laid out in, relative to the window (nullopt: the whole
+  // window, as in Dolphin). See PresentLayout.h. Callable from any thread; applies at the next
+  // present. Host only: the emulated frame and internal resolution don't change.
   static void SetLayoutHint(std::optional<LayoutHint> hint);
-  // Orca tests (ORCA_TEST_PRESENT, headless): the test image takes this size at the next present,
-  // as a `rect` sizes the window (any thread).
+  // Orca tests (ORCA_TEST_PRESENT): resizes the headless test image at the next present.
+  // Callable from any thread.
   static void RequestTestPresentSize(int width, int height);
 
   void SetKeyMap(const DolphinKeyMap& key_map);
@@ -143,7 +139,7 @@ private:
   bool FetchXFB(u32 xfb_addr, u32 fb_width, u32 fb_stride, u32 fb_height, u64 ticks);
 
   void ProcessFrameDumping(u64 ticks) const;
-  // Orca tests: the test image to the size RequestTestPresentSize asked for, if it asked.
+  // Orca tests: applies a pending RequestTestPresentSize.
   void ApplyTestPresentSize();
 
   void OnBackBufferSizeChanged();
@@ -178,11 +174,11 @@ private:
   // Width and height correspond to the final output resolution.
   // Offsets imply black borders (if the window aspect ratio doesn't match the game's one).
   MathUtil::Rectangle<int> m_target_rectangle = {};
-  // Orca: the box the picture is fitted into and centred in (UpdateDrawRectangle), in backbuffer
-  // pixels: the whole backbuffer unless an embed `view` lays it out elsewhere (SetLayoutHint).
+  // Orca: the box the picture is fitted and centred in, in backbuffer pixels. The whole
+  // backbuffer unless an embed `view` sets one (SetLayoutHint).
   LayoutBox m_layout_box = {};
-  // The layout hint the last UpdateDrawRectangle used (none: the window), kept while a newer one
-  // waits for the backbuffer to follow the window's resize.
+  // The layout hint last used (nullopt: the window), kept until the backbuffer catches up with a
+  // newer one.
   std::optional<LayoutHint> m_layout_applied;
 
   u32 m_auto_resolution_scale = 1;
@@ -200,8 +196,8 @@ private:
 
   std::unique_ptr<VideoCommon::PostProcessing> m_post_processor;
   std::unique_ptr<VideoCommon::OnScreenUI> m_onscreen_ui;
-  // Orca tests (ORCA_TEST_PRESENT=WxH, headless only): presents go to this image, the OSD and
-  // Orca's overlay on it, and screenshots and frame dumps take it instead of the bare XFB.
+  // Orca tests (ORCA_TEST_PRESENT=WxH, headless only): presents render here, OSD and overlay
+  // included, and screenshots and frame dumps use this image instead of the bare XFB.
   std::unique_ptr<AbstractTexture> m_test_target;
   std::unique_ptr<AbstractFramebuffer> m_test_framebuffer;
 

@@ -35,7 +35,7 @@ namespace Orca::UX
 {
 namespace
 {
-// Adds `more`'s masks to `masks`: a button, stick or press any rule takes is taken.
+// ORs `more` into `masks`. An input any rule takes is taken.
 void Merge(Rollback::InputGate::Masks& masks, const Rollback::InputGate::Masks& more)
 {
   for (int port = 0; port < Rollback::InputGate::PORTS; ++port)
@@ -67,21 +67,20 @@ void Init()
   Orca::Events::SetLocalPadSource([](bool for_frame) { return LocalPad(for_frame); });
   Orca::Events::SetInputAgeSource([] { return GetInputAge(); });
   InitOverlay();
-  // The input gate's one source: every rule's masks for the frame about to run, ORed (the online
-  // rules' locks, the ranked flows' turns), from memory alone.
+  // The input gate's masks for the frame about to run: every rule's masks ORed, from memory alone.
   Rollback::InputGate::SetSource([](const Core::CPUThreadGuard& guard) {
     Rollback::InputGate::Masks masks{};
     if (Rules::ProfileRuleset() == Rules::Ruleset::None)
       return masks;
     GuardMemory memory(guard);
-    // Every session's: no Z on the results screen (its replay save, a dead end in a session).
+    // No Z on the results screen in any session. Its replay save is a dead end online.
     Merge(masks, Rules::SessionMasks(memory));
     Merge(masks, Rules::GateMasks(memory));
     Merge(masks, RankedPPlus::Masks(memory));
     BrawlStages::GateMasks(guard, &masks);
     Rollback::InputGate::Masks order = CharOrder::GateFrame(guard);
-    // On a queue2 room's character select the ready timer gives the Start that goes on (Queue.h):
-    // the character order's own Start, once its picks are in, is not pressed.
+    // On a queue room's character select the ready timer presses Start, so the character order's
+    // own Start is dropped.
     if (Queue::OwnsStart(guard))
     {
       for (Rollback::InputGate::Mask& mask : order)
@@ -91,43 +90,41 @@ void Init()
     Merge(masks, Queue::GateFrame(guard));
     return masks;
   });
-  // The queue's character select sees the presses the gate keeps from the game (Start, B, Z):
-  // each frame's raw buttons go into the match block before it runs (InputGate.h, Queue.h).
+  // Each frame's raw buttons go into the match block before it runs, so the queue's character
+  // select still sees presses the gate hides from the game (Start, B, Z).
   Rollback::InputGate::SetLatch(
       [](const Core::CPUThreadGuard& guard,
          const std::array<std::optional<GCPadStatus>, Rollback::InputGate::PORTS>& raw) {
         Queue::LatchFrame(guard, raw);
-        // The stage select's two cursors (StageCursors.h): each player's stick moves their own.
+        // On the stage select, each player's stick moves their own cursor.
         StageCursors::LatchFrame(guard, raw);
       });
-  // The name tags write emulated memory: the compatibility key carries their version.
   Orca::Events::SetUXCompatVersion(kCompatVersion);
-  // At every frame boundary, first runs and re-runs, before the session saves anything there, with
-  // the ports in effect at that frame (the session's synced plan; ORCA_UX_TEST_NAMES in harness
-  // runs).
+  // Runs at every frame boundary, on first runs and rollback re-runs, before the session saves
+  // state there. Every memory write below must be a pure function of emulated memory, the frame
+  // number and the synced ports, so a re-run writes exactly what the first run did.
   Orca::Events::SetFrameCallback([](const Core::CPUThreadGuard& guard, int frame, bool resimulating,
                                     const std::vector<Orca::Events::PortInfo>& ports, bool alone) {
     static bool s_logged = false;
     if (!std::exchange(s_logged, true))
       NOTICE_LOG_FMT(ROLLBACK, "Orca UX: frame hook live at frame {}", frame);
     ApplyGamePatches(guard);
-    // The main menu's words about going online (a pure function of memory, like the patches).
+    // The main menu's text about going online.
     WriteMenuText(guard);
-    // Reads only: the app hears what the player picked in the game's Online menu.
+    // Read only. Tells the app what the player picked in the game's Online menu.
     ReadOnlineMenu(guard, resimulating, alone);
-    // A friend who plugged in while the host is in the menus: both go to With Friends' character
-    // select (game logic, a pure function of memory and the synced ports, first runs and re-runs).
+    // A friend who joins while the host is in the menus moves both to the With Friends character
+    // select.
     FriendsMove::Frame(guard, frame, resimulating, ports);
-    // A ranked queue match's set, followed in the match block (a pure function of memory).
+    // Tracks a ranked set in the match block.
     RankedSet::Frame(guard, frame, resimulating);
-    // Reads only: each game's result in a matchmade room, once its frames are final (Results.h).
+    // Read only. Reports each game's result in a matchmade room once its frames are final.
     ReadResultsFrame(guard, frame);
-    // Project+'s ranked stage flow (RankedPPlus.h): game logic, a pure function of memory, the
-    // frame number and the synced ports, first runs and re-runs.
+    // Project+'s ranked stage flow.
     RankedPPlus::Frame(guard, frame, resimulating, ports, alone);
-    // A ranked set's stage flow on vanilla Brawl's stage select (a pure function of memory).
+    // A ranked set's stage flow on vanilla Brawl's stage select.
     BrawlStages::FrameHook(guard, resimulating, ports);
-    // What the overlay draws of the stage select's two cursors (reads only, first runs).
+    // Read only, first runs only. Publishes the stage select cursors for the overlay.
     if (!resimulating && Rules::ProfileRuleset() != Rules::Ruleset::None)
     {
       GuardMemory memory(guard);
@@ -137,22 +134,21 @@ void Init()
       StageCursors::Publish(std::move(view));
     }
     ProbeFrame(guard, frame);
-    // The overlay kit dresses as the session's game (local display only).
+    // Local display only. The overlay matches the session's game.
     Kit::SetLook(Rules::ProfileRuleset() == Rules::Ruleset::PPlus ? Kit::Look::ProjectPlus :
                                                                     Kit::Look::Brawl);
-    // This player's own controls in its own game, for the session to carry into a game it joins or
-    // hosts (reads only; only while this game is its player's alone, so never a friend's game).
+    // Read only. Captures this player's own controls while playing alone, so the session can carry
+    // them into a game it joins or hosts.
     if (alone)
       ReadOwnControlsFrame(guard, ports);
-    // Test only, ORCA_UX_TEST_LATE_NAME=<frame>: a friend's name and controls that reached this
-    // machine late. First runs before that frame see them empty, re-runs see them, as when a port's
-    // values arrive between a frame's first run and its re-run: what the session's value channel
-    // rules out (NameTags.h), shown desyncing.
+    // Test only, ORCA_UX_TEST_LATE_NAME=<frame>. Simulates a friend's name arriving late: first
+    // runs before that frame see it empty and re-runs see it, to show the desync the session's
+    // synced value channel prevents.
     static const int s_late = [] {
       const char* v = std::getenv("ORCA_UX_TEST_LATE_NAME");
       return v ? std::atoi(v) : -1;
     }();
-    // Checked every frame: a host that boots solo can take a real friend's drop-in later.
+    // Checked every frame because a host that boots solo can have a friend join later.
     if (s_late >= 0 && !resimulating && frame < s_late && TestKnobsAllowed())
     {
       std::vector<Orca::Events::PortInfo> early = ports;
@@ -171,8 +167,7 @@ void Init()
     {
       WriteNameTags(guard, ports);
     }
-    // The online rules (OnlineRules.h): a queue room's header at an alone boundary, then the
-    // locks it calls for (rules, stages, the ready timer), on first runs and re-runs alike.
+    // The online rules: rule, stage and ready-timer locks for queue rooms.
     u8 plugged = 0;
     for (const Orca::Events::PortInfo& p : ports)
     {
@@ -180,34 +175,26 @@ void Init()
         plugged |= static_cast<u8>(1 << p.port);
     }
     Rules::OnFrame(guard, frame, resimulating, alone, plugged);
-    // A ranked set's character order on later games' character select (CharOrder.h): its state
-    // in the match block, which the input gate reads for the frame about to run.
+    // A ranked set's character order for later games. The input gate reads its state from the
+    // match block.
     CharOrder::Frame(guard, frame, resimulating, ports);
-    // The queue's character select (Queue.h): its ready flags and timer, the joiner's pick put in,
-    // after the character order (a ranked later game's ready timer waits for it).
+    // The queue's character select: ready flags, timer and the joiner's pick. Runs after the
+    // character order, which a ranked later game's ready timer waits for.
     Queue::Frame(guard, frame, resimulating, ports, alone);
-    // The character select's title (CssTitle.h): CASUAL, RANKED or FRIENDS, from the header the
-    // rules just wrote, the menu's pick and the ports (a pure function of them).
+    // The character select's title: CASUAL, RANKED or FRIENDS.
     CssTitle::Frame(guard, resimulating, ports);
-    // The game's big words relabelled (Relabel.h): READY TO FIGHT!, STAGE SELECT, the stage
-    // select's mode title and Project+'s legend, from the same block and ports (pure).
+    // Relabels the game's big titles, such as READY TO FIGHT! and STAGE SELECT.
     const Relabel::Shown labels = Relabel::Frame(guard, resimulating, ports);
-    // Orca's words in the character select's own text boxes (NativeText.h): each named player's
-    // plate, and the rules bar's line in a queue room, from the block the writers above just left
-    // and the synced ports (a pure function of them, first runs and re-runs).
+    // Orca's text in the character select's own text boxes: player names and the rules bar line.
     NativeText::Frame(guard, resimulating, ports, Relabel::ClockInBand(labels));
-    // Last, after every other writer here: a toggled patch group follows its condition as this
-    // boundary's writers left it, so the hook run again at this boundary (a re-run from the
-    // snapshot saved here) decides the same and writes nothing new (GamePatches.h).
+    // Must run last. Toggled patch groups follow the state the writers above left, so a re-run of
+    // this boundary decides the same and writes nothing new.
     ApplyToggledGamePatches(guard);
   });
-  // Nothing is presented while the game waits for a friend: show the last frame again, with the
-  // overlay's "Waiting for <name>..." on it.
+  // While the game waits for a friend, re-present the last frame with "Waiting for <name>...".
   Orca::Events::SetStallCallback([](int stalled_ms) { RepresentDuringStall(stalled_ms); });
-  // The frame meter times the game's shown frames.
   Orca::Events::SetBoundaryCallback([](bool shown) { FrameBoundary(shown); });
-  // The session's plug-in callback, for the overlay's joined/left toasts only (local UI; never a
-  // source for memory writes: those take the frame callback's ports).
+  // For joined/left toasts only. Never a source for memory writes; those use the frame callback.
   Orca::Events::SetPlugInCallback([](int frame, const std::vector<Orca::Events::PortInfo>& ports) {
     const double now = std::chrono::duration<double, std::milli>(
                            std::chrono::steady_clock::now().time_since_epoch())

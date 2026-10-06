@@ -28,11 +28,11 @@ namespace
 std::mutex s_lock;
 Source s_source;
 Latch s_latch;
-// CPU thread only (set at the boundary, read by the SI's polls).
+// CPU thread only: set at the boundary, read when the SI polls.
 Masks s_current{};
 bool s_any = false;  // some mask in s_current is not empty
 
-// ORCA_TEST_GATE, parsed once (a test override: only in a session).
+// ORCA_TEST_GATE, parsed once.
 struct TestKnob
 {
   std::vector<TestRule> rules;
@@ -70,7 +70,7 @@ u64 TestMemoryHash(const Core::CPUThreadGuard& guard)
   return XXH3_64bits(memory.GetRAM() + offset, TEST_HASH_SIZE);
 }
 
-// Splits at every `delim`, keeping empty fields (so a stray separator is an error, not ignored).
+// Splits at every `delim`, keeping empty fields so a stray separator is an error.
 std::vector<std::string> Split(std::string_view text, char delim)
 {
   std::vector<std::string> fields;
@@ -84,8 +84,7 @@ std::vector<std::string> Split(std::string_view text, char delim)
   }
 }
 
-// The test knob's log: on first runs, how often each port was masked and how often the masks
-// changed, every 600 boundaries.
+// Every 600 first-run boundaries, logs how often each port was masked and the masks changed.
 void LogTest(const Masks& masks)
 {
   static Masks s_last{};

@@ -1,17 +1,14 @@
 #!/usr/bin/env python3
 # view-test.py: screenshots of the embed `view` and `dim` lines (ORCA.md "Embedding"), headless. A
-# solo harness session presents into ORCA_TEST_PRESENT (a `rect` sizes that image as it would size
-# the window) and is steered over stdin as the YouGame page steers it when its menu opens beside
-# the game: `view` the whole player box, `rect` cut right of the panel, `dim 50`; then shut, `view
-# off`, an invite toast's cut from above, and `focus` clearing the dim. Each step is a PNG in
-# <out>/user/ScreenShots, named for it; look at them: the picture keeps its size and place (only
-# the part right of the panel shows), the frame meter and the chat card stay inside the window, the
-# dim covers everything. It also checks that malformed lines answer `unsupported`.
+# solo session renders into ORCA_TEST_PRESENT and gets the stdin lines the YouGame page sends when
+# its menu opens beside the game, then closes, then shows an invite toast. Each step saves a PNG in
+# <out>/user/ScreenShots. Check by eye that the picture keeps its size and place, the frame meter
+# and chat card stay inside the window, and the dim covers everything. It also checks that
+# malformed lines answer `unsupported`.
 #
 #   Tools/orca/view-test.py <dolphin-emu-nogui> <Brawl disc> <out dir> [seconds before the shots]
 #
-# About a minute (the scripted match starts ~40 s in). One Orca: hold
-# ~/Documents/brawl-dolphin/orca-run-solo.lock around it on a shared Mac.
+# Takes about a minute (the scripted match starts ~40 s in).
 import os
 import queue
 import shutil

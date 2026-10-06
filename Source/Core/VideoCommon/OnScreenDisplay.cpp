@@ -34,7 +34,7 @@ constexpr float MESSAGE_DROP_TIME = 5000.f;  // Ms to drop OSD messages that has
 
 static std::atomic<int> s_obscured_pixels_left = 0;
 static std::atomic<int> s_obscured_pixels_top = 0;
-// Orca: the bottom of the messages drawn last (MessagesBottom()), 0 with none.
+// Orca: see MessagesBottom().
 static std::atomic<float> s_messages_bottom = 0;
 
 struct Message
@@ -151,7 +151,7 @@ void AddTypedMessage(MessageType type, std::string message, u32 ms, u32 argb,
 void DiscardTypedMessage(MessageType type)
 {
   std::lock_guard lock{s_messages_mutex};
-  // As AddTypedMessage: discarded on the video thread, at the next DrawMessages().
+  // Like AddTypedMessage: the message is removed at the next DrawMessages().
   auto range = s_messages.equal_range(type);
   for (auto it = range.first; it != range.second; ++it)
     it->second.should_discard = true;

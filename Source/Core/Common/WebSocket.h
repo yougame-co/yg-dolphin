@@ -14,7 +14,7 @@
 namespace Common
 {
 // A WebSocket client for text messages (ws:// and wss://), built on libcurl's WebSocket support.
-// Not thread-safe: connect, send and receive from one thread (an I/O thread owns the socket).
+// Not thread-safe: connect, send and receive from a single thread.
 class WebSocket final
 {
 public:
@@ -23,20 +23,20 @@ public:
   WebSocket(const WebSocket&) = delete;
   WebSocket& operator=(const WebSocket&) = delete;
 
-  // Opens the connection and completes the upgrade. False, with a reason in *error, on failure.
+  // Opens the connection and completes the upgrade. On failure returns false and sets *error.
   bool Connect(const std::string& url, std::chrono::milliseconds timeout, std::string* error);
 
   // Sends one text message, waiting at most `timeout` for the socket to take it.
   bool SendText(std::string_view text, std::chrono::milliseconds timeout);
 
-  // The next complete text message, waiting at most `timeout`; nullopt on timeout or when the
-  // connection closed (check IsOpen).
+  // Returns the next complete text message, waiting at most `timeout`. Returns nullopt on timeout
+  // or when the connection closed (check IsOpen).
   std::optional<std::string> ReceiveText(std::chrono::milliseconds timeout);
 
   bool IsOpen() const;
   // Why the connection closed or failed (empty while open).
   const std::string& Error() const;
-  // The status code of the server's close frame (0: none came).
+  // The status code from the server's close frame, or 0 if none arrived.
   u16 CloseCode() const;
 
   // Sends a close frame (best effort) and releases the connection.

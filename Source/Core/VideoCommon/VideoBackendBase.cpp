@@ -313,7 +313,8 @@ bool VideoBackendBase::InitializeShared(std::unique_ptr<AbstractGfx> gfx,
 
   // do not initialize again for the config window
   m_initialized = true;
-  // Off until the rollback session asks; ORCA_TEST_SKIP_RENDER=1 (test only) skips the whole run.
+  // Orca: render skipping stays off until rollback asks for it. ORCA_TEST_SKIP_RENDER=1 (tests
+  // only) skips rendering for the whole run.
   VideoCommon_SetSkipRender(Orca::TestSkipRender());
 
   g_gfx = std::move(gfx);

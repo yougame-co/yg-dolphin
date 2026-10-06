@@ -4,10 +4,9 @@
 #
 #   Tools/orca/solo-pause.py <dolphin-emu-nogui> <disc> [--rooms]
 #
-# 1. Offline (a session with no room), one Orca at a time: a reference run to frame 2800, then the
-#    same run paused for 5 s at frame ~2560, in the middle of a match. The paused run answers "state paused" / "state running",
-#    its frames stop while paused and go on after, and every frame's RAM hash (YG_HASHLOG) equals the
-#    reference's: the pause changed nothing the game computed.
+# 1. Offline, one Orca at a time: a reference run to frame 2800, then the same run paused for 5 s
+#    mid-match. The paused run must answer "state paused" / "state running", stop its frames while
+#    paused, and match the reference's RAM hash on every frame (YG_HASHLOG).
 # 2. --rooms instead: two Orcas over real YouGame dev rooms (ORCA_TEST_DEV_GAME):
 #    - the host pauses alone, stays paused past the room's 8 s silence limit (its room stays open)
 #      and prints no stats meanwhile; a "prepare-join" (an invite) ends the pause ("state running");

@@ -15,7 +15,7 @@ namespace Orca::UX::YgOrb
 {
 namespace
 {
-// The line split at single spaces (no empty fields: "a  b" is malformed).
+// Splits at single spaces. Empty fields are kept, so the caller rejects "a  b".
 std::vector<std::string_view> Fields(std::string_view line)
 {
   std::vector<std::string_view> out;
@@ -165,7 +165,7 @@ double DwellMs(const Notice& notice)
   case Kind::Invite:
     break;
   }
-  // A message: long enough to read (4 s, and 60 ms a character, up to 9 s).
+  // Messages: 4 s plus 60 ms per character, up to 9 s.
   return std::min(9000.0, 4000.0 + 60.0 * static_cast<double>(CodePoints(notice.text)));
 }
 
@@ -175,7 +175,7 @@ void Model::Apply(const Command& command, double now_ms)
   switch (command.type)
   {
   case Command::Type::Off:
-    // The menu is open or the game no longer fills the screen: the lines go with the button.
+    // The lines hide with the button.
     m_on = false;
     m_blink_at = -1;
     if (!m_lines.empty())

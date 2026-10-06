@@ -27,8 +27,7 @@ u16 BigU16(std::span<const u8> d, std::size_t at)
 }
 
 
-// The GX formats fonts use, as coverage: I4 and I8 are the coverage itself, IA4 and IA8 carry it
-// in their alpha. Blocks of 8x8 (I4), 8x4 (I8, IA4) or 4x4 (IA8) texels.
+// Decodes a font sheet to coverage. I4/I8 store it directly; IA4/IA8 store it in alpha.
 bool DecodeCoverage(int format, int w, int h, std::span<const u8> src, std::vector<u8>* out)
 {
   out->assign(static_cast<std::size_t>(w) * static_cast<std::size_t>(h), 0);
@@ -418,7 +417,7 @@ std::u32string Substitute(char32_t code)
 {
   switch (code)
   {
-  case 0xB7:  // a heavy face without the middle dot: the katakana one, a bullet
+  case 0xB7:  // middle dot: try the katakana one, then a bullet
     return U"・";
   case 0x30FB:
     return U"•";
@@ -463,8 +462,7 @@ Atlas BuildAtlas(const Rfnt& font, std::span<const char32_t> codes, int pad, int
   atlas.ascent = static_cast<float>(font.Ascent());
   if (present.empty())
     return atlas;
-  // Roughly square: the narrowest power of two whose rows of cells reach no further down than it
-  // is wide.
+  // Roughly square: the smallest power-of-two width whose rows fit within that height.
   const int count = static_cast<int>(present.size());
   int width = 256;
   while (width < 2048 && (count + width / cw - 1) / std::max(1, width / cw) * ch > width)
@@ -511,7 +509,7 @@ Atlas BuildAtlas(const Rfnt& font, std::span<const char32_t> codes, int pad, int
   else
     atlas.space = static_cast<float>(font.CellWidth()) / 3;
   atlas.levels.push_back(std::move(rgba));
-  // Mip levels: each texel the mean coverage of the four under it (white stays white).
+  // Each mip texel averages the four below it.
   for (int level = 1; level < levels; ++level)
   {
     const int pw = width >> (level - 1), ph = height >> (level - 1);

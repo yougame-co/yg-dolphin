@@ -1,10 +1,10 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-// Online drop-in play (Orca::Online: friends over a YouGame room), run at the frame boundary. The
-// host plays solo from its boot; a friend who joins loads the host's keyframe, catches up through
-// the host's inputs since, and plugs into the next port, from where a rollback session over the
-// room's transport runs both games (RingPort is the emulator side). See ORCA.md, "Drop-in".
+// Online drop-in play: friends join this game through a YouGame room. The host plays solo from
+// boot; a friend who joins loads the host's keyframe, replays the host's inputs since then, and
+// takes the next free port. From there a rollback session over the room's transport runs both
+// games. See ORCA.md, "Drop-in".
 
 #pragma once
 
@@ -22,91 +22,72 @@ class System;
 
 namespace Rollback::OnlineMatch
 {
-// One frame boundary. The first call joins the room; a joiner blocks there until it has loaded the
-// host's keyframe (or emulation stops). `local_pad(seat)` gives this player's pad for the given
-// seat. Returns the frame the state was rewound to here (a rollback, or a joiner's keyframe): the
-// state is now the start of that frame.
-// `on_frame(frame, resimulating, ports, alone)` runs first at every boundary
-// (Orca::Events::NotifyFrame), before anything is saved there; `ports` are the controllers plugged
-// in at that frame; `alone`: AloneAt this frame (false on re-runs).
+// Runs at each frame boundary. The first call joins the room; a joiner blocks here until it has
+// loaded the host's keyframe (or emulation stops). `local_pad(seat)` returns this player's pad.
+// Returns the frame the state was rewound to (a rollback, or a joiner's keyframe); the state is
+// then at the start of that frame.
+// `on_frame` runs first at every boundary, before anything is saved: `ports` are the controllers
+// plugged in at that frame, and `alone` is AloneAt for it (false on re-runs).
 using FrameHook = std::function<void(int frame, bool resimulating,
                                      const std::vector<Orca::Events::PortInfo>& ports, bool alone)>;
 std::optional<int> OnBoundary(Core::System& system,
                               const std::function<Orca::Net::Pad(int local_seat)>& local_pad,
                               const FrameHook& on_frame);
 
-// A keyframe this recent serves a new arrival as it is: the joiner replays up to this many frames
-// (30 s at 60 fps) and catches up from there.
+// A keyframe at most this old (30 s at 60 fps) still serves a new joiner, who replays the frames
+// since.
 constexpr int KEYFRAME_FRESH_FRAMES = 30 * 60;
 
-// The frame hook's `alone` at the first run of `frame`: what this game does then is this player's
-// alone, so the UX may announce it (UX/OnlineMenu.h). It plays solo with nothing of drop-in under
-// way as the last boundary left it (`solo_idle`, SoloIdle: no friend plugged in or on the way, not
-// joining or catching up, no keyframe wanted or being made); nothing waits for this boundary to
-// take it (`drop_in_pending`, Orca::Online::DropInPending: a friend's arrival, a prepare-join or an
-// invite, the app's join or leave); and no keyframe it stored that nobody took yet
-// (`stored_keyframe`, its frame: a prepare-join's or an invite's) is still fresh, since a friend
-// who arrives within KEYFRAME_FRESH_FRAMES of it replays every frame since, which makes them the
-// friend's too.
+// True when `frame` belongs to this player alone: playing solo, no drop-in pending, and no fresh
+// keyframe a joining friend would replay from. Only then may the UI announce things.
 bool AloneAt(int frame, bool solo_idle, bool drop_in_pending, std::optional<int> stored_keyframe);
 
-// Whether the frame hook may write the online rules' header at the first run of `frame` though the
-// frame may not be this player's alone (UX/OnlineRules.h SetHeaderFree): no other game runs this
-// frame from a state before it. This game plays solo with nothing a friend would replay
-// (`solo_quiet`: no session, not joining, no keyframe being made or downloaded, nobody plugging in,
-// not catching up), and no keyframe it stored for the header it calls for now (`stored_keyframe`,
-// its frame) is still fresh. A friend's arrival, a prepare-join or a keyframe wanted don't stop it,
-// as they stop AloneAt: their keyframe is made at this boundary or later, after the hook, so it
-// carries what the hook wrote. So the room's header lands at the boundary after the room's welcome
-// even when the opponent's hello comes with it.
+// Whether the frame hook may write the online rules' header at `frame`: no other game runs this
+// frame from an earlier state. Looser than AloneAt: a friend arriving or a keyframe being wanted
+// doesn't block it, since that keyframe is made after the hook and so carries the header.
 bool HeaderFreeAt(int frame, bool solo_quiet, std::optional<int> stored_keyframe);
 
-// The host's wait for the header its room calls for, before it makes or offers a keyframe
-// (HostEvents): a keyframe carries the header in this game's memory, and the joiner replays it.
+// The host's wait for its room's header before it makes or offers a keyframe: the keyframe carries
+// the header in game memory, and the joiner replays it.
 enum class HeaderWait
 {
   Ready,  // make or offer the keyframe
-  Wait,   // not yet: the header lands at a boundary SetHeaderFree allows
-  Fail,   // a queue room: the match can't start (`orca error mismatch`, the room left)
+  Wait,   // not yet; the header is written at a later free boundary
+  Fail,   // queue room only: the match can't start and the room is left
 };
-// A friends room whose game never carries the header it calls for (a session already running when
-// it changed) makes its keyframe anyway after this many boundaries with a friend waiting (the
-// joiner refuses a header that locks, as before): 2 s.
+// A friends room whose game never gets its header (say, a session was already running when it
+// changed) makes the keyframe anyway after this many boundaries (2 s) with a friend waiting.
 constexpr int HEADER_WAIT_BOUNDARIES = 120;
-// A queue room never makes a keyframe without the room's header: after this many boundaries with
-// the opponent waiting (the header lands within one; a keyframe already being made first finishes),
-// 5 s, the join fails.
+// A queue room never makes a keyframe without the room's header: after this many boundaries (5 s)
+// with the opponent waiting, the join fails.
 constexpr int HEADER_FAIL_BOUNDARIES = 300;
-// One boundary of the wait: `in_place`, UX/OnlineRules.h HeaderInPlace; `someone_waiting`, a friend
-// waits for a keyframe; `queue_room`, this game hosts a room the queue made. `*waited` counts the
-// boundaries a friend has waited for the header.
+// One boundary of the wait. `in_place`: the header is in game memory (HeaderInPlace);
+// `someone_waiting`: a friend waits for a keyframe; `queue_room`: this game hosts a matchmade room.
+// `*waited` counts the boundaries waited so far.
 HeaderWait StepHeaderWait(int* waited, bool in_place, bool someone_waiting, bool queue_room);
 
 // True while this process plays online (solo in its room, or with friends).
 bool Active();
-// Logs the session's stats ("Online match <when>: ...").
+// Logs the session's stats.
 void LogStats(const char* when);
-// Logs the session's stats (and why it ended), ends the session and leaves the room. Safe to call
-// more than once; called by itself when emulation stops or the session ends.
+// Logs the stats and the reason, ends the session and leaves the room. Safe to call more than once;
+// also runs when emulation stops or the session ends.
 void End(const char* reason);
 
-// The player's pause in a session (the app's "pause", Core::SetState). A pause may stop only this
-// player's game: allowed in a session without a room (tests), and online while the last frame
-// boundary left this game alone with nothing of drop-in under way (no friend plugged in or on the
-// way, not joining or catching up, no keyframe wanted or being made) and nothing waits for the
-// next one (Orca::Online::DropInPending: a friend arriving, an invite, a join or a leave).
-// Any thread.
+// Whether the player's pause may go ahead. Allowed in a session without a room (tests), or online
+// while this game plays alone with no drop-in under way or pending, so the pause stops only this
+// player's game. Any thread.
 bool SoloPauseAllowed();
-// Core::SetState(Paused) in a session: whether the pause may go ahead (SoloPauseAllowed). From a
-// yes until EndPause, boundaries take no friend in, so one that still runs while the CPU thread
-// winds down never starts a session it can't step (a step gives up while the CPU is stepping).
+// Core::SetState(Paused) in a session: whether the pause may go ahead. From a yes until EndPause,
+// boundaries take no friend in, so a boundary that runs while the CPU thread winds down never
+// starts a session it can't step.
 bool BeginPause();
 // Core::SetState(Running): the pause, if any, is over.
 void EndPause();
-// Between a BeginPause that said yes and EndPause: the core is paused by the player's pause (not
-// still stepping at boot, nor stopped by an HLE reload or a panic).
+// True between a successful BeginPause and EndPause: the core is paused by the player, not by boot
+// stepping, an HLE reload or a panic.
 bool Pausing();
-// Host time spent paused since the last call. The stats line leaves it out of its interval, so
-// its fps counts running time only.
+// Host time spent paused since the last call. The stats line leaves it out, so its fps counts
+// running time only.
 std::chrono::nanoseconds TakePausedTime();
 }  // namespace Rollback::OnlineMatch

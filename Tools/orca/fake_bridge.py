@@ -10,19 +10,18 @@
 #     --gtest_filter='OrcaLive.BridgeMirrorsTheRoomAndTakesLeave'
 # Run that test alone: with a bridge configured, every room goes through it.
 #
-# GET /controllers/events: the app's controller stream (desktop/src/controllers.ts snapshots, schema
-# 1) with one GameCube adapter, a controller in port 1, reporting at FAKE_PAD_HZ (default 125, the
-# official adapter's rate; 1000 for an overclocked one). FAKE_PAD_NOISE=1 steps the main stick's X
-# by one on every report (wrapping at 256), so every report is a new pad and so is every frame's
-# read, however many reports came between two (for Orca's input age,
-# OrcaUXLatency.BoundaryInputAge). The helper's clock (sentAt, receivedAt) is this process's wall
-# clock plus FAKE_HELPER_SKEW_MS and FAKE_HELPER_DRIFT_PPM (gained per second since start), like
-# the real helper's: anchored to the wall clock once, then drifting from it. FAKE_PAD_SCRIPT is a
-# JSON-lines file of {"t": <seconds since the stream opened>, "buttons": <adapter wire mask>,
-# "axes": [x, y, cx, cy], "triggers": [l, r]} (each holds until the next; the last one loops back to
-# the first after FAKE_PAD_LOOP seconds, default never); without it, A is tapped every 2 s. Wire
-# mask: A 1, B 2, X 4, Y 8, Left 16, Right 32, Down 64, Up 128, Start 256, Z 512, R 1024, L 2048.
-# FAKE_PAD_GAMEPAD=1 sends the script as a standard gamepad instead (buttons: W3C indices bit mask).
+# GET /controllers/events: the app's controller stream (desktop/src/controllers.ts snapshots) with
+# one GameCube adapter and a controller in port 1. Settings:
+#   FAKE_PAD_HZ          report rate (default 125, the official adapter; 1000 when overclocked)
+#   FAKE_PAD_NOISE=1     nudge the main stick's X on every report, so every report is a new pad
+#                        (for Orca's input-age test, OrcaUXLatency.BoundaryInputAge)
+#   FAKE_HELPER_SKEW_MS, FAKE_HELPER_DRIFT_PPM  offset and drift of the fake helper's clock
+#   FAKE_PAD_SCRIPT      JSON lines of {"t": <s since the stream opened>, "buttons": <wire mask>,
+#                        "axes": [x, y, cx, cy], "triggers": [l, r]}, each held until the next;
+#                        without it, A is tapped every 2 s
+#   FAKE_PAD_LOOP        seconds after which the script starts over (default never)
+#   FAKE_PAD_GAMEPAD=1   send the script as a standard gamepad (W3C button indices) instead
+# Wire mask: A 1, B 2, X 4, Y 8, Left 16, Right 32, Down 64, Up 128, Start 256, Z 512, R 1024, L 2048.
 import json, os, sys, threading, time, urllib.request, random, string, uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 

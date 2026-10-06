@@ -448,7 +448,7 @@ TEST_F(OrcaBrawlStages, LaterGamesAgreementIgnoresDsrNotTheBan)
 
 TEST_F(OrcaBrawlStages, TheWinnerSkipsTheBanWithYAndBothAgree)
 {
-  // Luis's example: the loser's A on Battlefield, the winner skips the ban and A on Battlefield.
+  // The loser proposes Battlefield; the winner skips the ban with Y and agrees with A.
   FakeMemory m = Game("scSelStage");
   State s;
   s.set.game = 2;
@@ -781,8 +781,8 @@ TEST_F(OrcaBrawlStages, TheOverlaysTopLineHasTheSetTheTurnTheCountAndTheTime)
   EXPECT_EQ(StageCursors::TurnText(v, 1).mode, StageCursors::TurnCue::Mode::Idle);
 }
 
-// Whose turn each cursor says it is (Luis, 2026-10-05: "very obvious whose turn it is"), from both
-// machines' sides: the acting player's tag, the waiting local player's tab, nothing for the rest.
+// Each cursor makes it obvious whose turn it is, from both machines' sides: the acting player's
+// tag, the waiting local player's tab, nothing for the rest.
 TEST(OrcaStageCursors, TurnText)
 {
   using Mode = StageCursors::TurnCue::Mode;
@@ -790,9 +790,9 @@ TEST(OrcaStageCursors, TurnText)
   v.on = true;
   v.game = StageCursors::GAME_BRAWL;
   v.players[0].present = v.players[1].present = true;
-  v.players[0].name = "Crunch";
-  v.players[1].name = "Hbox";
-  v.players[1].local = true;  // Hbox's machine
+  v.players[0].name = "Ada";
+  v.players[1].name = "Bo";
+  v.players[1].local = true;  // Bo's machine
   v.turn = 0;
   v.kind = static_cast<u8>(RS::StepKind::Strike);
   v.left = 2;
@@ -811,9 +811,9 @@ TEST(OrcaStageCursors, TurnText)
   }
   // A strike, on the other player's screen: their name, the count, the timer; this player waits.
   EXPECT_EQ(StageCursors::TurnText(v, 0),
-            (StageCursors::TurnCue{Mode::Acting, false, "CRUNCH'S TURN", "STRIKING 2", 24}));
+            (StageCursors::TurnCue{Mode::Acting, false, "ADA'S TURN", "STRIKING 2", 24}));
   EXPECT_EQ(StageCursors::TurnText(v, 1),
-            (StageCursors::TurnCue{Mode::Waiting, true, "WAITING FOR CRUNCH", "", -1}));
+            (StageCursors::TurnCue{Mode::Waiting, true, "WAITING FOR ADA", "", -1}));
   // The same strike on the striker's own screen; the other cursor says nothing.
   v.players[0].local = true;
   v.players[1].local = false;
@@ -836,7 +836,7 @@ TEST(OrcaStageCursors, TurnText)
   EXPECT_EQ(StageCursors::TurnText(v, 0).detail, "X BANS 1 \u00b7 Y SKIPS");
   v.players[0].local = false;
   v.players[1].local = true;
-  EXPECT_EQ(StageCursors::TurnText(v, 0).title, "CRUNCH MAY BAN 1");
+  EXPECT_EQ(StageCursors::TurnText(v, 0).title, "ADA MAY BAN 1");
   EXPECT_EQ(StageCursors::TurnText(v, 0).detail, "");
   // A pick.
   v.optional = false;
@@ -847,14 +847,14 @@ TEST(OrcaStageCursors, TurnText)
   EXPECT_EQ(StageCursors::TurnText(v, 0).mode, Mode::Idle);
   v.players[0].local = true;
   v.players[1].local = false;
-  EXPECT_EQ(StageCursors::TurnText(v, 1).title, "HBOX PICKS");
-  EXPECT_EQ(StageCursors::TurnText(v, 0).title, "WAITING FOR HBOX");
-  // The Meta Knight clause (Luis's set: he was Meta Knight, Hbox picked any stage).
+  EXPECT_EQ(StageCursors::TurnText(v, 1).title, "BO PICKS");
+  EXPECT_EQ(StageCursors::TurnText(v, 0).title, "WAITING FOR BO");
+  // The Meta Knight clause: Ada plays Meta Knight, so Bo picks any stage.
   v.mk_clause = true;
   EXPECT_EQ(StageCursors::TurnText(v, 1),
-            (StageCursors::TurnCue{Mode::Acting, false, "HBOX PICKS ANY STAGE",
+            (StageCursors::TurnCue{Mode::Acting, false, "BO PICKS ANY STAGE",
                                    "META KNIGHT CLAUSE", 24}));
-  EXPECT_EQ(StageCursors::MkClauseNote(v), "HBOX PICKS ANY STAGE \u00b7 NO STRIKES");
+  EXPECT_EQ(StageCursors::MkClauseNote(v), "BO PICKS ANY STAGE \u00b7 NO STRIKES");
   v.players[0].local = false;
   v.players[1].local = true;
   EXPECT_EQ(StageCursors::TurnText(v, 1),

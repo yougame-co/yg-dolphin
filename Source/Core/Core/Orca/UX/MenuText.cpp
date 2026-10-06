@@ -18,8 +18,8 @@ namespace
 {
 using namespace std::string_view_literals;
 
-// The message files' colour codes: 0x12 0x02 0x0C r g b a, then 0x13 to end the colour (a hex
-// escape takes every hex digit after it, hence the split before "333").
+// Colour codes: 0x12 0x02 0x0C r g b a, ended by 0x13. The literal is split before "333" because a
+// hex escape would swallow the following hex digits.
 // clang-format off
 #define BRAWL "\x12\x02\x0c" "333\xff"
 #define PPLUS "\x12\x02\x0c\xbf\xc7\xc4\xff"
@@ -27,71 +27,62 @@ using namespace std::string_view_literals;
 #define END "\x13"
 // clang-format on
 
-// Read from the disc's and Project+'s mu_menumain archives (MiscData 5 and 10), each original
-// checked byte for byte there. Grouped by file (one archive walk per file per boundary).
+// Originals verified byte for byte against each game's mu_menumain archive. Grouped by file so
+// each file is looked up once per frame.
 constexpr std::array<MenuTextEdit, 19> EDITS{{
-    // The main menu's footer under the Online button. Brawl: 'Play different modes while
-    // connected to Nintendo WFC.'; Project+: 'Play different modes online. (Discontinued)'.
+    // Footer under the Online button.
     {5, 2, BRAWL "Play different modes while connected to " BRAWL "Nintendo WFC." END END ""sv,
      BRAWL "Play different modes online." END ""sv},
     {5, 2, PPLUS "Play different modes online. (Discontinued)" END ""sv,
      PPLUS "Play different modes online." END ""sv},
-    // The ONLINE page's With Friends: 'Play with people you've registered as Friends!' (a roster
-    // that isn't there). A on it goes straight to the local Versus character select, where the
-    // friends you invite drop in (RSBE01.patches, muProcWifi).
+    // With Friends: there is no friend roster; it opens the Versus character select, where
+    // invited friends drop in.
     {5, 18, BRAWL "Play with people you've registered as Friends!" END ""sv,
      BRAWL "Play with friends you invite! (2-4 players)" END ""sv},
     {5, 18, PPLUS "Play with people you've registered as Friends!" END ""sv,
      PPLUS "Play with friends you invite! (2-4 players)" END ""sv},
-    // The ONLINE page's With Anyone (Project+ only: 'Play against random people! (Project M not
-    // compatible!)'; Brawl's names no one).
+    // With Anyone (Project+ only).
     {5, 19, PPLUS "Play against random people! (Project M not compatible!)" END ""sv,
      PPLUS "Play against random people!" END ""sv},
-    // With Anyone's first button, now Casual: 'Go online for a quick brawl (fight) with someone,
-    // somewhere. (No names)'.
+    // With Anyone's first button, now Casual.
     {5, 51, BRAWL "Go online for a quick brawl with someone, somewhere. (No names)" END ""sv,
      BRAWL "Go online for a quick brawl with someone, somewhere." END ""sv},
     {5, 51, PPLUS "Go online for a quick fight with someone, somewhere. (No names)" END ""sv,
      PPLUS "Go online for a quick fight with someone, somewhere." END ""sv},
-    // Its second, now Ranked: 'Form a team with someone, somewhere for a 2-on-2 battle!'.
+    // With Anyone's second button, now Ranked.
     {5, 52, BRAWL "Form a team with someone, somewhere for a 2-on-2 battle!" END ""sv,
      BRAWL "Brawl someone at your level for a higher rank!" END ""sv},
     {5, 52, PPLUS "Form a team with someone, somewhere for a 2-on-2 battle!" END ""sv,
      PPLUS "Fight someone at your level for a higher rank!" END ""sv},
-    // The With Friends page's buttons (no menu opens that page since `ux=18`: A on With Friends
-    // leaves for the character select at once; kept so nothing could ever promise these): every
-    // button went to the local Versus character select, where friends drop in (Brawl calls it a
-    // brawl, Project+ a fight), so none may promise another mode or a roster. Its Brawl / FIGHT!
-    // button keeps 'Take on your friends! (2-4 players)'.
-    // Friend Roster: 'Register friends here to simplify playing with them.'
+    // The With Friends page's buttons. The page is no longer reachable, but every button would
+    // lead to the Versus character select, so none may promise another mode or a roster.
+    // Friend Roster.
     {5, 45, BRAWL "Register friends here to simplify playing with them." END ""sv,
      BRAWL "Friends you invite join your brawl! (2-4 players)" END ""sv},
     {5, 45, PPLUS "Register friends here to simplify playing with them." END ""sv,
      PPLUS "Friends you invite join your fight! (2-4 players)" END ""sv},
-    // Team Multi-Man Brawl / Smash: 'Join forces with a friend to defeat enemies! (2 players)'.
+    // Team Multi-Man.
     {5, 47, BRAWL "Join forces with a friend to defeat enemies! (2 players)" END ""sv,
      BRAWL "Brawl with the friends you invite! (2-4 players)" END ""sv},
     {5, 47, PPLUS "Join forces with a friend to defeat enemies! (2 players)" END ""sv,
      PPLUS "Fight the friends you invite! (2-4 players)" END ""sv},
-    // Home-Run Contest: 'Have an online Home-Run Contest with a friend! (2 players)'.
+    // Home-Run Contest.
     {5, 48, BRAWL "Have an online Home-Run Contest with a friend! (2 players)" END ""sv,
      BRAWL "Take on your friends in a brawl! (2-4 players)" END ""sv},
     {5, 48, PPLUS "Have an online Home-Run Contest with a friend! (2 players)" END ""sv,
      PPLUS "Take on your friends in a fight! (2-4 players)" END ""sv},
-    // Boss Battles, which none of the page's four buttons shows: 'Take on 10 bosses with the help
-    // of a friend! (2 players)'. Rewritten too, so nothing on the page can ever promise it.
+    // Boss Battles (no button shows it, but rewrite it anyway).
     {5, 49, BRAWL "Take on 10 bosses with the help of a friend! (2 players)" END ""sv,
      BRAWL "Take on your friends in a brawl! (2-4 players)" END ""sv},
     {5, 49, PPLUS "Take on 10 bosses with the help of a friend! (2 players)" END ""sv,
      PPLUS "Take on your friends in a fight! (2-4 players)" END ""sv},
-    // Data > Records (Brawl): 'View group records (excludes Nintendo WFC brawls).', a colour per
-    // piece.
+    // Data > Records (Brawl).
     {5, 78,
      BRAWL "View" BRAWL " " END BRAWL "g" END BRAWL "roup " END BRAWL "r" END BRAWL
            "ecords (" END BRAWL "e" END BRAWL "xcludes " END BRAWL "Nintendo WFC" END BRAWL
            " " END BRAWL "b" END BRAWL "rawls)" END BRAWL "." END END ""sv,
      BRAWL "View group records (excludes online brawls)." END ""sv},
-    // A record's description, both games: 'Total vs. matches, including Nintendo WFC matches.'
+    // A record's description (both games).
     {10, 48, RECORD "Total vs. matches, including Nintendo WFC matches." END ""sv,
      RECORD "Total vs. matches, including online matches." END ""sv},
 }};
@@ -104,17 +95,16 @@ constexpr std::array<MenuTextEdit, 19> EDITS{{
 constexpr u32 SCENE_MANAGER = 0x805A0060;
 constexpr u32 MANAGER_SCENE = 0x4;
 constexpr u32 MENU_ARCHIVE = 0xAC0;      // muMenuMain's gfArchive*
-constexpr u32 ARCHIVE_WORDS = 0x80 / 4;  // sizeof(gfArchive): one of its words is the image
+constexpr u32 ARCHIVE_WORDS = 0x80 / 4;  // sizeof(gfArchive); one word points at the image
 constexpr u32 ARC_MAGIC = 0x41524300;    // "ARC\0"
 constexpr u32 ARC_COUNT = 0x6;           // u16 entry count
 constexpr u32 ARC_NAME = 0x10;
 constexpr u32 ARC_FIRST = 0x40;
-constexpr u32 ENTRY_HEADER = 0x20;  // u16 type, u16 index, u32 size, ...; the data follows
+constexpr u32 ENTRY_HEADER = 0x20;  // u16 type, u16 index, u32 size, ...; data follows
 constexpr u16 TYPE_MISC = 1;
 constexpr u32 MAX_ENTRIES = 64;
 constexpr u32 MAX_MESSAGES = 1024;
-// The description box (MenuText.h): muMenuMain's panel and the message it shows, its window and
-// the window's message file, then the text it formatted that message into.
+// Description box offsets (see MenuText.h).
 constexpr u32 MENU_PANEL = 0x7BC;
 constexpr u32 PANEL_MESSAGE = 0x40;
 constexpr u32 PANEL_WINDOW = 0x48;
@@ -164,7 +154,7 @@ u32 FindMenuArchive(const GuestMemory& m)
   const u32 archive = m.Read32(scene + MENU_ARCHIVE);
   if (!Pointer(m, archive) || !m.Valid(archive + ARCHIVE_WORDS * 4 - 1))
     return 0;
-  // The archive object keeps its file image: the word that points at the menu's ARC.
+  // Find the gfArchive word that points at the menu's ARC image.
   for (u32 i = 0; i < ARCHIVE_WORDS; ++i)
   {
     const u32 image = m.Read32(archive + 4 * i);
@@ -257,8 +247,8 @@ int ApplyMenuDescription(GuestMemory& m, u32 messages, std::span<const MenuTextE
                                 [](u8 a, char b) { return a == static_cast<u8>(b); });
     if (at == now.end())
       continue;
-    // The bytes the game itself formats from the rewritten message: the new words, then the
-    // slot's zeros, in the same place (the box's length and what follows stay as they are).
+    // Write what the game would have formatted from the rewritten message; the length is
+    // unchanged.
     const u32 from = d.buffer + static_cast<u32>(at - now.begin());
     for (size_t i = 0; i < e.original.size(); ++i)
       m.Write8(from + static_cast<u32>(i), i < e.text.size() ? static_cast<u8>(e.text[i]) : 0);
@@ -285,7 +275,7 @@ int ApplyMenuText(GuestMemory& m, std::span<const MenuTextEdit> edits, int* in_b
     }
     if (!messages || !Pointer(m, messages))
       continue;
-    // A table of u32 offsets; the first one is where the text starts, so it says how many.
+    // The first offset is where the text starts, so it also gives the table's length.
     const u32 count = m.Read32(messages) / 4;
     if (count < 2 || count > MAX_MESSAGES || e.message + 1 >= count ||
         !m.Valid(messages + 4 * (e.message + 1) + 3))
@@ -309,8 +299,7 @@ int ApplyMenuText(GuestMemory& m, std::span<const MenuTextEdit> edits, int* in_b
       m.Write8(at + static_cast<u32>(i), i < e.text.size() ? static_cast<u8>(e.text[i]) : 0);
     ++written;
   }
-  // After the messages: a box that formatted one of them before it was rewritten shows the new
-  // words from the next frame on.
+  // Then fix a box that formatted a message before it was rewritten.
   const int box = ApplyMenuDescription(m, FindArchiveFile(m, archive, DESCRIPTION_FILE), edits);
   if (in_box)
     *in_box = box;
@@ -319,7 +308,7 @@ int ApplyMenuText(GuestMemory& m, std::span<const MenuTextEdit> edits, int* in_b
 
 void WriteMenuText(const Core::CPUThreadGuard& guard)
 {
-  // Brawl rev 2 itself or a launcher profile booting it (Project+).
+  // Brawl rev 2, directly or via a launcher profile (Project+).
   const Orca::Profile* profile = Orca::ActiveProfile();
   if (!profile || profile->revision != 2 ||
       (profile->IsLauncher() ? profile->disc != "RSBE01" : profile->game_id != "RSBE01"))

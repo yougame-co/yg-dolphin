@@ -32,7 +32,7 @@ using Rollback::InputGate::ALL;
 using Rollback::InputGate::Mask;
 using Rollback::InputGate::Masks;
 
-// The character select (CharOrder.h, OnlineRules.h; BrawlHeaders' muSelCharPlayerArea).
+// Brawl's character select (BrawlHeaders' muSelCharPlayerArea).
 constexpr u32 SCENE_MANAGER = 0x805A0060;
 constexpr u32 MANAGER_SCENE = 0x04;
 constexpr u32 SCENE_SELCHAR_TASK = 0x400;
@@ -120,7 +120,7 @@ std::vector<u8> EncodeIdentity(const Identity& id)
 
 std::optional<Identity> DecodeIdentity(const std::vector<u8>& b)
 {
-  // A newer version may add bytes after these: what this one knows is read.
+  // Newer versions may append bytes; only the known ones are read.
   if (b.size() < 13 || b[0] != 1)
     return std::nullopt;
   Identity id;
@@ -130,7 +130,7 @@ std::optional<Identity> DecodeIdentity(const std::vector<u8>& b)
   id.costume = b[4];
   id.x = std::bit_cast<float>(Get32(b, 5));
   id.y = std::bit_cast<float>(Get32(b, 9));
-  // Anything a game can't hold is no place: the player then picks by hand.
+  // An out-of-range position is dropped, and the player picks by hand.
   if (!std::isfinite(id.x) || !std::isfinite(id.y) || std::fabs(id.x) > 100 ||
       std::fabs(id.y) > 100)
   {
@@ -168,7 +168,6 @@ State Advance(const View& v, const State& state, int frame)
   State s = state;
   if (!v.queue2)
     return State{};
-  // Off the character select: a fresh select next time (a game, the stage select, the menus).
   if (!v.css)
   {
     s = State{};
@@ -178,8 +177,8 @@ State Advance(const View& v, const State& state, int frame)
   for (int p = 0; p < 2; ++p)
     newly[p] = static_cast<u16>(v.raw[p] & ~v.raw_prev[p]);
   const u32 now = static_cast<u32>(frame) + 1;
-  // A port's ready flag: Start with its token down readies it, B or the token taken up again
-  // un-readies it (B wins a frame that has both).
+  // Start with the token down readies a port. B, or picking the token back up, un-readies it.
+  // B wins if both happen in one frame.
   const auto follow = [&](int p, bool may_ready) {
     bool ready = (s.ready >> p) & 1;
     const bool placed = v.ports[p].placed;
@@ -192,15 +191,13 @@ State Advance(const View& v, const State& state, int frame)
 
   if (v.solo)
   {
-    // The queue's own character select: port 1 alone. The B that stops the search is swallowed
-    // until it is let go, and so is a Start held since this player's own game came back not ready
-    // (FLAG_SWALLOW_START).
+    // The queue's own character select, port 1 only. The B that cancels the search, and a Start
+    // still held from leaving a room, are hidden from the game until released.
     const u8 ready = s.ready;
     const bool swallowing = (s.flags & FLAG_SWALLOW_B) && (v.raw[0] & BUTTON_B);
     const bool swallowing_start = (s.flags & FLAG_SWALLOW_START) && (v.raw[0] & BUTTON_START);
-    // A new A on BACK while ready (the gate kept it from the game): it stops the search, and the
-    // next frame gives it to the game (FLAG_BACK_A, the gate's press), which backs out. Kept when
-    // this boundary's own result is fed back (the flag set, the same press).
+    // A new A on BACK while ready cancels the search, then the next frame passes it to the game
+    // to back out (FLAG_BACK_A). The flag survives this frame being re-run.
     const bool back_press = Rules::CssHandOnBack(v.ports[0].hand_target, v.ports[0].hand_button) &&
                             (newly[0] & PAD_BUTTON_A);
     const bool back_a = back_press && ((ready & 1) || (s.flags & FLAG_BACK_A));
@@ -223,7 +220,7 @@ State Advance(const View& v, const State& state, int frame)
 
   // ---- The room's character select ----
   const bool both = (v.plugged & 3) == 3;
-  // Port 2's pick from its queue identity (synced: the same at this frame everywhere), game 1 only.
+  // Port 2's pick from its synced queue identity, game 1 only.
   s.pick_set = v.game1 && v.pick2 && v.pick2->HasPick();
   if (s.pick_set)
   {
@@ -237,7 +234,6 @@ State Advance(const View& v, const State& state, int frame)
     s.pick_character = s.pick_costume = 0;
     s.pick_x = s.pick_y = 0;
   }
-  // Port 2's steering clock: from the first boundary its pick is to be put in (game 1).
   if (v.game1 && both && s.pick_set && !(s.locked & 2) && s.steer_start == 0)
     s.steer_start = now;
   if (s.steer_start != 0)
@@ -247,19 +243,18 @@ State Advance(const View& v, const State& state, int frame)
   }
   if (v.game1 && both)
   {
-    // Game 1's picks lock once they are in: the host's as it came, the joiner's once the steering
-    // put it down (or gave up, or there was nothing to steer to).
+    // Game 1's picks lock once placed: the host's as is, the joiner's once steering placed it,
+    // gave up, or had nothing to steer to.
     if (v.ports[0].placed)
       s.locked |= 1;
     const CssPort& two = v.ports[1];
     const bool steering_over = s.steer_start != 0 && s.steer >= STEER_LIMIT_FRAMES;
     const bool on_pick = s.pick_set && two.placed && two.character == s.pick_character;
-    // Any colour will do where the pick's own can't be had: the same character as port 1 can't
-    // wear port 1's colour (the game skips it), and Random has no colour to turn.
+    // Accept any colour when the pick's own is unavailable: a mirror match can't share port 1's
+    // colour, and Random has no colour.
     const bool any_colour = (v.ports[0].placed && v.ports[0].character == s.pick_character &&
                              v.ports[0].costume == s.pick_costume) ||
                             s.pick_character == RANDOM_CHARACTER;
-    // The costume's own clock, from the first boundary the token is down on the pick.
     if (on_pick && !(s.locked & 2) && s.costume_start == 0)
       s.costume_start = now;
     const bool costume_over =
@@ -278,8 +273,8 @@ State Advance(const View& v, const State& state, int frame)
 
   if (!ReadyPhase(v))
   {
-    // Not both players in (yet, or any more), or ranked's character order still running: nobody
-    // is ready, no timer. A casual timeout stays (the pages are leaving the room).
+    // Not both players in, or ranked's character order still running: nobody is ready and there
+    // is no timer. A casual timeout stays set while the players leave the room.
     s.ready = 0;
     s.flags &= FLAG_TIMED_OUT;
     if (!(s.flags & FLAG_TIMED_OUT))
@@ -288,8 +283,8 @@ State Advance(const View& v, const State& state, int frame)
     s.timer = 0;
     return s;
   }
-  // A start from another frame numbering (later than now, or far longer ago than the timer runs)
-  // starts here. Untimed (casual's later games) it still counts: Start's every other frame below.
+  // Restart the timer if its start is in the future or implausibly old (another frame
+  // numbering). It also counts when untimed, for the alternating Start presses below.
   if (s.timer_start == 0 || s.timer_start > now ||
       now - s.timer_start > static_cast<u32>(READY_FRAMES) * 4)
   {
@@ -301,9 +296,8 @@ State Advance(const View& v, const State& state, int frame)
     return s;
   if (OrderLockedIn(v))
   {
-    // Ranked's later games: each player's Start in the character order was their lock-in, so the
-    // stage select comes at once (Luis, 2026-10-04: "after you lock in opponent chooses and presses
-    // start to lock in and immediately we go to stage select"), once both tokens are down.
+    // Ranked later games: the character order's Starts were the lock-ins, so go to the stage
+    // select as soon as both tokens are down.
     if (v.ports[0].placed && v.ports[1].placed)
     {
       s.ready = 3;
@@ -323,7 +317,7 @@ State Advance(const View& v, const State& state, int frame)
   {
     if (v.ranked)
     {
-      // Ranked goes on with the picks as they are; without a character on both, the no-show rule
+      // Ranked continues with the current picks. If a character is missing, the no-show rule
       // (OnlineRules.h) decides.
       if (v.ports[0].placed && v.ports[1].placed)
         s.flags |= FLAG_GO;
@@ -368,7 +362,7 @@ std::optional<s64> ToFixed(float value)
   if (exponent == 0xFF)
     return std::nullopt;  // an infinity or a NaN
   if (exponent == 0)
-    return 0;  // zero, or a denormal (far under one FIXED_ONE)
+    return 0;  // zero or a denormal (far below one FIXED_ONE)
   // value = mantissa * 2^(exponent - 150), so value * 2^FIXED_BITS = mantissa * 2^shift.
   const u64 mantissa = (bits & 0x7FFFFF) | 0x800000;
   const int shift = static_cast<int>(exponent) - 150 + FIXED_BITS;
@@ -424,11 +418,9 @@ std::pair<u8, u8> SteerToward(float x, float y, float tx, float ty)
   const s64 d = static_cast<s64>(IntSqrt(static_cast<u64>(dx * dx) + static_cast<u64>(dy * dy)));
   if (d * 10 < FIXED_ONE)  // within 0.1
     return centred;
-  // Full tilt (the hand's 0.83 or 1.0 a frame) from 3 units out, slower nearer. The larger
-  // component is at least 30, past the game's dead zone (30 moves Brawl's hand about 0.06 a frame,
-  // fine enough to stop on a spot), so the hand always closes in; a smaller one the dead zone
-  // swallows is taken up once it is the larger. The stick's components are in FIXED_ONEs too
-  // (|dx * mag| < 2^29 * 2^23), divisions truncate toward zero.
+  // Full tilt from 3 units out, slower nearer. The larger component is at least 30, just past
+  // the game's dead zone (about 0.06 units a frame), so the hand always closes in. Components are
+  // in FIXED_ONEs (|dx * mag| < 2^29 * 2^23); divisions truncate toward zero.
   const s64 mag = std::clamp(100 * d / 3, 30 * FIXED_ONE, 100 * FIXED_ONE);
   s64 cx = dx * mag / d, cy = dy * mag / d;
   const s64 larger = std::max(cx < 0 ? -cx : cx, cy < 0 ? -cy : cy);
@@ -437,8 +429,7 @@ std::pair<u8, u8> SteerToward(float x, float y, float tx, float ty)
     cx = cx * (30 * FIXED_ONE) / larger;
     cy = cy * (30 * FIXED_ONE) / larger;
   }
-  // centre + c rounded half up (centre + c is above 0, so as lround does): an arithmetic shift is
-  // floor.
+  // Round centre + c half up, matching lround for positive values (the shift is a floor).
   const auto axis = [](s64 c, u8 centre) {
     const s64 v = (static_cast<s64>(centre) * FIXED_ONE + c + FIXED_ONE / 2) >> FIXED_BITS;
     return static_cast<u8>(std::clamp<s64>(v, 1, 255));
@@ -452,7 +443,7 @@ bool HandStill(float x, float y, float prev_x, float prev_y)
                            py = ToFixed(prev_y);
   if (!fx || !fy || !px || !py)
     return false;
-  // Under 0.05: 20 * |d| under one unit.
+  // |d| < 0.05, written as 20 * |d| < 1.
   const auto under = [](s64 d) { return 20 * (d < 0 ? -d : d) < FIXED_ONE; };
   return under(*fx - *px) && under(*fy - *py);
 }
@@ -464,15 +455,14 @@ Masks Gate(const View& v, const State& s)
     return masks;
   if (v.solo)
   {
-    // Port 1 alone: Start readies (Orca's, never the game's), Z is kept from the game (casual's
-    // skip in the room; nothing in ranked), and while ready B only stops the search.
+    // Port 1 only. Start (ready) and Z (skip) never reach the game. While ready, B only cancels
+    // the search.
     masks[0].buttons =
         BUTTON_START | BUTTON_Z | ((s.ready & 1) || (s.flags & FLAG_SWALLOW_B) ? BUTTON_B : 0);
-    // A on BACK (Rules::CssBackTakesA passes a new press there): while ready it only stops the
-    // search (Advance), then the frame after it the game gets it (FLAG_BACK_A), so the page hears
-    // `orca queue unready` before the game leaves. The stick stays centred while a new A is down,
-    // so the hand is still on BACK for that frame; an A already held when the hand got there
-    // (raw, the frame that just ran) leaves the stick alone, so the hand can move on.
+    // A on BACK while ready first cancels the search, then reaches the game a frame later
+    // (FLAG_BACK_A), so the app hears `orca queue unready` before the game backs out. The stick is
+    // centred while a new A is down so the hand stays on BACK. An A already held when the hand
+    // arrived leaves the stick free.
     if (Rules::CssHandOnBack(v.ports[0].hand_target, v.ports[0].hand_button))
     {
       if (s.ready & 1)
@@ -497,35 +487,34 @@ Masks Gate(const View& v, const State& s)
   masks[3] = ALL;
   if (s.flags & FLAG_TIMED_OUT)
   {
-    // Nothing moves until the pages leave the room.
     masks[0] = ALL;
     masks[1] = ALL;
     return masks;
   }
   if (v.game1)
   {
-    // Game 1's characters, once in: no token pickup, no costume.
+    // Game 1's characters are locked once in: no token pickup, no costume change.
     for (int p = 0; p < 2; ++p)
     {
       if (s.locked & (1 << p))
         masks[p].buttons |= PAD_BUTTON_A | PAD_BUTTON_B | PAD_BUTTON_X | PAD_BUTTON_Y;
     }
-    // Port 2's pick, put in for it: its own controller does nothing meanwhile.
+    // Steer port 2's pick into place. Its own controller is ignored meanwhile.
     if (s.pick_set && !(s.locked & 2) && s.steer < STEER_LIMIT_FRAMES && (v.plugged & 2))
     {
       Mask& two = masks[1];
       two = ALL;
       const CssPort& p = v.ports[1];
-      const bool edge = (s.steer & 3) == 0;  // a press every fourth frame, released between
+      const bool edge = (s.steer & 3) == 0;  // press every fourth frame, released between
       two.steer = s.steer >= STEER_SETTLE_FRAMES;
       if (!two.steer)
       {
-        // Centred while the game takes the new pad's origin (ALL centres the stick).
+        // Stick centred while the game calibrates the new pad (ALL centres it).
       }
       else if (p.placed)
       {
-        // Down on another character: back into the hand. On it with another costume: X turns it
-        // (not on Random, which takes any).
+        // On the wrong character, pick the token back up. On the right one in the wrong costume,
+        // press X (except on Random, which accepts any).
         if (p.character != s.pick_character)
           two.press = edge ? BUTTON_B : 0;
         else if (p.costume != s.pick_costume && s.pick_character != RANDOM_CHARACTER)
@@ -533,10 +522,8 @@ Masks Gate(const View& v, const State& s)
       }
       else if (p.hand_target == Rules::CSS_HAND_GRID_HOLDING && p.character == s.pick_character)
       {
-        // Over the pick with the token in the hand: still, and A puts it down once the hand has
-        // all but stopped (since the last frame began: the character it reads lags the hand by a
-        // frame, so a hand still moving can put the token on the next one). With the stick let go
-        // Brawl's hand still creeps, about 0.03 a frame, which is fine.
+        // Over the pick: press A once the hand has nearly stopped. The character read lags the
+        // hand by a frame, so a moving hand could drop the token on the next character.
         const bool still = HandStill(p.hand_x, p.hand_y, v.hand2_prev_x, v.hand2_prev_y);
         two.press = edge && still ? PAD_BUTTON_A : 0;
       }
@@ -548,9 +535,8 @@ Masks Gate(const View& v, const State& s)
       }
     }
   }
-  // A player who locked in (ready): their pick stays as it is (A would take the token up, X and Y
-  // turn the costume); B only unlocks them (the game never sees it: the online rules pass only a
-  // press's first frame, and this one is gone by the next).
+  // A ready player's pick is frozen (no A, X or Y). B only un-readies; the game never sees it,
+  // because the online rules only pass a press's first frame.
   for (int p = 0; p < 2; ++p)
   {
     if (s.ready & (1 << p))
@@ -558,7 +544,6 @@ Masks Gate(const View& v, const State& s)
   }
   if (s.flags & FLAG_GO)
   {
-    // Both ready: Start for port 1, every other frame until the character select goes.
     if ((s.timer & 1) == 0)
       masks[0].press |= BUTTON_START;
   }
@@ -685,9 +670,8 @@ int WriteState(GuestMemory& m, const State& s)
 
 int Latch(GuestMemory& m, const std::array<std::optional<GCPadStatus>, 4>& raw)
 {
-  // Under any header that locks (the character select's B and the character order's Start read
-  // it, OnlineRules.h, CharOrder.h), and with the character order's test knob on its character
-  // select.
+  // Runs under any header that locks the rules, since OnlineRules.h and CharOrder.h read RAW too,
+  // and with the character order's test knob on its character select.
   if (!RegionMapped(m) ||
       !(Rules::ReadHeader(m).Locked() ||
         (CharOrder::TestActive() && MatchBlock::Present(m) && CharOrder::ReadCss(m).on_css)))
@@ -704,7 +688,7 @@ int Latch(GuestMemory& m, const std::array<std::optional<GCPadStatus>, 4>& raw)
     w.U16(RAW_PREV + 2 * p, old);
     w.U16(RAW + 2 * p, now);
   }
-  // Port 2's hand as this frame starts (the steering's A waits for it to stand still).
+  // Port 2's hand at frame start; the steering's A waits for it to be still.
   const Rules::CssHand hand = Rules::ReadCssHand(m, 1);
   w.U32(HAND_PREV, std::bit_cast<u32>(hand.valid ? hand.x : 0.0f));
   w.U32(HAND_PREV + 4, std::bit_cast<u32>(hand.valid ? hand.y : 0.0f));
@@ -719,27 +703,25 @@ std::mutex s_mutex;
 bool s_active = false;
 bool s_ranked = false;
 int s_rating = -1;
-// The pick this player made on the queue's own character select (and where its hand put it).
+// This player's pick on the queue's own character select, and where it was placed.
 Identity s_pick;
 std::atomic<bool> s_solo_ready{false};
 std::atomic<bool> s_on_solo_css{false};
-std::atomic<bool> s_on_queue_css{false};  // OnQueueCss'
+std::atomic<bool> s_on_queue_css{false};
 std::atomic<bool> s_clear_ready{false};
-// Why (the log's): under s_mutex.
+// For the log. Guarded by s_mutex.
 std::string s_clear_ready_why;
 std::atomic<bool> s_last_timeout_mine{false};
 
-// First-run, local: what was printed, Z held for a skip, where the hand held the token.
+// Local state updated on first runs only: what was printed, the skip hold, token positions.
 struct Local
 {
   bool printed_ready = false;
   Identity printed;
   SkipHold skip;
   std::array<bool, 2> was_placed{};
-  // Each port's hand while it holds its token over one character: that character, where the hand
-  // first read it and where it last did. The pick's place is the middle of the two, inside the
-  // character's square (the hand's own place can sit on its edge, and the character read lags the
-  // hand by a frame).
+  // Where each hand first and last hovered over one character while holding its token. The
+  // midpoint is used as the pick's position, safely inside the character's square.
   struct Hover
   {
     int character = -1;
@@ -750,7 +732,6 @@ struct Local
     }
   };
   std::array<Hover, 2> hover{};
-  // The place the solo character select's pick went down at (its hover's middle).
   std::pair<float, float> pick_place{};
   int pick_place_character = -1;
 };
@@ -760,7 +741,7 @@ Local& L()
   return l;
 }
 
-// The casual timeout per frame, until it is final (as OnlineRules' no-show).
+// The casual timeout per frame, until that frame is confirmed (like OnlineRules' no-show).
 struct TimeoutTracker
 {
   std::map<int, u8> pending;  // bit 7: timed out; bits 0-1: who wasn't ready
@@ -804,7 +785,6 @@ std::string NameFor(const std::vector<Events::PortInfo>& ports, int port, int* r
   return fmt::format("Player {}", port + 1);
 }
 
-// The queue's own character select, where the player's pick (and its place) is taken.
 bool solo_css_for_pick(const View& v)
 {
   return v.queue2 && v.solo && v.css;
@@ -836,9 +816,8 @@ Text TextFor(const View& v, const State& s, const std::vector<Events::PortInfo>&
   }
   else if (v.queue2 && v.css)
   {
-    // Each player's name near their panel (the name alone, as the plates: Luis, 2026-10-05, no
-    // rating by the name). A player who locked in (ready, or the character order's lock-in) wears
-    // a LOCKED IN ribbon.
+    // Each player's name by their panel, with no rating. A locked-in player gets a LOCKED IN
+    // badge.
     for (int p = 0; p < 2; ++p)
     {
       if (!(v.plugged & (1 << p)))
@@ -867,7 +846,7 @@ Text TextFor(const View& v, const State& s, const std::vector<Events::PortInfo>&
     {
       const bool mine = (s.ready >> local) & 1;
       const bool theirs = (s.ready >> other) & 1;
-      // Game 1's picks are in already: only Start. Later games pick first (A), then Start.
+      // In game 1 the picks are already in, so only Start. Later games pick with A, then Start.
       const bool picks = !v.game1;
       const std::string clock = Timed(v) ? " · " + Clock(READY_FRAMES - s.timer) : std::string();
       if (mine && theirs)
@@ -888,8 +867,7 @@ Text TextFor(const View& v, const State& s, const std::vector<Events::PortInfo>&
                         "Press Start to lock in") +
                clock;
       note = mine && picks ? "B to change" : "";
-      // Casual only: a ranked match is played (Luis, 2026-10-05: "You are forced to play a ranked
-      // match"), so ranked never offers the skip, its bar or its hint.
+      // Casual only. Ranked never offers the skip.
       if (MaySkip(v, s) && skip_progress > 0)
       {
         const int bars = std::clamp(static_cast<int>(skip_progress * 10), 0, 10);
@@ -1015,14 +993,13 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
   if (Rules::ProfileRuleset() == Rules::Ruleset::None)
     return;
   GuardMemory m(guard);
-  // The player's own game after a room whose ready timer ran out on them: not ready any more (its
-  // own memory, at its own alone boundary).
+  // After a room that should not keep this player ready, clear ready at a solo frame.
   if (alone && !resimulating && s_clear_ready.exchange(false))
   {
     const Rules::Header h = Rules::ReadHeader(m);
     if (h.Solo() && RegionMapped(m))
     {
-      // A Start still held from the room's last screen readies nobody until it is let go.
+      // A Start still held from the room's last screen must be released before it counts.
       m.Write8(FLAGS, static_cast<u8>(m.Read8(FLAGS) | FLAG_SWALLOW_START));
       if (m.Read8(READY) & 1)
       {
@@ -1059,7 +1036,8 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
     }
   }
 
-  // The casual timeout for this frame (a re-run's replaces the first run's), until it is final.
+  // Record the casual timeout for this frame until it is confirmed. A re-run replaces the first
+  // run's value.
   TimeoutTracker& t = Timeouts();
   const u64 resyncs = Orca::Events::Resyncs();
   if (!t.started || t.resyncs != resyncs)
@@ -1079,7 +1057,6 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
 
   if (resimulating)
     return;
-  // While port 2's pick is being put in: where its hand is, every 10th frame (the log).
   if (after.pick_set && !(after.locked & 2) && after.steer_start != 0 && after.steer % 10 == 0 &&
       after.steer <= STEER_LIMIT_FRAMES)
   {
@@ -1098,7 +1075,6 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
       local = p.port;
   }
   Local& l = L();
-  // The log: where each port's hand put its token down (the queue identity's place).
   for (int p = 0; p < 2 && v.queue2 && v.css; ++p)
   {
     const CssPort& port = v.ports[p];
@@ -1129,8 +1105,7 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
     l.was_placed[p] = port.placed;
   }
   const bool solo_css = v.queue2 && v.solo && v.css;
-  // As the last alone boundary saw it: a boundary that isn't (the app's `host` or `join` waiting
-  // to be taken) says nothing new.
+  // Only a solo frame can set this. A non-solo frame (a pending `host` or `join`) leaves it.
   if (!solo_css)
     s_on_solo_css = false;
   else if (alone)
@@ -1143,7 +1118,6 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
     Identity pick;
     pick.character = own.placed ? own.character : -1;
     pick.costume = own.costume;
-    // Where the hand put it down (the middle of its way over that character).
     if (own.placed && l.pick_place_character == own.character)
     {
       pick.x = l.pick_place.first;
@@ -1174,7 +1148,7 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
   }
   else if (v.queue2 && !v.solo)
   {
-    // In a room: back on the player's own character select afterwards, ready is printed again.
+    // In a room. Ready is printed again once back on the player's own character select.
     l.printed_ready = false;
     s_solo_ready = false;
   }
@@ -1184,8 +1158,8 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
     s_solo_ready = false;
   }
 
-  // Skip: Z held 1.5 s on a casual room's character select (this player's own controller, as it
-  // was in the frame that just ran: never a guess). Never in ranked (MaySkip).
+  // Skip: Z held 1.5 s on a casual room's character select, read from this player's own latched
+  // input for the frame that just ran.
   const bool may_skip = MaySkip(v, after) && local >= 0 && local < 2;
   if (l.skip.Step(may_skip, may_skip && (v.raw[local] & BUTTON_Z) != 0))
   {
@@ -1203,7 +1177,7 @@ Masks GateFrame(const Core::CPUThreadGuard& guard)
   const Rules::Header h = Rules::ReadHeader(m);
   if (!h.Queue2())
     return {};
-  // The ports' values aren't memory: port 2's pick for the gate is the region's copy (PICK).
+  // The gate reads memory only. Port 2's pick comes from the region's copy (PICK).
   const View v = ReadView(m, {});
   return Gate(v, ReadState(m));
 }

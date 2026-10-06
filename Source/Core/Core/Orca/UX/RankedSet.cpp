@@ -60,21 +60,19 @@ int LedgeLimit(bool tiebreak, u8 character)
                     (mk ? LEDGE_LIMIT_MK : LEDGE_LIMIT);
 }
 
-// The last published set (CurrentScoreLine): bit 31 a ranked set, then done (2 bits), tiebreak,
-// the wins, the game number.
+// Last published set for CurrentScoreLine. Bit 31 ranked, 30 fighting, 29 results screen, 24-25
+// done, 23 tiebreak, then each port's wins and the game number.
 std::atomic<u32> s_published{0};
 std::atomic<int> s_local_port{0};
-// The last published dots (CurrentDots): bit 31 a ranked set on the menus, bits 2i..2i+1 game i's
-// winner plus one (0 none), bits 8..9 the game being played (3 none).
+// Last published dots for CurrentDots. Bit 31 on, bits 2i..2i+1 game i's winner plus one (0 none),
+// bits 8..9 the current game (3 none).
 std::atomic<u32> s_dots{0};
 }  // namespace
 
 std::optional<GameRecord> Judge(Ruleset ruleset, const SetState& set, const ResultBlock& block,
                                 u8 decision)
 {
-  // A no contest is the decision's (9: it never changed from the fight's start, as when the pause
-  // menu quits); the result info's +0x0E..+0x0F is the count of players tied for first, 2 after a
-  // time-up level on stocks even when the sudden death that follows had a winner.
+  // Decision 9 means no contest, e.g. quitting from the pause menu.
   const auto& p = block.ports;
   if (decision == DECISION_NO_CONTEST || !p[0].present || !p[1].present || !p[0].human ||
       !p[1].human || p[2].present || p[3].present)
@@ -107,26 +105,25 @@ std::optional<GameRecord> Judge(Ruleset ruleset, const SetState& set, const Resu
   };
   if (ruleset != Ruleset::Brawl)
   {
-    // Project+ decides time-outs itself (stocks, then percent; an exact tie gets overtime).
+    // Project+ decides time-outs itself.
     if (first0 != first1)
       return win(first0 ? 0 : 1, How::Results);
     if (first0 && first1)
       return tie();
     return std::nullopt;
   }
-  // A sudden death the clock wasn't seen to cause: a simultaneous last-stock loss, or a time-out
-  // whose stocks and percent weren't read. Either way the tiebreak game decides.
+  // A sudden death not caused by a seen time-up (a simultaneous last-stock KO, or a time-out we
+  // couldn't read) is a tie, settled by a tiebreak game.
   if (sudden && !snapped)
     return tie();
   if (r.timeout)
   {
-    // The ledge-grab limit first: exactly one player over it loses.
+    // Ledge-grab limit first: if exactly one player is over it, they lose.
     const bool over0 = set.ledge[0] > LedgeLimit(set.tiebreak, r.characters[0]);
     const bool over1 = set.ledge[1] > LedgeLimit(set.tiebreak, r.characters[1]);
     if (over0 != over1)
       return win(over0 ? 1 : 0, How::Ledge);
-    // Then stocks, then percent, as they were when time ran out (else the result info's stocks:
-    // with no sudden death they are the same).
+    // Then stocks, then percent, as they were when time ran out.
     std::array<int, 2> stocks{p[0].stocks, p[1].stocks};
     if (snapped)
       stocks = {set.snap_stocks[0], set.snap_stocks[1]};
@@ -149,7 +146,6 @@ SetState Step(SetState s, Ruleset ruleset, const Facts& f, u32 frame)
 {
   if (s.done)
   {
-    // The set is over: nothing more is followed.
     if (s.fight)
     {
       s.fight = false;
@@ -172,21 +168,20 @@ SetState Step(SetState s, Ruleset ruleset, const Facts& f, u32 frame)
     }
     else if (s.fight_flags & SetBlock::FIGHT_BETWEEN)
     {
-      // Back into a fight from between scenes: sudden death, the same game.
+      // Back into a fight from between scenes: sudden death in the same game.
       s.fight_flags =
           static_cast<u8>((s.fight_flags & ~SetBlock::FIGHT_BETWEEN) | SetBlock::FIGHT_SUDDEN);
     }
     if (f.live.valid)
     {
-      // The fighters back after they were gone, in the same fight scene: Brawl's sudden death
-      // (after a time-up level on stocks, or a simultaneous last-stock loss) rebuilds them.
+      // Fighters reappearing in the same scene means Brawl started a sudden death.
       if (s.fight_flags & SetBlock::FIGHT_GONE)
       {
         s.fight_flags = static_cast<u8>((s.fight_flags & ~SetBlock::FIGHT_GONE) |
                                         SetBlock::FIGHT_SUDDEN);
       }
       s.fight_flags |= SetBlock::FIGHT_SEEN;
-      // The ledge grabs and the time-up snapshot are the regular game's only.
+      // Ledge grabs and the time-up snapshot count only in regulation, not sudden death.
       if (!(s.fight_flags & (SetBlock::FIGHT_SUDDEN | SetBlock::FIGHT_TIMEUP)))
       {
         for (int i = 0; i < 2; ++i)
@@ -241,7 +236,7 @@ SetState Step(SetState s, Ruleset ruleset, const Facts& f, u32 frame)
     else
     {
       ++s.tb_streak;
-      // Brawl plays a tiebreak game; Project+'s own overtime leaves a tie only by accident.
+      // Brawl plays a tiebreak game. Project+ has its own overtime.
       s.tiebreak = ruleset == Ruleset::Brawl;
       if (s.tb_streak >= TIEBREAK_STREAK_LIMIT)
         s.done = 2;
@@ -258,7 +253,7 @@ SetState Step(SetState s, Ruleset ruleset, const Facts& f, u32 frame)
   case Scene::Other:
     if (s.fight)
     {
-      // The fight ended without its results screen: not a game.
+      // A fight that ends without a results screen is not a game.
       s.fight = false;
       s.fight_flags = 0;
       s.on_ledge = {0, 0};
@@ -288,10 +283,10 @@ int WriteSetRules(GuestMemory& memory, const SetState& set, u8 stocks, u8 minute
 
 namespace
 {
-// The fighters, from sora_melee's g_ftEntryManager (BrawlHeaders: module 27, section 6 + 0x2E88),
-// found through the OS module list: ftEntryManager +0x00 the entries, +0x04 their count; an
-// ftEntry (0x244 bytes) +0x0A the active instance, +0x28 its ftOwner, +0x30 the instances
-// (kind, Fighter*), +0x58 its player number (the port); an ftOwner +0x00 its data.
+// Fighters come from sora_melee's g_ftEntryManager (module 27, section 6 + 0x2E88), found through
+// the OS module list. ftEntryManager +0x00 is the entries and +0x04 their count. An ftEntry
+// (0x244 bytes) has the active instance at +0x0A, its ftOwner at +0x28, the (kind, Fighter*)
+// instances at +0x30 and the port at +0x58. An ftOwner's data pointer is at +0x00.
 constexpr u32 OS_MODULE_LIST = 0x800030C8;
 constexpr u32 SORA_MELEE = 27;
 constexpr u32 SORA_MELEE_BSS_SECTION = 6;
@@ -301,18 +296,16 @@ constexpr u32 ENTRY_ACTIVE = 0x0A;
 constexpr u32 ENTRY_OWNER = 0x28;
 constexpr u32 ENTRY_INSTANCES = 0x30;
 constexpr u32 ENTRY_PLAYER_NO = 0x58;
-// Fighter +0x60 its soModuleAccesser, +0xD8 the module list, +0x70 the status module.
+// Fighter +0x60 is its soModuleAccesser, +0xD8 the module list, +0x70 the status module.
 constexpr u32 FIGHTER_MODULES = 0x60;
 constexpr u32 MODULES_LIST = 0xD8;
 constexpr u32 LIST_STATUS = 0x70;
-// From RAM dumps of a Brawl fight (ORCA.md "Ranked sets"): ftOwner::getStockCount reads its data's
-// u32 at +0x34, ftOwner::getDamage (vtable +0x14) its f32 at +0x24, and the status module's
-// getStatusKind (vtable +0x48) its u32 at +0x34.
+// Found in RAM dumps: stock count is the owner data's u32 at +0x34, damage its f32 at +0x24, and
+// the status kind the status module's u32 at +0x34.
 constexpr u32 OWNER_DATA_STOCKS = 0x34;
 constexpr u32 OWNER_DATA_DAMAGE = 0x24;
 constexpr u32 STATUS_KIND = 0x34;
-// The result info's decision, live during the fight: 9 while it runs, 1 the moment time runs out
-// (the game freezes on "TIME!"), 2 at the deciding KO.
+// The result info's decision during a fight: 9 while it runs, 1 at time-up, 2 at the deciding KO.
 constexpr u32 GLOBAL_RESULT_INFO = 0x18;
 constexpr u32 RESULT_DECISION = 0x1378;
 // Fighter::StatusKind: Cliff_Catch_Move, Cliff_Catch, Cliff_Wait.
@@ -425,8 +418,7 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating)
     s_dots.store(0, std::memory_order_relaxed);
     return;
   }
-  // Only Brawl's verdict needs the fight's clock, stocks, percent and ledge (Project+ decides its
-  // time-outs itself, and its modules are its own).
+  // Only Brawl's verdict needs the live fight state.
   const Facts facts = ReadFacts(memory, header->ruleset == Ruleset::Brawl);
   const SetState before = SetBlock::ReadSet(memory);
   const SetState after = Step(before, header->ruleset, facts, static_cast<u32>(frame));
@@ -449,7 +441,7 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating)
   }
   if (header->ruleset == Ruleset::Brawl && facts.scene != Scene::Fight)
   {
-    // Test only, ORCA_TEST_SET_RULES=<stocks>,<minutes>: shorter games than 3 stocks and 8:00.
+    // Test knob ORCA_TEST_SET_RULES=<stocks>,<minutes> for shorter games.
     static const std::pair<u8, u8> s_rules = [] {
       const char* v = std::getenv("ORCA_TEST_SET_RULES");
       char* end = nullptr;
@@ -464,8 +456,7 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating)
     }();
     WriteSetRules(memory, after, s_rules.first, s_rules.second);
   }
-  // The set's end on screen (SetEnd.h, local display on first runs only): VICTORY or DEFEAT on the
-  // results screen of the game that decided it.
+  // Show VICTORY or DEFEAT on the deciding game's results screen. Local display, never on re-runs.
   if (!resimulating && after.done == 1 && facts.scene == Scene::Results && after.games > 0 &&
       after.winner != NO_PORT)
   {
@@ -475,7 +466,6 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating)
                                    after.wins[1 - me], Queue::OwnRating(), SetEnd::NowMs());
   }
   const bool fighting = facts.scene == Scene::Fight || facts.scene == Scene::Between;
-  // Bit 29: the results screen (ScoreLine names the game just played there).
   const bool results = facts.scene == Scene::Results;
   const u32 packed = 0x80000000u | (fighting ? 1u << 30 : 0) | (results ? 1u << 29 : 0) |
                      (u32(after.done & 3) << 24) |
@@ -533,14 +523,11 @@ std::string ScoreLine(const SetState& set, int local_port, bool results)
     return fmt::format("Set over · {}–{}", mine, theirs);
   if (set.tiebreak)
     return fmt::format("Tiebreak game · {}–{}", mine, theirs);
-  // An ordinary game's results screen: the game just played (the set already counts it there), so
-  // game 1's says "Game 1 · 1–0". A draw counts nothing (the same game again), and before any win
-  // there is no game to name.
+  // On a results screen, name the game just played. The set already counts it there.
   const int played = set.wins[0] + set.wins[1];
   if (results && played > 0)
     return fmt::format("Game {} · {}–{}", played, mine, theirs);
-  // Anywhere else nothing (Luis, 2026-10-05: "it says game 2 on top which is weird"; the dots say
-  // which game it is, the result's toast the score).
+  // Elsewhere the dots and the result toast already say it.
   return "";
 }
 
@@ -558,7 +545,7 @@ std::string ResultToast(std::string_view out, int mine, int theirs)
 std::string CurrentScoreLine()
 {
   const u32 packed = s_published.load(std::memory_order_relaxed);
-  // Only on the menus (the character and stage select, the results screen), never over a fight.
+  // Menus only, never over a fight.
   if (!(packed & 0x80000000u) || (packed & (1u << 30)))
     return "";
   SetState s;

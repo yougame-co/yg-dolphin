@@ -50,10 +50,9 @@ void SetSIMDMode(RoundMode rounding_mode, bool non_ieee_mode)
   // AH actually doing anything. But flushing both inputs and outputs seems to cause less problems
   // than flushing nothing, so let's just set FZ and roll with whatever behavior we get.
   //
-  // Orca: AH only where the CPU has it (on one without, the bit is ignored anyway), so that
-  // ORCA_TEST_NO_AFP, which clears cpu_info.bAFP, makes an AFP CPU flush like an Apple M1 to M3.
-  // What an Orca session does about the CPUs' differences (NaNs, denormal inputs) is in
-  // JitArm64::DenormalInputsFlushed and the JITs' accurate-NaN paths.
+  // Orca: set AH only where the CPU has it (elsewhere it is ignored anyway), so ORCA_TEST_NO_AFP
+  // makes an AFP CPU flush like an M1 to M3. Sessions handle the CPUs' NaN and denormal
+  // differences in JitArm64::DenormalInputsFlushed and the JITs' accurate-NaN paths.
   const u32 flush_to_zero_bits = (non_ieee_mode ? (cpu_info.bAFP ? FZ | AH : FZ) : 0);
   static bool afp_warning_shown = false;
   if (!afp_warning_shown && !cpu_info.bAFP && non_ieee_mode)

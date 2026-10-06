@@ -14,11 +14,11 @@
 #    reconnects to the same room (its player id comes back into its held seat), and the friend,
 #    whose host left, plays on ("host-left", then "no-room": it is on port 2) and joins it again.
 #    Then the app's Stop on the host, "leave" and "quit" at once: the friend hears it within ~1 s.
-# 5. Both under the app (a Tools/orca/fake_bridge.py each), the friend joining from the app's invite:
-#    the host's page Leave is the app's "leave". The host leaves ("left"), its page is told the room
-#    is empty, then shown the host's new room. The friend ("host-left", then "no-room": port 2) has
-#    told its page the old room is empty before "no-room", and never shows it again after.
-# Each step waits for the lines it expects and fails on a timeout. Two Orca processes at most.
+# 5. Both behind a fake app bridge (Tools/orca/fake_bridge.py), the friend joining from an invite:
+#    the host's page sends Leave. The host's page is told the room is empty, then shown the host's
+#    new room. The friend's page is told the old room is empty before "no-room", and never shows it
+#    again.
+# Each step waits for the lines it expects and fails on a timeout. Runs two Orca processes.
 import json
 import os
 import queue
@@ -251,10 +251,9 @@ for o in orcas:
     o.stop()
 orcas.clear()
 
-# 5. The page's Leave through the app's bridge. Each Orca has a fake bridge of its own, which mints
-# dev tickets for its own dev game (the same for both). The friend's names the host's room on its
-# hello, as an invite the player opened does; the host's sends the Leave once, eight seconds after
-# the mirrored room reads ready (the friend said hello), by when the friend has plugged in.
+# 5. The page's Leave through the app's bridge. Each Orca gets its own fake bridge minting dev
+# tickets for the same dev game. The friend's bridge names the host's room, as an opened invite
+# does; the host's sends Leave eight seconds after the room reads ready, once the friend is in.
 paged = code("pge")
 bridge_log = os.path.join(WORK, "bridge.log")
 friend_bridge_log = os.path.join(WORK, "bridge-friend.log")

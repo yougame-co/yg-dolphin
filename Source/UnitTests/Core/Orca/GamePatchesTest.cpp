@@ -147,7 +147,7 @@ TEST(OrcaGamePatches, ParsesWhenBlocks)
   EXPECT_FALSE(p[8].joins_previous);  // after `end`
   EXPECT_EQ(p[1].original, std::optional<u32>(0x4082007C));
   EXPECT_EQ(p[1].value, 0x4800007Cu);
-  // A file with none of it parses as before: every line untoggled.
+  // A file without `when` blocks: every line untoggled.
   for (const GamePatch& g : Parse("81000000 1 2\n81000004 3 4\n9017B640 * 5\n"))
     EXPECT_TRUE(g.when.empty());
 }
@@ -366,10 +366,10 @@ TEST(OrcaGamePatches, EachPassTakesItsOwnKind)
   ASSERT_EQ(plan.writes.size(), 2u);
   EXPECT_EQ(plan.writes[0].address, 0x81002000u);
   EXPECT_EQ(plan.writes[0].value, 0x22222222u);
-  EXPECT_TRUE(plan.writes[0].code);  // guarded: through the memory-patch path, as before
+  EXPECT_TRUE(plan.writes[0].code);  // guarded: through the memory-patch path
   EXPECT_EQ(plan.writes[1].address, 0x9017B640u);
   EXPECT_EQ(plan.writes[1].value, 0x3FFu);
-  EXPECT_FALSE(plan.writes[1].code);  // data: a plain write, as before
+  EXPECT_FALSE(plan.writes[1].code);  // data: a plain write
   Write(plan, m);
   // The guarded group has landed for good; the `*` line is written again only when it differs.
   EXPECT_TRUE(PlanGamePatches(patches, m, false).writes.empty());
@@ -460,9 +460,8 @@ std::vector<GamePatch> Shipped(const char* name)
 TEST(OrcaGamePatches, TheShippedFilesLandAsBefore)
 {
   // On memory holding every guarded line's original (and 0 under each `*` line), the first pass
-  // writes exactly what each group's GroupApplies says, group by group: the plan changed nothing
-  // for the kinds the files already had. Every toggled group in them is guarded and has a
-  // condition outside what the file writes.
+  // writes exactly what each group's GroupApplies says. Every toggled group in the shipped files is
+  // guarded, and its condition reads a word outside what the file writes.
   for (const char* name : {"RSBE01.patches", "PPLUS32.patches"})
   {
     SCOPED_TRACE(name);

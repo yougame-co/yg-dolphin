@@ -139,9 +139,9 @@ std::optional<LaunchSpec> ReadLaunchIni(const std::string& folder, std::string* 
   if (!spec)
     return std::nullopt;
 
-  // The loader, symlinks resolved, must be a regular file inside the folder (also resolved).
-  // Paths are UTF-8 strings: StringToPath/PathToString, never fs::path(std::string) or
-  // .string(), which go through the ANSI code page on Windows.
+  // The loader, symlinks resolved, must be a regular file inside the resolved folder. Use
+  // StringToPath/PathToString: fs::path(std::string) and .string() use the ANSI code page on
+  // Windows.
   namespace fs = std::filesystem;
   std::error_code ec;
   const fs::path root = fs::canonical(StringToPath(folder), ec);

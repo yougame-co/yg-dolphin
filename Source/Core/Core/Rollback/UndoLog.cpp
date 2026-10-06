@@ -33,7 +33,7 @@ u32 UndoLog::NextMark() const
 {
   if (++m_mark == 0)
   {
-    // Wrapped: no stale mark may equal a new one.
+    // Wrapped: clear so no stale mark equals a new one.
     std::fill(m_scratch.begin(), m_scratch.end(), 0);
     m_mark = 1;
   }
@@ -43,7 +43,7 @@ u32 UndoLog::NextMark() const
 u64 UndoLog::Open()
 {
   m_logs.push_back(Log{m_next_id++, {}});
-  // Recording (in a fault handler) should not need to allocate.
+  // Recording runs in a fault handler and should not allocate.
   m_logs.back().entries.reserve(std::max<std::size_t>(1024, m_page_count / 8));
   return m_logs.back().id;
 }
@@ -93,8 +93,8 @@ bool UndoLog::RewindTo(u64 id)
     FreeEntries(&m_logs.back());
     m_logs.pop_back();
   }
-  // Pages recorded in the dropped logs carry newer ids, which no longer match the newest; the
-  // emptied log's own pages must stop matching too.
+  // Pages from the dropped logs carry ids that no longer match the newest. Reset the emptied log's
+  // pages so they stop matching too.
   for (const Entry& entry : target->entries)
     m_recorded_in[entry.page] = 0;
   FreeEntries(&*target);
@@ -134,7 +134,7 @@ void UndoLog::Drop(u64 id)
   m_logs.erase(log);
   if (was_newest)
   {
-    // The older log is the newest now: its pages are the ones a write needs no record for.
+    // The older log is now the newest, so its pages are the ones that need no new record.
     const u64 newest = m_logs.back().id;
     for (const Entry& entry : m_logs.back().entries)
     {

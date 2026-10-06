@@ -10,44 +10,34 @@
 #include "Common/CommonTypes.h"
 #include "Core/Orca/UX/FreeSpace.h"
 
-// The match block (ORCA.md "Online rules", "Ranked stage flow", "Ranked sets"): what a queue
-// match's rules keep in the game's own memory, at FreeSpace::kMatchBlock (dead code of sora_scene's
-// online sequences, the same address in Brawl rev 2 and Project+). Every rollback snapshot and
-// drop-in keyframe carries it, like the rest of MEM1. Big-endian, like the game.
+// The match block: a queue match's rules and set state, stored in the game's own memory at
+// FreeSpace::kMatchBlock (same address in Brawl rev 2 and Project+). Living in MEM1 means rollback
+// snapshots and drop-in keyframes carry it for free. Big-endian, like the game. See ORCA.md,
+// "Online rules", "Ranked stage flow" and "Ranked sets".
 //
-// Before Orca writes it the block holds the game's dead code (its first word is
-// FreeSpace::kMatchBlockOriginalWord), so a reader checks the magic and treats anything else as no
-// block: friends rooms and solo play never have one.
+// Until Orca writes it the block holds dead game code, so readers check the magic. Friends rooms
+// and solo play never have a header.
 //
-// Who writes what:
-// - The header (and the saved rules), only at a boundary where this machine's game is its player's
-//   alone (Events.h `alone`): the header its room calls for, a queue room's mode, ruleset, coin and
-//   room, or none (OnlineRules.h WriteHeader, the only header writer). Never with a peer plugged in
-//   or on the way. A new header (from none, or another mode, ruleset or room) starts every
-//   track's state fresh (FreshSet).
-// - Everything else, game logic: the frame hook at every boundary, first runs and re-runs, as a
-//   pure function of memory (OnlineRules.h, RankedPPlus.h, BrawlStages.h, RankedSet.h,
-//   CharOrder.h).
+// Writers:
+// - The header and saved rules are written only by OnlineRules.h WriteHeader, and only while this
+//   machine's game has no peer (Events.h `alone`). A new header resets all set state.
+// - Everything else is game logic run by the frame hook every frame (including resimulation) as a
+//   pure function of memory.
 //
 // Layout (offsets from BASE):
-//   +0x00..+0x0F  header: magic, version, mode, ruleset, coin, the room's hash, the queue flags
-//   +0x10..+0x7F  Project+'s stage flow's set (State below; a casual game's preferred stages at
-//                 +0x40, its fight count at +0x10)
-//   +0x80..+0xBF  the stage flows' steps (State below for Project+; BrawlStages.h for Brawl, whose
-//                 casual pick keeps its preferred stages at +0xA3 and its coin at +0xA8)
-//   (The casual stage pick needs no range of its own: casual and ranked never share a block, and
-//   +0x140..+0x17F, once offered for it, is Project+'s SAVED_RSS.)
-//   +0xC0..+0xCF  Phase 1's own (the ready timer)
-//   +0xD0..+0xF3  the player's own rules, saved at the header's write
-//   +0xF4..+0xFF  the stage select's two cursors, shared (StageCursors.h)
-//   +0x100..+0x1A7 Project+'s stage switch data, saved at the header's write
-//   +0x1B4..+0x1BF the stage select's two cursors (StageCursors.h)
-//   +0x1C0..+0x1EF the queue's character select (Queue.h: ready flags, the ready timer, the raw
-//                 buttons, the opponent's pick)
-//   +0x1F0        the saved rules' flags
-//   +0x200..+0x20F the character order (CharOrder.h)
-//   +0x210..+0x28F the ranked set as the results track follows it (SetBlock.h, authoritative)
-//   +0x290..+0x297 a friend's drop-in from the menus (OnlineMenu.h FriendsMove)
+//   +0x00..+0x0F   header: magic, version, mode, ruleset, coin, room hash, queue flags
+//   +0x10..+0x7F   Project+ set state (casual uses +0x10 fight count, +0x40 preferred stages)
+//   +0x80..+0xBF   stage flow steps (Project+ State below; Brawl in BrawlStages.h)
+//   +0xC0..+0xCF   ranked character select ready timer
+//   +0xD0..+0xF3   the player's own rules, saved when the header is written
+//   +0xF4..+0xFF   shared stage select cursors (StageCursors.h)
+//   +0x100..+0x1A7 Project+ stage switch data, saved when the header is written
+//   +0x1B4..+0x1BF stage select cursors (StageCursors.h)
+//   +0x1C0..+0x1EF queue character select (Queue.h)
+//   +0x1F0         saved-rules flags
+//   +0x200..+0x20F character order (CharOrder.h)
+//   +0x210..+0x28F ranked set, authoritative (SetBlock.h)
+//   +0x290..+0x297 friend drop-in from the menus (OnlineMenu.h FriendsMove)
 namespace Orca::UX
 {
 class GuestMemory;
@@ -57,35 +47,30 @@ namespace Orca::UX::MatchBlock
 {
 constexpr u32 BASE = FreeSpace::kMatchBlock.begin;  // 0x806F2380
 constexpr u32 SIZE = FreeSpace::kMatchBlock.Size();  // 512
-// The block with its free tail (the character order and the set), up to the next relocated word.
+// Including the free tail up to the next relocated word.
 constexpr u32 FULL_SIZE = FreeSpace::kMatchBlockLimit - FreeSpace::kMatchBlock.begin;
 
 // ---- Header, +0x00 ----
-constexpr u32 MAGIC = BASE + 0x00;  // u32 'YGM1' while the block is Orca's
+constexpr u32 MAGIC = BASE + 0x00;  // u32 'YGM1'
 constexpr u32 MAGIC_VALUE = 0x59474D31;
 constexpr u32 VERSION = BASE + 0x04;  // u8
 constexpr u8 VERSION_VALUE = 1;
 constexpr u32 MODE = BASE + 0x05;     // u8 Mode
 constexpr u32 RULESET = BASE + 0x06;  // u8 Ruleset
-// u8: game 1's first striker, port 0 or 1: one bit of the room code's hash (CoinFromCode). The
-// server makes the code; neither player chooses it.
+// u8: game 1's first striker (port 0 or 1), derived from the server-made room code.
 constexpr u32 COIN = BASE + 0x07;
-// u32: the room code's hash (RoomHash): a new queue room with the same mode and ruleset still
-// starts a fresh set.
+// u32: room code hash, so a new room with the same mode and ruleset still starts a fresh set.
 constexpr u32 ROOM = BASE + 0x08;
-// u8: the queue's flags (Queue.h). FLAG_SOLO: this game is its player's own, on the queue's
-// character select before a match (no room of the queue's; the "With Anyone" pick with an app that
-// has `queue2`). FLAG_QUEUE2: the Slippi-style character select (ready with Start, the 30 s ready
-// timer, the opponent's pick written in): the host's app has `queue2`. A toggled patch group reads
-// the word at FLAGS (`when 806F238C & 01000000 == 00000000`: not solo).
+// u8: queue flags (Queue.h). FLAG_SOLO: on the queue's character select alone, before a match.
+// FLAG_QUEUE2: Slippi-style character select (ready with Start, 30 s timer). A toggled patch group
+// reads this word, so keep its address stable.
 constexpr u32 FLAGS = BASE + 0x0C;
 constexpr u8 FLAG_SOLO = 0x01;
 constexpr u8 FLAG_QUEUE2 = 0x02;
 // +0x0D..+0x0F: reserved (zero).
 constexpr u32 HEADER_SIZE = 0x10;
 
-// What the header's mode byte says. A toggled patch group reads it as the word at VERSION
-// (`when 806F2384 & 00FF0000 != 00000000`: mode not none) together with the magic.
+// A toggled patch group reads the mode byte via the word at VERSION, so keep its address stable.
 enum class Mode : u8
 {
   None = 0,
@@ -97,10 +82,10 @@ enum class Ruleset : u8
 {
   None = 0,
   Brawl = 1,  // Supernova 2025: 3 stocks, 8:00, BF PS1 LC SV YI + FD DP
-  PPlus = 2,  // Project+ 2024 Recommended procedure, the 2024 Proposed stage list
+  PPlus = 2,  // Project+ 2024 recommended procedure and proposed stage list
 };
 
-// ---- Set state, +0x10..+0x7F: Project+'s stage flow's set (State below) ----
+// ---- Set state, +0x10..+0x7F: Project+'s set (State below) ----
 constexpr u32 SET = BASE + 0x10;
 constexpr u32 SET_SIZE = 0x70;
 
@@ -108,69 +93,57 @@ constexpr u32 SET_SIZE = 0x70;
 constexpr u32 STEP = BASE + 0x80;
 constexpr u32 STEP_SIZE = 0x40;
 
-// ---- Phase 1's own, +0xC0..+0xCF ----
-// u16: frames on the ranked character select since the ready timer started (it counts while one
-// port has a character and another doesn't); 0 while it doesn't run.
+// ---- Ranked character select timer, +0xC0..+0xCF ----
+// u16: frames since the ready timer started (runs while one port has a character and the other
+// doesn't); 0 when stopped.
 constexpr u32 CSS_TIMER = BASE + 0xC0;
-// u8: the port (1-4) that didn't ready in time; 0 none. Set once when the timer runs out, cleared
-// when the character select is left.
+// u8: the port (1-4) that didn't ready in time, or 0. Cleared on leaving the character select.
 constexpr u32 CSS_NO_SHOW = BASE + 0xC2;
-// u8: bit 0, a fight began since the header was written (the no-show applies before it only).
+// u8: bit 0 set once a fight has begun (no-shows only count before that).
 constexpr u32 FOUGHT = BASE + 0xC3;
-// u8: the ports in play (bit n: port n+1), from the session's synced plan at each boundary.
+// u8: ports in play (bit n = port n+1), from the session's synced plan.
 constexpr u32 PLUGGED = BASE + 0xC4;
-// u32: the frame hook's frame number + 1 when the ready timer started (0: not running), so the
-// timer is a function of the frame number, the same however often a boundary runs.
+// u32: frame number + 1 when the ready timer started (0 = not running). Basing the timer on the
+// frame number keeps it identical however often a frame is resimulated.
 constexpr u32 CSS_TIMER_START = BASE + 0xC8;
 constexpr u32 PHASE1_SIZE = 0x10;
 
-// ---- Saved at the header's alone write, given back when it is cleared ----
-// The player's own rules before the lock (gmSetRule +0x02..+0x0B, 10 bytes) and the record's menu
-// data words the lock writes (items and the Random Stage Switch).
+// ---- The player's own settings, saved when the header is written and restored on clear ----
 constexpr u32 SAVED_RULES = BASE + 0xD0;   // 10 bytes, gmSetRule +0x02..+0x0B
 constexpr u32 SAVED_ITEMS = BASE + 0xE0;   // 3 words: menu data +0x00, +0x08, +0x0C
 constexpr u32 SAVED_STAGES = BASE + 0xEC;  // 2 words: menu data +0x20, +0x24
-// Project+ only: the first RSS_BYTES bytes of its stage switch data (RSS_EXDATA) before the lock.
+// Project+ only: its stage switch data (RSS_EXDATA) before the lock.
 constexpr u32 SAVED_RSS = BASE + 0x100;
 constexpr u32 SAVED_RSS_SIZE = 0xA8;
 constexpr u32 SAVED_FLAGS = BASE + 0x1F0;  // u8: bit 0 rules saved, bit 1 RSS saved
 
-// ---- The stage select's two cursors (StageCursors.h) ----
-// The free bytes after the saved stages (+0xF4..+0xFF) and before the queue's region
-// (+0x1B4..+0x1BF; +0x1A8..+0x1B3 are the character select's).
+// ---- Stage select cursors (StageCursors.h) ----
 constexpr u32 STAGE_CURSORS_SHARED = BASE + 0xF4;
 constexpr u32 STAGE_CURSORS_SHARED_SIZE = 0x0C;
 constexpr u32 STAGE_CURSORS = BASE + 0x1B4;
 constexpr u32 STAGE_CURSORS_SIZE = 0x0C;
 
-// ---- The queue's character select (Queue.h), +0x1C0..+0x1EF ----
-// (The sprint assigned this track +0x100..+0x13F, which is Project+'s saved stage switch data,
-// SAVED_RSS; +0x1A8..+0x1EF is the free run before SAVED_FLAGS.)
+// ---- Queue character select (Queue.h), +0x1C0..+0x1EF ----
 constexpr u32 QUEUE = BASE + 0x1C0;
 constexpr u32 QUEUE_SIZE = 0x30;
 
-// ---- Past the 512 bytes, in the same dead code up to kMatchBlockLimit ----
+// ---- Past the first 512 bytes, up to kMatchBlockLimit ----
 constexpr u32 CHAR_ORDER = BASE + 0x200;  // 16 bytes (CharOrder.h)
 constexpr u32 CHAR_ORDER_SIZE = 0x10;
-constexpr u32 RANKED_SET = BASE + 0x210;  // SetBlock.h's set (+0x210..+0x28F)
+constexpr u32 RANKED_SET = BASE + 0x210;  // SetBlock.h (+0x210..+0x28F)
 
-// ---- A friend's drop-in from the menus (OnlineMenu.h FriendsMove), +0x290..+0x297 ----
-// The last free bytes before kMatchBlockLimit (+0x180..+0x18F, first planned for this, is Project+'s
-// SAVED_RSS). Unlike the rest of the block these are kept in every session, solo and friends rooms
-// alike, with or without a header (a queue room's header only stops the move), wherever the block's
-// memory is Present.
+// ---- Friend drop-in from the menus (OnlineMenu.h FriendsMove), +0x290..+0x297 ----
+// Unlike the rest of the block, these are used in every session, with or without a header.
 constexpr u32 FRIENDS = BASE + 0x290;
-// u8: FRIENDS_TAG_VALUE once Orca's; anything else is the dead code's byte (nothing kept yet).
+// u8: FRIENDS_TAG_VALUE once initialized; anything else is still dead code.
 constexpr u32 FRIENDS_TAG = FRIENDS + 0;
 constexpr u8 FRIENDS_TAG_VALUE = 0xF5;
-// u8: the ports plugged in at the last boundary (bit n: port n+1), from the session's synced plan.
+// u8: ports plugged in last frame (bit n = port n+1).
 constexpr u32 FRIENDS_SEEN = FRIENDS + 1;
-// u8: 1 while a friend who plugged in waits for the host's main menu, to go to With Friends'
-// character select together.
+// u8: 1 while a newly joined friend waits for the host to reach the main menu, so both can go to
+// the character select together.
 constexpr u32 FRIENDS_PENDING = FRIENDS + 2;
-// u32: the frame hook's frame number + 1 from which the main menu has been running with its pages
-// built and a friend pending (0: it isn't), so how long it has run is a function of the frame
-// number, the same however often a boundary runs.
+// u32: frame number + 1 since the main menu has been ready with a friend pending (0 = not).
 constexpr u32 FRIENDS_MENU_SINCE = FRIENDS + 4;
 constexpr u32 FRIENDS_END = FRIENDS + 8;
 
@@ -186,28 +159,25 @@ static_assert(SAVED_FLAGS < BASE + SIZE);
 static_assert(CHAR_ORDER + CHAR_ORDER_SIZE <= RANKED_SET);
 static_assert(CSS_TIMER_START + 4 <= BASE + 0xC0 + PHASE1_SIZE);
 
-// ---- Project+'s stage flow's state (RankedPPlus.h), +0x00..+0x8F ----
+// ---- Project+ stage flow state (RankedPPlus.h), +0x00..+0x8F ----
 //   header   +0x00 u32 magic "YGM1"   +0x04 u8 version   +0x05 u8 mode   +0x06 u8 ruleset
 //            +0x07 u8 coin
-//   set      +0x10 u8 games counted   +0x11 u8 port 1's wins   +0x12 u8 port 2's wins
-//            +0x13 u8 the last counted game's winner (0xFF none)
-//            +0x14 u16 stages port 1 won on   +0x16 u16 stages port 2 won on (ruleset indices)
-//            +0x18 u8 the set is decided   +0x19 u8 its winner (0xFF none)
-//            +0x1A u8 a counted fight is on (entered from the stage flow)
-//            +0x1B u8 its stage (ruleset index, 0xFF unknown)
-//            +0x1C u8 port 1's character, +0x1D port 2's (gmCharacterKind, 0xFF unknown)
-//            +0x20 4 bytes per counted game (up to 8): winner, stage, port 1's and 2's characters
-//            (casual: +0x10 counts the fights begun from the stage select instead, and nothing
-//            else of the set is used)
-//            +0x40 u8 port 1's preferred stage, +0x41 port 2's (casual; ruleset index, 0xFF none)
-//   steps    +0x80 u8 the stage flow: 0 idle, 1 running on the stage select
-//            +0x81 u8 step   +0x82 u8 the port whose turn it is (0xFF none)
-//            +0x83 u8 strikes or bans made in this step   +0x84 u16 struck or banned this game
-//            +0x88 u32 the step's deadline (the frame hook's frame number)
-//            +0x8C u8 the pick's timer ran out: the default pick is being made   +0x8D u8 its stage
-//            +0x8E u8 the default pick's A is pressed this frame
-//            +0x8F u8 why the flow is picking (AUTO_*): its timer, the player's pick, the two
-//            players' agreement, a casual game's result
+//   set      +0x10 u8 games counted   +0x11 u8 port 1 wins   +0x12 u8 port 2 wins
+//            +0x13 u8 last counted game's winner (0xFF none)
+//            +0x14 u16 stages port 1 won on   +0x16 u16 port 2 (bitmasks of ruleset indices)
+//            +0x18 u8 set decided   +0x19 u8 set winner (0xFF none)
+//            +0x1A u8 a counted fight is in progress   +0x1B u8 its stage (0xFF unknown)
+//            +0x1C u8 port 1 character, +0x1D port 2 (gmCharacterKind, 0xFF unknown)
+//            +0x20 4 bytes per counted game (up to 8): winner, stage, both characters
+//            (casual uses only +0x10, as a count of fights started)
+//            +0x40 u8 port 1 preferred stage, +0x41 port 2 (casual only, 0xFF none)
+//   steps    +0x80 u8 flow: 0 idle, 1 running on the stage select
+//            +0x81 u8 step   +0x82 u8 port whose turn it is (0xFF none)
+//            +0x83 u8 strikes/bans made this step   +0x84 u16 stages struck/banned this game
+//            +0x88 u32 step deadline (frame number)
+//            +0x8C u8 auto pick in progress   +0x8D u8 its stage
+//            +0x8E u8 auto pick's A pressed this frame
+//            +0x8F u8 why the flow is picking (AUTO_*)
 constexpr u32 STATE_SIZE = 0x90;
 static_assert(BASE + STATE_SIZE <= FreeSpace::kMatchBlock.end);
 
@@ -217,10 +187,10 @@ constexpr u8 MODE_RANKED = 2;
 
 constexpr u8 NONE = 0xFF;
 // Why the stage flow is picking a stage (State::auto_why).
-constexpr u8 AUTO_TIMER = 0;   // the pick's timer ran out: its default
-constexpr u8 AUTO_PICKED = 1;  // the picker's A on a stage
+constexpr u8 AUTO_TIMER = 0;   // timer ran out: pick the default
+constexpr u8 AUTO_PICKED = 1;  // the picker pressed A on a stage
 constexpr u8 AUTO_AGREED = 2;  // both players proposed the same stage
-constexpr u8 AUTO_CASUAL = 3;  // a casual game's preferred stages (the same, or the coin's)
+constexpr u8 AUTO_CASUAL = 3;  // casual: shared preference, or the coin decides
 constexpr int MAX_GAMES = 8;
 
 struct GameRecord
@@ -257,32 +227,30 @@ struct State
   u32 deadline = 0;
   bool auto_pick = false;
   u8 auto_stage = NONE;
-  bool auto_press = false;  // the default pick's A, pressed 4 frames then released 4
+  bool auto_press = false;  // auto pick's A: pressed 4 frames, then released 4
   u8 auto_why = 0;          // AUTO_TIMER, AUTO_PICKED, AUTO_AGREED or AUTO_CASUAL
-  // A casual game's preferred stages (Project+'s casual stage pick, RankedPPlus.h).
+  // Casual preferred stages (RankedPPlus.h).
   std::array<u8, 2> prefs{NONE, NONE};
   bool operator==(const State&) const = default;
 
-  // A new set: the header's fields and nothing else.
+  // A new set with only the header fields filled in.
   static State Fresh(u8 mode, u8 ruleset, u8 coin);
 };
 
-// The block, or nullopt when it holds no header (the game's dead code, or a newer version).
+// Nullopt when there is no header (still dead code, or an unknown version).
 std::optional<State> Read(const GuestMemory& memory);
-// Whether the block's memory is there to write: sora_scene's dead code (its first word,
-// FreeSpace.h kMatchBlockOriginalWord) or a block already. Before the game loads sora_scene this
-// memory is something else's.
+// True when the block's memory holds sora_scene's dead code or a block. Before sora_scene loads,
+// this memory belongs to something else.
 bool Present(const GuestMemory& memory);
-// Writes `state`'s bytes (+0x00..+0x8F; the header's room hash and the queue's flags are not
-// State's), only the bytes that differ, and only where Present. Returns how many bytes changed.
+// Writes changed bytes of +0x00..+0x8F (except room hash and queue flags), only when Present.
+// Returns the number of bytes changed.
 int Write(GuestMemory& memory, const State& state);
-// No header: the dead code's first word back in place of the magic (nothing else is read without
-// it). Returns bytes changed.
+// Removes the header by restoring the original first word. Returns bytes changed.
 int Clear(GuestMemory& memory);
 
-// Game 1's first striker from the room's code: one bit of its FNV-1a hash. The server makes the
-// code; neither player chooses it, and both games read the result from the block.
+// Game 1's first striker: one bit of the room code's FNV-1a hash. The server makes the code, so
+// neither player can choose it.
 u8 CoinFromCode(std::string_view code);
-// The room code's FNV-1a hash, for the header's ROOM.
+// FNV-1a hash of the room code.
 u32 RoomHash(std::string_view code);
 }  // namespace Orca::UX::MatchBlock

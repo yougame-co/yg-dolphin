@@ -4,12 +4,8 @@
 
 #include "Common/Assert.h"
 
-// A debug build stops on an ImGui assert (Dolphin's ASSERT: a message box asks whether to carry
-// on). A release build writes the first failure at each place to stderr and the log
-// (ImGuiAssertFailed) and carries on, as ImGui's own default (assert()) does under NDEBUG: ImGui
-// only draws over the picture (Dolphin's OSD, Orca's overlay), and nogui answers ASSERT's question
-// with no, which traps. Orca 0.3.13 ended a player's game four times on 2026-10-04 so (SIGTRAP, a
-// font size of 0 in ImFontAtlasBakedGetOrAdd), with nothing wrong in the game.
+// Release builds log a failed ImGui assert and carry on instead of trapping. ImGui only draws
+// overlays, so a bad assert there must not end a player's game. Debug builds still stop.
 #if defined(_DEBUG) || defined(DEBUGFAST)
 #define IM_ASSERT(_EXPR) ASSERT(_EXPR)
 #else
@@ -21,10 +17,9 @@
   } while (0)
 #endif
 
-// A release build's failed IM_ASSERT (imgui_user_config.cpp): counts it, writes the first one at
-// each place (file and line) to stderr and the log, and returns. Any thread.
+// Counts a failed IM_ASSERT and logs the first failure at each file and line. Any thread.
 void ImGuiAssertFailed(const char* expression, const char* file, int line);
-// The ImGui asserts that failed in this process so far, in a release build (tests).
+// Number of failed ImGui asserts so far in a release build (for tests).
 std::size_t ImGuiAssertFailures();
 
 #define IMGUI_DISABLE_DEMO_WINDOWS

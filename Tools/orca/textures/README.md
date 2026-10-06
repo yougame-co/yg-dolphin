@@ -22,31 +22,22 @@ textures as `RSBE01`; their labels hash differently, so one folder serves both.
 
 Project+'s own button already reads PLAY ONLINE and its title ONLINE.
 
-Design F's relabels (`Core/Orca/UX/Relabel.h`, ORCA.md "Relabelled words") are 38 more names, listed
-with their words in `RELABELS` in the script: READY TO FIGHT! (C4 352x36, a palette entry's blue
-marked: PRESS START TO LOCK IN!, WINNER PICKS FIRST!, LOSER PICKS NOW!), STAGE SELECT (I4, Brawl
-128x16, Project+ 189x30, the first texel marked: P1 STRIKES 1 ... PICK A STAGE, right-aligned so the
-overlay's timer follows them), the stage select's BRAWL / VERSUS (I4 120x24: RANKED, CASUAL) and
-Project+'s stage select legend (CornerInfo I4 245x53: STRIKE, PROPOSE, TAKE BACK with their signs;
-CornerButtons IA8 150x50: X, A, B).
+The relabels (`Core/Orca/UX/Relabel.h`, ORCA.md "Relabelled words") add 38 more names, listed with
+their words in `RELABELS` in the script. They replace READY TO FIGHT! (with PRESS START TO LOCK IN!
+and similar), the STAGE SELECT title (with each strike or pick step, right-aligned so the overlay's
+timer follows), the stage select's BRAWL / VERSUS (RANKED, CASUAL) and Project+'s stage select
+legend (STRIKE, PROPOSE, TAKE BACK; X, A, B).
 
-The character select's titles are paletted (C8), so their names carry the palette's hash too. Orca
-never draws into the game's texture: in an online room it moves the blue of the palette entry the
-texture's background uses (a transparent colour) by one to three steps, one per mode
-(`Core/Orca/UX/CssTitle.h`, ORCA.md "The character select's title"), and each of those palettes
-hashes to one of the names above. The names were computed from the disc's and Project+'s archives
-with Dolphin's own hash (XXH64 of the texture's data, and of the palette's entries from the lowest
-to the highest the texture uses).
+The character select's titles are paletted (C8), so their names include the palette's hash. Orca
+never draws into the game's texture. Instead, in an online room it nudges the blue of the texture's
+transparent background colour by one to three steps, one per mode (`Core/Orca/UX/CssTitle.h`), so
+each mode's palette hashes to a different name above. The names use Dolphin's own texture hash.
 
-The art is ours, drawn by `make-labels.py` (needs Pillow) in each game's style: Brawl's black heavy
-letters with a white rim and halo, Project+'s black condensed letters with a white outline, and
-Brawl's ONLINE title in a condensed face like the game's own titles (SELECT MODE, / WITH ANYONE), at
-the height of theirs. Nothing in it comes from the game's art; the boxes in the script are where the
-game's own letters sit in its textures, so ours sit in the same place. Each label is 4x the game's
-size (Dolphin takes any integer multiple), with mip levels down to the game's own size
-(`<name>_mip1.png` at 2x, `_mip2.png` at 1x): Dolphin gives a custom texture's sampler its mip
-levels even where the game's texture has none, so a label drawn at 1x internal resolution reads the
-clean 1x level instead of the 4x one every fourth texel (which breaks thin strokes, like Anton's N).
+The art is original, drawn by `make-labels.py` (needs Pillow) in each game's style with
+open-licence fonts. Nothing comes from the game's art; the script only uses the positions of the
+game's letters so ours sit in the same place. Each label is 4x the game's size, with mip levels down
+to 1x (`_mip1.png` at 2x, `_mip2.png` at 1x). Dolphin samples a custom texture's mips even when the
+game's texture has none, so at 1x internal resolution thin strokes stay clean.
 Regenerate with:
 
 ```bash
@@ -75,12 +66,10 @@ them in `fonts/`. None is shipped with Orca: only the PNGs drawn with them are.
   RAM and swaps the host GPU texture; nothing Orca draws reaches emulated memory (Profile.cpp
   forces EFB copies to texture only, EFB access and bounding box off). The pack is therefore not
   in the compatibility key. `YG_HASHLOG` is identical with and without it in both games.
-- In a session Orca's pack keeps the names it has: a player's own pack in `<user>/Load/Textures`
-  (a Brawl HD pack holding the game's button or title, say) never brings back a texture Orca
-  replaces, and has every other name (`CollectHiresTextureFiles` in
-  `VideoCommon/HiresTextures.cpp`, unit test `OrcaOnlineMenuTextures`). Orca's is always
-  preloaded, the player's follows their "Prefetch Custom Textures" setting. Outside a session
-  Orca's pack isn't loaded.
+- In a session Orca's textures win over a player's own pack in `<user>/Load/Textures` for the
+  names Orca replaces; the player's pack still supplies every other name
+  (`CollectHiresTextureFiles` in `VideoCommon/HiresTextures.cpp`). Orca's pack is always
+  preloaded and is not loaded outside a session.
 - A new label: add an entry to `LABELS` with the texture's Dolphin name (dump it with
   `-C Graphics.Settings.DumpTextures=True`, then delete the dump: it is the game's art), run the
   script, and the unit test `OrcaOnlineMenuTextures` checks the name, the size and the mip levels.

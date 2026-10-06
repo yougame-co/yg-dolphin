@@ -60,11 +60,10 @@ void JitArm64::Force25BitPrecision(ARM64Reg output, ARM64Reg input)
   }
 }
 
-// Orca: PowerPC's fneg, fabs and fnabs (and their paired forms, and the final negation of
-// fnmadd/fnmsub) change only the sign bit, NaNs included, as Jit64 does with XORPD/ANDPD/ORPD.
-// AArch64's FNEG and FABS leave a NaN's sign alone while FPCR.AH is set, which Dolphin sets in the
-// guest's non-IEEE mode, so a Mac computed a NaN of the other sign than a PC: Project+ makes one
-// with fnmsubs (inf * 0) as a match starts, and the two players' memory diverged there.
+// Orca: PowerPC's fneg, fabs and fnabs (their paired forms and fnmadd/fnmsub's final negation too)
+// change only the sign bit, NaNs included, as Jit64 does with XORPD/ANDPD/ORPD. AArch64's FNEG and
+// FABS leave a NaN's sign alone while FPCR.AH is set (the guest's non-IEEE mode), which made Macs
+// and PCs compute NaNs of opposite sign and desync.
 // size: 32 or 64 (the lanes). packed: Vd and Vn are D (two singles) or Q (two doubles) registers
 // and every lane changes; otherwise only the low lane, and the rest of Vd is zeroed as FNEG did.
 void JitArm64::EmitSignOp(SignOp op, u8 size, ARM64Reg Vd, ARM64Reg Vn, bool packed,
@@ -305,10 +304,8 @@ void JitArm64::fp_arith(UGeckoInstruction inst)
         inputs.push_back(VC);
 
       // If any inputs are NaNs, pick the first NaN of them and set its quiet bit: PowerPC's order,
-      // a, b, c, with c as it is before its 25-bit rounding (as Jit64 and the interpreter's fmadds
-      // pick it). Orca: every input is checked, the last too. The hardware would pick a last NaN
-      // input right, but with no NaN input it makes its own default NaN, which is negative under
-      // FPCR.AH (an Apple M4 and later; x86-64's is negative too) and positive without (M1 to M3).
+      // a, b, c, with c as it is before its 25-bit rounding. Orca: check the last input too, so a
+      // result with no NaN input gets PowerPC's default NaN, not the host's (sign varies with AH).
       for (const ARM64Reg input : inputs)
       {
         m_float_emit.FCMP(input);
@@ -322,8 +319,8 @@ void JitArm64::fp_arith(UGeckoInstruction inst)
         SetJumpTarget(skip);
       }
 
-      // No NaN input: PowerPC's default NaN, positive on every host. Either way the NaN result is
-      // never negated (fnmadd/fnmsub), as on PowerPC.
+      // No NaN input: PowerPC's positive default NaN. The NaN result is never negated
+      // (fnmadd/fnmsub), as on PowerPC.
       EmitPPCDefaultNaN(VD, single);
       nan_fixups.push_back(B());
 
@@ -747,7 +744,7 @@ void JitArm64::fctiwx(UGeckoInstruction inst)
     if (m_accurate_nans)
     {
       // Orca: a NaN converts to 0x80000000 on PowerPC (the interpreter) and Jit64; FCVTZS makes
-      // it 0. FRINTI keeps a NaN a NaN, so the converted register still says.
+      // it 0. FRINTI keeps a NaN a NaN, so test its result for one.
       m_float_emit.FCMP(converted);
       CSET(WB, CCFlags::CC_VS);
       ORR(WA, WA, WB, ArithOption(WB, ShiftType::LSL, 31));

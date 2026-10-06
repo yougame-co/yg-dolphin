@@ -405,7 +405,7 @@ TEST(OrcaOnlineMenuTextures, EveryShippedTextureIsAnIntegerMultipleOfItsName)
   // Brawl's PLAY ONLINE, ONLINE breadcrumb, CASUAL and RANKED; Project+'s CASUAL and RANKED; the
   // character select's title in each game, CASUAL, RANKED and FRIENDS, one name per mark: the
   // game's texture (Brawl's BRAWL, Project+'s VERSUS) with its palette marked for that mode. And
-  // design F's relabels (Relabel.h): READY TO FIGHT!'s three in each game, STAGE SELECT's
+  // the texture relabels (Relabel.h): READY TO FIGHT!'s three in each game, STAGE SELECT's
   // thirteen in each, the stage select's RANKED and CASUAL in each, Project+'s legend's two.
   EXPECT_EQ(bases.size(), 12u + 6u + 26u + 4u + 2u);
   std::map<std::pair<u32, u32>, std::set<std::string>> titles;
@@ -973,9 +973,9 @@ TEST(OrcaOnlineMenuText, EveryEditFitsItsSlotAndSaysNothingOfNintendo)
 
 TEST(OrcaOnlineMenuText, TheOnlinePagesWithFriendsPromisesNoRoster)
 {
-  // The ONLINE page's With Friends (message 18) goes straight to the local Versus character select
-  // since ux=18, where the friends you invite drop in: 'Play with people you've registered as
-  // Friends!' named a roster that isn't there. Both games, the same words.
+  // The ONLINE page's With Friends (message 18) goes straight to the local Versus character select,
+  // where invited friends drop in, so the game's text about registered friends named a roster that
+  // isn't there. Both games, the same words.
   for (const char* colour : {BRAWL_COLOUR, PPLUS_COLOUR})
   {
     SCOPED_TRACE(colour == BRAWL_COLOUR ? "Brawl" : "Project+");
@@ -1259,7 +1259,7 @@ TEST(OrcaOnlineMenuText, WritesNothingUnlessItIsTheMenusOwnText)
   }
 }
 
-// Both games boot to the main menu (Luis, 2026-10-04). Brawl's boot goes there through its own
+// Both games boot to the main menu. Brawl's boot goes there through its own
 // sequences; Project+'s codeset's "Boot Directly to CSS" takes its Start case's path instead (the
 // title, then the main menu), and the title is skipped the same way in both.
 TEST(OrcaOnlineMenuBoot, BothGamesBootToTheMainMenu)

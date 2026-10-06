@@ -21,8 +21,7 @@
 # ORCA_TEST_NET_DELAY_MS=30, ORCA_DIRECT=0 ...). --ticket-direct off: both Orcas get their tickets
 # through a proxy on this machine (ORCA_SITE) that adds YouGame's `"direct": false` to each reply,
 # as the site's remote switch does: no link is ever tried (implies --expect relay; the log must
-# say why and show no link). Two Orca processes at most; take
-# ~/Documents/brawl-dolphin/orca-run.lock around it on the shared Mac.
+# say why and show no link). Runs two Orca processes.
 import http.server
 import json
 import os

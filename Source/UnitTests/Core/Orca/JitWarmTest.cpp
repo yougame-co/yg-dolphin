@@ -150,8 +150,8 @@ TEST(OrcaJitWarm, PacedTargetMeetsEveryDeadline)
   // Project+'s shape: 600 blocks first run in frame 0, 17,000 more by frame 24, 1,200 in frame 34.
   const std::vector<std::pair<int, std::size_t>> due = {{0, 600}, {24, 17'600}, {34, 18'800}};
   constexpr int LEAD = 3;
-  // Frame 0: frame 0's blocks are already late (all now), and 17,600 by boundary 21 is 800 a
-  // boundary, which covers them.
+  // At frame 0 the 600 frame-0 blocks are already late, and 17,600 by boundary 21 (24 - LEAD) is
+  // 800 per boundary, which covers them.
   EXPECT_EQ(PacedTarget(due, 0, 0, LEAD), 800u);
   // Walked boundary by boundary at exactly the pace, every deadline holds.
   std::size_t cursor = 0;
@@ -176,9 +176,8 @@ TEST(OrcaJitWarm, PacedTargetMeetsEveryDeadline)
   EXPECT_EQ(PacedTarget(std::vector<std::pair<int, std::size_t>>{{165, 30'000}}, 0, 0, LEAD), 185u);
 }
 
-// The lists Orca ships for a player without one (Data/Sys/Orca/<profile>.jitwarm, JitWarm.cpp
-// SeedPath): they read (checksum, format), hold a match's start, and are in `when` order
-// enough to pace (some block first run in the loading frames).
+// The seed lists Orca ships for players without their own (Data/Sys/Orca/<profile>.jitwarm): they
+// decode, are large enough to cover a match start, and include blocks first run while loading.
 TEST(OrcaJitWarm, ShippedSeedListsRead)
 {
   // The source tree's Data/Sys/Orca, found from this file (tests run from the build directory).

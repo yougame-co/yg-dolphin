@@ -118,7 +118,7 @@ std::optional<Options> TakeArguments(std::vector<char*>* argv, std::string* erro
     }
     else if (std::strcmp(arg, "--rect") == 0)
     {
-      // Four arguments, as the libretro host takes them, or one "X,Y,W,H".
+      // Either four arguments or one "X,Y,W,H".
       Rect r;
       if (ParseInt(next(1), &r.x) && ParseInt(next(2), &r.y) && ParseInt(next(3), &r.w) &&
           ParseInt(next(4), &r.h))
@@ -190,9 +190,8 @@ void Out(const std::string& line)
 
 void StartReading()
 {
-  // The file descriptor, not std::cin or stdin: a thread blocked in a FILE read holds that FILE's
-  // lock, and the fflush(nullptr) of Dolphin's shutdown (and the C runtime's exit) would wait on it
-  // forever whenever the game stops by itself.
+  // Read the raw file descriptor, not stdin: a thread blocked in a FILE read holds that FILE's
+  // lock, and fflush(nullptr) at shutdown or exit would then hang forever.
   std::thread([] {
     std::string pending;
     char buffer[512];
@@ -224,7 +223,7 @@ void StartReading()
       if (quit)
         return;
     }
-    // The app closed the pipe or died: nobody is left to show the game to.
+    // The app closed the pipe or died, so there is nobody left to show the game to.
     Inbox& inbox = GetInbox();
     std::lock_guard lock(inbox.mutex);
     inbox.lines.emplace_back("quit");

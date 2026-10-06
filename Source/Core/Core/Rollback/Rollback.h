@@ -1,16 +1,14 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-// Orca rollback core: exact whole-machine snapshots taken and restored at one point in the frame.
+// Orca rollback core: exact whole-machine snapshots, saved and restored at the frame boundary.
 //
-// A snapshot is RAM (MEM1, MEM2, the locked L1 cache) kept by the ring, plus everything else
-// through Dolphin's own DoState with RAM skipped. In a session, MEM1 and MEM2 are kept copy-on-write
-// (Rollback/Cow.h): a snapshot holds only the pages written after it; ORCA_TEST_FULL_SNAPSHOTS=1
-// and anything outside a session copy them whole. Saves and loads happen at the same instruction
-// (the frame boundary), so CPU registers, the stack, CoreTiming, the DSP, IOS and the devices are
-// all restored as they were. Subsystems check InSnapshotDoState() to leave out what a rollback
-// must not touch: RAM inside DoState, the JIT clears on load (JitInterface and unchanged BATs), and
-// NAND file contents.
+// A snapshot is RAM (MEM1, MEM2, the locked L1 cache) plus everything else through Dolphin's
+// DoState with RAM skipped. In a session RAM is kept copy-on-write (Cow.h); otherwise, or with
+// ORCA_TEST_FULL_SNAPSHOTS=1, it is copied whole. Because saves and loads happen at the same
+// instruction, CPU, DSP, timing and device state all come back exactly. Subsystems check
+// InSnapshotDoState() to skip what a rollback must not touch: RAM inside DoState, JIT clears on
+// load, and NAND file contents.
 
 #pragma once
 
@@ -34,8 +32,7 @@ namespace Rollback
 // True while a rollback snapshot is being saved or loaded (CPU thread; single core only).
 bool InSnapshotDoState();
 
-// True while frames are being re-run after a load: their host rendering is skipped and the audio
-// they produce is dropped (it already played the first time).
+// True while frames are re-run after a load: host rendering is skipped and their audio dropped.
 bool IsResimulating();
 void SetResimulating(bool resimulating);
 
@@ -49,8 +46,8 @@ public:
   SnapshotScope& operator=(const SnapshotScope&) = delete;
 };
 
-// A whole machine at one frame boundary, as a ring slot holds it, outside any ring: a drop-in
-// keyframe the host sends a joining friend. The NAND's contents travel separately.
+// A full machine image at a frame boundary: the keyframe a host sends to a player joining mid-game.
+// NAND contents are sent separately.
 struct MachineImage
 {
   std::vector<u8> state;
@@ -70,30 +67,28 @@ public:
 
   // Returns true when the save had to allocate (a slot's first use, or a bigger state).
   bool Save(Core::System& system, s64 frame);
-  // Restores the snapshot taken at `frame`. Returns false if it is not in the ring, the state does
-  // not load, or the NAND could not be put back. Only call this from the frame-boundary hook, where
-  // every snapshot was taken: loading anywhere else would resume at the hook's pinned pc, run the
-  // boundary twice and count the hooked instruction's cycles twice.
+  // Restores the snapshot taken at `frame`; false if missing or the state or NAND fails to restore.
+  // Only call from the frame-boundary hook: snapshots resume at the hook's pc, so loading elsewhere
+  // would run the boundary twice.
   bool Load(Core::System& system, s64 frame);
   bool Has(s64 frame) const;
-  // Forgets every snapshot and stops the NAND journal (call while emulation is still running).
+  // Forgets every snapshot and stops the NAND journal. Call while emulation is still running.
   void Reset(Core::System& system);
   // RamChecksum of the snapshot taken at `frame`, or nullopt if it is not in the ring.
   std::optional<u64> RamChecksum(s64 frame) const;
 
-  // The non-RAM state written by the most recent Save (for hashing and diagnostics).
+  // The non-RAM state from the most recent Save, for hashing and diagnostics.
   std::span<const u8> LastState() const;
 
-  // Drop-in keyframes. Capture writes what Save would into `image` (call it where Save is called:
-  // the frame-boundary hook). With `stop_journal`, the NAND journal the capture started stops again
-  // (no ring holds a snapshot to undo to). LoadImage takes an image captured on another machine
-  // into a slot as `frame` and loads it like Load; the NAND must already hold the image's contents.
+  // Keyframes for mid-game joins. Capture writes what Save would into `image`; call it from the
+  // frame-boundary hook. `stop_journal` stops the NAND journal the capture
+  // started, for callers with no ring to undo to. LoadImage loads an image from another machine as
+  // `frame`; the NAND must already match it.
   static bool Capture(Core::System& system, MachineImage* image, bool stop_journal);
   bool LoadImage(Core::System& system, MachineImage image, s64 frame);
 
 private:
-  // Load, and whether the load shows the snapshot's frame again (a keyframe's does; a rollback's
-  // does not: VideoCommon_SetSnapshotRedisplays).
+  // `redisplay` shows the snapshot's frame again: true for keyframes, false for rollbacks.
   bool LoadSlot(Core::System& system, s64 frame, bool redisplay);
 
   struct Slot
@@ -104,16 +99,16 @@ private:
     std::vector<u8> l1_cache;
     Common::UniqueBuffer<u8> state;
     std::size_t state_size = 0;
-    u64 nand_journal_mark = 0;  // the NAND journal mark this snapshot's state recorded
-    // The copy-on-write snapshot of MEM1 and MEM2 (Cow.h), or 0 when they are copied in mem1/mem2.
+    u64 nand_journal_mark = 0;  // NAND journal position at save time
+    // Copy-on-write snapshot id for MEM1/MEM2, or 0 when they are copied into mem1/mem2.
     u64 cow_id = 0;
   };
 
   Slot* Find(s64 frame);
   const Slot* Find(s64 frame) const;
-  // Empties a slot (its copy-on-write snapshot merges into the one before it).
+  // Empties a slot; its copy-on-write pages merge into the previous snapshot.
   void Forget(Slot* slot);
-  // Whether this ring's saves are copy-on-write, decided (and tracking armed) at its first save.
+  // Whether saves are copy-on-write; decided, and tracking armed, at the first save.
   bool UseCow(Core::System& system, bool* armed_now);
 
   std::vector<Slot> m_slots;
@@ -122,21 +117,20 @@ private:
   std::optional<bool> m_cow;
 };
 
-// XXH3 over MEM1 then MEM2: the state checksum players compare to detect a desync.
+// XXH3 of MEM1 then MEM2: the checksum players compare to detect a desync.
 u64 RamChecksum(std::span<const u8> mem1, std::span<const u8> mem2);
 
-// The complete status a GameCube controller port (0-based) reports for the current frame, as the
-// game reads it (SI_DeviceGCController): RawInputOverride through the input gate's masks for this
-// frame (InputGate.h). It replaces the host controller's status entirely (analog A/B, origin), so
-// nothing local leaks into the emulated machine.
+// The pad a GameCube port (0-based) reports to the game this frame: RawInputOverride passed through
+// the input gate (InputGate.h). It fully replaces the host controller's status, so nothing local
+// leaks into the emulated machine.
 std::optional<GCPadStatus> InputOverride(int port);
-// The same before the input gate: the session's pads, the test harness's, or, in a session that has
-// not supplied pads yet (the boot), a neutral pad. What a recording keeps (YG_PADREC).
+// The pad before the input gate: the session's, the test harness's, or a neutral pad during boot
+// in a session. This is what YG_PADREC records.
 std::optional<GCPadStatus> RawInputOverride(int port);
 
-// Called by the game profile's frame-boundary hook once per game frame. Runs in the host's
-// floating-point mode and leaves the guest's set again (from its FPSCR) on the way out.
+// Called by the game profile's frame-boundary hook once per frame. Runs in the host's
+// floating-point mode and restores the guest's (from FPSCR) on exit.
 void OnFrameBoundary(const Core::CPUThreadGuard& guard);
-// FPCR (ARM64) or MXCSR (x86-64) as this thread has it now; for tests.
+// This thread's FPCR (ARM64) or MXCSR (x86-64); for tests.
 u64 HostFloatControlForTests();
 }  // namespace Rollback

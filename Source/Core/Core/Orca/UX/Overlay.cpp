@@ -40,7 +40,7 @@ namespace Orca::UX
 {
 namespace
 {
-// How far back the stall count decides the signal.
+// The window of recent stalls that decides the signal.
 constexpr double STALL_WINDOW_MS = 3000;
 
 double NowMs()
@@ -50,7 +50,7 @@ double NowMs()
       .count();
 }
 
-// Fields the session adds in its next push; until then the stall text stays off.
+// Read these fields only if LinkStats has them; otherwise the stall text stays off.
 template <typename T>
 int StalledMs(const T& stats)
 {
@@ -73,8 +73,7 @@ std::string NameOf(const Events::PortInfo& p)
   return p.name.empty() ? fmt::format("Player {}", p.port + 1) : p.name;
 }
 
-// The frame meter's colour for a readout: its frames shown in a second, and whether one of them was
-// a hitch (past two frame periods) or late (past 20 ms).
+// The frame meter's colour, from frames shown in a second and whether any was a hitch or late.
 Signal LevelOf(int fps, bool hitch, bool late)
 {
   if (fps < OverlayModel::PERF_BAD_FPS || hitch)
@@ -98,8 +97,7 @@ LinkView ViewOf(const Events::LinkStats& stats)
   v.rollbacks_per_second = stats.rollbacks_per_second;
   v.deepest_rollback = stats.deepest_rollback;
   v.stalls = stats.stalls;
-  // Over a direct link (or TURN) the inputs travel that link, so its round trip is the ping that
-  // matters (as Slippi shows); the relay's stays the ping until the link is up.
+  // Inputs travel the direct (or TURN) link once it is up, so its round trip is the ping shown.
   v.transport = stats.link_rtt_ms >= 0 ? stats.transport : 0;
   v.round_trip_ms = v.transport > 0 ? stats.link_rtt_ms : stats.round_trip_ms;
   v.stalled_ms = StalledMs(stats);
@@ -110,8 +108,7 @@ LinkView ViewOf(const Events::LinkStats& stats)
 void OverlayModel::OnPorts(int frame, const std::vector<Events::PortInfo>& ports, double now_ms)
 {
   std::lock_guard lk(m_lock);
-  // The session calls this on first runs only, when the list changes; a drop-in join can take the
-  // frame number backwards (the host's frame), so frames don't order the lists.
+  // A drop-in join can move the frame number backwards, so frames don't order the lists.
   (void)frame;
   const auto find = [](const std::vector<Events::PortInfo>& list, int port) {
     return std::find_if(list.begin(), list.end(),
@@ -126,7 +123,7 @@ void OverlayModel::OnPorts(int frame, const std::vector<Events::PortInfo>& ports
     const auto was = find(m_ports, p.port);
     if (was != m_ports.end() && was->name == p.name && was->remote)
       continue;
-    // A joiner's first list already has the host: they are on a port, not joining.
+    // A joiner's first list already has the host, who is not joining.
     m_toasts.emplace_back(now_ms, first ? fmt::format("{} is on port {}", NameOf(p), p.port + 1) :
                                           fmt::format("{} joined on port {}", NameOf(p), p.port + 1));
   }
@@ -199,8 +196,7 @@ void OverlayModel::OnFrame(double now_ms, bool shown)
     return;
   }
   const double now = RunningMs(now_ms);
-  // A long run of unseen frames is a joiner's catch-up, a load rather than the game's pace: the
-  // meter starts over. A rollback's few re-runs only lengthen the next shown frame.
+  // A long run of unshown frames is a joiner catching up, not the game's pace. Restart the meter.
   if (std::exchange(m_unshown, 0) > PERF_MAX_UNSHOWN)
   {
     m_frames.clear();
@@ -209,7 +205,6 @@ void OverlayModel::OnFrame(double now_ms, bool shown)
   }
   if (m_first_frame < 0)
   {
-    // The first shown boundary arms the meter, the second starts it.
     if (m_last_frame >= 0)
       m_first_frame = now;
   }
@@ -242,13 +237,11 @@ void OverlayModel::Resume(double now_ms)
 
 void OverlayModel::Meter(double now_ms, Stats stats, Perf perf, Frame* f) const
 {
-  // Paused, the readout stands still at the moment of the pause.
   const double now = RunningMs(now_ms);
   if (perf == Perf::Off || m_first_frame < 0 || now < m_first_frame + PERF_WINDOW_MS)
     return;
-  // One pass, oldest first: the readout at each shown boundary of the last PERF_HOLD_MS gives the
-  // colour its hold. `first` is the oldest frame of the second being read; `hitch` and `late` are
-  // the newest frames past the thresholds (-1: none).
+  // The colour is the worst readout at any boundary in the last PERF_HOLD_MS. `hitch` and `late`
+  // index the newest frames past each threshold (-1 if none).
   std::size_t first = 0;
   std::ptrdiff_t hitch = -1, late = -1;
   const auto level_at = [&](std::size_t end, double t) {
@@ -269,8 +262,7 @@ void OverlayModel::Meter(double now_ms, Stats stats, Perf perf, Frame* f) const
     if (at > now - PERF_HOLD_MS && at >= m_first_frame + PERF_WINDOW_MS)
       level = Worse(level, level_at(end + 1, at));
   }
-  // Now: the last second's frames, and the frame still running (the game waiting for a friend)
-  // is at least this long already.
+  // A frame still running (waiting for a friend) counts as at least this long.
   level_at(end, now);
   const int fps = static_cast<int>(end - first);
   double longest_ms = std::max(0.0, now - m_last_frame);
@@ -281,7 +273,7 @@ void OverlayModel::Meter(double now_ms, Stats stats, Perf perf, Frame* f) const
   f->perf = fmt::format("{} fps · {:.0f} ms", fps, longest_ms);
   if (perf != Perf::Detailed)
     return;
-  // The ping line says these already with `ping full`.
+  // Stats::Full already shows these.
   if (m_link.online && stats != Stats::Full)
     f->perf += fmt::format(" · delay {} · {:.1f} rb/s", m_link.delay, m_link.rollbacks_per_second);
   for (std::size_t i = 0; i < end; ++i)
@@ -344,24 +336,24 @@ std::string s_rules_line;
 std::string s_rules_note;
 OverlayModel s_overlay;
 std::atomic<Stats> s_stats{Stats::Off};
-// On until the app says otherwise (Luis wants it while testing).
+// On until the app turns it off.
 std::atomic<Perf> s_perf{Perf::Fps};
-Common::EventHook s_state_hook;  // the core's pause and resume, for the frame meter
-std::atomic<bool> s_visible{true};  // the app shows the game (embed hide/show)
-// The page's dim (embed `dim N`, percent), and the level drawn last (eased toward it on the video
-// thread, `s_dim_at` the ImGui time it was drawn at; -1: not yet).
+Common::EventHook s_state_hook;  // core pause/resume, for the frame meter
+std::atomic<bool> s_visible{true};  // whether the app shows the game
+// The requested dim percent, and the level last drawn, eased toward it on the video thread.
+// `s_dim_at` is the ImGui time of that draw (-1 if none yet).
 std::atomic<int> s_dim{0};
 float s_dim_shown = 0;
 double s_dim_at = -1;
-std::optional<PictureArea> s_test_picture;  // SetPictureForTests's
+std::optional<PictureArea> s_test_picture;
 std::mutex s_rule_line_lock;
-std::string s_rule_line;  // SetRuleLine's
+std::string s_rule_line;
 std::mutex s_queue_lock;
-std::string s_queue_line, s_queue_note;  // SetQueueLines'
+std::string s_queue_line, s_queue_note;
 std::array<std::string, 4> s_queue_labels;
 std::array<bool, 4> s_queue_locked{};
-// ORCA_UX_OVERLAY_DEMO=1 (design checks only): a made-up friend whose link cycles good, ok, bad
-// with a stall, every 12 s, in place of the session's stats.
+// ORCA_UX_OVERLAY_DEMO=1, for design checks: a fake friend whose link cycles good, ok, then bad
+// with a stall every 12 s, in place of the session's stats.
 bool s_demo = false;
 double s_demo_start = -1;
 
@@ -370,11 +362,10 @@ LinkView DemoLink(double now)
   if (s_demo_start < 0)
   {
     s_demo_start = now;
-    s_overlay.OnPorts(0, {{0, "luis", false}}, now);
-    s_overlay.OnPorts(1, {{0, "luis", false}, {1, "ada", true}}, now);
+    s_overlay.OnPorts(0, {{0, "bo", false}}, now);
+    s_overlay.OnPorts(1, {{0, "bo", false}, {1, "ada", true}}, now);
   }
   const double t = std::fmod(now - s_demo_start, 12000);
-  // A toast and two chat lines each round, the second long enough to wrap.
   static int s_chat_round = -1;
   const int round = static_cast<int>((now - s_demo_start) / 12000);
   if (round != s_chat_round && t >= 1500)
@@ -399,7 +390,7 @@ ImU32 Rgba(int r, int g, int b, float a)
   return IM_COL32(r, g, b, static_cast<int>(std::lround(std::clamp(a, 0.0f, 1.0f) * 255)));
 }
 
-// The frame meter's colours: white while the game keeps its pace, then the lamp's yellow and red.
+// The frame meter's colours: white at full pace, then yellow and red.
 ImU32 LevelColour(Signal level, float alpha)
 {
   return level == Signal::Bad ? Rgba(255, 72, 64, alpha) :
@@ -407,22 +398,21 @@ ImU32 LevelColour(Signal level, float alpha)
                                 Rgba(255, 255, 255, alpha);
 }
 
-// The frame meter's graph on a panel plate: a bar per shown frame of the last two seconds, newest
-// on the right, up to 50 ms tall, with a line at one frame period.
+// The frame-time graph: a bar per shown frame of the last two seconds, newest on the right, capped
+// at 50 ms, with a line at one frame period.
 void FrameGraph(ImDrawList* dl, ImVec2 pos, ImVec2 size, float unit,
                 const std::vector<float>& frames)
 {
   constexpr float TOP_MS = 50;
   constexpr float SLOTS = OverlayModel::PERF_GRAPH_MS * 60 / 1000;
   Kit::Plate(dl, pos, ImVec2(pos.x + size.x, pos.y + size.y), unit, Kit::Tone::Panel, 0.9f);
-  // The bars inside the plate's rim.
   const float pad = 0.9f * unit;
   pos = ImVec2(pos.x + pad, pos.y + pad);
   size = ImVec2(size.x - 2 * pad, size.y - 2 * pad);
   dl->AddRectFilled(pos, ImVec2(pos.x + size.x, pos.y + size.y), Rgba(0, 0, 0, 0.45f),
                     0.4f * unit);
   const float slot = size.x / SLOTS;
-  // Bars a few pixels wide get a gap; thinner ones touch (a gap would alias them away).
+  // Only bars a few pixels wide get a gap. Thinner ones would alias away.
   const float gap = slot >= 3 ? slot * 0.2f : 0;
   const float bottom = pos.y + size.y;
   float x = pos.x + size.x;
@@ -442,21 +432,18 @@ void FrameGraph(ImDrawList* dl, ImVec2 pos, ImVec2 size, float unit,
               Rgba(255, 255, 255, 0.4f), std::max(1.0f, size.y / 40));
 }
 
-// The centre of port `port`'s panel on the character select, as a fraction of the game's picture's
-// width (both games, widescreen: ports 1 and 2 at 0.236 and 0.413 of a 1280x720 picture, 0.177
-// apart).
+// The centre of a port's character select panel, as a fraction of the picture's width. Measured
+// on widescreen 1280x720 in both games.
 float PanelCentre(int port)
 {
   return 0.236f + 0.177f * static_cast<float>(port);
 }
 
-// Where the name tab sits over a panel (its top), as a fraction of the picture's height.
+// The top of the name tab over a panel, as a fraction of the picture's height.
 constexpr float NAME_TAB_Y = 0.575f;
 
-// Port `port`'s portrait on the character select in a picture at `pic`, `pic_size` (design F's
-// frames and LOCKED IN ribbon go round it), measured on 1280x720 screenshots of both games
-// (2026-10-04): 200 pixels wide round the panel's centre; Brawl's from under the READY TO FIGHT
-// band (y 466) to its name plate (622), Project+'s from 432 to 628.
+// A port's portrait on the character select, where the lock-in frame and ribbon go. Measured on
+// 1280x720 screenshots: 200 px wide, Brawl y 466-622, Project+ y 432-628.
 Kit::Box PortraitRect(int port, ImVec2 pic, ImVec2 pic_size)
 {
   const bool pplus = Kit::CurrentLook() == Kit::Look::ProjectPlus;
@@ -466,16 +453,13 @@ Kit::Box PortraitRect(int port, ImVec2 pic, ImVec2 pic_size)
           ImVec2(cx + half, pic.y + pic_size.y * (pplus ? 0.872f : 0.864f))};
 }
 
-// The set's dots' middle, from the picture's top: in both games' dark top band on the character
-// and the stage selects.
+// The vertical middle of the set's score dots, in the games' dark top band.
 constexpr float DOTS_Y = 1.9f;  // overlay units
-// Where the top centre's banners start: under the dots when they show.
+// Where the top-centre banners start, lower when the dots show.
 constexpr float TOP_FIRST = 1.6f, TOP_UNDER_DOTS = 3.9f;  // overlay units
 
-// Design F's timers in the game's lettering (Kit::GameTimer), measured on 1280x720 screenshots of
-// both games (2026-10-05). READY TO FIGHT!'s: centred on the band's right end, past its words
-// (Brawl x 1186 y 441, Project+ x 1180 y 408). STAGE SELECT's: its left edge just past the
-// texture's right end (Brawl x 475, y 673; Project+ x 530, y 46; the labels' art ends there).
+// Timers drawn in the game's lettering, measured on 1280x720 screenshots. The band timer sits at
+// the right end of READY TO FIGHT!; the line timer starts just past the STAGE SELECT label.
 struct GameTimerPlace
 {
   float x, y, size;
@@ -484,10 +468,10 @@ constexpr GameTimerPlace BAND_TIMER_BRAWL{0.927f, 0.6125f, 5.2f};
 constexpr GameTimerPlace BAND_TIMER_PPLUS{0.922f, 0.567f, 5.2f};
 constexpr GameTimerPlace LINE_TIMER_BRAWL{0.371f, 0.935f, 4.4f};
 constexpr GameTimerPlace LINE_TIMER_PPLUS{0.414f, 0.064f, 5.4f};
-// The control guide's right end and middle: the games' own corner for their button legends.
+// The control guide's right edge and middle, where the games put their own button legends.
 constexpr float GUIDE_RIGHT = 0.975f, GUIDE_Y = 0.969f;
 
-// A name in capitals as the game's own plates write them (ASCII letters only).
+// Uppercases ASCII letters, as the game's own name plates do.
 std::string Upper(std::string_view name)
 {
   std::string out(name);
@@ -499,8 +483,8 @@ std::string Upper(std::string_view name)
   return out;
 }
 
-// The game's picture in the window (the presenter's target rectangle: the window can letterbox or
-// pillarbox it), the whole display when the presenter has none.
+// The game's picture in the window (letterboxed or pillarboxed), or the whole display if the
+// presenter has none.
 void PictureRect(ImVec2* pic, ImVec2* pic_size)
 {
   *pic = ImVec2(0, 0);
@@ -521,11 +505,8 @@ void PictureRect(ImVec2* pic, ImVec2* pic_size)
   }
 }
 
-// The stage select's two cursors (StageCursors.h), in the kit: each player's pointer in their
-// colour with a tab naming them (pulsing on their turn), and the stage each proposes
-// framed in their colour with their name on a tab; both on one stage, one gold frame with both
-// names. Positions are the match block's (published by the frame hook), mapped onto the picture
-// with the layout's probed map.
+// The stage select's two cursors: each player's pointer and proposed stage in their colour, or one
+// gold frame when both propose the same stage. Positions come from the match block.
 void DrawStageCursors(ImDrawList* dl, const StageCursors::View& v, ImVec2 pic, ImVec2 pic_size,
                       float unit, double now_s)
 {
@@ -554,9 +535,8 @@ void DrawStageCursors(ImDrawList* dl, const StageCursors::View& v, ImVec2 pic, I
                both ? Kit::Tone::Gold : Kit::PortTone(port),
                both ? Upper(p.name) + " + " + Upper(v.players[1].name) : Upper(p.name), port == 0);
   }
-  // Whose turn it is (Luis, 2026-10-05: "very obvious whose turn it is ... a blinking cursor on who
-  // is supposed to be acting"): each cursor's cue (StageCursors::TurnText). The blink's phase
-  // starts when a cursor's turn does; a stage select that comes back after a gap starts afresh.
+  // Make whose turn it is very obvious with a blinking cursor on the acting player. The blink's
+  // phase starts with the turn; a stage select that returns after a gap starts afresh.
   static std::array<StageCursors::TurnCue::Mode, 2> s_mode{};
   static std::array<u8, 2> s_kind{};
   static std::array<double, 2> s_since{};
@@ -578,9 +558,8 @@ void DrawStageCursors(ImDrawList* dl, const StageCursors::View& v, ImVec2 pic, I
     s_mode[port] = cues[port].mode;
     s_kind[port] = v.kind;
   }
-  // Opaque and a little larger than the game's own crosshair (which sits on the cursor that moved
-  // last), so it never shows; port 1's tab to the left and port 2's to the right, so two cursors on
-  // one tile keep both.
+  // Opaque and slightly larger than the game's own crosshair, to hide it. Port 1's tab goes left
+  // and port 2's right, so two cursors on one tile both stay readable.
   const float radius = 1.7f * std::abs(layout->du) * pic_size.x;
   for (int port = 0; port < 2; ++port)
   {
@@ -596,9 +575,8 @@ void DrawStageCursors(ImDrawList* dl, const StageCursors::View& v, ImVec2 pic, I
                    s_since[port]);
     }
   }
-  // The tags over both cursors: the acting player's says what to do (gold on this player's own
-  // turn, its rim on the blink; the other player's in their colour, steady; both at once, each in
-  // their own colour); a waiting local player's, a small grey tab.
+  // Turn tags: the acting player's says what to do (gold and blinking on the local player's own
+  // turn, steady in port colour otherwise); a waiting local player gets a small grey tab.
   const ImVec2 clamp_min(pic.x + 1.0f * unit, pic.y + 1.0f * unit);
   const ImVec2 clamp_max(pic.x + pic_size.x - 1.0f * unit, pic.y + pic_size.y - 1.0f * unit);
   for (int port = 0; port < 2; ++port)
@@ -619,7 +597,7 @@ void DrawStageCursors(ImDrawList* dl, const StageCursors::View& v, ImVec2 pic, I
                  gold ? Kit::Tone::Gold : Kit::PortTone(port), cue.seconds, now_s, port == 0,
                  clamp_min, clamp_max, cue.local ? blink.on : 0.0f);
   }
-  // Brawl's Meta Knight clause, said loudly for the stage select's first 3 s: no strikes this game.
+  // Brawl's Meta Knight clause (no strikes this game), shown large for the first 3 s.
   const std::string mk = StageCursors::MkClauseNote(v);
   const double shown = now_s - s_opened;
   if (!mk.empty() && shown < 3.0)
@@ -636,7 +614,7 @@ void DrawStageCursors(ImDrawList* dl, const StageCursors::View& v, ImVec2 pic, I
   }
 }
 
-// ORCA_UX_KIT_DEMO=1: the kit's primitives over the game's picture (Kit.h), for design checks.
+// ORCA_UX_KIT_DEMO=1: draws the kit's primitives over the game, for design checks.
 void DrawKitDemo()
 {
   ImVec2 pic, pic_size;
@@ -647,7 +625,7 @@ void DrawKitDemo()
   Kit::DrawDemo(ImGui::GetForegroundDrawList(), pic, pic_size, unit, ImGui::GetTime());
 }
 
-// A line's trailing " · m:ss" (the turn's timer), taken off it: the seconds, or -1 with none.
+// Strips a trailing " · m:ss" timer from the line and returns its seconds, or -1 if none.
 int TakeTimer(std::string* line)
 {
   static const std::string sep = " · ";
@@ -671,26 +649,22 @@ int TakeTimer(std::string* line)
   return minutes * 60 + (tail[colon + 1] - '0') * 10 + (tail[colon + 2] - '0');
 }
 
-// Everything the overlay shows this frame, gathered from the model and the UX's tracks.
+// Everything the overlay shows this frame.
 struct Scene
 {
   OverlayModel::Frame f;
   SetEnd::View set_end;
-  // Top centre: the search's or the queue's lines, then the set's (the stage flow's, the score,
-  // the turn); `hint` this machine's own (Hold Z, B to change) as the control guide, bottom right.
+  // Top-centre lines (search or queue, then the set's). `hint` is the local control guide.
   std::string search, search_note, rules, rules_note, hint;
-  // Design F (Relabel.h): the turn's timer at READY TO FIGHT!'s right end and beside STAGE
-  // SELECT's label when those say Orca's words (-1: not there).
+  // Turn timers drawn by relabelled titles (-1 if not shown).
   int band_seconds = -1;
   int line_seconds = -1;
-  bool legend = false;  // Project+'s stage select legend says X, A and B (Relabel.h)
+  bool legend = false;  // Project+'s stage select legend is relabelled
   std::array<std::string, 4> labels;
   std::array<bool, 4> locked{};
   StageCursors::View cursors;
-  // Design F: whose pick it is in the character order (-1 none), the set's dots, and the queue's
-  // own character select searching (a ring on the empty seat).
   int picker = -1;
-  std::string picker_ribbon;  // "YOUR PICK" / "HBOX PICKS" on the picker's portrait
+  std::string picker_ribbon;  // "YOUR PICK" / "BO PICKS" on the picker's portrait
   RankedSet::Dots dots;
   bool searching = false;
 
@@ -713,13 +687,11 @@ Scene Gather(double now)
   s_overlay.Update(s_demo ? DemoLink(now) : ViewOf(Events::GetLinkStats()), now);
   s.f = s_overlay.View(now, s_stats.load(std::memory_order_relaxed),
                        s_perf.load(std::memory_order_relaxed));
-  // The set's end and the opponent's disconnect (SetEnd.h): its notice says more than "Waiting
-  // for <name>…", which goes meanwhile.
+  // The set-end or disconnect notice replaces "Waiting for <name>...".
   s.set_end = SetEnd::Current().At(SetEnd::DemoFrame(now));
   if (s.set_end.hides_waiting)
     s.f.waiting.clear();
-  // The matchmaking search (UX/OnlineMenu.h), while the player waits on the character select; the
-  // queue's character select's lines (UX/Queue.h) in their place when it has any.
+  // The matchmaking search lines, replaced by the queue's character select lines when it has any.
   std::tie(s.search, s.search_note) = Search::Lines();
   {
     std::lock_guard lk(s_queue_lock);
@@ -731,8 +703,7 @@ Scene Gather(double now)
     s.labels = s_queue_labels;
     s.locked = s_queue_locked;
   }
-  // Design F (Relabel.h): with READY TO FIGHT! up and saying Orca's words, the turn's timer is
-  // the band's (the lines lose theirs; the rules bar already has, NativeText.h).
+  // With READY TO FIGHT! relabelled, the turn timer moves onto the band.
   const Relabel::Shown words = Relabel::Current();
   const bool band_clock = words.band != Relabel::Band::Game && words.band_up;
   const auto take = [](int* seconds, std::string* line) {
@@ -745,10 +716,8 @@ Scene Gather(double now)
     take(&s.band_seconds, &s.search);
     take(&s.band_seconds, &s.search_note);
   }
-  // What the game's own text boxes already say (NativeText.h): a plate that names its player
-  // needs no tab over it (its LOCKED IN ribbon stays), and a rules bar that says the queue's line
-  // takes the place of the top lines; this machine's own hints (Hold Z, B to change) stay, in the
-  // control guide.
+  // Skip what the game's own text boxes already say: a named plate needs no tab, and a rules bar
+  // showing the queue line replaces the top lines. Local hints move to the control guide.
   const u8 native = NativeText::Shown();
   for (int port = 0; port < 4; ++port)
   {
@@ -757,14 +726,13 @@ Scene Gather(double now)
   }
   if (native & NativeText::SHOWN_RULES)
   {
-    // On the queue's own character select the bar says it all (it is this player's alone).
+    // On the solo queue character select the bar says it all.
     s.hint = Queue::OnSoloCss() ? std::string() : std::move(s.search_note);
     s.search.clear();
     s.search_note.clear();
   }
-  // A ranked set's lines, top centre: the stage flow's (Brawl's through SetRulesLines, Project+'s
-  // RankedPPlus::CurrentLines), else the set's score on the menus (UX/RankedSet.h); under it the
-  // turn (the stage flow's, else the character order's).
+  // A ranked set's lines: the stage flow's, else the set score; under it the stage flow's turn,
+  // else the character order's.
   std::string rule_line;
   {
     std::lock_guard lk(s_rules_lock);
@@ -790,8 +758,8 @@ Scene Gather(double now)
     take(&s.band_seconds, &s.rules);
     take(&s.band_seconds, &s.rules_note);
   }
-  // With STAGE SELECT saying whose turn it is, the stage select's lines go: its timer beside the
-  // label, the set's score in the dots, the turn's buttons in the guide.
+  // With STAGE SELECT relabelled to show the turn, the timer moves beside the label, the score to
+  // the dots and the turn's buttons to the guide.
   if (words.line != Relabel::LINE_GAME)
   {
     take(&s.line_seconds, &s.rules);
@@ -801,23 +769,22 @@ Scene Gather(double now)
         *to = to->empty() ? more : *to + " \u00b7 " + more;
     };
     join(&s.hint, s.rules_note);
-    // The label says P1 PICKS; Brawl's Meta Knight clause is why it may be any stage.
+    // The label says P1 PICKS; the Meta Knight clause explains why any stage is allowed.
     if (s.rules.find("MK clause") != std::string::npos)
       join(&s.hint, "Meta Knight clause: any legal stage");
     s.rules.clear();
     s.rules_note.clear();
   }
   s.legend = words.legend;
-  // The rules bar says the set's score and the character order's turn too; the queue's own
-  // character select has no set yet (a ranked header is there already).
+  // The rules bar already shows these, and the solo queue character select has no set yet.
   if ((native & NativeText::SHOWN_RULES) || Queue::OnSoloCss())
   {
     s.rules.clear();
     s.rules_note.clear();
   }
   s.cursors = StageCursors::Current();
-  // The character and the stage selects only: the order's picker, the set's dots (not on the
-  // queue's own character select: no opponent, no set yet, though a ranked header is there).
+  // Picker and dots on the character and stage selects only, not on the solo queue character
+  // select, which has no opponent yet.
   if (Queue::OnQueueCss())
   {
     s.picker = CharOrder::CurrentPicker();
@@ -830,8 +797,7 @@ Scene Gather(double now)
   return s;
 }
 
-// Top left: the link's lamp with the ping and the frame meter beside it (the meter alone when
-// solo), the meter's graph under them. Returns the bottom.
+// Top left: the connection circle, ping, frame meter and graph. Returns the bottom.
 float DrawCorner(ImDrawList* dl, const OverlayModel::Frame& f, ImVec2 at, float unit)
 {
   constexpr float SIZE = 2.6f;
@@ -871,7 +837,6 @@ float DrawCorner(ImDrawList* dl, const OverlayModel::Frame& f, ImVec2 at, float 
   return y;
 }
 
-// DrawCorner's width: the lamp and its readouts, or its graph when wider.
 float CornerWidth(const OverlayModel::Frame& f, float unit)
 {
   constexpr float SIZE = 2.6f;
@@ -887,8 +852,7 @@ float CornerWidth(const OverlayModel::Frame& f, float unit)
   return w;
 }
 
-// `note` in lines no wider than `width` in `look`, '\n' between them: broken at its " · " first,
-// at spaces inside a part still too wide.
+// Wraps `note` to `width`, breaking at " · " first and at spaces only inside a part too wide.
 std::string FitNote(const Kit::TextLook& look, const std::string& note, float width)
 {
   static const std::string sep = " \u00b7 ";
@@ -919,8 +883,7 @@ std::string FitNote(const Kit::TextLook& look, const std::string& note, float wi
   return out;
 }
 
-// A banner's note fitted into `width` (its words' room: the banner's width less its cut ends and
-// margin) for a banner whose first row is `row` tall: the note, and the banner's height.
+// Fits a banner's note into `width`. Returns the wrapped note and the banner's height.
 std::pair<std::string, float> FitBanner(const std::string& title, const std::string& note,
                                         float row, float width, float unit)
 {
@@ -932,9 +895,8 @@ std::pair<std::string, float> FitBanner(const std::string& title, const std::str
   return {fitted, Kit::BannerHeight(row, lines)};
 }
 
-// Top centre: each pair of lines on a banner (the first, the search's or the queue's, with the
-// turn's timer beside it on its plate). `guide` gets this machine's hint (the control guide's).
-// Returns the lowest bottom and leftmost edge drawn (the toasts and the chat keep clear of them).
+// Top centre: each pair of lines on a banner, with the turn timer beside the first. Sets `guide`
+// to the local hint. Returns the drawn bounds so toasts and chat can keep clear.
 Kit::Box DrawTopCentre(ImDrawList* dl, const Scene& s, ImVec2 pic, ImVec2 pic_size, ImVec2 vis,
                        ImVec2 vis_size, float unit, double now_s, float first_top,
                        std::string* guide, float right_edge)
@@ -964,12 +926,9 @@ Kit::Box DrawTopCentre(ImDrawList* dl, const Scene& s, ImVec2 pic, ImVec2 pic_si
   }
   if (Kit::CurrentLook() == Kit::Look::ProjectPlus && Queue::OnQueueCss() && !groups.empty())
   {
-    // Project+'s queue character select: the lines on its own rules bar (the band right of RANKED
-    // that says "-stock Smash!", locked in a queue room anyway), as Brawl's rules bar says them in
-    // the game's own text (NativeText.h): what happens now, the set under it; the turn's timer
-    // under the bar's right end, over the grid's empty corner (the band's own when it has it), and
-    // this machine's hint in the guide. The bar's place in the picture, measured on 1280x720
-    // screenshots (2026-10-04): x 520..1265, y 42..105.
+    // Project+'s queue character select: draw the lines over its own rules bar, which is locked
+    // in a queue room anyway. The timer goes under the bar's right end and the local hint in the
+    // guide. The bar spans x 520-1265, y 42-105 on a 1280x720 picture.
     std::string title = groups[0].first, note, hint = s.hint;
     if (!s.search.empty())
     {
@@ -983,7 +942,7 @@ Kit::Box DrawTopCentre(ImDrawList* dl, const Scene& s, ImVec2 pic, ImVec2 pic_si
     }
     TakeTimer(&note);
     TakeTimer(&hint);
-    // It ends short of Orca's corner when the YouGame button sends that to the top right.
+    // Stops short of Orca's corner when that is moved to the top right.
     const float left = pic.x + pic_size.x * 0.4f;
     const float right = std::min(pic.x + pic_size.x * 0.99f, right_edge);
     const float top = pic.y + pic_size.y * 0.056f;
@@ -996,18 +955,16 @@ Kit::Box DrawTopCentre(ImDrawList* dl, const Scene& s, ImVec2 pic, ImVec2 pic_si
     *guide = hint;
     return drawn;
   }
-  // The banners are Orca's own: centred on the part of the picture in the window (VisiblePicture).
+  // Orca's own banners are centred on the visible part of the picture.
   const float cx = vis.x + vis_size.x / 2;
   float top = first_top;
   for (std::size_t i = 0; i < groups.size(); ++i)
   {
     const auto& [title, note] = groups[i];
-    // The first banner the larger: what happens now; the second the set's. At most 62% of the
-    // picture wide (the timer goes beside it): a longer note takes more lines.
+    // The first banner is larger. At most 62% of the picture wide, leaving room for the timer.
     const float row =
         i == 0 ? (note.empty() ? 6.4f : 8.6f) * unit : (note.empty() ? 5.0f : 7.0f) * unit;
-    // Never under the banner's least width (26 units): a window cut to a narrow part of the
-    // picture would otherwise leave the note no room and fit it one word a line.
+    // At least 26 units, or a narrow window would wrap the note one word per line.
     const float max_w = std::max(0.62f * vis_size.x, 26.0f * unit);
     const auto [fitted, h] = FitBanner(title, note, row, max_w, unit);
     const float w = std::clamp(Kit::BannerWidth(h, unit, title, fitted), 26.0f * unit, max_w);
@@ -1029,47 +986,38 @@ void DrawScene()
   Kit::BeginFrame();
   const double now = NowMs();
   const Scene s = Gather(now);
-  // The kit's demo in place of everything else (design checks).
   if (Kit::DemoMode() == 1)
   {
     DrawKitDemo();
     return;
   }
-  // The chat cards' font, loaded before any chat needs it (YgCard.h).
+  // Load the chat font before any chat needs it.
   Yg::Warm();
-  // The YouGame button and its lines (YgOrb.h, embed cap `yougame`), drawn with the rest.
   const YgOrb::Model::View yg = YgOrb::Current().At(now);
-  // Dolphin's own messages (OSD rows: a join's line, "N cheat(s) enabled", a graphics change) are
-  // drawn at the top left just before this: under the YouGame button and its pill while the button
-  // is there (the offset is set below, for the next frame), at the top as before without it.
+  // Dolphin's OSD messages are drawn top left before this. While the YouGame button shows they
+  // move below it, from the next frame.
   if (!yg.on)
     OSD::SetObscuredPixelsTop(0);
   if (s.Empty() && !yg.on && !yg.showing)
     return;
-  // Everything is laid out in the game's picture (the window can letterbox or pillarbox it), in
-  // its units (1% of its height), drawn with the kit (Kit.h): the game's fonts, its plates.
   ImVec2 pic, pic_size;
   PictureRect(&pic, &pic_size);
   const float unit = OverlayUnit(pic_size.y);
-  // No picture to draw on (no backbuffer yet, a window the app squeezed to a sliver): nothing.
+  // Nothing to draw on yet, or the window is too thin.
   if (unit <= 0 || !(pic_size.x >= 1))
     return;
-  // Its part in the window (all of it unless an embed `view` lays it out past the window): Orca's
-  // own elements stay there; what marks the game's art keeps the whole picture (VisiblePicture).
   const PictureArea visible = VisiblePicture({pic.x, pic.y, pic_size.x, pic_size.y},
                                       ImGui::GetIO().DisplaySize.x, ImGui::GetIO().DisplaySize.y);
   const ImVec2 vis(visible.x, visible.y), vis_size(visible.w, visible.h);
   ImDrawList* dl = ImGui::GetForegroundDrawList();
   const double now_s = ImGui::GetTime();
   const OverlayModel::Frame& f = s.f;
-  // The stage select's two cursors first: every line of text goes over them.
+  // Stage select cursors first, so all text draws over them.
   if (s.cursors.on)
     DrawStageCursors(dl, s.cursors, pic, pic_size, unit, now_s);
-  // The character select's panels: a name tab in the port's colour on each panel the game's own
-  // plate doesn't name. Design F's portraits: a locked-in player's framed in gold with LOCKED IN
-  // across its top, the picker's in their port's colour, blinking (Luis, 2026-10-05: "a blinking
-  // cursor on who is supposed to be acting") with YOUR PICK / HBOX PICKS where LOCKED IN goes; the
-  // empty seat's ring while the queue searches.
+  // Character select panels: a name tab where the game's plate shows no name, a gold LOCKED IN
+  // frame for locked-in players, and a blinking frame in port colour on the current picker with
+  // YOUR PICK / BO PICKS. The empty seat gets a ring while the queue searches.
   static int s_picker_was = -1;
   static double s_picker_since = 0;
   if (s.picker != s_picker_was)
@@ -1125,15 +1073,12 @@ void DrawScene()
     Kit::SetDots(dl, ImVec2(pic.x + pic_size.x / 2, pic.y + DOTS_Y * unit), unit, s.dots.games,
                  s.dots.current);
   }
-  // The YouGame button (YgOrb.h) holds the top left with its pill along its row, as the page's
-  // does (Luis, 2026-10-05: "stay up top nice and neat"): Orca's corner then hugs the top right,
-  // clear of the match clock, and Project+'s queue bar ends short of it. Without the button, all
-  // as before.
+  // The YouGame button holds the top left with its pill along the top edge. Orca's corner then
+  // moves to the top right, and Project+'s queue bar ends short of it.
   const float margin = 2.5f * unit;
   const Kit::Box orb = YgOrb::ButtonBox(yg);
   const bool yg_top = orb.max.x > orb.min.x;
-  // The corner's width grows at once and shrinks only once it has been narrower for a few
-  // seconds: its readouts' digits change every second, and neither it nor Project+'s bar moves.
+  // Grow at once but shrink only after 4 s, so changing digits don't cause jitter.
   static float s_corner_w = 0;
   static double s_corner_at = 0;
   const float corner_now = CornerWidth(f, unit);
@@ -1144,15 +1089,12 @@ void DrawScene()
   const bool corner_right = yg_top && s_corner_w > 0;
   const float corner_x =
       corner_right ? vis.x + vis_size.x - margin - s_corner_w : vis.x + margin;
-  // Top centre, then top left, where both games' matches and menus leave the screen empty.
   std::string guide;
   const Kit::Box centre =
       DrawTopCentre(dl, s, pic, pic_size, vis, vis_size, unit, now_s,
                     std::max(pic.y + (s.dots.on ? TOP_UNDER_DOTS : TOP_FIRST) * unit,
                              vis.y + TOP_FIRST * unit),
                     &guide, corner_right ? corner_x - 1.0f * unit : pic.x + pic_size.x);
-  // Design F: the turn's timer in the lettering of the game's words that say whose turn it is,
-  // and this machine's buttons in the games' own corner for them.
   const bool pplus = Kit::CurrentLook() == Kit::Look::ProjectPlus;
   if (s.band_seconds >= 0)
   {
@@ -1169,10 +1111,8 @@ void DrawScene()
   }
   if (!guide.empty())
   {
-    // One line along the bottom edge, the buttons and the words without one (a proposal, the
-    // casual pick's rule) in the hint's order, drawn smaller when longer than the picture is wide
-    // (never over the games' own buttons). Project+'s relabelled legend already says X, A and B on
-    // its stage select. Parsed once per hint (it changes a few times a screen; the video thread).
+    // The control guide: one line along the bottom edge, shrunk to fit. Skips X, A and B when
+    // Project+'s relabelled legend already shows them. Parsed only when the hint changes.
     static std::string s_hint;
     static std::vector<Kit::GuideItem> s_items;
     if (guide != s_hint)
@@ -1186,7 +1126,6 @@ void DrawScene()
       if (!(s.legend && (item.button == "X" || item.button == "A" || item.button == "B")))
         items.push_back(item);
     }
-    // Its place in the picture's corner, kept inside the window's part of it.
     const float right = std::min(pic.x + pic_size.x * GUIDE_RIGHT,
                                  vis.x + vis_size.x - pic_size.x * (1 - GUIDE_RIGHT));
     const float cy =
@@ -1196,23 +1135,18 @@ void DrawScene()
   }
   const float left = vis.x + margin;
   float y = DrawCorner(dl, f, ImVec2(corner_x, vis.y + margin), unit);
-  // Without the button, Dolphin's messages start under the corner (it is at the top left then,
-  // where they are drawn; in a cut view the two met).
+  // Without the button, Dolphin's messages start below the corner.
   if (!yg_top && corner_now > 0)
     OSD::SetObscuredPixelsTop(static_cast<int>(y));
   if (!f.waiting.empty())
   {
-    // "Waiting for <name>…" under the top centre's banners.
     const float top = std::max(vis.y + vis_size.y * 0.18f, centre.max.y + 1.5f * unit);
     Kit::Title(dl, ImVec2(vis.x + vis_size.x / 2, top), unit, f.waiting, 5.0f, Kit::Align::Centre);
   }
-  // The toasts and the chat on plates under the corner: under Dolphin's own messages (OSD rows
-  // such as "Screenshot saved...", drawn at the top left just before this), and under the top
-  // centre's banners where a plate as wide as the chat's would reach them.
+  // Toasts and chat go below the corner, Dolphin's messages and the top-centre banners.
   if (yg_top)
   {
-    // Orca's toasts and the chat in the button's pill with its notices (no copies: views of
-    // this frame's lines).
+    // With the button, toasts and chat go in its pill. Rows are views of this frame's lines.
     std::array<YgOrb::PillRow, 12> rows;
     std::size_t n = 0;
     for (const OverlayModel::Toast& t : f.toasts)
@@ -1227,7 +1161,6 @@ void DrawScene()
         rows[n++] = YgOrb::PillRow{YgOrb::PillRow::Type::Chat, c.name, c.text, {}, {},
                                    YgOrb::Kind::Join, c.alpha, c.at};
     }
-    // It ends short of the top centre's banners (the search, the rules, Project+'s queue bar).
     const float pill_right = centre.max.y > vis.y && centre.min.x > orb.min.x ?
                                  centre.min.x - 1.2f * unit :
                                  vis.x + vis_size.x;
@@ -1239,13 +1172,11 @@ void DrawScene()
   else if (!f.toasts.empty() || !f.chats.empty())
   {
     y = std::max(y, OSD::MessagesBottom() + unit);
-    // No wider than the window's part of the picture leaves right of the corner.
     const float wrap =
         std::max(std::min(0.36f * pic_size.x, vis.x + vis_size.x - margin - left), 12.0f * unit);
     if (centre.max.y > vis.y && centre.min.x < left + wrap + 3.0f * unit)
       y = std::max(y, centre.max.y + 1.2f * unit);
     const float bottom = vis.y + vis_size.y - margin;
-    // In YouGame's own look (YgCard.h): the room's and the chat are YouGame's, not the game's.
     for (const OverlayModel::Toast& t : f.toasts)
     {
       if (y >= bottom)
@@ -1261,16 +1192,14 @@ void DrawScene()
           0.8f * unit;
     }
   }
-  // Over everything else: the set's end, the opponent's disconnect, set over's hint (SetEnd.h).
   if (!s.set_end.Empty())
     SetEnd::Draw(dl, unit, vis.x, vis.y, vis_size.x, vis_size.y, s.set_end);
-  // The YouGame button over everything: it stands where the page's own is.
+  // The YouGame button goes on top, where the app's own button is.
   YgOrb::DrawButton(dl, yg);
 }
 
-// The page's dim (SetDim) over the whole display, last on the foreground list, so over the picture,
-// Dolphin's messages (windows, drawn under the foreground list) and everything above; eased toward
-// the level asked for, half black in DIM_EASE_S.
+// The dim (SetDim) over the whole display, last on the foreground list so it covers everything.
+// Eases toward the target by half black per DIM_EASE_S.
 void DrawDim()
 {
   const float target = static_cast<float>(s_dim.load(std::memory_order_relaxed)) / 100.0f;
@@ -1290,8 +1219,7 @@ void DrawDim()
       IM_COL32(0, 0, 0, static_cast<int>(std::lround(255.0f * std::min(s_dim_shown, 1.0f)))));
 }
 
-// The host overlay (OSD::SetHostOverlay): the scene, then the dim over all of it, whatever the
-// scene drew (or returned early on: nothing to say, a picture too thin, the kit's demo).
+// The host overlay: the scene, then the dim, even when the scene returned early.
 void Draw()
 {
   DrawScene();
@@ -1306,7 +1234,6 @@ OverlayModel& Overlay()
 
 PortColour PortColourOf(int port)
 {
-  // Brawl's and Project+'s port colours (the panels, the tokens).
   switch (port)
   {
   case 0:
@@ -1325,7 +1252,7 @@ PictureArea VisiblePicture(const PictureArea& picture, float display_w, float di
   const float x0 = std::max(picture.x, 0.0f), y0 = std::max(picture.y, 0.0f);
   const float x1 = std::min(picture.x + picture.w, display_w);
   const float y1 = std::min(picture.y + picture.h, display_h);
-  // !(>) also turns NaN away.
+  // !(>) also rejects NaN.
   if (!(x1 > x0 && y1 > y0))
     return picture;
   return {x0, y0, x1 - x0, y1 - y0};
@@ -1348,7 +1275,7 @@ int Dim()
 
 float OverlayUnit(float display_height)
 {
-  // !(>=) also turns a NaN height away.
+  // !(>=) also rejects NaN.
   if (!(display_height >= OVERLAY_MIN_HEIGHT))
     return 0;
   return display_height / 100;
@@ -1417,11 +1344,10 @@ void SetHostVisible(bool visible)
 
 void RepresentDuringStall(int stalled_ms)
 {
-  // Sessions run single core, so this presents on the CPU thread inside the stall wait, and while
-  // it presents the wait hears nothing (the friend's input, a stop). So: nothing for a short stall
-  // (the overlay has nothing to say before 250 ms), nothing while the app hides the game or its
-  // window is out of sight, ~15 times a second, 4 when presenting is slow, and not again in this
-  // stall once one present took over 50 ms (vsync can hold a Metal drawable for a while).
+  // Sessions run single core, so this presents on the CPU thread inside the stall wait, which
+  // hears nothing (input, a stop) while it presents. So skip short stalls and hidden windows,
+  // present ~15 times a second (4 if slow), and stop for this stall once a present takes over
+  // 50 ms (vsync can hold a Metal drawable that long).
   static double s_last = 0;
   static double s_every = 66;
   static int s_stall_ms = 0;
@@ -1458,7 +1384,7 @@ void InitOverlay()
     s_stats = v[0] == '2' ? Stats::Full : Stats::Ping;
   if (const char* v = std::getenv("ORCA_UX_OVERLAY_DEMO"); v && v[0] == '1')
     s_demo = true;
-  // Paused, the frame meter stands still (a pause is no slow frame), on whichever thread pauses.
+  // A pause must not count as a slow frame. Runs on whichever thread pauses.
   s_state_hook = Core::AddOnStateChangedCallback([](Core::State state) {
     if (state == Core::State::Paused)
       s_overlay.Pause(NowMs());

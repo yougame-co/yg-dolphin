@@ -38,7 +38,7 @@ constexpr u32 OFF_AUTO_PRESS = 0x8E;
 constexpr u32 OFF_AUTO_WHY = 0x8F;
 static_assert(OFF_AUTO_WHY < STATE_SIZE);
 
-// The block as bytes, so a write compares byte by byte.
+// Serializes the state so writes can compare byte by byte.
 std::array<u8, STATE_SIZE> Bytes(const State& s)
 {
   std::array<u8, STATE_SIZE> b{};
@@ -151,17 +151,15 @@ bool Present(const GuestMemory& m)
 
 int Write(GuestMemory& m, const State& s)
 {
-  // Only over sora_scene's dead code (or a block already there): before the game loads the module,
-  // this memory is something else's.
+  // Before sora_scene loads, this memory belongs to something else.
   if (!Present(m))
     return 0;
   const std::array<u8, STATE_SIZE> b = Bytes(s);
   int changed = 0;
-  // The magic last, so a reader never sees a header over the dead code's other bytes.
+  // Write the magic last so a reader never sees a header over half-written bytes.
   for (u32 i = STATE_SIZE; i-- > 0;)
   {
-    // The header's room hash and the queue's flags (+0x08..+0x0F) are the header writer's, not
-    // State's.
+    // Room hash and queue flags (+0x08..+0x0F) belong to the header writer.
     if (i >= ROOM - BASE && i < HEADER_SIZE)
       continue;
     if (m.Read8(BASE + i) != b[i])
@@ -177,7 +175,7 @@ int Clear(GuestMemory& m)
 {
   if (!m.Valid(BASE + 3) || m.Read32(BASE + OFF_MAGIC) != MAGIC_VALUE)
     return 0;
-  // The dead code's own first word again: no header, and a new one may be written.
+  // Restore the original first word: no header.
   m.Write32(BASE + OFF_MAGIC, FreeSpace::kMatchBlockOriginalWord);
   return 4;
 }
@@ -196,7 +194,7 @@ u32 RoomHash(std::string_view code)
 u8 CoinFromCode(std::string_view code)
 {
   u32 h = RoomHash(code);
-  // Fold every bit in, so the coin isn't one character's low bit.
+  // Fold the hash so the coin depends on every bit.
   h ^= h >> 16;
   h ^= h >> 8;
   h ^= h >> 4;

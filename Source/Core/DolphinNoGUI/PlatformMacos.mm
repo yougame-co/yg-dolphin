@@ -108,9 +108,9 @@
 }
 @end
 
-// Embed mode: Orca's view over the YouGame app's player box. It never takes the keyboard or the
-// mouse: clicks fall through to the app's window under it, which stays the key window, and the
-// pads and keys are read from the HID state (Quartz, SDL) while the app says the game has focus.
+// Embed mode: Orca's window floats over the YouGame app's player box but never becomes key. Clicks
+// fall through to the app's window, and pads and keys are read from HID state while the app says
+// the game has focus.
 @interface EmbedWindow : NSWindow
 @end
 
@@ -160,14 +160,13 @@ protected:
 
 private:
   bool InitEmbedded();
-  // Embed mode, every main loop pass: follows the parent window (moved, resized, minimized, hidden,
-  // another Space, ordered over Orca's window) and works out whether the game has the input.
-  // Returns false once the parent window is gone.
+  // Embed mode, every main loop pass: keeps the window on top of the parent as it moves, resizes,
+  // hides or changes Space, and decides whether the game gets input. Returns false once the parent
+  // window is gone.
   bool TrackParent();
   void ProcessEvents();
-  // Whether any of Orca's window is on screen, for the video backend
-  // (Presenter::SetSurfaceVisible): not while it is minimized, ordered out (embedded: the app's
-  // window minimized, hidden, on another Space, or "hide") or entirely covered by other windows.
+  // Tells the video backend whether any of the window is on screen: not when minimized, ordered out
+  // or fully covered.
   void UpdateSurfaceVisible();
   void ObserveOcclusion();
   void UpdateWindowPosition();
@@ -189,9 +188,9 @@ private:
   // Embed mode.
   bool m_embed_visible = true;      // "show" / "hide"
   bool m_embed_focus = true;        // "focus" / "blur"
-  bool m_embed_on_screen = false;   // ordered in, over the parent
-  // The parent left the window list: stopping after a grace period (a window that was just made
-  // can take a moment to show up in it, and so can one between Spaces).
+  bool m_embed_on_screen = false;   // Ordered in, over the parent.
+  // When the parent left the window list. Stop after a grace period: a new window, or one moving
+  // between Spaces, can be missing from the list for a moment.
   std::optional<std::chrono::steady_clock::time_point> m_parent_missing_since;
 
   id m_occlusion_observer = nil;
@@ -206,7 +205,7 @@ PlatformMacOS::~PlatformMacOS()
   [m_window close];
 }
 
-// finishLaunching runs once, whether the disc picker or Init gets there first.
+// finishLaunching must run once, whether the disc picker or Init gets there first.
 static bool s_launched = false;
 
 static void FinishLaunching()
@@ -307,7 +306,7 @@ void PlatformMacOS::ObserveOcclusion()
 {
   if (m_occlusion_observer)
     return;
-  // At once when the window system says so, even while the main loop waits for events.
+  // React right away, even while the main loop waits for events.
   m_occlusion_observer = [[NSNotificationCenter defaultCenter]
       addObserverForName:NSWindowDidChangeOcclusionStateNotification
                   object:m_window
@@ -320,7 +319,7 @@ void PlatformMacOS::ObserveOcclusion()
 
 void PlatformMacOS::UpdateSurfaceVisible()
 {
-  // Embedded, ordering out hides it at once; the occlusion state follows a moment later.
+  // When embedded, check m_embed_on_screen too: the occlusion state lags behind ordering out.
   const bool visible = (!IsEmbedded() || m_embed_on_screen) &&
                        ([m_window occlusionState] & NSWindowOcclusionStateVisible) != 0;
   if (visible != m_surface_visible)
@@ -330,10 +329,9 @@ void PlatformMacOS::UpdateSurfaceVisible()
     NOTICE_LOG_FMT(VIDEO, "Orca: the game's window is {}", visible ? "visible" : "out of sight");
   }
 
-  // The screen the window is on (the one with most of it), for the video backend: below 59 Hz it
-  // can't keep up with the game (Presenter::SetSurfaceRefreshRate). Read every pass rather than
-  // observed: it is cheap, and covers a move to another screen and a change of mode alike.
-  // A window with no screen (ordered out, hidden) keeps the last one's: it shows nothing anyway.
+  // Report the screen's refresh rate to the video backend; below 59 Hz it can't keep up with the
+  // game. Polled every pass because it is cheap and catches screen moves and mode changes. A window
+  // with no screen keeps the last value.
   int hz = m_surface_refresh_rate < 0 ? 0 : m_surface_refresh_rate;
   if (@available(macOS 12.0, *))
   {
@@ -353,7 +351,7 @@ bool PlatformMacOS::InitEmbedded()
   [Application sharedApplication];
   m_app_delegate = [[AppDelegate alloc] initWithPlatform:this];
   [NSApp setDelegate:m_app_delegate];
-  // Part of the YouGame app: no Dock icon, not in the app switcher, no menu bar of its own.
+  // No Dock icon, app switcher entry or menu bar: Orca is part of the YouGame app.
   [NSApp setActivationPolicy:NSApplicationActivationPolicyAccessory];
   [NSApp setPlatform:this];
   FinishLaunching();
@@ -371,8 +369,8 @@ bool PlatformMacOS::InitEmbedded()
   [m_window setHasShadow:NO];
   [m_window setIgnoresMouseEvents:YES];
   [m_window setAnimationBehavior:NSWindowAnimationBehaviorNone];
-  // Wherever the app's window is, its own Space when it is full screen included; TrackParent hides
-  // it whenever the app's window is not on screen.
+  // Follow the app's window to any Space, including its full-screen one. TrackParent hides this
+  // window whenever the app's window is off screen.
   [m_window setCollectionBehavior:NSWindowCollectionBehaviorCanJoinAllSpaces |
                                   NSWindowCollectionBehaviorFullScreenAuxiliary |
                                   NSWindowCollectionBehaviorIgnoresCycle |
@@ -383,8 +381,8 @@ bool PlatformMacOS::InitEmbedded()
   [[m_window contentView] setWantsLayer:YES];
 
   m_window_focus = false;
-  m_embed_visible = !m_embed.too_small;  // too small: hidden until a big enough rect (Embed.h)
-  // A window the app made a moment ago may not be in the window list yet.
+  m_embed_visible = !m_embed.too_small;  // Hidden until a big enough rect (Embed.h).
+  // A window the app just created may not be in the window list yet.
   while (TrackParent() && m_parent_missing_since)
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
   if (!IsRunning())
@@ -423,7 +421,7 @@ bool PlatformMacOS::TrackParent()
     bool on_screen = false;
     bool closed = false;
     pid_t owner = 0;
-    CGRect bounds = CGRectZero;  // global display space: points, origin at the main display's top left
+    CGRect bounds = CGRectZero;  // Points, origin at the main display's top left.
     if (CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow, parent))
     {
       if (CFArrayGetCount(list) > 0)
@@ -439,8 +437,7 @@ bool PlatformMacOS::TrackParent()
           auto* const onscreen =
               static_cast<CFBooleanRef>(CFDictionaryGetValue(info, kCGWindowIsOnscreen));
           on_screen = onscreen && CFBooleanGetValue(onscreen);
-          // A closed window can linger in the list, transparent (AppKit keeps it a while): it
-          // counts as gone.
+          // A closed window can linger in the list, fully transparent. Treat it as gone.
           auto* const alpha = static_cast<CFNumberRef>(CFDictionaryGetValue(info, kCGWindowAlpha));
           double alpha_value = 1;
           if (alpha && CFNumberGetValue(alpha, kCFNumberDoubleType, &alpha_value) &&
@@ -459,8 +456,7 @@ bool PlatformMacOS::TrackParent()
       }
       CFRelease(list);
     }
-    // A minimized window is missing from that query (macOS 26), but not from the full list: it
-    // still exists, off screen.
+    // On macOS 26 a minimized window is missing from that query but still in the full list.
     if (!exists && !closed)
     {
       if (CFArrayRef all = CGWindowListCreate(kCGWindowListOptionAll, kCGNullWindowID))
@@ -482,8 +478,7 @@ bool PlatformMacOS::TrackParent()
         [m_window orderOut:nil];
       m_embed_on_screen = false;
       m_window_focus = false;
-      // The app closed its window without "quit" (or never had one): no game without a place to
-      // show it, and none running unseen with its sound on.
+      // The app's window is gone without a "quit". Stop rather than run unseen with sound on.
       const auto now = std::chrono::steady_clock::now();
       if (!m_parent_missing_since)
         m_parent_missing_since = now;
@@ -499,9 +494,9 @@ bool PlatformMacOS::TrackParent()
     const bool show = m_embed_visible && on_screen;
     if (show)
     {
-      // The rect is in the app window's pixels from the top left of its frame (title bar
-      // included): points are pixels over the backing scale of the screen the window is on.
-      // The screen with the largest part of the window, as Electron's getDisplayMatching picks it.
+      // The rect is in pixels from the top left of the app window's frame, title bar included.
+      // Convert with the backing scale of the screen holding most of the window, the same screen
+      // Electron's getDisplayMatching picks.
       NSArray<NSScreen*>* const screens = [NSScreen screens];
       const CGFloat primary_height = screens.count ? screens[0].frame.size.height : 0;
       const NSRect cocoa_bounds =
@@ -529,9 +524,8 @@ bool PlatformMacOS::TrackParent()
       if (!NSEqualRects([m_window frame], frame))
         [m_window setFrame:frame display:YES animate:NO];
 
-      // Under the app's window means hidden: the app came to the front (a click on it, the
-      // switcher), which brings all of its windows over everyone else's. Back on top of it, and
-      // only of it: whatever else is over the app's window (its menus, other apps) stays over Orca.
+      // If the app's window got above ours (the app was brought to the front), move back directly
+      // above it. Anything else over the app's window, like its menus, stays over Orca.
       bool below = !m_embed_on_screen || ![m_window isVisible];
       if (!below)
       {
@@ -563,7 +557,7 @@ bool PlatformMacOS::TrackParent()
       m_embed_on_screen = false;
     }
 
-    // The keys and pads count while the app is in front, shows the game and gave it the focus.
+    // Input counts only while the app is in front, shows the game and gave it focus.
     const bool app_in_front =
         owner != 0 &&
         NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier == owner;
@@ -588,7 +582,7 @@ void PlatformMacOS::ProcessEvents()
 {
   @autoreleasepool
   {
-    // Embedded, the loop also follows the app's window, as smoothly as the display refreshes.
+    // When embedded, poll at 120 Hz so the window follows the app's window smoothly.
     NSDate* expiration = [NSDate dateWithTimeIntervalSinceNow:IsEmbedded() ? 1.0 / 120 : 1];
     NSEvent* event = [NSApp nextEventMatchingMask:NSEventMaskAny
                                         untilDate:expiration
@@ -655,7 +649,7 @@ void PlatformMacOS::SetupMenu()
                                                            action:nil
                                                     keyEquivalent:@""];
     [menuBar addItem:appMenuItem];
-    // Orca: a session refuses save states, so it doesn't offer them.
+    // Orca: sessions refuse save states, so hide the menu.
     if (!Orca::SessionActive())
       [menuBar addItem:stateMenuItem];
     [menuBar addItem:miscMenuItem];
@@ -775,14 +769,14 @@ std::unique_ptr<Platform> Platform::CreateMacOSPlatform()
 
 namespace
 {
-// The dialogs run before PlatformMacOS::Init, so they make the shared application (as Application,
-// which Init expects) and bring this process to the front: the YouGame app starts it directly.
+// The dialogs run before PlatformMacOS::Init, so they create the shared application (as the
+// Application class Init expects) and bring this process to the front.
 void BringToFront()
 {
   [Application sharedApplication];
   [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
   FinishLaunching();
-  // Copy and paste in the panel's text fields (Go to Folder) need an Edit menu; Init replaces this.
+  // Copy and paste in the panel's text fields need an Edit menu. Init replaces this menu.
   if ([NSApp mainMenu] == nil || [[NSApp mainMenu] numberOfItems] == 0)
   {
     NSMenu* bar = [NSMenu new];
@@ -817,8 +811,7 @@ std::optional<std::string> Platform::ChooseFileMacOS(const std::string& message)
     [panel setTitle:@"Orca"];
     [panel setMessage:[NSString stringWithUTF8String:message.c_str()]];
     [panel setPrompt:@"Choose"];
-    // Above other apps' windows even if macOS doesn't let this process take the focus from the
-    // YouGame app that started it.
+    // Stay above other windows even if macOS won't let this process take focus from the app.
     [panel setLevel:NSModalPanelWindowLevel];
     if ([panel runModal] != NSModalResponseOK || panel.URL == nil || panel.URL.path == nil)
       return std::nullopt;

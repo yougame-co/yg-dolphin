@@ -48,9 +48,9 @@ private:
   void UpdateEmbedFocus();
 
   HWND m_hwnd{};
-  // Embed mode: "show" / "hide" (a rect while hidden must not bring the window back).
+  // Embed mode: the app's "show" / "hide". A rect while hidden must not show the window again.
   bool m_embed_visible = true;
-  // "focus" / "blur": whether the app gives the game the input (the default, as on macOS).
+  // The app's "focus" / "blur": whether the game gets input. On by default, as on macOS.
   bool m_embed_focus = true;
 
   int m_window_x = Config::Get(Config::MAIN_RENDER_WINDOW_XPOS);
@@ -76,7 +76,7 @@ bool PlatformWin32::RegisterRenderWindowClass(bool embedded)
   wc.hInstance = GetModuleHandle(nullptr);
   wc.hIcon = LoadIcon(wc.hInstance, IDI_ICON1);
   wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-  // Embedded, black until the first frame rather than a white box in the app's page.
+  // When embedded, show black until the first frame instead of a white box.
   wc.hbrBackground = embedded ? static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)) :
                                 reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
   wc.lpszMenuName = nullptr;
@@ -99,11 +99,11 @@ bool PlatformWin32::CreateRenderWindow()
 {
   if (IsEmbedded())
   {
-    // A child of the app's window at the player box (client pixels of the parent), like the app's
-    // libretro host: clipped and moved with it, sharing its input queue.
+    // A child window of the app's window, placed at the player box in the parent's client pixels,
+    // so it moves and clips with the app.
     const HWND parent = reinterpret_cast<HWND>(static_cast<uintptr_t>(m_embed.parent));
     const Embed::Rect& r = m_embed.rect;
-    // No WM_PARENTNOTIFY: each would be a synchronous call into the app's UI thread.
+    // No WM_PARENTNOTIFY: each one is a synchronous call into the app's UI thread.
     m_hwnd = CreateWindowEx(WS_EX_NOPARENTNOTIFY, WINDOW_CLASS_NAME, _T("Orca"),
                             WS_CHILD | WS_CLIPSIBLINGS | WS_CLIPCHILDREN, r.x, r.y, r.w, r.h,
                             parent, nullptr, GetModuleHandle(nullptr), this);
@@ -112,7 +112,7 @@ bool PlatformWin32::CreateRenderWindow()
       fprintf(stderr, "Orca: CreateWindowEx under the app's window failed (%lu)\n", GetLastError());
       return false;
     }
-    m_embed_visible = !m_embed.too_small;  // too small: hidden until a big enough rect (Embed.h)
+    m_embed_visible = !m_embed.too_small;  // Hidden until a big enough rect (Embed.h).
     if (m_embed_visible)
       ShowWindow(m_hwnd, SW_SHOWNA);
     UpdateEmbedFocus();
@@ -136,8 +136,8 @@ bool PlatformWin32::CreateRenderWindow()
 
 bool PlatformWin32::Init()
 {
-  // Embedded, the rect is in the app's physical pixels (Electron is per-monitor DPI aware): so is
-  // this process, or Windows would scale the child window and its swap chain.
+  // The app (Electron) sends rects in physical pixels, so be per-monitor DPI aware too, or Windows
+  // would scale the child window and its swap chain.
   if (IsEmbedded())
     SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
 
@@ -223,9 +223,8 @@ void PlatformWin32::EmbedSetFocus(bool focus)
   UpdateEmbedFocus();
 }
 
-// Embedded, the app keeps the keyboard (its page reads the keys and sends them as a pad): this
-// window never takes the focus. The input gate opens while the app's window is the foreground
-// window, shows the game, and its last word was "focus", as on macOS.
+// When embedded, the app keeps keyboard focus and this window never takes it. Input counts while
+// the app's window is in the foreground, the game is shown, and the app's last word was "focus".
 void PlatformWin32::UpdateEmbedFocus()
 {
   const HWND root = GetAncestor(m_hwnd, GA_ROOT);
@@ -277,12 +276,11 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
   case WM_KEYDOWN:
     if (platform->IsEmbedded())
     {
-      // Once per press, as the libretro host: a held F11 must not toggle full screen over and over.
+      // Ignore auto-repeat, so a held F11 doesn't toggle full screen over and over.
       if (lParam & (1 << 30))
         break;
-      // The page can't see keys while Orca has the focus: the ones that mean something to it.
-      // Shift+Tab is the YouGame overlay's key (the page's PlayOrb): the same line as a press on
-      // the YouGame button, so the page opens it and the app takes the keyboard back.
+      // Forward the keys the page cares about, since it can't see them here. Shift+Tab opens the
+      // YouGame overlay, the same as clicking the YouGame button.
       if (wParam == VK_ESCAPE)
         Embed::Out("key escape");
       else if (wParam == VK_F11)
@@ -297,7 +295,7 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
     }
     break;
 
-  // Embedded, Alt and F10 are game keys: the default handling would open the app's window menu.
+  // When embedded, Alt and F10 are game keys, so don't let them open the app's window menu.
   // Alt+F4 still closes the app.
   case WM_SYSKEYDOWN:
   case WM_SYSKEYUP:
@@ -306,16 +304,16 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
       return 0;
     return DefWindowProc(hwnd, msg, wParam, lParam);
 
-  // Embedded, the app's window took ours with it: nobody left to show the game to.
+  // When embedded, the app's window was destroyed along with ours, so stop.
   case WM_DESTROY:
     if (platform && platform->IsEmbedded())
       platform->Stop();
     return DefWindowProc(hwnd, msg, wParam, lParam);
 
-  // Embedded, a press on the game's picture lands here, not in the app's page: the app hears of it
-  // and decides whether the game gets the input back (its "focus"). Nothing else changes here.
-  // Once per press: the class has no CS_DBLCLKS, so a double click is two presses. A left press on
-  // the YouGame button Orca draws for the page (UX/YgOrb.h) is the button's: "orca orb".
+  // When embedded, clicks on the game land here, not in the app's page. Report them; the app
+  // decides whether to give the game focus. A left click on the YouGame button Orca draws
+  // (UX/YgOrb.h) is reported as "orca orb". No CS_DBLCLKS, so a double click arrives as two
+  // presses.
   case WM_LBUTTONDOWN:
   case WM_RBUTTONDOWN:
   case WM_MBUTTONDOWN:
@@ -328,8 +326,7 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
     }
     return DefWindowProc(hwnd, msg, wParam, lParam);
 
-  // Embedded, the keyboard stays with the app: if anything hands this window the focus, it goes
-  // straight back to the app's window.
+  // When embedded, the keyboard stays with the app: hand any focus straight back to its window.
   case WM_SETFOCUS:
     if (platform && platform->IsEmbedded())
     {
@@ -339,7 +336,7 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
     break;
 
   case WM_CLOSE:
-    // Embedded, only the app ends the game ("quit" or a closed stdin).
+    // When embedded, only the app ends the game ("quit" or a closed stdin).
     if (!platform->IsEmbedded())
       platform->RequestShutdown();
     break;

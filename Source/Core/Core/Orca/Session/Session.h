@@ -16,83 +16,80 @@
 
 #include "Common/CommonTypes.h"
 
-// Orca's rollback session: the input exchange and the decisions about which frame the emulator runs
-// next. It knows nothing about Dolphin; the emulator side implements Game, the network side
-// Transport. The emulator calls OnBoundary at every frame boundary (after a frame completes) and
-// does what the returned Step says.
+// Orca's rollback session: the input exchange and the decision of which frame the emulator runs
+// next. It knows nothing about Dolphin; the emulator implements Game and the network side
+// Transport. The emulator calls OnBoundary after every frame and does what the returned Step says.
 namespace Orca::Net
 {
 // One player's controller for one frame, as the SI device reports it (opaque to the session).
 using Pad = std::array<u8, 8>;
 constexpr int MAX_SEATS = 4;
-// Not a button: the top bit of the first byte (outside PadCodec's PAD_WIRE_BUTTONS, so a sampled pad
-// never has it) marks a port with no controller plugged in. Drop-in play leaves every port without
-// a player unplugged; a friend who joins plugs in at a frame every machine agrees on.
+// Marks a port with no controller: the top bit of the first byte, outside PAD_WIRE_BUTTONS so a
+// real pad never has it. Ports without a player stay unplugged; a joining friend plugs in at a
+// frame every machine agrees on.
 constexpr u8 PAD_WIRE_UNPLUGGED = 0x80;
 constexpr Pad UNPLUGGED_PAD{PAD_WIRE_UNPLUGGED, 0, 0, 0, 0, 0, 0, 0};
 inline bool IsUnplugged(const Pad& pad)
 {
   return (pad[0] & PAD_WIRE_UNPLUGGED) != 0;
 }
-// A frame that never comes (about 200 days of play): a seat plugged in "at NEVER" isn't plugged
-// in. Not INT_MAX: the session runs on Dolphin's CPU thread, where the JIT leaves FPCR.AH set on
-// Apple Silicon, and clang builds a {0, INT_MAX} pair as movi + FNEG, which FPCR.AH turns into
-// {0, -1} (FNEG then leaves a NaN's sign alone). 0x3fffffff pairs are plain MOV immediates.
+// A frame that never comes (about 200 days of play). Not INT_MAX: on Apple Silicon the JIT leaves
+// FPCR.AH set on the CPU thread, and clang builds a {0, INT_MAX} pair with movi + FNEG, which then
+// yields {0, -1}. 0x3fffffff uses plain MOV immediates.
 constexpr int NEVER = 0x3fffffff;
-// Bounds on what a peer may send: inputs per packet, and how far ahead of us its frames may be (a
-// peer is never more than its input delay plus a rollback window ahead; this is generous).
+// Bounds on what a peer may send: inputs per packet, and how far ahead its frames may be (input
+// delay plus the rollback window, generously).
 constexpr int MAX_PADS_IN_PACKET = 64;
 constexpr int MAX_FRAMES_AHEAD = 240;
-// Drop-in history frames one packet may carry (a sender sends half, so two coalesced still fit).
+// Drop-in history frames per packet (senders send half, so two coalesced packets still fit).
 constexpr int MAX_HISTORY_IN_PACKET = 512;
-// Most predicted frames between two snapshots (Config::snapshot_every). A rollback may then load a
-// snapshot up to MAX_SNAPSHOT_EVERY - 1 frames older than the first wrong frame and re-run from
-// there.
+// Most predicted frames between two snapshots (Config::snapshot_every). A rollback may load a
+// snapshot up to MAX_SNAPSHOT_EVERY - 1 frames before the first wrong frame and re-run from there.
 constexpr int MAX_SNAPSHOT_EVERY = 4;
-// Round trips to the relay whose median is the link the adaptive delay covers (one a second: the
-// last fifteen seconds). A new session can take this many at once (Session::OnRoundTrip).
+// Relay round trips whose median the adaptive delay covers (one per second, so the last 15 s). A
+// new session can take this many at once (Session::OnRoundTrip).
 constexpr int RTT_SAMPLES = 15;
-// Delay change notes kept for the log until taken (Session::TakeDelayNotes).
+// Delay-change notes kept for the log until taken (Session::TakeDelayNotes).
 constexpr size_t MAX_DELAY_NOTES = 16;
-// How many more frames of the others' delay a stall's length is judged against (Packet::spared):
-// a stall longer than this many frames no raise within max_delay could spare anyway.
+// How many extra frames of the others' delay a stall's length is judged against (Packet::spared).
+// A longer stall couldn't be spared by any raise within max_delay anyway.
 constexpr int SPARED_FRAMES = 4;
 // Windows of the adaptive delay's history (Session::AdaptDelay): the last 45 seconds.
 constexpr int NEED_WINDOWS = 45;
 using Pads = std::array<Pad, MAX_SEATS>;
 
-// What the session needs from the emulator. Frame numbers count game frames from 0. "The state at
-// the start of frame f" is what the emulator holds at the boundary after frame f-1 completed.
+// What the session needs from the emulator. Frames count from 0. "The state at the start of frame
+// f" is what the emulator holds at the boundary after frame f-1 completes.
 class Game
 {
 public:
   virtual ~Game() = default;
-  // Snapshot the current state as the state at the start of `frame`. Only frames the session may
-  // roll back to, or compare checksums of, are saved: Load is never asked for an unsaved frame.
+  // Snapshot the current state as the start of `frame`. Only frames the session may roll back to or
+  // checksum are saved; Load is never asked for an unsaved frame.
   virtual bool Save(int frame) = 0;
   // Restore the state at the start of `frame`; the next boundary reached is the end of `frame`.
   virtual bool Load(int frame) = 0;
   // The pads every port reports while `frame` runs.
   virtual void SetPads(int frame, const Pads& pads) = 0;
-  // True while frames that were already shown are re-run (the emulator skips rendering).
+  // True while already-shown frames are re-run (the emulator skips rendering).
   virtual void SetResimulating(bool resimulating) = 0;
   // A hash of the saved state at the start of `frame`, for desync detection (nullopt if not saved).
-  // Only asked for every Config::checksum_every frames; it may be computed at Save time.
+  // Only asked every Config::checksum_every frames; it may be computed at Save time.
   virtual std::optional<u64> SnapshotChecksum(int frame) = 0;
   // After a stall: restart frame pacing from now, so the emulator doesn't race to make up the time.
   virtual void ResetPacing() = 0;
-  // What one Save costs on this machine, smoothed, in milliseconds (0: not measured). A full
-  // snapshot copies all of RAM: about 1.7 ms on an M-series Mac, 9 ms or more on a PC with older
-  // DDR4, where the copy also evicts the L3 the next frame needs. Picks Config::snapshot_every.
+  // What one Save costs on this machine, smoothed, in ms (0: not measured). Picks
+  // Config::snapshot_every: a full RAM copy is cheap on some machines and costly on others, where
+  // it also evicts the cache the next frame needs.
   virtual double SaveMs() const { return 0; }
-  // Now on a steady clock, in milliseconds from any origin: how long a stall held this machine
-  // (Packet::spared). std::chrono::steady_clock unless a test's simulated game keeps its own.
+  // Steady-clock time in ms from any origin, for measuring stalls (Packet::spared). Tests with a
+  // simulated game may supply their own clock.
   virtual double NowMs() const;
 };
 
-// Drop-in: a seat's controller is plugged in for frames [plug_from, unplug_from), and the seat
-// exchanges live inputs from live_from on (before that, its player replays the host's history).
-// NEVER for a frame that hasn't been decided.
+// Drop-in: a seat's controller is plugged in for frames [plug_from, unplug_from), and it exchanges
+// live inputs from live_from on (before that, its player replays the host's history). NEVER for an
+// undecided frame.
 struct SeatPlan
 {
   int plug_from = NEVER;
@@ -101,13 +98,13 @@ struct SeatPlan
   bool operator==(const SeatPlan&) const = default;
 };
 
-// One message from one player: its most recent inputs, what it has received, and a checksum.
+// One message from one player: its recent inputs, what it has received, and a checksum.
 struct Packet
 {
   int seat = 0;
-  // The sender's count of packets sent, from 1 (0: unsequenced, a hand-built packet). A packet can
-  // arrive twice (over a direct link and through the relay) and out of order: only one newer than
-  // any before it from that seat says where the sender is now (Session::ReceivePackets).
+  // The sender's packet count, from 1 (0: unsequenced). A packet can arrive twice (direct link and
+  // relay) and out of order; only one newer than all before it from that seat says where the sender
+  // is now (Session::ReceivePackets).
   int sequence = 0;
   // pads[i] is the input for frame first_frame + i.
   int first_frame = 0;
@@ -116,46 +113,44 @@ struct Packet
   std::array<int, MAX_SEATS> ack{-1, -1, -1, -1};
   // The frame this sender is at, for time sync.
   int current_frame = 0;
-  // Frames the sender re-simulated in its last one-second window, counted from each rollback's
-  // first wrong frame (-1: no window yet). Telemetry: the delay doesn't adapt on rollbacks.
+  // Frames the sender re-ran in its last one-second window, counted from each rollback's first
+  // wrong frame (-1: no window yet). Telemetry only; the delay doesn't adapt to rollbacks.
   int resimulated = -1;
-  // The sender's stalls that count for the delay, over the whole match (-1: not reported): once
-  // every peer's inputs were arriving, not while catching up, and not lined up with a hitch on
-  // either machine. A side stalls on the others' inputs, so the others raise their own delay on
-  // this count (Session.cpp, "Input delay"); a running count can't be missed or counted twice.
+  // The sender's stalls that count for the delay, over the whole match (-1: not reported): only
+  // once every peer's inputs were arriving, not while catching up, and not coinciding with a hitch
+  // on either machine. The others raise their own delay on this count. A running total can't be
+  // missed or double counted.
   int stalls = -1;
   // The sender's hitches (Session::OnLocalHitch) over the whole match (-1: not reported).
   int hitches = -1;
-  // Of those counted stalls, how many were over within k + 1 frames, for k = 0 .. SPARED_FRAMES -
-  // 1, over the whole match: k + 1 more frames of the others' delay would have spared the sender
-  // those (their inputs would have come that much sooner). A running count per k, like `stalls`
-  // (nullopt: not reported, a peer before 0.3.9).
+  // Of those counted stalls, how many ended within k + 1 frames, for k = 0 .. SPARED_FRAMES - 1: k
+  // + 1 more frames of the others' delay would have prevented them. A running total per k, like
+  // `stalls` (nullopt: not reported).
   std::optional<std::array<int, SPARED_FRAMES>> spared;
-  // The sender's smoothed lead over the slowest other player, in tenths of a frame: its frame minus
-  // the frame that player last reported (nullopt: nothing received yet). Both leads include the
-  // same transit time, so time sync halves their difference and the transit cancels out.
+  // The sender's smoothed lead over the slowest other player, in tenths of a frame (nullopt:
+  // nothing received yet). Both leads include the same transit time, so time sync halves their
+  // difference and transit cancels out.
   std::optional<int> advantage;
-  // The sender's typical round trip to the relay: the median of its latest ones, in milliseconds
-  // (nullopt: too few measured). The one-way time between two players is half of each one's round
-  // trip to the relay.
+  // The sender's typical round trip to the relay: the median of its latest ones, in ms (nullopt:
+  // too few measured). The one-way time between two players is half of each one's round trip.
   std::optional<int> rtt;
   std::optional<int> checksum_frame;
   u64 checksum = 0;
 
   // Drop-in (see SeatPlan): which seats are plugged in when. Only the host's roster counts.
   std::optional<std::array<SeatPlan, MAX_SEATS>> roster;
-  // The highest frame of the shared history this sender holds, contiguously from frame 0 (-1:
-  // none). The host sends a joining player the history it lacks.
+  // The highest frame of shared history this sender holds contiguously from frame 0 (-1: none). The
+  // host sends a joining player the history it lacks.
   int history_ack = -1;
-  // History for `history_seat` (-1: none): every seat's pads for frames history_first onwards,
-  // from the host's log of confirmed frames.
+  // History for `history_seat` (-1: none): every seat's pads from history_first on, from the host's
+  // log of confirmed frames.
   int history_seat = -1;
   int history_first = 0;
   std::vector<Pads> history;
   // This player asks to unplug (leave); the host picks the frame.
   bool leaving = false;
   // The newest version of the host's port values (Session::RequireValues) this sender holds (-1:
-  // none, or a peer that doesn't say).
+  // none or unknown).
   int values_ack = -1;
 };
 
@@ -174,48 +169,46 @@ struct Config
   int seats = 2;
   int local_seat = 0;
   // Frames between sampling a local input and the frame it applies to: the starting delay and the
-  // floor of the adaptive one. Two, like Slippi: rollback hides the rest of a normal link.
+  // adaptive floor. Two, like Slippi: rollback hides the rest of a normal link.
   int input_delay = 2;
-  // Ceiling of the adaptive delay and of a chosen one (100 ms at 60 Hz). At or below input_delay
-  // the adaptive delay never changes. Each player's delay is its own: every local input travels
-  // explicitly, whichever boundary sampled it, so peers with different delays agree on every frame.
+  // Ceiling of the adaptive or chosen delay (100 ms at 60 Hz). At or below input_delay the adaptive
+  // delay never changes. Each player's delay is its own: every input travels explicitly, so peers
+  // with different delays still agree on every frame.
   int max_delay = 6;
-  // The delay this player chose (the app's "delay N"): exactly that, never adapted, from the
-  // first frame (clamped to 1..max_delay). nullopt: the adaptive delay. SetFixedDelay changes it.
+  // The delay this player chose (the app's "delay N"), used exactly from the first frame (clamped
+  // to 1..max_delay). nullopt: adaptive. SetFixedDelay changes it.
   std::optional<int> fixed_delay;
-  // Game frames per second. Frames are the session's only clock: "a second" for the delay and
-  // time-sync windows is this many frames run, so sessions fed the same packets decide alike. Also
-  // converts round trips in milliseconds into frames.
+  // Game frames per second. Frames are the session's only clock: "a second" for delay and time-sync
+  // windows is this many frames, so sessions fed the same packets decide alike. Also converts round
+  // trips from ms to frames.
   int frame_rate = 60;
-  // Ask for a one-frame wait (StepKind::Wait) while this player runs ahead of the others (needs
-  // packets from a peer whose session reports its lead).
+  // Request a one-frame wait (StepKind::Wait) while this player runs ahead of the others.
   bool time_sync = true;
   // Deepest rollback allowed; beyond it the session stalls until inputs arrive.
   int max_rollback = 7;
-  // Every this many confirmed frames, players exchange a state checksum (a full RAM hash costs a few
-  // milliseconds, so not every frame).
+  // Players exchange a state checksum every this many confirmed frames (a full RAM hash costs a few
+  // ms, so not every frame).
   int checksum_every = 60;
   // Most inputs repeated in one packet.
   int max_pads_per_packet = 16;
-  // Predicted frames per snapshot, 1 to MAX_SNAPSHOT_EVERY (0: from Game::SaveMs, re-chosen once a
-  // "second": 1 while a save costs under about 3 ms, then one more per 3 ms). A predicted frame is saved
-  // when it is k frames past the newest snapshot; checksum frames always are. A rollback loads the
-  // newest snapshot at or before the first wrong frame and re-runs from there: up to k - 1 more
-  // re-run frames (which skip rendering) in exchange for k times fewer snapshots.
+  // Predicted frames per snapshot, 1 to MAX_SNAPSHOT_EVERY. 0 picks from Game::SaveMs each
+  // "second": 1 while a save costs under about 3 ms, then one more per 3 ms. Checksum frames are
+  // always saved. A rollback loads the newest snapshot at or before the first wrong frame, trading
+  // up to k - 1 extra re-run frames for k times fewer snapshots.
   int snapshot_every = 0;
 
   // Drop-in play. Defaults: every seat below `seats` plugged in and live from frame 0 (a match both
   // players start together), with nothing logged.
   //
-  // The frame the session starts at: the host's next frame when a friend arrives (the frames
-  // before it are in the log), 0 for a friend who replays the host's game from the boot.
+  // The frame the session starts at: the host's next frame when a friend arrives, or 0 for a friend
+  // who replays the host's game from boot.
   int start_frame = 0;
-  // The local pad the host held when the session started: it fills the frames the input delay
+  // The local pad the host held when the session started; it fills the frames the input delay
   // skips, so a held button stays held.
   Pad start_pad{};
   // Each seat's plan at the start (default: seats below `seats` plugged in from frame 0).
   std::optional<std::array<SeatPlan, MAX_SEATS>> plan;
-  // The seat whose roster decides who plugs in and when (the host), or -1 (a fixed roster).
+  // The seat whose roster decides who plugs in and when (the host), or -1 for a fixed roster.
   int authority_seat = -1;
 };
 
@@ -223,14 +216,14 @@ enum class StepKind
 {
   // Run the next frame (pads have been set).
   Run,
-  // A rollback started: the state was loaded and the next frame to run has its pads set.
+  // A rollback started: the state was loaded and the next frame's pads are set.
   Rollback,
-  // Waiting for remote inputs: call OnBoundary again with the same frame without running anything
-  // (after a short wait; give up if the emulator is stopping).
+  // Waiting for remote inputs: after a short wait, call OnBoundary again with the same frame
+  // without running anything (give up if the emulator is stopping).
   Stall,
-  // Time sync: this player has been running ahead of the others, so it gives one frame of time
-  // back. Hold for one frame period, then call OnBoundary again with the same frame (the session
-  // resets pacing there, so the frame is not made up). At most one per 30 frames.
+  // Time sync: this player is ahead, so it gives one frame back. Hold for one frame period, then
+  // call OnBoundary again with the same frame; pacing resets so the frame isn't made up. At most
+  // one per 30 frames.
   Wait,
   // The session ended (see Session::Error).
   Ended,
@@ -245,11 +238,11 @@ struct Step
 struct Stats
 {
   int rollbacks = 0;
-  // Frames re-run, and the most in one rollback: from the snapshot loaded to the newest frame, so
-  // they include the frames before the first wrong one that sparse snapshots re-run.
+  // Frames re-run, and the most in one rollback, counted from the loaded snapshot, so sparse
+  // snapshots' extra frames are included.
   int resimulated_frames = 0;
   int deepest_rollback = 0;
-  // Snapshots taken, and the predicted frames per snapshot now (Config::snapshot_every).
+  // Snapshots taken, and the current predicted frames per snapshot (Config::snapshot_every).
   int saves = 0;
   int snapshot_every = 1;
   int stalls = 0;
@@ -257,7 +250,7 @@ struct Stats
   int confirmed_frame = -1;
   // The current input delay, whether the player chose it (Config::fixed_delay), and how the
   // adaptive one got there: raises (for the link or the others' stalls), lowers, and raises that
-  // undid a lower the others then stalled on.
+  // undid a lower.
   int delay = 0;
   bool delay_fixed = false;
   int delay_raises = 0;
@@ -269,15 +262,14 @@ struct Stats
   // Slow frames this machine reported (OnLocalHitch), and the most any other player reported.
   int hitches = 0;
   int peer_hitches = 0;
-  // Stalls that count toward the others' delay (no hitch on either machine around them, not set
-  // off by the other side's own stall, not while catching up or settling after a plug-in), as this
-  // machine reports them (Packet::stalls), and how many of those a frame more of the others' delay
-  // would have spared (Packet::spared: the stall was over within a frame).
+  // Stalls that count toward the others' delay (no hitch nearby on either machine, not caused by
+  // the other side's own stall, not while catching up or settling), as reported (Packet::stalls),
+  // and how many a frame more of the others' delay would have spared (Packet::spared).
   int counted_stalls = 0;
   int spared_stalls = 0;
-  // The typical round trip to the relay, in milliseconds: this player's median (what it reports)
-  // and the slowest other player's as reported (-1: not known yet). What the link part of the delay
-  // follows; the latest single round trip is noisier (Wi-Fi spikes).
+  // Typical relay round trip in ms: this player's median, and the slowest other player's as
+  // reported (-1: not known yet). The link part of the delay follows these; single samples are too
+  // noisy.
   int rtt_median = -1;
   int peer_rtt_median = -1;
 };
@@ -288,69 +280,63 @@ public:
   Session(const Config& config, Game& game, Transport& transport);
 
   // Called at every boundary. `completed_frame` is the frame that just finished (-1 at the very
-  // first boundary, before frame 0). `local_pad` is the local controller now; it applies to frame
-  // (next frame + Delay()). Re-run boundaries also call this; the pad is ignored there.
+  // first boundary). `local_pad` is the local controller now; it applies to frame (next frame +
+  // Delay()). Re-run boundaries also call this; the pad is ignored there.
   Step OnBoundary(int completed_frame, const Pad& local_pad);
-  // A measured round trip to the relay, from the transport's pings. Call it on the thread that
-  // calls OnBoundary, once per new measurement (YouGameRoom::RoundTripMs gives a sequence number
-  // that changes with each pong; feed only when it changed, or one ping counts many times). The
-  // median of the latest RTT_SAMPLES is the link the adaptive delay covers (Session.cpp, "Input
-  // delay"); a new session may take the room's recent ones at once, oldest first, so it covers the
-  // link from its first frame.
+  // A measured relay round trip, from the transport's pings. Call on the OnBoundary thread once per
+  // new measurement (YouGameRoom::RoundTripMs gives a sequence number; feed only when it changes,
+  // or one ping counts many times). A new session may take the room's recent ones at once, oldest
+  // first, so it covers the link from its first frame.
   void OnRoundTrip(int rtt_ms);
-  // This player's chosen delay (Config::fixed_delay), or nullopt for the adaptive one, from the
-  // next sample on: anytime on the thread that calls OnBoundary. A change mid-match moves the frame
-  // the next local sample lands on, as an adaptive step does (SampleLocal): the frames a longer
-  // delay skips repeat the held input, the samples a shorter one lands on taken frames are
-  // dropped, and every input still travels explicitly, so the other players need nothing new.
-  // Back to adaptive, the delay starts over from what the link needs.
+  // This player's chosen delay (Config::fixed_delay), or nullopt for adaptive, from the next sample
+  // on. Call on the OnBoundary thread. A mid-match change moves where the next local sample lands:
+  // frames a longer delay skips repeat the held input, and samples a shorter one maps onto taken
+  // frames are dropped. Every input still travels explicitly, so peers need nothing new. Returning
+  // to adaptive starts over from what the link needs.
   void SetFixedDelay(std::optional<int> frames);
   std::optional<int> FixedDelay() const { return m_fixed_delay; }
-  // This machine just had a slow frame (a disc read, a shader compile: more than two frame periods
-  // of wall time outside the session's own stalls and waits). The session has no wall clock, so
-  // only the emulator can say; peers hear of it and leave the stalls it caused out of the delay.
+  // This machine just had a slow frame (a disc read, a shader compile: over two frame periods
+  // outside the session's own stalls and waits). Only the emulator can tell, since the session has
+  // no wall clock; peers hear of it and exclude the stalls it caused from the delay.
   void OnLocalHitch();
 
-  // ---- Drop-in ----
-  // The confirmed history: every seat's pads for frames [base, base + size). The host starts its
-  // session with the log of its solo frames since its keyframe and sends a joining player the part
-  // it lacks; TakeLog hands it back (with every frame run so far) when the session ends.
+  // ---- Drop-in ---- The confirmed history: every seat's pads for frames [base, base + size). The
+  // host starts with the log of its solo frames since its keyframe and sends a joiner what it
+  // lacks; TakeLog returns it, with every frame run so far, when the session ends.
   void SetLog(int base, std::vector<Pads> log);
   std::vector<Pads> TakeLog(int* base);
   int LogEnd() const { return m_log_base + static_cast<int>(m_log.size()); }
   // Host: a player at `seat` arrived and loads the keyframe of frame `history_from`; it replays the
-  // log from there up to live_from - 1 and exchanges live inputs from live_from on. The session
-  // plugs its controller in once it has caught up.
+  // log up to live_from - 1 and exchanges live inputs from live_from on. Its controller plugs in
+  // once it has caught up.
   void AddPeer(int seat, int live_from, int history_from);
-  // Host: the player at `seat` is gone (it left the room or stopped answering): its controller
-  // unplugs after the last input received from it.
+  // Host: the player at `seat` is gone (left or stopped answering); its controller unplugs after
+  // its last received input.
   void DropSeat(int seat);
   // A joining player: ask the host to unplug this controller. LeftDone() once it has.
   void RequestLeave();
   bool LeftDone() const;
-  // Host: no other player is plugged in or joining: the session can end and the host play solo.
+  // Host: no other player is plugged in or joining, so the session can end and the host play solo.
   bool Idle() const;
-  // ---- Port values (who plays a port, and with which controls) ----
-  // The host decides each port's values from the frame its controller plugs in (the app keeps
-  // them, with their version: Rollback/OnlineMatch.cpp "Ports"); every machine must hold them
-  // before it runs that frame. Host: `seat` plugs in only once every player in the session
-  // (the newcomer included) acknowledges holding values `version` or newer, so its plug frame,
-  // which each player hears of before running it, comes after the values it then writes. A player:
-  // the newest version it holds, which its packets acknowledge. Versions only grow.
+  // ---- Port values (who plays a port, and with which controls) ---- The host sets each port's
+  // values from the frame its controller plugs in, and every machine must hold them before running
+  // that frame. So `seat` plugs in only once every player (newcomer included) acknowledges holding
+  // version `version` or newer. On a player, this records the newest version it holds, which its
+  // packets acknowledge. Versions only grow.
   void RequireValues(int seat, int version);
   void SetValuesHeld(int version);
-  // The local inputs already sampled for frames from CurrentFrame() on (the host keeps them when it
+  // Local inputs already sampled for frames from CurrentFrame() on (the host keeps them when it
   // goes back to solo play).
   std::vector<Pad> PendingLocal() const;
   // Whether this machine's own controller is plugged in at `frame`.
   bool Plugged(int seat, int frame) const;
   // The newest frame the host reported (a joining player catches up to it).
   int AuthorityFrame() const;
-  // This player is still replaying the host's game: its own controller isn't plugged in yet.
+  // This player is still replaying the host's game; its own controller isn't plugged in yet.
   bool CatchingUp() const;
-  // Something outside the inputs that the frames from `frame` on depend on changed (a port's name
-  // arrived late): re-run them, as for a wrong guess. Only within the rollback window and from a
-  // snapshot this machine still has: false (nothing re-runs, nothing fails) otherwise.
+  // Something besides inputs that frames from `frame` on depend on changed (a port's name arrived
+  // late): re-run them as for a wrong guess. Only within the rollback window and from a snapshot
+  // still held; otherwise returns false and nothing happens.
   bool RerunFrom(int frame);
   // Host: drop every other player (they stopped answering, or the session failed on them).
   void DropAllPeers();
@@ -358,13 +344,12 @@ public:
   // frame is confirmed and nothing is being re-run.
   bool Settled() const;
   const std::array<SeatPlan, MAX_SEATS>& Plan() const { return m_plan; }
-  // The drop-in bookkeeping in one line, for logs: per seat its plan, received, acknowledged,
-  // reported frame and history acknowledgement; the log and local input ranges.
+  // Drop-in bookkeeping in one line, for logs: per seat its plan, received, acknowledged and
+  // reported frames and history acknowledgement; the log and local input ranges.
   std::string Describe() const;
 
-  // Each change of this player's delay since the last call, one line each: the frame, from and to,
-  // and why (the link, the others' stalls, a step down, the player's choice), with the numbers the
-  // rule went by. For the log; at most the newest MAX_DELAY_NOTES are kept.
+  // Each change of this player's delay since the last call, one line each: frame, from, to, and
+  // why, with the numbers the rule used. For the log; only the newest MAX_DELAY_NOTES are kept.
   std::vector<std::string> TakeDelayNotes() { return std::exchange(m_delay_notes, {}); }
 
   const std::string& Error() const { return m_error; }
@@ -373,7 +358,7 @@ public:
   bool Resimulating() const { return m_resim_until >= 0; }
   int Delay() const { return m_delay; }
   // The newest frame whose inputs are known for every seat (every frame through it ran, or will
-  // re-run, with every player's real inputs).
+  // re-run, with real inputs).
   int ConfirmedFrame() const;
 
 private:
@@ -412,7 +397,7 @@ private:
 
   // The next frame to run in normal flow.
   int m_frame = 0;
-  // While re-running: the last frame of the re-run (the newest frame already run before it).
+  // While re-running: the last frame of the re-run (the newest frame run before it).
   int m_resim_until = -1;
   // Earliest frame that ran with a wrong guess (INT_MAX: none).
   int m_dirty;
@@ -433,29 +418,29 @@ private:
   std::optional<int> m_pending_checksum;
   int m_last_sent_newest = -1;
   bool m_stalling = false;
-  // The frame whose state was last saved since the last load (-1: none): a repeated boundary on a
-  // stalled or waiting frame must not snapshot it again.
+  // The frame last saved since the last load (-1: none), so a repeated boundary on a stalled or
+  // waiting frame doesn't snapshot it again.
   int m_last_saved = -1;
-  // Frames whose snapshot holds the state this session's history leads to: a rollback forgets
-  // those after the frame it loads, until the re-run saves them again.
+  // Frames whose snapshot matches this session's history. A rollback forgets those after the frame
+  // it loads until the re-run saves them again.
   std::set<int> m_saved;
   // Predicted frames per snapshot (Config::snapshot_every, or chosen from Game::SaveMs).
   int m_snapshot_every = 1;
 
-  // Input delay: adaptive (once per window of frame_rate frames) unless the player chose one.
+  // Input delay: adapted once per window of frame_rate frames, unless the player chose one.
   int m_delay;
   std::optional<int> m_fixed_delay;
   int m_window_start = 0;
-  // Frames re-run from the first wrong one on, over the match, and as of the last window; the last
-  // window's (sent, telemetry).
+  // Frames re-run from the first wrong one, over the match and as of the last window, and the last
+  // window's count (sent as telemetry).
   int m_guessed_frames = 0;
   int m_window_resimulated = 0;
   int m_last_resimulated = -1;
-  // Stalls that count for the delay (sent), and how many of them were over within k + 1 frames
-  // (sent, Packet::spared); the time the current stall began and ended (Game::NowMs; -1: not yet,
-  // judged when the frame after it runs, a rollback's re-run first). Each peer's reported
-  // counts, whether it reports lengths, and how much of them the last window already took; the
-  // least delay the inputs its newest stalls waited on carried (INT_MAX: none this window).
+  // Stalls that count for the delay (sent), and how many ended within k + 1 frames (sent as
+  // Packet::spared). The current stall's start and end times (Game::NowMs; -1 until judged, when
+  // the frame after it runs). Each peer's reported counts, whether it reports lengths, and how much
+  // the last window already took; the least delay carried by inputs its newest stalls waited on
+  // (INT_MAX: none this window).
   int m_link_stalls = 0;
   std::array<int, SPARED_FRAMES> m_spared{};
   double m_stall_began_ms = 0;
@@ -466,52 +451,48 @@ private:
   std::array<std::array<int, SPARED_FRAMES>, MAX_SEATS> m_peer_spared_seen{};
   std::array<bool, MAX_SEATS> m_peer_reports_spared{};
   std::array<int, MAX_SEATS> m_peer_stall_delay{INT_MAX, INT_MAX, INT_MAX, INT_MAX};
-  // The delay this player's inputs carry from each frame on (first frame, delay; oldest first):
-  // how far behind the others' frame its sampling ran, whatever the delay was since.
+  // The delay this player's inputs carry from each frame on, as (first frame, delay), oldest first.
   std::deque<std::pair<int, int>> m_delay_marks;
-  // The furthest reach of the others on this player's inputs this window (how far their frame ran
-  // ahead of its sampling: their lag on its inputs plus the delay those carried). Each of the last
-  // NEED_WINDOWS windows' need (oldest first): the least delay at which, as far as the window
-  // shows, the others would not have stalled on this player's inputs (Session.cpp, "Input
-  // delay"), and how many of the newest of them count for a raise (none from before the last step
-  // down).
+  // The furthest the others ran ahead of this player's sampling this window (their lag on its
+  // inputs plus the delay those carried). Then, for each of the last NEED_WINDOWS windows, the
+  // least delay at which the others wouldn't have stalled on this player's inputs, and how many of
+  // the newest count toward a raise (none from before the last step down).
   int m_window_peer_reach = 0;
   std::array<int, NEED_WINDOWS> m_need_history{};
   int m_evidence_windows = 0;
   // Per player, the frame at which its lag on our inputs last reached max_rollback (it was waiting
   // on them): only then are its stalls ours to answer.
   std::array<int, MAX_SEATS> m_edge_frame{INT_MIN / 2, INT_MIN / 2, INT_MIN / 2, INT_MIN / 2};
-  // The frame at which another player's counted stall was last heard of: a stall here around it
-  // came of theirs (they stopped sending new inputs while stalled).
+  // The frame at which another player's counted stall was last heard of: a stall here around then
+  // was caused by theirs (they stopped sending new inputs while stalled).
   int m_last_peer_stall_frame = INT_MIN / 2;
-  // Whether the link raised the delay to where it is (it may then follow the link back down), and
-  // windows in a row the link has wanted less.
+  // Whether the link raised the delay to its current value (so it may follow the link back down),
+  // and consecutive windows in which the link wanted less.
   bool m_delay_from_link = false;
   int m_link_below_windows = 0;
-  // Quiet windows in a row (none that a frame less would have left without two frames of room),
-  // how many in a row a step down needs (doubled by each one undone), and windows since the last
-  // step down.
+  // Consecutive quiet windows (none where a frame less would have left under two frames of room),
+  // how many a step down needs (doubled by each one undone), and windows since the last step down.
   int m_quiet_windows = 0;
   int m_hold_windows;
   int m_windows_since_lower = INT_MAX / 2;
-  // The frame the current stall began at, and whether it may count: every peer's inputs had
-  // started arriving, this player's controller is plugged in, and the newest plug-in has settled
-  // (SettleFrom). Judged again when it ends (hitches, the others' stalls).
+  // The frame the current stall began at, and whether it may count: every peer's inputs had started
+  // arriving, this player's controller is plugged in, and the newest plug-in has settled
+  // (SettleFrom). Judged again when it ends.
   int m_stall_frame = 0;
   bool m_stall_after_input = false;
-  // This machine's hitches (sent), each peer's, and the frame the latest of any was heard of.
+  // This machine's hitches (sent), each peer's, and the frame the latest was heard of.
   int m_hitches = 0;
   std::array<int, MAX_SEATS> m_peer_hitches{0, 0, 0, 0};
   int m_last_hitch_frame = INT_MIN / 2;
 
-  // This player's latest round trips to the relay (oldest first) and their median, in
-  // milliseconds (nullopt: too few yet), and each peer's median as it reported.
+  // This player's latest relay round trips (oldest first) and their median in ms (nullopt: too
+  // few), and each peer's reported median.
   std::deque<int> m_rtts;
   std::optional<int> m_typical_rtt;
   std::array<std::optional<int>, MAX_SEATS> m_peer_rtt;
 
-  // Time sync, per peer, in frames: our latest lead over it, that lead smoothed, and its own
-  // smoothed lead over its slowest peer as it reported. The balance (ours - theirs) / 2 is averaged
+  // Time sync per peer, in frames: our latest lead over it, that lead smoothed, and its own
+  // smoothed lead over its slowest peer as reported. The balance (ours - theirs) / 2 is averaged
   // over a window.
   std::array<std::optional<double>, MAX_SEATS> m_advantage;
   std::array<std::optional<double>, MAX_SEATS> m_smoothed_advantage;
@@ -523,7 +504,7 @@ private:
   bool m_waiting = false;
 
   // Packets: the last sequence number sent, and per seat the newest received and the newest
-  // checksum frame taken (a second copy of a packet carries the same one).
+  // checksum frame taken (a duplicate packet carries the same one).
   int m_send_sequence = 0;
   std::array<int, MAX_SEATS> m_peer_sequence{0, 0, 0, 0};
   std::array<int, MAX_SEATS> m_peer_checksum_frame{-1, -1, -1, -1};
@@ -538,8 +519,8 @@ private:
   std::array<int, MAX_SEATS> m_history_acked{-1, -1, -1, -1};
   std::array<int, MAX_SEATS> m_history_stuck{0, 0, 0, 0};
   bool m_leaving = false;
-  // Port values: per seat, the version every player must hold before it plugs in (host); per
-  // seat, the newest each player acknowledged (host); the newest this machine holds.
+  // Port values: per seat, the version every player must hold before it plugs in (host), and the
+  // newest each player acknowledged (host); then the newest this machine holds.
   std::array<int, MAX_SEATS> m_values_required{-1, -1, -1, -1};
   std::array<int, MAX_SEATS> m_values_acked{-1, -1, -1, -1};
   int m_values_held = -1;

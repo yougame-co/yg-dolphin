@@ -1,7 +1,7 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-// Design F's relabels (UX/Relabel.h): the marks' values, which label a stage turn names, where the
+// Texture relabels (UX/Relabel.h): the marks' values, which label a stage turn names, where the
 // marks live (READY TO FIGHT!'s palette in the character select's archive, the stage select's
 // textures in its own), and that a mark is written only over the game's value or another mark.
 
