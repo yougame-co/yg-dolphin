@@ -1,8 +1,12 @@
 #!/bin/bash
 # Publish a snapshot of this private repo to the public one (github.com/Lrosias/orca-netplay).
 #
-#   Tools/orca-publish-public.sh [ref] [message]     # defaults: origin/main, "Orca source, <date>"
-#   DRY_RUN=1 Tools/orca-publish-public.sh ...       # build and check, don't push
+#   Tools/orca-publish-public.sh [ref] [message] [tag]   # defaults: origin/main, "Orca source, <date>"
+#   Tools/orca-publish-public.sh origin/main "Orca 0.3.28 (source of <release sha>)" orca-0.3.28
+#   DRY_RUN=1 Tools/orca-publish-public.sh ...           # build and check, don't push
+#
+# Every released Orca is published and tagged orca-<version>; the app's "source" link points at
+# https://github.com/Lrosias/orca-netplay/tree/orca-<version>.
 #
 # The public history is Dolphin's own, then one commit per published snapshot, authored as
 # YouGame. Private branches, history, ORCA_NOTES.md and this script never leave this repo. The snapshot is
@@ -10,8 +14,12 @@
 set -euo pipefail
 
 REF=${1:-origin/main}
+TAG=${3:-}
 PUBLIC_URL=${ORCA_PUBLIC_URL:-https://github.com/Lrosias/orca-netplay.git}
-EXCLUDE=(Tools/orca-publish-public.sh ORCA_NOTES.md) # private: never published
+# Never published: private notes, this script, and test tools that drive YouGame's own site, app or
+# test accounts rather than Orca.
+EXCLUDE=(Tools/orca-publish-public.sh ORCA_NOTES.md Tools/orca/xplat.py Tools/orca/page-e2e.mjs
+  Tools/orca/queue-e2e.mjs Tools/orca/controller-latency.mjs Tools/orca/selfmatch.mjs)
 # Case-insensitive. Real names, handles, personal paths and home-network details.
 DENY='\bluis\b|rosias|(^|[^q])hbox|hungry ?box|\bcherl\b|\bcrunch|gmail\.com|/Users/|C:\\\\Users|~/Documents|\$HOME/Documents|brawl-dolphin/|xfinity|comcast'
 
@@ -39,18 +47,26 @@ fi
 # Parent: the public repo's current head, or Dolphin 2609 for the first publish.
 git fetch -q "$PUBLIC_URL" main 2>/dev/null && parent=$(git rev-parse FETCH_HEAD) || parent=$BASE
 if [ "$(git rev-parse "$parent^{tree}")" = "$tree" ]; then
-  echo "Nothing new to publish."
-  exit 0
+  commit=$parent
+  echo "Tree unchanged since the public head; reusing $commit."
+else
+  msg=${2:-"Orca source, $(date -u +%Y-%m-%d)"} # no private hashes beyond a release's own
+  commit=$(GIT_AUTHOR_NAME=YouGame GIT_AUTHOR_EMAIL=noreply@yougame.co \
+    GIT_COMMITTER_NAME=YouGame GIT_COMMITTER_EMAIL=noreply@yougame.co \
+    git commit-tree "$tree" -p "$parent" -m "$msg")
+  echo "Snapshot $commit (from $src, parent $parent)"
 fi
-
-msg=${2:-"Orca source, $(date -u +%Y-%m-%d)"} # no private hashes in public messages
-commit=$(GIT_AUTHOR_NAME=YouGame GIT_AUTHOR_EMAIL=noreply@yougame.co \
-  GIT_COMMITTER_NAME=YouGame GIT_COMMITTER_EMAIL=noreply@yougame.co \
-  git commit-tree "$tree" -p "$parent" -m "$msg")
-echo "Snapshot $commit (from $src, parent $parent)"
 
 if [ -n "${DRY_RUN:-}" ]; then
   git diff --stat "$parent" "$commit" | tail -1
   exit 0
 fi
-git push "$PUBLIC_URL" "$commit:refs/heads/main"
+[ "$commit" = "$parent" ] || git push "$PUBLIC_URL" "$commit:refs/heads/main"
+if [ -n "$TAG" ]; then
+  git push "$PUBLIC_URL" "$commit:refs/tags/$TAG"
+  url="https://github.com/Lrosias/orca-netplay/tree/$TAG"
+  # The app links here; it must answer without a sign-in.
+  code=$(curl -s -o /dev/null -w '%{http_code}' -A 'Mozilla/5.0' "$url")
+  echo "$url -> $code"
+  [ "$code" = 200 ]
+fi
