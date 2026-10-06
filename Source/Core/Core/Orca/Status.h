@@ -10,12 +10,17 @@
 
 // Machine-readable status for the YouGame desktop app, one line each on stdout in a session:
 //   orca state booting|lobby|playing|ended, and drop-in's (ORCA.md "Drop-in"): joining <percent>,
-//   friend-joining, friend-joined, friend-left <why>, host-left, left, no-room, and a held join's
+//   friend-joining, friend-joined, friend-left <why>, host-left, left, left lobby (With Anyone >
+//   Casual or Ranked was picked in a host's friends lobby, by any player in it, and the host left
+//   its friends for the queue; its `orca menu online ...` follows; each friend gets host-left and
+//   the same `orca menu online ...` once home), no-room (a former joiner in a fight, until it is
+//   back on the menus and opens a room of its own), and a held join's
 //   (ORCA.md "Boot and friends from the menus"): friend-holding (the host: a friend waits until its
 //   game is back in the menus), friend-waiting (the joiner: the host plays a single-player mode)
 //   orca error <code> <sentence for the player>
 //   orca menu <event>, a pick in the game's own Online menu: online casual, online ranked (with the
-//   app's "host"; "... local" without it), online friends, cancel (ORCA.md "Matchmaking")
+//   app's "host"; "... local" without it; "... kept" from a host that kept its friends because its
+//   page can't search that queue), online friends, cancel (ORCA.md "Matchmaking")
 //   orca result <json>, a verdict of the room in a matchmade room (with the app's "results")
 //   orca queue ready <casual|ranked> <char> <costume> | unready | skip | timeout me|them, the
 //   queue's character select (with the app's "queue2", UX/Queue.h; through Line())
@@ -33,8 +38,10 @@ void Event(std::string_view state);
 void Error(std::string_view code, std::string_view sentence);
 // "orca menu <event>": the player picked something in the game's own Online menu (ORCA.md "Online
 // menu"): "online casual", "online ranked" (with the app's "host"; "online casual local" and
-// "online ranked local" without it), "online friends", and "cancel" (the player backed out of a
-// search). An event, never a state: each pick prints once.
+// "online ranked local" without it; "online casual kept" and "online ranked kept" from a host that
+// kept its friends because its page can't search that queue: PICK_CAPS), "online friends", and
+// "cancel" (the player backed out of a search). An event, never a state: each pick prints once (a
+// kept one again, armed, once the friends are gone).
 void Menu(std::string_view event);
 // "orca result <json>" (with the "results" capability): a matchmade room's verdict on a game or a
 // ranked set (ORCA.md "Matchmaking"). The whole line stays within 300 bytes (the app's limit).
@@ -47,8 +54,10 @@ void Report(std::string_view code, std::string_view sentence);
 
 // Capabilities (ORCA.md, "Embedding"): what this build implements, printed once as
 // "orca caps <list>" before "ready", and what the app said it understands ("caps <list>" on
-// stdin). A feature is on only when both list it. "pause" needs no answer: it says this Orca
-// pauses a session while the player's game is alone in it (older ones answer "unsupported pause").
+// stdin; a later "caps" line replaces the whole answer, and every feature is read where it acts,
+// so the page may answer again mid-run: "pick-casual", "pick-ranked" below). A feature is on only
+// when both list it. "pause" needs no answer: it says this Orca pauses a session while the
+// player's game is alone in it (older ones answer "unsupported pause").
 // "delay": the app may send "delay auto|1..6", the player's own input delay (ORCA.md).
 // "perf": the app may send "perf off|fps|detailed", the overlay's frame meter (ORCA.md).
 // "direct": the app may send "direct on|off", the player's switch for direct links (ORCA.md).
@@ -73,8 +82,19 @@ inline constexpr const char* LOCKS_CAP = "locks";
 // `queue rating <n|->`, and a matchmade room's ready timer. Offered with "locks" (a ruleset); with
 // the app's answer the Casual and Ranked picks wait for `orca queue ready` instead of searching.
 inline constexpr const char* QUEUE2_CAP = "queue2";
+// "pick-casual", "pick-ranked": the page can search that queue right now (YouGame: the queue's
+// switches on, and for Ranked a signed-in player; its lib/orca.ts orcaCapsAnswer), and says so
+// again on a later "caps" line when that changes (the player signed in, a switch flipped). A host
+// with friends in its game leaves them for a With Anyone pick only with that pick's cap; without
+// it the pick is announced in place, unarmed ("orca menu online <queue> kept"), so the page says
+// why and cancels, and armed once the friends are gone (Rollback/OnlineMatch.h DecideLobbyPick,
+// DecideKeptPick). The page's switches and sign-in are its server props: a change reaches a running
+// page on a refresh (signing in in place does one), and a reload starts a new run anyway. Offered
+// with "locks" (a ruleset: the profiles with the Online menu). With them a ruleset profile offers 15
+// caps; the app passes 16 at most (raising that takes a desktop release).
+inline constexpr const char* PICK_CAPS = "pick-casual pick-ranked";
 // What this build offers for the running profile: CAPS, "results" where its reader is verified,
-// and "locks" where it has a ruleset.
+// and "locks", "queue2" and the pick caps where it has a ruleset.
 std::string OfferedCaps();
 void PrintCaps();
 void SetAppCaps(std::string_view list);
