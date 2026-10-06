@@ -95,10 +95,11 @@ other. Now:
   is open`, and go first come, first served: one ticket per run in `orca-run-queue/` beside the
   locks, locked by its run, so a run that dies leaves none behind. `--wait-max S` gives up (exit 9),
   `--yield` stops the run if Luis opens his Orca (exit 10; a perf run without it notes the moment in
-  its output), `--serial NAME` keeps runs with the same NAME apart.
+  its output), `--serial NAME` keeps runs with the same NAME apart (a check waiting only for its key
+  lets later checks go past it).
 - Runs that share accounts or a queue are kept apart without asking: `queue-e2e.mjs --slug` and
-  `page-e2e.mjs` (two signed-in players), and a `queue-e2e.mjs` from a checkout older than this one
-  (the shared dev game).
+  `page-e2e.mjs` (two signed-in players), a `queue-e2e.mjs` from a checkout older than this one (the
+  shared dev game), and runs given the same `QE2E_DEV_SUFFIX`.
 - Old scripts keep working beside it: a check holds both old locks shared and a perf run holds them
   exclusive, so a plain `flock orca-run-solo.lock ...` acts as a perf run, and while one waits no
   new check starts. `luis-orca-guard.sh` works as before. Do not wrap a script that takes the old

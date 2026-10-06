@@ -26,7 +26,9 @@
 #
 # Exit status: the command's own; 9 gave up waiting; 10 stopped by --yield; 11 the command takes
 # orca-run-solo.lock or orca-run.lock itself and would wait for this very run forever (drop that
-# flock, or run the script without run-lock.py); 2 usage.
+# flock, or run the script without run-lock.py); 128+N after signal N; 2 usage. A signal to this
+# process stops the command's whole tree; SIGKILL cannot, and the command would run on with its
+# turn given away, so kill the process group instead. Under nohup a hangup is ignored as usual.
 #
 # How it shares with the old locks: a check holds orca-run-solo.lock and orca-run.lock shared and a
 # perf run holds both exclusive, so a script that still takes them with plain `flock` (exclusive)
@@ -62,6 +64,7 @@ REMIND_S = 600
 # wrapper carrying this pattern in its own arguments would look like him playing.
 LUIS_RE = re.compile(r"Resources/runtimes/orca/Orca\.app/Contents/MacOS/Orca|yougame-desktop/orca/apps/")
 LUIS = "Luis's Orca is open"
+SERIAL_BUSY = "another run with --serial"
 EXIT_GAVE_UP, EXIT_YIELDED, EXIT_DEADLOCK = 9, 10, 11
 
 
@@ -234,8 +237,10 @@ class Ticket:
             try:
                 with open(seq_file) as f:
                     self.seq = int(f.read().strip() or 0) + 1
-            except (FileNotFoundError, ValueError):
-                self.seq = 1
+            except (FileNotFoundError, ValueError):  # never behind a ticket already there
+                taken = [int(n.split(".")[0]) for n in os.listdir(QUEUE)
+                         if n.endswith(".ticket") and n.split(".")[0].isdigit()]
+                self.seq = max(taken, default=0) + 1
             with open(seq_file + ".tmp", "w") as f:
                 f.write(f"{self.seq}\n")
             os.replace(seq_file + ".tmp", seq_file)
@@ -367,7 +372,7 @@ class Run:
             fd = try_lock(serial_path(name), fcntl.LOCK_EX)
             if fd is None:
                 self.release()
-                return f"another run with --serial {name} is going"
+                return f"{SERIAL_BUSY} {name} is going"
             self.held.append(fd)
         for path in (SOLO, TWO):
             fd = try_lock(path, mode)
@@ -384,27 +389,38 @@ class Run:
                 return f"a plain flock run (pid {waiting[0]}) is waiting for the old lock; it goes first"
         return None
 
+    def may_pass(self, t):
+        """A check may go past a check ahead of it that waits only for its --serial key (another run
+        with that key is going), when this one does not need the key: it would not start sooner if
+        this one waited. Once the key frees, that check waits for something else and is passed no
+        longer."""
+        why = t.get("reason") or ""
+        if self.cls != "check" or t["cls"] != "check" or not why.startswith(SERIAL_BUSY):
+            return False
+        return not set(t.get("serial") or []) & set(self.serials)
+
     def blocked(self):
         """Why this run cannot start now, or None once it holds its locks."""
+        tickets = scan(self.ticket)
+        ahead = [t for t in tickets if t["seq"] < self.ticket.seq and t["state"] == "waiting"
+                 and not self.may_pass(t)]
+        if ahead:  # only the first in line looks at the machine; the rest repeat what it waits for
+            first = ahead[0]
+            text = f"{len(ahead)} ahead in the queue; the first is a {first['cls']} run (pid {first['pid']})"
+            return text + (f", waiting: {first['reason']}" if first.get("reason") else "")
         if luis_playing():
             return LUIS
-        tickets = scan(self.ticket)
-        ahead = [t for t in tickets if t["seq"] < self.ticket.seq and t["state"] == "waiting"]
-        if ahead:
-            first = ahead[0]
-            why = first.get("reason") or "?"
-            return f"{len(ahead)} ahead in the queue; the first ({first['cls']}, pid {first['pid']}) is waiting: {why}"
         load, free = machine()
         running = [t for t in tickets if t["state"] == "running" and t["seq"] != self.ticket.seq]
         checks = [t for t in running if t["cls"] == "check"]
+        if any(t["cls"] == "perf" for t in running):
+            return "a perf run has the machine"
         if self.cls == "perf":
             if not perf_roomy(load, free):
                 return f"the machine is busy (load {load:.1f}, {free}% memory free)"
             if checks:
                 return f"{len(checks)} check run(s) still going"
         else:
-            if any(t["cls"] == "perf" for t in running):
-                return "a perf run has the machine"
             allowed = checks_allowed(load, free)
             if len(checks) >= allowed:
                 return f"{len(checks)} check run(s) going; load {load:.1f} and {free}% memory free allow {allowed}"
@@ -508,21 +524,23 @@ class Run:
 
     def on_signal(self, signum, _frame):
         self.signals += 1
-        if self.child is None or self.child.poll() is not None:
+        if self.child is None:
+            self.stop_signal = signum
             raise KeyboardInterrupt
-        self.stop_signal = signum  # run_command stops the command's whole tree at its next look
+        if self.child.poll() is None:
+            self.stop_signal = signum  # run_command stops the command's whole tree at its next look
 
     def main(self):
         for s in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
-            signal.signal(s, self.on_signal)
+            if signal.getsignal(s) != signal.SIG_IGN:  # nohup's ignored SIGHUP stays ignored
+                signal.signal(s, self.on_signal)
         try:
             if not self.wait_turn():
                 return EXIT_GAVE_UP
             return self.run_command()
         except KeyboardInterrupt:
-            if self.child is None:
-                say("interrupted while waiting")
-            return 130
+            say("interrupted while waiting")
+            return 128 + (self.stop_signal or signal.SIGINT)
         finally:
             self.release()
             if self.ticket:
@@ -545,8 +563,12 @@ def auto_serials(cmd):
                     per_run = "QE2E_DEV_SUFFIX" in f.read()
             except OSError:
                 per_run = False
-            if not per_run or os.environ.get("QE2E_DEV_SUFFIX") == "":
+            suffix = os.environ.get("QE2E_DEV_SUFFIX")
+            if not per_run:
                 names.append("queue-e2e-shared-dev-game")
+            elif suffix is not None:  # a suffix of its own choosing: runs that share it share a game
+                names.append(f"queue-e2e-dev-{suffix.lower()}" if re.search(r"[A-Za-z0-9]", suffix)
+                             else "queue-e2e-shared-dev-game")
     return list(dict.fromkeys(names))
 
 

@@ -50,6 +50,9 @@ class RunLock(unittest.TestCase):
             if p.poll() is None:
                 p.kill()
                 p.wait()
+            for pipe in (p.stdout, p.stderr):
+                if pipe:
+                    pipe.close()
         shutil.rmtree(self.dir, ignore_errors=True)
 
     def set_load(self, load, free):
@@ -328,6 +331,60 @@ class RunLock(unittest.TestCase):
         for p in ps:
             self.assertEqual(self.finish(p)[0], 0)
         self.assertEqual(self.most_at_once(), 1)
+
+    def test_perf_waits_behind_a_running_perf_and_says_so(self):
+        first = self.start("perf", self.record("p1", 1.0))
+        self.assertTrue(self.wait_for(lambda: self.started("p1")))
+        rc, _, err = self.finish(self.start("perf", self.record("p2", 0.1)))
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.finish(first)[0], 0)
+        self.assertIn("a perf run has the machine", err)
+        s = self.spans()
+        self.assertGreaterEqual(s["p2"][0], s["p1"][1])
+
+    def test_a_check_passes_one_that_waits_for_its_serial_key(self):
+        a = self.start("check", self.record("a", 1.5), "--serial", "k")
+        self.assertTrue(self.wait_for(lambda: self.started("a")))
+        b = self.start("check", self.record("b", 0.2), "--serial", "k")
+        self.assertTrue(self.wait_for(lambda: len(self.tickets()) == 2))
+        time.sleep(0.3)
+        c = self.start("check", self.record("c", 0.2))
+        for p in (a, b, c):
+            self.assertEqual(self.finish(p)[0], 0)
+        s = self.spans()
+        self.assertLess(s["c"][1], s["a"][1])  # c went past b, which waited for a's key
+        self.assertGreaterEqual(s["b"][0], s["a"][1])
+
+    def test_runs_sharing_a_chosen_dev_suffix_are_kept_apart(self):
+        new = os.path.join(self.dir, "queue-e2e.mjs")
+        with open(new, "w") as f:
+            f.write("process.env.QE2E_DEV_SUFFIX\n")
+        env = {"QE2E_DEV_SUFFIX": "Mine"}
+        ps = [self.start("check", self.record(f"s{i}", 0.6) + [new], env=env) for i in range(2)]
+        for p in ps:
+            self.assertEqual(self.finish(p)[0], 0)
+        self.assertEqual(self.most_at_once(), 1)
+
+    def test_signal_while_waiting(self):
+        open(self.playing, "w").close()
+        c = self.start("check", self.record("c", 0.1))
+        self.assertTrue(self.wait_for(lambda: len(self.tickets()) == 1))
+        time.sleep(0.3)
+        c.send_signal(signal.SIGTERM)
+        self.assertEqual(self.finish(c)[0], 128 + signal.SIGTERM)
+        self.assertEqual(self.tickets(), [])
+        # Started under nohup (SIGHUP ignored), a hangup changes nothing.
+        n = subprocess.Popen(["nohup", sys.executable, TOOL, "check", "--", *self.record("n", 0.1)],
+                             env=self.env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.procs.append(n)
+        self.assertTrue(self.wait_for(lambda: len(self.tickets()) == 1))
+        time.sleep(0.3)
+        n.send_signal(signal.SIGHUP)
+        time.sleep(0.5)
+        self.assertIsNone(n.poll())
+        os.unlink(self.playing)
+        self.assertEqual(n.wait(timeout=10), 0)
+        self.assertTrue(self.started("n"))
 
     def test_status(self):
         c = self.start("check", self.record("c", 1.5), "--label", "the check")
