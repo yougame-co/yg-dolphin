@@ -237,6 +237,13 @@ float TextWithEllipsis(ImDrawList* dl, ImVec2 pos, float px, ImU32 colour, std::
   return w;
 }
 
+// A row with someone's own words: a chat line, or a direct message's notice (Luis, 2026-10-05:
+// "Show me the message"), drawn as the name over the words.
+bool Worded(const PillRow& r)
+{
+  return r.type == PillRow::Type::Chat || (r.type == PillRow::Type::Notice && r.kind == Kind::Dm);
+}
+
 // One laid-out row (string views into the frame's own lines and the notice cache: no copies).
 struct RowLayout
 {
@@ -315,7 +322,7 @@ Kit::Box DrawPill(ImDrawList* dl, const Model::View& view, std::span<const PillR
     RowLayout l;
     l.row = &r;
     float words = 0;
-    if (r.type == PillRow::Type::Chat)
+    if (Worded(r))
     {
       const auto [name, name_cut] = OneLine(r.name, m.name_px, words_room);
       const TwoLines body = Wrap2(r.text, m.text_px, words_room);
@@ -375,7 +382,7 @@ Kit::Box DrawPill(ImDrawList* dl, const Model::View& view, std::span<const PillR
     const PillRow& r = *l.row;
     const float a = r.alpha;
     const float tx = x0 + m.avatar + m.avatar_gap;
-    if (r.type == PillRow::Type::Chat)
+    if (Worded(r))
     {
       // The avatar at the row's top, the name, the words under it.
       const ImVec2 c(x0 + r_av, y + r_av);
