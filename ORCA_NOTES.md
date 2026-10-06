@@ -5121,6 +5121,22 @@ the host's `title.tmd` whole (only `tmp/` files travel as hashes), so mixed pair
 `ORCA_DISC_SHA1` is in the compatibility key but the app doesn't set it yet; when it does, it must
 pass Rev 2's hash for this dump, or Rev 1 and Rev 2 players get different keys.
 
+**Review fixes** (2026-10-06, rebased onto main with 0.3.28's Code Menu lock and play again):
+
+- A loader's disc (Project+) was aliased on its own volume in `SetDefaultDisc` after
+  `PrepareLauncherBoot` checked another volume, and the result was ignored: a failed read there would
+  have booted Rev 1 unaliased against Rev 2 players. Now a session refuses a Brawl (USA) disc that
+  doesn't read as Rev 2 there (`Orca::SessionDiscReady`): `orca error disc_revision`, no boot.
+- `OrcaDisc.ReadPatchesWithAWrongOriginalPatchNothing` (Rev 2 image): a list whose second byte
+  doesn't hold its original is refused and every read stays the same. 503 `Orca*` passed with both
+  test discs, `BrawlRev1ReadsAsRev2` ran.
+- Merged candidate, two Orcas, Project+ casual from the real queue (dev tickets), host Rev 2 .wbfs,
+  joiner Rev 1 .rvz (`queue-e2e.mjs <Rev 2> --pplus <launcher> --queue casual --q2 --disc-b
+  <Rev 1>`): PASS, 2 games, the verdicts the same on both sides, 100 checksums matched each, 0
+  rollbacks. A first try failed (`peer_left` after game 1, 44 / 45 checksums matched, no desync):
+  the external drive's APFS image logged one 81 s transaction stall (`disk11 ... took 81193606 us to
+  close`) over the same minute both Orcas dropped to about 2 fps.
+
 ## Code comments from 0.3.27, as written
 
 Merging rel-0.3.27 (`34897a118b`) into the cleaned main shortened its new code comments to main's

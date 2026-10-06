@@ -141,7 +141,8 @@ Every disc a session boots, and the launcher profile's disc, goes through `Orca:
 Rev 2's (`VolumeDisc::SetReadPatches`), so the console reads a Rev 2 disc and Rev 1 and Rev 2 players
 meet in the same rooms. The TMD and ticket still differ in hashes, signatures and the ticket ID; the
 game never reads them: a Rev 1 and a Rev 2 run of the default inputs (Brawl and Project+) give the
-same hashlog. Other revisions and modified Rev 1 copies are refused.
+same hashlog. Other revisions and modified Rev 1 copies are refused, and so is a launcher's disc that
+doesn't read as Rev 2 at boot (`Orca::SessionDiscReady`, e.g. after a read error).
 
 Sessions start from an empty NAND (save hash 0); the game makes its save in-session on both
 machines. A session with no `Config/GCPadNew.ini` gets `Sys/Orca/Input/GCPadNew.ini`: port 1 on the
