@@ -141,9 +141,9 @@ void Init()
     // Local display only. The overlay matches the session's game.
     Kit::SetLook(Rules::ProfileRuleset() == Rules::Ruleset::PPlus ? Kit::Look::ProjectPlus :
                                                                     Kit::Look::Brawl);
-    // Read only. Captures this player's own controls while playing alone, so the session can carry
-    // them into a game it joins or hosts.
-    if (alone)
+    // Read only, first runs only (it keeps and prints changes). Captures this player's own controls
+    // while playing alone, so the session can carry them into a game it joins or hosts.
+    if (alone && !resimulating)
       ReadOwnControlsFrame(guard, ports);
     // Test only, ORCA_UX_TEST_LATE_NAME=<frame>. Simulates a friend's name arriving late: first
     // runs before that frame see it empty and re-runs see it, to show the desync the session's

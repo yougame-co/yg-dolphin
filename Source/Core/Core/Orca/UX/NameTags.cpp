@@ -517,6 +517,7 @@ void LoadOwnControls()
   }
   std::optional<std::vector<u8>> profile;
   const char* from = "";
+  bool kept = false;
   if (const char* env = std::getenv("ORCA_CONTROLS"); env && *env)
   {
     profile = ParseControlsHex(StripWhitespace(env));
@@ -532,11 +533,15 @@ void LoadOwnControls()
     {
       profile = ParseControlsHex(StripWhitespace(text));
       from = "an earlier run";
+      kept = true;
     }
   }
   if (!profile)
     return;
   NOTICE_LOG_FMT(ROLLBACK, "Name tags: this player's own controls from {}", from);
+  // Kept ones, not the app's: the page takes them as the player's.
+  if (kept)
+    Orca::Status::Line("orca controls " + ControlsHex(*profile));
   Events::SetOwnControls(std::move(*profile));
 }
 
