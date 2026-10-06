@@ -27,8 +27,9 @@ namespace
 // revision byte of both disc headers and in main.dol at 0x8001BC9C (`li r7,1`; Rev 2 `li r7,2`).
 // Their TMDs and tickets differ only in hashes, signatures and the ticket ID, which the game
 // doesn't read (ORCA.md, "Orca.app and the disc").
-constexpr std::string_view BRAWL_REV1_ID = "RSBE01";
+constexpr std::string_view BRAWL_USA_ID = "RSBE01";
 constexpr u16 BRAWL_REV1 = 1;
+constexpr u16 BRAWL_REV2 = 2;
 // The game partition's content SHA-1 in the Rev 1 TMD: only this exact dump is aliased.
 constexpr std::array<u8, 20> BRAWL_REV1_CONTENT_SHA1 = {0xab, 0x93, 0xef, 0x28, 0x0b, 0x83, 0x45,
                                                         0x72, 0x52, 0x3f, 0x64, 0xc5, 0x5c, 0x6a,
@@ -42,7 +43,7 @@ bool AliasRevision(DiscIO::VolumeDisc& volume)
   if (volume.GetVolumeType() != DiscIO::Platform::WiiDisc)
     return false;
   const DiscIO::Partition game = volume.GetGamePartition();
-  if (volume.GetGameID(game) != BRAWL_REV1_ID || volume.GetRevision(game) != BRAWL_REV1)
+  if (volume.GetGameID(game) != BRAWL_USA_ID || volume.GetRevision(game) != BRAWL_REV1)
     return false;
   const std::vector<IOS::ES::Content> contents = volume.GetTMD(game).GetContents();
   if (contents.size() != 1 || contents[0].sha1 != BRAWL_REV1_CONTENT_SHA1)
@@ -50,6 +51,12 @@ bool AliasRevision(DiscIO::VolumeDisc& volume)
   // Each byte is checked before it is patched.
   return volume.SetReadPatches(
       {{DiscIO::PARTITION_NONE, 7, 1, 2}, {game, 7, 1, 2}, {game, BRAWL_REV1_DOL_VERSION, 1, 2}});
+}
+
+bool SessionDiscReady(const DiscIO::VolumeDisc& volume)
+{
+  const DiscIO::Partition game = volume.GetGamePartition();
+  return volume.GetGameID(game) != BRAWL_USA_ID || volume.GetRevision(game) == BRAWL_REV2;
 }
 
 DiscCheck CheckDisc(const std::string& path, std::string_view game_id)

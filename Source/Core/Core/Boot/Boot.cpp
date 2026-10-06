@@ -50,6 +50,7 @@
 #include "Core/NetPlayProto.h"
 #include "Core/Orca/Disc.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/Status.h"
 #include "Core/PatchEngine.h"
 #include "Core/PowerPC/PPCAnalyst.h"
 #include "Core/PowerPC/PPCSymbolDB.h"
@@ -484,15 +485,24 @@ bool CBoot::Load_BS2(Core::System& system, const std::string& boot_rom_filename)
   return true;
 }
 
-static void SetDefaultDisc(DVD::DVDInterface& dvd_interface)
+static bool SetDefaultDisc(DVD::DVDInterface& dvd_interface)
 {
   const std::string default_iso = Config::Get(Config::MAIN_DEFAULT_ISO);
   if (default_iso.empty())
-    return;
+    return true;
   std::unique_ptr<DiscIO::VolumeDisc> disc = DiscIO::CreateDiscForCore(default_iso);
   if (disc && Orca::SessionActive())
+  {
     Orca::AliasRevision(*disc);
+    // The loader's profile check read its own volume of this disc.
+    if (!Orca::SessionDiscReady(*disc))
+    {
+      Orca::Status::Error("disc_revision", "Orca couldn't read that Brawl disc as Rev 2.");
+      return false;
+    }
+  }
   SetDisc(dvd_interface, std::move(disc));
+  return true;
 }
 
 static void CopyDefaultExceptionHandlers(Core::System& system)
@@ -556,7 +566,8 @@ bool CBoot::BootUp(Core::System& system, const Core::CPUThreadGuard& guard,
       if (!executable.reader->IsValid())
         return false;
 
-      SetDefaultDisc(system.GetDVDInterface());
+      if (!SetDefaultDisc(system.GetDVDInterface()))
+        return false;
 
       auto& ppc_state = system.GetPPCState();
 
@@ -619,7 +630,8 @@ bool CBoot::BootUp(Core::System& system, const Core::CPUThreadGuard& guard,
 
     bool operator()(const DiscIO::VolumeWAD& wad) const
     {
-      SetDefaultDisc(system.GetDVDInterface());
+      if (!SetDefaultDisc(system.GetDVDInterface()))
+        return false;
       if (!Boot_WiiWAD(system, wad))
         return false;
 
@@ -631,7 +643,8 @@ bool CBoot::BootUp(Core::System& system, const Core::CPUThreadGuard& guard,
 
     bool operator()(const BootParameters::NANDTitle& nand_title) const
     {
-      SetDefaultDisc(system.GetDVDInterface());
+      if (!SetDefaultDisc(system.GetDVDInterface()))
+        return false;
       if (!BootNANDTitle(system, nand_title.id))
         return false;
 

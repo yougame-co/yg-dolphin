@@ -36,6 +36,11 @@ DiscCheck CheckDisc(const std::string& path, std::string_view game_id);
 // is such a dump and now reads as that revision. Sessions call it on every disc they boot.
 bool AliasRevision(DiscIO::VolumeDisc& volume);
 
+// False if `volume` is Brawl (USA) but doesn't read as Rev 2, the revision every Brawl profile
+// plays: AliasRevision didn't apply (e.g. a read failed). For a disc whose check read another
+// volume, like a loader's disc.
+bool SessionDiscReady(const DiscIO::VolumeDisc& volume);
+
 // Checks the boot file (-e) before anything else: "disc_missing" if nothing is at the path,
 // "disc_unreadable" if it won't open; the sentence is the path. Dolphin's own check raises a panic
 // alert, which is invisible inside the app's window on Windows and would hang the run.

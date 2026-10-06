@@ -153,6 +153,29 @@ std::vector<u8> ReadDisc(const DiscIO::VolumeDisc& volume, u64 offset, u64 lengt
 }
 }  // namespace
 
+// With ORCA_TEST_DISC (Rev 2): one byte that doesn't hold its original refuses the whole list, and
+// no read changes.
+TEST(OrcaDisc, ReadPatchesWithAWrongOriginalPatchNothing)
+{
+  const char* path = std::getenv("ORCA_TEST_DISC");
+  if (!path)
+    GTEST_SKIP() << "set ORCA_TEST_DISC to a Brawl (USA, Rev 2) image";
+  const std::unique_ptr<DiscIO::VolumeDisc> disc = DiscIO::CreateDisc(path);
+  ASSERT_TRUE(disc);
+  const DiscIO::Partition game = disc->GetGamePartition();
+  ASSERT_EQ(disc->GetRevision(game), 2);
+  const std::vector<u8> header = ReadDisc(*disc, 0, 0x20, DiscIO::PARTITION_NONE);
+  const std::vector<u8> boot = ReadDisc(*disc, 0, 0x20, game);
+
+  // The first byte holds its original (2); the second doesn't (2, not 1).
+  EXPECT_FALSE(disc->SetReadPatches({{DiscIO::PARTITION_NONE, 7, 2, 9}, {game, 7, 1, 9}}));
+  EXPECT_EQ(ReadDisc(*disc, 0, 0x20, DiscIO::PARTITION_NONE), header);
+  EXPECT_EQ(ReadDisc(*disc, 0, 0x20, game), boot);
+  EXPECT_EQ(disc->GetRevision(), 2);
+  EXPECT_EQ(disc->GetRevision(game), 2);
+  EXPECT_TRUE(Orca::SessionDiscReady(*disc));
+}
+
 // With ORCA_TEST_DISC_REV1 pointing at a Brawl (USA) (Rev 1) image: Orca plays it, and it reads as
 // Rev 2. With ORCA_TEST_DISC (Rev 2) too: the disc header and everything from the start of the game
 // partition to the end of its file table (boot.bin, bi2.bin, the apploader, main.dol, fst.bin) read
@@ -167,7 +190,10 @@ TEST(OrcaDisc, BrawlRev1ReadsAsRev2)
   ASSERT_TRUE(rev1);
   const DiscIO::Partition game = rev1->GetGamePartition();
   ASSERT_EQ(rev1->GetRevision(game), 1);
+  // Unaliased, a session refuses to insert it.
+  EXPECT_FALSE(Orca::SessionDiscReady(*rev1));
   ASSERT_TRUE(Orca::AliasRevision(*rev1));
+  EXPECT_TRUE(Orca::SessionDiscReady(*rev1));
   EXPECT_EQ(rev1->GetRevision(), 2);
   EXPECT_EQ(rev1->GetRevision(game), 2);
   EXPECT_EQ(rev1->GetGameID(game), "RSBE01");
