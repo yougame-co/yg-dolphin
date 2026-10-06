@@ -293,13 +293,34 @@ class RunLock(unittest.TestCase):
             os.kill(grandchild, 0)
         self.assertEqual(self.tickets(), [])
 
-    def test_yield_stops_the_run_when_luis_opens_his_orca(self):
-        c = self.start("check", ["sleep", "30"], "--yield")
+    def test_a_check_stops_when_luis_opens_his_orca(self):
+        c = self.start("check", ["sleep", "30"])  # no option: stopping is a check's default
         self.assertTrue(self.wait_for(lambda: any(".running." in t for t in self.tickets())))
         open(self.playing, "w").close()
+        t0 = time.time()
         rc, _, err = self.finish(c)
         self.assertEqual(rc, 10)
+        self.assertLess(time.time() - t0, 5)
         self.assertIn("stopped: Luis's Orca is open", err)
+        self.assertEqual(self.tickets(), [])
+        os.unlink(self.playing)
+        c = self.start("check", ["sleep", "30"], "--yield")  # still accepted, same thing
+        self.assertTrue(self.wait_for(lambda: any(".running." in t for t in self.tickets())))
+        open(self.playing, "w").close()
+        self.assertEqual(self.finish(c)[0], 10)
+
+    def test_no_yield_check_runs_on_and_notes_it(self):
+        c = self.start("check", self.record("c", 1.0), "--no-yield")
+        self.assertTrue(self.wait_for(lambda: self.started("c")))
+        open(self.playing, "w").close()
+        rc, _, err = self.finish(c)
+        self.assertEqual(rc, 0)
+        self.assertIn("it runs on beside his game", err)
+        self.assertEqual(err.count("Luis's Orca opened"), 1, err)
+        self.assertIsNotNone(self.spans()["c"][1])
+        rc, _, err = self.finish(self.start("check", ["true"], "--yield", "--no-yield"))
+        self.assertEqual(rc, 2)
+        self.assertIn("not allowed with argument", err)
 
     def test_perf_notes_luis_opening_his_orca(self):
         perf = self.start("perf", self.record("p", 1.0))
@@ -308,6 +329,14 @@ class RunLock(unittest.TestCase):
         rc, _, err = self.finish(perf)
         self.assertEqual(rc, 0)
         self.assertIn("numbers from here on are suspect", err)
+        self.assertEqual(err.count("Luis's Orca opened"), 1, err)
+        os.unlink(self.playing)
+        perf = self.start("perf", ["sleep", "30"], "--yield")  # a perf run stops only when asked to
+        self.assertTrue(self.wait_for(lambda: any(".running." in t for t in self.tickets())))
+        open(self.playing, "w").close()
+        rc, _, err = self.finish(perf)
+        self.assertEqual(rc, 10)
+        self.assertIn("stopped: Luis's Orca is open", err)
 
     def test_shared_dev_game_queue_e2e_runs_one_at_a_time(self):
         old = os.path.join(self.dir, "old", "queue-e2e.mjs")

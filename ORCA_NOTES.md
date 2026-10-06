@@ -93,10 +93,12 @@ other. Now:
   runs. Both wait while Luis's Orca is open (`ps -axo comm=`: the app bundle's
   `Resources/runtimes/orca` or the old `yougame-desktop/orca/apps/`), printing `waiting: Luis's Orca
   is open`, and go first come, first served: one ticket per run in `orca-run-queue/` beside the
-  locks, locked by its run, so a run that dies leaves none behind. `--wait-max S` gives up (exit 9),
-  `--yield` stops the run if Luis opens his Orca (exit 10; a perf run without it notes the moment in
-  its output), `--serial NAME` keeps runs with the same NAME apart (a check waiting only for its key
-  lets later checks go past it).
+  locks, locked by its run, so a run that dies leaves none behind. A check that is running when Luis
+  opens his Orca stops (exit 10: three checks are six test Orcas beside his game, enough to make it
+  stutter); `--no-yield` keeps one going that must finish, and `--yield` gives a perf run the same
+  stop (without it a perf run notes the moment in its output). `--wait-max S` gives up (exit 9),
+  `--serial NAME` keeps runs with the same NAME apart (a check waiting only for its key lets later
+  checks go past it).
 - Runs that share accounts or a queue are kept apart without asking: `queue-e2e.mjs --slug` and
   `page-e2e.mjs` (two signed-in players), a `queue-e2e.mjs` from a checkout older than this one (the
   shared dev game), and runs given the same `QE2E_DEV_SUFFIX`.

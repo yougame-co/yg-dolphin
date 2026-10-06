@@ -13,7 +13,8 @@
 # perf: two-Orca perf gates, frame-time A/Bs, anything timed. It has the machine to itself: it waits
 #   for every check to finish, and no check starts while it waits or runs.
 # Both wait while Luis's own Orca is open, saying so in one line, and take turns first come, first
-# served: a run keeps its place while it waits, so nothing that waits is starved.
+# served: a run keeps its place while it waits, so nothing that waits is starved. A check that is
+# running when he opens it stops (exit 10) unless it was started with --no-yield.
 #
 # Options:
 #   --label TEXT     what `status` shows for this run (default: the command)
@@ -21,14 +22,18 @@
 #   --serial NAME    never beside another run with the same NAME (repeatable). Added by itself for
 #                    runs that share accounts or a queue: queue-e2e.mjs with --slug and page-e2e.mjs
 #                    (two signed-in players), and a queue-e2e.mjs that still uses one shared dev game.
-#   --yield          stop the command if Luis's Orca opens while it runs: exit 10. A perf run without
-#                    it notes the moment in its output instead (the numbers after it are suspect).
+#   --yield          stop the command if Luis's Orca opens while it runs (exit 10; run it again once
+#                    it closes). The default for a check: three checks are six test Orcas beside his
+#                    game, enough to make it stutter. A perf run takes no default stop; it notes the
+#                    moment in its output instead (the numbers after it are suspect).
+#   --no-yield       a run that must finish even if Luis opens his Orca: it notes the moment instead.
 #
-# Exit status: the command's own; 9 gave up waiting; 10 stopped by --yield; 11 the command takes
-# orca-run-solo.lock or orca-run.lock itself and would wait for this very run forever (drop that
-# flock, or run the script without run-lock.py); 128+N after signal N; 2 usage. A signal to this
-# process stops the command's whole tree; SIGKILL cannot, and the command would run on with its
-# turn given away, so kill the process group instead. Under nohup a hangup is ignored as usual.
+# Exit status: the command's own; 9 gave up waiting; 10 stopped because Luis opened his Orca (--yield,
+# a check's default); 11 the command takes orca-run-solo.lock or orca-run.lock itself and would wait
+# for this very run forever (drop that flock, or run the script without run-lock.py); 128+N after
+# signal N; 2 usage. A signal to this process stops the command's whole tree; SIGKILL cannot, and the
+# command would run on with its turn given away, so kill the process group instead. Under nohup a
+# hangup is ignored as usual.
 #
 # How it shares with the old locks: a check holds orca-run-solo.lock and orca-run.lock shared and a
 # perf run holds both exclusive, so a script that still takes them with plain `flock` (exclusive)
@@ -506,13 +511,13 @@ class Run:
             if self.stop_signal is not None:
                 self.stop_child(f"signal {self.stop_signal}", grace=2 if self.signals > 1 else 20)
                 return 128 + self.stop_signal
-            if self.yield_ or (self.cls == "perf" and not noted):
-                if luis_playing():
-                    if self.yield_:
-                        self.stop_child(f"{LUIS}; run it again once it closes")
-                        return EXIT_YIELDED
-                    say("note: Luis's Orca opened during this perf run; numbers from here on are suspect")
-                    noted = True
+            if (self.yield_ or not noted) and luis_playing():
+                if self.yield_:
+                    self.stop_child(f"{LUIS}; run it again once it closes")
+                    return EXIT_YIELDED
+                say(f"note: Luis's Orca opened during this {self.cls} run (--no-yield); "
+                    + ("numbers from here on are suspect" if self.cls == "perf" else "it runs on beside his game"))
+                noted = True
             stuck = self.deadlock()
             if stuck:
                 say(f"the command takes {os.path.basename(stuck[1])} itself (flock pid {stuck[0]}): it would "
@@ -619,7 +624,7 @@ def main(argv):
         return status(a.json, a.luis)
     if "--" not in argv:
         sys.stderr.write("usage: run-lock.py check|perf [--label T] [--wait-max S] [--serial NAME] "
-                         "[--yield] -- <command...>\n       run-lock.py status [--json | --luis]\n")
+                         "[--yield | --no-yield] -- <command...>\n       run-lock.py status [--json | --luis]\n")
         return 2
     split = argv.index("--")
     p = argparse.ArgumentParser(prog="run-lock.py")
@@ -627,8 +632,14 @@ def main(argv):
     p.add_argument("--label")
     p.add_argument("--wait-max", type=float, default=0)
     p.add_argument("--serial", action="append", default=[])
-    p.add_argument("--yield", dest="yield_", action="store_true")
+    y = p.add_mutually_exclusive_group()
+    y.add_argument("--yield", dest="yield_", action="store_const", const=True,
+                   help="stop the command if Luis's Orca opens (exit 10); the default for check")
+    y.add_argument("--no-yield", dest="yield_", action="store_const", const=False,
+                   help="run on if Luis's Orca opens; the default for perf")
     a = p.parse_args(argv[:split])
+    if a.yield_ is None:
+        a.yield_ = a.cls == "check"
     cmd = argv[split + 1:]
     if not cmd:
         p.error("no command after --")

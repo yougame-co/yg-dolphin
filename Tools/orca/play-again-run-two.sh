@@ -4,7 +4,7 @@
 # Orca is open, up to three checks at once while the machine has room, never beside a perf run, first
 # come first served. It waits up to WAIT_MAX seconds (default 90 min) for its turn, writing what it
 # waits for to <out>.wait. <out> gets "start ...", the command's output, then "exit <code> <time>".
-# Exit 9: gave up waiting.
+# Exit 9: gave up waiting. Exit 10: stopped because the owner opened his Orca (no "exit" line).
 OUT=$1
 shift
 case $OUT in /*) ;; *) OUT=$PWD/$OUT ;; esac
@@ -21,4 +21,5 @@ OUT="$OUT" RUN="$RUN" python3 Tools/orca/run-lock.py check --label "play-again $
   ' _ "$@" 2>>"$OUT.wait"
 rc=$?
 [ $rc -eq 9 ] && echo "gave up waiting $(date +%T)" >>"$OUT.wait"
+[ $rc -eq 10 ] && echo "stopped: the owner's Orca opened $(date +%T)" >>"$OUT.wait"
 exit $rc

@@ -17,9 +17,15 @@ START_DEADLINE=$(( $(date +%s) + ${WAIT_TOTAL:-5400} ))
 run() { # name bin args...
   local name=$1 bin=$2; shift 2
   [ -f "$R/out/$name.out" ] && grep -q '^exit ' "$R/out/$name.out" && return 0
-  local left=$(( START_DEADLINE - $(date +%s) )); [ $left -lt 1800 ] && left=1800
-  WAIT_MAX=$left $(dirname "$0")/play-again-run-two.sh "$R/out/$name.out" node $Q "$bin" "$D" --q2 --keep --alarm 900 $EXTRA "$@"
-  if [ $? -eq 9 ]; then echo "$(date +%T) $name: gave up waiting for the owner's Orca to close" >> $R/chain.log; exit 9; fi
+  local left rc
+  while :; do # a run the owner's Orca stopped (exit 10) queues again and waits for it to close
+    left=$(( START_DEADLINE - $(date +%s) )); [ $left -lt 1800 ] && left=1800
+    WAIT_MAX=$left $(dirname "$0")/play-again-run-two.sh "$R/out/$name.out" node $Q "$bin" "$D" --q2 --keep --alarm 900 $EXTRA "$@"
+    rc=$?
+    [ $rc -ne 10 ] && break
+    echo "$(date +%T) $name: stopped, the owner's Orca opened; queued again" >> $R/chain.log
+  done
+  if [ $rc -eq 9 ]; then echo "$(date +%T) $name: gave up waiting for the owner's Orca to close" >> $R/chain.log; exit 9; fi
   echo "$(date +%T) $name: $(grep -E 'RESULT:|PASS:|FAIL:|^exit ' "$R/out/$name.out" | sed -E 's/^\[ *[0-9.]+\] //' | cut -c1-400 | paste -sd'|' -)" >> $R/chain.log
 }
 for spec in ${ONLY:-css-ranked css-menu pa-d pa-a pa-b pa-c pa-e}; do
