@@ -29,7 +29,9 @@
 //       [--queue ranked|casual] [--games <n>] [--site <url>] [--keep] [--alarm <s>]
 //       [--probe <file>]
 //       [--slug <listing> --cookie-a <file> --cookie-b <file> --id-a <id> --id-b <id>]
+//       [--disc-b <disc>]
 //
+// --disc-b: the second player (bo) boots this disc (Brawl Rev 1 against Rev 2, or the reverse).
 // Without --slug: dev tickets (an anonymous dev game of this run's own, nothing recorded, keyframes
 // in a local folder).
 // With --slug: real tickets for that listing as two signed-in players (the cookie files hold a
@@ -56,6 +58,7 @@ if (!BIN || !DISC) {
   process.exit(2);
 }
 const PPLUS = opt("--pplus");
+const DISC_B = opt("--disc-b", DISC);
 const QUEUE = opt("--queue", "ranked");
 const GAMES = Number(opt("--games", QUEUE === "ranked" ? "3" : "2"));
 const SITE = (opt("--site", "https://yougame.co") || "").replace(/\/$/, "");
@@ -439,8 +442,8 @@ class Side {
       // --shots 0: keep Dolphin's "Screenshot saved" OSD messages out of the scenario's shots.
       ...(shots && SHOTS === "0" ? ["-C", "Dolphin.Interface.OnScreenDisplayMessages=False"] : []),
       ...(PPLUS
-        ? ["-C", `Dolphin.Core.DefaultISO=${DISC}`, "-e", PPLUS]
-        : ["-e", DISC]),
+        ? ["-C", `Dolphin.Core.DefaultISO=${this.name === "bo" ? DISC_B : DISC}`, "-e", PPLUS]
+        : ["-e", this.name === "bo" ? DISC_B : DISC]),
     ];
     this.logPath = path.join(WORK, `${this.name}.log`);
     const logFile = fs.createWriteStream(this.logPath);

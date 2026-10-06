@@ -5056,6 +5056,71 @@ The parts not built:
   window's content view at the box, sets `contents` to the IOSurface of each frame, keeps the surface
   in use until the next one, and handles moves, scale and clipping itself.
 
+## Brawl Rev 1
+
+2026-10-06, after the launch-night playtest: 347 of about 900 in-app players had a disc refused, and
+327 of them brought a genuine Brawl (USA) (Rev 1) (Redump sha1
+`0e95949ac585f357e79fcd34b20670b5dca97ac2`, game partition content hash
+`ab93ef280b834572523f64c55c6a3205ead66d04`). Orca now plays that exact dump as Rev 2
+(`Orca/Disc.cpp` `AliasRevision`).
+
+**How the dumps differ** (both extracted with `dolphin-tool extract -g`, then `diff -rq` and `cmp -l`):
+
+- 5,314 files under `files/` identical (all 126 modules among them), FST identical, apploader, bi2
+  and partition layout identical, IOS `0000000100000024` and TMD title version 0 on both.
+- `disc/header.bin` and `sys/boot.bin`: byte 7, the revision (1 / 2).
+- `sys/main.dol`: one byte, file offset `0x11A1F` (address `0x8001BC9F`): `li r7,1` / `li r7,2` at
+  `0x8001BC9C`, the version in the disc ID the game builds at boot. main.dol is at `0x3DD00` in the
+  partition.
+- `tmd.bin`: the signature and the content hash (the H3 table's SHA-1, which differs because the
+  data blocks holding those bytes differ). `ticket.bin`: the signature and the ticket ID
+  (`0x1D0`-`0x1D7`). `h3.bin` differs accordingly.
+
+**Choice.** (a) Rev 1 plays only Rev 1 (its own compatibility key) would split a small player base
+in two and needs nothing proven; (b) Rev 1 runs as Rev 2 needs the differences to be data the game
+reads from the disc, which they are. Taken: (b), done as a read filter, not a RAM write: the
+`VolumeWii` of a session's disc returns Rev 2's three bytes (`VolumeDisc::SetReadPatches`), so the
+apploader loads Rev 2's main.dol and the header reads revision 2 everywhere (Dolphin's metadata,
+`0x80000007`, the profile check, the game INIs). Nothing touches emulated memory, so no frame-hook
+logic and no `UX::kCompatVersion` change. Gates: the game ID and revision, then the TMD's content hash
+(the same identity the app's `partition_sha1` uses), then each byte holds Rev 1's value before it is
+patched. Applied in `BootParameters::GenerateFromFile` and `SetDefaultDisc` (session only),
+`PrepareLauncherBoot` and `CheckDisc`. Not applied to a disc inserted later (`InsertDiscCallback`) or
+an IPL boot; sessions do neither.
+
+The Rev 1 TMD is what `DIVerify` writes to the session NAND (`title.tmd`), and the Rev 1 ticket is in
+ES's title context. Neither reaches emulated memory in any run below, and a drop-in keyframe carries
+the host's `title.tmd` whole (only `tmp/` files travel as hashes), so mixed pairs join.
+
+**Proof** (2026-10-06, Mac, headless, `rev1-alias` build; Rev 2 as .wbfs, Rev 1 as .rvz):
+
+- Hashlogs (MEM1 + MEM2 every frame): `bf-mario-link-results.txt` to 10800, Rev 1 == Rev 2 == the
+  0.3.27 code on Rev 2, frames 0-10800. `pplus-1v1.txt` to 9000, the same for Project+ (launcher with
+  the Rev 1 disc as DefaultISO), frames 0-9000.
+- The 0.3.27 code on Rev 1: `orca error disc_revision This disc is RSBE01 revision 1; Orca's
+  profile is for revision 2`, exit 1.
+- Unit tests: `OrcaDisc.BrawlRev1ReadsAsRev2` (`ORCA_TEST_DISC_REV1`) on .rvz and full .iso Rev 1
+  against .wbfs and .rvz Rev 2: the disc header and the partition from 0 to the end of the FST read
+  the same; `OrcaDisc.ReadPatchesLandInTheirRangeOnly`. 490 `Orca*` passed.
+- Two-Orca, `online-menu-dropin.py <Rev 2> --disc2 <Rev 1>`: a Rev 1 friend dropped into a Rev 2
+  host's main menu (keyframe of frame 2161, 38.5 MB of NAND named, not sent) and both went to With
+  Friends' character select: PASS, 12 checksums matched on each side, no desync.
+- The reverse, `online-menu-dropin.py <Rev 1> --disc2 <Rev 2>` (a Rev 2 friend into a Rev 1 host):
+  PASS, 12 checksums matched on each side.
+- Project+, `online-menu-dropin.py <Rev 2> --pplus <launcher> --disc2 <Rev 1>`: PASS, 12 checksums
+  matched on each side. (A first try timed out waiting for the host's `orca caps` while the external
+  disc drive was busy and load was near 25; the retry passed in 44 s.)
+- The real queue (dev tickets): `queue-e2e.mjs <Rev 1> --queue ranked --q2 --disc-b <Rev 2>`, a full
+  ranked set: PASS, 3 verdicts the same on both sides, 229 checksums matched each, 0 rollbacks.
+  `queue-e2e.mjs <Rev 2> --queue casual --q2 --disc-b <Rev 1>`: PASS, 2 games, 101 checksums each (a
+  first try failed at a network `fetch failed` on the ticket request, before any match).
+- Rev 1 against Rev 1 was not run separately: each Rev 1 run equals a Rev 2 run frame by frame.
+- Sync tests (`YG_SYNCTEST=7`) on Rev 1: Brawl to 10800, 73,451 re-run frames, 0 RAM mismatches;
+  Project+ to 9000, 60,851 re-run frames, 0 RAM mismatches.
+
+`ORCA_DISC_SHA1` is in the compatibility key but the app doesn't set it yet; when it does, it must
+pass Rev 2's hash for this dump, or Rev 1 and Rev 2 players get different keys.
+
 ## Code comments from 0.3.27, as written
 
 Merging rel-0.3.27 (`34897a118b`) into the cleaned main shortened its new code comments to main's

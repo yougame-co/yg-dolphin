@@ -48,6 +48,8 @@
 #include "Core/IOS/IOSC.h"
 #include "Core/IOS/Uids.h"
 #include "Core/NetPlayProto.h"
+#include "Core/Orca/Disc.h"
+#include "Core/Orca/Profile.h"
 #include "Core/PatchEngine.h"
 #include "Core/PowerPC/PPCAnalyst.h"
 #include "Core/PowerPC/PPCSymbolDB.h"
@@ -246,6 +248,8 @@ std::unique_ptr<BootParameters> BootParameters::GenerateFromFile(std::vector<std
   if (disc_image_extensions.contains(extension))
   {
     std::unique_ptr<DiscIO::VolumeDisc> disc = DiscIO::CreateDiscForCore(path);
+    if (disc && Orca::SessionActive())
+      Orca::AliasRevision(*disc);
     if (disc)
     {
       return std::make_unique<BootParameters>(Disc{std::move(path), std::move(disc), paths},
@@ -483,8 +487,12 @@ bool CBoot::Load_BS2(Core::System& system, const std::string& boot_rom_filename)
 static void SetDefaultDisc(DVD::DVDInterface& dvd_interface)
 {
   const std::string default_iso = Config::Get(Config::MAIN_DEFAULT_ISO);
-  if (!default_iso.empty())
-    SetDisc(dvd_interface, DiscIO::CreateDiscForCore(default_iso));
+  if (default_iso.empty())
+    return;
+  std::unique_ptr<DiscIO::VolumeDisc> disc = DiscIO::CreateDiscForCore(default_iso);
+  if (disc && Orca::SessionActive())
+    Orca::AliasRevision(*disc);
+  SetDisc(dvd_interface, std::move(disc));
 }
 
 static void CopyDefaultExceptionHandlers(Core::System& system)

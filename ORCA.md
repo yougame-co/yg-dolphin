@@ -12,8 +12,8 @@ How Orca's rollback works and how it compares with Slippi and Brawlback: [ORCA_A
   Orca is rebased onto later releases deliberately.
 - **Design:** an exact whole-machine snapshot at each frame boundary; controller input injected at
   the SI device; re-run frames that parse the GPU command stream but skip host rendering; per-game
-  profiles. Super Smash Bros. Brawl (`RSBE01` rev 2) and Project+ v3.2 (a launcher profile on top of
-  Brawl) are the supported games.
+  profiles. Super Smash Bros. Brawl (`RSBE01` rev 2, and rev 1 played as rev 2) and Project+ v3.2 (a
+  launcher profile on top of Brawl) are the supported games.
 - **Online:** through YouGame rooms. Friends drop in to a running game; strangers come from
   YouGame's matchmaking queue (casual or ranked).
 
@@ -133,6 +133,16 @@ a missing file prints `orca error disc_missing <path>`, an unreadable one `orca 
 disc_unreadable <path>`, and Orca exits 1 within a second. Orca's alert handler is registered before
 the boot file is read, so no hidden message box can block a run.
 
+Brawl (USA) (Rev 1) plays as Rev 2. The two dumps differ only in the revision byte of both disc
+headers and in one main.dol instruction (`0x8001BC9C`, the version in the disc ID the game builds at
+boot); every file, the file table, the partition layout, the IOS and the title version are the same.
+Every disc a session boots, and the launcher profile's disc, goes through `Orca::AliasRevision`
+(`Orca/Disc.h`): for that exact dump (the content hash in its TMD) reads of those three bytes return
+Rev 2's (`VolumeDisc::SetReadPatches`), so the console reads a Rev 2 disc and Rev 1 and Rev 2 players
+meet in the same rooms. The TMD and ticket still differ in hashes, signatures and the ticket ID; the
+game never reads them: a Rev 1 and a Rev 2 run of the default inputs (Brawl and Project+) give the
+same hashlog. Other revisions and modified Rev 1 copies are refused.
+
 Sessions start from an empty NAND (save hash 0); the game makes its save in-session on both
 machines. A session with no `Config/GCPadNew.ini` gets `Sys/Orca/Input/GCPadNew.ini`: port 1 on the
 keyboard and the first SDL gamepad of any model.
@@ -184,7 +194,8 @@ each start two emulators.
 ninja tests && ./Binaries/Tests/tests --gtest_filter='Orca*'
 ```
 
-Live, network and disc tests skip without their switches. `ORCA_LIVE_TEST=1` runs `OrcaLive.*`
+Live, network and disc tests skip without their switches (`ORCA_TEST_DISC` for a Rev 2 image,
+`ORCA_TEST_DISC_REV1` for Rev 1). `ORCA_LIVE_TEST=1` runs `OrcaLive.*`
 against real rooms on yougame.co.
 
 ### The harness

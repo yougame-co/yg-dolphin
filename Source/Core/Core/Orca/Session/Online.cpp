@@ -140,7 +140,8 @@ std::string CompatibilityKey()
       GetSeedSaveHash(), TestOverridesActive(), Config::Get(Config::MAIN_WII_SD_CARD),
       Config::Get(Config::MAIN_ALLOW_SD_WRITES));
   // The disc image's hash, when the app computed it: a modified disc with the right ID and revision
-  // would otherwise desync instead of being refused.
+  // would otherwise desync instead of being refused. For a dump AliasRevision plays as another
+  // (Brawl Rev 1), the app passes the hash of the dump it plays as, or its players meet no one.
   parts += "|disc=" + Env("ORCA_DISC_SHA1");
   // Version of what the in-game UX writes to emulated memory (name tags, mode locks).
   parts += fmt::format("|ux={}", Events::UXCompatVersion());
