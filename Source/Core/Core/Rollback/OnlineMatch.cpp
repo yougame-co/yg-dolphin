@@ -1501,6 +1501,9 @@ bool RestoreBeforeJoin(Core::System& system, Match& match)
   nand->ReloadFst();
   if (!match.port->LoadImage(std::move(before->image), before->frame))
     return false;
+  // As after loading the origin: a rebuild cancelled before its jit_clear_frame leaves blocks
+  // compiled from the boot's code.
+  system.GetJitInterface().ClearSafe();
   match.running = before->frame - 1;
   match.local_seat = before->local_seat;
   match.loaded_time = before->loaded_time;
@@ -1559,6 +1562,16 @@ ReplayStep AdvanceReplay(Core::System& system, Match& match, const FrameHook& on
     if (auto* transport = Orca::Online::Transport())
       transport->Send(heartbeat);
     match.replay_heartbeat = Clock::now();
+  }
+  // Every machine cleared the JIT once at the profile's jit_clear_frame of its own boot
+  // (Rollback.cpp, JitClearDue), and the replay's frames count from that boot's first boundary. A
+  // joiner long past that frame never gets JitClearDue again, so the rebuild clears here, at the
+  // same frame. A launch joiner's JitClearDue fires at this boundary too; a second clear is free.
+  if (const Orca::Profile* profile = Orca::ActiveProfile();
+      profile && profile->jit_clear_frame && frame == static_cast<int>(*profile->jit_clear_frame))
+  {
+    system.GetJitInterface().ClearSafe();
+    NOTICE_LOG_FMT(ROLLBACK, "Drop-in: JIT cleared at replay frame {}", frame);
   }
   Orca::Net::ReplayFrame& record = frame < target ? match.replay.frames[frame] : match.replay.boundary;
   {
