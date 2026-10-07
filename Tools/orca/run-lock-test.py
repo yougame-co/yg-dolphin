@@ -41,9 +41,11 @@ class RunLock(unittest.TestCase):
         self.env = dict(os.environ, ORCA_LOCK_DIR=self.dir, ORCA_RUN_LOCK_POLL="0.1",
                         ORCA_RUN_LOCK_TEST_PLAYING=self.playing,
                         ORCA_RUN_LOCK_TEST_LOAD=os.path.join(self.dir, "load"),
-                        ORCA_RUN_LOCK_TEST_SSD=os.path.join(self.dir, "ssd"), ORCA_SSD_WATCH="")
+                        ORCA_RUN_LOCK_TEST_SSD=os.path.join(self.dir, "ssd"), ORCA_SSD_WATCH="",
+                        ORCA_RUN_LOCK_TEST_GK=os.path.join(self.dir, "gk.log"), ORCA_GK_CACHE_S="0.2")
         for k in ("ORCA_RUN_LOCK", "QE2E_DEV_SUFFIX", "ORCA_CHECK_SLOTS", "ORCA_SSD_PROBE", "ORCA_SSD_GUARD",
-                  "ORCA_SSD_STALL_S", "ORCA_SSD_QUIET_S", "ORCA_PERF_PPLUS_DIR"):
+                  "ORCA_SSD_STALL_S", "ORCA_SSD_QUIET_S", "ORCA_PERF_PPLUS_DIR", "ORCA_GK_GUARD", "ORCA_GK_BUSY_S",
+                  "ORCA_GK_WAIT_MAX_S"):
             self.env.pop(k, None)
         self.set_load(3, 70)
         self.procs = []
@@ -65,6 +67,17 @@ class RunLock(unittest.TestCase):
     def ssd_stall(self, start, end, what="disk11 APFS tx_flush"):
         with open(os.path.join(self.dir, "ssd"), "a") as f:
             f.write(f"{start} {end} {what}\n")
+
+    def gk(self, ago, what, path="9119bb72c798ec94", tid="419e553"):
+        """One syspolicyd line, `ago` seconds old, as `log show --style compact` prints it."""
+        t = time.time() - ago
+        stamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(t)) + f".{int(t % 1 * 1000):03d}"
+        msg = {"start": f"GK performScan: PST: (path: {path}), (team: (null)), (id: (null)), (bundle_id: (null))",
+               "result": f"GK evaluateScanResult: 2, PST: (path: {path}), (team: (null)), (id: a.out), "
+                         "(bundle_id: NOT_A_BUNDLE), 0, 0, 1, 0, 0, 0, 0",
+               "failed": f"scan failed, finishing evaluation : PST: (path: {path}), (team: (null))"}[what]
+        with open(os.path.join(self.dir, "gk.log"), "a") as f:
+            f.write(f"{stamp} Df syspolicyd[503:{tid}] [com.apple.syspolicy.exec:default] {msg}\n")
 
     def record(self, name, secs):
         return [sys.executable, "-c", RECORD, self.log, name, str(secs)]
@@ -439,6 +452,55 @@ class RunLock(unittest.TestCase):
         self.assertIn("the perf run", text)
         for p in (c, perf):
             self.assertEqual(self.finish(p)[0], 0)
+
+    # ---- macOS's check of new programs ----
+
+    def test_gk_pending_reads_the_log(self):
+        spec = importlib.util.spec_from_file_location("run_lock", TOOL)
+        rl = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rl)
+        self.gk(130, "start", "aaaa")                   # next-swc: 125 s, then its result
+        self.gk(5, "result", "aaaa", tid="41a0975")
+        self.gk(5, "start", "bbbb")                     # the next on the same thread, still going
+        self.gk(60, "start", "cccc", tid="41a0001")     # another thread: ended by "scan failed"
+        self.gk(59, "failed", "cccc", tid="41a0002")
+        self.gk(50, "start", "dddd", tid="41b0000")     # one whose end was never logged...
+        self.gk(40, "start", "eeee", tid="41b0000")     # ...is over once its thread scans the next
+        self.gk(39, "result", "eeee", tid="41c0000")
+        lines = read(os.path.join(self.dir, "gk.log")).splitlines() + ["Timestamp  Ty Process[PID:TID]", "garbage"]
+        self.assertEqual([p for _, p in rl.gk_pending(lines)], ["bbbb"])
+        self.assertAlmostEqual(rl.gk_pending(lines)[0][0], time.time() - 5, delta=1.5)
+
+    def test_runs_wait_while_macos_checks_a_program(self):
+        self.gk(30, "start")
+        c = self.start("check", self.record("c", 0.1))
+        self.assertTrue(self.wait_for(lambda: len(self.tickets()) == 1))
+        time.sleep(0.5)
+        self.assertFalse(self.started("c"))
+        text = subprocess.run([sys.executable, TOOL, "status"], env=self.env, capture_output=True, text=True).stdout
+        self.assertIn("macOS: a new-program check running 3", text)
+        self.gk(0, "result")
+        rc, _, err = self.finish(c)
+        self.assertEqual(rc, 0)
+        self.assertIn("waiting: macOS is still checking a new program (3", err)
+        text = subprocess.run([sys.executable, TOOL, "status"], env=self.env, capture_output=True, text=True).stdout
+        self.assertIn("macOS: no new-program check under way", text)
+        # A check that has run under ORCA_GK_BUSY_S is a normal one: nobody waits.
+        self.gk(1, "start", "ffff")
+        rc, _, err = self.finish(self.start("check", self.record("d", 0.1)))
+        self.assertEqual(rc, 0)
+        self.assertNotIn("macOS", err)
+
+    def test_a_check_that_never_ends_is_waited_for_only_so_long(self):
+        self.gk(600, "start")
+        rc, _, err = self.finish(self.start("perf", self.record("p", 0.1), env={"ORCA_GK_WAIT_MAX_S": "0.5"}))
+        self.assertEqual(rc, 0)
+        self.assertIn("waiting: macOS is still checking a new program (10m", err)
+        self.assertIn("note: macOS has been checking a new program for 10m", err)
+        # ORCA_GK_GUARD=0: no look at all.
+        rc, _, err = self.finish(self.start("check", self.record("q", 0.1), env={"ORCA_GK_GUARD": "0"}))
+        self.assertEqual(rc, 0)
+        self.assertNotIn("macOS", err)
 
     # ---- the external SSD (perf runs) ----
 

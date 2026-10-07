@@ -64,6 +64,17 @@
 # ORCA_SSD_WATCH (paths, ':'-separated, default ~/ClaudeWorktrees) names the SSD's APFS disks to
 # watch, ORCA_SSD_PROBE adds files to time, ORCA_SSD_GUARD=0 turns all of this off.
 #
+# macOS's check of new programs (every run, 2026-10-06): macOS checks each program the first time it
+# runs, one at a time (syspolicyd's "GK performScan"), and holds the program until its check is done.
+# Behind agents' freshly installed esbuild, workerd and next-swc on the slow SSD image, one check took
+# 125 s and Luis's Orca waited 171 s for its turn; a test Orca started then would wait the same and
+# fail its own first-output timeout. So no run starts while a check has been going ORCA_GK_BUSY_S (5)
+# or more: the "GK performScan" lines of the last 30 minutes in macOS's log without their result
+# ("GK evaluateScanResult", "scan failed", "Could not start XProtect scan") or a later scan on the same
+# syspolicyd thread. One look (`log show`, about 1 s) serves every run for 15 s, so a check pays it
+# once at most; after ORCA_GK_WAIT_MAX_S (1200) a run goes anyway and says so. `status` shows it.
+# ORCA_GK_GUARD=0 turns it off; tests give ORCA_RUN_LOCK_TEST_GK, a file of log lines read instead.
+#
 # Environment: ORCA_LOCK_DIR (default ~/Documents/brawl-dolphin), ORCA_CHECK_SLOTS (3). Tests use
 # ORCA_RUN_LOCK_POLL (seconds between looks, 2), ORCA_RUN_LOCK_TEST_PLAYING (a file: Luis "plays"
 # while it exists), ORCA_RUN_LOCK_TEST_LOAD (a file holding "<load> <free %>") and
@@ -103,6 +114,11 @@ SSD_LOG_EVERY_S = 10
 SSD_QUIET_HINT = ("a perf run is queued or going: keep the external SSD quiet (no multi-GB copies onto it, "
                   "no npm installs in worktrees on it) until it is done")
 PPLUS_INTERNAL = os.environ.get("ORCA_PERF_PPLUS_DIR", "~/Documents/brawl-dolphin/pplus-internal/run")
+GK_GUARD = os.environ.get("ORCA_GK_GUARD", "1") != "0"
+GK_BUSY_S = float(os.environ.get("ORCA_GK_BUSY_S") or 5)
+GK_WAIT_MAX_S = float(os.environ.get("ORCA_GK_WAIT_MAX_S") or 1200)
+GK_WINDOW = "30m"
+GK_CACHE_S = float(os.environ.get("ORCA_GK_CACHE_S") or 15)
 F_NOCACHE = 48  # fcntl.h: read around the page cache
 
 
@@ -685,6 +701,92 @@ def internal_pplus(cmd):
     return out, swapped
 
 
+# ---- macOS's check of new programs (every run) ----
+
+GK_LINE = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d)(\.\d+)? .*?syspolicyd\[\d+:([0-9a-f]+)\]")
+GK_START = re.compile(r"GK performScan: PST: \(path: ([0-9a-f]+)\)")
+GK_END = re.compile(r"(?:GK evaluateScanResult: -?\d+,|scan failed, finishing evaluation :|Could not start XProtect scan for bundle:)"
+                    r" PST: \(path: ([0-9a-f]+)\)")
+
+
+def gk_pending(lines):
+    """[(start, path)] of the scans in these log lines that have not ended: no result line for their
+    path, and no later scan on the same syspolicyd thread (a thread runs one scan at a time)."""
+    pending, by_thread = {}, {}
+    for line in lines:
+        m = GK_LINE.match(line)
+        if not m:
+            continue
+        start = GK_START.search(line)
+        if start:
+            when = time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")) + float(m.group(2) or 0)
+            earlier = by_thread.get(m.group(3))
+            if earlier:
+                pending.pop(earlier, None)
+            pending[start.group(1)] = when
+            by_thread[m.group(3)] = start.group(1)
+            continue
+        end = GK_END.search(line)
+        if end:
+            pending.pop(end.group(1), None)
+    return sorted((when, path) for path, when in pending.items())
+
+
+def gk_lines():
+    fake = os.environ.get("ORCA_RUN_LOCK_TEST_GK")
+    if fake:
+        try:
+            with open(fake) as f:
+                return f.read().splitlines()
+        except OSError:
+            return []
+    try:
+        return subprocess.run(["/usr/bin/log", "show", "--style", "compact", "--last", GK_WINDOW, "--predicate",
+                               'process == "syspolicyd" AND eventMessage CONTAINS "PST: (path:"'],
+                              capture_output=True, text=True, timeout=60).stdout.splitlines()
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+
+
+def gk_busy():
+    """(since, path) of the oldest program check that has run GK_BUSY_S or more, or None. One look
+    at macOS's log serves every run for GK_CACHE_S (orca-run-queue/gatekeeper.json)."""
+    if not GK_GUARD:
+        return None
+    cache = os.path.join(QUEUE, "gatekeeper.json")
+    now = time.time()
+    try:
+        with open(cache) as f:
+            seen = json.load(f)
+        if 0 <= now - seen["at"] < GK_CACHE_S:
+            return tuple(seen["busy"]) if seen["busy"] else None
+    except (OSError, ValueError, KeyError, TypeError):
+        pass
+    busy = [p for p in gk_pending(gk_lines()) if now - p[0] >= GK_BUSY_S]
+    found = busy[0] if busy else None
+    try:
+        os.makedirs(QUEUE, exist_ok=True)
+        tmp = f"{cache}.{os.getpid()}"
+        with open(tmp, "w") as f:
+            json.dump({"at": now, "busy": list(found) if found else None}, f)
+        os.replace(tmp, cache)
+    except OSError:
+        pass
+    return found
+
+
+def gk_reason(found):
+    since, _ = found
+    return (f"macOS is still checking a new program ({ago(time.time() - since)}, since {clock(since)}): a test "
+            "Orca started now would wait behind it")
+
+
+def gk_status(found):
+    if not found:
+        return "macOS: no new-program check under way"
+    return f"macOS: a new-program check running {ago(time.time() - found[0])} (since {clock(found[0])}); runs wait for it"
+
+
 # ---- one run ----
 
 class Run:
@@ -705,6 +807,8 @@ class Run:
             "reason": "",
         }
         self.ssd = SSD(cmd) if cls == "perf" and SSD_GUARD else None
+        self.gk_since = None  # when this run first saw macOS busy checking a program
+        self.gk_noted = False
 
     def release(self):
         for fd in self.held:
@@ -761,6 +865,9 @@ class Run:
         checks = [t for t in running if t["cls"] == "check"]
         if any(t["cls"] == "perf" for t in running):
             return "a perf run has the machine"
+        why = self.gatekeeper()
+        if why:
+            return why
         if self.cls == "perf":
             if not perf_roomy(load, free):
                 return f"the machine is busy (load {load:.1f}, {free}% memory free)"
@@ -785,6 +892,23 @@ class Run:
         elif self.ssd and self.ssd.active:
             self.start_note += f", the external SSD quiet for {SSD_QUIET_S:.0f} s"
         return None
+
+    def gatekeeper(self):
+        """Why to wait for macOS's check of a new program, or None (also once waited GK_WAIT_MAX_S)."""
+        found = gk_busy()
+        if not found:
+            self.gk_since = None  # the cap counts each busy stretch on its own
+            return None
+        now = time.time()
+        if self.gk_since is None:
+            self.gk_since = now
+        if now - self.gk_since >= GK_WAIT_MAX_S:
+            if not self.gk_noted:
+                say(f"note: macOS has been checking a new program for {ago(now - found[0])}; going anyway after "
+                    f"waiting {ago(now - self.gk_since)} (a new build's first launch may still wait behind it)")
+                self.gk_noted = True
+            return None
+        return gk_reason(found)
 
     def wait_turn(self):
         self.ticket = Ticket(self.cls, self.info)
@@ -961,12 +1085,17 @@ def status(as_json, luis_only):
         print("Luis's Orca is open; nothing waits on it" if playing else "Luis's Orca is closed")
         return 1
     if as_json:
+        found = gk_busy() if GK_GUARD else None
         print(json.dumps({"luis_orca_open": playing, "load": round(load, 2), "free": free,
+                          "macos_checking_since": found[0] if found else None,
                           "checks_allowed": checks_allowed(load, free), "tickets": tickets,
                           "outside_queue": outside}, indent=1))
         return 0
     print(f"Luis's Orca: {'OPEN' if playing else 'closed'} | load {load:.1f} | {free}% memory free | "
           f"checks at once now: {checks_allowed(load, free)}")
+    if GK_GUARD:
+        found = gk_busy()
+        print(gk_status(found))
     if not tickets:
         print("queue: empty")
     for t in tickets:
