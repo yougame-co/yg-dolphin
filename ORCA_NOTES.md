@@ -1583,6 +1583,10 @@ blocks over `0x80023B84-0x8002402C` held Brawl's words and were skipped): Brawl 
 frame 11500 (28,759 + 2,716 blocks, 27 s headless), Project+ `pplus-1v1.txt` to 1200 (26,946, 7 s).
 Windows: its build, D3D present timing and a Mac <-> PC match are the PC's.
 
+Correction (2026-10-07, evening): 0.3.31 never shipped on its own. The v-sync move and these seed
+lists ship in 0.3.32 (kCompatVersion 23), with the name-tag and Sound slider commits and the
+input-replay drop-in; see "Orca 0.3.32".
+
 ## Music switch
 
 Approved 2026-10-06 (X report `no-music-toggle`: "no way to disable music", a P+ player's Discord
@@ -6224,7 +6228,8 @@ writing nw4r sound state; neither is menu-only. The Music switch covers music of
 (`418200B0 -> 408100B0`), so a value under the limit only comes up to it (vanilla's beq at 0 would
 pass a lower start into 65535; no session has one). Two 3-word guarded groups per file. Clamp: left
 `2800005A`, right `2C00000A`. No kCompatVersion change of its own (the files are in the lobby key;
-0.3.32's one bump is 22).
+0.3.32's one bump is 22). Correction (2026-10-07, evening): 0.3.32 as released is ux=23; 22 was
+the v-sync move's, in the unshipped 0.3.31.
 
 **Checked** (dev build of `release-0.3.32`, Mac, all through `run-lock.py check`; scripts and logs
 in the lead's scratchpad `rel0332/slider/`):
@@ -6249,6 +6254,34 @@ in the lead's scratchpad `rel0332/slider/`):
 
 Not run here: the two-Orca perf gate (menu code only, nothing per frame), Windows, the queue path
 (`queue-e2e.mjs`; the same drop-in as a friends room).
+
+## Orca 0.3.32 (2026-10-07)
+
+Branch `release-0.3.32s` (the earlier `release-0.3.32`, which holds 0.3.33's game-start work
+without the v-sync move, is left alone). On 0.3.31 (`ecb39fb754`, never shipped alone):
+
+- The name-tag commits and the Sound slider lock, cherry-picked from `release-0.3.32`
+  (`4f6834dfbe`..`c2ef593d8f`; `4f412350fe`, ux=22, was already in the base).
+- `codex/input-replay-protocol` `2d97b2ac07`: a join rebuilds the host's game from the joiner's own
+  boot origin and the host's input history (ORCA.md "Drop-in"). `codex/peer-state-containment`
+  `ffbb0ae3fa` is superseded and not in it (stacked, no join could succeed).
+- kCompatVersion 23 (`orca2:` keys either way).
+- Mac and Linux builds: `Keyframe.cpp` and `OnlineMatch.cpp` compile with `-fexceptions` (their
+  try/catch is MSVC-only otherwise). The savestate-read hardening in `2d97b2ac07` (ChunkFile,
+  State, Fifo, GPFifo, GameFileCache, ChunkFileTest) threw from a header every file includes, so
+  those files are back to 0.3.31's on every platform; only snapshots this process captured reach
+  the state loader.
+- From the two reviews: the rebuild clears the JIT at the profile's `JitClearFrame` (Project+'s
+  frame 2) and after returning to the player's own game; the boot origin's capture stops the NAND
+  journal; one friend at a time (a second arrival is dropped with `room_full`); a rebuild ended by
+  the room or its host reports the room's code or `peer_left`.
+
+Not in it, from the reviews (the lead's call): a host-side cap on how much history it offers (a
+long-running host can't be joined within the 3-minute deadline, and the page retries `network`);
+a capture failure at the origin stops the boot instead of playing on without drop-in; a retry when
+Windows can't delete the NAND folder on the way back; the low items (name cleaning in replays,
+128 MB download caps, a wall-clock rebuild watchdog, a `static_assert` on the decode budget).
+Server side (YouGame): replay ids and `orca2:` only, before online reopens.
 
 ## Explaining it to people (internal)
 
