@@ -6192,6 +6192,64 @@ views are created or the DBATs change (boot, `__LCEnable`), not on a snapshot lo
 Not covered: M1-M3 silicon (the guest runs on the M4; nothing in the fix depends on the chip) and
 macOS 15.7 (the guest is 15.6.1; the M2 reporter runs 15.7.9).
 
+## The game's Sound slider in rooms (0.3.32, 2026-10-07)
+
+**Report.** "Music would sometimes not play at all" (tweet, triage `orca-music-sometimes-silent`).
+Investigation (lead session, 2026-10-07): Options > Sound's balance at the end labelled MUSIC mutes
+all music; in a room it is the host's memory, so the host's slider silenced the joiner (two Orcas
+0.3.29, P+: friend RMS 1 against 3500). Dashboard decision `orca-sound-slider-in-rooms` (lock at 50
+or clamp 10-90) still proposed when this was built; the lock is the recommended default.
+
+**The page** (Brawl's `sora_menu_main`, text at `0x8116384C`; Project+'s own build at +0x1480, the
+Sound page's code and relocations identical): init `0x8117AC28` copies record +0x18 into the page's
++0x66C (u16) and sets the middle pause +0x66E to 20. The input handler `0x8117B2CC` (row 0 the
+slider, row 1 SOUND TEST): left held, `cmplwi r0, 100; bge` then at 50 a 20-frame pause, else +1;
+right held, `cmpwi r0, 0; beq`, the same pause, -1. Each step calls `0x80076F30` on the sound
+manager `[0x805A01D0]` with ((100 - v) / 100, v / 100), which normalises, doubles and clamps at 1.0:
+music at +0x714, effects at +0x718, then the stream player and 32 sound players. So the sound
+changes live; A or B on the page only stores +0x66C into the record (`0x8117B1AC`, `0x8117B200`) and
+sets the record's dirty bit (`0x800557A8`). Other callers of `0x80076F30`: `GameGlobal::init`
+(`0x8004C7F0`, 50), the defaults reset (`0x8004E294`, 50), a save's load (`0x8004ECB8`); none in any
+other module on the disc, none in Project+'s codeset sources on the SD card.
+
+**Why every session, solo included.** The lead's question offered "solo keeps it". A patch in the
+page can't: every Orca is the host a friend can drop into, and the slider's state (record and sound
+manager) is RAM, so a balance set while alone reaches the friend with the keyframe; the two-Orca
+proof below sets it before the friend joins, the common case (the queue's matched host played alone
+first). Keeping it solo would need a synced reset at plug-in: `0x80076F30` with an equal pair (what
+`GameGlobal::init` passes: 0.5, 0.5) from game code (a toggled cave on a per-frame path), or Orca
+writing nw4r sound state; neither is menu-only. The Music switch covers music off for one player.
+
+**Patch.** Both limits 50 (`28000064 -> 28000032`, `2C000000 -> 2C000032`) and right's `beq -> ble`
+(`418200B0 -> 408100B0`), so a value under the limit only comes up to it (vanilla's beq at 0 would
+pass a lower start into 65535; no session has one). Two 3-word guarded groups per file. Clamp: left
+`2800005A`, right `2C00000A`. No kCompatVersion change of its own (the files are in the lobby key;
+0.3.32's one bump is 22).
+
+**Checked** (dev build of `release-0.3.32`, Mac, all through `run-lock.py check`; scripts and logs
+in the lead's scratchpad `rel0332/slider/`):
+- RAM on the Sound page before the patch, Brawl Rev 2 and Project+: the six words as above; with it,
+  both groups land on entering the main menu (Brawl frame 1441, Project+ 199), the module differs
+  from the unpatched dump only in the three words, `0x9017BE68` stays 0x32 while left is held, and
+  the menu music plays on (Brawl RMS 3000-3800 a second after the slider against 13 unpatched;
+  Project+ 2000-2700 on its menu against 1-400). Brawl Rev 1 (rev1 alias): the same landings and
+  sound.
+- Two Orcas over yougame.co rooms (`two-orca-balance.py`, now taking Brawl too), the host's slider
+  pushed toward MUSIC solo, a friend joining 45 s after boot: shipped 0.3.30, friend silent (Brawl
+  RMS 12-20, Project+ 1); 0.3.32, friend 2700-6000 (Brawl), 2900-6100 (Project+). Every run 28-30
+  checksums matched both sides, no desync.
+- Hashlogs of the default inputs: the build with the files minus the two groups equals 0.3.30
+  (Brawl 0-10800, Project+ 0-9000); with the lock it differs from the landing frame on, and
+  MEM1+MEM2 at the character select, in the match, on the results screen and the second character
+  select differ only in the three words (the freed module memory keeps them in the match).
+- `YG_SYNCTEST=7`: the Sound page with the slider held and tapped both ways, then B out (Brawl to
+  3400: 21651 re-run frames; Project+ to 2400: 14651), and the default inputs (Brawl to 10800:
+  73451; Project+ to 9000: 60851): 0 RAM mismatches.
+- `OrcaOnlineMenuSound.TheBalanceSliderStaysInTheMiddleInBothGames` (fails without the groups).
+
+Not run here: the two-Orca perf gate (menu code only, nothing per frame), Windows, the queue path
+(`queue-e2e.mjs`; the same drop-in as a friends room).
+
 ## Explaining it to people (internal)
 
 **One sentence:**

@@ -812,6 +812,25 @@ Offered for Brawl (any revision) and Project+; without the cap the line answers 
   sends to an AUX bus. Cost: instructions retired by the whole run to frame 9000 (a snapshot every
   frame from 5900) are the same on and off, within the 0.1% between runs.
 
+### The game's Sound slider
+
+Options > Sound's balance between music and effects (gmGlobalRecord, `0x9017BE68`, 0-100) is game
+memory, so in a room it was the host's: a host who had pushed it to the end labelled MUSIC silenced
+the joiner's music, and to the other end their effects. Since Orca 0.3.32 it stays at 50, where
+`GameGlobal::init` puts it, in every session, solo included: both limits of the page's slider
+handler are 50 (`RSBE01.patches` and `PPLUS32.patches`, "Options > Sound"), so the cursor never
+moves and the sound manager is never called. Solo can't keep it: every Orca is the host a friend
+can drop into, and a balance set alone reaches the friend with the keyframe. Music on or off for one
+player is the Music switch. Clamping to 10-90 instead is two words per file, named there.
+
+Checked 2026-10-07, Brawl and Project+: two Orcas in a friends room, the host's slider held toward
+MUSIC before the friend joined. With 0.3.30 the friend's audio after the join was silent (RMS 1-20 a
+second); with the lock it had its music (RMS 2700-6100), every checksum matched. Hashlogs of the
+default inputs equal 0.3.30's without the two groups and differ with them only in the three changed
+words (RAM compared at the character select, in the match, on the results screen and back on the
+character select). `YG_SYNCTEST=7` with the slider held both ways on the Sound page, and over the
+default inputs: 0 RAM mismatches. Test: `OrcaOnlineMenuSound.*`.
+
 ## Match start
 
 The first seconds of a match (the countdown and just after) used to drop frames: two things compiled
