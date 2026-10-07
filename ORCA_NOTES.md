@@ -5991,6 +5991,53 @@ room ~1.9 s later (HOME); `pa-d-fl` shows the host re-armed (`orca menu online r
 Workaround for 0.3.27 players: the inviter presses B on the Ranked select (back to the menu) before
 pressing Play again; an invite already sent then gets a clean keyframe.
 
+## macOS 15: guest RAM views on top of each other (mac15-sigtrap, 2026-10-07)
+
+**Symptom.** Orca 0.3.26-0.3.28 closed with SIGTRAP on Project+ about 2.2 s after the `frame
+boundary hook` line, before its first frame: `Invalid write to 0x000002c8, PC = 0x801e17bc` (then
+`0x2dc`, `0x2e4`, `0x2e0`), then `Unknown instruction 00000000 at PC = 00000500, LR = 801e0bcc`, and
+the panic became an exit. 13 automatic crash reports from desktop 0.12.36 (an M2 MacBook Air on
+macOS 15.7.9, an M1 MacBook Air on 15.6.1) and the first reporter's 9 runs (an M2 Max on 15.6.1).
+Every crash came from macOS 15; every Mac known to have played was on macOS 26.
+
+**Cause.** Upstream #14838 (`27804b4e67`, in 2609, so in every Orca release) passes
+`MAP_MEM_VM_SHARE` to `mach_make_memory_entry_64` in `Common/MemArenaDarwin.cpp`. On macOS 15 a
+`vm_map` of that entry ignores its offset: every view (MEM1 at 0, the locked L1 cache at 32 MB, MEM2
+at 32.25 MB, the fastmem views and the rollback aliases) maps arena offset 0, so MEM1, the L1 cache
+and MEM2 are the same pages. Project+ loses MEM1 `0x0-0x3FFF`, so the current-thread pointer at
+`0x800000E4` is 0 (`OSSleepThread`'s four invalid writes) and the external-interrupt vector at `0x500`
+reads as zeros. The likely writer is Brawl's `__LCEnable`, which clears exactly 16 KB of locked cache
+with `dcbz_l` just before the first frame (inferred from the size and timing, not traced).
+Vanilla Brawl dies sooner, in `ClearMEM2Arena` (`Unknown instruction` at `801d5998`): its MEM2 clear
+zeroes its own MEM1 code. macOS 26 maps the offsets correctly, which is why no Mac here showed it.
+Upstream hit it too (an Intel Mac on macOS 15; other games on ARM Macs and later macOS) and replaced
+the memory entry with `vm_remap` of the arena itself in #14891 (`da76f651ec`, after 2609).
+
+**Fix.** `da76f651ec` cherry-picked unchanged: `CreateView` and `MapInMemoryRegion` `vm_remap` the
+arena, and `MapInMemoryRegion` then sets the view's protection. Host-side only; the game's memory is
+the same wherever the old mapping worked, so `kCompatVersion` stays. The changed calls run when
+views are created or the DBATs change (boot, `__LCEnable`), not on a snapshot load, whose
+`DBATUpdated` is skipped while the BATs are unchanged.
+
+**Checked** on the M4 Pro (macOS 26.3) and in the macOS 15.6.1 (24G90) guest of
+`~/Documents/brawl-dolphin/mac15-vm` (tart on the same M4; results in its `out/mac15fix/results/`):
+- macOS 15.6.1, release builds of the base (`0f423ddba5`) and the fix: the base's Project+ crashes
+  exactly as in the players' reports, headless after 6 s and embedded (the app's way: parent window,
+  Metal) after 16 s; the base's vanilla Brawl crashes at `801d5998`. The fix reaches the first frame
+  (`Frame hook`, `JIT cleared once`) and runs until stopped (45-60 s) every way: Project+ headless,
+  embedded, both with `ORCA_TEST_NO_AFP=1`, on the cached interpreter (`ORCA_TEST_CPUCORE=5`), and
+  vanilla Brawl. No crash report from the fix.
+- A C replay of the arena (the Wii layout and every view): the `MAP_MEM_VM_SHARE` entry fails on
+  macOS 15.6.1 (6,177 mismatches; MEM2 writes land in MEM1) and `vm_remap` passes; both pass on 26.3.
+- Hashlogs of the default inputs (Brawl to 10800, Project+ to 9000): the fix equals the base on
+  macOS 26.3, and the fix on macOS 15.6.1 equals the fix on 26.3, on every frame.
+- `YG_SYNCTEST=7`, 0 RAM mismatches: macOS 26.3 Brawl to 10800 (73,451 re-run frames) and Project+
+  to 9000 (60,851); macOS 15.6.1 Project+ to 3000 (18,851) and Brawl 1600-4000 (16,751).
+- Unit tests `Orca*`: 514 pass, 17 skipped (the live and latency switches), none fail.
+
+Not covered: M1-M3 silicon (the guest runs on the M4; nothing in the fix depends on the chip) and
+macOS 15.7 (the guest is 15.6.1; the M2 reporter runs 15.7.9).
+
 ## Explaining it to people (internal)
 
 **One sentence:**
