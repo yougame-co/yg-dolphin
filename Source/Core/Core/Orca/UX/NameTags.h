@@ -109,10 +109,6 @@ std::string ControlsHex(const std::vector<u8>& profile);
 std::optional<std::vector<u8>> ParseControlsHex(std::string_view hex);
 bool ControlsValid(const std::vector<u8>& profile);
 
-// Runs from Events' frame callback on every frame (first runs and re-runs), before the session
-// saves a snapshot or keyframe, so those include what it wrote.
-void WriteNameTags(const Core::CPUThreadGuard& guard, const std::vector<Events::PortInfo>& ports);
-
 // This player's own controls, read from their own save, to carry into an online game. Uses the tag
 // `port` wears on the character select, else the tag named by `last_worn` (kept by the caller),
 // else the tag matching `own_name`. Empty means the game's defaults.
@@ -138,11 +134,45 @@ private:
   bool m_rebase = false;
 };
 
-// Frame hook: on first runs while playing alone, publishes this player's controls to the session
-// (Events::SetOwnControls) when they change them in the game. Each change prints
-// "orca controls <hex>" for the app and is kept in the user folder. Brawl rev 2 and Project+ only.
-void ReadOwnControlsFrame(const Core::CPUThreadGuard& guard,
-                          const std::vector<Events::PortInfo>& ports);
+// The frame hook's reader of this player's own controls: the tag their port wears (ReadOwnControls,
+// remembering the tag they last wore) through an OwnControlsWatch.
+class OwnControlsReader
+{
+public:
+  // The app just set the controls: the next read is the reference (OwnControlsWatch::Rebase).
+  void Rebase() { m_rebase = true; }
+  // One read, on the port that isn't remote. `own` is the current profile, `resyncs` the session's
+  // resync count (when it moves, the remembered tag is forgotten: a tag with its name may be in
+  // someone else's save). Returns the controls to publish when the player changed them.
+  std::optional<std::vector<u8>> Read(const GuestMemory& memory,
+                                      const std::vector<Events::PortInfo>& ports,
+                                      const std::vector<u8>& own, u64 resyncs);
+
+private:
+  std::u16string m_last_worn;
+  OwnControlsWatch m_watch;
+  u64 m_resyncs = 0;
+  bool m_rebase = false;
+};
+
+// One frame of name tags: ApplyNameTags with `write_ports`, then, with a `reader` (first runs while
+// playing alone), the read of this player's own controls from `ports`. The read comes after the
+// writes, so it sees what Orca just put in the tag they wear (a tag they just made, given their
+// controls) rather than the game's defaults that tag held before. Returns the controls to publish.
+std::optional<std::vector<u8>> NameTagsFrame(GuestMemory& memory,
+                                             const std::vector<Events::PortInfo>& write_ports,
+                                             const std::vector<Events::PortInfo>& ports,
+                                             OwnControlsReader* reader,
+                                             const std::vector<u8>& own, u64 resyncs);
+
+// Runs from Events' frame callback on every frame (first runs and re-runs), before the session
+// saves a snapshot or keyframe, so those include what it wrote: NameTagsFrame on emulated memory,
+// reading only when `read_own` (first runs while playing alone). A change the player made to their
+// controls in the game is published to the session (Events::SetOwnControls), printed as
+// "orca controls <hex>" for the app and kept in the user folder. Brawl rev 2 and Project+ only.
+void NameTagsFrameHook(const Core::CPUThreadGuard& guard,
+                       const std::vector<Events::PortInfo>& write_ports,
+                       const std::vector<Events::PortInfo>& ports, bool read_own);
 
 // The controls this player starts with, at boot: ORCA_CONTROLS=<hex> from the app, else the ones
 // kept from an earlier run of this game (printed as "orca controls <hex>" for the page). Unset or

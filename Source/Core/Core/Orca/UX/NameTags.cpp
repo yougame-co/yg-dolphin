@@ -426,14 +426,6 @@ std::optional<std::vector<u8>> ParseControlsHex(std::string_view hex)
   return profile;
 }
 
-void WriteNameTags(const Core::CPUThreadGuard& guard, const std::vector<Events::PortInfo>& ports)
-{
-  if (ports.empty() || !BrawlRev2())
-    return;
-  GuardMemory memory(guard);
-  ApplyNameTags(memory, ports);
-}
-
 std::vector<u8> ReadOwnControls(const GuestMemory& m, int port, std::string_view own_name,
                                 std::u16string* last_worn)
 {
@@ -588,34 +580,57 @@ bool SetOwnControlsFromApp(std::string_view hex)
   return true;
 }
 
-void ReadOwnControlsFrame(const Core::CPUThreadGuard& guard,
-                          const std::vector<Events::PortInfo>& ports)
+std::optional<std::vector<u8>> OwnControlsReader::Read(const GuestMemory& m,
+                                                       const std::vector<Events::PortInfo>& ports,
+                                                       const std::vector<u8>& own, u64 resyncs)
+{
+  // PortInfo.remote differs per machine, so it only picks what to read here, never what to write.
+  const auto mine =
+      std::find_if(ports.begin(), ports.end(), [](const Events::PortInfo& p) { return !p.remote; });
+  if (mine == ports.end())
+    return std::nullopt;
+  // After a resync (keyframe load or back to solo), a tag with the remembered name may belong to
+  // someone else's save, so forget it, and take what is worn now as no change.
+  if (resyncs != m_resyncs)
+  {
+    m_resyncs = resyncs;
+    m_last_worn.clear();
+    m_watch.Rebase();
+  }
+  if (std::exchange(m_rebase, false))
+    m_watch.Rebase();
+  const std::vector<u8> read = ReadOwnControls(m, mine->port, mine->name, &m_last_worn);
+  return m_watch.Next(read.empty() ? read : Sanitized(read), own, IsDefaultProfile(m, read));
+}
+
+std::optional<std::vector<u8>> NameTagsFrame(GuestMemory& m,
+                                             const std::vector<Events::PortInfo>& write_ports,
+                                             const std::vector<Events::PortInfo>& ports,
+                                             OwnControlsReader* reader,
+                                             const std::vector<u8>& own, u64 resyncs)
+{
+  ApplyNameTags(m, write_ports);
+  // After the writes: a tag that just got the player's controls reads as those, never as the
+  // game's defaults it held before this frame's writes.
+  if (!reader)
+    return std::nullopt;
+  return reader->Read(m, ports, own, resyncs);
+}
+
+void NameTagsFrameHook(const Core::CPUThreadGuard& guard,
+                       const std::vector<Events::PortInfo>& write_ports,
+                       const std::vector<Events::PortInfo>& ports, bool read_own)
 {
   if (!BrawlRev2())
     return;
-  // PortInfo.remote differs per machine, so it only picks what to read here, never what to write.
-  const auto own =
-      std::find_if(ports.begin(), ports.end(), [](const Events::PortInfo& p) { return !p.remote; });
-  if (own == ports.end())
-    return;
-  static std::u16string s_last_worn;
-  static OwnControlsWatch s_watch;
-  // After a resync (keyframe load or back to solo), a tag with the remembered name may belong to
-  // someone else's save, so forget it, and take what is worn now as no change.
-  static u64 s_resyncs = 0;
-  if (const u64 resyncs = Events::Resyncs(); resyncs != s_resyncs)
-  {
-    s_resyncs = resyncs;
-    s_last_worn.clear();
-    s_watch.Rebase();
-  }
-  if (s_rebase_own.exchange(false))
-    s_watch.Rebase();
+  static OwnControlsReader s_reader;
+  if (read_own && s_rebase_own.exchange(false))
+    s_reader.Rebase();
   GuardMemory memory(guard);
-  const std::vector<u8> read = ReadOwnControls(memory, own->port, own->name, &s_last_worn);
-  const std::vector<u8> current = Events::OwnControls();
   std::optional<std::vector<u8>> changed =
-      s_watch.Next(read.empty() ? read : Sanitized(read), current, IsDefaultProfile(memory, read));
+      read_own ? NameTagsFrame(memory, write_ports, ports, &s_reader, Events::OwnControls(),
+                               Events::Resyncs()) :
+                 NameTagsFrame(memory, write_ports, ports, nullptr, {}, 0);
   if (!changed)
     return;
   NOTICE_LOG_FMT(ROLLBACK, "Name tags: this player changed their controls in the game");
