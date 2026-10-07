@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <chrono>
+#include <cstddef>
 #include <cstdio>
 #include <optional>
 #include <string>
@@ -49,8 +50,8 @@ std::string RunOn(const std::string& path, int* code)
 
 TEST(OrcaDiscVerify, NoProblemsIsOk)
 {
-  EXPECT_EQ(Orca::DiscVerify::CountSerious({}), 0u);
-  EXPECT_EQ(Orca::DiscVerify::VerdictLine(0), "orca verify ok");
+  EXPECT_EQ(Orca::DiscVerify::CountDamage({}), 0u);
+  EXPECT_EQ(Orca::DiscVerify::ResultLines({}), std::vector<std::string>{"orca verify ok"});
   EXPECT_EQ(Orca::DiscVerify::ExitCode(0), 0);
 }
 
@@ -69,10 +70,13 @@ TEST(OrcaDiscVerify, GoodScrubbedBrawlIsOk)
         {Severity::Low,
          "Errors were found in 1 unused blocks in the HBxE (Masterpiece) partition."});
   }
-  const size_t serious = Orca::DiscVerify::CountSerious(problems);
-  EXPECT_EQ(serious, 0u);
-  EXPECT_EQ(Orca::DiscVerify::VerdictLine(serious), "orca verify ok");
-  EXPECT_EQ(Orca::DiscVerify::ExitCode(serious), 0);
+  const std::size_t damage = Orca::DiscVerify::CountDamage(problems);
+  EXPECT_EQ(damage, 0u);
+  const std::vector<std::string> lines = Orca::DiscVerify::ResultLines(problems);
+  ASSERT_EQ(lines.size(), 10u);
+  EXPECT_EQ(lines[0], "orca verify problem low The update partition is missing.");
+  EXPECT_EQ(lines[9], "orca verify ok");
+  EXPECT_EQ(Orca::DiscVerify::ExitCode(damage), 0);
 }
 
 TEST(OrcaDiscVerify, MediumOrHighIsDamaged)
@@ -82,14 +86,67 @@ TEST(OrcaDiscVerify, MediumOrHighIsDamaged)
       {Severity::Medium, "Errors were found in 2 blocks in the DATA partition."},
       {Severity::Low, "The update partition is missing."},
   };
-  const size_t serious = Orca::DiscVerify::CountSerious(problems);
-  EXPECT_EQ(serious, 2u);
-  EXPECT_EQ(Orca::DiscVerify::VerdictLine(serious), "orca verify damaged 2");
-  EXPECT_EQ(Orca::DiscVerify::ExitCode(serious), 2);
+  const std::size_t damage = Orca::DiscVerify::CountDamage(problems);
+  EXPECT_EQ(damage, 2u);
+  EXPECT_EQ(Orca::DiscVerify::ResultLines(problems),
+            (std::vector<std::string>{
+                "orca verify problem high Content 00000001 is corrupt.",
+                "orca verify damage Content 00000001 is corrupt.",
+                "orca verify problem medium Errors were found in 2 blocks in the DATA partition.",
+                "orca verify damage Errors were found in 2 blocks in the DATA partition.",
+                "orca verify problem low The update partition is missing.",
+                "orca verify damaged 2",
+            }));
+  EXPECT_EQ(Orca::DiscVerify::ExitCode(damage), 2);
 
   const std::vector<Problem> one = {{Severity::Medium, "Some of the data could not be read."}};
-  EXPECT_EQ(Orca::DiscVerify::VerdictLine(Orca::DiscVerify::CountSerious(one)),
+  EXPECT_EQ(Orca::DiscVerify::VerdictLine(Orca::DiscVerify::CountDamage(one)),
             "orca verify damaged 1");
+}
+
+// Dolphin's Medium problems that only concern Brawl's Masterpiece partitions, as
+// DiscIO/VolumeVerifier.cpp words them: CheckPartitions, CheckPartition and Finish, with
+// GetPartitionName's "<id> (Masterpiece)". Orca and Project+ never read those partitions.
+const std::vector<Problem> MASTERPIECE_ONLY = {
+    {Severity::Medium, "The Masterpiece partitions are missing."},
+    {Severity::Medium, "The HBAE (Masterpiece) partition does not seem to contain valid data."},
+    {Severity::Medium, "Errors were found in 2 blocks in the HBAE (Masterpiece) partition."},
+};
+
+TEST(OrcaDiscVerify, MasterpieceOnlyProblemsDontCount)
+{
+  for (const Problem& problem : MASTERPIECE_ONLY)
+  {
+    EXPECT_FALSE(Orca::DiscVerify::Counts(problem)) << problem.text;
+    const std::vector<Problem> alone = {problem};
+    EXPECT_EQ(Orca::DiscVerify::ResultLines(alone),
+              (std::vector<std::string>{Orca::DiscVerify::ProblemLine(problem), "orca verify ok"}));
+  }
+  EXPECT_EQ(Orca::DiscVerify::CountDamage(MASTERPIECE_ONLY), 0u);
+  const std::vector<std::string> lines = Orca::DiscVerify::ResultLines(MASTERPIECE_ONLY);
+  ASSERT_EQ(lines.size(), 4u);
+  EXPECT_EQ(lines[0], "orca verify problem medium The Masterpiece partitions are missing.");
+  EXPECT_EQ(lines[3], "orca verify ok");
+}
+
+TEST(OrcaDiscVerify, DataDamageCountsBesideMasterpieces)
+{
+  const std::vector<Problem> problems = {
+      {Severity::Medium, "Errors were found in 3 blocks in the DATA partition."},
+      MASTERPIECE_ONLY[2],
+      {Severity::Low, "The update partition is missing."},
+  };
+  EXPECT_EQ(Orca::DiscVerify::CountDamage(problems), 1u);
+  EXPECT_EQ(
+      Orca::DiscVerify::ResultLines(problems),
+      (std::vector<std::string>{
+          "orca verify problem medium Errors were found in 3 blocks in the DATA partition.",
+          "orca verify damage Errors were found in 3 blocks in the DATA partition.",
+          "orca verify problem medium Errors were found in 2 blocks in the HBAE (Masterpiece) "
+          "partition.",
+          "orca verify problem low The update partition is missing.",
+          "orca verify damaged 1",
+      }));
 }
 
 TEST(OrcaDiscVerify, ProblemLines)

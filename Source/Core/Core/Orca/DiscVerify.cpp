@@ -16,9 +16,14 @@ namespace
 {
 using Severity = DiscIO::VolumeVerifier::Severity;
 
-bool IsSerious(Severity severity)
+// Problems only in Brawl's Masterpiece partitions, matched on VolumeVerifier.cpp's English strings
+// (nogui never loads translations): GetPartitionName's "{0} (Masterpiece)", the partition's name in
+// CheckPartition's and Finish's problems, and CheckPartitions' "The Masterpiece partitions are
+// missing."
+bool OnlyMasterpieces(std::string_view text)
 {
-  return severity == Severity::Medium || severity == Severity::High;
+  return text.find("(Masterpiece)") != std::string_view::npos ||
+         text.find("Masterpiece partitions") != std::string_view::npos;
 }
 
 std::string_view SeverityWord(Severity severity)
@@ -81,20 +86,26 @@ std::optional<std::string> TakeArgument(std::vector<char*>* argv, std::string* e
   return path;
 }
 
-std::size_t CountSerious(std::span<const Problem> problems)
+bool Counts(const Problem& problem)
 {
-  std::size_t serious = 0;
-  for (const Problem& problem : problems)
-  {
-    if (IsSerious(problem.severity))
-      ++serious;
-  }
-  return serious;
+  return (problem.severity == Severity::Medium || problem.severity == Severity::High) &&
+         !OnlyMasterpieces(problem.text);
 }
 
-int ExitCode(std::size_t serious)
+std::size_t CountDamage(std::span<const Problem> problems)
 {
-  return serious ? EXIT_DAMAGED : EXIT_OK;
+  std::size_t damage = 0;
+  for (const Problem& problem : problems)
+  {
+    if (Counts(problem))
+      ++damage;
+  }
+  return damage;
+}
+
+int ExitCode(std::size_t damage)
+{
+  return damage ? EXIT_DAMAGED : EXIT_OK;
 }
 
 std::string ProgressLine(u64 done, u64 total)
@@ -108,9 +119,14 @@ std::string ProblemLine(const Problem& problem)
                      OneLine(problem.text));
 }
 
-std::string VerdictLine(std::size_t serious)
+std::string DamageLine(const Problem& problem)
 {
-  return serious ? fmt::format("orca verify damaged {}", serious) : "orca verify ok";
+  return fmt::format("orca verify damage {}", OneLine(problem.text));
+}
+
+std::string VerdictLine(std::size_t damage)
+{
+  return damage ? fmt::format("orca verify damaged {}", damage) : "orca verify ok";
 }
 
 std::string UnreadableLine(std::string_view path)
@@ -123,6 +139,19 @@ std::string UnreadableLine(std::string_view path)
       c = ' ';
   }
   return line;
+}
+
+std::vector<std::string> ResultLines(std::span<const Problem> problems)
+{
+  std::vector<std::string> lines;
+  for (const Problem& problem : problems)
+  {
+    lines.push_back(ProblemLine(problem));
+    if (Counts(problem))
+      lines.push_back(DamageLine(problem));
+  }
+  lines.push_back(VerdictLine(CountDamage(problems)));
+  return lines;
 }
 
 bool ProgressPacer::Due(std::chrono::steady_clock::time_point now)
@@ -160,10 +189,8 @@ int Run(const std::string& path, std::FILE* out)
   verifier.Finish();
 
   const std::vector<Problem>& problems = verifier.GetResult().problems;
-  for (const Problem& problem : problems)
-    print(ProblemLine(problem));
-  const std::size_t serious = CountSerious(problems);
-  print(VerdictLine(serious));
-  return ExitCode(serious);
+  for (const std::string& line : ResultLines(problems))
+    print(line);
+  return ExitCode(CountDamage(problems));
 }
 }  // namespace Orca::DiscVerify

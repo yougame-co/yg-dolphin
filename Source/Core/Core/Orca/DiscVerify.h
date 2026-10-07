@@ -19,8 +19,10 @@
 // no whole-disc hashes), without booting it. One line each on stdout:
 //   orca verify progress <bytes done> <bytes total>   at most once a second
 //   orca verify problem <low|medium|high> <text>      one per problem the verifier reports
+//   orca verify damage <text>                         after a problem's line, when it counts
 //   orca verify ok | orca verify damaged <n> | orca verify unreadable <path>
-// Damaged means n Medium or High problems. Exit codes: 0 ok, 2 damaged, 1 unreadable.
+// A problem counts when it is Medium or High and not only in Brawl's Masterpiece partitions, which
+// Orca and Project+ never read. Damaged means n of them. Exit codes: 0 ok, 2 damaged, 1 unreadable.
 namespace Orca::DiscVerify
 {
 using Problem = DiscIO::VolumeVerifier::Problem;
@@ -33,16 +35,20 @@ inline constexpr int EXIT_DAMAGED = 2;
 // *error when the path is missing.
 std::optional<std::string> TakeArgument(std::vector<char*>* argv, std::string* error);
 
-// The Medium and High problems: any of them and the disc is damaged.
-std::size_t CountSerious(std::span<const Problem> problems);
-int ExitCode(std::size_t serious);
+// Whether a problem makes the disc damaged (above).
+bool Counts(const Problem& problem);
+std::size_t CountDamage(std::span<const Problem> problems);
+int ExitCode(std::size_t damage);
 
 std::string ProgressLine(u64 done, u64 total);
 // The text goes on one line: each run of spaces, line breaks and other control characters becomes
 // one space.
 std::string ProblemLine(const Problem& problem);
-std::string VerdictLine(std::size_t serious);
+std::string DamageLine(const Problem& problem);
+std::string VerdictLine(std::size_t damage);
 std::string UnreadableLine(std::string_view path);
+// Every problem's line, each followed by its damage line if it counts, then the verdict.
+std::vector<std::string> ResultLines(std::span<const Problem> problems);
 
 // Lets a progress line through at most once a second.
 class ProgressPacer
