@@ -9,8 +9,8 @@
 
 #include "Common/CommonTypes.h"
 
-// The player's Music switch (stdin "music on|off", cap "music"). Host only: with it off this machine
-// plays the mix without the game's music, and nothing the game sees changes.
+// The player's Music switch (stdin "music on|off", cap "music"). Host only: with it off this
+// machine plays the mix without the game's music, and nothing the game sees changes.
 //
 // Brawl and Project+ play their music on stream voices (AX type 1), their effects on normal ones.
 // AX HLE writes the full mix to RAM as always and keeps a second mix without the stream voices;
@@ -74,6 +74,7 @@ private:
   u64 m_quiet_reads = 0;
 };
 
-// The emulator's one shadow, used on the CPU thread only (the AX HLE and the AI DMA both run there).
+// The emulator's one shadow, used on the CPU thread only (the AX HLE and the AI DMA both run
+// there).
 Shadow& GetShadow();
 }  // namespace Orca::Music
