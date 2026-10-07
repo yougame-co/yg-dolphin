@@ -29,6 +29,9 @@ static constexpr auto X_None = None;
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
 #include <X11/keysym.h>
+#ifdef HAVE_XSHAPE
+#include <X11/extensions/shape.h>
+#endif
 #include "UICommon/UICommon.h"
 #include "UICommon/X11Utils.h"
 #include "VideoCommon/Present.h"
@@ -113,9 +116,11 @@ private:
   // on the workspace shown.
   bool m_app_viewable = true;
   bool m_surface_visible = true;
-  // Orca's window's size as the presenter last resized to it: a move alone needs no resize.
+  // Orca's window's size, and whether the presenter has yet to resize to it: a move alone needs no
+  // resize, and one that came before the presenter existed is made once it does.
   int m_embed_width = 0;
   int m_embed_height = 0;
+  bool m_resize_pending = false;
   std::chrono::steady_clock::time_point m_next_app_check{};
 };
 
@@ -249,6 +254,13 @@ bool PlatformX11::InitEmbedded()
                            CWBackPixel | CWBorderPixel | CWColormap, &attributes);
   m_embed_width = r.w;
   m_embed_height = r.h;
+#ifdef HAVE_XSHAPE
+  // An empty input shape: the pointer passes through Orca's window, and the GL child inside it, to
+  // the app's window, which so never sees it leave for a child over its own picture box.
+  int shape_event = 0, shape_error = 0;
+  if (XShapeQueryExtension(m_display, &shape_event, &shape_error))
+    XShapeCombineRectangles(m_display, m_window, ShapeInput, 0, 0, nullptr, 0, ShapeSet, Unsorted);
+#endif
   // Only the structure of Orca's window: no keys and no mouse, so every press goes up the tree to
   // the app's window. Dolphin's GL context selects the same on it.
   XSelectInput(m_display, m_window, StructureNotifyMask);
@@ -298,6 +310,11 @@ void PlatformX11::MainLoop()
       {
         m_next_app_check = now + std::chrono::milliseconds(500);
         UpdateAppState();
+      }
+      if (m_resize_pending && g_presenter)
+      {
+        m_resize_pending = false;
+        g_presenter->ResizeSurface();
       }
       UpdateEmbedFocus();
     }
@@ -381,6 +398,10 @@ void PlatformX11::UpdateAppState()
   m_app_viewable = XGetWindowAttributes(m_display, m_parent, &app) && app.map_state == IsViewable;
   m_app_focused = AppHasFocus();
   UpdateSurfaceVisible();
+  // Kept on top of the app's other children here too: a GPU-process window Chromium makes without a
+  // rect from the page (a GPU reset while the box stays put) would otherwise hide the game.
+  if (m_embed_visible)
+    XRaiseWindow(m_display, m_window);
 }
 
 // Whether the X server has the keyboard in the app's window: on it, on a window inside it, or on the
@@ -545,13 +566,13 @@ void PlatformX11::ProcessEmbeddedEvent(const XEvent& event)
   switch (event.type)
   {
   case ConfigureNotify:
-    // Sent for a move too: the presenter resizes only to a new size.
-    if (window == m_window && g_presenter &&
+    // Sent for a move or a restack too: the presenter resizes only to a new size (MainLoop).
+    if (window == m_window &&
         (event.xconfigure.width != m_embed_width || event.xconfigure.height != m_embed_height))
     {
       m_embed_width = event.xconfigure.width;
       m_embed_height = event.xconfigure.height;
-      g_presenter->ResizeSurface();
+      m_resize_pending = true;
     }
     break;
   case FocusIn:
@@ -567,7 +588,7 @@ void PlatformX11::ProcessEmbeddedEvent(const XEvent& event)
   case DestroyNotify:
     // The app's window was destroyed, and Orca's with it: stop, as on Windows. The app also says
     // "quit" or closes stdin when it can.
-    if (window == m_parent || window == m_window)
+    if (event.xdestroywindow.window == m_parent || event.xdestroywindow.window == m_window)
       Stop();
     break;
   default:

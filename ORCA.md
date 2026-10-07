@@ -1997,9 +1997,10 @@ background input, so that rule always applies.
   through (`ignoresMouseEvents`). Orca reads the keyboard from the HID state and pads through SDL;
   input counts while the last command was `focus`, the view is shown and the app is frontmost. The
   page sends `blur` when it wants keys for itself.
-- **Linux:** as on macOS, Orca never takes the keyboard or the mouse: its child window selects no
-  key or button events, so every press goes up the X tree to the app's window and its page, and the
-  page sees clicks on the picture itself (no `orca click`). The page sends the keyboard as a pad, as
+- **Linux:** as on macOS, Orca never takes the keyboard or the mouse: its child window has an empty
+  input shape (the pointer passes through it, and through the GL child inside it, to the app's
+  window) and selects no key or button events, so the page sees clicks on the picture itself (no
+  `orca click`). The page sends the keyboard as a pad, as
   on Windows. Input counts while the last command was `focus`, the view is shown and the X server
   has the keyboard in the app's window (its focus events, checked twice a second too).
 

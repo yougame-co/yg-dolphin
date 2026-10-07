@@ -11,20 +11,20 @@
 # Linux has no code signing the app checks: it trusts the zip by the manifest's SHA-256 and every
 # file by the hashes it records when it unpacks it (desktop/src/orca-policy.ts treeProblem).
 #
-# A release sets ORCA_VERSION (X.Y.Z) and builds the private repository at the release commit,
-# like the Windows build: that commit is in the compatibility key (scmrev.h), so a build of the
-# public snapshot would never meet a Mac or a PC. The tree must be clean before and after the
-# build. VERSION.txt and SOURCE.txt link the public source of that version (GPL),
-# <ORCA_SOURCE_URL, default https://github.com/Lrosias/orca-netplay>/tree/orca-<version>; the
-# script warns while that tag is not public yet. Without ORCA_VERSION the zip is a *-dev.zip.
+# A release sets ORCA_VERSION (X.Y.Z) and ORCA_SOURCE_URL (the public repository's URL, which
+# players fetch the source from: GPL) and builds the private repository at the release commit, like
+# the Windows build: that commit is in the compatibility key (scmrev.h), so a build of the public
+# snapshot would never meet a Mac or a PC. The tree must be clean before and after the build.
+# VERSION.txt and SOURCE.txt link <ORCA_SOURCE_URL>/tree/orca-<version>; the script warns while
+# that tag is not public yet. Without ORCA_VERSION the zip is a *-dev.zip.
 #
 # Build it on the oldest distribution it must run on (ORCA_GLIBC_MAX, default 2.35: Ubuntu 22.04,
 # Debian 12, SteamOS 3 and everything since): glibc is the one library it cannot carry. Needs git,
 # cmake, ninja, pkg-config, zip, binutils, GCC 12 or newer (Orca's CMakeLists refuses 11; on Ubuntu
-# 22.04 install gcc-12 g++-12 and run with CC=gcc-12 CXX=g++-12), and the headers of X11, Xi,
+# 22.04 install gcc-12 g++-12 and run with CC=gcc-12 CXX=g++-12), and the headers of X11, Xi, Xext,
 # Xrandr, EGL/OpenGL and the sound servers Cubeb opens at run time (Debian/Ubuntu: libx11-dev
-# libxi-dev libxrandr-dev libegl-dev libgl-dev libpulse-dev libasound2-dev). Without the PulseAudio
-# headers Cubeb has no Linux backend and Orca would play silent, so the build is refused.
+# libxi-dev libxext-dev libxrandr-dev libegl-dev libgl-dev libpulse-dev libasound2-dev). Without the
+# PulseAudio headers Cubeb has no Linux backend and Orca would play silent, so the build is refused.
 set -euo pipefail
 # readelf and objdump print what is parsed below in the C locale only.
 export LC_ALL=C
@@ -33,7 +33,6 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="${1:-$ROOT/build-orca-linux}"
 OUT_DIR="${2:-$BUILD_DIR/package}"
 GLIBC_MAX="${ORCA_GLIBC_MAX:-2.35}"
-PUBLIC="${ORCA_SOURCE_URL:-https://github.com/Lrosias/orca-netplay}"
 
 fail() {
   echo "orca-package: $*" >&2
@@ -70,6 +69,9 @@ VERSION="${ORCA_VERSION:-}"
 if [ -n "$VERSION" ]; then
   [[ "$VERSION" =~ ^[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}$ ]] || fail "ORCA_VERSION must be X.Y.Z, not $VERSION"
   [ -z "$DIRTY" ] || fail "a release needs a clean tree (untracked files included)$DIRTY"
+  PUBLIC="${ORCA_SOURCE_URL:-}"
+  PUBLIC="${PUBLIC%/}"
+  [ -n "$PUBLIC" ] || fail "a release needs ORCA_SOURCE_URL, the public repository players get the source from"
   RELEASE=1
   SOURCE="$PUBLIC/tree/orca-$VERSION"
   # Anonymous, so a private repository can't pass: players must be able to fetch it.
@@ -85,9 +87,10 @@ fi
 # frontends' extras), plus what keeps the program to libraries every desktop Linux has: no ALSA or
 # PulseAudio backends of Dolphin's own (Cubeb, the default, opens the sound server at run time), no
 # BlueZ, evdev or udev (the app hands Orca its controllers; libusb and hidapi would link libudev
-# whenever its headers are there), and libstdc++ linked in. -g: symbols for the .debug file beside
-# the zip, which change no generated code. Configured on every run so an older cache can't slip
-# other settings in.
+# whenever its headers are there), glibc's own iconv (not the bundled LGPL libiconv, linked in
+# statically otherwise), and libstdc++ linked in. -g: symbols for the .debug file beside the zip,
+# which change no generated code; -ffile-prefix-map: no path of the build machine in them or in the
+# program. Configured on every run so an older cache can't slip other settings in.
 cmake -S "$ROOT" -B "$BUILD_DIR" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DENABLE_QT=OFF -DENABLE_NOGUI=ON -DORCA_VERSION="$VERSION" \
@@ -96,8 +99,8 @@ cmake -S "$ROOT" -B "$BUILD_DIR" -G Ninja \
   -DUSE_RETRO_ACHIEVEMENTS=OFF -DUSE_MGBA=OFF -DUSE_UPNP=OFF -DENABLE_VULKAN=OFF \
   -DENABLE_CLI_TOOL=OFF -DENABLE_TESTS=OFF -DUSE_SANITIZERS=OFF \
   -DENABLE_ALSA=OFF -DENABLE_PULSEAUDIO=OFF -DENABLE_BLUEZ=OFF -DENABLE_EVDEV=OFF \
-  -DENABLE_HWDB=OFF -DCMAKE_DISABLE_FIND_PACKAGE_LIBUDEV=ON \
-  -DCMAKE_C_FLAGS="-g" -DCMAKE_CXX_FLAGS="-g" \
+  -DENABLE_HWDB=OFF -DCMAKE_DISABLE_FIND_PACKAGE_LIBUDEV=ON -DUSE_SYSTEM_ICONV=ON \
+  -DCMAKE_C_FLAGS="-g -ffile-prefix-map=$ROOT=." -DCMAKE_CXX_FLAGS="-g -ffile-prefix-map=$ROOT=." \
   -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc" >/dev/null
 grep -q '^USE_PULSE:INTERNAL=1' "$BUILD_DIR/CMakeCache.txt" ||
   fail "Cubeb found no PulseAudio headers (libpulse-dev): Orca would play no sound"
@@ -123,7 +126,7 @@ ALLOWED='^(libc|libm|libdl|libpthread|librt|ld-linux-x86-64|libX11|libXi|libXran
 FOREIGN="$(printf '%s\n' "$NEEDED" | grep -Ev "$ALLOWED" | grep -v '^$' || true)"
 [ -z "$FOREIGN" ] || fail "Orca needs libraries a player may not have:
 $FOREIGN"
-for lib in libX11.so.6 libXi.so.6 libEGL.so.1; do
+for lib in libX11.so.6 libXi.so.6 libXext.so.6 libEGL.so.1; do
   printf '%s\n' "$NEEDED" | grep -qx "$lib" || fail "Orca does not link $lib: was it built without its headers?"
 done
 GLIBC="$(objdump -T "$BIN" | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -n 1)"
@@ -163,7 +166,7 @@ cp "$ROOT/Externals/licenses.md" "$PKG/THIRD_PARTY/"
 for dir in "$ROOT"/Externals/*/; do
   name="$(basename "$dir")"
   case "$name" in
-  # Not in this build.
+  # Not in this build (libiconv: glibc's own is used).
   Qt | MoltenVK | Vulkan-Headers | VulkanMemoryAllocator | FFmpeg-bin | discord-rpc | gtest | mGBA | \
     miniupnpc | rcheevos | libadrenotools | wil | OpenAL | gettext | libiconv) continue ;;
   esac
