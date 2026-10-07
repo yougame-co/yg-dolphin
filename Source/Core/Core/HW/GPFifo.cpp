@@ -48,8 +48,6 @@ void GPFifoManager::DoState(PointerWrap& p)
   p.Do(m_gather_pipe);
   u32 pipe_count = static_cast<u32>(GetGatherPipeCount());
   p.Do(pipe_count);
-  if (p.IsReadMode() && pipe_count > sizeof(m_gather_pipe) - sizeof(u64))
-    throw PointerWrap::ReadError{};
   SetGatherPipeCount(pipe_count);
 }
 

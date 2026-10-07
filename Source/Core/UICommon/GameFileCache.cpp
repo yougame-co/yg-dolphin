@@ -241,15 +241,9 @@ bool GameFileCache::SyncCacheFile(bool save)
     {
       u8* ptr = buffer.data();
       PointerWrap p(&ptr, buffer.size(), PointerWrap::Mode::Read);
-      try
-      {
-        DoState(&p, buffer.size());
-        success = p.IsReadMode();
-      }
-      catch (const PointerWrap::ReadError&)
-      {
-        // A stale revision or damaged cache is rebuilt, as before.
-      }
+      DoState(&p, buffer.size());
+      if (p.IsReadMode())
+        success = true;
     }
   }
   if (!success)
