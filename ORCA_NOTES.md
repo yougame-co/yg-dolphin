@@ -140,6 +140,21 @@ on the drive's exFAT side took 2-6 s per MB (25 ms normally). So:
   `queue-e2e.mjs` and `page-e2e.mjs` give a first `orca caps` 120 s, the Python drop-in tools 30 s.
   Launch a new build once before timing it.
 
+### macOS's check of new programs
+
+2026-10-06. macOS checks each program the first time it runs (`syspolicyd`, "GK performScan" in its
+log), one at a time, and holds the program at its launch until the check is done: the process sits at
+32 KB and 0% CPU. That evening agents' fresh npm installs on the SSD image (next-swc, esbuild, workerd,
+a.out) took 7-125 s each to check, and Luis's Orca 0.3.29 waited 171 s in that line before its own
+0.2 s check. So `run-lock.py` (every run, check or perf) waits while a check has gone on 5 s or more:
+it reads the last 30 minutes of syspolicyd's log for a "GK performScan" with no result ("GK
+evaluateScanResult", "scan failed", "Could not start XProtect scan") and no later scan on the same
+thread, says `waiting: macOS is still checking a new program (...)`, and `status` shows `macOS: a
+new-program check running ...`. One look (`log show`, about 1 s) is shared by every run for 15 s.
+After 20 minutes a run goes anyway with a note. `ORCA_GK_BUSY_S`, `ORCA_GK_WAIT_MAX_S`,
+`ORCA_GK_GUARD=0` change it. A stuck check usually means the SSD image is stalling: keep npm installs
+and big copies off it while Orca runs are queued.
+
 ## Running a session
 
 A session is `ORCA_SESSION=1` plus a disc whose profile is in `Data/Sys/Orca/` (boot refuses anything
