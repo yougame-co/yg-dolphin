@@ -4,6 +4,8 @@
 #   Tools/orca-publish-public.sh [ref] [message] [tag]   # defaults: origin/main, "Orca source, <date>"
 #   Tools/orca-publish-public.sh origin/main "Orca 0.3.28 (source of <release sha>)" orca-0.3.28
 #   DRY_RUN=1 Tools/orca-publish-public.sh ...           # build and check, don't push
+#   TAG_ONLY=1 Tools/orca-publish-public.sh <cleaned ref> "Orca 0.3.25 (source of <sha>)" orca-0.3.25
+#     # an older release: one commit on Dolphin 2609, published as a tag only (main doesn't move)
 #
 # Every released Orca is published and tagged orca-<version>; the app's "source" link points at
 # https://github.com/Lrosias/orca-netplay/tree/orca-<version>.
@@ -33,7 +35,7 @@ src=$(git rev-parse --verify "$REF^{commit}")
 idx=$(mktemp)
 trap 'rm -f "$idx"' EXIT
 GIT_INDEX_FILE=$idx git read-tree "$src"
-GIT_INDEX_FILE=$idx git rm -q --cached --ignore-unmatch -- "${EXCLUDE[@]}"
+GIT_INDEX_FILE=$idx git rm -q -f --cached --ignore-unmatch -- "${EXCLUDE[@]}"
 tree=$(GIT_INDEX_FILE=$idx git write-tree)
 
 # Denylist check on every line Orca added since the fork point (Dolphin's own text is not ours).
@@ -46,13 +48,17 @@ if [ -n "$hits" ]; then
   exit 1
 fi
 
-# Parent: the public repo's current head, or Dolphin 2609 for the first publish.
-git fetch -q "$PUBLIC_URL" main 2>/dev/null && parent=$(git rev-parse FETCH_HEAD) || parent=$BASE
+# Parent: the public repo's current head, or Dolphin 2609 for the first publish or an older release.
+if [ -n "${TAG_ONLY:-}" ]; then
+  parent=$BASE
+else
+  git fetch -q "$PUBLIC_URL" main 2>/dev/null && parent=$(git rev-parse FETCH_HEAD) || parent=$BASE
+fi
+msg=${2:-"Orca source, $(date -u +%Y-%m-%d)"} # no private hashes beyond a release's own
 if [ "$(git rev-parse "$parent^{tree}")" = "$tree" ]; then
   commit=$parent
   echo "Tree unchanged since the public head; reusing $commit."
 else
-  msg=${2:-"Orca source, $(date -u +%Y-%m-%d)"} # no private hashes beyond a release's own
   commit=$(GIT_AUTHOR_NAME=YouGame GIT_AUTHOR_EMAIL=noreply@yougame.co \
     GIT_COMMITTER_NAME=YouGame GIT_COMMITTER_EMAIL=noreply@yougame.co \
     git commit-tree "$tree" -p "$parent" -m "$msg")
@@ -63,9 +69,12 @@ if [ -n "${DRY_RUN:-}" ]; then
   git diff --stat "$parent" "$commit" | tail -1
   exit 0
 fi
-[ "$commit" = "$parent" ] || git push "$PUBLIC_URL" "$commit:refs/heads/main"
+[ -n "${TAG_ONLY:-}" ] || [ "$commit" = "$parent" ] || git push "$PUBLIC_URL" "$commit:refs/heads/main"
 if [ -n "$TAG" ]; then
-  git push "$PUBLIC_URL" "$commit:refs/tags/$TAG"
+  # Annotated, so the tag says what it is: the shipped code, with comments rewritten.
+  GIT_COMMITTER_NAME=YouGame GIT_COMMITTER_EMAIL=noreply@yougame.co git tag -f -a "$TAG" "$commit" -m \
+    "$msg. The code is identical to what shipped; comments were rewritten and personal information removed." >/dev/null
+  git push -f "$PUBLIC_URL" "refs/tags/$TAG"
   url="https://github.com/Lrosias/orca-netplay/tree/$TAG"
   # The app links here; it must answer without a sign-in.
   code=$(curl -s -o /dev/null -w '%{http_code}' -A 'Mozilla/5.0' "$url")
