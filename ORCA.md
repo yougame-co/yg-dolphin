@@ -1198,12 +1198,44 @@ rated once per set.
    same bytes. Casual: each game is a `finish`, the room stays. Ranked: each game is a `game-report`;
    when one player has 2 agreed wins both send `finish {winner}`; 7 games without that, `finish
    {void}`. The room settles each report by agreement on the outcome; different outcomes void the
-   game.
+   game. Ranked also says when each game began: `game-start` once the first frame with the fight's
+   fighters in is final (below).
 7. After a ranked set's verdict the room stays open for up to five minutes (`set-over`) so the
    players can talk; each Orca leaves when its player moves on ([On-screen UI](#on-screen-ui)).
 
-Leaving a ranked set is a forfeit (the room's 15 s grace). A desync voids the match in progress
-before the players part.
+Leaving a ranked set once game 1 began is a forfeit (the room's 15 s grace); a set left before
+game 1 began (a no-show, a leave or a crash while game 1's stage loads) is void and rates nobody.
+The room knows game 1 began from the leaver's own `game-start` (Orca 0.3.33+) or from a game it
+settled (rooms `game-lobby.ts` `reached`; YouGame `docs/ORCA_ONLINE_UX.md` "3B leaving mid-game").
+A desync voids the match in progress before the players part.
+
+`game-start`: each Orca sends `{"t":"game-start","matchId":M,"id":"g<start>"}` once per ranked game,
+when its fighters are in: the first frame of a fight with `SET_FIGHT_FLAGS`' `FIGHT_SEEN`, which
+`RankedSet::Step` sets when `ReadLiveFight` reads both fighters (Brawl and Project+). That is after
+the stage's loading image (`scMelee` starts under it: Brawl to frame ~169, Project+ to 27): headless
+over `bf-ranked-bo3.txt` and `pplus-ranked.txt` the fighters were in 283 frames (Brawl) and 140
+frames (Project+) after the fight's first frame. So a crash or a 15 s stall while the stage loads
+leaves the set void, as the rule says. `<start>` is still `SET_FIGHT_START`, the fight's first
+frame, the same on both machines and the id that game's `game-report` carries (the room doesn't need
+the two to match). The tracker names it only once the fighters' frame is final
+(`ResultsTracker::Confirm`'s `starts`), so a rollback re-run never sends one for a fight that didn't
+happen, and only for a fight begun after the opponent's plug frame, as the reports. It goes with the
+reports' queue (16 held at most, each up to 60 s until there is a room match) and only in a ranked
+queue room with its match current and the set still open (not after this side's `finish` or the
+verdict); once per game per match. A sudden death is the same game; a fight left without its results
+screen began all the same. The room answers nothing; a refusal (`command-error`, `action:
+"game-start"`) is logged and ignored. Project+ reads the live fight only for this: its records count
+no ledge grabs or time-up snapshot, as before. Tests:
+`OrcaRankedSet.AGameBeginsWhenItsFightersAreIn`, `TrackerSaysWhenEachGameBegan`,
+`AGameBeginsOnlyOnFinalFramesAfterThePlugFrame`, `OrcaRoom.GameStartIsTheRoomsMessage`;
+`Tools/orca/queue-e2e.mjs --q2 --scenario leave --in-game 1`.
+
+On screen the same rule holds (`SetEnd::Model::GameBegan`, from the tracker's starts and results):
+before the set's first game the leaver reads "You left · This set doesn't count" (a no-show "Time's
+up · You didn't pick in time · This set doesn't count") and the other player's countdown runs to "No
+contest"; from it on, "This set counts as a loss" and "They forfeit in". Tests:
+`OrcaSetEndCountdown.BeforeTheFirstGameTheCountdownIsToNoContest`,
+`OrcaSetEndNotice.LeavingBeforeTheFirstGameSaysItDoesNotCount`.
 
 | stdin | |
 |---|---|
@@ -1223,6 +1255,7 @@ before the players part.
 - ranked set: `{"q":"ranked","k":"set","out":"won"|"lost"|"void","by":"games"|"forfeit","score":[...],"r"?:[before,after],"rank"?:"..."}`
 
 Room messages sent (queue rooms only; friends rooms never begin or report): ranked
+`{"t":"game-start","matchId":M,"id":"g<start>"}` and
 `{"t":"game-report","matchId":M,"id":"g<n>","winner":"<participant id>","detail":D}` (or `"draw"` or
 `"void"`), casual `{"t":"finish","matchId":M,"winner":...,"detail":D}`, a set's `finish`. D is
 `{"f","st","c","s","to"}`: the session frame of the first final results-screen reading, the stage,
@@ -1272,10 +1305,11 @@ opponent unplugs; ranked stays locked while the set is open.
 - **No way back to the menus.** A toggled patch group conditioned on the header flips the character
   select's "back to the menu" exit to "character select again", so BACK reloads the select.
 - **Ranked's no-ready timer:** before the set's first fight, once one player has picked and the
-  other hasn't, 60 s; then that port is the no-show, whose own Orca leaves (a forfeit).
+  other hasn't, 60 s; then that port is the no-show, whose own Orca leaves. No game began, so the
+  room voids the set and rates nobody.
 - **Stalls:** a ranked player whose game has waited 15 s on the opponent's inputs, or whose opponent
   went silent, claims the set (`Online::ReportStall`); the room lets it stand when the other side has
-  been silent too.
+  been silent too, and voids it when the stalled player's game never said game 1 began.
 
 Test knob: `ORCA_TEST_QUEUE=casual|ranked[:<coin>][:q2|:solo]` writes the header as a queue room's
 host would, in a harness run or a dev room. Tests: `OrcaOnlineRules*`.
@@ -1613,9 +1647,11 @@ Everything Orca shows should look like the game drew it. Two ways:
 **Set end** (`Orca/UX/SetEnd.*`): VICTORY or DEFEAT with the set's score and the rating counting from
 the old number to the new one; casual's per-game YOU WON / YOU LOST; "<name> disconnected · They
 forfeit in" with a draining ring that follows the room's 15 s grace (or the 10 s silence limit); "You
-left · This set counts as a loss". After a ranked verdict the room stays open (**set over**): both
-games keep the session on the results screen with the page's chat; each Orca leaves the room when its
-results screen ends, when the player holds Z for 1.5 s, or, with the opponent gone, on Start. A
+left · This set counts as a loss". Before the set's first game began (its fighters in) the room voids
+a leave instead: "No contest in" and "This set doesn't count". After a ranked verdict the room stays
+open (**set over**): both games keep the session on the results screen with the page's chat; each
+Orca leaves the room when its results screen ends, when the player holds Z for 1.5 s, or, with the
+opponent gone, on Start. A
 ranked set's player comes back to their own character select not ready, so the page doesn't search
 by itself; a Start still held from the results screen readies nobody until it is let go.
 
