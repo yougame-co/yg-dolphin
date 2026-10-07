@@ -40,11 +40,14 @@ class CPUThreadGuard;
 // already holding that name, else the highest unused one, built as the game builds one. A duplicate
 // name gets its port number as the last character (SAND2). The player's controls are written into
 // it. A port with controls but no showable name gets "P<port>". A port with neither gets nothing.
+// A joined port with controls that wears a tag holding exactly what the game puts in a tag it makes
+// (rumble on, the default layout: a tag the player just made, or made again after a restart, since
+// tags made in the game last only until Orca closes) gets its controls written into that tag too.
 //
 // Determinism: writes depend only on emulated memory and the session's synced port list, and are
-// idempotent (a re-run frame writes the same bytes; a port that has a tag is left alone). Names and
-// controls come from the host (OnlineMatch.cpp, "Ports") and every machine has them before the
-// frame they apply from.
+// idempotent (a re-run frame writes the same bytes; a port that wears a tag is left alone once that
+// tag no longer holds the game's defaults). Names and controls come from the host (OnlineMatch.cpp,
+// "Ports") and every machine has them before the frame they apply from.
 //
 // TODO: the character select's name plate keeps "PLAYER n" until the game redraws it (its setter,
 // 0x8069B1CC, only runs when the player picks a tag). Needs a game-side code.
@@ -94,9 +97,10 @@ private:
 constexpr u32 CONTROLS_LAYOUT_SIZE = 0x2D;
 constexpr u32 CONTROLS_PROFILE_SIZE = 1 + CONTROLS_LAYOUT_SIZE;
 
-// One frame's writes for these ports. Returns how many ports got a tag. Profile bytes are clamped
-// to values the game's own menus could set (rumble 0 or 1, the flag bytes' own bits only, actions
-// up to 0xE), else the game's default, since profiles come from other machines.
+// One frame's writes for these ports. Returns how many ports got a tag (a worn default tag given
+// the port's controls is not counted). Profile bytes are clamped to values the game's own menus
+// could set (rumble 0 or 1, the flag bytes' own bits only, actions up to 0xE), else the game's
+// default, since profiles come from other machines.
 int ApplyNameTags(GuestMemory& memory, const std::vector<Events::PortInfo>& ports);
 
 // A profile as text (lowercase hex, 92 characters) and back. Parsing refuses any other size, and
