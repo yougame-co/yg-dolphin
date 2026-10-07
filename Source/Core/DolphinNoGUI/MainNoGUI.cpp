@@ -36,6 +36,7 @@
 #include "Core/DolphinAnalytics.h"
 #include "Core/HW/VideoInterface.h"
 #include "Core/Host.h"
+#include "Core/Orca/BootLogs.h"
 #include "Core/Orca/Branding.h"
 #include "Core/Orca/CrashNote.h"
 #include "Core/Orca/Disc.h"
@@ -93,6 +94,15 @@ static void PrintAlert(const char* text) noexcept
 #else
   Orca::CrashNote::WriteLine(stderr, Orca::BrandText(text));
 #endif
+}
+
+// At the game's first frame, embedded: the boot logs the app turned on go off (Orca/BootLogs.h).
+// On the CPU thread, so std::fprintf: a throw from there can't unwind (Orca/CrashNote.h).
+static void EndBootLogs()
+{
+  const std::string ended = Orca::BootLogs::EndAtFirstFrame();
+  if (!ended.empty())
+    std::fprintf(stderr, "Orca: boot logs off at the first frame: %s\n", ended.c_str());
 }
 
 #ifdef _WIN32
@@ -662,6 +672,8 @@ int main(const int raw_argc, char* raw_argv[])
     Orca::Status::SetErrorListener([](std::string_view, std::string_view sentence) {
       Embed::Out(fmt::format("error {}", sentence));
     });
+    // The app's boot logs have told the boot's story once the game draws (Orca/BootLogs.h).
+    Orca::Status::SetFirstFrameListener(EndBootLogs);
   }
   const int argc = static_cast<int>(arg_list.size());
   arg_list.push_back(nullptr);

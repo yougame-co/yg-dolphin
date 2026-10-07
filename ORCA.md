@@ -1686,6 +1686,12 @@ Orca --embed --parent <handle> --rect X Y W H [-u <user>] -e <disc> [-C ...]
   means the app is gone, and Orca quits. When the app's window goes away without a `quit`, Orca
   stops too.
 - Fd 1 is kept for the protocol; everything else Orca or Dolphin prints goes to stderr.
+- The netplay and rollback logs are on at INFO. The boot logs the app turns on with `-C` after boots
+  that died before their first frame (OSREPORT, IOS, IOS_SD and the memory map's MI) go off at the
+  game's first frame, saying `Orca: boot logs off at the first frame: <names>` (`Orca/BootLogs.h`):
+  past it they tell nothing about the boot, and Project+ reads its SD card all game, so they logged
+  about 0.7 MB a minute of play (Brawl about 50 KB). A category the player's Logger.ini turns on
+  stays on.
 
 **Coordinates** are physical pixels (the box's CSS pixels times `devicePixelRatio`). On Windows
 `rect` is relative to the parent's client area and Orca's window is a `WS_CHILD`, so it moves and
