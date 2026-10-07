@@ -56,7 +56,12 @@ and why. Paths are relative to `Source/Core/Core/` unless they start with `Sourc
 
 Orca builds like Dolphin (CMake). The targets that matter are `dolphin-emu-nogui` (what the YouGame
 desktop app runs) and `tests`. On macOS, `Tools/orca-package-macos.sh` makes **Orca.app**, the
-bundle the desktop app starts.
+bundle the desktop app starts. On Linux (x86-64), `Tools/orca-package-linux.sh` makes the
+`Orca/` folder the app's `linux-x64` build unpacks: `Orca/orca` (the NoGUI program), `Sys/`
+and the licences. It builds with no Qt, Vulkan, ALSA, PulseAudio (Cubeb opens the system's sound
+server itself), BlueZ, evdev or libudev, links libstdc++ statically, and refuses a program that
+needs a library beyond glibc, X11 and EGL/OpenGL, or a glibc newer than `ORCA_GLIBC_MAX` (2.35,
+Ubuntu 22.04's). Build it on a distribution that old, so it runs on the ones since.
 
 Differences from a stock Dolphin build:
 
@@ -327,7 +332,8 @@ Every release candidate passes, for Brawl and for Project+:
    (both Orcas print `K checksums matched` with K > 0), no `Desync at frame`, no `orca error`. A
    sync test runs one game against itself, so only this shows races between two peers' messages.
 6. **Mac and PC:** `xplat.py` with one Orca on each. Two Orcas on one machine share a compiler, an
-   architecture and a JIT; only this run sees two builds disagree.
+   architecture and a JIT; only this run sees two builds disagree. A release with a Linux build also
+   runs `xplat.py` between Linux and the PC: GCC builds that one, MSVC the PC's.
 
 Releases that could affect netcode performance also run a two-Orca performance comparison against
 the live build.
@@ -1854,7 +1860,7 @@ overlay docks its lines on the bar instead), native words on the results screen,
 
 The YouGame desktop app shows Orca inside its own window, at the page's player box, using the same
 line protocol as its libretro host. Code: `Source/Core/DolphinNoGUI/Embed.*`, `Platform.cpp`
-(commands), `PlatformWin32.cpp` and `PlatformMacos.mm` (the window). Test hosts:
+(commands), `PlatformWin32.cpp`, `PlatformMacos.mm` and `PlatformX11.cpp` (the window). Test hosts:
 `Tools/orca/embed-test-host.m` (macOS) and `embed-test-host-win.cpp`.
 
 ```
@@ -1863,7 +1869,8 @@ Orca --embed --parent <handle> --rect X Y W H [-u <user>] -e <disc> [-C ...]
 
 - `--parent`: on Windows the HWND as a decimal number; on macOS the window's **CGWindowID** (in
   Electron, the middle field of `win.getMediaSourceId()`), since an `NSView*` means nothing to
-  another process.
+  another process; on Linux the X11 window id (Electron's `getNativeWindowHandle()` when the app
+  runs as an X11 client: the YouGame app always does, through XWayland on a Wayland desktop).
 - Orca never shows dialogs while embedded: alerts go to stderr. stdin must stay open; a closed stdin
   means the app is gone, and Orca quits. When the app's window goes away without a `quit`, Orca
   stops too.
@@ -1878,8 +1885,10 @@ Orca --embed --parent <handle> --rect X Y W H [-u <user>] -e <disc> [-C ...]
 **Coordinates** are physical pixels (the box's CSS pixels times `devicePixelRatio`). On Windows
 `rect` is relative to the parent's client area and Orca's window is a `WS_CHILD`, so it moves and
 clips with the parent. On macOS `rect` is relative to the parent's frame (title bar included; the app
-adds the title bar's height to Y), and Orca polls the window's bounds at 120 Hz. The app sends `rect`
-only when the box moves inside the window.
+adds the title bar's height to Y), and Orca polls the window's bounds at 120 Hz. On Linux `rect` is
+relative to the parent X window (the app adds its menu bar's height to Y) and Orca's window is its
+child, so it moves, clips and hides with it as on Windows. The app sends `rect` only when the box
+moves inside the window.
 
 ### stdin
 
@@ -1926,7 +1935,7 @@ never pauses Orca: the page sends `blur`, the player's pad goes neutral, and the
 | `state running` / `state paused` | The answer to `pause` and `resume`. |
 | `unsupported <command> [N]` | A refused command. Not an error. |
 | `key escape` / `key fullscreen` | Windows only, if Orca's window somehow has the keyboard. |
-| `orca click` | Windows only: a mouse press on Orca's window, which the page never sees; the app focuses its page and sends `focus`. |
+| `orca click` | Windows only: a mouse press on Orca's window, which the page never sees; the app focuses its page and sends `focus`. On macOS and Linux the press reaches the page. |
 | `error <sentence>` | Something failed. Each `orca error` also gets an `error` twin. |
 | `orca state <state>` / `orca error <code> <sentence>` | Session status (`Orca/Status.h`). Forward every line that starts with `orca `. |
 | `orca menu ...`, `orca result ...`, `orca queue ...` | See [Online menu](#online-menu) and [Matchmaking](#matchmaking-and-results). |
@@ -1987,6 +1996,20 @@ background input, so that rule always applies.
   through (`ignoresMouseEvents`). Orca reads the keyboard from the HID state and pads through SDL;
   input counts while the last command was `focus`, the view is shown and the app is frontmost. The
   page sends `blur` when it wants keys for itself.
+- **Linux:** as on macOS, Orca never takes the keyboard or the mouse: its child window selects no
+  key or button events, so every press goes up the X tree to the app's window and its page, and the
+  page sees clicks on the picture itself (no `orca click`). The page sends the keyboard as a pad, as
+  on Windows. Input counts while the last command was `focus`, the view is shown and the X server
+  has the keyboard in the app's window (its focus events, checked twice a second too).
+
+### Linux window behaviour
+
+Orca's window is an X11 child of the app's window, in the app's visual, black until the first frame;
+Dolphin's GL context makes its own child inside it (`Common/GL/GLX11Window.cpp`). The app forces
+itself onto X11 (`--ozone-platform=x11`), so a Wayland desktop runs both through XWayland. X errors
+are logged to stderr instead of ending Orca, because the app's window can go away between two
+requests that name it; Orca stops when that window is destroyed, as on Windows. While Orca's window
+is hidden or the app's window is unmapped, the presenter is told the surface is out of sight.
 
 ### macOS window behaviour
 
