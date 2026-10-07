@@ -1577,9 +1577,11 @@ and scMelee's first frames under the loading image). A 2-field hold is 33.367 ms
 did. They are emulation, the same on every machine (the session's own split puts all of them under
 "game loads"). Hitches here, stalls, rollbacks and snapshot cost are level or better.
 
-**Left for release:** `RSBE01.jitwarm` blocks over `0x80023B84-0x8002402C` recorded with Brawl's
-words now fail their hash and are skipped (a little less warm-up, no correctness issue): regenerate
-the warm-up lists. Windows build, its present timing (D3D) and the Mac <-> PC match.
+**Release (0.3.31, 2026-10-07):** the v-sync move ships alone as 0.3.31 (kCompatVersion 22), on
+0.3.30 (`a65d5995d3`). The warm-up seed lists were re-recorded on the release's code (the old ones'
+blocks over `0x80023B84-0x8002402C` held Brawl's words and were skipped): Brawl `bf-two-new.txt` to
+frame 11500 (28,759 + 2,716 blocks, 27 s headless), Project+ `pplus-1v1.txt` to 1200 (26,946, 7 s).
+Windows: its build, D3D present timing and a Mac <-> PC match are the PC's.
 
 ## Music switch
 
