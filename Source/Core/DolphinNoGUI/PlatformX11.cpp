@@ -47,12 +47,16 @@ std::atomic<int> s_x_errors{0};
 // last line. A lost connection to the X server still ends the process (Xlib's I/O error handler).
 int LogXError(Display* display, XErrorEvent* event)
 {
-  s_x_errors.fetch_add(1, std::memory_order_relaxed);
+  // Once the app's window is gone, every frame and every mouse move can answer one: the log keeps
+  // the first 20, then one in a thousand.
+  const int count = s_x_errors.fetch_add(1, std::memory_order_relaxed) + 1;
+  if (count > 20 && count % 1000 != 0)
+    return 0;
   char text[160] = "";
   XGetErrorText(display, event->error_code, text, sizeof(text));
-  std::fprintf(stderr, "Orca: X error %d (%s) on request %d.%d, resource 0x%lx\n",
+  std::fprintf(stderr, "Orca: X error %d (%s) on request %d.%d, resource 0x%lx (%d so far)\n",
                event->error_code, text, event->request_code, event->minor_code,
-               static_cast<unsigned long>(event->resourceid));
+               static_cast<unsigned long>(event->resourceid), count);
   return 0;
 }
 
@@ -79,6 +83,7 @@ private:
   void ProcessEvents();
   void ProcessEmbeddedEvent(const XEvent& event);
   bool AppHasFocus();
+  void UpdateAppState();
   void UpdateEmbedFocus();
   void UpdateSurfaceVisible();
 
@@ -104,10 +109,14 @@ private:
   bool m_embed_focus = true;
   // The keyboard is in the app's window (its FocusIn and FocusOut, checked with the X server).
   bool m_app_focused = false;
-  // The app's window is mapped: not minimized by a window manager that unmaps what it minimizes.
-  bool m_app_mapped = true;
+  // The app's window is viewable: it and its window manager's frame are mapped, so not minimized and
+  // on the workspace shown.
+  bool m_app_viewable = true;
   bool m_surface_visible = true;
-  std::chrono::steady_clock::time_point m_next_focus_check{};
+  // Orca's window's size as the presenter last resized to it: a move alone needs no resize.
+  int m_embed_width = 0;
+  int m_embed_height = 0;
+  std::chrono::steady_clock::time_point m_next_app_check{};
 };
 
 PlatformX11::~PlatformX11()
@@ -211,18 +220,35 @@ bool PlatformX11::InitEmbedded()
   }
   m_root = app.root;
 
-  // The app's own visual and colormap, which a window of another depth could not be a child of.
-  // Black until the first frame; opaque black where the app's window has an alpha channel. Dolphin's
-  // GL context makes a child of this window in the visual EGL picks (Common/GL/GLX11Window.cpp).
+  // A 24-bit TrueColor visual of its own, with its own colormap and border, so it may sit in an app
+  // window of any depth (in a 32-bit one the game's alpha would reach the compositor); the app's own
+  // visual where the server has none. Black until the first frame. Dolphin's GL context makes a
+  // child of this window in the visual EGL picks (Common/GL/GLX11Window.cpp).
   const int errors = s_x_errors.load(std::memory_order_relaxed);
   XSetWindowAttributes attributes = {};
-  attributes.background_pixel = app.depth == 32 ? 0xff000000UL : BlackPixelOfScreen(app.screen);
   attributes.border_pixel = 0;
-  attributes.colormap = app.colormap;
+  XVisualInfo own = {};
+  Visual* visual = app.visual;
+  int depth = app.depth;
+  if (XMatchVisualInfo(m_display, XScreenNumberOfScreen(app.screen), 24, TrueColor, &own))
+  {
+    visual = own.visual;
+    depth = own.depth;
+    attributes.colormap = XCreateColormap(m_display, m_parent, visual, AllocNone);
+    attributes.background_pixel = 0;  // TrueColor black
+  }
+  else
+  {
+    attributes.colormap = app.colormap;
+    attributes.background_pixel =
+        app.depth == 32 ? 0xff000000UL : BlackPixelOfScreen(app.screen);  // opaque black
+  }
   const Embed::Rect& r = m_embed.rect;
   m_window = XCreateWindow(m_display, m_parent, r.x, r.y, static_cast<unsigned int>(r.w),
-                           static_cast<unsigned int>(r.h), 0, app.depth, InputOutput, app.visual,
+                           static_cast<unsigned int>(r.h), 0, depth, InputOutput, visual,
                            CWBackPixel | CWBorderPixel | CWColormap, &attributes);
+  m_embed_width = r.w;
+  m_embed_height = r.h;
   // Only the structure of Orca's window: no keys and no mouse, so every press goes up the tree to
   // the app's window. Dolphin's GL context selects the same on it.
   XSelectInput(m_display, m_window, StructureNotifyMask);
@@ -231,7 +257,7 @@ bool PlatformX11::InitEmbedded()
   XSelectInput(m_display, m_parent, StructureNotifyMask | FocusChangeMask);
   m_embed_visible = !m_embed.too_small;  // Hidden until a big enough rect (Embed.h).
   if (m_embed_visible)
-    XMapWindow(m_display, m_window);
+    XMapRaised(m_display, m_window);
   XSync(m_display, False);
   if (s_x_errors.load(std::memory_order_relaxed) != errors)
   {
@@ -240,6 +266,7 @@ bool PlatformX11::InitEmbedded()
     return false;
   }
 
+  m_app_viewable = app.map_state == IsViewable;
   m_app_focused = AppHasFocus();
   UpdateEmbedFocus();
   UpdateSurfaceVisible();
@@ -263,13 +290,14 @@ void PlatformX11::MainLoop()
     UpdateWindowPosition();
     if (IsEmbedded())
     {
-      // The app's window reports its own focus changes; a window manager that moves the keyboard
-      // to its frame instead sends it none, so the server is asked again twice a second too.
+      // The app's window reports its own focus and mapping; a window manager that moves the keyboard
+      // to its frame, or unmaps the frame (another workspace), sends it nothing, so the server is
+      // asked again twice a second too.
       const auto now = std::chrono::steady_clock::now();
-      if (now >= m_next_focus_check)
+      if (now >= m_next_app_check)
       {
-        m_next_focus_check = now + std::chrono::milliseconds(500);
-        m_app_focused = AppHasFocus();
+        m_next_app_check = now + std::chrono::milliseconds(500);
+        UpdateAppState();
       }
       UpdateEmbedFocus();
     }
@@ -300,18 +328,27 @@ void PlatformX11::UpdateWindowPosition()
                &m_window_height, &borderDummy, &depthDummy);
 }
 
+// The window commands act only when embedded: ORCA_TEST_COMMANDS alone sends them too, and the
+// window then is Dolphin's own top-level one, the window manager's to place.
 void PlatformX11::EmbedSetRect(const Embed::Rect& r)
 {
+  if (!IsEmbedded())
+    return;
   XMoveResizeWindow(m_display, m_window, r.x, r.y, static_cast<unsigned int>(r.w),
                     static_cast<unsigned int>(r.h));
+  // Back above the app's own children, as Windows' HWND_TOP: Chromium's GPU process may make a new
+  // one of its own (after a GPU reset), stacked over the game.
+  XRaiseWindow(m_display, m_window);
   XFlush(m_display);
 }
 
 void PlatformX11::EmbedSetVisible(bool visible)
 {
+  if (!IsEmbedded())
+    return;
   m_embed_visible = visible;
   if (visible)
-    XMapWindow(m_display, m_window);
+    XMapRaised(m_display, m_window);
   else
     XUnmapWindow(m_display, m_window);
   XFlush(m_display);
@@ -321,6 +358,8 @@ void PlatformX11::EmbedSetVisible(bool visible)
 
 void PlatformX11::EmbedSetFocus(bool focus)
 {
+  if (!IsEmbedded())
+    return;
   m_embed_focus = focus;
   // A "focus" follows a click or a key in the app's window: ask the server now rather than wait for
   // the window's event.
@@ -332,17 +371,37 @@ void PlatformX11::EmbedSetFocus(bool focus)
 // keyboard is in the app's window, the game is shown, and the app's last word was "focus".
 void PlatformX11::UpdateEmbedFocus()
 {
-  m_window_focus = m_embed_visible && m_embed_focus && m_app_focused && m_app_mapped;
+  m_window_focus = m_embed_visible && m_embed_focus && m_app_focused && m_app_viewable;
+}
+
+// What the server says about the app's window now: whether it is viewable and has the keyboard.
+void PlatformX11::UpdateAppState()
+{
+  XWindowAttributes app = {};
+  m_app_viewable = XGetWindowAttributes(m_display, m_parent, &app) && app.map_state == IsViewable;
+  m_app_focused = AppHasFocus();
+  UpdateSurfaceVisible();
 }
 
 // Whether the X server has the keyboard in the app's window: on it, on a window inside it, or on the
-// window manager's frame around it.
+// window manager's frame around it. With PointerRoot focus the keyboard follows the pointer, so the
+// top-level window under the pointer stands for it.
 bool PlatformX11::AppHasFocus()
 {
   Window focus = X_None;
   int revert = 0;
   XGetInputFocus(m_display, &focus, &revert);
-  if (focus == X_None || focus == PointerRoot || focus == m_root)
+  if (focus == PointerRoot)
+  {
+    Window root = X_None;
+    Window child = X_None;
+    int root_x = 0, root_y = 0, x = 0, y = 0;
+    unsigned int mask = 0;
+    if (!XQueryPointer(m_display, m_root, &root, &child, &root_x, &root_y, &x, &y, &mask))
+      return false;
+    focus = child;
+  }
+  if (focus == X_None || focus == m_root)
     return false;
   // Whether `from` is `target` or inside it, walking up to the root.
   const auto inside = [this](Window from, Window target) {
@@ -365,11 +424,11 @@ bool PlatformX11::AppHasFocus()
   return inside(focus, m_parent) || inside(m_parent, focus);
 }
 
-// Out of sight (hidden by the app, or the app's window unmapped), the presenter skips what only a
-// visible window needs (VideoCommon::Presenter::SetSurfaceVisible).
+// Out of sight (hidden by the app, or the app's window not viewable), the presenter skips what only
+// a visible window needs (VideoCommon::Presenter::SetSurfaceVisible).
 void PlatformX11::UpdateSurfaceVisible()
 {
-  const bool visible = m_embed_visible && m_app_mapped;
+  const bool visible = m_embed_visible && m_app_viewable;
   if (visible == m_surface_visible)
     return;
   m_surface_visible = visible;
@@ -381,7 +440,9 @@ void PlatformX11::ProcessEvents()
 {
   XEvent event;
   KeySym key;
-  for (int num_events = XPending(m_display); num_events > 0; num_events--)
+  // Asked again before each read: nothing else on this connection takes events off the queue, so
+  // XNextEvent never waits.
+  while (XPending(m_display) > 0)
   {
     XNextEvent(m_display, &event);
     if (IsEmbedded())
@@ -484,8 +545,14 @@ void PlatformX11::ProcessEmbeddedEvent(const XEvent& event)
   switch (event.type)
   {
   case ConfigureNotify:
-    if (window == m_window && g_presenter)
+    // Sent for a move too: the presenter resizes only to a new size.
+    if (window == m_window && g_presenter &&
+        (event.xconfigure.width != m_embed_width || event.xconfigure.height != m_embed_height))
+    {
+      m_embed_width = event.xconfigure.width;
+      m_embed_height = event.xconfigure.height;
       g_presenter->ResizeSurface();
+    }
     break;
   case FocusIn:
   case FocusOut:
@@ -495,10 +562,7 @@ void PlatformX11::ProcessEmbeddedEvent(const XEvent& event)
   case MapNotify:
   case UnmapNotify:
     if (window == m_parent)
-    {
-      m_app_mapped = event.type == MapNotify;
-      UpdateSurfaceVisible();
-    }
+      UpdateAppState();
     break;
   case DestroyNotify:
     // The app's window was destroyed, and Orca's with it: stop, as on Windows. The app also says

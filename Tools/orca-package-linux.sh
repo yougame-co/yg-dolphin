@@ -19,10 +19,15 @@
 # script warns while that tag is not public yet. Without ORCA_VERSION the zip is a *-dev.zip.
 #
 # Build it on the oldest distribution it must run on (ORCA_GLIBC_MAX, default 2.35: Ubuntu 22.04,
-# Debian 12, SteamOS 3 and everything since): glibc is the one library it cannot carry. Needs
-# cmake, ninja, gcc/g++ 11 or newer, zip, binutils, and the X11, Xi, Xrandr and EGL/OpenGL headers
-# (Debian/Ubuntu: libx11-dev libxi-dev libxrandr-dev libegl-dev libgl-dev).
+# Debian 12, SteamOS 3 and everything since): glibc is the one library it cannot carry. Needs git,
+# cmake, ninja, pkg-config, zip, binutils, GCC 12 or newer (Orca's CMakeLists refuses 11; on Ubuntu
+# 22.04 install gcc-12 g++-12 and run with CC=gcc-12 CXX=g++-12), and the headers of X11, Xi,
+# Xrandr, EGL/OpenGL and the sound servers Cubeb opens at run time (Debian/Ubuntu: libx11-dev
+# libxi-dev libxrandr-dev libegl-dev libgl-dev libpulse-dev libasound2-dev). Without the PulseAudio
+# headers Cubeb has no Linux backend and Orca would play silent, so the build is refused.
 set -euo pipefail
+# readelf and objdump print what is parsed below in the C locale only.
+export LC_ALL=C
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BUILD_DIR="${1:-$ROOT/build-orca-linux}"
@@ -37,7 +42,7 @@ fail() {
 
 [ "$(uname -s)" = Linux ] || fail "Linux only"
 [ "$(uname -m)" = x86_64 ] || fail "x86-64 only (the app's linux-x64 build)"
-for tool in cmake ninja zip readelf objdump objcopy strip; do
+for tool in git cmake ninja pkg-config zip readelf objdump objcopy strip; do
   command -v "$tool" >/dev/null || fail "needs $tool"
 done
 mkdir -p "$OUT_DIR"
@@ -79,8 +84,10 @@ fi
 # The same switches as the Windows and macOS releases (no frame-dump encoder, none of the
 # frontends' extras), plus what keeps the program to libraries every desktop Linux has: no ALSA or
 # PulseAudio backends of Dolphin's own (Cubeb, the default, opens the sound server at run time), no
-# BlueZ, evdev or udev (the app hands Orca its controllers), and libstdc++ linked in. Configured on
-# every run so an older cache can't slip other settings in.
+# BlueZ, evdev or udev (the app hands Orca its controllers; libusb and hidapi would link libudev
+# whenever its headers are there), and libstdc++ linked in. -g: symbols for the .debug file beside
+# the zip, which change no generated code. Configured on every run so an older cache can't slip
+# other settings in.
 cmake -S "$ROOT" -B "$BUILD_DIR" -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DENABLE_QT=OFF -DENABLE_NOGUI=ON -DORCA_VERSION="$VERSION" \
@@ -89,8 +96,11 @@ cmake -S "$ROOT" -B "$BUILD_DIR" -G Ninja \
   -DUSE_RETRO_ACHIEVEMENTS=OFF -DUSE_MGBA=OFF -DUSE_UPNP=OFF -DENABLE_VULKAN=OFF \
   -DENABLE_CLI_TOOL=OFF -DENABLE_TESTS=OFF -DUSE_SANITIZERS=OFF \
   -DENABLE_ALSA=OFF -DENABLE_PULSEAUDIO=OFF -DENABLE_BLUEZ=OFF -DENABLE_EVDEV=OFF \
-  -DENABLE_HWDB=OFF \
+  -DENABLE_HWDB=OFF -DCMAKE_DISABLE_FIND_PACKAGE_LIBUDEV=ON \
+  -DCMAKE_C_FLAGS="-g" -DCMAKE_CXX_FLAGS="-g" \
   -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc" >/dev/null
+grep -q '^USE_PULSE:INTERNAL=1' "$BUILD_DIR/CMakeCache.txt" ||
+  fail "Cubeb found no PulseAudio headers (libpulse-dev): Orca would play no sound"
 cmake --build "$BUILD_DIR" --target dolphin-nogui
 
 if [ "$RELEASE" = 1 ]; then
@@ -105,12 +115,17 @@ BIN="$BUILD_DIR/Binaries/dolphin-emu-nogui"
 grep -q "$COMMIT" "$BUILD_DIR/Source/Core/Common/scmrev.h" ||
   fail "scmrev.h does not name $COMMIT: the compatibility key would be another build's"
 
-# Self-contained: what the program loads ships with every desktop Linux.
+# Self-contained: what the program loads ships with every desktop Linux. And it has its window: a
+# build that found no X11 or EGL headers has only Dolphin's framebuffer platform, which CMake only
+# warns about.
+NEEDED="$(readelf -d "$BIN" | sed -n 's/.*(NEEDED).*\[\(.*\)\]$/\1/p')"
 ALLOWED='^(libc|libm|libdl|libpthread|librt|ld-linux-x86-64|libX11|libXi|libXrandr|libXext|libxcb|libEGL|libOpenGL|libGL|libGLX)\.so'
-FOREIGN="$(readelf -d "$BIN" | awk '/\(NEEDED\)/ {gsub(/[][]/, "", $5); print $5}' |
-  grep -Ev "$ALLOWED" || true)"
+FOREIGN="$(printf '%s\n' "$NEEDED" | grep -Ev "$ALLOWED" | grep -v '^$' || true)"
 [ -z "$FOREIGN" ] || fail "Orca needs libraries a player may not have:
 $FOREIGN"
+for lib in libX11.so.6 libXi.so.6 libEGL.so.1; do
+  printf '%s\n' "$NEEDED" | grep -qx "$lib" || fail "Orca does not link $lib: was it built without its headers?"
+done
 GLIBC="$(objdump -T "$BIN" | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -n 1)"
 [ "$(printf '%s\n%s\n' "$GLIBC" "$GLIBC_MAX" | sort -V | tail -n 1)" = "$GLIBC_MAX" ] ||
   fail "Orca needs glibc $GLIBC, newer than $GLIBC_MAX: build it on an older distribution"
@@ -125,10 +140,14 @@ DEBUG="$OUT_DIR/orca-$VERSION-linux-x64.debug"
 objcopy --only-keep-debug "$PKG/orca" "$DEBUG"
 strip --strip-unneeded "$PKG/orca"
 objcopy --add-gnu-debuglink="$DEBUG" "$PKG/orca"
-# Real files only (cp -L): a link would unpack differently from one player to the next.
-# Sys/Themes and Sys/Resources are the Qt UI's.
+# Real files only (cp -L): a link would unpack differently from one player to the next. Minus what
+# only the Qt UI shows, as in the macOS bundle (DolphinNoGUI/CMakeLists.txt): the themes and the
+# Resources images, never the on-screen font.
 cp -RL "$BUILD_DIR/Binaries/Sys" "$PKG/Sys"
-rm -rf "$PKG/Sys/Themes" "$PKG/Sys/Resources"
+rm -rf "$PKG/Sys/Themes"
+find "$PKG/Sys/Resources" -maxdepth 1 -type f \
+  \( -name 'Flag_*' -o -name 'Platform_*' -o -name 'achievements_*' -o -name 'dolphin_logo*' \
+  -o -name 'isoproperties_*' -o -name 'nobanner*' \) -delete
 [ -z "$(find "$PKG" -type l)" ] || fail "a symbolic link is left in $PKG"
 for profile in RSBE01 PPLUS32; do
   [ -s "$PKG/Sys/Orca/$profile.ini" ] || fail "no Sys/Orca/$profile.ini: the app refuses an Orca without it"

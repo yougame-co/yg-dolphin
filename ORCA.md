@@ -59,9 +59,10 @@ desktop app runs) and `tests`. On macOS, `Tools/orca-package-macos.sh` makes **O
 bundle the desktop app starts. On Linux (x86-64), `Tools/orca-package-linux.sh` makes the
 `Orca/` folder the app's `linux-x64` build unpacks: `Orca/orca` (the NoGUI program), `Sys/`
 and the licences. It builds with no Qt, Vulkan, ALSA, PulseAudio (Cubeb opens the system's sound
-server itself), BlueZ, evdev or libudev, links libstdc++ statically, and refuses a program that
-needs a library beyond glibc, X11 and EGL/OpenGL, or a glibc newer than `ORCA_GLIBC_MAX` (2.35,
-Ubuntu 22.04's). Build it on a distribution that old, so it runs on the ones since.
+server itself, so its PulseAudio headers must be there at build time), BlueZ, evdev or libudev,
+links libstdc++ statically, and refuses a program that needs a library beyond glibc, X11 and
+EGL/OpenGL, one that lacks X11, Xi or EGL, or a glibc newer than `ORCA_GLIBC_MAX` (2.35, Ubuntu
+22.04's). Build it on a distribution that old, with GCC 12 or newer, so it runs on the ones since.
 
 Differences from a stock Dolphin build:
 
@@ -2004,12 +2005,17 @@ background input, so that rule always applies.
 
 ### Linux window behaviour
 
-Orca's window is an X11 child of the app's window, in the app's visual, black until the first frame;
-Dolphin's GL context makes its own child inside it (`Common/GL/GLX11Window.cpp`). The app forces
+Orca's window is an X11 child of the app's window, in a 24-bit visual of its own (so the app's
+window may have any depth), black until the first frame and raised above the app's other children
+on every `rect` and `show`; Dolphin's GL context makes its own child inside it
+(`Common/GL/GLX11Window.cpp`, which no longer discards the connection's queued events: it shares
+the connection with the main loop). The app forces
 itself onto X11 (`--ozone-platform=x11`), so a Wayland desktop runs both through XWayland. X errors
 are logged to stderr instead of ending Orca, because the app's window can go away between two
-requests that name it; Orca stops when that window is destroyed, as on Windows. While Orca's window
-is hidden or the app's window is unmapped, the presenter is told the surface is out of sight.
+requests that name it (the first 20, then one in a thousand); Orca stops when that window is
+destroyed, as on Windows. While Orca's window is hidden or the app's window is not viewable
+(minimized, another workspace: checked twice a second too), the presenter is told the surface is
+out of sight. With `ORCA_TEST_COMMANDS` and no embedding, the window commands do nothing.
 
 ### macOS window behaviour
 
