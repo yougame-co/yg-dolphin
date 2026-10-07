@@ -2515,7 +2515,19 @@ void ConfirmResults(Match& match)
       Core::DisplayMessage("Your opponent didn't pick a character in time", 6000);
     }
   }
-  for (const Orca::UX::GameResult& r : Orca::UX::Tracker().Confirm(confirmed, plug))
+  std::vector<int> starts;
+  const std::vector<Orca::UX::GameResult> results =
+      Orca::UX::Tracker().Confirm(confirmed, plug, &starts);
+  // A ranked game began (its fighters in, after the stage's loading image), at the same final frame
+  // on both machines: the room learns the set reached it, so a leave from here on loses the set.
+  // Sent ahead of results read from the same frames; the room keeps only this player's first
+  // game-start of the set and needs no order between them.
+  for (const int start : starts)
+  {
+    NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: a ranked game began (the fight from frame {})", start);
+    Orca::Online::ReportGameStart(start);
+  }
+  for (const Orca::UX::GameResult& r : results)
   {
     Orca::Net::GameReport report;
     report.kind = r.kind == Orca::UX::GameResult::Kind::Win  ? Orca::Net::GameReport::Kind::Win :
