@@ -619,8 +619,8 @@ std::optional<std::vector<u8>> OwnControlsReader::Read(const GuestMemory& m,
 std::optional<std::vector<u8>> NameTagsFrame(GuestMemory& m,
                                              const std::vector<Events::PortInfo>& write_ports,
                                              const std::vector<Events::PortInfo>& ports,
-                                             OwnControlsReader* reader,
-                                             const std::vector<u8>& own, u64 resyncs)
+                                             OwnControlsReader* reader, const std::vector<u8>& own,
+                                             u64 resyncs)
 {
   ApplyNameTags(m, write_ports);
   // After the writes: a tag that just got the player's controls reads as those, never as the

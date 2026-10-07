@@ -1835,8 +1835,8 @@ TEST(OrcaUXNameTags, ATagThePlayerMakesAgainWearsTheirOwnControls)
   const int writes = m.writes;
   EXPECT_EQ(ApplyNameTags(m, ports), 0);
   EXPECT_EQ(m.writes, writes);
-  // A friend in someone else's game who picks a tag at the defaults: the same, and the same bytes on
-  // either machine whoever is remote.
+  // A friend in someone else's game who picks a tag at the defaults: the same, and the same bytes
+  // on either machine whoever is remote.
   FakeBrawl host, joiner;
   for (FakeBrawl* g : {&host, &joiner})
   {
