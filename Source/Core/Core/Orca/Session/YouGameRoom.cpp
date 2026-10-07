@@ -2956,6 +2956,8 @@ struct YouGameRoom::Impl
         End("Your friend needs to sign in to YouGame to share their game", "signed_out");
       else if (reason == "refused")
         End("YouGame couldn't pass your friend's game to you", "network");
+      else if (reason == "room_full")
+        End("Your friend's game already has another friend in it", "room_full");
       else
         End("Your friend's game disconnected you", "network");
       return;

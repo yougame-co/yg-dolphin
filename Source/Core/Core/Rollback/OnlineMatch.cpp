@@ -923,6 +923,20 @@ void HostEvents(Core::System& system, Match& match)
                      event.host ? " that says it hosts" : "");
         continue;
       }
+      // One friend at a time. A friend still rebuilding the replay acknowledges nothing past its
+      // keyframe, which holds what the host sends everyone (Session::SendPacket, take_up_to): a
+      // friend already playing would stall for the whole rebuild and both would be dropped.
+      if (std::any_of(match.seated.begin(), match.seated.end(),
+                      [&event](int seat) { return seat != event.seat; }) ||
+          std::any_of(match.waiting.begin(), match.waiting.end(),
+                      [&event](const auto& waiting) { return waiting.first != event.seat; }))
+      {
+        NOTICE_LOG_FMT(ROLLBACK,
+                       "Drop-in: {} arrived for port {} with another friend in: room_full",
+                       event.name, event.seat + 1);
+        Orca::Online::DropPeer(event.seat, "room_full");
+        continue;
+      }
       NOTICE_LOG_FMT(ROLLBACK, "Drop-in: {} arrived for port {}", event.name, event.seat + 1);
       Core::DisplayMessage(fmt::format("{} is joining on port {}", event.name, event.seat + 1), 4000);
       match.waiting[event.seat] = {event.name, event.controls, event.queue};
