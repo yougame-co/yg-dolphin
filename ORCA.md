@@ -757,6 +757,12 @@ Offered for Brawl (any revision) and Project+; without the cap the line answers 
 - Two Orcas, one with the music off (`queue-e2e.mjs --q2 --queue casual --music-off ada
   --dump-audio`): Brawl passed with 102 checksums matched on each side, Project+ with 103, no
   desync; the music-off side's dump was silent for 71 of 157 s (Brawl) against 25 for the other.
+- Again on the 0.3.29 candidate: hashlogs on = off (Brawl Rev 2 frames 0-10807, Project+ 0-9003),
+  Rev 1 off = Rev 2 on (0-10819); a sync test off, 0 RAM mismatches; two Orcas, Project+, one off:
+  104 checksums each. A voice probe of the Brawl run with it off: the results screen's music is the
+  stream pair too (the announcer and the crowd are normal voices), and no stream voice of the run
+  sends to an AUX bus. Cost: instructions retired by the whole run to frame 9000 (a snapshot every
+  frame from 5900) are the same on and off, within the 0.1% between runs.
 
 ## Match start
 

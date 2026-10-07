@@ -1483,6 +1483,42 @@ earlier Brawl attempt failed before matching (bo never left its main menu in 60 
 on, nothing music-related) and one died when the worktree SSD image dropped mid-run; the rerun ran
 from the internal disk.
 
+**Review, 2026-10-06 (rebased on the 0.3.29 candidate, `8e2035cf3e`).** A stream voice is split
+whether or not it is running when its parameter block is read: an old AXWii applies per-ms updates
+inside the frame and could start it after the check (Brawl's ucode isn't one of those, so nothing
+leaked); a stopped voice adds nothing. A `static_assert` keeps the 96-sample copies inside the main
+buses (the first build's overrun). Brawl Rev 2 and Project+ now offer 16 caps, the most a desktop app
+before this release reads; the app and page released with the switch read 24.
+
+Runs on the rebased build (internal disk; the worktree's SSD image was stalling, `disk11` APFS
+flushes up to 19 s, and processes started with their cwd on it hung in `_dyld_start`):
+
+- Hashlogs: Brawl Rev 2 on = off, frames 0-10807; Rev 1 off = Rev 2 on, 0-10819 (Rev 1 reads as
+  Rev 2); Project+ on = off, 0-9003. Sync test off (Brawl to 9000): 60851 re-run frames, 0 RAM
+  mismatches.
+- Two Orcas, Project+ casual q2, ada off: PASS, 104 checksums each side, 0 rollbacks, no desync.
+- The stdin gate (headless, `ORCA_TEST_COMMANDS`): the offer is the 16 caps with `music`;
+  `music off` before any caps answer, and with caps that leave it out, answer `unsupported music`;
+  with it, `Music: off on this machine`; a repeat logs nothing; `music loud` and `music on extra`
+  are refused.
+- Audio, on vs off: Brawl as before (match effects median off/on 0.77, music-only seconds to the
+  0.7 floor, 655347 of 655360 AI blocks quiet); Project+ 88 music-only seconds silenced, effects
+  median 0.83.
+- Voice probe (throwaway build), Brawl default inputs, off: scVsResult is frames 9861-10277; a new
+  stream pair (main L only / main R only, the same MEM2 ring buffers) starts there and plays to the
+  scene's end, so the results music is muted like any other. Beside it: a mono 22 kHz voice panned
+  center for about 2 s (the announcer), voices with AUX B/C sends (the crowd). Over the whole run all
+  294 sampled stream voices had AUX A/B/C volumes 0 and `mixer_control` 1 or 2; no normal voice was
+  panned hard left or right. Other stages weren't probed.
+- Cost: `time -l` instructions retired by the whole process, Brawl to frame 9000 with a snapshot
+  every frame from 5900, three each: on 236.79/236.61/236.55 G, off 236.53/236.51/236.76 G (the
+  switch's work is a few microseconds a frame, under the run-to-run noise). Frame times
+  (`perf.mjs`, frames 6000-9000): plain with snapshots, mean on 2.65/2.70 ms, off 2.66/2.74; under a
+  k=7 sync test, p50 40.5/40.1 on and 40.6/40.9 off. Both sync-test runs with it off had a tail (96 and
+  38 frames over 50 ms, against 2 and 0 on), far more than the switch's work could cost; the second
+  overlapped ten flagged SSD stalls (`run-lock` marked both perf runs tainted). The release's
+  two-Orca perf gate runs with one side off.
+
 ## Match start
 
 Luis, 2026-10-03 (on his Windows PC): the first seconds of every match (the countdown and just
