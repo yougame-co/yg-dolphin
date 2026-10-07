@@ -80,6 +80,11 @@ const SHOTS_FROM = opt("--shots-from", "1500");
 const SHOTS_WHO = (opt("--shots-who", "ada") || "").split(",");
 const SHOTS_SIZE = opt("--shots-size", "640x528");
 const SHOTS_OUT = opt("--shots-out");
+// --music-off ada|bo|ada,bo: that player's Music switch is off (`music off` after the caps answer,
+// ORCA.md "Music switch"). --dump-audio: each Orca writes what it plays to
+// user-<name>/Dump/Audio/dspdump.wav (keep it with --keep).
+const MUSIC_OFF = (opt("--music-off", "") || "").split(",").filter(Boolean);
+const DUMP_AUDIO = argv.includes("--dump-audio");
 // How long after a ranked set's verdict the page sends the new rating (`queue rating`).
 const RATING_AFTER_MS = Number(opt("--rating-after", "1500"));
 const Q2 = argv.includes("--q2");
@@ -448,6 +453,9 @@ class Side {
       "Logger.Options.Verbosity=3",
       "-C",
       "Logger.Options.WriteToConsole=True",
+      ...(DUMP_AUDIO
+        ? ["-C", "Dolphin.DSP.DumpAudio=True", "-C", "Dolphin.DSP.DumpAudioSilent=True"]
+        : []),
       // --shots 0: keep Dolphin's "Screenshot saved" OSD messages out of the scenario's shots.
       ...(shots && SHOTS === "0" ? ["-C", "Dolphin.Interface.OnScreenDisplayMessages=False"] : []),
       ...(PPLUS
@@ -562,8 +570,14 @@ class Side {
   }
 
   send(line) {
-    log(`${this.name}< ${line}`);
-    this.proc.stdin.write(`${line}\n`);
+    // --music-off: this page turns `music` on in its caps answer and sends the switch after it.
+    const music = line.startsWith("caps") && MUSIC_OFF.includes(this.name);
+    if (music && !this.lines.some((l) => l && /^orca caps .*\bmusic\b/.test(l)))
+      fail(`${this.name}: Orca offers no music`);
+    for (const out of music ? [`${line} music`, "music off"] : [line]) {
+      log(`${this.name}< ${out}`);
+      this.proc.stdin.write(`${out}\n`);
+    }
   }
 
   // The first line from index `from` on that matches, within `ms`.

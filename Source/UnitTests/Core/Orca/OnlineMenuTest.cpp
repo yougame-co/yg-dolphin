@@ -1825,9 +1825,11 @@ TEST(OrcaOnlineMenuLobby, APickKeptWithFriendsIsArmedOnceTheyAreGone)
 
 TEST(OrcaOnlineMenuLobby, EveryCapFitsTheAppsCapsLine)
 {
-  // The desktop app and the page read at most 16 caps words; more needs a desktop release first.
+  // Apps before the Music switch's release read at most 16 caps words (that release reads 24): more
+  // needs it as the minimum app.
   // The most any profile offers is all of them.
-  const std::string all = fmt::format("{} {} {} {} {}", Orca::Status::CAPS, Orca::Status::RESULTS_CAP,
+  const std::string all = fmt::format("{} {} {} {} {} {}", Orca::Status::CAPS,
+                                      Orca::Status::MUSIC_CAP, Orca::Status::RESULTS_CAP,
                                       Orca::Status::LOCKS_CAP, Orca::Status::QUEUE2_CAP,
                                       Orca::Status::PICK_CAPS);
   std::istringstream words{all};
