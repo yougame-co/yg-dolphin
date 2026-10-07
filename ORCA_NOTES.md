@@ -28,7 +28,9 @@ Every Orca release candidate (a `rel-0.3.x` branch) passes these on the Mac befo
 dated **Checked** entry (for 0.3.14 and 0.3.15, at the end of "The queue's character select") gives
 the numbers. Runs are headless (`-v Null`), muted (`No Audio Output`), nice'd, and go through the
 Mac's run queue (`Tools/orca/run-lock.py check -- <command>`, `perf` for anything timed: "Sharing the
-Mac: the run queue" below), which waits while Luis plays and while the machine is busy.
+Mac: the run queue" below), which waits while Luis plays and while the machine is busy. Luis plays
+when `ps -axo comm=` lists his app's Orca (ORCA.md checklist step 0; `run-lock.py status` prints
+`Luis's Orca: open`); anything that starts Orca outside the queue checks the same first.
 
 1. **Build** `dolphin-emu-nogui` and `tests` (Release, the release's CMake flags): no new warnings.
 2. **Unit tests:** `Binaries/Tests/tests --gtest_filter='Orca*'`, none failing (the live, network

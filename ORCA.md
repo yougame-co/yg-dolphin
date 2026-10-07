@@ -272,6 +272,12 @@ Project+.
 
 Every release candidate passes, for Brawl and for Project+:
 
+0. **Nobody playing** on a shared Mac: before each step that starts Orca, `ps -axo comm=` lists
+   neither `/Applications/YouGame.app/Contents/Resources/runtimes/orca/Orca.app/Contents/MacOS/Orca`
+   nor `~/Library/Application Support/yougame-desktop/orca/apps/<version>/Orca.app/Contents/MacOS/Orca`
+   (whole paths: a packaged test copy's own bundled Orca isn't a player's). Test Orcas beside a game
+   in play make it stutter; wait until it closes.
+
 1. **Build** `dolphin-emu-nogui` and `tests` in Release: no new warnings.
 2. **Unit tests:** `Orca*`, none failing.
 3. **Hashlogs** of the default inputs (`bf-mario-link-results.txt` to frame 10800,
