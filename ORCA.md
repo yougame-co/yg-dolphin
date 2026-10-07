@@ -155,7 +155,10 @@ Dolphin's severity. A Medium or High problem counts as damage unless it is only 
 Masterpiece partitions, which Orca and Project+ never read (some WBFS tools wipe them); each one
 that counts is followed by `orca verify damage <text>`. Last comes `orca verify ok` (exit 0) or
 `orca verify damaged <n>`, n damage lines (exit 2). A file that isn't a disc image prints `orca
-verify unreadable <path>` (exit 1). The signature checks use a temporary NAND, never the player's.
+verify unreadable <path>` (exit 1). The signature checks use a temporary NAND, never the player's:
+a folder in the system's temp folder named for the process (`orca-verify-nand-<pid>-<n>`). A verify
+that is killed (the app's SIGTERM, TerminateProcess on Windows) leaves its folder behind, so each
+verify first removes those whose process is gone.
 A GameCube disc has no hash tree, so only its structure is checked. A good scrubbed Brawl Rev 2
 `.wbfs` reports 9 Low problems: no update partition, no stored image size, and errors in unused
 blocks (8088 in DATA, 1 in each Masterpiece partition).

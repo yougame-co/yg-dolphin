@@ -396,7 +396,8 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
   {
     UICommon::SetUserDirectory(user_directory);
     // The verifier's IOS checks signatures in a NAND of its own, so the player's is never written.
-    const std::string nand = File::CreateTempDir();
+    // Clears those of verifies that were killed first (DiscVerify.h).
+    const std::string nand = Orca::DiscVerify::MakeNand();
     if (!nand.empty())
       File::SetUserPath(D_WIIROOT_IDX, nand);
     const int code = Orca::DiscVerify::Run(s_verify_disc, stdout);
