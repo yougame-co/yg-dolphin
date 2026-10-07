@@ -93,8 +93,10 @@ other. Now:
   more than 30% of memory is free, one at a time under 20 and 20%, none above. `perf -- <command>`
   is for anything timed (two-Orca perf gates, frame-time A/Bs, `perf.mjs`, `selfmatch.mjs`): it has
   the machine to itself, waiting for the checks to finish, and no check starts while it waits or
-  runs. Both wait while Luis's Orca is open (`ps -axo comm=`: the app bundle's
-  `Resources/runtimes/orca` or the old `yougame-desktop/orca/apps/`), printing `waiting: Luis's Orca
+  runs. Both wait while Luis's Orca is open (`ps -axo comm=`, whole paths only: the Orca bundled in
+  `/Applications/YouGame.app` or a version in `~/Library/Application Support/yougame-desktop/orca/apps/`;
+  a packaged test copy's bundled Orca and a test copy's `--user-data-dir` downloads are not his, so a
+  check no longer yields to an agent's own test copy), printing `waiting: Luis's Orca
   is open`, and go first come, first served: one ticket per run in `orca-run-queue/` beside the
   locks, locked by its run, so a run that dies leaves none behind. A check that is running when Luis
   opens his Orca stops (exit 10: three checks are six test Orcas beside his game, enough to make it
