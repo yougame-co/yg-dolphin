@@ -427,8 +427,10 @@ std::optional<std::vector<u8>> ParseControlsHex(std::string_view hex)
 }
 
 std::vector<u8> ReadOwnControls(const GuestMemory& m, int port, std::string_view own_name,
-                                std::u16string* last_worn)
+                                std::u16string* last_worn, std::u16string* read_tag)
 {
+  if (read_tag)
+    read_tag->clear();
   u32 tags = 0;
   if (!TagTable(m, &tags))
     return {};
@@ -452,6 +454,8 @@ std::vector<u8> ReadOwnControls(const GuestMemory& m, int port, std::string_view
   if (slot < 0)
     return {};
   const u32 tag = tags + static_cast<u32>(slot) * TAG_SIZE;
+  if (read_tag)
+    *read_tag = TagAt(m, tag);
   std::vector<u8> profile;
   profile.reserve(CONTROLS_PROFILE_SIZE);
   profile.push_back(m.Read8(tag + TAG_RUMBLE));
@@ -461,11 +465,14 @@ std::vector<u8> ReadOwnControls(const GuestMemory& m, int port, std::string_view
 }
 
 std::optional<std::vector<u8>> OwnControlsWatch::Next(const std::vector<u8>& read,
+                                                      std::u16string_view tag,
                                                       const std::vector<u8>& own, bool is_default)
 {
   // Nothing readable (the menus before any tag exists) never clears a profile.
   if (read.empty())
     return std::nullopt;
+  const bool switched = tag != m_tag;
+  m_tag = tag;
   if (std::exchange(m_rebase, false))
   {
     m_last = read;
@@ -476,6 +483,11 @@ std::optional<std::vector<u8>> OwnControlsWatch::Next(const std::vector<u8>& rea
   m_last = read;
   // Orca's own write showing up in the tag, or a player with no profile on the defaults.
   if (read == own || (own.empty() && is_default))
+    return std::nullopt;
+  // A switch to a tag at the game's defaults (one they made, or made again after a restart) is not
+  // their controls changing, so the defaults never replace their own. Editing the tag they wear
+  // back to the defaults still is a change.
+  if (switched && is_default)
     return std::nullopt;
   return read;
 }
@@ -599,8 +611,9 @@ std::optional<std::vector<u8>> OwnControlsReader::Read(const GuestMemory& m,
   }
   if (std::exchange(m_rebase, false))
     m_watch.Rebase();
-  const std::vector<u8> read = ReadOwnControls(m, mine->port, mine->name, &m_last_worn);
-  return m_watch.Next(read.empty() ? read : Sanitized(read), own, IsDefaultProfile(m, read));
+  std::u16string tag;
+  const std::vector<u8> read = ReadOwnControls(m, mine->port, mine->name, &m_last_worn, &tag);
+  return m_watch.Next(read.empty() ? read : Sanitized(read), tag, own, IsDefaultProfile(m, read));
 }
 
 std::optional<std::vector<u8>> NameTagsFrame(GuestMemory& m,

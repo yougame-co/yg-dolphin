@@ -111,26 +111,29 @@ bool ControlsValid(const std::vector<u8>& profile);
 
 // This player's own controls, read from their own save, to carry into an online game. Uses the tag
 // `port` wears on the character select, else the tag named by `last_worn` (kept by the caller),
-// else the tag matching `own_name`. Empty means the game's defaults.
+// else the tag matching `own_name`. Empty means the game's defaults. `read_tag`, if given, gets the
+// name of the tag read (empty when none).
 std::vector<u8> ReadOwnControls(const GuestMemory& memory, int port, std::string_view own_name,
-                                std::u16string* last_worn);
+                                std::u16string* last_worn, std::u16string* read_tag = nullptr);
 
 // Which reads of the player's own tag are the player's own changes. A read that only shows what
-// Orca put in the tag, or a save that isn't this player's (after a resync, or before the app's
-// controls reached the tag), is no change.
+// Orca put in the tag, a save that isn't this player's (after a resync, or before the app's
+// controls reached the tag), or a switch to a tag at the game's defaults, is no change.
 class OwnControlsWatch
 {
 public:
   // The read becomes the reference without counting as a change: after a resync, and after the app
   // sets the controls (the worn tag still holds the old ones until the next character select).
   void Rebase() { m_rebase = true; }
-  // This frame's read; returns the controls to publish when the player changed them. `own` is the
-  // current profile, `is_default` whether the read is the game's defaults with rumble on.
-  std::optional<std::vector<u8>> Next(const std::vector<u8>& read, const std::vector<u8>& own,
-                                      bool is_default);
+  // This frame's read from the tag named `tag`; returns the controls to publish when the player
+  // changed them. `own` is the current profile, `is_default` whether the read is the game's
+  // defaults with rumble on.
+  std::optional<std::vector<u8>> Next(const std::vector<u8>& read, std::u16string_view tag,
+                                      const std::vector<u8>& own, bool is_default);
 
 private:
   std::vector<u8> m_last;
+  std::u16string m_tag;
   bool m_rebase = false;
 };
 
