@@ -20,6 +20,11 @@
 //   timeout  casual: nobody readies; both time out and are back on their own character select
 //   kill     ranked: the joiner's Orca is killed in game 2; the host wins by forfeit after 15 s
 //   leave    ranked: as kill, but the joiner sends `leave`
+//            --in-game 1: kill or leave during game 1 instead. Both Orcas must first have sent the
+//            room one `game-start` with the same id (Orca 0.3.33+, once the fighters are in), so the
+//            leave still loses the set by forfeit; --expect void (with --in-game 1 only) is the
+//            control for an Orca without it: no game-start, and the set ends void ("ended before a
+//            game was played")
 //   zleave   ranked: after the set the joiner leaves by holding Z on the results screen
 //   noskip   ranked: both hold Z on every character select; ranked has no skip
 // --pick random makes every pick RANDOM. Every --q2 scenario ends with the checksum gate: each
@@ -121,6 +126,19 @@ const FIGHT = argv.includes("--fight");
 // (`orca menu online <queue>`, RearmFriendsPick) within 20 s while the friend goes home to a room of
 // its own: RESULT: REARMED / NOT-REARMED (exit 6) and HOME / NO-ROOM.
 const LEAVER = opt("--leaver", "inviter");
+// --scenario kill|leave: the game of the set the joiner goes in (1 or 2), and the set's expected end
+// (forfeit, or void for an Orca that never says a game began).
+const IN_GAME = Number(opt("--in-game", "2"));
+const EXPECT = opt("--expect", "forfeit");
+if (![1, 2].includes(IN_GAME) || !["forfeit", "void"].includes(EXPECT)) {
+  console.error("--in-game is 1 or 2; --expect is forfeit or void");
+  process.exit(2);
+}
+// A set that played game 1 reached it whatever the Orca: only a leave in game 1 can be void.
+if (EXPECT === "void" && IN_GAME !== 1) {
+  console.error("--expect void needs --in-game 1");
+  process.exit(2);
+}
 const VARIANT = opt("--variant", "d");
 const INVITER = opt("--inviter", "");
 const INVITE_GAP_MS = Number(opt("--invite-gap", "4000"));
@@ -235,6 +253,7 @@ class Side {
     this.rating = -1; // the rating the page gave (`queue rating`)
     this.shots = []; // the scenario's own screenshots (test-shot)
     this.joinLog = []; // { at, line }: drop-in and room lines (--scenario playagain)
+    this.gameStarts = []; // { at, msg }: the room's game-start messages this Orca sent
   }
 
   // The scenario's own screenshot (`test-shot`), when this Orca renders.
@@ -519,6 +538,8 @@ class Side {
           this.joinLog.push({ at: Date.now(), line: pj[1] });
           if (SCENARIO === "playagain") log(`${this.name}~ ${pj[1]}`);
         }
+        const gs = /Orca room: (\{"t":"game-start".*\})$/.exec(line);
+        if (gs) this.gameStarts.push({ at: Date.now(), msg: JSON.parse(gs[1]) });
         if (/Desync at frame|the session failed/.test(line)) {
           this.desyncs.push(line);
           log(`${this.name}~ ${line}`);
@@ -1494,12 +1515,31 @@ async function q2Main() {
     const kill = SCENARIO === "kill";
     marks();
     await q2Css(host, joiner, true);
-    await q2Fight(host, joiner);
-    await host.expect(/^orca result \{"q":"ranked","k":"game","n":1/, 60000);
-    await q2Css(host, joiner, false);
+    if (IN_GAME === 2) {
+      await q2Fight(host, joiner);
+      await host.expect(/^orca result \{"q":"ranked","k":"game","n":1/, 60000);
+      await q2Css(host, joiner, false);
+    }
     await host.waitScene("scSelStage", 60000);
     await host.waitScene("scMelee", 200000);
-    await sleep(6000);
+    // The fighters are in about 4.7 s (Brawl, 283 frames) or 2.3 s (Project+, 140) after scMelee
+    // starts; the game-start goes once that frame is final.
+    await sleep(8000);
+    // Each Orca told the room this game began, once, with the same id (the fight's first frame).
+    const starts = [host, joiner].map((s) => s.gameStarts.map((g) => g.msg));
+    log(`game-start sent: ${[host, joiner].map((s, i) => `${s.name} ${JSON.stringify(starts[i])}`).join("; ")}`);
+    if (EXPECT === "void") {
+      if (starts.some((x) => x.length)) fail("--expect void, but an Orca sent game-start");
+    } else {
+      for (let i = 0; i < 2; ++i) {
+        if (starts[i].length !== IN_GAME)
+          fail(`${[host, joiner][i].name}: ${starts[i].length} game-start(s) by game ${IN_GAME}`);
+      }
+      const ids = starts.map((x) => x.map((g) => g.id).join(","));
+      if (ids[0] !== ids[1]) fail(`the game-start ids differ: ${ids[0]} / ${ids[1]}`);
+      if (starts.flat().some((g) => !g.matchId || !/^g\d+$/.test(g.id)))
+        fail(`a malformed game-start: ${JSON.stringify(starts)}`);
+    }
     const seFrom = host.setEndLog.length;
     const joinerFrom = joiner.setEndLog.length;
     const killed = Date.now();
@@ -1513,13 +1553,17 @@ async function q2Main() {
       await sleep(900);
       joiner.shot("self-left");
     }
+    // Before game 1 began the host counts down to no contest (an Orca older than 0.3.33, the void
+    // control's, still says forfeit).
     const left = await waitSetEnd(
       host,
-      /left the room mid-set: their forfeit in (\d+) s/,
+      EXPECT === "void"
+        ? /left the room mid-set: (?:no contest|their forfeit) in (\d+) s/
+        : /left the room mid-set: their forfeit in (\d+) s/,
       10000,
       seFrom,
     );
-    if (!left) fail(`${host.name}: never counted ${joiner.name}'s forfeit down`);
+    if (!left) fail(`${host.name}: never counted ${joiner.name}'s ${EXPECT === "void" ? "no contest" : "forfeit"} down`);
     log(`${host.name} heard the leave ${left.at - killed} ms after the kill: countdown from 15 s`);
     await sleep(3000);
     host.shot("countdown");
@@ -1527,9 +1571,11 @@ async function q2Main() {
     host.shot("countdown-late");
     const set = await host.expect(/^orca result (\{"q":"ranked","k":"set".*)$/, 40000);
     const r = JSON.parse(set.m[1]);
-    if (r.out !== "won" || r.by !== "forfeit") fail(`the set: ${set.m[1]}`);
+    if (EXPECT === "void" ? r.out !== "void" : r.out !== "won" || r.by !== "forfeit")
+      fail(`the set: ${set.m[1]}`);
+    log(`the set's verdict on ${host.name}: ${set.m[1]}`);
     const after = Date.now() - left.at;
-    log(`the forfeit verdict came ${after} ms after the leave reached ${host.name} (the countdown said 15000)`);
+    log(`the ${EXPECT} verdict came ${after} ms after the leave reached ${host.name} (the countdown said 15000)`);
     if (after < 14000 || after > 17500) fail(`the countdown was off by ${after - 15000} ms`);
     const broke = host.setEndLog.slice(seFrom).find((e) => /left the room while/.test(e.line));
     log(broke ? `the host's stall ended at the leave: ${broke.line}` : "the host wasn't stalled at the leave");
@@ -1540,14 +1586,15 @@ async function q2Main() {
     host.shot("victory-forfeit");
     await sleep(1500);
     host.shot("victory-forfeit-settled");
-    if (!(await waitSetEnd(host, /^Set end: the page's rating/, 5000, seFrom)))
+    // A void set rates nobody: the page sends no new rating.
+    if (EXPECT === "forfeit" && !(await waitSetEnd(host, /^Set end: the page's rating/, 5000, seFrom)))
       fail(`${host.name}: the page's new rating never reached the panel`);
     // A set was played (game 1): back not ready.
     await q2Back(host, host.queueAt, false);
     if (!kill) await q2Back(joiner, joiner.queueAt, false);
     noErrors(kill ? [host] : [host, joiner]);
     const sums = checksumsMatched(kill ? [host] : [host, joiner]);
-    log(`PASS: ${SCENARIO}: ${joiner.name} ${kill ? "died" : "left"} mid-set; ${host.name} counted 15 s from the leave, the forfeit came ${after} ms after it, VICTORY; back on its own character select; checksums: ${sums}`);
+    log(`PASS: ${SCENARIO}: ${joiner.name} ${kill ? "died" : "left"} mid-set in game ${IN_GAME}${EXPECT === "forfeit" ? ` after both sent game-start ${starts[0].map((g) => g.id).join(",")}` : " (no game-start)"}; ${host.name} counted 15 s from the leave, the ${EXPECT} verdict came ${after} ms after it${EXPECT === "forfeit" ? ", VICTORY" : ""}; back on its own character select; checksums: ${sums}`);
     return;
   }
   if (SCENARIO === "timeout") {
