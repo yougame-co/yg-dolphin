@@ -147,6 +147,19 @@ game never reads them: a Rev 1 and a Rev 2 run of the default inputs (Brawl and 
 same hashlog. Other revisions and modified Rev 1 copies are refused, and so is a launcher's disc that
 doesn't read as Rev 2 at boot (`Orca::SessionDiscReady`, e.g. after a read error).
 
+`Orca --verify <disc> [-u <user>]` checks a disc image and exits, without booting, a window, a
+session or the app's bridge (`Orca/DiscVerify.h`). It runs Dolphin's integrity check (the Wii hash
+tree; no Redump lookup, no whole-disc hashes) and prints `orca verify progress <done> <total>` in
+bytes at most once a second and one `orca verify problem <low|medium|high> <text>` per problem, with
+Dolphin's severity. A Medium or High problem counts as damage unless it is only in Brawl's
+Masterpiece partitions, which Orca and Project+ never read (some WBFS tools wipe them); each one
+that counts is followed by `orca verify damage <text>`. Last comes `orca verify ok` (exit 0) or
+`orca verify damaged <n>`, n damage lines (exit 2). A file that isn't a disc image prints `orca
+verify unreadable <path>` (exit 1). The signature checks use a temporary NAND, never the player's.
+A GameCube disc has no hash tree, so only its structure is checked. A good scrubbed Brawl Rev 2
+`.wbfs` reports 9 Low problems: no update partition, no stored image size, and errors in unused
+blocks (8088 in DATA, 1 in each Masterpiece partition).
+
 Sessions start from an empty NAND (save hash 0); the game makes its save in-session on both
 machines. A session with no `Config/GCPadNew.ini` gets `Sys/Orca/Input/GCPadNew.ini`: port 1 on the
 keyboard and the first SDL gamepad of any model.
