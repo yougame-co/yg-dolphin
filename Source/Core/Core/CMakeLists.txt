@@ -509,6 +509,8 @@ add_library(core
   NetPlayServer.h
   Orca/Branding.cpp
   Orca/Branding.h
+  Orca/CrashNote.cpp
+  Orca/CrashNote.h
   Orca/Disc.cpp
   Orca/Disc.h
   Orca/DiscVerify.cpp
