@@ -1451,6 +1451,89 @@ word). Headless Metal presents nothing, so presentation is measured in a `-p mac
 shader cache first (a cold Metal cache costs ~3.3 s at match start). A forced session setting
 (`Orca/Profile.cpp`) beats `-C`: comparing one needs a build that doesn't force it.
 
+## Music switch
+
+Approved 2026-10-06 (X report `no-music-toggle`: "no way to disable music", a P+ player's Discord
+list). Orca 0.3.29 candidate, branch `music-off`. ORCA.md "Music switch" has the design.
+
+**Where music and effects come apart.** An AX voice probe (every running parameter block once a
+second, harness, default inputs; a throwaway `ORCA_AX_PROBE` build, not committed) over menus,
+character and stage select and a match:
+
+- Brawl: the music is always the pair `pb=8049A5C0` (main L only, `mixer_control` 1) and
+  `pb=8049A480` (main R only, 2), `is_stream` 1, ADPCM, looping over ring buffers at nibble
+  addresses `0x204BC6C2..0x204F06BF` and `0x204F5EC2..0x20529EBF` (MEM2), ratio 1.0 (32 kHz), AUX
+  A/B/C volumes 0. Every other voice was `is_stream` 0: one-shot effects with AUX sends (reverb,
+  `mixer_control` 0x0003-0x0C63), and one looping effect, still type 0.
+- Project+: the same shape, with two stream pairs (ring buffers at `0x204AEB02`/`0x204E8302` and
+  `0x20521B02`/`0x2055B302`), again no AUX sends.
+- So the stream flag is the classifier, and no music reaches the AUX buses, whose returns the
+  game's CPU computes and Orca could not split.
+- The DSP issues `CMD_COMPRESSOR` every frame (the music's share gets the same gain).
+- AX writes its output frame to `0x804E84C0` / `0x804E8640` (384 bytes each, alternating); the AI
+  DMA reads them as `0x004E84C0` / `0x004E8640`. The shadow matches on the physical address.
+
+**Rejected.** Game RAM (Brawl's sound system volume, the Options menu, P+'s code menu): every peer
+hashes MEM1/MEM2 every 60 frames, a session starts from an empty NAND and a joiner plays on the
+host's save, so any in-game setting is the whole room's, never one player's. A synced "music off
+for the match" (the triage's first plan) would mute it for everyone.
+
+**A first build was wrong, and the checks caught it.** `AXUCode`'s main buffers hold 160 samples
+(AX GC's 5 ms); the first build copied all of them into 96-sample stack copies, writing past them on
+the stack of the voice loop (not traced further). With music off, hashlogs left 0.3.27's at
+the first menu music (Brawl frame 1513, Project+ frame 216) and two two-Orca runs desynced
+(Brawl: `bo` at 78 s; Project+: frame 3360 after 22 matched checksums). Sync tests of that build
+still passed (0 RAM mismatches): they compare a build with itself, so only a hashlog against the
+other setting, or two Orcas set differently, shows a switch that leaks into the game. The same
+build also never matched a frame (cached vs physical address), so it changed no sound at all.
+
+**Checked with the fixed build** (`f46f76064a`; the cap and command gate after it change no
+emulation): hashlogs on = off = 0.3.27 (Brawl frames 0-10800, Project+ 0-9006); sync tests off 0 RAM
+mismatches (Brawl 73451 re-run frames / 10494 loads, Project+ 60851 / 8694); audio dumps
+sample-aligned on/off (`wavcmp.py`): music-only seconds 2000-4000 RMS to 0.7; match off/on RMS
+median 0.77 (Brawl) and 0.84 (P+); AI blocks quiet 524275 of 524288 (the misses are the first ones,
+before AX's first frame), 97% in a sync test (re-runs rewrite the buffers; their sound is dropped
+anyway). Two-Orca casual q2, ada off and bo on: P+ PASS 103/103 checksums; Brawl PASS 102/102. One
+earlier Brawl attempt failed before matching (bo never left its main menu in 60 s; bo had the music
+on, nothing music-related) and one died when the worktree SSD image dropped mid-run; the rerun ran
+from the internal disk.
+
+**Review, 2026-10-06 (rebased on the 0.3.29 candidate, `8e2035cf3e`).** A stream voice is split
+whether or not it is running when its parameter block is read: an old AXWii applies per-ms updates
+inside the frame and could start it after the check (Brawl's ucode isn't one of those, so nothing
+leaked); a stopped voice adds nothing. A `static_assert` keeps the 96-sample copies inside the main
+buses (the first build's overrun). Brawl Rev 2 and Project+ now offer 16 caps, the most a desktop app
+before this release reads; the app and page released with the switch read 24.
+
+Runs on the rebased build (internal disk; the worktree's SSD image was stalling, `disk11` APFS
+flushes up to 19 s, and processes started with their cwd on it hung in `_dyld_start`):
+
+- Hashlogs: Brawl Rev 2 on = off, frames 0-10807; Rev 1 off = Rev 2 on, 0-10819 (Rev 1 reads as
+  Rev 2); Project+ on = off, 0-9003. Sync test off (Brawl to 9000): 60851 re-run frames, 0 RAM
+  mismatches.
+- Two Orcas, Project+ casual q2, ada off: PASS, 104 checksums each side, 0 rollbacks, no desync.
+- The stdin gate (headless, `ORCA_TEST_COMMANDS`): the offer is the 16 caps with `music`;
+  `music off` before any caps answer, and with caps that leave it out, answer `unsupported music`;
+  with it, `Music: off on this machine`; a repeat logs nothing; `music loud` and `music on extra`
+  are refused.
+- Audio, on vs off: Brawl as before (match effects median off/on 0.77, music-only seconds to the
+  0.7 floor, 655347 of 655360 AI blocks quiet); Project+ 88 music-only seconds silenced, effects
+  median 0.83.
+- Voice probe (throwaway build), Brawl default inputs, off: scVsResult is frames 9861-10277; a new
+  stream pair (main L only / main R only, the same MEM2 ring buffers) starts there and plays to the
+  scene's end, so the results music is muted like any other. Beside it: a mono 22 kHz voice panned
+  center for about 2 s (the announcer), voices with AUX B/C sends (the crowd). Over the whole run all
+  294 sampled stream voices had AUX A/B/C volumes 0 and `mixer_control` 1 or 2; no normal voice was
+  panned hard left or right. Other stages weren't probed.
+- Cost: `time -l` instructions retired by the whole process, Brawl to frame 9000 with a snapshot
+  every frame from 5900, three each: on 236.79/236.61/236.55 G, off 236.53/236.51/236.76 G (the
+  switch's work is a few microseconds a frame, under the run-to-run noise). Frame times
+  (`perf.mjs`, frames 6000-9000): plain with snapshots, mean on 2.65/2.70 ms, off 2.66/2.74; under a
+  k=7 sync test, p50 40.5/40.1 on and 40.6/40.9 off. Both sync-test runs with it off had a tail (96 and
+  38 frames over 50 ms, against 2 and 0 on), far more than the switch's work could cost; the second
+  overlapped ten flagged SSD stalls (`run-lock` marked both perf runs tainted). The release's
+  two-Orca perf gate runs with one side off.
+
 ## Match start
 
 Luis, 2026-10-03 (on his Windows PC): the first seconds of every match (the countdown and just
@@ -5922,6 +6005,53 @@ room ~1.9 s later (HOME); `pa-d-fl` shows the host re-armed (`orca menu online r
 
 Workaround for 0.3.27 players: the inviter presses B on the Ranked select (back to the menu) before
 pressing Play again; an invite already sent then gets a clean keyframe.
+
+## macOS 15: guest RAM views on top of each other (mac15-sigtrap, 2026-10-07)
+
+**Symptom.** Orca 0.3.26-0.3.28 closed with SIGTRAP on Project+ about 2.2 s after the `frame
+boundary hook` line, before its first frame: `Invalid write to 0x000002c8, PC = 0x801e17bc` (then
+`0x2dc`, `0x2e4`, `0x2e0`), then `Unknown instruction 00000000 at PC = 00000500, LR = 801e0bcc`, and
+the panic became an exit. 13 automatic crash reports from desktop 0.12.36 (an M2 MacBook Air on
+macOS 15.7.9, an M1 MacBook Air on 15.6.1) and the first reporter's 9 runs (an M2 Max on 15.6.1).
+Every crash came from macOS 15; every Mac known to have played was on macOS 26.
+
+**Cause.** Upstream #14838 (`27804b4e67`, in 2609, so in every Orca release) passes
+`MAP_MEM_VM_SHARE` to `mach_make_memory_entry_64` in `Common/MemArenaDarwin.cpp`. On macOS 15 a
+`vm_map` of that entry ignores its offset: every view (MEM1 at 0, the locked L1 cache at 32 MB, MEM2
+at 32.25 MB, the fastmem views and the rollback aliases) maps arena offset 0, so MEM1, the L1 cache
+and MEM2 are the same pages. Project+ loses MEM1 `0x0-0x3FFF`, so the current-thread pointer at
+`0x800000E4` is 0 (`OSSleepThread`'s four invalid writes) and the external-interrupt vector at `0x500`
+reads as zeros. The likely writer is Brawl's `__LCEnable`, which clears exactly 16 KB of locked cache
+with `dcbz_l` just before the first frame (inferred from the size and timing, not traced).
+Vanilla Brawl dies sooner, in `ClearMEM2Arena` (`Unknown instruction` at `801d5998`): its MEM2 clear
+zeroes its own MEM1 code. macOS 26 maps the offsets correctly, which is why no Mac here showed it.
+Upstream hit it too (an Intel Mac on macOS 15; other games on ARM Macs and later macOS) and replaced
+the memory entry with `vm_remap` of the arena itself in #14891 (`da76f651ec`, after 2609).
+
+**Fix.** `da76f651ec` cherry-picked unchanged: `CreateView` and `MapInMemoryRegion` `vm_remap` the
+arena, and `MapInMemoryRegion` then sets the view's protection. Host-side only; the game's memory is
+the same wherever the old mapping worked, so `kCompatVersion` stays. The changed calls run when
+views are created or the DBATs change (boot, `__LCEnable`), not on a snapshot load, whose
+`DBATUpdated` is skipped while the BATs are unchanged.
+
+**Checked** on the M4 Pro (macOS 26.3) and in the macOS 15.6.1 (24G90) guest of
+`~/Documents/brawl-dolphin/mac15-vm` (tart on the same M4; results in its `out/mac15fix/results/`):
+- macOS 15.6.1, release builds of the base (`0f423ddba5`) and the fix: the base's Project+ crashes
+  exactly as in the players' reports, headless after 6 s and embedded (the app's way: parent window,
+  Metal) after 16 s; the base's vanilla Brawl crashes at `801d5998`. The fix reaches the first frame
+  (`Frame hook`, `JIT cleared once`) and runs until stopped (45-60 s) every way: Project+ headless,
+  embedded, both with `ORCA_TEST_NO_AFP=1`, on the cached interpreter (`ORCA_TEST_CPUCORE=5`), and
+  vanilla Brawl. No crash report from the fix.
+- A C replay of the arena (the Wii layout and every view): the `MAP_MEM_VM_SHARE` entry fails on
+  macOS 15.6.1 (6,177 mismatches; MEM2 writes land in MEM1) and `vm_remap` passes; both pass on 26.3.
+- Hashlogs of the default inputs (Brawl to 10800, Project+ to 9000): the fix equals the base on
+  macOS 26.3, and the fix on macOS 15.6.1 equals the fix on 26.3, on every frame.
+- `YG_SYNCTEST=7`, 0 RAM mismatches: macOS 26.3 Brawl to 10800 (73,451 re-run frames) and Project+
+  to 9000 (60,851); macOS 15.6.1 Project+ to 3000 (18,851) and Brawl 1600-4000 (16,751).
+- Unit tests `Orca*`: 514 pass, 17 skipped (the live and latency switches), none fail.
+
+Not covered: M1-M3 silicon (the guest runs on the M4; nothing in the fix depends on the chip) and
+macOS 15.7 (the guest is 15.6.1; the M2 reporter runs 15.7.9).
 
 ## Explaining it to people (internal)
 
