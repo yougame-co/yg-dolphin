@@ -436,8 +436,16 @@ They come from `ORCA_CONTROLS` at boot, else the file Orca kept for this game
 (`<user>/Config/OrcaControls-<game>.txt`), and from the app's `controls <hex>` mid-run. While the
 player is alone, a change they make to the tag they wear (the controls menu, Project+'s name list)
 becomes their own controls: Orca prints `orca controls <hex>` and keeps the file. Orca's own writes,
-a save that isn't theirs (after a resync) and re-runs never count. Controls loaded from the file
-(no `ORCA_CONTROLS`) are printed the same way once at boot, so the page shows what Orca plays.
+a save that isn't theirs (after a resync), a switch to a tag at the game's defaults and re-runs never
+count. Controls loaded from the file (no `ORCA_CONTROLS`) are printed the same way once at boot, so
+the page shows what Orca plays.
+
+- **Tags made in the game** last only until Orca closes: every run boots an empty session NAND, so a
+  player who wants their own tag makes it again. A port with controls that wears a tag holding
+  exactly what the game puts in a new one (rumble on, the default layout) gets its controls written
+  into it on the character select, in the same frame (`ApplyNameTags`), and the read of the
+  player's own controls comes after the writes (`NameTagsFrame`), so a tag made again plays with
+  their controls and never replaces them with the defaults. The tags themselves are not kept.
 
 - **Solo**, the own port's values carry them from the frame they change, so the YouGame tag gets them
   on every character select: Training, the queue's own select, With Friends. A friend who joins
