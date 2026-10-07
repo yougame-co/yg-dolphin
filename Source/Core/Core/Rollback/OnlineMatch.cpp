@@ -1700,7 +1700,8 @@ std::optional<int> JoinHost(Core::System& system, Match& match)
 // "leave": a joiner asks its host to unplug it at an agreed frame; a host opens a new room.
 void Leave(Match& match)
 {
-  // Leaving a ranked set forfeits it, and the screen says so (UX/SetEnd.h).
+  // Leaving a ranked set forfeits it once its first game began (before that the room voids it), and
+  // the screen says which (UX/SetEnd.h).
   if (Orca::Online::RoomQueue() == "ranked" && Orca::Online::MatchLive())
     Orca::UX::SetEnd::Current().SelfLeft(false, Orca::UX::SetEnd::NowMs());
   Orca::UX::Search::End();
@@ -2497,8 +2498,9 @@ void ConfirmResults(Match& match)
   }
   // The casual ready timer ran out (UX/Queue.h), at the same final frame on both machines.
   Orca::UX::Queue::ConfirmTimeout(confirmed, match.local_seat);
-  // Ranked: a player who didn't pick a character in time before the first game leaves the room,
-  // which forfeits; the other waits for the verdict.
+  // Ranked: a player who didn't pick a character in time before the first game leaves the room; the
+  // set ends before its first game, so the room voids it and rates nobody. The other waits for the
+  // verdict.
   if (const auto no_show = Orca::UX::Rules::ConfirmNoShow(confirmed))
   {
     const bool mine = *no_show == match.local_seat;
@@ -2527,6 +2529,10 @@ void ConfirmResults(Match& match)
     NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: a ranked game began (the fight from frame {})", start);
     Orca::Online::ReportGameStart(start);
   }
+  // On screen, a leave from here on loses the set (UX/SetEnd.h); a set that ended a game reached it
+  // too. Only a ranked set's model takes it.
+  if (!starts.empty() || !results.empty())
+    Orca::UX::SetEnd::Current().GameBegan(Orca::UX::SetEnd::NowMs());
   for (const Orca::UX::GameResult& r : results)
   {
     Orca::Net::GameReport report;
