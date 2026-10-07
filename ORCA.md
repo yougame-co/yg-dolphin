@@ -371,55 +371,45 @@ change.
 ## Drop-in
 
 The host plays at once. An invited friend joins as if they had plugged a controller into the next
-port of the host's game, and both machines show it. The friend loads the host's latest state and
-syncs from there, so joining never takes longer the longer the host has played.
+port. Since the input-replay protocol, a join rebuilds the host's game from the local boot and its
+controller history. Longer histories take longer to rebuild. No peer supplies Dolphin device state,
+RAM images, NAND files, pointers, or arbitrary memory writes.
 
-`Rollback/OnlineMatch.cpp`, `Orca/Session/Session.*`, `Orca/Session/Keyframe.*`.
+`Rollback/OnlineMatch.cpp`, `Orca/Session/Session.*`, `Orca/Session/Replay.h`,
+`Orca/Session/Keyframe.*`.
 
 ### How it works
 
-1. **Solo.** The host's port 1 is its local pad with no input delay; the other ports report no
-   controller. It logs every frame's pads (32 bytes a frame) and joins its room in the background.
-   There is no rollback and no snapshot.
-2. **Keyframe.** On an invite (`prepare-join`) or when a friend arrives, whichever comes first:
-   - At the next frame boundary the host captures the machine (`SnapshotRing::Capture`, 8-10 ms)
-     and takes the session NAND as a copy-on-write clone (APFS; a plain read elsewhere).
-   - NAND files that the game's boot writes whatever the player does (`BootNandFrame` in the
-     profile; Brawl writes 38.7 MB of packs to `/tmp`) travel as XXH3 hashes only. The joiner runs
-     its own boot to that frame while it downloads, then fills those files in from its own NAND,
-     refusing the keyframe if one differs. This halved the upload. Saves always travel.
-   - A thread packs everything, compresses it (zstd level 3 with long-distance matching), encrypts
-     it with AES-256-GCM under a fresh key, and stores it. The game goes on meanwhile. The key
-     travels only in the room's `kf` message, so the store holds ciphertext.
-   - Never from the host's first 300 frames: Project+'s first frames after its launcher run
-     differently on a machine whose JIT holds other blocks. A keyframe under 30 s old is reused;
-     each serves one joiner, who deletes it after loading.
-3. **Join.** The host starts a rollback session at its next frame J and sends the friend the
-   keyframe's id, frame K, size and hash. The friend boots the same disc and profile, runs its boot
-   to `BootNandFrame` (`orca state joining <percent>`), downloads and checks the keyframe, replaces
-   its session NAND, loads the state (`SnapshotRing::LoadImage`), then runs the host's logged pads
-   for [K, J) and live inputs from J, unthrottled and unrendered, until it has caught up.
-4. **Plug in.** The host picks a frame S (its frame plus the rollback window, twice the maximum delay
-   and the round trip) and announces it in the roster every packet carries. Both machines plug port
-   2 in at exactly S. The host never waits on a joiner before S.
-5. **Leave.** The host picks an unplug frame L the same way; the friend stops once its inputs before
-   L are acknowledged. A friend whose connection drops is unplugged after its last input (rolling
-   back frames that guessed otherwise); one silent for 10 s is dropped. Both sides learn why
-   (`friend-left left|desync|stalled|network`, `bye desync`, `drop`). With nobody else plugged in,
-   the host plays solo again with no input delay.
+1. **Local origin.** Each process captures its own machine and temporary NAND before frame zero's
+   hook. These trusted local snapshots support replay and returning to the player's own game.
+2. **Recording.** The host retains the final controller pads and bounded port metadata for each
+   frame. Rollbacks replace predicted inputs with the winning inputs. Typed rules-header and
+   clear-ready events run through the same trusted UI handlers at their original phase.
+3. **Offer.** A background thread compresses and encrypts a replay through boundary K. The
+   canonical id is `replay-<frame>-<first eight hash digits>`. AES-GCM and the transport checksum
+   detect corruption; the decoder independently validates every peer-supplied field.
+4. **Rebuild.** The friend restores only its own origin and re-executes frames [0, K), unthrottled
+   and unrendered. At K it applies the recorded boundary hook and checks its complete MEM1/MEM2
+   checksum against the host. A mismatch or cancellation returns to its own local game.
+   Historical result and timeout notifications are rebased without reporting old events.
+5. **Catch up and plug in.** The normal rollback session starts at K, catches up from live history,
+   and both machines plug in the friend's controller at the same agreed future frame. Heartbeats
+   keep the pending seat alive while the replay runs.
+6. **Leave.** The existing agreed unplug and solo-return behavior continues. A failed replay does
+   not leave the player's machine on partially reconstructed peer history.
 
-Seats 3 and 4 work the same way, but only two players have been tested. With a third player, the
-packet carrying a catching-up joiner's inputs also limits the inputs the others get, so live players
-would stall during a join; catch-up should come from history only.
+Replays permit at most 216,000 frames (one hour at 60 fps), 64 MiB decompressed data, and a separate
+64 MiB decoded-allocation budget. Port lists have at most four unique seats, names at most 128 bytes,
+controls at most 64 bytes, and queue labels at most 32 bytes. Rebuilding has a three-minute deadline.
+An over-limit history refuses new joins; existing players keep playing. The `orca2:` compatibility
+prefix isolates the replay protocol from old `orca1:` clients and legacy machine-image payloads.
 
-**Typical numbers** (Brawl): keyframes of 26-30 MB; compress 120-170 ms on a thread; over the
-internet a join took 5.7-7.2 s from the friend's first frame to plugged in (upload, download and
-about 1 s of catch-up), and about 1.5 s with a local store. Higher zstd levels don't pay: level 19
-saves 6 MB over level 3 but takes 10 s; what is left is already-compressed game data.
+Only two-player joins have been tested. A Brawl loopback join at frame 2,039 rebuilt the same RAM,
+joined live play in about nine seconds, and then matched 24 live checksums on the test machine.
 
 ### Port values: each player's name and controls
 
-A joiner plays on a copy of the host's machine, save included, so its own name tags are not there.
+A joiner reconstructs the host's input history, so its own name tags are not there.
 Each port carries its player's values instead (`Orca/UX/NameTags.h`): the YouGame username as the
 tag's name, the tag's rumble byte and its whole button layout. The frame hook writes them into the
 port's name tag on the character select, and the game copies the layout into its per-port table

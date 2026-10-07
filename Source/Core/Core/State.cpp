@@ -230,10 +230,18 @@ static bool CheckIfStateLoadIsAllowed(Core::System& system)
 
 static bool LoadFromBuffer(Core::System& system, std::span<u8> buffer)
 {
-  u8* ptr = buffer.data();
-  PointerWrap p(&ptr, buffer.size(), PointerWrap::Mode::Read);
-  DoState(system, p);
-  return p.IsReadMode();
+  try
+  {
+    u8* ptr = buffer.data();
+    PointerWrap p(&ptr, buffer.size(), PointerWrap::Mode::Read, 64 * 1024 * 1024);
+    DoState(system, p);
+    return p.IsReadMode() && ptr == buffer.data() + buffer.size();
+  }
+  catch (const std::exception&)
+  {
+    ERROR_LOG_FMT(CORE, "Savestate read failed; refusing the state");
+    return false;
+  }
 }
 
 // Returns the required size, or 0 on failure.

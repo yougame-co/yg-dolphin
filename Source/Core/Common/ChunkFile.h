@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstring>
 #include <deque>
+#include <exception>
 #include <list>
 #include <map>
 #include <optional>
@@ -37,6 +38,14 @@
 class PointerWrap
 {
 public:
+  // Read failures must unwind DoState immediately. Switching to Measure mode would let callers
+  // keep using a partially restored count, index or pointer.
+  class ReadError final : public std::exception
+  {
+  public:
+    const char* what() const noexcept override { return "Invalid savestate data"; }
+  };
+
   enum class Mode
   {
     Read,
@@ -49,14 +58,21 @@ private:
   u8** m_ptr_current;
   u8* m_ptr_end;
   Mode m_mode;
+  size_t m_container_budget;
 
 public:
-  PointerWrap(u8** ptr, size_t size, Mode mode)
-      : m_ptr_current(ptr), m_ptr_end(*ptr + size), m_mode(mode)
+  PointerWrap(u8** ptr, size_t size, Mode mode, size_t container_budget = SIZE_MAX)
+      : m_ptr_current(ptr), m_ptr_end(*ptr + size), m_mode(mode),
+        m_container_budget(container_budget)
   {
   }
 
-  void SetMeasureMode() { m_mode = Mode::Measure; }
+  void SetMeasureMode()
+  {
+    if (IsReadMode())
+      throw ReadError{};
+    m_mode = Mode::Measure;
+  }
   void SetVerifyMode() { m_mode = Mode::Verify; }
   bool IsReadMode() const { return m_mode == Mode::Read; }
   bool IsWriteMode() const { return m_mode == Mode::Write; }
@@ -72,6 +88,7 @@ public:
     switch (m_mode)
     {
     case Mode::Read:
+      CheckContainerCount(count, sizeof(typename std::map<K, V>::value_type) + 4 * sizeof(void*));
       for (x.clear(); count != 0; --count)
       {
         std::pair<K, V> pair;
@@ -102,6 +119,7 @@ public:
     switch (m_mode)
     {
     case Mode::Read:
+      CheckContainerCount(count, sizeof(V) + 4 * sizeof(void*));
       for (x.clear(); count != 0; --count)
       {
         V value = {};
@@ -198,7 +216,7 @@ public:
   requires(std::is_trivially_copyable_v<T>)
   void DoArray(T* x, u32 count)
   {
-    DoVoid(x, count * sizeof(T));
+    DoVoid(x, static_cast<size_t>(count) * sizeof(T));
   }
 
   template <typename T>
@@ -221,12 +239,8 @@ public:
   {
     Do(count);
     u8* current = *m_ptr_current;
+    CheckBytes(count);
     *m_ptr_current += count;
-    if (!IsMeasureMode() && *m_ptr_current > m_ptr_end)
-    {
-      // trying to read/write past the end of the buffer, prevent this
-      SetMeasureMode();
-    }
     return current;
   }
 
@@ -288,22 +302,24 @@ public:
   }
 
   template <typename T>
-  void DoPointer(T*& x, T* const base)
+  void DoPointer(T*& x, T* const base, size_t count)
   {
     // pointers can be more than 2^31 apart, but you're using this function wrong if you need that
     // much range
-    ptrdiff_t offset = x - base;
+    ptrdiff_t offset = IsReadMode() ? 0 : x - base;
     Do(offset);
     if (IsReadMode())
     {
+      if (offset < 0 || static_cast<size_t>(offset) > count)
+        throw ReadError{};
       x = base + offset;
     }
   }
 
-  void DoPointer(void*& x, void* const base)
+  void DoPointer(void*& x, void* const base, size_t size)
   {
     auto* ptr = static_cast<u8*>(x);
-    DoPointer(ptr, static_cast<u8*>(base));
+    DoPointer(ptr, static_cast<u8*>(base), size);
     x = ptr;
   }
 
@@ -319,11 +335,7 @@ public:
 
     if (IsReadMode() && cookie != arbitraryNumber)
     {
-      PanicAlertFmtT(
-          "Error: After \"{0}\", found {1} ({2:#x}) instead of save marker {3} ({4:#x}). Aborting "
-          "savestate load...",
-          prevName, cookie, cookie, arbitraryNumber, arbitraryNumber);
-      SetMeasureMode();
+      throw ReadError{};
     }
   }
 
@@ -332,19 +344,45 @@ public:
   {
     u32 size = static_cast<u32>(container.size());
     Do(size);
-    container.resize(size);
+    if (IsReadMode())
+    {
+      CheckContainerCount(size, sizeof(typename T::value_type) + 4 * sizeof(void*));
+      container.resize(size);
+    }
 
     for (auto& elem : container)
       member(*this, elem);
   }
 
 private:
+  void CheckBytes(size_t size)
+  {
+    if (!IsMeasureMode() && size > static_cast<size_t>(m_ptr_end - *m_ptr_current))
+      SetMeasureMode();
+  }
+
+  void CheckContainerCount(size_t count, size_t element_size)
+  {
+    // Every serialized element must consume at least one byte. Account for the in-memory size
+    // too: a short stream can otherwise expand into a huge tree/list of complex objects.
+    CheckBytes(count);
+    if (count > m_container_budget / element_size)
+      throw ReadError{};
+    m_container_budget -= count * element_size;
+  }
+
   template <typename T>
   void DoContiguousContainer(T& container)
   {
     u32 size = static_cast<u32>(container.size());
     Do(size);
-    container.resize(size);
+    if (IsReadMode())
+    {
+      if constexpr (std::is_trivially_copyable_v<typename T::value_type>)
+        CheckBytes(static_cast<size_t>(size) * sizeof(typename T::value_type));
+      CheckContainerCount(size, sizeof(typename T::value_type));
+      container.resize(size);
+    }
 
     if (size > 0)
       DoArray(&container[0], size);
@@ -356,13 +394,9 @@ private:
     DoEachElement(x, [](PointerWrap& p, typename T::value_type& elem) { p.Do(elem); });
   }
 
-  DOLPHIN_FORCE_INLINE void DoVoid(void* data, u32 size)
+  DOLPHIN_FORCE_INLINE void DoVoid(void* data, size_t size)
   {
-    if (!IsMeasureMode() && (*m_ptr_current + size) > m_ptr_end)
-    {
-      // trying to read/write past the end of the buffer, prevent this
-      SetMeasureMode();
-    }
+    CheckBytes(size);
 
     switch (m_mode)
     {
