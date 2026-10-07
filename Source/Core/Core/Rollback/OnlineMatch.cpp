@@ -1560,8 +1560,22 @@ ReplayStep AdvanceReplay(Core::System& system, Match& match, const FrameHook& on
       End("replay failed");
       return ReplayStep::Failed;
     }
-    match.join_error_code = "network";
-    match.join_error = "Couldn't finish rebuilding your friend's game";
+    // As PumpJoin: a room that ended gives its own code (match-over, kicked, room_full...).
+    if (Orca::Online::RoomEnded())
+    {
+      match.join_error_code.clear();
+      match.join_error = fmt::format("Couldn't join: {}", Orca::Online::StatusLine());
+    }
+    else if (Orca::Online::HostLeftPending())
+    {
+      match.join_error_code = "peer_left";
+      match.join_error = "Your friend left before you could join";
+    }
+    else
+    {
+      match.join_error_code = "network";
+      match.join_error = "Couldn't finish rebuilding your friend's game";
+    }
     FailJoin(system, match);
     return ReplayStep::Failed;
   }

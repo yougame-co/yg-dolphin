@@ -404,6 +404,12 @@ controls at most 64 bytes, and queue labels at most 32 bytes. Rebuilding has a t
 An over-limit history refuses new joins; existing players keep playing. The `orca2:` compatibility
 prefix isolates the replay protocol from old `orca1:` clients and legacy machine-image payloads.
 
+A host takes one friend at a time: a friend who arrives while another is in the game, rebuilding
+or playing, is dropped with `room_full` (`HostEvents`). A rebuilding friend acknowledges nothing past
+its K, which holds what the host sends everyone (`Session::SendPacket`), so a friend already playing
+would stall for the whole rebuild and both would be dropped (`stalled`). A rebuild that ends because
+the room ended reports the room's own code, and one whose host left reports `peer_left`.
+
 Only two-player joins have been tested. A Brawl loopback join at frame 2,039 rebuilt the same RAM,
 joined live play in about nine seconds, and then matched 24 live checksums on the test machine.
 
