@@ -2754,7 +2754,7 @@ std::optional<int> Boundary(Core::System& system,
                            Orca::Net::ReadNandTree(nand->HostRoot(), &match.origin_nand);
     if (nand)
       nand->ReopenHostFiles();
-    if (!origin_ok || !SnapshotRing::Capture(system, &match.origin, false))
+    if (!origin_ok || !SnapshotRing::Capture(system, &match.origin, true))
     {
       StopEmulation(system, "Couldn't prepare this game's local replay origin");
       End("replay origin");
