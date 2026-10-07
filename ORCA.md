@@ -515,17 +515,20 @@ machines, so no compatibility change. Tests: `OrcaOnlineMenuLobby.*` (the three 
 
 ### Keyframe store
 
-`HttpKeyframeStore` in `Orca/Session/Keyframe.cpp`. Tests use `ORCA_TEST_KEYFRAME_DIR`: the store
-refuses dev tickets.
+`HttpKeyframeStore` in `Orca/Session/Keyframe.cpp`. It holds the host's encrypted replays (the
+store and its route keep the keyframe name). Tests use `ORCA_TEST_KEYFRAME_DIR`: the store refuses
+dev tickets.
 
-- `https://yougame.co/api/orca/keyframes/<room>/<id>`, `id` = `kf-<frame>-<8 hex of XXH3-64>`.
+- `https://yougame.co/api/orca/keyframes/<room>/<id>`, `id` = `replay-<frame>-<8 hex of XXH3-64>`
+  (frame 0 to 216,000, no leading zeros; `ValidReplayId`). Orca sends and accepts no other id.
   Auth: `Authorization: Ticket <ticket>` with the room's ticket (accepted up to 6 h past expiry; on
   401 `ticket` or 403 `signed_out` Orca mints a fresh one once).
-- **PUT** with `Content-Length` (at most 128 MB), `X-Orca-Frame`, `X-Orca-Hash`. 409 `exists` counts
-  as done. 6 PUTs a minute per account.
+- **PUT** with `Content-Length`, `X-Orca-Frame`, `X-Orca-Hash`. A replay is at most 64 MiB
+  before compression, so at most `ZSTD_compressBound(64 MiB)` + 28 = 67,371,036 bytes; Orca's own
+  cap on a download is 128 MB. 409 `exists` counts as done. 6 PUTs a minute per account.
 - **GET** streams with `Content-Length` (for join progress); Orca checks size and hash, then
   decrypts. 404 `gone` means expired.
-- **DELETE** by the joiner after loading, best effort; by the host when replacing or leaving.
+- **DELETE** by the joiner after rebuilding, best effort; by the host when replacing or leaving.
 - Network errors, 429 and 5xx retry 4 times with 0.5/1/2 s backoff; anything else is final. A host
   whose keyframe is refused for good (a refusal with YouGame's code; a bare 4xx from the edge only
   fails that keyframe) makes no more for the friends waiting: it drops them with
@@ -1020,7 +1023,7 @@ away.
 | `+0x290`-`+0x297` | A friend's move from the menus |
 
 Any new header (another mode, ruleset, coin or room) starts every track's state fresh. Compatibility:
-anything that changes what the game computes bumps `UX::kCompatVersion` (currently `ux=21`), which is
+anything that changes what the game computes bumps `UX::kCompatVersion` (currently `ux=23`), which is
 in the compatibility key.
 
 ## Input gate
