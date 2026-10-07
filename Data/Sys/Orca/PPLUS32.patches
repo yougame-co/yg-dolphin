@@ -232,6 +232,19 @@ when 806F238C & 01000000 == 00000000    # not the queue's own character select (
 806DCC04 48000008 48000008    # b      0x806DCC0C (guard)
 end
 
+# Project+'s own "Move v-sync call for Brawl/PM" (its codes write these two words with plain stores
+# from frame 1 on), the same groups as RSBE01.patches: written here at the first live boundary
+# through the memory-patch path, which drops the JIT's copies, so every machine runs the move from
+# frame 1 whatever its JIT compiled during the boot, and the codes then write the same words. See
+# ORCA.md "Code the JIT doesn't see".
+80023B84 2C000000 2C000000    # cmpwi r0, 0 (guard)
+80023B88 4182FF7C 60000000    # beq   0x80023B04 -> nop
+80023B8C 881F0074 881F0074    # lbz   r0, 0x74(r31) (guard)
+
+80024020 7C0803A6 7C0803A6    # mtlr  r0 (guard)
+80024024 38210020 38210020    # addi  r1, r1, 0x20 (guard)
+80024028 4E800020 481C4904    # blr -> b 0x801E892C (VIWaitForRetrace, a tail call)
+
 # The rules menu's item default, as RSBE01.patches sets it for Brawl (which describes these four
 # words of Brawl's gmGlobalRecord menu data): Project+ keeps Brawl's record and its Item Switch page
 # reads and writes the same words. With no save in the session NAND every match had items at

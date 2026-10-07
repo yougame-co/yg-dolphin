@@ -337,6 +337,20 @@ end
 8002AE38 80030480 8003007C    # lwz   r0, 0x480(r3) -> 0x7C(r3)
 8002AE3C 9005003C 9005003C    # stw   r0, 0x3C(r5) (guard only)
 
+# Project+'s "Move v-sync call for Brawl/PM" [hannesmann, Dan Salvato, Achilles], the same two words
+# (Source/Extras/Netplay.asm on Project+'s SD card). Brawl's frame function (0x80023AE4) waits for a
+# retrace before it draws: the beq at 0x80023B88 goes back to VIWaitForRetrace (0x801E892C) while no
+# XFB slot is free. Moved, it never waits there and waits once at the end instead, so each frame is
+# drawn and copied right after the game's logic, about 13 ms sooner (ORCA.md "Input latency"). Both
+# groups are in the main DOL, so they land together at the first boundary and stay.
+80023B84 2C000000 2C000000    # cmpwi r0, 0 (guard)
+80023B88 4182FF7C 60000000    # beq   0x80023B04 -> nop
+80023B8C 881F0074 881F0074    # lbz   r0, 0x74(r31) (guard)
+
+80024020 7C0803A6 7C0803A6    # mtlr  r0 (guard)
+80024024 38210020 38210020    # addi  r1, r1, 0x20 (guard)
+80024028 4E800020 481C4904    # blr -> b 0x801E892C (VIWaitForRetrace, a tail call)
+
 # --- Everything unlocked --------------------------------------------------------------------------
 
 # The prize-unlock check (0x8004F978) reads any bit outside its 102-prize table as set for bits

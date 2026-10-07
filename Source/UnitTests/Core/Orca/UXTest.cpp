@@ -1461,6 +1461,58 @@ TEST(OrcaUXGamePatches, BrawlInputLagFixIsTheMagusCodeInPlace)
     EXPECT_FALSE(p.address >= 0x8002AD8C && p.address <= 0x8002AE3C) << std::hex << p.address;
 }
 
+TEST(OrcaUXGamePatches, BrawlRunsProjectPlusVSyncMove)
+{
+  // Project+'s "Move v-sync call for Brawl/PM" (`op nop @ $80023b88`, `op b 0x1C4904 @ $80024028`):
+  // the same two words, each in a group of three whose other words only guard, in both games' files
+  // (Project+'s lands them before its own codes first write them, so no JIT keeps Brawl's).
+  for (const char* file : {"RSBE01.patches", "PPLUS32.patches"})
+  {
+    SCOPED_TRACE(file);
+    const auto patches = ShippedPatches(file);
+    const auto index_of = [&](u32 address) {
+      return static_cast<size_t>(
+          std::find_if(patches.begin(), patches.end(),
+                       [&](const GamePatch& p) { return p.address == address; }) -
+          patches.begin());
+    };
+    struct Move
+    {
+      u32 group, address, original, value;
+    };
+    for (const Move& move : {Move{0x80023B84, 0x80023B88, 0x4182FF7C, 0x60000000},   // beq -> nop
+                             Move{0x80024020, 0x80024028, 0x4E800020, 0x481C4904}})  // blr -> b
+    {
+      const size_t at = index_of(move.group);
+      ASSERT_LE(at + 3, patches.size()) << std::hex << move.group;
+      const std::span<const GamePatch> group(patches.data() + at, 3);
+      EXPECT_FALSE(group[0].joins_previous);
+      EXPECT_TRUE(group[1].joins_previous && group[2].joins_previous);
+      if (at + 3 < patches.size())
+        EXPECT_FALSE(patches[at + 3].joins_previous);
+      std::vector<u32> originals;
+      for (const GamePatch& p : group)
+      {
+        ASSERT_TRUE(p.original.has_value());
+        EXPECT_TRUE(p.when.empty());
+        originals.push_back(*p.original);
+        if (p.address == move.address)
+        {
+          EXPECT_EQ(*p.original, move.original);
+          EXPECT_EQ(p.value, move.value);
+        }
+        else
+        {
+          EXPECT_EQ(p.value, *p.original) << std::hex << p.address;
+        }
+      }
+      EXPECT_TRUE(GroupApplies(group, originals));
+    }
+  }
+  // The tail call goes to VIWaitForRetrace, where the beq's loop called it.
+  EXPECT_EQ(0x80024028u + (0x481C4904u & 0x03FFFFFC), 0x801E892Cu);
+}
+
 TEST(OrcaUXGamePatches, TheShippedProjectPlusFileGuardsEveryLine)
 {
   // Project+ owns the code and data around the disc's modules, so its file may only hold groups

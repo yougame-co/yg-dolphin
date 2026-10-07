@@ -669,35 +669,49 @@ input delay on top (2 frames of 16.68 ms).
 |---|---|---|---|
 | Immediate XFB | `Orca/Profile.cpp` | no | Presents each frame at its XFB copy instead of 18 ms later at the VI field that scans it out. |
 | VSync off | `Orca/Profile.cpp` | no | Forced: VSync only adds 2-19 ms in a composited window and could let the screen pace the game. |
-| Smooth Early Presentation | `Orca/Profile.cpp` | no | Evens presents out for about 2 ms: a 60 Hz screen repeats and drops a third as many frames. |
+| Steady presentation | `Source/Core/VideoCommon/PresentPacing.h` | no | Shows each frame at a steady offset from its VI time that covers the usual rollback re-run, so re-runs don't move the picture. |
 | No re-present on rollback loads | `Source/Core/VideoCommon/Present.cpp` | no | A rollback no longer flashes the snapshot's stale frame. |
 | Slow screens drop frames | `Source/Core/VideoBackends/Metal/MTLGfx.mm` | no | A screen under 59 Hz no longer slows the game to its rate. |
 | Thread priority | `Orca/ThreadPriority.cpp` | no | The CPU, room and controller threads run at interactive priority. |
 | Brawl's input lag fix | `Data/Sys/Orca/RSBE01.patches` | yes (Brawl) | Brawl copies this frame's pads, not last frame's. |
 | SI relatch | `HW/SI/SI.cpp`, `Rollback/Rollback.cpp` | yes | The game reads the pads the frame hook just set, not the previous hook's. |
+| V-sync move | `Data/Sys/Orca/RSBE01.patches`, `PPLUS32.patches` | yes | Both games draw and copy each frame right after its logic instead of after a retrace wait: 13 ms sooner. |
 
-The two that change emulation change the compatibility key, so builds with and without them never
+The three that change emulation change the compatibility key, so builds with and without them never
 meet.
 
 **Result** (median of 82 jumps, 120 Hz screen, solo): Brawl's press-to-glass went from 104 ms to
-53 ms, Project+'s from 87 ms to 53 ms; the image changes at press+2 frames in both.
+53 ms, Project+'s from 87 ms to 53 ms, with the image at press+2 frames in both; the v-sync move
+then took 13 ms more off both (the sampling boundary to the present call: 48.8 to 35.6 ms in Brawl,
+48.8 to 35.2 ms in Project+). Online, with frequent 1-frame rollbacks (on 6-17% of the frames), it
+keeps 6-7 ms of that; with 4-7 frame rollbacks it keeps none, and the picture is as steady as
+before.
 
 ### Presentation (host only)
 
-- **Immediate XFB.** Brawl and Project+ copy their XFB about 15.8 ms into a frame and the VI field
-  starts 18 ms later. It can't desync: re-run frames skip `ImmediateSwap`, the throttle it bypasses
-  only sleeps, and per-frame RAM hashes are identical with it on and off. It also shows the
-  corrected frame after a rollback at once.
-- **Smooth Early Presentation.** Immediate XFB presents unevenly (4-6% of 60 Hz refreshes repeated a
-  frame). Smooth presents at the VI time plus a slowly-following offset: about 2 ms later at the
-  present call, but no later at the glass at the median and earlier at p90, because even presents
-  catch the compositor's earlier slot. A session never makes a stall's time up (pacing resets when a
-  stall ends), so frames after a stall pay the same 2 ms as any other.
+- **Immediate XFB.** The VI field that would scan a copy out starts up to a frame after it. It can't
+  desync: re-run frames skip `ImmediateSwap`, the throttle it bypasses only sleeps, and per-frame
+  RAM hashes are identical with it on and off. It also shows the corrected frame after a rollback at
+  once.
+- **Steady presentation** (`PresentPacer`, under Smooth Early Presentation, forced on). With the
+  v-sync move a frame's copy lands about 2 ms after the frame boundary, 14 ms before the VI field
+  after it. Each frame is due at the throttle's host time for that field, computed at the copy (the
+  estimate taken at the previous field is stale after a re-run, whose fields run unthrottled, or a
+  stall's pacing reset), and is shown at due plus an offset: all but the latest 4 of the last 180
+  arrivals, moving at most 0.5 ms a frame up and 0.2 ms down, never past due. Without rollbacks the
+  offset sits just above the copies. When re-runs come often it grows to cover them, so a re-run
+  doesn't move the picture; a rare one is late on its own frame only. Dolphin's own rule moved half
+  the way to any late frame at once, so with the early copy every re-run dragged the presents after
+  it. Loads and hitches raise the offset the same way: a match's first seconds are presented as
+  before the move, until 3 s after the last slow frame.
+- **Precise waits** (`Common/Timer.cpp`, macOS). A present now waits up to 14 ms, and macOS woke such
+  sleeps 1-3 ms late, which no spin takes back; long waits sleep in 1 ms steps. Precision frame
+  timing is forced on.
 - **No re-present on rollback loads.** Rollback snapshots skip `Presenter::DoState`'s redisplay;
   savestates and keyframes still show their frame.
-- **Rollback and the vertex buffer.** At the frame boundary the GPU is mid-frame (Brawl and Project+
-  are 170-350 draws past their last XFB copy), so the frame shown after a rollback mixes the old
-  timeline's draws and the new one's; that stays. But a batch still buffered in the vertex manager
+- **Rollback and the vertex buffer.** Before the v-sync move, the GPU was mid-frame at the frame
+  boundary (Brawl and Project+ 170-350 draws past their last XFB copy), so the frame shown after a
+  rollback mixed the old timeline's draws and the new one's. But a batch still buffered in the vertex manager
   was flushed after the snapshot's XF and TEV state had been restored, so it was drawn through the
   wrong matrices (one-frame triangle spikes from a character as hits land). Loads now flush it first.
 - **Slow screens** (Metal). On a 50 Hz screen `nextDrawable` held the game at 50 fps, dragging the
@@ -726,6 +740,19 @@ rollbacks had 0-1 underflows; at 40 ms 5-32, at 32 ms 174. Sound trails the pict
   buffer from the pads just set, leaving the status register alone. It is deterministic: a pure
   function of the session's pads, applied after the boundary's snapshot was saved or loaded, so every
   load relatches.
+- **V-sync move** (Project+'s "Move v-sync call for Brawl/PM" by hannesmann, Dan Salvato and
+  Achilles, in its netplay codeset). Brawl's frame function (`0x80023AE4`) waits for a retrace
+  before it draws, looping back to `VIWaitForRetrace` (`0x801E892C`) from the `beq` at `0x80023B88`
+  while no XFB slot is free. The move makes that `beq` a `nop` and its `blr` at `0x80024028` a tail
+  call to `VIWaitForRetrace`, so each frame is drawn and copied right after the game's logic (the
+  copy 2.1 frames after the sampling boundary instead of 2.9) and waits once at the end. Both
+  games write the same two words at the first frame boundary, each in a guarded group of three
+  (`RSBE01.patches`, `PPLUS32.patches`; Project+'s codes then write the same words every frame, see
+  [Code the JIT doesn't see](#code-the-jit-doesnt-see)). Every frame's RAM differs from earlier
+  builds from frame 0 on; the scripts still reach the same scenes, a few frames sooner. A frame
+  that runs over a field now waits for the next retrace, so the game's slow load frames hold whole
+  fields; a 2-field hold (33.37 ms) counts as a slow frame in a game load, where a 1.5-field one
+  didn't.
 
 Measure with a latency-probe build: a scripted press, frame dumps to find the first changed image,
 and timestamps from the sampling boundary to the present call and to CoreAnimation's
@@ -874,15 +901,19 @@ whole-cache clear switches to Project+'s: a desync from the next frame. Orca nev
 a session itself, but Dolphin does when its code space fills, rarely, and at different times on a Mac
 and a PC.
 
-**The fix:** `KeepGameCode = <address> <Brawl's word> <Project+'s word>` lines in `PPLUS32.ini`.
-Every instruction fetch at those addresses (both JITs and the interpreters) gets Brawl's word while
-RAM holds Project+'s, so any JIT clear compiles what ran before, and RAM, its hashes and the codes'
-own reads are unchanged. `JitClearFrame = 2` adds one clear at the end of frame 2, so every machine
-compiles from then on whatever a fetch reads, whatever its boot compiled.
+**The fix:** the v-sync move's two words are written by `PPLUS32.patches` at the first frame
+boundary, before the codes first write them, through the memory-patch path, which drops the JIT's
+copies; every machine runs the move from frame 1 and the codes then write the same words ([Input
+latency](#input-latency)). The other five are `KeepGameCode = <address> <Brawl's word> <Project+'s
+word>` lines in `PPLUS32.ini`: every instruction fetch there (both JITs and the interpreters) gets
+Brawl's word while RAM holds Project+'s, so any JIT clear compiles what ran before, and RAM, its
+hashes and the codes' own reads are unchanged. `JitClearFrame = 2` adds one clear at the end of
+frame 2, so every machine compiles from then on whatever a fetch reads, whatever its boot compiled.
 
-Running Project+'s v-sync move for real would cut about 13 ms of latency, but it doubled the 60 Hz
-repeats and drops whenever there were rollbacks (a re-run's time lands on that frame's present and
-Smooth Early Presentation's offset follows it), so Orca keeps what earlier builds ran.
+Through 0.3.30 the v-sync move was kept as Brawl's words too: run for real, its early copy let each
+rollback's re-run land on that frame's present and drag the presents after it (twice the 60 Hz
+repeats and drops with rollbacks). The steady presentation in [Input latency](#input-latency) fixed
+that.
 
 **Checking a codeset** (a Project+ update, another launcher profile): `Tools/orca/jit-history.py
 <nogui> <disc> --pplus <dol>` runs the boot twice (as it comes, and with JIT clears), compares the

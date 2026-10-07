@@ -1436,6 +1436,151 @@ word). Headless Metal presents nothing, so presentation is measured in a `-p mac
 shader cache first (a cold Metal cache costs ~3.3 s at match start). A forced session setting
 (`Orca/Profile.cpp`) beats `-C`: comparing one needs a build that doesn't force it.
 
+### V-sync move and steady presentation (vsync-move, 2026-10-07)
+
+Luis approved taking back the ~13 ms Orca kept from Brawl's v-sync wait ("Code the JIT doesn't
+see", 2026-10-04), for both games, without worse pacing during rollbacks. Branch `vsync-move` off
+release-0.3.30 (`b9572814ba`); kCompatVersion 22. Probe builds: `vsync-probe-base` (b9572814ba +
+the probe hooks) and `vsync-probe` (the candidate + the hooks, plus a `YG_PACE` knob for A/B rules),
+both measurement-only.
+
+**What changed**
+- Both games run Project+'s "Move v-sync call for Brawl/PM": two guarded 3-word groups in
+  `RSBE01.patches` and the same in `PPLUS32.patches` (written at the first live boundary, before
+  Project+'s codes first write the same words, through the memory-patch path, so no machine's JIT
+  keeps Brawl's words); `PPLUS32.ini` drops their two `KeepGameCode` lines. Originals checked in a
+  RAM dump (ORCA_UX_PROBE): `0x80023B1C` is `bl 0x801E892C`, `0x80024020/24` `mtlr r0`, `addi r1,r1,0x20`.
+- `Presenter::ImmediateSwap`: a copy is due at `GetTargetHostTime(next field ticks)`, computed at the
+  copy on the CPU thread. The old due time was the host time taken when the previous field ran, so
+  after a rollback it was the last re-run field's (unthrottled: `now`), and after a stall the old
+  schedule's. That alone was most of prototype A's trouble: on the first frame after a re-run the
+  arrival read as on time, Smooth's offset jumped half way to it and the frames after it waited.
+  A state load's redisplay keeps `now` (its ticks are another timeline's: a keyframe join would
+  otherwise sleep for minutes, caught in review), and no present waits more than 34 ms.
+- `PresentPacer` (VideoCommon/PresentPacing.h) replaces Smooth Early Presentation's rule for
+  Immediate XFB: present at due + offset, offset = all but the latest 4 of the last 180 arrivals,
+  at most +0.5 / -0.2 ms a frame, never after due. A present after due would delay the next frame's
+  start instead (tried: `late=1000` moved the arrivals 1 ms later and nothing else).
+- `PrecisionTimer::SleepUntil` on macOS sleeps long waits in 1 ms steps. A stand-alone test slept
+  ~11 ms with a 1.02 ms spin margin: woke 2.8-3.2 ms late at p50 (QoS user-interactive or not, nice
+  or not); 1 ms steps: p50 0, p90 0.06 ms. In Orca the 12 ms present sleeps overshot 0-1 ms on half
+  the frames (present intervals p10/p90 15.7/17.7 ms); with steps 16.68/16.69. Precision frame
+  timing is now forced on (it was only Dolphin's default).
+
+**Solo latency** (latency probe, 82 jumps over two runs each, M4 Pro 120 Hz built-in screen,
+871x434 window, warm shader cache; base = b9572814ba + probe, cand = vsync-move + probe;
+p10 / median / p90 ms):
+
+| | Brawl base | Brawl cand | P+ base | P+ cand |
+|---|---|---|---|---|
+| sample -> XFB copy (emulated), median | 49.08 | 34.93 | 49.05 | 34.57 |
+| response frame's boundary -> present call | 14.70 / 15.40 / 16.11 | 1.98 / 2.23 / 2.46 | 14.27 / 15.42 / 15.76 | 1.62 / 1.85 / 2.12 |
+| sample -> present call | 48.22 / 48.78 / 49.43 | 35.33 / 35.57 / 35.87 | 48.01 / 48.76 / 49.45 | 34.97 / 35.19 / 35.46 |
+| GPU done -> on glass, median | 16.70 | 16.88 | 17.16 | 17.19 |
+| sample -> on glass | 65.61 / 68.57 / 71.93 | 52.64 / 56.24 / 59.53 | 65.92 / 69.14 / 72.21 | 52.16 / 55.70 / 59.03 |
+| frames off the 2-refresh cadence | 4.3% | 1.9% | 4.5% | 1.9% |
+
+The compositor sat in its slow state all night (~17 ms from GPU done to glass, against ~4-6 ms on
+10-02 and 10-04), so the glass totals are ~13 ms above the earlier tables for both builds; the
+difference is the move's: -12.3 ms Brawl, -13.4 ms P+ at the glass, -13.2 / -13.6 ms at the present
+call. An earlier pair (pacer window 300, fall 50 us) gave the same medians (Brawl 48.78 -> 35.63,
+P+ 48.81 -> 35.24 at the present call). The image still changes in the copy of press+2.
+
+**Rollback play** (real-time loopbacks as in "Measurements": `YG_LOOPBACK`, `YG_THROTTLE=1`, input
+delay 2, the remote 6-9 frames late, a 150 ms spike every 4 s from frame 2400, an AGENT TEST window,
+Metal; analysed from 2400). Each build plays its own recording. Brawl: `bf-mario-link-results.txt`
+(~890 rollbacks, 30 stalls). Project+: fuzzed play KOs differently in the two builds (base's match
+ended at 3030, cand's at 4331, so the windows weren't comparable), so a KO-free script (port 1
+jumps 3 in 13 frames, port 2 shields 3 in 8 and crouches 3 in 11; ~1440 rollbacks, 20 stalls, a
+heavier load than fuzz). Analysis: `vsa2.py` (scratch, kept with the runs in
+`~/Documents/brawl-dolphin/vsync-runs`); its 60 Hz simulation reads higher than the 10-02 table's
+for the same build, so compare columns, not tables.
+
+| Brawl | base (3 runs) | cand (2 runs) |
+|---|---|---|
+| 60 Hz repeats / drops, 1.5 s+ after a stall | 4.6-4.8% / 1.6-1.8% | 4.7-4.8% / 1.8% |
+| the same, first 0.5 s after a stall | 7.8-8.0% / 2.0-2.1% | 7.7-8.2% / 1.8-2.2% |
+| off the 2-refresh rhythm (120 Hz glass), first 0.5 s / 1.5 s+ | 9-12% / 6-8% | 8-9% / 6% |
+| sample -> present, 1.5 s+ after a stall (p50) | 81.3 ms | 81.0 ms |
+| boundary -> present, frames without / after a rollback (mean) | 14.04-14.06 / 15.70-15.73 ms | 13.69-13.70 / 15.34-15.35 ms |
+| present-call gaps over 25 ms | 48-52 | 41-44 |
+
+| Project+ | base (3 runs) | cand (2 runs) |
+|---|---|---|
+| 60 Hz repeats / drops, 1.5 s+ after a stall | 8.5-8.8% / 5.8-6.1% | 8.2-9.0% / 5.5-6.2% |
+| the same, first 0.5 s after a stall | 10.5-11.1% / 4.1-4.6% | 10.9-11.5% / 4.4-4.9% |
+| off the 2-refresh rhythm, first 0.5 s / 1.5 s+ | 17-23% / 20-22% | 21-22% / 17-24% |
+| sample -> present, 1.5 s+ after a stall (p50) | 81.1 ms | 80.7 ms |
+| boundary -> present, without / after a rollback (mean) | 13.06-13.21 / 15.92-16.14 ms | 12.70-12.76 / 15.62-15.71 ms |
+| present-call gaps over 25 ms | 142-163 | 148-152 |
+
+With 4-7 frame re-runs (11% of Brawl's frames, ~30% of this P+ script's) the offset sits at its
+limit (the due time): latency and pacing match base's within the run-to-run spread (P+'s first
+0.5 s after a stall reads ~0.4% higher; the first frame after a stall, which carries a 4-5 frame
+re-run, is presented ~0.6-1 ms later than in base). The gain shows where re-runs are short:
+
+| Remote 3-4 frames late (`_LAG=3 _JITTER=1`, no spikes: 1-frame rollbacks) | Brawl base | Brawl cand | P+ base | P+ cand |
+|---|---|---|---|---|
+| rollbacks (share of frames) | 442 (6%) | 441 | 932 (17%) | 919 |
+| 60 Hz repeats / drops | 1.2% / 1.1% | 1.1% / 1.0% | 1.0% / 0.9% | 1.0% / 0.9% |
+| sample -> present (p50) | 81.2 ms | 74.4 ms | 81.1 ms | 74.7 ms |
+| boundary -> present (mean) | 14.04 ms | 7.74 ms | 13.92 ms | 8.97 ms |
+
+Rules tried offline on the candidate's arrivals (`vsa2.py sim`, same arrival trace): Dolphin's
+Smooth rule with the corrected due time is fine with 1-frame rollbacks (1.2% / 1.1% at 6.9 ms
+boundary -> present in Brawl) but not with 4-7 frame ones (5.6-5.9% / 2.6-3.0% against base's
+4.6-4.8% / 1.6-1.8%); presenting at the copy, 16% / 13%. Quantiles 950-990 and windows 120-600 all
+pin at the limit with long re-runs; 980 of 180 keeps pacing at base's with short ones for 0.3 ms
+more than 970. The window and fall rate set how fast the offset comes down after a match's load,
+whose frames arrive late for ~170 frames (Brawl's scMelee intro, arrivals p50 -2 ms against -14.5
+in play): with 300 frames and 50 us it settled ~13 s into scMelee, with 180 and 200 us ~11 s.
+
+**Determinism** (candidate, `vsync-move` at the final build)
+- Hash logs, two runs each: Brawl `bf-mario-link-results.txt` identical over 10,808 frames,
+  Project+ `pplus-1v1.txt` over 9,006. Against base every frame differs from frame 0 (the groups
+  land at the first boundary).
+- Sync tests (`YG_SYNCTEST=7`): Brawl 300-4,500 (29,351 re-run frames), P+ 150-3,000 (19,901),
+  0 RAM mismatches; with `YG_SYNCTEST_CLEARJIT=1` Brawl and P+ 300-2,500 (15,351 each), 0; from
+  frame 2 to 700 in both games (4,837 each, rollbacks into the frames around P+'s JIT clear), 0.
+- `jit-history.py` with clears at 388, 2,000, 4,500 and 7,000: Brawl SAME over 9,005 frames,
+  Project+ SAME over 9,006.
+- Loopbacks: every run PASS with all checksums matched (Brawl 959, P+ 719 a run).
+- `dropin-commands.py`, both games, on Metal with a test present target (a wrapper turns the tool's
+  `-v Null` into Metal + `ORCA_TEST_PRESENT`, so keyframe redisplays go through the timed present):
+  PASS, keyframes loaded in 42-48 ms, checksums matched.
+- Unit tests: 560 `Orca*`, 538 pass, 22 skipped (disc/live), 0 fail. New: `OrcaPresentPacing.*`,
+  `OrcaUXGamePatches.BrawlRunsProjectPlusVSyncMove`; `OrcaLaunch.ProjectPlusKeepsBrawlsCode` now
+  lists five kept words.
+- Not run here: Jit64 (x86-64) hash logs and Mac <-> PC (`xplat.py`); the release's PC side.
+
+**Perf gate** (gate-vsync, the lead's gate0330b scenario: Project+ ranked set over prod rooms, both
+Orcas rendering with Metal test presents, 40 +- 8 ms, candidate = unsigned Release package of the
+branch at `3fe0cba133`, the same code as the commit; base = live 0.3.29; B0/C0 warm-ups, then four
+runs each, interleaved, none tainted by the SSD, every run PASS with every checksum matched).
+Means per run, host / joiner at frame 14400:
+
+| | 0.3.29 live | vsync-move |
+|---|---|---|
+| slow frames (hitches here + in game loads) | 8.5 / 8.2 (16.8) | 13.8 / 14.5 (28.2) |
+| of which here | 1.5 / 1.25 | 0.5 / 0.5 |
+| of which in game loads | 7 / 7 | 13.25 / 14 |
+| stalls | 1.2 / 10.8 | 0.5 / 10.8 |
+| rollbacks / re-run frames | 23.5 / 20.5, 69.5 / 61.5 | 25.5 / 22.5, 68.8 / 65.8 |
+| snapshot ms | 0.92 / 0.93 | 0.93 / 0.97 |
+
+The whole difference in slow frames is frames the game itself held in loads. With the move a frame
+that runs over a field waits for the next retrace, so load frames hold whole fields: 2.0, 5.0, 6.0
+where 0.3.29's held 1.5, 4.4, 5.4 (frame boundaries' emulated ticks in the loopback logs: base 12
+such frames from boot to the match, the candidate 16, all in scMemoryChange, the end of scSelStage
+and scMelee's first frames under the loading image). A 2-field hold is 33.367 ms and `HITCH_TIME` is
+33.334 ms, so each one now counts as a slow frame in a game load; 0.3.29's 1.5-field holds never
+did. They are emulation, the same on every machine (the session's own split puts all of them under
+"game loads"). Hitches here, stalls, rollbacks and snapshot cost are level or better.
+
+**Left for release:** `RSBE01.jitwarm` blocks over `0x80023B84-0x8002402C` recorded with Brawl's
+words now fail their hash and are skipped (a little less warm-up, no correctness issue): regenerate
+the warm-up lists. Windows build, its present timing (D3D) and the Mac <-> PC match.
+
 ## Music switch
 
 Approved 2026-10-06 (X report `no-music-toggle`: "no way to disable music", a P+ player's Discord
@@ -1906,6 +2051,13 @@ latency everywhere, but twice the 60 Hz repeats and drops and more long present 
 there are rollbacks, so 0.3.15 keeps 0.3.14's behaviour. The 13 ms is real for solo play and for
 online play without rollbacks; taking it online needs a presentation that doesn't let a re-run
 frame drag the others (and vanilla Brawl has the same wait, `RSBE01`).
+
+**Update, 2026-10-07 (`vsync-move`, kCompatVersion 22):** the 13 ms is taken back. Both games now
+run the v-sync move (Project+'s two words land from `PPLUS32.patches` at the first boundary, before
+its codes write them, so no JIT keeps Brawl's), and presentation no longer follows re-runs: the due
+time is recomputed from the throttle at the copy and a quantile of arrivals sets the offset
+("Input latency", "V-sync move and steady presentation"). The two v-sync `KeepGameCode` lines are
+gone; the other five stay.
 
 **The fix (0.3.15).** `KeepGameCode = <address> <Brawl's word> <Project+'s word>` lines in
 `PPLUS32.ini` (`Profile.h` `kept_code`, `Orca::KeptInstruction`): every instruction fetch at those
