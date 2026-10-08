@@ -25,6 +25,9 @@
 //            leave still loses the set by forfeit; --expect void (with --in-game 1 only) is the
 //            control for an Orca without it: no game-start, and the set ends void ("ended before a
 //            game was played")
+//            --in-game 0: kill or leave 1 s into game 1's stage, during its loading image, before
+//            the fighters are in: neither Orca sends game-start, and the set ends void, nobody
+//            rated (a crash at load; --expect void is then the default)
 //   zleave   ranked: after the set the joiner leaves by holding Z on the results screen
 //   noskip   ranked: both hold Z on every character select; ranked has no skip
 // --pick random makes every pick RANDOM. Every --q2 scenario ends with the checksum gate: each
@@ -134,17 +137,19 @@ const FIGHT = argv.includes("--fight");
 // (`orca menu online <queue>`, RearmFriendsPick) within 20 s while the friend goes home to a room of
 // its own: RESULT: REARMED / NOT-REARMED (exit 6) and HOME / NO-ROOM.
 const LEAVER = opt("--leaver", "inviter");
-// --scenario kill|leave: the game of the set the joiner goes in (1 or 2), and the set's expected end
-// (forfeit, or void for an Orca that never says a game began).
+// --scenario kill|leave: the game of the set the joiner goes in (1 or 2, or 0: game 1's load, before
+// its fighters are in), and the set's expected end (forfeit, or void for an Orca that never says a
+// game began, and for a leave at load).
 const IN_GAME = Number(opt("--in-game", "2"));
-const EXPECT = opt("--expect", "forfeit");
-if (![1, 2].includes(IN_GAME) || !["forfeit", "void"].includes(EXPECT)) {
-  console.error("--in-game is 1 or 2; --expect is forfeit or void");
+const EXPECT = opt("--expect", IN_GAME === 0 ? "void" : "forfeit");
+if (![0, 1, 2].includes(IN_GAME) || !["forfeit", "void"].includes(EXPECT)) {
+  console.error("--in-game is 0, 1 or 2; --expect is forfeit or void");
   process.exit(2);
 }
-// A set that played game 1 reached it whatever the Orca: only a leave in game 1 can be void.
-if (EXPECT === "void" && IN_GAME !== 1) {
-  console.error("--expect void needs --in-game 1");
+// A set that played game 1 reached it whatever the Orca: only a leave in game 1 can be void, and a
+// leave at game 1's load always is.
+if ((EXPECT === "void" && IN_GAME === 2) || (EXPECT === "forfeit" && IN_GAME === 0)) {
+  console.error("--expect void needs --in-game 0 or 1; --in-game 0 is void");
   process.exit(2);
 }
 const VARIANT = opt("--variant", "d");
@@ -1534,8 +1539,9 @@ async function q2Main() {
     await host.waitScene("scSelStage", 60000);
     await host.waitScene("scMelee", 200000);
     // The fighters are in about 4.7 s (Brawl, 283 frames) or 2.3 s (Project+, 140) after scMelee
-    // starts; the game-start goes once that frame is final.
-    await sleep(8000);
+    // starts; the game-start goes once that frame is final. --in-game 0 leaves 1 s in, during the
+    // stage's loading image.
+    await sleep(IN_GAME === 0 ? 1000 : 8000);
     // Each Orca told the room this game began, once, with the same id (the fight's first frame).
     const starts = [host, joiner].map((s) => s.gameStarts.map((g) => g.msg));
     log(`game-start sent: ${[host, joiner].map((s, i) => `${s.name} ${JSON.stringify(starts[i])}`).join("; ")}`);
@@ -1600,6 +1606,15 @@ async function q2Main() {
     // A void set rates nobody: the page sends no new rating.
     if (EXPECT === "forfeit" && !(await waitSetEnd(host, /^Set end: the page's rating/, 5000, seFrom)))
       fail(`${host.name}: the page's new rating never reached the panel`);
+    // A leave at load: the leaver's screen said the set doesn't count, and its Orca never told the
+    // room a game began, not even in the round trip before it was unplugged.
+    if (IN_GAME === 0) {
+      if (!kill && !joiner.setEndLog.slice(joinerFrom).some((e) => /left the set: before its first game/.test(e.line)))
+        fail(`${joiner.name}: its screen didn't say the set doesn't count`);
+      const late = [host, joiner].map((s) => s.gameStarts.length);
+      if (late[1]) fail(`${joiner.name} sent game-start after its leave: ${JSON.stringify(joiner.gameStarts)}`);
+      log(`game-start after the leave: ${host.name} ${late[0]}, ${joiner.name} ${late[1]}`);
+    }
     // A set was played (game 1): back not ready.
     await q2Back(host, host.queueAt, false);
     if (!kill) await q2Back(joiner, joiner.queueAt, false);
