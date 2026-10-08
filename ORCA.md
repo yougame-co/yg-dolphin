@@ -1578,8 +1578,10 @@ A picks (puts the token down), B takes it back up, **Start locks the pick in** (
 latch; the game never sees that Start). Off-turn players' controllers do nothing. When the second
 player locks in, the stage select comes at once. The tokens stay down between games, so Start alone
 keeps last game's character. A player whose time runs out with the token in hand has it put on the
-character under the hand. Game 1 has no order (both pick at once). State: 16 bytes at `+0x200`
-(magic `YGCO`, the step, the first picker, the lock-ins, the step's start frame).
+character under the hand. Game 1 has no order (both pick at once). L or R held as you lock in
+carries into the game (Zero Suit Samus, Sheik, Project+'s Nana-led Ice Climbers): kept as the turn
+ends and held for that player while the select ends. State: 16 bytes at `+0x200` (magic `YGCO`, the
+step, the first picker, the lock-ins, the step's start frame, the kept L and R at `+0x20E`).
 
 Not yet: Supernova 2025's exact order (ban, the loser's stage, then characters).
 
