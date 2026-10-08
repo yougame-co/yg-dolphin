@@ -4,6 +4,15 @@
   make-bundle.py RSBE01 <out> [--tree]
   make-bundle.py PPLUS32 <out> --pplus-user <Project+ release's user/ folder> [--tree]
   make-bundle.py --tree <folder>        (tree.json for an existing bundle folder)
+  make-bundle.py RSBE01 <out> --flat [--key <private key>]
+  make-bundle.py PPLUS32 <out> --flat (--pplus-user <user/> | --pplus-run <folder>) [--key <private key>]
+
+--flat writes a flat bundle (Source/Core/Core/Orca/Bundle.h): mod.json format 2 and the files it
+names side by side, at most eight with mod.sig, which --key signs (sign-bundle.py). Project+'s
+launcher keeps its official name and the official sd.raw is used as it is, pinned by size and
+XXH3-128 (xxhsum -H2 when installed, else PPLUS32.ini's hash once its SHA-256 shows it is the
+official image); on macOS big files are APFS clones. --pplus-run takes a folder with the launcher
+and sd.raw side by side (the desktop app's run folder).
 
 Reads Data/Sys/Orca/<profile>.ini, .patches, .jitwarm and Textures/RSBE01/ from this checkout (or
 --sys), and for Project+ the official release's files: Launcher/Project+ Netplay Launcher.dol and the
@@ -41,6 +50,8 @@ PPLUS_SD_BYTES = 2_097_152_000
 PPLUS_LAUNCHER = "Project+ Netplay Launcher.dol"
 # sha256 of Project+ v3.2's Netplay Launcher (PPLUS32.ini names its XXH3-128).
 PPLUS_LAUNCHER_SHA256_PREFIX = "74a0decf"
+# sha256 of Project+ v3.2's sd.raw (PPLUS32.ini names its XXH3-128).
+PPLUS_SD_SHA256_PREFIX = "cfe5d869"
 
 
 def path_problem(path):
@@ -142,8 +153,17 @@ def main():
     ap.add_argument("--pplus-user", help="Project+ release's user/ folder (Launcher/, Wii/sd.raw)")
     ap.add_argument("--7z", dest="sevenzip", default=None,
                     help="unpack sd.raw with this 7-Zip (7zz or 7z.exe); default: fatread.py, no 7-Zip needed")
-    ap.add_argument("--min-orca", default="0.4.0")
+    ap.add_argument("--min-orca", default=None, help="engine.minOrca (default 0.4.0; --flat 0.3.35)")
+    ap.add_argument("--flat", action="store_true", help="a flat bundle (mod.json format 2)")
+    ap.add_argument("--pplus-run", help="--flat: a folder with Project+'s launcher and sd.raw side by side")
+    ap.add_argument("--key", help="--flat: sign with this private key (sign-bundle.py keygen)")
     args = ap.parse_args()
+    if args.min_orca is None:
+        args.min_orca = "0.3.35" if args.flat else "0.4.0"
+    if args.flat:
+        if args.tree or not args.profile:
+            sys.exit("--flat takes a profile and no --tree")
+        return make_flat(args)
 
     out = os.path.abspath(args.out)
     if args.profile is None:
@@ -276,6 +296,122 @@ def main():
         raise
     sd = sum(1 for f in files if f["path"].startswith("sd/"))
     print(f"{out}: {len(files)} files ({sd} on the SD card), tree {tree['tree']}")
+
+
+def clone(src, dst):
+    """A copy of src at dst: an APFS clone on macOS (copy on write, never a hard link), else a copy."""
+    if sys.platform == "darwin" and subprocess.run(["cp", "-c", src, dst], capture_output=True).returncode == 0:
+        return
+    shutil.copyfile(src, dst)
+
+
+def xxh128(path):
+    """XXH3-128 as Orca's Profile.cpp HashFile prints it, with xxhsum (None when not installed)."""
+    try:
+        out = subprocess.run(["xxhsum", "-H2", path], check=True, capture_output=True, text=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    return out.split()[0].split("_")[-1].lower()
+
+
+def make_flat(args):
+    out = os.path.abspath(args.out)
+    if os.path.exists(out):
+        sys.exit(f"{out} exists; give a new folder")
+    if os.path.commonpath([out, REPO]) == REPO and args.profile == "PPLUS32":
+        sys.exit("Project+'s files are not ours to commit: write its bundle outside the repository")
+    orca = os.path.join(args.sys, "Orca")
+    ini = read_profile(os.path.join(orca, args.profile + ".ini"))
+    p, kept = {}, []
+    for key, value in ini["Profile"]:
+        if key == "KeepGameCode":
+            kept.append([hex_word(w) for w in value.split()])
+        else:
+            p[key] = value
+    unknown = set(p) - {"Title", "Disc", "Revision", "Launcher", "SDImage", "SDImageHash", "SaveTitle", "FrameHook",
+                        "FrameHookWord", "BootNandFrame", "JitClearFrame"}
+    if unknown:
+        sys.exit(f"{args.profile}: keys this tool doesn't map: {sorted(unknown)}")
+
+    sources = {}  # bundle file name -> source path
+    mod = {"format": 2, "engine": {"api": 1, "minOrca": args.min_orca}}
+    if "Title" in p:
+        mod["title"] = p["Title"]
+    mod["disc"] = {"id": p.get("Disc", args.profile), "revision": int(p["Revision"], 0)}
+    if "Launcher" in p:
+        if args.pplus_run:
+            dol, image = (os.path.join(args.pplus_run, n) for n in (PPLUS_LAUNCHER, p.get("SDImage", "")))
+        elif args.pplus_user:
+            dol = os.path.join(args.pplus_user, "Launcher", PPLUS_LAUNCHER)
+            image = os.path.join(args.pplus_user, "Wii", p.get("SDImage", ""))
+        else:
+            sys.exit("Project+: give --pplus-user <release's user/ folder> or --pplus-run <folder>")
+        if not sha256_file(dol).startswith(PPLUS_LAUNCHER_SHA256_PREFIX):
+            sys.exit(f"{dol} is not Project+ v3.2's Netplay Launcher")
+        mod["launcher"] = PPLUS_LAUNCHER
+        sources[PPLUS_LAUNCHER] = dol
+        if "SDImage" in p:
+            size = os.path.getsize(image)
+            if size != PPLUS_SD_BYTES:
+                sys.exit(f"{image} is not {PPLUS_SD_BYTES} bytes")
+            xxh3 = xxh128(image)
+            if xxh3 is None:
+                if not sha256_file(image).startswith(PPLUS_SD_SHA256_PREFIX):
+                    sys.exit(f"{image} is not Project+ v3.2's sd.raw, and xxhsum isn't here to hash it")
+                xxh3 = p["SDImageHash"]
+            if xxh3 != p["SDImageHash"]:
+                print(f"note: {image} is not the card PPLUS32.ini pins ({xxh3}, not {p['SDImageHash']})")
+            mod["sdImage"] = {"file": p["SDImage"], "bytes": size, "xxh3": xxh3}
+            sources[p["SDImage"]] = image
+    patches = f"{args.profile}.patches"
+    mod["patches"] = [patches]
+    sources[patches] = os.path.join(orca, patches)
+    jitwarm = os.path.join(orca, args.profile + ".jitwarm")
+    if os.path.exists(jitwarm):
+        mod["jitwarm"] = f"{args.profile}.jitwarm"
+        sources[mod["jitwarm"]] = jitwarm
+    mod["textures"] = "engine"
+    mod["frameHook"] = {"address": hex_word(p["FrameHook"]), "word": hex_word(p["FrameHookWord"])}
+    if "BootNandFrame" in p:
+        mod["bootNandFrame"] = int(p["BootNandFrame"], 0)
+    mod["firstKeyframeFrame"] = 300
+    if "JitClearFrame" in p:
+        mod["jitClearFrame"] = int(p["JitClearFrame"], 0)
+    if kept:
+        mod["keepGameCode"] = kept
+    if "SaveTitle" in p:
+        mod["saveTitle"] = f"0x{int(p['SaveTitle'], 16):016X}"
+    forced = {}
+    for key, value in ini["Forced"]:
+        if key == "Dolphin.Core.WiiSDCard":
+            if value != "True" or "sdImage" not in mod:
+                sys.exit(f"{args.profile}: WiiSDCard={value} without an SD image")
+            continue
+        if key != "Dolphin.Core.CustomRTCValue":
+            sys.exit(f"{args.profile}: {key} is not on the engine's allowlist")
+        forced[key] = int(value, 0)
+    if forced:
+        mod["forced"] = forced
+    mod["builtin"] = BUILTIN[args.profile]
+    mod["rulesets"] = RULESETS[args.profile]
+    mod["offers"] = OFFERS
+
+    tmp = tempfile.mkdtemp(prefix="orca-flat-", dir=os.path.dirname(out))
+    try:
+        for name, src in sources.items():
+            if path_problem(name) or "/" in name:
+                sys.exit(f"{name}: not a flat name")
+            clone(src, os.path.join(tmp, name))
+        with open(os.path.join(tmp, "mod.json"), "w", newline="\n") as f:
+            f.write(json.dumps(mod, indent=2) + "\n")
+        os.rename(tmp, out)
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+    print(f"{out}: {len(sources) + 1} files (mod.json, {', '.join(sources)})")
+    if args.key:
+        sign = os.path.join(HERE, "sign-bundle.py")
+        subprocess.run([sys.executable, "-I", sign, "sign", out, "--key", args.key], check=True)
 
 
 if __name__ == "__main__":
