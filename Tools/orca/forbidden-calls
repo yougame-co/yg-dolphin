@@ -1,0 +1,455 @@
+#!/usr/bin/env python3
+# Copyright 2026 YouGame
+# SPDX-License-Identifier: GPL-2.0-or-later
+"""Scan Orca's shipped code for calls a game fix must never add, and report the ones that are new.
+
+  Tools/orca/forbidden-calls                  scan the working tree
+  Tools/orca/forbidden-calls --rev B          scan the tree at revision B
+  Tools/orca/forbidden-calls --rev B --since A
+                                              also mark which hit lines A..B added
+  Tools/orca/forbidden-calls --baseline-rev origin/main --rev B
+                                              gate a branch against the stable branch's baseline,
+                                              so a branch can't approve its own hits
+  Tools/orca/forbidden-calls --update-baseline
+                                              accept today's hits (a person reviews that diff)
+  --list   print every hit, not just new ones;  --json   machine-readable
+
+What is scanned: Orca's own code (every %orca-root in layers.txt plus every file that differs from
+upstream Dolphin), C/C++/Objective-C and CMake files only, minus paths layers.txt marks `dev` (tests
+and tools never ship). Comments are ignored; string literals are kept.
+
+Rules:
+  socket        BSD/Winsock calls and headers, ENet, libjuice, SFML network, asio
+  http          curl, Dolphin's HttpRequest and WebSocket, NSURLSession, WinHTTP, URL literals
+  file-open     opening, writing, renaming or deleting files on a line that doesn't build its path
+                from the Dolphin user or Sys directory (GetUserPath, GetSysDirectory, D_*_IDX)
+  process       system, popen, fork, exec*, posix_spawn, CreateProcess, ShellExecute, NSTask
+  dynload       dlopen, dlsym, LoadLibrary, GetProcAddress, NSBundle, DynamicLibrary
+  env           getenv and friends, environ, Orca's env helpers (GetEnv, Env, EnvIs, EnvInt...)
+  peer-parse    decoding primitives (memcpy, reinterpret_cast, picojson, Parse*/Decode*, strto*,
+                from_chars, swaps) in code that reads bytes from peers, the room or the app:
+                Session/**, OnlineMatch, SessionPort, Chat, Controllers, the embed channel, WebSocket
+  build-deps    find_package, add_subdirectory, FetchContent, pkg-config and each library given to
+                target_link_libraries in CMake files
+
+A hit is keyed by (rule, path, token), where the token is the call or header plus its string
+argument when it has one (getenv("ORCA_X"), a URL). The baseline holds how many of each key are
+allowed. A key whose count goes up is a NEW hit, so moving or editing a line is quiet, while a
+new call, a new environment variable, a new URL or a new library is reported.
+Exit status: 0 clean, 1 new hits, 2 error.
+"""
+
+import argparse
+import json
+import os
+import re
+import sys
+from collections import Counter, defaultdict
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import layerlib  # noqa: E402
+
+BASELINE_IN_REPO = "Tools/orca/forbidden-calls.baseline"
+DEFAULT_BASELINE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "forbidden-calls.baseline")
+
+C_EXTS = (".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".hxx", ".inl", ".m", ".mm")
+
+PEER_FILES = [
+    "Source/Core/Core/Orca/Session/**",
+    "Source/Core/Core/Rollback/OnlineMatch.*",
+    "Source/Core/Core/Rollback/SessionPort.*",
+    "Source/Core/Core/Orca/UX/Chat.*",
+    "Source/Core/Core/Orca/UX/Controllers.*",
+    "Source/Core/DolphinNoGUI/Embed.*",
+    "Source/Core/DolphinNoGUI/Platform.*",
+    "Source/Core/Common/WebSocket.*",
+]
+PEER_RE = [re.compile(layerlib.glob_to_regex(g)) for g in PEER_FILES]
+
+USER_DIR = re.compile(r"\bGetUserPath\s*\(|\bGetSysDirectory\s*\(|\b[DF]_\w+_IDX\b")
+
+STR = r'(?:\s*(?:L|u8|u|U)?"(?:[^"\\]|\\.)*")?'  # an optional first string argument
+
+
+def calls(names, arg=False):
+    """A call to one of names, with whatever qualifier precedes it (`.`, `->`, `ns::`)."""
+    return re.compile(r"((?:[A-Za-z_]\w*)?::|\.|->)?\s*\b(" + names + r")\s*\(" + (STR if arg else ""))
+
+
+def include(names):
+    return re.compile(r'#\s*(?:include|import)\s*[<"]((?:' + names + r')[^>"]*)[>"]')
+
+
+# Each rule: a list of (regex, kind). kind "call": group 1 is the qualifier and the token is the
+# match; "member" calls (after . or ->) are skipped unless the rule says so. kind "name": the
+# token is the match. kind "include": the token is the header.
+SOCKET_CALLS = (
+    r"socket|socketpair|connect|bind|listen|accept4?|sendto|recvfrom|sendmsg|recvmsg|send|recv|"
+    r"getaddrinfo|gethostbyname2?|gethostbyaddr|inet_pton|inet_addr|closesocket|ioctlsocket|"
+    r"WSAStartup|WSASocket[AW]?|WSAPoll|WSAIoctl|select|poll|epoll_create1?|epoll_ctl|kqueue|"
+    r"setsockopt|getsockopt|getsockname|getpeername|enet_\w+|juice_\w+"
+)
+RULES = {
+    "socket": [
+        (include(r"sys/socket|netinet/|arpa/inet|netdb|winsock|ws2tcpip|ws2def|mswsock|sys/un\.h|"
+                 r"SFML/Network|enet/|juice/|asio|boost/asio|ixwebsocket"), "include"),
+        (calls(SOCKET_CALLS), "call-global"),
+        (re.compile(r"\bsf::(?:TcpSocket|UdpSocket|TcpListener|SocketSelector|IpAddress|Packet)\b|"
+                    r"\bENetHost\b|\bjuice_agent_t\b|\bSOCKET\b"), "name"),
+    ],
+    "http": [
+        (include(r"curl/|winhttp|wininet|Common/HttpRequest|Common/WebSocket|Common/CurlTLS"), "include"),
+        (calls(r"curl_\w+"), "call"),
+        (re.compile(r"\b(?:Common::)?(?:HttpRequest|WebSocket)\b|\bNSURL(?:Session\w*|Connection|"
+                    r"Request|MutableURLRequest)\b|\bNSMutableURLRequest\b|\bWinHttp\w+|"
+                    r"\bInternetOpen\w*|\bURLDownloadToFile\w*|\bsf::Http\b"), "name"),
+        (re.compile(r'"(?:https?|wss?|ftp)://(?:[^"\\]|\\.)*"'), "name"),
+    ],
+    "file-open": [
+        (include(r"fstream|filesystem|fcntl\.h|sys/mman"), "include"),
+        (calls(r"fopen|_wfopen|_tfsopen|_fsopen|freopen|fdopen|open|openat|creat|remove|unlink|"
+               r"rmdir|rename|mkdir|opendir|mmap|shm_open|CreateFile[AW]?|DeleteFile[AW]?|"
+               r"MoveFile\w*|CopyFile\w*"), "call-c"),
+        (re.compile(r"\bFile::(?:OpenFStream|ReadFileToString|WriteStringToFile|Copy|CopyDir|"
+                    r"Rename|RenameSync|Delete|DeleteDir|DeleteDirRecursively|CreateDir|CreateDirs|"
+                    r"CreateFullPath|CreateEmptyFile|MoveWithOverwrite|SetCurrentDir)\s*\(|"
+                    r"\b(?:std::filesystem|fs)::(?:remove|remove_all|rename|create_directory|"
+                    r"create_directories|copy|copy_file|resize_file|permissions|directory_iterator|"
+                    r"recursive_directory_iterator|temp_directory_path)\b"), "name"),
+        (re.compile(r"\b(?:std::)?(?:ifstream|ofstream|fstream)\b|\bFile::IOFile\b|"
+                    r"(?<!::)\bIOFile\s+\w+\s*[({]|\bNSFileManager\b|\bNSFileHandle\b"), "name"),
+    ],
+    "process": [
+        (include(r"spawn\.h|sys/wait\.h|process\.h"), "include"),
+        (calls(r"system|popen|_popen|_wpopen|fork|vfork|execl|execlp|execle|execv|execvp|execve|"
+               r"execvpe|posix_spawnp?|CreateProcess[AW]?|CreateProcessAsUser[AW]?|ShellExecute[AW]?|"
+               r"ShellExecuteEx[AW]?|WinExec|_spawn\w*|_wspawn\w*", arg=True), "call"),
+        (re.compile(r"\bNSTask\b|\bNSWorkspace\b|\bLSOpen\w*"), "name"),
+    ],
+    "dynload": [
+        (include(r"dlfcn\.h|Common/DynamicLibrary"), "include"),
+        (calls(r"dlopen|dlmopen|dlsym|LoadLibrary[AW]?|LoadLibraryEx[AW]?|GetProcAddress|"
+               r"GetModuleHandle\w*|CFBundleLoadExecutable\w*|CFBundleGetFunctionPointerForName",
+               arg=True), "call"),
+        (re.compile(r"\bNSBundle\b|\bDynamicLibrary\b"), "name"),
+    ],
+    "env": [
+        (calls(r"getenv|_wgetenv|secure_getenv|_dupenv_s|_wdupenv_s|GetEnvironmentVariable[AW]?|"
+               r"GetEnvironmentStrings\w*|setenv|unsetenv|putenv|_putenv|_wputenv|"
+               r"SetEnvironmentVariable[AW]?|GetEnv|Env|EnvIs|EnvInt|EnvHeat|EnvList|EnvFlag",
+               arg=True), "call"),
+        (re.compile(r"\b_?environ\b|\bNSProcessInfo\b"), "name"),
+    ],
+    "peer-parse": [
+        (calls(r"memcpy|memmove|picojson::parse|parse|from_chars|strtol|strtoul|strtoll|strtoull|"
+               r"strtod|strtof|stoi|stol|stoul|stoll|stoull|stod|sscanf|Decode\w*|Parse\w*|"
+               r"swap16|swap32|swap64|Read(?:U|S|BE|LE)?\d+\w*"), "call-any"),
+        (re.compile(r"\breinterpret_cast\s*<|\bBitCast\w*\s*<|\.get\s*<"), "name"),
+    ],
+}
+ALL_RULES = list(RULES) + ["build-deps"]
+
+CMAKE_CMDS = (r"find_package|add_subdirectory|FetchContent_Declare|FetchContent_MakeAvailable|"
+              r"ExternalProject_Add|pkg_check_modules|pkg_search_module|"
+              r"dolphin_find_optional_system_library\w*|target_link_libraries|link_libraries")
+CMAKE_KEYWORDS = {"PUBLIC", "PRIVATE", "INTERFACE", "LINK_PUBLIC", "LINK_PRIVATE", "debug",
+                  "optimized", "general", "REQUIRED", "QUIET", "CONFIG", "MODULE", "EXCLUDE_FROM_ALL",
+                  "SYSTEM", "IMPORTED_TARGET", "GLOBAL"}
+
+
+INCLUDE_LINE = re.compile(r"\s*#\s*(?:include|import)\b")
+
+
+def strip_c_comments(text):
+    """Blanks out // and /* */ comments, keeping strings, line breaks and columns."""
+    out = list(text)
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        nxt = text[i + 1] if i + 1 < n else ""
+        if c == "/" and nxt == "/":
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            for k in range(i, j):
+                out[k] = " "
+            i = j
+        elif c == "/" and nxt == "*":
+            j = text.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            for k in range(i, j):
+                if out[k] != "\n":
+                    out[k] = " "
+            i = j
+        elif c == "R" and nxt == '"' and (i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_")):
+            m = re.match(r'R"([^ ()\\\t\n]{0,16})\(', text[i:])
+            if m:
+                end = text.find(")" + m.group(1) + '"', i + m.end())
+                i = n if end < 0 else end + len(m.group(1)) + 2
+            else:
+                i += 1
+        elif c == '"' or (c == "'" and not (i > 0 and text[i - 1].isalnum() and nxt.isalnum())):
+            j = i + 1
+            while j < n and text[j] != c and text[j] != "\n":
+                j += 2 if text[j] == "\\" else 1
+            i = j + 1
+        else:
+            i += 1
+    return "".join(out)
+
+
+def strip_cmake_comments(text):
+    return re.sub(r"(?m)#.*$", lambda m: " " * len(m.group(0)), text)
+
+
+def norm(token):
+    return re.sub(r"\s+", "", token)
+
+
+def scan_c(path, text):
+    """Yields (rule, token, line number, line text)."""
+    code = strip_c_comments(text)
+    lines = code.split("\n")
+    raw = text.split("\n")
+    peer = any(r.match(path) for r in PEER_RE)
+    for no, line in enumerate(lines, 1):
+        if not line.strip():
+            continue
+        is_include = INCLUDE_LINE.match(line) is not None
+        for rule, pats in RULES.items():
+            if rule == "peer-parse" and not peer:
+                continue
+            for rx, kind in pats:
+                if is_include != (kind == "include"):
+                    continue
+                for m in rx.finditer(line):
+                    if kind == "include":
+                        token = "#include " + m.group(1)
+                    elif kind.startswith("call"):
+                        qual = (m.group(1) or "").strip()
+                        if qual in (".", "->") and kind != "call-any":
+                            continue
+                        if kind == "call-global" and qual not in ("", "::"):
+                            continue  # std::bind, asio::connect are not socket calls
+                        if kind == "call-c" and qual not in ("", "::", "std::"):
+                            continue  # HostFileSystem::Rename is not rename(2)
+                        token = norm(m.group(0))
+                        if qual in (".", "->"):
+                            token = token.lstrip(".->")
+                            token = "." + token
+                    else:
+                        token = norm(m.group(0))
+                    if rule == "file-open" and USER_DIR.search(line):
+                        continue
+                    yield rule, token, no, raw[no - 1].strip() if no - 1 < len(raw) else line.strip()
+
+
+def scan_cmake(path, text):
+    code = strip_cmake_comments(text)
+    raw = text.split("\n")
+    for m in re.finditer(r"\b(" + CMAKE_CMDS + r")\s*\(([^()]*(?:\([^()]*\)[^()]*)*)\)", code, re.I):
+        cmd = m.group(1)
+        args = [a for a in re.split(r"\s+", m.group(2).strip()) if a]
+        no = code.count("\n", 0, m.start()) + 1
+        first = raw[no - 1].strip()
+        if not args:
+            continue
+        if cmd.lower() in ("target_link_libraries", "link_libraries"):
+            target = args[0] if cmd.lower() == "target_link_libraries" else ""
+            for lib in args[1:] if target else args:
+                if lib in CMAKE_KEYWORDS:
+                    continue
+                yield "build-deps", "%s(%s %s)" % (cmd.lower(), target, lib), no, first
+        else:
+            yield "build-deps", "%s(%s)" % (cmd.lower(), args[0]), no, first
+
+
+def scannable(path, rules):
+    base = os.path.basename(path)
+    if not (path.endswith(C_EXTS) or base == "CMakeLists.txt" or path.endswith(".cmake")):
+        return False
+    return not rules.classify(path).dev
+
+
+def scan_text(path, text):
+    if path.endswith(C_EXTS):
+        return list(scan_c(path, text))
+    return list(scan_cmake(path, text))
+
+
+def read_files(repo, rev, paths):
+    """Contents of paths at rev (None = the working tree). Skips submodules and directories."""
+    if rev is None:
+        for p in paths:
+            full = os.path.join(repo, p)
+            if os.path.isfile(full):
+                with open(full, "rb") as f:
+                    yield p, f.read().decode("utf-8", "replace")
+        return
+    import subprocess
+
+    wanted = set(paths)
+    listing = layerlib.git(repo, "ls-tree", "-r", "-z", rev) if paths else ""
+    blobs = []
+    for rec in listing.split("\0"):
+        if not rec:
+            continue
+        meta, p = rec.split("\t", 1)
+        mode, kind, sha = meta.split()
+        if p in wanted and kind == "blob" and not mode.startswith("12"):
+            blobs.append((p, sha))
+    if not blobs:
+        return
+    proc = subprocess.Popen(["git", "-C", repo, "cat-file", "--batch"], stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE)
+    data, _ = proc.communicate("".join(sha + "\n" for _, sha in blobs).encode())
+    pos = 0
+    for p, sha in blobs:
+        end = data.index(b"\n", pos)
+        header = data[pos:end].split()
+        size = int(header[2])
+        body = data[end + 1 : end + 1 + size]
+        pos = end + 1 + size + 1
+        yield p, body.decode("utf-8", "replace")
+
+
+def load_baseline(text):
+    base = Counter()
+    for no, line in enumerate(text.splitlines(), 1):
+        if not line.strip() or line.startswith("#"):
+            continue
+        parts = line.split("\t")
+        if len(parts) != 4 or parts[1] not in ALL_RULES:
+            raise ValueError("baseline line %d: expected <count> <rule> <path> <token>" % no)
+        base[(parts[1], parts[2], parts[3])] += int(parts[0])
+    return base
+
+
+def format_baseline(counts, base_commit):
+    lines = [
+        "# Tools/orca/forbidden-calls baseline: the hits Orca's shipped code is allowed today.",
+        "# Rewrite with `Tools/orca/forbidden-calls --update-baseline`; a person reviews the diff.",
+        "# Scanned against upstream base %s." % base_commit,
+        "# <count>\\t<rule>\\t<path>\\t<token>",
+    ]
+    for (rule, path, token), n in sorted(counts.items(), key=lambda kv: (kv[0][1], kv[0][0], kv[0][2])):
+        lines.append("%d\t%s\t%s\t%s" % (n, rule, path, token))
+    return "\n".join(lines) + "\n"
+
+
+def added_lines(repo, since, rev, paths):
+    """{path: set(line numbers)} added from since to rev (rev None = working tree)."""
+    if not paths:
+        return {}
+    spec = [since] + ([rev] if rev else [])
+    diff = layerlib.git(repo, "diff", "-U0", "--no-renames", *spec, "--", *paths)
+    out, cur = defaultdict(set), None
+    for line in diff.splitlines():
+        if line.startswith("+++ "):
+            p = line[4:].strip()
+            cur = None if p == "/dev/null" else (p[2:] if p.startswith("b/") else p)
+        m = re.match(r"@@ -\S+ \+(\d+)(?:,(\d+))? @@", line)
+        if m and cur:
+            start, count = int(m.group(1)), int(m.group(2) or "1")
+            out[cur].update(range(start, start + count))
+    return out
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="New forbidden calls in Orca's shipped code, against a baseline.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__.split("\n\n", 1)[1],
+    )
+    ap.add_argument("--rev", help="scan this revision instead of the working tree")
+    ap.add_argument("--since", help="mark hit lines added since this revision")
+    ap.add_argument("--baseline", help="baseline file (default: %s)" % BASELINE_IN_REPO)
+    ap.add_argument("--baseline-rev", help="read the baseline at this revision")
+    ap.add_argument("--rules", help="a layers.txt other than this checkout's")
+    ap.add_argument("--rules-rev", help="read layers.txt at this revision")
+    ap.add_argument("--update-baseline", action="store_true")
+    ap.add_argument("--list", action="store_true", help="print every hit")
+    ap.add_argument("--json", action="store_true")
+    ap.add_argument("--repo")
+    args = ap.parse_args()
+
+    try:
+        repo = args.repo or layerlib.repo_root()
+        rules = (layerlib.load_rules(repo=repo, rev=args.rules_rev) if args.rules_rev
+                 else layerlib.load_rules(args.rules))
+        paths, base_commit = layerlib.orca_paths(repo, rules, args.rev)
+        paths = [p for p in paths if scannable(p, rules)]
+        hits = []
+        for p, text in read_files(repo, args.rev, paths):
+            for rule, token, no, line in scan_text(p, text):
+                hits.append({"rule": rule, "path": p, "token": token, "line": no, "text": line})
+    except (layerlib.GitError, layerlib.RulesError, OSError) as e:
+        layerlib.die("forbidden-calls: %s" % e)
+
+    counts = Counter((h["rule"], h["path"], h["token"]) for h in hits)
+    if args.update_baseline:
+        target = args.baseline or DEFAULT_BASELINE
+        with open(target, "w", encoding="utf-8") as f:
+            f.write(format_baseline(counts, base_commit))
+        print("forbidden-calls: wrote %d keys (%d hits in %d files) to %s" % (
+            len(counts), len(hits), len(paths), os.path.relpath(target, repo)))
+        return 0
+
+    try:
+        if args.baseline_rev:
+            base_text = layerlib.git(repo, "show", "%s:%s" % (args.baseline_rev, BASELINE_IN_REPO))
+        else:
+            with open(args.baseline or DEFAULT_BASELINE, encoding="utf-8") as f:
+                base_text = f.read()
+        baseline = load_baseline(base_text)
+    except (layerlib.GitError, OSError, ValueError) as e:
+        layerlib.die("forbidden-calls: baseline: %s" % e)
+
+    new_keys = {k: (n, baseline.get(k, 0)) for k, n in counts.items() if n > baseline.get(k, 0)}
+    gone = {k: (counts.get(k, 0), n) for k, n in baseline.items() if counts.get(k, 0) < n}
+    marked = {}
+    if args.since and new_keys:
+        marked = added_lines(repo, args.since, args.rev, sorted(set(k[1] for k in new_keys)))
+
+    report = []
+    for (rule, path, token), (now, allowed) in sorted(new_keys.items(), key=lambda kv: (kv[0][1], kv[0][0])):
+        where = [h for h in hits if (h["rule"], h["path"], h["token"]) == (rule, path, token)]
+        report.append({
+            "rule": rule, "path": path, "token": token, "count": now, "baseline": allowed,
+            "lines": [{"line": h["line"], "text": h["text"],
+                       "added": h["line"] in marked.get(path, ())} for h in where],
+        })
+
+    if args.json:
+        json.dump({"scanned_files": len(paths), "upstream_base": base_commit, "hits": len(hits),
+                   "new": report,
+                   "gone": [{"rule": r, "path": p, "token": t, "count": c, "baseline": b}
+                            for (r, p, t), (c, b) in sorted(gone.items())],
+                   "all": hits if args.list else None}, sys.stdout, indent=2)
+        sys.stdout.write("\n")
+        return 1 if report else 0
+
+    out = sys.stdout.write
+    out("forbidden-calls: %d files at %s, %d hits, upstream base %s\n" % (
+        len(paths), args.rev or "the working tree", len(hits), base_commit[:10]))
+    if args.list:
+        for h in sorted(hits, key=lambda h: (h["path"], h["line"])):
+            out("  %-10s %s:%d  %s\n" % (h["rule"], h["path"], h["line"], h["token"]))
+    if report:
+        out("\n%d NEW (not in the baseline):\n" % sum(r["count"] - r["baseline"] for r in report))
+        for r in report:
+            out("  %-10s %s  %s  (%d now, %d allowed)\n" % (r["rule"], r["path"], r["token"],
+                                                           r["count"], r["baseline"]))
+            for l in r["lines"]:
+                out("      %s%d: %s\n" % ("+" if l["added"] else " ", l["line"], l["text"][:160]))
+    else:
+        out("no new hits\n")
+    if gone:
+        out("\n%d baseline entr%s no longer seen (refresh with --update-baseline):\n" % (
+            len(gone), "y is" if len(gone) == 1 else "ies are"))
+        for (rule, path, token), (now, allowed) in sorted(gone.items())[:20]:
+            out("  %-10s %s  %s  (%d now, %d allowed)\n" % (rule, path, token, now, allowed))
+    return 1 if report else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
