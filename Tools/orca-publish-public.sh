@@ -24,8 +24,10 @@ EXCLUDE=(Tools/orca-publish-public.sh ORCA_NOTES.md Tools/orca/xplat.py Tools/or
   Tools/orca/queue-e2e.mjs Tools/orca/controller-latency.mjs Tools/orca/selfmatch.mjs
   Tools/orca/play-again-matrix.sh Tools/orca/play-again-run-two.sh Tools/orca/run-lock.py
   Tools/orca/run-lock-test.py)
-# Case-insensitive. Real names, handles, personal paths and home-network details.
-DENY='\bluis\b|rosias|(^|[^q])hbox|hungry ?box|\bcherl\b|\bcrunch|gmail\.com|/Users/|C:\\\\Users|~/Documents|\$HOME/Documents|brawl-dolphin/|xfinity|comcast'
+# Case-insensitive. Other people's names and handles, Gmail addresses, personal paths and
+# home-network details. Luis's own name and handle may appear (Luis, 2026-10-07: his name is fine;
+# what must never appear is his home address).
+DENY='(^|[^q])hbox|hungry ?box|\bcherl\b|\bcrunch|gmail\.com|/Users/|C:\\\\Users|~/Documents|\$HOME/Documents|brawl-dolphin/|xfinity|comcast'
 
 cd "$(git rev-parse --show-toplevel)"
 BASE=$(git rev-parse --verify "f84df020^{commit}") # Dolphin 2609, the fork point
