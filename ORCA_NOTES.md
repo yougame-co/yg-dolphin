@@ -6406,7 +6406,40 @@ Checks on this branch (Mac, `build`, Release; two-Orca runs on the local rooms s
   `dropin-commands.py`: pass. A join held by `ORCA_TEST_HOLD` fresh-starts once the hold ends.
 - Harness-only runs (hash logs) take none of this: no room, so no origin, no replay scope and no
   steering; their RAM is unchanged by construction. Not run: Mac<->PC (`xplat.py`), the Windows
-  restore time, the perf comparison, the release step 3 hash logs.
+  restore time (the perf comparison and the hash logs ran after the reviews, below).
+
+After the three reviews (2bc06a00f6, fcd67d6b57; same Mac, same local stack):
+
+- Fixes: a queue host makes no keyframe while its fresh start runs (tail, hold, its own pick being
+  put back), so a join sent at once no longer starts the session mid-steer; the tail's boundaries
+  don't count toward the header's limit; `CaptureOrigin` clears the JIT like every other way into
+  the origin; a failed fresh start lets whoever waits join in place instead of retrying; a replay
+  frame missing below the target fails the join. Test harness (`Harness::Restart`): a restore that
+  starts a new timeline makes its frames first passes. Before it, scene lines, results and the
+  first-pass hooks stopped until the frame number passed the old timeline's, so queue-e2e kept
+  pressing A and Start on a ranked stage select it couldn't see (the perf gate's rollbacks doubled).
+- `Orca*`: 614 run, 594 passed, 0 failed (the same 20 skipped). `YG_SYNCTEST=7`: Brawl casual
+  22,771 and ranked 10,171 re-run frames, Project+ casual 20,951 and ranked 28,651, 0 RAM
+  mismatches. Release step 3 hash logs equal 0.3.33's over every shared frame (Brawl 0-10806,
+  Project+ 0-9005).
+- `queue-e2e --q2 --queue ranked --join-delay 0 --costume 1` (the page's timing): Brawl and
+  Project+ sets 2-0, the host's pick back in costume 1 two frames before port 2 (1668/1670,
+  342/344), matched to plugged in 2.9 s, 229 and 233 checksums each side.
+- `long-join.py --fast-age`: Brawl hosts at frames 9,571 / 55,820 / 127,805 (2, 15, 35 minutes)
+  plugged in 1.1 / 0.9 / 1.4 s, Project+ at 7,706 / 54,493 / 126,499 in 1.8 / 1.6 / 1.7 s; on
+  fcd67d6b57 again, 1.2 s (Brawl, 127,764) and 1.6 s (Project+, 132,882); 13 checksums each side,
+  no desync. In place (`ORCA_TEST_FRESH=off`) into a fight at a 1-minute host: Brawl 9.2 s (4,976
+  frames rebuilt in 7.7 s), Project+ 13.0 s (6,888 in 11.0 s), no desync. `online-menu-dropin.py
+  --pplus`, `versus-cpu-dropin.py --pplus` and `online-menu-dropin.py --disc2 <Rev 1>`: pass.
+- Perf (`gate-0334fb`, the gate-0333 method: a Project+ ranked set, delay 3, 40 +- 8 ms, Metal;
+  both builds unsigned, the same queue-e2e): 0.3.33 (B1-B4) against this branch (C1-C4). Frame
+  numbers restart at the origin, so "at frame 14400" misses the end of this branch's set; compared
+  over each session instead. Joiner, whole set: slow 21.0 / 22.5, hitches here 0.8 / 0.0, stalls
+  12.8 / 11.0, rollbacks 28.8 / 28.5, re-run frames 81.8 / 80.2, snapshot 0.85 / 0.82 ms. Host,
+  last periodic line (about 12,300 frames in): slow 15.8 / 16.8, stalls 0.2 / 0, rollbacks 25.2 /
+  26.0. Within run-to-run spread: no regression. (B3 and B4 were marked tainted by external-SSD
+  stalls; the gate read the disc from the internal disk.)
+- Still not run: Mac<->PC (`xplat.py`), the Windows freeze and the origin hitch on the PC.
 
 ## Explaining it to people (internal)
 
