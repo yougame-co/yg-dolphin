@@ -220,12 +220,13 @@ measures the whole transport (0.1-0.3 ms on loopback); `Tools/orca/fake_bridge.p
 
 ## Mods (phase 1)
 
-Side branch `mods-p1-0333` (`mods-p1` rebased on `release-0.3.33`), not on main: nothing ships until
-YouGame switches to this architecture. Design: YouGame `docs/ORCA_MODS.md` ("Phase 1 contract" and its
-adjustments). A session reads its game from a mod bundle laid out as a run folder instead of
-`Data/Sys/Orca/<profile>.*`, chosen only by `ORCA_MOD_DIR`. Without it every legacy code path runs
-exactly as on the release (each mod branch keys on `Profile::mod`, set only by `LoadModProfile`, or
-on `ORCA_MOD_DIR` itself).
+Side branches `mods-0334` (`mods-p1` on `release-0.3.34`) and `bundle-flat` (flat bundles, below,
+on top of it), not on main: nothing ships until YouGame switches to this architecture. Design:
+YouGame `docs/ORCA_MODS.md` ("Phase 1 contract" and its adjustments). A session reads its game from a
+mod bundle instead of `Data/Sys/Orca/<profile>.*`: a tree bundle laid out as a run folder, chosen by
+`ORCA_MOD_DIR`, or a signed flat bundle that Orca finds by itself ("Flat bundles"). Without either
+every legacy code path runs exactly as on the release (each mod branch keys on `Profile::mod`, set
+only by `LoadModProfile` and `LoadFlatProfile`, or on `Mod::Requested()`).
 
 | Variable | Meaning |
 |---|---|
@@ -272,7 +273,12 @@ on `ORCA_MOD_DIR` itself).
   the guards held once, and not holding at or after `firstKeyframeFrame` is a failure for the rest of
   the boot (a warning, the gated caps withdrawn). Caps: `mod.json` `offers` ∩ the builtin, unless failed; the
   pick caps (`pick-casual pick-ranked`) go with `locks`, and `music` follows the same rule as legacy
-  (`Music::Supported`: the disc is RSBE01; host-only, so no guards).
+  (`Music::Supported`: the disc is RSBE01; host-only, so no guards). Whether a game's main menu is
+  read for a fresh start's origin ("Fresh starts", `FreshMove::Supported`) is asked once, as the
+  match is set up and before any guard is read: in mod mode it is the declared builtin, so a mod
+  boots to the same origin as legacy; the menu itself is still read only while the guards hold, so
+  a mod that moved what its builtin relies on gets no origin and takes no players, on every machine
+  alike.
 - **Bundles**: `Tools/orca/mods/make-bundle.py RSBE01|PPLUS32 <out> [--pplus-user <release user/>]
   [--tree]` (no `tree.json` in a bundle; `--tree` makes a local run folder, `--tree <folder>` alone
   rewrites one). Brawl's run folder is 153 files, Project+'s 4,033 (3,878 on the card).
@@ -304,6 +310,49 @@ ORCA_SESSION=1 ORCA_MOD_DIR=<run folder> ORCA_SD_CACHE=<cache> [ORCA_DISC_SHA1=<
   builder (`fat2`) lays each folder out files first, by upper-cased name, as the official image does
   195 of its 204 folders. Card `0615853dd38b01c51a3608d0199fa966` (tree `830384ca…34af4`), built
   twice byte-identical.
+
+### Flat bundles
+
+A flat bundle is a game's data as at most eight files in one folder, signed, so it can ride as a
+YouGame listing's runtime files: the app lays those out in `userData/orca/run/<slug>/` beside
+`userData/orca/user/` (the `-u` folder), and a Project+ or Brawl change becomes a file update instead
+of an Orca release (`Core/Orca/Bundle.h`).
+
+| File | What |
+|---|---|
+| `mod.json` | format 2: as format 1, with `sdImage` `{file, bytes, xxh3}` (the card used as it is), `patches` (file names, applied in order), `jitwarm`, `textures: "engine"` instead of `sd`. |
+| `mod.sig` | `ed25519 <public key> <signature>`, lowercase hex, one line. |
+| the rest | exactly the files `mod.json` names: a launcher, the SD image, up to four `.patches`, a JIT seed. |
+
+- **Where Orca looks**, once per process at boot, before any game setting is read
+  (`Mod::ResolveBundle`): `ORCA_MOD_DIR` when set (with a `tree.json` it is a tree bundle, as
+  above); else a launcher boot's own folder, where Project+'s `sd.raw` already lies; else, for a disc
+  boot, `<-u folder>/../run/<YOUGAME_GAME>/`. No `mod.json` there: legacy, exactly as before. A
+  launcher boot must run the bundle's launcher, and a disc boot needs a bundle without one.
+- **The signature** is over `orca-flat-bundle 1\n` and one `<name>\t<sha256>\t<bytes>\n` line for
+  `mod.json` and every file it names but the SD image, sorted by name; `mod.json` pins the card by
+  size and XXH3-128, as a legacy profile pins `sd.raw`. Only the key the build pins may sign: CMake
+  `-DORCA_BUNDLE_PUBLIC_KEY=<64 hex digits>`; without it the build trusts a TEST key, and the boot
+  line says so. Verified with `Externals/ed25519`.
+- **Hostile input.** The folder must hold exactly the named files (hidden files such as the app's
+  `.copies.json` aside), at most eight, no folders or links; names are the app's runtime file names
+  (no `/`, no `..`, no device names); every read is bounded as in a tree bundle (`mod.sig` 512
+  bytes); the small files are hashed and the signature checked before the card is hashed. Anything
+  wrong refuses the whole bundle with an `Orca bundle: <folder> refused: <why>. Playing the built-in
+  game.` line, and the session runs legacy; nothing of the bundle is used.
+- **Mod mode** then runs as for a tree bundle (builtins, guards, caps). The patches apply as they
+  were verified (kept in memory); textures stay the engine's. The key is `orca2|...|tree=<hash of the
+  signed lines but the JIT seed's>|sd=<the card's XXH3-128>|...`: a bundle player never meets a
+  legacy one, a JIT seed change keeps the pool, anything that reaches the game moves it.
+- **Tools**: `make-bundle.py RSBE01|PPLUS32 <out> --flat [--pplus-user <user/> | --pplus-run
+  <folder>] [--key <private key>]`; `sign-bundle.py keygen|sign|verify|message` (standard library
+  Ed25519, `ed25519ref.py`); `flat-sig-vector.json` ties the Python signer to the engine
+  (`OrcaBundle.SignatureVector`). Brawl's bundle is 4 files, Project+'s 6.
+- **Limits**: the card's pin is XXH3-128 (not a cryptographic hash, as legacy's pin isn't): the
+  signature covers the card only as strongly as that. A listing change moves ranked at once (no
+  pinned versions). The run-folder layout is a contract with the app (`orca.ts`: `userData/orca/{user,
+  run/<slug>}`); if it moves, Brawl plays legacy (Project+ follows its launcher). `minOrca` is not
+  enforced (the build has no version of its own); `engine.api` is.
 
 Open: a Windows build and unit run of this branch (`OrcaMod.SdImageIsDeterministic` pins the Mac's
 image hashes, so it proves the PC builds the same card), then Mac <-> PC (`xplat.py --mod`); a P+

@@ -7028,3 +7028,48 @@ Not run here: the switch firing on a really slow machine (the PC on its weakest 
 with very different settings and live `gfx` mid-match (0 desyncs expected: drawing never reaches
 RAM), the netplay perf gate against 0.3.38 (the frame loop got the measuring hooks), the Windows
 build (D3D11/D3D12/Vulkan/OpenGL each booting; whether Vulkan is in the Windows package), synctests.
+
+## Flat bundles (bundle-flat) and mods on 0.3.34 (mods-0334)
+
+`mods-0334`: `mods-p1-0333` rebased onto `release-0.3.34` (9f262a506b). Two textual conflicts, as the
+trial merge predicted: this file (both sides appended a section: both kept) and the keyframe start in
+`OnlineMatch.cpp` (0.3.34's `next >= FIRST_KEYFRAME_FRAME && OriginReady(match) && next >
+match.replay.first_frame && !match.fresh && ...` kept, with `FirstKeyframeFrame()` for the constant).
+One semantic conflict, found by reading 0.3.34's match setup: `FreshMove::Supported()` is asked once
+as the match is set up, and in mod mode it answered with the builtin's guards, which nobody has read
+yet then (and Project+'s can't hold before frame 2), so every mod session would have taken frame 0
+as its origin and never fresh-started. It now answers with the declared builtin (f2bcc7d60c). Checked:
+a Brawl tree bundle (`mods0333-bundles/rsbe01`) on two Orcas over the local rooms stack
+(`dropin-commands.py`): origin at frame 1524 with RAM `f0c74d6dd64230b5`, legacy's own origin hash;
+two fresh starts (exit 25) at the friend's joins, 119 + 21 checksums matched, one `orca caps` line
+each with `results locks queue2` (the guards held through both fresh starts; a failure would have
+withdrawn them in a second line).
+
+`bundle-flat` (Bundle.h, ORCA.md "Flat bundles"). Checked on the Mac, 2026-10-08, build 6b66379e6b
+(`~/Documents/brawl-dolphin/bundle-flat-runs`, gate.py, run-lock, headless, HIDAPI off), bundles made
+by `make-bundle.py --flat` from this branch's Data/Sys (= 0.3.34's) and the official Project+ v3.2
+files, signed with a TEST key kept outside the repository:
+
+- Unit tests with both discs: 642 `Orca*` run, 625 pass, 17 skipped (the usual live/latency/demo
+  set), 0 fail; 9 `OrcaBundle.*`, 19 `OrcaMod.*`.
+- LEGACY (no bundle where Orca looks, YOUGAME_GAME and ORCA_PROFILE set as the app sets them) against
+  the 0.3.34 release binary: hash logs of all 49 `bf-*`/`pplus-*` inputs (10,800 / 9,000 frames),
+  488,283 frames compared, 0 differ (line counts differ only past YG_EXIT_AFTER); sync tests 29,351 /
+  19,901 re-run frames, 0 RAM mismatches; key inputs identical with the commit masked; `ux=25`.
+- BUNDLE mode, found as the app lays it out: sync tests Brawl 29,351, Project+ 19,901 re-run frames,
+  0 RAM mismatches; hash logs against legacy: Brawl equal on every frame (3 inputs), Project+ equal
+  on every frame but frame 0 (3 inputs; legacy's latch writes the match block while the launcher runs,
+  known since mods-p1); caps lines equal to legacy's; keys `orca2:` over `orca2|...`, never legacy's.
+  Bundle check at boot: Brawl 4 files, Project+ 6 (the 2 GB card's XXH3 included) in the boot.
+- Two Orcas, local rooms stack: Project+ friends drop-in (`dropin-commands.py`): origin at frame 230
+  with RAM `0c80f10df0a8be22` (legacy's), two fresh starts, 114 + 20 checksums matched, PASS;
+  Project+ ranked queue set (`queue-e2e.mjs --q2 --queue ranked`): the queue host's fresh start (exit
+  31), its pick back in 70 frames, 2-0 with the same verdicts on both, 233 checksums each, PASS.
+- Mixed: a bundle host and a legacy friend (and the reverse) never meet: `room_mismatch`, keys
+  `orca2:214f0f2f...` against `orca2:6e9dc472...`.
+- Tampered bundles (14 cases: one byte of a patches file, of mod.json's signed lines, of the SD image;
+  a damaged, missing or untrusted signature; an extra file; a 3 GiB extra file; nine files; a folder;
+  a `../` name and a folder name, both signed; a JIT seed over 16 MiB; mod.json over 64 KiB; seven
+  named files): every one refused with its reason and played as legacy, equal to legacy's hash log on
+  every frame; the tampered card falls back to legacy, which refuses it as it always has.
+- Rev 1 dump: both bundles boot, builtins on.

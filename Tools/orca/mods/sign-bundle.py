@@ -189,6 +189,8 @@ def main():
         print(f"{args.bundle}/mod.sig: {len(lines)} signed lines, key {public.hex()}")
     elif args.cmd == "verify":
         mod, lines = load(args.bundle)
+        if not os.path.isfile(os.path.join(args.bundle, "mod.sig")):
+            raise SystemExit("mod.sig is missing")
         text = read_bounded(os.path.join(args.bundle, "mod.sig"), MAX_SIG).decode("ascii", "replace")
         parts = text.rstrip("\r\n").split(" ")
         if len(parts) != 3 or parts[0] != "ed25519" or not re.fullmatch(r"[0-9a-f]{64}", parts[1]) or not re.fullmatch(r"[0-9a-f]{128}", parts[2]):
