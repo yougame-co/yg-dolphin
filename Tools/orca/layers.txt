@@ -85,6 +85,7 @@ engine-sensitive  Source/Core/Core/Orca/JitWarm.*         # .jitwarm file parser
 engine-sensitive  Source/Core/Core/Orca/Launch.*          # orca-launch.ini parser
 engine-sensitive  Source/Core/Core/Orca/Profile.*         # profile parser, forced settings
 engine-sensitive  Source/Core/Core/Orca/Mod.*             # mods-p1: mod.json, tree hash, SD builder
+engine-sensitive  Source/Core/Core/Orca/Bundle.*          # flat bundles: discovery, mod.sig, the pinned key
 # Session/: rooms, direct links, keyframes, replays, pad codec, compatibility key, input exchange.
 engine-sensitive  Source/Core/Core/Orca/Session/**
 engine            Source/Core/Core/Orca/Session/Events.*  # engine-to-game callbacks, no parsing
@@ -130,11 +131,13 @@ engine-sensitive  Source/Core/Common/CurlTLS.h
 engine-sensitive  Source/Core/Common/Crypto/**
 engine-sensitive  Source/Core/Common/ChunkFile.h          # savestate format
 engine            Source/Core/Core/*
+engine-sensitive  Source/Core/Core/CMakeLists.txt         # links core's libraries; the bundle key it pins
 engine-sensitive  Source/Core/Core/BootManager.*          # forced settings at boot
 engine-sensitive  Source/Core/Core/State.*                # savestates
 engine-sensitive  Source/Core/Core/WiiRoot.*              # session NAND and save
 engine-sensitive  Source/Core/Core/Config/**              # settings schema
 engine-sensitive  Source/Core/Core/NetPlay*               # Dolphin NetPlay's parsers (sessions never use them)
+engine-sensitive  Source/Core/Core/ConfigLoaders/**       # game INIs (a mod session leaves the player's out)
 engine            Source/Core/Core/Boot/**
 engine            Source/Core/Core/HLE/**                 # frame hook install
 engine            Source/Core/Core/HW/**

@@ -95,6 +95,7 @@ PEER_FILES = [
     # Game bundle and data parsers (S4 reads them from a mod's files).
     "Source/Core/Core/Orca/Profile.*",
     "Source/Core/Core/Orca/Mod.*",
+    "Source/Core/Core/Orca/Bundle.*",
     "Source/Core/Core/Orca/JitWarm.*",
     "Source/Core/Core/Orca/UX/GamePatches.*",
     "Source/Core/Core/Orca/UX/GameFont.*",
