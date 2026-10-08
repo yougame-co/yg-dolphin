@@ -7073,3 +7073,10 @@ files, signed with a TEST key kept outside the repository:
   named files): every one refused with its reason and played as legacy, equal to legacy's hash log on
   every frame; the tampered card falls back to legacy, which refuses it as it always has.
 - Rev 1 dump: both bundles boot, builtins on.
+- Brawl flat bundle on two Orcas (`dropin-commands.py`, the bundle through ORCA_MOD_DIR): origin at
+  1524 with legacy's RAM hash, two fresh starts, 119 + 21 checksums matched, PASS.
+- Windows (the PC, `F:\src\orca-mods` checked out at 6611daa117, the release's CMake switches,
+  Release, MSVC): dolphin-nogui and tests built (33 min, no errors); `Orca*` 634 run, 617 pass, 17
+  skipped (OrcaLive 14, KitDraw 1, and the two Rev 1 tests: no Rev 1 dump on the PC), 0 fail; 9
+  `OrcaBundle.*` and 18 `OrcaMod.*` pass, `OrcaMod.SdImageIsDeterministic` among them (the PC builds
+  the Mac's pinned SD images). Not run: Mac <-> PC with a bundle (`xplat.py`), the perf gate.
