@@ -124,7 +124,12 @@ if [ "$RELEASE" = 1 ]; then
 fi
 
 [ -x "$EXE" ] || fail "no $EXE"
-LEAKS="$(strings -a "$EXE" | grep -F -e "$ROOT/" -e "$BUILD_DIR/" -e "${HOME:-$ROOT}/" | sort -u | head -n 5 || true)"
+# strings on its own, so a strings that fails can't read as "no leaks".
+STRINGS_OUT="$(mktemp)"
+strings -a "$EXE" > "$STRINGS_OUT" || { rm -f "$STRINGS_OUT"; fail "strings could not read $EXE"; }
+[ -s "$STRINGS_OUT" ] || { rm -f "$STRINGS_OUT"; fail "strings found nothing in $EXE"; }
+LEAKS="$(grep -F -e "$ROOT/" -e "$BUILD_DIR/" -e "${HOME:-$ROOT}/" "$STRINGS_OUT" | sort -u | head -n 5 || true)"
+rm -f "$STRINGS_OUT"
 [ -z "$LEAKS" ] || fail "the executable still names build-machine paths, e.g.:
 $LEAKS"
 [ -d "$APP/Contents/Resources/Sys" ] && [ ! -L "$APP/Contents/Resources/Sys" ] ||
