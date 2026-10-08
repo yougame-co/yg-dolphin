@@ -6302,6 +6302,48 @@ Windows can't delete the NAND folder on the way back; the low items (name cleani
 128 MB download caps, a wall-clock rebuild watchdog, a `static_assert` on the decode budget).
 Server side (YouGame): replay ids and `orca2:` only, before online reopens.
 
+## Orca 0.3.33 (2026-10-08)
+
+Branch `release-0.3.33`, from `release-0.3.32s` (`2a58d1d59e`, 0.3.32 as shipped). Cherry-picked
+with `-x`, resolved by hunk:
+
+- From `release-0.3.32` (the old feature branch, built on the unshipped 0.3.31; its name-tag and
+  slider commits are already in 0.3.32): the ranked game-start (`d0c8b0e254`, `3c0bc9e5bc`,
+  `be0b827c16`, `16bbb50686`: game-start at the first frame with the fighters in; a set left before
+  game 1 is void), and the small items `a15d5a140e` (Windows alerts never throw; each C++ exception
+  names itself), `0f423ddba5` + `c872898d24` (run-lock: wait out macOS's new-program check; only
+  Luis's installed Orca counts as Luis playing; `0f423ddba5` came along so the repo's run-lock is
+  the live one), `75aa74ee5c` (release checklist step 0), `43fa9cd712` (boot logs off at the first
+  frame, embedded), `d523d584bc` (`--verify` NAND cleanup). On 0.3.32's input-replay joins the
+  game-start needed one change: `ResultsTracker::Rebase` (a rebuilt join) takes the rebuilt frame's
+  fight, fighters in, as already begun, as it takes the set's games (test added). The only conflict
+  was `Results.cpp` (0.3.32's `Rebase` beside the new `Confirm` signature).
+- `pc/ranked-css-keep-triggers` `3e6a38a86f`: L and R held at lock-in reach the game on games 2+ of a
+  ranked set (Zero Suit Samus, Sheik, Nana-led Ice Climbers), plus the ORCA.md line.
+- SDL never opens the GameCube adapter (`SDL_HINT_JOYSTICK_HIDAPI_GAMECUBE` and
+  `SDL_HINT_HIDAPI_LIBUSB_GAMECUBE` "0", after the config's hints): on Windows Orca's SDL held the
+  Wii U adapter through WinUSB and the app's helper got "Permission ... denied"
+  (`gc-adapter-admin-windows`).
+- Input delay: no page's `delay N` (or `delay auto`) now means a fixed 3, never the adaptive delay
+  (`OnlineMatch.cpp` `DEFAULT_DELAY`). The adaptive code and `Config::input_delay` 2 stay for the
+  tests and the loopback harness.
+- `orca-publish-public.sh`: Luis's name and handle may appear (Luis, 2026-10-07); everything else in
+  the denylist stays. `orca-package-macos.sh`: `-ffile-prefix-map`/`-fdebug-prefix-map` map the
+  checkout to `.`, and the packager fails if the executable still names the checkout, build or home
+  path (0.3.32's named the checkout 421 times). The Windows release scripts (PC, outside the repo)
+  need the same: MSVC has no `-ffile-prefix-map`; `/d1trimfile:<root>\` (for `__FILE__`) and
+  `/PDBALTPATH:%_PDB%` (the PDB path in the exe) are the candidates, untested here.
+- kCompatVersion 24 (Project+ ranked sets now set `FIGHT_SEEN`; the character order keeps L and R at
+  `+0x20E`).
+
+Not in it: a long-session join fix (the after-release measurement had not written its
+recommendation when this branch was cut). Tests (Mac, `build`, Release): dolphin-nogui + tests
+build with no new warnings (one `-Wsign-compare` in `YouGameRoom.cpp`'s replay notice, from 0.3.32);
+Orca* with the discs: 594 run, 577 passed, 17 skipped (OrcaLive 14, OrcaUXLatency 2, OrcaKitDraw 1),
+0 failed; `run-lock-test.py` 35/35; headless ranked smoke: Brawl game 1's fighters in at frame 6866
+(fight from 6584), Project+ 3486 (from 3346). Harness runs that send no `delay N` (queue-e2e,
+xplat.py) now play at a fixed 3: a perf gate against 0.3.32 must give both builds the same delay.
+
 ## Explaining it to people (internal)
 
 **One sentence:**
