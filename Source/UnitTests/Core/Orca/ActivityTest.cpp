@@ -307,10 +307,30 @@ TEST(OrcaActivity, PartialLastInterval)
   EXPECT_EQ(last.interval_ms, 15 * S);
   EXPECT_EQ(last.active_ms, 15 * S);
   EXPECT_EQ(Orca::Activity::FormatLine(last), "orca active 15 15 1 solo 1");
-  // Stopping right after a line: an empty last line.
+  EXPECT_FALSE(Orca::Activity::IsEmpty(last));
+  // Stopping right after a line: an empty last line, which is left out.
   LineClock d(0, Mode::Solo);
   d.Take(60 * S);
-  EXPECT_EQ(Orca::Activity::FormatLine(d.Take(60 * S)), "orca active 0 0 0 solo 0");
+  EXPECT_TRUE(Orca::Activity::IsEmpty(d.Take(60 * S)));
+}
+
+TEST(OrcaActivity, EmptyLastLine)
+{
+  using Orca::Activity::IsEmpty;
+  LineClock c(0, Mode::Solo);
+  c.Input(30 * S, 1, 1);
+  EXPECT_FALSE(IsEmpty(c.Take(60 * S)));
+  // 0.4 s after a line, with no input: rounds to 0.
+  EXPECT_TRUE(IsEmpty(c.Take(60 * S + 400)));
+  // Half a second rounds to 1: kept.
+  EXPECT_FALSE(IsEmpty(c.Take(60 * S + 900)));
+  // A press in that last moment: kept, for its input.
+  c.Input(60 * S + 1000, 1, 1);
+  const Line pressed = c.Take(60 * S + 1100);
+  EXPECT_FALSE(IsEmpty(pressed));
+  EXPECT_EQ(Orca::Activity::FormatLine(pressed), "orca active 0 0 1 solo 1");
+  // A full interval is never empty, input or not.
+  EXPECT_FALSE(IsEmpty(c.Take(120 * S + 1100)));
 }
 
 TEST(OrcaActivity, SecondsRoundToTheNearest)

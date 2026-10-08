@@ -1823,10 +1823,23 @@ never pauses Orca: the page sends `blur`, the player's pad goes neutral, and the
 
 ### Activity lines
 
-`orca active 60 42 118 ranked 1`, every 60 s of wall-clock time from the game's first frame, on its
-own thread (stalls, loads and a paused game don't hold it up), and once more for the rest of the
-interval when the game stops (`Orca/Activity.h`). Since 0.3.35; an older app ignores the line (the
-desktop app forwards every `orca ` line and acts only on those it knows).
+`orca active 60 42 118 ranked 1`, every 60 s of wall-clock time on its own thread (stalls, loads and
+a paused game don't hold it up), and once more for the rest of the interval when the game stops,
+unless that rest is empty (under half a second, no input) (`Orca/Activity.h`). Since 0.3.35.
+
+- When it starts: embedded, at the first frame after `ready`. Until `ready` the app takes every line
+  from Orca for boot progress (`bootWatch.line()` in `desktop/src/orca.ts`), so a line printed by a
+  boot that hangs before its first picture would keep its boot watchdog from ever stopping it.
+  Without the app (a harness run), at the game's first frame.
+- An app without a handler for it (desktop on 2026-10-08): `parseOrcaLine` makes it a status line,
+  written to the run log and sent to the page as a `running` message that `OrcaEmbed` doesn't act
+  on. It changes neither the company, `orcaError` nor the `orca state left` hook.
+- For the app's handler: the last line comes after the game stopped, so after `orca state left` when
+  the app stopped it, and today's app no longer passes a stopped session's lines to the page (it
+  only logs them): read `orca active` before that check. Keep it out of `bootWatch.line()`.
+  `interval_s` is wall time, pauses and a sleeping Mac included: count `active_s`. Like the page's
+  own clock, the 30 s after an input run on when the game loses the input; the page only counts
+  them while it is visible.
 
 - `interval_s`: the seconds the line covers. `active_s`: those within 30 s after a real local input,
   the page's own rule (`web/src/lib/play-activity.ts`), never more than `interval_s`. Both are

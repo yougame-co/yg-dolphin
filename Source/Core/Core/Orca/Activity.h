@@ -102,6 +102,9 @@ struct Line
 };
 // "orca active 60 42 118 solo 1".
 std::string FormatLine(const Line& line);
+// A line with nothing to say: under half a second and no input (a game that stops right after a
+// periodic line). The last line is left out then.
+bool IsEmpty(const Line& line);
 
 // The clock behind the lines, on one monotonic clock in milliseconds. Pure, for tests.
 class Clock
@@ -172,13 +175,20 @@ void SnapshotPads(const UX::Snapshot& snapshot, double age_ms, std::vector<Pad>*
 
 // ---- The running game ----
 
+// Embedded, the app takes the game as started at its "ready" line (the first picture on screen),
+// and until then counts every line from Orca as boot progress that keeps its boot watchdog from
+// stopping a start that hangs. So with the app the clock starts only after that line: call this
+// before the boot, and Ready once "ready" is out. Without it the clock starts at the first frame.
+void HoldUntilReady();
+// The app has its "ready" line (written just before this call). Any thread.
+void Ready();
 // The local pad the session read at this boundary for a first-run frame, when it came from
 // Dolphin's own input (PAD_DOLPHIN) or a test script (PAD_SCRIPT). CPU thread.
 void NoteLocalPad(u32 id, const GCPadStatus& pad);
 // Every frame boundary in a session, on the CPU thread, after the session has decided the frame
 // about to run. `first_run`: that frame runs for the first time, in real time
-// (!Rollback::IsResimulating()); only those are read. The first such boundary starts the clock and
-// its line printer.
+// (!Rollback::IsResimulating()); only those are read. The first such boundary (after "ready" with
+// HoldUntilReady) starts the clock and its line printer.
 void OnBoundary(bool first_run);
 // The game stopped: prints the last line, for the time since the one before, and stops the
 // printer. Nothing is counted after it. Any thread; safe to call again.

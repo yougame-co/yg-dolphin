@@ -113,6 +113,12 @@ std::string FormatLine(const Line& line)
                      line.inputs, ModeName(line.mode), line.pads);
 }
 
+bool IsEmpty(const Line& line)
+{
+  // active_ms is never more than interval_ms, so it rounds to 0 too.
+  return Round(line.interval_ms) == 0 && line.inputs == 0;
+}
+
 Clock::Clock(s64 start_ms, Mode mode)
     : m_start(start_ms), m_last(start_ms), m_active_until(start_ms), m_mode(mode)
 {
@@ -255,6 +261,9 @@ std::mutex s_lock;
 std::condition_variable s_wake;
 std::optional<Clock> s_clock;
 bool s_finished = false;
+// HoldUntilReady: the clock waits for the app's "ready" (s_ready).
+bool s_hold = false;
+bool s_ready = false;
 std::thread s_printer;
 
 // CPU thread only.
@@ -311,9 +320,24 @@ Mode CurrentMode()
   const bool training = UX::InTraining();
   if (!Online::Enabled())
     return training ? Mode::Training : Mode::Solo;
-  return DecideMode(Online::RoomQueue(), Events::GetLinkStats().online, training);
+  // A room that ended (a network error, the backoff before it reopens) is no queue any more, as
+  // for the rules (OnlineMatch's WantedRulesMode). A set that is over hasn't ended: still ranked.
+  return DecideMode(Online::RoomEnded() ? std::string() : Online::RoomQueue(),
+                    Events::GetLinkStats().online, training);
 }
 }  // namespace
+
+void HoldUntilReady()
+{
+  std::lock_guard lk(s_lock);
+  s_hold = true;
+}
+
+void Ready()
+{
+  std::lock_guard lk(s_lock);
+  s_ready = true;
+}
 
 void NoteLocalPad(u32 id, const GCPadStatus& pad)
 {
@@ -335,7 +359,7 @@ void OnBoundary(bool first_run)
   }
   // Outside an online match the test harness's script plays every port, all of them local; an
   // online match notes its local seat's script itself (NoteLocalPad).
-  if (first_run && !Online::Enabled() && Rollback::Harness::Active())
+  if (first_run && Rollback::Harness::Active() && !Online::Enabled())
   {
     for (int port = 0; port < 4; ++port)
     {
@@ -353,6 +377,9 @@ void OnBoundary(bool first_run)
   const s64 now = NowMs();
   if (!s_clock)
   {
+    // Edges until then only set each controller's baseline.
+    if (s_hold && !s_ready)
+      return;
     s_clock.emplace(now, mode);
     s_printer = std::thread(PrintLines);
   }
@@ -376,7 +403,7 @@ void Finish()
   // A line the printer is writing goes first.
   if (s_printer.joinable())
     s_printer.join();
-  if (last)
+  if (last && !IsEmpty(*last))
     Status::Line(FormatLine(*last));
 }
 }  // namespace Orca::Activity

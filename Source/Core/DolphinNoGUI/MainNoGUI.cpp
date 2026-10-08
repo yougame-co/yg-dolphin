@@ -594,6 +594,8 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
   Common::EventHook first_frame_hook;
   if (embed.enabled)
   {
+    // Until "ready" the app takes any line for boot progress: no activity lines before it.
+    Orca::Activity::HoldUntilReady();
     first_frame_hook = GetVideoEvents().after_present_event.Register([](PresentInfo& info) {
       static std::atomic<bool> seen{false};
       if (seen.exchange(true))
