@@ -159,8 +159,9 @@ State Advance(const SetView& set, const CssView& css, const State& state, int fr
   bool next = timed_out;
   if (s.step == Step::First)
   {
-    // Free: the winner may lock in during the loser's turn.
-    if (set.order == Order::Free && locks_in(second))
+    // Free: the winner may lock in during the loser's turn, once: a later Start keeps the L and R
+    // it locked in with.
+    if (set.order == Order::Free && !(s.locked & (1 << second)) && locks_in(second))
     {
       s.locked = static_cast<u8>(s.locked | (1 << second));
       keep(second);

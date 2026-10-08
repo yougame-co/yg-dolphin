@@ -372,6 +372,12 @@ TEST(OrcaCharOrder, LAndRAreKeptAtATimeOutAndAFreeWinnersEarlyLockIn)
   State f = Twice(kBrawl2, Css(), State{}, 10);
   f = Twice(kBrawl2, Press(Css(), 1, START | L), f, 20);
   EXPECT_EQ(f, (St(2, Step::First, 0, 10, 10, 2, 0b0100)));
+  // Locked in is locked in: Start again, without L or with R, keeps what it locked in with (a
+  // Zelda can't turn into Sheik after the "You're locked in" line).
+  f = Twice(kBrawl2, Press(Css(), 1, START), f, 24);
+  EXPECT_EQ(f, (St(2, Step::First, 0, 10, 14, 2, 0b0100)));
+  f = Twice(kBrawl2, Press(Css(), 1, START | R), f, 26);
+  EXPECT_EQ(f, (St(2, Step::First, 0, 10, 16, 2, 0b0100)));
   f = Twice(kBrawl2, Press(Css(), 0, START), f, 30);
   EXPECT_EQ(f, (St(2, Step::Done, 0, 30, 0, 2, 0b0100)));
   const auto g = Gate(kBrawl2, Css(), f);
