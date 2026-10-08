@@ -48,7 +48,7 @@ TEST(OrcaCanonicalBoot, EveryBootPlaysPort1WithNothingPressedAndNobodyElse)
 
 TEST(OrcaCanonicalBoot, TheOriginIsTheMainMenuBuiltForHalfASecond)
 {
-  // Brawl: the menu builds at 1441; 30 frames later is the origin.
+  // 30 frames of a built main menu make the origin (Brawl Rev 2 measures 1524, Project+ 230).
   EXPECT_EQ(DecideOrigin(1441, 0, std::nullopt), OriginStep::Wait);
   EXPECT_EQ(DecideOrigin(1470, ORIGIN_SETTLE_FRAMES - 1, std::nullopt), OriginStep::Wait);
   EXPECT_EQ(DecideOrigin(1471, ORIGIN_SETTLE_FRAMES, std::nullopt), OriginStep::Capture);

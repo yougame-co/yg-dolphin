@@ -1319,8 +1319,11 @@ void HostEvents(Core::System& system, Match& match)
   DropStaleKeyframe(match);
   const u64 generation = Orca::UX::Rules::WantedGeneration();
   const bool in_place = Orca::UX::Rules::HeaderInPlace();
-  const HeaderWait header = StepHeaderWait(&match.header_waited, in_place,
-                                           !match.waiting.empty(), InQueueRoom());
+  // A fresh start's tail can't write the header (it runs as a re-run), so its boundaries don't
+  // count toward the header's limit.
+  const HeaderWait header = InTail(match) ? HeaderWait::Wait :
+                                            StepHeaderWait(&match.header_waited, in_place,
+                                                           !match.waiting.empty(), InQueueRoom());
   if (header == HeaderWait::Fail)
   {
     FailHeaderWait(match);
@@ -1345,8 +1348,11 @@ void HostEvents(Core::System& system, Match& match)
   {
     if (fresh)
       match.keyframe_wanted = false;
+    // Not while a fresh start runs (its tail, the queue host's hold, its own pick being put back):
+    // the session starts as soon as the keyframe is stored, and the player's pad then replaces the
+    // steering, so the pick would be left half done.
     else if (next >= FIRST_KEYFRAME_FRAME && OriginReady(match) && next > match.replay.first_frame &&
-             !InTail(match) && (!match.session || match.session->Settled()))
+             !match.fresh && (!match.session || match.session->Settled()))
     {
       match.keyframe_wanted = false;
       StartKeyframe(system, match, next);
@@ -1720,6 +1726,10 @@ bool CaptureOrigin(Core::System& system, Match& match, int frame)
   match.replay.first_frame = frame;
   match.log.clear();
   match.log_base = frame;
+  // Every way into the origin's frame starts with an empty JIT: this one, a fresh start and a
+  // joiner's restore (both clear after RestoreLocal). So a host whose friend joins in place runs
+  // from the origin with the same JIT history as that friend's rebuild.
+  system.GetJitInterface().ClearSafe();
   u64 nand_bytes = 0;
   for (const Orca::Net::NandEntry& e : match.origin_nand)
     nand_bytes += e.data.size();
@@ -2024,6 +2034,23 @@ ReplayStep AdvanceReplay(Core::System& system, Match& match, const FrameHook& on
     NOTICE_LOG_FMT(ROLLBACK, "Drop-in: JIT cleared at replay frame {}", frame);
   }
   Orca::Net::ReplayFrame* const at = frame < target ? match.replay.At(frame) : nullptr;
+  // The decoder hands over every frame from the origin to the target; a gap is a bug, never a
+  // frame to play with the boundary's events.
+  if (frame < target && !at)
+  {
+    ERROR_LOG_FMT(ROLLBACK, "Drop-in: the replay has no frame {} (frames {}-{})", frame,
+                  match.replay.first_frame, target);
+    if (!RestoreBeforeJoin(system, match))
+    {
+      StopEmulation(system, "Couldn't return to your own game");
+      End("replay gap");
+      return ReplayStep::Failed;
+    }
+    match.join_error_code = "room_mismatch";
+    match.join_error = "Your friend's replay didn't reproduce the same game";
+    FailJoin(system, match);
+    return ReplayStep::Failed;
+  }
   Orca::Net::ReplayFrame& record = at ? *at : match.replay.boundary;
   {
     Orca::Net::ReplayScope scope(&record, true, true);
@@ -3285,7 +3312,17 @@ std::optional<int> Boundary(Core::System& system,
   if (match.fresh_pending)
   {
     if (const std::optional<int> origin = FreshStart(system, match))
+    {
       rewound_to = origin;
+    }
+    else if (!match.finished)
+    {
+      // Not tried again every boundary: whoever waits now (a friend, or the queue room's
+      // opponent) joins in place instead, from this game's origin.
+      match.friends_in_place = !match.waiting.empty();
+      if (std::exchange(match.fresh_queue_armed, false))
+        match.fresh_room = Orca::Online::Code();
+    }
     if (match.finished)
       return std::nullopt;
   }
