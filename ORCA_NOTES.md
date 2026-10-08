@@ -6344,6 +6344,48 @@ Orca* with the discs: 594 run, 577 passed, 17 skipped (OrcaLive 14, OrcaUXLatenc
 (fight from 6584), Project+ 3486 (from 3346). Harness runs that send no `delay N` (queue-e2e,
 xplat.py) now play at a fixed 3: a perf gate against 0.3.32 must give both builds the same delay.
 
+## Orca 0.3.34: fresh starts (2026-10-08, in progress)
+
+Branch `freshboot-0.3.34`, from `release-0.3.33` (`69b97f49d3`). Design and measurements behind it:
+the lead's scratchpad `freshboot/design.md` and `rel0332s-runs/longjoin/` (0.3.32's input-replay
+join rebuilt about 600 frames a second on the M4 Pro: 25 min of host play took 162-178 s to plug in,
+about 40 min passed the 3-minute rebuild limit, slower machines failed at 10-12 min). ORCA.md "Fresh
+starts" says what it does (published: shorter joins only, never why peer state can't be loaded).
+
+- **The origin moves to the built main menu** (`DecideOrigin`): the first boundary whose main menu
+  has been built (`muMenuMain`, step running, exit code 0, `+0xAC8` set) for 30 frames, captured
+  before that boundary's hook. Before it every Orca plays `CanonicalBootPads` (port 1 neutral, 2-4
+  unplugged, its own pad read and dropped), `PortsAt` is port 1 with no values, the hook's `alone` and
+  the header's `free` are false, and the app's commands wait. A launch joiner runs that boot
+  unthrottled and unseen, pumping its join meanwhile, then blocks in `JoinHost` at its origin as it
+  did at frame 0. A game whose menu isn't read (`FreshMove::Supported`) keeps frame 0. No origin by
+  frame 6,000: no joins either way (`origin_failed`, friends dropped with `refused`).
+- **Replay** (`Replay.h`, `Keyframe.cpp`): `first_frame` after the frame count; frames `[first, K)`
+  only; a `menu_exit` word per frame (0, 25, 30, 31), only on the first. The decoder refuses
+  `first > K`, other exits, an exit anywhere else. Ids stay `replay-<K>-<hash8>`: frames restart at
+  the origin's after each fresh start. kCompatVersion 25.
+- **Fresh start** (`FreshStart`): `RestoreLocal` (shared with the join's load, the cancelled join's
+  way back and the queue image) puts back the origin's image and NAND on a new ring; JIT cleared; the
+  replay restarts at M with `menu_exit` on its first frame; the port values restart with this
+  player's own from M; unthrottled, unseen and muted (`SetCatchingUp`) through the tail, whose hook
+  runs as a re-run playing the replay's events (`FreshMove::Frame` applies the exit). The tail ends
+  30 frames after the character select's task is readable (cap 600).
+- **Triggers** (`DecideFreshStart`): `host` arms a queue room's, run at the first boundary after the
+  welcome names the queue (Hold until then: no keyframe), once per room. A friend at a solo host
+  with more than 600 frames of history since its last start (`ORCA_TEST_FRESH_AFTER`), after the
+  single-player hold. A `prepare-join` no longer pre-makes a keyframe.
+- **Port 1's pick in a queue room**: not the input gate (no new match-block bytes, nothing the joiner
+  computes): after the tail the host holds neutral pads until the room's header is in, then
+  `Queue::StepOwnPick` steers its own hand from its queue identity with the same integer steering,
+  as its own inputs, recorded like any other; done when down on the pick in its colour, at 10 s, or
+  when a session starts (the player's pad then). Without `queue2` or a pick it just hands back.
+- **NAND restore** writes only differing files and removes the rest (`ReplaceNandTree`).
+- **Knobs**: `ORCA_TEST_FRESH=off`, `ORCA_TEST_FRESH_AFTER=<frames>`, `ORCA_TEST_FAST_UNTIL=<frame>`.
+
+Answers taken for the design's open questions (defaults, revisit with Luis): a friend arriving
+during a Versus fight against CPUs fresh-starts at once; the friends rules carry is a follow-up; the
+in-place threshold is 10 s. `Profile::boot_nand_frame` (`BootNandFrame`) is unused since 0.3.32.
+
 ## Explaining it to people (internal)
 
 **One sentence:**
