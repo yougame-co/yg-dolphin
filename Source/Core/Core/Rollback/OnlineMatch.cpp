@@ -287,8 +287,10 @@ struct Match
     Clock::time_point started{};
   };
   std::optional<Fresh> fresh;
-  // ORCA_TEST_FAST_UNTIL: solo frames run unthrottled.
+  // ORCA_TEST_FAST_UNTIL: solo frames run unthrottled, until then or the first fresh start or
+  // session (`fast_spent`).
   bool fast = false;
+  bool fast_spent = false;
 
   // A Casual or Ranked pick handed over while this game wasn't alone, at a boundary the app's
   // commands may not take (TakeLobbyPickNow): retried at the next one while it still stands
@@ -422,7 +424,8 @@ int FreshFriendsAfter()
   }();
   return after >= 0 && Orca::UX::TestKnobsAllowed() ? after : FRESH_FRIENDS_AFTER;
 }
-// ORCA_TEST_FAST_UNTIL=<frame>: solo frames before it run unthrottled, to age a host quickly.
+// ORCA_TEST_FAST_UNTIL=<frame>: solo frames before it run unthrottled, to age a host quickly; never
+// after its first fresh start or session.
 int FastUntil()
 {
   static const int until = std::atoi(Orca::GetEnv("ORCA_TEST_FAST_UNTIL").c_str());
@@ -650,9 +653,10 @@ void RunSolo(Match& match, const std::function<Pad(int)>& local_pad)
     pad = local_pad(match.local_seat);
   }
   const int frame = match.running + 1;
-  if (const int until = FastUntil(); until > 0 && (frame < until) != match.fast)
+  if (const int until = FastUntil();
+      until > 0 && (!match.fast_spent && frame < until) != match.fast)
   {
-    match.fast = frame < until;
+    match.fast = !match.fast_spent && frame < until;
     Core::SetIsThrottlerTempDisabled(match.fast);
     NOTICE_LOG_FMT(ROLLBACK, "Drop-in: frames run {} from frame {} (ORCA_TEST_FAST_UNTIL)",
                    match.fast ? "unthrottled" : "at their own pace", frame);
@@ -1400,7 +1404,8 @@ void HostEvents(Core::System& system, Match& match)
       // A fresh start still putting port 1's pick back hands it to the player: in a session the
       // local pad is sampled ahead of the frame it plays.
       EndFresh(match, "a session starts");
-      // A session keeps time with its friends (ORCA_TEST_FAST_UNTIL is for solo frames only).
+      // A session keeps time with its friends (ORCA_TEST_FAST_UNTIL ages a host before one).
+      match.fast_spent = true;
       if (std::exchange(match.fast, false))
         Core::SetIsThrottlerTempDisabled(false);
       // The host's own controls apply from the next frame (this frame's hook already ran) and never
@@ -1788,6 +1793,10 @@ std::optional<int> FreshStart(Core::System& system, Match& match)
     match.fresh_room = fresh.room;
   }
   Orca::UX::Queue::DisarmOwnPick();
+  // ORCA_TEST_FAST_UNTIL aged the host before its first fresh start only.
+  match.fast_spent = true;
+  if (std::exchange(match.fast, false))
+    Core::SetIsThrottlerTempDisabled(false);
   // Unthrottled, unseen and muted until the character select is up (StepTail).
   match.port->SetCatchingUp(true);
   Orca::Events::NoteResync();

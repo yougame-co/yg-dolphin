@@ -470,8 +470,13 @@ bool Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
   }();
   if (!resimulating)
   {
-    const bool test_hold =
-        frame >= s_test_hold.first && frame < s_test_hold.second && TestKnobsAllowed();
+    // Once over, the test hold stays over: a fresh start (Rollback/OnlineMatch.cpp) runs frame
+    // numbers from the origin's again.
+    static bool s_test_hold_over = false;
+    if (frame >= s_test_hold.second)
+      s_test_hold_over = true;
+    const bool test_hold = !s_test_hold_over && frame >= s_test_hold.first &&
+                           frame < s_test_hold.second && TestKnobsAllowed();
     s_drop_in_held = SequenceHoldsDropIn(in.sequence) || test_hold;
   }
   in.present = B::Present(m) && m.Valid(B::FRIENDS) && m.Valid(B::FRIENDS_END - 1);

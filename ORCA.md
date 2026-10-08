@@ -475,7 +475,8 @@ same move from its own origin. Frame numbers start again at the origin's.
 
 Test knobs (`TestKnobsAllowed`): `ORCA_TEST_FRESH=off` (no fresh starts: every join replays from the
 origin in place), `ORCA_TEST_FRESH_AFTER=<frames>` (the friends threshold),
-`ORCA_TEST_FAST_UNTIL=<frame>` (solo frames before it run unthrottled, to age a host quickly).
+`ORCA_TEST_FAST_UNTIL=<frame>` (solo frames before it run unthrottled, to age a host quickly, until
+its first fresh start or session).
 
 ### Port values: each player's name and controls
 
