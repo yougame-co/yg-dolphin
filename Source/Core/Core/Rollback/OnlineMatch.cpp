@@ -2531,6 +2531,11 @@ void ConfirmResults(Match& match)
   std::vector<int> starts;
   const std::vector<Orca::UX::GameResult> results =
       Orca::UX::Tracker().Confirm(confirmed, plug, &starts);
+  // A joiner that asked to leave stays plugged in until its host's roster names the unplug frame,
+  // so a fight's first frame can turn final in between. The leave press decides: the screen said
+  // then whether the set counts (Leave), and the room hears no game began after it.
+  if (match.joining && match.leave_requested)
+    starts.clear();
   // A ranked game began (its fighters in, after the stage's loading image), at the same final frame
   // on both machines: the room learns the set reached it, so a leave from here on loses the set.
   // Sent ahead of results read from the same frames; the room keeps only this player's first
