@@ -627,10 +627,12 @@ void StepTail(Match& match, int frame)
   // The readers start over on the character select, silently.
   Orca::Events::NoteResync();
   match.stats_frame = -1;
+  // A queue room's host holds port 1 until the room's header is in (FreshPad); a friend's fresh
+  // start is over.
   if (fresh.queue)
     fresh.phase = Match::Fresh::Phase::Hold;
   else
-    EndFresh(match, nullptr);
+    match.fresh.reset();
 }
 
 void RunSolo(Match& match, const std::function<Pad(int)>& local_pad)
