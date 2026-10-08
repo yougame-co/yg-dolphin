@@ -19,12 +19,19 @@
 # to that frame (54000 is 15 minutes of play), so a short plan entry stands for a long host.
 # Since 0.3.34 a friend at a host with more than 10 s of play since its last start fresh-starts the
 # host first, so every join should plug in within a few seconds whatever the host's age.
-# Fails (exit 1) when a join doesn't plug in within --max-plug seconds (0: never fails).
+# --fast-age: each host gets its own ORCA_TEST_FAST_UNTIL, its origin's frame plus its plan minutes of
+# frames, and its friend joins once the host has played that far (a plan entry's minutes are then
+# frames of play, not wall time); the hosts reach their ages in a few minutes, side by side.
+# After each plug-in the two play --together seconds (10); then the friend leaves, and both Orcas'
+# "back to solo play" lines must count matched checksums, with no desync in either log.
+# Fails (exit 1) when a join doesn't plug in within --max-plug seconds (0: never fails), or a session's
+# checksums didn't match.
 import argparse
 import json
 import os
 import queue
 import random
+import re
 import string
 import subprocess
 import sys
@@ -42,6 +49,8 @@ ap.add_argument("--pp-offset", type=float, default=180)
 ap.add_argument("--join-timeout", type=float, default=420)
 ap.add_argument("--host-env", default="")
 ap.add_argument("--max-plug", type=float, default=10)
+ap.add_argument("--fast-age", action="store_true")
+ap.add_argument("--together", type=float, default=10)
 A = ap.parse_args()
 HERE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "inputs")
 os.makedirs(A.out, exist_ok=True)
@@ -56,6 +65,8 @@ def log(text):
     LOG.write(line + "\n")
 
 
+# Each game's origin (ORCA.md "Fresh starts"): Brawl Rev 2's built main menu, Project+'s.
+ORIGIN = {"bf": 1524, "pp": 230}
 INPUTS = {
     ("bf", "fight"): "bf-cpu-loop.txt", ("bf", "menu"): "bf-menu-idle.txt",
     ("pp", "fight"): "pplus-cpu-loop.txt", ("pp", "menu"): "pplus-menu-idle.txt",
@@ -171,8 +182,11 @@ plan = []
 for i, item in enumerate(A.plan.split(",")):
     game, mode, minutes = item.split(":")
     start = 0 if game == "bf" else A.pp_offset
+    if A.fast_age:
+        start = 0
     plan.append({"i": i, "game": game, "mode": mode, "minutes": float(minutes),
-                 "host_start": start, "target": start + float(minutes) * 60})
+                 "host_start": start, "target": start + float(minutes) * 60,
+                 "until": ORIGIN[game] + int(float(minutes) * 3600)})
 orcas = []
 try:
     log(f"plan {A.plan}, pp offset {A.pp_offset} s, out {A.out}")
@@ -188,6 +202,8 @@ try:
                                            for _ in range(7))
                 name = f"H{h['i']}-{h['game']}-{h['mode']}{int(h['minutes'])}"
                 host_env = dict(kv.split("=", 1) for kv in A.host_env.split(",") if kv)
+                if A.fast_age:
+                    host_env["ORCA_TEST_FAST_UNTIL"] = str(h["until"])
                 orca = Orca(name, h["game"], INPUTS[(h["game"], h["mode"])],
                             dict({"ORCA_ROOM": h["room"]}, **host_env))
                 orcas.append(orca)
@@ -211,7 +227,7 @@ try:
         host = h["orca"]
         name = f"F{h['i']}-{h['game']}"
         # The friend boots ~45 s ahead so it sits on its character select at the host's age.
-        while time.time() - T0 < h["target"] - 45:
+        while not A.fast_age and time.time() - T0 < h["target"] - 45:
             time.sleep(1)
         friend = Orca(name, h["game"], INPUTS[(h["game"], "menu")], {})
         orcas.append(friend)
@@ -219,7 +235,13 @@ try:
         friend.send("caps join leave stats")
         friend.expect("orca state playing", 120)
         friend.wait_log("-> scSelctCharacter", 180)
-        while time.time() - T0 < h["target"]:
+        if A.fast_age:
+            # Played its age: past its ORCA_TEST_FAST_UNTIL frame, at its own pace again.
+            while (host.frame() or 0) < h["until"] + 60:
+                if host.proc.poll() is not None:
+                    raise RuntimeError(f"host {h['i']} exited before its age")
+                time.sleep(0.5)
+        while time.time() - T0 < h["target"] and not A.fast_age:
             time.sleep(0.5)
         time.sleep(3)
         if host.proc.poll() is not None:
@@ -270,10 +292,38 @@ try:
             failures.append(
                 f"{h['game']} {h['mode']} ~{h['minutes']:g} min: {rec['outcome']}{late}")
         if outcome == "playing":
-            time.sleep(10)
+            time.sleep(A.together)
             rec2 = host.last_stats[1] if host.last_stats else None
-            log(f"10 s after plug-in: host stats {rec2} / friend stats "
+            log(f"{A.together:g} s after plug-in: host stats {rec2} / friend stats "
                 f"{friend.last_stats[1] if friend.last_stats else None}")
+            # The friend leaves; each side's session must have matched checksums, and no desync.
+            friend.send("leave")
+            solo = re.compile(r"back to solo play at frame (\d+) \(([^)]*)\): (\d+) rollbacks, "
+                              r"(\d+) checksums matched")
+            counts = {}
+            end = time.time() + 20
+            while time.time() < end and len(counts) < 2:
+                for who, o in (("host", host), ("friend", friend)):
+                    lines = o.grep("back to solo play at frame")
+                    if lines and who not in counts:
+                        m = solo.search(lines[-1])
+                        if m:
+                            counts[who] = {"why": m.group(2), "rollbacks": int(m.group(3)),
+                                           "checksums": int(m.group(4))}
+                time.sleep(0.5)
+            desyncs = host.grep("Desync at frame", "the session failed") + friend.grep(
+                "Desync at frame", "the session failed")
+            rec["sessions"] = counts
+            rec["desyncs"] = len(desyncs)
+            log(f"SESSION {h['game']} ~{h['minutes']:g} min: {json.dumps(counts)}, "
+                f"{len(desyncs)} desync lines")
+            with open(RESULTS, "a") as f:
+                f.write(json.dumps({"game": h["game"], "plan_min": h["minutes"],
+                                    "sessions": counts, "desyncs": len(desyncs)}) + "\n")
+            if (len(counts) < 2 or any(c["checksums"] <= 0 for c in counts.values())
+                    or desyncs):
+                failures.append(f"{h['game']} ~{h['minutes']:g} min: session checksums "
+                                f"{counts}, {len(desyncs)} desync lines")
         friend.stop()
         host.stop()
 except Exception as e:  # noqa: BLE001

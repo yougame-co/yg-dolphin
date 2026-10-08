@@ -152,6 +152,14 @@ if ((EXPECT === "void" && IN_GAME === 2) || (EXPECT === "forfeit" && IN_GAME ===
   console.error("--expect void needs --in-game 0 or 1; --in-game 0 is void");
   process.exit(2);
 }
+// --join-delay <ms>: how long after the match the joiner's page sends its first `join` (default 1500).
+// The YouGame page sends `host` and `join` at once (lib/orca-queue.ts ORCA_JOIN_DELAY_MS 0); with 0
+// the host's fresh start, its hold for the room's header and its own pick being put back all race
+// the joiner's arrival, as in prod.
+const JOIN_DELAY_MS = Number(opt("--join-delay", "1500"));
+// --costume <n> (--q2): after A on its own character select each player presses X n times, so its
+// pick is in another colour and the host's own pick, put back after its fresh start, needs X too.
+const COSTUME_PRESSES = Number(opt("--costume", "0"));
 const VARIANT = opt("--variant", "d");
 const INVITER = opt("--inviter", "");
 const INVITE_GAP_MS = Number(opt("--invite-gap", "4000"));
@@ -545,7 +553,7 @@ class Side {
           log(`${this.name}~ ${se[1]}`);
         }
         const pj =
-          /(Online rules: (the host's game says|the host's header|leaving room|header ).*|Drop-in: (left|loaded keyframe|the host offers|joining room|plugged into|playing solo|leaving|this boot's NAND|port \d (left|moves|is)|keyframe of frame|.* arrived for port|back to a game|home ).*|Couldn't .*|Orca room ended: .*|Orca: joining a YouGame room.*|Orca room: in room .*|Orca room: Room \S+: .*|Matchmaking: (the opponent|the host|done|no verdict|the room closed).*|Online: session ended.*)$/.exec(
+          /(Online rules: (the host's game says|the host's header|leaving room|header ).*|Drop-in: (left|loaded keyframe|the host offers|joining room|plugged into|playing solo|leaving|this boot's NAND|port \d (left|moves|is)|keyframe of frame|.* arrived for port|back to a game|home |fresh start at frame ).*|Couldn't .*|Orca room ended: .*|Orca: joining a YouGame room.*|Orca room: in room .*|Orca room: Room \S+: .*|Matchmaking: (the opponent|the host|done|no verdict|the room closed).*|Online: session ended.*)$/.exec(
             line,
           );
         if (pj) {
@@ -816,7 +824,7 @@ async function hostOrJoin(side, room, slot) {
     return;
   }
   for (let tries = 0; ; ++tries) {
-    await sleep(1500);
+    await sleep(tries === 0 ? JOIN_DELAY_MS : 1500);
     const from = side.lines.length;
     side.send(`join ${room}`);
     const r = await Promise.race([
@@ -1135,6 +1143,10 @@ async function q2Ready(side, queue) {
   await sleep(300);
   await side.press("A");
   await sleep(1500);
+  for (let i = 0; i < COSTUME_PRESSES; ++i) {
+    await side.press("X");
+    await sleep(400);
+  }
   for (let tries = 0; ; ++tries) {
     const at = side.lines.length;
     await side.press("START");
@@ -1169,6 +1181,27 @@ async function q2Search(side, queue, from) {
   return search(side, queue);
 }
 
+// After its fresh start the host's own pick goes back on the room's select by its own inputs
+// (ORCA.md "Fresh starts"), and only then may the opponent plug in: a session hands port 1 to the
+// player's pad. The host's last fresh start must have put its pick back, in its colour, at a frame
+// before the opponent's port starts. An Orca without fresh starts says none of this: skipped.
+function ownPickBeforeSession(host) {
+  if (!host.joinLog.some((e) => /^Drop-in: fresh start at frame /.test(e.line))) return;
+  const back = host.queueLog.filter((l) => /port 1's own pick is /.test(l)).pop();
+  const port2 = host.joinLog.filter((e) => /^Drop-in: port 2 is /.test(e.line)).pop();
+  if (!back) fail(`${host.name}: no "port 1's own pick" line after its fresh start`);
+  if (!port2) fail(`${host.name}: no "port 2 is" line`);
+  const backFrame = Number(/frame (\d+)/.exec(back)[1]);
+  const port2Frame = Number(/from frame (\d+)/.exec(port2.line)[1]);
+  const m = /own pick is (back in|left to the player) \(character (0x[0-9a-f]+) costume (\d+)/.exec(back);
+  log(`${host.name}: ${back}; ${port2.line}`);
+  if (!m || m[1] !== "back in") fail(`${host.name}: its own pick wasn't put back: ${back}`);
+  if (host.pick && Number(m[3]) !== host.pick[1])
+    fail(`${host.name}: its own pick came back in costume ${m[3]}, its pick is ${host.pick[1]}`);
+  if (backFrame >= port2Frame)
+    fail(`${host.name}: port 2 plugged in at frame ${port2Frame}, before its own pick was back (${backFrame})`);
+}
+
 async function q2Meet(first, second, queue, pick) {
   const from = [first.lines.length, second.lines.length];
   await pick(first);
@@ -1185,6 +1218,7 @@ async function q2Meet(first, second, queue, pick) {
   await Promise.all([hostOrJoin(first, m1.room, m1.slot), hostOrJoin(second, m2.room, m2.slot)]);
   await host.expect(/^orca state friend-joined$/, 120000, hostFrom);
   if (host.lines.slice(hostFrom).some((l) => l === "unsupported host")) fail("unsupported host");
+  ownPickBeforeSession(host);
   return { host, joiner, room: m1.room };
 }
 
