@@ -304,6 +304,10 @@ class ScanTests(unittest.TestCase):
         self.assertEqual(tokens(self.UX, "auto f = std::bind(g, 1);\nm_ws.send(x);\nroom->connect(y);\n"),
                          [])
 
+    def test_words_inside_strings_are_not_calls(self):
+        self.assertEqual(tokens(self.UX, 'Log("character select (frame {})", f);\n'), [])
+        self.assertEqual(tokens(self.UX, 'auto s = R"(system("x"))";\n'), [])
+
     def test_http(self):
         self.assertIn(("http", "curl_easy_init("), tokens(self.UX, "CURL* c = curl_easy_init();\n"))
         self.assertIn(("http", '"https://evil.example/x"'),
@@ -374,7 +378,7 @@ class EndToEndTests(unittest.TestCase):
 
     def test_flow(self):
         self.git("init", "-q")
-        self.write("Source/Core/Common/Util.cpp", "int util() { return 1; }\n")
+        self.write("Source/Core/Common/Util.cpp", 'const char* p = getenv("PATH");\n')
         self.git("add", "-A")
         self.git("commit", "-qm", "upstream")
         base = self.git("rev-parse", "HEAD")
@@ -418,6 +422,20 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(sorted((n["rule"], n["token"]) for n in new),
                          [("env", 'getenv("HOME"'), ("socket", "connect(")])
         self.assertTrue(all(l["added"] for n in new for l in n["lines"]))
+
+        # Orca's first change to an upstream file: only what Orca adds is new.
+        self.write("Source/Core/Common/Util.cpp",
+                   'const char* p = getenv("PATH");\nconst char* h = getenv("HOME");\n')
+        self.git("commit", "-qam", "upstream-ish")
+        bl2 = os.path.join(self.tmp, "bl2.txt")
+        self.run_tool("forbidden-calls", "--rules", rules, "--update-baseline", "--baseline", bl2,
+                      "--rev", "HEAD~3")
+        code, out, err = self.run_tool("forbidden-calls", "--rules", rules, "--baseline", bl2,
+                                       "--rev", "HEAD", "--json")
+        got = sorted((n["rule"], n["path"], n["token"]) for n in json.loads(out)["new"])
+        self.assertIn(("env", "Source/Core/Common/Util.cpp", 'getenv("HOME"'), got)
+        self.assertNotIn(("env", "Source/Core/Common/Util.cpp", 'getenv("PATH"'), got)
+        self.git("reset", "-q", "--hard", "HEAD~1")
 
         # The working tree, a stdin diff, and --files.
         code, out, err = self.run_tool("forbidden-calls", "--rules", rules, "--baseline", bl)
