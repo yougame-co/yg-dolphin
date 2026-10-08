@@ -12,6 +12,9 @@
 #          (phase 1)"): a bundle whose mod.json names a launcher boots it like --pplus. --sd-cache
 #          keeps built SD cards between runs (default: under the run's work dir); --disc-sha1 sets
 #          ORCA_DISC_SHA1 as the app does. Both sides must run the same bundle (the key says so).
+#   Flat:  a flat bundle (ORCA.md "Flat bundles") is found the way the app lays it out: Project+'s
+#          with --pplus "<bundle>/Project+ Netplay Launcher.dol" (the launcher's folder); a disc
+#          boot's with --flat-run <bundle>, copied to <work>/run/<slug>/ beside -u <work>/user.
 #
 # --cookie is a file holding a session cookie header (sandbox-ada on one side, sandbox-bo on the
 # other; both are testers on open-brawl and project-rollback): web/scripts/online-tests/lib.mjs
@@ -33,6 +36,7 @@ p.add_argument("--mod")
 p.add_argument("--sd-cache")
 p.add_argument("--disc-sha1")
 p.add_argument("--slug")
+p.add_argument("--flat-run")
 p.add_argument("--frames", type=int, default=36000)
 p.add_argument("--delay", type=float, default=0)
 p.add_argument("--leave-at", type=int, default=0)
@@ -50,6 +54,14 @@ pplus_like = bool(a.pplus or mod_launcher)
 slug = a.slug or ("project-rollback" if pplus_like else "open-brawl")
 inp = a.input or os.path.join(HERE, "inputs", "pplus-1v1.txt" if pplus_like else "bf-mario-link-results.txt")
 work = tempfile.mkdtemp(prefix=f"orca-xplat-{a.role}-")
+if a.flat_run:
+    # The desktop app's layout: userData/orca/{user,run/<slug>} (desktop orca.ts).
+    import shutil
+    run_dir = os.path.join(work, "run", slug)
+    os.makedirs(run_dir)
+    for name in os.listdir(a.flat_run):
+        if not name.startswith("."):
+            shutil.copyfile(os.path.join(a.flat_run, name), os.path.join(run_dir, name))
 T0 = time.time()
 
 
