@@ -708,6 +708,12 @@ Seen LastSeen()
 
 bool Supported()
 {
+  // Asked once, as the match is set up (Rollback/OnlineMatch.cpp), before a mod's guard words are
+  // first read (Project+'s codes land in frame 1): in mod mode, the builtin mod.json declares. The
+  // menu is still read only while the guards hold (Frame), so a mod that moved what the builtin
+  // relies on never finds a built menu, gets no origin and takes no players, on every machine alike.
+  if (Orca::Mod::ActiveMod())
+    return Orca::Mod::DeclaredBuiltin() != Orca::Mod::Builtin::None;
   return BrawlExecutable();
 }
 }  // namespace FreshMove

@@ -784,6 +784,9 @@ TEST(OrcaMod, ModeGates)
   EXPECT_FALSE(Orca::Mod::BuiltinOn(Builtin::BrawlRev2));
   EXPECT_EQ(Orca::UX::Rules::ProfileRuleset(), Orca::UX::Rules::Ruleset::None);
   EXPECT_FALSE(Orca::UX::ResultsVerified());
+  // A fresh start's origin at the built main menu (0.3.34) is decided as the match is set up, before
+  // any guard is read: by the declared builtin, so a mod boots to the same origin as legacy.
+  EXPECT_TRUE(Orca::UX::FreshMove::Supported());
   // A builtin's caps are never offered before its guards hold (they are checked at the frame hook).
   // The music switch is host-only and follows the disc as in legacy (Music::Supported), guards or
   // not; the pick caps go with "locks".
@@ -833,6 +836,7 @@ TEST(OrcaMod, ModeGates)
   ASSERT_TRUE(none) << error;
   Orca::SetActiveProfile(none);
   EXPECT_EQ(Orca::Mod::DeclaredBuiltin(), Builtin::None);
+  EXPECT_FALSE(Orca::UX::FreshMove::Supported());
   // No builtin: no builtin caps; the music switch still follows the disc (RSBE01).
   EXPECT_EQ(Orca::Status::OfferedCaps(), base);
   EXPECT_TRUE(Orca::Mod::GuardsDecided());  // nothing to wait for
@@ -849,6 +853,7 @@ TEST(OrcaMod, ModeGates)
   EXPECT_TRUE(Orca::UX::ResultsVerified());
   EXPECT_EQ(Orca::Status::OfferedCaps(), all);
   EXPECT_EQ(Orca::UX::FriendsMove::FirstFriendFrame(), Orca::UX::FriendsMove::FIRST_FRIEND_FRAME);
+  EXPECT_TRUE(Orca::UX::FreshMove::Supported());
   Orca::SetActiveProfile(std::nullopt);
   File::DeleteDirRecursively(b.dir);
   File::DeleteDirRecursively(n.dir);

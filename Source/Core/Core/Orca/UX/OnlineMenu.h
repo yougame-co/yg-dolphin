@@ -304,7 +304,8 @@ void Frame(const Core::CPUThreadGuard& guard, int frame);
 // What the last call of the frame hook read (nothing for other games). CPU thread.
 Seen LastSeen();
 
-// Whether this game's main menu can be read and left: Brawl rev 2, and Project+.
+// Whether this game's main menu can be read and left: Brawl rev 2, and Project+ (in mod mode, a mod
+// with a builtin, decided at boot rather than by its guards: Core/Orca/Mod.h).
 bool Supported();
 }  // namespace FreshMove
 }  // namespace Orca::UX
