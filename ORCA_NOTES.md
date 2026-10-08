@@ -6386,6 +6386,28 @@ Answers taken for the design's open questions (defaults, revisit with Luis): a f
 during a Versus fight against CPUs fresh-starts at once; the friends rules carry is a follow-up; the
 in-place threshold is 10 s. `Profile::boot_nand_frame` (`BootNandFrame`) is unused since 0.3.32.
 
+Checks on this branch (Mac, `build`, Release; two-Orca runs on the local rooms stack, dev tickets):
+
+- dolphin-nogui + tests build. `Orca*`: 614 run, 594 passed, 20 skipped (OrcaLive 14, OrcaUXLatency
+  2, OrcaKitDraw 1, OrcaDisc 2: this tree's test binary finds no `Sys/Orca` beside its bundle;
+  `OrcaKeyframe.HttpStoreAgainstAFakeServer` 1, which passes against `fake_keyframes.py`), 0 failed.
+- Origins: Brawl Rev 2 frame 1524 (RAM `f0c74d6dd64230b5`, NAND 37,807 KB, 17-31 ms), Project+ frame
+  230 (`0c80f10df0a8be22`, 2,416 KB), the same throttled, unthrottled (launch joiner) and with
+  `ORCA_TEST_FAST_UNTIL`. A fresh start restores in 22-126 ms; its tail runs 1524-1588 (Brawl) or
+  230-266 (Project+) in about 0.2-0.35 s.
+- `long-join.py` (`ORCA_TEST_FAST_UNTIL` hosts): a friend plugs in 1.2 s after `join` at a Brawl
+  host at frame 29,573 and 1.7 s at a Project+ host at 37,828; earlier, 1.2 s at 54,287 (15 min)
+  and 1.7 s at 50,677. 0.3.32 needed 162-178 s at 25 min.
+- A launch join (`ORCA_JOIN`, its boot run unseen to its origin): plugged in 2.3 s.
+- `queue-e2e.mjs --q2 --queue ranked`: Brawl 228 checksums each, Project+ 233, each host's pick put
+  back in 70 frames, both back on their own select after the set. `--queue casual` fails after
+  game 1 ("the character select never went on") on this stack with 0.3.33's build too.
+- `online-menu-dropin.py` (in place, `--invite` both cases), `versus-cpu-dropin.py` (18 checksums),
+  `dropin-commands.py`: pass. A join held by `ORCA_TEST_HOLD` fresh-starts once the hold ends.
+- Harness-only runs (hash logs) take none of this: no room, so no origin, no replay scope and no
+  steering; their RAM is unchanged by construction. Not run: Mac<->PC (`xplat.py`), the Windows
+  restore time, the perf comparison, the release step 3 hash logs.
+
 ## Explaining it to people (internal)
 
 **One sentence:**

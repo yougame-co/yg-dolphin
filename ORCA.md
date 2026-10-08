@@ -420,8 +420,9 @@ pointers, or arbitrary memory writes.
    not leave the player's machine on partially reconstructed peer history.
 
 Replays permit frames up to 216,000 (one hour at 60 fps), 64 MiB decompressed data, and a separate
-64 MiB decoded-allocation budget. A replay carries its first frame and only the frames from it. Port lists have at most four unique seats, names at most 128 bytes,
-controls at most 64 bytes, and queue labels at most 32 bytes. Rebuilding has a three-minute deadline.
+64 MiB decoded-allocation budget. A replay carries its first frame and only the frames from it.
+Port lists have at most four unique seats, names at most 128 bytes, controls at most 64 bytes, and
+queue labels at most 32 bytes. Rebuilding has a three-minute deadline.
 An over-limit history refuses new joins; existing players keep playing. The `orca2:` compatibility
 prefix isolates the replay protocol from old `orca1:` clients and legacy machine-image payloads.
 
@@ -1781,7 +1782,7 @@ only when the box moves inside the window.
 | `perf off\|fps\|detailed` | The overlay's frame meter (frames shown in the last second and the longest; yellow under 59 fps or past 20 ms, red under 50 fps or past two frames). A frame the game itself holds in emulated time (Project+ loading between scenes) counts as the video frames it held, so the meter, `fps` and the `hi` hitch count in `orca stats` show only this machine falling behind; `hil` counts the frames a load alone made slow (`hi` + `hil` is the older builds' `hi`). |
 | `music on\|off` | The player's Music switch ([Music switch](#music-switch)), cap `music`. |
 | `save N` / `load N` / `reset` | Refused in a session. |
-| `prepare-join` | The host invited a friend: capture a keyframe at the next boundary. |
+| `prepare-join` | The host invited a friend: a queue or search under way ends (`orca menu cancel`). Since 0.3.34 no keyframe is made ahead: the friend's arrival may [fresh-start](#fresh-starts) the game first. |
 | `join <code>` / `leave` | Into or out of a friend's game. |
 | `host <code>` / `queue-cancel` / `queue rating <n\|->` | Matchmaking ([Matchmaking](#matchmaking-and-results)). |
 | `direct on\|off` | The player's switch for direct links. |
