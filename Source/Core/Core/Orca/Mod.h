@@ -26,7 +26,10 @@ class CPUThreadGuard;
 //   sd/...          the SD card as files, when mod.json has "sd" (built into an image, BuildSdImage)
 //   orca/patches/<name>.patches, orca/textures/..., orca/jitwarm
 //
-// Without ORCA_MOD_DIR nothing here runs and Orca is exactly what it was (legacy profiles).
+// A flat bundle (mod.json format 2, Core/Orca/Bundle.h) is the same game data as at most eight files
+// in one folder, signed, which a session finds by itself: a game update that rides as a listing's
+// runtime files. Without ORCA_MOD_DIR or a flat bundle nothing here runs and Orca is exactly what it
+// was (legacy profiles).
 namespace Orca::Mod
 {
 // The script API version this engine implements; mod.json's engine.api must not be above it.
@@ -55,6 +58,12 @@ inline constexpr u64 MAX_JITWARM_BYTES = u64{16} << 20;    // orca/jitwarm, and 
 inline constexpr int MAX_JSON_DEPTH = 16;
 // Today's FIRST_KEYFRAME_FRAME (Rollback/OnlineMatch.cpp) and FIRST_FRIEND_FRAME (UX/OnlineMenu.h).
 inline constexpr u32 DEFAULT_FIRST_KEYFRAME_FRAME = 300;
+// A flat bundle: at most this many files, mod.json and mod.sig included (a listing's runtime files:
+// YouGame desktop orca-policy.ts and web lib/orca.ts allow eight), and this many patches files.
+inline constexpr size_t FLAT_MAX_FILES = 8;
+inline constexpr size_t FLAT_MAX_PATCHES = 4;
+inline constexpr std::string_view FLAT_MANIFEST = "mod.json";
+inline constexpr std::string_view FLAT_SIGNATURE = "mod.sig";
 
 // --- The tree ----------------------------------------------------------------------------------
 
@@ -81,6 +90,11 @@ struct Tree
 // space, or a Windows device name (CON, NUL, COM1, ...), at most MAX_PATH_BYTES bytes. A bundle never
 // holds a tree.json of its own (the app writes the run folder's), so ParseTree refuses one listed.
 std::optional<std::string> PathProblem(std::string_view path);
+// Why a flat bundle's file name is refused, or nullopt: a name the YouGame app lays out as a runtime
+// file ([A-Za-z0-9+ ()_-], then also '.', at most MAX_PATH_BYTES bytes), never "..", a folder, a
+// Windows device name or a name ending in a dot or a space, nor one of the bundle's own (mod.json,
+// mod.sig, tree.json).
+std::optional<std::string> FlatNameProblem(std::string_view name);
 // Files the tree hash leaves out: orca/jitwarm and orca/test/... (host-only).
 bool HostOnly(std::string_view path);
 // The contract's treeHash: lowercase hex SHA-256 of "<path>\t<sha256>\t<bytes>\n" for every file
@@ -115,9 +129,18 @@ struct KeptWord
   bool operator==(const KeptWord&) const = default;
 };
 
+// Format 2's pinned SD image: a file of the bundle used as the card as it is (never built).
+struct SdImageFile
+{
+  std::string file;
+  u64 bytes = 0;
+  std::string xxh3;  // XXH3-128, 32 lowercase hex digits (Profile.cpp HashFile)
+  bool operator==(const SdImageFile&) const = default;
+};
+
 struct Manifest
 {
-  int format = 0;
+  int format = 0;  // 1: a tree bundle (ORCA_MOD_DIR + tree.json); 2: a flat bundle (Bundle.h)
   int engine_api = 0;
   std::string min_orca;
   std::string title;
@@ -139,6 +162,14 @@ struct Manifest
   Builtin builtin = Builtin::None;
   std::vector<std::string> rulesets;
   std::vector<std::string> offers;
+  // Format 2 only: file names at the bundle's root. The SD image used as it is ("sdImage"), the game
+  // patches in the order they apply, the JIT seed (host-only), and the texture pack, which is the
+  // engine's own (Sys/Orca/Textures, as in legacy) until a bundle can carry one.
+  std::optional<SdImageFile> sd_image;
+  std::vector<std::string> patches;
+  std::string jitwarm;
+  // Every file a format 2 mod.json names, in that order (launcher, SD image, patches, JIT seed).
+  std::vector<std::string> FlatFiles() const;
 };
 
 // The `forced` keys a mod may set. Switches that determinism or safety depend on (dual core, FMA,
@@ -150,15 +181,22 @@ std::span<const std::string_view> OfferableCaps();
 // The disc's own title ID (a Wii disc: 00010000 and its 4-character game code).
 u64 DiscTitleId(std::string_view disc_id);
 
-// Every field validated; anything unknown or malformed refuses (nullopt and why).
+// Every field validated; anything unknown or malformed refuses (nullopt and why). Format 1 (a tree
+// bundle) and format 2 (flat: "sdImage", "patches", "jitwarm", "textures" instead of "sd", and every
+// file a flat name at the root, FLAT_MAX_FILES in all).
 std::optional<Manifest> ParseManifest(std::string_view json, std::string* error);
 
 // --- The session -------------------------------------------------------------------------------
 
-// ORCA_MOD_DIR is set in a session: the boot loads the game from that bundle (mod mode).
+// The session reads its game from a bundle (mod mode): a tree bundle in ORCA_MOD_DIR, or a flat
+// bundle that was found and verified (Bundle.h ResolveBundle). Before ResolveBundle ran, whether
+// ORCA_MOD_DIR is set.
 bool Requested();
-// ORCA_MOD_DIR with a trailing '/', or empty.
+// The bundle's folder with a trailing '/', or empty.
 std::string Dir();
+
+// A verified flat bundle (Core/Orca/Bundle.h).
+struct FlatBundle;
 
 // What a mod-mode profile carries besides the legacy fields (Profile::mod).
 struct ModInfo
@@ -166,8 +204,19 @@ struct ModInfo
   std::string dir;  // with a trailing '/'
   Tree tree;
   Manifest manifest;
-  // The built SD image's XXH3-128 (32 hex digits), set at boot; empty without "sd".
+  // The SD image's XXH3-128 (32 hex digits), set at boot (built, or a flat bundle's as verified);
+  // empty without a card.
   std::string sd_image_hash;
+  // A flat bundle (format 2): its tree lists the signed files by name (the hash leaves the JIT seed
+  // out, as a tree bundle's does), and its patches are kept as they were verified.
+  bool flat = false;
+  std::vector<std::pair<std::string, std::string>> flat_patches;  // (name, text), applied in order
+
+  // The JIT seed (host-only), or empty: orca/jitwarm in a tree bundle, mod.json's "jitwarm" in a
+  // flat one.
+  std::string JitWarmPath() const;
+  // Whether the texture pack is the engine's own (a flat bundle's), or the bundle's orca/textures/.
+  bool EngineTextures() const { return flat; }
 };
 // The running profile's mod: null in legacy mode (a profile from Data/Sys/Orca) or outside a
 // session. Every mod-mode branch keys on this, so legacy sessions run exactly the code they ran.

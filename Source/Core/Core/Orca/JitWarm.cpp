@@ -140,9 +140,9 @@ std::string SeedPath()
   const Profile* profile = ActiveProfile();
   if (!profile || GetEnv("ORCA_JITWARM_SEED") == "0")
     return {};
-  // Mod mode: the bundle's orca/jitwarm, when it has one (host-only: not in the tree hash).
+  // Mod mode: the bundle's JIT seed, when it has one (host-only: not in the tree hash).
   if (profile->mod)
-    return profile->mod->tree.Find("orca/jitwarm") ? profile->mod->dir + "orca/jitwarm" : "";
+    return profile->mod->JitWarmPath();
   return File::GetSysDirectory() + "Orca/" + profile->game_id + ".jitwarm";
 }
 

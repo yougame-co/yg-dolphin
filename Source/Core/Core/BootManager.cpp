@@ -37,6 +37,7 @@
 #include "Core/HW/Sram.h"
 #include "Core/Movie.h"
 #include "Core/NetPlayProto.h"
+#include "Core/Orca/Bundle.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Status.h"
 #include "Core/System.h"
@@ -54,6 +55,14 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
     return false;
 
   SConfig& StartUp = SConfig::GetInstance();
+
+  // Orca: the bundle this session plays, if any (Core/Orca/Bundle.h), decided before anything
+  // reads a game setting (mod mode leaves the player's game INIs out). Once per process.
+  if (Orca::SessionActive())
+  {
+    const auto* executable = std::get_if<BootParameters::Executable>(&boot->parameters);
+    Orca::Mod::ResolveBundle(executable ? &executable->path : nullptr);
+  }
 
   if (!StartUp.SetPathsAndGameMetadata(system, *boot))
     return false;
@@ -91,9 +100,12 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
     bool mod_wrong_disc = false;
     if (Orca::Mod::Requested())
     {
-      // Mod mode (ORCA_MOD_DIR): the game comes from the bundle, never from Data/Sys/Orca, and
-      // ORCA_PROFILE is ignored.
-      orca_profile = Orca::LoadModProfile(Orca::Mod::Dir(), &error);
+      // Mod mode (a tree bundle in ORCA_MOD_DIR, or a verified flat bundle): the game comes from
+      // the bundle, never from Data/Sys/Orca, and ORCA_PROFILE is ignored.
+      if (const Orca::Mod::FlatBundle* flat = Orca::Mod::ResolvedFlat())
+        orca_profile = Orca::LoadFlatProfile(*flat, &error);
+      else
+        orca_profile = Orca::LoadModProfile(Orca::Mod::Dir(), &error);
       if (orca_profile &&
           !Orca::PrepareModBoot(&*orca_profile, executable ? &executable->path : nullptr,
                                 Config::Get(Config::MAIN_DEFAULT_ISO), StartUp.GetGameID(),
@@ -104,8 +116,9 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
       if (orca_profile)
       {
         const Orca::Mod::ModInfo& mod = *orca_profile->mod;
-        NOTICE_LOG_FMT(BOOT, "Orca mod: {} ({} {} rev {}), tree {}, builtin {}, SD {}",
+        NOTICE_LOG_FMT(BOOT, "Orca mod: {} ({}, {} {} rev {}), tree {}, builtin {}, SD {}",
                        mod.manifest.title.empty() ? "untitled" : mod.manifest.title,
+                       mod.flat ? "flat bundle" : "tree bundle",
                        mod.manifest.launcher.empty() ? "disc" : "launcher on",
                        mod.manifest.disc_id, mod.manifest.disc_revision, mod.tree.hash,
                        Orca::Mod::BuiltinName(mod.manifest.builtin),

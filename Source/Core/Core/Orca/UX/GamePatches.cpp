@@ -344,6 +344,28 @@ const std::vector<GamePatch>& ActivePatches()
     }
     s_for = "mod:" + tree;
     s_patches.clear();
+    // A flat bundle: its patches files as they were verified (Core/Orca/Bundle.cpp), in mod.json's
+    // order.
+    if (profile->mod->flat)
+    {
+      for (const auto& [name, text] : profile->mod->flat_patches)
+      {
+        std::string error;
+        const std::optional<std::vector<GamePatch>> parsed = ParseGamePatches(text, &error);
+        if (!parsed)
+        {
+          ERROR_LOG_FMT(ROLLBACK, "Orca: {}{} refused, {}: no game patches", profile->mod->dir, name,
+                        error);
+          Orca::Status::Error("profile", "This mod's game patches are damaged.");
+          s_patches.clear();
+          break;
+        }
+        NOTICE_LOG_FMT(ROLLBACK, "Orca: {} game patches from {}{}", parsed->size(),
+                       profile->mod->dir, name);
+        s_patches.insert(s_patches.end(), parsed->begin(), parsed->end());
+      }
+      return s_patches;
+    }
     for (const Orca::Mod::TreeFile* file : profile->mod->tree.Under("orca/patches/"))
     {
       if (!file->path.ends_with(".patches") ||

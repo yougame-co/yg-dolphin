@@ -296,7 +296,13 @@ TEST(OrcaMod, RefusesAnythingElse)
   EXPECT_TRUE(Refused(""));
   EXPECT_TRUE(Refused("[]"));
   EXPECT_TRUE(Refused(BrawlWith("unknown", "1")));
-  EXPECT_TRUE(Refused(BrawlWith("format", "2")));
+  // Format 2 is a flat bundle's (Bundle.h, BundleTest.cpp): a tree bundle's "sd" is refused there.
+  EXPECT_TRUE(Refused(BrawlWith("format", "3")));
+  EXPECT_TRUE(Refused(BrawlWith("format", "0")));
+  EXPECT_TRUE(Refused(BrawlWith("format", "\"1\"")));
+  std::string pplus_flat = PPLUS_MOD;
+  pplus_flat.replace(pplus_flat.find("\"format\": 1"), 11, "\"format\": 2");
+  EXPECT_TRUE(Refused(pplus_flat));
   EXPECT_TRUE(Refused(BrawlWithout("format")));
   EXPECT_TRUE(Refused(BrawlWithout("engine")));
   EXPECT_TRUE(Refused(BrawlWithout("disc")));

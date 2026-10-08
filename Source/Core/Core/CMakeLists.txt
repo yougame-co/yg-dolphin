@@ -525,6 +525,8 @@ add_library(core
   Orca/JitWarm.h
   Orca/Launch.cpp
   Orca/Launch.h
+  Orca/Bundle.cpp
+  Orca/Bundle.h
   Orca/Mod.cpp
   Orca/Mod.h
   Orca/Music.cpp
@@ -830,6 +832,7 @@ PUBLIC
 
 PRIVATE
   CURL::libcurl
+  ed25519
   imgui
   LibJuice::LibJuice
   zstd::zstd
@@ -839,6 +842,25 @@ PRIVATE
   LZ4::LZ4
   ZLIB::ZLIB
 )
+
+# The Ed25519 key a flat bundle's mod.sig must be by (Core/Orca/Bundle.cpp). Unset, the engine
+# trusts the bundle-flat branch's TEST key; a release sets its own here (64 lowercase hex digits).
+set(ORCA_BUNDLE_PUBLIC_KEY "" CACHE STRING
+    "Ed25519 public key (64 lowercase hex digits) that signs Orca flat bundles; empty: the TEST key")
+if(ORCA_BUNDLE_PUBLIC_KEY)
+  if(NOT ORCA_BUNDLE_PUBLIC_KEY MATCHES "^[0-9a-f]+$")
+    message(FATAL_ERROR "ORCA_BUNDLE_PUBLIC_KEY must be 64 lowercase hex digits")
+  endif()
+  string(LENGTH "${ORCA_BUNDLE_PUBLIC_KEY}" ORCA_BUNDLE_PUBLIC_KEY_LENGTH)
+  if(NOT ORCA_BUNDLE_PUBLIC_KEY_LENGTH EQUAL 64)
+    message(FATAL_ERROR "ORCA_BUNDLE_PUBLIC_KEY must be 64 lowercase hex digits")
+  endif()
+  set_source_files_properties(Orca/Bundle.cpp PROPERTIES
+    COMPILE_DEFINITIONS "ORCA_BUNDLE_PUBLIC_KEY=\"${ORCA_BUNDLE_PUBLIC_KEY}\"")
+  message(STATUS "Orca flat bundles: trusting key ${ORCA_BUNDLE_PUBLIC_KEY}")
+else()
+  message(STATUS "Orca flat bundles: trusting the TEST key (set ORCA_BUNDLE_PUBLIC_KEY for a release)")
+endif()
 
 if(LIBUDEV_FOUND)
   target_include_directories(core PRIVATE ${LIBUDEV_INCLUDE_DIR})

@@ -24,6 +24,7 @@
 #include "Common/IOFile.h"
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
+#include "Core/Orca/Bundle.h"
 #include "Core/Orca/Disc.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/UX/GamePatches.h"
@@ -234,6 +235,36 @@ std::optional<std::string> PathProblem(std::string_view path)
   return std::nullopt;
 }
 
+std::optional<std::string> FlatNameProblem(std::string_view name)
+{
+  if (name.empty())
+    return "an empty name";
+  if (name.size() > MAX_PATH_BYTES)
+    return fmt::format("longer than {} bytes", MAX_PATH_BYTES);
+  // The YouGame app's runtime file names (desktop orca-policy.ts FILE_RE), which are what lands in
+  // the folder.
+  const auto plain = [](char c) {
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '+' ||
+           c == ' ' || c == '(' || c == ')' || c == '_' || c == '-';
+  };
+  if (!plain(name.front()) ||
+      !std::all_of(name.begin() + 1, name.end(), [&](char c) { return plain(c) || c == '.'; }))
+  {
+    return "a character other than A-Z a-z 0-9 + ( ) _ - space, and '.' after the first";
+  }
+  if (name.find("..") != std::string_view::npos)
+    return "\"..\"";
+  if (name.front() == ' ')
+    return "a name that starts with a space";
+  // A Windows device name, or a name ending in a dot or a space.
+  if (const auto problem = PathProblem(name))
+    return problem;
+  const std::string lower = ToLowerAscii(name);
+  if (lower == FLAT_MANIFEST || lower == FLAT_SIGNATURE || lower == "tree.json")
+    return "one of the bundle's own names (mod.json, mod.sig, tree.json)";
+  return std::nullopt;
+}
+
 bool HostOnly(std::string_view path)
 {
   return path == "orca/jitwarm" || path.starts_with("orca/test/");
@@ -399,23 +430,32 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
   if (!root.is<picojson::object>())
     return fail("not an object");
   const picojson::object& o = root.get<picojson::object>();
-  if (const auto key = UnknownKey(
-          o, {"format", "engine", "title", "disc", "launcher", "sd", "frameHook", "bootNandFrame",
-              "firstKeyframeFrame", "jitClearFrame", "keepGameCode", "saveTitle", "forced",
-              "builtin", "rulesets", "offers"}))
-  {
-    return fail(fmt::format("unknown key {}", *key));
-  }
   const auto get = [&o](const char* key) -> const picojson::value* {
     const auto it = o.find(key);
     return it == o.end() ? nullptr : &it->second;
   };
 
   Manifest m;
-  // format
-  if (const picojson::value* v = get("format"); !v || Integer(*v, 1, 1) != 1u)
-    return fail("\"format\" must be 1");
-  m.format = 1;
+  // format: 1, a tree bundle (ORCA_MOD_DIR with tree.json); 2, a flat bundle (Bundle.h). It decides
+  // which keys there may be.
+  {
+    const picojson::value* v = get("format");
+    const auto format = v ? Integer(*v, 1, 2) : std::nullopt;
+    if (!format)
+      return fail("\"format\" must be 1 (a tree bundle) or 2 (a flat bundle)");
+    m.format = static_cast<int>(*format);
+  }
+  const bool flat = m.format == 2;
+  const auto unknown =
+      flat ? UnknownKey(o, {"format", "engine", "title", "disc", "launcher", "sdImage", "patches",
+                            "jitwarm", "textures", "frameHook", "bootNandFrame",
+                            "firstKeyframeFrame", "jitClearFrame", "keepGameCode", "saveTitle",
+                            "forced", "builtin", "rulesets", "offers"}) :
+             UnknownKey(o, {"format", "engine", "title", "disc", "launcher", "sd", "frameHook",
+                            "bootNandFrame", "firstKeyframeFrame", "jitClearFrame", "keepGameCode",
+                            "saveTitle", "forced", "builtin", "rulesets", "offers"});
+  if (unknown)
+    return fail(fmt::format("unknown key {} (format {})", *unknown, m.format));
 
   // engine
   {
@@ -486,8 +526,13 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
     if (!v->is<std::string>())
       return fail("\"launcher\" must be a file name");
     const std::string& l = v->get<std::string>();
-    if (PathProblem(l) || l.find('/') != std::string::npos || l == "mod.json" ||
-        l == "tree.json")
+    if (flat)
+    {
+      if (const auto problem = FlatNameProblem(l))
+        return fail(fmt::format("\"launcher\" must be a file name of the bundle: {}", *problem));
+    }
+    else if (PathProblem(l) || l.find('/') != std::string::npos || l == "mod.json" ||
+             l == "tree.json")
     {
       return fail("\"launcher\" must be a file name at the bundle's root");
     }
@@ -692,18 +737,121 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
     if (!m.offers.empty() && m.builtin == Builtin::None)
       return fail("a mod with no builtin has no logic to offer caps with");
   }
+
+  if (!flat)
+    return m;
+
+  // Format 2: every file a name at the bundle's root.
+  // sdImage: the card used as it is, pinned by size and XXH3-128 (as a legacy profile pins sd.raw).
+  if (const picojson::value* v = get("sdImage"))
+  {
+    if (!v->is<picojson::object>())
+      return fail("\"sdImage\" must be an object");
+    const picojson::object& s = v->get<picojson::object>();
+    if (const auto key = UnknownKey(s, {"file", "bytes", "xxh3"}))
+      return fail(fmt::format("unknown key sdImage.{}", *key));
+    SdImageFile image;
+    if (!s.contains("file") || !s.at("file").is<std::string>())
+      return fail("sdImage.file must be a file name");
+    image.file = s.at("file").get<std::string>();
+    if (const auto problem = FlatNameProblem(image.file))
+      return fail(fmt::format("sdImage.file: {}", *problem));
+    const auto bytes = s.contains("bytes") ? Integer(s.at("bytes"), 1, SD_MAX_BYTES) : std::nullopt;
+    if (!bytes)
+      return fail(fmt::format("sdImage.bytes must be an integer from 1 to {} (an SDSC card)",
+                              SD_MAX_BYTES));
+    image.bytes = *bytes;
+    if (!s.contains("xxh3") || !s.at("xxh3").is<std::string>() ||
+        !IsLowerHex(s.at("xxh3").get<std::string>(), 32))
+    {
+      return fail("sdImage.xxh3 must be 32 lowercase hex digits (its XXH3-128)");
+    }
+    image.xxh3 = s.at("xxh3").get<std::string>();
+    m.sd_image = std::move(image);
+  }
+  // patches: the game patches, applied in this order.
+  if (const picojson::value* v = get("patches"))
+  {
+    if (!v->is<picojson::array>() || v->get<picojson::array>().size() > FLAT_MAX_PATCHES)
+    {
+      return fail(
+          fmt::format("\"patches\" must be an array of at most {} file names", FLAT_MAX_PATCHES));
+    }
+    for (const picojson::value& item : v->get<picojson::array>())
+    {
+      if (!item.is<std::string>())
+        return fail("\"patches\" must name files");
+      const std::string& name = item.get<std::string>();
+      if (const auto problem = FlatNameProblem(name))
+        return fail(fmt::format("patches: {}: {}", name, *problem));
+      if (!name.ends_with(".patches"))
+        return fail(fmt::format("patches: {} must end in .patches", name));
+      m.patches.push_back(name);
+    }
+  }
+  // jitwarm: the JIT seed (host-only).
+  if (const picojson::value* v = get("jitwarm"))
+  {
+    if (!v->is<std::string>())
+      return fail("\"jitwarm\" must be a file name");
+    if (const auto problem = FlatNameProblem(v->get<std::string>()))
+      return fail(fmt::format("jitwarm: {}", *problem));
+    m.jitwarm = v->get<std::string>();
+  }
+  // textures: the engine's own pack, the only kind so far.
+  if (const picojson::value* v = get("textures"); v && (!v->is<std::string>() || v->get<std::string>() != "engine"))
+    return fail("\"textures\" must be \"engine\" (a flat bundle can't carry a texture pack yet)");
+  // Each file once (also without case: Windows and macOS folders), and few enough to be a listing's.
+  const std::vector<std::string> files = m.FlatFiles();
+  std::set<std::string> lower;
+  for (const std::string& file : files)
+  {
+    if (!lower.insert(ToLowerAscii(file)).second)
+      return fail(fmt::format("{} is named twice", file));
+  }
+  if (files.size() + 2 > FLAT_MAX_FILES)
+  {
+    return fail(fmt::format("a flat bundle has at most {} files, mod.json and mod.sig included",
+                            FLAT_MAX_FILES));
+  }
   return m;
+}
+
+std::vector<std::string> Manifest::FlatFiles() const
+{
+  std::vector<std::string> files;
+  if (!launcher.empty())
+    files.push_back(launcher);
+  if (sd_image)
+    files.push_back(sd_image->file);
+  files.insert(files.end(), patches.begin(), patches.end());
+  if (!jitwarm.empty())
+    files.push_back(jitwarm);
+  return files;
+}
+
+std::string ModInfo::JitWarmPath() const
+{
+  if (flat)
+    return manifest.jitwarm.empty() ? std::string{} : dir + manifest.jitwarm;
+  return tree.Find("orca/jitwarm") ? dir + "orca/jitwarm" : std::string{};
 }
 
 // --- The session -------------------------------------------------------------------------------
 
 bool Requested()
 {
-  return SessionActive() && !GetEnv("ORCA_MOD_DIR").empty();
+  if (!SessionActive())
+    return false;
+  if (const std::optional<BundleKind> kind = ResolvedKind())
+    return *kind != BundleKind::None;
+  return !GetEnv("ORCA_MOD_DIR").empty();
 }
 
 std::string Dir()
 {
+  if (ResolvedKind())
+    return ResolvedDir();
   std::string dir = GetEnv("ORCA_MOD_DIR");
   if (!dir.empty() && dir.back() != '/' && dir.back() != '\\')
     dir += '/';
@@ -1110,6 +1258,65 @@ bool ReadBounded(const std::string& path, u64 max_bytes, std::string* out, std::
   }
   return true;
 }
+
+// The profile a bundle's validated mod.json makes, a tree bundle's or a flat one's.
+std::optional<Profile> ProfileFromManifest(const std::string& dir, Mod::Tree tree,
+                                           Mod::Manifest manifest, std::string* error)
+{
+  Profile profile;
+  // The room's mode and the boot log name it as the legacy profile its builtin replaces, so a
+  // bundle of Brawl or Project+ plays in the same modes as before.
+  switch (manifest.builtin)
+  {
+  case Mod::Builtin::BrawlRev2:
+    profile.game_id = "RSBE01";
+    break;
+  case Mod::Builtin::BrawlRev2PPlus:
+    profile.game_id = "PPLUS32";
+    break;
+  default:
+    profile.game_id = manifest.disc_id;
+    break;
+  }
+  profile.title = manifest.title;
+  profile.revision = manifest.disc_revision;
+  profile.frame_hook = manifest.frame_hook;
+  profile.frame_hook_word = manifest.frame_hook_word;
+  profile.boot_nand_frame = manifest.boot_nand_frame;
+  profile.jit_clear_frame = manifest.jit_clear_frame;
+  for (const Mod::KeptWord& k : manifest.keep_game_code)
+    profile.kept_code.push_back({k.address, k.game, k.loader});
+  profile.save_title = manifest.save_title;
+  // The card is in exactly when mod.json has one (never a forced key of its own).
+  if (manifest.sd_bytes || manifest.sd_image)
+    profile.forced.emplace_back(Config::Location{Config::System::Main, "Core", "WiiSDCard"}, "True");
+  for (const auto& [key, value] : manifest.forced)
+  {
+    const size_t dot1 = key.find('.');
+    const size_t dot2 = key.find('.', dot1 + 1);
+    const std::optional<Config::System> system = Config::GetSystemFromName(key.substr(0, dot1));
+    if (!system)
+    {
+      *error = fmt::format("Orca mod: unknown system in {}", key);
+      return std::nullopt;
+    }
+    profile.forced.emplace_back(
+        Config::Location{*system, key.substr(dot1 + 1, dot2 - dot1 - 1), key.substr(dot2 + 1)},
+        value);
+  }
+  if (const Mod::TreeFile* launcher =
+          manifest.launcher.empty() ? nullptr : tree.Find(manifest.launcher))
+  {
+    profile.launcher_hash = launcher->sha256;
+    profile.disc = manifest.disc_id;
+  }
+  if (manifest.sd_bytes)
+    profile.sd_image = "sd/";
+  else if (manifest.sd_image)
+    profile.sd_image = manifest.sd_image->file;
+  profile.mod = Mod::ModInfo{dir, std::move(tree), std::move(manifest), {}};
+  return profile;
+}
 }  // namespace
 
 std::optional<Profile> LoadModProfile(const std::string& dir_in, std::string* error)
@@ -1163,6 +1370,12 @@ std::optional<Profile> LoadModProfile(const std::string& dir_in, std::string* er
   std::optional<Mod::Manifest> manifest = Mod::ParseManifest(text, error);
   if (!manifest)
     return std::nullopt;
+  if (manifest->format != 1)
+  {
+    *error = "Orca mod: a run folder with tree.json needs a format 1 mod.json (format 2 is a flat "
+             "bundle's)";
+    return std::nullopt;
+  }
   const Mod::TreeFile* launcher =
       manifest->launcher.empty() ? nullptr : tree->Find(manifest->launcher);
   if (!manifest->launcher.empty() && !launcher)
@@ -1215,55 +1428,19 @@ std::optional<Profile> LoadModProfile(const std::string& dir_in, std::string* er
     }
   }
 
-  Profile profile;
-  // The room's mode and the boot log name it as the legacy profile its builtin replaces, so a
-  // bundle of Brawl or Project+ plays in the same modes as before.
-  switch (manifest->builtin)
-  {
-  case Mod::Builtin::BrawlRev2:
-    profile.game_id = "RSBE01";
-    break;
-  case Mod::Builtin::BrawlRev2PPlus:
-    profile.game_id = "PPLUS32";
-    break;
-  default:
-    profile.game_id = manifest->disc_id;
-    break;
-  }
-  profile.title = manifest->title;
-  profile.revision = manifest->disc_revision;
-  profile.frame_hook = manifest->frame_hook;
-  profile.frame_hook_word = manifest->frame_hook_word;
-  profile.boot_nand_frame = manifest->boot_nand_frame;
-  profile.jit_clear_frame = manifest->jit_clear_frame;
-  for (const Mod::KeptWord& k : manifest->keep_game_code)
-    profile.kept_code.push_back({k.address, k.game, k.loader});
-  profile.save_title = manifest->save_title;
-  // The card is in exactly when mod.json has one (never a forced key of its own).
-  if (manifest->sd_bytes)
-    profile.forced.emplace_back(Config::Location{Config::System::Main, "Core", "WiiSDCard"}, "True");
-  for (const auto& [key, value] : manifest->forced)
-  {
-    const size_t dot1 = key.find('.');
-    const size_t dot2 = key.find('.', dot1 + 1);
-    const std::optional<Config::System> system = Config::GetSystemFromName(key.substr(0, dot1));
-    if (!system)
-    {
-      *error = fmt::format("Orca mod: unknown system in {}", key);
-      return std::nullopt;
-    }
-    profile.forced.emplace_back(
-        Config::Location{*system, key.substr(dot1 + 1, dot2 - dot1 - 1), key.substr(dot2 + 1)},
-        value);
-  }
-  if (launcher)
-  {
-    profile.launcher_hash = launcher->sha256;
-    profile.disc = manifest->disc_id;
-  }
-  if (manifest->sd_bytes)
-    profile.sd_image = "sd/";
-  profile.mod = Mod::ModInfo{dir, std::move(*tree), std::move(*manifest), {}};
+  return ProfileFromManifest(dir, std::move(*tree), std::move(*manifest), error);
+}
+
+std::optional<Profile> LoadFlatProfile(const Mod::FlatBundle& bundle, std::string* error)
+{
+  std::optional<Profile> profile =
+      ProfileFromManifest(bundle.dir, bundle.tree, bundle.manifest, error);
+  if (!profile)
+    return std::nullopt;
+  Mod::ModInfo& mod = *profile->mod;
+  mod.flat = true;
+  mod.flat_patches = bundle.patches;
+  mod.sd_image_hash = bundle.sd_image_hash;
   return profile;
 }
 }  // namespace Orca
@@ -1330,7 +1507,19 @@ bool PrepareModBoot(Profile* profile, const std::string* executable_path,
       return false;
     }
   }
-  if (m.sd_bytes)
+  if (m.sd_image)
+  {
+    // A flat bundle's card, used as it is: its size and XXH3-128 were checked as the bundle was
+    // verified (Bundle.cpp), once per process.
+    if (mod.sd_image_hash.empty())
+    {
+      *error = "Orca mod: the SD image was not verified";
+      return false;
+    }
+    profile->sd_image_path = mod.dir + m.sd_image->file;
+    profile->sd_image_hash = mod.sd_image_hash;
+  }
+  else if (m.sd_bytes)
   {
     const std::optional<Mod::SdImage> image =
         Mod::PrepareSdImage(mod, GetEnv("ORCA_SD_CACHE"), error);

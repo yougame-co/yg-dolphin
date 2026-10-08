@@ -208,6 +208,8 @@ std::optional<Profile> LoadProfileFrom(const std::string& sys_directory, const s
 // Mod mode: the profile a bundle's mod.json makes (Core/Orca/Mod.h), after checking its tree.json
 // (the hash of the list, every file there at its size). Anything malformed refuses (nullopt).
 std::optional<Profile> LoadModProfile(const std::string& dir, std::string* error);
+// Mod mode, a flat bundle: the profile its verified mod.json makes (Core/Orca/Bundle.h).
+std::optional<Profile> LoadFlatProfile(const Mod::FlatBundle& bundle, std::string* error);
 // Mod mode's boot checks: a loader boot runs exactly the bundle's launcher with the mod's disc in the
 // drive (`default_disc`); a disc boot (`executable_path` null) runs the mod's disc (`boot_game_id`,
 // `boot_revision`); `wrong_disc` says a refusal was the disc's. A mod with an SD card gets its image built or reused (ORCA_SD_CACHE), and

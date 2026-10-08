@@ -160,9 +160,11 @@ void HiresTexture::Update()
   // Orca: in a session, also load Orca's own pack (Data/Sys/Orca/Textures/<game ID>), which
   // replaces the Online menu's labels.
   std::set<std::string> orca_directories;
-  if (const Orca::Profile* profile = Orca::ActiveProfile(); profile && profile->mod)
+  if (const Orca::Profile* profile = Orca::ActiveProfile();
+      profile && profile->mod && !profile->mod->EngineTextures())
   {
-    // Mod mode: the bundle's orca/textures/ (with the same priority over the player's pack).
+    // Mod mode: the bundle's orca/textures/ (with the same priority over the player's pack). A flat
+    // bundle's are the engine's own, as in legacy (below).
     if (!profile->mod->tree.Under("orca/textures/").empty())
       orca_directories.insert(profile->mod->dir + "orca/textures/");
   }
