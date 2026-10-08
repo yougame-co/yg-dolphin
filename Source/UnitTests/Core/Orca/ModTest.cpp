@@ -520,6 +520,37 @@ TEST(OrcaMod, RefusesABundleThatDiffersFromItsTree)
     File::DeleteDirRecursively(b.dir);
   }
   {
+    // A launcher whose extension isn't lower case is hash-checked too.
+    Bundle b = MakeBundle(BrawlWith("launcher", R"("BOOT.DOL")"));
+    b.Add("BOOT.DOL", std::string(64, '\x01'));
+    b.WriteTree();
+    ASSERT_TRUE(Orca::LoadModProfile(b.dir, &error)) << error;
+    ASSERT_TRUE(File::WriteStringToFile(b.dir + "BOOT.DOL", std::string(64, '\x02')));
+    EXPECT_FALSE(Orca::LoadModProfile(b.dir, &error));
+    EXPECT_NE(error.find("sha256"), std::string::npos) << error;
+    File::DeleteDirRecursively(b.dir);
+  }
+  {
+    // mod.json edited after tree.json was written, at the same size.
+    Bundle b = MakeBundle(BRAWL_MOD);
+    b.WriteTree();
+    std::string edited = BRAWL_MOD;
+    edited.replace(edited.find("1800"), 4, "1801");
+    ASSERT_TRUE(File::WriteStringToFile(b.dir + "mod.json", edited));
+    EXPECT_FALSE(Orca::LoadModProfile(b.dir, &error));
+    EXPECT_NE(error.find("sha256"), std::string::npos) << error;
+    File::DeleteDirRecursively(b.dir);
+  }
+  {
+    // A file the session reads whole, over its limit, is refused before it is read.
+    Bundle b = MakeBundle(BRAWL_MOD);
+    b.Add("orca/patches/big.patches", std::string(Orca::Mod::MAX_PATCHES_BYTES + 1, '\n'));
+    b.WriteTree();
+    EXPECT_FALSE(Orca::LoadModProfile(b.dir, &error));
+    EXPECT_NE(error.find("over"), std::string::npos) << error;
+    File::DeleteDirRecursively(b.dir);
+  }
+  {
     // No tree.json, or a malformed mod.json.
     Bundle b = MakeBundle("{}");
     EXPECT_FALSE(Orca::LoadModProfile(b.dir, &error));
@@ -527,6 +558,36 @@ TEST(OrcaMod, RefusesABundleThatDiffersFromItsTree)
     EXPECT_FALSE(Orca::LoadModProfile(b.dir, &error));
     File::DeleteDirRecursively(b.dir);
   }
+}
+
+// mod.json and tree.json are size-limited and nesting-limited before picojson sees them (it recurses
+// once per level: 20 KB of brackets would overflow Windows' 1 MiB main-thread stack).
+TEST(OrcaMod, RefusesOversizedOrDeepJson)
+{
+  std::string error;
+  const auto deep = [](int levels) {
+    return R"({"format":)" + std::string(levels, '[') + std::string(levels, ']') + "}";
+  };
+  // 40 KB (under mod.json's limit) and 100 KB: either crashes picojson on Windows' main thread.
+  EXPECT_FALSE(Orca::Mod::ParseManifest(deep(20000), &error));
+  EXPECT_NE(error.find("nested"), std::string::npos) << error;
+  EXPECT_FALSE(Orca::Mod::ParseTree(deep(50000), &error));
+  EXPECT_NE(error.find("nested"), std::string::npos) << error;
+  // Seventeen levels are refused, sixteen parse (and then fail on content, not depth).
+  const auto nest = [](int levels) {
+    return R"({"format":)" + std::string(levels - 1, '[') + std::string(levels - 1, ']') + "}";
+  };
+  EXPECT_FALSE(Orca::Mod::ParseManifest(nest(17), &error));
+  EXPECT_NE(error.find("nested"), std::string::npos) << error;
+  EXPECT_FALSE(Orca::Mod::ParseManifest(nest(16), &error));
+  EXPECT_EQ(error.find("nested"), std::string::npos) << error;
+  // Brackets inside strings don't count.
+  EXPECT_TRUE(Orca::Mod::ParseManifest(BrawlWith("title", R"("[[[[[[[[[[[[[[[[[[[[\"[[[[")"), &error))
+      << error;
+  // Over 64 KiB: refused, even as trailing whitespace.
+  EXPECT_FALSE(Orca::Mod::ParseManifest(BRAWL_MOD + std::string(Orca::Mod::MAX_MOD_JSON_BYTES, ' '),
+                                        &error));
+  EXPECT_NE(error.find("over"), std::string::npos) << error;
 }
 
 // The card is built from the listed files only, and the same files and size give the same bytes.
@@ -550,6 +611,8 @@ TEST(OrcaMod, SdImageIsDeterministic)
   const std::string one = Orca::HashFile(dir + "one.raw");
   EXPECT_FALSE(one.empty());
   EXPECT_EQ(one, Orca::HashFile(dir + "two.raw"));
+  // Pinned, so the PC's run proves it builds the Mac's bytes (and every later builder the same).
+  EXPECT_EQ(one, "0da52d2d776c7a5b5caeeeb2cd106ed1");
   std::string bytes;
   ASSERT_TRUE(File::ReadFileToString(dir + "one.raw", bytes));
   EXPECT_NE(bytes.find("alpha"), std::string::npos);
@@ -561,6 +624,7 @@ TEST(OrcaMod, SdImageIsDeterministic)
   ASSERT_TRUE(Orca::Mod::BuildSdImage(reversed, GEOMETRY_BYTES, dir + "g2.raw", &error, 2048, 2))
       << error;
   EXPECT_EQ(Orca::HashFile(dir + "g1.raw"), Orca::HashFile(dir + "g2.raw"));
+  EXPECT_EQ(Orca::HashFile(dir + "g1.raw"), "1a80cd449366c2cab73a447e410d91d0");
   EXPECT_NE(Orca::HashFile(dir + "g1.raw"), one);
   {
     std::string boot;
@@ -736,13 +800,15 @@ TEST(OrcaMod, ModeGates)
   EXPECT_TRUE(Orca::Mod::GuardsDecided());
   EXPECT_TRUE(Orca::Mod::BuiltinOn(Builtin::BrawlRev2));
   EXPECT_EQ(Orca::Status::OfferedCaps(), all);
-  // Broken after holding (the mod rewrote what the modules rely on): withdrawn for the boot.
+  // Broken after holding (the mod rewrote what the modules rely on): the caps are withdrawn for the
+  // boot; the modules follow memory alone, so they run again wherever the words hold again.
   Orca::Mod::NoteGuards(false, 500);
   EXPECT_TRUE(Orca::Mod::GuardsFailed());
   EXPECT_FALSE(Orca::Mod::BuiltinOn(Builtin::BrawlRev2));
   EXPECT_EQ(Orca::Status::OfferedCaps(), base);
   Orca::Mod::NoteGuards(true, 501);
-  EXPECT_FALSE(Orca::Mod::BuiltinOn(Builtin::BrawlRev2));
+  EXPECT_TRUE(Orca::Mod::BuiltinOn(Builtin::BrawlRev2));
+  EXPECT_TRUE(Orca::Mod::GuardsFailed());
   EXPECT_EQ(Orca::Status::OfferedCaps(), base);
   // A new boot: never holding by firstKeyframeFrame is a failure (decided, nothing offered).
   Orca::SetActiveProfile(profile);
@@ -786,6 +852,54 @@ TEST(OrcaMod, ModeGates)
   Orca::SetActiveProfile(std::nullopt);
   File::DeleteDirRecursively(b.dir);
   File::DeleteDirRecursively(n.dir);
+}
+
+// Whether the modules run is a pure function of memory, first runs and re-runs: a joiner whose own
+// frames already held replays frame 1 from the starting snapshot (Project+'s codes not landed yet)
+// with the modules off, exactly as the host ran it, and a rollback re-run after a failure runs the
+// modules wherever the first run did. Only the caps keep history.
+TEST(OrcaMod, GuardsFollowMemoryOnReRuns)
+{
+  Bundle b = MakeBundle(PPLUS_MOD);
+  b.Add("launcher.dol", std::string(64, '\x01'));
+  b.WriteTree();
+  std::string error;
+  auto profile = Orca::LoadModProfile(b.dir, &error);
+  ASSERT_TRUE(profile) << error;
+  Orca::SetActiveProfile(profile);
+  const Builtin pplus = Builtin::BrawlRev2PPlus;
+  // The joiner's own boot: frame 1 before the codes land, then held.
+  Orca::Mod::NoteGuards(false, 1);
+  EXPECT_FALSE(Orca::Mod::BuiltinOn(pplus));
+  Orca::Mod::NoteGuards(true, 2);
+  EXPECT_TRUE(Orca::Mod::BuiltinOn(pplus));
+  EXPECT_TRUE(Orca::Mod::Offers("results"));
+  Orca::Mod::NoteGuards(true, 450);
+  // It joins: the starting snapshot's frame 1 again, then frame 2.
+  Orca::Mod::NoteGuards(false, 1);
+  EXPECT_FALSE(Orca::Mod::BuiltinOn(pplus));
+  EXPECT_EQ(Orca::UX::Rules::ProfileRuleset(), Orca::UX::Rules::Ruleset::None);
+  EXPECT_FALSE(Orca::Mod::GuardsFailed());
+  EXPECT_TRUE(Orca::Mod::Offers("results"));
+  Orca::Mod::NoteGuards(true, 2);
+  EXPECT_TRUE(Orca::Mod::BuiltinOn(pplus));
+  EXPECT_EQ(Orca::UX::Rules::ProfileRuleset(), Orca::UX::Rules::Ruleset::PPlus);
+  // The input gate's calls carry no frame: off while not holding, never a failure.
+  Orca::Mod::NoteGuards(false, std::nullopt);
+  EXPECT_FALSE(Orca::Mod::BuiltinOn(pplus));
+  EXPECT_FALSE(Orca::Mod::GuardsFailed());
+  Orca::Mod::NoteGuards(true, std::nullopt);
+  EXPECT_TRUE(Orca::Mod::BuiltinOn(pplus));
+  // A real failure (at or after firstKeyframeFrame), then a rollback re-runs a frame that held.
+  Orca::Mod::NoteGuards(false, 600);
+  EXPECT_TRUE(Orca::Mod::GuardsFailed());
+  EXPECT_FALSE(Orca::Mod::BuiltinOn(pplus));
+  EXPECT_FALSE(Orca::Mod::Offers("results"));
+  Orca::Mod::NoteGuards(true, 598);
+  EXPECT_TRUE(Orca::Mod::BuiltinOn(pplus));
+  EXPECT_FALSE(Orca::Mod::Offers("results"));
+  Orca::SetActiveProfile(std::nullopt);
+  File::DeleteDirRecursively(b.dir);
 }
 
 // With ORCA_TEST_DISC_REV1 (Brawl (USA) (Rev 1)): a mod's launcher boots it as Rev 2, as a legacy

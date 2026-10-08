@@ -335,10 +335,14 @@ const std::vector<GamePatch>& ActivePatches()
   // Mod mode: the bundle's orca/patches/*.patches, in name order (keyed by its tree).
   if (profile && profile->mod)
   {
-    const std::string key = "mod:" + profile->mod->tree.hash;
-    if (key == s_for)
+    // Compared in place: this runs every frame, re-runs too.
+    const std::string& tree = profile->mod->tree.hash;
+    if (s_for.size() == 4 + tree.size() && s_for.starts_with("mod:") &&
+        std::string_view(s_for).substr(4) == tree)
+    {
       return s_patches;
-    s_for = key;
+    }
+    s_for = "mod:" + tree;
     s_patches.clear();
     for (const Orca::Mod::TreeFile* file : profile->mod->tree.Under("orca/patches/"))
     {

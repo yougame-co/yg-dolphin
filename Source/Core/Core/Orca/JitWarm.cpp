@@ -146,10 +146,12 @@ std::string SeedPath()
   return File::GetSysDirectory() + "Orca/" + profile->game_id + ".jitwarm";
 }
 
+// Empty when missing, unreadable or over Mod::MAX_JITWARM_BYTES (a mod's orca/jitwarm may be up to
+// 4 GiB in its tree.json; Orca's seeds and a player's list are about 1 MB).
 std::vector<u8> ReadWhole(const std::string& path)
 {
   std::vector<u8> bytes;
-  if (File::IOFile in(path, "rb"); in)
+  if (File::IOFile in(path, "rb"); in && in.GetSize() <= Mod::MAX_JITWARM_BYTES)
   {
     bytes.resize(in.GetSize());
     if (!in.ReadBytes(bytes.data(), bytes.size()))

@@ -186,9 +186,9 @@ std::string CompatibilityKeyParts()
 std::string CompatibilityKey()
 {
   const std::string parts = CompatibilityKeyParts();
-  // "orca2:" names the room protocol, in legacy and mod mode alike (the rooms take Orca lobbies on
-  // it only); the two modes never share a hash: legacy parts start "orca|", mod parts "orca2|"
-  // (ModKeyParts). The room allows 1-64 characters of [a-zA-Z0-9._:-].
+  // "orca2:" is the room protocol's prefix, in legacy and mod mode alike; the two modes never share
+  // a hash: legacy parts start "orca|", mod parts "orca2|" (ModKeyParts). The room allows 1-64
+  // characters of [a-zA-Z0-9._:-].
   const std::string key = fmt::format("orca2:{:016x}", XXH3_64bits(parts.data(), parts.size()));
   // What went into it, when that changes: a player alone in a queue shows which input split them.
   {

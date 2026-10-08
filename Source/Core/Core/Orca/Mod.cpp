@@ -21,6 +21,7 @@
 
 #include "Common/FatFsUtil.h"
 #include "Common/FileUtil.h"
+#include "Common/IOFile.h"
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
 #include "Core/Orca/Disc.h"
@@ -83,9 +84,42 @@ std::optional<u32> HexWord(const picojson::value& v)
   return static_cast<u32>(std::stoul(s.substr(2), nullptr, 16));
 }
 
-// One JSON value and nothing after it but whitespace (picojson's string parse ignores the rest).
-std::string ParseWhole(picojson::value* root, std::string_view json)
+// Whether brackets outside strings nest deeper than MAX_JSON_DEPTH. picojson recurses once per level
+// with no limit of its own: 20 KB of brackets overflow Windows' 1 MiB main-thread stack.
+bool TooDeep(std::string_view json)
 {
+  int depth = 0;
+  bool in_string = false, escaped = false;
+  for (const char c : json)
+  {
+    if (in_string)
+    {
+      if (escaped)
+        escaped = false;
+      else if (c == '\\')
+        escaped = true;
+      else if (c == '"')
+        in_string = false;
+      continue;
+    }
+    if (c == '"')
+      in_string = true;
+    else if ((c == '[' || c == '{') && ++depth > MAX_JSON_DEPTH)
+      return true;
+    else if ((c == ']' || c == '}') && depth > 0)
+      --depth;
+  }
+  return false;
+}
+
+// One JSON value of at most max_bytes and MAX_JSON_DEPTH levels, and nothing after it but whitespace
+// (picojson's string parse ignores the rest).
+std::string ParseWhole(picojson::value* root, std::string_view json, u64 max_bytes)
+{
+  if (json.size() > max_bytes)
+    return fmt::format("over {} bytes", max_bytes);
+  if (TooDeep(json))
+    return fmt::format("nested deeper than {} levels", MAX_JSON_DEPTH);
   std::string error;
   const auto end = picojson::parse(*root, json.begin(), json.end(), &error);
   if (!error.empty())
@@ -242,7 +276,7 @@ std::optional<Tree> ParseTree(std::string_view json, std::string* error)
     return std::nullopt;
   };
   picojson::value root;
-  const std::string parse_error = ParseWhole(&root, json);
+  const std::string parse_error = ParseWhole(&root, json, MAX_TREE_JSON_BYTES);
   if (!parse_error.empty())
     return fail(parse_error);
   if (!root.is<picojson::object>())
@@ -359,7 +393,7 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
     return std::nullopt;
   };
   picojson::value root;
-  const std::string parse_error = ParseWhole(&root, json);
+  const std::string parse_error = ParseWhole(&root, json, MAX_MOD_JSON_BYTES);
   if (!parse_error.empty())
     return fail(parse_error);
   if (!root.is<picojson::object>())
@@ -930,9 +964,13 @@ bool GuardsHold(Builtin builtin, const std::function<std::optional<u32>(u32)>& r
 
 namespace
 {
-// -1: not held yet since boot (the game's code isn't live, or a loader's codes haven't landed),
-// 0: failed, 1: held.
+// Whether the builtin's modules run: 1 while the guards hold in memory as it is now, else 0 (failed
+// for the caps) or -1 (not decided yet). A pure function of memory, first runs and re-runs alike.
 std::atomic<int> s_guards{-1};
+// For the caps only (Offers, GuardsDecided): the guards held at some frame since boot, or failed
+// for the rest of the boot. Never what the modules do: a joiner replays frame 1 from the starting
+// snapshot after its own frames held, and must run it as the host did (off, Project+'s codes not
+// landed yet).
 std::atomic<bool> s_guards_failed{false};
 std::atomic<bool> s_held_once{false};
 
@@ -946,8 +984,8 @@ void LogFirstBrokenGuard(const Core::CPUThreadGuard& guard, Builtin builtin)
     if (word != g.word)
     {
       WARN_LOG_FMT(BOOT,
-                   "Orca mod: builtin {} off: {:08x} holds {:08x}, not {:08x} (this mod's code "
-                   "moved what the builtin's modules rely on)",
+                   "Orca mod: builtin {} failed: {:08x} holds {:08x}, not {:08x} (this mod's code "
+                   "moved what the builtin's modules rely on; its caps are withdrawn)",
                    BuiltinName(builtin), g.address, word, g.word);
       return;
     }
@@ -980,11 +1018,12 @@ void RefreshGuards(const Core::CPUThreadGuard& guard, std::optional<int> frame)
       return std::nullopt;
     return PowerPC::MMU::HostRead<u32>(guard, address);
   });
-  const int before = s_guards;
+  // Logged once each per boot: memory may go back and forth (a join's replay of frame 1).
+  const bool held_before = s_held_once, failed_before = s_guards_failed;
   NoteGuards(held, frame);
-  if (s_guards != before && s_guards == 1)
+  if (!held_before && s_held_once)
     NOTICE_LOG_FMT(BOOT, "Orca mod: builtin {} on (its guard words hold)", BuiltinName(builtin));
-  else if (s_guards != before && s_guards == 0)
+  if (!failed_before && s_guards_failed)
     LogFirstBrokenGuard(guard, builtin);
 }
 
@@ -993,25 +1032,19 @@ void NoteGuards(bool held, std::optional<int> frame)
   const ModInfo* mod = ActiveMod();
   if (!mod || mod->manifest.builtin == Builtin::None)
     return;
-  if (held && !s_guards_failed)
+  if (held)
   {
     s_guards = 1;
     s_held_once = true;
     return;
   }
-  // Not (yet) holding: the modules stay off. A loader's codes land in the game's first frames
-  // (Project+'s in frame 1), so this is a failure only once the guards held and then stopped, or
-  // when they still don't hold by the first frame a friend could join from. A failure is for the
-  // rest of the boot (the caps it withdrew stay withdrawn).
-  const bool failed = s_guards_failed || s_held_once ||
-                      (frame && *frame >= static_cast<int>(mod->manifest.first_keyframe_frame));
-  if (!failed)
-  {
-    s_guards = -1;
-    return;
-  }
-  s_guards = 0;
-  s_guards_failed = true;
+  // Not holding: the modules are off for this frame. For the caps it is a failure (for the rest of
+  // the boot: what they withdrew stays withdrawn) only at or after the first frame a friend could
+  // join from. Earlier frames are a loader's codes still landing (Project+'s in frame 1), or a
+  // join's or a rollback's re-run of them; the input gate's calls carry no frame and never decide.
+  if (frame && *frame >= static_cast<int>(mod->manifest.first_keyframe_frame))
+    s_guards_failed = true;
+  s_guards = s_guards_failed ? 0 : -1;
 }
 
 bool GuardsDecided()
@@ -1051,6 +1084,34 @@ bool Offers(std::string_view cap)
 
 namespace Orca
 {
+namespace
+{
+// A bundle file the session reads whole (to parse or hash it), refused when over max_bytes: a tree
+// may list files up to MAX_FILE_BYTES, and only the card's are streamed.
+bool ReadBounded(const std::string& path, u64 max_bytes, std::string* out, std::string* why)
+{
+  File::IOFile f(path, "rb");
+  if (!f)
+  {
+    *why = "can't be read";
+    return false;
+  }
+  const u64 size = f.GetSize();
+  if (size > max_bytes)
+  {
+    *why = fmt::format("is over {} bytes", max_bytes);
+    return false;
+  }
+  out->resize(size);
+  if (size != 0 && !f.ReadBytes(out->data(), size))
+  {
+    *why = "can't be read";
+    return false;
+  }
+  return true;
+}
+}  // namespace
+
 std::optional<Profile> LoadModProfile(const std::string& dir_in, std::string* error)
 {
   std::string dir = dir_in;
@@ -1061,10 +1122,10 @@ std::optional<Profile> LoadModProfile(const std::string& dir_in, std::string* er
   }
   if (dir.back() != '/' && dir.back() != '\\')
     dir += '/';
-  std::string text;
-  if (!File::ReadFileToString(dir + "tree.json", text))
+  std::string text, why;
+  if (!ReadBounded(dir + "tree.json", Mod::MAX_TREE_JSON_BYTES, &text, &why))
   {
-    *error = fmt::format("Orca mod: {}tree.json can't be read", dir);
+    *error = fmt::format("Orca mod: {}tree.json {}", dir, why);
     return std::nullopt;
   }
   std::optional<Mod::Tree> tree = Mod::ParseTree(text, error);
@@ -1082,26 +1143,22 @@ std::optional<Profile> LoadModProfile(const std::string& dir_in, std::string* er
       return std::nullopt;
     }
   }
-  if (!tree->Find("mod.json") || !File::ReadFileToString(dir + "mod.json", text))
+  // mod.json: hashed against tree.json and parsed from the same bytes.
+  const Mod::TreeFile* mod_file = tree->Find("mod.json");
+  if (!mod_file)
   {
     *error = "Orca mod: the bundle has no mod.json";
     return std::nullopt;
   }
-  // What reaches the game besides the SD card (whose built image's hash is in the key) is checked
-  // against tree.json's sha256 too: mod.json, the launcher, the game patches. Small files; a run
-  // folder edited in place since the app laid it out is refused rather than desyncing.
-  for (const Mod::TreeFile& f : tree->files)
+  if (!ReadBounded(dir + "mod.json", Mod::MAX_MOD_JSON_BYTES, &text, &why))
   {
-    const bool checked = f.path == "mod.json" || f.path.starts_with("orca/patches/") ||
-                         (f.path.find('/') == std::string::npos && f.path.ends_with(".dol")) ||
-                         (f.path.find('/') == std::string::npos && f.path.ends_with(".elf"));
-    std::string contents;
-    if (checked && (!File::ReadFileToString(dir + f.path, contents) ||
-                    Mod::Sha256Hex(contents) != f.sha256))
-    {
-      *error = fmt::format("Orca mod: {} is not the file tree.json names (sha256)", f.path);
-      return std::nullopt;
-    }
+    *error = fmt::format("Orca mod: mod.json {}", why);
+    return std::nullopt;
+  }
+  if (Mod::Sha256Hex(text) != mod_file->sha256)
+  {
+    *error = "Orca mod: mod.json is not the file tree.json names (sha256)";
+    return std::nullopt;
   }
   std::optional<Mod::Manifest> manifest = Mod::ParseManifest(text, error);
   if (!manifest)
@@ -1113,6 +1170,31 @@ std::optional<Profile> LoadModProfile(const std::string& dir_in, std::string* er
     *error = fmt::format("Orca mod: mod.json's launcher {} is not in the bundle", manifest->launcher);
     return std::nullopt;
   }
+  // What else reaches the game besides the SD card (whose built image's hash is in the key) is
+  // checked against tree.json's sha256 too: the launcher and any other .dol or .elf at the root
+  // (any case), and the game patches. Small files; a run folder edited in place since the app laid
+  // it out is refused rather than desyncing.
+  for (const Mod::TreeFile& f : tree->files)
+  {
+    const std::string lower = Mod::ToLowerAscii(f.path);
+    const bool executable =
+        f.path == manifest->launcher ||
+        (f.path.find('/') == std::string::npos && (lower.ends_with(".dol") || lower.ends_with(".elf")));
+    if (!executable && !f.path.starts_with("orca/patches/"))
+      continue;
+    std::string contents;
+    if (!ReadBounded(dir + f.path, executable ? Mod::MAX_LAUNCHER_BYTES : Mod::MAX_PATCHES_BYTES,
+                     &contents, &why))
+    {
+      *error = fmt::format("Orca mod: {} {}", f.path, why);
+      return std::nullopt;
+    }
+    if (Mod::Sha256Hex(contents) != f.sha256)
+    {
+      *error = fmt::format("Orca mod: {} is not the file tree.json names (sha256)", f.path);
+      return std::nullopt;
+    }
+  }
 
   // Game patches (orca/patches/<name>.patches): every file must parse, or the session is refused
   // here rather than running without them.
@@ -1123,8 +1205,9 @@ std::optional<Profile> LoadModProfile(const std::string& dir_in, std::string* er
     {
       continue;
     }
-    std::string patch_text, why;
-    if (!File::ReadFileToString(dir + f->path, patch_text) ||
+    std::string patch_text;
+    why.clear();
+    if (!ReadBounded(dir + f->path, Mod::MAX_PATCHES_BYTES, &patch_text, &why) ||
         !UX::ParseGamePatches(patch_text, &why))
     {
       *error = fmt::format("Orca mod: {}: {}", f->path, why.empty() ? "can't be read" : why);

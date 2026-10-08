@@ -45,6 +45,14 @@ inline constexpr size_t MAX_PATH_BYTES = 100;
 inline constexpr size_t MAX_FILES = 20000;
 // FAT's limit for one file.
 inline constexpr u64 MAX_FILE_BYTES = (u64{4} << 30) - 1;
+// What the engine reads whole into memory from a bundle (only the card's files are streamed): a
+// bigger file refuses the session. JSON nesting is limited too: picojson recurses once per level.
+inline constexpr u64 MAX_MOD_JSON_BYTES = u64{64} << 10;
+inline constexpr u64 MAX_TREE_JSON_BYTES = u64{16} << 20;  // Project+'s: about 0.7 MB, 4,033 files
+inline constexpr u64 MAX_PATCHES_BYTES = u64{1} << 20;     // each orca/patches/ file
+inline constexpr u64 MAX_LAUNCHER_BYTES = u64{64} << 20;   // a .dol or .elf at the root
+inline constexpr u64 MAX_JITWARM_BYTES = u64{16} << 20;    // orca/jitwarm, and the player's own list
+inline constexpr int MAX_JSON_DEPTH = 16;
 // Today's FIRST_KEYFRAME_FRAME (Rollback/OnlineMatch.cpp) and FIRST_FRIEND_FRAME (UX/OnlineMenu.h).
 inline constexpr u32 DEFAULT_FIRST_KEYFRAME_FRAME = 300;
 
@@ -202,9 +210,10 @@ std::span<const GuardWord> BuiltinGuards(Builtin builtin);
 bool GuardsHold(Builtin builtin, const std::function<std::optional<u32>(u32)>& read);
 // Mod mode, on the CPU thread at every entry into the UX modules (the frame callback, with its
 // frame, and the input gate's source and latch): checks the active mod's guards against memory as
-// it is now. The modules run only while they hold. Not holding is a failure (GuardsFailed) once they
-// held before, or still at the frame callback's firstKeyframeFrame: until then a loader's codes may
-// not have landed yet.
+// it is now. The modules run exactly while they hold, a pure function of memory on first runs and
+// re-runs (a joiner replaying frame 1 runs it as the host did). For the caps, not holding at or after
+// the frame callback's firstKeyframeFrame is a failure for the rest of the boot (GuardsFailed);
+// before it a loader's codes may not have landed yet, or the frame is a re-run of those.
 void RefreshGuards(const Core::CPUThreadGuard& guard, std::optional<int> frame = std::nullopt);
 // A new boot's profile: nothing checked yet (Profile.cpp SetActiveProfile).
 void ResetGuards();
@@ -213,13 +222,14 @@ void NoteGuards(bool held, std::optional<int> frame);
 // Mod mode: whether the builtin's caps are settled for now: no builtin, or its guards have held, or
 // they failed. Until then `orca caps` and "ready" wait (Status::CapsSettled).
 bool GuardsDecided();
-// Mod mode: the active mod's builtin is `builtin` and its guards held at the last refresh.
+// Mod mode: the active mod's builtin is `builtin` and its guards held at the last refresh (whether
+// or not they failed earlier: what the modules do never depends on history).
 bool BuiltinOn(Builtin builtin);
 // Mod mode: the active mod's builtin, guards or not (host-only readers: the JIT warm-up's and the
 // harness's scene readers).
 Builtin DeclaredBuiltin();
-// Mod mode: the guards were checked and failed at least once since boot (the caps they gate are
-// then not offered, if they haven't been printed yet).
+// Mod mode: the guards didn't hold at or after firstKeyframeFrame since boot (the caps they gate
+// are then not offered, or withdrawn).
 bool GuardsFailed();
 // Whether this mod offers `cap` (mod.json "offers"), its builtin supports it, and its guards have
 // held since boot and never failed.
