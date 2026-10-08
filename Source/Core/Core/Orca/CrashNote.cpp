@@ -24,8 +24,9 @@ bool WriteLine(std::FILE* out, std::string_view text) noexcept
 {
   if (!out)
     return false;
+  // One call (one lock), so another thread's line can't land between the text and its newline.
   const bool wrote =
-      std::fwrite(text.data(), 1, text.size(), out) == text.size() && std::fputc('\n', out) != EOF;
+      std::fprintf(out, "%.*s\n", static_cast<int>(text.size()), text.data()) >= 0;
   return std::fflush(out) == 0 && wrote;
 }
 
