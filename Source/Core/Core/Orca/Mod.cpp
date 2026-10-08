@@ -882,10 +882,13 @@ constexpr auto PPLUS_GUARDS = std::to_array<GuardWord>({
     {0x805518D0, 0x3E008049},  // lis r16,0x8049
     {0x805518D4, 0x62106000},  // ori r16,r16,0x6000: the current page
 });
-// Vanilla's own: Brawl's v-sync call, which Project+'s codes replace (PPLUS32 keepGameCode), so the
-// vanilla modules (BrawlStages' stage flow, the rules screen) never run on Project+.
+// Vanilla's own: a word of Brawl's code that Project+'s codes rewrite in frame 1 and Orca's own
+// RSBE01.patches never touches (PPLUS32 keepGameCode: RAM holds Project+'s word, only instruction
+// fetches see Brawl's), so the vanilla modules (BrawlStages' stage flow, the rules screen) never run
+// on Project+. Not Brawl's v-sync call (0x80023B88): since 0.3.33 RSBE01.patches moves it as
+// Project+ does, so it reads the same in both.
 constexpr auto VANILLA_GUARDS = std::to_array<GuardWord>({
-    {0x80023B88, 0x4182FF7C},  // beq- (Project+: nop)
+    {0x8001CD24, 0x38631198},  // addi r3,r3,0x1198 (Project+: lwz r3,0x11A0(r3))
 });
 template <size_t A, size_t B>
 constexpr std::array<GuardWord, A + B> Join(const std::array<GuardWord, A>& a,

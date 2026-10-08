@@ -262,8 +262,9 @@ on `ORCA_MOD_DIR` itself).
   NameTags, MenuText, `VanillaBrawl`, `RequestQueueRules`; JitWarm's `KnownGame` and the harness's
   scene reader take the declared builtin, host-only). `brawl-rev2` and `brawl-rev2-pplus` run only
   while their guard words hold (`Mod::BuiltinGuards`: the frame loop's word, r13's base, the scene
-  manager / g_GameGlobal / pad system loads, the message buffer's vtable; vanilla's v-sync call for
-  `brawl-rev2`; Project+'s stage select routines at 0x80553594, 0x80554320, 0x805518D0 for
+  manager / g_GameGlobal / pad system loads, the message buffer's vtable; for `brawl-rev2` Brawl's
+  word at 0x8001CD24, which Project+'s codes rewrite (not the v-sync call any more: since 0.3.33
+  RSBE01.patches moves it as Project+ does; `OrcaMod.GuardsAreNotOrcasOwnPatches`); Project+'s stage select routines at 0x80553594, 0x80554320, 0x805518D0 for
   `brawl-rev2-pplus`), checked against memory at every entry into the UX (frame callback, input gate
   source and latch), first runs and re-runs alike. Project+'s codes land in frame 1, so its guards
   hold from frame 2; not holding counts as a failure (a warning, no gated caps) only after they held,

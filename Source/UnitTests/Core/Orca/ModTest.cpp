@@ -4,7 +4,9 @@
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
+#include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -20,6 +22,7 @@
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Status.h"
+#include "Core/Orca/UX/GamePatches.h"
 #include "Core/Orca/UX/OnlineMenu.h"
 #include "Core/Orca/UX/OnlineRules.h"
 #include "Core/Orca/UX/Results.h"
@@ -634,6 +637,46 @@ TEST(OrcaMod, SdImageCache)
   EXPECT_FALSE(Orca::Mod::PrepareSdImage(*profile->mod, "", &error));
   File::DeleteDirRecursively(b.dir);
   File::DeleteDirRecursively(cache);
+}
+
+// A guard word is code the game never rewrites, so Orca's own game patches must never write one
+// (0.3.33's RSBE01.patches moved Brawl's v-sync call, which the vanilla guard used to read). The
+// vanilla guard is a word Project+'s codes rewrite (PPLUS32.ini KeepGameCode), so brawl-rev2 never
+// holds on Project+.
+TEST(OrcaMod, GuardsAreNotOrcasOwnPatches)
+{
+  std::set<u32> patched;
+  for (const char* name : {"RSBE01.patches", "PPLUS32.patches"})
+  {
+    std::string text, error;
+    ASSERT_TRUE(File::ReadFileToString(RepoPath(std::string("Data/Sys/Orca/") + name), text)) << name;
+    const auto patches = Orca::UX::ParseGamePatches(text, &error);
+    ASSERT_TRUE(patches) << name << ": " << error;
+    for (const auto& p : *patches)
+    {
+      if (!p.original || *p.original != p.value)
+        patched.insert(p.address);
+    }
+  }
+  ASSERT_FALSE(patched.empty());
+  for (const Builtin builtin : {Builtin::BrawlRev2, Builtin::BrawlRev2PPlus})
+  {
+    for (const auto& g : Orca::Mod::BuiltinGuards(builtin))
+      EXPECT_FALSE(patched.contains(g.address)) << std::hex << g.address;
+  }
+  std::string error;
+  const auto pplus = Orca::LoadProfileFrom(RepoPath("Data/Sys/"), "PPLUS32", 2, &error);
+  ASSERT_TRUE(pplus) << error;
+  std::map<u32, u32> pplus_words;
+  for (const auto& k : pplus->kept_code)
+    pplus_words[k.address] = k.loader;
+  bool vanilla_only = false;
+  for (const auto& g : Orca::Mod::BuiltinGuards(Builtin::BrawlRev2))
+  {
+    if (pplus_words.contains(g.address) && pplus_words[g.address] != g.word)
+      vanilla_only = true;
+  }
+  EXPECT_TRUE(vanilla_only);
 }
 
 TEST(OrcaMod, Guards)
