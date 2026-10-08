@@ -50,6 +50,7 @@
 #include "Core/Orca/UX/Results.h"
 #include "Core/Orca/UX/SetEnd.h"
 #include "Core/PowerPC/JitInterface.h"
+#include "Core/Rollback/Harness.h"
 #include "Core/Rollback/Rollback.h"
 #include "Core/Rollback/SessionPort.h"
 #include "Core/System.h"
@@ -1698,6 +1699,8 @@ Restore RestoreLocal(Core::System& system, Match& match, MachineImage image,
   nand->ReloadFst();
   if (!match.port->LoadImage(std::move(image), frame))
     return Restore::Broken;
+  // Frames from here are a new timeline; test runs' harness counts them as first passes.
+  Rollback::Harness::Restart();
   return Restore::Done;
 }
 
