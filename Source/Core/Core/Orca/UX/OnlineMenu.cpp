@@ -17,6 +17,7 @@
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/Session/Online.h"
+#include "Core/Orca/Session/Replay.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/CssTitle.h"
 #include "Core/Orca/UX/MatchBlock.h"
@@ -528,4 +529,86 @@ bool Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
   return true;
 }
 }  // namespace FriendsMove
+
+namespace FreshMove
+{
+namespace
+{
+Seen s_seen;
+}  // namespace
+
+Seen Read(const GuestMemory& m)
+{
+  Seen seen;
+  if (!Pointer(m, SCENE_MANAGER))
+    return seen;
+  const std::string scene = ReadSceneName(m);
+  if (scene == "scSelctCharacter")
+  {
+    seen.css = Queue::CssTaskReadable(m);
+    return seen;
+  }
+  if (scene != "muMenuMain")
+    return seen;
+  const u32 manager = m.Read32(SCENE_MANAGER);
+  if (!Pointer(m, manager + MANAGER_EXIT_CODE) || !Pointer(m, manager + MANAGER_STEP))
+    return seen;
+  // ReadSceneName already validated the scene pointer.
+  const u32 menu = m.Read32(manager + MANAGER_SCENE);
+  seen.menu_built = m.Read32(manager + MANAGER_STEP) == FriendsMove::STEP_RUNNING &&
+                    m.Read32(manager + MANAGER_EXIT_CODE) == 0 &&
+                    m.Valid(menu + FriendsMove::MENU_BUILT) &&
+                    m.Read8(menu + FriendsMove::MENU_BUILT) != 0;
+  return seen;
+}
+
+bool Apply(GuestMemory& m, u32 exit)
+{
+  if (!Orca::Net::ValidMenuExit(exit) || !Read(m).menu_built)
+    return false;
+  // Same as the menu's own exit (muMenuMain, 0x81176828), and FriendsMove's: the code, then the
+  // step.
+  const u32 manager = m.Read32(SCENE_MANAGER);
+  m.Write32(manager + MANAGER_EXIT_CODE, exit);
+  m.Write32(manager + MANAGER_STEP, FriendsMove::STEP_EXIT);
+  return true;
+}
+
+void Frame(const Core::CPUThreadGuard& guard, int frame)
+{
+  if (!BrawlExecutable())
+  {
+    s_seen = {};
+    return;
+  }
+  GuardMemory m(guard);
+  if (const Orca::Net::ReplayFrame* record = Orca::Net::ReplayScope::Current();
+      record && record->menu_exit != 0)
+  {
+    if (Apply(m, record->menu_exit))
+    {
+      NOTICE_LOG_FMT(ROLLBACK, "Online menu: frame {}: a fresh start leaves the main menu (exit "
+                               "code {})",
+                     frame, record->menu_exit);
+    }
+    else
+    {
+      WARN_LOG_FMT(ROLLBACK, "Online menu: frame {}: a fresh start's exit code {} found no built "
+                             "main menu to leave",
+                   frame, record->menu_exit);
+    }
+  }
+  s_seen = Read(m);
+}
+
+Seen LastSeen()
+{
+  return s_seen;
+}
+
+bool Supported()
+{
+  return BrawlExecutable();
+}
+}  // namespace FreshMove
 }  // namespace Orca::UX
