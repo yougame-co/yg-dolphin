@@ -6698,6 +6698,103 @@ port on the character select and one per frame while alone: run the two-Orca per
 Known edges (review): in a With Friends host's memory a remote port whose 5-letter tag reads as a typed tag takes it (a port without controls then plays that layout; a same-prefix joiner whose port joins before the host's can take the host's typed tag, as it could Orca's ASCII one before); off the select a player who picked Orca's ASCII copy over their typed one has the typed one read. Not clang-formatted (no clang-format on this Mac). Not covered: tags kept between runs (still
 `orca-keep-own-tags`), Windows, a real two-Orca room with a typed tag.
 
+## Mods (phase 1)
+
+What was checked for ORCA.md's "Mods (phase 1)". Local run folders: `~/Documents/brawl-dolphin/mods/rsbe01`
+(153 files, tree `ffcd31eb…7281`) and `mods/pplus32` (4,033 files, 3,878 on the card, tree
+`cab2942b…6498`); 0.3.33's in `~/Documents/brawl-dolphin/mods0333-bundles`.
+
+**Checked 2026-10-05** (`mods-p1` f4988c5302, M4 Pro, headless, `-v Null`; runs in
+`~/Documents/brawl-dolphin/mods-p1-runs`):
+- Unit tests: 486 `Orca*`, 466 pass, 20 skipped (live, network, disc), 0 fail; 14 new `OrcaMod.*`
+  (the tree-hash vector, path and tree refusals, every mod.json field and refusal, the schema's
+  lists against the engine's, bundles that differ from their tree, the SD image built twice, the
+  cache, guards, the gates, the legacy key's inputs).
+- Legacy unchanged: a build of this branch (e34e4138ed's tree) with origin/main's commit string (before the first
+  commit, so `GetScmRevGitStr()` matched) gives origin/main's keys exactly: Brawl
+  `orca1:4745bca65f8fe1ef`, Project+ `orca1:83ef3563709cc4b1`. Hashlogs of the default inputs in
+  legacy mode equal an origin/main 5103d50a85 build's: Brawl 10,803 frames, Project+ 9,006, 0 differ.
+- Vanilla Brawl from the bundle: T0 equals legacy, 10,801 frames, 0 differ (`orca2:a3f4a49c5a222cb1`
+  without `ORCA_DISC_SHA1`). T1 (`bf-queue2-flow.txt`, the 0.3.14 env, `YG_SYNCTEST=7` 1440-4700):
+  22,771 re-run frames, 0 RAM mismatches, the same steps as legacy frame for frame.
+- Project+ from the bundle (SD built from the tree, `16abfce070288e17dffb09e0c826cd92`, 8.2 s; a
+  second build into another cache is byte-identical): two T0 runs equal (9,006 frames), but not
+  legacy's, from frame 0. With the official `sd.raw` put in the cache instead, mod mode equals legacy
+  on every frame but frame 0 (9,006 compared, 1 differs). Frame 0: legacy's input latch writes 32
+  bytes into the match block (0x806F2540) while the launcher still runs, before the game is in RAM;
+  mod mode's builtin is off until the hook is live, and the boot overwrites the bytes by frame 1. The
+  built card's difference is the FAT reaching RAM: P+'s file structs hold other short names
+  (FatFs's `~1` forms), start clusters and zero times, and the boot's SD reads finish 14 frames
+  sooner (scBoot at 108 instead of 122; FatFs picks 16 KiB clusters where the official image has 2
+  KiB, so fewer cluster reads, most likely), so the fuzzed match then plays out differently. T1
+  (`pplus-queue2-flow.txt`, the 0.3.14 env, 200-3200): 20,951 re-run frames, 0 RAM mismatches, on
+  the built card and on the official one (the latter the same steps as legacy).
+- JIT (design section 7), Project+ from the bundle: `jit-history.py` with clears at
+  388/2000/4500/7000 and at 1/3/5/700/1234/3333/6001: the same 9,002 and 9,017 frames as without;
+  census 0 stale words below 0x80800000. Cold (`ORCA_JITWARM=0`) against warm: 9,006 frames, 0 differ.
+- Drop-in: NAND at `bootNandFrame` the same with and without input, from the bundles (Brawl 1800: 35
+  files; Project+ 600: 33).
+
+**Follow-ups, 2026-10-05** (`mods-p1` 1c663bc7f4), measurements:
+- **Project+ against legacy, `pplus-1v1.txt` to 9,000:** every scene change on the same frame as
+  legacy's (scBoot 122, the main menu 197, the match 587-3030, the results 3035-3451; before: scBoot
+  108, the match to 6082), the fuzzed match the same. RAM still differs on every frame: by frame 230
+  the game issued 7,495 SD reads against legacy's 7,717 (223 fewer one-sector FAT and directory
+  reads: the official image's clusters are scattered and 26 files fragmented, ours contiguous), and
+  at frame 1,000 296 KB of MEM1 and 1.2 MB of MEM2 differ (the FAT driver's state and caches, and
+  two 104 KB streamed-audio buffers filled at other moments). Byte-identical RAM would need the
+  official image's own cluster allocation and directory timestamps, which no tree carries. With
+  `pplus-queue2-flow.txt` the title screen ends one frame sooner (179, legacy 180), and every later
+  step is one frame sooner. Frame 0's 32 bytes (legacy's latch writing the match block while the
+  launcher runs) stay: a builtin's writes before its guards can be checked would defeat the guards.
+- T1 (`pplus-queue2-flow.txt`, 200-3200): 20,951 re-run frames, 0 RAM mismatches. JIT: clears at
+  388/2000/4500/7000 and 1/3/5/700/1234/3333/6001 the same as without (9,015 and 9,006 frames); cold
+  against warm, 0 of 9,010 differ. Brawl's bundle and legacy Project+ still equal origin/main's
+  hashlogs (10,806 and 9,001 frames, 0 differ).
+
+**Rebased on 0.3.33, checked 2026-10-08** (`mods-p1-0333` 225bfabf56, M4 Pro, headless, `-v Null`,
+SDL HIDAPI off, under `run-lock.py check`; runs in `~/Documents/brawl-dolphin/mods0333-runs`):
+- Unit tests: 611 `Orca*`, 594 pass, 17 skipped (live and latency), 0 fail, with both test discs; 17
+  `OrcaMod.*` (two new: `LauncherBootReadsRev1AsRev2`, `GuardsAreNotOrcasOwnPatches`).
+- Legacy (no `ORCA_MOD_DIR`) against the 0.3.33 dev build (9bdfaf71d5, whose emulator 69b97f49d3
+  shares): hashlogs of the default inputs equal (Brawl 10,802 frames, Project+ 9,015, 0 differ; only
+  how many frames each logged past `YG_EXIT_AFTER` differs, as in 0.3.33's gate A); sync tests Brawl
+  300-4500 29,351 re-run frames and Project+ 150-3000 19,901, 0 RAM mismatches; the key's inputs
+  equal with the commit masked (Brawl and Project+); `kCompatVersion` 24.
+- Bundles from 0.3.33's data (`make-bundle.py`; Brawl tree `6ad8bdbe…25f8`, Project+ `2a010bed…a182`
+  with 0.3.33's five kept words): Brawl from its bundle equals legacy (10,805 frames, 0 differ);
+  Project+ with its built card (`0615853d…`, byte-identical to 2026-10-05's) keeps legacy's scenes to
+  the match's end, then the results come one frame later (the card's FAT state reaches RAM, as
+  before); with the official `sd.raw` in the cache it equals legacy on every frame but frame 0 (9,005
+  compared, 1 differs: legacy's latch writing the match block while the launcher runs). Both bundles'
+  `orca caps` lines equal legacy's (`… music results locks queue2 pick-casual pick-ranked`).
+- Found by the bundle runs: 0.3.33's RSBE01.patches moves Brawl's v-sync call, which the vanilla
+  guard used to read, so a Brawl bundle lost its builtin after the first boundary; the guard now reads
+  0x8001CD24 (225bfabf56).
+
+**Review fixes, checked 2026-10-08** (`mods-p1-0333` 8a5ad09596, M4 Pro, headless, SDL HIDAPI off,
+under `run-lock.py check`; runs in `~/Documents/brawl-dolphin/mods0333-runs`):
+- **A P+ join in mod mode desynced, now fixed.** The guards' history (held once, then not) switched a
+  joiner's builtin off for the run when it re-executed frame 1 from its origin (Project+'s codes not
+  landed yet), while the host's stayed on. `dropin-commands.py --pplus <bundle launcher> --env
+  ORCA_MOD_DIR=<pplus32>` on the pre-fix build (c15903b60c's sources): the friend fails at once,
+  `orca error room_mismatch Your friend's replay didn't reproduce the same game`. On the fix: PASS,
+  two joins (at the friend's frame 9 and into the running match at 7551), 87 and 30 checksums
+  matched, 0 rollbacks, 0 stalls. `BuiltinOn` now follows memory alone; only the caps keep history
+  (failed only at or after `firstKeyframeFrame`).
+- Unit tests: 613 `Orca*`, 596 pass, 17 skipped (live, latency, the design dump), 0 fail, both test
+  discs; 19 `OrcaMod.*` (new: `GuardsFollowMemoryOnReRuns`, `RefusesOversizedOrDeepJson`; the
+  pinned SD hashes `0da52d2d…6ed1` (64 MiB) and `1a80cd44…91d0` (160 MiB, 2 KiB clusters, two FATs)).
+- Legacy against the 0.3.33 dev build: hashlogs equal (Brawl 10,810 frames, Project+ 9,015, 0
+  differ), sync tests Brawl 29,351 and Project+ 19,901 re-run frames with 0 RAM mismatches, key
+  inputs equal with the commit masked.
+- Single-instance runs equal the pre-fix build's on every compared frame: legacy Brawl 10,810 and
+  Project+ 9,015, mod Brawl 10,805 and mod Project+ 9,009 (built card). Mod Brawl still equals
+  legacy (10,810, 0 differ); all four `orca caps` lines as before.
+- Mod-mode sync tests (new): Brawl bundle 300-4500, 29,351 re-run frames, Project+ bundle 150-3000,
+  19,901, 0 RAM mismatches.
+- `dropin-commands.py` takes "playing" before the caps line (mod mode's caps wait for the guards).
+
 ## Explaining it to people (internal)
 
 **One sentence:**
