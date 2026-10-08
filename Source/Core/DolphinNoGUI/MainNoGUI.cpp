@@ -36,6 +36,7 @@
 #include "Core/DolphinAnalytics.h"
 #include "Core/HW/VideoInterface.h"
 #include "Core/Host.h"
+#include "Core/Orca/Activity.h"
 #include "Core/Orca/BootLogs.h"
 #include "Core/Orca/Branding.h"
 #include "Core/Orca/CrashNote.h"
@@ -629,6 +630,8 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
 #endif
 
   s_platform->MainLoop();
+  // The game has stopped: the activity lines' last one, before leaving the room takes its time.
+  Orca::Activity::Finish();
   // Stopping can take a while (a session leaves its room), so get out of the app's way first.
   s_platform->EmbedTeardown();
   Core::Stop(Core::System::GetInstance());

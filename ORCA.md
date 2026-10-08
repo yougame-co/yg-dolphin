@@ -1818,7 +1818,34 @@ never pauses Orca: the page sends `blur`, the player's pad goes neutral, and the
 | `orca state <state>` / `orca error <code> <sentence>` | Session status (`Orca/Status.h`). Forward every line that starts with `orca `. |
 | `orca menu ...`, `orca result ...`, `orca queue ...` | See [Online menu](#online-menu) and [Matchmaking](#matchmaking-and-results). |
 | `orca controls <hex>` | The player's own controls: changed in the game, or loaded from Orca's file at boot. The page keeps them. |
+| `orca active <interval_s> <active_s> <inputs> <mode> <pads>` | How much the player played: every 60 s while the game runs, and once more when it stops ([Activity lines](#activity-lines)). |
 | `exit <code>` | Always last: 0 normal, 1 a reported error, 2 bad arguments. |
+
+### Activity lines
+
+`orca active 60 42 118 ranked 1`, every 60 s of wall-clock time from the game's first frame, on its
+own thread (stalls, loads and a paused game don't hold it up), and once more for the rest of the
+interval when the game stops (`Orca/Activity.h`). Since 0.3.35; an older app ignores the line (the
+desktop app forwards every `orca ` line and acts only on those it knows).
+
+- `interval_s`: the seconds the line covers. `active_s`: those within 30 s after a real local input,
+  the page's own rule (`web/src/lib/play-activity.ts`), never more than `interval_s`. Both are
+  rounded to the nearest second.
+- `inputs`: real input edges in the interval, on every local controller together. A button pressed
+  or released, a trigger past half its travel (or its click) and back under a quarter, a stick out
+  past 48 of its 127 and back under 28: analog noise, drift, a stick held still and a gamepad's
+  stream of identical reports never count.
+- `mode`: `ranked` or `casual` in a queue room, `friends` with a friend plugged in, `training` in the
+  game's Training, else `solo`; the one with the most active time in the interval.
+- `pads`: local controllers with at least one edge in the interval. Several (couch play, the
+  keyboard pad) never multiply the seconds: one counts while any of them had an edge in the 30 s
+  before it.
+
+Only this machine's controllers count (every adapter port and gamepad in the app's stream, Dolphin's
+own port 1, a harness script), read at the boundary of each frame that runs for the first time in
+real time and only while the game has the input. Never a peer's input, a rollback re-run, a
+joiner's rebuild or catch-up, a fresh start's tail or replayed pads. Observation only: nothing it
+reads or keeps reaches emulation, the replay, checksums or the compatibility key.
 
 ### Focus
 
