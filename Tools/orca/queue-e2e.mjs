@@ -34,7 +34,7 @@
 //       [--queue ranked|casual] [--games <n>] [--site <url>] [--keep] [--alarm <s>]
 //       [--probe <file>] [--controls <ada>,<bo>] [--controls-mid <bo>]
 //       [--slug <listing> --cookie-a <file> --cookie-b <file> --id-a <id> --id-b <id>]
-//       [--disc-b <disc>]
+//       [--disc-b <disc>] [--delay <n>]
 //
 // --disc-b: the second player (bo) boots this disc (Brawl Rev 1 against Rev 2, or the reverse).
 // Without --slug: dev tickets (an anonymous dev game of this run's own, nothing recorded, keyframes
@@ -93,6 +93,14 @@ const DUMP_AUDIO = argv.includes("--dump-audio");
 // How long after a ranked set's verdict the page sends the new rating (`queue rating`).
 const RATING_AFTER_MS = Number(opt("--rating-after", "1500"));
 const Q2 = argv.includes("--q2");
+// --delay <n>: each page sends `delay <n>` after its caps, as the YouGame page does (prod: 3).
+// Without it Orca plays its own default (0.3.33+: a fixed 3; 0.3.32 and older: adaptive from 2), so
+// a perf gate across those builds passes --delay to both.
+const DELAY = opt("--delay");
+if (DELAY !== undefined && !/^[1-9]$/.test(DELAY)) {
+  console.error("--delay is a number of frames, 1 to 9");
+  process.exit(2);
+}
 // --scenario playagain (ranked, --q2): "Play again" after a ranked set. After the verdict, the
 // inviter's page invites the other player into the private room its Orca hosts (`prepare-join`) and
 // the invitee's page accepts it (`join <code>`, --invite-gap ms later). --variant picks where each
@@ -595,7 +603,10 @@ class Side {
     const music = line.startsWith("caps") && MUSIC_OFF.includes(this.name);
     if (music && !this.lines.some((l) => l && /^orca caps .*\bmusic\b/.test(l)))
       fail(`${this.name}: Orca offers no music`);
-    for (const out of music ? [`${line} music`, "music off"] : [line]) {
+    const outs = music ? [`${line} music`, "music off"] : [line];
+    // --delay: the page's input delay right after its caps answer, as OrcaEmbed sends it.
+    if (DELAY && line.startsWith("caps") && /\bdelay\b/.test(line)) outs.push(`delay ${DELAY}`);
+    for (const out of outs) {
       log(`${this.name}< ${out}`);
       this.proc.stdin.write(`${out}\n`);
     }
