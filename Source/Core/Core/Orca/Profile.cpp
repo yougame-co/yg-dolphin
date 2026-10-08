@@ -17,6 +17,7 @@
 #include <xxh3.h>
 
 #include "Common/CPUDetect.h"
+#include "Common/CommonFuncs.h"
 #include "Common/FileUtil.h"
 #include "Common/Hash.h"
 #include "Common/IOFile.h"
@@ -754,6 +755,49 @@ std::string HashFile(const std::string& path)
   return ok ? fmt::format("{:016x}{:016x}", hash.high64, hash.low64) : std::string{};
 }
 
+// The system's reason for the last failed open or read. On Windows that's its own code and words
+// (a full disk, OneDrive not running, a sharing violation), which the C library folds into one
+// errno; the number keeps a report readable when Windows answers in the player's language.
+static std::string LastFileError()
+{
+#ifdef _WIN32
+  const unsigned long code = _doserrno;
+  if (code != 0)
+    return fmt::format("{} (error {})", StripWhitespace(Common::GetWin32ErrorString(code)), code);
+#endif
+  return Common::LastStrerrorString();
+}
+
+std::string DiscOpenProblem(const std::string& disc_path)
+{
+  if (disc_path.empty())
+    return "no disc is set";
+  // Shared like DiscIO's own open (CreateBlobReader), so another program holding the image open
+  // isn't blamed for a failure it didn't cause.
+  File::IOFile file(disc_path, "rb", File::SharedAccess::ReadWrite);
+  if (!file.IsOpen())
+    return fmt::format("its disc won't open: {}", LastFileError());
+  u8 head[4];
+  if (!file.ReadBytes(head, sizeof(head)))
+  {
+    if (std::feof(file.GetHandle()))
+      return "its disc file is cut short";
+    // A file Windows has to fetch first (a OneDrive copy kept online only) fails here.
+    return fmt::format("its disc won't read: {}", LastFileError());
+  }
+  // Only a plain extension goes in: the app passes a native path, and on Windows SplitPath doesn't
+  // split at a backslash, so a name without one would hand back part of a folder's name.
+  std::string path = disc_path;
+  UnifyPathSeparators(path);
+  std::string extension;
+  SplitPath(path, nullptr, nullptr, &extension);
+  const bool plain = extension.size() >= 2 && extension.size() <= 6 &&
+                     std::all_of(extension.begin() + 1, extension.end(),
+                                 [](unsigned char c) { return std::isalnum(c) != 0; });
+  return fmt::format("its disc file ({}, {} bytes) isn't a disc image Orca reads",
+                     plain ? extension : "no plain extension", file.GetSize());
+}
+
 bool PrepareLauncherBoot(Profile* profile, const std::string& executable_path,
                          const std::string& disc_path, std::string* error)
 {
@@ -768,8 +812,8 @@ bool PrepareLauncherBoot(Profile* profile, const std::string& executable_path,
       disc_path.empty() ? nullptr : DiscIO::CreateDisc(disc_path);
   if (!disc)
   {
-    *error = fmt::format("Orca: profile {} boots {} from the drive, and no disc is set",
-                         profile->game_id, profile->disc);
+    *error = fmt::format("Orca: profile {} boots {} from the drive, and {}", profile->game_id,
+                         profile->disc, DiscOpenProblem(disc_path));
     return false;
   }
   // The boot inserts the disc with the same alias (Boot.cpp).

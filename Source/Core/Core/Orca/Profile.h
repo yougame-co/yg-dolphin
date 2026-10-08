@@ -206,6 +206,11 @@ std::string LauncherProfileName();
 // XXH3-128 of a file as 32 lowercase hex digits; empty when it can't be read.
 std::string HashFile(const std::string& path);
 
+// Why DiscIO::CreateDisc gave nothing for `disc_path`, as the end of an error line: no path, a file
+// that won't open or read (with the system's own reason), one cut short, or one that isn't a disc
+// image. The app opens the disc before every run but never reads it, so a crash report needs this.
+std::string DiscOpenProblem(const std::string& disc_path);
+
 // A launcher profile's boot checks: the executable at `executable_path`, the disc at `disc_path`
 // and the SD image must match the profile. On success sets `profile->sd_image_path`; on failure,
 // `error` says why.
