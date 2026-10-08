@@ -220,17 +220,18 @@ measures the whole transport (0.1-0.3 ms on loopback); `Tools/orca/fake_bridge.p
 
 ## Mods (phase 1)
 
-Branch `mods-p1`, not on main: nothing ships until Luis flips to this architecture. Design: YouGame
-`docs/ORCA_MODS.md` ("Phase 1 contract" and its adjustments). A session reads its game from a mod
-bundle laid out as a run folder instead of `Data/Sys/Orca/<profile>.*`, chosen only by
-`ORCA_MOD_DIR`. Without it every legacy code path runs exactly as on main (each mod branch keys on
-`Profile::mod`, set only by `LoadModProfile`).
+Side branch `mods-p1-0333` (`mods-p1` rebased on `release-0.3.33`), not on main: nothing ships until
+Luis flips to this architecture. Design: YouGame `docs/ORCA_MODS.md` ("Phase 1 contract" and its
+adjustments). A session reads its game from a mod bundle laid out as a run folder instead of
+`Data/Sys/Orca/<profile>.*`, chosen only by `ORCA_MOD_DIR`. Without it every legacy code path runs
+exactly as on the release (each mod branch keys on `Profile::mod`, set only by `LoadModProfile`, or
+on `ORCA_MOD_DIR` itself).
 
 | Variable | Meaning |
 |---|---|
 | `ORCA_MOD_DIR` | The run folder: `mod.json`, `tree.json`, the launcher, `sd/...`, `orca/patches/*.patches`, `orca/textures/`, `orca/jitwarm`. Mod mode. `ORCA_PROFILE` is ignored. |
 | `ORCA_SD_CACHE` | Where a mod's SD image is built (required when `mod.json` has `sd`). |
-| `ORCA_DISC_SHA1` | The dump's canonical SHA-1, in the `orca2` key (`-` when unset). Legacy's `orca1` key already mixes it in; the app sets it in mod mode only. |
+| `ORCA_DISC_SHA1` | The dump's canonical SHA-1, in the key (`-` when unset in mod mode; legacy's key mixes it in too). |
 
 - **`mod.json`** (`Core/Orca/Mod.cpp` `ParseManifest`, `Tools/orca/mods/mod.schema.json` for the
   site): every field of the design's example, unknown keys and malformed values refuse the session,
@@ -253,7 +254,10 @@ bundle laid out as a run folder instead of `Data/Sys/Orca/<profile>.*`, chosen o
   hash is `sd=` in the key.
 - **The key**: `orca2:<xxh3>` over `orca2|<commit>|api=1|tree=<treeHash>|sd=<image or ->|disc=<sha1 or
   ->|`, the forced settings (the card's switch, then `forced`), the universal settings, `|ux=`. The
-  player's `User/GameSettings` INIs never load in mod mode (`GameConfigLoader`).
+  player's `User/GameSettings` INIs never load in mod mode (`GameConfigLoader`). The prefix is the
+  room protocol's, the same as a legacy key's since 0.3.32 (the rooms take Orca lobbies on `orca2:`
+  only); the hash inputs differ from the first bytes (legacy's start `orca|`), so the two modes never
+  share a key.
 - **Builtins** replace the game-id checks (`ProfileRuleset`, `ResultsVerified`, `BrawlExecutable`,
   NameTags, MenuText, `VanillaBrawl`, `RequestQueueRules`; JitWarm's `KnownGame` and the harness's
   scene reader take the declared builtin, host-only). `brawl-rev2` and `brawl-rev2-pplus` run only
@@ -263,7 +267,9 @@ bundle laid out as a run folder instead of `Data/Sys/Orca/<profile>.*`, chosen o
   `brawl-rev2-pplus`), checked against memory at every entry into the UX (frame callback, input gate
   source and latch), first runs and re-runs alike. Project+'s codes land in frame 1, so its guards
   hold from frame 2; not holding counts as a failure (a warning, no gated caps) only after they held,
-  or still at `firstKeyframeFrame`. Caps: `mod.json` `offers` ∩ the builtin, unless failed.
+  or still at `firstKeyframeFrame`. Caps: `mod.json` `offers` ∩ the builtin, unless failed; the
+  pick caps (`pick-casual pick-ranked`) go with `locks`, and `music` follows the same rule as legacy
+  (`Music::Supported`: the disc is RSBE01; host-only, so no guards).
 - **Bundles**: `Tools/orca/mods/make-bundle.py RSBE01|PPLUS32 <out> [--pplus-user <release user/>]
   [--tree]` (no `tree.json` in a bundle; `--tree` makes a local run folder, `--tree <folder>` alone
   rewrites one). Local run folders: `~/Documents/brawl-dolphin/mods/rsbe01` (153 files, tree

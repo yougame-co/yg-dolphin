@@ -23,10 +23,12 @@
 #include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
+#include "Core/Orca/Disc.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/UX/GamePatches.h"
 #include "Core/PowerPC/MMU.h"
 #include "DiscIO/Volume.h"
+#include "DiscIO/VolumeDisc.h"
 
 namespace Orca::Mod
 {
@@ -1207,14 +1209,17 @@ bool PrepareModBoot(Profile* profile, const std::string* executable_path,
                            m.launcher);
       return false;
     }
-    const std::unique_ptr<DiscIO::Volume> disc =
-        default_disc.empty() ? nullptr : DiscIO::CreateVolume(default_disc);
+    const std::unique_ptr<DiscIO::VolumeDisc> disc =
+        default_disc.empty() ? nullptr : DiscIO::CreateDisc(default_disc);
     if (!disc)
     {
       *error = fmt::format("Orca mod: the launcher boots {} from the drive, and no disc is set",
                            m.disc_id);
       return false;
     }
+    // The boot inserts the disc with the same alias (Boot.cpp SetDefaultDisc): Brawl's Rev 1 dump
+    // reads as Rev 2, as for a legacy launcher profile (Profile.cpp).
+    AliasRevision(*disc);
     const u16 revision = disc->GetRevision().value_or(0);
     if (disc->GetGameID() != m.disc_id || revision != m.disc_revision)
     {

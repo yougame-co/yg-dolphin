@@ -190,7 +190,8 @@ bool CapsSettled()
 
 void UpdateCaps()
 {
-  if (!SessionActive())
+  // Legacy profiles offer the same caps for the whole run: nothing to follow.
+  if (!SessionActive() || !Mod::ActiveMod())
     return;
   const std::string caps = OfferedCaps();
   std::lock_guard lock(s_mutex);
@@ -206,7 +207,6 @@ void UpdateCaps()
     Print(fmt::format("orca caps {}\n", caps));
   }
 }
-
 
 void SetAppCaps(std::string_view list)
 {

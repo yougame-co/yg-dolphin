@@ -678,13 +678,16 @@ TEST(OrcaMod, ModeGates)
   EXPECT_EQ(Orca::UX::Rules::ProfileRuleset(), Orca::UX::Rules::Ruleset::None);
   EXPECT_FALSE(Orca::UX::ResultsVerified());
   // A builtin's caps are never offered before its guards hold (they are checked at the frame hook).
-  const std::string all = std::string(Orca::Status::CAPS) + " results locks queue2";
-  EXPECT_EQ(Orca::Status::OfferedCaps(), Orca::Status::CAPS);
+  // The music switch is host-only and follows the disc as in legacy (Music::Supported), guards or
+  // not; the pick caps go with "locks".
+  const std::string base = std::string(Orca::Status::CAPS) + " " + Orca::Status::MUSIC_CAP;
+  const std::string all = base + " results locks queue2 " + Orca::Status::PICK_CAPS;
+  EXPECT_EQ(Orca::Status::OfferedCaps(), base);
   EXPECT_FALSE(Orca::Mod::GuardsDecided());
   // Not holding yet in the first frames (a loader's codes still landing): undecided, nothing offered.
   Orca::Mod::NoteGuards(false, 1);
   EXPECT_FALSE(Orca::Mod::GuardsDecided());
-  EXPECT_EQ(Orca::Status::OfferedCaps(), Orca::Status::CAPS);
+  EXPECT_EQ(Orca::Status::OfferedCaps(), base);
   // Held: decided, offered, the modules on.
   Orca::Mod::NoteGuards(true, 2);
   EXPECT_TRUE(Orca::Mod::GuardsDecided());
@@ -694,10 +697,10 @@ TEST(OrcaMod, ModeGates)
   Orca::Mod::NoteGuards(false, 500);
   EXPECT_TRUE(Orca::Mod::GuardsFailed());
   EXPECT_FALSE(Orca::Mod::BuiltinOn(Builtin::BrawlRev2));
-  EXPECT_EQ(Orca::Status::OfferedCaps(), Orca::Status::CAPS);
+  EXPECT_EQ(Orca::Status::OfferedCaps(), base);
   Orca::Mod::NoteGuards(true, 501);
   EXPECT_FALSE(Orca::Mod::BuiltinOn(Builtin::BrawlRev2));
-  EXPECT_EQ(Orca::Status::OfferedCaps(), Orca::Status::CAPS);
+  EXPECT_EQ(Orca::Status::OfferedCaps(), base);
   // A new boot: never holding by firstKeyframeFrame is a failure (decided, nothing offered).
   Orca::SetActiveProfile(profile);
   EXPECT_FALSE(Orca::Mod::GuardsDecided());
@@ -706,7 +709,7 @@ TEST(OrcaMod, ModeGates)
   Orca::Mod::NoteGuards(false, 300);
   EXPECT_TRUE(Orca::Mod::GuardsDecided());
   EXPECT_TRUE(Orca::Mod::GuardsFailed());
-  EXPECT_EQ(Orca::Status::OfferedCaps(), Orca::Status::CAPS);
+  EXPECT_EQ(Orca::Status::OfferedCaps(), base);
   Orca::SetActiveProfile(profile);
   EXPECT_EQ(Orca::UX::FriendsMove::FirstFriendFrame(), 300);
 
@@ -721,7 +724,8 @@ TEST(OrcaMod, ModeGates)
   ASSERT_TRUE(none) << error;
   Orca::SetActiveProfile(none);
   EXPECT_EQ(Orca::Mod::DeclaredBuiltin(), Builtin::None);
-  EXPECT_EQ(Orca::Status::OfferedCaps(), Orca::Status::CAPS);
+  // No builtin: no builtin caps; the music switch still follows the disc (RSBE01).
+  EXPECT_EQ(Orca::Status::OfferedCaps(), base);
   EXPECT_TRUE(Orca::Mod::GuardsDecided());  // nothing to wait for
   EXPECT_EQ(Orca::Mod::FirstKeyframeFrame(), 600u);
   EXPECT_EQ(Orca::UX::FriendsMove::FirstFriendFrame(), 600);
@@ -734,14 +738,57 @@ TEST(OrcaMod, ModeGates)
   EXPECT_TRUE(Orca::Mod::GuardsDecided());
   EXPECT_EQ(Orca::UX::Rules::ProfileRuleset(), Orca::UX::Rules::Ruleset::Brawl);
   EXPECT_TRUE(Orca::UX::ResultsVerified());
+  EXPECT_EQ(Orca::Status::OfferedCaps(), all);
   EXPECT_EQ(Orca::UX::FriendsMove::FirstFriendFrame(), Orca::UX::FriendsMove::FIRST_FRIEND_FRAME);
   Orca::SetActiveProfile(std::nullopt);
   File::DeleteDirRecursively(b.dir);
   File::DeleteDirRecursively(n.dir);
 }
 
-// The legacy key's inputs, pinned: with no ORCA_MOD_DIR the key is "orca1:" over exactly what
-// origin/main hashed (the profile and patches files, every game INI, the forced settings, the
+// With ORCA_TEST_DISC_REV1 (Brawl (USA) (Rev 1)): a mod's launcher boots it as Rev 2, as a legacy
+// launcher profile does (AliasRevision); with ORCA_TEST_DISC (Rev 2) too, that one as it is.
+TEST(OrcaMod, LauncherBootReadsRev1AsRev2)
+{
+  const char* rev1 = std::getenv("ORCA_TEST_DISC_REV1");
+  if (!rev1)
+    GTEST_SKIP() << "set ORCA_TEST_DISC_REV1 to a Brawl (USA) (Rev 1) image";
+  picojson::value json;
+  picojson::parse(json, PPLUS_MOD);
+  json.get<picojson::object>().erase("sd");
+  Bundle b = MakeBundle(json.serialize());
+  b.Add("launcher.dol", "dol");
+  b.WriteTree();
+  std::string error;
+  auto profile = Orca::LoadModProfile(b.dir, &error);
+  ASSERT_TRUE(profile) << error;
+  const std::string launcher = b.dir + "launcher.dol";
+  bool wrong_disc = false;
+  EXPECT_TRUE(Orca::PrepareModBoot(&*profile, &launcher, rev1, "", 0, &error, &wrong_disc)) << error;
+  if (const char* rev2 = std::getenv("ORCA_TEST_DISC"))
+  {
+    EXPECT_TRUE(Orca::PrepareModBoot(&*profile, &launcher, rev2, "", 0, &error, &wrong_disc))
+        << error;
+  }
+  // A mod that needs Rev 1 itself still sees Rev 2 for that dump: one alias, the same as legacy's.
+  // (A builtin runs on revision 2 only, so this one has none.)
+  json.get<picojson::object>()["disc"].get<picojson::object>()["revision"] = picojson::value(1.0);
+  for (const char* key : {"builtin", "offers", "rulesets"})
+    json.get<picojson::object>().erase(key);
+  Bundle one = MakeBundle(json.serialize());
+  one.Add("launcher.dol", "dol");
+  one.WriteTree();
+  auto profile1 = Orca::LoadModProfile(one.dir, &error);
+  ASSERT_TRUE(profile1) << error;
+  const std::string launcher1 = one.dir + "launcher.dol";
+  EXPECT_FALSE(Orca::PrepareModBoot(&*profile1, &launcher1, rev1, "", 0, &error, &wrong_disc));
+  EXPECT_TRUE(wrong_disc);
+  EXPECT_NE(error.find("revision 2"), std::string::npos) << error;
+  File::DeleteDirRecursively(b.dir);
+  File::DeleteDirRecursively(one.dir);
+}
+
+// The legacy key's inputs, pinned: with no ORCA_MOD_DIR the key is "orca2:" (the room protocol's
+// prefix, in both modes) over exactly what release-0.3.33 hashed (the profile and patches files, every game INI, the forced settings, the
 // universal settings, the disc and the UX version, in that order).
 TEST(OrcaMod, LegacyKeyIsUnchanged)
 {
@@ -767,9 +814,10 @@ TEST(OrcaMod, LegacyKeyIsUnchanged)
   EXPECT_NE(parts.find("|disc=" + Orca::GetEnv("ORCA_DISC_SHA1") + "|ux="), std::string::npos);
   EXPECT_EQ(parts.find("orca2"), std::string::npos);
   EXPECT_EQ(Orca::Online::CompatibilityKey(),
-            fmt::format("orca1:{:016x}", XXH3_64bits(parts.data(), parts.size())));
+            fmt::format("orca2:{:016x}", XXH3_64bits(parts.data(), parts.size())));
 
-  // Mod mode: "orca2" over the engine, the tree, the card and the disc.
+  // Mod mode: "orca2:" over "orca2|", the engine, the tree, the card and the disc (never the same
+  // hash input as a legacy key, which starts "orca|").
   Bundle b = MakeBundle(PPLUS_MOD);
   b.Add("launcher.dol", "dol");
   b.WriteTree();
@@ -784,7 +832,8 @@ TEST(OrcaMod, LegacyKeyIsUnchanged)
       Common::GetScmRevGitStr(), Orca::Mod::ENGINE_API, Orca::Mod::TreeHash(b.files),
       std::string(32, 'c'), disc.empty() ? "-" : disc)))
       << mod_parts;
-  EXPECT_TRUE(Orca::Online::CompatibilityKey().starts_with("orca2:"));
+  EXPECT_EQ(Orca::Online::CompatibilityKey(),
+            fmt::format("orca2:{:016x}", XXH3_64bits(mod_parts.data(), mod_parts.size())));
   Orca::SetActiveProfile(std::nullopt);
   File::DeleteDirRecursively(b.dir);
 }
