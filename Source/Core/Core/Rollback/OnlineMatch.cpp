@@ -350,10 +350,21 @@ constexpr std::chrono::seconds RANKED_STALL_LIMIT{15};
 // Set over: holding Z this long on the results screen leaves the room.
 constexpr std::chrono::milliseconds SET_OVER_Z_HOLD{1500};
 
-// The input delay the player chose ("delay N" with "caps delay"), or nullopt for the adaptive one.
+// Orca's input delay when the page chooses none (no "caps delay", no "delay N" yet, or an old
+// page's "delay auto"): a fixed three frames, the page's own default. Never the session's adaptive
+// delay: players want a delay that never moves with the link; lag shows as rollbacks or stalls.
+constexpr int DEFAULT_DELAY = 3;
+
+// The input delay this player plays at: the page's "delay N" (with "caps delay"), else
+// DEFAULT_DELAY. Always fixed.
 std::optional<int> ChosenDelay()
 {
-  return Orca::Status::Cap("delay") ? Orca::Online::ChosenDelay() : std::nullopt;
+  if (Orca::Status::Cap("delay"))
+  {
+    if (const std::optional<int> chosen = Orca::Online::ChosenDelay())
+      return chosen;
+  }
+  return DEFAULT_DELAY;
 }
 
 // A round-trip sample the session has not seen yet (the room numbers its samples).
@@ -2958,7 +2969,8 @@ std::optional<int> Boundary(Core::System& system,
   if (!match.session)
     return std::nullopt;
 
-  // Round trips feed the adaptive input delay unless one was chosen; each player's is its own.
+  // Round trips go to the session's stats (the delay is always fixed: ChosenDelay); each player's
+  // delay is its own.
   if (const auto round_trip_ms = NewRoundTrip(&match.round_trip_sequence))
     match.session->OnRoundTrip(*round_trip_ms);
   match.session->SetFixedDelay(ChosenDelay());

@@ -312,7 +312,7 @@ the live build.
   is kept as a journal mark, not bytes. A load restores only the 4 KB pages that changed, and drops
   the JIT blocks in those pages; the rest of the JIT is kept across loads. The EFB is left alone:
   re-run frames draw nothing.
-- **Window:** 7 frames of rollback, 2 frames of input delay by default
+- **Window:** 7 frames of rollback, 3 frames of input delay by default, fixed
   ([Input delay](#input-delay)). Peers exchange a checksum every 60 frames; a mismatch is a desync,
   which unplugs the friend rather than letting the games drift.
 - **Ports.** Online, SI is forced to four GameCube pads, and a port without a player reports no
@@ -619,8 +619,8 @@ two-minute match where the relay alone gave 7 and 65 rollbacks and 4 stalls. Wit
 the link still carried the match; forced TURN gave a 23-24 ms round trip.
 
 **Wi-Fi.** A machine whose radio leaves the air loses everything sent to or from it for that long.
-Rollback hides up to `input_delay + max_rollback` frames of it (9 frames, about 150 ms, at the
-default 2 + 7); past that the
+Rollback hides up to the input delay plus `max_rollback` frames of it (10 frames, about 167 ms, at
+the default 3 + 7); past that the
 other side stalls. No build fixes a radio's dead time. The fix is the player's: a cable on the
 machine whose radio drops out, or Bluetooth off, or the adapter's power saving off, or another
 channel. To find whose radio it is, run a 10 Hz router ping on each machine during a match and line
@@ -634,12 +634,17 @@ Tests: `OrcaDirectLink*`, `OrcaRoom.TicketSwitchesDirectLinks`, `OrcaSessionDire
 
 ## Input delay
 
-`Orca/Session/Session.cpp`, "Input delay". Two frames by default, like Slippi. Rollback hides the
-rest of the link, jitter and spikes included: a spike past the rollback window costs a stall there,
-not a frame of delay on every input all match long. The embed command `delay N` (1-6) fixes it
-instead.
+Fixed, never adaptive: players want a delay that never moves with the link. The page sends `delay N`
+(1-6; YouGame's `ORCA_DELAY_DEFAULT`, 3 since Orca 0.3.32's v-sync move); with no page, no `caps
+delay` or an old page's `delay auto`, Orca plays at its own fixed 3 (`Rollback/OnlineMatch.cpp`
+`DEFAULT_DELAY`, Orca 0.3.33+; before, the adaptive delay below from 2). Rollback hides the rest of
+the link, jitter and spikes included: a spike past the rollback window costs a stall there, not a
+frame of delay on every input all match long. Each player's delay is their own: a 2 and a 3 play
+together.
 
-The adaptive delay rises only for what rollback can't cover, and only where a little delay cures it:
+The session's adaptive delay (`Orca/Session/Session.cpp`, "Input delay"; `Config::input_delay` 2 is
+its floor) is kept but no online match uses it. It rises only for what rollback can't cover, and only
+where a little delay cures it:
 
 - **The typical link.** The median of this player's latest 15 round trips to the relay (one a
   second) plus the slowest friend's median, halved for one way. The delay covers what the 7-frame
@@ -679,7 +684,7 @@ way between them is about half the sum of the two. `pmed` and `fpmed` are the me
 ## Input latency
 
 Between a press and the frame that shows it, and what Orca does about each part. Online adds the
-input delay on top (2 frames of 16.68 ms).
+input delay on top (3 frames of 16.68 ms).
 
 | Change | Where | Changes emulation | What it does |
 |---|---|---|---|
@@ -1722,7 +1727,7 @@ only when the box moves inside the window.
 | `join <code>` / `leave` | Into or out of a friend's game. |
 | `host <code>` / `queue-cancel` / `queue rating <n\|->` | Matchmaking ([Matchmaking](#matchmaking-and-results)). |
 | `direct on\|off` | The player's switch for direct links. |
-| `delay auto` / `delay N` | Adaptive input delay, or a fixed 1-6 frames. |
+| `delay auto` / `delay N` | Orca's default input delay (a fixed 3), or a fixed 1-6 frames. |
 | `chat <name> <text>` | A line from the page's chat, shown while Orca fills the screen. Fields are `encodeURIComponent` of UTF-8 (name at most 24 code points, text 140). Never logged. |
 | `controls <hex>` | The player's own controls ([Each player's own controls](#each-players-own-controls)); the tag gets them at the next character select. A bad profile answers `unsupported controls`. |
 | `orb <x> <y> <size> <lit> <away> <badge>` / `orb blink` / `orb off` | YouGame's overlay button, drawn where the page's own stands under Orca's window. |
