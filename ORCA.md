@@ -1043,7 +1043,7 @@ away.
 | `+0x290`-`+0x297` | A friend's move from the menus |
 
 Any new header (another mode, ruleset, coin or room) starts every track's state fresh. Compatibility:
-anything that changes what the game computes bumps `UX::kCompatVersion` (currently `ux=23`), which is
+anything that changes what the game computes bumps `UX::kCompatVersion` (currently `ux=24`), which is
 in the compatibility key.
 
 ## Input gate
