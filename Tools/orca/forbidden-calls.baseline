@@ -1,8 +1,6 @@
 # Tools/orca/forbidden-calls baseline: the hits Orca's shipped code is allowed today.
 # Rewrite with `Tools/orca/forbidden-calls --update-baseline`; a person reviews the diff.
 # Scanned against upstream base f84df02055ab9610feec48e65648cac5a3c098fa.
-# The per-key maximum of main (0.3.32, 28a2ea7538) and release-0.3.33 (69b97f49d3), so both are
-# clean until 0.3.33 merges into main; then refresh it.
 # <count>\t<rule>\t<path>\t<token>
 1	build-deps	CMakeLists.txt	add_custom_target(dolphin_scmrev)
 1	build-deps	CMakeLists.txt	add_subdirectory(Externals/Bochs_disasm)
@@ -389,9 +387,9 @@
 1	env	Source/Core/Core/Orca/Session/Keyframe.cpp	Orca::GetEnv("ORCA_TEST_KEEP_KEYFRAMES"
 1	env	Source/Core/Core/Orca/Session/Keyframe.cpp	Orca::GetEnv("ORCA_TEST_KEYFRAME_DIR"
 4	file-open	Source/Core/Core/Orca/Session/Keyframe.cpp	File::CreateFullPath(
-1	file-open	Source/Core/Core/Orca/Session/Keyframe.cpp	File::Delete(
+2	file-open	Source/Core/Core/Orca/Session/Keyframe.cpp	File::Delete(
 1	file-open	Source/Core/Core/Orca/Session/Keyframe.cpp	File::DeleteDirRecursively(
-3	file-open	Source/Core/Core/Orca/Session/Keyframe.cpp	File::IOFile
+4	file-open	Source/Core/Core/Orca/Session/Keyframe.cpp	File::IOFile
 2	file-open	Source/Core/Core/Orca/Session/Keyframe.cpp	File::ReadFileToString(
 1	file-open	Source/Core/Core/Orca/Session/Keyframe.cpp	File::Rename(
 1	http	Source/Core/Core/Orca/Session/Keyframe.cpp	#include Common/CurlTLS.h
@@ -621,7 +619,7 @@
 8	app-channel	Source/Core/Core/Rollback/OnlineMatch.cpp	Orca::Status::Cap("host"
 5	app-channel	Source/Core/Core/Rollback/OnlineMatch.cpp	Orca::Status::Cap("join"
 4	app-channel	Source/Core/Core/Rollback/OnlineMatch.cpp	Orca::Status::Cap("leave"
-3	app-channel	Source/Core/Core/Rollback/OnlineMatch.cpp	Orca::Status::Cap("queue2"
+4	app-channel	Source/Core/Core/Rollback/OnlineMatch.cpp	Orca::Status::Cap("queue2"
 1	app-channel	Source/Core/Core/Rollback/OnlineMatch.cpp	Orca::Status::Error("desync"
 2	app-channel	Source/Core/Core/Rollback/OnlineMatch.cpp	Orca::Status::Error("internal"
 1	app-channel	Source/Core/Core/Rollback/OnlineMatch.cpp	Orca::Status::Error("peer_left"
@@ -642,11 +640,15 @@
 2	app-channel	Source/Core/Core/Rollback/OnlineMatch.cpp	Orca::Status::State("friend-joining"
 3	app-channel	Source/Core/Core/Rollback/OnlineMatch.cpp	Orca::Status::State("friend-left"
 1	app-channel	Source/Core/Core/Rollback/OnlineMatch.cpp	Orca::Status::State("friend-leftleft"
+1	app-channel	Source/Core/Core/Rollback/OnlineMatch.cpp	Orca::Status::State("friend-leftrefused"
 1	app-channel	Source/Core/Core/Rollback/OnlineMatch.cpp	Orca::Status::State("friend-waiting"
 4	app-channel	Source/Core/Core/Rollback/OnlineMatch.cpp	Orca::Status::State("joining0"
 1	app-channel	Source/Core/Core/Rollback/OnlineMatch.cpp	Orca::Status::State("no-room"
 2	app-channel	Source/Core/Core/Rollback/OnlineMatch.cpp	Orca::Status::State("playing"
 1	app-channel	Source/Core/Core/Rollback/OnlineMatch.cpp	Orca::Status::Stats(
+1	env	Source/Core/Core/Rollback/OnlineMatch.cpp	Orca::GetEnv("ORCA_TEST_FAST_UNTIL"
+1	env	Source/Core/Core/Rollback/OnlineMatch.cpp	Orca::GetEnv("ORCA_TEST_FRESH"
+1	env	Source/Core/Core/Rollback/OnlineMatch.cpp	Orca::GetEnv("ORCA_TEST_FRESH_AFTER"
 1	env	Source/Core/Core/Rollback/OnlineMatch.cpp	Orca::GetEnv("ORCA_TEST_LEAVE_AT"
 1	peer-parse	Source/Core/Core/Rollback/OnlineMatch.cpp	Net::DecodePad(
 1	app-channel	Source/Core/Core/Rollback/Rollback.cpp	Orca::Status::GameStarted(
@@ -695,7 +697,7 @@
 1	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	Orca::Status::SetFirstFrameListener(
 1	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	Orca::Status::SetOutput(
 1	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	STDERR_FILENO
-7	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	fmt::print(
+5	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	fmt::print(
 16	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	stderr
 1	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	stdout
 1	env	Source/Core/DolphinNoGUI/MainNoGUI.cpp	Orca::GetEnv("ORCA_TEST_COMMANDS"
