@@ -843,10 +843,13 @@ PRIVATE
   ZLIB::ZLIB
 )
 
-# The Ed25519 key a flat bundle's mod.sig must be by (Core/Orca/Bundle.cpp). Unset, the engine
-# trusts the bundle-flat branch's TEST key; a release sets its own here (64 lowercase hex digits).
+# The Ed25519 key a flat bundle's mod.sig must be by (Core/Orca/Bundle.cpp): 64 lowercase hex digits.
+# Unset, the build trusts no key and every flat bundle is refused (legacy only). The bundle-flat TEST
+# key is trusted only with ORCA_BUNDLE_TRUST_TEST_KEY=ON (tests and gates); release scripts refuse it.
 set(ORCA_BUNDLE_PUBLIC_KEY "" CACHE STRING
-    "Ed25519 public key (64 lowercase hex digits) that signs Orca flat bundles; empty: the TEST key")
+    "Ed25519 public key (64 lowercase hex digits) that signs Orca flat bundles; empty: none")
+option(ORCA_BUNDLE_TRUST_TEST_KEY "Also trust the bundle-flat TEST key (tests only, never a release)" OFF)
+set(ORCA_BUNDLE_DEFINITIONS "")
 if(ORCA_BUNDLE_PUBLIC_KEY)
   if(NOT ORCA_BUNDLE_PUBLIC_KEY MATCHES "^[0-9a-f]+$")
     message(FATAL_ERROR "ORCA_BUNDLE_PUBLIC_KEY must be 64 lowercase hex digits")
@@ -855,11 +858,22 @@ if(ORCA_BUNDLE_PUBLIC_KEY)
   if(NOT ORCA_BUNDLE_PUBLIC_KEY_LENGTH EQUAL 64)
     message(FATAL_ERROR "ORCA_BUNDLE_PUBLIC_KEY must be 64 lowercase hex digits")
   endif()
-  set_source_files_properties(Orca/Bundle.cpp PROPERTIES
-    COMPILE_DEFINITIONS "ORCA_BUNDLE_PUBLIC_KEY=\"${ORCA_BUNDLE_PUBLIC_KEY}\"")
+  list(APPEND ORCA_BUNDLE_DEFINITIONS "ORCA_BUNDLE_PUBLIC_KEY=\"${ORCA_BUNDLE_PUBLIC_KEY}\"")
   message(STATUS "Orca flat bundles: trusting key ${ORCA_BUNDLE_PUBLIC_KEY}")
-else()
-  message(STATUS "Orca flat bundles: trusting the TEST key (set ORCA_BUNDLE_PUBLIC_KEY for a release)")
+endif()
+if(ORCA_BUNDLE_TRUST_TEST_KEY)
+  list(APPEND ORCA_BUNDLE_DEFINITIONS ORCA_BUNDLE_TRUST_TEST_KEY)
+  message(WARNING "Orca flat bundles: trusting the TEST key (ORCA_BUNDLE_TRUST_TEST_KEY): never a release")
+endif()
+if(NOT ORCA_BUNDLE_DEFINITIONS)
+  message(STATUS "Orca flat bundles: no key (set ORCA_BUNDLE_PUBLIC_KEY): every bundle is refused")
+endif()
+# Read by Source/UnitTests/Core (OrcaBundle.PinnedKey checks the build trusts exactly these).
+set(ORCA_BUNDLE_DEFINITIONS "${ORCA_BUNDLE_DEFINITIONS}" CACHE INTERNAL "")
+set_source_files_properties(Orca/Bundle.cpp PROPERTIES COMPILE_DEFINITIONS "${ORCA_BUNDLE_DEFINITIONS}")
+# The SD image's SHA-256 (Bundle.cpp) uses CNG on Windows.
+if(WIN32)
+  target_link_libraries(core PRIVATE bcrypt)
 endif()
 
 if(LIBUDEV_FOUND)

@@ -91,18 +91,45 @@ std::string UniversalKeyParts()
 
 // Mod mode (Core/Orca/Mod.h, YouGame docs/ORCA_MODS.md "The key in mod mode"): the engine's commit
 // and API version, the bundle's tree hash (mod.json, the patches, textures, launcher and SD files:
-// everything but orca/jitwarm and orca/test/), the built SD image's hash, the disc, then the forced
-// settings as the legacy key adds them. The player's own User/GameSettings INIs are ignored in a
-// mod session (ConfigLoaders/GameConfigLoader.cpp), so they are not in it; Sys/GameSettings ship
-// with the engine (its commit).
+// everything but orca/jitwarm and orca/test/), the SD image's hash, the disc, the Sys/GameSettings
+// INIs Dolphin loads for the game (as the legacy key hashes them: an install whose copy was edited
+// meets nobody rather than desyncing), then the forced settings as the legacy key adds them. The
+// player's own User/GameSettings INIs are ignored in a mod session
+// (ConfigLoaders/GameConfigLoader.cpp), so they are not in it.
 std::string ModKeyParts(const Profile& profile)
 {
   const Mod::ModInfo& mod = *profile.mod;
   const std::string disc = Env("ORCA_DISC_SHA1");
-  std::string parts = fmt::format("orca2|{}|api={}|tree={}|sd={}|disc={}|",
+  std::string parts = fmt::format("orca2|{}|api={}|tree={}|sd={}|disc={}|sys=",
                                   Common::GetScmRevGitStr(), Mod::ENGINE_API, mod.tree.hash,
                                   mod.sd_image_hash.empty() ? "-" : mod.sd_image_hash,
                                   disc.empty() ? "-" : disc);
+  // A launcher profile runs under two game IDs, its loader's and the disc's (as below).
+  std::vector<std::pair<std::string, u16>> ini_games{{profile.game_id, profile.revision}};
+  if (profile.IsLauncher())
+  {
+    const SConfig& running = SConfig::GetInstance();
+    ini_games = {{profile.boot_game_id, 0},
+                 {profile.disc, profile.revision},
+                 {running.GetGameID(), running.GetRevision()}};
+  }
+  for (const auto& [ini_game, ini_revision] : ini_games)
+  {
+    for (const std::string& name : ConfigLoaders::GetGameIniFilenames(ini_game, ini_revision))
+    {
+      std::string contents;
+      if (File::ReadFileToString(File::GetSysDirectory() + GAMESETTINGS_DIR DIR_SEP + name,
+                                 contents))
+      {
+        parts += fmt::format("{:016x},", XXH3_64bits(contents.data(), contents.size()));
+      }
+      else
+      {
+        parts += "-,";
+      }
+    }
+  }
+  parts += '|';
   for (const auto& [location, value] : profile.forced)
     parts += fmt::format("{}.{}.{}={}|", static_cast<int>(location.system), location.section,
                          location.key, value);

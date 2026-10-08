@@ -320,7 +320,7 @@ of an Orca release (`Core/Orca/Bundle.h`).
 
 | File | What |
 |---|---|
-| `mod.json` | format 2: as format 1, with `sdImage` `{file, bytes, xxh3}` (the card used as it is), `patches` (file names, applied in order), `jitwarm`, `textures: "engine"` instead of `sd`. |
+| `mod.json` | format 2: as format 1, plus `listing` (the slug it is for) and `serial`, with `sdImage` `{file, bytes, sha256}` (the card used as it is), `patches` (file names, applied in order), `jitwarm`, `textures: "engine"` instead of `sd`. |
 | `mod.sig` | `ed25519 <public key> <signature>`, lowercase hex, one line. |
 | the rest | exactly the files `mod.json` names: a launcher, the SD image, up to four `.patches`, a JIT seed. |
 
@@ -331,37 +331,51 @@ of an Orca release (`Core/Orca/Bundle.h`).
   launcher boot must run the bundle's launcher, and a disc boot needs a bundle without one.
 - **The signature** is over `orca-flat-bundle 1\n` and one `<name>\t<sha256>\t<bytes>\n` line for
   `mod.json` and every file it names but the SD image, sorted by name; `mod.json` pins the card by
-  size and XXH3-128, as a legacy profile pins `sd.raw`. Only the key the build pins may sign: CMake
-  `-DORCA_BUNDLE_PUBLIC_KEY=<64 hex digits>`; without it the build trusts a TEST key, and the boot
-  line says so. Verified with `Externals/ed25519`.
+  size and chunked SHA-256 (SHA-256 over the SHA-256 of each 64 MiB piece, which hash on every core:
+  about 0.15 s for Project+'s 2 GB card on an M-series Mac; `sdhash.py`). The launcher's line is
+  checked on the bytes the boot read, and the patches and JIT seed are used as they were verified,
+  so nothing is read again after the check. Verified with `Externals/ed25519`.
+- **Keys.** Only a key the build pins may sign: CMake `-DORCA_BUNDLE_PUBLIC_KEY=<64 hex digits>`. A
+  build without one trusts no key, and every flat bundle is refused. `-DORCA_BUNDLE_TRUST_TEST_KEY=ON`
+  adds the bundle-flat TEST key for tests and gates only; `orca-package-macos.sh` turns it off and
+  fails if the executable holds it. `OrcaBundle.PinnedKey` checks the build trusts exactly what
+  CMake was given.
+- **Listing and serial.** Under the app (`YOUGAME_GAME` set), a bundle for another listing is
+  refused. `MIN_FLAT_SERIAL` (`Bundle.h`) refuses older bundles: a release raises it to retire a
+  signed bundle, which can't otherwise be taken back.
 - **Hostile input.** The folder must hold exactly the named files (hidden files such as the app's
   `.copies.json` aside), at most eight, no folders or links; names are the app's runtime file names
-  (no `/`, no `..`, no device names); every read is bounded as in a tree bundle (`mod.sig` 512
-  bytes); the small files are hashed and the signature checked before the card is hashed. Anything
-  wrong refuses the whole bundle with an `Orca bundle: <folder> refused: <why>. Playing the built-in
-  game.` line, and the session runs legacy; nothing of the bundle is used.
-- **Mod mode** then runs as for a tree bundle (builtins, guards, caps). The patches apply as they
-  were verified (kept in memory); textures stay the engine's. The key is `orca2|...|tree=<hash of the
-  signed lines but the JIT seed's>|sd=<the card's XXH3-128>|...`: a bundle player never meets a
-  legacy one, a JIT seed change keeps the pool, anything that reaches the game moves it.
-- **Tools**: `make-bundle.py RSBE01|PPLUS32 <out> --flat [--pplus-user <user/> | --pplus-run
-  <folder>] [--key <private key>]`; `sign-bundle.py keygen|sign|verify|message` (standard library
-  Ed25519, `ed25519ref.py`); `flat-sig-vector.json` ties the Python signer to the engine
-  (`OrcaBundle.SignatureVector`). Brawl's bundle is 4 files, Project+'s 6.
-- **Limits**: the card's pin is XXH3-128 (not a cryptographic hash, as legacy's pin isn't): the
-  signature covers the card only as strongly as that. A listing change moves ranked at once (no
-  pinned versions). The run-folder layout is a contract with the app (`orca.ts`: `userData/orca/{user,
-  run/<slug>}`); if it moves, Brawl plays legacy (Project+ follows its launcher). `minOrca` is not
-  enforced (the build has no version of its own); `engine.api` is.
+  (no `/`, no `..`, no device names); `mod.sig` is read first and must be by a trusted key before
+  `mod.json` is parsed; every read is bounded as in a tree bundle (`mod.sig` 512 bytes); the small
+  files are hashed and the signature checked before the card is hashed. Anything wrong refuses the
+  whole bundle with an `Orca bundle: <folder> refused: <why>.` line. A bundle Orca found by itself
+  then plays the built-in game: legacy, which for Project+ still boots the launcher and `sd.raw`
+  from that folder under its own profile's pins. One `ORCA_MOD_DIR` named refuses the session.
+- **Mod mode** then runs as for a tree bundle (builtins, guards, caps). Textures stay the engine's.
+  The key is `orca2|...|tree=<hash of the signed lines but the JIT seed's>|sd=<the card's pin>|...
+  |sys=<the Sys game INIs>|...`: a bundle player never meets a legacy one, a JIT seed change keeps
+  the pool, anything that reaches the game moves it.
+- **Signing.** Sign only a bundle that played on two Orcas: a builtin whose guards never hold gets no
+  origin, so its players meet nobody. `sign-bundle.py sign` checks the folder as Orca does, the
+  card's pin included, before it signs.
+- **Tools**: `make-bundle.py RSBE01|PPLUS32 <out> --flat --serial <n> [--listing <slug>]
+  [--pplus-user <user/> | --pplus-run <folder>] [--key <private key>]` (Project+'s launcher and card
+  must be v3.2's, by full SHA-256); `sign-bundle.py keygen|sign|verify|message`
+  (standard library Ed25519, `ed25519ref.py`); `sdhash.py` (the card's pin); `flat-sig-vector.json`
+  and `sd-hash-vector.json` tie the Python tools to the engine (`OrcaBundle.SignatureVector`,
+  `OrcaBundle.ChunkedSha256`); `mod.schema.json` states format 2. Brawl's bundle is 4 files,
+  Project+'s 6.
+- **Limits**: a listing change moves ranked at once (no pinned versions). The run-folder layout is a
+  contract with the app (`orca.ts`: `userData/orca/{user,run/<slug>}`); if it moves, Brawl plays
+  legacy (Project+ follows its launcher). `minOrca` is not enforced (the build has no version of its
+  own); `engine.api` is. A refused bundle shows only in Orca's log.
 
-Open: a Windows build and unit run of this branch (`OrcaMod.SdImageIsDeterministic` pins the Mac's
-image hashes, so it proves the PC builds the same card), then Mac <-> PC (`xplat.py --mod`); a P+
-fork whose codeset moves the stage select routines loses `brawl-rev2-pplus` until phase 3's labels;
-a bundle's own patches are not yet checked against the guard words (the validator's job);
-duplicate JSON keys are last-wins (as in JavaScript; the site refuses them).
+Open: a P+ fork whose codeset moves the stage select routines loses `brawl-rev2-pplus` until phase
+3's labels; a bundle's own patches are not yet checked against the guard words (the validator's
+job); duplicate JSON keys are last-wins (as in JavaScript; the site refuses them).
 
-What was checked (2026-10-05, then on 0.3.33 on 2026-10-08, with the runs): ORCA_NOTES.md, "Mods
-(phase 1)".
+What was checked (2026-10-05, then on 0.3.33 and in flat form on 0.3.34 on 2026-10-08, with the
+runs): ORCA_NOTES.md, "Mods (phase 1)" and "Flat bundles".
 
 ## Testing
 

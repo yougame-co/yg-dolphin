@@ -4,15 +4,17 @@
   make-bundle.py RSBE01 <out> [--tree]
   make-bundle.py PPLUS32 <out> --pplus-user <Project+ release's user/ folder> [--tree]
   make-bundle.py --tree <folder>        (tree.json for an existing bundle folder)
-  make-bundle.py RSBE01 <out> --flat [--key <private key>]
-  make-bundle.py PPLUS32 <out> --flat (--pplus-user <user/> | --pplus-run <folder>) [--key <private key>]
+  make-bundle.py RSBE01 <out> --flat --serial <n> [--listing <slug>] [--key <private key>]
+  make-bundle.py PPLUS32 <out> --flat --serial <n> (--pplus-user <user/> | --pplus-run <folder>)
+                 [--listing <slug>] [--key <private key>]
 
 --flat writes a flat bundle (Source/Core/Core/Orca/Bundle.h): mod.json format 2 and the files it
-names side by side, at most eight with mod.sig, which --key signs (sign-bundle.py). Project+'s
-launcher keeps its official name and the official sd.raw is used as it is, pinned by size and
-XXH3-128 (xxhsum -H2 when installed, else PPLUS32.ini's hash once its SHA-256 shows it is the
-official image); on macOS big files are APFS clones. --pplus-run takes a folder with the launcher
-and sd.raw side by side (the desktop app's run folder).
+names side by side, at most eight with mod.sig, which --key signs (sign-bundle.py). It is for one
+listing (--listing; open-brawl for RSBE01, project-rollback for PPLUS32) and carries --serial, which
+must go up with every bundle signed for that listing. Project+'s launcher keeps its official name and
+the official sd.raw is used as it is (both checked by their full SHA-256; --any-card takes another
+card), pinned by size and chunked SHA-256 (sdhash.py); on macOS big files are APFS clones.
+--pplus-run takes a folder with the launcher and sd.raw side by side (the desktop app's run folder).
 
 Reads Data/Sys/Orca/<profile>.ini, .patches, .jitwarm and Textures/RSBE01/ from this checkout (or
 --sys), and for Project+ the official release's files: Launcher/Project+ Netplay Launcher.dol and the
@@ -48,10 +50,14 @@ OFFERS = ["results", "locks", "queue2"]
 # Project+'s official SD image: the card size the bundle pins.
 PPLUS_SD_BYTES = 2_097_152_000
 PPLUS_LAUNCHER = "Project+ Netplay Launcher.dol"
-# sha256 of Project+ v3.2's Netplay Launcher (PPLUS32.ini names its XXH3-128).
-PPLUS_LAUNCHER_SHA256_PREFIX = "74a0decf"
-# sha256 of Project+ v3.2's sd.raw (PPLUS32.ini names its XXH3-128).
-PPLUS_SD_SHA256_PREFIX = "cfe5d869"
+# SHA-256 of Project+ v3.2's Netplay Launcher and of its sd.raw (PPLUS32.ini names their XXH3-128).
+PPLUS_LAUNCHER_SHA256 = "74a0decf1595725928c8830bddc17207669323883112640b0e25e9f2da95c0da"
+PPLUS_SD_SHA256 = "cfe5d86976092df50dfdcb21c627d19ba305aa5c9175827a18ca816fc1402d2d"
+# The listing each profile's flat bundle is for.
+LISTING = {"RSBE01": "open-brawl", "PPLUS32": "project-rollback"}
+
+sys.path.insert(0, HERE)
+import sdhash  # noqa: E402
 
 
 def path_problem(path):
@@ -157,6 +163,9 @@ def main():
     ap.add_argument("--flat", action="store_true", help="a flat bundle (mod.json format 2)")
     ap.add_argument("--pplus-run", help="--flat: a folder with Project+'s launcher and sd.raw side by side")
     ap.add_argument("--key", help="--flat: sign with this private key (sign-bundle.py keygen)")
+    ap.add_argument("--listing", help="--flat: the listing's slug (default: the profile's)")
+    ap.add_argument("--serial", type=int, help="--flat: the bundle's serial, above every one signed before")
+    ap.add_argument("--any-card", action="store_true", help="--flat: take an sd.raw that isn't Project+ v3.2's")
     args = ap.parse_args()
     if args.min_orca is None:
         args.min_orca = "0.3.35" if args.flat else "0.4.0"
@@ -258,7 +267,7 @@ def main():
             if not args.pplus_user:
                 sys.exit("Project+: give --pplus-user <release's user/ folder>")
             dol = os.path.join(args.pplus_user, "Launcher", PPLUS_LAUNCHER)
-            if not sha256_file(dol).startswith(PPLUS_LAUNCHER_SHA256_PREFIX):
+            if sha256_file(dol) != PPLUS_LAUNCHER_SHA256:
                 sys.exit(f"{dol} is not Project+ v3.2's Netplay Launcher")
             put("launcher.dol", dol)
             lic = os.path.join(os.path.dirname(os.path.abspath(args.pplus_user)), "license.txt")
@@ -305,15 +314,6 @@ def clone(src, dst):
     shutil.copyfile(src, dst)
 
 
-def xxh128(path):
-    """XXH3-128 as Orca's Profile.cpp HashFile prints it, with xxhsum (None when not installed)."""
-    try:
-        out = subprocess.run(["xxhsum", "-H2", path], check=True, capture_output=True, text=True).stdout
-    except (OSError, subprocess.CalledProcessError):
-        return None
-    return out.split()[0].split("_")[-1].lower()
-
-
 def make_flat(args):
     out = os.path.abspath(args.out)
     if os.path.exists(out):
@@ -334,7 +334,13 @@ def make_flat(args):
         sys.exit(f"{args.profile}: keys this tool doesn't map: {sorted(unknown)}")
 
     sources = {}  # bundle file name -> source path
-    mod = {"format": 2, "engine": {"api": 1, "minOrca": args.min_orca}}
+    if args.serial is None or args.serial < 1:
+        sys.exit("--flat needs --serial <n> (1 and up, above every bundle signed for the listing)")
+    listing = args.listing or LISTING[args.profile]
+    if not re.fullmatch(r"[a-z0-9-]{1,80}", listing):
+        sys.exit(f"--listing {listing!r} is not a listing slug")
+    mod = {"format": 2, "engine": {"api": 1, "minOrca": args.min_orca}, "listing": listing,
+           "serial": args.serial}
     if "Title" in p:
         mod["title"] = p["Title"]
     mod["disc"] = {"id": p.get("Disc", args.profile), "revision": int(p["Revision"], 0)}
@@ -346,7 +352,7 @@ def make_flat(args):
             image = os.path.join(args.pplus_user, "Wii", p.get("SDImage", ""))
         else:
             sys.exit("Project+: give --pplus-user <release's user/ folder> or --pplus-run <folder>")
-        if not sha256_file(dol).startswith(PPLUS_LAUNCHER_SHA256_PREFIX):
+        if sha256_file(dol) != PPLUS_LAUNCHER_SHA256:
             sys.exit(f"{dol} is not Project+ v3.2's Netplay Launcher")
         mod["launcher"] = PPLUS_LAUNCHER
         sources[PPLUS_LAUNCHER] = dol
@@ -354,14 +360,12 @@ def make_flat(args):
             size = os.path.getsize(image)
             if size != PPLUS_SD_BYTES:
                 sys.exit(f"{image} is not {PPLUS_SD_BYTES} bytes")
-            xxh3 = xxh128(image)
-            if xxh3 is None:
-                if not sha256_file(image).startswith(PPLUS_SD_SHA256_PREFIX):
-                    sys.exit(f"{image} is not Project+ v3.2's sd.raw, and xxhsum isn't here to hash it")
-                xxh3 = p["SDImageHash"]
-            if xxh3 != p["SDImageHash"]:
-                print(f"note: {image} is not the card PPLUS32.ini pins ({xxh3}, not {p['SDImageHash']})")
-            mod["sdImage"] = {"file": p["SDImage"], "bytes": size, "xxh3": xxh3}
+            if sdhash.sha256_file(image) != PPLUS_SD_SHA256:
+                if not args.any_card:
+                    sys.exit(f"{image} is not Project+ v3.2's sd.raw (--any-card takes it anyway)")
+                print(f"note: {image} is not Project+ v3.2's sd.raw")
+            mod["sdImage"] = {"file": p["SDImage"], "bytes": size,
+                              "sha256": sdhash.chunked_sha256(image, size)}
             sources[p["SDImage"]] = image
     patches = f"{args.profile}.patches"
     mod["patches"] = [patches]

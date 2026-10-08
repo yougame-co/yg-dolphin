@@ -61,7 +61,11 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
   if (Orca::SessionActive())
   {
     const auto* executable = std::get_if<BootParameters::Executable>(&boot->parameters);
-    Orca::Mod::ResolveBundle(executable ? &executable->path : nullptr);
+    // A launcher is checked as the bytes its reader already holds: those are what run.
+    std::span<const u8> launcher_bytes;
+    if (executable && executable->reader)
+      launcher_bytes = executable->reader->GetBytes();
+    Orca::Mod::ResolveBundle(executable ? &executable->path : nullptr, launcher_bytes);
   }
 
   if (!StartUp.SetPathsAndGameMetadata(system, *boot))
@@ -104,6 +108,8 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
       // the bundle, never from Data/Sys/Orca, and ORCA_PROFILE is ignored.
       if (const Orca::Mod::FlatBundle* flat = Orca::Mod::ResolvedFlat())
         orca_profile = Orca::LoadFlatProfile(*flat, &error);
+      else if (Orca::Mod::ResolvedKind() == Orca::Mod::BundleKind::Refused)
+        error = Orca::Mod::ResolvedError();
       else
         orca_profile = Orca::LoadModProfile(Orca::Mod::Dir(), &error);
       if (orca_profile &&

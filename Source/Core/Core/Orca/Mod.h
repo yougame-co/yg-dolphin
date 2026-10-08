@@ -134,7 +134,7 @@ struct SdImageFile
 {
   std::string file;
   u64 bytes = 0;
-  std::string xxh3;  // XXH3-128, 32 lowercase hex digits (Profile.cpp HashFile)
+  std::string sha256;  // its chunked SHA-256, 64 lowercase hex digits (Bundle.h SD_HASH_HEADER)
   bool operator==(const SdImageFile&) const = default;
 };
 
@@ -162,9 +162,13 @@ struct Manifest
   Builtin builtin = Builtin::None;
   std::vector<std::string> rulesets;
   std::vector<std::string> offers;
-  // Format 2 only: file names at the bundle's root. The SD image used as it is ("sdImage"), the game
-  // patches in the order they apply, the JIT seed (host-only), and the texture pack, which is the
-  // engine's own (Sys/Orca/Textures, as in legacy) until a bundle can carry one.
+  // Format 2 only. The listing the bundle is for (a YouGame slug: Orca refuses it under another
+  // listing) and its serial (Bundle.h MIN_FLAT_SERIAL). File names at the bundle's root: the SD
+  // image used as it is ("sdImage"), the game patches in the order they apply, the JIT seed
+  // (host-only), and the texture pack, which is the engine's own (Sys/Orca/Textures, as in legacy)
+  // until a bundle can carry one.
+  std::string listing;
+  u64 serial = 0;
   std::optional<SdImageFile> sd_image;
   std::vector<std::string> patches;
   std::string jitwarm;
@@ -204,16 +208,17 @@ struct ModInfo
   std::string dir;  // with a trailing '/'
   Tree tree;
   Manifest manifest;
-  // The SD image's XXH3-128 (32 hex digits), set at boot (built, or a flat bundle's as verified);
-  // empty without a card.
+  // The SD image's hash, set at boot: a built card's XXH3-128 (32 hex digits), a flat bundle's
+  // chunked SHA-256 as verified (64); empty without a card.
   std::string sd_image_hash;
   // A flat bundle (format 2): its tree lists the signed files by name (the hash leaves the JIT seed
-  // out, as a tree bundle's does), and its patches are kept as they were verified.
+  // out, as a tree bundle's does), and its patches and JIT seed are kept as they were verified.
   bool flat = false;
   std::vector<std::pair<std::string, std::string>> flat_patches;  // (name, text), applied in order
+  std::string flat_jitwarm;
 
   // The JIT seed (host-only), or empty: orca/jitwarm in a tree bundle, mod.json's "jitwarm" in a
-  // flat one.
+  // flat one (whose bytes are flat_jitwarm: JitWarm reads those, never the file again).
   std::string JitWarmPath() const;
   // Whether the texture pack is the engine's own (a flat bundle's), or the bundle's orca/textures/.
   bool EngineTextures() const { return flat; }

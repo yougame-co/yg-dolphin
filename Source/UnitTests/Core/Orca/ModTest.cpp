@@ -18,6 +18,7 @@
 #include "Common/FileUtil.h"
 #include "Common/IOFile.h"
 #include "Common/Version.h"
+#include "Core/ConfigManager.h"
 #include "Core/Orca/Mod.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Online.h"
@@ -986,6 +987,12 @@ TEST(OrcaMod, LegacyKeyIsUnchanged)
 
   // Mod mode: "orca2:" over "orca2|", the engine, the tree, the card and the disc (never the same
   // hash input as a legacy key, which starts "orca|").
+  // A launcher profile's key reads the running game's ID (SConfig), as in a session.
+  SConfig::Init();
+  struct ConfigDone
+  {
+    ~ConfigDone() { SConfig::Shutdown(); }
+  } config_done;
   Bundle b = MakeBundle(PPLUS_MOD);
   b.Add("launcher.dol", "dol");
   b.WriteTree();
@@ -996,9 +1003,13 @@ TEST(OrcaMod, LegacyKeyIsUnchanged)
   const std::string mod_parts = Orca::Online::CompatibilityKeyParts();
   const std::string disc = Orca::GetEnv("ORCA_DISC_SHA1");
   EXPECT_TRUE(mod_parts.starts_with(fmt::format(
-      "orca2|{}|api={}|tree={}|sd={}|disc={}|0.Core.WiiSDCard=True|0.Core.CustomRTCValue=1735689600|thread=",
-      Common::GetScmRevGitStr(), Orca::Mod::ENGINE_API, Orca::Mod::TreeHash(b.files),
-      std::string(32, 'c'), disc.empty() ? "-" : disc)))
+      "orca2|{}|api={}|tree={}|sd={}|disc={}|sys=", Common::GetScmRevGitStr(),
+      Orca::Mod::ENGINE_API, Orca::Mod::TreeHash(b.files), std::string(32, 'c'),
+      disc.empty() ? "-" : disc)))
+      << mod_parts;
+  // The Sys game INIs' hashes, then the forced settings.
+  EXPECT_NE(mod_parts.find("|0.Core.WiiSDCard=True|0.Core.CustomRTCValue=1735689600|thread="),
+            std::string::npos)
       << mod_parts;
   EXPECT_EQ(Orca::Online::CompatibilityKey(),
             fmt::format("orca2:{:016x}", XXH3_64bits(mod_parts.data(), mod_parts.size())));

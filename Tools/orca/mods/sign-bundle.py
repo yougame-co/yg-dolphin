@@ -4,17 +4,21 @@
   sign-bundle.py keygen <private key file>          a new key: 32 random bytes as hex (mode 600);
                                                     prints the public key Orca pins
                                                     (CMake -DORCA_BUNDLE_PUBLIC_KEY=<hex>)
-  sign-bundle.py sign <bundle> --key <private key>  writes <bundle>/mod.sig
-  sign-bundle.py verify <bundle> --public <hex>     checks the bundle as Orca does, except the SD
-                                                    image's XXH3-128 (no XXH3 in Python's standard
-                                                    library: --xxhsum checks it with xxhsum -H2)
+  sign-bundle.py sign <bundle> --key <private key>  checks the bundle as Orca does (the SD image's
+                                                    size and chunked SHA-256 included), then writes
+                                                    <bundle>/mod.sig
+  sign-bundle.py verify <bundle> --public <hex>     checks the bundle as Orca does
   sign-bundle.py message <bundle>                   prints the lines mod.sig signs
   sign-bundle.py vector <out.json>                  the shared test vector (a fixed key, not a real one)
 
 A bundle folder holds mod.json (format 2), mod.sig and exactly the files mod.json names, at most 8
 in all. mod.sig is "ed25519 <public key> <signature>\\n" over "orca-flat-bundle 1\\n" and a
 "<name>\\t<sha256>\\t<bytes>\\n" line for mod.json and every file it names but the SD image (mod.json
-pins that one by size and XXH3-128), sorted by name. Keep private keys out of every repository.
+pins that one by size and chunked SHA-256, sdhash.py), sorted by name. Keep private keys out of every
+repository.
+
+Sign only a bundle that played on two Orcas (ORCA.md "Flat bundles"): one whose builtin's guards
+never hold reaches no origin, so its players can't meet anyone.
 """
 
 import argparse
@@ -22,11 +26,11 @@ import hashlib
 import json
 import os
 import re
-import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import ed25519ref  # noqa: E402
+import sdhash  # noqa: E402
 
 HEADER = b"orca-flat-bundle 1\n"
 MAX_FILES = 8
@@ -106,6 +110,12 @@ def load(folder):
     mod = json.loads(raw)
     if mod.get("format") != 2:
         raise SystemExit("mod.json is not format 2")
+    if not isinstance(mod.get("listing"), str) or not re.fullmatch(r"[a-z0-9-]{1,80}", mod["listing"]):
+        raise SystemExit("mod.json has no listing (a listing's slug)")
+    if type(mod.get("serial")) is not int or mod["serial"] < 1:
+        raise SystemExit("mod.json has no serial (an integer from 1)")
+    if "sdImage" in mod and set(mod["sdImage"]) != {"file", "bytes", "sha256"}:
+        raise SystemExit("mod.json's sdImage is {file, bytes, sha256}")
     named = named_files(mod)
     for name in named:
         problem = name_problem(name)
@@ -137,6 +147,16 @@ def load(folder):
     return mod, lines
 
 
+def check_card(folder, mod):
+    """The SD image is the one mod.json pins (its chunked SHA-256, as Orca checks it)."""
+    if "sdImage" not in mod:
+        return
+    image = mod["sdImage"]
+    got = sdhash.chunked_sha256(os.path.join(folder, image["file"]), image["bytes"])
+    if got != image["sha256"]:
+        raise SystemExit(f"{image['file']} is chunked SHA-256 {got}, not the {image['sha256']} mod.json pins")
+
+
 def message(lines):
     return HEADER + b"".join(f"{n}\t{h}\t{b}\n".encode() for n, h, b in lines)
 
@@ -146,11 +166,6 @@ def read_seed(path):
     if len(seed) != 32:
         raise SystemExit(f"{path} is not a 32-byte Ed25519 private key in hex")
     return seed
-
-
-def xxh128(path):
-    out = subprocess.run(["xxhsum", "-H2", path], check=True, capture_output=True, text=True).stdout
-    return out.split()[0].split("_")[-1].lower()
 
 
 def main():
@@ -164,7 +179,6 @@ def main():
     v = sub.add_parser("verify")
     v.add_argument("bundle")
     v.add_argument("--public", required=True)
-    v.add_argument("--xxhsum", action="store_true", help="also check the SD image's XXH3-128 with xxhsum")
     m = sub.add_parser("message")
     m.add_argument("bundle")
     t = sub.add_parser("vector")
@@ -181,12 +195,14 @@ def main():
         print(ed25519ref.keypair(seed).hex())
     elif args.cmd == "sign":
         seed = read_seed(args.key)
-        _, lines = load(args.bundle)
+        mod, lines = load(args.bundle)
+        check_card(args.bundle, mod)
         public = ed25519ref.keypair(seed)
         sig = ed25519ref.sign(seed, message(lines))
         with open(os.path.join(args.bundle, "mod.sig"), "w", newline="\n") as f:
             f.write(f"ed25519 {public.hex()} {sig.hex()}\n")
-        print(f"{args.bundle}/mod.sig: {len(lines)} signed lines, key {public.hex()}")
+        print(f"{args.bundle}/mod.sig: {mod['listing']} serial {mod['serial']}, {len(lines)} signed lines, "
+              f"key {public.hex()}")
     elif args.cmd == "verify":
         mod, lines = load(args.bundle)
         if not os.path.isfile(os.path.join(args.bundle, "mod.sig")):
@@ -199,11 +215,8 @@ def main():
             raise SystemExit(f"mod.sig is by {parts[1]}, not {args.public}")
         if not ed25519ref.verify(bytes.fromhex(parts[1]), message(lines), bytes.fromhex(parts[2])):
             raise SystemExit("mod.sig doesn't match the files")
-        if args.xxhsum and "sdImage" in mod:
-            got = xxh128(os.path.join(args.bundle, mod["sdImage"]["file"]))
-            if got != mod["sdImage"]["xxh3"]:
-                raise SystemExit(f"{mod['sdImage']['file']} is XXH3-128 {got}, not {mod['sdImage']['xxh3']}")
-        print(f"{args.bundle}: signature good ({len(lines)} lines)")
+        check_card(args.bundle, mod)
+        print(f"{args.bundle}: {mod['listing']} serial {mod['serial']}, signature good ({len(lines)} lines)")
     elif args.cmd == "message":
         _, lines = load(args.bundle)
         sys.stdout.write(message(lines).decode())

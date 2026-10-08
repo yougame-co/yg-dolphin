@@ -1,3 +1,5 @@
 *.sln text eol=crlf
 # Orca: the JIT warm-up lists Orca ships (Data/Sys/Orca/*.jitwarm)
 *.jitwarm binary
+# Orca: game patches are hashed byte for byte (a flat bundle's signature, the key): LF everywhere
+*.patches text eol=lf

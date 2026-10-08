@@ -447,10 +447,10 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
   }
   const bool flat = m.format == 2;
   const auto unknown =
-      flat ? UnknownKey(o, {"format", "engine", "title", "disc", "launcher", "sdImage", "patches",
-                            "jitwarm", "textures", "frameHook", "bootNandFrame",
-                            "firstKeyframeFrame", "jitClearFrame", "keepGameCode", "saveTitle",
-                            "forced", "builtin", "rulesets", "offers"}) :
+      flat ? UnknownKey(o, {"format", "engine", "listing", "serial", "title", "disc", "launcher",
+                            "sdImage", "patches", "jitwarm", "textures", "frameHook",
+                            "bootNandFrame", "firstKeyframeFrame", "jitClearFrame", "keepGameCode",
+                            "saveTitle", "forced", "builtin", "rulesets", "offers"}) :
              UnknownKey(o, {"format", "engine", "title", "disc", "launcher", "sd", "frameHook",
                             "bootNandFrame", "firstKeyframeFrame", "jitClearFrame", "keepGameCode",
                             "saveTitle", "forced", "builtin", "rulesets", "offers"});
@@ -741,14 +741,34 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
   if (!flat)
     return m;
 
-  // Format 2: every file a name at the bundle's root.
-  // sdImage: the card used as it is, pinned by size and XXH3-128 (as a legacy profile pins sd.raw).
+  // Format 2. listing: the YouGame listing the bundle is for (desktop orca-policy.ts SLUG_RE).
+  {
+    const picojson::value* v = get("listing");
+    const auto slug = [](const std::string& l) {
+      return !l.empty() && l.size() <= 80 && std::ranges::all_of(l, [](char c) {
+        return (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-';
+      });
+    };
+    if (!v || !v->is<std::string>() || !slug(v->get<std::string>()))
+      return fail("\"listing\" must be a listing's slug (a-z 0-9 -, at most 80)");
+    m.listing = v->get<std::string>();
+  }
+  // serial: the bundle's number, raised with every bundle signed for the listing.
+  {
+    const picojson::value* v = get("serial");
+    const auto serial = v ? Integer(*v, 1, u64{1} << 53) : std::nullopt;
+    if (!serial)
+      return fail("\"serial\" must be an integer from 1");
+    m.serial = *serial;
+  }
+  // Every file a name at the bundle's root.
+  // sdImage: the card used as it is, pinned by size and chunked SHA-256 (Bundle.h SD_HASH_HEADER).
   if (const picojson::value* v = get("sdImage"))
   {
     if (!v->is<picojson::object>())
       return fail("\"sdImage\" must be an object");
     const picojson::object& s = v->get<picojson::object>();
-    if (const auto key = UnknownKey(s, {"file", "bytes", "xxh3"}))
+    if (const auto key = UnknownKey(s, {"file", "bytes", "sha256"}))
       return fail(fmt::format("unknown key sdImage.{}", *key));
     SdImageFile image;
     if (!s.contains("file") || !s.at("file").is<std::string>())
@@ -761,12 +781,12 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
       return fail(fmt::format("sdImage.bytes must be an integer from 1 to {} (an SDSC card)",
                               SD_MAX_BYTES));
     image.bytes = *bytes;
-    if (!s.contains("xxh3") || !s.at("xxh3").is<std::string>() ||
-        !IsLowerHex(s.at("xxh3").get<std::string>(), 32))
+    if (!s.contains("sha256") || !s.at("sha256").is<std::string>() ||
+        !IsLowerHex(s.at("sha256").get<std::string>(), 64))
     {
-      return fail("sdImage.xxh3 must be 32 lowercase hex digits (its XXH3-128)");
+      return fail("sdImage.sha256 must be 64 lowercase hex digits (its chunked SHA-256)");
     }
-    image.xxh3 = s.at("xxh3").get<std::string>();
+    image.sha256 = s.at("sha256").get<std::string>();
     m.sd_image = std::move(image);
   }
   // patches: the game patches, applied in this order.
@@ -1440,6 +1460,7 @@ std::optional<Profile> LoadFlatProfile(const Mod::FlatBundle& bundle, std::strin
   Mod::ModInfo& mod = *profile->mod;
   mod.flat = true;
   mod.flat_patches = bundle.patches;
+  mod.flat_jitwarm = bundle.jitwarm;
   mod.sd_image_hash = bundle.sd_image_hash;
   return profile;
 }
@@ -1509,8 +1530,8 @@ bool PrepareModBoot(Profile* profile, const std::string* executable_path,
   }
   if (m.sd_image)
   {
-    // A flat bundle's card, used as it is: its size and XXH3-128 were checked as the bundle was
-    // verified (Bundle.cpp), once per process.
+    // A flat bundle's card, used as it is: its size and chunked SHA-256 were checked as the bundle
+    // was verified (Bundle.cpp), once per process.
     if (mod.sd_image_hash.empty())
     {
       *error = "Orca mod: the SD image was not verified";

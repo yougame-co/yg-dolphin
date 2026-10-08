@@ -10,6 +10,7 @@
 #include <deque>
 #include <mutex>
 #include <numeric>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -249,6 +250,9 @@ private:
   bool m_log_presence = false;  // ORCA_JITWARM_LOG=2: also which listed blocks are in RAM
   std::string m_path;
   std::string m_seed_path;  // Orca's shipped list, used when the player has none (SeedPath)
+  // A flat bundle's seed as it was verified (Mod.h ModInfo::flat_jitwarm): read from here, never
+  // from m_seed_path again.
+  std::optional<std::vector<u8>> m_seed_bytes;
 
   bool m_seen_other_scene = false;  // a match starts only from another scene, not on a join
   bool m_in_match = false;
@@ -315,6 +319,12 @@ bool State::Enabled()
   m_log_presence = log == "2";
   m_path = FilePath();
   m_seed_path = SeedPath();
+  if (const Profile* profile = ActiveProfile();
+      profile && profile->mod && profile->mod->flat && !m_seed_path.empty())
+  {
+    const std::string& seed = profile->mod->flat_jitwarm;
+    m_seed_bytes.emplace(seed.begin(), seed.end());
+  }
   if (m_enabled)
     NOTICE_LOG_FMT(ROLLBACK, "JIT warm-up: on ({}, {} us per frame)", m_path, m_budget_us);
   return m_enabled;
@@ -733,7 +743,7 @@ void State::OnBoundary(const Core::CPUThreadGuard& guard)
         WARN_LOG_FMT(ROLLBACK, "JIT warm-up: {} is not readable, starting over", m_path);
       if (!blocks && !m_seed_path.empty())
       {
-        blocks = Decode(ReadWhole(m_seed_path));
+        blocks = Decode(m_seed_bytes ? *m_seed_bytes : ReadWhole(m_seed_path));
         if (blocks)
         {
           NOTICE_LOG_FMT(ROLLBACK,

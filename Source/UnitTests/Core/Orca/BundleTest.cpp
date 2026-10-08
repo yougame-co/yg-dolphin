@@ -19,6 +19,7 @@
 #include "Common/FileUtil.h"
 #include "Common/IOFile.h"
 #include "Common/Version.h"
+#include "Core/ConfigManager.h"
 #include "Core/Orca/Bundle.h"
 #include "Core/Orca/Mod.h"
 #include "Core/Orca/Profile.h"
@@ -27,6 +28,10 @@
 namespace
 {
 using Orca::Mod::PublicKey;
+
+// The bundle-flat TEST key (Bundle.cpp), trusted only by a build with ORCA_BUNDLE_TRUST_TEST_KEY.
+[[maybe_unused]] constexpr char TEST_KEY_HEX[] =
+    "afb9463d5c16f0f617432d76f75f37a8c649e36d7c626088ba00b19dea115a43";
 
 void SetEnv(const char* name, const std::string& value)
 {
@@ -104,16 +109,18 @@ struct Signer
 };
 
 // Project+'s flat mod.json as make-bundle.py --flat writes it, for a card of `sd_bytes` with this
-// XXH3-128.
-std::string PPlusFlat(u64 sd_bytes, const std::string& xxh3)
+// chunked SHA-256.
+std::string PPlusFlat(u64 sd_bytes, const std::string& sha256)
 {
   return fmt::format(R"({{
   "format": 2,
   "engine": {{"api": 1, "minOrca": "0.3.35"}},
+  "listing": "project-rollback",
+  "serial": 1,
   "title": "Project+",
   "disc": {{"id": "RSBE01", "revision": 2}},
   "launcher": "Project+ Netplay Launcher.dol",
-  "sdImage": {{"file": "sd.raw", "bytes": {}, "xxh3": "{}"}},
+  "sdImage": {{"file": "sd.raw", "bytes": {}, "sha256": "{}"}},
   "patches": ["PPLUS32.patches"],
   "jitwarm": "PPLUS32.jitwarm",
   "textures": "engine",
@@ -128,12 +135,14 @@ std::string PPlusFlat(u64 sd_bytes, const std::string& xxh3)
   "rulesets": ["pplus-2024"],
   "offers": ["results", "locks", "queue2"]
 }})",
-                     sd_bytes, xxh3);
+                     sd_bytes, sha256);
 }
 
 constexpr char BRAWL_FLAT[] = R"({
   "format": 2,
   "engine": {"api": 1, "minOrca": "0.3.35"},
+  "listing": "open-brawl",
+  "serial": 1,
   "disc": {"id": "RSBE01", "revision": 2},
   "patches": ["RSBE01.patches"],
   "jitwarm": "RSBE01.jitwarm",
@@ -173,10 +182,12 @@ struct Flat
   {
     ASSERT_TRUE(File::WriteStringToFile(dir + "mod.sig", signer.Sign(Message())));
   }
-  std::optional<Orca::Mod::FlatBundle> Load(const Signer& signer, std::string* error) const
+  std::optional<Orca::Mod::FlatBundle> Load(const Signer& signer, std::string* error,
+                                            const Orca::Mod::BootLauncher* boot = nullptr,
+                                            std::string_view listing = {}) const
   {
     const PublicKey key = signer.Key();
-    return Orca::Mod::LoadFlatBundle(dir, std::span(&key, 1), error);
+    return Orca::Mod::LoadFlatBundle(dir, std::span(&key, 1), error, boot, listing);
   }
 };
 
@@ -189,7 +200,7 @@ Flat MakePPlus(const std::string& dir, const Signer& signer)
   f.Put("sd.raw", std::string(65536, '\x11'));
   f.Put("PPLUS32.patches", PATCHES);
   f.Put("PPLUS32.jitwarm", "warm");
-  f.Put("mod.json", PPlusFlat(65536, Orca::HashFile(dir + "sd.raw")));
+  f.Put("mod.json", PPlusFlat(65536, Orca::Mod::ChunkedSha256File(dir + "sd.raw", 65536)));
   f.Sign(signer);
   return f;
 }
@@ -276,16 +287,77 @@ TEST(OrcaBundle, SignatureVector)
   EXPECT_FALSE(Orca::Mod::ParseSignature(sig_line.substr(0, 100)));
 }
 
-// The pinned key is the TEST key unless the build sets one.
+// The build trusts exactly the keys CMake gave it (the same definitions reach this file): the
+// pinned key, the TEST key only when asked for, and none at all without either.
 TEST(OrcaBundle, PinnedKey)
 {
-  const auto keys = Orca::Mod::TrustedKeys();
-  ASSERT_EQ(keys.size(), 1u);
-#ifndef ORCA_BUNDLE_PUBLIC_KEY
-  EXPECT_TRUE(Orca::Mod::IsTestKey(keys[0]));
+  std::vector<std::string> expected;
+#ifdef ORCA_BUNDLE_PUBLIC_KEY
+  expected.push_back(ORCA_BUNDLE_PUBLIC_KEY);
 #endif
+#ifdef ORCA_BUNDLE_TRUST_TEST_KEY
+  if (std::find(expected.begin(), expected.end(), TEST_KEY_HEX) == expected.end())
+    expected.push_back(TEST_KEY_HEX);
+#endif
+  std::vector<std::string> trusted;
+  for (const PublicKey& key : Orca::Mod::TrustedKeys())
+    trusted.push_back(Orca::Mod::KeyHex(key));
+  EXPECT_EQ(trusted, expected);
+  for (const PublicKey& key : Orca::Mod::TrustedKeys())
+  {
+#ifdef ORCA_BUNDLE_TRUST_TEST_KEY
+    EXPECT_EQ(Orca::Mod::IsTestKey(key), Orca::Mod::KeyHex(key) == TEST_KEY_HEX);
+#else
+    EXPECT_FALSE(Orca::Mod::IsTestKey(key));
+#endif
+  }
   const Signer other(7);
   EXPECT_FALSE(Orca::Mod::IsTestKey(other.Key()));
+  // Tests can trust none: nothing loads.
+  const PublicKey none{};
+  Orca::Mod::TrustKeysForTests(std::span(&none, 0));
+  EXPECT_TRUE(Orca::Mod::TrustedKeys().empty());
+  Orca::Mod::ResetTrustedKeysForTests();
+  EXPECT_EQ(Orca::Mod::TrustedKeys().size(), expected.size());
+}
+
+// The SD image's pin (Bundle.h SD_HASH_HEADER): the engine's parallel hash, the definition written
+// out here, and Python's (sd-hash-vector.json, from sign-bundle.py) agree, across a chunk boundary.
+TEST(OrcaBundle, ChunkedSha256)
+{
+  std::string text;
+  ASSERT_TRUE(File::ReadFileToString(RepoPath("Tools/orca/mods/sd-hash-vector.json"), text));
+  picojson::value v;
+  ASSERT_EQ(picojson::parse(v, text), "");
+  const u64 bytes = static_cast<u64>(v.get("bytes").get<double>());
+  ASSERT_GT(bytes, Orca::Mod::SD_HASH_CHUNK_BYTES);
+  // Byte i is (i * 131 + 7) mod 251.
+  std::string data(bytes, '\0');
+  for (u64 i = 0; i < bytes; ++i)
+    data[i] = static_cast<char>((i * 131 + 7) % 251);
+  const std::string root = TempDir();
+  ASSERT_TRUE(File::WriteStringToFile(root + "card", data));
+  std::string written = fmt::format("orca-chunked-sha256 1\n{} {}\n", bytes,
+                                    Orca::Mod::SD_HASH_CHUNK_BYTES);
+  for (u64 at = 0; at < bytes; at += Orca::Mod::SD_HASH_CHUNK_BYTES)
+  {
+    const std::string_view piece =
+        std::string_view(data).substr(at, Orca::Mod::SD_HASH_CHUNK_BYTES);
+    written += Orca::Mod::Sha256Hex(piece);
+    written += '\n';
+  }
+  const std::string hash = Orca::Mod::ChunkedSha256File(root + "card", bytes);
+  EXPECT_EQ(hash, Orca::Mod::Sha256Hex(written));
+  EXPECT_EQ(hash, v.get("chunkedSha256").get<std::string>());
+  // The first bytes only; a file shorter than asked is unreadable.
+  EXPECT_EQ(Orca::Mod::ChunkedSha256File(root + "card", 1000),
+            Orca::Mod::Sha256Hex(fmt::format("orca-chunked-sha256 1\n1000 {}\n{}\n",
+                                              Orca::Mod::SD_HASH_CHUNK_BYTES,
+                                              Orca::Mod::Sha256Hex(data.substr(0, 1000)))));
+  EXPECT_EQ(Orca::Mod::ChunkedSha256File(root + "card", bytes + 1), "");
+  EXPECT_EQ(Orca::Mod::ChunkedSha256File(root + "missing", 10), "");
+  EXPECT_EQ(Orca::Mod::ChunkedSha256File(root + "card", 0), "");
+  File::DeleteDirRecursively(root);
 }
 
 TEST(OrcaBundle, FlatNames)
@@ -307,9 +379,33 @@ TEST(OrcaBundle, FlatNames)
   }
 }
 
+// mod.schema.json states the flat form's limits as the engine has them.
+TEST(OrcaBundle, SchemaKnowsTheFlatForm)
+{
+  std::string text;
+  ASSERT_TRUE(File::ReadFileToString(RepoPath("Tools/orca/mods/mod.schema.json"), text));
+  picojson::value schema;
+  ASSERT_EQ(picojson::parse(schema, text), "");
+  const picojson::value& limits = schema.get("x-orca-limits");
+  EXPECT_EQ(limits.get("flatMaxFiles").get<double>(),
+            static_cast<double>(Orca::Mod::FLAT_MAX_FILES));
+  EXPECT_EQ(limits.get("flatMaxPatches").get<double>(),
+            static_cast<double>(Orca::Mod::FLAT_MAX_PATCHES));
+  EXPECT_EQ(limits.get("minFlatSerial").get<double>(),
+            static_cast<double>(Orca::Mod::MIN_FLAT_SERIAL));
+  EXPECT_EQ(limits.get("sdHashChunkBytes").get<double>(),
+            static_cast<double>(Orca::Mod::SD_HASH_CHUNK_BYTES));
+  const picojson::value& properties = schema.get("properties");
+  EXPECT_EQ(properties.get("patches").get("maxItems").get<double>(),
+            static_cast<double>(Orca::Mod::FLAT_MAX_PATCHES));
+  EXPECT_EQ(properties.get("sdImage").get("properties").get("bytes").get("maximum").get<double>(),
+            static_cast<double>(Orca::Mod::SD_MAX_BYTES));
+}
+
 TEST(OrcaBundle, ParsesTheFlatForm)
 {
-  const std::string pplus = PPlusFlat(2097152000, "5293a846d4de6139fd3ccd61faa9ac8d");
+  const std::string card = std::string(64, 'c');
+  const std::string pplus = PPlusFlat(2097152000, card);
   std::string error;
   const auto m = Orca::Mod::ParseManifest(pplus, &error);
   ASSERT_TRUE(m) << error;
@@ -318,7 +414,9 @@ TEST(OrcaBundle, ParsesTheFlatForm)
   ASSERT_TRUE(m->sd_image);
   EXPECT_EQ(m->sd_image->file, "sd.raw");
   EXPECT_EQ(m->sd_image->bytes, 2097152000u);
-  EXPECT_EQ(m->sd_image->xxh3, "5293a846d4de6139fd3ccd61faa9ac8d");
+  EXPECT_EQ(m->sd_image->sha256, card);
+  EXPECT_EQ(m->listing, "project-rollback");
+  EXPECT_EQ(m->serial, 1u);
   EXPECT_EQ(m->patches, std::vector<std::string>{"PPLUS32.patches"});
   EXPECT_EQ(m->jitwarm, "PPLUS32.jitwarm");
   EXPECT_FALSE(m->sd_bytes);
@@ -348,14 +446,35 @@ TEST(OrcaBundle, ParsesTheFlatForm)
   // At most eight files with mod.json and mod.sig: a launcher, a card, four patches and a seed are 9.
   EXPECT_TRUE(Refused(With(pplus, "patches", R"(["a.patches", "b.patches", "c.patches", "d.patches"])")));
   EXPECT_FALSE(Refused(With(pplus, "patches", R"(["a.patches", "b.patches", "c.patches"])")));
-  // The pinned card.
-  EXPECT_TRUE(Refused(With(pplus, "sdImage", R"({"file": "sd.raw", "bytes": 2147483649, "xxh3": "5293a846d4de6139fd3ccd61faa9ac8d"})")));
-  EXPECT_TRUE(Refused(With(pplus, "sdImage", R"({"file": "sd.raw", "bytes": 0, "xxh3": "5293a846d4de6139fd3ccd61faa9ac8d"})")));
-  EXPECT_TRUE(Refused(With(pplus, "sdImage", R"({"file": "sd.raw", "bytes": 100, "xxh3": "5293A846D4DE6139FD3CCD61FAA9AC8D"})")));
-  EXPECT_TRUE(Refused(With(pplus, "sdImage", R"({"file": "sd.raw", "bytes": 100})")));
-  EXPECT_TRUE(Refused(With(pplus, "sdImage", R"({"file": "sd/sd.raw", "bytes": 100, "xxh3": "5293a846d4de6139fd3ccd61faa9ac8d"})")));
-  EXPECT_TRUE(Refused(With(pplus, "sdImage", R"({"file": "sd.raw", "bytes": 100, "xxh3": "5293a846d4de6139fd3ccd61faa9ac8d", "sha256": "x"})")));
-  EXPECT_TRUE(Refused(With(pplus, "sdImage", R"({"file": "PPLUS32.patches", "bytes": 100, "xxh3": "5293a846d4de6139fd3ccd61faa9ac8d"})")));
+  // The pinned card: by size and chunked SHA-256 (never XXH3).
+  const auto image = [&](const std::string& fields) {
+    return With(pplus, "sdImage", "{" + fields + "}");
+  };
+  const std::string sha = "\"sha256\": \"" + card + "\"";
+  const std::string upper = "\"sha256\": \"" + std::string(64, 'C') + "\"";
+  const std::string short_hash = "\"sha256\": \"" + std::string(63, 'c') + "\"";
+  const std::string xxh3 = "\"xxh3\": \"5293a846d4de6139fd3ccd61faa9ac8d\"";
+  EXPECT_FALSE(Refused(image("\"file\": \"sd.raw\", \"bytes\": 100, " + sha)));
+  EXPECT_TRUE(Refused(image("\"file\": \"sd.raw\", \"bytes\": 2147483649, " + sha)));
+  EXPECT_TRUE(Refused(image("\"file\": \"sd.raw\", \"bytes\": 0, " + sha)));
+  EXPECT_TRUE(Refused(image("\"file\": \"sd.raw\", \"bytes\": 100, " + upper)));
+  EXPECT_TRUE(Refused(image("\"file\": \"sd.raw\", \"bytes\": 100, " + short_hash)));
+  EXPECT_TRUE(Refused(image("\"file\": \"sd.raw\", \"bytes\": 100")));
+  EXPECT_TRUE(Refused(image("\"file\": \"sd.raw\", \"bytes\": 100, " + xxh3)));
+  EXPECT_TRUE(Refused(image("\"file\": \"sd/sd.raw\", \"bytes\": 100, " + sha)));
+  EXPECT_TRUE(Refused(image("\"file\": \"sd.raw\", \"bytes\": 100, " + sha + ", \"xxh3\": \"x\"")));
+  EXPECT_TRUE(Refused(image("\"file\": \"PPLUS32.patches\", \"bytes\": 100, " + sha)));
+  // Its listing and serial.
+  EXPECT_TRUE(Refused(Without(pplus, "listing")));
+  EXPECT_TRUE(Refused(With(pplus, "listing", R"("Project-Rollback")")));
+  EXPECT_TRUE(Refused(With(pplus, "listing", R"("../open-brawl")")));
+  EXPECT_TRUE(Refused(With(pplus, "listing", R"("")")));
+  EXPECT_TRUE(Refused(With(pplus, "listing", "1")));
+  EXPECT_TRUE(Refused(Without(pplus, "serial")));
+  EXPECT_TRUE(Refused(With(pplus, "serial", "0")));
+  EXPECT_TRUE(Refused(With(pplus, "serial", "1.5")));
+  EXPECT_TRUE(Refused(With(pplus, "serial", R"("2")")));
+  EXPECT_FALSE(Refused(With(pplus, "serial", "4096")));
   // Textures stay the engine's.
   EXPECT_TRUE(Refused(With(pplus, "textures", R"("bundle")")));
   EXPECT_FALSE(Refused(Without(pplus, "textures")));
@@ -372,7 +491,9 @@ TEST(OrcaBundle, LoadsASignedBundle)
   const auto bundle = p.Load(signer, &error);
   ASSERT_TRUE(bundle) << error;
   EXPECT_EQ(bundle->dir, p.dir);
-  EXPECT_EQ(bundle->sd_image_hash, Orca::HashFile(p.dir + "sd.raw"));
+  EXPECT_EQ(bundle->sd_image_hash, Orca::Mod::ChunkedSha256File(p.dir + "sd.raw", 65536));
+  EXPECT_EQ(bundle->sd_image_hash.size(), 64u);
+  EXPECT_EQ(bundle->jitwarm, "warm");
   ASSERT_EQ(bundle->patches.size(), 1u);
   EXPECT_EQ(bundle->patches[0].first, "PPLUS32.patches");
   EXPECT_EQ(bundle->patches[0].second, PATCHES);
@@ -396,6 +517,7 @@ TEST(OrcaBundle, LoadsASignedBundle)
   EXPECT_TRUE(profile->mod->flat);
   EXPECT_TRUE(profile->mod->EngineTextures());
   EXPECT_EQ(profile->mod->JitWarmPath(), p.dir + "PPLUS32.jitwarm");
+  EXPECT_EQ(profile->mod->flat_jitwarm, "warm");
   EXPECT_EQ(profile->mod->sd_image_hash, bundle->sd_image_hash);
 
   // The launcher boot uses the card as it is, with the hash checked at load.
@@ -547,12 +669,53 @@ TEST(OrcaBundle, RefusesTamperedBundles)
           "PPLUS32.patches:");
   refused("no mod.json", [&](Flat& f) { File::Delete(f.dir + "mod.json"); }, "no mod.json");
   EXPECT_GE(n, 24);
+
+  // The listing and the launcher the boot runs.
+  const std::string root = TempDir();
+  Flat p = MakePPlus(root + "p/", signer);
+  std::string error;
+  EXPECT_TRUE(p.Load(signer, &error, nullptr, "project-rollback")) << error;
+  EXPECT_FALSE(p.Load(signer, &error, nullptr, "open-brawl"));
+  EXPECT_NE(error.find("for listing project-rollback, and this is open-brawl"), std::string::npos)
+      << error;
+  const std::string& dol = p.files["Project+ Netplay Launcher.dol"];
+  std::vector<u8> bytes(dol.begin(), dol.end());
+  const Orca::Mod::BootLauncher same{"Project+ Netplay Launcher.dol", bytes};
+  EXPECT_TRUE(p.Load(signer, &error, &same)) << error;
+  const Orca::Mod::BootLauncher other_name{"Other.dol", bytes};
+  EXPECT_FALSE(p.Load(signer, &error, &other_name));
+  EXPECT_NE(error.find("the boot runs Other.dol, not the bundle's launcher"), std::string::npos)
+      << error;
+  // What the boot read is what is checked: other bytes are refused even with the file intact, and
+  // the file changing after the boot read it changes nothing.
+  std::vector<u8> changed = bytes;
+  changed[100] ^= 1;
+  const Orca::Mod::BootLauncher changed_bytes{"Project+ Netplay Launcher.dol", changed};
+  EXPECT_FALSE(p.Load(signer, &error, &changed_bytes));
+  EXPECT_NE(error.find("doesn't match"), std::string::npos) << error;
+  ASSERT_TRUE(File::WriteStringToFile(p.dir + "Project+ Netplay Launcher.dol", "swapped"));
+  EXPECT_TRUE(p.Load(signer, &error, &same)) << error;
+  EXPECT_FALSE(p.Load(signer, &error));
+  // A Brawl bundle has no launcher: a launcher boot isn't its.
+  Flat b = MakeBrawl(root + "b/", signer);
+  EXPECT_FALSE(b.Load(signer, &error, &same));
+  EXPECT_NE(error.find("not the bundle's launcher (none)"), std::string::npos) << error;
+  // No key trusted: nothing loads.
+  EXPECT_FALSE(Orca::Mod::LoadFlatBundle(b.dir, {}, &error));
+  EXPECT_NE(error.find("trusts no bundle key"), std::string::npos) << error;
+  File::DeleteDirRecursively(root);
 }
 
 // The key: mod mode over the signed lines and the card; a JIT seed change keeps it, anything that
 // reaches the game moves it; never a legacy key.
 TEST(OrcaBundle, KeyMovesWithTheBundleOnly)
 {
+  // A launcher profile's key reads the running game's ID (SConfig), as in a session.
+  SConfig::Init();
+  struct ConfigDone
+  {
+    ~ConfigDone() { SConfig::Shutdown(); }
+  } config_done;
   const Signer signer(1);
   const std::string root = TempDir();
   std::string error;
@@ -615,13 +778,14 @@ TEST(OrcaBundle, FindsItsFolder)
   File::DeleteDirRecursively(root);
 }
 
-// What a session decides at boot: a good bundle is mod mode; a refused one, or none, is legacy.
+// What a session decides at boot: a good bundle is mod mode; a refused one Orca found by itself, or
+// none, is legacy; one ORCA_MOD_DIR named and that is refused refuses the session.
 TEST(OrcaBundle, ResolvesOrFallsBack)
 {
   const ScopedEnv session("ORCA_SESSION", "1");
   const ScopedEnv no_dir("ORCA_MOD_DIR", "");
-  const ScopedEnv game("YOUGAME_GAME", "open-brawl");
-  const Signer signer(1);
+  const ScopedEnv brawl_game("YOUGAME_GAME", "open-brawl");
+  const Signer signer(1), stranger(2);
   const PublicKey key = signer.Key();
   Orca::Mod::TrustKeysForTests(std::span(&key, 1));
   const std::string root = TempDir();
@@ -660,30 +824,76 @@ TEST(OrcaBundle, ResolvesOrFallsBack)
   EXPECT_FALSE(Orca::Mod::Requested());
   EXPECT_EQ(Orca::Mod::ResolvedFlat(), nullptr);
   EXPECT_EQ(Orca::Mod::Dir(), "");
+  b.Sign(signer);
 
-  // Project+: the launcher's own folder; the boot must run the bundle's launcher.
+  // A build that trusts no key: legacy, whatever is there.
+  Orca::Mod::TrustKeysForTests({});
+  Orca::Mod::ResetResolvedBundle();
+  Orca::Mod::ResolveBundle(nullptr);
+  EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::None);
+  Orca::Mod::TrustKeysForTests(std::span(&key, 1));
+
+  // Project+: the launcher's own folder; the boot must run the bundle's launcher, for its listing.
+  const ScopedEnv pplus_game("YOUGAME_GAME", "project-rollback");
   Flat p = MakePPlus(root + "run/project-rollback/", signer);
   const std::string launcher = p.dir + "Project+ Netplay Launcher.dol";
+  const std::string& dol = p.files["Project+ Netplay Launcher.dol"];
+  const std::vector<u8> dol_bytes(dol.begin(), dol.end());
   Orca::Mod::ResetResolvedBundle();
-  Orca::Mod::ResolveBundle(&launcher);
+  Orca::Mod::ResolveBundle(&launcher, dol_bytes);
+  EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Flat);
+  Orca::Mod::ResetResolvedBundle();
+  Orca::Mod::ResolveBundle(&launcher);  // no reader bytes: the file
   EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Flat);
   const std::string other = p.dir + "sd.raw";
   Orca::Mod::ResetResolvedBundle();
   Orca::Mod::ResolveBundle(&other);
   EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::None);
-  // A launcher bundle found for a disc boot (ORCA_MOD_DIR pointing at it): refused.
+  // Under another listing: refused.
   {
-    const ScopedEnv dir("ORCA_MOD_DIR", p.dir);
+    const ScopedEnv game("YOUGAME_GAME", "open-brawl");
     Orca::Mod::ResetResolvedBundle();
-    Orca::Mod::ResolveBundle(nullptr);
+    Orca::Mod::ResolveBundle(&launcher, dol_bytes);
     EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::None);
   }
   // Signed by a key the build doesn't pin: refused.
-  Orca::Mod::TrustKeysForTests({});
+  const PublicKey stranger_key = stranger.Key();
+  Orca::Mod::TrustKeysForTests(std::span(&stranger_key, 1));
   Orca::Mod::ResetResolvedBundle();
-  Orca::Mod::ResolveBundle(&launcher);
+  Orca::Mod::ResolveBundle(&launcher, dol_bytes);
   EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::None);
   Orca::Mod::TrustKeysForTests(std::span(&key, 1));
+
+  // ORCA_MOD_DIR names the folder: a good bundle plays; anything refused refuses the session.
+  {
+    const ScopedEnv dir("ORCA_MOD_DIR", p.dir);
+    Orca::Mod::ResetResolvedBundle();
+    Orca::Mod::ResolveBundle(&launcher, dol_bytes);
+    EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Flat);
+    // A launcher bundle for a disc boot.
+    Orca::Mod::ResetResolvedBundle();
+    Orca::Mod::ResolveBundle(nullptr);
+    EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Refused);
+    EXPECT_TRUE(Orca::Mod::Requested());
+    EXPECT_EQ(Orca::Mod::ResolvedFlat(), nullptr);
+    EXPECT_NE(Orca::Mod::ResolvedError().find("this boot is a disc's"), std::string::npos)
+        << Orca::Mod::ResolvedError();
+    // No key trusted.
+    Orca::Mod::TrustKeysForTests({});
+    Orca::Mod::ResetResolvedBundle();
+    Orca::Mod::ResolveBundle(&launcher, dol_bytes);
+    EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Refused);
+    EXPECT_NE(Orca::Mod::ResolvedError().find("trusts no bundle key"), std::string::npos);
+    Orca::Mod::TrustKeysForTests(std::span(&key, 1));
+  }
+  {
+    File::CreateFullPath(root + "empty/");
+    const ScopedEnv dir("ORCA_MOD_DIR", root + "empty");
+    Orca::Mod::ResetResolvedBundle();
+    Orca::Mod::ResolveBundle(nullptr);
+    EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Refused);
+    EXPECT_NE(Orca::Mod::ResolvedError().find("neither tree.json nor mod.json"), std::string::npos);
+  }
 
   // ORCA_MOD_DIR with a tree.json: mods phase 1's tree bundle, as before.
   {
@@ -700,12 +910,12 @@ TEST(OrcaBundle, ResolvesOrFallsBack)
   {
     const ScopedEnv no_session("ORCA_SESSION", "");
     Orca::Mod::ResetResolvedBundle();
-    Orca::Mod::ResolveBundle(&launcher);
+    Orca::Mod::ResolveBundle(&launcher, dol_bytes);
     EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::None);
     EXPECT_FALSE(Orca::Mod::Requested());
   }
   Orca::Mod::ResetResolvedBundle();
-  Orca::Mod::TrustKeysForTests({});
+  Orca::Mod::ResetTrustedKeysForTests();
   File::SetUserPath(D_USER_IDX, old_user);
   File::DeleteDirRecursively(root);
 }
