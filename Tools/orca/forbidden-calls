@@ -35,7 +35,9 @@ Rules:
 A hit is keyed by (rule, path, token), where the token is the call or header plus its string
 argument when it has one (getenv("ORCA_X"), a URL). The baseline holds how many of each key are
 allowed. A key whose count goes up is a NEW hit, so moving or editing a line is quiet, while a
-new call, a new environment variable, a new URL or a new library is reported.
+new call, a new environment variable, a new URL or a new library is reported. A file with no
+baseline entries (Orca's first change to an upstream file) is allowed what upstream Dolphin's copy
+of it has, so only Orca's additions count.
 Exit status: 0 clean, 1 new hits, 2 error.
 """
 
@@ -103,7 +105,7 @@ RULES = {
         (re.compile(r"\b(?:Common::)?(?:HttpRequest|WebSocket)\b|\bNSURL(?:Session\w*|Connection|"
                     r"Request|MutableURLRequest)\b|\bNSMutableURLRequest\b|\bWinHttp\w+|"
                     r"\bInternetOpen\w*|\bURLDownloadToFile\w*|\bsf::Http\b"), "name"),
-        (re.compile(r'"(?:https?|wss?|ftp)://(?:[^"\\]|\\.)*"'), "name"),
+        (re.compile(r'"(?:https?|wss?|ftp)://(?:[^"\\]|\\.)*"'), "string"),
     ],
     "file-open": [
         (include(r"fstream|filesystem|fcntl\.h|sys/mman"), "include"),
@@ -160,41 +162,40 @@ CMAKE_KEYWORDS = {"PUBLIC", "PRIVATE", "INTERFACE", "LINK_PUBLIC", "LINK_PRIVATE
 INCLUDE_LINE = re.compile(r"\s*#\s*(?:include|import)\b")
 
 
-def strip_c_comments(text):
-    """Blanks out // and /* */ comments, keeping strings, line breaks and columns."""
-    out = list(text)
-    i, n = 0, len(text)
-    while i < n:
-        c = text[i]
-        nxt = text[i + 1] if i + 1 < n else ""
-        if c == "/" and nxt == "/":
-            j = text.find("\n", i)
-            j = n if j < 0 else j
-            for k in range(i, j):
-                out[k] = " "
-            i = j
-        elif c == "/" and nxt == "*":
-            j = text.find("*/", i + 2)
-            j = n if j < 0 else j + 2
-            for k in range(i, j):
-                if out[k] != "\n":
-                    out[k] = " "
-            i = j
-        elif c == "R" and nxt == '"' and (i == 0 or not (text[i - 1].isalnum() or text[i - 1] == "_")):
-            m = re.match(r'R"([^ ()\\\t\n]{0,16})\(', text[i:])
-            if m:
-                end = text.find(")" + m.group(1) + '"', i + m.end())
-                i = n if end < 0 else end + len(m.group(1)) + 2
-            else:
-                i += 1
-        elif c == '"' or (c == "'" and not (i > 0 and text[i - 1].isalnum() and nxt.isalnum())):
-            j = i + 1
-            while j < n and text[j] != c and text[j] != "\n":
-                j += 2 if text[j] == "\\" else 1
-            i = j + 1
-        else:
-            i += 1
-    return "".join(out)
+C_LEXEMES = re.compile(
+    r"(?P<line>//[^\n]*)"
+    r"|(?P<block>/\*.*?(?:\*/|\Z))"
+    r'|(?P<raw>\b(?:u8|[uUL])?R"(?P<d>[^ ()\\\t\n]{0,16})\(.*?\)(?P=d)")'
+    r"|(?P<num>\b[0-9][0-9A-Za-z_'.]*)"  # 1'000 is a number, not a character literal
+    r'|(?P<str>"(?:[^"\\\n]|\\.)*"?)'
+    r"|(?P<chr>'(?:[^'\\\n]|\\.)*'?)",
+    re.S,
+)
+
+
+def _spaces(text):
+    return re.sub(r"[^\n]", " ", text)
+
+
+def strip_c_comments(text, blank_strings=False):
+    """Blanks out // and /* */ comments, keeping line breaks and columns. String and character
+    literals are kept, or with blank_strings their contents become spaces (quotes stay)."""
+
+    def sub(m):
+        kind = m.lastgroup if m.lastgroup != "d" else "raw"
+        t = m.group(0)
+        if kind in ("line", "block"):
+            return _spaces(t)
+        if not blank_strings or kind == "num":
+            return t
+        if kind == "raw":
+            q = t.index('"')
+            return t[: q + 1] + _spaces(t[q + 1 : -1]) + t[-1]
+        if len(t) >= 2 and t[-1] == t[0]:
+            return t[0] + _spaces(t[1:-1]) + t[-1]
+        return t[0] + _spaces(t[1:])
+
+    return C_LEXEMES.sub(sub, text)
 
 
 def strip_cmake_comments(text):
@@ -207,11 +208,11 @@ def norm(token):
 
 def scan_c(path, text):
     """Yields (rule, token, line number, line text)."""
-    code = strip_c_comments(text)
-    lines = code.split("\n")
+    lines = strip_c_comments(text).split("\n")
+    bare_lines = strip_c_comments(text, blank_strings=True).split("\n")
     raw = text.split("\n")
     peer = any(r.match(path) for r in PEER_RE)
-    for no, line in enumerate(lines, 1):
+    for no, (line, bare) in enumerate(zip(lines, bare_lines), 1):
         if not line.strip():
             continue
         is_include = INCLUDE_LINE.match(line) is not None
@@ -221,7 +222,9 @@ def scan_c(path, text):
             for rx, kind in pats:
                 if is_include != (kind == "include"):
                     continue
-                for m in rx.finditer(line):
+                # Calls and names are matched with string contents blanked (no "select (" in a
+                # message), then read back from the real line so a string argument is kept.
+                for m in rx.finditer(line if kind in ("include", "string") else bare):
                     if kind == "include":
                         token = "#include " + m.group(1)
                     elif kind.startswith("call"):
@@ -232,13 +235,13 @@ def scan_c(path, text):
                             continue  # std::bind, asio::connect are not socket calls
                         if kind == "call-c" and qual not in ("", "::", "std::"):
                             continue  # HostFileSystem::Rename is not rename(2)
-                        token = norm(m.group(0))
+                        token = norm(line[m.start() : m.end()])
                         if qual in (".", "->"):
                             token = token.lstrip(".->")
                             token = "." + token
                     else:
-                        token = norm(m.group(0))
-                    if rule == "file-open" and USER_DIR.search(line):
+                        token = norm(line[m.start() : m.end()])
+                    if rule == "file-open" and USER_DIR.search(bare):
                         continue
                     yield rule, token, no, raw[no - 1].strip() if no - 1 < len(raw) else line.strip()
 
@@ -404,7 +407,21 @@ def main():
     except (layerlib.GitError, OSError, ValueError) as e:
         layerlib.die("forbidden-calls: baseline: %s" % e)
 
-    new_keys = {k: (n, baseline.get(k, 0)) for k, n in counts.items() if n > baseline.get(k, 0)}
+    # A file the baseline has never seen (Orca's first change to an upstream Dolphin file) is held
+    # to upstream's own hits in it, so only what Orca adds is new.
+    fresh = sorted(set(h["path"] for h in hits) - set(k[1] for k in baseline))
+    upstream = Counter()
+    try:
+        for p, text in read_files(repo, base_commit, fresh):
+            for rule, token, _, _ in scan_text(p, text):
+                upstream[(rule, p, token)] += 1
+    except (layerlib.GitError, OSError) as e:
+        layerlib.die("forbidden-calls: upstream copies: %s" % e)
+
+    def allowed(k):
+        return baseline.get(k, 0) + upstream.get(k, 0)
+
+    new_keys = {k: (n, allowed(k)) for k, n in counts.items() if n > allowed(k)}
     gone = {k: (counts.get(k, 0), n) for k, n in baseline.items() if counts.get(k, 0) < n}
     marked = {}
     if args.since and new_keys:
@@ -421,7 +438,7 @@ def main():
 
     if args.json:
         json.dump({"scanned_files": len(paths), "upstream_base": base_commit, "hits": len(hits),
-                   "new": report,
+                   "new_to_baseline": fresh, "new": report,
                    "gone": [{"rule": r, "path": p, "token": t, "count": c, "baseline": b}
                             for (r, p, t), (c, b) in sorted(gone.items())],
                    "all": hits if args.list else None}, sys.stdout, indent=2)
@@ -431,6 +448,10 @@ def main():
     out = sys.stdout.write
     out("forbidden-calls: %d files at %s, %d hits, upstream base %s\n" % (
         len(paths), args.rev or "the working tree", len(hits), base_commit[:10]))
+    if fresh:
+        out("%d file%s new to the baseline, held to upstream's hits in %s: %s\n" % (
+            len(fresh), "" if len(fresh) == 1 else "s", "it" if len(fresh) == 1 else "them",
+            ", ".join(fresh[:8]) + (" ..." if len(fresh) > 8 else "")))
     if args.list:
         for h in sorted(hits, key=lambda h: (h["path"], h["line"])):
             out("  %-10s %s:%d  %s\n" % (h["rule"], h["path"], h["line"], h["token"]))

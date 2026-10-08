@@ -133,7 +133,7 @@
 1	http	Source/Core/Common/WebSocket.cpp	#include Common/CurlTLS.h
 1	http	Source/Core/Common/WebSocket.cpp	#include Common/WebSocket.h
 1	http	Source/Core/Common/WebSocket.cpp	#include curl/curl.h
-21	http	Source/Core/Common/WebSocket.cpp	WebSocket
+12	http	Source/Core/Common/WebSocket.cpp	WebSocket
 1	http	Source/Core/Common/WebSocket.cpp	curl_easy_cleanup(
 2	http	Source/Core/Common/WebSocket.cpp	curl_easy_getinfo(
 1	http	Source/Core/Common/WebSocket.cpp	curl_easy_init(
@@ -246,7 +246,7 @@
 2	socket	Source/Core/Core/IOS/Network/Socket.cpp	accept(
 1	socket	Source/Core/Core/IOS/Network/Socket.cpp	bind(
 2	socket	Source/Core/Core/IOS/Network/Socket.cpp	closesocket(
-4	socket	Source/Core/Core/IOS/Network/Socket.cpp	connect(
+1	socket	Source/Core/Core/IOS/Network/Socket.cpp	connect(
 1	socket	Source/Core/Core/IOS/Network/Socket.cpp	getpeername(
 4	socket	Source/Core/Core/IOS/Network/Socket.cpp	getsockopt(
 2	socket	Source/Core/Core/IOS/Network/Socket.cpp	ioctlsocket(
@@ -255,7 +255,7 @@
 2	socket	Source/Core/Core/IOS/Network/Socket.cpp	select(
 1	socket	Source/Core/Core/IOS/Network/Socket.cpp	sendto(
 1	socket	Source/Core/Core/IOS/Network/Socket.cpp	setsockopt(
-3	socket	Source/Core/Core/IOS/Network/Socket.cpp	socket(
+1	socket	Source/Core/Core/IOS/Network/Socket.cpp	socket(
 2	dynload	Source/Core/Core/Orca/CrashNote.cpp	GetModuleHandleW(
 1	file-open	Source/Core/Core/Orca/Disc.cpp	File::IOFile
 1	file-open	Source/Core/Core/Orca/DiscVerify.cpp	#include filesystem
@@ -452,7 +452,6 @@
 1	file-open	Source/Core/Core/Orca/UX/NameTags.cpp	File::ReadFileToString(
 1	file-open	Source/Core/Core/Orca/UX/NameTags.cpp	File::WriteStringToFile(
 1	env	Source/Core/Core/Orca/UX/OnlineMenu.cpp	std::getenv("ORCA_TEST_HOLD"
-1	socket	Source/Core/Core/Orca/UX/OnlineMenu.cpp	select(
 1	env	Source/Core/Core/Orca/UX/Overlay.cpp	std::getenv("ORCA_UX_OVERLAY_DEMO"
 1	env	Source/Core/Core/Orca/UX/Overlay.cpp	std::getenv("ORCA_UX_STATS"
 1	env	Source/Core/Core/Orca/UX/Probe.cpp	std::getenv("ORCA_TEST_DEV_GAME"
@@ -533,7 +532,6 @@
 1	file-open	Source/Core/Core/Rollback/Loopback.cpp	std::ifstream
 1	env	Source/Core/Core/Rollback/OnlineMatch.cpp	Orca::GetEnv("ORCA_TEST_LEAVE_AT"
 1	peer-parse	Source/Core/Core/Rollback/OnlineMatch.cpp	Net::DecodePad(
-1	socket	Source/Core/Core/Rollback/OnlineMatch.cpp	select(
 2	peer-parse	Source/Core/Core/Rollback/SessionPort.cpp	Net::DecodePad(
 1	file-open	Source/Core/Core/State.cpp	#include filesystem
 4	file-open	Source/Core/Core/State.cpp	File::Delete(
