@@ -6441,6 +6441,47 @@ After the three reviews (2bc06a00f6, fcd67d6b57; same Mac, same local stack):
   stalls; the gate read the disc from the internal disk.)
 - Still not run: Mac<->PC (`xplat.py`), the Windows freeze and the origin hitch on the PC.
 
+## Orca 0.3.35 (2026-10-08)
+
+Branch `release-0.3.35`, from `release-0.3.34` (`9f262a506b`, 0.3.34 as shipped). Two side branches
+off that same commit, merged with `--no-ff` (no conflicts: they touch different files):
+
+- `orca-active` (`c3866a3771`, `ffb48d7a56`): the app gets `orca active <interval_s> <active_s>
+  <inputs> <mode> <pads>` every 60 s while a game runs, and once more when it stops (ORCA.md
+  "Activity lines"). Embedded, the first comes after `ready`. Observation only: on its branch the
+  Brawl and Project+ hash logs equal 0.3.34's (`4474f0d28c16`, `d8801b31d2a5`). Today's desktop app
+  logs the line and does nothing else with it; counting play from it is a YouGame change. Not yet
+  compiled on Windows (MSVC `/WX`). Review 2 asked for the two-Orca perf gate on the release that
+  carries it (the frame hook and the local pad path read for it).
+- `orca-swapchain-resize-0334` (`781ada5721`): on Windows, when D3D11 or D3D12 `ResizeBuffers`
+  can't make the new back buffers, Orca skips the picture and asks for the resize again instead of
+  the assert in `CreateSwapChainBuffers` that ended it with exit `0x80000003` (four field crashes on
+  0.3.30-0.3.34, three players' machines). stderr names the window size and the HRESULT once per
+  change. Checked on the PC: the released 0.3.34 told `rect 0 0 20000 400` exits 2147483651; the
+  branch's build keeps playing, the picture comes back, it quits cleanly. ORCA.md "Windows window
+  resizes".
+- **kCompatVersion stays 25.** ORCA.md: only what changes what the game computes bumps it. Neither
+  branch does: the activity reader reads local pads and the wall clock and writes nothing that
+  reaches emulated memory, the replay, checksums or the key, and the swap-chain change is the D3D
+  renderer's presentation (a skipped picture changes no emulated state; re-runs draw nothing
+  anyway). Outside `Source/Core/VideoBackends/D3D*` (not built on macOS) the merged tree's code is
+  `orca-active`'s, so its hash logs carry over to the Mac build. The key carries the build's git
+  revision anyway, so 0.3.34 and 0.3.35 never meet.
+- ORCA.md: the compatibility line said `ux=24`; it has been 25 since 0.3.34.
+
+Checks (Mac, worktree `orca-rel-0335`, `build`, Release, `orca-cmake-flags.txt` + tests):
+
+- dolphin-nogui + tests build from clean (ccache): the same 13 warnings as 0.3.34's full build, none
+  new (Orca's only one is `YouGameRoom.cpp:3076`'s `-Wsign-compare`). The binary says
+  `Dolphin [release-0.3.35] 2609-623`.
+- `Orca*` with the fake keyframe server and both Brawl discs: 640 run, 621 passed, 19 skipped
+  (OrcaLive 14, OrcaUXLatency 2, OrcaKitDraw 1, OrcaDisc 2: no `Sys/Orca` beside this tree's test
+  binary), 0 failed; `OrcaActivity` 26/26.
+
+Not run here (the release's own steps): hash logs and synctests on this build, the two-Orca perf
+gate against 0.3.34, the Windows build (the first MSVC compile of `Activity.cpp`) and its gtests,
+the swap-chain repro on the release bits, Mac <-> PC.
+
 ## Explaining it to people (internal)
 
 **One sentence:**
