@@ -122,6 +122,11 @@
 1	http	Source/Core/Common/CurlTLS.h	#include curl/curl.h
 2	http	Source/Core/Common/CurlTLS.h	curl_easy_setopt(
 1	http	Source/Core/Common/CurlTLS.h	curl_version_info(
+1	file-open	Source/Core/Common/FatFsUtil.cpp	File::CreateDir(
+1	file-open	Source/Core/Common/FatFsUtil.cpp	File::Delete(
+2	file-open	Source/Core/Common/FatFsUtil.cpp	File::DeleteDirRecursively(
+8	file-open	Source/Core/Common/FatFsUtil.cpp	File::IOFile
+3	file-open	Source/Core/Common/FatFsUtil.cpp	File::Rename(
 1	http	Source/Core/Common/HttpRequest.cpp	#include Common/CurlTLS.h
 1	http	Source/Core/Common/HttpRequest.cpp	#include Common/HttpRequest.h
 1	http	Source/Core/Common/HttpRequest.cpp	#include curl/curl.h
@@ -172,6 +177,7 @@
 3	file-open	Source/Core/Core/Boot/Boot.cpp	File::IOFile
 1	file-open	Source/Core/Core/Boot/Boot.cpp	File::OpenFStream(
 1	file-open	Source/Core/Core/Boot/Boot.cpp	std::ifstream
+1	file-open	Source/Core/Core/Boot/Boot.h	File::IOFile
 1	app-channel	Source/Core/Core/BootManager.cpp	Orca::Status::Error(
 1	app-channel	Source/Core/Core/BootManager.cpp	Orca::Status::Error("settings"
 1	app-channel	Source/Core/Core/BootManager.cpp	Orca::Status::State("booting"
@@ -195,10 +201,12 @@
 1	build-deps	Source/Core/Core/CMakeLists.txt	target_link_libraries(core ZLIB::ZLIB)
 1	build-deps	Source/Core/Core/CMakeLists.txt	target_link_libraries(core androidcommon)
 1	build-deps	Source/Core/Core/CMakeLists.txt	target_link_libraries(core audiocommon)
+1	build-deps	Source/Core/Core/CMakeLists.txt	target_link_libraries(core bcrypt)
 1	build-deps	Source/Core/Core/CMakeLists.txt	target_link_libraries(core common)
 1	build-deps	Source/Core/Core/CMakeLists.txt	target_link_libraries(core cpp-ipc::ipc)
 1	build-deps	Source/Core/Core/CMakeLists.txt	target_link_libraries(core cubeb)
 1	build-deps	Source/Core/Core/CMakeLists.txt	target_link_libraries(core discio)
+1	build-deps	Source/Core/Core/CMakeLists.txt	target_link_libraries(core ed25519)
 1	build-deps	Source/Core/Core/CMakeLists.txt	target_link_libraries(core enet::enet)
 1	build-deps	Source/Core/Core/CMakeLists.txt	target_link_libraries(core expr)
 1	build-deps	Source/Core/Core/CMakeLists.txt	target_link_libraries(core fmt::fmt)
@@ -301,6 +309,17 @@
 2	socket	Source/Core/Core/NetPlayClient.cpp	enet_peer_timeout(
 77	socket	Source/Core/Core/NetPlayClient.cpp	sf::Packet
 2	app-channel	Source/Core/Core/Orca/Activity.cpp	Status::Line(
+1	env	Source/Core/Core/Orca/Bridge.cpp	GetEnv("YOUGAME_STDIO"
+2	env	Source/Core/Core/Orca/Bundle.cpp	GetEnv("ORCA_MOD_DIR"
+2	env	Source/Core/Core/Orca/Bundle.cpp	GetEnv("YOUGAME_GAME"
+1	file-open	Source/Core/Core/Orca/Bundle.cpp	#include filesystem
+2	file-open	Source/Core/Core/Orca/Bundle.cpp	File::IOFile
+1	file-open	Source/Core/Core/Orca/Bundle.cpp	fs::directory_iterator
+1	peer-parse	Source/Core/Core/Orca/Bundle.cpp	ParseManifest(
+2	peer-parse	Source/Core/Core/Orca/Bundle.cpp	ParseSignature(
+1	peer-parse	Source/Core/Core/Orca/Bundle.cpp	UX::ParseGamePatches(
+2	peer-parse	Source/Core/Core/Orca/Bundle.cpp	reinterpret_cast<
+1	peer-parse	Source/Core/Core/Orca/Bundle.h	ParseSignature(
 1	app-channel	Source/Core/Core/Orca/CrashNote.cpp	GetStdHandle
 1	app-channel	Source/Core/Core/Orca/CrashNote.cpp	STD_ERROR_HANDLE
 2	dynload	Source/Core/Core/Orca/CrashNote.cpp	GetModuleHandleW(
@@ -324,8 +343,36 @@
 1	peer-parse	Source/Core/Core/Orca/JitWarm.h	Decode(
 1	file-open	Source/Core/Core/Orca/Launch.cpp	#include filesystem
 1	file-open	Source/Core/Core/Orca/Launch.cpp	File::ReadFileToString(
+2	env	Source/Core/Core/Orca/Mod.cpp	GetEnv("ORCA_MOD_DIR"
+1	env	Source/Core/Core/Orca/Mod.cpp	GetEnv("ORCA_SD_CACHE"
+1	file-open	Source/Core/Core/Orca/Mod.cpp	#include filesystem
+1	file-open	Source/Core/Core/Orca/Mod.cpp	File::CreateFullPath(
+4	file-open	Source/Core/Core/Orca/Mod.cpp	File::Delete(
+1	file-open	Source/Core/Core/Orca/Mod.cpp	File::IOFile
+1	file-open	Source/Core/Core/Orca/Mod.cpp	File::ReadFileToString(
+2	file-open	Source/Core/Core/Orca/Mod.cpp	File::Rename(
+1	file-open	Source/Core/Core/Orca/Mod.cpp	File::WriteStringToFile(
+1	file-open	Source/Core/Core/Orca/Mod.cpp	fs::directory_iterator
+4	file-open	Source/Core/Core/Orca/Mod.cpp	fs::remove
+21	peer-parse	Source/Core/Core/Orca/Mod.cpp	.get<
+1	peer-parse	Source/Core/Core/Orca/Mod.cpp	Mod::ParseManifest(
+1	peer-parse	Source/Core/Core/Orca/Mod.cpp	Mod::ParseTree(
+1	peer-parse	Source/Core/Core/Orca/Mod.cpp	ParseManifest(
+1	peer-parse	Source/Core/Core/Orca/Mod.cpp	ParseTree(
+3	peer-parse	Source/Core/Core/Orca/Mod.cpp	ParseWhole(
+1	peer-parse	Source/Core/Core/Orca/Mod.cpp	UX::ParseGamePatches(
+1	peer-parse	Source/Core/Core/Orca/Mod.cpp	picojson::parse(
+1	peer-parse	Source/Core/Core/Orca/Mod.cpp	reinterpret_cast<
+1	peer-parse	Source/Core/Core/Orca/Mod.cpp	std::stoul(
+1	peer-parse	Source/Core/Core/Orca/Mod.h	ParseManifest(
+1	peer-parse	Source/Core/Core/Orca/Mod.h	ParseTree(
 1	env	Source/Core/Core/Orca/Music.cpp	Orca::GetEnv("ORCA_MUSIC"
 2	app-channel	Source/Core/Core/Orca/PanicDiag.cpp	stderr
+1	app-channel	Source/Core/Core/Orca/Perf.cpp	Status::Line("orcaperf"
+2	env	Source/Core/Core/Orca/Perf.cpp	GetEnv("ORCA_PERF_AUTO"
+1	env	Source/Core/Core/Orca/Perf.cpp	GetEnv("ORCA_TEST_COMMANDS"
+2	env	Source/Core/Core/Orca/Perf.cpp	GetEnv("ORCA_TEST_PERF"
+2	env	Source/Core/Core/Orca/Perf.cpp	GetEnv("ORCA_TEST_SLOW"
 1	env	Source/Core/Core/Orca/Profile.cpp	EnvIs(
 1	env	Source/Core/Core/Orca/Profile.cpp	EnvIs("ORCA_SESSION"
 1	env	Source/Core/Core/Orca/Profile.cpp	EnvIs("ORCA_TEST_FULL_SNAPSHOTS"
@@ -359,6 +406,16 @@
 3	peer-parse	Source/Core/Core/Orca/Profile.cpp	std::sscanf(
 1	peer-parse	Source/Core/Core/Orca/Profile.cpp	std::strtoul(
 1	env	Source/Core/Core/Orca/Profile.h	GetEnv(
+2	env	Source/Core/Core/Orca/Sandbox.cpp	GetEnv("ORCA_NET"
+1	file-open	Source/Core/Core/Orca/Sandbox.cpp	#include fcntl.h
+2	file-open	Source/Core/Core/Orca/Sandbox.cpp	CreateFileW(
+2	file-open	Source/Core/Core/Orca/Sandbox.cpp	open(
+1	file-open	Source/Core/Core/Orca/Sandbox.cpp	unlink(
+1	socket	Source/Core/Core/Orca/Sandbox.cpp	#include arpa/inet.h
+1	socket	Source/Core/Core/Orca/Sandbox.cpp	#include netinet/in.h
+1	socket	Source/Core/Core/Orca/Sandbox.cpp	#include winsock2.h
+1	socket	Source/Core/Core/Orca/Sandbox.cpp	#include ws2tcpip.h
+4	socket	Source/Core/Core/Orca/Sandbox.cpp	inet_pton(
 1	env	Source/Core/Core/Orca/Session/DirectLink.cpp	GetEnv("ORCA_DIRECT"
 1	env	Source/Core/Core/Orca/Session/DirectLink.cpp	GetEnv("ORCA_DIRECT_BLOCK"
 1	env	Source/Core/Core/Orca/Session/DirectLink.cpp	GetEnv("ORCA_DIRECT_FORCE"
@@ -432,7 +489,7 @@
 1	app-channel	Source/Core/Core/Orca/Session/Online.cpp	Status::Report("network"
 1	app-channel	Source/Core/Core/Orca/Session/Online.cpp	Status::Report("peer_left"
 1	env	Source/Core/Core/Orca/Session/Online.cpp	Env(
-1	env	Source/Core/Core/Orca/Session/Online.cpp	Env("ORCA_DISC_SHA1"
+2	env	Source/Core/Core/Orca/Session/Online.cpp	Env("ORCA_DISC_SHA1"
 1	env	Source/Core/Core/Orca/Session/Online.cpp	Env("ORCA_JOIN"
 2	env	Source/Core/Core/Orca/Session/Online.cpp	Env("ORCA_NAME"
 1	env	Source/Core/Core/Orca/Session/Online.cpp	Env("ORCA_ROOM"
@@ -442,6 +499,7 @@
 1	env	Source/Core/Core/Orca/Session/Online.cpp	Env("YOUGAME_TOKEN"
 1	env	Source/Core/Core/Orca/Session/Online.cpp	GetEnv(
 1	file-open	Source/Core/Core/Orca/Session/Online.cpp	File::ReadFileToString(
+1	file-user	Source/Core/Core/Orca/Session/Online.cpp	File::ReadFileToString(
 1	peer-parse	Source/Core/Core/Orca/Session/PadCodec.h	DecodePad(
 1	peer-parse	Source/Core/Core/Orca/Session/Replay.h	std::from_chars(
 1	app-channel	Source/Core/Core/Orca/Session/YouGameRoom.cpp	Orca::Status::Cap("direct"
@@ -480,16 +538,18 @@
 1	http	Source/Core/Core/Orca/Session/YouGameRoom.cpp	curl_easy_strerror(
 1	http	Source/Core/Core/Orca/Session/YouGameRoom.cpp	curl_slist_append(
 1	http	Source/Core/Core/Orca/Session/YouGameRoom.cpp	curl_slist_free_all(
-75	peer-parse	Source/Core/Core/Orca/Session/YouGameRoom.cpp	.get<
+76	peer-parse	Source/Core/Core/Orca/Session/YouGameRoom.cpp	.get<
 2	peer-parse	Source/Core/Core/Orca/Session/YouGameRoom.cpp	DecodeDirectPacket(
 2	peer-parse	Source/Core/Core/Orca/Session/YouGameRoom.cpp	DecodeInlineKeyframe(
 2	peer-parse	Source/Core/Core/Orca/Session/YouGameRoom.cpp	DecodePacket(
 2	peer-parse	Source/Core/Core/Orca/Session/YouGameRoom.cpp	ParseIce(
-8	peer-parse	Source/Core/Core/Orca/Session/YouGameRoom.cpp	ParseJson(
+10	peer-parse	Source/Core/Core/Orca/Session/YouGameRoom.cpp	ParseJson(
+1	peer-parse	Source/Core/Core/Orca/Session/YouGameRoom.cpp	ParseRoomJson(
 1	peer-parse	Source/Core/Core/Orca/Session/YouGameRoom.cpp	picojson::parse(
 1	peer-parse	Source/Core/Core/Orca/Session/YouGameRoom.h	DecodeDirectPacket(
 1	peer-parse	Source/Core/Core/Orca/Session/YouGameRoom.h	DecodeInlineKeyframe(
 1	peer-parse	Source/Core/Core/Orca/Session/YouGameRoom.h	DecodePacket(
+1	peer-parse	Source/Core/Core/Orca/Session/YouGameRoom.h	ParseRoomJson(
 1	app-channel	Source/Core/Core/Orca/Status.cpp	stdout
 1	env	Source/Core/Core/Orca/ThreadPriority.cpp	GetEnv("ORCA_THREAD_QOS"
 3	peer-parse	Source/Core/Core/Orca/UX/Chat.cpp	DecodeField(
@@ -512,14 +572,14 @@
 1	http	Source/Core/Core/Orca/UX/ControllerSource.cpp	curl_easy_strerror(
 1	http	Source/Core/Core/Orca/UX/ControllerSource.cpp	curl_slist_append(
 1	http	Source/Core/Core/Orca/UX/ControllerSource.cpp	curl_slist_free_all(
-1	peer-parse	Source/Core/Core/Orca/UX/ControllerSource.cpp	ParseSnapshotEvent(
+2	peer-parse	Source/Core/Core/Orca/UX/ControllerSource.cpp	ParseSnapshotEvent(
 7	peer-parse	Source/Core/Core/Orca/UX/Controllers.cpp	.get<
 1	peer-parse	Source/Core/Core/Orca/UX/Controllers.cpp	GCAdapter::DecodeChannel(
 2	peer-parse	Source/Core/Core/Orca/UX/Controllers.cpp	ParsePad(
 2	peer-parse	Source/Core/Core/Orca/UX/Controllers.cpp	ParsePort(
-1	peer-parse	Source/Core/Core/Orca/UX/Controllers.cpp	ParseSnapshotEvent(
+3	peer-parse	Source/Core/Core/Orca/UX/Controllers.cpp	ParseSnapshotEvent(
 1	peer-parse	Source/Core/Core/Orca/UX/Controllers.cpp	picojson::parse(
-1	peer-parse	Source/Core/Core/Orca/UX/Controllers.h	ParseSnapshotEvent(
+2	peer-parse	Source/Core/Core/Orca/UX/Controllers.h	ParseSnapshotEvent(
 2	peer-parse	Source/Core/Core/Orca/UX/GameFont.cpp	DecodeCoverage(
 5	peer-parse	Source/Core/Core/Orca/UX/GameFont.cpp	ReadU16(
 2	peer-parse	Source/Core/Core/Orca/UX/GameFont.cpp	Rfnt::Parse(
@@ -527,11 +587,11 @@
 1	peer-parse	Source/Core/Core/Orca/UX/GameFont.cpp	reinterpret_cast<
 1	peer-parse	Source/Core/Core/Orca/UX/GameFont.h	Parse(
 1	peer-parse	Source/Core/Core/Orca/UX/GameFont.h	ReadU16(
-1	app-channel	Source/Core/Core/Orca/UX/GamePatches.cpp	Orca::Status::Error("profile"
-1	file-open	Source/Core/Core/Orca/UX/GamePatches.cpp	File::ReadFileToString(
+3	app-channel	Source/Core/Core/Orca/UX/GamePatches.cpp	Orca::Status::Error("profile"
+2	file-open	Source/Core/Core/Orca/UX/GamePatches.cpp	File::ReadFileToString(
 2	peer-parse	Source/Core/Core/Orca/UX/GamePatches.cpp	.Read32(
 2	peer-parse	Source/Core/Core/Orca/UX/GamePatches.cpp	ParseCondition(
-2	peer-parse	Source/Core/Core/Orca/UX/GamePatches.cpp	ParseGamePatches(
+4	peer-parse	Source/Core/Core/Orca/UX/GamePatches.cpp	ParseGamePatches(
 1	peer-parse	Source/Core/Core/Orca/UX/GamePatches.h	ParseGamePatches(
 1	env	Source/Core/Core/Orca/UX/Kit.cpp	std::getenv("ORCA_UX_KIT_DEMO"
 2	app-channel	Source/Core/Core/Orca/UX/NameTags.cpp	Orca::Status::Line("orcacontrols"
@@ -706,7 +766,7 @@
 2	app-channel	Source/Core/DolphinNoGUI/Embed.cpp	STDOUT_FILENO
 1	app-channel	Source/Core/DolphinNoGUI/Embed.cpp	STD_ERROR_HANDLE
 1	app-channel	Source/Core/DolphinNoGUI/Embed.cpp	STD_OUTPUT_HANDLE
-1	app-channel	Source/Core/DolphinNoGUI/Embed.cpp	stderr
+2	app-channel	Source/Core/DolphinNoGUI/Embed.cpp	stderr
 5	app-channel	Source/Core/DolphinNoGUI/Embed.cpp	stdout
 1	file-open	Source/Core/DolphinNoGUI/Embed.cpp	fdopen(
 5	peer-parse	Source/Core/DolphinNoGUI/Embed.cpp	ParseInt(
@@ -714,42 +774,50 @@
 1	peer-parse	Source/Core/DolphinNoGUI/Embed.cpp	std::strtol(
 1	peer-parse	Source/Core/DolphinNoGUI/Embed.cpp	std::strtoull(
 1	peer-parse	Source/Core/DolphinNoGUI/Embed.h	ParseRect(
-3	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	Orca::Status::Error(
+4	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	Orca::Status::Error(
 1	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	Orca::Status::Error("cancelled"
 1	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	Orca::Status::Error("profile"
-6	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	Orca::Status::Finish(
+1	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	Orca::Status::ExitCode(
+7	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	Orca::Status::Finish(
 1	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	Orca::Status::PrintCaps(
 1	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	Orca::Status::SetErrorListener(
 1	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	Orca::Status::SetFirstFrameListener(
 1	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	Orca::Status::SetOutput(
 1	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	STDERR_FILENO
-5	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	fmt::print(
-16	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	stderr
-1	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	stdout
-1	env	Source/Core/DolphinNoGUI/MainNoGUI.cpp	Orca::GetEnv("ORCA_TEST_COMMANDS"
+11	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	fmt::print(
+21	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	stderr
+3	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	stdout
+2	env	Source/Core/DolphinNoGUI/MainNoGUI.cpp	Orca::GetEnv("ORCA_TEST_COMMANDS"
+1	env	Source/Core/DolphinNoGUI/MainNoGUI.cpp	Orca::GetEnv("ORCA_TEST_PERF"
 1	env	Source/Core/DolphinNoGUI/MainNoGUI.cpp	setenv("ORCA_PROFILE"
 1	env	Source/Core/DolphinNoGUI/MainNoGUI.cpp	setenv("ORCA_SESSION"
 1	env	Source/Core/DolphinNoGUI/MainNoGUI.cpp	std::getenv("HOME"
 2	file-open	Source/Core/DolphinNoGUI/MainNoGUI.cpp	File::CreateFullPath(
 1	file-open	Source/Core/DolphinNoGUI/MainNoGUI.cpp	File::DeleteDirRecursively(
 1	file-user	Source/Core/DolphinNoGUI/MainNoGUI.cpp	File::Copy(
+1	app-channel	Source/Core/DolphinNoGUI/Platform.cpp	Orca::Status::Cap("gfx"
 1	app-channel	Source/Core/DolphinNoGUI/Platform.cpp	Orca::Status::Cap("music"
-1	app-channel	Source/Core/DolphinNoGUI/Platform.cpp	Orca::Status::PrintCaps(
+1	app-channel	Source/Core/DolphinNoGUI/Platform.cpp	Orca::Status::CapsSettled(
+2	app-channel	Source/Core/DolphinNoGUI/Platform.cpp	Orca::Status::PrintCaps(
 1	app-channel	Source/Core/DolphinNoGUI/Platform.cpp	Orca::Status::SetAppCaps(
+1	app-channel	Source/Core/DolphinNoGUI/Platform.cpp	Orca::Status::Stopping(
+1	app-channel	Source/Core/DolphinNoGUI/Platform.cpp	Orca::Status::UpdateCaps(
 1	app-channel	Source/Core/DolphinNoGUI/Platform.cpp	fmt::print(
 1	app-channel	Source/Core/DolphinNoGUI/Platform.cpp	stderr
 3	env	Source/Core/DolphinNoGUI/Platform.cpp	Orca::GetEnv("ORCA_TEST_COMMANDS"
 1	file-open	Source/Core/DolphinNoGUI/Platform.cpp	File::CreateFullPath(
 1	peer-parse	Source/Core/DolphinNoGUI/Platform.cpp	Chat::Parse(
 2	peer-parse	Source/Core/DolphinNoGUI/Platform.cpp	Embed::ParseRect(
+1	peer-parse	Source/Core/DolphinNoGUI/Platform.cpp	Perf::ParseGfx(
 1	peer-parse	Source/Core/DolphinNoGUI/Platform.cpp	YgOrb::ParseNotice(
 1	peer-parse	Source/Core/DolphinNoGUI/Platform.cpp	YgOrb::ParseOrb(
 3	peer-parse	Source/Core/DolphinNoGUI/Platform.cpp	std::from_chars(
 1	app-channel	Source/Core/DolphinNoGUI/PlatformHeadless.cpp	stdout
 2	app-channel	Source/Core/DolphinNoGUI/PlatformMacos.mm	stderr
 1	process	Source/Core/DolphinNoGUI/PlatformMacos.mm	NSWorkspace
-2	app-channel	Source/Core/DolphinNoGUI/PlatformWin32.cpp	stderr
-3	dynload	Source/Core/DolphinNoGUI/PlatformWin32.cpp	GetModuleHandle(
+1	app-channel	Source/Core/DolphinNoGUI/PlatformWin32.cpp	Orca::Status::Error(
+6	app-channel	Source/Core/DolphinNoGUI/PlatformWin32.cpp	stderr
+4	dynload	Source/Core/DolphinNoGUI/PlatformWin32.cpp	GetModuleHandle(
 3	app-channel	Source/Core/DolphinNoGUI/PlatformX11.cpp	stderr
 1	env	Source/Core/DolphinNoGUI/PlatformX11.cpp	std::getenv("DISPLAY"
 1	env	Source/Core/UICommon/UICommon.cpp	getenv("DOLPHIN_EMU_USERPATH"
@@ -761,12 +829,17 @@
 1	file-open	Source/Core/UICommon/UICommon.cpp	File::CreateFullPath(
 1	file-user	Source/Core/UICommon/UICommon.cpp	File::CreateEmptyFile(
 46	file-user	Source/Core/UICommon/UICommon.cpp	File::CreateFullPath(
+1	dynload	Source/Core/VideoBackends/D3D/D3DBase.cpp	#include Common/DynamicLibrary.h
+3	dynload	Source/Core/VideoBackends/D3D/D3DBase.cpp	DynamicLibrary
+1	dynload	Source/Core/VideoBackends/D3D/D3DBase.cpp	GetModuleHandleExW(
 1	build-deps	Source/Core/VideoBackends/D3DCommon/CMakeLists.txt	target_link_libraries(videod3dcommon common)
 1	build-deps	Source/Core/VideoBackends/D3DCommon/CMakeLists.txt	target_link_libraries(videod3dcommon spirv_cross)
 1	build-deps	Source/Core/VideoBackends/D3DCommon/CMakeLists.txt	target_link_libraries(videod3dcommon use_pch)
 1	build-deps	Source/Core/VideoBackends/D3DCommon/CMakeLists.txt	target_link_libraries(videod3dcommon videocommon)
 1	dynload	Source/Core/VideoBackends/D3DCommon/D3DCommon.cpp	#include Common/DynamicLibrary.h
 2	dynload	Source/Core/VideoBackends/D3DCommon/D3DCommon.cpp	DynamicLibrary
+1	dynload	Source/Core/VideoBackends/D3DCommon/D3DCommon.cpp	GetProcAddress(
+1	dynload	Source/Core/VideoBackends/D3DCommon/D3DCommon.cpp	LoadLibraryExW(
 1	dynload	Source/Core/VideoBackends/D3DCommon/FxcCache.cpp	GetModuleHandleW(
 4	file-open	Source/Core/VideoBackends/D3DCommon/FxcCache.cpp	File::IOFile
 1	file-open	Source/Core/VideoBackends/D3DCommon/FxcCache.cpp	File::ReadFileToString(
