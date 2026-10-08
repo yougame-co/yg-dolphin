@@ -28,7 +28,9 @@ Every Orca release candidate (a `rel-0.3.x` branch) passes these on the Mac befo
 dated **Checked** entry (for 0.3.14 and 0.3.15, at the end of "The queue's character select") gives
 the numbers. Runs are headless (`-v Null`), muted (`No Audio Output`), nice'd, and go through the
 Mac's run queue (`Tools/orca/run-lock.py check -- <command>`, `perf` for anything timed: "Sharing the
-Mac: the run queue" below), which waits while Luis plays and while the machine is busy.
+Mac: the run queue" below), which waits while Luis plays and while the machine is busy. Luis plays
+when `ps -axo comm=` lists his app's Orca (ORCA.md checklist step 0; `run-lock.py status` prints
+`Luis's Orca: open`); anything that starts Orca outside the queue checks the same first.
 
 1. **Build** `dolphin-emu-nogui` and `tests` (Release, the release's CMake flags): no new warnings.
 2. **Unit tests:** `Binaries/Tests/tests --gtest_filter='Orca*'`, none failing (the live, network
@@ -93,8 +95,10 @@ other. Now:
   more than 30% of memory is free, one at a time under 20 and 20%, none above. `perf -- <command>`
   is for anything timed (two-Orca perf gates, frame-time A/Bs, `perf.mjs`, `selfmatch.mjs`): it has
   the machine to itself, waiting for the checks to finish, and no check starts while it waits or
-  runs. Both wait while Luis's Orca is open (`ps -axo comm=`: the app bundle's
-  `Resources/runtimes/orca` or the old `yougame-desktop/orca/apps/`), printing `waiting: Luis's Orca
+  runs. Both wait while Luis's Orca is open (`ps -axo comm=`, whole paths only: the Orca bundled in
+  `/Applications/YouGame.app` or a version in `~/Library/Application Support/yougame-desktop/orca/apps/`;
+  a packaged test copy's bundled Orca and a test copy's `--user-data-dir` downloads are not his, so a
+  check no longer yields to an agent's own test copy), printing `waiting: Luis's Orca
   is open`, and go first come, first served: one ticket per run in `orca-run-queue/` beside the
   locks, locked by its run, so a run that dies leaves none behind. A check that is running when Luis
   opens his Orca stops (exit 10: three checks are six test Orcas beside his game, enough to make it
@@ -6297,6 +6301,145 @@ a capture failure at the origin stops the boot instead of playing on without dro
 Windows can't delete the NAND folder on the way back; the low items (name cleaning in replays,
 128 MB download caps, a wall-clock rebuild watchdog, a `static_assert` on the decode budget).
 Server side (YouGame): replay ids and `orca2:` only, before online reopens.
+
+## Orca 0.3.33 (2026-10-08)
+
+Branch `release-0.3.33`, from `release-0.3.32s` (`2a58d1d59e`, 0.3.32 as shipped). Cherry-picked
+with `-x`, resolved by hunk:
+
+- From `release-0.3.32` (the old feature branch, built on the unshipped 0.3.31; its name-tag and
+  slider commits are already in 0.3.32): the ranked game-start (`d0c8b0e254`, `3c0bc9e5bc`,
+  `be0b827c16`, `16bbb50686`: game-start at the first frame with the fighters in; a set left before
+  game 1 is void), and the small items `a15d5a140e` (Windows alerts never throw; each C++ exception
+  names itself), `0f423ddba5` + `c872898d24` (run-lock: wait out macOS's new-program check; only
+  Luis's installed Orca counts as Luis playing; `0f423ddba5` came along so the repo's run-lock is
+  the live one), `75aa74ee5c` (release checklist step 0), `43fa9cd712` (boot logs off at the first
+  frame, embedded), `d523d584bc` (`--verify` NAND cleanup). On 0.3.32's input-replay joins the
+  game-start needed one change: `ResultsTracker::Rebase` (a rebuilt join) takes the rebuilt frame's
+  fight, fighters in, as already begun, as it takes the set's games (test added). The only conflict
+  was `Results.cpp` (0.3.32's `Rebase` beside the new `Confirm` signature).
+- `pc/ranked-css-keep-triggers` `3e6a38a86f`: L and R held at lock-in reach the game on games 2+ of a
+  ranked set (Zero Suit Samus, Sheik, Nana-led Ice Climbers), plus the ORCA.md line.
+- SDL never opens the GameCube adapter (`SDL_HINT_JOYSTICK_HIDAPI_GAMECUBE` and
+  `SDL_HINT_HIDAPI_LIBUSB_GAMECUBE` "0", after the config's hints): on Windows Orca's SDL held the
+  Wii U adapter through WinUSB and the app's helper got "Permission ... denied"
+  (`gc-adapter-admin-windows`).
+- Input delay: no page's `delay N` (or `delay auto`) now means a fixed 3, never the adaptive delay
+  (`OnlineMatch.cpp` `DEFAULT_DELAY`). The adaptive code and `Config::input_delay` 2 stay for the
+  tests and the loopback harness.
+- `orca-publish-public.sh`: Luis's name and handle may appear (Luis, 2026-10-07); everything else in
+  the denylist stays. `orca-package-macos.sh`: `-ffile-prefix-map`/`-fdebug-prefix-map` map the
+  checkout to `.`, and the packager fails if the executable still names the checkout, build or home
+  path (0.3.32's named the checkout 421 times). The Windows release scripts (PC, outside the repo)
+  need the same: MSVC has no `-ffile-prefix-map`; `/d1trimfile:<root>\` (for `__FILE__`) and
+  `/PDBALTPATH:%_PDB%` (the PDB path in the exe) are the candidates, untested here.
+- kCompatVersion 24 (Project+ ranked sets now set `FIGHT_SEEN`; the character order keeps L and R at
+  `+0x20E`).
+
+Not in it: a long-session join fix (the after-release measurement had not written its
+recommendation when this branch was cut). Tests (Mac, `build`, Release): dolphin-nogui + tests
+build with no new warnings (one `-Wsign-compare` in `YouGameRoom.cpp`'s replay notice, from 0.3.32);
+Orca* with the discs: 594 run, 577 passed, 17 skipped (OrcaLive 14, OrcaUXLatency 2, OrcaKitDraw 1),
+0 failed; `run-lock-test.py` 35/35; headless ranked smoke: Brawl game 1's fighters in at frame 6866
+(fight from 6584), Project+ 3486 (from 3346). Harness runs that send no `delay N` (queue-e2e,
+xplat.py) now play at a fixed 3: a perf gate against 0.3.32 must give both builds the same delay.
+
+## Orca 0.3.34: fresh starts (2026-10-08, in progress)
+
+Branch `freshboot-0.3.34`, from `release-0.3.33` (`69b97f49d3`). Design and measurements behind it:
+the lead's scratchpad `freshboot/design.md` and `rel0332s-runs/longjoin/` (0.3.32's input-replay
+join rebuilt about 600 frames a second on the M4 Pro: 25 min of host play took 162-178 s to plug in,
+about 40 min passed the 3-minute rebuild limit, slower machines failed at 10-12 min). ORCA.md "Fresh
+starts" says what it does (published: shorter joins only, never why peer state can't be loaded).
+
+- **The origin moves to the built main menu** (`DecideOrigin`): the first boundary whose main menu
+  has been built (`muMenuMain`, step running, exit code 0, `+0xAC8` set) for 30 frames, captured
+  before that boundary's hook. Before it every Orca plays `CanonicalBootPads` (port 1 neutral, 2-4
+  unplugged, its own pad read and dropped), `PortsAt` is port 1 with no values, the hook's `alone` and
+  the header's `free` are false, and the app's commands wait. A launch joiner runs that boot
+  unthrottled and unseen, pumping its join meanwhile, then blocks in `JoinHost` at its origin as it
+  did at frame 0. A game whose menu isn't read (`FreshMove::Supported`) keeps frame 0. No origin by
+  frame 6,000: no joins either way (`origin_failed`, friends dropped with `refused`).
+- **Replay** (`Replay.h`, `Keyframe.cpp`): `first_frame` after the frame count; frames `[first, K)`
+  only; a `menu_exit` word per frame (0, 25, 30, 31), only on the first. The decoder refuses
+  `first > K`, other exits, an exit anywhere else. Ids stay `replay-<K>-<hash8>`: frames restart at
+  the origin's after each fresh start. kCompatVersion 25.
+- **Fresh start** (`FreshStart`): `RestoreLocal` (shared with the join's load, the cancelled join's
+  way back and the queue image) puts back the origin's image and NAND on a new ring; JIT cleared; the
+  replay restarts at M with `menu_exit` on its first frame; the port values restart with this
+  player's own from M; unthrottled, unseen and muted (`SetCatchingUp`) through the tail, whose hook
+  runs as a re-run playing the replay's events (`FreshMove::Frame` applies the exit). The tail ends
+  30 frames after the character select's task is readable (cap 600).
+- **Triggers** (`DecideFreshStart`): `host` arms a queue room's, run at the first boundary after the
+  welcome names the queue (Hold until then: no keyframe), once per room. A friend at a solo host
+  with more than 600 frames of history since its last start (`ORCA_TEST_FRESH_AFTER`), after the
+  single-player hold. A `prepare-join` no longer pre-makes a keyframe.
+- **Port 1's pick in a queue room**: not the input gate (no new match-block bytes, nothing the joiner
+  computes): after the tail the host holds neutral pads until the room's header is in, then
+  `Queue::StepOwnPick` steers its own hand from its queue identity with the same integer steering,
+  as its own inputs, recorded like any other; done when down on the pick in its colour, at 10 s, or
+  when a session starts (the player's pad then). Without `queue2` or a pick it just hands back.
+- **NAND restore** writes only differing files and removes the rest (`ReplaceNandTree`).
+- **Knobs**: `ORCA_TEST_FRESH=off`, `ORCA_TEST_FRESH_AFTER=<frames>`, `ORCA_TEST_FAST_UNTIL=<frame>`.
+
+Answers taken for the design's open questions (defaults, revisit with Luis): a friend arriving
+during a Versus fight against CPUs fresh-starts at once; the friends rules carry is a follow-up; the
+in-place threshold is 10 s. `Profile::boot_nand_frame` (`BootNandFrame`) is unused since 0.3.32.
+
+Checks on this branch (Mac, `build`, Release; two-Orca runs on the local rooms stack, dev tickets):
+
+- dolphin-nogui + tests build. `Orca*`: 614 run, 594 passed, 20 skipped (OrcaLive 14, OrcaUXLatency
+  2, OrcaKitDraw 1, OrcaDisc 2: this tree's test binary finds no `Sys/Orca` beside its bundle;
+  `OrcaKeyframe.HttpStoreAgainstAFakeServer` 1, which passes against `fake_keyframes.py`), 0 failed.
+- Origins: Brawl Rev 2 frame 1524 (RAM `f0c74d6dd64230b5`, NAND 37,807 KB, 17-31 ms), Project+ frame
+  230 (`0c80f10df0a8be22`, 2,416 KB), the same throttled, unthrottled (launch joiner) and with
+  `ORCA_TEST_FAST_UNTIL`. A fresh start restores in 22-126 ms; its tail runs 1524-1588 (Brawl) or
+  230-266 (Project+) in about 0.2-0.35 s.
+- `long-join.py` (`ORCA_TEST_FAST_UNTIL` hosts): a friend plugs in 1.2 s after `join` at a Brawl
+  host at frame 29,573 and 1.7 s at a Project+ host at 37,828; earlier, 1.2 s at 54,287 (15 min)
+  and 1.7 s at 50,677. 0.3.32 needed 162-178 s at 25 min.
+- A launch join (`ORCA_JOIN`, its boot run unseen to its origin): plugged in 2.3 s.
+- `queue-e2e.mjs --q2 --queue ranked`: Brawl 228 checksums each, Project+ 233, each host's pick put
+  back in 70 frames, both back on their own select after the set. `--queue casual` fails after
+  game 1 ("the character select never went on") on this stack with 0.3.33's build too.
+- `online-menu-dropin.py` (in place, `--invite` both cases), `versus-cpu-dropin.py` (18 checksums),
+  `dropin-commands.py`: pass. A join held by `ORCA_TEST_HOLD` fresh-starts once the hold ends.
+- Harness-only runs (hash logs) take none of this: no room, so no origin, no replay scope and no
+  steering; their RAM is unchanged by construction. Not run: Mac<->PC (`xplat.py`), the Windows
+  restore time (the perf comparison and the hash logs ran after the reviews, below).
+
+After the three reviews (2bc06a00f6, fcd67d6b57; same Mac, same local stack):
+
+- Fixes: a queue host makes no keyframe while its fresh start runs (tail, hold, its own pick being
+  put back), so a join sent at once no longer starts the session mid-steer; the tail's boundaries
+  don't count toward the header's limit; `CaptureOrigin` clears the JIT like every other way into
+  the origin; a failed fresh start lets whoever waits join in place instead of retrying; a replay
+  frame missing below the target fails the join. Test harness (`Harness::Restart`): a restore that
+  starts a new timeline makes its frames first passes. Before it, scene lines, results and the
+  first-pass hooks stopped until the frame number passed the old timeline's, so queue-e2e kept
+  pressing A and Start on a ranked stage select it couldn't see (the perf gate's rollbacks doubled).
+- `Orca*`: 614 run, 594 passed, 0 failed (the same 20 skipped). `YG_SYNCTEST=7`: Brawl casual
+  22,771 and ranked 10,171 re-run frames, Project+ casual 20,951 and ranked 28,651, 0 RAM
+  mismatches. Release step 3 hash logs equal 0.3.33's over every shared frame (Brawl 0-10806,
+  Project+ 0-9005).
+- `queue-e2e --q2 --queue ranked --join-delay 0 --costume 1` (the page's timing): Brawl and
+  Project+ sets 2-0, the host's pick back in costume 1 two frames before port 2 (1668/1670,
+  342/344), matched to plugged in 2.9 s, 229 and 233 checksums each side.
+- `long-join.py --fast-age`: Brawl hosts at frames 9,571 / 55,820 / 127,805 (2, 15, 35 minutes)
+  plugged in 1.1 / 0.9 / 1.4 s, Project+ at 7,706 / 54,493 / 126,499 in 1.8 / 1.6 / 1.7 s; on
+  fcd67d6b57 again, 1.2 s (Brawl, 127,764) and 1.6 s (Project+, 132,882); 13 checksums each side,
+  no desync. In place (`ORCA_TEST_FRESH=off`) into a fight at a 1-minute host: Brawl 9.2 s (4,976
+  frames rebuilt in 7.7 s), Project+ 13.0 s (6,888 in 11.0 s), no desync. `online-menu-dropin.py
+  --pplus`, `versus-cpu-dropin.py --pplus` and `online-menu-dropin.py --disc2 <Rev 1>`: pass.
+- Perf (`gate-0334fb`, the gate-0333 method: a Project+ ranked set, delay 3, 40 +- 8 ms, Metal;
+  both builds unsigned, the same queue-e2e): 0.3.33 (B1-B4) against this branch (C1-C4). Frame
+  numbers restart at the origin, so "at frame 14400" misses the end of this branch's set; compared
+  over each session instead. Joiner, whole set: slow 21.0 / 22.5, hitches here 0.8 / 0.0, stalls
+  12.8 / 11.0, rollbacks 28.8 / 28.5, re-run frames 81.8 / 80.2, snapshot 0.85 / 0.82 ms. Host,
+  last periodic line (about 12,300 frames in): slow 15.8 / 16.8, stalls 0.2 / 0, rollbacks 25.2 /
+  26.0. Within run-to-run spread: no regression. (B3 and B4 were marked tainted by external-SSD
+  stalls; the gate read the disc from the internal disk.)
+- Still not run: Mac<->PC (`xplat.py`), the Windows freeze and the origin hitch on the PC.
 
 ## Explaining it to people (internal)
 

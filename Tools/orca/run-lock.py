@@ -100,9 +100,17 @@ QUEUE = os.path.join(LOCK_DIR, "orca-run-queue")
 SLOTS = max(1, int(os.environ.get("ORCA_CHECK_SLOTS") or 3))
 POLL = float(os.environ.get("ORCA_RUN_LOCK_POLL") or 2)
 REMIND_S = 600
-# Luis's Orca, matched on executable paths only (ps comm), never on whole command lines: a waiting
-# wrapper carrying this pattern in its own arguments would look like him playing.
-LUIS_RE = re.compile(r"Resources/runtimes/orca/Orca\.app/Contents/MacOS/Orca|yougame-desktop/orca/apps/")
+# Luis's Orca, matched on executable paths only (ps comm: the argv[0] the app starts it with, an
+# absolute path), never on whole command lines: a waiting wrapper carrying this pattern in its own
+# arguments would look like him playing. Only his installed app's two places count, whole: the Orca
+# bundled in /Applications/YouGame.app and the versions the app downloads into its data folder. A
+# packaged test copy of the app (desktop/release/..., a copy in /tmp) bundles Orca under the same
+# Resources/runtimes/orca path inside its own .app, and one started with --user-data-dir keeps its
+# downloads there: neither is Luis (until 2026-10-07 both matched, and agents' checks yielded to
+# their own test copies unless run with --no-yield).
+LUIS_APP_DATA = os.path.expanduser("~/Library/Application Support/yougame-desktop/orca/apps")
+LUIS_RE = re.compile(r"^/Applications/YouGame\.app/Contents/Resources/runtimes/orca/Orca\.app/Contents/MacOS/Orca$"
+                     rf"|^{re.escape(LUIS_APP_DATA)}/[^/]+/Orca\.app/Contents/MacOS/Orca$")
 LUIS = "Luis's Orca is open"
 SERIAL_BUSY = "another run with --serial"
 EXIT_GAVE_UP, EXIT_YIELDED, EXIT_DEADLOCK = 9, 10, 11
@@ -141,7 +149,12 @@ def luis_playing():
     if fake:
         return os.path.exists(fake)
     out = subprocess.run(["ps", "-axo", "comm="], capture_output=True, text=True).stdout
-    return any(LUIS_RE.search(line) for line in out.splitlines())
+    return any(is_luis_orca(line) for line in out.splitlines())
+
+
+def is_luis_orca(comm):
+    """Whether one `ps -axo comm=` line is Luis's own Orca (LUIS_RE)."""
+    return bool(LUIS_RE.search(comm.strip()))
 
 
 def machine():

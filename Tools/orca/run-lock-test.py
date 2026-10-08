@@ -613,6 +613,51 @@ class RunLock(unittest.TestCase):
         rl.read_probe(path)
         self.assertEqual(sorted(os.listdir(self.dir)), [".orca-ssd-probe", "load"])
 
+    # ---- whose Orca is Luis's ----
+
+    def test_only_luiss_installed_app_counts(self):
+        spec = importlib.util.spec_from_file_location("run_lock", TOOL)
+        rl = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(rl)
+        tail = "Orca.app/Contents/MacOS/Orca"
+        bundled = "Contents/Resources/runtimes/orca/" + tail
+        luis = [f"/Applications/YouGame.app/{bundled}",
+                f"{rl.LUIS_APP_DATA}/0.3.30/{tail}",
+                f"{rl.LUIS_APP_DATA}/0.3.31/{tail}\n"]
+        others = [
+            # Packaged test copies of the app, and one's own downloads (--user-data-dir).
+            f"{os.path.expanduser('~')}/ClaudeWorktrees/YouGame/x/desktop/release/mac-arm64/YouGame.app/{bundled}",
+            f"/private/tmp/agent-test/YouGame AGENT TEST 0.12.40.app/{bundled}",
+            f"/private/tmp/agent-test/Applications/YouGame.app/{bundled}",
+            f"/tmp/ud/yougame-desktop/orca/apps/0.3.30/{tail}",
+            f"{rl.LUIS_APP_DATA}/../apps-old/0.3.30/{tail}",
+            f"{rl.LUIS_APP_DATA}/0.3.30/nested/{tail}",
+            # Agents' Orcas, a helper beside his, his app itself, a wrapper.
+            f"{os.path.expanduser('~')}/Documents/brawl-dolphin/gate-0331/cand/{tail}",
+            f"/Applications/YouGame.app/{bundled} Helper",
+            "/Applications/YouGame.app/Contents/MacOS/YouGame",
+            f"python3 /Applications/YouGame.app/{bundled}",
+            ""]
+        for comm in luis:
+            self.assertTrue(rl.is_luis_orca(comm), comm)
+        for comm in others:
+            self.assertFalse(rl.is_luis_orca(comm), comm)
+
+        class Ps:
+            def __init__(self, lines):
+                self.stdout = "".join(f"{line}\n" for line in lines)
+        env = os.environ.pop("ORCA_RUN_LOCK_TEST_PLAYING", None)
+        real = rl.subprocess.run
+        try:
+            rl.subprocess.run = lambda *a, **k: Ps(others[:-1])
+            self.assertFalse(rl.luis_playing())
+            rl.subprocess.run = lambda *a, **k: Ps(others[:-1] + [luis[1]])
+            self.assertTrue(rl.luis_playing())
+        finally:
+            rl.subprocess.run = real
+            if env is not None:
+                os.environ["ORCA_RUN_LOCK_TEST_PLAYING"] = env
+
 
 if __name__ == "__main__":
     unittest.main()

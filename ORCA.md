@@ -155,7 +155,10 @@ Dolphin's severity. A Medium or High problem counts as damage unless it is only 
 Masterpiece partitions, which Orca and Project+ never read (some WBFS tools wipe them); each one
 that counts is followed by `orca verify damage <text>`. Last comes `orca verify ok` (exit 0) or
 `orca verify damaged <n>`, n damage lines (exit 2). A file that isn't a disc image prints `orca
-verify unreadable <path>` (exit 1). The signature checks use a temporary NAND, never the player's.
+verify unreadable <path>` (exit 1). The signature checks use a temporary NAND, never the player's:
+a folder in the system's temp folder named for the process (`orca-verify-nand-<pid>-<n>`). A verify
+that is killed (the app's SIGTERM, TerminateProcess on Windows) leaves its folder behind, so each
+verify first removes those whose process is gone.
 A GameCube disc has no hash tree, so only its structure is checked. A good scrubbed Brawl Rev 2
 `.wbfs` reports 9 Low problems: no update partition, no stored image size, and errors in unused
 blocks (8088 in DATA, 1 in each Masterpiece partition).
@@ -272,6 +275,12 @@ Project+.
 
 Every release candidate passes, for Brawl and for Project+:
 
+0. **Nobody playing** on a shared Mac: before each step that starts Orca, `ps -axo comm=` lists
+   neither `/Applications/YouGame.app/Contents/Resources/runtimes/orca/Orca.app/Contents/MacOS/Orca`
+   nor `~/Library/Application Support/yougame-desktop/orca/apps/<version>/Orca.app/Contents/MacOS/Orca`
+   (whole paths: a packaged test copy's own bundled Orca isn't a player's). Test Orcas beside a game
+   in play make it stutter; wait until it closes.
+
 1. **Build** `dolphin-emu-nogui` and `tests` in Release: no new warnings.
 2. **Unit tests:** `Orca*`, none failing.
 3. **Hashlogs** of the default inputs (`bf-mario-link-results.txt` to frame 10800,
@@ -303,7 +312,7 @@ the live build.
   is kept as a journal mark, not bytes. A load restores only the 4 KB pages that changed, and drops
   the JIT blocks in those pages; the rest of the JIT is kept across loads. The EFB is left alone:
   re-run frames draw nothing.
-- **Window:** 7 frames of rollback, 2 frames of input delay by default
+- **Window:** 7 frames of rollback, 3 frames of input delay by default, fixed
   ([Input delay](#input-delay)). Peers exchange a checksum every 60 frames; a mismatch is a desync,
   which unplugs the friend rather than letting the games drift.
 - **Ports.** Online, SI is forced to four GameCube pads, and a port without a player reports no
@@ -371,36 +380,49 @@ change.
 ## Drop-in
 
 The host plays at once. An invited friend joins as if they had plugged a controller into the next
-port. Since the input-replay protocol, a join rebuilds the host's game from the local boot and its
-controller history. Longer histories take longer to rebuild. No peer supplies Dolphin device state,
-RAM images, NAND files, pointers, or arbitrary memory writes.
+port. Since the input-replay protocol, a join rebuilds the host's game from the local origin and its
+controller history. Longer histories take longer to rebuild, so since 0.3.34 a match's history
+starts with the match: before a queue match, and before a friend joins a host that has played on its
+own for a while, the host goes back to its origin (a [fresh start](#fresh-starts)), and the join
+replays only the match's own frames. No peer supplies Dolphin device state, RAM images, NAND files,
+pointers, or arbitrary memory writes.
 
 `Rollback/OnlineMatch.cpp`, `Orca/Session/Session.*`, `Orca/Session/Replay.h`,
 `Orca/Session/Keyframe.*`.
 
 ### How it works
 
-1. **Local origin.** Each process captures its own machine and temporary NAND before frame zero's
-   hook. These trusted local snapshots support replay and returning to the player's own game.
+1. **Local origin.** Every Orca boots the same way up to its origin: port 1 plugged in with
+   nothing pressed, ports 2-4 unplugged, whatever its seat or controller, and no port values. The
+   origin is the first boundary at which the main menu has been built for 30 frames
+   (`OnlineMenu.h` `FreshMove`, `OnlineMatch.h` `DecideOrigin`), captured before that boundary's
+   hook: the process's own machine, temporary NAND and RAM checksum. These trusted local snapshots
+   support replay, fresh starts and returning to the player's own game. Nobody can act during the
+   boot anyway; the main menu's first half second ignores input. A game whose main menu Orca doesn't
+   read takes its origin at its first boundary, with no fresh starts.
 2. **Recording.** The host retains the final controller pads and bounded port metadata for each
    frame. Rollbacks replace predicted inputs with the winning inputs. Typed rules-header and
    clear-ready events run through the same trusted UI handlers at their original phase.
 3. **Offer.** A background thread compresses and encrypts a replay through boundary K. The
    canonical id is `replay-<frame>-<first eight hash digits>`. AES-GCM and the transport checksum
    detect corruption; the decoder independently validates every peer-supplied field.
-4. **Rebuild.** The friend restores only its own origin and re-executes frames [0, K), unthrottled
-   and unrendered. At K it applies the recorded boundary hook and checks its complete MEM1/MEM2
-   checksum against the host. A mismatch or cancellation returns to its own local game.
-   Historical result and timeout notifications are rebased without reporting old events.
+4. **Rebuild.** The friend restores only its own origin and re-executes frames [M, K) from it (M:
+   the origin's frame, which the replay names), unthrottled and unrendered. Another origin frame or
+   RAM checksum refuses the join (`room_mismatch`). A launch joiner first runs its own boot to its
+   origin, unseen and unthrottled, taking the host's offer meanwhile. At K it applies the recorded
+   boundary hook and checks its complete MEM1/MEM2 checksum against the host. A mismatch or
+   cancellation returns to its own local game. Historical result and timeout notifications are
+   rebased without reporting old events.
 5. **Catch up and plug in.** The normal rollback session starts at K, catches up from live history,
    and both machines plug in the friend's controller at the same agreed future frame. Heartbeats
    keep the pending seat alive while the replay runs.
 6. **Leave.** The existing agreed unplug and solo-return behavior continues. A failed replay does
    not leave the player's machine on partially reconstructed peer history.
 
-Replays permit at most 216,000 frames (one hour at 60 fps), 64 MiB decompressed data, and a separate
-64 MiB decoded-allocation budget. Port lists have at most four unique seats, names at most 128 bytes,
-controls at most 64 bytes, and queue labels at most 32 bytes. Rebuilding has a three-minute deadline.
+Replays permit frames up to 216,000 (one hour at 60 fps), 64 MiB decompressed data, and a separate
+64 MiB decoded-allocation budget. A replay carries its first frame and only the frames from it.
+Port lists have at most four unique seats, names at most 128 bytes, controls at most 64 bytes, and
+queue labels at most 32 bytes. Rebuilding has a three-minute deadline.
 An over-limit history refuses new joins; existing players keep playing. The `orca2:` compatibility
 prefix isolates the replay protocol from old `orca1:` clients and legacy machine-image payloads.
 
@@ -412,6 +434,50 @@ the room ended reports the room's own code, and one whose host left reports `pee
 
 Only two-player joins have been tested. A Brawl loopback join at frame 2,039 rebuilt the same RAM,
 joined live play in about nine seconds, and then matched 24 live checksums on the test machine.
+
+### Fresh starts
+
+Without them a join rebuilds everything the host played since its Orca booted: about 600 frames a
+second on an M4 Pro, so 25 minutes of play took close to three minutes to join, and slower machines
+ran out of time after 10-12. A fresh start (`OnlineMatch.cpp` `FreshStart`) puts the host back at
+its own origin and leaves the main menu for the match's character select with a recorded exit, the
+way the player's own press would (`OnlineMenu.h` `FreshMove`). The exit is a typed event on the
+replay's first frame (`menu_exit`: 25 With Friends, 30 Casual, 31 Ranked), so a joiner replays the
+same move from its own origin. Frame numbers start again at the origin's.
+
+- **When.** A queue room's host always fresh-starts, once per room, at the first boundary after the
+  room's welcome named the queue (`host` arms it). A friend arriving at a host with no session
+  fresh-starts it when the host's history since its last start is over 10 s
+  (`FRESH_FRIENDS_AFTER`); a shorter one, a host that just booted or just fresh-started, joins in
+  place. A host in a single-player mode holds the friend first, as before; anywhere else (the
+  menus, a select, a Versus fight against CPUs, results) the fresh start is immediate. The decision
+  is `DecideFreshStart`, a pure function. Never in a session.
+- **Where to.** A queue room: its Casual or Ranked select. A friend: the Casual or Ranked select the
+  host is on, so Play again re-arms there once the friend leaves; otherwise With Friends.
+- **The tail.** From the origin until the character select has been up 30 frames (600 at most),
+  the host runs unthrottled, unseen and muted, like a rebuild of the same frames: the hook re-runs
+  and plays the replay's typed events, and nothing is announced. Then the game shows as usual; the
+  readers start over on the select.
+- **A queue room's host** then plays nothing until the room's header is in, and its own pick goes
+  back on the room's select by its own inputs (`Queue.h` `StepOwnPick`): the hand to where its token
+  was placed on its own select, A once still over that character, B if it landed on another, X
+  until the costume matches; at most 10 s, and the player's controller takes over once a session
+  starts. These are ordinary inputs, recorded and sent as such. The opponent's pick is steered in as
+  before.
+- **What it costs.** The host's picture holds for the restore and the tail (a few hundred frames,
+  unthrottled). Its history restarts, so a join replays only the tail, the header and the seconds
+  since: how long either player played before no longer matters. After a queue room the player's own
+  game comes back as before (the queue image).
+- **What it resets.** A friends fresh start resets what the host set up alone: Versus rules, items,
+  the stage list, Project+'s Code Menu, a fight against CPUs in progress, tags made in the game. Each
+  player's YouGame tag and controls carry over as port values.
+- **NAND.** A restore rewrites only the files that differ and removes the rest
+  (`ReplaceNandTree`), so a fresh start doesn't write Brawl's 39 MB of boot files again.
+
+Test knobs (`TestKnobsAllowed`): `ORCA_TEST_FRESH=off` (no fresh starts: every join replays from the
+origin in place), `ORCA_TEST_FRESH_AFTER=<frames>` (the friends threshold),
+`ORCA_TEST_FAST_UNTIL=<frame>` (solo frames before it run unthrottled, to age a host quickly, until
+its first fresh start or session).
 
 ### Port values: each player's name and controls
 
@@ -610,8 +676,8 @@ two-minute match where the relay alone gave 7 and 65 rollbacks and 4 stalls. Wit
 the link still carried the match; forced TURN gave a 23-24 ms round trip.
 
 **Wi-Fi.** A machine whose radio leaves the air loses everything sent to or from it for that long.
-Rollback hides up to `input_delay + max_rollback` frames of it (9 frames, about 150 ms, at the
-default 2 + 7); past that the
+Rollback hides up to the input delay plus `max_rollback` frames of it (10 frames, about 167 ms, at
+the default 3 + 7); past that the
 other side stalls. No build fixes a radio's dead time. The fix is the player's: a cable on the
 machine whose radio drops out, or Bluetooth off, or the adapter's power saving off, or another
 channel. To find whose radio it is, run a 10 Hz router ping on each machine during a match and line
@@ -625,12 +691,17 @@ Tests: `OrcaDirectLink*`, `OrcaRoom.TicketSwitchesDirectLinks`, `OrcaSessionDire
 
 ## Input delay
 
-`Orca/Session/Session.cpp`, "Input delay". Two frames by default, like Slippi. Rollback hides the
-rest of the link, jitter and spikes included: a spike past the rollback window costs a stall there,
-not a frame of delay on every input all match long. The embed command `delay N` (1-6) fixes it
-instead.
+Fixed, never adaptive: players want a delay that never moves with the link. The page sends `delay N`
+(1-6; YouGame's `ORCA_DELAY_DEFAULT`, 3 since Orca 0.3.32's v-sync move); with no page, no `caps
+delay` or an old page's `delay auto`, Orca plays at its own fixed 3 (`Rollback/OnlineMatch.cpp`
+`DEFAULT_DELAY`, Orca 0.3.33+; before, the adaptive delay below from 2). Rollback hides the rest of
+the link, jitter and spikes included: a spike past the rollback window costs a stall there, not a
+frame of delay on every input all match long. Each player's delay is their own: a 2 and a 3 play
+together.
 
-The adaptive delay rises only for what rollback can't cover, and only where a little delay cures it:
+The session's adaptive delay (`Orca/Session/Session.cpp`, "Input delay"; `Config::input_delay` 2 is
+its floor) is kept but no online match uses it. It rises only for what rollback can't cover, and only
+where a little delay cures it:
 
 - **The typical link.** The median of this player's latest 15 round trips to the relay (one a
   second) plus the slowest friend's median, halved for one way. The delay covers what the 7-frame
@@ -670,7 +741,7 @@ way between them is about half the sum of the two. `pmed` and `fpmed` are the me
 ## Input latency
 
 Between a press and the frame that shows it, and what Orca does about each part. Online adds the
-input delay on top (2 frames of 16.68 ms).
+input delay on top (3 frames of 16.68 ms).
 
 | Change | Where | Changes emulation | What it does |
 |---|---|---|---|
@@ -1029,7 +1100,7 @@ away.
 | `+0x290`-`+0x297` | A friend's move from the menus |
 
 Any new header (another mode, ruleset, coin or room) starts every track's state fresh. Compatibility:
-anything that changes what the game computes bumps `UX::kCompatVersion` (currently `ux=23`), which is
+anything that changes what the game computes bumps `UX::kCompatVersion` (currently `ux=24`), which is
 in the compatibility key.
 
 ## Input gate
@@ -1161,7 +1232,8 @@ steps 6-10.
 Booting either game lands on the main menu. Brawl's patches skip the strap, the save prompt and the
 title. Project+'s codeset has "Boot Directly to CSS"; one guarded group over `NETBOOST.GCT`'s words in
 memory (`0x80559C20`) makes its default case go to the title and main menu as vanilla Brawl does.
-Project+ reaches its main menu at frame 197.
+Project+ reaches its main menu at frame 197. Online, the boot plays nobody's inputs and ends at the
+origin, the built main menu 30 frames on ([How it works](#how-it-works)).
 
 **A friend who drops in while the host is anywhere but Versus** (`OnlineMenu.h` `FriendsMove`): once
 the main menu has built its pages and run 30 frames, the frame hook leaves the menu with exit code 25,
@@ -1198,12 +1270,44 @@ rated once per set.
    same bytes. Casual: each game is a `finish`, the room stays. Ranked: each game is a `game-report`;
    when one player has 2 agreed wins both send `finish {winner}`; 7 games without that, `finish
    {void}`. The room settles each report by agreement on the outcome; different outcomes void the
-   game.
+   game. Ranked also says when each game began: `game-start` once the first frame with the fight's
+   fighters in is final (below).
 7. After a ranked set's verdict the room stays open for up to five minutes (`set-over`) so the
    players can talk; each Orca leaves when its player moves on ([On-screen UI](#on-screen-ui)).
 
-Leaving a ranked set is a forfeit (the room's 15 s grace). A desync voids the match in progress
-before the players part.
+Leaving a ranked set once game 1 began is a forfeit (the room's 15 s grace); a set left before
+game 1 began (a no-show, a leave or a crash while game 1's stage loads) is void and rates nobody.
+The room knows game 1 began from the leaver's own `game-start` (Orca 0.3.33+) or from a game it
+settled (rooms `game-lobby.ts` `reached`; YouGame `docs/ORCA_ONLINE_UX.md` "3B leaving mid-game").
+A desync voids the match in progress before the players part.
+
+`game-start`: each Orca sends `{"t":"game-start","matchId":M,"id":"g<start>"}` once per ranked game,
+when its fighters are in: the first frame of a fight with `SET_FIGHT_FLAGS`' `FIGHT_SEEN`, which
+`RankedSet::Step` sets when `ReadLiveFight` reads both fighters (Brawl and Project+). That is after
+the stage's loading image (`scMelee` starts under it: Brawl to frame ~169, Project+ to 27): headless
+over `bf-ranked-bo3.txt` and `pplus-ranked.txt` the fighters were in 283 frames (Brawl) and 140
+frames (Project+) after the fight's first frame. So a crash or a 15 s stall while the stage loads
+leaves the set void, as the rule says. `<start>` is still `SET_FIGHT_START`, the fight's first
+frame, the same on both machines and the id that game's `game-report` carries (the room doesn't need
+the two to match). The tracker names it only once the fighters' frame is final
+(`ResultsTracker::Confirm`'s `starts`), so a rollback re-run never sends one for a fight that didn't
+happen, and only for a fight begun after the opponent's plug frame, as the reports. It goes with the
+reports' queue (16 held at most, each up to 60 s until there is a room match) and only in a ranked
+queue room with its match current and the set still open (not after this side's `finish` or the
+verdict); once per game per match. A sudden death is the same game; a fight left without its results
+screen began all the same. The room answers nothing; a refusal (`command-error`, `action:
+"game-start"`) is logged and ignored. Project+ reads the live fight only for this: its records count
+no ledge grabs or time-up snapshot, as before. Tests:
+`OrcaRankedSet.AGameBeginsWhenItsFightersAreIn`, `TrackerSaysWhenEachGameBegan`,
+`AGameBeginsOnlyOnFinalFramesAfterThePlugFrame`, `OrcaRoom.GameStartIsTheRoomsMessage`;
+`Tools/orca/queue-e2e.mjs --q2 --scenario leave --in-game 1`.
+
+On screen the same rule holds (`SetEnd::Model::GameBegan`, from the tracker's starts and results):
+before the set's first game the leaver reads "You left · This set doesn't count" (a no-show "Time's
+up · You didn't pick in time · This set doesn't count") and the other player's countdown runs to "No
+contest"; from it on, "This set counts as a loss" and "They forfeit in". Tests:
+`OrcaSetEndCountdown.BeforeTheFirstGameTheCountdownIsToNoContest`,
+`OrcaSetEndNotice.LeavingBeforeTheFirstGameSaysItDoesNotCount`.
 
 | stdin | |
 |---|---|
@@ -1223,6 +1327,7 @@ before the players part.
 - ranked set: `{"q":"ranked","k":"set","out":"won"|"lost"|"void","by":"games"|"forfeit","score":[...],"r"?:[before,after],"rank"?:"..."}`
 
 Room messages sent (queue rooms only; friends rooms never begin or report): ranked
+`{"t":"game-start","matchId":M,"id":"g<start>"}` and
 `{"t":"game-report","matchId":M,"id":"g<n>","winner":"<participant id>","detail":D}` (or `"draw"` or
 `"void"`), casual `{"t":"finish","matchId":M,"winner":...,"detail":D}`, a set's `finish`. D is
 `{"f","st","c","s","to"}`: the session frame of the first final results-screen reading, the stage,
@@ -1272,10 +1377,11 @@ opponent unplugs; ranked stays locked while the set is open.
 - **No way back to the menus.** A toggled patch group conditioned on the header flips the character
   select's "back to the menu" exit to "character select again", so BACK reloads the select.
 - **Ranked's no-ready timer:** before the set's first fight, once one player has picked and the
-  other hasn't, 60 s; then that port is the no-show, whose own Orca leaves (a forfeit).
+  other hasn't, 60 s; then that port is the no-show, whose own Orca leaves. No game began, so the
+  room voids the set and rates nobody.
 - **Stalls:** a ranked player whose game has waited 15 s on the opponent's inputs, or whose opponent
   went silent, claims the set (`Online::ReportStall`); the room lets it stand when the other side has
-  been silent too.
+  been silent too, and voids it when the stalled player's game never said game 1 began.
 
 Test knob: `ORCA_TEST_QUEUE=casual|ranked[:<coin>][:q2|:solo]` writes the header as a queue room's
 host would, in a harness run or a dev room. Tests: `OrcaOnlineRules*`.
@@ -1535,8 +1641,10 @@ A picks (puts the token down), B takes it back up, **Start locks the pick in** (
 latch; the game never sees that Start). Off-turn players' controllers do nothing. When the second
 player locks in, the stage select comes at once. The tokens stay down between games, so Start alone
 keeps last game's character. A player whose time runs out with the token in hand has it put on the
-character under the hand. Game 1 has no order (both pick at once). State: 16 bytes at `+0x200`
-(magic `YGCO`, the step, the first picker, the lock-ins, the step's start frame).
+character under the hand. Game 1 has no order (both pick at once). L or R held as you lock in
+carries into the game (Zero Suit Samus, Sheik, Project+'s Nana-led Ice Climbers): kept as the turn
+ends and held for that player while the select ends. State: 16 bytes at `+0x200` (magic `YGCO`, the
+step, the first picker, the lock-ins, the step's start frame, the kept L and R at `+0x20E`).
 
 Not yet: Supernova 2025's exact order (ban, the loser's stage, then characters).
 
@@ -1561,7 +1669,8 @@ The page owns the room: Orca never leaves on a skip or a timeout by itself.
 - **The pick's identity.** At ready, Orca keeps the pick (character, costume, where the hand placed
   it) and the page's `queue rating`, as a 13-byte queue identity that rides the session's value
   channel, so every machine has the joiner's at its plug frame.
-- **The room's select.** Game 1: the host's pick is locked; the joiner's pick is put in from its
+- **The room's select.** Game 1: the host's pick goes back on it after its fresh start, by its own
+  inputs ([Fresh starts](#fresh-starts)), and locks once down; the joiner's pick is put in from its
   identity by the input gate (its stick held centred for 20 frames, since the game takes a newly
   plugged pad's stick as its origin, then steered to the place, A once the hand has stopped, X until
   the costume matches; about 1.5-2 s, 10 s at most). Then a 30 s ready timer; both ready, Orca
@@ -1613,9 +1722,11 @@ Everything Orca shows should look like the game drew it. Two ways:
 **Set end** (`Orca/UX/SetEnd.*`): VICTORY or DEFEAT with the set's score and the rating counting from
 the old number to the new one; casual's per-game YOU WON / YOU LOST; "<name> disconnected · They
 forfeit in" with a draining ring that follows the room's 15 s grace (or the 10 s silence limit); "You
-left · This set counts as a loss". After a ranked verdict the room stays open (**set over**): both
-games keep the session on the results screen with the page's chat; each Orca leaves the room when its
-results screen ends, when the player holds Z for 1.5 s, or, with the opponent gone, on Start. A
+left · This set counts as a loss". Before the set's first game began (its fighters in) the room voids
+a leave instead: "No contest in" and "This set doesn't count". After a ranked verdict the room stays
+open (**set over**): both games keep the session on the results screen with the page's chat; each
+Orca leaves the room when its results screen ends, when the player holds Z for 1.5 s, or, with the
+opponent gone, on Start. A
 ranked set's player comes back to their own character select not ready, so the page doesn't search
 by itself; a Start still held from the results screen readies nobody until it is let go.
 
@@ -1644,6 +1755,12 @@ Orca --embed --parent <handle> --rect X Y W H [-u <user>] -e <disc> [-C ...]
   means the app is gone, and Orca quits. When the app's window goes away without a `quit`, Orca
   stops too.
 - Fd 1 is kept for the protocol; everything else Orca or Dolphin prints goes to stderr.
+- The netplay and rollback logs are on at INFO. The boot logs the app turns on with `-C` after boots
+  that died before their first frame (OSREPORT, IOS, IOS_SD and the memory map's MI) go off at the
+  game's first frame, saying `Orca: boot logs off at the first frame: <names>` (`Orca/BootLogs.h`):
+  past it they tell nothing about the boot, and Project+ reads its SD card all game, so they logged
+  about 0.7 MB a minute of play (Brawl about 50 KB). A category the player's Logger.ini turns on
+  stays on.
 
 **Coordinates** are physical pixels (the box's CSS pixels times `devicePixelRatio`). On Windows
 `rect` is relative to the parent's client area and Orca's window is a `WS_CHILD`, so it moves and
@@ -1665,11 +1782,11 @@ only when the box moves inside the window.
 | `perf off\|fps\|detailed` | The overlay's frame meter (frames shown in the last second and the longest; yellow under 59 fps or past 20 ms, red under 50 fps or past two frames). A frame the game itself holds in emulated time (Project+ loading between scenes) counts as the video frames it held, so the meter, `fps` and the `hi` hitch count in `orca stats` show only this machine falling behind; `hil` counts the frames a load alone made slow (`hi` + `hil` is the older builds' `hi`). |
 | `music on\|off` | The player's Music switch ([Music switch](#music-switch)), cap `music`. |
 | `save N` / `load N` / `reset` | Refused in a session. |
-| `prepare-join` | The host invited a friend: capture a keyframe at the next boundary. |
+| `prepare-join` | The host invited a friend: a queue or search under way ends (`orca menu cancel`). Since 0.3.34 no keyframe is made ahead: the friend's arrival may [fresh-start](#fresh-starts) the game first. |
 | `join <code>` / `leave` | Into or out of a friend's game. |
 | `host <code>` / `queue-cancel` / `queue rating <n\|->` | Matchmaking ([Matchmaking](#matchmaking-and-results)). |
 | `direct on\|off` | The player's switch for direct links. |
-| `delay auto` / `delay N` | Adaptive input delay, or a fixed 1-6 frames. |
+| `delay auto` / `delay N` | Orca's default input delay (a fixed 3), or a fixed 1-6 frames. |
 | `chat <name> <text>` | A line from the page's chat, shown while Orca fills the screen. Fields are `encodeURIComponent` of UTF-8 (name at most 24 code points, text 140). Never logged. |
 | `controls <hex>` | The player's own controls ([Each player's own controls](#each-players-own-controls)); the tag gets them at the next character select. A bad profile answers `unsupported controls`. |
 | `orb <x> <y> <size> <lit> <away> <badge>` / `orb blink` / `orb off` | YouGame's overlay button, drawn where the page's own stands under Orca's window. |
