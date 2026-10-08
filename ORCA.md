@@ -1100,8 +1100,8 @@ away.
 | `+0x290`-`+0x297` | A friend's move from the menus |
 
 Any new header (another mode, ruleset, coin or room) starts every track's state fresh. Compatibility:
-anything that changes what the game computes bumps `UX::kCompatVersion` (currently `ux=24`), which is
-in the compatibility key.
+anything that changes what the game computes bumps `UX::kCompatVersion` (currently `ux=25`, since
+0.3.34), which is in the compatibility key.
 
 ## Input gate
 
@@ -1894,3 +1894,13 @@ menu's side panel instead cuts `rect`, keeps `view` and sends `dim 50`.
 (`Tools/orca/iosurface-spike.c`) passed three 1920x1080 IOSurfaces to another process in about 13 ms
 of setup, with per-frame messages in a median 12 us. It would need Metal to present into an
 IOSurface ring and a small N-API module in the app.
+
+### Windows window resizes
+
+When the app resizes Orca's window and the graphics driver can't make the picture at the new size
+(D3D11 or D3D12 `ResizeBuffers` fails: out of memory, a window past 16384 px), Orca skips the picture
+instead of closing, and asks for the resize again on the next frame, then every 30 frames (a new
+size asks at once). The game, and an online match, carry on. stderr says so once per change
+(`Orca: the picture's swap chain has no buffers after a resize ...`, with the window's size and the
+error code) and again when the picture works. A lost graphics device still ends Orca, after saying
+so. Since 0.3.35; before, a refused resize ended Orca (exit `0x80000003`).
