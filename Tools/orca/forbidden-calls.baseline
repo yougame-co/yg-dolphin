@@ -1,6 +1,8 @@
 # Tools/orca/forbidden-calls baseline: the hits Orca's shipped code is allowed today.
 # Rewrite with `Tools/orca/forbidden-calls --update-baseline`; a person reviews the diff.
 # Scanned against upstream base f84df02055ab9610feec48e65648cac5a3c098fa.
+# The per-key maximum of main (0.3.32, 28a2ea7538) and release-0.3.33 (69b97f49d3), so both are
+# clean until 0.3.33 merges into main; then refresh it.
 # <count>\t<rule>\t<path>\t<token>
 1	build-deps	CMakeLists.txt	add_custom_target(dolphin_scmrev)
 1	build-deps	CMakeLists.txt	add_subdirectory(Externals/Bochs_disasm)
@@ -693,7 +695,7 @@
 1	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	Orca::Status::SetFirstFrameListener(
 1	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	Orca::Status::SetOutput(
 1	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	STDERR_FILENO
-5	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	fmt::print(
+7	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	fmt::print(
 16	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	stderr
 1	app-channel	Source/Core/DolphinNoGUI/MainNoGUI.cpp	stdout
 1	env	Source/Core/DolphinNoGUI/MainNoGUI.cpp	Orca::GetEnv("ORCA_TEST_COMMANDS"
