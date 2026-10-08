@@ -4,7 +4,10 @@
 """Which Orca layers a change touches, and what it would take to ship it.
 
   Tools/orca/layer-of-diff                    the working tree against HEAD (plus untracked files)
-  Tools/orca/layer-of-diff A..B               a commit range (the tree diff from A to B)
+  Tools/orca/layer-of-diff A...B              what branch B changed since it left A (merge-base);
+                                              use this for a branch, not A..B
+  Tools/orca/layer-of-diff A..B               the tree diff from A to B (a stale branch shows A's
+                                              newer changes too, reversed)
   Tools/orca/layer-of-diff C                  one commit, against its first parent
   Tools/orca/layer-of-diff A B                same as A..B
   git diff ... | Tools/orca/layer-of-diff -   a unified diff on stdin
@@ -16,7 +19,13 @@ Options:
   --max LAYER       exit 1 if any path (dev paths included) is above LAYER; for gating a diff
                     against its brief (a game-data brief refuses a diff that touches game logic)
   --rules FILE      a layers.txt other than this checkout's
-  --rules-rev REV   read layers.txt at REV (gate a branch with the stable map, not its own)
+  --rules-rev REV   read layers.txt at REV (gate a branch with the stable map, not its own); the
+                    running tools must then be REV's too, or it refuses (exit 2)
+  --repo DIR        the repository to read (default: the one this script is in)
+
+As a gate, run the stable branch's copy against the branch:
+  <main checkout>/Tools/orca/layer-of-diff --repo <branch worktree> --rules-rev origin/main \
+      --max <brief layer> origin/main...<branch>
 
 Layers, least to most risky: game-data, game-logic, engine, engine-sensitive (layers.txt).
 "What it takes to ship" counts only paths that ship in an Orca build (not `dev`):
@@ -25,6 +34,8 @@ Layers, least to most risky: game-data, game-logic, engine, engine-sensitive (la
   game-logic          an Orca release until scripts (S7), then a mod version
   engine              an Orca release
   engine-sensitive    an Orca release, after a person reviews the diff
+Paths whose rule has the `review` flag (game logic carrying competitive policy) are listed under
+"review": a person reviews the diff whatever its layer.
 """
 
 import argparse
@@ -87,6 +98,7 @@ def summarize(changes, rules):
             "binary": c.binary,
             "rule": "%s (line %d)" % (m.rule.glob, m.rule.line),
             "fallback": m.fallback,
+            "review": m.review,
             "ambiguous": ["%s %s (line %d)" % (r.cls, r.source, r.line) for r in m.ties],
         })
     layers = {}
@@ -112,6 +124,7 @@ def summarize(changes, rules):
         "highest_shipped": shipped,
         "ships_as": SHIP[shipped],
         "fallback_paths": [r["path"] for r in rows if r["fallback"]],
+        "review_paths": [r["path"] for r in rows if r["review"]],
         "ambiguous_paths": [r["path"] for r in rows if r["ambiguous"]],
     }
 
@@ -135,11 +148,12 @@ def main():
     try:
         repo = args.repo or layerlib.repo_root()
         if args.rules_rev:
+            layerlib.check_tools_at(repo, args.rules_rev)
             rules = layerlib.load_rules(repo=repo, rev=args.rules_rev)
         else:
             rules = layerlib.load_rules(args.rules)
         changes, what = collect(args, repo)
-    except (layerlib.GitError, layerlib.RulesError, OSError) as e:
+    except (layerlib.GitError, layerlib.RulesError, OSError, ValueError) as e:
         layerlib.die("layer-of-diff: %s" % e)
 
     s = summarize(changes, rules)
@@ -164,13 +178,15 @@ def main():
                 "  (%d dev-only)" % dev if dev else ""))
     out("layer: %s\n" % s["highest"])
     out("ships as: %s\n" % s["ships_as"])
+    if s["review_paths"]:
+        out("review: a person reviews %s (competitive policy)\n" % ", ".join(s["review_paths"]))
     if args.list:
         out("\n")
         for r in sorted(s["files"], key=lambda r: (-layerlib.RANK[r["class"]], r["path"])):
             size = "bin" if r["binary"] else "+%d -%d" % (r["added"], r["deleted"])
-            out("%-17s %-3s %-12s %s  [%s%s]\n" % (
+            out("%-17s %-3s %-12s %s  [%s%s%s]\n" % (
                 r["class"], "dev" if r["dev"] else "", size, r["path"], r["rule"],
-                ", fallback" if r["fallback"] else ""))
+                ", review" if r["review"] else "", ", fallback" if r["fallback"] else ""))
     if s["ambiguous_paths"]:
         out("\nAMBIGUOUS in layers.txt (fix the map):\n")
         for r in s["files"]:

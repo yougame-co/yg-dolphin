@@ -3,7 +3,7 @@
 # Read by Tools/orca/layer-of-diff and Tools/orca/forbidden-calls (shared code in layerlib.py,
 # tests in test_layers.py). Crowd fixes are routed and gated by the layers their diff touches.
 #
-# Line format:   <class>  <glob>  [dev]
+# Line format:   <class>  <glob>  [dev] [review]
 #
 #   class  One of four, from least to most risky:
 #          game-data         Data a game bundle will carry: profiles, .patches, JIT seeds, label
@@ -26,11 +26,18 @@
 #   dev    The path never ships in an Orca build (docs, tests, tools). layer-of-diff leaves dev
 #          paths out when it decides whether a change needs an Orca build, but still reports and
 #          gates on their layer.
+#   review Game logic that carries competitive policy (ranked rules, what a room rates): it ships
+#          as game logic, but a person reviews the diff (layer-of-diff lists it under "review").
 #
 # The most specific rule wins: the one with the most literal (non-wildcard) characters. Two
 # matching rules with the same count and different classes or flags are an error (test_layers.py
 # checks every tracked path). Every path in Orca's own code must be matched by a rule other than
 # the `**` fallback, so a new area is classed on purpose, not by default.
+#
+# A gate runs the stable branch's copies of these tools (a checkout of origin/main) against the
+# branch with --repo, and reads this map with --rules-rev: a branch that edits the map or a tool
+# can't run its own copy through the gate (the tools refuse when the running copy differs from the
+# rev they are told to trust).
 #
 # Directives (one per line, starting with %):
 #   %orca-root <dir/>       Orca's own directories (besides every file that differs from upstream).
@@ -50,12 +57,20 @@
 engine            **
 
 # ---------------------------------------------------------------------------------------------
-# Game data (Data/Sys/Orca: profiles, patches, JIT seeds, label textures).
-game-data         Data/Sys/Orca/**
+# Game data (Data/Sys/Orca: patches, JIT seeds, label textures), by kind: anything else there (a
+# new kind of file, code) is engine until it is named here.
+engine            Data/Sys/Orca/**
+game-data         Data/Sys/Orca/*.patches                 # game code patches (a validator in S5)
+game-data         Data/Sys/Orca/*.jitwarm                 # JIT warm-up seeds
+game-data         Data/Sys/Orca/Textures/**/*.png         # label textures
 engine            Data/Sys/Orca/Fonts/**                  # YouGame card font: an engine asset
 engine            Data/Sys/Orca/Input/**                  # default pad mapping: an engine asset
-# Dolphin's own game settings for Brawl; hashed into the compatibility key like the profile.
-game-data         Data/Sys/GameSettings/RSB*.ini
+# Profiles: [Forced] can set any Dolphin setting on the session's layer (after the universal list,
+# so it can undo it), and [Profile] holds owner-only fields (FrameHook, KeepGameCode, Launcher,
+# SDImageHash...). Engine-sensitive until S4's mod.json is checked field by field.
+engine-sensitive  Data/Sys/Orca/*.ini
+# Dolphin's own game settings for Brawl ([Core], [Video_*]: Dolphin settings), in the key.
+engine-sensitive  Data/Sys/GameSettings/RSB*.ini
 # Branding.
 engine            Data/Orca.{icns,png}
 engine            Installer/Orca.ico
@@ -63,6 +78,7 @@ engine            Installer/Orca.ico
 # ---------------------------------------------------------------------------------------------
 # Orca/: session plumbing.
 engine            Source/Core/Core/Orca/**
+engine-sensitive  Source/Core/Core/Orca/Status.*          # the app protocol on stdout, the app's caps
 engine-sensitive  Source/Core/Core/Orca/Disc.*            # disc check, Rev 1 alias
 engine-sensitive  Source/Core/Core/Orca/DiscVerify.*      # Orca --verify
 engine-sensitive  Source/Core/Core/Orca/JitWarm.*         # .jitwarm file parser
@@ -73,21 +89,27 @@ engine-sensitive  Source/Core/Core/Orca/Mod.*             # mods-p1: mod.json, t
 engine-sensitive  Source/Core/Core/Orca/Session/**
 engine            Source/Core/Core/Orca/Session/Events.*  # engine-to-game callbacks, no parsing
 
-# Future game modules (S2): Orca/Games/<game>/.
+# Future game modules (S2): Orca/Games/<game>/. Their build files pull code in: engine-sensitive.
 game-logic        Source/Core/Core/Orca/Games/**
+engine-sensitive  Source/Core/Core/Orca/Games/**/CMakeLists.txt
+engine-sensitive  Source/Core/Core/Orca/Games/**/*.cmake
 
 # UX/: host-only UI (overlay, kit, set end, orb, cards, controllers) and the composition root
 # are engine. RankedSteps (strikes, bans, DSR, timers) is competitive policy: engine (S2 keeps it
 # there; its tables become ruleset data in S5).
 engine            Source/Core/Core/Orca/UX/**
 engine-sensitive  Source/Core/Core/Orca/UX/Chat.*         # peer chat text
+engine-sensitive  Source/Core/Core/Orca/UX/ControllerSource.* # curl SSE client, YOUGAME_TOKEN
 engine-sensitive  Source/Core/Core/Orca/UX/Controllers.*  # the app's controller JSON
+engine-sensitive  Source/Core/Core/Orca/UX/YgOrb.*        # the app's orb and notice commands
 engine-sensitive  Source/Core/Core/Orca/UX/GameFont.*     # RFNT reader (fonts from the disc)
 engine-sensitive  Source/Core/Core/Orca/UX/GamePatches.*  # .patches parser and applier
 # Game logic: hardcoded Brawl rev 2 / Project+ memory.
 game-logic        Source/Core/Core/Orca/UX/{BrawlStages,CharOrder,CssTitle,NameTags,OnlineMenu}.*
-game-logic        Source/Core/Core/Orca/UX/{OnlineRules,OnlineSeats,Queue,RankedPPlus,RankedSet}.*
-game-logic        Source/Core/Core/Orca/UX/{Results,StageCursors}.*
+game-logic        Source/Core/Core/Orca/UX/{OnlineRules,OnlineSeats,RankedPPlus,StageCursors}.*
+# ...carrying competitive policy until S2 splits it out: the queue's ready/timer/skip machine,
+# ranked stocks and minutes (RankedSet), and the winner and set result the room rates (Results).
+game-logic        Source/Core/Core/Orca/UX/{Queue,RankedSet,Results}.* review
 # Game memory layouts: free space, code caves, the match block and the set block.
 game-logic        Source/Core/Core/Orca/UX/{FreeSpace,MatchBlock,SetBlock}.*
 # Mixed: an engine mechanism carrying game data (texture names, message buffers, menu strings).
@@ -146,7 +168,8 @@ engine            docs/**                                 dev
 engine            Source/UnitTests/**                     dev
 game-logic        Source/UnitTests/Core/Orca/{BrawlStages,CharOrder,CssTitle,NativeText}Test.cpp dev
 game-logic        Source/UnitTests/Core/Orca/{OnlineMenu,OnlineRules,OnlineSeats,Queue}Test.cpp dev
-game-logic        Source/UnitTests/Core/Orca/{RankedSet,Ranked,Relabel,Results}Test.cpp dev
+game-logic        Source/UnitTests/Core/Orca/{RankedSet,Relabel,Results}Test.cpp dev
+# (RankedTest.cpp tests the engine's RankedSteps: engine dev, from the line above.)
 engine            Tools/**                                dev
 engine-sensitive  Tools/orca-{package-macos,publish-public}.sh dev   # release scripts
 engine-sensitive  Tools/orca/layer*                       dev     # this map, layer-of-diff, layerlib
@@ -154,5 +177,6 @@ engine-sensitive  Tools/orca/forbidden-calls*             dev
 engine-sensitive  Tools/orca/test_layers.py               dev
 game-data         Tools/orca/inputs/**                    dev     # scripted pads for bf-*/pplus-*
 game-data         Tools/orca/textures/**                  dev     # label art generator
+engine            Tools/orca/textures/*.py                dev     # its code
 game-logic        Tools/orca/free-space.py                dev
 engine-sensitive  .github/**                              dev

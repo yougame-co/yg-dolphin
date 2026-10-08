@@ -118,6 +118,14 @@ class RuleTests(unittest.TestCase):
         with self.assertRaises(layerlib.RulesError):
             layerlib.parse_rules("engine a/**\n")  # no fallback
 
+    def test_review_flag(self):
+        r = rules_of("game-logic UX/**\ngame-logic UX/Queue.* review\n")
+        self.assertTrue(r.classify("UX/Queue.cpp").review)
+        self.assertEqual(r.classify("UX/Queue.cpp").cls, "game-logic")
+        self.assertFalse(r.classify("UX/Other.cpp").review)
+        tie = rules_of("game-logic UX/A* review\ngame-logic UX/*A\n")
+        self.assertTrue(tie.classify("UX/AA").ties)
+
     def test_comments_and_directives(self):
         r = layerlib.parse_rules("# x\n%orca-root A/\n%upstream-ref up/master\n"
                                  "%upstream-base abc\nengine **   # fallback\n")
@@ -154,11 +162,18 @@ class RealMapTests(unittest.TestCase):
     def test_known_paths(self):
         expect = {
             "Data/Sys/Orca/RSBE01.patches": ("game-data", False),
-            "Data/Sys/Orca/PPLUS32.ini": ("game-data", False),
+            # Profiles carry forced settings and owner-only fields.
+            "Data/Sys/Orca/PPLUS32.ini": ("engine-sensitive", False),
+            "Data/Sys/Orca/RSBE01.ini": ("engine-sensitive", False),
             "Data/Sys/Orca/RSBE01.jitwarm": ("game-data", False),
             "Data/Sys/Orca/Textures/RSBE01/x.png": ("game-data", False),
             "Data/Sys/Orca/Fonts/Roboto-Medium.ttf": ("engine", False),
-            "Data/Sys/GameSettings/RSBE01.ini": ("game-data", False),
+            # A new kind of file under Data/Sys/Orca is engine until it is named.
+            "Data/Sys/Orca/mod.json": ("engine", False),
+            "Data/Sys/Orca/scripts/x.luau": ("engine", False),
+            "Data/Sys/Orca/lib/evil.dylib": ("engine", False),
+            "Data/Sys/Orca/Textures/RSBE01/x.dll": ("engine", False),
+            "Data/Sys/GameSettings/RSBE01.ini": ("engine-sensitive", False),
             "Data/Sys/GameSettings/GALE01.ini": ("engine", False),
             "Source/Core/Core/Orca/UX/OnlineRules.cpp": ("game-logic", False),
             "Source/Core/Core/Orca/UX/BrawlStages.h": ("game-logic", False),
@@ -170,7 +185,13 @@ class RealMapTests(unittest.TestCase):
             "Source/Core/Core/Orca/UX/UX.cpp": ("engine", False),
             "Source/Core/Core/Orca/UX/GamePatches.cpp": ("engine-sensitive", False),
             "Source/Core/Core/Orca/UX/Chat.cpp": ("engine-sensitive", False),
+            "Source/Core/Core/Orca/UX/ControllerSource.cpp": ("engine-sensitive", False),
+            "Source/Core/Core/Orca/UX/YgOrb.cpp": ("engine-sensitive", False),
+            "Source/Core/Core/Orca/UX/YgOrbDraw.cpp": ("engine", False),
+            "Source/Core/Core/Orca/Status.cpp": ("engine-sensitive", False),
             "Source/Core/Core/Orca/Games/BrawlRev2/Module.cpp": ("game-logic", False),
+            "Source/Core/Core/Orca/Games/BrawlRev2/CMakeLists.txt": ("engine-sensitive", False),
+            "Source/Core/Core/Orca/Games/BrawlRev2/deps/x.cmake": ("engine-sensitive", False),
             "Source/Core/Core/Orca/Session/YouGameRoom.cpp": ("engine-sensitive", False),
             "Source/Core/Core/Orca/Session/Session.cpp": ("engine-sensitive", False),
             "Source/Core/Core/Orca/Session/Events.h": ("engine", False),
@@ -196,11 +217,12 @@ class RealMapTests(unittest.TestCase):
             "CMakeLists.txt": ("engine-sensitive", False),
             "ORCA.md": ("engine", True),
             "Source/UnitTests/Core/Orca/QueueTest.cpp": ("game-logic", True),
-            "Source/UnitTests/Core/Orca/RankedTest.cpp": ("game-logic", True),
+            # Tests the engine's RankedSteps.
+            "Source/UnitTests/Core/Orca/RankedTest.cpp": ("engine", True),
             "Source/UnitTests/Core/Orca/RoomTest.cpp": ("engine", True),
             "Tools/orca/queue-e2e.mjs": ("engine", True),
             "Tools/orca/inputs/bf-dropin.txt": ("game-data", True),
-            "Tools/orca/textures/make-labels.py": ("game-data", True),
+            "Tools/orca/textures/make-labels.py": ("engine", True),
             "Tools/orca/layers.txt": ("engine-sensitive", True),
             "Tools/orca/layer-of-diff": ("engine-sensitive", True),
             "Tools/orca/layerlib.py": ("engine-sensitive", True),
@@ -213,6 +235,38 @@ class RealMapTests(unittest.TestCase):
             m = self.rules.classify(path)
             self.assertEqual((m.cls, m.dev), (cls, dev), "%s matched %s" % (path, m.rule))
             self.assertFalse(m.ties, path)
+        # Competitive policy in game logic: a person reviews it.
+        for path in ("Source/Core/Core/Orca/UX/Queue.cpp", "Source/Core/Core/Orca/UX/RankedSet.h",
+                     "Source/Core/Core/Orca/UX/Results.cpp"):
+            m = self.rules.classify(path)
+            self.assertEqual((m.cls, m.review), ("game-logic", True), path)
+        self.assertFalse(self.rules.classify("Source/Core/Core/Orca/UX/NameTags.cpp").review)
+
+    def test_peer_files_are_engine_sensitive(self):
+        """forbidden-calls' PEER_FILES (where peer-parse applies) must all be engine-sensitive, so the
+        two lists can't drift (Session/Events is the documented exception: no parsing)."""
+        tracked = [p for p in layerlib.git(self.repo, "ls-files", "-z").split("\0") if p]
+        for glob, rx in zip(fc.PEER_FILES, fc.PEER_RE):
+            matched = [p for p in tracked if rx.match(p)]
+            if glob != "Source/Core/Core/Orca/Mod.*":  # mods-p1, not on main yet
+                self.assertTrue(matched, glob)
+            for p in matched:
+                if p.startswith("Source/Core/Core/Orca/Session/Events."):
+                    continue
+                self.assertEqual(self.rules.classify(p).cls, "engine-sensitive", "%s (%s)" % (p, glob))
+
+    def test_network_and_process_code_is_engine_sensitive(self):
+        """Any shipped Orca file with socket, http or process hits must be engine-sensitive (this
+        would have caught UX/ControllerSource, a curl client classed engine)."""
+        paths, _ = layerlib.orca_paths(self.repo, self.rules, "HEAD")
+        paths = [p for p in paths if fc.scannable(p, self.rules)]
+        wrong = set()
+        for p, text in fc.read_files(self.repo, "HEAD", paths):
+            cls = self.rules.classify(p).cls
+            for rule, token, no, _ in fc.scan_text(p, text, cls):
+                if rule in ("socket", "http", "process") and cls != "engine-sensitive":
+                    wrong.add("%s:%d %s %s (%s)" % (p, no, rule, token, cls))
+        self.assertEqual(sorted(wrong), [])
 
 
 DIFF = """diff --git a/A.cpp b/A.cpp
@@ -269,14 +323,37 @@ class DiffParseTests(unittest.TestCase):
         got = {c.path: (c.added, c.deleted) for c in layerlib.parse_unified_diff(text)}
         self.assertEqual(got, {"x.txt": (1, 1), "y.txt": (1, 0)})
 
+    def test_malformed_diff_fails_closed(self):
+        # The first hunk claims more lines than it has: the next file's header would be read as
+        # context, hiding an engine-sensitive file.
+        hidden = ("diff --git a/Data/Sys/Orca/RSBE01.patches b/Data/Sys/Orca/RSBE01.patches\n"
+                  "--- a/Data/Sys/Orca/RSBE01.patches\n+++ b/Data/Sys/Orca/RSBE01.patches\n"
+                  "@@ -1,9 +1,9 @@\n-a\n+b\n"
+                  "diff --git a/Source/Core/Core/Orca/Session/Room.cpp b/Source/Core/Core/Orca/Session/Room.cpp\n"
+                  "--- a/Source/Core/Core/Orca/Session/Room.cpp\n+++ b/Source/Core/Core/Orca/Session/Room.cpp\n"
+                  "@@ -1 +1 @@\n-x\n+y\n")
+        with self.assertRaises(ValueError):
+            layerlib.parse_unified_diff(hidden)
+        with self.assertRaises(ValueError):
+            layerlib.parse_unified_diff("--- a/x\n+++ b/x\n@@ -1,2 +1,2 @@\n-a\n+b\n")  # EOF
+        with self.assertRaises(ValueError):
+            layerlib.parse_unified_diff("@@ -1 +1 @@\n-a\n+b\n")  # no file
+        p = subprocess.run([sys.executable, os.path.join(HERE, "layer-of-diff"), "--json", "-"],
+                           input=hidden.encode(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.assertEqual(p.returncode, 2, p.stdout)
+
     def test_numstat(self):
         got = layerlib.parse_numstat("3\t1\tA.cpp\0-\t-\tpic.png\0")
         self.assertEqual([(c.path, c.added, c.deleted, c.binary) for c in got],
                          [("A.cpp", 3, 1, False), ("pic.png", 0, 0, True)])
 
 
-def tokens(path, text):
-    return [(rule, token) for rule, token, _, _ in fc.scan_text(path, text)]
+def tokens(path, text, cls="engine"):
+    return [(rule, token) for rule, token, _, _ in fc.scan_text(path, text, cls)]
+
+
+def game(text, path="Source/Core/Core/Orca/UX/NameTags.cpp"):
+    return tokens(path, text, "game-logic")
 
 
 class ScanTests(unittest.TestCase):
@@ -318,8 +395,70 @@ class ScanTests(unittest.TestCase):
         self.assertIn(("file-open", "std::fopen("), tokens(self.UX, 'FILE* f = std::fopen("/etc/x", "r");\n'))
         self.assertIn(("file-open", "File::IOFile"), tokens(self.UX, 'File::IOFile f(path, "rb");\n'))
         self.assertIn(("file-open", "std::ofstream"), tokens(self.UX, "std::ofstream out(p);\n"))
-        self.assertEqual(tokens(self.UX, 'File::IOFile f(File::GetUserPath(D_USER_IDX) + "x", "wb");\n'), [])
         self.assertEqual(tokens(self.UX, "fs.Rename(a, b);\nHostFileSystem::Delete(a);\n"), [])
+        self.assertEqual(tokens(self.UX, "v.erase(std::remove(v.begin(), v.end(), x), v.end());\n"), [])
+
+    def test_file_in_the_user_dir(self):
+        # Outside game logic: its own baselined rule, never skipped.
+        user = 'File::IOFile f(File::GetUserPath(D_USER_IDX) + "x", "wb");\n'
+        self.assertEqual(tokens(self.UX, user), [("file-user", "File::IOFile")])
+        # One token anywhere on the line used to exempt it.
+        self.assertEqual(tokens(self.UX, 'File::IOFile f(p, "wb"); auto unused = D_USER_IDX;\n'),
+                         [("file-user", "File::IOFile")])
+        self.assertIn(("file-user", "File::WriteStringToFile("), tokens(
+            self.UX, 'File::WriteStringToFile(File::GetUserPath(D_CONFIG_IDX) + "Dolphin.ini", s);\n'))
+        # Climbing out of it is a plain file-open.
+        self.assertIn(("file-open", "File::IOFile"), tokens(
+            self.UX, 'File::IOFile f(File::GetUserPath(D_USER_IDX) + "../../../Library/LaunchAgents/x.plist", "wb");\n'))
+        # In game logic every file operation is file-open.
+        self.assertEqual(game(user), [("file-open", "File::IOFile")])
+
+    def test_app_channel(self):
+        # (Tokens drop whitespace, inside strings too.)
+        self.assertIn(("app-channel", 'Orca::Status::Line("orcaresultx"'),
+                      tokens(self.UX, 'Orca::Status::Line("orca result x");\n'))
+        self.assertIn(("app-channel", 'Status::Error("profile"'),
+                      tokens(self.UX, 'Status::Error("profile", "bad");\n'))
+        for line in ('printf("orca error x\\n");', 'std::puts("orca x");', 'fputs(s, stdout);',
+                     'std::cout << "orca x";', 'fmt::print("orca x\\n");', 'write(1, buf, n);',
+                     'fprintf(stderr, "x");', 'auto h = GetStdHandle(STD_OUTPUT_HANDLE);'):
+            self.assertTrue([t for t in tokens(self.UX, line + "\n") if t[0] == "app-channel"], line)
+        self.assertEqual(tokens(self.UX, 'snprintf(b, n, "x"); m.write(1, 2); s.printf();\n'), [])
+
+    def test_include_escape(self):
+        self.assertIn(("include-escape", "#include ../../../../../Tools/orca/textures/x.inc"),
+                      tokens(self.UX, '#include "../../../../../Tools/orca/textures/x.inc"\n'))
+        self.assertEqual(tokens(self.UX, '#include "Core/Orca/UX/Queue.h"\n'), [])
+
+    def test_bare_names_in_game_logic(self):
+        self.assertIn(("env", "bare std::getenv"), game('auto v = (std::getenv)("X");\n'))
+        self.assertIn(("env", "bare std::getenv"), game("#define E std::getenv\n"))
+        self.assertIn(("env", "bare std::getenv"), game("auto* g = &std::getenv;\n"))
+        self.assertIn(("process", "bare ::system"), game("auto f = ::system;\n"))
+        self.assertIn(("dynload", "bare dlsym"), game("auto f = dlsym;\n"))
+        # A backslash-newline splitting the name.
+        self.assertIn(("env", 'std::getenv("X"'), game('auto v = std::get\\\nenv("X");\n'))
+        # Not in engine code, and not a member or a variable that only shares a name.
+        self.assertEqual(tokens(self.UX, "auto* g = &std::getenv;\n"), [])
+        self.assertEqual(game("auto& system = Core::System::GetInstance(); system.Go(); m.getenv;\n"), [])
+
+    def test_game_only_rules(self):
+        self.assertIn(("determinism", "std::thread"), game("std::thread t(f);\n"))
+        self.assertIn(("determinism", "steady_clock"), game("auto n = std::chrono::steady_clock::now();\n"))
+        self.assertIn(("determinism", "rand("), game("int r = rand();\n"))
+        self.assertIn(("determinism", "time(nullptr)"), game("auto t = time(nullptr);\n"))
+        self.assertEqual(game("auto s = clock(step);\n"), [])  # a lambda named clock
+        self.assertIn(("settings", "Config::SetBase("), game("Config::SetBase(Config::MAIN_CPU_THREAD, true);\n"))
+        self.assertIn(("settings", "State::SaveAs("), game('State::SaveAs(guard, "x");\n'))
+        self.assertEqual(tokens(self.UX, "std::thread t(f);\nConfig::SetBase(x, 1);\n"), [])
+        self.assertIn(("socket", "mbedtls_net_connect("), tokens(self.UX, "mbedtls_net_connect(&c, h, p, 0);\n"))
+
+    def test_scannable(self):
+        rules = layerlib.load_rules()
+        self.assertTrue(fc.scannable("Source/Core/Core/Orca/UX/NameTags.inc", rules))
+        self.assertTrue(fc.scannable("Source/Core/Core/Orca/Games/BrawlRev2/table.txt", rules))
+        self.assertFalse(fc.scannable("Source/Core/Core/Orca/UX/Overlay.txt", rules))
+        self.assertFalse(fc.scannable("Tools/orca/textures/x.inc", rules))  # dev
 
     def test_process_dynload_env(self):
         self.assertIn(("process", 'std::system("rm-rf"'), tokens(self.UX, 'std::system("rm-rf");\n'))
@@ -343,6 +482,14 @@ class ScanTests(unittest.TestCase):
         self.assertIn(("build-deps", "target_link_libraries(core juice)"), got)
         self.assertIn(("build-deps", "target_link_libraries(core common)"), got)
         self.assertNotIn(("build-deps", "find_package(Commented)"), got)
+        more = ("execute_process(COMMAND curl x)\nadd_custom_command(OUTPUT a COMMAND b)\n"
+                "file(DOWNLOAD https://x f)\nfile(GLOB s *.cpp)\ntarget_sources(core PRIVATE x.cpp)\n"
+                "target_compile_options(core PRIVATE -include evil.h)\ninclude(Evil)\n")
+        got = tokens("Source/Core/Core/Orca/Games/X/CMakeLists.txt", more)
+        for t in ("execute_process(COMMAND)", "add_custom_command(OUTPUT)", "file(DOWNLOAD)",
+                  "target_sources(core)", "target_compile_options(-include)", "include(Evil)"):
+            self.assertIn(("build-deps", t), got)
+        self.assertNotIn(("build-deps", "file(GLOB)"), got)
 
     def test_baseline_round_trip(self):
         from collections import Counter
@@ -448,6 +595,44 @@ class EndToEndTests(unittest.TestCase):
                                        "Tools/orca/layers.txt", "ORCA.md")
         s = json.loads(out)
         self.assertEqual((s["highest"], s["highest_shipped"]), ("engine-sensitive", None))
+
+        # Game logic that edits a baselined line (same count, another file) is reported with --since.
+        self.write("Source/Core/Core/Orca/UX/Queue.cpp",
+                   '// baselined\nvoid Frame() {}\nvoid Leak() { connect(3, 0, 0); getenv("HOME"); }\n')
+        self.git("commit", "-qam", "baseline it")
+        bl3 = os.path.join(self.tmp, "bl3.txt")
+        self.run_tool("forbidden-calls", "--rules", rules, "--update-baseline", "--baseline", bl3)
+        self.write("Source/Core/Core/Orca/UX/Queue.cpp",
+                   'void Frame() {}\nvoid Leak() {\n  connect(4, 0, 0); getenv("HOME"); }\n')
+        self.git("commit", "-qam", "moved")
+        code, out, err = self.run_tool("forbidden-calls", "--rules", rules, "--baseline", bl3,
+                                       "--rev", "HEAD", "--since", "HEAD~1", "--json")
+        s = json.loads(out)
+        self.assertEqual(code, 1, err)
+        self.assertEqual(s["new"], [])
+        self.assertEqual(sorted(h["rule"] for h in s["edited"]), ["env", "socket"])
+
+    def test_gate_runs_the_trusted_revs_tools(self):
+        """With --rules-rev / --baseline-rev, the running tools must be that rev's copies."""
+        self.git("init", "-q")
+        os.makedirs(os.path.join(self.tmp, "Tools/orca"))
+        for name in ("layers.txt", "forbidden-calls.baseline") + layerlib.TOOL_FILES:
+            shutil.copy(os.path.join(HERE, name), os.path.join(self.tmp, "Tools/orca", name))
+        self.write("README", "x\n")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "tools")
+        code, out, err = self.run_tool("layer-of-diff", "--rules-rev", "HEAD", "--files", "README")
+        self.assertEqual(code, 0, err)
+        # The trusted rev's tools differ from the running ones (a branch edited them): refused.
+        with open(os.path.join(self.tmp, "Tools/orca/layerlib.py"), "a") as f:
+            f.write("# lowered\n")
+        self.git("commit", "-qam", "edit a tool")
+        code, out, err = self.run_tool("layer-of-diff", "--rules-rev", "HEAD", "--files", "README")
+        self.assertEqual(code, 2, out)
+        self.assertIn("layerlib.py", err)
+        code, out, err = self.run_tool("forbidden-calls", "--baseline-rev", "HEAD")
+        self.assertEqual(code, 2, out)
+        self.assertIn("layerlib.py", err)
 
 
 if __name__ == "__main__":

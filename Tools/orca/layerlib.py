@@ -14,7 +14,7 @@ import sys
 # Least to most risky. A diff's layer is the highest of its paths' layers.
 CLASSES = ("game-data", "game-logic", "engine", "engine-sensitive")
 RANK = {name: i for i, name in enumerate(CLASSES)}
-FLAGS = ("dev",)
+FLAGS = ("dev", "review")
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_RULES = os.path.join(HERE, "layers.txt")
@@ -26,19 +26,21 @@ class RulesError(ValueError):
 
 
 class Rule:
-    __slots__ = ("cls", "glob", "source", "dev", "line", "literal", "regex")
+    __slots__ = ("cls", "glob", "source", "dev", "review", "line", "literal", "regex")
 
-    def __init__(self, cls, glob, source, dev, line):
+    def __init__(self, cls, glob, source, dev, line, review=False):
         self.cls = cls
         self.glob = glob  # one alternative after brace expansion
         self.source = source  # the glob as written
         self.dev = dev
+        self.review = review
         self.line = line
         self.literal = literal_count(glob)
         self.regex = re.compile(glob_to_regex(glob))
 
     def __repr__(self):
-        return "Rule(%s %s%s @%d)" % (self.cls, self.glob, " dev" if self.dev else "", self.line)
+        return "Rule(%s %s%s%s @%d)" % (self.cls, self.glob, " dev" if self.dev else "",
+                                        " review" if self.review else "", self.line)
 
 
 class Rules:
@@ -69,7 +71,8 @@ class Match:
         top = [r for r in matching if r.literal == best]
         self.rule = top[0]
         # Tied rules that disagree make the map ambiguous for this path.
-        self.ties = [r for r in top[1:] if (r.cls, r.dev) != (top[0].cls, top[0].dev)]
+        self.ties = [r for r in top[1:]
+                     if (r.cls, r.dev, r.review) != (top[0].cls, top[0].dev, top[0].review)]
 
     @property
     def cls(self):
@@ -78,6 +81,10 @@ class Match:
     @property
     def dev(self):
         return self.rule.dev
+
+    @property
+    def review(self):
+        return self.rule.review
 
     @property
     def fallback(self):
@@ -155,7 +162,7 @@ def parse_rules(text, name="layers.txt"):
                 raise RulesError("%s:%d: unknown directive %%%s" % (name, lineno, key))
             continue
         if len(fields) < 2:
-            raise RulesError("%s:%d: expected <class> <glob> [dev]" % (name, lineno))
+            raise RulesError("%s:%d: expected <class> <glob> [dev] [review]" % (name, lineno))
         cls, glob, flags = fields[0], fields[1], fields[2:]
         if cls not in RANK:
             raise RulesError("%s:%d: unknown class %r (one of %s)" % (name, lineno, cls, ", ".join(CLASSES)))
@@ -165,7 +172,7 @@ def parse_rules(text, name="layers.txt"):
         if glob.startswith("/") or "\\" in glob:
             raise RulesError("%s:%d: globs are relative to the repository root, with /" % (name, lineno))
         for alt in expand_braces(glob):
-            rules.append(Rule(cls, alt, glob, "dev" in flags, lineno))
+            rules.append(Rule(cls, alt, glob, "dev" in flags, lineno, "review" in flags))
     if not any(r.glob == "**" for r in rules):
         raise RulesError("%s: no `**` fallback rule" % name)
     return Rules(rules, roots, ref, base)
@@ -201,6 +208,27 @@ def git(repo, *args, check=True, binary=False):
 
 def repo_root(start=None):
     return git(start or HERE, "rev-parse", "--show-toplevel").strip()
+
+
+TOOL_FILES = ("layerlib.py", "layer-of-diff", "forbidden-calls")
+
+
+def check_tools_at(repo, rev):
+    """A gate that trusts `rev`'s map (--rules-rev / --baseline-rev) must also run `rev`'s tools:
+    raises GitError naming each running file that differs from its copy at rev. Run them from a
+    checkout of rev, with --repo <branch worktree>."""
+    differ = []
+    for name in TOOL_FILES:
+        with open(os.path.join(HERE, name), "rb") as f:
+            running = f.read()
+        p = subprocess.run(["git", "-C", repo, "show", "%s:Tools/orca/%s" % (rev, name)],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if p.returncode != 0 or p.stdout != running:
+            differ.append(name)
+    if differ:
+        raise GitError("the running %s differ%s from %s's copy: a gate runs %s's tools (a checkout "
+                       "of it, with --repo <branch>), or drop --rules-rev/--baseline-rev to try "
+                       "this copy" % (", ".join(differ), "s" if len(differ) == 1 else "", rev, rev))
 
 
 def ref_exists(repo, ref):
@@ -291,20 +319,24 @@ def parse_unified_diff(text):
 
     old = new = None  # the hunk's sides
     left = right = 0  # lines still expected in the current hunk
-    for line in text.splitlines():
+    for no, line in enumerate(text.splitlines(), 1):
         if left > 0 or right > 0:
             if line.startswith("\\"):
                 continue
             tag = line[:1]
-            if tag == "+":
+            if tag == "+" and right > 0:
                 touch(new or old).added += 1
                 right -= 1
-            elif tag == "-":
+            elif tag == "-" and left > 0:
                 touch(old or new).deleted += 1
                 left -= 1
-            else:  # context (a blank line is context with its space trimmed)
+            elif tag in (" ", "") and left > 0 and right > 0:
+                # Context (a blank line is context with its space trimmed).
                 left -= 1
                 right -= 1
+            else:
+                # Fail closed: a hunk that claims more lines than it has would hide the next file.
+                raise ValueError("malformed diff at line %d: the hunk ends early" % no)
             continue
         if line.startswith("diff --git "):
             m = re.match(r'diff --git ("a/.*?"|a/\S.*?) ("b/.*"|b/.*)$', line)
@@ -331,8 +363,12 @@ def parse_unified_diff(text):
             continue
         m = re.match(r"@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@", line)
         if m:
+            if not (old or new):
+                raise ValueError("malformed diff at line %d: a hunk outside a file" % no)
             left = int(m.group(1)) if m.group(1) is not None else 1
             right = int(m.group(2)) if m.group(2) is not None else 1
+    if left > 0 or right > 0:
+        raise ValueError("malformed diff: the last hunk ends early")
     return [files[p] for p in order]
 
 
