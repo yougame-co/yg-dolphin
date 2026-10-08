@@ -350,6 +350,26 @@ Open: Mac <-> PC (a PC builds its own card: it must hash `0615853d…`); a P+ fo
 moves the stage select routines loses `brawl-rev2-pplus` until phase 3's labels; duplicate JSON keys
 are last-wins (as in JavaScript; the site refuses them).
 
+**Rebased on 0.3.33, checked 2026-10-08** (`mods-p1-0333` 225bfabf56, M4 Pro, headless, `-v Null`,
+SDL HIDAPI off, under `run-lock.py check`; runs in `~/Documents/brawl-dolphin/mods0333-runs`):
+- Unit tests: 611 `Orca*`, 594 pass, 17 skipped (live and latency), 0 fail, with both test discs; 17
+  `OrcaMod.*` (two new: `LauncherBootReadsRev1AsRev2`, `GuardsAreNotOrcasOwnPatches`).
+- Legacy (no `ORCA_MOD_DIR`) against the 0.3.33 dev build (9bdfaf71d5, whose emulator 69b97f49d3
+  shares): hashlogs of the default inputs equal (Brawl 10,802 frames, Project+ 9,015, 0 differ; only
+  how many frames each logged past `YG_EXIT_AFTER` differs, as in 0.3.33's gate A); sync tests Brawl
+  300-4500 29,351 re-run frames and Project+ 150-3000 19,901, 0 RAM mismatches; the key's inputs
+  equal with the commit masked (Brawl and Project+); `kCompatVersion` 24.
+- Bundles from 0.3.33's data (`make-bundle.py`; Brawl tree `6ad8bdbe…25f8`, Project+ `2a010bed…a182`
+  with 0.3.33's five kept words): Brawl from its bundle equals legacy (10,805 frames, 0 differ);
+  Project+ with its built card (`0615853d…`, byte-identical to 2026-10-05's) keeps legacy's scenes to
+  the match's end, then the results come one frame later (the card's FAT state reaches RAM, as
+  before); with the official `sd.raw` in the cache it equals legacy on every frame but frame 0 (9,005
+  compared, 1 differs: legacy's latch writing the match block while the launcher runs). Both bundles'
+  `orca caps` lines equal legacy's (`… music results locks queue2 pick-casual pick-ranked`).
+- Found by the bundle runs: 0.3.33's RSBE01.patches moves Brawl's v-sync call, which the vanilla
+  guard used to read, so a Brawl bundle lost its builtin after the first boundary; the guard now reads
+  0x8001CD24 (225bfabf56).
+
 ## Testing
 
 Run tests headless (`-v Null`), muted, and at low priority on a shared machine. Two-instance runs
