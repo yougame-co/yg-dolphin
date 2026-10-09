@@ -6678,3 +6678,47 @@ Checks (Mac, worktree `orca-rel-0336`, `build`, Release, `orca-cmake-flags.txt` 
 
 The release's own steps (hash logs and synctests against 0.3.35, the two-Orca perf gate, the
 Windows build and its gtests, Mac <-> PC) are recorded with the release.
+
+## Orca 0.3.37 (2026-10-09)
+
+Branch `release-0.3.37`, from `security-0.3.36` (`3b7cc5517d`, 0.3.36 as shipped). Four side branches,
+each off `release-0.3.35`, merged with `--no-ff`:
+
+- `music-loop-0335` (`4d90601c87`): with the Music switch off, a stream voice stays music through its
+  song's loop (the game turns music voices into normal voices at each loop, so music played for
+  0.5-5 s per loop). Clean merge.
+- `orca-rejoin-seat-0335` (`04b32e5fcf`, `ee73c12f8e`): a ranked joiner back in its old seat after a
+  dropped connection skips the host's roster entries from the earlier stay until the host takes it in
+  (bug reports 6afb0948, 22ba6446, 96e56887). Conflict in `Session::ApplyRoster` with 0.3.36's own-seat
+  checks, resolved by intent: the skip runs first, so an earlier stay's entry can neither set
+  `m_own_live_from` nor trip the plug-in check (under 0.3.36's checks such an entry would have set
+  `m_own_live_from` to the old live frame, and the admitting roster would then end the session). The
+  skip's "not taken in yet" test reads `m_own_live_from` instead of the seat plan's `live_from`: the
+  same until the host names the live frame (a joiner's plan starts with its own seat empty, and
+  `m_own_live_from` is set whenever the plan's is, and never reset), and after that no roster change to
+  the own seat is skipped, a later drop by the host included.
+- `orca-random-seed-0335` (`e76a92dae2`, `4abe7663f7`): every history starts from a seed of its own
+  (ORCA.md "Random numbers"). Clean merge.
+- `tags-width-0335` (`ea1935aa68`): a name tag the player typed in the game is theirs (full-width
+  names fold to ASCII, one case). Conflict in this file only.
+- **kCompatVersion 25 -> 26, one bump for both changes that alter what the game computes:** the seed
+  (both generators' seed words written at a history's first frame) and typed name tags (the session's
+  writes differ whenever memory holds a typed tag of a player's name). The music and rejoin changes
+  alter neither. The key also carries the git revision, so 0.3.36 and 0.3.37 never meet anyway.
+- clang-format 19.1.7 over every line changed since 0.3.36: only the seed's lines needed it (wrapping,
+  include order); the name-tag lines were already clean. Then 0 lines to change.
+- `Tools/orca-publish-public.sh` names `github.com/yougame-co/orca-netplay` (the repos moved to the
+  `yougame-co` org on 2026-10-09; cherry-picked from main `95a392c04e`).
+
+Checks (Mac, worktree `orca-rel-0337`, `build`, Release, `orca-cmake-flags.txt` + tests):
+
+- dolphin-nogui + tests from clean (ccache): the same warnings as 0.3.36's build, none new. The binary
+  says `Dolphin [release-0.3.37] 2609-646`.
+- `Orca*` with the fake keyframe server and both Brawl discs: 656 run, 637 passed, 19 skipped (the same
+  19 as 0.3.36: OrcaLive 14, OrcaDisc 2, OrcaUXLatency 2, OrcaKitDraw 1), 0 failed. The ten new tests
+  pass: OrcaMusic (4), the seed's OrcaKeyframe (1) and OrcaOnlineMenuFresh (2),
+  `OrcaDropIn.FriendBackInTheSameSeatAfterADrop`, OrcaUXNameTags (2).
+
+Not run here (the release's own steps): hash logs and synctests on this build, the two-Orca perf gate
+against 0.3.36, the Windows build and its gtests, Mac <-> PC (the seed and the tags both need it), a
+real two-Orca room with a typed tag.
