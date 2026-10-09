@@ -109,6 +109,7 @@ with the same value meet):
 | `ORCA_TEST_KEYFRAME_DIR` | Keyframes go through this folder instead of YouGame's store. |
 | `ORCA_TEST_LEAVE_AT` | A joined friend leaves at this frame. |
 | `ORCA_TEST_COMMANDS` | `1`: take the embed protocol's stdin commands without embedding, plus test commands: `test-drop-room`, `test-direct off\|on\|in\|out\|rebuild`, `test-shot <name>`. |
+| `ORCA_TEST_DROP_SILENT` | `1`: `test-drop-room` drops the room connection the way a network failure does: no close, the socket stays open and unread, and the server only notices when the player's next connection replaces it. |
 | `ORCA_TEST_PRESENT` | Headless only: `WxH` presents into an offscreen image with the OSD and overlay, so screenshots show what a player sees. |
 | `ORCA_TEST_PADS`, `ORCA_TEST_SKIP_RENDER` | Harness overrides. |
 | `ORCA_TEST_FULL_SNAPSHOTS` | `1`: snapshots copy all of RAM instead of copy-on-write. |
@@ -416,7 +417,11 @@ pointers, or arbitrary memory writes.
    rebased without reporting old events.
 5. **Catch up and plug in.** The normal rollback session starts at K, catches up from live history,
    and both machines plug in the friend's controller at the same agreed future frame. Heartbeats
-   keep the pending seat alive while the replay runs.
+   keep the pending seat alive while the replay runs. The host's packets reach the friend from the
+   moment it is in the room, before the host takes it in; a roster from then that names no live
+   frame for the friend's seat, or one before K, is not about this stay and the friend's session
+   skips that seat (`Session::ApplyRoster`). It matters when a player comes back to the seat it had: until the host
+   takes it in again, the host's roster still names that seat's earlier plug-in.
 6. **Leave.** The existing agreed unplug and solo-return behavior continues. A failed replay does
    not leave the player's machine on partially reconstructed peer history.
 
