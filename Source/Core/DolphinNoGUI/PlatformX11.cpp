@@ -112,8 +112,8 @@ private:
   bool m_embed_focus = true;
   // The keyboard is in the app's window (its FocusIn and FocusOut, checked with the X server).
   bool m_app_focused = false;
-  // The app's window is viewable: it and its window manager's frame are mapped, so not minimized and
-  // on the workspace shown.
+  // The app's window is viewable: it and its window manager's frame are mapped, so not minimized
+  // and on the workspace shown.
   bool m_app_viewable = true;
   bool m_surface_visible = true;
   // Orca's window's size, and whether the presenter has yet to resize to it: a move alone needs no
@@ -226,8 +226,8 @@ bool PlatformX11::InitEmbedded()
   m_root = app.root;
 
   // A 24-bit TrueColor visual of its own, with its own colormap and border, so it may sit in an app
-  // window of any depth (in a 32-bit one the game's alpha would reach the compositor); the app's own
-  // visual where the server has none. Black until the first frame. Dolphin's GL context makes a
+  // window of any depth (in a 32-bit one the game's alpha would reach the compositor); the app's
+  // own visual where the server has none. Black until the first frame. Dolphin's GL context makes a
   // child of this window in the visual EGL picks (Common/GL/GLX11Window.cpp).
   const int errors = s_x_errors.load(std::memory_order_relaxed);
   XSetWindowAttributes attributes = {};
@@ -302,9 +302,9 @@ void PlatformX11::MainLoop()
     UpdateWindowPosition();
     if (IsEmbedded())
     {
-      // The app's window reports its own focus and mapping; a window manager that moves the keyboard
-      // to its frame, or unmaps the frame (another workspace), sends it nothing, so the server is
-      // asked again twice a second too.
+      // The app's window reports its own focus and mapping; a window manager that moves the
+      // keyboard to its frame, or unmaps the frame (another workspace), sends it nothing, so the
+      // server is asked again twice a second too.
       const auto now = std::chrono::steady_clock::now();
       if (now >= m_next_app_check)
       {
@@ -404,9 +404,9 @@ void PlatformX11::UpdateAppState()
     XRaiseWindow(m_display, m_window);
 }
 
-// Whether the X server has the keyboard in the app's window: on it, on a window inside it, or on the
-// window manager's frame around it. With PointerRoot focus the keyboard follows the pointer, so the
-// top-level window under the pointer stands for it.
+// Whether the X server has the keyboard in the app's window: on it, on a window inside it, or on
+// the window manager's frame around it. With PointerRoot focus the keyboard follows the pointer, so
+// the top-level window under the pointer stands for it.
 bool PlatformX11::AppHasFocus()
 {
   Window focus = X_None;
