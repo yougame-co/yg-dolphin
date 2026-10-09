@@ -1,5 +1,5 @@
 #!/bin/bash
-# Publish a snapshot of this private repo to the public one (github.com/Lrosias/orca-netplay).
+# Publish a snapshot of this private repo to the public one (github.com/yougame-co/orca-netplay).
 #
 #   Tools/orca-publish-public.sh [ref] [message] [tag]   # defaults: origin/main, "Orca source, <date>"
 #   Tools/orca-publish-public.sh origin/main "Orca 0.3.28 (source of <release sha>)" orca-0.3.28
@@ -8,7 +8,7 @@
 #     # an older release: one commit on Dolphin 2609, published as a tag only (main doesn't move)
 #
 # Every released Orca is published and tagged orca-<version>; the app's "source" link points at
-# https://github.com/Lrosias/orca-netplay/tree/orca-<version>.
+# https://github.com/yougame-co/orca-netplay/tree/orca-<version>.
 #
 # The public history is Dolphin's own, then one commit per published snapshot, authored as
 # YouGame. Private branches, history, ORCA_NOTES.md and this script never leave this repo. The snapshot is
@@ -17,7 +17,7 @@ set -euo pipefail
 
 REF=${1:-origin/main}
 TAG=${3:-}
-PUBLIC_URL=${ORCA_PUBLIC_URL:-https://github.com/Lrosias/orca-netplay.git}
+PUBLIC_URL=${ORCA_PUBLIC_URL:-https://github.com/yougame-co/orca-netplay.git}
 # Never published: private notes, this script, and test tools that drive YouGame's own site, app or
 # test accounts rather than Orca.
 EXCLUDE=(Tools/orca-publish-public.sh ORCA_NOTES.md Tools/orca/xplat.py Tools/orca/page-e2e.mjs
@@ -77,7 +77,7 @@ if [ -n "$TAG" ]; then
   GIT_COMMITTER_NAME=YouGame GIT_COMMITTER_EMAIL=noreply@yougame.co git tag -f -a "$TAG" "$commit" -m \
     "$msg. The code is identical to what shipped; comments were rewritten and personal information removed." >/dev/null
   git push -f "$PUBLIC_URL" "refs/tags/$TAG"
-  url="https://github.com/Lrosias/orca-netplay/tree/$TAG"
+  url="https://github.com/yougame-co/orca-netplay/tree/$TAG"
   # The app links here; it must answer without a sign-in.
   code=$(curl -s -o /dev/null -w '%{http_code}' -A 'Mozilla/5.0' "$url")
   echo "$url -> $code"
