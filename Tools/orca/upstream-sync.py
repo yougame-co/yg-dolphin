@@ -311,26 +311,46 @@ def series_test(base, commits):
         if p.returncode != 0:
             return "conflict at %s" % c[:10], [l for l in p.stdout.splitlines()[1:] if l.strip()]
         tree = p.stdout.split()[0]
-        cur = git("commit-tree", tree, "-p", cur, "-m", "upstream-sync series test").strip()
+        env = dict(os.environ, GIT_AUTHOR_NAME="upstream-sync", GIT_AUTHOR_EMAIL="upstream-sync@invalid",
+                   GIT_COMMITTER_NAME="upstream-sync", GIT_COMMITTER_EMAIL="upstream-sync@invalid")
+        q = subprocess.run(["git", "-C", REPO, "commit-tree", tree, "-p", cur, "-m", "upstream-sync series test"],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
+        if q.returncode != 0:
+            return "error", [q.stderr.strip()[:200]]
+        cur = q.stdout.strip()
     return "clean", []
 
 
 def live_equivalents(base, mb):
     """What base already carries from upstream since the merge-base: -x trailers and (author,
     subject) pairs (a hotfix tag's picks have other shas than master's commits)."""
-    log = git("log", "--format=%B", "%s..%s" % (mb, base))
-    picked = set(re.findall(r"\(cherry picked from commit ([0-9a-f]{40})\)", log))
-    subjects = {}
-    for line in git("log", "--no-merges", "--format=%H%x09%an%x09%s", "%s..%s" % (mb, base)).splitlines():
-        h, an, s = line.split("\t", 2)
-        subjects[(an, s)] = h
+    picked, subjects = set(), {}
+    for h, meta in commit_meta("%s..%s" % (mb, base)).items():
+        trailers = re.findall(r"\(cherry picked from commit ([0-9a-f]{40})\)", meta["body"])
+        picked.update(trailers)
+        if trailers:  # only Orca's own picks count by subject, never a coincidental same title
+            subjects[(meta["author"], meta["subject"])] = h
     return picked, subjects
 
 
-def in_live(c, base, mb, picked, subjects, cherry_minus):
+def commit_meta(spec):
+    """{sha: {author, date, subject, body}} for the non-merge commits of a range, in one git call."""
+    out = {}
+    for rec in git("log", "--no-merges", "--format=%H%x00%an%x00%cs%x00%B%x1e", spec).split("\x1e"):
+        parts = rec.strip("\n").split("\x00", 3)
+        if len(parts) == 4:
+            body = parts[3]
+            out[parts[0]] = {"author": parts[1], "date": parts[2], "subject": body.split("\n", 1)[0], "body": body}
+    return out
+
+
+def in_live(c, base, mb, picked, subjects, cherry_minus, meta=None):
     if c in picked or c in cherry_minus:
         return True
-    an, s = git("log", "-1", "--format=%an%x09%s", c).rstrip("\n").split("\t", 1)
+    if meta is None:
+        an, s = git("log", "-1", "--format=%an%x09%s", c).rstrip("\n").split("\t", 1)
+    else:
+        an, s = meta["author"], meta["subject"]
     return (an, s) in subjects
 
 
@@ -405,22 +425,27 @@ def cmd_triage(args):
     seen_before = set(prev.get("seen", []))
 
     commits = git("rev-list", "--reverse", "--no-merges", "%s..%s" % (mb, head)).split()
+    metas = commit_meta("%s..%s" % (mb, head))
+    pr_of = {}  # each commit's PR: the first merge on its way to head
+    for line in git("log", "--merges", "--reverse", "--format=%H %s", "%s..%s" % (mb, head)).splitlines():
+        h, subj = line.split(" ", 1)
+        m = re.match(r"Merge pull request #(\d+)", subj)
+        if m:
+            for c in git("rev-list", "--no-merges", "%s^1..%s" % (h, h)).split():
+                pr_of.setdefault(c, int(m.group(1)))
     pending, already = [], []
     for c in commits:
-        if in_live(c, base, mb, picked, subjects, minus):
+        meta = metas[c]
+        if in_live(c, base, mb, picked, subjects, minus, meta):
             already.append(c)
             continue
-        msg = git("log", "-1", "--format=%s%n%n%b", c)
-        subject = msg.splitlines()[0] if msg else ""
+        msg, subject = meta["body"], meta["subject"]
         files = commit_files(c)
         classes = classify(msg, files)
         where, why = reach(files)
         status, conflicts = pick_test(base, c)
-        pr = re.search(r"Merge pull request #(\d+)", git("log", "--merges", "--ancestry-path", "--reverse",
-                                                         "--format=%s", "%s..%s" % (c, head), check=False))
         pending.append({
-            "sha": c, "subject": subject, "date": git("log", "-1", "--format=%cs", c).strip(),
-            "author": git("log", "-1", "--format=%an", c).strip(), "pr": int(pr.group(1)) if pr else None,
+            "sha": c, "subject": subject, "date": meta["date"], "author": meta["author"], "pr": pr_of.get(c),
             "classes": classes, "reach": where, "reach_why": why, "files": len(files),
             "overlap": sorted(set(files) & orca_changed), "layer": max_layer(rules, files),
             "pick": status, "conflicts": conflicts, "new": c not in seen_before,
@@ -1004,25 +1029,31 @@ def test_runs(st, out, which, app, live_app):
         lbin, lv = os.path.join(lapp, "Contents", "MacOS", "Orca"), m["version"]
     cbin = candidate_bin(st, app)
     names = [n for n in JOBS if (n.endswith("-hash") and "hash" in which) or (not n.endswith("-hash") and "sync" in which)]
-    lout = os.path.join(WATCH, "live", lv, "results") if lv != "given" else os.path.join(out, "live")
-    cout = os.path.join(out, "cand")
-    for d in (lout, cout):
-        os.makedirs(d, exist_ok=True)
     inputs = os.path.join(SYNC_WT, "Tools", "orca", "inputs")
     if not os.path.isdir(inputs):
         inputs = os.path.join(REPO, "Tools", "orca", "inputs")
-    specs = [{"name": n, "bin": cbin, "out": cout, "inputs": inputs} for n in names]
+    # The live results are cached per live version and per content of the inputs they ran.
+    h = hashlib.sha256()
+    for n in names:
+        with open(os.path.join(inputs, JOBS[n][2]), "rb") as f:
+            h.update(n.encode() + b"\0" + f.read())
+    lout = (os.path.join(WATCH, "live", lv, "results-" + h.hexdigest()[:10]) if lv != "given"
+            else os.path.join(out, "live"))
+    cout = os.path.join(out, "cand")
+    for d in (lout, cout):
+        os.makedirs(d, exist_ok=True)
+    specs = [{"name": n, "bin": cbin, "out": cout, "inputs": inputs, "role": "cand"} for n in names]
     live_cached = os.path.join(lout, "results.json")
     lres = {}
     if os.path.exists(live_cached):
         lres = {r["name"]: r for r in json.load(open(live_cached))}
-    specs += [{"name": n, "bin": lbin, "out": lout, "inputs": inputs} for n in names
+    specs += [{"name": n, "bin": lbin, "out": lout, "inputs": inputs, "role": "live"} for n in names
               if n not in lres or (n.endswith("-hash") and not os.path.exists(os.path.join(lout, n + ".hash")))]
     spec_path = os.path.join(out, "jobs.json")
     with open(spec_path, "w") as f:
         json.dump(specs, f, indent=1)
     say("%d headless Orca run(s): %s (run-lock check)" % (len(specs), ", ".join(
-        "%s/%s" % ("live" if s["bin"] == lbin else "cand", s["name"]) for s in specs)))
+        "%s/%s" % (s["role"], s["name"]) for s in specs)))
     rc = run_lock("upstream-sync %s hashlogs+synctests (headless)" % st["sync"]["branch"],
                   [sys.executable, os.path.abspath(__file__), "_jobs", spec_path], log=os.path.join(out, "jobs.log"))
     if not os.path.exists(spec_path + ".out"):
@@ -1030,7 +1061,7 @@ def test_runs(st, out, which, app, live_app):
     done = json.load(open(spec_path + ".out"))
     cres = {}
     for s, r in zip(specs, done):
-        (cres if s["bin"] == cbin else lres)[r["name"]] = r
+        (cres if s["role"] == "cand" else lres)[r["name"]] = r
     with open(live_cached, "w") as f:
         json.dump([r for r in lres.values() if r.get("exit") == 0], f, indent=1)
     results = {}
@@ -1038,7 +1069,9 @@ def test_runs(st, out, which, app, live_app):
         c, l = cres.get(n, {}), lres.get(n, {})
         if n.endswith("-hash"):
             cmpd = hashcmp(os.path.join(lout, n + ".hash"), os.path.join(cout, n + ".hash"))
-            ok = c.get("exit") == 0 and cmpd["shared"] > 0 and cmpd["differ"] == 0
+            frames = JOBS[n][1]  # both logs must cover the run, not just agree on a short stretch
+            ok = (c.get("exit") == 0 and cmpd["differ"] == 0 and cmpd["last"] is not None
+                  and cmpd["last"] >= frames - 30)
             results[n] = dict(cmpd, exit=c.get("exit"), pass_=ok)
             say("%s: %d shared frames (0..%s), %d differ%s -> %s" % (
                 n, cmpd["shared"], cmpd["last"], cmpd["differ"],
