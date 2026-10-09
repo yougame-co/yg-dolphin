@@ -379,8 +379,7 @@ void Session::ApplyRoster(const std::array<SeatPlan, MAX_SEATS>& roster)
     {
       // This player's own seat. The host names its live frame once; plugs it in once, at a frame
       // not yet run, and only once this machine holds the history up to that live frame; and only
-      // ever brings its unplug frame earlier. Anything else would let the host's log decide frames
-      // this controller plays.
+      // ever brings its unplug frame earlier. Anything else ends the session.
       if (now.live_from != NEVER)
       {
         if (m_own_live_from == NEVER)
