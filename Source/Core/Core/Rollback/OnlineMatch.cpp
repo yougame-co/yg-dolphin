@@ -2322,8 +2322,13 @@ void JoinInPlay(Match& match, const std::string& code)
   ResetDropIn(match);
   ForgetRoom(match);
   match.linger_until.reset();
-  // A queue match: the join's own messages replace the search's.
+  // A queue match: the join's own messages replace the search's, and the overlay says the opponent
+  // was found until the host's game is loaded (queue2 searches from the queue's own select, which
+  // Search doesn't track, so the queue's state counts too).
+  const bool queued = QueueOrSearch();
   Orca::UX::Search::Matched(false);
+  if (queued)
+    Orca::UX::Search::JoinStarted();
   Orca::Online::ShutdownInBackground();
   Orca::Online::StartRoom(code, true);
   NOTICE_LOG_FMT(ROLLBACK, "Drop-in: joining room {} during play, frame {}", code, match.running + 1);

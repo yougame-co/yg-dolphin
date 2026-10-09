@@ -354,6 +354,12 @@ bool Joining()
   return s_joining;
 }
 
+void JoinStarted()
+{
+  std::lock_guard lock(s_mutex);
+  s_joining = true;
+}
+
 void JoinOver()
 {
   std::lock_guard lock(s_mutex);

@@ -89,6 +89,9 @@ void Matched(bool hosting);
 void End();
 State Current();
 bool Ranked();
+// A matched join began while this player was searching or on the queue's own select: the overlay
+// says the opponent was found until JoinOver (or End).
+void JoinStarted();
 // A joiner's "Opponent found" lines are up: from a matched join until the host's game is loaded
 // (JoinOver) or the join ends. Display only: Current() stays None meanwhile.
 bool Joining();
