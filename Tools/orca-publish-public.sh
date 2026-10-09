@@ -28,6 +28,8 @@ EXCLUDE=(Tools/orca-publish-public.sh ORCA_NOTES.md Tools/orca/xplat.py Tools/or
 # home-network details. Luis's own name and handle may appear (Luis, 2026-10-07: his name is fine;
 # what must never appear is his home address).
 DENY='(^|[^q])hbox|hungry ?box|\bcherl\b|\bcrunch|gmail\.com|/Users/|C:\\\\Users|~/Documents|\$HOME/Documents|brawl-dolphin/|xfinity|comcast'
+# The match-start timing tools drive YouGame's site with roster accounts too (a glob: git's pathspec).
+EXCLUDE+=('Tools/orca/match-latency*')
 
 cd "$(git rev-parse --show-toplevel)"
 BASE=$(git rev-parse --verify "f84df020^{commit}") # Dolphin 2609, the fork point

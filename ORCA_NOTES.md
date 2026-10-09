@@ -6810,3 +6810,54 @@ Checks (Mac, worktree `orca-rel-0337`, `build`, Release, `orca-cmake-flags.txt` 
 Not run here (the release's own steps): hash logs and synctests on this build, the two-Orca perf gate
 against 0.3.36, the Windows build and its gtests, Mac <-> PC (the seed and the tags both need it), a
 real two-Orca room with a typed tag.
+
+## Orca 0.3.38 (2026-10-09)
+
+Branch `release-0.3.38`, from `release-0.3.37` (`8a053f2cee`, 0.3.37 as shipped).
+
+- `match-latency-orca-0337` (`cdd51eccd5`, `1f28cd4cf2`, `dfcea6d4a6`, `4d4f9ac3cf`), merged with
+  `--no-ff`, clean: a queue host's own pick is restored unseen and unthrottled (up to 120 frames), a
+  replay of at most 32 KiB travels inside the `kf` room message (the keyframe store stays the
+  fallback for bigger ones and for `ORCA_TEST_INLINE=off`), and a matched joiner shows "Opponent found
+  · joining <host>…" until the replay loads; the match start timing tools (never published). Merged,
+  not rebased, so its "(WIP)" subject stays and the shas its gates and the PC build used stay valid.
+  Its numbers on prod with the rooms/site change of YouGame PR #667: casual Brawl matched -> both in
+  control 3.21 / 3.48 s p50 / p90, against 5.47 / 5.87 s on 0.3.37; the store's `not_seated` retry
+  (about 1 in 10 matches since #667) goes away with the inline replay.
+- Linux, `cherry-pick -x` of the `linux-x11-embed` commits and the GCC 12 fix only (`38105499b4`,
+  `bf0fa8549e`, `df8b0b6c02`, `80cfa63190`), not `linux-alpha-0335`'s merge into 0.3.35 nor the main
+  commits `linux-x11-embed` sits on (`683291a33c` Contributing.md, run-lock): all clean, and every
+  Linux file is byte-identical to `linux-alpha-0335`'s. X11-only code (`PlatformX11.cpp`,
+  `GLX11Window.cpp`, `XInput2.cpp`), the `Embed.h`/CMake hooks for it, `Tools/orca-package-linux.sh`;
+  inert on macOS and Windows.
+- Upstream Dolphin, `cherry-pick -x`, all clean: `622c711ccf` (a crash in `std::locale{""}` with an
+  invalid `LC_ALL`; adds `Common/LocaleUtil`), `910eeffc08` (unsigned counters in
+  `VideoCommon/Statistics`, no signed overflow), and upstream PR #14772 whole, the EXI microphone
+  series `afee1e8ae4`..`cee5888137` (8 commits, the sanity checks `e02e385b16` among them). Sessions
+  force every EXI slot to None, so the microphone code never runs in one. Picked straight onto the
+  release branch rather than with `upstream-sync.py start`, whose sync worktree holds another run's
+  `upstream-sync-20261009`.
+- clang-format 19.1.7 over every line changed since 0.3.37: four comments in `PlatformX11.cpp` were
+  wrapped one column late; then 0 lines to change.
+- **kCompatVersion stays 26.** A bump is for a change to what the game computes, and none of these
+  makes one: match start runs the same inputs at the same frames (its branch's hash logs equal
+  0.3.37's, `YG_SYNCTEST=7` the same re-run counts), the inline replay is the same ORP2 bytes the store
+  carried, the Linux code is windowing and packaging, the upstream picks touch the locale, the
+  statistics counters and the (unused) microphone. The join protocol changes, but 0.3.37 and 0.3.38
+  never meet: the compatibility key starts with the build's git commit (`git rev-parse HEAD`), so they
+  are never matched, and in a friends room a hello with another key is ignored (the joiner ends with
+  `room_mismatch`). So every platform's build (macOS, Windows, Linux) has to come from a git checkout
+  of the release commit. Replay format: ORP2, unchanged.
+
+Checks (Mac, worktree `orca-rel-0338`, `build`, Release, `orca-cmake-flags.txt` + tests, at `b8d692f3e3`):
+
+- dolphin-nogui + tests (ccache): 0.3.37's warnings minus one: the `YouGameRoom.cpp` sign-compare is
+  gone (the replay offer check moved into `KeyframeOfferFromJson` with a cast); none new. The binary
+  says `Dolphin [release-0.3.38] 2609-668`.
+- `Orca*` with the fake keyframe server and both Brawl discs: 663 run, 644 passed, 19 skipped (the
+  same 19 as 0.3.37), 0 failed. The seven new tests pass: OrcaFreshStart (3), OrcaKeyframe (3, the
+  inline replay), `OrcaMatchmakingMenu.AMatchedJoinerSaysTheOpponentWasFound`.
+
+Not run here (the release's own steps): hash logs and synctests on this build, the two-Orca perf gate
+against 0.3.37, the Windows build and its gtests, Mac <-> PC, the Linux build in the VM (GCC 12 has
+not yet compiled 0.3.36-0.3.38's code), the packaged app's bundle version.
