@@ -7080,3 +7080,85 @@ files, signed with a TEST key kept outside the repository:
   skipped (OrcaLive 14, KitDraw 1, and the two Rev 1 tests: no Rev 1 dump on the PC), 0 fail; 9
   `OrcaBundle.*` and 18 `OrcaMod.*` pass, `OrcaMod.SdImageIsDeterministic` among them (the PC builds
   the Mac's pinned SD images). Not run: Mac <-> PC with a bundle (`xplat.py`), the perf gate.
+
+**After the reviews (round 2, 2026-10-08; engine 7d53340a44, tools to 242360a6d7).** A security
+review and a determinism review of `release-0.3.34..bundle-flat`. Must-fix, all applied:
+
+- **The card's pin was XXH3-128, which a reviewer forged**: 64 KiB changed in a clone of the real
+  `sd.raw`, 128 bytes later restoring its XXH3-128 (no search). Now `sdImage.sha256`, a chunked
+  SHA-256 (`Bundle.h` `SD_HASH_HEADER`: SHA-256 over the SHA-256 of each 64 MiB piece, hashed on every
+  core with CommonCrypto / CNG / mbedtls). The P+ check takes 118-127 ms on this Mac (528 ms with the
+  card cold), down from 240-470 ms for XXH3; plain SHA-256 would be about 0.8 s here and several
+  seconds on a PC without SHA instructions (the i7-8700 has none). `sdhash.py` and
+  `sd-hash-vector.json` tie the tools to the engine. The key's `sd=` is that pin.
+- **A build without a configured key trusted the TEST key.** Now it trusts none and refuses every
+  bundle (`refused: this build trusts no bundle key`); `-DORCA_BUNDLE_TRUST_TEST_KEY=ON` adds the
+  TEST key for tests; `orca-package-macos.sh` forces it off, takes `ORCA_BUNDLE_PUBLIC_KEY` from the
+  environment, and fails if the executable holds the TEST key or lacks the pinned one (both keys are
+  logged by text, so `strings` finds them). `OrcaBundle.PinnedKey` checks Bundle.cpp got exactly
+  CMake's keys (the same definitions reach the test): checked on Ninja (route key + TEST key, and no
+  key) and on the PC's Visual Studio preset (route key + TEST key).
+- **Layer map**: main merged in (tooling only); `Bundle.*` engine-sensitive and in forbidden-calls'
+  `PEER_FILES` (its peer-parse hits: `ParseSignature` x2, `reinterpret_cast` x2, `ParseManifest`,
+  `ParseGamePatches`); `Source/Core/Core/CMakeLists.txt` and `ConfigLoaders/**` engine-sensitive
+  (test_layers.py found `GameConfigLoader.cpp` on the fallback); baseline refreshed on the branch.
+- **Gates not run in round 1**: Mac <-> PC (`xplat.py`) and the perf gate (below).
+
+Should-fix, applied: the launcher's signed line is checked on the bytes the boot's reader already
+holds (`BootExecutableReader::GetBytes`), and the JIT seed is used as verified (`flat_jitwarm`), so
+nothing is read twice; `mod.sig` is read and its key checked before `mod.json` reaches picojson;
+format 2 names its `listing` (refused under another `YOUGAME_GAME`) and a `serial` (`MIN_FLAT_SERIAL`
+retires older bundles); a folder `ORCA_MOD_DIR` names and that is refused refuses the session
+(`BundleKind::Refused`) instead of playing legacy unseen; the mod key adds the Sys game INIs
+(`sys=`); `sign-bundle.py sign` checks the card's pin before it signs; `make-bundle.py` checks
+Project+'s launcher and card by full SHA-256 and refuses another card unless `--any-card`;
+`mod.schema.json` describes format 2; `*.patches` stay LF (`.gitattributes`); ORCA.md no longer says
+"nothing of the bundle is used" after a refusal. Also: `fake_bridge.py` names the Orca build in a
+real ticket (`FAKE_ORCA_BUILD`): since the site's 0.3.32 protocol floor went on, every `xplat.py` run
+over prod got 409 `orca_outdated` and no room; `xplat.py --flat-run` lays a disc boot's bundle out as
+the app does.
+
+Not changed: a refused bundle still shows only in Orca's log (a page-visible line needs an app/page
+change); bundles are checked once per process (NoGUI boots once).
+
+Checks (Mac: `bundle-flat-runs`, gate.py under run-lock, headless, HIDAPI off; binary `bin-bf2`, the
+code of 7d53340a44 built from the tree before that commit, so it reports a31cee9c82):
+
+- `Orca*` with both discs: 644 run, 627 pass, 17 skipped, 0 fail (11 `OrcaBundle.*`, 19
+  `OrcaMod.*`). A no-key build: `OrcaBundle.*` 11/11.
+- LEGACY against the 0.3.34 release: 49 inputs, 488,307 frames compared, 0 differ; sync tests
+  29,351 / 19,901 re-run frames, 0 RAM mismatches; key inputs identical with the commit masked.
+- BUNDLE (app layout): sync tests 29,351 / 19,901, 0 RAM mismatches; hash logs against legacy: Brawl
+  3 inputs equal on every frame, Project+ 3 inputs equal on every frame but frame 0 (as before); caps
+  lines equal to legacy's; keys `orca2:475f0054...` (Brawl) / `orca2:23bba593...` (P+), never
+  legacy's.
+- Tampered, 18 cases (round 1's 14 rebuilt on the new bundles, plus: the forged card, a bundle for
+  another listing, serial 0, the old `xxh3` pin, each signed with the TEST key): every one refused
+  with its reason and played as legacy, equal to legacy's hash log. **The forged card**: the bundle
+  refuses it (chunked SHA-256 `342f9b6b...` against `4e352981...`), and then legacy boots that same
+  folder's `sd.raw` under PPLUS32.ini's XXH3-128 pin, which the forged card passes: legacy played it
+  (900 frames, no visible effect from the payload's spot on the card). A one-byte change is refused by
+  both, as before.
+- No-key build (`bin-nokey`): both bundles refused (`trusts no bundle key`), legacy, hash logs equal
+  to legacy's. `ORCA_MOD_DIR` naming a tampered bundle: `orca error profile ... refused: mod.sig
+  doesn't match`; naming a good one: mod mode.
+- Windows (the PC, `F:\src\orca-mods` at 6ebc8560a6, the release's CMake switches plus the route-check
+  key and `ORCA_BUNDLE_TRUST_TEST_KEY=ON`, Visual Studio preset, Release; incremental build 5 min):
+  `Orca*` 636 run, 619 pass, 17 skipped (OrcaLive 14, KitDraw 1, the two Rev 1 tests), 0 fail;
+  `OrcaBundle.*` 11/11 (`ChunkedSha256` through CNG, `PinnedKey` through the VS generator's
+  definitions), `OrcaMod.*` 18.
+- Mac <-> PC over prod rooms (`xplat.py`, sandbox-ada on the Mac hosting, sandbox-bo on the PC
+  joining, both 6ebc8560a6): Project+ flat bundle found as its launcher's folder on both: the same key
+  on both machines (`orca2:52b9513eebb77785`: tree, card pin and Sys INIs agree across platforms),
+  the PC plugged in, 198 checksums matched on each side, no desync, direct link, 60.4 fps average on
+  the PC. (The Mac slept on battery while the host waited alone afterwards; its lost room after the
+  friend left is that, not the bundle.)
+  Brawl flat bundle with `--flat-run` (laid out in `<work>/run/open-brawl` beside `-u <work>/user`, as
+  the app does): the PC found it through `<user>/../run/open-brawl/` (its JIT seed read from there),
+  the same key on both (`orca2:1be65c4c97343d1a`), origin at frame 1524, the PC plugged in at 1645 and
+  11 checksums matched, no desync, before the Mac slept again and its SSH session to the PC (and the
+  PC's Orca with it) was cut about 30 s in.
+- Not run: the perf gate. The candidate (unsigned package of 6a1c3e0e2b pinning a perf-gate key, the
+  P+ bundle re-signed with it) and an unsigned 0.3.34 base are ready in `bundle-flat-runs/perf`
+  (`runs.sh`, the gate-0334fb method), but from about 14:50 the Mac ran on battery and slept on and
+  off; the first base run died mid-set. It needs a plugged-in, awake Mac.
