@@ -2052,6 +2052,16 @@ so. Since 0.3.35; before, a refused resize ended Orca (exit `0x80000003`).
 
 What each release changed for players, in plain words.
 
+### 0.3.38
+
+- **Matches start about 2 seconds sooner.** Once the queue finds you an opponent, you are both in
+  control of your fighters about 2 seconds earlier, and the player joining sees "Opponent found ·
+  joining" and the opponent's name while the match loads.
+- **Linux: an experimental build.** The YouGame app on Linux (x86-64, X11 or XWayland) can now run
+  Orca inside its window. It is an early test and may still have problems.
+- **Small fixes from upstream Dolphin.** A crash when the system's language setting is invalid, a
+  counter overflow in the graphics statistics, and extra checks in the GameCube microphone.
+
 ### 0.3.37
 
 - **Music stays off.** With the Music switch off, the music no longer comes back for a few seconds
