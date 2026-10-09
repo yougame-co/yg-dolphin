@@ -134,6 +134,7 @@ engine-sensitive  Source/Core/Core/BootManager.*          # forced settings at b
 engine-sensitive  Source/Core/Core/State.*                # savestates
 engine-sensitive  Source/Core/Core/WiiRoot.*              # session NAND and save
 engine-sensitive  Source/Core/Core/Config/**              # settings schema
+engine-sensitive  Source/Core/Core/NetPlay*               # Dolphin NetPlay's parsers (sessions never use them)
 engine            Source/Core/Core/Boot/**
 engine            Source/Core/Core/HLE/**                 # frame hook install
 engine            Source/Core/Core/HW/**
@@ -151,6 +152,10 @@ engine-sensitive  Source/Core/VideoBackends/D3DCommon/FxcCache.*
 engine            Source/Core/VideoCommon/**
 engine-sensitive  Source/Core/VideoCommon/HiresTextures.* # texture pack loader
 engine-sensitive  Source/Core/VideoCommon/ShaderCache.*   # shader-cache keys
+
+# Dolphin's Qt UI never ships (Orca.app and the Windows zip carry dolphin-emu-nogui only). Classed
+# here because an upstream fix picked into it (0.3.36's NetPlay banner check) makes it an Orca path.
+engine            Source/Core/DolphinQt/**                dev
 
 # Build inputs and third-party code.
 engine-sensitive  .gitmodules
@@ -172,6 +177,7 @@ game-logic        Source/UnitTests/Core/Orca/{RankedSet,Relabel,Results}Test.cpp
 # (RankedTest.cpp tests the engine's RankedSteps: engine dev, from the line above.)
 engine            Tools/**                                dev
 engine-sensitive  Tools/orca-{package-macos,publish-public}.sh dev   # release scripts
+engine-sensitive  Tools/orca/upstream-sync.py              dev     # upstream Dolphin sync (release script)
 engine-sensitive  Tools/orca/layer*                       dev     # this map, layer-of-diff, layerlib
 engine-sensitive  Tools/orca/forbidden-calls*             dev
 engine-sensitive  Tools/orca/test_layers.py               dev

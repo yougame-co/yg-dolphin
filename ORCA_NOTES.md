@@ -79,6 +79,94 @@ when `ps -axo comm=` lists his app's Orca (ORCA.md checklist step 0; `run-lock.p
    (`--pplus ~/Documents/brawl-dolphin/pplus-internal/run/"Project+ Netplay Launcher.dol"`; "The
    external SSD" below).
 
+## Upstream Dolphin updates
+
+Luis, 2026-10-09: Orca stays current with upstream Dolphin, and a Dolphin security fix reaches
+players within hours, not at the next big rebase. Three pieces:
+
+1. **The watch** (pub/sub, code only, no AI: Luis, 2026-10-09). YouGame's `tools/upstream-watch/`
+   is a Cloudflare Worker that reads dolphin-emu/dolphin every 15 minutes (tags, releases, master,
+   security advisories, the blog; conditional requests) and mails `brawl-rollback-lead@mac` through
+   the agent mailbox only when something is new: a tag, release, advisory, security-looking commit
+   or blog post at once, other master commits in one daily digest. Its README says how to pause it.
+2. **Triage and sync**: `Tools/orca/upstream-sync.py` (private: excluded from the public tag).
+3. **The release**: every gate of the release checklist, as always. `upstream-sync.py next` prints
+   the steps with exact commands; the lead's workflow template
+   `~/Documents/brawl-dolphin/upstream-watch/release-workflow.js` runs them in one call
+   (`args: {version, picks | merge, why}`).
+
+```bash
+T=~/Documents/brawl-dolphin/orca-upstream-tools          # a checkout of origin/main: the tools
+git -C $T fetch -q origin && git -C $T checkout -q --detach origin/main
+S="python3 $T/Tools/orca/upstream-sync.py"
+$S triage                     # what upstream has that live Orca lacks; exit 3 = a new security/crash row
+$S triage --dashboard --save  # files each security/crash row on /admin/triage as lead, once
+$S start <sha>...             # branch upstream-sync-<date> from the live build, cherry-pick -x
+$S check --version 0.3.N      # build, Orca* gtests, package, hashlogs = live's, YG_SYNCTEST=7
+$S next                       # everything left, with exact commands
+```
+
+The live build is whatever yougame.co's manifest serves; `start` branches from its commit in one
+persistent worktree, `~/Documents/brawl-dolphin/orca-upstream-sync` (incremental builds; ccache), and
+`test` downloads the live Mac build from the site into `upstream-watch/live/<version>/` (sha256
+checked; never the app's own copy, which run-lock counts as Luis playing) and caches its hashlogs
+and synctest counts. Every Orca run goes through `run-lock.py check`; builds take `build.lock`,
+wait for the load and for a perf run in progress (up to 15 minutes). State:
+`upstream-watch/state.json`; logs: `upstream-watch/runs/<branch>/`.
+
+**Triage columns.** `class` comes from keywords in the message (and Externals paths): a hint, read
+the diff. `reach`: `ships`; `unreachable?` (built in but not reached in a session: Dolphin NetPlay,
+the EXI mic, the assembler, RetroAchievements, the debugger, GBA; check again before relying on
+it); `not-shipped` (Qt, Android, the updater, DolphinTool, other games' GameSettings, docs).
+`overlap`: files Orca changed too. `layer`: layers.txt (Externals and root CMake are
+engine-sensitive). `pick`: the commit alone merged onto live, and for a PR with several commits the
+whole series too (PR #14772's EXI mic fix only applies after its refactors). A commit counts as
+already in Orca by `-x` trailer, patch-id, or the same author and subject (a hotfix tag's picks have
+other shas than master's).
+
+**Who supplies the bytes** decides the urgency, as for 2609a: a peer, the room server or the page
+(urgent: release now), a file the player brings (their own disc, hash-checked; P+ pinned by hash),
+or nothing Orca reaches (take it with the next release). Write that line in the release notes,
+neutrally until the release is live.
+
+**How long a fix takes to reach players** (0.3.36's numbers):
+
+| Step | Time |
+| --- | --- |
+| Upstream merges a fix; the watch mails | under 15 min (a digest item: next 13:00 UTC) |
+| Triage, read the diff against the exposure | 15-30 min |
+| `start`, `check` (build 1-5 min with ccache, gtests 5, package 2-5, hash + sync ~10, each run waiting its turn in run-lock) | 30-45 min |
+| Mac sign + notarize, confirm on the signed bits | 15 min |
+| Windows build, sign, stage, gate 1, gtests (in parallel) | 45-60 min |
+| Mac<->PC friends joins | 15 min |
+| Perf gate, 4+4 runs + warm-ups (mandatory; the long pole) | about 95 min |
+| Go-live (Windows zip to R2, flip, verify) | 5 min |
+| Prod smoke (tickets, ranked sets, aged-host drop-ins), while live | 45 min |
+
+About 3-4 hours from the lead starting to the manifest flip; 0.3.36 went from the first pick
+(~02:00) to live at 05:09 with a hardening fix and a review round in between. Players get it at
+their next Play: the app forces the newest Orca, and matchmaking answers older builds with
+`orca_outdated`. Friends rooms still take builds down to the site's floor (0.3.32), so a fix that
+guards against a peer also needs that floor raised on the site.
+
+**Picking or merging.** Cherry-pick master commits with `-x`, as 0.3.36 did for 2609a's four fixes:
+the smallest diff, and triage then knows they are in. `start --merge refs/tags/<hotfix>` takes a
+whole hotfix tag (2609a merges clean onto 0.3.36; it also brings ScmRevGen's version bump). Moving
+to a new Dolphin release (2612) is a planned rebase with its own determinism work (upstream's
+texture-cache refactor already conflicts), not this pipeline.
+
+**Not covered by the watch:** libraries Dolphin bundles and itself lags on (upstream's Externals
+bumps arrive as ordinary commits; an advisory upstream hasn't acted on doesn't): look at the
+network-facing ones each release (Externals/mbedtls, curl, Orca's libjuice, zstd, minizip-ng).
+Fixes still sitting in open upstream PRs aren't seen either, and GitHub advisories are often
+published after the fix ships.
+
+**The layer map after a pick.** A pick into an upstream file Orca never touched makes that file an
+Orca path (it now differs from the merge-base), so `test_layers.py` wants a rule for it and network
+code there must be engine-sensitive: 0.3.36's NetPlay picks needed `Source/Core/Core/NetPlay*` and
+`Source/Core/DolphinQt/**` (dev: Qt never ships). Add such rules when merging the release into main,
+then refresh the forbidden-calls baseline as usual.
+
 ## Sharing the Mac: the run queue
 
 2026-10-06. Every scripted Orca run on the Mac took `orca-run-solo.lock` (two-Orca runs

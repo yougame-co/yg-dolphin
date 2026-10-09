@@ -739,7 +739,6 @@
 1	process	Source/Core/DolphinNoGUI/PlatformMacos.mm	NSWorkspace
 2	app-channel	Source/Core/DolphinNoGUI/PlatformWin32.cpp	stderr
 3	dynload	Source/Core/DolphinNoGUI/PlatformWin32.cpp	GetModuleHandle(
-29	socket	Source/Core/DolphinQt/NetPlay/NetPlayDialog.cpp	connect(
 1	env	Source/Core/UICommon/UICommon.cpp	getenv("DOLPHIN_EMU_USERPATH"
 1	env	Source/Core/UICommon/UICommon.cpp	getenv("HOME"
 1	env	Source/Core/UICommon/UICommon.cpp	getenv("PWD"

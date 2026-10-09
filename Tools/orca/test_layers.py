@@ -211,7 +211,9 @@ class RealMapTests(unittest.TestCase):
             "Source/Core/DolphinNoGUI/Orca.entitlements": ("engine-sensitive", False),
             "Source/Core/VideoCommon/HiresTextures.cpp": ("engine-sensitive", False),
             "Source/Core/VideoCommon/Present.cpp": ("engine", False),
-            "Source/Core/DolphinQt/MainWindow.cpp": ("engine", False),
+            "Source/Core/DolphinQt/MainWindow.cpp": ("engine", True),  # never built into Orca
+            "Source/Core/Core/NetPlayClient.cpp": ("engine-sensitive", False),
+            "Tools/orca/upstream-sync.py": ("engine-sensitive", True),
             "Externals/libjuice/CMakeLists.txt": ("engine-sensitive", False),
             "Externals/licenses.md": ("engine-sensitive", False),
             "CMakeLists.txt": ("engine-sensitive", False),
