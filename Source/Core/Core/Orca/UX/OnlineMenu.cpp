@@ -620,9 +620,9 @@ void Frame(const Core::CPUThreadGuard& guard, int frame)
     return;
   }
   GuardMemory m(guard);
+  const Orca::Net::ReplayFrame* const record = Orca::Net::ReplayScope::Current();
   // The history's seed first: before the exit, and before the frame draws anything.
-  if (const Orca::Net::ReplayFrame* record = Orca::Net::ReplayScope::Current();
-      record && record->seed != 0)
+  if (record && record->seed != 0)
   {
     if (ApplySeed(m, record->seed))
     {
@@ -637,8 +637,7 @@ void Frame(const Core::CPUThreadGuard& guard, int frame)
                    frame);
     }
   }
-  if (const Orca::Net::ReplayFrame* record = Orca::Net::ReplayScope::Current();
-      record && record->menu_exit != 0)
+  if (record && record->menu_exit != 0)
   {
     if (Apply(m, record->menu_exit))
     {

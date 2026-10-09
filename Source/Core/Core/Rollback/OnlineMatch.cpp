@@ -439,8 +439,9 @@ int FastUntil()
 // FreshMove::ApplySeed): fresh for every boot and every fresh start, so RANDOM on the character
 // select, and every draw the game makes, differ from one match to the next. The host draws it and
 // the replay carries it, so a joiner's rebuild starts from the same numbers. 0 (the canonical
-// boot's own numbers, as every Orca before this) with no YouGame room, so harness runs repeat;
-// ORCA_TEST_RNG_SEED=<n> (a test knob) fixes it instead.
+// boot's own numbers, as every Orca before this) with no YouGame room; offline harness runs have no
+// history at all, so they repeat. In a dev game's room ORCA_TEST_RNG_SEED=<n> (a test knob) fixes
+// it.
 u32 NewHistorySeed()
 {
   if (Orca::UX::TestKnobsAllowed())
