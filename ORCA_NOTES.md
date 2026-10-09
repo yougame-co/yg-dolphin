@@ -1777,6 +1777,37 @@ flushes up to 19 s, and processes started with their cwd on it hung in `_dyld_st
   overlapped ten flagged SSD stalls (`run-lock` marked both perf runs tainted). The release's
   two-Orca perf gate runs with one side off.
 
+### Music back at a song's loop (2026-10-09)
+
+**Reports.** Two Project+ players on Windows, desktop 0.12.39 (bug_reports `91db1039`, 10-08 17:51
+UTC: "music still randomly turns on from time to time"; `0366bc41`, 10-09 01:49 UTC: "comes back on
+full blast when it loops").
+
+**Cause, proven.** The switch classified music by the voice's type alone (`is_stream` 1). A RAM
+watch of the stream pair's parameter blocks (`ORCA_UX_PROBE` watch at pb+0x10, running and type;
+Brawl's Wii PB in RAM has no updates field, so loop/end/current are at +0x72/+0x76/+0x7A) over 6-7
+minutes idle on the main menu, 0.3.35, music off: at every loop of the menu song (every ~5485
+frames, 91 s) NW4R's stream player sets the pair to type 0 with loop start and end inside the ring
+(L: loop `0x204D06C2`, end `0x204CD81D`; ring `0x204BC6C2-0x204F06BF`), the DSP jumps ~34 frames
+later and the bounds go back to the ring's, and the type goes back to 1 after 34-303 frames in all.
+The audio dump's only loud spans (RMS 1000-4400, the song at full volume) are exactly those windows,
+offset by the audio latency: Brawl 3.8/5.2/0.7 s, Project+ 3.8/5.2/0.7/2.1 s. Same PBs in Project+
+(`8049A480`/`8049A5C0`). The 2026-10-06 checks didn't see it: no run sat through a loop in a
+music-only scene, and "AI blocks played quiet" counts shadow hits, not what the split left in.
+
+**Fix** (branch `music-loop-0335`, off `release-0.3.35`): `Orca::Music::StreamVoices` remembers,
+per parameter block, the ring a stream voice loops over; while that voice is type 0 and plays
+inside that ring it is still music. Leaving the ring (a reused block's effect, a song that ends
+into the zero buffer) forgets it. Followed with the switch on too, so turning it off during a loop
+covers that loop. Host only and never saved; RAM unchanged.
+
+Checks (Mac, release build + the branch, `bugs-oct9/music` in the lead's scratchpad): unit tests
+`OrcaMusic*` 13/13; idle menu off, Brawl 21600 frames and Project+ 25000: the fix's dumps have no
+loud span (the type-0 windows still happen: 3 and 4); default inputs: hashlogs fix off = 0.3.35 on
+on every frame, dumps on sample-identical, off identical but for a loop window each (Project+
+136.2-137.0 s: 0.3.35 RMS 3869, fix 1; Brawl 131.4-132.8 s, in the match: 8893 to 7609, the
+effects stay); sync tests off: 0 RAM mismatches.
+
 ## Match start
 
 Luis, 2026-10-03 (on his Windows PC): the first seconds of every match (the countdown and just
@@ -6570,6 +6601,103 @@ Not run here (the release's own steps): hash logs and synctests on this build, t
 gate against 0.3.34, the Windows build (the first MSVC compile of `Activity.cpp`) and its gtests,
 the swap-chain repro on the release bits, Mac <-> PC.
 
+## Random gave the same characters every match (orca-random-seed-0335, 2026-10-09)
+
+Report (decepticon, P+, 0.3.32, 2026-10-08): "I almost always get sonic first. And I get
+dedede/yoshi/luigi all the time" (dashboard `orca-random-same-characters`).
+
+**Cause, proven under the harness with probe watches and writes:**
+
+- Two `mtRand` generators: `g_mtRandDefault` (`0x805A00B8`, seed `+4`) and a second at `0x805A0420`
+  (seed `+4`), same vtable `0x8042AE50`, generate `0x8003FAC4` (`(s * 0x41C64E6D + 12345) &
+  0x7FFFFFFF`), randf `0x8003FAF8`, randi `0x8003FC7C` (the default one).
+- The character select draws each panel's RANDOM as it starts from the second one (12 draws: CSS
+  frame 2 in P+, about 30 in Brawl; `0x806857F0`, `randf(0x805A0420) * 42` into P+'s table at
+  `0x80680E80`, area i's character is draw 3i). A on RANDOM copies that draw into gmGlobalModeMelee
+  (no draw at the press; picking RANDOM again in the same visit gives the same character).
+- Writing `0x805A00BC` on the main menu or the select changed nothing; writing `0x805A0424` before
+  the select changed RANDOM (P+ Roy to another, Brawl `0x25` to `0x03`). A longer main menu, A
+  7-65 frames after hovering, Start 200-300: the same seeds and character. The menus' generator
+  moves only at select entries and about every 5 s of a fight.
+- The pinned clock and scripted boot make it `207d5b71` at every origin (app path; `207d5b25`
+  offline). With 0.3.34's fresh starts every queue room starts there.
+
+**On 0.3.35** (queue-e2e `--q2 --queue ranked --pick random`, rooms mur7guyk and 8xkmpur7): both
+rooms, both Orcas: the menus' generator `22537565` after the select's draws, game 1 host R.O.B.
+(`0x26`), joiner King Dedede (`0x23`), game 2 `0x03`/`0x26`. `g_mtRandDefault` at game 1's fight
+start was the same too (`01aa7b00`).
+
+**Fix:** a seed per history ([ORCA.md "Random numbers"](ORCA.md#random-numbers)):
+`ReplayFrame::seed` on the first frame (ORP2), drawn by the host at every boot origin and fresh
+start, written into both generators by `FreshMove::ApplySeed` at that frame's hook. ux 26.
+
+**Checks** (Mac, Release, this branch):
+
+- Build: only the known `YouGameRoom.cpp:3076` warning. `Orca*`: 643 run, 623 passed, 20 skipped
+  (OrcaLive, OrcaDisc, the HTTP store, UXLatency, KitDraw), 0 failed; new tests
+  `OrcaKeyframe.AHistorysSeedTravelsOnItsFirstFrameOnly`,
+  `OrcaOnlineMenuFresh.AHistorysSeedStartsBothRandomNumberGenerators`,
+  `OrcaOnlineMenuFresh.TheCharacterSelectsRandomDrawsDependOnTheSeed`.
+- queue-e2e P+ ranked `--pick random`, twice: PASS, 227 checksums matched on each side, 0
+  rollbacks; characters 41/42, 42/40 and 23/0, 15/40 (0.3.35: 38/35, 3/38 both times). Every
+  origin's RAM hash is still `0c80f10df0a8be22`; the joiner's rebuild applied the host's seed.
+- dropin-commands.py P+: PASS, and with `ORCA_TEST_FRESH=off` (joins from the host's boot origin,
+  its CaptureOrigin seed): PASS; the friend rebuilt with the host's seed both times.
+- Offline hash log (pplus-1v1 to 4000): identical to 0.3.35 (no room, no seed).
+
+Not run: Mac<->PC (`xplat.py`), Brawl two-Orca, the perf gate. The change writes two words at one
+frame, so no perf effect is expected.
+
+## Name tags typed in the game (branch tags-width-0335, 2026-10-09)
+
+**Reports** (site comments, Oct 7-9, after 0.3.30-0.3.35): "changing controls inside the game
+(notedly turning off tap jump) literally just doesn't work"; a step-by-step one: Options > Controls,
+make a tag named like their username, tap jump and C-stick changed, Casual or Ranked, "controls
+return to default settings", and the Controls list then shows that name twice.
+
+**Cause, proven with the game's own menus** (shipped 0.3.35 bytes, Brawl rev 2, headless,
+`YG_INPUT` through Options > Controls > New entry, the keypad, the GameCube page and Save):
+- The name list types **full-width** characters: "ADGJ" is `FF21 FF24 FF27 FF2A` in the tag; the
+  same in Project+. `BrawlTag` and `MakeTag` write ASCII (`0041 ...`), and `FindTag` compared code
+  points, so a player's own tag never matched their username.
+- In a dev game's room named `sandbox-ada`: the player's `ＳＡＮＤＢ` (slot 0, tap jump off) stays
+  as saved; on the character select Orca makes `SANDB` in slot 119 at the defaults and port 1 wears
+  it (tap jump on). No `orca controls` line and no kept file: `ReadOwnControls` found neither the
+  worn tag nor, off the select, a tag named `SANDB`, so nothing reached the page or the account,
+  and online rooms carried nothing. The Names list then shows SANDB twice.
+- Save on the GameCube page writes the flag byte as 0x01 with tap jump off and 0x81 with it on: 0x80
+  is tap jump, 0x01 a "saved" mark, not tap jump. In a match (Mario, up held after GO) a worn tag
+  with 0x80 or 0x81 jumps (status 0xA, 0xB) and one with 0x01 or 0x00 does not, so the tag
+  mechanism and Orca's clamped profiles do apply tap jump; only the tag choice was wrong.
+
+**Change.** Names match as they read: full-width forms fold to ASCII and letters to one case
+(`SameName`). `FindPlayerTag` returns a tag the player typed that reads as the name before the one
+Orca made; `ApplyNameTags` uses it for a port's name and its variant, and `ReadOwnControls` uses it
+for the own-name fallback and for a last-worn tag that reads as the own name (so a tag typed after
+wearing Orca's is the one read). On the character select the read takes the worn slot itself.
+`WriteControls` keeps a flag byte's bits a profile doesn't carry (the 0x01 Save mark). Nothing else.
+
+**Checked** (dev build of the branch, Mac, every run through `run-lock.py check`):
+- `OrcaUXNameTags` 22/22, two new tests that fail on 0.3.35's `NameTags.cpp`
+  (`ATagThePlayerTypedInTheGameIsTheirs`, `ControlsSavedInTheGamesMenusArePublishedThere`);
+  `Orca*` 642 run, 623 passed, 19 skipped (OrcaLive, OrcaDisc, OrcaUXLatency, OrcaKitDraw), 0 failed.
+- The same menus in a dev room: `orca controls ...00...` (tap jump off) printed and kept right after
+  Save, before any character select; port 1 wears slot 0; no slot-119 tag; one SANDB in the list.
+- Restart on that user folder, the tag typed again and left at the defaults: "own controls from an
+  earlier run", no change published for the new tag, the character select writes the kept controls
+  into it and port 1 wears it.
+- `YG_SYNCTEST=7` from 2300 to 6000 with `ORCA_UX_TEST_NAMES=sandbox-ada,sandbox-bo` over the
+  typed tag, its Save, the character select (port 1 in the typed tag, port 2 SAND2), the stage
+  select and a match: 0 RAM mismatches (PASS); up held in the match: no jump.
+
+**Release notes.** Remote ports' tags can differ from 0.3.35's in a session whose memory holds a
+typed tag of a player's name (a With Friends host's own), so the release that takes this needs its
+kCompatVersion bump. The writes are still a pure function of memory and the synced ports, the same
+on every machine whoever is remote. The frame hook gains one folded scan of the 120 tags per joined
+port on the character select and one per frame while alone: run the two-Orca perf gate as usual.
+Known edges (review): in a With Friends host's memory a remote port whose 5-letter tag reads as a typed tag takes it (a port without controls then plays that layout; a same-prefix joiner whose port joins before the host's can take the host's typed tag, as it could Orca's ASCII one before); off the select a player who picked Orca's ASCII copy over their typed one has the typed one read. Not clang-formatted (no clang-format on this Mac). Not covered: tags kept between runs (still
+`orca-keep-own-tags`), Windows, a real two-Orca room with a typed tag.
+
 ## Explaining it to people (internal)
 
 **One sentence:**
@@ -6638,3 +6766,47 @@ Checks (Mac, worktree `orca-rel-0336`, `build`, Release, `orca-cmake-flags.txt` 
 
 The release's own steps (hash logs and synctests against 0.3.35, the two-Orca perf gate, the
 Windows build and its gtests, Mac <-> PC) are recorded with the release.
+
+## Orca 0.3.37 (2026-10-09)
+
+Branch `release-0.3.37`, from `security-0.3.36` (`3b7cc5517d`, 0.3.36 as shipped). Four side branches,
+each off `release-0.3.35`, merged with `--no-ff`:
+
+- `music-loop-0335` (`4d90601c87`): with the Music switch off, a stream voice stays music through its
+  song's loop (the game turns music voices into normal voices at each loop, so music played for
+  0.5-5 s per loop). Clean merge.
+- `orca-rejoin-seat-0335` (`04b32e5fcf`, `ee73c12f8e`): a ranked joiner back in its old seat after a
+  dropped connection skips the host's roster entries from the earlier stay until the host takes it in
+  (bug reports 6afb0948, 22ba6446, 96e56887). Conflict in `Session::ApplyRoster` with 0.3.36's own-seat
+  checks, resolved by intent: the skip runs first, so an earlier stay's entry can neither set
+  `m_own_live_from` nor trip the plug-in check (under 0.3.36's checks such an entry would have set
+  `m_own_live_from` to the old live frame, and the admitting roster would then end the session). The
+  skip's "not taken in yet" test reads `m_own_live_from` instead of the seat plan's `live_from`: the
+  same until the host names the live frame (a joiner's plan starts with its own seat empty, and
+  `m_own_live_from` is set whenever the plan's is, and never reset), and after that no roster change to
+  the own seat is skipped, a later drop by the host included.
+- `orca-random-seed-0335` (`e76a92dae2`, `4abe7663f7`): every history starts from a seed of its own
+  (ORCA.md "Random numbers"). Clean merge.
+- `tags-width-0335` (`ea1935aa68`): a name tag the player typed in the game is theirs (full-width
+  names fold to ASCII, one case). Conflict in this file only.
+- **kCompatVersion 25 -> 26, one bump for both changes that alter what the game computes:** the seed
+  (both generators' seed words written at a history's first frame) and typed name tags (the session's
+  writes differ whenever memory holds a typed tag of a player's name). The music and rejoin changes
+  alter neither. The key also carries the git revision, so 0.3.36 and 0.3.37 never meet anyway.
+- clang-format 19.1.7 over every line changed since 0.3.36: only the seed's lines needed it (wrapping,
+  include order); the name-tag lines were already clean. Then 0 lines to change.
+- `Tools/orca-publish-public.sh` names `github.com/yougame-co/orca-netplay` (the repos moved to the
+  `yougame-co` org on 2026-10-09; cherry-picked from main `95a392c04e`).
+
+Checks (Mac, worktree `orca-rel-0337`, `build`, Release, `orca-cmake-flags.txt` + tests):
+
+- dolphin-nogui + tests from clean (ccache): the same warnings as 0.3.36's build, none new. The binary
+  says `Dolphin [release-0.3.37] 2609-646`.
+- `Orca*` with the fake keyframe server and both Brawl discs: 656 run, 637 passed, 19 skipped (the same
+  19 as 0.3.36: OrcaLive 14, OrcaDisc 2, OrcaUXLatency 2, OrcaKitDraw 1), 0 failed. The ten new tests
+  pass: OrcaMusic (4), the seed's OrcaKeyframe (1) and OrcaOnlineMenuFresh (2),
+  `OrcaDropIn.FriendBackInTheSameSeatAfterADrop`, OrcaUXNameTags (2).
+
+Not run here (the release's own steps): hash logs and synctests on this build, the two-Orca perf gate
+against 0.3.36, the Windows build and its gtests, Mac <-> PC (the seed and the tags both need it), a
+real two-Orca room with a typed tag.
