@@ -108,6 +108,7 @@ with the same value meet):
 | `ORCA_TEST_KEYFRAME_DIR` | Keyframes go through this folder instead of YouGame's store. |
 | `ORCA_TEST_LEAVE_AT` | A joined friend leaves at this frame. |
 | `ORCA_TEST_COMMANDS` | `1`: take the embed protocol's stdin commands without embedding, plus test commands: `test-drop-room`, `test-direct off\|on\|in\|out\|rebuild`, `test-shot <name>`. |
+| `ORCA_TEST_DROP_SILENT` | `1`: `test-drop-room` drops the room connection the way a network failure does: no close, the socket stays open and unread, and the server only notices when the player's next connection replaces it. |
 | `ORCA_TEST_PRESENT` | Headless only: `WxH` presents into an offscreen image with the OSD and overlay, so screenshots show what a player sees. |
 | `ORCA_TEST_PADS`, `ORCA_TEST_SKIP_RENDER` | Harness overrides. |
 | `ORCA_TEST_FULL_SNAPSHOTS` | `1`: snapshots copy all of RAM instead of copy-on-write. |

@@ -29,6 +29,12 @@
 //            the fighters are in: neither Orca sends game-start, and the set ends void, nobody
 //            rated (a crash at load; --expect void is then the default)
 //   zleave   ranked: after the set the joiner leaves by holding Z on the results screen
+//   rejoin   ranked: the joiner's room connection drops in game 1 (`test-drop-room`) and its page
+//            sends it back to the same room, as the YouGame page does; it must plug in again and
+//            play on (bug reports 6afb0948, 22ba6446, 96e56887: Orca 0.3.30 and 0.3.34 ended with
+//            "The host plugged this controller in at frame N, already past"). --drop silent (the
+//            default) drops it as a network failure does (ORCA_TEST_DROP_SILENT: the server hears
+//            of it only when the next connection replaces it); --drop clean closes it at once
 //   noskip   ranked: both hold Z on every character select; ranked has no skip
 // --pick random makes every pick RANDOM. Every --q2 scenario ends with the checksum gate: each
 // session either Orca ended matched checksums with the other, and neither logged a desync.
@@ -157,6 +163,7 @@ if ((EXPECT === "void" && IN_GAME === 2) || (EXPECT === "forfeit" && IN_GAME ===
 // the host's fresh start, its hold for the room's header and its own pick being put back all race
 // the joiner's arrival, as in prod.
 const JOIN_DELAY_MS = Number(opt("--join-delay", "1500"));
+const DROP = opt("--drop", "silent");
 // --costume <n> (--q2): after A on its own character select each player presses X n times, so its
 // pick is in another colour and the host's own pick, put back after its fresh start, needs X too.
 const COSTUME_PRESSES = Number(opt("--costume", "0"));
@@ -454,6 +461,7 @@ class Side {
       if ((k.startsWith("ORCA_TEST_") || k.startsWith("SDL_")) && !(k in env)) env[k] = v;
     }
     if (PPLUS) env.ORCA_PROFILE = "PPLUS32";
+    if (SCENARIO === "rejoin" && DROP === "silent") env.ORCA_TEST_DROP_SILENT = "1";
     const own = CONTROLS[this.name === "ada" ? 0 : 1];
     if (own && own !== "-") env.ORCA_CONTROLS = own;
     if (PROBE) {
@@ -1557,6 +1565,49 @@ async function q2Main() {
       fail("the rematch's session never ended on both sides");
     const sums = checksumsMatched([a, b], 2);
     log(`PASS: rematch: skipped ${room}, then ${host2.name} hosted ${m1.room}: ${n} verdict(s) the same on both sides; both back on their own character select, ready; checksums: ${sums}`);
+    return;
+  }
+  if (SCENARIO === "rejoin") {
+    if (QUEUE !== "ranked") fail("rejoin is a ranked scenario");
+    marks();
+    await q2Css(host, joiner, true);
+    await host.waitScene("scSelStage", 60000);
+    await host.waitScene("scMelee", 200000);
+    await sleep(8000);
+    const hostFrom = host.lines.length;
+    const joinFrom = joiner.joinLog.length;
+    const dropFrom = joiner.lines.length;
+    joiner.send("test-drop-room");
+    await joiner.expect(/^orca error network /, 30000, dropFrom);
+    log(`${joiner.name}: its room connection dropped mid-fight`);
+    await waitFor(
+      () => joiner.queueLog.slice(joiner.queueAt).some((l) => /back on this player's own character select/.test(l)),
+      30000,
+      `${joiner.name} never went back to its own character select`,
+    );
+    // The page sends it back to the match's room.
+    await sleep(JOIN_DELAY_MS);
+    const back = joiner.lines.length;
+    joiner.send(`join ${room}`);
+    const r = await Promise.race([
+      joiner.expect(/^orca state playing$/, 150000, back).then(() => "playing"),
+      joiner.expect(/^orca error (\S+) (.*)$/, 150000, back).then((x) => `${x.m[1]}: ${x.m[2]}`),
+    ]);
+    if (r !== "playing") fail(`${joiner.name}: back in ${room}, then orca error ${r}`);
+    await host.expect(/^orca state friend-joined$/, 60000, hostFrom);
+    // Plugged in again, and both play on: 20 s with no error on either side.
+    await sleep(20000);
+    const joins = joiner.joinLog.slice(joinFrom).map((e) => e.line);
+    const plugged = joins.filter((l) => /^Drop-in: plugged into port 2 at frame/.test(l));
+    const ended = joins.filter((l) => /^Online: session ended/.test(l));
+    log(`${joiner.name} after the drop: ${joins.filter((l) => /plugged into|session ended|joining room|port \d is/.test(l)).join(" | ")}`);
+    if (plugged.length < 1) fail(`${joiner.name} never plugged in again`);
+    if (ended.length !== 1) fail(`${joiner.name}: ${ended.length} session end(s) since the drop, wanted the drop's own`);
+    noErrors([host]);
+    noErrors([joiner], /^orca error network /);
+    for (const s of [host, joiner]) if (s.desyncs.length) fail(`${s.name}: ${s.desyncs[0]}`);
+    const sums = checksumsMatched([joiner]);
+    log(`PASS: rejoin: ${joiner.name} dropped mid-fight, came back to ${room} and ${plugged[plugged.length - 1]}; 20 s on, no error on either side; ${joiner.name}'s first session: ${sums}`);
     return;
   }
   if (SCENARIO === "kill" || SCENARIO === "leave") {
