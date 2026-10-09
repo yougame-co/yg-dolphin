@@ -415,7 +415,11 @@ pointers, or arbitrary memory writes.
    rebased without reporting old events.
 5. **Catch up and plug in.** The normal rollback session starts at K, catches up from live history,
    and both machines plug in the friend's controller at the same agreed future frame. Heartbeats
-   keep the pending seat alive while the replay runs.
+   keep the pending seat alive while the replay runs. The host's packets reach the friend from the
+   moment it is in the room, before the host takes it in; a roster from then that names no live
+   frame for the friend's seat is not about this stay and the friend's session skips that seat
+   (`Session::ApplyRoster`). It matters when a player comes back to the seat it had: until the host
+   takes it in again, the host's roster still names that seat's earlier plug-in.
 6. **Leave.** The existing agreed unplug and solo-return behavior continues. A failed replay does
    not leave the player's machine on partially reconstructed peer history.
 
