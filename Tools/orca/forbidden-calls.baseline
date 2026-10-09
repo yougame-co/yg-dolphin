@@ -284,6 +284,7 @@
 1	socket	Source/Core/Core/IOS/Network/Socket.cpp	sendto(
 1	socket	Source/Core/Core/IOS/Network/Socket.cpp	setsockopt(
 1	socket	Source/Core/Core/IOS/Network/Socket.cpp	socket(
+2	app-channel	Source/Core/Core/Orca/Activity.cpp	Status::Line(
 1	app-channel	Source/Core/Core/Orca/CrashNote.cpp	GetStdHandle
 1	app-channel	Source/Core/Core/Orca/CrashNote.cpp	STD_ERROR_HANDLE
 2	dynload	Source/Core/Core/Orca/CrashNote.cpp	GetModuleHandleW(
@@ -745,6 +746,7 @@
 1	file-open	Source/Core/VideoBackends/D3DCommon/Shader.cpp	#include fstream
 1	file-open	Source/Core/VideoBackends/D3DCommon/Shader.cpp	File::OpenFStream(
 1	file-open	Source/Core/VideoBackends/D3DCommon/Shader.cpp	std::ofstream
+3	app-channel	Source/Core/VideoBackends/D3DCommon/SwapChain.cpp	stderr
 1	file-open	Source/Core/VideoBackends/Metal/MTLGfx.mm	#include fstream
 1	file-open	Source/Core/VideoBackends/Metal/MTLGfx.mm	std::ofstream
 1	build-deps	Source/Core/VideoCommon/CMakeLists.txt	target_link_libraries(videocommon ${AUDIOTOOLBOX_LIBRARY})
