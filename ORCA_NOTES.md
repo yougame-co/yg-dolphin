@@ -6560,6 +6560,56 @@ start, written into both generators by `FreshMove::ApplySeed` at that frame's ho
 Not run: Mac<->PC (`xplat.py`), Brawl two-Orca, the perf gate. The change writes two words at one
 frame, so no perf effect is expected.
 
+## Name tags typed in the game (branch tags-width-0335, 2026-10-09)
+
+**Reports** (site comments, Oct 7-9, after 0.3.30-0.3.35): "changing controls inside the game
+(notedly turning off tap jump) literally just doesn't work"; a step-by-step one: Options > Controls,
+make a tag named like their username, tap jump and C-stick changed, Casual or Ranked, "controls
+return to default settings", and the Controls list then shows that name twice.
+
+**Cause, proven with the game's own menus** (shipped 0.3.35 bytes, Brawl rev 2, headless,
+`YG_INPUT` through Options > Controls > New entry, the keypad, the GameCube page and Save):
+- The name list types **full-width** characters: "ADGJ" is `FF21 FF24 FF27 FF2A` in the tag; the
+  same in Project+. `BrawlTag` and `MakeTag` write ASCII (`0041 ...`), and `FindTag` compared code
+  points, so a player's own tag never matched their username.
+- In a dev game's room named `sandbox-ada`: the player's `ＳＡＮＤＢ` (slot 0, tap jump off) stays
+  as saved; on the character select Orca makes `SANDB` in slot 119 at the defaults and port 1 wears
+  it (tap jump on). No `orca controls` line and no kept file: `ReadOwnControls` found neither the
+  worn tag nor, off the select, a tag named `SANDB`, so nothing reached the page or the account,
+  and online rooms carried nothing. The Names list then shows SANDB twice.
+- Save on the GameCube page writes the flag byte as 0x01 with tap jump off and 0x81 with it on: 0x80
+  is tap jump, 0x01 a "saved" mark, not tap jump. In a match (Mario, up held after GO) a worn tag
+  with 0x80 or 0x81 jumps (status 0xA, 0xB) and one with 0x01 or 0x00 does not, so the tag
+  mechanism and Orca's clamped profiles do apply tap jump; only the tag choice was wrong.
+
+**Change.** Names match as they read: full-width forms fold to ASCII and letters to one case
+(`SameName`). `FindPlayerTag` returns a tag the player typed that reads as the name before the one
+Orca made; `ApplyNameTags` uses it for a port's name and its variant, and `ReadOwnControls` uses it
+for the own-name fallback and for a last-worn tag that reads as the own name (so a tag typed after
+wearing Orca's is the one read). On the character select the read takes the worn slot itself.
+`WriteControls` keeps a flag byte's bits a profile doesn't carry (the 0x01 Save mark). Nothing else.
+
+**Checked** (dev build of the branch, Mac, every run through `run-lock.py check`):
+- `OrcaUXNameTags` 22/22, two new tests that fail on 0.3.35's `NameTags.cpp`
+  (`ATagThePlayerTypedInTheGameIsTheirs`, `ControlsSavedInTheGamesMenusArePublishedThere`);
+  `Orca*` 642 run, 623 passed, 19 skipped (OrcaLive, OrcaDisc, OrcaUXLatency, OrcaKitDraw), 0 failed.
+- The same menus in a dev room: `orca controls ...00...` (tap jump off) printed and kept right after
+  Save, before any character select; port 1 wears slot 0; no slot-119 tag; one SANDB in the list.
+- Restart on that user folder, the tag typed again and left at the defaults: "own controls from an
+  earlier run", no change published for the new tag, the character select writes the kept controls
+  into it and port 1 wears it.
+- `YG_SYNCTEST=7` from 2300 to 6000 with `ORCA_UX_TEST_NAMES=sandbox-ada,sandbox-bo` over the
+  typed tag, its Save, the character select (port 1 in the typed tag, port 2 SAND2), the stage
+  select and a match: 0 RAM mismatches (PASS); up held in the match: no jump.
+
+**Release notes.** Remote ports' tags can differ from 0.3.35's in a session whose memory holds a
+typed tag of a player's name (a With Friends host's own), so the release that takes this needs its
+kCompatVersion bump. The writes are still a pure function of memory and the synced ports, the same
+on every machine whoever is remote. The frame hook gains one folded scan of the 120 tags per joined
+port on the character select and one per frame while alone: run the two-Orca perf gate as usual.
+Known edges (review): in a With Friends host's memory a remote port whose 5-letter tag reads as a typed tag takes it (a port without controls then plays that layout; a same-prefix joiner whose port joins before the host's can take the host's typed tag, as it could Orca's ASCII one before); off the select a player who picked Orca's ASCII copy over their typed one has the typed one read. Not clang-formatted (no clang-format on this Mac). Not covered: tags kept between runs (still
+`orca-keep-own-tags`), Windows, a real two-Orca room with a typed tag.
+
 ## Explaining it to people (internal)
 
 **One sentence:**
