@@ -124,6 +124,7 @@ with the same value meet):
 | `ORCA_TEST_QUEUE`, `ORCA_TEST_QUEUE_PICK` | A queue room's header, and a matched joiner's pick ([Character select](#character-select)). |
 | `ORCA_TEST_CHAR_ORDER`, `ORCA_TEST_SET_RULES` | Run the ranked character order, or set the stock/time rules, without a real room. |
 | `ORCA_UX_TEST_NAMES`, `ORCA_UX_TEST_CONTROLS`, `ORCA_UX_TEST_PLUG_AT` | Names, controls and a plug-in frame for harness ports. |
+| `ORCA_TEST_RNG_SEED` | The seed every history's game starts from in a dev game's room ([Random numbers](#random-numbers)). |
 | `ORCA_TEST_HOLD`, `ORCA_TEST_SHADER_WAIT_MS`, `ORCA_TEST_FXC_FLAGS`, `ORCA_TEST_JITWARM_SLOW_US`, `ORCA_JITWARM_SEED`, `ORCA_JITWARM_LOG`, `ORCA_JITWARM_BUDGET_US` | Knobs for the sections that describe them. |
 | `ORCA_UX_PROBE` | Memory watches, dumps and writes for reverse-engineering game state. |
 | `ORCA_UX_KIT_DEMO`, `ORCA_UX_SETEND_DEMO`, `ORCA_UX_OVERLAY_DEMO` | Draw overlay elements for design checks. |
@@ -404,7 +405,8 @@ pointers, or arbitrary memory writes.
    read takes its origin at its first boundary, with no fresh starts.
 2. **Recording.** The host retains the final controller pads and bounded port metadata for each
    frame. Rollbacks replace predicted inputs with the winning inputs. Typed rules-header and
-   clear-ready events run through the same trusted UI handlers at their original phase.
+   clear-ready events run through the same trusted UI handlers at their original phase. The first
+   frame also carries the history's seed ([Random numbers](#random-numbers)).
 3. **Offer.** A background thread compresses and encrypts a replay through boundary K. The
    canonical id is `replay-<frame>-<first eight hash digits>`. AES-GCM and the transport checksum
    detect corruption; the decoder independently validates every peer-supplied field.
@@ -449,7 +451,8 @@ ran out of time after 10-12. A fresh start (`OnlineMatch.cpp` `FreshStart`) puts
 its own origin and leaves the main menu for the match's character select with a recorded exit, the
 way the player's own press would (`OnlineMenu.h` `FreshMove`). The exit is a typed event on the
 replay's first frame (`menu_exit`: 25 With Friends, 30 Casual, 31 Ranked), so a joiner replays the
-same move from its own origin. Frame numbers start again at the origin's.
+same move from its own origin. So is a new seed for the game's random numbers
+([Random numbers](#random-numbers)). Frame numbers start again at the origin's.
 
 - **When.** A queue room's host always fresh-starts, once per room, at the first boundary after the
   room's welcome named the queue (`host` arms it). A friend arriving at a host with no session
@@ -484,6 +487,34 @@ Test knobs (`TestKnobsAllowed`): `ORCA_TEST_FRESH=off` (no fresh starts: every j
 origin in place), `ORCA_TEST_FRESH_AFTER=<frames>` (the friends threshold),
 `ORCA_TEST_FAST_UNTIL=<frame>` (solo frames before it run unthrottled, to age a host quickly, until
 its first fresh start or session).
+
+### Random numbers
+
+Brawl and Project+ draw from two generators (`mtRand`, a 31-bit LCG: `seed * 0x41C64E6D + 12345`):
+`g_mtRandDefault` (`0x805A00B8`, everything a fight draws) and the menus' own (`0x805A0420`). The
+character select draws each panel's RANDOM from the menus' generator as it starts (three draws per
+panel, `0x806857F0`; Project+ maps the first through its 42-entry table at `0x80680E80`), and A on
+RANDOM takes that draw. In the menus nothing else draws from the menus' generator, and
+`g_mtRandDefault` moves once per scene change; how long anyone stays on a screen changes neither, and
+nothing reseeds them from the clock after boot (probe watches, 2026-10-09).
+
+Orca pins the clock and boots the same way every time, so both generators start every boot, and
+every fresh start's origin, from the same numbers. Through 0.3.35 that made RANDOM the same
+character in every match: since 0.3.34's fresh starts, game 1 of every Project+ queue match gave
+the host R.O.B. and the joiner King Dedede, and game 2 one of a few characters set by game 1's
+length (the menus' generator moves once every ~5 s of a fight). Before 0.3.34, the same for a given
+player's own image. A fight also began from the same `g_mtRandDefault` state every match.
+
+So every history starts from a seed of its own: a typed event on the replay's first frame
+(`ReplayFrame::seed`, with `menu_exit` on a fresh start), drawn by the host from the system's random
+source for every boot origin and every fresh start (`OnlineMatch.cpp` `NewHistorySeed`). The frame
+hook writes both generators' seed words from it at that frame (`OnlineMenu.h`
+`FreshMove::ApplySeed`), after the origin is captured, so every Orca's origin stays the canonical
+one, and a joiner's rebuild plays the same event from its own origin. The origin's checksum and the
+rebuild's checksum at K still refuse any difference. A seed rides only on a replay's first frame;
+the decoder refuses it anywhere else. With no YouGame room there is no history and nothing is
+written, so harness runs and hash logs repeat; in a dev game's room `ORCA_TEST_RNG_SEED=<n>` (a
+test knob) fixes the seed.
 
 ### Port values: each player's name and controls
 
@@ -1121,8 +1152,8 @@ away.
 | `+0x290`-`+0x297` | A friend's move from the menus |
 
 Any new header (another mode, ruleset, coin or room) starts every track's state fresh. Compatibility:
-anything that changes what the game computes bumps `UX::kCompatVersion` (currently `ux=25`, since
-0.3.34), which is in the compatibility key.
+anything that changes what the game computes bumps `UX::kCompatVersion` (currently `ux=26`, since
+the history's seed, [Random numbers](#random-numbers)), which is in the compatibility key.
 
 ## Input gate
 
@@ -1698,7 +1729,8 @@ The page owns the room: Orca never leaves on a skip or a timeout by itself.
   presses Start. Casual's later games have no timer: players can talk; ranked's go through the
   character order.
 - **Random** is a pick like any character (`0x29`); the game resolves it from its own RNG, which is
-  emulated state, so both machines resolve the same character.
+  emulated state, so both machines resolve the same character, and starts from each history's own
+  seed, so it differs from match to match ([Random numbers](#random-numbers)).
 - **Ranked has no skip** (`Queue::MaySkip`): a ranked match must be played.
 - **After the room** (a skip, a timeout, the opponent gone, a set over), the session loads the
   **queue image**, the player's own game as it was when `host` or `join` came (a machine image and
