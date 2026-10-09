@@ -472,7 +472,8 @@ bool UnpackKeyframe(const std::vector<u8>& blob, int* frame, ReplayArchive* repl
     }
     if (!ReadReplayFrame(r, &decoded.boundary) ||
         (count > 0 && (decoded.boundary.menu_exit != 0 || decoded.boundary.seed != 0)) ||
-        !ChargeMetadata(decoded.boundary, decoded.frames.empty() ? nullptr : &decoded.frames.back(), &budget) ||
+        !ChargeMetadata(decoded.boundary, decoded.frames.empty() ? nullptr : &decoded.frames.back(),
+                        &budget) ||
         !r.AtEnd())
       return false;
     *frame = static_cast<int>(end);

@@ -626,14 +626,16 @@ void Frame(const Core::CPUThreadGuard& guard, int frame)
   {
     if (ApplySeed(m, record->seed))
     {
-      NOTICE_LOG_FMT(ROLLBACK, "Online menu: frame {}: the game's random numbers start from this "
-                               "history's seed {:08x}",
+      NOTICE_LOG_FMT(ROLLBACK,
+                     "Online menu: frame {}: the game's random numbers start from this "
+                     "history's seed {:08x}",
                      frame, record->seed);
     }
     else
     {
-      WARN_LOG_FMT(ROLLBACK, "Online menu: frame {}: this history's seed found no random number "
-                             "generators to start",
+      WARN_LOG_FMT(ROLLBACK,
+                   "Online menu: frame {}: this history's seed found no random number "
+                   "generators to start",
                    frame);
     }
   }
