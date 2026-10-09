@@ -13,7 +13,7 @@ set -u
 CLASS=$1; TAG=$2; MODE=$3; G=$4; N=$5
 HERE=$(cd "$(dirname "$0")" && pwd)
 OUTROOT=${ML_OUT:-$PWD/match-latency-runs}
-LOCK=${ML_RUN_LOCK:-$HOME/Documents/brawl-dolphin/run-lock.py}
+LOCK=${ML_RUN_LOCK:-$HERE/run-lock.py}
 : "${ML_BIN:?}" "${ML_BUILD:?}" "${ML_DISC:?}" "${ML_SESS:?}" "${ML_PC:?set ML_PC=user@host}" "${ML_PC_KEY:?}" "${ML_PC_EXE:?}"
 PCDIR=${ML_PC_DIR:-'C:\orca-ab\mlat'}
 A=${ML_A:-cy}; B=${ML_B:-di}

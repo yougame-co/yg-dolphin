@@ -289,7 +289,7 @@ a replay that didn't reproduce the host's game, `orca error mismatch`, `not_seat
 never landing, a live frame moved, or a desync. `--max-p50`/`--max-p90`/`--min-ok` gate the total.
 
 ```bash
-node Tools/orca/match-latency-session.mjs ~/Documents/YouGame <sess> cy di   # roster cookies, mode 600
+node Tools/orca/match-latency-session.mjs <YouGame checkout> <sess> cy di   # roster cookies, mode 600
 ML_BIN=<Orca> ML_BUILD=<version>:<commit> ML_DISC=<Brawl> ML_PPLUS=<dol> ML_SESS=<sess> \
   Tools/orca/match-latency-run.sh perf cb10 casual brawl 10 [--gap 90]
 node Tools/orca/match-latency-report.mjs [--detail] match-latency-runs/cb10

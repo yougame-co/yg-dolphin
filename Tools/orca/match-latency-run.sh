@@ -11,14 +11,14 @@
 #   ML_DISC    Brawl (USA) Rev 2;  ML_PPLUS  "Project+ Netplay Launcher.dol" (pplus runs only)
 #   ML_SESS    a folder with <name>.cookie for the two /sandbox roster players (match-latency-session.mjs)
 #   ML_A, ML_B their names (cy, di);  ML_OUT  where runs go (./match-latency-runs)
-#   ML_RUN_LOCK  run-lock.py (~/Documents/brawl-dolphin/run-lock.py);  ML_LABEL  a label suffix
+#   ML_RUN_LOCK  run-lock.py (default: the one next to this script);  ML_LABEL  a label suffix
 # Output: $ML_OUT/<tag>/ (the run) and $ML_OUT/<tag>.log; one line per run in $ML_OUT/index.txt.
 # Then: node match-latency-report.mjs $ML_OUT/<tag>
 set -u
 CLASS=$1; TAG=$2; MODE=$3; G=$4; N=$5; shift 5
 HERE=$(cd "$(dirname "$0")" && pwd)
 OUTROOT=${ML_OUT:-$PWD/match-latency-runs}
-LOCK=${ML_RUN_LOCK:-$HOME/Documents/brawl-dolphin/run-lock.py}
+LOCK=${ML_RUN_LOCK:-$HERE/run-lock.py}
 : "${ML_BIN:?set ML_BIN}" "${ML_BUILD:?set ML_BUILD}" "${ML_DISC:?set ML_DISC}" "${ML_SESS:?set ML_SESS}"
 A=${ML_A:-cy}; B=${ML_B:-di}
 if [ "$G" = pplus ]; then
