@@ -377,16 +377,10 @@ void Session::ApplyRoster(const std::array<SeatPlan, MAX_SEATS>& roster)
       continue;
     if (s == m_config.local_seat)
     {
-      // This player's own seat: the host plugs it in once, at a frame not yet run and past the
-      // history it sent, and names its live frame once. Anything else would let the host's log
-      // decide frames this controller plays.
-      if (now.plug_from != mine.plug_from &&
-          (mine.plug_from != NEVER || now.plug_from < std::max(m_frame, LogEnd())))
-      {
-        Fail(fmt::format("The host moved this controller's plug-in from frame {} to {}",
-                         mine.plug_from, now.plug_from));
-        return;
-      }
+      // This player's own seat. The host names its live frame once; plugs it in once, at a frame
+      // not yet run, and only once this machine holds the history up to that live frame; and only
+      // ever brings its unplug frame earlier. Anything else would let the host's log decide frames
+      // this controller plays.
       if (now.live_from != NEVER)
       {
         if (m_own_live_from == NEVER)
@@ -399,6 +393,20 @@ void Session::ApplyRoster(const std::array<SeatPlan, MAX_SEATS>& roster)
                            m_own_live_from, now.live_from));
           return;
         }
+      }
+      if (now.plug_from != mine.plug_from &&
+          (mine.plug_from != NEVER || now.plug_from < std::max(m_frame, LogEnd()) ||
+           m_own_live_from == NEVER || LogEnd() < m_own_live_from))
+      {
+        Fail(fmt::format("The host moved this controller's plug-in from frame {} to {}",
+                         mine.plug_from, now.plug_from));
+        return;
+      }
+      if (now.unplug_from > mine.unplug_from)
+      {
+        Fail(fmt::format("The host moved this controller's unplug from frame {} to {}",
+                         mine.unplug_from, now.unplug_from));
+        return;
       }
     }
     // Frames that ran with this seat plugged in where it now isn't, or the reverse, run again.
@@ -443,10 +451,10 @@ void Session::ReceiveHistory(const Packet& packet)
     }
     // New history: the host's game before this player plays in it. Never past what the host ever
     // sends ahead of this machine (HISTORY_AHEAD; the rest comes again), and never a frame from this
-    // player's live frame on or one its controller is plugged in at: those run with its own inputs.
+    // player's live frame or plug-in on (set once each): those run with its own inputs.
     if (m_own_live_from == NEVER || f > m_frame + HISTORY_AHEAD)
       break;
-    if (f >= m_own_live_from || Plugged(m_config.local_seat, f))
+    if (f >= m_own_live_from || f >= m_plan[m_config.local_seat].plug_from)
     {
       Fail(fmt::format("The host sent history for frame {}, past this player's live frame {}", f,
                        m_own_live_from));

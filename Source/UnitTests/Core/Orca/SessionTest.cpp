@@ -3759,10 +3759,9 @@ TEST(OrcaDropIn, HistoryPastTheJoinersLiveFrameEndsTheSession)
     return;
   for (int i = 0; i < 3 && h.joiner->session.Error().empty(); ++i)
     h.Send(h.ForgedHistory(h.roster));
-  EXPECT_NE(h.joiner->session.Error().find("history"), std::string::npos)
+  EXPECT_NE(h.joiner->session.Error().find("past this player's live frame"), std::string::npos)
       << h.joiner->session.Error();
-  for (int i = 0; i < 120; ++i)
-    h.Send(h.Forged(h.roster));
+  // The first forged packet ends it: no frame ran (or ran again) with the forged pad.
   EXPECT_EQ(h.ForgedFrames(), 0);
 }
 
@@ -3841,6 +3840,139 @@ TEST(OrcaDropIn, RosterThatTakesBackTheJoinersSeatEndsTheSession)
     h.Send(h.Forged(dropped));
     EXPECT_TRUE(h.joiner->session.Error().empty()) << h.joiner->session.Error();
   }
+}
+
+// A host that names a live frame it never reaches, plugs the joiner in, unplugs it at the end of its
+// log, sends history with the joiner's seat forged and plugs it back in would run its own pads in the
+// joiner's seat. The joiner is never plugged in before it holds the history up to its live frame, so
+// it ends at the plug-in and no frame runs the forged pad.
+TEST(OrcaDropIn, PlugInBeforeTheJoinerHoldsItsHistoryEndsTheSession)
+{
+  ForgedHost h;
+  h.attack_from = ForgedHost::KEYFRAME;
+  std::array<SeatPlan, MAX_SEATS> roster{};
+  roster[0] = {0, NEVER, 0};
+  roster[1] = {NEVER, NEVER, 1 << 29};
+  // A little of the host's game as history, the joiner's seat unplugged as an honest host sends it.
+  Packet honest = h.ForgedHistory(roster);
+  honest.history.resize(20);
+  for (Pads& pads : honest.history)
+    pads[1] = UNPLUGGED_PAD;
+  h.Send(std::move(honest));
+  ASSERT_TRUE(h.joiner->session.Error().empty()) << h.joiner->session.Error();
+  ASSERT_EQ(h.joiner->session.LogEnd(), ForgedHost::KEYFRAME + 20);
+
+  auto plugged = roster;
+  plugged[1].plug_from =
+      std::max(h.joiner->session.CurrentFrame(), h.joiner->session.LogEnd()) + 10;
+  h.Send(h.Forged(plugged));
+  EXPECT_NE(h.joiner->session.Error().find("plug-in"), std::string::npos)
+      << h.joiner->session.Error();
+  // The rest of the sequence: unplugged at the log's end, forged history, plugged back in.
+  auto unplugged = plugged;
+  unplugged[1].unplug_from = h.joiner->session.LogEnd();
+  for (int i = 0; i < 4; ++i)
+    h.Send(h.ForgedHistory(unplugged));
+  for (int i = 0; i < 300; ++i)
+    h.Send(h.Forged(plugged));
+  EXPECT_FALSE(h.joiner->session.Error().empty());
+  EXPECT_EQ(h.joiner->session.LogEnd(), ForgedHost::KEYFRAME + 20);
+  EXPECT_EQ(h.ForgedFrames(), 0);
+}
+
+// The host only ever brings this player's unplug frame earlier (it leaves, or the host drops it). One
+// that moves it later, or back to never, would make frames already run as unplugged count as played.
+TEST(OrcaDropIn, JoinersUnplugOnlyComesEarlier)
+{
+  for (const bool back_to_never : {true, false})
+  {
+    SCOPED_TRACE(back_to_never ? "back to never" : "later");
+    ForgedHost h;
+    h.PlayHonestly(60);
+    if (::testing::Test::HasFatalFailure())
+      return;
+    auto leaving = h.roster;
+    leaving[1].unplug_from = h.joiner->session.CurrentFrame() + 40;
+    h.Send(h.Forged(leaving));
+    ASSERT_TRUE(h.joiner->session.Error().empty()) << h.joiner->session.Error();
+    auto earlier = leaving;
+    earlier[1].unplug_from -= 10;
+    h.Send(h.Forged(earlier));
+    ASSERT_TRUE(h.joiner->session.Error().empty()) << h.joiner->session.Error();
+    auto moved = earlier;
+    moved[1].unplug_from = back_to_never ? NEVER : earlier[1].unplug_from + 400;
+    h.Send(h.Forged(moved));
+    EXPECT_NE(h.joiner->session.Error().find("unplug"), std::string::npos)
+        << h.joiner->session.Error();
+  }
+  {
+    // Plugged in and unplugged at the same frame (never really plugged in), then history from its
+    // live frame on: that history is refused like any other past the live frame.
+    SCOPED_TRACE("plugged and unplugged at once");
+    ForgedHost h;
+    h.attack_from = ForgedHost::KEYFRAME;
+    std::array<SeatPlan, MAX_SEATS> roster{};
+    roster[0] = {0, NEVER, 0};
+    roster[1] = {NEVER, NEVER, ForgedHost::KEYFRAME};
+    h.Send(h.Forged(roster));
+    const int plug = h.joiner->session.CurrentFrame() + 10;
+    roster[1].plug_from = plug;
+    roster[1].unplug_from = plug;
+    h.Send(h.Forged(roster));
+    ASSERT_TRUE(h.joiner->session.Error().empty()) << h.joiner->session.Error();
+    h.Send(h.ForgedHistory(roster));
+    EXPECT_NE(h.joiner->session.Error().find("past this player's live frame"), std::string::npos)
+        << h.joiner->session.Error();
+    roster[1].unplug_from = NEVER;
+    for (int i = 0; i < 60; ++i)
+      h.Send(h.Forged(roster));
+    EXPECT_EQ(h.ForgedFrames(), 0);
+  }
+}
+
+// An honest host whose plug-in roster is the first one the joiner hears (a live frame at the
+// keyframe, so no history; the host's earlier packets lost): the joiner holds everything before its
+// live frame, takes the plug-in and plays.
+TEST(OrcaDropIn, PlugInAsTheFirstRosterTheJoinerHears)
+{
+  FakeNet net;
+  net.latency = 4;
+  FakeGame solo;
+  std::vector<Pads> log = PlaySolo(&solo, 0, 300);
+  DropInPlayer host(DropInConfig(0, 300), net, 0, 300);
+  host.game.m_state = solo.m_state;
+  host.game.m_history = solo.m_history;
+  host.game.m_ran_pads = solo.m_ran_pads;
+  host.session.SetLog(0, log);
+  host.session.AddPeer(1, 300, 300);
+  DropInPlayer joiner(DropInConfig(1, 300), net, 1, 300);
+  joiner.seat = 1;
+  joiner.game.m_state = solo.m_state;
+  bool heard_plug = false;
+  int t = 0;
+  for (; t < 2000; ++t)
+  {
+    net.now = t;
+    host.Tick(t, 1);
+    // Everything the host sends before the plug-in is lost on the way.
+    if (host.session.Plan()[1].plug_from == NEVER)
+      net.queues[1].clear();
+    const bool behind = joiner.session.CatchingUp() ||
+                        joiner.session.AuthorityFrame() - joiner.session.CurrentFrame() > 12;
+    joiner.Tick(t, behind ? 40 : 1);
+    ASSERT_TRUE(host.session.Error().empty()) << host.session.Error();
+    ASSERT_TRUE(joiner.session.Error().empty()) << joiner.session.Error();
+    if (!heard_plug && joiner.session.Plan()[1].plug_from != NEVER)
+    {
+      heard_plug = true;
+      EXPECT_EQ(joiner.session.Plan()[1].plug_from, host.session.Plan()[1].plug_from);
+    }
+    if (heard_plug && joiner.session.CurrentFrame() > joiner.session.Plan()[1].plug_from + 120)
+      break;
+  }
+  EXPECT_TRUE(heard_plug);
+  EXPECT_FALSE(joiner.session.CatchingUp());
+  EXPECT_GT(joiner.session.CurrentFrame(), joiner.session.Plan()[1].plug_from + 120);
 }
 
 // While catching up, the joiner keeps at most HISTORY_AHEAD (4096) frames of history past the frame
