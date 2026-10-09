@@ -284,6 +284,8 @@
 1	socket	Source/Core/Core/IOS/Network/Socket.cpp	sendto(
 1	socket	Source/Core/Core/IOS/Network/Socket.cpp	setsockopt(
 1	socket	Source/Core/Core/IOS/Network/Socket.cpp	socket(
+1	file-open	Source/Core/Core/Movie.cpp	File::Delete(
+5	file-open	Source/Core/Core/Movie.cpp	File::IOFile
 1	file-open	Source/Core/Core/NetPlayClient.cpp	File::CreateFullPath(
 2	file-open	Source/Core/Core/NetPlayClient.cpp	File::Delete(
 5	file-open	Source/Core/Core/NetPlayClient.cpp	File::DeleteDirRecursively(
@@ -455,6 +457,7 @@
 1	env	Source/Core/Core/Orca/Session/YouGameRoom.cpp	Env("YOUGAME_GAME"
 1	env	Source/Core/Core/Orca/Session/YouGameRoom.cpp	Env("YOUGAME_TOKEN"
 1	env	Source/Core/Core/Orca/Session/YouGameRoom.cpp	Orca::GetEnv(
+1	env	Source/Core/Core/Orca/Session/YouGameRoom.cpp	Orca::GetEnv("ORCA_TEST_INLINE"
 1	http	Source/Core/Core/Orca/Session/YouGameRoom.cpp	"http://"
 2	http	Source/Core/Core/Orca/Session/YouGameRoom.cpp	"http://127.0.0.1:"
 1	http	Source/Core/Core/Orca/Session/YouGameRoom.cpp	"http://localhost:"
@@ -477,13 +480,15 @@
 1	http	Source/Core/Core/Orca/Session/YouGameRoom.cpp	curl_easy_strerror(
 1	http	Source/Core/Core/Orca/Session/YouGameRoom.cpp	curl_slist_append(
 1	http	Source/Core/Core/Orca/Session/YouGameRoom.cpp	curl_slist_free_all(
-73	peer-parse	Source/Core/Core/Orca/Session/YouGameRoom.cpp	.get<
+75	peer-parse	Source/Core/Core/Orca/Session/YouGameRoom.cpp	.get<
 2	peer-parse	Source/Core/Core/Orca/Session/YouGameRoom.cpp	DecodeDirectPacket(
+2	peer-parse	Source/Core/Core/Orca/Session/YouGameRoom.cpp	DecodeInlineKeyframe(
 2	peer-parse	Source/Core/Core/Orca/Session/YouGameRoom.cpp	DecodePacket(
 2	peer-parse	Source/Core/Core/Orca/Session/YouGameRoom.cpp	ParseIce(
 8	peer-parse	Source/Core/Core/Orca/Session/YouGameRoom.cpp	ParseJson(
 1	peer-parse	Source/Core/Core/Orca/Session/YouGameRoom.cpp	picojson::parse(
 1	peer-parse	Source/Core/Core/Orca/Session/YouGameRoom.h	DecodeDirectPacket(
+1	peer-parse	Source/Core/Core/Orca/Session/YouGameRoom.h	DecodeInlineKeyframe(
 1	peer-parse	Source/Core/Core/Orca/Session/YouGameRoom.h	DecodePacket(
 1	app-channel	Source/Core/Core/Orca/Status.cpp	stdout
 1	env	Source/Core/Core/Orca/ThreadPriority.cpp	GetEnv("ORCA_THREAD_QOS"
@@ -683,10 +688,12 @@
 2	file-open	Source/Core/Core/WiiRoot.cpp	File::MoveWithOverwrite(
 1	file-user	Source/Core/Core/WiiRoot.cpp	File::Delete(
 2	build-deps	Source/Core/DolphinNoGUI/CMakeLists.txt	add_custom_command(TARGET)
+1	build-deps	Source/Core/DolphinNoGUI/CMakeLists.txt	pkg_check_modules(XEXT)
 1	build-deps	Source/Core/DolphinNoGUI/CMakeLists.txt	target_link_libraries(dolphin-nogui ${APPKIT_LIBRARY})
 1	build-deps	Source/Core/DolphinNoGUI/CMakeLists.txt	target_link_libraries(dolphin-nogui ${COREFOUNDATION_LIBRARY})
 1	build-deps	Source/Core/DolphinNoGUI/CMakeLists.txt	target_link_libraries(dolphin-nogui ${IOK_LIBRARY})
 1	build-deps	Source/Core/DolphinNoGUI/CMakeLists.txt	target_link_libraries(dolphin-nogui PkgConfig::X11)
+1	build-deps	Source/Core/DolphinNoGUI/CMakeLists.txt	target_link_libraries(dolphin-nogui PkgConfig::XEXT)
 1	build-deps	Source/Core/DolphinNoGUI/CMakeLists.txt	target_link_libraries(dolphin-nogui PkgConfig::XRANDR)
 1	build-deps	Source/Core/DolphinNoGUI/CMakeLists.txt	target_link_libraries(dolphin-nogui core)
 1	build-deps	Source/Core/DolphinNoGUI/CMakeLists.txt	target_link_libraries(dolphin-nogui cpp-optparse)
@@ -743,6 +750,8 @@
 1	process	Source/Core/DolphinNoGUI/PlatformMacos.mm	NSWorkspace
 2	app-channel	Source/Core/DolphinNoGUI/PlatformWin32.cpp	stderr
 3	dynload	Source/Core/DolphinNoGUI/PlatformWin32.cpp	GetModuleHandle(
+3	app-channel	Source/Core/DolphinNoGUI/PlatformX11.cpp	stderr
+1	env	Source/Core/DolphinNoGUI/PlatformX11.cpp	std::getenv("DISPLAY"
 1	env	Source/Core/UICommon/UICommon.cpp	getenv("DOLPHIN_EMU_USERPATH"
 1	env	Source/Core/UICommon/UICommon.cpp	getenv("HOME"
 1	env	Source/Core/UICommon/UICommon.cpp	getenv("PWD"
@@ -787,6 +796,7 @@
 1	build-deps	Source/Core/VideoCommon/CMakeLists.txt	target_link_libraries(videocommon use_pch)
 1	build-deps	Source/Core/VideoCommon/CMakeLists.txt	target_link_libraries(videocommon xxhash::xxhash)
 4	build-deps	Source/Core/VideoCommon/CMakeLists.txt	target_sources(videocommon)
+1	file-open	Source/Core/VideoCommon/PostProcessing.cpp	File::ReadFileToString(
 1	env	Source/Core/VideoCommon/Present.cpp	std::getenv("ORCA_TEST_PRESENT"
 2	app-channel	Source/Core/VideoCommon/ShaderCache.cpp	Orca::Status::Shaders(
 1	file-open	Source/Core/VideoCommon/ShaderCache.cpp	File::Delete(
