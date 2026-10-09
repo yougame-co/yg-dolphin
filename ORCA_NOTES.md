@@ -6482,6 +6482,53 @@ Not run here (the release's own steps): hash logs and synctests on this build, t
 gate against 0.3.34, the Windows build (the first MSVC compile of `Activity.cpp`) and its gtests,
 the swap-chain repro on the release bits, Mac <-> PC.
 
+## Random gave the same characters every match (orca-random-seed-0335, 2026-10-09)
+
+Report (decepticon, P+, 0.3.32, 2026-10-08): "I almost always get sonic first. And I get
+dedede/yoshi/luigi all the time" (dashboard `orca-random-same-characters`).
+
+**Cause, proven under the harness with probe watches and writes:**
+
+- Two `mtRand` generators: `g_mtRandDefault` (`0x805A00B8`, seed `+4`) and a second at `0x805A0420`
+  (seed `+4`), same vtable `0x8042AE50`, generate `0x8003FAC4` (`(s * 0x41C64E6D + 12345) &
+  0x7FFFFFFF`), randf `0x8003FAF8`, randi `0x8003FC7C` (the default one).
+- The character select draws each panel's RANDOM as it starts from the second one (12 draws: CSS
+  frame 2 in P+, about 30 in Brawl; `0x806857F0`, `randf(0x805A0420) * 42` into P+'s table at
+  `0x80680E80`, area i's character is draw 3i). A on RANDOM copies that draw into gmGlobalModeMelee
+  (no draw at the press; picking RANDOM again in the same visit gives the same character).
+- Writing `0x805A00BC` on the main menu or the select changed nothing; writing `0x805A0424` before
+  the select changed RANDOM (P+ Roy to another, Brawl `0x25` to `0x03`). A longer main menu, A
+  7-65 frames after hovering, Start 200-300: the same seeds and character. The menus' generator
+  moves only at select entries and about every 5 s of a fight.
+- The pinned clock and scripted boot make it `207d5b71` at every origin (app path; `207d5b25`
+  offline). With 0.3.34's fresh starts every queue room starts there.
+
+**On 0.3.35** (queue-e2e `--q2 --queue ranked --pick random`, rooms mur7guyk and 8xkmpur7): both
+rooms, both Orcas: the menus' generator `22537565` after the select's draws, game 1 host R.O.B.
+(`0x26`), joiner King Dedede (`0x23`), game 2 `0x03`/`0x26`. `g_mtRandDefault` at game 1's fight
+start was the same too (`01aa7b00`).
+
+**Fix:** a seed per history ([ORCA.md "Random numbers"](ORCA.md#random-numbers)):
+`ReplayFrame::seed` on the first frame (ORP2), drawn by the host at every boot origin and fresh
+start, written into both generators by `FreshMove::ApplySeed` at that frame's hook. ux 26.
+
+**Checks** (Mac, Release, this branch):
+
+- Build: only the known `YouGameRoom.cpp:3076` warning. `Orca*`: 643 run, 623 passed, 20 skipped
+  (OrcaLive, OrcaDisc, the HTTP store, UXLatency, KitDraw), 0 failed; new tests
+  `OrcaKeyframe.AHistorysSeedTravelsOnItsFirstFrameOnly`,
+  `OrcaOnlineMenuFresh.AHistorysSeedStartsBothRandomNumberGenerators`,
+  `OrcaOnlineMenuFresh.TheCharacterSelectsRandomDrawsDependOnTheSeed`.
+- queue-e2e P+ ranked `--pick random`, twice: PASS, 227 checksums matched on each side, 0
+  rollbacks; characters 41/42, 42/40 and 23/0, 15/40 (0.3.35: 38/35, 3/38 both times). Every
+  origin's RAM hash is still `0c80f10df0a8be22`; the joiner's rebuild applied the host's seed.
+- dropin-commands.py P+: PASS, and with `ORCA_TEST_FRESH=off` (joins from the host's boot origin,
+  its CaptureOrigin seed): PASS; the friend rebuilt with the host's seed both times.
+- Offline hash log (pplus-1v1 to 4000): identical to 0.3.35 (no room, no seed).
+
+Not run: Mac<->PC (`xplat.py`), Brawl two-Orca, the perf gate. The change writes two words at one
+frame, so no perf effect is expected.
+
 ## Explaining it to people (internal)
 
 **One sentence:**
