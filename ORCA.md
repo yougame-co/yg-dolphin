@@ -50,6 +50,7 @@ and why. Paths are relative to `Source/Core/Core/` unless they start with `Sourc
 - [Character select](#character-select)
 - [On-screen UI](#on-screen-ui)
 - [Embedding](#embedding)
+- [Changes by release](#changes-by-release)
 
 ## Building
 
@@ -545,6 +546,13 @@ the page shows what Orca plays.
   into it on the character select, in the same frame (`ApplyNameTags`), and the read of the
   player's own controls comes after the writes (`NameTagsFrame`), so a tag made again plays with
   their controls and never replaces them with the defaults. The tags themselves are not kept.
+- **A tag the player typed is theirs.** The game types names in full-width characters (`A` is
+  `0xFF21`) and Orca's own tags are ASCII, so names match as they read: full-width folded to ASCII,
+  one case (`NameTags.h`). A tag the player named like their YouGame username in Options >
+  Controls is found as theirs, preferred over Orca's own copy (`FindPlayerTag`), and is the one their
+  port wears on the character select and their own controls are read from. Since 0.3.37; before, Orca
+  made a second tag of that name at the game's defaults and put the player in it, so controls set in
+  the game (tap jump off) never reached an online game.
 
 - **Solo**, the own port's values carry them from the frame they change, so the YouGame tag gets them
   on every character select: Training, the queue's own select, With Friends. A friend who joins
@@ -1153,7 +1161,8 @@ away.
 
 Any new header (another mode, ruleset, coin or room) starts every track's state fresh. Compatibility:
 anything that changes what the game computes bumps `UX::kCompatVersion` (currently `ux=26`, since
-the history's seed, [Random numbers](#random-numbers)), which is in the compatibility key.
+0.3.37: the history's seed, [Random numbers](#random-numbers), and tags typed in the game,
+[Port values](#port-values-each-players-name-and-controls)), which is in the compatibility key.
 
 ## Input gate
 
@@ -1957,3 +1966,19 @@ size asks at once). The game, and an online match, carry on. stderr says so once
 (`Orca: the picture's swap chain has no buffers after a resize ...`, with the window's size and the
 error code) and again when the picture works. A lost graphics device still ends Orca, after saying
 so. Since 0.3.35; before, a refused resize ended Orca (exit `0x80000003`).
+
+## Changes by release
+
+What each release changed for players, in plain words.
+
+### 0.3.37
+
+- **Music stays off.** With the Music switch off, the music no longer comes back for a few seconds
+  each time a song loops.
+- **Random is random again.** Picking Random on the character select gives a different fighter from
+  match to match, instead of the same ones every time.
+- **Reconnecting to a ranked set no longer closes Orca.** If your connection drops mid-set and you
+  come back to the same room, you rejoin the set instead of Orca stopping.
+- **Your in-game name tag and controls carry into online games.** A name tag you make in the game's
+  Controls menu, named like your YouGame name, is now used as yours, so its controls (tap jump off,
+  your C-stick) play online instead of the defaults, and the name no longer shows up twice.
