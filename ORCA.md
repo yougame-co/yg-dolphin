@@ -852,6 +852,12 @@ Offered for Brawl (any revision) and Project+; without the cap the line answers 
   main left, one on main right, no AUX sends. Sound effects are normal voices (type 0), looping ones
   too. Seen on every voice of the default Brawl and Project+ runs (menus, character and stage
   select, a match).
+- **Through a song's loop.** At each loop the stream player makes the pair normal voices for 0.5-5
+  s (loop start and end moved inside the ring buffer, so the DSP takes the loop's ADPCM context at
+  the jump), then stream voices again. A voice that played as a stream stays music while it plays
+  inside the ring buffer it had then (`Orca::Music::StreamVoices`); an effect that reuses its
+  parameter block plays from elsewhere and is an effect. Before this (0.3.30-0.3.35) the music came
+  back at full volume for those seconds at every loop.
 - **RAM gets the same mix.** AX HLE mixes every voice as before and writes the frame (96 samples,
   3 ms) to RAM as before. With the switch off it also keeps what the stream voices added to the
   main bus (a voice's share is additive, `MixAdd`), gives that the compressor's gain too, and mixes
@@ -882,6 +888,15 @@ Offered for Brawl (any revision) and Project+; without the cap the line answers 
   stream pair too (the announcer and the crowd are normal voices), and no stream voice of the run
   sends to an AUX bus. Cost: instructions retired by the whole run to frame 9000 (a snapshot every
   frame from 5900) are the same on and off, within the 0.1% between runs.
+
+Through loops (2026-10-09, Mac, branch `music-loop-0335`): idle on the main menu with it off, the
+menu song loops every 91 s and 0.3.35's dump has the music back for 3.8, 5.2 and 0.7 s (Brawl) and
+3.8, 5.2, 0.7 and 2.1 s (Project+), exactly while a RAM watch shows the pair as type 0; with the fix
+the dump is silent the whole 6-7 minutes. Over the default inputs it is off the same as 0.3.35
+except at a loop (Project+ 136 s: 0.3.35 played the music, the fix doesn't; Brawl 131 s, in the
+match: the effects only), on it is sample-identical, and hashlogs (fix off, 0.3.35 on) are equal on
+every frame (Brawl 0-10813, Project+ 0-9001). Sync tests off: 0 RAM mismatches (Brawl 29351 re-run
+frames, Project+ 19901).
 
 ### The game's Sound slider
 

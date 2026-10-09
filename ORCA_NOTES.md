@@ -1689,6 +1689,37 @@ flushes up to 19 s, and processes started with their cwd on it hung in `_dyld_st
   overlapped ten flagged SSD stalls (`run-lock` marked both perf runs tainted). The release's
   two-Orca perf gate runs with one side off.
 
+### Music back at a song's loop (2026-10-09)
+
+**Reports.** Two Project+ players on Windows, desktop 0.12.39 (bug_reports `91db1039`, 10-08 17:51
+UTC: "music still randomly turns on from time to time"; `0366bc41`, 10-09 01:49 UTC: "comes back on
+full blast when it loops").
+
+**Cause, proven.** The switch classified music by the voice's type alone (`is_stream` 1). A RAM
+watch of the stream pair's parameter blocks (`ORCA_UX_PROBE` watch at pb+0x10, running and type;
+Brawl's Wii PB in RAM has no updates field, so loop/end/current are at +0x72/+0x76/+0x7A) over 6-7
+minutes idle on the main menu, 0.3.35, music off: at every loop of the menu song (every ~5485
+frames, 91 s) NW4R's stream player sets the pair to type 0 with loop start and end inside the ring
+(L: loop `0x204D06C2`, end `0x204CD81D`; ring `0x204BC6C2-0x204F06BF`), the DSP jumps ~34 frames
+later and the bounds go back to the ring's, and the type goes back to 1 after 34-303 frames in all.
+The audio dump's only loud spans (RMS 1000-4400, the song at full volume) are exactly those windows,
+offset by the audio latency: Brawl 3.8/5.2/0.7 s, Project+ 3.8/5.2/0.7/2.1 s. Same PBs in Project+
+(`8049A480`/`8049A5C0`). The 2026-10-06 checks didn't see it: no run sat through a loop in a
+music-only scene, and "AI blocks played quiet" counts shadow hits, not what the split left in.
+
+**Fix** (branch `music-loop-0335`, off `release-0.3.35`): `Orca::Music::StreamVoices` remembers,
+per parameter block, the ring a stream voice loops over; while that voice is type 0 and plays
+inside that ring it is still music. Leaving the ring (a reused block's effect, a song that ends
+into the zero buffer) forgets it. Followed with the switch on too, so turning it off during a loop
+covers that loop. Host only and never saved; RAM unchanged.
+
+Checks (Mac, release build + the branch, `bugs-oct9/music` in the lead's scratchpad): unit tests
+`OrcaMusic*` 13/13; idle menu off, Brawl 21600 frames and Project+ 25000: the fix's dumps have no
+loud span (the type-0 windows still happen: 3 and 4); default inputs: hashlogs fix off = 0.3.35 on
+on every frame, dumps on sample-identical, off identical but for a loop window each (Project+
+136.2-137.0 s: 0.3.35 RMS 3869, fix 1; Brawl 131.4-132.8 s, in the match: 8893 to 7609, the
+effects stay); sync tests off: 0 RAM mismatches.
+
 ## Match start
 
 Luis, 2026-10-03 (on his Windows PC): the first seconds of every match (the countdown and just
