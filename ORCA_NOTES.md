@@ -6513,3 +6513,34 @@ the swap-chain repro on the release bits, Mac <-> PC.
 **What not to say:** that Brawlback "did it wrong", or that Orca is faster per frame. Brawlback's
 research informed the experiments that led to Orca's design, and we haven't measured the speed
 claim.
+
+## Orca 0.3.36 (2026-10-09)
+
+Branch `security-0.3.36`, from `release-0.3.35` (`ae0bd8a41f`, 0.3.35 as shipped). A security
+release: nothing new for players.
+
+- The four security fixes of upstream Dolphin's `2609a` hotfix, cherry-picked with `-x` (all
+  clean): `a5c88ec00e` (NetPlay: oversized input buffer messages), `c129fd7aac` (assembler: malformed
+  source), `13817559eb` (NetPlay: oversized Wii save banners), `2eea927e95` (VideoCommon: restored
+  FIFO pointers are validated). Orca's nogui build constructs no Dolphin NetPlay client or server and
+  has no debugger UI; the FIFO check also runs on rollback's own snapshot loads, so the synctests
+  cover it. The rest of `2609a` is Android, RetroAchievements, the version bump, and the
+  MemArenaDarwin fix Orca has carried since 0.3.30.
+- Drop-in hardening: tighter checks on the host's roster and history for a joining player
+  (`Session::ApplyRoster`, `Session::ReceiveHistory`; tests `OrcaDropIn.HistoryPastTheJoinersLiveFrameEndsTheSession`,
+  `RosterThatTakesBackTheJoinersSeatEndsTheSession`, `HistoryAheadOfTheJoinerIsBounded`).
+- **kCompatVersion stays 25.** Neither change alters what the game computes: the FIFO check only
+  refuses a state whose pointers fall outside the buffer, and the drop-in checks change nothing a
+  session computes. The key carries the build's git revision, so 0.3.35 and 0.3.36 never
+  meet.
+
+Checks (Mac, worktree `orca-rel-0336`, `build`, Release, `orca-cmake-flags.txt` + tests):
+
+- dolphin-nogui + tests build: the same warnings as 0.3.35's build (Orca's only one is
+  `YouGameRoom.cpp:3076`'s `-Wsign-compare`), none new. The binary says
+  `Dolphin [security-0.3.36] 2609-629`.
+- `Orca*` with the fake keyframe server and both Brawl discs: 643 run, 624 passed, 19 skipped (the
+  same 19 as 0.3.35), 0 failed. The three new drop-in tests fail on 0.3.35's `Session.cpp`.
+
+The release's own steps (hash logs and synctests against 0.3.35, the two-Orca perf gate, the
+Windows build and its gtests, Mac <-> PC) are recorded with the release.
