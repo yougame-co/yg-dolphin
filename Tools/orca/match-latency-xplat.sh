@@ -36,7 +36,7 @@ AT=$(( $(date +%s) + 100 ))
 echo "match-latency-xplat $TAG start $(date +%T): both search at $AT"
 pc "& '$PCDIR\\match-latency-pc.ps1' -Mode $MODE -Game $G -Out $TAG-pc -Matches $N -SearchAt $AT -Name $B -Exe '$ML_PC_EXE' -Build '$ML_BUILD'; \"EXIT=\$LASTEXITCODE\"" > "$OUTROOT/$TAG.pc.out" 2>&1 &
 PC=$!
-env ORCA_TEST_NET_DELAY_MS=0 node "$HERE/match-latency.mjs" --side a --mode "$MODE" --bin "$ML_BIN" --disc "$ML_DISC" "${EXTRA[@]}" --slug "$SLUG" \
+env ORCA_TEST_NET_DELAY_MS=0 node "$HERE/match-latency.mjs" --side a --mode "$MODE" --bin "$ML_BIN" --disc "$ML_DISC" ${EXTRA[@]+"${EXTRA[@]}"} --slug "$SLUG" \
   --a "$A" --sess "$ML_SESS" --orca-build "$ML_BUILD" --matches "$N" --search-at $((AT + ${MACLAG:-0})) ${MACLAG:+--search-delay $((MACLAG * 1000))} \
   --out "$OUTROOT/$TAG-mac" > "$OUTROOT/$TAG-mac.log" 2>&1
 rc=$?

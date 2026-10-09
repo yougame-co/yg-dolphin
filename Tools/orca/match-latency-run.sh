@@ -36,7 +36,7 @@ FREE=$(df -g "$HOME" | awk 'NR==2 {print $4}')
 echo "$(date '+%F %T') start $TAG ($CLASS $MODE $G x$N, $ML_BUILD) $*" >> "$OUTROOT/index.txt"
 python3 "$LOCK" "$CLASS" --label "AGENT TEST match-latency $TAG ($MODE $G x$N, $ML_BUILD, $A/$B)${ML_LABEL:+ $ML_LABEL}" --wait-max 10800 -- \
   env ORCA_TEST_NET_DELAY_MS=0 SDL_JOYSTICK_HIDAPI=0 SDL_JOYSTICK_HIDAPI_GAMECUBE=0 SDL_HIDAPI_LIBUSB=0 \
-  node "$HERE/match-latency.mjs" --pair --mode "$MODE" --bin "$ML_BIN" --disc "$ML_DISC" "${EXTRA[@]}" --slug "$SLUG" \
+  node "$HERE/match-latency.mjs" --pair --mode "$MODE" --bin "$ML_BIN" --disc "$ML_DISC" ${EXTRA[@]+"${EXTRA[@]}"} --slug "$SLUG" \
   --a "$A" --b "$B" --sess "$ML_SESS" --orca-build "$ML_BUILD" --matches "$N" --out "$OUT" "$@" > "$OUT.log" 2>&1
 rc=$?
 echo "exit $rc $(date +%T)" >> "$OUT.log"
