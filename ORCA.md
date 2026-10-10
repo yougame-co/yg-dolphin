@@ -1971,7 +1971,14 @@ Everything Orca shows should look like the game drew it. Two ways:
 - **The kit** (`Orca/UX/Kit.*`, `Widgets.*`): everything else is drawn by the host over the picture,
   local display only, in the game's own fonts (read at run time from the player's disc,
   `system/font/`, never shipped) and the look of that game's menus. Without the disc it falls back to
-  ImGui's font.
+  ImGui's font. The fonts' two textures are freed as the video backend shuts down
+  (`OSD::SetHostOverlay`'s release function, called first in `VideoBackendBase::ShutdownShared`).
+  Up to 0.3.38 they lived until process exit: on D3D11 they held 4 device references ("Unreleased
+  references: 4"), so the device and the graphics driver outlived `D3D::Destroy`, which unloads
+  d3d11.dll, and a driver thread calling back into it ended Orca with `0xC0000005` a moment after
+  the game (10 of 132 embedded or jailed exits on an NVIDIA PC); a standalone window, which exits
+  through the CRT, crashed every time in their destructors. `D3D::Destroy` now also keeps d3d11.dll
+  loaded if anything still holds the device.
 - **Relabelled textures** (`Orca/UX/Relabel.*`, `CssTitle.*`): the game's big words (READY TO
   FIGHT!, STAGE SELECT, the character select's BRAWL / VERSUS title) are textures. Orca changes a
   value nobody sees (a transparent palette entry's blue, or one texel's high nibble) so the texture
@@ -2280,8 +2287,9 @@ integrity), so with `--embed-adopted` Orca:
 Everything else is embed mode as before: the swap chain is made on the adopted child, `rect`,
 `view`, `hide`, `show` and focus work the same, and Orca stops when the app's window is destroyed.
 It also exits like embed mode (`exit <code>`, then `_exit` without the CRT's exit-time work), not
-like a standalone window, whose exit crashes with `0xC0000005` on 0.3.38. Elsewhere the flag
-changes nothing: a Mac's Orca window is top-level anyway.
+like a standalone window, whose exit crashed with `0xC0000005` up to 0.3.38 (the kit's font
+textures, [On-screen UI](#on-screen-ui)). Elsewhere the flag changes nothing: a Mac's Orca window is
+top-level anyway.
 
 ### Network
 
@@ -2313,6 +2321,8 @@ What each release changed for players, in plain words.
 - **The app sees how fast your computer is,** so it can tell you when a setting helps.
 - **Stability and ranked fixes.**
 - **Stopping a game while it loads** no longer counts as a game that couldn't start.
+- **Windows: no more crash after a game ends.** Orca could close with an error a moment after a
+  game had ended, which sent a crash report. Games themselves were never affected.
 
 ### 0.3.38
 

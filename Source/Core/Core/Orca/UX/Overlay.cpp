@@ -1407,6 +1407,6 @@ void InitOverlay()
     else if (state == Core::State::Running)
       s_overlay.Resume(NowMs());
   });
-  OSD::SetHostOverlay(&Draw);
+  OSD::SetHostOverlay(&Draw, &Kit::ReleaseGpu);
 }
 }  // namespace Orca::UX
