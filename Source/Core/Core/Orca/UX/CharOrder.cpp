@@ -229,7 +229,9 @@ State Advance(const SetView& set, const CssView& css, const State& state, int fr
       s.locked = static_cast<u8>(s.locked | (1 << second));
       keep(second);
     }
-    next = next || locks_in(first);
+    // A first pick that timed out with the token in hand ends once Orca has put it down (Gate),
+    // so the second picker never picks before the first pick is down.
+    next = (next && css.ports[first].Down()) || locks_in(first);
   }
   else
   {
@@ -298,7 +300,8 @@ Masks Gate(const SetView& set, const CssView& css, const State& state)
   switch (state.step)
   {
   case Step::First:
-    masks[first] = picking(first);
+    // Time ran out with the token in hand: it goes down before the second picker's turn.
+    masks[first] = TimedOut(state) && !css.ports[first].Down() ? done(first) : picking(first);
     // WinnerFirst: the other player waits. Free: the winner may pick and lock in, then waits.
     if (set.order == Order::WinnerFirst || (state.locked & (1 << second)))
       masks[second] = set.order == Order::WinnerFirst ? ALL : done(second);
@@ -359,6 +362,13 @@ std::string Line(const SetView& set, const CssView& css, const State& state,
   const std::string left = Clock(PICK_FRAMES - state.elapsed);
   const int first = state.first & 1;
   const int second = 1 - first;
+  // The first pick's time is up with its token in hand: it is going down.
+  if (state.step == Step::First && TimedOut(state) && !css.ports[first].Down())
+  {
+    if (first == local)
+      return "Time's up: your token goes on a character";
+    return fmt::format("Waiting for {} to put the token down", names[first]);
+  }
   // The current picker's next action: pick with A, then press Start.
   const auto todo = [&css](int port) {
     return css.ports[port].Down() ? "Start locks it in · B to change" : "A on a character, then Start";
@@ -394,10 +404,11 @@ u8 LockedPorts(const SetView& set, const CssView& css, const State& state)
   {
   case Step::First:
     return set.order == Order::Free ? static_cast<u8>(state.locked & (1 << (1 - first))) : 0;
+  // Never a token still in hand.
   case Step::Second:
-    return static_cast<u8>(1 << first);
+    return css.ports[first].placed ? static_cast<u8>(1 << first) : 0;
   case Step::Done:
-    return 3;
+    return static_cast<u8>((css.ports[0].placed ? 1 : 0) | (css.ports[1].placed ? 2 : 0));
   case Step::Idle:
     break;
   }

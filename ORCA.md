@@ -1762,8 +1762,10 @@ latch; the game never sees that Start). Off-turn players' controllers do nothing
 player locks in, the stage select comes at once. The tokens stay down between games, so Start alone
 keeps last game's character. A player whose turn ends with the token in hand has no input until it
 is down: Orca holds their stick, brings the hand back to where it last held the token over a
-character this order (`+0x1F4`-`+0x1FF`), and puts it down there. A token still in hand 45 s after
-both turns makes its player the ranked no-show, who leaves the set. Game 1 has no order (both pick
+character this order (`+0x1F4`-`+0x1FF`), and puts it down there. The next turn starts only once it
+is down, so the second picker always sees the first pick, and nobody shows as locked in with a token
+in hand. A token still in hand 45 s after both turns makes its player the ranked no-show, who leaves
+the set. Game 1 has no order (both pick
 at once). L or R held as you lock in
 carries into the game (Zero Suit Samus, Sheik, Project+'s Nana-led Ice Climbers): kept as the turn
 ends and held for that player while the select ends. State: 16 bytes at `+0x200` (magic `YGCO`, the

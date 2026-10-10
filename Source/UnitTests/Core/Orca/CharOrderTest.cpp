@@ -274,16 +274,20 @@ TEST(OrcaCharOrder, EachPickTimesOutAfter45Seconds)
   EXPECT_EQ(s, (St(2, Step::Second, 0, PICK_FRAMES, 0)));
   s = Twice(kGame2, Css(), s, 2 * PICK_FRAMES);
   EXPECT_EQ(s, (St(2, Step::Done, 0, 2 * PICK_FRAMES, 0)));
-  // The time is up even with the token in the hand: the order goes on, and the winner (whose turn
-  // is over) has no input but A, Orca putting the token on the character under the hand.
+  // The time is up with the token in the hand: the winner (whose turn is over) has no input but A,
+  // Orca putting the token on the character under the hand, and the loser's turn waits for it.
   State t = Twice(kGame2, Css(false, false), State{}, 0);
   t = Twice(kGame2, Css(false, false), t, PICK_FRAMES);
-  EXPECT_EQ(t.step, Step::Second);
+  EXPECT_EQ(t.step, Step::First);
   const auto g = Gate(kGame2, Css(false, false), t);
   EXPECT_EQ(g[0].buttons, ALL.buttons & ~A);
   EXPECT_EQ(g[0].press, A);
   EXPECT_TRUE(g[0].main_stick);
-  EXPECT_EQ(g[1].buttons, START | B);  // the loser's token in the hand too: no B for it
+  EXPECT_EQ(g[1], ALL);
+  // Down: the loser's turn, its own 45 seconds from then.
+  t = Twice(kGame2, Css(true, false), t, PICK_FRAMES + 3);
+  EXPECT_EQ(t, (St(2, Step::Second, 0, PICK_FRAMES + 3, 0)));
+  EXPECT_EQ(Gate(kGame2, Css(true, false), t)[1].buttons, START | B);  // in hand: no B for it
 }
 
 TEST(OrcaCharOrder, GateMasksWhoseTurnItIsNot)
@@ -690,6 +694,10 @@ TEST(OrcaCharOrder, LockedPortsFollowTheTurns)
   EXPECT_EQ(LockedPorts(kGame2, Css(), St(2, Step::First, 0, 0, 3)), 0);
   EXPECT_EQ(LockedPorts(kGame2, Css(), St(2, Step::Second, 0, 0, 3)), 1);
   EXPECT_EQ(LockedPorts(kGame2, Css(), St(2, Step::Done, 0, 0, 3)), 3);
+  // Never a token still in hand.
+  EXPECT_EQ(LockedPorts(kGame2, Css(false, true), St(2, Step::Second, 0, 0, 3)), 0);
+  EXPECT_EQ(LockedPorts(kGame2, Css(true, false), St(2, Step::Done, 0, 0, 3)), 1);
+  EXPECT_EQ(LockedPorts(kGame2, Css(false, true), St(2, Step::Done, 0, 0, 3)), 2);
   const SetView p2won{Ruleset::PPlus, 2, 1, Order::WinnerFirst};
   EXPECT_EQ(LockedPorts(p2won, Css(), St(2, Step::Second, 1, 0, 3)), 2);
   // Free: the winner's early lock-in on the loser's turn.
@@ -896,3 +904,63 @@ TEST(OrcaCharOrder, AnchorBytesRoundTrip)
   EXPECT_EQ(ReadState(m), State{});
 }
 
+// The first pick is down before the second picker's turn begins, so the second picker never picks
+// before seeing it. The repro: the winner takes its token up and keeps the hand off the grid as its
+// time runs out, meaning to put it down only after the loser has picked.
+TEST(OrcaCharOrder, TheSecondTurnWaitsForTheFirstPickToBeDown)
+{
+  std::vector<Orca::Events::PortInfo> ports{{0, "ADA", true, {}}, {1, "BO", false, {}}};
+  State s = Twice(kGame2, Css(), State{}, 0);
+  // The winner takes its token up over its character (0x05 at 10, 8), then leaves the grid.
+  s = Twice(kGame2, InHand(Css(), 0, 0x05, 10.0f, 8.0f), s, 10);
+  const CssView off = InHand(Css(), 0, kNoCharacter, 10.0f, -15.0f);
+  s = Twice(kGame2, off, s, 20);
+  s = Twice(kGame2, off, s, PICK_FRAMES);
+  // Time's up: still the winner's step. The loser has no input; nobody shows as locked in.
+  EXPECT_EQ(s.step, Step::First);
+  EXPECT_EQ(Picker(off, s), 0);
+  auto g = Gate(kGame2, off, s);
+  EXPECT_EQ(g[1], ALL);
+  EXPECT_TRUE(g[0].steer && g[0].main_stick);
+  EXPECT_EQ(g[0].steer_x, CENTRE);  // straight up, back to its character
+  EXPECT_GT(g[0].steer_y, CENTRE);
+  EXPECT_EQ(LockedPorts(kGame2, off, s), 0);
+  EXPECT_EQ(Line(kGame2, off, s, ports), "Waiting for ADA to put the token down");
+  ports[0].remote = false;
+  ports[1].remote = true;
+  EXPECT_EQ(Line(kGame2, off, s, ports), "Time's up: your token goes on a character");
+  // A Start from it changes nothing (no Start reaches the order with no token down).
+  s = Twice(kGame2, Press(off, 0, START), s, PICK_FRAMES + 30);
+  EXPECT_EQ(s.step, Step::First);
+  // However long it takes, the time running out again is not the end of the turn.
+  s = Twice(kGame2, off, s, 3 * PICK_FRAMES);
+  EXPECT_EQ(s.step, Step::First);
+  // Over its character: A every other frame. Down: the loser's turn begins, the winner locked.
+  const CssView over = InHand(Css(), 0, 0x05, 10.0f, 7.9f);
+  s = Twice(kGame2, over, s, 3 * PICK_FRAMES + 1);
+  State at = s;
+  at.elapsed = static_cast<u16>(at.elapsed & ~1);
+  EXPECT_EQ(Gate(kGame2, over, at)[0].press, A);
+  s = Twice(kGame2, Css(), s, 3 * PICK_FRAMES + 2);
+  EXPECT_EQ(s.step, Step::Second);
+  EXPECT_EQ(s.since, static_cast<u32>(3 * PICK_FRAMES + 2));
+  EXPECT_EQ(s.elapsed, 0);
+  EXPECT_EQ(LockedPorts(kGame2, Css(), s), 1);
+  g = Gate(kGame2, Css(), s);
+  EXPECT_EQ(g[0], ALL);
+  EXPECT_EQ(g[1].buttons, START);
+}
+
+// Free: the loser asked first. Its time running out with the token in hand ends its turn only once
+// the token is down too.
+TEST(OrcaCharOrder, FreeLosersTurnWaitsForItsTokenToo)
+{
+  const SetView set = kBrawl2;  // port 2 won game 1: port 1 (the loser) is asked first
+  State s = Twice(set, Css(), State{}, 0);
+  ASSERT_EQ(s.first, 0);
+  const CssView off = InHand(Css(), 0, kNoCharacter, 10.0f, -15.0f);
+  s = Twice(set, off, s, PICK_FRAMES);
+  EXPECT_EQ(s.step, Step::First);
+  s = Twice(set, Css(), s, PICK_FRAMES + 1);
+  EXPECT_EQ(s.step, Step::Second);
+}

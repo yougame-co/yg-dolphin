@@ -25,8 +25,9 @@ class CPUThreadGuard;
 // Each turn has 45 seconds. When time runs out, the player keeps the character their token is on
 // (by default the previous game's). A token still in hand then goes down for them: Orca takes their
 // stick, brings the hand back to the last character it held the token over this order (its
-// anchor) and places it there, so a turn always ends with a pick. A token still in hand 45 seconds
-// after both turns makes its player the ranked no-show (NoShow), who leaves the set.
+// anchor) and places it there, and the next turn starts only once it is down. So a turn always
+// ends with a pick, and the second picker always sees the first one. A token still in hand 45
+// seconds after both turns makes its player the ranked no-show (NoShow), who leaves the set.
 //
 // Controls on your turn: A places the token on a character, B picks it back up, Start locks the
 // pick in. Start never reaches the game here; the order reads it from the raw input latch
