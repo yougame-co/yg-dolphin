@@ -1671,8 +1671,10 @@ by both games. Stages are the ruleset's legal list, starters first, as bit masks
   is skipped, a pick takes the first allowed stage.
 
 **Brawl** (`Orca/UX/BrawlStages.*`): stages the current step doesn't allow are drawn as plain grey
-tiles. The flow's own picks (the last starter, a timer's default) move the game's cursor there (via
-the page button for Pokemon Stadium on the Melee page) and press A until the game takes it. A stage
+tiles. The page (Brawl or Melee stages) is both players' view, so only the player whose step it is
+turns it with A on the page button (either, on a casual game's step both take at once). The flow's
+own picks (the last starter, a timer's default) move the game's cursor there (via the page button
+for Pokemon Stadium on the Melee page) and press A until the game takes it. A stage
 taken against the steps is replaced before the screen copies it out. The stage select task is the
 scene's `+0x3AC`: `+0x200` the cursor (`+0x3C`/`+0x40` x and y), `+0x224` the state, `+0x228` the
 page, `+0x244` the hovered item, `+0x258` the taken stage (a write before the screen leaves changes
