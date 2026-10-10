@@ -400,4 +400,12 @@ void ResetForTests()
   w.closed = false;
   w.replies.clear();
 }
+
+bool Heartbeat::Due(std::chrono::steady_clock::time_point now)
+{
+  if (m_next && now < *m_next)
+    return false;
+  m_next = now + HEARTBEAT_PERIOD;
+  return true;
+}
 }  // namespace Orca::Bridge

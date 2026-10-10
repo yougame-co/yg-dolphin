@@ -437,6 +437,24 @@ TEST_F(OrcaBridge, ARequestGivesUpOnTimeoutCancelAndAClosedStdin)
 
 // ---- The sandbox's switches ----
 
+// The stdio bridge's heartbeat (Bridge::Heartbeat, said by Platform::UpdateRunningFlag): due at
+// once, then once a period however often the main loop asks; a loop that stalled says it once when
+// it comes back, not once per period it missed.
+TEST(OrcaBridgeHeartbeat, DueAtOnceThenOncePerPeriod)
+{
+  EXPECT_EQ(Bridge::HEARTBEAT_LINE, "orca alive");
+  EXPECT_EQ(Bridge::HEARTBEAT_PERIOD, 1000ms);
+  Bridge::Heartbeat beat;
+  const auto t0 = std::chrono::steady_clock::time_point{} + 1h;
+  EXPECT_TRUE(beat.Due(t0));
+  EXPECT_FALSE(beat.Due(t0));
+  EXPECT_FALSE(beat.Due(t0 + Bridge::HEARTBEAT_PERIOD - 1ms));
+  EXPECT_TRUE(beat.Due(t0 + Bridge::HEARTBEAT_PERIOD));
+  EXPECT_TRUE(beat.Due(t0 + 10s));
+  EXPECT_FALSE(beat.Due(t0 + 10s + 500ms));
+  EXPECT_TRUE(beat.Due(t0 + 11s));
+}
+
 TEST(OrcaSandbox, NetworkModes)
 {
   bool known = false;

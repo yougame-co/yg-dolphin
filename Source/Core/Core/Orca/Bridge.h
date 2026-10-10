@@ -130,4 +130,20 @@ struct Stats
 Stats GetStats();
 // Tests: counters to zero and stdin open again.
 void ResetForTests();
+
+// The heartbeat on the stdio bridge: HEARTBEAT_LINE about once a HEARTBEAT_PERIOD, from the thread
+// that owns Orca's window (every main-loop pass asks Due). The app stops a running Orca that said
+// it once and then goes quiet (its window is a child of the app's and shares its input queue, so a
+// hung window thread would hang the app's window too). Said only to the app, on the stdio bridge.
+inline constexpr std::string_view HEARTBEAT_LINE = "orca alive";
+inline constexpr std::chrono::milliseconds HEARTBEAT_PERIOD{1000};
+class Heartbeat
+{
+public:
+  // Whether to say it now; then not again for HEARTBEAT_PERIOD. The first call is always due.
+  bool Due(std::chrono::steady_clock::time_point now);
+
+private:
+  std::optional<std::chrono::steady_clock::time_point> m_next;
+};
 }  // namespace Orca::Bridge

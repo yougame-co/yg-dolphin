@@ -15,7 +15,8 @@
 #
 # It fails (exit 1) when Orca asks for anything but hello, mpTicket and mpRoom, sends an mpTicket
 # field the app would drop or a ranked one, never mirrors the room, doesn't end the room on the
-# page's Leave, or exits with a code other than 0. ORCA_NET and the rest of the environment pass
+# page's Leave, doesn't say `orca alive` about once a second once it runs (the heartbeat the app's
+# watchdog arms on: at least one every 3 s), or exits with a code other than 0. ORCA_NET and the rest of the environment pass
 # through, so `ORCA_NET=internet` checks the sandbox's network mode too (no loopback, no LAN).
 import json, os, random, string, subprocess, sys, threading, time, urllib.request, uuid
 
@@ -35,6 +36,7 @@ TICKET_FIELDS = {"id", "type", "players", "mode", "ranked", "room", "lobby"}
 start = time.time()
 problems, rooms, requests = [], [], []
 state = {"left_sent": False, "ended": False, "sandbox_line": None, "keyboard_line": False}
+alive = []
 out_lock = threading.Lock(); log_lock = threading.Lock()
 logf = open(LOG, "w") if LOG else None
 
@@ -109,6 +111,8 @@ def read_stdout():
         line = raw.decode("utf-8", "replace").rstrip("\r\n")
         if line.startswith("yg "):
             log("orca", line[:300]); request(line)
+        elif line == "orca alive":
+            alive.append(time.time())
         elif line.startswith("orca ") or line.startswith("exit ") or line.startswith("ready"):
             log("orca", line)
             if line.startswith("orca error"): problems.append(line)
@@ -161,9 +165,13 @@ if not code0: problems.append("the room was never mirrored with its code")
 if LEAVE and code0 and not any(r.get("code") == code0 and r.get("players") == [] and r.get("participants") == [] for r in rooms):
     problems.append("the page never saw the room empty after its Leave")
 if code != 0: problems.append(f"exit code {code}")
+gaps = [b - a for a, b in zip(alive, alive[1:])]
+if len(alive) < 3: problems.append(f"only {len(alive)} `orca alive` lines")
+elif max(gaps) > 3: problems.append(f"`orca alive` went quiet for {max(gaps):.1f} s")
 if os.environ.get("ORCA_NET") and not state["sandbox_line"]: problems.append("no 'in the app's sandbox' line")
 summary = {"exit": code, "requests": {k: requests.count(k) for k in sorted(set(requests))},
-           "mpRoom": len(rooms), "room": code0, "sandbox": state["sandbox_line"], "no_keyboard_note": state["keyboard_line"],
+           "mpRoom": len(rooms), "room": code0,
+           "alive": len(alive), "alive_gap_max_s": round(max(gaps), 2) if gaps else None, "sandbox": state["sandbox_line"], "no_keyboard_note": state["keyboard_line"],
            "problems": problems}
 log("app", json.dumps(summary))
 print(("PASS " if not problems else "FAIL ") + json.dumps(summary), flush=True)
