@@ -687,8 +687,10 @@ int wmain(int argc, wchar_t** argv)
   AppendMenuW(file, MF_STRING, MENU_FILE_QUIT, L"&Quit");
   AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(file), L"&File");
   AppendMenuW(menu, MF_STRING, 0, L"&View");
-  s_window = CreateWindowExW(0, wc.lpszClassName, L"Orca embed test host", WS_OVERLAPPEDWINDOW,
-                             100, 100, 1280, 800, nullptr, menu, wc.hInstance, nullptr);
+  // AGENT TEST: a test window must never be taken for a player's.
+  s_window = CreateWindowExW(0, wc.lpszClassName, L"AGENT TEST Orca embed test host",
+                             WS_OVERLAPPEDWINDOW, 100, 100, 1280, 800, nullptr, menu, wc.hInstance,
+                             nullptr);
   // 1280x800 DIPs of client area.
   RunCommand("size 1280 800");
   ShowWindow(s_window, SW_SHOW);
