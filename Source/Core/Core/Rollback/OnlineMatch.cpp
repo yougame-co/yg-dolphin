@@ -218,6 +218,8 @@ struct Match
   double stats_stall_ms = 0;
   // The local controller's input-age totals at the last line (Orca::Events::InputAge).
   Orca::Events::InputAge stats_input{};
+  // Stalls on the other players across steps, for the current session.
+  StallBudget stall_budget;
 
   // Each port's player name and own controls, and the frame they apply from. The host decides them
   // and sends them with keyframe offers, so every game writes the same values each frame. A short
@@ -1505,6 +1507,7 @@ void HostEvents(Core::System& system, Match& match)
       Orca::Online::Transport()->Receive();
       match.session = std::make_unique<Orca::Net::Session>(config, *match.port,
                                                            *Orca::Online::Transport());
+      match.stall_budget.Clear();
       SeedRoundTrips(match);
       match.session->SetLog(match.log_base, std::move(match.log));
       match.log.clear();
@@ -2041,6 +2044,7 @@ void FinishReplay(Match& match)
   config.plan = plan;
   match.session =
       std::make_unique<Orca::Net::Session>(config, *match.port, *Orca::Online::Transport());
+  match.stall_budget.Clear();
   match.session->SetValuesHeld(match.names_version);
   SeedRoundTrips(match);
   match.running = frame - 1;
@@ -3683,6 +3687,9 @@ std::optional<int> Boundary(Core::System& system,
     auto stall_published = step_start;
     bool stall_shown = false;
     bool stall_claimed = false;
+    // Held past the stall budget across steps (StallBudget): as silent as one long stall.
+    bool budget_spent = false;
+    const bool catching_up = match.port->CatchingUp() || match.session->CatchingUp();
     const int stalls_before = match.session->GetStats().stalls;
     const int running_before = match.running;
     const Orca::Net::Step step = StepSession(
@@ -3713,7 +3720,16 @@ std::optional<int> Boundary(Core::System& system,
           }
           if (match.joining && Orca::Online::HostLeftPending())
             host_left = true;
-          return host_left || !left_seats.empty() || Stopping(system);
+          // A joiner still catching up waits on the host's history by design: not counted.
+          if (!budget_spent && !catching_up && match.stall_budget.Spent(now, step_start))
+          {
+            budget_spent = true;
+            WARN_LOG_FMT(ROLLBACK,
+                         "Online: held on the other players for {} s of the last {} s: they count "
+                         "as silent",
+                         StallBudget::STALL_BUDGET.count(), StallBudget::STALL_WINDOW.count());
+          }
+          return host_left || !left_seats.empty() || budget_spent || Stopping(system);
         },
         std::chrono::milliseconds{1},
         LeavingPastUnplug(match) ? LEAVE_SILENCE_LIMIT : PEER_SILENCE_LIMIT, &peer_silent);
@@ -3731,7 +3747,13 @@ std::optional<int> Boundary(Core::System& system,
         NOTICE_LOG_FMT(ROLLBACK, "Online match: {}", note);
     }
     if (match.session && match.session->GetStats().stalls > stalls_before)
+    {
       match.stats_stall_ms += MsSince(step_start);
+      if (!catching_up)
+        match.stall_budget.Add(step_start, *match.last_return);
+    }
+    if (budget_spent && step.kind == Orca::Net::StepKind::Ended)
+      peer_silent = true;
     if (step.kind == Orca::Net::StepKind::Rollback)
     {
       match.stats_rbmax = std::max(match.stats_rbmax, running_before - step.frame + 1);
@@ -4163,6 +4185,32 @@ bool AloneAt(int frame, bool solo_idle, bool drop_in_pending, std::optional<int>
 bool HeaderFreeAt(int frame, bool solo_quiet, std::optional<int> stored_keyframe)
 {
   return solo_quiet && !(stored_keyframe && frame - *stored_keyframe <= KEYFRAME_FRESH_FRAMES);
+}
+
+void StallBudget::Add(Clock::time_point start, Clock::time_point end)
+{
+  if (end <= start)
+    return;
+  std::erase_if(m_stalls, [&](const auto& stall) { return stall.second <= end - STALL_WINDOW; });
+  m_stalls.emplace_back(start, end);
+}
+
+StallBudget::Clock::duration
+StallBudget::Stalled(Clock::time_point now, std::optional<Clock::time_point> ongoing_since) const
+{
+  const Clock::time_point from = now - STALL_WINDOW;
+  Clock::duration total{};
+  const auto add = [&](Clock::time_point start, Clock::time_point end) {
+    start = std::max(start, from);
+    end = std::min(end, now);
+    if (end > start)
+      total += end - start;
+  };
+  for (const auto& [start, end] : m_stalls)
+    add(start, end);
+  if (ongoing_since)
+    add(*ongoing_since, now);
+  return total;
 }
 
 bool VoidFirst(const VerdictWaitInputs& in)

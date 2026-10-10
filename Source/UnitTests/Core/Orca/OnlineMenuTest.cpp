@@ -1951,6 +1951,38 @@ TEST(OrcaOnlineMenuLobby, APeerFaultOrAVerdictThatNeverCameVoidsFirst)
   EXPECT_FALSE(with([](VerdictWaitInputs& o) { o.room_ended = true; }));
 }
 
+// A peer that lets one input through just before each silence limit (10 s) restarts every single
+// stall, but not the budget across them: the game counts it as silent once it has been held for
+// STALL_BUDGET of the last STALL_WINDOW, so the trickle can't freeze the game for good.
+TEST(OrcaStallBudget, ATrickleUnderTheSilenceLimitRunsTheBudgetOut)
+{
+  using Rollback::OnlineMatch::StallBudget;
+  using namespace std::chrono_literals;
+  const StallBudget::Clock::time_point t0{};
+  StallBudget budget;
+  auto t = t0 + 100s;
+  // Two stalls of 9.9 s, a frame of play between them: the second runs the budget out mid-stall.
+  budget.Add(t, t + 9900ms);
+  t += 9900ms + 17ms;
+  EXPECT_FALSE(budget.Spent(t, t));
+  EXPECT_FALSE(budget.Spent(t + 5s, t));
+  EXPECT_TRUE(budget.Spent(t + 5200ms, t));
+  // An honest link that stalls a second at a time, every 10 s, never runs it out.
+  StallBudget honest;
+  for (auto at = t0 + 100s; at < t0 + 400s; at += 10s)
+  {
+    honest.Add(at, at + 1s);
+    EXPECT_FALSE(honest.Spent(at + 1s)) << (at - t0) / 1s;
+  }
+  // Stalls leave the window: 14 s an hour ago counts for nothing.
+  StallBudget old;
+  old.Add(t0 + 100s, t0 + 114s);
+  EXPECT_EQ(old.Stalled(t0 + 3700s), StallBudget::Clock::duration::zero());
+  EXPECT_FALSE(old.Spent(t0 + 3700s, t0 + 3699s));
+  // A stall partly in the window counts the part in it.
+  EXPECT_EQ(old.Stalled(t0 + 170s), 4s);
+}
+
 TEST(OrcaOnlineMenuLobby, AFormerJoinerComesHomeOnTheMenusAlone)
 {
   using Rollback::OnlineMatch::HomeInputs;

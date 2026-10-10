@@ -13,6 +13,8 @@
 #include <chrono>
 #include <functional>
 #include <optional>
+#include <utility>
+#include <vector>
 
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/Session/Session.h"
@@ -186,6 +188,31 @@ struct HomeInputs
   bool lingering = false;
 };
 bool MayComeHome(const HomeInputs& in);
+
+// Time this game spent held on the other players' inputs, across steps. One stall ends at the
+// silence limit, but a player who lets one input through just before each limit would hold the
+// game forever; past STALL_BUDGET in the last STALL_WINDOW they count as silent all the same.
+class StallBudget
+{
+public:
+  using Clock = std::chrono::steady_clock;
+  static constexpr std::chrono::seconds STALL_WINDOW{60};
+  static constexpr std::chrono::seconds STALL_BUDGET{15};
+  // A stall from `start` to `end`.
+  void Add(Clock::time_point start, Clock::time_point end);
+  // Stalled time in the window ending `now`, with a stall still going on since `ongoing_since`.
+  Clock::duration Stalled(Clock::time_point now,
+                          std::optional<Clock::time_point> ongoing_since = std::nullopt) const;
+  bool Spent(Clock::time_point now,
+             std::optional<Clock::time_point> ongoing_since = std::nullopt) const
+  {
+    return Stalled(now, ongoing_since) >= STALL_BUDGET;
+  }
+  void Clear() { m_stalls.clear(); }
+
+private:
+  std::vector<std::pair<Clock::time_point, Clock::time_point>> m_stalls;
+};
 
 // A queue room's match with no verdict yet, when this game's session with the opponent ends or its
 // wait for the verdict (Linger) runs out.
