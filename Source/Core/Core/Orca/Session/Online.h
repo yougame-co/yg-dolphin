@@ -17,8 +17,8 @@
 // boundary. One room per process; its I/O runs on its own thread.
 namespace Orca::Online
 {
-// Online play is on: ORCA_SESSION=1 plus the desktop app's bridge (YOUGAME_BRIDGE / YOUGAME_TOKEN),
-// or ORCA_TEST_DEV_GAME for tests.
+// Online play is on: ORCA_SESSION=1 plus the desktop app's bridge (YOUGAME_STDIO=1, or
+// YOUGAME_BRIDGE / YOUGAME_TOKEN), or ORCA_TEST_DEV_GAME for tests.
 bool Enabled();
 
 // Starts the room at the first frame boundary. It runs on its own thread, so the host keeps playing

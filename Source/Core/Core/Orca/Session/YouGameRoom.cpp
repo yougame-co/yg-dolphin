@@ -10,6 +10,7 @@
 #include <condition_variable>
 #include <cstdlib>
 #include <deque>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -17,6 +18,7 @@
 #include <set>
 #include <string_view>
 #include <thread>
+#include <utility>
 
 #include <curl/curl.h>
 #include <fmt/format.h>
@@ -25,6 +27,7 @@
 #include "Common/HttpRequest.h"
 #include "Common/Logging/Log.h"
 #include "Common/WebSocket.h"
+#include "Core/Orca/Bridge.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/DirectLink.h"
 #include "Core/Orca/Session/Online.h"
@@ -936,8 +939,12 @@ struct YouGameRoom::Impl
   Clock::time_point last_heard{};
 
   // Under the desktop app, the room is mirrored to the YouGame page through the app's bridge
-  // (mpRoom, latest only), and the page's lobby commands come back on its event stream.
+  // (mpRoom, latest only), and the page's lobby commands come back on its event stream. `stdio`:
+  // that bridge is stdin and stdout (Orca/Bridge.h), and the lobby commands come with
+  // `push_token`'s handler instead of the event stream.
   bool bridged = false;
+  bool stdio = false;
+  u64 push_token = 0;
   std::string bridge_url, bridge_token;
   // How tickets were minted (set once, before role_known): the dev site and player, and the
   // keyframe store's URL from the ticket reply.
@@ -1120,6 +1127,7 @@ struct YouGameRoom::Impl
     stop = true;
     if (thread.joinable())
       thread.join();
+    Orca::Bridge::ClearPushHandler(std::exchange(push_token, 0));
     if (direct)
       direct->Stop();
   }
@@ -1175,14 +1183,16 @@ struct YouGameRoom::Impl
 
     const std::string bridge = Env("YOUGAME_BRIDGE"), token = Env("YOUGAME_TOKEN");
     const std::string dev = Env("ORCA_TEST_DEV_GAME");
-    const bool use_bridge = !bridge.empty() && !token.empty();
+    // The app's bridge on stdin and stdout (a sandboxed Orca), else on loopback.
+    stdio = Orca::Bridge::Enabled();
+    const bool use_bridge = stdio || (!bridge.empty() && !token.empty());
     if (!use_bridge && dev.empty())
     {
       End("Start Orca from the YouGame app to play online");
       return false;
     }
     // The bridge is the desktop app on loopback; nothing else may receive the token.
-    if (use_bridge && !LoopbackBridge(bridge))
+    if (use_bridge && !stdio && !LoopbackBridge(bridge))
     {
       End("Invalid YouGame app bridge address");
       return false;
@@ -1190,8 +1200,11 @@ struct YouGameRoom::Impl
     if (use_bridge)
     {
       bridged = true;
-      bridge_url = bridge.ends_with("/") ? bridge.substr(0, bridge.size() - 1) : bridge;
-      bridge_token = token;
+      if (!stdio)
+      {
+        bridge_url = bridge.ends_with("/") ? bridge.substr(0, bridge.size() - 1) : bridge;
+        bridge_token = token;
+      }
     }
 
     // Leave() must not wait out a slow request: the progress callback aborts it.
@@ -1200,29 +1213,45 @@ struct YouGameRoom::Impl
                           const Common::HttpRequest::Headers& headers,
                           picojson::object* result) -> bool {
       Common::HttpRequest::Response response;
+      // On the stdio bridge, the app's reply itself.
+      std::optional<picojson::object> answer;
       for (int attempt = 1; attempt <= TICKET_TRIES && !stop; ++attempt)
       {
         const auto start = Clock::now();
-        response = http.Post(target, picojson::value(body).serialize(), headers,
-                             Common::HttpRequest::AllowedReturnCodes::All);
-        if (response)
-          break;
+        if (stdio)
+        {
+          answer = Orca::Bridge::Request(body, TICKET_TIMEOUT, [this] { return stop.load(); });
+          if (answer)
+            break;
+        }
+        else
+        {
+          response = http.Post(target, picojson::value(body).serialize(), headers,
+                               Common::HttpRequest::AllowedReturnCodes::All);
+          if (response)
+            break;
+        }
         WARN_LOG_FMT(
-            NETPLAY, "Orca room: no reply from {} in {} ms (HTTP {}, try {} of {})", target,
+            NETPLAY, "Orca room: no reply from {} in {} ms (HTTP {}, try {} of {})",
+            stdio ? "the app" : target,
             std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - start).count(),
             http.GetLastResponseCode(), attempt, TICKET_TRIES);
         const auto until = Clock::now() + std::chrono::seconds(1);
         while (attempt < TICKET_TRIES && !stop && Clock::now() < until)
           std::this_thread::sleep_for(std::chrono::milliseconds(20));
       }
-      if (!response)
+      if (!response && !answer)
       {
         End(stop ? "You left the room" : "YouGame did not respond", stop ? "" : "network");
         return false;
       }
       picojson::value json;
-      const std::string text(response->begin(), response->end());
-      if (!ParseJson(text, &json) || !json.is<picojson::object>())
+      if (answer)
+      {
+        json = picojson::value(std::move(*answer));
+      }
+      else if (!ParseJson(std::string(response->begin(), response->end()), &json) ||
+               !json.is<picojson::object>())
       {
         End(fmt::format("YouGame sent an unreadable reply (HTTP {})", http.GetLastResponseCode()));
         return false;
@@ -1376,7 +1405,14 @@ struct YouGameRoom::Impl
     request["lobby"] = picojson::value(lobby);
     Common::HttpRequest http(std::chrono::seconds(10));
     Common::HttpRequest::Response response;
-    if (bridged)
+    std::optional<picojson::object> answer;  // the stdio bridge's reply
+    if (bridged && stdio)
+    {
+      request["type"] = picojson::value("mpTicket");
+      request["ranked"] = picojson::value(false);
+      answer = Orca::Bridge::Request(std::move(request), std::chrono::seconds(10));
+    }
+    else if (bridged)
     {
       request["type"] = picojson::value("mpTicket");
       request["ranked"] = picojson::value(false);
@@ -1395,8 +1431,17 @@ struct YouGameRoom::Impl
                            Common::HttpRequest::AllowedReturnCodes::All);
     }
     picojson::value json;
-    if (!response || !ParseJson(std::string(response->begin(), response->end()), &json) ||
-        !json.is<picojson::object>())
+    if (answer)
+    {
+      json = picojson::value(std::move(*answer));
+    }
+    else if (stdio)
+    {
+      *error = "no ticket from the app";
+      return false;
+    }
+    else if (!response || !ParseJson(std::string(response->begin(), response->end()), &json) ||
+             !json.is<picojson::object>())
     {
       *error = fmt::format("no ticket from YouGame (HTTP {})", http.GetLastResponseCode());
       return false;
@@ -1645,7 +1690,15 @@ struct YouGameRoom::Impl
     if (bridged)
     {
       bridge_thread = std::thread([this] { BridgeLoop(); });
-      events_thread = std::thread([this] { EventsLoop(); });
+      if (stdio)
+      {
+        push_token = Orca::Bridge::SetPushHandler(
+            [this](const picojson::object& event) { OnPageEvent(event); });
+      }
+      else
+      {
+        events_thread = std::thread([this] { EventsLoop(); });
+      }
     }
 
     if (net_delay)
@@ -1848,20 +1901,32 @@ struct YouGameRoom::Impl
     if (last_published.empty())
       return;
     Common::HttpRequest http(MIRROR_END_TIMEOUT);
-    if (!PostMirror(http, picojson::value(RoomMirror(true)).serialize(), true))
+    if (!PostMirror(http, picojson::value(RoomMirror(true)).serialize(), true, MIRROR_END_TIMEOUT))
       WARN_LOG_FMT(NETPLAY, "Orca room: the app did not take the room's end");
   }
 
   // One mirror update to the app, unless a newer room already posted (this one is stale) or this
   // room already posted its end (`last` marks the end). True once the app took it, or if there was
-  // nothing to send.
-  bool PostMirror(Common::HttpRequest& http, const std::string& body, bool last = false)
+  // nothing to send. On the stdio bridge it waits up to `timeout` for the app, or until
+  // `cancelled`.
+  bool PostMirror(Common::HttpRequest& http, const std::string& body, bool last = false,
+                  std::chrono::milliseconds timeout = std::chrono::seconds(5),
+                  const std::function<bool()>& cancelled = {})
   {
     std::lock_guard lock(s_mirror_mutex);
     if (generation < s_mirror_newest || mirror_closed)
       return true;
     s_mirror_newest = generation;
     mirror_closed = last;
+    if (stdio)
+    {
+      picojson::value request;
+      if (!ParseJson(body, &request) || !request.is<picojson::object>())
+        return false;
+      const auto reply =
+          Orca::Bridge::Request(std::move(request.get<picojson::object>()), timeout, cancelled);
+      return reply && reply->count("ok") && reply->at("ok").evaluate_as_boolean();
+    }
     const auto response = http.Post(
         bridge_url + "/sdk", body,
         {{"Authorization", "Bearer " + bridge_token}, {"Content-Type", "application/json"}},
@@ -1898,7 +1963,8 @@ struct YouGameRoom::Impl
       }
       if (!body || bridge_done)
         continue;
-      if (!PostMirror(http, *body))
+      if (!PostMirror(http, *body, false, std::chrono::seconds(5),
+                      [this] { return bridge_done.load(); }))
       {
         WARN_LOG_FMT(NETPLAY, "Orca room: the app did not take the room update (HTTP {})",
                      http.GetLastResponseCode());
@@ -1912,7 +1978,12 @@ struct YouGameRoom::Impl
     picojson::value value;
     if (!ParseJson(line, &value) || !value.is<picojson::object>())
       return;
-    const auto& e = value.get<picojson::object>();
+    OnPageEvent(value.get<picojson::object>());
+  }
+
+  // The same command, already parsed (the stream's line, or a push on the stdio bridge).
+  void OnPageEvent(const picojson::object& e)
+  {
     // Only this game's own page may command it.
     const std::string game = Env("YOUGAME_GAME");
     if (game.empty() || Str(e, "slug") != game)
@@ -2024,6 +2095,7 @@ struct YouGameRoom::Impl
   {
     bridge_done = true;
     bridge_wake.notify_all();
+    Orca::Bridge::ClearPushHandler(std::exchange(push_token, 0));
     if (bridge_thread.joinable())
       bridge_thread.join();
     if (events_thread.joinable())

@@ -18,9 +18,9 @@
 // A private YouGame room carrying an Orca drop-in session. The host plays from boot and friends
 // join by room code (up to four players). Each player's seat is its room slot (seat 0, the host, is
 // port 1), and session packets travel as relayed room messages. Tickets come from the YouGame
-// desktop app's loopback bridge (YOUGAME_BRIDGE / YOUGAME_TOKEN), or for tests from the site as an
-// anonymous dev game (ORCA_TEST_DEV_GAME), whose rooms never meet real players. All network work
-// runs on one thread.
+// desktop app's bridge, on stdin and stdout (YOUGAME_STDIO=1, Orca/Bridge.h) or on loopback
+// (YOUGAME_BRIDGE / YOUGAME_TOKEN), or for tests from the site as an anonymous dev game
+// (ORCA_TEST_DEV_GAME), whose rooms never meet real players. All network work runs on one thread.
 namespace Orca::Net
 {
 struct RoomOptions

@@ -39,11 +39,13 @@
 #include "Core/Orca/Activity.h"
 #include "Core/Orca/BootLogs.h"
 #include "Core/Orca/Branding.h"
+#include "Core/Orca/Bridge.h"
 #include "Core/Orca/CrashNote.h"
 #include "Core/Orca/Disc.h"
 #include "Core/Orca/DiscVerify.h"
 #include "Core/Orca/Launch.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/Sandbox.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/UX.h"
 #include "Core/System.h"
@@ -56,6 +58,10 @@
 #include "UICommon/DiscordPresence.h"
 #endif
 #include "UICommon/UICommon.h"
+
+#ifdef __APPLE__
+#include "InputCommon/ControllerInterface/Quartz/Quartz.h"
+#endif
 
 static std::unique_ptr<Platform> s_platform;
 // True in embed mode (Embed.h): drawn inside the YouGame app's window, controlled over stdin.
@@ -492,13 +498,29 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
     return 1;
   }
 
+  // Inside the app's sandbox (Orca/Sandbox.h): say so in the log, and refuse a user folder Orca may
+  // not write, which would otherwise fail somewhere later with a reason nobody could act on.
+  if (Orca::SessionActive() && Orca::Sandbox::Jailed())
+  {
+    fmt::print(stderr, "Orca: in the app's sandbox (network {}{})\n",
+               Orca::Sandbox::NetModeName(Orca::Sandbox::NetModeFromEnv()),
+               Orca::Bridge::Enabled() ? ", stdio bridge" : "");
+    if (!user_directory.empty() && Orca::Sandbox::WriteDenied(user_directory))
+    {
+      Orca::Status::Error(Orca::Sandbox::DENIED_ERROR,
+                          "Orca isn't allowed to write its folder, so it didn't start.");
+      return Orca::Status::Finish();
+    }
+  }
+
   s_platform = GetPlatform(options);
   if (s_platform && embed.enabled)
     s_platform->SetEmbed(embed);
   if (!s_platform || !s_platform->Init())
   {
     fprintf(stderr, "No platform found, or failed to initialize.\n");
-    if (embed.enabled)
+    // Unless the platform already said why (sandbox_embed: nothing adopted the window).
+    if (embed.enabled && Orca::Status::ExitCode() == 0)
       Embed::Out("error Orca couldn't open its view in the app's window");
     return 1;
   }
@@ -542,6 +564,15 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
   // state, so typing in the app's chat would otherwise reach the game.
   if (embed.enabled)
     Config::SetCurrent(Config::MAIN_INPUT_BACKGROUND_INPUT, false);
+#ifdef __APPLE__
+  // On the stdio bridge the page sends the keyboard as a pad, so read no global key state at all.
+  if (!Orca::Sandbox::OsKeyboardAllowed(Orca::Sandbox::ThisOs(), Orca::SessionActive(),
+                                        Orca::Bridge::Enabled()))
+  {
+    ciface::Quartz::SetKeyboardEnabled(false);
+    fmt::print(stderr, "Orca: no keyboard of its own: the page sends it as a pad\n");
+  }
+#endif
   UICommon::InitControllers(wsi);
   // The in-game UI: overlay, name tags and the app's controllers as the local pad.
   if (Orca::SessionActive())
@@ -589,6 +620,16 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
 #endif
 
   DolphinAnalytics::Instance().ReportDolphinStart("nogui");
+
+  // The stdio bridge (Orca/Bridge.h): requests go out as protocol lines, and the app's replies come
+  // in with the commands on stdin, so it needs stdin read (embedded, or a test harness's commands).
+  if (Orca::Bridge::Enabled())
+  {
+    if (embed.enabled || Orca::GetEnv("ORCA_TEST_COMMANDS") == "1")
+      Orca::Bridge::SetWriter(Embed::Out);
+    else
+      fmt::print(stderr, "Orca: YOUGAME_STDIO=1 without --embed: the app's bridge is off\n");
+  }
 
   // Tell the app "ready" once the first frame is on screen.
   Common::EventHook first_frame_hook;

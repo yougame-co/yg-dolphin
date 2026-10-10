@@ -50,6 +50,7 @@ and why. Paths are relative to `Source/Core/Core/` unless they start with `Sourc
 - [Character select](#character-select)
 - [On-screen UI](#on-screen-ui)
 - [Embedding](#embedding)
+- [The sandbox](#the-sandbox)
 - [Changes by release](#changes-by-release)
 
 ## Building
@@ -96,6 +97,8 @@ game) is seat 0, controller port 1; a friend's seat is its room slot.
 | Variable | Meaning |
 |---|---|
 | `YOUGAME_BRIDGE`, `YOUGAME_TOKEN` | Set by the YouGame desktop app: tickets come from its loopback bridge. |
+| `YOUGAME_STDIO` | `1`, set by the app instead: its bridge is Orca's stdin and stdout ([The stdio bridge](#the-stdio-bridge)). |
+| `ORCA_NET` | Set by the app when it sandboxes Orca: `internet` or `internet-lan` ([Network](#network)). |
 | `ORCA_ROOM` | Room code (6-12 of `a-z0-9`). Default: the app's invite, else a new code. |
 | `ORCA_JOIN` | `1`: join the friend's game in that room. |
 | `ORCA_NAME` | Name shown in the room. |
@@ -1865,8 +1868,10 @@ line protocol as its libretro host. Code: `Source/Core/DolphinNoGUI/Embed.*`, `P
 `Tools/orca/embed-test-host.m` (macOS) and `embed-test-host-win.cpp`.
 
 ```
-Orca --embed --parent <handle> --rect X Y W H [-u <user>] -e <disc> [-C ...]
+Orca --embed --parent <handle> --rect X Y W H [--embed-adopted] [-u <user>] -e <disc> [-C ...]
 ```
+
+`--embed-adopted` is the sandbox's way to embed on Windows ([Adopted window](#adopted-window)).
 
 - `--parent`: on Windows the HWND as a decimal number; on macOS the window's **CGWindowID** (in
   Electron, the middle field of `win.getMediaSourceId()`), since an `NSView*` means nothing to
@@ -2047,6 +2052,101 @@ size asks at once). The game, and an online match, carry on. stderr says so once
 (`Orca: the picture's swap chain has no buffers after a resize ...`, with the window's size and the
 error code) and again when the picture works. A lost graphics device still ends Orca, after saying
 so. Since 0.3.35; before, a refused resize ended Orca (exit `0x80000003`).
+
+## The sandbox
+
+The YouGame desktop app can run Orca inside its sandbox: on Windows an AppContainer started by
+`yougame-sandbox.exe`, inside a job (low integrity, no loopback, files only where the app grants
+them), and later on macOS a `sandbox-exec` profile. Orca's side of it is a handful of switches, all
+off unless the app sets them, so an Orca with them runs exactly as before under an app without the
+sandbox. The app jails only an Orca whose manifest entry (and the installer's `orca.json`) says
+`"sandbox": 1`. Code: `Orca/Sandbox.*`, `Orca/Bridge.*`, `DolphinNoGUI/Embed.*`,
+`PlatformWin32.cpp`; tests: `OrcaBridge*`, `OrcaSandbox.*` (`SandboxTest.cpp`) and
+`OrcaLive.StdioBridgeMirrorsTheRoomAndTakesLeave`.
+
+| What | How |
+|---|---|
+| `YOUGAME_STDIO=1` | The app's bridge on stdin and stdout instead of a loopback server ([The stdio bridge](#the-stdio-bridge)). |
+| `--embed-adopted` | Windows: the window waits to be made a child of the app's ([Adopted window](#adopted-window)). |
+| `ORCA_NET` | The network the sandbox gives Orca ([Network](#network)). |
+| Every session | Dolphin's own GameCube adapter code never starts (`GCAdapter::Init`): the app's controller helper owns the adapter and sends its ports in the snapshots. No libusb or UsbDk is loaded, and a planted `Dolphin.ini` can't reach the adapter. |
+| macOS session on the stdio bridge | No Quartz keyboard device, so nothing reads the global key state (`CGEventSourceKeyState`): the page sends the keyboard as a pad. |
+| Windows, D3D | `d3dcompiler_47.dll` is loaded by its full path beside `Orca.exe` (the name is the fallback when there is none, as in a dev build), so neither the sandbox's prefer-System32 rule nor a DLL elsewhere on the search path swaps in another compiler, whose bytes would miss every cached shader (`FxcCache.cpp`). |
+| Inside the sandbox | stderr says `Orca: in the app's sandbox (network <mode>[, stdio bridge])`. A user folder Orca may not write ends the run at once with `orca error sandbox_denied`. |
+
+**Error codes** (`orca error <code> <sentence>`):
+
+| Code | When |
+|---|---|
+| `sandbox_disc` | Inside the sandbox, the disc can't be opened for lack of permission: the app didn't grant it (a network share, a file an admin tool made). "Orca can't read this disc where it is. Move it to a drive on this PC." |
+| `sandbox_embed` | `--embed-adopted`: nothing adopted the window within 10 s. "Orca couldn't open in the YouGame window. Try again." |
+| `sandbox_denied` | Inside the sandbox, Orca may not write its user folder. |
+
+**Windows zip layout.** A release zip for the sandbox carries, beside `Orca/Orca.exe`, the pinned
+`d3dcompiler_47.dll` (10.0.20348 from the Windows SDK's `Redist/D3D/x64`, SHA-256
+`a05f99734f7c4822fefc12b367af21fd0976ed6608752fb1e1e80b6ece7ecbbb`, the one YouGame's installer ships) and `Orca/shaders/D3D-fxc.cache`, the
+compiled-shader cache made with that compiler and that build (the app's `orca.ts`
+`downloadedShaders` merges it into the player's). The 0.3.30-0.3.38 zips have neither.
+
+### The stdio bridge
+
+With `YOUGAME_STDIO=1` the app's bridge is Orca's own stdin and stdout, the pipes embedding already
+uses, so a sandboxed Orca needs no loopback (an AppContainer can't reach it) and no token. Each
+bridge line starts with `yg `; every other line keeps its embed meaning.
+
+| Direction | Line |
+|---|---|
+| Orca to app (stdout) | `yg {"id":<n>,"type":"hello"\|"mpTicket"\|"mpRoom",...}`: the only three requests Orca makes, at most 32 KB. `mpTicket` carries `players`, `mode`, `ranked` (always `false`), `room` and `lobby`, nothing else. |
+| App to Orca (stdin) | `yg {"re":<n>,"ok":true,"result":{...}}` or `yg {"re":<n>,"ok":false,"error":"..."}`: the reply to request `n`. |
+| | `yg {"push":{"type":"controllers","snapshot":{...}}}`: a controller snapshot, the same schema-1 object the loopback stream's `data:` lines carry. |
+| | `yg {"push":{"slug":"<game>","cmd":"leave"\|"kick",...}}`: the page's lobby commands, as the loopback event stream sent them. |
+
+- The stdin reader reads 64 KB at a time and routes bridge lines on its own thread, so neither a
+  reply nor a pad waits for the frame loop: a reply wakes the request waiting for it (any thread,
+  with a timeout), a snapshot goes straight into the controller cache the CPU thread reads once per
+  frame, a lobby command to the current room.
+- Only the newest controller snapshot of one read is parsed; the older ones are stale already
+  (counted as `coalesced`).
+- A stdin line over 128 KB is dropped whole, through its newline; a bridge line over 64 KB, one that
+  isn't JSON, nests deeper than 8 or has a shape Orca doesn't know is dropped and counted, never
+  acted on. A reply nobody waits for is dropped. A closed stdin fails every waiting request at once.
+- Bridge lines are dropped unless `YOUGAME_STDIO=1`, and they never reach the embed commands.
+- Requests need stdout as the protocol channel: `--embed`, or `ORCA_TEST_COMMANDS=1` for tests.
+- The loopback bridge (`YOUGAME_BRIDGE`, `YOUGAME_TOKEN`) stays for an app without the stdio
+  bridge and for tests; dev tickets (`ORCA_TEST_DEV_GAME`) work as before.
+
+### Adopted window
+
+A process in an AppContainer (low integrity) may not create a window under the app's (medium
+integrity), so with `--embed-adopted` Orca:
+
+1. creates a hidden top-level `WS_POPUP` window (`WS_EX_NOPARENTNOTIFY | WS_EX_TOOLWINDOW`, so it
+   never shows on the taskbar), class and caption both `Orca`, and never retitles it;
+2. answers messages until `GetParent` is the `--parent` window: the launcher (outside the
+   sandbox, `--embed-parent <hwnd> --embed-class Orca --embed-title Orca --embed-keep-style`) makes
+   it a `WS_CHILD` of the app's window. After 10 s it gives up with `orca error sandbox_embed`;
+3. then places it at the last `rect` and shows it, and puts it back at the app's rect whenever it
+   is found elsewhere (Windows keeps a window's screen position across `SetParent`).
+
+Everything else is embed mode as before: the swap chain is made on the adopted child, `rect`,
+`view`, `hide`, `show` and focus work the same, and Orca stops when the app's window is destroyed.
+It also exits like embed mode (`exit <code>`, then `_exit` without the CRT's exit-time work), not
+like a standalone window, whose exit crashes with `0xC0000005` on 0.3.38. Elsewhere the flag
+changes nothing: a Mac's Orca window is top-level anyway.
+
+### Network
+
+`ORCA_NET` says which network the sandbox gives Orca, for the [direct links](#direct-links):
+
+| Value | Direct links |
+|---|---|
+| unset | Every candidate, as before. In a Windows AppContainer started without it: what the token allows (`internet-lan` with the `privateNetworkClientServer` capability, else `internet`). |
+| `internet` | No loopback and no LAN candidate (RFC 1918, link-local, IPv6 unique-local) is offered or tried, and there is no upgrade to the LAN. |
+| `internet-lan` | LAN candidates too (the player's setting, on by default on Windows), never loopback. |
+| anything else | `internet`, the strictest. |
+
+`ORCA_DIRECT_LOOPBACK` has no effect when `ORCA_NET` is set. The room's WebSocket, the site's HTTPS,
+STUN and TURN are internet traffic and work in every mode.
 
 ## Changes by release
 
