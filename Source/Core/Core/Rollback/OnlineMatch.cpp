@@ -195,6 +195,9 @@ struct Match
   bool joined = false;
   int leave_at = -1;
   bool leave_requested = false;
+  // The opponent didn't pick in time on a ranked set's later game (UX/CharOrder.h NoShow): this
+  // player's leave reports the room's match void first.
+  bool opponent_no_show = false;
   std::string join_status;
 
   int last_percent = -1;
@@ -218,6 +221,8 @@ struct Match
   double stats_stall_ms = 0;
   // The local controller's input-age totals at the last line (Orca::Events::InputAge).
   Orca::Events::InputAge stats_input{};
+  // Stalls on the other players across steps, for the current session.
+  StallBudget stall_budget;
 
   // Each port's player name and own controls, and the frame they apply from. The host decides them
   // and sends them with keyframe offers, so every game writes the same values each frame. A short
@@ -866,6 +871,7 @@ void EndFresh(Match& match, const char* why)
 // Drops drop-in work for the room being left; the next room gets a new store.
 void ResetDropIn(Match& match)
 {
+  match.opponent_no_show = false;
   match.replaying.reset();
   match.before_join.reset();
   // A fresh start due, armed or holding for this room is over with it.
@@ -1505,6 +1511,7 @@ void HostEvents(Core::System& system, Match& match)
       Orca::Online::Transport()->Receive();
       match.session = std::make_unique<Orca::Net::Session>(config, *match.port,
                                                            *Orca::Online::Transport());
+      match.stall_budget.Clear();
       SeedRoundTrips(match);
       match.session->SetLog(match.log_base, std::move(match.log));
       match.log.clear();
@@ -1969,6 +1976,15 @@ Load LoadKeyframe(Core::System& system, Match& match, int* frame_out)
     match.join_error = "Your friend's game data differs from yours";
     return Load::Failed;
   }
+  // Every header it writes is this game's ruleset's (or none).
+  if (!Orca::Net::HeadersFitRuleset(download->replay,
+                                    static_cast<u8>(Orca::UX::Rules::ProfileRuleset())))
+  {
+    WARN_LOG_FMT(ROLLBACK, "Drop-in: the host's replay sets another game's rules: refused");
+    match.join_error_code = "room_mismatch";
+    match.join_error = "Your friend's game data differs from yours";
+    return Load::Failed;
+  }
   IOS::HLE::FS::HostFileSystem* nand = HostNand(system);
   if (!nand || !Core::WiiRootIsTemporary())
   {
@@ -2041,13 +2057,14 @@ void FinishReplay(Match& match)
   config.plan = plan;
   match.session =
       std::make_unique<Orca::Net::Session>(config, *match.port, *Orca::Online::Transport());
+  match.stall_budget.Clear();
   match.session->SetValuesHeld(match.names_version);
   SeedRoundTrips(match);
   match.running = frame - 1;
   match.stats_frame = -1;
   EndQueueForJoin(match);
   Orca::UX::Rules::ExpectHeader(QueueMode(Orca::Online::RoomQueue()), Orca::Online::Code(),
-                                RoomFlags());
+                                RoomFlags(), Orca::Online::KnownSetGames());
   NOTICE_LOG_FMT(ROLLBACK, "Drop-in: rebuilt replay frame {} locally in {:.0f} ms", frame,
                  MsSince(match.loaded_time));
   match.replaying.reset();
@@ -2271,6 +2288,18 @@ std::optional<int> JoinHost(Core::System& system, Match& match)
 // "leave": a joiner asks its host to unplug it at an agreed frame; a host opens a new room.
 void Leave(Match& match)
 {
+  // The opponent didn't pick in time and stayed: the room's match hears it void before this leave.
+  if (std::exchange(match.opponent_no_show, false) &&
+      VoidFirst({.queue_room = Orca::Online::RoomQueue() != "private",
+                 .match_live = Orca::Online::MatchLive(),
+                 .set_over = Orca::Online::SetOver(),
+                 .room_ended = Orca::Online::RoomEnded(),
+                 .from_peer = true}))
+  {
+    NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: leaving after the opponent's no-show: reporting the "
+                             "match void first");
+    Orca::Online::ReportPeerFault();
+  }
   // Leaving a ranked set forfeits it once its first game began (before that the room voids it), and
   // the screen says which (UX/SetEnd.h).
   if (Orca::Online::RoomQueue() == "ranked" && Orca::Online::MatchLive())
@@ -2976,6 +3005,8 @@ void PublishStats(Match& match)
   num("st", stats.stalls - last.stalls);
   num("stms", std::round(match.stats_stall_ms));
   num("ds", s_desyncs);
+  // Times another player's inputs were found coming late against its own frame (Session::LateSeat).
+  num("late", stats.late_seats);
   // Frames the game itself held (a load) count as shown, so this falls only when this machine does.
   num("fps",
       std::round((match.running - match.stats_frame + match.stats_held) / seconds * 10) / 10);
@@ -3023,8 +3054,26 @@ void Linger(Match& match)
   }
   const bool over = Orca::Online::RoomEnded();
   if (!over && Clock::now() < *match.linger_until)
+  {
+    // Still here and running: the room hears so, so the opponent can't claim this game stalled.
+    Orca::Online::KeepAlive();
     return;
+  }
   match.linger_until.reset();
+  // No verdict in time and the set still open: this player's void goes in before it leaves, so the
+  // leave isn't a forfeit (an opponent back in the room after its own drop never settles it).
+  if (VoidFirst({.queue_room = Orca::Online::RoomQueue() != "private",
+                 .match_live = Orca::Online::MatchLive(),
+                 .set_over = Orca::Online::SetOver(),
+                 .room_ended = over,
+                 .waited_out = true}))
+  {
+    NOTICE_LOG_FMT(ROLLBACK,
+                   "Matchmaking: no verdict in {} s with the set still open: reporting "
+                   "it void before leaving",
+                   VERDICT_WAIT.count());
+    Orca::Online::ReportPeerFault();
+  }
   // A verdict that came already cleared the countdown; none will come now.
   Orca::UX::SetEnd::Current().NoVerdict(Orca::UX::SetEnd::NowMs());
   if (match.local_seat != 0)
@@ -3073,9 +3122,10 @@ void ConfirmResults(Match& match)
   }
   // The casual ready timer ran out (UX/Queue.h), at the same final frame on both machines.
   Orca::UX::Queue::ConfirmTimeout(confirmed, match.local_seat);
-  // Ranked: a player who didn't pick a character in time before the first game leaves the room; the
-  // set ends before its first game, so the room voids it and rates nobody. The other waits for the
-  // verdict.
+  // Ranked: a player who didn't pick a character in time leaves the room. Before the first game the
+  // set ends with no game, so the room voids it and rates nobody; on a later game (a token still in
+  // hand after the character order, UX/CharOrder.h) leaving loses the set. The other waits for the
+  // verdict, and a leave of its own then reports the match void first.
   if (const auto no_show = Orca::UX::Rules::ConfirmNoShow(confirmed))
   {
     const bool mine = *no_show == match.local_seat;
@@ -3089,6 +3139,7 @@ void ConfirmResults(Match& match)
     }
     else if (!mine)
     {
+      match.opponent_no_show = Orca::Online::RoomQueue() == "ranked";
       Core::DisplayMessage("Your opponent didn't pick a character in time", 6000);
     }
   }
@@ -3204,6 +3255,27 @@ void JoinerEvents(Match& match)
     else if (event.kind == Orca::Net::PeerEvent::Kind::Left && event.host)
       match.host_gone = event.reason;
   }
+}
+
+// A joiner: the host's values for this player's own port must be what it sent (OwnValuesKept).
+// Anything else is the host's doing: the session ends for it, before the port plays with them.
+void CheckOwnValues(Match& match)
+{
+  if (!match.session || !match.session->Error().empty())
+    return;
+  OwnValues own;
+  if (Orca::Online::Seat() == match.local_seat)
+    own.name = Orca::Online::SeatName(match.local_seat);
+  own.controls = Orca::Online::HelloControls();
+  own.queue = Orca::Online::HelloQueue();
+  const int plug_from = match.session->Plan()[match.local_seat].plug_from;
+  if (OwnValuesKept(AllNames(match), match.local_seat, plug_from, own))
+    return;
+  WARN_LOG_FMT(ROLLBACK,
+               "Drop-in: the host's values for port {} aren't this player's own: the "
+               "session ends",
+               match.local_seat + 1);
+  match.session->EndForPeer("The host changed this player's own port values");
 }
 
 // A joiner's leave is complete: play on solo; the app hears "left" (its own Leave, so no error).
@@ -3638,6 +3710,7 @@ std::optional<int> Boundary(Core::System& system,
   if (match.joining)
   {
     JoinerEvents(match);
+    CheckOwnValues(match);
     if (match.host_gone && !match.session->Resimulating())
     {
       HostGone(system, match, local_pad);
@@ -3665,6 +3738,9 @@ std::optional<int> Boundary(Core::System& system,
     auto stall_published = step_start;
     bool stall_shown = false;
     bool stall_claimed = false;
+    // Held past the stall budget across steps (StallBudget): as silent as one long stall.
+    bool budget_spent = false;
+    const bool catching_up = match.port->CatchingUp() || match.session->CatchingUp();
     const int stalls_before = match.session->GetStats().stalls;
     const int running_before = match.running;
     const Orca::Net::Step step = StepSession(
@@ -3695,7 +3771,16 @@ std::optional<int> Boundary(Core::System& system,
           }
           if (match.joining && Orca::Online::HostLeftPending())
             host_left = true;
-          return host_left || !left_seats.empty() || Stopping(system);
+          // A joiner still catching up waits on the host's history by design: not counted.
+          if (!budget_spent && !catching_up && match.stall_budget.Spent(now, step_start))
+          {
+            budget_spent = true;
+            WARN_LOG_FMT(ROLLBACK,
+                         "Online: held on the other players for {} s of the last {} s: they count "
+                         "as silent",
+                         StallBudget::STALL_BUDGET.count(), StallBudget::STALL_WINDOW.count());
+          }
+          return host_left || !left_seats.empty() || budget_spent || Stopping(system);
         },
         std::chrono::milliseconds{1},
         LeavingPastUnplug(match) ? LEAVE_SILENCE_LIMIT : PEER_SILENCE_LIMIT, &peer_silent);
@@ -3713,7 +3798,13 @@ std::optional<int> Boundary(Core::System& system,
         NOTICE_LOG_FMT(ROLLBACK, "Online match: {}", note);
     }
     if (match.session && match.session->GetStats().stalls > stalls_before)
+    {
       match.stats_stall_ms += MsSince(step_start);
+      if (!catching_up)
+        match.stall_budget.Add(step_start, *match.last_return);
+    }
+    if (budget_spent && step.kind == Orca::Net::StepKind::Ended)
+      peer_silent = true;
     if (step.kind == Orca::Net::StepKind::Rollback)
     {
       match.stats_rbmax = std::max(match.stats_rbmax, running_before - step.frame + 1);
@@ -3890,6 +3981,15 @@ std::optional<int> Boundary(Core::System& system,
       }
       if (Orca::Online::IsDesync(error))
         ++s_desyncs;
+      // The opponent broke the session: the room's match hears it void before anything else.
+      if (VoidFirst({.queue_room = Orca::Online::RoomQueue() != "private",
+                     .match_live = Orca::Online::MatchLive(),
+                     .set_over = Orca::Online::SetOver(),
+                     .room_ended = room_gone,
+                     .from_peer = match.session->ErrorFromPeer()}))
+      {
+        Orca::Online::ReportPeerFault();
+      }
       DropFriends(match, Orca::Online::IsDesync(error) ? "desync" : "network",
                   !room_gone && attempt == 0);
       GoSolo(match, "the session failed");
@@ -3916,7 +4016,7 @@ std::optional<int> Boundary(Core::System& system,
                    PEER_SILENCE_LIMIT.count(), match.running);
       Orca::Online::ReportPeerStalled(PEER_SILENT_SENTENCE);
     }
-    const bool survivable = Orca::Online::ReportSessionEnd(error);
+    const bool survivable = Orca::Online::ReportSessionEnd(error, match.session->ErrorFromPeer());
     if (Orca::Online::IsDesync(error))
       ++s_desyncs;
     if (Soft() && survivable && match.joining && Orca::Online::RoomErrorCode() == "match-over")
@@ -4088,7 +4188,7 @@ void LogStats(const char* when)
       "{:.2f}, input delay {}{} "
       "(+{} -{} reverted {}), {} counted stalls a frame more would have spared, {} checksums "
       "matched, confirmed frame {}, round trip {} ms (median {} ms here, {} ms there), link {}, "
-      "{} snapshots (every {}, {:.2f} ms each){}{}",
+      "{} snapshots (every {}, {:.2f} ms each), {} found late{}{}",
       when, match.session->CurrentFrame(), stats.rollbacks, stats.resimulated_frames,
       stats.deepest_rollback, stats.stalls, stats.counted_stalls, stats.waits, stats.hitches,
       stats.load_hitches, stats.peer_hitches, stats.frame_advantage, stats.delay,
@@ -4096,8 +4196,8 @@ void LogStats(const char* when)
       stats.delay_reverts, stats.spared_stalls, stats.checksums_matched, stats.confirmed_frame,
       Orca::Online::RoundTripMs(), stats.rtt_median, stats.peer_rtt_median,
       Orca::Online::Direct().line, stats.saves, stats.snapshot_every,
-      match.port ? match.port->SaveMs() : 0.0, match.session->Error().empty() ? "" : "; ",
-      match.session->Error());
+      match.port ? match.port->SaveMs() : 0.0, stats.late_seats,
+      match.session->Error().empty() ? "" : "; ", match.session->Error());
 }
 
 bool Active()
@@ -4136,6 +4236,68 @@ bool AloneAt(int frame, bool solo_idle, bool drop_in_pending, std::optional<int>
 bool HeaderFreeAt(int frame, bool solo_quiet, std::optional<int> stored_keyframe)
 {
   return solo_quiet && !(stored_keyframe && frame - *stored_keyframe <= KEYFRAME_FRESH_FRAMES);
+}
+
+bool OwnValuesKept(const std::vector<Orca::Net::KeyframeInfo::Name>& names, int seat, int plug_from,
+                   const OwnValues& own)
+{
+  std::vector<const Orca::Net::KeyframeInfo::Name*> mine;
+  for (const auto& name : names)
+  {
+    if (name.seat == seat)
+      mine.push_back(&name);
+  }
+  std::stable_sort(mine.begin(), mine.end(),
+                   [](const auto* a, const auto* b) { return a->from < b->from; });
+  const auto kept = [&own](const Orca::Net::KeyframeInfo::Name* entry) {
+    if (!entry)
+      return own.controls.empty() && own.queue.empty();
+    return entry->controls == own.controls && entry->queue == own.queue &&
+           (own.name.empty() || entry->name == own.name);
+  };
+  if (plug_from == Orca::Net::NEVER)
+    return kept(mine.empty() ? nullptr : mine.back());
+  const Orca::Net::KeyframeInfo::Name* in_force = nullptr;
+  for (const auto* entry : mine)
+  {
+    if (entry->from <= plug_from)
+      in_force = entry;
+    else if (!kept(entry))
+      return false;
+  }
+  return kept(in_force);
+}
+
+void StallBudget::Add(Clock::time_point start, Clock::time_point end)
+{
+  if (end <= start)
+    return;
+  std::erase_if(m_stalls, [&](const auto& stall) { return stall.second <= end - STALL_WINDOW; });
+  m_stalls.emplace_back(start, end);
+}
+
+StallBudget::Clock::duration
+StallBudget::Stalled(Clock::time_point now, std::optional<Clock::time_point> ongoing_since) const
+{
+  const Clock::time_point from = now - STALL_WINDOW;
+  Clock::duration total{};
+  const auto add = [&](Clock::time_point start, Clock::time_point end) {
+    start = std::max(start, from);
+    end = std::min(end, now);
+    if (end > start)
+      total += end - start;
+  };
+  for (const auto& [start, end] : m_stalls)
+    add(start, end);
+  if (ongoing_since)
+    add(*ongoing_since, now);
+  return total;
+}
+
+bool VoidFirst(const VerdictWaitInputs& in)
+{
+  return in.queue_room && in.match_live && !in.set_over && !in.room_ended &&
+         (in.from_peer || in.waited_out);
 }
 
 bool MayComeHome(const HomeInputs& in)

@@ -66,6 +66,8 @@ constexpr int TICKET_TRIES = 2;
 // gets this many tries (one per roster change after a refusal) and is resent if unanswered this
 // long.
 constexpr auto REPORT_HOLD = std::chrono::seconds(60);
+// How often a void `finish` the room refused (its games still being decided) goes again.
+constexpr int FINISH_RETRIES = 30;
 constexpr int BEGIN_TRIES = 5;
 constexpr auto BEGIN_ANSWER = std::chrono::seconds(5);
 // The server closed a matchmade room after its result (rooms/src/index.ts: 4004 "match-over").
@@ -312,55 +314,125 @@ std::string CleanLabel(const std::string& raw, size_t max)
 
 // picojson has no nesting limit (deep arrays overflow the I/O thread's stack) and aborts on numbers
 // that overflow a double. Nothing YouGame sends nests deeply, uses an exponent or has over 17
-// digits in a row, so such messages are refused before parsing.
-bool SafeToParse(const std::string& text)
+// digits in a row, so such values become null before parsing: a message carrying one (a value
+// another player put in the room, echoed by the server) is still read, without that value.
+constexpr int MAX_JSON_DEPTH = 16;
+constexpr int MAX_JSON_DIGITS = 17;
+
+// The index just past the string starting at `at` (a quote), or npos if it never ends.
+size_t SkipJsonString(std::string_view text, size_t at)
 {
-  int depth = 0, digits = 0;
-  for (size_t i = 0; i < text.size(); ++i)
+  for (size_t i = at + 1; i < text.size(); ++i)
+  {
+    if (text[i] == '\\')
+      ++i;
+    else if (text[i] == '"')
+      return i + 1;
+  }
+  return std::string_view::npos;
+}
+
+// The index of the bracket closing the array or object opened at `at`, or npos.
+size_t MatchingClose(std::string_view text, size_t at)
+{
+  int depth = 0;
+  for (size_t i = at; i < text.size();)
   {
     const char c = text[i];
     if (c == '"')
     {
-      // Skip the string, escapes included.
-      for (++i; i < text.size() && text[i] != '"'; ++i)
-      {
-        if (text[i] == '\\')
-          ++i;
-      }
-      digits = 0;
+      i = SkipJsonString(text, i);
+      if (i == std::string_view::npos)
+        return i;
       continue;
     }
-    digits = c >= '0' && c <= '9' ? digits + 1 : 0;
-    if (digits > 17)
+    if (c == '[' || c == '{')
+      ++depth;
+    else if ((c == ']' || c == '}') && --depth == 0)
+      return i;
+    ++i;
+  }
+  return std::string_view::npos;
+}
+
+bool SafeNumber(std::string_view number)
+{
+  int digits = 0;
+  for (const char c : number)
+  {
+    if (c == 'e' || c == 'E')
       return false;
+    digits = c >= '0' && c <= '9' ? digits + 1 : 0;
+    if (digits > MAX_JSON_DIGITS)
+      return false;
+  }
+  return true;
+}
+
+// `text` with every value picojson can't take safely (nested past MAX_JSON_DEPTH, a number with an
+// exponent or over MAX_JSON_DIGITS digits in a row) replaced by null. Nullopt if a string or
+// bracket never closes (picojson would refuse it anyway).
+std::optional<std::string> SanitizeJson(std::string_view text)
+{
+  std::string out;
+  out.reserve(text.size());
+  int depth = 0;
+  for (size_t i = 0; i < text.size();)
+  {
+    const char c = text[i];
+    if (c == '"')
+    {
+      const size_t end = SkipJsonString(text, i);
+      if (end == std::string_view::npos)
+        return std::nullopt;
+      out.append(text.substr(i, end - i));
+      i = end;
+      continue;
+    }
     if (c == '[' || c == '{')
     {
-      if (++depth > 16)
-        return false;
+      if (depth >= MAX_JSON_DEPTH)
+      {
+        const size_t end = MatchingClose(text, i);
+        if (end == std::string_view::npos)
+          return std::nullopt;
+        out += "null";
+        i = end + 1;
+        continue;
+      }
+      ++depth;
     }
     else if (c == ']' || c == '}')
     {
       --depth;
     }
-    else if (text.compare(i, 4, "true") == 0)
+    else if (c == '-' || (c >= '0' && c <= '9'))
     {
-      i += 3;
+      size_t end = i + 1;
+      while (end < text.size() &&
+             ((text[end] >= '0' && text[end] <= '9') || text[end] == '.' || text[end] == 'e' ||
+              text[end] == 'E' || text[end] == '+' || text[end] == '-'))
+      {
+        ++end;
+      }
+      const std::string_view number = text.substr(i, end - i);
+      if (SafeNumber(number))
+        out.append(number);
+      else
+        out += "null";
+      i = end;
+      continue;
     }
-    else if (text.compare(i, 5, "false") == 0)
-    {
-      i += 4;
-    }
-    else if (c == 'e' || c == 'E')
-    {
-      return false;
-    }
+    out += c;
+    ++i;
   }
-  return true;
+  return out;
 }
 
 bool ParseJson(const std::string& text, picojson::value* value)
 {
-  return SafeToParse(text) && picojson::parse(*value, text).empty();
+  const std::optional<std::string> safe = SanitizeJson(text);
+  return safe && picojson::parse(*value, *safe).empty();
 }
 
 picojson::object PacketToJson(const Packet& packet)
@@ -845,6 +917,58 @@ std::string GameStartMessage(const std::string& queue, const std::string& match,
                      start);
 }
 
+bool ParseRoomJson(const std::string& text, picojson::value* value)
+{
+  return ParseJson(text, value);
+}
+
+bool DropKeepsRoom(const std::string& queue, bool match_live, bool set_over)
+{
+  return queue == "ranked" && match_live && !set_over;
+}
+
+bool KeepAliveDue(Clock::time_point now, std::optional<Clock::time_point> wanted,
+                  std::optional<Clock::time_point> sent)
+{
+  if (!wanted || (sent && *wanted <= *sent))
+    return false;
+  return !sent || now - *sent >= KEEP_ALIVE_EVERY;
+}
+
+namespace
+{
+std::mutex s_known_mutex;
+// RememberKnownSetGames: match id -> games known, the newest last (a ranked set is one match, so
+// a few are plenty).
+std::vector<std::pair<std::string, int>> s_known_by_match;
+constexpr size_t KNOWN_MATCHES = 8;
+}  // namespace
+
+int RememberKnownSetGames(const std::string& match, int known)
+{
+  if (match.empty())
+    return known;
+  std::lock_guard lock(s_known_mutex);
+  auto it = std::ranges::find(s_known_by_match, match, &std::pair<std::string, int>::first);
+  if (it != s_known_by_match.end())
+  {
+    known = std::max(known, it->second);
+    s_known_by_match.erase(it);
+  }
+  s_known_by_match.emplace_back(match, known);
+  if (s_known_by_match.size() > KNOWN_MATCHES)
+    s_known_by_match.erase(s_known_by_match.begin());
+  return known;
+}
+
+std::string FinishMessage(const std::string& match, const std::string& winner)
+{
+  return winner.empty() ?
+             fmt::format("{{\"t\":\"finish\",\"matchId\":{},\"void\":true}}", JsonString(match)) :
+             fmt::format("{{\"t\":\"finish\",\"matchId\":{},\"winner\":{}}}", JsonString(match),
+                         JsonString(winner));
+}
+
 bool DecodeDirectPacket(const std::string& payload, int slot, Packet* packet)
 {
   Packet decoded;
@@ -974,8 +1098,20 @@ struct YouGameRoom::Impl
   };
   std::deque<HeldReport> reports;
   bool desync_pending = false;
+  // KnownSetGames, kept by the I/O thread.
+  int known_games = 0;
+  // The session ended for the opponent's doing (ReportFault): the match in progress is void.
+  bool fault_pending = false;
   // The opponent stopped sending inputs mid ranked set (ReportStall): this player claims the set.
   bool stall_pending = false;
+  // KeepAlive: when the emulation thread last asked for one, and (I/O thread) when one last went.
+  std::optional<Clock::time_point> alive_wanted;
+  std::optional<Clock::time_point> alive_sent;
+  // I/O thread: the last `finish` sent, and when to send it again after the room refused it while
+  // its games were still being decided (a void must reach the match before this player goes).
+  std::string last_finish;
+  std::optional<Clock::time_point> finish_retry_at;
+  int finish_retries = 0;
   // I/O thread: the room's participants (id, connection, slot), whether anyone is away, the host's
   // begin state (sent and unanswered, tries, waiting for a roster change after a refusal), and what
   // was reported and decided in this match.
@@ -2060,7 +2196,17 @@ struct YouGameRoom::Impl
         id.clear();
       std::lock_guard lock(mutex);
       if (id != match_id)
+      {
         NOTICE_LOG_FMT(NETPLAY, "Orca room: room match {}", id.empty() ? "over" : id);
+        // A match this process played before its room link dropped: the games it knew of come back.
+        if (!id.empty())
+          known_games = RememberKnownSetGames(id, 0);
+        if (!id.empty() && known_games > 0)
+        {
+          NOTICE_LOG_FMT(NETPLAY, "Orca room: back in match {}, which this player knew {} game(s) of",
+                         id, known_games);
+        }
+      }
       match_id = std::move(id);
     }
     if (const auto it = m.find("participants"); it != m.end() && it->second.is<picojson::array>())
@@ -2246,8 +2392,18 @@ struct YouGameRoom::Impl
     const std::string text = GameStartMessage(room_queue, match, decided, start);
     if (text.empty() || !starts_sent.insert(start).second)
       return;
+    NoteKnownGames();
     NOTICE_LOG_FMT(NETPLAY, "Orca room: {}", text);
     SendRaw(text);
+  }
+
+  // KnownSetGames for the room's match: what this room saw, or what this process saw of the same
+  // match before its link dropped (RememberKnownSetGames), whichever is more.
+  void NoteKnownGames()
+  {
+    const int known = std::max(tally.Games(), static_cast<int>(starts_sent.size()));
+    std::lock_guard lock(mutex);
+    known_games = RememberKnownSetGames(match_id, known);
   }
 
   // The set's (or a casual game's) end, once.
@@ -2256,12 +2412,10 @@ struct YouGameRoom::Impl
     finish_sent = true;
     if (!why.empty())
       void_why["$final"] = why;
-    const std::string text =
-        winner.empty() ?
-            fmt::format("{{\"t\":\"finish\",\"matchId\":{},\"void\":true}}", JsonString(match)) :
-            fmt::format("{{\"t\":\"finish\",\"matchId\":{},\"winner\":{}}}", JsonString(match),
-                        JsonString(winner));
+    const std::string text = FinishMessage(match, winner);
     NOTICE_LOG_FMT(NETPLAY, "Orca room: {}", text);
+    last_finish = text;
+    finish_retry_at.reset();
     SendRaw(text);
   }
 
@@ -2269,7 +2423,7 @@ struct YouGameRoom::Impl
   void FlushLobby()
   {
     std::string current_match, room_queue;
-    bool desync, done, stall;
+    bool desync, fault, done, stall;
     std::vector<HeldReport> ready;
     {
       std::lock_guard lock(mutex);
@@ -2277,6 +2431,7 @@ struct YouGameRoom::Impl
       room_queue = queue;
       done = set_done;
       desync = std::exchange(desync_pending, false);
+      fault = std::exchange(fault_pending, false);
       stall = std::exchange(stall_pending, false);
       const auto now = Clock::now();
       while (!reports.empty())
@@ -2305,6 +2460,15 @@ struct YouGameRoom::Impl
     {
       NOTICE_LOG_FMT(NETPLAY, "Orca room: the games went apart: the room's match is void");
       SendFinish(current_match, "", "desync");
+      return;
+    }
+    // The session ended for the opponent's doing (or the verdict never came): this player's own
+    // word goes in first, so its leave or silence can't settle the match for the opponent.
+    if (fault && !finish_sent && !done)
+    {
+      NOTICE_LOG_FMT(NETPLAY, "Orca room: the session ended for the opponent's doing: the room's "
+                              "match is void");
+      SendFinish(current_match, "", "fault");
       return;
     }
     // The opponent's inputs stopped mid ranked set: this player names itself the winner. The room
@@ -2453,6 +2617,7 @@ struct YouGameRoom::Impl
     }
     const Verdict v = ReadVerdict(m, id);
     std::optional<SetTally::End> end = tally.Game(v.winner);
+    NoteKnownGames();
     int n = 0;
     if (const auto it = game_numbers.find(id); it != game_numbers.end())
       n = it->second;
@@ -2574,6 +2739,9 @@ struct YouGameRoom::Impl
   // "start": the room's match began.
   void OnStart(const picojson::object& m)
   {
+    last_finish.clear();
+    finish_retry_at.reset();
+    finish_retries = 0;
     begin_sent.reset();
     begin_tries = 0;
     ranked_sent = 0;
@@ -2585,6 +2753,8 @@ struct YouGameRoom::Impl
     starts_sent.clear();
     match_participants.clear();
     LobbyFields(m);
+    // After LobbyFields: the new match's id, so its count starts from what this process knew of it.
+    NoteKnownGames();
     match_participants = lobby_participants;
     // On screen (UX/SetEnd.h): a queue room's set or casual game against this opponent.
     std::string room_queue, opponent;
@@ -2732,6 +2902,7 @@ struct YouGameRoom::Impl
 
     TryBegin();
     FlushLobby();
+    KeepAliveAndRetry(now);
 
     if (now - last_send < SEND_GAP)
       return;
@@ -2749,6 +2920,37 @@ struct YouGameRoom::Impl
     message["t"] = picojson::value("msg");
     message["d"] = picojson::value(PacketToJson(*packet));
     SendJson(message);
+  }
+
+  // While the game waits for a ranked verdict without a session: a sign of life the room counts
+  // (anything but a ping), and a void it refused while the match's games were being decided.
+  void KeepAliveAndRetry(Clock::time_point now)
+  {
+    bool live;
+    std::optional<Clock::time_point> wanted;
+    {
+      std::lock_guard lock(mutex);
+      live = queue == "ranked" && !match_id.empty() && !set_done && !set_over;
+      wanted = alive_wanted;
+    }
+    if (!live)
+    {
+      finish_retry_at.reset();
+      return;
+    }
+    if (finish_retry_at && now >= *finish_retry_at && !last_finish.empty())
+    {
+      finish_retry_at.reset();
+      NOTICE_LOG_FMT(NETPLAY, "Orca room: {} (again)", last_finish);
+      SendRaw(last_finish);
+    }
+    if (KeepAliveDue(now, wanted, alive_sent))
+    {
+      alive_sent = now;
+      picojson::object alive;
+      alive["t"] = picojson::value("alive");
+      SendJson(alive);
+    }
   }
 
   void SendTo(const std::string& to, const picojson::object& d)
@@ -3067,6 +3269,13 @@ struct YouGameRoom::Impl
     else if (t == "command-error")
     {
       WARN_LOG_FMT(NETPLAY, "Orca room: {} refused: {}", Str(m, "action"), Str(m, "error"));
+      // A void refused while the match's games were still being decided goes again shortly.
+      if (Str(m, "action") == "finish" && last_finish.find("\"void\":true") != std::string::npos &&
+          finish_retries < FINISH_RETRIES)
+      {
+        ++finish_retries;
+        finish_retry_at = Clock::now() + KEEP_ALIVE_EVERY;
+      }
       // The host's begin goes again once the roster changes (BEGIN_TRIES at most).
       if (Str(m, "action") == "begin")
       {
@@ -3106,6 +3315,36 @@ struct YouGameRoom::Impl
       if (!peer.drop_in_host || !joining)
         return;
       const std::string reason = Str(d, "r");
+      bool keep_room;
+      {
+        std::lock_guard lock(mutex);
+        keep_room = DropKeepsRoom(queue, !match_id.empty() && !set_done, set_over);
+        // In a ranked set still being decided this player's own void goes first, and it stays
+        // for the verdict: the host leaving the session is all this is (HostGone).
+        if (keep_room)
+        {
+          if (reason == "desync")
+            desync_pending = true;
+          else
+            fault_pending = true;
+        }
+      }
+      if (keep_room)
+      {
+        WARN_LOG_FMT(NETPLAY,
+                     "Orca room: the host unplugged this player mid set ({}): the match "
+                     "is void, and this game waits for the verdict",
+                     reason);
+        FlushLobby();
+        Emit({PeerEvent::Kind::Left,
+              peer.slot,
+              true,
+              peer.name,
+              {},
+              {},
+              reason == "desync" ? std::string("desync") : std::string("dropped")});
+        return;
+      }
       // A matchmade room hears that the match in progress is void before this player goes.
       if (reason == "desync")
       {
@@ -3360,6 +3599,18 @@ std::string YouGameRoom::SeatName(int seat) const
   return it == m_impl->seat_names.end() ? std::string() : it->second;
 }
 
+std::vector<u8> YouGameRoom::HelloControls() const
+{
+  const auto& controls = m_impl->options.controls;
+  return m_impl->options.joining && controls.size() <= MAX_CONTROLS ? controls : std::vector<u8>{};
+}
+
+std::vector<u8> YouGameRoom::HelloQueue() const
+{
+  const auto& queue = m_impl->options.queue;
+  return m_impl->options.joining && queue.size() <= MAX_QUEUE ? queue : std::vector<u8>{};
+}
+
 std::string YouGameRoom::Code() const
 {
   std::lock_guard lock(m_impl->mutex);
@@ -3533,6 +3784,24 @@ void YouGameRoom::ReportStall()
 {
   std::lock_guard lock(m_impl->mutex);
   m_impl->stall_pending = true;
+}
+
+int YouGameRoom::KnownSetGames() const
+{
+  std::lock_guard lock(m_impl->mutex);
+  return m_impl->known_games;
+}
+
+void YouGameRoom::ReportFault()
+{
+  std::lock_guard lock(m_impl->mutex);
+  m_impl->fault_pending = true;
+}
+
+void YouGameRoom::KeepAlive()
+{
+  std::lock_guard lock(m_impl->mutex);
+  m_impl->alive_wanted = Clock::now();
 }
 
 void YouGameRoom::TestDropConnection()

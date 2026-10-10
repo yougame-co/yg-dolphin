@@ -1213,14 +1213,17 @@ away.
 | `+0x1B4`-`+0x1BF` | The two stage cursors |
 | `+0x1C0`-`+0x1EF` | The queue's character select |
 | `+0x1F0` | Saved rules' flags |
+| `+0x1F4`-`+0x1FF` | Character order: where each hand last held its token |
 | `+0x200`-`+0x20F` | Character order |
 | `+0x210`-`+0x28F` | The ranked set (`SetBlock`, authoritative) |
 | `+0x290`-`+0x297` | A friend's move from the menus |
 
 Any new header (another mode, ruleset, coin or room) starts every track's state fresh. Compatibility:
-anything that changes what the game computes bumps `UX::kCompatVersion` (currently `ux=26`, since
-0.3.37: the history's seed, [Random numbers](#random-numbers), and tags typed in the game,
-[Port values](#port-values-each-players-name-and-controls)), which is in the compatibility key.
+anything that changes what the game computes bumps `UX::kCompatVersion` (currently `ux=27`: how a
+turn ends in the [Character order](#character-order), and who turns Brawl's stage select page;
+`ux=26` since 0.3.37: the history's seed, [Random numbers](#random-numbers), and tags typed in the
+game, [Port values](#port-values-each-players-name-and-controls)), which is in the compatibility
+key.
 
 ## Input gate
 
@@ -1670,8 +1673,10 @@ by both games. Stages are the ruleset's legal list, starters first, as bit masks
   is skipped, a pick takes the first allowed stage.
 
 **Brawl** (`Orca/UX/BrawlStages.*`): stages the current step doesn't allow are drawn as plain grey
-tiles. The flow's own picks (the last starter, a timer's default) move the game's cursor there (via
-the page button for Pokemon Stadium on the Melee page) and press A until the game takes it. A stage
+tiles. The page (Brawl or Melee stages) is both players' view, so only the player whose step it is
+turns it with A on the page button (either, on a casual game's step both take at once). The flow's
+own picks (the last starter, a timer's default) move the game's cursor there (via the page button
+for Pokemon Stadium on the Melee page) and press A until the game takes it. A stage
 taken against the steps is replaced before the screen copies it out. The stage select task is the
 scene's `+0x3AC`: `+0x200` the cursor (`+0x3C`/`+0x40` x and y), `+0x224` the state, `+0x228` the
 page, `+0x244` the hovered item, `+0x258` the taken stage (a write before the screen leaves changes
@@ -1759,8 +1764,13 @@ one constant:
 A picks (puts the token down), B takes it back up, **Start locks the pick in** (read from the raw
 latch; the game never sees that Start). Off-turn players' controllers do nothing. When the second
 player locks in, the stage select comes at once. The tokens stay down between games, so Start alone
-keeps last game's character. A player whose time runs out with the token in hand has it put on the
-character under the hand. Game 1 has no order (both pick at once). L or R held as you lock in
+keeps last game's character. A player whose turn ends with the token in hand has no input until it
+is down: Orca holds their stick, brings the hand back to where it last held the token over a
+character this order (`+0x1F4`-`+0x1FF`), and puts it down there. The next turn starts only once it
+is down, so the second picker always sees the first pick, and nobody shows as locked in with a token
+in hand. A token still in hand 45 s after both turns makes its player the ranked no-show, who leaves
+the set. Game 1 has no order (both pick
+at once). L or R held as you lock in
 carries into the game (Zero Suit Samus, Sheik, Project+'s Nana-led Ice Climbers): kept as the turn
 ends and held for that player while the select ends. State: 16 bytes at `+0x200` (magic `YGCO`, the
 step, the first picker, the lock-ins, the step's start frame, the kept L and R at `+0x20E`).
