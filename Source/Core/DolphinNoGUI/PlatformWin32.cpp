@@ -113,10 +113,12 @@ bool PlatformWin32::CreateAdoptedWindow()
   const HWND parent = reinterpret_cast<HWND>(static_cast<uintptr_t>(m_embed.parent));
   const Embed::Rect& r = m_embed.rect;
   // A tool window, so it never shows on the taskbar while it waits. No WM_PARENTNOTIFY once
-  // adopted: each one is a synchronous call into the app's UI thread.
+  // adopted: each one is a synchronous call into the app's UI thread. Made at the app's rect: the
+  // launcher's SetParent keeps a window's coordinates as they are and reads them in the parent's
+  // client area, so the window lands at its rect even when SetParent's own move comes after ours.
   m_hwnd = CreateWindowEx(WS_EX_NOPARENTNOTIFY | WS_EX_TOOLWINDOW, WINDOW_CLASS_NAME, _T("Orca"),
-                          WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN, 0, 0, r.w, r.h, nullptr,
-                          nullptr, GetModuleHandle(nullptr), this);
+                          WS_POPUP | WS_CLIPSIBLINGS | WS_CLIPCHILDREN, r.x, r.y, r.w, r.h,
+                          nullptr, nullptr, GetModuleHandle(nullptr), this);
   if (!m_hwnd)
   {
     fprintf(stderr, "Orca: CreateWindowEx for adoption failed (%lu)\n", GetLastError());
@@ -145,6 +147,21 @@ bool PlatformWin32::CreateAdoptedWindow()
   m_embed_visible = !m_embed.too_small;  // Hidden until a big enough rect (Embed.h).
   SetWindowPos(m_hwnd, HWND_TOP, r.x, r.y, r.w, r.h,
                SWP_NOACTIVATE | (m_embed_visible ? SWP_SHOWWINDOW : 0));
+  // GetParent can say "adopted" while the launcher's SetParent is still on its way out: once more,
+  // a moment later, so the window is where it belongs for the rest of the boot too (MainLoop keeps
+  // it there after that).
+  const auto settle = std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
+  while (std::chrono::steady_clock::now() < settle)
+  {
+    MSG msg;
+    while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
+    {
+      TranslateMessage(&msg);
+      DispatchMessage(&msg);
+    }
+    Sleep(5);
+  }
+  KeepAdoptedPlaced();
   UpdateEmbedFocus();
   return true;
 }
