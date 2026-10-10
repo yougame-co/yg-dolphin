@@ -1219,9 +1219,11 @@ away.
 | `+0x290`-`+0x297` | A friend's move from the menus |
 
 Any new header (another mode, ruleset, coin or room) starts every track's state fresh. Compatibility:
-anything that changes what the game computes bumps `UX::kCompatVersion` (currently `ux=26`, since
-0.3.37: the history's seed, [Random numbers](#random-numbers), and tags typed in the game,
-[Port values](#port-values-each-players-name-and-controls)), which is in the compatibility key.
+anything that changes what the game computes bumps `UX::kCompatVersion` (currently `ux=27`: how a
+turn ends in the [Character order](#character-order), and who turns Brawl's stage select page;
+`ux=26` since 0.3.37: the history's seed, [Random numbers](#random-numbers), and tags typed in the
+game, [Port values](#port-values-each-players-name-and-controls)), which is in the compatibility
+key.
 
 ## Input gate
 
