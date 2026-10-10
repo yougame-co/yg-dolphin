@@ -46,6 +46,7 @@
 #include "Core/Orca/Disc.h"
 #include "Core/Orca/DiscVerify.h"
 #include "Core/Orca/Launch.h"
+#include "Core/Orca/Perf.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Sandbox.h"
 #include "Core/Orca/Status.h"
@@ -693,6 +694,10 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
   {
     s_platform->EnableTestCommands();
     Embed::StartReading();
+    // A harness run steered like the app prints no "ready"; with ORCA_TEST_PERF it reports its
+    // speed from the first frame, so the speed lines can be tested (Orca/Perf.h).
+    if (!Orca::GetEnv("ORCA_TEST_PERF").empty())
+      Orca::Perf::Ready();
   }
 
   if (!BootManager::BootCore(Core::System::GetInstance(), std::move(boot), wsi))

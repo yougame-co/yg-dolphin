@@ -37,6 +37,7 @@
 #include "Core/HW/Memmap.h"
 #include "Core/IOS/FS/HostBackend/FS.h"
 #include "Core/IOS/IOS.h"
+#include "Core/Orca/Perf.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/Session/Keyframe.h"
@@ -46,6 +47,7 @@
 #include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/OnlineMenu.h"
 #include "Core/Orca/UX/OnlineRules.h"
+#include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/UX/Probe.h"
 #include "Core/Orca/UX/Queue.h"
 #include "Core/Orca/UX/RankedSet.h"
@@ -336,6 +338,8 @@ std::atomic<bool> s_pausing{false};
 // Paused host time, for the stats line. Pause and resume arrive on the host thread; 0 = not paused.
 std::atomic<s64> s_paused_since_ns{0};
 std::atomic<s64> s_paused_ns{0};
+// All paused host time so far, for this machine's speed (Orca/Perf.h), which never takes it.
+std::atomic<s64> s_paused_total_ns{0};
 
 s64 NowNs()
 {
@@ -2940,6 +2944,34 @@ std::vector<Orca::Events::PortInfo> PortsAt(Match& match, int frame)
 
 // ---- Stats ----
 
+// This machine's own speed (Orca/Perf.h): what the frame that just ended was, at its boundary,
+// before the session steps.
+void PerfBoundary(const Match& match)
+{
+  Orca::Perf::Boundary boundary;
+  // Re-runs and a joiner's catch-up run with Rollback::IsResimulating.
+  boundary.first_run = !Rollback::IsResimulating();
+  // Frames that run unthrottled or unseen are not this machine's frame rate.
+  boundary.excluded = !match.started || match.finished || match.stale ||
+                      match.replaying != nullptr || CanonicalBoot(match) || InTail(match) ||
+                      Unseen(match) || (match.port && match.port->CatchingUp()) ||
+                      Core::GetIsThrottlerTempDisabled();
+  boundary.hidden = !Orca::UX::HostVisible();
+  boundary.held = LastFrameHeldMs() > 0;
+  boundary.held_frames = LastFrameHeldFrames();
+  if (match.session)
+  {
+    for (int seat = 0; seat < Orca::Net::MAX_SEATS; ++seat)
+    {
+      if (seat != match.local_seat && match.session->Plugged(seat, match.running))
+        ++boundary.peers;
+    }
+    boundary.rerun_total = static_cast<u64>(match.session->GetStats().resimulated_frames);
+  }
+  boundary.paused_total = std::chrono::nanoseconds(s_paused_total_ns.load());
+  Orca::Perf::OnBoundary(boundary);
+}
+
 // Publishes link stats every boundary, and the "orca stats" line about once a second.
 void PublishStats(Match& match)
 {
@@ -3391,6 +3423,7 @@ std::optional<int> Boundary(Core::System& system,
     match.download.reset();
     match = {};
     Orca::UX::Queue::DisarmOwnPick();
+    Orca::Perf::NewBoot();
   }
   if (match.finished)
     return std::nullopt;
@@ -3743,6 +3776,11 @@ std::optional<int> Boundary(Core::System& system,
     const bool catching_up = match.port->CatchingUp() || match.session->CatchingUp();
     const int stalls_before = match.session->GetStats().stalls;
     const int running_before = match.running;
+    // Stalls and time-sync waits are not this machine's work (Orca/Perf.h), and neither are the
+    // presents and sleeps inside them.
+    std::chrono::nanoseconds waited{};
+    std::optional<Orca::Perf::StepScope> perf_scope;
+    perf_scope.emplace();
     const Orca::Net::Step step = StepSession(
         *match.session, *match.port, match.running, [&] { return local_pad(match.local_seat); },
         [&] {
@@ -3783,7 +3821,9 @@ std::optional<int> Boundary(Core::System& system,
           return host_left || !left_seats.empty() || budget_spent || Stopping(system);
         },
         std::chrono::milliseconds{1},
-        LeavingPastUnplug(match) ? LEAVE_SILENCE_LIMIT : PEER_SILENCE_LIMIT, &peer_silent);
+        LeavingPastUnplug(match) ? LEAVE_SILENCE_LIMIT : PEER_SILENCE_LIMIT, &peer_silent, &waited);
+    perf_scope.reset();
+    Orca::Perf::AddWait(waited);
     match.last_return = Clock::now();
     if (stall_shown)
     {
@@ -4154,6 +4194,7 @@ std::optional<int> OnBoundary(Core::System& system,
                               const FrameHook& on_frame)
 {
   s_solo_idle = false;
+  PerfBoundary(TheMatch());
   const bool was_replaying = TheMatch().replaying != nullptr;
   // The local pad as this boundary read it for the game (for SetOverLeave).
   const std::function<Orca::Net::Pad(int)> seen = [&local_pad](int local_seat) {
@@ -4467,7 +4508,11 @@ void EndPause()
 {
   s_pausing = false;
   if (const s64 since = s_paused_since_ns.exchange(0); since != 0)
-    s_paused_ns += NowNs() - since;
+  {
+    const s64 paused = NowNs() - since;
+    s_paused_ns += paused;
+    s_paused_total_ns += paused;
+  }
 }
 
 bool Pausing()

@@ -22,6 +22,7 @@
 #include "Core/Orca/Activity.h"
 #include "Core/Orca/Branding.h"
 #include "Core/Orca/Music.h"
+#include "Core/Orca/Perf.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Status.h"
@@ -223,8 +224,10 @@ void Platform::ProcessEmbedCommands()
       // Prints nothing outside a session.
       Orca::Status::PrintCaps();
       Embed::Out(*ready);
-      // The activity lines may start now (Orca/Activity.h, HoldUntilReady).
+      // The activity lines may start now (Orca/Activity.h, HoldUntilReady), and so may the speed
+      // lines (Orca/Perf.h).
       Orca::Activity::Ready();
+      Orca::Perf::Ready();
     }
   }
 
@@ -372,6 +375,17 @@ void Platform::ProcessEmbedCommands()
         Orca::Music::SetOn(value == "on");
       else
         Embed::Out("unsupported music");
+    }
+    else if (cmd == "gfx")
+    {
+      // "gfx <key> <value>": a live change to one of the player's drawing-only graphics settings,
+      // from a fixed list (Orca/Perf.h ParseGfx), with the app's "gfx" cap. It applies at the next
+      // frame boundary, for this run only; the app passes the stored choice at the next start.
+      const std::optional<Orca::Perf::GfxChange> change = Orca::Perf::ParseGfx(line);
+      if (change && Orca::Status::Cap("gfx"))
+        Orca::Perf::QueueGfx(*change);
+      else
+        Embed::Out("unsupported gfx");
     }
     else if (cmd == "save" || cmd == "load")
     {

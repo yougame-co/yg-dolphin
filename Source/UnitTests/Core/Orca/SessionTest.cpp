@@ -43,7 +43,8 @@ Orca::Net::Step StepSession(Orca::Net::Session& session, Orca::Net::Game& game, 
                             const std::function<Orca::Net::Pad()>& sample_local,
                             const std::function<bool()>& stopping,
                             std::chrono::microseconds stall_wait,
-                            std::chrono::milliseconds give_up_after = {}, bool* gave_up = nullptr);
+                            std::chrono::milliseconds give_up_after = {}, bool* gave_up = nullptr,
+                            std::chrono::nanoseconds* waited = nullptr);
 }  // namespace Rollback
 
 using namespace Orca::Net;
