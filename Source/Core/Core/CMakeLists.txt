@@ -527,6 +527,8 @@ add_library(core
   Orca/Music.h
   Orca/PanicDiag.cpp
   Orca/PanicDiag.h
+  Orca/Perf.cpp
+  Orca/Perf.h
   Orca/Profile.cpp
   Orca/Profile.h
   Orca/Status.cpp

@@ -1353,6 +1353,11 @@ void SetHostVisible(bool visible)
   s_visible = visible;
 }
 
+bool HostVisible()
+{
+  return s_visible;
+}
+
 void RepresentDuringStall(int stalled_ms)
 {
   // Sessions run single core, so this presents on the CPU thread inside the stall wait, which

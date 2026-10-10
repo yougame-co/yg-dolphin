@@ -2109,8 +2109,9 @@ TEST(OrcaOnlineMenuLobby, APickKeptWithFriendsIsArmedOnceTheyAreGone)
 
 TEST(OrcaOnlineMenuLobby, EveryCapFitsTheAppsCapsLine)
 {
-  // Apps before the Music switch's release read at most 16 caps words (that release reads 24): more
-  // needs it as the minimum app.
+  // Apps before the Music switch's release read at most 16 caps words; desktop 0.12.39 and later
+  // read 24. With "gfx" (17) Orca needs at least that app; its manifest asks for 0.12.41, the app
+  // that sends "gfx".
   // The most any profile offers is all of them.
   const std::string all = fmt::format(
       "{} {} {} {} {} {}", Orca::Status::CAPS, Orca::Status::MUSIC_CAP, Orca::Status::RESULTS_CAP,
@@ -2122,7 +2123,7 @@ TEST(OrcaOnlineMenuLobby, EveryCapFitsTheAppsCapsLine)
     ++count;
     EXPECT_LE(word.size(), 24u) << word;
   }
-  EXPECT_LE(count, 16);
+  EXPECT_LE(count, 24);
 }
 
 TEST(OrcaOnlineMenuLobby, APickWithNobodyToLeaveIsAnnounced)

@@ -37,6 +37,7 @@ and why. Paths are relative to `Source/Core/Core/` unless they start with `Sourc
 - [Input latency](#input-latency)
 - [Music switch](#music-switch)
 - [Match start](#match-start)
+- [Graphics](#graphics)
 - [Code the JIT doesn't see](#code-the-jit-doesnt-see)
 - [Game patches](#game-patches)
 - [Free space and the match block](#free-space-and-the-match-block)
@@ -1027,11 +1028,13 @@ match's PowerPC code. Both now compile before the match is on screen.
 
 ### Shaders
 
-Sessions force (`Orca/Profile.cpp`, `Source/Core/VideoCommon/ShaderCache.cpp`):
+Sessions force or allow (`Orca/Profile.cpp`, `Source/Core/VideoCommon/ShaderCache.cpp`):
 
-- **Asynchronous ubershaders:** a pipeline never drawn compiles in the background and is drawn with
-  an ubershader meanwhile. Dolphin's default compiles it on the emulation thread, which in a session
-  is also the GPU thread.
+- **Asynchronous shaders only:** a pipeline never drawn compiles in the background and is drawn with
+  an ubershader meanwhile (AsyncUber, the default), or not drawn until it is ready (AsyncSkip, the
+  player's choice since 0.3.39: lightest on the graphics card, and a new effect may be missing for a
+  moment on that player's screen only). Dolphin's default compiles it on the emulation thread,
+  which in a session is also the GPU thread, so a session refuses it ([Graphics](#graphics)).
 - **Compile before starting:** the ubershaders and every pipeline in `Cache/<game>.uidcache` compile
   on all cores before the first frame, the UID cache first (it is what the match draws and is far
   quicker than the ubershaders).
@@ -1097,6 +1100,107 @@ Brawl 170) counts the frame times a player sees after the loading image.
 A rollback in Project+ recompiles 40-120 blocks (pages with code also hold data that changes every
 frame, and a restore drops every block in a restored page). Invalidating only changed 32-byte lines
 would keep most of them (not done).
+
+## Graphics
+
+Since 0.3.39 the player picks every graphics setting that only changes what their own machine
+draws, and how fast. The YouGame app keeps them per computer and passes them on every start
+(`-C Graphics.*` and `-C Dolphin.Core.GFXBackend`, the CommandLine layer). Code:
+`Orca/Profile.cpp` (what a session forces), `Orca/Perf.*` (live changes, speed, the switch to
+Performance).
+
+**Why they can differ between players.** In a session nothing drawn reaches the game: EFB and XFB
+copies stay on the GPU and RAM only gets a placeholder whose size comes from the game's own
+registers; EFB peeks, bounding box and perf queries return constants; single core is forced, so the
+host GPU's speed changes when a frame runs, never what it computes. Rollback snapshots skip the
+framebuffer and texture cache, and the desync check hashes MEM1 and MEM2 only. So a setting that
+only changes drawing can only make this machine slower or faster, and a slower machine is what the
+speed lines below are for.
+
+**What the player picks** (the app's Graphics panel): backend and graphics card (next start),
+internal resolution (Auto, Native, 2x-4x; `MaxInternalResolution` is 4, so Auto never picks 5x or
+6x on a 4K screen), anti-aliasing (next start: it reloads every pipeline, and with the shader wait
+forced that would freeze both players), texture filtering, the scaling filter, scaled EFB copies,
+the shader compilation mode (AsyncUber or AsyncSkip) and compile threads (next start), GPU texture
+decoding, CPU culling and backend multithreading.
+
+**What stays forced** (`ForEachUniversalSetting`, checked by `VerifyForcedSettings` at boot):
+
+- everything that changes what the game computes or shows only some players: the CPU and timing
+  settings, EFB/XFB copies to RAM, EFB access, bounding box, perf queries, graphics mods, VSync off,
+  Immediate XFB and the presentation pacing, the shader wait;
+- since 0.3.39, also the settings a player's Dolphin.ini or GFX.ini could change before: the GDB
+  stub (off: it would serve the game's memory to anyone), debugging and the 14 JIT debug switches,
+  the low DCBZ hack, fastmem internals, the boot IOS, the HSP device, emulation speed (1.0) and
+  Dolphin's pacing settings, Cap Immediate XFB, and, for fairness, the widescreen hack, Disable Fog,
+  wireframe, the texture-format overlay and Free Look. Each is Dolphin's default, so nothing a
+  normal player computes changes and the compatibility key needs nothing new;
+- the shader compilation mode within a range: a session takes the player's value only if it is
+  AsyncUber or AsyncSkip, else forces AsyncUber (Synchronous and SyncUber compile on the emulation
+  thread). A compile thread count of 0 (the emulation thread) becomes -1, Dolphin's Auto. With no
+  value from anywhere, a session uses what it forced before 0.3.39 (AsyncUber and Auto), not
+  Dolphin's defaults (Synchronous and one thread). Both are pinned at boot, so a game INI layer a
+  launcher's disc brings in later can't change them.
+
+**Live changes:** `gfx <key> <value>` on stdin (cap `gfx`), applied at the next frame boundary on
+the CPU thread, for this run only (the app passes the stored choice at the next start). The keys are
+a fixed list, because the CurrentRun layer they write outranks the forced one and
+`VerifyForcedSettings` runs only at boot:
+
+| Key | Setting | Values |
+|---|---|---|
+| `res` | `Graphics.Settings.InternalResolution` | 0 Auto, 1 native, 2-4 |
+| `aniso` | `Graphics.Enhancements.MaxAnisotropy` | -1 the game's own, 0-4 (1x-16x) |
+| `filter` | `Graphics.Enhancements.ForceTextureFiltering` | 0 the game's own, 1 nearest, 2 linear |
+| `resample` | `Graphics.Enhancements.OutputResampling` | 0-6 |
+| `efb` | `Graphics.Hacks.EFBScaledCopy` | 0, 1 |
+| `gpudecode` | `Graphics.Settings.EnableGPUTextureDecoding` | 0, 1 |
+| `cpucull` | `Graphics.Settings.CPUCull` | 0, 1 |
+
+`res` and `gpudecode` cost one short hitch (the EFB is rebuilt or the texture cache dropped), which
+the other player sees as one stall.
+
+### This machine's speed
+
+Orca measures its own speed (`Orca/Perf.h`) and reports it as `orca perf {json}` on stdout,
+embedded only, each line at most 300 bytes, versioned with `"v":1`:
+
+- `{"v":1,"k":"info","be":"D3D","gpu":"...","ad":[...],"ai":0,"cpu":"...","th":12,"os":"win","rev":"..."}`
+  once after `ready`: the backend in use, the graphics card it uses, up to 3 adapter names and the
+  adapter index, the CPU's name (dropped if the line would pass 300 bytes), logical threads, the OS
+  and this build's source revision. Names are printable ASCII, at most 40 characters.
+- `{"v":1,"k":"win","m":"1v1","n":858,"cap":51.7,"w50":18.9,"w95":24.1,"g95":3.2,"fps":51.6,"rbf":212,"res":1,"pf":1,"as":1}`
+  every 15 s of running time (a pause doesn't count), menus included (`n` is 0 there).
+- `{"v":1,"k":"auto","cap":44.3}` once, when the run switched itself to Performance.
+
+How it is measured. A forward frame is a boundary whose frame ran for the first time in real time.
+Its time since the previous forward boundary includes any rollback re-runs (they are this machine's
+cost); taken out are the CPU thread's sleeps in CoreTiming (the throttle and the present pacing)
+and the session's stall and time-sync waits (`StepSession`). What is left is the frame's work. A
+frame counts once the game has been in a match for 900 frames (Brawl's scene, as the JIT warm-up
+reads it), and not when the game was paused, hidden by the page, held for a load, caught up after a
+join or run unseen. In a window, `n` is the counted frames, `cap` is `n` over their total work (the
+frames per second this machine could run, not capped at 60), `w50`/`w95` the median and 95th
+percentile work in ms, `g95` the 95th percentile time blocked binding the back buffer and presenting
+(a GPU-bound machine has most of its work there), `fps` frames shown per running second, `rbf`
+re-run frames, `m` the peers plugged in (`solo`, `1v1`, `multi`), `res` the EFB scale in use (Auto
+resolved), `pf` 1 when the picture settings are Performance's with anti-aliasing off, `as` 1 once
+the switch fired.
+
+**The switch to Performance.** A window counts when it has at least 600 frames, solo or 1v1 (3-4
+player rooms dip normally). After 4 counted windows in a row under 58 fps (`cap`), with the picture
+settings not already Performance's, Orca switches once per run: native resolution, unscaled EFB
+copies, the game's own texture filtering, the default scaling filter and no post-processing shader,
+at once and mid-match too (one hitch beats a match of stalls). It shows "Graphics set to Performance
+to hold 60 fps" and prints the `auto` line; the page keeps Performance (and anti-aliasing off) for
+the next start. Menus and big rooms in between don't break the run; a counted window at 58 or more,
+one already on Performance, or a `gfx` change starts it over. Why 58: time sync gives back at most
+one frame in 30, so the faster side can only slow to about 59.94 x 30/31 = 58.0 fps; under that the
+other player stalls. `ORCA_PERF_AUTO=0` turns the switch off, and in a session
+`ORCA_TEST_PERF=<window_s>[,<warm_frames>]` shortens the windows for tests.
+
+Observation only: wall-clock time and drawing settings never reach emulation, the replay, the
+checksums or the compatibility key.
 
 ## Code the JIT doesn't see
 
@@ -1904,6 +2008,7 @@ moves inside the window.
 | `volume V` | 0 to 1, this run only. |
 | `perf off\|fps\|detailed` | The overlay's frame meter (frames shown in the last second and the longest; yellow under 59 fps or past 20 ms, red under 50 fps or past two frames). A frame the game itself holds in emulated time (Project+ loading between scenes) counts as the video frames it held, so the meter, `fps` and the `hi` hitch count in `orca stats` show only this machine falling behind; `hil` counts the frames a load alone made slow (`hi` + `hil` is the older builds' `hi`). |
 | `music on\|off` | The player's Music switch ([Music switch](#music-switch)), cap `music`. |
+| `gfx <key> <value>` | A live change to one of the player's drawing-only graphics settings ([Graphics](#graphics)), cap `gfx`. |
 | `save N` / `load N` / `reset` | Refused in a session. |
 | `prepare-join` | The host invited a friend: a queue or search under way ends (`orca menu cancel`). Since 0.3.34 no keyframe is made ahead: the friend's arrival may [fresh-start](#fresh-starts) the game first. |
 | `join <code>` / `leave` | Into or out of a friend's game. |
@@ -1942,6 +2047,7 @@ never pauses Orca: the page sends `blur`, the player's pad goes neutral, and the
 | `orca menu ...`, `orca result ...`, `orca queue ...` | See [Online menu](#online-menu) and [Matchmaking](#matchmaking-and-results). |
 | `orca controls <hex>` | The player's own controls: changed in the game, or loaded from Orca's file at boot. The page keeps them. |
 | `orca active <interval_s> <active_s> <inputs> <mode> <pads>` | How much the player played: every 60 s while the game runs, and once more when it stops ([Activity lines](#activity-lines)). |
+| `orca perf <json>` | This machine's speed: `info` once after `ready`, `win` every 15 s of running time, `auto` when the run switched its graphics to Performance ([This machine's speed](#this-machines-speed)). |
 | `exit <code>` | Always last: 0 normal, 1 a reported error, 2 bad arguments. |
 
 ### Activity lines
@@ -2051,6 +2157,17 @@ so. Since 0.3.35; before, a refused resize ended Orca (exit `0x80000003`).
 ## Changes by release
 
 What each release changed for players, in plain words.
+
+### 0.3.39
+
+- **Your graphics, your choice.** Every graphics setting that only changes what your own screen
+  shows is now yours to pick in the YouGame app: resolution, anti-aliasing, texture filtering, the
+  backend and graphics card, and more. Settings that would change the game or show you more than
+  your opponent stay the same for everyone.
+- **Orca keeps up on slower computers.** If your computer can't hold 60 frames a second in a match,
+  Orca switches its graphics to Performance by itself, once, and tells you. Your opponent stops
+  freezing.
+- **The app sees how fast your computer is,** so it can tell you when a setting helps.
 
 ### 0.3.38
 

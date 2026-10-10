@@ -6773,3 +6773,68 @@ Checks (Mac, worktree `orca-rel-0338`, `build`, Release, `orca-cmake-flags.txt` 
 Not run here (the release's own steps): hash logs and synctests on this build, the two-Orca perf gate
 against 0.3.37, the Windows build and its gtests, Mac <-> PC, the Linux build in the VM (GCC 12 has
 not yet compiled 0.3.36-0.3.38's code), the packaged app's bundle version.
+
+## Graphics settings and this machine's speed (branch orca-gfx-0338, 2026-10-10)
+
+Branch `orca-gfx-0338` from `release-0.3.38` (`ccdc8e441a`), the Orca half of the graphics plan Luis
+approved on 2026-10-10 ("yes, fold it in and build it"): every drawing-only setting is the
+player's, game-affecting ones stay forced, Orca measures its own speed and switches itself to
+Performance once a run when it can't hold 58. The spec (YouGame session scratchpad
+`orca-gfx/spec.md`, from `classification.md`, `data.md`, `plumbing.md`) ships it in three releases:
+web, desktop 0.12.41 (the `graphics` launch field, `-C` for every exposed setting, the `gfx` filter),
+then this as Orca 0.3.39 with `minDesktop` 0.12.41. Not released; nothing merged.
+
+- `Orca/Profile.cpp`: `ShaderCompilationMode` and `ShaderCompilerThreads` leave
+  `ForEachUniversalSetting`. `ForcedConfigLoader` reads the layers under the Netplay one when it is
+  made (not in `Load`, which runs under the config lock), keeps the player's mode if it is AsyncUber
+  or AsyncSkip and threads if not 0, else AsyncUber / -1, and pins them in the Netplay layer (a
+  launcher's disc re-adds game INI layers after boot). Set by nobody, they stay what 0.3.38 forced
+  (AsyncUber, -1), not Dolphin's defaults (Synchronous, 1), so an old app changes nothing.
+  `VerifyForcedSettings` also checks the effective values. 34 keys join the forced list, each
+  Dolphin's default: GDB port/socket, debugging, the 14 JIT debug switches, LowDCBZ, fastmem
+  internals, boot IOS, HSP, emulation speed and pacing, CapImmediateXFB, widescreen hack, fog,
+  wireframe, texfmt overlay, Free Look. No compatibility-key change needed (the key starts with the
+  build's commit anyway). `DescribeGraphics` logs the graphics in use at boot.
+- `Orca/Perf.*` (new): the frame rules (`Meter`, pure), windows, the switch rule (`AutoSwitch`), the
+  `orca perf` v1 JSON, the `gfx` map (7 keys, CurrentRun layer, applied at the next forward boundary
+  on the CPU thread). Hooks: `CoreTiming::SleepUntil` (CPU-thread sleeps), `Presenter::Present`
+  (bind + present), `StepSession` (a `waited` out-parameter: from the first stall or time-sync step
+  to the last call, so the snapshot save the session does at the boundary stays work),
+  `OnlineMatch::OnBoundary` (`PerfBoundary`, first thing at every boundary), `Rollback.cpp` beside
+  the JIT warm-up (`JitWarm::SceneIsMatch`). Deviation from the spec: a frame the game held for a
+  load is left out instead of having its hold subtracted (its interval spans several video frames
+  and the throttle sleeps inside it are already subtracted), and only the waits inside
+  `StepSession` are subtracted, not its whole time.
+- Platform: `gfx <key> <value>` with cap `gfx` (17 caps now: the app reads 24 since 0.12.39; the cap
+  tests say so). `Perf::Ready()` beside `Activity::Ready()`; a test-commands run with
+  `ORCA_TEST_PERF` starts the lines without "ready". `ORCA_PERF_AUTO=0` turns the switch off.
+
+Checks (Mac M4 Pro, worktree `orca-gfx`, `build`, Release, the package script's flags with tests,
+AC power, through `vh-lock.py` / `run-lock.py`, SDL HIDAPI off):
+
+- dolphin-nogui + tests: no warnings in the changed files.
+- `Orca*`: 697 run, 675 passed, 22 skipped, 0 failed. New: `OrcaPerf` (22: work, percentiles, cap,
+  re-runs kept, waits out, GPU share, menus/warm-up, pauses/hidden/holds/unseen, catch-up, modes,
+  the switch rule with a3851fbb- and 2f80e4c8-shaped fixtures, the JSON lines, 300 bytes, names,
+  `gfx` parsing), `OrcaGraphicsSettings` (12: game-affecting settings from `-C` and the INIs are
+  forced back, drawing-only ones pass, the shader range and pin, nothing passed, CurrentRun
+  overrides fail the boot, `gfx` keys never forced, Performance recognized, the 34 keys).
+  `OrcaOnlineMenuLobby.EveryCapFitsTheAppsCapsLine` now allows 24 and
+  `OrcaMatchmakingMenu.HostIsACapResultsOnlyWithAVerifiedReader` lists `gfx`.
+- Hash logs, Brawl `bf-mario-link-results.txt` to 10800, headless: this build equals 0.3.38
+  (`orca-rel-0338/build`) on every frame both logs have (0-10807), and so does this build with a
+  hostile `GFX.ini`/`Dolphin.ini` (widescreen hack, fog off, wireframe, texfmt overlay, shader mode
+  0, threads 0, 3x, MSAA 4, EFBToTexture off, CapImmediateXFB, EmulationSpeed 0.5, LowDCBZ, boot IOS
+  36, rush presentation, JitOff, JitIntegerOff, debug mode): the boot passed `VerifyForcedSettings`
+  and logged mode 2, threads -1, 3x, MSAA 4.
+- One Orca in a dev room on yougame.co (`ORCA_TEST_DEV_GAME`, nothing recorded), solo vs a CPU in
+  real time (`bf-cpu-loop.txt`, `YG_THROTTLE=1`, `-v Null`, `ORCA_TEST_PERF=3,120`, `-C` mode 3 and
+  threads 2): one `info` line, a `win` line every 3 s (boot and menus `n` 0), in-match windows of
+  180 frames at `cap` 270-315 (`w50` 3.2-3.6 ms, `fps` 59.9), `gfx res 2` and `gfx efb 0` applied
+  at the next boundary (`res` 2 in the next window), `gfx wireframe 1` answered `unsupported gfx`,
+  no switch. Boot logged mode 3 and threads 2.
+
+Not run here: the switch firing on a really slow machine (the PC on its weakest settings), Mac <-> PC
+with very different settings and live `gfx` mid-match (0 desyncs expected: drawing never reaches
+RAM), the netplay perf gate against 0.3.38 (the frame loop got the measuring hooks), the Windows
+build (D3D11/D3D12/Vulkan/OpenGL each booting; whether Vulkan is in the Windows package), synctests.
