@@ -73,6 +73,12 @@ public:
     boundary.rerun_total = m_rerun;
     m_meter.OnBoundary(boundary, m_now, m_totals);
   }
+  // The session waits `ms` (a stall or time sync) without a boundary.
+  void Wait(double ms)
+  {
+    m_now += Ms(ms);
+    m_totals.wait += Ms(ms);
+  }
   void Pause(double ms)
   {
     m_now += Ms(ms);
@@ -187,6 +193,46 @@ TEST(OrcaPerf, ReRunsCountAsTheMachinesWork)
   EXPECT_NEAR(w.w50, 10, 0.01);
   EXPECT_NEAR(w.cap, 3 / 0.042, 0.1);
   EXPECT_EQ(w.rbf, 4);
+  // Split at the last re-run boundary: 12 ms of re-run work over 4 frames, and three forward
+  // frames of 10 ms each.
+  EXPECT_EQ(w.rv, 4);
+  EXPECT_NEAR(w.rw, 3, 0.01);
+  EXPECT_NEAR(w.fc, 100, 0.1);
+}
+
+TEST(OrcaPerf, ReRunWorkLeavesItsWaitsOut)
+{
+  // A stall before the rollback (8 ms) is a wait, not re-run work; the re-runs themselves are 2 ms
+  // each.
+  Driver d;
+  d.Warm();
+  d.Frame(16.7, 6.7);
+  d.Wait(8);
+  for (int i = 0; i < 3; ++i)
+    d.Rerun(2);
+  d.Frame(10, 0);
+  const Window w = d.NextWindow(1000, 1000 - 10);
+  EXPECT_EQ(w.rv, 3);
+  EXPECT_NEAR(w.rw, 2, 0.01);
+  // Forward work: 10, 10 and 10 ms.
+  EXPECT_NEAR(w.fc, 100, 0.1);
+  // All of it: 10, 16 and 10 ms.
+  EXPECT_NEAR(w.cap, 3 / 0.036, 0.1);
+}
+
+TEST(OrcaPerf, ReRunsOfAFrameThatDoesntCountAreLeftOutToo)
+{
+  // Re-runs before a frame that a pause spoiled count toward rbf (the window's) but not rv.
+  Driver d;
+  d.Warm();
+  d.Frame(16.7, 6.7);
+  d.Rerun(3);
+  d.Pause(100);
+  d.Frame(16.7, 6.7);
+  const Window w = d.NextWindow(1000, 1000 - 10);
+  EXPECT_EQ(w.rbf, 1);
+  EXPECT_EQ(w.rv, 0);
+  EXPECT_DOUBLE_EQ(w.rw, 0);
 }
 
 TEST(OrcaPerf, SessionWaitsAreNotWork)
@@ -413,6 +459,9 @@ TEST(OrcaPerf, TheLinesAreVersionedJson)
   w.mode = Mode::OneVsOne;
   w.n = 858;
   w.cap = 51.66;
+  w.fc = 58.04;
+  w.rw = 12.42;
+  w.rv = 180;
   w.w50 = 18.94;
   w.w95 = 24.1;
   w.g95 = 3.2;
@@ -422,14 +471,31 @@ TEST(OrcaPerf, TheLinesAreVersionedJson)
   w.pf = true;
   w.as = true;
   EXPECT_EQ(Orca::Perf::WindowJson(w),
-            R"({"v":1,"k":"win","m":"1v1","n":858,"cap":51.7,"w50":18.9,"w95":24.1,"g95":3.2,)"
-            R"("fps":51.6,"rbf":212,"res":1,"pf":1,"as":1})");
+            R"({"v":1,"k":"win","m":"1v1","n":858,"cap":51.7,"fc":58.0,"rw":12.4,"rv":180,)"
+            R"("w50":18.9,"w95":24.1,"g95":3.2,"fps":51.6,"rbf":212,"res":1,"pf":1,"as":1})");
+  // A test switch marks every window.
+  w.test = true;
+  EXPECT_NE(Orca::Perf::WindowJson(w).find(R"("as":1,"t":1})"), std::string::npos);
   EXPECT_EQ(Orca::Perf::AutoJson(44.25), R"({"v":1,"k":"auto","cap":44.3})");
   Window empty;
   empty.cap = std::numeric_limits<double>::infinity();
   EXPECT_EQ(Orca::Perf::WindowJson(empty),
-            R"({"v":1,"k":"win","m":"solo","n":0,"cap":0.0,"w50":0.0,"w95":0.0,"g95":0.0,)"
-            R"("fps":0.0,"rbf":0,"res":0,"pf":0,"as":0})");
+            R"({"v":1,"k":"win","m":"solo","n":0,"cap":0.0,"fc":0.0,"rw":0.0,"rv":0,"w50":0.0,)"
+            R"("w95":0.0,"g95":0.0,"fps":0.0,"rbf":0,"res":0,"pf":0,"as":0})");
+  // The longest a window line can be still fits the app's 300 characters.
+  Window big;
+  big.mode = Mode::Multi;
+  big.n = 1'000'000;
+  big.cap = big.fc = 999.9;
+  big.rw = 1e9;
+  big.rv = 1'000'000'000;
+  big.w50 = big.w95 = big.g95 = 99'999.9;
+  big.fps = 999.9;
+  big.rbf = 1'000'000;
+  big.res = 12;
+  big.pf = big.as = big.test = true;
+  EXPECT_LE(Orca::Perf::WindowJson(big).size() + std::string("orca perf ").size(),
+            Orca::Perf::LINE_BYTES);
 }
 
 TEST(OrcaPerf, TheInfoLineFitsThreeHundredBytes)

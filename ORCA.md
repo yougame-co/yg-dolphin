@@ -1122,7 +1122,10 @@ internal resolution (Auto, Native, 2x-4x; `MaxInternalResolution` is 4, so Auto 
 6x on a 4K screen), anti-aliasing (next start: it reloads every pipeline, and with the shader wait
 forced that would freeze both players), texture filtering, the scaling filter, scaled EFB copies,
 the shader compilation mode (AsyncUber or AsyncSkip) and compile threads (next start), GPU texture
-decoding, CPU culling and backend multithreading.
+decoding, CPU culling and backend multithreading. The app offers the backends each package carries:
+Direct3D 11 and 12 and OpenGL on Windows (its build has `ENABLE_VULKAN` off), Metal on macOS, OpenGL
+on Linux. On Windows the adapter list leaves out trailing software adapters (WARP, "Microsoft Basic
+Render Driver"), so a one-card PC lists one card.
 
 **What stays forced** (`ForEachUniversalSetting`, checked by `VerifyForcedSettings` at boot):
 
@@ -1133,11 +1136,17 @@ decoding, CPU culling and backend multithreading.
   stub (off: it would serve the game's memory to anyone), debugging and the 14 JIT debug switches,
   the low DCBZ hack, fastmem internals, the boot IOS, the HSP device, emulation speed (1.0) and
   Dolphin's pacing settings, Cap Immediate XFB, and, for fairness, the widescreen hack, Disable Fog,
-  wireframe, the texture-format overlay and Free Look. Each is Dolphin's default, so nothing a
-  normal player computes changes and the compatibility key needs nothing new;
+  wireframe, the texture-format overlay and Free Look; from the review, PauseOnPanic (it turns on
+  the JIT's memory checks, so an unresolved access breaks into a DSI instead of reading 0), the
+  audio buffer size (80 ms: it bounds the throttle's fallback like the other pacing settings) and
+  VertexRounding (a shader host-config bit only away from native resolution: with it on, the switch to
+  Performance or a live `gfx res` would reload every shader on the CPU thread mid-match with no time
+  limit). Each is Dolphin's default, so nothing a normal player computes changes and the
+  compatibility key needs nothing new;
 - the shader compilation mode within a range: a session takes the player's value only if it is
   AsyncUber or AsyncSkip, else forces AsyncUber (Synchronous and SyncUber compile on the emulation
-  thread). A compile thread count of 0 (the emulation thread) becomes -1, Dolphin's Auto. With no
+  thread). A compile thread count outside -1 and 1-4 (0 is the emulation thread; hundreds from a
+  hand-edited GFX.ini) becomes -1, Dolphin's Auto. With no
   value from anywhere, a session uses what it forced before 0.3.39 (AsyncUber and Auto), not
   Dolphin's defaults (Synchronous and one thread). Both are pinned at boot, so a game INI layer a
   launcher's disc brings in later can't change them.
@@ -1158,7 +1167,10 @@ a fixed list, because the CurrentRun layer they write outranks the forced one an
 | `cpucull` | `Graphics.Settings.CPUCull` | 0, 1 |
 
 `res` and `gpudecode` cost one short hitch (the EFB is rebuilt or the texture cache dropped), which
-the other player sees as one stall.
+the other player sees as one stall. Only the last value queued for each key is kept, so a burst of
+lines (a page while the game is paused) applies as at most one change per key. No `gfx` key, and
+nothing the switch to Performance writes, changes the shader host config (the
+`OrcaGraphicsSettings.ResolutionChangesNeverReloadTheShaders` test).
 
 ### This machine's speed
 
@@ -1169,8 +1181,9 @@ embedded only, each line at most 300 bytes, versioned with `"v":1`:
   once after `ready`: the backend in use, the graphics card it uses, up to 3 adapter names and the
   adapter index, the CPU's name (dropped if the line would pass 300 bytes), logical threads, the OS
   and this build's source revision. Names are printable ASCII, at most 40 characters.
-- `{"v":1,"k":"win","m":"1v1","n":858,"cap":51.7,"w50":18.9,"w95":24.1,"g95":3.2,"fps":51.6,"rbf":212,"res":1,"pf":1,"as":1}`
-  every 15 s of running time (a pause doesn't count), menus included (`n` is 0 there).
+- `{"v":1,"k":"win","m":"1v1","n":858,"cap":51.7,"fc":58.0,"rw":12.4,"rv":180,"w50":18.9,"w95":24.1,"g95":3.2,"fps":51.6,"rbf":212,"res":1,"pf":1,"as":1}`
+  every 15 s of running time (a pause doesn't count), menus included (`n` is 0 there), with
+  `"t":1` at the end when a test switch shaped the run.
 - `{"v":1,"k":"auto","cap":44.3}` once, when the run switched itself to Performance.
 
 How it is measured. A forward frame is a boundary whose frame ran for the first time in real time.
@@ -1179,13 +1192,19 @@ cost); taken out are the CPU thread's sleeps in CoreTiming (the throttle and the
 and the session's stall and time-sync waits (`StepSession`). What is left is the frame's work. A
 frame counts once the game has been in a match for 900 frames (Brawl's scene, as the JIT warm-up
 reads it), and not when the game was paused, hidden by the page, held for a load, caught up after a
-join or run unseen. In a window, `n` is the counted frames, `cap` is `n` over their total work (the
-frames per second this machine could run, not capped at 60), `w50`/`w95` the median and 95th
+join or run unseen. The work is also split at the frame's last re-run boundary: before it is re-run
+work (the rollback's load and its re-run frames, waits out), after it forward work. Re-runs depend on
+the opponent (their distance, how often their inputs change), forward work only on this machine, so
+the page can read the machine at a reference re-run load whoever it played. In a window, `n` is the
+counted frames, `cap` is `n` over their total work (the frames per second this machine could run,
+not capped at 60), `fc` the same over forward work only, `rw` the re-run work per re-run frame (ms)
+over the `rv` re-run frames inside the counted frames, `w50`/`w95` the median and 95th
 percentile work in ms, `g95` the 95th percentile time blocked binding the back buffer and presenting
 (a GPU-bound machine has most of its work there), `fps` frames shown per running second, `rbf`
 re-run frames, `m` the peers plugged in (`solo`, `1v1`, `multi`), `res` the EFB scale in use (Auto
-resolved), `pf` 1 when the picture settings are Performance's with anti-aliasing off, `as` 1 once
-the switch fired.
+resolved), `pf` 1 when the picture settings are Performance's with anti-aliasing off, `as` 1 when
+the switch fired this run and the picture is still Performance's (anti-aliasing aside, which waits
+for the next start; a player who raised the picture again is measured on their own settings).
 
 **The switch to Performance.** A window counts when it has at least 600 frames, solo or 1v1 (3-4
 player rooms dip normally). After 4 counted windows in a row under 58 fps (`cap`), with the picture
@@ -1196,8 +1215,14 @@ to hold 60 fps" and prints the `auto` line; the page keeps Performance (and anti
 the next start. Menus and big rooms in between don't break the run; a counted window at 58 or more,
 one already on Performance, or a `gfx` change starts it over. Why 58: time sync gives back at most
 one frame in 30, so the faster side can only slow to about 59.94 x 30/31 = 58.0 fps; under that the
-other player stalls. `ORCA_PERF_AUTO=0` turns the switch off, and in a session
-`ORCA_TEST_PERF=<window_s>[,<warm_frames>]` shortens the windows for tests.
+other player stalls.
+
+Test switches, read only with `ORCA_TEST_COMMANDS=1` in a session (a harness run; the app passes
+Orca neither) and marked `"t":1` on every window line: `ORCA_TEST_PERF=<window_s>[,<warm_frames>]`
+shortens the windows (and starts the lines without the app's `ready`), `ORCA_PERF_AUTO=0` turns the
+switch off, and `ORCA_TEST_SLOW=<ms>[,<ms_on_performance>]` makes a slow machine: each forward frame
+spins the CPU thread that long (the second value while the picture is Performance's), so the switch
+fires and helps.
 
 Observation only: wall-clock time and drawing settings never reach emulation, the replay, the
 checksums or the compatibility key.

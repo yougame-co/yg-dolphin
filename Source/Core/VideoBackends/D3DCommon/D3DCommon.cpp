@@ -108,6 +108,10 @@ std::vector<std::string> GetAdapterNames()
     return {};
 
   std::vector<std::string> adapters;
+  // Orca: which ones are software renderers (Windows 8+ lists the Microsoft Basic Render Driver,
+  // WARP, after the real cards). Trailing ones are left off the list, so a machine with one card
+  // shows one, and every index left still picks the adapter EnumAdapters gives it.
+  std::vector<bool> software;
   Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
   while (factory->EnumAdapters(static_cast<UINT>(adapters.size()), &adapter) !=
          DXGI_ERROR_NOT_FOUND)
@@ -116,8 +120,19 @@ std::vector<std::string> GetAdapterNames()
     DXGI_ADAPTER_DESC desc;
     if (SUCCEEDED(adapter->GetDesc(&desc)))
       name = WStringToUTF8(desc.Description);
+    bool is_software = false;
+    Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter1;
+    DXGI_ADAPTER_DESC1 desc1;
+    if (SUCCEEDED(adapter.As(&adapter1)) && SUCCEEDED(adapter1->GetDesc1(&desc1)))
+      is_software = (desc1.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0;
 
     adapters.push_back(std::move(name));
+    software.push_back(is_software);
+  }
+  while (adapters.size() > 1 && software.back())
+  {
+    adapters.pop_back();
+    software.pop_back();
   }
 
   return adapters;

@@ -257,10 +257,10 @@ std::string DescribeForcedSettings(const Profile& profile);
 // Graphics settings are the player's (the app passes them with -C), except the few the universal
 // list forces: see ORCA.md, "Graphics". Two have a range a session allows. The shader compilation
 // mode must be one of the asynchronous ones (AsyncUber or AsyncSkip): the others compile on the
-// emulation thread, which stalls the other player. The compile thread count must not be 0 (the
-// emulation thread); -1 is Dolphin's Auto. ForcedConfigLoader pins the player's value for the run,
-// or AsyncUber or -1 in place of one outside the range or of none, and VerifyForcedSettings checks
-// the effective values.
+// emulation thread, which stalls the other player. The compile thread count is -1 (Dolphin's
+// Auto) or 1 to 4: never 0 (the emulation thread). ForcedConfigLoader pins the player's value for
+// the run, or AsyncUber or -1 in place of one outside the range or of none, and
+// VerifyForcedSettings checks the effective values.
 bool SessionShaderModeAllowed(ShaderCompilationMode mode);
 bool SessionShaderThreadsAllowed(int threads);
 // Every setting the universal list forces, for tests and the `gfx` command's check.

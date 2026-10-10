@@ -28,17 +28,25 @@ struct Location;
 // throttle and the present pacing) and the session's stall and time-sync waits. What is left is
 // `work`, the time the frame cost this machine. `gpu` is the part of it spent blocked on the
 // graphics card (binding the back buffer and presenting), which tells a GPU-bound machine from a
-// CPU-bound one.
+// CPU-bound one. The interval is also split at the frame's last re-run boundary: what came before
+// it (the rollback's load and its re-run frames, waits out) is re-run work, the rest forward work.
+// Re-runs depend on the opponent (their distance, how often their inputs change), forward work only
+// on this machine, so the page can read this machine's speed at a reference re-run load whoever it
+// played.
 //
 // A frame counts (is "valid") once the game has been in a match for WARM frames (menus and each
 // match's start are left out), when nothing paused or hid the game since the last one, and when
 // the game didn't hold the frame for a load. A window is WINDOW_S seconds of running time:
 //   n    valid frames
 //   cap  n / their total work: the frames per second this machine could run, not capped at 60
+//   fc   n / their total forward work: the same without the re-runs
+//   rw   re-run work per re-run frame (ms) inside those frames' intervals; rv how many re-run
+//        frames that was
 //   w50, w95  median and 95th percentile work (ms); g95: 95th percentile gpu (ms)
 //   fps  frames shown per running second, as the overlay's meter counts them
-//   rbf  rollback re-run frames
+//   rbf  rollback re-run frames (all of the window's)
 //   m    peers plugged in: solo (0), 1v1 (1), multi (2-3)
+//   t    1 when a test switch (ORCA_TEST_PERF, ORCA_PERF_AUTO=0, ORCA_TEST_SLOW) shaped the run
 //
 // The page gets one `orca perf {json}` line per window (stdout, embedded only, at most 300 bytes),
 // versioned with "v":1:
@@ -86,9 +94,15 @@ struct Frame
   double sleep_ms = 0;  // CPU thread asleep in CoreTiming
   double wait_ms = 0;   // the session's stall and time-sync waits
   double gpu_ms = 0;    // blocked binding the back buffer and presenting
+  // The part of the work before the frame's last re-run boundary (a rollback's load and re-runs),
+  // and how many re-run frames it held.
+  double rerun_ms = 0;
+  int reruns = 0;
 };
 // max(0, interval - sleep - wait).
 double Work(const Frame& frame);
+// Work without the re-runs: max(0, Work - rerun_ms).
+double ForwardWork(const Frame& frame);
 
 // Nearest-rank percentile (p in 0..100) of `values`; 0 when empty.
 double Percentile(std::vector<double> values, double p);
@@ -98,6 +112,9 @@ struct Window
   Mode mode = Mode::Solo;
   int n = 0;
   double cap = 0;
+  double fc = 0;  // forward frames per second (re-runs left out)
+  double rw = 0;  // ms per re-run frame inside the valid frames' intervals, 0 with none
+  int rv = 0;     // those re-run frames
   double w50 = 0;
   double w95 = 0;
   double g95 = 0;
@@ -105,7 +122,11 @@ struct Window
   int rbf = 0;
   int res = 0;      // the EFB scale in use (Auto resolved)
   bool pf = false;  // the picture settings are Performance's, with no anti-aliasing
-  bool as = false;  // the switch to Performance fired this run
+  // The switch to Performance fired this run and the picture settings are still Performance's
+  // (anti-aliasing aside, which waits for the next start); a player who changed them since is
+  // measured on their own settings again.
+  bool as = false;
+  bool test = false;  // a test switch shaped the run (TestRulesActive)
   bool Counts(const Rules& rules) const;
 };
 
@@ -113,7 +134,8 @@ struct Window
 class WindowMeter
 {
 public:
-  void AddValid(double work_ms, double gpu_ms);
+  // A valid frame: its work, the GPU share, and the part of it that was re-runs (and how many).
+  void AddValid(double work_ms, double gpu_ms, double rerun_ms = 0, int reruns = 0);
   void AddShown(int frames);
   void AddRunning(double ms);
   void AddRerun(int frames);
@@ -127,6 +149,9 @@ private:
   std::vector<double> m_work;
   std::vector<double> m_gpu;
   double m_work_ms = 0;
+  double m_forward_ms = 0;
+  double m_rerun_ms = 0;
+  int m_reruns = 0;
   double m_running_ms = 0;
   int m_shown = 0;
   int m_rerun = 0;
@@ -201,6 +226,10 @@ private:
   Rules m_rules;
   std::optional<std::chrono::nanoseconds> m_last_forward;
   Totals m_totals;
+  // The last re-run boundary since the last forward one, its totals, and how many there were.
+  std::optional<std::chrono::nanoseconds> m_last_rerun;
+  Totals m_rerun_totals;
+  int m_reruns = 0;
   std::chrono::nanoseconds m_paused{};
   u64 m_rerun_total = 0;
   // Something since the last forward frame (a catch-up) makes the next one's interval meaningless.
@@ -267,7 +296,9 @@ std::vector<Config::Location> GfxLocations();
 std::array<GfxChange, 5> PerformancePreset();
 // Writes one change to the CurrentRun layer. CPU thread, at a frame boundary.
 void ApplyGfx(const GfxChange& change);
-// Whether the live picture settings are Performance's, with MSAA 1 and SSAA off.
+// Whether the live picture settings are Performance's (anti-aliasing aside).
+bool PerformancePicture();
+// Whether they are, with MSAA 1 and SSAA off too.
 bool PerformanceNow();
 
 // ---- At run time ----
@@ -278,9 +309,15 @@ void Ready();
 bool Measuring();
 // A new boot in the same process: measuring starts over (the info line is not sent again).
 void NewBoot();
-// The rules in use: Rules{} unless ORCA_TEST_PERF=<window_s>,<warm_frames> shortens them (a
-// session only; count_frames scales with the window; with ORCA_TEST_COMMANDS=1 it also starts the
-// lines without the app's "ready"). ORCA_PERF_AUTO=0 turns the switch off.
+// The test switches, each read only with ORCA_TEST_COMMANDS=1 in a session (a harness run: the
+// app passes Orca neither) and marked "t":1 on every window line:
+//   ORCA_TEST_PERF=<window_s>,<warm_frames>  shorter rules (count_frames scales with the window);
+//                     it also starts the lines without the app's "ready"
+//   ORCA_PERF_AUTO=0  no switch to Performance
+//   ORCA_TEST_SLOW=<ms>[,<ms_on_performance>]  a slow machine: each forward frame spins the CPU
+//                     thread that long (the second while the picture is Performance's, default 0)
+bool TestRulesActive();
+// The rules in use: Rules{}, or ORCA_TEST_PERF's.
 const Rules& ActiveRules();
 // Time the CPU thread slept in CoreTiming, and spent binding and presenting the back buffer.
 void AddSleep(std::chrono::nanoseconds time);
@@ -300,7 +337,9 @@ public:
 // Whether the running scene is a match (Brawl and Project+), at a forward boundary; nullopt when it
 // can't be read.
 void NoteScene(std::optional<bool> in_match);
-// A `gfx` line's change, applied at the next forward boundary. Any thread.
+// A `gfx` line's change, applied at the next forward boundary. Any thread. Only the last value
+// queued for each key is kept, so a burst of lines (while paused, say) is at most one change per
+// key when it applies.
 void QueueGfx(const GfxChange& change);
 
 // Every frame boundary of a session, on the CPU thread, before the session steps.

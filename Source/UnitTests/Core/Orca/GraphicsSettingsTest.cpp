@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <filesystem>
 #include <memory>
 #include <string>
 #include <vector>
@@ -15,6 +16,7 @@
 #include "Core/HW/HSP/HSP_Device.h"
 #include "Core/Orca/Perf.h"
 #include "Core/Orca/Profile.h"
+#include "VideoCommon/ShaderGenCommon.h"
 #include "VideoCommon/VideoConfig.h"
 
 // Which settings a session takes from the player (the app's -C, GFX.ini) and which it forces,
@@ -93,8 +95,14 @@ TEST_F(OrcaGraphicsSettings, GameAffectingSettingsFromOutsideAreIgnored)
   Ini(Config::GFX_HACK_CAP_IMMEDIATE_XFB, true);
   Ini(Config::GFX_HACK_SKIP_EFB_COPY_TO_RAM, false);
   Ini(Config::GFX_VSYNC, true);
+  Ini(Config::MAIN_PAUSE_ON_PANIC, true);
+  Ini(Config::MAIN_AUDIO_BUFFER_SIZE, 512);
+  Ini(Config::GFX_HACK_VERTEX_ROUNDING, true);
   Boot();
 
+  EXPECT_FALSE(Config::Get(Config::MAIN_PAUSE_ON_PANIC));
+  EXPECT_EQ(Config::Get(Config::MAIN_AUDIO_BUFFER_SIZE), 80);
+  EXPECT_FALSE(Config::Get(Config::GFX_HACK_VERTEX_ROUNDING));
   EXPECT_EQ(Config::Get(Config::MAIN_EMULATION_SPEED), 1.0f);
   EXPECT_EQ(Config::Get(Config::MAIN_GDB_PORT), -1);
   EXPECT_EQ(Config::Get(Config::MAIN_GDB_SOCKET), "");
@@ -198,6 +206,18 @@ TEST_F(OrcaGraphicsSettings, OneThreadIsThePlayersChoiceToo)
   EXPECT_EQ(Config::Get(Config::GFX_SHADER_COMPILER_THREADS), 1);
 }
 
+TEST_F(OrcaGraphicsSettings, ThreadsOutsideTheAppsChoicesAreAuto)
+{
+  // A hand-edited GFX.ini asking for 500 compile threads: Auto instead.
+  Ini(Config::GFX_SHADER_COMPILER_THREADS, 500);
+  Boot();
+  EXPECT_EQ(Config::Get(Config::GFX_SHADER_COMPILER_THREADS), -1);
+  EXPECT_EQ(Verify(), std::nullopt);
+  EXPECT_TRUE(Orca::SessionShaderThreadsAllowed(4));
+  EXPECT_FALSE(Orca::SessionShaderThreadsAllowed(5));
+  EXPECT_FALSE(Orca::SessionShaderThreadsAllowed(-2));
+}
+
 TEST_F(OrcaGraphicsSettings, TheHighestLayerUnderTheSessionDecides)
 {
   // A game INI over the app's -C, as Config::Get would read them without the session.
@@ -269,6 +289,76 @@ TEST_F(OrcaGraphicsSettings, LiveChangesTouchOnlyDrawingSettings)
   EXPECT_TRUE(Config::Get(Config::GFX_CPU_CULL));
 }
 
+TEST_F(OrcaGraphicsSettings, ResolutionChangesNeverReloadTheShaders)
+{
+  // VertexRounding is a shader host-config bit only away from native resolution: with it on, the
+  // switch to Performance (res 1) or a live `gfx res` would reload every shader mid-match. Forced
+  // off, no `gfx` change moves the host config.
+  Ini(Config::GFX_HACK_VERTEX_ROUNDING, true);
+  CommandLine(Config::GFX_EFB_SCALE, 4);
+  Boot();
+  EXPECT_FALSE(Config::Get(Config::GFX_HACK_VERTEX_ROUNDING));
+  const auto host_bits = [] {
+    g_Config.Refresh();
+    UpdateActiveConfig();
+    return ShaderHostConfig::GetCurrent().bits;
+  };
+  const u32 before = host_bits();
+  for (const char* line :
+       {"gfx res 1", "gfx res 0", "gfx res 4", "gfx aniso 4", "gfx aniso -1", "gfx filter 1",
+        "gfx filter 2", "gfx resample 6", "gfx efb 0", "gfx efb 1", "gfx gpudecode 1",
+        "gfx cpucull 1", "gfx res 1"})
+  {
+    const std::optional<Orca::Perf::GfxChange> change = Orca::Perf::ParseGfx(line);
+    ASSERT_TRUE(change) << line;
+    Orca::Perf::ApplyGfx(*change);
+    EXPECT_EQ(host_bits(), before) << line;
+  }
+  // The switch to Performance is the same changes.
+  for (const Orca::Perf::GfxChange& change : Orca::Perf::PerformancePreset())
+    Orca::Perf::ApplyGfx(change);
+  EXPECT_EQ(host_bits(), before);
+}
+
+TEST_F(OrcaGraphicsSettings, QueuedChangesKeepTheLastValuePerKey)
+{
+  Boot();
+  // A burst of lines (a page while the game is paused): one change per key when they apply.
+  for (int i = 0; i < 1000; ++i)
+    Orca::Perf::QueueGfx({Orca::Perf::GfxKey::Res, i % 2 ? 2 : 3});
+  Orca::Perf::QueueGfx({Orca::Perf::GfxKey::Efb, 0});
+  Orca::Perf::QueueGfx({Orca::Perf::GfxKey::Res, 4});
+  // The next forward boundary applies them (measuring hasn't started: nothing else happens).
+  Orca::Perf::Boundary boundary;
+  boundary.first_run = true;
+  Orca::Perf::OnBoundary(boundary);
+  EXPECT_EQ(Config::Get(Config::GFX_EFB_SCALE), 4);
+  EXPECT_FALSE(Config::Get(Config::GFX_HACK_COPY_EFB_SCALED));
+  EXPECT_EQ(Verify(), std::nullopt);
+}
+
+TEST_F(OrcaGraphicsSettings, TheShippedProfilesForceNoLiveKey)
+{
+  // The `gfx` map writes above every forced setting, the profiles' own included.
+  const std::string sys =
+      (std::filesystem::path(__FILE__).parent_path() / "../../../../Data/Sys/").string();
+  for (const auto& [id, revision] : {std::pair<const char*, std::optional<u16>>{"RSBE01", 2},
+                                     {"PPLUS32", std::nullopt}})
+  {
+    std::string error;
+    const std::optional<Orca::Profile> profile = Orca::LoadProfileFrom(sys, id, revision, &error);
+    ASSERT_TRUE(profile) << id << ": " << error;
+    for (const auto& [location, value] : profile->forced)
+    {
+      for (const Config::Location& live : Orca::Perf::GfxLocations())
+      {
+        EXPECT_FALSE(location == live)
+            << id << " forces " << location.section << "." << location.key;
+      }
+    }
+  }
+}
+
 TEST_F(OrcaGraphicsSettings, ThePerformancePresetIsRecognized)
 {
   CommandLine(Config::GFX_EFB_SCALE, 3);
@@ -278,9 +368,13 @@ TEST_F(OrcaGraphicsSettings, ThePerformancePresetIsRecognized)
   for (const Orca::Perf::GfxChange& change : Orca::Perf::PerformancePreset())
     Orca::Perf::ApplyGfx(change);
   EXPECT_TRUE(Orca::Perf::PerformanceNow());
-  // Anti-aliasing is a next-start setting, but it still isn't Performance.
+  // Anti-aliasing is a next-start setting, but it still isn't Performance: the picture is.
   CommandLine(Config::GFX_MSAA, 4u);
   EXPECT_FALSE(Orca::Perf::PerformanceNow());
+  EXPECT_TRUE(Orca::Perf::PerformancePicture());
+  // A player who raised the resolution again is on their own settings.
+  Orca::Perf::ApplyGfx({Orca::Perf::GfxKey::Res, 3});
+  EXPECT_FALSE(Orca::Perf::PerformancePicture());
 }
 
 TEST_F(OrcaGraphicsSettings, TheForcedListHoldsTheNewKeys)
@@ -321,8 +415,13 @@ TEST_F(OrcaGraphicsSettings, TheForcedListHoldsTheNewKeys)
       Config::GFX_ENABLE_WIREFRAME.GetLocation(),
       Config::GFX_TEXFMT_OVERLAY_ENABLE.GetLocation(),
       Config::FREE_LOOK_ENABLED.GetLocation(),
+      // From the review: a game-affecting JIT switch, a pacing setting, and the host-config bit
+      // that would make a resolution change reload every shader.
+      Config::MAIN_PAUSE_ON_PANIC.GetLocation(),
+      Config::MAIN_AUDIO_BUFFER_SIZE.GetLocation(),
+      Config::GFX_HACK_VERTEX_ROUNDING.GetLocation(),
   };
-  EXPECT_EQ(added.size(), 34u);
+  EXPECT_EQ(added.size(), 37u);
   for (const Config::Location& location : added)
     EXPECT_TRUE(Has(forced, location)) << location.section << "." << location.key;
   // The player's settings are not on the list (WaitForShadersBeforeStarting stays forced).

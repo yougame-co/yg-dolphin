@@ -217,6 +217,9 @@ void ForEachUniversalSetting(F&& f)
   {
     f(*jit_off, false);
   }
+  // PauseOnPanic turns on the JIT's memory checks (jo.memcheck): an unresolved access then breaks
+  // into a DSI instead of reading 0 and going on, so this player's game would leave the other's.
+  f(Config::MAIN_PAUSE_ON_PANIC, false);
   f(Config::MAIN_LOW_DCBZ_HACK, false);
   f(Config::MAIN_PAGE_TABLE_FASTMEM, Config::MAIN_PAGE_TABLE_FASTMEM.GetDefaultValue());
   f(Config::MAIN_FASTMEM_ARENA, Config::MAIN_FASTMEM_ARENA.GetDefaultValue());
@@ -231,6 +234,14 @@ void ForEachUniversalSetting(F&& f)
   f(Config::MAIN_TIMING_VARIANCE, Config::MAIN_TIMING_VARIANCE.GetDefaultValue());
   f(Config::MAIN_CORRECT_TIME_DRIFT, Config::MAIN_CORRECT_TIME_DRIFT.GetDefaultValue());
   f(Config::GFX_HACK_CAP_IMMEDIATE_XFB, false);
+  // The audio buffer bounds how far the throttle may fall behind before it skips ahead
+  // (CoreTiming's max fallback); kept at Dolphin's 80 ms like the other pacing settings.
+  f(Config::MAIN_AUDIO_BUFFER_SIZE, Config::MAIN_AUDIO_BUFFER_SIZE.GetDefaultValue());
+  // Drawing-only, but it is a shader host-config bit that flips whenever the internal resolution
+  // goes to or from native (VideoConfig::UseVertexRounding). With it on, a live `gfx res` or the
+  // switch to Performance would reload every shader on the CPU thread mid-match, with no time
+  // limit, and freeze both players.
+  f(Config::GFX_HACK_VERTEX_ROUNDING, false);
   // Fairness: drawing-only, but each shows a player more than the game does (the stage past its
   // framing, through fog, through cover) or a free camera.
   f(Config::GFX_WIDESCREEN_HACK, false);
@@ -898,7 +909,9 @@ bool SessionShaderModeAllowed(ShaderCompilationMode mode)
 
 bool SessionShaderThreadsAllowed(int threads)
 {
-  return threads != 0;
+  // Auto, or 1 to 4 compile threads (the app's choices): never 0 (the emulation thread), and never
+  // hundreds of threads from a hand-edited GFX.ini.
+  return threads == -1 || (threads >= 1 && threads <= 4);
 }
 
 std::vector<Config::Location> UniversalForcedLocations()

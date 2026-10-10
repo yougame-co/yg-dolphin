@@ -75,6 +75,11 @@ double Work(const Frame& frame)
   return std::max(0.0, frame.interval_ms - frame.sleep_ms - frame.wait_ms);
 }
 
+double ForwardWork(const Frame& frame)
+{
+  return std::max(0.0, Work(frame) - std::max(0.0, frame.rerun_ms));
+}
+
 double Percentile(std::vector<double> values, double p)
 {
   if (values.empty())
@@ -91,11 +96,15 @@ bool Window::Counts(const Rules& rules) const
   return n >= rules.count_frames && mode != Mode::Multi;
 }
 
-void WindowMeter::AddValid(double work_ms, double gpu_ms)
+void WindowMeter::AddValid(double work_ms, double gpu_ms, double rerun_ms, int reruns)
 {
   m_work.push_back(work_ms);
   m_gpu.push_back(gpu_ms);
   m_work_ms += work_ms;
+  const double rerun = std::clamp(rerun_ms, 0.0, work_ms);
+  m_forward_ms += work_ms - rerun;
+  m_rerun_ms += rerun;
+  m_reruns += std::max(0, reruns);
 }
 
 void WindowMeter::AddShown(int frames)
@@ -126,6 +135,10 @@ Window WindowMeter::Take()
   if (window.n > 0)
   {
     window.cap = m_work_ms > 0 ? std::min(CAP_MAX, window.n / (m_work_ms / 1000)) : CAP_MAX;
+    window.fc =
+        m_forward_ms > 0 ? std::min(CAP_MAX, window.n / (m_forward_ms / 1000)) : CAP_MAX;
+    window.rv = m_reruns;
+    window.rw = m_reruns > 0 ? m_rerun_ms / m_reruns : 0;
     window.w50 = Percentile(m_work, 50);
     window.w95 = Percentile(m_work, 95);
     window.g95 = Percentile(m_gpu, 95);
@@ -209,11 +222,16 @@ std::string InfoJson(const Info& info)
 
 std::string WindowJson(const Window& window)
 {
-  return fmt::format("{{\"v\":1,\"k\":\"win\",\"m\":\"{}\",\"n\":{},\"cap\":{},\"w50\":{},"
-                     "\"w95\":{},\"g95\":{},\"fps\":{},\"rbf\":{},\"res\":{},\"pf\":{},\"as\":{}}}",
-                     ModeName(window.mode), window.n, Num(window.cap), Num(window.w50),
-                     Num(window.w95), Num(window.g95), Num(window.fps), window.rbf, window.res,
-                     window.pf ? 1 : 0, window.as ? 1 : 0);
+  std::string json = fmt::format(
+      "{{\"v\":1,\"k\":\"win\",\"m\":\"{}\",\"n\":{},\"cap\":{},\"fc\":{},\"rw\":{},\"rv\":{},"
+      "\"w50\":{},\"w95\":{},\"g95\":{},\"fps\":{},\"rbf\":{},\"res\":{},\"pf\":{},\"as\":{}",
+      ModeName(window.mode), window.n, Num(window.cap), Num(window.fc),
+      Num(std::min(window.rw, 9999.9)), std::min(window.rv, 999'999), Num(window.w50),
+      Num(window.w95), Num(window.g95), Num(window.fps), window.rbf, window.res, window.pf ? 1 : 0,
+      window.as ? 1 : 0);
+  if (window.test)
+    json += ",\"t\":1";
+  return json + "}";
 }
 
 std::string AutoJson(double cap)
@@ -342,15 +360,20 @@ void ApplyGfx(const GfxChange& change)
   }
 }
 
-bool PerformanceNow()
+bool PerformancePicture()
 {
   return Config::Get(Config::GFX_EFB_SCALE) == 1 &&
          !Config::Get(Config::GFX_HACK_COPY_EFB_SCALED) &&
          Config::Get(Config::GFX_ENHANCE_MAX_ANISOTROPY) == AnisotropicFilteringMode::Default &&
          Config::Get(Config::GFX_ENHANCE_FORCE_TEXTURE_FILTERING) ==
              TextureFilteringMode::Default &&
-         Config::Get(Config::GFX_ENHANCE_OUTPUT_RESAMPLING) == OutputResamplingMode::Default &&
-         Config::Get(Config::GFX_MSAA) <= 1 && !Config::Get(Config::GFX_SSAA);
+         Config::Get(Config::GFX_ENHANCE_OUTPUT_RESAMPLING) == OutputResamplingMode::Default;
+}
+
+bool PerformanceNow()
+{
+  return PerformancePicture() && Config::Get(Config::GFX_MSAA) <= 1 &&
+         !Config::Get(Config::GFX_SSAA);
 }
 
 void Meter::NoteScene(std::optional<bool> in_match)
@@ -370,6 +393,10 @@ std::optional<Window> Meter::OnBoundary(const Boundary& boundary, std::chrono::n
     // A re-run's time belongs to the next forward frame; a catch-up's makes it meaningless.
     if (boundary.excluded)
       m_spoiled = true;
+    // Where the re-runs end: the forward frame's own work starts here.
+    m_last_rerun = now;
+    m_rerun_totals = totals;
+    ++m_reruns;
     return std::nullopt;
   }
   if (m_scene_match)
@@ -385,6 +412,14 @@ std::optional<Window> Meter::OnBoundary(const Boundary& boundary, std::chrono::n
     frame.sleep_ms = Ms(totals.sleep - m_totals.sleep);
     frame.wait_ms = Ms(totals.wait - m_totals.wait);
     frame.gpu_ms = Ms(totals.present - m_totals.present);
+    if (m_last_rerun && *m_last_rerun >= *m_last_forward)
+    {
+      // From the last forward boundary to the last re-run one, waits out.
+      frame.rerun_ms = Ms(*m_last_rerun - *m_last_forward) -
+                       Ms(m_rerun_totals.sleep - m_totals.sleep) -
+                       Ms(m_rerun_totals.wait - m_totals.wait);
+      frame.reruns = m_reruns;
+    }
   }
   const std::chrono::nanoseconds paused = boundary.paused_total - m_paused;
   // A new session restarts its count.
@@ -400,10 +435,12 @@ std::optional<Window> Meter::OnBoundary(const Boundary& boundary, std::chrono::n
   m_window.AddRerun(static_cast<int>(std::min<u64>(rerun, 1'000'000)));
   m_window.SeePeers(boundary.peers);
   if (valid)
-    m_window.AddValid(Work(frame), frame.gpu_ms);
+    m_window.AddValid(Work(frame), frame.gpu_ms, frame.rerun_ms, frame.reruns);
 
   m_last_forward = now;
   m_totals = totals;
+  m_last_rerun.reset();
+  m_reruns = 0;
   m_paused = boundary.paused_total;
   m_rerun_total = boundary.rerun_total;
   m_spoiled = false;
@@ -423,7 +460,8 @@ std::atomic<s64> s_present_ns{0};
 std::atomic<s64> s_wait_ns{0};
 std::atomic<int> s_step_scopes{0};
 std::mutex s_gfx_mutex;
-std::vector<GfxChange> s_gfx_queue;
+// The last value queued for each key (GfxKey order), applied at the next forward boundary.
+std::array<std::optional<int>, 7> s_gfx_queue;
 
 // CPU thread only.
 struct Run
@@ -434,11 +472,54 @@ struct Run
 };
 Run s_run;
 
+// A harness run (ORCA_TEST_COMMANDS=1, which the app never passes) in a session.
+bool TestRun()
+{
+  static const bool test = GetEnv("ORCA_TEST_COMMANDS") == "1";
+  return test && SessionActive();
+}
+
+struct TestSlow
+{
+  double ms = 0;
+  double performance_ms = 0;
+};
+const TestSlow& ReadTestSlow()
+{
+  static const TestSlow slow = [] {
+    TestSlow out;
+    const std::string value = GetEnv("ORCA_TEST_SLOW");
+    if (!TestRun() || value.empty())
+      return out;
+    double ms = 0, performance_ms = 0;
+    const int read = std::sscanf(value.c_str(), "%lf,%lf", &ms, &performance_ms);
+    if (read >= 1)
+      out.ms = std::clamp(ms, 0.0, 100.0);
+    if (read >= 2)
+      out.performance_ms = std::clamp(performance_ms, 0.0, 100.0);
+    return out;
+  }();
+  return slow;
+}
+
+// Spins the CPU thread (busy, not asleep: it is work, as a slow machine's would be).
+void Spin(double ms)
+{
+  if (ms <= 0)
+    return;
+  const auto until = std::chrono::steady_clock::now() +
+                     std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                         std::chrono::duration<double, std::milli>(ms));
+  while (std::chrono::steady_clock::now() < until)
+  {
+  }
+}
+
 Rules ReadRules()
 {
   Rules rules;
   const std::string test = GetEnv("ORCA_TEST_PERF");
-  if (SessionActive() && !test.empty())
+  if (TestRun() && !test.empty())
   {
     double window_s = rules.window_s;
     int warm = rules.warm_frames;
@@ -456,7 +537,7 @@ Rules ReadRules()
 
 bool AutoAllowed()
 {
-  static const bool allowed = GetEnv("ORCA_PERF_AUTO") != "0";
+  static const bool allowed = !(TestRun() && GetEnv("ORCA_PERF_AUTO") == "0");
   return allowed;
 }
 
@@ -506,7 +587,12 @@ void ApplyQueuedGfx()
   std::vector<GfxChange> changes;
   {
     std::lock_guard lock(s_gfx_mutex);
-    changes.swap(s_gfx_queue);
+    for (std::size_t key = 0; key < s_gfx_queue.size(); ++key)
+    {
+      if (s_gfx_queue[key])
+        changes.push_back({static_cast<GfxKey>(key), *s_gfx_queue[key]});
+      s_gfx_queue[key].reset();
+    }
   }
   if (changes.empty())
     return;
@@ -538,7 +624,8 @@ void FinishWindow(Window window)
   window.res = g_framebuffer_manager ? static_cast<int>(g_framebuffer_manager->GetEFBScale()) :
                                        Config::Get(Config::GFX_EFB_SCALE);
   window.pf = PerformanceNow();
-  window.as = s_run.auto_switch && s_run.auto_switch->Fired();
+  window.as = s_run.auto_switch && s_run.auto_switch->Fired() && PerformancePicture();
+  window.test = TestRulesActive();
   Print(WindowJson(window));
   if (s_run.auto_switch && AutoAllowed() && s_run.auto_switch->Feed(window))
     SwitchToPerformance(s_run.auto_switch->TriggerCap());
@@ -548,6 +635,14 @@ void FinishWindow(Window window)
 void Ready()
 {
   s_ready = true;
+}
+
+bool TestRulesActive()
+{
+  static const bool active =
+      TestRun() && (!GetEnv("ORCA_TEST_PERF").empty() || GetEnv("ORCA_PERF_AUTO") == "0" ||
+                    !GetEnv("ORCA_TEST_SLOW").empty());
+  return active;
 }
 
 bool Measuring()
@@ -602,8 +697,11 @@ void NoteScene(std::optional<bool> in_match)
 
 void QueueGfx(const GfxChange& change)
 {
+  const auto key = static_cast<std::size_t>(change.key);
+  if (key >= s_gfx_queue.size())
+    return;
   std::lock_guard lock(s_gfx_mutex);
-  s_gfx_queue.push_back(change);
+  s_gfx_queue[key] = change.value;
 }
 
 void OnBoundary(const Boundary& boundary)
@@ -630,6 +728,12 @@ void OnBoundary(const Boundary& boundary)
           boundary, std::chrono::duration_cast<std::chrono::nanoseconds>(now), totals))
   {
     FinishWindow(*window);
+  }
+  // A test's slow machine: after the clock was read, so the next forward frame carries it.
+  if (boundary.first_run && !boundary.excluded)
+  {
+    const TestSlow& slow = ReadTestSlow();
+    Spin(PerformancePicture() ? slow.performance_ms : slow.ms);
   }
 }
 }  // namespace Orca::Perf
