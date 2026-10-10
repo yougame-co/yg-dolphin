@@ -50,6 +50,14 @@ void Platform::SetTitle(const std::string& title)
 
 void Platform::UpdateRunningFlag()
 {
+  // Every main-loop pass comes through here, on the thread that owns the window: the stdio
+  // bridge's heartbeat (the app stops an Orca that said it and then goes quiet). To the app, or a
+  // test harness playing it (ORCA_TEST_COMMANDS: Tools/orca/stdio-app.py counts them).
+  if ((m_embed.enabled || m_test_commands) && Orca::Bridge::Ready() &&
+      m_heartbeat.Due(std::chrono::steady_clock::now()))
+  {
+    Embed::Out(std::string(Orca::Bridge::HEARTBEAT_LINE));
+  }
   ProcessEmbedCommands();
   EndSoloPauseForDropIn();
   WatchRoomWhilePaused();

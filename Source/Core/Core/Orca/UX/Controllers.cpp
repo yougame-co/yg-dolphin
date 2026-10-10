@@ -253,12 +253,24 @@ enum StandardButton
 constexpr float TRIGGER_CLICK = 0.5f;
 }  // namespace
 
+bool SafeJson(std::string_view text)
+{
+  return SafeToParse(text);
+}
+
 std::optional<Snapshot> ParseSnapshotEvent(std::string_view json)
 {
   if (!SafeToParse(json))
     return std::nullopt;
   picojson::value root;
-  if (!picojson::parse(root, std::string(json)).empty() || !root.is<picojson::object>())
+  if (!picojson::parse(root, std::string(json)).empty())
+    return std::nullopt;
+  return ParseSnapshotEvent(root);
+}
+
+std::optional<Snapshot> ParseSnapshotEvent(const picojson::value& root)
+{
+  if (!root.is<picojson::object>())
     return std::nullopt;
   const auto& event = root.get<picojson::object>();
   const picojson::value* type = Field(event, "type");

@@ -6,10 +6,13 @@
 #include <d3d11_4.h>
 #include <d3d12.h>
 #include <dxgi1_6.h>
+#include <string>
+#include <utility>
 #include <wrl/client.h>
 
 #include "Common/Assert.h"
 #include "Common/DynamicLibrary.h"
+#include "Common/FileUtil.h"
 #include "Common/HRWrap.h"
 #include "Common/MsgHandler.h"
 #include "Common/StringUtil.h"
@@ -24,7 +27,29 @@ pD3DCompile d3d_compile;
 
 static Common::DynamicLibrary s_dxgi_library;
 static Common::DynamicLibrary s_d3dcompiler_library;
+// Orca: the compiler beside the exe, loaded by its full path (LoadCompilerBesideExe).
+static HMODULE s_d3dcompiler_beside = nullptr;
 static bool s_libraries_loaded = false;
+
+// Orca: the d3dcompiler_47.dll that ships beside Orca.exe, by its full path. Loaded by name, the
+// sandbox's prefer-System32 rule (or a DLL planted elsewhere on the search path) would swap in
+// another build of the compiler, and every shader in the cache keyed to the shipped one would be
+// compiled again (FxcCache.cpp). Null when there is none there (a dev build): the name is the
+// fallback.
+static HMODULE LoadCompilerBesideExe()
+{
+  const std::string path = File::GetExeDirectory() + "/" + D3DCOMPILER_DLL_A;
+  if (!File::Exists(path))
+    return nullptr;
+  // LoadLibraryEx wants backslashes in a path.
+  std::wstring wide = UTF8ToWString(path);
+  for (wchar_t& c : wide)
+  {
+    if (c == L'/')
+      c = L'\\';
+  }
+  return LoadLibraryExW(wide.c_str(), nullptr, 0);
+}
 
 static HRESULT (*create_dxgi_factory)(REFIID riid, _COM_Outptr_ void** ppFactory);
 static HRESULT (*create_dxgi_factory2)(UINT Flags, REFIID riid, void** ppFactory);
@@ -40,7 +65,8 @@ bool LoadLibraries()
     return false;
   }
 
-  if (!s_d3dcompiler_library.Open(D3DCOMPILER_DLL_A))
+  s_d3dcompiler_beside = LoadCompilerBesideExe();
+  if (!s_d3dcompiler_beside && !s_d3dcompiler_library.Open(D3DCOMPILER_DLL_A))
   {
     PanicAlertFmtT("Failed to load {0}. If you are using Windows 7, try installing the "
                    "KB4019990 update package.",
@@ -50,10 +76,16 @@ bool LoadLibraries()
   }
 
   // Required symbols.
-  if (!s_d3dcompiler_library.GetSymbol("D3DCompile", &d3d_compile) ||
-      !s_dxgi_library.GetSymbol("CreateDXGIFactory", &create_dxgi_factory))
+  if (s_d3dcompiler_beside)
+  {
+    d3d_compile = reinterpret_cast<pD3DCompile>(GetProcAddress(s_d3dcompiler_beside, "D3DCompile"));
+  }
+  if ((!s_d3dcompiler_beside && !s_d3dcompiler_library.GetSymbol("D3DCompile", &d3d_compile)) ||
+      !d3d_compile || !s_dxgi_library.GetSymbol("CreateDXGIFactory", &create_dxgi_factory))
   {
     PanicAlertFmtT("Failed to find one or more D3D symbols");
+    if (s_d3dcompiler_beside)
+      FreeLibrary(std::exchange(s_d3dcompiler_beside, nullptr));
     s_d3dcompiler_library.Close();
     s_dxgi_library.Close();
     return false;
@@ -72,6 +104,8 @@ void UnloadLibraries()
   create_dxgi_factory = nullptr;
   create_dxgi_factory2 = nullptr;
   d3d_compile = nullptr;
+  if (s_d3dcompiler_beside)
+    FreeLibrary(std::exchange(s_d3dcompiler_beside, nullptr));
   s_d3dcompiler_library.Close();
   s_dxgi_library.Close();
   s_libraries_loaded = false;
