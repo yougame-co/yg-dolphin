@@ -313,6 +313,9 @@ private:
 // {"t":"game-start","matchId":"<match>","id":"g<start>"}, the id the game's `game-report` carries.
 // Empty when none may go: a room other than a ranked queue's, no room match, the set already
 // decided (this side sent its finish, or the verdict came), or no fight frame.
+// Parses a room message the way the room does: a value the parser can't take safely (nested too
+// deep, a number with an exponent or too many digits) is read as null, and the rest still parses.
+bool ParseRoomJson(const std::string& text, picojson::value* value);
 // A host's `drop` to the joiner in a room whose match is still being decided: the joiner reports
 // the match void and stays to wait for the verdict, rather than ending its room (leaving a live
 // ranked set loses it). False: its room ends with the reason, as in a friends room.

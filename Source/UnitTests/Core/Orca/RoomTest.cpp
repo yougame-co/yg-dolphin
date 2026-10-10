@@ -227,7 +227,7 @@ TEST(OrcaRoom, RejectsMalformedPackets)
   EXPECT_FALSE(DecodePacket(with("[130,-1,-1,-1]", "[130,-2,-1,-1]"), &got));
   EXPECT_FALSE(DecodePacket(with("\"h\":\"fedcba9876543210\"", "\"h\":\"fedcba98\""), &got));
   // Bad telemetry must never refuse a packet, since that would end the match: out-of-range values
-  // are clamped, fractions truncated, non-numbers ignored. (SafeToParse already rejects exponents.)
+  // are clamped, fractions truncated, non-numbers ignored (an exponent reads as null).
   const auto telemetry = [&](const std::string& from, const std::string& to) {
     Packet out;
     EXPECT_TRUE(DecodePacket(with(from, to), &out)) << to;
@@ -337,6 +337,46 @@ TEST(OrcaRoom, KeepAliveOnlyWhileTheGameRuns)
   EXPECT_TRUE(KeepAliveDue(t0 + KEEP_ALIVE_EVERY, t0 + std::chrono::milliseconds(1900), t0));
   // Nothing asked since the last one (the emulation thread stopped): none, however long.
   EXPECT_FALSE(KeepAliveDue(t0 + std::chrono::seconds(60), t0, t0));
+}
+
+// A value the parser can't take (another player's, echoed in a server message such as the welcome)
+// costs only that value: the rest of the message is still read, so a welcome still names this
+// player and its room. Nothing deep or huge reaches picojson.
+TEST(OrcaRoom, AnUnreadableValueCostsOnlyThatValue)
+{
+  const std::string head =
+      R"({"t":"welcome","me":"c1","lifecycle":"game","room":{"code":"abc123"},)";
+  std::string deep_object = "1";
+  for (int i = 0; i < 3000; ++i)
+    deep_object = R"({"a":)" + deep_object + "}";
+  const std::string deep_array = std::string(5000, '[') + std::string(5000, ']');
+  for (const std::string& bad :
+       {std::string("1e999"), std::string("-2E+308"), std::string(400, '9'),
+        std::string("0.") + std::string(40, '1'), deep_array, deep_object})
+  {
+    SCOPED_TRACE(bad.substr(0, 16));
+    picojson::value v;
+    ASSERT_TRUE(ParseRoomJson(head + R"("state":{"x":)" + bad + R"(,"y":2},"n":3})", &v));
+    ASSERT_TRUE(v.is<picojson::object>());
+    const picojson::object& o = v.get<picojson::object>();
+    EXPECT_EQ(o.at("t").get<std::string>(), "welcome");
+    EXPECT_EQ(o.at("me").get<std::string>(), "c1");
+    EXPECT_EQ(o.at("room").get<picojson::object>().at("code").get<std::string>(), "abc123");
+    EXPECT_EQ(o.at("n").get<double>(), 3);
+    const picojson::object& state = o.at("state").get<picojson::object>();
+    // A number goes whole; a deep value keeps its first levels, and what is past them goes.
+    if (bad != deep_array && bad != deep_object)
+      EXPECT_TRUE(state.at("x").is<picojson::null>());
+    EXPECT_EQ(state.at("y").get<double>(), 2);
+  }
+  // Strings are left alone, escapes and brackets inside them included.
+  picojson::value v;
+  ASSERT_TRUE(ParseRoomJson(R"({"s":"1e999 [[[ \" }","d":-12.5,"t":true,"f":false,"z":null})", &v));
+  EXPECT_EQ(v.get<picojson::object>().at("s").get<std::string>(), "1e999 [[[ \" }");
+  EXPECT_EQ(v.get<picojson::object>().at("d").get<double>(), -12.5);
+  // What never closes is still refused.
+  EXPECT_FALSE(ParseRoomJson(R"({"s":"open)", &v));
+  EXPECT_FALSE(ParseRoomJson(std::string(40, '[') + "1", &v));
 }
 
 TEST(OrcaRoom, CoalescingKeepsEarlierInputsAndChecksum)

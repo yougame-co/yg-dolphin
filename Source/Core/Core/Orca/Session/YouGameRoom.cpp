@@ -314,55 +314,125 @@ std::string CleanLabel(const std::string& raw, size_t max)
 
 // picojson has no nesting limit (deep arrays overflow the I/O thread's stack) and aborts on numbers
 // that overflow a double. Nothing YouGame sends nests deeply, uses an exponent or has over 17
-// digits in a row, so such messages are refused before parsing.
-bool SafeToParse(const std::string& text)
+// digits in a row, so such values become null before parsing: a message carrying one (a value
+// another player put in the room, echoed by the server) is still read, without that value.
+constexpr int MAX_JSON_DEPTH = 16;
+constexpr int MAX_JSON_DIGITS = 17;
+
+// The index just past the string starting at `at` (a quote), or npos if it never ends.
+size_t SkipJsonString(std::string_view text, size_t at)
 {
-  int depth = 0, digits = 0;
-  for (size_t i = 0; i < text.size(); ++i)
+  for (size_t i = at + 1; i < text.size(); ++i)
+  {
+    if (text[i] == '\\')
+      ++i;
+    else if (text[i] == '"')
+      return i + 1;
+  }
+  return std::string_view::npos;
+}
+
+// The index of the bracket closing the array or object opened at `at`, or npos.
+size_t MatchingClose(std::string_view text, size_t at)
+{
+  int depth = 0;
+  for (size_t i = at; i < text.size();)
   {
     const char c = text[i];
     if (c == '"')
     {
-      // Skip the string, escapes included.
-      for (++i; i < text.size() && text[i] != '"'; ++i)
-      {
-        if (text[i] == '\\')
-          ++i;
-      }
-      digits = 0;
+      i = SkipJsonString(text, i);
+      if (i == std::string_view::npos)
+        return i;
       continue;
     }
-    digits = c >= '0' && c <= '9' ? digits + 1 : 0;
-    if (digits > 17)
+    if (c == '[' || c == '{')
+      ++depth;
+    else if ((c == ']' || c == '}') && --depth == 0)
+      return i;
+    ++i;
+  }
+  return std::string_view::npos;
+}
+
+bool SafeNumber(std::string_view number)
+{
+  int digits = 0;
+  for (const char c : number)
+  {
+    if (c == 'e' || c == 'E')
       return false;
+    digits = c >= '0' && c <= '9' ? digits + 1 : 0;
+    if (digits > MAX_JSON_DIGITS)
+      return false;
+  }
+  return true;
+}
+
+// `text` with every value picojson can't take safely (nested past MAX_JSON_DEPTH, a number with an
+// exponent or over MAX_JSON_DIGITS digits in a row) replaced by null. Nullopt if a string or
+// bracket never closes (picojson would refuse it anyway).
+std::optional<std::string> SanitizeJson(std::string_view text)
+{
+  std::string out;
+  out.reserve(text.size());
+  int depth = 0;
+  for (size_t i = 0; i < text.size();)
+  {
+    const char c = text[i];
+    if (c == '"')
+    {
+      const size_t end = SkipJsonString(text, i);
+      if (end == std::string_view::npos)
+        return std::nullopt;
+      out.append(text.substr(i, end - i));
+      i = end;
+      continue;
+    }
     if (c == '[' || c == '{')
     {
-      if (++depth > 16)
-        return false;
+      if (depth >= MAX_JSON_DEPTH)
+      {
+        const size_t end = MatchingClose(text, i);
+        if (end == std::string_view::npos)
+          return std::nullopt;
+        out += "null";
+        i = end + 1;
+        continue;
+      }
+      ++depth;
     }
     else if (c == ']' || c == '}')
     {
       --depth;
     }
-    else if (text.compare(i, 4, "true") == 0)
+    else if (c == '-' || (c >= '0' && c <= '9'))
     {
-      i += 3;
+      size_t end = i + 1;
+      while (end < text.size() &&
+             ((text[end] >= '0' && text[end] <= '9') || text[end] == '.' || text[end] == 'e' ||
+              text[end] == 'E' || text[end] == '+' || text[end] == '-'))
+      {
+        ++end;
+      }
+      const std::string_view number = text.substr(i, end - i);
+      if (SafeNumber(number))
+        out.append(number);
+      else
+        out += "null";
+      i = end;
+      continue;
     }
-    else if (text.compare(i, 5, "false") == 0)
-    {
-      i += 4;
-    }
-    else if (c == 'e' || c == 'E')
-    {
-      return false;
-    }
+    out += c;
+    ++i;
   }
-  return true;
+  return out;
 }
 
 bool ParseJson(const std::string& text, picojson::value* value)
 {
-  return SafeToParse(text) && picojson::parse(*value, text).empty();
+  const std::optional<std::string> safe = SanitizeJson(text);
+  return safe && picojson::parse(*value, *safe).empty();
 }
 
 picojson::object PacketToJson(const Packet& packet)
@@ -845,6 +915,11 @@ std::string GameStartMessage(const std::string& queue, const std::string& match,
     return "";
   return fmt::format("{{\"t\":\"game-start\",\"matchId\":{},\"id\":\"g{}\"}}", JsonString(match),
                      start);
+}
+
+bool ParseRoomJson(const std::string& text, picojson::value* value)
+{
+  return ParseJson(text, value);
 }
 
 bool DropKeepsRoom(const std::string& queue, bool match_live, bool set_over)
