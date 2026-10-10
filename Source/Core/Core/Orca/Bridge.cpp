@@ -144,6 +144,15 @@ bool Enabled()
   return GetEnv("YOUGAME_STDIO") == "1";
 }
 
+bool Ready()
+{
+  if (!Enabled())
+    return false;
+  Waiting& w = Wait();
+  std::lock_guard lock(w.mutex);
+  return w.writer != nullptr;
+}
+
 bool AllowedRequest(std::string_view type)
 {
   return type == "hello" || type == "mpTicket" || type == "mpRoom";

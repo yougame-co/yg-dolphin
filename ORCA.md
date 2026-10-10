@@ -2113,7 +2113,8 @@ bridge line starts with `yg `; every other line keeps its embed meaning.
   isn't JSON, nests deeper than 8 or has a shape Orca doesn't know is dropped and counted, never
   acted on. A reply nobody waits for is dropped. A closed stdin fails every waiting request at once.
 - Bridge lines are dropped unless `YOUGAME_STDIO=1`, and they never reach the embed commands.
-- Requests need stdout as the protocol channel: `--embed`, or `ORCA_TEST_COMMANDS=1` for tests.
+- Requests need stdout as the protocol channel and stdin read: `--embed`, or `ORCA_TEST_COMMANDS=1`
+  for tests. Without either the bridge is off (stderr says so) and the session plays offline.
 - The loopback bridge (`YOUGAME_BRIDGE`, `YOUGAME_TOKEN`) stays for an app without the stdio
   bridge and for tests; dev tickets (`ORCA_TEST_DEV_GAME`) work as before.
 

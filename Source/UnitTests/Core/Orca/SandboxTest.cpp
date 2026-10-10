@@ -327,11 +327,17 @@ TEST_F(OrcaBridge, SnapshotsReachTheControllerCache)
 
 TEST_F(OrcaBridge, RequestsOnlyWhatOrcaAsksForAndOnlyWithAPipe)
 {
-  // No writer: refused at once.
+  // No writer: refused at once, and online play is off (Online::Enabled).
+  EXPECT_FALSE(Bridge::Ready());
   const auto start = std::chrono::steady_clock::now();
   EXPECT_FALSE(Bridge::Request(Object("hello"), 5s).has_value());
   EXPECT_LT(std::chrono::steady_clock::now() - start, 1s);
   Bridge::SetWriter(&Capture);
+  EXPECT_TRUE(Bridge::Ready());
+  {
+    ScopedEnv off("YOUGAME_STDIO", nullptr);
+    EXPECT_FALSE(Bridge::Ready());
+  }
   for (const char* type : {"submitScore", "mpFriend", "controllers", "", "save"})
     EXPECT_FALSE(Bridge::Request(Object(type), 50ms).has_value()) << type;
   picojson::object with_id = Object("hello");

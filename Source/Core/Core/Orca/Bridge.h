@@ -44,6 +44,9 @@ inline constexpr size_t MAX_OUTBOUND = 32 * 1024;
 
 // YOUGAME_STDIO=1: the app speaks the bridge on stdin and stdout.
 bool Enabled();
+// Enabled() and stdout set up to carry requests (SetWriter): what online play needs. Without
+// --embed (or ORCA_TEST_COMMANDS) nothing reads Orca's stdin, so the bridge is off.
+bool Ready();
 // The only requests Orca makes: "hello", "mpTicket" and "mpRoom".
 bool AllowedRequest(std::string_view type);
 

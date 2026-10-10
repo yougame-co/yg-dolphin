@@ -63,7 +63,7 @@ bool Enabled()
 {
   if (!SessionActive())
     return false;
-  return Bridge::Enabled() || (!Env("YOUGAME_BRIDGE").empty() && !Env("YOUGAME_TOKEN").empty()) ||
+  return Bridge::Ready() || (!Env("YOUGAME_BRIDGE").empty() && !Env("YOUGAME_TOKEN").empty()) ||
          !Env("ORCA_TEST_DEV_GAME").empty();
 }
 
