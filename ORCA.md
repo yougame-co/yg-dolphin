@@ -2311,6 +2311,8 @@ What each release changed for players, in plain words.
   Orca switches its graphics to Performance by itself, once, and tells you. Your opponent stops
   freezing.
 - **The app sees how fast your computer is,** so it can tell you when a setting helps.
+- **Stability and ranked fixes.**
+- **Stopping a game while it loads** no longer counts as a game that couldn't start.
 
 ### 0.3.38
 
