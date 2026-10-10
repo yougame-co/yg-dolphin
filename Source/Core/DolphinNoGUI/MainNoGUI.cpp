@@ -4,6 +4,7 @@
 #include "DolphinNoGUI/Platform.h"
 
 #include <OptionParser.h>
+#include <algorithm>
 #include <atomic>
 #include <csignal>
 #include <cstdio>
@@ -21,6 +22,7 @@
 
 #include <fmt/format.h>
 
+#include "AudioCommon/CubebUtils.h"
 #include "Common/CommonPaths.h"
 #include "Common/FileUtil.h"
 #include "Common/IniFile.h"
@@ -51,6 +53,7 @@
 #include "Core/System.h"
 #include "DolphinNoGUI/Embed.h"
 #include "VideoCommon/Present.h"
+#include "VideoCommon/VideoBackendBase.h"
 #include "VideoCommon/VideoEvents.h"
 
 #include "UICommon/CommandLineParse.h"
@@ -68,6 +71,8 @@ static std::unique_ptr<Platform> s_platform;
 static bool s_embedded = false;
 // The disc of a --verify run (DiscVerify.h), which checks it and exits without booting.
 static std::string s_verify_disc;
+// --sandbox-probe (ORCA.md "The sandbox"): SandboxProbe instead of a boot.
+static bool s_sandbox_probe = false;
 
 static void signal_handler(int)
 {
@@ -117,8 +122,8 @@ static void EndBootLogs()
 static bool MsgAlertHandler(const char* caption, const char* text, bool yes_no,
                             Common::MsgType style)
 {
-  // When embedded or verifying, log the alert instead of popping a message box.
-  if (s_embedded || !s_verify_disc.empty())
+  // When embedded, verifying or probing, log the alert instead of popping a message box.
+  if (s_embedded || !s_verify_disc.empty() || s_sandbox_probe)
   {
     PrintAlert(text);
     return false;
@@ -344,6 +349,40 @@ static int RefuseBootFile(const Orca::DiscCheck& check)
 }
 
 // The rest of main, after the embed arguments are removed. Returns the exit code.
+// --sandbox-probe (ORCA.md "The sandbox"): what a boot asks of the system before its first frame,
+// with nothing of the player's: no disc, and only the empty folder the app gives it (-u). The desktop
+// app runs it inside its macOS sandbox once per macOS version and Orca version, under the strict
+// profile and, only if that ends the probe, the relaxed one, and plays under the profile that
+// passed. So the profile is chosen by this run alone, never by a player's run, which a crafted disc
+// or setting could end on purpose to be retried under the relaxed one. Says PROBE_OK on stdout.
+static constexpr const char* PROBE_OK = "orca probe ok";
+static int SandboxProbe(const std::string& user_directory)
+{
+  if (user_directory.empty())
+  {
+    fmt::print(stderr, "--sandbox-probe needs -u <folder>\n");
+    return 1;
+  }
+  UICommon::SetUserDirectory(user_directory);
+  UICommon::CreateDirectories();
+  UICommon::Init();
+  Common::ScopeGuard shutdown([] { UICommon::Shutdown(); });
+  // The GPU, as a boot opens it (Metal on a Mac), with no window.
+  const WindowSystemInfo wsi(WindowSystemType::Headless, nullptr, nullptr, nullptr);
+  VideoBackendBase::PopulateBackendInfo(wsi);
+  // The controllers, without the keyboard's global state (on the stdio bridge the app sends it).
+#ifdef __APPLE__
+  ciface::Quartz::SetKeyboardEnabled(false);
+#endif
+  UICommon::InitControllers(wsi);
+  UICommon::ShutdownControllers();
+  // The sound out, as a boot opens it.
+  const bool sound = CubebUtils::GetContext() != nullptr;
+  fmt::print(stdout, "{}{}\n", PROBE_OK, sound ? "" : " (no sound)");
+  std::fflush(stdout);
+  return 0;
+}
+
 static int Run(const int argc, char* argv[], const Embed::Options& embed)
 {
 #ifdef ORCA_MACOS_BUNDLE
@@ -398,6 +437,9 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
   else if (const char* home = std::getenv("HOME"); home && *home)
     user_directory = std::string(home) + "/Library/Application Support/Orca";
 #endif
+
+  if (s_sandbox_probe)
+    return SandboxProbe(user_directory);
 
   if (!s_verify_disc.empty())
   {
@@ -507,8 +549,7 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
                Orca::Bridge::Enabled() ? ", stdio bridge" : "");
     if (!user_directory.empty() && Orca::Sandbox::WriteDenied(user_directory))
     {
-      Orca::Status::Error(Orca::Sandbox::DENIED_ERROR,
-                          "Orca isn't allowed to write its folder, so it didn't start.");
+      Orca::Status::Error(Orca::Sandbox::DENIED_ERROR, Orca::Sandbox::DENIED_SENTENCE);
       return Orca::Status::Finish();
     }
   }
@@ -711,6 +752,19 @@ int main(const int raw_argc, char* raw_argv[])
     return 1;
   }
   s_verify_disc = *verify;
+  // --sandbox-probe: alone, never with --embed or --verify (SandboxProbe).
+  if (const auto it = std::find_if(arg_list.begin() + 1, arg_list.end(),
+                                   [](const char* a) { return std::string_view(a) == "--sandbox-probe"; });
+      it != arg_list.end())
+  {
+    arg_list.erase(it);
+    if (embed->enabled || !s_verify_disc.empty())
+    {
+      fmt::print(stderr, "--sandbox-probe can't be used with --embed or --verify\n");
+      return 1;
+    }
+    s_sandbox_probe = true;
+  }
   s_embedded = embed->enabled;
   if (s_embedded)
   {

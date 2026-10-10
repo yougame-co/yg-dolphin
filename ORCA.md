@@ -2075,14 +2075,16 @@ manifest entry, so a build without the mode can never be marked as having it. Co
 | macOS session on the stdio bridge | No Quartz keyboard device, so nothing reads the global key state (`CGEventSourceKeyState`): the page sends the keyboard as a pad. |
 | Windows, D3D | `d3dcompiler_47.dll` is loaded by its full path beside `Orca.exe` (the name is the fallback when there is none, as in a dev build), so neither the sandbox's prefer-System32 rule nor a DLL elsewhere on the search path swaps in another compiler, whose bytes would miss every cached shader (`FxcCache.cpp`). |
 | Inside the sandbox | stderr says `Orca: in the app's sandbox (network <mode>[, stdio bridge])`. A user folder Orca may not write ends the run at once with `orca error sandbox_denied`. |
+| Embedded (or `ORCA_TEST_COMMANDS`), on the stdio bridge | `orca alive` on stdout about once a second from the thread that owns the window (`Bridge::Heartbeat`, every main-loop pass). The app stops a running Orca that said it once and then goes quiet for 10 s: an adopted window shares the app window's input queue, so a hung window thread would hang the app too. Never on the loopback bridge, so an older app never sees it. `Tools/orca/stdio-app.py` fails a run without one at least every 3 s. |
+| `--sandbox-probe -u <folder>` | No boot: what a boot asks of the system before its first frame (UICommon, the GPU backend's info with no window, the controllers without the Mac keyboard, the sound out), then `orca probe ok` and exit 0. The app runs it under its macOS sandbox once per macOS and Orca version, with an empty folder and no disc, to choose the strict or relaxed profile from this run alone (never from a player's run, which a crafted disc or setting could end on purpose). Not with `--embed` or `--verify`. |
 
 **Error codes** (`orca error <code> <sentence>`):
 
 | Code | When |
 |---|---|
-| `sandbox_disc` | Inside the sandbox, the disc can't be opened for lack of permission: the app didn't grant it (a network share, a file an admin tool made). "Orca can't read this disc where it is. Move it to a drive on this computer." |
+| `sandbox_disc` | Inside the sandbox, the disc can't be opened for lack of permission: the app didn't grant it (a network share, a file an admin tool made). "Orca can't read this disc where it is. Copy it into a folder of yours, such as Documents, and choose the copy." (the app's words for the same refusal) |
 | `sandbox_embed` | `--embed-adopted`: nothing adopted the window within 10 s. "Orca couldn't open in the YouGame window. Try again." |
-| `sandbox_denied` | Inside the sandbox, Orca may not write its user folder. |
+| `sandbox_denied` | Inside the sandbox, Orca may not write its user folder. "Orca isn't allowed into its own folder, so it didn't start. Reset Orca's files from YouGame's Help menu, then press Play again." |
 
 **Windows zip layout.** A release zip for the sandbox carries, beside `Orca/Orca.exe`, the pinned
 `d3dcompiler_47.dll` (10.0.20348 from the Windows SDK's `Redist/D3D/x64`, SHA-256
@@ -2124,12 +2126,15 @@ A process in an AppContainer (low integrity) may not create a window under the a
 integrity), so with `--embed-adopted` Orca:
 
 1. creates a hidden top-level `WS_POPUP` window (`WS_EX_NOPARENTNOTIFY | WS_EX_TOOLWINDOW`, so it
-   never shows on the taskbar), class and caption both `Orca`, and never retitles it;
+   never shows on the taskbar), class and caption both `Orca`, and never retitles it. It is made at
+   the app's rect: `SetParent` keeps a window's coordinates and reads them in the parent's client
+   area, so the window lands at its rect even when the launcher's `SetParent` moves it after Orca
+   placed it (made at 0,0, it covered the app's header for the rest of the boot);
 2. answers messages until `GetParent` is the `--parent` window: the launcher (outside the
    sandbox, `--embed-parent <hwnd> --embed-class Orca --embed-title Orca --embed-keep-style`) makes
    it a `WS_CHILD` of the app's window. After 10 s it gives up with `orca error sandbox_embed`;
-3. then places it at the last `rect` and shows it, and puts it back at the app's rect whenever it
-   is found elsewhere (Windows keeps a window's screen position across `SetParent`).
+3. then places it at the last `rect` and shows it, checks the place once more 50 ms later, and
+   from the main loop on puts it back at the app's rect whenever it is found elsewhere.
 
 Everything else is embed mode as before: the swap chain is made on the adopted child, `rect`,
 `view`, `hide`, `show` and focus work the same, and Orca stops when the app's window is destroyed.
