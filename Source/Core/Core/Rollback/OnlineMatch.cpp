@@ -2980,6 +2980,8 @@ void PublishStats(Match& match)
   num("st", stats.stalls - last.stalls);
   num("stms", std::round(match.stats_stall_ms));
   num("ds", s_desyncs);
+  // Times another player's inputs were found coming late against its own frame (Session::LateSeat).
+  num("late", stats.late_seats);
   // Frames the game itself held (a load) count as shown, so this falls only when this machine does.
   num("fps",
       std::round((match.running - match.stats_frame + match.stats_held) / seconds * 10) / 10);
@@ -4159,7 +4161,7 @@ void LogStats(const char* when)
       "{:.2f}, input delay {}{} "
       "(+{} -{} reverted {}), {} counted stalls a frame more would have spared, {} checksums "
       "matched, confirmed frame {}, round trip {} ms (median {} ms here, {} ms there), link {}, "
-      "{} snapshots (every {}, {:.2f} ms each){}{}",
+      "{} snapshots (every {}, {:.2f} ms each), {} found late{}{}",
       when, match.session->CurrentFrame(), stats.rollbacks, stats.resimulated_frames,
       stats.deepest_rollback, stats.stalls, stats.counted_stalls, stats.waits, stats.hitches,
       stats.load_hitches, stats.peer_hitches, stats.frame_advantage, stats.delay,
@@ -4167,8 +4169,8 @@ void LogStats(const char* when)
       stats.delay_reverts, stats.spared_stalls, stats.checksums_matched, stats.confirmed_frame,
       Orca::Online::RoundTripMs(), stats.rtt_median, stats.peer_rtt_median,
       Orca::Online::Direct().line, stats.saves, stats.snapshot_every,
-      match.port ? match.port->SaveMs() : 0.0, match.session->Error().empty() ? "" : "; ",
-      match.session->Error());
+      match.port ? match.port->SaveMs() : 0.0, stats.late_seats,
+      match.session->Error().empty() ? "" : "; ", match.session->Error());
 }
 
 bool Active()
