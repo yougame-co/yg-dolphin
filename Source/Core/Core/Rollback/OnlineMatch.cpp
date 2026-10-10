@@ -3228,6 +3228,27 @@ void JoinerEvents(Match& match)
   }
 }
 
+// A joiner: the host's values for this player's own port must be what it sent (OwnValuesKept).
+// Anything else is the host's doing: the session ends for it, before the port plays with them.
+void CheckOwnValues(Match& match)
+{
+  if (!match.session || !match.session->Error().empty())
+    return;
+  OwnValues own;
+  if (Orca::Online::Seat() == match.local_seat)
+    own.name = Orca::Online::SeatName(match.local_seat);
+  own.controls = Orca::Online::HelloControls();
+  own.queue = Orca::Online::HelloQueue();
+  const int plug_from = match.session->Plan()[match.local_seat].plug_from;
+  if (OwnValuesKept(AllNames(match), match.local_seat, plug_from, own))
+    return;
+  WARN_LOG_FMT(ROLLBACK,
+               "Drop-in: the host's values for port {} aren't this player's own: the "
+               "session ends",
+               match.local_seat + 1);
+  match.session->EndForPeer("The host changed this player's own port values");
+}
+
 // A joiner's leave is complete: play on solo; the app hears "left" (its own Leave, so no error).
 void FinishLeave(Match& match)
 {
@@ -3660,6 +3681,7 @@ std::optional<int> Boundary(Core::System& system,
   if (match.joining)
   {
     JoinerEvents(match);
+    CheckOwnValues(match);
     if (match.host_gone && !match.session->Resimulating())
     {
       HostGone(system, match, local_pad);
@@ -4185,6 +4207,36 @@ bool AloneAt(int frame, bool solo_idle, bool drop_in_pending, std::optional<int>
 bool HeaderFreeAt(int frame, bool solo_quiet, std::optional<int> stored_keyframe)
 {
   return solo_quiet && !(stored_keyframe && frame - *stored_keyframe <= KEYFRAME_FRESH_FRAMES);
+}
+
+bool OwnValuesKept(const std::vector<Orca::Net::KeyframeInfo::Name>& names, int seat, int plug_from,
+                   const OwnValues& own)
+{
+  std::vector<const Orca::Net::KeyframeInfo::Name*> mine;
+  for (const auto& name : names)
+  {
+    if (name.seat == seat)
+      mine.push_back(&name);
+  }
+  std::stable_sort(mine.begin(), mine.end(),
+                   [](const auto* a, const auto* b) { return a->from < b->from; });
+  const auto kept = [&own](const Orca::Net::KeyframeInfo::Name* entry) {
+    if (!entry)
+      return own.controls.empty() && own.queue.empty();
+    return entry->controls == own.controls && entry->queue == own.queue &&
+           (own.name.empty() || entry->name == own.name);
+  };
+  if (plug_from == Orca::Net::NEVER)
+    return kept(mine.empty() ? nullptr : mine.back());
+  const Orca::Net::KeyframeInfo::Name* in_force = nullptr;
+  for (const auto* entry : mine)
+  {
+    if (entry->from <= plug_from)
+      in_force = entry;
+    else if (!kept(entry))
+      return false;
+  }
+  return kept(in_force);
 }
 
 void StallBudget::Add(Clock::time_point start, Clock::time_point end)

@@ -1983,6 +1983,62 @@ TEST(OrcaStallBudget, ATrickleUnderTheSilenceLimitRunsTheBudgetOut)
   EXPECT_EQ(old.Stalled(t0 + 170s), 4s);
 }
 
+// The host decides every port's values so every machine writes the same bytes, but a joiner's own
+// controls, queue identity (its pick) and name are what it sent: the joiner checks the entries for
+// its own port, and a host that rewrites them ends the session (OwnValuesKept).
+TEST(OrcaOnlineMenuLobby, AJoinersOwnPortValuesAreItsOwn)
+{
+  using Orca::Net::KeyframeInfo;
+  using Orca::Net::NEVER;
+  using Rollback::OnlineMatch::OwnValues;
+  using Rollback::OnlineMatch::OwnValuesKept;
+  const std::vector<u8> controls{0x10, 0x20, 0x30};
+  const std::vector<u8> queue{0x01, 0xff, 0xff, 0x05, 0x00, 0, 0, 0, 0, 0, 0, 0, 0};
+  const OwnValues own{"bo", controls, queue};
+  const KeyframeInfo::Name host{0, 1524, "ada", {}, {}};
+  const KeyframeInfo::Name honest{1, 1730, "bo", controls, queue};
+  // An honest host: the joiner's entry from its plug-in frame is what it sent.
+  EXPECT_TRUE(OwnValuesKept({host, honest}, 1, NEVER, own));
+  EXPECT_TRUE(OwnValuesKept({host, honest}, 1, 1730, own));
+  // An earlier stay's entry before this plug-in frame plays no frame of this stay.
+  KeyframeInfo::Name earlier = honest;
+  earlier.from = 300;
+  earlier.controls = {0x99};
+  EXPECT_TRUE(OwnValuesKept({host, earlier, honest}, 1, 1730, own));
+  // Another pick (a character the joiner never chose), other controls, another name: refused.
+  KeyframeInfo::Name forced = honest;
+  forced.queue[3] = 0x11;
+  EXPECT_FALSE(OwnValuesKept({host, forced}, 1, NEVER, own));
+  EXPECT_FALSE(OwnValuesKept({host, forced}, 1, 1730, own));
+  KeyframeInfo::Name remapped = honest;
+  remapped.controls = {0x10, 0x20, 0x31};
+  EXPECT_FALSE(OwnValuesKept({host, remapped}, 1, 1730, own));
+  KeyframeInfo::Name renamed = honest;
+  renamed.name = "bob";
+  EXPECT_FALSE(OwnValuesKept({host, renamed}, 1, 1730, own));
+  // A name the joiner doesn't know yet isn't checked.
+  EXPECT_TRUE(OwnValuesKept({host, renamed}, 1, 1730, OwnValues{"", controls, queue}));
+  // A pick added for a joiner that sent none, or the joiner's values dropped.
+  EXPECT_FALSE(OwnValuesKept({host, honest}, 1, 1730, OwnValues{"bo", controls, {}}));
+  KeyframeInfo::Name bare = honest;
+  bare.controls.clear();
+  bare.queue.clear();
+  EXPECT_FALSE(OwnValuesKept({host, bare}, 1, 1730, own));
+  EXPECT_FALSE(OwnValuesKept({host}, 1, 1730, own));
+  EXPECT_TRUE(OwnValuesKept({host}, 1, 1730, OwnValues{"bo", {}, {}}));
+  // The right values later, the wrong ones in force at the plug-in frame; or a later change.
+  KeyframeInfo::Name moved = honest;
+  moved.from = 1800;
+  EXPECT_FALSE(OwnValuesKept({host, forced, moved}, 1, 1730, own));
+  KeyframeInfo::Name later = forced;
+  later.from = 2400;
+  EXPECT_FALSE(OwnValuesKept({host, honest, later}, 1, 1730, own));
+  // Other ports are the host's to name.
+  KeyframeInfo::Name other = forced;
+  other.seat = 2;
+  EXPECT_TRUE(OwnValuesKept({host, honest, other}, 1, 1730, own));
+}
+
 TEST(OrcaOnlineMenuLobby, AFormerJoinerComesHomeOnTheMenusAlone)
 {
   using Rollback::OnlineMatch::HomeInputs;

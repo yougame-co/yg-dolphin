@@ -18,6 +18,7 @@
 
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/Session/Session.h"
+#include "Core/Orca/Session/YouGameRoom.h"
 
 namespace Core
 {
@@ -213,6 +214,22 @@ public:
 private:
   std::vector<std::pair<Clock::time_point, Clock::time_point>> m_stalls;
 };
+
+// A joiner's own port values: its name in the room (empty: unknown), and its controls and queue
+// identity as its hello sent them (Online::HelloControls, HelloQueue).
+struct OwnValues
+{
+  std::string name;
+  std::vector<u8> controls;
+  std::vector<u8> queue;
+};
+// Whether the host's port values (KeyframeInfo::names) keep this joiner's own `seat` as it sent it.
+// The host decides every port's values so every machine writes the same bytes, but a player's own
+// controls and pick are never the host's to choose: the entry in force at its plug-in frame (the
+// newest one while that isn't known, `plug_from` NEVER) and every later one must hold them. No
+// entry at all is fine only for a player who sent none.
+bool OwnValuesKept(const std::vector<Orca::Net::KeyframeInfo::Name>& names, int seat, int plug_from,
+                   const OwnValues& own);
 
 // A queue room's match with no verdict yet, when this game's session with the opponent ends or its
 // wait for the verdict (Linger) runs out.

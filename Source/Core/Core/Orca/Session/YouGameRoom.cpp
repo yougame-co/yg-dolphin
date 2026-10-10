@@ -3548,6 +3548,18 @@ std::string YouGameRoom::SeatName(int seat) const
   return it == m_impl->seat_names.end() ? std::string() : it->second;
 }
 
+std::vector<u8> YouGameRoom::HelloControls() const
+{
+  const auto& controls = m_impl->options.controls;
+  return m_impl->options.joining && controls.size() <= MAX_CONTROLS ? controls : std::vector<u8>{};
+}
+
+std::vector<u8> YouGameRoom::HelloQueue() const
+{
+  const auto& queue = m_impl->options.queue;
+  return m_impl->options.joining && queue.size() <= MAX_QUEUE ? queue : std::vector<u8>{};
+}
+
 std::string YouGameRoom::Code() const
 {
   std::lock_guard lock(m_impl->mutex);

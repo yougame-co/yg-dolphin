@@ -217,6 +217,10 @@ public:
   std::string Code() const;
   // The roster's name for a seat (this player's included); "" when nobody holds it.
   std::string SeatName(int seat) const;
+  // A joiner's own controls and queue identity exactly as its hello carries them (none past their
+  // wire bounds): what an honest host puts in this player's port.
+  std::vector<u8> HelloControls() const;
+  std::vector<u8> HelloQueue() const;
   // A line for the UI or log: what the room is doing, or why it ended.
   std::string Status() const;
   // Once Ended: the app's error code (Orca::Status), empty for a normal end. One code is internal:

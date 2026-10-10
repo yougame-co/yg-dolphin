@@ -211,6 +211,18 @@ void StartRoom(const std::string& code, bool joining)
   StartLocked(std::move(options));
 }
 
+std::vector<u8> HelloControls()
+{
+  const auto room = Room();
+  return room ? room->HelloControls() : std::vector<u8>{};
+}
+
+std::vector<u8> HelloQueue()
+{
+  const auto room = Room();
+  return room ? room->HelloQueue() : std::vector<u8>{};
+}
+
 std::string SeatName(int seat)
 {
   const auto room = Room();

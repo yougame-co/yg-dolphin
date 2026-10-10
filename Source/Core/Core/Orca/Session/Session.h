@@ -361,6 +361,9 @@ public:
   // The error was another player's doing (a packet or a host roster no honest Orca sends), not
   // this machine's: this player can play on, and the match it was in doesn't count.
   bool ErrorFromPeer() const { return m_error_from_peer; }
+  // Ends the session for something another player sent that this machine caught outside it (a
+  // host's values for this player's own port): the next step ends, ErrorFromPeer.
+  void EndForPeer(std::string error) { FailPeer(std::move(error)); }
   const Stats& GetStats() const { return m_stats; }
   int CurrentFrame() const { return m_frame; }
   bool Resimulating() const { return m_resim_until >= 0; }

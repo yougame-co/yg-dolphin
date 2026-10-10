@@ -32,6 +32,9 @@ void StartRoom(const std::string& code, bool joining);
 std::string Code();
 // The roster's name for a seat; "" when unknown or with no room.
 std::string SeatName(int seat);
+// A joiner's own controls and queue identity as its hello sent them (YouGameRoom::HelloControls).
+std::vector<u8> HelloControls();
+std::vector<u8> HelloQueue();
 
 // The app's "join <code>" and "leave" (embed mode). Any thread, never blocks; taken at the next
 // frame boundary.
