@@ -61,6 +61,12 @@ void ReportGame(const Net::GameReport& report);
 void ReportGameStart(int start);
 // The games desynced: the room's match in progress is void.
 void ReportDesync();
+// The session ended for the opponent's doing (Session::ErrorFromPeer), or a ranked set's wait for
+// its verdict ran out: the room's match in progress is void (YouGameRoom::ReportFault).
+void ReportPeerFault();
+// Waiting in a ranked set's room for the verdict, with no session: this game still runs
+// (YouGameRoom::KeepAlive). Emulation thread.
+void KeepAlive();
 // In a ranked set whose opponent stopped sending inputs (15 s stalled, or silent), this player
 // claims the set. Does nothing outside a ranked room's live match.
 void ReportStall();

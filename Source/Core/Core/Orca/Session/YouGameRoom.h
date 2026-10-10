@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <map>
 #include <memory>
 #include <optional>
@@ -256,6 +257,13 @@ public:
   // The opponent's inputs stopped mid ranked set: send a `finish` naming this player the winner,
   // once, if the set is still open.
   void ReportStall();
+  // The session ended for the opponent's doing, or the wait for a verdict ran out: report the
+  // room's match in progress void, as for a desync, before this player leaves or goes quiet.
+  void ReportFault();
+  // A ranked set's room while this game waits there for the verdict without a session: say every
+  // so often that this game still runs (the room counts it as heard). Call from the emulation
+  // thread, which is what a stall claim is about.
+  void KeepAlive();
 
   void Send(const Packet& packet) override;
   std::vector<Packet> Receive() override;
@@ -305,6 +313,18 @@ private:
 // {"t":"game-start","matchId":"<match>","id":"g<start>"}, the id the game's `game-report` carries.
 // Empty when none may go: a room other than a ranked queue's, no room match, the set already
 // decided (this side sent its finish, or the verdict came), or no fight frame.
+// A host's `drop` to the joiner in a room whose match is still being decided: the joiner reports
+// the match void and stays to wait for the verdict, rather than ending its room (leaving a live
+// ranked set loses it). False: its room ends with the reason, as in a friends room.
+bool DropKeepsRoom(const std::string& queue, bool match_live, bool set_over);
+// Whether a keep-alive (YouGameRoom::KeepAlive) goes out now: the emulation thread asked for one
+// since the last went, and the last is at least KEEP_ALIVE_EVERY old.
+constexpr std::chrono::milliseconds KEEP_ALIVE_EVERY{2000};
+bool KeepAliveDue(std::chrono::steady_clock::time_point now,
+                  std::optional<std::chrono::steady_clock::time_point> wanted,
+                  std::optional<std::chrono::steady_clock::time_point> sent);
+// The `finish` for a room's match: a winner, or void when `winner` is empty.
+std::string FinishMessage(const std::string& match, const std::string& winner);
 std::string GameStartMessage(const std::string& queue, const std::string& match, bool decided,
                              int start);
 // Packets as room messages (exposed for tests).

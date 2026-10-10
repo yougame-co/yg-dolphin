@@ -187,6 +187,25 @@ struct HomeInputs
 };
 bool MayComeHome(const HomeInputs& in);
 
+// A queue room's match with no verdict yet, when this game's session with the opponent ends or its
+// wait for the verdict (Linger) runs out.
+struct VerdictWaitInputs
+{
+  // A casual or ranked room (not a friends room), its match still being decided (MatchLive), the
+  // ranked set not over, and the room still up.
+  bool queue_room = false;
+  bool match_live = false;
+  bool set_over = false;
+  bool room_ended = false;
+  // The session ended for the opponent's doing (Session::ErrorFromPeer), or the wait for the
+  // verdict ran out with the room still open.
+  bool from_peer = false;
+  bool waited_out = false;
+};
+// Whether this game reports the room's match void before anything else (Online::ReportPeerFault),
+// so that its leaving, or its silence while it waits, can't settle the match for the opponent.
+bool VoidFirst(const VerdictWaitInputs& in);
+
 // What the session does, at the same boundary, with a With Anyone pick (Casual or Ranked) the frame
 // hook saw while the game wasn't alone (UX/OnlineMenu.h TakeLobbyPick). Casual and Ranked leave the
 // friends lobby for a 2-player room the matchmaker fills, but only when the page can search that

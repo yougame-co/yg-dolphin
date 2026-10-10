@@ -66,6 +66,8 @@ constexpr int TICKET_TRIES = 2;
 // gets this many tries (one per roster change after a refusal) and is resent if unanswered this
 // long.
 constexpr auto REPORT_HOLD = std::chrono::seconds(60);
+// How often a void `finish` the room refused (its games still being decided) goes again.
+constexpr int FINISH_RETRIES = 30;
 constexpr int BEGIN_TRIES = 5;
 constexpr auto BEGIN_ANSWER = std::chrono::seconds(5);
 // The server closed a matchmade room after its result (rooms/src/index.ts: 4004 "match-over").
@@ -845,6 +847,27 @@ std::string GameStartMessage(const std::string& queue, const std::string& match,
                      start);
 }
 
+bool DropKeepsRoom(const std::string& queue, bool match_live, bool set_over)
+{
+  return queue == "ranked" && match_live && !set_over;
+}
+
+bool KeepAliveDue(Clock::time_point now, std::optional<Clock::time_point> wanted,
+                  std::optional<Clock::time_point> sent)
+{
+  if (!wanted || (sent && *wanted <= *sent))
+    return false;
+  return !sent || now - *sent >= KEEP_ALIVE_EVERY;
+}
+
+std::string FinishMessage(const std::string& match, const std::string& winner)
+{
+  return winner.empty() ?
+             fmt::format("{{\"t\":\"finish\",\"matchId\":{},\"void\":true}}", JsonString(match)) :
+             fmt::format("{{\"t\":\"finish\",\"matchId\":{},\"winner\":{}}}", JsonString(match),
+                         JsonString(winner));
+}
+
 bool DecodeDirectPacket(const std::string& payload, int slot, Packet* packet)
 {
   Packet decoded;
@@ -974,8 +997,18 @@ struct YouGameRoom::Impl
   };
   std::deque<HeldReport> reports;
   bool desync_pending = false;
+  // The session ended for the opponent's doing (ReportFault): the match in progress is void.
+  bool fault_pending = false;
   // The opponent stopped sending inputs mid ranked set (ReportStall): this player claims the set.
   bool stall_pending = false;
+  // KeepAlive: when the emulation thread last asked for one, and (I/O thread) when one last went.
+  std::optional<Clock::time_point> alive_wanted;
+  std::optional<Clock::time_point> alive_sent;
+  // I/O thread: the last `finish` sent, and when to send it again after the room refused it while
+  // its games were still being decided (a void must reach the match before this player goes).
+  std::string last_finish;
+  std::optional<Clock::time_point> finish_retry_at;
+  int finish_retries = 0;
   // I/O thread: the room's participants (id, connection, slot), whether anyone is away, the host's
   // begin state (sent and unanswered, tries, waiting for a roster change after a refusal), and what
   // was reported and decided in this match.
@@ -2256,12 +2289,10 @@ struct YouGameRoom::Impl
     finish_sent = true;
     if (!why.empty())
       void_why["$final"] = why;
-    const std::string text =
-        winner.empty() ?
-            fmt::format("{{\"t\":\"finish\",\"matchId\":{},\"void\":true}}", JsonString(match)) :
-            fmt::format("{{\"t\":\"finish\",\"matchId\":{},\"winner\":{}}}", JsonString(match),
-                        JsonString(winner));
+    const std::string text = FinishMessage(match, winner);
     NOTICE_LOG_FMT(NETPLAY, "Orca room: {}", text);
+    last_finish = text;
+    finish_retry_at.reset();
     SendRaw(text);
   }
 
@@ -2269,7 +2300,7 @@ struct YouGameRoom::Impl
   void FlushLobby()
   {
     std::string current_match, room_queue;
-    bool desync, done, stall;
+    bool desync, fault, done, stall;
     std::vector<HeldReport> ready;
     {
       std::lock_guard lock(mutex);
@@ -2277,6 +2308,7 @@ struct YouGameRoom::Impl
       room_queue = queue;
       done = set_done;
       desync = std::exchange(desync_pending, false);
+      fault = std::exchange(fault_pending, false);
       stall = std::exchange(stall_pending, false);
       const auto now = Clock::now();
       while (!reports.empty())
@@ -2305,6 +2337,15 @@ struct YouGameRoom::Impl
     {
       NOTICE_LOG_FMT(NETPLAY, "Orca room: the games went apart: the room's match is void");
       SendFinish(current_match, "", "desync");
+      return;
+    }
+    // The session ended for the opponent's doing (or the verdict never came): this player's own
+    // word goes in first, so its leave or silence can't settle the match for the opponent.
+    if (fault && !finish_sent && !done)
+    {
+      NOTICE_LOG_FMT(NETPLAY, "Orca room: the session ended for the opponent's doing: the room's "
+                              "match is void");
+      SendFinish(current_match, "", "fault");
       return;
     }
     // The opponent's inputs stopped mid ranked set: this player names itself the winner. The room
@@ -2574,6 +2615,9 @@ struct YouGameRoom::Impl
   // "start": the room's match began.
   void OnStart(const picojson::object& m)
   {
+    last_finish.clear();
+    finish_retry_at.reset();
+    finish_retries = 0;
     begin_sent.reset();
     begin_tries = 0;
     ranked_sent = 0;
@@ -2732,6 +2776,7 @@ struct YouGameRoom::Impl
 
     TryBegin();
     FlushLobby();
+    KeepAliveAndRetry(now);
 
     if (now - last_send < SEND_GAP)
       return;
@@ -2749,6 +2794,37 @@ struct YouGameRoom::Impl
     message["t"] = picojson::value("msg");
     message["d"] = picojson::value(PacketToJson(*packet));
     SendJson(message);
+  }
+
+  // While the game waits for a ranked verdict without a session: a sign of life the room counts
+  // (anything but a ping), and a void it refused while the match's games were being decided.
+  void KeepAliveAndRetry(Clock::time_point now)
+  {
+    bool live;
+    std::optional<Clock::time_point> wanted;
+    {
+      std::lock_guard lock(mutex);
+      live = queue == "ranked" && !match_id.empty() && !set_done && !set_over;
+      wanted = alive_wanted;
+    }
+    if (!live)
+    {
+      finish_retry_at.reset();
+      return;
+    }
+    if (finish_retry_at && now >= *finish_retry_at && !last_finish.empty())
+    {
+      finish_retry_at.reset();
+      NOTICE_LOG_FMT(NETPLAY, "Orca room: {} (again)", last_finish);
+      SendRaw(last_finish);
+    }
+    if (KeepAliveDue(now, wanted, alive_sent))
+    {
+      alive_sent = now;
+      picojson::object alive;
+      alive["t"] = picojson::value("alive");
+      SendJson(alive);
+    }
   }
 
   void SendTo(const std::string& to, const picojson::object& d)
@@ -3067,6 +3143,13 @@ struct YouGameRoom::Impl
     else if (t == "command-error")
     {
       WARN_LOG_FMT(NETPLAY, "Orca room: {} refused: {}", Str(m, "action"), Str(m, "error"));
+      // A void refused while the match's games were still being decided goes again shortly.
+      if (Str(m, "action") == "finish" && last_finish.find("\"void\":true") != std::string::npos &&
+          finish_retries < FINISH_RETRIES)
+      {
+        ++finish_retries;
+        finish_retry_at = Clock::now() + KEEP_ALIVE_EVERY;
+      }
       // The host's begin goes again once the roster changes (BEGIN_TRIES at most).
       if (Str(m, "action") == "begin")
       {
@@ -3106,6 +3189,36 @@ struct YouGameRoom::Impl
       if (!peer.drop_in_host || !joining)
         return;
       const std::string reason = Str(d, "r");
+      bool keep_room;
+      {
+        std::lock_guard lock(mutex);
+        keep_room = DropKeepsRoom(queue, !match_id.empty() && !set_done, set_over);
+        // In a ranked set still being decided this player's own void goes first, and it stays
+        // for the verdict: the host leaving the session is all this is (HostGone).
+        if (keep_room)
+        {
+          if (reason == "desync")
+            desync_pending = true;
+          else
+            fault_pending = true;
+        }
+      }
+      if (keep_room)
+      {
+        WARN_LOG_FMT(NETPLAY,
+                     "Orca room: the host unplugged this player mid set ({}): the match "
+                     "is void, and this game waits for the verdict",
+                     reason);
+        FlushLobby();
+        Emit({PeerEvent::Kind::Left,
+              peer.slot,
+              true,
+              peer.name,
+              {},
+              {},
+              reason == "desync" ? std::string("desync") : std::string("dropped")});
+        return;
+      }
       // A matchmade room hears that the match in progress is void before this player goes.
       if (reason == "desync")
       {
@@ -3533,6 +3646,18 @@ void YouGameRoom::ReportStall()
 {
   std::lock_guard lock(m_impl->mutex);
   m_impl->stall_pending = true;
+}
+
+void YouGameRoom::ReportFault()
+{
+  std::lock_guard lock(m_impl->mutex);
+  m_impl->fault_pending = true;
+}
+
+void YouGameRoom::KeepAlive()
+{
+  std::lock_guard lock(m_impl->mutex);
+  m_impl->alive_wanted = Clock::now();
 }
 
 void YouGameRoom::TestDropConnection()

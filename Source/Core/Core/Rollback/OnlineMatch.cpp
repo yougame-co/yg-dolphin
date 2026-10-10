@@ -3023,8 +3023,26 @@ void Linger(Match& match)
   }
   const bool over = Orca::Online::RoomEnded();
   if (!over && Clock::now() < *match.linger_until)
+  {
+    // Still here and running: the room hears so, so the opponent can't claim this game stalled.
+    Orca::Online::KeepAlive();
     return;
+  }
   match.linger_until.reset();
+  // No verdict in time and the set still open: this player's void goes in before it leaves, so the
+  // leave isn't a forfeit (an opponent back in the room after its own drop never settles it).
+  if (VoidFirst({.queue_room = Orca::Online::RoomQueue() != "private",
+                 .match_live = Orca::Online::MatchLive(),
+                 .set_over = Orca::Online::SetOver(),
+                 .room_ended = over,
+                 .waited_out = true}))
+  {
+    NOTICE_LOG_FMT(ROLLBACK,
+                   "Matchmaking: no verdict in {} s with the set still open: reporting "
+                   "it void before leaving",
+                   VERDICT_WAIT.count());
+    Orca::Online::ReportPeerFault();
+  }
   // A verdict that came already cleared the countdown; none will come now.
   Orca::UX::SetEnd::Current().NoVerdict(Orca::UX::SetEnd::NowMs());
   if (match.local_seat != 0)
@@ -3890,6 +3908,15 @@ std::optional<int> Boundary(Core::System& system,
       }
       if (Orca::Online::IsDesync(error))
         ++s_desyncs;
+      // The opponent broke the session: the room's match hears it void before anything else.
+      if (VoidFirst({.queue_room = Orca::Online::RoomQueue() != "private",
+                     .match_live = Orca::Online::MatchLive(),
+                     .set_over = Orca::Online::SetOver(),
+                     .room_ended = room_gone,
+                     .from_peer = match.session->ErrorFromPeer()}))
+      {
+        Orca::Online::ReportPeerFault();
+      }
       DropFriends(match, Orca::Online::IsDesync(error) ? "desync" : "network",
                   !room_gone && attempt == 0);
       GoSolo(match, "the session failed");
@@ -4136,6 +4163,12 @@ bool AloneAt(int frame, bool solo_idle, bool drop_in_pending, std::optional<int>
 bool HeaderFreeAt(int frame, bool solo_quiet, std::optional<int> stored_keyframe)
 {
   return solo_quiet && !(stored_keyframe && frame - *stored_keyframe <= KEYFRAME_FRESH_FRAMES);
+}
+
+bool VoidFirst(const VerdictWaitInputs& in)
+{
+  return in.queue_room && in.match_live && !in.set_over && !in.room_ended &&
+         (in.from_peer || in.waited_out);
 }
 
 bool MayComeHome(const HomeInputs& in)

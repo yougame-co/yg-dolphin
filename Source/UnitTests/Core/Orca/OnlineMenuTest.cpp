@@ -1923,6 +1923,34 @@ TEST(OrcaOnlineMenuLobby, TheMenusAreTheMainMenuAndACharacterSelect)
   EXPECT_FALSE(MenusScene("muMenuMain", "sqHomerun"));
 }
 
+// A queue room's match still being decided when the opponent breaks the session, or when the wait
+// for its verdict runs out with the room still open: this game reports it void before it goes, so
+// its leave or its silence never settles the set for the opponent. Not in a friends room, not once
+// the set is over or the room has ended, and not for this machine's own failures.
+TEST(OrcaOnlineMenuLobby, APeerFaultOrAVerdictThatNeverCameVoidsFirst)
+{
+  using Rollback::OnlineMatch::VerdictWaitInputs;
+  using Rollback::OnlineMatch::VoidFirst;
+  VerdictWaitInputs in;
+  in.queue_room = true;
+  in.match_live = true;
+  in.from_peer = true;
+  EXPECT_TRUE(VoidFirst(in));
+  in.from_peer = false;
+  EXPECT_FALSE(VoidFirst(in)) << "this machine's own failure";
+  in.waited_out = true;
+  EXPECT_TRUE(VoidFirst(in));
+  const auto with = [&in](auto change) {
+    VerdictWaitInputs other = in;
+    change(other);
+    return VoidFirst(other);
+  };
+  EXPECT_FALSE(with([](VerdictWaitInputs& o) { o.queue_room = false; }));
+  EXPECT_FALSE(with([](VerdictWaitInputs& o) { o.match_live = false; }));
+  EXPECT_FALSE(with([](VerdictWaitInputs& o) { o.set_over = true; }));
+  EXPECT_FALSE(with([](VerdictWaitInputs& o) { o.room_ended = true; }));
+}
+
 TEST(OrcaOnlineMenuLobby, AFormerJoinerComesHomeOnTheMenusAlone)
 {
   using Rollback::OnlineMatch::HomeInputs;

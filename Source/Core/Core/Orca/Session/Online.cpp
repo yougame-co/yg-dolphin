@@ -293,6 +293,18 @@ void ReportGameStart(int start)
     room->ReportGameStart(start);
 }
 
+void ReportPeerFault()
+{
+  if (const auto room = Room())
+    room->ReportFault();
+}
+
+void KeepAlive()
+{
+  if (const auto room = Room())
+    room->KeepAlive();
+}
+
 void ReportDesync()
 {
   if (const auto room = Room())
@@ -608,6 +620,9 @@ bool ReportSessionEnd(const std::string& session_error, bool from_peer)
   // that takes back this player's seat): that one is the friend's doing, and this game goes on.
   if (from_peer || session_error.find("sent an invalid packet") != std::string::npos)
   {
+    // The room's match hears it void first, so this player's going can't hand it to the friend.
+    if (room)
+      room->ReportFault();
     Status::Report("network", session_error);
     return true;
   }

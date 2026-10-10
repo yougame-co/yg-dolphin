@@ -302,6 +302,43 @@ TEST(OrcaRoom, GameStartIsTheRoomsMessage)
   EXPECT_EQ(GameStartMessage("ranked", match, false, -1), "");
 }
 
+// A host's `drop` in a ranked set still being decided keeps the joiner in the room to report the
+// match void and wait for the verdict; anywhere else the joiner's room ends as before.
+TEST(OrcaRoom, ADropMidSetKeepsTheRoom)
+{
+  EXPECT_TRUE(DropKeepsRoom("ranked", true, false));
+  EXPECT_FALSE(DropKeepsRoom("ranked", false, false));
+  EXPECT_FALSE(DropKeepsRoom("ranked", true, true));
+  EXPECT_FALSE(DropKeepsRoom("casual", true, false));
+  EXPECT_FALSE(DropKeepsRoom("private", true, false));
+}
+
+// The void a room's match hears is exactly the room's `finish` (rooms/src/game-lobby.ts).
+TEST(OrcaRoom, FinishIsTheRoomsMessage)
+{
+  EXPECT_EQ(FinishMessage("m1", ""), "{\"t\":\"finish\",\"matchId\":\"m1\",\"void\":true}");
+  EXPECT_EQ(FinishMessage("m1", "u2"), "{\"t\":\"finish\",\"matchId\":\"m1\",\"winner\":\"u2\"}");
+  picojson::value v;
+  ASSERT_TRUE(picojson::parse(v, FinishMessage("a\"b", "")).empty());
+  EXPECT_EQ(v.get<picojson::object>().at("matchId").get<std::string>(), "a\"b");
+}
+
+// A keep-alive goes only when the emulation thread asked since the last one, and at most every
+// KEEP_ALIVE_EVERY: a game whose emulation froze stops sending them.
+TEST(OrcaRoom, KeepAliveOnlyWhileTheGameRuns)
+{
+  using Clock = std::chrono::steady_clock;
+  const Clock::time_point t0 = Clock::now();
+  EXPECT_FALSE(KeepAliveDue(t0, std::nullopt, std::nullopt));
+  EXPECT_TRUE(KeepAliveDue(t0, t0, std::nullopt));
+  // Asked again right after one went: wait for the interval.
+  EXPECT_FALSE(
+      KeepAliveDue(t0 + std::chrono::milliseconds(500), t0 + std::chrono::milliseconds(400), t0));
+  EXPECT_TRUE(KeepAliveDue(t0 + KEEP_ALIVE_EVERY, t0 + std::chrono::milliseconds(1900), t0));
+  // Nothing asked since the last one (the emulation thread stopped): none, however long.
+  EXPECT_FALSE(KeepAliveDue(t0 + std::chrono::seconds(60), t0, t0));
+}
+
 TEST(OrcaRoom, CoalescingKeepsEarlierInputsAndChecksum)
 {
   std::optional<Packet> pending;
