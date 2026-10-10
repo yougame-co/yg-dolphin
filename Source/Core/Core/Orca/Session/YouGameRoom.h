@@ -337,6 +337,12 @@ bool KeepAliveDue(std::chrono::steady_clock::time_point now,
                   std::optional<std::chrono::steady_clock::time_point> sent);
 // The `finish` for a room's match: a winner, or void when `winner` is empty.
 std::string FinishMessage(const std::string& match, const std::string& winner);
+// The games of a room match this player knows of (YouGameRoom::KnownSetGames), kept by match id for
+// the life of the process (exposed for tests): records `known` for `match` and returns the most
+// this process ever knew of it. A player whose room link dropped comes back on a fresh room with
+// the same match, and what it knew comes back with it. Only this player's own count: nothing the
+// room or the host sends goes in. An empty `match` keeps nothing and returns `known`.
+int RememberKnownSetGames(const std::string& match, int known);
 std::string GameStartMessage(const std::string& queue, const std::string& match, bool decided,
                              int start);
 // Packets as room messages (exposed for tests).

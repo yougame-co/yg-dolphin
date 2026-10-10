@@ -12,6 +12,7 @@
 #include <thread>
 #include <vector>
 
+#include <fmt/format.h>
 #include <gtest/gtest.h>
 
 #include "Core/Orca/Session/Online.h"
@@ -311,6 +312,30 @@ TEST(OrcaRoom, ADropMidSetKeepsTheRoom)
   EXPECT_FALSE(DropKeepsRoom("ranked", true, true));
   EXPECT_FALSE(DropKeepsRoom("casual", true, false));
   EXPECT_FALSE(DropKeepsRoom("private", true, false));
+}
+
+// A player whose room link dropped mid set comes back on a fresh room in the same match: the games
+// it knew of come back with it (a joiner's keyframe may then hold that many, OnlineRules
+// SetFitsJoin), while a match it never played starts from none. Only the most it knew counts: a
+// fresh room's lower count never lowers it.
+TEST(OrcaRoom, AReconnectKeepsTheGamesItKnew)
+{
+  const std::string match = "6f1c2b9e-0d3a-4c55-9a7e-reconnect01";
+  EXPECT_EQ(RememberKnownSetGames(match, 0), 0);
+  EXPECT_EQ(RememberKnownSetGames(match, 1), 1);
+  EXPECT_EQ(RememberKnownSetGames(match, 2), 2);
+  // The fresh room after the drop knows nothing yet.
+  EXPECT_EQ(RememberKnownSetGames(match, 0), 2);
+  EXPECT_EQ(RememberKnownSetGames(match, 1), 2);
+  // Another match starts from what it saw.
+  EXPECT_EQ(RememberKnownSetGames("another-match-0002", 0), 0);
+  // No match: nothing kept.
+  EXPECT_EQ(RememberKnownSetGames("", 3), 3);
+  EXPECT_EQ(RememberKnownSetGames("", 0), 0);
+  // A few matches are kept, the oldest go first.
+  for (int i = 0; i < 20; ++i)
+    RememberKnownSetGames(fmt::format("filler-{}", i), 1);
+  EXPECT_EQ(RememberKnownSetGames(match, 0), 0);
 }
 
 // The void a room's match hears is exactly the room's `finish` (rooms/src/game-lobby.ts).

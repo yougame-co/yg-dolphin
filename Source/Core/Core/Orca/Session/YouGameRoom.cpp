@@ -935,6 +935,32 @@ bool KeepAliveDue(Clock::time_point now, std::optional<Clock::time_point> wanted
   return !sent || now - *sent >= KEEP_ALIVE_EVERY;
 }
 
+namespace
+{
+std::mutex s_known_mutex;
+// RememberKnownSetGames: match id -> games known, the newest last (a ranked set is one match, so
+// a few are plenty).
+std::vector<std::pair<std::string, int>> s_known_by_match;
+constexpr size_t KNOWN_MATCHES = 8;
+}  // namespace
+
+int RememberKnownSetGames(const std::string& match, int known)
+{
+  if (match.empty())
+    return known;
+  std::lock_guard lock(s_known_mutex);
+  auto it = std::ranges::find(s_known_by_match, match, &std::pair<std::string, int>::first);
+  if (it != s_known_by_match.end())
+  {
+    known = std::max(known, it->second);
+    s_known_by_match.erase(it);
+  }
+  s_known_by_match.emplace_back(match, known);
+  if (s_known_by_match.size() > KNOWN_MATCHES)
+    s_known_by_match.erase(s_known_by_match.begin());
+  return known;
+}
+
 std::string FinishMessage(const std::string& match, const std::string& winner)
 {
   return winner.empty() ?
@@ -2170,7 +2196,17 @@ struct YouGameRoom::Impl
         id.clear();
       std::lock_guard lock(mutex);
       if (id != match_id)
+      {
         NOTICE_LOG_FMT(NETPLAY, "Orca room: room match {}", id.empty() ? "over" : id);
+        // A match this process played before its room link dropped: the games it knew of come back.
+        if (!id.empty())
+          known_games = RememberKnownSetGames(id, 0);
+        if (!id.empty() && known_games > 0)
+        {
+          NOTICE_LOG_FMT(NETPLAY, "Orca room: back in match {}, which this player knew {} game(s) of",
+                         id, known_games);
+        }
+      }
       match_id = std::move(id);
     }
     if (const auto it = m.find("participants"); it != m.end() && it->second.is<picojson::array>())
@@ -2361,11 +2397,13 @@ struct YouGameRoom::Impl
     SendRaw(text);
   }
 
+  // KnownSetGames for the room's match: what this room saw, or what this process saw of the same
+  // match before its link dropped (RememberKnownSetGames), whichever is more.
   void NoteKnownGames()
   {
     const int known = std::max(tally.Games(), static_cast<int>(starts_sent.size()));
     std::lock_guard lock(mutex);
-    known_games = known;
+    known_games = RememberKnownSetGames(match_id, known);
   }
 
   // The set's (or a casual game's) end, once.
@@ -2713,9 +2751,10 @@ struct YouGameRoom::Impl
     set_ends.clear();
     block_ids.clear();
     starts_sent.clear();
-    NoteKnownGames();
     match_participants.clear();
     LobbyFields(m);
+    // After LobbyFields: the new match's id, so its count starts from what this process knew of it.
+    NoteKnownGames();
     match_participants = lobby_participants;
     // On screen (UX/SetEnd.h): a queue room's set or casual game against this opponent.
     std::string room_queue, opponent;
