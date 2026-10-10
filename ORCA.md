@@ -2060,7 +2060,9 @@ The YouGame desktop app can run Orca inside its sandbox: on Windows an AppContai
 them), and later on macOS a `sandbox-exec` profile. Orca's side of it is a handful of switches, all
 off unless the app sets them, so an Orca with them runs exactly as before under an app without the
 sandbox. The app jails only an Orca whose manifest entry (and the installer's `orca.json`) says
-`"sandbox": 1`. Code: `Orca/Sandbox.*`, `Orca/Bridge.*`, `DolphinNoGUI/Embed.*`,
+`"sandbox": 1`. The build says so itself in `Sys/Orca/features.json` (`{"sandbox": 1}`: it speaks
+`YOUGAME_STDIO`, `--embed-adopted` and `ORCA_NET`), which the release scripts copy into the
+manifest entry, so a build without the mode can never be marked as having it. Code: `Orca/Sandbox.*`, `Orca/Bridge.*`, `DolphinNoGUI/Embed.*`,
 `PlatformWin32.cpp`; tests: `OrcaBridge*`, `OrcaSandbox.*` (`SandboxTest.cpp`) and
 `OrcaLive.StdioBridgeMirrorsTheRoomAndTakesLeave`.
 

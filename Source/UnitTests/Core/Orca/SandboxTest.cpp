@@ -586,6 +586,29 @@ TEST(OrcaSandbox, EmbedAdoptedNeedsEmbed)
   EXPECT_NE(error.find("--embed-adopted"), std::string::npos);
 }
 
+// The build declares its sandbox mode (Sys/Orca/features.json), which the release scripts copy into
+// the manifest entry: the app jails only an Orca that says "sandbox": 1.
+TEST(OrcaSandbox, TheBuildDeclaresItsSandboxMode)
+{
+  std::string path = File::GetSysDirectory() + "Orca/features.json";
+  if (!File::Exists(path))
+  {
+    // The source tree's copy, from this file's own path.
+    const std::string here = __FILE__;
+    const size_t at = here.rfind("Source/UnitTests/");
+    if (at != std::string::npos)
+      path = here.substr(0, at) + "Data/Sys/Orca/features.json";
+  }
+  std::string text;
+  if (!File::ReadFileToString(path, text))
+    GTEST_SKIP() << "no Sys/Orca/features.json here";
+  picojson::value v;
+  ASSERT_TRUE(picojson::parse(v, text).empty()) << text;
+  ASSERT_TRUE(v.is<picojson::object>());
+  ASSERT_TRUE(v.get("sandbox").is<double>());
+  EXPECT_EQ(v.get("sandbox").get<double>(), 1.0);
+}
+
 #ifndef _WIN32
 // What a sandbox refusing a file looks like (EACCES), made with permissions. Skipped as root.
 TEST(OrcaSandbox, AFileTheSandboxDidNotGrantIsSaidSo)
