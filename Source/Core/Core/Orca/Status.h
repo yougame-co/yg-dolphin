@@ -104,7 +104,10 @@ void SetFirstFrameListener(void (*listener)());
 void SetOutput(std::FILE* out);
 // Also notified of the printed error (embed mode repeats it in the app's "error" form).
 void SetErrorListener(void (*listener)(std::string_view code, std::string_view sentence));
-// At exit: reports a boot error if the game never reached a frame and no reason was given, then
-// "ended". Returns ExitCode().
+// The app asked Orca to stop ("quit", or its stdin closed). A game stopped before its first frame
+// was not a boot that failed: Finish() then reports no boot error.
+void Stopping();
+// At exit: reports a boot error if the game never reached a frame, no reason was given and the app
+// didn't stop it, then "ended". Returns ExitCode().
 int Finish();
 }  // namespace Orca::Status

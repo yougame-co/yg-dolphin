@@ -248,7 +248,9 @@ void Platform::ProcessEmbedCommands()
     in >> cmd;
     if (cmd == "quit")
     {
-      // Stop at once, session or not: the app is closing the player or has died.
+      // Stop at once, session or not: the app is closing the player or has died. Before the first
+      // frame that is a stop, not a boot that failed (a Stop while shaders compile).
+      Orca::Status::Stopping();
       Stop();
     }
     else if (cmd == "rect")
