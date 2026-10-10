@@ -305,6 +305,12 @@ void ReportGameStart(int start)
     room->ReportGameStart(start);
 }
 
+int KnownSetGames()
+{
+  const auto room = Room();
+  return room ? room->KnownSetGames() : 0;
+}
+
 void ReportPeerFault()
 {
   if (const auto room = Room())

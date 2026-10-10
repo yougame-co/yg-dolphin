@@ -62,6 +62,8 @@ void ReportGame(const Net::GameReport& report);
 // A ranked set's game began (its fight's first frame, the id its report will carry): tells a ranked
 // queue room's match, so leaving from then on loses the set.
 void ReportGameStart(int start);
+// The games of the room's ranked match this player knows of (YouGameRoom::KnownSetGames).
+int KnownSetGames();
 // The games desynced: the room's match in progress is void.
 void ReportDesync();
 // The session ended for the opponent's doing (Session::ErrorFromPeer), or a ranked set's wait for

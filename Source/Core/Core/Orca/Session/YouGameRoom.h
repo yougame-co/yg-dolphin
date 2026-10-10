@@ -256,6 +256,9 @@ public:
   // A ranked set's game began (`start`: its fight's first frame): tells the room's match with a
   // `game-start` (GameStartMessage), queued with the reports, once per game.
   void ReportGameStart(int start);
+  // The games of the room's ranked match this player has played (its game-starts) or heard the
+  // verdict of, whichever is more: a joiner's keyframe holds no more (Rules::SetFitsJoin).
+  int KnownSetGames() const;
   // The games desynced: report the match in progress void (a ranked set, or a casual game).
   void ReportDesync();
   // The opponent's inputs stopped mid ranked set: send a `finish` naming this player the winner,
@@ -305,6 +308,8 @@ public:
   // set's end, once (nothing after it).
   std::optional<End> Game(const std::string& winner);
   int Wins(const std::string& id) const;
+  // Games with a verdict so far, void and drawn ones included.
+  int Games() const { return m_games; }
   void Reset();
 
 private:

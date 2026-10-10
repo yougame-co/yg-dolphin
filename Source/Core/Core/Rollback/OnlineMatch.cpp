@@ -2051,7 +2051,7 @@ void FinishReplay(Match& match)
   match.stats_frame = -1;
   EndQueueForJoin(match);
   Orca::UX::Rules::ExpectHeader(QueueMode(Orca::Online::RoomQueue()), Orca::Online::Code(),
-                                RoomFlags());
+                                RoomFlags(), Orca::Online::KnownSetGames());
   NOTICE_LOG_FMT(ROLLBACK, "Drop-in: rebuilt replay frame {} locally in {:.0f} ms", frame,
                  MsSince(match.loaded_time));
   match.replaying.reset();

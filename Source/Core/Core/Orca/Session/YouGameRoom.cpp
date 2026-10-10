@@ -1072,6 +1072,8 @@ struct YouGameRoom::Impl
   };
   std::deque<HeldReport> reports;
   bool desync_pending = false;
+  // KnownSetGames, kept by the I/O thread.
+  int known_games = 0;
   // The session ended for the opponent's doing (ReportFault): the match in progress is void.
   bool fault_pending = false;
   // The opponent stopped sending inputs mid ranked set (ReportStall): this player claims the set.
@@ -2354,8 +2356,16 @@ struct YouGameRoom::Impl
     const std::string text = GameStartMessage(room_queue, match, decided, start);
     if (text.empty() || !starts_sent.insert(start).second)
       return;
+    NoteKnownGames();
     NOTICE_LOG_FMT(NETPLAY, "Orca room: {}", text);
     SendRaw(text);
+  }
+
+  void NoteKnownGames()
+  {
+    const int known = std::max(tally.Games(), static_cast<int>(starts_sent.size()));
+    std::lock_guard lock(mutex);
+    known_games = known;
   }
 
   // The set's (or a casual game's) end, once.
@@ -2569,6 +2579,7 @@ struct YouGameRoom::Impl
     }
     const Verdict v = ReadVerdict(m, id);
     std::optional<SetTally::End> end = tally.Game(v.winner);
+    NoteKnownGames();
     int n = 0;
     if (const auto it = game_numbers.find(id); it != game_numbers.end())
       n = it->second;
@@ -2702,6 +2713,7 @@ struct YouGameRoom::Impl
     set_ends.clear();
     block_ids.clear();
     starts_sent.clear();
+    NoteKnownGames();
     match_participants.clear();
     LobbyFields(m);
     match_participants = lobby_participants;
@@ -3733,6 +3745,12 @@ void YouGameRoom::ReportStall()
 {
   std::lock_guard lock(m_impl->mutex);
   m_impl->stall_pending = true;
+}
+
+int YouGameRoom::KnownSetGames() const
+{
+  std::lock_guard lock(m_impl->mutex);
+  return m_impl->known_games;
 }
 
 void YouGameRoom::ReportFault()
