@@ -2080,7 +2080,7 @@ manifest entry, so a build without the mode can never be marked as having it. Co
 
 | Code | When |
 |---|---|
-| `sandbox_disc` | Inside the sandbox, the disc can't be opened for lack of permission: the app didn't grant it (a network share, a file an admin tool made). "Orca can't read this disc where it is. Move it to a drive on this PC." |
+| `sandbox_disc` | Inside the sandbox, the disc can't be opened for lack of permission: the app didn't grant it (a network share, a file an admin tool made). "Orca can't read this disc where it is. Move it to a drive on this computer." |
 | `sandbox_embed` | `--embed-adopted`: nothing adopted the window within 10 s. "Orca couldn't open in the YouGame window. Try again." |
 | `sandbox_denied` | Inside the sandbox, Orca may not write its user folder. |
 

@@ -69,7 +69,7 @@ inline constexpr const char* EMBED_SENTENCE =
     "Orca couldn't open in the YouGame window. Try again.";
 inline constexpr const char* DISC_ERROR = "sandbox_disc";
 inline constexpr const char* DISC_SENTENCE =
-    "Orca can't read this disc where it is. Move it to a drive on this PC.";
+    "Orca can't read this disc where it is. Move it to a drive on this computer.";
 inline constexpr const char* DENIED_ERROR = "sandbox_denied";
 
 // Opening `path` to read fails for lack of permission (ERROR_ACCESS_DENIED, EACCES or EPERM), the
