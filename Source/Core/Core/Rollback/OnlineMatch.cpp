@@ -195,6 +195,9 @@ struct Match
   bool joined = false;
   int leave_at = -1;
   bool leave_requested = false;
+  // The opponent didn't pick in time on a ranked set's later game (UX/CharOrder.h NoShow): this
+  // player's leave reports the room's match void first.
+  bool opponent_no_show = false;
   std::string join_status;
 
   int last_percent = -1;
@@ -868,6 +871,7 @@ void EndFresh(Match& match, const char* why)
 // Drops drop-in work for the room being left; the next room gets a new store.
 void ResetDropIn(Match& match)
 {
+  match.opponent_no_show = false;
   match.replaying.reset();
   match.before_join.reset();
   // A fresh start due, armed or holding for this room is over with it.
@@ -2284,6 +2288,18 @@ std::optional<int> JoinHost(Core::System& system, Match& match)
 // "leave": a joiner asks its host to unplug it at an agreed frame; a host opens a new room.
 void Leave(Match& match)
 {
+  // The opponent didn't pick in time and stayed: the room's match hears it void before this leave.
+  if (std::exchange(match.opponent_no_show, false) &&
+      VoidFirst({.queue_room = Orca::Online::RoomQueue() != "private",
+                 .match_live = Orca::Online::MatchLive(),
+                 .set_over = Orca::Online::SetOver(),
+                 .room_ended = Orca::Online::RoomEnded(),
+                 .from_peer = true}))
+  {
+    NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: leaving after the opponent's no-show: reporting the "
+                             "match void first");
+    Orca::Online::ReportPeerFault();
+  }
   // Leaving a ranked set forfeits it once its first game began (before that the room voids it), and
   // the screen says which (UX/SetEnd.h).
   if (Orca::Online::RoomQueue() == "ranked" && Orca::Online::MatchLive())
@@ -3106,9 +3122,10 @@ void ConfirmResults(Match& match)
   }
   // The casual ready timer ran out (UX/Queue.h), at the same final frame on both machines.
   Orca::UX::Queue::ConfirmTimeout(confirmed, match.local_seat);
-  // Ranked: a player who didn't pick a character in time before the first game leaves the room; the
-  // set ends before its first game, so the room voids it and rates nobody. The other waits for the
-  // verdict.
+  // Ranked: a player who didn't pick a character in time leaves the room. Before the first game the
+  // set ends with no game, so the room voids it and rates nobody; on a later game (a token still in
+  // hand after the character order, UX/CharOrder.h) leaving loses the set. The other waits for the
+  // verdict, and a leave of its own then reports the match void first.
   if (const auto no_show = Orca::UX::Rules::ConfirmNoShow(confirmed))
   {
     const bool mine = *no_show == match.local_seat;
@@ -3122,6 +3139,7 @@ void ConfirmResults(Match& match)
     }
     else if (!mine)
     {
+      match.opponent_no_show = Orca::Online::RoomQueue() == "ranked";
       Core::DisplayMessage("Your opponent didn't pick a character in time", 6000);
     }
   }
