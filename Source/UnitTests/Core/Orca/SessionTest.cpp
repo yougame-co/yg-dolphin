@@ -29,6 +29,7 @@
 #include "Common/HttpRequest.h"
 #include "Common/WebSocket.h"
 
+#include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Session/PadCodec.h"
 #include "Core/Orca/Session/Session.h"
 #include "Core/Orca/Session/YouGameRoom.h"
@@ -3950,6 +3951,52 @@ TEST(OrcaDropIn, RosterThatTakesBackTheJoinersSeatEndsTheSession)
     h.Send(h.Scripted(dropped));
     EXPECT_TRUE(h.joiner->session.Error().empty()) << h.joiner->session.Error();
   }
+}
+
+// A host roster or history that takes back the joiner's seat is the host's doing: the joiner's game
+// goes on (ReportSessionEnd says it can), it is never this machine's own failure.
+TEST(OrcaDropIn, HostRosterThatEndsTheSessionIsThePeersFault)
+{
+  const auto ended_by = [](const char* what, const std::function<void(ScriptedHost&)>& send) {
+    SCOPED_TRACE(what);
+    ScriptedHost h;
+    h.PlayUntilLive(60);
+    if (::testing::Test::HasFatalFailure())
+      return;
+    send(h);
+    const std::string error = h.joiner->session.Error();
+    ASSERT_FALSE(error.empty());
+    EXPECT_TRUE(h.joiner->session.ErrorFromPeer()) << error;
+    EXPECT_FALSE(Orca::Online::IsDesync(error)) << error;
+    EXPECT_TRUE(Orca::Online::ReportSessionEnd(error, h.joiner->session.ErrorFromPeer())) << error;
+  };
+  ended_by("plug-in reset", [](ScriptedHost& h) {
+    auto reset = h.roster;
+    reset[1] = {NEVER, NEVER, NEVER};
+    h.Send(h.Scripted(reset));
+  });
+  ended_by("live frame moved", [](ScriptedHost& h) {
+    auto moved = h.roster;
+    moved[1].live_from = h.joiner->session.CurrentFrame() + 4096;
+    h.Send(h.Scripted(moved));
+  });
+  ended_by("unplug moved later", [](ScriptedHost& h) {
+    auto later = h.roster;
+    later[1].unplug_from = NEVER;
+    auto earlier = h.roster;
+    earlier[1].unplug_from = h.joiner->session.CurrentFrame() + 600;
+    h.Send(h.Scripted(earlier));
+    h.Send(h.Scripted(later));
+  });
+  ended_by("history past the live frame", [](ScriptedHost& h) {
+    for (int i = 0; i < 3 && h.joiner->session.Error().empty(); ++i)
+      h.Send(h.ScriptedHistory(h.roster));
+  });
+  ended_by("an invalid packet", [](ScriptedHost& h) {
+    Packet p = h.Scripted(h.roster);
+    p.current_frame = -5;
+    h.Send(std::move(p));
+  });
 }
 
 // The joiner is plugged in only once it holds the history up to its live frame: a plug-in roster

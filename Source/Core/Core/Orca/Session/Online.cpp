@@ -568,7 +568,7 @@ std::string StatusLine()
   return room ? room->Status() : "";
 }
 
-bool ReportSessionEnd(const std::string& session_error)
+bool ReportSessionEnd(const std::string& session_error, bool from_peer)
 {
   const auto room = Room();
   // Disagreeing inputs or checksums: the games desynced. Tell the friend before leaving, so both
@@ -604,9 +604,9 @@ bool ReportSessionEnd(const std::string& session_error)
   if (session_error.empty())
     return true;
   // The emulator side failed (a snapshot that wouldn't save or load, lost frame alignment), or the
-  // friend sent something an honest Orca never sends.
-  const bool from_peer = session_error.find("sent an invalid packet") != std::string::npos;
-  if (from_peer)
+  // friend sent something an honest Orca never sends (a bad packet, or a host's roster or history
+  // that takes back this player's seat): that one is the friend's doing, and this game goes on.
+  if (from_peer || session_error.find("sent an invalid packet") != std::string::npos)
   {
     Status::Report("network", session_error);
     return true;

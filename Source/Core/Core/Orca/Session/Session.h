@@ -358,6 +358,9 @@ public:
   std::vector<std::string> TakeDelayNotes() { return std::exchange(m_delay_notes, {}); }
 
   const std::string& Error() const { return m_error; }
+  // The error was another player's doing (a packet or a host roster no honest Orca sends), not
+  // this machine's: this player can play on, and the match it was in doesn't count.
+  bool ErrorFromPeer() const { return m_error_from_peer; }
   const Stats& GetStats() const { return m_stats; }
   int CurrentFrame() const { return m_frame; }
   bool Resimulating() const { return m_resim_until >= 0; }
@@ -375,6 +378,8 @@ private:
   void ChooseSnapshotEvery();
   void CheckChecksums();
   Step Fail(std::string error);
+  // Fail, for what another player sent (ErrorFromPeer).
+  Step FailPeer(std::string error);
   bool SaveOnce(int frame);
   void SampleLocal(const Pad& local_pad);
   void AdaptDelay();
@@ -537,5 +542,6 @@ private:
 
   Stats m_stats;
   std::string m_error;
+  bool m_error_from_peer = false;
 };
 }  // namespace Orca::Net

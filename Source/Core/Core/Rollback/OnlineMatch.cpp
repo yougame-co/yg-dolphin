@@ -3916,7 +3916,7 @@ std::optional<int> Boundary(Core::System& system,
                    PEER_SILENCE_LIMIT.count(), match.running);
       Orca::Online::ReportPeerStalled(PEER_SILENT_SENTENCE);
     }
-    const bool survivable = Orca::Online::ReportSessionEnd(error);
+    const bool survivable = Orca::Online::ReportSessionEnd(error, match.session->ErrorFromPeer());
     if (Orca::Online::IsDesync(error))
       ++s_desyncs;
     if (Soft() && survivable && match.joining && Orca::Online::RoomErrorCode() == "match-over")

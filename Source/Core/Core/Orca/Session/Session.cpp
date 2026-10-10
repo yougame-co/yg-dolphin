@@ -399,8 +399,8 @@ void Session::ApplyRoster(const std::array<SeatPlan, MAX_SEATS>& roster)
         }
         else if (now.live_from != m_own_live_from)
         {
-          Fail(fmt::format("The host moved this player's live frame from {} to {}",
-                           m_own_live_from, now.live_from));
+          FailPeer(fmt::format("The host moved this player's live frame from {} to {}",
+                               m_own_live_from, now.live_from));
           return;
         }
       }
@@ -408,14 +408,14 @@ void Session::ApplyRoster(const std::array<SeatPlan, MAX_SEATS>& roster)
           (mine.plug_from != NEVER || now.plug_from < std::max(m_frame, LogEnd()) ||
            m_own_live_from == NEVER || LogEnd() < m_own_live_from))
       {
-        Fail(fmt::format("The host moved this controller's plug-in from frame {} to {}",
-                         mine.plug_from, now.plug_from));
+        FailPeer(fmt::format("The host moved this controller's plug-in from frame {} to {}",
+                             mine.plug_from, now.plug_from));
         return;
       }
       if (now.unplug_from > mine.unplug_from)
       {
-        Fail(fmt::format("The host moved this controller's unplug from frame {} to {}",
-                         mine.unplug_from, now.unplug_from));
+        FailPeer(fmt::format("The host moved this controller's unplug from frame {} to {}",
+                             mine.unplug_from, now.unplug_from));
         return;
       }
     }
@@ -466,8 +466,8 @@ void Session::ReceiveHistory(const Packet& packet)
       break;
     if (f >= m_own_live_from || f >= m_plan[m_config.local_seat].plug_from)
     {
-      Fail(fmt::format("The host sent history for frame {}, past this player's live frame {}", f,
-                       m_own_live_from));
+      FailPeer(fmt::format("The host sent history for frame {}, past this player's live frame {}",
+                           f, m_own_live_from));
       return;
     }
     if (const auto used = m_used.find(f); used != m_used.end() && used->second != pads)
@@ -517,6 +517,13 @@ void Session::PlugCaughtUpPeers()
     plan.plug_from = m_frame + m_config.max_rollback + 2 * m_config.max_delay + rtt_frames + 4;
     AdvanceReceived(s);
   }
+}
+
+Step Session::FailPeer(std::string error)
+{
+  if (m_error.empty())
+    m_error_from_peer = true;
+  return Fail(std::move(error));
 }
 
 Step Session::Fail(std::string error)
@@ -1230,7 +1237,7 @@ void Session::ReceivePackets()
         packet.history.size() > static_cast<size_t>(MAX_HISTORY_IN_PACKET) ||
         packet.history_first < 0 || packet.history_ack > far_limit)
     {
-      Fail(fmt::format("Player {} sent an invalid packet", s + 1));
+      FailPeer(fmt::format("Player {} sent an invalid packet", s + 1));
       return;
     }
     // A packet can arrive twice (direct link and relay) and out of order. Inputs, history, acks,

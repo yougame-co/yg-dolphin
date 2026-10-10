@@ -144,8 +144,9 @@ std::string StatusLine();
 
 // Reports why the session ended to the desktop app (Orca::Status): a desync, the room's reason, or
 // the session's own error; nothing for a normal leave. False when the game can't continue solo
-// (this machine's emulation failed; "internal" is always terminal).
-bool ReportSessionEnd(const std::string& session_error);
+// (this machine's emulation failed; "internal" is always terminal). `from_peer`: the error was
+// another player's doing (Session::ErrorFromPeer), never this machine's: it plays on.
+bool ReportSessionEnd(const std::string& session_error, bool from_peer = false);
 
 // Why this Orca leaves its room, sent in its goodbye: "mismatch" (a queue room's header it wouldn't
 // play) or "no-show" (it didn't pick in time). Any thread.
