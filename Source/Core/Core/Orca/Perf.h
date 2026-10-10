@@ -274,6 +274,10 @@ bool PerformanceNow();
 
 // The app saw "ready": lines may print, and measuring starts. Embedded runs only.
 void Ready();
+// Whether measuring has started (Ready, then a boundary).
+bool Measuring();
+// A new boot in the same process: measuring starts over (the info line is not sent again).
+void NewBoot();
 // The rules in use: Rules{} unless ORCA_TEST_PERF=<window_s>,<warm_frames> shortens them (a
 // session only; count_frames scales with the window; with ORCA_TEST_COMMANDS=1 it also starts the
 // lines without the app's "ready"). ORCA_PERF_AUTO=0 turns the switch off.

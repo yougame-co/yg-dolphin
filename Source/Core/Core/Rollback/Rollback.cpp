@@ -667,7 +667,8 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
   {
     Orca::JitWarm::OnBoundary(guard);
     // This machine's speed counts frames only once a match is under way (Orca/Perf.h).
-    Orca::Perf::NoteScene(Orca::JitWarm::SceneIsMatch(guard));
+    if (Orca::Perf::Measuring())
+      Orca::Perf::NoteScene(Orca::JitWarm::SceneIsMatch(guard));
   }
 
   // Skip host rendering for re-run frames. The emulated GPU still runs, so RAM and timing match.

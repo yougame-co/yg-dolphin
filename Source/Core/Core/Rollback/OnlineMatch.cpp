@@ -3351,6 +3351,7 @@ std::optional<int> Boundary(Core::System& system,
     match.download.reset();
     match = {};
     Orca::UX::Queue::DisarmOwnPick();
+    Orca::Perf::NewBoot();
   }
   if (match.finished)
     return std::nullopt;

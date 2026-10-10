@@ -6812,7 +6812,8 @@ then this as Orca 0.3.39 with `minDesktop` 0.12.41. Not released; nothing merged
 Checks (Mac M4 Pro, worktree `orca-gfx`, `build`, Release, the package script's flags with tests,
 AC power, through `vh-lock.py` / `run-lock.py`, SDL HIDAPI off):
 
-- dolphin-nogui + tests: no warnings in the changed files.
+- dolphin-nogui + tests: no warnings in the changed files. The whole `tests` binary: 1748 run, 1726
+  passed, 22 skipped, 0 failed.
 - `Orca*`: 697 run, 675 passed, 22 skipped, 0 failed. New: `OrcaPerf` (22: work, percentiles, cap,
   re-runs kept, waits out, GPU share, menus/warm-up, pauses/hidden/holds/unseen, catch-up, modes,
   the switch rule with a3851fbb- and 2f80e4c8-shaped fixtures, the JSON lines, 300 bytes, names,
@@ -6833,6 +6834,10 @@ AC power, through `vh-lock.py` / `run-lock.py`, SDL HIDAPI off):
   180 frames at `cap` 270-315 (`w50` 3.2-3.6 ms, `fps` 59.9), `gfx res 2` and `gfx efb 0` applied
   at the next boundary (`res` 2 in the next window), `gfx wireframe 1` answered `unsupported gfx`,
   no switch. Boot logged mode 3 and threads 2.
+
+Review (code-review, high): a second boot in one process now starts measuring over
+(`Perf::NewBoot` from the stale-match reset); the scene is read only once measuring has started.
+Left as is: a `gfx` line sent while the game is paused applies at the next frame after resume.
 
 Not run here: the switch firing on a really slow machine (the PC on its weakest settings), Mac <-> PC
 with very different settings and live `gfx` mid-match (0 desyncs expected: drawing never reaches

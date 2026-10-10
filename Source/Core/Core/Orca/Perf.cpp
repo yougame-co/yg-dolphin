@@ -550,6 +550,17 @@ void Ready()
   s_ready = true;
 }
 
+bool Measuring()
+{
+  return s_run.meter.has_value();
+}
+
+void NewBoot()
+{
+  s_run.meter.reset();
+  s_run.auto_switch.reset();
+}
+
 const Rules& ActiveRules()
 {
   static const Rules rules = ReadRules();
