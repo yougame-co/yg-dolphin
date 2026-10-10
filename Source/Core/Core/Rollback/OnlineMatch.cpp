@@ -1972,6 +1972,15 @@ Load LoadKeyframe(Core::System& system, Match& match, int* frame_out)
     match.join_error = "Your friend's game data differs from yours";
     return Load::Failed;
   }
+  // Every header it writes is this game's ruleset's (or none).
+  if (!Orca::Net::HeadersFitRuleset(download->replay,
+                                    static_cast<u8>(Orca::UX::Rules::ProfileRuleset())))
+  {
+    WARN_LOG_FMT(ROLLBACK, "Drop-in: the host's replay sets another game's rules: refused");
+    match.join_error_code = "room_mismatch";
+    match.join_error = "Your friend's game data differs from yours";
+    return Load::Failed;
+  }
   IOS::HLE::FS::HostFileSystem* nand = HostNand(system);
   if (!nand || !Core::WiiRootIsTemporary())
   {

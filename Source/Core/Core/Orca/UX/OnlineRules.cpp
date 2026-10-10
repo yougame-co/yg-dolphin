@@ -1077,9 +1077,13 @@ void OnFrame(const Core::CPUThreadGuard& guard, int frame, bool resimulating, bo
   GuardMemory m(guard);
   if (Orca::Net::ReplayScope::Playing())
   {
-    if (const auto& header = Orca::Net::ReplayScope::Current()->header)
+    // Never another game's ruleset (Net::HeadersFitRuleset refuses such a replay first).
+    if (const auto& header = Orca::Net::ReplayScope::Current()->header;
+        header && (header->ruleset == 0 || static_cast<Ruleset>(header->ruleset) == ruleset))
+    {
       WriteHeader(m, static_cast<Mode>(header->mode), static_cast<Ruleset>(header->ruleset),
                   header->coin, header->room, header->flags);
+    }
   }
   // The room code (made by the server) decides game 1's first striker, so neither player chooses.
   Header wanted;
