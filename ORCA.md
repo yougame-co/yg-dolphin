@@ -1976,7 +1976,7 @@ Everything Orca shows should look like the game drew it. Two ways:
   Up to 0.3.38 they lived until process exit: on D3D11 they held 4 device references ("Unreleased
   references: 4"), so the device and the graphics driver outlived `D3D::Destroy`, which unloads
   d3d11.dll, and a driver thread calling back into it ended Orca with `0xC0000005` a moment after
-  the game (10 of 132 embedded or jailed exits on an NVIDIA PC); a standalone window, which exits
+  the game (12 of 132 embedded or jailed exits on an NVIDIA PC); a standalone window, which exits
   through the CRT, crashed every time in their destructors. `D3D::Destroy` now also keeps d3d11.dll
   loaded if anything still holds the device.
 - **Relabelled textures** (`Orca/UX/Relabel.*`, `CssTitle.*`): the game's big words (READY TO
