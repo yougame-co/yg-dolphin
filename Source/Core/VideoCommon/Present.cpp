@@ -1140,6 +1140,13 @@ void Presenter::Present(PresentInfo* present_info)
       if (time_gpu)
         Orca::Perf::AddPresent(Clock::now() - gpu_start);
     }
+    else
+    {
+      // Orca tests (ORCA_TEST_PRESENT): nothing is presented, so the frame's GPU work is submitted
+      // here instead. Metal otherwise keeps every frame's command buffers open and runs out of GPU
+      // memory after a few thousand frames ("Failed to allocate IOGPUDeviceShmem").
+      g_gfx->Flush();
+    }
   }
 
   if (m_xfb_entry)
