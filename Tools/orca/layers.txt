@@ -86,6 +86,7 @@ engine-sensitive  Source/Core/Core/Orca/Launch.*          # orca-launch.ini pars
 engine-sensitive  Source/Core/Core/Orca/Profile.*         # profile parser, forced settings
 engine-sensitive  Source/Core/Core/Orca/Mod.*             # mods-p1: mod.json, tree hash, SD builder
 engine-sensitive  Source/Core/Core/Orca/Bundle.*          # flat bundles: discovery, mod.sig, the pinned key
+engine-sensitive  Source/Core/Core/Orca/Sandbox.*         # sandbox mode (0.3.39): --sandbox-probe's socket and file checks
 # Session/: rooms, direct links, keyframes, replays, pad codec, compatibility key, input exchange.
 engine-sensitive  Source/Core/Core/Orca/Session/**
 engine            Source/Core/Core/Orca/Session/Events.*  # engine-to-game callbacks, no parsing
