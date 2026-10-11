@@ -6843,3 +6843,50 @@ Not run here: the switch firing on a really slow machine (the PC on its weakest 
 with very different settings and live `gfx` mid-match (0 desyncs expected: drawing never reaches
 RAM), the netplay perf gate against 0.3.38 (the frame loop got the measuring hooks), the Windows
 build (D3D11/D3D12/Vulkan/OpenGL each booting; whether Vulkan is in the Windows package), synctests.
+
+## Hold B to leave; Z back for costumes (branch orca/hold-b-exit, 2026-10-11)
+
+Luis, 2026-10-11: players couldn't do Project+'s Z costume because Z was Orca's leave (casual skip,
+set over), a Slippi habit. Leaving is now a held B everywhere, which is what players already do to
+back out of a menu. Off `release-0.3.39-rc` @ `23b3471f58`; `kCompatVersion` 28 -> 29 (Z now reaches
+the synced game on the queue selects: a 0.3.39 and this build would diverge the moment someone holds
+Z at the go, so they never meet).
+
+- **Why the costume failed.** `Queue::Gate` masked Z for ports 1-2 on every queue character select
+  (own select and rooms, both modes). P+'s `[Legacy TE] Hold Z for AltZ` (`AltCostume.asm`, hook
+  `0x8068478C`) reads Z as the select ends: hidden costume 62. R's AltR (61) was never masked, so it
+  already worked online. Brawl has no known Z on the select.
+- **Casual skip:** `SkipHold` on B (90 frames, unchanged). The bar shows only from
+  `SKIP_BAR_FRAMES` (15) so a B tap never flashes it. The hold's first frame is a normal B (un-pick
+  with the token down, un-ready while locked in); the online rules still pass B only on a press's
+  first frame, so the hold never backs the room's game out. Hint: "Hold B to leave", or
+  "B to change · Hold B to leave".
+- **Set over:** `SetOverLeave` on B, 1.5 s (`SET_OVER_HOLD`, log reason `B held`). Text "Hold B to
+  leave" / "Press Start to continue · Hold B to leave". `Rules::GateMasks` keeps B from ranked's
+  results screen (`scVsResult` under a ranked header), so whatever B does there natively, the hold
+  never moves the opponent's game. Casual's results screen is unchanged. Not probed yet whether B
+  does anything there in Brawl or P+; the mask makes it moot for ranked.
+- **Own select while searching:** the B that un-readies is swallowed as before; still held
+  `SOLO_LEAVE_FRAMES` (30) later, the swallow lifts and the game sees a new B: token up, and the
+  game's own 31-frame back-out. About 1 s from the press. `TIMER_START` carries the swallow's start
+  frame on the own select (it has no ready timer; a new header zeroes the region).
+- **The tip:** "New · Hold B to leave" in the control guide on the own select, the first time a player
+  gets there (`Queue::OnceTip`, first runs only, display only). 6 s, gone on Start or 15 frames of B.
+  Kept as seen in `<User>/Config/OrcaSeen.txt` (line `hold-b-leave`) once on screen 2 s or once B is
+  held: per Orca user folder, the same place the kept controls live (`OrcaControls-<game>.txt`), not
+  the account. Jailed and unjailed runs have separate folders, so a player may see it twice.
+- **Unchanged:** Z masked on the results screen (replay save) and P+'s stage select (hazards);
+  ranked has no skip and no hold hint on the select; `orca queue skip` keeps its name, so the app and
+  page need nothing.
+- **Harness:** `queue-e2e.mjs` `skip`, `noskip`, `playagain` a/b hold B; `zleave` is now `bleave`
+  (the old name still runs it); new `altz` (P+: both hold Z through the go, checksum gate).
+
+Tests: `OrcaQueue.HoldingBSkipsOnce`, `HoldingBWhileSearchingLeaves`, `ZIsTheGamesOnEveryQueueSelect`,
+`TheHoldBTipShowsOnce`, `TheTipSeenFileKeepsOneKeyPerLine`, `RankedHasNoSkip`,
+`ItsOwnCharacterSelectsMasks`; `OrcaOnlineRules.RankedResultsNeverTakeB`; `OrcaKit.GuideOfOrcasHints`;
+`OrcaSetEndSetOver.TheLeaveHintAndBsHold`.
+
+Not run here (before the release): the probes (Z on the Versus select in Brawl and P+ with
+`YG_HASHLOG`, B on the results screen), `YG_SYNCTEST=7` with Z held through the go and B held in
+casual and ranked rooms, `queue-e2e` `skip`/`bleave`/`noskip`/`playagain`/`altz` Mac <-> PC, the
+netcode perf gate. Input delay stays 3.

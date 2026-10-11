@@ -233,6 +233,122 @@ TEST(OrcaQueue, TheBThatStopsTheSearchIsSwallowedUntilLetGo)
   EXPECT_FALSE(Gate(Solo(), s)[0].buttons & B);
 }
 
+// Hold B to leave works while searching too: the tap cancels the search and is kept from the game,
+// and the same B still held SOLO_LEAVE_FRAMES later reaches it, so the game's own held B backs out
+// to the menus. Each frame is a pure, idempotent function of the state (TIMER_START holds when the
+// swallow began).
+TEST(OrcaQueue, HoldingBWhileSearchingLeaves)
+{
+  State s = Step(Press(Solo(), START), State{}, 500);
+  ASSERT_EQ(s.ready, 1);
+  s = Step(Press(Solo(), B), s, 501);
+  EXPECT_EQ(s.ready, 0);
+  EXPECT_TRUE(s.flags & FLAG_SWALLOW_B);
+  EXPECT_EQ(s.timer_start, 502u);
+  View held = Solo();
+  held.raw = {B, 0};
+  held.raw_prev = {B, 0};
+  for (int f = 502; f < 501 + SOLO_LEAVE_FRAMES; ++f)
+  {
+    s = Step(held, s, f);
+    EXPECT_TRUE(s.flags & FLAG_SWALLOW_B) << f;
+    EXPECT_EQ(s.timer_start, 502u) << f;
+    EXPECT_TRUE(Gate(held, s)[0].buttons & B) << f;
+  }
+  // SOLO_LEAVE_FRAMES after the press: B is the game's (it picks the token up and, held, backs
+  // out). Never swallowed again while it stays held.
+  s = Step(held, s, 501 + SOLO_LEAVE_FRAMES);
+  EXPECT_FALSE(s.flags & FLAG_SWALLOW_B);
+  EXPECT_EQ(s.timer_start, 0u);
+  EXPECT_EQ(s.ready, 0);
+  EXPECT_FALSE(Gate(held, s)[0].buttons & B);
+  for (int f = 502 + SOLO_LEAVE_FRAMES; f < 540 + SOLO_LEAVE_FRAMES; ++f)
+  {
+    s = Step(held, s, f);
+    EXPECT_FALSE(s.flags & FLAG_SWALLOW_B) << f;
+    EXPECT_FALSE(Gate(held, s)[0].buttons & B) << f;
+  }
+  // A tap that is let go sooner only cancels: nothing reaches the game.
+  State t = Step(Press(Solo(), START), State{}, 700);
+  t = Step(Press(Solo(), B), t, 701);
+  for (int f = 702; f < 710; ++f)
+    t = Step(held, t, f);
+  View free = Solo();
+  free.raw_prev = {B, 0};
+  t = Step(free, t, 710);
+  EXPECT_FALSE(t.flags & FLAG_SWALLOW_B);
+  EXPECT_EQ(t.timer_start, 0u);
+  EXPECT_EQ(t.ready, 0);
+  // A stamp from the future (another frame numbering) starts the count again, never lifts early.
+  State odd;
+  odd.flags = FLAG_SWALLOW_B;
+  odd.timer_start = 9000;
+  odd = Step(held, odd, 800);
+  EXPECT_TRUE(odd.flags & FLAG_SWALLOW_B);
+  EXPECT_EQ(odd.timer_start, 801u);
+}
+
+// The one-time tip, "New · Hold B to leave", on the queue's own select.
+TEST(OrcaQueue, TheHoldBTipShowsOnce)
+{
+  EXPECT_EQ(TIP_TEXT, "New \u00b7 Hold B to leave");
+  // Shown TIP_FRAMES on the select, kept as seen once at TIP_SEEN_FRAMES.
+  OnceTip tip;
+  int keeps = 0, shown = 0;
+  for (int f = 0; f < TIP_FRAMES + 100; ++f)
+  {
+    const OnceTip::Step step = tip.Frame(true, false, 0);
+    shown += step.show;
+    keeps += step.keep;
+    if (step.keep)
+      EXPECT_EQ(f + 1, TIP_SEEN_FRAMES);
+  }
+  EXPECT_EQ(shown, TIP_FRAMES);
+  EXPECT_EQ(keeps, 1);
+  EXPECT_TRUE(tip.over);
+  // Off the select it waits, and goes on where it was when the player comes back.
+  OnceTip away;
+  for (int f = 0; f < 60; ++f)
+    away.Frame(true, false, 0);
+  EXPECT_EQ(away.Frame(false, false, 0), OnceTip::Step{});
+  EXPECT_EQ(away.shown, 60);
+  EXPECT_TRUE(away.Frame(true, false, 0).show);
+  // Readying (Start) ends it; before TIP_SEEN_FRAMES that isn't kept as seen, so the next run
+  // shows it again.
+  OnceTip start;
+  for (int f = 0; f < 30; ++f)
+    EXPECT_TRUE(start.Frame(true, false, 0).show);
+  EXPECT_EQ(start.Frame(true, true, 0), OnceTip::Step{});
+  EXPECT_TRUE(start.over);
+  EXPECT_FALSE(start.kept);
+  EXPECT_FALSE(start.Frame(true, false, 0).show);
+  // Holding B (the lesson) ends it and keeps it as seen at once. A tap doesn't.
+  OnceTip hold;
+  EXPECT_TRUE(hold.Frame(true, false, TIP_HOLD_FRAMES - 1).show);
+  const OnceTip::Step held = hold.Frame(true, false, TIP_HOLD_FRAMES);
+  EXPECT_FALSE(held.show);
+  EXPECT_TRUE(held.keep);
+  EXPECT_EQ(hold.Frame(true, false, TIP_HOLD_FRAMES + 1), OnceTip::Step{});
+  // Already seen in an earlier run: never.
+  OnceTip seen;
+  seen.over = true;
+  for (int f = 0; f < 10; ++f)
+    EXPECT_EQ(seen.Frame(true, false, 0), OnceTip::Step{});
+}
+
+TEST(OrcaQueue, TheTipSeenFileKeepsOneKeyPerLine)
+{
+  EXPECT_FALSE(TipSeenIn("", TIP_KEY));
+  EXPECT_FALSE(TipSeenIn("hold-b-leaves\n", TIP_KEY));
+  EXPECT_TRUE(TipSeenIn("hold-b-leave", TIP_KEY));
+  EXPECT_TRUE(TipSeenIn("other\r\n  hold-b-leave \r\n", TIP_KEY));
+  EXPECT_EQ(TipSeenWith("", TIP_KEY), "hold-b-leave\n");
+  EXPECT_EQ(TipSeenWith("other", TIP_KEY), "other\nhold-b-leave\n");
+  // Idempotent: a key already there is kept as is.
+  EXPECT_EQ(TipSeenWith("hold-b-leave\nother\n", TIP_KEY), "hold-b-leave\nother\n");
+  EXPECT_TRUE(TipSeenIn(TipSeenWith("a\nb\n", TIP_KEY), TIP_KEY));
+}
+
 // Back on its own character select not ready after a room (a ranked set played there): the Start
 // that left the results screen, still held, readies nobody; a new Start does.
 TEST(OrcaQueue, AStartHeldThroughTheWayBackIsSwallowedUntilLetGo)
@@ -275,14 +391,14 @@ TEST(OrcaQueue, ItsOwnCharacterSelectsMasks)
 {
   State s;
   Masks m = Gate(Solo(), s);
-  // Start is Orca's, Z the room's skip; B backs out while not ready; nobody else plays.
-  EXPECT_EQ(m[0].buttons, START | Z);
+  // Start is Orca's; B backs out while not ready; Z is the game's; nobody else plays.
+  EXPECT_EQ(m[0].buttons, START);
   EXPECT_EQ(m[0].press, 0);
   for (int port = 1; port < 4; ++port)
     EXPECT_EQ(m[port], ALL);
   s.ready = 1;
   m = Gate(Solo(), s);
-  EXPECT_EQ(m[0].buttons, START | Z | B);
+  EXPECT_EQ(m[0].buttons, START | B);
   // Off the character select, or without the queue's header: nothing.
   View off = Solo();
   off.css = false;
@@ -404,11 +520,14 @@ TEST(OrcaQueue, BothReadyGoOnAndPort1PressesStart)
   s = Step(Press(Room(), 0, START), s, 1020);
   EXPECT_EQ(s.ready, 3);
   EXPECT_TRUE(s.flags & FLAG_GO);
-  // Start for port 1 every other frame until the screen goes; Start and Z never pass.
+  // Start for port 1 every other frame until the screen goes; Start never passes, Z does (Project+
+  // reads it as the select ends for the AltZ costume).
   Masks m = Gate(Room(), s);
   EXPECT_EQ(m[0].press & START, s.timer % 2 == 0 ? START : 0);
   EXPECT_TRUE(m[0].buttons & START);
-  EXPECT_TRUE(m[1].buttons & (START | Z));
+  EXPECT_TRUE(m[1].buttons & START);
+  EXPECT_FALSE(m[0].buttons & Z);
+  EXPECT_FALSE(m[1].buttons & Z);
   s = Step(Room(), s, 1021);
   m = Gate(Room(), s);
   EXPECT_EQ(m[0].press & START, s.timer % 2 == 0 ? START : 0);
@@ -1049,11 +1168,18 @@ TEST(OrcaQueue, TheHandIsStillUnderAFrameOfCreep)
   EXPECT_FALSE(HandStill(7.5f, std::numeric_limits<float>::quiet_NaN(), 7.5f, 6.2f));
 }
 
-TEST(OrcaQueue, HoldingZSkipsOnce)
+TEST(OrcaQueue, HoldingBSkipsOnce)
 {
   SkipHold hold;
   for (int i = 1; i < SKIP_FRAMES; ++i)
+  {
     EXPECT_FALSE(hold.Step(true, true)) << i;
+    // No bar for an ordinary B tap: only from SKIP_BAR_FRAMES of a hold.
+    if (i < SKIP_BAR_FRAMES)
+      EXPECT_EQ(hold.Progress(), 0.0f) << i;
+    else
+      EXPECT_GT(hold.Progress(), 0.0f) << i;
+  }
   EXPECT_GT(hold.Progress(), 0.9f);
   EXPECT_TRUE(hold.Step(true, true));
   // Held on: once.
@@ -1074,13 +1200,12 @@ TEST(OrcaQueue, HoldingZSkipsOnce)
 
 TEST(OrcaQueue, RankedHasNoSkip)
 {
-  // Ranked matches can't be skipped with Z. Casual keeps the skip: the hint, then the bar while Z
-  // is held.
+  // Ranked matches can't be skipped. Casual keeps the skip: the hint, then the bar while B is held.
   State s = Step(Room(), State{}, 100);
   ASSERT_TRUE(ReadyPhase(Room()));
   EXPECT_TRUE(MaySkip(Room(), s));
   Text t = TextFor(Room(), s, {}, 0, 0.0f);
-  EXPECT_NE(t.note.find("Hold Z to find someone else"), std::string::npos) << t.note;
+  EXPECT_EQ(t.note, "Hold B to leave");
   t = TextFor(Room(), s, {}, 1, 0.5f);
   EXPECT_NE(t.note.find("Finding someone else |||||....."), std::string::npos) << t.note;
   // Casual's later games too (no timer), and with a player locked in.
@@ -1089,7 +1214,7 @@ TEST(OrcaQueue, RankedHasNoSkip)
   State ls = Step(Press(later, START), State{}, 200);
   ASSERT_EQ(ls.ready, 1);
   EXPECT_TRUE(MaySkip(later, ls));
-  EXPECT_NE(TextFor(later, ls, {}, 0, 0.0f).note.find("Hold Z"), std::string::npos);
+  EXPECT_EQ(TextFor(later, ls, {}, 0, 0.0f).note, "B to change \u00b7 Hold B to leave");
   // Not once it goes on, nor after a timeout, nor on the player's own character select.
   State go = s;
   go.flags |= FLAG_GO;
@@ -1099,14 +1224,14 @@ TEST(OrcaQueue, RankedHasNoSkip)
   EXPECT_FALSE(MaySkip(Room(), out));
   EXPECT_FALSE(MaySkip(Solo(), State{}));
 
-  // Ranked: game 1 and later games (the order done), either port, ready or not, Z held or not:
-  // no skip, and nothing on screen says Z.
+  // Ranked: game 1 and later games (the order done), either port, ready or not, B held or not:
+  // no skip, and nothing on screen offers a hold.
   for (const bool game1 : {true, false})
   {
     View v = Room(true);
     v.game1 = game1;
     v.order_done = true;
-    for (const u16 presses : {u16{0}, START, Z})
+    for (const u16 presses : {u16{0}, START, B})
     {
       for (int port = 0; port < 2; ++port)
       {
@@ -1119,17 +1244,50 @@ TEST(OrcaQueue, RankedHasNoSkip)
           {
             const Text rt = TextFor(v, rs, {}, local, progress);
             EXPECT_FALSE(rt.line.empty());
-            EXPECT_EQ(rt.line.find('Z'), std::string::npos) << rt.line;
-            EXPECT_EQ(rt.note.find('Z'), std::string::npos) << rt.note;
+            EXPECT_EQ(rt.line.find("Hold"), std::string::npos) << rt.line;
+            EXPECT_EQ(rt.note.find("Hold"), std::string::npos) << rt.note;
             EXPECT_EQ(rt.note.find("someone else"), std::string::npos) << rt.note;
           }
         }
       }
     }
   }
-  // Z stays kept from the game in both modes alike (nothing emulated changed with the rule).
-  EXPECT_EQ(Gate(Room(true), State{})[0].buttons & Z, Z);
-  EXPECT_EQ(Gate(Room(false), State{})[0].buttons & Z, Z);
+  // Z reaches the game in both modes alike, on every queue select, locked in or not.
+  EXPECT_EQ(Gate(Room(true), State{})[0].buttons & Z, 0);
+  EXPECT_EQ(Gate(Room(false), State{})[0].buttons & Z, 0);
+}
+
+// Players do Project+'s AltZ costume by holding Z as the select ends, so Z is never Orca's on a
+// queue character select: own select, rooms of both modes, game 1 locked in, later games.
+TEST(OrcaQueue, ZIsTheGamesOnEveryQueueSelect)
+{
+  for (const u8 ready : {u8{0}, u8{1}})
+  {
+    State s;
+    s.ready = ready;
+    for (const Rollback::InputGate::Mask& mask : Gate(Solo(), s))
+    {
+      if (mask != ALL)
+        EXPECT_EQ(mask.buttons & Z, 0);
+    }
+  }
+  for (const bool ranked : {false, true})
+  {
+    for (const bool game1 : {true, false})
+    {
+      View v = Room(ranked);
+      v.game1 = game1;
+      State s;
+      s.locked = 3;
+      s.ready = 1;
+      const Masks m = Gate(v, s);
+      EXPECT_EQ(m[0].buttons & Z, 0) << ranked << game1;
+      EXPECT_EQ(m[1].buttons & Z, 0) << ranked << game1;
+      // A locked game-1 pick still keeps its A, B, X and Y from the game.
+      if (game1)
+        EXPECT_EQ(m[0].buttons & (A | B | X | Y), A | B | X | Y);
+    }
+  }
 }
 
 TEST(OrcaQueue, RandomIsAPickLikeAnyCharacter)

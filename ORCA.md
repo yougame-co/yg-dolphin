@@ -1929,14 +1929,23 @@ presses Start; only then does the page search (`Orca/UX/Queue.*`, the session's 
 |---|---|
 | `orca queue ready <casual\|ranked> <char> <costume>` | A character down and Start pressed: search with this pick. Printed again with a new pick or when back after a room. `<char>` is the select's id (`0x28` none, `0x29` Random). |
 | `orca queue unready` | B, the token taken up, or `queue-cancel` while ready. |
-| `orca menu cancel` | Backed out to the menus (B or A on BACK while not ready). |
-| `orca queue skip` | Casual only: Z held 1.5 s on the room's select. The page leaves and searches again. |
+| `orca menu cancel` | Backed out to the menus (held B, or A on BACK; while ready, the B that un-readies backs out once held about 1 s). |
+| `orca queue skip` | Casual only: B held 1.5 s on the room's select (its first frame does what B does there). The page leaves and searches again. |
 | `orca queue timeout me\|them` | Casual's first game: the 30 s ready timer ran out. |
 
 The page owns the room: Orca never leaves on a skip or a timeout by itself.
 
 - **The own select.** The header carries `FLAG_SOLO`. Ports 2-4 are masked; Start never reaches the
-  game (it readies through the latch); while ready, B only un-readies.
+  game (it readies through the latch); while ready, a B tap only un-readies, and the same B held
+  `SOLO_LEAVE_FRAMES` (30) reaches the game, which backs out as for any held B (`TIMER_START` holds
+  when that B began, its solo meaning). So hold B leaves the own select, searching or not.
+- **Hold B to leave** (2026-10-11, `ux=29`). Leaving moved from Z to B: casual's skip, set over's
+  leave and the own select's back-out are all a held B. Z is the game's on every queue character
+  select, so Project+'s AltZ costume works (hold Z as the select ends: in a room, through Orca's
+  Start at the go). Ranked's results screen keeps B from the game (`GateMasks`). The first time a
+  player reaches the own select, the control guide shows "New · Hold B to leave" for 6 s (gone on
+  Start or a held B); once on screen 2 s, or once B is held, `hold-b-leave` goes into
+  `<User>/Config/OrcaSeen.txt`, beside the kept controls, so it never shows again on that machine.
 - **The pick's identity.** At ready, Orca keeps the pick (character, costume, where the hand placed
   it) and the page's `queue rating`, as a 13-byte queue identity that rides the session's value
   channel, so every machine has the joiner's at its plug frame. The place is learned from a hand
@@ -2008,7 +2017,7 @@ forfeit in" with a draining ring that follows the room's 15 s grace (or the 10 s
 left · This set counts as a loss". Before the set's first game began (its fighters in) the room voids
 a leave instead: "No contest in" and "This set doesn't count". After a ranked verdict the room stays
 open (**set over**): both games keep the session on the results screen with the page's chat; each
-Orca leaves the room when its results screen ends, when the player holds Z for 1.5 s, or, with the
+Orca leaves the room when its results screen ends, when the player holds B for 1.5 s, or, with the
 opponent gone, on Start. A
 ranked set's player comes back to their own character select not ready, so the page doesn't search
 by itself; a Start still held from the results screen readies nobody until it is let go.

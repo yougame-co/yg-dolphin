@@ -15,7 +15,7 @@
 // into the host's game. Scenarios with --q2 (--scenario):
 //   match    the default: a casual game or a ranked set to its end (VICTORY/DEFEAT, new rating),
 //            then both leave the room through the results screen
-//   skip     the joiner holds Z (`orca queue skip`); both end up back on their own character select
+//   skip     the joiner holds B (`orca queue skip`); both end up back on their own character select
 //   rematch  casual: skip, then both search again and meet in a new room, the skipper hosting
 //   timeout  casual: nobody readies; both time out and are back on their own character select
 //   kill     ranked: the joiner's Orca is killed in game 2; the host wins by forfeit after 15 s
@@ -28,14 +28,18 @@
 //            --in-game 0: kill or leave 1 s into game 1's stage, during its loading image, before
 //            the fighters are in: neither Orca sends game-start, and the set ends void, nobody
 //            rated (a crash at load; --expect void is then the default)
-//   zleave   ranked: after the set the joiner leaves by holding Z on the results screen
+//   bleave   ranked: after the set the joiner leaves by holding B on the results screen (zleave, its
+//            old name, still runs it)
 //   rejoin   ranked: the joiner's room connection drops in game 1 (`test-drop-room`) and its page
 //            sends it back to the same room, as the YouGame page does; it must plug in again and
 //            play on (bug reports 6afb0948, 22ba6446, 96e56887: Orca 0.3.30 and 0.3.34 ended with
 //            "The host plugged this controller in at frame N, already past"). --drop silent (the
 //            default) drops it as a network failure does (ORCA_TEST_DROP_SILENT: the server hears
 //            of it only when the next connection replaces it); --drop clean closes it at once
-//   noskip   ranked: both hold Z on every character select; ranked has no skip
+//   noskip   ranked: both hold B on every character select; ranked has no skip
+//   altz     Project+: both hold Z through the first character select's go (Orca's Start), as the
+//            AltZ costume code wants (hidden costume 62); Z must reach both games alike, which the
+//            checksum gate checks. Add --probe for a `fighters` line with the costumes
 // --pick random makes every pick RANDOM. Every --q2 scenario ends with the checksum gate: each
 // session either Orca ended matched checksums with the other, and neither logged a desync.
 //
@@ -85,7 +89,12 @@ const ALARM = Number(opt("--alarm", "900"));
 //   forfeit  ranked: the joiner's connection drops after game 1; the host wins by forfeit
 //   rehost   casual: after the joiner leaves, it queues first, hosts, and they play again
 //   noshow   the opponent never arrives; the host moves on to a room of its own
-const SCENARIO = opt("--scenario", "match");
+// zleave is bleave's old name (leaving moved from Z to B).
+const SCENARIO = opt("--scenario", "match") === "zleave" ? "bleave" : opt("--scenario", "match");
+if (SCENARIO === "altz" && !argv.includes("--pplus")) {
+  console.error("--scenario altz is for Project+ (--pplus)");
+  process.exit(2);
+}
 // --shots <n>: render with Metal and save a screenshot every n frames from --shots-from; 0 saves
 // only the scenario's own shots (`test-shot`). --shots-who picks which Orcas render (ada, bo or
 // ada,bo), --shots-size sets the size, and --shots-out copies the scenario's shots to a folder.
@@ -115,8 +124,8 @@ if (DELAY !== undefined && !/^[1-9]$/.test(DELAY)) {
 // the invitee's page accepts it (`join <code>`, --invite-gap ms later). --variant picks where each
 // player is then:
 //   a: the invitee is still in the set's room as its host (the joiner, the inviter, left by holding
-//      Z on the results screen; the host stays there);
-//   b: the invitee is still in the set's room as its joiner (the host, the inviter, held Z);
+//      B on the results screen; the host stays there);
+//   b: the invitee is still in the set's room as its joiner (the host, the inviter, held B);
 //   c: both are still in the set's room when the invite goes out: the inviter's page leaves the room
 //      (the app's `leave`) and invites at once, and the invitee accepts as soon as the code is known;
 //   d: both left together by pressing on through the results screen, each in a room of its own
@@ -1260,6 +1269,11 @@ async function q2Css(host, joiner, first, queueFrom = 0) {
     for (const s of [host, joiner]) s.pad.buttons |= BTN.L;
     log("--giga: both hold L through the character select's Start");
   }
+  const altz = SCENARIO === "altz" && first;
+  if (altz) {
+    for (const s of [host, joiner]) s.pad.buttons |= BTN.Z;
+    log("altz: both hold Z through the character select's go");
+  }
   for (let tries = 0; host.scene === "scSelctCharacter"; ++tries) {
     if (tries >= (QUEUE === "ranked" ? 120 : 30)) fail("the character select never went on");
     if (QUEUE === "ranked" && !first && tries < 3) {
@@ -1270,25 +1284,30 @@ async function q2Css(host, joiner, first, queueFrom = 0) {
     await sleep(1200);
   }
   if (giga) for (const s of [host, joiner]) s.pad.buttons &= ~BTN.L;
+  if (altz) {
+    for (const s of [host, joiner]) s.pad.buttons &= ~BTN.Z;
+    altzHeld = true;
+  }
 }
 
-// --scenario noskip: ranked has no skip. On every character select both players hold Z for 3 s
+// --scenario noskip: ranked has no skip. On every character select both players hold B for 3 s
 // (twice the casual skip's hold) and neither Orca may print `orca queue skip`.
 async function noSkip(sides) {
   if (QUEUE !== "ranked") fail("noskip is a ranked scenario");
   const from = sides.map((s) => s.lines.length);
-  for (const s of sides) s.pad.buttons |= BTN.Z;
+  for (const s of sides) s.pad.buttons |= BTN.B;
   await sleep(3000);
-  for (const s of sides) s.pad.buttons &= ~BTN.Z;
+  for (const s of sides) s.pad.buttons &= ~BTN.B;
   await sleep(500);
   sides.forEach((s, i) => {
     if (s.lines.slice(from[i]).some((l) => l === "orca queue skip"))
-      fail(`${s.name}: held Z on a ranked character select and printed orca queue skip`);
+      fail(`${s.name}: held B on a ranked character select and printed orca queue skip`);
   });
   ++noSkipHolds;
-  log(`noskip: both held Z 3 s on the ranked character select; no orca queue skip`);
+  log(`noskip: both held B 3 s on the ranked character select; no orca queue skip`);
 }
 let noSkipHolds = 0;
+let altzHeld = false;
 
 async function q2Fight(host, joiner) {
   if (QUEUE === "casual") {
@@ -1398,7 +1417,7 @@ async function setEndPanels(sides, from, resultsFrom) {
 }
 
 // After a ranked set, both stay on the results screen until each leaves by pressing on, or
-// (zleave) the joiner holds Z and the host sees "<name> left" and leaves with Start. No forfeit
+// (bleave) the joiner holds B and the host sees "<name> left" and leaves with Start. No forfeit
 // countdown runs after the set.
 async function setOverLeave(host, joiner, from) {
   const sides = [host, joiner];
@@ -1413,14 +1432,14 @@ async function setOverLeave(host, joiner, from) {
   if (host.scene !== "scVsResult") fail(`${host.name}: off the results screen by itself (${host.scene})`);
   for (const s of sides) s.shot(`${s.name}-set-over`);
   if (SCENARIO === "playagain") return playAgainLeave(host, joiner, from);
-  if (SCENARIO === "zleave") {
-    joiner.pad.buttons |= BTN.Z;
+  if (SCENARIO === "bleave") {
+    joiner.pad.buttons |= BTN.B;
     await sleep(900);
     joiner.shot(`${joiner.name}-set-over-hold`);
-    const z = await waitSetEnd(joiner, /set over: leaving room \S+ \(Z held\)/, 5000, from[1]).finally(
-      () => (joiner.pad.buttons &= ~BTN.Z),
+    const z = await waitSetEnd(joiner, /set over: leaving room \S+ \(B held\)/, 5000, from[1]).finally(
+      () => (joiner.pad.buttons &= ~BTN.B),
     );
-    if (!z) fail(`${joiner.name}: held Z on the results screen and stayed in the room`);
+    if (!z) fail(`${joiner.name}: held B on the results screen and stayed in the room`);
     log(`${joiner.name}: ${z.line}`);
     const gone = await waitSetEnd(host, /^Set end: \S+ left the set's room/, 20000, from[0]);
     if (!gone) fail(`${host.name}: never heard ${joiner.name} leave the set's room`);
@@ -1518,9 +1537,9 @@ async function q2Main() {
     );
     marks();
     const from = joiner.lines.length;
-    joiner.pad.buttons |= BTN.Z;
+    joiner.pad.buttons |= BTN.B;
     await joiner.expect(/^orca queue skip$/, 6000, from).finally(() => {
-      joiner.pad.buttons &= ~BTN.Z;
+      joiner.pad.buttons &= ~BTN.B;
     });
     joiner.send("leave");
     await host.expect(/^orca state friend-left /, 60000, host.linesAtBack);
@@ -1528,10 +1547,10 @@ async function q2Main() {
     noErrors([a, b]);
     if (SCENARIO === "skip") {
       const sums = checksumsMatched([a, b]);
-      log(`PASS: skip: ${joiner.name} held Z, left ${room}; both back on their own character select, ready; checksums: ${sums}`);
+      log(`PASS: skip: ${joiner.name} held B, left ${room}; both back on their own character select, ready; checksums: ${sums}`);
       return;
     }
-    log(`skip: ${joiner.name} held Z, left ${room}; both back on their own character select, ready`);
+    log(`skip: ${joiner.name} held B, left ${room}; both back on their own character select, ready`);
     // The quick rematch: both search again and, with dev tickets, meet in a new room. The skipper
     // waited longest, so it hosts from port 1.
     const sessionsBefore = [a.sessions.length, b.sessions.length];
@@ -1755,7 +1774,10 @@ async function q2Main() {
   noErrors([a, b]);
   const sums = checksumsMatched([a, b]);
   if (SCENARIO === "noskip") {
-    if (!noSkipHolds) fail("noskip: Z was never held");
+    if (!noSkipHolds) fail("noskip: B was never held");
+  }
+  if (SCENARIO === "altz") {
+    if (!altzHeld) fail("altz: Z was never held through the go");
     for (const s of [a, b])
       if (s.lines.some((l) => l === "orca queue skip")) fail(`${s.name}: printed orca queue skip`);
   }
@@ -1764,7 +1786,7 @@ async function q2Main() {
     .filter((r) => r.d && Array.isArray(r.d.c))
     .map((r) => r.d.c.join("/"))
     .join(", ");
-  log(`PASS: q2 ${QUEUE}${SCENARIO !== "match" ? ` ${SCENARIO}` : ""}${PICK !== "character" ? ` pick ${PICK}` : ""}: ${n} verdicts the same on both sides${fought ? ` (characters ${fought})` : ""}; ${SCENARIO === "noskip" ? `Z held on ${noSkipHolds} character select(s), no skip; ` : ""}${QUEUE === "ranked" ? "set over: both stayed, then left; " : ""}both back on their own character select${ready ? ", ready" : ", not ready"}; checksums: ${sums}`);
+  log(`PASS: q2 ${QUEUE}${SCENARIO !== "match" ? ` ${SCENARIO}` : ""}${PICK !== "character" ? ` pick ${PICK}` : ""}: ${n} verdicts the same on both sides${fought ? ` (characters ${fought})` : ""}; ${SCENARIO === "noskip" ? `B held on ${noSkipHolds} character select(s), no skip; ` : ""}${SCENARIO === "altz" ? "Z held through the go; " : ""}${QUEUE === "ranked" ? "set over: both stayed, then left; " : ""}both back on their own character select${ready ? ", ready" : ", not ready"}; checksums: ${sums}`);
 }
 
 // ---- --scenario playagain ----
@@ -1784,16 +1806,16 @@ async function playAgainLeave(host, joiner, from) {
   playAgain = { inviter, invitee, room, how: "" };
   const at = (s) => from[sides.indexOf(s)];
   if (VARIANT === "a" || VARIANT === "b") {
-    inviter.pad.buttons |= BTN.Z;
-    const z = await waitSetEnd(inviter, /set over: leaving room \S+ \(Z held\)/, 6000, at(inviter)).finally(
-      () => (inviter.pad.buttons &= ~BTN.Z),
+    inviter.pad.buttons |= BTN.B;
+    const z = await waitSetEnd(inviter, /set over: leaving room \S+ \(B held\)/, 6000, at(inviter)).finally(
+      () => (inviter.pad.buttons &= ~BTN.B),
     );
-    if (!z) fail(`${inviter.name}: held Z on the results screen and stayed in the room`);
+    if (!z) fail(`${inviter.name}: held B on the results screen and stayed in the room`);
     log(`${inviter.name} (inviter): ${z.line}`);
     await sleep(3000);
     if (invitee.setEndLog.slice(at(invitee)).some((e) => /set over: leaving/.test(e.line)))
       fail(`${invitee.name}: left the set's room when ${inviter.name} did`);
-    playAgain.how = `${inviter.name} held Z out of ${room}; ${invitee.name} stays there on its results screen`;
+    playAgain.how = `${inviter.name} held B out of ${room}; ${invitee.name} stays there on its results screen`;
   } else if (VARIANT === "c") {
     inviter.send("leave");
     playAgain.how = `${inviter.name}'s page left ${room} (leave) with both still in it; ${invitee.name} stays`;

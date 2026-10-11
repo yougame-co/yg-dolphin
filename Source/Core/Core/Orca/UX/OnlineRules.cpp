@@ -795,6 +795,12 @@ Rollback::InputGate::Masks GateMasks(const GuestMemory& m)
     // No pause. Project+ pauses on a held Start regardless of the rule.
     buttons = PAD_BUTTON_START;
   }
+  else if (scene == SCENE_RESULTS && h.mode == Mode::Ranked)
+  {
+    // Ranked: after the set, holding B leaves the room (Rollback/OnlineMatch.cpp SetOverLeave).
+    // Whatever B does on this screen natively, the hold must not move the other player's game.
+    buttons = PAD_BUTTON_B;
+  }
   for (Rollback::InputGate::Mask& mask : masks)
     mask.buttons = buttons;
   return masks;
