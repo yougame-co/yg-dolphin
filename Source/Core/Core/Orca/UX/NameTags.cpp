@@ -143,8 +143,13 @@ int FindPlayerTag(const GuestMemory& m, u32 tags, const std::u16string& name)
   return made;
 }
 
-// Creates a tag in the highest unused slot the way the game does: record cleared, name, rumble on,
+// Creates a tag in the highest unused slot the way the game does: entry cleared, name, rumble on,
 // default controls from CONTROLS_TEMPLATE. -1 when every tag is taken.
+// Slot i's entry is the TAG_SIZE bytes from records + i * TAG_SIZE, and its name is RECORDS_TAGS
+// into it, so the entry starts RECORDS_TAGS before `tags + i * TAG_SIZE`. Clearing TAG_SIZE bytes
+// from the name instead (through 0.3.38) cleared the next entry's first RECORDS_TAGS bytes, and for
+// slot 119 (the first Orca makes) the heap header and gmGlobalRecord right after the table, which
+// hangs Options > Controls.
 int MakeTag(GuestMemory& m, u32 tags, const std::u16string& name)
 {
   int unused = -1;
@@ -159,8 +164,9 @@ int MakeTag(GuestMemory& m, u32 tags, const std::u16string& name)
     return -1;
   }
   const u32 tag = tags + static_cast<u32>(unused) * TAG_SIZE;
+  const u32 entry = tag - RECORDS_TAGS;
   for (u32 i = 0; i < TAG_SIZE; i += 2)
-    m.Write16(tag + i, 0);
+    m.Write16(entry + i, 0);
   for (u32 i = 0; i < name.size() && i < TAG_CHARS; ++i)
     m.Write16(tag + 2 * i, static_cast<u16>(name[i]));
   m.Write8(tag + TAG_RUMBLE, 1);
@@ -283,7 +289,8 @@ bool TagTable(const GuestMemory& m, u32* tags)
     return false;
   const u32 records = m.Read32(global + GAME_GLOBAL_NAME_RECORDS);
   *tags = records + RECORDS_TAGS;
-  return Pointer(m, records) && m.Valid(*tags + TAG_SLOTS * TAG_SIZE - 1);
+  // The table is TAG_SLOTS entries of TAG_SIZE from `records` (the game's new(0x88E0)).
+  return Pointer(m, records) && m.Valid(records + TAG_SLOTS * TAG_SIZE - 1);
 }
 
 // Port `port`'s player area on the character select, if a human joined it.

@@ -1200,7 +1200,13 @@ public:
   static constexpr u32 SCENE = 0x90ff6340, NAME = 0x806ff278, TASK = 0x815e75e0,
                        GLOBAL = 0x90181300, RECORDS = 0x90172d40;
   static u32 Area(int i) { return 0x81500000 + static_cast<u32>(i) * 0x1000; }
-  static u32 Tag(int i) { return RECORDS + 0xE0 + static_cast<u32>(i) * 0x124; }
+  // Tag i's entry is the 0x124 bytes from Entry(i); its name, Tag(i), is 0xE0 into it. The table
+  // (the game's new(0x88E0)) ends at END, where the next heap block's header and gmGlobalRecord
+  // begin: GUARD bytes there that no writer may touch.
+  static u32 Entry(int i) { return RECORDS + static_cast<u32>(i) * 0x124; }
+  static u32 Tag(int i) { return Entry(i) + 0xE0; }
+  static constexpr u32 END = RECORDS + 120 * 0x124, GUARD = 0x100;
+  static u8 GuardByte(u32 a) { return static_cast<u8>(0xC5 ^ (a & 0xFF)); }
 
   explicit FakeBrawl(const char* scene = "scSelctCharacter")
   {
@@ -1214,8 +1220,10 @@ public:
     for (u32 i = 0; i < CONTROLS.size(); ++i)
       bytes[0x80406938 + i] = CONTROLS[i];
     W32(GLOBAL + 0x28, RECORDS);
-    for (u32 a = RECORDS; a < Tag(120); a += 2)
+    for (u32 a = RECORDS; a < END; a += 2)
       Write16(a, 0);
+    for (u32 a = END; a < END + GUARD; ++a)
+      bytes[a] = GuardByte(a);
     for (int i = 0; i < 4; ++i)
     {
       W32(TASK + 0x44 + 4 * static_cast<u32>(i), Area(i));
@@ -1655,9 +1663,13 @@ TEST(OrcaUXNameTags, ReusesTheSameNameAndLeavesAChosenTagAlone)
 TEST(OrcaUXNameTags, ANewTagIsMadeAsTheGameMakesOneAndNothingElseIsWritten)
 {
   FakeBrawl m;
-  // A leftover record (a deleted tag's bytes) in the slot that will be used.
-  for (u32 a = FakeBrawl::Tag(119) + 0x60; a < FakeBrawl::Tag(119) + 0x80; a += 2)
+  // A leftover entry (a deleted tag's bytes) in the slot that will be used: its per-name block,
+  // +0xEE and the creation time.
+  const u32 entry = FakeBrawl::Entry(119);
+  for (u32 a = entry + 0x60; a < entry + 0x80; a += 2)
     m.Write16(a, 0xAAAA);
+  m.Write16(entry + 0xEE, 0xAAAA);
+  m.W32(entry + 0xF0, 0x261E6EC2);
   m.Join(0);
   m.recording = true;
   ASSERT_EQ(ApplyNameTags(m, {{0, "cy", false}}), 1);
@@ -1666,15 +1678,53 @@ TEST(OrcaUXNameTags, ANewTagIsMadeAsTheGameMakesOneAndNothingElseIsWritten)
   EXPECT_EQ(m.Read8(tag + 0x0C), 1);  // rumble on
   for (u32 i = 0; i < FakeBrawl::CONTROLS.size(); ++i)
     EXPECT_EQ(m.Read8(tag + 0x14 + i), FakeBrawl::CONTROLS[i]) << i;
-  for (u32 a = tag + 0x60; a < tag + 0x80; ++a)
+  for (u32 a = entry + 0x60; a < entry + 0x80; ++a)
     EXPECT_EQ(m.Read8(a), 0);  // cleared
-  // Only that record and port 0's tag field.
+  EXPECT_EQ(m.Read16(entry + 0xEE), 0);
+  EXPECT_EQ(m.Read32(entry + 0xF0), 0u);
+  // Only that entry and port 0's tag field.
   for (const u32 a : m.written)
   {
-    const bool in_tag = a >= tag && a < tag + 0x124;
+    const bool in_tag = a >= entry && a < entry + 0x124;
     const bool in_name_id = a >= FakeBrawl::Area(0) + 0x1C8 && a < FakeBrawl::Area(0) + 0x1CC;
     EXPECT_TRUE(in_tag || in_name_id) << std::hex << a;
   }
+}
+
+// Orca's first tag goes in slot 119, the table's last entry. Through 0.3.38 MakeTag cleared 0x124
+// bytes from the name rather than from the entry, so it zeroed the 0xE0 bytes after the table (the
+// next heap block's header and the start of gmGlobalRecord), and Options > Controls then hung; in
+// any other slot it cleared the next entry's per-name block and left its own.
+TEST(OrcaUXNameTags, MakingATagWritesOnlyItsOwnEntry)
+{
+  FakeBrawl m;
+  m.Join(0);
+  m.Join(1);
+  // Slot 118's leftovers, which its tag must clear.
+  for (u32 a = FakeBrawl::Entry(118); a < FakeBrawl::Entry(118) + 0xE0; a += 2)
+    m.Write16(a, 0xBBBB);
+  ASSERT_EQ(ApplyNameTags(m, {{0, "ada", false}}), 1);
+  ASSERT_EQ(m.NameId(0), 119);
+  // Slot 119's own per-name block, as the game would leave it, must survive the next tag.
+  for (u32 a = FakeBrawl::Entry(119); a < FakeBrawl::Entry(119) + 0xE0; a += 2)
+    m.Write16(a, 0x5A5A);
+  m.recording = true;
+  ASSERT_EQ(ApplyNameTags(m, {{0, "ada", false}, {1, "bo", true}}), 1);
+  ASSERT_EQ(m.NameId(1), 118);
+  EXPECT_EQ(m.TagName(118), u"BO");
+  for (u32 a = FakeBrawl::Entry(118); a < FakeBrawl::Entry(118) + 0xE0; ++a)
+    EXPECT_EQ(m.Read8(a), 0) << std::hex << a;
+  for (u32 a = FakeBrawl::Entry(119); a < FakeBrawl::Entry(119) + 0xE0; ++a)
+    EXPECT_EQ(m.Read8(a), 0x5A) << std::hex << a;
+  for (const u32 a : m.written)
+  {
+    const bool in_entry = a >= FakeBrawl::Entry(118) && a < FakeBrawl::Entry(119);
+    const bool in_name_id = a >= FakeBrawl::Area(1) + 0x1C8 && a < FakeBrawl::Area(1) + 0x1CC;
+    EXPECT_TRUE(in_entry || in_name_id) << std::hex << a;
+  }
+  // Nothing past the table, ever.
+  for (u32 a = FakeBrawl::END; a < FakeBrawl::END + FakeBrawl::GUARD; ++a)
+    EXPECT_EQ(m.Read8(a), FakeBrawl::GuardByte(a)) << std::hex << a;
 }
 
 TEST(OrcaUXNameTags, TwoPortsNeverShareATag)
@@ -1767,7 +1817,7 @@ TEST(OrcaUXNameTags, APortsOwnControlsGoIntoTheTagItGets)
   // Nothing outside the two records and the two tag fields.
   for (const u32 a : m.written)
   {
-    const bool in_tag = (a >= FakeBrawl::Tag(118) && a < FakeBrawl::Tag(120));
+    const bool in_tag = (a >= FakeBrawl::Entry(118) && a < FakeBrawl::END);
     const bool in_name_id = (a >= FakeBrawl::Area(0) + 0x1C8 && a < FakeBrawl::Area(0) + 0x1CC) ||
                             (a >= FakeBrawl::Area(1) + 0x1C8 && a < FakeBrawl::Area(1) + 0x1CC);
     EXPECT_TRUE(in_tag || in_name_id) << std::hex << a;
@@ -2419,7 +2469,7 @@ TEST(OrcaUXNameTags, UnmappedPointersWriteNothing)
     // The records' end not mapped.
     FakeBrawl m;
     m.Join(0);
-    m.bytes.erase(FakeBrawl::Tag(120) - 1);
+    m.bytes.erase(FakeBrawl::END - 1);
     EXPECT_EQ(ApplyNameTags(m, {{0, "cy", false}}), 0);
   }
 }
