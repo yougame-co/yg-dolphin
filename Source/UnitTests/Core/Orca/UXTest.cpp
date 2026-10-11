@@ -1908,7 +1908,7 @@ TEST(OrcaUXNameTags, ATagThePlayerMakesAgainWearsTheirOwnControls)
   EXPECT_EQ(TagLayout(m, 118), CustomLayout());
   EXPECT_EQ(m.Read8(FakeBrawl::Tag(118) + 0x0C), 0);
   EXPECT_EQ(m.TagName(118), u"MYTAG");
-  EXPECT_EQ(m.TagName(119), u"");  // no YouGame tag made
+  EXPECT_EQ(m.TagName(0), u"");  // no YouGame tag made (it would be the lowest free slot)
   // Only that tag's rumble and layout.
   for (const u32 a : m.written)
   {
