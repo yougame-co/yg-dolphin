@@ -1200,7 +1200,13 @@ public:
   static constexpr u32 SCENE = 0x90ff6340, NAME = 0x806ff278, TASK = 0x815e75e0,
                        GLOBAL = 0x90181300, RECORDS = 0x90172d40;
   static u32 Area(int i) { return 0x81500000 + static_cast<u32>(i) * 0x1000; }
-  static u32 Tag(int i) { return RECORDS + 0xE0 + static_cast<u32>(i) * 0x124; }
+  // Tag i's entry is the 0x124 bytes from Entry(i); its name, Tag(i), is 0xE0 into it. The table
+  // (the game's new(0x88E0)) ends at END, where the next heap block's header and gmGlobalRecord
+  // begin: GUARD bytes there that no writer may touch.
+  static u32 Entry(int i) { return RECORDS + static_cast<u32>(i) * 0x124; }
+  static u32 Tag(int i) { return Entry(i) + 0xE0; }
+  static constexpr u32 END = RECORDS + 120 * 0x124, GUARD = 0x100;
+  static u8 GuardByte(u32 a) { return static_cast<u8>(0xC5 ^ (a & 0xFF)); }
 
   explicit FakeBrawl(const char* scene = "scSelctCharacter")
   {
@@ -1214,8 +1220,10 @@ public:
     for (u32 i = 0; i < CONTROLS.size(); ++i)
       bytes[0x80406938 + i] = CONTROLS[i];
     W32(GLOBAL + 0x28, RECORDS);
-    for (u32 a = RECORDS; a < Tag(120); a += 2)
+    for (u32 a = RECORDS; a < END; a += 2)
       Write16(a, 0);
+    for (u32 a = END; a < END + GUARD; ++a)
+      bytes[a] = GuardByte(a);
     for (int i = 0; i < 4; ++i)
     {
       W32(TASK + 0x44 + 4 * static_cast<u32>(i), Area(i));
@@ -1624,11 +1632,11 @@ TEST(OrcaUXNameTags, JoinedPortsGetTheirTagOnTheCharacterSelect)
   m.Join(0);
   m.Join(1);
   EXPECT_EQ(ApplyNameTags(m, ports), 2);
-  // The highest unused tags, in port order.
-  EXPECT_EQ(m.NameId(0), 119);
-  EXPECT_EQ(m.TagName(119), u"CY");
-  EXPECT_EQ(m.NameId(1), 118);
-  EXPECT_EQ(m.TagName(118), u"ADA");
+  // The lowest unused tags, in port order, as the game's name list makes them.
+  EXPECT_EQ(m.NameId(0), 0);
+  EXPECT_EQ(m.TagName(0), u"CY");
+  EXPECT_EQ(m.NameId(1), 1);
+  EXPECT_EQ(m.TagName(1), u"ADA");
   EXPECT_EQ(m.NameId(2), -1);
   // Idempotent: the next frame (or a re-run of this one) writes nothing.
   const int writes = m.writes;
@@ -1649,31 +1657,108 @@ TEST(OrcaUXNameTags, ReusesTheSameNameAndLeavesAChosenTagAlone)
   EXPECT_EQ(m.NameId(0), 0);
   EXPECT_EQ(m.TagName(0), u"MINE");
   EXPECT_EQ(m.NameId(1), 3);
-  EXPECT_EQ(m.TagName(119), u"");  // nothing new was made
+  for (int slot : {1, 2, 4, 119})
+    EXPECT_EQ(m.TagName(slot), u"") << slot;  // nothing new was made
 }
 
 TEST(OrcaUXNameTags, ANewTagIsMadeAsTheGameMakesOneAndNothingElseIsWritten)
 {
   FakeBrawl m;
-  // A leftover record (a deleted tag's bytes) in the slot that will be used.
-  for (u32 a = FakeBrawl::Tag(119) + 0x60; a < FakeBrawl::Tag(119) + 0x80; a += 2)
+  // A leftover entry (a deleted tag's bytes) in the slot that will be used: its per-name block,
+  // +0xEE and the creation time.
+  const u32 entry = FakeBrawl::Entry(0);
+  for (u32 a = entry + 0x60; a < entry + 0x80; a += 2)
     m.Write16(a, 0xAAAA);
+  m.Write16(entry + 0xEE, 0xAAAA);
+  m.W32(entry + 0xF0, 0x261E6EC2);
   m.Join(0);
   m.recording = true;
   ASSERT_EQ(ApplyNameTags(m, {{0, "cy", false}}), 1);
-  const u32 tag = FakeBrawl::Tag(119);
-  EXPECT_EQ(m.TagName(119), u"CY");
+  const u32 tag = FakeBrawl::Tag(0);
+  EXPECT_EQ(m.TagName(0), u"CY");
   EXPECT_EQ(m.Read8(tag + 0x0C), 1);  // rumble on
   for (u32 i = 0; i < FakeBrawl::CONTROLS.size(); ++i)
     EXPECT_EQ(m.Read8(tag + 0x14 + i), FakeBrawl::CONTROLS[i]) << i;
-  for (u32 a = tag + 0x60; a < tag + 0x80; ++a)
+  for (u32 a = entry + 0x60; a < entry + 0x80; ++a)
     EXPECT_EQ(m.Read8(a), 0);  // cleared
-  // Only that record and port 0's tag field.
+  EXPECT_EQ(m.Read16(entry + 0xEE), 0);
+  EXPECT_EQ(m.Read32(entry + 0xF0), 0u);
+  // Only that entry and port 0's tag field.
   for (const u32 a : m.written)
   {
-    const bool in_tag = a >= tag && a < tag + 0x124;
+    const bool in_tag = a >= entry && a < entry + 0x124;
     const bool in_name_id = a >= FakeBrawl::Area(0) + 0x1C8 && a < FakeBrawl::Area(0) + 0x1CC;
     EXPECT_TRUE(in_tag || in_name_id) << std::hex << a;
+  }
+}
+
+// Through 0.3.38 Orca made its tags in the highest unused slot (119 first) and cleared 0x124 bytes
+// from the name rather than from the entry. Options > Controls stops the game for good when a used
+// slot follows an unused one, and the clear ran 0xE0 bytes past the table (the next heap block's
+// header and the start of gmGlobalRecord) in slot 119, or over the next entry's per-name block in
+// any other. Now: the lowest unused slot, as the game's name list does, and only that entry.
+TEST(OrcaUXNameTags, ATagGoesInTheLowestFreeSlotAndWritesOnlyItsOwnEntry)
+{
+  {
+    FakeBrawl m;
+    m.Join(0);
+    // Slot 0's leftovers, which its tag clears; slot 1's per-name block, which it must not touch.
+    for (u32 a = FakeBrawl::Entry(0); a < FakeBrawl::Entry(0) + 0xE0; a += 2)
+      m.Write16(a, 0xBBBB);
+    for (u32 a = FakeBrawl::Entry(1); a < FakeBrawl::Entry(1) + 0xE0; a += 2)
+      m.Write16(a, 0x5A5A);
+    m.recording = true;
+    ASSERT_EQ(ApplyNameTags(m, {{0, "ada", false}}), 1);
+    ASSERT_EQ(m.NameId(0), 0);
+    for (u32 a = FakeBrawl::Entry(0); a < FakeBrawl::Entry(0) + 0xE0; ++a)
+      EXPECT_EQ(m.Read8(a), 0) << std::hex << a;
+    for (u32 a = FakeBrawl::Entry(1); a < FakeBrawl::Entry(1) + 0xE0; ++a)
+      EXPECT_EQ(m.Read8(a), 0x5A) << std::hex << a;
+    for (const u32 a : m.written)
+    {
+      const bool in_entry = a >= FakeBrawl::Entry(0) && a < FakeBrawl::Entry(1);
+      const bool in_name_id = a >= FakeBrawl::Area(0) + 0x1C8 && a < FakeBrawl::Area(0) + 0x1CC;
+      EXPECT_TRUE(in_entry || in_name_id) << std::hex << a;
+    }
+  }
+  {
+    // The player's own tags in slots 0 and 2: the gap, never past them.
+    FakeBrawl m;
+    m.SetTag(0, u"MINE");
+    m.SetTag(2, u"ALT");
+    m.Join(0);
+    ASSERT_EQ(ApplyNameTags(m, {{0, "ada", false}}), 1);
+    EXPECT_EQ(m.NameId(0), 1);
+    EXPECT_EQ(m.TagName(1), u"ADA");
+  }
+  {
+    // Only slot 119 left: its entry ends where the table does, and nothing past it is written.
+    FakeBrawl m;
+    for (int slot = 0; slot < 119; ++slot)
+      m.SetTag(slot, u"T");
+    m.Join(0);
+    m.recording = true;
+    ASSERT_EQ(ApplyNameTags(m, {{0, "ada", false}}), 1);
+    ASSERT_EQ(m.NameId(0), 119);
+    EXPECT_EQ(m.TagName(119), u"ADA");
+    for (u32 a = FakeBrawl::END; a < FakeBrawl::END + FakeBrawl::GUARD; ++a)
+      EXPECT_EQ(m.Read8(a), FakeBrawl::GuardByte(a)) << std::hex << a;
+    for (const u32 a : m.written)
+    {
+      const bool in_entry = a >= FakeBrawl::Entry(119) && a < FakeBrawl::END;
+      const bool in_name_id = a >= FakeBrawl::Area(0) + 0x1C8 && a < FakeBrawl::Area(0) + 0x1CC;
+      EXPECT_TRUE(in_entry || in_name_id) << std::hex << a;
+    }
+  }
+  {
+    // Every slot taken: no tag, nothing written.
+    FakeBrawl m;
+    for (int slot = 0; slot < 120; ++slot)
+      m.SetTag(slot, u"T");
+    m.Join(0);
+    m.recording = true;
+    EXPECT_EQ(ApplyNameTags(m, {{0, "ada", false}}), 0);
+    EXPECT_TRUE(m.written.empty());
   }
 }
 
@@ -1767,7 +1852,7 @@ TEST(OrcaUXNameTags, APortsOwnControlsGoIntoTheTagItGets)
   // Nothing outside the two records and the two tag fields.
   for (const u32 a : m.written)
   {
-    const bool in_tag = (a >= FakeBrawl::Tag(118) && a < FakeBrawl::Tag(120));
+    const bool in_tag = (a >= FakeBrawl::Entry(0) && a < FakeBrawl::Entry(2));
     const bool in_name_id = (a >= FakeBrawl::Area(0) + 0x1C8 && a < FakeBrawl::Area(0) + 0x1CC) ||
                             (a >= FakeBrawl::Area(1) + 0x1C8 && a < FakeBrawl::Area(1) + 0x1CC);
     EXPECT_TRUE(in_tag || in_name_id) << std::hex << a;
@@ -2203,8 +2288,8 @@ TEST(OrcaUXNameTags, TheOwnControlsReadComesAfterTheWrites)
     m.Join(0);
     OwnControlsReader reader;
     EXPECT_FALSE(NameTagsFrame(m, ports, ports, &reader, custom, 0));
-    EXPECT_EQ(m.TagName(119), u"ZEKE");
-    EXPECT_EQ(TagLayout(m, 119), CustomLayout());
+    EXPECT_EQ(m.TagName(0), u"ZEKE");
+    EXPECT_EQ(TagLayout(m, 0), CustomLayout());
     // They make MYTAG again (the game makes it at its defaults) and wear it: the same frame gives
     // it their controls, and the read sees those, not the defaults.
     GameMadeTag(m, 118, u"MYTAG");
@@ -2226,15 +2311,15 @@ TEST(OrcaUXNameTags, TheOwnControlsReadComesAfterTheWrites)
     m.Join(0);
     OwnControlsReader reader;
     EXPECT_FALSE(NameTagsFrame(m, ports, ports, &reader, custom, 0));
-    GameMadeTag(m, 119, u"ZEKE");
+    GameMadeTag(m, 0, u"ZEKE");
     EXPECT_FALSE(NameTagsFrame(m, ports, ports, &reader, custom, 0));
-    EXPECT_EQ(TagLayout(m, 119), CustomLayout());
+    EXPECT_EQ(TagLayout(m, 0), CustomLayout());
     // Read before the writes (the old order), that frame published the defaults.
     FakeBrawl old;
     old.Join(0);
     OwnControlsReader before;
     EXPECT_FALSE(NameTagsFrame(old, ports, ports, &before, custom, 0));
-    GameMadeTag(old, 119, u"ZEKE");
+    GameMadeTag(old, 0, u"ZEKE");
     EXPECT_EQ(before.Read(old, ports, custom, 0), Profile(1, FakeBrawl::CONTROLS));
   }
   {
@@ -2242,7 +2327,7 @@ TEST(OrcaUXNameTags, TheOwnControlsReadComesAfterTheWrites)
     FakeBrawl m;
     m.Join(0);
     EXPECT_FALSE(NameTagsFrame(m, ports, ports, nullptr, custom, 0));
-    EXPECT_EQ(TagLayout(m, 119), CustomLayout());
+    EXPECT_EQ(TagLayout(m, 0), CustomLayout());
   }
   {
     // The app sets new controls while the old ones are worn: the next read on this player's own
@@ -2320,8 +2405,8 @@ TEST(OrcaUXNameTags, ATagThePlayerTypedInTheGameIsTheirs)
     GameMadeTag(m, 1, Typed(u"SANDC"));
     m.Join(0);
     EXPECT_EQ(ApplyNameTags(m, {{0, "sandbox-ada", false}}), 1);
-    EXPECT_EQ(m.NameId(0), 119);
-    EXPECT_EQ(m.TagName(119), u"SANDB");
+    EXPECT_EQ(m.NameId(0), 2);
+    EXPECT_EQ(m.TagName(2), u"SANDB");
   }
   {
     // With controls carried (kept from an earlier run), the typed tag gets them, as Orca's own
@@ -2419,7 +2504,7 @@ TEST(OrcaUXNameTags, UnmappedPointersWriteNothing)
     // The records' end not mapped.
     FakeBrawl m;
     m.Join(0);
-    m.bytes.erase(FakeBrawl::Tag(120) - 1);
+    m.bytes.erase(FakeBrawl::END - 1);
     EXPECT_EQ(ApplyNameTags(m, {{0, "cy", false}}), 0);
   }
 }

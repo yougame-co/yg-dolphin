@@ -48,8 +48,9 @@ HOST_LAYOUT[6], HOST_LAYOUT[7], HOST_LAYOUT[11], HOST_LAYOUT[0x2C] = 0x02, 0x04,
 FRIEND_LAYOUT = bytearray(DEFAULTS)
 FRIEND_LAYOUT[0], FRIEND_LAYOUT[1], FRIEND_LAYOUT[9], FRIEND_LAYOUT[10] = 0x04, 0x04, 0x0E, 0x0E
 HOST_RUMBLE, FRIEND_RUMBLE = 0, 1
-# Each own game's first tag is the highest slot (an empty save): 119, records + 0xE0 + 119 * 0x124.
-TAG = 0xE0 + 119 * 0x124
+# Each own game's first tag is the lowest slot (an empty save), as the game makes them: 0,
+# records + 0xE0 + 0 * 0x124.
+TAG = 0xE0 + 0 * 0x124
 # Just before P1 starts (the input file's START): the tags as both games hold them.
 RECORDS_AT = 1940 if PPLUS else 4380
 
