@@ -1414,3 +1414,39 @@ TEST(OrcaQueue, AnUnknownPlaceIsPublishedWithNoPick)
   ArmOwnPick(unknown);
   EXPECT_FALSE(OwnPickArmed());
 }
+
+// The prod log behind the fix (Orca 0.3.38): in the room, port 1's own pick went down on character
+// 0xb costume 6 with the hand over it from (-24.86, 4.83) to (-21.25, 4.95); after the ranked set
+// the player was back on their own select with that token already down and readied without moving
+// the hand, and 0.3.38 published "orca queue ready ranked 11 6 (the hand at 0.0, 0.0)". The room's
+// placement now teaches 0xb's place, so the next room steers to it instead of to (0, 0).
+TEST(OrcaQueue, AfterARankedSetTheRoomsPlacementIsTheNextPicksPlace)
+{
+  PickPlaces places;
+  // The room's select: port 1's hand holds the token over 0xb, then puts it down.
+  places.Frame(0, Holding(0xb, -24.86f, 4.83f));
+  places.Frame(0, Holding(0xb, -21.25f, 4.95f));
+  ASSERT_TRUE(places.Frame(0, DownOn(0xb, 6, -21.25f, 4.95f))->learned);
+  // The fights and results: no select.
+  places.Frame(0, CssPort{});
+  // Back on the player's own select after the set: the token is already down, the hand never moved.
+  const auto back = places.Frame(0, DownOn(0xb, 6, 0.0f, 0.0f));
+  ASSERT_TRUE(back);
+  Identity pick;
+  pick.rating = 1500;
+  pick.character = 0xb;
+  pick.costume = 6;
+  const Identity published = Publishable(pick, places.Find(0xb));
+  ASSERT_TRUE(published.HasPick());
+  EXPECT_FLOAT_EQ(published.x, (-24.86f + -21.25f) / 2);
+  EXPECT_FLOAT_EQ(published.y, (4.83f + 4.95f) / 2);
+  const auto decoded = DecodeIdentity(EncodeIdentity(published));
+  ASSERT_TRUE(decoded);
+  EXPECT_EQ(decoded->character, 0xb);
+  EXPECT_NEAR(decoded->x, published.x, 0.01f);
+  EXPECT_NEAR(decoded->y, published.y, 0.01f);
+  // A different pick on the same select (the player swapped characters by hand in the room's
+  // select, so its place was never seen) goes out with no pick rather than 0xb's square.
+  pick.character = 0x13;
+  EXPECT_FALSE(Publishable(pick, places.Find(0x13)).HasPick());
+}
