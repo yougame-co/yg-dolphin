@@ -281,6 +281,44 @@ TEST(OrcaUXControllers, StandardPadOnAGameCubeLayout)
   EXPECT_EQ(s.stickY, 160);  // 128 + 31.75
 }
 
+TEST(OrcaUXControllers, StandardPadCStickRestingOffCentreReadsAsNeutral)
+{
+  // Brawl takes a new C-stick attack only once the C-stick is back at neutral, and 5 units off
+  // centre is not neutral to it: a C-stick resting a few percent off (here 6%, X and Y) must reach
+  // the game exactly centred.
+  StandardPad p;
+  p.axes = {0, 0, -0.06f, 0.06f};
+  GCPadStatus s = MapStandardPad(p);
+  EXPECT_EQ(s.substickX, 128);
+  EXPECT_EQ(s.substickY, 128);
+  // Measured together: 0.14 on both axes (0.198) is still at rest.
+  p.axes = {0, 0, 0.14f, -0.14f};
+  s = MapStandardPad(p);
+  EXPECT_EQ(s.substickX, 128);
+  EXPECT_EQ(s.substickY, 128);
+  p.axes = {0, 0, NAN, 0};
+  EXPECT_EQ(MapStandardPad(p).substickX, 128);
+  // Past the dead zone nothing is rescaled: a flick, a partial push and a box controller's exact
+  // values keep their bytes.
+  p.axes = {0, 0, 1, 0};
+  EXPECT_EQ(MapStandardPad(p).substickX, 255);
+  p.axes = {0, 0, 0, -1};
+  EXPECT_EQ(MapStandardPad(p).substickY, 255);
+  p.axes = {0, 0, -0.25f, 0};
+  s = MapStandardPad(p);
+  EXPECT_EQ(s.substickX, 96);  // 128 - 31.75
+  EXPECT_EQ(s.substickY, 128);
+  p.axes = {0, 0, 0.15f, 0.15f};  // 0.212 together
+  s = MapStandardPad(p);
+  EXPECT_EQ(s.substickX, 147);  // 128 + 19.05
+  EXPECT_EQ(s.substickY, 109);
+  // The main stick is unchanged: walking and tilts use its small values.
+  p.axes = {0.06f, -0.06f, 0, 0};
+  s = MapStandardPad(p);
+  EXPECT_EQ(s.stickX, 136);  // 128 + 7.62
+  EXPECT_EQ(s.stickY, 136);
+}
+
 TEST(OrcaUXControllers, ParsesTheHelpersSnapshot)
 {
   const std::string json =

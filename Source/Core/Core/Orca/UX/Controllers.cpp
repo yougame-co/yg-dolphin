@@ -229,6 +229,15 @@ u8 AxisByte(float v, bool invert)
                    static_cast<int>(std::lround(s * GCPadStatus::MAIN_STICK_RADIUS)));
 }
 
+// A standard pad's C-stick inside this radius (of a full push, both axes together) reads as
+// centred. Brawl takes a new C-stick attack only once the C-stick is back at neutral: resting 5
+// units (4%) off centre, every C-stick smash and aerial after the first is ignored (4 units off is
+// still neutral), and analog sticks often rest that far off. The adapter's controllers get their
+// rest as their origin (the app's helper); a standard pad has none, hence this (a little under the
+// 0.265 XInput recommends for a right stick). Outside it nothing is rescaled: flicks and a box
+// controller's exact C-stick values reach the game as before. Only the local player's bytes change.
+constexpr float C_STICK_DEAD_ZONE = 0.2f;
+
 // W3C standard gamepad button indices.
 enum StandardButton
 {
@@ -399,8 +408,12 @@ GCPadStatus MapStandardPad(const StandardPad& pad)
     status.button |= PAD_TRIGGER_R;
   status.stickX = AxisByte(pad.axes[0], false);
   status.stickY = AxisByte(pad.axes[1], true);
-  status.substickX = AxisByte(pad.axes[2], false);
-  status.substickY = AxisByte(pad.axes[3], true);
+  const float cx = pad.axes[2], cy = pad.axes[3];
+  if (cx * cx + cy * cy >= C_STICK_DEAD_ZONE * C_STICK_DEAD_ZONE)
+  {
+    status.substickX = AxisByte(cx, false);
+    status.substickY = AxisByte(cy, true);
+  }
   status.isConnected = true;
   return status;
 }
