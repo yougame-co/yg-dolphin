@@ -149,16 +149,39 @@ Window WindowMeter::Take()
   return window;
 }
 
+std::optional<double> RerunCost(const Window& window, const Rules& rules)
+{
+  if (window.rv >= rules.rerun_min && window.rw >= 0)
+    return window.rw;
+  return std::nullopt;
+}
+
+double CapAtRef(const Window& window, const Rules& rules, std::optional<double> known_rw)
+{
+  const double fc = window.fc;
+  if (!(fc > 0))
+    return window.cap;
+  std::optional<double> rw = RerunCost(window, rules);
+  if (!rw)
+    rw = known_rw;
+  if (!rw)
+    return fc;
+  return std::min(fc, 1000 / (1000 / fc + rules.rerun_ref * *rw));
+}
+
 bool AutoSwitch::Feed(const Window& window)
 {
   if (m_fired || !window.Counts(m_rules))
     return false;
-  if (window.pf || window.cap >= m_rules.auto_cap)
+  if (const std::optional<double> rw = RerunCost(window, m_rules))
+    m_rerun_cost = rw;
+  const double cap = CapAtRef(window, m_rules, m_rerun_cost);
+  if (window.pf || cap >= m_rules.auto_cap)
   {
     m_run.clear();
     return false;
   }
-  m_run.push_back(window.cap);
+  m_run.push_back(cap);
   if (static_cast<int>(m_run.size()) > m_rules.auto_windows)
     m_run.erase(m_run.begin());
   if (static_cast<int>(m_run.size()) < m_rules.auto_windows)

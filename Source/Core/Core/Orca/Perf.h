@@ -31,8 +31,8 @@ struct Location;
 // CPU-bound one. The interval is also split at the frame's last re-run boundary: what came before
 // it (the rollback's load and its re-run frames, waits out) is re-run work, the rest forward work.
 // Re-runs depend on the opponent (their distance, how often their inputs change), forward work only
-// on this machine, so the page can read this machine's speed at a reference re-run load whoever it
-// played.
+// on this machine, so the page's verdict and the switch below read this machine's speed at a
+// reference re-run load whoever it played (CapAtRef).
 //
 // A frame counts (is "valid") once the game has been in a match for WARM frames (menus and each
 // match's start are left out), when nothing paused or hid the game since the last one, and when
@@ -52,7 +52,7 @@ struct Location;
 // versioned with "v":1:
 //   {"v":1,"k":"info",...}  once, after "ready": backend, graphics card, adapters, CPU, threads
 //   {"v":1,"k":"win",...}   every window, menus included (n is 0 there)
-//   {"v":1,"k":"auto","cap":C}  once, when the switch to Performance fires
+//   {"v":1,"k":"auto","cap":C}  once, when the switch to Performance fires (C: CapAtRef's median)
 //
 // Observation only: wall-clock time and the graphics settings, which never reach emulation, the
 // replay, checksums or the compatibility key.
@@ -72,6 +72,15 @@ struct Rules
   // (Session.cpp TIME_SYNC_FRAMES); under that, the other player stalls.
   double auto_cap = 58.0;
   int auto_windows = 4;
+  // The switch reads each window at one reference re-run load, as the page reads its verdict
+  // (orca-perf.ts perfCapAtRef, RERUN_REF and RERUN_MIN): forward work per frame plus rerun_ref
+  // re-run frames at the re-run cost the machine measured. Re-runs grow with the distance to the
+  // opponent, not with this machine's speed: read with all its re-runs, an i7-8700 / RTX 2080 at
+  // 40 ms each way measured 51-56 and switched in every match, though it ran 63-71 forward frames
+  // a second.
+  double rerun_ref = 0.1;
+  // A window's re-run cost (rw) is trusted once it held this many re-run frames.
+  int rerun_min = 30;
 };
 
 constexpr std::size_t LINE_BYTES = 300;  // the app forwards at most 300 characters of a line
@@ -158,11 +167,22 @@ private:
   int m_peers = 0;
 };
 
+// The re-run cost a window measured (ms per re-run frame), once it held rules.rerun_min re-run
+// frames; nullopt with fewer.
+std::optional<double> RerunCost(const Window& window, const Rules& rules);
+// A window's speed at the reference re-run load (rules.rerun_ref): its forward work per frame plus
+// that many re-run frames at the cost it measured, else at `known_rw` (the last cost measured);
+// with neither (a calm link), its forward speed alone, so a slow machine is slow even with re-runs
+// free. Never above its forward speed; a window without one (fc 0) reads its all-in cap. The page's
+// perfCapAtRef toward slow.
+double CapAtRef(const Window& window, const Rules& rules,
+                std::optional<double> known_rw = std::nullopt);
+
 // When to switch to Performance. A window counts when Window::Counts; menus and 3-4 player rooms
 // (which dip normally) neither count nor break a run. The switch fires once, when the last
-// auto_windows counted windows are all under auto_cap with the picture settings not already
-// Performance's. A counted window at auto_cap or above, one already on Performance, or a settings
-// change (Restart) starts the count over.
+// auto_windows counted windows are all under auto_cap at the reference re-run load (CapAtRef) with
+// the picture settings not already Performance's. A counted window at auto_cap or above, one
+// already on Performance, or a settings change (Restart) starts the count over.
 class AutoSwitch
 {
 public:
@@ -171,12 +191,14 @@ public:
   bool Feed(const Window& window);
   void Restart() { m_run.clear(); }
   bool Fired() const { return m_fired; }
-  // The median cap of the windows that fired it.
+  // The median CapAtRef of the windows that fired it.
   double TriggerCap() const { return m_trigger_cap; }
 
 private:
   Rules m_rules;
   std::vector<double> m_run;
+  // The re-run cost the last counted window that measured one did (RerunCost).
+  std::optional<double> m_rerun_cost;
   bool m_fired = false;
   double m_trigger_cap = 0;
 };

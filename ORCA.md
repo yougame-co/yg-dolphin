@@ -1187,7 +1187,8 @@ embedded only, each line at most 300 bytes, versioned with `"v":1`:
 - `{"v":1,"k":"win","m":"1v1","n":858,"cap":51.7,"fc":58.0,"rw":12.4,"rv":180,"w50":18.9,"w95":24.1,"g95":3.2,"fps":51.6,"rbf":212,"res":1,"pf":1,"as":1}`
   every 15 s of running time (a pause doesn't count), menus included (`n` is 0 there), with
   `"t":1` at the end when a test switch shaped the run.
-- `{"v":1,"k":"auto","cap":44.3}` once, when the run switched itself to Performance.
+- `{"v":1,"k":"auto","cap":44.3}` once, when the run switched itself to Performance (`cap`: the
+  median speed of the windows that switched it, at the reference re-run load below).
 
 How it is measured. A forward frame is a boundary whose frame ran for the first time in real time.
 Its time since the previous forward boundary includes any rollback re-runs (they are this machine's
@@ -1210,8 +1211,13 @@ the switch fired this run and the picture is still Performance's (anti-aliasing 
 for the next start; a player who raised the picture again is measured on their own settings).
 
 **The switch to Performance.** A window counts when it has at least 600 frames, solo or 1v1 (3-4
-player rooms dip normally). After 4 counted windows in a row under 58 fps (`cap`), with the picture
-settings not already Performance's, Orca switches once per run: native resolution, unscaled EFB
+player rooms dip normally). It is read at the page's reference re-run load (`CapAtRef`, the page's
+`perfCapAtRef`): its forward work per frame plus 0.1 re-run frames at the re-run cost it measured
+(`rw`, once `rv` is 30 or more; else the last cost the run measured; with none, `fc` alone). The
+raw `cap` grows with the distance to the opponent: an i7-8700 / RTX 2080 at 40 ms each way read
+51-56 with 63-71 forward frames a second, and switched in every match before this rule. After 4
+counted windows in a row under 58 fps at that load, with the picture settings not already
+Performance's, Orca switches once per run: native resolution, unscaled EFB
 copies, the game's own texture filtering, the default scaling filter and no post-processing shader,
 at once and mid-match too (one hitch beats a match of stalls). It shows "Graphics set to Performance
 to hold 60 fps" and prints the `auto` line; the page keeps Performance (and anti-aliasing off) for

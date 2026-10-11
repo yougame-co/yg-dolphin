@@ -426,6 +426,102 @@ TEST(OrcaPerf, AFineMachineWithDipsNeverSwitches)
     EXPECT_FALSE(fine.Feed(Win(i == 20 ? 51 : 72, 858)));
 }
 
+// A window as the `win` line has it: n, cap, fc, rw and rv, 1v1, Performance off.
+Window Line(int n, double cap, double fc, double rw, int rv)
+{
+  Window window = Win(cap, n);
+  window.fc = fc;
+  window.rw = rw;
+  window.rv = rv;
+  return window;
+}
+
+TEST(OrcaPerf, TheSwitchReadsTheReferenceRerunLoad)
+{
+  const Rules rules;
+  // Forward work per frame plus 0.1 re-run frames at the measured cost: 1000 / (1000/64.9 + 0.93).
+  EXPECT_NEAR(Orca::Perf::CapAtRef(Line(787, 53.6, 64.9, 9.3, 275), rules), 61.2, 0.05);
+  // Too few re-runs to trust their cost: the last cost measured, else forward speed alone.
+  EXPECT_FALSE(Orca::Perf::RerunCost(Line(800, 60, 64.9, 40, 29), rules).has_value());
+  EXPECT_NEAR(Orca::Perf::CapAtRef(Line(800, 60, 64.9, 40, 29), rules, 9.3), 61.2, 0.05);
+  EXPECT_DOUBLE_EQ(Orca::Perf::CapAtRef(Line(800, 60, 64.9, 40, 29), rules), 64.9);
+  // Never above forward speed, and a window without one reads its all-in cap.
+  EXPECT_DOUBLE_EQ(Orca::Perf::CapAtRef(Line(800, 70, 64.9, 0, 40), rules), 64.9);
+  EXPECT_DOUBLE_EQ(Orca::Perf::CapAtRef(Win(51), rules), 51);
+}
+
+TEST(OrcaPerf, ANormalPcAtOnlineLatencyNeverSwitches)
+{
+  // The counted windows of the 0.3.39 candidate's 11 PC runs on 2026-10-10 (i7-8700, RTX 2080,
+  // 40 +- 8 ms each way, 0.35-0.40 re-run frames per frame) up to where the old rule switched: it
+  // read the raw cap (44-58, mostly under 58) and switched in every run. Read at the page's
+  // reference re-run load, the same windows are 48-72 and never four in a row under 58.
+  const std::vector<std::vector<Window>> runs = {
+      {Line(788, 54.6, 69.5, 14.5, 214), Line(784, 58.4, 72.0, 8.4, 303),
+       Line(738, 51.8, 66.6, 13.4, 236), Line(756, 54.1, 65.2, 9.6, 249),
+       Line(805, 56.6, 75.0, 10.9, 322), Line(786, 52.9, 65.7, 9.5, 305)},
+      {Line(787, 54.9, 68.1, 8.3, 335), Line(778, 57.6, 77.5, 11.2, 309),
+       Line(737, 51.8, 61.2, 9.1, 242), Line(798, 56.2, 67.4, 9.3, 252)},
+      {Line(792, 55.9, 69.8, 9.4, 299), Line(751, 53.9, 67.1, 8.2, 333),
+       Line(772, 55.0, 64.7, 9.6, 220), Line(790, 51.1, 66.6, 12.2, 293)},
+      {Line(803, 55.7, 73.0, 11.9, 288), Line(798, 53.2, 70.9, 11.8, 315),
+       Line(787, 55.5, 66.8, 10.1, 238), Line(803, 56.1, 69.0, 9.6, 281)},
+      {Line(708, 49.1, 62.7, 12.9, 243), Line(801, 57.9, 71.1, 8.4, 304),
+       Line(723, 48.9, 57.6, 9.2, 244), Line(799, 56.0, 73.5, 11.6, 293)},
+      {Line(714, 49.1, 58.9, 10.0, 241), Line(800, 57.3, 71.0, 8.7, 307),
+       Line(748, 49.2, 57.9, 10.8, 210), Line(787, 53.6, 64.9, 9.3, 275)},
+      {Line(780, 55.4, 68.1, 8.3, 318), Line(806, 56.7, 72.2, 9.2, 332),
+       Line(736, 50.2, 59.9, 9.2, 257), Line(754, 53.7, 66.7, 10.7, 254)},
+      {Line(779, 53.0, 63.8, 10.5, 237), Line(779, 54.2, 68.6, 9.8, 307),
+       Line(718, 48.7, 61.8, 13.8, 227), Line(754, 51.1, 65.2, 13.9, 229)},
+      {Line(637, 43.9, 50.1, 8.7, 210), Line(789, 55.1, 70.0, 9.4, 323),
+       Line(745, 50.2, 70.6, 16.4, 263), Line(786, 52.6, 61.8, 9.4, 236)},
+      {Line(768, 53.8, 69.4, 10.6, 302), Line(743, 52.9, 70.5, 11.7, 301),
+       Line(768, 52.1, 70.7, 13.9, 278), Line(765, 52.7, 62.7, 9.4, 246)},
+      {Line(741, 52.2, 63.5, 9.0, 282), Line(801, 56.6, 78.8, 11.5, 348),
+       Line(777, 53.9, 63.4, 9.1, 235), Line(709, 48.5, 56.7, 9.2, 230)},
+  };
+  AutoSwitch all;  // one long session of all of them
+  for (std::size_t r = 0; r < runs.size(); ++r)
+  {
+    int raw_slow = 0;
+    AutoSwitch s;
+    for (const Window& w : runs[r])
+    {
+      ASSERT_TRUE(w.Counts(Rules{}));
+      raw_slow += w.cap < 58.0 ? 1 : 0;
+      EXPECT_FALSE(s.Feed(w)) << "run " << r;
+      EXPECT_FALSE(all.Feed(w)) << "run " << r;
+    }
+    // The raw cap would have switched: four in a row under 58.
+    EXPECT_GE(raw_slow, 4) << "run " << r;
+  }
+  EXPECT_FALSE(all.Fired());
+}
+
+TEST(OrcaPerf, ASlowMachineSwitchesWhateverItsRerunLoad)
+{
+  // 48 forward frames a second: slow at any re-run load. Rollback-heavy, its reference speed is 45.8.
+  AutoSwitch busy;
+  for (int i = 0; i < 3; ++i)
+    EXPECT_FALSE(busy.Feed(Line(700, 40.1, 48, 10, 250)));
+  EXPECT_TRUE(busy.Feed(Line(700, 40.1, 48, 10, 250)));
+  EXPECT_NEAR(busy.TriggerCap(), 45.8, 0.05);
+  // On a calm link (too few re-runs to cost, none measured before) it reads its forward speed.
+  AutoSwitch calm;
+  for (int i = 0; i < 3; ++i)
+    EXPECT_FALSE(calm.Feed(Line(700, 47.5, 48, 0, 4)));
+  EXPECT_TRUE(calm.Feed(Line(700, 47.5, 48, 0, 4)));
+  EXPECT_DOUBLE_EQ(calm.TriggerCap(), 48);
+  // A calm window after a busy one uses the cost measured then: 1000 / (1000/60 + 0.1 * 30) = 50.8.
+  AutoSwitch costly;
+  EXPECT_FALSE(costly.Feed(Line(700, 40, 60, 30, 200)));
+  for (int i = 0; i < 2; ++i)
+    EXPECT_FALSE(costly.Feed(Line(700, 59.5, 60, 0, 2)));
+  EXPECT_TRUE(costly.Feed(Line(700, 59.5, 60, 0, 2)));
+  EXPECT_NEAR(costly.TriggerCap(), 50.8, 0.05);
+}
+
 TEST(OrcaPerf, ASlowMachineSwitchesInItsFirstMatch)
 {
   // a3851fbb: 44 fps in 1v1, with the real rules, from the moment a match starts. Its 900 warm-up
