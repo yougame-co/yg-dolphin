@@ -464,6 +464,119 @@ TEST(OrcaUXControllers, StaleOrSuspendedInputIsNeutral)
   EXPECT_EQ(ChooseLocalPad(*s, 250.5)->pad.stickX, 128);
 }
 
+namespace
+{
+// What reaches Orca for an SDL int16 axis value: the helper's v / 32767 (or / 32768 below zero),
+// printed with 8 significant digits (desktop/native/src/main.cpp readPads), optionally negated by
+// the app (a pad set up with an inverted axis: orca-controls.ts normalizePad), then a float.
+float HelperAxis(int s, bool negated_by_app = false)
+{
+  const std::string printed = fmt::format("{:.8g}", s / (s < 0 ? 32768.0 : 32767.0));
+  const double v = std::stod(printed);
+  return static_cast<float>(negated_by_app ? -v : v);
+}
+// The OS's scaling of an 8-bit HID axis (0..255) to SDL's int16: IOKit's
+// GetHIDScaledCalibratedState and DirectInput's DIPROP_RANGE -32768..32767 both map it linearly.
+int Hid8(int byte)
+{
+  return 257 * byte - 32768;
+}
+// The map before this fix, for analog values that must not change.
+u8 LegacyAxisByte(float v, bool invert)
+{
+  const float s = std::clamp(invert ? -v : v, -1.0f, 1.0f);
+  return static_cast<u8>(std::clamp(128 + static_cast<int>(std::lround(s * 127)), 0, 255));
+}
+}  // namespace
+
+// Box controllers (B0XX, HayBox) send exact GameCube stick bytes. Over USB they arrive as an 8-bit
+// HID axis (DInput / "Dolphin" mode: X = byte, Y = 255 - byte) or as XInput (HayBox: 257 * (byte -
+// 128) + 128, which SDL negates for Y). Every byte must reach the game unchanged, both ways: a
+// leftward or downward partial tilt one unit short misses the thresholds box players tune to
+// (turnaround specials, shield drops).
+TEST(OrcaUXControllers, BoxControllerBytesReachTheGameExactlyInBothDirections)
+{
+  for (int g = 1; g <= 255; ++g)
+  {
+    SCOPED_TRACE(g);
+    StandardPad p;
+    // DInput / "Dolphin" mode (HayBox DInputBackend: leftXAxis(x), leftYAxis(255 - y)).
+    p.axes = {HelperAxis(Hid8(g)), HelperAxis(Hid8(255 - g)), HelperAxis(Hid8(g)),
+              HelperAxis(Hid8(255 - g))};
+    GCPadStatus s = MapStandardPad(p);
+    EXPECT_EQ(s.stickX, g);
+    EXPECT_EQ(s.stickY, g);
+    // The C-stick the same, past any rest dead zone (a box's C-stick is only ever pushed far).
+    if (std::abs(g - 128) > 26)
+    {
+      EXPECT_EQ(s.substickX, g);
+      EXPECT_EQ(s.substickY, g);
+    }
+    // The same pad set up in the Controls panel with its Y read inverted (HID up = +): the app
+    // negates, so the device's byte is g itself on Y.
+    p.axes = {HelperAxis(Hid8(g)), HelperAxis(Hid8(g), true), 0, 0};
+    s = MapStandardPad(p);
+    EXPECT_EQ(s.stickX, g);
+    EXPECT_EQ(s.stickY, g);
+    // XInput mode (HayBox XInputBackend: (byte - 128) * 65535 / 255 + 128; SDL's XInput driver
+    // reports Y as -max(-32767, ly)).
+    const int xi = (g - 128) * 65535 / 255 + 128;
+    p.axes = {HelperAxis(xi), HelperAxis(-std::max(-32767, xi)), 0, 0};
+    s = MapStandardPad(p);
+    EXPECT_EQ(s.stickX, g);
+    EXPECT_EQ(s.stickY, g);
+  }
+  // HID 0, beyond any stick, stays at the GameCube's 1, as a full digital push always has.
+  StandardPad p;
+  p.axes = {HelperAxis(Hid8(0)), HelperAxis(Hid8(255)), 0, 0};
+  EXPECT_EQ(MapStandardPad(p).stickX, 1);
+  EXPECT_EQ(MapStandardPad(p).stickY, 1);
+  // The resting box: 128 both ways.
+  p.axes = {HelperAxis(Hid8(128)), HelperAxis(Hid8(127)), 0, 0};
+  EXPECT_EQ(MapStandardPad(p).stickX, 128);
+  EXPECT_EQ(MapStandardPad(p).stickY, 128);
+}
+
+// Analog sticks (XInput, DualSense, Switch Pro: 16-bit, centred on 0) keep the old map; only a value
+// on the 8-bit lattice changes, by one unit, and only below zero (where the old map was short).
+TEST(OrcaUXControllers, AnalogSticksKeepTheirMapOffTheEightBitLattice)
+{
+  int changed = 0;
+  for (int raw = -32768; raw <= 32767; ++raw)
+  {
+    for (const bool negated : {false, true})
+    {
+      const float v = HelperAxis(raw, negated);
+      for (const bool invert : {false, true})
+      {
+        StandardPad p;
+        p.axes = {invert ? 0.0f : v, invert ? v : 0.0f, 0, 0};
+        const GCPadStatus s = MapStandardPad(p);
+        const int now = invert ? s.stickY : s.stickX;
+        const int before = LegacyAxisByte(v, invert);
+        if (now == before)
+          continue;
+        ++changed;
+        const int s16 = negated ? -raw : raw;
+        const int m = ((s16 % 257) + 257) % 257;
+        ASSERT_TRUE(m == 128 || m == 129) << raw << " " << negated << " " << invert;
+        ASSERT_EQ(std::abs(now - before), 1) << raw << " " << negated << " " << invert;
+        // Toward the push: a negative push one further left/down, a mirrored one further up/right.
+        ASSERT_EQ(now - before, (v < 0) != invert ? -1 : 1) << raw << " " << negated << " " << invert;
+      }
+    }
+  }
+  EXPECT_GT(changed, 0);
+  // Centre, rest noise and full pushes are unchanged.
+  StandardPad p;
+  for (const int raw : {0, 1, -1, 100, -100, 1000, -1000, 32767, -32768})
+  {
+    p.axes = {HelperAxis(raw), HelperAxis(raw), 0, 0};
+    EXPECT_EQ(MapStandardPad(p).stickX, LegacyAxisByte(HelperAxis(raw), false)) << raw;
+    EXPECT_EQ(MapStandardPad(p).stickY, LegacyAxisByte(HelperAxis(raw), true)) << raw;
+  }
+}
+
 
 namespace
 {
