@@ -1935,7 +1935,11 @@ The page owns the room: Orca never leaves on a skip or a timeout by itself.
   game (it readies through the latch); while ready, B only un-readies.
 - **The pick's identity.** At ready, Orca keeps the pick (character, costume, where the hand placed
   it) and the page's `queue rating`, as a 13-byte queue identity that rides the session's value
-  channel, so every machine has the joiner's at its plug frame.
+  channel, so every machine has the joiner's at its plug frame. The place is learned from a hand
+  over that same character (`Queue::PickPlaces`, kept per character for the run); a token that was
+  already down (the queue image after a ranked set) teaches nothing, and a pick with no known place
+  goes out with no pick, so the player picks by hand rather than having the hand parked on another
+  square with their controller held for 10 s.
 - **The room's select.** Game 1: the host's pick goes back on it after its fresh start, by its own
   inputs ([Fresh starts](#fresh-starts)), and locks once down; the joiner's pick is put in from its
   identity by the input gate (its stick held centred for 20 frames, since the game takes a newly
