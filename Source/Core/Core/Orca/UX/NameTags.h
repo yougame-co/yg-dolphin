@@ -40,7 +40,7 @@ class CPUThreadGuard;
 //     gmPlayerInitData (+0x0C name, +0x18 tag index).
 //
 // On every character-select frame, a joined port with a named player and no tag gets one: the tag
-// already holding that name, else the highest unused one, built as the game builds one. A duplicate
+// already holding that name, else the lowest unused one, built as the game builds one. A duplicate
 // name gets its port number as the last character (SAND2). The player's controls are written into
 // it. A port with controls but no showable name gets "P<port>". A port with neither gets nothing.
 // The game's own name list types tags in full-width characters (U+FF21 for A) while Orca writes

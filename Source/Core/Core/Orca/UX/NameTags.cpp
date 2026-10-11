@@ -143,17 +143,18 @@ int FindPlayerTag(const GuestMemory& m, u32 tags, const std::u16string& name)
   return made;
 }
 
-// Creates a tag in the highest unused slot the way the game does: entry cleared, name, rumble on,
+// Creates a tag the way the game does: in the lowest unused slot, entry cleared, name, rumble on,
 // default controls from CONTROLS_TEMPLATE. -1 when every tag is taken.
+// The lowest slot, as the game's own name list does: Options > Controls stops the game for good
+// when a used slot follows an unused one (through 0.3.38 Orca took the highest, slot 119).
 // Slot i's entry is the TAG_SIZE bytes from records + i * TAG_SIZE, and its name is RECORDS_TAGS
 // into it, so the entry starts RECORDS_TAGS before `tags + i * TAG_SIZE`. Clearing TAG_SIZE bytes
 // from the name instead (through 0.3.38) cleared the next entry's first RECORDS_TAGS bytes, and for
-// slot 119 (the first Orca makes) the heap header and gmGlobalRecord right after the table, which
-// hangs Options > Controls.
+// slot 119 the heap header and gmGlobalRecord right after the table.
 int MakeTag(GuestMemory& m, u32 tags, const std::u16string& name)
 {
   int unused = -1;
-  for (int i = 0; i < TAG_SLOTS; ++i)
+  for (int i = 0; i < TAG_SLOTS && unused < 0; ++i)
   {
     if (TagAt(m, tags + static_cast<u32>(i) * TAG_SIZE).empty())
       unused = i;
