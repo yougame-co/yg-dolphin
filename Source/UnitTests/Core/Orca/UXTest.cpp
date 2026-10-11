@@ -1469,6 +1469,45 @@ TEST(OrcaUXGamePatches, BrawlInputLagFixIsTheMagusCodeInPlace)
     EXPECT_FALSE(p.address >= 0x8002AD8C && p.address <= 0x8002AE3C) << std::hex << p.address;
 }
 
+TEST(OrcaUXGamePatches, BrawlHasNoRandomTripping)
+{
+  // "No Tripping" [Phantom Wings] (Gecko 0489E910 FFE0F090): in the trip check (0x8089E820) the
+  // trip rate param's float (0xDB3, fetched at 0x8089E90C) is replaced by the call's own argument,
+  // so the chance is 0 and the check returns before it draws a random number. One changed word in a
+  // group of six whose other words are the param fetch around it, read in RAM on scMelee.
+  const auto patches = ShippedPatches("RSBE01.patches");
+  const auto first = std::find_if(patches.begin(), patches.end(),
+                                  [](const GamePatch& p) { return p.address == 0x8089E900; });
+  ASSERT_NE(first, patches.end());
+  constexpr size_t WORDS = 6;
+  ASSERT_GE(static_cast<size_t>(patches.end() - first), WORDS);
+  const std::span<const GamePatch> group(&*first, WORDS);
+  const std::vector<u32> want_originals{0x7FA3EB78, 0x38800DB3, 0x38A00000,
+                                        0x4BEF8361, 0xFFE00890, 0x2C1E0001};
+  std::vector<u32> originals, landed;
+  for (size_t i = 0; i < group.size(); ++i)
+  {
+    const GamePatch& p = group[i];
+    ASSERT_TRUE(p.original.has_value()) << std::hex << p.address;
+    EXPECT_EQ(p.address, 0x8089E900u + 4 * i);
+    EXPECT_EQ(p.joins_previous, i != 0) << std::hex << p.address;
+    EXPECT_TRUE(p.when.empty()) << std::hex << p.address;
+    originals.push_back(*p.original);
+    landed.push_back(p.value);
+    if (p.address != 0x8089E910)
+      EXPECT_EQ(p.value, *p.original) << std::hex << p.address;  // guard only
+  }
+  EXPECT_EQ(originals, want_originals);
+  EXPECT_EQ(group[4].value, 0xFFE0F090u);  // fmr f31, f1 -> fmr f31, f30: the Gecko line's word
+  if (first + WORDS != patches.end())
+    EXPECT_FALSE(first[WORDS].joins_previous);
+  EXPECT_TRUE(GroupApplies(group, originals));
+  EXPECT_FALSE(GroupApplies(group, landed));
+  // Project+ has no tripping of its own: its file leaves the check alone.
+  for (const GamePatch& p : ShippedPatches("PPLUS32.patches"))
+    EXPECT_FALSE(p.address >= 0x8089E820 && p.address <= 0x8089EC1C) << std::hex << p.address;
+}
+
 TEST(OrcaUXGamePatches, BrawlRunsProjectPlusVSyncMove)
 {
   // Project+'s "Move v-sync call for Brawl/PM" (`op nop @ $80023b88`, `op b 0x1C4904 @ $80024028`):
