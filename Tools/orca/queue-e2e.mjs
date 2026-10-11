@@ -39,7 +39,9 @@
 //   noskip   ranked: both hold B on every character select; ranked has no skip
 //   altz     Project+: both hold Z through the first character select's go (Orca's Start), as the
 //            AltZ costume code wants (hidden costume 62); Z must reach both games alike, which the
-//            checksum gate checks. Add --probe for a `fighters` line with the costumes
+//            checksum gate checks. The gate can't tell whether Z reached the game at all: add
+//            --probe Tools/orca/inputs/pplus-altz.probe and each Orca's log shows
+//            `Watch ... p1-9C = 003e....` and `p2-9C = 003e....` (costume 62) as the select ends
 // --pick random makes every pick RANDOM. Every --q2 scenario ends with the checksum gate: each
 // session either Orca ended matched checksums with the other, and neither logged a desync.
 //
@@ -1778,6 +1780,8 @@ async function q2Main() {
   }
   if (SCENARIO === "altz") {
     if (!altzHeld) fail("altz: Z was never held through the go");
+  }
+  if (SCENARIO === "noskip" || SCENARIO === "altz") {
     for (const s of [a, b])
       if (s.lines.some((l) => l === "orca queue skip")) fail(`${s.name}: printed orca queue skip`);
   }
