@@ -1659,6 +1659,48 @@ TEST(OrcaOnlineMenuDropIn, AMenuStillLoadingIsNeverLeft)
   EXPECT_EQ(RunUntilMove(in, 100), 3121 + static_cast<int>(FriendsMove::MENU_SETTLE_FRAMES));
 }
 
+TEST(OrcaOnlineMenuDropIn, TheNameKeypadIsNeverLeft)
+{
+  // Project+, Orca 0.3.38 (reports 6c4ed71a, d3e6d812): the host typed a name (Options > Controls >
+  // New entry) when the friend plugged in; leaving the menu with the keypad open crashed both games
+  // at 0x80677f54. With the keypad open the friend waits, however long; once it closes, the built
+  // menu counts its half second again.
+  Inputs in = OnMenu(700);
+  in.keypad = true;
+  in.plugged = 0x03;
+  Outputs out = Decide(in);
+  EXPECT_EQ(out.pending, 1);
+  EXPECT_EQ(out.menu_since, 0u);
+  EXPECT_FALSE(out.move);
+  in = After(in, out);
+  for (; in.frame < 2000;)
+  {
+    out = Decide(in);
+    ExpectIdempotent(in, out);
+    EXPECT_FALSE(out.move) << in.frame;
+    EXPECT_EQ(out.menu_since, 0u) << in.frame;
+    EXPECT_EQ(out.pending, 1) << in.frame;
+    in = After(in, out);
+  }
+  in.keypad = false;
+  EXPECT_EQ(RunUntilMove(in, 100), 2000 + static_cast<int>(FriendsMove::MENU_SETTLE_FRAMES));
+
+  // Opened during the half second: the count starts over once it closes.
+  in = OnMenu(3000);
+  in.plugged = 0x03;
+  out = Decide(in);
+  EXPECT_EQ(out.menu_since, 3001u);
+  in = After(in, out, 10);
+  in.keypad = true;
+  out = Decide(in);
+  EXPECT_FALSE(out.move);
+  EXPECT_EQ(out.menu_since, 0u);
+  EXPECT_EQ(out.pending, 1);
+  in = After(in, out, 100);
+  in.keypad = false;
+  EXPECT_EQ(RunUntilMove(in, 100), 3110 + static_cast<int>(FriendsMove::MENU_SETTLE_FRAMES));
+}
+
 TEST(OrcaOnlineMenuDropIn, NoMoveForQueueRoomsVersusOrAFriendWhoLeft)
 {
   {
@@ -1775,6 +1817,77 @@ FakeMemory CharacterSelect(bool readable)
   return m;
 }
 }  // namespace
+
+namespace
+{
+// A gfTask at `task` named `name` (its string at task + 0x100), linked to `prev` and `next`.
+void Task(FakeMemory& m, u32 task, std::string_view name, u32 prev, u32 next)
+{
+  m.Fill(task, 0x40);
+  m.Write32(task, task + 0x100);
+  m.Text(task + 0x100, name);
+  m.Write32(task + FriendsMove::TASK_PREV, prev);
+  m.Write32(task + FriendsMove::TASK_NEXT, next);
+}
+
+// The main menu's process list as Project+ has it on Options > Controls (measured, 0.3.38):
+// MainMenuTask, muPanelCtrl, Menu, Menu, and with the keypad open MuName and MuNameRemoteTask.
+FakeMemory MenuWithTasks(bool keypad)
+{
+  FakeMemory m = MainMenu(true);
+  m.Write32(0x80910000 + FriendsMove::MENU_TASK, 0x81000000);
+  Task(m, 0x81000000, "MainMenuTask", 0, 0x81001000);
+  Task(m, 0x81001000, "muPanelCtrl", 0x81000000, 0x81002000);
+  Task(m, 0x81002000, "Menu", 0x81001000, 0x81003000);
+  Task(m, 0x81003000, "Menu", 0x81002000, keypad ? 0x81004000 : 0);
+  if (keypad)
+  {
+    Task(m, 0x81004000, "MuName", 0x81003000, 0x81005000);
+    Task(m, 0x81005000, "MuNameRemoteTask", 0x81004000, 0);
+  }
+  m.writes = 0;
+  return m;
+}
+}  // namespace
+
+TEST(OrcaOnlineMenuDropIn, ReadsTheNameKeypadFromTheMenusTasks)
+{
+  using FriendsMove::KeypadOpen;
+  EXPECT_TRUE(KeypadOpen(MenuWithTasks(true), 0x80910000));
+  EXPECT_FALSE(KeypadOpen(MenuWithTasks(false), 0x80910000));
+  // Linked before the menu's task: found the other way.
+  {
+    FakeMemory m = MenuWithTasks(false);
+    Task(m, 0x81004000, "MuName", 0, 0x81000000);
+    m.Write32(0x81000000 + FriendsMove::TASK_PREV, 0x81004000);
+    EXPECT_TRUE(KeypadOpen(m, 0x80910000));
+  }
+  // Only that exact name: another task whose name starts with it is not the keypad.
+  {
+    FakeMemory m = MenuWithTasks(false);
+    Task(m, 0x81004000, "MuNameRemoteTask", 0x81003000, 0);
+    m.Write32(0x81003000 + FriendsMove::TASK_NEXT, 0x81004000);
+    EXPECT_FALSE(KeypadOpen(m, 0x80910000));
+  }
+  // A loop in the links, unmapped links or names, no task: false, and the walk ends.
+  {
+    FakeMemory m = MenuWithTasks(false);
+    m.Write32(0x81003000 + FriendsMove::TASK_NEXT, 0x81001000);
+    EXPECT_FALSE(KeypadOpen(m, 0x80910000));
+    m.Write32(0x81003000 + FriendsMove::TASK_NEXT, 0x8F000000);
+    EXPECT_FALSE(KeypadOpen(m, 0x80910000));
+    m.Write32(0x81003000 + FriendsMove::TASK_NEXT, 0x81004000);
+    Task(m, 0x81004000, "MuName", 0x81003000, 0);
+    m.Write32(0x81004000, 0x8F000000);
+    EXPECT_FALSE(KeypadOpen(m, 0x80910000));
+  }
+  EXPECT_FALSE(KeypadOpen(MainMenu(true), 0x80910000));
+  EXPECT_FALSE(KeypadOpen(FakeMemory{}, 0x80910000));
+  // Reading never writes.
+  FakeMemory m = MenuWithTasks(true);
+  (void)KeypadOpen(m, 0x80910000);
+  EXPECT_EQ(m.writes, 0);
+}
 
 TEST(OrcaOnlineMenuFresh, ReadsTheBuiltMainMenuAndTheCharacterSelect)
 {
