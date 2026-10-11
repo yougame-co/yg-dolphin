@@ -146,7 +146,7 @@ int FindPlayerTag(const GuestMemory& m, u32 tags, const std::u16string& name)
 // Creates a tag the way the game does: in the lowest unused slot, entry cleared, name, rumble on,
 // default controls from CONTROLS_TEMPLATE. -1 when every tag is taken.
 // The lowest slot, as the game's own name list does: Options > Controls stops the game for good
-// when a used slot follows an unused one (through 0.3.38 Orca took the highest, slot 119).
+// when slot 0 is empty and another slot is used (through 0.3.38 Orca took the highest, slot 119).
 // Slot i's entry is the TAG_SIZE bytes from records + i * TAG_SIZE, and its name is RECORDS_TAGS
 // into it, so the entry starts RECORDS_TAGS before `tags + i * TAG_SIZE`. Clearing TAG_SIZE bytes
 // from the name instead (through 0.3.38) cleared the next entry's first RECORDS_TAGS bytes, and for

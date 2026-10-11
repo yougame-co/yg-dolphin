@@ -245,8 +245,9 @@ for o in (host, friend):
     tags[o.name] = records
     named = {}
     for slot in range(120):
-        tag = records[0xE0 + slot * 0x124:0xE0 + (slot + 1) * 0x124]
-        if any(tag):
+        # The tag's own bytes (name, rumble, layout), not the next entry's per-name block.
+        tag = records[0xE0 + slot * 0x124:0xE0 + slot * 0x124 + 0x44]
+        if any(tag[:10]):
             name = tag[:10].decode("utf-16-be", "replace").split("\0")[0]
             named[name] = (tag[0x0C], bytes(tag[0x14:0x41]))
             log(f"{o.name}: tag {slot} {name} rumble {tag[0x0C]} controls {tag[0x14:0x41].hex()}")
