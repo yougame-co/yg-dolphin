@@ -2329,6 +2329,11 @@ What each release changed for players, in plain words.
 - **Stopping a game while it loads** no longer counts as a game that couldn't start.
 - **Windows: no more crash after a game ends.** Orca could close with an error a moment after a
   game had ended, which sent a crash report. Games themselves were never affected.
+- **Options > Controls no longer freezes the game.** After any character select, opening the
+  game's Controls menu stopped the game for good: Orca put your name tag in the last of the
+  game's 120 slots, and the menu can't list a tag after empty slots. Your tag now goes in the first
+  free slot, as the game puts its own (`NameTags.cpp` `MakeTag`), and making it no longer clears
+  memory past the tag table.
 
 ### 0.3.38
 
