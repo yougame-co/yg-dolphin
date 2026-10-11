@@ -1693,10 +1693,11 @@ TEST(OrcaUXNameTags, ANewTagIsMadeAsTheGameMakesOneAndNothingElseIsWritten)
 }
 
 // Through 0.3.38 Orca made its tags in the highest unused slot (119 first) and cleared 0x124 bytes
-// from the name rather than from the entry. Options > Controls stops the game for good when a used
-// slot follows an unused one, and the clear ran 0xE0 bytes past the table (the next heap block's
-// header and the start of gmGlobalRecord) in slot 119, or over the next entry's per-name block in
-// any other. Now: the lowest unused slot, as the game's name list does, and only that entry.
+// from the name rather than from the entry. Options > Controls stops the game for good when slot 0
+// is empty and another slot is used, and the clear ran 0xE0 bytes past the table (the next heap
+// block's header and the start of gmGlobalRecord) in slot 119, or over the next entry's per-name
+// block in any other. Now: the lowest unused slot, as the game's name list does, and only that
+// entry.
 TEST(OrcaUXNameTags, ATagGoesInTheLowestFreeSlotAndWritesOnlyItsOwnEntry)
 {
   {
