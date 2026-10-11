@@ -1357,8 +1357,8 @@ away.
 | `+0x290`-`+0x297` | A friend's move from the menus |
 
 Any new header (another mode, ruleset, coin or room) starts every track's state fresh. Compatibility:
-anything that changes what the game computes bumps `UX::kCompatVersion` (currently `ux=27`: how a
-turn ends in the [Character order](#character-order), and who turns Brawl's stage select page;
+anything that changes what the game computes bumps `UX::kCompatVersion` (currently `ux=28`: a
+friend's move from the menus waits while Options > Controls is open; `ux=27`: how a turn ends in the [Character order](#character-order), and who turns Brawl's stage select page;
 `ux=26` since 0.3.37: the history's seed, [Random numbers](#random-numbers), and tags typed in the
 game, [Port values](#port-values-each-players-name-and-controls)), which is in the compatibility
 key.
@@ -1499,7 +1499,11 @@ origin, the built main menu 30 frames on ([How it works](#how-it-works)).
 the main menu has built its pages and run 30 frames, the frame hook leaves the menu with exit code 25,
 as With Friends does, so both games go to the character select at the same boundary. It counts from
 the menu's build (`+0xAC8` of muMenuMain), not its start: moving before the build made the menu's
-exit call destructors through uninitialised page slots and froze both games. Never in a queue room.
+exit call destructors through uninitialised page slots and froze both games. Never while Options >
+Controls is open: its name list and keypad run as a gfTask of their own (`MuName`, linked after the
+menu's task), and leaving the menu under it froze (the list) or crashed (the keypad, `0x80677f54`)
+both games, so the friend waits on the host's menu until the host backs out of it, then 30 frames
+more. Never in a queue room.
 That character select is online, so its CPUs go and a friend whose panel had one takes it at once
 ([No CPUs online](#no-cpus-online)).
 
@@ -2326,6 +2330,10 @@ What each release changed for players, in plain words.
   freezing.
 - **The app sees how fast your computer is,** so it can tell you when a setting helps.
 - **Stability and ranked fixes.**
+- **A friend joining while you set up your controls no longer crashes both games.** If a friend
+  dropped in while you were in Options > Controls (making a name or typing it), both games crashed
+  or froze. Now your friend waits on your menu until you leave Controls, then you both go to the
+  character select.
 - **Stopping a game while it loads** no longer counts as a game that couldn't start.
 - **Windows: no more crash after a game ends.** Orca could close with an error a moment after a
   game had ended, which sent a crash report. Games themselves were never affected.
