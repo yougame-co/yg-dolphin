@@ -163,13 +163,10 @@ constexpr u8 RULESET_NONE = 0;
 constexpr u8 RULESET_BRAWL_SUPERNOVA_2025 = 1;
 constexpr u8 RULESET_PPLUS_2024 = 2;
 
-// Project+ 2024: BF, PS2, SV, LM, ToT; counterpicks GHZ, BC, FH, DL. Winner strikes 2.
-const Ruleset& PPlus2024();
-// Brawl, Supernova 2025: BF, PS1, LC, SV, YI; counterpicks FD, Delfino. Winner may ban 1. Meta
-// Knight clause; Ice Climbers never on FD.
-const Ruleset& Brawl2025();
-// nullptr for none or an unknown id.
-const Ruleset* RulesetById(u8 id);
+// The rulesets themselves are data: the builtin module's are Games/Brawl/Rulesets.h (Project+ 2024:
+// BF, PS2, SV, LM, ToT; counterpicks GHZ, BC, FH, DL; winner strikes 2. Brawl Supernova 2025: BF,
+// PS1, LC, SV, YI; counterpicks FD, Delfino; winner may ban 1; Meta Knight clause; Ice Climbers
+// never on FD).
 
 // What a game's steps depend on.
 struct SetView

@@ -17,6 +17,7 @@
 #include "Core/Orca/Games/Brawl/OnlineMenu.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/Games/Brawl/Results.h"
+#include "Core/Orca/Games/Brawl/Rulesets.h"
 #include "Core/Orca/Games/Brawl/SetBlock.h"
 #include "Core/Orca/Games/Brawl/StageCursors.h"
 
@@ -294,7 +295,7 @@ u8 HoverKey(const GuestMemory& m, const View& v)
 
 const RS::Ruleset& Rules()
 {
-  return RS::Brawl2025();
+  return Rulesets::Brawl2025();
 }
 
 // `casual` plans the two preferred-stage turns instead of the ranked steps.

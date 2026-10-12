@@ -13,64 +13,7 @@ constexpr StageMask Bit(int i)
 {
   return static_cast<StageMask>(1u << i);
 }
-
-Ruleset MakePPlus()
-{
-  Ruleset r;
-  r.id = RULESET_PPLUS_2024;
-  r.name = "Project+ 2024";
-  r.stage_count = 9;
-  r.starters = 0x001F;      // BF, PS2, SV, LM, ToT
-  r.counterpicks = 0x01E0;  // GHZ, BC, FH, DL
-  r.later_kind = StepKind::Strike;
-  r.later_count = 2;
-  r.later_optional = false;
-  r.stage_names = {"Battlefield",     "Pokémon Stadium 2", "Smashville",
-                   "Luigi's Mansion", "Temple of Time",    "Green Hill Zone",
-                   "Bowser's Castle", "Frigate Husk",      "Dream Land"};
-  return r;
-}
-
-Ruleset MakeBrawl()
-{
-  Ruleset r;
-  r.id = RULESET_BRAWL_SUPERNOVA_2025;
-  r.name = "Brawl Supernova 2025";
-  r.stage_count = 7;
-  r.starters = 0x001F;      // BF, PS1, LC, SV, YI
-  r.counterpicks = 0x0060;  // FD, Delfino
-  r.later_kind = StepKind::Ban;
-  r.later_count = 1;
-  r.later_optional = true;
-  r.ic_banned_stage = 5;  // Final Destination
-  r.ice_climbers = 0x10;  // gmCharacterKind
-  r.meta_knight = 0x18;
-  r.stage_names = {"Battlefield",    "Pokémon Stadium",   "Lylat Cruise", "Smashville",
-                   "Yoshi's Island", "Final Destination", "Delfino Plaza"};
-  return r;
-}
 }  // namespace
-
-const Ruleset& PPlus2024()
-{
-  static const Ruleset r = MakePPlus();
-  return r;
-}
-
-const Ruleset& Brawl2025()
-{
-  static const Ruleset r = MakeBrawl();
-  return r;
-}
-
-const Ruleset* RulesetById(u8 id)
-{
-  if (id == RULESET_PPLUS_2024)
-    return &PPlus2024();
-  if (id == RULESET_BRAWL_SUPERNOVA_2025)
-    return &Brawl2025();
-  return nullptr;
-}
 
 int CountBits(StageMask mask)
 {
