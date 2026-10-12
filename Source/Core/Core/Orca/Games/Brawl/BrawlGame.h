@@ -23,6 +23,13 @@ inline constexpr std::string_view BRAWL_REV2 = "brawl-rev2";
 inline constexpr std::string_view BRAWL_REV2_PPLUS = "brawl-rev2-pplus";
 inline constexpr std::string_view BRAWL_REV2_LAUNCHER = "brawl-rev2-launcher";
 
+// Each game's own compatibility revision (Manifest::compat; the key's `ux=<engine>.<game>`, or
+// `ux=<engine>` alone while it is 0, as every game's is today, so S3 changed no key). The three
+// games share this module's code: a step change that reaches more than one of them bumps each.
+inline constexpr int BRAWL_REV2_COMPAT = 0;
+inline constexpr int BRAWL_REV2_PPLUS_COMPAT = 0;
+inline constexpr int BRAWL_REV2_LAUNCHER_COMPAT = 0;
+
 // The game `profile` runs (null: no session). Static for a boot: the profile and mod.json only,
 // never memory.
 Orca::Engine::Manifest Identify(const Orca::Profile* profile);

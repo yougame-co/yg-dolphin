@@ -22,7 +22,9 @@
 #include "Core/Orca/Mod.h"
 #include "Core/Orca/Music.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/Session/Events.h"
 #include "Core/Orca/Session/Online.h"
+#include "Core/Orca/UX/UX.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/GamePatches.h"
 #include "Core/Orca/Games/Brawl/BrawlModule.h"
@@ -1173,6 +1175,66 @@ TEST(OrcaMod, LauncherBootReadsRev1AsRev2)
   EXPECT_NE(error.find("revision 2"), std::string::npos) << error;
   File::DeleteDirRecursively(b.dir);
   File::DeleteDirRecursively(one.dir);
+}
+
+// S3 (WP19 a): the key's UX version is the engine's, then the running game's own revision when it
+// has one. Every game's is 0 today, so Brawl rev 2's and Project+'s keys end exactly as before S3.
+TEST(OrcaMod, UxKeyPartIsPerGame)
+{
+  EXPECT_EQ(Orca::Online::UxKeyPart(29, 0), "|ux=29");
+  EXPECT_EQ(Orca::Online::UxKeyPart(29, 3), "|ux=29.3");
+  // A launcher profile's key reads the running game's ID (SConfig), as in a session.
+  SConfig::Init();
+  struct ConfigDone
+  {
+    ~ConfigDone() { SConfig::Shutdown(); }
+  } config_done;
+  const std::string ux = fmt::format("|ux={}", Orca::UX::kCompatVersion);
+  const int before = Orca::Events::UXCompatVersion();
+  // The module, the UX version and the profile as they were, whatever fails.
+  struct SessionDone
+  {
+    int ux;
+    ~SessionDone()
+    {
+      Orca::Engine::SetModule(nullptr);
+      Orca::Events::SetUXCompatVersion(ux);
+      Orca::SetActiveProfile(std::nullopt);
+    }
+  } session_done{before};
+  Orca::Events::SetUXCompatVersion(Orca::UX::kCompatVersion);
+  Orca::Engine::SetModule(&Orca::UX::Builtin());
+  std::string error;
+  for (const char* name : {"RSBE01", "PPLUS32"})
+  {
+    SCOPED_TRACE(name);
+    const auto profile = Orca::LoadProfileFrom(RepoPath("Data/Sys/"), name, 2, &error);
+    ASSERT_TRUE(profile) << error;
+    Orca::SetActiveProfile(profile);
+    EXPECT_EQ(Orca::UX::Builtin().Describe().compat, 0);
+    EXPECT_TRUE(Orca::Online::CompatibilityKeyParts().ends_with(ux));
+  }
+  // Mod mode's key ends the same way.
+  Bundle b = MakeBundle(BRAWL_MOD);
+  b.WriteTree();
+  Bundle pp = MakeBundle(PPLUS_MOD);
+  pp.Add("launcher.dol", std::string(64, '\x01'));
+  pp.WriteTree();
+  for (const Bundle* bundle : {&b, &pp})
+  {
+    const auto mod = Orca::LoadModProfile(bundle->dir, &error);
+    ASSERT_TRUE(mod) << error;
+    Orca::SetActiveProfile(mod);
+    EXPECT_EQ(Orca::UX::Builtin().Describe().compat, 0);
+    const std::string parts = Orca::Online::CompatibilityKeyParts();
+    EXPECT_TRUE(parts.starts_with("orca2|")) << parts;
+    EXPECT_TRUE(parts.ends_with(ux)) << parts;
+  }
+  File::DeleteDirRecursively(b.dir);
+  File::DeleteDirRecursively(pp.dir);
+  Orca::Engine::SetModule(nullptr);
+  Orca::Events::SetUXCompatVersion(before);
+  Orca::SetActiveProfile(std::nullopt);
 }
 
 // The legacy key's inputs, pinned: with no ORCA_MOD_DIR the key is "orca2:" (the room protocol's

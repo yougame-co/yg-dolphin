@@ -29,6 +29,7 @@
 #include "Core/Core.h"
 #include "Core/Config/SessionSettings.h"
 #include "Core/Orca/Bridge.h"
+#include "Core/Orca/Engine/Module.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Status.h"
 #include "Core/HW/SI/SI_Device.h"
@@ -69,6 +70,13 @@ bool Enabled()
 
 namespace
 {
+// The UX version for the running game: the engine's, and the game module's own revision.
+std::string RunningUxKeyPart()
+{
+  Engine::Module* module = Engine::ActiveModule();
+  return UxKeyPart(Events::UXCompatVersion(), module ? module->Describe().compat : 0);
+}
+
 // The universal forced settings that change what the game computes, the seeded save and whether test
 // overrides are on: the tail of both key versions.
 std::string UniversalKeyParts()
@@ -134,10 +142,15 @@ std::string ModKeyParts(const Profile& profile)
     parts += fmt::format("{}.{}.{}={}|", static_cast<int>(location.system), location.section,
                          location.key, value);
   parts += UniversalKeyParts();
-  parts += fmt::format("|ux={}", Events::UXCompatVersion());
+  parts += RunningUxKeyPart();
   return parts;
 }
 }  // namespace
+
+std::string UxKeyPart(int engine, int game)
+{
+  return game > 0 ? fmt::format("|ux={}.{}", engine, game) : fmt::format("|ux={}", engine);
+}
 
 std::string CompatibilityKeyParts()
 {
@@ -206,7 +219,7 @@ std::string CompatibilityKeyParts()
   // (Brawl Rev 1), the app passes the hash of the dump it plays as, or its players meet no one.
   parts += "|disc=" + Env("ORCA_DISC_SHA1");
   // Version of what the in-game UX writes to emulated memory (name tags, mode locks).
-  parts += fmt::format("|ux={}", Events::UXCompatVersion());
+  parts += RunningUxKeyPart();
   return parts;
 }
 

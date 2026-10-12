@@ -18,12 +18,13 @@ constexpr std::string_view BRAWL_DISC = "RSBE01";
 constexpr u16 BRAWL_REVISION = 2;
 constexpr std::string_view PPLUS_PROFILE = "PPLUS32";
 
-Orca::Engine::Manifest Game(std::string_view id, Orca::Engine::Ruleset ruleset)
+Orca::Engine::Manifest Game(std::string_view id, Orca::Engine::Ruleset ruleset, int compat)
 {
   Orca::Engine::Manifest game;
   game.id = id;
   game.ruleset = ruleset;
   game.results = true;
+  game.compat = compat;
   return game;
 }
 }  // namespace
@@ -37,10 +38,10 @@ Orca::Engine::Manifest Identify(const Orca::Profile* profile)
     switch (profile->mod->manifest.builtin)
     {
     case Orca::Mod::Builtin::BrawlRev2:
-      game = Game(BRAWL_REV2, Orca::Engine::Ruleset::Brawl);
+      game = Game(BRAWL_REV2, Orca::Engine::Ruleset::Brawl, BRAWL_REV2_COMPAT);
       break;
     case Orca::Mod::Builtin::BrawlRev2PPlus:
-      game = Game(BRAWL_REV2_PPLUS, Orca::Engine::Ruleset::PPlus);
+      game = Game(BRAWL_REV2_PPLUS, Orca::Engine::Ruleset::PPlus, BRAWL_REV2_PPLUS_COMPAT);
       break;
     default:
       break;
@@ -51,12 +52,12 @@ Orca::Engine::Manifest Identify(const Orca::Profile* profile)
     // Legacy: Brawl rev 2 itself, or a launcher profile that boots it (Project+, or another build,
     // which plays no ruleset).
     if (!profile->IsLauncher() && profile->game_id == BRAWL_DISC)
-      game = Game(BRAWL_REV2, Orca::Engine::Ruleset::Brawl);
+      game = Game(BRAWL_REV2, Orca::Engine::Ruleset::Brawl, BRAWL_REV2_COMPAT);
     else if (profile->IsLauncher() && profile->disc == BRAWL_DISC)
     {
       game = profile->game_id == PPLUS_PROFILE ?
-                 Game(BRAWL_REV2_PPLUS, Orca::Engine::Ruleset::PPlus) :
-                 Game(BRAWL_REV2_LAUNCHER, Orca::Engine::Ruleset::None);
+                 Game(BRAWL_REV2_PPLUS, Orca::Engine::Ruleset::PPlus, BRAWL_REV2_PPLUS_COMPAT) :
+                 Game(BRAWL_REV2_LAUNCHER, Orca::Engine::Ruleset::None, BRAWL_REV2_LAUNCHER_COMPAT);
     }
   }
   // Brawl's disc, any revision and in either mode, builtin or not: its music is on stream voices.

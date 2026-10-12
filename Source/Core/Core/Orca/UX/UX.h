@@ -12,8 +12,10 @@
 namespace Orca::UX
 {
 // Bump whenever anything here that writes emulated memory, masks inputs or changes how a session
-// ends changes. The session hashes it into the compatibility key as `ux=<n>`, so two builds that
-// would diverge never meet in a room.
+// ends changes, for every game. The session hashes it into the compatibility key as `ux=<n>`, so
+// two builds that would diverge never meet in a room. A change to one game's module only bumps that
+// game's own revision instead (Engine/Module.h Manifest::compat, Games/Brawl/BrawlGame.h), which
+// the key adds as `ux=<n>.<game>` (Session/Online.h UxKeyPart).
 constexpr int kCompatVersion = 29;
 
 // The disc the game boots from. The overlay reads the game's own fonts from it. Call before Init.

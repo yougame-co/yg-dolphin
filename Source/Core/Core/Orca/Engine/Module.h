@@ -26,7 +26,7 @@ class CPUThreadGuard;
 // The seam between the engine and a game module (the Orca split, modules.md section 4). The engine
 // owns the three hooks into emulation (the frame callback, the input gate's source and its latch)
 // and calls the active module from each; the module owns its game's steps and their order, which
-// is part of what makes two builds compatible (UX::kCompatVersion).
+// is part of what makes two builds compatible (UX::kCompatVersion and the game's Manifest::compat).
 //
 // S2 commit 4: one module, the builtin Brawl/Project+ one (Games/Brawl/BrawlModule.h), whose three
 // entry points are UX.cpp's three hook bodies moved verbatim. Later commits narrow the interface
@@ -130,6 +130,10 @@ struct Manifest
   // Host only, about the disc rather than the game (true without an id too, such as for a mod with
   // no builtin on Brawl's disc): the game's music can be switched off (Core/Orca/Music.h).
   bool music = false;
+  // The game's own compatibility revision (S3, WP19 a): the key's "ux=" is the engine's
+  // UX::kCompatVersion, then ".<compat>" when this is above 0 (Online::UxKeyPart). A change to the
+  // module's steps that changes what only this game computes bumps this, not the engine's number.
+  int compat = 0;
 };
 
 class Module

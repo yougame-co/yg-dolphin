@@ -185,4 +185,8 @@ void Shutdown();
 std::string CompatibilityKey();
 // What the key hashes (tests pin its legacy form).
 std::string CompatibilityKeyParts();
+// The key's last part, the in-game UX's version (S3, WP19 a): "|ux=<engine>" (UX::kCompatVersion),
+// then ".<game>" when the running game's module gives that game a revision of its own
+// (Engine/Module.h Manifest::compat), so a change to one game's steps splits only its rooms.
+std::string UxKeyPart(int engine, int game);
 }  // namespace Orca::Online

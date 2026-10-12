@@ -1527,15 +1527,18 @@ away.
 | `+0x290`-`+0x297` | A friend's move from the menus |
 
 Any new header (another mode, ruleset, coin or room) starts every track's state fresh.
-Compatibility: anything that changes what the game computes bumps `UX::kCompatVersion` (currently
-`ux=29`: a casual stage select's Random, the two cursors start on nothing, and a button held into
-the stage select counts once it is let go, so an A held into a ranked stage select no longer
-proposes until released, and Project+'s auto-pick waits for the hover to leave Random; also
-leaving is a held B and Z reaches the game on the queue's selects (hold B to leave); `ux=28`: a
-friend's move from the menus waits while Options > Controls is open; `ux=27`: how a turn ends in the
-[Character order](#character-order), and who turns Brawl's stage select page; `ux=26` since 0.3.37:
-the history's seed, [Random numbers](#random-numbers), and tags typed in the game, [Port
-values](#port-values-each-players-name-and-controls)), which is in the compatibility key.
+Compatibility: a change to one game's module that changes only what that game computes bumps that
+game's own revision (`Games/Brawl/BrawlGame.h`, the key's `ux=<n>.<game>`; every game's is 0, so the
+key says `ux=<n>` alone, as before); anything else that changes what the game computes bumps
+`UX::kCompatVersion` (currently `ux=29`: a casual stage select's Random, the two cursors start on
+nothing, and a button held into the stage select counts once it is let go, so an A held into a
+ranked stage select no longer proposes until released, and Project+'s auto-pick waits for the hover
+to leave Random; also leaving is a held B and Z reaches the game on the queue's selects (hold B to
+leave); `ux=28`: a friend's move from the menus waits while Options > Controls is open; `ux=27`: how
+a turn ends in the [Character order](#character-order), and who turns Brawl's stage select page;
+`ux=26` since 0.3.37: the history's seed, [Random numbers](#random-numbers), and tags typed in the
+game, [Port values](#port-values-each-players-name-and-controls)), which is in the compatibility
+key.
 
 ## Input gate
 
