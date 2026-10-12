@@ -530,11 +530,12 @@ void DrawStageCursors(ImDrawList* dl, const StageCursors::View& v, ImVec2 pic, I
     const StageCursors::View::Player& p = v.players[port];
     if (!p.present || !Ranked::Named(p.proposal))
       continue;
-    // A stage's tile, or the Random button for a casual Random.
+    // A stage's tile, or the Random button as drawn for a casual Random.
     const StageCursors::Tile* tile = StageCursors::TileOf(*layout, p.proposal, v.page);
     const StageCursors::Rect* rect = tile ? &tile->rect : nullptr;
     if (p.proposal == Ranked::PREF_RANDOM)
-      rect = &layout->random_button;
+      rect = layout->random_art.x0 < layout->random_art.x1 ? &layout->random_art :
+                                                             &layout->random_button;
     if (!rect || rect->x0 >= rect->x1 || rect->y0 >= rect->y1)
       continue;
     const bool both = v.players[1 - port].present && v.players[1 - port].proposal == p.proposal;

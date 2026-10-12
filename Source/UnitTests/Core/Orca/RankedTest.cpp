@@ -197,10 +197,15 @@ void AimRandom(FakeMemory& m, int port)
   StageCursors::Write(m, *c);
 }
 
+// `port`'s buttons in the frame that just ran (the latch's). A cursor no latch has read yet
+// (StageCursors::Start's HELD_ALL) is first read with nothing held, as for a player who let go
+// before the stage select; AHeldIntoTheStageSelectNamesNothing drives the real latch instead.
 void Hold(FakeMemory& m, int port, u8 buttons)
 {
   auto c = StageCursors::Read(m);
   ASSERT_TRUE(c);
+  if (c->cursors[port].now == StageCursors::HELD_ALL)
+    c->cursors[port].seen = 0;
   c->cursors[port].now = buttons;
   StageCursors::Write(m, *c);
 }
@@ -640,8 +645,9 @@ TEST(OrcaRankedPPlus, OverlayLines)
   // player whose turn it is, A's proposal for both, what the other proposes.
   RankedPPlus::Lines l = RankedPPlus::Describe(m, 100, ports);
   EXPECT_EQ(l.set, "Ranked · ada 0–0 bo · bo strikes 1 · 0:30");
-  // Port 1's cursor starts on Random, which ranked doesn't have.
-  EXPECT_EQ(l.turn, "A proposes a stage · Random is casual only");
+  // Port 1's cursor starts on Random, which ranked doesn't have; the hint waits until a player moves
+  // onto it (RankedIgnoresRandomAndSaysItIsCasualOnly).
+  EXPECT_EQ(l.turn, "A proposes a stage");
   // The turn as STAGE SELECT's relabel names it (Relabel.h): the same step as the line's.
   EXPECT_EQ(RankedPPlus::CurrentTurn(m), (Ranked::Turn{StepKind::Strike, 1, 1}));
   const std::vector<Orca::Events::PortInfo> theirs{{0, "ada", true, {}}, {1, "bo", false, {}}};
@@ -836,6 +842,21 @@ TEST(OrcaRankedPPlus, CasualRandomOnTheRandomButton)
             fmt::format("{} ({})", Ranked::PPlus2024().stage_names[s.auto_stage],
                         random_won ? "random" : "your pick"));
   EXPECT_EQ(RankedPPlus::Apply(m, frame, true), 0);
+  // The flow's A waits while the game's hover still reads its own Random or page button (it
+  // follows the cursor a frame late), so Project+ never takes its own random stage.
+  ASSERT_TRUE(Block(m).auto_press);
+  for (const u32 item : {RankedPPlus::RANDOM_ITEM, RankedPPlus::PAGE_ITEM})
+  {
+    m.Write32(TASK + RankedPPlus::SSS_HOVERED, item);
+    for (const auto& mask : RankedPPlus::Masks(m))
+    {
+      EXPECT_EQ(mask, Rollback::InputGate::ALL);
+      EXPECT_EQ(mask.press, 0);
+    }
+  }
+  m.Write32(TASK + RankedPPlus::SSS_HOVERED, 0x07);  // a stage
+  EXPECT_EQ(RankedPPlus::Masks(m)[s.active].press, PAD_BUTTON_A);
+  EXPECT_EQ(RankedPPlus::Masks(m)[1 - s.active].press, 0);
 }
 
 TEST(OrcaRankedPPlus, CasualBothRandomPicksAtOnceAndARandomOutlastsTheTimer)
@@ -890,11 +911,16 @@ TEST(OrcaRankedPPlus, RankedIgnoresRandomAndSaysItIsCasualOnly)
   RankedPPlus::Apply(m, frame, true);
   const std::vector<Orca::Events::PortInfo> ports{{0, "ada", false, {}}, {1, "bo", true, {}}};
   const MatchBlock::State before = Block(m);
-  // Port 1's cursor starts on Random; its A there does nothing, and the line says why.
+  // Port 1's cursor starts on Random; its A there does nothing. The hint waits for a move onto it.
   const auto c = StageCursors::Read(m);
   ASSERT_TRUE(c);
   EXPECT_EQ(StageCursors::Hovered(StageCursors::PPlusLayout(), 0, c->cursors[0].x, c->cursors[0].y),
             StageCursors::RANDOM_BUTTON);
+  Press(m, 0, -1, BTN_A, &frame);
+  EXPECT_EQ(RankedPPlus::Describe(m, frame, ports).turn,
+            "Your turn: X on a stage strikes it · A proposes a stage");
+  // Moved onto it: A and X do nothing, and the line says why.
+  AimRandom(m, 0);
   Press(m, 0, -1, BTN_A, &frame);
   Press(m, 0, -1, BTN_X, &frame);
   MatchBlock::State after = Block(m);
@@ -907,6 +933,52 @@ TEST(OrcaRankedPPlus, RankedIgnoresRandomAndSaysItIsCasualOnly)
   Aim(m, 0, 2);
   EXPECT_EQ(RankedPPlus::Describe(m, frame, ports).turn,
             "Your turn: X on a stage strikes it · A proposes a stage");
+}
+
+// An A held, or mashed, into the stage select counts once it is let go (StageCursors::Start holds
+// every button). Casual: port 1 starts on Random, so a held A would name it. Ranked: the steps take
+// presses in the frame the cursors start, before any latch, and an A still held once the cursor
+// reaches a stage proposes nothing. The real latch reads the pads here.
+TEST(OrcaRankedPPlus, AHeldIntoTheStageSelectNamesNothing)
+{
+  std::array<std::optional<GCPadStatus>, 4> raw{};
+  GCPadStatus pad{};
+  pad.isConnected = true;
+  pad.stickX = pad.stickY = 128;
+  pad.button = PAD_BUTTON_A;
+  raw[0] = raw[1] = pad;
+  for (const bool casual : {true, false})
+  {
+    FakeMemory m = casual ? CasualSss(1) : RankedSss(1);
+    int frame = 200;
+    EXPECT_EQ(StageCursors::Latch(m, raw), 0);  // no cursors yet
+    RankedPPlus::Apply(m, frame, true);
+    ASSERT_TRUE(StageCursors::Read(m));
+    for (int i = 0; i < 10; ++i)
+    {
+      StageCursors::Latch(m, raw);
+      RankedPPlus::Apply(m, ++frame, true);
+      EXPECT_EQ(RankedPPlus::Apply(m, frame, true), 0);
+    }
+    if (!casual)
+    {
+      Aim(m, 0, 3);
+      StageCursors::Latch(m, raw);
+      RankedPPlus::Apply(m, ++frame, true);
+    }
+    EXPECT_EQ(Block(m).prefs[0], MatchBlock::NONE) << "casual " << casual;
+    EXPECT_EQ(Block(m).prefs[1], MatchBlock::NONE) << "casual " << casual;
+    EXPECT_FALSE(Block(m).auto_pick);
+    // Let go a frame, press again: now it counts (casual: Random; ranked: a proposal).
+    raw[0]->button = 0;
+    StageCursors::Latch(m, raw);
+    RankedPPlus::Apply(m, ++frame, true);
+    raw[0]->button = PAD_BUTTON_A;
+    StageCursors::Latch(m, raw);
+    RankedPPlus::Apply(m, ++frame, true);
+    EXPECT_EQ(Block(m).prefs[0], casual ? MatchBlock::RANDOM : u8{3}) << "casual " << casual;
+    EXPECT_EQ(Block(m).prefs[1], MatchBlock::NONE) << "casual " << casual;
+  }
 }
 
 TEST(OrcaRankedSteps, CasualIsOnePreferStepForBothOnTheWholeList)
@@ -1152,9 +1224,11 @@ TEST(OrcaRankedSteps, RankedHasNoRandom)
   }
 }
 
-// Two machines run the same casual pick from the same header (room, coin, game) and the same
-// presses: the same stage, whichever order the presses come in within a frame, and a re-run of a
-// frame (a rollback) changes nothing. Nothing reads the game's own RNG.
+// The pick is a pure function of the header (room, coin, game) and the names: the same stage
+// whichever order a frame handles the two ports in, a repeated name changes nothing, and nothing
+// reads the game's own RNG. This checks the step functions only; rollback re-runs of the flows are
+// covered by the Press and Boundary helpers (each runs a frame twice), and an old build meeting a
+// new one by the compatibility key (UX::kCompatVersion).
 TEST(OrcaRankedSteps, CasualRandomIsTheSameOnBothMachines)
 {
   const Ranked::Ruleset& rules = Ranked::PPlus2024();

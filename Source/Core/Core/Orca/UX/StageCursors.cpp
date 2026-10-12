@@ -106,6 +106,7 @@ Layout MakeBrawl()
   l.pages = true;
   l.page_button = R(15.25f, -19.75f, 30.25f, -17.25f);
   l.random_button = R(-5.25f, -21.0f, 15.25f, -17.25f);
+  l.random_art = R(-4.9f, -20.7f, 15.0f, -17.4f);
   // On the Random bar, either side of the game's own cursor start (3.5, -17.5).
   l.start = {Point{U(-2.0f), U(-18.0f)}, Point{U(9.0f), U(-18.0f)}};
   Map(&l);
@@ -121,6 +122,7 @@ Layout MakePPlus()
   l.tiles = kPPlusTiles;
   l.pages = false;
   l.random_button = R(-16.25f, -23.75f, 3.0f, -19.0f);
+  l.random_art = R(-16.0f, -22.6f, 4.0f, -19.3f);
   // Below the two rows of tiles: port 1's on Random, port 2's on the page button.
   l.start = {Point{U(-6.0f), U(-21.0f)}, Point{U(6.0f), U(-21.0f)}};
   Map(&l);
@@ -299,6 +301,10 @@ State Start(const Layout& l)
   {
     s.cursors[p].x = l.start[p].x;
     s.cursors[p].y = l.start[p].y;
+    // Held until the latch reads them up. `now` too: the flow may take presses in this same frame,
+    // before any latch, and that must not clear `seen`.
+    s.cursors[p].now = HELD_ALL;
+    s.cursors[p].seen = HELD_ALL;
   }
   return s;
 }

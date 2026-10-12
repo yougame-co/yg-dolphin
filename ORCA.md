@@ -1357,11 +1357,12 @@ away.
 | `+0x290`-`+0x297` | A friend's move from the menus |
 
 Any new header (another mode, ruleset, coin or room) starts every track's state fresh. Compatibility:
-anything that changes what the game computes bumps `UX::kCompatVersion` (currently `ux=28`: a
-friend's move from the menus waits while Options > Controls is open; `ux=27`: how a turn ends in
-the [Character order](#character-order), and who turns Brawl's stage select page; `ux=26` since
-0.3.37: the history's seed, [Random numbers](#random-numbers), and tags typed in the game, [Port
-values](#port-values-each-players-name-and-controls)), which is in the compatibility key.
+anything that changes what the game computes bumps `UX::kCompatVersion` (currently `ux=29`: a
+casual stage select's Random, and a button held into the stage select counts once it is let go;
+`ux=28`: a friend's move from the menus waits while Options > Controls is open; `ux=27`: how a turn
+ends in the [Character order](#character-order), and who turns Brawl's stage select page; `ux=26`
+since 0.3.37: the history's seed, [Random numbers](#random-numbers), and tags typed in the game,
+[Port values](#port-values-each-players-name-and-controls)), which is in the compatibility key.
 
 ## Input gate
 
@@ -1843,12 +1844,16 @@ machine and re-run computes the same. Tests: `OrcaRankedSteps.*Casual*`, `OrcaBr
 
 **Random.** A on the game's own Random button names Random (`Ranked::PREF_RANDOM`, Project+'s block
 `0xFE`): that player's random legal stage, the one a silent player gets at the timer
-(`CasualDefault`, never FD with an Ice Climbers), but at once. Random against a stage, the coin takes
-one of the two; Random against Random, the stage is picked at once. The block keeps the marker, not
-the stage it draws, so the other player only sees "bo wants Random"; the result says "Smashville
-(random)". The flow then takes that stage's own tile; the game's Random and its random number
-generator are never used. Ranked has no Random (neither ruleset has a random counterpick): A there
-does nothing and the hint line says "Random is casual only". The Random buttons' rectangles
+(`CasualDefault`, never FD with an Ice Climbers), but at once. Random against a stage, the coin
+takes one of the two; Random against Random, the stage is picked at once. The block keeps the
+marker, not the stage it draws, so the other player only sees "bo wants Random"; the result says
+"Smashville (random)". The flow then takes that stage's own tile; the game's Random and its random
+number generator are never used: Project+'s A waits until the game's hover has left its Random
+button (the hover follows the cursor a frame late), as Brawl's waits for the hover to read the
+stage. The cursors start on Random (Project+: port 1's) with every button counted as held, so an A
+held or mashed into the stage select names nothing until it is let go. Ranked has no Random (neither
+ruleset has a random counterpick): A there does nothing, and once you move your cursor onto it the
+hint line says "Random is casual only". The Random buttons' rectangles
 (`StageCursors::Layout::random_button`) were measured from screenshots, not swept like the tiles.
 Friends rooms keep the game's own stage select, Random included.
 

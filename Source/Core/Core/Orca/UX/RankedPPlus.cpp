@@ -273,7 +273,8 @@ s8 Signed(u8 pref)
   return pref < Ranked::MAX_STAGES ? static_cast<s8>(pref) : Ranked::PREF_NONE;
 }
 
-// Whether the local player's own cursor is on the Random button (UI only).
+// Whether the local player has moved their own cursor onto the Random button (UI only). Port 1's
+// cursor starts on it, so one still at its start doesn't count.
 bool LocalOnRandom(const GuestMemory& m, int me)
 {
   if (me < 0 || me > 1)
@@ -281,9 +282,11 @@ bool LocalOnRandom(const GuestMemory& m, int me)
   const std::optional<StageCursors::State> c = StageCursors::Read(m);
   if (!c)
     return false;
+  const StageCursors::Layout& layout = StageCursors::PPlusLayout();
   const StageCursors::Cursor& mine = c->cursors[me];
-  return StageCursors::Hovered(StageCursors::PPlusLayout(), 0, mine.x, mine.y) ==
-         StageCursors::RANDOM_BUTTON;
+  if (mine.x == layout.start[me].x && mine.y == layout.start[me].y)
+    return false;
+  return StageCursors::Hovered(layout, 0, mine.x, mine.y) == StageCursors::RANDOM_BUTTON;
 }
 
 // Ranked presses on each player's own cursor. X strikes on your turn, A picks on your pick or
@@ -702,14 +705,19 @@ Rollback::InputGate::Masks Masks(const GuestMemory& m)
   const std::optional<MatchBlock::State> s = MatchBlock::Read(m);
   if (!s || (!IsRankedPPlus(*s) && !IsCasualPPlus(*s)) || s->done || s->flow != 1)
     return masks;
-  const std::string scene = ReadSceneName(m);
-  if (!StageSelectTask(m, scene) || !StageCursors::Read(m))
+  const u32 task = StageSelectTask(m, ReadSceneName(m));
+  if (!task || !StageCursors::Read(m))
     return masks;
   // Players use their own cursors, so the game's cursor and buttons are masked for everyone. Only
   // the flow drives them, pressing A for the cursor's port when it picks.
   for (Mask& mask : masks)
     mask = Rollback::InputGate::ALL;
-  if (s->auto_pick && s->active <= 1)
+  // A only once the game's hover has left its Random and page buttons. Apply moves the game's
+  // cursor onto the picked tile, but the hover follows a frame later; an A while it still reads
+  // Random would take Project+'s own random stage instead of the flow's.
+  const u32 hovered = m.Read32(task + SSS_HOVERED);
+  const bool on_button = hovered == RANDOM_ITEM || hovered == PAGE_ITEM;
+  if (s->auto_pick && s->active <= 1 && !on_button)
     masks[s->active].press = s->auto_press ? PAD_BUTTON_A : 0;
   return masks;
 }

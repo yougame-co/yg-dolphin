@@ -96,6 +96,9 @@ struct Layout
   // The game's own Random button (hovered item 0x36), on every page. An empty rectangle is never
   // hovered.
   Rect random_button{};
+  // Overlay only, never synced: the Random button as drawn, for the frame around a Random pick (the
+  // hit rectangle above runs past it).
+  Rect random_art{};
   std::array<Point, 2> start{};
   // Overlay only, never synced: where cursor (0, 0) sits in the picture (0..1 across and down),
   // and how far one cursor unit moves across and down.
@@ -143,7 +146,10 @@ std::optional<State> Read(const GuestMemory& memory);
 int Write(GuestMemory& memory, const State& state);
 // Turns the tag off if it was on. Returns bytes changed.
 int Clear(GuestMemory& memory);
-// A fresh pair of cursors at the layout's start points.
+// A fresh pair of cursors at the layout's start points. Every button starts as held (`now` and
+// `seen` HELD_ALL), so a button held or mashed through the screen change only counts once it has
+// been let go: an A from the character select never names the stage the cursor starts on.
+constexpr u8 HELD_ALL = 0xFF;
 State Start(const Layout& layout);
 
 // Presses `port` made since the frame hook last looked (`now` against `seen`). Marks them seen.

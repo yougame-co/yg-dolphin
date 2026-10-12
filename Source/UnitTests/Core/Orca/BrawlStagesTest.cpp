@@ -180,11 +180,15 @@ void Aim(FakeMemory& m, int port, int stage)
   StageCursors::Write(m, *c);
 }
 
-// `port`'s buttons in the frame that just ran (the latch's).
+// `port`'s buttons in the frame that just ran (the latch's). A cursor no latch has read yet
+// (StageCursors::Start's HELD_ALL) is first read with nothing held, as for a player who let go
+// before the stage select; AnAHeldIntoTheStageSelectNamesNothing drives the real latch instead.
 void Hold(FakeMemory& m, int port, u8 buttons)
 {
   auto c = StageCursors::Read(m);
   ASSERT_TRUE(c);
+  if (c->cursors[port].now == StageCursors::HELD_ALL)
+    c->cursors[port].seen = 0;
   c->cursors[port].now = buttons;
   StageCursors::Write(m, *c);
 }
@@ -769,10 +773,10 @@ TEST_F(OrcaBrawlStages, TheOverlaysTopLineHasTheSetTheTurnTheCountAndTheTime)
   EXPECT_EQ(CurrentTurn(m), std::nullopt);
   Scene(m, "scSelStage");
   Boundary(m);
-  // Both cursors start on the Random bar, which ranked doesn't have.
+  // Both cursors start on the Random bar, which ranked doesn't have; the hint waits until a player
+  // moves onto it (RankedIgnoresRandom).
   EXPECT_EQ(Lines(m, ports), (std::pair<std::string, std::string>{
-                                 "You 0–0 bo · bo strikes 1 · 0:30",
-                                 "A proposes a stage · Random is casual only"}));
+                                 "You 0–0 bo · bo strikes 1 · 0:30", "A proposes a stage"}));
   // The turn as STAGE SELECT's relabel names it (Relabel.h): the same step as the line's.
   EXPECT_EQ(CurrentTurn(m), (Ranked::Turn{Ranked::StepKind::Strike, 1, 1}));
   Aim(m, 1, Battlefield);
@@ -780,8 +784,7 @@ TEST_F(OrcaBrawlStages, TheOverlaysTopLineHasTheSetTheTurnTheCountAndTheTime)
   // Port 1's two strikes, its keys under the line.
   EXPECT_EQ(Lines(m, ports), (std::pair<std::string, std::string>{
                                  "You 0–0 bo · You strike 2 · 0:30",
-                                 "X on a stage strikes it · A proposes a stage · Random is casual "
-                                 "only"}));
+                                 "X on a stage strikes it · A proposes a stage"}));
   EXPECT_EQ(CurrentTurn(m), (Ranked::Turn{Ranked::StepKind::Strike, 0, 2}));
   Aim(m, 0, Smashville);
   Push(m, 0, X);
@@ -1147,7 +1150,17 @@ TEST_F(OrcaBrawlCasual, RandomIsAPickAndItsStageStaysHidden)
                          "Yoshi's Island", "Final Destination", "Delfino Plaza"};
   EXPECT_EQ(Lines(m, ports).first, std::string(names[s->progress.picked]) +
                                        (random_won ? " (random)" : " (bo's pick)"));
-  // The flow takes the stage itself: the game's cursor on its tile, A pressed on it.
+  // The flow takes the stage itself: while the game's hover still reads its own Random (item 0x36)
+  // no A, so the game never takes its own random stage; once the hover is on the tile, A.
+  m.Write32(TASK + 0x244, 0x36);
+  for (int i = 0; i < 4; ++i)
+  {
+    Boundary(m);
+    Rollback::InputGate::Masks masks{};
+    Masks(m, &masks);
+    for (const auto& mask : masks)
+      EXPECT_EQ(mask.press & PAD_BUTTON_A, 0) << "frame " << i;
+  }
   Hover(m, s->progress.picked);
   bool pressed = false;
   for (int i = 0; i < 3; ++i)
@@ -1194,26 +1207,69 @@ TEST_F(OrcaBrawlCasual, BothRandomPicksAtOnceAndARandomOutlastsTheTimer)
   EXPECT_EQ(s->progress.prefs[0], RS::CasualDefault(later, 0));
 }
 
-// Ranked has no Random: A and X there do nothing, and the line says why.
+// Ranked has no Random: A and X there do nothing, and once a player moves onto it the line says
+// why (both cursors start on it, so not before).
 TEST_F(OrcaBrawlStages, RankedIgnoresRandom)
 {
   FakeMemory m = Game("scSelStage");  // the header's coin: port 2 strikes first
   Boundary(m);
   const auto before = ReadState(m);
   ASSERT_TRUE(before);
+  std::vector<Orca::Events::PortInfo> theirs{{0, "ada", true, {}}, {1, "bo", false, {}}};
+  Push(m, 1, A);
+  Push(m, 0, A);
+  EXPECT_EQ(Lines(m, theirs).second, "X on a stage strikes it · A proposes a stage");
+  Aim(m, 1, StageCursors::RANDOM_BUTTON);
   Push(m, 1, A);
   Push(m, 1, X);
-  Push(m, 0, A);
   const auto after = ReadState(m);
   EXPECT_EQ(after->progress.prefs, before->progress.prefs);
   EXPECT_EQ(after->progress.struck, before->progress.struck);
   EXPECT_EQ(after->progress.step, before->progress.step);
   EXPECT_EQ(after->progress.picked, -1);
-  std::vector<Orca::Events::PortInfo> theirs{{0, "ada", true, {}}, {1, "bo", false, {}}};
   EXPECT_EQ(Lines(m, theirs).second,
             "X on a stage strikes it · A proposes a stage · Random is casual only");
   Aim(m, 1, Battlefield);
   EXPECT_EQ(Lines(m, theirs).second, "X on a stage strikes it · A proposes a stage");
+}
+
+// An A held, or mashed, into the stage select names nothing, though both cursors start on Random:
+// every button starts as held (StageCursors::Start), so it counts once it is let go. The real
+// latch reads the pads here, a frame at a time.
+TEST_F(OrcaBrawlCasual, AnAHeldIntoTheStageSelectNamesNothing)
+{
+  FakeMemory m = Game("scSelStage");
+  m.Write32(kBlock + 8, ROOM);
+  std::array<std::optional<GCPadStatus>, 4> raw{};
+  GCPadStatus pad{};
+  pad.isConnected = true;
+  pad.stickX = pad.stickY = 128;
+  pad.button = PAD_BUTTON_A;
+  raw[0] = raw[1] = pad;
+  // The first frame: no cursors yet, so the latch has nothing to read; the flow starts them.
+  EXPECT_EQ(StageCursors::Latch(m, raw), 0);
+  Boundary(m);
+  const auto c = StageCursors::Read(m);
+  ASSERT_TRUE(c);
+  EXPECT_EQ(c->cursors[0].seen, StageCursors::HELD_ALL);
+  // Both keep A down: nothing named.
+  for (int i = 0; i < 10; ++i)
+  {
+    StageCursors::Latch(m, raw);
+    Boundary(m);
+  }
+  EXPECT_EQ(ReadState(m)->progress.prefs, (std::array<s8, 2>{RS::PREF_NONE, RS::PREF_NONE}));
+  EXPECT_EQ(ReadState(m)->progress.picked, -1);
+  // Port 1 lets go for a frame and presses again: that A names Random. Port 2 still holds.
+  raw[0]->button = 0;
+  StageCursors::Latch(m, raw);
+  Boundary(m);
+  raw[0]->button = PAD_BUTTON_A;
+  StageCursors::Latch(m, raw);
+  Boundary(m);
+  EXPECT_EQ(ReadState(m)->progress.prefs[0], RS::PREF_RANDOM);
+  EXPECT_EQ(ReadState(m)->progress.prefs[1], RS::PREF_NONE);
+  EXPECT_EQ(ReadState(m)->progress.picked, -1);
 }
 
 TEST(OrcaStageCursors, TheLatchMovesEachCursorWithItsOwnStick)
