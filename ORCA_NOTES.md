@@ -7215,8 +7215,9 @@ code of 7d53340a44 built from the tree before that commit, so it reports a31cee9
 Luis, 2026-10-12: no separate 0.3.40 prod release; everything goes to staging and ships as YouGame V2.
 `orca-v2` is shipped 0.3.39 (`23b3471f58`) with, each as its own merge: `orca-hold-talk-0339`,
 `orca-rumble`, `orca-random-stage-0339`, `orca/hold-b-exit` (head `f5da7e2b1d`),
-`orca-rename-yg-baiji`, then `packs-0339`. Not merged: `orca-device-lost-0339` (review never ran),
-`orca-mac-keyboard` (change plus its revert). One compat bump: `ux=29`.
+`orca-rename-yg-baiji`, then `packs-0339`; after its review, `orca-device-lost-0339` (D3D11
+device-lost clean stop, `gpu_lost`; no compat change). Not merged: `orca-mac-keyboard` (change plus
+its revert). One compat bump: `ux=29`.
 
 - Conflicts: hold-talk x rumble on the caps word list (kept both, `... talk rumble`); packs x 0.3.39
   in `UX/OnlineMenu.cpp` (`KeypadOpen` and `FirstFriendFrame`, both kept); packs x the rename in
@@ -7241,3 +7242,24 @@ Luis, 2026-10-12: no separate 0.3.40 prod release; everything goes to staging an
   plugged-in Mac, the bundle-mode runtime set (tamper cases, two Orcas), packs regenerated from this
   line's `Data/Sys/Orca`, a review agent on the merged result, the hand tests (mic, rumble hardware,
   P+ Random, the hold-B tip).
+
+**Device lost on the line (`orca-device-lost-0339`, merged after its review, device-lost-review.md).**
+The CPU thread's vectored handler now tags its fault line "(first chance)" (review W1): single core
+runs the D3D driver on the CPU thread, so an access violation a driver raises and catches itself was
+printed like a fatal one. The unhandled filter's line for the same fault is still printed untagged
+(the two lines dedupe separately). `OrcaCrashNote.FaultLineNamesTheModuleOffsetAndGraphicsDevice`
+pins the tagged form. Left as decided or open, from the review:
+- W2: the desktop files `gpu_lost` (exit 1) as a crash and auto-reports it (`orca-crash.ts`
+  `NOT_A_FAULT` lacks it). Kept on purpose for visibility; filter dashboards on the `[VIDEO]` reason.
+  A `0x887A0001` (invalid call) reason is Orca's own misuse though the sentence blames the driver.
+- W3: D3D12 never calls `SetDeviceRemovedQuery`, so a lost device there is seen only at present or
+  resize (labelled `D3D`) and its draws and maps go on until the stop lands. D3D11 (the default, and
+  the sandbox's) is the supported case; add `SetDeviceRemovedQuery("D3D12", ...)` in the DX12 device
+  create if D3D12 matters. Vulkan and OpenGL `DEVICE_LOST` are out of scope.
+- W4: the unhandled filter's `GetModuleHandleExW`/`GetModuleFileNameW` can block on the loader lock
+  held by another thread, turning an exit into a hang the app's watchdog reports as "stopped
+  answering". Low risk, accepted (the throw reporter does the same).
+- Owed: the PC build and `OrcaGpuLostTest`/`OrcaCrashNoteTest` there (none of the `_WIN32` code has
+  been compiled), a forced-TDR smoke if one can be made, and 5 more forbidden-calls hits (CrashNote's
+  `GetStdHandle`/`GetModuleHandleExW`, GpuLost's `stderr`/`Status::Error`) for the one baseline
+  refresh of the V2 line.

@@ -223,6 +223,14 @@ TEST(OrcaCrashNote, FaultLineNamesTheModuleOffsetAndGraphicsDevice)
   EXPECT_STREQ(out, "Orca: exception 0xC0000005 (access violation writing 0x0) at 0x7FFA12345678 "
                     "(in no module) on thread 4242; graphics device: none");
 
+  // Said by the CPU thread's vectored handler as it was raised: tagged, since a driver may still
+  // catch it and the run go on.
+  fault.first_chance = true;
+  Orca::CrashNote::FormatFault(out, sizeof(out), fault);
+  EXPECT_STREQ(out, "Orca: exception 0xC0000005 (access violation writing 0x0) (first chance) at "
+                    "0x7FFA12345678 (in no module) on thread 4242; graphics device: none");
+  fault.first_chance = false;
+
   // A failed assert's breakpoint (the 0x80000003 exits): no access.
   Orca::CrashNote::Fault breakpoint;
   breakpoint.code = 0x80000003;

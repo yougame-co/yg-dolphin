@@ -125,6 +125,8 @@ size_t FormatFault(char* out, size_t size, const Fault& fault)
     }
     line << ")";
   }
+  if (fault.first_chance)
+    line << " (first chance)";
   line << " at ";
   if (fault.module.empty())
   {
@@ -414,19 +416,23 @@ std::string_view FaultModule(const void* address, u64* base)
   return {s_fault_module, n};
 }
 
-// Prints `record`'s line once (at most MAX_FAULTS different ones).
-void RecordFault(const EXCEPTION_RECORD& record)
+// Prints `record`'s line once (at most MAX_FAULTS different ones). A first-chance line and the
+// unhandled filter's line for the same fault are different lines, so a fault the CPU thread's
+// handler saw first and that then ended Orca is said both ways.
+void RecordFault(const EXCEPTION_RECORD& record, bool first_chance)
 {
   if (s_fault_busy.test_and_set(std::memory_order_acquire))
     return;
   const u64 address = reinterpret_cast<u64>(record.ExceptionAddress);
-  const u64 key = (static_cast<u64>(record.ExceptionCode) << 32) ^ address;
+  const u64 key = ((static_cast<u64>(record.ExceptionCode) << 32) ^ address) ^
+                  (first_chance ? 1ull << 63 : 0);
   if (s_fault_count < MAX_FAULTS &&
       std::find(s_faults.begin(), s_faults.begin() + s_fault_count, key) ==
           s_faults.begin() + s_fault_count)
   {
     s_faults[s_fault_count++] = key;
     Fault fault;
+    fault.first_chance = first_chance;
     fault.code = record.ExceptionCode;
     fault.address = address;
     u64 base = 0;
@@ -465,7 +471,7 @@ const EXCEPTION_RECORD* ReportedFault(const EXCEPTION_POINTERS* pointers)
 LONG CALLBACK OnCpuThreadFault(EXCEPTION_POINTERS* pointers)
 {
   if (const EXCEPTION_RECORD* record = ReportedFault(pointers); record && Core::IsCPUThread())
-    RecordFault(*record);
+    RecordFault(*record, true);
   return EXCEPTION_CONTINUE_SEARCH;
 }
 
@@ -476,7 +482,7 @@ LPTOP_LEVEL_EXCEPTION_FILTER s_previous_filter = nullptr;
 LONG WINAPI OnUnhandledFault(EXCEPTION_POINTERS* pointers)
 {
   if (const EXCEPTION_RECORD* record = ReportedFault(pointers))
-    RecordFault(*record);
+    RecordFault(*record, false);
   return s_previous_filter ? s_previous_filter(pointers) : EXCEPTION_CONTINUE_SEARCH;
 }
 }  // namespace

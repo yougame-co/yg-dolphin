@@ -73,12 +73,18 @@ struct Fault
   u64 access_address = 0;
   u32 thread = 0;
   std::string_view graphics;
+  // Printed as it was raised, before any handler ran (the CPU thread's vectored handler): the run
+  // may go on, as when a graphics driver catches its own access violation. The line says
+  // "(first chance)" so it doesn't read as what ended the run.
+  bool first_chance = false;
 };
 // What the fault reporter prints for these exception codes ("access violation"); nullptr for the
 // others, which it leaves alone.
 const char* FaultName(u32 code);
 //   Orca: exception 0xC0000005 (access violation reading 0x10) at nvwgf2umx.dll+0x1A2B3C on
 //   thread 4242; graphics device: lost (D3D11: device hung, 0x887A0006) at a 16x16x1 texture
+// ("Orca: exception 0xC0000005 (access violation reading 0x10) (first chance) at ..." for a
+// first-chance line)
 // into `out`; returns its length.
 size_t FormatFault(char* out, size_t size, const Fault& fault);
 
@@ -86,8 +92,10 @@ size_t FormatFault(char* out, size_t size, const Fault& fault);
 // rollback snapshots, an illegal instruction, a failed assert's breakpoint) prints its line
 // (FormatFault) on stderr, then goes on as before: Windows ends Orca with it. No dump is written.
 // On the CPU thread the line is printed as the fault is raised (a vectored handler after
-// MemTools.cpp's): a fault under its JIT frames, which have no unwind tables, never reaches the
-// unhandled-exception filter, the way a C++ throw from there can't be dispatched. Other threads'
+// MemTools.cpp's), tagged "(first chance)" since a handler may still take it (single core runs the
+// D3D driver on the CPU thread, and a driver catches some of its own): a fault under its JIT frames,
+// which have no unwind tables, never reaches the unhandled-exception filter, the way a C++ throw
+// from there can't be dispatched. Other threads'
 // faults may still be caught (a driver catches its own), so the unhandled-exception filter prints
 // those, then hands them to the filter before it. At most 8 different lines per run, each once.
 // Elsewhere it does nothing (macOS writes its own crash report).
