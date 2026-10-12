@@ -33,11 +33,15 @@ namespace Rollback::OnlineMatch
 // then at the start of that frame.
 // `on_frame` runs first at every boundary, before anything is saved: `ports` are the controllers
 // plugged in at that frame, and `alone` is AloneAt for it (false on re-runs).
+// `local_pad_waiting(seat)` runs at each tick while the session holds a frame on the other
+// players (a stall or a time-sync wait). Host only: it must not touch the pad the frame records
+// and sends, or any emulated state.
 using FrameHook = std::function<void(int frame, bool resimulating,
                                      const std::vector<Orca::Events::PortInfo>& ports, bool alone)>;
 std::optional<int> OnBoundary(Core::System& system,
                               const std::function<Orca::Net::Pad(int local_seat)>& local_pad,
-                              const FrameHook& on_frame);
+                              const FrameHook& on_frame,
+                              const std::function<void(int local_seat)>& local_pad_waiting = {});
 
 // A keyframe at most this old (30 s at 60 fps) still serves a new joiner, who replays the frames
 // since.

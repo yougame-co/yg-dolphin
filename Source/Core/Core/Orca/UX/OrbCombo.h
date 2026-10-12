@@ -3,7 +3,10 @@
 
 #pragma once
 
+#include <optional>
+
 #include "Common/CommonTypes.h"
+#include "Core/Orca/UX/OverlayKey.h"
 #include "InputCommon/GCPadStatus.h"
 
 // Controller shortcut for the YouGame overlay: hold D-pad Up and press Start. A GameCube pad has no
@@ -41,9 +44,18 @@ private:
 
 // Applies the shortcut to the local pad before the session sends it. The combo only advances on a
 // first run (rollback re-runs discard their reads) while `live`, because an unfocused pad reads as
-// neutral and must not look like a release: a press still down then is cancelled instead. CPU
-// thread only.
-GCPadStatus FilterLocalPad(GCPadStatus pad, bool first_run, bool live);
+// neutral and must not look like a release: a press still down then is cancelled instead. `now`
+// times the read for the release (OverlayKey::Press::Release). CPU thread only.
+GCPadStatus FilterLocalPad(GCPadStatus pad, bool first_run, bool live,
+                           OverlayKey::Ms now = OverlayKey::NowMs());
+// While the session holds a frame on a friend's input (each stall tick) no frame reads the pad, so
+// a talk press would not end until the game moved again, up to the stall limit later. `buttons` is
+// the local pad as a frame would read it now (nullopt: no fresh read, as for a test script's pad);
+// Start let go ends the press now, and an unfocused pad cancels it. Only the press's lines change:
+// the combo and its mask advance on frames alone, so what the session records and sends is the
+// same bytes as without this. Does nothing unless a talk press is down. CPU thread only.
+void LocalPadWaiting(std::optional<u16> buttons, bool live,
+                     OverlayKey::Ms now = OverlayKey::NowMs());
 // The local pad is no longer read (the game paused or is stopping): a press still down is
 // cancelled. Any thread.
 void LocalPadStopped();

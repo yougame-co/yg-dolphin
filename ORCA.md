@@ -2100,10 +2100,16 @@ release instead of `orca orb` (`Orca/UX/OverlayKey.h`): `orca overlay down keys|
 one `orca overlay up keys|pad` (let go: Tab or Shift; Start, even with Up still held) or
 `orca overlay cancel keys|pad` (no longer read: Orca's window lost the keyboard or was hidden; the
 game lost focus, paused or is stopping). The page times them: let go within 250 ms is a tap (the
-overlay), longer is a hold (it talks). A click on the button stays `orca orb`. On macOS and Linux
-Orca's window never has the keyboard, so the page sees Shift+Tab itself. The masking is the same as
-without the cap, so the compatibility key does not change. While the player talks the page sends
-`talk listen <name> <text>` (to whom, then the live words, at most 4 a second), `talk send`,
+overlay), longer is a hold (it talks). A click on the button stays `orca orb`. The pad is read once
+a frame, and while a frame waits on a friend (a stall, up to the 10 s silence limit) no frame reads
+it, so each stall tick reads it again for the press alone (`UX::LocalPadWaiting`): Start let go
+prints `up` within a tick. That read is not recorded, sent or timed, and the combo's mask advances
+on frames only, so the bytes every machine plays are unchanged. A release found more than 100 ms
+after the last read that saw Start down, once the press is past 250 ms, prints `cancel`, not `up`:
+Orca cannot say when the player let go, so a tap could read as a hold or a talk run on. On macOS and
+Linux Orca's window never has the keyboard, so the page sees Shift+Tab itself. The masking is the
+same as without the cap, so the compatibility key does not change. While the player talks the page
+sends `talk listen <name> <text>` (to whom, then the live words, at most 4 a second), `talk send`,
 `talk sent` or `talk error`, and `talk off`. Orca draws one row after the three notice rows,
 replaced in place: listen and send keep the end of the words and stay until the next line (60 s at
 most), sent fades after 3 s and error after 4 s, and while listening the button sends out a green

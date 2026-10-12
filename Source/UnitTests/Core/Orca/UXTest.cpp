@@ -3644,6 +3644,206 @@ TEST(OrcaUXOrbCombo, TheLocalPadPrintsItsPressAndReleaseWithTalk)
   EXPECT_FALSE(Orca::UX::OverlayKey::Pad().IsDown());
 }
 
+TEST(OrcaUXOverlayKey, APadLetGoAtATimeOrcaCannotPlaceIsCancelledOncePastTheTapLine)
+{
+  using Orca::UX::OverlayKey::PAGE_HOLD_MS;
+  using Orca::UX::OverlayKey::Press;
+  using Orca::UX::OverlayKey::READ_GAP_MS;
+  using Orca::UX::OverlayKey::Source;
+  Press pad(Source::Pad);
+  // Read every frame: up, a tap or a hold alike.
+  EXPECT_EQ(pad.Down(true, 1000), "orca overlay down pad");
+  pad.Seen(1017);
+  EXPECT_EQ(pad.Release(1034), "orca overlay up pad");
+  EXPECT_EQ(pad.Down(true, 2000), "orca overlay down pad");
+  for (Orca::UX::OverlayKey::Ms t = 2017; t <= 4000; t += 17)
+    pad.Seen(t);
+  EXPECT_EQ(pad.Release(4017), "orca overlay up pad");
+  EXPECT_EQ(pad.Release(4034), "") << "once per down";
+  // A gap that ends before the tap line: the page sees a tap either way.
+  pad.Down(true, 5000);
+  EXPECT_EQ(pad.Release(5000 + PAGE_HOLD_MS - 1), "orca overlay up pad");
+  // Let go somewhere in a gap that crosses the tap line: a tap could read as a hold.
+  pad.Down(true, 6000);
+  pad.Seen(6017);
+  EXPECT_EQ(pad.Release(6000 + PAGE_HOLD_MS), "orca overlay cancel pad");
+  // A hold whose release falls in a gap: the talk could run on past the player's release.
+  pad.Down(true, 7000);
+  pad.Seen(9000);
+  EXPECT_EQ(pad.Release(9000 + READ_GAP_MS + 1), "orca overlay cancel pad");
+  pad.Down(true, 10000);
+  pad.Seen(12000);
+  EXPECT_EQ(pad.Release(12000 + READ_GAP_MS), "orca overlay up pad");
+  // An older read never moves the last sighting back.
+  pad.Down(true, 13000);
+  pad.Seen(13400);
+  pad.Seen(13100);
+  EXPECT_EQ(pad.Release(13417), "orca overlay up pad");
+  // Keys see their key-up as it happens: a long hold is an up.
+  Press keys(Source::Keys);
+  keys.Down(true, 0);
+  EXPECT_EQ(keys.Up(), "orca overlay up keys");
+}
+
+namespace
+{
+// Orca's status lines while a test runs, with the app's caps set to `caps`.
+class StatusLines
+{
+public:
+  explicit StatusLines(const char* caps)
+  {
+    const char* const was = std::getenv("ORCA_SESSION");
+    m_had = was != nullptr;
+    m_saved = was ? was : "";
+    Orca::Status::SetAppCaps(caps);
+    // Status lines print only in a session.
+    SetSession("1");
+    m_out = std::tmpfile();
+    Orca::Status::SetOutput(m_out);
+  }
+  ~StatusLines()
+  {
+    Orca::Status::SetOutput(nullptr);
+    Orca::Status::SetAppCaps("");
+    SetSession(m_had ? m_saved.c_str() : nullptr);
+    if (m_out)
+      std::fclose(m_out);
+  }
+  StatusLines(const StatusLines&) = delete;
+  StatusLines& operator=(const StatusLines&) = delete;
+  bool Ok() const { return m_out != nullptr; }
+  // What printed since the last call.
+  std::string Take()
+  {
+    std::fflush(m_out);
+    std::fseek(m_out, m_taken, SEEK_SET);
+    std::string text;
+    char buffer[256];
+    while (std::fgets(buffer, sizeof(buffer), m_out))
+      text += buffer;
+    std::fseek(m_out, 0, SEEK_END);
+    m_taken = std::ftell(m_out);
+    return text;
+  }
+
+private:
+  static void SetSession(const char* value)
+  {
+#ifdef _WIN32
+    _putenv_s("ORCA_SESSION", value ? value : "");
+#else
+    if (value)
+      setenv("ORCA_SESSION", value, 1);
+    else
+      unsetenv("ORCA_SESSION");
+#endif
+  }
+  std::FILE* m_out = nullptr;
+  long m_taken = 0;
+  bool m_had = false;
+  std::string m_saved;
+};
+}  // namespace
+
+TEST(OrcaUXOrbCombo, AStallEndsATalkPressWhenStartIsLetGoWithTheSentPadsUnchanged)
+{
+  using Orca::UX::FilterLocalPad;
+  using Orca::UX::LocalPadWaiting;
+  using Orca::UX::OrbCombo;
+  using Orca::UX::OverlayKey::Ms;
+  constexpr u16 UP = PAD_BUTTON_UP, START = PAD_BUTTON_START, A = PAD_BUTTON_A;
+  StatusLines lines("talk");
+  ASSERT_TRUE(lines.Ok());
+  ASSERT_TRUE(Orca::Status::Cap(Orca::Status::TALK_CAP));
+  GCPadStatus pad;
+  const auto with = [&pad](u16 buttons) {
+    GCPadStatus p = pad;
+    p.button = buttons;
+    return p;
+  };
+  // The shared combo starts from rest, like `sent` below.
+  Orca::UX::LocalPadStopped();
+  FilterLocalPad(with(0), true, true, 0);
+  FilterLocalPad(with(0), true, true, 0);
+  lines.Take();
+  // What every machine plays: the combo fed the frames' reads alone.
+  OrbCombo sent;
+  Ms t = 100'000;
+  const auto frame = [&](u16 buttons) {
+    t += 17;
+    const u16 got = FilterLocalPad(with(buttons), true, true, t).button;
+    EXPECT_EQ(got, sent.Next(buttons).buttons) << "frame at " << t;
+    return got;
+  };
+  // A stall of `ms`, ticking every 1 ms with the pad as it is now.
+  const auto stall = [&](int ms, u16 buttons) {
+    for (int i = 0; i < ms; ++i)
+      LocalPadWaiting(buttons, true, ++t);
+  };
+
+  // A hold: the stall starts with Start down; the player lets go 3 s in. The up prints on that
+  // tick, not 10 s later when the game moves again, and the frames still mask the D-pad and Start.
+  frame(UP);
+  EXPECT_EQ(frame(UP | START), 0);
+  EXPECT_EQ(lines.Take(), "orca overlay down pad\n");
+  stall(3000, UP | START);
+  EXPECT_EQ(lines.Take(), "");
+  stall(1, UP);
+  EXPECT_EQ(lines.Take(), "orca overlay up pad\n") << "within one stall tick";
+  stall(7000, UP);
+  EXPECT_EQ(frame(UP), 0);
+  EXPECT_EQ(frame(UP | A), A);
+  EXPECT_EQ(frame(A), A);
+  EXPECT_EQ(lines.Take(), "") << "one up per down";
+
+  // A tap that a stall swallows: let go 100 ms in, read on the tick. A tap for the page.
+  frame(UP);
+  frame(UP | START);
+  stall(100, UP | START);
+  stall(1, 0);
+  stall(5000, 0);
+  frame(0);
+  EXPECT_EQ(lines.Take(), "orca overlay down pad\norca overlay up pad\n");
+
+  // No fresh read in the stall (a test script's pad): the release is only found when frames
+  // resume, past the tap line, so Orca cannot tell a tap from a hold and cancels.
+  frame(UP);
+  frame(UP | START);
+  for (int i = 0; i < 4000; ++i)
+    LocalPadWaiting(std::nullopt, true, ++t);
+  frame(UP);
+  frame(0);
+  EXPECT_EQ(lines.Take(), "orca overlay down pad\norca overlay cancel pad\n");
+
+  // Let go and pressed again within one stall: the second press is not a new down, and its
+  // release prints nothing; the frames mask it as before.
+  frame(UP);
+  frame(UP | START);
+  stall(50, UP | START);
+  stall(50, UP);
+  stall(50, UP | START);
+  EXPECT_EQ(frame(UP | START), 0);
+  EXPECT_EQ(frame(0), 0);
+  EXPECT_EQ(lines.Take(), "orca overlay down pad\norca overlay up pad\n");
+
+  // The game lost focus during the stall: cancelled on the tick.
+  frame(UP);
+  frame(UP | START);
+  stall(20, UP | START);
+  LocalPadWaiting(UP | START, false, ++t);
+  stall(20, 0);
+  frame(0);
+  EXPECT_EQ(lines.Take(), "orca overlay down pad\norca overlay cancel pad\n");
+
+  // No press down: a stall prints nothing.
+  stall(50, 0);
+  stall(50, UP | START);
+  frame(0);
+  EXPECT_EQ(lines.Take(), "");
+  EXPECT_FALSE(Orca::UX::OverlayKey::Pad().IsDown());
+}
+
 TEST(OrcaUXYgOrb, ParsesTalkLines)
 {
   using namespace Orca::UX::YgOrb;

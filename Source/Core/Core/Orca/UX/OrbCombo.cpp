@@ -48,21 +48,26 @@ OrbCombo::Step OrbCombo::Next(u16 buttons)
   return step;
 }
 
-GCPadStatus FilterLocalPad(GCPadStatus pad, bool first_run, bool live)
+GCPadStatus FilterLocalPad(GCPadStatus pad, bool first_run, bool live, OverlayKey::Ms now)
 {
   static OrbCombo s_combo;
   if (first_run && live)
   {
+    const bool start = (pad.button & OrbCombo::START) != 0;
     const OrbCombo::Step step = s_combo.Next(pad.button);
     pad.button = step.buttons;
     if (step.fired)
     {
       INFO_LOG_FMT(CORE, "Orca: the YouGame shortcut (Up + Start)");
-      Print(OverlayKey::Pad().Down(Status::Cap(Status::TALK_CAP)));
+      Print(OverlayKey::Pad().Down(Status::Cap(Status::TALK_CAP), now));
     }
     else if (step.released)
     {
-      Print(OverlayKey::Pad().Up());
+      Print(OverlayKey::Pad().Release(now));
+    }
+    else if (start)
+    {
+      OverlayKey::Pad().Seen(now);
     }
   }
   else
@@ -73,6 +78,20 @@ GCPadStatus FilterLocalPad(GCPadStatus pad, bool first_run, bool live)
       pad.button &= static_cast<u16>(~(OrbCombo::START | OrbCombo::DPAD));
   }
   return pad;
+}
+
+void LocalPadWaiting(std::optional<u16> buttons, bool live, OverlayKey::Ms now)
+{
+  // Not s_combo: its mask moves with frames only, so the pads the session sends stay the same.
+  OverlayKey::Press& press = OverlayKey::Pad();
+  if (!press.IsDown())
+    return;
+  if (!live)
+    Print(press.Cancel());
+  else if (buttons && (*buttons & OrbCombo::START) != 0)
+    press.Seen(now);
+  else if (buttons)
+    Print(press.Release(now));
 }
 
 void LocalPadStopped()
