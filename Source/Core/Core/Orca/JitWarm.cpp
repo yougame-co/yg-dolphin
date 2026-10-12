@@ -979,4 +979,35 @@ std::optional<bool> SceneIsMatch(const Core::CPUThreadGuard& guard)
     return std::nullopt;
   return InMatch(guard);
 }
+
+std::optional<Scene> CurrentScene(const Core::CPUThreadGuard& guard)
+{
+  if (!KnownGame())
+    return std::nullopt;
+  const auto mapped = [&guard](u32 address) {
+    return PowerPC::MMU::HostIsRAMAddress(guard, address);
+  };
+  if (!mapped(SCENE_MANAGER))
+    return std::nullopt;
+  const u32 manager = PowerPC::MMU::HostRead<u32>(guard, SCENE_MANAGER);
+  if (!mapped(manager + 0x4))
+    return std::nullopt;
+  const u32 scene = PowerPC::MMU::HostRead<u32>(guard, manager + 0x4);
+  if (!mapped(scene))
+    return std::nullopt;
+  return Scene{scene, PowerPC::MMU::HostRead<u32>(guard, scene)};
+}
+
+std::string SceneName(const Core::CPUThreadGuard& guard, u32 name)
+{
+  std::string out;
+  for (u32 i = 0; i < 31 && PowerPC::MMU::HostIsRAMAddress(guard, name + i); ++i)
+  {
+    const char c = static_cast<char>(PowerPC::MMU::HostRead<u8>(guard, name + i));
+    if (c == '\0')
+      break;
+    out.push_back(c >= 0x20 && c < 0x7F ? c : '?');
+  }
+  return out;
+}
 }  // namespace Orca::JitWarm

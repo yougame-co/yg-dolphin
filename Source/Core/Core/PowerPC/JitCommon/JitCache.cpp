@@ -19,6 +19,7 @@
 #include "Core/Core.h"
 #include "Core/Host.h"
 #include "Core/Orca/JitWarm.h"
+#include "Core/Orca/PanicDiag.h"
 #include "Core/PowerPC/JitCommon/JitBase.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PPCSymbolDB.h"
@@ -162,6 +163,9 @@ void JitBaseBlockCache::FinalizeBlock(JitBlock& block, bool block_link,
   block.fast_block_map_index = index;
 
   block.physical_addresses = code_block.m_physical_addresses;
+  // Orca: what RAM held when this block was compiled, so a crash dump can tell stale code apart.
+  block.orca_code_hash =
+      Orca::PanicDiag::CodeHash(Orca::PanicDiag::RamOf(m_jit.m_system), block.physical_addresses);
 
   block.originalSize = code_block.m_num_instructions;
   if (Rollback::Diag::g_jit_code_log)

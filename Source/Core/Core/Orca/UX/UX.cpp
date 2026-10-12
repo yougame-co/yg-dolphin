@@ -10,6 +10,7 @@
 
 #include "Common/Logging/Log.h"
 #include "Core/Orca/Mod.h"
+#include "Core/Orca/PanicDiag.h"
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/UX/BrawlStages.h"
 #include "Core/Orca/UX/CharOrder.h"
@@ -150,6 +151,10 @@ void Init()
       StageCursors::Publish(std::move(view));
     }
     ProbeFrame(guard, frame);
+    // Read only, first runs only. One log line per scene change, for crash reports
+    // (Orca/PanicDiag.h).
+    if (!resimulating)
+      Orca::PanicDiag::NoteScene(guard, frame);
     // Read only, first runs only. The game's rumble for this machine's own port, to the page.
     if (!resimulating)
     {
