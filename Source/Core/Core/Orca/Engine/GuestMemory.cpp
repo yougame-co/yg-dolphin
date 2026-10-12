@@ -1,7 +1,7 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "Core/Orca/Game/GuestMemory.h"
+#include "Core/Orca/Engine/GuestMemory.h"
 
 #include "Core/PowerPC/MMU.h"
 

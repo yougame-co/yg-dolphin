@@ -13,7 +13,7 @@
 #include <gtest/gtest.h>
 
 #include "Core/Orca/Games/Brawl/CharOrder.h"
-#include "Core/Orca/Game/GuestMemory.h"
+#include "Core/Orca/Engine/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/Queue.h"
 #include "InputCommon/GCPadStatus.h"
 

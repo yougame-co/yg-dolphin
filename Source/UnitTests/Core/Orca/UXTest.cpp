@@ -37,7 +37,7 @@
 #include "Core/Orca/UX/Controllers.h"
 #include "Core/Orca/Games/Brawl/FreeSpace.h"
 #include "Core/Orca/UX/GamePatches.h"
-#include "Core/Orca/Game/GuestMemory.h"
+#include "Core/Orca/Engine/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/NameTags.h"
 #include "Core/Orca/UX/OrbCombo.h"
 #include "Core/Orca/UX/Overlay.h"

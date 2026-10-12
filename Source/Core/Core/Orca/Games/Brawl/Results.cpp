@@ -11,7 +11,7 @@
 #include "Common/Logging/Log.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Events.h"
-#include "Core/Orca/Game/GuestMemory.h"
+#include "Core/Orca/Engine/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/OnlineMenu.h"
 
 namespace Orca::UX

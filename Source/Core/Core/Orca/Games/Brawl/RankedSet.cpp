@@ -13,7 +13,7 @@
 
 #include "Common/Logging/Log.h"
 #include "Core/Orca/Profile.h"
-#include "Core/Orca/Game/GuestMemory.h"
+#include "Core/Orca/Engine/GuestMemory.h"
 #include "Core/Orca/UX/Probe.h"
 #include "Core/Orca/UX/QueueApp.h"
 #include "Core/Orca/UX/SetEnd.h"

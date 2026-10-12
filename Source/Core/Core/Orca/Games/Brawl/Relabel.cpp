@@ -11,7 +11,7 @@
 #include "Core/Orca/Games/Brawl/BrawlStages.h"
 #include "Core/Orca/Games/Brawl/CharOrder.h"
 #include "Core/Orca/Games/Brawl/MenuText.h"
-#include "Core/Orca/Game/GuestMemory.h"
+#include "Core/Orca/Engine/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/OnlineRules.h"
 #include "Core/Orca/Games/Brawl/Queue.h"
 #include "Core/Orca/Games/Brawl/PPlus/RankedPPlus.h"

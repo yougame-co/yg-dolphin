@@ -13,7 +13,7 @@
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Games/Brawl/FreeSpace.h"
 #include "Core/Orca/Games/Brawl/MatchBlock.h"
-#include "Core/Orca/Game/GuestMemory.h"
+#include "Core/Orca/Engine/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/OnlineMenu.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/Games/Brawl/Results.h"

@@ -16,7 +16,7 @@
 #include <gtest/gtest.h>
 
 #include "Core/Orca/Games/Brawl/BrawlStages.h"
-#include "Core/Orca/Game/GuestMemory.h"
+#include "Core/Orca/Engine/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/StageCursors.h"
 #include "Core/Rollback/InputGate.h"
 #include "InputCommon/GCPadStatus.h"

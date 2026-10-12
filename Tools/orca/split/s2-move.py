@@ -30,7 +30,7 @@ Orca/Games/Brawl/ by hand and add it to MODULES below on that branch.
 
 Commits 2-3 moved code between files, which rename detection can't follow. A branch that edited
 these blocks gets a modify/delete or content conflict and ports the edit into the new file by hand:
-  - GuardMemory's bodies (Games/Brawl/NameTags.cpp -> Orca/Game/GuestMemory.cpp);
+  - GuardMemory's bodies (Games/Brawl/NameTags.cpp -> Orca/Engine/GuestMemory.cpp);
   - the Search namespace (Games/Brawl/OnlineMenu.* -> UX/Search.*);
   - OnlinePick, MenuEventText, AnnounceOnlinePick, PickSearchable, the "orca menu cancel" lines
     (Games/Brawl/OnlineMenu.* -> UX/MenuEvents.*);
@@ -47,6 +47,7 @@ left alone: the baseline is reviewed by a person, and notes are history):
   - `Orca/UX/<Module>.<ext>` -> `Orca/Games/Brawl/<Module>.<ext>` (RankedPPlus: Games/Brawl/PPlus/)
     in Source/** and Tools/orca/** (includes, CMake lists, layer tests, free-space.py);
   - `Orca/<Game>Test.cpp` -> `Orca/Games/Brawl/<Game>Test.cpp` (tests' CMake list, layer tests);
+  - `Orca/Game/<file>` -> `Orca/Engine/<file>` (the engine folder's first name; git mv too);
   - moved tests that find Data/Sys through `__FILE__` get two more `../`;
   - Tools/orca/layers.txt: the UX/ game-logic lines become one review line under Games/Brawl/ (the
     existing `Games/**` rule classes the rest), and the game tests' lines become `Games/**`;
@@ -86,6 +87,12 @@ REWRITE_EXT = (".h", ".hpp", ".cpp", ".inc", ".ipp", ".mm", ".m", ".c", ".txt", 
 MOD_RE = re.compile(r"Orca/UX/(" + "|".join(sorted(MODULES, key=len, reverse=True)) +
                     r")\.(\w+)")
 TEST_RE = re.compile(r"(?<=Orca/)(" + "|".join(GAME_TESTS) + r")Test\.cpp")
+# Engine files of the split live in Orca/Engine/. S2 commit 2 first put GuestMemory in Orca/Game/,
+# one letter from the game modules' Orca/Games/; the coordinator moved it before anyone built on it.
+OLD_ENGINE = "Source/Core/Core/Orca/Game/"
+ENGINE = "Source/Core/Core/Orca/Engine/"
+ENGINE_FILES = ["GuestMemory.h", "GuestMemory.cpp"]
+ENGINE_RE = re.compile(r"Orca/Game/(\w+\.\w+)")
 _MODS = "|".join(sorted(MODULES, key=len, reverse=True))
 # Old paths in a glob or brace form (layers.txt), and bare `UX/<Module>.h` mentions in comments.
 GLOB_RE = re.compile(r"Orca/UX/(\{[^}]*\b(" + _MODS + r")\b[^}]*\}|(" + _MODS + r")\.\*)")
@@ -151,6 +158,9 @@ def moves(root):
         src = TESTS + name + "Test.cpp"
         if os.path.exists(os.path.join(root, src)):
             out.append((src, GAME_TESTS_DIR + name + "Test.cpp"))
+    for name in ENGINE_FILES:
+        if os.path.exists(os.path.join(root, OLD_ENGINE + name)):
+            out.append((OLD_ENGINE + name, ENGINE + name))
     return out
 
 
@@ -158,6 +168,7 @@ def rewrite_text(path, text):
     def mod(m):
         return "Orca/Games/Brawl/" + MODULES[m.group(1)] + m.group(1) + "." + m.group(2)
     new = MOD_RE.sub(mod, text)
+    new = ENGINE_RE.sub(r"Orca/Engine/\1", new)
     new = TEST_RE.sub(lambda m: "Games/Brawl/" + m.group(1) + "Test.cpp", new)
     if path.startswith(GAME_TESTS_DIR):
         # Two directories deeper than before: tests that find Data/Sys from __FILE__.
@@ -214,7 +225,8 @@ def check(root):
         search_ok = "UX/Search.h" in text or p.endswith("/UX/Search.cpp")
         for i, line in enumerate(text.splitlines(), 1):
             where = "%s:%d: %s" % (p, i, line.strip())
-            if MOD_RE.search(line) or TEST_RE.search(line) or GLOB_RE.search(line):
+            if MOD_RE.search(line) or TEST_RE.search(line) or GLOB_RE.search(line) or \
+                    ENGINE_RE.search(line):
                 left.append(where)
             elif code and (QUEUE_APP_RE.search(line) or TIP_RE.search(line)):
                 left.append(where)

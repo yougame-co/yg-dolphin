@@ -27,7 +27,7 @@
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/GamePatches.h"
 #include "Core/Orca/Games/Brawl/MenuText.h"
-#include "Core/Orca/Game/GuestMemory.h"
+#include "Core/Orca/Engine/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/OnlineMenu.h"
 #include "Core/Rollback/OnlineMatch.h"
 #include "VideoCommon/HiresTextures.h"

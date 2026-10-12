@@ -3,7 +3,7 @@
 
 #include "Core/Orca/Games/Brawl/MatchBlock.h"
 
-#include "Core/Orca/Game/GuestMemory.h"
+#include "Core/Orca/Engine/GuestMemory.h"
 
 namespace Orca::UX::MatchBlock
 {

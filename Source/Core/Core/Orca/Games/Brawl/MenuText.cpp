@@ -10,7 +10,7 @@
 
 #include "Common/Logging/Log.h"
 #include "Core/Orca/Profile.h"
-#include "Core/Orca/Game/GuestMemory.h"
+#include "Core/Orca/Engine/GuestMemory.h"
 
 namespace Orca::UX
 {

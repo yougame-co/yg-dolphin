@@ -21,7 +21,7 @@
 #include "Common/Logging/Log.h"
 #include "Core/Core.h"
 #include "Core/Orca/Session/Online.h"
-#include "Core/Orca/Game/GuestMemory.h"
+#include "Core/Orca/Engine/GuestMemory.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/Games/Brawl/RankedSet.h"
 #include "Core/PowerPC/MMU.h"

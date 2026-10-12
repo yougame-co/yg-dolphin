@@ -9,7 +9,7 @@
 #include "Common/Logging/Log.h"
 #include "Core/Orca/Games/Brawl/CssTitle.h"
 #include "Core/Orca/Games/Brawl/MatchBlock.h"
-#include "Core/Orca/Game/GuestMemory.h"
+#include "Core/Orca/Engine/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/OnlineMenu.h"
 #include "Core/Orca/Games/Brawl/Queue.h"
 #include "InputCommon/GCPadStatus.h"

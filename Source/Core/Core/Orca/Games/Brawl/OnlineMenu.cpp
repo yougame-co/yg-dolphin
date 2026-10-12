@@ -19,7 +19,7 @@
 #include "Core/Orca/Status.h"
 #include "Core/Orca/Games/Brawl/CssTitle.h"
 #include "Core/Orca/Games/Brawl/MatchBlock.h"
-#include "Core/Orca/Game/GuestMemory.h"
+#include "Core/Orca/Engine/GuestMemory.h"
 #include "Core/Orca/UX/Probe.h"
 #include "Core/Orca/UX/QueueApp.h"
 #include "Core/Orca/UX/Search.h"
