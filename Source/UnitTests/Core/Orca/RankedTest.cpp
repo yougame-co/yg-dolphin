@@ -199,7 +199,7 @@ void AimRandom(FakeMemory& m, int port)
 
 // `port`'s buttons in the frame that just ran (the latch's). A cursor no latch has read yet
 // (StageCursors::Start's HELD_ALL) is first read with nothing held, as for a player who let go
-// before the stage select; AHeldIntoTheStageSelectNamesNothing drives the real latch instead.
+// before the stage select; AnAMashedOrHeldIntoTheStageSelectNamesNothing drives the real latch.
 void Hold(FakeMemory& m, int port, u8 buttons)
 {
   auto c = StageCursors::Read(m);
@@ -645,8 +645,8 @@ TEST(OrcaRankedPPlus, OverlayLines)
   // player whose turn it is, A's proposal for both, what the other proposes.
   RankedPPlus::Lines l = RankedPPlus::Describe(m, 100, ports);
   EXPECT_EQ(l.set, "Ranked · ada 0–0 bo · bo strikes 1 · 0:30");
-  // Port 1's cursor starts on Random, which ranked doesn't have; the hint waits until a player moves
-  // onto it (RankedIgnoresRandomAndSaysItIsCasualOnly).
+  // Both cursors start on nothing, so no "Random is casual only" yet
+  // (RankedIgnoresRandomAndSaysItIsCasualOnly).
   EXPECT_EQ(l.turn, "A proposes a stage");
   // The turn as STAGE SELECT's relabel names it (Relabel.h): the same step as the line's.
   EXPECT_EQ(RankedPPlus::CurrentTurn(m), (Ranked::Turn{StepKind::Strike, 1, 1}));
@@ -911,15 +911,15 @@ TEST(OrcaRankedPPlus, RankedIgnoresRandomAndSaysItIsCasualOnly)
   RankedPPlus::Apply(m, frame, true);
   const std::vector<Orca::Events::PortInfo> ports{{0, "ada", false, {}}, {1, "bo", true, {}}};
   const MatchBlock::State before = Block(m);
-  // Port 1's cursor starts on Random; its A there does nothing. The hint waits for a move onto it.
+  // Port 1's cursor starts on nothing; its A there does nothing, and no such line.
   const auto c = StageCursors::Read(m);
   ASSERT_TRUE(c);
   EXPECT_EQ(StageCursors::Hovered(StageCursors::PPlusLayout(), 0, c->cursors[0].x, c->cursors[0].y),
-            StageCursors::RANDOM_BUTTON);
+            StageCursors::NOTHING);
   Press(m, 0, -1, BTN_A, &frame);
   EXPECT_EQ(RankedPPlus::Describe(m, frame, ports).turn,
             "Your turn: X on a stage strikes it · A proposes a stage");
-  // Moved onto it: A and X do nothing, and the line says why.
+  // On Random: A and X do nothing, and the line says why.
   AimRandom(m, 0);
   Press(m, 0, -1, BTN_A, &frame);
   Press(m, 0, -1, BTN_X, &frame);
@@ -935,49 +935,74 @@ TEST(OrcaRankedPPlus, RankedIgnoresRandomAndSaysItIsCasualOnly)
             "Your turn: X on a stage strikes it · A proposes a stage");
 }
 
-// An A held, or mashed, into the stage select counts once it is let go (StageCursors::Start holds
-// every button). Casual: port 1 starts on Random, so a held A would name it. Ranked: the steps take
-// presses in the frame the cursors start, before any latch, and an A still held once the cursor
-// reaches a stage proposes nothing. The real latch reads the pads here.
-TEST(OrcaRankedPPlus, AHeldIntoTheStageSelectNamesNothing)
+// An A mashed into the stage select names nothing, as in 0.3.39: both cursors start on nothing (no
+// tile or Random). A button held through the screen change counts once it is let go
+// (StageCursors::Start holds every button; the steps take presses in the frame the cursors start,
+// before any latch), so an A held onto Random or a stage names nothing either. Ranked's strikes
+// work from the start. The real latch reads the pads here.
+TEST(OrcaRankedPPlus, AnAMashedOrHeldIntoTheStageSelectNamesNothing)
 {
-  std::array<std::optional<GCPadStatus>, 4> raw{};
-  GCPadStatus pad{};
-  pad.isConnected = true;
-  pad.stickX = pad.stickY = 128;
-  pad.button = PAD_BUTTON_A;
-  raw[0] = raw[1] = pad;
   for (const bool casual : {true, false})
   {
-    FakeMemory m = casual ? CasualSss(1) : RankedSss(1);
+    FakeMemory m = casual ? CasualSss(1) : RankedSss(1);  // ranked: port 2 strikes first
+    std::array<std::optional<GCPadStatus>, 4> raw{};
+    GCPadStatus pad{};
+    pad.isConnected = true;
+    pad.stickX = pad.stickY = 128;
+    pad.button = PAD_BUTTON_A;
+    raw[0] = raw[1] = pad;
     int frame = 200;
-    EXPECT_EQ(StageCursors::Latch(m, raw), 0);  // no cursors yet
-    RankedPPlus::Apply(m, frame, true);
-    ASSERT_TRUE(StageCursors::Read(m));
-    for (int i = 0; i < 10; ++i)
-    {
+    const auto next = [&] {
       StageCursors::Latch(m, raw);
       RankedPPlus::Apply(m, ++frame, true);
       EXPECT_EQ(RankedPPlus::Apply(m, frame, true), 0);
-    }
-    if (!casual)
+    };
+    EXPECT_EQ(StageCursors::Latch(m, raw), 0);  // no cursors yet
+    RankedPPlus::Apply(m, frame, true);
+    ASSERT_TRUE(StageCursors::Read(m));
+    // Both keep A down, then mash it (press, let go, press...): nothing named or struck.
+    for (int i = 0; i < 10; ++i)
+      next();
+    for (int i = 0; i < 6; ++i)
     {
-      Aim(m, 0, 3);
-      StageCursors::Latch(m, raw);
-      RankedPPlus::Apply(m, ++frame, true);
+      raw[0]->button = raw[1]->button = (i & 1) ? PAD_BUTTON_A : 0;
+      next();
     }
     EXPECT_EQ(Block(m).prefs[0], MatchBlock::NONE) << "casual " << casual;
     EXPECT_EQ(Block(m).prefs[1], MatchBlock::NONE) << "casual " << casual;
-    EXPECT_FALSE(Block(m).auto_pick);
-    // Let go a frame, press again: now it counts (casual: Random; ranked: a proposal).
+    EXPECT_EQ(Block(m).struck, 0) << "casual " << casual;
+    EXPECT_FALSE(Block(m).auto_pick) << "casual " << casual;
+    if (!casual)
+    {
+      // Ranked from the start: port 2 moves 4 frames up-right and 3 right onto Luigi's Mansion
+      // (pplus-sss-cursors-ranked.txt) and strikes it with X.
+      raw[1]->button = 0;
+      raw[1]->stickX = raw[1]->stickY = 255;
+      for (int i = 0; i < 4; ++i)
+        next();
+      raw[1]->stickY = 128;
+      for (int i = 0; i < 3; ++i)
+        next();
+      raw[1]->stickX = 128;
+      raw[1]->button = PAD_BUTTON_X;
+      next();
+      EXPECT_EQ(Block(m).struck, 0x0008);  // Luigi's Mansion
+    }
+    // Port 1 moves onto Random (casual) or Battlefield (ranked) with A still down: nothing. It lets
+    // go for a frame and presses again: named. Port 2 names nothing.
+    if (casual)
+      AimRandom(m, 0);
+    else
+      Aim(m, 0, 0);
+    next();
+    EXPECT_EQ(Block(m).prefs[0], MatchBlock::NONE) << "casual " << casual;
     raw[0]->button = 0;
-    StageCursors::Latch(m, raw);
-    RankedPPlus::Apply(m, ++frame, true);
+    next();
     raw[0]->button = PAD_BUTTON_A;
-    StageCursors::Latch(m, raw);
-    RankedPPlus::Apply(m, ++frame, true);
-    EXPECT_EQ(Block(m).prefs[0], casual ? MatchBlock::RANDOM : u8{3}) << "casual " << casual;
+    next();
+    EXPECT_EQ(Block(m).prefs[0], casual ? MatchBlock::RANDOM : u8{0}) << "casual " << casual;
     EXPECT_EQ(Block(m).prefs[1], MatchBlock::NONE) << "casual " << casual;
+    EXPECT_FALSE(Block(m).auto_pick) << "casual " << casual;
   }
 }
 

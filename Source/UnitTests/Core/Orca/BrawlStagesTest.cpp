@@ -182,7 +182,7 @@ void Aim(FakeMemory& m, int port, int stage)
 
 // `port`'s buttons in the frame that just ran (the latch's). A cursor no latch has read yet
 // (StageCursors::Start's HELD_ALL) is first read with nothing held, as for a player who let go
-// before the stage select; AnAHeldIntoTheStageSelectNamesNothing drives the real latch instead.
+// before the stage select; AnAMashedOrHeldIntoTheStageSelectNamesNothing drives the real latch.
 void Hold(FakeMemory& m, int port, u8 buttons)
 {
   auto c = StageCursors::Read(m);
@@ -773,8 +773,7 @@ TEST_F(OrcaBrawlStages, TheOverlaysTopLineHasTheSetTheTurnTheCountAndTheTime)
   EXPECT_EQ(CurrentTurn(m), std::nullopt);
   Scene(m, "scSelStage");
   Boundary(m);
-  // Both cursors start on the Random bar, which ranked doesn't have; the hint waits until a player
-  // moves onto it (RankedIgnoresRandom).
+  // Both cursors start on nothing, so no "Random is casual only" yet (RankedIgnoresRandom).
   EXPECT_EQ(Lines(m, ports), (std::pair<std::string, std::string>{
                                  "You 0–0 bo · bo strikes 1 · 0:30", "A proposes a stage"}));
   // The turn as STAGE SELECT's relabel names it (Relabel.h): the same step as the line's.
@@ -1110,20 +1109,18 @@ TEST_F(OrcaBrawlCasual, NoFinalDestinationForAnIceClimbersAndNothingAlone)
     EXPECT_TRUE(mask.Empty());
 }
 
-// Random (casual): both cursors start on the game's Random bar, A there names Random, B takes it
-// back. The block keeps the marker, never the stage it draws; the flow then presses A on a real
-// stage's tile, never the game's own Random.
+// Random (casual): A on the game's Random bar names Random, B takes it back. The block keeps the
+// marker, never the stage it draws; the flow then presses A on a real stage's tile, never the
+// game's own Random.
 TEST_F(OrcaBrawlCasual, RandomIsAPickAndItsStageStaysHidden)
 {
   FakeMemory m = Game("scSelStage");
   m.Write32(kBlock + 8, ROOM);
   Boundary(m);
-  const StageCursors::Layout& l = StageCursors::BrawlLayout();
-  for (const StageCursors::Point& p : l.start)
-    EXPECT_EQ(StageCursors::Hovered(l, 0, p.x, p.y), StageCursors::RANDOM_BUTTON);
   std::vector<Orca::Events::PortInfo> ports{{0, "ada", false, {}}, {1, "bo", true, {}}};
   std::vector<Orca::Events::PortInfo> theirs{{0, "ada", true, {}}, {1, "bo", false, {}}};
-  // Port 1's A where its cursor starts: Random. B takes it back; A again.
+  // Port 1's A on Random names it. B takes it back; A again.
+  Aim(m, 0, StageCursors::RANDOM_BUTTON);
   Push(m, 0, A);
   EXPECT_EQ(ReadState(m)->progress.prefs[0], RS::PREF_RANDOM);
   Push(m, 0, B);
@@ -1180,6 +1177,7 @@ TEST_F(OrcaBrawlCasual, BothRandomPicksAtOnceAndARandomOutlastsTheTimer)
   FakeMemory m = Game("scSelStage");
   m.Write32(kBlock + 8, ROOM);
   Boundary(m);
+  Aim(m, 0, StageCursors::RANDOM_BUTTON);
   Push(m, 0, A);
   EXPECT_EQ(ReadState(m)->progress.picked, -1);
   Aim(m, 1, StageCursors::RANDOM_BUTTON);
@@ -1207,8 +1205,8 @@ TEST_F(OrcaBrawlCasual, BothRandomPicksAtOnceAndARandomOutlastsTheTimer)
   EXPECT_EQ(s->progress.prefs[0], RS::CasualDefault(later, 0));
 }
 
-// Ranked has no Random: A and X there do nothing, and once a player moves onto it the line says
-// why (both cursors start on it, so not before).
+// Ranked has no Random: A and X there do nothing, and the line says why. A where the cursors start
+// does nothing either, and no such line.
 TEST_F(OrcaBrawlStages, RankedIgnoresRandom)
 {
   FakeMemory m = Game("scSelStage");  // the header's coin: port 2 strikes first
@@ -1233,43 +1231,78 @@ TEST_F(OrcaBrawlStages, RankedIgnoresRandom)
   EXPECT_EQ(Lines(m, theirs).second, "X on a stage strikes it · A proposes a stage");
 }
 
-// An A held, or mashed, into the stage select names nothing, though both cursors start on Random:
-// every button starts as held (StageCursors::Start), so it counts once it is let go. The real
-// latch reads the pads here, a frame at a time.
-TEST_F(OrcaBrawlCasual, AnAHeldIntoTheStageSelectNamesNothing)
+// An A mashed into the stage select names nothing, as in 0.3.39: both cursors start on nothing (no
+// tile, Random or page button), so Random against Random never plays at once. A button held through
+// the screen change counts once it is let go (StageCursors::Start holds every button), so an A held
+// onto Random or a stage names nothing either. Ranked's strikes work from the start. The real latch
+// reads the pads here, a frame at a time.
+TEST_F(OrcaBrawlCasual, AnAMashedOrHeldIntoTheStageSelectNamesNothing)
 {
-  FakeMemory m = Game("scSelStage");
-  m.Write32(kBlock + 8, ROOM);
-  std::array<std::optional<GCPadStatus>, 4> raw{};
-  GCPadStatus pad{};
-  pad.isConnected = true;
-  pad.stickX = pad.stickY = 128;
-  pad.button = PAD_BUTTON_A;
-  raw[0] = raw[1] = pad;
-  // The first frame: no cursors yet, so the latch has nothing to read; the flow starts them.
-  EXPECT_EQ(StageCursors::Latch(m, raw), 0);
-  Boundary(m);
-  const auto c = StageCursors::Read(m);
-  ASSERT_TRUE(c);
-  EXPECT_EQ(c->cursors[0].seen, StageCursors::HELD_ALL);
-  // Both keep A down: nothing named.
-  for (int i = 0; i < 10; ++i)
+  for (const bool casual : {true, false})
   {
-    StageCursors::Latch(m, raw);
+    SetRankedForTests(!casual);
+    SetCasualForTests(casual);
+    FakeMemory m = Game("scSelStage");  // the header's coin: port 2 strikes first
+    if (casual)
+      m.Write32(kBlock + 8, ROOM);
+    std::array<std::optional<GCPadStatus>, 4> raw{};
+    GCPadStatus pad{};
+    pad.isConnected = true;
+    pad.stickX = pad.stickY = 128;
+    pad.button = PAD_BUTTON_A;
+    raw[0] = raw[1] = pad;
+    const auto next = [&] {
+      StageCursors::Latch(m, raw);
+      Boundary(m);
+    };
+    // The first frame: no cursors yet, so the latch has nothing to read; the flow starts them.
+    EXPECT_EQ(StageCursors::Latch(m, raw), 0);
     Boundary(m);
+    const auto c = StageCursors::Read(m);
+    ASSERT_TRUE(c);
+    EXPECT_EQ(c->cursors[0].seen, StageCursors::HELD_ALL);
+    // Both keep A down, then mash it (press, let go, press...): nothing named or struck.
+    for (int i = 0; i < 10; ++i)
+      next();
+    for (int i = 0; i < 6; ++i)
+    {
+      raw[0]->button = raw[1]->button = (i & 1) ? PAD_BUTTON_A : 0;
+      next();
+    }
+    EXPECT_EQ(ReadState(m)->progress.prefs, (std::array<s8, 2>{RS::PREF_NONE, RS::PREF_NONE}))
+        << "casual " << casual;
+    EXPECT_EQ(ReadState(m)->progress.struck, 0) << "casual " << casual;
+    EXPECT_EQ(ReadState(m)->progress.picked, -1) << "casual " << casual;
+    if (!casual)
+    {
+      // Ranked from the start: port 2, the first striker, moves 9 frames up-right and 1 up onto
+      // Smashville (bf-sss-cursors.txt) and strikes it with X.
+      raw[1]->button = 0;
+      raw[1]->stickX = raw[1]->stickY = 255;
+      for (int i = 0; i < 9; ++i)
+        next();
+      raw[1]->stickX = 128;
+      next();
+      raw[1]->stickY = 128;
+      raw[1]->button = PAD_BUTTON_X;
+      next();
+      EXPECT_EQ(ReadState(m)->progress.struck, 1 << Smashville);
+    }
+    // Port 1 moves onto Random (casual) or Battlefield (ranked) with A still down: nothing. It
+    // lets go for a frame and presses again: named. Port 2 names nothing.
+    const int target = casual ? int{StageCursors::RANDOM_BUTTON} : int{Battlefield};
+    Aim(m, 0, target);
+    next();
+    EXPECT_EQ(ReadState(m)->progress.prefs[0], RS::PREF_NONE) << "casual " << casual;
+    raw[0]->button = 0;
+    next();
+    raw[0]->button = PAD_BUTTON_A;
+    next();
+    EXPECT_EQ(ReadState(m)->progress.prefs[0], casual ? RS::PREF_RANDOM : s8{Battlefield})
+        << "casual " << casual;
+    EXPECT_EQ(ReadState(m)->progress.prefs[1], RS::PREF_NONE) << "casual " << casual;
+    EXPECT_EQ(ReadState(m)->progress.picked, -1) << "casual " << casual;
   }
-  EXPECT_EQ(ReadState(m)->progress.prefs, (std::array<s8, 2>{RS::PREF_NONE, RS::PREF_NONE}));
-  EXPECT_EQ(ReadState(m)->progress.picked, -1);
-  // Port 1 lets go for a frame and presses again: that A names Random. Port 2 still holds.
-  raw[0]->button = 0;
-  StageCursors::Latch(m, raw);
-  Boundary(m);
-  raw[0]->button = PAD_BUTTON_A;
-  StageCursors::Latch(m, raw);
-  Boundary(m);
-  EXPECT_EQ(ReadState(m)->progress.prefs[0], RS::PREF_RANDOM);
-  EXPECT_EQ(ReadState(m)->progress.prefs[1], RS::PREF_NONE);
-  EXPECT_EQ(ReadState(m)->progress.picked, -1);
 }
 
 TEST(OrcaStageCursors, TheLatchMovesEachCursorWithItsOwnStick)
@@ -1350,7 +1383,7 @@ TEST(OrcaStageCursors, EdgesAreSeenOnceAndTilesAreTheLayouts)
   EXPECT_EQ(StageCursors::BrawlLayout().tiles.size(), 7u);
   EXPECT_EQ(StageCursors::PPlusLayout().tiles.size(), 9u);
   // Each game's Random button: on every page, inside the cursor's reach, clear of the tiles and the
-  // page button. Brawl's two cursors and Project+'s first start on it.
+  // page button.
   for (const StageCursors::Layout* l : {&StageCursors::BrawlLayout(), &StageCursors::PPlusLayout()})
   {
     const StageCursors::Rect& r = l->random_button;
@@ -1368,16 +1401,21 @@ TEST(OrcaStageCursors, EdgesAreSeenOnceAndTilesAreTheLayouts)
     if (l->pages)
       EXPECT_TRUE(apart(r, l->page_button));
   }
+  // Every cursor starts on nothing on every page (no tile, Random or page button), inside the
+  // cursor's reach: an A mashed into the stage select names nothing.
+  for (const StageCursors::Layout* l : {&StageCursors::BrawlLayout(), &StageCursors::PPlusLayout()})
+  {
+    for (const StageCursors::Point& p : l->start)
+    {
+      EXPECT_TRUE(l->bounds.Contains(p.x, p.y));
+      for (u32 page = 0; page < 2; ++page)
+      {
+        EXPECT_EQ(StageCursors::Hovered(*l, page, p.x, p.y), StageCursors::NOTHING)
+            << "game " << int(l->game) << " at " << p.x << ", " << p.y << " page " << page;
+      }
+    }
+  }
   const StageCursors::Layout& brawl = StageCursors::BrawlLayout();
-  const StageCursors::Layout& pplus = StageCursors::PPlusLayout();
-  EXPECT_EQ(StageCursors::Hovered(brawl, 0, brawl.start[0].x, brawl.start[0].y),
-            StageCursors::RANDOM_BUTTON);
-  EXPECT_EQ(StageCursors::Hovered(brawl, 1, brawl.start[1].x, brawl.start[1].y),
-            StageCursors::RANDOM_BUTTON);
-  EXPECT_EQ(StageCursors::Hovered(pplus, 0, pplus.start[0].x, pplus.start[0].y),
-            StageCursors::RANDOM_BUTTON);
-  EXPECT_EQ(StageCursors::Hovered(pplus, 0, pplus.start[1].x, pplus.start[1].y),
-            StageCursors::NOTHING);
   // The page button still reads as the page button.
   EXPECT_EQ(StageCursors::Hovered(brawl, 0, (brawl.page_button.x0 + brawl.page_button.x1) / 2,
                                   (brawl.page_button.y0 + brawl.page_button.y1) / 2),

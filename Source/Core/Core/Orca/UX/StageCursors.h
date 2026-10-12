@@ -99,6 +99,8 @@ struct Layout
   // Overlay only, never synced: the Random button as drawn, for the frame around a Random pick (the
   // hit rectangle above runs past it).
   Rect random_art{};
+  // Where the two cursors start: on nothing (Hovered reads NOTHING), not a tile, Random or the page
+  // button.
   std::array<Point, 2> start{};
   // Overlay only, never synced: where cursor (0, 0) sits in the picture (0..1 across and down),
   // and how far one cursor unit moves across and down.
@@ -146,9 +148,10 @@ std::optional<State> Read(const GuestMemory& memory);
 int Write(GuestMemory& memory, const State& state);
 // Turns the tag off if it was on. Returns bytes changed.
 int Clear(GuestMemory& memory);
-// A fresh pair of cursors at the layout's start points. Every button starts as held (`now` and
-// `seen` HELD_ALL), so a button held or mashed through the screen change only counts once it has
-// been let go: an A from the character select never names the stage the cursor starts on.
+// A fresh pair of cursors at the layout's start points, which are on nothing, so a mashed A names
+// nothing. Every button starts as held (`now` and `seen` HELD_ALL), so a button held through the
+// screen change only counts once it has been let go: an A from the character select never names
+// the stage or Random a cursor is moved onto.
 constexpr u8 HELD_ALL = 0xFF;
 State Start(const Layout& layout);
 

@@ -273,8 +273,7 @@ s8 Signed(u8 pref)
   return pref < Ranked::MAX_STAGES ? static_cast<s8>(pref) : Ranked::PREF_NONE;
 }
 
-// Whether the local player has moved their own cursor onto the Random button (UI only). Port 1's
-// cursor starts on it, so one still at its start doesn't count.
+// Whether the local player's own cursor is on the Random button (UI only).
 bool LocalOnRandom(const GuestMemory& m, int me)
 {
   if (me < 0 || me > 1)
@@ -282,11 +281,9 @@ bool LocalOnRandom(const GuestMemory& m, int me)
   const std::optional<StageCursors::State> c = StageCursors::Read(m);
   if (!c)
     return false;
-  const StageCursors::Layout& layout = StageCursors::PPlusLayout();
   const StageCursors::Cursor& mine = c->cursors[me];
-  if (mine.x == layout.start[me].x && mine.y == layout.start[me].y)
-    return false;
-  return StageCursors::Hovered(layout, 0, mine.x, mine.y) == StageCursors::RANDOM_BUTTON;
+  return StageCursors::Hovered(StageCursors::PPlusLayout(), 0, mine.x, mine.y) ==
+         StageCursors::RANDOM_BUTTON;
 }
 
 // Ranked presses on each player's own cursor. X strikes on your turn, A picks on your pick or

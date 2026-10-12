@@ -107,8 +107,9 @@ Layout MakeBrawl()
   l.page_button = R(15.25f, -19.75f, 30.25f, -17.25f);
   l.random_button = R(-5.25f, -21.0f, 15.25f, -17.25f);
   l.random_art = R(-4.9f, -20.7f, 15.0f, -17.4f);
-  // On the Random bar, either side of the game's own cursor start (3.5, -17.5).
-  l.start = {Point{U(-2.0f), U(-18.0f)}, Point{U(9.0f), U(-18.0f)}};
+  // Just above the Random bar (-17.25), either side of the game's own cursor start (3.5, -17.5),
+  // below every legal tile: on nothing, so an A mashed into the stage select names nothing.
+  l.start = {Point{U(-2.0f), U(-16.5f)}, Point{U(9.0f), U(-16.5f)}};
   Map(&l);
   return l;
 }
@@ -123,8 +124,9 @@ Layout MakePPlus()
   l.pages = false;
   l.random_button = R(-16.25f, -23.75f, 3.0f, -19.0f);
   l.random_art = R(-16.0f, -22.6f, 4.0f, -19.3f);
-  // Below the two rows of tiles: port 1's on Random, port 2's on the page button.
-  l.start = {Point{U(-6.0f), U(-21.0f)}, Point{U(6.0f), U(-21.0f)}};
+  // Between the lower row of tiles (-17.75) and the Random button (-19.0): on nothing, so an A
+  // mashed into the stage select names nothing.
+  l.start = {Point{U(-6.0f), U(-18.5f)}, Point{U(6.0f), U(-18.5f)}};
   Map(&l);
   return l;
 }

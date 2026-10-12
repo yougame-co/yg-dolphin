@@ -615,8 +615,7 @@ std::string PrefName(s8 pref)
   return pref >= 0 && pref < kStages ? kStageNames[pref] : "";
 }
 
-// Whether the local player has moved their own cursor onto the Random button (UI only). Both
-// cursors start on it, so one still at its start doesn't count.
+// Whether the local player's own cursor is on the Random button (UI only).
 bool LocalOnRandom(const GuestMemory& m, const View& v, int me)
 {
   if (me < 0 || me > 1 || !v.present)
@@ -624,12 +623,9 @@ bool LocalOnRandom(const GuestMemory& m, const View& v, int me)
   const std::optional<StageCursors::State> c = StageCursors::Read(m);
   if (!c)
     return false;
-  const StageCursors::Layout& layout = StageCursors::BrawlLayout();
   const StageCursors::Cursor& mine = c->cursors[me];
-  if (mine.x == layout.start[me].x && mine.y == layout.start[me].y)
-    return false;
-  return StageCursors::Hovered(layout, m.Read32(v.task + TASK_PAGE), mine.x, mine.y) ==
-         StageCursors::RANDOM_BUTTON;
+  return StageCursors::Hovered(StageCursors::BrawlLayout(), m.Read32(v.task + TASK_PAGE), mine.x,
+                               mine.y) == StageCursors::RANDOM_BUTTON;
 }
 
 bool VanillaBrawl()
