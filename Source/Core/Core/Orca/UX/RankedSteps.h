@@ -4,6 +4,7 @@
 #pragma once
 
 #include <array>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -65,10 +66,52 @@ struct Turn
   bool operator==(const Turn&) const = default;
 };
 
+// Who decides a timed-out game of a ranked set.
+enum class TimeOut : u8
+{
+  // The game's own results screen (Project+: its codeset's overtime).
+  Results,
+  // The ledge-grab limit, then stocks, then percent, as they were when time ran out; a level game
+  // is a tie.
+  Judged,
+};
+
+// A ranked set's ledge-grab limits (TimeOut::Judged): a player over the limit loses a timed-out
+// game, unless both are.
+struct LedgeLimits
+{
+  struct Character
+  {
+    int character = -1;
+    u8 limit = 0;
+    u8 tiebreak_limit = 0;
+    bool operator==(const Character&) const = default;
+  };
+  u8 limit = 0;
+  u8 tiebreak_limit = 0;
+  std::array<Character, 4> characters{};
+  u8 character_count = 0;
+
+  // The limit for a character (the game's character id) in a regular or tiebreak game.
+  int For(bool tiebreak, int character) const
+  {
+    for (u8 i = 0; i < character_count && i < characters.size(); ++i)
+    {
+      if (characters[i].character == character)
+        return tiebreak ? characters[i].tiebreak_limit : characters[i].limit;
+    }
+    return tiebreak ? tiebreak_limit : limit;
+  }
+  bool operator==(const LedgeLimits&) const = default;
+};
+
+// A competitive ruleset. The builtin ones are data (Games/Brawl/Rulesets/*.json, read through
+// Engine/Ruleset.h against Tools/orca/mods/ruleset.schema.json); nothing here names a game.
 struct Ruleset
 {
-  u8 id = 0;  // MatchBlock's ruleset byte
-  std::string_view name;
+  u8 id = 0;  // MatchBlock's ruleset byte (the file's "block")
+  std::string slug;  // the file's "id", as mod.json's "rulesets" lists it
+  std::string name;
   int stage_count = 0;
   StageMask starters = 0;
   StageMask counterpicks = 0;
@@ -92,8 +135,25 @@ struct Ruleset
   // Casual games give both players 15 seconds to name a stage, with a shorter grace.
   u16 casual_seconds = 15;
   u16 casual_grace_frames = 30;
-  // Short stage names for the overlay and logs.
-  std::array<std::string_view, MAX_STAGES> stage_names{};
+  // Stage names for the overlay and logs, and each stage's id in the game (Brawl and Project+:
+  // srStageKind).
+  std::array<std::string, MAX_STAGES> stage_names{};
+  std::array<u8, MAX_STAGES> stage_kinds{};
+
+  // A ranked set, and every locked match: stocks and minutes, who decides a time-out, the
+  // ledge-grab limits, the tiebreak game (with its own stocks and minutes) or none, and how many
+  // ties in a row void the set.
+  u8 stocks = 3;
+  u8 minutes = 8;
+  TimeOut time_out = TimeOut::Results;
+  LedgeLimits ledge{};
+  bool tiebreak = false;
+  u8 tiebreak_stocks = 1;
+  u8 tiebreak_minutes = 3;
+  u8 void_after_ties = 5;
+  // Ranked character select: a player still without a fighter this long after the other picked
+  // is a no-show.
+  u16 css_ready_seconds = 60;
 
   StageMask All() const { return static_cast<StageMask>((1u << stage_count) - 1); }
 };

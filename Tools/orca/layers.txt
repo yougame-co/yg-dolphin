@@ -88,6 +88,10 @@ engine-sensitive  Source/Core/Core/Orca/Mod.*             # mods-p1: mod.json, t
 engine-sensitive  Source/Core/Core/Orca/Bundle.*          # flat bundles: discovery, mod.sig, the pinned key
 engine-sensitive  Source/Core/Core/Orca/Sandbox.*         # sandbox mode (0.3.39): --sandbox-probe's socket and file checks
 engine-sensitive  Source/Core/Core/Orca/LocalStore.*      # S2: kept seen keys and controls (user files)
+# S5: game data as files: the strict JSON reader, the one-schema interpreter and the ruleset reader
+# (pack bytes once a bundle carries a ruleset), and the schema itself, which is compiled in.
+engine-sensitive  Source/Core/Core/Orca/Engine/{StrictJson,Schema,Ruleset}.*
+engine-sensitive  Tools/orca/mods/ruleset.schema.json
 # Session/: rooms, direct links, keyframes, replays, pad codec, compatibility key, input exchange.
 engine-sensitive  Source/Core/Core/Orca/Session/**
 engine            Source/Core/Core/Orca/Session/Events.*  # engine-to-game callbacks, no parsing
@@ -100,6 +104,8 @@ engine            Source/Core/Core/Orca/Policy/**         review
 game-logic        Source/Core/Core/Orca/Games/**
 engine-sensitive  Source/Core/Core/Orca/Games/**/CMakeLists.txt
 engine-sensitive  Source/Core/Core/Orca/Games/**/*.cmake
+# S5: the builtin module's rulesets (stages, timers, clauses, ledge limits, set rules) are data.
+game-data         Source/Core/Core/Orca/Games/**/Rulesets/*.json     review
 
 # UX/: host-only UI (overlay, kit, set end, orb, cards, controllers) and the composition root
 # are engine. RankedSteps (strikes, bans, DSR, timers) is competitive policy: engine (S2 keeps it

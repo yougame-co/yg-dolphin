@@ -1973,6 +1973,32 @@ Two wins end the set; 8 games without that void it. Other tracks read the score,
 
 Tests: `OrcaSetBlock*`, `OrcaRankedSet*`, `OrcaResults*`. Not checked live: a real ledge-grab count.
 
+### Rulesets are data
+
+A ruleset's numbers and lists are a data file, not C++ (Orca split S5): the legal stages (name, the
+game's stage id, starter or counterpick), the stage steps' timers and the winner's later step, DSR,
+the Ice Climbers and Meta Knight clauses, the set (wins, stocks and minutes, who decides a time-out,
+the ledge-grab limits, the tiebreak game, how many ties void the set) and the ranked character
+select's no-show timer. The builtin ones are `Orca/Games/Brawl/Rulesets/brawl-supernova-2025.json`
+(the match block's ruleset 1) and `pplus-2024.json` (2), compiled in byte for byte
+(`Games/Brawl/Rulesets.*`).
+
+Every ruleset is read the same way (`Orca/Engine/Ruleset.*`): a strict JSON reader
+(`Engine/StrictJson.*`: one value, valid UTF-8, JSON's own number grammar, no duplicate keys, at
+most 16 KiB and 8 levels), then the one schema, `Tools/orca/mods/ruleset.schema.json`, compiled in
+and interpreted by `Engine/Schema.*`, then the few rules a schema can't state (its `x-orca-rules`).
+Anything unknown, out of range or of the wrong type refuses the file; nothing is defaulted or
+clamped. The schema uses a small subset of JSON Schema in which every value is typed and bounded,
+and the interpreter refuses a schema outside it, so the site's validator (YouGame
+`web/src/lib/orca-data-schema.ts`, `orca-ruleset-validate.ts`, with a byte copy of the schema) and
+Orca can't drift: `Tools/orca/mods/ruleset-vectors.json` holds the cases both must agree on
+(`OrcaRuleset.Vectors` and the site's `orca-ruleset-validate.test.mjs`). A libFuzzer target for
+the reader is `Tools/orca/fuzz/build-ruleset-fuzz.sh`.
+
+Changing a builtin file changes what both games write, like a code change: it needs the hashlogs
+and, for a ruleset already played online, a compat bump. A pack can't carry a ruleset file yet (the
+pack format names none).
+
 ## Stage select
 
 ### Ranked steps
