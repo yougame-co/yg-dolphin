@@ -183,6 +183,9 @@ void ForEachUniversalSetting(F&& f)
   // VSync adds 2-19 ms of display latency with no pacing gain (a composited window never tears)
   // and, below 60 Hz, would slow the game: always off in a session, whatever GFX.ini says.
   f(Config::GFX_VSYNC, false);
+  // The JIT vertex loaders: the session's vertex bounds (VertexLoaderManager::IndexedReadsFit)
+  // assume what they read, and the software loader reads a skipped vertex's position too.
+  f(Config::GFX_VERTEX_LOADER_TYPE, VertexLoaderType::Native);
   f(Config::GFX_HACK_EFB_ACCESS_ENABLE, false);
   f(Config::GFX_HACK_BBOX_ENABLE, false);
   f(Config::GFX_HACK_EFB_EMULATE_FORMAT_CHANGES, false);
