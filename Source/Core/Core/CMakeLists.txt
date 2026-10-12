@@ -523,6 +523,8 @@ add_library(core
   Orca/DiscVerify.h
   Orca/Engine/GuestMemory.cpp
   Orca/Engine/GuestMemory.h
+  Orca/Engine/Module.cpp
+  Orca/Engine/Module.h
   Orca/GpuLost.cpp
   Orca/GpuLost.h
   Orca/JitWarm.cpp
@@ -562,6 +564,8 @@ add_library(core
   Orca/Session/YouGameRoom.cpp
   Orca/Session/YouGameRoom.h
   Orca/Games/Brawl/BrawlStages.cpp
+  Orca/Games/Brawl/BrawlModule.cpp
+  Orca/Games/Brawl/BrawlModule.h
   Orca/Games/Brawl/BrawlStages.h
   Orca/Games/Brawl/CharOrder.cpp
   Orca/Games/Brawl/CharOrder.h
