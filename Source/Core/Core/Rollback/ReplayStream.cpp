@@ -60,20 +60,67 @@ Writer::Writer(std::string base, bool to_room) : m_base(std::move(base)), m_to_r
 {
 }
 
-// The next whole unit to the file and, for watchers, to the room.
+// The next whole unit to the file and, once its stream has started there, to the room.
 bool Writer::Emit(const std::vector<u8>& bytes)
 {
   if (m_file && (!m_file->WriteBytes(bytes.data(), bytes.size()) || !m_file->Flush()))
     return false;
-  if (m_to_room)
+  if (m_to_room && m_room_started)
     Orca::Online::SendReplayStream(bytes);
   return true;
+}
+
+// The room's stream starts: the header, then the frames written so far, a few hundred a message
+// (a room message holds at most 64 KiB).
+void Writer::StartRoom(const Orca::Net::ReplayArchive& replay, const std::map<int, u64>* checksums,
+                       int live)
+{
+  m_room_started = true;
+  Orca::Online::SendReplayStream(m_header);
+  constexpr int PER_MESSAGE = 600;
+  for (int first = m_first; first < m_written_end; first += PER_MESSAGE)
+  {
+    Orca::Net::ReplayChunk chunk;
+    chunk.first = first;
+    chunk.live = live;
+    const int last = std::min(first + PER_MESSAGE, m_written_end);
+    for (int f = first; f < last; ++f)
+    {
+      Orca::Net::ReplayFrame frame = *replay.At(f);
+      if (!frame.ports)
+      {
+        frame.ports = chunk.frames.empty() ?
+                          std::make_shared<const std::vector<Orca::Events::PortInfo>>() :
+                          chunk.frames.back().ports;
+      }
+      chunk.frames.push_back(std::move(frame));
+    }
+    if (checksums)
+    {
+      for (auto it = checksums->upper_bound(first); it != checksums->end() && it->first <= last;
+           ++it)
+      {
+        chunk.checksums.emplace_back(it->first, it->second);
+      }
+    }
+    const std::vector<u8> bytes = Orca::Net::PackReplayChunk(chunk, first == m_first);
+    if (bytes.empty())
+    {
+      ERROR_LOG_FMT(ROLLBACK, "Replay: couldn't pack frames {}-{} for the room", first, last);
+      m_to_room = false;
+      return;
+    }
+    Orca::Online::SendReplayStream(bytes);
+  }
+  NOTICE_LOG_FMT(ROLLBACK, "Replay: streaming history {} to the room from frame {} ({} frames "
+                           "already written)",
+                 m_segment, m_first, m_written_end - m_first);
 }
 
 Writer::~Writer() = default;
 
 bool Writer::Pump(const Orca::Net::ReplayArchive& replay, int end, int live,
-                  const std::map<int, u64>* checksums)
+                  const std::map<int, u64>* checksums, bool room_ready)
 {
   if (replay.first_frame < 0 || replay.frames.empty())
     return true;
@@ -97,6 +144,8 @@ bool Writer::Pump(const Orca::Net::ReplayArchive& replay, int end, int live,
     info.segment = m_segment;
     info.room = Orca::Online::Code();
     const std::vector<u8> header = Orca::Net::PackReplayStreamHeader(info);
+    m_header = header;
+    m_room_started = false;
     if ((m_file && !*m_file) || !Emit(header))
     {
       ERROR_LOG_FMT(ROLLBACK, "Replay: couldn't write {}", path);
@@ -111,6 +160,8 @@ bool Writer::Pump(const Orca::Net::ReplayArchive& replay, int end, int live,
                    m_segment, m_first, m_origin, path);
     Orca::Status::Line(fmt::format("orca replay-out {}", path.empty() ? "room" : path));
   }
+  if (m_to_room && room_ready && !m_room_started)
+    StartRoom(replay, checksums, live);
   const int pending = end - m_written_end;
   if (pending <= 0 || (pending < 6 && Clock::now() - m_flushed < std::chrono::milliseconds(100)))
     return true;
@@ -185,9 +236,20 @@ void Player::WatchThread(std::string url)
       watch.error = std::move(why);
     watch.ended = true;
   };
+  // A busy room may take a while to answer: a few tries, a moment apart, before giving up.
   Common::WebSocket socket;
   std::string error;
-  if (!socket.Connect(url, std::chrono::seconds(10), &error))
+  bool connected = false;
+  for (int attempt = 0; attempt < 5 && !watch.stop && !connected; ++attempt)
+  {
+    if (attempt > 0)
+    {
+      WARN_LOG_FMT(ROLLBACK, "Replay: the match's stream didn't answer ({}); trying again", error);
+      std::this_thread::sleep_for(std::chrono::seconds(2));
+    }
+    connected = socket.Connect(url, std::chrono::seconds(10), &error);
+  }
+  if (!connected)
   {
     fail("couldn't connect to the match: " + error);
     return;
@@ -384,7 +446,9 @@ std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, in
     {
       if (host.stopping())
         return std::nullopt;
-      if (m_source_ended || Clock::now() - m_last_data > std::chrono::seconds(30))
+      // A watch URL may take several tries to connect (WatchThread).
+      const auto limit = m_watch ? std::chrono::seconds(75) : std::chrono::seconds(30);
+      if (m_source_ended || Clock::now() - m_last_data > limit)
       {
         Finish(host, false, "the replay never started");
         return std::nullopt;

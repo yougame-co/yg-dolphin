@@ -7,7 +7,7 @@
 #   Tools/orca/replay-check.py <dolphin-emu-nogui> <disc> [--pplus <launcher.dol>]
 #                              [--match-seconds N] [--no-watch] [--late-watch S]
 #                              [--net-delay MS] [--net-jitter MS] [--realtime]
-#                              [--video Metal --shots MS --shot-seconds S]
+#                              [--video Metal --shots MS --shot-seconds S] [--relay <site>]
 #
 # 1. Host and Friend each boot their own game, writing their history to a replay stream
 #    (ORCA_TEST_REPLAY_OUT). Friend drops into Host's character select (as dropin-identity.py), and
@@ -54,6 +54,23 @@ REALTIME = "--realtime" in sys.argv
 VIDEO = sys.argv[sys.argv.index("--video") + 1] if "--video" in sys.argv else "Null"
 SHOTS = int(sys.argv[sys.argv.index("--shots") + 1]) if "--shots" in sys.argv else 0
 SHOT_SECONDS = int(sys.argv[sys.argv.index("--shot-seconds") + 1]) if "--shot-seconds" in sys.argv else 20
+# --relay <site>: everything over a local rooms stack (rooms/scripts/replay-stub-site.mjs in YouGame,
+# with `wrangler dev` rooms): Host also streams to its room (ORCA_TEST_REPLAY_ROOM), and both
+# watchers watch through the rooms Worker's /watch/<code> with a watch ticket from that site,
+# instead of reading Host's file.
+RELAY = sys.argv[sys.argv.index("--relay") + 1].rstrip("/") if "--relay" in sys.argv else None
+DEV = "orca-replay-test"
+
+
+def watch_url():
+    import json
+    import urllib.request
+    req = urllib.request.Request(f"{RELAY}/api/multiplayer/ticket", method="POST",
+                                 data=json.dumps({"dev": DEV, "watch": ROOM}).encode(),
+                                 headers={"content-type": "application/json"})
+    reply = json.loads(urllib.request.urlopen(req, timeout=10).read())
+    base = reply["url"].replace("https://", "wss://").replace("http://", "ws://").rstrip("/")
+    return f"{base}{reply['watch']}?ticket={reply['ticket']}"
 
 
 def net(side):
@@ -90,7 +107,7 @@ class Orca:
             "PATH": os.environ["PATH"],
             "ORCA_SESSION": "1",
             "ORCA_TEST_COMMANDS": "1",
-            "ORCA_TEST_DEV_GAME": "orca-replay-test",
+            "ORCA_TEST_DEV_GAME": DEV,
             "ORCA_TEST_KEYFRAME_DIR": os.path.join(WORK, "kf"),
             "ORCA_NAME": name,
             "YG_SCENES": "1",
@@ -102,6 +119,8 @@ class Orca:
         for key in ("ORCA_SITE", "SDL_HIDAPI", "SDL_JOYSTICK_HIDAPI"):
             if os.environ.get(key):
                 env[key] = os.environ[key]
+        if RELAY:
+            env["ORCA_SITE"] = RELAY
         env.update(net(name))
         env.update(env_extra)
         video = VIDEO if name in ("Host", "Watcher") else "Null"
@@ -234,11 +253,12 @@ def replay(name, path, env_extra=None, timeout=600):
     return fields(done)
 
 
-log(f"room {ROOM}, work {WORK}, match {MATCH_SECONDS} s, watch {WATCH}, late watch {LATE} s, "
+log(f"room {ROOM}, work {WORK}, relay {RELAY or 'no (file)'}, match {MATCH_SECONDS} s, watch {WATCH}, late watch {LATE} s, "
     f"net delay {DELAY or 0} ms + jitter {JITTER} ms on Friend's side")
 
 # 1. Record a real match.
-host = Orca("Host", {"ORCA_ROOM": ROOM, "ORCA_TEST_REPLAY_OUT": os.path.join(WORK, "rec-host")})
+host = Orca("Host", {"ORCA_ROOM": ROOM, "ORCA_TEST_REPLAY_OUT": os.path.join(WORK, "rec-host"),
+                     **({"ORCA_TEST_REPLAY_ROOM": "1"} if RELAY else {})})
 orcas.append(host)
 host.expect("orca caps", 30)
 host.send("caps join leave stats")
@@ -265,7 +285,8 @@ log(f"Host's stream: {host_file}")
 # 2. Live: a watcher of Host's stream, from Host's origin.
 watcher = None
 if WATCH:
-    watcher = Orca("Watcher", {"ORCA_TEST_REPLAY_IN": host_file, "ORCA_TEST_REPLAY_FOLLOW": "1",
+    watcher = Orca("Watcher", {"ORCA_TEST_REPLAY_IN": watch_url() if RELAY else host_file,
+                               "ORCA_TEST_REPLAY_FOLLOW": "1",
                                "ORCA_TEST_REPLAY_DELAY": "12"}, inputs=False)
     orcas.append(watcher)
     watcher.expect("orca caps", 30)
@@ -297,7 +318,8 @@ if SHOTS and VIDEO != "Null":
 late = None
 if WATCH and 0 < LATE < MATCH_SECONDS:
     time.sleep(LATE)
-    late = Orca("LateWatcher", {"ORCA_TEST_REPLAY_IN": host_file, "ORCA_TEST_REPLAY_FOLLOW": "1",
+    late = Orca("LateWatcher", {"ORCA_TEST_REPLAY_IN": watch_url() if RELAY else host_file,
+                                "ORCA_TEST_REPLAY_FOLLOW": "1",
                                 "ORCA_TEST_REPLAY_DELAY": "12"}, inputs=False)
     orcas.append(late)
     late.expect("orca caps", 30)

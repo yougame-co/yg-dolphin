@@ -59,15 +59,22 @@ public:
   // (frame: RAM checksum at its start) that they cover, at most every 6 frames or 100 ms. `live`
   // is this machine's own newest frame, for watchers. A history other than the one being written
   // begins another file. False once writing failed.
+  // With the room on (ORCA_TEST_REPLAY_ROOM), the room takes a stream only from a seated player
+  // in a match, so it starts once `room_ready` (a session runs): the header, then everything
+  // written so far in compact chunks, then each chunk as it is written.
   bool Pump(const Orca::Net::ReplayArchive& replay, int end, int live,
-            const std::map<int, u64>* checksums);
+            const std::map<int, u64>* checksums, bool room_ready = false);
 
 private:
   bool Emit(const std::vector<u8>& bytes);
+  void StartRoom(const Orca::Net::ReplayArchive& replay, const std::map<int, u64>* checksums,
+                 int live);
 
   std::string m_base;
   bool m_to_room = false;
   bool m_started = false;
+  bool m_room_started = false;
+  std::vector<u8> m_header;
   u32 m_segment = 0;
   std::unique_ptr<File::IOFile> m_file;
   int m_first = -1;

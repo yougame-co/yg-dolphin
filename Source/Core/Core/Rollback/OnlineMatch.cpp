@@ -3679,7 +3679,8 @@ std::optional<int> Boundary(Core::System& system,
     const int final_end = match.session ? std::min(match.running + 1, match.session->FinalFrame()) :
                                           match.running + 1;
     if (!match.replay_out->Pump(match.replay, final_end, match.running + 1,
-                                match.session ? &match.session->LocalChecksums() : nullptr))
+                                match.session ? &match.session->LocalChecksums() : nullptr,
+                                match.session != nullptr))
       match.replay_out.reset();
   }
 
