@@ -26,8 +26,8 @@
 #   dev    The path never ships in an Orca build (docs, tests, tools). layer-of-diff leaves dev
 #          paths out when it decides whether a change needs an Orca build, but still reports and
 #          gates on their layer.
-#   review Game logic that carries competitive policy (ranked rules, what a room rates): it ships
-#          as game logic, but a person reviews the diff (layer-of-diff lists it under "review").
+#   review Code that carries competitive policy (ranked rules, what a room rates): game logic or
+#          engine (Orca/Policy), a person reviews the diff (layer-of-diff lists it under "review").
 #
 # The most specific rule wins: the one with the most literal (non-wildcard) characters. Two
 # matching rules with the same count and different classes or flags are an error (test_layers.py
@@ -92,6 +92,10 @@ engine-sensitive  Source/Core/Core/Orca/LocalStore.*      # S2: kept seen keys a
 engine-sensitive  Source/Core/Core/Orca/Session/**
 engine            Source/Core/Core/Orca/Session/Events.*  # engine-to-game callbacks, no parsing
 
+# Competitive policy machines, engine-side (S2 commit 7, Luis's decision 11): the queue's ready/
+# timer/skip machine and the character order. Engine code a person reviews (their numbers become
+# ruleset data in S5).
+engine            Source/Core/Core/Orca/Policy/**         review
 # Future game modules (S2): Orca/Games/<game>/. Their build files pull code in: engine-sensitive.
 game-logic        Source/Core/Core/Orca/Games/**
 engine-sensitive  Source/Core/Core/Orca/Games/**/CMakeLists.txt

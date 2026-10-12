@@ -546,6 +546,11 @@ add_library(core
   Orca/PanicDiag.h
   Orca/Perf.cpp
   Orca/Perf.h
+  Orca/Policy/CharOrder.cpp
+  Orca/Policy/CharOrder.h
+  Orca/Policy/CssRules.h
+  Orca/Policy/Queue.cpp
+  Orca/Policy/Queue.h
   Orca/Profile.cpp
   Orca/Profile.h
   Orca/Sandbox.cpp

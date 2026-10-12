@@ -11,6 +11,7 @@
 
 #include "Common/CommonTypes.h"
 #include "Core/Orca/Games/Brawl/MatchBlock.h"
+#include "Core/Orca/Policy/CssRules.h"
 #include "Core/Orca/Games/Brawl/SetBlock.h"
 #include "Core/Rollback/InputGate.h"
 
@@ -93,17 +94,7 @@ Rollback::InputGate::Masks SessionMasks(const GuestMemory& memory);
 // A passes only when the hand is in the grid or on its own token and at least one frame's travel
 // (0.83 in Brawl, 1.0 in Project+) inside the grid's edges. That keeps A off every other button
 // (player type, name, costume, teams, rules, BACK). X and Y still change costumes.
-constexpr u32 CSS_HAND_NOTHING = 0;
-constexpr u32 CSS_HAND_BUTTON = 1;  // button id at +0xAC: 0x1D player type, 0x1C name, ...
-constexpr u32 CSS_HAND_GRID = 2;    // over the grid, token placed
-constexpr u32 CSS_HAND_OWN_TOKEN = 3;  // A picks it up
-constexpr u32 CSS_HAND_EXIT = 4;       // BACK (button 2) or Rules (4)
-constexpr u32 CSS_HAND_TAKING = 6;     // token moving into the hand
-constexpr u32 CSS_HAND_GRID_HOLDING = 7;  // over the grid, token in hand (A places it)
-constexpr u32 CSS_HAND_PLACING = 8;       // token moving down
-constexpr u32 CSS_BUTTON_PLAYER_TYPE = 0x1D;
-constexpr u32 CSS_BUTTON_NAME = 0x1C;
-constexpr u32 CSS_BUTTON_BACK = 0x02;  // with CSS_HAND_EXIT (Rules is 0x04)
+// The hand's target kinds and button ids: Policy/CssRules.h (the policy machines read them).
 // A passes only strictly between these y bounds. Brawl's bottom row reaches down to -4.07 and the
 // player's panel (a button) starts near -5.8, so -4.2 stays one frame's travel inside the grid
 // while still covering the whole bottom row, including RANDOM.
@@ -139,10 +130,7 @@ bool CssHandMayPressA(const CssHand& hand, float bottom = CSS_A_BOTTOM);
 // (FLAG_SOLO), port 1's A reaches the game when the hand is on BACK and A is a new press; a held A
 // sliding onto BACK never backs out. If the player is searching, Queue.h first stops the search and
 // passes A the next frame. Never in a queue room, never on Rules. Pure.
-constexpr bool CssHandOnBack(u32 target, u32 button)
-{
-  return target == CSS_HAND_EXIT && button == CSS_BUTTON_BACK;
-}
+// CssHandOnBack(target, button): Policy/CssRules.h.
 constexpr bool CssBackTakesA(const CssHand& hand, bool a_held)
 {
   return hand.valid && CssHandOnBack(hand.target, hand.button) && !a_held;
@@ -170,24 +158,10 @@ bool ReadCssNameList(const GuestMemory& memory, int port);
 // So while the locks hold, B reaches the game only on the first frame of a press and only while
 // that player's token is down. "New press" comes from the queue's raw-button latch in emulated
 // memory, never from host state. Queue.h and CharOrder.h may mask B further.
-struct CssToken
-{
-  bool valid = false;  // the player's area could be read
-  bool human = false;
-  int character = 0x28;  // under the hand while held, else the token's (0x28 = none)
-  bool in_hand = true;   // +0x1F8
-  bool flying = false;   // +0x1F9: moving up or down
-  // Placed on a character and still: B picks it up.
-  constexpr bool Down() const { return valid && human && character != 0x28 && !in_hand && !flying; }
-  bool operator==(const CssToken&) const = default;
-};
+// CssToken: Policy/CssRules.h.
 // Port `port`'s (0-3) token on the character select; invalid anywhere else.
 CssToken ReadCssToken(const GuestMemory& memory, int port);
-// Whether B may reach the game, given the token and whether B was held last frame. Pure.
-constexpr bool CssBUnpicks(const CssToken& token, bool b_held)
-{
-  return token.Down() && !b_held;
-}
+// CssBUnpicks(token, b_held): Policy/CssRules.h.
 // The same from memory, with B from the latch (ports 1 and 2 only; 3 and 4 never play a queue
 // match).
 bool CssBMayUnpick(const GuestMemory& memory, int port);
