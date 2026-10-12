@@ -3779,7 +3779,7 @@ TEST(OrcaUXOrbCombo, AStallEndsATalkPressWhenStartIsLetGoWithTheSentPadsUnchange
   // A stall of `ms`, ticking every 1 ms with the pad as it is now.
   const auto stall = [&](int ms, u16 buttons) {
     for (int i = 0; i < ms; ++i)
-      LocalPadWaiting(buttons, true, ++t);
+      LocalPadWaiting(buttons, ++t);
   };
 
   // A hold: the stall starts with Start down; the player lets go 3 s in. The up prints on that
@@ -3811,7 +3811,7 @@ TEST(OrcaUXOrbCombo, AStallEndsATalkPressWhenStartIsLetGoWithTheSentPadsUnchange
   frame(UP);
   frame(UP | START);
   for (int i = 0; i < 4000; ++i)
-    LocalPadWaiting(std::nullopt, true, ++t);
+    LocalPadWaiting(std::nullopt, ++t);
   frame(UP);
   frame(0);
   EXPECT_EQ(lines.Take(), "orca overlay down pad\norca overlay cancel pad\n");
@@ -3827,14 +3827,18 @@ TEST(OrcaUXOrbCombo, AStallEndsATalkPressWhenStartIsLetGoWithTheSentPadsUnchange
   EXPECT_EQ(frame(0), 0);
   EXPECT_EQ(lines.Take(), "orca overlay down pad\norca overlay up pad\n");
 
-  // The game lost focus during the stall: cancelled on the tick.
+  // The game lost focus during the stall: the stall reads cannot see it (the input gate moves with
+  // the frames' pad poll), so the first frame after it, unfocused, cancels the press.
   frame(UP);
   frame(UP | START);
   stall(20, UP | START);
-  LocalPadWaiting(UP | START, false, ++t);
+  EXPECT_EQ(lines.Take(), "orca overlay down pad\n");
+  t += 17;
+  EXPECT_EQ(FilterLocalPad(with(UP | START), true, false, t).button, 0) << "still masked";
+  EXPECT_EQ(lines.Take(), "orca overlay cancel pad\n");
   stall(20, 0);
-  frame(0);
-  EXPECT_EQ(lines.Take(), "orca overlay down pad\norca overlay cancel pad\n");
+  EXPECT_EQ(frame(0), 0);
+  EXPECT_EQ(lines.Take(), "") << "one cancel per down";
 
   // No press down: a stall prints nothing.
   stall(50, 0);

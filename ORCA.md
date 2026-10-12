@@ -2104,9 +2104,11 @@ overlay), longer is a hold (it talks). A click on the button stays `orca orb`. T
 a frame, and while a frame waits on a friend (a stall, up to the 10 s silence limit) no frame reads
 it, so each stall tick reads it again for the press alone (`UX::LocalPadWaiting`): Start let go
 prints `up` within a tick. That read is not recorded, sent or timed, and the combo's mask advances
-on frames only, so the bytes every machine plays are unchanged. A release found more than 100 ms
-after the last read that saw Start down, once the press is past 250 ms, prints `cancel`, not `up`:
-Orca cannot say when the player let go, so a tap could read as a hold or a talk run on. On macOS and
+on frames only, so the bytes every machine plays are unchanged. Focus lost during a stall is handled
+when frames resume (the input gate moves with the frames' pad poll), and the page's own blur
+already ends its side. A release found more than 100 ms after the last read that saw Start down,
+once the press is past 250 ms, prints `cancel`, not `up`: Orca cannot say when the player let go, so
+a tap could read as a hold or a talk run on. On macOS and
 Linux Orca's window never has the keyboard, so the page sees Shift+Tab itself. The masking is the
 same as without the cap, so the compatibility key does not change. While the player talks the page
 sends `talk listen <name> <text>` (to whom, then the live words, at most 4 a second), `talk send`,

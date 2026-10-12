@@ -51,11 +51,12 @@ GCPadStatus FilterLocalPad(GCPadStatus pad, bool first_run, bool live,
 // While the session holds a frame on a friend's input (each stall tick) no frame reads the pad, so
 // a talk press would not end until the game moved again, up to the stall limit later. `buttons` is
 // the local pad as a frame would read it now (nullopt: no fresh read, as for a test script's pad);
-// Start let go ends the press now, and an unfocused pad cancels it. Only the press's lines change:
-// the combo and its mask advance on frames alone, so what the session records and sends is the
-// same bytes as without this. Does nothing unless a talk press is down. CPU thread only.
-void LocalPadWaiting(std::optional<u16> buttons, bool live,
-                     OverlayKey::Ms now = OverlayKey::NowMs());
+// Start let go ends the press now. Focus is not checked here: the input gate moves only with the
+// frames' pad poll, so focus lost during a stall is handled when frames resume (FilterLocalPad
+// cancels), and the page's own blur already ends its side. Only the press's lines change: the
+// combo and its mask advance on frames alone, so what the session records and sends is the same
+// bytes as without this. Does nothing unless a talk press is down. CPU thread only.
+void LocalPadWaiting(std::optional<u16> buttons, OverlayKey::Ms now = OverlayKey::NowMs());
 // The local pad is no longer read (the game paused or is stopping): a press still down is
 // cancelled. Any thread.
 void LocalPadStopped();

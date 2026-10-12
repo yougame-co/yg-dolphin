@@ -650,15 +650,16 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
       // A test script's pad changes only with frames.
       if (Harness::InputOverride(local_seat))
         return;
-      const bool live = ControlReference::GetInputGate();
+      // No focus check: the input gate is this thread's and moves only at the SI poll, so it is
+      // the last frame's here. Focus lost mid-stall is handled when frames resume.
       if (const auto from_app = Orca::Events::LocalPad(false))
       {
-        Orca::UX::LocalPadWaiting(from_app->button, live);
+        Orca::UX::LocalPadWaiting(from_app->button);
         return;
       }
       g_controller_interface.SetCurrentInputChannel(ciface::InputChannel::SerialInterface);
       g_controller_interface.UpdateInput();
-      Orca::UX::LocalPadWaiting(Pad::GetStatus(0).button, live);
+      Orca::UX::LocalPadWaiting(Pad::GetStatus(0).button);
     };
     const auto on_frame = [&guard](int frame, bool resimulating,
                                    const std::vector<Orca::Events::PortInfo>& ports, bool alone) {
