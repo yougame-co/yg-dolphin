@@ -570,6 +570,15 @@ struct Teardown
   ~Teardown() { StopStream(false); }
 } s_teardown;
 
+// LastLocalDevice, packed so one atomic holds it: the source in bit 16, the index below.
+constexpr int NO_DEVICE = -1;
+std::atomic<int> s_local_device{NO_DEVICE};
+
+int PackDevice(PadSource source, int index)
+{
+  return (source == PadSource::Gamepad ? 1 << 16 : 0) | (index & 0xffff);
+}
+
 // The pad from the newest snapshot; `for_frame` also records input age.
 std::optional<LocalChoice> Choose(bool for_frame)
 {
@@ -672,12 +681,25 @@ std::optional<GCPadStatus> LocalPad(bool for_frame)
 {
   // Time the read before the focus check: focus changes what the game gets, not input age.
   const auto choice = Choose(for_frame);
+  if (for_frame)
+  {
+    s_local_device.store(choice ? PackDevice(choice->source, choice->index) : NO_DEVICE,
+                         std::memory_order_relaxed);
+  }
   if (!choice)
     return std::nullopt;
   // Same focus rule as the keyboard: no input while the window is unfocused.
   if (!ControlReference::GetInputGate())
     return NeutralPad();
   return choice->pad;
+}
+
+std::optional<LocalDevice> LastLocalDevice()
+{
+  const int packed = s_local_device.load(std::memory_order_relaxed);
+  if (packed == NO_DEVICE)
+    return std::nullopt;
+  return LocalDevice{(packed >> 16) ? PadSource::Gamepad : PadSource::Adapter, packed & 0xffff};
 }
 
 ControllerTiming GetControllerTiming()

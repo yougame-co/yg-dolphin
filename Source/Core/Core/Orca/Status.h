@@ -62,6 +62,8 @@ void Report(std::string_view code, std::string_view sentence);
 //   results  "orca result" lines, only for a profile with a verified result reader
 //   gfx      app may send "gfx <key> <value>": a live change to one of the player's drawing-only
 //            graphics settings (Orca/Perf.h ParseGfx), applied at the next frame boundary
+//   rumble   Orca prints "orca rumble <port> <0|1> <adapter|pad|none> <index>": the game's motor
+//            for the local player's controller (Orca/UX/Rumble.h), which the page plays
 inline constexpr const char* CAPS =
     "join leave stats pause delay perf direct host chat yougame gfx";
 // "music": offered where Orca can tell the game's music apart (Orca/Music.h Supported).
@@ -83,11 +85,13 @@ inline constexpr const char* QUEUE2_CAP = "queue2";
 inline constexpr const char* PICK_CAPS = "pick-casual pick-ranked";
 // "talk": hold-to-talk. Orca prints "orca overlay down|up|cancel keys|pad" for the overlay key's
 // press and release instead of the "orca orb" toggle (UX/OverlayKey.h), and the app may send
-// "talk ..." lines, one row in the YouGame button's pill (UX/YgOrb.h). Offered last, so an app that
-// reads fewer words drops only this.
+// "talk ..." lines, one row in the YouGame button's pill (UX/YgOrb.h). Offered next to last, so an
+// app that reads fewer words drops only "rumble" and this.
 inline constexpr const char* TALK_CAP = "talk";
+// "rumble": every profile, last, so an app that reads fewer caps words drops it before any other.
+inline constexpr const char* RUMBLE_CAP = "rumble";
 // This build's caps for the running profile: CAPS, plus "music", "results", "locks", "queue2" and
-// the pick caps where supported, then "talk".
+// the pick caps where supported, then "talk" and "rumble".
 std::string OfferedCaps();
 void PrintCaps();
 void SetAppCaps(std::string_view list);

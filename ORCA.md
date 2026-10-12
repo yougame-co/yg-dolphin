@@ -1580,7 +1580,7 @@ contest"; from it on, "This set counts as a loss" and "They forfeit in". Tests:
 
 | stdout | |
 |---|---|
-| `orca caps ... host results locks queue2 pick-casual pick-ranked` | `results` where the result reader is verified; `locks`, `queue2` and the pick caps where the profile has a ruleset (Brawl rev 2 and Project+). The app answers a pick cap only for a queue it can search now. With `music` that is 16 caps, the most an app before the Music switch's release passes (that release takes 24); more needs it as the minimum app (`OrcaOnlineMenuLobby.EveryCapFitsTheAppsCapsLine`). `talk` comes after them, so such an app drops only it. |
+| `orca caps ... host results locks queue2 pick-casual pick-ranked` | `results` where the result reader is verified; `locks`, `queue2` and the pick caps where the profile has a ruleset (Brawl rev 2 and Project+). The app answers a pick cap only for a queue it can search now. With `music` that is 16 caps, the most an app before the Music switch's release passes (that release takes 24); more needs it as the minimum app (`OrcaOnlineMenuLobby.EveryCapFitsTheAppsCapsLine`). `talk` and then `rumble` come after them, so such an app drops only those. |
 | `orca result <json>` | The room's verdict, when it arrives. At most 300 bytes. |
 | `orca state friend-left match-over` / `host-left match-over` | A ranked room closed after its set. |
 
@@ -2133,6 +2133,7 @@ ring every 1.2 s.
 | `orca controls <hex>` | The player's own controls: changed in the game, or loaded from Orca's file at boot. The page keeps them. |
 | `orca active <interval_s> <active_s> <inputs> <mode> <pads>` | How much the player played: every 60 s while the game runs, and once more when it stops ([Activity lines](#activity-lines)). |
 | `orca perf <json>` | This machine's speed: `info` once after `ready`, `win` every 15 s of running time, `auto` when the run switched its graphics to Performance ([This machine's speed](#this-machines-speed)). |
+| `orca rumble <port> <0\|1> <adapter\|pad\|none> <index>` | The game's motor for the local player's controller, on change and every 30 frames while on, cap `rumble` ([Rumble](#rumble)). |
 | `exit <code>` | Always last: 0 normal, 1 a reported error, 2 bad arguments. |
 
 ### Activity lines
@@ -2173,6 +2174,30 @@ own port 1, a harness script), read at the boundary of each frame that runs for 
 real time and only while the game has the input. Never a peer's input, a rollback re-run, a
 joiner's rebuild or catch-up, a fresh start's tail or replayed pads. Observation only: nothing it
 reads or keeps reaches emulation, the replay, checksums or the compatibility key.
+
+### Rumble
+
+Orca drives no motor: the app's controller helper owns the devices. With cap `rumble`, Orca tells
+the page when the game turns the local player's motor on or off, and the page sends the helper its
+`rumble` commands (`Orca/UX/Rumble.h`).
+
+- **What it reads:** the local port's SI channel output, the command each poll sends, where
+  PADControlMotor leaves `0x0040_03_0m` (m = 1 is on). Read at frame boundaries that are not re-runs
+  or a joiner's catch-up. The register is in every snapshot, so a rollback's correction shows at the
+  next live boundary and a re-run never buzzes the pad again. Nothing is written to emulated memory
+  and no input changes: no `ux` or `kCompat` bump. Dolphin's own motor output (`Pad::Rumble`) is off
+  in a session: it would follow the in-game port, not this machine's, and fire on every re-run.
+- **Line:** `orca rumble <port 1-4> <0|1> <adapter|pad|none> <index>`. The device is the one Orca
+  read the local pad from at the last first-run frame: the adapter's physical port (0-3) or the
+  standard pad's index in the app's snapshot (as the app arranged it). `none` (Dolphin's own input, a
+  test script) is never on.
+- **Timing:** on at once, off after 3 live frames off, so the game's on/off patterns read as one
+  buzz. The off goes out as soon as it is due; on lines are at least 6 frames apart, so at most 10
+  on and 10 off lines a second. While the game holds the motor on, the same `1` line is said again
+  every 30 live frames: the page holds the motor about a second after any `1`, so a long rumble
+  lasts and a frozen Orca stops buzzing soon. Off at once when the game has stalled 100 ms on a
+  friend and at the exit; off after the same 3 frames when Orca loses the focus.
+- The player's switch is the game's own: each name tag's Rumble in Options > Controls.
 
 ### Focus
 
