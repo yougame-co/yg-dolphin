@@ -634,7 +634,7 @@ void State::Warm(const Core::CPUThreadGuard& guard)
     m_compiling = true;
     const auto compile_start = std::chrono::steady_clock::now();
     PowerPC::RoundingModeUpdated(ppc_state);
-    jit->CompileFromHook(b.effective);
+    const bool fit = jit->CompileFromHook(b.effective);
     Common::FPU::LoadDefaultSIMDState();
     m_compiling = false;
     if (m_log_frames)
@@ -648,6 +648,19 @@ void State::Warm(const Core::CPUThreadGuard& guard)
         NOTICE_LOG_FMT(ROLLBACK, "JIT warm-up: frame {}: {:08x} took {:.2f} ms ({} instructions)",
                        m_match_frame, b.effective, compile_ms, slow ? slow->originalSize : 0);
       }
+    }
+    if (!fit)
+    {
+      // Bigger than the free code space (no real game's block comes close): the JIT dropped it.
+      // Stop warming this match rather than try more of the list.
+      WARN_LOG_FMT(ROLLBACK, "JIT warm-up: {:08x} did not fit in the free code space; stopping",
+                   b.effective);
+      status = Status::GivenUp;
+      ++m_discarded;
+      m_queue.clear();
+      m_waiting.clear();
+      m_cursor = 0;
+      break;
     }
     if (m_test_slow_us > 0)
     {

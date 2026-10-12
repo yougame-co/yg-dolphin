@@ -186,6 +186,9 @@ public:
   void InvalidateICacheLine(u32 address);
   void ErasePhysicalRange(u32 address, u32 length);
   void EraseSingleBlock(const JitBlock& block);
+  // Orca: forgets a block AllocateBlock made whose code generation failed (never finalized: it is
+  // in no lookup table, link list or range map), so no lookup can find its unfinished code.
+  void DiscardUnfinalizedBlock(const JitBlock& block);
 
   u32* GetBlockBitSet() const;
 

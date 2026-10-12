@@ -99,3 +99,6 @@ target_sources(PowerPCTest PRIVATE
   PowerPC/TestValues.h
   StubJit.h
 )
+if(_M_X86_64 OR _M_ARM_64)
+  target_sources(PowerPCTest PRIVATE PowerPC/JitHookCompileTest.cpp)
+endif()
