@@ -2109,7 +2109,7 @@ never pauses Orca: the page sends `blur`, the player's pad goes neutral, and the
 | `orca controls <hex>` | The player's own controls: changed in the game, or loaded from Orca's file at boot. The page keeps them. |
 | `orca active <interval_s> <active_s> <inputs> <mode> <pads>` | How much the player played: every 60 s while the game runs, and once more when it stops ([Activity lines](#activity-lines)). |
 | `orca perf <json>` | This machine's speed: `info` once after `ready`, `win` every 15 s of running time, `auto` when the run switched its graphics to Performance ([This machine's speed](#this-machines-speed)). |
-| `orca rumble <port> <0\|1> <adapter\|pad\|none> <index>` | The game's motor for the local player's controller, on change only, cap `rumble` ([Rumble](#rumble)). |
+| `orca rumble <port> <0\|1> <adapter\|pad\|none> <index>` | The game's motor for the local player's controller, on change and every 30 frames while on, cap `rumble` ([Rumble](#rumble)). |
 | `exit <code>` | Always last: 0 normal, 1 a reported error, 2 bad arguments. |
 
 ### Activity lines
@@ -2168,9 +2168,11 @@ the page when the game turns the local player's motor on or off, and the page se
   standard pad's index in the app's snapshot (as the app arranged it). `none` (Dolphin's own input, a
   test script) is never on.
 - **Timing:** on at once, off after 3 live frames off, so the game's on/off patterns read as one
-  buzz. Lines are at least 6 frames apart (10 a second at most). Off at once when the game has
-  stalled 100 ms on a friend and at the exit; off after the same 3 frames when Orca loses the focus.
-  On change only: the page holds the motor between lines, with its own time limit.
+  buzz. The off goes out as soon as it is due; on lines are at least 6 frames apart, so at most 10
+  on and 10 off lines a second. While the game holds the motor on, the same `1` line is said again
+  every 30 live frames: the page holds the motor about a second after any `1`, so a long rumble
+  lasts and a frozen Orca stops buzzing soon. Off at once when the game has stalled 100 ms on a
+  friend and at the exit; off after the same 3 frames when Orca loses the focus.
 - The player's switch is the game's own: each name tag's Rumble in Options > Controls.
 
 ### Focus

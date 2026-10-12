@@ -46,25 +46,25 @@ bool MotorOn(u32 channel_out)
 
 std::optional<State> Tracker::Boundary(bool motor, bool live, int port, Target target)
 {
-  if (m_since_line < MIN_GAP_FRAMES)
-    ++m_since_line;
-  State want = m_sent;
+  if (m_since_on < RESEND_FRAMES)
+    ++m_since_on;
   if (motor && live && target.device != Device::None)
   {
     m_off_run = 0;
-    want = {true, port, target};
+    const State want{true, port, target};
+    // A new buzz, another port or device, or a renewal of the same: never closer than the gap.
+    if (m_since_on < MIN_GAP_FRAMES || (want == m_sent && m_since_on < RESEND_FRAMES))
+      return std::nullopt;
+    m_sent = want;
+    m_since_on = 0;
+    return m_sent;
   }
-  else if (m_sent.on && ++m_off_run >= OFF_FRAMES)
-  {
-    want.on = false;
-  }
-  // Off is off, whatever port or device it was on.
-  if (want == m_sent || (!want.on && !m_sent.on) || m_since_line < MIN_GAP_FRAMES)
+  // Off once it has been off OFF_FRAMES boundaries in a row, whatever the gap: an off only follows
+  // an on line, so offs are no more frequent than ons. Off is off, whatever port or device.
+  if (!m_sent.on || ++m_off_run < OFF_FRAMES)
     return std::nullopt;
-  m_sent = want;
-  m_since_line = 0;
-  if (!want.on)
-    m_off_run = 0;
+  m_sent.on = false;
+  m_off_run = 0;
   return m_sent;
 }
 
@@ -74,7 +74,6 @@ std::optional<State> Tracker::Halt()
   if (!m_sent.on)
     return std::nullopt;
   m_sent.on = false;
-  m_since_line = 0;
   return m_sent;
 }
 

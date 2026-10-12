@@ -18,6 +18,7 @@ using Orca::UX::Rumble::FormatLine;
 using Orca::UX::Rumble::MIN_GAP_FRAMES;
 using Orca::UX::Rumble::MotorOn;
 using Orca::UX::Rumble::OFF_FRAMES;
+using Orca::UX::Rumble::RESEND_FRAMES;
 using Orca::UX::Rumble::State;
 using Orca::UX::Rumble::Target;
 using Orca::UX::Rumble::Tracker;
@@ -82,50 +83,108 @@ TEST(OrcaRumble, OnAtOnceOffAfterThreeFramesOff)
   EXPECT_FALSE(t.Sent().on);
 }
 
-TEST(OrcaRumble, ASteadyMotorSaysOnOnce)
+TEST(OrcaRumble, ASteadyMotorIsSaidAgainEveryHalfSecond)
 {
+  // The page holds the motor only a short while after a line: a long rumble is renewed, the same
+  // line every RESEND_FRAMES and nothing between.
   Tracker t;
   const auto lines = Feed(t, std::vector<bool>(600, true));
-  ASSERT_EQ(lines.size(), 1u);
-  EXPECT_EQ(lines[0].first, 0);
+  ASSERT_EQ(lines.size(), 600u / RESEND_FRAMES);
+  for (std::size_t i = 0; i < lines.size(); ++i)
+  {
+    EXPECT_EQ(lines[i].first, static_cast<int>(i) * RESEND_FRAMES);
+    EXPECT_EQ(lines[i].second, "orca rumble 1 1 adapter 0");
+  }
+  static_assert(RESEND_FRAMES <= 30, "the page's hold is about a second");
 }
 
 TEST(OrcaRumble, TheGamesOnOffPatternsAreOneBuzz)
 {
-  // On one frame, off two: never three frames off in a row, so it stays on.
+  // On one frame, off two: never three frames off in a row, so it stays on, renewed on an on
+  // frame once RESEND_FRAMES have passed.
   Tracker t;
   const auto lines = Feed(t, Repeat({true, false, false}, 100));
-  ASSERT_EQ(lines.size(), 1u);
-  EXPECT_EQ(lines[0].second, "orca rumble 1 1 adapter 0");
+  ASSERT_EQ(lines.size(), 10u);
+  for (std::size_t i = 0; i < lines.size(); ++i)
+  {
+    EXPECT_EQ(lines[i].second, "orca rumble 1 1 adapter 0");
+    if (i > 0)
+      EXPECT_EQ(lines[i].first - lines[i - 1].first, RESEND_FRAMES);
+  }
 }
 
-TEST(OrcaRumble, AtMostTenLinesASecond)
+TEST(OrcaRumble, NoRenewalWhileTheMotorIsOff)
 {
-  // A pattern that would flip every few frames: lines are MIN_GAP_FRAMES apart at least.
+  // Renewals come only while the game holds the motor on: not in the off frames before the off
+  // line, and not while the window has no focus.
+  Tracker t;
+  Feed(t, std::vector<bool>(RESEND_FRAMES - 1, true));
+  const auto off = Feed(t, std::vector<bool>(OFF_FRAMES + 20, false));
+  ASSERT_EQ(off.size(), 1u);
+  EXPECT_EQ(off[0], std::make_pair(OFF_FRAMES - 1, std::string("orca rumble 1 0 adapter 0")));
+  Tracker unfocused;
+  Feed(unfocused, std::vector<bool>(RESEND_FRAMES - 1, true));
+  const auto lines = Feed(unfocused, std::vector<bool>(60, true), ADAPTER0, false);
+  ASSERT_EQ(lines.size(), 1u);
+  EXPECT_EQ(lines[0].second, "orca rumble 1 0 adapter 0");
+}
+
+TEST(OrcaRumble, AtMostTenOnLinesAndTwentyLinesASecond)
+{
+  // Patterns that would flip every few frames: on lines are MIN_GAP_FRAMES apart at least, an off
+  // only follows an on, so any second of play has at most 20 lines.
   for (const std::vector<bool>& pattern :
        {std::vector<bool>{true, false, false, false},
         std::vector<bool>{true, true, false, false, false},
+        std::vector<bool>{true, false, false, false, false, false},
         std::vector<bool>{true, false, false, false, false, false, false, false}})
   {
     Tracker t;
     const auto lines = Feed(t, Repeat(pattern, 120));
     ASSERT_FALSE(lines.empty());
-    for (std::size_t i = 1; i < lines.size(); ++i)
-      EXPECT_GE(lines[i].first - lines[i - 1].first, MIN_GAP_FRAMES);
-    // Never two lines in a row that say the same.
-    for (std::size_t i = 1; i < lines.size(); ++i)
-      EXPECT_NE(lines[i].second, lines[i - 1].second);
+    int last_on = -MIN_GAP_FRAMES;
+    for (std::size_t i = 0; i < lines.size(); ++i)
+    {
+      // Never two lines in a row that say the same (no renewal in a pattern this short).
+      if (i > 0)
+        EXPECT_NE(lines[i].second, lines[i - 1].second);
+      if (lines[i].second == "orca rumble 1 1 adapter 0")
+      {
+        EXPECT_GE(lines[i].first - last_on, MIN_GAP_FRAMES);
+        last_on = lines[i].first;
+      }
+      std::size_t in_second = 0;
+      for (const auto& line : lines)
+        in_second += line.first >= lines[i].first && line.first < lines[i].first + 60;
+      EXPECT_LE(in_second, 20u);
+    }
   }
-  static_assert(60 / MIN_GAP_FRAMES <= 10);
+  static_assert(2 * (60 / MIN_GAP_FRAMES) <= 20);
 }
 
-TEST(OrcaRumble, AnOffWaitsOutTheGapButIsNeverLost)
+TEST(OrcaRumble, AnOffNeverWaitsForTheGap)
 {
+  // A one-frame pulse (a light hit, a misprediction's phantom): on at 0, off on the third frame
+  // off, not held to MIN_GAP_FRAMES.
   Tracker t;
-  // On at 0, off from 1: the off is due at frame 3 but the gap holds it to frame 6.
   const auto lines = Feed(t, {true, false, false, false, false, false, false, false});
   ASSERT_EQ(lines.size(), 2u);
-  EXPECT_EQ(lines[1], std::make_pair(MIN_GAP_FRAMES, std::string("orca rumble 1 0 adapter 0")));
+  EXPECT_EQ(lines[1], std::make_pair(OFF_FRAMES, std::string("orca rumble 1 0 adapter 0")));
+  static_assert(OFF_FRAMES < MIN_GAP_FRAMES);
+}
+
+TEST(OrcaRumble, TheNextHitAfterALongBuzzIsOnAtOnce)
+{
+  // The gap counts from the last on line: a combo's next hit after a long buzz is not held back.
+  Tracker t;
+  std::vector<bool> motor(20, true);
+  motor.insert(motor.end(), OFF_FRAMES, false);
+  motor.push_back(true);
+  const auto lines = Feed(t, motor);
+  ASSERT_EQ(lines.size(), 3u);
+  EXPECT_EQ(lines[1],
+            std::make_pair(20 + OFF_FRAMES - 1, std::string("orca rumble 1 0 adapter 0")));
+  EXPECT_EQ(lines[2], std::make_pair(20 + OFF_FRAMES, std::string("orca rumble 1 1 adapter 0")));
 }
 
 TEST(OrcaRumble, NoRumbleWithoutTheFocus)

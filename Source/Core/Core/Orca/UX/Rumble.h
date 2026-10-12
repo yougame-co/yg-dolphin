@@ -30,9 +30,11 @@ class CPUThreadGuard;
 //   pad      the standard pad's index in the app's snapshot, as the app arranged it for Orca
 //   none     Orca reads no app device (Dolphin's own input, a test script): never on
 // The motor goes on at once and off after OFF_FRAMES live boundaries off, so the game's on/off
-// patterns read as one buzz. Two lines are at least MIN_GAP_FRAMES live boundaries apart (at most
-// 10 a second), except a halt (a stall, the exit), which says off at once. The page holds the motor
-// on between lines, with its own time limit.
+// patterns read as one buzz. An off goes out as soon as it is due. On lines (a new buzz, another
+// port or device, a renewal) are at least MIN_GAP_FRAMES live boundaries apart, so at most 10 on
+// and 10 off lines a second. While the game holds the motor on, the on line is said again every
+// RESEND_FRAMES: the page holds the motor between lines for a short time limit of its own, so a
+// long rumble lasts and a frozen Orca stops it soon. A halt (a stall, the exit) says off at once.
 namespace Orca::UX::Rumble
 {
 enum class Device : u8
@@ -59,6 +61,7 @@ struct State
 
 constexpr int OFF_FRAMES = 3;
 constexpr int MIN_GAP_FRAMES = 6;
+constexpr int RESEND_FRAMES = 30;
 // A stall this long stops the motor (Halt) until the game runs again.
 constexpr int STALL_HALT_MS = 100;
 
@@ -79,9 +82,9 @@ public:
 
 private:
   State m_sent;
-  // Live boundaries in a row with the motor off, and since the last line.
+  // Live boundaries in a row with the motor off, and since the last on line (up to RESEND_FRAMES).
   int m_off_run = 0;
-  int m_since_line = MIN_GAP_FRAMES;
+  int m_since_on = RESEND_FRAMES;
 };
 
 std::string FormatLine(const State& state);
