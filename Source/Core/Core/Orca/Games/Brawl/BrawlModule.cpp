@@ -71,6 +71,19 @@ public:
   }
   std::optional<std::string> TakeMismatch() override { return Rules::TakeMismatch(); }
 };
+
+// The session's menu reads over OnlineMenu.h, as it called them.
+class BrawlMenuReads final : public Orca::Engine::MenuReads
+{
+public:
+  bool DropInHeld() override { return UX::DropInHeld(); }
+  bool OnTheMenus() override { return UX::OnTheMenus(); }
+  std::optional<OnlinePick> CssPick() override { return UX::CssPick(); }
+  bool PickStands(OnlinePick pick) override { return UX::PickStands(pick); }
+  std::optional<OnlinePick> TakeLobbyPick() override { return UX::TakeLobbyPick(); }
+  bool FreshSupported() override { return FreshMove::Supported(); }
+  Orca::Engine::FreshSeen LastSeen() override { return FreshMove::LastSeen(); }
+};
 }  // namespace
 
 BrawlModule& Builtin()
@@ -214,6 +227,12 @@ Orca::Engine::HeaderHost& BrawlModule::Header()
 {
   static BrawlHeader s_header;
   return s_header;
+}
+
+Orca::Engine::MenuReads& BrawlModule::Read()
+{
+  static BrawlMenuReads s_reads;
+  return s_reads;
 }
 
 Orca::Engine::Ruleset BrawlModule::ProfileRuleset()

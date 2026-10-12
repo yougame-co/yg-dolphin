@@ -26,6 +26,7 @@ public:
              const std::array<std::optional<GCPadStatus>, Rollback::InputGate::PORTS>& raw) override;
   Orca::Engine::Verdicts& Results() override;
   Orca::Engine::HeaderHost& Header() override;
+  Orca::Engine::MenuReads& Read() override;
   Orca::Engine::Ruleset ProfileRuleset() override;
 };
 

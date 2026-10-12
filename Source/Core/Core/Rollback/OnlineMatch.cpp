@@ -702,7 +702,7 @@ void StepTail(Match& match, int frame)
   if (!InTail(match))
     return;
   Match::Fresh& fresh = *match.fresh;
-  fresh.css_streak = Orca::UX::FreshMove::LastSeen().css ? fresh.css_streak + 1 : 0;
+  fresh.css_streak = Orca::UX::Game().Read().LastSeen().css ? fresh.css_streak + 1 : 0;
   const int length = frame - match.origin_frame + 1;
   if (fresh.css_streak < FRESH_CSS_SETTLE && length < FRESH_TAIL_LIMIT)
     return;
@@ -1374,7 +1374,7 @@ void HostEvents(Core::System& system, Match& match)
 
   // A host in a single-player mode (Classic, Training, Events...) holds waiting friends until its
   // game is back in the menus (UX/OnlineMenu.h SequenceHoldsDropIn).
-  const bool hold = Orca::UX::DropInHeld() && !match.waiting.empty();
+  const bool hold = Orca::UX::Game().Read().DropInHeld() && !match.waiting.empty();
   if (hold != match.holding)
   {
     match.holding = hold;
@@ -1405,7 +1405,7 @@ void HostEvents(Core::System& system, Match& match)
   start.in_queue_room = InQueueRoom();
   start.waiting = !match.waiting.empty();
   start.in_place = match.friends_in_place;
-  start.single_player = Orca::UX::DropInHeld();
+  start.single_player = Orca::UX::Game().Read().DropInHeld();
   start.history_frames = match.running + 1 - match.replay.first_frame;
   start.fresh_after = FreshFriendsAfter();
   switch (DecideFreshStart(start))
@@ -1426,7 +1426,7 @@ void HostEvents(Core::System& system, Match& match)
     }
     else
     {
-      const std::optional<Orca::UX::OnlinePick> pick = Orca::UX::CssPick();
+      const std::optional<Orca::UX::OnlinePick> pick = Orca::UX::Game().Read().CssPick();
       match.fresh_pending = FriendsFreshExit(
           pick ? std::optional(*pick == Orca::UX::OnlinePick::Ranked) : std::nullopt);
       NOTICE_LOG_FMT(ROLLBACK, "Drop-in: a friend arrives after {} frames of this game's own: a "
@@ -1853,7 +1853,7 @@ bool CaptureOrigin(Core::System& system, Match& match, int frame)
   match.replay.first_frame = frame;
   // The history's seed is its first frame's typed event, applied by that frame's hook (FreshMove),
   // after this capture: the origin stays every Orca's same canonical one.
-  if (Orca::UX::FreshMove::Supported())
+  if (Orca::UX::Game().Read().FreshSupported())
   {
     match.replay.frames.resize(1);
     match.replay.frames[0].seed = NewHistorySeed();
@@ -2590,7 +2590,7 @@ bool MaybeRestoreQueueImage(Core::System& system, Match& match)
 // (never mid re-run). Local: the session ends here, so only the room's leave reaches the friends.
 void TakeLobbyPickNow(Match& match)
 {
-  auto pick = Orca::UX::TakeLobbyPick();
+  auto pick = Orca::UX::Game().Read().TakeLobbyPick();
   // A fresh pick replaces one that waited.
   if (pick)
     match.lobby_pick.reset();
@@ -2599,7 +2599,7 @@ void TakeLobbyPickNow(Match& match)
     pick = std::exchange(match.lobby_pick, std::nullopt);
     // A pick that waited is stale once the game has moved on from it (main menu, stage select,
     // fight): leaving the friends then would be for nothing.
-    if (!Orca::UX::PickStands(*pick))
+    if (!Orca::UX::Game().Read().PickStands(*pick))
     {
       NOTICE_LOG_FMT(ROLLBACK, "Online menu: the {} pick that waited for a boundary is stale by "
                                "frame {} (the game went on from it): dropped",
@@ -2693,7 +2693,7 @@ void ComeHome(Match& match)
   in.room_up = !Orca::Online::RoomEnded();
   in.solo_idle = SoloIdle(match);
   in.drop_in_pending = Orca::Online::DropInPending();
-  in.on_menus = Orca::UX::OnTheMenus();
+  in.on_menus = Orca::UX::Game().Read().OnTheMenus();
   in.queue_image = match.queue_image != nullptr;
   in.lingering = match.linger_until.has_value();
   if (!MayComeHome(in))
@@ -2707,7 +2707,7 @@ void ComeHome(Match& match)
   // Home on the character select a Casual or Ranked pick opened (its host left for the queue at
   // that pick): announce the same pick, so Start readies it on the queue's own character select.
   // Alone now, the app answers it as any alone pick.
-  const std::optional<Orca::UX::OnlinePick> pick = Orca::UX::CssPick();
+  const std::optional<Orca::UX::OnlinePick> pick = Orca::UX::Game().Read().CssPick();
   if (AnnounceHomePick(pick.has_value(), Orca::Status::Cap("host"),
                        Orca::UX::QueueApp::Active() ||
                            Orca::UX::Search::Current() != Orca::UX::Search::State::None))
@@ -2728,7 +2728,7 @@ void ArmKeptPick(Match& match)
   if (!match.kept_pick || (match.session && match.session->Resimulating()))
     return;
   KeptPickInputs in;
-  in.stands = Orca::UX::PickStands(*match.kept_pick);
+  in.stands = Orca::UX::Game().Read().PickStands(*match.kept_pick);
   in.alone = match.local_seat == 0 && !match.joining && match.seated.empty() &&
              AloneAt(match.running + 1, SoloIdle(match), Orca::Online::DropInPending(),
                      match.keyframe ? std::optional(match.keyframe->frame) : std::nullopt);
@@ -2771,7 +2771,7 @@ void RearmFriendsPick(Match& match)
   in.alone = match.local_seat == 0 && !match.joining && match.seated.empty() &&
              AloneAt(match.running + 1, SoloIdle(match), Orca::Online::DropInPending(),
                      match.keyframe ? std::optional(match.keyframe->frame) : std::nullopt);
-  in.on_pick_select = Orca::UX::CssPick() == match.friends_pick;
+  in.on_pick_select = Orca::UX::Game().Read().CssPick() == match.friends_pick;
   // Only a queue the page can search now: unprompted, a refusal would only confuse.
   in.host_cap = Orca::Status::Cap("host") && Orca::UX::PickSearchable(*match.friends_pick);
   in.queue_or_search = QueueOrSearch();
@@ -3490,7 +3490,7 @@ std::optional<int> Boundary(Core::System& system,
     system.GetJitInterface().ClearSafe();
     // A game whose main menu this can't read has its origin at its first boundary instead, and no
     // fresh starts.
-    if (!Orca::UX::FreshMove::Supported())
+    if (!Orca::UX::Game().Read().FreshSupported())
     {
       NOTICE_LOG_FMT(ROLLBACK, "Drop-in: this game's main menu isn't read: its origin is its first "
                                "frame, with no fresh starts");
@@ -3613,7 +3613,7 @@ std::optional<int> Boundary(Core::System& system,
     if (CanonicalBoot(match))
     {
       match.menu_built_streak =
-          Orca::UX::FreshMove::LastSeen().menu_built ? match.menu_built_streak + 1 : 0;
+          Orca::UX::Game().Read().LastSeen().menu_built ? match.menu_built_streak + 1 : 0;
     }
   }
 

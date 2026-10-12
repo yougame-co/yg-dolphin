@@ -33,6 +33,17 @@ enum class Ruleset : u8
 constexpr u8 FLAG_SOLO = 0x01;
 constexpr u8 FLAG_QUEUE2 = 0x02;
 
+// What one frame shows, for the session's origin and a fresh start's tail (Brawl: OnlineMenu.h
+// FreshMove::Seen).
+struct FreshSeen
+{
+  // The main menu runs with its pages built and no exit chosen (it can be left).
+  bool menu_built = false;
+  // A character select is up: its task and panels can be read.
+  bool css = false;
+  bool operator==(const FreshSeen&) const = default;
+};
+
 // Where a frame's game is, as the results tracker reads it (Brawl: Results.h Reading::Scene).
 enum class SceneKind : u8
 {

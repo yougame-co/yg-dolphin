@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "Common/CommonTypes.h"
+#include "Core/Orca/Engine/MatchTypes.h"
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/UX/MenuEvents.h"
 
@@ -224,15 +225,8 @@ bool Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
 // event from its own origin, so the match's history starts there on both machines.
 namespace FreshMove
 {
-// What one frame shows, for the session's origin and the fresh start's tail.
-struct Seen
-{
-  // The main menu runs with its pages built and no exit chosen (it can be left).
-  bool menu_built = false;
-  // A character select is up: its task and panels can be read.
-  bool css = false;
-  bool operator==(const Seen&) const = default;
-};
+// What one frame shows, for the session's origin and the fresh start's tail (Engine/MatchTypes.h).
+using Seen = Orca::Engine::FreshSeen;
 Seen Read(const GuestMemory& memory);
 
 // Leaves a built main menu with `exit` (25, 30 or 31): the code, then STEP_EXIT. Writes nothing

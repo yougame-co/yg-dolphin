@@ -12,6 +12,7 @@
 #include "Core/Orca/Engine/MatchTypes.h"
 
 #include "Core/Orca/Session/Events.h"
+#include "Core/Orca/UX/MenuEvents.h"
 #include "Core/Rollback/InputGate.h"
 #include "InputCommon/GCPadStatus.h"
 
@@ -75,6 +76,28 @@ public:
   virtual std::optional<std::string> TakeMismatch() = 0;
 };
 
+// What the game shows of its menus, for drop-in and fresh starts (S2 commit 5, group D). What the
+// frame hook read at its last first run; CPU thread unless noted.
+class MenuReads
+{
+public:
+  virtual ~MenuReads() = default;
+  // The host's game is in a mode a friend can't drop into (single player, the Vault). Any thread.
+  virtual bool DropInHeld() = 0;
+  // The main menu or a character select: a former joiner moves to port 1 here.
+  virtual bool OnTheMenus() = 0;
+  // The Casual or Ranked pick the character select was opened for, if on one.
+  virtual std::optional<UX::OnlinePick> CssPick() = 0;
+  // Whether a pick the session couldn't take when it was seen still stands.
+  virtual bool PickStands(UX::OnlinePick pick) = 0;
+  // A Casual or Ranked pick made while the game was not alone, once.
+  virtual std::optional<UX::OnlinePick> TakeLobbyPick() = 0;
+  // Whether the game's main menu can be read and left (fresh starts). Any thread.
+  virtual bool FreshSupported() = 0;
+  // What the last frame hook read for the fresh start.
+  virtual FreshSeen LastSeen() = 0;
+};
+
 class Module
 {
 public:
@@ -96,6 +119,7 @@ public:
   // What the session asks of the module (S2 commit 5 routes Rollback/OnlineMatch.cpp through these).
   virtual Verdicts& Results() = 0;
   virtual HeaderHost& Header() = 0;
+  virtual MenuReads& Read() = 0;
   // The ruleset the running game plays (None: no locks). Part of the compatibility key.
   virtual Ruleset ProfileRuleset() = 0;
 };
