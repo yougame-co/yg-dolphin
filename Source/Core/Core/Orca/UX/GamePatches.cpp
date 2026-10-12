@@ -350,7 +350,8 @@ const std::vector<GamePatch>& ActivePatches()
       else
       {
         ERROR_LOG_FMT(ROLLBACK, "Orca: {} refused, {}: no game patches", path, error);
-        Orca::Status::Error("profile", "Orca's game data for this disc is damaged. Reinstall Orca.");
+        Orca::Status::Error("profile",
+                            "YG Baiji's game data for this disc is damaged. Reinstall YG Baiji.");
       }
     }
   }

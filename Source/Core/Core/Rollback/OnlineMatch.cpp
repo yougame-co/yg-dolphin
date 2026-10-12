@@ -3462,7 +3462,8 @@ std::optional<int> Boundary(Core::System& system,
       match.local_seat = Orca::Online::Seat();
       if (!match.store)
       {
-        StopEmulation(system, "Couldn't join: this Orca has nowhere to get your friend's game from");
+        StopEmulation(system,
+                      "Couldn't join: this YG Baiji has nowhere to get your friend's game from");
         End("no keyframe store");
         return std::nullopt;
       }

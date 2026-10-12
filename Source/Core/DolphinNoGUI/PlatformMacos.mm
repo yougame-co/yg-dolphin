@@ -267,7 +267,7 @@ bool PlatformMacOS::Init()
   [m_window makeKeyAndOrderFront:NSApp];
   [m_window makeMainWindow];
   [NSApp activateIgnoringOtherApps:YES];
-  [m_window setTitle:@"Orca"];
+  [m_window setTitle:@"YG Baiji"];
   ObserveOcclusion();
 
   SetupMenu();
@@ -375,7 +375,7 @@ bool PlatformMacOS::InitEmbedded()
                                   NSWindowCollectionBehaviorFullScreenAuxiliary |
                                   NSWindowCollectionBehaviorIgnoresCycle |
                                   NSWindowCollectionBehaviorTransient];
-  [m_window setTitle:@"Orca"];
+  [m_window setTitle:@"YG Baiji"];
   m_window_delegate = [[WindowDelegate alloc] init];
   [m_window setDelegate:m_window_delegate];
   [[m_window contentView] setWantsLayer:YES];
@@ -655,7 +655,7 @@ void PlatformMacOS::SetupMenu()
     [menuBar addItem:miscMenuItem];
 
     // Quit
-    NSString* quitTitle = @"Quit Orca";
+    NSString* quitTitle = @"Quit YG Baiji";
     NSMenuItem* quitMenuItem = [[NSMenuItem alloc] initWithTitle:quitTitle
                                                           action:@selector(shutdown)
                                                    keyEquivalent:@"q"];
@@ -782,7 +782,7 @@ void BringToFront()
     NSMenu* bar = [NSMenu new];
     NSMenuItem* app_item = [NSMenuItem new];
     NSMenu* app_menu = [NSMenu new];
-    [app_menu addItemWithTitle:@"Quit Orca" action:@selector(terminate:) keyEquivalent:@"q"];
+    [app_menu addItemWithTitle:@"Quit YG Baiji" action:@selector(terminate:) keyEquivalent:@"q"];
     [app_item setSubmenu:app_menu];
     [bar addItem:app_item];
     NSMenuItem* edit_item = [NSMenuItem new];
@@ -808,7 +808,7 @@ std::optional<std::string> Platform::ChooseFileMacOS(const std::string& message)
     [panel setCanChooseFiles:YES];
     [panel setCanChooseDirectories:NO];
     [panel setAllowsMultipleSelection:NO];
-    [panel setTitle:@"Orca"];
+    [panel setTitle:@"YG Baiji"];
     [panel setMessage:[NSString stringWithUTF8String:message.c_str()]];
     [panel setPrompt:@"Choose"];
     // Stay above other windows even if macOS won't let this process take focus from the app.

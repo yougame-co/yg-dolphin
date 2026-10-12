@@ -742,8 +742,8 @@ std::string RefusalReason(const std::string& connect_error)
 {
   if (connect_error.find("(HTTP 403)") != std::string::npos)
   {
-    return "The room didn't let you in: your friend's Orca, disc or save differs from yours (both "
-           "of you: update YouGame and press Play again), or the host removed you";
+    return "The room didn't let you in: your friend's YG Baiji, disc or save differs from yours "
+           "(both of you: update YouGame and press Play again), or the host removed you";
   }
   if (connect_error.find("(HTTP 409)") != std::string::npos)
     return "That room is full";
@@ -1324,7 +1324,7 @@ struct YouGameRoom::Impl
     const bool use_bridge = stdio || (!bridge.empty() && !token.empty());
     if (!use_bridge && dev.empty())
     {
-      End("Start Orca from the YouGame app to play online");
+      End("Start YG Baiji from the YouGame app to play online");
       return false;
     }
     // The bridge is the desktop app on loopback; nothing else may receive the token.
@@ -3230,7 +3230,7 @@ struct YouGameRoom::Impl
       me = Str(m, "me");
       if (Str(m, "lifecycle") != "game")
       {
-        End("This room is not an Orca lobby", "room_mismatch");
+        End("This room is not a YG Baiji lobby", "room_mismatch");
         return;
       }
       // A room whose game is running is what a drop-in friend joins: no refusal.
@@ -3449,7 +3449,7 @@ struct YouGameRoom::Impl
         // Not a player of this game; a joiner can't play it at all.
         WARN_LOG_FMT(NETPLAY, "Orca room: {} runs a different Orca build or setup", id);
         if (joining && id == host)
-          End("Your friend is running a different Orca build or setup", "room_mismatch");
+          End("Your friend is running a different YG Baiji build or setup", "room_mismatch");
         return;
       }
       const bool was_heard = peer.heard;

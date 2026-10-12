@@ -2,10 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <!-- Players see YG Baiji (Orca until 0.3.39). The executable, the bundle id and the icon keep
+         the name Orca: installed YouGame apps let only <app>/Contents/MacOS/Orca run in their
+         sandbox, and macOS ties the Local Network permission to the bundle id. -->
     <key>CFBundleName</key>
-    <string>Orca</string>
+    <string>YG Baiji</string>
     <key>CFBundleDisplayName</key>
-    <string>Orca</string>
+    <string>YG Baiji</string>
     <key>CFBundleExecutable</key>
     <string>Orca</string>
     <key>CFBundleIdentifier</key>

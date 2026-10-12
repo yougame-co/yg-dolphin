@@ -77,7 +77,8 @@ static bool s_sandbox_probe = false;
 
 static void signal_handler(int)
 {
-  constexpr char message[] = "A signal was received. A second signal will force Orca to stop.\n";
+  constexpr char message[] =
+      "A signal was received. A second signal will force YG Baiji to stop.\n";
 #ifdef _WIN32
   fputs(message, stderr);
 #else
@@ -327,7 +328,7 @@ static std::optional<std::string> ChooseSessionDisc(const std::string& user_dire
       Orca::Status::Error(check.code, check.sentence);
       return std::nullopt;
     }
-    Platform::ShowErrorMacOS("Orca can't play that disc", check.sentence);
+    Platform::ShowErrorMacOS("YG Baiji can't play that disc", check.sentence);
     refused = std::move(check);
   }
 }
@@ -536,7 +537,7 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
   {
     fprintf(stderr, "Could not boot the specified file\n");
     if (embed.enabled && !Orca::SessionActive())
-      Embed::Out("error Orca couldn't start the game");
+      Embed::Out("error YG Baiji couldn't start the game");
     Orca::Status::Finish();
     return 1;
   }
@@ -563,7 +564,7 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
     fprintf(stderr, "No platform found, or failed to initialize.\n");
     // Unless the platform already said why (sandbox_embed: nothing adopted the window).
     if (embed.enabled && Orca::Status::ExitCode() == 0)
-      Embed::Out("error Orca couldn't open its view in the app's window");
+      Embed::Out("error YG Baiji couldn't open its view in the app's window");
     return 1;
   }
 
@@ -705,7 +706,7 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
     fprintf(stderr, "Could not boot the specified file\n");
     // In a session, the session status has already reported the error.
     if (embed.enabled && !Orca::SessionActive())
-      Embed::Out("error Orca couldn't start the game");
+      Embed::Out("error YG Baiji couldn't start the game");
     Orca::Status::Finish();
     return 1;
   }
