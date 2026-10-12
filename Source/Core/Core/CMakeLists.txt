@@ -521,6 +521,8 @@ add_library(core
   Orca/Disc.h
   Orca/DiscVerify.cpp
   Orca/DiscVerify.h
+  Orca/GpuLost.cpp
+  Orca/GpuLost.h
   Orca/JitWarm.cpp
   Orca/JitWarm.h
   Orca/Launch.cpp

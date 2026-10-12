@@ -2247,6 +2247,7 @@ manifest entry, so a build without the mode can never be marked as having it. Co
 | `sandbox_disc` | Inside the sandbox, the disc can't be opened for lack of permission: the app didn't grant it (a network share, a file an admin tool made). "Orca can't read this disc where it is. Copy it into a folder of yours, such as Documents, and choose the copy." (the app's words for the same refusal) |
 | `sandbox_embed` | `--embed-adopted`: nothing adopted the window within 10 s. "Orca couldn't open in the YouGame window. Try again." |
 | `sandbox_denied` | Inside the sandbox, Orca may not write its user folder. "Orca isn't allowed into its own folder, so it didn't start. Reset Orca's files from YouGame's Help menu, then press Play again." |
+| `gpu_lost` | Direct3D: the graphics device was lost (a GPU hang the driver reset, a driver update or crash; `Orca/GpuLost.h`). stderr says `Orca: [VIDEO] the graphics device is lost (D3D11: device hung, 0x887A0006) at <what failed>; Orca stops`, nothing more is drawn, and the run stops like any other stop (the room is left: an online opponent sees this player leave, not a desync), exit 1. "Your graphics driver stopped responding. Try the Performance preset or a lower resolution in Graphics, and update your GPU driver." |
 
 **Windows zip layout.** A release zip for the sandbox carries, beside `Orca/Orca.exe`, the pinned
 `d3dcompiler_47.dll` (10.0.20348 from the Windows SDK's `Redist/D3D/x64`, SHA-256

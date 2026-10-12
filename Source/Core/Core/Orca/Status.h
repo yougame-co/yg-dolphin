@@ -24,8 +24,9 @@
 //     Performance; embedded only, each line at most 300 bytes (Orca/Perf.h)
 // Error codes: boot, cancelled, disc_missing, disc_unreadable, disc_revision, profile, settings,
 // room_mismatch, room_full, kicked, network, peer_left, desync, signed_out (the keyframe store
-// refused a signed-out player's game; the host says "friend-left signed_out"), internal. Only the
-// first error is printed, since it explains the exit. Outside a session nothing is printed.
+// refused a signed-out player's game; the host says "friend-left signed_out"), internal, gpu_lost
+// (the graphics device was lost and the run stops: Orca/GpuLost.h). Only the first error is
+// printed, since it explains the exit. Outside a session nothing is printed.
 namespace Orca::Status
 {
 void State(std::string_view state);
