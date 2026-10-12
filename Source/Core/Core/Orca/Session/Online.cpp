@@ -406,6 +406,12 @@ void KeepAlive()
     room->KeepAlive();
 }
 
+void SendReplayStream(const std::vector<u8>& bytes)
+{
+  if (const auto room = Room())
+    room->SendReplayStream(bytes);
+}
+
 void ReportDesync()
 {
   if (const auto room = Room())

@@ -8,6 +8,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <thread>
 #include <string>
 #include <utility>
 #include <vector>
@@ -33,8 +34,11 @@ class IOFile;
 //
 // Test knobs for now (UX/Probe.h TestKnobsAllowed), until the app can ask for them:
 //  - ORCA_TEST_REPLAY_OUT=<base>: write this machine's history to <base>-<n>.ygr (a fresh start or
-//    a join begins another history, so another file).
-//  - ORCA_TEST_REPLAY_IN=<file>: instead of a game, boot to the origin and play <file>.
+//    a join begins another history, so another file). ORCA_TEST_REPLAY_ROOM=1 also sends it to the
+//    room for its watchers (Online::SendReplayStream); <base> may then be empty.
+//  - ORCA_TEST_REPLAY_IN=<file>: instead of a game, boot to the origin and play <file>; or a
+//    ws:// or wss:// watch URL (the rooms Worker's /watch/<code> with a watch ticket), whose
+//    {"t":"rs","b":<base64>} messages carry the stream, {"t":"end"} its end.
 //    ORCA_TEST_REPLAY_FOLLOW=1 keeps reading as the file grows, ORCA_TEST_REPLAY_DELAY (12) frames
 //    behind its newest frame (a live watcher); ORCA_TEST_REPLAY_REALTIME=1 plays a finished file at
 //    real speed rather than flat out; ORCA_TEST_REPLAY_SEEK=<a>:<b> goes back from frame b to a
@@ -49,7 +53,7 @@ class Writer
 {
 public:
   static std::unique_ptr<Writer> FromEnv();
-  explicit Writer(std::string base);
+  explicit Writer(std::string base, bool to_room = false);
   ~Writer();
   // Appends `replay`'s frames before `end` (all final) with the checksums among `checksums`
   // (frame: RAM checksum at its start) that they cover, at most every 6 frames or 100 ms. `live`
@@ -59,7 +63,11 @@ public:
             const std::map<int, u64>* checksums);
 
 private:
+  bool Emit(const std::vector<u8>& bytes);
+
   std::string m_base;
+  bool m_to_room = false;
+  bool m_started = false;
   u32 m_segment = 0;
   std::unique_ptr<File::IOFile> m_file;
   int m_first = -1;
@@ -89,6 +97,8 @@ struct PlayerHost
 class Player
 {
 public:
+  Player();
+  ~Player();
   static std::unique_ptr<Player> FromEnv();
   // Plays the next recorded frame instead of a game, once this machine's origin is in. `running`
   // is the last frame run. Returns the frame the state now starts at when it was rewound (the
@@ -99,6 +109,7 @@ public:
 
 private:
   bool Poll(std::string* error);
+  void WatchThread(std::string url);
   void Finish(const PlayerHost& host, bool ok, const std::string& why);
 
   std::string m_path;
@@ -111,6 +122,10 @@ private:
   std::string m_repack;
   std::unique_ptr<File::IOFile> m_file;
   u64 m_offset = 0;
+  // A watch URL's socket runs on its own thread, handing bytes over here.
+  struct Watch;
+  std::unique_ptr<Watch> m_watch;
+  bool m_source_ended = false;
   std::unique_ptr<Orca::Net::ReplayStreamReader> m_reader;
   bool m_loaded = false;
   bool m_over = false;

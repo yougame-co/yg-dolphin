@@ -7,6 +7,7 @@
 #   Tools/orca/replay-check.py <dolphin-emu-nogui> <disc> [--pplus <launcher.dol>]
 #                              [--match-seconds N] [--no-watch] [--late-watch S]
 #                              [--net-delay MS] [--net-jitter MS] [--realtime]
+#                              [--video Metal --shots MS --shot-seconds S]
 #
 # 1. Host and Friend each boot their own game, writing their history to a replay stream
 #    (ORCA_TEST_REPLAY_OUT). Friend drops into Host's character select (as dropin-identity.py), and
@@ -47,6 +48,12 @@ LATE = int(sys.argv[sys.argv.index("--late-watch") + 1]) if "--late-watch" in sy
 DELAY = sys.argv[sys.argv.index("--net-delay") + 1] if "--net-delay" in sys.argv else None
 JITTER = sys.argv[sys.argv.index("--net-jitter") + 1] if "--net-jitter" in sys.argv else "0"
 REALTIME = "--realtime" in sys.argv
+# --video Metal renders Host and Watcher off screen (headless) and --shots asks both for a screenshot
+# every MS ms for --shot-seconds of the fight (test-shot), for a side-by-side video of what the
+# player and the live watcher saw (side-by-side.mp4 in the work folder, kept with ORCA_TEST_KEEP=1).
+VIDEO = sys.argv[sys.argv.index("--video") + 1] if "--video" in sys.argv else "Null"
+SHOTS = int(sys.argv[sys.argv.index("--shots") + 1]) if "--shots" in sys.argv else 0
+SHOT_SECONDS = int(sys.argv[sys.argv.index("--shot-seconds") + 1]) if "--shot-seconds" in sys.argv else 20
 
 
 def net(side):
@@ -97,7 +104,8 @@ class Orca:
                 env[key] = os.environ[key]
         env.update(net(name))
         env.update(env_extra)
-        args = [BIN, "-p", "headless", "-u", self.user, "-v", "Null",
+        video = VIDEO if name in ("Host", "Watcher") else "Null"
+        args = [BIN, "-p", "headless", "-u", self.user, "-v", video,
                 "-C", "Dolphin.DSP.Backend=No Audio Output",
                 "-C", "Logger.Logs.ROLLBACK=True", "-C", "Logger.Logs.NETPLAY=True",
                 "-C", "Logger.Logs.CORE=True", "-C", "Logger.Options.Verbosity=2"]
@@ -267,6 +275,25 @@ if WATCH:
 for o in (host, friend):
     log(f"{o.name}: {short(o.wait_log('-> scMelee', 300))}")
 log(f"the match runs for {MATCH_SECONDS} s")
+
+
+def shoot():
+    end = time.time() + SHOT_SECONDS
+    n = 0
+    while time.time() < end:
+        n += 1
+        for o, tag in ((host, "h"), (watcher, "w")):
+            if o and o.proc.poll() is None:
+                try:
+                    o.proc.stdin.write(f"test-shot {tag}-{n:04d}\n")
+                    o.proc.stdin.flush()
+                except Exception:
+                    pass
+        time.sleep(SHOTS / 1000)
+
+
+if SHOTS and VIDEO != "Null":
+    threading.Thread(target=shoot, daemon=True).start()
 late = None
 if WATCH and 0 < LATE < MATCH_SECONDS:
     time.sleep(LATE)

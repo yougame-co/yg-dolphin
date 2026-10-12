@@ -271,6 +271,11 @@ public:
   // so often that this game still runs (the room counts it as heard). Call from the emulation
   // thread, which is what a stall claim is about.
   void KeepAlive();
+  // A replay stream's next bytes (whole units: a header or chunks, Session/Keyframe.h "Replay
+  // streams"), sent to the room as {"t":"rs","b":<base64>} by the I/O thread, in order. The room
+  // relays them to whoever watches this match; players never get them. Bounded: past 4 MB
+  // waiting, more is dropped.
+  void SendReplayStream(const std::vector<u8>& bytes);
 
   void Send(const Packet& packet) override;
   std::vector<Packet> Receive() override;

@@ -4,17 +4,22 @@
 #include "Core/Rollback/ReplayStream.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
+#include <mutex>
 #include <thread>
 
 #include <fmt/format.h>
+#include <picojson.h>
 
 #include "Common/IOFile.h"
 #include "Common/Logging/Log.h"
 #include "Common/Version.h"
+#include "Common/WebSocket.h"
 #include "Core/HW/Memmap.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Online.h"
+#include "Core/Orca/Session/YouGameRoom.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/Probe.h"
 #include "Core/System.h"
@@ -45,11 +50,24 @@ std::unique_ptr<Writer> Writer::FromEnv()
   if (!Orca::UX::TestKnobsAllowed())
     return nullptr;
   std::string base = Orca::GetEnv("ORCA_TEST_REPLAY_OUT");
-  return base.empty() ? nullptr : std::make_unique<Writer>(std::move(base));
+  const bool to_room = Orca::GetEnv("ORCA_TEST_REPLAY_ROOM") == "1";
+  if (base.empty() && !to_room)
+    return nullptr;
+  return std::make_unique<Writer>(std::move(base), to_room);
 }
 
-Writer::Writer(std::string base) : m_base(std::move(base))
+Writer::Writer(std::string base, bool to_room) : m_base(std::move(base)), m_to_room(to_room)
 {
+}
+
+// The next whole unit to the file and, for watchers, to the room.
+bool Writer::Emit(const std::vector<u8>& bytes)
+{
+  if (m_file && (!m_file->WriteBytes(bytes.data(), bytes.size()) || !m_file->Flush()))
+    return false;
+  if (m_to_room)
+    Orca::Online::SendReplayStream(bytes);
+  return true;
 }
 
 Writer::~Writer() = default;
@@ -61,13 +79,14 @@ bool Writer::Pump(const Orca::Net::ReplayArchive& replay, int end, int live,
     return true;
   end = std::min(end, replay.EndFrame());
   const u32 seed = replay.frames[0].seed;
-  if (!m_file || replay.first_frame != m_first || replay.origin_hash != m_origin ||
+  if (!m_started || replay.first_frame != m_first || replay.origin_hash != m_origin ||
       seed != m_seed || end < m_written_end)
   {
     // Another history: a file of its own, from its first frame.
     ++m_segment;
-    const std::string path = fmt::format("{}-{}.ygr", m_base, m_segment);
-    m_file = std::make_unique<File::IOFile>(path, "wb");
+    const std::string path =
+        m_base.empty() ? std::string() : fmt::format("{}-{}.ygr", m_base, m_segment);
+    m_file = path.empty() ? nullptr : std::make_unique<File::IOFile>(path, "wb");
     Orca::Net::ReplayStreamInfo info;
     info.compat = Orca::Online::CompatibilityKey();
     info.build = Common::GetScmRevGitStr();
@@ -78,18 +97,19 @@ bool Writer::Pump(const Orca::Net::ReplayArchive& replay, int end, int live,
     info.segment = m_segment;
     info.room = Orca::Online::Code();
     const std::vector<u8> header = Orca::Net::PackReplayStreamHeader(info);
-    if (!*m_file || !m_file->WriteBytes(header.data(), header.size()) || !m_file->Flush())
+    if ((m_file && !*m_file) || !Emit(header))
     {
       ERROR_LOG_FMT(ROLLBACK, "Replay: couldn't write {}", path);
       return false;
     }
+    m_started = true;
     m_first = replay.first_frame;
     m_origin = replay.origin_hash;
     m_seed = seed;
     m_written_end = m_first;
     NOTICE_LOG_FMT(ROLLBACK, "Replay: writing history {} (from frame {}, origin {:016x}) to {}",
                    m_segment, m_first, m_origin, path);
-    Orca::Status::Line(fmt::format("orca replay-out {}", path));
+    Orca::Status::Line(fmt::format("orca replay-out {}", path.empty() ? "room" : path));
   }
   const int pending = end - m_written_end;
   if (pending <= 0 || (pending < 6 && Clock::now() - m_flushed < std::chrono::milliseconds(100)))
@@ -120,7 +140,7 @@ bool Writer::Pump(const Orca::Net::ReplayArchive& replay, int end, int live,
     }
   }
   const std::vector<u8> bytes = Orca::Net::PackReplayChunk(chunk, chunk.first == replay.first_frame);
-  if (bytes.empty() || !m_file->WriteBytes(bytes.data(), bytes.size()) || !m_file->Flush())
+  if (bytes.empty() || !Emit(bytes))
   {
     ERROR_LOG_FMT(ROLLBACK, "Replay: couldn't write frames {}-{}", chunk.first,
                   chunk.first + count);
@@ -132,6 +152,108 @@ bool Writer::Pump(const Orca::Net::ReplayArchive& replay, int end, int live,
 }
 
 // ---- Player ----
+
+// A watch URL's stream, handed from its socket's thread to the player.
+struct Player::Watch
+{
+  std::thread thread;
+  std::atomic<bool> stop{false};
+  std::mutex mutex;
+  std::vector<u8> bytes;
+  bool ended = false;
+  std::string error;
+};
+
+Player::Player() = default;
+
+Player::~Player()
+{
+  if (m_watch)
+  {
+    m_watch->stop = true;
+    if (m_watch->thread.joinable())
+      m_watch->thread.join();
+  }
+}
+
+void Player::WatchThread(std::string url)
+{
+  Watch& watch = *m_watch;
+  const auto fail = [&watch](std::string why) {
+    std::lock_guard lock(watch.mutex);
+    if (watch.error.empty())
+      watch.error = std::move(why);
+    watch.ended = true;
+  };
+  Common::WebSocket socket;
+  std::string error;
+  if (!socket.Connect(url, std::chrono::seconds(10), &error))
+  {
+    fail("couldn't connect to the match: " + error);
+    return;
+  }
+  auto last_ping = Clock::now();
+  while (!watch.stop)
+  {
+    if (Clock::now() - last_ping > std::chrono::seconds(15))
+    {
+      socket.SendText(R"({"t":"ping"})", std::chrono::seconds(2));
+      last_ping = Clock::now();
+    }
+    const std::optional<std::string> text = socket.ReceiveText(std::chrono::milliseconds(100));
+    if (!text)
+    {
+      if (!socket.IsOpen())
+      {
+        std::lock_guard lock(watch.mutex);
+        watch.ended = true;
+        return;
+      }
+      continue;
+    }
+    picojson::value value;
+    if (!picojson::parse(value, *text).empty() || !value.is<picojson::object>())
+      continue;
+    const picojson::object& message = value.get<picojson::object>();
+    const auto type = message.find("t");
+    if (type == message.end() || !type->second.is<std::string>())
+      continue;
+    const std::string& t = type->second.get<std::string>();
+    if (t == "rs")
+    {
+      const auto b = message.find("b");
+      if (b == message.end() || !b->second.is<std::string>())
+        continue;
+      const std::string& text64 = b->second.get<std::string>();
+      size_t pad = 0;
+      while (pad < 2 && pad < text64.size() && text64[text64.size() - 1 - pad] == '=')
+        ++pad;
+      const std::optional<std::vector<u8>> bytes =
+          text64.size() % 4 == 0 ?
+              Orca::Net::DecodeInlineKeyframe(text64, text64.size() / 4 * 3 - pad) :
+              std::nullopt;
+      if (!bytes)
+      {
+        fail("the match's stream is damaged");
+        return;
+      }
+      std::lock_guard lock(watch.mutex);
+      watch.bytes.insert(watch.bytes.end(), bytes->begin(), bytes->end());
+    }
+    else if (t == "end" || t == "reset")
+    {
+      // A new history (a fresh start) begins another stream: this one is over.
+      {
+        std::lock_guard lock(watch.mutex);
+        watch.ended = true;
+      }
+      socket.SendText(R"({"t":"leave"})", std::chrono::seconds(1));
+      socket.Close();
+      return;
+    }
+  }
+  socket.Close();
+}
 
 std::unique_ptr<Player> Player::FromEnv()
 {
@@ -169,6 +291,30 @@ bool Player::Poll(std::string* error)
 {
   if (!m_reader)
     m_reader = std::make_unique<Orca::Net::ReplayStreamReader>(Orca::Online::CompatibilityKey());
+  if (m_path.starts_with("ws://") || m_path.starts_with("wss://"))
+  {
+    if (!m_watch)
+    {
+      m_watch = std::make_unique<Watch>();
+      m_watch->thread = std::thread(&Player::WatchThread, this, m_path);
+    }
+    std::vector<u8> bytes;
+    {
+      std::lock_guard lock(m_watch->mutex);
+      bytes.swap(m_watch->bytes);
+      if (m_watch->ended)
+        m_source_ended = true;
+      if (!m_watch->error.empty() && !m_reader->Info())
+      {
+        *error = m_watch->error;
+        return false;
+      }
+    }
+    if (bytes.empty())
+      return true;
+    m_last_data = Clock::now();
+    return m_reader->Feed(bytes.data(), bytes.size(), error);
+  }
   if (!m_file)
   {
     m_file = std::make_unique<File::IOFile>(m_path, "rb");
@@ -238,7 +384,7 @@ std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, in
     {
       if (host.stopping())
         return std::nullopt;
-      if (Clock::now() - m_last_data > std::chrono::seconds(30))
+      if (m_source_ended || Clock::now() - m_last_data > std::chrono::seconds(30))
       {
         Finish(host, false, "the replay never started");
         return std::nullopt;
@@ -297,7 +443,8 @@ std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, in
       ++m_waits;
       while (archive.EndFrame() - frame <= m_delay)
       {
-        const bool quiet = Clock::now() - m_last_data > std::chrono::seconds(5);
+        const bool quiet =
+            m_source_ended || Clock::now() - m_last_data > std::chrono::seconds(5);
         if (quiet && frame < archive.EndFrame())
           break;
         if (quiet)

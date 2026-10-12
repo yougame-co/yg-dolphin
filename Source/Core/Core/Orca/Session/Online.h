@@ -72,6 +72,8 @@ void ReportPeerFault();
 // Waiting in a ranked set's room for the verdict, with no session: this game still runs
 // (YouGameRoom::KeepAlive). Emulation thread.
 void KeepAlive();
+// Sends a replay stream's next bytes to the room for its watchers (YouGameRoom::SendReplayStream).
+void SendReplayStream(const std::vector<u8>& bytes);
 // In a ranked set whose opponent stopped sending inputs (15 s stalled, or silent), this player
 // claims the set. Does nothing outside a ranked room's live match.
 void ReportStall();

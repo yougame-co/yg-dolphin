@@ -1104,6 +1104,10 @@ struct YouGameRoom::Impl
     bool game_start = false;
   };
   std::deque<HeldReport> reports;
+  // Replay stream messages waiting for the I/O thread (SendReplayStream), and their bytes.
+  std::deque<std::string> replay_texts;
+  size_t replay_text_bytes = 0;
+  bool replay_dropped = false;
   bool desync_pending = false;
   // KnownSetGames, kept by the I/O thread.
   int known_games = 0;
@@ -2491,6 +2495,19 @@ struct YouGameRoom::Impl
     SendRaw(text);
   }
 
+  // A replay stream's waiting messages, in order.
+  void FlushReplayStream()
+  {
+    std::deque<std::string> texts;
+    {
+      std::lock_guard lock(mutex);
+      texts.swap(replay_texts);
+      replay_text_bytes = 0;
+    }
+    for (const std::string& text : texts)
+      SendRaw(text);
+  }
+
   // Reports wait for the room's match; a desync voids the match in progress.
   void FlushLobby()
   {
@@ -2974,6 +2991,7 @@ struct YouGameRoom::Impl
 
     TryBegin();
     FlushLobby();
+    FlushReplayStream();
     KeepAliveAndRetry(now);
 
     if (now - last_send < SEND_GAP)
@@ -3874,6 +3892,25 @@ void YouGameRoom::KeepAlive()
 {
   std::lock_guard lock(m_impl->mutex);
   m_impl->alive_wanted = Clock::now();
+}
+
+void YouGameRoom::SendReplayStream(const std::vector<u8>& bytes)
+{
+  if (bytes.empty())
+    return;
+  std::string text = R"({"t":"rs","b":")" + EncodeInlineKeyframe(bytes) + R"("})";
+  std::lock_guard lock(m_impl->mutex);
+  // A stream with a gap is no stream: once anything was dropped, nothing more is sent.
+  if (m_impl->replay_dropped)
+    return;
+  if (m_impl->replay_text_bytes + text.size() > (4u << 20))
+  {
+    if (!std::exchange(m_impl->replay_dropped, true))
+      WARN_LOG_FMT(NETPLAY, "Orca room: the replay stream fell 4 MB behind; dropping it");
+    return;
+  }
+  m_impl->replay_text_bytes += text.size();
+  m_impl->replay_texts.push_back(std::move(text));
 }
 
 void YouGameRoom::TestDropConnection()
