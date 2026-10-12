@@ -71,13 +71,25 @@ fi
 # Flat bundles (ORCA.md "Flat bundles"), as in orca-package-macos.sh: ORCA_BUNDLE_PUBLIC_KEY (64
 # lowercase hex digits) is the key they must be signed with; unset, the build trusts none and refuses
 # every bundle. The TEST key is never trusted in a package: the build turns it off, CMake's cache is
-# checked for it, and the program is checked for the key's text.
+# checked for it, and the program is checked for the key's text. ORCA_STAGING_BUILD=1 marks a
+# staging build (YouGame's staging scripts set it): only such a build may pin the STAGING key; any
+# other build refuses that key, as ORCA_BUNDLE_PUBLIC_KEY and in the program, as it refuses the TEST key.
 # The bundle-flat TEST key (Source/Core/Core/Orca/Bundle.cpp).
 TEST_BUNDLE_KEY=afb9463d5c16f0f617432d76f75f37a8c649e36d7c626088ba00b19dea115a43
+# The STAGING flat-bundle key's public half (orca-package-macos.sh and orca/bundle-key-guard.py carry it).
+STAGING_BUNDLE_KEY=8422b8b28b82aff024427d77e6c72a38d9ea75bcb6533fe706c61006f742c0ab
+STAGING=0
+case "${ORCA_STAGING_BUILD:-}" in
+"" | 0) ;;
+1) STAGING=1 ;;
+*) fail "ORCA_STAGING_BUILD is 1 or unset, not ${ORCA_STAGING_BUILD}" ;;
+esac
 BUNDLE_KEY="${ORCA_BUNDLE_PUBLIC_KEY:-}"
 if [ -n "$BUNDLE_KEY" ]; then
   [[ "$BUNDLE_KEY" =~ ^[0-9a-f]{64}$ ]] || fail "ORCA_BUNDLE_PUBLIC_KEY is not 64 lowercase hex digits"
   [ "$BUNDLE_KEY" != "$TEST_BUNDLE_KEY" ] || fail "ORCA_BUNDLE_PUBLIC_KEY is the TEST key"
+  [ "$BUNDLE_KEY" != "$STAGING_BUNDLE_KEY" ] || [ "$STAGING" = 1 ] ||
+    fail "ORCA_BUNDLE_PUBLIC_KEY is the STAGING key: only a staging build (ORCA_STAGING_BUILD=1) pins it"
 fi
 
 RELEASE=0
@@ -150,6 +162,10 @@ strings -a "$BIN" >"$STRINGS_OUT" || { rm -f "$STRINGS_OUT"; fail "strings could
 if grep -qF "$TEST_BUNDLE_KEY" "$STRINGS_OUT"; then
   rm -f "$STRINGS_OUT"
   fail "the program trusts the bundle-flat TEST key"
+fi
+if [ "$STAGING" = 0 ] && grep -qF "$STAGING_BUNDLE_KEY" "$STRINGS_OUT"; then
+  rm -f "$STRINGS_OUT"
+  fail "the program trusts the STAGING bundle key, and this is not a staging build"
 fi
 if [ -n "$BUNDLE_KEY" ] && ! grep -qF "$BUNDLE_KEY" "$STRINGS_OUT"; then
   rm -f "$STRINGS_OUT"
