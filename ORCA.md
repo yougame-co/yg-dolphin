@@ -2577,6 +2577,12 @@ What each release changed for players, in plain words.
   Yangtze river dolphin. The window, the Mac menu and the messages say YG Baiji. Your controls,
   settings and ranked ratings carry over. On Windows the firewall may ask once more, because the
   program has a new name.
+- **Hold to talk.** Hold YouGame's overlay key (or the controller shortcut) to talk to friends in a
+  match; a tap still opens the menu.
+- **Rumble.** Your controller can rumble when the game rumbles, with the app's switch on.
+- **Random stage in casual.** Both players can pick Random on a casual stage select.
+- **Hold B to leave.** Skipping a casual opponent, leaving after a ranked set and backing out of the
+  character select are now a held B. Z goes to the game, so Project+'s Z costumes work.
 
 ### 0.3.39
 

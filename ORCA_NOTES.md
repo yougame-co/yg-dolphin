@@ -7209,3 +7209,35 @@ code of 7d53340a44 built from the tree before that commit, so it reports a31cee9
   P+ bundle re-signed with it) and an unsigned 0.3.34 base are ready in `bundle-flat-runs/perf`
   (`runs.sh`, the gate-0334fb method), but from about 14:50 the Mac ran on battery and slept on and
   off; the first base run died mid-set. It needs a plugged-in, awake Mac.
+
+## The V2 staging line (branch orca-v2, 2026-10-12)
+
+Luis, 2026-10-12: no separate 0.3.40 prod release; everything goes to staging and ships as YouGame V2.
+`orca-v2` is shipped 0.3.39 (`23b3471f58`) with, each as its own merge: `orca-hold-talk-0339`,
+`orca-rumble`, `orca-random-stage-0339`, `orca/hold-b-exit` (head `f5da7e2b1d`),
+`orca-rename-yg-baiji`, then `packs-0339`. Not merged: `orca-device-lost-0339` (review never ran),
+`orca-mac-keyboard` (change plus its revert). One compat bump: `ux=29`.
+
+- Conflicts: hold-talk x rumble on the caps word list (kept both, `... talk rumble`); packs x 0.3.39
+  in `UX/OnlineMenu.cpp` (`KeypadOpen` and `FirstFriendFrame`, both kept); packs x the rename in
+  `Tools/orca-publish-public.sh` (`yg-baiji.git`, packs' exclusion wording); `Status.h`'s caps comment;
+  this file (appended sections, both kept).
+- Fixed on the line: packs' `OfferedCaps()` returned early in mod mode, so a pack session offered no
+  `talk` or `rumble`. The engine caps now follow both blocks, still last (the legacy caps line is
+  unchanged). `OrcaBundle.PackSessionsOfferTheEngineCaps` and `OrcaMod.ModeGates` cover it; both fail
+  with the early return put back.
+- Mac: `dolphin-emu-nogui` + `tests`, -j4. Orca*: 840 ran, 820 passed, 20 skipped (live, disc, latency,
+  kit dump), 0 failed; the rest of the suite 1051/1051. `test_layers.py` 41/41.
+- Legacy hashlogs (the packs-on-listings `sync.sh` inputs, each binary with its own Sys): `orca-v2` vs
+  the line before packs (`57b68284ff`): 6 inputs, 0 frames differ, so packs and the caps fix leave
+  legacy alone. `orca-v2` vs 0.3.39 itself: Brawl and Project+ default flows, ORCA_NET and STDIO: 0
+  differ; both Random flows differ from the stage select on (first frame 2440 Brawl, 1210 Project+,
+  `scSelStage`), and so does the pre-packs line: the `ux=29` stage select (cursor start), expected.
+- `forbidden-calls` has 14 new hits from the candidates (they were cut from 0.3.39, before main's
+  baseline): app-channel lines for talk/rumble, `ParseTalk`/`DecodeField`, and `Queue.cpp` reading and
+  writing `<User>/Config/OrcaSeen.txt` (hold B's one-time tip) in game logic. Baseline not refreshed:
+  a person reviews those.
+- Still owed: PC build + unit, Mac <-> PC (legacy and P+/Brawl packs), the netplay perf gate on a quiet
+  plugged-in Mac, the bundle-mode runtime set (tamper cases, two Orcas), packs regenerated from this
+  line's `Data/Sys/Orca`, a review agent on the merged result, the hand tests (mic, rumble hardware,
+  P+ Random, the hold-B tip).
