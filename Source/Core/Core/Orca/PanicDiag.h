@@ -93,7 +93,7 @@ std::vector<std::string> DescribeBackChain(const BackChain& chain, u32 sp);
 std::vector<std::string> DescribeWords(const GuestRam& ram, std::string_view label, u32 address,
                                        int count);
 
-// The OS's module list (OSModuleInfo chain at 0x800030C8, as UX/RankedSet.cpp walks it): which
+// The OS's module list (OSModuleInfo chain at 0x800030C8, as Games/Brawl/RankedSet.cpp walks it): which
 // loaded module section holds `address`, as "m<id>s<section>+<offset>"; "-" in none.
 constexpr u32 OS_MODULE_LIST = 0x800030C8;
 std::string ModuleOf(const GuestRam& ram, u32 address);

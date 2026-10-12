@@ -2581,8 +2581,8 @@ What each release changed for players, in plain words.
 - **Clearer "couldn't open the disc" reports.** When Project+ (or a pack's launcher) can't open your
   game disc, the report now says why: the file won't open or read, is cut short, or isn't a disc
   image. A disc whose folder or file name contains `=` now opens.
-- **A pack YG Baiji refuses says so.** If a game's pack fails its checks, the game doesn't start
-  and you see the reason, instead of the plain game starting in its place.
+- **A refused pack no longer starts the plain game.** If a game's pack fails its checks, the game
+  doesn't start, instead of the plain game starting in its place; the reason is in the report.
 - **Better crash reports** for crashes inside the game.
 - **Stability fixes.**
 

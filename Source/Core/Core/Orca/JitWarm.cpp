@@ -161,7 +161,7 @@ std::string SeedPath()
 }
 
 // The pack format's cap on orca/jitwarm is the same as Decode's.
-static_assert(Mod::MAX_JITWARM_BYTES == MAX_FILE_BYTES);
+static_assert(Mod::MAX_JITWARM_BYTES == JitWarm::MAX_FILE_BYTES);
 
 // Empty when missing, unreadable or over Mod::MAX_JITWARM_BYTES (a mod's orca/jitwarm may be up to
 // 4 GiB in its tree.json; Orca's seeds and a player's list are about 1 MB).

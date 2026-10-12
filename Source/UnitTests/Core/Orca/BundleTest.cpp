@@ -930,6 +930,23 @@ TEST(OrcaBundle, ResolvesOrRefuses)
   EXPECT_TRUE(Orca::Mod::Requested());
   Orca::Mod::TrustKeysForTests(std::span(&key, 1));
 
+  // A launcher folder without mod.json (legacy Project+): legacy, with a key or without one.
+  {
+    File::CreateFullPath(root + "legacy-pplus/");
+    const std::string legacy_launcher = root + "legacy-pplus/Project+ Netplay Launcher.dol";
+    ASSERT_TRUE(File::WriteStringToFile(legacy_launcher, dol));
+    Orca::Mod::ResetResolvedBundle();
+    Orca::Mod::ResolveBundle(&legacy_launcher, dol_bytes);
+    EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::None);
+    EXPECT_FALSE(Orca::Mod::Requested());
+    Orca::Mod::TrustKeysForTests({});
+    Orca::Mod::ResetResolvedBundle();
+    Orca::Mod::ResolveBundle(&legacy_launcher, dol_bytes);
+    EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::None);
+    EXPECT_FALSE(Orca::Mod::Requested());
+    Orca::Mod::TrustKeysForTests(std::span(&key, 1));
+  }
+
   // ORCA_MOD_DIR names the folder: a good bundle plays; anything refused refuses the session.
   {
     const ScopedEnv dir("ORCA_MOD_DIR", p.dir);

@@ -872,10 +872,17 @@ std::string DiscOpenProblem(const std::string& disc_path)
     return "no disc is set";
   // Shared like DiscIO's own open (CreateBlobReader), so another program holding the image open
   // isn't blamed for a failure it didn't cause.
+#ifdef _WIN32
+  // LastFileError reads the CRT's last Windows code: clear it, so an older failure isn't reported.
+  _doserrno = 0;
+#endif
   File::IOFile file(disc_path, "rb", File::SharedAccess::ReadWrite);
   if (!file.IsOpen())
     return fmt::format("its disc won't open: {}", LastFileError());
   u8 head[4];
+#ifdef _WIN32
+  _doserrno = 0;
+#endif
   if (!file.ReadBytes(head, sizeof(head)))
   {
     if (std::feof(file.GetHandle()))

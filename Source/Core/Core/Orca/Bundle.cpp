@@ -582,7 +582,7 @@ void ResolveBundle(const std::string* executable_path, std::span<const u8> launc
     return decide(BundleKind::None);
   }
   if (TrustedKeys().empty())
-    return refuse("this build trusts no bundle key (built without ORCA_BUNDLE_PUBLIC_KEY)");
+    return refuse("this build trusts no bundle key");
 
   const auto start = std::chrono::steady_clock::now();
   std::string why;
