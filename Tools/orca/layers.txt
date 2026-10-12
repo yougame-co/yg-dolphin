@@ -181,6 +181,7 @@ engine-sensitive  Tools/orca-{package-macos,publish-public}.sh dev   # release s
 engine-sensitive  Tools/orca/upstream-sync.py              dev     # upstream Dolphin sync (release script)
 engine-sensitive  Tools/orca/layer*                       dev     # this map, layer-of-diff, layerlib
 engine-sensitive  Tools/orca/forbidden-calls*             dev
+engine-sensitive  Tools/orca/{firewall*,test_firewall.py}  dev     # S2: include firewall + float rule
 engine-sensitive  Tools/orca/test_layers.py               dev
 game-data         Tools/orca/inputs/**                    dev     # scripted pads for bf-*/pplus-*
 game-data         Tools/orca/textures/**                  dev     # label art generator

@@ -237,6 +237,9 @@ class RealMapTests(unittest.TestCase):
             "Tools/orca/layerlib.py": ("engine-sensitive", True),
             "Tools/orca/forbidden-calls": ("engine-sensitive", True),
             "Tools/orca/forbidden-calls.baseline": ("engine-sensitive", True),
+            "Tools/orca/firewall": ("engine-sensitive", True),
+            "Tools/orca/firewall.baseline": ("engine-sensitive", True),
+            "Tools/orca/test_firewall.py": ("engine-sensitive", True),
             "Tools/orca/test_layers.py": ("engine-sensitive", True),
             "Tools/orca-package-macos.sh": ("engine-sensitive", True),
         }
