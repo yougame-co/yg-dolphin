@@ -25,6 +25,7 @@
 #include "Core/Orca/UX/Kit.h"
 #include "Core/Orca/UX/Probe.h"
 #include "Core/Orca/UX/Rumble.h"
+#include "Core/Orca/UX/RankedSteps.h"
 
 namespace Orca::UX
 {
@@ -259,6 +260,45 @@ void BrawlModule::LoadOwnControls()
 void BrawlModule::SetLocalPort(int port)
 {
   RankedSet::SetLocalPort(port);
+}
+
+Orca::Engine::Display BrawlModule::Show()
+{
+  Orca::Engine::Display d;
+  const u8 native = NativeText::Shown();
+  d.plates = native & 0x0F;
+  d.rules_bar = (native & NativeText::SHOWN_RULES) != 0;
+  const Relabel::Shown words = Relabel::Current();
+  d.band_clock = words.band != Relabel::Band::Game && words.band_up;
+  d.line_relabelled = words.line != Relabel::LINE_GAME;
+  d.legend = words.legend;
+  d.tip = Queue::Tip();
+  const RankedPPlus::Lines ranked = RankedPPlus::CurrentLines();
+  d.ranked_set = ranked.set;
+  d.ranked_turn = ranked.turn;
+  d.score_line = RankedSet::CurrentScoreLine();
+  d.cursors = StageCursors::Current();
+  const StageCursors::View& v = d.cursors;
+  d.layout = StageCursors::LayoutFor(v.game);
+  if (d.layout)
+  {
+    for (int port = 0; port < 2; ++port)
+    {
+      const StageCursors::View::Player& p = v.players[port];
+      if (!p.present || !Ranked::Named(p.proposal))
+        continue;
+      const StageCursors::Tile* tile = StageCursors::TileOf(*d.layout, p.proposal, v.page);
+      d.proposals[port] = tile ? &tile->rect : nullptr;
+    }
+    for (int port = 0; port < 2; ++port)
+      d.cues[port] = StageCursors::TurnText(v, port);
+    d.mk_note = StageCursors::MkClauseNote(v);
+  }
+  d.picker = CharOrder::CurrentPicker();
+  if (d.picker >= 0)
+    d.picker_ribbon = CharOrder::CurrentPickerRibbon();
+  d.dots = RankedSet::CurrentDots();
+  return d;
 }
 
 Orca::Engine::Ruleset BrawlModule::ProfileRuleset()

@@ -9,6 +9,7 @@
 #include <string>
 
 #include "Common/CommonTypes.h"
+#include "Core/Orca/Engine/Display.h"
 #include "Core/Orca/Games/Brawl/MatchBlock.h"
 #include "InputCommon/GCPadStatus.h"
 
@@ -63,49 +64,13 @@ u8 ButtonsOf(u16 pad_buttons);
 constexpr u8 GAME_BRAWL = 1;
 constexpr u8 GAME_PPLUS = 2;
 
-// In cursor units x 16: x0 <= x < x1, y0 <= y < y1 (up is +y).
-struct Rect
-{
-  s16 x0, y0, x1, y1;
-  constexpr bool Contains(int x, int y) const { return x >= x0 && x < x1 && y >= y0 && y < y1; }
-};
-// A legal stage's tile: ruleset stage index (RankedSteps.h), page, and rectangle.
-struct Tile
-{
-  s8 stage;
-  u8 page;
-  Rect rect;
-};
-struct Point
-{
-  s16 x, y;
-};
+// Rect, Tile, Point and Layout (a layout's geometry, what the cursors move over): Engine/Display.h,
+// which the overlay draws from.
+using Orca::Engine::Cursors::Layout;
+using Orca::Engine::Cursors::Point;
+using Orca::Engine::Cursors::Rect;
+using Orca::Engine::Cursors::Tile;
 
-struct Layout
-{
-  u8 game = 0;
-  // The cursor's range (the game's own cursor never leaves it), x 16.
-  Rect bounds{};
-  // Movement per frame at full tilt (x 16), and the stick dead zone (of 128).
-  s16 speed = 16;
-  s16 dead_zone = 24;
-  std::span<const Tile> tiles;
-  // Brawl's Melee Stages / Brawl Stages page button. Without pages it is never hovered.
-  bool pages = false;
-  Rect page_button{};
-  // The game's own Random button (hovered item 0x36), on every page. An empty rectangle is never
-  // hovered.
-  Rect random_button{};
-  // Overlay only, never synced: the Random button as drawn, for the frame around a Random pick (the
-  // hit rectangle above runs past it).
-  Rect random_art{};
-  // Where the two cursors start: on nothing (Hovered reads NOTHING), not a tile, Random or the page
-  // button.
-  std::array<Point, 2> start{};
-  // Overlay only, never synced: where cursor (0, 0) sits in the picture (0..1 across and down),
-  // and how far one cursor unit moves across and down.
-  float u0 = 0.5f, du = 0.01f, v0 = 0.5f, dv = -0.01f;
-};
 const Layout& BrawlLayout();
 const Layout& PPlusLayout();
 const Layout* LayoutFor(u8 game);
@@ -166,50 +131,11 @@ void LatchFrame(const Core::CPUThreadGuard& guard,
                 const std::array<std::optional<GCPadStatus>, 4>& raw);
 
 // ---- Overlay view (UI only, published by the stage flows on first runs) ----
-struct View
-{
-  bool on = false;
-  u8 game = 0;
-  u32 page = 0;
-  struct Player
-  {
-    bool present = false;
-    s16 x = 0, y = 0;
-    s8 proposal = -1;  // proposed stage (ruleset index), -1 none, -2 Random (Ranked::PREF_*)
-    bool local = false;
-    std::string name;
-  };
-  std::array<Player, 2> players;
-  s8 picked = -1;    // the stage the flow took (-1: not yet)
-  s8 turn = -1;      // whose turn it is (-1: nobody's or both)
-  // The current step: kind (Ranked::StepKind, 0 none), strikes or bans still owed, whether a ban
-  // is optional, Brawl's Meta Knight clause (one pick of any legal stage), a step for both players
-  // at once (a casual pick), and the timer's seconds (-1: none).
-  u8 kind = 0;
-  u8 left = 0;
-  bool optional = false;
-  bool mk_clause = false;
-  bool both = false;
-  s16 seconds = -1;
-  bool operator==(const View&) const = default;
-};
+// View: Engine/Display.h (the overlay draws it).
+using Orca::Engine::Cursors::View;
 
-// The turn tag drawn by a player's cursor (UI only).
-struct TurnCue
-{
-  enum class Mode : u8
-  {
-    Idle,     // nothing to say: no tag, no blink
-    Acting,   // this player has to act: the cursor blinks, the tag says what to do
-    Waiting,  // the local player waits for the other: a small grey tab, no blink
-  };
-  Mode mode = Mode::Idle;
-  bool local = false;  // the cursor belongs to this machine's player
-  std::string title;   // "YOUR TURN", "BO'S TURN", "WAITING FOR BO"
-  std::string detail;  // "X STRIKES A STAGE · 2 LEFT" (may be empty)
-  int seconds = -1;    // the turn's timer (-1: none)
-  bool operator==(const TurnCue&) const = default;
-};
+// TurnCue: Engine/Display.h.
+using Orca::Engine::Cursors::TurnCue;
 // The turn tag for `port`'s cursor (0 or 1), from this machine's point of view.
 TurnCue TurnText(const View& view, int port);
 // The banner line under "META KNIGHT CLAUSE" ("BO PICKS ANY STAGE · NO STRIKES", or "YOU PICK ..."

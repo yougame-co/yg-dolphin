@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include "Common/CommonTypes.h"
+#include "Core/Orca/Engine/Display.h"
 #include "Core/Orca/Games/Brawl/Results.h"
 #include "Core/Orca/Games/Brawl/SetBlock.h"
 
@@ -97,13 +98,7 @@ void SetLocalPort(int port);
 // The overlay's per-game dots. games[i] is the winning port of the i-th decided game, -1 if not
 // played yet (ties don't count). `current` is the 0-based game in play, -1 once the set is over.
 // `on` only in a ranked set on the menus.
-struct Dots
-{
-  bool on = false;
-  std::array<int, 3> games{-1, -1, -1};
-  int current = -1;
-  bool operator==(const Dots&) const = default;
-};
+using Dots = Orca::Engine::SetDots;  // Engine/Display.h
 Dots DotsOf(const SetBlock::SetState& set);
 // The last dots the hook published. Any thread; off during a fight.
 Dots CurrentDots();

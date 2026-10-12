@@ -30,6 +30,7 @@ public:
   Orca::Engine::CssAdapter* Css() override;
   void LoadOwnControls() override;
   void SetLocalPort(int port) override;
+  Orca::Engine::Display Show() override;
   Orca::Engine::Ruleset ProfileRuleset() override;
 };
 

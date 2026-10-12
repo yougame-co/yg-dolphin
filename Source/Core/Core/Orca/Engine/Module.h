@@ -9,6 +9,7 @@
 #include <string_view>
 #include <vector>
 
+#include "Core/Orca/Engine/Display.h"
 #include "Core/Orca/Engine/MatchTypes.h"
 
 #include "Core/Orca/Session/Events.h"
@@ -142,6 +143,8 @@ public:
   virtual void LoadOwnControls() = 0;
   // The port this machine plays (0-based), for the module's local-only display state (group F).
   virtual void SetLocalPort(int port) = 0;
+  // What the overlay shows now (host only, any thread the overlay draws on; S2 commit 6).
+  virtual Display Show() = 0;
   // The ruleset the running game plays (None: no locks). Part of the compatibility key.
   virtual Ruleset ProfileRuleset() = 0;
 };

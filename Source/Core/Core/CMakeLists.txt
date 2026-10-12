@@ -521,6 +521,7 @@ add_library(core
   Orca/Disc.h
   Orca/DiscVerify.cpp
   Orca/DiscVerify.h
+  Orca/Engine/Display.h
   Orca/Engine/GuestMemory.cpp
   Orca/Engine/GuestMemory.h
   Orca/Engine/MatchTypes.cpp
