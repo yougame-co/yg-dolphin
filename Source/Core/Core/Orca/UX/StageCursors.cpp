@@ -75,6 +75,15 @@ constexpr std::array<Tile, 9> kPPlusTiles{{
     {3, 0, R(14.25f, -17.75f, 21.75f, -11.25f)},   // Luigi's Mansion, 8
 }};
 
+// The Random buttons (hovered item 0x36) were not swept like the tiles: they are measured from
+// screenshots of each stage select at 1280x720 through the picture map below, padded out to the
+// next quarter unit. Brawl's grey bar's outline is x -4.9..15.0, y -20.7..-17.4: its rectangle
+// stops where the page button's starts (the sweep found the page button from 15.5), and the cursor
+// stops at -19.5 inside the bar. Project+'s slanted green button is x -16.0..4.0 at its widest,
+// y -22.6..-19.3: its rectangle takes the middle of the slanted right edge (Project+'s flows have
+// no page button) and runs down past the cursor's range, -23.5, which is just under the button.
+// Neither touches a tile. A sweep under ORCA_UX_PROBE would confirm both.
+
 // Maps cursor units to the picture for the overlay, the same in both games. Measured at 1280x720
 // (picture 1250 x 720 between bars at x 15 and 1265): cursor (0, 0) is at (639.8, 358.4), one unit
 // is 15.18 px across and 14.42 px down.
@@ -96,8 +105,11 @@ Layout MakeBrawl()
   l.tiles = kBrawlTiles;
   l.pages = true;
   l.page_button = R(15.25f, -19.75f, 30.25f, -17.25f);
-  // On the Random bar, either side of the game's own cursor start (3.5, -17.5).
-  l.start = {Point{U(-2.0f), U(-18.0f)}, Point{U(9.0f), U(-18.0f)}};
+  l.random_button = R(-5.25f, -21.0f, 15.25f, -17.25f);
+  l.random_art = R(-4.9f, -20.7f, 15.0f, -17.4f);
+  // Just above the Random bar (-17.25), either side of the game's own cursor start (3.5, -17.5),
+  // below every legal tile: on nothing, so an A mashed into the stage select names nothing.
+  l.start = {Point{U(-2.0f), U(-16.5f)}, Point{U(9.0f), U(-16.5f)}};
   Map(&l);
   return l;
 }
@@ -110,8 +122,11 @@ Layout MakePPlus()
   l.speed = U(1.6f);
   l.tiles = kPPlusTiles;
   l.pages = false;
-  // Below the two rows of tiles.
-  l.start = {Point{U(-6.0f), U(-21.0f)}, Point{U(6.0f), U(-21.0f)}};
+  l.random_button = R(-16.25f, -23.75f, 3.0f, -19.0f);
+  l.random_art = R(-16.0f, -22.6f, 4.0f, -19.3f);
+  // Between the lower row of tiles (-17.75) and the Random button (-19.0): on nothing, so an A
+  // mashed into the stage select names nothing.
+  l.start = {Point{U(-6.0f), U(-18.5f)}, Point{U(6.0f), U(-18.5f)}};
   Map(&l);
   return l;
 }
@@ -205,6 +220,8 @@ int Hovered(const Layout& l, u32 page, int x, int y)
   }
   if (l.pages && l.page_button.Contains(x, y))
     return PAGE_BUTTON;
+  if (l.random_button.Contains(x, y))
+    return RANDOM_BUTTON;
   return NOTHING;
 }
 
@@ -286,6 +303,10 @@ State Start(const Layout& l)
   {
     s.cursors[p].x = l.start[p].x;
     s.cursors[p].y = l.start[p].y;
+    // Held until the latch reads them up. `now` too: the flow may take presses in this same frame,
+    // before any latch, and that must not clear `seen`.
+    s.cursors[p].now = HELD_ALL;
+    s.cursors[p].seen = HELD_ALL;
   }
   return s;
 }
@@ -367,17 +388,18 @@ TurnCue TurnText(const View& v, int port)
   cue.local = p.local;
   const std::string name = UpperName(v, port);
   const std::string them = UpperName(v, 1 - port);
-  // Both pick at once (casual): whoever hasn't proposed a stage acts. A local player who has waits.
+  // Both pick at once (casual): whoever hasn't named a stage or Random acts. A local player who
+  // has waits.
   if (v.both)
   {
-    if (p.proposal < 0)
+    if (!Ranked::Named(p.proposal))
     {
       cue.mode = TurnCue::Mode::Acting;
       cue.title = p.local ? "YOUR PICK" : fmt::format("{} PICKS", name);
-      cue.detail = p.local ? "A PICKS A STAGE" : "";
+      cue.detail = p.local ? "A PICKS A STAGE OR RANDOM" : "";
       cue.seconds = v.seconds;
     }
-    else if (p.local && other.present && other.proposal < 0)
+    else if (p.local && other.present && !Ranked::Named(other.proposal))
     {
       cue.mode = TurnCue::Mode::Waiting;
       cue.title = fmt::format("WAITING FOR {}", them);

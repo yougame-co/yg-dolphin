@@ -265,9 +265,25 @@ void AutoPick(MatchBlock::State& s, int stage, int port, u8 why, int frame)
   s.auto_press = false;
 }
 
+// A block preference as RankedSteps keeps it: a stage, PREF_RANDOM, or PREF_NONE.
 s8 Signed(u8 pref)
 {
-  return pref < Ranked::MAX_STAGES ? static_cast<s8>(pref) : s8(-1);
+  if (pref == MatchBlock::RANDOM)
+    return Ranked::PREF_RANDOM;
+  return pref < Ranked::MAX_STAGES ? static_cast<s8>(pref) : Ranked::PREF_NONE;
+}
+
+// Whether the local player's own cursor is on the Random button (UI only).
+bool LocalOnRandom(const GuestMemory& m, int me)
+{
+  if (me < 0 || me > 1)
+    return false;
+  const std::optional<StageCursors::State> c = StageCursors::Read(m);
+  if (!c)
+    return false;
+  const StageCursors::Cursor& mine = c->cursors[me];
+  return StageCursors::Hovered(StageCursors::PPlusLayout(), 0, mine.x, mine.y) ==
+         StageCursors::RANDOM_BUTTON;
 }
 
 // Ranked presses on each player's own cursor. X strikes on your turn, A picks on your pick or
@@ -404,8 +420,9 @@ void ResetSteps(MatchBlock::State& s)
   s.prefs = {MatchBlock::NONE, MatchBlock::NONE};
 }
 
-// A casual stage select. Both players name a stage at once with A (B takes it back), and the flow
-// picks the result. When the timer runs out, a player who named none gets a random legal stage.
+// A casual stage select. Both players name a stage, or Random, at once with A (B takes it back),
+// and the flow picks the result. Random, and a player who named none when the timer runs out, get
+// a random legal stage (Ranked::CasualResult). The block keeps Random as RANDOM, not its stage.
 void CasualSelect(GuestMemory& m, const Ranked::Ruleset& rules, MatchBlock::State& s, int frame,
                   StageCursors::State& c)
 {
@@ -437,16 +454,19 @@ void CasualSelect(GuestMemory& m, const Ranked::Ruleset& rules, MatchBlock::Stat
       s.prefs[port] = MatchBlock::NONE;
     if ((pressed & StageCursors::BTN_A) && on >= 0 && (allowed & Bit(on)))
       s.prefs[port] = static_cast<u8>(on);
+    else if ((pressed & StageCursors::BTN_A) && on == StageCursors::RANDOM_BUTTON && allowed)
+      s.prefs[port] = MatchBlock::RANDOM;
   }
-  const bool both = s.prefs[0] < Ranked::MAX_STAGES && s.prefs[1] < Ranked::MAX_STAGES;
+  const std::array<s8, 2> prefs{Signed(s.prefs[0]), Signed(s.prefs[1])};
+  const bool both = Ranked::Named(prefs[0]) && Ranked::Named(prefs[1]);
   if (!both && !expired)
     return;
-  // Both named, or time is up: the flow picks the result for that player.
-  const std::array<s8, 2> prefs{Signed(s.prefs[0]), Signed(s.prefs[1])};
+  // Both named, or time is up: the flow picks the result for that player. Whoever named nothing
+  // gets their random stage; a Random stays RANDOM.
   const int chosen = Ranked::CasualResult(plan, prefs);
   for (int port = 0; port < 2; ++port)
   {
-    if (s.prefs[port] >= Ranked::MAX_STAGES)
+    if (!Ranked::Named(prefs[port]))
       s.prefs[port] = static_cast<u8>(Ranked::CasualDefault(plan, port));
   }
   const int port = s.prefs[0] == s.prefs[1] ? 0 : Ranked::CasualChoice(plan);
@@ -682,14 +702,19 @@ Rollback::InputGate::Masks Masks(const GuestMemory& m)
   const std::optional<MatchBlock::State> s = MatchBlock::Read(m);
   if (!s || (!IsRankedPPlus(*s) && !IsCasualPPlus(*s)) || s->done || s->flow != 1)
     return masks;
-  const std::string scene = ReadSceneName(m);
-  if (!StageSelectTask(m, scene) || !StageCursors::Read(m))
+  const u32 task = StageSelectTask(m, ReadSceneName(m));
+  if (!task || !StageCursors::Read(m))
     return masks;
   // Players use their own cursors, so the game's cursor and buttons are masked for everyone. Only
   // the flow drives them, pressing A for the cursor's port when it picks.
   for (Mask& mask : masks)
     mask = Rollback::InputGate::ALL;
-  if (s->auto_pick && s->active <= 1)
+  // A only once the game's hover has left its Random and page buttons. Apply moves the game's
+  // cursor onto the picked tile, but the hover follows a frame later; an A while it still reads
+  // Random would take Project+'s own random stage instead of the flow's.
+  const u32 hovered = m.Read32(task + SSS_HOVERED);
+  const bool on_button = hovered == RANDOM_ITEM || hovered == PAGE_ITEM;
+  if (s->auto_pick && s->active <= 1 && !on_button)
     masks[s->active].press = s->auto_press ? PAD_BUTTON_A : 0;
   return masks;
 }
@@ -756,13 +781,20 @@ Lines Describe(const GuestMemory& m, int frame, const std::vector<Events::PortIn
       a += " · " + b;
     return a;
   };
+  // A preference as the overlay names it: a stage, "Random", or empty for none.
+  const auto pref_name = [&](u8 pref) -> std::string {
+    if (pref == MatchBlock::RANDOM)
+      return "Random";
+    return pref < rules.stage_count ? std::string(rules.stage_names[pref]) : std::string();
+  };
   const auto proposal_note = [&]() {
     std::string out;
     for (int port = 0; port < 2; ++port)
     {
-      if (port == me || s->prefs[port] >= rules.stage_count)
+      const std::string wanted = pref_name(s->prefs[port]);
+      if (port == me || wanted.empty())
         continue;
-      out = fmt::format("{} wants {}", name(port), rules.stage_names[s->prefs[port]]);
+      out = fmt::format("{} wants {}", name(port), wanted);
       if (me >= 0 && s->prefs[me] != s->prefs[port])
         out += " · A on it to agree";
     }
@@ -775,9 +807,14 @@ Lines Describe(const GuestMemory& m, int frame, const std::vector<Events::PortIn
       return lines;
     if (s->auto_pick && s->auto_stage < Ranked::MAX_STAGES && s->active <= 1)
     {
-      const std::string whose = s->prefs[0] == s->prefs[1] ? std::string("both picks") :
-                                local(s->active)           ? std::string("your pick") :
-                                                   fmt::format("{}'s pick", name(s->active));
+      // The flow picks for the coin's port (port 1 when both named the same), so a Random there
+      // says so, never what the other port's Random would have drawn.
+      std::string whose = local(s->active) ? std::string("your pick") :
+                                             fmt::format("{}'s pick", name(s->active));
+      if (s->prefs[s->active] == MatchBlock::RANDOM)
+        whose = "random";
+      else if (s->prefs[0] == s->prefs[1])
+        whose = "both picks";
       lines.set = fmt::format("{} ({})", rules.stage_names[s->auto_stage], whose);
       return lines;
     }
@@ -787,9 +824,10 @@ Lines Describe(const GuestMemory& m, int frame, const std::vector<Events::PortIn
     lines.set = fmt::format("Stage pick · {}", clock(plan.steps[s->step]));
     if (me >= 0)
     {
-      lines.turn = s->prefs[me] < rules.stage_count ?
-                       fmt::format("You want {}", rules.stage_names[s->prefs[me]]) :
-                       std::string("A on the stage you want · the same pick plays there, else a "
+      const std::string mine = pref_name(s->prefs[me]);
+      lines.turn = !mine.empty() ?
+                       fmt::format("You want {}", mine) :
+                       std::string("A on a stage or Random · the same pick plays there, else a "
                                    "coin takes one of the two");
     }
     lines.turn = join(lines.turn, proposal_note());
@@ -840,7 +878,8 @@ Lines Describe(const GuestMemory& m, int frame, const std::vector<Events::PortIn
     break;
   }
   lines.set = fmt::format("{} · {} · {}", set, turn, clock(step));
-  // Second line: the turn's keys, then the opponent's proposal or a hint that A proposes.
+  // Second line: the turn's keys, then the opponent's proposal or a hint that A proposes. On the
+  // Random button, that Random is casual only.
   if (local(turn_port))
     lines.turn = fmt::format("Your turn: {}", keys);
   const std::string theirs = proposal_note();
@@ -848,6 +887,8 @@ Lines Describe(const GuestMemory& m, int frame, const std::vector<Events::PortIn
     lines.turn = join(lines.turn, theirs);
   else if (me >= 0 && !(me == turn_port && step.kind == StepKind::Pick))
     lines.turn = join(lines.turn, "A proposes a stage");
+  if (LocalOnRandom(m, me))
+    lines.turn = join(lines.turn, "Random is casual only");
   return lines;
 }
 
@@ -955,8 +996,8 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
             a.active <= 1 ? a.active + 1 : 0, a.struck, a.step_done,
             a.auto_pick ? static_cast<int>(a.auto_stage) : -1, a.fight ? 1 : 0,
             a.stage == MatchBlock::NONE ? -1 : a.stage, a.won_on[0], a.won_on[1],
-            a.prefs[0] == MatchBlock::NONE ? -1 : a.prefs[0],
-            a.prefs[1] == MatchBlock::NONE ? -1 : a.prefs[1], a.done ? fmt::format(" SET port {}", a.set_winner + 1) : std::string());
+            static_cast<int>(Signed(a.prefs[0])), static_cast<int>(Signed(a.prefs[1])),
+            a.done ? fmt::format(" SET port {}", a.set_winner + 1) : std::string());
       }
     }
     Lines lines = Describe(memory, frame, ports);

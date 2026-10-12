@@ -177,7 +177,8 @@ static_assert(CSS_TIMER_START + 4 <= BASE + 0xC0 + PHASE1_SIZE);
 //            +0x1C u8 port 1 character, +0x1D port 2 (gmCharacterKind, 0xFF unknown)
 //            +0x20 4 bytes per counted game (up to 8): winner, stage, both characters
 //            (casual uses only +0x10, as a count of fights started)
-//            +0x40 u8 port 1 preferred stage, +0x41 port 2 (casual only, 0xFF none)
+//            +0x40 u8 port 1 preferred stage, +0x41 port 2 (casual only, 0xFF none,
+//            0xFE Random)
 //   steps    +0x80 u8 flow: 0 idle, 1 running on the stage select
 //            +0x81 u8 step   +0x82 u8 port whose turn it is (0xFF none)
 //            +0x83 u8 strikes/bans made this step   +0x84 u16 stages struck/banned this game
@@ -193,6 +194,8 @@ constexpr u8 MODE_CASUAL = 1;
 constexpr u8 MODE_RANKED = 2;
 
 constexpr u8 NONE = 0xFF;
+// A casual preferred stage of Random (State::prefs; Ranked::PREF_RANDOM).
+constexpr u8 RANDOM = 0xFE;
 // Why the stage flow is picking a stage (State::auto_why).
 constexpr u8 AUTO_TIMER = 0;   // timer ran out: pick the default
 constexpr u8 AUTO_PICKED = 1;  // the picker pressed A on a stage
@@ -236,7 +239,7 @@ struct State
   u8 auto_stage = NONE;
   bool auto_press = false;  // auto pick's A: pressed 4 frames, then released 4
   u8 auto_why = 0;          // AUTO_TIMER, AUTO_PICKED, AUTO_AGREED or AUTO_CASUAL
-  // Casual preferred stages (RankedPPlus.h).
+  // Casual preferred stages (RankedPPlus.h): a ruleset index, NONE or RANDOM.
   std::array<u8, 2> prefs{NONE, NONE};
   bool operator==(const State&) const = default;
 

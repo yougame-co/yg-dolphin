@@ -529,15 +529,20 @@ void DrawStageCursors(ImDrawList* dl, const StageCursors::View& v, ImVec2 pic, I
   for (int port = 0; port < 2; ++port)
   {
     const StageCursors::View::Player& p = v.players[port];
-    if (!p.present || p.proposal < 0)
+    if (!p.present || !Ranked::Named(p.proposal))
       continue;
+    // A stage's tile, or the Random button as drawn for a casual Random.
     const StageCursors::Tile* tile = StageCursors::TileOf(*layout, p.proposal, v.page);
-    if (!tile)
+    const StageCursors::Rect* rect = tile ? &tile->rect : nullptr;
+    if (p.proposal == Ranked::PREF_RANDOM)
+      rect = layout->random_art.x0 < layout->random_art.x1 ? &layout->random_art :
+                                                             &layout->random_button;
+    if (!rect || rect->x0 >= rect->x1 || rect->y0 >= rect->y1)
       continue;
     const bool both = v.players[1 - port].present && v.players[1 - port].proposal == p.proposal;
     if (both && port == 1)
       continue;
-    const ImVec2 c0 = at16(tile->rect.x0, tile->rect.y1), c1 = at16(tile->rect.x1, tile->rect.y0);
+    const ImVec2 c0 = at16(rect->x0, rect->y1), c1 = at16(rect->x1, rect->y0);
     Kit::Frame(dl, ImVec2(std::min(c0.x, c1.x), std::min(c0.y, c1.y)),
                ImVec2(std::max(c0.x, c1.x), std::max(c0.y, c1.y)), unit,
                both ? Kit::Tone::Gold : Kit::PortTone(port),
