@@ -602,6 +602,8 @@ add_library(core
   Orca/UX/Relabel.h
   Orca/UX/Results.cpp
   Orca/UX/Results.h
+  Orca/UX/Rumble.cpp
+  Orca/UX/Rumble.h
   Orca/UX/SetEnd.cpp
   Orca/UX/SetEnd.h
   Orca/UX/StageCursors.cpp

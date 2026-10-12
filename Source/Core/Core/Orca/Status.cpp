@@ -122,6 +122,7 @@ std::string OfferedCaps()
     caps += fmt::format(" {}", RESULTS_CAP);
   if (UX::Rules::ProfileRuleset() != UX::Rules::Ruleset::None)
     caps += fmt::format(" {} {} {}", LOCKS_CAP, QUEUE2_CAP, PICK_CAPS);
+  caps += fmt::format(" {}", RUMBLE_CAP);
   return caps;
 }
 

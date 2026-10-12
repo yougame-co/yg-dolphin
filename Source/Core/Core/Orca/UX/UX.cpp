@@ -29,6 +29,7 @@
 #include "Core/Orca/UX/RankedSet.h"
 #include "Core/Orca/UX/Relabel.h"
 #include "Core/Orca/UX/Results.h"
+#include "Core/Orca/UX/Rumble.h"
 #include "Core/Orca/UX/StageCursors.h"
 #include "Core/Rollback/InputGate.h"
 
@@ -142,6 +143,15 @@ void Init()
       StageCursors::Publish(std::move(view));
     }
     ProbeFrame(guard, frame);
+    // Read only, first runs only. The game's rumble for this machine's own port, to the page.
+    if (!resimulating)
+    {
+      for (const Orca::Events::PortInfo& p : ports)
+      {
+        if (!p.remote)
+          Rumble::Frame(guard, p.port);
+      }
+    }
     // Local display only. The overlay matches the session's game.
     Kit::SetLook(Rules::ProfileRuleset() == Rules::Ruleset::PPlus ? Kit::Look::ProjectPlus :
                                                                     Kit::Look::Brawl);
@@ -203,7 +213,10 @@ void Init()
     ApplyToggledGamePatches(guard);
   });
   // While the game waits for a friend, re-present the last frame with "Waiting for <name>...".
-  Orca::Events::SetStallCallback([](int stalled_ms) { RepresentDuringStall(stalled_ms); });
+  Orca::Events::SetStallCallback([](int stalled_ms) {
+    RepresentDuringStall(stalled_ms);
+    Rumble::Stall(stalled_ms);
+  });
   Orca::Events::SetBoundaryCallback([](bool shown, double game_held_ms, int game_held_frames) {
     FrameBoundary(shown, game_held_ms, game_held_frames);
   });
@@ -218,6 +231,7 @@ void Init()
 
 void Shutdown()
 {
+  Rumble::Halt();
   Rollback::InputGate::SetSource({});
   Rollback::InputGate::SetLatch({});
   Orca::Events::SetStallCallback({});
