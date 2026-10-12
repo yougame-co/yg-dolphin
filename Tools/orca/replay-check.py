@@ -8,6 +8,7 @@
 #                              [--match-seconds N] [--no-watch] [--late-watch S]
 #                              [--net-delay MS] [--net-jitter MS] [--realtime]
 #                              [--video Metal --shots MS --shot-seconds S] [--relay <site>]
+#                              [--watch-drop S]
 #
 # 1. Host and Friend each boot their own game, writing their history to a replay stream
 #    (ORCA_TEST_REPLAY_OUT). Friend drops into Host's character select (as dropin-identity.py), and
@@ -57,8 +58,10 @@ SHOT_SECONDS = int(sys.argv[sys.argv.index("--shot-seconds") + 1]) if "--shot-se
 # --relay <site>: everything over a local rooms stack (rooms/scripts/replay-stub-site.mjs in YouGame,
 # with `wrangler dev` rooms): Host also streams to its room (ORCA_TEST_REPLAY_ROOM), and both
 # watchers watch through the rooms Worker's /watch/<code> with a watch ticket from that site,
-# instead of reading Host's file.
+# instead of reading Host's file. Watcher's connection drops once, --watch-drop seconds (20; 0: never)
+# after it connected, and must come back on a fresh ticket and play on with every checksum matching.
 RELAY = sys.argv[sys.argv.index("--relay") + 1].rstrip("/") if "--relay" in sys.argv else None
+WATCH_DROP = sys.argv[sys.argv.index("--watch-drop") + 1] if "--watch-drop" in sys.argv else "20"
 DEV = "orca-replay-test"
 
 
@@ -285,9 +288,14 @@ log(f"Host's stream: {host_file}")
 # 2. Live: a watcher of Host's stream, from Host's origin.
 watcher = None
 if WATCH:
-    watcher = Orca("Watcher", {"ORCA_TEST_REPLAY_IN": watch_url() if RELAY else host_file,
+    # Over the relay, Watcher gets its own watch tickets (watch:<room>), so its connection can drop
+    # (--watch-drop seconds after it connected, 20 by default) and come back with a fresh one.
+    watcher = Orca("Watcher", {"ORCA_TEST_REPLAY_IN": (f"watch:{ROOM}" if WATCH_DROP != "0" else watch_url())
+                                                      if RELAY else host_file,
                                "ORCA_TEST_REPLAY_FOLLOW": "1",
-                               "ORCA_TEST_REPLAY_DELAY": "12"}, inputs=False)
+                               "ORCA_TEST_REPLAY_DELAY": "12",
+                               **({"ORCA_TEST_REPLAY_WATCH_DROP": WATCH_DROP} if RELAY and WATCH_DROP != "0" else {})},
+                   inputs=False)
     orcas.append(watcher)
     watcher.expect("orca caps", 30)
     watcher.send("caps stats")
@@ -352,6 +360,10 @@ if watcher:
     w = fields(done)
     check("live watcher matches the players", w["ok"] and int(w["checked"]) > 0 and w["mismatched"] == "0",
           f"{w['checked']} checksums checked, {w['mismatched']} differ, {w['frames']} frames")
+    if RELAY and WATCH_DROP != "0":
+        back = watcher.log_lines("back on the match's stream")
+        check("the live watcher's connection dropped and came back", w["ok"] and back,
+              f"{len(back)} reconnect(s): {short(back[0]) if back else '-'}")
     check("live watcher latency", int(w["checked"]) > 0,
           f"{w['live_avg_ms']} ms behind the players on average ({w['live_max_ms']} ms at most); "
           f"{w['behind_avg_ms']} ms of it behind the stream; {w['waits']} waits for data")

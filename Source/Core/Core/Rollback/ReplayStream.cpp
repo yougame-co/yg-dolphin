@@ -12,6 +12,7 @@
 #include <fmt/format.h>
 #include <picojson.h>
 
+#include "Common/HttpRequest.h"
 #include "Common/IOFile.h"
 #include "Common/Logging/Log.h"
 #include "Common/Version.h"
@@ -227,7 +228,62 @@ Player::~Player()
   }
 }
 
-void Player::WatchThread(std::string url)
+// The URL to watch on, with a ticket good now. A `watch:<room>` source gets a watch ticket from the
+// site for the dev game, as the app's page would get one for a real listing, so every reconnect
+// has a fresh one; a ws(s):// URL is used as given (its ticket expires).
+static std::string WatchTarget(const std::string& source, std::string* error)
+{
+  if (!source.starts_with("watch:"))
+    return source;
+  std::string site = Orca::GetEnv("ORCA_SITE");
+  if (site.empty())
+    site = "https://yougame.co";
+  while (site.ends_with('/'))
+    site.pop_back();
+  picojson::object request;
+  request["dev"] = picojson::value(Orca::GetEnv("ORCA_TEST_DEV_GAME"));
+  request["watch"] = picojson::value(source.substr(6));
+  Common::HttpRequest http(std::chrono::seconds(10));
+  const Common::HttpRequest::Response response =
+      http.Post(site + "/api/multiplayer/ticket", picojson::value(request).serialize(),
+                {{"Content-Type", "application/json"}}, Common::HttpRequest::AllowedReturnCodes::All);
+  picojson::value json;
+  if (!response ||
+      !picojson::parse(json, std::string(response->begin(), response->end())).empty() ||
+      !json.is<picojson::object>())
+  {
+    *error = fmt::format("no watch ticket (HTTP {})", http.GetLastResponseCode());
+    return {};
+  }
+  const picojson::object& reply = json.get<picojson::object>();
+  const auto str = [&reply](const char* key) {
+    const auto it = reply.find(key);
+    return it != reply.end() && it->second.is<std::string>() ? it->second.get<std::string>() :
+                                                                std::string();
+  };
+  std::string url = str("url");
+  const std::string ticket = str("ticket");
+  const std::string path = str("watch");
+  if (url.empty() || ticket.empty() || !path.starts_with("/watch/"))
+  {
+    *error = str("error").empty() ? std::string("no watch ticket") : str("error");
+    return {};
+  }
+  if (url.starts_with("https://"))
+    url = "wss://" + url.substr(8);
+  else if (url.starts_with("http://"))
+    url = "ws://" + url.substr(7);
+  else
+  {
+    *error = "the watch ticket's room URL isn't http(s)";
+    return {};
+  }
+  while (url.ends_with('/'))
+    url.pop_back();
+  return url + path + "?ticket=" + ticket;
+}
+
+void Player::WatchThread(std::string source)
 {
   Watch& watch = *m_watch;
   const auto fail = [&watch](std::string why) {
@@ -236,85 +292,164 @@ void Player::WatchThread(std::string url)
       watch.error = std::move(why);
     watch.ended = true;
   };
-  // A busy room may take a while to answer: a few tries, a moment apart, before giving up.
-  Common::WebSocket socket;
-  std::string error;
-  bool connected = false;
-  for (int attempt = 0; attempt < 5 && !watch.stop && !connected; ++attempt)
-  {
-    if (attempt > 0)
-    {
-      WARN_LOG_FMT(ROLLBACK, "Replay: the match's stream didn't answer ({}); trying again", error);
-      std::this_thread::sleep_for(std::chrono::seconds(2));
-    }
-    connected = socket.Connect(url, std::chrono::seconds(10), &error);
-  }
-  if (!connected)
-  {
-    fail("couldn't connect to the match: " + error);
-    return;
-  }
-  auto last_ping = Clock::now();
+  // ORCA_TEST_REPLAY_WATCH_DROP=<s>: the socket drops once, that long after it first connected, as
+  // a network failure would (the reconnect test).
+  const int drop_after = std::max(0, std::atoi(Orca::GetEnv("ORCA_TEST_REPLAY_WATCH_DROP").c_str()));
+  bool dropped = false;
+  // The stream's bytes taken so far. A connection always starts the stream from its header, so after
+  // a reconnect the first `received` bytes are ones already played: they are skipped, and the
+  // first of them (`head`) must be the same, or it is another stream.
+  u64 received = 0;
+  std::vector<u8> head;
+  int connections = 0;
+  // Connections in a row that closed with nothing new (a finished stream sends its backlog and
+  // closes): the stream is over after a few, rather than reconnecting forever.
+  int fruitless = 0;
   while (!watch.stop)
   {
-    if (Clock::now() - last_ping > std::chrono::seconds(15))
+    // A busy room may take a while to answer: a few tries, a moment apart, before giving up; a
+    // dropped connection gets about half a minute to come back.
+    Common::WebSocket socket;
+    std::string error;
+    bool connected = false;
+    const int tries = connections == 0 ? 5 : 15;
+    for (int attempt = 0; attempt < tries && !watch.stop && !connected; ++attempt)
     {
-      socket.SendText(R"({"t":"ping"})", std::chrono::seconds(2));
-      last_ping = Clock::now();
-    }
-    const std::optional<std::string> text = socket.ReceiveText(std::chrono::milliseconds(100));
-    if (!text)
-    {
-      if (!socket.IsOpen())
+      if (attempt > 0)
       {
-        std::lock_guard lock(watch.mutex);
-        watch.ended = true;
-        return;
+        WARN_LOG_FMT(ROLLBACK, "Replay: the match's stream didn't answer ({}); trying again", error);
+        std::this_thread::sleep_for(std::chrono::seconds(2));
       }
-      continue;
+      const std::string url = WatchTarget(source, &error);
+      connected = !url.empty() && socket.Connect(url, std::chrono::seconds(10), &error);
     }
-    picojson::value value;
-    if (!picojson::parse(value, *text).empty() || !value.is<picojson::object>())
-      continue;
-    const picojson::object& message = value.get<picojson::object>();
-    const auto type = message.find("t");
-    if (type == message.end() || !type->second.is<std::string>())
-      continue;
-    const std::string& t = type->second.get<std::string>();
-    if (t == "rs")
+    if (watch.stop)
+      return;
+    if (!connected)
     {
-      const auto b = message.find("b");
-      if (b == message.end() || !b->second.is<std::string>())
+      fail(connections == 0 ? "couldn't connect to the match: " + error :
+                              "lost the match's stream: " + error);
+      return;
+    }
+    if (connections++ > 0)
+    {
+      NOTICE_LOG_FMT(ROLLBACK, "Replay: back on the match's stream; skipping the {} bytes already "
+                               "played",
+                     received);
+      Orca::Status::Line(fmt::format("orca replay reconnected {}", connections - 1));
+    }
+    const auto connected_at = Clock::now();
+    const u64 received_before = received;
+    u64 seen = 0;  // this connection's bytes
+    auto last_ping = Clock::now();
+    bool lost = false;
+    while (!watch.stop)
+    {
+      if (drop_after > 0 && !dropped &&
+          Clock::now() - connected_at > std::chrono::seconds(drop_after))
+      {
+        dropped = true;
+        WARN_LOG_FMT(ROLLBACK, "Replay: test: the watch connection drops");
+        socket.Close(4000);
+        lost = true;
+        break;
+      }
+      if (Clock::now() - last_ping > std::chrono::seconds(15))
+      {
+        socket.SendText(R"({"t":"ping"})", std::chrono::seconds(2));
+        last_ping = Clock::now();
+      }
+      const std::optional<std::string> text = socket.ReceiveText(std::chrono::milliseconds(100));
+      if (!text)
+      {
+        if (!socket.IsOpen())
+        {
+          WARN_LOG_FMT(ROLLBACK, "Replay: the watch connection closed ({}, code {})",
+                       socket.Error(), socket.CloseCode());
+          lost = true;
+          break;
+        }
         continue;
-      const std::string& text64 = b->second.get<std::string>();
-      size_t pad = 0;
-      while (pad < 2 && pad < text64.size() && text64[text64.size() - 1 - pad] == '=')
-        ++pad;
-      const std::optional<std::vector<u8>> bytes =
-          text64.size() % 4 == 0 ?
-              Orca::Net::DecodeInlineKeyframe(text64, text64.size() / 4 * 3 - pad) :
-              std::nullopt;
-      if (!bytes)
+      }
+      picojson::value value;
+      if (!picojson::parse(value, *text).empty() || !value.is<picojson::object>())
+        continue;
+      const picojson::object& message = value.get<picojson::object>();
+      const auto type = message.find("t");
+      if (type == message.end() || !type->second.is<std::string>())
+        continue;
+      const std::string& t = type->second.get<std::string>();
+      if (t == "rs")
       {
-        fail("the match's stream is damaged");
+        const auto b = message.find("b");
+        if (b == message.end() || !b->second.is<std::string>())
+          continue;
+        const std::string& text64 = b->second.get<std::string>();
+        size_t pad = 0;
+        while (pad < 2 && pad < text64.size() && text64[text64.size() - 1 - pad] == '=')
+          ++pad;
+        const std::optional<std::vector<u8>> bytes =
+            text64.size() % 4 == 0 ?
+                Orca::Net::DecodeInlineKeyframe(text64, text64.size() / 4 * 3 - pad) :
+                std::nullopt;
+        if (!bytes)
+        {
+          fail("the match's stream is damaged");
+          return;
+        }
+        // What this connection repeats of the stream already taken: compared where it is the
+        // stream's head, then skipped.
+        size_t from = 0;
+        if (seen < received)
+        {
+          from = static_cast<size_t>(std::min<u64>(received - seen, bytes->size()));
+          for (size_t i = 0; i < from; ++i)
+          {
+            if (seen + i < head.size() && head[seen + i] != (*bytes)[i])
+            {
+              fail("the match's stream changed while reconnecting");
+              return;
+            }
+          }
+        }
+        seen += bytes->size();
+        if (from == bytes->size())
+          continue;
+        received += bytes->size() - from;
+        if (head.size() < 65536)
+        {
+          head.insert(head.end(), bytes->begin() + from,
+                      bytes->begin() + std::min(bytes->size(), from + (65536 - head.size())));
+        }
+        std::lock_guard lock(watch.mutex);
+        watch.bytes.insert(watch.bytes.end(), bytes->begin() + from, bytes->end());
+      }
+      else if (t == "end" || t == "reset")
+      {
+        // A new history (a fresh start) begins another stream: this one is over.
+        {
+          std::lock_guard lock(watch.mutex);
+          watch.ended = true;
+        }
+        socket.SendText(R"({"t":"leave"})", std::chrono::seconds(1));
+        socket.Close();
         return;
       }
-      std::lock_guard lock(watch.mutex);
-      watch.bytes.insert(watch.bytes.end(), bytes->begin(), bytes->end());
     }
-    else if (t == "end" || t == "reset")
+    if (!lost)
     {
-      // A new history (a fresh start) begins another stream: this one is over.
-      {
-        std::lock_guard lock(watch.mutex);
-        watch.ended = true;
-      }
-      socket.SendText(R"({"t":"leave"})", std::chrono::seconds(1));
       socket.Close();
       return;
     }
+    fruitless = received == received_before ? fruitless + 1 : 0;
+    if (fruitless >= 3)
+    {
+      WARN_LOG_FMT(ROLLBACK, "Replay: the match's stream keeps closing with nothing new; it's over");
+      std::lock_guard lock(watch.mutex);
+      watch.ended = true;
+      return;
+    }
   }
-  socket.Close();
 }
 
 std::unique_ptr<Player> Player::FromEnv()
@@ -353,7 +488,7 @@ bool Player::Poll(std::string* error)
 {
   if (!m_reader)
     m_reader = std::make_unique<Orca::Net::ReplayStreamReader>(Orca::Online::CompatibilityKey());
-  if (m_path.starts_with("ws://") || m_path.starts_with("wss://"))
+  if (m_path.starts_with("ws://") || m_path.starts_with("wss://") || m_path.starts_with("watch:"))
   {
     if (!m_watch)
     {
@@ -507,14 +642,23 @@ std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, in
       ++m_waits;
       while (archive.EndFrame() - frame <= m_delay)
       {
-        const bool quiet =
-            m_source_ended || Clock::now() - m_last_data > std::chrono::seconds(5);
+        // A file is over once it stops growing; a watch socket says so ({"t":"end"}, or it is lost
+        // for good), and its silence is a network hiccup or a reconnect, not the end.
+        const auto quiet_after = m_watch ? std::chrono::seconds(150) : std::chrono::seconds(5);
+        const bool quiet = m_source_ended || Clock::now() - m_last_data > quiet_after;
         if (quiet && frame < archive.EndFrame())
           break;
         if (quiet)
         {
           m_waited_ms += MsSince(wait_start);
-          Finish(host, true, "the stream ended");
+          // A watch socket lost for good ends the watching early: not a whole match.
+          std::string lost;
+          if (m_watch)
+          {
+            std::lock_guard lock(m_watch->mutex);
+            lost = m_watch->error;
+          }
+          Finish(host, lost.empty(), lost.empty() ? "the stream ended" : lost);
           return std::nullopt;
         }
         if (host.stopping())

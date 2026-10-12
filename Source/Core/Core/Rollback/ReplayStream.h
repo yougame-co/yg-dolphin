@@ -38,14 +38,18 @@ class IOFile;
 //    room for its watchers (Online::SendReplayStream); <base> may then be empty.
 //  - ORCA_TEST_REPLAY_IN=<file>: instead of a game, boot to the origin and play <file>; or a
 //    ws:// or wss:// watch URL (the rooms Worker's /watch/<code> with a watch ticket), whose
-//    {"t":"rs","b":<base64>} messages carry the stream, {"t":"end"} its end.
+//    {"t":"rs","b":<base64>} messages carry the stream, {"t":"end"} its end; or watch:<room>, which
+//    gets its watch ticket from ORCA_SITE for the dev game, a fresh one for every connection. A
+//    dropped connection comes back (about 30 s of tries) and skips the bytes already played;
+//    ORCA_TEST_REPLAY_WATCH_DROP=<s> drops it once, that long after it connected.
 //    ORCA_TEST_REPLAY_FOLLOW=1 keeps reading as the file grows, ORCA_TEST_REPLAY_DELAY (12) frames
 //    behind its newest frame (a live watcher); ORCA_TEST_REPLAY_REALTIME=1 plays a finished file at
 //    real speed rather than flat out; ORCA_TEST_REPLAY_SEEK=<a>:<b> goes back from frame b to a
 //    snapshot taken at frame a, once. ORCA_TEST_REPLAY_REPACK=<file> writes a clean replay there
 //    again as one compact stream.
 // Stdout (session only): "orca replay-out <path>" per file written; a player prints "orca replay
-// start ...", "orca replay at ..." every 600 frames, "orca replay seek ..." and one
+// start ...", "orca replay at ..." every 600 frames, "orca replay seek ...", "orca replay
+// reconnected <n>" and one
 // "orca replay done ok|fail <key=value>... why=<text>" line.
 namespace Rollback::ReplayStream
 {
@@ -116,7 +120,7 @@ public:
 
 private:
   bool Poll(std::string* error);
-  void WatchThread(std::string url);
+  void WatchThread(std::string source);
   void Finish(const PlayerHost& host, bool ok, const std::string& why);
 
   std::string m_path;

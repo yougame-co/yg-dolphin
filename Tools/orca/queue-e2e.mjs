@@ -110,6 +110,9 @@ const SHOTS_OUT = opt("--shots-out");
 // user-<name>/Dump/Audio/dspdump.wav (keep it with --keep).
 const MUSIC_OFF = (opt("--music-off", "") || "").split(",").filter(Boolean);
 const DUMP_AUDIO = argv.includes("--dump-audio");
+// --replay: each Orca writes its history as replay streams to <work>/rec-<name>-<n>.ygr
+// (ORCA_TEST_REPLAY_OUT; Tools/orca/replay-set-check.py watches and replays them).
+const REPLAY = argv.includes("--replay");
 // How long after a ranked set's verdict the page sends the new rating (`queue rating`).
 const RATING_AFTER_MS = Number(opt("--rating-after", "1500"));
 const Q2 = argv.includes("--q2");
@@ -465,6 +468,10 @@ class Side {
       YG_SCENES: "1",
     };
     if (!SLUG) env.ORCA_TEST_KEYFRAME_DIR = path.join(WORK, "kf");
+    if (REPLAY) {
+      env.ORCA_TEST_REPLAY_OUT = path.join(WORK, `rec-${this.name}`);
+      env.ORCA_TEST_DEV_GAME = DEV_GAME; // test knobs work in dev games only
+    }
     // Test overrides from this script's own environment, the same for both Orcas (for example
     // ORCA_TEST_SET_RULES=1,8: a ranked Brawl set's games at 1 stock), and SDL's switches (on a
     // shared Mac, SDL_JOYSTICK_HIDAPI=0 and friends keep test Orcas off a player's adapter).

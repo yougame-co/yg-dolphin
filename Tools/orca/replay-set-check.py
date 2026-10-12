@@ -1,0 +1,236 @@
+#!/usr/bin/env python3
+# replay-set-check.py: a whole set recorded, watched live and replayed (Rollback/ReplayStream.h), as
+# a tournament set runs: two headless Orcas matched by the queue play a ranked best of 3 to its end
+# (Tools/orca/queue-e2e.mjs --q2 --replay: character select, stage strikes, every game, results), over
+# a local rooms stack. Headless and muted; run it through run-lock.py.
+#
+#   Tools/orca/replay-set-check.py <dolphin-emu-nogui> <disc> --site <url> [--pplus <launcher.dol>]
+#       [--queue ranked|casual] [--games N] [--late-watch S] [--relay] [--scenario rejoin|kill|...]
+#
+# --site is a local stand-in site with dev tickets and a local rooms Worker behind it (YouGame
+# rooms/scripts/replay-stub-site.mjs + `wrangler dev`). The queue-e2e run's own checks (the same
+# verdicts on both sides, matched checksums) must pass.
+# 1. Live: once the set's room is up, Watcher follows the host's set stream from its first frame, 12
+#    frames behind, and LateWatcher joins --late-watch seconds later (150: in game 2), catching up
+#    from the set's first frame. --relay: both watch through the rooms Worker's /watch/<room> with a
+#    watch ticket from --site, and the players stream to their room (ORCA_TEST_REPLAY_ROOM); without
+#    it they read the host's file. Each must match every checksum to the set's end.
+# --scenario goes to queue-e2e (rejoin: the joiner's room connection drops in game 1 and comes back;
+# the set's recordings must still be whole).
+# 2. Saved: the host's and the joiner's set files (the history they shared: same origin, same first
+#    frame) replay flat out in fresh Orcas, every checksum matching, and hold the same frames and
+#    checksums as each other.
+import glob
+import json
+import os
+import re
+import subprocess
+import sys
+import threading
+import time
+import urllib.request
+
+import replay_stream
+
+if len(sys.argv) < 3 or "--site" not in sys.argv:
+    sys.exit("usage: replay-set-check.py <nogui> <disc> --site <url> [--pplus <dol>] [--queue Q] "
+             "[--games N] [--late-watch S] [--relay]")
+BIN, DISC = os.path.abspath(sys.argv[1]), sys.argv[2]
+
+
+def opt(name, fallback=None):
+    return sys.argv[sys.argv.index(name) + 1] if name in sys.argv else fallback
+
+
+SITE = opt("--site").rstrip("/")
+PPLUS = opt("--pplus")
+QUEUE = opt("--queue", "ranked")
+GAMES = opt("--games")
+SCENARIO = opt("--scenario")
+LATE = int(opt("--late-watch", "150"))
+RELAY = "--relay" in sys.argv
+HERE = os.path.dirname(os.path.abspath(__file__))
+T0 = time.time()
+results = []
+
+
+def log(text):
+    print(f"[{time.time() - T0:6.1f}] {text}", flush=True)
+
+
+def check(name, ok, detail):
+    results.append((name, bool(ok), detail))
+    log(f"{'PASS' if ok else 'FAIL'} {name}: {detail}")
+
+
+def fields(done_line):
+    out = {"ok": " done ok " in done_line}
+    for k, v in re.findall(r"(\w+)=(\S*)", done_line):
+        out[k] = v
+    if "why=" in done_line:
+        out["why"] = done_line.split("why=", 1)[1]
+    return out
+
+
+def play(name, source, extra=(), timeout=900):
+    """replay-play.py on `source` (a file or a ws:// URL); returns (done fields, output lines)."""
+    cmd = [sys.executable, os.path.join(HERE, "replay-play.py"), BIN, DISC, source, *extra]
+    if PPLUS:
+        cmd += ["--pplus", PPLUS]
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    lines = []
+    done = None
+    start = time.time()
+    for line in proc.stdout:
+        line = line.rstrip("\n")
+        lines.append(line)
+        if "orca replay start" in line or "orca replay done" in line or "orca error" in line:
+            log(f"{name}: {line.split('] ', 1)[-1][:300]}")
+        if "orca replay done" in line:
+            done = line
+        if time.time() - start > timeout:
+            proc.kill()
+            break
+    proc.wait()
+    return (fields(done) if done else {"ok": False, "why": "no done line"}), lines
+
+
+def watch_url(dev, room):
+    req = urllib.request.Request(f"{SITE}/api/multiplayer/ticket", method="POST",
+                                 data=json.dumps({"dev": dev, "watch": room}).encode(),
+                                 headers={"content-type": "application/json"})
+    reply = json.loads(urllib.request.urlopen(req, timeout=10).read())
+    base = reply["url"].replace("https://", "wss://").replace("http://", "ws://").rstrip("/")
+    return f"{base}{reply['watch']}?ticket={reply['ticket']}"
+
+
+# 1. The set, through queue-e2e.
+cmd = ["node", os.path.join(HERE, "queue-e2e.mjs"), BIN, DISC, "--q2", "--queue", QUEUE, "--site", SITE,
+       "--keep", "--replay", "--alarm", "1500"]
+if PPLUS:
+    cmd += ["--pplus", PPLUS]
+if GAMES:
+    cmd += ["--games", GAMES]
+if SCENARIO:
+    cmd += ["--scenario", SCENARIO]
+env = dict(os.environ)
+if RELAY:
+    env["ORCA_TEST_REPLAY_ROOM"] = "1"
+log(f"queue {QUEUE}, site {SITE}, relay {'yes' if RELAY else 'no (files)'}, late watch {LATE} s")
+qe = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env)
+state = {"work": None, "dev": None, "host": None, "joiner": None, "room": None, "lines": []}
+matched = threading.Event()
+
+
+def read_qe():
+    for line in qe.stdout:
+        line = line.rstrip("\n")
+        state["lines"].append(line)
+        m = re.search(r"work (\S+); dev game (\S+);", line)
+        if m:
+            state["work"], state["dev"] = m.group(1), m.group(2)
+        m = re.search(r"host (\w+), joiner (\w+), room (\w+)", line)
+        if m and not matched.is_set():
+            state["host"], state["joiner"], state["room"] = m.groups()
+            matched.set()
+        if re.search(r"PASS|FAIL|RESULT|set end|matched into|host \w+, joiner", line):
+            print(f"         queue-e2e: {line}", flush=True)
+
+
+reader = threading.Thread(target=read_qe, daemon=True)
+reader.start()
+if not matched.wait(600):
+    qe.terminate()
+    sys.exit("FAIL: queue-e2e never matched the two players")
+host, joiner, room, work = state["host"], state["joiner"], state["room"], state["work"]
+log(f"matched: host {host}, joiner {joiner}, room {room}, work {work}")
+before = set(glob.glob(os.path.join(work, f"rec-{host}-*.ygr")))
+set_file = None
+deadline = time.time() + 180
+while time.time() < deadline and not set_file:
+    new = sorted(set(glob.glob(os.path.join(work, f"rec-{host}-*.ygr"))) - before)
+    if new:
+        set_file = new[-1]
+    time.sleep(0.5)
+if not set_file:
+    qe.terminate()
+    qe.wait(30)
+    sys.exit(f"FAIL: the host started no new history after the match ({sorted(before)})")
+log(f"the set's stream: {set_file}")
+t_set = time.time()
+
+watchers = {}
+
+
+def watcher(name):
+    source = watch_url(state["dev"], room) if RELAY else set_file
+    watchers[name] = play(name, source, ["--follow"])
+
+
+if RELAY:
+    time.sleep(2)  # the room's stream starts once the session does
+threads = [threading.Thread(target=watcher, args=("Watcher",), daemon=True)]
+threads[0].start()
+late_at = t_set + LATE
+while time.time() < late_at and qe.poll() is None:
+    time.sleep(1)
+if qe.poll() is None:
+    log(f"LateWatcher joins {time.time() - t_set:.0f} s into the set")
+    threads.append(threading.Thread(target=watcher, args=("LateWatcher",), daemon=True))
+    threads[1].start()
+else:
+    log("the set ended before the late watcher's time: no late watcher")
+qe.wait()
+reader.join(5)
+qe_ok = qe.returncode == 0
+check("the set played to its end (queue-e2e)", qe_ok,
+      next((l.split("] ", 1)[-1][:400] for l in reversed(state["lines"]) if "PASS" in l or "FAIL" in l),
+           f"exit {qe.returncode}"))
+for t in threads:
+    t.join(600)
+set_stream = replay_stream.read(set_file)
+log(f"host's set file: {replay_stream.summary(set_stream)}")
+
+for name in ("Watcher", "LateWatcher"):
+    if name not in watchers:
+        continue
+    w, _ = watchers[name]
+    detail = (f"{w.get('frames')} frames, {w.get('checked')} checksums checked, {w.get('mismatched')} differ; "
+              f"{w.get('live_avg_ms')} ms behind the players on average ({w.get('live_max_ms')} at most)")
+    if name == "LateWatcher" and w.get("caught_up_ms"):
+        detail += f"; caught up in {float(w['caught_up_ms']) / 1000:.1f} s"
+    if not w["ok"]:
+        detail += f"; why={w.get('why')}"
+    covers = int(w.get("frames") or 0) >= len(set_stream.frames) - 120
+    check(f"{name} followed the whole set and matches", w["ok"] and int(w.get("checked") or 0) > 0
+          and w.get("mismatched") == "0" and covers, detail + f" (the set: {len(set_stream.frames)} frames)")
+
+# 2. Saved: both players' files of the set.
+joiner_file = None
+# Every history starts at the same canonical origin and frame; the set's is the one whose first frame
+# (its seed and menu exit) is the host's.
+for path in sorted(glob.glob(os.path.join(work, f"rec-{joiner}-*.ygr"))):
+    s = replay_stream.read(path)
+    if (s.info["origin_hash"] == set_stream.info["origin_hash"] and s.first == set_stream.first and
+            s.frames[:1] == set_stream.frames[:1] and (not joiner_file or len(s.frames) > len(joiner_stream.frames))):
+        joiner_file, joiner_stream = path, s
+if not joiner_file:
+    check("the joiner recorded the set", False, "no file of the joiner's starts where the host's set does")
+else:
+    log(f"joiner's set file: {replay_stream.summary(joiner_stream)}")
+    for who, path in ((host, set_file), (joiner, joiner_file)):
+        r, _ = play(f"Replay-{who}", path)
+        check(f"replay of {who}'s set file", r["ok"] and int(r.get("checked") or 0) > 0 and r.get("mismatched") == "0",
+              f"{r.get('frames')} frames, {r.get('checked')} checksums checked, {r.get('mismatched')} differ, "
+              f"{int(r.get('wall_ms') or 0) / 1000:.1f} s wall" + ("" if r["ok"] else f"; why={r.get('why')}"))
+    end = min(set_stream.end, joiner_stream.end)
+    diff = [i for i in range(end - set_stream.first) if set_stream.frames[i] != joiner_stream.frames[i]]
+    common = sorted(set(set_stream.checksums) & set(joiner_stream.checksums))
+    cdiff = [c for c in common if set_stream.checksums[c] != joiner_stream.checksums[c]]
+    check("both players recorded the same set", not diff and not cdiff and common,
+          f"frames {set_stream.first}-{end}: {len(diff)} differ; {len(common)} checksums in both, {len(cdiff)} differ")
+
+failed = [r for r in results if not r[1]]
+log(f"{len(results) - len(failed)} of {len(results)} checks passed; work {work}")
+print("PASS" if not failed else "FAIL: " + ", ".join(r[0] for r in failed), flush=True)
+sys.exit(1 if failed else 0)
