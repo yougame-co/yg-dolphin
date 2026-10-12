@@ -158,12 +158,16 @@ std::string OfferedCaps()
     }
     if (Mod::Offers(LOCKS_CAP))
       caps += fmt::format(" {}", PICK_CAPS);
-    return caps;
   }
-  if (UX::ResultsVerified())
-    caps += fmt::format(" {}", RESULTS_CAP);
-  if (UX::Rules::ProfileRuleset() != UX::Rules::Ruleset::None)
-    caps += fmt::format(" {} {} {}", LOCKS_CAP, QUEUE2_CAP, PICK_CAPS);
+  else
+  {
+    if (UX::ResultsVerified())
+      caps += fmt::format(" {}", RESULTS_CAP);
+    if (UX::Rules::ProfileRuleset() != UX::Rules::Ruleset::None)
+      caps += fmt::format(" {} {} {}", LOCKS_CAP, QUEUE2_CAP, PICK_CAPS);
+  }
+  // Engine caps, like "music": every profile, legacy or mod, whatever its builtin or guards. Last,
+  // so an app that reads fewer words drops them before any other.
   caps += fmt::format(" {} {}", TALK_CAP, RUMBLE_CAP);
   return caps;
 }

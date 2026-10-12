@@ -796,9 +796,14 @@ TEST(OrcaMod, ModeGates)
   EXPECT_TRUE(Orca::UX::FreshMove::Supported());
   // A builtin's caps are never offered before its guards hold (they are checked at the frame hook).
   // The music switch is host-only and follows the disc as in legacy (Music::Supported), guards or
-  // not; the pick caps go with "locks".
-  const std::string base = std::string(Orca::Status::CAPS) + " " + Orca::Status::MUSIC_CAP;
-  const std::string all = base + " results locks queue2 " + Orca::Status::PICK_CAPS;
+  // not; the pick caps go with "locks". The engine caps "talk" and "rumble" are offered in every
+  // mode, last, guards or not.
+  const std::string tail =
+      fmt::format(" {} {}", Orca::Status::TALK_CAP, Orca::Status::RUMBLE_CAP);
+  const std::string base =
+      std::string(Orca::Status::CAPS) + " " + Orca::Status::MUSIC_CAP + tail;
+  const std::string all = std::string(Orca::Status::CAPS) + " " + Orca::Status::MUSIC_CAP +
+                          " results locks queue2 " + Orca::Status::PICK_CAPS + tail;
   EXPECT_EQ(Orca::Status::OfferedCaps(), base);
   EXPECT_FALSE(Orca::Mod::GuardsDecided());
   // Not holding yet in the first frames (a loader's codes still landing): undecided, nothing offered.

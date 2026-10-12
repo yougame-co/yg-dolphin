@@ -24,6 +24,7 @@
 #include "Core/Orca/Mod.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Online.h"
+#include "Core/Orca/Status.h"
 
 namespace
 {
@@ -751,6 +752,51 @@ TEST(OrcaBundle, KeyMovesWithTheBundleOnly)
   Orca::SetActiveProfile(legacy);
   EXPECT_TRUE(Orca::Online::CompatibilityKeyParts().starts_with("orca|"));
   Orca::SetActiveProfile(std::nullopt);
+  File::DeleteDirRecursively(root);
+}
+
+// A pack session (mod mode, flat bundle) offers the engine caps "talk" and "rumble" like a legacy
+// one, last, whatever its builtin's guards say: they are the app's and the engine's, not the game's.
+// The builtin caps (results, locks, ...) stay behind the guards (OrcaMod.ModeGates).
+TEST(OrcaBundle, PackSessionsOfferTheEngineCaps)
+{
+  SConfig::Init();
+  struct ConfigDone
+  {
+    ~ConfigDone() { SConfig::Shutdown(); }
+  } config_done;
+  const Signer signer(1);
+  const std::string root = TempDir();
+  const std::string tail =
+      fmt::format(" {} {}", Orca::Status::TALK_CAP, Orca::Status::RUMBLE_CAP);
+  const auto ends_with_tail = [&tail] {
+    const std::string offered = Orca::Status::OfferedCaps();
+    return offered.size() >= tail.size() &&
+           offered.compare(offered.size() - tail.size(), tail.size(), tail) == 0;
+  };
+  std::string error;
+  for (const Flat& f : {MakePPlus(root + "pplus/", signer), MakeBrawl(root + "brawl/", signer)})
+  {
+    const auto bundle = f.Load(signer, &error);
+    ASSERT_TRUE(bundle) << error;
+    auto profile = Orca::LoadFlatProfile(*bundle, &error);
+    ASSERT_TRUE(profile) << error;
+    Orca::SetActiveProfile(profile);
+    ASSERT_NE(Orca::Mod::ActiveMod(), nullptr) << f.dir;
+    // Guards not read yet, then held, then failed: the engine caps are there every time.
+    EXPECT_TRUE(ends_with_tail()) << Orca::Status::OfferedCaps();
+    Orca::Mod::NoteGuards(true, 2);
+    EXPECT_TRUE(ends_with_tail()) << Orca::Status::OfferedCaps();
+    Orca::Mod::NoteGuards(false, 5000);
+    EXPECT_TRUE(Orca::Mod::GuardsFailed());
+    EXPECT_TRUE(ends_with_tail()) << Orca::Status::OfferedCaps();
+    // And the app's agreement turns them on, as in legacy.
+    Orca::Status::SetAppCaps("join talk rumble");
+    EXPECT_TRUE(Orca::Status::Cap(Orca::Status::TALK_CAP));
+    EXPECT_TRUE(Orca::Status::Cap(Orca::Status::RUMBLE_CAP));
+    Orca::Status::SetAppCaps("");
+    Orca::SetActiveProfile(std::nullopt);
+  }
   File::DeleteDirRecursively(root);
 }
 
