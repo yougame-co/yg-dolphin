@@ -924,6 +924,11 @@ TEST(OrcaBundle, ResolvesOrFallsBack)
     EXPECT_EQ(Orca::Mod::ResolvedFlat(), nullptr);
     EXPECT_NE(Orca::Mod::ResolvedError().find("this boot is a disc's"), std::string::npos)
         << Orca::Mod::ResolvedError();
+    // The player reads it (orca error): the new name, and never the folder's path.
+    EXPECT_TRUE(Orca::Mod::ResolvedError().starts_with("YG Baiji refused this game's pack: "))
+        << Orca::Mod::ResolvedError();
+    EXPECT_EQ(Orca::Mod::ResolvedError().find(root), std::string::npos)
+        << Orca::Mod::ResolvedError();
     // No key trusted.
     Orca::Mod::TrustKeysForTests({});
     Orca::Mod::ResetResolvedBundle();

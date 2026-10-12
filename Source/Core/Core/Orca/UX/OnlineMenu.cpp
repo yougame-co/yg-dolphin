@@ -512,9 +512,9 @@ Outputs Decide(const Inputs& in)
   out.keep = true;
   // First write: mark only the host's port as seen, so a friend plugged in now counts as new.
   // Ports plugged in before FIRST_FRIEND_FRAME are test ports, never friends.
-  const u8 seen = kept                                ? in.seen :
+  const u8 seen = kept                          ? in.seen :
                   in.frame < FirstFriendFrame() ? in.plugged :
-                                                        static_cast<u8>(in.plugged & ~FRIEND_PORTS);
+                                                  static_cast<u8>(in.plugged & ~FRIEND_PORTS);
   bool pending = kept && in.pending != 0;
   if (in.plugged & ~seen & FRIEND_PORTS)
     pending = true;

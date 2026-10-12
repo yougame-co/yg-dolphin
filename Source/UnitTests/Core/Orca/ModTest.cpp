@@ -776,6 +776,29 @@ TEST(OrcaMod, Guards)
                                      [](u32) -> std::optional<u32> { return 0; }));
 }
 
+// The whole legacy caps line, word for word, for each ruleset profile (Brawl rev 2 and Project+'s
+// launcher): the mod-mode branch in OfferedCaps must never reorder or drop a legacy word, and the
+// engine caps stay last.
+TEST(OrcaMod, LegacyCapsLinesArePinned)
+{
+  const std::string line = "join leave stats pause delay perf direct host chat yougame gfx music "
+                           "results locks queue2 pick-casual pick-ranked talk rumble";
+  std::string error;
+  const auto brawl = Orca::LoadProfileFrom(RepoPath("Data/Sys/"), "RSBE01", 2, &error);
+  ASSERT_TRUE(brawl) << error;
+  Orca::SetActiveProfile(brawl);
+  ASSERT_EQ(Orca::Mod::ActiveMod(), nullptr);
+  EXPECT_EQ(Orca::UX::Rules::ProfileRuleset(), Orca::UX::Rules::Ruleset::Brawl);
+  EXPECT_EQ(Orca::Status::OfferedCaps(), line);
+  const auto pplus = Orca::LoadProfileFrom(RepoPath("Data/Sys/"), "PPLUS32", 2, &error);
+  ASSERT_TRUE(pplus) << error;
+  Orca::SetActiveProfile(pplus);
+  ASSERT_EQ(Orca::Mod::ActiveMod(), nullptr);
+  EXPECT_EQ(Orca::UX::Rules::ProfileRuleset(), Orca::UX::Rules::Ruleset::PPlus);
+  EXPECT_EQ(Orca::Status::OfferedCaps(), line);
+  Orca::SetActiveProfile(std::nullopt);
+}
+
 // Mod mode's gates: a builtin's modules stay off until its guards were checked against memory
 // (RefreshGuards, at the frame hook), and a mod's caps are what it offers.
 TEST(OrcaMod, ModeGates)

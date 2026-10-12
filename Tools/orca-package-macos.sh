@@ -136,6 +136,8 @@ cmake -S "$ROOT" -B "$BUILD_DIR" -G Ninja \
   -DORCA_BUNDLE_TRUST_TEST_KEY=OFF -DORCA_BUNDLE_PUBLIC_KEY="$BUNDLE_KEY" \
   -DCMAKE_C_FLAGS="$PREFIX_MAP" -DCMAKE_CXX_FLAGS="$PREFIX_MAP" \
   -DCMAKE_OBJC_FLAGS="$PREFIX_MAP" -DCMAKE_OBJCXX_FLAGS="$PREFIX_MAP" >/dev/null
+grep -q '^ORCA_BUNDLE_TRUST_TEST_KEY:BOOL=OFF$' "$BUILD_DIR/CMakeCache.txt" ||
+  fail "CMake's cache still trusts the bundle-flat TEST key"
 cmake --build "$BUILD_DIR" --target dolphin-nogui
 
 if [ "$RELEASE" = 1 ]; then

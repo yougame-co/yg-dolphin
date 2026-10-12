@@ -45,7 +45,7 @@ fail() {
 
 [ "$(uname -s)" = Linux ] || fail "Linux only"
 [ "$(uname -m)" = x86_64 ] || fail "x86-64 only (the app's linux-x64 build)"
-for tool in git cmake ninja pkg-config zip readelf objdump objcopy strip; do
+for tool in git cmake ninja pkg-config zip readelf objdump objcopy strip strings; do
   command -v "$tool" >/dev/null || fail "needs $tool"
 done
 mkdir -p "$OUT_DIR"
@@ -66,6 +66,18 @@ if [ "$STATE" = "git status failed" ]; then
   DIRTY=" (tree state unknown: git status failed)"
 elif [ -n "$STATE" ]; then
   DIRTY=" (with local changes)"
+fi
+
+# Flat bundles (ORCA.md "Flat bundles"), as in orca-package-macos.sh: ORCA_BUNDLE_PUBLIC_KEY (64
+# lowercase hex digits) is the key they must be signed with; unset, the build trusts none and refuses
+# every bundle. The TEST key is never trusted in a package: the build turns it off, CMake's cache is
+# checked for it, and the program is checked for the key's text.
+# The bundle-flat TEST key (Source/Core/Core/Orca/Bundle.cpp).
+TEST_BUNDLE_KEY=afb9463d5c16f0f617432d76f75f37a8c649e36d7c626088ba00b19dea115a43
+BUNDLE_KEY="${ORCA_BUNDLE_PUBLIC_KEY:-}"
+if [ -n "$BUNDLE_KEY" ]; then
+  [[ "$BUNDLE_KEY" =~ ^[0-9a-f]{64}$ ]] || fail "ORCA_BUNDLE_PUBLIC_KEY is not 64 lowercase hex digits"
+  [ "$BUNDLE_KEY" != "$TEST_BUNDLE_KEY" ] || fail "ORCA_BUNDLE_PUBLIC_KEY is the TEST key"
 fi
 
 RELEASE=0
@@ -108,10 +120,13 @@ cmake -S "$ROOT" -B "$BUILD_DIR" -G Ninja \
   -DENABLE_ANALYTICS=OFF -DENABLE_AUTOUPDATE=OFF -DUSE_DISCORD_PRESENCE=OFF \
   -DUSE_RETRO_ACHIEVEMENTS=OFF -DUSE_MGBA=OFF -DUSE_UPNP=OFF -DENABLE_VULKAN=OFF \
   -DENABLE_CLI_TOOL=OFF -DENABLE_TESTS=OFF -DUSE_SANITIZERS=OFF \
+  -DORCA_BUNDLE_TRUST_TEST_KEY=OFF -DORCA_BUNDLE_PUBLIC_KEY="$BUNDLE_KEY" \
   -DENABLE_ALSA=OFF -DENABLE_PULSEAUDIO=OFF -DENABLE_BLUEZ=OFF -DENABLE_EVDEV=OFF \
   -DENABLE_HWDB=OFF -DCMAKE_DISABLE_FIND_PACKAGE_LIBUDEV=ON -DUSE_SYSTEM_ICONV=ON \
   -DCMAKE_C_FLAGS="-g -ffile-prefix-map=$ROOT=." -DCMAKE_CXX_FLAGS="-g -ffile-prefix-map=$ROOT=." \
   -DCMAKE_EXE_LINKER_FLAGS="-static-libstdc++ -static-libgcc" >/dev/null
+grep -q '^ORCA_BUNDLE_TRUST_TEST_KEY:BOOL=OFF$' "$BUILD_DIR/CMakeCache.txt" ||
+  fail "CMake's cache still trusts the bundle-flat TEST key"
 grep -q '^USE_PULSE:INTERNAL=1' "$BUILD_DIR/CMakeCache.txt" ||
   fail "Cubeb found no PulseAudio headers (libpulse-dev): Orca would play no sound"
 cmake --build "$BUILD_DIR" --target dolphin-nogui
@@ -127,6 +142,25 @@ BIN="$BUILD_DIR/Binaries/dolphin-emu-nogui"
 [ -d "$BUILD_DIR/Binaries/Sys" ] || fail "no Sys beside $BIN"
 grep -q "$COMMIT" "$BUILD_DIR/Source/Core/Common/scmrev.h" ||
   fail "scmrev.h does not name $COMMIT: the compatibility key would be another build's"
+# Flat bundles: never the TEST key; the pinned key when there is one (Bundle.cpp keeps both as text).
+# strings on its own, so a strings that fails can't read as "no key".
+STRINGS_OUT="$(mktemp)"
+strings -a "$BIN" >"$STRINGS_OUT" || { rm -f "$STRINGS_OUT"; fail "strings could not read $BIN"; }
+[ -s "$STRINGS_OUT" ] || { rm -f "$STRINGS_OUT"; fail "strings found nothing in $BIN"; }
+if grep -qF "$TEST_BUNDLE_KEY" "$STRINGS_OUT"; then
+  rm -f "$STRINGS_OUT"
+  fail "the program trusts the bundle-flat TEST key"
+fi
+if [ -n "$BUNDLE_KEY" ] && ! grep -qF "$BUNDLE_KEY" "$STRINGS_OUT"; then
+  rm -f "$STRINGS_OUT"
+  fail "the program doesn't hold ORCA_BUNDLE_PUBLIC_KEY"
+fi
+rm -f "$STRINGS_OUT"
+if [ -n "$BUNDLE_KEY" ]; then
+  echo "orca-package: flat bundles: the pinned key only"
+else
+  echo "orca-package: flat bundles: off (no ORCA_BUNDLE_PUBLIC_KEY: every bundle is refused)"
+fi
 
 # Self-contained: what the program loads ships with every desktop Linux. And it has its window: a
 # build that found no X11 or EGL headers has only Dolphin's framebuffer platform, which CMake only

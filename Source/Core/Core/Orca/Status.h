@@ -63,6 +63,8 @@ void Report(std::string_view code, std::string_view sentence);
 //   results  "orca result" lines, only for a profile with a verified result reader
 //   gfx      app may send "gfx <key> <value>": a live change to one of the player's drawing-only
 //            graphics settings (Orca/Perf.h ParseGfx), applied at the next frame boundary
+//   talk     Orca prints "orca overlay down|up|cancel keys|pad" for the overlay key (hold-to-talk,
+//            UX/OverlayKey.h) and the app may send "talk ..." lines (UX/YgOrb.h)
 //   rumble   Orca prints "orca rumble <port> <0|1> <adapter|pad|none> <index>": the game's motor
 //            for the local player's controller (Orca/UX/Rumble.h), which the page plays
 inline constexpr const char* CAPS =
@@ -81,8 +83,9 @@ inline constexpr const char* QUEUE2_CAP = "queue2";
 // later "caps" line when that changes. A host with friends in its game leaves them for a With
 // Anyone pick only with that pick's cap; without it the pick prints in place, unarmed ("orca menu
 // online <queue> kept"), and arms once the friends are gone (Rollback/OnlineMatch.h
-// DecideLobbyPick, DecideKeptPick). Offered with "locks". A ruleset profile then offers 17 caps;
-// the app reads up to 24 (desktop 0.12.39 and later), and Orca needs a newer app than that anyway.
+// DecideLobbyPick, DecideKeptPick). Offered with "locks". A ruleset profile then offers 19 caps
+// (with "talk" and "rumble"); the app reads up to 24 (desktop 0.12.39 and later), and Orca needs a
+// newer app than that anyway.
 inline constexpr const char* PICK_CAPS = "pick-casual pick-ranked";
 // "talk": hold-to-talk. Orca prints "orca overlay down|up|cancel keys|pad" for the overlay key's
 // press and release instead of the "orca orb" toggle (UX/OverlayKey.h), and the app may send

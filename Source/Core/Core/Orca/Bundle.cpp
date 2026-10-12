@@ -346,7 +346,7 @@ std::optional<FlatBundle> LoadFlatBundle(const std::string& dir_in, std::span<co
   if (dir.back() != '/' && dir.back() != '\\')
     dir += '/';
   if (keys.empty())
-    return fail("this Orca trusts no bundle key");
+    return fail("this build trusts no bundle key");
 
   // The folder: regular files only (hidden ones aside: the app's .copies.json, a .DS_Store), no
   // more than a flat bundle holds. Nothing is read yet.
@@ -394,7 +394,7 @@ std::optional<FlatBundle> LoadFlatBundle(const std::string& dir_in, std::span<co
     return fail("mod.sig is not \"ed25519 <public key> <signature>\" in lowercase hex");
   if (std::ranges::find(keys, signature->first) == keys.end())
   {
-    return fail(fmt::format("mod.sig is by key {}, which this Orca doesn't trust",
+    return fail(fmt::format("mod.sig is by key {}, which this build doesn't trust",
                             KeyHex(signature->first)));
   }
 
@@ -415,7 +415,7 @@ std::optional<FlatBundle> LoadFlatBundle(const std::string& dir_in, std::span<co
   }
   if (manifest->serial < MIN_FLAT_SERIAL)
   {
-    return fail(fmt::format("serial {} is retired (this Orca takes {} and up)", manifest->serial,
+    return fail(fmt::format("serial {} is retired (this build takes {} and up)", manifest->serial,
                             MIN_FLAT_SERIAL));
   }
   if (boot && boot->name != manifest->launcher)
@@ -568,7 +568,9 @@ void ResolveBundle(const std::string* executable_path, std::span<const u8> launc
                                  "Playing the built-in game.");
     if (!explicit_dir)
       return decide(BundleKind::None);
-    resolution.error = fmt::format("Orca bundle: {} refused: {}", dir, why);
+    // What the player reads (orca error): no folder path, which names their home folder; the log
+    // line above keeps it.
+    resolution.error = fmt::format("YG Baiji refused this game's pack: {}", why);
     decide(BundleKind::Refused);
   };
   if (!SessionActive() || dir.empty())

@@ -1252,6 +1252,10 @@ void ResetTimeouts()
 namespace
 {
 // The one-time tip, on a first run: `on_select` the queue's own select, alone.
+// TODO(S2): host file I/O in game logic (OrcaSeen.txt, read and written on the CPU thread). It moves
+// to the S2 seen-store: an engine-layer Seen(key)/MarkSeen(key), loaded once per session and written
+// off the CPU thread, injected into Queue like Events::SetLocalPadSource; later the app's own "seen"
+// lines. NameTags' controls file goes the same way (v2-review.md W2).
 void TipFrame(bool on_select, bool ready, bool b_held, int frame)
 {
   Local& l = L();

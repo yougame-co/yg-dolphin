@@ -55,8 +55,8 @@ TEST(OrcaBranding, LeavesOtherWords)
 
 TEST(OrcaBranding, LeavesPathsAndFileNames)
 {
-  EXPECT_EQ(BrandWords("/Users/me/Library/Application Support/Dolphin/Config"),
-            "/Users/me/Library/Application Support/Dolphin/Config");
+  EXPECT_EQ(BrandWords("/Volumes/Games/Library/Application Support/Dolphin/Config"),
+            "/Volumes/Games/Library/Application Support/Dolphin/Config");
   EXPECT_EQ(BrandWords("C:\\Games\\Orca\\Sys"), "C:\\Games\\Orca\\Sys");
   EXPECT_EQ(BrandWords("Couldn't open Dolphin.ini"), "Couldn't open Dolphin.ini");
   EXPECT_EQ(BrandWords("Orca.app/Contents/MacOS/Orca"), "Orca.app/Contents/MacOS/Orca");
