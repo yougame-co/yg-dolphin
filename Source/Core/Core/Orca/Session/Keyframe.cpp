@@ -496,8 +496,23 @@ constexpr u32 MAX_STREAM_HEADER = 16u << 10;
 // A chunk holds at most a minute of frames and 8 MB compressed.
 constexpr u32 MAX_CHUNK_FRAMES = 3600;
 constexpr u32 MAX_CHUNK_BYTES = 8u << 20;
-// Magic, first frame, frame count, live frame, checksum count, payload size, the payload's XXH3.
-constexpr size_t CHUNK_PREAMBLE = 4 + 4 + 4 + 4 + 4 + 4 + 8;
+// Magic, first frame, frame count, live frame, checksum count, payload size, then the XXH3 of all
+// of those and the payload: every byte of a chunk is covered.
+constexpr size_t CHUNK_FIELDS = 4 + 4 + 4 + 4 + 4 + 4;
+constexpr size_t CHUNK_PREAMBLE = CHUNK_FIELDS + 8;
+
+u64 ChunkHash(const u8* fields, const u8* payload, size_t size)
+{
+  XXH3_state_t* state = XXH3_createState();
+  if (!state)
+    return 0;
+  XXH3_64bits_reset(state);
+  XXH3_64bits_update(state, fields, CHUNK_FIELDS);
+  XXH3_64bits_update(state, payload, size);
+  const u64 hash = XXH3_64bits_digest(state);
+  XXH3_freeState(state);
+  return hash;
+}
 constexpr size_t STREAM_PREAMBLE = 4 + 4 + 4;
 
 void PutU32(std::vector<u8>* out, u32 v)
@@ -577,7 +592,7 @@ std::vector<u8> PackReplayChunk(const ReplayChunk& chunk, bool history_start)
     PutU32(&out, static_cast<u32>(std::max(chunk.live, 0)));
     PutU32(&out, static_cast<u32>(chunk.checksums.size()));
     PutU32(&out, static_cast<u32>(payload.size()));
-    PutU64(&out, XXH3_64bits(payload.data(), payload.size()));
+    PutU64(&out, ChunkHash(out.data(), payload.data(), payload.size()));
     out.insert(out.end(), payload.begin(), payload.end());
     return out;
   }
@@ -711,7 +726,7 @@ bool ReplayStreamReader::Parse(std::string* error)
       if (m_pending.size() - pos - CHUNK_PREAMBLE < size)
         break;  // the rest of this chunk hasn't arrived yet
       const u8* payload = p + CHUNK_PREAMBLE;
-      if (XXH3_64bits(payload, size) != hash)
+      if (ChunkHash(p, payload, size) != hash)
         return fail("the replay has a damaged chunk");
       const auto raw_size = ZSTD_getFrameContentSize(payload, size);
       if (raw_size == ZSTD_CONTENTSIZE_ERROR || raw_size == ZSTD_CONTENTSIZE_UNKNOWN ||

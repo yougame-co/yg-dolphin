@@ -1027,3 +1027,24 @@ TEST(OrcaReplayStream, SurvivesRandomDamage)
       ASSERT_TRUE(frame.ports);
   }
 }
+
+// Every byte of a chunk is covered by its hash, the preamble's fields too: a damaged live frame
+// (which nothing else checks) is refused like a damaged payload.
+TEST(OrcaReplayStream, RefusesADamagedPreamble)
+{
+  const auto replay = Replay(30, 0);
+  const std::vector<u8> good = Stream(replay, 10);
+  ReplayStreamInfo info = StreamInfo();
+  info.first_frame = 0;
+  const size_t header = PackReplayStreamHeader(info).size();
+  // The first chunk's live frame: magic (4), first (4), count (4), then live.
+  for (const size_t field : {size_t{12}, size_t{16}})
+  {
+    auto bad = good;
+    bad[header + field] ^= 0x01;
+    ReplayStreamReader reader;
+    std::string error;
+    EXPECT_FALSE(reader.Feed(bad.data(), bad.size(), &error)) << field;
+    EXPECT_TRUE(reader.Archive().frames.empty()) << field;
+  }
+}

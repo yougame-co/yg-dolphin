@@ -415,13 +415,17 @@ with open(tampered, "wb") as out:
 t = replay("ReplayOtherBuild", tampered)
 check("a replay from another build is refused", not t["ok"] and "another" in t.get("why", ""),
       f"why={t.get('why')}")
-damaged = os.path.join(WORK, "damaged.ygr")
-j = len(data) // 2
-with open(damaged, "wb") as out:
-    out.write(data[:j] + bytes([data[j] ^ 0x5A]) + data[j + 1:])
-d = replay("ReplayDamaged", damaged)
-check("a damaged replay is refused", not d["ok"] and "damaged" in d.get("why", ""),
-      f"why={d.get('why')}")
+# One byte flipped in the middle (wherever it lands), and in the first chunk's live frame (a
+# preamble field only the chunk's hash covers): both must be refused.
+import struct
+header_len = 12 + struct.unpack("<I", data[8:12])[0]
+for name, j in (("middle", len(data) // 2), ("live-field", header_len + 12)):
+    damaged = os.path.join(WORK, f"damaged-{name}.ygr")
+    with open(damaged, "wb") as out:
+        out.write(data[:j] + bytes([data[j] ^ 0x5A]) + data[j + 1:])
+    d = replay(f"ReplayDamaged-{name}", damaged)
+    check(f"a damaged replay is refused ({name})", not d["ok"] and "damaged" in d.get("why", ""),
+          f"why={d.get('why')}")
 
 # 4. Both players recorded the same match.
 end = min(host_stream.end, friend_stream.end)
