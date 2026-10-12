@@ -8,6 +8,8 @@
 #include <string_view>
 #include <vector>
 
+#include "Core/Orca/Engine/MatchTypes.h"
+
 #include "Core/Orca/Session/Events.h"
 #include "Core/Rollback/InputGate.h"
 #include "InputCommon/GCPadStatus.h"
@@ -27,6 +29,25 @@ class CPUThreadGuard;
 // toward API v1 (Read, Css, Display, OnHeader...) and move what the session needs out of the module.
 namespace Orca::Engine
 {
+// Verdicts on confirmed frames (S2 commit 5, group C): the module keeps a reading per frame and
+// turns frames into game results once they are final, identically on every machine. CPU thread.
+class Verdicts
+{
+public:
+  virtual ~Verdicts() = default;
+  // Frames through `confirmed` are final. Returns the games they finish, in order; `starts` gets
+  // the ranked set games they begin (the reports' ids). Only games begun after `plug_frame` count.
+  virtual std::vector<GameResult> Confirm(int confirmed, int plug_frame,
+                                          std::vector<int>* starts = nullptr) = 0;
+  // Memory was replaced (a keyframe or snapshot load): everything stored is stale.
+  virtual void Reset() = 0;
+  // The scene of the last final reading, and of the newest (possibly predicted) one.
+  virtual std::optional<SceneKind> FinalScene() const = 0;
+  virtual std::optional<SceneKind> LatestScene() const = 0;
+  // The ranked no-show port (0-based), once frames through it are `confirmed` final.
+  virtual std::optional<int> ConfirmNoShow(int confirmed) = 0;
+};
+
 class Module
 {
 public:
@@ -44,6 +65,9 @@ public:
   // The frame's raw buttons, before it runs (writes the module's latch regions only).
   virtual void Latch(const Core::CPUThreadGuard& guard,
                      const std::array<std::optional<GCPadStatus>, Rollback::InputGate::PORTS>& raw) = 0;
+
+  // What the session asks of the module (S2 commit 5 routes Rollback/OnlineMatch.cpp through these).
+  virtual Verdicts& Results() = 0;
 };
 
 // The module the engine's hooks call. Set by UX::Init before the hooks are installed and cleared by

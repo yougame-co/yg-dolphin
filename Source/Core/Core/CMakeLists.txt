@@ -523,6 +523,8 @@ add_library(core
   Orca/DiscVerify.h
   Orca/Engine/GuestMemory.cpp
   Orca/Engine/GuestMemory.h
+  Orca/Engine/MatchTypes.cpp
+  Orca/Engine/MatchTypes.h
   Orca/Engine/Module.cpp
   Orca/Engine/Module.h
   Orca/GpuLost.cpp

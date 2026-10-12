@@ -24,6 +24,7 @@ public:
   Rollback::InputGate::Masks Masks(const Core::CPUThreadGuard& guard) override;
   void Latch(const Core::CPUThreadGuard& guard,
              const std::array<std::optional<GCPadStatus>, Rollback::InputGate::PORTS>& raw) override;
+  Orca::Engine::Verdicts& Results() override;
 };
 
 // The one instance UX::Init hands the engine.

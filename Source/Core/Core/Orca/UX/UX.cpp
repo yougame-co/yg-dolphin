@@ -88,6 +88,13 @@ void Init()
   });
 }
 
+Orca::Engine::Module& Game()
+{
+  if (Orca::Engine::Module* module = Orca::Engine::ActiveModule())
+    return *module;
+  return Builtin();
+}
+
 void Shutdown()
 {
   Rumble::Halt();

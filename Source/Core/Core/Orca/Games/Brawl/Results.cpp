@@ -62,19 +62,6 @@ u32 GlobalField(const GuestMemory& m, u32 field)
 std::atomic<bool> s_rules_pending{false};
 }  // namespace
 
-std::string GameResult::DetailJson() const
-{
-  std::string out =
-      fmt::format("{{\"f\":{},\"st\":{},\"c\":[{},{}],\"s\":[{},{}],\"to\":{}", frame, stage,
-                  characters[0], characters[1], stocks[0], stocks[1], timeout ? 1 : 0);
-  if (start >= 0)
-  {
-    out += fmt::format(",\"k\":{},\"lg\":[{},{}],\"tb\":{}", how, ledge[0], ledge[1],
-                       tiebreak ? 1 : 0);
-  }
-  return out + "}";
-}
-
 GameResult FromRecord(const SetBlock::SetState& set, int index)
 {
   GameResult g;

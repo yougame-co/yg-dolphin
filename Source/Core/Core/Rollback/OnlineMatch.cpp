@@ -54,8 +54,8 @@
 #include "Core/Orca/UX/QueueApp.h"
 #include "Core/Orca/UX/Search.h"
 #include "Core/Orca/Games/Brawl/RankedSet.h"
-#include "Core/Orca/Games/Brawl/Results.h"
 #include "Core/Orca/UX/SetEnd.h"
+#include "Core/Orca/UX/UX.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/Rollback/Harness.h"
 #include "Core/Rollback/Rollback.h"
@@ -1947,7 +1947,7 @@ std::optional<int> FreshStart(Core::System& system, Match& match)
   match.port->SetCatchingUp(true);
   Orca::Events::NoteResync();
   Orca::UX::QueueApp::ResetTimeouts();
-  Orca::UX::Tracker().Reset();
+  Orca::UX::Game().Results().Reset();
   Orca::UX::Rules::MemoryReplaced();
   NOTICE_LOG_FMT(ROLLBACK, "Drop-in: fresh start at frame {}: back to the origin (frame {}) in {:.0f} "
                            "ms, leaving the main menu with exit code {}{}",
@@ -2038,7 +2038,7 @@ Load LoadKeyframe(Core::System& system, Match& match, int* frame_out)
   match.replaying = std::move(download);
   match.port->SetCatchingUp(true);
   Orca::UX::QueueApp::ResetTimeouts();
-  Orca::UX::Tracker().Reset();
+  Orca::UX::Game().Results().Reset();
   Orca::Events::NoteResync();
   Orca::UX::Rules::MemoryReplaced();
   // The host's game is here: the next picture shown is the room's select, not this player's own.
@@ -2102,7 +2102,7 @@ bool RestoreBeforeJoin(Core::System& system, Match& match)
   match.replaying.reset();
   Orca::Events::NoteResync();
   Orca::UX::QueueApp::ResetTimeouts();
-  Orca::UX::Tracker().Reset();
+  Orca::UX::Game().Results().Reset();
   Orca::UX::Rules::MemoryReplaced();
   return true;
 }
@@ -3136,7 +3136,7 @@ void Linger(Match& match)
   }
 }
 
-// Reports games whose frames are now final (UX/Results.h). Every machine reads the same frames, so
+// Reports games whose frames are now final (the module's Verdicts, Engine/Module.h). Every machine reads the same frames, so
 // both report the same games. A game counts only once an opponent is plugged in.
 void ConfirmResults(Match& match)
 {
@@ -3167,7 +3167,7 @@ void ConfirmResults(Match& match)
   // set ends with no game, so the room voids it and rates nobody; on a later game (a token still in
   // hand after the character order, UX/CharOrder.h) leaving loses the set. The other waits for the
   // verdict, and a leave of its own then reports the match void first.
-  if (const auto no_show = Orca::UX::Rules::ConfirmNoShow(confirmed))
+  if (const auto no_show = Orca::UX::Game().Results().ConfirmNoShow(confirmed))
   {
     const bool mine = *no_show == match.local_seat;
     NOTICE_LOG_FMT(ROLLBACK, "Online rules: port {} didn't pick a character in time{}",
@@ -3185,8 +3185,8 @@ void ConfirmResults(Match& match)
     }
   }
   std::vector<int> starts;
-  const std::vector<Orca::UX::GameResult> results =
-      Orca::UX::Tracker().Confirm(confirmed, plug, &starts);
+  const std::vector<Orca::Engine::GameResult> results =
+      Orca::UX::Game().Results().Confirm(confirmed, plug, &starts);
   // A joiner that asked to leave stays plugged in until its host's roster names the unplug frame,
   // so a fight's first frame can turn final in between. The leave press decides: the screen said
   // then whether the set counts (Leave), and the room hears no game began after it.
@@ -3205,11 +3205,11 @@ void ConfirmResults(Match& match)
   // too. Only a ranked set's model takes it.
   if (!starts.empty() || !results.empty())
     Orca::UX::SetEnd::Current().GameBegan(Orca::UX::SetEnd::NowMs());
-  for (const Orca::UX::GameResult& r : results)
+  for (const Orca::Engine::GameResult& r : results)
   {
     Orca::Net::GameReport report;
-    report.kind = r.kind == Orca::UX::GameResult::Kind::Win  ? Orca::Net::GameReport::Kind::Win :
-                  r.kind == Orca::UX::GameResult::Kind::Draw ? Orca::Net::GameReport::Kind::Draw :
+    report.kind = r.kind == Orca::Engine::GameResult::Kind::Win  ? Orca::Net::GameReport::Kind::Win :
+                  r.kind == Orca::Engine::GameResult::Kind::Draw ? Orca::Net::GameReport::Kind::Draw :
                                                                Orca::Net::GameReport::Kind::Void;
     report.winner_seat = r.winner_port;
     report.why = r.why;
@@ -4134,7 +4134,7 @@ void NoteRankedFight(Match& match)
   {
     return;
   }
-  if (Orca::UX::Tracker().LatestScene() == Orca::UX::Reading::Scene::Fight)
+  if (Orca::UX::Game().Results().LatestScene() == Orca::Engine::SceneKind::Fight)
   {
     match.ranked_fought = true;
     NOTICE_LOG_FMT(ROLLBACK, "Queue: a ranked fight in room {} (frame {}): back not ready after it",
@@ -4161,9 +4161,9 @@ void SetOverLeave(Match& match)
   }
   if (match.set_over_left)
     return;
-  using Scene = Orca::UX::Reading::Scene;
-  const std::optional<Scene> final_scene = Orca::UX::Tracker().FinalScene();
-  const bool on_results = Orca::UX::Tracker().LatestScene() == Scene::Results;
+  using Scene = Orca::Engine::SceneKind;
+  const std::optional<Scene> final_scene = Orca::UX::Game().Results().FinalScene();
+  const bool on_results = Orca::UX::Game().Results().LatestScene() == Scene::Results;
   // The opponent's game is gone: the host's session ended, or the joiner plays solo.
   const bool alone = !match.session;
   const u16 buttons = s_local_pad ? Orca::Net::DecodePad(*s_local_pad).button : u16{0};

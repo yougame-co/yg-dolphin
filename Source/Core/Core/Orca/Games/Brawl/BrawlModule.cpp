@@ -28,6 +28,32 @@
 
 namespace Orca::UX
 {
+namespace
+{
+// The session's verdicts over Results.h's tracker and OnlineRules' no-show, as it called them.
+class BrawlVerdicts final : public Orca::Engine::Verdicts
+{
+public:
+  std::vector<GameResult> Confirm(int confirmed, int plug_frame, std::vector<int>* starts) override
+  {
+    return Tracker().Confirm(confirmed, plug_frame, starts);
+  }
+  void Reset() override { Tracker().Reset(); }
+  std::optional<Orca::Engine::SceneKind> FinalScene() const override
+  {
+    return Tracker().FinalScene();
+  }
+  std::optional<Orca::Engine::SceneKind> LatestScene() const override
+  {
+    return Tracker().LatestScene();
+  }
+  std::optional<int> ConfirmNoShow(int confirmed) override
+  {
+    return Rules::ConfirmNoShow(confirmed);
+  }
+};
+}  // namespace
+
 BrawlModule& Builtin()
 {
   static BrawlModule s_module;
@@ -157,6 +183,12 @@ Rollback::InputGate::Masks BrawlModule::Masks(const Core::CPUThreadGuard& guard)
   Orca::Engine::MergeMasks(masks, order);
   Orca::Engine::MergeMasks(masks, Queue::GateFrame(guard));
   return masks;
+}
+
+Orca::Engine::Verdicts& BrawlModule::Results()
+{
+  static BrawlVerdicts s_verdicts;
+  return s_verdicts;
 }
 
 void BrawlModule::Latch(
