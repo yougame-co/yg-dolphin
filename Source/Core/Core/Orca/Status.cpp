@@ -18,8 +18,7 @@
 #include "Core/Orca/Mod.h"
 #include "Core/Orca/Music.h"
 #include "Core/Orca/Profile.h"
-#include "Core/Orca/Games/Brawl/OnlineRules.h"
-#include "Core/Orca/Games/Brawl/Results.h"
+#include "Core/Orca/UX/UX.h"
 
 namespace Orca::Status
 {
@@ -161,9 +160,12 @@ std::string OfferedCaps()
   }
   else
   {
-    if (UX::ResultsVerified())
+    // What the game module says (Engine/Module.h): results where it reads them while its addresses
+    // hold, the locks with a ruleset.
+    Orca::Engine::Module& game = UX::Game();
+    if (game.Active() && game.Describe().results)
       caps += fmt::format(" {}", RESULTS_CAP);
-    if (UX::Rules::ProfileRuleset() != UX::Rules::Ruleset::None)
+    if (game.ProfileRuleset() != Orca::Engine::Ruleset::None)
       caps += fmt::format(" {} {} {}", LOCKS_CAP, QUEUE2_CAP, PICK_CAPS);
   }
   // Engine caps, like "music": every profile, legacy or mod, whatever its builtin or guards. Last,
