@@ -93,6 +93,9 @@ struct Layout
   // Brawl's Melee Stages / Brawl Stages page button. Without pages it is never hovered.
   bool pages = false;
   Rect page_button{};
+  // The game's own Random button (hovered item 0x36), on every page. An empty rectangle is never
+  // hovered.
+  Rect random_button{};
   std::array<Point, 2> start{};
   // Overlay only, never synced: where cursor (0, 0) sits in the picture (0..1 across and down),
   // and how far one cursor unit moves across and down.
@@ -102,9 +105,10 @@ const Layout& BrawlLayout();
 const Layout& PPlusLayout();
 const Layout* LayoutFor(u8 game);
 
-// What a cursor is on: a legal stage's index, PAGE_BUTTON, or NOTHING.
+// What a cursor is on: a legal stage's index, PAGE_BUTTON, RANDOM_BUTTON, or NOTHING.
 constexpr int NOTHING = -1;
 constexpr int PAGE_BUTTON = -2;
+constexpr int RANDOM_BUTTON = -3;
 int Hovered(const Layout& layout, u32 page, int x, int y);
 // The tile of `stage` on `page` (nullptr: not on that page).
 const Tile* TileOf(const Layout& layout, int stage, u32 page);
@@ -162,7 +166,7 @@ struct View
   {
     bool present = false;
     s16 x = 0, y = 0;
-    s8 proposal = -1;  // proposed stage (ruleset index), -1 none
+    s8 proposal = -1;  // proposed stage (ruleset index), -1 none, -2 Random (Ranked::PREF_*)
     bool local = false;
     std::string name;
   };

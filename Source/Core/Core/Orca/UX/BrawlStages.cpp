@@ -393,6 +393,11 @@ void CursorPresses(const RS::Plan& plan, State* s, StageCursors::State* c, u32 p
       if (!(my_turn && step->kind == RS::StepKind::Pick && RS::Pick(plan, &s->progress, on)))
         RS::Propose(plan, &s->progress, port, on);
     }
+    else if (on == StageCursors::RANDOM_BUTTON && (pressed & StageCursors::BTN_A) && plan.casual)
+    {
+      // Casual only: A on the game's Random button names Random. Ranked has none.
+      RS::Propose(plan, &s->progress, port, RS::PREF_RANDOM);
+    }
     if (my_turn && step->optional && (pressed & StageCursors::BTN_Y) && s->progress.picked < 0)
       RS::Skip(Rules(), plan, &s->progress);
     if (pressed & StageCursors::BTN_B)
@@ -601,6 +606,27 @@ constexpr std::array<const char*, kStages> kStageNames{
     "Battlefield",    "Pokemon Stadium",   "Lylat Cruise",  "Smashville",
     "Yoshi's Island", "Final Destination", "Delfino Plaza",
 };
+
+// A preference as the overlay names it: a stage, "Random", or empty for none.
+std::string PrefName(s8 pref)
+{
+  if (pref == RS::PREF_RANDOM)
+    return "Random";
+  return pref >= 0 && pref < kStages ? kStageNames[pref] : "";
+}
+
+// Whether the local player's own cursor is on the Random button (UI only).
+bool LocalOnRandom(const GuestMemory& m, const View& v, int me)
+{
+  if (me < 0 || me > 1 || !v.present)
+    return false;
+  const std::optional<StageCursors::State> c = StageCursors::Read(m);
+  if (!c)
+    return false;
+  const StageCursors::Cursor& mine = c->cursors[me];
+  return StageCursors::Hovered(StageCursors::BrawlLayout(), m.Read32(v.task + TASK_PAGE), mine.x,
+                               mine.y) == StageCursors::RANDOM_BUTTON;
+}
 
 bool VanillaBrawl()
 {
@@ -819,15 +845,16 @@ std::pair<std::string, std::string> Lines(const GuestMemory& m,
     if (!p.remote && (p.port == 0 || p.port == 1))
       me = p.port;
   }
-  // The opponent's proposal, e.g. "bo wants Smashville".
+  // The opponent's proposal, e.g. "bo wants Smashville" (casual: also "bo wants Random").
   const auto proposal_note = [&]() -> std::string {
     const auto& prefs = s->progress.prefs;
     std::string out;
     for (int port = 0; port < 2; ++port)
     {
-      if (port == me || prefs[port] < 0 || prefs[port] >= kStages)
+      const std::string wanted = PrefName(prefs[port]);
+      if (port == me || wanted.empty())
         continue;
-      out = fmt::format("{} wants {}", name(port), kStageNames[prefs[port]]);
+      out = fmt::format("{} wants {}", name(port), wanted);
       if (me >= 0 && prefs[me] != prefs[port])
         out += " · A on it to agree";
     }
@@ -849,21 +876,25 @@ std::pair<std::string, std::string> Lines(const GuestMemory& m,
     {
       const int seconds = RS::SecondsShown(Rules(), *step, s->progress.frames);
       std::string note;
-      if (me >= 0 && s->progress.prefs[me] >= 0)
-        note = fmt::format("You want {}", kStageNames[s->progress.prefs[me]]);
+      if (me >= 0 && !PrefName(s->progress.prefs[me]).empty())
+        note = fmt::format("You want {}", PrefName(s->progress.prefs[me]));
       else if (me >= 0)
-        note = "A on the stage you want · the same pick plays there, else a coin takes one of "
+        note = "A on a stage or Random · the same pick plays there, else a coin takes one of "
                "the two";
       note = join(note, proposal_note());
       return {fmt::format("Stage pick · 0:{:02}", seconds), note};
     }
-    if (s->progress.picked < 0)
+    if (s->progress.picked < 0 || s->progress.picked >= kStages)
       return {};
+    // Whose preference the stage is: the coin's port when the two differ. Random says so, and
+    // never which stage the other port's Random would have drawn.
     const auto& prefs = s->progress.prefs;
-    const int chosen = RS::CasualChoice(plan);
-    const std::string whose = prefs[0] == prefs[1]    ? "both picks" :
-                              local(chosen)           ? "your pick" :
-                                                        fmt::format("{}'s pick", name(chosen));
+    const int chosen = prefs[0] == prefs[1] ? 0 : RS::CasualChoice(plan);
+    std::string whose = local(chosen) ? "your pick" : fmt::format("{}'s pick", name(chosen));
+    if (prefs[chosen] == RS::PREF_RANDOM)
+      whose = "random";
+    else if (prefs[0] == prefs[1])
+      whose = "both picks";
     return {fmt::format("{} ({})", kStageNames[s->progress.picked], whose), {}};
   }
   // Ranked: the set score; on the stage select also whose turn it is, how many to strike or ban,
@@ -897,7 +928,8 @@ std::pair<std::string, std::string> Lines(const GuestMemory& m,
     case RS::StepKind::Prefer:
       break;
     }
-    // Hint line: your keys on your turn, else the opponent's proposal, else that A proposes.
+    // Hint line: your keys on your turn, else the opponent's proposal, else that A proposes. On
+    // the Random button, that Random is casual only.
     std::string note;
     if (you)
       note = keys;
@@ -906,6 +938,8 @@ std::pair<std::string, std::string> Lines(const GuestMemory& m,
       note = join(note, theirs);
     else if (me >= 0 && !(you && step->kind == RS::StepKind::Pick))
       note = join(note, "A proposes a stage");
+    if (LocalOnRandom(m, v, me))
+      note = join(note, "Random is casual only");
     return {fmt::format("{} · {} · {}", score, turn, clock), note};
   }
   if (s->progress.picked >= 0)

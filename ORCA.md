@@ -1841,6 +1841,17 @@ stages come from `CasualSeed(room hash, coin, game number)` through murmur3's fi
 machine and re-run computes the same. Tests: `OrcaRankedSteps.*Casual*`, `OrcaBrawlCasual.*`,
 `OrcaRankedPPlus.Casual*`.
 
+**Random.** A on the game's own Random button names Random (`Ranked::PREF_RANDOM`, Project+'s block
+`0xFE`): that player's random legal stage, the one a silent player gets at the timer
+(`CasualDefault`, never FD with an Ice Climbers), but at once. Random against a stage, the coin takes
+one of the two; Random against Random, the stage is picked at once. The block keeps the marker, not
+the stage it draws, so the other player only sees "bo wants Random"; the result says "Smashville
+(random)". The flow then takes that stage's own tile; the game's Random and its random number
+generator are never used. Ranked has no Random (neither ruleset has a random counterpick): A there
+does nothing and the hint line says "Random is casual only". The Random buttons' rectangles
+(`StageCursors::Layout::random_button`) were measured from screenshots, not swept like the tiles.
+Friends rooms keep the game's own stage select, Random included.
+
 ### Two cursors
 
 In queue matches each player has a cursor of their own on the stage select, moved by their own stick

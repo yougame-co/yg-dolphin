@@ -214,6 +214,7 @@ int CasualChoice(const Plan& plan)
 
 int CasualResult(const Plan& plan, std::array<s8, 2> prefs)
 {
+  // Random (PREF_RANDOM) and none (any other negative) both draw the port's default.
   for (int port = 0; port < 2; ++port)
   {
     if (prefs[port] < 0)
@@ -357,13 +358,21 @@ StageMask Proposable(const Plan& plan, const Progress& progress)
 
 bool Propose(const Plan& plan, Progress* progress, int port, int stage)
 {
-  if (port < 0 || port > 1 || stage < 0 || stage >= MAX_STAGES)
+  if (port < 0 || port > 1 || progress->prefs[port] == stage)
     return false;
-  if (!(Proposable(plan, *progress) & Bit(stage)) || progress->prefs[port] == stage)
+  if (stage == PREF_RANDOM)
+  {
+    // Casual only, and only while some stage is left to draw from.
+    if (!plan.casual || Proposable(plan, *progress) == 0)
+      return false;
+  }
+  else if (stage < 0 || stage >= MAX_STAGES || !(Proposable(plan, *progress) & Bit(stage)))
+  {
     return false;
+  }
   progress->prefs[port] = static_cast<s8>(stage);
   const auto& prefs = progress->prefs;
-  if (plan.casual && prefs[0] >= 0 && prefs[1] >= 0)
+  if (plan.casual && Named(prefs[0]) && Named(prefs[1]))
     progress->picked = static_cast<s8>(CasualResult(plan, prefs));
   else if (!plan.casual && prefs[0] >= 0 && prefs[0] == prefs[1])
     progress->picked = prefs[0];  // matching proposals skip the remaining steps
@@ -372,9 +381,9 @@ bool Propose(const Plan& plan, Progress* progress, int port, int stage)
 
 bool Withdraw(Progress* progress, int port)
 {
-  if (port < 0 || port > 1 || progress->picked >= 0 || progress->prefs[port] < 0)
+  if (port < 0 || port > 1 || progress->picked >= 0 || !Named(progress->prefs[port]))
     return false;
-  progress->prefs[port] = -1;
+  progress->prefs[port] = PREF_NONE;
   return true;
 }
 
@@ -405,10 +414,11 @@ void Tick(const Ruleset& rules, const Plan& plan, Progress* progress)
   }
   if (step->kind == StepKind::Prefer)
   {
-    // Whoever named nothing gets a random legal stage, then the coin decides between the two.
+    // Whoever named nothing gets a random legal stage, then the coin decides between the two. A
+    // Random stays Random (CasualResult draws the same stage for it).
     for (int port = 0; port < 2; ++port)
     {
-      if (progress->prefs[port] < 0)
+      if (!Named(progress->prefs[port]))
         progress->prefs[port] = static_cast<s8>(CasualDefault(plan, port));
     }
     const int stage = CasualResult(plan, progress->prefs);

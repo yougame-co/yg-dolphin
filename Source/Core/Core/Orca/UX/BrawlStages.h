@@ -43,8 +43,8 @@ class CPUThreadGuard;
 // the flow moves the game's cursor and presses A itself.
 //
 // Casual games ("Casual stage pick" in ORCA.md) use the same machinery: both players name a
-// preferred stage with A within 15 s. Matching picks win; otherwise a coin seeded from the room
-// and game decides. A player who names none gets a random legal stage.
+// preferred stage, or Random, with A within 15 s. Matching picks win; otherwise a coin seeded from
+// the room and game decides. Random, and a player who names none, get a random legal stage.
 namespace Orca::UX
 {
 class GuestMemory;

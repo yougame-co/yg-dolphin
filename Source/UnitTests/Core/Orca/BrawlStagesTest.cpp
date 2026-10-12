@@ -5,6 +5,7 @@
 // game's memory: the steps follow the game's pads and cursor, every write is idempotent at its
 // boundary, the timer counts the screen's own frames, the gate keeps the off-turn port out.
 
+#include <algorithm>
 #include <bit>
 #include <map>
 #include <string>
@@ -160,13 +161,13 @@ void Boundary(FakeMemory& m, bool again = true)
 }
 
 // The two cursors (StageCursors.h) as the latch leaves them: `port`'s on the middle of `stage`'s
-// tile (its page shown), or on the page button.
+// tile (its page shown), on the Random button (StageCursors::RANDOM_BUTTON), or on the page button.
 void Aim(FakeMemory& m, int port, int stage)
 {
   auto c = StageCursors::Read(m);
   ASSERT_TRUE(c);
   const StageCursors::Layout& l = StageCursors::BrawlLayout();
-  StageCursors::Rect r = l.page_button;
+  StageCursors::Rect r = stage == StageCursors::RANDOM_BUTTON ? l.random_button : l.page_button;
   if (stage >= 0)
   {
     const StageCursors::Tile* t = StageCursors::TileOf(l, stage, TileFor(stage).page);
@@ -768,9 +769,10 @@ TEST_F(OrcaBrawlStages, TheOverlaysTopLineHasTheSetTheTurnTheCountAndTheTime)
   EXPECT_EQ(CurrentTurn(m), std::nullopt);
   Scene(m, "scSelStage");
   Boundary(m);
+  // Both cursors start on the Random bar, which ranked doesn't have.
   EXPECT_EQ(Lines(m, ports), (std::pair<std::string, std::string>{
                                  "You 0–0 bo · bo strikes 1 · 0:30",
-                                 "A proposes a stage"}));
+                                 "A proposes a stage · Random is casual only"}));
   // The turn as STAGE SELECT's relabel names it (Relabel.h): the same step as the line's.
   EXPECT_EQ(CurrentTurn(m), (Ranked::Turn{Ranked::StepKind::Strike, 1, 1}));
   Aim(m, 1, Battlefield);
@@ -778,7 +780,8 @@ TEST_F(OrcaBrawlStages, TheOverlaysTopLineHasTheSetTheTurnTheCountAndTheTime)
   // Port 1's two strikes, its keys under the line.
   EXPECT_EQ(Lines(m, ports), (std::pair<std::string, std::string>{
                                  "You 0–0 bo · You strike 2 · 0:30",
-                                 "X on a stage strikes it · A proposes a stage"}));
+                                 "X on a stage strikes it · A proposes a stage · Random is casual "
+                                 "only"}));
   EXPECT_EQ(CurrentTurn(m), (Ranked::Turn{Ranked::StepKind::Strike, 0, 2}));
   Aim(m, 0, Smashville);
   Push(m, 0, X);
@@ -917,7 +920,8 @@ TEST(OrcaStageCursors, TurnTextBothAtOnce)
   v.left = 1;
   v.seconds = 15;
   EXPECT_EQ(StageCursors::TurnText(v, 0),
-            (StageCursors::TurnCue{Mode::Acting, true, "YOUR PICK", "A PICKS A STAGE", 15}));
+            (StageCursors::TurnCue{Mode::Acting, true, "YOUR PICK", "A PICKS A STAGE OR RANDOM",
+                                   15}));
   EXPECT_EQ(StageCursors::TurnText(v, 1),
             (StageCursors::TurnCue{Mode::Acting, false, "BO PICKS", "", 15}));
   v.players[0].proposal = 2;
@@ -928,6 +932,14 @@ TEST(OrcaStageCursors, TurnTextBothAtOnce)
   EXPECT_EQ(StageCursors::TurnText(v, 0).mode, Mode::Idle);
   EXPECT_EQ(StageCursors::TurnText(v, 1).mode, Mode::Idle);
   EXPECT_EQ(StageCursors::MkClauseNote(v), "");
+  // Random counts as named.
+  v.players[0].proposal = RS::PREF_RANDOM;
+  v.players[1].proposal = RS::PREF_NONE;
+  EXPECT_EQ(StageCursors::TurnText(v, 0),
+            (StageCursors::TurnCue{Mode::Waiting, true, "WAITING FOR BO", "", -1}));
+  v.players[1].proposal = RS::PREF_RANDOM;
+  EXPECT_EQ(StageCursors::TurnText(v, 0).mode, Mode::Idle);
+  EXPECT_EQ(StageCursors::TurnText(v, 1).mode, Mode::Idle);
 }
 
 namespace
@@ -977,7 +989,7 @@ TEST_F(OrcaBrawlCasual, BothPickAtOnceTheSameStagePlays)
   EXPECT_EQ(Lines(m, ports),
             (std::pair<std::string, std::string>{
                 "Stage pick · 0:15",
-                "A on the stage you want · the same pick plays there, else a coin takes one of the "
+                "A on a stage or Random · the same pick plays there, else a coin takes one of the "
                 "two"}));
   EXPECT_EQ(CurrentTurn(m), (Ranked::Turn{Ranked::StepKind::Prefer, Ranked::BOTH, 1}));
   // Port 2 names Smashville, then changes its mind to Battlefield; port 1 names Battlefield too.
@@ -985,7 +997,7 @@ TEST_F(OrcaBrawlCasual, BothPickAtOnceTheSameStagePlays)
   Push(m, 1, A);
   EXPECT_EQ(ReadState(m)->progress.prefs[1], Smashville);
   EXPECT_EQ(Lines(m, ports).second,
-            "A on the stage you want · the same pick plays there, else a coin takes one of the "
+            "A on a stage or Random · the same pick plays there, else a coin takes one of the "
             "two · bo wants Smashville · A on it to agree");
   Aim(m, 1, Battlefield);
   Push(m, 1, A);
@@ -1095,6 +1107,115 @@ TEST_F(OrcaBrawlCasual, NoFinalDestinationForAnIceClimbersAndNothingAlone)
     EXPECT_TRUE(mask.Empty());
 }
 
+// Random (casual): both cursors start on the game's Random bar, A there names Random, B takes it
+// back. The block keeps the marker, never the stage it draws; the flow then presses A on a real
+// stage's tile, never the game's own Random.
+TEST_F(OrcaBrawlCasual, RandomIsAPickAndItsStageStaysHidden)
+{
+  FakeMemory m = Game("scSelStage");
+  m.Write32(kBlock + 8, ROOM);
+  Boundary(m);
+  const StageCursors::Layout& l = StageCursors::BrawlLayout();
+  for (const StageCursors::Point& p : l.start)
+    EXPECT_EQ(StageCursors::Hovered(l, 0, p.x, p.y), StageCursors::RANDOM_BUTTON);
+  std::vector<Orca::Events::PortInfo> ports{{0, "ada", false, {}}, {1, "bo", true, {}}};
+  std::vector<Orca::Events::PortInfo> theirs{{0, "ada", true, {}}, {1, "bo", false, {}}};
+  // Port 1's A where its cursor starts: Random. B takes it back; A again.
+  Push(m, 0, A);
+  EXPECT_EQ(ReadState(m)->progress.prefs[0], RS::PREF_RANDOM);
+  Push(m, 0, B);
+  EXPECT_EQ(ReadState(m)->progress.prefs[0], RS::PREF_NONE);
+  Push(m, 0, A);
+  EXPECT_EQ(ReadState(m)->progress.prefs[0], RS::PREF_RANDOM);
+  EXPECT_EQ(ReadState(m)->progress.picked, -1);
+  EXPECT_EQ(Lines(m, ports).second, "You want Random");
+  EXPECT_EQ(Lines(m, theirs).second,
+            "A on a stage or Random · the same pick plays there, else a coin takes one of the "
+            "two · ada wants Random · A on it to agree");
+  EXPECT_EQ(CursorView(m, ports).players[0].proposal, RS::PREF_RANDOM);
+  // Port 2 names Smashville: the coin takes Smashville or port 1's random stage.
+  Aim(m, 1, Smashville);
+  Push(m, 1, A);
+  const auto s = ReadState(m);
+  const RS::Plan plan = CasualPlanOf(*s);
+  ASSERT_GE(s->progress.picked, 0);
+  EXPECT_EQ(s->progress.picked, RS::CasualResult(plan, {RS::PREF_RANDOM, Smashville}));
+  EXPECT_EQ(s->progress.prefs[0], RS::PREF_RANDOM);  // still the marker
+  const bool random_won = RS::CasualChoice(plan) == 0;
+  EXPECT_EQ(s->progress.picked, random_won ? RS::CasualDefault(plan, 0) : int{Smashville});
+  const char* names[] = {"Battlefield",    "Pokemon Stadium",   "Lylat Cruise", "Smashville",
+                         "Yoshi's Island", "Final Destination", "Delfino Plaza"};
+  EXPECT_EQ(Lines(m, ports).first, std::string(names[s->progress.picked]) +
+                                       (random_won ? " (random)" : " (bo's pick)"));
+  // The flow takes the stage itself: the game's cursor on its tile, A pressed on it.
+  Hover(m, s->progress.picked);
+  bool pressed = false;
+  for (int i = 0; i < 3; ++i)
+  {
+    Boundary(m);
+    Rollback::InputGate::Masks masks{};
+    Masks(m, &masks);
+    for (const auto& mask : masks)
+      pressed = pressed || mask.press == PAD_BUTTON_A;
+  }
+  EXPECT_TRUE(pressed);
+  EXPECT_EQ(ReadState(m)->progress.picked, s->progress.picked);
+}
+
+TEST_F(OrcaBrawlCasual, BothRandomPicksAtOnceAndARandomOutlastsTheTimer)
+{
+  FakeMemory m = Game("scSelStage");
+  m.Write32(kBlock + 8, ROOM);
+  Boundary(m);
+  Push(m, 0, A);
+  EXPECT_EQ(ReadState(m)->progress.picked, -1);
+  Aim(m, 1, StageCursors::RANDOM_BUTTON);
+  Push(m, 1, A);
+  auto s = ReadState(m);
+  const RS::Plan plan = CasualPlanOf(*s);
+  EXPECT_EQ(s->progress.picked, RS::CasualResult(plan, {RS::PREF_RANDOM, RS::PREF_RANDOM}));
+  EXPECT_GT(s->progress.frames, 15 * 60);  // at once, not at the timer
+  std::vector<Orca::Events::PortInfo> ports{{0, "ada", false, {}}, {1, "bo", true, {}}};
+  EXPECT_NE(Lines(m, ports).first.find(" (random)"), std::string::npos);
+  // Another game: Random against nobody, time runs out; Random is kept.
+  m.Write32(TASK + 0x250, 0);
+  Scene(m, "scMelee");
+  Boundary(m);
+  Scene(m, "scSelStage");
+  Boundary(m);
+  Aim(m, 1, StageCursors::RANDOM_BUTTON);
+  Push(m, 1, A);
+  for (int i = 0; i < 15 * 60 + 30 && ReadState(m)->progress.picked < 0; ++i)
+    Boundary(m, false);
+  s = ReadState(m);
+  const RS::Plan later = CasualPlanOf(*s);
+  EXPECT_EQ(s->progress.picked, RS::CasualResult(later, {RS::PREF_NONE, RS::PREF_RANDOM}));
+  EXPECT_EQ(s->progress.prefs[1], RS::PREF_RANDOM);
+  EXPECT_EQ(s->progress.prefs[0], RS::CasualDefault(later, 0));
+}
+
+// Ranked has no Random: A and X there do nothing, and the line says why.
+TEST_F(OrcaBrawlStages, RankedIgnoresRandom)
+{
+  FakeMemory m = Game("scSelStage");  // the header's coin: port 2 strikes first
+  Boundary(m);
+  const auto before = ReadState(m);
+  ASSERT_TRUE(before);
+  Push(m, 1, A);
+  Push(m, 1, X);
+  Push(m, 0, A);
+  const auto after = ReadState(m);
+  EXPECT_EQ(after->progress.prefs, before->progress.prefs);
+  EXPECT_EQ(after->progress.struck, before->progress.struck);
+  EXPECT_EQ(after->progress.step, before->progress.step);
+  EXPECT_EQ(after->progress.picked, -1);
+  std::vector<Orca::Events::PortInfo> theirs{{0, "ada", true, {}}, {1, "bo", false, {}}};
+  EXPECT_EQ(Lines(m, theirs).second,
+            "X on a stage strikes it · A proposes a stage · Random is casual only");
+  Aim(m, 1, Battlefield);
+  EXPECT_EQ(Lines(m, theirs).second, "X on a stage strikes it · A proposes a stage");
+}
+
 TEST(OrcaStageCursors, TheLatchMovesEachCursorWithItsOwnStick)
 {
   FakeMemory m = Game("scSelStage");
@@ -1172,4 +1293,37 @@ TEST(OrcaStageCursors, EdgesAreSeenOnceAndTilesAreTheLayouts)
   }
   EXPECT_EQ(StageCursors::BrawlLayout().tiles.size(), 7u);
   EXPECT_EQ(StageCursors::PPlusLayout().tiles.size(), 9u);
+  // Each game's Random button: on every page, inside the cursor's reach, clear of the tiles and the
+  // page button. Brawl's two cursors and Project+'s first start on it.
+  for (const StageCursors::Layout* l : {&StageCursors::BrawlLayout(), &StageCursors::PPlusLayout()})
+  {
+    const StageCursors::Rect& r = l->random_button;
+    ASSERT_LT(r.x0, r.x1);
+    ASSERT_LT(r.y0, r.y1);
+    const int mx = (r.x0 + r.x1) / 2, my = (std::max(r.y0, l->bounds.y0) + r.y1) / 2;
+    EXPECT_TRUE(l->bounds.Contains(mx, my));
+    for (u32 page = 0; page < 2; ++page)
+      EXPECT_EQ(StageCursors::Hovered(*l, page, mx, my), StageCursors::RANDOM_BUTTON);
+    const auto apart = [](const StageCursors::Rect& a, const StageCursors::Rect& b) {
+      return a.x1 <= b.x0 || b.x1 <= a.x0 || a.y1 <= b.y0 || b.y1 <= a.y0;
+    };
+    for (const StageCursors::Tile& t : l->tiles)
+      EXPECT_TRUE(apart(r, t.rect)) << "game " << int(l->game) << " stage " << int(t.stage);
+    if (l->pages)
+      EXPECT_TRUE(apart(r, l->page_button));
+  }
+  const StageCursors::Layout& brawl = StageCursors::BrawlLayout();
+  const StageCursors::Layout& pplus = StageCursors::PPlusLayout();
+  EXPECT_EQ(StageCursors::Hovered(brawl, 0, brawl.start[0].x, brawl.start[0].y),
+            StageCursors::RANDOM_BUTTON);
+  EXPECT_EQ(StageCursors::Hovered(brawl, 1, brawl.start[1].x, brawl.start[1].y),
+            StageCursors::RANDOM_BUTTON);
+  EXPECT_EQ(StageCursors::Hovered(pplus, 0, pplus.start[0].x, pplus.start[0].y),
+            StageCursors::RANDOM_BUTTON);
+  EXPECT_EQ(StageCursors::Hovered(pplus, 0, pplus.start[1].x, pplus.start[1].y),
+            StageCursors::NOTHING);
+  // The page button still reads as the page button.
+  EXPECT_EQ(StageCursors::Hovered(brawl, 0, (brawl.page_button.x0 + brawl.page_button.x1) / 2,
+                                  (brawl.page_button.y0 + brawl.page_button.y1) / 2),
+            StageCursors::PAGE_BUTTON);
 }
