@@ -20,12 +20,12 @@ set -euo pipefail
 REF=${1:-origin/main}
 TAG=${3:-}
 PUBLIC_URL=${ORCA_PUBLIC_URL:-https://github.com/yougame-co/yg-baiji.git}
-# Never published: private notes, this script, and test tools that drive YouGame's own site, app or
-# test accounts rather than Orca.
+# Never published: private notes, this script, the upstream-sync release tool, and test tools that
+# drive YouGame's own site, app or test accounts rather than Orca.
 EXCLUDE=(Tools/orca-publish-public.sh ORCA_NOTES.md Tools/orca/xplat.py Tools/orca/page-e2e.mjs
   Tools/orca/queue-e2e.mjs Tools/orca/controller-latency.mjs Tools/orca/selfmatch.mjs
   Tools/orca/play-again-matrix.sh Tools/orca/play-again-run-two.sh Tools/orca/run-lock.py
-  Tools/orca/run-lock-test.py)
+  Tools/orca/run-lock-test.py Tools/orca/upstream-sync.py Tools/orca/test_upstream_sync.py)
 # Case-insensitive. Other people's names and handles, Gmail addresses, personal paths and
 # home-network details. Luis's own name and handle may appear (Luis, 2026-10-07: his name is fine;
 # what must never appear is his home address).

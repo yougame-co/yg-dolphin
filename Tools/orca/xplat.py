@@ -8,6 +8,13 @@
 #   host:  xplat.py --role host --room xp1234ab --bin <nogui> --disc <rsbe01 rev2> --cookie <file>
 #   join:  xplat.py --role join --room xp1234ab --bin <nogui> --disc <...> --cookie <file> --delay 60
 #   P+:    add --pplus "<dir>/Project+ Netplay Launcher.dol" (and --slug project-rollback) on both.
+#   Mods:  --mod <bundle folder with tree.json> runs Orca in mod mode (ORCA_MOD_DIR; ORCA.md "Mods
+#          (phase 1)"): a bundle whose mod.json names a launcher boots it like --pplus. --sd-cache
+#          keeps built SD cards between runs (default: under the run's work dir); --disc-sha1 sets
+#          ORCA_DISC_SHA1 as the app does. Both sides must run the same bundle (the key says so).
+#   Flat:  a flat bundle (ORCA.md "Flat bundles") is found the way the app lays it out: Project+'s
+#          with --pplus "<bundle>/Project+ Netplay Launcher.dol" (the launcher's folder); a disc
+#          boot's with --flat-run <bundle>, copied to <work>/run/<slug>/ beside -u <work>/user.
 #
 # --cookie is a file holding a session cookie header (sandbox-ada on one side, sandbox-bo on the
 # other; both are testers on open-brawl and project-rollback): web/scripts/online-tests/lib.mjs
@@ -25,7 +32,11 @@ p.add_argument("--bin", required=True)
 p.add_argument("--disc", required=True)
 p.add_argument("--cookie", required=True)
 p.add_argument("--pplus")
+p.add_argument("--mod")
+p.add_argument("--sd-cache")
+p.add_argument("--disc-sha1")
 p.add_argument("--slug")
+p.add_argument("--flat-run")
 p.add_argument("--frames", type=int, default=36000)
 p.add_argument("--delay", type=float, default=0)
 p.add_argument("--leave-at", type=int, default=0)
@@ -35,9 +46,22 @@ p.add_argument("--keep", action="store_true")
 a = p.parse_args()
 if not re.fullmatch(r"[a-z0-9]{6,12}", a.room):
     sys.exit("room: 6-12 of a-z0-9")
-slug = a.slug or ("project-rollback" if a.pplus else "open-brawl")
-inp = a.input or os.path.join(HERE, "inputs", "pplus-1v1.txt" if a.pplus else "bf-mario-link-results.txt")
+mod_launcher = None
+if a.mod:
+    with open(os.path.join(a.mod, "mod.json"), encoding="utf-8") as f:
+        mod_launcher = json.load(f).get("launcher")
+pplus_like = bool(a.pplus or mod_launcher)
+slug = a.slug or ("project-rollback" if pplus_like else "open-brawl")
+inp = a.input or os.path.join(HERE, "inputs", "pplus-1v1.txt" if pplus_like else "bf-mario-link-results.txt")
 work = tempfile.mkdtemp(prefix=f"orca-xplat-{a.role}-")
+if a.flat_run:
+    # The desktop app's layout: userData/orca/{user,run/<slug>} (desktop orca.ts).
+    import shutil
+    run_dir = os.path.join(work, "run", slug)
+    os.makedirs(run_dir)
+    for name in os.listdir(a.flat_run):
+        if not name.startswith("."):
+            shutil.copyfile(os.path.join(a.flat_run, name), os.path.join(run_dir, name))
 T0 = time.time()
 
 
@@ -87,7 +111,17 @@ else:
 args = [a.bin, "-p", "headless", "-u", os.path.join(work, "user"), "-v", "Null",
         "-C", "Dolphin.DSP.Backend=No Audio Output", "-C", "Logger.Logs.ROLLBACK=True",
         "-C", "Logger.Logs.NETPLAY=True", "-C", "Logger.Options.Verbosity=2"]
-if a.pplus:
+if a.mod:
+    env["ORCA_MOD_DIR"] = os.path.abspath(a.mod)
+    env["ORCA_SD_CACHE"] = os.path.abspath(a.sd_cache or os.path.join(work, "sd"))
+    os.makedirs(env["ORCA_SD_CACHE"], exist_ok=True)
+    if a.disc_sha1:
+        env["ORCA_DISC_SHA1"] = a.disc_sha1
+    if mod_launcher:
+        args += ["-C", f"Dolphin.Core.DefaultISO={a.disc}", "-e", os.path.join(env["ORCA_MOD_DIR"], mod_launcher)]
+    else:
+        args += ["-e", a.disc]
+elif a.pplus:
     env["ORCA_PROFILE"] = "PPLUS32"
     args += ["-C", f"Dolphin.Core.DefaultISO={a.disc}", "-e", a.pplus]
 else:

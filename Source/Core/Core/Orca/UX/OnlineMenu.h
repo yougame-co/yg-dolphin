@@ -197,6 +197,8 @@ constexpr u32 EXIT_WITH_FRIENDS = 25;
 // No friend plugs in before this frame, because a host never makes a keyframe in its first 300
 // frames (Rollback/OnlineMatch.cpp FIRST_KEYFRAME_FRAME).
 constexpr int FIRST_FRIEND_FRAME = 300;
+// FIRST_FRIEND_FRAME, or a mod's firstKeyframeFrame (Core/Orca/Mod.h), which it follows.
+int FirstFriendFrame();
 // The friend sees the host's built menu for half a second before both move.
 constexpr u32 MENU_SETTLE_FRAMES = 30;
 // muMenuMain's "pages built" byte (same in both games). Its files load over many frames, then all
@@ -320,7 +322,8 @@ void Frame(const Core::CPUThreadGuard& guard, int frame);
 // What the last call of the frame hook read (nothing for other games). CPU thread.
 Seen LastSeen();
 
-// Whether this game's main menu can be read and left: Brawl rev 2, and Project+.
+// Whether this game's main menu can be read and left: Brawl rev 2, and Project+ (in mod mode, a mod
+// with a builtin, decided at boot rather than by its guards: Core/Orca/Mod.h).
 bool Supported();
 }  // namespace FreshMove
 }  // namespace Orca::UX

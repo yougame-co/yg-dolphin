@@ -555,6 +555,15 @@ bool HeaderIs(const Header& in_memory, const Header& wanted)
 
 Ruleset ProfileRuleset()
 {
+  // Mod mode: the mod's builtin, while its guard words hold (Core/Orca/Mod.h).
+  if (Orca::Mod::ActiveMod())
+  {
+    if (Orca::Mod::BuiltinOn(Orca::Mod::Builtin::BrawlRev2))
+      return Ruleset::Brawl;
+    if (Orca::Mod::BuiltinOn(Orca::Mod::Builtin::BrawlRev2PPlus))
+      return Ruleset::PPlus;
+    return Ruleset::None;
+  }
   const Orca::Profile* profile = Orca::ActiveProfile();
   if (!profile || profile->revision != 2)
     return Ruleset::None;

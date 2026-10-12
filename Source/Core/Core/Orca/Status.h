@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdio>
 #include <string>
@@ -91,9 +92,22 @@ inline constexpr const char* TALK_CAP = "talk";
 // "rumble": every profile, last, so an app that reads fewer caps words drops it before any other.
 inline constexpr const char* RUMBLE_CAP = "rumble";
 // This build's caps for the running profile: CAPS, plus "music", "results", "locks", "queue2" and
-// the pick caps where supported, then "talk" and "rumble".
+// the pick caps where supported, then "talk" and "rumble" (every mode, mod mode included). In mod
+// mode (Core/Orca/Mod.h) a builtin's caps only once its guard words have held, and never after they
+// failed.
 std::string OfferedCaps();
 void PrintCaps();
+// Whether `orca caps` (and "ready" after it) may go out: always outside mod mode; in mod mode once
+// the builtin's guards are decided (Mod::GuardsDecided: held, or failed by firstKeyframeFrame), or
+// CAPS_SETTLE_LIMIT after it was first asked (a launcher that never brings the game up), so the
+// first line never offers a builtin cap whose guards haven't held.
+inline constexpr std::chrono::seconds CAPS_SETTLE_LIMIT{20};
+bool CapsSettled();
+// After the first `orca caps`: prints the line again when the offer changed (a builtin's guards
+// held after CAPS_SETTLE_LIMIT, or failed after holding); a withdrawn cap is off at once. The app
+// takes a later `orca caps` as the new offer (desktop orca.ts: offered and agreed are recomputed,
+// and the page answers it again), so no app change is needed.
+void UpdateCaps();
 void SetAppCaps(std::string_view list);
 bool Cap(std::string_view name);
 // "orca stats <json>" (with the "stats" capability).

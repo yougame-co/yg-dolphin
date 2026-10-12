@@ -67,8 +67,82 @@ bool Enabled()
          !Env("ORCA_TEST_DEV_GAME").empty();
 }
 
-std::string CompatibilityKey()
+namespace
 {
+// The universal forced settings that change what the game computes, the seeded save and whether test
+// overrides are on: the tail of both key versions.
+std::string UniversalKeyParts()
+{
+  return fmt::format(
+      "thread={}|fma={}|rtc={}:{}|si={},{},{},{}|efb={}|xfb={}|access={}|bbox={}|save={:016x}|test={}"
+      "|sdcard={}:{}",
+      Config::Get(Config::MAIN_CPU_THREAD), Config::Get(Config::SESSION_USE_FMA),
+      Config::Get(Config::MAIN_CUSTOM_RTC_ENABLE), Config::Get(Config::MAIN_CUSTOM_RTC_VALUE),
+      static_cast<int>(Config::Get(Config::GetInfoForSIDevice(0))),
+      static_cast<int>(Config::Get(Config::GetInfoForSIDevice(1))),
+      static_cast<int>(Config::Get(Config::GetInfoForSIDevice(2))),
+      static_cast<int>(Config::Get(Config::GetInfoForSIDevice(3))),
+      Config::Get(Config::GFX_HACK_SKIP_EFB_COPY_TO_RAM),
+      Config::Get(Config::GFX_HACK_SKIP_XFB_COPY_TO_RAM),
+      Config::Get(Config::GFX_HACK_EFB_ACCESS_ENABLE), Config::Get(Config::GFX_HACK_BBOX_ENABLE),
+      GetSeedSaveHash(), TestOverridesActive(), Config::Get(Config::MAIN_WII_SD_CARD),
+      Config::Get(Config::MAIN_ALLOW_SD_WRITES));
+}
+
+// Mod mode (Core/Orca/Mod.h, YouGame docs/ORCA_MODS.md "The key in mod mode"): the engine's commit
+// and API version, the bundle's tree hash (mod.json, the patches, textures, launcher and SD files:
+// everything but orca/jitwarm and orca/test/), the SD image's hash, the disc, the Sys/GameSettings
+// INIs Dolphin loads for the game (as the legacy key hashes them: an install whose copy was edited
+// meets nobody rather than desyncing), then the forced settings as the legacy key adds them. The
+// player's own User/GameSettings INIs are ignored in a mod session
+// (ConfigLoaders/GameConfigLoader.cpp), so they are not in it.
+std::string ModKeyParts(const Profile& profile)
+{
+  const Mod::ModInfo& mod = *profile.mod;
+  const std::string disc = Env("ORCA_DISC_SHA1");
+  std::string parts = fmt::format("orca2|{}|api={}|tree={}|sd={}|disc={}|sys=",
+                                  Common::GetScmRevGitStr(), Mod::ENGINE_API, mod.tree.hash,
+                                  mod.sd_image_hash.empty() ? "-" : mod.sd_image_hash,
+                                  disc.empty() ? "-" : disc);
+  // A launcher profile runs under two game IDs, its loader's and the disc's (as below).
+  std::vector<std::pair<std::string, u16>> ini_games{{profile.game_id, profile.revision}};
+  if (profile.IsLauncher())
+  {
+    const SConfig& running = SConfig::GetInstance();
+    ini_games = {{profile.boot_game_id, 0},
+                 {profile.disc, profile.revision},
+                 {running.GetGameID(), running.GetRevision()}};
+  }
+  for (const auto& [ini_game, ini_revision] : ini_games)
+  {
+    for (const std::string& name : ConfigLoaders::GetGameIniFilenames(ini_game, ini_revision))
+    {
+      std::string contents;
+      if (File::ReadFileToString(File::GetSysDirectory() + GAMESETTINGS_DIR DIR_SEP + name,
+                                 contents))
+      {
+        parts += fmt::format("{:016x},", XXH3_64bits(contents.data(), contents.size()));
+      }
+      else
+      {
+        parts += "-,";
+      }
+    }
+  }
+  parts += '|';
+  for (const auto& [location, value] : profile.forced)
+    parts += fmt::format("{}.{}.{}={}|", static_cast<int>(location.system), location.section,
+                         location.key, value);
+  parts += UniversalKeyParts();
+  parts += fmt::format("|ux={}", Events::UXCompatVersion());
+  return parts;
+}
+}  // namespace
+
+std::string CompatibilityKeyParts()
+{
+  if (const Profile* profile = ActiveProfile(); profile && profile->mod)
+    return ModKeyParts(*profile);
   std::string parts = fmt::format("orca|{}|", Common::GetScmRevGitStr());
   if (const Profile* profile = ActiveProfile())
   {
@@ -126,27 +200,22 @@ std::string CompatibilityKey()
   // simulates an M1 to M3 on a newer Mac.
   //
   // The universal forced settings that change what the game computes.
-  parts += fmt::format(
-      "thread={}|fma={}|rtc={}:{}|si={},{},{},{}|efb={}|xfb={}|access={}|bbox={}|save={:016x}|test={}"
-      "|sdcard={}:{}",
-      Config::Get(Config::MAIN_CPU_THREAD), Config::Get(Config::SESSION_USE_FMA),
-      Config::Get(Config::MAIN_CUSTOM_RTC_ENABLE), Config::Get(Config::MAIN_CUSTOM_RTC_VALUE),
-      static_cast<int>(Config::Get(Config::GetInfoForSIDevice(0))),
-      static_cast<int>(Config::Get(Config::GetInfoForSIDevice(1))),
-      static_cast<int>(Config::Get(Config::GetInfoForSIDevice(2))),
-      static_cast<int>(Config::Get(Config::GetInfoForSIDevice(3))),
-      Config::Get(Config::GFX_HACK_SKIP_EFB_COPY_TO_RAM),
-      Config::Get(Config::GFX_HACK_SKIP_XFB_COPY_TO_RAM),
-      Config::Get(Config::GFX_HACK_EFB_ACCESS_ENABLE), Config::Get(Config::GFX_HACK_BBOX_ENABLE),
-      GetSeedSaveHash(), TestOverridesActive(), Config::Get(Config::MAIN_WII_SD_CARD),
-      Config::Get(Config::MAIN_ALLOW_SD_WRITES));
+  parts += UniversalKeyParts();
   // The disc image's hash, when the app computed it: a modified disc with the right ID and revision
   // would otherwise desync instead of being refused. For a dump AliasRevision plays as another
   // (Brawl Rev 1), the app passes the hash of the dump it plays as, or its players meet no one.
   parts += "|disc=" + Env("ORCA_DISC_SHA1");
   // Version of what the in-game UX writes to emulated memory (name tags, mode locks).
   parts += fmt::format("|ux={}", Events::UXCompatVersion());
-  // The room allows 1-64 characters of [a-zA-Z0-9._:-].
+  return parts;
+}
+
+std::string CompatibilityKey()
+{
+  const std::string parts = CompatibilityKeyParts();
+  // "orca2:" is the room protocol's prefix, in legacy and mod mode alike; the two modes never share
+  // a hash: legacy parts start "orca|", mod parts "orca2|" (ModKeyParts). The room allows 1-64
+  // characters of [a-zA-Z0-9._:-].
   const std::string key = fmt::format("orca2:{:016x}", XXH3_64bits(parts.data(), parts.size()));
   // What went into it, when that changes: a player alone in a queue shows which input split them.
   {

@@ -29,6 +29,15 @@ add_dolphin_test(OrcaCrashNoteTest Orca/CrashNoteTest.cpp)
 add_dolphin_test(OrcaBootLogsTest Orca/BootLogsTest.cpp)
 add_dolphin_test(OrcaBrandingTest Orca/BrandingTest.cpp)
 add_dolphin_test(OrcaLaunchTest Orca/LaunchTest.cpp)
+add_dolphin_test(OrcaModTest Orca/ModTest.cpp)
+# ModTest includes xxh3.h; core links xxhash PRIVATE, so the test needs it directly (MSVC has no
+# system copy on its include path to hide that).
+target_link_libraries(OrcaModTest PRIVATE xxhash::xxhash)
+add_dolphin_test(OrcaBundleTest Orca/BundleTest.cpp)
+# BundleTest signs bundles with Externals/ed25519 (core links it PRIVATE).
+target_link_libraries(OrcaBundleTest PRIVATE ed25519 xxhash::xxhash)
+# The keys the build pins (Source/Core/Core/CMakeLists.txt), so PinnedKey checks Bundle.cpp got them.
+target_compile_definitions(OrcaBundleTest PRIVATE ${ORCA_BUNDLE_DEFINITIONS})
 add_dolphin_test(OrcaCowTest Orca/CowTest.cpp)
 add_dolphin_test(OrcaKeyframeTest Orca/KeyframeTest.cpp)
 add_dolphin_test(OrcaFreshStartTest Orca/FreshStartTest.cpp)

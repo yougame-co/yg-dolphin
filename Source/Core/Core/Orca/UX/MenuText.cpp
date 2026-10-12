@@ -308,9 +308,18 @@ int ApplyMenuText(GuestMemory& m, std::span<const MenuTextEdit> edits, int* in_b
 
 void WriteMenuText(const Core::CPUThreadGuard& guard)
 {
-  // Brawl rev 2, directly or via a launcher profile (Project+).
+  // Brawl rev 2, directly or via a launcher profile (Project+); in mod mode, the mod's builtin while
+  // its guard words hold.
   const Orca::Profile* profile = Orca::ActiveProfile();
-  if (!profile || profile->revision != 2 ||
+  if (profile && profile->mod)
+  {
+    if (!Orca::Mod::BuiltinOn(Orca::Mod::Builtin::BrawlRev2) &&
+        !Orca::Mod::BuiltinOn(Orca::Mod::Builtin::BrawlRev2PPlus))
+    {
+      return;
+    }
+  }
+  else if (!profile || profile->revision != 2 ||
       (profile->IsLauncher() ? profile->disc != "RSBE01" : profile->game_id != "RSBE01"))
   {
     return;

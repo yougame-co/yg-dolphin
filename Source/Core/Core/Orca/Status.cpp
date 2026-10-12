@@ -4,8 +4,10 @@
 #include "Core/Orca/Status.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <sstream>
 #include <string>
@@ -13,6 +15,7 @@
 #include <fmt/format.h>
 
 #include "Core/Orca/Activity.h"
+#include "Core/Orca/Mod.h"
 #include "Core/Orca/Music.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/UX/OnlineRules.h"
@@ -29,6 +32,30 @@ std::atomic<bool> s_started{false};
 std::atomic<bool> s_stopping{false};
 std::FILE* s_out = nullptr;
 std::set<std::string, std::less<>> s_app_caps;
+// The last `orca caps` list printed (nullopt: none yet), under s_mutex.
+std::optional<std::string> s_printed_caps;
+// The app's last `caps` line, and the offer s_app_caps was last agreed against (under s_mutex).
+std::string s_app_list;
+std::string s_offer_seen;
+
+// Both lists' names (under s_mutex).
+std::set<std::string, std::less<>> Agreed(std::string_view offered, std::string_view app)
+{
+  std::set<std::string, std::less<>> ours;
+  std::istringstream mine{std::string(offered)};
+  for (std::string name; mine >> name;)
+    ours.insert(name);
+  std::set<std::string, std::less<>> both;
+  std::istringstream theirs{std::string(app)};
+  for (std::string name; theirs >> name;)
+  {
+    if (ours.count(name))
+      both.insert(name);
+  }
+  return both;
+}
+// When CapsSettled was first asked (host clock: when "ready" waits, never what the game computes).
+std::optional<std::chrono::steady_clock::time_point> s_settle_asked;
 void (*s_error_listener)(std::string_view, std::string_view) = nullptr;
 void (*s_first_frame_listener)() = nullptr;
 
@@ -118,6 +145,21 @@ std::string OfferedCaps()
   std::string caps = CAPS;
   if (Music::Supported())
     caps += fmt::format(" {}", MUSIC_CAP);
+  // Mod mode (Core/Orca/Mod.h): besides the music switch above (host-only, the same rule in both
+  // modes), what mod.json offers and its builtin carries, only once the builtin's guard words have
+  // held and never after they failed (Mod::Offers). The pick caps go with "locks", as for a legacy
+  // ruleset profile.
+  if (Mod::ActiveMod())
+  {
+    for (const char* cap : {RESULTS_CAP, LOCKS_CAP, QUEUE2_CAP})
+    {
+      if (Mod::Offers(cap))
+        caps += fmt::format(" {}", cap);
+    }
+    if (Mod::Offers(LOCKS_CAP))
+      caps += fmt::format(" {}", PICK_CAPS);
+    return caps;
+  }
   if (UX::ResultsVerified())
     caps += fmt::format(" {}", RESULTS_CAP);
   if (UX::Rules::ProfileRuleset() != UX::Rules::Ruleset::None)
@@ -132,24 +174,47 @@ void PrintCaps()
     return;
   const std::string caps = OfferedCaps();
   std::lock_guard lock(s_mutex);
+  s_printed_caps = caps;
   Print(fmt::format("orca caps {}\n", caps));
+}
+
+bool CapsSettled()
+{
+  if (!SessionActive() || Mod::GuardsDecided())
+    return true;
+  const auto now = std::chrono::steady_clock::now();
+  std::lock_guard lock(s_mutex);
+  if (!s_settle_asked)
+    s_settle_asked = now;
+  return now - *s_settle_asked >= CAPS_SETTLE_LIMIT;
+}
+
+void UpdateCaps()
+{
+  // Legacy profiles offer the same caps for the whole run: nothing to follow.
+  if (!SessionActive() || !Mod::ActiveMod())
+    return;
+  const std::string caps = OfferedCaps();
+  std::lock_guard lock(s_mutex);
+  if (s_offer_seen == caps)
+    return;
+  s_offer_seen = caps;
+  // What is on follows the offer at once (a withdrawn cap off, a cap the app already listed on),
+  // before any new answer from the app.
+  s_app_caps = Agreed(caps, s_app_list);
+  if (s_printed_caps && *s_printed_caps != caps)
+  {
+    s_printed_caps = caps;
+    Print(fmt::format("orca caps {}\n", caps));
+  }
 }
 
 void SetAppCaps(std::string_view list)
 {
-  std::set<std::string, std::less<>> ours;
-  std::istringstream mine{OfferedCaps()};
-  for (std::string name; mine >> name;)
-    ours.insert(name);
-  std::set<std::string, std::less<>> both;
-  std::istringstream theirs{std::string(list)};
-  for (std::string name; theirs >> name;)
-  {
-    if (ours.count(name))
-      both.insert(name);
-  }
+  const std::string offered = OfferedCaps();
   std::lock_guard lock(s_mutex);
-  s_app_caps = std::move(both);
+  s_app_list = std::string(list);
+  s_app_caps = Agreed(offered, list);
 }
 
 bool Cap(std::string_view name)

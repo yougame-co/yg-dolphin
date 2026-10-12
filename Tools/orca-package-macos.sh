@@ -18,6 +18,9 @@
 # ORCA_INTERNAL=1 instead signs and notarizes an internal test build from the private repository:
 # the same credentials and clean tree, but no ORCA_SOURCE_URL or tag. SOURCE.txt says it is not for
 # public distribution and the zip is named *-internal.zip. Such a build only goes to testers.
+# ORCA_BUNDLE_PUBLIC_KEY (64 lowercase hex digits) is the key flat bundles must be signed with
+# (ORCA.md "Flat bundles"); unset, the build trusts none and refuses every bundle. The TEST key is
+# never trusted in a package: the build turns it off and the executable is checked for it.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -47,6 +50,14 @@ case "$BUILD_DIR/" in
 "$ROOT"/*) ;;
 *) PREFIX_MAP="$PREFIX_MAP -ffile-prefix-map=$BUILD_DIR=build -fdebug-prefix-map=$BUILD_DIR=build" ;;
 esac
+
+# The bundle-flat TEST key (Source/Core/Core/Orca/Bundle.cpp).
+TEST_BUNDLE_KEY=afb9463d5c16f0f617432d76f75f37a8c649e36d7c626088ba00b19dea115a43
+BUNDLE_KEY="${ORCA_BUNDLE_PUBLIC_KEY:-}"
+if [ -n "$BUNDLE_KEY" ]; then
+  [[ "$BUNDLE_KEY" =~ ^[0-9a-f]{64}$ ]] || fail "ORCA_BUNDLE_PUBLIC_KEY is not 64 lowercase hex digits"
+  [ "$BUNDLE_KEY" != "$TEST_BUNDLE_KEY" ] || fail "ORCA_BUNDLE_PUBLIC_KEY is the TEST key"
+fi
 
 RELEASE=0
 INTERNAL=0
@@ -122,6 +133,7 @@ cmake -S "$ROOT" -B "$BUILD_DIR" -G Ninja \
   -DENABLE_ANALYTICS=OFF -DENABLE_AUTOUPDATE=OFF -DUSE_DISCORD_PRESENCE=OFF \
   -DUSE_RETRO_ACHIEVEMENTS=OFF -DUSE_MGBA=OFF -DUSE_UPNP=OFF -DENABLE_VULKAN=OFF \
   -DENABLE_CLI_TOOL=OFF -DENABLE_TESTS=OFF -DUSE_SANITIZERS=OFF \
+  -DORCA_BUNDLE_TRUST_TEST_KEY=OFF -DORCA_BUNDLE_PUBLIC_KEY="$BUNDLE_KEY" \
   -DCMAKE_C_FLAGS="$PREFIX_MAP" -DCMAKE_CXX_FLAGS="$PREFIX_MAP" \
   -DCMAKE_OBJC_FLAGS="$PREFIX_MAP" -DCMAKE_OBJCXX_FLAGS="$PREFIX_MAP" >/dev/null
 cmake --build "$BUILD_DIR" --target dolphin-nogui
@@ -141,6 +153,16 @@ STRINGS_OUT="$(mktemp)"
 strings -a "$EXE" > "$STRINGS_OUT" || { rm -f "$STRINGS_OUT"; fail "strings could not read $EXE"; }
 [ -s "$STRINGS_OUT" ] || { rm -f "$STRINGS_OUT"; fail "strings found nothing in $EXE"; }
 LEAKS="$(grep -F -e "$ROOT/" -e "$BUILD_DIR/" -e "${HOME:-$ROOT}/" "$STRINGS_OUT" | sort -u | head -n 5 || true)"
+# Flat bundles: never the TEST key; the pinned key when there is one (Bundle.cpp logs both by text).
+if grep -qF "$TEST_BUNDLE_KEY" "$STRINGS_OUT"; then
+  rm -f "$STRINGS_OUT"
+  fail "the executable trusts the bundle-flat TEST key"
+fi
+if [ -n "$BUNDLE_KEY" ] && ! grep -qF "$BUNDLE_KEY" "$STRINGS_OUT"; then
+  rm -f "$STRINGS_OUT"
+  fail "the executable doesn't hold ORCA_BUNDLE_PUBLIC_KEY"
+fi
+echo "orca-package: flat bundles: ${BUNDLE_KEY:-off (no ORCA_BUNDLE_PUBLIC_KEY: every bundle is refused)}"
 rm -f "$STRINGS_OUT"
 [ -z "$LEAKS" ] || fail "the executable still names build-machine paths, e.g.:
 $LEAKS"

@@ -630,6 +630,9 @@ bool LocalOnRandom(const GuestMemory& m, const View& v, int me)
 
 bool VanillaBrawl()
 {
+  // Mod mode: the vanilla builtin, while its guard words hold (Core/Orca/Mod.h).
+  if (Orca::Mod::ActiveMod())
+    return Orca::Mod::BuiltinOn(Orca::Mod::Builtin::BrawlRev2);
   const Orca::Profile* profile = Orca::ActiveProfile();
   return profile && !profile->IsLauncher() && profile->game_id == "RSBE01" &&
          profile->revision == 2;

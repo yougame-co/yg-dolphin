@@ -211,10 +211,14 @@ void Platform::ProcessEmbedCommands()
   if (!m_embed.enabled && !m_test_commands)
     return;
   {
+    // A mod's builtin offers its caps only once its guards have held (Status::CapsSettled): until
+    // then "ready" and the caps before it wait. Never in legacy mode.
+    const bool settled = Orca::Status::CapsSettled();
     std::optional<std::string> ready;
     {
       std::lock_guard lock(m_ready_lock);
-      ready.swap(m_ready_line);
+      if (settled)
+        ready.swap(m_ready_line);
       if (ready)
         m_ready_sent = true;
     }
@@ -229,6 +233,14 @@ void Platform::ProcessEmbedCommands()
       Orca::Activity::Ready();
       Orca::Perf::Ready();
     }
+    // Test commands: the caps once the boot chose its profile and they are settled.
+    if (m_test_caps_pending && settled)
+    {
+      m_test_caps_pending = false;
+      Orca::Status::PrintCaps();
+    }
+    // An offer that changed since (a builtin's guards failing after they held): printed again.
+    Orca::Status::UpdateCaps();
   }
 
   auto& system = Core::System::GetInstance();

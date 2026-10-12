@@ -79,6 +79,94 @@ when `ps -axo comm=` lists his app's Orca (ORCA.md checklist step 0; `run-lock.p
    (`--pplus ~/Documents/brawl-dolphin/pplus-internal/run/"Project+ Netplay Launcher.dol"`; "The
    external SSD" below).
 
+## Upstream Dolphin updates
+
+Luis, 2026-10-09: Orca stays current with upstream Dolphin, and a Dolphin security fix reaches
+players within hours, not at the next big rebase. Three pieces:
+
+1. **The watch** (pub/sub, code only, no AI: Luis, 2026-10-09). YouGame's `tools/upstream-watch/`
+   is a Cloudflare Worker that reads dolphin-emu/dolphin every 15 minutes (tags, releases, master,
+   security advisories, the blog; conditional requests) and mails `brawl-rollback-lead@mac` through
+   the agent mailbox only when something is new: a tag, release, advisory, security-looking commit
+   or blog post at once, other master commits in one daily digest. Its README says how to pause it.
+2. **Triage and sync**: `Tools/orca/upstream-sync.py` (private: excluded from the public tag).
+3. **The release**: every gate of the release checklist, as always. `upstream-sync.py next` prints
+   the steps with exact commands; the lead's workflow template
+   `~/Documents/brawl-dolphin/upstream-watch/release-workflow.js` runs them in one call
+   (`args: {version, picks | merge, why}`).
+
+```bash
+T=~/Documents/brawl-dolphin/orca-upstream-tools          # a checkout of origin/main: the tools
+git -C $T fetch -q origin && git -C $T checkout -q --detach origin/main
+S="python3 $T/Tools/orca/upstream-sync.py"
+$S triage                     # what upstream has that live Orca lacks; exit 3 = a new security/crash row
+$S triage --dashboard --save  # files each security/crash row on /admin/triage as lead, once
+$S start <sha>...             # branch upstream-sync-<date> from the live build, cherry-pick -x
+$S check --version 0.3.N      # build, Orca* gtests, package, hashlogs = live's, YG_SYNCTEST=7
+$S next                       # everything left, with exact commands
+```
+
+The live build is whatever yougame.co's manifest serves; `start` branches from its commit in one
+persistent worktree, `~/Documents/brawl-dolphin/orca-upstream-sync` (incremental builds; ccache), and
+`test` downloads the live Mac build from the site into `upstream-watch/live/<version>/` (sha256
+checked; never the app's own copy, which run-lock counts as Luis playing) and caches its hashlogs
+and synctest counts. Every Orca run goes through `run-lock.py check`; builds take `build.lock`,
+wait for the load and for a perf run in progress (up to 15 minutes). State:
+`upstream-watch/state.json`; logs: `upstream-watch/runs/<branch>/`.
+
+**Triage columns.** `class` comes from keywords in the message (and Externals paths): a hint, read
+the diff. `reach`: `ships`; `unreachable?` (built in but not reached in a session: Dolphin NetPlay,
+the EXI mic, the assembler, RetroAchievements, the debugger, GBA; check again before relying on
+it); `not-shipped` (Qt, Android, the updater, DolphinTool, other games' GameSettings, docs).
+`overlap`: files Orca changed too. `layer`: layers.txt (Externals and root CMake are
+engine-sensitive). `pick`: the commit alone merged onto live, and for a PR with several commits the
+whole series too (PR #14772's EXI mic fix only applies after its refactors). A commit counts as
+already in Orca by `-x` trailer, patch-id, or the same author and subject (a hotfix tag's picks have
+other shas than master's).
+
+**Who supplies the bytes** decides the urgency, as for 2609a: a peer, the room server or the page
+(urgent: release now), a file the player brings (their own disc, hash-checked; P+ pinned by hash),
+or nothing Orca reaches (take it with the next release). Write that line in the release notes,
+neutrally until the release is live.
+
+**How long a fix takes to reach players** (0.3.36's numbers):
+
+| Step | Time |
+| --- | --- |
+| Upstream merges a fix; the watch mails | under 15 min (a digest item: next 13:00 UTC) |
+| Triage, read the diff against the exposure | 15-30 min |
+| `start`, `check` (build 1-5 min with ccache, gtests 5, package 2-5, hash + sync ~10, each run waiting its turn in run-lock) | 30-45 min |
+| Mac sign + notarize, confirm on the signed bits | 15 min |
+| Windows build, sign, stage, gate 1, gtests (in parallel) | 45-60 min |
+| Mac<->PC friends joins | 15 min |
+| Perf gate, 4+4 runs + warm-ups (mandatory; the long pole) | about 95 min |
+| Go-live (Windows zip to R2, flip, verify) | 5 min |
+| Prod smoke (tickets, ranked sets, aged-host drop-ins), while live | 45 min |
+
+About 3-4 hours from the lead starting to the manifest flip; 0.3.36 went from the first pick
+(~02:00) to live at 05:09 with a hardening fix and a review round in between. Players get it at
+their next Play: the app forces the newest Orca, and matchmaking answers older builds with
+`orca_outdated`. Friends rooms still take builds down to the site's floor (0.3.32), so a fix that
+guards against a peer also needs that floor raised on the site.
+
+**Picking or merging.** Cherry-pick master commits with `-x`, as 0.3.36 did for 2609a's four fixes:
+the smallest diff, and triage then knows they are in. `start --merge refs/tags/<hotfix>` takes a
+whole hotfix tag (2609a merges clean onto 0.3.36; it also brings ScmRevGen's version bump). Moving
+to a new Dolphin release (2612) is a planned rebase with its own determinism work (upstream's
+texture-cache refactor already conflicts), not this pipeline.
+
+**Not covered by the watch:** libraries Dolphin bundles and itself lags on (upstream's Externals
+bumps arrive as ordinary commits; an advisory upstream hasn't acted on doesn't): look at the
+network-facing ones each release (Externals/mbedtls, curl, Orca's libjuice, zstd, minizip-ng).
+Fixes still sitting in open upstream PRs aren't seen either, and GitHub advisories are often
+published after the fix ships.
+
+**The layer map after a pick.** A pick into an upstream file Orca never touched makes that file an
+Orca path (it now differs from the merge-base), so `test_layers.py` wants a rule for it and network
+code there must be engine-sensitive: 0.3.36's NetPlay picks needed `Source/Core/Core/NetPlay*` and
+`Source/Core/DolphinQt/**` (dev: Qt never ships). Add such rules when merging the release into main,
+then refresh the forbidden-calls baseline as usual.
+
 ## Sharing the Mac: the run queue
 
 2026-10-06. Every scripted Orca run on the Mac took `orca-run-solo.lock` (two-Orca runs
@@ -6610,6 +6698,103 @@ port on the character select and one per frame while alone: run the two-Orca per
 Known edges (review): in a With Friends host's memory a remote port whose 5-letter tag reads as a typed tag takes it (a port without controls then plays that layout; a same-prefix joiner whose port joins before the host's can take the host's typed tag, as it could Orca's ASCII one before); off the select a player who picked Orca's ASCII copy over their typed one has the typed one read. Not clang-formatted (no clang-format on this Mac). Not covered: tags kept between runs (still
 `orca-keep-own-tags`), Windows, a real two-Orca room with a typed tag.
 
+## Mods (phase 1)
+
+What was checked for ORCA.md's "Mods (phase 1)". Local run folders: `~/Documents/brawl-dolphin/mods/rsbe01`
+(153 files, tree `ffcd31eb…7281`) and `mods/pplus32` (4,033 files, 3,878 on the card, tree
+`cab2942b…6498`); 0.3.33's in `~/Documents/brawl-dolphin/mods0333-bundles`.
+
+**Checked 2026-10-05** (`mods-p1` f4988c5302, M4 Pro, headless, `-v Null`; runs in
+`~/Documents/brawl-dolphin/mods-p1-runs`):
+- Unit tests: 486 `Orca*`, 466 pass, 20 skipped (live, network, disc), 0 fail; 14 new `OrcaMod.*`
+  (the tree-hash vector, path and tree refusals, every mod.json field and refusal, the schema's
+  lists against the engine's, bundles that differ from their tree, the SD image built twice, the
+  cache, guards, the gates, the legacy key's inputs).
+- Legacy unchanged: a build of this branch (e34e4138ed's tree) with origin/main's commit string (before the first
+  commit, so `GetScmRevGitStr()` matched) gives origin/main's keys exactly: Brawl
+  `orca1:4745bca65f8fe1ef`, Project+ `orca1:83ef3563709cc4b1`. Hashlogs of the default inputs in
+  legacy mode equal an origin/main 5103d50a85 build's: Brawl 10,803 frames, Project+ 9,006, 0 differ.
+- Vanilla Brawl from the bundle: T0 equals legacy, 10,801 frames, 0 differ (`orca2:a3f4a49c5a222cb1`
+  without `ORCA_DISC_SHA1`). T1 (`bf-queue2-flow.txt`, the 0.3.14 env, `YG_SYNCTEST=7` 1440-4700):
+  22,771 re-run frames, 0 RAM mismatches, the same steps as legacy frame for frame.
+- Project+ from the bundle (SD built from the tree, `16abfce070288e17dffb09e0c826cd92`, 8.2 s; a
+  second build into another cache is byte-identical): two T0 runs equal (9,006 frames), but not
+  legacy's, from frame 0. With the official `sd.raw` put in the cache instead, mod mode equals legacy
+  on every frame but frame 0 (9,006 compared, 1 differs). Frame 0: legacy's input latch writes 32
+  bytes into the match block (0x806F2540) while the launcher still runs, before the game is in RAM;
+  mod mode's builtin is off until the hook is live, and the boot overwrites the bytes by frame 1. The
+  built card's difference is the FAT reaching RAM: P+'s file structs hold other short names
+  (FatFs's `~1` forms), start clusters and zero times, and the boot's SD reads finish 14 frames
+  sooner (scBoot at 108 instead of 122; FatFs picks 16 KiB clusters where the official image has 2
+  KiB, so fewer cluster reads, most likely), so the fuzzed match then plays out differently. T1
+  (`pplus-queue2-flow.txt`, the 0.3.14 env, 200-3200): 20,951 re-run frames, 0 RAM mismatches, on
+  the built card and on the official one (the latter the same steps as legacy).
+- JIT (design section 7), Project+ from the bundle: `jit-history.py` with clears at
+  388/2000/4500/7000 and at 1/3/5/700/1234/3333/6001: the same 9,002 and 9,017 frames as without;
+  census 0 stale words below 0x80800000. Cold (`ORCA_JITWARM=0`) against warm: 9,006 frames, 0 differ.
+- Drop-in: NAND at `bootNandFrame` the same with and without input, from the bundles (Brawl 1800: 35
+  files; Project+ 600: 33).
+
+**Follow-ups, 2026-10-05** (`mods-p1` 1c663bc7f4), measurements:
+- **Project+ against legacy, `pplus-1v1.txt` to 9,000:** every scene change on the same frame as
+  legacy's (scBoot 122, the main menu 197, the match 587-3030, the results 3035-3451; before: scBoot
+  108, the match to 6082), the fuzzed match the same. RAM still differs on every frame: by frame 230
+  the game issued 7,495 SD reads against legacy's 7,717 (223 fewer one-sector FAT and directory
+  reads: the official image's clusters are scattered and 26 files fragmented, ours contiguous), and
+  at frame 1,000 296 KB of MEM1 and 1.2 MB of MEM2 differ (the FAT driver's state and caches, and
+  two 104 KB streamed-audio buffers filled at other moments). Byte-identical RAM would need the
+  official image's own cluster allocation and directory timestamps, which no tree carries. With
+  `pplus-queue2-flow.txt` the title screen ends one frame sooner (179, legacy 180), and every later
+  step is one frame sooner. Frame 0's 32 bytes (legacy's latch writing the match block while the
+  launcher runs) stay: a builtin's writes before its guards can be checked would defeat the guards.
+- T1 (`pplus-queue2-flow.txt`, 200-3200): 20,951 re-run frames, 0 RAM mismatches. JIT: clears at
+  388/2000/4500/7000 and 1/3/5/700/1234/3333/6001 the same as without (9,015 and 9,006 frames); cold
+  against warm, 0 of 9,010 differ. Brawl's bundle and legacy Project+ still equal origin/main's
+  hashlogs (10,806 and 9,001 frames, 0 differ).
+
+**Rebased on 0.3.33, checked 2026-10-08** (`mods-p1-0333` 225bfabf56, M4 Pro, headless, `-v Null`,
+SDL HIDAPI off, under `run-lock.py check`; runs in `~/Documents/brawl-dolphin/mods0333-runs`):
+- Unit tests: 611 `Orca*`, 594 pass, 17 skipped (live and latency), 0 fail, with both test discs; 17
+  `OrcaMod.*` (two new: `LauncherBootReadsRev1AsRev2`, `GuardsAreNotOrcasOwnPatches`).
+- Legacy (no `ORCA_MOD_DIR`) against the 0.3.33 dev build (9bdfaf71d5, whose emulator 69b97f49d3
+  shares): hashlogs of the default inputs equal (Brawl 10,802 frames, Project+ 9,015, 0 differ; only
+  how many frames each logged past `YG_EXIT_AFTER` differs, as in 0.3.33's gate A); sync tests Brawl
+  300-4500 29,351 re-run frames and Project+ 150-3000 19,901, 0 RAM mismatches; the key's inputs
+  equal with the commit masked (Brawl and Project+); `kCompatVersion` 24.
+- Bundles from 0.3.33's data (`make-bundle.py`; Brawl tree `6ad8bdbe…25f8`, Project+ `2a010bed…a182`
+  with 0.3.33's five kept words): Brawl from its bundle equals legacy (10,805 frames, 0 differ);
+  Project+ with its built card (`0615853d…`, byte-identical to 2026-10-05's) keeps legacy's scenes to
+  the match's end, then the results come one frame later (the card's FAT state reaches RAM, as
+  before); with the official `sd.raw` in the cache it equals legacy on every frame but frame 0 (9,005
+  compared, 1 differs: legacy's latch writing the match block while the launcher runs). Both bundles'
+  `orca caps` lines equal legacy's (`… music results locks queue2 pick-casual pick-ranked`).
+- Found by the bundle runs: 0.3.33's RSBE01.patches moves Brawl's v-sync call, which the vanilla
+  guard used to read, so a Brawl bundle lost its builtin after the first boundary; the guard now reads
+  0x8001CD24 (225bfabf56).
+
+**Review fixes, checked 2026-10-08** (`mods-p1-0333` 8a5ad09596, M4 Pro, headless, SDL HIDAPI off,
+under `run-lock.py check`; runs in `~/Documents/brawl-dolphin/mods0333-runs`):
+- **A P+ join in mod mode desynced, now fixed.** The guards' history (held once, then not) switched a
+  joiner's builtin off for the run when it re-executed frame 1 from its origin (Project+'s codes not
+  landed yet), while the host's stayed on. `dropin-commands.py --pplus <bundle launcher> --env
+  ORCA_MOD_DIR=<pplus32>` on the pre-fix build (c15903b60c's sources): the friend fails at once,
+  `orca error room_mismatch Your friend's replay didn't reproduce the same game`. On the fix: PASS,
+  two joins (at the friend's frame 9 and into the running match at 7551), 87 and 30 checksums
+  matched, 0 rollbacks, 0 stalls. `BuiltinOn` now follows memory alone; only the caps keep history
+  (failed only at or after `firstKeyframeFrame`).
+- Unit tests: 613 `Orca*`, 596 pass, 17 skipped (live, latency, the design dump), 0 fail, both test
+  discs; 19 `OrcaMod.*` (new: `GuardsFollowMemoryOnReRuns`, `RefusesOversizedOrDeepJson`; the
+  pinned SD hashes `0da52d2d…6ed1` (64 MiB) and `1a80cd44…91d0` (160 MiB, 2 KiB clusters, two FATs)).
+- Legacy against the 0.3.33 dev build: hashlogs equal (Brawl 10,810 frames, Project+ 9,015, 0
+  differ), sync tests Brawl 29,351 and Project+ 19,901 re-run frames with 0 RAM mismatches, key
+  inputs equal with the commit masked.
+- Single-instance runs equal the pre-fix build's on every compared frame: legacy Brawl 10,810 and
+  Project+ 9,015, mod Brawl 10,805 and mod Project+ 9,009 (built card). Mod Brawl still equals
+  legacy (10,810, 0 differ); all four `orca caps` lines as before.
+- Mod-mode sync tests (new): Brawl bundle 300-4500, 29,351 re-run frames, Project+ bundle 150-3000,
+  19,901, 0 RAM mismatches.
+- `dropin-commands.py` takes "playing" before the caps line (mod mode's caps wait for the guards).
+
 ## Explaining it to people (internal)
 
 **One sentence:**
@@ -6890,3 +7075,137 @@ Not run here (before the release): the probes (Z on the Versus select in Brawl a
 `YG_HASHLOG`, B on the results screen), `YG_SYNCTEST=7` with Z held through the go and B held in
 casual and ranked rooms, `queue-e2e` `skip`/`bleave`/`noskip`/`playagain`/`altz` Mac <-> PC, the
 netcode perf gate. Input delay stays 3.
+
+## Flat bundles (bundle-flat) and mods on 0.3.34 (mods-0334)
+
+`mods-0334`: `mods-p1-0333` rebased onto `release-0.3.34` (9f262a506b). Two textual conflicts, as the
+trial merge predicted: this file (both sides appended a section: both kept) and the keyframe start in
+`OnlineMatch.cpp` (0.3.34's `next >= FIRST_KEYFRAME_FRAME && OriginReady(match) && next >
+match.replay.first_frame && !match.fresh && ...` kept, with `FirstKeyframeFrame()` for the constant).
+One semantic conflict, found by reading 0.3.34's match setup: `FreshMove::Supported()` is asked once
+as the match is set up, and in mod mode it answered with the builtin's guards, which nobody has read
+yet then (and Project+'s can't hold before frame 2), so every mod session would have taken frame 0
+as its origin and never fresh-started. It now answers with the declared builtin (f2bcc7d60c). Checked:
+a Brawl tree bundle (`mods0333-bundles/rsbe01`) on two Orcas over the local rooms stack
+(`dropin-commands.py`): origin at frame 1524 with RAM `f0c74d6dd64230b5`, legacy's own origin hash;
+two fresh starts (exit 25) at the friend's joins, 119 + 21 checksums matched, one `orca caps` line
+each with `results locks queue2` (the guards held through both fresh starts; a failure would have
+withdrawn them in a second line).
+
+`bundle-flat` (Bundle.h, ORCA.md "Flat bundles"). Checked on the Mac, 2026-10-08, build 6b66379e6b
+(`~/Documents/brawl-dolphin/bundle-flat-runs`, gate.py, run-lock, headless, HIDAPI off), bundles made
+by `make-bundle.py --flat` from this branch's Data/Sys (= 0.3.34's) and the official Project+ v3.2
+files, signed with a TEST key kept outside the repository:
+
+- Unit tests with both discs: 642 `Orca*` run, 625 pass, 17 skipped (the usual live/latency/demo
+  set), 0 fail; 9 `OrcaBundle.*`, 19 `OrcaMod.*`.
+- LEGACY (no bundle where Orca looks, YOUGAME_GAME and ORCA_PROFILE set as the app sets them) against
+  the 0.3.34 release binary: hash logs of all 49 `bf-*`/`pplus-*` inputs (10,800 / 9,000 frames),
+  488,283 frames compared, 0 differ (line counts differ only past YG_EXIT_AFTER); sync tests 29,351 /
+  19,901 re-run frames, 0 RAM mismatches; key inputs identical with the commit masked; `ux=25`.
+- BUNDLE mode, found as the app lays it out: sync tests Brawl 29,351, Project+ 19,901 re-run frames,
+  0 RAM mismatches; hash logs against legacy: Brawl equal on every frame (3 inputs), Project+ equal
+  on every frame but frame 0 (3 inputs; legacy's latch writes the match block while the launcher runs,
+  known since mods-p1); caps lines equal to legacy's; keys `orca2:` over `orca2|...`, never legacy's.
+  Bundle check at boot: Brawl 4 files, Project+ 6 (the 2 GB card's XXH3 included) in the boot.
+- Two Orcas, local rooms stack: Project+ friends drop-in (`dropin-commands.py`): origin at frame 230
+  with RAM `0c80f10df0a8be22` (legacy's), two fresh starts, 114 + 20 checksums matched, PASS;
+  Project+ ranked queue set (`queue-e2e.mjs --q2 --queue ranked`): the queue host's fresh start (exit
+  31), its pick back in 70 frames, 2-0 with the same verdicts on both, 233 checksums each, PASS.
+- Mixed: a bundle host and a legacy friend (and the reverse) never meet: `room_mismatch`, keys
+  `orca2:214f0f2f...` against `orca2:6e9dc472...`.
+- Tampered bundles (14 cases: one byte of a patches file, of mod.json's signed lines, of the SD image;
+  a damaged, missing or untrusted signature; an extra file; a 3 GiB extra file; nine files; a folder;
+  a `../` name and a folder name, both signed; a JIT seed over 16 MiB; mod.json over 64 KiB; seven
+  named files): every one refused with its reason and played as legacy, equal to legacy's hash log on
+  every frame; the tampered card falls back to legacy, which refuses it as it always has.
+- Rev 1 dump: both bundles boot, builtins on.
+- Brawl flat bundle on two Orcas (`dropin-commands.py`, the bundle through ORCA_MOD_DIR): origin at
+  1524 with legacy's RAM hash, two fresh starts, 119 + 21 checksums matched, PASS.
+- Windows (the PC, `F:\src\orca-mods` checked out at 6611daa117, the release's CMake switches,
+  Release, MSVC): dolphin-nogui and tests built (33 min, no errors); `Orca*` 634 run, 617 pass, 17
+  skipped (OrcaLive 14, KitDraw 1, and the two Rev 1 tests: no Rev 1 dump on the PC), 0 fail; 9
+  `OrcaBundle.*` and 18 `OrcaMod.*` pass, `OrcaMod.SdImageIsDeterministic` among them (the PC builds
+  the Mac's pinned SD images). Not run: Mac <-> PC with a bundle (`xplat.py`), the perf gate.
+
+**After the reviews (round 2, 2026-10-08; engine 7d53340a44, tools to 242360a6d7).** A security
+review and a determinism review of `release-0.3.34..bundle-flat`. Must-fix, all applied:
+
+- **The card's pin was XXH3-128, which a reviewer forged**: 64 KiB changed in a clone of the real
+  `sd.raw`, 128 bytes later restoring its XXH3-128 (no search). Now `sdImage.sha256`, a chunked
+  SHA-256 (`Bundle.h` `SD_HASH_HEADER`: SHA-256 over the SHA-256 of each 64 MiB piece, hashed on every
+  core with CommonCrypto / CNG / mbedtls). The P+ check takes 118-127 ms on this Mac (528 ms with the
+  card cold), down from 240-470 ms for XXH3; plain SHA-256 would be about 0.8 s here and several
+  seconds on a PC without SHA instructions (the i7-8700 has none). `sdhash.py` and
+  `sd-hash-vector.json` tie the tools to the engine. The key's `sd=` is that pin.
+- **A build without a configured key trusted the TEST key.** Now it trusts none and refuses every
+  bundle (`refused: this build trusts no bundle key`); `-DORCA_BUNDLE_TRUST_TEST_KEY=ON` adds the
+  TEST key for tests; `orca-package-macos.sh` forces it off, takes `ORCA_BUNDLE_PUBLIC_KEY` from the
+  environment, and fails if the executable holds the TEST key or lacks the pinned one (both keys are
+  logged by text, so `strings` finds them). `OrcaBundle.PinnedKey` checks Bundle.cpp got exactly
+  CMake's keys (the same definitions reach the test): checked on Ninja (route key + TEST key, and no
+  key) and on the PC's Visual Studio preset (route key + TEST key).
+- **Layer map**: main merged in (tooling only); `Bundle.*` engine-sensitive and in forbidden-calls'
+  `PEER_FILES` (its peer-parse hits: `ParseSignature` x2, `reinterpret_cast` x2, `ParseManifest`,
+  `ParseGamePatches`); `Source/Core/Core/CMakeLists.txt` and `ConfigLoaders/**` engine-sensitive
+  (test_layers.py found `GameConfigLoader.cpp` on the fallback); baseline refreshed on the branch.
+- **Gates not run in round 1**: Mac <-> PC (`xplat.py`) and the perf gate (below).
+
+Should-fix, applied: the launcher's signed line is checked on the bytes the boot's reader already
+holds (`BootExecutableReader::GetBytes`), and the JIT seed is used as verified (`flat_jitwarm`), so
+nothing is read twice; `mod.sig` is read and its key checked before `mod.json` reaches picojson;
+format 2 names its `listing` (refused under another `YOUGAME_GAME`) and a `serial` (`MIN_FLAT_SERIAL`
+retires older bundles); a folder `ORCA_MOD_DIR` names and that is refused refuses the session
+(`BundleKind::Refused`) instead of playing legacy unseen; the mod key adds the Sys game INIs
+(`sys=`); `sign-bundle.py sign` checks the card's pin before it signs; `make-bundle.py` checks
+Project+'s launcher and card by full SHA-256 and refuses another card unless `--any-card`;
+`mod.schema.json` describes format 2; `*.patches` stay LF (`.gitattributes`); ORCA.md no longer says
+"nothing of the bundle is used" after a refusal. Also: `fake_bridge.py` names the Orca build in a
+real ticket (`FAKE_ORCA_BUILD`): since the site's 0.3.32 protocol floor went on, every `xplat.py` run
+over prod got 409 `orca_outdated` and no room; `xplat.py --flat-run` lays a disc boot's bundle out as
+the app does.
+
+Not changed: a refused bundle still shows only in Orca's log (a page-visible line needs an app/page
+change); bundles are checked once per process (NoGUI boots once).
+
+Checks (Mac: `bundle-flat-runs`, gate.py under run-lock, headless, HIDAPI off; binary `bin-bf2`, the
+code of 7d53340a44 built from the tree before that commit, so it reports a31cee9c82):
+
+- `Orca*` with both discs: 644 run, 627 pass, 17 skipped, 0 fail (11 `OrcaBundle.*`, 19
+  `OrcaMod.*`). A no-key build: `OrcaBundle.*` 11/11.
+- LEGACY against the 0.3.34 release: 49 inputs, 488,307 frames compared, 0 differ; sync tests
+  29,351 / 19,901 re-run frames, 0 RAM mismatches; key inputs identical with the commit masked.
+- BUNDLE (app layout): sync tests 29,351 / 19,901, 0 RAM mismatches; hash logs against legacy: Brawl
+  3 inputs equal on every frame, Project+ 3 inputs equal on every frame but frame 0 (as before); caps
+  lines equal to legacy's; keys `orca2:475f0054...` (Brawl) / `orca2:23bba593...` (P+), never
+  legacy's.
+- Tampered, 18 cases (round 1's 14 rebuilt on the new bundles, plus: the forged card, a bundle for
+  another listing, serial 0, the old `xxh3` pin, each signed with the TEST key): every one refused
+  with its reason and played as legacy, equal to legacy's hash log. **The forged card**: the bundle
+  refuses it (chunked SHA-256 `342f9b6b...` against `4e352981...`), and then legacy boots that same
+  folder's `sd.raw` under PPLUS32.ini's XXH3-128 pin, which the forged card passes: legacy played it
+  (900 frames, no visible effect from the payload's spot on the card). A one-byte change is refused by
+  both, as before.
+- No-key build (`bin-nokey`): both bundles refused (`trusts no bundle key`), legacy, hash logs equal
+  to legacy's. `ORCA_MOD_DIR` naming a tampered bundle: `orca error profile ... refused: mod.sig
+  doesn't match`; naming a good one: mod mode.
+- Windows (the PC, `F:\src\orca-mods` at 6ebc8560a6, the release's CMake switches plus the route-check
+  key and `ORCA_BUNDLE_TRUST_TEST_KEY=ON`, Visual Studio preset, Release; incremental build 5 min):
+  `Orca*` 636 run, 619 pass, 17 skipped (OrcaLive 14, KitDraw 1, the two Rev 1 tests), 0 fail;
+  `OrcaBundle.*` 11/11 (`ChunkedSha256` through CNG, `PinnedKey` through the VS generator's
+  definitions), `OrcaMod.*` 18.
+- Mac <-> PC over prod rooms (`xplat.py`, sandbox-ada on the Mac hosting, sandbox-bo on the PC
+  joining, both 6ebc8560a6): Project+ flat bundle found as its launcher's folder on both: the same key
+  on both machines (`orca2:52b9513eebb77785`: tree, card pin and Sys INIs agree across platforms),
+  the PC plugged in, 198 checksums matched on each side, no desync, direct link, 60.4 fps average on
+  the PC. (The Mac slept on battery while the host waited alone afterwards; its lost room after the
+  friend left is that, not the bundle.)
+  Brawl flat bundle with `--flat-run` (laid out in `<work>/run/open-brawl` beside `-u <work>/user`, as
+  the app does): the PC found it through `<user>/../run/open-brawl/` (its JIT seed read from there),
+  the same key on both (`orca2:1be65c4c97343d1a`), origin at frame 1524, the PC plugged in at 1645 and
+  11 checksums matched, no desync, before the Mac slept again and its SSH session to the PC (and the
+  PC's Orca with it) was cut about 30 s in.
+- Not run: the perf gate. The candidate (unsigned package of 6a1c3e0e2b pinning a perf-gate key, the
+  P+ bundle re-signed with it) and an unsigned 0.3.34 base are ready in `bundle-flat-runs/perf`
+  (`runs.sh`, the gate-0334fb method), but from about 14:50 the Mac ran on battery and slept on and
+  off; the first base run died mid-set. It needs a plugged-in, awake Mac.

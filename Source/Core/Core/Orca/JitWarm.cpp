@@ -10,6 +10,7 @@
 #include <deque>
 #include <mutex>
 #include <numeric>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -140,13 +141,18 @@ std::string SeedPath()
   const Profile* profile = ActiveProfile();
   if (!profile || GetEnv("ORCA_JITWARM_SEED") == "0")
     return {};
+  // Mod mode: the bundle's JIT seed, when it has one (host-only: not in the tree hash).
+  if (profile->mod)
+    return profile->mod->JitWarmPath();
   return File::GetSysDirectory() + "Orca/" + profile->game_id + ".jitwarm";
 }
 
+// Empty when missing, unreadable or over Mod::MAX_JITWARM_BYTES (a mod's orca/jitwarm may be up to
+// 4 GiB in its tree.json; Orca's seeds and a player's list are about 1 MB).
 std::vector<u8> ReadWhole(const std::string& path)
 {
   std::vector<u8> bytes;
-  if (File::IOFile in(path, "rb"); in)
+  if (File::IOFile in(path, "rb"); in && in.GetSize() <= Mod::MAX_JITWARM_BYTES)
   {
     bytes.resize(in.GetSize());
     if (!in.ReadBytes(bytes.data(), bytes.size()))
@@ -159,6 +165,10 @@ std::vector<u8> ReadWhole(const std::string& path)
 bool KnownGame()
 {
   const Profile* profile = ActiveProfile();
+  // Mod mode: a mod whose builtin is for Brawl rev 2 (host-only: guards aren't needed to read
+  // scenes for the warm-up's timing, and its blocks are hash-checked against RAM).
+  if (profile && profile->mod)
+    return Mod::DeclaredBuiltin() != Mod::Builtin::None;
   if (!profile || profile->revision != 2)
     return false;
   return profile->IsLauncher() ? profile->disc == "RSBE01" : profile->game_id == "RSBE01";
@@ -240,6 +250,9 @@ private:
   bool m_log_presence = false;  // ORCA_JITWARM_LOG=2: also which listed blocks are in RAM
   std::string m_path;
   std::string m_seed_path;  // Orca's shipped list, used when the player has none (SeedPath)
+  // A flat bundle's seed as it was verified (Mod.h ModInfo::flat_jitwarm): read from here, never
+  // from m_seed_path again.
+  std::optional<std::vector<u8>> m_seed_bytes;
 
   bool m_seen_other_scene = false;  // a match starts only from another scene, not on a join
   bool m_in_match = false;
@@ -306,6 +319,12 @@ bool State::Enabled()
   m_log_presence = log == "2";
   m_path = FilePath();
   m_seed_path = SeedPath();
+  if (const Profile* profile = ActiveProfile();
+      profile && profile->mod && profile->mod->flat && !m_seed_path.empty())
+  {
+    const std::string& seed = profile->mod->flat_jitwarm;
+    m_seed_bytes.emplace(seed.begin(), seed.end());
+  }
   if (m_enabled)
     NOTICE_LOG_FMT(ROLLBACK, "JIT warm-up: on ({}, {} us per frame)", m_path, m_budget_us);
   return m_enabled;
@@ -724,7 +743,7 @@ void State::OnBoundary(const Core::CPUThreadGuard& guard)
         WARN_LOG_FMT(ROLLBACK, "JIT warm-up: {} is not readable, starting over", m_path);
       if (!blocks && !m_seed_path.empty())
       {
-        blocks = Decode(ReadWhole(m_seed_path));
+        blocks = Decode(m_seed_bytes ? *m_seed_bytes : ReadWhole(m_seed_path));
         if (blocks)
         {
           NOTICE_LOG_FMT(ROLLBACK,

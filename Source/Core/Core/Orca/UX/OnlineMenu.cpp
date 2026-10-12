@@ -67,6 +67,12 @@ std::string ReadManagerName(const GuestMemory& m, u32 field)
 // Brawl rev 2, or a launcher profile that boots it (Project+). The addresses are for that build.
 bool BrawlExecutable()
 {
+  // Mod mode: the mod's builtin, while its guard words hold (Core/Orca/Mod.h).
+  if (Orca::Mod::ActiveMod())
+  {
+    return Orca::Mod::BuiltinOn(Orca::Mod::Builtin::BrawlRev2) ||
+           Orca::Mod::BuiltinOn(Orca::Mod::Builtin::BrawlRev2PPlus);
+  }
   const Orca::Profile* profile = Orca::ActiveProfile();
   return profile && profile->revision == 2 &&
          (profile->IsLauncher() ? profile->disc == "RSBE01" : profile->game_id == "RSBE01");
@@ -487,6 +493,12 @@ bool KeypadOpen(const GuestMemory& m, u32 menu)
   return false;
 }
 
+int FirstFriendFrame()
+{
+  return Orca::Mod::ActiveMod() ? static_cast<int>(Orca::Mod::FirstKeyframeFrame()) :
+                                  FIRST_FRIEND_FRAME;
+}
+
 Outputs Decide(const Inputs& in)
 {
   namespace B = MatchBlock;
@@ -501,7 +513,7 @@ Outputs Decide(const Inputs& in)
   // First write: mark only the host's port as seen, so a friend plugged in now counts as new.
   // Ports plugged in before FIRST_FRIEND_FRAME are test ports, never friends.
   const u8 seen = kept                                ? in.seen :
-                  in.frame < FIRST_FRIEND_FRAME ? in.plugged :
+                  in.frame < FirstFriendFrame() ? in.plugged :
                                                         static_cast<u8>(in.plugged & ~FRIEND_PORTS);
   bool pending = kept && in.pending != 0;
   if (in.plugged & ~seen & FRIEND_PORTS)
@@ -737,6 +749,12 @@ Seen LastSeen()
 
 bool Supported()
 {
+  // Asked once, as the match is set up (Rollback/OnlineMatch.cpp), before a mod's guard words are
+  // first read (Project+'s codes land in frame 1): in mod mode, the builtin mod.json declares. The
+  // menu is still read only while the guards hold (Frame), so a mod that moved what the builtin
+  // relies on never finds a built menu, gets no origin and takes no players, on every machine alike.
+  if (Orca::Mod::ActiveMod())
+    return Orca::Mod::DeclaredBuiltin() != Orca::Mod::Builtin::None;
   return BrawlExecutable();
 }
 }  // namespace FreshMove
