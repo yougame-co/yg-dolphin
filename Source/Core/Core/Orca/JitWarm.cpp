@@ -44,6 +44,18 @@ constexpr u32 FILE_VERSION = 1;
 constexpr u32 MEM2_PHYSICAL = 0x10000000;
 constexpr std::size_t MAX_RANGES = 32;
 constexpr u32 MAX_RANGE_BYTES = 0x10000;
+// Wii RAM, physical: MEM1 (24 MiB at 0) and MEM2 (64 MiB at 0x10000000).
+constexpr u32 MEM1_END = 0x01800000;
+constexpr u32 MEM2_END = MEM2_PHYSICAL + 0x04000000;
+// The most instructions the JIT puts in one block (JitBase::code_buffer_size), as bytes.
+constexpr u32 MAX_BLOCK_BYTES = 32000 * 4;
+// The smallest block in the file: its fixed fields and one range.
+constexpr std::size_t MIN_BLOCK_BYTES = 4 + 4 + 4 + 8 + 2 + 1 + 1 + 8;
+
+bool InRam(u32 start, u32 end)
+{
+  return start < end && (end <= MEM1_END || (start >= MEM2_PHYSICAL && end <= MEM2_END));
+}
 
 // Brawl (NTSC-U, rev 2), Project+ included: gfSceneManager* at 0x805A0060, its current scene at
 // +0x4, and the scene's name (char*) at +0x0. A match is the scMelee scene, starting after the load
@@ -147,6 +159,9 @@ std::string SeedPath()
     return profile->mod->JitWarmPath();
   return File::GetSysDirectory() + "Orca/" + profile->game_id + ".jitwarm";
 }
+
+// The pack format's cap on orca/jitwarm is the same as Decode's.
+static_assert(Mod::MAX_JITWARM_BYTES == MAX_FILE_BYTES);
 
 // Empty when missing, unreadable or over Mod::MAX_JITWARM_BYTES (a mod's orca/jitwarm may be up to
 // 4 GiB in its tree.json; Orca's seeds and a player's list are about 1 MB).
@@ -649,9 +664,22 @@ void State::Warm(const Core::CPUThreadGuard& guard)
     m_compiling = true;
     const auto compile_start = std::chrono::steady_clock::now();
     PowerPC::RoundingModeUpdated(ppc_state);
-    jit->CompileFromHook(b.effective);
+    const bool fit = jit->CompileFromHook(b.effective);
     Common::FPU::LoadDefaultSIMDState();
     m_compiling = false;
+    if (!fit)
+    {
+      // Bigger than the free code space (no real game's block comes close): the JIT dropped it.
+      // Stop warming this match rather than try more of the list.
+      WARN_LOG_FMT(ROLLBACK, "JIT warm-up: {:08x} did not fit in the free code space; stopping",
+                   b.effective);
+      status = Status::GivenUp;
+      ++m_discarded;
+      m_queue.clear();
+      m_waiting.clear();
+      m_cursor = 0;
+      break;
+    }
     if (m_log_frames)
     {
       const double compile_ms = std::chrono::duration<double, std::milli>(
@@ -884,7 +912,7 @@ std::vector<u8> Encode(const std::vector<Block>& blocks)
 
 std::optional<std::vector<Block>> Decode(std::span<const u8> bytes)
 {
-  if (bytes.size() < 3 * sizeof(u32) + sizeof(u64))
+  if (bytes.size() < 3 * sizeof(u32) + sizeof(u64) || bytes.size() > MAX_FILE_BYTES)
     return std::nullopt;
   const std::span<const u8> body = bytes.first(bytes.size() - sizeof(u64));
   u64 checksum;
@@ -894,7 +922,8 @@ std::optional<std::vector<Block>> Decode(std::span<const u8> bytes)
   Reader in(body);
   u32 magic, version, count;
   if (!in.Get(&magic) || !in.Get(&version) || !in.Get(&count) || magic != FILE_MAGIC ||
-      version != FILE_VERSION || count > 2 * MAX_BLOCKS)
+      version != FILE_VERSION || count > 2 * MAX_BLOCKS ||
+      count > (bytes.size() - 3 * sizeof(u32) - sizeof(u64)) / MIN_BLOCK_BYTES)
   {
     return std::nullopt;
   }
@@ -904,16 +933,24 @@ std::optional<std::vector<Block>> Decode(std::span<const u8> bytes)
     u8 ranges;
     if (!in.Get(&b.effective) || !in.Get(&b.physical) || !in.Get(&b.flags) || !in.Get(&b.hash) ||
         !in.Get(&b.when) || !in.Get(&b.age) || !in.Get(&ranges) || ranges == 0 ||
-        ranges > MAX_RANGES)
+        ranges > MAX_RANGES || (b.effective & 3) != 0 || (b.physical & 3) != 0 ||
+        !InRam(b.physical, b.physical + 4))
     {
       return std::nullopt;
     }
     b.ranges.resize(ranges);
+    u32 block_bytes = 0;
     for (auto& [start, end] : b.ranges)
     {
-      if (!in.Get(&start) || !in.Get(&end) || end <= start || end - start > MAX_RANGE_BYTES)
+      if (!in.Get(&start) || !in.Get(&end) || end <= start || end - start > MAX_RANGE_BYTES ||
+          ((start | end) & 3) != 0 || !InRam(start, end))
+      {
         return std::nullopt;
+      }
+      block_bytes += end - start;
     }
+    if (block_bytes > MAX_BLOCK_BYTES)
+      return std::nullopt;
   }
   if (!in.AtEnd())
     return std::nullopt;

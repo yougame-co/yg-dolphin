@@ -46,7 +46,12 @@ struct Block
 std::optional<u64> HashRanges(std::span<const u8> mem1, std::span<const u8> mem2,
                               const std::vector<std::pair<u32, u32>>& ranges);
 
-// File format (<user>/Cache/<profile>.jitwarm): header, blocks, checksum.
+// File format (<user>/Cache/<profile>.jitwarm): header, blocks, checksum. Decode takes nothing it
+// doesn't expect from a JIT: a file over MAX_FILE_BYTES, an address or range outside MEM1 and MEM2
+// or not word-aligned, or a block covering more instructions than the JIT puts in one is refused,
+// whoever wrote the file. (The list only says what to compile ahead: each block is still checked
+// against RAM before it compiles, and the warm-up never changes what the game computes.)
+constexpr std::size_t MAX_FILE_BYTES = std::size_t{16} << 20;
 std::vector<u8> Encode(const std::vector<Block>& blocks);
 std::optional<std::vector<Block>> Decode(std::span<const u8> bytes);
 

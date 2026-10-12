@@ -114,6 +114,11 @@ void ForEachUniversalSetting(F&& f)
   f(Config::MAIN_ALLOW_SD_WRITES, false);
   f(Config::MAIN_WII_SD_CARD_ENABLE_FOLDER_SYNC, false);
   f(Config::MAIN_BLUETOOTH_PASSTHROUGH_ENABLED, false);
+  // No USB keyboard and no real USB device handed to the guest. The session's device budget
+  // (IOS::HLE::SessionAllowsDevice) keeps the USB devices closed anyway; these keep a player's
+  // Dolphin.ini from asking for them.
+  f(Config::MAIN_WII_KEYBOARD, false);
+  f(Config::MAIN_USB_PASSTHROUGH_DEVICES, std::string());
   f(Config::MAIN_OVERRIDE_REGION_SETTINGS, true);
   // The console region a DOL boots as (the Project+ launcher). Dolphin otherwise takes it from the
   // host locale, so two machines could boot different regions and diverge from the first frame.
@@ -178,6 +183,9 @@ void ForEachUniversalSetting(F&& f)
   // VSync adds 2-19 ms of display latency with no pacing gain (a composited window never tears)
   // and, below 60 Hz, would slow the game: always off in a session, whatever GFX.ini says.
   f(Config::GFX_VSYNC, false);
+  // The JIT vertex loaders: the session's vertex bounds (VertexLoaderManager::IndexedReadsFit)
+  // assume what they read, and the software loader reads a skipped vertex's position too.
+  f(Config::GFX_VERTEX_LOADER_TYPE, VertexLoaderType::Native);
   f(Config::GFX_HACK_EFB_ACCESS_ENABLE, false);
   f(Config::GFX_HACK_BBOX_ENABLE, false);
   f(Config::GFX_HACK_EFB_EMULATE_FORMAT_CHANGES, false);

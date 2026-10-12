@@ -74,6 +74,8 @@ add_dolphin_test(OrcaPresentPacingTest Orca/PresentPacingTest.cpp)
 add_dolphin_test(OrcaPerfTest Orca/PerfTest.cpp)
 add_dolphin_test(OrcaGraphicsSettingsTest Orca/GraphicsSettingsTest.cpp)
 add_dolphin_test(OrcaRumbleTest Orca/RumbleTest.cpp)
+add_dolphin_test(OrcaDeviceBudgetTest Orca/DeviceBudgetTest.cpp)
+add_dolphin_test(OrcaNandQuotaTest Orca/NandQuotaTest.cpp)
 
 add_dolphin_test(SkylandersTest IOS/USB/SkylandersTest.cpp)
 
@@ -110,3 +112,6 @@ target_sources(PowerPCTest PRIVATE
   PowerPC/TestValues.h
   StubJit.h
 )
+if(_M_X86_64 OR _M_ARM_64)
+  target_sources(PowerPCTest PRIVATE PowerPC/JitHookCompileTest.cpp)
+endif()

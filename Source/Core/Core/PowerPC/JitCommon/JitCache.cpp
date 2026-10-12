@@ -443,6 +443,15 @@ void JitBaseBlockCache::EraseSingleBlock(const JitBlock& block)
   block_map.erase(block_map_iter);  // The original JitBlock reference is now dangling.
 }
 
+void JitBaseBlockCache::DiscardUnfinalizedBlock(const JitBlock& block)
+{
+  const auto equal_range = block_map.equal_range(block.physicalAddress);
+  const auto block_map_iter = std::ranges::find(equal_range.first, equal_range.second, &block,
+                                                [](const auto& kv) { return &kv.second; });
+  if (block_map_iter != equal_range.second)
+    block_map.erase(block_map_iter);
+}
+
 u32* JitBaseBlockCache::GetBlockBitSet() const
 {
   return valid_block.m_valid_block.get();
