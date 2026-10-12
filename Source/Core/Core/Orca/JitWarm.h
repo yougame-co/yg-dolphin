@@ -5,6 +5,7 @@
 
 #include <optional>
 #include <span>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -74,4 +75,16 @@ void OnBoundary(const Core::CPUThreadGuard& guard);
 // Whether the running scene is a match, for a game whose scenes Orca reads (Brawl rev 2 and the
 // launchers that boot it); nullopt while the scene can't be read, and for any other game.
 std::optional<bool> SceneIsMatch(const Core::CPUThreadGuard& guard);
+
+// The running scene, for the same games: its object and its name's address; nullopt while it
+// can't be read and for any other game. Reads only.
+struct Scene
+{
+  u32 object = 0;
+  u32 name = 0;
+  bool operator==(const Scene&) const = default;
+};
+std::optional<Scene> CurrentScene(const Core::CPUThreadGuard& guard);
+// The scene name at `name` (CurrentScene's), at most 31 characters; empty if unreadable.
+std::string SceneName(const Core::CPUThreadGuard& guard, u32 name);
 }  // namespace Orca::JitWarm

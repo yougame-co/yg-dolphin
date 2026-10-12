@@ -23,6 +23,7 @@
 #include "Core/Orca/Games/Brawl/Relabel.h"
 #include "Core/Orca/Games/Brawl/Results.h"
 #include "Core/Orca/Games/Brawl/StageCursors.h"
+#include "Core/Orca/PanicDiag.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/UX/Kit.h"
 #include "Core/Orca/UX/Probe.h"
@@ -137,6 +138,10 @@ void BrawlModule::OnBoundary(const Core::CPUThreadGuard& guard, int frame, bool 
     StageCursors::Publish(std::move(view));
   }
   ProbeFrame(guard, frame);
+  // Read only, first runs only. One log line per scene change, for crash reports
+  // (Orca/PanicDiag.h).
+  if (!resimulating)
+    Orca::PanicDiag::NoteScene(guard, frame);
   // Read only, first runs only. The game's rumble for this machine's own port, to the page.
   if (!resimulating)
   {
