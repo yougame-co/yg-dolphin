@@ -1179,6 +1179,37 @@ TEST(OrcaMod, LauncherBootReadsRev1AsRev2)
   File::DeleteDirRecursively(one.dir);
 }
 
+// A mod's launcher boot says why its disc didn't open, as a legacy launcher profile does
+// (Profile.cpp DiscOpenProblem): no path, or a file that isn't a disc image. Never the path.
+TEST(OrcaMod, LauncherBootSaysWhyTheDiscDidNotOpen)
+{
+  picojson::value json;
+  picojson::parse(json, PPLUS_MOD);
+  json.get<picojson::object>().erase("sd");
+  Bundle b = MakeBundle(json.serialize());
+  b.Add("launcher.dol", "dol");
+  b.WriteTree();
+  const std::string elsewhere = File::CreateTempDir() + "/";
+  const std::string not_disc = elsewhere + "not-a-disc.iso";
+  ASSERT_TRUE(File::WriteStringToFile(not_disc, "not a disc image"));
+  std::string error;
+  auto profile = Orca::LoadModProfile(b.dir, &error);
+  ASSERT_TRUE(profile) << error;
+  const std::string launcher = b.dir + "launcher.dol";
+  bool wrong_disc = false;
+  EXPECT_FALSE(Orca::PrepareModBoot(&*profile, &launcher, "", "", 0, &error, &wrong_disc));
+  EXPECT_FALSE(wrong_disc);
+  EXPECT_NE(error.find("from the drive, and no disc is set"), std::string::npos) << error;
+  EXPECT_FALSE(Orca::PrepareModBoot(&*profile, &launcher, not_disc, "", 0, &error, &wrong_disc));
+  EXPECT_FALSE(wrong_disc);
+  EXPECT_NE(error.find("from the drive, and its disc file (.iso, 16 bytes) isn't a disc image"),
+            std::string::npos)
+      << error;
+  EXPECT_EQ(error.find(elsewhere), std::string::npos) << error;
+  File::DeleteDirRecursively(b.dir);
+  File::DeleteDirRecursively(elsewhere);
+}
+
 // S3 (WP19 a): the key's UX version is the engine's, then the running game's own revision when it
 // has one. Every game's is 0 today, so Brawl rev 2's and Project+'s keys end exactly as before S3.
 TEST(OrcaMod, UxKeyPartIsPerGame)

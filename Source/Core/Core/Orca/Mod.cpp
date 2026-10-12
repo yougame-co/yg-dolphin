@@ -1497,8 +1497,8 @@ bool PrepareModBoot(Profile* profile, const std::string* executable_path,
         default_disc.empty() ? nullptr : DiscIO::CreateDisc(default_disc);
     if (!disc)
     {
-      *error = fmt::format("Orca mod: the launcher boots {} from the drive, and no disc is set",
-                           m.disc_id);
+      *error = fmt::format("Orca mod: the launcher boots {} from the drive, and {}", m.disc_id,
+                           DiscOpenProblem(default_disc));
       return false;
     }
     // The boot inserts the disc with the same alias (Boot.cpp SetDefaultDisc): Brawl's Rev 1 dump
