@@ -748,6 +748,12 @@ Scene Gather(double now)
     s.search.clear();
     s.search_note.clear();
   }
+  // The one-time "New · Hold B to leave" on the queue's own select, in the control guide.
+  if (Queue::OnSoloCss())
+  {
+    if (const std::string tip = Queue::Tip(); !tip.empty())
+      s.hint = s.hint.empty() ? tip : s.hint + " \u00b7 " + tip;
+  }
   // A ranked set's lines: the stage flow's, else the set score; under it the stage flow's turn,
   // else the character order's.
   std::string rule_line;

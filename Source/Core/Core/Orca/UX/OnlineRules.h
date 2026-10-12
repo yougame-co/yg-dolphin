@@ -75,7 +75,7 @@ int ApplyLocks(GuestMemory& memory, int frame);
 
 // What the input gate masks for the frame about to run (read only). In Project+, D-pad Down never
 // reaches the game while L and R are held, in every scene: the Code Menu's chord and the debug
-// codes' own.
+// codes' own. In ranked, B never reaches the results screen: after the set, holding it leaves.
 Rollback::InputGate::Masks GateMasks(const GuestMemory& memory);
 
 // ---- Every session, with or without a header ----

@@ -317,17 +317,17 @@ struct Match
   std::optional<Orca::UX::OnlinePick> friends_pick;
   bool friends_pick_played = false;
   // Set over: after a ranked verdict this game stays in the room until the player leaves
-  // (SetOverLeave). Tracks the leave, Z held since, and the last buttons (to spot presses).
+  // (SetOverLeave). Tracks the leave, B held since, and the last buttons (to spot presses).
   bool set_over_left = false;
   bool set_over_hint = false;  // the overlay's leave hint is shown
-  std::optional<Clock::time_point> set_over_z_since;
+  std::optional<Clock::time_point> set_over_hold_since;
   u16 set_over_buttons = 0xFFFF;
 };
 
 // Desyncs this process has seen across all matches (the stats line's "ds").
 int s_desyncs = 0;
 
-// The local pad the last boundary read, for set over's Z and Start.
+// The local pad the last boundary read, for set over's B and Start.
 std::optional<Orca::Net::Pad> s_local_pad;
 
 // Solo pause. s_solo_idle: the last boundary left this game alone (false while a boundary runs).
@@ -403,8 +403,8 @@ constexpr std::chrono::seconds ROOM_HOLD{90};
 constexpr std::chrono::seconds VERDICT_WAIT{30};
 // Ranked: the opponent's inputs stopped this long, so this player claims the set (ReportStall).
 constexpr std::chrono::seconds RANKED_STALL_LIMIT{15};
-// Set over: holding Z this long on the results screen leaves the room.
-constexpr std::chrono::milliseconds SET_OVER_Z_HOLD{1500};
+// Set over: holding B this long on the results screen leaves the room.
+constexpr std::chrono::milliseconds SET_OVER_HOLD{1500};
 
 // Orca's input delay when the page chooses none (no "caps delay", no "delay N" yet, or an old
 // page's "delay auto"): a fixed three frames, the page's own default. Never the session's adaptive
@@ -4134,8 +4134,9 @@ void NoteRankedFight(Match& match)
 
 // Set over: after a ranked set's verdict, both players stay on the results screen and can chat on
 // the page. This game leaves the room when its results screen is over (read at a final frame), when
-// the player holds Z for SET_OVER_Z_HOLD (Z is masked from the game there), or, once the opponent
-// is gone, on Start or A. Reads only the local pad and never changes the game.
+// the player holds B for SET_OVER_HOLD (B is masked from the game there: OnlineRules GateMasks),
+// or, once the opponent is gone, on Start or A. Reads only the local pad and never changes the
+// game.
 void SetOverLeave(Match& match)
 {
   Orca::UX::SetEnd::Model& set_end = Orca::UX::SetEnd::Current();
@@ -4144,7 +4145,7 @@ void SetOverLeave(Match& match)
     if (std::exchange(match.set_over_hint, false))
       set_end.LeaveHint(false, false, 0);
     match.set_over_left = false;
-    match.set_over_z_since.reset();
+    match.set_over_hold_since.reset();
     match.set_over_buttons = 0xFFFF;
     return;
   }
@@ -4159,26 +4160,26 @@ void SetOverLeave(Match& match)
   const u16 pressed = static_cast<u16>(buttons & ~match.set_over_buttons);
   match.set_over_buttons = buttons;
   const auto now = Clock::now();
-  if (on_results && (buttons & PAD_TRIGGER_Z))
+  if (on_results && (buttons & PAD_BUTTON_B))
   {
-    if (!match.set_over_z_since)
-      match.set_over_z_since = now;
+    if (!match.set_over_hold_since)
+      match.set_over_hold_since = now;
   }
   else
   {
-    match.set_over_z_since.reset();
+    match.set_over_hold_since.reset();
   }
   const float held =
-      match.set_over_z_since ?
+      match.set_over_hold_since ?
           std::min(1.0f, static_cast<float>(std::chrono::duration<double>(
-                                                now - *match.set_over_z_since) /
-                                            SET_OVER_Z_HOLD)) :
+                                                now - *match.set_over_hold_since) /
+                                            SET_OVER_HOLD)) :
           0.0f;
   const char* why = nullptr;
   if (final_scene && *final_scene != Scene::Results)
     why = "the game is off the results screen";
-  else if (match.set_over_z_since && now - *match.set_over_z_since >= SET_OVER_Z_HOLD)
-    why = "Z held";
+  else if (match.set_over_hold_since && now - *match.set_over_hold_since >= SET_OVER_HOLD)
+    why = "B held";
   else if (alone && on_results && (pressed & (PAD_BUTTON_START | PAD_BUTTON_A)))
     why = "the opponent is gone and the player pressed on";
   match.set_over_hint = on_results && !why;
@@ -4186,7 +4187,7 @@ void SetOverLeave(Match& match)
   if (!why)
     return;
   match.set_over_left = true;
-  match.set_over_z_since.reset();
+  match.set_over_hold_since.reset();
   set_end.LeavingSetRoom(Orca::UX::SetEnd::NowMs());
   NOTICE_LOG_FMT(ROLLBACK, "Matchmaking: set over: leaving room {} ({}), frame {}",
                  Orca::Online::Code(), why, match.running + 1);

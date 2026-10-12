@@ -14,6 +14,8 @@
 
 #include <fmt/format.h>
 
+#include "Common/CommonPaths.h"
+#include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Events.h"
@@ -47,7 +49,6 @@ constexpr u32 KIND_HUMAN = 1;
 
 constexpr u16 BUTTON_START = PAD_BUTTON_START;
 constexpr u16 BUTTON_B = PAD_BUTTON_B;
-constexpr u16 BUTTON_Z = PAD_TRIGGER_Z;
 
 bool Pointer(const GuestMemory& m, u32 p)
 {
@@ -208,9 +209,12 @@ State Advance(const View& v, const State& state, int frame)
   if (v.solo)
   {
     // The queue's own character select, port 1 only. The B that cancels the search, and a Start
-    // still held from leaving a room, are hidden from the game until released.
+    // still held from leaving a room, are hidden from the game until released. That B still held
+    // SOLO_LEAVE_FRAMES later reaches the game, which backs out as for any held B: hold B leaves
+    // whether or not the player was searching.
     const u8 ready = s.ready;
     const bool swallowing = (s.flags & FLAG_SWALLOW_B) && (v.raw[0] & BUTTON_B);
+    const u32 swallow_since = s.timer_start;  // TIMER_START's solo meaning
     const bool swallowing_start = (s.flags & FLAG_SWALLOW_START) && (v.raw[0] & BUTTON_START);
     // A new A on BACK while ready cancels the search, then the next frame passes it to the game
     // to back out (FLAG_BACK_A). The flag survives this frame being re-run.
@@ -225,6 +229,16 @@ State Advance(const View& v, const State& state, int frame)
     follow(0, !v.ports[0].name_list);
     if (swallowing || ((ready & 1) && !(s.ready & 1) && (newly[0] & BUTTON_B)))
       s.flags |= FLAG_SWALLOW_B;
+    if (s.flags & FLAG_SWALLOW_B)
+    {
+      s.timer_start =
+          swallowing && swallow_since != 0 && swallow_since <= now ? swallow_since : now;
+      if (now - s.timer_start >= static_cast<u32>(SOLO_LEAVE_FRAMES))
+      {
+        s.flags = static_cast<u8>(s.flags & ~FLAG_SWALLOW_B);
+        s.timer_start = 0;
+      }
+    }
     if (swallowing_start)
       s.flags |= FLAG_SWALLOW_START;
     if (back_a)
@@ -348,9 +362,9 @@ State Advance(const View& v, const State& state, int frame)
   return s;
 }
 
-bool SkipHold::Step(bool may_skip, bool z_held)
+bool SkipHold::Step(bool may_skip, bool held)
 {
-  if (!may_skip || !z_held)
+  if (!may_skip || !held)
   {
     frames = 0;
     sent = false;
@@ -367,7 +381,7 @@ bool SkipHold::Step(bool may_skip, bool z_held)
 
 float SkipHold::Progress() const
 {
-  if (sent || frames <= 0)
+  if (sent || frames < SKIP_BAR_FRAMES)
     return 0;
   return std::min(1.0f, static_cast<float>(frames) / SKIP_FRAMES);
 }
@@ -472,10 +486,10 @@ Masks Gate(const View& v, const State& s)
     return masks;
   if (v.solo)
   {
-    // Port 1 only. Start (ready) and Z (skip) never reach the game. While ready, B only cancels
-    // the search.
+    // Port 1 only. Start (ready) never reaches the game. While ready, B only cancels the search
+    // (until held SOLO_LEAVE_FRAMES). Z is the game's own.
     masks[0].buttons =
-        BUTTON_START | BUTTON_Z | ((s.ready & 1) || (s.flags & FLAG_SWALLOW_B) ? BUTTON_B : 0);
+        BUTTON_START | ((s.ready & 1) || (s.flags & FLAG_SWALLOW_B) ? BUTTON_B : 0);
     // A on BACK while ready first cancels the search, then reaches the game a frame later
     // (FLAG_BACK_A), so the app hears `orca queue unready` before the game backs out. The stick is
     // centred while a new A is down so the hand stays on BACK. An A already held when the hand
@@ -498,8 +512,10 @@ Masks Gate(const View& v, const State& s)
       masks[port] = ALL;
     return masks;
   }
-  masks[0].buttons = BUTTON_START | BUTTON_Z;
-  masks[1].buttons = BUTTON_START | BUTTON_Z;
+  // Start is Orca's (the go). Z reaches the game, locked in or not: Project+ reads it as the
+  // select ends for the AltZ costume, which no lock covers (as R's AltR never was masked).
+  masks[0].buttons = BUTTON_START;
+  masks[1].buttons = BUTTON_START;
   masks[2] = ALL;
   masks[3] = ALL;
   if (s.flags & FLAG_TIMED_OUT)
@@ -956,6 +972,7 @@ std::atomic<bool> s_clear_ready{false};
 // For the log. Guarded by s_mutex.
 std::string s_clear_ready_why;
 std::atomic<bool> s_last_timeout_mine{false};
+std::atomic<bool> s_tip_on{false};
 
 // Local state updated on first runs only: what was printed, the skip hold, token positions.
 struct Local
@@ -965,6 +982,10 @@ struct Local
   SkipHold skip;
   // Each character's place on the select, learned from the hands (PickPlaces).
   PickPlaces places;
+  // The one-time tip: loaded from the seen-file on first use; port 1's B held so far.
+  bool tip_loaded = false;
+  OnceTip tip;
+  int tip_b_frames = 0;
 };
 Local& L()
 {
@@ -1102,7 +1123,7 @@ Text TextFor(const View& v, const State& s, const std::vector<Events::PortInfo>&
       }
       else if (MaySkip(v, s))
       {
-        note += note.empty() ? "Hold Z to find someone else" : " · Hold Z to find someone else";
+        note += note.empty() ? "Hold B to leave" : " · Hold B to leave";
       }
     }
   }
@@ -1128,6 +1149,7 @@ void End()
     s_pick = {};
   }
   s_solo_ready = false;
+  s_tip_on = false;
   PublishIdentity();
 }
 
@@ -1225,6 +1247,104 @@ void ResetTimeouts()
 {
   Timeouts() = {};
   s_last_timeout_mine = false;
+}
+
+namespace
+{
+// The one-time tip, on a first run: `on_select` the queue's own select, alone.
+void TipFrame(bool on_select, bool ready, bool b_held, int frame)
+{
+  Local& l = L();
+  l.tip_b_frames = on_select && b_held ? l.tip_b_frames + 1 : 0;
+  if (on_select && !l.tip_loaded)
+  {
+    l.tip_loaded = true;
+    std::string text;
+    const std::string path = TipSeenPath();
+    if (!path.empty() && File::Exists(path) && File::ReadFileToString(path, text) &&
+        TipSeenIn(text, TIP_KEY))
+    {
+      l.tip.over = true;
+    }
+    else
+    {
+      NOTICE_LOG_FMT(ROLLBACK, "Queue: frame {}: the hold-B tip shows (not seen yet)", frame);
+    }
+  }
+  const OnceTip::Step step = l.tip.Frame(on_select, ready, l.tip_b_frames);
+  s_tip_on = step.show;
+  if (!step.keep)
+    return;
+  std::string text;
+  const std::string path = TipSeenPath();
+  if (!path.empty() && File::Exists(path))
+    File::ReadFileToString(path, text);
+  if (path.empty() || !File::WriteStringToFile(path, TipSeenWith(std::move(text), TIP_KEY)))
+    WARN_LOG_FMT(ROLLBACK, "Queue: couldn't keep the hold-B tip as seen");
+  else
+    NOTICE_LOG_FMT(ROLLBACK, "Queue: frame {}: the hold-B tip is kept as seen", frame);
+}
+}  // namespace
+
+OnceTip::Step OnceTip::Frame(bool on_select, bool ready, int b_frames)
+{
+  Step step;
+  if (over || !on_select)
+    return step;
+  // Readying (Start) or holding B ends it; holding B is the lesson learned, so it counts as seen.
+  const bool held = b_frames >= TIP_HOLD_FRAMES;
+  if (ready || held || shown >= TIP_FRAMES)
+  {
+    over = true;
+    step.keep = held && !kept;
+    kept = kept || step.keep;
+    return step;
+  }
+  ++shown;
+  step.show = true;
+  step.keep = shown >= TIP_SEEN_FRAMES && !kept;
+  kept = kept || step.keep;
+  return step;
+}
+
+bool TipSeenIn(std::string_view text, std::string_view key)
+{
+  while (!text.empty())
+  {
+    const std::size_t end = text.find('\n');
+    std::string_view line = text.substr(0, end);
+    while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
+      line.remove_suffix(1);
+    while (!line.empty() && (line.front() == ' ' || line.front() == '\t'))
+      line.remove_prefix(1);
+    if (line == key)
+      return true;
+    if (end == std::string_view::npos)
+      break;
+    text.remove_prefix(end + 1);
+  }
+  return false;
+}
+
+std::string TipSeenWith(std::string text, std::string_view key)
+{
+  if (TipSeenIn(text, key))
+    return text;
+  if (!text.empty() && text.back() != '\n')
+    text += '\n';
+  text += key;
+  text += '\n';
+  return text;
+}
+
+std::string TipSeenPath()
+{
+  return File::GetUserPath(D_CONFIG_IDX) + "OrcaSeen.txt";
+}
+
+std::string Tip()
+{
+  return s_tip_on ? std::string(TIP_TEXT) : std::string();
 }
 
 void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
@@ -1413,15 +1533,16 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
     s_solo_ready = false;
   }
 
-  // Skip: Z held 1.5 s on a casual room's character select, read from this player's own latched
-  // input for the frame that just ran.
+  // Skip: B held 1.5 s on a casual room's character select, read from this player's own latched
+  // input for the frame that just ran. Its first frame does what any B does there.
   const bool may_skip = MaySkip(v, after) && local >= 0 && local < 2;
-  if (l.skip.Step(may_skip, may_skip && (v.raw[local] & BUTTON_Z) != 0))
+  if (l.skip.Step(may_skip, may_skip && (v.raw[local] & BUTTON_B) != 0))
   {
-    NOTICE_LOG_FMT(ROLLBACK, "Queue: frame {}: Z held {} frames: orca queue skip", frame,
+    NOTICE_LOG_FMT(ROLLBACK, "Queue: frame {}: B held {} frames: orca queue skip", frame,
                    l.skip.frames);
     Orca::Status::Line("orca queue skip");
   }
+  TipFrame(solo_css && alone, after.ready & 1, v.raw[0] & BUTTON_B, frame);
   Text text = TextFor(v, after, ports, local, l.skip.Progress());
   SetQueueLines(std::move(text.line), std::move(text.note), std::move(text.labels), text.locked);
 }

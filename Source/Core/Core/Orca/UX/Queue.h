@@ -28,8 +28,9 @@ class CPUThreadGuard;
 // While searching, the player waits on the local Versus character select where only their own
 // panel works. Picking and pressing Start makes them ready (`orca queue ready <casual|ranked>
 // <char> <costume>`), and B un-readies (`orca queue unready`). Once matched, the joiner's pick is
-// steered onto port 2, and a ready timer runs before the stage select. Casual players can hold Z to
-// skip (`orca queue skip`). Ranked has no skip.
+// steered onto port 2, and a ready timer runs before the stage select. Casual players can hold B to
+// skip (`orca queue skip`). Ranked has no skip. Z is the game's own on every queue character select
+// (Project+'s AltZ costume: hold Z as the select ends).
 //
 // Every in-game decision is a pure function of emulated memory, the frame number and the session's
 // synced values, written to the MatchBlock::QUEUE region only where it differs, so rollback re-runs
@@ -47,7 +48,9 @@ constexpr u32 READY = MatchBlock::QUEUE + 0x00;        // u8: bit p set when por
 constexpr u32 FLAGS = MatchBlock::QUEUE + 0x01;        // u8: FLAG_*
 constexpr u32 TIMEOUT_WHO = MatchBlock::QUEUE + 0x02;  // u8: bit p set when port p timed out
 constexpr u32 LOCKED = MatchBlock::QUEUE + 0x03;       // u8: bit p set when port p is locked in
-// u32: frame + 1 when the ready timer started (0 = not running).
+// u32: frame + 1 when the ready timer started (0 = not running). On the queue's own select, which
+// has no timer: frame + 1 when FLAG_SWALLOW_B began (0 = not swallowing). A new header zeroes the
+// region, so a room never sees the solo meaning.
 constexpr u32 TIMER_START = MatchBlock::QUEUE + 0x04;
 constexpr u32 RAW = MatchBlock::QUEUE + 0x08;       // u16[2]: ports 1, 2's raw buttons, last frame
 constexpr u32 RAW_PREV = MatchBlock::QUEUE + 0x0C;  // u16[2]: the frame before
@@ -68,7 +71,8 @@ static_assert(REGION_END <= MatchBlock::QUEUE + MatchBlock::QUEUE_SIZE);
 constexpr u8 FLAG_GO = 0x01;         // both ready (or ranked timer expired): Orca presses Start
 constexpr u8 FLAG_TIMED_OUT = 0x02;  // casual timer expired: frozen until the players leave
 // The B that cancelled the search is still held. Hide it from the game until released, or the
-// token would be picked back up.
+// token would be picked back up. Held SOLO_LEAVE_FRAMES, it reaches the game, which backs out to
+// the menus as held B does (hold B to leave).
 constexpr u8 FLAG_SWALLOW_B = 0x04;
 // After returning from a room not ready, the Start or A that left the results screen may still be
 // held. It must not start a search until released.
@@ -77,9 +81,14 @@ constexpr u8 FLAG_SWALLOW_START = 0x08;
 // and backs out, so one press does both. Idempotent if the frame is re-run.
 constexpr u8 FLAG_BACK_A = 0x10;
 
-// 30 s to ready up, 1.5 s of Z to skip, at 60 frames per second.
+// 30 s to ready up, 1.5 s of B to skip, at 60 frames per second.
 constexpr int READY_FRAMES = 30 * 60;
 constexpr int SKIP_FRAMES = 90;
+// The skip's bar shows only after this much of a hold, so an ordinary B tap never flashes it.
+constexpr int SKIP_BAR_FRAMES = 15;
+// The queue's own select while searching: B cancels the search; still held this long, it reaches
+// the game, whose own held B backs out to the menus about half a second later.
+constexpr int SOLO_LEAVE_FRAMES = 30;
 // Give up steering port 2's hand after this long; the player then picks by hand.
 constexpr int STEER_LIMIT_FRAMES = 10 * 60;
 // Keep port 2's stick centred this long first. The game calibrates a newly plugged pad's stick
@@ -179,7 +188,7 @@ bool OrderLockedIn(const View& view);
 // casual games wait for both Starts with no clock, to give players time to talk.
 bool Timed(const View& view);
 
-// Whether holding Z may ask to skip this opponent: casual only, both players in, before the go or a
+// Whether holding B may ask to skip this opponent: casual only, both players in, before the go or a
 // timeout. Ranked matches cannot be skipped; leaving any other way is a forfeit.
 bool MaySkip(const View& view, const State& state);
 
@@ -192,16 +201,49 @@ std::string_view UnreadyReason(const View& view, const State& before, const Stat
 // The gate's masks and presses for the frame about to run. Pure.
 Rollback::InputGate::Masks Gate(const View& view, const State& state);
 
-// Z held for SKIP_FRAMES in a row fires one skip; Z must be released before the next. Local only.
+// B held for SKIP_FRAMES in a row fires one skip; B must be released before the next. A tap keeps
+// its own meaning (un-pick, un-ready). Local only.
 struct SkipHold
 {
   int frames = 0;
   bool sent = false;
   // Returns whether a skip fires on this frame.
-  bool Step(bool may_skip, bool z_held);
-  // 0..1 progress toward a skip, for the overlay.
+  bool Step(bool may_skip, bool held);
+  // 0..1 progress toward a skip, for the overlay: 0 until SKIP_BAR_FRAMES.
   float Progress() const;
 };
+
+// The one-time tip on the queue's own select, "New · Hold B to leave": shown the first time a
+// player reaches it after leaving moved from Z to B, for TIP_FRAMES or until they ready (Start)
+// or hold B. Kept as seen (TipSeenPath) once on screen TIP_SEEN_FRAMES, or once they hold B. Local
+// and display only; first runs only. Pure.
+constexpr std::string_view TIP_TEXT = "New \u00b7 Hold B to leave";
+constexpr std::string_view TIP_KEY = "hold-b-leave";
+constexpr int TIP_FRAMES = 6 * 60;
+constexpr int TIP_SEEN_FRAMES = 2 * 60;
+constexpr int TIP_HOLD_FRAMES = 15;  // a B held this long dismisses it
+struct OnceTip
+{
+  bool over = false;  // seen in an earlier run, or done in this one
+  int shown = 0;      // frames on screen
+  bool kept = false;  // kept as seen
+  struct Step
+  {
+    bool show = false;
+    bool keep = false;  // keep it as seen now (once)
+    bool operator==(const Step&) const = default;
+  };
+  // One first-run frame. `on_select`: on the queue's own select, alone. `ready`: searching.
+  // `b_frames`: how long B has been held.
+  Step Frame(bool on_select, bool ready, int b_frames);
+};
+// The seen-file's text: one key per line.
+bool TipSeenIn(std::string_view text, std::string_view key);
+std::string TipSeenWith(std::string text, std::string_view key);
+// <User>/Config/OrcaSeen.txt, beside the kept controls (NameTags.cpp).
+std::string TipSeenPath();
+// The tip to show in the control guide now, or empty. Any thread.
+std::string Tip();
 
 // The overlay's queue text: the top line, a hint under it, and each port's name label and LOCKED IN
 // badge. `local` is this machine's port. Pure, display only.
@@ -329,7 +371,7 @@ int WriteState(GuestMemory& memory, const State& state);
 int Latch(GuestMemory& memory, const std::array<std::optional<GCPadStatus>, 4>& raw);
 
 // ---- The frame hook's part (UX.cpp), after the character order ----
-// Reads, advances and writes the state on every run. On first runs it also prints lines, tracks Z
+// Reads, advances and writes the state on every run. On first runs it also prints lines, tracks B
 // for a skip and updates the overlay.
 void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
            const std::vector<Events::PortInfo>& ports, bool alone);

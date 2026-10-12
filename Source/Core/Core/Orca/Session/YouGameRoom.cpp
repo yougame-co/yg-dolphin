@@ -3325,7 +3325,7 @@ struct YouGameRoom::Impl
     else if (t == "set-over")
     {
       // A ranked set's room after its verdict stays open (relay, chat) until the players leave,
-      // each when their results screen ends or they hold Z, or until `ms` passes and it closes with
+      // each when their results screen ends or they hold B, or until `ms` passes and it closes with
       // 4004. Nothing more is rated or forfeited, and every lobby command is refused ("The set is
       // over").
       const int ms = Int(m, "ms", 0, 3600000).value_or(0);

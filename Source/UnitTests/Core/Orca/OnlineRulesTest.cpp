@@ -428,6 +428,29 @@ TEST(OrcaOnlineRules, TheGateLocksTheMenusOnlyUnderAHeader)
     EXPECT_EQ(mask.buttons, PAD_BUTTON_B | PAD_TRIGGER_L | PAD_TRIGGER_R | PAD_TRIGGER_Z);
 }
 
+// Ranked's results screen keeps B from the game: after the set, holding it leaves the room
+// (OnlineMatch.cpp SetOverLeave), and the hold must never move the other player's game. Casual's
+// results screen keeps its B.
+TEST(OrcaOnlineRules, RankedResultsNeverTakeB)
+{
+  for (Ruleset ruleset : {Ruleset::Brawl, Ruleset::PPlus})
+  {
+    FakeMemory ranked = Locked(Mode::Ranked, ruleset, "scVsResult");
+    for (const auto& mask : GateMasks(ranked))
+    {
+      EXPECT_EQ(mask.buttons, PAD_BUTTON_B);
+      EXPECT_EQ(mask.press, 0);
+    }
+    FakeMemory casual = Locked(Mode::Casual, ruleset, "scVsResult");
+    for (const auto& mask : GateMasks(casual))
+      EXPECT_EQ(mask.buttons & PAD_BUTTON_B, 0);
+    // Ranked's fight is unchanged: only Start.
+    SetScene(ranked, "scMelee");
+    for (const auto& mask : GateMasks(ranked))
+      EXPECT_EQ(mask.buttons, PAD_BUTTON_START);
+  }
+}
+
 // The results screen's Z (its replay save, a dead end in a session) is masked in every session's
 // game, with a header or without (a friends game, solo play), and nowhere else.
 TEST(OrcaOnlineRules, TheResultsScreenNeverTakesZ)
