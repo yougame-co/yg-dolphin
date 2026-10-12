@@ -7,6 +7,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "Common/CommonTypes.h"
 #include "Core/Orca/Engine/Display.h"
@@ -23,20 +24,19 @@ class CPUThreadGuard;
 // emulated memory and the frame number, and only changed bytes are written, so a rollback re-run
 // writes nothing new. See ORCA.md, "Ranked sets".
 //
-// Brawl time-outs go to the ledge-grab limit, then stocks, then percent. A level game or a sudden
-// death is a tie, replayed as a 1 stock, 3:00 tiebreak game. Five ties in a row void the set.
-// Project+'s own codeset already settles time-outs, so its results screen's winner stands.
-// The set ends at 2 wins, or is void after SetBlock::MAX_RECORDS games.
+// The numbers are the ruleset's (Games/Brawl/Rulesets.h, data): a ruleset whose time-outs are judged
+// (Brawl Supernova 2025) sends them to the ledge-grab limit, then stocks, then percent, and a level
+// game or a sudden death is a tie, replayed as its tiebreak game (1 stock, 3:00); one whose results
+// screen decides (Project+ 2024: its own codeset settles time-outs) keeps the screen's winner. Its
+// ties in a row (5) void the set. The set ends at its wins (2), or is void after
+// SetBlock::MAX_RECORDS games.
+namespace Orca::UX::Ranked
+{
+struct Ruleset;
+}
+
 namespace Orca::UX::RankedSet
 {
-constexpr int WINS = 2;
-constexpr int TIEBREAK_STREAK_LIMIT = 5;
-constexpr int LEDGE_LIMIT = 35;
-constexpr int LEDGE_LIMIT_MK = 20;
-constexpr int LEDGE_LIMIT_TIEBREAK = 11;
-constexpr int LEDGE_LIMIT_TIEBREAK_MK = 6;
-// gmCharacterKind of Meta Knight in the result info.
-constexpr u8 META_KNIGHT = 0x18;
 
 // The fight's live state on one frame.
 struct Live
@@ -69,10 +69,11 @@ std::optional<SetBlock::GameRecord> Judge(SetBlock::Ruleset ruleset, const SetBl
 SetBlock::SetState Step(SetBlock::SetState set, SetBlock::Ruleset ruleset, const Facts& facts,
                         u32 frame);
 
-// Writes a Brawl ranked game's rules on the menus: 3 stocks and 8:00, or 1 stock and 3:00 for a
-// tiebreak. Returns how many bytes changed.
-int WriteSetRules(GuestMemory& memory, const SetBlock::SetState& set, u8 stocks = 3,
-                  u8 minutes = 8);
+// Writes a ranked game's rules on the menus, for a ruleset with a tiebreak game: its stocks and
+// minutes (Brawl: 3 and 8:00), or its tiebreak's (1 and 3:00). `stocks`/`minutes` override the
+// regular game's (the ORCA_TEST_SET_RULES knob). Returns how many bytes changed.
+int WriteSetRules(GuestMemory& memory, const SetBlock::SetState& set, const Ranked::Ruleset& rules,
+                  std::optional<std::pair<u8, u8>> stocks_minutes = std::nullopt);
 
 // Read-only. Invalid where the fight can't be read.
 Live ReadLiveFight(const GuestMemory& memory);

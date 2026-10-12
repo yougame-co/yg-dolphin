@@ -155,6 +155,10 @@ struct Ruleset
   // is a no-show.
   u16 css_ready_seconds = 60;
 
+  // A set with a tiebreak game writes each game's stocks and minutes itself (RankedSet.h); without
+  // one, the locks write the set's for every game (OnlineRules).
+  bool SetWritesGameRules() const { return tiebreak; }
+
   StageMask All() const { return static_cast<StageMask>((1u << stage_count) - 1); }
 };
 
