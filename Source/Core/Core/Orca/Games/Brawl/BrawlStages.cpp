@@ -25,7 +25,7 @@ namespace Orca::UX::BrawlStages
 {
 static_assert(kBlock == FreeSpace::kMatchBlock.begin);
 static_assert(kRegion >= FreeSpace::kMatchBlock.begin &&
-              kRegion + kRegionSize <= FreeSpace::kMatchBlock.end);
+              kRegion + kRegionSize <= FreeSpace::kMatchBlockHead.end);
 static_assert(kResultsSet + 0x80 <= FreeSpace::kMatchBlockLimit);
 
 namespace RS = Ranked;

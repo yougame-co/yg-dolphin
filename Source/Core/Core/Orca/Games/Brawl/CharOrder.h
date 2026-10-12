@@ -70,7 +70,7 @@ namespace Orca::UX::CharOrder
 
 // 16 bytes right after the 512-byte match block: +0 kMagic, +4 game, +5 step, +6 first,
 // +7 locked, +8 since, +0xC elapsed, +0xE held, +0xF 0. Anything without the magic reads as Idle.
-constexpr u32 kArea = FreeSpace::kMatchBlock.end;
+constexpr u32 kArea = FreeSpace::kMatchBlockHead.end;
 constexpr u32 kAreaSize = 0x10;
 constexpr u32 kMagic = 0x5947434F;  // "YGCO"
 static_assert(kArea % 16 == 0 && kArea + kAreaSize <= FreeSpace::kMatchBlockLimit &&
@@ -79,7 +79,7 @@ static_assert(kArea % 16 == 0 && kArea + kAreaSize <= FreeSpace::kMatchBlockLimi
 // +4 + 4 * port s16 x, s16 y. Read only with kArea's magic.
 constexpr u32 kAnchorArea = FreeSpace::kMatchBlock.begin + 0x1F4;
 constexpr u32 kAnchorAreaSize = 0x0C;
-static_assert(kAnchorArea + kAnchorAreaSize <= FreeSpace::kMatchBlock.end &&
+static_assert(kAnchorArea + kAnchorAreaSize <= FreeSpace::kMatchBlockHead.end &&
               FreeSpace::Detail::Free({kAnchorArea, kAnchorArea + kAnchorAreaSize}));
 
 // Match block offsets ReadSet() uses (header: MatchBlock.h; set: SetBlock.h).

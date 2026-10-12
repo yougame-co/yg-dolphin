@@ -49,7 +49,7 @@ class GuestMemory;
 namespace Orca::UX::MatchBlock
 {
 constexpr u32 BASE = FreeSpace::kMatchBlock.begin;  // 0x806F2380
-constexpr u32 SIZE = FreeSpace::kMatchBlock.Size();  // 512
+constexpr u32 SIZE = FreeSpace::kMatchBlockHead.Size();  // 512
 // Including the free tail up to the next relocated word.
 constexpr u32 FULL_SIZE = FreeSpace::kMatchBlockLimit - FreeSpace::kMatchBlock.begin;
 
@@ -178,7 +178,7 @@ static_assert(CSS_TIMER_START + 4 <= BASE + 0xC0 + PHASE1_SIZE);
 //            +0x8E u8 auto pick's A pressed this frame
 //            +0x8F u8 why the flow is picking (AUTO_*)
 constexpr u32 STATE_SIZE = 0x90;
-static_assert(BASE + STATE_SIZE <= FreeSpace::kMatchBlock.end);
+static_assert(BASE + STATE_SIZE <= FreeSpace::kMatchBlockHead.end);
 
 constexpr u8 MODE_NONE = 0;
 constexpr u8 MODE_CASUAL = 1;

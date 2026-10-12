@@ -36,6 +36,7 @@
 #include "Core/Orca/UX/ControllerSource.h"
 #include "Core/Orca/UX/Controllers.h"
 #include "Core/Orca/Games/Brawl/FreeSpace.h"
+#include "Core/Orca/Games/Brawl/MatchBlock.h"
 #include "Core/Orca/UX/GamePatches.h"
 #include "Core/Orca/Engine/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/NameTags.h"
@@ -1744,6 +1745,15 @@ TEST(OrcaUXFreeSpace, TheBlockAndTheCavesFitAndNoShippedPatchStraysIntoThem)
   using namespace FreeSpace;
   // Room for the ~96-byte header and set state, and code space for the lock patches.
   EXPECT_GE(kMatchBlock.Size(), 96u);
+  // kMatchBlock is all of the block, as MatchBlock.h lays it out (its last field ends at the next
+  // relocated word), and its head the first 512 bytes the block's codecs count in.
+  EXPECT_EQ(kMatchBlock.begin, MatchBlock::BASE);
+  EXPECT_EQ(kMatchBlock.end, MatchBlock::FRIENDS_END);
+  EXPECT_EQ(kMatchBlock.Size(), MatchBlock::FULL_SIZE);
+  EXPECT_EQ(kMatchBlockHead.Size(), 512u);
+  EXPECT_EQ(kMatchBlockHead.Size(), MatchBlock::SIZE);
+  for (const FreeSpace::Range& cave : kCodeCaves)
+    EXPECT_FALSE(cave.Overlaps(kMatchBlock)) << std::hex << cave.begin;
   u32 cave_bytes = 0;
   for (const FreeSpace::Range& cave : kCodeCaves)
     cave_bytes += cave.Size();

@@ -1503,7 +1503,9 @@ loader relocates against `sora_melee`, and `0x806F3DA4`, which Project+'s codese
 visits, twice: once watching the block and caves (they keep the game's own bytes, and nothing writes
 them), once with them filled with illegal instructions (none ever runs, the fill survives, and every
 RAM dump is byte-identical to the first run's outside the block and caves). Sync tests and keyframe
-tests pass with the fill.
+tests pass with the fill. The tool reads the ranges from the header: until S5, FreeSpace.h's
+`kMatchBlock` was only the block's first 512 bytes (`kMatchBlockHead` now), so the last 152
+(`0x806F2580`-`0x806F2618`: character order, ranked set, friend drop-in) were not in the proof.
 
 **Using it.** Before Orca writes it, the block holds code (its first word is `li r17, 0`), so
 readers check the magic. Only Orca's frame hook writes the block, never a patch group. A cave is a
