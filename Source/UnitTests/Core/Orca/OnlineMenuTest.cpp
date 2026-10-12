@@ -2340,7 +2340,7 @@ TEST(OrcaOnlineMenuLobby, EveryCapFitsTheAppsCapsLine)
 {
   // Apps before the Music switch's release read at most 16 caps words; desktop 0.12.39 and later
   // read 24. With "gfx" (17) Orca needs at least that app; its manifest asks for 0.12.41, the app
-  // that sends "gfx".
+  // that sends "gfx". "talk" (18) comes last.
   // The most any profile offers is all of them.
   const std::string all = fmt::format(
       "{} {} {} {} {} {}", Orca::Status::CAPS, Orca::Status::MUSIC_CAP, Orca::Status::RESULTS_CAP,
@@ -2352,7 +2352,9 @@ TEST(OrcaOnlineMenuLobby, EveryCapFitsTheAppsCapsLine)
     ++count;
     EXPECT_LE(word.size(), 24u) << word;
   }
-  EXPECT_LE(count, 24);
+  EXPECT_LE(count + 1, 24) << Orca::Status::TALK_CAP;
+  const std::string offered = Orca::Status::OfferedCaps();
+  EXPECT_EQ(offered.substr(offered.rfind(' ') + 1), Orca::Status::TALK_CAP);
 }
 
 TEST(OrcaOnlineMenuLobby, APickWithNobodyToLeaveIsAnnounced)

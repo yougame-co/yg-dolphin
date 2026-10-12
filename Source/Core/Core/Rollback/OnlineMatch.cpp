@@ -3409,7 +3409,8 @@ std::vector<int> LeftSeatsInPlay(const Match& match)
 
 std::optional<int> Boundary(Core::System& system,
                             const std::function<Orca::Net::Pad(int local_seat)>& local_pad,
-                            const FrameHook& on_frame)
+                            const FrameHook& on_frame,
+                            const std::function<void(int local_seat)>& local_pad_waiting)
 {
   Match& match = TheMatch();
   if (match.stale)
@@ -3784,6 +3785,10 @@ std::optional<int> Boundary(Core::System& system,
     const Orca::Net::Step step = StepSession(
         *match.session, *match.port, match.running, [&] { return local_pad(match.local_seat); },
         [&] {
+          // A talk press still down ends when Start is let go, not when the game moves again.
+          // Host only: it reads the pad without recording or sending it (UX/OrbCombo.h).
+          if (local_pad_waiting)
+            local_pad_waiting(match.local_seat);
           const auto now = Clock::now();
           if (now - stall_published > std::chrono::milliseconds(10))
           {
@@ -4191,7 +4196,8 @@ void SetOverLeave(Match& match)
 
 std::optional<int> OnBoundary(Core::System& system,
                               const std::function<Orca::Net::Pad(int local_seat)>& local_pad,
-                              const FrameHook& on_frame)
+                              const FrameHook& on_frame,
+                              const std::function<void(int local_seat)>& local_pad_waiting)
 {
   s_solo_idle = false;
   PerfBoundary(TheMatch());
@@ -4202,7 +4208,7 @@ std::optional<int> OnBoundary(Core::System& system,
     s_local_pad = pad;
     return pad;
   };
-  const std::optional<int> rewound_to = Boundary(system, seen, on_frame);
+  const std::optional<int> rewound_to = Boundary(system, seen, on_frame, local_pad_waiting);
   if (TheMatch().replaying || (was_replaying && !TheMatch().session))
   {
     s_solo_idle = SoloIdle(TheMatch());

@@ -8,6 +8,7 @@
 #include "Core/Core.h"
 #include "Core/Orca/Sandbox.h"
 #include "Core/Orca/Status.h"
+#include "Core/Orca/UX/OverlayKey.h"
 #include "Core/Orca/UX/YgOrb.h"
 #include "Core/System.h"
 
@@ -17,6 +18,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <dwmapi.h>
+#include <string>
+#include <string_view>
 #include <windowsx.h>
 
 #include "VideoCommon/Present.h"
@@ -24,6 +27,13 @@
 
 namespace
 {
+// Prints a line from Orca/UX/OverlayKey.h, if any.
+void OutKey(std::string_view line)
+{
+  if (!line.empty())
+    Embed::Out(std::string(line));
+}
+
 class PlatformWin32 final : public Platform
 {
 public:
@@ -315,6 +325,9 @@ void PlatformWin32::EmbedSetRect(const Embed::Rect& r)
 
 void PlatformWin32::EmbedSetVisible(bool visible)
 {
+  // A hidden window gets no key-up: a Shift+Tab press still down ends here.
+  if (!visible)
+    OutKey(Orca::UX::OverlayKey::Keys().Cancel());
   m_embed_visible = visible;
   ShowWindow(m_hwnd, visible ? SW_SHOWNA : SW_HIDE);
   UpdateEmbedFocus();
@@ -382,21 +395,35 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
       // Ignore auto-repeat, so a held F11 doesn't toggle full screen over and over.
       if (lParam & (1 << 30))
         break;
-      // Forward the keys the page cares about, since it can't see them here. Shift+Tab opens the
-      // YouGame overlay, the same as clicking the YouGame button.
+      // Forward the keys the page cares about, since it can't see them here. Shift+Tab is
+      // YouGame's overlay key: "orca orb" opens the overlay, the same as clicking the YouGame
+      // button; with the app's "talk" cap its press and release go instead, and holding it talks
+      // (Orca/UX/OverlayKey.h).
       if (wParam == VK_ESCAPE)
         Embed::Out("key escape");
       else if (wParam == VK_F11)
         Embed::Out("key fullscreen");
       else if (wParam == VK_TAB && (GetKeyState(VK_SHIFT) & 0x8000) &&
                !(GetKeyState(VK_CONTROL) & 0x8000) && !(GetKeyState(VK_MENU) & 0x8000))
-        Embed::Out("orca orb");
+        OutKey(Orca::UX::OverlayKey::Keys().Down(Orca::Status::Cap(Orca::Status::TALK_CAP)));
     }
     else if (wParam == VK_ESCAPE)
     {
       platform->RequestShutdown();
     }
     break;
+
+  // The end of a Shift+Tab press: Tab or Shift let go.
+  case WM_KEYUP:
+    if (platform && platform->IsEmbedded() && (wParam == VK_TAB || wParam == VK_SHIFT))
+      OutKey(Orca::UX::OverlayKey::Keys().Up());
+    return DefWindowProc(hwnd, msg, wParam, lParam);
+
+  // The keyboard went elsewhere, so a Shift+Tab press still down never sees its key-up here.
+  case WM_KILLFOCUS:
+    if (platform && platform->IsEmbedded())
+      OutKey(Orca::UX::OverlayKey::Keys().Cancel());
+    return DefWindowProc(hwnd, msg, wParam, lParam);
 
   // When embedded, Alt and F10 are game keys, so don't let them open the app's window menu.
   // Alt+F4 still closes the app.

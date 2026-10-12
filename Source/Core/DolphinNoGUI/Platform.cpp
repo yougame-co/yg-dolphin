@@ -554,6 +554,16 @@ void Platform::ProcessEmbedCommands()
       else
         Embed::Out("unsupported notice");
     }
+    else if (cmd == "talk")
+    {
+      // Hold-to-talk's row beside the YouGame button, replaced by each line, with the app's "talk"
+      // cap (UX/YgOrb.h). Players' words are never printed or logged.
+      std::optional<Orca::UX::YgOrb::Talk> talk = Orca::UX::YgOrb::ParseTalk(line);
+      if (talk && Orca::Status::Cap(Orca::Status::TALK_CAP))
+        Orca::UX::YgOrb::SetTalk(std::move(*talk));
+      else
+        Embed::Out("unsupported talk");
+    }
     else if (cmd == "test-shot" && Orca::GetEnv("ORCA_TEST_COMMANDS") == "1")
     {
       // Tests only: save a screenshot <name>.png (a-z 0-9 - _) at the next present into the user

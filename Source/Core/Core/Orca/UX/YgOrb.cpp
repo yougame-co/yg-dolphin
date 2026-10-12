@@ -135,6 +135,60 @@ std::optional<Notice> ParseNotice(std::string_view line)
   return n;
 }
 
+std::optional<Talk> ParseTalk(std::string_view line)
+{
+  const std::vector<std::string_view> f = Fields(line);
+  if (f.empty() || f[0] != "talk")
+    return std::nullopt;
+  Talk t;
+  if (f.size() == 2 && f[1] == "off")
+    return t;
+  if (f.size() != 4)
+    return std::nullopt;
+  if (f[1] == "listen")
+    t.phase = Talk::Phase::Listen;
+  else if (f[1] == "send")
+    t.phase = Talk::Phase::Send;
+  else if (f[1] == "sent")
+    t.phase = Talk::Phase::Sent;
+  else if (f[1] == "error")
+    t.phase = Talk::Phase::Error;
+  else
+    return std::nullopt;
+  std::optional<std::string> name = Chat::DecodeField(f[2], Chat::NAME_ENCODED, Chat::NAME_POINTS);
+  std::optional<std::string> text = Chat::DecodeField(f[3], Chat::TEXT_ENCODED, Chat::TEXT_POINTS);
+  if (!name || !text)
+    return std::nullopt;
+  t.name = std::move(*name);
+  t.text = std::move(*text);
+  return t;
+}
+
+double TalkDwellMs(Talk::Phase phase)
+{
+  switch (phase)
+  {
+  case Talk::Phase::Off:
+    return 0;
+  case Talk::Phase::Listen:
+  case Talk::Phase::Send:
+    return TALK_STALE_MS;
+  case Talk::Phase::Sent:
+    return 3000;
+  case Talk::Phase::Error:
+    return 4000;
+  }
+  return 0;
+}
+
+float TalkAlpha(const Talk& talk, double at_ms, double now_ms)
+{
+  const double left = TalkDwellMs(talk.phase) - (now_ms - at_ms);
+  if (left <= 0)
+    return 0;
+  return static_cast<float>(std::min(1.0, left / Model::FADE_MS));
+}
+
 Place ScaledPlace(const Place& place, float view_width, float display_width)
 {
   if (!(view_width > 0) || !(display_width > 0))
@@ -183,6 +237,11 @@ void Model::Apply(const Command& command, double now_ms)
       m_lines.clear();
       ++m_generation;
     }
+    if (m_talk.talk.phase != Talk::Phase::Off)
+    {
+      m_talk = TalkEntry{};
+      ++m_talk_generation;
+    }
     break;
   case Command::Type::Blink:
     m_blink_at = now_ms;
@@ -212,6 +271,15 @@ void Model::Add(Notice notice, double now_ms)
   ++m_generation;
 }
 
+void Model::SetTalk(Talk talk, double now_ms)
+{
+  std::lock_guard lock(m_lock);
+  if (talk.phase == Talk::Phase::Listen && m_talk.talk.phase != Talk::Phase::Listen)
+    m_listen_at = now_ms;
+  m_talk = TalkEntry{now_ms, std::move(talk)};
+  ++m_talk_generation;
+}
+
 Model::View Model::At(double now_ms) const
 {
   std::lock_guard lock(m_lock);
@@ -224,11 +292,20 @@ Model::View Model::At(double now_ms) const
     if (age >= 0 && age < RING_MS * RINGS)
       v.ring = static_cast<float>(std::fmod(age, RING_MS) / RING_MS);
   }
+  const bool talking = TalkAlpha(m_talk.talk, m_talk.at, now_ms) > 0;
+  // A blink comes first; otherwise the listening pulse, from the line that opened the mic.
+  if (m_on && v.ring < 0 && talking && m_talk.talk.phase == Talk::Phase::Listen)
+  {
+    const double age = std::max(0.0, now_ms - m_listen_at);
+    v.ring = static_cast<float>(std::fmod(age, LISTEN_RING_MS) / LISTEN_RING_MS);
+    v.listening = true;
+  }
   v.generation = m_generation;
+  v.talk_generation = m_talk_generation;
   v.view_width = static_cast<float>(m_view_width);
-  v.showing = std::any_of(m_lines.begin(), m_lines.end(), [&](const Entry& e) {
-    return LineAlpha(e.notice, e.at, now_ms) > 0;
-  });
+  v.showing = talking || std::any_of(m_lines.begin(), m_lines.end(), [&](const Entry& e) {
+                return LineAlpha(e.notice, e.at, now_ms) > 0;
+              });
   return v;
 }
 
@@ -244,6 +321,14 @@ std::uint64_t Model::Lines(std::uint64_t generation, std::vector<Entry>* out) co
   if (generation != m_generation)
     out->assign(m_lines.begin(), m_lines.end());
   return m_generation;
+}
+
+std::uint64_t Model::TalkRow(std::uint64_t generation, TalkEntry* out) const
+{
+  std::lock_guard lock(m_lock);
+  if (generation != m_talk_generation)
+    *out = m_talk;
+  return m_talk_generation;
 }
 
 bool Model::Hit(float x, float y) const
@@ -277,6 +362,11 @@ void Apply(const Command& command)
 void Show(Notice notice)
 {
   Current().Add(std::move(notice), NowMs());
+}
+
+void SetTalk(Talk talk)
+{
+  Current().SetTalk(std::move(talk), NowMs());
 }
 
 void SetViewSize(int width, int height)

@@ -24,6 +24,7 @@
 #include "Core/Orca/UX/Kit.h"
 #include "Core/Orca/UX/NativeText.h"
 #include "Core/Orca/UX/OnlineMenu.h"
+#include "Core/Orca/UX/OrbCombo.h"
 #include "Core/Orca/UX/Queue.h"
 #include "Core/Orca/UX/RankedPPlus.h"
 #include "Core/Orca/UX/RankedSet.h"
@@ -1400,12 +1401,15 @@ void InitOverlay()
     s_stats = v[0] == '2' ? Stats::Full : Stats::Ping;
   if (const char* v = std::getenv("ORCA_UX_OVERLAY_DEMO"); v && v[0] == '1')
     s_demo = true;
-  // A pause must not count as a slow frame. Runs on whichever thread pauses.
+  // A pause must not count as a slow frame. Runs on whichever thread pauses. A paused or stopping
+  // game reads no pad, so a held controller shortcut ends there (hold-to-talk, UX/OrbCombo.h).
   s_state_hook = Core::AddOnStateChangedCallback([](Core::State state) {
     if (state == Core::State::Paused)
       s_overlay.Pause(NowMs());
     else if (state == Core::State::Running)
       s_overlay.Resume(NowMs());
+    if (state == Core::State::Paused || state == Core::State::Stopping)
+      LocalPadStopped();
   });
   OSD::SetHostOverlay(&Draw, &Kit::ReleaseGpu);
 }
