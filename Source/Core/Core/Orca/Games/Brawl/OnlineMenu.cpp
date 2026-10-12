@@ -17,6 +17,7 @@
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/Session/Replay.h"
 #include "Core/Orca/Status.h"
+#include "Core/Orca/Games/Brawl/BrawlModule.h"
 #include "Core/Orca/Games/Brawl/CssTitle.h"
 #include "Core/Orca/Games/Brawl/MatchBlock.h"
 #include "Core/Orca/Engine/GuestMemory.h"
@@ -64,18 +65,11 @@ std::string ReadManagerName(const GuestMemory& m, u32 field)
   return {};  // not a name
 }
 
-// Brawl rev 2, or a launcher profile that boots it (Project+). The addresses are for that build.
+// Brawl rev 2, or a launcher profile that boots it (Project+), whose addresses hold (in mod mode,
+// while the builtin's guard words hold): the module's answer (BrawlGame.h).
 bool BrawlExecutable()
 {
-  // Mod mode: the mod's builtin, while its guard words hold (Core/Orca/Mod.h).
-  if (Orca::Mod::ActiveMod())
-  {
-    return Orca::Mod::BuiltinOn(Orca::Mod::Builtin::BrawlRev2) ||
-           Orca::Mod::BuiltinOn(Orca::Mod::Builtin::BrawlRev2PPlus);
-  }
-  const Orca::Profile* profile = Orca::ActiveProfile();
-  return profile && profile->revision == 2 &&
-         (profile->IsLauncher() ? profile->disc == "RSBE01" : profile->game_id == "RSBE01");
+  return Builtin().Active();
 }
 }  // namespace
 
@@ -596,9 +590,7 @@ bool Supported()
   // first read (Project+'s codes land in frame 1): in mod mode, the builtin mod.json declares. The
   // menu is still read only while the guards hold (Frame), so a mod that moved what the builtin
   // relies on never finds a built menu, gets no origin and takes no players, on every machine alike.
-  if (Orca::Mod::ActiveMod())
-    return Orca::Mod::DeclaredBuiltin() != Orca::Mod::Builtin::None;
-  return BrawlExecutable();
+  return !Builtin().Describe().id.empty();
 }
 }  // namespace FreshMove
 }  // namespace Orca::UX

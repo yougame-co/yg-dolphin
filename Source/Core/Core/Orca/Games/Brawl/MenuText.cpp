@@ -9,8 +9,8 @@
 #include <vector>
 
 #include "Common/Logging/Log.h"
-#include "Core/Orca/Profile.h"
 #include "Core/Orca/Engine/GuestMemory.h"
+#include "Core/Orca/Games/Brawl/BrawlModule.h"
 
 namespace Orca::UX
 {
@@ -309,21 +309,9 @@ int ApplyMenuText(GuestMemory& m, std::span<const MenuTextEdit> edits, int* in_b
 void WriteMenuText(const Core::CPUThreadGuard& guard)
 {
   // Brawl rev 2, directly or via a launcher profile (Project+); in mod mode, the mod's builtin while
-  // its guard words hold.
-  const Orca::Profile* profile = Orca::ActiveProfile();
-  if (profile && profile->mod)
-  {
-    if (!Orca::Mod::BuiltinOn(Orca::Mod::Builtin::BrawlRev2) &&
-        !Orca::Mod::BuiltinOn(Orca::Mod::Builtin::BrawlRev2PPlus))
-    {
-      return;
-    }
-  }
-  else if (!profile || profile->revision != 2 ||
-      (profile->IsLauncher() ? profile->disc != "RSBE01" : profile->game_id != "RSBE01"))
-  {
+  // its guard words hold: the module's answer (BrawlGame.h).
+  if (!Builtin().Active())
     return;
-  }
   GuardMemory memory(guard);
   int in_box = 0;
   if (const int n = ApplyMenuText(memory, MenuTextEdits(), &in_box))

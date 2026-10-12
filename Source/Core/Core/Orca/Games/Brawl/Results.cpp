@@ -12,6 +12,7 @@
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/Engine/GuestMemory.h"
+#include "Core/Orca/Games/Brawl/BrawlModule.h"
 #include "Core/Orca/Games/Brawl/OnlineMenu.h"
 
 namespace Orca::UX
@@ -364,17 +365,9 @@ ResultsTracker& Tracker()
 
 bool ResultsVerified()
 {
-  // Mod mode: the mod's builtin, while its guard words hold (Core/Orca/Mod.h).
-  if (Orca::Mod::ActiveMod())
-  {
-    return Orca::Mod::BuiltinOn(Orca::Mod::Builtin::BrawlRev2) ||
-           Orca::Mod::BuiltinOn(Orca::Mod::Builtin::BrawlRev2PPlus);
-  }
-  const Orca::Profile* profile = Orca::ActiveProfile();
-  if (!profile || profile->revision != 2)
-    return false;
-  // Project+'s launcher boots Brawl rev 2's executable, so scenes and result info match.
-  return profile->IsLauncher() ? profile->disc == "RSBE01" : profile->game_id == "RSBE01";
+  // Brawl rev 2 or a launcher booting its executable (Project+), whose scenes and result info
+  // match, while the module's addresses hold (BrawlGame.h).
+  return Builtin().Active() && Builtin().Describe().results;
 }
 
 void ReadResultsFrame(const Core::CPUThreadGuard& guard, int frame)
