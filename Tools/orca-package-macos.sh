@@ -21,6 +21,9 @@
 # ORCA_BUNDLE_PUBLIC_KEY (64 lowercase hex digits) is the key flat bundles must be signed with
 # (ORCA.md "Flat bundles"); unset, the build trusts none and refuses every bundle. The TEST key is
 # never trusted in a package: the build turns it off and the executable is checked for it.
+# ORCA_STAGING_BUILD=1 marks a staging build (YouGame's staging scripts set it): only such a build
+# may pin the STAGING flat-bundle key, and it is never a public release. Any other build refuses
+# that key, as ORCA_BUNDLE_PUBLIC_KEY and in the executable, the same way it refuses the TEST key.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -53,10 +56,21 @@ esac
 
 # The bundle-flat TEST key (Source/Core/Core/Orca/Bundle.cpp).
 TEST_BUNDLE_KEY=afb9463d5c16f0f617432d76f75f37a8c649e36d7c626088ba00b19dea115a43
+# The STAGING flat-bundle key's public half (staging builds only, 2026-10-12; its private half never
+# leaves the lead's staging folder). orca-package-linux.sh and orca/bundle-key-guard.py carry it too.
+STAGING_BUNDLE_KEY=8422b8b28b82aff024427d77e6c72a38d9ea75bcb6533fe706c61006f742c0ab
+STAGING=0
+case "${ORCA_STAGING_BUILD:-}" in
+"" | 0) ;;
+1) STAGING=1 ;;
+*) fail "ORCA_STAGING_BUILD is 1 or unset, not ${ORCA_STAGING_BUILD}" ;;
+esac
 BUNDLE_KEY="${ORCA_BUNDLE_PUBLIC_KEY:-}"
 if [ -n "$BUNDLE_KEY" ]; then
   [[ "$BUNDLE_KEY" =~ ^[0-9a-f]{64}$ ]] || fail "ORCA_BUNDLE_PUBLIC_KEY is not 64 lowercase hex digits"
   [ "$BUNDLE_KEY" != "$TEST_BUNDLE_KEY" ] || fail "ORCA_BUNDLE_PUBLIC_KEY is the TEST key"
+  [ "$BUNDLE_KEY" != "$STAGING_BUNDLE_KEY" ] || [ "$STAGING" = 1 ] ||
+    fail "ORCA_BUNDLE_PUBLIC_KEY is the STAGING key: only a staging build (ORCA_STAGING_BUILD=1) pins it"
 fi
 
 RELEASE=0
@@ -109,6 +123,8 @@ PLIST_VERSION="${PLIST_VERSION:-0.0.0}"
 if [ "$RELEASE" = 1 ]; then
   [ -z "$DIRTY" ] || fail "a signed build needs a clean tree (untracked files included)$DIRTY"
 fi
+[ "$STAGING" = 0 ] || [ "$RELEASE" = 0 ] || [ "$INTERNAL" = 1 ] ||
+  fail "a staging build (ORCA_STAGING_BUILD=1) is never a public release"
 if [ "$RELEASE" = 1 ] && [ "$INTERNAL" = 0 ]; then
   [ -n "$TAG" ] || fail "a release needs a yg-baiji-<version> tag on HEAD"
   # Anonymous, so a private repository can't pass: players must be able to fetch it.
@@ -155,16 +171,21 @@ STRINGS_OUT="$(mktemp)"
 strings -a "$EXE" > "$STRINGS_OUT" || { rm -f "$STRINGS_OUT"; fail "strings could not read $EXE"; }
 [ -s "$STRINGS_OUT" ] || { rm -f "$STRINGS_OUT"; fail "strings found nothing in $EXE"; }
 LEAKS="$(grep -F -e "$ROOT/" -e "$BUILD_DIR/" -e "${HOME:-$ROOT}/" "$STRINGS_OUT" | sort -u | head -n 5 || true)"
-# Flat bundles: never the TEST key; the pinned key when there is one (Bundle.cpp logs both by text).
+# Flat bundles: never the TEST key, the STAGING key only in a staging build, and the pinned key when
+# there is one (Bundle.cpp keeps them as text).
 if grep -qF "$TEST_BUNDLE_KEY" "$STRINGS_OUT"; then
   rm -f "$STRINGS_OUT"
   fail "the executable trusts the bundle-flat TEST key"
+fi
+if [ "$STAGING" = 0 ] && grep -qF "$STAGING_BUNDLE_KEY" "$STRINGS_OUT"; then
+  rm -f "$STRINGS_OUT"
+  fail "the executable trusts the STAGING bundle key, and this is not a staging build"
 fi
 if [ -n "$BUNDLE_KEY" ] && ! grep -qF "$BUNDLE_KEY" "$STRINGS_OUT"; then
   rm -f "$STRINGS_OUT"
   fail "the executable doesn't hold ORCA_BUNDLE_PUBLIC_KEY"
 fi
-echo "orca-package: flat bundles: ${BUNDLE_KEY:-off (no ORCA_BUNDLE_PUBLIC_KEY: every bundle is refused)}"
+echo "orca-package: flat bundles: ${BUNDLE_KEY:-off (no ORCA_BUNDLE_PUBLIC_KEY: every bundle is refused)}$([ "$STAGING" = 0 ] || echo " (STAGING build)")"
 rm -f "$STRINGS_OUT"
 [ -z "$LEAKS" ] || fail "the executable still names build-machine paths, e.g.:
 $LEAKS"
