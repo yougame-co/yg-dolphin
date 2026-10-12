@@ -1025,6 +1025,66 @@ TEST(OrcaMod, GameIdentityIsTheModules)
   File::DeleteDirRecursively(n.dir);
 }
 
+// S3: the harness reads scene names where the module says it can (Rollback/Harness.cpp's
+// scene-relative inputs): Dolphin running Brawl rev 2, a mod with a builtin, or a launcher profile
+// booting Brawl rev 2, whatever its build or mode; else not at all.
+TEST(OrcaMod, SceneNamesAreTheModules)
+{
+  struct ProfileDone
+  {
+    ~ProfileDone() { Orca::SetActiveProfile(std::nullopt); }
+  } profile_done;
+  Orca::UX::BrawlModule& module = Orca::UX::Builtin();
+  // `readable`: with no game running in Dolphin (the harness passes SConfig's ID and revision).
+  const auto readable = [&module] { return module.ScenesReadable("", 0); };
+  Orca::SetActiveProfile(std::nullopt);
+  EXPECT_FALSE(readable());
+  // Dolphin running Brawl rev 2 is enough, with no profile at all; another revision is not.
+  EXPECT_TRUE(module.ScenesReadable("RSBE01", 2));
+  EXPECT_FALSE(module.ScenesReadable("RSBE01", 1));
+  EXPECT_FALSE(module.ScenesReadable("RMCE01", 2));
+  Orca::Profile disc;
+  disc.game_id = "RSBE01";
+  disc.revision = 2;
+  // A disc profile reads them through Dolphin's running game only.
+  Orca::SetActiveProfile(disc);
+  EXPECT_FALSE(readable());
+  Orca::Profile launcher;
+  launcher.game_id = "LXP";
+  launcher.revision = 2;
+  launcher.launcher_hash = std::string(32, '0');
+  launcher.disc = "RSBE01";
+  Orca::SetActiveProfile(launcher);
+  EXPECT_TRUE(readable());
+  launcher.revision = 1;
+  Orca::SetActiveProfile(launcher);
+  EXPECT_FALSE(readable());
+
+  std::string error;
+  Bundle b = MakeBundle(BRAWL_MOD);
+  b.WriteTree();
+  auto brawl = Orca::LoadModProfile(b.dir, &error);
+  ASSERT_TRUE(brawl) << error;
+  Orca::SetActiveProfile(brawl);
+  EXPECT_TRUE(readable());  // declared, guards or not
+  picojson::value plain;
+  picojson::parse(plain, PPLUS_MOD);
+  plain.get<picojson::object>().erase("builtin");
+  plain.get<picojson::object>().erase("offers");
+  plain.get<picojson::object>().erase("rulesets");
+  Bundle n = MakeBundle(plain.serialize());
+  n.Add("launcher.dol", std::string(64, '\x01'));
+  n.WriteTree();
+  auto none = Orca::LoadModProfile(n.dir, &error);
+  ASSERT_TRUE(none) << error;
+  // No builtin, but a launcher booting Brawl rev 2.
+  Orca::SetActiveProfile(none);
+  EXPECT_TRUE(readable());
+  Orca::SetActiveProfile(std::nullopt);
+  File::DeleteDirRecursively(b.dir);
+  File::DeleteDirRecursively(n.dir);
+}
+
 // Whether the modules run is a pure function of memory, first runs and re-runs: a joiner whose own
 // frames already held replays frame 1 from the starting snapshot (Project+'s codes not landed yet)
 // with the modules off, exactly as the host ran it, and a rollback re-run after a failure runs the

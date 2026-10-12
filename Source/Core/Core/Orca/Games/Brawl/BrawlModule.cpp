@@ -28,6 +28,7 @@
 #include "Core/Orca/UX/Probe.h"
 #include "Core/Orca/UX/Rumble.h"
 #include "Core/Orca/UX/RankedSteps.h"
+#include "Core/PowerPC/MMU.h"
 
 namespace Orca::UX
 {
@@ -317,6 +318,35 @@ Orca::Engine::Ruleset BrawlModule::ProfileRuleset()
 {
   const Orca::Engine::Manifest game = Describe();
   return BrawlGame::On(game) ? game.ruleset : Orca::Engine::Ruleset::None;
+}
+
+bool BrawlModule::ScenesReadable(std::string_view running_game, u16 running_revision)
+{
+  return BrawlGame::ScenesReadable(Orca::ActiveProfile(), running_game, running_revision);
+}
+
+// Super Smash Bros. Brawl (NTSC-U, revision 2): gfSceneManager* at 0x805a0060, its current scene
+// at +0x4, and the scene's name (char*) at +0x0, e.g. scTitle, scSelctCharacter, scMelee.
+std::string BrawlModule::SceneName(const Core::CPUThreadGuard& guard)
+{
+  const u32 manager = PowerPC::MMU::HostRead<u32>(guard, 0x805a0060);
+  if (manager < 0x80000000u)
+    return {};
+  const u32 scene = PowerPC::MMU::HostRead<u32>(guard, manager + 0x4);
+  if (scene < 0x80000000u)
+    return {};
+  const u32 name_ptr = PowerPC::MMU::HostRead<u32>(guard, scene);
+  if (name_ptr < 0x80000000u)
+    return {};
+  std::string name;
+  for (u32 i = 0; i < 32; ++i)
+  {
+    const char c = static_cast<char>(PowerPC::MMU::HostRead<u8>(guard, name_ptr + i));
+    if (c == '\0')
+      break;
+    name.push_back(c);
+  }
+  return name;
 }
 
 void BrawlModule::Latch(

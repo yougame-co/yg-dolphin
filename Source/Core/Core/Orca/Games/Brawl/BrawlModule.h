@@ -35,6 +35,8 @@ public:
   void SetLocalPort(int port) override;
   Orca::Engine::Display Show() override;
   Orca::Engine::Ruleset ProfileRuleset() override;
+  bool ScenesReadable(std::string_view running_game, u16 running_revision) override;
+  std::string SceneName(const Core::CPUThreadGuard& guard) override;
 };
 
 // The one instance UX::Init hands the engine.

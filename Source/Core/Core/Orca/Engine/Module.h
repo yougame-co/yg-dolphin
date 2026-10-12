@@ -171,6 +171,11 @@ public:
   virtual Display Show() = 0;
   // The ruleset the running game plays (None: no locks). Part of the compatibility key.
   virtual Ruleset ProfileRuleset() = 0;
+  // Host only, for the harness's scene-relative inputs and logs (Rollback/Harness.cpp, S3): whether
+  // the running game's scene names can be read, given the game ID and revision Dolphin runs (the
+  // engine's settings), and the scene it shows now (empty: none readable).
+  virtual bool ScenesReadable(std::string_view running_game, u16 running_revision) = 0;
+  virtual std::string SceneName(const Core::CPUThreadGuard& guard) = 0;
 };
 
 // The module the engine's hooks call. Set by UX::Init before the hooks are installed and cleared by

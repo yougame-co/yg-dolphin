@@ -27,6 +27,7 @@
 #include "Core/Core.h"
 #include "Core/HW/Memmap.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/UX/UX.h"
 #include "Core/PowerPC/JitCommon/JitBase.h"
 #include "Core/PowerPC/JitCommon/JitCache.h"
 #include "Core/PowerPC/JitInterface.h"
@@ -161,17 +162,12 @@ std::vector<u8> ReadWhole(const std::string& path)
   return bytes;
 }
 
-// A game whose scenes Orca can read: Brawl rev 2, or a launcher profile that boots it.
+// A game whose scenes Orca can read: one the game module describes, Brawl rev 2 or a launcher
+// profile that boots it; in mod mode a builtin, guards or not (host-only: guards aren't needed to
+// read scenes for the warm-up's timing, and its blocks are hash-checked against RAM).
 bool KnownGame()
 {
-  const Profile* profile = ActiveProfile();
-  // Mod mode: a mod whose builtin is for Brawl rev 2 (host-only: guards aren't needed to read
-  // scenes for the warm-up's timing, and its blocks are hash-checked against RAM).
-  if (profile && profile->mod)
-    return Mod::DeclaredBuiltin() != Mod::Builtin::None;
-  if (!profile || profile->revision != 2)
-    return false;
-  return profile->IsLauncher() ? profile->disc == "RSBE01" : profile->game_id == "RSBE01";
+  return !Orca::UX::Game().Describe().id.empty();
 }
 
 // Whether the current scene is a match; nullopt while the scene can't be read (boot, transitions).

@@ -65,6 +65,19 @@ Orca::Engine::Manifest Identify(const Orca::Profile* profile)
   return game;
 }
 
+bool ScenesReadable(const Orca::Profile* profile, std::string_view running_game,
+                    u16 running_revision)
+{
+  // Dolphin runs Brawl rev 2, a mod declares a builtin, or a launcher profile boots Brawl rev 2
+  // (its running revision comes from the TMD and may not match, but the profile verified the disc).
+  if (running_game == BRAWL_DISC && running_revision == BRAWL_REVISION)
+    return true;
+  if (profile && profile->mod && !Identify(profile).id.empty())
+    return true;
+  return profile && profile->IsLauncher() && profile->disc == BRAWL_DISC &&
+         profile->revision == BRAWL_REVISION;
+}
+
 bool On(const Orca::Engine::Manifest& game)
 {
   if (game.id.empty())

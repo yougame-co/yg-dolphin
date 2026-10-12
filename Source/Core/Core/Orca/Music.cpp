@@ -9,6 +9,7 @@
 
 #include "Common/Logging/Log.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/UX/UX.h"
 
 namespace Orca::Music
 {
@@ -36,10 +37,8 @@ void PutBE16(u8* out, s32 value)
 
 bool Supported()
 {
-  const Orca::Profile* profile = Orca::ActiveProfile();
-  if (!profile)
-    return false;
-  return (profile->IsLauncher() ? profile->disc : profile->game_id) == "RSBE01";
+  // Brawl's disc, any revision, Project+'s launcher included: the game module's answer.
+  return Orca::UX::Game().Describe().music;
 }
 
 bool On()
