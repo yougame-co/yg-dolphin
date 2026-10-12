@@ -12,7 +12,7 @@
 
 #include "Core/Orca/Games/Brawl/CssTitle.h"
 #include "Core/Orca/Games/Brawl/MatchBlock.h"
-#include "Core/Orca/Games/Brawl/NameTags.h"
+#include "Core/Orca/Game/GuestMemory.h"
 
 using namespace Orca::UX::CssTitle;
 namespace Block = Orca::UX::MatchBlock;

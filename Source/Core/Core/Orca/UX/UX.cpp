@@ -18,6 +18,7 @@
 #include "Core/Orca/UX/GamePatches.h"
 #include "Core/Orca/UX/Kit.h"
 #include "Core/Orca/Games/Brawl/MenuText.h"
+#include "Core/Orca/Game/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/NameTags.h"
 #include "Core/Orca/Games/Brawl/NativeText.h"
 #include "Core/Orca/Games/Brawl/OnlineRules.h"

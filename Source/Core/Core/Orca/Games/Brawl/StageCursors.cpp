@@ -9,7 +9,7 @@
 
 #include <fmt/format.h>
 
-#include "Core/Orca/Games/Brawl/NameTags.h"
+#include "Core/Orca/Game/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/OnlineMenu.h"
 #include "Core/Orca/Games/Brawl/OnlineRules.h"
 #include "Core/Orca/UX/RankedSteps.h"

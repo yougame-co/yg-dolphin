@@ -19,7 +19,7 @@
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Session/Replay.h"
-#include "Core/Orca/Games/Brawl/NameTags.h"
+#include "Core/Orca/Game/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/OnlineMenu.h"
 #include "Core/Orca/Games/Brawl/OnlineSeats.h"
 #include "Core/Orca/UX/Probe.h"

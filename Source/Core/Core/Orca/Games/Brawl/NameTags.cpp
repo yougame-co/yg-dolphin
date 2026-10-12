@@ -18,7 +18,6 @@
 #include "Core/Core.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Status.h"
-#include "Core/PowerPC/MMU.h"
 
 namespace Orca::UX
 {
@@ -316,35 +315,6 @@ std::u16string PortLabel(int port)
   return {u'P', static_cast<char16_t>(u'1' + port)};
 }
 }  // namespace
-
-bool GuardMemory::Valid(u32 address) const
-{
-  return PowerPC::MMU::HostIsRAMAddress(m_guard, address);
-}
-u32 GuardMemory::Read32(u32 address) const
-{
-  return PowerPC::MMU::HostRead<u32>(m_guard, address);
-}
-u16 GuardMemory::Read16(u32 address) const
-{
-  return PowerPC::MMU::HostRead<u16>(m_guard, address);
-}
-u8 GuardMemory::Read8(u32 address) const
-{
-  return PowerPC::MMU::HostRead<u8>(m_guard, address);
-}
-void GuardMemory::Write8(u32 address, u8 value)
-{
-  PowerPC::MMU::HostWrite<u8>(m_guard, value, address);
-}
-void GuardMemory::Write16(u32 address, u16 value)
-{
-  PowerPC::MMU::HostWrite<u16>(m_guard, value, address);
-}
-void GuardMemory::Write32(u32 address, u32 value)
-{
-  PowerPC::MMU::HostWrite<u32>(m_guard, value, address);
-}
 
 std::u16string BrawlTag(std::string_view username)
 {

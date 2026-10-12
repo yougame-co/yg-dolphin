@@ -17,7 +17,7 @@
 #include "Core/Debugger/PPCDebugInterface.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Status.h"
-#include "Core/Orca/Games/Brawl/NameTags.h"
+#include "Core/Orca/Game/GuestMemory.h"
 #include "Core/PowerPC/MMU.h"
 
 namespace Orca::UX

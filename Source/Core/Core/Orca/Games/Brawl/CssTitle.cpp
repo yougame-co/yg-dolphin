@@ -8,7 +8,7 @@
 
 #include "Common/Logging/Log.h"
 #include "Core/Orca/Games/Brawl/MenuText.h"
-#include "Core/Orca/Games/Brawl/NameTags.h"
+#include "Core/Orca/Game/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/OnlineRules.h"
 
 namespace Orca::UX::CssTitle

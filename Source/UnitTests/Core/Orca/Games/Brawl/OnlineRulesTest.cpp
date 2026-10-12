@@ -14,7 +14,7 @@
 #include <gtest/gtest.h>
 
 #include "Core/Orca/Games/Brawl/MatchBlock.h"
-#include "Core/Orca/Games/Brawl/NameTags.h"
+#include "Core/Orca/Game/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/OnlineRules.h"
 #include "Core/Orca/Games/Brawl/SetBlock.h"
 #include "Core/Orca/Games/Brawl/Queue.h"

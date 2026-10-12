@@ -13,7 +13,7 @@
 
 #include "Core/Orca/Session/YouGameRoom.h"
 #include "Core/Orca/Status.h"
-#include "Core/Orca/Games/Brawl/NameTags.h"
+#include "Core/Orca/Game/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/OnlineMenu.h"
 #include "Core/Orca/Games/Brawl/Results.h"
 

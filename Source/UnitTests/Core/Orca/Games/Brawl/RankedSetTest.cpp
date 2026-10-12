@@ -10,7 +10,7 @@
 
 #include <gtest/gtest.h>
 
-#include "Core/Orca/Games/Brawl/NameTags.h"
+#include "Core/Orca/Game/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/RankedSet.h"
 #include "Core/Orca/Games/Brawl/Results.h"
 #include "Core/Orca/Games/Brawl/SetBlock.h"

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "Common/CommonTypes.h"
+#include "Core/Orca/Game/GuestMemory.h"
 #include "Core/Orca/Session/Events.h"
 
 namespace Core
@@ -68,37 +69,6 @@ constexpr int TAG_SLOTS = 120;
 // and spaces become '-', anything else dropped, at most 5 characters. Locale-independent, so
 // identical on every machine. Empty when nothing usable is left.
 std::u16string BrawlTag(std::string_view username);
-
-// Emulated memory access (tests substitute a map).
-class GuestMemory
-{
-public:
-  virtual ~GuestMemory() = default;
-  virtual bool Valid(u32 address) const = 0;  // a mapped, readable RAM address
-  virtual u32 Read32(u32 address) const = 0;
-  virtual u16 Read16(u32 address) const = 0;
-  virtual u8 Read8(u32 address) const = 0;
-  virtual void Write8(u32 address, u8 value) = 0;
-  virtual void Write16(u32 address, u16 value) = 0;
-  virtual void Write32(u32 address, u32 value) = 0;
-};
-
-// The CPU thread's emulated memory, through the guard.
-class GuardMemory final : public GuestMemory
-{
-public:
-  explicit GuardMemory(const Core::CPUThreadGuard& guard) : m_guard(guard) {}
-  bool Valid(u32 address) const override;
-  u32 Read32(u32 address) const override;
-  u16 Read16(u32 address) const override;
-  u8 Read8(u32 address) const override;
-  void Write8(u32 address, u8 value) override;
-  void Write16(u32 address, u16 value) override;
-  void Write32(u32 address, u32 value) override;
-
-private:
-  const Core::CPUThreadGuard& m_guard;
-};
 
 // A controls profile (PortInfo::controls): a tag's rumble byte, then its layout. Any other size is
 // no profile.

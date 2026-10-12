@@ -10,7 +10,7 @@
 
 #include "Core/Orca/Games/Brawl/CharOrder.h"
 #include "Core/Orca/Games/Brawl/MatchBlock.h"
-#include "Core/Orca/Games/Brawl/NameTags.h"
+#include "Core/Orca/Game/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/NativeText.h"
 #include "Core/Orca/Games/Brawl/Queue.h"
 #include "Core/Orca/Games/Brawl/Relabel.h"

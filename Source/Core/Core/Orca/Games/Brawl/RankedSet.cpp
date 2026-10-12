@@ -13,7 +13,7 @@
 
 #include "Common/Logging/Log.h"
 #include "Core/Orca/Profile.h"
-#include "Core/Orca/Games/Brawl/NameTags.h"
+#include "Core/Orca/Game/GuestMemory.h"
 #include "Core/Orca/UX/Probe.h"
 #include "Core/Orca/Games/Brawl/Queue.h"
 #include "Core/Orca/UX/SetEnd.h"
