@@ -23,6 +23,7 @@
 #include "Core/Orca/Games/Brawl/BrawlModule.h"
 #include "Core/Orca/Games/Brawl/OnlineMenu.h"
 #include "Core/Orca/Games/Brawl/OnlineSeats.h"
+#include "Core/Orca/Games/Brawl/Rulesets.h"
 #include "Core/Orca/UX/Probe.h"
 #include "Core/Orca/Games/Brawl/Queue.h"
 #include "Core/Orca/Games/Brawl/SetBlock.h"
@@ -173,11 +174,6 @@ bool BlockMapped(const GuestMemory& m)
   return m.Valid(B::BASE) && m.Valid(B::BASE + B::SIZE - 1);
 }
 
-u8 StocksFor(Ruleset ruleset)
-{
-  return ruleset == Ruleset::PPlus ? 4 : 3;
-}
-
 // Current picks from the match's init data.
 std::array<PlayerPick, 4> Picks(const GuestMemory& m)
 {
@@ -206,22 +202,23 @@ bool AnyIceClimbers(const std::array<PlayerPick, 4>& ports)
   return false;
 }
 
-void ForceRules(Writer& w, const Header& h)
+void ForceRules(Writer& w, const Header& h, const Ranked::Ruleset& rules)
 {
   const u32 rule = GlobalField(w.m, GLOBAL_SET_RULE);
   if (rule && w.m.Valid(rule + RULE_PAUSE))
   {
     w.U8(rule + RULE_MODE, static_cast<u8>((w.m.Read8(rule + RULE_MODE) & 0xF8) | 1));
-    // Ranked Brawl sets own stocks and time (RankedSet::WriteSetRules), written earlier this frame.
-    const bool set_rules = h.mode == Mode::Ranked && h.ruleset == Ruleset::Brawl;
+    // A ranked set with a tiebreak game (Brawl) owns its stocks and time
+    // (RankedSet::WriteSetRules), written earlier this frame; otherwise the ruleset's, every game.
+    const bool set_rules = h.mode == Mode::Ranked && rules.SetWritesGameRules();
     if (!set_rules)
-      w.U8(rule + RULE_STOCKS, StocksFor(h.ruleset));
+      w.U8(rule + RULE_STOCKS, rules.stocks);
     w.U8(rule + RULE_HANDICAP, 0);
     w.U8(rule + RULE_RATIO, 10);
     // Both modes use the stage select: casual's preferred-stage turns, ranked's strikes and picks.
     w.U8(rule + RULE_STAGE_CHOICE, STAGE_CHOOSE);
     if (!set_rules)
-      w.U8(rule + RULE_STOCK_MINUTES, 8);
+      w.U8(rule + RULE_STOCK_MINUTES, rules.minutes);
     w.U8(rule + RULE_TEAM_ATTACK, 1);
     w.U8(rule + RULE_PAUSE, 0);
   }
@@ -420,8 +417,10 @@ void ForceLegalFighters(Writer& w, const std::string& scene)
 
 // Ranked character select no-ready timer (MatchBlock CSS_TIMER, CSS_NO_SHOW). Elapsed time is the
 // frame number minus CSS_TIMER_START, never an incremented counter, so rollback re-runs agree.
-void ReadyTimer(Writer& w, const Header& h, const std::string& scene, int frame)
+void ReadyTimer(Writer& w, const Header& h, const Ranked::Ruleset& rules, const std::string& scene,
+                int frame)
 {
+  const u32 ready_frames = static_cast<u32>(rules.css_ready_seconds) * 60;
   const auto stop = [&] {
     w.U16(B::CSS_TIMER, 0);
     w.U32(B::CSS_TIMER_START, 0);
@@ -459,13 +458,13 @@ void ReadyTimer(Writer& w, const Header& h, const std::string& scene, int frame)
   const u32 now = static_cast<u32>(frame) + 1;
   u32 start = w.m.Read32(B::CSS_TIMER_START);
   // Not running, or a start from another frame numbering (in the future or far past): restart.
-  if (start == 0 || start > now || now - start > static_cast<u32>(CSS_READY_FRAMES) * 2)
+  if (start == 0 || start > now || now - start > ready_frames * 2)
   {
     start = now;
     w.U32(B::CSS_TIMER_START, start);
   }
   const u32 t = now - start;
-  if (t >= static_cast<u32>(CSS_READY_FRAMES))
+  if (t >= ready_frames)
   {
     stop();
     w.U8(B::CSS_NO_SHOW, static_cast<u8>(waiting + 1));
@@ -714,16 +713,21 @@ int ApplyLocks(GuestMemory& m, int frame)
   const Header h = ReadHeader(m);
   if (!h.Locked())
     return 0;
+  // A locked header names a builtin ruleset (ReadHeader); none only in a build whose ruleset files
+  // don't load (OrcaRulesets.BuiltinsAreTheOldTables), which then applies no locks.
+  const Ranked::Ruleset* rules = Rulesets::ByBlock(static_cast<u8>(h.ruleset));
+  if (!rules)
+    return 0;
   Writer w{m};
   const std::string scene = ReadSceneName(m);
-  ForceRules(w, h);
+  ForceRules(w, h, *rules);
   if (h.ruleset == Ruleset::PPlus)
   {
     ForceCodeMenu(w);
     ForceLegalFighters(w, scene);
   }
   ForceStages(w, h, scene);
-  ReadyTimer(w, h, scene, frame);
+  ReadyTimer(w, h, *rules, scene, frame);
   return w.changed;
 }
 
