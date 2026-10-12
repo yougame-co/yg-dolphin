@@ -12,6 +12,27 @@
 // the session acts on. They were the Brawl modules' own types; the modules keep using-declarations.
 namespace Orca::Engine
 {
+// The match header's mode, ruleset and queue flags (the header bytes the session wants in memory;
+// Brawl: MatchBlock MODE, RULESET, FLAGS, whose values these are).
+enum class Mode : u8
+{
+  None = 0,
+  Casual = 1,
+  Ranked = 2,
+};
+
+enum class Ruleset : u8
+{
+  None = 0,
+  Brawl = 1,  // Supernova 2025: 3 stocks, 8:00, BF PS1 LC SV YI + FD DP
+  PPlus = 2,  // Project+ 2024 recommended procedure and proposed stage list
+};
+
+// FLAG_SOLO: on the queue's character select alone, before a match. FLAG_QUEUE2: Slippi-style
+// character select (ready with Start, 30 s timer).
+constexpr u8 FLAG_SOLO = 0x01;
+constexpr u8 FLAG_QUEUE2 = 0x02;
+
 // Where a frame's game is, as the results tracker reads it (Brawl: Results.h Reading::Scene).
 enum class SceneKind : u8
 {

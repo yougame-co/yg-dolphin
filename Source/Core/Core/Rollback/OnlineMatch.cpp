@@ -46,7 +46,6 @@
 #include "Core/Orca/Status.h"
 #include "Core/Orca/Games/Brawl/NameTags.h"
 #include "Core/Orca/Games/Brawl/OnlineMenu.h"
-#include "Core/Orca/Games/Brawl/OnlineRules.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/UX/Probe.h"
 #include "Core/Orca/Games/Brawl/Queue.h"
@@ -666,7 +665,7 @@ Pad FreshPad(Match& match, const Pad& local, int frame)
     EndFresh(match, "the room is gone");
     return local;
   }
-  if (fresh.phase == Phase::Hold && Orca::UX::Rules::HeaderInPlace())
+  if (fresh.phase == Phase::Hold && Orca::UX::Game().Header().HeaderInPlace())
   {
     const Orca::UX::QueueApp::Identity pick = Orca::UX::QueueApp::OwnIdentity();
     if (Orca::Status::Cap("queue2") && pick.HasPick())
@@ -913,28 +912,28 @@ void ResetDropIn(Match& match)
 }
 
 // The online rules' mode for a room's queue (UX/OnlineRules.h): casual or ranked, else none.
-Orca::UX::Rules::Mode QueueMode(const std::string& queue)
+Orca::Engine::Mode QueueMode(const std::string& queue)
 {
   if (queue == "casual")
-    return Orca::UX::Rules::Mode::Casual;
+    return Orca::Engine::Mode::Casual;
   if (queue == "ranked")
-    return Orca::UX::Rules::Mode::Ranked;
-  return Orca::UX::Rules::Mode::None;
+    return Orca::Engine::Mode::Ranked;
+  return Orca::Engine::Mode::None;
 }
 
 // Queue flags for a queue room's header (FLAG_QUEUE2 with `queue2`); host sets, joiner checks.
 u8 RoomFlags()
 {
-  return Orca::Status::Cap("queue2") ? Orca::UX::MatchBlock::FLAG_QUEUE2 : u8{0};
+  return Orca::Status::Cap("queue2") ? Orca::Engine::FLAG_QUEUE2 : u8{0};
 }
 
 // The header this game should carry, written only where HeaderFreeAt allows: a queue room's while
 // hosting it on port 1, or while waiting for or staying after a ranked verdict; the queue's own
 // character select's (FLAG_SOLO) while waiting there with `queue2`; otherwise none.
-std::pair<Orca::UX::Rules::Mode, u8> WantedRulesMode(const Match& match)
+std::pair<Orca::Engine::Mode, u8> WantedRulesMode(const Match& match)
 {
-  using Orca::UX::Rules::Mode;
-  namespace MB = Orca::UX::MatchBlock;
+  using Orca::Engine::Mode;
+  namespace MB = Orca::Engine;
   if (match.joining)
     return {Mode::None, 0};
   const Mode mode =
@@ -959,9 +958,9 @@ std::pair<Orca::UX::Rules::Mode, u8> WantedRulesMode(const Match& match)
 void UpdateWanted(const Match& match)
 {
   const auto [mode, flags] = WantedRulesMode(match);
-  const bool room = mode != Orca::UX::Rules::Mode::None &&
-                    (flags & Orca::UX::MatchBlock::FLAG_SOLO) == 0;
-  if (Orca::UX::Rules::SetWanted(mode, flags, room ? Orca::Online::Code() : std::string()))
+  const bool room = mode != Orca::Engine::Mode::None &&
+                    (flags & Orca::Engine::FLAG_SOLO) == 0;
+  if (Orca::UX::Game().Header().SetWanted(mode, flags, room ? Orca::Online::Code() : std::string()))
   {
     DEBUG_LOG_FMT(ROLLBACK, "Online rules: header {} flags {:#04x} wanted from frame {}",
                   static_cast<int>(mode), flags, match.running + 1);
@@ -972,7 +971,7 @@ void UpdateWanted(const Match& match)
 void DropStaleKeyframe(Match& match)
 {
   if (!match.keyframe || match.session ||
-      match.keyframe_generation == Orca::UX::Rules::WantedGeneration())
+      match.keyframe_generation == Orca::UX::Game().Header().WantedGeneration())
   {
     return;
   }
@@ -1440,8 +1439,8 @@ void HostEvents(Core::System& system, Match& match)
   // A queue room's opponent must replay a keyframe carrying the room's header, so wait for it. If
   // it never lands, fail the join rather than start the match on the wrong header.
   DropStaleKeyframe(match);
-  const u64 generation = Orca::UX::Rules::WantedGeneration();
-  const bool in_place = Orca::UX::Rules::HeaderInPlace();
+  const u64 generation = Orca::UX::Game().Header().WantedGeneration();
+  const bool in_place = Orca::UX::Game().Header().HeaderInPlace();
   // A fresh start's tail can't write the header (it runs as a re-run), so its boundaries don't
   // count toward the header's limit; nor do its unseen hold's, which run unthrottled.
   const HeaderWait header = HeaderWaitAt(&match.header_waited, InTail(match), Unseen(match),
@@ -1948,7 +1947,7 @@ std::optional<int> FreshStart(Core::System& system, Match& match)
   Orca::Events::NoteResync();
   Orca::UX::QueueApp::ResetTimeouts();
   Orca::UX::Game().Results().Reset();
-  Orca::UX::Rules::MemoryReplaced();
+  Orca::UX::Game().Header().MemoryReplaced();
   NOTICE_LOG_FMT(ROLLBACK, "Drop-in: fresh start at frame {}: back to the origin (frame {}) in {:.0f} "
                            "ms, leaving the main menu with exit code {}{}",
                  from, frame, MsSince(start), exit,
@@ -1991,7 +1990,7 @@ Load LoadKeyframe(Core::System& system, Match& match, int* frame_out)
   }
   // Every header it writes is this game's ruleset's (or none).
   if (!Orca::Net::HeadersFitRuleset(download->replay,
-                                    static_cast<u8>(Orca::UX::Rules::ProfileRuleset())))
+                                    static_cast<u8>(Orca::UX::Game().ProfileRuleset())))
   {
     WARN_LOG_FMT(ROLLBACK, "Drop-in: the host's replay sets another game's rules: refused");
     match.join_error_code = "room_mismatch";
@@ -2040,7 +2039,7 @@ Load LoadKeyframe(Core::System& system, Match& match, int* frame_out)
   Orca::UX::QueueApp::ResetTimeouts();
   Orca::UX::Game().Results().Reset();
   Orca::Events::NoteResync();
-  Orca::UX::Rules::MemoryReplaced();
+  Orca::UX::Game().Header().MemoryReplaced();
   // The host's game is here: the next picture shown is the room's select, not this player's own.
   Orca::UX::Search::JoinOver();
   *frame_out = match.origin_frame;
@@ -2076,7 +2075,7 @@ void FinishReplay(Match& match)
   match.running = frame - 1;
   match.stats_frame = -1;
   EndQueueForJoin(match);
-  Orca::UX::Rules::ExpectHeader(QueueMode(Orca::Online::RoomQueue()), Orca::Online::Code(),
+  Orca::UX::Game().Header().ExpectHeader(QueueMode(Orca::Online::RoomQueue()), Orca::Online::Code(),
                                 RoomFlags(), Orca::Online::KnownSetGames());
   NOTICE_LOG_FMT(ROLLBACK, "Drop-in: rebuilt replay frame {} locally in {:.0f} ms", frame,
                  MsSince(match.loaded_time));
@@ -2103,7 +2102,7 @@ bool RestoreBeforeJoin(Core::System& system, Match& match)
   Orca::Events::NoteResync();
   Orca::UX::QueueApp::ResetTimeouts();
   Orca::UX::Game().Results().Reset();
-  Orca::UX::Rules::MemoryReplaced();
+  Orca::UX::Game().Header().MemoryReplaced();
   return true;
 }
 
@@ -2501,7 +2500,7 @@ void CaptureQueueImage(Core::System& system, Match& match)
 bool InQueueRoom()
 {
   return !Orca::Online::RoomEnded() && QueueMode(Orca::Online::RoomQueue()) !=
-                                           Orca::UX::Rules::Mode::None;
+                                           Orca::Engine::Mode::None;
 }
 
 // Restores the queue image once the queue's room is over: solo, no drop-in under way, no ranked
@@ -2552,7 +2551,7 @@ bool MaybeRestoreQueueImage(Core::System& system, Match& match)
   Orca::UX::Queue::DisarmOwnPick();
   Orca::Events::NoteResync();
   // The header the frame hook read was the room's game's; this game's own is read at the next hook.
-  Orca::UX::Rules::MemoryReplaced();
+  Orca::UX::Game().Header().MemoryReplaced();
   match.log.clear();
   match.log_base = frame;
   match.running = frame - 1;
@@ -2814,7 +2813,7 @@ void LeaveOnMismatch(Match& match)
 {
   if (match.session && match.session->Resimulating())
     return;
-  const auto why = Orca::UX::Rules::TakeMismatch();
+  const auto why = Orca::UX::Game().Header().TakeMismatch();
   if (!why)
     return;
   WARN_LOG_FMT(ROLLBACK, "Online rules: leaving room {}: {}", Orca::Online::Code(), *why);
@@ -3574,7 +3573,7 @@ std::optional<int> Boundary(Core::System& system,
   // canonical boot).
   UpdateWanted(match);
   DropStaleKeyframe(match);
-  Orca::UX::Rules::SetHeaderFree(
+  Orca::UX::Game().Header().SetHeaderFree(
       !CanonicalBoot(match) &&
       HeaderFreeAt(match.running + 1, SoloQuiet(match),
                    match.keyframe ? std::optional(match.keyframe->frame) : std::nullopt));

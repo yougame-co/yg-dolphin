@@ -5,6 +5,7 @@
 
 #include <array>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -48,6 +49,32 @@ public:
   virtual std::optional<int> ConfirmNoShow(int confirmed) = 0;
 };
 
+// The match header the session wants in memory (S2 commit 5, group B): the module writes it at a
+// solo first-run frame and checks a host's on a joiner. The session says what it wants and asks
+// whether it is in place. CPU thread unless noted.
+class HeaderHost
+{
+public:
+  virtual ~HeaderHost() = default;
+  // Sets the wanted header for this room (`code`: the room code, empty outside a room). Returns
+  // whether it changed (WantedGeneration then increments).
+  virtual bool SetWanted(Mode mode, u8 flags = 0, std::string_view code = {}) = 0;
+  // Counts changes to the wanted header, so a keyframe made under an older count is stale.
+  virtual u64 WantedGeneration() = 0;
+  // Whether memory carried the wanted header at the last first-run frame hook, with no change.
+  virtual bool HeaderInPlace() = 0;
+  // Memory was replaced after this frame's hook, so the header read is stale until the next one.
+  virtual void MemoryReplaced() = 0;
+  // Lets this frame's hook write the header though a peer is joining and waiting for a keyframe.
+  virtual void SetHeaderFree(bool free) = 0;
+  // A joiner just loaded its keyframe into a room of `mode`: the host's header is checked at the
+  // next frame hook (`known_games`: the ranked set's games this player knows of; -1 none).
+  virtual void ExpectHeader(Mode mode, std::string_view code = {}, u8 flags = 0,
+                            int known_games = -1) = 0;
+  // Why the host's header didn't fit the room, once.
+  virtual std::optional<std::string> TakeMismatch() = 0;
+};
+
 class Module
 {
 public:
@@ -68,6 +95,9 @@ public:
 
   // What the session asks of the module (S2 commit 5 routes Rollback/OnlineMatch.cpp through these).
   virtual Verdicts& Results() = 0;
+  virtual HeaderHost& Header() = 0;
+  // The ruleset the running game plays (None: no locks). Part of the compatibility key.
+  virtual Ruleset ProfileRuleset() = 0;
 };
 
 // The module the engine's hooks call. Set by UX::Init before the hooks are installed and cleared by

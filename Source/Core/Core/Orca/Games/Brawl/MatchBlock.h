@@ -8,6 +8,7 @@
 #include <string_view>
 
 #include "Common/CommonTypes.h"
+#include "Core/Orca/Engine/MatchTypes.h"
 #include "Core/Orca/Games/Brawl/FreeSpace.h"
 
 // The match block: a queue match's rules and set state, stored in the game's own memory at
@@ -67,25 +68,15 @@ constexpr u32 ROOM = BASE + 0x08;
 // FLAG_QUEUE2: Slippi-style character select (ready with Start, 30 s timer). A toggled patch group
 // reads this word, so keep its address stable.
 constexpr u32 FLAGS = BASE + 0x0C;
-constexpr u8 FLAG_SOLO = 0x01;
-constexpr u8 FLAG_QUEUE2 = 0x02;
+using Orca::Engine::FLAG_QUEUE2;  // Engine/MatchTypes.h: the session sets them
+using Orca::Engine::FLAG_SOLO;
 // +0x0D..+0x0F: reserved (zero).
 constexpr u32 HEADER_SIZE = 0x10;
 
 // A toggled patch group reads the mode byte via the word at VERSION, so keep its address stable.
-enum class Mode : u8
-{
-  None = 0,
-  Casual = 1,
-  Ranked = 2,
-};
-
-enum class Ruleset : u8
-{
-  None = 0,
-  Brawl = 1,  // Supernova 2025: 3 stocks, 8:00, BF PS1 LC SV YI + FD DP
-  PPlus = 2,  // Project+ 2024 recommended procedure and proposed stage list
-};
+// Mode and Ruleset (values: Engine/MatchTypes.h, the session's header).
+using Orca::Engine::Mode;
+using Orca::Engine::Ruleset;
 
 // ---- Set state, +0x10..+0x7F: Project+'s set (State below) ----
 constexpr u32 SET = BASE + 0x10;

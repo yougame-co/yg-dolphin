@@ -52,6 +52,25 @@ public:
     return Rules::ConfirmNoShow(confirmed);
   }
 };
+
+// The session's header over OnlineRules' (Rules::), as it called it.
+class BrawlHeader final : public Orca::Engine::HeaderHost
+{
+public:
+  bool SetWanted(Rules::Mode mode, u8 flags, std::string_view code) override
+  {
+    return Rules::SetWanted(mode, flags, code);
+  }
+  u64 WantedGeneration() override { return Rules::WantedGeneration(); }
+  bool HeaderInPlace() override { return Rules::HeaderInPlace(); }
+  void MemoryReplaced() override { Rules::MemoryReplaced(); }
+  void SetHeaderFree(bool free) override { Rules::SetHeaderFree(free); }
+  void ExpectHeader(Rules::Mode mode, std::string_view code, u8 flags, int known_games) override
+  {
+    Rules::ExpectHeader(mode, code, flags, known_games);
+  }
+  std::optional<std::string> TakeMismatch() override { return Rules::TakeMismatch(); }
+};
 }  // namespace
 
 BrawlModule& Builtin()
@@ -189,6 +208,17 @@ Orca::Engine::Verdicts& BrawlModule::Results()
 {
   static BrawlVerdicts s_verdicts;
   return s_verdicts;
+}
+
+Orca::Engine::HeaderHost& BrawlModule::Header()
+{
+  static BrawlHeader s_header;
+  return s_header;
+}
+
+Orca::Engine::Ruleset BrawlModule::ProfileRuleset()
+{
+  return Rules::ProfileRuleset();
 }
 
 void BrawlModule::Latch(

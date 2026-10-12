@@ -25,6 +25,8 @@ public:
   void Latch(const Core::CPUThreadGuard& guard,
              const std::array<std::optional<GCPadStatus>, Rollback::InputGate::PORTS>& raw) override;
   Orca::Engine::Verdicts& Results() override;
+  Orca::Engine::HeaderHost& Header() override;
+  Orca::Engine::Ruleset ProfileRuleset() override;
 };
 
 // The one instance UX::Init hands the engine.
