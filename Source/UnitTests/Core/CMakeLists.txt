@@ -62,6 +62,7 @@ add_dolphin_test(OrcaPresentPacingTest Orca/PresentPacingTest.cpp)
 add_dolphin_test(OrcaPerfTest Orca/PerfTest.cpp)
 add_dolphin_test(OrcaGraphicsSettingsTest Orca/GraphicsSettingsTest.cpp)
 add_dolphin_test(OrcaDeviceBudgetTest Orca/DeviceBudgetTest.cpp)
+add_dolphin_test(OrcaNandQuotaTest Orca/NandQuotaTest.cpp)
 
 add_dolphin_test(SkylandersTest IOS/USB/SkylandersTest.cpp)
 
