@@ -798,3 +798,232 @@ TEST(OrcaKeyframe, HttpStoreAgainstAFakeServer)
   EXPECT_NE(error.find("401"), std::string::npos) << error;
   EXPECT_EQ(LastRefusal(), "ticket");
 }
+
+// ---- Replay streams (Keyframe.h): saved matches and live watching ----
+
+namespace
+{
+ReplayStreamInfo StreamInfo()
+{
+  ReplayStreamInfo info;
+  info.compat = "orca2:test";
+  info.build = "0123456789abcdef";
+  info.game_id = "RSBE01";
+  info.origin_hash = 0x123456789abcdef0;
+  info.first_frame = 500;
+  info.segment = 2;
+  info.room = "abc123";
+  return info;
+}
+
+// The whole replay, cut into chunks of `per_chunk` frames, each with a checksum every 60 frames.
+std::vector<u8> Stream(const ReplayArchive& replay, size_t per_chunk)
+{
+  ReplayStreamInfo info = StreamInfo();
+  info.first_frame = replay.first_frame;
+  std::vector<u8> out = PackReplayStreamHeader(info);
+  for (size_t start = 0; start < replay.frames.size(); start += per_chunk)
+  {
+    ReplayChunk chunk;
+    chunk.first = replay.first_frame + static_cast<int>(start);
+    const size_t end = std::min(start + per_chunk, replay.frames.size());
+    chunk.frames.assign(replay.frames.begin() + start, replay.frames.begin() + end);
+    for (int f = chunk.first + 1; f <= replay.first_frame + static_cast<int>(end); ++f)
+    {
+      if (f % 60 == 0)
+        chunk.checksums.emplace_back(f, 0xabc000u + static_cast<u64>(f));
+    }
+    const auto bytes = PackReplayChunk(chunk, start == 0);
+    EXPECT_FALSE(bytes.empty());
+    out.insert(out.end(), bytes.begin(), bytes.end());
+  }
+  return out;
+}
+}  // namespace
+
+// A stream holds every frame's inputs and typed events and the checksums, and reads the same
+// whether it arrives whole or a few bytes at a time (a growing file, a network stream).
+TEST(OrcaReplayStream, RoundTripsWholeOrInPieces)
+{
+  auto original = Replay(1000, 500);
+  original.frames[0].seed = 77;
+  original.frames[0].menu_exit = MENU_EXIT_RANKED;
+  original.frames[42].header = ReplayHeader{1, 2, 0, 3, 55};
+  original.frames[99].clear_ready = true;
+  const std::vector<u8> bytes = Stream(original, 7);
+  for (const size_t piece : {bytes.size(), size_t{1}, size_t{13}, size_t{4096}})
+  {
+    ReplayStreamReader reader;
+    std::string error;
+    for (size_t at = 0; at < bytes.size(); at += piece)
+    {
+      const size_t n = std::min(piece, bytes.size() - at);
+      ASSERT_TRUE(reader.Feed(bytes.data() + at, n, &error)) << error;
+    }
+    ASSERT_TRUE(reader.Info());
+    EXPECT_EQ(reader.Info()->compat, "orca2:test");
+    EXPECT_EQ(reader.Info()->build, "0123456789abcdef");
+    EXPECT_EQ(reader.Info()->game_id, "RSBE01");
+    EXPECT_EQ(reader.Info()->origin_hash, original.origin_hash);
+    EXPECT_EQ(reader.Info()->first_frame, 500);
+    EXPECT_EQ(reader.Info()->segment, 2u);
+    EXPECT_EQ(reader.Info()->room, "abc123");
+    ReplayArchive& decoded = reader.Archive();
+    EXPECT_EQ(decoded.first_frame, 500);
+    EXPECT_EQ(decoded.origin_hash, original.origin_hash);
+    ASSERT_EQ(decoded.frames.size(), original.frames.size());
+    for (size_t i = 0; i < decoded.frames.size(); ++i)
+    {
+      EXPECT_EQ(decoded.frames[i].pads, original.frames[i].pads);
+      EXPECT_EQ(decoded.frames[i].header, original.frames[i].header);
+      EXPECT_EQ(decoded.frames[i].clear_ready, original.frames[i].clear_ready);
+      EXPECT_EQ(decoded.frames[i].seed, original.frames[i].seed);
+      EXPECT_EQ(decoded.frames[i].menu_exit, original.frames[i].menu_exit);
+      ASSERT_EQ(decoded.frames[i].ports->size(), original.frames[i].ports->size());
+      for (size_t p = 0; p < decoded.frames[i].ports->size(); ++p)
+      {
+        const auto& got = decoded.frames[i].ports->at(p);
+        const auto& want = original.frames[i].ports->at(p);
+        EXPECT_EQ(got.port, want.port);
+        EXPECT_EQ(got.name, want.name);
+        EXPECT_EQ(got.controls, want.controls);
+        EXPECT_EQ(got.queue, want.queue);
+      }
+    }
+    // Equal ports are shared, across chunks too.
+    EXPECT_EQ(decoded.frames[6].ports, decoded.frames[7].ports);
+    EXPECT_EQ(reader.Checksums().size(), 1000u / 60u + 1);
+    EXPECT_EQ(reader.Checksums().at(540), 0xabc000u + 540);
+    EXPECT_EQ(reader.Chunks(), (1000u + 6) / 7);
+  }
+}
+
+// A live watcher reads a chunk only once all of it has arrived: a partial tail is held back.
+TEST(OrcaReplayStream, HoldsBackAPartialChunk)
+{
+  const auto replay = Replay(20, 0);
+  const std::vector<u8> bytes = Stream(replay, 10);
+  ReplayStreamReader reader;
+  std::string error;
+  ASSERT_TRUE(reader.Feed(bytes.data(), bytes.size() - 5, &error)) << error;
+  EXPECT_EQ(reader.Archive().frames.size(), 10u);
+  ASSERT_TRUE(reader.Feed(bytes.data() + bytes.size() - 5, 5, &error)) << error;
+  EXPECT_EQ(reader.Archive().frames.size(), 20u);
+}
+
+// Damage anywhere is refused, never played: a flipped byte in a chunk, chunks out of order, a
+// seed after a history's first frame, another stream version, a header that isn't the stream's.
+TEST(OrcaReplayStream, RefusesDamageGapsAndOtherVersions)
+{
+  const auto replay = Replay(30, 0);
+  const std::vector<u8> good = Stream(replay, 10);
+  std::string error;
+  {
+    auto bad = good;
+    bad[bad.size() - 20] ^= 0x40;
+    ReplayStreamReader reader;
+    EXPECT_FALSE(reader.Feed(bad.data(), bad.size(), &error));
+    EXPECT_NE(error.find("damaged"), std::string::npos) << error;
+    // A failed reader stays failed.
+    EXPECT_FALSE(reader.Feed(good.data(), 1, &error));
+  }
+  {
+    std::vector<u8> bytes = PackReplayStreamHeader(StreamInfo());
+    ReplayChunk chunk;
+    chunk.first = 510;  // the stream starts at 500
+    chunk.frames.assign(replay.frames.begin(), replay.frames.begin() + 5);
+    const auto packed = PackReplayChunk(chunk, false);
+    bytes.insert(bytes.end(), packed.begin(), packed.end());
+    ReplayStreamReader reader;
+    EXPECT_FALSE(reader.Feed(bytes.data(), bytes.size(), &error));
+    EXPECT_NE(error.find("follow on"), std::string::npos) << error;
+  }
+  {
+    ReplayChunk chunk;
+    chunk.first = 3;
+    chunk.frames.assign(replay.frames.begin(), replay.frames.begin() + 5);
+    chunk.frames[2].seed = 9;
+    EXPECT_TRUE(PackReplayChunk(chunk, false).empty());
+    chunk.frames[2].seed = 0;
+    chunk.frames[0].seed = 9;
+    EXPECT_TRUE(PackReplayChunk(chunk, false).empty());
+    EXPECT_FALSE(PackReplayChunk(chunk, true).empty());
+  }
+  {
+    auto bad = good;
+    bad[4] = 2;  // version 2
+    ReplayStreamReader reader;
+    EXPECT_FALSE(reader.Feed(bad.data(), bad.size(), &error));
+  }
+  {
+    std::vector<u8> bad = {'O', 'R', 'P', '2', 0, 0, 0, 0, 0, 0, 0, 0};
+    ReplayStreamReader reader;
+    EXPECT_FALSE(reader.Feed(bad.data(), bad.size(), &error));
+    EXPECT_NE(error.find("not a replay stream"), std::string::npos) << error;
+  }
+}
+
+// A player only reads a stream of its own build: another build's is refused at the header, before
+// any frame of it is decoded.
+TEST(OrcaReplayStream, RefusesAnotherBuildBeforeItsFrames)
+{
+  const auto replay = Replay(30, 0);
+  const std::vector<u8> bytes = Stream(replay, 10);
+  std::string error;
+  ReplayStreamReader same("orca2:test");
+  EXPECT_TRUE(same.Feed(bytes.data(), bytes.size(), &error)) << error;
+  EXPECT_EQ(same.Archive().frames.size(), 30u);
+  ReplayStreamReader other("orca2:other");
+  EXPECT_FALSE(other.Feed(bytes.data(), bytes.size(), &error));
+  EXPECT_NE(error.find("another build"), std::string::npos) << error;
+  EXPECT_TRUE(other.Archive().frames.empty());
+}
+
+// Bytes from another player are untrusted: random damage, cuts and splices never crash or hang the
+// reader, and whatever it accepts is a whole, in-order history.
+TEST(OrcaReplayStream, SurvivesRandomDamage)
+{
+  const auto replay = Replay(200, 100);
+  const std::vector<u8> good = Stream(replay, 9);
+  std::mt19937 rng(7);
+  for (int round = 0; round < 3000; ++round)
+  {
+    std::vector<u8> bytes = good;
+    const int edits = 1 + static_cast<int>(rng() % 4);
+    for (int e = 0; e < edits; ++e)
+    {
+      const size_t at = rng() % bytes.size();
+      switch (rng() % 4)
+      {
+      case 0:
+        bytes[at] ^= static_cast<u8>(1u << (rng() % 8));
+        break;
+      case 1:
+        bytes.resize(at);
+        break;
+      case 2:
+        bytes.insert(bytes.begin() + static_cast<std::ptrdiff_t>(at), static_cast<u8>(rng()));
+        break;
+      default:
+        // A large length where a chunk's fields are.
+        if (at + 4 <= bytes.size())
+          U32(bytes, at, 0xffffffffu - static_cast<u32>(rng() % 16));
+        break;
+      }
+      if (bytes.empty())
+        break;
+    }
+    ReplayStreamReader reader;
+    std::string error;
+    const size_t piece = 1 + rng() % 64;
+    for (size_t at = 0; at < bytes.size(); at += piece)
+    {
+      if (!reader.Feed(bytes.data() + at, std::min(piece, bytes.size() - at), &error))
+        break;
+    }
+    const ReplayArchive& got = reader.Archive();
+    ASSERT_LE(got.frames.size(), replay.frames.size() + 3600);
+    for (const auto& frame : got.frames)
+      ASSERT_TRUE(frame.ports);
+  }
+}

@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <algorithm>
+
 #include <array>
 #include <climits>
 #include <cstddef>
@@ -377,6 +379,12 @@ public:
   // The newest frame whose inputs are known for every seat (every frame through it ran, or will
   // re-run, with real inputs).
   int ConfirmedFrame() const;
+  // Frames before this one are final: confirmed for every seat, run with those inputs, and not
+  // waiting to re-run (as CheckChecksums takes its checksums). A replay stream records only these.
+  int FinalFrame() const { return std::min({m_frame, ConfirmedFrame() + 1, m_dirty}); }
+  // This machine's RAM checksums of final frames (every Config::checksum_every), the newest 600
+  // frames' worth: (frame, RamChecksum of the state at that frame's start).
+  const std::map<int, u64>& LocalChecksums() const { return m_local_checksums; }
 
 private:
   void ReceivePackets();

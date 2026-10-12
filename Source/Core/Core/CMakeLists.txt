@@ -739,6 +739,8 @@ add_library(core
   Rollback/Loopback.h
   Rollback/OnlineMatch.cpp
   Rollback/OnlineMatch.h
+  Rollback/ReplayStream.cpp
+  Rollback/ReplayStream.h
   Rollback/Rollback.cpp
   Rollback/Rollback.h
   Rollback/SessionPort.cpp
