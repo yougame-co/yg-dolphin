@@ -175,11 +175,11 @@ class RealMapTests(unittest.TestCase):
             "Data/Sys/Orca/Textures/RSBE01/x.dll": ("engine", False),
             "Data/Sys/GameSettings/RSBE01.ini": ("engine-sensitive", False),
             "Data/Sys/GameSettings/GALE01.ini": ("engine", False),
-            "Source/Core/Core/Orca/UX/OnlineRules.cpp": ("game-logic", False),
-            "Source/Core/Core/Orca/UX/BrawlStages.h": ("game-logic", False),
-            "Source/Core/Core/Orca/UX/RankedPPlus.cpp": ("game-logic", False),
-            "Source/Core/Core/Orca/UX/FreeSpace.h": ("game-logic", False),
-            "Source/Core/Core/Orca/UX/MenuText.cpp": ("game-logic", False),
+            "Source/Core/Core/Orca/Games/Brawl/OnlineRules.cpp": ("game-logic", False),
+            "Source/Core/Core/Orca/Games/Brawl/BrawlStages.h": ("game-logic", False),
+            "Source/Core/Core/Orca/Games/Brawl/PPlus/RankedPPlus.cpp": ("game-logic", False),
+            "Source/Core/Core/Orca/Games/Brawl/FreeSpace.h": ("game-logic", False),
+            "Source/Core/Core/Orca/Games/Brawl/MenuText.cpp": ("game-logic", False),
             "Source/Core/Core/Orca/UX/RankedSteps.cpp": ("engine", False),
             "Source/Core/Core/Orca/UX/Overlay.cpp": ("engine", False),
             "Source/Core/Core/Orca/UX/UX.cpp": ("engine", False),
@@ -218,7 +218,7 @@ class RealMapTests(unittest.TestCase):
             "Externals/licenses.md": ("engine-sensitive", False),
             "CMakeLists.txt": ("engine-sensitive", False),
             "ORCA.md": ("engine", True),
-            "Source/UnitTests/Core/Orca/QueueTest.cpp": ("game-logic", True),
+            "Source/UnitTests/Core/Orca/Games/Brawl/QueueTest.cpp": ("game-logic", True),
             # Tests the engine's RankedSteps.
             "Source/UnitTests/Core/Orca/RankedTest.cpp": ("engine", True),
             "Source/UnitTests/Core/Orca/RoomTest.cpp": ("engine", True),
@@ -238,11 +238,11 @@ class RealMapTests(unittest.TestCase):
             self.assertEqual((m.cls, m.dev), (cls, dev), "%s matched %s" % (path, m.rule))
             self.assertFalse(m.ties, path)
         # Competitive policy in game logic: a person reviews it.
-        for path in ("Source/Core/Core/Orca/UX/Queue.cpp", "Source/Core/Core/Orca/UX/RankedSet.h",
-                     "Source/Core/Core/Orca/UX/Results.cpp"):
+        for path in ("Source/Core/Core/Orca/Games/Brawl/Queue.cpp", "Source/Core/Core/Orca/Games/Brawl/RankedSet.h",
+                     "Source/Core/Core/Orca/Games/Brawl/Results.cpp"):
             m = self.rules.classify(path)
             self.assertEqual((m.cls, m.review), ("game-logic", True), path)
-        self.assertFalse(self.rules.classify("Source/Core/Core/Orca/UX/NameTags.cpp").review)
+        self.assertFalse(self.rules.classify("Source/Core/Core/Orca/Games/Brawl/NameTags.cpp").review)
 
     def test_peer_files_are_engine_sensitive(self):
         """forbidden-calls' PEER_FILES (where peer-parse applies) must all be engine-sensitive, so the
@@ -354,12 +354,12 @@ def tokens(path, text, cls="engine"):
     return [(rule, token) for rule, token, _, _ in fc.scan_text(path, text, cls)]
 
 
-def game(text, path="Source/Core/Core/Orca/UX/NameTags.cpp"):
+def game(text, path="Source/Core/Core/Orca/Games/Brawl/NameTags.cpp"):
     return tokens(path, text, "game-logic")
 
 
 class ScanTests(unittest.TestCase):
-    UX = "Source/Core/Core/Orca/UX/Queue.cpp"
+    UX = "Source/Core/Core/Orca/Games/Brawl/Queue.cpp"
     ROOM = "Source/Core/Core/Orca/Session/YouGameRoom.cpp"
 
     def test_comments_are_blanked_strings_kept(self):
@@ -430,7 +430,7 @@ class ScanTests(unittest.TestCase):
     def test_include_escape(self):
         self.assertIn(("include-escape", "#include ../../../../../Tools/orca/textures/x.inc"),
                       tokens(self.UX, '#include "../../../../../Tools/orca/textures/x.inc"\n'))
-        self.assertEqual(tokens(self.UX, '#include "Core/Orca/UX/Queue.h"\n'), [])
+        self.assertEqual(tokens(self.UX, '#include "Core/Orca/Games/Brawl/Queue.h"\n'), [])
 
     def test_bare_names_in_game_logic(self):
         self.assertIn(("env", "bare std::getenv"), game('auto v = (std::getenv)("X");\n'))
@@ -457,7 +457,7 @@ class ScanTests(unittest.TestCase):
 
     def test_scannable(self):
         rules = layerlib.load_rules()
-        self.assertTrue(fc.scannable("Source/Core/Core/Orca/UX/NameTags.inc", rules))
+        self.assertTrue(fc.scannable("Source/Core/Core/Orca/Games/Brawl/NameTags.inc", rules))
         self.assertTrue(fc.scannable("Source/Core/Core/Orca/Games/BrawlRev2/table.txt", rules))
         self.assertFalse(fc.scannable("Source/Core/Core/Orca/UX/Overlay.txt", rules))
         self.assertFalse(fc.scannable("Tools/orca/textures/x.inc", rules))  # dev
@@ -538,7 +538,7 @@ class EndToEndTests(unittest.TestCase):
         text = layerlib.re.sub(r"%upstream-base \w+", "%upstream-base " + base, text)
         with open(rules, "w") as f:
             f.write(text)
-        self.write("Source/Core/Core/Orca/UX/Queue.cpp", "void Frame() {}\n")
+        self.write("Source/Core/Core/Orca/Games/Brawl/Queue.cpp", "void Frame() {}\n")
         self.write("Data/Sys/Orca/RSBE01.patches", "x\n")
         self.git("add", "Source", "Data")
         self.git("commit", "-qm", "orca")
@@ -556,7 +556,7 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual((s["highest"], s["highest_shipped"]), ("game-data", "game-data"))
 
         # Game logic that opens a socket.
-        self.write("Source/Core/Core/Orca/UX/Queue.cpp",
+        self.write("Source/Core/Core/Orca/Games/Brawl/Queue.cpp",
                    'void Frame() {}\nvoid Leak() { connect(3, 0, 0); getenv("HOME"); }\n')
         self.git("commit", "-qam", "logic")
         code, out, err = self.run_tool("layer-of-diff", "--rules", rules, "--max", "game-data", "HEAD~1..HEAD")
@@ -599,12 +599,12 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual((s["highest"], s["highest_shipped"]), ("engine-sensitive", None))
 
         # Game logic that edits a baselined line (same count, another file) is reported with --since.
-        self.write("Source/Core/Core/Orca/UX/Queue.cpp",
+        self.write("Source/Core/Core/Orca/Games/Brawl/Queue.cpp",
                    '// baselined\nvoid Frame() {}\nvoid Leak() { connect(3, 0, 0); getenv("HOME"); }\n')
         self.git("commit", "-qam", "baseline it")
         bl3 = os.path.join(self.tmp, "bl3.txt")
         self.run_tool("forbidden-calls", "--rules", rules, "--update-baseline", "--baseline", bl3)
-        self.write("Source/Core/Core/Orca/UX/Queue.cpp",
+        self.write("Source/Core/Core/Orca/Games/Brawl/Queue.cpp",
                    'void Frame() {}\nvoid Leak() {\n  connect(4, 0, 0); getenv("HOME"); }\n')
         self.git("commit", "-qam", "moved")
         code, out, err = self.run_tool("forbidden-calls", "--rules", rules, "--baseline", bl3,

@@ -24,9 +24,9 @@
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/GamePatches.h"
-#include "Core/Orca/UX/OnlineMenu.h"
-#include "Core/Orca/UX/OnlineRules.h"
-#include "Core/Orca/UX/Results.h"
+#include "Core/Orca/Games/Brawl/OnlineMenu.h"
+#include "Core/Orca/Games/Brawl/OnlineRules.h"
+#include "Core/Orca/Games/Brawl/Results.h"
 
 namespace
 {

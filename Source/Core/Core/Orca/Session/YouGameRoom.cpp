@@ -35,8 +35,8 @@
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/UX/Probe.h"
-#include "Core/Orca/UX/Queue.h"
-#include "Core/Orca/UX/RankedSet.h"
+#include "Core/Orca/Games/Brawl/Queue.h"
+#include "Core/Orca/Games/Brawl/RankedSet.h"
 #include "Core/Orca/UX/SetEnd.h"
 
 namespace Orca::Net

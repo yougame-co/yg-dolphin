@@ -17,7 +17,7 @@
 
 #include "Common/FileUtil.h"
 #include "Core/Orca/UX/GamePatches.h"
-#include "Core/Orca/UX/NameTags.h"
+#include "Core/Orca/Games/Brawl/NameTags.h"
 
 using namespace Orca::UX;
 

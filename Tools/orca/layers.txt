@@ -106,17 +106,13 @@ engine-sensitive  Source/Core/Core/Orca/UX/Controllers.*  # the app's controller
 engine-sensitive  Source/Core/Core/Orca/UX/YgOrb.*        # the app's orb and notice commands
 engine-sensitive  Source/Core/Core/Orca/UX/GameFont.*     # RFNT reader (fonts from the disc)
 engine-sensitive  Source/Core/Core/Orca/UX/GamePatches.*  # .patches parser and applier
-# Game logic: hardcoded Brawl rev 2 / Project+ memory.
-game-logic        Source/Core/Core/Orca/UX/{BrawlStages,CharOrder,CssTitle,NameTags,OnlineMenu}.*
-game-logic        Source/Core/Core/Orca/UX/{OnlineRules,OnlineSeats,RankedPPlus,StageCursors}.*
-# ...carrying competitive policy until S2 splits it out: the queue's ready/timer/skip machine,
+# Game logic (hardcoded Brawl rev 2 / Project+ memory) moved to Orca/Games/Brawl/ in S2 commit 1
+# (Tools/orca/split/s2-move.py) and is classed by the Games/** rule above: stage flows, rules, name
+# tags, the match block and set block layouts, free space, and the mixed text modules (an engine
+# mechanism carrying game data, classed by the data until S5 moves the mechanism to the engine).
+# Three of them carry competitive policy until S2 splits it out: the queue's ready/timer/skip machine,
 # ranked stocks and minutes (RankedSet), and the winner and set result the room rates (Results).
-game-logic        Source/Core/Core/Orca/UX/{Queue,RankedSet,Results}.* review
-# Game memory layouts: free space, code caves, the match block and the set block.
-game-logic        Source/Core/Core/Orca/UX/{FreeSpace,MatchBlock,SetBlock}.*
-# Mixed: an engine mechanism carrying game data (texture names, message buffers, menu strings).
-# Classed by the game data, which is what changes; the mechanism moves to the engine in S5.
-game-logic        Source/Core/Core/Orca/UX/{MenuText,NativeText,Relabel}.*
+game-logic        Source/Core/Core/Orca/Games/Brawl/{Queue,RankedSet,Results}.* review
 
 # ---------------------------------------------------------------------------------------------
 # Rollback/: rollback core and test harness.
@@ -175,9 +171,7 @@ engine            .gitignore
 engine            **/*.md                                 dev
 engine            docs/**                                 dev
 engine            Source/UnitTests/**                     dev
-game-logic        Source/UnitTests/Core/Orca/{BrawlStages,CharOrder,CssTitle,NativeText}Test.cpp dev
-game-logic        Source/UnitTests/Core/Orca/{OnlineMenu,OnlineRules,OnlineSeats,Queue}Test.cpp dev
-game-logic        Source/UnitTests/Core/Orca/{RankedSet,Relabel,Results}Test.cpp dev
+game-logic        Source/UnitTests/Core/Orca/Games/**     dev     # game-module tests (S2)
 # (RankedTest.cpp tests the engine's RankedSteps: engine dev, from the line above.)
 engine            Tools/**                                dev
 engine-sensitive  Tools/orca-{package-macos,publish-public}.sh dev   # release scripts

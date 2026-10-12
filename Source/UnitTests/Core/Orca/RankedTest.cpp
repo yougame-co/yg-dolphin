@@ -13,11 +13,11 @@
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
-#include "Core/Orca/UX/MatchBlock.h"
-#include "Core/Orca/UX/NameTags.h"
-#include "Core/Orca/UX/RankedPPlus.h"
+#include "Core/Orca/Games/Brawl/MatchBlock.h"
+#include "Core/Orca/Games/Brawl/NameTags.h"
+#include "Core/Orca/Games/Brawl/PPlus/RankedPPlus.h"
 #include "Core/Orca/UX/RankedSteps.h"
-#include "Core/Orca/UX/StageCursors.h"
+#include "Core/Orca/Games/Brawl/StageCursors.h"
 #include "InputCommon/GCPadStatus.h"
 
 using namespace Orca::UX;

@@ -18,8 +18,8 @@
 #include "Core/Orca/Mod.h"
 #include "Core/Orca/Music.h"
 #include "Core/Orca/Profile.h"
-#include "Core/Orca/UX/OnlineRules.h"
-#include "Core/Orca/UX/Results.h"
+#include "Core/Orca/Games/Brawl/OnlineRules.h"
+#include "Core/Orca/Games/Brawl/Results.h"
 
 namespace Orca::Status
 {

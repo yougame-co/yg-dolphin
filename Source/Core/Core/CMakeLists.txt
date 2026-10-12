@@ -557,63 +557,63 @@ add_library(core
   Orca/Session/Session.h
   Orca/Session/YouGameRoom.cpp
   Orca/Session/YouGameRoom.h
-  Orca/UX/BrawlStages.cpp
-  Orca/UX/BrawlStages.h
-  Orca/UX/CharOrder.cpp
-  Orca/UX/CharOrder.h
+  Orca/Games/Brawl/BrawlStages.cpp
+  Orca/Games/Brawl/BrawlStages.h
+  Orca/Games/Brawl/CharOrder.cpp
+  Orca/Games/Brawl/CharOrder.h
   Orca/UX/Chat.cpp
   Orca/UX/Chat.h
-  Orca/UX/CssTitle.cpp
-  Orca/UX/CssTitle.h
+  Orca/Games/Brawl/CssTitle.cpp
+  Orca/Games/Brawl/CssTitle.h
   Orca/UX/Controllers.cpp
   Orca/UX/Controllers.h
   Orca/UX/ControllerSource.cpp
   Orca/UX/ControllerSource.h
-  Orca/UX/FreeSpace.h
+  Orca/Games/Brawl/FreeSpace.h
   Orca/UX/GameFont.cpp
   Orca/UX/GameFont.h
   Orca/UX/GamePatches.cpp
   Orca/UX/GamePatches.h
   Orca/UX/Kit.cpp
   Orca/UX/Kit.h
-  Orca/UX/SetBlock.cpp
-  Orca/UX/SetBlock.h
-  Orca/UX/MatchBlock.cpp
-  Orca/UX/MatchBlock.h
-  Orca/UX/MenuText.cpp
-  Orca/UX/MenuText.h
-  Orca/UX/NameTags.cpp
-  Orca/UX/NameTags.h
-  Orca/UX/NativeText.cpp
-  Orca/UX/NativeText.h
-  Orca/UX/OnlineMenu.cpp
-  Orca/UX/OnlineMenu.h
-  Orca/UX/OnlineRules.cpp
-  Orca/UX/OnlineRules.h
-  Orca/UX/OnlineSeats.cpp
-  Orca/UX/OnlineSeats.h
+  Orca/Games/Brawl/SetBlock.cpp
+  Orca/Games/Brawl/SetBlock.h
+  Orca/Games/Brawl/MatchBlock.cpp
+  Orca/Games/Brawl/MatchBlock.h
+  Orca/Games/Brawl/MenuText.cpp
+  Orca/Games/Brawl/MenuText.h
+  Orca/Games/Brawl/NameTags.cpp
+  Orca/Games/Brawl/NameTags.h
+  Orca/Games/Brawl/NativeText.cpp
+  Orca/Games/Brawl/NativeText.h
+  Orca/Games/Brawl/OnlineMenu.cpp
+  Orca/Games/Brawl/OnlineMenu.h
+  Orca/Games/Brawl/OnlineRules.cpp
+  Orca/Games/Brawl/OnlineRules.h
+  Orca/Games/Brawl/OnlineSeats.cpp
+  Orca/Games/Brawl/OnlineSeats.h
   Orca/UX/Overlay.cpp
   Orca/UX/Overlay.h
   Orca/UX/Probe.cpp
   Orca/UX/Probe.h
-  Orca/UX/Queue.cpp
-  Orca/UX/Queue.h
-  Orca/UX/RankedSet.cpp
-  Orca/UX/RankedSet.h
-  Orca/UX/RankedPPlus.cpp
-  Orca/UX/RankedPPlus.h
+  Orca/Games/Brawl/Queue.cpp
+  Orca/Games/Brawl/Queue.h
+  Orca/Games/Brawl/RankedSet.cpp
+  Orca/Games/Brawl/RankedSet.h
+  Orca/Games/Brawl/PPlus/RankedPPlus.cpp
+  Orca/Games/Brawl/PPlus/RankedPPlus.h
   Orca/UX/RankedSteps.cpp
   Orca/UX/RankedSteps.h
-  Orca/UX/Relabel.cpp
-  Orca/UX/Relabel.h
-  Orca/UX/Results.cpp
-  Orca/UX/Results.h
+  Orca/Games/Brawl/Relabel.cpp
+  Orca/Games/Brawl/Relabel.h
+  Orca/Games/Brawl/Results.cpp
+  Orca/Games/Brawl/Results.h
   Orca/UX/Rumble.cpp
   Orca/UX/Rumble.h
   Orca/UX/SetEnd.cpp
   Orca/UX/SetEnd.h
-  Orca/UX/StageCursors.cpp
-  Orca/UX/StageCursors.h
+  Orca/Games/Brawl/StageCursors.cpp
+  Orca/Games/Brawl/StageCursors.h
   Orca/UX/UX.cpp
   Orca/UX/UX.h
   Orca/UX/Widgets.cpp
