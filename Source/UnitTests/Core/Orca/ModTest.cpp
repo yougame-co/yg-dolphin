@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <array>
 #include <cstdlib>
 #include <filesystem>
 #include <map>
 #include <optional>
+#include <span>
 #include <set>
 #include <string>
 #include <vector>
@@ -1235,6 +1237,45 @@ TEST(OrcaMod, UxKeyPartIsPerGame)
   Orca::Engine::SetModule(nullptr);
   Orca::Events::SetUXCompatVersion(before);
   Orca::SetActiveProfile(std::nullopt);
+}
+
+// S3: a module's guest writes are recorded against the regions it declares, never refused
+// (Engine/Regions.h); the builtin's are sorted, disjoint, and hold its match block.
+TEST(OrcaMod, ModuleWritesAreRecordedNotRefused)
+{
+  using Orca::Engine::Region;
+  using Orca::Engine::RegionKind;
+  const std::span<const Region> builtin = Orca::UX::Builtin().Regions();
+  ASSERT_FALSE(builtin.empty());
+  for (size_t i = 0; i < builtin.size(); ++i)
+  {
+    EXPECT_LT(builtin[i].begin, builtin[i].end) << builtin[i].name;
+    if (i > 0)
+      EXPECT_LE(builtin[i - 1].end, builtin[i].begin) << builtin[i].name;
+  }
+  static constexpr std::array<Region, 1> regions{{{0x80001000, 0x80001010, RegionKind::Data, "a"}}};
+  Orca::Engine::SetWriteRegions("test", regions);
+  Orca::Engine::NoteWrite(0x80001000, 4);
+  Orca::Engine::NoteWrite(0x8000100C, 4);
+  EXPECT_EQ(Orca::Engine::Writes().writes, 2u);
+  EXPECT_EQ(Orca::Engine::Writes().outside, 0u);
+  Orca::Engine::NoteWrite(0x8000100E, 4);  // runs past the end
+  Orca::Engine::NoteWrite(0x80000FFF, 1);
+  Orca::Engine::NoteWrite(0x80002000, 2);
+  EXPECT_EQ(Orca::Engine::Writes().writes, 5u);
+  EXPECT_EQ(Orca::Engine::Writes().outside, 3u);
+  // No regions: nothing recorded.
+  Orca::Engine::SetWriteRegions({}, {});
+  Orca::Engine::NoteWrite(0x80002000, 2);
+  EXPECT_EQ(Orca::Engine::Writes().writes, 0u);
+  // The builtin, through SetModule: its match block is in, main.dol's code is not.
+  Orca::Engine::SetModule(&Orca::UX::Builtin());
+  Orca::Engine::NoteWrite(0x806F2380, 4);
+  Orca::Engine::NoteWrite(0x80004000, 4);
+  EXPECT_EQ(Orca::Engine::Writes().writes, 2u);
+  EXPECT_EQ(Orca::Engine::Writes().outside, 1u);
+  Orca::Engine::SetModule(nullptr);
+  EXPECT_EQ(Orca::Engine::Writes().writes, 0u);
 }
 
 // The legacy key's inputs, pinned: with no ORCA_MOD_DIR the key is "orca2:" (the room protocol's

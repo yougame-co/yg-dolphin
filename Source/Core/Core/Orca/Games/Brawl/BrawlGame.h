@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <span>
 #include <string_view>
 
 #include "Core/Orca/Engine/Module.h"
@@ -37,6 +38,8 @@ Orca::Engine::Manifest Identify(const Orca::Profile* profile);
 // without a profile when Dolphin itself runs Brawl rev 2 (`running_game`, `running_revision`).
 bool ScenesReadable(const Orca::Profile* profile, std::string_view running_game,
                     u16 running_revision);
+// The guest memory the module's steps write, for every game here (record-only, Engine/Regions.h).
+std::span<const Orca::Engine::Region> Regions();
 // Whether the module's code applies to memory now, for the game `game` describes: in mod mode while
 // the builtin's guard words held at the last Mod::RefreshGuards; in legacy mode always.
 bool On(const Orca::Engine::Manifest& game);

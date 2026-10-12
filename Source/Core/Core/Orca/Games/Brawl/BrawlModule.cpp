@@ -314,6 +314,11 @@ bool BrawlModule::Active()
   return BrawlGame::On(Describe());
 }
 
+std::span<const Orca::Engine::Region> BrawlModule::Regions()
+{
+  return BrawlGame::Regions();
+}
+
 Orca::Engine::Ruleset BrawlModule::ProfileRuleset()
 {
   const Orca::Engine::Manifest game = Describe();

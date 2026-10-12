@@ -22,6 +22,7 @@ public:
   std::string_view Id() const override { return "brawl-builtin"; }
   Orca::Engine::Manifest Describe() override;
   bool Active() override;
+  std::span<const Orca::Engine::Region> Regions() override;
   void OnBoundary(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
                   const std::vector<Orca::Events::PortInfo>& ports, bool alone) override;
   Rollback::InputGate::Masks Masks(const Core::CPUThreadGuard& guard) override;

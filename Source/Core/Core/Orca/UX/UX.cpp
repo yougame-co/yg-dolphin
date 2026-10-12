@@ -106,6 +106,13 @@ void Shutdown()
   Orca::Events::SetPlugInCallback({});
   Orca::Events::SetLocalPadSource({});
   Orca::Events::SetInputAgeSource({});
+  // What the module wrote outside the regions it declares (record-only, Engine/Regions.h).
+  if (Orca::Engine::Module* module = Orca::Engine::ActiveModule())
+  {
+    const Orca::Engine::WriteCounts writes = Orca::Engine::Writes();
+    NOTICE_LOG_FMT(ROLLBACK, "Orca: module {} made {} guest writes, {} outside its regions",
+                   module->Id(), writes.writes, writes.outside);
+  }
   Orca::Engine::SetModule(nullptr);
   ShutdownOverlay();
   StopControllerStream();

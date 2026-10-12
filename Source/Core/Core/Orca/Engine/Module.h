@@ -5,12 +5,14 @@
 
 #include <array>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "Core/Orca/Engine/Display.h"
 #include "Core/Orca/Engine/MatchTypes.h"
+#include "Core/Orca/Engine/Regions.h"
 
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/UX/MenuEvents.h"
@@ -148,6 +150,10 @@ public:
   // mode: the builtin's guard words held at the last Mod::RefreshGuards; legacy: always, for a
   // described game). A pure function of memory on first runs and re-runs. Any thread.
   virtual bool Active() = 0;
+  // The guest memory its steps write (S3, record-only): every write through GuardMemory outside
+  // these is counted and logged, never refused (Engine/Regions.h). Static: the engine keeps the
+  // span.
+  virtual std::span<const Region> Regions() = 0;
   // Every frame boundary, first runs and rollback re-runs, before the session saves state there.
   // Every memory write must be a pure function of emulated memory, the frame number and the synced
   // ports, so a re-run writes exactly what the first run did. Runs after the engine's own

@@ -3,8 +3,10 @@
 
 #include "Core/Orca/Games/Brawl/BrawlGame.h"
 
+#include <array>
 #include <string_view>
 
+#include "Core/Orca/Games/Brawl/FreeSpace.h"
 #include "Core/Orca/Mod.h"
 #include "Core/Orca/Profile.h"
 
@@ -77,6 +79,33 @@ bool ScenesReadable(const Orca::Profile* profile, std::string_view running_game,
     return true;
   return profile && profile->IsLauncher() && profile->disc == BRAWL_DISC &&
          profile->revision == BRAWL_REVISION;
+}
+
+std::span<const Orca::Engine::Region> Regions()
+{
+  using Orca::Engine::RegionKind;
+  // Every write the six legacy hashlog inputs and both TEST packs make lands in one of these
+  // (S3's discovery run: 395 distinct 256-byte blocks). The heaps are what the game's own objects
+  // live in (character and stage selects, message buffers, the rules, the records with the tags),
+  // between the RELs the game loads into MEM1 (sora_* below 0x80B90000; fighters and stages at
+  // about 0x8107D000-0x811A9000; Project+'s at 0x817C5000) and up to MEM2's arena. They still hold
+  // the code of whatever REL loads inside them: telling code from data there is the enforcement
+  // step's (modules.md section 4.2), not this record's.
+  static constexpr std::array<Orca::Engine::Region, 7> REGIONS{{
+      // Project+'s stage select data (RSS_EXDATA, the page index, the strike table)
+      {0x8042C4E8, 0x8042C840, RegionKind::Data, "pplus-stage-data"},
+      // Project+'s Code Menu (OnlineRules.h CODE_MENU_END)
+      {0x804E0000, 0x804E2520, RegionKind::Data, "pplus-code-menu"},
+      // g_mtRandDefault and the menu's mtRand, a fresh start's seed (OnlineMenu.h)
+      {0x805A00B8, 0x805A00C0, RegionKind::Data, "rng-default"},
+      {0x805A0420, 0x805A0428, RegionKind::Data, "rng-menu"},
+      // The match block in sora_scene's free space, up to its limit (FreeSpace.h)
+      {FreeSpace::kMatchBlock.begin, FreeSpace::kMatchBlockLimit, RegionKind::Scratch,
+       "match-block"},
+      {0x81200000, 0x817C0000, RegionKind::Data, "mem1-heap"},
+      {0x90000800, 0x93600000, RegionKind::Data, "mem2-heap"},
+  }};
+  return REGIONS;
 }
 
 bool On(const Orca::Engine::Manifest& game)

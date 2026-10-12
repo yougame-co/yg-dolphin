@@ -14,6 +14,11 @@ std::atomic<Module*> s_module{nullptr};
 
 void SetModule(Module* module)
 {
+  // Its writes are recorded against its regions from now on (record-only, Engine/Regions.h).
+  if (module)
+    SetWriteRegions(module->Id(), module->Regions());
+  else
+    SetWriteRegions({}, {});
   s_module = module;
 }
 

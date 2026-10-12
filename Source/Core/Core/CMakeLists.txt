@@ -528,6 +528,8 @@ add_library(core
   Orca/Engine/MatchTypes.h
   Orca/Engine/Module.cpp
   Orca/Engine/Module.h
+  Orca/Engine/Regions.cpp
+  Orca/Engine/Regions.h
   Orca/GpuLost.cpp
   Orca/GpuLost.h
   Orca/JitWarm.cpp
