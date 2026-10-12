@@ -114,12 +114,36 @@ public:
   virtual std::optional<GCPadStatus> OwnPickPad() = 0;
 };
 
+// What game a session runs, as its module knows it (S3, modules.md section 4.1's Describe): fixed
+// for a boot, from the profile (legacy) or mod.json's builtin (mod mode), never from memory. The
+// game files and the engine ask the module for this instead of comparing game ids themselves.
+struct Manifest
+{
+  // The game the module's code is for: mod.json's builtin name ("brawl-rev2", "brawl-rev2-pplus"),
+  // or a legacy launcher profile's other build on the same executable ("brawl-rev2-launcher").
+  // Empty: none of the module's games.
+  std::string_view id;
+  // The ruleset its online rules play (None: no locks, no queue, no ranked).
+  Ruleset ruleset = Ruleset::None;
+  // It reads each game's result.
+  bool results = false;
+  // Host only, about the disc rather than the game (true without an id too, such as for a mod with
+  // no builtin on Brawl's disc): the game's music can be switched off (Core/Orca/Music.h).
+  bool music = false;
+};
+
 class Module
 {
 public:
   virtual ~Module() = default;
   // A stable id ("brawl-builtin"), for logs.
   virtual std::string_view Id() const = 0;
+  // What game this session runs (S3). Any thread.
+  virtual Manifest Describe() = 0;
+  // Whether the module's code applies to memory now: a described game whose addresses hold (mod
+  // mode: the builtin's guard words held at the last Mod::RefreshGuards; legacy: always, for a
+  // described game). A pure function of memory on first runs and re-runs. Any thread.
+  virtual bool Active() = 0;
   // Every frame boundary, first runs and rollback re-runs, before the session saves state there.
   // Every memory write must be a pure function of emulated memory, the frame number and the synced
   // ports, so a re-run writes exactly what the first run did. Runs after the engine's own

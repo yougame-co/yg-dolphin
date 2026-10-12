@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "Core/Orca/Engine/GuestMemory.h"
+#include "Core/Orca/Games/Brawl/BrawlGame.h"
 #include "Core/Orca/Games/Brawl/BrawlStages.h"
 #include "Core/Orca/Games/Brawl/CharOrder.h"
 #include "Core/Orca/Games/Brawl/CssTitle.h"
@@ -22,6 +23,7 @@
 #include "Core/Orca/Games/Brawl/Relabel.h"
 #include "Core/Orca/Games/Brawl/Results.h"
 #include "Core/Orca/Games/Brawl/StageCursors.h"
+#include "Core/Orca/Profile.h"
 #include "Core/Orca/UX/Kit.h"
 #include "Core/Orca/UX/Probe.h"
 #include "Core/Orca/UX/Rumble.h"
@@ -299,6 +301,16 @@ Orca::Engine::Display BrawlModule::Show()
     d.picker_ribbon = CharOrder::CurrentPickerRibbon();
   d.dots = RankedSet::CurrentDots();
   return d;
+}
+
+Orca::Engine::Manifest BrawlModule::Describe()
+{
+  return BrawlGame::Identify(Orca::ActiveProfile());
+}
+
+bool BrawlModule::Active()
+{
+  return BrawlGame::On(Describe());
 }
 
 Orca::Engine::Ruleset BrawlModule::ProfileRuleset()

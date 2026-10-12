@@ -572,6 +572,8 @@ add_library(core
   Orca/Session/YouGameRoom.cpp
   Orca/Session/YouGameRoom.h
   Orca/Games/Brawl/BrawlStages.cpp
+  Orca/Games/Brawl/BrawlGame.cpp
+  Orca/Games/Brawl/BrawlGame.h
   Orca/Games/Brawl/BrawlModule.cpp
   Orca/Games/Brawl/BrawlModule.h
   Orca/Games/Brawl/BrawlStages.h

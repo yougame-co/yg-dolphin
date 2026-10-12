@@ -20,10 +20,12 @@
 #include "Common/Version.h"
 #include "Core/ConfigManager.h"
 #include "Core/Orca/Mod.h"
+#include "Core/Orca/Music.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/GamePatches.h"
+#include "Core/Orca/Games/Brawl/BrawlModule.h"
 #include "Core/Orca/Games/Brawl/OnlineMenu.h"
 #include "Core/Orca/Games/Brawl/OnlineRules.h"
 #include "Core/Orca/Games/Brawl/Results.h"
@@ -891,6 +893,135 @@ TEST(OrcaMod, ModeGates)
   EXPECT_TRUE(Orca::UX::FreshMove::Supported());
   Orca::SetActiveProfile(std::nullopt);
   File::DeleteDirRecursively(b.dir);
+  File::DeleteDirRecursively(n.dir);
+}
+
+// S3: which game a session runs is the builtin module's answer (Module::Describe, Active,
+// ProfileRuleset over BrawlGame::Identify), for every kind of profile, legacy and mod mode, and the
+// predicates the game files and the engine asked before S3 (each compared ids itself) agree.
+TEST(OrcaMod, GameIdentityIsTheModules)
+{
+  // No active profile afterwards, whatever fails.
+  struct ProfileDone
+  {
+    ~ProfileDone() { Orca::SetActiveProfile(std::nullopt); }
+  } profile_done;
+  using Orca::Engine::Ruleset;
+  Orca::UX::BrawlModule& module = Orca::UX::Builtin();
+  const auto expect = [&module](std::string_view id, Ruleset ruleset, bool on, bool music) {
+    const Orca::Engine::Manifest game = module.Describe();
+    EXPECT_EQ(game.id, id);
+    EXPECT_EQ(game.ruleset, ruleset);
+    EXPECT_EQ(game.results, !id.empty());
+    EXPECT_EQ(game.music, music);
+    EXPECT_EQ(module.Active(), on);
+    EXPECT_EQ(module.ProfileRuleset(), on ? ruleset : Ruleset::None);
+    EXPECT_EQ(Orca::UX::Rules::ProfileRuleset(), module.ProfileRuleset());
+    EXPECT_EQ(Orca::UX::ResultsVerified(), on);
+    EXPECT_EQ(Orca::UX::FreshMove::Supported(), !id.empty());
+    EXPECT_EQ(Orca::Music::Supported(), music);
+  };
+  {
+    SCOPED_TRACE("no profile");
+    Orca::SetActiveProfile(std::nullopt);
+    expect("", Ruleset::None, false, false);
+  }
+  Orca::Profile disc;
+  disc.game_id = "RSBE01";
+  disc.revision = 2;
+  {
+    SCOPED_TRACE("Brawl rev 2");
+    Orca::SetActiveProfile(disc);
+    expect("brawl-rev2", Ruleset::Brawl, true, true);
+  }
+  {
+    SCOPED_TRACE("Brawl, another revision: the music switch only");
+    disc.revision = 1;
+    Orca::SetActiveProfile(disc);
+    expect("", Ruleset::None, false, true);
+  }
+  {
+    SCOPED_TRACE("another disc");
+    disc.game_id = "RMCE01";
+    disc.revision = 2;
+    Orca::SetActiveProfile(disc);
+    expect("", Ruleset::None, false, false);
+  }
+  Orca::Profile launcher;
+  launcher.game_id = "PPLUS32";
+  launcher.revision = 2;
+  launcher.launcher_hash = std::string(32, '0');
+  launcher.disc = "RSBE01";
+  {
+    SCOPED_TRACE("Project+'s launcher on Brawl rev 2");
+    Orca::SetActiveProfile(launcher);
+    expect("brawl-rev2-pplus", Ruleset::PPlus, true, true);
+  }
+  {
+    SCOPED_TRACE("another launcher build on Brawl rev 2: no ruleset, the rest");
+    launcher.game_id = "LXP";
+    Orca::SetActiveProfile(launcher);
+    expect("brawl-rev2-launcher", Ruleset::None, true, true);
+  }
+  {
+    SCOPED_TRACE("Project+'s launcher on another disc");
+    launcher.game_id = "PPLUS32";
+    launcher.disc = "RSBP01";
+    Orca::SetActiveProfile(launcher);
+    expect("", Ruleset::None, false, false);
+  }
+  {
+    SCOPED_TRACE("Project+'s launcher on Brawl, another revision");
+    launcher.disc = "RSBE01";
+    launcher.revision = 1;
+    Orca::SetActiveProfile(launcher);
+    expect("", Ruleset::None, false, true);
+  }
+
+  // Mod mode: the builtin mod.json declares, on while its guard words hold.
+  std::string error;
+  Bundle b = MakeBundle(BRAWL_MOD);
+  b.WriteTree();
+  auto brawl = Orca::LoadModProfile(b.dir, &error);
+  ASSERT_TRUE(brawl) << error;
+  {
+    SCOPED_TRACE("Brawl mod");
+    Orca::SetActiveProfile(brawl);
+    expect("brawl-rev2", Ruleset::Brawl, false, true);
+    Orca::Mod::NoteGuards(true, 2);
+    expect("brawl-rev2", Ruleset::Brawl, true, true);
+    Orca::Mod::NoteGuards(false, 500);
+    expect("brawl-rev2", Ruleset::Brawl, false, true);
+  }
+  Bundle pp = MakeBundle(PPLUS_MOD);
+  pp.Add("launcher.dol", std::string(64, '\x01'));
+  pp.WriteTree();
+  auto pplus = Orca::LoadModProfile(pp.dir, &error);
+  ASSERT_TRUE(pplus) << error;
+  {
+    SCOPED_TRACE("Project+ mod");
+    Orca::SetActiveProfile(pplus);
+    expect("brawl-rev2-pplus", Ruleset::PPlus, false, true);
+    Orca::Mod::NoteGuards(true, 2);
+    expect("brawl-rev2-pplus", Ruleset::PPlus, true, true);
+  }
+  picojson::value plain;
+  picojson::parse(plain, BRAWL_MOD);
+  plain.get<picojson::object>().erase("builtin");
+  plain.get<picojson::object>().erase("offers");
+  Bundle n = MakeBundle(plain.serialize());
+  n.WriteTree();
+  auto none = Orca::LoadModProfile(n.dir, &error);
+  ASSERT_TRUE(none) << error;
+  {
+    SCOPED_TRACE("a mod with no builtin on Brawl's disc");
+    Orca::SetActiveProfile(none);
+    Orca::Mod::NoteGuards(true, 2);
+    expect("", Ruleset::None, false, true);
+  }
+  Orca::SetActiveProfile(std::nullopt);
+  File::DeleteDirRecursively(b.dir);
+  File::DeleteDirRecursively(pp.dir);
   File::DeleteDirRecursively(n.dir);
 }
 
