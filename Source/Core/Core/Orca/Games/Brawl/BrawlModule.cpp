@@ -315,7 +315,8 @@ bool BrawlModule::Active()
 
 Orca::Engine::Ruleset BrawlModule::ProfileRuleset()
 {
-  return Rules::ProfileRuleset();
+  const Orca::Engine::Manifest game = Describe();
+  return BrawlGame::On(game) ? game.ruleset : Orca::Engine::Ruleset::None;
 }
 
 void BrawlModule::Latch(

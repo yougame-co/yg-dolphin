@@ -20,6 +20,7 @@
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Session/Replay.h"
 #include "Core/Orca/Engine/GuestMemory.h"
+#include "Core/Orca/Games/Brawl/BrawlModule.h"
 #include "Core/Orca/Games/Brawl/OnlineMenu.h"
 #include "Core/Orca/Games/Brawl/OnlineSeats.h"
 #include "Core/Orca/UX/Probe.h"
@@ -555,22 +556,9 @@ bool HeaderIs(const Header& in_memory, const Header& wanted)
 
 Ruleset ProfileRuleset()
 {
-  // Mod mode: the mod's builtin, while its guard words hold (Core/Orca/Mod.h).
-  if (Orca::Mod::ActiveMod())
-  {
-    if (Orca::Mod::BuiltinOn(Orca::Mod::Builtin::BrawlRev2))
-      return Ruleset::Brawl;
-    if (Orca::Mod::BuiltinOn(Orca::Mod::Builtin::BrawlRev2PPlus))
-      return Ruleset::PPlus;
-    return Ruleset::None;
-  }
-  const Orca::Profile* profile = Orca::ActiveProfile();
-  if (!profile || profile->revision != 2)
-    return Ruleset::None;
-  if (profile->IsLauncher())
-    return profile->game_id == "PPLUS32" && profile->disc == "RSBE01" ? Ruleset::PPlus :
-                                                                        Ruleset::None;
-  return profile->game_id == "RSBE01" ? Ruleset::Brawl : Ruleset::None;
+  // The module's answer (BrawlGame.h): Brawl rev 2 plays Brawl's, Project+'s launcher on it
+  // Project+'s, while their addresses hold (in mod mode, the builtin's guard words).
+  return Builtin().ProfileRuleset();
 }
 
 std::array<PlayerPick, 4> ReadPicks(const GuestMemory& m)

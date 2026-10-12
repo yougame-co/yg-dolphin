@@ -9,7 +9,6 @@
 #include <fmt/format.h>
 
 #include "Common/Logging/Log.h"
-#include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/Engine/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/BrawlModule.h"
@@ -389,15 +388,8 @@ void ReadResultsFrame(const Core::CPUThreadGuard& guard, int frame)
 
 void RequestQueueRules()
 {
-  const Orca::Profile* profile = Orca::ActiveProfile();
-  if (profile && profile->mod)
-  {
-    // Vanilla Brawl's rules screen only (Core/Orca/Mod.h).
-    if (Orca::Mod::BuiltinOn(Orca::Mod::Builtin::BrawlRev2))
-      s_rules_pending = true;
-    return;
-  }
-  if (profile && !profile->IsLauncher() && profile->game_id == "RSBE01" && profile->revision == 2)
+  // Vanilla Brawl's rules screen only, while its addresses hold: the module's answer.
+  if (Builtin().ProfileRuleset() == Orca::Engine::Ruleset::Brawl)
     s_rules_pending = true;
 }
 

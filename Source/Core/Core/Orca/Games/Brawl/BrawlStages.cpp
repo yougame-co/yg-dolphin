@@ -10,7 +10,7 @@
 #include <fmt/format.h>
 
 #include "Common/Logging/Log.h"
-#include "Core/Orca/Profile.h"
+#include "Core/Orca/Games/Brawl/BrawlModule.h"
 #include "Core/Orca/Games/Brawl/FreeSpace.h"
 #include "Core/Orca/Games/Brawl/MatchBlock.h"
 #include "Core/Orca/Engine/GuestMemory.h"
@@ -630,12 +630,8 @@ bool LocalOnRandom(const GuestMemory& m, const View& v, int me)
 
 bool VanillaBrawl()
 {
-  // Mod mode: the vanilla builtin, while its guard words hold (Core/Orca/Mod.h).
-  if (Orca::Mod::ActiveMod())
-    return Orca::Mod::BuiltinOn(Orca::Mod::Builtin::BrawlRev2);
-  const Orca::Profile* profile = Orca::ActiveProfile();
-  return profile && !profile->IsLauncher() && profile->game_id == "RSBE01" &&
-         profile->revision == 2;
+  // Brawl rev 2 itself (no launcher), while its addresses hold: the module's answer.
+  return Builtin().ProfileRuleset() == Orca::Engine::Ruleset::Brawl;
 }
 }  // namespace
 

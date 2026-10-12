@@ -7,8 +7,9 @@
 
 // The builtin game module for Brawl rev 2 and Project+ (Orca split, S2 commit 4): the game steps
 // that used to be UX.cpp's three hook bodies, moved verbatim and in the same order. Each step still
-// checks its own game (BrawlExecutable, ProfileRuleset, the mod's guards), so this module runs for
-// every session as those bodies did; Masks returns none when no ruleset applies.
+// checks whether it applies (BrawlExecutable, ProfileRuleset), so this module runs for every
+// session as those bodies did; Masks returns none when no ruleset applies. Since S3 those checks
+// ask the module (Describe, Active, ProfileRuleset over BrawlGame.h) instead of comparing game ids.
 //
 // A few engine calls still sit between the game steps (ProbeFrame, Rumble, Kit::SetLook, the late-
 // name test knob): hoisting them out changes the write order and needs its own proof (modules.md
