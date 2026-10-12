@@ -42,8 +42,8 @@ inline constexpr std::string_view SD_BUILDER = "fat2";
 inline constexpr u64 SD_MAX_BYTES = u64{2} << 30;
 inline constexpr u64 SD_MIN_BYTES = u64{64} << 20;
 inline constexpr u64 SD_ALIGN = 32768;
-// A bundle path (the contract's 100 characters: the run folder userData\orca\run\<slug>\<hash>\
-// takes about 135 on Windows, and laid-out paths stay under 240).
+// A bundle path (the contract's 100 characters: the run folder, userData\orca\run\<slug>\<hash>
+// plus its separator, takes about 135 on Windows, and laid-out paths stay under 240).
 inline constexpr size_t MAX_PATH_BYTES = 100;
 inline constexpr size_t MAX_FILES = 20000;
 // FAT's limit for one file.
