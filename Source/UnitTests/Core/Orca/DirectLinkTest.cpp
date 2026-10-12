@@ -16,6 +16,7 @@
 #include <gtest/gtest.h>
 #include <picojson.h>
 
+#include "Common/Timer.h"
 #include "Core/Orca/Session/DirectLink.h"
 #include "Core/Orca/Session/YouGameRoom.h"
 
@@ -394,11 +395,30 @@ TEST(OrcaDirectLink, BlockedOrTurnOnlyStaysOnTheRelay)
 // trip of 120 ms on the link.
 TEST(OrcaDirectLink, TestDelayCoversTheLinkBothWays)
 {
+  // The link thread releases held datagrams on its own wake-ups. Orca asks Windows for 1 ms timers
+  // once emulation starts (SystemTimers); without that, each of the four holds can overshoot by a
+  // 15.6 ms tick. A no-op elsewhere.
+  Common::Timer::IncreaseResolution();
+  struct Restore
+  {
+    ~Restore() { Common::Timer::RestoreResolution(); }
+  } restore;
   Mesh mesh(2, [](DirectOptions& o, int) { o.net_delay_ms = 30; });
-  ASSERT_TRUE(mesh.WaitFor([&] { return mesh.AllUp() && mesh.Stats(0, 1).rtt_ms >= 0; }));
-  ASSERT_TRUE(mesh.WaitFor([&] { return mesh.Stats(0, 1).rtt_ms >= 110; }, 3s))
-      << mesh.Stats(0, 1).rtt_ms;
-  EXPECT_LE(mesh.Stats(0, 1).rtt_ms, 160);
+  ASSERT_TRUE(mesh.WaitFor([&] { return mesh.AllUp(); }));
+  // The median of about ten keepalive round trips (one each 200 ms), not the first one alone: one
+  // late wake-up on a busy machine is not the delay.
+  ASSERT_TRUE(mesh.WaitFor([&] { return mesh.Stats(0, 1).received >= 12; }))
+      << mesh.Stats(0, 1).received;
+  const int rtt = mesh.Stats(0, 1).rtt_ms;
+  // Under 110: the delay is missing on one way. Windows' ceiling leaves room for a test process
+  // the PC runs at below-normal priority next to other work.
+#ifdef _WIN32
+  constexpr int CEILING_MS = 200;
+#else
+  constexpr int CEILING_MS = 160;
+#endif
+  EXPECT_GE(rtt, 110);
+  EXPECT_LE(rtt, CEILING_MS);
 }
 
 // A peer sending far faster than an honest one (one a frame; while it stalls, one every 4 ms) gets
