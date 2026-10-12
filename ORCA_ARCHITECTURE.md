@@ -1,5 +1,9 @@
 # How Orca works
 
+> **2026-10-12:** Orca is now called YG Baiji. Players see that name from 0.3.40 on (the baiji is
+> the Yangtze river dolphin). This page keeps the name Orca, as the code does, and nothing in it was
+> reworded.
+
 Orca adds rollback netplay to the Dolphin emulator. It runs Super Smash Bros. Brawl and Project+
 online on [YouGame](https://yougame.co). This page explains the design. It also covers how Orca
 differs from Slippi and Brawlback, the projects that came before it and informed it.
@@ -200,3 +204,6 @@ reworded it the same day to "Our first experiment, before Orca existed, ran our 
 on Brawlback's approach." That made it harder to see that the experiment was a fork of Brawlback's
 code, which was a mistake. The Brawlback section above gives the full account. The source of each
 released Orca is tagged in this repository as `orca-<version>`.
+
+2026-10-12: from 0.3.40 (YG Baiji) the tags are `yg-baiji-<version>`; the `orca-<version>` tags
+stay as they are.

@@ -1,8 +1,11 @@
 #!/bin/bash
-# Builds Orca for Linux (x86-64) and zips it the way the YouGame app's linux-x64 build unpacks it:
-#   Orca/orca          the NoGUI program (the manifest's entry, "Orca/orca")
-#   Orca/Sys/          Dolphin's and Orca's data, read from beside the program
-#   Orca/COPYING, LICENSES/, THIRD_PARTY/, SOURCE.txt, VERSION.txt
+# Builds YG Baiji (Orca up to 0.3.39) for Linux (x86-64) and zips it the way the YouGame app's
+# linux-x64 build unpacks it:
+#   yg-baiji/yg-baiji  the NoGUI program (the manifest's entry, "yg-baiji/yg-baiji"; "Orca/orca"
+#                      up to 0.3.39)
+#   yg-baiji/Sys/      Dolphin's and Orca's data, read from beside the program (Sys/Orca/ keeps its
+#                      name: installed apps check Sys/Orca/<profile>.ini)
+#   yg-baiji/COPYING, LICENSES/, THIRD_PARTY/, SOURCE.txt, VERSION.txt
 #
 #   Tools/orca-package-linux.sh [build-dir] [out-dir]
 #     build-dir  default <repo>/build-orca-linux (configured for a release on every run)
@@ -15,8 +18,9 @@
 # players fetch the source from: GPL) and builds the private repository at the release commit, like
 # the Windows build: that commit is in the compatibility key (scmrev.h), so a build of the public
 # snapshot would never meet a Mac or a PC. The tree must be clean before and after the build.
-# VERSION.txt and SOURCE.txt link <ORCA_SOURCE_URL>/tree/orca-<version>; the script warns while
-# that tag is not public yet. Without ORCA_VERSION the zip is a *-dev.zip.
+# VERSION.txt and SOURCE.txt link <ORCA_SOURCE_URL>/tree/<tag>, the tag being yg-baiji-<version>
+# from 0.3.40 and orca-<version> before; the script warns while that tag is not public yet. Without
+# ORCA_VERSION the zip is a *-dev.zip.
 #
 # Build it on the oldest distribution it must run on (ORCA_GLIBC_MAX, default 2.35: Ubuntu 22.04,
 # Debian 12, SteamOS 3 and everything since): glibc is the one library it cannot carry. Needs git,
@@ -73,11 +77,17 @@ if [ -n "$VERSION" ]; then
   PUBLIC="${PUBLIC%/}"
   [ -n "$PUBLIC" ] || fail "a release needs ORCA_SOURCE_URL, the public repository players get the source from"
   RELEASE=1
-  SOURCE="$PUBLIC/tree/orca-$VERSION"
+  # The public tag: yg-baiji-<version> from 0.3.40, orca-<version> before.
+  if [ "$(printf '%s\n%s\n' 0.3.40 "$VERSION" | sort -V | head -n 1)" = 0.3.40 ]; then
+    TAG="yg-baiji-$VERSION"
+  else
+    TAG="orca-$VERSION"
+  fi
+  SOURCE="$PUBLIC/tree/$TAG"
   # Anonymous, so a private repository can't pass: players must be able to fetch it.
   GIT_TERMINAL_PROMPT=0 git -c credential.helper= ls-remote --exit-code "$PUBLIC" \
-    "refs/tags/orca-$VERSION" >/dev/null 2>&1 ||
-    echo "orca-package: WARNING: orca-$VERSION is not public yet at $PUBLIC" >&2
+    "refs/tags/$TAG" >/dev/null 2>&1 ||
+    echo "orca-package: WARNING: $TAG is not public yet at $PUBLIC" >&2
 else
   VERSION=0.0.0
   SOURCE="not published (a development build)"
@@ -134,15 +144,16 @@ GLIBC="$(objdump -T "$BIN" | grep -o 'GLIBC_[0-9][0-9.]*' | sed 's/GLIBC_//' | s
   fail "Orca needs glibc $GLIBC, newer than $GLIBC_MAX: build it on an older distribution"
 
 STAGE="$OUT_DIR/stage"
-PKG="$STAGE/Orca"
+PKG="$STAGE/yg-baiji"
+PROGRAM="$PKG/yg-baiji"
 rm -rf "$STAGE"
 mkdir -p "$PKG"
-install -m 755 "$BIN" "$PKG/orca"
+install -m 755 "$BIN" "$PROGRAM"
 # Symbols stay beside the zip (for a crash's addresses), not in it.
-DEBUG="$OUT_DIR/orca-$VERSION-linux-x64.debug"
-objcopy --only-keep-debug "$PKG/orca" "$DEBUG"
-strip --strip-unneeded "$PKG/orca"
-objcopy --add-gnu-debuglink="$DEBUG" "$PKG/orca"
+DEBUG="$OUT_DIR/yg-baiji-$VERSION-linux-x64.debug"
+objcopy --only-keep-debug "$PROGRAM" "$DEBUG"
+strip --strip-unneeded "$PROGRAM"
+objcopy --add-gnu-debuglink="$DEBUG" "$PROGRAM"
 # Real files only (cp -L): a link would unpack differently from one player to the next. Minus what
 # only the Qt UI shows, as in the macOS bundle (DolphinNoGUI/CMakeLists.txt): the themes and the
 # Resources images, never the on-screen font.
@@ -178,9 +189,9 @@ for dir in "$ROOT"/Externals/*/; do
     done
 done
 cat >"$PKG/SOURCE.txt" <<EOF
-Orca $VERSION is free software under the GNU GPL v2 or later. Source for this exact version: $SOURCE (also linked from yougame.co).
+YG Baiji $VERSION (formerly Orca) is free software under the GNU GPL v2 or later. Source for this exact version: $SOURCE (also linked from yougame.co).
 
-Built for Linux (x86-64) from commit $COMMIT$DIRTY. Orca is based on the Dolphin emulator
+Built for Linux (x86-64) from commit $COMMIT$DIRTY. YG Baiji is based on the Dolphin emulator
 (https://github.com/dolphin-emu/dolphin). Needs glibc $GLIBC or newer, X11 (or XWayland), EGL and
 OpenGL.
 
@@ -188,19 +199,19 @@ CMake settings:
 $(grep -E '^(CMAKE_BUILD_TYPE|CMAKE_EXE_LINKER_FLAGS|ENABLE_[A-Z_]+|USE_[A-Z_]+|ENCODE_FRAMEDUMPS|ORCA_[A-Z_]+):' \
   "$BUILD_DIR/CMakeCache.txt" | sed 's/^/  /')
 EOF
-printf '%s\n' "Orca $VERSION (YouGame fork of Dolphin), Linux x64" "commit $COMMIT" "source $SOURCE" \
+printf '%s\n' "YG Baiji $VERSION (YouGame fork of Dolphin), Linux x64" "commit $COMMIT" "source $SOURCE" \
   'License: GPL-2.0-or-later (COPYING, LICENSES/GPL-2.0-or-later.txt).' >"$PKG/VERSION.txt"
 
 if [ "$RELEASE" = 1 ]; then
-  ZIP="$OUT_DIR/orca-$VERSION-linux-x64.zip"
+  ZIP="$OUT_DIR/yg-baiji-$VERSION-linux-x64.zip"
 else
-  ZIP="$OUT_DIR/orca-$VERSION-linux-x64-dev.zip"
+  ZIP="$OUT_DIR/yg-baiji-$VERSION-linux-x64-dev.zip"
 fi
 rm -f "$ZIP"
-# Info-ZIP keeps each file's Unix mode, so Orca/orca unpacks executable (unzip and bsdtar both
-# restore it, and the app sets it again before a run). -X: no owner ids or extra timestamps.
-(cd "$STAGE" && zip -q -r -X "$ZIP" Orca)
+# Info-ZIP keeps each file's Unix mode, so yg-baiji/yg-baiji unpacks executable (unzip and bsdtar
+# both restore it, and the app sets it again before a run). -X: no owner ids or extra timestamps.
+(cd "$STAGE" && zip -q -r -X "$ZIP" yg-baiji)
 rm -rf "$STAGE"
-echo "orca-package: $ZIP (entry Orca/orca, commit $COMMIT, glibc $GLIBC)"
+echo "orca-package: $ZIP (entry yg-baiji/yg-baiji, commit $COMMIT, glibc $GLIBC)"
 sha256sum "$ZIP"
 stat -c '%s bytes' "$ZIP"

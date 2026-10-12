@@ -66,15 +66,15 @@ bool OsKeyboardAllowed(Os os, bool session, bool stdio);
 // Error codes (orca error <code> <sentence>), with their sentences for the player.
 inline constexpr const char* EMBED_ERROR = "sandbox_embed";
 inline constexpr const char* EMBED_SENTENCE =
-    "Orca couldn't open in the YouGame window. Try again.";
+    "YG Baiji couldn't open in the YouGame window. Try again.";
 inline constexpr const char* DISC_ERROR = "sandbox_disc";
 inline constexpr const char* DISC_SENTENCE =
-    "Orca can't read this disc where it is. Copy it into a folder of yours, such as Documents, "
+    "YG Baiji can't read this disc where it is. Copy it into a folder of yours, such as Documents, "
     "and choose the copy.";
 inline constexpr const char* DENIED_ERROR = "sandbox_denied";
 inline constexpr const char* DENIED_SENTENCE =
-    "Orca isn't allowed into its own folder, so it didn't start. Reset Orca's files from YouGame's "
-    "Help menu, then press Play again.";
+    "YG Baiji isn't allowed into its own folder, so it didn't start. In YouGame's Help menu, reset "
+    "its files, then press Play again.";
 
 // Opening `path` to read fails for lack of permission (ERROR_ACCESS_DENIED, EACCES or EPERM), the
 // way a sandbox refuses a file it wasn't given.

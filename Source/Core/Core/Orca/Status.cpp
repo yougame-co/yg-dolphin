@@ -238,7 +238,7 @@ int Finish()
             !s_stopping.load(std::memory_order_relaxed);
   }
   if (stuck)
-    Error("boot", "Orca couldn't start the game");
+    Error("boot", "YG Baiji couldn't start the game");
   State("ended");
   return ExitCode();
 }

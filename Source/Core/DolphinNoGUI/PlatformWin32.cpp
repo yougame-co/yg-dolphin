@@ -192,7 +192,8 @@ bool PlatformWin32::CreateRenderWindow()
     return true;
   }
 
-  m_hwnd = CreateWindowEx(WS_EX_CLIENTEDGE, WINDOW_CLASS_NAME, _T("Orca"), WS_OVERLAPPEDWINDOW,
+  // Standalone: the caption is the name players see (the embedded windows above keep "Orca").
+  m_hwnd = CreateWindowEx(WS_EX_CLIENTEDGE, WINDOW_CLASS_NAME, _T("YG Baiji"), WS_OVERLAPPEDWINDOW,
                           m_window_x < 0 ? CW_USEDEFAULT : m_window_x,
                           m_window_y < 0 ? CW_USEDEFAULT : m_window_y, m_window_width,
                           m_window_height, nullptr, nullptr, GetModuleHandle(nullptr), this);

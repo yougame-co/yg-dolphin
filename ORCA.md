@@ -1,5 +1,15 @@
 # Orca
 
+> **2026-10-12: players see the name YG Baiji** from 0.3.40 on (Orca up to 0.3.39; the baiji is the
+> Yangtze river dolphin). The builds still use neither Dolphin's name nor its logo. This document,
+> the code and every contract keep the codename Orca: `namespace Orca`, `Core/Orca`, `Sys/Orca/`,
+> the `orca <verb>` lines and caps, `orca2:` keys, `orca-<game>` modes, the `ORCA_*` variables,
+> `Config/Orca.ini`, `OrcaControls-<GAMEID>.txt`, the log prefixes and the bundle id
+> `co.yougame.orca`. What ships is `YG Baiji.app` (its program still `Contents/MacOS/Orca`),
+> `YG Baiji/yg-baiji.exe` and `yg-baiji/yg-baiji` where this document says Orca.app,
+> `Orca/Orca.exe` and `Orca/orca`. Public tags are `yg-baiji-<version>` from 0.3.40. Text written
+> before this note is left as it was.
+
 Orca is YouGame's GameCube and Wii rollback netcode core: a fork of the
 [Dolphin](https://github.com/dolphin-emu/dolphin) emulator. Every Orca source file carries an SPDX
 `GPL-2.0-or-later` tag, as Dolphin's own do; in aggregate the repository is GPLv3-compatible (see
@@ -58,9 +68,9 @@ and why. Paths are relative to `Source/Core/Core/` unless they start with `Sourc
 
 Orca builds like Dolphin (CMake). The targets that matter are `dolphin-emu-nogui` (what the YouGame
 desktop app runs) and `tests`. On macOS, `Tools/orca-package-macos.sh` makes **Orca.app**, the
-bundle the desktop app starts. On Linux (x86-64), `Tools/orca-package-linux.sh` makes the
-`Orca/` folder the app's `linux-x64` build unpacks: `Orca/orca` (the NoGUI program), `Sys/`
-and the licences. It builds with no Qt, Vulkan, ALSA, PulseAudio (Cubeb opens the system's sound
+bundle the desktop app starts, and zips it as `YG Baiji.app` (from 0.3.40). On Linux (x86-64),
+`Tools/orca-package-linux.sh` makes the `yg-baiji/` folder (`Orca/` up to 0.3.39) the app's
+`linux-x64` build unpacks: `yg-baiji/yg-baiji` (the NoGUI program), `Sys/` and the licences. It builds with no Qt, Vulkan, ALSA, PulseAudio (Cubeb opens the system's sound
 server itself, so its PulseAudio headers must be there at build time), BlueZ, evdev or libudev,
 links libstdc++ statically, and refuses a program that needs a library beyond glibc, X11 and
 EGL/OpenGL, one that lacks X11, Xi or EGL, or a glibc newer than `ORCA_GLIBC_MAX` (2.35, Ubuntu
@@ -2322,6 +2332,13 @@ STUN and TURN are internet traffic and work in every mode.
 ## Changes by release
 
 What each release changed for players, in plain words.
+
+### 0.3.40
+
+- **Orca is now YG Baiji.** The name was picked in a YouGame community poll; the baiji is the
+  Yangtze river dolphin. The window, the Mac menu and the messages say YG Baiji. Your controls,
+  settings and ranked ratings carry over. On Windows the firewall may ask once more, because the
+  program has a new name.
 
 ### 0.3.39
 
