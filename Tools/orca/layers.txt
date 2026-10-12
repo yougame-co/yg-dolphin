@@ -87,6 +87,7 @@ engine-sensitive  Source/Core/Core/Orca/Profile.*         # profile parser, forc
 engine-sensitive  Source/Core/Core/Orca/Mod.*             # mods-p1: mod.json, tree hash, SD builder
 engine-sensitive  Source/Core/Core/Orca/Bundle.*          # flat bundles: discovery, mod.sig, the pinned key
 engine-sensitive  Source/Core/Core/Orca/Sandbox.*         # sandbox mode (0.3.39): --sandbox-probe's socket and file checks
+engine-sensitive  Source/Core/Core/Orca/LocalStore.*      # S2: kept seen keys and controls (user files)
 # Session/: rooms, direct links, keyframes, replays, pad codec, compatibility key, input exchange.
 engine-sensitive  Source/Core/Core/Orca/Session/**
 engine            Source/Core/Core/Orca/Session/Events.*  # engine-to-game callbacks, no parsing
@@ -106,12 +107,14 @@ engine-sensitive  Source/Core/Core/Orca/UX/Controllers.*  # the app's controller
 engine-sensitive  Source/Core/Core/Orca/UX/YgOrb.*        # the app's orb and notice commands
 engine-sensitive  Source/Core/Core/Orca/UX/GameFont.*     # RFNT reader (fonts from the disc)
 engine-sensitive  Source/Core/Core/Orca/UX/GamePatches.*  # .patches parser and applier
+engine-sensitive  Source/Core/Core/Orca/UX/QueueApp.*     # S2: the queue identity codec (peer bytes)
 # Game logic (hardcoded Brawl rev 2 / Project+ memory) moved to Orca/Games/Brawl/ in S2 commit 1
 # (Tools/orca/split/s2-move.py) and is classed by the Games/** rule above: stage flows, rules, name
 # tags, the match block and set block layouts, free space, and the mixed text modules (an engine
 # mechanism carrying game data, classed by the data until S5 moves the mechanism to the engine).
-# Three of them carry competitive policy until S2 splits it out: the queue's ready/timer/skip machine,
-# ranked stocks and minutes (RankedSet), and the winner and set result the room rates (Results).
+# Three of them carry competitive policy until S2 splits it out: the queue's ready/timer/skip
+# machine, ranked stocks and minutes (RankedSet), and the winner and set result the room rates
+# (Results).
 game-logic        Source/Core/Core/Orca/Games/Brawl/{Queue,RankedSet,Results}.* review
 
 # ---------------------------------------------------------------------------------------------

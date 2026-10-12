@@ -194,6 +194,11 @@ class RealMapTests(unittest.TestCase):
             "Source/Core/Core/Orca/Games/BrawlRev2/deps/x.cmake": ("engine-sensitive", False),
             # The engine side of the split: Orca/Game/ (singular) is not a game module.
             "Source/Core/Core/Orca/Game/GuestMemory.h": ("engine", False),
+            # S2 commit 3: engine files that parse peer or file bytes.
+            "Source/Core/Core/Orca/UX/QueueApp.cpp": ("engine-sensitive", False),
+            "Source/Core/Core/Orca/LocalStore.cpp": ("engine-sensitive", False),
+            "Source/Core/Core/Orca/UX/Search.cpp": ("engine", False),
+            "Source/Core/Core/Orca/UX/MenuEvents.cpp": ("engine", False),
             "Source/Core/Core/Orca/Session/YouGameRoom.cpp": ("engine-sensitive", False),
             "Source/Core/Core/Orca/Session/Session.cpp": ("engine-sensitive", False),
             "Source/Core/Core/Orca/Session/Events.h": ("engine", False),

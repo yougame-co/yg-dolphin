@@ -206,8 +206,8 @@ struct SkipHold
 
 // The one-time tip on the queue's own select, "New · Hold B to leave": shown the first time a
 // player reaches it after leaving moved from Z to B, for TIP_FRAMES or until they ready (Start)
-// or hold B. Kept as seen (LocalStore::MarkSeen) once on screen TIP_SEEN_FRAMES, or once they hold B. Local
-// and display only; first runs only. Pure.
+// or hold B. Kept as seen (LocalStore::MarkSeen) once on screen TIP_SEEN_FRAMES, or once they
+// hold B. Local and display only; first runs only. Pure.
 constexpr std::string_view TIP_TEXT = "New \u00b7 Hold B to leave";
 constexpr std::string_view TIP_KEY = "hold-b-leave";
 constexpr int TIP_FRAMES = 6 * 60;

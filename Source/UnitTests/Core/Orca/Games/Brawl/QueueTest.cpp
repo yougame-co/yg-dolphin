@@ -1,8 +1,8 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-// The queue's character select (Core/Orca/Games/Brawl/Queue.h): ready, unready, the ready timer and its
-// timeouts, game 1's locks, the joiner's pick steered in, the skip's hold, the raw latch.
+// The queue's character select (Core/Orca/Games/Brawl/Queue.h): ready, unready, the ready timer and
+// its timeouts, game 1's locks, the joiner's pick steered in, the skip's hold, the raw latch.
 
 #include <algorithm>
 #include <array>

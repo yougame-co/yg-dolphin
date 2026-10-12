@@ -1,9 +1,9 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-// A ranked set's character order on later games (Core/Orca/Games/Brawl/CharOrder.h): the step machine, the
-// gate's masks and presses, the overlay's line, the state's bytes, the Meta Knight re-check and the
-// test knob.
+// A ranked set's character order on later games (Core/Orca/Games/Brawl/CharOrder.h): the step
+// machine, the gate's masks and presses, the overlay's line, the state's bytes, the Meta Knight
+// re-check and the test knob.
 
 #include <bit>
 #include <limits>
