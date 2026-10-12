@@ -358,9 +358,10 @@ of an Orca release (`Core/Orca/Bundle.h`).
   (no `/`, no `..`, no device names); `mod.sig` is read first and must be by a trusted key before
   `mod.json` is parsed; every read is bounded as in a tree bundle (`mod.sig` 512 bytes); the small
   files are hashed and the signature checked before the card is hashed. Anything wrong refuses the
-  whole bundle with an `Orca bundle: <folder> refused: <why>.` line. A bundle Orca found by itself
-  then plays the built-in game: legacy, which for Project+ still boots the launcher and `sd.raw`
-  from that folder under its own profile's pins. One `ORCA_MOD_DIR` named refuses the session.
+  whole bundle with an `Orca bundle: <folder> refused: <why>. The session is refused.` line, and the
+  session ends with `orca error profile YG Baiji refused this game's pack: <why>` (no folder path),
+  whether Orca found the bundle by itself or `ORCA_MOD_DIR` named it: a refused pack never plays the
+  built-in game in its place.
 - **Mod mode** then runs as for a tree bundle (builtins, guards, caps). Textures stay the engine's.
   The key is `orca2|...|tree=<hash of the signed lines but the JIT seed's>|sd=<the card's pin>|...
   |sys=<the Sys game INIs>|...`: a bundle player never meets a legacy one, a JIT seed change keeps
@@ -378,7 +379,7 @@ of an Orca release (`Core/Orca/Bundle.h`).
 - **Limits**: a listing change moves ranked at once (no pinned versions). The run-folder layout is a
   contract with the app (`orca.ts`: `userData/orca/{user,run/<slug>}`); if it moves, Brawl plays
   legacy (Project+ follows its launcher). `minOrca` is not enforced (the build has no version of its
-  own); `engine.api` is. A refused bundle shows only in Orca's log.
+  own); `engine.api` is. A refused bundle ends the session with its reason (above).
 
 Open: a P+ fork whose codeset moves the stage select routines loses `brawl-rev2-pplus` until phase
 3's labels; a bundle's own patches are not yet checked against the guard words (the validator's

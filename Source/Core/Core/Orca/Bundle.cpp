@@ -560,14 +560,11 @@ void ResolveBundle(const std::string* executable_path, std::span<const u8> launc
     resolution.kind = kind;
     s_resolved = std::move(resolution);
   };
-  // A bundle Orca found by itself and refused leaves the game to the built-in one; one ORCA_MOD_DIR
-  // named refuses the session (as a broken tree bundle does), so a test never plays legacy unseen.
+  // A refused bundle refuses the session (as a broken tree bundle does), whether ORCA_MOD_DIR named
+  // the folder or Orca found its mod.json by itself: never the built-in game in a pack's place, which
+  // would split the player from the pack's room unseen.
   const auto refuse = [&](const std::string& why) {
-    ERROR_LOG_FMT(BOOT, "Orca bundle: {} refused: {}. {}", dir, why,
-                  explicit_dir ? "ORCA_MOD_DIR names it: the session is refused." :
-                                 "Playing the built-in game.");
-    if (!explicit_dir)
-      return decide(BundleKind::None);
+    ERROR_LOG_FMT(BOOT, "Orca bundle: {} refused: {}. The session is refused.", dir, why);
     // What the player reads (orca error): no folder path, which names their home folder; the log
     // line above keeps it.
     resolution.error = fmt::format("YG Baiji refused this game's pack: {}", why);

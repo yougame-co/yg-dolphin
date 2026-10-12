@@ -824,9 +824,10 @@ TEST(OrcaBundle, FindsItsFolder)
   File::DeleteDirRecursively(root);
 }
 
-// What a session decides at boot: a good bundle is mod mode; a refused one Orca found by itself, or
-// none, is legacy; one ORCA_MOD_DIR named and that is refused refuses the session.
-TEST(OrcaBundle, ResolvesOrFallsBack)
+// What a session decides at boot: a good bundle is mod mode; no mod.json is legacy; a refused one
+// refuses the session, whether Orca found it by itself or ORCA_MOD_DIR named it (state.md item 7:
+// never the built-in game in a refused pack's place).
+TEST(OrcaBundle, ResolvesOrRefuses)
 {
   const ScopedEnv session("ORCA_SESSION", "1");
   const ScopedEnv no_dir("ORCA_MOD_DIR", "");
@@ -863,21 +864,39 @@ TEST(OrcaBundle, ResolvesOrFallsBack)
   Orca::Mod::ResolveBundle(nullptr);
   EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Flat);
 
-  // The same folder tampered with, in a new process: refused, legacy.
+  // The same folder tampered with, in a new process: the session is refused, with the reason the
+  // player reads (no folder path), not played as legacy.
   Orca::Mod::ResetResolvedBundle();
   Orca::Mod::ResolveBundle(nullptr);
-  EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::None);
-  EXPECT_FALSE(Orca::Mod::Requested());
+  EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Refused);
+  EXPECT_TRUE(Orca::Mod::Requested());
   EXPECT_EQ(Orca::Mod::ResolvedFlat(), nullptr);
-  EXPECT_EQ(Orca::Mod::Dir(), "");
+  EXPECT_TRUE(Orca::Mod::ResolvedError().starts_with("YG Baiji refused this game's pack: "))
+      << Orca::Mod::ResolvedError();
+  EXPECT_EQ(Orca::Mod::ResolvedError().find(root), std::string::npos)
+      << Orca::Mod::ResolvedError();
   b.Sign(signer);
+  Orca::Mod::ResetResolvedBundle();
+  Orca::Mod::ResolveBundle(nullptr);
+  EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Flat);
 
-  // A build that trusts no key: legacy, whatever is there.
+  // A build that trusts no key: a mod.json it finds refuses the session.
   Orca::Mod::TrustKeysForTests({});
   Orca::Mod::ResetResolvedBundle();
   Orca::Mod::ResolveBundle(nullptr);
-  EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::None);
+  EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Refused);
+  EXPECT_NE(Orca::Mod::ResolvedError().find("trusts no bundle key"), std::string::npos);
   Orca::Mod::TrustKeysForTests(std::span(&key, 1));
+  // Without a mod.json in the folder that build is legacy, exactly as before bundles.
+  {
+    const ScopedEnv game("YOUGAME_GAME", "no-pack-here");
+    Orca::Mod::TrustKeysForTests({});
+    Orca::Mod::ResetResolvedBundle();
+    Orca::Mod::ResolveBundle(nullptr);
+    EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::None);
+    EXPECT_FALSE(Orca::Mod::Requested());
+    Orca::Mod::TrustKeysForTests(std::span(&key, 1));
+  }
 
   // Project+: the launcher's own folder; the boot must run the bundle's launcher, for its listing.
   const ScopedEnv pplus_game("YOUGAME_GAME", "project-rollback");
@@ -894,20 +913,21 @@ TEST(OrcaBundle, ResolvesOrFallsBack)
   const std::string other = p.dir + "sd.raw";
   Orca::Mod::ResetResolvedBundle();
   Orca::Mod::ResolveBundle(&other);
-  EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::None);
+  EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Refused);
   // Under another listing: refused.
   {
     const ScopedEnv game("YOUGAME_GAME", "open-brawl");
     Orca::Mod::ResetResolvedBundle();
     Orca::Mod::ResolveBundle(&launcher, dol_bytes);
-    EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::None);
+    EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Refused);
   }
   // Signed by a key the build doesn't pin: refused.
   const PublicKey stranger_key = stranger.Key();
   Orca::Mod::TrustKeysForTests(std::span(&stranger_key, 1));
   Orca::Mod::ResetResolvedBundle();
   Orca::Mod::ResolveBundle(&launcher, dol_bytes);
-  EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::None);
+  EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Refused);
+  EXPECT_TRUE(Orca::Mod::Requested());
   Orca::Mod::TrustKeysForTests(std::span(&key, 1));
 
   // ORCA_MOD_DIR names the folder: a good bundle plays; anything refused refuses the session.

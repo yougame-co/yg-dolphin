@@ -31,8 +31,8 @@
 // pins (TrustedKeys) may sign; a build that pins none trusts no bundle.
 //
 // A bundle is hostile input: every read is bounded, every name checked, and anything wrong refuses
-// the whole bundle with a log line; the session then plays the built-in game (Data/Sys/Orca), or,
-// when ORCA_MOD_DIR named the folder, is refused. A session finds the folder itself
+// the whole bundle with a log line, and the session is refused (never the built-in game in its
+// place). No mod.json where Orca looks is legacy (Data/Sys/Orca). A session finds the folder itself
 // (FlatBundleDir), checks it once per process (ResolveBundle), and plays it in mod mode from the
 // bytes it verified (the launcher the boot runs, the patches, the JIT seed): its key is
 // "orca2|..." over the signed lines (the JIT seed's left out: host-only) and the SD image's hash,
@@ -114,10 +114,10 @@ std::string FlatBundleDir(const std::string* executable_path);
 
 // The session's bundle, decided once per process at boot (BootManager, before any game setting is
 // read): a tree bundle (ORCA_MOD_DIR with a tree.json, mods phase 1, unchanged), a flat bundle that
-// passed LoadFlatBundle, none (legacy: no mod.json where Orca looked, a refused bundle Orca found
-// by itself, or a build that trusts no key), or Refused: ORCA_MOD_DIR named a folder that is
-// neither a tree bundle nor a good flat one, so the session is refused (BootManager) rather than
-// run legacy.
+// passed LoadFlatBundle, none (legacy: no mod.json where Orca looked), or Refused: a mod.json that
+// didn't pass (whether Orca found it or ORCA_MOD_DIR named its folder; a build that trusts no key
+// refuses every one), or an ORCA_MOD_DIR that is neither a tree bundle nor a flat one, so the
+// session is refused (BootManager) rather than run legacy.
 enum class BundleKind
 {
   None,
