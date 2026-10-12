@@ -26,6 +26,8 @@
 #include "Core/Orca/Games/Brawl/OnlineMenu.h"
 #include "Core/Orca/UX/OrbCombo.h"
 #include "Core/Orca/Games/Brawl/Queue.h"
+#include "Core/Orca/UX/QueueApp.h"
+#include "Core/Orca/UX/Search.h"
 #include "Core/Orca/Games/Brawl/PPlus/RankedPPlus.h"
 #include "Core/Orca/Games/Brawl/RankedSet.h"
 #include "Core/Orca/Games/Brawl/Relabel.h"
@@ -744,12 +746,12 @@ Scene Gather(double now)
   {
     // On the solo queue character select the bar says it all (but a matched joiner's bar still
     // says it is searching).
-    s.hint = Queue::OnSoloCss() ? std::string() : std::move(s.search_note);
+    s.hint = QueueApp::OnSoloCss() ? std::string() : std::move(s.search_note);
     s.search.clear();
     s.search_note.clear();
   }
   // The one-time "New · Hold B to leave" on the queue's own select, in the control guide.
-  if (Queue::OnSoloCss())
+  if (QueueApp::OnSoloCss())
   {
     if (const std::string tip = Queue::Tip(); !tip.empty())
       s.hint = s.hint.empty() ? tip : s.hint + " \u00b7 " + tip;
@@ -800,7 +802,7 @@ Scene Gather(double now)
   }
   s.legend = words.legend;
   // The rules bar already shows these, and the solo queue character select has no set yet.
-  if ((native & NativeText::SHOWN_RULES) || Queue::OnSoloCss())
+  if ((native & NativeText::SHOWN_RULES) || QueueApp::OnSoloCss())
   {
     s.rules.clear();
     s.rules_note.clear();
@@ -808,15 +810,15 @@ Scene Gather(double now)
   s.cursors = StageCursors::Current();
   // Picker and dots on the character and stage selects only, not on the solo queue character
   // select, which has no opponent yet.
-  if (Queue::OnQueueCss())
+  if (QueueApp::OnQueueCss())
   {
     s.picker = CharOrder::CurrentPicker();
     if (s.picker >= 0)
       s.picker_ribbon = CharOrder::CurrentPickerRibbon();
   }
-  if ((Queue::OnQueueCss() && !Queue::OnSoloCss()) || s.cursors.on)
+  if ((QueueApp::OnQueueCss() && !QueueApp::OnSoloCss()) || s.cursors.on)
     s.dots = RankedSet::CurrentDots();
-  s.searching = Queue::OnSoloCss() && Queue::SoloReady();
+  s.searching = QueueApp::OnSoloCss() && QueueApp::SoloReady();
   return s;
 }
 
@@ -947,7 +949,7 @@ Kit::Box DrawTopCentre(ImDrawList* dl, const Scene& s, ImVec2 pic, ImVec2 pic_si
     if (seconds < 0)
       seconds = TakeTimer(&note);
   }
-  if (Kit::CurrentLook() == Kit::Look::ProjectPlus && Queue::OnQueueCss() && !groups.empty())
+  if (Kit::CurrentLook() == Kit::Look::ProjectPlus && QueueApp::OnQueueCss() && !groups.empty())
   {
     // Project+'s queue character select: draw the lines over its own rules bar, which is locked
     // in a queue room anyway. The timer goes under the bar's right end and the local hint in the

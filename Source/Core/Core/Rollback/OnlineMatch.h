@@ -279,7 +279,7 @@ enum class LobbyPickStep
 struct LobbyPickInputs
 {
   // Joining; the port it plays (a former joiner hosts nobody); in a matchmade room; the app's
-  // "host" cap; the app's cap for the picked queue (UX/OnlineMenu.h PickSearchable).
+  // "host" cap; the app's cap for the picked queue (UX/MenuEvents.h PickSearchable).
   bool joining = false;
   int local_seat = 0;
   bool queue_room = false;
@@ -303,7 +303,7 @@ struct LobbyPickPlan
   // Drop the invite's keyframe (made before the pick); a friend who comes later ends the queue
   // first (FriendEndsQueue). Never while a session runs or friends are kept.
   bool drop_keyframe = false;
-  // The announcement also starts the pick (UX/OnlineMenu.h AnnounceOnlinePick: the queue's own
+  // The announcement also starts the pick (UX/MenuEvents.h AnnounceOnlinePick: the queue's own
   // character select, or the search). False for a host that keeps its friends: the queue's header
   // would reach a friend on the way, who would refuse it, and the page cancels anyway.
   bool arm = true;

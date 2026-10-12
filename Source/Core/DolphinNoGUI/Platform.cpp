@@ -28,9 +28,9 @@
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/Chat.h"
 #include "Core/Orca/Games/Brawl/NameTags.h"
-#include "Core/Orca/Games/Brawl/OnlineMenu.h"
 #include "Core/Orca/UX/Overlay.h"
-#include "Core/Orca/Games/Brawl/Queue.h"
+#include "Core/Orca/UX/QueueApp.h"
+#include "Core/Orca/UX/Search.h"
 #include "Core/Orca/UX/SetEnd.h"
 #include "Core/Orca/UX/YgOrb.h"
 #include "Core/Rollback/OnlineMatch.h"
@@ -451,7 +451,7 @@ void Platform::ProcessEmbedCommands()
       // The app's search ended without a match: stop showing the search and un-ready the player
       // on the queue's character select (Start searches again).
       Orca::UX::Search::End();
-      Orca::UX::Queue::ClearReady();
+      Orca::UX::QueueApp::ClearReady();
     }
     else if (cmd == "queue")
     {
@@ -462,11 +462,11 @@ void Platform::ProcessEmbedCommands()
       int rating = 0;
       const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), rating);
       if (what == "rating" && value == "-")
-        Orca::UX::Queue::SetOwnRating(-1);
+        Orca::UX::QueueApp::SetOwnRating(-1);
       else if (what == "rating" && error == std::errc{} && end == value.data() + value.size() &&
                rating >= 0 && rating <= 0xFFFE)
       {
-        Orca::UX::Queue::SetOwnRating(rating);
+        Orca::UX::QueueApp::SetOwnRating(rating);
         // After a set, this is the new rating; the end-of-set panel counts up to it (UX/SetEnd.h).
         Orca::UX::SetEnd::Current().QueueRating(rating, Orca::UX::SetEnd::NowMs());
       }

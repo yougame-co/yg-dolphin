@@ -11,6 +11,7 @@
 
 #include "Common/CommonTypes.h"
 #include "Core/Orca/Session/Events.h"
+#include "Core/Orca/UX/MenuEvents.h"
 
 namespace Core
 {
@@ -37,13 +38,6 @@ namespace Orca::UX
 {
 class GuestMemory;
 
-enum class OnlinePick
-{
-  Casual,
-  Ranked,
-  Friends,
-};
-
 // What one frame shows of the main menu.
 struct MenuState
 {
@@ -62,46 +56,8 @@ MenuState ReadMenuState(const GuestMemory& memory);
 // The pick an exit code stands for, if any.
 std::optional<OnlinePick> PickForExitCode(u32 exit_code);
 
-// The words after "orca menu" on stdout: "online casual" or "online ranked" when the app's queue
-// searches ("host" capability), with " local" appended when nothing searches; "online friends".
-std::string_view MenuEventText(OnlinePick pick, bool queue = false);
-
 // The current scene's name ("" when unreadable).
 std::string ReadSceneName(const GuestMemory& memory);
-
-// Matchmaking search state after a Casual or Ranked pick, for the overlay. The search ends when the
-// app matches this game (`host <code>` or `join <code>`), the app cancels (`queue-cancel`), or the
-// player backs out to the main menu, which prints "orca menu cancel" once. Any thread.
-namespace Search
-{
-enum class State
-{
-  None,
-  Searching,
-  Found,
-};
-void Begin(bool ranked);
-// The app matched this game: Found when hosting, None when joining. A joiner that was searching
-// shows "Opponent found · joining <host>…" (Joining) until JoinOver, so its own select's search
-// lines don't stay up while the host's game comes over.
-void Matched(bool hosting);
-// The opponent plugged in, the app ended the search, or the room went away. Ends Joining too.
-void End();
-State Current();
-bool Ranked();
-// A matched join began while this player was searching or on the queue's own select: the overlay
-// says the opponent was found until JoinOver (or End).
-void JoinStarted();
-// A joiner's "Opponent found" lines are up: from a matched join until the host's game is loaded
-// (JoinOver) or the join ends. Display only: Current() stays None meanwhile.
-bool Joining();
-// The joiner loaded the host's game, or its join ended.
-void JoinOver();
-// The overlay's two lines (empty: nothing to show).
-std::pair<std::string, std::string> Lines();
-// Lines() for the joining state, given the host's name (empty while the room hasn't named it).
-std::pair<std::string, std::string> JoiningLines(const std::string& host, bool ranked);
-}  // namespace Search
 
 class OnlineMenuReader
 {
@@ -126,17 +82,6 @@ private:
 // ---- Leaving the friends lobby for the queue, and coming home (ORCA.md "Drop-in", "Online
 // menu"). Casual and Ranked under With Anyone leave the friends lobby for a 2-player room the
 // matchmaker fills; a guest whose host left goes back to its own lobby. ----
-
-// Prints "orca menu online ..." for a pick ("... local" without the app's "host") and starts what
-// it means: the queue's own character select (with "queue2"), the search, or neither (Friends).
-// `arm` false prints the line alone, marked "kept": a host that keeps its friends because the app
-// can't search that queue now (PickSearchable), so the app says why and cancels, and nothing of the
-// queue reaches the friends' game.
-void AnnounceOnlinePick(OnlinePick pick, bool arm = true);
-
-// Whether the app can search this pick's queue right now ("pick-casual", "pick-ranked":
-// Orca::Status PICK_CAPS); never Friends. Any thread.
-bool PickSearchable(OnlinePick pick);
 
 // A Casual or Ranked pick the frame hook saw at this boundary while the game was not alone, which
 // nothing printed. The session takes it at the same boundary, after the hook: a host leaves its

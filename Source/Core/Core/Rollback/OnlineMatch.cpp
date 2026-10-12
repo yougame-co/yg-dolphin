@@ -50,6 +50,9 @@
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/UX/Probe.h"
 #include "Core/Orca/Games/Brawl/Queue.h"
+#include "Core/Orca/UX/MenuEvents.h"
+#include "Core/Orca/UX/QueueApp.h"
+#include "Core/Orca/UX/Search.h"
 #include "Core/Orca/Games/Brawl/RankedSet.h"
 #include "Core/Orca/Games/Brawl/Results.h"
 #include "Core/Orca/UX/SetEnd.h"
@@ -665,7 +668,7 @@ Pad FreshPad(Match& match, const Pad& local, int frame)
   }
   if (fresh.phase == Phase::Hold && Orca::UX::Rules::HeaderInPlace())
   {
-    const Orca::UX::Queue::Identity pick = Orca::UX::Queue::OwnIdentity();
+    const Orca::UX::QueueApp::Identity pick = Orca::UX::QueueApp::OwnIdentity();
     if (Orca::Status::Cap("queue2") && pick.HasPick())
     {
       fresh.phase = Phase::Steer;
@@ -942,10 +945,10 @@ std::pair<Orca::UX::Rules::Mode, u8> WantedRulesMode(const Match& match)
   {
     return {mode, RoomFlags()};
   }
-  if (mode == Mode::None && Orca::UX::Queue::Active() && Orca::Status::Cap("queue2") &&
+  if (mode == Mode::None && Orca::UX::QueueApp::Active() && Orca::Status::Cap("queue2") &&
       match.local_seat == 0 && !match.session && !match.linger_until)
   {
-    return {Orca::UX::Queue::Ranked() ? Mode::Ranked : Mode::Casual,
+    return {Orca::UX::QueueApp::Ranked() ? Mode::Ranked : Mode::Casual,
             static_cast<u8>(MB::FLAG_SOLO | MB::FLAG_QUEUE2)};
   }
   return {Mode::None, 0};
@@ -1204,7 +1207,7 @@ bool InQueueRoom();
 // On the queue's own character select, or searching.
 bool QueueOrSearch()
 {
-  return Orca::UX::Queue::Active() ||
+  return Orca::UX::QueueApp::Active() ||
          Orca::UX::Search::Current() != Orca::UX::Search::State::None;
 }
 
@@ -1227,19 +1230,19 @@ void EndQueueForFriend(Match& match, bool arrived, bool invited)
                  "header",
                  arrived ? "arrived in" : "is invited to", Orca::Online::Code(),
                  match.running + 1,
-                 (Orca::UX::Queue::Active() ? Orca::UX::Queue::Ranked() :
+                 (Orca::UX::QueueApp::Active() ? Orca::UX::QueueApp::Ranked() :
                                               Orca::UX::Search::Ranked()) ?
                      "ranked" :
                      "casual");
   // Armed again once the friends are gone (RearmFriendsPick).
-  if (Orca::UX::Queue::Active())
+  if (Orca::UX::QueueApp::Active())
   {
     match.friends_pick =
-        Orca::UX::Queue::Ranked() ? Orca::UX::OnlinePick::Ranked : Orca::UX::OnlinePick::Casual;
+        Orca::UX::QueueApp::Ranked() ? Orca::UX::OnlinePick::Ranked : Orca::UX::OnlinePick::Casual;
     match.friends_pick_played = false;
   }
   Orca::UX::Search::End();
-  Orca::UX::Queue::End();
+  Orca::UX::QueueApp::End();
   Orca::Status::Menu("cancel");
 }
 
@@ -1585,7 +1588,7 @@ void EndQueueForJoin(Match& match)
   if (!queue_or_search)
     return;
   Orca::UX::Search::End();
-  Orca::UX::Queue::End();
+  Orca::UX::QueueApp::End();
   Orca::Status::Menu("cancel");
 }
 
@@ -1943,7 +1946,7 @@ std::optional<int> FreshStart(Core::System& system, Match& match)
   // Unthrottled, unseen and muted until the character select is up (StepTail).
   match.port->SetCatchingUp(true);
   Orca::Events::NoteResync();
-  Orca::UX::Queue::ResetTimeouts();
+  Orca::UX::QueueApp::ResetTimeouts();
   Orca::UX::Tracker().Reset();
   Orca::UX::Rules::MemoryReplaced();
   NOTICE_LOG_FMT(ROLLBACK, "Drop-in: fresh start at frame {}: back to the origin (frame {}) in {:.0f} "
@@ -2034,7 +2037,7 @@ Load LoadKeyframe(Core::System& system, Match& match, int* frame_out)
   match.replay_heartbeat = {};
   match.replaying = std::move(download);
   match.port->SetCatchingUp(true);
-  Orca::UX::Queue::ResetTimeouts();
+  Orca::UX::QueueApp::ResetTimeouts();
   Orca::UX::Tracker().Reset();
   Orca::Events::NoteResync();
   Orca::UX::Rules::MemoryReplaced();
@@ -2098,7 +2101,7 @@ bool RestoreBeforeJoin(Core::System& system, Match& match)
   match.replay = std::move(before->replay);
   match.replaying.reset();
   Orca::Events::NoteResync();
-  Orca::UX::Queue::ResetTimeouts();
+  Orca::UX::QueueApp::ResetTimeouts();
   Orca::UX::Tracker().Reset();
   Orca::UX::Rules::MemoryReplaced();
   return true;
@@ -2438,7 +2441,7 @@ void TakeCommands(Core::System& system, Match& match)
   const bool restored = MaybeRestoreQueueImage(system, match);
   // On the queue's own character select, the current game is the one to come back to.
   const bool queue_css =
-      Orca::Status::Cap("queue2") && (restored || Orca::UX::Queue::OnSoloCss());
+      Orca::Status::Cap("queue2") && (restored || Orca::UX::QueueApp::OnSoloCss());
   if (Orca::Status::Cap("join"))
   {
     if (const auto code = Orca::Online::TakeJoinRequest())
@@ -2517,7 +2520,7 @@ bool MaybeRestoreQueueImage(Core::System& system, Match& match)
                    Orca::Online::RoomQueue());
   }
   // Out of the queue (backed out to the menus): nothing to come back to.
-  if (!Orca::UX::Queue::Active())
+  if (!Orca::UX::QueueApp::Active())
   {
     match.queue_image.reset();
     return false;
@@ -2563,11 +2566,11 @@ bool MaybeRestoreQueueImage(Core::System& system, Match& match)
     match.tell_no_room = false;
     match.reopen_pending = Clock::now() + REOPEN_DELAY;
   }
-  const bool mine = Orca::UX::Queue::TakeTimeoutWasMine();
+  const bool mine = Orca::UX::QueueApp::TakeTimeoutWasMine();
   // After a ranked set (a fight was played in that room) the player presses Start to search again.
   const bool fought = std::exchange(match.ranked_fought, false);
   const char* why = mine ? "the ready timer ran out on us" : fought ? "a ranked set was played" : "";
-  Orca::UX::Queue::AfterRestore(!mine && !fought, why);
+  Orca::UX::QueueApp::AfterRestore(!mine && !fought, why);
   NOTICE_LOG_FMT(ROLLBACK, "Queue: back on this player's own character select at frame {} in {:.0f} "
                  "ms ({:.1f} s after the room's game was kept){}",
                  frame, MsSince(start),
@@ -2707,7 +2710,7 @@ void ComeHome(Match& match)
   // Alone now, the app answers it as any alone pick.
   const std::optional<Orca::UX::OnlinePick> pick = Orca::UX::CssPick();
   if (AnnounceHomePick(pick.has_value(), Orca::Status::Cap("host"),
-                       Orca::UX::Queue::Active() ||
+                       Orca::UX::QueueApp::Active() ||
                            Orca::UX::Search::Current() != Orca::UX::Search::State::None))
   {
     NOTICE_LOG_FMT(ROLLBACK, "Drop-in: home on the {} character select: orca menu {}",
@@ -2730,7 +2733,7 @@ void ArmKeptPick(Match& match)
   in.alone = match.local_seat == 0 && !match.joining && match.seated.empty() &&
              AloneAt(match.running + 1, SoloIdle(match), Orca::Online::DropInPending(),
                      match.keyframe ? std::optional(match.keyframe->frame) : std::nullopt);
-  in.queue_or_search = Orca::UX::Queue::Active() ||
+  in.queue_or_search = Orca::UX::QueueApp::Active() ||
                        Orca::UX::Search::Current() != Orca::UX::Search::State::None;
   const Orca::UX::OnlinePick pick = *match.kept_pick;
   const char* const queue = pick == Orca::UX::OnlinePick::Ranked ? "ranked" : "casual";
@@ -3159,7 +3162,7 @@ void ConfirmResults(Match& match)
       plug = latest;
   }
   // The casual ready timer ran out (UX/Queue.h), at the same final frame on both machines.
-  Orca::UX::Queue::ConfirmTimeout(confirmed, match.local_seat);
+  Orca::UX::QueueApp::ConfirmTimeout(confirmed, match.local_seat);
   // Ranked: a player who didn't pick a character in time leaves the room. Before the first game the
   // set ends with no game, so the room voids it and rates nobody; on a later game (a token still in
   // hand after the character order, UX/CharOrder.h) leaving loses the set. The other waits for the

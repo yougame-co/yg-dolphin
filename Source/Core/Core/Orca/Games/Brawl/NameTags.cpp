@@ -11,11 +11,10 @@
 
 #include <fmt/format.h>
 
-#include "Common/CommonPaths.h"
-#include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
 #include "Core/Core.h"
+#include "Core/Orca/LocalStore.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Status.h"
 
@@ -539,19 +538,11 @@ std::atomic<bool> s_own_loaded{false};
 // The app's controls came before the game's profile was known: kept once it is.
 std::atomic<bool> s_keep_pending{false};
 
-// Where this game's controls are kept between runs: the user folder's Config, one file per game.
-std::string OwnControlsPath()
-{
-  const Orca::Profile* profile = Orca::ActiveProfile();
-  if (!profile || profile->game_id.empty())
-    return {};
-  return File::GetUserPath(D_CONFIG_IDX) + "OrcaControls-" + profile->game_id + ".txt";
-}
-
+// This game's controls are kept between runs by the engine (Orca/LocalStore.h: the user folder's
+// Config, one file per game), so this file does no file I/O.
 void KeepOwnControls(const std::vector<u8>& profile)
 {
-  const std::string path = OwnControlsPath();
-  if (path.empty() || !File::WriteStringToFile(path, ControlsHex(profile) + "\n"))
+  if (!Orca::LocalStore::KeepControls(ControlsHex(profile) + "\n"))
     WARN_LOG_FMT(ROLLBACK, "Name tags: couldn't keep this player's controls");
 }
 
@@ -598,11 +589,9 @@ void LoadOwnControls()
   }
   if (!profile)
   {
-    std::string text;
-    if (const std::string path = OwnControlsPath();
-        !path.empty() && File::Exists(path) && File::ReadFileToString(path, text))
+    if (const std::optional<std::string> text = Orca::LocalStore::KeptControls())
     {
-      profile = ParseControlsHex(StripWhitespace(text));
+      profile = ParseControlsHex(StripWhitespace(*text));
       from = "an earlier run";
       kept = true;
     }

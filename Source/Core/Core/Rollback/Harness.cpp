@@ -41,7 +41,7 @@
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Session/PadCodec.h"
 #include "Core/Orca/UX/OrbCombo.h"
-#include "Core/Orca/Games/Brawl/Queue.h"
+#include "Core/Orca/UX/QueueApp.h"
 #include "Core/Orca/Games/Brawl/Results.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/MMU.h"
@@ -1375,14 +1375,14 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
                       spec);
         return out;
       }
-      Orca::UX::Queue::Identity id;
+      Orca::UX::QueueApp::Identity id;
       id.character = std::atoi(f[1].c_str());
       id.costume = std::atoi(f[2].c_str());
       id.x = std::strtof(f[3].c_str(), nullptr);
       id.y = std::strtof(f[4].c_str(), nullptr);
       id.rating = f.size() == 6 ? std::atoi(f[5].c_str()) : -1;
       out.from = std::atoi(f[0].c_str());
-      out.queue = Orca::UX::Queue::EncodeIdentity(id);
+      out.queue = Orca::UX::QueueApp::EncodeIdentity(id);
       NOTICE_LOG_FMT(ROLLBACK, "ORCA_TEST_QUEUE_PICK: port 2 from frame {}: character {} costume "
                      "{} at ({}, {})",
                      out.from, id.character, id.costume, id.x, id.y);
@@ -1412,7 +1412,7 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
     }
     // The queue's casual ready timer for port 1; it logs when it runs out.
     if (first_pass_here && !Orca::TestQueueSpec().empty())
-      Orca::UX::Queue::ConfirmTimeout(frame_here + 1, 0);
+      Orca::UX::QueueApp::ConfirmTimeout(frame_here + 1, 0);
     // YG_RESULTS=1: log the match results reader's output (UX/Results.h). Frames are final at
     // their first pass here.
     static const bool s_results = Orca::GetEnv("YG_RESULTS") == "1";

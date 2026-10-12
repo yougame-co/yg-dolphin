@@ -4,19 +4,16 @@
 #include "Core/Orca/Games/Brawl/Queue.h"
 
 #include <algorithm>
-#include <atomic>
 #include <bit>
 #include <cmath>
 #include <map>
-#include <mutex>
 #include <string>
 #include <utility>
 
 #include <fmt/format.h>
 
-#include "Common/CommonPaths.h"
-#include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
+#include "Core/Orca/LocalStore.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/Session/Replay.h"
@@ -26,6 +23,7 @@
 #include "Core/Orca/Games/Brawl/OnlineMenu.h"
 #include "Core/Orca/Games/Brawl/OnlineRules.h"
 #include "Core/Orca/UX/Overlay.h"
+#include "Core/Orca/UX/QueueApp.h"
 
 namespace Orca::UX::Queue
 {
@@ -53,19 +51,6 @@ constexpr u16 BUTTON_B = PAD_BUTTON_B;
 bool Pointer(const GuestMemory& m, u32 p)
 {
   return p % 4 == 0 && m.Valid(p);
-}
-
-void Put32(std::vector<u8>& out, u32 v)
-{
-  out.push_back(static_cast<u8>(v >> 24));
-  out.push_back(static_cast<u8>(v >> 16));
-  out.push_back(static_cast<u8>(v >> 8));
-  out.push_back(static_cast<u8>(v));
-}
-
-u32 Get32(const std::vector<u8>& b, size_t at)
-{
-  return u32(b[at]) << 24 | u32(b[at + 1]) << 16 | u32(b[at + 2]) << 8 | u32(b[at + 3]);
 }
 
 // Writes only what differs, counting the bytes changed.
@@ -103,44 +88,6 @@ std::string Clock(int frames)
   return fmt::format("{}:{:02}", seconds / 60, seconds % 60);
 }
 }  // namespace
-
-// ---- The queue identity ----
-
-std::vector<u8> EncodeIdentity(const Identity& id)
-{
-  std::vector<u8> out;
-  out.push_back(1);
-  const u16 rating = id.rating < 0 || id.rating > 0xFFFE ? 0xFFFF : static_cast<u16>(id.rating);
-  out.push_back(static_cast<u8>(rating >> 8));
-  out.push_back(static_cast<u8>(rating));
-  out.push_back(id.HasPick() && id.character <= 0xFE ? static_cast<u8>(id.character) : 0xFF);
-  out.push_back(static_cast<u8>(std::clamp(id.costume, 0, 0xFF)));
-  Put32(out, std::bit_cast<u32>(id.x));
-  Put32(out, std::bit_cast<u32>(id.y));
-  return out;
-}
-
-std::optional<Identity> DecodeIdentity(const std::vector<u8>& b)
-{
-  // Newer versions may append bytes; only the known ones are read.
-  if (b.size() < 13 || b[0] != 1)
-    return std::nullopt;
-  Identity id;
-  const u16 rating = static_cast<u16>(b[1] << 8 | b[2]);
-  id.rating = rating == 0xFFFF ? -1 : rating;
-  id.character = b[3] == 0xFF ? -1 : b[3];
-  id.costume = b[4];
-  id.x = std::bit_cast<float>(Get32(b, 5));
-  id.y = std::bit_cast<float>(Get32(b, 9));
-  // An out-of-range position is dropped, and the player picks by hand.
-  if (!std::isfinite(id.x) || !std::isfinite(id.y) || std::fabs(id.x) > 100 ||
-      std::fabs(id.y) > 100)
-  {
-    id.character = -1;
-    id.x = id.y = 0;
-  }
-  return id;
-}
 
 // ---- The step machine ----
 
@@ -959,21 +906,6 @@ int Latch(GuestMemory& m, const std::array<std::optional<GCPadStatus>, 4>& raw)
 
 namespace
 {
-std::mutex s_mutex;
-bool s_active = false;
-bool s_ranked = false;
-int s_rating = -1;
-// This player's pick on the queue's own character select, and where it was placed.
-Identity s_pick;
-std::atomic<bool> s_solo_ready{false};
-std::atomic<bool> s_on_solo_css{false};
-std::atomic<bool> s_on_queue_css{false};
-std::atomic<bool> s_clear_ready{false};
-// For the log. Guarded by s_mutex.
-std::string s_clear_ready_why;
-std::atomic<bool> s_last_timeout_mine{false};
-std::atomic<bool> s_tip_on{false};
-
 // Local state updated on first runs only: what was printed, the skip hold, token positions.
 struct Local
 {
@@ -991,33 +923,6 @@ Local& L()
 {
   static Local l;
   return l;
-}
-
-// The casual timeout per frame, until that frame is confirmed (like OnlineRules' no-show).
-struct TimeoutTracker
-{
-  std::map<int, u8> pending;  // bit 7: timed out; bits 0-1: who wasn't ready
-  u64 resyncs = 0;
-  bool started = false;
-  u8 last = 0;
-  int last_frame = -1;
-};
-TimeoutTracker& Timeouts()
-{
-  static TimeoutTracker t;
-  return t;
-}
-
-void PublishIdentity()
-{
-  Identity id;
-  {
-    std::lock_guard lk(s_mutex);
-    id = s_pick;
-    id.rating = s_rating;
-  }
-  Orca::Events::SetOwnQueue(id.rating < 0 && !id.HasPick() ? std::vector<u8>{} :
-                                                              EncodeIdentity(id));
 }
 
 std::string NameFor(const std::vector<Events::PortInfo>& ports, int port, int* rating)
@@ -1130,132 +1035,10 @@ Text TextFor(const View& v, const State& s, const std::vector<Events::PortInfo>&
   return out;
 }
 
-void Begin(bool ranked)
-{
-  {
-    std::lock_guard lk(s_mutex);
-    s_active = true;
-    s_ranked = ranked;
-  }
-  NOTICE_LOG_FMT(ROLLBACK, "Queue: on the {} queue's own character select", ranked ? "ranked" :
-                                                                                       "casual");
-}
-
-void End()
-{
-  {
-    std::lock_guard lk(s_mutex);
-    s_active = false;
-    s_pick = {};
-  }
-  s_solo_ready = false;
-  s_tip_on = false;
-  PublishIdentity();
-}
-
-bool Active()
-{
-  std::lock_guard lk(s_mutex);
-  return s_active;
-}
-
-bool Ranked()
-{
-  std::lock_guard lk(s_mutex);
-  return s_ranked;
-}
-
-void SetOwnRating(int rating)
-{
-  {
-    std::lock_guard lk(s_mutex);
-    s_rating = rating;
-  }
-  PublishIdentity();
-}
-
-int OwnRating()
-{
-  std::lock_guard lk(s_mutex);
-  return s_rating;
-}
-
-bool SoloReady()
-{
-  return s_solo_ready;
-}
-
-Identity OwnIdentity()
-{
-  std::lock_guard lk(s_mutex);
-  Identity id = s_pick;
-  id.rating = s_rating;
-  return id;
-}
-
-bool OnSoloCss()
-{
-  return s_on_solo_css;
-}
-
-bool OnQueueCss()
-{
-  return s_on_queue_css;
-}
-
-void AfterRestore(bool keep_ready, const char* why)
-{
-  if (keep_ready)
-    return;
-  {
-    std::lock_guard lk(s_mutex);
-    s_clear_ready_why = why && *why ? why : "after the room";
-  }
-  s_clear_ready = true;
-}
-
-void ClearReady()
-{
-  s_clear_ready = true;
-}
-
-bool TakeTimeoutWasMine()
-{
-  return s_last_timeout_mine.exchange(false);
-}
-
-void ConfirmTimeout(int confirmed, int local_port)
-{
-  TimeoutTracker& t = Timeouts();
-  for (auto it = t.pending.begin(); it != t.pending.end() && it->first <= confirmed;
-       it = t.pending.erase(it))
-  {
-    if ((it->second & 0x80) && !(t.last & 0x80))
-    {
-      const bool mine = local_port >= 0 && local_port < 2 && ((it->second >> local_port) & 1);
-      s_last_timeout_mine = mine;
-      NOTICE_LOG_FMT(ROLLBACK, "Queue: the ready timer ran out at frame {}: orca queue timeout {}",
-                     it->first, mine ? "me" : "them");
-      Orca::Status::Line(mine ? "orca queue timeout me" : "orca queue timeout them");
-    }
-    t.last = it->second;
-    t.last_frame = it->first;
-  }
-}
-
-void ResetTimeouts()
-{
-  Timeouts() = {};
-  s_last_timeout_mine = false;
-}
-
 namespace
 {
-// The one-time tip, on a first run: `on_select` the queue's own select, alone.
-// TODO(S2): host file I/O in game logic (OrcaSeen.txt, read and written on the CPU thread). It moves
-// to the S2 seen-store: an engine-layer Seen(key)/MarkSeen(key), loaded once per session and written
-// off the CPU thread, injected into Queue like Events::SetLocalPadSource; later the app's own "seen"
-// lines. NameTags' controls file goes the same way (v2-review.md W2).
+// The one-time tip, on a first run: `on_select` the queue's own select, alone. Whether it was seen,
+// and keeping it as seen, go through the engine's store (Orca/LocalStore.h): no file I/O here.
 void TipFrame(bool on_select, bool ready, bool b_held, int frame)
 {
   Local& l = L();
@@ -1263,10 +1046,7 @@ void TipFrame(bool on_select, bool ready, bool b_held, int frame)
   if (on_select && !l.tip_loaded)
   {
     l.tip_loaded = true;
-    std::string text;
-    const std::string path = TipSeenPath();
-    if (!path.empty() && File::Exists(path) && File::ReadFileToString(path, text) &&
-        TipSeenIn(text, TIP_KEY))
+    if (Orca::LocalStore::Seen(TIP_KEY))
     {
       l.tip.over = true;
     }
@@ -1276,14 +1056,10 @@ void TipFrame(bool on_select, bool ready, bool b_held, int frame)
     }
   }
   const OnceTip::Step step = l.tip.Frame(on_select, ready, l.tip_b_frames);
-  s_tip_on = step.show;
+  QueueApp::SetTipShown(step.show);
   if (!step.keep)
     return;
-  std::string text;
-  const std::string path = TipSeenPath();
-  if (!path.empty() && File::Exists(path))
-    File::ReadFileToString(path, text);
-  if (path.empty() || !File::WriteStringToFile(path, TipSeenWith(std::move(text), TIP_KEY)))
+  if (!Orca::LocalStore::MarkSeen(TIP_KEY))
     WARN_LOG_FMT(ROLLBACK, "Queue: couldn't keep the hold-B tip as seen");
   else
     NOTICE_LOG_FMT(ROLLBACK, "Queue: frame {}: the hold-B tip is kept as seen", frame);
@@ -1311,44 +1087,9 @@ OnceTip::Step OnceTip::Frame(bool on_select, bool ready, int b_frames)
   return step;
 }
 
-bool TipSeenIn(std::string_view text, std::string_view key)
-{
-  while (!text.empty())
-  {
-    const std::size_t end = text.find('\n');
-    std::string_view line = text.substr(0, end);
-    while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t'))
-      line.remove_suffix(1);
-    while (!line.empty() && (line.front() == ' ' || line.front() == '\t'))
-      line.remove_prefix(1);
-    if (line == key)
-      return true;
-    if (end == std::string_view::npos)
-      break;
-    text.remove_prefix(end + 1);
-  }
-  return false;
-}
-
-std::string TipSeenWith(std::string text, std::string_view key)
-{
-  if (TipSeenIn(text, key))
-    return text;
-  if (!text.empty() && text.back() != '\n')
-    text += '\n';
-  text += key;
-  text += '\n';
-  return text;
-}
-
-std::string TipSeenPath()
-{
-  return File::GetUserPath(D_CONFIG_IDX) + "OrcaSeen.txt";
-}
-
 std::string Tip()
 {
-  return s_tip_on ? std::string(TIP_TEXT) : std::string();
+  return QueueApp::TipShown() ? std::string(TIP_TEXT) : std::string();
 }
 
 void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
@@ -1361,7 +1102,7 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
   std::string cleared;
   const bool replay_clear = Orca::Net::ReplayScope::Playing() &&
                             Orca::Net::ReplayScope::Current()->clear_ready;
-  if (replay_clear || (alone && !resimulating && s_clear_ready.exchange(false)))
+  if (replay_clear || (alone && !resimulating && QueueApp::TakeClearReady()))
   {
     if (auto* replay = Orca::Net::ReplayScope::Current(); replay && !Orca::Net::ReplayScope::Playing())
       replay->clear_ready = true;
@@ -1373,11 +1114,7 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
       if (m.Read8(READY) & 1)
       {
         m.Write8(READY, static_cast<u8>(m.Read8(READY) & ~1));
-        std::string why;
-        {
-          std::lock_guard lk(s_mutex);
-          why = s_clear_ready_why;
-        }
+        const std::string why = QueueApp::ClearReadyWhy();
         NOTICE_LOG_FMT(ROLLBACK, "Queue: not ready after the room ({})", why);
         cleared = "cleared after the room: " + why;
       }
@@ -1386,7 +1123,7 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
   const View v = ReadView(m, ports);
   if (!resimulating)
   {
-    s_on_queue_css = v.queue2 && v.css;
+    QueueApp::SetOnQueueCss(v.queue2 && v.css);
     SteerOwnPickFrame(v, frame);
   }
   const State before = ReadState(m);
@@ -1409,32 +1146,11 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
     }
   }
 
-  // Record the casual timeout for this frame until it is confirmed. A re-run replaces the first
-  // run's value.
-  TimeoutTracker& t = Timeouts();
-  const u64 resyncs = Orca::Events::Resyncs();
-  if (!t.started || t.resyncs != resyncs)
-  {
-    t = {};
-    t.started = true;
-    t.resyncs = resyncs;
-  }
-  if (frame > t.last_frame)
-  {
-    const u8 value = (after.flags & FLAG_TIMED_OUT) && v.queue2 && !v.solo ?
-                         static_cast<u8>(0x80 | (after.timeout_who & 3)) : 0;
-    if (Orca::Net::ReplayScope::NetworkPlaying())
-    {
-      t.pending.clear();
-      t.last = value;
-      t.last_frame = frame;
-      s_last_timeout_mine = false;
-    }
-    else
-      t.pending[frame] = value;
-    while (t.pending.size() > 4096)
-      t.pending.erase(t.pending.begin());
-  }
+  // Record the casual timeout for this frame until it is confirmed (QueueApp::NoteTimeout). A
+  // re-run replaces the first run's value.
+  QueueApp::NoteTimeout(frame, (after.flags & FLAG_TIMED_OUT) && v.queue2 && !v.solo ?
+                                   static_cast<u8>(0x80 | (after.timeout_who & 3)) :
+                                   0);
 
   if (resimulating)
     return;
@@ -1478,14 +1194,14 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
   const bool solo_css = v.queue2 && v.solo && v.css;
   // Only a solo frame can set this. A non-solo frame (a pending `host` or `join`) leaves it.
   if (!solo_css)
-    s_on_solo_css = false;
+    QueueApp::SetOnSoloCss(false);
   else if (alone)
-    s_on_solo_css = true;
+    QueueApp::SetOnSoloCss(true);
   if (solo_css && alone)
   {
     const CssPort& own = v.ports[0];
     const bool ready = after.ready & 1;
-    s_solo_ready = ready;
+    QueueApp::SetSoloReady(ready);
     Identity pick;
     pick.character = own.placed ? own.character : -1;
     pick.costume = own.costume;
@@ -1495,11 +1211,7 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
       // Only a pick whose place is known is put back by steering; otherwise the player picks by
       // hand in the room.
       const Identity published = Publishable(pick, l.places.Find(pick.character));
-      {
-        std::lock_guard lk(s_mutex);
-        s_pick = published;
-      }
-      PublishIdentity();
+      QueueApp::SetPick(published);
       l.printed_ready = true;
       l.printed = pick;
       const std::string text = fmt::format("orca queue ready {} {} {}", v.ranked ? "ranked" : "casual",
@@ -1529,12 +1241,12 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
   {
     // In a room. Ready is printed again once back on the player's own character select.
     l.printed_ready = false;
-    s_solo_ready = false;
+    QueueApp::SetSoloReady(false);
   }
   else if (!v.queue2)
   {
     l.printed_ready = false;
-    s_solo_ready = false;
+    QueueApp::SetSoloReady(false);
   }
 
   // Skip: B held 1.5 s on a casual room's character select, read from this player's own latched

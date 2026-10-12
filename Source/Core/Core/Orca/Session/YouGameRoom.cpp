@@ -35,7 +35,7 @@
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/UX/Probe.h"
-#include "Core/Orca/Games/Brawl/Queue.h"
+#include "Core/Orca/UX/QueueApp.h"
 #include "Core/Orca/Games/Brawl/RankedSet.h"
 #include "Core/Orca/UX/SetEnd.h"
 
@@ -2770,7 +2770,7 @@ struct YouGameRoom::Impl
       // (UX/SetEnd.h).
       Orca::UX::SetEnd::Current().SetVerdict(
           OutcomeOf(v.out), forfeit, mine, theirs, rating_before, rating_after,
-          Orca::UX::Queue::OwnRating(), Orca::UX::SetEnd::NowMs());
+          Orca::UX::QueueApp::OwnRating(), Orca::UX::SetEnd::NowMs());
       NOTICE_LOG_FMT(NETPLAY, "Orca room: the set: {} {} ({})", v.out, Score(),
                      Str(m, "disposition"));
       std::lock_guard lock(mutex);

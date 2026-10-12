@@ -8,7 +8,6 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
-#include <mutex>
 #include <string>
 
 #include <fmt/format.h>
@@ -16,13 +15,14 @@
 #include "Common/Logging/Log.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Events.h"
-#include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Session/Replay.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/Games/Brawl/CssTitle.h"
 #include "Core/Orca/Games/Brawl/MatchBlock.h"
 #include "Core/Orca/Game/GuestMemory.h"
 #include "Core/Orca/UX/Probe.h"
+#include "Core/Orca/UX/QueueApp.h"
+#include "Core/Orca/UX/Search.h"
 #include "Core/Orca/Games/Brawl/Queue.h"
 
 namespace Orca::UX
@@ -124,20 +124,6 @@ std::optional<OnlinePick> PickForExitCode(u32 exit_code)
   }
 }
 
-std::string_view MenuEventText(OnlinePick pick, bool queue)
-{
-  switch (pick)
-  {
-  case OnlinePick::Casual:
-    return queue ? "online casual" : "online casual local";
-  case OnlinePick::Ranked:
-    return queue ? "online ranked" : "online ranked local";
-  case OnlinePick::Friends:
-    return "online friends";
-  }
-  return {};
-}
-
 std::optional<OnlinePick> OnlineMenuReader::Boundary(const MenuState& state, bool resimulating,
                                                      bool alone, u64 resyncs)
 {
@@ -199,51 +185,6 @@ std::optional<OnlinePick> s_leaving_pick;
 std::optional<OnlinePick> s_css_pick;
 std::optional<OnlinePick> s_lobby_pick;
 }  // namespace
-
-void AnnounceOnlinePick(OnlinePick pick, bool arm)
-{
-  // With the app's "host" capability, the queue searches while the player waits on the character
-  // select.
-  const bool queue = Orca::Status::Cap("host");
-  if (!arm)
-  {
-    // Kept: the friends stay, nothing starts, and the app knows this pick never searches here.
-    Orca::Status::Menu(fmt::format("{} kept", MenuEventText(pick, queue)));
-    return;
-  }
-  Orca::Status::Menu(MenuEventText(pick, queue));
-  // With `queue2` the app searches once the player is ready on the queue's own character select
-  // (UX/Queue.h). Without it, the search starts at the pick.
-  if (queue && pick != OnlinePick::Friends && Orca::Status::Cap("queue2"))
-  {
-    Search::End();
-    Queue::Begin(pick == OnlinePick::Ranked);
-  }
-  else if (queue && pick != OnlinePick::Friends)
-  {
-    Queue::End();
-    Search::Begin(pick == OnlinePick::Ranked);
-  }
-  else
-  {
-    Queue::End();
-    Search::End();
-  }
-}
-
-bool PickSearchable(OnlinePick pick)
-{
-  switch (pick)
-  {
-  case OnlinePick::Casual:
-    return Orca::Status::Cap("pick-casual");
-  case OnlinePick::Ranked:
-    return Orca::Status::Cap("pick-ranked");
-  case OnlinePick::Friends:
-    break;
-  }
-  return false;
-}
 
 std::optional<OnlinePick> TakeLobbyPick()
 {
@@ -311,111 +252,13 @@ void ReadOnlineMenu(const Core::CPUThreadGuard& guard, bool resimulating, bool a
   }
   // Back on the main menu while searching, or while matched but still alone: the search is over.
   if (alone && state.where == MenuState::Where::Menu &&
-      (Search::Current() != Search::State::None || Queue::Active()))
+      (Search::Current() != Search::State::None || QueueApp::Active()))
   {
     NOTICE_LOG_FMT(ROLLBACK,
                    "Online menu: back on the main menu while searching: orca menu cancel");
-    Search::End();
-    Queue::End();
-    Orca::Status::Menu("cancel");
+    AnnounceMenuCancel();
   }
 }
-
-namespace Search
-{
-namespace
-{
-std::mutex s_mutex;
-State s_state = State::None;
-bool s_ranked = false;
-bool s_joining = false;
-}  // namespace
-
-void Begin(bool ranked)
-{
-  std::lock_guard lock(s_mutex);
-  s_state = State::Searching;
-  s_ranked = ranked;
-  s_joining = false;
-}
-
-void Matched(bool hosting)
-{
-  std::lock_guard lock(s_mutex);
-  // When joining, the join's own lines replace the search's until the host's game is loaded.
-  s_joining = !hosting && s_state != State::None;
-  s_state = hosting && s_state != State::None ? State::Found : State::None;
-}
-
-void End()
-{
-  std::lock_guard lock(s_mutex);
-  s_state = State::None;
-  s_joining = false;
-}
-
-bool Joining()
-{
-  std::lock_guard lock(s_mutex);
-  return s_joining;
-}
-
-void JoinStarted()
-{
-  std::lock_guard lock(s_mutex);
-  s_joining = true;
-}
-
-void JoinOver()
-{
-  std::lock_guard lock(s_mutex);
-  s_joining = false;
-}
-
-std::pair<std::string, std::string> JoiningLines(const std::string& host, bool ranked)
-{
-  return {host.empty() ? std::string("Opponent found · joining their game…") :
-                         fmt::format("Opponent found · joining {}…", host),
-          ranked ? "RANKED BETA" : ""};
-}
-
-State Current()
-{
-  std::lock_guard lock(s_mutex);
-  return s_state;
-}
-
-bool Ranked()
-{
-  std::lock_guard lock(s_mutex);
-  return s_ranked;
-}
-
-std::pair<std::string, std::string> Lines()
-{
-  State state;
-  bool ranked, joining;
-  {
-    std::lock_guard lock(s_mutex);
-    state = s_state;
-    ranked = s_ranked;
-    joining = s_joining;
-  }
-  if (joining)
-    return JoiningLines(Orca::Online::SeatName(0), ranked);
-  const std::string beta = ranked ? "RANKED BETA" : "";
-  if (state == State::Searching)
-    return {"Searching for an opponent… (B: back)", beta};
-  if (state == State::Found)
-  {
-    const std::string name = Orca::Online::SeatName(1);
-    return {name.empty() ? std::string("Opponent found · waiting for them…") :
-                           fmt::format("Opponent found · waiting for {}…", name),
-            beta};
-  }
-  return {};
-}
-}  // namespace Search
 
 namespace
 {

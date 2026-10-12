@@ -529,6 +529,8 @@ add_library(core
   Orca/JitWarm.h
   Orca/Launch.cpp
   Orca/Launch.h
+  Orca/LocalStore.cpp
+  Orca/LocalStore.h
   Orca/Bundle.cpp
   Orca/Bundle.h
   Orca/Mod.cpp
@@ -578,6 +580,8 @@ add_library(core
   Orca/UX/GamePatches.h
   Orca/UX/Kit.cpp
   Orca/UX/Kit.h
+  Orca/UX/MenuEvents.cpp
+  Orca/UX/MenuEvents.h
   Orca/Games/Brawl/SetBlock.cpp
   Orca/Games/Brawl/SetBlock.h
   Orca/Games/Brawl/MatchBlock.cpp
@@ -598,6 +602,8 @@ add_library(core
   Orca/UX/Overlay.h
   Orca/UX/Probe.cpp
   Orca/UX/Probe.h
+  Orca/UX/QueueApp.cpp
+  Orca/UX/QueueApp.h
   Orca/Games/Brawl/Queue.cpp
   Orca/Games/Brawl/Queue.h
   Orca/Games/Brawl/RankedSet.cpp
@@ -614,6 +620,8 @@ add_library(core
   Orca/UX/Rumble.h
   Orca/UX/SetEnd.cpp
   Orca/UX/SetEnd.h
+  Orca/UX/Search.cpp
+  Orca/UX/Search.h
   Orca/Games/Brawl/StageCursors.cpp
   Orca/Games/Brawl/StageCursors.h
   Orca/UX/UX.cpp

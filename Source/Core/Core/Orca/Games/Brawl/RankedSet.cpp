@@ -15,7 +15,7 @@
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Game/GuestMemory.h"
 #include "Core/Orca/UX/Probe.h"
-#include "Core/Orca/Games/Brawl/Queue.h"
+#include "Core/Orca/UX/QueueApp.h"
 #include "Core/Orca/UX/SetEnd.h"
 
 namespace Orca::UX::RankedSet
@@ -477,7 +477,7 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating)
     const int me = s_local_port.load(std::memory_order_relaxed) == 1 ? 1 : 0;
     const GameRecord& last = after.records[std::min(after.games, u8(SetBlock::MAX_RECORDS)) - 1];
     SetEnd::Current().BlockSetOver(last.start, after.winner == me, after.wins[me],
-                                   after.wins[1 - me], Queue::OwnRating(), SetEnd::NowMs());
+                                   after.wins[1 - me], QueueApp::OwnRating(), SetEnd::NowMs());
   }
   const bool fighting = facts.scene == Scene::Fight || facts.scene == Scene::Between;
   const bool results = facts.scene == Scene::Results;

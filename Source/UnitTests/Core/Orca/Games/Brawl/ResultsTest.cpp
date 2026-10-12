@@ -16,6 +16,8 @@
 #include "Core/Orca/Game/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/OnlineMenu.h"
 #include "Core/Orca/Games/Brawl/Results.h"
+#include "Core/Orca/UX/MenuEvents.h"
+#include "Core/Orca/UX/Search.h"
 
 using namespace Orca::UX;
 using Scene = Reading::Scene;

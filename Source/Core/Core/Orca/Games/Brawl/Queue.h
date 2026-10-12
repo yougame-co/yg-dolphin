@@ -13,6 +13,7 @@
 
 #include "Common/CommonTypes.h"
 #include "Core/Orca/Session/Events.h"
+#include "Core/Orca/UX/QueueApp.h"
 #include "Core/Orca/Games/Brawl/MatchBlock.h"
 #include "Core/Rollback/InputGate.h"
 #include "InputCommon/GCPadStatus.h"
@@ -97,28 +98,18 @@ constexpr int STEER_SETTLE_FRAMES = 20;
 // Give up turning port 2's costume (X) after this long; the pick stands in any colour.
 constexpr int COSTUME_LIMIT_FRAMES = 3 * 60;
 
-// The character select's id for "no character" (muSelCharPlayerArea +0x1B8, Selch_SelectNone).
-constexpr int NO_CHARACTER = 0x28;
+// The character select's id for "no character" (muSelCharPlayerArea +0x1B8, Selch_SelectNone):
+// QueueApp::NO_CHARACTER, beside the queue identity that carries it.
+using QueueApp::NO_CHARACTER;
 // The id for Random (Selch_Random, same in Project+). The game resolves it from its own emulated
 // RNG, so it is the same on every machine. X does not change Random's colour, so any costume is
 // accepted.
 constexpr int RANDOM_CHARACTER = 0x29;
 
-// ---- The queue identity (Events::PortInfo::queue), 13 bytes, big-endian ----
-//   +0 version 1   +1 u16 rating (0xFFFF none)   +3 u8 character (0xFF none)   +4 u8 costume
-//   +5 f32 x   +9 f32 y   (where the player's token was placed in their own game)
-struct Identity
-{
-  int rating = -1;  // -1: none ("queue rating -")
-  int character = -1;  // the character select's id (+0x1B8); -1 none
-  int costume = 0;     // the colour number (+0x1BC)
-  float x = 0;
-  float y = 0;
-  bool HasPick() const { return character >= 0 && character != NO_CHARACTER; }
-  bool operator==(const Identity&) const = default;
-};
-std::vector<u8> EncodeIdentity(const Identity& identity);
-std::optional<Identity> DecodeIdentity(const std::vector<u8>& bytes);
+// ---- The queue identity: QueueApp (engine), where the app's side keeps this player's own ----
+using QueueApp::DecodeIdentity;
+using QueueApp::EncodeIdentity;
+using QueueApp::Identity;
 
 // ---- What a frame sees ----
 struct CssPort
@@ -215,7 +206,7 @@ struct SkipHold
 
 // The one-time tip on the queue's own select, "New · Hold B to leave": shown the first time a
 // player reaches it after leaving moved from Z to B, for TIP_FRAMES or until they ready (Start)
-// or hold B. Kept as seen (TipSeenPath) once on screen TIP_SEEN_FRAMES, or once they hold B. Local
+// or hold B. Kept as seen (LocalStore::MarkSeen) once on screen TIP_SEEN_FRAMES, or once they hold B. Local
 // and display only; first runs only. Pure.
 constexpr std::string_view TIP_TEXT = "New \u00b7 Hold B to leave";
 constexpr std::string_view TIP_KEY = "hold-b-leave";
@@ -237,11 +228,8 @@ struct OnceTip
   // `b_frames`: how long B has been held.
   Step Frame(bool on_select, bool ready, int b_frames);
 };
-// The seen-file's text: one key per line.
-bool TipSeenIn(std::string_view text, std::string_view key);
-std::string TipSeenWith(std::string text, std::string_view key);
-// <User>/Config/OrcaSeen.txt, beside the kept controls (NameTags.cpp).
-std::string TipSeenPath();
+// Whether it was seen, and keeping it as seen, go through the engine's store of seen keys
+// (Orca/LocalStore.h: <User>/Config/OrcaSeen.txt), so this file does no file I/O.
 // The tip to show in the control guide now, or empty. Any thread.
 std::string Tip();
 
@@ -307,8 +295,7 @@ struct OwnStep
 // Done once the token is down on the pick in its colour, after STEER_LIMIT_FRAMES, after
 // COSTUME_LIMIT_FRAMES of turning the colour, or at once with no pick. Pure, integer steering.
 OwnStep StepOwnPick(const CssPort& port, const Identity& pick, OwnSteer* steer);
-// This player's own pick, as its queue identity carries it (empty when it never readied one).
-Identity OwnIdentity();
+// This player's own pick, as its queue identity carries it: QueueApp::OwnIdentity.
 // Steers port 1 onto `pick` from the next room character select the frame hook sees (game 1),
 // giving up after STEER_LIMIT_FRAMES. CPU thread.
 void ArmOwnPick(const Identity& pick);
@@ -384,35 +371,5 @@ bool OwnsStart(const Core::CPUThreadGuard& guard);
 void LatchFrame(const Core::CPUThreadGuard& guard,
                 const std::array<std::optional<GCPadStatus>, 4>& raw);
 
-// ---- The app's side (any thread) ----
-// The player picked Casual or Ranked and waits on the queue's own character select.
-void Begin(bool ranked);
-// Backed out to the menus (`orca menu cancel`).
-void End();
-bool Active();
-bool Ranked();
-// `queue rating <n|->`: this player's rating in the current queue (-1 none).
-void SetOwnRating(int rating);
-int OwnRating();
-// The last solo first run saw the queue's own character select with the player ready.
-bool SoloReady();
-// The last solo first run saw the queue's own character select.
-bool OnSoloCss();
-// The last first run saw a queue character select (solo or in a room). The overlay then docks its
-// lines on Project+'s rules bar.
-bool OnQueueCss();
-// The session restored the player's own game after a room. With `keep_ready` false (their own
-// timer ran out, or a ranked set was played), ready is cleared so the search does not restart by
-// itself. `why` is for the log.
-void AfterRestore(bool keep_ready, const char* why = "");
-// The app's `queue-cancel`: the search ended, so the player is no longer ready
-// (`orca queue unready` follows).
-void ClearReady();
-// The casual ready timer ran out and its frame is confirmed. Prints `orca queue timeout me|them`
-// once.
-void ConfirmTimeout(int confirmed, int local_port);
-// Discard notifications from the state that was replaced by a local snapshot.
-void ResetTimeouts();
-// Whether the last `orca queue timeout` said `me`. Cleared when read.
-bool TakeTimeoutWasMine();
+// ---- The app's side (Begin, End, Active, the rating, ready, timeouts): QueueApp (engine) ----
 }  // namespace Orca::UX::Queue

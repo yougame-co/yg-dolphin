@@ -336,19 +336,6 @@ TEST(OrcaQueue, TheHoldBTipShowsOnce)
     EXPECT_EQ(seen.Frame(true, false, 0), OnceTip::Step{});
 }
 
-TEST(OrcaQueue, TheTipSeenFileKeepsOneKeyPerLine)
-{
-  EXPECT_FALSE(TipSeenIn("", TIP_KEY));
-  EXPECT_FALSE(TipSeenIn("hold-b-leaves\n", TIP_KEY));
-  EXPECT_TRUE(TipSeenIn("hold-b-leave", TIP_KEY));
-  EXPECT_TRUE(TipSeenIn("other\r\n  hold-b-leave \r\n", TIP_KEY));
-  EXPECT_EQ(TipSeenWith("", TIP_KEY), "hold-b-leave\n");
-  EXPECT_EQ(TipSeenWith("other", TIP_KEY), "other\nhold-b-leave\n");
-  // Idempotent: a key already there is kept as is.
-  EXPECT_EQ(TipSeenWith("hold-b-leave\nother\n", TIP_KEY), "hold-b-leave\nother\n");
-  EXPECT_TRUE(TipSeenIn(TipSeenWith("a\nb\n", TIP_KEY), TIP_KEY));
-}
-
 // Back on its own character select not ready after a room (a ranked set played there): the Start
 // that left the results screen, still held, readies nobody; a new Start does.
 TEST(OrcaQueue, AStartHeldThroughTheWayBackIsSwallowedUntilLetGo)
