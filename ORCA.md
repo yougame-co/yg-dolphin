@@ -2576,6 +2576,16 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.41
+
+- **Clearer "couldn't open the disc" reports.** When Project+ (or a pack's launcher) can't open your
+  game disc, the report now says why: the file won't open or read, is cut short, or isn't a disc
+  image. A disc whose folder or file name contains `=` now opens.
+- **A pack YG Baiji refuses says so.** If a game's pack fails its checks, the game doesn't start
+  and you see the reason, instead of the plain game starting in its place.
+- **Better crash reports** for crashes inside the game.
+- **Stability fixes.**
+
 ### 0.3.40
 
 - **Orca is now YG Baiji.** The name was picked in a YouGame community poll; the baiji is the
