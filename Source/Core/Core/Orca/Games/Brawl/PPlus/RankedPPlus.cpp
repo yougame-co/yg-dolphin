@@ -73,19 +73,6 @@ constexpr u32 RSS_PAGE0_SLOTS = RSS_EXDATA + 0x3D;
 constexpr u32 RSS_SLOT_KINDS = RSS_EXDATA + 0x104;
 constexpr int MAX_PAGE_STAGES = 31;
 
-// The 2024 Proposed stages by Project+ stage kind, in the ruleset's order.
-constexpr std::array<u8, 9> LEGAL_KINDS{
-    0x01,  // Battlefield
-    0x2E,  // Pokémon Stadium 2
-    0x21,  // Smashville
-    0x04,  // Luigi's Mansion
-    0x09,  // Temple of Time
-    0x23,  // Green Hill Zone
-    0x06,  // Bowser's Castle
-    0x0C,  // Frigate Husk
-    0x2D,  // Dream Land
-};
-
 constexpr StageMask Bit(int i)
 {
   return static_cast<StageMask>(1u << i);
@@ -565,10 +552,12 @@ void Step1(GuestMemory& m, MatchBlock::State& s, int frame, bool two_players,
 
 int LegalIndexOfKind(int kind)
 {
-  for (size_t i = 0; i < LEGAL_KINDS.size(); ++i)
+  // The 2024 Proposed stages' Project+ stage kinds, in the ruleset's order.
+  const Ranked::Ruleset& rules = Rulesets::PPlus2024();
+  for (int i = 0; i < rules.stage_count; ++i)
   {
-    if (LEGAL_KINDS[i] == kind)
-      return static_cast<int>(i);
+    if (rules.stage_kinds[static_cast<size_t>(i)] == kind)
+      return i;
   }
   return -1;
 }

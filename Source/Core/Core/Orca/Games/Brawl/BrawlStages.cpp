@@ -214,17 +214,6 @@ const Tile& TileFor(int stage)
 namespace
 {
 
-// srStageKind of each legal stage, in RankedSteps order.
-constexpr std::array<int, kStages> kStageKinds{
-    0x01,  // Battlefield
-    0x2E,  // Pokemon Stadium (Melee)
-    0x13,  // Lylat Cruise
-    0x21,  // Smashville
-    0x0D,  // Yoshi's Island (Brawl)
-    0x02,  // Final Destination
-    0x03,  // Delfino Plaza
-};
-
 // gmGlobalModeMelee (g_GameGlobal +0x08): +0x98 four players of 0x5C bytes; +0x00 character,
 // +0x01 player type (0 = human).
 // TODO: confirm the character select fills these before the stage select.
@@ -472,7 +461,7 @@ void SelectFrame(GuestMemory& m, const View& v, State* s, bool casual)
       }
       if (s->progress.picked >= 0)
       {
-        const u32 kind = static_cast<u32>(kStageKinds[s->progress.picked]);
+        const u32 kind = Rules().stage_kinds[static_cast<size_t>(s->progress.picked)];
         if (m.Read32(v.task + TASK_TAKEN_KIND) != kind)
           m.Write32(v.task + TASK_TAKEN_KIND, kind);
       }
@@ -567,9 +556,11 @@ void SelectFrame(GuestMemory& m, const View& v, State* s, bool casual)
 
 int StageForStageId(int stage_id)
 {
-  for (int stage = 0; stage < kStages; ++stage)
+  // The ruleset's stage ids (srStageKind), in its order.
+  const RS::Ruleset& rules = Rules();
+  for (int stage = 0; stage < rules.stage_count; ++stage)
   {
-    if (kStageKinds[stage] == stage_id)
+    if (rules.stage_kinds[static_cast<size_t>(stage)] == stage_id)
       return stage;
   }
   return -1;

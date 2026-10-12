@@ -15,6 +15,8 @@
 
 #include "Common/FileUtil.h"
 #include "Core/Orca/Engine/Ruleset.h"
+#include "Core/Orca/Games/Brawl/BrawlStages.h"
+#include "Core/Orca/Games/Brawl/PPlus/RankedPPlus.h"
 #include "Core/Orca/Games/Brawl/Rulesets.h"
 
 namespace
@@ -144,4 +146,25 @@ TEST(OrcaRulesets, CompiledInAreTheFiles)
     EXPECT_EQ(r->ledge, builtin.ledge);
     EXPECT_EQ(r->css_ready_seconds, builtin.css_ready_seconds);
   }
+}
+
+// The stage flows find a stage by the game's id through the ruleset's list; Brawl's stage select
+// tiles (BrawlStages.cpp kTiles, layout data for a later slice) follow the same order.
+TEST(OrcaRulesets, StageIdsComeFromTheRuleset)
+{
+  namespace BS = Orca::UX::BrawlStages;
+  EXPECT_EQ(Orca::UX::Rulesets::Brawl2025().stage_count, static_cast<int>(BS::kStages));
+  EXPECT_EQ(BS::StageForStageId(0x01), BS::Battlefield);
+  EXPECT_EQ(BS::StageForStageId(0x2E), BS::PokemonStadium);
+  EXPECT_EQ(BS::StageForStageId(0x13), BS::LylatCruise);
+  EXPECT_EQ(BS::StageForStageId(0x21), BS::Smashville);
+  EXPECT_EQ(BS::StageForStageId(0x0D), BS::YoshisIsland);
+  EXPECT_EQ(BS::StageForStageId(0x02), BS::FinalDestination);
+  EXPECT_EQ(BS::StageForStageId(0x03), BS::DelfinoPlaza);
+  EXPECT_EQ(BS::StageForStageId(0x04), -1);
+  const std::array<int, 9> pplus{0x01, 0x2E, 0x21, 0x04, 0x09, 0x23, 0x06, 0x0C, 0x2D};
+  for (size_t i = 0; i < pplus.size(); ++i)
+    EXPECT_EQ(Orca::UX::RankedPPlus::LegalIndexOfKind(pplus[i]), static_cast<int>(i));
+  EXPECT_EQ(Orca::UX::RankedPPlus::LegalIndexOfKind(0x02), -1);
+  EXPECT_EQ(Orca::UX::RankedPPlus::LegalIndexOfKind(0), -1);
 }
