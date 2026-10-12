@@ -27,6 +27,9 @@ public:
   Orca::Engine::Verdicts& Results() override;
   Orca::Engine::HeaderHost& Header() override;
   Orca::Engine::MenuReads& Read() override;
+  Orca::Engine::CssAdapter* Css() override;
+  void LoadOwnControls() override;
+  void SetLocalPort(int port) override;
   Orca::Engine::Ruleset ProfileRuleset() override;
 };
 

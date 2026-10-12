@@ -13,6 +13,7 @@
 
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/UX/MenuEvents.h"
+#include "Core/Orca/UX/QueueApp.h"
 #include "Core/Rollback/InputGate.h"
 #include "InputCommon/GCPadStatus.h"
 
@@ -98,6 +99,20 @@ public:
   virtual FreshSeen LastSeen() = 0;
 };
 
+// The character select, for the host's own pick after a fresh start (S2 commit 5, group E): the
+// session arms it with the player's queue identity, and each first-run frame hook steers port 1
+// back onto that pick with this player's own inputs. CPU thread.
+class CssAdapter
+{
+public:
+  virtual ~CssAdapter() = default;
+  virtual void ArmOwnPick(const UX::QueueApp::Identity& pick) = 0;
+  virtual void DisarmOwnPick() = 0;
+  virtual bool OwnPickArmed() = 0;
+  // The pad the last first-run frame hook chose for port 1 while armed (nullopt: not steering).
+  virtual std::optional<GCPadStatus> OwnPickPad() = 0;
+};
+
 class Module
 {
 public:
@@ -120,6 +135,13 @@ public:
   virtual Verdicts& Results() = 0;
   virtual HeaderHost& Header() = 0;
   virtual MenuReads& Read() = 0;
+  // The builtin always has one (the session does not check for nullptr until S3 offers modules
+  // without a character select).
+  virtual CssAdapter* Css() = 0;
+  // This player's own controls, before a launch join's hello carries them (group F).
+  virtual void LoadOwnControls() = 0;
+  // The port this machine plays (0-based), for the module's local-only display state (group F).
+  virtual void SetLocalPort(int port) = 0;
   // The ruleset the running game plays (None: no locks). Part of the compatibility key.
   virtual Ruleset ProfileRuleset() = 0;
 };

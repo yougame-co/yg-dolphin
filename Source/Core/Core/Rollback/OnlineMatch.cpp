@@ -44,15 +44,11 @@
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Session/PadCodec.h"
 #include "Core/Orca/Status.h"
-#include "Core/Orca/Games/Brawl/NameTags.h"
-#include "Core/Orca/Games/Brawl/OnlineMenu.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/UX/Probe.h"
-#include "Core/Orca/Games/Brawl/Queue.h"
 #include "Core/Orca/UX/MenuEvents.h"
 #include "Core/Orca/UX/QueueApp.h"
 #include "Core/Orca/UX/Search.h"
-#include "Core/Orca/Games/Brawl/RankedSet.h"
 #include "Core/Orca/UX/SetEnd.h"
 #include "Core/Orca/UX/UX.h"
 #include "Core/PowerPC/JitInterface.h"
@@ -86,7 +82,7 @@ struct KeyframeJob
   Orca::Net::KeyframeInfo info;
   double capture_ms = 0, pack_ms = 0, put_ms = 0;
   u64 raw_size = 0;
-  // The header generation wanted at capture (UX/OnlineRules.h WantedGeneration).
+  // The header generation wanted at capture (Games/Brawl/OnlineRules.h WantedGeneration).
   u64 generation = 0;
   std::string error;
   // The store refused it for good (Orca::Net::LastRefusal); empty if another try could work.
@@ -161,7 +157,7 @@ struct Match
   std::set<int> seated;
   // Seats taken in but not plugged in yet; the app hears "friend-joined" once all have.
   std::set<int> plugging;
-  // Host: hold waiting friends while in a single-player mode (Orca::UX::DropInHeld).
+  // Host: hold waiting friends while in a single-player mode (the module's Read().DropInHeld()).
   bool holding = false;
   // Host: its room ended without this player leaving it. Reported once, then reopened with a
   // growing backoff; `home_code` is the last room that worked.
@@ -199,7 +195,7 @@ struct Match
   bool joined = false;
   int leave_at = -1;
   bool leave_requested = false;
-  // The opponent didn't pick in time on a ranked set's later game (UX/CharOrder.h NoShow): this
+  // The opponent didn't pick in time on a ranked set's later game (CharOrder::NoShow): this
   // player's leave reports the room's match void first.
   bool opponent_no_show = false;
   std::string join_status;
@@ -279,7 +275,7 @@ struct Match
   // The friends waiting now join in place (DecideFreshStart said None for them).
   bool friends_in_place = false;
   // The fresh start under way: its unseen tail, then (a queue room) neutral pads until the room's
-  // header is in, then port 1's own pick put back (UX/Queue.h ArmOwnPick).
+  // header is in, then port 1's own pick put back (Module::Css() ArmOwnPick).
   struct Fresh
   {
     enum class Phase
@@ -309,7 +305,7 @@ struct Match
 
   // A Casual or Ranked pick handed over while this game wasn't alone, at a boundary the app's
   // commands may not take (TakeLobbyPickNow): retried at the next one while it still stands
-  // (UX/OnlineMenu.h PickStands).
+  // (Games/Brawl/OnlineMenu.h PickStands).
   std::optional<Orca::UX::OnlinePick> lobby_pick;
   // A pick this host announced unarmed to keep its friends, armed once they are gone and it still
   // stands (ArmKeptPick).
@@ -455,7 +451,7 @@ int FastUntil()
   return until > 0 && Orca::UX::TestKnobsAllowed() ? until : 0;
 }
 
-// A new history's seed for the game's random numbers (ReplayFrame::seed, UX/OnlineMenu.h
+// A new history's seed for the game's random numbers (ReplayFrame::seed, Games/Brawl/OnlineMenu.h
 // FreshMove::ApplySeed): fresh for every boot and every fresh start, so RANDOM on the character
 // select, and every draw the game makes, differ from one match to the next. The host draws it and
 // the replay carries it, so a joiner's rebuild starts from the same numbers. 0 (the canonical
@@ -651,7 +647,7 @@ void EndFresh(Match& match, const char* why);
 
 // Port 1's pad while a fresh start runs (FreshStart): nothing pressed through the tail and, in a
 // queue room, until the room's header is in; then the player's own pick put back by its own
-// inputs (UX/Queue.h ArmOwnPick); then the player's controller.
+// inputs (Module::Css() ArmOwnPick); then the player's controller.
 Pad FreshPad(Match& match, const Pad& local, int frame)
 {
   if (!match.fresh)
@@ -671,7 +667,7 @@ Pad FreshPad(Match& match, const Pad& local, int frame)
     if (Orca::Status::Cap("queue2") && pick.HasPick())
     {
       fresh.phase = Phase::Steer;
-      Orca::UX::Queue::ArmOwnPick(pick);
+      Orca::UX::Game().Css()->ArmOwnPick(pick);
     }
     else
     {
@@ -681,7 +677,7 @@ Pad FreshPad(Match& match, const Pad& local, int frame)
   }
   if (fresh.phase == Phase::Steer)
   {
-    if (!Orca::UX::Queue::OwnPickArmed())
+    if (!Orca::UX::Game().Css()->OwnPickArmed())
     {
       NOTICE_LOG_FMT(ROLLBACK, "Drop-in: port 1's pick is back at frame {} ({:.0f} ms after the "
                                "fresh start)",
@@ -689,7 +685,7 @@ Pad FreshPad(Match& match, const Pad& local, int frame)
       EndFresh(match, nullptr);
       return local;
     }
-    const std::optional<GCPadStatus> steer = Orca::UX::Queue::OwnPickPad();
+    const std::optional<GCPadStatus> steer = Orca::UX::Game().Css()->OwnPickPad();
     return steer ? Orca::Net::EncodePad(*steer) : Pad{};
   }
   return Pad{};
@@ -876,7 +872,7 @@ void EndFresh(Match& match, const char* why)
   // An unseen hold or steer ends with it: the player sees and plays from this frame.
   ShowFresh(match, nullptr);
   if (match.fresh->phase == Match::Fresh::Phase::Steer)
-    Orca::UX::Queue::DisarmOwnPick();
+    Orca::UX::Game().Css()->DisarmOwnPick();
   match.fresh.reset();
 }
 
@@ -911,7 +907,7 @@ void ResetDropIn(Match& match)
   match.store = MakeStore();
 }
 
-// The online rules' mode for a room's queue (UX/OnlineRules.h): casual or ranked, else none.
+// The online rules' mode for a room's queue (OnlineRules.h): casual or ranked, else none.
 Orca::Engine::Mode QueueMode(const std::string& queue)
 {
   if (queue == "casual")
@@ -1373,7 +1369,7 @@ void HostEvents(Core::System& system, Match& match)
   }
 
   // A host in a single-player mode (Classic, Training, Events...) holds waiting friends until its
-  // game is back in the menus (UX/OnlineMenu.h SequenceHoldsDropIn).
+  // game is back in the menus (Games/Brawl/OnlineMenu.h SequenceHoldsDropIn).
   const bool hold = Orca::UX::Game().Read().DropInHeld() && !match.waiting.empty();
   if (hold != match.holding)
   {
@@ -1937,7 +1933,7 @@ std::optional<int> FreshStart(Core::System& system, Match& match)
     match.fresh_queue_armed = false;
     match.fresh_room = fresh.room;
   }
-  Orca::UX::Queue::DisarmOwnPick();
+  Orca::UX::Game().Css()->DisarmOwnPick();
   // ORCA_TEST_FAST_UNTIL aged the host before its first fresh start only.
   match.fast_spent = true;
   if (std::exchange(match.fast, false))
@@ -2028,7 +2024,7 @@ Load LoadKeyframe(Core::System& system, Match& match, int* frame_out)
   system.GetJitInterface().ClearSafe();
   // A fresh start of this game's own is over: the friend's game replaces it.
   match.fresh.reset();
-  Orca::UX::Queue::DisarmOwnPick();
+  Orca::UX::Game().Css()->DisarmOwnPick();
   match.replay = std::move(download->replay);
   match.running = match.origin_frame - 1;
   match.join_in_play = false;
@@ -2459,7 +2455,7 @@ void TakeCommands(Core::System& system, Match& match)
   }
 }
 
-// ---- The queue image (UX/Queue.h) ----
+// ---- The queue image (Games/Brawl/Queue.h) ----
 
 // Captures this player's own game and NAND, to restore when the queue's room is over.
 void CaptureQueueImage(Core::System& system, Match& match)
@@ -2548,7 +2544,7 @@ bool MaybeRestoreQueueImage(Core::System& system, Match& match)
   }
   // The room's fresh start, if any, was for the game left behind.
   match.fresh.reset();
-  Orca::UX::Queue::DisarmOwnPick();
+  Orca::UX::Game().Css()->DisarmOwnPick();
   Orca::Events::NoteResync();
   // The header the frame hook read was the room's game's; this game's own is read at the next hook.
   Orca::UX::Game().Header().MemoryReplaced();
@@ -2581,7 +2577,7 @@ bool MaybeRestoreQueueImage(Core::System& system, Match& match)
 // ---- The friends lobby and the queue ----
 
 // A Casual or Ranked pick the frame hook saw at this boundary while this game wasn't alone
-// (UX/OnlineMenu.h TakeLobbyPick), taken after the app's commands (DecideLobbyPick). A host whose
+// (OnlineMenu.h TakeLobbyPick), taken after the app's commands (DecideLobbyPick). A host whose
 // app can search that queue now leaves its room as the app's Leave does: its friends play on, hear
 // `host-left`, and come home on the character select the pick opened (ComeHome). It prints
 // `orca state left lobby`, then the pick as if made alone. Without the pick's cap it keeps its
@@ -2826,7 +2822,7 @@ void LeaveOnMismatch(Match& match)
 //
 // Each port's values (player name and own controls) are decided by the host from a frame it picks;
 // every machine holds them before running that frame, so the frame hook writes the same bytes
-// everywhere (UX/NameTags.h). The host plugs a newcomer in only once every player acknowledges its
+// everywhere (NameTags.h). The host plugs a newcomer in only once every player acknowledges its
 // values, and never changes its own mid-session.
 
 // Host: a seat's new values, from their frame. Keeps a few entries per seat.
@@ -3160,11 +3156,11 @@ void ConfirmResults(Match& match)
     if (plugged >= 2)
       plug = latest;
   }
-  // The casual ready timer ran out (UX/Queue.h), at the same final frame on both machines.
+  // The casual ready timer ran out (UX/QueueApp.h), at the same final frame on both machines.
   Orca::UX::QueueApp::ConfirmTimeout(confirmed, match.local_seat);
   // Ranked: a player who didn't pick a character in time leaves the room. Before the first game the
   // set ends with no game, so the room voids it and rates nobody; on a later game (a token still in
-  // hand after the character order, UX/CharOrder.h) leaving loses the set. The other waits for the
+  // hand after the character order, CharOrder.h) leaving loses the set. The other waits for the
   // verdict, and a leave of its own then reports the match void first.
   if (const auto no_show = Orca::UX::Game().Results().ConfirmNoShow(confirmed))
   {
@@ -3431,7 +3427,7 @@ std::optional<int> Boundary(Core::System& system,
     match.job.reset();
     match.download.reset();
     match = {};
-    Orca::UX::Queue::DisarmOwnPick();
+    Orca::UX::Game().Css()->DisarmOwnPick();
     Orca::Perf::NewBoot();
   }
   if (match.finished)
@@ -3456,7 +3452,7 @@ std::optional<int> Boundary(Core::System& system,
     if (const std::string leave = Orca::GetEnv("ORCA_TEST_LEAVE_AT"); !leave.empty())
       match.leave_at = std::atoi(leave.c_str());
     // This player's own controls, before a launch join's hello carries them.
-    Orca::UX::LoadOwnControls();
+    Orca::UX::Game().LoadOwnControls();
     Orca::Online::Start();
     // The role (host plays, joiner waits) is known once the room has its ticket.
     std::optional<bool> joining;
@@ -4227,7 +4223,7 @@ std::optional<int> OnBoundary(Core::System& system,
   ConfirmResults(TheMatch());
   NoteRankedFight(TheMatch());
   SetOverLeave(TheMatch());
-  Orca::UX::RankedSet::SetLocalPort(TheMatch().local_seat);
+  Orca::UX::Game().SetLocalPort(TheMatch().local_seat);
   s_solo_idle = SoloIdle(TheMatch());
   return rewound_to;
 }

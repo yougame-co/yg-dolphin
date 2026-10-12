@@ -84,6 +84,16 @@ public:
   bool FreshSupported() override { return FreshMove::Supported(); }
   Orca::Engine::FreshSeen LastSeen() override { return FreshMove::LastSeen(); }
 };
+
+// The host's own pick over Queue.h, as the session called it.
+class BrawlCss final : public Orca::Engine::CssAdapter
+{
+public:
+  void ArmOwnPick(const QueueApp::Identity& pick) override { Queue::ArmOwnPick(pick); }
+  void DisarmOwnPick() override { Queue::DisarmOwnPick(); }
+  bool OwnPickArmed() override { return Queue::OwnPickArmed(); }
+  std::optional<GCPadStatus> OwnPickPad() override { return Queue::OwnPickPad(); }
+};
 }  // namespace
 
 BrawlModule& Builtin()
@@ -233,6 +243,22 @@ Orca::Engine::MenuReads& BrawlModule::Read()
 {
   static BrawlMenuReads s_reads;
   return s_reads;
+}
+
+Orca::Engine::CssAdapter* BrawlModule::Css()
+{
+  static BrawlCss s_css;
+  return &s_css;
+}
+
+void BrawlModule::LoadOwnControls()
+{
+  UX::LoadOwnControls();
+}
+
+void BrawlModule::SetLocalPort(int port)
+{
+  RankedSet::SetLocalPort(port);
 }
 
 Orca::Engine::Ruleset BrawlModule::ProfileRuleset()
