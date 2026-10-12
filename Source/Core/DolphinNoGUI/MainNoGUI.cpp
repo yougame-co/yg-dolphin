@@ -745,6 +745,9 @@ int main(const int raw_argc, char* raw_argv[])
 {
   // Windows: a C++ exception names itself on stderr as it is thrown, so a run it ends says why.
   Orca::CrashNote::InstallThrowReporter();
+  // And so does a fault (an access violation, a failed assert): its module, offset and the
+  // graphics device's state.
+  Orca::CrashNote::InstallFaultReporter();
   // Remove --embed, --parent, --rect and --verify before the regular parser sees the arguments.
   std::vector<char*> arg_list(raw_argv, raw_argv + raw_argc);
   std::string embed_error;
