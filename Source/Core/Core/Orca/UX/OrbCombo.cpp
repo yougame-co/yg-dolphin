@@ -3,11 +3,23 @@
 
 #include "Core/Orca/UX/OrbCombo.h"
 
+#include <string_view>
+
 #include "Common/Logging/Log.h"
 #include "Core/Orca/Status.h"
+#include "Core/Orca/UX/OverlayKey.h"
 
 namespace Orca::UX
 {
+namespace
+{
+void Print(std::string_view line)
+{
+  if (!line.empty())
+    Status::Line(line);
+}
+}  // namespace
+
 OrbCombo::Step OrbCombo::Next(u16 buttons)
 {
   const bool start = (buttons & START) != 0;
@@ -16,7 +28,13 @@ OrbCombo::Step OrbCombo::Next(u16 buttons)
   if (!m_held && start && !m_start && (buttons & UP) != 0)
   {
     m_held = true;
+    m_pressing = true;
     step.fired = true;
+  }
+  else if (m_pressing && !start)
+  {
+    m_pressing = false;
+    step.released = true;
   }
   m_start = start;
   if (m_held)
@@ -40,13 +58,25 @@ GCPadStatus FilterLocalPad(GCPadStatus pad, bool first_run, bool live)
     if (step.fired)
     {
       INFO_LOG_FMT(CORE, "Orca: the YouGame shortcut (Up + Start)");
-      Status::Line("orca orb");
+      Print(OverlayKey::Pad().Down(Status::Cap(Status::TALK_CAP)));
+    }
+    else if (step.released)
+    {
+      Print(OverlayKey::Pad().Up());
     }
   }
-  else if (s_combo.Held())
+  else
   {
-    pad.button &= static_cast<u16>(~(OrbCombo::START | OrbCombo::DPAD));
+    if (!live)
+      Print(OverlayKey::Pad().Cancel());
+    if (s_combo.Held())
+      pad.button &= static_cast<u16>(~(OrbCombo::START | OrbCombo::DPAD));
   }
   return pad;
+}
+
+void LocalPadStopped()
+{
+  Print(OverlayKey::Pad().Cancel());
 }
 }  // namespace Orca::UX

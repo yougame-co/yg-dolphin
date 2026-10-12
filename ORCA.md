@@ -1580,7 +1580,7 @@ contest"; from it on, "This set counts as a loss" and "They forfeit in". Tests:
 
 | stdout | |
 |---|---|
-| `orca caps ... host results locks queue2 pick-casual pick-ranked` | `results` where the result reader is verified; `locks`, `queue2` and the pick caps where the profile has a ruleset (Brawl rev 2 and Project+). The app answers a pick cap only for a queue it can search now. With `music` that is 16 caps, the most an app before the Music switch's release passes (that release takes 24); more needs it as the minimum app (`OrcaOnlineMenuLobby.EveryCapFitsTheAppsCapsLine`). |
+| `orca caps ... host results locks queue2 pick-casual pick-ranked` | `results` where the result reader is verified; `locks`, `queue2` and the pick caps where the profile has a ruleset (Brawl rev 2 and Project+). The app answers a pick cap only for a queue it can search now. With `music` that is 16 caps, the most an app before the Music switch's release passes (that release takes 24); more needs it as the minimum app (`OrcaOnlineMenuLobby.EveryCapFitsTheAppsCapsLine`). `talk` comes after them, so such an app drops only it. |
 | `orca result <json>` | The room's verdict, when it arrives. At most 300 bytes. |
 | `orca state friend-left match-over` / `host-left match-over` | A ranked room closed after its set. |
 
@@ -2080,19 +2080,34 @@ moves inside the window.
 | `controls <hex>` | The player's own controls ([Each player's own controls](#each-players-own-controls)); the tag gets them at the next character select. A bad profile answers `unsupported controls`. |
 | `orb <x> <y> <size> <lit> <away> <badge>` / `orb blink` / `orb off` | YouGame's overlay button, drawn where the page's own stands under Orca's window. |
 | `notice <kind> <name> <text> [<key> <verb>]` | One of the YouGame overlay's lines (join, leave, invite, ...). Never logged. |
+| `talk listen\|send\|sent\|error <name> <text>` / `talk off` | Hold-to-talk's row, cap `talk`: one row after the notices, replaced by each line. Fields as in `chat`. Never logged. |
 | `quit` | Stop at once and exit. |
 
 Most commands are gated by capabilities (`caps`) that Orca and the app agree on; a later `caps` line
 replaces the whole answer. A command without its cap, or a malformed one, answers
 `unsupported <command>`. Any other line goes to stderr. Drawing
-commands (`view`, `dim`, `perf`, `chat`, `orb`, `notice`) are host-only: never in game memory or
-the compatibility key.
+commands (`view`, `dim`, `perf`, `chat`, `orb`, `notice`, `talk`) are host-only: never in game
+memory or the compatibility key.
 
 **Opening YouGame's overlay** prints `orca orb`: a left press on the button (Windows), Shift+Tab
 while Orca has the keyboard, or, on a controller, holding the D-pad's Up and pressing Start
 (`Orca/UX/OrbCombo.h`). From that Start until Start and the D-pad are let go the game gets neither,
 and the masked pad is what is recorded and sent, so every machine plays it. Opening the overlay
 never pauses Orca: the page sends `blur`, the player's pad goes neutral, and the match goes on.
+
+**Hold-to-talk** (cap `talk`, offered last). With it, those two presses print their press and
+release instead of `orca orb` (`Orca/UX/OverlayKey.h`): `orca overlay down keys|pad`, then exactly
+one `orca overlay up keys|pad` (let go: Tab or Shift; Start, even with Up still held) or
+`orca overlay cancel keys|pad` (no longer read: Orca's window lost the keyboard or was hidden; the
+game lost focus, paused or is stopping). The page times them: let go within 250 ms is a tap (the
+overlay), longer is a hold (it talks). A click on the button stays `orca orb`. On macOS and Linux
+Orca's window never has the keyboard, so the page sees Shift+Tab itself. The masking is the same as
+without the cap, so the compatibility key does not change. While the player talks the page sends
+`talk listen <name> <text>` (to whom, then the live words, at most 4 a second), `talk send`,
+`talk sent` or `talk error`, and `talk off`. Orca draws one row after the three notice rows,
+replaced in place: listen and send keep the end of the words and stay until the next line (60 s at
+most), sent fades after 3 s and error after 4 s, and while listening the button sends out a green
+ring every 1.2 s.
 
 ### stdout
 
@@ -2103,6 +2118,7 @@ never pauses Orca: the page sends `blur`, the player's pad goes neutral, and the
 | `unsupported <command> [N]` | A refused command. Not an error. |
 | `key escape` / `key fullscreen` | Windows only, if Orca's window somehow has the keyboard. |
 | `orca click` | Windows only: a mouse press on Orca's window, which the page never sees; the app focuses its page and sends `focus`. On macOS and Linux the press reaches the page. |
+| `orca orb` / `orca overlay down\|up\|cancel keys\|pad` | The overlay key, as a toggle, or (cap `talk`) its press and release: see Hold-to-talk above. |
 | `error <sentence>` | Something failed. Each `orca error` also gets an `error` twin. |
 | `orca state <state>` / `orca error <code> <sentence>` | Session status (`Orca/Status.h`). Forward every line that starts with `orca `. |
 | `orca menu ...`, `orca result ...`, `orca queue ...` | See [Online menu](#online-menu) and [Matchmaking](#matchmaking-and-results). |

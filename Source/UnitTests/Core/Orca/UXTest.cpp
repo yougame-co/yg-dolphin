@@ -7,6 +7,7 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
@@ -30,6 +31,7 @@
 #include <imgui.h>
 
 #include "Core/Orca/Session/Events.h"
+#include "Core/Orca/Status.h"
 #include "Core/Orca/UX/Chat.h"
 #include "Core/Orca/UX/ControllerSource.h"
 #include "Core/Orca/UX/Controllers.h"
@@ -38,6 +40,7 @@
 #include "Core/Orca/UX/NameTags.h"
 #include "Core/Orca/UX/OrbCombo.h"
 #include "Core/Orca/UX/Overlay.h"
+#include "Core/Orca/UX/OverlayKey.h"
 #include "Core/Orca/UX/YgOrbDraw.h"
 #include "InputCommon/GCPadStatus.h"
 #include "VideoCommon/OnScreenDisplay.h"
@@ -3491,6 +3494,260 @@ TEST(OrcaUXOrbCombo, TheLocalPadKeepsItsStateWhileUnfocusedAndOnReRuns)
   FilterLocalPad(with(0), true, true);
 }
 
+TEST(OrcaUXOrbCombo, LettingGoOfStartEndsAHoldOnceWithTheMaskUnchanged)
+{
+  using Orca::UX::OrbCombo;
+  constexpr u16 UP = PAD_BUTTON_UP, START = PAD_BUTTON_START;
+  OrbCombo c;
+  c.Next(UP);
+  auto s = c.Next(UP | START);
+  EXPECT_TRUE(s.fired);
+  EXPECT_FALSE(s.released);
+  s = c.Next(UP | START);
+  EXPECT_FALSE(s.fired);
+  EXPECT_FALSE(s.released);
+  // Start let go with Up still held: released once, and the D-pad stays masked as before.
+  s = c.Next(UP);
+  EXPECT_TRUE(s.released);
+  EXPECT_EQ(s.buttons, 0);
+  EXPECT_TRUE(c.Held());
+  s = c.Next(UP);
+  EXPECT_FALSE(s.released);
+  EXPECT_EQ(s.buttons, 0);
+  // Start again while still masked: neither a new press nor a new release.
+  s = c.Next(UP | START);
+  EXPECT_FALSE(s.fired);
+  EXPECT_EQ(s.buttons, 0);
+  s = c.Next(0);
+  EXPECT_FALSE(s.released);
+  EXPECT_FALSE(c.Held());
+  // Both let go together: released on that frame.
+  c.Next(UP);
+  EXPECT_TRUE(c.Next(UP | START).fired);
+  s = c.Next(0);
+  EXPECT_TRUE(s.released);
+  EXPECT_EQ(s.buttons, 0);
+  EXPECT_FALSE(c.Held());
+  // No shortcut, no release.
+  EXPECT_FALSE(c.Next(START).released);
+  EXPECT_FALSE(c.Next(0).released);
+}
+
+TEST(OrcaUXOverlayKey, APressIsADownThenOneUpOrCancelAndTheToggleWithoutTalk)
+{
+  using Orca::UX::OverlayKey::Press;
+  using Orca::UX::OverlayKey::Source;
+  Press keys(Source::Keys);
+  // Without "talk": the toggle, and nothing follows.
+  EXPECT_EQ(keys.Down(false), "orca orb");
+  EXPECT_FALSE(keys.IsDown());
+  EXPECT_EQ(keys.Up(), "");
+  EXPECT_EQ(keys.Cancel(), "");
+  // With it: down, then exactly one up.
+  EXPECT_EQ(keys.Down(true), "orca overlay down keys");
+  EXPECT_TRUE(keys.IsDown());
+  EXPECT_EQ(keys.Down(true), "") << "a second press while down is the same press";
+  EXPECT_EQ(keys.Up(), "orca overlay up keys");
+  EXPECT_EQ(keys.Up(), "");
+  EXPECT_EQ(keys.Cancel(), "");
+  // Or exactly one cancel, after which a late key-up prints nothing.
+  EXPECT_EQ(keys.Down(true), "orca overlay down keys");
+  EXPECT_EQ(keys.Cancel(), "orca overlay cancel keys");
+  EXPECT_EQ(keys.Cancel(), "");
+  EXPECT_EQ(keys.Up(), "");
+  // A press that began with "talk" ends with its up even if the cap went away meanwhile.
+  Press pad(Source::Pad);
+  EXPECT_EQ(pad.Down(true), "orca overlay down pad");
+  EXPECT_EQ(pad.Down(false), "");
+  EXPECT_EQ(pad.Up(), "orca overlay up pad");
+  EXPECT_EQ(pad.Down(true), "orca overlay down pad");
+  EXPECT_EQ(pad.Cancel(), "orca overlay cancel pad");
+}
+
+TEST(OrcaUXOrbCombo, TheLocalPadPrintsItsPressAndReleaseWithTalk)
+{
+  using Orca::UX::FilterLocalPad;
+  constexpr u16 UP = PAD_BUTTON_UP, START = PAD_BUTTON_START;
+  GCPadStatus pad;
+  const auto with = [&pad](u16 buttons) {
+    GCPadStatus p = pad;
+    p.button = buttons;
+    return p;
+  };
+  std::FILE* const out = std::tmpfile();
+  ASSERT_NE(out, nullptr);
+  const auto printed = [out] {
+    std::fflush(out);
+    std::rewind(out);
+    std::string text;
+    char buffer[256];
+    while (std::fgets(buffer, sizeof(buffer), out))
+      text += buffer;
+    std::fseek(out, 0, SEEK_END);
+    return text;
+  };
+  const char* const was = std::getenv("ORCA_SESSION");
+  const std::string saved = was ? was : "";
+  const auto session = [](const char* value) {
+#ifdef _WIN32
+    _putenv_s("ORCA_SESSION", value ? value : "");
+#else
+    if (value)
+      setenv("ORCA_SESSION", value, 1);
+    else
+      unsetenv("ORCA_SESSION");
+#endif
+  };
+  // Status lines print only in a session; the app agreed "talk".
+  Orca::Status::SetAppCaps("talk");
+  ASSERT_TRUE(Orca::Status::Cap(Orca::Status::TALK_CAP));
+  session("1");
+  Orca::Status::SetOutput(out);
+
+  // A hold: down at the Start press, up at its release, masked as ever.
+  EXPECT_EQ(FilterLocalPad(with(UP), true, true).button, UP);
+  EXPECT_EQ(FilterLocalPad(with(UP | START), true, true).button, 0);
+  // A re-run's read of Start let go is no release.
+  EXPECT_EQ(FilterLocalPad(with(UP), false, true).button, 0);
+  EXPECT_EQ(FilterLocalPad(with(UP | START), true, true).button, 0);
+  EXPECT_EQ(FilterLocalPad(with(UP), true, true).button, 0);
+  EXPECT_EQ(FilterLocalPad(with(0), true, true).button, 0);
+  EXPECT_EQ(printed(), "orca overlay down pad\norca overlay up pad\n");
+
+  // The game lost focus mid-press: cancelled, and the release that follows prints nothing.
+  FilterLocalPad(with(UP), true, true);
+  FilterLocalPad(with(UP | START), true, true);
+  EXPECT_EQ(FilterLocalPad(with(0), true, false).button, 0);
+  EXPECT_EQ(FilterLocalPad(with(0), true, false).button, 0);
+  FilterLocalPad(with(0), true, true);
+  // Paused or stopping mid-press: cancelled once.
+  FilterLocalPad(with(UP), true, true);
+  FilterLocalPad(with(UP | START), true, true);
+  Orca::UX::LocalPadStopped();
+  Orca::UX::LocalPadStopped();
+  FilterLocalPad(with(0), true, true);
+  EXPECT_EQ(printed(), "orca overlay down pad\norca overlay up pad\n"
+                       "orca overlay down pad\norca overlay cancel pad\n"
+                       "orca overlay down pad\norca overlay cancel pad\n");
+
+  // Without "talk": the toggle, as before.
+  Orca::Status::SetAppCaps("");
+  FilterLocalPad(with(UP), true, true);
+  FilterLocalPad(with(UP | START), true, true);
+  FilterLocalPad(with(0), true, true);
+  const std::string all = printed();
+  EXPECT_EQ(all.substr(all.size() - 9), "orca orb\n");
+
+  Orca::Status::SetOutput(nullptr);
+  session(was ? saved.c_str() : nullptr);
+  std::fclose(out);
+  EXPECT_FALSE(Orca::UX::OverlayKey::Pad().IsDown());
+}
+
+TEST(OrcaUXYgOrb, ParsesTalkLines)
+{
+  using namespace Orca::UX::YgOrb;
+  auto t = ParseTalk("talk listen Ada Listening%E2%80%A6%20let%20go%20to%20send");
+  ASSERT_TRUE(t);
+  EXPECT_EQ(t->phase, Talk::Phase::Listen);
+  EXPECT_EQ(t->name, "Ada");
+  EXPECT_EQ(t->text, "Listening\xE2\x80\xA6 let go to send");
+  t = ParseTalk("talk sent Bo%20Li gg%20wp");
+  ASSERT_TRUE(t);
+  EXPECT_EQ(t->phase, Talk::Phase::Sent);
+  EXPECT_EQ(t->name, "Bo Li");
+  EXPECT_EQ(t->text, "gg wp");
+  EXPECT_EQ(ParseTalk("talk send Ada hi")->phase, Talk::Phase::Send);
+  EXPECT_EQ(ParseTalk("talk error Ada No%20mic")->phase, Talk::Phase::Error);
+  t = ParseTalk("talk off");
+  ASSERT_TRUE(t);
+  EXPECT_EQ(t->phase, Talk::Phase::Off);
+  for (const char* bad : {"talk", "talk ", "talk off now", "talk listen", "talk listen Ada",
+                          "talk shout Ada hi", "talk off Ada hi", "talk listen Ada hi there",
+                          "talk listen Ada%0A hi", "talk listen Ada hi%", "talk  listen Ada hi",
+                          "talk listen Ada hi ", "Talk off", "talks off"})
+  {
+    EXPECT_FALSE(ParseTalk(bad)) << bad;
+  }
+}
+
+TEST(OrcaUXYgOrb, TheTalkRowIsReplacedInPlaceAndOutlivesTheNotices)
+{
+  using namespace Orca::UX::YgOrb;
+  const auto talk = [](Talk::Phase phase, std::string text) {
+    Talk t;
+    t.phase = phase;
+    t.name = "Ada";
+    t.text = std::move(text);
+    return t;
+  };
+  Model m;
+  m.Apply(*ParseOrb("orb 32 32 80 1 0 0"), 0);
+  EXPECT_FALSE(m.At(0).showing);
+  // The mic opens: the row shows and the button pulses green.
+  m.SetTalk(talk(Talk::Phase::Listen, "Listening"), 1000);
+  auto v = m.At(1000);
+  EXPECT_TRUE(v.showing);
+  EXPECT_TRUE(v.listening);
+  EXPECT_NEAR(v.ring, 0.0f, 0.01f);
+  Model::TalkEntry row;
+  std::uint64_t generation = m.TalkRow(0, &row);
+  EXPECT_EQ(row.talk.text, "Listening");
+  // Live words replace it in place; the pulse runs on from when the mic opened.
+  m.SetTalk(talk(Talk::Phase::Listen, "gg"), 1300);
+  EXPECT_EQ(m.At(1300).talk_generation, generation + 1);
+  generation = m.TalkRow(generation, &row);
+  EXPECT_EQ(row.talk.text, "gg");
+  EXPECT_EQ(row.at, 1300);
+  EXPECT_NEAR(m.At(1600).ring, 0.5f, 0.01f);
+  // Notices come and go beside it; it keeps no timer of theirs.
+  Notice n;
+  n.kind = Kind::Leave;
+  n.name = "Bo";
+  n.text = "left";
+  for (int i = 0; i < 5; ++i)
+    m.Add(n, 2000 + i);
+  std::vector<Model::Entry> lines;
+  m.Lines(0, &lines);
+  EXPECT_EQ(lines.size(), Model::KEEP);
+  EXPECT_TRUE(m.At(30000).showing);
+  EXPECT_EQ(TalkAlpha(row.talk, row.at, 30000), 1.0f);
+  // A blink still wins over the pulse.
+  m.Apply(*ParseOrb("orb blink"), 30000);
+  EXPECT_FALSE(m.At(30350).listening);
+  EXPECT_NEAR(m.At(30350).ring, 0.5f, 0.01f);
+  // Sending: no pulse, the row stays.
+  m.SetTalk(talk(Talk::Phase::Send, "gg"), 40000);
+  EXPECT_FALSE(m.At(41000).listening);
+  EXPECT_LT(m.At(41000).ring, 0);
+  EXPECT_TRUE(m.At(90000).showing);
+  // Sent fades by itself after 3 s, an error after 4 s.
+  const Talk sent = talk(Talk::Phase::Sent, "gg");
+  EXPECT_EQ(TalkAlpha(sent, 0, 2000), 1.0f);
+  EXPECT_NEAR(TalkAlpha(sent, 0, 2800), 0.5f, 0.01f);
+  EXPECT_EQ(TalkAlpha(sent, 0, 3000), 0.0f);
+  EXPECT_EQ(TalkAlpha(talk(Talk::Phase::Error, "No mic"), 0, 3900), 0.25f);
+  m.SetTalk(sent, 100000);
+  EXPECT_TRUE(m.At(102000).showing);
+  EXPECT_FALSE(m.At(103000).showing);
+  // A listen row the page never ends goes after TALK_STALE_MS.
+  m.SetTalk(talk(Talk::Phase::Listen, "hi"), 200000);
+  EXPECT_TRUE(m.At(200000 + TALK_STALE_MS - 1000).showing);
+  EXPECT_FALSE(m.At(200000 + TALK_STALE_MS).showing);
+  // Off, or the button going off, removes it at once.
+  m.SetTalk(talk(Talk::Phase::Listen, "hi"), 300000);
+  m.SetTalk(Talk{}, 300100);
+  EXPECT_FALSE(m.At(300100).showing);
+  EXPECT_LT(m.At(300100).ring, 0);
+  m.SetTalk(talk(Talk::Phase::Listen, "hi"), 300200);
+  generation = m.At(300200).talk_generation;
+  m.Apply(*ParseOrb("orb off"), 300300);
+  EXPECT_FALSE(m.At(300300).showing);
+  EXPECT_GT(m.At(300300).talk_generation, generation);
+  m.TalkRow(0, &row);
+  EXPECT_EQ(row.talk.phase, Talk::Phase::Off);
+}
+
 TEST(OrcaUXYgOrb, ThePlaceScalesFromThePagesPixelsToTheBackbuffer)
 {
   using namespace Orca::UX::YgOrb;
@@ -3532,4 +3789,20 @@ TEST(OrcaUXYgOrb, ThePillsWordsAreCutAfterASpaceAndNeverInsideACharacter)
   EXPECT_EQ(FitPrefix("ab", 0, w), 0u);
   // A word that ends right at the limit stays ("abcde fg" is eight).
   EXPECT_EQ(FitPrefix("abcde fg hij", 8, w), 8u);
+}
+
+TEST(OrcaUXYgOrb, LiveWordsKeepTheirEndAndAreCutBeforeAWord)
+{
+  using Orca::UX::YgOrb::FitSuffix;
+  const auto w = [](std::string_view t) { return static_cast<float>(t.size()); };
+  EXPECT_EQ(FitSuffix("gg wp", 10, w), 0u);
+  // "you ready" is nine: it starts after a space.
+  EXPECT_EQ(FitSuffix("are you ready", 9, w), 4u);
+  // "u ready" fits seven: the cut moves on to the next word.
+  EXPECT_EQ(FitSuffix("are you ready", 7, w), 8u);
+  // One long word: at a character.
+  EXPECT_EQ(FitSuffix("supercalifragilistic", 6, w), 14u);
+  // Half of a two-byte e acute and "s" fit two: the cut stays after the e.
+  EXPECT_EQ(FitSuffix("caf\xC3\xA9s", 2, w), 5u);
+  EXPECT_EQ(FitSuffix("ab", 0, w), 2u);
 }

@@ -7,7 +7,8 @@
 #include "InputCommon/GCPadStatus.h"
 
 // Controller shortcut for the YouGame overlay: hold D-pad Up and press Start. A GameCube pad has no
-// Home button. Orca prints `orca orb` and the app opens the overlay.
+// Home button. Orca prints `orca orb` and the app opens the overlay. With the app's "talk" cap it
+// prints the press and the release of Start instead (UX/OverlayKey.h), so holding it talks.
 //
 // From the Start press until both are released, the game sees neither Start nor the D-pad. The
 // session records and sends this masked pad, so every machine sees the same input and it cannot
@@ -25,18 +26,25 @@ public:
   {
     u16 buttons = 0;  // what the game gets
     bool fired = false;
+    // Start let go after firing, once per firing. The D-pad may stay masked after it.
+    bool released = false;
   };
   // Feeds one frame's sample of the local buttons. Pure, no I/O.
   Step Next(u16 buttons);
   bool Held() const { return m_held; }
 
 private:
-  bool m_held = false;   // fired; Start and the D-pad stay masked until both are released
-  bool m_start = false;  // Start was down in the last sample
+  bool m_held = false;      // fired; Start and the D-pad stay masked until both are released
+  bool m_start = false;     // Start was down in the last sample
+  bool m_pressing = false;  // fired and Start not yet let go
 };
 
 // Applies the shortcut to the local pad before the session sends it. The combo only advances on a
 // first run (rollback re-runs discard their reads) while `live`, because an unfocused pad reads as
-// neutral and must not look like a release. CPU thread only.
+// neutral and must not look like a release: a press still down then is cancelled instead. CPU
+// thread only.
 GCPadStatus FilterLocalPad(GCPadStatus pad, bool first_run, bool live);
+// The local pad is no longer read (the game paused or is stopping): a press still down is
+// cancelled. Any thread.
+void LocalPadStopped();
 }  // namespace Orca::UX

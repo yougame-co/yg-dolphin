@@ -81,8 +81,13 @@ inline constexpr const char* QUEUE2_CAP = "queue2";
 // DecideLobbyPick, DecideKeptPick). Offered with "locks". A ruleset profile then offers 17 caps;
 // the app reads up to 24 (desktop 0.12.39 and later), and Orca needs a newer app than that anyway.
 inline constexpr const char* PICK_CAPS = "pick-casual pick-ranked";
+// "talk": hold-to-talk. Orca prints "orca overlay down|up|cancel keys|pad" for the overlay key's
+// press and release instead of the "orca orb" toggle (UX/OverlayKey.h), and the app may send
+// "talk ..." lines, one row in the YouGame button's pill (UX/YgOrb.h). Offered last, so an app that
+// reads fewer words drops only this.
+inline constexpr const char* TALK_CAP = "talk";
 // This build's caps for the running profile: CAPS, plus "music", "results", "locks", "queue2" and
-// the pick caps where supported.
+// the pick caps where supported, then "talk".
 std::string OfferedCaps();
 void PrintCaps();
 void SetAppCaps(std::string_view list);
