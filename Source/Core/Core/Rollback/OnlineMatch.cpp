@@ -2284,9 +2284,9 @@ std::optional<int> StepReplayPlayer(Core::System& system, Match& match, const Fr
   const auto after_restore = [&system] {
     system.GetJitInterface().ClearSafe();
     Orca::Events::NoteResync();
-    Orca::UX::Queue::ResetTimeouts();
-    Orca::UX::Tracker().Reset();
-    Orca::UX::Rules::MemoryReplaced();
+    Orca::UX::QueueApp::ResetTimeouts();
+    Orca::UX::Game().Results().Reset();
+    Orca::UX::Game().Header().MemoryReplaced();
   };
   ReplayStream::PlayerHost host;
   host.restore_origin = [&] {
