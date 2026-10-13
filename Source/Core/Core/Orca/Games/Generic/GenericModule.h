@@ -13,7 +13,7 @@ struct Profile;
 
 namespace Orca::UX
 {
-inline constexpr int GENERIC_COMPAT = 0;
+inline constexpr int GENERIC_COMPAT = 1;
 
 // Selection uses only the boot's verified bundle and local jail verdict. Tree bundles are
 // available to TEST-key builds only; flat bundles always require a jail.

@@ -9,6 +9,7 @@
 #include "Core/Orca/Music.h"
 #include "Core/Orca/PanicDiag.h"
 #include "Core/Orca/Status.h"
+#include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Games/Brawl/BrawlModule.h"
 #include "Core/Orca/Games/Generic/GenericModule.h"
 #include "Core/Orca/Profile.h"
@@ -41,7 +42,7 @@ TEST(OrcaGenericModule, ContractHasNoGameRulesScenesOrResults)
   EXPECT_FALSE(manifest.results);
   EXPECT_FALSE(manifest.music);
   EXPECT_EQ(manifest.compat, UX::GENERIC_COMPAT);
-  EXPECT_EQ(UX::GENERIC_COMPAT, 0);
+  EXPECT_EQ(UX::GENERIC_COMPAT, 1);
   EXPECT_TRUE(module.Active());
   EXPECT_TRUE(module.Regions().empty());
   EXPECT_EQ(module.ProfileRuleset(), Ruleset::None);
@@ -253,6 +254,24 @@ TEST(OrcaGenericModule, LegacySelectionAndShutdownKeepTheBuiltinFallback)
   UX::SelectModule(nullptr);
   EXPECT_EQ(ActiveModule(), nullptr);
   EXPECT_EQ(&UX::Game(), &UX::Builtin());
+}
+
+TEST(OrcaGenericModule, PackKeyDistinguishesGenericFromAnInactiveBuiltin)
+{
+  BootDone done;
+  Profile profile;
+  profile.game_id = "GALE01";
+  profile.mod.emplace();
+  profile.mod->tree.hash = "fixed-tree";
+  SetActiveProfile(profile);
+  SetModule(&UX::Builtin());
+  ASSERT_EQ(UX::Builtin().Describe().compat, 0);
+  const auto inactive_key = Online::CompatibilityKey();
+  UX::GenericModule generic;
+  SetModule(&generic);
+  EXPECT_NE(Online::CompatibilityKey(), inactive_key);
+  EXPECT_TRUE(Online::CompatibilityKeyParts().ends_with(
+      Online::UxKeyPart(Events::UXCompatVersion(), 1)));
 }
 
 TEST(OrcaGenericModule, NoBrawlWarmupOrSceneReadsEvenOnBrawlsDisc)
