@@ -991,7 +991,9 @@ std::vector<Block> Merge(std::vector<Block> known, const std::vector<bool>& seen
 
 void OnBlockFinalized(const JitBlock& block)
 {
-  GetState().OnBlockFinalized(block);
+  // Recording can still be armed from a previous boot in this process.
+  if (ScenesReadable())
+    GetState().OnBlockFinalized(block);
 }
 
 void OnBoundary(const Core::CPUThreadGuard& guard)

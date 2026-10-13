@@ -3,19 +3,20 @@
 
 #include <gtest/gtest.h>
 
-#include "Core/Core.h"
 #include "Core/ConfigManager.h"
+#include "Core/Core.h"
+#include "Core/Orca/Games/Brawl/BrawlModule.h"
+#include "Core/Orca/Games/Generic/GenericModule.h"
 #include "Core/Orca/JitWarm.h"
 #include "Core/Orca/Music.h"
 #include "Core/Orca/PanicDiag.h"
-#include "Core/Orca/Status.h"
-#include "Core/Orca/Session/Online.h"
-#include "Core/Orca/Games/Brawl/BrawlModule.h"
-#include "Core/Orca/Games/Generic/GenericModule.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/Session/Online.h"
+#include "Core/Orca/Status.h"
 #include "Core/Orca/UX/UX.h"
-#include "Core/System.h"
+#include "Core/PowerPC/JitCommon/JitCache.h"
 #include "Core/Rollback/OnlineMatch.h"
+#include "Core/System.h"
 
 using namespace Orca;
 using namespace Orca::Engine;
@@ -296,6 +297,13 @@ TEST(OrcaGenericModule, NoBrawlWarmupOrSceneReadsEvenOnBrawlsDisc)
     EXPECT_FALSE(JitWarm::SceneIsMatch(guard));
     EXPECT_FALSE(JitWarm::CurrentScene(guard));
     EXPECT_TRUE(JitWarm::SceneName(guard, 0x80000000).empty());
+    JitBlock block(false);
+    block.effectiveAddress = 0x80000000;
+    block.physicalAddress = 0;
+    block.feature_flags = {};
+    block.originalSize = 1;
+    block.physical_addresses.insert(0, 4);
+    JitWarm::OnBlockFinalized(block);
     JitWarm::OnBoundary(guard);
     PanicDiag::NoteScene(guard, 100);
     EXPECT_EQ(Music::Supported(), profile.game_id == "RSBE01");
