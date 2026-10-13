@@ -22,6 +22,8 @@ namespace
 {
 using namespace IOS::HLE::FS;
 constexpr Modes modes{Mode::ReadWrite, Mode::ReadWrite, Mode::ReadWrite};
+// CLUSTER_SIZE is a u16, so its multiples are ints; the sizes here are u32.
+constexpr u32 CLUSTER_BYTES = CLUSTER_SIZE;
 
 class OrcaNandQuota : public testing::Test
 {
@@ -50,7 +52,10 @@ protected:
     if (offset != 0 && !file->Seek(offset, SeekMode::Set))
       return std::unexpected{ResultCode::Invalid};
     const std::vector<u8> data(size, fill);
-    return file->Write(data.data(), data.size());
+    const Result<size_t> written = file->Write(data.data(), data.size());
+    if (!written)
+      return std::unexpected{written.error()};
+    return static_cast<u32>(*written);
   }
   u32 Size(const std::string& path)
   {
@@ -90,22 +95,22 @@ TEST_F(OrcaNandQuota, AWriteThatWouldOverfillTheNandFails)
   ASSERT_EQ(m_fs->CreateFile(0, 0, "/tmp/a", 0, modes), ResultCode::Success);
   ASSERT_EQ(m_fs->CreateFile(0, 0, "/tmp/b", 0, modes), ResultCode::Success);
 
-  EXPECT_EQ(Write("/tmp/a", 0, 3 * CLUSTER_SIZE), 3 * CLUSTER_SIZE);
+  EXPECT_EQ(Write("/tmp/a", 0, 3 * CLUSTER_BYTES), 3 * CLUSTER_BYTES);
   // Rewriting what a file already holds needs no room.
-  EXPECT_EQ(Write("/tmp/a", 100, 2 * CLUSTER_SIZE), 2 * CLUSTER_SIZE);
+  EXPECT_EQ(Write("/tmp/a", 100, 2 * CLUSTER_BYTES), 2 * CLUSTER_BYTES);
   // Two more clusters don't fit; the file keeps its size.
-  EXPECT_EQ(Write("/tmp/b", 0, CLUSTER_SIZE + 1).error(), ResultCode::NoFreeSpace);
+  EXPECT_EQ(Write("/tmp/b", 0, CLUSTER_BYTES + 1).error(), ResultCode::NoFreeSpace);
   EXPECT_EQ(Size("/tmp/b"), 0u);
-  EXPECT_EQ(Write("/tmp/a", 3 * CLUSTER_SIZE, CLUSTER_SIZE + 1).error(), ResultCode::NoFreeSpace);
-  EXPECT_EQ(Size("/tmp/a"), 3 * CLUSTER_SIZE);
+  EXPECT_EQ(Write("/tmp/a", 3 * CLUSTER_BYTES, CLUSTER_BYTES + 1).error(), ResultCode::NoFreeSpace);
+  EXPECT_EQ(Size("/tmp/a"), 3 * CLUSTER_BYTES);
   // One does.
-  EXPECT_EQ(Write("/tmp/b", 0, CLUSTER_SIZE), CLUSTER_SIZE);
-  EXPECT_EQ(Write("/tmp/b", CLUSTER_SIZE, 1).error(), ResultCode::NoFreeSpace);
+  EXPECT_EQ(Write("/tmp/b", 0, CLUSTER_BYTES), CLUSTER_BYTES);
+  EXPECT_EQ(Write("/tmp/b", CLUSTER_BYTES, 1).error(), ResultCode::NoFreeSpace);
 
   // Deleting frees its clusters.
   ASSERT_EQ(m_fs->Delete(0, 0, "/tmp/a"), ResultCode::Success);
-  EXPECT_EQ(Write("/tmp/b", CLUSTER_SIZE, 3 * CLUSTER_SIZE), 3 * CLUSTER_SIZE);
-  EXPECT_EQ(Size("/tmp/b"), 4 * CLUSTER_SIZE);
+  EXPECT_EQ(Write("/tmp/b", CLUSTER_BYTES, 3 * CLUSTER_BYTES), 3 * CLUSTER_BYTES);
+  EXPECT_EQ(Size("/tmp/b"), 4 * CLUSTER_BYTES);
 }
 
 TEST_F(OrcaNandQuota, FilesAlreadyThereCount)
@@ -113,14 +118,14 @@ TEST_F(OrcaNandQuota, FilesAlreadyThereCount)
   Make(0);
   ASSERT_EQ(m_fs->CreateDirectory(0, 0, "/tmp", 0, modes), ResultCode::Success);
   ASSERT_EQ(m_fs->CreateFile(0, 0, "/tmp/a", 0, modes), ResultCode::Success);
-  ASSERT_EQ(Write("/tmp/a", 0, 6 * CLUSTER_SIZE), 6 * CLUSTER_SIZE);
+  ASSERT_EQ(Write("/tmp/a", 0, 6 * CLUSTER_BYTES), 6 * CLUSTER_BYTES);
   m_fs.reset();
 
   // A session NAND seeded with more than the quota: nothing may grow, rewrites still work.
   Make(4);
   ASSERT_EQ(m_fs->CreateFile(0, 0, "/tmp/b", 0, modes), ResultCode::Success);
   EXPECT_EQ(Write("/tmp/b", 0, 1).error(), ResultCode::NoFreeSpace);
-  EXPECT_EQ(Write("/tmp/a", 0, 6 * CLUSTER_SIZE), 6 * CLUSTER_SIZE);
+  EXPECT_EQ(Write("/tmp/a", 0, 6 * CLUSTER_BYTES), 6 * CLUSTER_BYTES);
 }
 
 TEST_F(OrcaNandQuota, NoQuotaOutsideASession)
@@ -128,7 +133,7 @@ TEST_F(OrcaNandQuota, NoQuotaOutsideASession)
   Make(0);
   ASSERT_EQ(m_fs->CreateDirectory(0, 0, "/tmp", 0, modes), ResultCode::Success);
   ASSERT_EQ(m_fs->CreateFile(0, 0, "/tmp/a", 0, modes), ResultCode::Success);
-  EXPECT_EQ(Write("/tmp/a", 0, 64 * CLUSTER_SIZE), 64 * CLUSTER_SIZE);
+  EXPECT_EQ(Write("/tmp/a", 0, 64 * CLUSTER_BYTES), 64 * CLUSTER_BYTES);
 }
 
 TEST_F(OrcaNandQuota, RollingBackForgetsTheGrowth)
@@ -136,16 +141,16 @@ TEST_F(OrcaNandQuota, RollingBackForgetsTheGrowth)
   Make(4);
   ASSERT_EQ(m_fs->CreateDirectory(0, 0, "/tmp", 0, modes), ResultCode::Success);
   ASSERT_EQ(m_fs->CreateFile(0, 0, "/tmp/a", 0, modes), ResultCode::Success);
-  ASSERT_EQ(Write("/tmp/a", 0, CLUSTER_SIZE), CLUSTER_SIZE);
+  ASSERT_EQ(Write("/tmp/a", 0, CLUSTER_BYTES), CLUSTER_BYTES);
   const std::vector<u8> snapshot = Snapshot();
-  ASSERT_EQ(Write("/tmp/a", CLUSTER_SIZE, 3 * CLUSTER_SIZE), 3 * CLUSTER_SIZE);
-  EXPECT_EQ(Write("/tmp/a", 4 * CLUSTER_SIZE, 1).error(), ResultCode::NoFreeSpace);
+  ASSERT_EQ(Write("/tmp/a", CLUSTER_BYTES, 3 * CLUSTER_BYTES), 3 * CLUSTER_BYTES);
+  EXPECT_EQ(Write("/tmp/a", 4 * CLUSTER_BYTES, 1).error(), ResultCode::NoFreeSpace);
   Load(snapshot);
   EXPECT_FALSE(m_fs->TakeJournalError());
-  EXPECT_EQ(Size("/tmp/a"), CLUSTER_SIZE);
+  EXPECT_EQ(Size("/tmp/a"), CLUSTER_BYTES);
   // The undone clusters are free again, exactly as on the run that never wrote them.
-  EXPECT_EQ(Write("/tmp/a", CLUSTER_SIZE, 3 * CLUSTER_SIZE), 3 * CLUSTER_SIZE);
-  EXPECT_EQ(Write("/tmp/a", 4 * CLUSTER_SIZE, 1).error(), ResultCode::NoFreeSpace);
+  EXPECT_EQ(Write("/tmp/a", CLUSTER_BYTES, 3 * CLUSTER_BYTES), 3 * CLUSTER_BYTES);
+  EXPECT_EQ(Write("/tmp/a", 4 * CLUSTER_BYTES, 1).error(), ResultCode::NoFreeSpace);
 }
 
 TEST_F(OrcaNandQuota, TheJournalKeepsBoundedBytes)

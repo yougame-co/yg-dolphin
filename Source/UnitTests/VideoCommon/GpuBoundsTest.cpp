@@ -173,7 +173,7 @@ TEST(OrcaVertexBounds, OffsetsMatchTheVertexSizeForEveryLayout)
         << std::hex << desc.low.Hex << " " << desc.high.Hex << " " << vat.g0.Hex << " "
         << vat.g1.Hex << " " << vat.g2.Hex;
     for (std::size_t r = 0; r < *count; ++r)
-      ASSERT_LE(reads[r].src_offset + reads[r].index_bytes, bytes);
+      ASSERT_LE(u32{reads[r].src_offset} + reads[r].index_bytes, bytes);
   }
 }
 

@@ -52,6 +52,8 @@ add_dolphin_test(OrcaOnlineMenuTest Orca/Games/Brawl/OnlineMenuTest.cpp)
 add_dolphin_test(OrcaGamePatchesTest Orca/GamePatchesTest.cpp)
 add_dolphin_test(OrcaPauseTest Orca/PauseTest.cpp)
 add_dolphin_test(OrcaJitWarmTest Orca/JitWarmTest.cpp)
+# JitWarmTest includes xxh3.h too (see OrcaModTest).
+target_link_libraries(OrcaJitWarmTest PRIVATE xxhash::xxhash)
 add_dolphin_test(OrcaMusicTest Orca/MusicTest.cpp)
 add_dolphin_test(OrcaActivityTest Orca/ActivityTest.cpp)
 add_dolphin_test(OrcaResultsTest Orca/Games/Brawl/ResultsTest.cpp)
