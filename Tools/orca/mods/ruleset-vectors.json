@@ -1,6 +1,6 @@
 {
   "description": "Shared test vectors for ruleset files (Tools/orca/mods/ruleset.schema.json): Orca's OrcaRuleset.Vectors and the site's test/orca-ruleset-validate.test.mjs run every case and must agree on ok. A case with no text operation takes `base`, applies `remove` (delete keys or array items by JSON pointer) then `set` (set them; the parent must exist), and writes it out as JSON in any layout. A case with a text operation starts from `baseText` (the same ruleset, byte for byte Games/Brawl/Rulesets/brawl-supernova-2025.json): `text` replaces it, `text_replace` [old, new] replaces the first occurrence, `text_append` adds text, `text_prepend_hex` adds raw bytes (hex) in front, `text_hex_replace` [old, new] replaces raw bytes (hex), and `text_pad` adds spaces before the last } until the text is that many bytes. The site decodes raw bytes with a fatal UTF-8 decoder first, so bytes it can't decode count as refused.",
-  "baseText": "{\n  \"format\": 1,\n  \"id\": \"brawl-supernova-2025\",\n  \"block\": 1,\n  \"name\": \"Brawl Supernova 2025\",\n  \"stages\": [\n    { \"name\": \"Battlefield\", \"kind\": 1, \"role\": \"starter\" },\n    { \"name\": \"Pokémon Stadium\", \"kind\": 46, \"role\": \"starter\" },\n    { \"name\": \"Lylat Cruise\", \"kind\": 19, \"role\": \"starter\" },\n    { \"name\": \"Smashville\", \"kind\": 33, \"role\": \"starter\" },\n    { \"name\": \"Yoshi's Island\", \"kind\": 13, \"role\": \"starter\" },\n    { \"name\": \"Final Destination\", \"kind\": 2, \"role\": \"counterpick\" },\n    { \"name\": \"Delfino Plaza\", \"kind\": 3, \"role\": \"counterpick\" }\n  ],\n  \"steps\": {\n    \"game1Seconds\": [30, 30, 10],\n    \"later\": { \"kind\": \"ban\", \"count\": 1, \"optional\": true, \"seconds\": 30 },\n    \"pickSeconds\": 30,\n    \"graceFrames\": 180,\n    \"casualSeconds\": 15,\n    \"casualGraceFrames\": 30\n  },\n  \"dsr\": true,\n  \"clauses\": {\n    \"iceClimbers\": { \"character\": 16, \"bannedStage\": 5 },\n    \"metaKnight\": { \"character\": 24 }\n  },\n  \"set\": {\n    \"wins\": 2,\n    \"stocks\": 3,\n    \"minutes\": 8,\n    \"timeOut\": \"judged\",\n    \"ledgeGrabLimit\": {\n      \"limit\": 35,\n      \"tiebreakLimit\": 11,\n      \"characters\": [{ \"character\": 24, \"limit\": 20, \"tiebreakLimit\": 6 }]\n    },\n    \"tiebreak\": { \"stocks\": 1, \"minutes\": 3 },\n    \"voidAfterTies\": 5\n  },\n  \"css\": { \"readySeconds\": 60 }\n}\n",
+  "baseText": "{\n  \"format\": 1,\n  \"id\": \"brawl-supernova-2025\",\n  \"block\": 1,\n  \"name\": \"Brawl Supernova 2025\",\n  \"stages\": [\n    { \"name\": \"Battlefield\", \"kind\": 1, \"role\": \"starter\" },\n    { \"name\": \"Pokémon Stadium\", \"kind\": 46, \"role\": \"starter\" },\n    { \"name\": \"Lylat Cruise\", \"kind\": 19, \"role\": \"starter\" },\n    { \"name\": \"Smashville\", \"kind\": 33, \"role\": \"starter\" },\n    { \"name\": \"Yoshi's Island\", \"kind\": 13, \"role\": \"starter\" },\n    { \"name\": \"Final Destination\", \"kind\": 2, \"role\": \"counterpick\" },\n    { \"name\": \"Delfino Plaza\", \"kind\": 3, \"role\": \"counterpick\" }\n  ],\n  \"steps\": {\n    \"game1Seconds\": [30, 30, 10],\n    \"later\": { \"kind\": \"ban\", \"count\": 1, \"optional\": true, \"seconds\": 30 },\n    \"pickSeconds\": 30,\n    \"graceFrames\": 180,\n    \"casualSeconds\": 15,\n    \"casualGraceFrames\": 30\n  },\n  \"dsr\": true,\n  \"clauses\": {\n    \"iceClimbers\": { \"character\": 16, \"bannedStage\": 5 },\n    \"metaKnight\": { \"character\": 24 }\n  },\n  \"set\": {\n    \"wins\": 2,\n    \"stocks\": 3,\n    \"minutes\": 8,\n    \"timeOut\": \"judged\",\n    \"ledgeGrabLimit\": {\n      \"limit\": 35,\n      \"tiebreakLimit\": 11,\n      \"characters\": [{ \"character\": 24, \"limit\": 20, \"tiebreakLimit\": 6 }]\n    },\n    \"tiebreak\": { \"stocks\": 1, \"minutes\": 3 },\n    \"voidAfterTies\": 5\n  },\n  \"queue\": { \"readySeconds\": 30, \"skipFrames\": 90 },\n  \"characterOrder\": { \"pickSeconds\": 45 },\n  \"css\": { \"readySeconds\": 60 }\n}\n",
   "base": {
     "format": 1,
     "id": "brawl-supernova-2025",
@@ -91,6 +91,13 @@
         "minutes": 3
       },
       "voidAfterTies": 5
+    },
+    "queue": {
+      "readySeconds": 30,
+      "skipFrames": 90
+    },
+    "characterOrder": {
+      "pickSeconds": 45
     },
     "css": {
       "readySeconds": 60
@@ -845,6 +852,64 @@
       "ok": false,
       "set": {
         "/css/readySeconds": 0
+      }
+    },
+    {
+      "name": "queue missing",
+      "ok": false,
+      "remove": [
+        "/queue"
+      ]
+    },
+    {
+      "name": "characterOrder missing",
+      "ok": false,
+      "remove": [
+        "/characterOrder"
+      ]
+    },
+    {
+      "name": "skipFrames 0",
+      "ok": false,
+      "set": {
+        "/queue/skipFrames": 0
+      }
+    },
+    {
+      "name": "skipFrames 601",
+      "ok": false,
+      "set": {
+        "/queue/skipFrames": 601
+      }
+    },
+    {
+      "name": "a queue timer over 600 s",
+      "ok": false,
+      "set": {
+        "/queue/readySeconds": 601
+      }
+    },
+    {
+      "name": "a character order turn of 0 s",
+      "ok": false,
+      "set": {
+        "/characterOrder/pickSeconds": 0
+      }
+    },
+    {
+      "name": "an unknown key in queue",
+      "ok": false,
+      "set": {
+        "/queue/autoReady": true
+      }
+    },
+    {
+      "name": "the queue and order timers at their largest",
+      "ok": true,
+      "set": {
+        "/queue/readySeconds": 600,
+        "/queue/skipFrames": 600,
+        "/characterOrder/pickSeconds": 600
       }
     },
     {

@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://yougame.co/schemas/orca-ruleset.json",
   "title": "Orca ruleset: a competitive ruleset as data",
-  "description": "A ruleset file (format 1): the legal stages, the stage steps' timers, the clauses, the set's rules (stocks, time, time-outs, ledge-grab limits, tiebreaks) and the character select's timer, for one game. Orca compiles this schema in and checks every ruleset against it on load (Source/Core/Core/Orca/Engine/Schema.h, Ruleset.h); the site checks uploads with the same file (YouGame web/src/lib/orca-ruleset.schema.json, a byte copy). Both validators understand exactly the keywords used here (x-orca-keywords) and refuse a schema that uses any other, so the two can't drift; rules a schema can't state are in x-orca-rules, implemented in both and pinned by Tools/orca/mods/ruleset-vectors.json. String lengths are UTF-8 bytes. Every number is an integer.",
+  "description": "A ruleset file (format 1): the legal stages, the stage steps' timers, the clauses, the set's rules (stocks, time, time-outs, ledge-grab limits, tiebreaks), the queue's and the character order's timers and the character select's no-show timer, for one game. Orca compiles this schema in and checks every ruleset against it on load (Source/Core/Core/Orca/Engine/Schema.h, Ruleset.h); the site checks uploads with the same file (YouGame web/src/lib/orca-ruleset.schema.json, a byte copy). Both validators understand exactly the keywords used here (x-orca-keywords) and refuse a schema that uses any other, so the two can't drift; rules a schema can't state are in x-orca-rules, implemented in both and pinned by Tools/orca/mods/ruleset-vectors.json. String lengths are UTF-8 bytes. Every number is an integer.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -15,6 +15,8 @@
     "dsr",
     "clauses",
     "set",
+    "queue",
+    "characterOrder",
     "css"
   ],
   "properties": {
@@ -213,6 +215,28 @@
         }
       }
     },
+    "queue": {
+      "description": "The queue's character select (Policy/Queue.h): both players lock in with Start, then the match starts; at the timer, a casual room times out and a ranked one goes on with the picks. B held skips.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["readySeconds", "skipFrames"],
+      "properties": {
+        "readySeconds": { "$ref": "#/$defs/seconds" },
+        "skipFrames": {
+          "description": "Frames B is held to skip.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 600
+        }
+      }
+    },
+    "characterOrder": {
+      "description": "Ranked games 2 and later (Policy/CharOrder.h): one player picks at a time, each turn this long.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pickSeconds"],
+      "properties": { "pickSeconds": { "$ref": "#/$defs/seconds" } }
+    },
     "css": {
       "type": "object",
       "additionalProperties": false,
@@ -288,6 +312,8 @@
     "At least one stage is a starter.",
     "set.ledgeGrabLimit is present exactly when set.timeOut is judged; its characters are distinct.",
     "later.optional is true only for a ban.",
-    "Seconds become frames at 60 per second; a step's frames (seconds x 60 + grace) fit 16 bits."
+    "Seconds become frames at 60 per second; a step's frames (seconds x 60 + grace) fit 16 bits, and so do css.readySeconds, queue.readySeconds and characterOrder.pickSeconds x 60.",
+    "The text is valid UTF-8 with no byte-order mark, and a \\u escape for a character above U+FFFF is a surrogate pair.",
+    "Every number is written as an exact integer of magnitude at most 2^53 - 1, in at most 32 bytes (30, 30.0, 3e1 and -0 are integers; 0.5 and 1e-400 are not)."
   ]
 }

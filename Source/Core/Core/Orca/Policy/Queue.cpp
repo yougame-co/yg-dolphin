@@ -198,7 +198,7 @@ State Advance(const View& v, const State& state, int frame)
   // Restart the timer if its start is in the future or implausibly old (another frame
   // numbering). It also counts when untimed, for the alternating Start presses below.
   if (s.timer_start == 0 || s.timer_start > now ||
-      now - s.timer_start > static_cast<u32>(READY_FRAMES) * 4)
+      now - s.timer_start > u32{v.ready_frames} * 4)
   {
     s.timer_start = now;
   }
@@ -225,7 +225,7 @@ State Advance(const View& v, const State& state, int frame)
   {
     s.flags |= FLAG_GO;
   }
-  else if (Timed(v) && t >= static_cast<u32>(READY_FRAMES))
+  else if (Timed(v) && t >= v.ready_frames)
   {
     if (v.ranked)
     {
@@ -243,7 +243,7 @@ State Advance(const View& v, const State& state, int frame)
   return s;
 }
 
-bool SkipHold::Step(bool may_skip, bool held)
+bool SkipHold::Step(bool may_skip, bool held, int skip_frames)
 {
   if (!may_skip || !held)
   {
@@ -252,7 +252,7 @@ bool SkipHold::Step(bool may_skip, bool held)
     return false;
   }
   ++frames;
-  if (frames >= SKIP_FRAMES && !sent)
+  if (frames >= skip_frames && !sent)
   {
     sent = true;
     return true;
@@ -260,11 +260,11 @@ bool SkipHold::Step(bool may_skip, bool held)
   return false;
 }
 
-float SkipHold::Progress() const
+float SkipHold::Progress(int skip_frames) const
 {
   if (sent || frames < SKIP_BAR_FRAMES)
     return 0;
-  return std::min(1.0f, static_cast<float>(frames) / SKIP_FRAMES);
+  return std::min(1.0f, static_cast<float>(frames) / skip_frames);
 }
 
 std::optional<s64> ToFixed(float value)

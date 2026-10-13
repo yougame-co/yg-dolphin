@@ -38,5 +38,7 @@
     "tiebreak": { "stocks": 1, "minutes": 3 },
     "voidAfterTies": 5
   },
+  "queue": { "readySeconds": 30, "skipFrames": 90 },
+  "characterOrder": { "pickSeconds": 45 },
   "css": { "readySeconds": 60 }
 }

@@ -22,6 +22,7 @@
 #include "Core/Orca/Engine/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/OnlineMenu.h"
 #include "Core/Orca/Games/Brawl/OnlineRules.h"
+#include "Core/Orca/Games/Brawl/Rulesets.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/UX/QueueApp.h"
 
@@ -323,6 +324,13 @@ View ReadView(const GuestMemory& m, const std::vector<Events::PortInfo>& ports)
   const Rules::Header h = Rules::ReadHeader(m);
   if (!h.Queue2() || !RegionMapped(m))
     return v;
+  // The ruleset's queue timers. A queue header is locked, so it names a builtin ruleset; none only
+  // in a build whose ruleset files don't load (OrcaRulesets.BuiltinsAreTheOldTables).
+  const Ranked::Ruleset* rules = Rulesets::ByBlock(static_cast<u8>(h.ruleset));
+  if (!rules)
+    return v;
+  v.ready_frames = static_cast<u16>(rules->queue_ready_seconds * 60);
+  v.skip_frames = rules->queue_skip_frames;
   v.queue2 = true;
   v.solo = h.Solo();
   v.ranked = h.mode == Rules::Mode::Ranked;
@@ -559,7 +567,7 @@ Text TextFor(const View& v, const State& s, const std::vector<Events::PortInfo>&
       const bool theirs = (s.ready >> other) & 1;
       // In game 1 the picks are already in, so only Start. Later games pick with A, then Start.
       const bool picks = !v.game1;
-      const std::string clock = Timed(v) ? " · " + Clock(READY_FRAMES - s.timer) : std::string();
+      const std::string clock = Timed(v) ? " · " + Clock(v.ready_frames - s.timer) : std::string();
       if (mine && theirs)
         line = "Both locked in";
       else if (mine)
@@ -811,14 +819,14 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
   // Skip: B held 1.5 s on a casual room's character select, read from this player's own latched
   // input for the frame that just ran. Its first frame does what any B does there.
   const bool may_skip = MaySkip(v, after) && local >= 0 && local < 2;
-  if (l.skip.Step(may_skip, may_skip && (v.raw[local] & BUTTON_B) != 0))
+  if (l.skip.Step(may_skip, may_skip && (v.raw[local] & BUTTON_B) != 0, v.skip_frames))
   {
     NOTICE_LOG_FMT(ROLLBACK, "Queue: frame {}: B held {} frames: orca queue skip", frame,
                    l.skip.frames);
     Orca::Status::Line("orca queue skip");
   }
   TipFrame(solo_css && alone, after.ready & 1, v.raw[0] & BUTTON_B, frame);
-  Text text = TextFor(v, after, ports, local, l.skip.Progress());
+  Text text = TextFor(v, after, ports, local, l.skip.Progress(v.skip_frames));
   SetQueueLines(std::move(text.line), std::move(text.note), std::move(text.labels), text.locked);
 }
 

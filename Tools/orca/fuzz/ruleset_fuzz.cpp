@@ -56,6 +56,9 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
   Require(r->stocks >= 1 && r->stocks <= 99 && r->minutes >= 1 && r->minutes <= 99);
   Require(r->void_after_ties >= 1 && r->void_after_ties <= 8);
   Require(r->css_ready_seconds >= 1 && r->css_ready_seconds * 60u <= 0xFFFF);
+  Require(r->queue_ready_seconds >= 1 && r->queue_ready_seconds * 60u <= 0xFFFF);
+  Require(r->queue_skip_frames >= 1 && r->queue_skip_frames <= 600);
+  Require(r->order_pick_seconds >= 1 && r->order_pick_seconds * 60u <= 0xFFFF);
   Require((r->time_out == Ranked::TimeOut::Judged) || r->ledge == Ranked::LedgeLimits{});
   Require(r->ledge.character_count <= r->ledge.characters.size());
   Require(r->ledge.limit <= 254 && r->ledge.tiebreak_limit <= 254);

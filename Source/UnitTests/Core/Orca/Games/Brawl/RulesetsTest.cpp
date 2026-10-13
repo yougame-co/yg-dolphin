@@ -5,7 +5,8 @@
 // the tables and constants held at split-s3 (RankedSteps.cpp MakeBrawl/MakePPlus, BrawlStages.cpp
 // kStageKinds, RankedPPlus.cpp LEGAL_KINDS, RankedSet.h WINS/TIEBREAK_STREAK_LIMIT/LEDGE_LIMIT*/
 // META_KNIGHT and WriteSetRules' 3/8 and 1/3, OnlineRules.cpp StocksFor and ForceRules' 8 minutes,
-// OnlineRules.h CSS_READY_FRAMES): the data must say exactly the same, or the guest writes change.
+// OnlineRules.h CSS_READY_FRAMES, Policy/Queue.h READY_FRAMES and SKIP_FRAMES, Policy/CharOrder.h
+// PICK_FRAMES): the data must say exactly the same, or the guest writes change.
 
 #include <array>
 #include <filesystem>
@@ -86,6 +87,9 @@ TEST(OrcaRulesets, BuiltinsAreTheOldTables)
   EXPECT_EQ(b.tiebreak_minutes, 3);
   EXPECT_EQ(b.void_after_ties, 5);
   EXPECT_EQ(b.css_ready_seconds, 60);
+  EXPECT_EQ(b.queue_ready_seconds, 30);
+  EXPECT_EQ(b.queue_skip_frames, 90);
+  EXPECT_EQ(b.order_pick_seconds, 45);
 
   const Ranked::Ruleset& p = Orca::UX::Rulesets::PPlus2024();
   EXPECT_EQ(p.id, 2);
@@ -119,6 +123,9 @@ TEST(OrcaRulesets, BuiltinsAreTheOldTables)
   EXPECT_FALSE(p.tiebreak);
   EXPECT_EQ(p.void_after_ties, 5);
   EXPECT_EQ(p.css_ready_seconds, 60);
+  EXPECT_EQ(p.queue_ready_seconds, 30);
+  EXPECT_EQ(p.queue_skip_frames, 90);
+  EXPECT_EQ(p.order_pick_seconds, 45);
 
   EXPECT_EQ(Orca::UX::Rulesets::ByBlock(1), &b);
   EXPECT_EQ(Orca::UX::Rulesets::ByBlock(2), &p);

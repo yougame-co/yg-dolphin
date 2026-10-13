@@ -63,6 +63,12 @@ int Int(const picojson::value& v)
 {
   return static_cast<int>(v.get<double>());
 }
+// A number before the schema's bounds are relied on: StrictJson keeps every number an exact
+// integer of magnitude at most 2^53 - 1, so this never overflows, whatever the bounds say.
+s64 Wide(const picojson::value& v)
+{
+  return static_cast<s64>(v.get<double>());
+}
 const picojson::value& At(const picojson::value& v, const char* key)
 {
   return v.get<Object>().at(key);
@@ -109,18 +115,23 @@ std::optional<Ranked::Ruleset> ReadRuleset(std::string_view json, std::string* e
   // holds if they are ever widened). The site checks the same.
   {
     const picojson::value& st = At(*doc, "steps");
-    const int grace = std::max(Int(At(st, "graceFrames")), Int(At(st, "casualGraceFrames")));
-    std::vector<int> seconds{Int(At(At(st, "later"), "seconds")), Int(At(st, "pickSeconds")),
-                             Int(At(st, "casualSeconds"))};
+    const s64 grace = std::max(Wide(At(st, "graceFrames")), Wide(At(st, "casualGraceFrames")));
+    std::vector<s64> seconds{Wide(At(At(st, "later"), "seconds")), Wide(At(st, "pickSeconds")),
+                             Wide(At(st, "casualSeconds"))};
     for (const picojson::value& g : At(st, "game1Seconds").get<Array>())
-      seconds.push_back(Int(g));
-    for (const int s : seconds)
+      seconds.push_back(Wide(g));
+    for (const s64 s : seconds)
     {
-      if (s64{s} * 60 + grace > 0xFFFF)
+      if (s * 60 + grace > 0xFFFF)
         return Fail(error, "/steps: a step's frames must fit 16 bits");
     }
-    if (s64{Int(At(At(*doc, "css"), "readySeconds"))} * 60 > 0xFFFF)
-      return Fail(error, "/css/readySeconds: its frames must fit 16 bits");
+    for (const s64 s : {Wide(At(At(*doc, "css"), "readySeconds")),
+                        Wide(At(At(*doc, "queue"), "readySeconds")),
+                        Wide(At(At(*doc, "characterOrder"), "pickSeconds"))})
+    {
+      if (s * 60 > 0xFFFF)
+        return Fail(error, "/css, /queue, /characterOrder: a timer's frames must fit 16 bits");
+    }
   }
 
   // The x-orca-rules a schema can't state.
@@ -210,6 +221,10 @@ std::optional<Ranked::Ruleset> ReadRuleset(std::string_view json, std::string* e
   }
   r.void_after_ties = static_cast<u8>(Int(At(set, "voidAfterTies")));
   r.css_ready_seconds = static_cast<u16>(Int(At(At(*doc, "css"), "readySeconds")));
+  const picojson::value& queue = At(*doc, "queue");
+  r.queue_ready_seconds = static_cast<u16>(Int(At(queue, "readySeconds")));
+  r.queue_skip_frames = static_cast<u16>(Int(At(queue, "skipFrames")));
+  r.order_pick_seconds = static_cast<u16>(Int(At(At(*doc, "characterOrder"), "pickSeconds")));
   return r;
 }
 }  // namespace Orca::Engine

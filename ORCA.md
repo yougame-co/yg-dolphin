@@ -1980,8 +1980,9 @@ Tests: `OrcaSetBlock*`, `OrcaRankedSet*`, `OrcaResults*`. Not checked live: a re
 A ruleset's numbers and lists are a data file, not C++ (Orca split S5): the legal stages (name, the
 game's stage id, starter or counterpick), the stage steps' timers and the winner's later step, DSR,
 the Ice Climbers and Meta Knight clauses, the set (wins, stocks and minutes, who decides a time-out,
-the ledge-grab limits, the tiebreak game, how many ties void the set) and the ranked character
-select's no-show timer. The builtin ones are `Orca/Games/Brawl/Rulesets/brawl-supernova-2025.json`
+the ledge-grab limits, the tiebreak game, how many ties void the set), the queue's character
+select (its ready timer, the B hold that skips), the ranked character order's turn time and the
+ranked character select's no-show timer. The builtin ones are `Orca/Games/Brawl/Rulesets/brawl-supernova-2025.json`
 (the match block's ruleset 1) and `pplus-2024.json` (2), compiled in byte for byte
 (`Games/Brawl/Rulesets.*`).
 

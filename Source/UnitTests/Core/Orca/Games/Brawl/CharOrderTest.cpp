@@ -15,6 +15,7 @@
 #include "Core/Orca/Games/Brawl/CharOrder.h"
 #include "Core/Orca/Engine/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/Queue.h"
+#include "Core/Orca/Games/Brawl/Rulesets.h"
 #include "InputCommon/GCPadStatus.h"
 
 using namespace Orca::UX::CharOrder;
@@ -54,9 +55,17 @@ FakeMemory DeadArea()
 }
 
 // Project+, game 2, port 1 won game 1, in the standard order (the winner first).
-const SetView kGame2{Ruleset::PPlus, 2, 0, Order::WinnerFirst};
+// A turn's time, from the builtin rulesets' data (45 s in both): ReadSet puts it in every set.
+const int PICK_FRAMES = Orca::UX::Rulesets::PPlus2024().order_pick_seconds * 60;
+SetView WithPick(SetView set)
+{
+  set.pick_frames = static_cast<u16>(PICK_FRAMES);
+  return set;
+}
+
+const SetView kGame2 = WithPick(SetView{Ruleset::PPlus, 2, 0, Order::WinnerFirst});
 // Brawl, game 2, port 2 won game 1, in the Free order (the loser asked first, the winner free).
-const SetView kBrawl2{Ruleset::Brawl, 2, 1, Order::Free};
+const SetView kBrawl2 = WithPick(SetView{Ruleset::Brawl, 2, 1, Order::Free});
 
 State St(int game, Step step, int first, u32 since, int elapsed, int locked = 0, int held = 0)
 {
@@ -108,7 +117,7 @@ TEST(OrcaCharOrder, StartsWithTheWinnerOnAProjectPlusLaterGame)
   const State s = Twice(kGame2, Css(), State{}, 1000);
   EXPECT_EQ(s, (St(2, Step::First, 0, 1000, 0)));
   // Port 2 won: port 2 first.
-  const State t = Twice(SetView{Ruleset::PPlus, 3, 1, Order::WinnerFirst}, Css(), State{}, 50);
+  const State t = Twice(WithPick(SetView{Ruleset::PPlus, 3, 1, Order::WinnerFirst}), Css(), State{}, 50);
   EXPECT_EQ(t.step, Step::First);
   EXPECT_EQ(t.first, 1);
   EXPECT_EQ(t.game, 3);
@@ -116,8 +125,8 @@ TEST(OrcaCharOrder, StartsWithTheWinnerOnAProjectPlusLaterGame)
 
 TEST(OrcaCharOrder, NothingOnGameOneFriendsOrOffTheCharacterSelect)
 {
-  EXPECT_EQ(Twice(SetView{Ruleset::PPlus, 1, -1}, Css(), State{}, 10), State{});
-  EXPECT_EQ(Twice(SetView{Ruleset::Brawl, 1, -1}, Css(), State{}, 10), State{});
+  EXPECT_EQ(Twice(WithPick(SetView{Ruleset::PPlus, 1, -1}), Css(), State{}, 10), State{});
+  EXPECT_EQ(Twice(WithPick(SetView{Ruleset::Brawl, 1, -1}), Css(), State{}, 10), State{});
   EXPECT_EQ(Twice(SetView{}, Css(), State{}, 10), State{});
   CssView one = Css();
   one.ports[1].human = false;  // only one player
@@ -158,10 +167,10 @@ TEST(OrcaCharOrder, StaleOrderClearsOnACharacterSelectItDoesNotApplyTo)
 {
   const State stale = St(2, Step::Done, 0, 5, 7);
   // A new set's game 1, or a friends game, on the character select: cleared.
-  EXPECT_EQ(Twice(SetView{Ruleset::PPlus, 1, -1}, Css(), stale, 10), State{});
+  EXPECT_EQ(Twice(WithPick(SetView{Ruleset::PPlus, 1, -1}), Css(), stale, 10), State{});
   EXPECT_EQ(Twice(SetView{}, Css(), stale, 10), State{});
   // The next game of the same set starts over with its own winner.
-  const State next = Twice(SetView{Ruleset::PPlus, 3, 1, Order::WinnerFirst}, Css(), stale, 10);
+  const State next = Twice(WithPick(SetView{Ruleset::PPlus, 3, 1, Order::WinnerFirst}), Css(), stale, 10);
   EXPECT_EQ(next, (St(3, Step::First, 1, 10, 0)));
 }
 
@@ -302,7 +311,7 @@ TEST(OrcaCharOrder, GateMasksWhoseTurnItIsNot)
   EXPECT_EQ(second[0], ALL);
   EXPECT_EQ(second[1], (Mask{START, false, false, 0}));
   // Port 2 won: the other way round.
-  const SetView p2won{Ruleset::PPlus, 2, 1, Order::WinnerFirst};
+  const SetView p2won = WithPick(SetView{Ruleset::PPlus, 2, 1, Order::WinnerFirst});
   const auto first2 = Gate(p2won, css, St(2, Step::First, 1, 0, 3));
   EXPECT_EQ(first2[0], ALL);
   EXPECT_EQ(first2[1].buttons, START);
@@ -394,14 +403,14 @@ TEST(OrcaCharOrder, LAndRAreKeptAtATimeOutAndAFreeWinnersEarlyLockIn)
 TEST(OrcaCharOrder, GateIgnoresAStateTheMachineWouldClear)
 {
   // A state from another game, another winner, or with no set: no masks.
-  EXPECT_EQ(Gate(SetView{Ruleset::PPlus, 3, 0, Order::WinnerFirst}, Css(),
+  EXPECT_EQ(Gate(WithPick(SetView{Ruleset::PPlus, 3, 0, Order::WinnerFirst}), Css(),
                  St(2, Step::First, 0, 0, 0)),
             Rollback::InputGate::Masks{});
-  EXPECT_EQ(Gate(SetView{Ruleset::PPlus, 2, 1, Order::WinnerFirst}, Css(),
+  EXPECT_EQ(Gate(WithPick(SetView{Ruleset::PPlus, 2, 1, Order::WinnerFirst}), Css(),
                  St(2, Step::First, 0, 0, 0)),
             Rollback::InputGate::Masks{});
   // A state of one order read under the other: its first picker isn't the order's.
-  EXPECT_EQ(Gate(SetView{Ruleset::PPlus, 2, 0, Order::Free}, Css(), St(2, Step::First, 0, 0, 0)),
+  EXPECT_EQ(Gate(WithPick(SetView{Ruleset::PPlus, 2, 0, Order::Free}), Css(), St(2, Step::First, 0, 0, 0)),
             Rollback::InputGate::Masks{});
   EXPECT_EQ(Gate(SetView{}, Css(), St(2, Step::First, 0, 0, 0)), Rollback::InputGate::Masks{});
   EXPECT_EQ(Gate(kGame2, Css(), State{}), Rollback::InputGate::Masks{});
@@ -487,11 +496,11 @@ TEST(OrcaCharOrder, TheOrderIsOneConstantWinnerFirstByDefault)
   // carries the order.
   EXPECT_EQ(kLaterGameOrder, Order::WinnerFirst);
   EXPECT_EQ(SetView{}.order, kLaterGameOrder);
-  EXPECT_EQ(FirstPicker(SetView{Ruleset::PPlus, 2, 0, Order::Free}), 1);
-  EXPECT_EQ(FirstPicker(SetView{Ruleset::PPlus, 2, 0, Order::WinnerFirst}), 0);
-  EXPECT_EQ(FirstPicker(SetView{Ruleset::Brawl, 2, 1, Order::Free}), 0);
-  EXPECT_EQ(FirstPicker(SetView{Ruleset::Brawl, 2, 1, Order::WinnerFirst}), 1);
-  EXPECT_EQ(FirstPicker(SetView{Ruleset::Brawl, 1, -1, Order::Free}), -1);
+  EXPECT_EQ(FirstPicker(WithPick(SetView{Ruleset::PPlus, 2, 0, Order::Free})), 1);
+  EXPECT_EQ(FirstPicker(WithPick(SetView{Ruleset::PPlus, 2, 0, Order::WinnerFirst})), 0);
+  EXPECT_EQ(FirstPicker(WithPick(SetView{Ruleset::Brawl, 2, 1, Order::Free})), 0);
+  EXPECT_EQ(FirstPicker(WithPick(SetView{Ruleset::Brawl, 2, 1, Order::WinnerFirst})), 1);
+  EXPECT_EQ(FirstPicker(WithPick(SetView{Ruleset::Brawl, 1, -1, Order::Free})), -1);
 }
 
 TEST(OrcaCharOrder, FreeAsksTheLoserFirstAndTheWinnerMayLockInAnyTime)
@@ -523,7 +532,7 @@ TEST(OrcaCharOrder, FreeAsksTheLoserFirstAndTheWinnerMayLockInAnyTime)
 
 TEST(OrcaCharOrder, FreeWinnerWhoWaitsGetsItsOwnTurn)
 {
-  const SetView set{Ruleset::PPlus, 2, 0, Order::Free};  // port 1 won: port 2 asked first
+  const SetView set = WithPick(SetView{Ruleset::PPlus, 2, 0, Order::Free});  // port 1 won: port 2 asked first
   State s = Twice(set, Css(), State{}, 100);
   EXPECT_EQ(s, St(2, Step::First, 1, 100, 0));
   s = Twice(set, Press(Css(), 1, START), s, 150);
@@ -570,15 +579,15 @@ TEST(OrcaCharOrder, ReadsTheSetFromTheMatchBlock)
   m.Write8(base + Block::MODE, Block::MODE_RANKED);
   m.Write8(base + Block::RULESET, 2);
   m.Write8(base + Block::SET_LAST_WINNER, 0xFF);
-  EXPECT_EQ(ReadSet(m), (SetView{Ruleset::PPlus, 1, -1}));
+  EXPECT_EQ(ReadSet(m), (WithPick(SetView{Ruleset::PPlus, 1, -1})));
   // Port 2 won game 1.
   m.Write8(base + Block::SET_WINS + 1, 1);
   m.Write8(base + Block::SET_LAST_WINNER, 1);
-  EXPECT_EQ(ReadSet(m), (SetView{Ruleset::PPlus, 2, 1}));
+  EXPECT_EQ(ReadSet(m), (WithPick(SetView{Ruleset::PPlus, 2, 1})));
   m.Write8(base + Block::RULESET, 1);
   m.Write8(base + Block::SET_WINS, 1);
   m.Write8(base + Block::SET_LAST_WINNER, 0);
-  EXPECT_EQ(ReadSet(m), (SetView{Ruleset::Brawl, 3, 0}));
+  EXPECT_EQ(ReadSet(m), (WithPick(SetView{Ruleset::Brawl, 3, 0})));
   // Casual, a decided set, an unknown ruleset or version: no set.
   m.Write8(base + Block::MODE, 1);
   EXPECT_EQ(ReadSet(m), SetView{});
@@ -698,7 +707,7 @@ TEST(OrcaCharOrder, LockedPortsFollowTheTurns)
   EXPECT_EQ(LockedPorts(kGame2, Css(false, true), St(2, Step::Second, 0, 0, 3)), 0);
   EXPECT_EQ(LockedPorts(kGame2, Css(true, false), St(2, Step::Done, 0, 0, 3)), 1);
   EXPECT_EQ(LockedPorts(kGame2, Css(false, true), St(2, Step::Done, 0, 0, 3)), 2);
-  const SetView p2won{Ruleset::PPlus, 2, 1, Order::WinnerFirst};
+  const SetView p2won = WithPick(SetView{Ruleset::PPlus, 2, 1, Order::WinnerFirst});
   EXPECT_EQ(LockedPorts(p2won, Css(), St(2, Step::Second, 1, 0, 3)), 2);
   // Free: the winner's early lock-in on the loser's turn.
   EXPECT_EQ(LockedPorts(kBrawl2, Css(), St(2, Step::First, 0, 0, 3)), 0);
@@ -816,7 +825,7 @@ TEST(OrcaCharOrder, AnchorsAreKeptOnlyOverACharacterWithTheTokenInHand)
   EXPECT_EQ(s.anchor_x[0], 192);
   EXPECT_EQ(s.anchor_y[0], -256);
   // A new order starts with none.
-  EXPECT_EQ(Twice(SetView{Ruleset::PPlus, 3, 0, Order::WinnerFirst}, Css(), s, 7).anchored, 0);
+  EXPECT_EQ(Twice(WithPick(SetView{Ruleset::PPlus, 3, 0, Order::WinnerFirst}), Css(), s, 7).anchored, 0);
 }
 
 // The anchor at a character's edge with the hand stopped just outside it, or no anchor at all: the
@@ -858,7 +867,7 @@ TEST(OrcaCharOrder, ATokenStillInHandLongAfterBothTurnsIsANoShow)
   const CssView both = InHand(InHand(Css(), 0, kNoCharacter, 0, -10), 1, kNoCharacter, 0, -10);
   EXPECT_EQ(NoShow(kGame2, both, St(2, Step::Done, 0, 0, PICK_FRAMES - 1)), -1);
   EXPECT_EQ(NoShow(kGame2, both, St(2, Step::Done, 0, 0, PICK_FRAMES)), 1);
-  const SetView p2won{Ruleset::PPlus, 2, 1, Order::WinnerFirst};
+  const SetView p2won = WithPick(SetView{Ruleset::PPlus, 2, 1, Order::WinnerFirst});
   EXPECT_EQ(NoShow(p2won, both, St(2, Step::Done, 1, 0, PICK_FRAMES)), 0);
   const CssView first = InHand(Css(), 0, kNoCharacter, 0, -10);
   EXPECT_EQ(NoShow(kGame2, first, St(2, Step::Done, 0, 0, PICK_FRAMES)), 0);

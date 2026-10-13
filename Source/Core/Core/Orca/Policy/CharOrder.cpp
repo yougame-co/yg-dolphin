@@ -82,9 +82,9 @@ std::pair<float, float> SteerTarget(const State& state, int port, const CssPort&
 }  // namespace
 
 // The current turn's time is up.
-bool TimedOut(const State& state)
+bool TimedOut(const SetView& set, const State& state)
 {
-  return state.elapsed >= PICK_FRAMES;
+  return state.elapsed >= set.pick_frames;
 }
 
 namespace
@@ -151,7 +151,7 @@ State Advance(const SetView& set, const CssView& css, const State& state, int fr
     const CssPort& p = css.ports[port];
     return (p.raw_new & PAD_BUTTON_START) != 0 && p.Down();
   };
-  const bool timed_out = elapsed >= static_cast<u32>(PICK_FRAMES);
+  const bool timed_out = elapsed >= set.pick_frames;
   const int first = s.first & 1;
   const int second = 1 - first;
   // L and R as a turn ends (CharOrder.h): the game reads them as the character select ends.
@@ -240,7 +240,7 @@ Masks Gate(const SetView& set, const CssView& css, const State& state)
   {
   case Step::First:
     // Time ran out with the token in hand: it goes down before the second picker's turn.
-    masks[first] = TimedOut(state) && !css.ports[first].Down() ? done(first) : picking(first);
+    masks[first] = TimedOut(set, state) && !css.ports[first].Down() ? done(first) : picking(first);
     // WinnerFirst: the other player waits. Free: the winner may pick and lock in, then waits.
     if (set.order == Order::WinnerFirst || (state.locked & (1 << second)))
       masks[second] = set.order == Order::WinnerFirst ? ALL : done(second);
@@ -290,7 +290,7 @@ u8 LockedPorts(const SetView& set, const CssView& css, const State& state)
 
 int NoShow(const SetView& set, const CssView& css, const State& state)
 {
-  if (!Active(set, css, state) || state.step != Step::Done || !TimedOut(state))
+  if (!Active(set, css, state) || state.step != Step::Done || !TimedOut(set, state))
     return -1;
   const int first = state.first & 1;
   for (const int port : {1 - first, first})

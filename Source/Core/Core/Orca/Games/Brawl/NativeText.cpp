@@ -105,7 +105,7 @@ std::string OrderLine(const GuestMemory& m, const std::array<std::string, 2>& na
     return css.ports[port].Down() ? std::string("Start locks it in") : std::string("A then Start");
   };
   const std::string left =
-      band_clock ? std::string() : "  " + Clock(CharOrder::PICK_FRAMES - state.elapsed);
+      band_clock ? std::string() : "  " + Clock(set.pick_frames - state.elapsed);
   if (set.ruleset != CharOrder::Ruleset::None && css.on_css && state.game == set.game)
   {
     if (state.step == CharOrder::Step::First && !(set.order == CharOrder::Order::Free &&
@@ -167,7 +167,7 @@ std::string RoomLine(const GuestMemory& m, const Queue::View& v, const Queue::St
   {
     const bool picks = !v.game1;
     const std::string clock = Queue::Timed(v) && !band_clock ?
-                                  "  " + Clock(Queue::READY_FRAMES - s.timer) :
+                                  "  " + Clock(v.ready_frames - s.timer) :
                                   std::string();
     const int ready = s.ready & 3;
     if (ready == 3)

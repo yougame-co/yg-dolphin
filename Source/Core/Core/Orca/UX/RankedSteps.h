@@ -154,6 +154,11 @@ struct Ruleset
   // Ranked character select: a player still without a fighter this long after the other picked
   // is a no-show.
   u16 css_ready_seconds = 60;
+  // The queue's character select (Policy/Queue.h): its ready timer, and how long B is held to skip.
+  u16 queue_ready_seconds = 30;
+  u16 queue_skip_frames = 90;
+  // Ranked games 2+: each player's turn in the character order (Policy/CharOrder.h).
+  u16 order_pick_seconds = 45;
 
   // A set with a tiebreak game writes each game's stocks and minutes itself (RankedSet.h); without
   // one, the locks write the set's for every game (OnlineRules).
