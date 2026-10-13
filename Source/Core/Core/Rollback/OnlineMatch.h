@@ -30,6 +30,10 @@ namespace Orca::Mod
 struct Manifest;
 struct OriginDecl;
 }
+namespace Orca::Net
+{
+struct ReplayArchive;
+}
 namespace Orca::UX
 {
 class GuestMemory;
@@ -102,9 +106,25 @@ int DeclaredOriginStreak(int frame, int streak, const Orca::Mod::OriginDecl& dec
 // start is over FRESH_FRIENDS_AFTER frames; a shorter one joins in place. A host in a single-player
 // mode holds the friend first, as before.
 constexpr int FRESH_FRIENDS_AFTER = 10 * 60;
+// Declared-origin games keep joins in place through ten minutes of solo history.
+constexpr int FRESH_RESET_FRIENDS_AFTER = 10 * 60 * 60;
 // The tail ends once the character select has been up this many frames, or after FRESH_TAIL_LIMIT.
 constexpr int FRESH_CSS_SETTLE = 30;
 constexpr int FRESH_TAIL_LIMIT = 600;
+enum class FreshKind
+{
+  Menu,
+  Reset,
+};
+FreshKind FreshKindForOrigin(OriginRule rule);
+int DefaultFreshFriendsAfter(FreshKind kind);
+bool FreshExitAllowed(FreshKind kind, u8 exit);
+bool FreshTailSettled(FreshKind kind, int css_streak, int length);
+// The new history's metadata and typed events. Reset histories have neither an exit nor a seed.
+Orca::Net::ReplayArchive FreshReplayStart(FreshKind kind, int frame, u64 origin_hash, u8 exit,
+                                        u32 seed);
+// GameCube has no NAND component. Wii still requires the temporary session root and its IOS FS.
+bool LocalNandReady(bool is_wii, bool has_host_nand, bool temporary);
 enum class FreshStep
 {
   None,  // nothing to do: no fresh start (a join, if any, goes on in place)
@@ -113,8 +133,8 @@ enum class FreshStep
 };
 struct FreshInputs
 {
-  // Fresh starts are on (ORCA_TEST_FRESH=off turns them off) and this game's origin is the built
-  // main menu.
+  FreshKind kind = FreshKind::Menu;
+  // Fresh starts are on (ORCA_TEST_FRESH=off turns them off) and this game's origin is after boot.
   bool enabled = true;
   bool origin_ready = false;
   bool joining = false;
@@ -135,7 +155,8 @@ struct FreshInputs
   bool single_player = false;
   // Frames since the host's last start (its origin or its last fresh start).
   int history_frames = 0;
-  int fresh_after = FRESH_FRIENDS_AFTER;
+  // Negative: the kind's default; nonnegative: an explicit test threshold.
+  int fresh_after = -1;
 };
 FreshStep DecideFreshStart(const FreshInputs& in);
 // The main menu exit a friends fresh start takes: the Casual or Ranked select the host is on

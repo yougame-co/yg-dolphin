@@ -1329,6 +1329,11 @@ void ShowToast(std::string text)
   s_overlay.AddToast(std::move(text), NowMs());
 }
 
+void ShowRestartForJoin(std::string_view name)
+{
+  ShowToast(fmt::format("Restarting the game so {} can join", name.empty() ? "your friend" : name));
+}
+
 void SetQueueLines(std::string line, std::string note, std::array<std::string, 4> labels,
                    std::array<bool, 4> locked)
 {

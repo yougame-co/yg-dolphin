@@ -6,6 +6,7 @@
 // match, or before a friend joins a game it has played alone for a while, so a join replays only the
 // match's own frames.
 
+#include <chrono>
 #include <map>
 #include <optional>
 
@@ -15,7 +16,9 @@
 #include "Core/Orca/Mod.h"
 #include "Core/Orca/Session/PadCodec.h"
 #include "Core/Orca/Session/Replay.h"
+#include "Core/Orca/UX/Overlay.h"
 #include "Core/Rollback/OnlineMatch.h"
+#include "Core/System.h"
 
 using namespace Rollback::OnlineMatch;
 
@@ -327,4 +330,157 @@ TEST(OrcaDeclaredOrigin, RuleSelectionMatrix)
       }
     }
   }
+}
+
+TEST(OrcaResetStart, OnlyDeclaredOriginsUseResetAndExitZero)
+{
+  for (const auto rule : {OriginRule::Menu, OriginRule::Declared, OriginRule::Frame0,
+                          OriginRule::Failed})
+    EXPECT_EQ(FreshKindForOrigin(rule), rule == OriginRule::Declared ? FreshKind::Reset :
+                                                                   FreshKind::Menu);
+  for (unsigned exit = 0; exit <= 255; ++exit)
+  {
+    EXPECT_EQ(FreshExitAllowed(FreshKind::Reset, static_cast<u8>(exit)), exit == 0);
+    EXPECT_EQ(FreshExitAllowed(FreshKind::Menu, static_cast<u8>(exit)),
+              Orca::Net::ValidMenuExit(exit));
+  }
+}
+
+TEST(OrcaResetStart, FriendsJoinInPlaceThroughTenMinutesThenRestart)
+{
+  EXPECT_EQ(DefaultFreshFriendsAfter(FreshKind::Menu), 10 * 60);
+  EXPECT_EQ(DefaultFreshFriendsAfter(FreshKind::Reset), 10 * 60 * 60);
+  FreshInputs in = SoloHost();
+  in.kind = FreshKind::Reset;
+  in.waiting = true;
+  for (const int history : {0, FRESH_FRIENDS_AFTER + 1, FRESH_RESET_FRIENDS_AFTER - 1,
+                            FRESH_RESET_FRIENDS_AFTER})
+  {
+    in.history_frames = history;
+    EXPECT_EQ(DecideFreshStart(in), FreshStep::None);
+  }
+  in.history_frames = FRESH_RESET_FRIENDS_AFTER + 1;
+  EXPECT_EQ(DecideFreshStart(in), FreshStep::Now);
+  in.in_place = true;
+  EXPECT_EQ(DecideFreshStart(in), FreshStep::None);
+  in.in_place = false;
+  in.history_frames = 2;
+  in.fresh_after = 1;
+  EXPECT_EQ(DecideFreshStart(in), FreshStep::Now);
+}
+
+TEST(OrcaResetStart, QueueRestartsOnceAndOnlyASoloHostCanRestart)
+{
+  FreshInputs in = SoloHost(1);
+  in.kind = FreshKind::Reset;
+  in.queue_armed = true;
+  EXPECT_EQ(DecideFreshStart(in), FreshStep::Hold);
+  in.in_queue_room = true;
+  EXPECT_EQ(DecideFreshStart(in), FreshStep::Now);
+  for (bool FreshInputs::* blocked : {&FreshInputs::joining, &FreshInputs::session,
+                                      &FreshInputs::seated_or_plugging})
+  {
+    in.*blocked = true;
+    EXPECT_EQ(DecideFreshStart(in), FreshStep::None);
+    in.*blocked = false;
+  }
+  in.busy = true;
+  EXPECT_EQ(DecideFreshStart(in), FreshStep::Hold);
+  in.busy = false;
+  in.origin_ready = false;
+  EXPECT_EQ(DecideFreshStart(in), FreshStep::Hold);
+  in.origin_ready = true;
+  in.enabled = false;  // a frame-0 origin never enables fresh starts
+  EXPECT_EQ(DecideFreshStart(in), FreshStep::None);
+  in.enabled = true;
+  in.queue_armed = false;
+  in.waiting = true;
+  in.history_frames = 20 * 60 * 60;
+  EXPECT_EQ(DecideFreshStart(in), FreshStep::None);
+  in.in_queue_room = false;
+  EXPECT_EQ(DecideFreshStart(in), FreshStep::Now);
+}
+
+TEST(OrcaResetStart, TailSettlesImmediatelyWithoutACharacterSelect)
+{
+  for (const int length : {0, 1, FRESH_TAIL_LIMIT - 1, FRESH_TAIL_LIMIT})
+    EXPECT_TRUE(FreshTailSettled(FreshKind::Reset, 0, length));
+  EXPECT_FALSE(FreshTailSettled(FreshKind::Menu, FRESH_CSS_SETTLE - 1,
+                               FRESH_TAIL_LIMIT - 1));
+  EXPECT_TRUE(FreshTailSettled(FreshKind::Menu, FRESH_CSS_SETTLE, 1));
+  EXPECT_TRUE(FreshTailSettled(FreshKind::Menu, 0, FRESH_TAIL_LIMIT));
+}
+
+TEST(OrcaResetStart, NewHistoryRecordsNoMenuExitOrSeed)
+{
+  auto reset = FreshReplayStart(FreshKind::Reset, 1801, 0x12345678, 0, 999);
+  EXPECT_EQ(reset.origin_hash, 0x12345678u);
+  EXPECT_EQ(reset.first_frame, 1801);
+  EXPECT_EQ(reset.EndFrame(), 1801);
+  EXPECT_TRUE(reset.frames.empty());
+  EXPECT_EQ(reset.boundary.menu_exit, 0);
+  EXPECT_EQ(reset.boundary.seed, 0u);
+  {
+    Orca::Net::ReplayRecordingScope recording(&reset);
+    auto* first = Orca::Net::ReplayRecordingScope::Frame(1801);
+    ASSERT_NE(first, nullptr);
+    EXPECT_EQ(first->menu_exit, 0);
+    EXPECT_EQ(first->seed, 0u);
+    EXPECT_FALSE(first->header);
+    Orca::Net::ReplayRecordingScope::RecordPads(1801, CanonicalBootPads());
+  }
+  EXPECT_TRUE(Orca::Net::HeadersFitRuleset(reset, 0));
+  // Brawl's existing typed events retain their exact first-frame values.
+  for (const u8 exit : {Orca::Net::MENU_EXIT_FRIENDS, Orca::Net::MENU_EXIT_CASUAL,
+                        Orca::Net::MENU_EXIT_RANKED})
+  {
+    const auto menu = FreshReplayStart(FreshKind::Menu, 230, 0x12345678, exit, 999);
+    ASSERT_EQ(menu.frames.size(), 1u);
+    EXPECT_EQ(menu.frames[0].menu_exit, exit);
+    EXPECT_EQ(menu.frames[0].seed, 999u);
+    EXPECT_EQ(menu.origin_hash, 0x12345678u);
+    EXPECT_EQ(menu.first_frame, 230);
+  }
+}
+
+TEST(OrcaOriginNand, GameCubeNeedsNoIosAndWiiKeepsItsSessionRootRequirement)
+{
+  // The preflight used by capture, restore, and the joiner, with a real no-IOS system.
+  auto& system = Core::System::GetInstance();
+  ASSERT_EQ(system.GetIOS(), nullptr);
+  struct RestoreBootKind
+  {
+    Core::System& system;
+    bool is_wii;
+    ~RestoreBootKind() { system.SetIsWii(is_wii); }
+  } restore{system, system.IsWii()};
+  system.SetIsWii(false);
+  EXPECT_TRUE(LocalNandReady(system.IsWii(), system.GetIOS() != nullptr, false));
+  EXPECT_TRUE(LocalNandReady(system.IsWii(), system.GetIOS() != nullptr, true));
+  for (const bool has_nand : {false, true})
+  {
+    for (const bool temporary : {false, true})
+    {
+      EXPECT_TRUE(LocalNandReady(false, has_nand, temporary));
+      EXPECT_EQ(LocalNandReady(true, has_nand, temporary), has_nand && temporary);
+    }
+  }
+  system.SetIsWii(true);
+  EXPECT_FALSE(LocalNandReady(system.IsWii(), system.GetIOS() != nullptr, true));
+}
+
+TEST(OrcaResetStart, TheHostExplainsTheRestartToItsPlayer)
+{
+  const auto now = [] {
+    return std::chrono::duration<double, std::milli>(
+               std::chrono::steady_clock::now().time_since_epoch()).count();
+  };
+  Orca::UX::ShowRestartForJoin("Ada");
+  auto view = Orca::UX::Overlay().View(now(), Orca::UX::Stats::Off);
+  ASSERT_FALSE(view.toasts.empty());
+  EXPECT_EQ(view.toasts.back().text, "Restarting the game so Ada can join");
+  Orca::UX::ShowRestartForJoin("");
+  view = Orca::UX::Overlay().View(now(), Orca::UX::Stats::Off);
+  ASSERT_FALSE(view.toasts.empty());
+  EXPECT_EQ(view.toasts.back().text, "Restarting the game so your friend can join");
 }

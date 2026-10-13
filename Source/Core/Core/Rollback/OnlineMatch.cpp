@@ -270,10 +270,10 @@ struct Match
   // comes back not ready, so Start searches again.
   bool ranked_fought = false;
 
-  // Fresh starts (FreshStart). `fresh_pending`: the main menu exit of one due at the next
+  // Fresh starts (FreshStart). `fresh_pending`: an exit (0 for Reset) due at the next
   // boundary. `fresh_queue_armed`: `host` matched this game, so its queue room fresh-starts once
   // the welcome names it; `fresh_room` is the room the last fresh start was for.
-  u8 fresh_pending = 0;
+  std::optional<u8> fresh_pending;
   bool fresh_queue_armed = false;
   std::string fresh_room;
   // The friends waiting now join in place (DecideFreshStart said None for them).
@@ -289,6 +289,7 @@ struct Match
       Steer,
     };
     Phase phase = Phase::Tail;
+    FreshKind kind = FreshKind::Menu;
     u8 exit = 0;
     bool queue = false;
     std::string room;
@@ -439,13 +440,13 @@ bool FreshStartsOn()
   return !(off && Orca::UX::TestKnobsAllowed());
 }
 // ORCA_TEST_FRESH_AFTER=<frames>: a friend fresh-starts a host whose history is longer than this.
-int FreshFriendsAfter()
+int FreshFriendsAfter(FreshKind kind)
 {
   static const int after = [] {
     const std::string value = Orca::GetEnv("ORCA_TEST_FRESH_AFTER");
     return value.empty() ? -1 : std::max(0, std::atoi(value.c_str()));
   }();
-  return after >= 0 && Orca::UX::TestKnobsAllowed() ? after : FRESH_FRIENDS_AFTER;
+  return after >= 0 && Orca::UX::TestKnobsAllowed() ? after : DefaultFreshFriendsAfter(kind);
 }
 // ORCA_TEST_FAST_UNTIL=<frame>: solo frames before it run unthrottled, to age a host quickly; never
 // after its first fresh start or session.
@@ -704,9 +705,9 @@ void StepTail(Match& match, int frame)
   Match::Fresh& fresh = *match.fresh;
   fresh.css_streak = Orca::UX::Game().Read().LastSeen().css ? fresh.css_streak + 1 : 0;
   const int length = frame - match.origin_frame + 1;
-  if (fresh.css_streak < FRESH_CSS_SETTLE && length < FRESH_TAIL_LIMIT)
+  if (!FreshTailSettled(fresh.kind, fresh.css_streak, length))
     return;
-  if (fresh.css_streak < FRESH_CSS_SETTLE)
+  if (fresh.kind == FreshKind::Menu && fresh.css_streak < FRESH_CSS_SETTLE)
   {
     WARN_LOG_FMT(ROLLBACK, "Drop-in: the fresh start's tail found no character select in {} "
                            "frames; it ends at frame {}",
@@ -719,7 +720,7 @@ void StepTail(Match& match, int frame)
   match.stats_frame = -1;
   // A queue room's host holds port 1 until the room's header is in, then puts its own pick back
   // (FreshPad), still unseen and unthrottled (FreshUnseen); a friend's fresh start is over.
-  if (fresh.queue)
+  if (fresh.queue && fresh.kind == FreshKind::Menu)
   {
     fresh.phase = Match::Fresh::Phase::Hold;
     fresh.unseen = FreshUnseen(true, 0);
@@ -887,7 +888,7 @@ void ResetDropIn(Match& match)
   match.replaying.reset();
   match.before_join.reset();
   // A fresh start due, armed or holding for this room is over with it.
-  match.fresh_pending = 0;
+  match.fresh_pending.reset();
   match.fresh_queue_armed = false;
   EndFresh(match, "the room is left");
   if (match.keyframe)
@@ -1395,19 +1396,20 @@ void HostEvents(Core::System& system, Match& match)
   if (match.waiting.empty())
     match.friends_in_place = false;
   FreshInputs start;
+  start.kind = FreshKindForOrigin(match.origin_rule);
   start.enabled = FreshStartsOn() && match.origin_frame > 0;
   start.origin_ready = OriginReady(match);
   start.joining = match.joining;
   start.session = match.session != nullptr;
   start.seated_or_plugging = !match.seated.empty() || !match.plugging.empty();
-  start.busy = InTail(match) || match.job != nullptr || match.fresh_pending != 0;
+  start.busy = InTail(match) || match.job != nullptr || match.fresh_pending.has_value();
   start.queue_armed = match.fresh_queue_armed;
   start.in_queue_room = InQueueRoom();
   start.waiting = !match.waiting.empty();
   start.in_place = match.friends_in_place;
   start.single_player = Orca::UX::Game().Read().DropInHeld();
   start.history_frames = match.running + 1 - match.replay.first_frame;
-  start.fresh_after = FreshFriendsAfter();
+  start.fresh_after = FreshFriendsAfter(start.kind);
   switch (DecideFreshStart(start))
   {
   case FreshStep::None:
@@ -1417,7 +1419,13 @@ void HostEvents(Core::System& system, Match& match)
   case FreshStep::Hold:
     return;
   case FreshStep::Now:
-    if (start.queue_armed)
+    if (start.kind == FreshKind::Reset)
+    {
+      match.fresh_pending = 0;
+      NOTICE_LOG_FMT(ROLLBACK, "Drop-in: a reset start at the next boundary (frame {})",
+                     match.running + 2);
+    }
+    else if (start.queue_armed)
     {
       match.fresh_pending = Orca::Online::RoomQueue() == "ranked" ? Orca::Net::MENU_EXIT_RANKED :
                                                                     Orca::Net::MENU_EXIT_CASUAL;
@@ -1431,7 +1439,7 @@ void HostEvents(Core::System& system, Match& match)
           pick ? std::optional(*pick == Orca::UX::OnlinePick::Ranked) : std::nullopt);
       NOTICE_LOG_FMT(ROLLBACK, "Drop-in: a friend arrives after {} frames of this game's own: a "
                                "fresh start at the next boundary (frame {}, exit {})",
-                     start.history_frames, match.running + 2, match.fresh_pending);
+                     start.history_frames, match.running + 2, *match.fresh_pending);
     }
     return;
   }
@@ -1812,15 +1820,19 @@ enum class Restore
 Restore RestoreLocal(Core::System& system, Match& match, MachineImage image,
                      const std::vector<Orca::Net::NandEntry>& nand_entries, int frame)
 {
-  IOS::HLE::FS::HostFileSystem* nand = HostNand(system);
-  if (!nand || !Core::WiiRootIsTemporary())
+  IOS::HLE::FS::HostFileSystem* nand = system.IsWii() ? HostNand(system) : nullptr;
+  if (!LocalNandReady(system.IsWii(), nand != nullptr, Core::WiiRootIsTemporary()))
     return Restore::Failed;
-  nand->CloseHostFiles();
+  if (nand)
+    nand->CloseHostFiles();
   match.port.reset();
   match.port = std::make_unique<RingPort>(system, MAX_ROLLBACK);
-  if (!Orca::Net::ReplaceNandTree(nand->HostRoot(), nand_entries))
-    return Restore::Broken;
-  nand->ReloadFst();
+  if (nand)
+  {
+    if (!Orca::Net::ReplaceNandTree(nand->HostRoot(), nand_entries))
+      return Restore::Broken;
+    nand->ReloadFst();
+  }
   if (!match.port->LoadImage(std::move(image), frame))
     return Restore::Broken;
   // Frames from here are a new timeline; test runs' harness counts them as first passes.
@@ -1833,11 +1845,15 @@ Restore RestoreLocal(Core::System& system, Match& match, MachineImage image,
 bool CaptureOrigin(Core::System& system, Match& match, int frame)
 {
   const auto start = Clock::now();
-  IOS::HLE::FS::HostFileSystem* nand = HostNand(system);
+  IOS::HLE::FS::HostFileSystem* nand = system.IsWii() ? HostNand(system) : nullptr;
+  if (!system.IsWii())
+    match.origin_nand.clear();
   if (nand)
     nand->CloseHostFiles();
-  const bool nand_ok = nand && Core::WiiRootIsTemporary() &&
-                       Orca::Net::ReadNandTree(nand->HostRoot(), &match.origin_nand);
+  const bool nand_ok = LocalNandReady(system.IsWii(), nand != nullptr,
+                                      Core::WiiRootIsTemporary()) &&
+                       (!system.IsWii() ||
+                        Orca::Net::ReadNandTree(nand->HostRoot(), &match.origin_nand));
   if (nand)
     nand->ReopenHostFiles();
   if (!nand_ok || !SnapshotRing::Capture(system, &match.origin, true))
@@ -1882,9 +1898,10 @@ bool CaptureOrigin(Core::System& system, Match& match, int frame)
 // frame, where the state now starts.
 std::optional<int> FreshStart(Core::System& system, Match& match)
 {
-  const u8 exit = std::exchange(match.fresh_pending, 0);
+  const FreshKind kind = FreshKindForOrigin(match.origin_rule);
+  const u8 exit = std::exchange(match.fresh_pending, std::nullopt).value_or(0);
   if (!OriginReady(match) || match.session || match.joining || match.replaying || match.download ||
-      match.job || !match.port || !Orca::Net::ValidMenuExit(exit))
+      match.job || !match.port || !FreshExitAllowed(kind, exit))
   {
     WARN_LOG_FMT(ROLLBACK, "Drop-in: a fresh start was due at frame {}, but this game isn't solo "
                            "with an origin; skipped",
@@ -1915,14 +1932,10 @@ std::optional<int> FreshStart(Core::System& system, Match& match)
   match.keyframe_wanted = !match.waiting.empty();
   match.header_waited = 0;
   match.running = frame - 1;
-  match.replay = {};
-  match.replay.origin_hash = match.origin_hash;
-  match.replay.first_frame = frame;
   // The exit and a new seed are the first frame's typed events; FreshMove applies them at that
-  // frame's hook, here and in every replay of it.
-  match.replay.frames.resize(1);
-  match.replay.frames[0].menu_exit = exit;
-  match.replay.frames[0].seed = NewHistorySeed();
+  // frame's hook, here and in every replay of it. Reset games have neither event.
+  match.replay = FreshReplayStart(kind, frame, match.origin_hash, exit,
+                                  kind == FreshKind::Menu ? NewHistorySeed() : 0);
   match.log.clear();
   match.log_base = frame;
   match.queued_local.clear();
@@ -1931,6 +1944,7 @@ std::optional<int> FreshStart(Core::System& system, Match& match)
   RefreshOwnValues(match, frame);
   match.stats_frame = -1;
   Match::Fresh fresh;
+  fresh.kind = kind;
   fresh.exit = exit;
   fresh.queue = InQueueRoom();
   fresh.room = Orca::Online::Code();
@@ -1952,6 +1966,8 @@ std::optional<int> FreshStart(Core::System& system, Match& match)
   Orca::UX::QueueApp::ResetTimeouts();
   Orca::UX::Game().Results().Reset();
   Orca::UX::Game().Header().MemoryReplaced();
+  if (kind == FreshKind::Reset && !match.waiting.empty())
+    Orca::UX::ShowRestartForJoin(match.waiting.begin()->second.name);
   NOTICE_LOG_FMT(ROLLBACK, "Drop-in: fresh start at frame {}: back to the origin (frame {}) in {:.0f} "
                            "ms, leaving the main menu with exit code {}{}",
                  from, frame, MsSince(start), exit,
@@ -2001,8 +2017,8 @@ Load LoadKeyframe(Core::System& system, Match& match, int* frame_out)
     match.join_error = "Your friend's game data differs from yours";
     return Load::Failed;
   }
-  IOS::HLE::FS::HostFileSystem* nand = HostNand(system);
-  if (!nand || !Core::WiiRootIsTemporary())
+  IOS::HLE::FS::HostFileSystem* nand = system.IsWii() ? HostNand(system) : nullptr;
+  if (!LocalNandReady(system.IsWii(), nand != nullptr, Core::WiiRootIsTemporary()))
   {
     match.join_error_code = "internal";
     match.join_error = "Couldn't restore this game's local boot";
@@ -2015,11 +2031,14 @@ Load LoadKeyframe(Core::System& system, Match& match, int* frame_out)
   before->replay = match.replay;
   if (!SnapshotRing::Capture(system, &before->image, false))
     return Load::Failed;
-  nand->CloseHostFiles();
-  if (!Orca::Net::ReadNandTree(nand->HostRoot(), &before->nand))
+  if (nand)
   {
-    nand->ReopenHostFiles();
-    return Load::Failed;
+    nand->CloseHostFiles();
+    if (!Orca::Net::ReadNandTree(nand->HostRoot(), &before->nand))
+    {
+      nand->ReopenHostFiles();
+      return Load::Failed;
+    }
   }
   match.before_join = std::move(before);
   if (RestoreLocal(system, match, match.origin, match.origin_nand, match.origin_frame) !=
@@ -4512,6 +4531,46 @@ int DeclaredOriginStreak(int frame, int streak, const Orca::Mod::OriginDecl& dec
   return std::min(streak + 1, static_cast<int>(decl.settle));
 }
 
+FreshKind FreshKindForOrigin(OriginRule rule)
+{
+  return rule == OriginRule::Declared ? FreshKind::Reset : FreshKind::Menu;
+}
+
+int DefaultFreshFriendsAfter(FreshKind kind)
+{
+  return kind == FreshKind::Reset ? FRESH_RESET_FRIENDS_AFTER : FRESH_FRIENDS_AFTER;
+}
+
+bool FreshExitAllowed(FreshKind kind, u8 exit)
+{
+  return kind == FreshKind::Reset ? exit == 0 : Orca::Net::ValidMenuExit(exit);
+}
+
+bool FreshTailSettled(FreshKind kind, int css_streak, int length)
+{
+  return kind == FreshKind::Reset || css_streak >= FRESH_CSS_SETTLE || length >= FRESH_TAIL_LIMIT;
+}
+
+Orca::Net::ReplayArchive FreshReplayStart(FreshKind kind, int frame, u64 origin_hash, u8 exit,
+                                         u32 seed)
+{
+  Orca::Net::ReplayArchive replay;
+  replay.origin_hash = origin_hash;
+  replay.first_frame = frame;
+  if (kind == FreshKind::Menu)
+  {
+    replay.frames.resize(1);
+    replay.frames[0].menu_exit = exit;
+    replay.frames[0].seed = seed;
+  }
+  return replay;
+}
+
+bool LocalNandReady(bool is_wii, bool has_host_nand, bool temporary)
+{
+  return !is_wii || (has_host_nand && temporary);
+}
+
 FreshStep DecideFreshStart(const FreshInputs& in)
 {
   if (!in.enabled || in.joining || in.session || in.seated_or_plugging)
@@ -4528,7 +4587,8 @@ FreshStep DecideFreshStart(const FreshInputs& in)
     return FreshStep::None;
   if (!in.origin_ready || in.busy || in.single_player)
     return FreshStep::Hold;
-  return in.history_frames > in.fresh_after ? FreshStep::Now : FreshStep::None;
+  const int after = in.fresh_after >= 0 ? in.fresh_after : DefaultFreshFriendsAfter(in.kind);
+  return in.history_frames > after ? FreshStep::Now : FreshStep::None;
 }
 
 u8 FriendsFreshExit(std::optional<bool> css_pick_ranked)
