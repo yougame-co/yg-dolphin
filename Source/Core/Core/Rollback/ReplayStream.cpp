@@ -45,6 +45,86 @@ u64 MemoryChecksum(Core::System& system)
 }
 }  // namespace
 
+std::vector<std::vector<u8>> RepackedPieces(const std::vector<u8>& written, int* frames,
+                                            size_t max_piece, bool* too_big)
+{
+  *frames = 0;
+  if (too_big)
+    *too_big = false;
+  if (max_piece == 0 || written.empty())
+    return {};
+  // Our own bytes, but read back with the untrusted reader's bounds all the same.
+  Orca::Net::ReplayStreamReader reader;
+  std::string error;
+  if (!reader.Feed(written.data(), written.size(), &error) || !reader.Info() ||
+      reader.Archive().frames.empty())
+  {
+    WARN_LOG_FMT(ROLLBACK, "Replay: the written history doesn't read back ({}); no saved copy",
+                 error.empty() ? "no frames" : error);
+    return {};
+  }
+  const std::vector<u8> bytes =
+      Orca::Net::PackReplayStream(*reader.Info(), reader.Archive(), reader.Checksums());
+  if (bytes.empty() || bytes.size() > Orca::Net::REPLAY_PACKED_MAX)
+  {
+    if (too_big)
+      *too_big = bytes.size() > Orca::Net::REPLAY_PACKED_MAX;
+    WARN_LOG_FMT(ROLLBACK, "Replay: the saved copy packs to {} bytes, over 1 MiB or empty: skipped",
+                 bytes.size());
+    return {};
+  }
+  max_piece = std::min(max_piece, Orca::Net::REPLAY_PACKED_PIECE_MAX);
+  std::vector<std::vector<u8>> pieces;
+  pieces.reserve((bytes.size() + max_piece - 1) / max_piece);
+  for (size_t at = 0; at < bytes.size(); at += max_piece)
+  {
+    const size_t last = std::min(at + max_piece, bytes.size());
+    pieces.emplace_back(bytes.begin() + static_cast<std::ptrdiff_t>(at),
+                        bytes.begin() + static_cast<std::ptrdiff_t>(last));
+  }
+  *frames = static_cast<int>(reader.Archive().frames.size());
+  return pieces;
+}
+
+// ---- PackedSender ----
+
+PackedSender::PackedSender(Send send) : m_send(std::move(send))
+{
+}
+
+PackedSender::~PackedSender()
+{
+  m_thread.Shutdown();
+}
+
+bool PackedSender::TooBig(u32 history) const
+{
+  return m_too_big.load() == history;
+}
+
+void PackedSender::Submit(std::vector<u8> written, u64 generation, u32 history)
+{
+  if (!m_started)
+  {
+    m_started = true;
+    m_thread.Reset("Replay packer", [this](Job job) {
+      // A newer copy is waiting: it covers this one.
+      if (job.sequence != m_latest.load())
+        return;
+      int frames = 0;
+      bool too_big = false;
+      const auto pieces =
+          RepackedPieces(job.written, &frames, Orca::Net::REPLAY_PACKED_PIECE_MAX, &too_big);
+      if (too_big)
+        m_too_big = job.history;
+      if (!pieces.empty())
+        m_send(pieces, frames, job.generation);
+    });
+  }
+  const u64 sequence = m_latest.fetch_add(1) + 1;
+  m_thread.Push(Job{std::move(written), generation, history, sequence});
+}
+
 // ---- Writer ----
 
 struct Writer::Timing
@@ -56,21 +136,30 @@ struct Writer::Timing
   int live = -1;
 };
 
-std::unique_ptr<Writer> Writer::FromEnv()
+std::unique_ptr<Writer> Writer::ForMatch()
 {
-  if (!Orca::UX::TestKnobsAllowed())
-    return nullptr;
-  std::string base = Orca::GetEnv("ORCA_TEST_REPLAY_OUT");
-  const bool to_room = Orca::GetEnv("ORCA_TEST_REPLAY_ROOM") == "1";
+  std::string base;
+  bool to_room = false;
+  if (Orca::UX::TestKnobsAllowed())
+  {
+    base = Orca::GetEnv("ORCA_TEST_REPLAY_OUT");
+    to_room = Orca::GetEnv("ORCA_TEST_REPLAY_ROOM") == "1";
+  }
+  // The product's writer: room only, while the room records (Online::RecordWanted).
   if (base.empty() && !to_room)
-    return nullptr;
+  {
+    if (!Orca::SessionActive())
+      return nullptr;
+    return std::make_unique<Writer>(std::string(), true, true);
+  }
   auto writer = std::make_unique<Writer>(std::move(base), to_room);
   if (Orca::GetEnv("ORCA_TEST_REPLAY_TIMING") == "1")
     writer->m_timing = std::make_unique<Timing>();
   return writer;
 }
 
-Writer::Writer(std::string base, bool to_room) : m_base(std::move(base)), m_to_room(to_room)
+Writer::Writer(std::string base, bool to_room, bool gated)
+    : m_base(std::move(base)), m_to_room(to_room), m_gated(gated)
 {
 }
 
@@ -81,6 +170,22 @@ bool Writer::Emit(const std::vector<u8>& bytes)
     return false;
   if (m_to_room && m_room_started)
     Orca::Online::SendReplayStream(bytes);
+  if (m_to_room && !m_written_over)
+  {
+    // ~60 KB a minute: past this, about 6 hours in, the copy wouldn't pack into 1 MiB anyway.
+    constexpr size_t MAX_WRITTEN = 24u << 20;
+    if (m_written.size() + bytes.size() > MAX_WRITTEN)
+    {
+      WARN_LOG_FMT(ROLLBACK, "Replay: history {} is past {} MiB: no more saved copies of it",
+                   m_segment, MAX_WRITTEN >> 20);
+      m_written_over = true;
+      m_written = {};
+    }
+    else
+    {
+      m_written.insert(m_written.end(), bytes.begin(), bytes.end());
+    }
+  }
   return true;
 }
 
@@ -130,6 +235,28 @@ bool Writer::StartRoom(const Orca::Net::ReplayArchive& replay, int live)
   return emitted;
 }
 
+void Writer::SendPacked()
+{
+  if (!m_to_room || !m_room_started || m_written_over || m_written_end <= m_first ||
+      Orca::Online::RoomGeneration() != m_room_generation)
+  {
+    return;
+  }
+  if (m_gated && !Orca::Online::RecordWanted())
+    return;
+  // This history's copy already packed past 1 MiB: later ones only grow.
+  if (m_packer && m_packer->TooBig(m_segment))
+    return;
+  if (!m_packer)
+  {
+    // A room reopened while this packed: its stream starts again and the next result's copy goes
+    // there.
+    m_packer = std::make_unique<PackedSender>(&Orca::Online::SendReplayPacked);
+  }
+  // A copy of what was written (a memcpy of ~60 KB a minute of play); the packing happens there.
+  m_packer->Submit(m_written, m_room_generation, m_segment);
+}
+
 void Writer::LogTiming(bool final) const
 {
   if (!m_timing)
@@ -161,6 +288,20 @@ Writer::~Writer()
 bool Writer::Pump(const Orca::Net::ReplayArchive& replay, int end, int live,
                   const std::map<int, u64>* checksums, bool room_ready)
 {
+  // The product writer does nothing while this room doesn't record. The answer (the app's caps,
+  // the player's choice, the room) changes rarely and takes three locks: asked twice a second.
+  if (m_gated)
+  {
+    if (!room_ready)
+      return true;
+    if (m_record_checked < 0 || live < m_record_checked || live - m_record_checked >= 30)
+    {
+      m_record_wanted = Orca::Online::RecordWanted();
+      m_record_checked = live;
+    }
+    if (!m_record_wanted)
+      return true;
+  }
   // The test timer covers every return, including calls with nothing settled yet. With it off,
   // no timing samples or clock reads are added to the writer's normal flush cadence.
   const auto started = m_timing ? Clock::now() : Clock::time_point{};
@@ -219,6 +360,8 @@ bool Writer::Pump(const Orca::Net::ReplayArchive& replay, int end, int live,
     m_header = header;
     m_room_started = false;
     m_room_checksums.clear();
+    m_written.clear();
+    m_written_over = false;
     if ((m_file && !*m_file) || !Emit(header))
     {
       ERROR_LOG_FMT(ROLLBACK, "Replay: couldn't write {}", path);
@@ -231,7 +374,8 @@ bool Writer::Pump(const Orca::Net::ReplayArchive& replay, int end, int live,
     m_written_end = m_first;
     NOTICE_LOG_FMT(ROLLBACK, "Replay: writing history {} (from frame {}, origin {:016x}) to {}",
                    m_segment, m_first, m_origin, path);
-    Orca::Status::Line(fmt::format("orca replay-out {}", path.empty() ? "room" : path));
+    if (!m_gated)
+      Orca::Status::Line(fmt::format("orca replay-out {}", path.empty() ? "room" : path));
   }
   if (m_to_room && room_ready && m_room_generation != 0 && !m_room_started)
     emitted = StartRoom(replay, live);

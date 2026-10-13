@@ -1771,7 +1771,7 @@ contest"; from it on, "This set counts as a loss" and "They forfeit in". Tests:
 
 | stdout | |
 |---|---|
-| `orca caps ... host results locks queue2 pick-casual pick-ranked` | `results` where the result reader is verified; `locks`, `queue2` and the pick caps where the profile has a ruleset (Brawl rev 2 and Project+). The app answers a pick cap only for a queue it can search now. With `music` that is 16 caps, the most an app before the Music switch's release passes (that release takes 24); more needs it as the minimum app (`OrcaOnlineMenuLobby.EveryCapFitsTheAppsCapsLine`). `talk` and then `rumble` come after them, so such an app drops only those. |
+| `orca caps ... host results locks queue2 pick-casual pick-ranked` | `results` where the result reader is verified; `locks`, `queue2` and the pick caps where the profile has a ruleset (Brawl rev 2 and Project+). The app answers a pick cap only for a queue it can search now. With `music` that is 16 caps, the most an app before the Music switch's release passes (that release takes 24); more needs it as the minimum app (`OrcaOnlineMenuLobby.EveryCapFitsTheAppsCapsLine`). `talk`, `rumble` and then `record` come after them, so such an app drops only those. |
 | `orca result <json>` | The room's verdict, when it arrives. At most 300 bytes. |
 | `orca state friend-left match-over` / `host-left match-over` | A ranked room closed after its set. |
 
@@ -2319,6 +2319,7 @@ moves inside the window.
 | `join <code>` / `leave` | Into or out of a friend's game. |
 | `host <code>` / `queue-cancel` / `queue rating <n\|->` | Matchmaking ([Matchmaking](#matchmaking-and-results)). |
 | `direct on\|off` | The player's switch for direct links. |
+| `record on\|off\|auto` | Whether this player's match streams to the room for watchers and the saved replay in the players' accounts, cap `record`. `auto` (the default) records ranked rooms only; a tournament or friends room records after `record on`. See `Rollback/ReplayStream.h`. |
 | `delay auto` / `delay N` | Orca's default input delay (a fixed 3), or a fixed 1-6 frames. |
 | `chat <name> <text>` | A line from the page's chat, shown while Orca fills the screen. Fields are `encodeURIComponent` of UTF-8 (name at most 24 code points, text 140). Never logged. |
 | `controls <hex>` | The player's own controls ([Each player's own controls](#each-players-own-controls)); the tag gets them at the next character select. A bad profile answers `unsupported controls`. |

@@ -23,6 +23,8 @@
 # 2. Saved: the host's and the joiner's set files (the history they shared: same origin, same first
 #    frame) replay flat out in fresh Orcas, every checksum matching, and hold the same frames and
 #    checksums as each other.
+# 3. Kept (--relay, stub site only): the compact copy the room handed the site at the set's end holds
+#    the set, agrees with the set file and replays checksum-clean.
 import glob
 import json
 import os
@@ -259,6 +261,52 @@ else:
     cdiff = [c for c in common if set_stream.checksums[c] != joiner_stream.checksums[c]]
     check("both players recorded the same set", not diff and not cdiff and common,
           f"frames {set_stream.first}-{end}: {len(diff)} differ; {len(common)} checksums in both, {len(cdiff)} differ")
+
+# 3. Kept: over the relay, the room hands the site a compact copy of the set (Orca's `rp` pieces at
+# each result, the latest when its recorder leaves). The local stub site keeps it (GET
+# /test/orca-replays); the real site has no such route, so this is skipped there. It must hold the
+# set's frames from its start to near its end, agree with the set file, and replay checksum-clean.
+if RELAY:
+    def site_get(path):
+        req = urllib.request.Request(f"{SITE}{path}", headers={"user-agent": "Mozilla/5.0 (AGENT TEST replay-set-check)"})
+        return urllib.request.urlopen(req, timeout=10).read()
+    try:
+        site_get("/test/orca-replays")
+        stub = True
+    except Exception:
+        stub = False
+        log("the site keeps no test copies (not the stub site): no kept-copy check")
+    if stub:
+        copies, deadline = [], time.time() + 90
+        while time.time() < deadline:
+            copies = [c for c in json.loads(site_get("/test/orca-replays")) if c["code"] == state["room"]]
+            if copies:
+                break
+            time.sleep(2)
+        check("the room handed the site one kept copy of the set", len(copies) == 1,
+              f"{len(copies)} copy(ies) for room {state['room']}" +
+              (f": {copies[-1]['frames']} frames, {copies[-1]['bytes']} bytes, players "
+               f"{[p['n'] for p in copies[-1]['players']]}" if copies else ""))
+        if copies:
+            kept_path = os.path.join(work, f"kept-{state['room']}.ygr")
+            with open(kept_path, "wb") as f:
+                f.write(site_get(f"/test/orca-replays/{copies[-1]['i']}"))
+            kept = replay_stream.read(kept_path)
+            log(f"kept copy: {replay_stream.summary(kept)}")
+            n = len(kept.frames)
+            same = kept.first == set_stream.first and kept.frames == set_stream.frames[:n]
+            common = sorted(set(kept.checksums) & set(set_stream.checksums))
+            cdiff = [c for c in common if kept.checksums[c] != set_stream.checksums[c]]
+            live_bytes = os.path.getsize(set_file)
+            check("the kept copy is the set, compact", same and not cdiff and common and n == copies[-1]["frames"]
+                  and n >= len(set_stream.frames) - 3600,
+                  f"{n} of the set file's {len(set_stream.frames)} frames, {'the same' if same else 'DIFFERENT'}; "
+                  f"{len(common)} checksums in both, {len(cdiff)} differ; {os.path.getsize(kept_path)} bytes vs "
+                  f"{live_bytes} live ({live_bytes / max(1, os.path.getsize(kept_path)):.0f}x smaller)")
+            r, _ = play("Replay-kept", kept_path)
+            check("replay of the kept copy", r["ok"] and int(r.get("checked") or 0) > 0 and r.get("mismatched") == "0",
+                  f"{r.get('frames')} frames, {r.get('checked')} checksums checked, {r.get('mismatched')} differ, "
+                  f"{int(r.get('wall_ms') or 0) / 1000:.1f} s wall" + ("" if r["ok"] else f"; why={r.get('why')}"))
 
 failed = [r for r in results if not r[1]]
 log(f"{len(results) - len(failed)} of {len(results)} checks passed; work {work}")

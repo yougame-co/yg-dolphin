@@ -279,6 +279,10 @@ public:
   // relays them to whoever watches this match; players never get them. Bounded: past 4 MB
   // waiting, more is dropped.
   void SendReplayStream(const std::vector<u8>& bytes);
+  // A saved copy of the match (Rollback/ReplayStream.h RepackedPieces), sent one piece every
+  // 200 ms after the live stream's messages: {"t":"rp","b":<base64>,"i":<index>,"n":<count>,
+  // "f":<frames>,"ms":<duration at 60 fps>}. A newer copy replaces the unsent pieces of an older one.
+  void SendReplayPacked(const std::vector<std::vector<u8>>& pieces, int frames);
 
   void Send(const Packet& packet) override;
   std::vector<Packet> Receive() override;

@@ -326,6 +326,7 @@ std::optional<std::string> s_host_request;
 bool s_leave_request = false;
 std::optional<int> s_chosen_delay;
 std::atomic<bool> s_direct_wanted{true};
+std::atomic<RecordChoice> s_record_choice{RecordChoice::Auto};
 }  // namespace
 
 void RequestJoin(const std::string& code)
@@ -412,6 +413,12 @@ void SendReplayStream(const std::vector<u8>& bytes)
     room->SendReplayStream(bytes);
 }
 
+void SendReplayPacked(const std::vector<std::vector<u8>>& pieces, int frames, u64 generation)
+{
+  if (const auto room = Room(); room && room->Generation() == generation)
+    room->SendReplayPacked(pieces, frames);
+}
+
 u64 RoomGeneration()
 {
   const auto room = Room();
@@ -450,6 +457,22 @@ void SetDirectWanted(bool on)
 bool DirectWanted()
 {
   return s_direct_wanted;
+}
+
+void SetRecordChoice(RecordChoice choice)
+{
+  s_record_choice = choice;
+}
+
+bool RecordWanted()
+{
+  const RecordChoice choice = s_record_choice;
+  if (choice == RecordChoice::Off || !Status::Cap(Status::RECORD_CAP))
+    return false;
+  const auto room = Room();
+  if (!room)
+    return false;
+  return choice == RecordChoice::On || room->Queue() == "ranked";
 }
 
 void SetChosenDelay(std::optional<int> frames)

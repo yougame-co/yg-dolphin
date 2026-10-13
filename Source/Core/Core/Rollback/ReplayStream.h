@@ -3,7 +3,9 @@
 
 #pragma once
 
+#include <atomic>
 #include <chrono>
+#include <cstddef>
 #include <functional>
 #include <map>
 #include <memory>
@@ -14,6 +16,7 @@
 #include <vector>
 
 #include "Common/CommonTypes.h"
+#include "Common/WorkQueueThread.h"
 #include "Core/Orca/Session/Keyframe.h"
 #include "Core/Rollback/OnlineMatch.h"
 #include "Core/Rollback/Rollback.h"
@@ -32,10 +35,20 @@ class IOFile;
 // back from this machine's own origin, checking every checksum it carries. A watcher is a player
 // of a stream that is still growing: it is no seat in the match, so it can't slow or change it.
 //
-// Test knobs for now (UX/Probe.h TestKnobsAllowed), until the app can ask for them:
+// The product switch: with the app's "record" cap (Orca/Status.h), every match runs a room-only
+// writer that records only while Online::RecordWanted() (ranked rooms by default, any room after the
+// app's "record on"); otherwise it costs one check a frame. It streams to the room for watchers as
+// {"t":"rs","b":<base64>} (Online::SendReplayStream), and at each game's result it also sends the
+// history written so far as a compact saved replay (Online::SendReplayPacked):
+// {"t":"rp","b":<base64>,"i":<piece index>,"n":<piece count>,"f":<frames>,"ms":<duration at
+// 60 fps>}, zero-based pieces of at most 32 KiB decoded, at most 1 MiB for the whole file. The
+// emulation thread only copies the bytes already written; a worker thread repacks them
+// (PackedSender), so neither the frame nor the result report waits on it. The room keeps the
+// latest complete copy for the site when the stream ends (the last game covers the set).
+// Test knobs (UX/Probe.h TestKnobsAllowed):
 //  - ORCA_TEST_REPLAY_OUT=<base>: write this machine's history to <base>-<n>.ygr (a fresh start or
-//    a join begins another history, so another file). ORCA_TEST_REPLAY_ROOM=1 also sends it to the
-//    room for its watchers (Online::SendReplayStream); <base> may then be empty.
+//    a join begins another history, so another file). ORCA_TEST_REPLAY_ROOM=1 also streams it to
+//    the room, with saved copies, whatever the room or the app's caps; <base> may then be empty.
 //    ORCA_TEST_REPLAY_TIMING=1 logs Pump's cost in microseconds every 3600 frames and at shutdown.
 //  - ORCA_TEST_REPLAY_IN=<file>: instead of a game, boot to the origin and play <file>; or a
 //    ws:// or wss:// watch URL (the rooms Worker's /watch/<code> with a watch ticket), whose
@@ -55,11 +68,54 @@ class IOFile;
 // "orca replay done ok|fail <key=value>... why=<text>" line.
 namespace Rollback::ReplayStream
 {
+// A history's saved copy from the bytes its writer wrote (a header and live chunks, ~60 KB a
+// minute): read back, packed compactly (Orca::Net::PackReplayStream, ~3 KB a minute) and split for
+// the room. Empty if the bytes aren't one whole history with frames, the packed copy exceeds 1 MiB
+// (`too_big` then says so) or max_piece is 0; max_piece is capped at 32 KiB. `frames` gets the
+// copy's frame count.
+std::vector<std::vector<u8>> RepackedPieces(const std::vector<u8>& written, int* frames,
+                                            size_t max_piece = Orca::Net::REPLAY_PACKED_PIECE_MAX,
+                                            bool* too_big = nullptr);
+
+// Repacks saved copies on its own thread and hands the pieces to `send` there, so the caller (the
+// emulation thread, at a game's result) only gives up a copy of the written bytes. Copies are
+// cumulative: one still waiting when a newer one arrives is skipped. The thread starts with the
+// first copy; destruction finishes the copies already handed over (milliseconds each).
+class PackedSender
+{
+public:
+  using Send =
+      std::function<void(const std::vector<std::vector<u8>>& pieces, int frames, u64 generation)>;
+  explicit PackedSender(Send send);
+  ~PackedSender();
+  // `history`: the writer's history count, for TooBig.
+  void Submit(std::vector<u8> written, u64 generation, u32 history);
+  // A copy of this history already packed past 1 MiB (its later copies would too).
+  bool TooBig(u32 history) const;
+
+private:
+  struct Job
+  {
+    std::vector<u8> written;
+    u64 generation = 0;
+    u32 history = 0;
+    u64 sequence = 0;
+  };
+  Send m_send;
+  std::atomic<u64> m_latest{0};
+  // The history whose copy packed past 1 MiB (histories count from 1).
+  std::atomic<u32> m_too_big{0};
+  Common::WorkQueueThread<Job> m_thread;
+  bool m_started = false;
+};
+
 class Writer
 {
 public:
-  static std::unique_ptr<Writer> FromEnv();
-  explicit Writer(std::string base, bool to_room = false);
+  // The test knobs' writer, else the product's room-only one when this build offers "record".
+  static std::unique_ptr<Writer> ForMatch();
+  // `gated`: records only while Online::RecordWanted() and the session runs (the product switch).
+  explicit Writer(std::string base, bool to_room = false, bool gated = false);
   ~Writer();
   // Appends `replay`'s frames before `end` (all final) with the checksums among `checksums`
   // (frame: RAM checksum at its start) that they cover, at most every 6 frames or 100 ms. `live`
@@ -71,6 +127,10 @@ public:
   // again with the same header and backlog.
   bool Pump(const Orca::Net::ReplayArchive& replay, int end, int live,
             const std::map<int, u64>* checksums, bool room_ready = false);
+  // At a game's result: hands a copy of this history's written bytes to the packer thread, which
+  // sends the room a saved copy of the match so far. Quietly does nothing until this history's room
+  // stream has started, or if this room no longer records.
+  void SendPacked();
 
 private:
   bool Emit(const std::vector<u8>& bytes);
@@ -89,6 +149,15 @@ private:
   // room needs the whole backlog's checksums too.
   std::map<int, u64> m_room_checksums;
   std::vector<u8> m_header;
+  // This history's bytes as written (the file's content), for its saved copies; dropped past
+  // MAX_WRITTEN (hours of play, far past what packs into 1 MiB).
+  std::vector<u8> m_written;
+  bool m_written_over = false;
+  std::unique_ptr<PackedSender> m_packer;
+  bool m_gated = false;
+  // The gated writer's last Online::RecordWanted() answer, and the live frame it was asked at.
+  bool m_record_wanted = false;
+  int m_record_checked = -1;
   u32 m_segment = 0;
   std::unique_ptr<File::IOFile> m_file;
   int m_first = -1;

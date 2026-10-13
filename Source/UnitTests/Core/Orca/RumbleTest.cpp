@@ -272,9 +272,9 @@ TEST(OrcaRumble, NothingToHaltWhenOff)
 
 TEST(OrcaRumble, NoLinesWithoutTheCap)
 {
-  // Offered by every profile, last; on only once the app's answer lists it.
+  // Offered by every profile, before only "record"; on only once the app's answer lists it.
   const std::string offered = Orca::Status::OfferedCaps();
-  EXPECT_TRUE(offered.ends_with(" rumble")) << offered;
+  EXPECT_TRUE(offered.ends_with(" rumble record")) << offered;
   Orca::Status::SetAppCaps("join leave");
   EXPECT_FALSE(Orca::Status::Cap(Orca::Status::RUMBLE_CAP));
   // A halt with nothing sent prints nothing either way.

@@ -94,6 +94,10 @@ std::vector<u8> PackReplayChunk(const ReplayChunk& chunk, bool history_start);
 // Empty if a frame can't be written.
 std::vector<u8> PackReplayStream(const ReplayStreamInfo& info, const ReplayArchive& replay,
                                  const std::map<int, u64>& checksums);
+// A saved copy (PackReplayStream) goes to the room in `rp` pieces (Online::SendReplayPacked): at
+// most 1 MiB in all, at most 32 KiB a piece before base64.
+constexpr size_t REPLAY_PACKED_MAX = 1u << 20;
+constexpr size_t REPLAY_PACKED_PIECE_MAX = 32u << 10;
 
 // Decodes a replay stream fed in pieces (a growing file, or network messages). Feed takes the
 // next bytes; a partial chunk waits for the rest. Frames must arrive in order with no gap. Resume

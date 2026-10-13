@@ -186,7 +186,7 @@ std::string OfferedCaps()
   }
   // Engine caps, like "music": every profile, legacy or mod, whatever its builtin or guards. Last,
   // so an app that reads fewer words drops them before any other.
-  caps += fmt::format(" {} {}", TALK_CAP, RUMBLE_CAP);
+  caps += fmt::format(" {} {} {}", TALK_CAP, RUMBLE_CAP, RECORD_CAP);
   return caps;
 }
 

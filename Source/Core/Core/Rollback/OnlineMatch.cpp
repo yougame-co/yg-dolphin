@@ -3322,6 +3322,10 @@ void ConfirmResults(Match& match)
                        fmt::format("a draw, {}", report.detail) :
                        fmt::format("void ({})", r.why));
     Orca::Online::ReportGame(report);
+    // The match so far as a saved replay: a copy of the written bytes here, packed and sent on the
+    // writer's own thread, so neither this frame nor the report above waits on it.
+    if (match.replay_out)
+      match.replay_out->SendPacked();
   }
 }
 
@@ -3578,7 +3582,7 @@ std::optional<int> Boundary(Core::System& system,
       Orca::Status::State("playing");
       NOTICE_LOG_FMT(ROLLBACK, "Drop-in: playing solo on port 1; room {}", Orca::Online::StatusLine());
     }
-    match.replay_out = ReplayStream::Writer::FromEnv();
+    match.replay_out = ReplayStream::Writer::ForMatch();
     match.replay_play = match.joining ? nullptr : ReplayStream::Player::FromEnv();
     // A replay player boots to its origin unseen and unthrottled, as a launch joiner does.
     if (match.replay_play)
