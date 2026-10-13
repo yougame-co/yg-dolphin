@@ -119,7 +119,9 @@ class Orca:
             env["YG_INPUT"] = INPUT
         if PPLUS:
             env["ORCA_PROFILE"] = "PPLUS32"
-        for key in ("ORCA_SITE", "SDL_HIDAPI", "SDL_JOYSTICK_HIDAPI"):
+        # ORCA_TEST_SNAPSHOT_EVERY=<n>: the session snapshots every n frames, as a slow machine's does
+        # (Windows: every 2-4), so rollbacks restore from before frames already recorded.
+        for key in ("ORCA_SITE", "SDL_HIDAPI", "SDL_JOYSTICK_HIDAPI", "ORCA_TEST_SNAPSHOT_EVERY"):
             if os.environ.get(key):
                 env[key] = os.environ[key]
         if RELAY:
@@ -447,6 +449,10 @@ common = sorted(set(host_stream.checksums) & set(friend_stream.checksums))
 cdiff = [c for c in common if host_stream.checksums[c] != friend_stream.checksums[c]]
 if DELAY:
     check("the players rolled back during the recorded match", rollbacks > 0, f"{rollbacks} rollbacks")
+# One file per history: each player's own boot, then the shared match. A rollback that re-runs
+# frames already written must not start another (ORCA_TEST_SNAPSHOT_EVERY=3 shows it).
+check("each player wrote one file per history", len(host.replay_out) == 2 and len(friend.replay_out) == 2,
+      f"Host {len(host.replay_out)} files, Friend {len(friend.replay_out)}")
 check("Host and Friend recorded the same frames", not diff and end - first > 0,
       f"frames {first}-{end}: {len(diff)} differ (first {diff[:5]})")
 check("Host and Friend recorded the same checksums", common and not cdiff,

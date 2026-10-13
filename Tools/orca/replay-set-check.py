@@ -5,7 +5,8 @@
 # a local rooms stack. Headless and muted; run it through run-lock.py.
 #
 #   Tools/orca/replay-set-check.py <dolphin-emu-nogui> <disc> --site <url> [--pplus <launcher.dol>]
-#       [--queue ranked|casual] [--games N] [--late-watch S] [--relay] [--scenario rejoin|kill|...]
+#       [--queue ranked|casual] [--games N] [--late-watch S] [--relay [--watch-drop S]]
+#       [--scenario rejoin|kill|...]
 #
 # --site is a local stand-in site with dev tickets and a local rooms Worker behind it (YouGame
 # rooms/scripts/replay-stub-site.mjs + `wrangler dev`). The queue-e2e run's own checks (the same
@@ -14,7 +15,9 @@
 #    frames behind, and LateWatcher joins --late-watch seconds later (150: in game 2), catching up
 #    from the set's first frame. --relay: both watch through the rooms Worker's /watch/<room> with a
 #    watch ticket from --site, and the players stream to their room (ORCA_TEST_REPLAY_ROOM); without
-#    it they read the host's file. Each must match every checksum to the set's end.
+#    it they read the host's file. Each must match every checksum to the set's end. Over the relay,
+#    Watcher's connection drops once, --watch-drop seconds (40; 0: never) after it connected, and must
+#    come back on a fresh watch ticket.
 # --scenario goes to queue-e2e (rejoin: the joiner's room connection drops in game 1 and comes back;
 # the set's recordings must still be whole).
 # 2. Saved: the host's and the joiner's set files (the history they shared: same origin, same first
@@ -49,6 +52,7 @@ GAMES = opt("--games")
 SCENARIO = opt("--scenario")
 LATE = int(opt("--late-watch", "150"))
 RELAY = "--relay" in sys.argv
+WATCH_DROP = opt("--watch-drop", "40")
 HERE = os.path.dirname(os.path.abspath(__file__))
 T0 = time.time()
 results = []
@@ -163,8 +167,16 @@ watchers = {}
 
 
 def watcher(name):
-    source = watch_url(state["dev"], room) if RELAY else set_file
-    watchers[name] = play(name, source, ["--follow"])
+    extra = ["--follow"]
+    if RELAY and name == "Watcher" and WATCH_DROP != "0":
+        # Its own watch tickets (watch:<room>) for the set's dev game, so its connection can drop
+        # --watch-drop seconds in and come back on a fresh one.
+        source = f"watch:{room}"
+        extra += ["--env", f"ORCA_SITE={SITE}", "--env", f"ORCA_TEST_DEV_GAME={state['dev']}",
+                  "--env", f"ORCA_TEST_REPLAY_WATCH_DROP={WATCH_DROP}"]
+    else:
+        source = watch_url(state["dev"], room) if RELAY else set_file
+    watchers[name] = play(name, source, extra)
 
 
 if RELAY:
@@ -202,6 +214,10 @@ for name in ("Watcher", "LateWatcher"):
     if not w["ok"]:
         detail += f"; why={w.get('why')}"
     covers = int(w.get("frames") or 0) >= len(set_stream.frames) - 120
+    if name == "Watcher" and RELAY and WATCH_DROP != "0":
+        back = [l for l in watchers[name][1] if "orca replay reconnected" in l]
+        check("Watcher's connection dropped mid-set and came back", w["ok"] and back,
+              f"{len(back)} reconnect(s), dropped {WATCH_DROP} s after it connected")
     check(f"{name} followed the whole set and matches", w["ok"] and int(w.get("checked") or 0) > 0
           and w.get("mismatched") == "0" and covers, detail + f" (the set: {len(set_stream.frames)} frames)")
 

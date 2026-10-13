@@ -127,14 +127,21 @@ bool Writer::Pump(const Orca::Net::ReplayArchive& replay, int end, int live,
     return true;
   end = std::min(end, replay.EndFrame());
   const u32 seed = replay.frames[0].seed;
+  // Another history (a fresh start or a join: a new first frame, origin or seed, or an archive that
+  // starts over shorter than what was written). Not a rollback: the session loads the newest
+  // snapshot at or before the frame it guessed wrong, which on a machine that snapshots every few
+  // frames (Windows: 3-11 ms each) can be before frames already written; they re-run with the same
+  // inputs and `end` dips under m_written_end until the re-run passes it, with nothing new to write.
   if (!m_started || replay.first_frame != m_first || replay.origin_hash != m_origin ||
-      seed != m_seed || end < m_written_end)
+      seed != m_seed || replay.EndFrame() < m_written_end)
   {
     // Another history: a file of its own, from its first frame.
     ++m_segment;
     const std::string path =
         m_base.empty() ? std::string() : fmt::format("{}-{}.ygr", m_base, m_segment);
-    m_file = path.empty() ? nullptr : std::make_unique<File::IOFile>(path, "wb");
+    // Others may read it as it grows (a live watcher of the file, on Windows too).
+    m_file = path.empty() ? nullptr :
+                            std::make_unique<File::IOFile>(path, "wb", File::SharedAccess::Read);
     Orca::Net::ReplayStreamInfo info;
     info.compat = Orca::Online::CompatibilityKey();
     info.build = Common::GetScmRevGitStr();
@@ -514,7 +521,8 @@ bool Player::Poll(std::string* error)
   }
   if (!m_file)
   {
-    m_file = std::make_unique<File::IOFile>(m_path, "rb");
+    // The writer may still have it open for writing (a live watcher of a growing file).
+    m_file = std::make_unique<File::IOFile>(m_path, "rb", File::SharedAccess::ReadWrite);
     if (!*m_file)
     {
       m_file.reset();
