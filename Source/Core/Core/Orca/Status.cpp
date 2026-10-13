@@ -129,7 +129,13 @@ void Line(std::string_view line)
 
 void Report(std::string_view code, std::string_view sentence)
 {
-  if (!Cap("join"))
+  bool app_reports;
+  {
+    std::lock_guard lock(s_mutex);
+    // The app's protocol support survives withdrawal of this boot's online features.
+    app_reports = Agreed("join", s_app_list).contains("join");
+  }
+  if (!app_reports)
   {
     Error(code, sentence);
     return;
@@ -142,7 +148,16 @@ void Report(std::string_view code, std::string_view sentence)
 
 std::string OfferedCaps()
 {
-  std::string caps = s_online_withdrawn ? "leave stats pause delay perf chat yougame gfx" : CAPS;
+  std::string caps;
+  std::istringstream base{CAPS};
+  for (std::string cap; base >> cap;)
+  {
+    if (s_online_withdrawn && (cap == "join" || cap == "host" || cap == "direct"))
+      continue;
+    if (!caps.empty())
+      caps += ' ';
+    caps += cap;
+  }
   if (Music::Supported())
     caps += fmt::format(" {}", MUSIC_CAP);
   // Mod mode (Core/Orca/Mod.h): besides the music switch above (host-only, the same rule in both
@@ -225,6 +240,8 @@ void WithdrawOnline()
 void ResetOnline()
 {
   s_online_withdrawn = false;
+  std::lock_guard lock(s_mutex);
+  s_offer_seen.clear();
 }
 
 void SetAppCaps(std::string_view list)

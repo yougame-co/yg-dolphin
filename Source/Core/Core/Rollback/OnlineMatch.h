@@ -93,6 +93,8 @@ enum class OriginRule
 OriginRule SelectOriginRule(const Orca::Mod::Manifest* manifest, bool menu_supported,
                           bool guards_failed);
 OriginStep DecideDeclaredOrigin(int frame, int streak, const Orca::Mod::OriginDecl& decl);
+// Legacy menu failures keep their existing log only; packs also explain the failure to the app.
+std::string_view OriginFailureReport(const Orca::Mod::Manifest* manifest);
 int DeclaredOriginStreak(int frame, int streak, const Orca::Mod::OriginDecl& decl,
                          const Orca::UX::GuestMemory& memory);
 

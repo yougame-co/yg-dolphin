@@ -45,7 +45,7 @@ void Result(std::string_view json);
 // Prints an embed-protocol line as is (e.g. "unsupported host").
 void Line(std::string_view line);
 // An error the session survives. With the app's "caps join", it is printed and Orca plays on solo
-// with exit code 0; otherwise it is the same as Error().
+// with exit code 0, even after join is withdrawn from our offer; otherwise it is Error().
 void Report(std::string_view code, std::string_view sentence);
 
 // Capabilities: this build's list is printed once as "orca caps <list>" before "ready", and the app

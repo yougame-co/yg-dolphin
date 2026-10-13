@@ -3571,8 +3571,9 @@ std::optional<int> Boundary(Core::System& system,
       const u64 ram = RamChecksum({memory.GetRAM(), memory.GetRamSize()},
                                   {memory.GetEXRAM(), memory.GetEXRAM() ? memory.GetExRamSize() : 0});
       NOTICE_LOG_FMT(ROLLBACK, "Orca origin: rule failed at frame {}: RAM {:016x}", frame, ram);
-      Orca::Status::Report("no_origin", "This pack's game didn't reach the start point its pack "
-                                      "names, so friends can't join.");
+      if (const auto sentence = OriginFailureReport(mod ? &mod->manifest : nullptr);
+          !sentence.empty())
+        Orca::Status::Report("no_origin", sentence);
       Orca::Status::WithdrawOnline();
       ERROR_LOG_FMT(ROLLBACK, "Drop-in: no built main menu by frame {}: this game has no origin, so "
                               "it can't take or join players",
@@ -4516,6 +4517,12 @@ OriginStep DecideDeclaredOrigin(int frame, int streak, const Orca::Mod::OriginDe
     return OriginStep::Capture;
   return frame >= static_cast<int>(decl.frame) + ORIGIN_WORDS_WINDOW ? OriginStep::Fail :
                                                                     OriginStep::Wait;
+}
+
+std::string_view OriginFailureReport(const Orca::Mod::Manifest* manifest)
+{
+  return manifest ? "This pack's game didn't reach the start point its pack names, so friends "
+                    "can't join." : "";
 }
 
 int DeclaredOriginStreak(int frame, int streak, const Orca::Mod::OriginDecl& decl,
