@@ -4,6 +4,11 @@
 #include <gtest/gtest.h>
 
 #include "Core/Core.h"
+#include "Core/ConfigManager.h"
+#include "Core/Orca/JitWarm.h"
+#include "Core/Orca/Music.h"
+#include "Core/Orca/PanicDiag.h"
+#include "Core/Orca/Status.h"
 #include "Core/Orca/Games/Brawl/BrawlModule.h"
 #include "Core/Orca/Games/Generic/GenericModule.h"
 #include "Core/Orca/Profile.h"
@@ -233,4 +238,35 @@ TEST(OrcaGenericModule, LegacySelectionAndShutdownKeepTheBuiltinFallback)
   UX::SelectModule(nullptr);
   EXPECT_EQ(ActiveModule(), nullptr);
   EXPECT_EQ(&UX::Game(), &UX::Builtin());
+}
+
+TEST(OrcaGenericModule, NoBrawlWarmupOrSceneReadsEvenOnBrawlsDisc)
+{
+  BootDone done;
+  SConfig::Init();
+  struct ConfigDone { ~ConfigDone() { SConfig::Shutdown(); } } config;
+  UX::GenericModule module;
+  SetModule(&module);
+  Core::DeclareAsCPUThread();
+  const Core::CPUThreadGuard guard(Core::System::GetInstance());
+  // No guest memory is initialized. All scene entry points must return before any read.
+  for (const char* disc : {"GALE01", "RSBE01"})
+  {
+    Profile profile;
+    profile.game_id = disc;
+    profile.revision = 2;
+    profile.mod.emplace();
+    SetActiveProfile(profile);
+    SetModule(&module);
+    EXPECT_FALSE(JitWarm::ScenesReadable());
+    EXPECT_FALSE(JitWarm::SceneIsMatch(guard));
+    EXPECT_FALSE(JitWarm::CurrentScene(guard));
+    EXPECT_TRUE(JitWarm::SceneName(guard, 0x80000000).empty());
+    JitWarm::OnBoundary(guard);
+    PanicDiag::NoteScene(guard, 100);
+    EXPECT_EQ(Music::Supported(), profile.game_id == "RSBE01");
+    EXPECT_EQ(Status::OfferedCaps().find(" music") != std::string::npos,
+              profile.game_id == "RSBE01");
+  }
+  Core::UndeclareAsCPUThread();
 }

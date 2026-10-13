@@ -684,7 +684,7 @@ void OnFrameBoundary(const Core::CPUThreadGuard& guard)
 
   // JIT warm-up: precompile blocks earlier matches needed and record this match's for next time.
   // Only on first runs, and not while catching up, whose frames run back to back.
-  if (Orca::SessionActive() && !IsResimulating() &&
+  if (Orca::SessionActive() && Orca::JitWarm::ScenesReadable() && !IsResimulating() &&
       !(RingPort::Active() && RingPort::Active()->CatchingUp()))
   {
     Orca::JitWarm::OnBoundary(guard);

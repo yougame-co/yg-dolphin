@@ -37,8 +37,11 @@ void PutBE16(u8* out, s32 value)
 
 bool Supported()
 {
-  // Brawl's disc, any revision, Project+'s launcher included: the game module's answer.
-  return Orca::UX::Game().Describe().music;
+  // Keep the Brawl-disc music switch for builtin-less packs, as before module selection.
+  const auto* profile = ActiveProfile();
+  const bool brawl_disc = profile &&
+      (profile->IsLauncher() ? profile->disc : profile->game_id) == "RSBE01";
+  return brawl_disc || Orca::UX::Game().Describe().music;
 }
 
 bool On()
