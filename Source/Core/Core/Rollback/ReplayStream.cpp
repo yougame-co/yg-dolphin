@@ -15,6 +15,7 @@
 #include "Common/HttpRequest.h"
 #include "Common/IOFile.h"
 #include "Common/Logging/Log.h"
+#include "Common/ScopeGuard.h"
 #include "Common/Version.h"
 #include "Common/WebSocket.h"
 #include "Core/HW/Memmap.h"
@@ -46,6 +47,15 @@ u64 MemoryChecksum(Core::System& system)
 
 // ---- Writer ----
 
+struct Writer::Timing
+{
+  std::vector<double> calls;
+  std::vector<double> chunks;
+  std::vector<double> early;
+  int next_log = 3600;
+  int live = -1;
+};
+
 std::unique_ptr<Writer> Writer::FromEnv()
 {
   if (!Orca::UX::TestKnobsAllowed())
@@ -54,7 +64,10 @@ std::unique_ptr<Writer> Writer::FromEnv()
   const bool to_room = Orca::GetEnv("ORCA_TEST_REPLAY_ROOM") == "1";
   if (base.empty() && !to_room)
     return nullptr;
-  return std::make_unique<Writer>(std::move(base), to_room);
+  auto writer = std::make_unique<Writer>(std::move(base), to_room);
+  if (Orca::GetEnv("ORCA_TEST_REPLAY_TIMING") == "1")
+    writer->m_timing = std::make_unique<Timing>();
+  return writer;
 }
 
 Writer::Writer(std::string base, bool to_room) : m_base(std::move(base)), m_to_room(to_room)
@@ -73,9 +86,10 @@ bool Writer::Emit(const std::vector<u8>& bytes)
 
 // The room's stream starts: the header, then the frames written so far, a few hundred a message
 // (a room message holds at most 64 KiB).
-void Writer::StartRoom(const Orca::Net::ReplayArchive& replay, const std::map<int, u64>* checksums,
+bool Writer::StartRoom(const Orca::Net::ReplayArchive& replay, const std::map<int, u64>* checksums,
                        int live)
 {
+  bool emitted = false;
   m_room_started = true;
   Orca::Online::SendReplayStream(m_header);
   constexpr int PER_MESSAGE = 600;
@@ -109,20 +123,65 @@ void Writer::StartRoom(const Orca::Net::ReplayArchive& replay, const std::map<in
     {
       ERROR_LOG_FMT(ROLLBACK, "Replay: couldn't pack frames {}-{} for the room", first, last);
       m_to_room = false;
-      return;
+      return emitted;
     }
     Orca::Online::SendReplayStream(bytes);
+    emitted = true;
   }
   NOTICE_LOG_FMT(ROLLBACK, "Replay: streaming history {} to the room from frame {} ({} frames "
                            "already written)",
                  m_segment, m_first, m_written_end - m_first);
+  return emitted;
 }
 
-Writer::~Writer() = default;
+void Writer::LogTiming(bool final) const
+{
+  if (!m_timing)
+    return;
+  const auto describe = [](std::vector<double> calls) {
+    std::sort(calls.begin(), calls.end());
+    double total = 0;
+    for (double us : calls)
+      total += us;
+    // Nearest-rank percentiles; an empty group has no cost.
+    const auto percentile = [&calls](size_t percent) {
+      return calls.empty() ? 0.0 : calls[(calls.size() * percent + 99) / 100 - 1];
+    };
+    return fmt::format("count={} total={:.3f} mean={:.3f} p50={:.3f} p99={:.3f} max={:.3f}",
+                       calls.size(), total, calls.empty() ? 0.0 : total / calls.size(),
+                       percentile(50), percentile(99), calls.empty() ? 0.0 : calls.back());
+  };
+  NOTICE_LOG_FMT(ROLLBACK,
+                 "Replay: writer timing {} frame={} us: all [{}], chunk [{}], early [{}]",
+                 final ? "final" : "periodic", m_timing->live, describe(m_timing->calls),
+                 describe(m_timing->chunks), describe(m_timing->early));
+}
+
+Writer::~Writer()
+{
+  LogTiming(true);
+}
 
 bool Writer::Pump(const Orca::Net::ReplayArchive& replay, int end, int live,
                   const std::map<int, u64>* checksums, bool room_ready)
 {
+  // The test timer covers every return, including calls with nothing settled yet. With it off,
+  // no timing samples or clock reads are added to the writer's normal flush cadence.
+  const auto started = m_timing ? Clock::now() : Clock::time_point{};
+  bool emitted = false;
+  Common::ScopeGuard timing([&] {
+    if (!m_timing)
+      return;
+    const double us = std::chrono::duration<double, std::micro>(Clock::now() - started).count();
+    m_timing->calls.push_back(us);
+    (emitted ? m_timing->chunks : m_timing->early).push_back(us);
+    m_timing->live = live;
+    if (live >= m_timing->next_log)
+    {
+      LogTiming(false);
+      m_timing->next_log = (live / 3600 + 1) * 3600;
+    }
+  });
   if (replay.first_frame < 0 || replay.frames.empty())
     return true;
   end = std::min(end, replay.EndFrame());
@@ -169,7 +228,7 @@ bool Writer::Pump(const Orca::Net::ReplayArchive& replay, int end, int live,
     Orca::Status::Line(fmt::format("orca replay-out {}", path.empty() ? "room" : path));
   }
   if (m_to_room && room_ready && !m_room_started)
-    StartRoom(replay, checksums, live);
+    emitted = StartRoom(replay, checksums, live);
   const int pending = end - m_written_end;
   if (pending <= 0 || (pending < 6 && Clock::now() - m_flushed < std::chrono::milliseconds(100)))
     return true;
@@ -205,6 +264,7 @@ bool Writer::Pump(const Orca::Net::ReplayArchive& replay, int end, int live,
                   chunk.first + count);
     return false;
   }
+  emitted = true;
   m_written_end = chunk.first + count;
   m_flushed = Clock::now();
   return true;

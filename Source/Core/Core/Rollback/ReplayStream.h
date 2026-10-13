@@ -36,6 +36,7 @@ class IOFile;
 //  - ORCA_TEST_REPLAY_OUT=<base>: write this machine's history to <base>-<n>.ygr (a fresh start or
 //    a join begins another history, so another file). ORCA_TEST_REPLAY_ROOM=1 also sends it to the
 //    room for its watchers (Online::SendReplayStream); <base> may then be empty.
+//    ORCA_TEST_REPLAY_TIMING=1 logs Pump's cost in microseconds every 3600 frames and at shutdown.
 //  - ORCA_TEST_REPLAY_IN=<file>: instead of a game, boot to the origin and play <file>; or a
 //    ws:// or wss:// watch URL (the rooms Worker's /watch/<code> with a watch ticket), whose
 //    {"t":"rs","b":<base64>} messages carry the stream, {"t":"end"} its end; or watch:<room>, which
@@ -71,8 +72,12 @@ public:
 
 private:
   bool Emit(const std::vector<u8>& bytes);
-  void StartRoom(const Orca::Net::ReplayArchive& replay, const std::map<int, u64>* checksums,
+  bool StartRoom(const Orca::Net::ReplayArchive& replay, const std::map<int, u64>* checksums,
                  int live);
+  void LogTiming(bool final) const;
+
+  struct Timing;
+  std::unique_ptr<Timing> m_timing;
 
   std::string m_base;
   bool m_to_room = false;
