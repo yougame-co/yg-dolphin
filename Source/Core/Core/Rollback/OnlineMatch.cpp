@@ -3507,7 +3507,7 @@ std::optional<int> Boundary(Core::System& system,
       if (!match.store)
       {
         StopEmulation(system,
-                      "Couldn't join: this YG Baiji has nowhere to get your friend's game from");
+                      "Couldn't join: this YG Dolphin has nowhere to get your friend's game from");
         End("no keyframe store");
         return std::nullopt;
       }

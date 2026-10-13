@@ -2,14 +2,15 @@
 # Publish a snapshot of this private repo to the public one (github.com/yougame-co/yg-baiji, named
 # orca-netplay until 0.3.40; GitHub redirects the old name).
 #
-#   Tools/orca-publish-public.sh [ref] [message] [tag]   # defaults: origin/main, "YG Baiji source, <date>"
-#   Tools/orca-publish-public.sh origin/main "YG Baiji 0.3.40 (source of <release sha>)" yg-baiji-0.3.40
+#   Tools/orca-publish-public.sh [ref] [message] [tag]   # defaults: origin/main, "YG Dolphin source, <date>"
+#   Tools/orca-publish-public.sh origin/main "YG Dolphin 0.3.42 (source of <release sha>)" yg-dolphin-0.3.42
 #   DRY_RUN=1 Tools/orca-publish-public.sh ...           # build and check, don't push
 #   TAG_ONLY=1 Tools/orca-publish-public.sh <cleaned ref> "Orca 0.3.25 (source of <sha>)" orca-0.3.25
 #     # an older release: one commit on Dolphin 2609, published as a tag only (main doesn't move)
 #
-# Every release is published and tagged yg-baiji-<version> (orca-<version> up to 0.3.39, tags that
-# stay as they are); the app's "source" link points at
+# Every release from 0.3.42 is published and tagged yg-dolphin-<version> (yg-baiji-<version> in
+# 0.3.40 and 0.3.41, orca-<version> before; older tags stay as they are). The app's "source"
+# link points at
 # https://github.com/yougame-co/yg-baiji/tree/<tag>.
 #
 # The public history is Dolphin's own, then one commit per published snapshot, authored as
@@ -60,7 +61,7 @@ if [ -n "${TAG_ONLY:-}" ]; then
 else
   git fetch -q "$PUBLIC_URL" main 2>/dev/null && parent=$(git rev-parse FETCH_HEAD) || parent=$BASE
 fi
-msg=${2:-"YG Baiji source, $(date -u +%Y-%m-%d)"} # no private hashes beyond a release's own
+msg=${2:-"YG Dolphin source, $(date -u +%Y-%m-%d)"} # no private hashes beyond a release's own
 if [ "$(git rev-parse "$parent^{tree}")" = "$tree" ]; then
   commit=$parent
   echo "Tree unchanged since the public head; reusing $commit."

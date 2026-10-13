@@ -1,5 +1,11 @@
 # Orca
 
+> **2026-10-13: YG Baiji is now YG Dolphin.** Players see YG Dolphin from 0.3.42 on. The code,
+> files and contracts keep the codename Orca. Packages are `YG Dolphin.app`, `yg-dolphin.exe`
+> and `yg-dolphin/yg-dolphin`; the Mac program stays `Contents/MacOS/Orca`. Tags are
+> `yg-dolphin-<version>` from 0.3.42; older `yg-baiji-` and `orca-` tags keep their names.
+> Earlier notes are left as they were.
+
 > **2026-10-12: players see the name YG Baiji** from 0.3.40 on (Orca up to 0.3.39; the baiji is the
 > Yangtze river dolphin). The builds still use neither Dolphin's name nor its logo. This document,
 > the code and every contract keep the codename Orca: `namespace Orca`, `Core/Orca`, `Sys/Orca/`,
@@ -2613,6 +2619,8 @@ What each release changed for players, in plain words.
 
 ### 0.3.42
 
+- **YG Baiji is now YG Dolphin.** The window, the Mac menu and the messages use the new name.
+  Your controls and settings carry over.
 - **Name tags keep the buttons you saved.**
 - **More community packs.** Community mods of other GameCube games can run (casual).
 

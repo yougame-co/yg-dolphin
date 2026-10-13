@@ -1,5 +1,11 @@
 # How Orca works
 
+> **2026-10-13: YG Baiji is now YG Dolphin.** Players see YG Dolphin from 0.3.42 on. The code,
+> files and contracts keep the codename Orca. Packages are `YG Dolphin.app`, `yg-dolphin.exe`
+> and `yg-dolphin/yg-dolphin`; the Mac program stays `Contents/MacOS/Orca`. Tags are
+> `yg-dolphin-<version>` from 0.3.42; older `yg-baiji-` and `orca-` tags keep their names.
+> Earlier notes are left as they were.
+
 > **2026-10-12:** Orca is now called YG Baiji. Players see that name from 0.3.40 on (the baiji is
 > the Yangtze river dolphin). This page keeps the name Orca, as the code does, and nothing in it was
 > reworded.

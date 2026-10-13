@@ -647,7 +647,7 @@ std::optional<Profile> LoadProfileFrom(const std::string& sys_directory, const s
   File::OpenFStream(in, path, std::ios_base::in);
   if (!in)
   {
-    *error = fmt::format("YG Baiji has no profile for {} ({})", game_id, path);
+    *error = fmt::format("YG Dolphin has no profile for {} ({})", game_id, path);
     return std::nullopt;
   }
 
@@ -791,7 +791,7 @@ std::optional<Profile> LoadProfileFrom(const std::string& sys_directory, const s
   }
   if (revision && *profile_revision != *revision)
   {
-    *error = fmt::format("This disc is {} revision {}; YG Baiji's profile is for revision {}",
+    *error = fmt::format("This disc is {} revision {}; YG Dolphin's profile is for revision {}",
                          game_id, *revision, *profile_revision);
     return std::nullopt;
   }

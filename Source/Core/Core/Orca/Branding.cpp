@@ -50,8 +50,8 @@ std::string WindowTitle()
 
 std::string BrandWords(std::string_view text)
 {
-  // Dolphin's own name, and the name this fork had until 0.3.39.
-  static constexpr std::array<std::string_view, 2> WORDS = {"Dolphin", "Orca"};
+  // The names this fork had before 0.3.42. Dolphin keeps its own name.
+  static constexpr std::array<std::string_view, 2> WORDS = {"YG Baiji", "Orca"};
   std::string branded;
   branded.reserve(text.size());
   std::size_t at = 0;

@@ -871,7 +871,7 @@ TEST(OrcaBundle, ResolvesOrRefuses)
   EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Refused);
   EXPECT_TRUE(Orca::Mod::Requested());
   EXPECT_EQ(Orca::Mod::ResolvedFlat(), nullptr);
-  EXPECT_TRUE(Orca::Mod::ResolvedError().starts_with("YG Baiji refused this game's pack: "))
+  EXPECT_TRUE(Orca::Mod::ResolvedError().starts_with("YG Dolphin refused this game's pack: "))
       << Orca::Mod::ResolvedError();
   EXPECT_EQ(Orca::Mod::ResolvedError().find(root), std::string::npos)
       << Orca::Mod::ResolvedError();
@@ -962,7 +962,7 @@ TEST(OrcaBundle, ResolvesOrRefuses)
     EXPECT_NE(Orca::Mod::ResolvedError().find("this boot is a disc's"), std::string::npos)
         << Orca::Mod::ResolvedError();
     // The player reads it (orca error): the new name, and never the folder's path.
-    EXPECT_TRUE(Orca::Mod::ResolvedError().starts_with("YG Baiji refused this game's pack: "))
+    EXPECT_TRUE(Orca::Mod::ResolvedError().starts_with("YG Dolphin refused this game's pack: "))
         << Orca::Mod::ResolvedError();
     EXPECT_EQ(Orca::Mod::ResolvedError().find(root), std::string::npos)
         << Orca::Mod::ResolvedError();

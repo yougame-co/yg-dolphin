@@ -40,7 +40,8 @@ if (WIN32)
   target_sources(dolphin-nogui PRIVATE DolphinNoGUI.exe.manifest DolphinNoGUI.rc)
   # The program's version resource (DolphinNoGUI.rc), what Windows and antivirus show: ORCA_VERSION
   # as a string and as the four numbers VERSIONINFO wants. The release packages DolphinNoGUI.exe as
-  # "YG Baiji/yg-baiji.exe" from 0.3.40 ("Orca/Orca.exe" before).
+  # "YG Dolphin/yg-dolphin.exe" from 0.3.42 ("YG Baiji/yg-baiji.exe" in 0.3.40 and 0.3.41;
+  # "Orca/Orca.exe" before).
   string(REGEX MATCHALL "[0-9]+" ORCA_VERSION_PARTS "${ORCA_VERSION}")
   list(APPEND ORCA_VERSION_PARTS 0 0 0 0)
   list(SUBLIST ORCA_VERSION_PARTS 0 4 ORCA_VERSION_PARTS)
@@ -54,7 +55,7 @@ if (WIN32)
   )
 elseif(APPLE AND ORCA_MACOS_BUNDLE)
   # Orca.app: runs a session by default, with its own user dir and a disc picker (MainNoGUI.cpp).
-  # Tools/orca-package-macos.sh ships it as "YG Baiji.app"; the program inside stays
+  # Tools/orca-package-macos.sh ships it as "YG Dolphin.app"; the program inside stays
   # Contents/MacOS/Orca (CFBundleExecutable, Orca-Info.plist.in).
   target_compile_definitions(dolphin-nogui PRIVATE ORCA_MACOS_BUNDLE)
   set_target_properties(dolphin-nogui PROPERTIES

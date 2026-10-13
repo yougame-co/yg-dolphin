@@ -1,6 +1,7 @@
 #!/bin/bash
-# Builds the macOS (arm64) app as a self-contained bundle and zips it as YG Baiji.app (Orca.app up
-# to 0.3.39). CMake still names its bundle Orca.app, and the program inside stays
+# Builds the macOS (arm64) app as a self-contained bundle and zips it as YG Dolphin.app
+# (YG Baiji.app in 0.3.40 and 0.3.41, Orca.app before). CMake still names its bundle Orca.app,
+# and the program inside stays
 # Contents/MacOS/Orca: installed YouGame apps let only that path run in their sandbox.
 #
 #   Tools/orca-package-macos.sh [build-dir] [out-dir]
@@ -13,8 +14,8 @@
 #   CSC_LINK (Developer ID Application .p12) and CSC_KEY_PASSWORD
 #   APPLE_API_KEY (.p8 path), APPLE_API_KEY_ID, APPLE_API_ISSUER
 #   ORCA_SOURCE_URL: the public repository players can fetch the source from (GPL); its
-#     yg-baiji-<version> tag (orca-<version> up to 0.3.39) must point at HEAD, and the tree must be
-#     clean before and after the build.
+#     yg-dolphin-<version> tag (yg-baiji-<version> in 0.3.40 and 0.3.41, orca-<version> before)
+#     must point at HEAD, and the tree must be clean before and after the build.
 # ORCA_INTERNAL=1 instead signs and notarizes an internal test build from the private repository:
 # the same credentials and clean tree, but no ORCA_SOURCE_URL or tag. SOURCE.txt says it is not for
 # public distribution and the zip is named *-internal.zip. Such a build only goes to testers.
@@ -32,7 +33,7 @@ OUT_DIR="${2:-$BUILD_DIR/package}"
 ENTITLEMENTS="$ROOT/Source/Core/DolphinNoGUI/Orca.entitlements"
 BUILT="$BUILD_DIR/Binaries/Orca.app"
 # What ships: the name players see. The program keeps its name (CFBundleExecutable).
-APP="$BUILD_DIR/stage/YG Baiji.app"
+APP="$BUILD_DIR/stage/YG Dolphin.app"
 EXE="$APP/Contents/MacOS/Orca"
 
 fail() {
@@ -109,10 +110,12 @@ if [ "$STATE" = "git status failed" ]; then
 elif [ -n "$STATE" ]; then
   DIRTY=" (with local changes)"
 fi
-# yg-baiji-<version> from 0.3.40; orca-<version> before.
-TAG="$(git -C "$ROOT" tag --points-at HEAD --list 'yg-baiji-*' | head -n 1)"
+# yg-dolphin-<version> from 0.3.42; yg-baiji-<version> in 0.3.40 and 0.3.41; orca-<version> before.
+TAG="$(git -C "$ROOT" tag --points-at HEAD --list 'yg-dolphin-*' | head -n 1)"
+[ -n "$TAG" ] || TAG="$(git -C "$ROOT" tag --points-at HEAD --list 'yg-baiji-*' | head -n 1)"
 [ -n "$TAG" ] || TAG="$(git -C "$ROOT" tag --points-at HEAD --list 'orca-*' | head -n 1)"
-TAG_VERSION="${TAG#yg-baiji-}"
+TAG_VERSION="${TAG#yg-dolphin-}"
+TAG_VERSION="${TAG_VERSION#yg-baiji-}"
 TAG_VERSION="${TAG_VERSION#orca-}"
 VERSION="${ORCA_VERSION:-$TAG_VERSION}"
 VERSION="${VERSION:-0.3.42}"
@@ -126,7 +129,7 @@ fi
 [ "$STAGING" = 0 ] || [ "$RELEASE" = 0 ] || [ "$INTERNAL" = 1 ] ||
   fail "a staging build (ORCA_STAGING_BUILD=1) is never a public release"
 if [ "$RELEASE" = 1 ] && [ "$INTERNAL" = 0 ]; then
-  [ -n "$TAG" ] || fail "a release needs a yg-baiji-<version> tag on HEAD"
+  [ -n "$TAG" ] || fail "a release needs its version tag on HEAD"
   # Anonymous, so a private repository can't pass: players must be able to fetch it.
   PUBLISHED="$(GIT_TERMINAL_PROMPT=0 git -c credential.helper= ls-remote "$ORCA_SOURCE_URL" \
     "refs/tags/$TAG" "refs/tags/$TAG^{}" 2>/dev/null | awk '{print $1}' | tail -n 1)" ||
@@ -200,14 +203,14 @@ $FOREIGN"
 # What the GPL asks to travel with the binary: where the source is, and the bundled licences.
 RESOURCES="$APP/Contents/Resources"
 if [ "$INTERNAL" = 1 ]; then
-  SOURCE_LINE="Internal test build of YG Baiji $COMMIT from a private repository. Not for public distribution."
+  SOURCE_LINE="Internal test build of YG Dolphin $COMMIT from a private repository. Not for public distribution."
 else
   SOURCE_LINE="Source:  ${ORCA_SOURCE_URL:-not published (a development build)}"
 fi
 cat >"$RESOURCES/SOURCE.txt" <<EOF
-YG Baiji $VERSION for macOS (arm64)
+YG Dolphin $VERSION for macOS (arm64)
 
-YG Baiji (formerly Orca) is free software under the GNU General Public License; see COPYING and
+YG Dolphin (formerly Orca) is free software under the GNU General Public License; see COPYING and
 LICENSES/.
 It is based on the Dolphin emulator source (https://github.com/dolphin-emu/dolphin).
 
@@ -239,10 +242,10 @@ done
 
 mkdir -p "$OUT_DIR"
 if [ "$RELEASE" = 0 ]; then
-  ZIP="$OUT_DIR/yg-baiji-$VERSION-macos-arm64-unsigned.zip"
+  ZIP="$OUT_DIR/yg-dolphin-$VERSION-macos-arm64-unsigned.zip"
   rm -f "$ZIP"
   ditto -c -k --keepParent "$APP" "$ZIP"
-  echo "orca-package: no signing credentials; YG Baiji.app stays unsigned"
+  echo "orca-package: no signing credentials; YG Dolphin.app stays unsigned"
   echo "orca-package: $ZIP"
   shasum -a 256 "$ZIP"
   exit 0
@@ -275,8 +278,8 @@ codesign --force --options runtime --timestamp --entitlements "$ENTITLEMENTS" \
   --keychain "$KEYCHAIN" --sign "$IDENTITY" "$APP"
 codesign --verify --strict --verbose=2 "$APP"
 
-ZIP="$OUT_DIR/yg-baiji-$VERSION-macos-arm64.zip"
-[ "$INTERNAL" = 0 ] || ZIP="$OUT_DIR/yg-baiji-$VERSION-macos-arm64-internal.zip"
+ZIP="$OUT_DIR/yg-dolphin-$VERSION-macos-arm64.zip"
+[ "$INTERNAL" = 0 ] || ZIP="$OUT_DIR/yg-dolphin-$VERSION-macos-arm64-internal.zip"
 RESULT="$KEYCHAIN_DIR/notary.json"
 rm -f "$ZIP"
 ditto -c -k --keepParent "$APP" "$ZIP"

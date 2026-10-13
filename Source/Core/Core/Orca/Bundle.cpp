@@ -567,7 +567,7 @@ void ResolveBundle(const std::string* executable_path, std::span<const u8> launc
     ERROR_LOG_FMT(BOOT, "Orca bundle: {} refused: {}. The session is refused.", dir, why);
     // What the player reads (orca error): no folder path, which names their home folder; the log
     // line above keeps it.
-    resolution.error = fmt::format("YG Baiji refused this game's pack: {}", why);
+    resolution.error = fmt::format("YG Dolphin refused this game's pack: {}", why);
     decide(BundleKind::Refused);
   };
   if (!SessionActive() || dir.empty())
