@@ -37,6 +37,10 @@ constexpr u32 CONTROLS_TEMPLATE_SIZE = CONTROLS_LAYOUT_SIZE;
 // jump (0x80). Every other byte is an action.
 constexpr u32 FLAGS_GAMECUBE = 11, FLAGS_NUNCHUK = 0x1F, FLAGS_CLASSIC = 0x2C;
 constexpr u8 BITS_GAMECUBE = 0xF0, BITS_NUNCHUK = 0xC3, BITS_CLASSIC = 0x80;
+// The bit the game's Save on the GameCube page sets in that page's flag byte. No profile carries it
+// (LayoutByte keeps only BITS_GAMECUBE) and Orca's writes leave it as it is, so a tag holding it
+// was saved in the game's own menus.
+constexpr u8 GAMECUBE_SAVED = 0x01;
 // The highest action the menus can set. 0xE is "none".
 constexpr u8 MAX_ACTION = 0x0E;
 constexpr u32 SCENE_SELCHAR_TASK = 0x400;
@@ -248,6 +252,12 @@ void WriteControls(GuestMemory& m, u32 tag, const std::vector<u8>& profile)
   }
 }
 
+// Whether the player saved this tag's GameCube page in the game's menus (Options > Controls).
+bool SavedInGame(const GuestMemory& m, u32 tag)
+{
+  return (m.Read8(tag + TAG_CONTROLS + FLAGS_GAMECUBE) & GAMECUBE_SAVED) != 0;
+}
+
 bool TemplateReadable(const GuestMemory& m)
 {
   return m.Valid(CONTROLS_TEMPLATE) && m.Valid(CONTROLS_TEMPLATE + CONTROLS_TEMPLATE_SIZE - 1);
@@ -340,6 +350,9 @@ int ApplyNameTags(GuestMemory& m, const std::vector<Events::PortInfo>& ports)
   u32 task = 0, tags = 0;
   if (ports.empty() || !CharacterSelectTask(m, &task) || !TagTable(m, &tags))
     return 0;
+  // In a room (more than one port in the synced list) a port's controls are the ones it joined
+  // with, for the whole room, and nothing synced changes when a player edits their tag there.
+  const bool room = ports.size() > 1;
   int given = 0;
   for (const Events::PortInfo& p : ports)
   {
@@ -382,8 +395,13 @@ int ApplyNameTags(GuestMemory& m, const std::vector<Events::PortInfo>& ports)
       slot = MakeTag(m, tags, tag);
     if (slot < 0)
       continue;
-    if (carries)
-      WriteControls(m, tags + static_cast<u32>(slot) * TAG_SIZE, p.controls);
+    // A character select entered from the menus starts with the port wearing no tag, so this runs
+    // again on each one. In a room, a tag the player saved in Options > Controls keeps what they
+    // saved: writing the controls they joined with back into it undid every edit made in a room at
+    // the next character select. Alone, the reader has already made the edit the port's own.
+    const u32 at = tags + static_cast<u32>(slot) * TAG_SIZE;
+    if (carries && !(room && SavedInGame(m, at)))
+      WriteControls(m, at, p.controls);
     m.Write32(*area + AREA_NAME_ID, static_cast<u32>(slot));
     ++given;
   }

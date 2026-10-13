@@ -78,7 +78,8 @@ constexpr u32 CONTROLS_PROFILE_SIZE = 1 + CONTROLS_LAYOUT_SIZE;
 // One frame's writes for these ports. Returns how many ports got a tag (a worn default tag given
 // the port's controls is not counted). Profile bytes are clamped to values the game's own menus
 // could set (rumble 0 or 1, the flag bytes' own bits only, actions up to 0xE), else the game's
-// default, since profiles come from other machines.
+// default, since profiles come from other machines. With more than one port (a room), a tag the
+// player saved in the game's Options > Controls keeps what they saved for the rest of the room.
 int ApplyNameTags(GuestMemory& memory, const std::vector<Events::PortInfo>& ports);
 
 // A profile as text (lowercase hex, 92 characters) and back. Parsing refuses any other size, and

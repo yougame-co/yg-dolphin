@@ -2679,6 +2679,86 @@ TEST(OrcaUXNameTags, ControlsSavedInTheGamesMenusArePublishedThere)
   }
 }
 
+TEST(OrcaUXNameTags, InARoomATagSavedInTheGamesMenusKeepsWhatWasSaved)
+{
+  // A friends room: both ports carry the controls they joined with. Port 1 (ADA) goes to Options >
+  // Controls in the room and saves tap jump back on, with Z as jump. The next character select
+  // starts with every port wearing no tag (rc2 runs: area +0x1C8 = 0xFFFFFFFF on entry).
+  const std::vector<u8> cy = Profile(1, FakeBrawl::CONTROLS);
+  const std::vector<u8> ada = Profile(0, CustomLayout());
+  const auto room = [&](bool ada_remote) {
+    return std::vector<Orca::Events::PortInfo>{{0, "cy", ada_remote ? false : true, cy},
+                                               {1, "ada", ada_remote, ada}};
+  };
+  const auto saved_in_room = [](FakeBrawl& m, int slot) {
+    m.Write8(FakeBrawl::Tag(slot) + 0x0C, 1);          // rumble on
+    m.Write8(FakeBrawl::Tag(slot) + 0x14 + 2, 0x02);   // Z: jump
+    m.Write8(FakeBrawl::Tag(slot) + 0x14 + 11, 0x81);  // tap jump on, and the game's Save bit
+  };
+  const auto next_character_select = [](FakeBrawl& m) {
+    m.W32(FakeBrawl::Area(0) + 0x1C8, 0xFFFFFFFF);
+    m.W32(FakeBrawl::Area(1) + 0x1C8, 0xFFFFFFFF);
+  };
+  std::array<FakeBrawl, 2> machines;
+  for (size_t i = 0; i < machines.size(); ++i)
+  {
+    FakeBrawl& m = machines[i];
+    m.Join(0);
+    m.Join(1);
+    ASSERT_EQ(ApplyNameTags(m, room(i == 0)), 2);
+    const int slot = m.NameId(1);
+    ASSERT_EQ(m.TagName(slot), u"ADA");
+    EXPECT_EQ(TagLayout(m, slot), CustomLayout());
+    saved_in_room(m, slot);
+    std::array<u8, 0x2D> edited = CustomLayout();
+    edited[2] = 0x02;
+    edited[11] = 0x81;
+    ASSERT_EQ(TagLayout(m, slot), edited);
+    // Before: the controls ADA joined with went back into the tag here, so the edit was gone.
+    next_character_select(m);
+    EXPECT_EQ(ApplyNameTags(m, room(i == 0)), 2);
+    EXPECT_EQ(m.NameId(1), slot);
+    EXPECT_EQ(TagLayout(m, slot), edited);
+    // Rumble too: nothing of the controls they joined with goes back in.
+    EXPECT_EQ(m.Read8(FakeBrawl::Tag(slot) + 0x0C), 1);
+    // And on every later character select of the room.
+    next_character_select(m);
+    ApplyNameTags(m, room(i == 0));
+    EXPECT_EQ(TagLayout(m, slot), edited);
+    // Port 0 never saved its tag: it keeps getting its own controls.
+    EXPECT_EQ(TagLayout(m, m.NameId(0)), FakeBrawl::CONTROLS);
+  }
+  // Whoever is remote on each machine, the same bytes.
+  EXPECT_EQ(machines[0].bytes, machines[1].bytes);
+  {
+    // Alone nothing changes: the reader made the edit the port's own controls, and a profile the
+    // app sends later (another device) still goes into the tag at the next character select.
+    FakeBrawl m;
+    m.Join(1);
+    const std::vector<Orca::Events::PortInfo> solo{{1, "ada", false, ada}};
+    ASSERT_EQ(ApplyNameTags(m, solo), 1);
+    const int slot = m.NameId(1);
+    saved_in_room(m, slot);
+    m.W32(FakeBrawl::Area(1) + 0x1C8, 0xFFFFFFFF);
+    ApplyNameTags(m, solo);
+    std::array<u8, 0x2D> written = CustomLayout();
+    written[11] = 0x01;  // the profile's tap jump off, the game's Save bit kept
+    EXPECT_EQ(TagLayout(m, slot), written);
+    EXPECT_EQ(m.Read8(FakeBrawl::Tag(slot) + 0x0C), 0);
+  }
+  {
+    // In a room, a tag of the name that was never saved in the game (a friend back in the host's
+    // game after changing their controls elsewhere) still gets the controls they joined with.
+    FakeBrawl m;
+    GameMadeTag(m, 0, u"ADA");
+    m.Write8(FakeBrawl::Tag(0) + 0x14 + 6, 0x03);
+    m.Join(0);
+    m.Join(1);
+    ApplyNameTags(m, room(true));
+    EXPECT_EQ(m.NameId(1), 0);
+    EXPECT_EQ(TagLayout(m, 0), CustomLayout());
+  }
+}
 TEST(OrcaUXNameTags, UnmappedPointersWriteNothing)
 {
   {
