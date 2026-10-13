@@ -677,6 +677,11 @@ same move from its own origin. So is a new seed for the game's random numbers
   is `DecideFreshStart`, a pure function. Never in a session.
 - **Where to.** A queue room: its Casual or Ranked select. A friend: the Casual or Ranked select the
   host is on, so Play again re-arms there once the friend leaves; otherwise With Friends.
+- **Declared origins.** These packs restore the declared start point without a menu exit or seed.
+  Friends join in place through three minutes of emulated play; after that the solo host resets
+  before the join. This bounds the replay while avoiding frequent restarts in games without a
+  menu shortcut. The threshold uses emulated seconds, so it works at any frame rate and does not
+  count paused time. A queue host resets once per room and sees a restart toast too.
 - **The tail.** From the origin until the character select has been up 30 frames (600 at most),
   the host runs unthrottled, unseen and muted, like a rebuild of the same frames: the hook re-runs
   and plays the replay's typed events, and nothing is announced. Then the game shows as usual; the

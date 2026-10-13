@@ -110,8 +110,9 @@ int DeclaredOriginStreak(int frame, int streak, const Orca::Mod::OriginDecl& dec
 // start is over FRESH_FRIENDS_AFTER frames; a shorter one joins in place. A host in a single-player
 // mode holds the friend first, as before.
 constexpr int FRESH_FRIENDS_AFTER = 10 * 60;
-// Declared-origin games keep joins in place through ten minutes of solo history.
-constexpr int FRESH_RESET_FRIENDS_AFTER = 10 * 60 * 60;
+// Reset games have no menu shortcut: keep short joins in place and bound longer replays to
+// three minutes of emulated play. Seconds work at any frame rate and exclude host pauses.
+inline constexpr std::chrono::seconds FRESH_RESET_FRIENDS_AFTER{3 * 60};
 // The tail ends once the character select has been up this many frames, or after FRESH_TAIL_LIMIT.
 constexpr int FRESH_CSS_SETTLE = 30;
 constexpr int FRESH_TAIL_LIMIT = 600;
@@ -121,7 +122,6 @@ enum class FreshKind
   Reset,
 };
 FreshKind FreshKindForOrigin(OriginRule rule);
-int DefaultFreshFriendsAfter(FreshKind kind);
 bool FreshExitAllowed(FreshKind kind, u8 exit);
 bool FreshTailSettled(FreshKind kind, int css_streak, int length);
 // The new history's metadata and typed events. Reset histories have neither an exit nor a seed.
@@ -159,7 +159,9 @@ struct FreshInputs
   bool single_player = false;
   // Frames since the host's last start (its origin or its last fresh start).
   int history_frames = 0;
-  // Negative: the kind's default; nonnegative: an explicit test threshold.
+  // Emulated time since the origin, restored with the timeline; used by reset games.
+  std::chrono::duration<double> history_time{};
+  // Negative: the kind's default; nonnegative: an explicit test threshold in frames.
   int fresh_after = -1;
 };
 FreshStep DecideFreshStart(const FreshInputs& in);

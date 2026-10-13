@@ -1329,6 +1329,11 @@ void ShowToast(std::string text)
   s_overlay.AddToast(std::move(text), NowMs());
 }
 
+void ShowRestartForMatch()
+{
+  ShowToast("Restarting the game for this match");
+}
+
 void ShowRestartForJoin(std::string_view name)
 {
   ShowToast(fmt::format("Restarting the game so {} can join", name.empty() ? "your friend" : name));

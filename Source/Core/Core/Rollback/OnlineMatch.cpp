@@ -33,6 +33,8 @@
 #include "Common/StringUtil.h"
 #include "Common/Timer.h"
 #include "Core/Core.h"
+#include "Core/CoreTiming.h"
+#include "Core/HW/SystemTimers.h"
 #include "Core/HW/CPU.h"
 #include "Core/HW/Memmap.h"
 #include "Core/IOS/FS/HostBackend/FS.h"
@@ -181,6 +183,7 @@ struct Match
   std::vector<Orca::Net::NandEntry> origin_nand;
   int origin_frame = -1;
   u64 origin_hash = 0;
+  u64 origin_ticks = 0;
   // Frames in a row the frame hook saw the built main menu, before the origin.
   int menu_built_streak = 0;
   int origin_words_streak = 0;
@@ -440,13 +443,13 @@ bool FreshStartsOn()
   return !(off && Orca::UX::TestKnobsAllowed());
 }
 // ORCA_TEST_FRESH_AFTER=<frames>: a friend fresh-starts a host whose history is longer than this.
-int FreshFriendsAfter(FreshKind kind)
+int FreshFriendsAfter()
 {
   static const int after = [] {
     const std::string value = Orca::GetEnv("ORCA_TEST_FRESH_AFTER");
     return value.empty() ? -1 : std::max(0, std::atoi(value.c_str()));
   }();
-  return after >= 0 && Orca::UX::TestKnobsAllowed() ? after : DefaultFreshFriendsAfter(kind);
+  return after >= 0 && Orca::UX::TestKnobsAllowed() ? after : -1;
 }
 // ORCA_TEST_FAST_UNTIL=<frame>: solo frames before it run unthrottled, to age a host quickly; never
 // after its first fresh start or session.
@@ -1409,7 +1412,11 @@ void HostEvents(Core::System& system, Match& match)
   start.in_place = match.friends_in_place;
   start.single_player = Orca::UX::Game().Read().DropInHeld();
   start.history_frames = match.running + 1 - match.replay.first_frame;
-  start.fresh_after = FreshFriendsAfter(start.kind);
+  const u64 ticks = system.GetCoreTiming().GetTicks();
+  start.history_time = std::chrono::duration<double>(
+      static_cast<double>(ticks >= match.origin_ticks ? ticks - match.origin_ticks : 0) /
+      system.GetSystemTimers().GetTicksPerSecond());
+  start.fresh_after = FreshFriendsAfter();
   switch (DecideFreshStart(start))
   {
   case FreshStep::None:
@@ -1863,6 +1870,7 @@ bool CaptureOrigin(Core::System& system, Match& match, int frame)
     return false;
   }
   match.origin_frame = frame;
+  match.origin_ticks = system.GetCoreTiming().GetTicks();
   match.origin_hash = RamChecksum(match.origin.mem1, match.origin.mem2);
   match.replay = {};
   match.replay.origin_hash = match.origin_hash;
@@ -1966,8 +1974,13 @@ std::optional<int> FreshStart(Core::System& system, Match& match)
   Orca::UX::QueueApp::ResetTimeouts();
   Orca::UX::Game().Results().Reset();
   Orca::UX::Game().Header().MemoryReplaced();
-  if (kind == FreshKind::Reset && !match.waiting.empty())
-    Orca::UX::ShowRestartForJoin(match.waiting.begin()->second.name);
+  if (kind == FreshKind::Reset)
+  {
+    if (fresh.queue)
+      Orca::UX::ShowRestartForMatch();
+    else if (!match.waiting.empty())
+      Orca::UX::ShowRestartForJoin(match.waiting.begin()->second.name);
+  }
   NOTICE_LOG_FMT(ROLLBACK, "Drop-in: fresh start at frame {}: back to the origin (frame {}) in {:.0f} "
                            "ms, leaving the main menu with exit code {}{}",
                  from, frame, MsSince(start), exit,
@@ -4565,11 +4578,6 @@ FreshKind FreshKindForOrigin(OriginRule rule)
   return rule == OriginRule::Declared ? FreshKind::Reset : FreshKind::Menu;
 }
 
-int DefaultFreshFriendsAfter(FreshKind kind)
-{
-  return kind == FreshKind::Reset ? FRESH_RESET_FRIENDS_AFTER : FRESH_FRIENDS_AFTER;
-}
-
 bool FreshExitAllowed(FreshKind kind, u8 exit)
 {
   return kind == FreshKind::Reset ? exit == 0 : Orca::Net::ValidMenuExit(exit);
@@ -4616,8 +4624,11 @@ FreshStep DecideFreshStart(const FreshInputs& in)
     return FreshStep::None;
   if (!in.origin_ready || in.busy || in.single_player)
     return FreshStep::Hold;
-  const int after = in.fresh_after >= 0 ? in.fresh_after : DefaultFreshFriendsAfter(in.kind);
-  return in.history_frames > after ? FreshStep::Now : FreshStep::None;
+  if (in.fresh_after >= 0)
+    return in.history_frames > in.fresh_after ? FreshStep::Now : FreshStep::None;
+  const bool due = in.kind == FreshKind::Reset ? in.history_time > FRESH_RESET_FRIENDS_AFTER :
+                                                in.history_frames > FRESH_FRIENDS_AFTER;
+  return due ? FreshStep::Now : FreshStep::None;
 }
 
 u8 FriendsFreshExit(std::optional<bool> css_pick_ranked)

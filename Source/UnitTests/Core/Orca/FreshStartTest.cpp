@@ -346,26 +346,33 @@ TEST(OrcaResetStart, OnlyDeclaredOriginsUseResetAndExitZero)
   }
 }
 
-TEST(OrcaResetStart, FriendsJoinInPlaceThroughTenMinutesThenRestart)
+TEST(OrcaResetStart, FriendsJoinInPlaceThroughThreeMinutesAtAnyFrameRate)
 {
-  EXPECT_EQ(DefaultFreshFriendsAfter(FreshKind::Menu), 10 * 60);
-  EXPECT_EQ(DefaultFreshFriendsAfter(FreshKind::Reset), 10 * 60 * 60);
+  EXPECT_EQ(FRESH_RESET_FRIENDS_AFTER, std::chrono::seconds(180));
   FreshInputs in = SoloHost();
   in.kind = FreshKind::Reset;
   in.waiting = true;
-  for (const int history : {0, FRESH_FRIENDS_AFTER + 1, FRESH_RESET_FRIENDS_AFTER - 1,
-                            FRESH_RESET_FRIENDS_AFTER})
+  for (const int frames_per_second : {30, 50, 60, 120})
   {
-    in.history_frames = history;
-    EXPECT_EQ(DecideFreshStart(in), FreshStep::None);
+    for (const int seconds : {0, 10, 179, 180, 181})
+    {
+      in.history_frames = seconds * frames_per_second;
+      in.history_time = std::chrono::seconds(seconds);
+      EXPECT_EQ(DecideFreshStart(in), seconds > 180 ? FreshStep::Now : FreshStep::None);
+    }
   }
-  in.history_frames = FRESH_RESET_FRIENDS_AFTER + 1;
+  // A paused host or a held game frame does not turn wall time into replay history.
+  in.history_frames = 100000;
+  in.history_time = std::chrono::seconds(1);
+  EXPECT_EQ(DecideFreshStart(in), FreshStep::None);
+  in.history_frames = 1;
+  in.history_time = std::chrono::seconds(181);
   EXPECT_EQ(DecideFreshStart(in), FreshStep::Now);
   in.in_place = true;
   EXPECT_EQ(DecideFreshStart(in), FreshStep::None);
   in.in_place = false;
   in.history_frames = 2;
-  in.fresh_after = 1;
+  in.fresh_after = 1;  // The explicit test knob still counts frames.
   EXPECT_EQ(DecideFreshStart(in), FreshStep::Now);
 }
 
@@ -396,6 +403,7 @@ TEST(OrcaResetStart, QueueRestartsOnceAndOnlyASoloHostCanRestart)
   in.queue_armed = false;
   in.waiting = true;
   in.history_frames = 20 * 60 * 60;
+  in.history_time = std::chrono::minutes(20);
   EXPECT_EQ(DecideFreshStart(in), FreshStep::None);
   in.in_queue_room = false;
   EXPECT_EQ(DecideFreshStart(in), FreshStep::Now);
@@ -483,4 +491,8 @@ TEST(OrcaResetStart, TheHostExplainsTheRestartToItsPlayer)
   view = Orca::UX::Overlay().View(now(), Orca::UX::Stats::Off);
   ASSERT_FALSE(view.toasts.empty());
   EXPECT_EQ(view.toasts.back().text, "Restarting the game so your friend can join");
+  Orca::UX::ShowRestartForMatch();
+  view = Orca::UX::Overlay().View(now(), Orca::UX::Stats::Off);
+  ASSERT_FALSE(view.toasts.empty());
+  EXPECT_EQ(view.toasts.back().text, "Restarting the game for this match");
 }
