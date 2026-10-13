@@ -37,6 +37,12 @@ constexpr u32 CONTROLS_TEMPLATE_SIZE = CONTROLS_LAYOUT_SIZE;
 // jump (0x80). Every other byte is an action.
 constexpr u32 FLAGS_GAMECUBE = 11, FLAGS_NUNCHUK = 0x1F, FLAGS_CLASSIC = 0x2C;
 constexpr u8 BITS_GAMECUBE = 0xF0, BITS_NUNCHUK = 0xC3, BITS_CLASSIC = 0x80;
+// The bit the game's Save on the GameCube page sets in that page's flag byte. No profile carries it
+// (LayoutByte keeps only BITS_GAMECUBE) and Orca's writes leave it as it is, so a tag holding it
+// was saved in the game's own menus.
+constexpr u8 GAMECUBE_SAVED = 0x01;
+// The game's own Controls page (Options > Controls > a tag), where a tag's buttons are set.
+constexpr char CONTROLS_PAGE[] = "scButton";
 // The highest action the menus can set. 0xE is "none".
 constexpr u8 MAX_ACTION = 0x0E;
 constexpr u32 SCENE_SELCHAR_TASK = 0x400;
@@ -248,6 +254,26 @@ void WriteControls(GuestMemory& m, u32 tag, const std::vector<u8>& profile)
   }
 }
 
+// Whether the player saved this tag's GameCube page in the game's menus (Options > Controls). A
+// game whose own new tags hold the bit (none known) never reads as saved. The caller has checked
+// the template is readable.
+bool SavedInGame(const GuestMemory& m, u32 tag)
+{
+  return (m.Read8(tag + TAG_CONTROLS + FLAGS_GAMECUBE) & GAMECUBE_SAVED) != 0 &&
+         (m.Read8(CONTROLS_TEMPLATE + FLAGS_GAMECUBE) & GAMECUBE_SAVED) == 0;
+}
+
+// The tag's rumble byte and layout, as the game holds them (a profile's shape, unclamped).
+std::vector<u8> TagProfile(const GuestMemory& m, u32 tag)
+{
+  std::vector<u8> profile;
+  profile.reserve(CONTROLS_PROFILE_SIZE);
+  profile.push_back(m.Read8(tag + TAG_RUMBLE));
+  for (u32 i = 0; i < CONTROLS_LAYOUT_SIZE; ++i)
+    profile.push_back(m.Read8(tag + TAG_CONTROLS + i));
+  return profile;
+}
+
 bool TemplateReadable(const GuestMemory& m)
 {
   return m.Valid(CONTROLS_TEMPLATE) && m.Valid(CONTROLS_TEMPLATE + CONTROLS_TEMPLATE_SIZE - 1);
@@ -340,17 +366,31 @@ int ApplyNameTags(GuestMemory& m, const std::vector<Events::PortInfo>& ports)
   u32 task = 0, tags = 0;
   if (ports.empty() || !CharacterSelectTask(m, &task) || !TagTable(m, &tags))
     return 0;
+  // In a room (more than one port in the synced list) a port's controls are the ones it joined
+  // with, for the whole room, and nothing synced changes when a player edits their tag there.
+  const bool room = ports.size() > 1;
+  const auto tag_name = [](const Events::PortInfo& p) {
+    std::u16string name = BrawlTag(p.name);
+    if (name.empty() && p.controls.size() == CONTROLS_PROFILE_SIZE)
+      name = PortLabel(p.port);
+    return name;
+  };
   int given = 0;
   for (const Events::PortInfo& p : ports)
   {
     if (p.port < 0 || p.port > 3)
       continue;
     const bool carries = p.controls.size() == CONTROLS_PROFILE_SIZE;
-    std::u16string name = BrawlTag(p.name);
-    if (name.empty() && carries)
-      name = PortLabel(p.port);
+    const std::u16string name = tag_name(p);
     if (name.empty())
       continue;
+    // Two players whose names make the same tag (sandbox-ada, sandbox-bo: SANDB) take it and its
+    // variant in the order they join, so either may wear the one the other saved: theirs always get
+    // their own controls.
+    const bool shares_name =
+        std::any_of(ports.begin(), ports.end(), [&](const Events::PortInfo& o) {
+          return o.port != p.port && SameName(tag_name(o), name);
+        });
     const std::optional<u32> area = JoinedArea(m, task, p.port);
     if (!area)
       continue;
@@ -382,8 +422,17 @@ int ApplyNameTags(GuestMemory& m, const std::vector<Events::PortInfo>& ports)
       slot = MakeTag(m, tags, tag);
     if (slot < 0)
       continue;
-    if (carries)
-      WriteControls(m, tags + static_cast<u32>(slot) * TAG_SIZE, p.controls);
+    // A character select entered from the menus starts with the port wearing no tag, so this runs
+    // again on each one. In a room, a tag the player saved in Options > Controls keeps what they
+    // saved: writing the controls they joined with back into it undid every edit made in a room at
+    // the next character select. Alone, the reader has already made the edit the port's own.
+    // Limits: the bit means "saved in this run", not "in this room", so a friend back in the same
+    // host's run keeps their earlier edit over the controls they bring, and a host who goes from
+    // the menus straight into a room keeps a saved tag over newer own controls until a character
+    // select alone (name-tags stage 1C makes room edits synced values).
+    const u32 at = tags + static_cast<u32>(slot) * TAG_SIZE;
+    if (carries && !(room && !shares_name && SavedInGame(m, at)))
+      WriteControls(m, at, p.controls);
     m.Write32(*area + AREA_NAME_ID, static_cast<u32>(slot));
     ++given;
   }
@@ -451,7 +500,8 @@ std::optional<std::vector<u8>> ParseControlsHex(std::string_view hex)
 }
 
 std::vector<u8> ReadOwnControls(const GuestMemory& m, int port, std::string_view own_name,
-                                std::u16string* last_worn, std::u16string* read_tag)
+                                std::u16string* last_worn, std::u16string* read_tag,
+                                std::u16string* last_edited)
 {
   if (read_tag)
     read_tag->clear();
@@ -472,11 +522,18 @@ std::vector<u8> ReadOwnControls(const GuestMemory& m, int port, std::string_view
         {
           *last_worn = std::move(worn);
           slot = static_cast<int>(id);
+          // What they wear now is what they play with, whatever they set up before.
+          if (last_edited)
+            last_edited->clear();
         }
       }
     }
   }
-  // Elsewhere, the tag they last wore, else their YouGame tag. A last-worn tag that reads as their
+  // Elsewhere, first the tag they last set up on the game's Controls page (exactly that one, by
+  // the name it has: whatever its name, those are the controls they just chose).
+  if (slot < 0 && last_edited && !last_edited->empty())
+    slot = FindTag(m, tags, *last_edited);
+  // Then the tag they last wore, else their YouGame tag. A last-worn tag that reads as their
   // YouGame name is looked up as that name, so a tag of that name they type in Options > Controls
   // after wearing Orca's is the one read (and the one the next character select gives them).
   const std::u16string own = BrawlTag(own_name);
@@ -489,12 +546,7 @@ std::vector<u8> ReadOwnControls(const GuestMemory& m, int port, std::string_view
   const u32 tag = tags + static_cast<u32>(slot) * TAG_SIZE;
   if (read_tag)
     *read_tag = TagAt(m, tag);
-  std::vector<u8> profile;
-  profile.reserve(CONTROLS_PROFILE_SIZE);
-  profile.push_back(m.Read8(tag + TAG_RUMBLE));
-  for (u32 i = 0; i < CONTROLS_LAYOUT_SIZE; ++i)
-    profile.push_back(m.Read8(tag + TAG_CONTROLS + i));
-  return profile;
+  return TagProfile(m, tag);
 }
 
 std::optional<std::vector<u8>> OwnControlsWatch::Next(const std::vector<u8>& read,
@@ -563,6 +615,42 @@ std::vector<u8> Sanitized(std::vector<u8> profile)
 }
 }  // namespace
 
+std::optional<std::u16string> ControlsPageEdits::Next(const GuestMemory& m)
+{
+  const bool page = SceneIs(m, CONTROLS_PAGE);
+  if (!page && m_seen.empty())
+    return std::nullopt;
+  u32 tags = 0;
+  if (!TagTable(m, &tags))
+  {
+    m_seen.clear();
+    return std::nullopt;
+  }
+  // The page's first frame: what every tag holds before the player sets anything.
+  const bool first = m_seen.empty();
+  if (first)
+    m_seen.resize(TAG_SLOTS);
+  std::optional<std::u16string> edited;
+  for (int i = 0; i < TAG_SLOTS; ++i)
+  {
+    const u32 tag = tags + static_cast<u32>(i) * TAG_SIZE;
+    Seen now{TagAt(m, tag), {}};
+    if (!now.name.empty())
+      now.profile = Sanitized(TagProfile(m, tag));
+    Seen& was = m_seen[static_cast<size_t>(i)];
+    // The same tag (same slot, same name) with other controls: the player set it up. A tag made,
+    // renamed or deleted is not an edit, and neither is a Save that changed nothing the controls
+    // play (the Save bit alone: Sanitized drops it).
+    if (!first && !edited && !now.name.empty() && now.name == was.name && now.profile != was.profile)
+      edited = now.name;
+    was = std::move(now);
+  }
+  // The first frame after the page is its last look (a write that lands as the page closes).
+  if (!page)
+    m_seen.clear();
+  return edited;
+}
+
 void LoadOwnControls()
 {
   if (s_own_loaded.exchange(true))
@@ -630,13 +718,26 @@ std::optional<std::vector<u8>> OwnControlsReader::Read(const GuestMemory& m,
   {
     m_resyncs = resyncs;
     m_last_worn.clear();
+    m_last_edited.clear();
+    m_edits = {};
     m_watch.Rebase();
   }
   if (std::exchange(m_rebase, false))
     m_watch.Rebase();
+  // A tag the player just set up on the game's Controls page is the one read from now on, whatever
+  // its name, until they wear one on a character select (through 0.3.40 only the worn, last-worn or
+  // YouGame-name tag was read, so buttons set on any other tag were never kept or carried).
+  std::optional<std::u16string> edited = m_edits.Next(m);
+  const bool set_up = edited.has_value();
+  if (edited)
+    m_last_edited = std::move(*edited);
   std::u16string tag;
-  const std::vector<u8> read = ReadOwnControls(m, mine->port, mine->name, &m_last_worn, &tag);
-  return m_watch.Next(read.empty() ? read : Sanitized(read), tag, own, IsDefaultProfile(m, read));
+  const std::vector<u8> read =
+      ReadOwnControls(m, mine->port, mine->name, &m_last_worn, &tag, &m_last_edited);
+  // A tag they just set up to the game's defaults (tap jump back on) is their choice, not a switch
+  // to a tag at the defaults.
+  return m_watch.Next(read.empty() ? read : Sanitized(read), tag, own,
+                      !set_up && IsDefaultProfile(m, read));
 }
 
 std::optional<std::vector<u8>> NameTagsFrame(GuestMemory& m,

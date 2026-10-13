@@ -2689,6 +2689,361 @@ TEST(OrcaUXNameTags, ControlsSavedInTheGamesMenusArePublishedThere)
   }
 }
 
+TEST(OrcaUXNameTags, InARoomATagSavedInTheGamesMenusKeepsWhatWasSaved)
+{
+  // A friends room: both ports carry the controls they joined with. Port 1 (ADA) goes to Options >
+  // Controls in the room and saves tap jump back on, with Z as jump. The next character select
+  // starts with every port wearing no tag (rc2 runs: area +0x1C8 = 0xFFFFFFFF on entry).
+  std::array<u8, 0x2D> cy_layout = FakeBrawl::CONTROLS;
+  cy_layout[3] = 0x02;  // GameCube X: jump
+  const std::vector<u8> cy = Profile(1, cy_layout);
+  const std::vector<u8> ada = Profile(0, CustomLayout());
+  const auto room = [&](bool ada_remote) {
+    return std::vector<Orca::Events::PortInfo>{{0, "cy", ada_remote ? false : true, cy},
+                                               {1, "ada", ada_remote, ada}};
+  };
+  const auto saved_in_room = [](FakeBrawl& m, int slot) {
+    m.Write8(FakeBrawl::Tag(slot) + 0x0C, 1);          // rumble on
+    m.Write8(FakeBrawl::Tag(slot) + 0x14 + 2, 0x02);   // Z: jump
+    m.Write8(FakeBrawl::Tag(slot) + 0x14 + 11, 0x81);  // tap jump on, and the game's Save bit
+  };
+  const auto next_character_select = [](FakeBrawl& m) {
+    m.W32(FakeBrawl::Area(0) + 0x1C8, 0xFFFFFFFF);
+    m.W32(FakeBrawl::Area(1) + 0x1C8, 0xFFFFFFFF);
+  };
+  std::array<FakeBrawl, 2> machines;
+  for (size_t i = 0; i < machines.size(); ++i)
+  {
+    FakeBrawl& m = machines[i];
+    m.Join(0);
+    m.Join(1);
+    ASSERT_EQ(ApplyNameTags(m, room(i == 0)), 2);
+    const int slot = m.NameId(1);
+    ASSERT_EQ(m.TagName(slot), u"ADA");
+    EXPECT_EQ(TagLayout(m, slot), CustomLayout());
+    saved_in_room(m, slot);
+    std::array<u8, 0x2D> edited = CustomLayout();
+    edited[2] = 0x02;
+    edited[11] = 0x81;
+    ASSERT_EQ(TagLayout(m, slot), edited);
+    // Before: the controls ADA joined with went back into the tag here, so the edit was gone.
+    next_character_select(m);
+    EXPECT_EQ(ApplyNameTags(m, room(i == 0)), 2);
+    EXPECT_EQ(m.NameId(1), slot);
+    EXPECT_EQ(TagLayout(m, slot), edited);
+    // Rumble too: nothing of the controls they joined with goes back in.
+    EXPECT_EQ(m.Read8(FakeBrawl::Tag(slot) + 0x0C), 1);
+    // And on every later character select of the room.
+    next_character_select(m);
+    ApplyNameTags(m, room(i == 0));
+    EXPECT_EQ(TagLayout(m, slot), edited);
+    // Port 0 never saved its tag: it keeps getting its own controls.
+    EXPECT_EQ(TagLayout(m, m.NameId(0)), cy_layout);
+  }
+  // Whoever is remote on each machine, the same bytes.
+  EXPECT_EQ(machines[0].bytes, machines[1].bytes);
+  {
+    // Alone nothing changes: the reader made the edit the port's own controls, and a profile the
+    // app sends later (another device) still goes into the tag at the next character select.
+    FakeBrawl m;
+    m.Join(1);
+    const std::vector<Orca::Events::PortInfo> solo{{1, "ada", false, ada}};
+    ASSERT_EQ(ApplyNameTags(m, solo), 1);
+    const int slot = m.NameId(1);
+    saved_in_room(m, slot);
+    m.W32(FakeBrawl::Area(1) + 0x1C8, 0xFFFFFFFF);
+    ApplyNameTags(m, solo);
+    std::array<u8, 0x2D> written = CustomLayout();
+    written[11] = 0x01;  // the profile's tap jump off, the game's Save bit kept
+    EXPECT_EQ(TagLayout(m, slot), written);
+    EXPECT_EQ(m.Read8(FakeBrawl::Tag(slot) + 0x0C), 0);
+  }
+  {
+    // In a room, a tag of the name that was never saved in the game (a friend back in the host's
+    // game after changing their controls elsewhere) still gets the controls they joined with.
+    FakeBrawl m;
+    GameMadeTag(m, 0, u"ADA");
+    m.Write8(FakeBrawl::Tag(0) + 0x14 + 6, 0x03);
+    m.Join(0);
+    m.Join(1);
+    ApplyNameTags(m, room(true));
+    EXPECT_EQ(m.NameId(1), 0);
+    EXPECT_EQ(TagLayout(m, 0), CustomLayout());
+  }
+  {
+    // Two names that make one tag (sandbox-ada, sandbox-bo: SANDB and port 0's variant SAND1): port 0
+    // saved SANDB in the room, then port 1 joins the next character select first and wears SANDB.
+    // It plays with its own controls, never port 0's saved ones.
+    const std::vector<u8> bo = Profile(1, cy_layout);
+    const std::vector<Orca::Events::PortInfo> pair{{0, "sandbox-ada", false, ada},
+                                                   {1, "sandbox-bo", true, bo}};
+    FakeBrawl m;
+    m.Join(0);
+    m.Join(1);
+    ASSERT_EQ(ApplyNameTags(m, pair), 2);
+    const int sandb = m.NameId(0);
+    ASSERT_EQ(m.TagName(sandb), u"SANDB");
+    saved_in_room(m, sandb);
+    next_character_select(m);
+    m.Join(1);
+    m.W32(FakeBrawl::Area(0) + 0x1B4, 0);  // port 0 not joined yet
+    ApplyNameTags(m, pair);
+    ASSERT_EQ(m.NameId(1), sandb);
+    std::array<u8, 0x2D> bo_in_saved = cy_layout;
+    bo_in_saved[11] |= 0x01;  // the game's Save bit stays; the rest is port 1's own
+    EXPECT_EQ(TagLayout(m, sandb), bo_in_saved);
+    m.Join(0);
+    ApplyNameTags(m, pair);
+    ASSERT_EQ(m.TagName(m.NameId(0)), u"SAND1");
+    EXPECT_EQ(TagLayout(m, m.NameId(0)), CustomLayout());
+  }
+}
+
+namespace
+{
+// Puts scene `name` on (Options > Controls' page is "scButton", the main menu "muMenuMain"): its
+// name at a spare address, the scene's name pointer at it.
+void OnScene(FakeBrawl& m, const char* name)
+{
+  constexpr u32 at = 0x806ff400;
+  for (size_t i = 0; i <= std::strlen(name); ++i)
+    m.bytes[at + static_cast<u32>(i)] = static_cast<u8>(name[i]);
+  m.W32(FakeBrawl::SCENE, at);
+}
+// Sets the custom layout (CustomLayout) in tag `slot` as the game's Controls page saves it: the
+// GameCube flag byte with the page's Save bit.
+void SavedCustom(FakeBrawl& m, int slot)
+{
+  for (u32 i = 0; i < 0x2D; ++i)
+    m.Write8(FakeBrawl::Tag(slot) + 0x14 + i, CustomLayout()[i]);
+  m.Write8(FakeBrawl::Tag(slot) + 0x14 + 11, 0x01);
+}
+}  // namespace
+
+TEST(OrcaUXNameTags, RumbleWiiRemoteAndClassicEditsDoNotNeedTheGameCubeSaveBitToBeRead)
+{
+  // Synthetic menu/CSS writes: these verify the reader, not which bits a game's editor sets.
+  // The latter needs a real Brawl/Project+ session.
+  struct Edit
+  {
+    const char* name;
+    u32 offset;
+    size_t profile_byte;
+    u8 value;
+  };
+  for (const Edit edit : {Edit{"rumble", 0x0C, 0, 0},
+                          Edit{"Wii Remote", 0x14 + 0x0C, 1 + 0x0C, 0x02},
+                          Edit{"Classic", 0x14 + 0x20, 1 + 0x20, 0x02}})
+  {
+    SCOPED_TRACE(edit.name);
+    for (const bool css : {false, true})
+    {
+      SCOPED_TRACE(css ? "worn CSS tag" : "Options Controls page");
+      for (const bool saved_bit : {false, true})
+      {
+        SCOPED_TRACE(saved_bit);
+        FakeBrawl m(css ? "scSelctCharacter" : "scButton");
+        GameMadeTag(m, 0, Typed(u"MINE"));
+        if (css)
+        {
+          m.Join(0);
+          Wear(m, 0, 0);
+        }
+        const std::vector<u8> own = Profile(1, FakeBrawl::CONTROLS);
+        const std::vector<Orca::Events::PortInfo> ports{{0, "ada", false, own}};
+        OwnControlsReader reader;
+        EXPECT_FALSE(reader.Read(m, ports, own, 0));
+        m.Write8(FakeBrawl::Tag(0) + edit.offset, edit.value);
+        if (saved_bit)
+          m.Write8(FakeBrawl::Tag(0) + 0x14 + 11, 0x81);
+        std::vector<u8> want = own;
+        want[edit.profile_byte] = edit.value;
+        m.written.clear();
+        m.recording = true;
+        const auto changed = reader.Read(m, ports, own, 0);
+        ASSERT_TRUE(changed);
+        EXPECT_EQ(*changed, want);
+        EXPECT_TRUE(ControlsValid(*changed));
+        EXPECT_FALSE(reader.Read(m, ports, want, 0));
+        EXPECT_TRUE(m.written.empty());
+      }
+    }
+  }
+}
+
+TEST(OrcaUXNameTags, RumbleWiiRemoteAndClassicRoomEditsKeepOnlyTagsWithTheSaveBit)
+{
+  for (const u32 offset : {0x0Cu, 0x14u + 0x0C, 0x14u + 0x20})
+  {
+    SCOPED_TRACE(offset);
+    for (const bool saved_bit : {false, true})
+    {
+      SCOPED_TRACE(saved_bit);
+      std::array<FakeBrawl, 2> machines;
+      for (size_t i = 0; i < machines.size(); ++i)
+      {
+        FakeBrawl& m = machines[i];
+        const auto own = Profile(1, FakeBrawl::CONTROLS);
+        const std::vector<Orca::Events::PortInfo> ports{{0, "ada", i == 0, own},
+                                                       {1, "cy", i != 0, own}};
+        m.Join(0);
+        m.Join(1);
+        ASSERT_EQ(ApplyNameTags(m, ports), 2);
+        const int slot = m.NameId(0);
+        m.Write8(FakeBrawl::Tag(slot) + offset, offset == 0x0C ? 0 : 0x02);
+        if (saved_bit)
+          m.Write8(FakeBrawl::Tag(slot) + 0x14 + 11, 0x81);
+        const auto edited_layout = TagLayout(m, slot);
+        const u8 edited_rumble = m.Read8(FakeBrawl::Tag(slot) + 0x0C);
+        Wear(m, 0, -1);
+        Wear(m, 1, -1);
+        ASSERT_EQ(ApplyNameTags(m, ports), 2);
+        EXPECT_EQ(m.NameId(0), slot);
+        EXPECT_EQ(TagLayout(m, slot), saved_bit ? edited_layout : FakeBrawl::CONTROLS);
+        EXPECT_EQ(m.Read8(FakeBrawl::Tag(slot) + 0x0C), saved_bit ? edited_rumble : 1);
+      }
+      EXPECT_EQ(machines[0].bytes, machines[1].bytes);
+    }
+  }
+}
+
+TEST(OrcaUXNameTags, ATemplateWithTheSaveBitDoesNotMakeNewRoomTagsReadAsEdited)
+{
+  FakeBrawl m;
+  // A variant whose default template already contains the bit must still receive carried controls.
+  m.Write8(0x80406938 + 11, 0x81);
+  const auto custom = Profile(0, CustomLayout());
+  const std::vector<Orca::Events::PortInfo> ports{{0, "ada", false, custom},
+                                                 {1, "cy", true, custom}};
+  m.Join(0);
+  m.Join(1);
+  ASSERT_EQ(ApplyNameTags(m, ports), 2);
+  auto want = CustomLayout();
+  want[11] |= 0x01;
+  for (const int port : {0, 1})
+  {
+    EXPECT_EQ(TagLayout(m, m.NameId(port)), want);
+    EXPECT_EQ(m.Read8(FakeBrawl::Tag(m.NameId(port)) + 0x0C), 0);
+  }
+}
+
+TEST(OrcaUXNameTags, ButtonsSetOnTheControlsPageAreThePlayersOwnWhateverTheTagIsCalled)
+{
+  const std::vector<Orca::Events::PortInfo> ports{{0, "sandbox-ada", false, {}}};
+  {
+    // The players' flow (comments 10-09..10-11): they wore Orca's SANDB on a character select,
+    // then in Options > Controls made a tag of another name, MINE, set its buttons and saved, and
+    // went online. Through 0.3.40 only SANDB was read, so MINE's buttons were never kept, never
+    // carried into a room, and gone after a restart.
+    FakeBrawl m;
+    m.Join(0);
+    OwnControlsReader reader;
+    EXPECT_FALSE(NameTagsFrame(m, ports, ports, &reader, {}, 0));
+    ASSERT_EQ(m.TagName(m.NameId(0)), u"SANDB");
+    ASSERT_EQ(m.NameId(0), 0);
+    OnScene(m, "muMenuMain");
+    GameMadeTag(m, 1, Typed(u"MINE"));
+    EXPECT_FALSE(NameTagsFrame(m, ports, ports, &reader, {}, 0));  // made at the defaults
+    OnScene(m, "scButton");
+    EXPECT_FALSE(NameTagsFrame(m, ports, ports, &reader, {}, 0));  // the page opens
+    // A Save that changes nothing the controls play (only the page's Save bit) is no edit.
+    m.Write8(FakeBrawl::Tag(1) + 0x14 + 11, 0x81);
+    EXPECT_FALSE(NameTagsFrame(m, ports, ports, &reader, {}, 0));
+    SavedCustom(m, 1);
+    const std::optional<std::vector<u8>> edited = NameTagsFrame(m, ports, ports, &reader, {}, 0);
+    ASSERT_TRUE(edited);
+    EXPECT_EQ(*edited, Profile(1, CustomLayout()));
+    EXPECT_TRUE(ControlsValid(*edited));
+    // Back on the main menu: still that tag, nothing more to publish.
+    OnScene(m, "muMenuMain");
+    EXPECT_FALSE(NameTagsFrame(m, ports, ports, &reader, *edited, 0));
+    EXPECT_FALSE(NameTagsFrame(m, ports, ports, &reader, *edited, 0));
+    // The next character select (here alone; a room carries the same profile): Orca's SANDB gets
+    // what they set, and MINE stays as they saved it. Nothing is published there.
+    m.W32(FakeBrawl::SCENE, FakeBrawl::NAME);
+    m.W32(FakeBrawl::Area(0) + 0x1C8, 0xFFFFFFFF);  // joined again
+    const std::vector<Orca::Events::PortInfo> now{{0, "sandbox-ada", false, *edited}};
+    EXPECT_FALSE(NameTagsFrame(m, now, now, &reader, *edited, 0));
+    EXPECT_EQ(m.NameId(0), 0);
+    EXPECT_EQ(TagLayout(m, 0), CustomLayout());
+    EXPECT_EQ(m.Read8(FakeBrawl::Tag(1) + 0x14 + 11), 0x01);
+    // Off the character select again, the tag they wore is read, and it holds the same.
+    OnScene(m, "muMenuMain");
+    EXPECT_FALSE(NameTagsFrame(m, now, now, &reader, *edited, 0));
+  }
+  {
+    // Making, renaming or deleting a tag on the way is no edit; the reader never writes.
+    FakeBrawl m("scButton");
+    GameMadeTag(m, 0, Typed(u"SANDB"));
+    GameMadeTag(m, 1, Typed(u"OLD"));
+    SavedCustom(m, 1);
+    OwnControlsReader reader;
+    const auto read = [&] {
+      m.written.clear();
+      m.recording = true;
+      std::optional<std::vector<u8>> got = reader.Read(m, ports, {}, 0);
+      m.recording = false;
+      EXPECT_TRUE(m.written.empty());
+      return got;
+    };
+    EXPECT_FALSE(read());
+    m.SetTag(1, u"");                    // deleted
+    GameMadeTag(m, 2, Typed(u"NEW"));    // made
+    SavedCustom(m, 2);
+    EXPECT_FALSE(read());
+    m.SetTag(2, Typed(u"NEWER"));        // renamed
+    m.Write8(FakeBrawl::Tag(2) + 0x14 + 2, 0x02);
+    EXPECT_FALSE(read());
+    // The same tag with other buttons is one.
+    m.Write8(FakeBrawl::Tag(2) + 0x14 + 3, 0x02);
+    const std::optional<std::vector<u8>> edited = read();
+    ASSERT_TRUE(edited);
+    EXPECT_EQ((*edited)[1 + 3], 0x02);
+  }
+  {
+    // A write that lands as the page closes is still seen, once; then the page is no longer
+    // watched (later changes elsewhere are Orca's or the game's, not the player's set-up).
+    FakeBrawl m("scButton");
+    GameMadeTag(m, 0, Typed(u"SANDB"));
+    GameMadeTag(m, 5, Typed(u"MINE"));
+    OwnControlsReader reader;
+    EXPECT_FALSE(reader.Read(m, ports, {}, 0));
+    OnScene(m, "muMenuMain");
+    SavedCustom(m, 5);
+    const std::optional<std::vector<u8>> edited = reader.Read(m, ports, {}, 0);
+    ASSERT_TRUE(edited);
+    EXPECT_EQ(*edited, Profile(1, CustomLayout()));
+    // Off the page, another tag changing is no set-up: MINE is still the one read.
+    m.Write8(FakeBrawl::Tag(0) + 0x14 + 2, 0x02);
+    EXPECT_FALSE(reader.Read(m, ports, *edited, 0));
+    EXPECT_FALSE(reader.Read(m, ports, *edited, 0));
+    // A resync forgets it (the tag may be someone else's now): what is read then is no change.
+    m.Write8(FakeBrawl::Tag(5) + 0x14 + 4, 0x02);
+    EXPECT_FALSE(reader.Read(m, ports, *edited, 1));
+  }
+  // Setting a tag up back to the game's defaults (tap jump on again) is their choice too, even
+  // though the reader switches to that tag at the defaults. Detect it with or without a Save bit.
+  for (const bool saved_bit : {false, true})
+  {
+    SCOPED_TRACE(saved_bit);
+    FakeBrawl m("scButton");
+    GameMadeTag(m, 0, Typed(u"SANDB"));
+    SavedCustom(m, 0);
+    GameMadeTag(m, 1, Typed(u"MINE"));
+    SavedCustom(m, 1);
+    const std::vector<u8> own = Profile(1, CustomLayout());
+    OwnControlsReader reader;
+    EXPECT_FALSE(reader.Read(m, ports, own, 0));
+    for (u32 i = 0; i < 0x2D; ++i)
+      m.Write8(FakeBrawl::Tag(1) + 0x14 + i, FakeBrawl::CONTROLS[i]);
+    if (saved_bit)
+      m.Write8(FakeBrawl::Tag(1) + 0x14 + 11, 0x81);
+    const std::optional<std::vector<u8>> edited = reader.Read(m, ports, own, 0);
+    ASSERT_TRUE(edited);
+    EXPECT_EQ(*edited, Profile(1, FakeBrawl::CONTROLS));
+  }
+}
+
 TEST(OrcaUXNameTags, UnmappedPointersWriteNothing)
 {
   {

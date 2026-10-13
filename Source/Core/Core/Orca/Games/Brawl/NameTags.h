@@ -78,7 +78,8 @@ constexpr u32 CONTROLS_PROFILE_SIZE = 1 + CONTROLS_LAYOUT_SIZE;
 // One frame's writes for these ports. Returns how many ports got a tag (a worn default tag given
 // the port's controls is not counted). Profile bytes are clamped to values the game's own menus
 // could set (rumble 0 or 1, the flag bytes' own bits only, actions up to 0xE), else the game's
-// default, since profiles come from other machines.
+// default, since profiles come from other machines. With more than one port (a room), a tag the
+// player saved in the game's Options > Controls keeps what they saved for the rest of the room.
 int ApplyNameTags(GuestMemory& memory, const std::vector<Events::PortInfo>& ports);
 
 // A profile as text (lowercase hex, 92 characters) and back. Parsing refuses any other size, and
@@ -88,12 +89,35 @@ std::optional<std::vector<u8>> ParseControlsHex(std::string_view hex);
 bool ControlsValid(const std::vector<u8>& profile);
 
 // This player's own controls, read from their own save, to carry into an online game. Uses the tag
-// `port` wears on the character select, else the tag named by `last_worn` (kept by the caller),
-// else the tag that reads as `own_name` (one they typed in the game first). A `last_worn` that
-// reads as `own_name` is looked up as `own_name`. Empty means the game's defaults. `read_tag`, if
-// given, gets the name of the tag read (empty when none).
+// `port` wears on the character select (which clears `last_edited`), else the tag named exactly by
+// `last_edited` (the one they last set up on the game's Controls page, kept by the caller), else the
+// tag named by `last_worn` (kept by the caller), else the tag that reads as `own_name` (one they
+// typed in the game first). A `last_worn` that reads as `own_name` is looked up as `own_name`.
+// Empty means the game's defaults. `read_tag`, if given, gets the name of the tag read (empty when
+// none).
 std::vector<u8> ReadOwnControls(const GuestMemory& memory, int port, std::string_view own_name,
-                                std::u16string* last_worn, std::u16string* read_tag = nullptr);
+                                std::u16string* last_worn, std::u16string* read_tag = nullptr,
+                                std::u16string* last_edited = nullptr);
+
+// Which tag the player sets up on the game's own Controls page (scButton: Options > Controls, a
+// tag, then its controller's page). The page writes into the save's tag table, so the tag whose
+// controls change there (same slot, same name) is the one they set up, whatever its name. Read-only.
+class ControlsPageEdits
+{
+public:
+  // One frame: the name of the tag whose controls changed on the page since the frame before
+  // (the page's first frame is the reference; the first frame after it is its last look).
+  std::optional<std::u16string> Next(const GuestMemory& memory);
+
+private:
+  struct Seen
+  {
+    std::u16string name;
+    std::vector<u8> profile;
+  };
+  // Every tag as last seen on the page; empty while not on it.
+  std::vector<Seen> m_seen;
+};
 
 // Which reads of the player's own tag are the player's own changes. A read that only shows what
 // Orca put in the tag, a save that isn't this player's (after a resync, or before the app's
@@ -117,7 +141,8 @@ private:
 };
 
 // The frame hook's reader of this player's own controls: the tag their port wears (ReadOwnControls,
-// remembering the tag they last wore) through an OwnControlsWatch.
+// remembering the tag they last wore and the one they last set up on the Controls page) through an
+// OwnControlsWatch.
 class OwnControlsReader
 {
 public:
@@ -132,6 +157,8 @@ public:
 
 private:
   std::u16string m_last_worn;
+  std::u16string m_last_edited;
+  ControlsPageEdits m_edits;
   OwnControlsWatch m_watch;
   u64 m_resyncs = 0;
   bool m_rebase = false;
