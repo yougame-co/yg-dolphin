@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <optional>
 #include <span>
@@ -18,9 +19,12 @@
 #include <xxh3.h>
 
 #include "Common/FileUtil.h"
+#include "Common/CommonPaths.h"
 #include "Common/IOFile.h"
 #include "Common/Version.h"
 #include "Core/ConfigManager.h"
+#include "Core/Config/MainSettings.h"
+#include "Core/Config/SessionSettings.h"
 #include "Core/Orca/Mod.h"
 #include "Core/Orca/Music.h"
 #include "Core/Orca/Profile.h"
@@ -1556,4 +1560,53 @@ TEST(OrcaMod, NoOriginWithdrawsOnlineForOnlyThisBoot)
   Orca::Status::SetAppCaps("");
   SetEnv("ORCA_SESSION", "");
   Orca::SetActiveProfile(std::nullopt);
+}
+
+// Pin the complete legacy serialization, including absent INIs, per-profile settings and the
+// engine/game UX suffix. Only the build revision is normalized: commits intentionally change it.
+TEST(OrcaMod, GoldenLegacyCompatibilityKey)
+{
+  const std::string dir = File::CreateTempDir();
+  ASSERT_FALSE(dir.empty());
+  const std::string old_disc = Orca::GetEnv("ORCA_DISC_SHA1");
+  const std::string old_session = Orca::GetEnv("ORCA_SESSION");
+  const int old_ux = Orca::Events::UXCompatVersion();
+  const u64 old_save = Orca::GetSeedSaveHash();
+  const auto done = [&] {
+    Orca::SetActiveProfile(std::nullopt);
+    Orca::Engine::SetModule(nullptr);
+    Orca::Events::SetUXCompatVersion(old_ux);
+    Orca::SetSeedSaveHash(old_save);
+    Config::Shutdown();
+    SetEnv("ORCA_DISC_SHA1", old_disc);
+    SetEnv("ORCA_SESSION", old_session);
+    File::DeleteDirRecursively(dir);
+  };
+  struct Cleanup { std::function<void()> run; ~Cleanup() { run(); } } cleanup{done};
+  File::SetUserPath(D_USER_IDX, dir + "/user/");
+  ASSERT_TRUE(File::CreateFullPath(dir + "/user/GameSettings/RSBE01.ini"));
+  ASSERT_TRUE(File::WriteStringToFile(dir + "/user/GameSettings/RSBE01.ini",
+                                    "fixed local game settings\n"));
+  SetEnv("ORCA_SESSION", "0");
+  SetEnv("ORCA_DISC_SHA1", "0123456789abcdef0123456789abcdef01234567");
+  Config::Init();
+  std::string error;
+  const auto loaded = Orca::LoadProfileFrom(RepoPath("Data/Sys/"), "RSBE01", 2, &error);
+  ASSERT_TRUE(loaded) << error;
+  const auto& profile = *loaded;
+  Config::AddLayer(Orca::GenerateConfigLoader(profile));
+  // FMA support is a host input, so pin it for this portable fixture.
+  Config::Set(Config::LayerType::Netplay, Config::SESSION_USE_FMA, false);
+  Orca::SetActiveProfile(profile);
+  Orca::Engine::SetModule(&Orca::UX::Builtin());
+  Orca::Events::SetUXCompatVersion(Orca::UX::kCompatVersion);
+  Orca::SetSeedSaveHash(0x1122334455667788);
+  std::string parts = Orca::Online::CompatibilityKeyParts();
+  EXPECT_EQ(Orca::Online::CompatibilityKey(),
+            fmt::format("orca2:{:016x}", XXH3_64bits(parts.data(), parts.size())));
+  const std::string revision = Common::GetScmRevGitStr();
+  ASSERT_TRUE(parts.starts_with("orca|" + revision + "|"));
+  parts.replace(5, revision.size(), "fixture-engine-revision");
+  EXPECT_EQ(fmt::format("orca2:{:016x}", XXH3_64bits(parts.data(), parts.size())),
+            "orca2:395b59606b61d7e7");
 }
