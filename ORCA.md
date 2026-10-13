@@ -1986,8 +1986,8 @@ select's no-show timer. The builtin ones are `Orca/Games/Brawl/Rulesets/brawl-su
 (`Games/Brawl/Rulesets.*`).
 
 Every ruleset is read the same way (`Orca/Engine/Ruleset.*`): a strict JSON reader
-(`Engine/StrictJson.*`: one value, valid UTF-8, JSON's own number grammar, no duplicate keys, at
-most 16 KiB and 8 levels), then the one schema, `Tools/orca/mods/ruleset.schema.json`, compiled in
+(`Engine/StrictJson.*`: one value, valid UTF-8, JSON's own number grammar with only exact integers
+as written, no duplicate keys, at most 16 KiB and 8 levels), then the one schema, `Tools/orca/mods/ruleset.schema.json`, compiled in
 and interpreted by `Engine/Schema.*`, then the few rules a schema can't state (its `x-orca-rules`).
 Anything unknown, out of range or of the wrong type refuses the file; nothing is defaulted or
 clamped. The schema uses a small subset of JSON Schema in which every value is typed and bounded,
@@ -1998,7 +1998,8 @@ Orca can't drift: `Tools/orca/mods/ruleset-vectors.json` holds the cases both mu
 the reader is `Tools/orca/fuzz/build-ruleset-fuzz.sh`.
 
 Changing a builtin file changes what both games write, like a code change: it needs the hashlogs
-and, for a ruleset already played online, a compat bump. A pack can't carry a ruleset file yet (the
+and, for a ruleset already played online, a compat bump. A build whose builtin files don't load
+plays no ruleset at all (no locks, no queue or ranked caps), and logs why. A pack can't carry a ruleset file yet (the
 pack format names none).
 
 ## Stage select

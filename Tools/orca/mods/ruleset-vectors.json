@@ -1010,6 +1010,124 @@
       ]
     },
     {
+      "name": "a duplicate key spelled with an escape",
+      "ok": false,
+      "text_replace": [
+        "\"format\": 1,",
+        "\"format\": 1, \"form\\u0061t\": 1,"
+      ]
+    },
+    {
+      "name": "a lone surrogate in a key",
+      "ok": false,
+      "text_replace": [
+        "\"format\": 1,",
+        "\"format\": 1, \"\\ud800\": 1,"
+      ]
+    },
+    {
+      "name": "U+2028 and U+10FFFF in a name",
+      "ok": true,
+      "set": {
+        "/name": "Brawl 􏿿"
+      }
+    },
+    {
+      "name": "invalid UTF-8 (past U+10FFFF)",
+      "ok": false,
+      "text_hex_replace": [
+        "426174746c656669656c64",
+        "426174746c65f4908080656c64"
+      ]
+    },
+    {
+      "name": "an empty ledge characters list",
+      "ok": true,
+      "set": {
+        "/set/ledgeGrabLimit/characters": []
+      }
+    },
+    {
+      "name": "CR LF between tokens",
+      "ok": true,
+      "text_replace": [
+        "\"format\": 1,",
+        "\"format\": 1,\r\n"
+      ]
+    },
+    {
+      "name": "-0 is 0",
+      "ok": true,
+      "text_replace": [
+        "\"graceFrames\": 180",
+        "\"graceFrames\": -0"
+      ]
+    },
+    {
+      "name": "3E+1 is 30",
+      "ok": true,
+      "text_replace": [
+        "\"pickSeconds\": 30",
+        "\"pickSeconds\": 3E+1"
+      ]
+    },
+    {
+      "name": "0e-400 is 0",
+      "ok": true,
+      "text_replace": [
+        "\"graceFrames\": 180",
+        "\"graceFrames\": 0e-400"
+      ]
+    },
+    {
+      "name": "an underflowing number (not an exact integer)",
+      "ok": false,
+      "text_replace": [
+        "\"graceFrames\": 180",
+        "\"graceFrames\": 1e-400"
+      ]
+    },
+    {
+      "name": "a number that rounds to an integer as a double (not exact)",
+      "ok": false,
+      "text_replace": [
+        "\"pickSeconds\": 30",
+        "\"pickSeconds\": 30.000000000000001"
+      ]
+    },
+    {
+      "name": "a number just under an integer (not exact)",
+      "ok": false,
+      "text_replace": [
+        "\"pickSeconds\": 30",
+        "\"pickSeconds\": 29.99999999999999999"
+      ]
+    },
+    {
+      "name": "a 32-byte number",
+      "ok": true,
+      "text_replace": [
+        "\"pickSeconds\": 30",
+        "\"pickSeconds\": 30.00000000000000000000000000000"
+      ]
+    },
+    {
+      "name": "a 33-byte number",
+      "ok": false,
+      "text_replace": [
+        "\"pickSeconds\": 30",
+        "\"pickSeconds\": 30.000000000000000000000000000000"
+      ]
+    },
+    {
+      "name": "a 400-byte number",
+      "ok": false,
+      "text_replace": [
+        "\"pickSeconds\": 30",
+        "\"pickSeconds\": 30.0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+      ]
+    },
+    {
       "name": "a byte-order mark",
       "ok": false,
       "text_prepend_hex": "efbbbf"

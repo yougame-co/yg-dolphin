@@ -47,6 +47,12 @@ const Ranked::Ruleset& PPlus2024()
   return r;
 }
 
+bool Loaded()
+{
+  static const bool loaded = Brawl2025().id != 0 && PPlus2024().id != 0;
+  return loaded;
+}
+
 const Ranked::Ruleset* ByBlock(u8 block)
 {
   for (const Ranked::Ruleset* r : {&Brawl2025(), &PPlus2024()})

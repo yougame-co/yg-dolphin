@@ -10,13 +10,15 @@
 #include <picojson.h>
 
 // A strict JSON reader for game data files (Orca split S5: rulesets first). It accepts exactly what
-// the site's parseStrictJson (YouGame web/src/lib/orca-pack-validate.ts) accepts, so a file the site
-// takes is a file Orca takes:
+// the site's ruleset validator reads (YouGame web/src/lib/orca-ruleset-validate.ts: parseStrictJson
+// from orca-pack-validate.ts plus its number rule), so a file the site takes is a file Orca takes:
 //   - one RFC 8259 value and nothing after it but space, tab, CR and LF;
 //   - the whole text valid UTF-8, strings without raw control characters, \u escapes with paired
 //     surrogates only;
-//   - numbers in JSON's grammar (no leading zeros, no "1.", no "+1"), kept as doubles as picojson
-//     does (exact up to 2^53);
+//   - numbers in JSON's grammar (no leading zeros, no "1.", no "+1"), at most 32 bytes, and only
+//     exact integers of magnitude at most 2^53 - 1 as written ("30.0" and "3e1" are 30; "0.5",
+//     "1e-400" and "1.0000000000000001" are refused): every number a data schema takes is an
+//     integer, and no host's decimal conversion decides a value;
 //   - no key twice in one object;
 //   - at most `max_depth` levels of values (the root is level 1, as the site counts), and at most
 //     `max_bytes` bytes, so recursion and memory are bounded before anything is read.

@@ -65,7 +65,7 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
   Require(!r->slug.empty() && r->slug.size() <= 32 && !r->name.empty() && r->name.size() <= 48);
   // Reading is a pure function of the text.
   const auto again = Orca::Engine::ReadRuleset(text, &error);
-  Require(again && again->stage_names == r->stage_names && again->ledge == r->ledge &&
-          again->starters == r->starters && again->css_ready_seconds == r->css_ready_seconds);
+  Require(again && *again == *r);
+  Require(r->ledge.character_count <= 4);
   return 0;
 }

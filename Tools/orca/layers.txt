@@ -125,7 +125,7 @@ engine-sensitive  Source/Core/Core/Orca/UX/QueueApp.*     # S2: the queue identi
 # Three of them carry competitive policy until S2 splits it out: the queue's ready/timer/skip
 # machine, ranked stocks and minutes (RankedSet), and the winner and set result the room rates
 # (Results).
-game-logic        Source/Core/Core/Orca/Games/Brawl/{Queue,RankedSet,Results}.* review
+game-logic        Source/Core/Core/Orca/Games/Brawl/{Queue,RankedSet,Results,Rulesets}.* review
 
 # ---------------------------------------------------------------------------------------------
 # Rollback/: rollback core and test harness.
@@ -193,6 +193,7 @@ engine-sensitive  Tools/orca/layer*                       dev     # this map, la
 engine-sensitive  Tools/orca/forbidden-calls*             dev
 engine-sensitive  Tools/orca/{firewall*,test_firewall.py}  dev     # S2: include firewall + float rule
 engine-sensitive  Tools/orca/test_layers.py               dev
+engine-sensitive  Tools/orca/mods/ruleset-vectors.json    dev     # S5: the cases Orca and the site must agree on
 game-data         Tools/orca/inputs/**                    dev     # scripted pads for bf-*/pplus-*
 game-data         Tools/orca/textures/**                  dev     # label art generator
 engine            Tools/orca/textures/*.py                dev     # its code

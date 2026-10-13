@@ -202,7 +202,7 @@ public:
     if (const picojson::value* ref = Member(o, "$ref"))
     {
       if (in_def || root)
-        return where + ": no $ref here (a definition is one hop)";
+        return where + ": no $ref here (a definition holds none, so a $ref is one hop)";
       if (!ref->is<std::string>())
         return where + ": $ref must be a string";
       const std::string& r = ref->get<std::string>();
@@ -251,7 +251,7 @@ public:
         return where + ": an object node has additionalProperties false";
       for (const auto& [key, sub] : props->get<Object>())
       {
-        if (auto p = Node(sub, where + "/properties/" + key, false))
+        if (auto p = Node(sub, where + "/properties/" + key, in_def))
           return p;
       }
       if (const picojson::value* req = Member(o, "required"))
@@ -282,7 +282,7 @@ public:
       const picojson::value* items = Member(o, "items");
       if (!items)
         return where + ": an array node has items";
-      return Node(*items, where + "/items", false);
+      return Node(*items, where + "/items", in_def);
     }
     if (t == "integer")
     {

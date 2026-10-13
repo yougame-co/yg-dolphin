@@ -3,9 +3,7 @@
 
 #include "Core/Orca/Engine/StrictJson.h"
 
-#include <cmath>
-#include <locale>
-#include <sstream>
+#include <string>
 
 #include "Common/CommonTypes.h"
 
@@ -13,6 +11,9 @@ namespace Orca::Engine
 {
 namespace
 {
+// A number literal's longest spelling (the site's limit too).
+constexpr size_t MAX_NUMBER_BYTES = 32;
+
 class Reader
 {
 public:
@@ -352,13 +353,14 @@ private:
 
   static bool Digit(unsigned char c) { return c >= '0' && c <= '9'; }
 
-  // -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?, the site's grammar. A whole number of up to 15
-  // digits is converted exactly; anything else by the C++ library's decimal conversion in the
-  // classic locale (correctly rounded, as JavaScript's), never the host's locale.
+  // -?(0|[1-9][0-9]*)(\.[0-9]+)?([eE][+-]?[0-9]+)?, the site's grammar, at most
+  // MAX_NUMBER_BYTES long, and as written an exact integer of magnitude at most 2^53 - 1 ("30",
+  // "30.0", "3e1", "3000e-2", "-0"). Anything else ("0.5", "1e-400", "1.0000000000000001") is
+  // refused here, not rounded: the value never depends on a host's decimal conversion, and the
+  // site applies the same rule to the same text (orca-ruleset-validate.ts).
   bool Number(picojson::value* out)
   {
     const size_t start = m_pos;
-    bool simple = true;
     if (!AtEnd() && Peek() == '-')
       ++m_pos;
     if (AtEnd() || !Digit(Peek()))
@@ -374,49 +376,70 @@ private:
       while (!AtEnd() && Digit(Peek()))
         ++m_pos;
     }
+    const size_t int_end = m_pos;
+    size_t frac_begin = m_pos, frac_end = m_pos;
     if (!AtEnd() && Peek() == '.')
     {
-      simple = false;
       ++m_pos;
+      frac_begin = m_pos;
       if (AtEnd() || !Digit(Peek()))
         return Fail("bad number");
       while (!AtEnd() && Digit(Peek()))
         ++m_pos;
+      frac_end = m_pos;
     }
+    s64 exponent = 0;
     if (!AtEnd() && (Peek() == 'e' || Peek() == 'E'))
     {
-      simple = false;
       ++m_pos;
+      bool negative_exponent = false;
       if (!AtEnd() && (Peek() == '+' || Peek() == '-'))
+      {
+        negative_exponent = Peek() == '-';
         ++m_pos;
+      }
       if (AtEnd() || !Digit(Peek()))
         return Fail("bad number");
       while (!AtEnd() && Digit(Peek()))
+      {
+        if (exponent < 1000)
+          exponent = exponent * 10 + (Peek() - '0');
         ++m_pos;
+      }
+      if (negative_exponent)
+        exponent = -exponent;
     }
-    const std::string_view literal = m_text.substr(start, m_pos - start);
-    const bool negative = literal[0] == '-';
-    const std::string_view digits = literal.substr(negative ? 1 : 0);
-    double value;
-    if (simple && digits.size() <= 15)
+    if (m_pos - start > MAX_NUMBER_BYTES)
+      return Fail("number longer than " + std::to_string(MAX_NUMBER_BYTES) + " bytes");
+    const bool negative = m_text[start] == '-';
+    // The significant digits, int part then fraction, and the power of ten they are scaled by.
+    std::string digits(m_text.substr(negative ? start + 1 : start, int_end - (negative ? start + 1 : start)));
+    digits.append(m_text.substr(frac_begin, frac_end - frac_begin));
+    exponent -= static_cast<s64>(frac_end - frac_begin);
+    const size_t first = digits.find_first_not_of('0');
+    if (first == std::string::npos)
     {
-      u64 v = 0;
-      for (const char c : digits)
-        v = v * 10 + static_cast<u64>(c - '0');
-      value = static_cast<double>(v);
-      if (negative)
-        value = -value;
+      *out = picojson::value(negative ? -0.0 : 0.0);
+      return true;
     }
-    else
+    digits.erase(0, first);
+    while (digits.back() == '0')
     {
-      std::istringstream in{std::string(literal)};
-      in.imbue(std::locale::classic());
-      in >> value;
-      // Out of a double's range (JavaScript reads it as Infinity, which no schema takes).
-      if (in.fail() || !std::isfinite(value))
-        return Fail("number out of range");
+      digits.pop_back();
+      ++exponent;
     }
-    *out = picojson::value(value);
+    constexpr u64 MAX_SAFE = (u64{1} << 53) - 1;
+    if (exponent < 0 || static_cast<s64>(digits.size()) + exponent > 16)
+      return Fail("not an exact integer of at most 2^53 - 1");
+    u64 v = 0;
+    for (const char c : digits)
+      v = v * 10 + static_cast<u64>(c - '0');
+    for (s64 i = 0; i < exponent; ++i)
+      v *= 10;
+    if (v > MAX_SAFE)
+      return Fail("not an exact integer of at most 2^53 - 1");
+    const double value = static_cast<double>(v);
+    *out = picojson::value(negative ? -value : value);
     return true;
   }
 

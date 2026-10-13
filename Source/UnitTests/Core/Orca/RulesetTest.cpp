@@ -173,7 +173,9 @@ TEST(OrcaRuleset, SchemaListsTheInterpretersKeywords)
 // Every case of the shared vectors: Orca and the site agree on each.
 TEST(OrcaRuleset, Vectors)
 {
-  const picojson::value vectors = Json(ReadText("Tools/orca/mods/ruleset-vectors.json"));
+  // The vectors file holds non-integers on purpose (cases' "set" values), so picojson reads it.
+  picojson::value vectors;
+  ASSERT_EQ(picojson::parse(vectors, ReadText("Tools/orca/mods/ruleset-vectors.json")), "");
   // baseText is the builtin file, and base the same value.
   EXPECT_EQ(vectors.get("baseText").get<std::string>(),
             ReadText("Source/Core/Core/Orca/Games/Brawl/Rulesets/brawl-supernova-2025.json"));
@@ -197,7 +199,7 @@ TEST(OrcaRuleset, StrictJson)
     error.clear();
     return !ReadStrictJson(text, 1 << 16, depth, &error) && !error.empty();
   };
-  EXPECT_FALSE(refused(R"({"a": [1, 2.5, -0, 1e3, true, false, null, "\u00e9\ud83c\udfae"]})"));
+  EXPECT_FALSE(refused(R"({"a": [1, 2.0, -0, 1e3, true, false, null, "\u00e9\ud83c\udfae"]})"));
   EXPECT_TRUE(refused(R"({"a": 1, "a": 2})"));
   EXPECT_TRUE(refused("{\"a\": 1} x"));
   EXPECT_TRUE(refused("01"));
@@ -235,8 +237,16 @@ TEST(OrcaRuleset, StrictJson)
   EXPECT_EQ(n("3e1"), 30.0);
   EXPECT_EQ(n("3000e-2"), 30.0);
   EXPECT_EQ(n("-7"), -7.0);
-  EXPECT_EQ(n("9007199254740993"), 9007199254740992.0);
-  EXPECT_EQ(n("2.5"), 2.5);
+  EXPECT_EQ(n("9007199254740991"), 9007199254740991.0);
+  EXPECT_EQ(n("0e-400"), 0.0);
+  EXPECT_EQ(n("3E+1"), 30.0);
+  // Only exact integers within 2^53 - 1, as written, and at most 32 bytes: no host's decimal
+  // conversion decides anything.
+  for (const char* text : {"9007199254740992", "2.5", "1e-400", "1.0000000000000001",
+                           "0.99999999999999999", "1e16", "30.000000000000000000000000000000"})
+  {
+    EXPECT_TRUE(refused(text)) << text;
+  }
   // Escapes.
   EXPECT_EQ(ReadStrictJson(R"("\"\\\/\b\f\n\r\t\u0041\u00e9")", 64, 2, &error)->get<std::string>(),
             "\"\\/\b\f\n\r\tA\xC3\xA9");
@@ -305,9 +315,5 @@ TEST(OrcaRuleset, ReadingIsAPureFunction)
   ASSERT_TRUE(a) << error;
   const auto b = ReadRuleset(text, &error);
   ASSERT_TRUE(b);
-  EXPECT_EQ(a->slug, b->slug);
-  EXPECT_EQ(a->stage_names, b->stage_names);
-  EXPECT_EQ(a->stage_kinds, b->stage_kinds);
-  EXPECT_EQ(a->ledge, b->ledge);
-  EXPECT_EQ(a->game1_seconds, b->game1_seconds);
+  EXPECT_TRUE(*a == *b);
 }

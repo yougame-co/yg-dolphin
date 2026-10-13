@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <set>
+#include <vector>
 
 #include "Core/Orca/Engine/Schema.h"
 #include "Core/Orca/Engine/StrictJson.h"
@@ -55,7 +56,9 @@ const Compiled& Schema()
   return compiled;
 }
 
-// After the schema check every value below has its type and bounds.
+// After the schema check every value below has its type and bounds, and every key read is one
+// the schema requires (At() throws on a missing key: a schema edit that makes one optional must
+// read it with Find()).
 int Int(const picojson::value& v)
 {
   return static_cast<int>(v.get<double>());
@@ -100,6 +103,25 @@ std::optional<Ranked::Ruleset> ReadRuleset(std::string_view json, std::string* e
     return Fail(error, why);
   if (auto p = SchemaMismatch(compiled.schema, *doc))
     return Fail(error, *p);
+
+  // Timers in frames fit the 16-bit counters the stage flows and the match block keep, checked on
+  // the file's numbers before anything is narrowed (the schema's bounds already see to it; this
+  // holds if they are ever widened). The site checks the same.
+  {
+    const picojson::value& st = At(*doc, "steps");
+    const int grace = std::max(Int(At(st, "graceFrames")), Int(At(st, "casualGraceFrames")));
+    std::vector<int> seconds{Int(At(At(st, "later"), "seconds")), Int(At(st, "pickSeconds")),
+                             Int(At(st, "casualSeconds"))};
+    for (const picojson::value& g : At(st, "game1Seconds").get<Array>())
+      seconds.push_back(Int(g));
+    for (const int s : seconds)
+    {
+      if (s64{s} * 60 + grace > 0xFFFF)
+        return Fail(error, "/steps: a step's frames must fit 16 bits");
+    }
+    if (s64{Int(At(At(*doc, "css"), "readySeconds"))} * 60 > 0xFFFF)
+      return Fail(error, "/css/readySeconds: its frames must fit 16 bits");
+  }
 
   // The x-orca-rules a schema can't state.
   Ranked::Ruleset r;
@@ -188,17 +210,6 @@ std::optional<Ranked::Ruleset> ReadRuleset(std::string_view json, std::string* e
   }
   r.void_after_ties = static_cast<u8>(Int(At(set, "voidAfterTies")));
   r.css_ready_seconds = static_cast<u16>(Int(At(At(*doc, "css"), "readySeconds")));
-  // Timers in frames fit the 16-bit counters the stage flows and the match block keep (the
-  // schema's bounds already see to it; this holds if they are ever widened).
-  const u32 grace = std::max(r.grace_frames, r.casual_grace_frames);
-  for (const u16 seconds : {r.game1_seconds[0], r.game1_seconds[1], r.game1_seconds[2],
-                            r.later_seconds, r.pick_seconds, r.casual_seconds})
-  {
-    if (u32{seconds} * 60 + grace > 0xFFFF)
-      return Fail(error, "/steps: a step's frames must fit 16 bits");
-  }
-  if (u32{r.css_ready_seconds} * 60 > 0xFFFF)
-    return Fail(error, "/css/readySeconds: its frames must fit 16 bits");
   return r;
 }
 }  // namespace Orca::Engine

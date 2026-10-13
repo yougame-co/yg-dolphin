@@ -160,6 +160,7 @@ struct Ruleset
   bool SetWritesGameRules() const { return tiebreak; }
 
   StageMask All() const { return static_cast<StageMask>((1u << stage_count) - 1); }
+  bool operator==(const Ruleset&) const = default;
 };
 
 // MatchBlock's ruleset ids.

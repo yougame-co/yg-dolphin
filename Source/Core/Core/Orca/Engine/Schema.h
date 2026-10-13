@@ -20,7 +20,8 @@
 //     maxItems, minItems), integer (minimum and maximum, always), boolean, string (minLength and
 //     maxLength in UTF-8 bytes and an x-orca-charset, always; a pattern only as the charset's own
 //     spelling for other tools), or a node of strings given by enum;
-//   - $ref to #/$defs/<name> (one hop: a definition holds no $ref), description and title anywhere;
+//   - $ref to #/$defs/<name> (one hop: nothing inside a definition is a $ref), description and
+//     title anywhere;
 //   - x-orca-charset: "id" ([a-z0-9-], not starting with '-') or "text" (UTF-8, no control
 //     characters);
 //   - x-orca-indexOf "/a/b": an integer below the length of the array at that pointer of the same

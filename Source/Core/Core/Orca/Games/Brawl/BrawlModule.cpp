@@ -13,6 +13,7 @@
 #include "Core/Orca/Games/Brawl/CssTitle.h"
 #include "Core/Orca/Games/Brawl/MenuText.h"
 #include "Core/Orca/Games/Brawl/NameTags.h"
+#include "Core/Orca/Games/Brawl/Rulesets.h"
 #include "Core/Orca/Games/Brawl/NativeText.h"
 #include "Core/Orca/Games/Brawl/OnlineMenu.h"
 #include "Core/Orca/Games/Brawl/OnlineRules.h"
@@ -326,6 +327,9 @@ std::span<const Orca::Engine::Region> BrawlModule::Regions()
 
 Orca::Engine::Ruleset BrawlModule::ProfileRuleset()
 {
+  // A build whose ruleset files don't load plays none (Rulesets.h): fail closed.
+  if (!Rulesets::Loaded())
+    return Orca::Engine::Ruleset::None;
   const Orca::Engine::Manifest game = Describe();
   return BrawlGame::On(game) ? game.ruleset : Orca::Engine::Ruleset::None;
 }
