@@ -79,6 +79,8 @@ void OnBoundary(const Core::CPUThreadGuard& guard);
 
 // Whether the running scene is a match, for a game whose scenes Orca reads (Brawl rev 2 and the
 // launchers that boot it); nullopt while the scene can't be read, and for any other game.
+// Whether the active module can read this game's scenes for warm-up and host diagnostics.
+bool ScenesReadable();
 std::optional<bool> SceneIsMatch(const Core::CPUThreadGuard& guard);
 
 // The running scene, for the same games: its object and its name's address; nullopt while it

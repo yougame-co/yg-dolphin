@@ -170,8 +170,7 @@ public:
   virtual Verdicts& Results() = 0;
   virtual HeaderHost& Header() = 0;
   virtual MenuReads& Read() = 0;
-  // The builtin always has one (the session does not check for nullptr until S3 offers modules
-  // without a character select).
+  // Never null: modules without a character select return NoCss().
   virtual CssAdapter* Css() = 0;
   // This player's own controls, before a launch join's hello carries them (group F).
   virtual void LoadOwnControls() = 0;
@@ -188,7 +187,10 @@ public:
   virtual std::string SceneName(const Core::CPUThreadGuard& guard) = 0;
 };
 
-// The module the engine's hooks call. Set by UX::Init before the hooks are installed and cleared by
+// A character select adapter for modules that have none. Host-only, with no state or guest writes.
+CssAdapter& NoCss();
+
+// The module the engine's hooks call. Selected after the boot profile exists and cleared by
 // UX::Shutdown after they are removed; nullptr: the hooks do the engine's part only.
 void SetModule(Module* module);
 Module* ActiveModule();

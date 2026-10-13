@@ -5,6 +5,7 @@
 #include <array>
 #include <cstdlib>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <optional>
 #include <span>
@@ -18,9 +19,12 @@
 #include <xxh3.h>
 
 #include "Common/FileUtil.h"
+#include "Common/CommonPaths.h"
 #include "Common/IOFile.h"
 #include "Common/Version.h"
 #include "Core/ConfigManager.h"
+#include "Core/Config/MainSettings.h"
+#include "Core/Config/SessionSettings.h"
 #include "Core/Orca/Mod.h"
 #include "Core/Orca/Music.h"
 #include "Core/Orca/Profile.h"
@@ -1404,4 +1408,205 @@ TEST(OrcaMod, CapsWaitForTheGuards)
   EXPECT_TRUE(Orca::Status::CapsSettled());  // legacy: never waits
   SetEnv("ORCA_SESSION", session);
   File::DeleteDirRecursively(b.dir);
+}
+
+namespace
+{
+std::string WithOrigin(const std::string& origin, int format = 1,
+                       const picojson::object& extra = {})
+{
+  picojson::value root;
+  picojson::parse(root, BRAWL_MOD);
+  auto& object = root.get<picojson::object>();
+  object.erase("builtin");
+  object.erase("offers");
+  object.erase("bootNandFrame");
+  object["format"] = picojson::value(static_cast<double>(format));
+  if (format == 2)
+  {
+    object["listing"] = picojson::value("generic-game");
+    object["serial"] = picojson::value(1.0);
+  }
+  picojson::value decl;
+  EXPECT_EQ(picojson::parse(decl, origin), "");
+  object["origin"] = decl;
+  for (const auto& [key, value] : extra)
+    object[key] = value;
+  return root.serialize();
+}
+}
+
+TEST(OrcaMod, OriginAcceptedBoundsInBothFormats)
+{
+  for (const int format : {1, 2})
+  {
+    for (const u32 frame : {1u, 36000u})
+    {
+      std::string error;
+      const auto m = Orca::Mod::ParseManifest(
+          WithOrigin(fmt::format(R"({{"frame":{}}})", frame), format), &error);
+      ASSERT_TRUE(m) << error;
+      ASSERT_TRUE(m->origin);
+      EXPECT_EQ(m->origin->frame, frame);
+      EXPECT_EQ(m->origin->settle, 30u);
+      EXPECT_TRUE(m->origin->words.empty());
+    }
+    for (const std::string& address : {"0x80000000", "0x817FFFFC", "0x90000000", "0x93FFFFFC"})
+    {
+      for (const int settle : {1, 600})
+      {
+        std::string error;
+        const auto m = Orca::Mod::ParseManifest(WithOrigin(fmt::format(
+            R"({{"frame":1,"words":[{{"address":"{}","word":"0xFFFFFFFF"}}],"settle":{}}})",
+            address, settle), format), &error);
+        ASSERT_TRUE(m) << error;
+        EXPECT_EQ(m->origin->settle, settle);
+        ASSERT_EQ(m->origin->words.size(), 1u);
+        EXPECT_EQ(m->origin->words[0].word, 0xFFFFFFFFu);
+      }
+    }
+    EXPECT_FALSE(Refused(WithOrigin(R"({"frame":1,"words":[],"settle":1})", format)));
+    picojson::array words;
+    for (int i = 0; i < 8; ++i)
+      words.emplace_back(picojson::object{{"address", picojson::value(fmt::format("0x{:08x}", 0x80000000u + i * 4))},
+                                          {"word", picojson::value("0x00000000")}});
+    const picojson::object decl{{"frame", picojson::value(1.0)}, {"words", picojson::value(words)}};
+    EXPECT_FALSE(Refused(WithOrigin(picojson::value(decl).serialize(), format)));
+    words.push_back(words.back());
+    EXPECT_TRUE(Refused(WithOrigin(picojson::value(picojson::object{
+        {"frame", picojson::value(1.0)}, {"words", picojson::value(words)}}).serialize(), format)));
+  }
+}
+
+TEST(OrcaMod, OriginRefusesMalformedFields)
+{
+  for (const int format : {1, 2})
+  {
+    for (const char* decl : {"null", "[]", "1", "{}", R"({"frame":0})", R"({"frame":36001})",
+                             R"({"frame":-1})", R"({"frame":1.5})", R"({"frame":"1"})",
+                             R"({"frame":true})", R"({"frame":1,"ram":"x"})",
+                             R"({"frame":1,"words":null})", R"({"frame":1,"words":{}})",
+                             R"({"frame":1,"words":[[]]})", R"({"frame":1,"words":[{}]})",
+                             R"({"frame":1,"settle":1})", R"({"frame":1,"words":[],"settle":0})",
+                             R"({"frame":1,"words":[],"settle":601})",
+                             R"({"frame":1,"words":[],"settle":1.5})",
+                             R"({"frame":1,"words":[],"settle":"1"})",
+                             R"({"frame":1,"words":[{"address":"0x80000000","word":0}]})",
+                             R"({"frame":1,"words":[{"address":"0x80000000","word":"0x100000000"}]})",
+                             R"({"frame":1,"words":[{"address":"0x80000000","word":"0xzz"}]})",
+                             R"({"frame":1,"words":[{"address":"0x80000000","word":"0x0","x":1}]})",
+                             R"({"frame":1,"words":[{"address":"0x80000000","word":"0x0"},{"address":"0x80000000","word":"0x1"}]})"})
+      EXPECT_TRUE(Refused(WithOrigin(decl, format))) << decl;
+    for (const char* address : {"0x7FFFFFFC", "0x81800000", "0x80000002", "0x8FFFFFFC",
+                               "0x94000000", "0x90000001", "80000000", "0x180000000"})
+      EXPECT_TRUE(Refused(WithOrigin(fmt::format(
+          R"({{"frame":1,"words":[{{"address":"{}","word":"0x0"}}]}})", address), format))) << address;
+  }
+}
+
+TEST(OrcaMod, OriginFollowsBootFramesAndBuiltinVerdict)
+{
+  for (const int format : {1, 2})
+  {
+    for (const char* key : {"jitClearFrame", "bootNandFrame"})
+    {
+      for (const int boot : {9, 10, 11})
+      {
+        EXPECT_EQ(Refused(WithOrigin(R"({"frame":10})", format,
+            {{key, picojson::value(static_cast<double>(boot))}})), boot >= 10);
+      }
+    }
+    const picojson::object builtin{{"builtin", picojson::value("brawl-rev2")},
+                                   {"firstKeyframeFrame", picojson::value(600.0)}};
+    EXPECT_TRUE(Refused(WithOrigin(R"({"frame":599})", format, builtin)));
+    EXPECT_FALSE(Refused(WithOrigin(R"({"frame":600})", format, builtin)));
+    EXPECT_FALSE(Refused(WithOrigin(R"({"frame":601})", format, builtin)));
+  }
+}
+
+TEST(OrcaMod, OriginChangesOnlyThePacksTreeHash)
+{
+  const std::string before = WithOrigin(R"({"frame":1801})");
+  const std::string after = WithOrigin(R"({"frame":1802})");
+  const auto hash = [](const std::string& json) {
+    const std::vector<Orca::Mod::TreeFile> files{
+        {"mod.json", Orca::Mod::Sha256Hex(json), json.size()}};
+    return Orca::Mod::TreeHash(files);
+  };
+  EXPECT_NE(hash(before), hash(after));
+}
+
+TEST(OrcaMod, NoOriginWithdrawsOnlineForOnlyThisBoot)
+{
+  Orca::Profile profile;
+  profile.game_id = "GALE01";
+  profile.mod.emplace();
+  Orca::SetActiveProfile(profile);
+  SetEnv("ORCA_SESSION", "1");
+  Orca::Status::SetAppCaps("join host direct leave pause");
+  EXPECT_TRUE(Orca::Status::Cap("join"));
+  Orca::Status::WithdrawOnline();
+  EXPECT_FALSE(Orca::Status::Cap("join"));
+  EXPECT_FALSE(Orca::Status::Cap("host"));
+  EXPECT_FALSE(Orca::Status::Cap("direct"));
+  EXPECT_TRUE(Orca::Status::Cap("leave"));
+  Orca::Status::SetAppCaps("join host direct leave");
+  EXPECT_FALSE(Orca::Status::Cap("join"));
+  Orca::SetActiveProfile(profile);
+  Orca::Status::SetAppCaps("join host direct leave");
+  EXPECT_TRUE(Orca::Status::Cap("join"));
+  EXPECT_TRUE(Orca::Status::Cap("host"));
+  EXPECT_TRUE(Orca::Status::Cap("direct"));
+  Orca::Status::SetAppCaps("");
+  SetEnv("ORCA_SESSION", "");
+  Orca::SetActiveProfile(std::nullopt);
+}
+
+// Pin the complete legacy serialization, including absent INIs, per-profile settings and the
+// engine/game UX suffix. Only the build revision is normalized: commits intentionally change it.
+TEST(OrcaMod, GoldenLegacyCompatibilityKey)
+{
+  const std::string dir = File::CreateTempDir();
+  ASSERT_FALSE(dir.empty());
+  const std::string old_disc = Orca::GetEnv("ORCA_DISC_SHA1");
+  const std::string old_session = Orca::GetEnv("ORCA_SESSION");
+  const int old_ux = Orca::Events::UXCompatVersion();
+  const u64 old_save = Orca::GetSeedSaveHash();
+  const auto done = [&] {
+    Orca::SetActiveProfile(std::nullopt);
+    Orca::Engine::SetModule(nullptr);
+    Orca::Events::SetUXCompatVersion(old_ux);
+    Orca::SetSeedSaveHash(old_save);
+    Config::Shutdown();
+    SetEnv("ORCA_DISC_SHA1", old_disc);
+    SetEnv("ORCA_SESSION", old_session);
+    File::DeleteDirRecursively(dir);
+  };
+  struct Cleanup { std::function<void()> run; ~Cleanup() { run(); } } cleanup{done};
+  File::SetUserPath(D_USER_IDX, dir + "/user/");
+  ASSERT_TRUE(File::CreateFullPath(dir + "/user/GameSettings/RSBE01.ini"));
+  ASSERT_TRUE(File::WriteStringToFile(dir + "/user/GameSettings/RSBE01.ini",
+                                    "fixed local game settings\n"));
+  SetEnv("ORCA_SESSION", "0");
+  SetEnv("ORCA_DISC_SHA1", "0123456789abcdef0123456789abcdef01234567");
+  Config::Init();
+  std::string error;
+  const auto loaded = Orca::LoadProfileFrom(RepoPath("Data/Sys/"), "RSBE01", 2, &error);
+  ASSERT_TRUE(loaded) << error;
+  const auto& profile = *loaded;
+  Config::AddLayer(Orca::GenerateConfigLoader(profile));
+  // FMA support is a host input, so pin it for this portable fixture.
+  Config::Set(Config::LayerType::Netplay, Config::SESSION_USE_FMA, false);
+  Orca::SetActiveProfile(profile);
+  Orca::Engine::SetModule(&Orca::UX::Builtin());
+  Orca::Events::SetUXCompatVersion(Orca::UX::kCompatVersion);
+  Orca::SetSeedSaveHash(0x1122334455667788);
+  std::string parts = Orca::Online::CompatibilityKeyParts();
+  EXPECT_EQ(Orca::Online::CompatibilityKey(),
+            fmt::format("orca2:{:016x}", XXH3_64bits(parts.data(), parts.size())));
+  const std::string revision = Common::GetScmRevGitStr();
+  ASSERT_TRUE(parts.starts_with("orca|" + revision + "|"));
+  parts.replace(5, revision.size(), "fixture-engine-revision");
+  EXPECT_EQ(fmt::format("orca2:{:016x}", XXH3_64bits(parts.data(), parts.size())),
+            "orca2:395b59606b61d7e7");
 }

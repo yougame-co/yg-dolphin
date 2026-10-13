@@ -25,6 +25,7 @@
 #include "Common/IOFile.h"
 #include "Common/Logging/Log.h"
 #include "Core/Core.h"
+#include "Core/ConfigManager.h"
 #include "Core/HW/Memmap.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/UX/UX.h"
@@ -177,14 +178,6 @@ std::vector<u8> ReadWhole(const std::string& path)
   return bytes;
 }
 
-// A game whose scenes Orca can read: one the game module describes, Brawl rev 2 or a launcher
-// profile that boots it; in mod mode a builtin, guards or not (host-only: guards aren't needed to
-// read scenes for the warm-up's timing, and its blocks are hash-checked against RAM).
-bool KnownGame()
-{
-  return !Orca::UX::Game().Describe().id.empty();
-}
-
 // Whether the current scene is a match; nullopt while the scene can't be read (boot, transitions).
 std::optional<bool> InMatch(const Core::CPUThreadGuard& guard)
 {
@@ -320,7 +313,7 @@ bool State::Enabled()
   if (m_checked)
     return m_enabled;
   m_checked = true;
-  m_enabled = SessionActive() && KnownGame() && GetEnv("ORCA_JITWARM") != "0";
+  m_enabled = SessionActive() && ScenesReadable() && GetEnv("ORCA_JITWARM") != "0";
   if (const std::string budget = GetEnv("ORCA_JITWARM_BUDGET_US"); !budget.empty())
     m_budget_us = std::clamp(std::atoi(budget.c_str()), 0, 100'000);
   if (const std::string slow = GetEnv("ORCA_TEST_JITWARM_SLOW_US"); !slow.empty())
@@ -755,7 +748,7 @@ void State::Warm(const Core::CPUThreadGuard& guard)
 
 void State::OnBoundary(const Core::CPUThreadGuard& guard)
 {
-  if (!Enabled())
+  if (!ScenesReadable() || !Enabled())
     return;
   if (!m_load_started)
   {
@@ -998,7 +991,9 @@ std::vector<Block> Merge(std::vector<Block> known, const std::vector<bool>& seen
 
 void OnBlockFinalized(const JitBlock& block)
 {
-  GetState().OnBlockFinalized(block);
+  // Recording can still be armed from a previous boot in this process.
+  if (ScenesReadable())
+    GetState().OnBlockFinalized(block);
 }
 
 void OnBoundary(const Core::CPUThreadGuard& guard)
@@ -1006,16 +1001,23 @@ void OnBoundary(const Core::CPUThreadGuard& guard)
   GetState().OnBoundary(guard);
 }
 
+// Only modules that can read these scenes use Brawl's warm-up timing and diagnostics.
+bool ScenesReadable()
+{
+  const auto& running = SConfig::GetInstance();
+  return Orca::UX::Game().ScenesReadable(running.GetGameID(), running.GetRevision());
+}
+
 std::optional<bool> SceneIsMatch(const Core::CPUThreadGuard& guard)
 {
-  if (!KnownGame())
+  if (!ScenesReadable())
     return std::nullopt;
   return InMatch(guard);
 }
 
 std::optional<Scene> CurrentScene(const Core::CPUThreadGuard& guard)
 {
-  if (!KnownGame())
+  if (!ScenesReadable())
     return std::nullopt;
   const auto mapped = [&guard](u32 address) {
     return PowerPC::MMU::HostIsRAMAddress(guard, address);
@@ -1033,6 +1035,8 @@ std::optional<Scene> CurrentScene(const Core::CPUThreadGuard& guard)
 
 std::string SceneName(const Core::CPUThreadGuard& guard, u32 name)
 {
+  if (!ScenesReadable())
+    return {};
   std::string out;
   for (u32 i = 0; i < 31 && PowerPC::MMU::HostIsRAMAddress(guard, name + i); ++i)
   {

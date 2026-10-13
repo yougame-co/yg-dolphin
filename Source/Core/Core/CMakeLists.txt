@@ -584,6 +584,8 @@ add_library(core
   Orca/Games/Brawl/BrawlGame.h
   Orca/Games/Brawl/BrawlModule.cpp
   Orca/Games/Brawl/BrawlModule.h
+  Orca/Games/Generic/GenericModule.cpp
+  Orca/Games/Generic/GenericModule.h
   Orca/Games/Brawl/BrawlStages.h
   Orca/Games/Brawl/CharOrder.cpp
   Orca/Games/Brawl/CharOrder.h
@@ -926,6 +928,9 @@ foreach(orca_embed_src
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${orca_embed_src}")
 endforeach()
 target_include_directories(core PRIVATE "${ORCA_EMBED_DIR}")
+if(ORCA_BUNDLE_TRUST_TEST_KEY)
+  set_source_files_properties(Orca/UX/UX.cpp PROPERTIES COMPILE_DEFINITIONS ORCA_BUNDLE_TRUST_TEST_KEY)
+endif()
 # The SD image's SHA-256 (Bundle.cpp) uses CNG on Windows.
 if(WIN32)
   target_link_libraries(core PRIVATE bcrypt)

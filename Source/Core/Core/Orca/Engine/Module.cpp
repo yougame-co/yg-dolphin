@@ -4,16 +4,33 @@
 #include "Core/Orca/Engine/Module.h"
 
 #include <atomic>
+#include <cassert>
 
 namespace Orca::Engine
 {
 namespace
 {
 std::atomic<Module*> s_module{nullptr};
+
+class NullCss final : public CssAdapter
+{
+public:
+  void ArmOwnPick(const UX::QueueApp::Identity&) override {}
+  void DisarmOwnPick() override {}
+  bool OwnPickArmed() override { return false; }
+  std::optional<GCPadStatus> OwnPickPad() override { return std::nullopt; }
+};
 }  // namespace
+
+CssAdapter& NoCss()
+{
+  static NullCss s_css;
+  return s_css;
+}
 
 void SetModule(Module* module)
 {
+  assert(!module || module->Css());
   // Its writes are recorded against its regions from now on (record-only, Engine/Regions.h).
   if (module)
     SetWriteRegions(module->Id(), module->Regions());
@@ -24,7 +41,9 @@ void SetModule(Module* module)
 
 Module* ActiveModule()
 {
-  return s_module.load();
+  Module* module = s_module.load();
+  assert(!module || module->Css());
+  return module;
 }
 
 void MergeMasks(Rollback::InputGate::Masks& masks, const Rollback::InputGate::Masks& more)

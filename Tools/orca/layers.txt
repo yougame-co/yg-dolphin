@@ -102,6 +102,7 @@ engine            Source/Core/Core/Orca/Session/Events.*  # engine-to-game callb
 engine            Source/Core/Core/Orca/Policy/**         review
 # Future game modules (S2): Orca/Games/<game>/. Their build files pull code in: engine-sensitive.
 game-logic        Source/Core/Core/Orca/Games/**
+game-logic        Source/Core/Core/Orca/Games/Generic/**   # engine-only game module
 engine-sensitive  Source/Core/Core/Orca/Games/**/CMakeLists.txt
 engine-sensitive  Source/Core/Core/Orca/Games/**/*.cmake
 # S5: the builtin module's rulesets (stages, timers, clauses, ledge limits, set rules) are data.

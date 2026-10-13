@@ -25,6 +25,20 @@ namespace Core
 class System;
 }
 
+namespace Orca::Mod
+{
+struct Manifest;
+struct OriginDecl;
+}
+namespace Orca::Net
+{
+struct ReplayArchive;
+}
+namespace Orca::UX
+{
+class GuestMemory;
+}
+
 namespace Rollback::OnlineMatch
 {
 // Runs at each frame boundary. The first call joins the room; a joiner blocks here until it has
@@ -57,6 +71,7 @@ constexpr int KEYFRAME_FRESH_FRAMES = 30 * 60;
 constexpr int ORIGIN_SETTLE_FRAMES = 30;
 // A game whose main menu isn't built by then has no origin: it can't take or join players.
 constexpr int ORIGIN_DEADLINE = 6000;
+constexpr int ORIGIN_WORDS_WINDOW = 6000;
 // The pads of every frame before the origin.
 Orca::Net::Pads CanonicalBootPads();
 enum class OriginStep
@@ -68,6 +83,22 @@ enum class OriginStep
 // At the boundary of `frame`, before its hook: `menu_built_streak` frames in a row (up to the last)
 // showed the built main menu. The origin must come after the profile's JIT clear.
 OriginStep DecideOrigin(int frame, int menu_built_streak, std::optional<u32> jit_clear_frame);
+enum class OriginRule
+{
+  Menu,
+  Declared,
+  Frame0,
+  Failed,
+};
+OriginRule SelectOriginRule(const Orca::Mod::Manifest* manifest, bool menu_supported,
+                          bool guards_failed);
+OriginStep DecideDeclaredOrigin(int frame, int streak, const Orca::Mod::OriginDecl& decl);
+// Legacy menu failures keep their existing log only; packs also explain the failure to the app.
+std::string_view OriginFailureReport(const Orca::Mod::Manifest* manifest);
+// A ranked room needs game results; friends and casual rooms accept engine-only modules.
+std::string_view RoomRefusal(std::string_view queue, bool results);
+int DeclaredOriginStreak(int frame, int streak, const Orca::Mod::OriginDecl& decl,
+                         const Orca::UX::GuestMemory& memory);
 
 // A fresh start: the host restores its own origin, leaves the main menu for the match's character
 // select (With Friends, Casual or Ranked) with a recorded exit, and runs unseen and unthrottled
@@ -79,9 +110,25 @@ OriginStep DecideOrigin(int frame, int menu_built_streak, std::optional<u32> jit
 // start is over FRESH_FRIENDS_AFTER frames; a shorter one joins in place. A host in a single-player
 // mode holds the friend first, as before.
 constexpr int FRESH_FRIENDS_AFTER = 10 * 60;
+// Reset games have no menu shortcut: keep short joins in place and bound longer replays to
+// three minutes of emulated play. Seconds work at any frame rate and exclude host pauses.
+inline constexpr std::chrono::seconds FRESH_RESET_FRIENDS_AFTER{3 * 60};
 // The tail ends once the character select has been up this many frames, or after FRESH_TAIL_LIMIT.
 constexpr int FRESH_CSS_SETTLE = 30;
 constexpr int FRESH_TAIL_LIMIT = 600;
+enum class FreshKind
+{
+  Menu,
+  Reset,
+};
+FreshKind FreshKindForOrigin(OriginRule rule);
+bool FreshExitAllowed(FreshKind kind, u8 exit);
+bool FreshTailSettled(FreshKind kind, int css_streak, int length);
+// The new history's metadata and typed events. Reset histories have neither an exit nor a seed.
+Orca::Net::ReplayArchive FreshReplayStart(FreshKind kind, int frame, u64 origin_hash, u8 exit,
+                                        u32 seed);
+// GameCube has no NAND component. Wii still requires the temporary session root and its IOS FS.
+bool LocalNandReady(bool is_wii, bool has_host_nand, bool temporary);
 enum class FreshStep
 {
   None,  // nothing to do: no fresh start (a join, if any, goes on in place)
@@ -90,8 +137,8 @@ enum class FreshStep
 };
 struct FreshInputs
 {
-  // Fresh starts are on (ORCA_TEST_FRESH=off turns them off) and this game's origin is the built
-  // main menu.
+  FreshKind kind = FreshKind::Menu;
+  // Fresh starts are on (ORCA_TEST_FRESH=off turns them off) and this game's origin is after boot.
   bool enabled = true;
   bool origin_ready = false;
   bool joining = false;
@@ -112,7 +159,10 @@ struct FreshInputs
   bool single_player = false;
   // Frames since the host's last start (its origin or its last fresh start).
   int history_frames = 0;
-  int fresh_after = FRESH_FRIENDS_AFTER;
+  // Emulated time since the origin, restored with the timeline; used by reset games.
+  std::chrono::duration<double> history_time{};
+  // Negative: the kind's default; nonnegative: an explicit test threshold in frames.
+  int fresh_after = -1;
 };
 FreshStep DecideFreshStart(const FreshInputs& in);
 // The main menu exit a friends fresh start takes: the Casual or Ranked select the host is on
