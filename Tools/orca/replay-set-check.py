@@ -100,9 +100,13 @@ def play(name, source, extra=(), timeout=900):
 
 
 def watch_url(dev, room):
+    # YG_SITE_COOKIE: a Cookie header value for --site (a staging site's team access cookie, handed in
+    # by a wrapper). Never logged; queue-e2e.mjs sends it too.
+    headers = {"content-type": "application/json", "user-agent": "Mozilla/5.0 (AGENT TEST replay-set-check)"}
+    if os.environ.get("YG_SITE_COOKIE"):
+        headers["cookie"] = os.environ["YG_SITE_COOKIE"]
     req = urllib.request.Request(f"{SITE}/api/multiplayer/ticket", method="POST",
-                                 data=json.dumps({"dev": dev, "watch": room}).encode(),
-                                 headers={"content-type": "application/json"})
+                                 data=json.dumps({"dev": dev, "watch": room}).encode(), headers=headers)
     reply = json.loads(urllib.request.urlopen(req, timeout=10).read())
     base = reply["url"].replace("https://", "wss://").replace("http://", "ws://").rstrip("/")
     return f"{base}{reply['watch']}?ticket={reply['ticket']}"

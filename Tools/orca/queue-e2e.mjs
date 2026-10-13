@@ -84,6 +84,10 @@ const GAMES = Number(opt("--games", QUEUE === "ranked" ? "3" : "2"));
 const SITE = (opt("--site", "https://yougame.co") || "").replace(/\/$/, "");
 const SLUG = opt("--slug");
 const KEEP = argv.includes("--keep");
+// YG_SITE_COOKIE: a Cookie header value ("name=value") sent with every request to --site, such as a
+// staging site's team access cookie, handed in by a wrapper. Never logged.
+const SITE_COOKIE = process.env.YG_SITE_COOKIE || "";
+const siteCookie = (own) => [own, SITE_COOKIE].filter(Boolean).join("; ");
 const ALARM = Number(opt("--alarm", "900"));
 // Scenarios without --q2:
 //   match    the default: a ranked set, or --games casual games and then the joiner leaves
@@ -442,7 +446,7 @@ class Side {
       headers: {
         "content-type": "application/json",
         "user-agent": UA,
-        ...(this.cookie ? { cookie: this.cookie } : {}),
+        ...(siteCookie(this.cookie) ? { cookie: siteCookie(this.cookie) } : {}),
       },
       body: JSON.stringify(full),
     });
