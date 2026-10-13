@@ -138,6 +138,20 @@ struct SdImageFile
   bool operator==(const SdImageFile&) const = default;
 };
 
+struct OriginWord
+{
+  u32 address = 0;
+  u32 word = 0;
+  bool operator==(const OriginWord&) const = default;
+};
+
+struct OriginDecl
+{
+  u32 frame = 0;
+  std::vector<OriginWord> words;
+  u32 settle = 30;
+};
+
 struct Manifest
 {
   int format = 0;  // 1: a tree bundle (ORCA_MOD_DIR + tree.json); 2: a flat bundle (Bundle.h)
@@ -155,6 +169,7 @@ struct Manifest
   std::optional<u32> boot_nand_frame;
   u32 first_keyframe_frame = DEFAULT_FIRST_KEYFRAME_FRAME;
   std::optional<u32> jit_clear_frame;
+  std::optional<OriginDecl> origin;
   std::vector<KeptWord> keep_game_code;
   std::optional<u64> save_title;
   // <System>.<Section>.<Key> = value, keys from ForcedAllowlist() only, in key order.

@@ -25,6 +25,16 @@ namespace Core
 class System;
 }
 
+namespace Orca::Mod
+{
+struct Manifest;
+struct OriginDecl;
+}
+namespace Orca::UX
+{
+class GuestMemory;
+}
+
 namespace Rollback::OnlineMatch
 {
 // Runs at each frame boundary. The first call joins the room; a joiner blocks here until it has
@@ -57,6 +67,7 @@ constexpr int KEYFRAME_FRESH_FRAMES = 30 * 60;
 constexpr int ORIGIN_SETTLE_FRAMES = 30;
 // A game whose main menu isn't built by then has no origin: it can't take or join players.
 constexpr int ORIGIN_DEADLINE = 6000;
+constexpr int ORIGIN_WORDS_WINDOW = 6000;
 // The pads of every frame before the origin.
 Orca::Net::Pads CanonicalBootPads();
 enum class OriginStep
@@ -68,6 +79,18 @@ enum class OriginStep
 // At the boundary of `frame`, before its hook: `menu_built_streak` frames in a row (up to the last)
 // showed the built main menu. The origin must come after the profile's JIT clear.
 OriginStep DecideOrigin(int frame, int menu_built_streak, std::optional<u32> jit_clear_frame);
+enum class OriginRule
+{
+  Menu,
+  Declared,
+  Frame0,
+  Failed,
+};
+OriginRule SelectOriginRule(const Orca::Mod::Manifest* manifest, bool menu_supported,
+                          bool guards_failed);
+OriginStep DecideDeclaredOrigin(int frame, int streak, const Orca::Mod::OriginDecl& decl);
+int DeclaredOriginStreak(int frame, int streak, const Orca::Mod::OriginDecl& decl,
+                         const Orca::UX::GuestMemory& memory);
 
 // A fresh start: the host restores its own origin, leaves the main menu for the match's character
 // select (With Friends, Casual or Ranked) with a recorded exit, and runs unseen and unthrottled

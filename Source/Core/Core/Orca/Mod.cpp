@@ -450,10 +450,10 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
       flat ? UnknownKey(o, {"format", "engine", "listing", "serial", "title", "disc", "launcher",
                             "sdImage", "patches", "jitwarm", "textures", "frameHook",
                             "bootNandFrame", "firstKeyframeFrame", "jitClearFrame", "keepGameCode",
-                            "saveTitle", "forced", "builtin", "rulesets", "offers"}) :
+                            "saveTitle", "forced", "origin", "builtin", "rulesets", "offers"}) :
              UnknownKey(o, {"format", "engine", "title", "disc", "launcher", "sd", "frameHook",
                             "bootNandFrame", "firstKeyframeFrame", "jitClearFrame", "keepGameCode",
-                            "saveTitle", "forced", "builtin", "rulesets", "offers"});
+                            "saveTitle", "forced", "origin", "builtin", "rulesets", "offers"});
   if (unknown)
     return fail(fmt::format("unknown key {} (format {})", *unknown, m.format));
 
@@ -628,6 +628,60 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
     return fail("jitClearFrame must be an integer from 0 to 1000000");
   m.jit_clear_frame = *jit_clear;
 
+  // origin: a start point declared by the pack, verified from local RAM at boot.
+  if (const picojson::value* v = get("origin"))
+  {
+    if (!v->is<picojson::object>())
+      return fail("origin must be an object");
+    const auto& o = v->get<picojson::object>();
+    if (const auto key = UnknownKey(o, {"frame", "words", "settle"}))
+      return fail(fmt::format("unknown key origin.{}", *key));
+    const auto n = o.contains("frame") ? Integer(o.at("frame"), 1, 36'000) : std::nullopt;
+    if (!n)
+      return fail("origin.frame must be an integer from 1 to 36000");
+    OriginDecl decl;
+    decl.frame = static_cast<u32>(*n);
+    if (o.contains("words"))
+    {
+      const auto& words = o.at("words");
+      if (!words.is<picojson::array>() || words.get<picojson::array>().size() > 8)
+        return fail("origin.words must be an array of at most 8 words");
+      for (const auto& item : words.get<picojson::array>())
+      {
+        if (!item.is<picojson::object>())
+          return fail("origin.words entries must be objects");
+        const auto& w = item.get<picojson::object>();
+        if (const auto key = UnknownKey(w, {"address", "word"}))
+          return fail(fmt::format("unknown key origin.words.{}", *key));
+        const auto address = w.contains("address") ? HexWord(w.at("address")) : std::nullopt;
+        const auto word = w.contains("word") ? HexWord(w.at("word")) : std::nullopt;
+        if (!address || !(InMem1Word(*address) ||
+                         (*address >= 0x90000000 && *address <= 0x93FFFFFC && *address % 4 == 0)))
+          return fail("origin.words.address must be a word address in MEM1 or MEM2");
+        if (!word)
+          return fail("origin.words.word must be a hex word");
+        if (std::ranges::any_of(decl.words, [&](const OriginWord& w) {
+              return w.address == *address;
+            }))
+          return fail("origin.words repeats an address");
+        decl.words.push_back({*address, *word});
+      }
+    }
+    if (o.contains("settle"))
+    {
+      if (!o.contains("words"))
+        return fail("origin.settle requires origin.words");
+      const auto settle = Integer(o.at("settle"), 1, 600);
+      if (!settle)
+        return fail("origin.settle must be an integer from 1 to 600");
+      decl.settle = static_cast<u32>(*settle);
+    }
+    if ((m.jit_clear_frame && decl.frame <= *m.jit_clear_frame) ||
+        (m.boot_nand_frame && decl.frame <= *m.boot_nand_frame))
+      return fail("origin.frame must follow jitClearFrame and bootNandFrame");
+    m.origin = std::move(decl);
+  }
+
   // keepGameCode
   if (const picojson::value* v = get("keepGameCode"))
   {
@@ -698,6 +752,10 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
       return fail(fmt::format("builtin {} runs on RSBE01 revision 2 only", BuiltinName(*builtin)));
     m.builtin = *builtin;
   }
+
+  if (m.origin && m.builtin != Builtin::None &&
+      m.origin->frame < m.first_keyframe_frame)
+    return fail("origin.frame must be at least firstKeyframeFrame with a builtin");
 
   // rulesets
   if (const picojson::value* v = get("rulesets"))

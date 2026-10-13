@@ -37,6 +37,8 @@
 #include "Core/HW/Memmap.h"
 #include "Core/IOS/FS/HostBackend/FS.h"
 #include "Core/IOS/IOS.h"
+#include "Core/Orca/Engine/GuestMemory.h"
+#include "Core/Orca/Mod.h"
 #include "Core/Orca/Perf.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Events.h"
@@ -181,6 +183,8 @@ struct Match
   u64 origin_hash = 0;
   // Frames in a row the frame hook saw the built main menu, before the origin.
   int menu_built_streak = 0;
+  int origin_words_streak = 0;
+  OriginRule origin_rule = OriginRule::Menu;
   // No origin could be found (the menu never built in time): this game takes and joins nobody.
   bool origin_failed = false;
   Orca::Net::ReplayArchive replay;
@@ -1849,7 +1853,7 @@ bool CaptureOrigin(Core::System& system, Match& match, int frame)
   match.replay.first_frame = frame;
   // The history's seed is its first frame's typed event, applied by that frame's hook (FreshMove),
   // after this capture: the origin stays every Orca's same canonical one.
-  if (Orca::UX::Game().Read().FreshSupported())
+  if (match.origin_rule == OriginRule::Menu)
   {
     match.replay.frames.resize(1);
     match.replay.frames[0].seed = NewHistorySeed();
@@ -1865,6 +1869,10 @@ bool CaptureOrigin(Core::System& system, Match& match, int frame)
     nand_bytes += e.data.size();
   NOTICE_LOG_FMT(ROLLBACK, "Drop-in: origin at frame {}: RAM {:016x}, NAND {} KB ({:.0f} ms)", frame,
                  match.origin_hash, nand_bytes / 1024, MsSince(start));
+  NOTICE_LOG_FMT(ROLLBACK, "Orca origin: rule {} at frame {}: RAM {:016x}",
+                 match.origin_rule == OriginRule::Declared ? "declared" :
+                 match.origin_rule == OriginRule::Frame0 ? "frame0" : "menu",
+                 frame, match.origin_hash);
   return true;
 }
 
@@ -3486,7 +3494,11 @@ std::optional<int> Boundary(Core::System& system,
     system.GetJitInterface().ClearSafe();
     // A game whose main menu this can't read has its origin at its first boundary instead, and no
     // fresh starts.
-    if (!Orca::UX::Game().Read().FreshSupported())
+    const auto* mod = Orca::Mod::ActiveMod();
+    match.origin_rule = SelectOriginRule(mod ? &mod->manifest : nullptr,
+                                        Orca::UX::Game().Read().FreshSupported(),
+                                        Orca::Mod::GuardsFailed());
+    if (match.origin_rule == OriginRule::Frame0)
     {
       NOTICE_LOG_FMT(ROLLBACK, "Drop-in: this game's main menu isn't read: its origin is its first "
                                "frame, with no fresh starts");
@@ -3501,8 +3513,31 @@ std::optional<int> Boundary(Core::System& system,
   {
     const int frame = match.running + 1;
     const Orca::Profile* profile = Orca::ActiveProfile();
-    switch (DecideOrigin(frame, match.menu_built_streak,
-                         profile ? profile->jit_clear_frame : std::nullopt))
+    const auto* mod = Orca::Mod::ActiveMod();
+    // A builtin verdict is known before this boundary's hook, including when a declaration
+    // names firstKeyframeFrame itself. Legacy boots do not take this branch.
+    if (mod && mod->manifest.builtin != Orca::Mod::Builtin::None)
+    {
+      const Core::CPUThreadGuard guard(system);
+      Orca::Mod::RefreshGuards(guard, frame);
+      if (match.origin_rule == OriginRule::Menu && Orca::Mod::GuardsFailed())
+        match.origin_rule = SelectOriginRule(&mod->manifest, true, true);
+    }
+    OriginStep step;
+    if (match.origin_rule == OriginRule::Declared && mod && mod->manifest.origin)
+    {
+      const Core::CPUThreadGuard guard(system);
+      const Orca::UX::GuardMemory memory(guard);
+      match.origin_words_streak = DeclaredOriginStreak(
+          frame, match.origin_words_streak, *mod->manifest.origin, memory);
+      step = DecideDeclaredOrigin(frame, match.origin_words_streak, *mod->manifest.origin);
+    }
+    else if (match.origin_rule == OriginRule::Failed)
+      step = OriginStep::Fail;
+    else
+      step = DecideOrigin(frame, match.menu_built_streak,
+                          profile ? profile->jit_clear_frame : std::nullopt);
+    switch (step)
     {
     case OriginStep::Wait:
       break;
@@ -3512,6 +3547,14 @@ std::optional<int> Boundary(Core::System& system,
       break;
     case OriginStep::Fail:
       match.origin_failed = true;
+      match.origin_rule = OriginRule::Failed;
+      auto& memory = system.GetMemory();
+      const u64 ram = RamChecksum({memory.GetRAM(), memory.GetRamSize()},
+                                  {memory.GetEXRAM(), memory.GetEXRAM() ? memory.GetExRamSize() : 0});
+      NOTICE_LOG_FMT(ROLLBACK, "Orca origin: rule failed at frame {}: RAM {:016x}", frame, ram);
+      Orca::Status::Report("no_origin", "This pack's game didn't reach the start point its pack "
+                                      "names, so friends can't join.");
+      Orca::Status::WithdrawOnline();
       ERROR_LOG_FMT(ROLLBACK, "Drop-in: no built main menu by frame {}: this game has no origin, so "
                               "it can't take or join players",
                     frame);
@@ -3606,7 +3649,7 @@ std::optional<int> Boundary(Core::System& system,
       Orca::Events::NotifyPlugIn(frame, ports);
     }
     // Before the origin: frames in a row with the main menu built (DecideOrigin).
-    if (CanonicalBoot(match))
+    if (CanonicalBoot(match) && match.origin_rule == OriginRule::Menu)
     {
       match.menu_built_streak =
           Orca::UX::Game().Read().LastSeen().menu_built ? match.menu_built_streak + 1 : 0;
@@ -4430,6 +4473,43 @@ OriginStep DecideOrigin(int frame, int menu_built_streak, std::optional<u32> jit
     return OriginStep::Capture;
   }
   return frame >= ORIGIN_DEADLINE ? OriginStep::Fail : OriginStep::Wait;
+}
+
+OriginRule SelectOriginRule(const Orca::Mod::Manifest* manifest, bool menu_supported,
+                            bool guards_failed)
+{
+  if (!manifest)
+    return menu_supported ? OriginRule::Menu : OriginRule::Frame0;
+  if (manifest->builtin != Orca::Mod::Builtin::None && !guards_failed)
+    return OriginRule::Menu;
+  if (manifest->origin)
+    return OriginRule::Declared;
+  return manifest->builtin == Orca::Mod::Builtin::None ? OriginRule::Frame0 : OriginRule::Failed;
+}
+
+OriginStep DecideDeclaredOrigin(int frame, int streak, const Orca::Mod::OriginDecl& decl)
+{
+  if (frame < static_cast<int>(decl.frame))
+    return OriginStep::Wait;
+  if (decl.words.empty())
+    return frame == static_cast<int>(decl.frame) ? OriginStep::Capture : OriginStep::Fail;
+  if (streak >= static_cast<int>(decl.settle))
+    return OriginStep::Capture;
+  return frame >= static_cast<int>(decl.frame) + ORIGIN_WORDS_WINDOW ? OriginStep::Fail :
+                                                                    OriginStep::Wait;
+}
+
+int DeclaredOriginStreak(int frame, int streak, const Orca::Mod::OriginDecl& decl,
+                         const Orca::UX::GuestMemory& memory)
+{
+  if (frame < static_cast<int>(decl.frame) || decl.words.empty())
+    return 0;
+  for (const auto& word : decl.words)
+  {
+    if (!memory.Valid(word.address) || memory.Read32(word.address) != word.word)
+      return 0;
+  }
+  return std::min(streak + 1, static_cast<int>(decl.settle));
 }
 
 FreshStep DecideFreshStart(const FreshInputs& in)

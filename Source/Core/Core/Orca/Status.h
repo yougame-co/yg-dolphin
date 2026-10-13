@@ -112,6 +112,10 @@ bool CapsSettled();
 // takes a later `orca caps` as the new offer (desktop orca.ts: offered and agreed are recomputed,
 // and the page answers it again), so no app change is needed.
 void UpdateCaps();
+// No online origin for this boot: withdraw join, host and direct, immediately.
+void WithdrawOnline();
+// Called when the active profile changes for a new boot.
+void ResetOnline();
 void SetAppCaps(std::string_view list);
 bool Cap(std::string_view name);
 // "orca stats <json>" (with the "stats" capability).

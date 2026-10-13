@@ -28,6 +28,7 @@ std::mutex s_mutex;
 std::string s_state;
 bool s_errored = false;
 std::atomic<bool> s_started{false};
+std::atomic<bool> s_online_withdrawn{false};
 std::atomic<bool> s_stopping{false};
 std::FILE* s_out = nullptr;
 std::set<std::string, std::less<>> s_app_caps;
@@ -141,7 +142,7 @@ void Report(std::string_view code, std::string_view sentence)
 
 std::string OfferedCaps()
 {
-  std::string caps = CAPS;
+  std::string caps = s_online_withdrawn ? "leave stats pause delay perf chat yougame gfx" : CAPS;
   if (Music::Supported())
     caps += fmt::format(" {}", MUSIC_CAP);
   // Mod mode (Core/Orca/Mod.h): besides the music switch above (host-only, the same rule in both
@@ -198,7 +199,7 @@ bool CapsSettled()
 void UpdateCaps()
 {
   // Legacy profiles offer the same caps for the whole run: nothing to follow.
-  if (!SessionActive() || !Mod::ActiveMod())
+  if (!SessionActive() || (!Mod::ActiveMod() && !s_online_withdrawn))
     return;
   const std::string caps = OfferedCaps();
   std::lock_guard lock(s_mutex);
@@ -213,6 +214,17 @@ void UpdateCaps()
     s_printed_caps = caps;
     Print(fmt::format("orca caps {}\n", caps));
   }
+}
+
+void WithdrawOnline()
+{
+  s_online_withdrawn = true;
+  UpdateCaps();
+}
+
+void ResetOnline()
+{
+  s_online_withdrawn = false;
 }
 
 void SetAppCaps(std::string_view list)

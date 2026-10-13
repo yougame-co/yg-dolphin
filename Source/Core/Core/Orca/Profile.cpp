@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "Core/Orca/Profile.h"
+
+#include "Core/Orca/Status.h"
 #include "Core/Orca/Session/Online.h"
 
 #include <algorithm>
@@ -530,6 +532,7 @@ void SetActiveProfile(std::optional<Profile> profile)
   s_active_profile = std::move(profile);
   s_boot_frames = 0;
   Mod::ResetGuards();
+  Status::ResetOnline();
   s_kept_code.clear();
   if (s_active_profile)
   {
