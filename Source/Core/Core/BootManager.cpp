@@ -40,6 +40,7 @@
 #include "Core/Orca/Bundle.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Status.h"
+#include "Core/Orca/UX/UX.h"
 #include "Core/System.h"
 #include "Core/WiiRoot.h"
 
@@ -280,6 +281,7 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
     NOTICE_LOG_FMT(BOOT, "{}", Orca::DescribeGraphics());
   }
   Orca::SetActiveProfile(orca_profile);
+  Orca::UX::SelectModule(Orca::ActiveProfile());
 
   system.Initialize();
 

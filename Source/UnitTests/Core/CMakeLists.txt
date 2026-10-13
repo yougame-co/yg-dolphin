@@ -43,6 +43,7 @@ target_compile_definitions(OrcaBundleTest PRIVATE ${ORCA_BUNDLE_DEFINITIONS})
 add_dolphin_test(OrcaCowTest Orca/CowTest.cpp)
 add_dolphin_test(OrcaKeyframeTest Orca/KeyframeTest.cpp)
 add_dolphin_test(OrcaFreshStartTest Orca/FreshStartTest.cpp)
+add_dolphin_test(OrcaGenericModuleTest Orca/GenericModuleTest.cpp)
 add_dolphin_test(OrcaUXTest Orca/UXTest.cpp)
 # The overlay draw tests set up ImGui frames of their own.
 target_link_libraries(OrcaUXTest PRIVATE imgui)

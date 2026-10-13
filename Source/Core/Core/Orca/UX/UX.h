@@ -7,6 +7,11 @@
 
 #include "Core/Orca/Engine/Module.h"
 
+namespace Orca
+{
+struct Profile;
+}
+
 // Orca's in-game UX for online play: the local controller fed by the YouGame app, the overlay,
 // and the players' names in the game's own name tags.
 namespace Orca::UX
@@ -22,9 +27,11 @@ constexpr int kCompatVersion = 29;
 void SetGameDisc(std::string path);
 // Call once before the game boots. Registers the pad source, overlay and session callbacks.
 void Init();
+// Call immediately after setting the active boot profile. nullptr clears the selection.
+void SelectModule(const Profile* profile);
 // Call at exit, before the UI and logging shut down.
 void Shutdown();
-// The game module the session (Rollback/OnlineMatch.cpp) asks: the one Init handed the engine, else
+// The game module the session (Rollback/OnlineMatch.cpp) asks: the selected boot module, else
 // the builtin (a session run without the UX, as in tests, asks the same code it always did).
 Orca::Engine::Module& Game();
 }  // namespace Orca::UX

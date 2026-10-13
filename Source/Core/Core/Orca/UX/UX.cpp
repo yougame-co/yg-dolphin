@@ -11,7 +11,9 @@
 #include "Common/Logging/Log.h"
 #include "Core/Orca/Engine/Module.h"
 #include "Core/Orca/Games/Brawl/BrawlModule.h"
+#include "Core/Orca/Games/Generic/GenericModule.h"
 #include "Core/Orca/Mod.h"
+#include "Core/Orca/Sandbox.h"
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/UX/ControllerSource.h"
 #include "Core/Orca/UX/GamePatches.h"
@@ -33,8 +35,6 @@ void Init()
   Orca::Events::SetLocalPadSource([](bool for_frame) { return LocalPad(for_frame); });
   Orca::Events::SetInputAgeSource([] { return GetInputAge(); });
   InitOverlay();
-  // The game module the three hooks below call: the builtin Brawl/Project+ one (Engine/Module.h).
-  Orca::Engine::SetModule(&Builtin());
   // The input gate's masks for the frame about to run: every rule's masks ORed, from memory alone.
   Rollback::InputGate::SetSource([](const Core::CPUThreadGuard& guard) {
     // Mod mode: the builtin's guards, against memory as it is now (Core/Orca/Mod.h).
@@ -88,6 +88,22 @@ void Init()
   });
 }
 
+void SelectModule(const Profile* profile)
+{
+#ifdef ORCA_BUNDLE_TRUST_TEST_KEY
+  constexpr bool test_build = true;
+#else
+  constexpr bool test_build = false;
+#endif
+  if (!profile)
+    Orca::Engine::SetModule(nullptr);
+  else if (GenericModuleEligible(profile, Mod::ResolvedKind().value_or(Mod::BundleKind::None),
+                                 Sandbox::Jailed(), test_build))
+    Orca::Engine::SetModule(&Generic());
+  else
+    Orca::Engine::SetModule(&Builtin());
+}
+
 Orca::Engine::Module& Game()
 {
   if (Orca::Engine::Module* module = Orca::Engine::ActiveModule())
@@ -113,7 +129,7 @@ void Shutdown()
     NOTICE_LOG_FMT(ROLLBACK, "Orca: module {} made {} guest writes, {} outside its regions",
                    module->Id(), writes.writes, writes.outside);
   }
-  Orca::Engine::SetModule(nullptr);
+  SelectModule(nullptr);
   ShutdownOverlay();
   StopControllerStream();
 }

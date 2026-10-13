@@ -578,6 +578,8 @@ add_library(core
   Orca/Games/Brawl/BrawlGame.h
   Orca/Games/Brawl/BrawlModule.cpp
   Orca/Games/Brawl/BrawlModule.h
+  Orca/Games/Generic/GenericModule.cpp
+  Orca/Games/Generic/GenericModule.h
   Orca/Games/Brawl/BrawlStages.h
   Orca/Games/Brawl/CharOrder.cpp
   Orca/Games/Brawl/CharOrder.h
@@ -903,6 +905,9 @@ endif()
 # Read by Source/UnitTests/Core (OrcaBundle.PinnedKey checks the build trusts exactly these).
 set(ORCA_BUNDLE_DEFINITIONS "${ORCA_BUNDLE_DEFINITIONS}" CACHE INTERNAL "")
 set_source_files_properties(Orca/Bundle.cpp PROPERTIES COMPILE_DEFINITIONS "${ORCA_BUNDLE_DEFINITIONS}")
+if(ORCA_BUNDLE_TRUST_TEST_KEY)
+  set_source_files_properties(Orca/UX/UX.cpp PROPERTIES COMPILE_DEFINITIONS ORCA_BUNDLE_TRUST_TEST_KEY)
+endif()
 # The SD image's SHA-256 (Bundle.cpp) uses CNG on Windows.
 if(WIN32)
   target_link_libraries(core PRIVATE bcrypt)
