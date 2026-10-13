@@ -95,6 +95,8 @@ OriginRule SelectOriginRule(const Orca::Mod::Manifest* manifest, bool menu_suppo
 OriginStep DecideDeclaredOrigin(int frame, int streak, const Orca::Mod::OriginDecl& decl);
 // Legacy menu failures keep their existing log only; packs also explain the failure to the app.
 std::string_view OriginFailureReport(const Orca::Mod::Manifest* manifest);
+// A ranked room needs game results; friends and casual rooms accept engine-only modules.
+std::string_view RoomRefusal(std::string_view queue, bool results);
 int DeclaredOriginStreak(int frame, int streak, const Orca::Mod::OriginDecl& decl,
                          const Orca::UX::GuestMemory& memory);
 

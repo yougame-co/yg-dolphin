@@ -14,6 +14,7 @@
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/UX/UX.h"
 #include "Core/System.h"
+#include "Core/Rollback/OnlineMatch.h"
 
 using namespace Orca;
 using namespace Orca::Engine;
@@ -107,6 +108,20 @@ TEST(OrcaGenericModule, HeaderTracksOnlyWantedChanges)
   EXPECT_FALSE(header.TakeMismatch());
   EXPECT_FALSE(header.TakeMismatch());
   EXPECT_EQ(header.WantedGeneration(), 4u);
+}
+
+TEST(OrcaGenericModule, RankedRoomsRequireResultsFromAnyModule)
+{
+  UX::GenericModule generic;
+  EXPECT_EQ(Rollback::OnlineMatch::RoomRefusal("ranked", generic.Describe().results),
+            "This game doesn't report match results, so it can't play Ranked. Try Casual or "
+            "With Friends.");
+  for (const bool results : {false, true})
+  {
+    EXPECT_TRUE(Rollback::OnlineMatch::RoomRefusal("private", results).empty());
+    EXPECT_TRUE(Rollback::OnlineMatch::RoomRefusal("casual", results).empty());
+    EXPECT_EQ(Rollback::OnlineMatch::RoomRefusal("ranked", results).empty(), results);
+  }
 }
 
 TEST(OrcaGenericModule, NoCssNeverArmsOrSteers)

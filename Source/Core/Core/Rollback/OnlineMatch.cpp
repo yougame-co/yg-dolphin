@@ -3526,6 +3526,21 @@ std::optional<int> Boundary(Core::System& system,
     }
   }
 
+  // Check each welcome before replay, fresh starts, the frame hook, or peer events can play it.
+  if (!Orca::Online::RoomEnded())
+  {
+    if (const auto reason = RoomRefusal(Orca::Online::RoomQueue(),
+                                       Orca::UX::Game().Describe().results);
+        !reason.empty())
+    {
+      Orca::UX::Search::End();
+      Orca::UX::QueueApp::End();
+      BecomeSolo(match, "ranked unsupported", "playing", true);
+      Orca::Status::Report("ranked_unsupported", reason);
+      Orca::UX::ShowToast(std::string(reason));
+    }
+  }
+
   // Every boot plays the canonical boot to its origin, the first boundary whose main menu has been
   // built for ORIGIN_SETTLE_FRAMES frames, captured before that boundary's hook.
   if (CanonicalBoot(match))
@@ -4523,6 +4538,13 @@ std::string_view OriginFailureReport(const Orca::Mod::Manifest* manifest)
 {
   return manifest ? "This pack's game didn't reach the start point its pack names, so friends "
                     "can't join." : "";
+}
+
+std::string_view RoomRefusal(std::string_view queue, bool results)
+{
+  return queue == "ranked" && !results ?
+             "This game doesn't report match results, so it can't play Ranked. Try Casual or "
+             "With Friends." : "";
 }
 
 int DeclaredOriginStreak(int frame, int streak, const Orca::Mod::OriginDecl& decl,
