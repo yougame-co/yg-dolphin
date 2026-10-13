@@ -115,10 +115,10 @@ TAG="$(git -C "$ROOT" tag --points-at HEAD --list 'yg-baiji-*' | head -n 1)"
 TAG_VERSION="${TAG#yg-baiji-}"
 TAG_VERSION="${TAG_VERSION#orca-}"
 VERSION="${ORCA_VERSION:-$TAG_VERSION}"
-VERSION="${VERSION:-0.0.0}"
+VERSION="${VERSION:-0.3.42}"
 # Info.plist versions are one to three integers: 0.2.0-rc1 shows as 0.2.0.
 PLIST_VERSION="$(echo "$VERSION" | grep -Eo '^[0-9]+(\.[0-9]+){0,2}' || true)"
-PLIST_VERSION="${PLIST_VERSION:-0.0.0}"
+PLIST_VERSION="${PLIST_VERSION:-0.3.42}"
 
 if [ "$RELEASE" = 1 ]; then
   [ -z "$DIRTY" ] || fail "a signed build needs a clean tree (untracked files included)$DIRTY"

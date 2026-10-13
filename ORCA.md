@@ -2611,6 +2611,11 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.42
+
+- **Name tags keep the buttons you saved.**
+- **More community packs.** Community mods of other GameCube games can run (casual).
+
 ### 0.3.41
 
 - **Clearer "couldn't open the disc" reports.** When Project+ (or a pack's launcher) can't open your
