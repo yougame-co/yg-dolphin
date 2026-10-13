@@ -2759,6 +2759,118 @@ TEST(OrcaUXNameTags, InARoomATagSavedInTheGamesMenusKeepsWhatWasSaved)
     EXPECT_EQ(TagLayout(m, 0), CustomLayout());
   }
 }
+
+namespace
+{
+// Puts scene `name` on (Options > Controls' page is "scButton", the main menu "muMenuMain"): its
+// name at a spare address, the scene's name pointer at it.
+void OnScene(FakeBrawl& m, const char* name)
+{
+  constexpr u32 at = 0x806ff400;
+  for (size_t i = 0; i <= std::strlen(name); ++i)
+    m.bytes[at + static_cast<u32>(i)] = static_cast<u8>(name[i]);
+  m.W32(FakeBrawl::SCENE, at);
+}
+// Sets the custom layout (CustomLayout) in tag `slot` as the game's Controls page saves it: the
+// GameCube flag byte with the page's Save bit.
+void SavedCustom(FakeBrawl& m, int slot)
+{
+  for (u32 i = 0; i < 0x2D; ++i)
+    m.Write8(FakeBrawl::Tag(slot) + 0x14 + i, CustomLayout()[i]);
+  m.Write8(FakeBrawl::Tag(slot) + 0x14 + 11, 0x01);
+}
+}  // namespace
+
+TEST(OrcaUXNameTags, ButtonsSetOnTheControlsPageAreThePlayersOwnWhateverTheTagIsCalled)
+{
+  const std::vector<Orca::Events::PortInfo> ports{{0, "sandbox-ada", false, {}}};
+  {
+    // The players' flow (comments 10-09..10-11): they wore Orca's SANDB on a character select,
+    // then in Options > Controls made a tag of another name, MINE, set its buttons and saved, and
+    // went online. Through 0.3.40 only SANDB was read, so MINE's buttons were never kept, never
+    // carried into a room, and gone after a restart.
+    FakeBrawl m;
+    m.Join(0);
+    OwnControlsReader reader;
+    EXPECT_FALSE(NameTagsFrame(m, ports, ports, &reader, {}, 0));
+    ASSERT_EQ(m.TagName(m.NameId(0)), u"SANDB");
+    ASSERT_EQ(m.NameId(0), 0);
+    OnScene(m, "muMenuMain");
+    GameMadeTag(m, 1, Typed(u"MINE"));
+    EXPECT_FALSE(NameTagsFrame(m, ports, ports, &reader, {}, 0));  // made at the defaults
+    OnScene(m, "scButton");
+    EXPECT_FALSE(NameTagsFrame(m, ports, ports, &reader, {}, 0));  // the page opens
+    // A Save that changes nothing the controls play (only the page's Save bit) is no edit.
+    m.Write8(FakeBrawl::Tag(1) + 0x14 + 11, 0x81);
+    EXPECT_FALSE(NameTagsFrame(m, ports, ports, &reader, {}, 0));
+    SavedCustom(m, 1);
+    const std::optional<std::vector<u8>> edited = NameTagsFrame(m, ports, ports, &reader, {}, 0);
+    ASSERT_TRUE(edited);
+    EXPECT_EQ(*edited, Profile(1, CustomLayout()));
+    EXPECT_TRUE(ControlsValid(*edited));
+    // Back on the names list and the main menu: still that tag, nothing more to publish.
+    OnScene(m, "muMenuMain");
+    EXPECT_FALSE(NameTagsFrame(m, ports, ports, &reader, *edited, 0));
+    EXPECT_FALSE(NameTagsFrame(m, ports, ports, &reader, *edited, 0));
+    // The next character select (here alone; a room carries the same profile): Orca's SANDB gets
+    // what they set, and MINE stays as they saved it. Nothing is published there.
+    m.W32(FakeBrawl::SCENE, FakeBrawl::NAME);
+    m.W32(FakeBrawl::Area(0) + 0x1C8, 0xFFFFFFFF);  // joined again
+    const std::vector<Orca::Events::PortInfo> now{{0, "sandbox-ada", false, *edited}};
+    EXPECT_FALSE(NameTagsFrame(m, now, now, &reader, *edited, 0));
+    EXPECT_EQ(m.NameId(0), 0);
+    EXPECT_EQ(TagLayout(m, 0), CustomLayout());
+    EXPECT_EQ(m.Read8(FakeBrawl::Tag(1) + 0x14 + 11), 0x01);
+    // Off the character select again, the tag they wore is read, and it holds the same.
+    OnScene(m, "muMenuMain");
+    EXPECT_FALSE(NameTagsFrame(m, now, now, &reader, *edited, 0));
+  }
+  {
+    // Making, renaming or deleting a tag on the way is no edit; the reader never writes.
+    FakeBrawl m("scButton");
+    GameMadeTag(m, 0, Typed(u"SANDB"));
+    GameMadeTag(m, 1, Typed(u"OLD"));
+    SavedCustom(m, 1);
+    OwnControlsReader reader;
+    m.recording = true;
+    EXPECT_FALSE(reader.Read(m, ports, {}, 0));
+    m.SetTag(1, u"");                    // deleted
+    GameMadeTag(m, 2, Typed(u"NEW"));    // made
+    SavedCustom(m, 2);
+    EXPECT_FALSE(reader.Read(m, ports, {}, 0));
+    m.SetTag(2, Typed(u"NEWER"));        // renamed
+    m.Write8(FakeBrawl::Tag(2) + 0x14 + 2, 0x02);
+    EXPECT_FALSE(reader.Read(m, ports, {}, 0));
+    m.recording = false;
+    m.written.clear();
+    // The same tag with other buttons is one.
+    m.Write8(FakeBrawl::Tag(2) + 0x14 + 3, 0x02);
+    m.recording = true;
+    const std::optional<std::vector<u8>> edited = reader.Read(m, ports, {}, 0);
+    ASSERT_TRUE(edited);
+    EXPECT_EQ((*edited)[1 + 3], 0x02);
+    EXPECT_TRUE(m.written.empty());
+  }
+  {
+    // A write that lands as the page closes is still seen, once; then the page is no longer
+    // watched (later changes elsewhere are Orca's or the game's, not the player's set-up).
+    FakeBrawl m("scButton");
+    GameMadeTag(m, 0, Typed(u"SANDB"));
+    GameMadeTag(m, 5, Typed(u"MINE"));
+    OwnControlsReader reader;
+    EXPECT_FALSE(reader.Read(m, ports, {}, 0));
+    OnScene(m, "muMenuMain");
+    SavedCustom(m, 5);
+    const std::optional<std::vector<u8>> edited = reader.Read(m, ports, {}, 0);
+    ASSERT_TRUE(edited);
+    EXPECT_EQ(*edited, Profile(1, CustomLayout()));
+    ControlsPageEdits edits;
+    EXPECT_FALSE(edits.Next(m));
+    m.Write8(FakeBrawl::Tag(0) + 0x14 + 2, 0x02);
+    EXPECT_FALSE(edits.Next(m));
+  }
+}
+
 TEST(OrcaUXNameTags, UnmappedPointersWriteNothing)
 {
   {
