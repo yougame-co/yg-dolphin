@@ -911,6 +911,196 @@ TEST(OrcaReplayStream, HoldsBackAPartialChunk)
   EXPECT_EQ(reader.Archive().frames.size(), 20u);
 }
 
+// A reopened recorder repacks its small live chunks into a backlog with different boundaries.
+// Whole overlapping chunks and the overlap in a partly new chunk must agree, without replaying
+// or charging metadata for them again; an incomplete old tail is discarded at the reset.
+TEST(OrcaReplayStream, ResumesWithARepackedBacklog)
+{
+  auto original = Replay(1407, 500);
+  original.frames[0].seed = 77;
+  original.frames[0].menu_exit = MENU_EXIT_RANKED;
+  original.frames[42].header = ReplayHeader{1, 2, 0, 3, 55};
+  original.frames[99].clear_ready = true;
+  auto ports = std::make_shared<std::vector<Orca::Events::PortInfo>>(*original.frames[735].ports);
+  ports->at(0).name = "new name";
+  for (size_t i = 735; i < original.frames.size(); ++i)
+    original.frames[i].ports = ports;
+  auto prefix = original;
+  prefix.frames.resize(738);
+  const auto live = Stream(prefix, 6);
+  const auto backlog = Stream(original, 600);
+  const auto uninterrupted = Stream(original, 6);
+  ReplayStreamReader expected;
+  std::string error;
+  ASSERT_TRUE(expected.Feed(uninterrupted.data(), uninterrupted.size(), &error)) << error;
+  for (const size_t piece : {backlog.size(), size_t{1}, size_t{13}})
+  {
+    ReplayStreamReader reader;
+    ASSERT_TRUE(reader.Feed(live.data(), live.size() - 5, &error)) << error;
+    EXPECT_EQ(reader.Archive().frames.size(), 732u);
+    reader.Resume();
+    // A second reset while the new header is incomplete still resumes this same history.
+    ASSERT_TRUE(reader.Feed(backlog.data(), 5, &error)) << error;
+    reader.Resume();
+    for (size_t at = 0; at < backlog.size(); at += piece)
+    {
+      ASSERT_TRUE(reader.Feed(backlog.data() + at, std::min(piece, backlog.size() - at), &error))
+          << error;
+    }
+    EXPECT_EQ(reader.Resumes(), 1u);
+    EXPECT_EQ(reader.Archive().first_frame, expected.Archive().first_frame);
+    EXPECT_EQ(reader.Archive().origin_hash, expected.Archive().origin_hash);
+    ASSERT_EQ(reader.Archive().frames.size(), expected.Archive().frames.size());
+    for (size_t i = 0; i < original.frames.size(); ++i)
+    {
+      const auto& got = reader.Archive().frames[i];
+      const auto& want = expected.Archive().frames[i];
+      EXPECT_EQ(got.pads, want.pads);
+      EXPECT_EQ(*got.ports, *want.ports);
+      EXPECT_EQ(got.header, want.header);
+      EXPECT_EQ(got.clear_ready, want.clear_ready);
+      EXPECT_EQ(got.menu_exit, want.menu_exit);
+      EXPECT_EQ(got.seed, want.seed);
+    }
+    EXPECT_EQ(reader.Checksums(), expected.Checksums());
+    EXPECT_EQ(reader.Archive().frames[731].ports, reader.Archive().frames[732].ports);
+    // Repeating an entirely overlapping segment must leave the archive and checksums intact.
+    reader.Resume();
+    ASSERT_TRUE(reader.Feed(backlog.data(), backlog.size(), &error)) << error;
+    EXPECT_EQ(reader.Resumes(), 2u);
+    EXPECT_EQ(reader.Archive().frames.size(), original.frames.size());
+    EXPECT_EQ(reader.Checksums(), expected.Checksums());
+  }
+}
+
+TEST(OrcaReplayStream, RefusesAnotherHeaderOnResume)
+{
+  const auto replay = Replay(20, 500);
+  const auto live = Stream(replay, 6);
+  std::vector<ReplayStreamInfo> other(6, StreamInfo());
+  other[0].compat += "other";
+  other[1].build += "other";
+  other[2].game_id = "RSBP01";
+  other[3].origin_hash ^= 1;
+  ++other[4].first_frame;
+  other[5].room += "other";
+  std::vector<std::vector<u8>> headers;
+  for (const auto& info : other)
+    headers.push_back(PackReplayStreamHeader(info));
+  // A header that isn't valid JSON is another stream too.
+  auto broken = PackReplayStreamHeader(StreamInfo());
+  broken[broken.size() - 1] = '!';
+  headers.push_back(std::move(broken));
+  for (const auto& header : headers)
+  {
+    ReplayStreamReader reader("orca2:test");
+    std::string error;
+    ASSERT_TRUE(reader.Feed(live.data(), live.size(), &error)) << error;
+    reader.Resume();
+    EXPECT_FALSE(reader.Feed(header.data(), header.size(), &error));
+    EXPECT_EQ(error, "the match's stream moved to another history");
+    EXPECT_EQ(reader.Archive().frames.size(), replay.frames.size());
+    reader.Resume();
+    EXPECT_FALSE(reader.Feed(live.data(), live.size(), &error));
+  }
+}
+
+TEST(OrcaReplayStream, ResumesAcrossTheRecordersSegmentNumber)
+{
+  // A recorder that drops back into its match through a keyframe starts its own next segment of
+  // the same history: only the header's segment count differs, and the frames carry on.
+  const auto replay = Replay(900, 500);
+  auto prefix = replay;
+  prefix.frames.resize(300);
+  const auto live = Stream(prefix, 6);
+  auto later = StreamInfo();
+  later.segment += 2;
+  auto backlog = PackReplayStreamHeader(later);
+  const auto chunks = Stream(replay, 600);
+  const size_t header_size = PackReplayStreamHeader(StreamInfo()).size();
+  backlog.insert(backlog.end(), chunks.begin() + static_cast<std::ptrdiff_t>(header_size),
+                 chunks.end());
+  ReplayStreamReader reader("orca2:test");
+  std::string error;
+  ASSERT_TRUE(reader.Feed(live.data(), live.size(), &error)) << error;
+  reader.Resume();
+  ASSERT_TRUE(reader.Feed(backlog.data(), backlog.size(), &error)) << error;
+  EXPECT_EQ(reader.Resumes(), 1u);
+  EXPECT_EQ(reader.Archive().frames.size(), replay.frames.size());
+}
+
+TEST(OrcaReplayStream, RefusesAChangedOverlappingFrame)
+{
+  const auto replay = Replay(70, 0);
+  const auto live = Stream(replay, 6);
+  for (int field = 0; field < 9; ++field)
+  {
+    SCOPED_TRACE(field);
+    auto changed = replay;
+    auto& frame = changed.frames[0];
+    auto ports = std::make_shared<std::vector<Orca::Events::PortInfo>>(*frame.ports);
+    frame.ports = ports;
+    switch (field)
+    {
+    case 0:
+      frame.pads[0][0] ^= 1;
+      break;
+    case 1:
+      ports->at(0).name += "other";
+      break;
+    case 2:
+      ports->at(0).controls.push_back(4);
+      break;
+    case 3:
+      ports->at(0).queue.push_back(9);
+      break;
+    case 4:
+      ports->at(0).port = 1;
+      break;
+    case 5:
+      frame.header = ReplayHeader{1, 2, 0, 3, 55};
+      break;
+    case 6:
+      frame.clear_ready = true;
+      break;
+    case 7:
+      frame.menu_exit = MENU_EXIT_FRIENDS;
+      break;
+    case 8:
+      frame.seed = 77;
+      break;
+    }
+    const auto backlog = Stream(changed, 600);
+    ReplayStreamReader reader;
+    std::string error;
+    ASSERT_TRUE(reader.Feed(live.data(), live.size(), &error)) << error;
+    reader.Resume();
+    EXPECT_FALSE(reader.Feed(backlog.data(), backlog.size(), &error));
+    EXPECT_EQ(error, "the match's stream changed");
+  }
+}
+
+TEST(OrcaReplayStream, RefusesAChangedOverlappingChecksum)
+{
+  const auto replay = Replay(70, 0);
+  const auto live = Stream(replay, 6);
+  ReplayChunk chunk;
+  chunk.first = 0;
+  chunk.frames = replay.frames;
+  chunk.checksums.emplace_back(60, 0xabc000u + 61);
+  const auto backlog = PackReplayChunk(chunk, true);
+  ASSERT_FALSE(backlog.empty());
+  ReplayStreamReader reader;
+  std::string error;
+  ASSERT_TRUE(reader.Feed(live.data(), live.size(), &error)) << error;
+  reader.Resume();
+  const auto header = PackReplayStreamHeader(*reader.Info());
+  ASSERT_TRUE(reader.Feed(header.data(), header.size(), &error)) << error;
+  EXPECT_FALSE(reader.Feed(backlog.data(), backlog.size(), &error));
+  EXPECT_EQ(error, "the match's stream changed");
+  EXPECT_EQ(reader.Checksums().at(60), 0xabc000u + 60);
+}
+
 // Damage anywhere is refused, never played: a flipped byte in a chunk, chunks out of order, a
 // seed after a history's first frame, another stream version, a header that isn't the stream's.
 TEST(OrcaReplayStream, RefusesDamageGapsAndOtherVersions)

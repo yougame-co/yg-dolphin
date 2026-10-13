@@ -629,6 +629,12 @@ std::vector<u8> PackReplayStream(const ReplayStreamInfo& info, const ReplayArchi
   return out;
 }
 
+void ReplayStreamReader::Resume()
+{
+  m_pending.clear();
+  m_resuming = true;
+}
+
 bool ReplayStreamReader::Feed(const u8* data, size_t size, std::string* error)
 {
   if (m_failed)
@@ -655,25 +661,28 @@ bool ReplayStreamReader::Parse(std::string* error)
   };
   try
   {
-    if (!m_info)
+    if (!m_info || m_resuming)
     {
       if (m_pending.size() < STREAM_PREAMBLE)
         return true;
       if (std::memcmp(m_pending.data(), STREAM_MAGIC, sizeof(STREAM_MAGIC)) != 0)
-        return fail("not a replay stream");
+        return fail(m_info ? "the match's stream moved to another history" : "not a replay stream");
       const u32 version = GetU32(m_pending.data() + 4);
       const u32 size = GetU32(m_pending.data() + 8);
       if (version != STREAM_VERSION)
-        return fail("a replay stream of another version");
+        return fail(m_info ? "the match's stream moved to another history" :
+                             "a replay stream of another version");
       if (size > MAX_STREAM_HEADER)
         return fail("the replay's header is too large");
       if (m_pending.size() < STREAM_PREAMBLE + size)
         return true;
+      pos = STREAM_PREAMBLE + size;
       picojson::value value;
       const std::string json(m_pending.begin() + STREAM_PREAMBLE,
                              m_pending.begin() + STREAM_PREAMBLE + size);
       if (!picojson::parse(value, json).empty() || !value.is<picojson::object>())
-        return fail("the replay's header isn't valid");
+        return fail(m_info ? "the match's stream moved to another history" :
+                             "the replay's header isn't valid");
       const picojson::object& o = value.get<picojson::object>();
       const auto text = [&o](const char* key) -> std::optional<std::string> {
         const auto it = o.find(key);
@@ -688,7 +697,7 @@ bool ReplayStreamReader::Parse(std::string* error)
         return it->second.get<double>();
       };
       // Another build's stream is refused before anything else of it is read.
-      if (!m_compat.empty() && text("compat") != m_compat)
+      if (!m_info && !m_compat.empty() && text("compat") != m_compat)
         return fail("the replay was recorded by another build");
       ReplayStreamInfo info;
       const auto compat = text("compat"), build = text("build"), game = text("game"),
@@ -696,7 +705,10 @@ bool ReplayStreamReader::Parse(std::string* error)
       const auto first = number("first_frame"), segment = number("segment");
       if (!compat || !build || !game || !origin || origin->size() != 16 || !first || *first < 0 ||
           *first > MAX_REPLAY_FRAMES || !segment || *segment < 0)
-        return fail("the replay's header is incomplete");
+      {
+        return fail(m_info ? "the match's stream moved to another history" :
+                             "the replay's header is incomplete");
+      }
       info.compat = *compat;
       info.build = *build;
       info.game_id = *game;
@@ -704,11 +716,28 @@ bool ReplayStreamReader::Parse(std::string* error)
       info.origin_hash = std::strtoull(origin->c_str(), nullptr, 16);
       info.first_frame = static_cast<int>(*first);
       info.segment = static_cast<u32>(*segment);
-      m_archive = {};
-      m_archive.origin_hash = info.origin_hash;
-      m_archive.first_frame = info.first_frame;
-      m_info = std::move(info);
-      pos = STREAM_PREAMBLE + size;
+      if (m_info)
+      {
+        // The same history: everything but the writer's own segment count, which moves on when
+        // a recorder drops back into its match through a keyframe (its history rebuilt from the
+        // host's). That it is the same match is then proven frame by frame on the overlap.
+        if (info.compat != m_info->compat || info.build != m_info->build ||
+            info.game_id != m_info->game_id || info.origin_hash != m_info->origin_hash ||
+            info.first_frame != m_info->first_frame || info.room != m_info->room)
+        {
+          return fail("the match's stream moved to another history");
+        }
+        ++m_resumes;
+      }
+      else
+      {
+        m_archive = {};
+        m_archive.origin_hash = info.origin_hash;
+        m_archive.first_frame = info.first_frame;
+        m_info = std::move(info);
+      }
+      m_resuming = false;
+      m_segment_end = m_archive.first_frame;
     }
     while (m_pending.size() - pos >= CHUNK_PREAMBLE)
     {
@@ -721,7 +750,7 @@ bool ReplayStreamReader::Parse(std::string* error)
       if (count == 0 || count > MAX_CHUNK_FRAMES || size > MAX_CHUNK_BYTES ||
           checks > count + 1 || static_cast<u64>(first) + count > MAX_REPLAY_FRAMES)
         return fail("the replay has a damaged chunk");
-      if (static_cast<int>(first) != m_archive.EndFrame())
+      if (static_cast<int>(first) != m_segment_end)
         return fail("the replay's frames don't follow on");
       if (m_pending.size() - pos - CHUNK_PREAMBLE < size)
         break;  // the rest of this chunk hasn't arrived yet
@@ -747,7 +776,16 @@ bool ReplayStreamReader::Parse(std::string* error)
         ReplayFrame next;
         if (!ReadReplayFrame(r, &next))
           return fail("the replay has a damaged frame");
-        if (!m_archive.frames.empty() && (next.menu_exit != 0 || next.seed != 0))
+        const int frame = static_cast<int>(first + i);
+        if (const ReplayFrame* previous = m_archive.At(frame))
+        {
+          if (next.pads != previous->pads || *next.ports != *previous->ports ||
+              next.header != previous->header || next.clear_ready != previous->clear_ready ||
+              next.menu_exit != previous->menu_exit || next.seed != previous->seed)
+            return fail("the match's stream changed");
+          continue;
+        }
+        if (frame != m_archive.first_frame && (next.menu_exit != 0 || next.seed != 0))
           return fail("the replay has a damaged frame");
         if (!ChargeMetadata(next, m_archive.frames.empty() ? nullptr : &m_archive.frames.back(),
                             &m_metadata_budget))
@@ -760,14 +798,16 @@ bool ReplayStreamReader::Parse(std::string* error)
       {
         u32 frame;
         u64 value;
-        if (!r.U32(&frame) || !r.U64(&value) || static_cast<int>(frame) < m_archive.first_frame ||
-            static_cast<int>(frame) > m_archive.EndFrame())
+        if (!r.U32(&frame) || !r.U64(&value) || frame < first || frame > first + count)
           return fail("the replay has a damaged checksum");
-        m_checksums[static_cast<int>(frame)] = value;
+        const auto [it, inserted] = m_checksums.emplace(static_cast<int>(frame), value);
+        if (!inserted && it->second != value)
+          return fail("the match's stream changed");
       }
       if (!r.AtEnd())
         return fail("the replay has a damaged chunk");
       pos += CHUNK_PREAMBLE + size;
+      m_segment_end = static_cast<int>(first + count);
       ++m_chunks;
       if (live <= MAX_REPLAY_FRAMES)
         m_live = std::max(m_live, static_cast<int>(live));

@@ -74,6 +74,9 @@ void ReportPeerFault();
 void KeepAlive();
 // Sends a replay stream's next bytes to the room for its watchers (YouGameRoom::SendReplayStream).
 void SendReplayStream(const std::vector<u8>& bytes);
+// The current room/socket's process-wide generation (0 with no room). Changes on a reopen,
+// including one with the same code; room readiness is still checked separately.
+u64 RoomGeneration();
 // In a ranked set whose opponent stopped sending inputs (15 s stalled, or silent), this player
 // claims the set. Does nothing outside a ranked room's live match.
 void ReportStall();

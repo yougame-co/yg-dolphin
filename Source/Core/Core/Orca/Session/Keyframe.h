@@ -96,7 +96,9 @@ std::vector<u8> PackReplayStream(const ReplayStreamInfo& info, const ReplayArchi
                                  const std::map<int, u64>& checksums);
 
 // Decodes a replay stream fed in pieces (a growing file, or network messages). Feed takes the
-// next bytes; a partial chunk waits for the rest. Frames must arrive in order with no gap.
+// next bytes; a partial chunk waits for the rest. Frames must arrive in order with no gap. Resume
+// begins another segment of the same history: its header (all but the segment count the same),
+// then frames from its start, comparing the overlap and appending only what wasn't already read.
 //
 // The bytes come from other players (a file they made, later the room), so this is an untrusted
 // parser: every length is bounded before it is used, the stream's compatibility key is checked
@@ -109,6 +111,10 @@ public:
   explicit ReplayStreamReader(std::string compat = {}) : m_compat(std::move(compat)) {}
   // False, with `error`, on bytes that aren't a valid stream; the reader is then spent.
   bool Feed(const u8* data, size_t size, std::string* error);
+  // A room reset: discard an incomplete tail, keeping the archive, checksums and metadata budget.
+  // The next header must be the same history (all but its segment count); the overlap is then
+  // compared frame by frame. A failed reader stays failed.
+  void Resume();
   const std::optional<ReplayStreamInfo>& Info() const { return m_info; }
   // Every frame decoded so far, from Info()->first_frame.
   ReplayArchive& Archive() { return m_archive; }
@@ -117,12 +123,16 @@ public:
   int LiveFrame() const { return m_live; }
   u64 BytesRead() const { return m_bytes; }
   u32 Chunks() const { return m_chunks; }
+  // Resumed segments whose identical header has been accepted (not just a reset received).
+  u32 Resumes() const { return m_resumes; }
 
 private:
   bool Parse(std::string* error);
   std::string m_compat;
   std::vector<u8> m_pending;
   std::optional<ReplayStreamInfo> m_info;
+  bool m_resuming = false;
+  int m_segment_end = -1;
   // Port metadata still allowed (as PackKeyframe's budget): names and controls that change every
   // frame can't grow memory past it.
   size_t m_metadata_budget = 64ull << 20;
@@ -130,6 +140,7 @@ private:
   std::map<int, u64> m_checksums;
   u64 m_bytes = 0;
   u32 m_chunks = 0;
+  u32 m_resumes = 0;
   int m_live = -1;
   bool m_failed = false;
 };

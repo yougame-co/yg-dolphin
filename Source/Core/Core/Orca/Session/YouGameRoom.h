@@ -215,6 +215,9 @@ public:
   bool FreshTicket(bool fresh, std::string* ticket, std::string* store_url, std::string* error);
   // The room code in use (for showing and sharing), once known.
   std::string Code() const;
+  // Process-wide generation of this room connection. Reopening creates a new room/socket, even
+  // when its code is the same; immutable, so it can be read on any thread.
+  u64 Generation() const;
   // The roster's name for a seat (this player's included); "" when nobody holds it.
   std::string SeatName(int seat) const;
   // A joiner's own controls and queue identity exactly as its hello carries them (none past their

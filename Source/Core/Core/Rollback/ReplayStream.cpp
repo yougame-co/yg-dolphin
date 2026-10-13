@@ -86,8 +86,7 @@ bool Writer::Emit(const std::vector<u8>& bytes)
 
 // The room's stream starts: the header, then the frames written so far, a few hundred a message
 // (a room message holds at most 64 KiB).
-bool Writer::StartRoom(const Orca::Net::ReplayArchive& replay, const std::map<int, u64>* checksums,
-                       int live)
+bool Writer::StartRoom(const Orca::Net::ReplayArchive& replay, int live)
 {
   bool emitted = false;
   m_room_started = true;
@@ -110,13 +109,10 @@ bool Writer::StartRoom(const Orca::Net::ReplayArchive& replay, const std::map<in
       }
       chunk.frames.push_back(std::move(frame));
     }
-    if (checksums)
+    for (auto it = m_room_checksums.upper_bound(first);
+         it != m_room_checksums.end() && it->first <= last; ++it)
     {
-      for (auto it = checksums->upper_bound(first); it != checksums->end() && it->first <= last;
-           ++it)
-      {
-        chunk.checksums.emplace_back(it->first, it->second);
-      }
+      chunk.checksums.emplace_back(it->first, it->second);
     }
     const std::vector<u8> bytes = Orca::Net::PackReplayChunk(chunk, first == m_first);
     if (bytes.empty())
@@ -185,6 +181,15 @@ bool Writer::Pump(const Orca::Net::ReplayArchive& replay, int end, int live,
   if (replay.first_frame < 0 || replay.frames.empty())
     return true;
   end = std::min(end, replay.EndFrame());
+  if (m_to_room)
+  {
+    const u64 generation = Orca::Online::RoomGeneration();
+    if (generation != m_room_generation)
+    {
+      m_room_generation = generation;
+      m_room_started = false;
+    }
+  }
   const u32 seed = replay.frames[0].seed;
   // Another history (a fresh start or a join: a new first frame, origin or seed, or an archive that
   // starts over shorter than what was written). Not a rollback: the session loads the newest
@@ -213,6 +218,7 @@ bool Writer::Pump(const Orca::Net::ReplayArchive& replay, int end, int live,
     const std::vector<u8> header = Orca::Net::PackReplayStreamHeader(info);
     m_header = header;
     m_room_started = false;
+    m_room_checksums.clear();
     if ((m_file && !*m_file) || !Emit(header))
     {
       ERROR_LOG_FMT(ROLLBACK, "Replay: couldn't write {}", path);
@@ -227,8 +233,8 @@ bool Writer::Pump(const Orca::Net::ReplayArchive& replay, int end, int live,
                    m_segment, m_first, m_origin, path);
     Orca::Status::Line(fmt::format("orca replay-out {}", path.empty() ? "room" : path));
   }
-  if (m_to_room && room_ready && !m_room_started)
-    emitted = StartRoom(replay, checksums, live);
+  if (m_to_room && room_ready && m_room_generation != 0 && !m_room_started)
+    emitted = StartRoom(replay, live);
   const int pending = end - m_written_end;
   if (pending <= 0 || (pending < 6 && Clock::now() - m_flushed < std::chrono::milliseconds(100)))
     return true;
@@ -265,6 +271,11 @@ bool Writer::Pump(const Orca::Net::ReplayArchive& replay, int end, int live,
     return false;
   }
   emitted = true;
+  if (m_to_room)
+  {
+    for (const auto& [frame, hash] : chunk.checksums)
+      m_room_checksums[frame] = hash;
+  }
   m_written_end = chunk.first + count;
   m_flushed = Clock::now();
   return true;
@@ -279,6 +290,8 @@ struct Player::Watch
   std::atomic<bool> stop{false};
   std::mutex mutex;
   std::vector<u8> bytes;
+  // Reset markers at byte offsets in `bytes`, including multiple resets without intervening data.
+  std::vector<size_t> resets;
   bool ended = false;
   std::string error;
 };
@@ -363,9 +376,9 @@ void Player::WatchThread(std::string source)
   // a network failure would (the reconnect test).
   const int drop_after = std::max(0, std::atoi(Orca::GetEnv("ORCA_TEST_REPLAY_WATCH_DROP").c_str()));
   bool dropped = false;
-  // The stream's bytes taken so far. A connection always starts the stream from its header, so after
-  // a reconnect the first `received` bytes are ones already played: they are skipped, and the
-  // first of them (`head`) must be the same, or it is another stream.
+  // This segment's bytes taken so far. A connection starts the newest segment from its header,
+  // so after a reconnect the first `received` bytes are ones already played: they are skipped,
+  // and the first of them (`head`) must be the same, or it is another stream.
   u64 received = 0;
   std::vector<u8> head;
   int connections = 0;
@@ -406,7 +419,7 @@ void Player::WatchThread(std::string source)
       Orca::Status::Line(fmt::format("orca replay reconnected {}", connections - 1));
     }
     const auto connected_at = Clock::now();
-    const u64 received_before = received;
+    u64 received_before = received;
     u64 seen = 0;  // this connection's bytes
     auto last_ping = Clock::now();
     bool lost = false;
@@ -491,9 +504,22 @@ void Player::WatchThread(std::string source)
         std::lock_guard lock(watch.mutex);
         watch.bytes.insert(watch.bytes.end(), bytes->begin() + from, bytes->end());
       }
-      else if (t == "end" || t == "reset")
+      else if (t == "reset")
       {
-        // A new history (a fresh start) begins another stream: this one is over.
+        // The room starts another segment, possibly a repack of this same history. The player
+        // checks its header and overlap, after every byte queued before this marker.
+        {
+          std::lock_guard lock(watch.mutex);
+          watch.resets.push_back(watch.bytes.size());
+        }
+        received = 0;
+        received_before = 0;
+        head.clear();
+        seen = 0;
+        fruitless = 0;
+      }
+      else if (t == "end")
+      {
         {
           std::lock_guard lock(watch.mutex);
           watch.ended = true;
@@ -563,9 +589,11 @@ bool Player::Poll(std::string* error)
       m_watch->thread = std::thread(&Player::WatchThread, this, m_path);
     }
     std::vector<u8> bytes;
+    std::vector<size_t> resets;
     {
       std::lock_guard lock(m_watch->mutex);
       bytes.swap(m_watch->bytes);
+      resets.swap(m_watch->resets);
       if (m_watch->ended)
         m_source_ended = true;
       if (!m_watch->error.empty() && !m_reader->Info())
@@ -574,10 +602,33 @@ bool Player::Poll(std::string* error)
         return false;
       }
     }
-    if (bytes.empty())
+    if (bytes.empty() && resets.empty())
       return true;
     m_last_data = Clock::now();
-    return m_reader->Feed(bytes.data(), bytes.size(), error);
+    const auto feed = [&](size_t from, size_t to) {
+      if (from == to)
+        return true;
+      const u32 resumes = m_reader->Resumes();
+      if (!m_reader->Feed(bytes.data() + from, to - from, error))
+        return false;
+      if (m_reader->Resumes() != resumes)
+      {
+        NOTICE_LOG_FMT(ROLLBACK, "Replay: resumed the match's history at frame {} after a reset",
+                       m_reader->Archive().EndFrame());
+        Orca::Status::Line(fmt::format("orca replay resumed {} end={}", m_reader->Resumes(),
+                                     m_reader->Archive().EndFrame()));
+      }
+      return true;
+    };
+    size_t from = 0;
+    for (const size_t reset : resets)
+    {
+      if (!feed(from, reset))
+        return false;
+      m_reader->Resume();
+      from = reset;
+    }
+    return feed(from, bytes.size());
   }
   if (!m_file)
   {

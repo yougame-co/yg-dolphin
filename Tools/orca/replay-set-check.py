@@ -6,7 +6,7 @@
 #
 #   Tools/orca/replay-set-check.py <dolphin-emu-nogui> <disc> --site <url> [--pplus <launcher.dol>]
 #       [--queue ranked|casual] [--games N] [--late-watch S] [--relay [--watch-drop S]]
-#       [--scenario rejoin|kill|...]
+#       [--scenario rejoin|kill|...] [--recorder ada|bo]
 #
 # --site is a local stand-in site with dev tickets and a local rooms Worker behind it (YouGame
 # rooms/scripts/replay-stub-site.mjs + `wrangler dev`). The queue-e2e run's own checks (the same
@@ -50,6 +50,10 @@ PPLUS = opt("--pplus")
 QUEUE = opt("--queue", "ranked")
 GAMES = opt("--games")
 SCENARIO = opt("--scenario")
+# --recorder <ada|bo>: only that player streams to the room (queue-e2e --replay-room). With
+# --scenario rejoin, bo (the joiner) is the one whose room connection drops and comes back, so
+# --recorder bo checks that the live stream follows its recorder through the drop.
+RECORDER = opt("--recorder")
 LATE = int(opt("--late-watch", "150"))
 RELAY = "--relay" in sys.argv
 WATCH_DROP = opt("--watch-drop", "40")
@@ -121,6 +125,8 @@ if GAMES:
     cmd += ["--games", GAMES]
 if SCENARIO:
     cmd += ["--scenario", SCENARIO]
+if RECORDER:
+    cmd += ["--replay-room", RECORDER]
 env = dict(os.environ)
 if RELAY:
     env["ORCA_TEST_REPLAY_ROOM"] = "1"
@@ -222,6 +228,10 @@ for name in ("Watcher", "LateWatcher"):
         back = [l for l in watchers[name][1] if "orca replay reconnected" in l]
         check("Watcher's connection dropped mid-set and came back", w["ok"] and back,
               f"{len(back)} reconnect(s), dropped {WATCH_DROP} s after it connected")
+    if RELAY and SCENARIO == "rejoin" and RECORDER:
+        resumed = [l for l in watchers[name][1] if "orca replay resumed" in l]
+        check(f"{name} followed its recorder through the room drop", w["ok"] and resumed,
+              f"{len(resumed)} resume(s): {resumed[0].split('] ', 1)[-1] if resumed else '-'}")
     check(f"{name} followed the whole set and matches", w["ok"] and int(w.get("checked") or 0) > 0
           and w.get("mismatched") == "0" and covers, detail + f" (the set: {len(set_stream.frames)} frames)")
 

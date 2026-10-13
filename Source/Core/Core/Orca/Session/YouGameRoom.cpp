@@ -3707,6 +3707,11 @@ std::string YouGameRoom::Code() const
   return m_impl->code;
 }
 
+u64 YouGameRoom::Generation() const
+{
+  return m_impl->generation;
+}
+
 std::string YouGameRoom::Status() const
 {
   std::lock_guard lock(m_impl->mutex);

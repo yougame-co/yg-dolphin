@@ -412,6 +412,12 @@ void SendReplayStream(const std::vector<u8>& bytes)
     room->SendReplayStream(bytes);
 }
 
+u64 RoomGeneration()
+{
+  const auto room = Room();
+  return room ? room->Generation() : 0;
+}
+
 void ReportDesync()
 {
   if (const auto room = Room())

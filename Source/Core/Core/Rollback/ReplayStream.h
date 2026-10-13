@@ -42,6 +42,7 @@ class IOFile;
 //    {"t":"rs","b":<base64>} messages carry the stream, {"t":"end"} its end; or watch:<room>, which
 //    gets its watch ticket from ORCA_SITE for the dev game, a fresh one for every connection. A
 //    dropped connection comes back (about 30 s of tries) and skips the bytes already played;
+//    {"t":"reset"} starts a new segment, whose header and overlapping frames must match.
 //    ORCA_TEST_REPLAY_WATCH_DROP=<s> drops it once, that long after it connected.
 //    ORCA_TEST_REPLAY_FOLLOW=1 keeps reading as the file grows, ORCA_TEST_REPLAY_DELAY (12) frames
 //    behind its newest frame (a live watcher); ORCA_TEST_REPLAY_REALTIME=1 plays a finished file at
@@ -50,7 +51,7 @@ class IOFile;
 //    again as one compact stream.
 // Stdout (session only): "orca replay-out <path>" per file written; a player prints "orca replay
 // start ...", "orca replay at ..." every 600 frames, "orca replay seek ...", "orca replay
-// reconnected <n>" and one
+// reconnected <n>", "orca replay resumed ..." after a reset, and one
 // "orca replay done ok|fail <key=value>... why=<text>" line.
 namespace Rollback::ReplayStream
 {
@@ -66,14 +67,14 @@ public:
   // begins another file. False once writing failed.
   // With the room on (ORCA_TEST_REPLAY_ROOM), the room takes a stream only from a seated player
   // in a match, so it starts once `room_ready` (a session runs): the header, then everything
-  // written so far in compact chunks, then each chunk as it is written.
+  // written so far in compact chunks, then each chunk as it is written. A reopened room starts
+  // again with the same header and backlog.
   bool Pump(const Orca::Net::ReplayArchive& replay, int end, int live,
             const std::map<int, u64>* checksums, bool room_ready = false);
 
 private:
   bool Emit(const std::vector<u8>& bytes);
-  bool StartRoom(const Orca::Net::ReplayArchive& replay, const std::map<int, u64>* checksums,
-                 int live);
+  bool StartRoom(const Orca::Net::ReplayArchive& replay, int live);
   void LogTiming(bool final) const;
 
   struct Timing;
@@ -83,6 +84,10 @@ private:
   bool m_to_room = false;
   bool m_started = false;
   bool m_room_started = false;
+  u64 m_room_generation = 0;
+  // The checksums already written: sessions only retain their last few seconds, but a reopened
+  // room needs the whole backlog's checksums too.
+  std::map<int, u64> m_room_checksums;
   std::vector<u8> m_header;
   u32 m_segment = 0;
   std::unique_ptr<File::IOFile> m_file;

@@ -117,6 +117,9 @@ const DUMP_AUDIO = argv.includes("--dump-audio");
 // --replay: each Orca writes its history as replay streams to <work>/rec-<name>-<n>.ygr
 // (ORCA_TEST_REPLAY_OUT; Tools/orca/replay-set-check.py watches and replays them).
 const REPLAY = argv.includes("--replay");
+// --replay-room <name,...>: only these players send their history to the room for watchers
+// (ORCA_TEST_REPLAY_ROOM=1), whatever this script's own environment says.
+const REPLAY_ROOM = opt("--replay-room") ? opt("--replay-room").split(",") : null;
 // How long after a ranked set's verdict the page sends the new rating (`queue rating`).
 const RATING_AFTER_MS = Number(opt("--rating-after", "1500"));
 const Q2 = argv.includes("--q2");
@@ -481,6 +484,11 @@ class Side {
     // shared Mac, SDL_JOYSTICK_HIDAPI=0 and friends keep test Orcas off a player's adapter).
     for (const [k, v] of Object.entries(process.env)) {
       if ((k.startsWith("ORCA_TEST_") || k.startsWith("SDL_")) && !(k in env)) env[k] = v;
+    }
+    // After the copy from this script's environment, which would otherwise set it for both.
+    if (REPLAY_ROOM) {
+      if (REPLAY_ROOM.includes(this.name)) env.ORCA_TEST_REPLAY_ROOM = "1";
+      else delete env.ORCA_TEST_REPLAY_ROOM;
     }
     if (PPLUS) env.ORCA_PROFILE = "PPLUS32";
     if (SCENARIO === "rejoin" && DROP === "silent") env.ORCA_TEST_DROP_SILENT = "1";
