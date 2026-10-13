@@ -3011,9 +3011,11 @@ TEST(OrcaUXNameTags, ButtonsSetOnTheControlsPageAreThePlayersOwnWhateverTheTagIs
     m.Write8(FakeBrawl::Tag(5) + 0x14 + 4, 0x02);
     EXPECT_FALSE(reader.Read(m, ports, *edited, 1));
   }
+  // Setting a tag up back to the game's defaults (tap jump on again) is their choice too, even
+  // though the reader switches to that tag at the defaults. Detect it with or without a Save bit.
+  for (const bool saved_bit : {false, true})
   {
-    // Setting a tag up back to the game's defaults (tap jump on again) is their choice too, even
-    // though the reader switches to that tag at the defaults.
+    SCOPED_TRACE(saved_bit);
     FakeBrawl m("scButton");
     GameMadeTag(m, 0, Typed(u"SANDB"));
     SavedCustom(m, 0);
@@ -3024,7 +3026,8 @@ TEST(OrcaUXNameTags, ButtonsSetOnTheControlsPageAreThePlayersOwnWhateverTheTagIs
     EXPECT_FALSE(reader.Read(m, ports, own, 0));
     for (u32 i = 0; i < 0x2D; ++i)
       m.Write8(FakeBrawl::Tag(1) + 0x14 + i, FakeBrawl::CONTROLS[i]);
-    m.Write8(FakeBrawl::Tag(1) + 0x14 + 11, 0x81);
+    if (saved_bit)
+      m.Write8(FakeBrawl::Tag(1) + 0x14 + 11, 0x81);
     const std::optional<std::vector<u8>> edited = reader.Read(m, ports, own, 0);
     ASSERT_TRUE(edited);
     EXPECT_EQ(*edited, Profile(1, FakeBrawl::CONTROLS));
