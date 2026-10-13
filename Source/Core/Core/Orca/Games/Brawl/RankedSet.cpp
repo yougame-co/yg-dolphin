@@ -14,6 +14,7 @@
 #include "Common/Logging/Log.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Engine/GuestMemory.h"
+#include "Core/Orca/Games/Brawl/Rulesets.h"
 #include "Core/Orca/UX/Probe.h"
 #include "Core/Orca/UX/QueueApp.h"
 #include "Core/Orca/UX/SetEnd.h"
@@ -53,11 +54,19 @@ u8 Byte(int v)
   return v < 0 || v > 254 ? 0xFF : static_cast<u8>(v);
 }
 
-int LedgeLimit(bool tiebreak, u8 character)
+// The ruleset a set block's ruleset byte names. A ranked header whose byte names none (Orca never
+// writes one) keeps what the tracker did before rulesets were data: the results screen decides,
+// two wins take the set, five ties in a row void it, no tiebreak game.
+const Ranked::Ruleset* RulesOf(Ruleset ruleset)
 {
-  const bool mk = character == META_KNIGHT;
-  return tiebreak ? (mk ? LEDGE_LIMIT_TIEBREAK_MK : LEDGE_LIMIT_TIEBREAK) :
-                    (mk ? LEDGE_LIMIT_MK : LEDGE_LIMIT);
+  return Rulesets::ByBlock(static_cast<u8>(ruleset));
+}
+constexpr int NO_RULESET_WINS = 2;
+constexpr int NO_RULESET_VOID_AFTER_TIES = 5;
+
+bool Judged(const Ranked::Ruleset* rules)
+{
+  return rules && rules->time_out == Ranked::TimeOut::Judged;
 }
 
 // Last published set for CurrentScoreLine. Bit 31 ranked, 30 fighting, 29 results screen, 24-25
@@ -103,9 +112,10 @@ std::optional<GameRecord> Judge(Ruleset ruleset, const SetState& set, const Resu
     r.how = How::Tie;
     return r;
   };
-  if (ruleset != Ruleset::Brawl)
+  const Ranked::Ruleset* rules = RulesOf(ruleset);
+  if (!Judged(rules))
   {
-    // Project+ decides time-outs itself.
+    // The results screen decides (Project+'s codeset settles time-outs itself).
     if (first0 != first1)
       return win(first0 ? 0 : 1, How::Results);
     if (first0 && first1)
@@ -119,8 +129,8 @@ std::optional<GameRecord> Judge(Ruleset ruleset, const SetState& set, const Resu
   if (r.timeout)
   {
     // Ledge-grab limit first: if exactly one player is over it, they lose.
-    const bool over0 = set.ledge[0] > LedgeLimit(set.tiebreak, r.characters[0]);
-    const bool over1 = set.ledge[1] > LedgeLimit(set.tiebreak, r.characters[1]);
+    const bool over0 = set.ledge[0] > rules->ledge.For(set.tiebreak, r.characters[0]);
+    const bool over1 = set.ledge[1] > rules->ledge.For(set.tiebreak, r.characters[1]);
     if (over0 != over1)
       return win(over0 ? 1 : 0, How::Ledge);
     // Then stocks, then percent, as they were when time ran out.
@@ -144,6 +154,8 @@ std::optional<GameRecord> Judge(Ruleset ruleset, const SetState& set, const Resu
 
 SetState Step(SetState s, Ruleset ruleset, const Facts& f, u32 frame)
 {
+  const Ranked::Ruleset* rules = RulesOf(ruleset);
+  const bool judged = Judged(rules);
   if (s.done)
   {
     if (s.fight)
@@ -172,10 +184,10 @@ SetState Step(SetState s, Ruleset ruleset, const Facts& f, u32 frame)
       s.fight_flags =
           static_cast<u8>((s.fight_flags & ~SetBlock::FIGHT_BETWEEN) | SetBlock::FIGHT_SUDDEN);
     }
-    if (f.live.valid && ruleset != Ruleset::Brawl)
+    if (f.live.valid && !judged)
     {
-      // Project+ only needs to know the fighters are in: the game began (its game-start). Its own
-      // codeset settles time-outs, so nothing else is counted.
+      // The results screen decides (Project+): only the fighters being in counts, when the game
+      // began (its game-start). Nothing else is counted.
       s.fight_flags |= SetBlock::FIGHT_SEEN;
     }
     else if (f.live.valid)
@@ -204,7 +216,7 @@ SetState Step(SetState s, Ruleset ruleset, const Facts& f, u32 frame)
         }
       }
     }
-    else if (ruleset == Ruleset::Brawl && f.live_read && (s.fight_flags & SetBlock::FIGHT_SEEN))
+    else if (judged && f.live_read && (s.fight_flags & SetBlock::FIGHT_SEEN))
     {
       s.fight_flags |= SetBlock::FIGHT_GONE;
     }
@@ -233,7 +245,7 @@ SetState Step(SetState s, Ruleset ruleset, const Facts& f, u32 frame)
       s.last_winner = r->winner;
       s.tiebreak = false;
       s.tb_streak = 0;
-      if (s.wins[w] >= WINS)
+      if (s.wins[w] >= (rules ? rules->wins_needed : NO_RULESET_WINS))
       {
         s.done = 1;
         s.winner = r->winner;
@@ -242,9 +254,9 @@ SetState Step(SetState s, Ruleset ruleset, const Facts& f, u32 frame)
     else
     {
       ++s.tb_streak;
-      // Brawl plays a tiebreak game. Project+ has its own overtime.
-      s.tiebreak = ruleset == Ruleset::Brawl;
-      if (s.tb_streak >= TIEBREAK_STREAK_LIMIT)
+      // A ruleset with a tiebreak game plays one (Brawl). Project+ has its own overtime.
+      s.tiebreak = rules && rules->tiebreak;
+      if (s.tb_streak >= (rules ? rules->void_after_ties : NO_RULESET_VOID_AFTER_TIES))
         s.done = 2;
     }
     if (!s.done && s.games >= SetBlock::MAX_RECORDS)
@@ -269,8 +281,11 @@ SetState Step(SetState s, Ruleset ruleset, const Facts& f, u32 frame)
   return s;
 }
 
-int WriteSetRules(GuestMemory& memory, const SetState& set, u8 stocks, u8 minutes)
+int WriteSetRules(GuestMemory& memory, const SetState& set, const Ranked::Ruleset& rules,
+                  std::optional<std::pair<u8, u8>> stocks_minutes)
 {
+  const u8 stocks = stocks_minutes ? stocks_minutes->first : rules.stocks;
+  const u8 minutes = stocks_minutes ? stocks_minutes->second : rules.minutes;
   const u32 rule = SetRule(memory);
   if (!rule)
     return 0;
@@ -282,8 +297,8 @@ int WriteSetRules(GuestMemory& memory, const SetState& set, u8 stocks, u8 minute
     ++changed;
   };
   put(RULE_MODE, 1);
-  put(RULE_STOCKS, set.tiebreak ? 1 : stocks);
-  put(RULE_STOCK_MINUTES, set.tiebreak ? 3 : minutes);
+  put(RULE_STOCKS, set.tiebreak ? rules.tiebreak_stocks : stocks);
+  put(RULE_STOCK_MINUTES, set.tiebreak ? rules.tiebreak_minutes : minutes);
   return changed;
 }
 
@@ -453,10 +468,11 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating)
                                        "");
     }
   }
-  if (header->ruleset == Ruleset::Brawl && facts.scene != Scene::Fight)
+  const Ranked::Ruleset* rules = RulesOf(header->ruleset);
+  if (rules && rules->SetWritesGameRules() && facts.scene != Scene::Fight)
   {
     // Test knob ORCA_TEST_SET_RULES=<stocks>,<minutes> for shorter games.
-    static const std::pair<u8, u8> s_rules = [] {
+    static const std::optional<std::pair<u8, u8>> s_rules = []() -> std::optional<std::pair<u8, u8>> {
       const char* v = std::getenv("ORCA_TEST_SET_RULES");
       char* end = nullptr;
       const long stocks = v ? std::strtol(v, &end, 10) : 0;
@@ -466,9 +482,9 @@ void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating)
       {
         return std::pair<u8, u8>(static_cast<u8>(stocks), static_cast<u8>(minutes));
       }
-      return std::pair<u8, u8>(3, 8);
+      return std::nullopt;
     }();
-    WriteSetRules(memory, after, s_rules.first, s_rules.second);
+    WriteSetRules(memory, after, *rules, s_rules);
   }
   // Show VICTORY or DEFEAT on the deciding game's results screen. Local display, never on re-runs.
   if (!resimulating && after.done == 1 && facts.scene == Scene::Results && after.games > 0 &&

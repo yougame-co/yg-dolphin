@@ -44,10 +44,15 @@ struct Range
 constexpr u32 kSoraSceneBase = 0x806BB480;
 constexpr Range kSoraSceneText{0x806BB554, 0x806F8ADC};
 
-// The match block (header and set state), inside sqNetAnyOkiraku::setNext. It can grow up to
-// kMatchBlockLimit, the next relocated word.
-constexpr Range kMatchBlock{0x806F2380, 0x806F2580};
-constexpr u32 kMatchBlockLimit = 0x806F2618;
+// The match block (MatchBlock.h: header, steps, saved rules, cursors, queue, character order, the
+// ranked set, friend drop-in), inside sqNetAnyOkiraku::setNext, all of it: up to the next relocated
+// word, which its last field (FRIENDS_END) reaches. kMatchBlockHead is its first 512 bytes, the
+// part the block's codecs count in (MatchBlock::SIZE); the character order starts where it ends.
+// (Until S5 kMatchBlock was only the head, so free-space.py and CavesValid never covered the 152
+// bytes after it.)
+constexpr Range kMatchBlock{0x806F2380, 0x806F2618};
+constexpr Range kMatchBlockHead{0x806F2380, 0x806F2580};
+constexpr u32 kMatchBlockLimit = kMatchBlock.end;
 constexpr u32 kMatchBlockOriginalWord = 0x3A200000;  // `li r17, 0`, at kMatchBlock.begin
 
 // Code caves: runs of at least 500 bytes with no relocated words (16,908 bytes in total). All of
@@ -128,8 +133,19 @@ constexpr bool CavesValid()
 }
 }  // namespace Detail
 
-static_assert(kMatchBlock.Size() >= 96 && kMatchBlock.begin % 32 == 0 &&
-              kMatchBlock.end % 32 == 0 && kMatchBlock.end <= kMatchBlockLimit);
-static_assert(Detail::Free(kMatchBlock) && Detail::Free({kMatchBlock.begin, kMatchBlockLimit}));
+// The block starts on a cache line and its last line holds no cave (only the relocated word, which
+// is data the loader writes before Orca runs).
+static_assert(kMatchBlockHead.Size() >= 96 && kMatchBlock.begin % 32 == 0 &&
+              kMatchBlockHead.begin == kMatchBlock.begin && kMatchBlockHead.end % 32 == 0 &&
+              kMatchBlockHead.end <= kMatchBlock.end);
+static_assert(Detail::Free(kMatchBlock));
+static_assert([] {
+  for (const Range& cave : kCodeCaves)
+  {
+    if (cave.begin < ((kMatchBlock.end + 31) & ~31u) && cave.end > (kMatchBlock.begin & ~31u))
+      return false;
+  }
+  return true;
+}());
 static_assert(Detail::CavesValid());
 }  // namespace Orca::UX::FreeSpace

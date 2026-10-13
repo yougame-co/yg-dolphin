@@ -17,6 +17,7 @@
 
 #include "Core/Orca/Games/Brawl/BrawlStages.h"
 #include "Core/Orca/Engine/GuestMemory.h"
+#include "Core/Orca/Games/Brawl/Rulesets.h"
 #include "Core/Orca/Games/Brawl/StageCursors.h"
 #include "Core/Rollback/InputGate.h"
 #include "InputCommon/GCPadStatus.h"
@@ -621,7 +622,7 @@ TEST_F(OrcaBrawlStages, ATakenStageTheStepsDontAllowIsReplaced)
   Push(m, 1, Y);
   RS::SetView view = ReadState(m)->set;
   view.characters = {0, 2};
-  const RS::Plan plan = RS::PlanGame(RS::Brawl2025(), view);
+  const RS::Plan plan = RS::PlanGame(Rulesets::Brawl2025(), view);
   ASSERT_NE(RS::Current(plan, ReadState(m)->progress), nullptr);
   ASSERT_EQ(RS::Current(plan, ReadState(m)->progress)->kind, RS::StepKind::Pick);
   // The game's cursor rests on Delfino, then A lands on Final Destination (port 1 won there: DSR).
@@ -968,7 +969,7 @@ RS::Plan CasualPlanOf(const State& s)
   RS::SetView v;
   v.coin = s.coin;
   v.characters = {s.characters[0], s.characters[1]};
-  return RS::PlanCasual(RS::Brawl2025(), v, s.seed);
+  return RS::PlanCasual(Rulesets::Brawl2025(), v, s.seed);
 }
 }  // namespace
 

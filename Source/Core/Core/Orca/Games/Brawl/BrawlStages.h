@@ -52,7 +52,7 @@ class GuestMemory;
 
 namespace Orca::UX::BrawlStages
 {
-// Supernova 2025's legal stages, in Ranked::Brawl2025's index order.
+// Supernova 2025's legal stages, in the Brawl ruleset's order (Rulesets/brawl-supernova-2025.json).
 enum Stage : u8
 {
   Battlefield,

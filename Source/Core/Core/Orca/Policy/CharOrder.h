@@ -41,6 +41,9 @@ struct SetView
   int game = 0;                     // 1-based
   int last_winner = -1;             // previous game's winning port (0 or 1), from game 2 on
   Order order = kLaterGameOrder;
+  // Each turn, in frames: the ruleset's characterOrder.pickSeconds x 60 (45 s in both builtins), set
+  // by ReadSet with the set.
+  u16 pick_frames = 0;
   bool operator==(const SetView&) const = default;
 };
 // The winner (WinnerFirst) or the loser (Free). -1 without a previous winner.
@@ -99,9 +102,6 @@ struct State
   bool operator==(const State&) const = default;
 };
 
-// 45 seconds per pick at 60 fps.
-constexpr int PICK_FRAMES = 45 * 60;
-
 // Where a token goes with no anchor known for either port: the middle of the character grid.
 constexpr float kGridMiddleX = 0.0f;
 constexpr float kGridMiddleY = 5.0f;
@@ -109,8 +109,8 @@ constexpr float kGridMiddleY = 5.0f;
 // The order is on: the character select of an applying set game, begun for this game and picker.
 // Shared by the step machine, the gate and the overlay's line.
 bool Active(const SetView& set, const CssView& css, const State& state);
-// The current turn's time is up.
-bool TimedOut(const State& state);
+// The current turn's time is up (SetView::pick_frames).
+bool TimedOut(const SetView& set, const State& state);
 
 // Advances the step machine by one frame. Pure. Starts the order on the character select of game
 // 2+, moves on when the current picker locks in or time runs out, and clears a stale order on any
@@ -123,7 +123,7 @@ Rollback::InputGate::Masks Gate(const SetView& set, const CssView& css, const St
 // Bitmask of ports that have locked in, for the overlay's LOCKED IN ribbons. Display only.
 u8 LockedPorts(const SetView& set, const CssView& css, const State& state);
 
-// The port whose token is still in hand PICK_FRAMES after both turns ended, or -1 (the second
+// The port whose token is still in hand a turn's time (pick_frames) after both turns ended, or -1 (the second
 // picker's first). Frame() writes it as the ranked no-show (MatchBlock CSS_NO_SHOW), which takes
 // that player out of the set as one who didn't pick in time (Rollback/OnlineMatch.cpp). Pure.
 int NoShow(const SetView& set, const CssView& css, const State& state);

@@ -13,10 +13,11 @@
 #include "Core/Rollback/InputGate.h"
 
 // The queue's character select machine, Slippi-style (ORCA.md "The queue's character select"):
-// ready flags, the 30 s ready timer, the skip's hold, port 2's pick steered in with integer
+// ready flags, the ready timer, the skip's hold, port 2's pick steered in with integer
 // steering, and the gate's masks and presses. Pure functions of what a frame sees (View, State)
 // and the frame number. Engine-side competitive policy (Orca split, S2 commit 7, Luis's decision
-// 11): a person reviews a change here, and its numbers become ruleset data in S5. The Brawl module
+// 11): a person reviews a change here. Its timers are ruleset data (S5): the ruleset's queue
+// section, which the Brawl module puts in View. The Brawl module
 // (Games/Brawl/Queue.h) reads View and State from memory, calls these at the same positions as
 // before, and writes the result back.
 namespace Orca::UX::Queue
@@ -36,9 +37,6 @@ constexpr u8 FLAG_SWALLOW_START = 0x08;
 // and backs out, so one press does both. Idempotent if the frame is re-run.
 constexpr u8 FLAG_BACK_A = 0x10;
 
-// 30 s to ready up, 1.5 s of B to skip, at 60 frames per second.
-constexpr int READY_FRAMES = 30 * 60;
-constexpr int SKIP_FRAMES = 90;
 // The skip's bar shows only after this much of a hold, so an ordinary B tap never flashes it.
 constexpr int SKIP_BAR_FRAMES = 15;
 // The queue's own select while searching: B cancels the search; still held this long, it reaches
@@ -97,6 +95,10 @@ struct View
   float hand2_prev_x = 0;
   float hand2_prev_y = 0;
   std::optional<Identity> pick2;  // port 2's queued pick, from its plug frame on
+  // The ruleset's queue timers (queue.readySeconds x 60, queue.skipFrames: Brawl's and Project+'s
+  // 30 s and 90 frames), set with queue2.
+  u16 ready_frames = 0;
+  u16 skip_frames = 0;
   bool operator==(const View&) const = default;
 };
 
@@ -141,16 +143,16 @@ std::string_view UnreadyReason(const View& view, const State& before, const Stat
 // The gate's masks and presses for the frame about to run. Pure.
 Rollback::InputGate::Masks Gate(const View& view, const State& state);
 
-// B held for SKIP_FRAMES in a row fires one skip; B must be released before the next. A tap keeps
-// its own meaning (un-pick, un-ready). Local only.
+// B held for `skip_frames` (View::skip_frames) in a row fires one skip; B must be released before
+// the next. A tap keeps its own meaning (un-pick, un-ready). Local only.
 struct SkipHold
 {
   int frames = 0;
   bool sent = false;
   // Returns whether a skip fires on this frame.
-  bool Step(bool may_skip, bool held);
+  bool Step(bool may_skip, bool held, int skip_frames);
   // 0..1 progress toward a skip, for the overlay: 0 until SKIP_BAR_FRAMES.
-  float Progress() const;
+  float Progress(int skip_frames) const;
 };
 
 // ---- Fixed point (the steering's arithmetic) ----

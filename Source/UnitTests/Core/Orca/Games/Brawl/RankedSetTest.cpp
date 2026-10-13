@@ -13,6 +13,7 @@
 #include "Core/Orca/Engine/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/RankedSet.h"
 #include "Core/Orca/Games/Brawl/Results.h"
+#include "Core/Orca/Games/Brawl/Rulesets.h"
 #include "Core/Orca/Games/Brawl/SetBlock.h"
 
 using namespace Orca::UX;
@@ -252,7 +253,7 @@ TEST(OrcaRankedSet, BrawlTimeOutLedgeLimitThenStocksThenPercent)
   // Meta Knight's limit is 20.
   live = Grabs(0, 21);
   live.push_back(LiveAt(true, 3, 2, 10, 20));
-  s = Play({}, Ruleset::Brawl, 1000, Result(0, 1, 3, 2, RankedSet::META_KNIGHT), live);
+  s = Play({}, Ruleset::Brawl, 1000, Result(0, 1, 3, 2, static_cast<u8>(Rulesets::Brawl2025().meta_knight)), live);
   EXPECT_EQ(s.records[0].how, How::Ledge);
   EXPECT_EQ(s.records[0].winner, 1);
   // Both over: the limit is ignored.
@@ -298,11 +299,11 @@ TEST(OrcaRankedSet, BrawlTieMeansATiebreakGame)
   m.Write32(0x9018131C, 0x9017F360);
   for (u32 i = 0; i < 0x10; ++i)
     m.bytes[0x9017F360 + i] = 0;
-  EXPECT_EQ(RankedSet::WriteSetRules(m, s), 3);
+  EXPECT_EQ(RankedSet::WriteSetRules(m, s, Rulesets::Brawl2025()), 3);
   EXPECT_EQ(m.Read8(0x9017F362), 1);
   EXPECT_EQ(m.Read8(0x9017F364), 1);
   EXPECT_EQ(m.Read8(0x9017F368), 3);
-  EXPECT_EQ(RankedSet::WriteSetRules(m, s), 0);
+  EXPECT_EQ(RankedSet::WriteSetRules(m, s, Rulesets::Brawl2025()), 0);
   // The tiebreak game's ledge limit is 11.
   live = Grabs(1, 12);
   live.push_back(LiveAt(true, 1, 1, 50, 60));
@@ -314,7 +315,7 @@ TEST(OrcaRankedSet, BrawlTieMeansATiebreakGame)
   EXPECT_FALSE(t.tiebreak);
   EXPECT_EQ(t.tb_streak, 0);
   EXPECT_EQ(t.GameNumber(), 2);
-  EXPECT_EQ(RankedSet::WriteSetRules(m, t), 2);
+  EXPECT_EQ(RankedSet::WriteSetRules(m, t, Rulesets::Brawl2025()), 2);
   EXPECT_EQ(m.Read8(0x9017F364), 3);
   EXPECT_EQ(m.Read8(0x9017F368), 8);
   // A simultaneous last-stock loss (sudden death, no time-up): a tie as well.
@@ -323,7 +324,7 @@ TEST(OrcaRankedSet, BrawlTieMeansATiebreakGame)
   EXPECT_TRUE(u.tiebreak);
   // Five ties in a row void the set.
   SetState v;
-  for (int i = 0; i < RankedSet::TIEBREAK_STREAK_LIMIT; ++i)
+  for (int i = 0; i < Rulesets::Brawl2025().void_after_ties; ++i)
     v = Play(v, Ruleset::Brawl, 1000 + 1000 * i, Result(0, 1, 1, 0), {}, true);
   EXPECT_EQ(v.done, 2);
   EXPECT_EQ(v.winner, NO_PORT);
@@ -400,6 +401,32 @@ TEST(OrcaRankedSet, ProjectPlusKeepsItsOwnTimeOutRules)
   s = Play({}, Ruleset::PPlus, 1000, Result(0, 0, 1, 1));
   EXPECT_EQ(s.records[0].how, How::Tie);
   EXPECT_FALSE(s.tiebreak);
+}
+
+// A ranked header whose ruleset byte names no ruleset (Orca never writes one) keeps the tracker's
+// behaviour from before rulesets were data: the results screen decides a time-out, two wins take the
+// set, five ties void it, no tiebreak game, and ledge grabs aren't counted.
+TEST(OrcaRankedSet, NoRulesetKeepsTheOldDefaults)
+{
+  std::vector<RankedSet::Live> live = Grabs(0, 40);
+  live.push_back(LiveAt(true, 3, 1, 10, 90));
+  ResultBlock timeout = Result(1, 0, 3, 1);
+  timeout.decision = 1;
+  SetState s = Play({}, Ruleset::None, 1000, timeout, live);
+  ASSERT_EQ(s.games, 1);
+  EXPECT_EQ(s.records[0].how, How::Results);
+  EXPECT_EQ(s.records[0].winner, 1);
+  EXPECT_EQ(s.records[0].ledge, (std::array<u8, 2>{0, 0}));
+  s = Play(s, Ruleset::None, 5000, Result(1, 0));
+  EXPECT_EQ(s.done, 1);
+  EXPECT_EQ(s.winner, 1);
+  SetState t;
+  for (int i = 0; i < 5; ++i)
+  {
+    t = Play(t, Ruleset::None, 1000 + 1000 * i, Result(0, 0, 1, 1));
+    EXPECT_FALSE(t.tiebreak);
+  }
+  EXPECT_EQ(t.done, 2);
 }
 
 // A ranked game begins once its fighters are in (FIGHT_SEEN), not at the fight scene's first frame:

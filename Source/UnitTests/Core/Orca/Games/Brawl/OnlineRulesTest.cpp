@@ -16,6 +16,7 @@
 #include "Core/Orca/Games/Brawl/MatchBlock.h"
 #include "Core/Orca/Engine/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/OnlineRules.h"
+#include "Core/Orca/Games/Brawl/Rulesets.h"
 #include "Core/Orca/Games/Brawl/SetBlock.h"
 #include "Core/Orca/Games/Brawl/Queue.h"
 #include "Core/Rollback/OnlineMatch.h"
@@ -27,6 +28,8 @@ namespace MB = Orca::UX::MatchBlock;
 
 namespace
 {
+// The ranked character select's ready limit: the Brawl ruleset's (60 s, as both builtins).
+const int CSS_READY_FRAMES = Rulesets::Brawl2025().css_ready_seconds * 60;
 int NextFrame()
 {
   static int s_frame = 0;

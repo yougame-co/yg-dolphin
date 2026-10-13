@@ -20,6 +20,7 @@
 #include "Core/Orca/Games/Brawl/OnlineRules.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/Games/Brawl/Queue.h"
+#include "Core/Orca/Games/Brawl/Rulesets.h"
 #include "Core/Orca/Games/Brawl/SetBlock.h"
 #include "InputCommon/GCPadStatus.h"
 
@@ -119,11 +120,11 @@ std::string Line(const SetView& set, const CssView& css, const State& state,
     }
     return {};
   }
-  const std::string left = Clock(PICK_FRAMES - state.elapsed);
+  const std::string left = Clock(set.pick_frames - state.elapsed);
   const int first = state.first & 1;
   const int second = 1 - first;
   // The first pick's time is up with its token in hand: it is going down.
-  if (state.step == Step::First && TimedOut(state) && !css.ports[first].Down())
+  if (state.step == Step::First && TimedOut(set, state) && !css.ports[first].Down())
   {
     if (first == local)
       return "Time's up: your token goes on a character";
@@ -159,11 +160,25 @@ static_assert(Block::SET_WINS == SetBlock::SET_WINS && Block::SET_DONE == SetBlo
               Block::SET_LAST_WINNER == SetBlock::SET_LAST_WINNER);
 static_assert(kArea == FreeSpace::kMatchBlock.begin + 0x200);
 
+namespace
+{
+// A set's turn time, from the ruleset its block names (a set names a builtin; none only in a
+// build whose ruleset files don't load, OrcaRulesets.BuiltinsAreTheOldTables: no set then).
+SetView WithTimer(SetView set)
+{
+  const Ranked::Ruleset* rules = Rulesets::ByBlock(static_cast<u8>(set.ruleset));
+  if (!rules)
+    return {};
+  set.pick_frames = static_cast<u16>(rules->order_pick_seconds * 60);
+  return set;
+}
+}  // namespace
+
 SetView ReadSet(const GuestMemory& memory)
 {
   // Test override.
   if (TestSet().ruleset != Ruleset::None)
-    return TestSet();
+    return WithTimer(TestSet());
   const GuestMemory& m = memory;
   const u32 base = FreeSpace::kMatchBlock.begin;
   if (!m.Valid(base + Block::MAGIC) || !m.Valid(base + Block::SET_LAST_WINNER) ||
@@ -183,7 +198,7 @@ SetView ReadSet(const GuestMemory& memory)
   set.game = m.Read8(base + Block::SET_WINS) + m.Read8(base + Block::SET_WINS + 1) + 1;
   const u8 last = m.Read8(base + Block::SET_LAST_WINNER);
   set.last_winner = last <= 1 ? last : -1;
-  return set;
+  return WithTimer(set);
 }
 
 CssView ReadCss(const GuestMemory& m)

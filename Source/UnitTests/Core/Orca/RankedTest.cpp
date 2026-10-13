@@ -16,6 +16,7 @@
 #include "Core/Orca/Games/Brawl/MatchBlock.h"
 #include "Core/Orca/Engine/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/PPlus/RankedPPlus.h"
+#include "Core/Orca/Games/Brawl/Rulesets.h"
 #include "Core/Orca/UX/RankedSteps.h"
 #include "Core/Orca/Games/Brawl/StageCursors.h"
 #include "InputCommon/GCPadStatus.h"
@@ -231,7 +232,7 @@ constexpr u8 BTN_X = StageCursors::BTN_X;
 
 TEST(OrcaRankedSteps, PPlusGameOneIsOneTwoOneOnTheStartersFromTheCoin)
 {
-  const Ranked::Ruleset& r = Ranked::PPlus2024();
+  const Ranked::Ruleset& r = Rulesets::PPlus2024();
   for (int coin = 0; coin < 2; ++coin)
   {
     Ranked::SetView v;
@@ -248,7 +249,7 @@ TEST(OrcaRankedSteps, PPlusGameOneIsOneTwoOneOnTheStartersFromTheCoin)
 
 TEST(OrcaRankedSteps, PPlusLaterGamesWinnerStrikesTwoLoserPicksWithFullDsr)
 {
-  const Ranked::Ruleset& r = Ranked::PPlus2024();
+  const Ranked::Ruleset& r = Rulesets::PPlus2024();
   Ranked::SetView v;
   v.game = 3;
   v.last_winner = 1;
@@ -265,7 +266,7 @@ TEST(OrcaRankedSteps, PPlusLaterGamesWinnerStrikesTwoLoserPicksWithFullDsr)
 
 TEST(OrcaRankedSteps, BrawlBanIsOptionalMetaKnightAndIceClimbersClauses)
 {
-  const Ranked::Ruleset& r = Ranked::Brawl2025();
+  const Ranked::Ruleset& r = Rulesets::Brawl2025();
   Ranked::SetView v;
   v.game = 2;
   v.last_winner = 0;
@@ -292,7 +293,7 @@ TEST(OrcaRankedSteps, BrawlBanIsOptionalMetaKnightAndIceClimbersClauses)
 
 TEST(OrcaRankedSteps, TimerDefaultsTakeTheFirstStagesInListOrder)
 {
-  const Ranked::Ruleset& r = Ranked::PPlus2024();
+  const Ranked::Ruleset& r = Rulesets::PPlus2024();
   Ranked::SetView v;
   const Ranked::Plan plan = Ranked::PlanGame(r, v);
   EXPECT_EQ(Ranked::DefaultStrikes(plan, 0, 0, 0), 0x0001);
@@ -768,7 +769,7 @@ TEST(OrcaRankedPPlus, CasualTwoStagesTheCoinAndTimeRunsOut)
   int frame = 200;
   RankedPPlus::Apply(m, frame, true);
   const Ranked::Plan plan = Ranked::PlanCasual(
-      Ranked::PPlus2024(), Ranked::SetView{1, -1, 1, {}, {-1, -1}},
+      Rulesets::PPlus2024(), Ranked::SetView{1, -1, 1, {}, {-1, -1}},
       Ranked::CasualSeed(0x5EED1234, 1, 1));
   // Port 1 names Battlefield and takes it back; port 2 names Dream Land; time runs out: a random
   // legal stage for port 1, then the coin between the two.
@@ -810,7 +811,7 @@ TEST(OrcaRankedPPlus, CasualRandomOnTheRandomButton)
   int frame = 200;
   RankedPPlus::Apply(m, frame, true);
   const Ranked::Plan plan = Ranked::PlanCasual(
-      Ranked::PPlus2024(), Ranked::SetView{1, -1, 1, {}, {-1, -1}},
+      Rulesets::PPlus2024(), Ranked::SetView{1, -1, 1, {}, {-1, -1}},
       Ranked::CasualSeed(0x5EED1234, 1, 1));
   const std::vector<Orca::Events::PortInfo> ports{{0, "ada", false, {}}, {1, "bo", true, {}}};
   // Port 2 names Random and takes it back; names it again. Nothing is picked yet.
@@ -839,7 +840,7 @@ TEST(OrcaRankedPPlus, CasualRandomOnTheRandomButton)
   const bool random_won = Ranked::CasualChoice(plan) == 1;
   EXPECT_EQ(s.auto_stage, random_won ? Ranked::CasualDefault(plan, 1) : 2);
   EXPECT_EQ(RankedPPlus::Describe(m, frame, ports).set,
-            fmt::format("{} ({})", Ranked::PPlus2024().stage_names[s.auto_stage],
+            fmt::format("{} ({})", Rulesets::PPlus2024().stage_names[s.auto_stage],
                         random_won ? "random" : "your pick"));
   EXPECT_EQ(RankedPPlus::Apply(m, frame, true), 0);
   // The flow's A waits while the game's hover still reads its own Random or page button (it
@@ -867,7 +868,7 @@ TEST(OrcaRankedPPlus, CasualBothRandomPicksAtOnceAndARandomOutlastsTheTimer)
     int frame = 200;
     RankedPPlus::Apply(m, frame, true);
     const Ranked::Plan plan = Ranked::PlanCasual(
-        Ranked::PPlus2024(), Ranked::SetView{1, -1, 0, {}, {-1, -1}},
+        Rulesets::PPlus2024(), Ranked::SetView{1, -1, 0, {}, {-1, -1}},
         Ranked::CasualSeed(0x5EED1234, 0, 1));
     AimRandom(m, 0);
     Press(m, 0, -1, BTN_A, &frame);
@@ -882,7 +883,7 @@ TEST(OrcaRankedPPlus, CasualBothRandomPicksAtOnceAndARandomOutlastsTheTimer)
     EXPECT_EQ(s.prefs[1], MatchBlock::RANDOM);
     const std::vector<Orca::Events::PortInfo> ports{{0, "ada", false, {}}, {1, "bo", true, {}}};
     EXPECT_EQ(RankedPPlus::Describe(m, frame, ports).set,
-              fmt::format("{} (random)", Ranked::PPlus2024().stage_names[s.auto_stage]));
+              fmt::format("{} (random)", Rulesets::PPlus2024().stage_names[s.auto_stage]));
   }
   // Random against nobody: time runs out, the same stage as CasualResult's, Random kept.
   {
@@ -890,7 +891,7 @@ TEST(OrcaRankedPPlus, CasualBothRandomPicksAtOnceAndARandomOutlastsTheTimer)
     int frame = 200;
     RankedPPlus::Apply(m, frame, true);
     const Ranked::Plan plan = Ranked::PlanCasual(
-        Ranked::PPlus2024(), Ranked::SetView{1, -1, 1, {}, {-1, -1}},
+        Rulesets::PPlus2024(), Ranked::SetView{1, -1, 1, {}, {-1, -1}},
         Ranked::CasualSeed(0x5EED1234, 1, 1));
     AimRandom(m, 0);
     Press(m, 0, -1, BTN_A, &frame);
@@ -1008,7 +1009,7 @@ TEST(OrcaRankedPPlus, AnAMashedOrHeldIntoTheStageSelectNamesNothing)
 
 TEST(OrcaRankedSteps, CasualIsOnePreferStepForBothOnTheWholeList)
 {
-  const Ranked::Ruleset& rules = Ranked::Brawl2025();
+  const Ranked::Ruleset& rules = Rulesets::Brawl2025();
   Ranked::SetView set;
   set.coin = 1;
   Ranked::Plan plan = Ranked::PlanCasual(rules, set, 1234);
@@ -1027,13 +1028,13 @@ TEST(OrcaRankedSteps, CasualIsOnePreferStepForBothOnTheWholeList)
   EXPECT_FALSE(plan.mk_clause);
   EXPECT_EQ(plan.steps.size(), 1u);
   // Project+: the 2024 Proposed list's 9.
-  EXPECT_EQ(Ranked::PlanCasual(Ranked::PPlus2024(), {}, 1).available,
+  EXPECT_EQ(Ranked::PlanCasual(Rulesets::PPlus2024(), {}, 1).available,
             static_cast<StageMask>(0x1FF));
 }
 
 TEST(OrcaRankedSteps, AgreementIsLegalInPlayAndNotStruck)
 {
-  const Ranked::Ruleset& rules = Ranked::Brawl2025();
+  const Ranked::Ruleset& rules = Rulesets::Brawl2025();
   Ranked::SetView set;
   // Game 1: the starters.
   Ranked::Plan plan = Ranked::PlanGame(rules, set);
@@ -1072,7 +1073,7 @@ TEST(OrcaRankedSteps, AgreementIsLegalInPlayAndNotStruck)
 
 TEST(OrcaRankedSteps, CasualCoinIsTheSameEverywhereAndFair)
 {
-  const Ranked::Ruleset& rules = Ranked::Brawl2025();
+  const Ranked::Ruleset& rules = Rulesets::Brawl2025();
   // The same room, coin and game: the same seed; another game: another.
   EXPECT_EQ(Ranked::CasualSeed(77, 1, 2), Ranked::CasualSeed(77, 1, 2));
   EXPECT_NE(Ranked::CasualSeed(77, 1, 2), Ranked::CasualSeed(77, 1, 3));
@@ -1108,7 +1109,7 @@ TEST(OrcaRankedSteps, CasualCoinIsTheSameEverywhereAndFair)
 
 TEST(OrcaRankedSteps, ProgressCasualBothNameThenTheSameOrTheCoin)
 {
-  const Ranked::Ruleset& rules = Ranked::Brawl2025();
+  const Ranked::Ruleset& rules = Rulesets::Brawl2025();
   Ranked::SetView set;
   const Ranked::Plan plan = Ranked::PlanCasual(rules, set, 99);
   Ranked::Progress p = Ranked::Begin(rules, plan);
@@ -1152,7 +1153,7 @@ TEST(OrcaRankedSteps, ProgressCasualBothNameThenTheSameOrTheCoin)
 // same as naming nothing at the timer, but at once. The marker is kept, never the stage it draws.
 TEST(OrcaRankedSteps, CasualRandomIsThePortsSeededDrawAndStaysAMarker)
 {
-  const Ranked::Ruleset& rules = Ranked::Brawl2025();
+  const Ranked::Ruleset& rules = Rulesets::Brawl2025();
   const s8 R = Ranked::PREF_RANDOM, N = Ranked::PREF_NONE;
   EXPECT_TRUE(Ranked::Named(R));
   EXPECT_TRUE(Ranked::Named(0));
@@ -1237,7 +1238,7 @@ TEST(OrcaRankedSteps, CasualRandomIsThePortsSeededDrawAndStaysAMarker)
 
 TEST(OrcaRankedSteps, RankedHasNoRandom)
 {
-  const Ranked::Ruleset& rules = Ranked::Brawl2025();
+  const Ranked::Ruleset& rules = Rulesets::Brawl2025();
   for (const Ranked::SetView& set : {Ranked::SetView{}, Ranked::SetView{2, 1, 0, {8, 0}, {-1, -1}}})
   {
     const Ranked::Plan plan = Ranked::PlanGame(rules, set);
@@ -1256,7 +1257,7 @@ TEST(OrcaRankedSteps, RankedHasNoRandom)
 // new one by the compatibility key (UX::kCompatVersion).
 TEST(OrcaRankedSteps, CasualRandomIsTheSameOnBothMachines)
 {
-  const Ranked::Ruleset& rules = Ranked::PPlus2024();
+  const Ranked::Ruleset& rules = Rulesets::PPlus2024();
   struct Peer
   {
     Ranked::Plan plan;
@@ -1321,7 +1322,7 @@ TEST(OrcaRankedSteps, CasualRandomIsTheSameOnBothMachines)
 // one screen frame at a time).
 TEST(OrcaRankedSteps, ProgressDrivesGameOneOneTwoOneThenThePick)
 {
-  const Ranked::Ruleset& rules = Ranked::Brawl2025();
+  const Ranked::Ruleset& rules = Rulesets::Brawl2025();
   Ranked::SetView set;
   set.coin = 1;
   const Ranked::Plan plan = Ranked::PlanGame(rules, set);
@@ -1348,7 +1349,7 @@ TEST(OrcaRankedSteps, ProgressDrivesGameOneOneTwoOneThenThePick)
 
 TEST(OrcaRankedSteps, ProgressTimersTakeTheDefaults)
 {
-  const Ranked::Ruleset& rules = Ranked::Brawl2025();
+  const Ranked::Ruleset& rules = Rulesets::Brawl2025();
   const Ranked::Plan plan = Ranked::PlanGame(rules, {});
   Ranked::Progress p = Ranked::Begin(rules, plan);
   // Every step's timer runs out: the first starters struck in list order, then the first allowed
@@ -1365,7 +1366,7 @@ TEST(OrcaRankedSteps, ProgressTimersTakeTheDefaults)
 
 TEST(OrcaRankedSteps, ProgressLaterGamesBanIsOptionalAndThePickHasFullDsr)
 {
-  const Ranked::Ruleset& rules = Ranked::Brawl2025();
+  const Ranked::Ruleset& rules = Rulesets::Brawl2025();
   Ranked::SetView set;
   set.game = 2;
   set.last_winner = 1;
@@ -1391,7 +1392,7 @@ TEST(OrcaRankedSteps, ProgressLaterGamesBanIsOptionalAndThePickHasFullDsr)
 
 TEST(OrcaRankedSteps, ProgressMetaKnightClauseIsOnePickOfAnyLegalStage)
 {
-  const Ranked::Ruleset& rules = Ranked::Brawl2025();
+  const Ranked::Ruleset& rules = Rulesets::Brawl2025();
   Ranked::SetView set;
   set.characters = {rules.meta_knight, 0x10};  // Meta Knight against Ice Climbers
   const Ranked::Plan plan = Ranked::PlanGame(rules, set);

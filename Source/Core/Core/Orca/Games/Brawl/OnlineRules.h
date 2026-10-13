@@ -222,8 +222,8 @@ struct PlayerPick
 };
 std::array<PlayerPick, 4> ReadPicks(const GuestMemory& memory);
 
-// Ranked character select ready limit, in frames (60 s).
-constexpr int CSS_READY_FRAMES = 60 * 60;
+// The ranked character select's ready limit is the ruleset's css.readySeconds (60 s in both
+// builtins, Games/Brawl/Rulesets.h).
 
 // ---- Session side (Rollback/OnlineMatch.cpp, CPU thread) ----
 // Sets the header this machine's room calls for, every frame before the frame hook and again before

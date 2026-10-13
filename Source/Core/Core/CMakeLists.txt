@@ -530,6 +530,12 @@ add_library(core
   Orca/Engine/Module.h
   Orca/Engine/Regions.cpp
   Orca/Engine/Regions.h
+  Orca/Engine/Ruleset.cpp
+  Orca/Engine/Ruleset.h
+  Orca/Engine/Schema.cpp
+  Orca/Engine/Schema.h
+  Orca/Engine/StrictJson.cpp
+  Orca/Engine/StrictJson.h
   Orca/GpuLost.cpp
   Orca/GpuLost.h
   Orca/JitWarm.cpp
@@ -632,6 +638,8 @@ add_library(core
   Orca/Games/Brawl/Relabel.h
   Orca/Games/Brawl/Results.cpp
   Orca/Games/Brawl/Results.h
+  Orca/Games/Brawl/Rulesets.cpp
+  Orca/Games/Brawl/Rulesets.h
   Orca/UX/Rumble.cpp
   Orca/UX/Rumble.h
   Orca/UX/SetEnd.cpp
@@ -903,6 +911,21 @@ endif()
 # Read by Source/UnitTests/Core (OrcaBundle.PinnedKey checks the build trusts exactly these).
 set(ORCA_BUNDLE_DEFINITIONS "${ORCA_BUNDLE_DEFINITIONS}" CACHE INTERNAL "")
 set_source_files_properties(Orca/Bundle.cpp PROPERTIES COMPILE_DEFINITIONS "${ORCA_BUNDLE_DEFINITIONS}")
+# Orca data compiled in byte for byte (Engine/Ruleset.cpp, Games/Brawl/Rulesets.cpp): the ruleset
+# schema and the builtin module's rulesets, each written as a list of char literals that a source
+# file includes. Changing one of them re-runs CMake.
+set(ORCA_EMBED_DIR "${CMAKE_CURRENT_BINARY_DIR}/OrcaEmbed")
+foreach(orca_embed_src
+    "${CMAKE_SOURCE_DIR}/Tools/orca/mods/ruleset.schema.json"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Orca/Games/Brawl/Rulesets/brawl-supernova-2025.json"
+    "${CMAKE_CURRENT_SOURCE_DIR}/Orca/Games/Brawl/Rulesets/pplus-2024.json")
+  get_filename_component(orca_embed_name "${orca_embed_src}" NAME)
+  file(READ "${orca_embed_src}" orca_embed_hex HEX)
+  string(REGEX REPLACE "([0-9a-f][0-9a-f])" "'\\\\x\\1'," orca_embed_list "${orca_embed_hex}")
+  file(CONFIGURE OUTPUT "${ORCA_EMBED_DIR}/${orca_embed_name}.inc" CONTENT "${orca_embed_list}\n" @ONLY)
+  set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${orca_embed_src}")
+endforeach()
+target_include_directories(core PRIVATE "${ORCA_EMBED_DIR}")
 # The SD image's SHA-256 (Bundle.cpp) uses CNG on Windows.
 if(WIN32)
   target_link_libraries(core PRIVATE bcrypt)

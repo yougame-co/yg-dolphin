@@ -48,7 +48,7 @@ constexpr Rect R(float x0, float y0, float x1, float y1)
 // ---- Brawl rev 2 (empty save), probed ----
 // Cursor range is x -30..30, y -19.5..19.5 (the game clamps to it). Rectangles come from sweeping
 // the game's cursor in 0.5 steps and recording which stage it hovers, padded by a quarter unit.
-// Stage indices are Ranked::Brawl2025's: BF, PS1, LC, SV, YI, FD, Delfino.
+// Stage indices are the Brawl ruleset's (Rulesets/brawl-supernova-2025.json): BF, PS1, LC, SV, YI, FD, Delfino.
 constexpr std::array<Tile, 7> kBrawlTiles{{
     {0, 0, R(-4.75f, 13.25f, 1.25f, 19.25f)},  // Battlefield, page 0 slot 0 (item 0x02)
     {1, 1, R(18.25f, -12.75f, 26.25f, -4.75f)},  // Pokemon Stadium, Melee page slot 9 (0x0B)
@@ -62,7 +62,7 @@ constexpr std::array<Tile, 7> kBrawlTiles{{
 // ---- Project+ v3.2, 2024 Proposed preset, page 0 (probed the same way) ----
 // Cursor range is x -31..31, y -23.5..20.5. Nine tiles in two rows under the preview: positions
 // 0-3 on top (GHZ, BC, FH, DL), 4-8 below (ToT, SV, BF, PS2, LM). Hovered item = position + 2.
-// Stage indices are Ranked::PPlus2024's: BF, PS2, SV, LM, ToT, GHZ, BC, FH, DL.
+// Stage indices are the Project+ ruleset's (Rulesets/pplus-2024.json): BF, PS2, SV, LM, ToT, GHZ, BC, FH, DL.
 constexpr std::array<Tile, 9> kPPlusTiles{{
     {5, 0, R(-15.25f, -11.25f, -8.25f, -3.25f)},   // Green Hill Zone, position 0
     {6, 0, R(-6.75f, -11.25f, 0.75f, -3.25f)},     // Bowser's Castle, 1

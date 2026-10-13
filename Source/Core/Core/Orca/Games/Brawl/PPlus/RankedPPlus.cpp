@@ -20,6 +20,7 @@
 #include "Core/Orca/Games/Brawl/OnlineRules.h"
 #include "Core/Orca/UX/RankedSteps.h"
 #include "Core/Orca/Games/Brawl/Results.h"
+#include "Core/Orca/Games/Brawl/Rulesets.h"
 #include "Core/Orca/Games/Brawl/StageCursors.h"
 
 namespace Orca::UX::RankedPPlus
@@ -71,19 +72,6 @@ constexpr u32 RSS_PAGE0_COUNT = RSS_EXDATA + 0x3C;
 constexpr u32 RSS_PAGE0_SLOTS = RSS_EXDATA + 0x3D;
 constexpr u32 RSS_SLOT_KINDS = RSS_EXDATA + 0x104;
 constexpr int MAX_PAGE_STAGES = 31;
-
-// The 2024 Proposed stages by Project+ stage kind, in the ruleset's order.
-constexpr std::array<u8, 9> LEGAL_KINDS{
-    0x01,  // Battlefield
-    0x2E,  // Pokémon Stadium 2
-    0x21,  // Smashville
-    0x04,  // Luigi's Mansion
-    0x09,  // Temple of Time
-    0x23,  // Green Hill Zone
-    0x06,  // Bowser's Castle
-    0x0C,  // Frigate Husk
-    0x2D,  // Dream Land
-};
 
 constexpr StageMask Bit(int i)
 {
@@ -149,13 +137,13 @@ Ranked::SetView ViewOf(const MatchBlock::State& s)
 Plan CasualPlan(const GuestMemory& m, const MatchBlock::State& s)
 {
   const u32 room = m.Valid(MatchBlock::ROOM + 3) ? m.Read32(MatchBlock::ROOM) : 0;
-  return Ranked::PlanCasual(Ranked::PPlus2024(), ViewOf(s),
+  return Ranked::PlanCasual(Rulesets::PPlus2024(), ViewOf(s),
                             Ranked::CasualSeed(room, s.coin, s.games + 1));
 }
 
 Plan PlanFor(const GuestMemory& m, const MatchBlock::State& s)
 {
-  return IsCasualPPlus(s) ? CasualPlan(m, s) : Ranked::PlanGame(Ranked::PPlus2024(), ViewOf(s));
+  return IsCasualPPlus(s) ? CasualPlan(m, s) : Ranked::PlanGame(Rulesets::PPlus2024(), ViewOf(s));
 }
 
 // Moves the stage select's own cursor; the hover follows next frame. Returns bytes changed.
@@ -487,7 +475,7 @@ void CasualStep(GuestMemory& m, MatchBlock::State& s, int frame, bool two_player
   if (scene == "scSelctCharacter" && s.flow != 0)
     ResetSteps(s);
   if (task && two_players)
-    CasualSelect(m, Ranked::PPlus2024(), s, frame, c);
+    CasualSelect(m, Rulesets::PPlus2024(), s, frame, c);
   else if (task && s.flow == 1)
     ResetSteps(s);
 }
@@ -496,7 +484,7 @@ void CasualStep(GuestMemory& m, MatchBlock::State& s, int frame, bool two_player
 void Step1(GuestMemory& m, MatchBlock::State& s, int frame, bool two_players,
            const std::string& scene, u32 task, StageCursors::State& c)
 {
-  const Ranked::Ruleset& rules = Ranked::PPlus2024();
+  const Ranked::Ruleset& rules = Rulesets::PPlus2024();
   if (scene == "scVsResult" && s.fight)
   {
     const Reading r = ReadResults(m);
@@ -564,10 +552,12 @@ void Step1(GuestMemory& m, MatchBlock::State& s, int frame, bool two_players,
 
 int LegalIndexOfKind(int kind)
 {
-  for (size_t i = 0; i < LEGAL_KINDS.size(); ++i)
+  // The 2024 Proposed stages' Project+ stage kinds, in the ruleset's order.
+  const Ranked::Ruleset& rules = Rulesets::PPlus2024();
+  for (int i = 0; i < rules.stage_count; ++i)
   {
-    if (LEGAL_KINDS[i] == kind)
-      return static_cast<int>(i);
+    if (rules.stage_kinds[static_cast<size_t>(i)] == kind)
+      return i;
   }
   return -1;
 }
@@ -644,7 +634,7 @@ int Apply(GuestMemory& m, int frame, bool two_players)
   }
   if (task && s.flow == 1 && !s.done && two_players)
   {
-    const Ranked::Ruleset& rules = Ranked::PPlus2024();
+    const Ranked::Ruleset& rules = Rulesets::PPlus2024();
     const Plan plan = PlanFor(m, s);
     const std::vector<int> page0 = PageZero(m);
     const int table = WriteStrikeTable(m, page0, ShownStruck(rules, plan, s));
@@ -760,7 +750,7 @@ Lines Describe(const GuestMemory& m, int frame, const std::vector<Events::PortIn
     }
     return false;
   };
-  const Ranked::Ruleset& rules = Ranked::PPlus2024();
+  const Ranked::Ruleset& rules = Rulesets::PPlus2024();
   const auto clock = [&](const Step& step) {
     const int left = std::max<int>(
         0, static_cast<int>(s->deadline) - Ranked::GraceFrames(rules, step) - frame);
@@ -921,7 +911,7 @@ StageCursors::View CursorView(const GuestMemory& m, const std::vector<Events::Po
     view.optional = step.optional;
     view.both = step.port == Ranked::BOTH;
     const int left = std::max<int>(0, static_cast<int>(s->deadline) -
-                                          Ranked::GraceFrames(Ranked::PPlus2024(), step) - frame);
+                                          Ranked::GraceFrames(Rulesets::PPlus2024(), step) - frame);
     view.seconds = static_cast<s16>(std::min(9999, (left + 59) / 60));
   }
   for (int port = 0; port < 2; ++port)

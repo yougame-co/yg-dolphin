@@ -20,6 +20,7 @@
 #include "Core/Orca/Engine/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/OnlineRules.h"
 #include "Core/Orca/Games/Brawl/Queue.h"
+#include "Core/Orca/Games/Brawl/Rulesets.h"
 #include "InputCommon/GCPadStatus.h"
 
 using namespace Orca::UX;
@@ -33,6 +34,10 @@ namespace
 // The stick's centre, as values (the header's constants have no definition to bind to).
 constexpr int CX = GCPadStatus::MAIN_STICK_CENTER_X;
 constexpr int CY = GCPadStatus::MAIN_STICK_CENTER_Y;
+// The queue's timers, from the builtin rulesets' data (both 30 s and 90 frames).
+const int READY_FRAMES = Rulesets::Brawl2025().queue_ready_seconds * 60;
+const int SKIP_FRAMES = Rulesets::Brawl2025().queue_skip_frames;
+
 constexpr u16 START = PAD_BUTTON_START, B = PAD_BUTTON_B, A = PAD_BUTTON_A, X = PAD_BUTTON_X,
               Y = PAD_BUTTON_Y, Z = PAD_TRIGGER_Z;
 
@@ -51,6 +56,8 @@ CssPort Placed(int character, int costume = 0)
 View Solo()
 {
   View v;
+  v.ready_frames = static_cast<u16>(READY_FRAMES);
+  v.skip_frames = static_cast<u16>(SKIP_FRAMES);
   v.queue2 = true;
   v.solo = true;
   v.css = true;
@@ -62,6 +69,8 @@ View Solo()
 View Room(bool ranked = false)
 {
   View v;
+  v.ready_frames = static_cast<u16>(READY_FRAMES);
+  v.skip_frames = static_cast<u16>(SKIP_FRAMES);
   v.queue2 = true;
   v.css = true;
   v.ranked = ranked;
@@ -1160,29 +1169,29 @@ TEST(OrcaQueue, HoldingBSkipsOnce)
   SkipHold hold;
   for (int i = 1; i < SKIP_FRAMES; ++i)
   {
-    EXPECT_FALSE(hold.Step(true, true)) << i;
+    EXPECT_FALSE(hold.Step(true, true, SKIP_FRAMES)) << i;
     // No bar for an ordinary B tap: only from SKIP_BAR_FRAMES of a hold.
     if (i < SKIP_BAR_FRAMES)
-      EXPECT_EQ(hold.Progress(), 0.0f) << i;
+      EXPECT_EQ(hold.Progress(SKIP_FRAMES), 0.0f) << i;
     else
-      EXPECT_GT(hold.Progress(), 0.0f) << i;
+      EXPECT_GT(hold.Progress(SKIP_FRAMES), 0.0f) << i;
   }
-  EXPECT_GT(hold.Progress(), 0.9f);
-  EXPECT_TRUE(hold.Step(true, true));
+  EXPECT_GT(hold.Progress(SKIP_FRAMES), 0.9f);
+  EXPECT_TRUE(hold.Step(true, true, SKIP_FRAMES));
   // Held on: once.
   for (int i = 0; i < 200; ++i)
-    EXPECT_FALSE(hold.Step(true, true));
-  EXPECT_EQ(hold.Progress(), 0.0f);
+    EXPECT_FALSE(hold.Step(true, true, SKIP_FRAMES));
+  EXPECT_EQ(hold.Progress(SKIP_FRAMES), 0.0f);
   // Let go, held again: again.
-  EXPECT_FALSE(hold.Step(true, false));
+  EXPECT_FALSE(hold.Step(true, false, SKIP_FRAMES));
   for (int i = 1; i < SKIP_FRAMES; ++i)
-    EXPECT_FALSE(hold.Step(true, true));
-  EXPECT_TRUE(hold.Step(true, true));
+    EXPECT_FALSE(hold.Step(true, true, SKIP_FRAMES));
+  EXPECT_TRUE(hold.Step(true, true, SKIP_FRAMES));
   // Where no skip may be asked for, holding counts nothing.
   SkipHold other;
   for (int i = 0; i < SKIP_FRAMES * 2; ++i)
-    EXPECT_FALSE(other.Step(false, true));
-  EXPECT_FALSE(other.Step(true, true));
+    EXPECT_FALSE(other.Step(false, true, SKIP_FRAMES));
+  EXPECT_FALSE(other.Step(true, true, SKIP_FRAMES));
 }
 
 TEST(OrcaQueue, RankedHasNoSkip)
