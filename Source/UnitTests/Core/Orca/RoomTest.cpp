@@ -2461,6 +2461,11 @@ TEST_F(OrcaRoomRuntime, QuickBackAndSameIdJoinGrantHoldBeforeAnyStall)
     const std::string code = std::string("quick") + event;
     auto room = Open(code, R"({"joining":false})", false);
     ASSERT_TRUE(Wait([&] { return room->Seat() == 0 && room->RoundTripMs() >= 0; }));
+    // A shared session: the friend's inputs reached us before its room socket blipped.
+    Packet played = NeutralFrames(6000, 16);
+    played.seat = 1;
+    Action(code, InjectPacket(played));
+    ASSERT_TRUE(Wait([&] { return !room->Receive().empty(); }));
     room->TakePeerEvents();
     Action(code, fmt::format(R"({{"message":{}}})", RosterMessage(event, false)));
     std::this_thread::sleep_for(100ms);
@@ -2471,6 +2476,26 @@ TEST_F(OrcaRoomRuntime, QuickBackAndSameIdJoinGrantHoldBeforeAnyStall)
     EXPECT_EQ(room->Seat(), 0);
     EXPECT_EQ(room->Code(), code);
     EXPECT_FALSE(Sent(code, "msg", "drop"));
+  }
+}
+
+TEST_F(OrcaRoomRuntime, BackWithoutASharedSessionGrantsNoHold)
+{
+  // A friend's room socket blips while no session runs between us (the host in a single-player
+  // mode, a joiner still waiting): no hold, so nothing expires and resets it 90 s later.
+  for (const char* event : {"back", "join"})
+  {
+    const std::string code = std::string("idle") + event;
+    auto room = Open(code, R"({"joining":false})", false);
+    ASSERT_TRUE(Wait([&] { return room->Seat() == 0 && room->RoundTripMs() >= 0; }));
+    room->TakePeerEvents();
+    Action(code, fmt::format(R"({{"message":{}}})", RosterMessage(event, false)));
+    std::this_thread::sleep_for(100ms);
+    // With no session the back is train-0343's plain re-handshake; what matters is that no hold
+    // is left to expire and reset the friend later.
+    room->TakePeerEvents();
+    EXPECT_FALSE(room->InputHoldFor("peer"));
+    EXPECT_EQ(room->Code(), code);
   }
 }
 
@@ -2636,6 +2661,11 @@ TEST_F(OrcaRoomRuntime, ReturningFriendUsesActualHostCurrentMatchKeyframe)
     ack.seat = 0;
     ack.ack[1] = current - 1;
     room->Send(ack);
+    // A shared session: the friend's inputs up to our stalled frame reached us first.
+    Packet played = NeutralFrames(current - 16, 16);
+    played.seat = 1;
+    Action(code, InjectPacket(played));
+    ASSERT_TRUE(Wait([&] { return !room->Receive().empty(); }));
     Action(code, fmt::format(R"({{"message":{}}})", RosterMessage("back", false)));
     std::this_thread::sleep_for(100ms);
     ASSERT_TRUE(room->TakePeerEvents().empty());

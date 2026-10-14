@@ -1909,6 +1909,16 @@ struct YouGameRoom::Impl
     if (keep_session)
     {
       std::lock_guard lock(mutex);
+      // Only a peer we share a session with (its packets reached us over the room or a direct
+      // link, or a keyframe offer is pending) gets a hold. A blip while no session runs (the
+      // host in a single-player mode, a joiner still waiting) stays a plain presence back: a
+      // hold there would expire 90 s later and reset a healthy friend.
+      keep_session = peer.sent_packet || direct_inputs.contains(id) ||
+                     keyframe_offers.contains(peer.slot);
+    }
+    if (keep_session)
+    {
+      std::lock_guard lock(mutex);
       const auto [hold, inserted] = input_holds.try_emplace(
           id, peer.presence.Deadline().value_or(now + ROOM_HOLD));
       keep_session = now < hold->second;
@@ -4520,6 +4530,11 @@ std::vector<PeerEvent> YouGameRoom::TakePeerEvents()
 {
   std::lock_guard lock(m_impl->mutex);
   return std::exchange(m_impl->events, {});
+}
+
+bool YouGameRoom::InputHoldFor(const std::string& id) const
+{
+  return m_impl->InputHoldAlive(id, std::chrono::steady_clock::now());
 }
 
 bool YouGameRoom::ArrivalPending() const

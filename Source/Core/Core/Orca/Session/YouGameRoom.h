@@ -204,6 +204,8 @@ public:
   // Whether the untaken events include a friend arriving (Arrived on a seat after the host's, from
   // a player that isn't the game's host).
   bool ArrivalPending() const;
+  // Whether a recovery input hold is alive for this room id (tests).
+  bool InputHoldFor(const std::string& id) const;
   // The latest host-away hold deadline, including a back that raced the session's timeout.
   std::optional<std::chrono::steady_clock::time_point> HostAwayDeadline() const;
   // Restart this seat's hello/keyframe handshake after its session ended during a room blip.
