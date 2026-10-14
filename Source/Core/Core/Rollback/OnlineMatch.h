@@ -113,6 +113,8 @@ constexpr int FRESH_FRIENDS_AFTER = 10 * 60;
 // Reset games have no menu shortcut: keep short joins in place and bound longer replays to
 // three minutes of emulated play. Seconds work at any frame rate and exclude host pauses.
 inline constexpr std::chrono::seconds FRESH_RESET_FRIENDS_AFTER{3 * 60};
+// Give a solo host time to read the warning before a friend's join resets unsaved progress.
+inline constexpr std::chrono::seconds FRESH_RESET_JOIN_WARNING{3};
 // The tail ends once the character select has been up this many frames, or after FRESH_TAIL_LIMIT.
 constexpr int FRESH_CSS_SETTLE = 30;
 constexpr int FRESH_TAIL_LIMIT = 600;
@@ -132,6 +134,7 @@ bool LocalNandReady(bool is_wii, bool has_host_nand, bool temporary);
 enum class FreshStep
 {
   None,  // nothing to do: no fresh start (a join, if any, goes on in place)
+  Warn,  // show the reset warning now; hold the join before scheduling its fresh start
   Now,   // fresh-start at the next boundary
   Hold,  // a fresh start is due later: make no keyframe yet
 };
@@ -165,6 +168,11 @@ struct FreshInputs
   int fresh_after = -1;
 };
 FreshStep DecideFreshStart(const FreshInputs& in);
+// Host wall time only: warn once, then hold a reset join for three seconds. Other starts and a
+// cancelled or held join clear the warning, so a later join gets its own notice.
+FreshStep WarnBeforeResetJoin(FreshStep step, FreshKind kind, bool queue_armed,
+                             std::optional<std::chrono::steady_clock::time_point>* warned_at,
+                             std::chrono::steady_clock::time_point now);
 // The main menu exit a friends fresh start takes: the Casual or Ranked select the host is on
 // (UX/OnlineMenu.h CssPick), so Play again re-arms there, else With Friends.
 u8 FriendsFreshExit(std::optional<bool> css_pick_ranked);

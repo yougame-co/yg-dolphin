@@ -1336,7 +1336,8 @@ void ShowRestartForMatch()
 
 void ShowRestartForJoin(std::string_view name)
 {
-  ShowToast(fmt::format("Restarting the game so {} can join", name.empty() ? "your friend" : name));
+  ShowToast(fmt::format("Restarting the game in 3 seconds so {} can join. "
+                       "Unsaved progress will be lost.", name.empty() ? "your friend" : name));
 }
 
 void SetQueueLines(std::string line, std::string note, std::array<std::string, 4> labels,

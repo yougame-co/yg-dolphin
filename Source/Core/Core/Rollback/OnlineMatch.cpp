@@ -278,6 +278,7 @@ struct Match
   // boundary. `fresh_queue_armed`: `host` matched this game, so its queue room fresh-starts once
   // the welcome names it; `fresh_room` is the room the last fresh start was for.
   std::optional<u8> fresh_pending;
+  std::optional<Clock::time_point> fresh_join_warned_at;
   bool fresh_queue_armed = false;
   std::string fresh_room;
   // The friends waiting now join in place (DecideFreshStart said None for them).
@@ -897,6 +898,7 @@ void ResetDropIn(Match& match)
   match.before_join.reset();
   // A fresh start due, armed or holding for this room is over with it.
   match.fresh_pending.reset();
+  match.fresh_join_warned_at.reset();
   match.fresh_queue_armed = false;
   EndFresh(match, "the room is left");
   if (match.keyframe)
@@ -1422,13 +1424,17 @@ void HostEvents(Core::System& system, Match& match)
       static_cast<double>(ticks >= match.origin_ticks ? ticks - match.origin_ticks : 0) /
       system.GetSystemTimers().GetTicksPerSecond());
   start.fresh_after = FreshFriendsAfter();
-  switch (DecideFreshStart(start))
+  switch (WarnBeforeResetJoin(DecideFreshStart(start), start.kind, start.queue_armed,
+                             &match.fresh_join_warned_at, Clock::now()))
   {
   case FreshStep::None:
     // Whoever waits now joins in place, even if the history passes the threshold meanwhile.
     match.friends_in_place = !match.waiting.empty();
     break;
   case FreshStep::Hold:
+    return;
+  case FreshStep::Warn:
+    Orca::UX::ShowRestartForJoin(match.waiting.begin()->second.name);
     return;
   case FreshStep::Now:
     if (start.kind == FreshKind::Reset)
@@ -1979,13 +1985,9 @@ std::optional<int> FreshStart(Core::System& system, Match& match)
   Orca::UX::QueueApp::ResetTimeouts();
   Orca::UX::Game().Results().Reset();
   Orca::UX::Game().Header().MemoryReplaced();
-  if (kind == FreshKind::Reset)
-  {
-    if (fresh.queue)
-      Orca::UX::ShowRestartForMatch();
-    else if (!match.waiting.empty())
-      Orca::UX::ShowRestartForJoin(match.waiting.begin()->second.name);
-  }
+  // Friends already saw their warning before fresh_pending was scheduled.
+  if (kind == FreshKind::Reset && fresh.queue)
+    Orca::UX::ShowRestartForMatch();
   NOTICE_LOG_FMT(ROLLBACK, "Drop-in: fresh start at frame {}: back to the origin (frame {}) in {:.0f} "
                            "ms, leaving the main menu with exit code {}{}",
                  from, frame, MsSince(start), exit,
@@ -4707,6 +4709,22 @@ FreshStep DecideFreshStart(const FreshInputs& in)
   const bool due = in.kind == FreshKind::Reset ? in.history_time > FRESH_RESET_FRIENDS_AFTER :
                                                 in.history_frames > FRESH_FRIENDS_AFTER;
   return due ? FreshStep::Now : FreshStep::None;
+}
+
+FreshStep WarnBeforeResetJoin(FreshStep step, FreshKind kind, bool queue_armed,
+                             std::optional<Clock::time_point>* warned_at, Clock::time_point now)
+{
+  if (step != FreshStep::Now || kind != FreshKind::Reset || queue_armed)
+  {
+    warned_at->reset();
+    return step;
+  }
+  if (!*warned_at)
+  {
+    *warned_at = now;
+    return FreshStep::Warn;
+  }
+  return now - **warned_at < FRESH_RESET_JOIN_WARNING ? FreshStep::Hold : FreshStep::Now;
 }
 
 u8 FriendsFreshExit(std::optional<bool> css_pick_ranked)

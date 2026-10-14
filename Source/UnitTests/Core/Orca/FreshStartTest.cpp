@@ -486,13 +486,56 @@ TEST(OrcaResetStart, TheHostExplainsTheRestartToItsPlayer)
   Orca::UX::ShowRestartForJoin("Ada");
   auto view = Orca::UX::Overlay().View(now(), Orca::UX::Stats::Off);
   ASSERT_FALSE(view.toasts.empty());
-  EXPECT_EQ(view.toasts.back().text, "Restarting the game so Ada can join");
+  EXPECT_EQ(view.toasts.back().text, "Restarting the game in 3 seconds so Ada can join. Unsaved progress will be lost.");
   Orca::UX::ShowRestartForJoin("");
   view = Orca::UX::Overlay().View(now(), Orca::UX::Stats::Off);
   ASSERT_FALSE(view.toasts.empty());
-  EXPECT_EQ(view.toasts.back().text, "Restarting the game so your friend can join");
+  EXPECT_EQ(view.toasts.back().text, "Restarting the game in 3 seconds so your friend can join. Unsaved progress will be lost.");
   Orca::UX::ShowRestartForMatch();
   view = Orca::UX::Overlay().View(now(), Orca::UX::Stats::Off);
   ASSERT_FALSE(view.toasts.empty());
   EXPECT_EQ(view.toasts.back().text, "Restarting the game for this match");
+}
+
+TEST(OrcaResetStart, WarnsBeforeSchedulingAFriendsReset)
+{
+  using namespace std::chrono_literals;
+  FreshInputs in = SoloHost();
+  in.kind = FreshKind::Reset;
+  in.waiting = true;
+  in.history_time = FRESH_RESET_FRIENDS_AFTER + 1s;
+  const auto t0 = std::chrono::steady_clock::time_point{} + 1h;
+  std::optional<std::chrono::steady_clock::time_point> warned_at;
+  const auto step = [&](auto now) {
+    return WarnBeforeResetJoin(DecideFreshStart(in), in.kind, in.queue_armed, &warned_at, now);
+  };
+  EXPECT_EQ(step(t0), FreshStep::Warn);
+  ASSERT_EQ(warned_at, t0);
+  EXPECT_EQ(step(t0), FreshStep::Hold);
+  EXPECT_EQ(step(t0 + 2999ms), FreshStep::Hold);
+  EXPECT_EQ(step(t0 + 3s), FreshStep::Now);
+  EXPECT_EQ(step(t0 + 4s), FreshStep::Now);
+  // Leaving cancels the pending warning. A later arrival receives the full notice again.
+  in.waiting = false;
+  EXPECT_EQ(step(t0 + 5s), FreshStep::None);
+  EXPECT_FALSE(warned_at);
+  in.waiting = true;
+  EXPECT_EQ(step(t0 + 6s), FreshStep::Warn);
+  // A single-player hold also cancels it: warn anew once resetting becomes possible again.
+  in.single_player = true;
+  EXPECT_EQ(step(t0 + 7s), FreshStep::Hold);
+  EXPECT_FALSE(warned_at);
+  in.single_player = false;
+  EXPECT_EQ(step(t0 + 8s), FreshStep::Warn);
+  in.queue_armed = in.in_queue_room = true;
+  EXPECT_EQ(step(t0 + 8s), FreshStep::Now);
+  EXPECT_FALSE(warned_at);
+  in.queue_armed = in.in_queue_room = false;
+  in.kind = FreshKind::Menu;
+  EXPECT_EQ(step(t0 + 8s), FreshStep::Now);
+  EXPECT_FALSE(warned_at);
+  in.kind = FreshKind::Reset;
+  in.history_time = 1s;
+  EXPECT_EQ(step(t0 + 9s), FreshStep::None);
+  EXPECT_FALSE(warned_at);
 }
