@@ -215,6 +215,9 @@ public:
   bool FreshTicket(bool fresh, std::string* ticket, std::string* store_url, std::string* error);
   // The room code in use (for showing and sharing), once known.
   std::string Code() const;
+  // Process-wide generation of this room connection. Reopening creates a new room/socket, even
+  // when its code is the same; immutable, so it can be read on any thread.
+  u64 Generation() const;
   // The roster's name for a seat (this player's included); "" when nobody holds it.
   std::string SeatName(int seat) const;
   // A joiner's own controls and queue identity exactly as its hello carries them (none past their
@@ -271,6 +274,15 @@ public:
   // so often that this game still runs (the room counts it as heard). Call from the emulation
   // thread, which is what a stall claim is about.
   void KeepAlive();
+  // A replay stream's next bytes (whole units: a header or chunks, Session/Keyframe.h "Replay
+  // streams"), sent to the room as {"t":"rs","b":<base64>} by the I/O thread, in order. The room
+  // relays them to whoever watches this match; players never get them. Bounded: past 4 MB
+  // waiting, more is dropped.
+  void SendReplayStream(const std::vector<u8>& bytes);
+  // A saved copy of the match (Rollback/ReplayStream.h RepackedPieces), sent one piece every
+  // 200 ms after the live stream's messages: {"t":"rp","b":<base64>,"i":<index>,"n":<count>,
+  // "f":<frames>,"ms":<duration at 60 fps>}. A newer copy replaces the unsent pieces of an older one.
+  void SendReplayPacked(const std::vector<std::vector<u8>>& pieces, int frames);
 
   void Send(const Packet& packet) override;
   std::vector<Packet> Receive() override;

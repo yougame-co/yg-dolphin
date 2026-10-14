@@ -84,6 +84,10 @@ const GAMES = Number(opt("--games", QUEUE === "ranked" ? "3" : "2"));
 const SITE = (opt("--site", "https://yougame.co") || "").replace(/\/$/, "");
 const SLUG = opt("--slug");
 const KEEP = argv.includes("--keep");
+// YG_SITE_COOKIE: a Cookie header value ("name=value") sent with every request to --site, such as a
+// staging site's team access cookie, handed in by a wrapper. Never logged.
+const SITE_COOKIE = process.env.YG_SITE_COOKIE || "";
+const siteCookie = (own) => [own, SITE_COOKIE].filter(Boolean).join("; ");
 const ALARM = Number(opt("--alarm", "900"));
 // Scenarios without --q2:
 //   match    the default: a ranked set, or --games casual games and then the joiner leaves
@@ -110,6 +114,12 @@ const SHOTS_OUT = opt("--shots-out");
 // user-<name>/Dump/Audio/dspdump.wav (keep it with --keep).
 const MUSIC_OFF = (opt("--music-off", "") || "").split(",").filter(Boolean);
 const DUMP_AUDIO = argv.includes("--dump-audio");
+// --replay: each Orca writes its history as replay streams to <work>/rec-<name>-<n>.ygr
+// (ORCA_TEST_REPLAY_OUT; Tools/orca/replay-set-check.py watches and replays them).
+const REPLAY = argv.includes("--replay");
+// --replay-room <name,...>: only these players send their history to the room for watchers
+// (ORCA_TEST_REPLAY_ROOM=1), whatever this script's own environment says.
+const REPLAY_ROOM = opt("--replay-room") ? opt("--replay-room").split(",") : null;
 // How long after a ranked set's verdict the page sends the new rating (`queue rating`).
 const RATING_AFTER_MS = Number(opt("--rating-after", "1500"));
 const Q2 = argv.includes("--q2");
@@ -439,7 +449,7 @@ class Side {
       headers: {
         "content-type": "application/json",
         "user-agent": UA,
-        ...(this.cookie ? { cookie: this.cookie } : {}),
+        ...(siteCookie(this.cookie) ? { cookie: siteCookie(this.cookie) } : {}),
       },
       body: JSON.stringify(full),
     });
@@ -465,11 +475,20 @@ class Side {
       YG_SCENES: "1",
     };
     if (!SLUG) env.ORCA_TEST_KEYFRAME_DIR = path.join(WORK, "kf");
+    if (REPLAY) {
+      env.ORCA_TEST_REPLAY_OUT = path.join(WORK, `rec-${this.name}`);
+      env.ORCA_TEST_DEV_GAME = DEV_GAME; // test knobs work in dev games only
+    }
     // Test overrides from this script's own environment, the same for both Orcas (for example
     // ORCA_TEST_SET_RULES=1,8: a ranked Brawl set's games at 1 stock), and SDL's switches (on a
     // shared Mac, SDL_JOYSTICK_HIDAPI=0 and friends keep test Orcas off a player's adapter).
     for (const [k, v] of Object.entries(process.env)) {
       if ((k.startsWith("ORCA_TEST_") || k.startsWith("SDL_")) && !(k in env)) env[k] = v;
+    }
+    // After the copy from this script's environment, which would otherwise set it for both.
+    if (REPLAY_ROOM) {
+      if (REPLAY_ROOM.includes(this.name)) env.ORCA_TEST_REPLAY_ROOM = "1";
+      else delete env.ORCA_TEST_REPLAY_ROOM;
     }
     if (PPLUS) env.ORCA_PROFILE = "PPLUS32";
     if (SCENARIO === "rejoin" && DROP === "silent") env.ORCA_TEST_DROP_SILENT = "1";

@@ -390,6 +390,24 @@ void Platform::ProcessEmbedCommands()
       else
         Embed::Out("unsupported music");
     }
+    else if (cmd == "record")
+    {
+      // "record on|off|auto": whether this player's match streams to the room for watchers and
+      // the saved replay (Orca::Online::RecordWanted). "auto" records ranked rooms only.
+      std::string value, more;
+      in >> value;
+      if ((value == "on" || value == "off" || value == "auto") && !(in >> more) &&
+          Orca::Status::Cap(Orca::Status::RECORD_CAP))
+      {
+        Orca::Online::SetRecordChoice(value == "on"  ? Orca::Online::RecordChoice::On :
+                                      value == "off" ? Orca::Online::RecordChoice::Off :
+                                                       Orca::Online::RecordChoice::Auto);
+      }
+      else
+      {
+        Embed::Out("unsupported record");
+      }
+    }
     else if (cmd == "gfx")
     {
       // "gfx <key> <value>": a live change to one of the player's drawing-only graphics settings,

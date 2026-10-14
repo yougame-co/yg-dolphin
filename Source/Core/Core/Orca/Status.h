@@ -68,6 +68,10 @@ void Report(std::string_view code, std::string_view sentence);
 //            UX/OverlayKey.h) and the app may send "talk ..." lines (UX/YgOrb.h)
 //   rumble   Orca prints "orca rumble <port> <0|1> <adapter|pad|none> <index>": the game's motor
 //            for the local player's controller (Orca/UX/Rumble.h), which the page plays
+//   record   Orca streams its match to the room (watchers, the saved replay in the players'
+//            accounts) in ranked rooms, and in any room after the app's "record on"; "record off"
+//            stops it everywhere, "record auto" goes back to the default (Session/Online.h
+//            RecordWanted, Rollback/ReplayStream.h)
 inline constexpr const char* CAPS =
     "join leave stats pause delay perf direct host chat yougame gfx";
 // "music": offered where Orca can tell the game's music apart (Orca/Music.h Supported).
@@ -84,19 +88,23 @@ inline constexpr const char* QUEUE2_CAP = "queue2";
 // later "caps" line when that changes. A host with friends in its game leaves them for a With
 // Anyone pick only with that pick's cap; without it the pick prints in place, unarmed ("orca menu
 // online <queue> kept"), and arms once the friends are gone (Rollback/OnlineMatch.h
-// DecideLobbyPick, DecideKeptPick). Offered with "locks". A ruleset profile then offers 19 caps
-// (with "talk" and "rumble"); the app reads up to 24 (desktop 0.12.39 and later), and Orca needs a
-// newer app than that anyway.
+// DecideLobbyPick, DecideKeptPick). Offered with "locks". A ruleset profile then offers 20 caps
+// (with "talk", "rumble" and "record"); the app reads up to 24 (desktop 0.12.39 and later), and Orca
+// needs a newer app than that anyway.
 inline constexpr const char* PICK_CAPS = "pick-casual pick-ranked";
 // "talk": hold-to-talk. Orca prints "orca overlay down|up|cancel keys|pad" for the overlay key's
 // press and release instead of the "orca orb" toggle (UX/OverlayKey.h), and the app may send
-// "talk ..." lines, one row in the YouGame button's pill (UX/YgOrb.h). Offered next to last, so an
-// app that reads fewer words drops only "rumble" and this.
+// "talk ..." lines, one row in the YouGame button's pill (UX/YgOrb.h). Offered third from last, so
+// an app that reads fewer words drops only "record", "rumble" and this.
 inline constexpr const char* TALK_CAP = "talk";
-// "rumble": every profile, last, so an app that reads fewer caps words drops it before any other.
+// "rumble": every profile, after "talk", so an app that reads fewer caps words drops only "record"
+// before it.
 inline constexpr const char* RUMBLE_CAP = "rumble";
+// "record": every profile, last. The newest word: an app that reads fewer caps words drops it first,
+// and an app without it never records.
+inline constexpr const char* RECORD_CAP = "record";
 // This build's caps for the running profile: CAPS, plus "music", "results", "locks", "queue2" and
-// the pick caps where supported, then "talk" and "rumble" (every mode, mod mode included). In mod
+// the pick caps where supported, then "talk", "rumble" and "record" (every mode, mod mode included). In mod
 // mode (Core/Orca/Mod.h) a builtin's caps only once its guard words have held, and never after they
 // failed.
 std::string OfferedCaps();

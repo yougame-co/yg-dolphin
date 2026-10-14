@@ -57,6 +57,7 @@
 #include "Core/Orca/UX/UX.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/Rollback/Harness.h"
+#include "Core/Rollback/ReplayStream.h"
 #include "Core/Rollback/Rollback.h"
 #include "Core/Rollback/SessionPort.h"
 #include "Core/System.h"
@@ -328,6 +329,10 @@ struct Match
   bool set_over_hint = false;  // the overlay's leave hint is shown
   std::optional<Clock::time_point> set_over_hold_since;
   u16 set_over_buttons = 0xFFFF;
+  // This machine's history as a replay stream, and a replay played instead of a game
+  // (ReplayStream.h).
+  std::unique_ptr<ReplayStream::Writer> replay_out;
+  std::unique_ptr<ReplayStream::Player> replay_play;
 };
 
 // Desyncs this process has seen across all matches (the stats line's "ds").
@@ -2272,6 +2277,56 @@ ReplayStep AdvanceReplay(Core::System& system, Match& match, const FrameHook& on
   return ReplayStep::Done;
 }
 
+// A replay player's next frame (ReplayStream.h), with this match's own restores: its origin, or a
+// seek point it took itself. Like a joiner's rebuild, it never restores anything from elsewhere.
+std::optional<int> StepReplayPlayer(Core::System& system, Match& match, const FrameHook& on_frame)
+{
+  const auto after_restore = [&system] {
+    system.GetJitInterface().ClearSafe();
+    Orca::Events::NoteResync();
+    Orca::UX::QueueApp::ResetTimeouts();
+    Orca::UX::Game().Results().Reset();
+    Orca::UX::Game().Header().MemoryReplaced();
+  };
+  ReplayStream::PlayerHost host;
+  host.restore_origin = [&] {
+    if (RestoreLocal(system, match, match.origin, match.origin_nand, match.origin_frame) !=
+        Restore::Done)
+      return false;
+    after_restore();
+    return true;
+  };
+  host.restore = [&](MachineImage image, const std::vector<Orca::Net::NandEntry>& nand, int frame) {
+    if (RestoreLocal(system, match, std::move(image), nand, frame) != Restore::Done)
+      return false;
+    after_restore();
+    return true;
+  };
+  host.read_nand = [&system](std::vector<Orca::Net::NandEntry>* nand) {
+    IOS::HLE::FS::HostFileSystem* fs = HostNand(system);
+    if (!fs)
+      return false;
+    fs->CloseHostFiles();
+    const bool ok = Orca::Net::ReadNandTree(fs->HostRoot(), nand);
+    fs->ReopenHostFiles();
+    return ok;
+  };
+  host.set_catching_up = [&match](bool catching) { match.port->SetCatchingUp(catching); };
+  host.set_pads = [&match](int frame, const Orca::Net::Pads& pads) {
+    match.port->SetPads(frame, pads);
+  };
+  host.stopping = [&system] { return Stopping(system); };
+  host.stop = [&system](const std::string& message) { StopEmulation(system, message); };
+  const std::optional<int> rewound = match.replay_play->Step(
+      system, host, &match.running, match.origin_hash, match.origin_frame, on_frame);
+  if (match.replay_play->Over())
+  {
+    match.replay_play.reset();
+    End("replay over");
+  }
+  return rewound;
+}
+
 // A launch join (ORCA_JOIN, or an invite the app opened): blocks until the host's keyframe is in.
 // Returns the frame the state starts at, or nullopt (join failed, or stopping).
 std::optional<int> JoinHost(Core::System& system, Match& match)
@@ -3267,6 +3322,10 @@ void ConfirmResults(Match& match)
                        fmt::format("a draw, {}", report.detail) :
                        fmt::format("void ({})", r.why));
     Orca::Online::ReportGame(report);
+    // The match so far as a saved replay: a copy of the written bytes here, packed and sent on the
+    // writer's own thread, so neither this frame nor the report above waits on it.
+    if (match.replay_out)
+      match.replay_out->SendPacked();
   }
 }
 
@@ -3523,6 +3582,11 @@ std::optional<int> Boundary(Core::System& system,
       Orca::Status::State("playing");
       NOTICE_LOG_FMT(ROLLBACK, "Drop-in: playing solo on port 1; room {}", Orca::Online::StatusLine());
     }
+    match.replay_out = ReplayStream::Writer::ForMatch();
+    match.replay_play = match.joining ? nullptr : ReplayStream::Player::FromEnv();
+    // A replay player boots to its origin unseen and unthrottled, as a launch joiner does.
+    if (match.replay_play)
+      match.port->SetCatchingUp(true);
     system.GetJitInterface().ClearSafe();
     // A game whose main menu this can't read has its origin at its first boundary instead, and no
     // fresh starts.
@@ -3608,6 +3672,20 @@ std::optional<int> Boundary(Core::System& system,
                     frame);
       break;
     }
+  }
+
+  // A replay player plays its file from the origin on, instead of a game.
+  if (match.replay_play && OriginReady(match))
+    return StepReplayPlayer(system, match, on_frame);
+  // This machine's history, as its frames become final.
+  if (match.replay_out && OriginReady(match) && !match.replaying)
+  {
+    const int final_end = match.session ? std::min(match.running + 1, match.session->FinalFrame()) :
+                                          match.running + 1;
+    if (!match.replay_out->Pump(match.replay, final_end, match.running + 1,
+                                match.session ? &match.session->LocalChecksums() : nullptr,
+                                match.session != nullptr))
+      match.replay_out.reset();
   }
 
   Orca::Net::ReplayRecordingScope recording(&match.replay);

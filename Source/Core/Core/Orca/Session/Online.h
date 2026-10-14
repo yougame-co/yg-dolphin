@@ -72,6 +72,14 @@ void ReportPeerFault();
 // Waiting in a ranked set's room for the verdict, with no session: this game still runs
 // (YouGameRoom::KeepAlive). Emulation thread.
 void KeepAlive();
+// Sends a replay stream's next bytes to the room for its watchers (YouGameRoom::SendReplayStream).
+void SendReplayStream(const std::vector<u8>& bytes);
+// Queues a saved copy of the match (Rollback/ReplayStream.h RepackedPieces) for the room, if it is
+// still the room of `generation` (RoomGeneration()). Any thread, never blocks; nothing without it.
+void SendReplayPacked(const std::vector<std::vector<u8>>& pieces, int frames, u64 generation);
+// The current room/socket's process-wide generation (0 with no room). Changes on a reopen,
+// including one with the same code; room readiness is still checked separately.
+u64 RoomGeneration();
 // In a ranked set whose opponent stopped sending inputs (15 s stalled, or silent), this player
 // claims the set. Does nothing outside a ranked room's live match.
 void ReportStall();
@@ -85,6 +93,19 @@ std::optional<int> ChosenDelay();
 // applies it at its next tick. Any thread, never blocks.
 void SetDirectWanted(bool on);
 bool DirectWanted();
+// The app's "record on|off|auto" (with its "record" cap): whether this player's Orca streams its
+// match to the room, for watchers and the saved replay the site keeps in the players' accounts.
+// "auto", the default, records ranked rooms only; a tournament or friends room records after the
+// page's "record on". Persists across rooms. Any thread, never blocks.
+enum class RecordChoice
+{
+  Auto,
+  On,
+  Off,
+};
+void SetRecordChoice(RecordChoice choice);
+// Whether to record in the current room now: the app's "record" cap, a room, and the choice above.
+bool RecordWanted();
 // Whether this Orca joins someone else's game (ORCA_JOIN=1, or the app opened an invite); nullopt
 // until known, or if the room ended first.
 std::optional<bool> Joining();

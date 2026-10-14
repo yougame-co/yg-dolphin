@@ -30,6 +30,7 @@
 #include "Core/Orca/Bridge.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/DirectLink.h"
+#include "Core/Orca/Session/Keyframe.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Session/Replay.h"
 #include "Core/Orca/Status.h"
@@ -1104,6 +1105,14 @@ struct YouGameRoom::Impl
     bool game_start = false;
   };
   std::deque<HeldReport> reports;
+  // Replay stream messages waiting for the I/O thread (SendReplayStream), and their bytes.
+  std::deque<std::string> replay_texts;
+  size_t replay_text_bytes = 0;
+  bool replay_dropped = false;
+  // The newest saved copy's pieces still to send (SendReplayPacked), one per PACKED_GAP: a newer
+  // copy replaces them. The I/O thread's time of the last one.
+  std::deque<std::string> replay_packed;
+  Clock::time_point packed_sent{};
   bool desync_pending = false;
   // KnownSetGames, kept by the I/O thread.
   int known_games = 0;
@@ -2491,6 +2500,32 @@ struct YouGameRoom::Impl
     SendRaw(text);
   }
 
+  // A replay stream's waiting messages, in order; then at most one saved-copy piece (32 KiB, ~44 KB
+  // of text) every PACKED_GAP, so a whole copy never goes out in one burst ahead of the inputs, and
+  // stays within the room's replay budget (rooms/src/index.ts RS_BYTES_PER_SECOND).
+  void FlushReplayStream()
+  {
+    constexpr auto PACKED_GAP = std::chrono::milliseconds(200);
+    std::deque<std::string> texts;
+    std::optional<std::string> piece;
+    const auto now = Clock::now();
+    {
+      std::lock_guard lock(mutex);
+      texts.swap(replay_texts);
+      replay_text_bytes = 0;
+      if (!replay_packed.empty() && now - packed_sent >= PACKED_GAP)
+      {
+        piece = std::move(replay_packed.front());
+        replay_packed.pop_front();
+        packed_sent = now;
+      }
+    }
+    for (const std::string& text : texts)
+      SendRaw(text);
+    if (piece)
+      SendRaw(*piece);
+  }
+
   // Reports wait for the room's match; a desync voids the match in progress.
   void FlushLobby()
   {
@@ -2974,6 +3009,8 @@ struct YouGameRoom::Impl
 
     TryBegin();
     FlushLobby();
+    // After the reports: a result never waits behind replay bytes queued in the same tick.
+    FlushReplayStream();
     KeepAliveAndRetry(now);
 
     if (now - last_send < SEND_GAP)
@@ -3689,6 +3726,11 @@ std::string YouGameRoom::Code() const
   return m_impl->code;
 }
 
+u64 YouGameRoom::Generation() const
+{
+  return m_impl->generation;
+}
+
 std::string YouGameRoom::Status() const
 {
   std::lock_guard lock(m_impl->mutex);
@@ -3874,6 +3916,58 @@ void YouGameRoom::KeepAlive()
 {
   std::lock_guard lock(m_impl->mutex);
   m_impl->alive_wanted = Clock::now();
+}
+
+void YouGameRoom::SendReplayStream(const std::vector<u8>& bytes)
+{
+  if (bytes.empty())
+    return;
+  std::string text = R"({"t":"rs","b":")" + EncodeInlineKeyframe(bytes) + R"("})";
+  std::lock_guard lock(m_impl->mutex);
+  // A stream with a gap is no stream: once anything was dropped, nothing more is sent.
+  if (m_impl->replay_dropped)
+    return;
+  if (m_impl->replay_text_bytes + text.size() > (4u << 20))
+  {
+    if (!std::exchange(m_impl->replay_dropped, true))
+      WARN_LOG_FMT(NETPLAY, "Orca room: the replay stream fell 4 MB behind; dropping it");
+    return;
+  }
+  m_impl->replay_text_bytes += text.size();
+  m_impl->replay_texts.push_back(std::move(text));
+}
+
+void YouGameRoom::SendReplayPacked(const std::vector<std::vector<u8>>& pieces, int frames)
+{
+  if (pieces.empty() || frames <= 0)
+    return;
+  size_t packed_bytes = 0;
+  for (const auto& piece : pieces)
+  {
+    if (piece.empty() || piece.size() > REPLAY_PACKED_PIECE_MAX)
+      return;
+    packed_bytes += piece.size();
+    if (packed_bytes > REPLAY_PACKED_MAX)
+    {
+      WARN_LOG_FMT(NETPLAY, "Orca room: packed replay exceeds 1 MiB; skipping it");
+      return;
+    }
+  }
+  const u64 ms = static_cast<u64>(frames) * 1000 / 60;
+  std::vector<std::string> texts;
+  texts.reserve(pieces.size());
+  for (size_t i = 0; i < pieces.size(); ++i)
+  {
+    texts.push_back(fmt::format(
+        "{{\"t\":\"rp\",\"b\":\"{}\",\"i\":{},\"n\":{},\"f\":{},\"ms\":{}}}",
+        EncodeInlineKeyframe(pieces[i]), i, pieces.size(), frames, ms));
+  }
+  std::lock_guard lock(m_impl->mutex);
+  // Copies are cumulative: this one replaces whatever of an older one is still unsent (the room
+  // takes a piece 0 as a new copy and keeps its last complete one until this one is whole). A live
+  // stream that fell behind (replay_dropped) doesn't stop it: a saved copy stands on its own.
+  m_impl->replay_packed.assign(std::make_move_iterator(texts.begin()),
+                               std::make_move_iterator(texts.end()));
 }
 
 void YouGameRoom::TestDropConnection()

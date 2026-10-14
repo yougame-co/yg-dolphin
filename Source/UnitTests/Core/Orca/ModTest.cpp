@@ -792,7 +792,7 @@ TEST(OrcaMod, Guards)
 TEST(OrcaMod, LegacyCapsLinesArePinned)
 {
   const std::string line = "join leave stats pause delay perf direct host chat yougame gfx music "
-                           "results locks queue2 pick-casual pick-ranked talk rumble";
+                           "results locks queue2 pick-casual pick-ranked talk rumble record";
   std::string error;
   const auto brawl = Orca::LoadProfileFrom(RepoPath("Data/Sys/"), "RSBE01", 2, &error);
   ASSERT_TRUE(brawl) << error;
@@ -829,10 +829,10 @@ TEST(OrcaMod, ModeGates)
   EXPECT_TRUE(Orca::UX::FreshMove::Supported());
   // A builtin's caps are never offered before its guards hold (they are checked at the frame hook).
   // The music switch is host-only and follows the disc as in legacy (Music::Supported), guards or
-  // not; the pick caps go with "locks". The engine caps "talk" and "rumble" are offered in every
-  // mode, last, guards or not.
-  const std::string tail =
-      fmt::format(" {} {}", Orca::Status::TALK_CAP, Orca::Status::RUMBLE_CAP);
+  // not; the pick caps go with "locks". The engine caps "talk", "rumble" and "record" are offered in
+  // every mode, last, guards or not.
+  const std::string tail = fmt::format(" {} {} {}", Orca::Status::TALK_CAP,
+                                       Orca::Status::RUMBLE_CAP, Orca::Status::RECORD_CAP);
   const std::string base =
       std::string(Orca::Status::CAPS) + " " + Orca::Status::MUSIC_CAP + tail;
   const std::string all = std::string(Orca::Status::CAPS) + " " + Orca::Status::MUSIC_CAP +
