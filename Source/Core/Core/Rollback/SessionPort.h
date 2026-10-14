@@ -24,6 +24,10 @@ class System;
 
 namespace Rollback
 {
+namespace OnlineMatch
+{
+class StallBudget;
+}
 // Create and destroy only on the CPU thread at a frame boundary, or after emulation stops: SI
 // polls read the active port's pads, and the destructor resets the ring and the NAND journal.
 class RingPort final : public Orca::Net::Game
@@ -88,6 +92,7 @@ private:
 // `sample_local` is called once, and again after each wait so the next frame uses a fresh
 // pad; stall retries reuse the first sample. `waited`, if given, gets the time spent waiting (from
 // the first stall or time-sync step to the last call), which is not this machine's work.
+// The optional budget observes actual stalls and room recovery through the same polling path.
 Orca::Net::Step StepSession(Orca::Net::Session& session, Orca::Net::Game& game, int completed_frame,
                             const std::function<Orca::Net::Pad()>& sample_local,
                             const std::function<bool()>& stopping,
@@ -95,5 +100,8 @@ Orca::Net::Step StepSession(Orca::Net::Session& session, Orca::Net::Game& game, 
                             std::chrono::milliseconds give_up_after = {}, bool* gave_up = nullptr,
                             std::chrono::nanoseconds* waited = nullptr,
                             const std::function<bool(std::chrono::steady_clock::time_point)>&
-                                hold_silence = {});
+                                hold_silence = {},
+                            OnlineMatch::StallBudget* stall_budget = nullptr,
+                            const std::function<bool(std::chrono::steady_clock::time_point)>&
+                                room_recovering = {});
 }  // namespace Rollback

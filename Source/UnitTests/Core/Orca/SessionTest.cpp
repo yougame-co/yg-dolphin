@@ -38,6 +38,10 @@
 
 namespace Rollback
 {
+namespace OnlineMatch
+{
+class StallBudget;
+}
 // Declared here instead of including Core/Rollback/SessionPort.h, whose includes bring in a
 // `Config` namespace that clashes with this file's Config.
 Orca::Net::Step StepSession(Orca::Net::Session& session, Orca::Net::Game& game, int completed_frame,
@@ -47,7 +51,10 @@ Orca::Net::Step StepSession(Orca::Net::Session& session, Orca::Net::Game& game, 
                             std::chrono::milliseconds give_up_after = {}, bool* gave_up = nullptr,
                             std::chrono::nanoseconds* waited = nullptr,
                             const std::function<bool(std::chrono::steady_clock::time_point)>&
-                                hold_silence = {});
+                                hold_silence = {},
+                            OnlineMatch::StallBudget* stall_budget = nullptr,
+                            const std::function<bool(std::chrono::steady_clock::time_point)>&
+                                room_recovering = {});
 }  // namespace Rollback
 
 using namespace Orca::Net;

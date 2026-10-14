@@ -1113,6 +1113,8 @@ struct YouGameRoom::Impl
   // Stable connection ids survive ResetPeer and back, unlike a peer's handshake slot.
   std::map<int, std::string> peer_ids;
   std::map<std::string, Clock::time_point> input_holds;
+  // I/O-owned reconnect/presence state, published under mutex for the session thread.
+  Clock::time_point room_recovery_until{};
   std::vector<std::string> pending_room_notices;
   std::array<int, MAX_SEATS> input_through{-1, -1, -1, -1};
   std::optional<std::pair<std::vector<KeyframeInfo::Name>, int>> pending_names;
@@ -1944,6 +1946,23 @@ struct YouGameRoom::Impl
                            kept ? "kept" : "ended", why, ReconnectContext()));
   }
 
+  void PublishRoomRecovery()
+  {
+    const auto now = Now();
+    auto until = reconnect.since ? *reconnect.since + ROOM_HOLD : Clock::time_point{};
+    for (const auto& [id, peer] : peers)
+    {
+      if (peer.presence.suspended)
+        continue;
+      if (const auto deadline = peer.presence.Deadline())
+        until = std::max(until, *deadline);
+      if (peer.resume_requested || (peer.recovering_arrival && !peer.sent_packet))
+        until = std::max(until, now + ROOM_HOLD);
+    }
+    std::lock_guard lock(mutex);
+    room_recovery_until = until;
+  }
+
   bool StartReconnect(unsigned close_code, const std::string& why)
   {
     const auto now = Now();
@@ -2308,6 +2327,7 @@ struct YouGameRoom::Impl
     // The connection failed under the player (went quiet, or a test dropped it): see below.
     while (!stop && State() != RoomState::Ended)
     {
+      PublishRoomRecovery();
       if (leave_requested)
       {
         End("You left the room", "");
@@ -4610,6 +4630,17 @@ bool YouGameRoom::HoldInputSilence(Clock::time_point since, Clock::time_point no
       return false;
   }
   return true;
+}
+
+bool YouGameRoom::RoomRecovering(Clock::time_point now) const
+{
+  std::lock_guard lock(m_impl->mutex);
+  if (!m_impl->options.recovery_enabled || m_impl->queue != "private" ||
+      (!m_impl->queue_known && !m_impl->options.friends_room) || m_impl->state != RoomState::Waiting)
+    return false;
+  return now < m_impl->room_recovery_until ||
+         std::ranges::any_of(m_impl->input_holds,
+                             [&](const auto& hold) { return now < hold.second; });
 }
 
 bool YouGameRoom::FreshTicket(bool fresh, std::string* ticket, std::string* store_url,

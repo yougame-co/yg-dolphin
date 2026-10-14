@@ -375,6 +375,8 @@ public:
   const Stats& GetStats() const { return m_stats; }
   int CurrentFrame() const { return m_frame; }
   bool Resimulating() const { return m_resim_until >= 0; }
+  // Rollback can return from a boundary while its original input stall is still ongoing.
+  bool InputStalled() const { return m_stalling && m_stall_ended_ms < 0; }
   int Delay() const { return m_delay; }
   // The newest frame whose inputs are known for every seat (every frame through it ran, or will
   // re-run, with real inputs).

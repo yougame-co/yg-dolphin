@@ -213,6 +213,8 @@ public:
   // Transport verdict during the existing game stall. No room leave means wait for the hold.
   bool HoldInputSilence(std::chrono::steady_clock::time_point since,
                         std::chrono::steady_clock::time_point now);
+  // Friends-room recovery already in progress; observing it never creates an input hold.
+  bool RoomRecovering(std::chrono::steady_clock::time_point now) const;
 
   // Whether the untaken events include the game's host leaving, so a joiner stalled on the host's
   // inputs hears it at once rather than after its silence limit.

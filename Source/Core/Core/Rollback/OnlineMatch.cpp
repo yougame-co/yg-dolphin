@@ -4023,10 +4023,6 @@ std::optional<int> Boundary(Core::System& system,
     auto stall_published = step_start;
     bool stall_shown = false;
     bool stall_claimed = false;
-    // Held past the stall budget across steps (StallBudget): as silent as one long stall.
-    bool budget_spent = false;
-    // Whether a room hold covered this step's stall at any point (a recovered connection blip).
-    bool held_seen = false;
     const bool catching_up = match.port->CatchingUp() || match.session->CatchingUp();
     const int stalls_before = match.session->GetStats().stalls;
     const int running_before = match.running;
@@ -4067,25 +4063,16 @@ std::optional<int> Boundary(Core::System& system,
           }
           if (match.joining && Orca::Online::HostLeftPending())
             host_left = true;
-          // A joiner still catching up waits on the host's history by design: not counted.
-          const bool room_held = Orca::Online::HoldInputSilence(step_start, poll_time);
-          held_seen = held_seen || room_held;
-          if (!budget_spent && !catching_up &&
-              match.stall_budget.Spent(poll_time, step_start, room_held))
-          {
-            budget_spent = true;
-            WARN_LOG_FMT(ROLLBACK,
-                         "Online: held on the other players for {} s of the last {} s: they count "
-                         "as silent",
-                         StallBudget::STALL_BUDGET.count(), StallBudget::STALL_WINDOW.count());
-          }
-          return host_left || !left_seats.empty() || budget_spent || Stopping(system);
+          return host_left || !left_seats.empty() || Stopping(system);
         },
         std::chrono::milliseconds{1},
         LeavingPastUnplug(match) ? LEAVE_SILENCE_LIMIT : PEER_SILENCE_LIMIT, &peer_silent, &waited,
         [&](Clock::time_point poll_time) {
           return !LeavingPastUnplug(match) && Orca::Online::HoldInputSilence(step_start, poll_time);
-        });
+        },
+        // A joiner catching up waits on history by design, outside the stall budget.
+        catching_up ? nullptr : &match.stall_budget,
+        [](Clock::time_point poll_time) { return Orca::Online::RoomRecovering(poll_time); });
     perf_scope.reset();
     Orca::Perf::AddWait(waited);
     match.last_return = Clock::now();
@@ -4102,13 +4089,7 @@ std::optional<int> Boundary(Core::System& system,
         NOTICE_LOG_FMT(ROLLBACK, "Online match: {}", note);
     }
     if (match.session && match.session->GetStats().stalls > stalls_before)
-    {
       match.stats_stall_ms += MsSince(step_start);
-      if (!catching_up && !(held_seen && match.stall_budget.ExcuseRecovered(*match.last_return)))
-        match.stall_budget.Add(step_start, *match.last_return);
-    }
-    if (budget_spent && step.kind == Orca::Net::StepKind::Ended)
-      peer_silent = true;
     if (step.kind == Orca::Net::StepKind::Rollback)
     {
       match.stats_rbmax = std::max(match.stats_rbmax, running_before - step.frame + 1);
@@ -4595,6 +4576,52 @@ bool StallBudget::ExcuseRecovered(Clock::time_point now)
     return false;
   m_recoveries.push_back(now);
   return true;
+}
+
+bool StallBudget::Poll(Clock::time_point now, Clock::time_point step_start, bool recovering)
+{
+  ObserveRecovery(recovering);
+  auto total = Stalled(now);
+  if (!m_recovery_seen)
+  {
+    for (const auto& [start, end] : m_pending_stalls)
+      if (end > now - STALL_WINDOW)
+        total += end - std::max(start, now - STALL_WINDOW);
+    total += now - std::max(step_start, now - STALL_WINDOW);
+  }
+  return total >= STALL_BUDGET;
+}
+
+void StallBudget::FinishStep(std::optional<Clock::time_point> stall_start, Clock::time_point end,
+                              bool still_stalled, bool resumed)
+{
+  if (stall_start && end > *stall_start)
+    m_pending_stalls.emplace_back(*stall_start, end);
+  // A partial packet can cause a rollback before it supplies the inputs we stalled on.
+  if (still_stalled && resumed)
+    return;
+  bool excused = false;
+  if (!m_pending_stalls.empty() && m_recovery_seen && resumed)
+  {
+    Clock::duration duration{};
+    for (const auto& [start, until] : m_pending_stalls)
+      duration += until - start;
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
+    excused = ExcuseRecovered(end);
+    if (excused)
+      NOTICE_LOG_FMT(ROLLBACK,
+                     "Online: stall of {} ms excused: recovered outage ({} of {} in {} min)",
+                     ms, Recoveries(), MAX_RECOVERIES, RECOVERY_WINDOW.count());
+    else
+      NOTICE_LOG_FMT(ROLLBACK, "Online: stall of {} ms not excused: recovered outage cap reached "
+                               "({} of {} in {} min)",
+                     ms, Recoveries(), MAX_RECOVERIES, RECOVERY_WINDOW.count());
+  }
+  if (!excused)
+    for (const auto& [start, until] : m_pending_stalls)
+      Add(start, until);
+  m_pending_stalls.clear();
+  m_recovery_seen = false;
 }
 
 StallBudget::Clock::duration

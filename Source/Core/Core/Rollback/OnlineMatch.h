@@ -293,18 +293,28 @@ public:
   {
     m_stalls.clear();
     m_recoveries.clear();
+    m_pending_stalls.clear();
+    m_recovery_seen = false;
   }
-  // A completed stall a room hold covered (a friend's connection blip the room recovered) is not
+  // A completed stall room recovery covered (a friend's connection blip the room recovered) is not
   // the other player starving us: it doesn't count, up to MAX_RECOVERIES in RECOVERY_WINDOW. Past
   // that a player flapping its connection would hold the game forever, so it counts like any
   // other. Returns whether this one was excused.
   static constexpr std::chrono::minutes RECOVERY_WINDOW{10};
   static constexpr int MAX_RECOVERIES = 3;
   bool ExcuseRecovered(Clock::time_point now);
+  // Used by StepSession, including rollback returns that split one input stall across steps.
+  void ObserveRecovery(bool recovering) { m_recovery_seen |= recovering; }
+  bool Poll(Clock::time_point now, Clock::time_point step_start, bool recovering);
+  void FinishStep(std::optional<Clock::time_point> stall_start, Clock::time_point end,
+                  bool still_stalled, bool resumed);
+  int Recoveries() const { return static_cast<int>(m_recoveries.size()); }
 
 private:
   std::vector<std::pair<Clock::time_point, Clock::time_point>> m_stalls;
   std::vector<Clock::time_point> m_recoveries;
+  std::vector<std::pair<Clock::time_point, Clock::time_point>> m_pending_stalls;
+  bool m_recovery_seen = false;
 };
 
 // A joiner's own port values: its name in the room (empty: unknown), and its controls and queue

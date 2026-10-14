@@ -123,6 +123,7 @@ std::optional<std::chrono::steady_clock::time_point> HostAwayDeadline();
 void RetryPeer(int seat);
 bool HoldInputSilence(std::chrono::steady_clock::time_point since,
                       std::chrono::steady_clock::time_point now);
+bool RoomRecovering(std::chrono::steady_clock::time_point now);
 bool RoomEnded();
 // This Orca is in its room: the welcome arrived and the room hasn't ended.
 bool InRoom();

@@ -543,6 +543,12 @@ bool HoldInputSilence(std::chrono::steady_clock::time_point since,
   return room && room->HoldInputSilence(since, now);
 }
 
+bool RoomRecovering(std::chrono::steady_clock::time_point now)
+{
+  const auto room = Room();
+  return room && room->RoomRecovering(now);
+}
+
 bool RoomEnded()
 {
   const auto room = Room();

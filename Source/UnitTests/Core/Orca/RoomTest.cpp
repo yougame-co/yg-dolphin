@@ -47,7 +47,10 @@ Orca::Net::Step StepSession(Orca::Net::Session& session, Orca::Net::Game& game, 
                             std::chrono::milliseconds give_up_after = {}, bool* gave_up = nullptr,
                             std::chrono::nanoseconds* waited = nullptr,
                             const std::function<bool(std::chrono::steady_clock::time_point)>&
-                                hold_silence = {});
+                                hold_silence = {},
+                            OnlineMatch::StallBudget* stall_budget = nullptr,
+                            const std::function<bool(std::chrono::steady_clock::time_point)>&
+                                room_recovering = {});
 }
 
 using namespace Orca::Net;
@@ -2044,14 +2047,16 @@ Orca::Net::Config RoomSessionConfig()
 class OrcaRoomStallRuntime : public OrcaRoomRuntime
 {
 protected:
-  void OpenDirect(const std::string& code, bool joining)
+  void OpenDirect(const std::string& code, bool joining, const std::string& queue = "private",
+                  bool recovery_enabled = true)
   {
     vars.push_back(std::make_unique<ScopedEnv>("ORCA_DIRECT", "1"));
     vars.push_back(std::make_unique<ScopedEnv>("ORCA_DIRECT_LOOPBACK", "1"));
     vars.push_back(std::make_unique<ScopedEnv>("ORCA_DIRECT_STUN", "0"));
     room_code = code;
     local_seat = joining ? 1 : 0;
-    room = Open(code, fmt::format(R"({{"direct":true,"joining":{}}})", joining), joining);
+    room = Open(code, fmt::format(R"({{"direct":true,"joining":{},"queue":"{}"}})", joining, queue),
+                joining, queue == "private", recovery_enabled);
     ASSERT_TRUE(Wait([&] { return room->Seat() == local_seat && room->RoundTripMs() >= 0; }));
     DirectOptions options;
     options.me = "peer";
@@ -2101,61 +2106,75 @@ protected:
     return config;
   }
 
-  Step StallFor(std::chrono::milliseconds duration, bool drop_socket = false)
+  Step Boundary(RoomClock::time_point deadline, int* polls = nullptr)
   {
+    const auto start = RoomClock::now();
+    const int recoveries_before = budget.Recoveries();
+    const auto result = Rollback::StepSession(*session, game, completed, [] { return Pad{}; }, [&] {
+      if (polls)
+        ++*polls;
+      return room->HostLeftPending() || RoomClock::now() > deadline;
+    }, 1ms, 10s, nullptr, nullptr,
+    [&](RoomClock::time_point now) {
+      ++hold_calls;
+      return room->HoldInputSilence(start, now);
+    }, &budget, [&](RoomClock::time_point now) { return room->RoomRecovering(now); });
+    last_excused = budget.Recoveries() > recoveries_before;
+    if (result.kind == StepKind::Run || result.kind == StepKind::Rollback)
+      completed = game.Run();
+    return result;
+  }
+
+  Step StallFor(std::chrono::milliseconds duration, bool drop_socket = false, bool peer_away = false)
+  {
+    if (peer_away)
+    {
+      Action(room_code, fmt::format(R"({{"message":{}}})", RosterMessage("away", local_seat == 1)));
+      EXPECT_TRUE(Wait([&] { return room->RoomRecovering(RoomClock::now()); }));
+    }
     if (drop_socket)
     {
       Action(room_code, R"({"block_for":80})");
       room->TestDropConnection();
+      direct.Test("off");
     }
     const auto begin = RoomClock::now();
     int polls = 0;
     std::thread restore([&] {
       std::this_thread::sleep_for(duration);
-      const auto packet = EncodePacket(NeutralPacket(next_input, 16));
+      direct.Test("on");
+      const auto recovered = NeutralPacket(next_input, 16);
+      const auto packet = EncodePacket(recovered);
+      if (peer_away)
+        Action(room_code, fmt::format(R"({{"message":{}}})", RosterMessage("back", local_seat == 1)));
       // Repeated UDP packets, as the session does, until StepSession has received them.
+      // Peer-away cases restore through the room, keeping back and its inputs in socket order.
       while (!restored.load())
       {
-        direct.Send(packet);
+        if (peer_away)
+          Action(room_code, InjectPacket(recovered));
+        else
+          direct.Send(packet);
         std::this_thread::sleep_for(2ms);
       }
     });
     Step result{};
     for (int boundary = 0; boundary < 100; ++boundary)
     {
-      const auto start = RoomClock::now();
-      const int before = session->GetStats().stalls;
-      bool held_seen = false;
-      result = Rollback::StepSession(*session, game, completed, [] { return Pad{}; }, [&] {
-        ++polls;
-        const auto now = RoomClock::now();
-        const bool held = room->HoldInputSilence(start, now);
-        held_seen |= held;
-        return budget.Spent(now, start, held) || room->HostLeftPending() ||
-               now - begin > duration + 5s;
-      }, 1ms, 10s, nullptr, nullptr,
-      [&](RoomClock::time_point now) { return room->HoldInputSilence(start, now); });
-      if (session->GetStats().stalls > before)
-      {
-        const auto end = RoomClock::now();
-        if (held_seen)
-          last_excused = budget.ExcuseRecovered(end);
-        if (!held_seen || !last_excused)
-          budget.Add(start, end);
-      }
-      if (result.kind == StepKind::Run || result.kind == StepKind::Rollback)
-        completed = game.Run();
+      result = Boundary(begin + duration + 5s, &polls);
       if (polls > 0 || result.kind == StepKind::Ended)
         break;
     }
     restored = true;
     restore.join();
     restored = false;
+    if (peer_away)
+      EXPECT_TRUE(Wait([&] { return !room->RoomRecovering(RoomClock::now()); }));
     next_input += 16;
     return result;
   }
   std::string room_code;
-  int local_seat = 1, completed = -1, next_input = 0;
+  int local_seat = 1, completed = -1, next_input = 0, hold_calls = 0;
   std::unique_ptr<YouGameRoom> room;
   DirectLink direct;
   RoomHashGame game;
@@ -2163,6 +2182,29 @@ protected:
   Rollback::OnlineMatch::StallBudget budget;
   std::atomic<bool> restored{false};
   bool last_excused = false;
+
+  void ExpectDarkRecovery(std::chrono::milliseconds duration)
+  {
+    ASSERT_TRUE(session);
+    for (int small = 0; small < 3; ++small)
+      ASSERT_EQ(StallFor(100ms).kind, StepKind::Run);
+    EXPECT_EQ(budget.Recoveries(), 0);
+    EXPECT_EQ(hold_calls, 0);
+    // The room socket stays down when the actual UDP link returns, just as in staging.
+    ASSERT_EQ(StallFor(duration, true).kind, StepKind::Run);
+    EXPECT_TRUE(last_excused);
+    EXPECT_EQ(budget.Recoveries(), 1);
+    EXPECT_LT(budget.Stalled(RoomClock::now()), 1s);
+    EXPECT_TRUE(room->RoomRecovering(RoomClock::now()));
+    EXPECT_GT(Connections(room_code), 1);
+    EXPECT_EQ(room->GetState(), RoomState::Waiting);
+    EXPECT_EQ(room->Code(), room_code);
+    EXPECT_TRUE(session->Error().empty());
+    EXPECT_FALSE(session->Idle());
+    EXPECT_EQ(StallFor(200ms).kind, StepKind::Run);
+    EXPECT_FALSE(Sent(room_code, "leave"));
+    EXPECT_FALSE(Sent(room_code, "msg", "drop"));
+  }
 };
 }  // namespace
 
@@ -2887,13 +2929,117 @@ TEST_F(OrcaRoomRuntime, QueueBackAndJoinKeepTheirOriginalRuntimePolicy)
 TEST_F(OrcaRoomStallRuntime, OrdinaryStallsLeaveRecoveryAllowanceForDarkJoiner)
 {
   OpenDirect("budgetdark", true);
+  ExpectDarkRecovery(15s);
+}
+
+TEST_F(OrcaRoomStallRuntime, DarkHostFifteenSecondsKeepsTheSessionAfterAnotherStall)
+{
+  OpenDirect("budgethost", false);
+  ExpectDarkRecovery(15s);
+}
+
+TEST_F(OrcaRoomStallRuntime, DarkJoinerSixtySecondsKeepsTheSessionAfterAnotherStall)
+{
+  OpenDirect("budgetlong", true);
+  ExpectDarkRecovery(60s);
+}
+
+TEST_F(OrcaRoomStallRuntime, FourthRecoveredOutageInTenMinutesCounts)
+{
+  OpenDirect("budgetcap", true);
   ASSERT_TRUE(session);
-  for (int small = 0; small < 3; ++small)
-    ASSERT_EQ(StallFor(100ms).kind, StepKind::Run);
-  // These were normal packet delays, without a socket loss or room-away verdict.
-  // They must leave the allowances available for the first real outage.
-  ASSERT_EQ(StallFor(14900ms, true).kind, StepKind::Run);
-  EXPECT_TRUE(last_excused);
-  EXPECT_LT(budget.Stalled(RoomClock::now()), 1s);
-  EXPECT_EQ(StallFor(200ms).kind, StepKind::Run);
+  ASSERT_EQ(StallFor(200ms).kind, StepKind::Run);
+  for (int outage = 0; outage < 3; ++outage)
+  {
+    ASSERT_EQ(StallFor(100ms, false, true).kind, StepKind::Run)
+        << "outage " << outage + 1 << ": " << session->Error() << ": " << session->Describe();
+    EXPECT_TRUE(last_excused);
+    EXPECT_EQ(budget.Recoveries(), outage + 1);
+  }
+  ASSERT_EQ(StallFor(14900ms, false, true).kind, StepKind::Run);
+  EXPECT_FALSE(last_excused);
+  EXPECT_EQ(budget.Recoveries(), 3);
+  EXPECT_GE(budget.Stalled(RoomClock::now()), 15s);
+  EXPECT_EQ(StallFor(100ms).kind, StepKind::Ended);
+}
+
+TEST_F(OrcaRoomStallRuntime, RollbackSplitsOneOutageWithoutSpendingAnotherRecovery)
+{
+  OpenDirect("budgetsplt", true);
+  ASSERT_TRUE(session);
+  ASSERT_EQ(StallFor(100ms).kind, StepKind::Run);
+  Action(room_code, fmt::format(R"({{"message":{}}})", RosterMessage("away", true)));
+  ASSERT_TRUE(Wait([&] { return room->RoomRecovering(RoomClock::now()); }));
+  // Frame 20 changes a prediction, but frames 16..19 are still missing: Rollback returns
+  // while the original stall is alive, and several replay steps precede its next stall poll.
+  Packet partial = NeutralPacket(20, 1);
+  partial.pads[0][0] = 1;
+  std::atomic<bool> partial_done{false};
+  std::thread partial_sender([&] {
+    std::this_thread::sleep_for(100ms);
+    while (!partial_done)
+    {
+      direct.Send(EncodePacket(partial));
+      std::this_thread::sleep_for(2ms);
+    }
+  });
+  Step step{};
+  const auto deadline = RoomClock::now() + 5s;
+  for (int boundary = 0; boundary < 30; ++boundary)
+  {
+    step = Boundary(deadline);
+    if (step.kind != StepKind::Run)
+      break;
+  }
+  partial_done = true;
+  partial_sender.join();
+  ASSERT_EQ(step.kind, StepKind::Rollback) << session->Error();
+  EXPECT_TRUE(session->InputStalled());
+  EXPECT_EQ(budget.Recoveries(), 0);
+  // The room back and the rest of the inputs arrive after the rollback has returned.
+  Action(room_code, fmt::format(R"({{"message":{}}})", RosterMessage("back", true)));
+  Packet remaining = NeutralPacket(16, 16);
+  remaining.pads[4][0] = 1;
+  std::atomic<bool> remaining_done{false};
+  std::thread remaining_sender([&] {
+    std::this_thread::sleep_for(200ms);
+    while (!remaining_done)
+    {
+      direct.Send(EncodePacket(remaining));
+      std::this_thread::sleep_for(2ms);
+    }
+  });
+  for (int boundary = 0; boundary < 30 && session->InputStalled(); ++boundary)
+    step = Boundary(RoomClock::now() + 5s);
+  remaining_done = true;
+  remaining_sender.join();
+  for (int boundary = 0; boundary < 30 && session->Resimulating(); ++boundary)
+    step = Boundary(RoomClock::now() + 5s);
+  EXPECT_EQ(step.kind, StepKind::Run) << session->Error();
+  EXPECT_FALSE(session->InputStalled());
+  EXPECT_EQ(budget.Recoveries(), 1);
+  EXPECT_LT(budget.Stalled(RoomClock::now()), 200ms);
+  EXPECT_EQ(hold_calls, 0);
+}
+
+TEST_F(OrcaRoomStallRuntime, RankedStallsKeepTheBudgetAndSilenceLimit)
+{
+  OpenDirect("budgetrank", true, "ranked");
+  ASSERT_TRUE(session);
+  EXPECT_FALSE(room->RoomRecovering(RoomClock::now()));
+  ASSERT_EQ(StallFor(9s).kind, StepKind::Run);
+  EXPECT_EQ(StallFor(7s).kind, StepKind::Ended);
+  EXPECT_EQ(budget.Recoveries(), 0);
+  EXPECT_GE(budget.Stalled(RoomClock::now()), 15s);
+}
+
+TEST_F(OrcaRoomStallRuntime, CasualStallsKeepTheBudgetAndSilenceLimit)
+{
+  OpenDirect("budgetcasual", true, "casual");
+  ASSERT_TRUE(session);
+  EXPECT_FALSE(room->RoomRecovering(RoomClock::now()));
+  ASSERT_EQ(StallFor(9s).kind, StepKind::Run);
+  EXPECT_EQ(StallFor(7s).kind, StepKind::Ended);
+  EXPECT_EQ(budget.Recoveries(), 0);
+  EXPECT_GE(budget.Stalled(RoomClock::now()), 15s);
 }
