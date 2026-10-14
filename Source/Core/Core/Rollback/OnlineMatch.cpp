@@ -4041,8 +4041,9 @@ std::optional<int> Boundary(Core::System& system,
           if (match.joining && Orca::Online::HostLeftPending())
             host_left = true;
           // A joiner still catching up waits on the host's history by design: not counted.
-          if (!budget_spent && !catching_up && match.stall_budget.Spent(now, step_start) &&
-              !Orca::Online::HoldInputSilence(step_start, now))
+          if (!budget_spent && !catching_up &&
+              match.stall_budget.Spent(now, step_start,
+                                      Orca::Online::HoldInputSilence(step_start, now)))
           {
             budget_spent = true;
             WARN_LOG_FMT(ROLLBACK,

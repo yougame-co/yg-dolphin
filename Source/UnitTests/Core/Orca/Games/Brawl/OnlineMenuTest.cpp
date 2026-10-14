@@ -2096,6 +2096,27 @@ TEST(OrcaStallBudget, ATrickleUnderTheSilenceLimitRunsTheBudgetOut)
   EXPECT_EQ(old.Stalled(t0 + 170s), 4s);
 }
 
+TEST(OrcaStallBudget, RoomHoldsExcuseOnlyTheOngoingStall)
+{
+  using Rollback::OnlineMatch::StallBudget;
+  using namespace std::chrono_literals;
+  const StallBudget::Clock::time_point t0{};
+  StallBudget budget;
+  auto start = t0 + 100s;
+  // One input every 9.9 seconds starts a new room hold on each stall. The third
+  // stall must end immediately because the completed stalls already spent 19.8 seconds.
+  for (int input = 0; input < 2; ++input)
+  {
+    EXPECT_FALSE(budget.Spent(start + 9900ms, start, true));
+    budget.Add(start, start + 9900ms);
+    start += 9900ms + 17ms;
+  }
+  EXPECT_TRUE(budget.Spent(start, start, true));
+  StallBudget outage;
+  EXPECT_FALSE(outage.Spent(t0 + 160s, t0 + 100s, true));
+  EXPECT_TRUE(outage.Spent(t0 + 160s, t0 + 100s, false));
+}
+
 // The host decides every port's values so every machine writes the same bytes, but a joiner's own
 // controls, queue identity (its pick) and name are what it sent: the joiner checks the entries for
 // its own port, and a host that rewrites them ends the session (OwnValuesKept).

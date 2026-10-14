@@ -267,9 +267,11 @@ public:
   Clock::duration Stalled(Clock::time_point now,
                           std::optional<Clock::time_point> ongoing_since = std::nullopt) const;
   bool Spent(Clock::time_point now,
-             std::optional<Clock::time_point> ongoing_since = std::nullopt) const
+             std::optional<Clock::time_point> ongoing_since = std::nullopt,
+             bool ongoing_held = false) const
   {
-    return Stalled(now, ongoing_since) >= STALL_BUDGET;
+    // A room hold excuses this outage only; completed stalls still consume the budget.
+    return Stalled(now, ongoing_held ? std::nullopt : ongoing_since) >= STALL_BUDGET;
   }
   void Clear() { m_stalls.clear(); }
 
