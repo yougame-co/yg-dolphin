@@ -728,13 +728,13 @@ std::string WebSocketUrl(std::string url)
 }
 }  // namespace
 
-// Why the rooms Worker refused the WebSocket upgrade, for the player. Only the status is readable:
-// 401 an expired ticket; 403 a different lobby key (another Orca build, disc or save) or a host's
-// kick; 409 a full room.
+// Why the rooms Worker refused the upgrade; only recognized body reasons reach this policy.
 std::string RefusalCode(const std::string& connect_error)
 {
   if (connect_error.find("(HTTP 403)") != std::string::npos)
     return "room_mismatch";
+  if (connect_error.find("match complete") != std::string::npos)
+    return "match-over";
   if (connect_error.find("(HTTP 409)") != std::string::npos)
     return "room_full";
   return "network";
@@ -747,6 +747,8 @@ std::string RefusalReason(const std::string& connect_error)
     return "The room didn't let you in: your friend's YG Dolphin, disc or save differs from yours "
            "(both of you: update YouGame and press Play again), or the host removed you";
   }
+  if (connect_error.find("match complete") != std::string::npos)
+    return "The match is over";
   if (connect_error.find("(HTTP 409)") != std::string::npos)
     return "That room is full";
   if (connect_error.find("(HTTP 401)") != std::string::npos)
@@ -1015,8 +1017,30 @@ struct YouGameRoom::Impl
   std::unique_ptr<Common::WebSocket> ws = std::make_unique<Common::WebSocket>();
   std::string room_url;
   // Only ORCA_TEST_ROOM_DROP + ORCA_TEST_DROP_SILENT keep an unread old socket for 409 tests.
-  std::unique_ptr<Common::WebSocket> test_held_socket;
+  decltype(ws) test_held_socket;
   RoomReconnect reconnect;
+  RoomReconnectBudget reconnect_budget;
+  bool dropped = false;
+  bool initial_seat_retry = false;
+  u32 jitter_sequence = 0;
+  unsigned resume_sequence = 0;
+  unsigned ReconnectJitter()
+  {
+    if (test_now)
+      return 30;
+    if (!jitter_sequence)
+      jitter_sequence = static_cast<u32>(std::hash<std::string>{}(run)) | 1;
+    jitter_sequence ^= jitter_sequence << 13;
+    jitter_sequence ^= jitter_sequence >> 17;
+    jitter_sequence ^= jitter_sequence << 5;
+    return jitter_sequence % 61;
+  }
+  bool FriendsRecovery() const
+  {
+    std::lock_guard lock(mutex);
+    return options.recovery_enabled && queue == "private" &&
+           (queue_known || options.friends_room);
+  }
   unsigned reconnect_close_code = 0;
   std::string reconnect_reason, reconnect_error;
   bool reconnect_logged = false;
@@ -1024,7 +1048,7 @@ struct YouGameRoom::Impl
   {
     std::thread thread;
     std::atomic<bool> done{false}, cancel{false};
-    std::unique_ptr<Common::WebSocket> socket;
+    decltype(ws) socket;
     std::string error;
     ~ReconnectJob()
     {
@@ -1071,6 +1095,10 @@ struct YouGameRoom::Impl
     bool back_hello_pending = false;
     bool resume_requested = false;
     bool resume_handled = false;
+    std::string resume_id, handled_resume_id;
+    Clock::time_point resume_retry_at{};
+    std::chrono::milliseconds resume_backoff{500};
+    Clock::time_point resume_handled_until{};
     std::string run;
   };
   std::map<std::string, Peer> peers;
@@ -1080,7 +1108,12 @@ struct YouGameRoom::Impl
   std::vector<PeerEvent> events;
   std::map<int, KeyframeInfo> keyframe_offers;
   std::vector<std::pair<int, std::string>> pending_drops;
-  std::vector<int> pending_retries;
+  std::vector<std::string> pending_retries;
+  // Stable connection ids survive ResetPeer and back, unlike a peer's handshake slot.
+  std::map<int, std::string> peer_ids;
+  std::map<std::string, Clock::time_point> input_holds;
+  std::vector<std::string> pending_room_notices;
+  std::array<int, MAX_SEATS> input_through{-1, -1, -1, -1};
   std::optional<std::pair<std::vector<KeyframeInfo::Name>, int>> pending_names;
   // Host: joins held (HoldJoins), and whether a change is still to be announced.
   bool holding = false;
@@ -1128,6 +1161,7 @@ struct YouGameRoom::Impl
   // ranked set finished here (under mutex); and, from the emulator thread (under mutex), the host's
   // opponent plugged in, game reports, a desync.
   std::string queue = "private";
+  bool queue_known = false;
   bool stay = false;
   int room_size = MAX_SEATS;
   std::string match_id;
@@ -1567,7 +1601,7 @@ struct YouGameRoom::Impl
     return site + "/api/orca/keyframes";
   }
 
-  // A fresh ticket for the keyframe store (tickets last five minutes; a keyframe goes out much
+  // A fresh room/store ticket (tickets last five minutes; a keyframe goes out much
   // later). Any thread, once the room has its first ticket; no side effects.
   bool FreshTicket(bool fresh, std::string* ticket, std::string* store_url, std::string* error,
                    const std::atomic<bool>* cancel = nullptr)
@@ -1600,7 +1634,7 @@ struct YouGameRoom::Impl
     request["mode"] = picojson::value(options.mode);
     request["room"] = picojson::value(room);
     request["lobby"] = picojson::value(lobby);
-    Common::HttpRequest http(std::chrono::seconds(10), [this, cancel](s64, s64, s64, s64) {
+    Common::HttpRequest http(cancel ? std::chrono::seconds(2) : std::chrono::seconds(10), [this, cancel](s64, s64, s64, s64) {
       return !stop && !leave_requested && (!cancel || !*cancel);
     });
     Common::HttpRequest::Response response;
@@ -1609,7 +1643,10 @@ struct YouGameRoom::Impl
     {
       request["type"] = picojson::value("mpTicket");
       request["ranked"] = picojson::value(false);
-      answer = Orca::Bridge::Request(std::move(request), std::chrono::seconds(10));
+      answer = Orca::Bridge::Request(std::move(request), std::chrono::seconds(10),
+                                   [this, cancel] {
+                                     return stop || leave_requested || (cancel && *cancel);
+                                   });
     }
     else if (bridged)
     {
@@ -1841,6 +1878,13 @@ struct YouGameRoom::Impl
     return input == direct_inputs.end() ? std::nullopt : std::optional(input->second);
   }
 
+  bool InputHoldAlive(const std::string& id, Clock::time_point now) const
+  {
+    std::lock_guard lock(mutex);
+    const auto hold = input_holds.find(id);
+    return hold != input_holds.end() && now < hold->second;
+  }
+
   std::string ReconnectContext() const
   {
     return fmt::format("attempt={} close-code={} close-reason={} last-error={}",
@@ -1861,16 +1905,17 @@ struct YouGameRoom::Impl
   {
     const auto now = Now();
     const bool retry = reconnect.since.has_value();
-    if (!reconnect.Start(now, close_code))
+    if (!FriendsRecovery() || !reconnect.Start(now, close_code, ReconnectJitter()))
       return false;
+    dropped = true;
     if (!retry)
     {
       reconnect_close_code = close_code;
       reconnect_reason = why;
       reconnect_error.clear();
       reconnect_logged = false;
-      // The room can reconnect even when the game cannot keep playing directly. Its peers still
-      // use the existing input timeout, then greet again after welcome, within this same hold.
+      // The room can reconnect while the game stalls on inputs. Keep its peer identities
+      // throughout the hold, so returning buffered inputs can continue the same session.
       for (auto& [id, peer] : peers)
       {
         if (peer.presence.away_since)
@@ -1888,7 +1933,7 @@ struct YouGameRoom::Impl
     else
     {
       reconnect_error = fmt::format("close-code={} close-reason={}", close_code, why);
-      reconnect.Retry(now);
+      reconnect.Retry(now, ReconnectJitter());
     }
     // No leave: the server must hold this seat and the host role. The room mirror and transport
     // remain live, and direct links retain their identity, queues and keys.
@@ -1927,27 +1972,51 @@ struct YouGameRoom::Impl
       return false;
     }
     const bool replaced = close_code == 4000;
+    const char* final = FinalRoomClose(close_code);
     RoomNotice(fmt::format("room-away self ended {} close-code={} close-reason={}",
-                           replaced ? "replaced" : "match-over", close_code, why));
-    End(fmt::format("{} ({})", replaced ? "Another game of yours took over this room" :
-                                         "Lost the connection to the room", why),
-        replaced && !joining ? "taken" : "network");
+                           final ? final : "network", close_code, why));
+    if (FriendsRecovery() && close_code == 1008)
+      End("The room closed because too many or too large messages were sent", "message-limit");
+    else if (FriendsRecovery() && close_code == 4001)
+      End("You were removed from the room", "kicked");
+    else if (FriendsRecovery() && close_code == 4003)
+      End("The room is locked", "locked");
+    else
+      End(fmt::format("{} ({})", replaced ? "Another game of yours took over this room" :
+                                           "Lost the connection to the room", why),
+          replaced && !joining ? "taken" : "network");
     return false;
   }
 
   bool RetryInitialRefusal(const std::string& error)
   {
-    // An upgrade has no readable response body. For a returning player, 409 may mean the old
-    // socket still occupies this seat; do not report a full room before allowing it to go quiet.
-    return error.find("(HTTP 409)") != std::string::npos && StartReconnect(0, error);
+    if (error.find("(HTTP 409)") == std::string::npos ||
+        error.find("seat in use") == std::string::npos || !StartReconnect(0, "seat-in-use"))
+      return false;
+    initial_seat_retry = true;
+    reconnect.backoff = std::chrono::milliseconds(1000);
+    return true;
   }
 
   void ReconnectFailed(const std::string& error)
   {
+    // A known refusal is final, including during recovery. Only seat-in-use may retry 409.
+    if (error.find("(HTTP 4") != std::string::npos &&
+        !(error.find("(HTTP 409)") != std::string::npos &&
+          error.find("seat in use") != std::string::npos))
+    {
+      End(RefusalReason(error), RefusalCode(error));
+      return;
+    }
+    if (initial_seat_retry && reconnect.attempts >= 3)
+    {
+      End("The room seat is still in use", "seat-in-use");
+      return;
+    }
     reconnect_error = error;
-    reconnect.Retry(Now());
+    reconnect.Retry(Now(), ReconnectJitter());
     RoomNotice(fmt::format("room-away self retry {} {}",
-                           error.find("(HTTP 409)") != std::string::npos ? "seat-in-use" :
+                           error.find("seat in use") != std::string::npos ? "seat-in-use" :
                                                                          "connect-failed",
                            ReconnectContext()));
   }
@@ -1968,6 +2037,7 @@ struct YouGameRoom::Impl
         return;
       if (reconnect_job->socket)
       {
+        reconnect_budget.Take(now);
         ws = std::move(reconnect_job->socket);
         last_heard = now;
         last_ping = last_hello = {};
@@ -1982,6 +2052,11 @@ struct YouGameRoom::Impl
     }
     if (ws->IsOpen() || reconnect_job || !reconnect.Attempt(now))
       return;
+    if (!reconnect_budget.Available(now))
+    {
+      End("The room exceeded its reconnect budget (6 reconnects in 5 minutes)", "reconnect-limit");
+      return;
+    }
     RoomNotice("room-away self retry connecting " + ReconnectContext());
     if (test_now)
       return;
@@ -1996,7 +2071,6 @@ struct YouGameRoom::Impl
           Clock::now() < deadline)
       {
         auto socket = std::make_unique<Common::WebSocket>();
-        Common::HttpRequest escape;
         const auto remaining =
             std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now());
         if (remaining.count() <= 0)
@@ -2005,9 +2079,9 @@ struct YouGameRoom::Impl
           raw->done = true;
           return;
         }
-        if (socket->Connect(room_url + "/room/" + CodeForReconnect() + "?ticket=" +
-                                escape.EscapeComponent(ticket),
-                            std::min(remaining, std::chrono::milliseconds(8000)), &raw->error) &&
+        if (ConnectRoom(*socket, ticket,
+                            std::min(remaining, std::chrono::milliseconds(2000)), &raw->error,
+                            [this, raw] { return stop || leave_requested || raw->cancel; }) &&
             !raw->cancel)
         {
           raw->socket = std::move(socket);
@@ -2016,6 +2090,75 @@ struct YouGameRoom::Impl
       raw->done = true;
     });
     reconnect_job = std::move(job);
+  }
+
+  bool ConnectRoom(Common::WebSocket& socket, const std::string& ticket,
+                   std::chrono::milliseconds timeout, std::string* error,
+                   const std::function<bool()>& cancelled, bool read_refusal = true)
+  {
+    auto until = Now() + std::chrono::milliseconds(1000);
+    Common::HttpRequest escape(std::chrono::milliseconds(1000), [&](s64, s64, s64, s64) {
+      return Now() < until && (!cancelled || !cancelled());
+    });
+    const std::string url = room_url + "/room/" + CodeForReconnect() + "?ticket=" +
+                            escape.EscapeComponent(ticket);
+    if (socket.Connect(url, timeout, error, cancelled))
+      return true;
+    if (!FriendsRecovery())
+    {
+      // Queue rooms retain the train's status-only refusal, even if curl delivered a body.
+      if (const auto status = error->find("(HTTP 409)"); status != std::string::npos)
+        error->erase(status + 10);
+      return false;
+    }
+    // Some libcurl versions stop at a refused WebSocket status before delivering its body.
+    // Read that same endpoint as HTTP with Upgrade, bounded to one second. A successful probe
+    // is immediately released and retried through the normal WebSocket handshake.
+    if (read_refusal && FriendsRecovery() && error->find("(HTTP 409)") != std::string::npos &&
+        error->find("seat in use") == std::string::npos &&
+        error->find("room full") == std::string::npos &&
+        error->find("match complete") == std::string::npos &&
+        (!cancelled || !cancelled()))
+    {
+      until = Now() + std::chrono::milliseconds(1000);
+      const auto response = escape.Get("http" + url.substr(2),
+          {{"Upgrade", "websocket"}, {"Connection", "Upgrade"},
+           {"Sec-WebSocket-Key", "AAAAAAAAAAAAAAAAAAAAAA=="}, {"Sec-WebSocket-Version", "13"}},
+          Common::HttpRequest::AllowedReturnCodes::All);
+      const std::string body = response ? std::string(response->begin(), response->end()) : "";
+      if (body.find("seat in use") != std::string::npos || escape.GetLastResponseCode() == 101)
+        *error += " seat in use";
+      else if (body.find("This match is complete") != std::string::npos)
+        *error += " match complete";
+      else if (body.find("Room is full") != std::string::npos)
+        *error += " room full";
+    }
+    return false;
+  }
+
+  // Quit uses the cached ticket once, with one total two-second deadline. No ticket refresh.
+  void BestEffortLeave()
+  {
+    const auto deadline = Now() + std::chrono::seconds(2);
+    std::string ticket, room;
+    {
+      std::lock_guard lock(mutex);
+      ticket = current_ticket;
+      room = code;
+    }
+    if (ticket.empty() || room.empty())
+      return;
+    std::string error;
+    if (!ConnectRoom(*ws, ticket,
+                     std::chrono::milliseconds(1400), &error,
+                     [&] { return Now() >= deadline; }, false))
+      return;
+    picojson::object leave;
+    leave["t"] = picojson::value("leave");
+    SendJson(leave, std::chrono::milliseconds(100), false);
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Now());
+    ws->Close(1000, std::clamp(remaining, std::chrono::milliseconds(0),
+                             std::chrono::milliseconds(500)));
   }
 
   std::string CodeForReconnect()
@@ -2077,11 +2220,9 @@ struct YouGameRoom::Impl
       room = code;
     }
     room_url = WebSocketUrl(url);
-    Common::HttpRequest escape;
     std::string error;
-    if (!ws->Connect(room_url + "/room/" + room + "?ticket=" +
-                        escape.EscapeComponent(ticket),
-                    std::chrono::seconds(8), &error))
+    if (!ConnectRoom(*ws, ticket,
+                    std::chrono::seconds(8), &error, [this] { return stop.load(); }))
     {
       WARN_LOG_FMT(NETPLAY, "Orca room: {}", error);
       if (!RetryInitialRefusal(error))
@@ -2129,7 +2270,6 @@ struct YouGameRoom::Impl
                    net_uplink->to_s);
     }
     // The connection failed under the player (went quiet, or a test dropped it): see below.
-    bool dropped = false;
     while (!stop && State() != RoomState::Ended)
     {
       if (leave_requested)
@@ -2142,7 +2282,7 @@ struct YouGameRoom::Impl
         WARN_LOG_FMT(NETPLAY, "Orca room: TEST dropping the connection");
         dropped = true;
         const unsigned test_close_code = Env("ORCA_TEST_ROOM_CLOSE_CODE") == "1013" ? 1013 : 0;
-        if (StartReconnect(test_close_code, "test-drop"))
+        if (OnSocketClose(test_close_code, "test-drop"))
           continue;
         End("Lost the connection to the room (test drop)");
         break;
@@ -2195,6 +2335,9 @@ struct YouGameRoom::Impl
         dropped = true;
         if (StartReconnect(0, "server-silent"))
           continue;
+        End(fmt::format("Lost the connection to the room (no answer for {} s)",
+                        SERVER_SILENCE_LIMIT.count()));
+        break;
       }
       Tick();
     }
@@ -2203,6 +2346,8 @@ struct YouGameRoom::Impl
     if (reconnect.since)
       ReconnectOutcome("cancelled", false);
     reconnect_job.reset();
+    if ((stop || leave_requested) && dropped && !ws->IsOpen())
+      BestEffortLeave();
     if (direct)
       direct->Stop();
     // The bridge threads wind down while the goodbyes go out. First tell the page the room is gone,
@@ -3152,34 +3297,45 @@ struct YouGameRoom::Impl
   void Tick()
   {
     const auto now = Now();
-    std::vector<int> retries;
+    std::vector<std::string> retries, notices;
     {
       std::lock_guard lock(mutex);
       retries.swap(pending_retries);
+      notices.swap(pending_room_notices);
     }
-    for (int slot : retries)
+    for (const auto& notice : notices)
+      RoomNotice(notice);
+    for (const auto& id : retries)
     {
-      for (auto p = peers.begin(); p != peers.end(); ++p)
+      const auto p = peers.find(id);
+      if (p == peers.end())
+        continue;
+      auto& peer = p->second;
+      if (peer.resume_requested)
+        continue;
+      const auto presence = peer.presence;
+      const bool local_room_away = peer.local_room_away;
+      const auto name = peer.name;
+      const int slot = peer.slot;
+      const bool was_host = peer.drop_in_host;
+      // The stable roster id resolves this request even when back cleared the handshake slot.
+      ResetPeer(p, "room-resume");
+      peer.slot = slot;
+      peer.name = name;
+      peer.drop_in_host = was_host;
+      peer.presence = presence;
+      peer.local_room_away = local_room_away;
+      peer.resume_requested = true;
+      peer.resume_id = fmt::format("{}-{}", run, ++resume_sequence);
+      peer.resume_retry_at = {};
+      if (!joining)
       {
-        if (p->second.slot != slot)
-          continue;
-        const auto presence = p->second.presence;
-        const bool local_room_away = p->second.local_room_away;
-        const auto name = p->second.name;
-        const bool was_host = p->second.drop_in_host;
-        // This side already ended its session; don't emit another Left about it.
-        p->second.announced = false;
-        p->second.presence.suspended = false;
-        ResetPeer(p);
-        p->second.slot = slot;
-        p->second.name = name;
-        p->second.drop_in_host = was_host;
-        p->second.presence = presence;
-        p->second.local_room_away = local_room_away;
-        p->second.presence.suspended = presence.away_since.has_value();
-        p->second.resume_requested = true;
-        last_hello = {};
+        picojson::object d;
+        d["k"] = picojson::value("drop");
+        d["r"] = picojson::value("stalled");
+        SendTo(id, d);
       }
+      last_hello = {};
     }
     CheckAwayPeers(now);
     if ((!test_now && !ws->IsOpen()) || reconnect.since)
@@ -3282,16 +3438,33 @@ struct YouGameRoom::Impl
       {
         if (peer.presence.away_since)
           continue;
-        if (!peer.heard || !peer.heard_us || peer.resume_requested)
+        bool resume_expired = false;
+        {
+          std::lock_guard lock(mutex);
+          resume_expired = joining && peer.resume_requested && host_hold_until &&
+                           now >= *host_hold_until;
+        }
+        if (resume_expired)
+        {
+          peer.resume_requested = false;
+          End("Your friend did not return to the room (hold-expired)", "peer_left");
+          return;
+        }
+        const bool retry_resume = peer.resume_requested && now >= peer.resume_retry_at;
+        if (peer.resume_requested ? retry_resume : (!peer.heard || !peer.heard_us))
         {
           picojson::object d;
           d["k"] = picojson::value("hello");
           d["c"] = picojson::value(options.compatibility);
           d["r"] = picojson::value(peer.heard);
           d["h"] = picojson::value(!joining);
-          d["run"] = picojson::value(run);  // optional; distinguishes a reattach from a new boot
+          if (FriendsRecovery())
+            d["run"] = picojson::value(run);  // optional; private room recovery only
           if (peer.resume_requested)
+          {
             d["resume"] = picojson::value(true);
+            d["resume_id"] = picojson::value(peer.resume_id);
+          }
           if (direct)
             d["dl"] = picojson::value(1.0);
           // A joiner sends the host its own controls, for its port in the host's game.
@@ -3301,8 +3474,11 @@ struct YouGameRoom::Impl
           if (joining && !options.queue.empty() && options.queue.size() <= MAX_QUEUE)
             d["qi"] = picojson::value(ToHex(options.queue.data(), options.queue.size()));
           SendTo(id, d);
-          if (peer.heard_us)
-            peer.resume_requested = false;
+          if (peer.resume_requested)
+          {
+            peer.resume_retry_at = now + peer.resume_backoff;
+            peer.resume_backoff = std::min(peer.resume_backoff * 2, std::chrono::milliseconds(4000));
+          }
         }
         if (const auto offer = offers.find(peer.slot);
             offer != offers.end() && peer.heard && !peer.sent_packet)
@@ -3420,16 +3596,23 @@ struct YouGameRoom::Impl
       std::lock_guard lock(mutex);
       keyframe_offers.erase(p->second.slot);
       direct_inputs.erase(p->first);
+      if (why == "room-resume")
+        input_holds.erase(p->first);
       std::erase_if(pending_drops, [&](const auto& drop) { return drop.first == p->second.slot; });
     }
     ForgetPackets(p->first);
     UnlinkPeer(p->first, p->second);
+    const int slot = FriendsRecovery() ? p->second.slot : -1;
+    const auto resume_id = p->second.resume_requested ? p->second.resume_id : "";
     p->second = {};
-    p->second.slot = -1;
+    p->second.slot = slot;
+    p->second.resume_id = resume_id;
   }
 
   void CheckAwayPeers(Clock::time_point now)
   {
+    if (!FriendsRecovery())
+      return;
     for (auto& [id, peer] : peers)
     {
       const RoomLoss loss = peer.presence.Check(now, LastDirectInput(id));
@@ -3524,6 +3707,9 @@ struct YouGameRoom::Impl
     {
       std::lock_guard lock(mutex);
       seat_names = std::move(names);
+      peer_ids.clear();
+      for (const auto& [id, info] : present)
+        peer_ids[info.first] = id;
       my_seat = seat;
     }
     // A hosting Orca must hold the room's first seat and be the room's host: its port 1 is seat 0,
@@ -3563,6 +3749,7 @@ struct YouGameRoom::Impl
         std::lock_guard lock(mutex);
         keyframe_offers.erase(p->second.slot);
         direct_inputs.erase(p->first);
+        input_holds.erase(p->first);
         if (p->second.drop_in_host)
         {
           host_away_until.reset();
@@ -3644,14 +3831,14 @@ struct YouGameRoom::Impl
           if (!peer.local_room_away && !peer.presence.away_since)
             continue;
           // Welcome is authoritative after a missed back/leave while our socket was down.
-          const auto participants = m.find("participants");
+          const auto participants = m.find("players");
           const picojson::object* present = nullptr;
           if (participants != m.end() && participants->second.is<picojson::array>())
           {
             for (const auto& participant : participants->second.get<picojson::array>())
             {
               if (participant.is<picojson::object>() &&
-                  Str(participant.get<picojson::object>(), "connectionId") == p->first)
+                  Str(participant.get<picojson::object>(), "id") == p->first)
                 present = &participant.get<picojson::object>();
             }
           }
@@ -3691,6 +3878,7 @@ struct YouGameRoom::Impl
         const std::string q = Str(room, "queue");
         std::lock_guard lock(mutex);
         queue = q == "casual" || q == "ranked" ? q : "private";
+        queue_known = true;
         stay = room.count("stay") && room.at("stay").evaluate_as_boolean();
         room_size = Int(room, "size", 2, MAX_SEATS).value_or(MAX_SEATS);
         if (queue != "private")
@@ -3727,6 +3915,8 @@ struct YouGameRoom::Impl
         }
         ReconnectOutcome(kept_session ? "same-seat" : "same-seat-fresh-drop-in", kept_session);
         reconnect = {};
+        dropped = false;
+        initial_seat_retry = false;
         test_held_socket.reset();
       }
       std::lock_guard lock(mutex);
@@ -3746,7 +3936,11 @@ struct YouGameRoom::Impl
           if (const auto p = peers.find(id); p != peers.end())
           {
             const auto now = Now();
-            if (t == "away")
+            if (!FriendsRecovery() && t != "leave")
+            {
+              ResetPeer(p);
+            }
+            else if (t == "away")
             {
               p->second.presence.Away(now);
               p->second.resume_handled = false;
@@ -3769,6 +3963,10 @@ struct YouGameRoom::Impl
                 host_away_until.reset();
                 host_hold_until.reset();
               }
+              {
+                std::lock_guard lock(mutex);
+                input_holds.erase(id);
+              }
               OpponentGone(id);
               ResetPeer(p);
               peers.erase(p);
@@ -3780,7 +3978,8 @@ struct YouGameRoom::Impl
               p->second.resume_handled = false;
               const bool was_host = p->second.drop_in_host;
               const bool resume = p->second.resume_requested;
-              const bool keep = p->second.presence.Back(now, DirectInputLive(LastDirectInput(id), now));
+              const bool keep = p->second.presence.Back(now, DirectInputLive(LastDirectInput(id), now) ||
+                                                           InputHoldAlive(id, now));
               p->second.back_hello_pending = keep && p->second.announced;
               if (was_host)
               {
@@ -3918,6 +4117,8 @@ struct YouGameRoom::Impl
       }
       if (recovery_drop)
       {
+        if (peer.resume_requested)
+          return;
         // A stalled notice from the old session can cross back on the room socket. It must not
         // turn a held host into a room leave before the fresh drop-in handshake.
         const int slot = peer.slot;
@@ -3928,7 +4129,10 @@ struct YouGameRoom::Impl
         peer.name = name;
         peer.drop_in_host = true;
         peer.presence = presence;
-        peer.presence.suspended = presence.away_since.has_value();
+        peer.presence.suspended = false;
+        peer.resume_requested = true;
+        peer.resume_id = fmt::format("{}-{}", run, ++resume_sequence);
+        last_hello = {};
         RoomNotice("room-away host ended old-session-stalled waiting-back");
         return;
       }
@@ -3998,15 +4202,24 @@ struct YouGameRoom::Impl
         return;
       }
       const std::string their_run = Str(d, "run");
-      const bool new_run = (!peer.run.empty() && !their_run.empty() && their_run != peer.run) ||
-                           (peer.back_hello_pending && their_run.empty() &&
-                            !DirectInputLive(LastDirectInput(id), Now()));
+      const bool new_run = FriendsRecovery() && !peer.run.empty() && !their_run.empty() &&
+                           their_run != peer.run;
       peer.back_hello_pending = false;
-      const bool resume = d.count("resume") && d.at("resume").is<bool>() &&
+      const bool resume = FriendsRecovery() && d.count("resume") && d.at("resume").is<bool>() &&
                           d.at("resume").get<bool>();
       // Optional hello fields only; no session packet or compatibility key changes. A new boot,
       // or a joiner whose old session ended, takes the ordinary drop-in handshake once.
-      if (new_run || (!joining && !peer.resume_handled && peer.announced && resume))
+      const auto their_resume_id = Str(d, "resume_id");
+      bool offer_pending;
+      {
+        std::lock_guard lock(mutex);
+        offer_pending = keyframe_offers.contains(peer.slot);
+      }
+      if (new_run || (!joining && peer.announced && resume &&
+                      (!peer.resume_handled ||
+                       (!their_resume_id.empty() && their_resume_id != peer.handled_resume_id) ||
+                       (Now() >= peer.resume_handled_until &&
+                                               !peer.sent_packet && !offer_pending))))
       {
         const int slot = peer.slot;
         const std::string name = peer.name;
@@ -4014,6 +4227,8 @@ struct YouGameRoom::Impl
         peer.slot = slot;
         peer.name = name;
         peer.resume_handled = true;
+        peer.handled_resume_id = their_resume_id;
+        peer.resume_handled_until = Now() + std::chrono::seconds(4);
         RoomNotice(fmt::format("room-back peer {} ended fresh-drop-in-request", slot + 1));
       }
       const bool was_heard = peer.heard;
@@ -4090,6 +4305,7 @@ struct YouGameRoom::Impl
         return;
       }
       peer.keyframe = *info;
+      peer.resume_requested = false;
       Emit({PeerEvent::Kind::Keyframe, peer.slot, true, peer.name, {}, std::move(*info)});
       return;
     }
@@ -4117,6 +4333,8 @@ struct YouGameRoom::Impl
       return;
     }
     peer.sent_packet = true;
+    if (!joining)
+      peer.resume_requested = false;
     if (peer.linked)
       direct->OnRelayPacket(id);
     std::lock_guard lock(mutex);
@@ -4165,18 +4383,24 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
                                             step.text.empty() ? "no reason given" : step.text);
       break;
     case RoomTestStep::Kind::RetryPeer:
-      room.pending_retries.push_back(static_cast<int>(step.close_code));
+      for (const auto& [slot, id] : room.peer_ids)
+      {
+        if (slot == static_cast<int>(step.close_code))
+          room.pending_retries.push_back(id);
+      }
       break;
     case RoomTestStep::Kind::PollReconnect:
       room.PollReconnect();
-      room.Tick();
+      if (room.State() != RoomState::Ended)
+        room.Tick();
       break;
     case RoomTestStep::Kind::ConnectFailure:
       room.reconnect_job = std::make_unique<YouGameRoom::Impl::ReconnectJob>();
       room.reconnect_job->error = step.text;
       room.reconnect_job->done = true;
       room.PollReconnect();
-      room.Tick();
+      if (room.State() != RoomState::Ended)
+        room.Tick();
       break;
     case RoomTestStep::Kind::InitialConnectFailure:
       reconnect_started = room.RetryInitialRefusal(step.text);
@@ -4256,7 +4480,37 @@ std::optional<std::chrono::steady_clock::time_point> YouGameRoom::HostAwayDeadli
 void YouGameRoom::RetryPeer(int seat)
 {
   std::lock_guard lock(m_impl->mutex);
-  m_impl->pending_retries.push_back(seat);
+  if (const auto id = m_impl->peer_ids.find(seat); id != m_impl->peer_ids.end())
+    m_impl->pending_retries.push_back(id->second);
+}
+
+bool YouGameRoom::HoldInputSilence(Clock::time_point since, Clock::time_point now)
+{
+  std::lock_guard lock(m_impl->mutex);
+  if (!m_impl->options.recovery_enabled || m_impl->queue != "private" ||
+      (!m_impl->queue_known && !m_impl->options.friends_room) || m_impl->state != RoomState::Waiting ||
+      m_impl->peer_ids.empty())
+    return false;
+  for (const auto& [slot, id] : m_impl->peer_ids)
+  {
+    // A real departure (or a requested resync) interrupts the stall immediately.
+    if (std::ranges::any_of(m_impl->events, [&](const PeerEvent& e) {
+          return e.kind == PeerEvent::Kind::Left && e.seat == slot;
+        }))
+      return false;
+    const auto [hold, inserted] = m_impl->input_holds.try_emplace(id, since + ROOM_HOLD);
+    if (inserted)
+      m_impl->pending_room_notices.push_back(
+          fmt::format("room-away peer {} kept waiting-room-verdict", slot + 1));
+    if (m_impl->joining && slot == 0)
+    {
+      if (!m_impl->host_hold_until || now >= *m_impl->host_hold_until)
+        m_impl->host_hold_until = hold->second;
+    }
+    if (now >= hold->second)
+      return false;
+  }
+  return true;
 }
 
 bool YouGameRoom::FreshTicket(bool fresh, std::string* ticket, std::string* store_url,
@@ -4576,6 +4830,7 @@ void YouGameRoom::Send(const Packet& packet)
   {
     std::lock_guard lock(m_impl->mutex);
     CoalescePacket(&m_impl->outgoing, packet);
+    m_impl->input_through = packet.ack;
   }
   // Every packet also goes straight to each linked player; the first copy to arrive wins
   // (Session::ReceivePackets handles both).
@@ -4590,8 +4845,7 @@ std::vector<Packet> YouGameRoom::Receive()
     m_impl->inbox_from.clear();
     packets = std::exchange(m_impl->inbox, {});
   }
-  if (!m_impl->direct)
-    return packets;
+  if (m_impl->direct)
   for (DirectLink::Received& received : m_impl->direct->Receive())
   {
     Packet packet;
@@ -4607,6 +4861,37 @@ std::vector<Packet> YouGameRoom::Receive()
       m_impl->direct_inputs[received.from] = Clock::now();
     }
     packets.push_back(std::move(packet));
+  }
+  {
+    std::lock_guard lock(m_impl->mutex);
+    std::erase_if(packets, [&](const Packet& packet) {
+      const auto id = m_impl->peer_ids.find(packet.seat);
+      if (id == m_impl->peer_ids.end() || !m_impl->input_holds.contains(id->second) ||
+          packet.pads.empty())
+        return false;
+      if (std::ranges::find(m_impl->pending_retries, id->second) != m_impl->pending_retries.end())
+        return true;
+      const int through = m_impl->input_through[packet.seat];
+      if (through >= 0 && (packet.first_frame > through + 1 ||
+                           packet.current_frame > through + MAX_FRAMES_AHEAD))
+      {
+        if (std::ranges::find(m_impl->pending_retries, id->second) == m_impl->pending_retries.end())
+        {
+          m_impl->pending_retries.push_back(id->second);
+          m_impl->pending_room_notices.push_back(
+              fmt::format("room-back peer {} retry input-buffers", packet.seat + 1));
+        }
+        return true;
+      }
+      // Contiguous inputs returned. Another outage gets its own hold window.
+      if (packet.first_frame + static_cast<int>(packet.pads.size()) > through + 1)
+      {
+        m_impl->input_holds.erase(id->second);
+        m_impl->pending_room_notices.push_back(
+            fmt::format("room-back peer {} kept buffered-inputs", packet.seat + 1));
+      }
+      return false;
+    });
   }
   return packets;
 }

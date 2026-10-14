@@ -35,6 +35,10 @@ struct RoomOptions
   std::string mode = "orca-test";
   // This Orca joins a friend's running game (ORCA_JOIN=1, or the app opened an invite).
   bool joining = false;
+  // Known queue requests keep their original behavior even before the first welcome.
+  bool friends_room = true;
+  // Transport policy can be disabled for the healthy-session baseline comparison.
+  bool recovery_enabled = true;
   // A joiner's own controls (Orca::Events::OwnControls), sent in its hello so the host puts them in
   // its port (KeyframeInfo::Name::controls). Empty: none.
   std::vector<u8> controls;
@@ -202,6 +206,9 @@ public:
   std::optional<std::chrono::steady_clock::time_point> HostAwayDeadline() const;
   // Restart this seat's hello/keyframe handshake after its session ended during a room blip.
   void RetryPeer(int seat);
+  // Transport verdict during the existing game stall. No room leave means wait for the hold.
+  bool HoldInputSilence(std::chrono::steady_clock::time_point since,
+                        std::chrono::steady_clock::time_point now);
 
   // Whether the untaken events include the game's host leaving, so a joiner stalled on the host's
   // inputs hears it at once rather than after its silence limit.

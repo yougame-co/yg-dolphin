@@ -282,7 +282,7 @@ void Start()
   StartLocked(std::move(options));
 }
 
-void StartRoom(const std::string& code, bool joining)
+void StartRoom(const std::string& code, bool joining, bool friends_room)
 {
   std::lock_guard lock(s_mutex);
   if (s_room)
@@ -290,6 +290,7 @@ void StartRoom(const std::string& code, bool joining)
   Net::RoomOptions options;
   options.room_code = code;
   options.joining = joining;
+  options.friends_room = friends_room;
   options.ask_app_for_room = false;
   StartLocked(std::move(options));
 }
@@ -533,6 +534,13 @@ void RetryPeer(int seat)
 {
   if (const auto room = Room())
     room->RetryPeer(seat);
+}
+
+bool HoldInputSilence(std::chrono::steady_clock::time_point since,
+                      std::chrono::steady_clock::time_point now)
+{
+  const auto room = Room();
+  return room && room->HoldInputSilence(since, now);
 }
 
 bool RoomEnded()

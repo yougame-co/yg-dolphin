@@ -1712,7 +1712,6 @@ JoinPump PumpJoin(Match& match, std::string* last_status)
       {
         if (match.host_room_wait.until)
         {
-          match.host_room_wait.Back();
           match.boot_time = Clock::now();
           NOTICE_LOG_FMT(ROLLBACK, "Drop-in: host back; resuming by keyframe in room {}",
                          Orca::Online::Code());
@@ -1779,6 +1778,7 @@ JoinPump PumpJoin(Match& match, std::string* last_status)
       }
       else if (event.kind == Orca::Net::PeerEvent::Kind::Keyframe && !match.download)
       {
+        match.host_room_wait.Back();
         // Offered: any hold the host has now is for another friend's join.
         match.host_holding = false;
         match.offered_time = Clock::now();
@@ -2395,7 +2395,7 @@ std::optional<int> JoinHost(Core::System& system, Match& match)
         OSD::DiscardTypedMessage(OSD::MessageType::OrcaJoin);
         ResetDropIn(match);
         Orca::Online::ShutdownInBackground();
-        Orca::Online::StartRoom(*code, true);
+        Orca::Online::StartRoom(*code, true, !QueueOrSearch());
         match.boot_time = Clock::now();
         match.offered_time = match.boot_time;
         match.host_here = false;
@@ -2508,7 +2508,7 @@ void JoinInPlay(Match& match, const std::string& code)
   if (queued)
     Orca::UX::Search::JoinStarted();
   Orca::Online::ShutdownInBackground();
-  Orca::Online::StartRoom(code, true);
+  Orca::Online::StartRoom(code, true, !queued);
   NOTICE_LOG_FMT(ROLLBACK, "Drop-in: joining room {} during play, frame {}", code, match.running + 1);
   match.joining = true;
   match.join_in_play = true;
@@ -2543,7 +2543,7 @@ void HostInPlay(Match& match, const std::string& code)
   ForgetRoom(match);
   match.linger_until.reset();
   Orca::Online::ShutdownInBackground();
-  Orca::Online::StartRoom(code, false);
+  Orca::Online::StartRoom(code, false, false);
   Orca::UX::Search::Matched(true);
   // Once the welcome names the queue, this game fresh-starts into the room's character select
   // (DecideFreshStart); the header and rule locks follow at the next alone boundary after it. Once
@@ -4041,7 +4041,8 @@ std::optional<int> Boundary(Core::System& system,
           if (match.joining && Orca::Online::HostLeftPending())
             host_left = true;
           // A joiner still catching up waits on the host's history by design: not counted.
-          if (!budget_spent && !catching_up && match.stall_budget.Spent(now, step_start))
+          if (!budget_spent && !catching_up && match.stall_budget.Spent(now, step_start) &&
+              !Orca::Online::HoldInputSilence(step_start, now))
           {
             budget_spent = true;
             WARN_LOG_FMT(ROLLBACK,
@@ -4052,7 +4053,10 @@ std::optional<int> Boundary(Core::System& system,
           return host_left || !left_seats.empty() || budget_spent || Stopping(system);
         },
         std::chrono::milliseconds{1},
-        LeavingPastUnplug(match) ? LEAVE_SILENCE_LIMIT : PEER_SILENCE_LIMIT, &peer_silent, &waited);
+        LeavingPastUnplug(match) ? LEAVE_SILENCE_LIMIT : PEER_SILENCE_LIMIT, &peer_silent, &waited,
+        [&](Clock::time_point now) {
+          return !LeavingPastUnplug(match) && Orca::Online::HoldInputSilence(step_start, now);
+        });
     perf_scope.reset();
     Orca::Perf::AddWait(waited);
     match.last_return = Clock::now();

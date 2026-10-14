@@ -147,7 +147,9 @@ Orca::Net::Step StepSession(Orca::Net::Session& session, Orca::Net::Game& game, 
                             const std::function<bool()>& stopping,
                             std::chrono::microseconds stall_wait,
                             std::chrono::milliseconds give_up_after, bool* gave_up,
-                            std::chrono::nanoseconds* waited_time)
+                            std::chrono::nanoseconds* waited_time,
+                            const std::function<bool(std::chrono::steady_clock::time_point)>&
+                                hold_silence)
 {
   Orca::Net::Pad local_pad = sample_local();
   bool waited = false;
@@ -168,6 +170,8 @@ Orca::Net::Step StepSession(Orca::Net::Session& session, Orca::Net::Game& game, 
       held_since = now;
     last_poll = now;
     if (give_up_after.count() <= 0 || now - *held_since <= give_up_after)
+      return false;
+    if (hold_silence && hold_silence(now))
       return false;
     if (gave_up)
       *gave_up = true;
