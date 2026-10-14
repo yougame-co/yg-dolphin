@@ -289,10 +289,22 @@ public:
     // A room hold excuses this outage only; completed stalls still consume the budget.
     return Stalled(now, ongoing_held ? std::nullopt : ongoing_since) >= STALL_BUDGET;
   }
-  void Clear() { m_stalls.clear(); }
+  void Clear()
+  {
+    m_stalls.clear();
+    m_recoveries.clear();
+  }
+  // A completed stall a room hold covered (a friend's connection blip the room recovered) is not
+  // the other player starving us: it doesn't count, up to MAX_RECOVERIES in RECOVERY_WINDOW. Past
+  // that a player flapping its connection would hold the game forever, so it counts like any
+  // other. Returns whether this one was excused.
+  static constexpr std::chrono::minutes RECOVERY_WINDOW{10};
+  static constexpr int MAX_RECOVERIES = 3;
+  bool ExcuseRecovered(Clock::time_point now);
 
 private:
   std::vector<std::pair<Clock::time_point, Clock::time_point>> m_stalls;
+  std::vector<Clock::time_point> m_recoveries;
 };
 
 // A joiner's own port values: its name in the room (empty: unknown), and its controls and queue

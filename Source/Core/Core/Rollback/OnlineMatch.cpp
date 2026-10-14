@@ -4025,6 +4025,8 @@ std::optional<int> Boundary(Core::System& system,
     bool stall_claimed = false;
     // Held past the stall budget across steps (StallBudget): as silent as one long stall.
     bool budget_spent = false;
+    // Whether a room hold covered this step's stall at any point (a recovered connection blip).
+    bool held_seen = false;
     const bool catching_up = match.port->CatchingUp() || match.session->CatchingUp();
     const int stalls_before = match.session->GetStats().stalls;
     const int running_before = match.running;
@@ -4066,9 +4068,10 @@ std::optional<int> Boundary(Core::System& system,
           if (match.joining && Orca::Online::HostLeftPending())
             host_left = true;
           // A joiner still catching up waits on the host's history by design: not counted.
+          const bool room_held = Orca::Online::HoldInputSilence(step_start, poll_time);
+          held_seen = held_seen || room_held;
           if (!budget_spent && !catching_up &&
-              match.stall_budget.Spent(poll_time, step_start,
-                                      Orca::Online::HoldInputSilence(step_start, poll_time)))
+              match.stall_budget.Spent(poll_time, step_start, room_held))
           {
             budget_spent = true;
             WARN_LOG_FMT(ROLLBACK,
@@ -4101,7 +4104,7 @@ std::optional<int> Boundary(Core::System& system,
     if (match.session && match.session->GetStats().stalls > stalls_before)
     {
       match.stats_stall_ms += MsSince(step_start);
-      if (!catching_up)
+      if (!catching_up && !(held_seen && match.stall_budget.ExcuseRecovered(*match.last_return)))
         match.stall_budget.Add(step_start, *match.last_return);
     }
     if (budget_spent && step.kind == Orca::Net::StepKind::Ended)
@@ -4583,6 +4586,15 @@ void StallBudget::Add(Clock::time_point start, Clock::time_point end)
     return;
   std::erase_if(m_stalls, [&](const auto& stall) { return stall.second <= end - STALL_WINDOW; });
   m_stalls.emplace_back(start, end);
+}
+
+bool StallBudget::ExcuseRecovered(Clock::time_point now)
+{
+  std::erase_if(m_recoveries, [&](Clock::time_point at) { return at <= now - RECOVERY_WINDOW; });
+  if (static_cast<int>(m_recoveries.size()) >= MAX_RECOVERIES)
+    return false;
+  m_recoveries.push_back(now);
+  return true;
 }
 
 StallBudget::Clock::duration

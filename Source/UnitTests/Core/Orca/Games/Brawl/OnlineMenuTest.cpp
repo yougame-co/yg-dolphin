@@ -2096,6 +2096,26 @@ TEST(OrcaStallBudget, ATrickleUnderTheSilenceLimitRunsTheBudgetOut)
   EXPECT_EQ(old.Stalled(t0 + 170s), 4s);
 }
 
+TEST(OrcaStallBudget, ARecoveredOutageIsExcusedAFewTimesOnly)
+{
+  using Rollback::OnlineMatch::StallBudget;
+  using namespace std::chrono_literals;
+  const StallBudget::Clock::time_point t0{};
+  StallBudget budget;
+  // A 15 s blackout the room recovered (held), then play resumes and stalls 40 ms: still alive.
+  auto t = t0 + 100s;
+  EXPECT_TRUE(budget.ExcuseRecovered(t + 15s));
+  t += 15s + 2s;
+  budget.Add(t, t + 40ms);
+  EXPECT_FALSE(budget.Spent(t + 40ms));
+  // At most MAX_RECOVERIES in RECOVERY_WINDOW: a flapping connection counts again after that.
+  for (int i = 1; i < StallBudget::MAX_RECOVERIES; ++i)
+    EXPECT_TRUE(budget.ExcuseRecovered(t + std::chrono::seconds(i)));
+  EXPECT_FALSE(budget.ExcuseRecovered(t + 10s));
+  // Old recoveries leave the window.
+  EXPECT_TRUE(budget.ExcuseRecovered(t + StallBudget::RECOVERY_WINDOW + 20s));
+}
+
 TEST(OrcaStallBudget, RoomHoldsExcuseOnlyTheOngoingStall)
 {
   using Rollback::OnlineMatch::StallBudget;
