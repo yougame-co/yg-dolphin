@@ -526,7 +526,7 @@ void KeyframeTest(Core::System& system, int f, bool first_pass)
   if (f == to && s_keyframe.image && !s_keyframe.loaded)
   {
     s_keyframe.loaded = true;
-    const bool ok = Ring().LoadImage(system, std::move(*s_keyframe.image), from);
+    const bool ok = Ring().LoadMachineImage(system, std::move(*s_keyframe.image), from);
     const u64 ram = LiveRamChecksum(system);
     NOTICE_LOG_FMT(ROLLBACK, "Keyframe test: loaded frame {} at frame {}: {}, RAM {:016x} (captured {:016x}) {}",
                    from, f, ok ? "ok" : "failed", ram, s_keyframe.ram,

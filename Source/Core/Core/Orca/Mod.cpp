@@ -633,17 +633,18 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
   {
     if (!v->is<picojson::object>())
       return fail("origin must be an object");
-    const auto& o = v->get<picojson::object>();
-    if (const auto key = UnknownKey(o, {"frame", "words", "settle"}))
+    const auto& origin_obj = v->get<picojson::object>();
+    if (const auto key = UnknownKey(origin_obj, {"frame", "words", "settle"}))
       return fail(fmt::format("unknown key origin.{}", *key));
-    const auto n = o.contains("frame") ? Integer(o.at("frame"), 1, 36'000) : std::nullopt;
+    const auto n =
+        origin_obj.contains("frame") ? Integer(origin_obj.at("frame"), 1, 36'000) : std::nullopt;
     if (!n)
       return fail("origin.frame must be an integer from 1 to 36000");
     OriginDecl decl;
     decl.frame = static_cast<u32>(*n);
-    if (o.contains("words"))
+    if (origin_obj.contains("words"))
     {
-      const auto& words = o.at("words");
+      const auto& words = origin_obj.at("words");
       if (!words.is<picojson::array>() || words.get<picojson::array>().size() > 8)
         return fail("origin.words must be an array of at most 8 words");
       for (const auto& item : words.get<picojson::array>())
@@ -667,11 +668,11 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
         decl.words.push_back({*address, *word});
       }
     }
-    if (o.contains("settle"))
+    if (origin_obj.contains("settle"))
     {
-      if (!o.contains("words"))
+      if (!origin_obj.contains("words"))
         return fail("origin.settle requires origin.words");
-      const auto settle = Integer(o.at("settle"), 1, 600);
+      const auto settle = Integer(origin_obj.at("settle"), 1, 600);
       if (!settle)
         return fail("origin.settle must be an integer from 1 to 600");
       decl.settle = static_cast<u32>(*settle);

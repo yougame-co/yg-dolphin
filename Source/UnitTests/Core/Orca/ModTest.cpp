@@ -1460,7 +1460,7 @@ TEST(OrcaMod, OriginAcceptedBoundsInBothFormats)
             R"({{"frame":1,"words":[{{"address":"{}","word":"0xFFFFFFFF"}}],"settle":{}}})",
             address, settle), format), &error);
         ASSERT_TRUE(m) << error;
-        EXPECT_EQ(m->origin->settle, settle);
+        EXPECT_EQ(m->origin->settle, static_cast<u32>(settle));
         ASSERT_EQ(m->origin->words.size(), 1u);
         EXPECT_EQ(m->origin->words[0].word, 0xFFFFFFFFu);
       }

@@ -444,7 +444,7 @@ bool SnapshotRing::Capture(Core::System& system, MachineImage* image, bool stop_
   return true;
 }
 
-bool SnapshotRing::LoadImage(Core::System& system, MachineImage image, s64 frame)
+bool SnapshotRing::LoadMachineImage(Core::System& system, MachineImage image, s64 frame)
 {
   auto& memory = system.GetMemory();
   if (image.state.empty() || image.mem1.size() != memory.GetRamSize() ||

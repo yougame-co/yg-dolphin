@@ -179,7 +179,7 @@ TEST_F(OrcaSnapshot, GameCubeCaptureRestoreAndKeyframeLoadWithoutIos)
   EXPECT_EQ(loaded.origin_hash, hash);
   memory.GetRAM()[123] = 0;
   cpu.gpr[3] = 0;
-  ASSERT_TRUE(ring.LoadImage(m_system, std::move(origin), loaded.first_frame));
+  ASSERT_TRUE(ring.LoadMachineImage(m_system, std::move(origin), loaded.first_frame));
   EXPECT_EQ(memory.GetRAM()[123], 42);
   EXPECT_EQ(cpu.gpr[3], 0x12345678u);
   EXPECT_EQ(ring.RamChecksum(100), hash);
