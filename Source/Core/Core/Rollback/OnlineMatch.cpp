@@ -47,6 +47,7 @@
 #include "Core/Orca/Session/Keyframe.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Session/PadCodec.h"
+#include "Core/Orca/Session/RoomResilience.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/UX/Probe.h"
@@ -196,6 +197,7 @@ struct Match
   int host_seat = 0;
   std::string host_name;
   bool host_here = false;
+  Orca::Net::HostRoomWait host_room_wait;
   // The host holds this join while its game is in a single-player mode.
   bool host_holding = false;
   Clock::time_point boot_time{}, offered_time{}, loaded_time{};
@@ -392,7 +394,7 @@ bool Stopping(Core::System& system)
 // Two frame periods at 60 Hz: a frame slower than this was a hitch.
 constexpr std::chrono::microseconds HITCH_TIME{33'334};
 // A peer frozen with its connection open: after this long the host unplugs it, a joiner stops.
-constexpr std::chrono::seconds PEER_SILENCE_LIMIT{10};
+constexpr auto PEER_SILENCE_LIMIT = Orca::Net::PEER_SILENCE_LIMIT;
 constexpr char PEER_SILENT_SENTENCE[] = "Your friend's game stopped responding";
 // A joiner past its unplug frame waits this long for the host's final acknowledgement
 // (Session::LeftDone), then leaves anyway.
@@ -416,7 +418,7 @@ constexpr int CATCH_UP_BEHIND = 12;
 // How long a joiner waits for the host's keyframe before it gives up.
 constexpr std::chrono::seconds JOIN_LIMIT{90};
 // How long the rooms Worker holds a disconnected player's seat (AWAY_MS).
-constexpr std::chrono::seconds ROOM_HOLD{90};
+constexpr auto ROOM_HOLD = Orca::Net::ROOM_HOLD;
 // How long to wait in a ranked room for the verdict after the opponent left (forfeit after 15 s).
 constexpr std::chrono::seconds VERDICT_WAIT{30};
 // Ranked: the opponent's inputs stopped this long, so this player claims the set (ReportStall).
@@ -1199,6 +1201,7 @@ void BecomeSolo(Match& match, const char* why, const char* state, bool own_boot 
   match.leave_requested = false;
   match.leave_at = -1;
   match.last_percent = -1;
+  match.host_room_wait.Back();
   match.later_names.reset();
   OSD::DiscardTypedMessage(OSD::MessageType::OrcaJoin);
   Orca::UX::Search::JoinOver();
@@ -1210,6 +1213,28 @@ void BecomeSolo(Match& match, const char* why, const char* state, bool own_boot 
                  match.local_seat + 1, match.running + 1, why);
   if (state)
     Orca::Status::State(state);
+}
+
+// A held host seat can return. Keep the room and play solo until its fresh keyframe arrives.
+bool WaitForAwayHost(Match& match)
+{
+  if (!match.joining || match.leave_requested || Orca::Online::RoomQueue() != "private" ||
+      !match.host_room_wait.Start(Clock::now(), Orca::Online::HostAwayDeadline()))
+    return false;
+  const auto deadline = match.host_room_wait.until;
+  BecomeSolo(match, "host room away", nullptr, false, true);
+  match.host_room_wait.until = deadline;
+  match.joining = true;
+  match.join_in_play = true;
+  match.host_gone.reset();
+  match.boot_time = Clock::now();
+  match.offered_time = match.boot_time;
+  match.join_status.clear();
+  Orca::Online::RetryPeer(match.host_seat);
+  NOTICE_LOG_FMT(ROLLBACK, "Drop-in: host room away; session ended, staying in room {} for back",
+                 Orca::Online::Code());
+  Orca::Status::Event("room-away host ended waiting-back");
+  return true;
 }
 
 bool InQueueRoom();
@@ -1685,6 +1710,15 @@ JoinPump PumpJoin(Match& match, std::string* last_status)
     {
       if (event.kind == Orca::Net::PeerEvent::Kind::Arrived && event.host)
       {
+        if (match.host_room_wait.until)
+        {
+          match.host_room_wait.Back();
+          match.boot_time = Clock::now();
+          NOTICE_LOG_FMT(ROLLBACK, "Drop-in: host back; resuming by keyframe in room {}",
+                         Orca::Online::Code());
+          Orca::Status::Event("room-back host ended fresh-drop-in");
+          Orca::Status::State("joining 0");
+        }
         match.host_here = true;
         match.host_seat = event.seat;
         match.host_name = event.name.empty() ? "your friend" : event.name;
@@ -1693,6 +1727,8 @@ JoinPump PumpJoin(Match& match, std::string* last_status)
       }
       else if (event.kind == Orca::Net::PeerEvent::Kind::Left && event.host)
       {
+        if (match.host_room_wait.until && event.reason == "room-away-silent")
+          continue;
         // The host never carried the room's header (FailHeaderWait): the match can't start.
         if (event.reason == "mismatch")
         {
@@ -1760,6 +1796,14 @@ JoinPump PumpJoin(Match& match, std::string* last_status)
       match.join_error = fmt::format("Couldn't join: {}", Orca::Online::StatusLine());
       return JoinPump::Failed;
     }
+    if (match.host_room_wait.Expired(Clock::now()))
+    {
+      NOTICE_LOG_FMT(ROLLBACK, "Drop-in: host back wait ended: room hold expired");
+      Orca::Status::Event("room-away host ended hold-expired");
+      match.join_error_code = "peer_left";
+      match.join_error = "Your friend did not return to the room";
+      return JoinPump::Failed;
+    }
     if (std::string status = Orca::Online::StatusLine(); status != *last_status)
     {
       NOTICE_LOG_FMT(NETPLAY, "Orca: {}", status);
@@ -1780,7 +1824,7 @@ JoinPump PumpJoin(Match& match, std::string* last_status)
     // A held join has no time limit; the limit counts from when the host lets it go on.
     if (match.host_holding)
       match.boot_time = Clock::now();
-    if (Clock::now() - match.boot_time > JOIN_LIMIT)
+    if (!match.host_room_wait.until && Clock::now() - match.boot_time > JOIN_LIMIT)
     {
       match.join_error_code = "network";
       match.join_error = "Your friend's game never sent its state";
@@ -3452,6 +3496,12 @@ void HostGone(Core::System& system, Match& match, const std::function<Pad(int)>&
     return;
   }
   LogStats("host left");
+  if ((event.reason == "room-away-silent" || event.reason == "room-resume") &&
+      WaitForAwayHost(match))
+  {
+    RunSolo(match, local_pad);
+    return;
+  }
   if (event.reason == "desync")
     ++s_desyncs;
   if (Soft())
@@ -4231,6 +4281,11 @@ std::optional<int> Boundary(Core::System& system,
     WARN_LOG_FMT(ROLLBACK, "Online: session ended at frame {}: {}", match.running + 1,
                  error.empty() ? (peer_silent ? "no word from the host" : "no error") : error);
     NOTICE_LOG_FMT(ROLLBACK, "Drop-in: session state at the end: {}", match.session->Describe());
+    if (match.joining && (error.empty() || error == "Connection lost") && WaitForAwayHost(match))
+    {
+      RunSolo(match, local_pad);
+      return rewound_to;
+    }
     if (peer_silent)
     {
       WARN_LOG_FMT(ROLLBACK, "Online: no word from the host for {} s at frame {}",
