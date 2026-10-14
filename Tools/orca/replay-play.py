@@ -4,11 +4,14 @@
 #
 #   Tools/orca/replay-play.py <dolphin-emu-nogui> <disc> <file.ygr|ws://...> [--pplus <dol>]
 #       [--realtime] [--follow] [--video Metal] [--shots MS] [--env K=V ...]
+#       [--product [--names "<port> <url-encoded name> ..."]]
 #
 # --realtime plays at real speed (default: flat out); --follow keeps reading a growing stream (a live
 # watcher); --video Metal renders off screen and --shots MS saves a screenshot every MS ms into the
 # work folder (kept). The test knobs that are part of the compatibility key (ORCA_TEST_NET_*) must be
 # set as the recording machines had them: pass them with --env.
+# --product plays it the way the YouGame app does (ORCA_REPLAY_SOURCE: a file at real speed, a watch
+# URL live) instead of through the test knobs; --names gives view-time names (ORCA_REPLAY_NAMES).
 import os
 import subprocess
 import sys
@@ -37,8 +40,13 @@ env = {
     "ORCA_TEST_DEV_GAME": "orca-replay-test",
     "ORCA_TEST_KEYFRAME_DIR": os.path.join(WORK, "kf"),
     "ORCA_NAME": "Player",
-    "ORCA_TEST_REPLAY_IN": SOURCE,
 }
+if "--product" in args:
+    env["ORCA_REPLAY_SOURCE"] = SOURCE
+    if "--names" in args:
+        env["ORCA_REPLAY_NAMES"] = args[args.index("--names") + 1]
+else:
+    env["ORCA_TEST_REPLAY_IN"] = SOURCE
 if "--realtime" in args:
     env["ORCA_TEST_REPLAY_REALTIME"] = "1"
 if "--follow" in args:
@@ -81,6 +89,12 @@ for line in proc.stdout:
     if line.startswith("orca caps"):
         proc.stdin.write("caps stats\n")
         proc.stdin.flush()
+    # The product mode's position line comes 4 times a second: show one in 40.
+    if line.startswith("orca replay time"):
+        times = globals().get("times", 0) + 1
+        globals()["times"] = times
+        if times % 40 != 1:
+            continue
     if line.startswith("orca replay"):
         print(f"[{time.time() - T0:6.1f}] {line}", flush=True)
     if line.startswith("orca replay start"):

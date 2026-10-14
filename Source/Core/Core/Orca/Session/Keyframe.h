@@ -129,6 +129,8 @@ public:
   u32 Chunks() const { return m_chunks; }
   // Resumed segments whose identical header has been accepted (not just a reset received).
   u32 Resumes() const { return m_resumes; }
+  // At saved-file EOF (or live end): a complete header and no partial chunk/next segment.
+  bool Complete() const { return m_info.has_value() && m_pending.empty() && !m_resuming && !m_failed; }
 
 private:
   bool Parse(std::string* error);

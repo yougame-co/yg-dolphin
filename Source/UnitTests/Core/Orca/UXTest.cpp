@@ -1803,6 +1803,10 @@ TEST(OrcaUXNameTags, UsernamesBecomeBrawlTags)
   EXPECT_EQ(BrawlTag("longusername"), u"LONGU");
   EXPECT_EQ(BrawlTag("sandbox-ada"), u"SANDB");
   EXPECT_EQ(BrawlTag("a_b c"), u"A-B-C");
+  // An anonymized replay name fits the tag.
+  EXPECT_EQ(BrawlTag("Player 2"), u"P2");
+  EXPECT_EQ(BrawlTag("Player 12"), u"P12");
+  EXPECT_EQ(BrawlTag("Player X"), u"PLAYE");
   EXPECT_EQ(BrawlTag("x.y!?"), u"X.Y!?");
   EXPECT_EQ(BrawlTag("H4l9x"), u"H4L9X");
   EXPECT_EQ(BrawlTag("j\xc3\xa9r\xc3\xb4me"), u"JRME");  // non-ASCII dropped, never transliterated
@@ -1863,6 +1867,24 @@ TEST(OrcaUXNameTags, ReusesTheSameNameAndLeavesAChosenTagAlone)
   EXPECT_EQ(m.NameId(1), 3);
   for (int slot : {1, 2, 4, 119})
     EXPECT_EQ(m.TagName(slot), u"") << slot;  // nothing new was made
+}
+
+TEST(OrcaUXNameTags, ReplayViewNamesReplaceAWornTagAndLaterUpdates)
+{
+  FakeBrawl m;
+  m.SetTag(0, u"FILE");
+  m.Join(0);
+  m.W32(FakeBrawl::Area(0) + 0x1C8, 0);
+  EXPECT_EQ(ApplyNameTags(m, {{0, "Alice", false}}, true), 0);
+  EXPECT_EQ(m.TagName(0), u"ALICE");
+  EXPECT_EQ(m.NameId(0), 0);
+  const int writes = m.writes;
+  ApplyNameTags(m, {{0, "Alice", false}}, true);
+  EXPECT_EQ(m.writes, writes);
+  ApplyNameTags(m, {{0, "Bob", false}}, true);
+  EXPECT_EQ(m.TagName(0), u"BOB");
+  ApplyNameTags(m, {{0, "\xf0\x9f\x90\xac", false}}, true);
+  EXPECT_EQ(m.TagName(0), u"P1");
 }
 
 TEST(OrcaUXNameTags, ANewTagIsMadeAsTheGameMakesOneAndNothingElseIsWritten)

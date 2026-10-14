@@ -12,6 +12,7 @@
 #include <optional>
 #include <thread>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -68,6 +69,17 @@ class IOFile;
 // "orca replay done ok|fail <key=value>... why=<text>" line.
 namespace Rollback::ReplayStream
 {
+// Product playback: ORCA_REPLAY_SOURCE is a local file or a ws(s) watch URL. Names use zero-based
+// ports, as PortInfo does: "0 Alice 2 Bob%20Smith" (encodeURIComponent, chat's 24-point limit).
+using NameMap = std::map<int, std::string>;
+bool ProductMode();
+std::optional<NameMap> ParseNames(std::string_view fields);
+// Copies metadata, replacing every name. The reader's original stays intact for Resume checks.
+std::vector<Orca::Events::PortInfo> ViewPorts(const std::vector<Orca::Events::PortInfo>& ports,
+                                          const NameMap& names);
+// Main/window thread -> player/CPU thread. Validates the whole line before queuing any change.
+bool Command(std::string_view line);
+
 // A history's saved copy from the bytes its writer wrote (a header and live chunks, ~60 KB a
 // minute): read back, packed compactly (Orca::Net::PackReplayStream, ~3 KB a minute) and split for
 // the room. Empty if the bytes aren't one whole history with frames, the packed copy exceeds 1 MiB
@@ -196,13 +208,23 @@ public:
   std::optional<int> Step(Core::System& system, const PlayerHost& host, int* running,
                           u64 origin_hash, int origin_frame, const OnlineMatch::FrameHook& on_frame);
   bool Over() const { return m_over; }
+  // The match could not produce the local origin, before Step could begin.
+  void Fail(const PlayerHost& host, const std::string& why);
 
 private:
   bool Poll(std::string* error);
   void WatchThread(std::string source);
   void Finish(const PlayerHost& host, bool ok, const std::string& why);
+  void PrintTime(int frame, bool force = false);
 
   std::string m_path;
+  bool m_product = false;
+  bool m_paused = false;
+  // View-time names (ORCA_REPLAY_NAMES or `replay names`); none: the recording's own.
+  std::optional<NameMap> m_names;
+  std::optional<int> m_seek_target;
+  int m_position = -1;
+  std::chrono::steady_clock::time_point m_time_printed{};
   bool m_follow = false;
   bool m_realtime = false;
   int m_delay = 12;

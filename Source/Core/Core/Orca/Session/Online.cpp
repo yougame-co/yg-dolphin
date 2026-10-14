@@ -35,6 +35,7 @@
 #include "Core/HW/SI/SI_Device.h"
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/Session/YouGameRoom.h"
+#include "Core/Rollback/ReplayStream.h"
 
 namespace Orca::Online
 {
@@ -64,6 +65,10 @@ bool Enabled()
 {
   if (!SessionActive())
     return false;
+  // Replay boots use the same four-port profile and boundary dispatcher as online matches,
+  // while StartLocked refuses to create a room for them.
+  if (Rollback::ReplayStream::ProductMode())
+    return true;
   return Bridge::Ready() || (!Env("YOUGAME_BRIDGE").empty() && !Env("YOUGAME_TOKEN").empty()) ||
          !Env("ORCA_TEST_DEV_GAME").empty();
 }
@@ -248,6 +253,8 @@ namespace
 {
 void StartLocked(Net::RoomOptions options)
 {
+  if (Rollback::ReplayStream::ProductMode())
+    return;
   options.compatibility = CompatibilityKey();
   if (const Profile* profile = ActiveProfile())
   {

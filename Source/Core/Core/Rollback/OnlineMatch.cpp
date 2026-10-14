@@ -3552,10 +3552,14 @@ std::optional<int> Boundary(Core::System& system,
       match.leave_at = std::atoi(leave.c_str());
     // This player's own controls, before a launch join's hello carries them.
     Orca::UX::Game().LoadOwnControls();
-    Orca::Online::Start();
+    if (ReplayStream::ProductMode())
+      match.replay_play = ReplayStream::Player::FromEnv();
+    if (!match.replay_play)
+      Orca::Online::Start();
     // The role (host plays, joiner waits) is known once the room has its ticket.
     std::optional<bool> joining;
-    while (!(joining = Orca::Online::Joining()) && !Orca::Online::RoomEnded() && !Stopping(system))
+    while (!match.replay_play && !(joining = Orca::Online::Joining()) &&
+           !Orca::Online::RoomEnded() && !Stopping(system))
       std::this_thread::sleep_for(std::chrono::milliseconds(2));
     match.joining = joining.value_or(false);
     if (match.joining)
@@ -3582,8 +3586,11 @@ std::optional<int> Boundary(Core::System& system,
       Orca::Status::State("playing");
       NOTICE_LOG_FMT(ROLLBACK, "Drop-in: playing solo on port 1; room {}", Orca::Online::StatusLine());
     }
-    match.replay_out = ReplayStream::Writer::ForMatch();
-    match.replay_play = match.joining ? nullptr : ReplayStream::Player::FromEnv();
+    if (!match.replay_play)
+    {
+      match.replay_out = ReplayStream::Writer::ForMatch();
+      match.replay_play = match.joining ? nullptr : ReplayStream::Player::FromEnv();
+    }
     // A replay player boots to its origin unseen and unthrottled, as a launch joiner does.
     if (match.replay_play)
       match.port->SetCatchingUp(true);
@@ -3670,6 +3677,15 @@ std::optional<int> Boundary(Core::System& system,
       ERROR_LOG_FMT(ROLLBACK, "Drop-in: no built main menu by frame {}: this game has no origin, so "
                               "it can't take or join players",
                     frame);
+      if (match.replay_play)
+      {
+        ReplayStream::PlayerHost host;
+        host.stop = [&system](const std::string& message) { StopEmulation(system, message); };
+        match.replay_play->Fail(host, "this game couldn't produce the replay's local origin");
+        match.replay_play.reset();
+        End("replay origin failed");
+        return std::nullopt;
+      }
       break;
     }
   }

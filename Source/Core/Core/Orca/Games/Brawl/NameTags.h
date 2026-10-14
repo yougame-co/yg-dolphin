@@ -80,7 +80,9 @@ constexpr u32 CONTROLS_PROFILE_SIZE = 1 + CONTROLS_LAYOUT_SIZE;
 // could set (rumble 0 or 1, the flag bytes' own bits only, actions up to 0xE), else the game's
 // default, since profiles come from other machines. With more than one port (a room), a tag the
 // player saved in the game's Options > Controls keeps what they saved for the rest of the room.
-int ApplyNameTags(GuestMemory& memory, const std::vector<Events::PortInfo>& ports);
+// `view_names`: replay-only; replaces even a worn tag's name while preserving its controls.
+int ApplyNameTags(GuestMemory& memory, const std::vector<Events::PortInfo>& ports,
+                  bool view_names = false);
 
 // A profile as text (lowercase hex, 92 characters) and back. Parsing refuses any other size, and
 // any byte the game's menus couldn't set.
@@ -172,7 +174,7 @@ std::optional<std::vector<u8>> NameTagsFrame(GuestMemory& memory,
                                              const std::vector<Events::PortInfo>& write_ports,
                                              const std::vector<Events::PortInfo>& ports,
                                              OwnControlsReader* reader, const std::vector<u8>& own,
-                                             u64 resyncs);
+                                             u64 resyncs, bool view_names = false);
 
 // Runs from Events' frame callback on every frame (first runs and re-runs), before the session
 // saves a snapshot or keyframe, so those include what it wrote: NameTagsFrame on emulated memory,
