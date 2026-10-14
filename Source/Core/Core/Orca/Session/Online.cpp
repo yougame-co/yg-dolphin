@@ -643,9 +643,9 @@ void ShutdownInBackground()
     std::lock_guard lock(teardowns.mutex);
     ++teardowns.running;
   }
-  std::thread([room = std::move(room), &teardowns]() mutable {
-    room->Leave();
-    room.reset();
+  std::thread([leaving_room = std::move(room), &teardowns]() mutable {
+    leaving_room->Leave();
+    leaving_room.reset();
     std::lock_guard lock(teardowns.mutex);
     --teardowns.running;
     teardowns.done.notify_all();
