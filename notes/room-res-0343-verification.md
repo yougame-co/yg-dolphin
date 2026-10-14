@@ -1,52 +1,70 @@
-# Friends-room recovery on 0.3.43
+# Friends-room recovery: 0.3.44 review fixes
 
-Branch `room-res-0343`, based on `train-0343` at `7e169aa0a3`. Local commits only. The old reference commit was read and adapted; it was not merged or cherry-picked.
+Private branch `room-res-0343`. Starting base check:
 
-## Behavior
+```text
+2f3b51e34e Resume held-host sessions through drop-in
+BASE-OK
+```
 
-- A1: Peer `away` retains the direct link, peer identity, pending inputs, and session. `back` / same-id `join` clears the mark without another arrival. A real leave still unplugs immediately. Direct input silence uses the existing 10-second limit; a held seat expires after 90 seconds. Duplicate away does not extend it.
-- A2: Own socket loss and the existing 8-second server-silence check start a background ticket refresh and WebSocket upgrade for the same room. Direct links and the page's room mirror stay alive. Welcome confirms the same identity and seat. The reconnect deadline never restarts. A silent direct peer ends its session after 10 seconds; unsuccessful room recovery ends the room after 90 seconds.
-- A3: A friends-room joiner whose host session ends during a room blip keeps the room, plays solo, and waits for the held host. Back initiates the normal hello / keyframe / joining-percent path. Real leave or hold expiry ends the wait. Back and an old-session stalled notice may cross without abandoning the room. Ranked verdict handling remains on the train's existing path.
-- A4: `room-away`, `room-back`, and `room-leave` lines name the subject, kept / ended / retry decision, and cause. Reconnect attempts and final outcomes include attempt number, original close code/reason, and last connection error. Ticket contents and ticket-refusal text are never included.
-- B1: 1013, server closes without a code, and receive failures are reconnectable. 4000 (replaced) and 4004 (match over) remain final.
-- B2: HTTP 409 during upgrade retries with 0.5, 1, 2, then capped 4-second backoff, within the original hold. Initial upgrade 409 also waits for the held seat; other initial refusals retain existing behavior.
-- B3: Every attempt, refusal, welcome, and final outcome is logged with reconnect context.
+The starting checkout was clean and contained `2f3b51e34e`. All changes and commits are local. The original room-port brief and review checklist were read, along with the rooms Worker's welcome/roster implementation at the requested read-only path. No release operation was performed.
 
-## Code map
+## Changes by review item
 
-- A1: Source/Core/Core/Orca/Session/YouGameRoom.cpp:3431, Source/Core/Core/Orca/Session/YouGameRoom.cpp:3749
-- A2: Source/Core/Core/Orca/Session/YouGameRoom.cpp:1860, Source/Core/Core/Orca/Session/YouGameRoom.cpp:1955, Source/Core/Core/Orca/Session/YouGameRoom.cpp:3608
-- A3: Source/Core/Core/Rollback/OnlineMatch.cpp:1219, Source/Core/Core/Rollback/OnlineMatch.cpp:1706
-- A4 / B3: Source/Core/Core/Orca/Session/YouGameRoom.cpp:1829, Source/Core/Core/Orca/Session/YouGameRoom.cpp:1844
-- B1: Source/Core/Core/Orca/Session/YouGameRoom.cpp:1919, Source/Core/Core/Orca/Session/RoomResilience.h:77
-- B2: Source/Core/Core/Orca/Session/YouGameRoom.cpp:1938, Source/Core/Core/Orca/Session/YouGameRoom.cpp:1945, Source/Core/Core/Orca/Session/RoomResilience.h:107
-- Hook: Source/Core/Core/Orca/Session/YouGameRoom.cpp:4568
+1. **Recovered teardown.** Successful welcome clears the room thread's `dropped` flag. A later room-thread End takes the ordinary FlushLobby/bye/leave path. `Source/Core/Core/Orca/Session/YouGameRoom.cpp:3918`. The runtime teardown test waits for a reconnect welcome/pong, injects a host desync drop, and observes both bye and leave before calling Leave itself (`Source/UnitTests/Core/Orca/RoomTest.cpp:1774`).
 
-## Compatibility and determinism
+2. **Bounded reconnects and final closes.** `RoomResilience.h:72` classifies 1008, 4000, 4001, 4003 and 4004 as final; `YouGameRoom.cpp:1964` gives the friends-room closures their own reasons. `RoomResilience.h:91` holds the per-room rolling budget, and `YouGameRoom.cpp:2024` applies it. At most six accepted reconnect upgrades per five minutes; failed upgrades remain bounded by the original 90-second outage deadline. Welcome clears the outage state but never this budget. `RoomResilience.h:117` applies 70–130% backoff jitter from a room-owned seed. Tests cover final close frames through Run, six successful recoveries followed by a rejected seventh, rolling budget expiry and jitter bounds.
 
-Compatibility remains 30. Session packets, rollback algorithms, simulated timers, and game inputs are unchanged. Hello adds optional `run` (room-object identity) and, only during recovery, `resume`. Existing readers ignore unknown fields; absent fields are accepted. The healthy hello's serialized bytes gain `run`, but game frame hashes and inputs remain identical. Healthy interoperability with 0.3.42 is preserved wherever the train already allowed it. An old peer retains its old room-drop policy, so full seamless recovery requires the fix on both machines.
+3. **First-connect 409.** `YouGameRoom.cpp:1991` retries only a recognized seat-in-use reason, with three retries after the first refusal, at approximately 0.5/1/2 seconds plus jitter. Full and complete end immediately. `YouGameRoom.cpp:2095` reads recognized refusal reasons; this libcurl stops before delivering the refusal body, so a bounded HTTP Upgrade probe reads the same endpoint's reason. The probe never prints arbitrary response text, and is disabled for queue rooms and quit. Tests exercise actual loopback HTTP 409 bodies, attempt counts, eventual success and immediate full/complete refusal.
 
-The reference's recovery traces and frame-hash comparison are ported to this policy API. Extra cases cover close classification, initial/refreshed 409, exponential backoff, hold expiry, same-run and legacy hellos, welcome reconciliation, own input silence, and a stalled notice crossing back. External-service/disc integration cases remain opt-in.
+4. **Friends-room scope and harnesses.** `YouGameRoom.cpp:1038` gates recovery on the authoritative private queue. A known queue request suppresses first-connect retries until welcome establishes the queue; private welcome overrides an initial queue hint. Queue sockets, away/back resets and healthy hellos retain the train's behavior. Queue request hints are passed in `Source/Core/Core/Orca/Session/Online.cpp:285` and OnlineMatch's room entry paths. Harness opt-in is set in `Tools/orca/dropin-rooms.py:99`, `Tools/orca/pause-room.py:47`, and `Tools/orca/queue-e2e.mjs:470`. Friends-room harness assertions now expect background same-room recovery. The hook remains inert without its opt-in. Runtime tests cover both queues, the inert hook and a private welcome overriding a queue hint.
 
-## Exact two-machine check for the release lead
+5. **Quit cancellation and ownership.** `YouGameRoom.cpp:1637` bounds reconnect ticket HTTP waits to two seconds; the stdio ticket request at line 1646 checks stop/leave/cancel every bridge wait. The reconnect socket upgrade is capped at two seconds and checks cancellation. `Source/Core/Common/WebSocket.cpp:76` supplies the handshake cancellation callback. Jobs remain owned and joined; no thread is detached. Runtime tests quit during both an upgrade and ticket refresh, and verify prompt completion.
 
-Use a private staging/test room with two copies of this build, direct transport active (`tx=1`), a running match, and both machines recording their usual frame hashes. Use the existing stdin test harness with `ORCA_TEST_COMMANDS=1` and `ORCA_TEST_ROOM_DROP=1` on both machines. No hook runs by default, including in release builds.
+6. **Quit leave.** `YouGameRoom.cpp:2140` makes one cached-ticket connection attempt, sends leave and closes within a shared two-second attempt deadline. It does not refresh the ticket or retry this attempt. `WebSocket.cpp:264` permits the close wait to use the remaining time. Both quit runtime tests observe leave at the fixture.
 
-1. **Host socket:** Send `test-drop-room` to the host's stdin once. Expect the joiner's `room-away peer ... kept`, uninterrupted advancing frames on both, the host reconnecting to the same code/seat, then `back` without a new arrival, reset, or keyframe. Compare shared confirmed frame hashes. Repeat on the joiner's stdin and verify the same invariants.
-2. **Room-only blackout / server silence:** In the lead's isolated test harness, block only TCP to the room endpoint on the host for 9 seconds, preserving the direct UDP link and bridge. Remove that test rule. Repeat on the joiner. Expect the 8-second server-silence recovery path, continuous play, and same-seat recovery. Use an isolated harness; no Mac privacy/security settings are needed.
-3. **409 seat in use:** Launch the dropping side additionally with `ORCA_TEST_DROP_SILENT=1`, then send `test-drop-room`. The old socket stays unread while reconnect attempts use the same seat. Verify an actual HTTP 409 / seat-in-use log, retry backoff, unchanged original deadline, and successful recovery. If server timing bypasses 409, use the lead's local room fixture to refuse the first two upgrades with HTTP 409 before accepting; do not count a run without a 409 as this check.
-4. **1013:** Launch the dropping side additionally with `ORCA_TEST_ROOM_CLOSE_CODE=1013`; send `test-drop-room`. This injects the classification (not a real server close frame). Expect logged close-code 1013, retry, same room/seat, and continuous direct play. Also have the lead's isolated room fixture send a real 1013 close to verify the libcurl receive path.
-5. **Away plus silence:** Drop the host's room socket and block both directions of its direct link (`test-direct off` in the harness) for over 10 seconds. The old session must end at the existing timeout, and the joiner must retain the old room code while waiting. Restore direct with `test-direct on` and room reachability before 90 seconds. Expect back, fresh hello/keyframe, `joining N%`, automatic play together, and matching confirmed hashes after rejoin. Repeat with the joiner's room socket dropped. Use a room-only test outage long enough that back follows the silence timeout.
-6. **Back / final cases:** Repeat away followed by back before 10 seconds (no reset), after 10 but before 90 seconds (fresh drop-in), and after 90 seconds (wait ends). A duplicate away must not extend the hold. A real leave during away must end the wait immediately. 4000 must not reconnect and 4004 must keep the match-over outcome.
+7. **Actual welcome shape.** `YouGameRoom.cpp:3834` finds `away` on `players[]` by player id. The corrected test at `RoomTest.cpp:1671` puts it only there, with ordinary unmodified participants. It retains the peer at 10 seconds and ends its hold at 90 seconds.
 
-Two-machine checks remain for the release lead; this run contacts no external services and performs no release operation.
+8. **Both transports silent.** `YouGameRoom.cpp:4487` grants a bounded hold during the existing stall even before the server has sent away. The original deadline cannot be restarted by polling. `Source/Core/Core/Rollback/SessionPort.cpp:174` asks the transport whether to keep waiting after the existing timeout; `Source/Core/Core/Rollback/OnlineMatch.cpp:4045` also keeps the stall budget from ending a held friends session. A real leave, hold expiry or final room end interrupts it. Buffered inputs resume the same Session. A missing input prefix or a frame gap beyond the input window queues a fresh handshake by connection id in `YouGameRoom.cpp:4840`, preserving the room code. The existing host wait and keyframe path handles this resync. The real Run/reconnect/Session/StepSession fixture blocks room upgrades and inputs for 15 seconds without a peer-away verdict and verifies continuation, no leave and unchanged code. A second test injects an unavailable input gap, observes the resync event and receives the existing keyframe offer in that same room.
 
-## Light-gate results
+9. **Retryable resume.** `YouGameRoom.cpp:4480` resolves retry requests to stable roster ids; Tick handles those ids at line 3297. Resumes carry an optional per-request `resume_id` and retry with backoff until a keyframe arrives or the hold expires. Host deduplication at line 4212 distinguishes retries from a new resume cycle, including a host that already has a live session and an old keyframe offer. `OnlineMatch.cpp:1781` clears the host wait only when a keyframe arrives. Runtime tests exercise repeated resume messages, the keyframe response, and a second resume request against an already resumed host.
 
-- Required incremental build: `flock /Users/luis/Code/brawl-dolphin/build.lock nice -n 10 cmake --build build-orca-0343 --target tests -j4` passed. The final build includes the corrected current-format keyframe fixture and deadline handling.
-- Full suite under the same lock and `nice -n 10`, one test worker, minimal environment, and the existing `fake_keyframes.py` loopback fixture: **2,031 registered; 2,008 passed; 0 failed; 23 skipped**.
-- Orca: **980 registered; 957 passed; 0 failed; 23 skipped**. All runnable Orca tests passed. All **25 added checks** passed (24 recovery traces/policy checks plus the frame-hash comparison), including the adapted reference checks.
-- Skipped: 15 live-room/bridge integration tests, 4 disc/revision tests, 2 latency harness tests, and 2 disc/font/design tests. No real service was contacted. The localhost keyframe-store test ran and passed.
-- Counts: the older `baseline-tests.xml` contains 934 Orca registrations (910 passes, 24 skips); the pre-existing `final-tests.xml` contains 955 (931 passes, 24 skips). This change adds 25 registrations to the current train's 955, yielding 980. Running the loopback keyframe fixture removes one baseline skip.
-- Final evidence: `build-orca-0343/room-port-build-final.log`, `room-port-tests.log`, and `room-port-tests.xml`. The initial run's single outdated-reference-fixture failure is retained in `room-port-tests-initial.log` / `.xml`; the final complete rerun has zero failures.
-- No compat bump, push, deploy, signing, release, or production operation. No remaining implementation/test blocker. The real two-machine forced-drop checks above remain for the release lead.
+## Determinism and compatibility
+
+Compatibility remains 30. Session.cpp, simulated timers, rollback decisions and packet encoding are unchanged. The timeout exception belongs to the room transport and existing emulator stall adapter. `run`, `resume` and `resume_id` are optional private-room hello fields; absent fields remain accepted. The runtime healthy test drives two real Sessions with the same varying inputs and compares all 200 frame hashes with recovery enabled and explicitly disabled. The earlier direct-room-blip frame-hash test also passes. Full seamless recovery still requires the new behavior on both machines; older clients keep their old outage policy.
+
+## Final local gates
+
+Every build, suite and syntax check was run under the shared build lock and nice level 10, after verifying load below 20. The required build command passed:
+
+```sh
+flock /Users/luis/Code/brawl-dolphin/build.lock nice -n 10 cmake --build build-orca-0343 --target tests -j4
+```
+
+The complete suite ran with one test worker through `Tools/orca/room-fix-tests.py`. This dependency-free runner starts only loopback room/keyframe fixtures and provides a minimal environment without inherited app credentials or live-test opt-ins.
+
+| Tests | Registered | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| Complete suite | 2,048 | 2,025 | 0 | 23 |
+| Orca* | 997 | 974 | 0 | 23 |
+| Room resilience + runtime | 41 | 41 | 0 | 0 |
+
+There are 17 additional registrations: 16 runtime checks and the rolling-budget/jitter check. The 24 existing traces were updated for the held stall and real server message shape. Python syntax checks passed for the fixture, dropin-rooms and pause-room; node syntax checking passed for queue-e2e.
+
+`forbidden-calls --baseline-rev train-0343` reports **17 branch-added hits, down from 18 at the starting base**. Its overall existing-baseline report remains nonzero: 106 pre-existing train findings plus 17 from this branch (123 total), versus 124 at the starting base. No new scan allowance or baseline was added.
+
+Evidence: `build-orca-0343/room-fix-build-final.log`, `room-fix-tests.log`, `room-fix-tests.xml`, and `room-fix-forbidden-{train,before,after}.json`.
+
+The 23 skipped cases are the existing opt-in live-service, disc, latency and font/design cases. No local gate is blocked. Emulator-boot integration through OnlineMatch's WaitForAwayHost/PumpJoin and actual keyframe loading/playback was reviewed but not executed: the runtime fixtures reach the room thread, reconnect thread, teardown, real Session/StepSession and keyframe offer. The real two-machine emulator check remains for the release lead. The live dropin/pause/queue harnesses were syntax-checked, not run against external services.
+
+## Release-lead two-machine plan: the actual whole-connection outage
+
+Use two staging 0.3.44 clients in a private friends room, compatibility 30, an active match and a confirmed direct link (`tx=1`). Record the original room code, seat identities, netlogs and confirmed frame hashes. Use an isolated VM/gateway network filter controlled by the release lead; do not substitute a graceful direct-off command for a packet blackout.
+
+1. **Joiner, 15 seconds:** On the joiner's isolated network path, blackhole BOTH its room-host TCP traffic and BOTH directions of the selected peer direct UDP link for exactly 15 seconds. Send no close frame and keep the local app bridge working. The host's own room socket stays healthy. This reproduces the period in which the host has silent peer inputs but no server away verdict. Both games must freeze through the existing stall, stay in the original room, and avoid host-left/new-code recovery at 10 seconds. Restore both paths together. With retained input buffers they must continue the same session; compare confirmed hashes after catch-up.
+2. **Host, 15 seconds:** Repeat the identical two-path blackout on the host machine. Verify the same stall, same seats/code, buffered continuation and matching confirmed hashes on both sides.
+3. **Joiner then host, 60 seconds:** Repeat both blackouts for exactly 60 seconds, separately on each machine. The original hold must remain alive. Failed upgrades must not consume the accepted-reconnect budget. Restore both paths together before hold expiry. Retained buffers continue; if the missing input range is unavailable, expect the existing keyframe/drop-in progress (`joining N%`) followed by play in the SAME room and matching confirmed hashes. No new invitation code may appear during either hold. Keep the loopback missing-buffer case as explicit coverage when the real outage preserves all buffered inputs.
+4. **Final/verdict checks:** During a held stall, have the peer really leave; this must interrupt waiting immediately. Run a blackout beyond the hold to verify a clean end. Check 1008/4001/4003 finality, 1013 recovery, actual seat-in-use 409 backoff, full/complete refusal, and user quit during reconnect with prompt leave.
+5. **Healthy/interoperability checks:** Compare healthy confirmed hashes against 0.3.43 and check healthy 0.3.43/0.3.44 pairing. Run the updated dropin-rooms/pause-room harnesses in the lead's authorized isolated setup and the ranked rejoin harness to confirm its original behavior.
+
+This plan is for the release lead. No deployment, release, signing, push or external-service test was performed here.

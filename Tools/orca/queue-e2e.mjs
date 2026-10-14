@@ -467,6 +467,7 @@ class Side {
       PATH: process.env.PATH,
       ORCA_SESSION: "1",
       ORCA_TEST_COMMANDS: "1",
+      ORCA_TEST_ROOM_DROP: "1",
       YOUGAME_BRIDGE: `http://127.0.0.1:${this.port}`,
       YOUGAME_TOKEN: this.token,
       YOUGAME_GAME: SLUG || DEV_GAME,
