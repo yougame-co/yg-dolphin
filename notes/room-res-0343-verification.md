@@ -1,5 +1,8 @@
 # Friends-room recovery: 0.3.44 review fixes
 
+The original room-fix record below is historical. The room-fix2 follow-up at the end
+supersedes its refusal, budget and queue-scope details.
+
 Private branch `room-res-0343`. Starting base check:
 
 ```text
@@ -68,3 +71,95 @@ Use two staging 0.3.44 clients in a private friends room, compatibility 30, an a
 5. **Healthy/interoperability checks:** Compare healthy confirmed hashes against 0.3.43 and check healthy 0.3.43/0.3.44 pairing. Run the updated dropin-rooms/pause-room harnesses in the lead's authorized isolated setup and the ranked rejoin harness to confirm its original behavior.
 
 This plan is for the release lead. No deployment, release, signing, push or external-service test was performed here.
+
+
+## room-fix2 final review follow-up
+
+Base check before edits:
+
+```text
+7080eee6b7 Update room recovery harnesses and verification
+BASE-OK
+```
+
+The checkout was clean on `room-res-0343`. All follow-up writes are local to this
+worktree. The referenced brief, review and Worker source were read at their explicitly
+requested reference paths; the Worker was not modified.
+
+- The first room upgrade now makes one request. Its own WebSocket error path may attach
+  recognized full/complete reasons; an unclassified 409 ends as `room_full`. No HTTP
+  Upgrade probe remains. Loopback tests check one connection and zero probes, and a
+  capture of enabled NETPLAY/COMMON logs covers refusal, timeout and cancellation.
+- The stall budget excludes only an ongoing held outage. Completed stalls still count
+  toward the rolling budget. A 9.9-second input cadence spends the budget after two
+  completed stalls; one held outage remains excused until its verdict/deadline.
+- Ranked/casual back/join reset the hello timer and greet on the next Tick. Silent test
+  drops leave their sockets open and unread; Online retains their room ownership as on
+  train. New room notices and best-effort recovery leave are friends-only.
+- Receive ignores an expired input hold when deciding whether buffered inputs need a
+  resync. A loopback test returns a large gap after an expired hold and verifies the
+  packet reaches the caller without a room-resume departure.
+- Recovery teardown sends one short best-effort leave when its socket is open. Final
+  teardown with no socket does not create a connection; only a user quit may make the
+  existing cached-ticket attempt. An accepted socket still owned by the reconnect job
+  is joined and transferred before this teardown. A changed-seat recovery fixture exercises the real
+  open-socket final path and checks exactly one leave.
+
+The train-to-working-tree runtime audit also restored queue roster processing for
+`leave`, retention of pending drops across peer reset, Tick and direct-signal behavior
+on a closed socket, the train test-drop end reason and queue handshake/ticket wait
+cancellation policy. Remaining recovery state and optional hello fields are either
+friends-gated or inert when recovery is false. Session/packet decisions are unchanged.
+
+Final locked build passed with the required command:
+
+```sh
+flock /Users/luis/Code/brawl-dolphin/build.lock nice -n 10 cmake --build build-orca-0343 --target tests -j4
+```
+
+The complete suite ran through `Tools/orca/room-fix-tests.py`, under the same lock and
+nice level, with one test worker and the existing minimal loopback-only environment.
+
+| Tests | Registered | Passed | Failed | Skipped |
+| --- | ---: | ---: | ---: | ---: |
+| Complete suite | 2,053 | 2,030 | 0 | 23 |
+| Orca* | 1,002 | 979 | 0 | 23 |
+| Room resilience + runtime | 45 | 45 | 0 | 0 |
+| Stall budget | 2 | 2 | 0 | 0 |
+
+The 23 skips remain the existing opt-in live-service, disc, latency and font/design
+cases. The runtime healthy comparison covers all 200 frame hashes with recovery both
+enabled and disabled, and the real 15-second both-transport-silent case also passes.
+The first build needed test-name qualification after adding the logger header; the
+first suite run exposed missing in-memory logger configuration during fixture cleanup.
+Both were corrected before the final successful build and complete suite.
+
+Evidence: `build-orca-0343/room-fix2-build-final.log`, `room-fix2-tests.log` and
+`room-fix2-tests.xml`. The whole train-to-working-tree diff was checked for logging and
+Status paths carrying the constructed room URL: none does. The enabled-log regression
+covers refusal (with a probe-delay trap), timeout and progress cancellation, checking
+both the query marker and the fixture value.
+
+`forbidden-calls --baseline-rev train-0343 --json` remains at **17 branch-added
+hits**, with 106 pre-existing train findings (123 total). Its baseline-excess exit
+status is unchanged; no allowance or baseline was edited. Evidence:
+`build-orca-0343/room-fix2-forbidden.json`, compared with the existing train and
+7080eee6b7 reports.
+
+Current source references by room-fix2 item:
+
+1. Single upgrade: `YouGameRoom.cpp:2096`; recognized own-handshake reasons:
+   `Source/Core/Common/WebSocket.cpp:124`; enabled-log regression: `RoomTest.cpp:2332`.
+2. Ongoing-hold budget: `OnlineMatch.cpp:4045`, `OnlineMatch.h:269`;
+   cadence regression: `Games/Brawl/OnlineMenuTest.cpp:2099`.
+3. Queue immediate hello: `YouGameRoom.cpp:3950`; retained ownership:
+   `Source/Core/Core/Orca/Session/Online.cpp:808`; queue regressions:
+   `RoomTest.cpp:2244` and `RoomTest.cpp:2270`.
+4. Receive deadline: `YouGameRoom.cpp:4886`; regression: `RoomTest.cpp:2297`.
+5. Friends-only notices/leave: `YouGameRoom.cpp:1866`, `YouGameRoom.cpp:2118`.
+6. Final teardown: `YouGameRoom.cpp:2332`; open-socket regression:
+   `RoomTest.cpp:2315`; budget test also joins final teardown and checks no new connection.
+
+Basenames above belong to `Source/Core/Core/Orca/Session`, `Source/Core/Core/Rollback`
+or `Source/UnitTests/Core/Orca` as applicable. No local gate is blocked. The release-lead two-machine plan above still applies;
+no external-service integration, release or push was performed.
