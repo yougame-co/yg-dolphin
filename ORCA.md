@@ -2618,6 +2618,11 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.44
+
+- **Friends rooms ride through short connection drops.** If your connection drops for a moment, the room
+  keeps going and keeps the same room code, so nobody has to make a new room or share a new code.
+
 ### 0.3.43
 
 - **Saved replays.** Matches in ranked and tournament rooms can be saved as replays.
