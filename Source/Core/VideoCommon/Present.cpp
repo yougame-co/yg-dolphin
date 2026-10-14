@@ -11,6 +11,7 @@
 #include <optional>
 
 #include "Common/ChunkFile.h"
+#include "Core/BroadcastSink.h"
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
@@ -309,6 +310,9 @@ void Presenter::SetNextSwapEstimatedTime(u64 ticks, TimePoint host_time)
 
 void Presenter::ProcessFrameDumping(u64 ticks) const
 {
+  if (m_xfb_entry && Broadcast::Active())
+    g_frame_dumper->BroadcastCurrentFrame(m_xfb_entry->texture.get(), AdjustForCustomCrop(m_xfb_rect),
+                                         CalculateDrawAspectRatio(false));
   if (g_frame_dumper->IsFrameDumping() && m_xfb_entry && m_test_target)
   {
     g_frame_dumper->DumpCurrentFrame(m_test_target.get(), m_test_target->GetRect(),
