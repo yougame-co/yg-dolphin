@@ -119,6 +119,8 @@ std::vector<Net::PeerEvent> TakePeerEvents();
 bool HostLeftPending();
 // Host: seats of players whose leaving is among the untaken events. Any thread.
 std::vector<int> LeftSeatsPending();
+std::optional<std::chrono::steady_clock::time_point> HostAwayDeadline();
+void RetryPeer(int seat);
 bool RoomEnded();
 // This Orca is in its room: the welcome arrived and the room hasn't ended.
 bool InRoom();

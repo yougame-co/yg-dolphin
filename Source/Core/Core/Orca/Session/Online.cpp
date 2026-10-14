@@ -523,6 +523,18 @@ std::vector<int> LeftSeatsPending()
   return room ? room->LeftSeatsPending() : std::vector<int>{};
 }
 
+std::optional<std::chrono::steady_clock::time_point> HostAwayDeadline()
+{
+  const auto room = Room();
+  return room ? room->HostAwayDeadline() : std::nullopt;
+}
+
+void RetryPeer(int seat)
+{
+  if (const auto room = Room())
+    room->RetryPeer(seat);
+}
+
 bool RoomEnded()
 {
   const auto room = Room();
@@ -783,13 +795,6 @@ void TestDropRoom()
 {
   if (const auto room = Room())
   {
-    // ORCA_TEST_DROP_SILENT=1: the dropped room is kept, so its connection stays open
-    // (YouGameRoom's test drop) until the server replaces it with the player's next one.
-    if (Env("ORCA_TEST_DROP_SILENT") == "1")
-    {
-      static std::vector<std::shared_ptr<Net::YouGameRoom>> s_kept;
-      s_kept.push_back(room);
-    }
     room->TestDropConnection();
   }
 }

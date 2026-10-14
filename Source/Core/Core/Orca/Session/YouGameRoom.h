@@ -107,7 +107,7 @@ struct PeerEvent
   {
     // It said hello with our compatibility key: a player of this game at `seat`.
     Arrived,
-    // It left the room or its connection dropped.
+    // It left, or its held room seat lost direct inputs / expired.
     Left,
     // The host offered its keyframe (to a joiner).
     Keyframe,
@@ -178,6 +178,9 @@ enum class RoomState
   Ended,
 };
 
+struct RoomTestStep;
+struct RoomTestSnapshot;
+
 class YouGameRoom final : public Transport
 {
 public:
@@ -195,6 +198,11 @@ public:
   // Whether the untaken events include a friend arriving (Arrived on a seat after the host's, from
   // a player that isn't the game's host).
   bool ArrivalPending() const;
+  // The latest host-away hold deadline, including a back that raced the session's timeout.
+  std::optional<std::chrono::steady_clock::time_point> HostAwayDeadline() const;
+  // Restart this seat's hello/keyframe handshake after its session ended during a room blip.
+  void RetryPeer(int seat);
+
   // Whether the untaken events include the game's host leaving, so a joiner stalled on the host's
   // inputs hears it at once rather than after its silence limit.
   bool HostLeftPending() const;
@@ -295,9 +303,13 @@ public:
   void SetLeaveReason(std::string reason);
   // Tests only: drop the connection as a network failure would (no goodbye; the server holds the
   // seat). The room ends with "network".
+  // No-op unless ORCA_TEST_ROOM_DROP=1. ORCA_TEST_DROP_SILENT keeps the old socket unread;
+  // ORCA_TEST_ROOM_CLOSE_CODE=1013 exercises that close classification.
   void TestDropConnection();
 
 private:
+  friend std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions&,
+                                                      const std::vector<RoomTestStep>&);
   struct Impl;
   std::unique_ptr<Impl> m_impl;
 };
@@ -384,4 +396,39 @@ std::string RefusalCode(const std::string& connect_error);
 // Queues `packet` in place of one not yet sent, keeping the older one's earlier inputs and
 // checksum.
 void CoalescePacket(std::optional<Packet>* outgoing, const Packet& packet);
+// In-memory transport traces for unit tests. No thread, ticket request or socket is opened.
+struct RoomTestStep
+{
+  enum class Kind
+  {
+    Message,
+    DirectInput,
+    Tick,
+    SocketClose,
+    RetryPeer,
+    PollReconnect,
+    ConnectFailure,
+    InitialConnectFailure,
+  };
+  Kind kind;
+  int milliseconds = 0;
+  std::string text;
+  unsigned close_code = 0;
+};
+struct RoomTestSnapshot
+{
+  RoomState state;
+  std::vector<PeerEvent> events;
+  std::vector<Packet> packets;
+  std::optional<std::chrono::steady_clock::time_point> host_away_until;
+  bool reconnecting = false;
+  bool reconnect_started = false;
+  std::vector<std::string> sent;
+  unsigned reconnect_attempts = 0;
+  std::optional<std::chrono::steady_clock::time_point> reconnect_at;
+  std::vector<std::string> notices;
+  std::string status;
+};
+std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
+                                             const std::vector<RoomTestStep>& steps);
 }  // namespace Orca::Net

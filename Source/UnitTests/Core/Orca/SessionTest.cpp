@@ -32,6 +32,7 @@
 
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Session/PadCodec.h"
+#include "Core/Orca/Session/RoomResilience.h"
 #include "Core/Orca/Session/Session.h"
 #include "Core/Orca/Session/YouGameRoom.h"
 
@@ -194,6 +195,7 @@ struct FakeNet
   int direct_loss_percent = 0;
   std::array<std::vector<InFlight>, 2> direct;
   int direct_delivered = 0;
+  bool relay_open = true;
   // A sender that rewrites its own packets (a modified client), by sending end.
   std::function<void(int from, Packet* packet)> tamper;
 
@@ -214,7 +216,8 @@ struct FakeNet
       int at = m_net.now + delay;
       if (!queue.empty())
         at = std::max(at, queue.back().deliver_at);
-      queue.push_back({at, packet});
+      if (m_net.relay_open)
+        queue.push_back({at, packet});
       if (m_net.direct_latency >= 0 &&
           Uniform(m_net.rng, 0, 99) >= m_net.direct_loss_percent)
       {
@@ -4471,5 +4474,54 @@ TEST(OrcaSessionDirect, DirectLinkBesideTheRelay)
     EXPECT_LE(s.waits, 3);
     EXPECT_EQ(s.delay, 2);
     EXPECT_LT(s.rollbacks * 4, relay.SessionOf(i).GetStats().rollbacks) << "side " << i;
+  }
+}
+
+TEST(OrcaSessionDirect, RoomBlipWithLiveInputsKeepsEveryFrameHash)
+{
+  using namespace std::chrono_literals;
+  Config config;
+  Match control(config, 0, 0);
+  Match recovery(config, 0, 0);
+  for (Match* match : {&control, &recovery})
+  {
+    match->net.direct_latency = 0;
+    match->rtt_samples = false;
+  }
+  PeerRoomPresence peer;
+  RoomReconnect room;
+  for (int tick = 0; tick < 1200; ++tick)
+  {
+    const auto now = RoomClock::time_point{} + std::chrono::milliseconds(tick * 1000 / 60);
+    if (tick == 200)
+    {
+      peer.Away(now);
+      ASSERT_TRUE(room.Start(now, 0));
+      recovery.net.relay_open = false;
+    }
+    if (tick >= 200 && tick < 1000)
+    {
+      EXPECT_EQ(peer.Check(now, now), RoomLoss::None);
+      EXPECT_EQ(room.Check(now), RoomLoss::None);
+    }
+    if (tick == 1000)
+    {
+      ASSERT_TRUE(peer.Back(now, true));
+      room.since.reset();
+      recovery.net.relay_open = true;
+    }
+    control.Play(1);
+    recovery.Play(1);
+  }
+  EXPECT_GT(recovery.CompareConfirmed(), 1100);
+  for (const auto& pair : {std::pair{control.a.get(), recovery.a.get()},
+                          std::pair{control.b.get(), recovery.b.get()}})
+  {
+    EXPECT_TRUE(pair.second->session.Error().empty());
+    EXPECT_EQ(pair.first->game.m_history, pair.second->game.m_history);
+    EXPECT_EQ(pair.first->game.m_ran_pads, pair.second->game.m_ran_pads);
+    EXPECT_EQ(pair.first->session.CurrentFrame(), pair.second->session.CurrentFrame());
+    EXPECT_EQ(pair.first->session.GetStats().checksums_matched,
+              pair.second->session.GetStats().checksums_matched);
   }
 }
