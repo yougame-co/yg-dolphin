@@ -136,6 +136,8 @@ struct PeerEvent
   std::vector<u8> queue;
   // Hold: whether the host holds the join now.
   bool holding = false;
+  // Arrived: a retained friends-room player requests a current-match keyframe.
+  bool recovering = false;
 };
 
 // How other players' inputs reach this one (DirectLink.h): the worst of them.

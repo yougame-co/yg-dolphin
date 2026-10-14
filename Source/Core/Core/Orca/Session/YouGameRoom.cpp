@@ -1095,6 +1095,7 @@ struct YouGameRoom::Impl
     bool back_hello_pending = false;
     bool resume_requested = false;
     bool resume_handled = false;
+    bool recovering_arrival = false;
     std::string resume_id, handled_resume_id;
     Clock::time_point resume_retry_at{};
     std::chrono::milliseconds resume_backoff{500};
@@ -1887,6 +1888,25 @@ struct YouGameRoom::Impl
     return hold != input_holds.end() && now < hold->second;
   }
 
+  // A fast room back is not evidence that the direct path recovered. An announced peer
+  // still owns its live/stalled session; retain the original hold until usable inputs return.
+  bool BackPeer(const std::string& id, Peer& peer, Clock::time_point now)
+  {
+    const bool live = DirectInputLive(LastDirectInput(id), now);
+    bool keep_session = peer.announced && !peer.presence.suspended &&
+                        (!peer.presence.Deadline() || now < *peer.presence.Deadline());
+    if (keep_session)
+    {
+      std::lock_guard lock(mutex);
+      const auto [hold, inserted] = input_holds.try_emplace(
+          id, peer.presence.Deadline().value_or(now + ROOM_HOLD));
+      keep_session = now < hold->second;
+      if (keep_session && peer.drop_in_host)
+        host_hold_until = hold->second;
+    }
+    return peer.presence.Back(now, live || keep_session || InputHoldAlive(id, now));
+  }
+
   std::string ReconnectContext() const
   {
     return fmt::format("attempt={} close-code={} close-reason={} last-error={}",
@@ -2106,8 +2126,8 @@ struct YouGameRoom::Impl
     if (!FriendsRecovery())
     {
       // Queue rooms retain the train's status-only refusal, even if curl delivered a body.
-      if (const auto status = error->find("(HTTP 409)"); status != std::string::npos)
-        error->erase(status + 10);
+      if (const auto http_status = error->find("(HTTP 409)"); http_status != std::string::npos)
+        error->erase(http_status + 10);
       return false;
     }
     return false;
@@ -3329,6 +3349,7 @@ struct YouGameRoom::Impl
       peer.presence = presence;
       peer.local_room_away = local_room_away;
       peer.resume_requested = true;
+      peer.recovering_arrival = true;
       peer.resume_id = fmt::format("{}-{}", run, ++resume_sequence);
       peer.resume_retry_at = {};
       if (!joining)
@@ -3620,7 +3641,16 @@ struct YouGameRoom::Impl
       return;
     for (auto& [id, peer] : peers)
     {
-      const RoomLoss loss = peer.presence.Check(now, LastDirectInput(id));
+      RoomLoss loss = peer.presence.Check(now, LastDirectInput(id));
+      {
+        std::lock_guard lock(mutex);
+        if (const auto hold = input_holds.find(id);
+            hold != input_holds.end() && now >= hold->second)
+        {
+          loss = RoomLoss::HoldExpired;
+          input_holds.erase(hold);
+        }
+      }
       if (loss == RoomLoss::None || peer.presence.suspended)
         continue;
       const int slot = peer.slot;
@@ -3858,7 +3888,7 @@ struct YouGameRoom::Impl
             continue;
           const bool was_host = peer.drop_in_host;
           const bool resume = peer.resume_requested;
-          if (!peer.presence.Back(Now(), DirectInputLive(LastDirectInput(p->first), Now())))
+          if (!BackPeer(p->first, peer, Now()))
           {
             kept_session = false;
             // CheckAwayPeers already reported this session's timeout.
@@ -3988,8 +4018,7 @@ struct YouGameRoom::Impl
               p->second.resume_handled = false;
               const bool was_host = p->second.drop_in_host;
               const bool resume = p->second.resume_requested;
-              const bool keep = p->second.presence.Back(now, DirectInputLive(LastDirectInput(id), now) ||
-                                                           InputHoldAlive(id, now));
+              const bool keep = BackPeer(id, p->second, now);
               p->second.back_hello_pending = keep && p->second.announced;
               if (was_host)
               {
@@ -4237,6 +4266,7 @@ struct YouGameRoom::Impl
         peer.slot = slot;
         peer.name = name;
         peer.resume_handled = true;
+        peer.recovering_arrival = !new_run && resume;
         peer.handled_resume_id = their_resume_id;
         peer.resume_handled_until = Now() + std::chrono::seconds(4);
         RoomNotice(fmt::format("room-back peer {} ended fresh-drop-in-request", slot + 1));
@@ -4271,7 +4301,7 @@ struct YouGameRoom::Impl
         SetStatus(fmt::format("Room {}: {} is here", room, peer.name.empty() ? "a friend" : peer.name));
         Emit(
             {PeerEvent::Kind::Arrived, peer.slot, peer.drop_in_host, peer.name, peer.controls,
-             {}, {}, peer.queue});
+             {}, {}, peer.queue, false, peer.recovering_arrival});
         // Refresh the page's lobby now, not at the next roster change.
         Publish();
       }
@@ -4507,6 +4537,10 @@ bool YouGameRoom::HoldInputSilence(Clock::time_point since, Clock::time_point no
     if (std::ranges::any_of(m_impl->events, [&](const PeerEvent& e) {
           return e.kind == PeerEvent::Kind::Left && e.seat == slot;
         }))
+      return false;
+    // A caller can reach the timeout after the window has already elapsed. Do not install an
+    // already-expired new hold; existing holds still keep their original deadline.
+    if (!m_impl->input_holds.contains(id) && now >= since + ROOM_HOLD)
       return false;
     const auto [hold, inserted] = m_impl->input_holds.try_emplace(id, since + ROOM_HOLD);
     if (inserted)

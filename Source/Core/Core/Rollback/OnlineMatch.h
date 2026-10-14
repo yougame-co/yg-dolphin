@@ -12,6 +12,7 @@
 
 #include <chrono>
 #include <functional>
+#include <memory>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -33,6 +34,7 @@ struct OriginDecl;
 namespace Orca::Net
 {
 struct ReplayArchive;
+class KeyframeStore;
 }
 namespace Orca::UX
 {
@@ -60,6 +62,20 @@ std::optional<int> OnBoundary(Core::System& system,
 // A keyframe at most this old (30 s at 60 fps) still serves a new joiner, who replays the frames
 // since.
 constexpr int KEYFRAME_FRESH_FRAMES = 30 * 60;
+
+// Headless runtime fixture: pumps the same host event/keyframe path with a real room and a
+// supplied game history. The caller initializes Core::System's memory and owns `game`.
+struct HostRecoveryResult
+{
+  bool fresh_start = false;
+  bool seated = false;
+  int current_frame = -1;
+  std::optional<int> keyframe_frame;
+};
+HostRecoveryResult PumpRecoveryHostForTest(Core::System& system, Orca::Net::YouGameRoom& room,
+                                          Orca::Net::Game& game, Orca::Net::ReplayArchive replay,
+                                          int current_frame, bool session_alive,
+                                          std::unique_ptr<Orca::Net::KeyframeStore> store);
 
 // ---- The origin and fresh starts ----
 // Every Orca boots the same way up to its origin: port 1 plugged in with nothing pressed, ports 2-4
