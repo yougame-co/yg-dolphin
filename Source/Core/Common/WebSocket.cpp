@@ -43,6 +43,8 @@ struct WebSocket::Impl
   std::string error;
   u16 close_code = 0;
   std::string partial;
+  std::string refusal;
+  std::function<bool()> cancelled;
 
   void Fail(std::string why)
   {
@@ -71,7 +73,7 @@ WebSocket::~WebSocket()
 }
 
 bool WebSocket::Connect(const std::string& url, std::chrono::milliseconds timeout,
-                        std::string* error)
+                        std::string* error, const std::function<bool()>& cancelled)
 {
   m_impl->Release();
   m_impl->error.clear();
@@ -85,13 +87,34 @@ bool WebSocket::Connect(const std::string& url, std::chrono::milliseconds timeou
   }
   CURL* curl = m_impl->curl;
   ConfigureCurlTLS(curl);
-  curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
-  // 2: connect and upgrade, then leave the socket to curl_ws_send/curl_ws_recv.
-  curl_easy_setopt(curl, CURLOPT_CONNECT_ONLY, 2L);
-  curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, static_cast<long>(timeout.count()));
-  curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, static_cast<long>(timeout.count()));
-  curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
-  curl_easy_setopt(curl, CURLOPT_USERAGENT, "Orca/1");
+  for (const auto& [option, value] : std::array<std::pair<CURLoption, const char*>, 2>{{
+           {CURLOPT_URL, url.c_str()}, {CURLOPT_USERAGENT, "Orca/1"}}})
+    curl_easy_setopt(curl, option, value);
+  // Capture only a bounded refusal body; expose recognized reasons, never arbitrary text.
+  auto& refusal = m_impl->refusal;
+  refusal.clear();
+  m_impl->cancelled = cancelled;
+  const auto write = +[](char* data, size_t size, size_t count, void* target) -> size_t {
+    auto& body = *static_cast<std::string*>(target);
+    const size_t bytes = size * count;
+    if (bytes > 8192 - body.size())
+      return 0;
+    body.append(data, bytes);
+    return bytes;
+  };
+  const auto progress = +[](void* target, curl_off_t, curl_off_t, curl_off_t, curl_off_t) -> int {
+    const auto& cancel = *static_cast<const std::function<bool()>*>(target);
+    return cancel && cancel();
+  };
+  for (const auto& [option, value] : std::array<std::pair<CURLoption, long>, 5>{{
+           {CURLOPT_CONNECT_ONLY, 2L}, {CURLOPT_CONNECTTIMEOUT_MS, timeout.count()},
+           {CURLOPT_TIMEOUT_MS, timeout.count()}, {CURLOPT_NOSIGNAL, 1L},
+           {CURLOPT_NOPROGRESS, cancelled ? 0L : 1L}}})
+    curl_easy_setopt(curl, option, value);
+  curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write);
+  curl_easy_setopt(curl, CURLOPT_WRITEDATA, &refusal);
+  curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress);
+  curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &m_impl->cancelled);
 
   const CURLcode result = curl_easy_perform(curl);
   if (result != CURLE_OK)
@@ -100,6 +123,15 @@ bool WebSocket::Connect(const std::string& url, std::chrono::milliseconds timeou
     curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
     *error = fmt::format("WebSocket connect failed: {} (HTTP {})", curl_easy_strerror(result),
                          status);
+    if (status == 409)
+    {
+      if (refusal.find("seat in use") != std::string::npos)
+        *error += " seat in use";
+      else if (refusal.find("This match is complete") != std::string::npos)
+        *error += " match complete";
+      else if (refusal.find("Room is full") != std::string::npos)
+        *error += " room full";
+    }
     m_impl->Release();
     return false;
   }
@@ -111,6 +143,8 @@ bool WebSocket::Connect(const std::string& url, std::chrono::milliseconds timeou
     m_impl->Release();
     return false;
   }
+  // The live socket retains no caller captures after the handshake.
+  m_impl->cancelled = {};
   // The timeout was meant for the handshake only. libcurl keeps applying it afterwards, and on
   // Windows (Schannel) every send fails once the socket is older than it, so clear it.
   curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, 0L);
@@ -227,16 +261,16 @@ const std::string& WebSocket::Error() const
   return m_impl->error;
 }
 
-void WebSocket::Close(u16 code)
+void WebSocket::Close(u16 code, std::chrono::milliseconds timeout)
 {
   if (m_impl->open && m_impl->curl)
   {
     const std::array<char, 2> payload{static_cast<char>(code >> 8), static_cast<char>(code & 0xFF)};
     size_t sent = 0;
     curl_ws_send(m_impl->curl, payload.data(), payload.size(), &sent, 0, CURLWS_CLOSE);
-    // Wait up to 500 ms for the server's close frame. Closing with unread data sends a TCP reset,
+    // Wait briefly for the server's close frame. Closing with unread data sends a TCP reset,
     // which can drop the last message we sent (such as a room "leave").
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
     std::array<char, 4096> buffer;
     while (true)
     {

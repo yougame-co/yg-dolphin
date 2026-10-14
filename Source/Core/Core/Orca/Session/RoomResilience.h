@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <deque>
 #include <optional>
 
 namespace Orca::Net
@@ -52,8 +53,9 @@ struct PeerRoomPresence
       return RoomLoss::None;
     if (now >= *Deadline())
       return RoomLoss::HoldExpired;
-    if (!suspended && now - last_direct_input.value_or(*away_since) >= PEER_SILENCE_LIMIT)
-      return RoomLoss::InputSilent;
+    // Input silence freezes the existing session until the room hold expires.
+    // It is not a room verdict; the server may not have detected the dead socket yet.
+    (void)last_direct_input;
     return RoomLoss::None;
   }
 
@@ -67,6 +69,43 @@ struct PeerRoomPresence
   }
 };
 
+inline const char* FinalRoomClose(unsigned code)
+{
+  switch (code)
+  {
+  case 1008:
+    return "message-limit";
+  case 4000:
+    return "replaced";
+  case 4001:
+    return "kicked";
+  case 4003:
+    return "locked";
+  case 4004:
+    return "match-over";
+  default: return nullptr;
+  }
+}
+
+// Lifetime budget: welcome clears an outage, never this rolling history.
+struct RoomReconnectBudget
+{
+  std::deque<RoomClock::time_point> connections;
+  bool Available(RoomClock::time_point now)
+  {
+    while (!connections.empty() && now - connections.front() >= std::chrono::minutes(5))
+      connections.pop_front();
+    return connections.size() < 6;
+  }
+  bool Take(RoomClock::time_point now)
+  {
+    if (!Available(now))
+      return false;
+    connections.push_back(now);
+    return true;
+  }
+};
+
 struct RoomReconnect
 {
   std::optional<RoomClock::time_point> since;
@@ -74,14 +113,20 @@ struct RoomReconnect
   unsigned attempts = 0;
   std::chrono::milliseconds backoff{500};
 
-  bool Start(RoomClock::time_point now, unsigned close_code)
+  // Transport-only jitter, supplied by the room's per-process seed. Tests use the midpoint.
+  static std::chrono::milliseconds Jitter(std::chrono::milliseconds delay, unsigned sample)
   {
-    if (close_code == 4000 || close_code == 4004)
+    return delay * (70 + sample % 61) / 100;
+  }
+
+  bool Start(RoomClock::time_point now, unsigned close_code, unsigned sample = 30)
+  {
+    if (FinalRoomClose(close_code))
       return false;
     if (!since)
     {
       since = now;
-      next_attempt = now + std::chrono::milliseconds(500);
+      next_attempt = now + Jitter(std::chrono::milliseconds(500), sample);
       attempts = 0;
       backoff = std::chrono::milliseconds(500);
     }
@@ -104,11 +149,11 @@ struct RoomReconnect
     return true;
   }
 
-  void Retry(RoomClock::time_point now)
+  void Retry(RoomClock::time_point now, unsigned sample = 30)
   {
     if (!since)
       return;
-    next_attempt = std::min(now + backoff, *since + ROOM_HOLD);
+    next_attempt = std::min(now + Jitter(backoff, sample), *since + ROOM_HOLD);
     backoff = std::min(backoff * 2, std::chrono::milliseconds(4000));
   }
 };

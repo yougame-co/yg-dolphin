@@ -4,6 +4,7 @@
 #pragma once
 
 #include <chrono>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -24,7 +25,8 @@ public:
   WebSocket& operator=(const WebSocket&) = delete;
 
   // Opens the connection and completes the upgrade. On failure returns false and sets *error.
-  bool Connect(const std::string& url, std::chrono::milliseconds timeout, std::string* error);
+  bool Connect(const std::string& url, std::chrono::milliseconds timeout, std::string* error,
+               const std::function<bool()>& cancelled = {});
 
   // Sends one text message, waiting at most `timeout` for the socket to take it.
   bool SendText(std::string_view text, std::chrono::milliseconds timeout);
@@ -40,7 +42,7 @@ public:
   u16 CloseCode() const;
 
   // Sends a close frame (best effort) and releases the connection.
-  void Close(u16 code = 1000);
+  void Close(u16 code = 1000, std::chrono::milliseconds timeout = std::chrono::milliseconds(500));
 
 private:
   struct Impl;
