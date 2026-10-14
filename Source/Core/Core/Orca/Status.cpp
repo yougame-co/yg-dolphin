@@ -240,7 +240,11 @@ void WithdrawOnline()
 void ResetOnline()
 {
   s_online_withdrawn = false;
+  const std::string caps = OfferedCaps();
   std::lock_guard lock(s_mutex);
+  // Legacy profiles do not pass through UpdateCaps after a reboot. Restore the agreement here
+  // against the app's existing list, without waiting for another caps command.
+  s_app_caps = Agreed(caps, s_app_list);
   s_offer_seen.clear();
 }
 

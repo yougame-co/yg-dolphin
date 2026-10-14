@@ -78,3 +78,29 @@ TEST(OrcaStatus, LegacyMenuOriginFailureKeepsItsExistingLogOnly)
   EXPECT_EQ(Rollback::OnlineMatch::OriginFailureReport(&pack),
             "This pack's game didn't reach the start point its pack names, so friends can't join.");
 }
+
+TEST(OrcaStatus, LegacyRebootReagreesOnlyTheAppsListedCapabilities)
+{
+  const auto old_session = Orca::GetEnv("ORCA_SESSION");
+  SetEnv("ORCA_SESSION", "1");
+  Orca::SetActiveProfile(std::nullopt);
+  Orca::Status::SetAppCaps("join host stats unknown");
+  Orca::Status::WithdrawOnline();
+  EXPECT_FALSE(Orca::Status::Cap("join"));
+  EXPECT_FALSE(Orca::Status::Cap("host"));
+  EXPECT_TRUE(Orca::Status::Cap("stats"));
+  // SetActiveProfile is the in-process boot path and calls ResetOnline after resetting guards.
+  Orca::SetActiveProfile(Orca::Profile{});
+  EXPECT_TRUE(Orca::Status::Cap("join"));
+  EXPECT_TRUE(Orca::Status::Cap("host"));
+  EXPECT_TRUE(Orca::Status::Cap("stats"));
+  EXPECT_FALSE(Orca::Status::Cap("direct"));
+  EXPECT_FALSE(Orca::Status::Cap("unknown"));
+  Orca::Status::WithdrawOnline();
+  Orca::SetActiveProfile(Orca::Profile{});
+  EXPECT_TRUE(Orca::Status::Cap("join"));
+  Orca::Status::SetAppCaps("");
+  Orca::SetActiveProfile(std::nullopt);
+  EXPECT_FALSE(Orca::Status::Cap("join"));
+  SetEnv("ORCA_SESSION", old_session);
+}
