@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <optional>
 #include <string>
@@ -128,6 +129,12 @@ void PrioritizeThread(LatencyThread thread);
 //                            (default: always); queued traffic is delivered after, in order.
 //                            ~M for G1-G2 makes gaps random with mean M ms.
 //                            Implies ORCA_TEST_NET_DELAY_MS.
+//   ORCA_TEST_BLACKOUT=S1-S2  drop direct packets both ways from S1 to S2 s after the room
+//                            opened; silently detach the room socket and fail every reconnect
+//                            as a network error until S2. No traffic is queued by this hook.
+//   ORCA_TEST_BLACKOUT_ROOM_AFTER=N  restore the room N s BEFORE the direct path (0 by default).
+//                            For a 15 s blackout, N=12 brings the room back after 3 s.
+//                            Both hooks require ORCA_SESSION=1; BLACKOUT marks the test key.
 //   ORCA_TEST_NET_UPLINK=D+J[/S1-S2]  outgoing messages wait D ms plus a deterministic 0..J ms,
 //                            order kept (a slow, bursty uplink), from S1 to S2 s after the room
 //                            opened. Implies ORCA_TEST_NET_DELAY_MS.
@@ -157,6 +164,22 @@ int TestPads();
 bool TestSkipRender();
 std::optional<int> TestNetDelayMs();
 int TestNetJitterMs();
+struct TestBlackout
+{
+  int from_s = 0;
+  int to_s = 0;
+  int room_before_s = 0;
+  bool DirectBlocked(std::chrono::steady_clock::duration elapsed) const
+  {
+    return elapsed >= std::chrono::seconds(from_s) && elapsed < std::chrono::seconds(to_s);
+  }
+  bool RoomBlocked(std::chrono::steady_clock::duration elapsed) const
+  {
+    return elapsed >= std::chrono::seconds(from_s) &&
+           elapsed < std::chrono::seconds(to_s - room_before_s);
+  }
+};
+std::optional<TestBlackout> TestBlackoutConfig();
 struct TestNetSpikes
 {
   int gap_min_ms = 0;

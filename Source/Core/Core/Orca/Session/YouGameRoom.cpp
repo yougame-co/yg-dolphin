@@ -1277,6 +1277,14 @@ struct YouGameRoom::Impl
   // Test-only spikes (Orca::TestNetSpikesConfig): the current or next one, from the room's start.
   std::optional<TestNetSpikes> net_spikes = TestNetSpikesConfig();
   const Clock::time_point net_opened = Clock::now();
+  const std::optional<TestBlackout> blackout = TestBlackoutConfig();
+  bool blackout_started = false;
+  std::optional<Clock::time_point> blackout_opened;
+  bool RoomBlackedOut() const
+  {
+    return blackout_started && blackout && blackout_opened &&
+           blackout->RoomBlocked(Clock::now() - *blackout_opened);
+  }
   Clock::time_point spike_from = net_opened;
   Clock::time_point spike_to = net_opened;
   u32 spike_count = 0;
@@ -1770,6 +1778,9 @@ struct YouGameRoom::Impl
       o.ice = ice;
       o.ice_minted = ice_minted;
     }
+    if (blackout && blackout_opened)
+      o.blackout = std::pair(*blackout_opened + std::chrono::seconds(blackout->from_s),
+                             *blackout_opened + std::chrono::seconds(blackout->to_s));
     o.fresh_ice = [this] { return FreshIce(); };
     NOTICE_LOG_FMT(NETPLAY, "Orca room: direct links on{}{}{}", o.force.empty() ? "" : ", forced ",
                  o.force, o.ice.turn_host.empty() ? ", no TURN in the ticket" : "");
@@ -1959,7 +1970,8 @@ struct YouGameRoom::Impl
     }
     // No leave: the server must hold this seat and the host role. The room mirror and transport
     // remain live, and direct links retain their identity, queues and keys.
-    if (why == "test-drop" && Env("ORCA_TEST_DROP_SILENT") == "1")
+    if (why == "test-blackout" ||
+        (why == "test-drop" && Env("ORCA_TEST_DROP_SILENT") == "1"))
     {
       test_held_socket = std::move(ws);
       ws = std::make_unique<Common::WebSocket>();
@@ -2080,6 +2092,11 @@ struct YouGameRoom::Impl
       return;
     }
     RoomNotice("room-away self retry connecting " + ReconnectContext());
+    if (RoomBlackedOut())
+    {
+      ReconnectFailed("network (test-blackout)");
+      return;
+    }
     if (test_now)
       return;
     auto job = std::make_unique<ReconnectJob>();
@@ -2117,6 +2134,11 @@ struct YouGameRoom::Impl
                    std::chrono::milliseconds timeout, std::string* error,
                    const std::function<bool()>& cancelled)
   {
+    if (RoomBlackedOut())
+    {
+      *error = "network (test-blackout)";
+      return false;
+    }
     Common::HttpRequest escape;
     const std::string url = room_url + "/room/" + CodeForReconnect() + "?ticket=" +
                             escape.EscapeComponent(ticket);
@@ -2279,6 +2301,22 @@ struct YouGameRoom::Impl
       if (leave_requested)
       {
         End("You left the room", "");
+        break;
+      }
+      if (blackout && blackout_opened && !blackout_started &&
+          Clock::now() >= *blackout_opened + std::chrono::seconds(blackout->from_s) &&
+          Clock::now() < *blackout_opened + std::chrono::seconds(blackout->to_s))
+      {
+        blackout_started = true;
+        WARN_LOG_FMT(NETPLAY, "Orca room: TEST blackout {}-{} s, room returns {} s before direct",
+                     blackout->from_s, blackout->to_s, blackout->room_before_s);
+        dropped = true;
+        if (FriendsRecovery() && OnSocketClose(0, "test-blackout"))
+          continue;
+        // The hook can test queue drops too, without changing their recovery policy.
+        test_held_socket = std::move(ws);
+        ws = std::make_unique<Common::WebSocket>();
+        End("Lost the connection to the room (test blackout)");
         break;
       }
       if (test_drop.exchange(false))
@@ -3856,6 +3894,8 @@ struct YouGameRoom::Impl
       }
       // A room whose game is running is what a drop-in friend joins: no refusal.
       welcomed_at = Now();
+      if (!blackout_opened)
+        blackout_opened = welcomed_at;
       bool kept_session = true;
       if (recovering)
       {

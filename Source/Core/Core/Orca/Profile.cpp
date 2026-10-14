@@ -7,6 +7,7 @@
 #include "Core/Orca/Session/Online.h"
 
 #include <algorithm>
+#include <charconv>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -363,6 +364,30 @@ std::optional<int> TestNetDelayMs()
   return std::clamp(std::atoi(value.c_str()), 0, 1000);
 }
 
+std::optional<TestBlackout> TestBlackoutConfig()
+{
+  if (!SessionActive())
+    return std::nullopt;
+  const std::string value = GetEnv("ORCA_TEST_BLACKOUT");
+  const auto dash = value.find('-');
+  if (dash == std::string::npos)
+    return std::nullopt;
+  const auto number = [](std::string_view text, int* out) {
+    const auto parsed = std::from_chars(text.data(), text.data() + text.size(), *out);
+    return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() && *out >= 0;
+  };
+  TestBlackout blackout;
+  if (!number(std::string_view(value).substr(0, dash), &blackout.from_s) ||
+      !number(std::string_view(value).substr(dash + 1), &blackout.to_s) ||
+      blackout.to_s <= blackout.from_s)
+    return std::nullopt;
+  const std::string before = GetEnv("ORCA_TEST_BLACKOUT_ROOM_AFTER");
+  if (!before.empty() && (!number(before, &blackout.room_before_s) ||
+                          blackout.room_before_s > blackout.to_s - blackout.from_s))
+    return std::nullopt;
+  return blackout;
+}
+
 std::optional<TestNetSpikes> TestNetSpikesConfig()
 {
   const std::string value = GetEnv("ORCA_TEST_NET_SPIKES");
@@ -500,6 +525,7 @@ std::optional<u32> TestFxcFlags()
 bool TestOverridesActive()
 {
   return TestPads() != 0 || TestSkipRender() || TestNetDelayMs().has_value() ||
+         TestBlackoutConfig().has_value() ||
          TestSnapshotEvery() != 0 || TestFullSnapshots() || TestNoAfp() ||
          TestCpuCore().has_value() || !TestGateSpec().empty() || !TestQueueSpec().empty() ||
          !TestCharOrderSpec().empty() || !TestQueuePickSpec().empty();

@@ -545,3 +545,28 @@ TEST(OrcaDirectLink, AFailedIceMintBacksOff)
   EXPECT_EQ(mints[0].load(), 1);
   EXPECT_EQ(mints[1].load(), 1);
 }
+
+TEST(OrcaDirectLink, ScheduledBlackoutDropsBothWaysWithoutDeliveringLater)
+{
+  const auto from = std::chrono::steady_clock::now() + 2s;
+  const auto until = from + 2s;
+  Mesh mesh(2, [&](DirectOptions& options, int node) {
+    if (node == 0)
+      options.blackout = std::pair(from, until);
+  });
+  ASSERT_TRUE(mesh.WaitFor([&] { return mesh.AllUp(); }, 1500ms));
+  mesh.At(0).link->Send("before");
+  ASSERT_TRUE(mesh.WaitFor([&] { return Count(mesh.At(1).received, "before") == 1; }, 400ms));
+  ASSERT_TRUE(mesh.WaitFor([&] { return std::chrono::steady_clock::now() >= from + 50ms; }, 2s));
+  mesh.At(0).link->Send("dark-out");
+  mesh.At(1).link->Send("dark-in");
+  ASSERT_TRUE(mesh.WaitFor([&] { return std::chrono::steady_clock::now() >= until + 100ms; }, 3s));
+  mesh.At(0).link->Send("after-out");
+  mesh.At(1).link->Send("after-in");
+  ASSERT_TRUE(mesh.WaitFor([&] {
+    return Count(mesh.At(0).received, "after-in") == 1 &&
+           Count(mesh.At(1).received, "after-out") == 1;
+  }));
+  EXPECT_EQ(Count(mesh.At(0).received, "dark-in"), 0);
+  EXPECT_EQ(Count(mesh.At(1).received, "dark-out"), 0);
+}

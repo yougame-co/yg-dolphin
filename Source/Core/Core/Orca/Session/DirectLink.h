@@ -105,6 +105,9 @@ struct DirectOptions
   // this long (plus 0..jitter) on the way out and again on the way in.
   std::optional<int> net_delay_ms;
   int net_jitter_ms = 0;
+  // Scheduled packet drops, sharing the room's clock; independent of delay and test-direct.
+  std::optional<std::pair<std::chrono::steady_clock::time_point,
+                          std::chrono::steady_clock::time_point>> blackout;
 };
 
 // Options from the environment; nullopt when ORCA_DIRECT=0 (relay only).

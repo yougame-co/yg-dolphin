@@ -1138,10 +1138,18 @@ struct DirectLink::Impl
     return static_cast<int>(x % 100) < options.loss_percent;
   }
 
+  bool BlackedOut() const
+  {
+    if (!options.blackout)
+      return false;
+    const auto now = Clock::now();
+    return now >= options.blackout->first && now < options.blackout->second;
+  }
+
   void SendOn(Link& link, const std::vector<u8>& datagram)
   {
     // Under send_mutex, so the agent is alive.
-    if (!link.agent)
+    if (!link.agent || BlackedOut())
       return;
 #ifdef _WIN32
     // libjuice can't mark traffic on Windows (that would need qWAVE, as Slippi uses).
@@ -1157,7 +1165,7 @@ struct DirectLink::Impl
     if (payload.size() > MAX_PAYLOAD)
       return;
     std::lock_guard lock(send_mutex);
-    if (stopped)
+    if (stopped || BlackedOut())
       return;
     for (const std::shared_ptr<Link>& link : sending)
     {
@@ -1187,6 +1195,8 @@ struct DirectLink::Impl
   std::vector<Received> Receive()
   {
     std::lock_guard lock(inbox_mutex);
+    if (BlackedOut())
+      inbox.clear();
     std::vector<Received> out(std::make_move_iterator(inbox.begin()),
                               std::make_move_iterator(inbox.end()));
     inbox.clear();
@@ -1232,7 +1242,7 @@ struct DirectLink::Impl
 
   void OnDatagram(Link& link, const u8* data, size_t size)
   {
-    if (block_in)
+    if (block_in || BlackedOut())
       return;
     if (options.net_delay_ms)
     {
@@ -1254,6 +1264,8 @@ struct DirectLink::Impl
 
   void Deliver(Link& link, const u8* data, size_t size)
   {
+    if (BlackedOut())
+      return;
     u8 kind = 0;
     auto payload = link.Open(data, size, &kind);
     if (!payload || kind != KIND_PACKET)

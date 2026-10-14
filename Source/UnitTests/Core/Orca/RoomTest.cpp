@@ -2411,6 +2411,49 @@ TEST_F(OrcaRoomRuntime, UpgradeFailurePathsNeverLogTicketUrls)
   EXPECT_TRUE(saw_failure);
 }
 
+TEST(OrcaRoomBlackout, StrictParsingWindowAndInertness)
+{
+  ScopedEnv session("ORCA_SESSION", "1");
+  ScopedEnv before("ORCA_TEST_BLACKOUT_ROOM_AFTER", nullptr);
+  ScopedEnv unset("ORCA_TEST_BLACKOUT", nullptr);
+  EXPECT_FALSE(Orca::TestBlackoutConfig());
+  {
+    ScopedEnv variant_only("ORCA_TEST_BLACKOUT_ROOM_AFTER", "12");
+    EXPECT_FALSE(Orca::TestBlackoutConfig());
+  }
+  for (const char* invalid : {"", "-1-15", "15-15", "15-3", "3-15junk", "3-15-20",
+                              "0-2147483648", "a-b"})
+  {
+    ScopedEnv value("ORCA_TEST_BLACKOUT", invalid);
+    EXPECT_FALSE(Orca::TestBlackoutConfig()) << invalid;
+  }
+  ScopedEnv value("ORCA_TEST_BLACKOUT", "75-90");
+  const auto normal = Orca::TestBlackoutConfig();
+  ASSERT_TRUE(normal);
+  EXPECT_FALSE(normal->DirectBlocked(74999ms));
+  EXPECT_TRUE(normal->DirectBlocked(75s));
+  EXPECT_TRUE(normal->RoomBlocked(89999ms));
+  EXPECT_FALSE(normal->DirectBlocked(90s));
+  EXPECT_TRUE(Orca::TestOverridesActive());
+  {
+    ScopedEnv variant("ORCA_TEST_BLACKOUT_ROOM_AFTER", "12");
+    const auto race = Orca::TestBlackoutConfig();
+    ASSERT_TRUE(race);
+    EXPECT_TRUE(race->RoomBlocked(77999ms));
+    EXPECT_FALSE(race->RoomBlocked(78s));
+    EXPECT_TRUE(race->DirectBlocked(89s));
+    EXPECT_FALSE(race->DirectBlocked(90s));
+  }
+  for (const char* invalid : {"-1", "16", "12junk", "2147483648"})
+  {
+    ScopedEnv variant("ORCA_TEST_BLACKOUT_ROOM_AFTER", invalid);
+    EXPECT_FALSE(Orca::TestBlackoutConfig());
+  }
+  ScopedEnv inactive("ORCA_SESSION", "0");
+  EXPECT_FALSE(Orca::TestBlackoutConfig());
+  EXPECT_FALSE(Orca::TestOverridesActive());
+}
+
 TEST_F(OrcaRoomRuntime, QuickBackAndSameIdJoinGrantHoldBeforeAnyStall)
 {
   for (const char* event : {"back", "join"})
@@ -2501,6 +2544,47 @@ TEST_F(OrcaRoomRuntime, QuickBackPreservesTheOriginalHoldExpiry)
   EXPECT_EQ(events[0].reason, "room-hold-expired");
   EXPECT_EQ(room->Seat(), 1);
   EXPECT_EQ(room->Code(), code);
+}
+
+TEST_F(OrcaRoomRuntime, BlackoutFailsUpgradesSilentlyThenRecovers)
+{
+  ScopedEnv active("ORCA_SESSION", "1");
+  ScopedEnv blackout("ORCA_TEST_BLACKOUT", "1-4");
+  ScopedEnv before("ORCA_TEST_BLACKOUT_ROOM_AFTER", nullptr);
+  const std::string code = "blackout";
+  auto room = Open(code);
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 1 && room->RoundTripMs() >= 0; }));
+  room->TakePeerEvents();
+  std::this_thread::sleep_for(2200ms);
+  const auto dark = Request("/state/" + code);
+  EXPECT_EQ(dark.get("connects").get<double>(), 1);
+  EXPECT_EQ(dark.get("tickets").get<double>(), 1);
+  EXPECT_EQ(dark.get("closes").get<double>(), 0); // no close frame, no phantom upgrade
+  EXPECT_FALSE(Sent(code, "leave"));
+  ASSERT_TRUE(Wait([&] { return Connections(code) == 2 && room->RoundTripMs() >= 0; }, 6s));
+  std::this_thread::sleep_for(100ms);
+  EXPECT_TRUE(room->TakePeerEvents().empty());
+  EXPECT_EQ(room->Code(), code);
+  EXPECT_EQ(room->GetState(), RoomState::Waiting);
+}
+
+TEST_F(OrcaRoomRuntime, BlackoutRoomReturnsBeforeTheDirectWindowEnds)
+{
+  ScopedEnv active("ORCA_SESSION", "1");
+  ScopedEnv blackout("ORCA_TEST_BLACKOUT", "1-16");
+  ScopedEnv before("ORCA_TEST_BLACKOUT_ROOM_AFTER", "12");
+  const std::string code = "blackrace";
+  const auto opened = RoomClock::now();
+  auto room = Open(code);
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 1 && room->RoundTripMs() >= 0; }));
+  room->TakePeerEvents();
+  ASSERT_TRUE(Wait([&] { return Connections(code) == 2; }, 8s));
+  EXPECT_GE(RoomClock::now() - opened, 4s);
+  EXPECT_LT(RoomClock::now() - opened, 12s);
+  std::this_thread::sleep_for(100ms);
+  EXPECT_TRUE(room->TakePeerEvents().empty());
+  EXPECT_EQ(room->Code(), code);
+  EXPECT_EQ(room->Seat(), 1);
 }
 
 TEST_F(OrcaRoomRuntime, ReturningFriendUsesActualHostCurrentMatchKeyframe)
