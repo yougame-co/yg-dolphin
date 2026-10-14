@@ -2618,6 +2618,12 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.43
+
+- **Saved replays.** Matches in ranked and tournament rooms can be saved as replays.
+- **A warning before restarting.** If a friend's join needs to restart your pack's game, you get
+  a three-second warning that unsaved progress will be lost.
+
 ### 0.3.42
 
 - **YG Baiji is now YG Dolphin.** The window, the Mac menu and the messages use the new name.
