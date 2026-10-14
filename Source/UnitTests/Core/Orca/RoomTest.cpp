@@ -15,10 +15,24 @@
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
+#include "Common/HttpRequest.h"
+#include "Common/WebSocket.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Session/RoomResilience.h"
 #include "Core/Orca/Session/YouGameRoom.h"
 #include "Core/Orca/Status.h"
+
+namespace Rollback
+{
+Orca::Net::Step StepSession(Orca::Net::Session& session, Orca::Net::Game& game, int completed_frame,
+                            const std::function<Orca::Net::Pad()>& sample_local,
+                            const std::function<bool()>& stopping,
+                            std::chrono::microseconds stall_wait,
+                            std::chrono::milliseconds give_up_after = {}, bool* gave_up = nullptr,
+                            std::chrono::nanoseconds* waited = nullptr,
+                            const std::function<bool(std::chrono::steady_clock::time_point)>&
+                                hold_silence = {});
+}
 
 using namespace Orca::Net;
 
@@ -154,8 +168,10 @@ std::string RosterMessage(const char* type, bool joining = true, bool include_pe
   const int local_slot = joining ? 1 : 0;
   const int peer_slot = joining ? 0 : 1;
   return fmt::format(R"({{"t":"{}","me":"me","host":"{}","lifecycle":"game",
-      "player":{{"id":"peer"}},"participants":[{{"connectionId":"me","slot":{},"name":"Me"}}{}]}})",
-                     type, host, local_slot,
+      "player":{{"id":"peer"}},"players":[{{"id":"me","name":"Me"}}{}],"participants":[{{"connectionId":"me","slot":{},"name":"Me"}}{}]}})",
+                     type, host,
+                     include_peer ? std::string(R"(,{"id":"peer","name":"Friend"})") : "",
+                     local_slot,
                      include_peer ? fmt::format(R"(,{{"connectionId":"peer","slot":{},"name":"Friend"}})", peer_slot) : "");
 }
 
@@ -202,7 +218,7 @@ TEST(OrcaRoomResilience, AwayWithDirectInputsKeepsPeerAndBackDoesNotAnnounceAgai
   ASSERT_EQ(trace[9].packets.size(), 1u);
 }
 
-TEST(OrcaRoomResilience, SilentDirectInputsSuspendOnlyAfterExistingTimeout)
+TEST(OrcaRoomResilience, SilentDirectInputsKeepTheSessionUntilTheRoomVerdict)
 {
   const auto trace = TraceRoomForTest(TraceOptions(), {
       {RK::Message, 0, RosterMessage("welcome")}, {RK::Message, 0, PeerHello()},
@@ -212,17 +228,13 @@ TEST(OrcaRoomResilience, SilentDirectInputsSuspendOnlyAfterExistingTimeout)
       {RK::Message, 15000, RosterMessage("back")}, {RK::Message, 15001, PeerHello()},
   });
   EXPECT_TRUE(trace[4].events.empty());
-  ASSERT_EQ(trace[5].events.size(), 1u);
-  EXPECT_EQ(trace[5].events[0].kind, PeerEvent::Kind::Left);
-  EXPECT_EQ(trace[5].events[0].reason, "room-away-silent");
-  EXPECT_TRUE(trace[5].events[0].host);
+  EXPECT_TRUE(trace[5].events.empty());
   EXPECT_TRUE(trace[5].host_away_until);
   EXPECT_EQ(trace[5].state, RoomState::Waiting);
   EXPECT_TRUE(trace[6].events.empty());
-  EXPECT_TRUE(trace[7].packets.empty());
+  EXPECT_EQ(trace[7].packets.size(), 1u);
   EXPECT_FALSE(trace[8].host_away_until);
-  ASSERT_EQ(trace[9].events.size(), 1u);
-  EXPECT_EQ(trace[9].events[0].kind, PeerEvent::Kind::Arrived);
+  EXPECT_TRUE(trace[9].events.empty());
 }
 
 TEST(OrcaRoomResilience, RealLeaveEndsEvenWhenDirectInputIsLive)
@@ -297,7 +309,7 @@ TEST(OrcaRoomResilience, OwnSocketReattachesWithoutResettingALivePeer)
 
 TEST(OrcaRoomResilience, FinalSocketClosesEndButRelayOnlyRoomsCanRecoverTheirHeldSeat)
 {
-  for (unsigned code : {4000u, 4004u})
+  for (unsigned code : {1008u, 4000u, 4001u, 4003u, 4004u})
   {
     const auto trace = TraceRoomForTest(TraceOptions(), {
         {RK::Message, 0, RosterMessage("welcome")}, {RK::Message, 0, PeerHello()},
@@ -371,7 +383,8 @@ TEST(OrcaRoomResilience, WaitingJoinerRequestsResumeOnBackAndReceivesAKeyframe)
       {RK::Message, 14004, fmt::format(R"({{"t":"msg","from":"peer","d":{{"k":"kf",
           "f":300,"n":1,"id":"replay-300-01234567","x":"0123456789abcdef","key":"{}"}}}})", std::string(64, '0'))},
   });
-  EXPECT_TRUE(trace[5].events.empty());
+  ASSERT_EQ(trace[5].events.size(), 1u);
+  EXPECT_EQ(trace[5].events[0].reason, "room-resume");
   const auto hello = [](const RoomTestSnapshot& snapshot) {
     for (const std::string& text : snapshot.sent)
     {
@@ -387,8 +400,7 @@ TEST(OrcaRoomResilience, WaitingJoinerRequestsResumeOnBackAndReceivesAKeyframe)
   EXPECT_FALSE(hello(trace[7]).get("r").evaluate_as_boolean());
   ASSERT_EQ(trace[8].events.size(), 1u);
   EXPECT_EQ(trace[8].events[0].kind, PeerEvent::Kind::Arrived);
-  EXPECT_TRUE(hello(trace[9]).get("resume").evaluate_as_boolean());
-  EXPECT_TRUE(hello(trace[9]).get("r").evaluate_as_boolean());
+  EXPECT_TRUE(hello(trace[9]).is<picojson::null>()); // next resume respects its backoff
   ASSERT_EQ(trace[10].events.size(), 1u);
   EXPECT_EQ(trace[10].events[0].kind, PeerEvent::Kind::Keyframe);
   EXPECT_EQ(trace[10].events[0].keyframe.id, "replay-300-01234567");
@@ -404,7 +416,7 @@ TEST(OrcaRoomResilience, ReconnectDeadlineAndInputTimeoutDoNotRestartOnRetry)
   PeerRoomPresence peer;
   peer.Away(start);
   EXPECT_EQ(peer.Check(start + 9999ms, start), RoomLoss::None);
-  EXPECT_EQ(peer.Check(start + 10s, start), RoomLoss::InputSilent);
+  EXPECT_EQ(peer.Check(start + 10s, start), RoomLoss::None);
   EXPECT_EQ(recovery.Check(start + 89999ms), RoomLoss::None);
   EXPECT_EQ(recovery.Check(start + 90s), RoomLoss::HoldExpired);
 }
@@ -414,7 +426,7 @@ TEST(OrcaRoomResilience, JoinerWaitsForBackThenUsesFreshDropInBeforeTheHoldExpir
   const auto start = RoomClock::time_point{};
   PeerRoomPresence host;
   host.Away(start);
-  EXPECT_EQ(host.Check(start + 10s, start), RoomLoss::InputSilent);
+  EXPECT_EQ(host.Check(start + 10s, start), RoomLoss::None);
   host.suspended = true;
   HostRoomWait wait;
   ASSERT_TRUE(wait.Start(start + 10s, host.Deadline()));
@@ -1542,12 +1554,12 @@ TEST(OrcaRoomResilience, SeatInUseRetriesWithBoundedExponentialBackoff)
   const auto trace = TraceRoomForTest(TraceOptions(), {
       {RK::Message, 0, RosterMessage("welcome")}, {RK::Message, 0, PeerHello()},
       {RK::SocketClose, 1000, "WebSocket closed by the server", 1013},
-      {RK::PollReconnect, 1500}, {RK::ConnectFailure, 1500, "WebSocket upgrade failed (HTTP 409)"},
+      {RK::PollReconnect, 1500}, {RK::ConnectFailure, 1500, "WebSocket upgrade failed (HTTP 409) seat in use"},
       {RK::PollReconnect, 1999}, {RK::PollReconnect, 2000},
-      {RK::ConnectFailure, 2000, "WebSocket upgrade failed (HTTP 409)"},
-      {RK::PollReconnect, 3000}, {RK::ConnectFailure, 3000, "WebSocket upgrade failed (HTTP 409)"},
-      {RK::PollReconnect, 5000}, {RK::ConnectFailure, 5000, "WebSocket upgrade failed (HTTP 409)"},
-      {RK::PollReconnect, 9000}, {RK::ConnectFailure, 9000, "WebSocket upgrade failed (HTTP 409)"},
+      {RK::ConnectFailure, 2000, "WebSocket upgrade failed (HTTP 409) seat in use"},
+      {RK::PollReconnect, 3000}, {RK::ConnectFailure, 3000, "WebSocket upgrade failed (HTTP 409) seat in use"},
+      {RK::PollReconnect, 5000}, {RK::ConnectFailure, 5000, "WebSocket upgrade failed (HTTP 409) seat in use"},
+      {RK::PollReconnect, 9000}, {RK::ConnectFailure, 9000, "WebSocket upgrade failed (HTTP 409) seat in use"},
       {RK::Message, 9500, RosterMessage("welcome")},
   });
   const auto at = [](int ms) { return RoomClock::time_point{} + std::chrono::milliseconds(ms); };
@@ -1567,7 +1579,7 @@ TEST(OrcaRoomResilience, SeatInUseRetriesWithBoundedExponentialBackoff)
 TEST(OrcaRoomResilience, InitialSeatInUseRefusalRetriesButOtherRefusalsRemainFinal)
 {
   const auto held = TraceRoomForTest(TraceOptions(), {
-      {RK::InitialConnectFailure, 0, "WebSocket upgrade failed (HTTP 409)"},
+      {RK::InitialConnectFailure, 0, "WebSocket upgrade failed (HTTP 409) seat in use"},
       {RK::PollReconnect, 500}, {RK::Message, 1000, RosterMessage("welcome")},
   });
   EXPECT_TRUE(held[0].reconnect_started);
@@ -1586,7 +1598,7 @@ TEST(OrcaRoomResilience, ReconnectRetriesNeverExtendTheHoldAndLogTheFinalOutcome
   const auto trace = TraceRoomForTest(TraceOptions(), {
       {RK::Message, 0, RosterMessage("welcome")}, {RK::Message, 0, PeerHello()},
       {RK::SocketClose, 1000, "WebSocket closed by the server", 1013},
-      {RK::ConnectFailure, 89000, "WebSocket upgrade failed (HTTP 409)"},
+      {RK::ConnectFailure, 89000, "WebSocket upgrade failed (HTTP 409) seat in use"},
       {RK::PollReconnect, 90999}, {RK::PollReconnect, 91000}, {RK::PollReconnect, 92000},
   });
   EXPECT_EQ(trace[4].state, RoomState::Waiting);
@@ -1609,8 +1621,7 @@ TEST(OrcaRoomResilience, OwnRoomLossWithSilentInputsWaitsForFreshDropIn)
       {RK::Message, 14002, PeerHello()},
   });
   EXPECT_TRUE(trace[4].events.empty());
-  ASSERT_EQ(trace[5].events.size(), 1u);
-  EXPECT_EQ(trace[5].events[0].reason, "room-away-silent");
+  EXPECT_TRUE(trace[5].events.empty());
   EXPECT_TRUE(trace[5].host_away_until);
   EXPECT_FALSE(trace[8].reconnecting);
   ASSERT_EQ(trace[10].events.size(), 1u);
@@ -1659,17 +1670,20 @@ TEST(OrcaRoomResilience, RecoveryWelcomeClearsAMissedBackAndHonorsARealLeave)
 
 TEST(OrcaRoomResilience, RecoveryWelcomeDoesNotClearAPeerStillAway)
 {
-  auto welcome = RosterMessage("welcome");
-  welcome.replace(welcome.find("\"name\":\"Friend\""), std::string("\"name\":\"Friend\"").size(),
-                  "\"name\":\"Friend\",\"away\":true");
+  picojson::value server;
+  ASSERT_TRUE(picojson::parse(server, RosterMessage("welcome")).empty());
+  server.get<picojson::object>()["players"].get<picojson::array>()[1].get<picojson::object>()["away"] =
+      picojson::value(true);
+  const auto welcome = server.serialize();
   const auto trace = TraceRoomForTest(TraceOptions(), {
       {RK::Message, 0, RosterMessage("welcome")}, {RK::Message, 0, PeerHello()},
       {RK::Message, 1000, RosterMessage("away")}, {RK::SocketClose, 1001},
-      {RK::Message, 2000, welcome}, {RK::Tick, 11000},
+      {RK::Message, 2000, welcome}, {RK::Tick, 11000}, {RK::Tick, 91000},
   });
   EXPECT_TRUE(trace[4].host_away_until);
-  ASSERT_EQ(trace[5].events.size(), 1u);
-  EXPECT_EQ(trace[5].events[0].reason, "room-away-silent");
+  EXPECT_TRUE(trace[5].events.empty());
+  ASSERT_EQ(trace[6].events.size(), 1u);
+  EXPECT_EQ(trace[6].events[0].reason, "room-hold-expired");
 }
 
 
@@ -1684,4 +1698,545 @@ TEST(OrcaRoomResilience, OldSessionStalledNoticeCrossingBackKeepsTheRoom)
   EXPECT_EQ(trace.back().state, RoomState::Waiting);
   ASSERT_EQ(trace.back().events.size(), 1u);
   EXPECT_EQ(trace.back().events[0].reason, "room-away-silent");
+}
+
+
+namespace
+{
+class OrcaRoomRuntime : public testing::Test
+{
+protected:
+  void SetUp() override
+  {
+    const char* fixture = std::getenv("ORCA_TEST_ROOM_SERVER");
+    if (!fixture)
+      GTEST_SKIP() << "run through Tools/orca/room-fix-tests.py (loopback fixtures)";
+    url = fixture;
+    ASSERT_TRUE(url.starts_with("http://127.0.0.1:"));
+    for (const auto& [name, value] : std::vector<std::pair<const char*, std::string>>{
+             {"ORCA_SITE", url}, {"ORCA_TEST_DEV_GAME", "room-fixture"},
+             {"ORCA_DIRECT", "0"}, {"ORCA_TEST_ROOM_DROP", "1"}})
+      vars.push_back(std::make_unique<ScopedEnv>(name, value.c_str()));
+  }
+  picojson::value Request(const std::string& path, const std::string& body = "")
+  {
+    Common::HttpRequest http(2s);
+    const auto reply = body.empty() ? http.Get(url + path) : http.Post(url + path, body);
+    EXPECT_TRUE(reply);
+    picojson::value value;
+    if (reply)
+      EXPECT_TRUE(picojson::parse(value, std::string(reply->begin(), reply->end())).empty());
+    return value;
+  }
+  std::unique_ptr<YouGameRoom> Open(const std::string& code, const std::string& config = "{}",
+                                    bool joining = true, bool friends = true,
+                                    bool recovery_enabled = true)
+  {
+    Request("/configure/" + code, config);
+    auto options = TraceOptions(joining);
+    options.room_code = code;
+    options.friends_room = friends;
+    options.recovery_enabled = recovery_enabled;
+    return std::make_unique<YouGameRoom>(options);
+  }
+  bool Wait(const std::function<bool()>& predicate, std::chrono::milliseconds limit = 6s)
+  {
+    const auto until = RoomClock::now() + limit;
+    while (RoomClock::now() < until)
+    {
+      if (predicate())
+        return true;
+      std::this_thread::sleep_for(10ms);
+    }
+    return predicate();
+  }
+  int Connections(const std::string& code)
+  {
+    return static_cast<int>(Request("/state/" + code).get("connects").get<double>());
+  }
+  bool Sent(const std::string& code, const std::string& type, const std::string& kind = "")
+  {
+    const auto value = Request("/state/" + code);
+    for (const auto& m : value.get("messages").get<picojson::array>())
+    {
+      if (m.get("t").to_str() == type && (kind.empty() || m.get("d").get("k").to_str() == kind))
+        return true;
+    }
+    return false;
+  }
+  void Action(const std::string& code, const std::string& body) { Request("/action/" + code, body); }
+  std::string url;
+  std::vector<std::unique_ptr<ScopedEnv>> vars;
+};
+}  // namespace
+
+TEST_F(OrcaRoomRuntime, RecoveredSocketUsesTheRealGoodbyeTeardown)
+{
+  const std::string code = "teardown";
+  auto room = Open(code);
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 1 && room->RoundTripMs() >= 0; }));
+  u32 before;
+  room->RoundTripMs(&before);
+  room->TestDropConnection();
+  ASSERT_TRUE(Wait([&] {
+    u32 sequence;
+    room->RoundTripMs(&sequence);
+    return sequence > before && Connections(code) == 2;
+  }));
+  room->SetLeaveReason("desync");
+  Action(code, R"({"message":{"t":"msg","from":"peer","d":{"k":"drop","r":"desync"}}})");
+  ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }));
+  // Observe Run's teardown before Leave() could turn it into a user quit.
+  ASSERT_TRUE(Wait([&] { return Sent(code, "leave"); }));
+  EXPECT_TRUE(Sent(code, "msg", "bye"));
+  EXPECT_EQ(room->ErrorCode(), "desync");
+}
+
+TEST_F(OrcaRoomRuntime, FinalCloseCodesReachRunAndNeverReconnect)
+{
+  for (const auto& [close, reason] : std::vector<std::pair<int, std::string>>{
+           {1008, "message-limit"}, {4001, "kicked"}, {4003, "locked"}})
+  {
+    const std::string code = "final" + std::to_string(close);
+    auto room = Open(code);
+    ASSERT_TRUE(Wait([&] { return room->Seat() == 1; }));
+    Action(code, fmt::format(R"({{"close":{}}})", close));
+    ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }));
+    EXPECT_EQ(room->ErrorCode(), reason);
+    room->Leave();
+    EXPECT_EQ(Connections(code), 1);
+  }
+}
+
+TEST_F(OrcaRoomRuntime, WelcomeDoesNotResetTheReconnectBudget)
+{
+  const std::string code = "budget44";
+  auto room = Open(code);
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 1 && room->RoundTripMs() >= 0; }));
+  for (int i = 0; i < 6; ++i)
+  {
+    u32 before;
+    room->RoundTripMs(&before);
+    room->TestDropConnection();
+    ASSERT_TRUE(Wait([&] {
+      u32 now;
+      room->RoundTripMs(&now);
+      return now > before && Connections(code) == i + 2;
+    }));
+  }
+  room->TestDropConnection();
+  ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }));
+  EXPECT_EQ(room->ErrorCode(), "reconnect-limit");
+  EXPECT_EQ(Connections(code), 7);
+}
+
+TEST_F(OrcaRoomRuntime, FirstUpgradeFullAndCompleteAreImmediateRefusals)
+{
+  for (const auto& [code, body, result] : std::vector<std::tuple<std::string, std::string, std::string>>{
+           {"fullroom", "Room is full", "room_full"},
+           {"complete", "This match is complete", "match-over"}})
+  {
+    auto room = Open(code, fmt::format(R"({{"refuse":"{}"}})", body));
+    ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }, 1s));
+    EXPECT_EQ(room->ErrorCode(), result);
+    EXPECT_EQ(Connections(code), 1);
+  }
+}
+
+TEST_F(OrcaRoomRuntime, FirstSeatInUseRetriesThreeTimesThenEnds)
+{
+  auto room = Open("seatbusy", R"({"refuse":"seat in use"})");
+  ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }, 7s));
+  EXPECT_EQ(room->ErrorCode(), "seat-in-use");
+  EXPECT_EQ(Connections("seatbusy"), 4);
+  auto recovered = Open("seatback", R"({"refuse":"seat in use","refuse_count":2})");
+  ASSERT_TRUE(Wait([&] { return recovered->Seat() == 1; }));
+  EXPECT_EQ(Connections("seatback"), 3);
+}
+
+TEST_F(OrcaRoomRuntime, QueueRoomsRetainTheirOriginalDropAndHelloBehavior)
+{
+  for (const std::string queue : {"ranked", "casual"})
+  {
+    const std::string code = queue + "44";
+    auto room = Open(code, fmt::format(R"({{"queue":"{}"}})", queue), true, false);
+    ASSERT_TRUE(Wait([&] { return room->Seat() == 1 && room->RoundTripMs() >= 0; }));
+    const auto messages = Request("/state/" + code).get("messages");
+    for (const auto& message : messages.get<picojson::array>())
+    {
+      if (message.get("d").is<picojson::object>() &&
+          message.get("d").get("k").to_str() == "hello")
+        EXPECT_TRUE(message.get("d").get("run").is<picojson::null>());
+    }
+    room->TestDropConnection();
+    ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }));
+    EXPECT_EQ(Connections(code), 1);
+  }
+}
+
+TEST_F(OrcaRoomRuntime, DropHookIsInertWithoutItsOptIn)
+{
+  ScopedEnv disabled("ORCA_TEST_ROOM_DROP", nullptr);
+  auto room = Open("inert444");
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 1; }));
+  room->TestDropConnection();
+  std::this_thread::sleep_for(700ms);
+  EXPECT_EQ(room->GetState(), RoomState::Waiting);
+  EXPECT_EQ(Connections("inert444"), 1);
+}
+
+TEST_F(OrcaRoomRuntime, QuitCancelsAnUpgradeAndAttemptsLeaveWithTheCachedTicket)
+{
+  const std::string code = "quitmid4";
+  auto room = Open(code);
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 1; }));
+  Action(code, R"({"upgrade_delay":6})");
+  room->TestDropConnection();
+  ASSERT_TRUE(Wait([&] { return Connections(code) >= 2; }));
+  Action(code, R"({"upgrade_delay":0})");
+  const auto start = RoomClock::now();
+  room->Leave();
+  EXPECT_LT(RoomClock::now() - start, 3s);
+  EXPECT_TRUE(Sent(code, "leave"));
+}
+
+TEST_F(OrcaRoomRuntime, QuitCancelsATicketRefreshAndAttemptsLeave)
+{
+  const std::string code = "quittkt4";
+  auto room = Open(code);
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 1; }));
+  Action(code, R"({"ticket_delay":6})");
+  room->TestDropConnection();
+  ASSERT_TRUE(Wait([&] { return Request("/state/" + code).get("tickets").get<double>() >= 2; }));
+  const auto start = RoomClock::now();
+  room->Leave();
+  EXPECT_LT(RoomClock::now() - start, 3s);
+  EXPECT_TRUE(Sent(code, "leave"));
+}
+
+TEST_F(OrcaRoomRuntime, ResumeRetriesUntilAKeyframeArrives)
+{
+  const std::string code = "resume44";
+  auto room = Open(code);
+  ASSERT_TRUE(Wait([&] { return Sent(code, "msg", "hello"); }));
+  room->TakePeerEvents();
+  const auto now = RoomClock::now();
+  ASSERT_TRUE(room->HoldInputSilence(now, now + 10s));
+  room->RetryPeer(0);
+  ASSERT_TRUE(Wait([&] {
+    int resumes = 0;
+    const auto messages = Request("/state/" + code).get("messages");
+    for (const auto& m : messages.get<picojson::array>())
+      if (m.get("d").is<picojson::object>())
+        resumes += m.get("d").get("resume").evaluate_as_boolean();
+    return resumes >= 3;
+  }));
+  // A host's hello does not acknowledge the resync; only the keyframe does.
+  Action(code, R"({"message":{"t":"msg","from":"peer","d":{"k":"hello","c":"test","h":true,"r":true}}})");
+  KeyframeInfo keyframe;
+  keyframe.id = "replay-300-01234567";
+  keyframe.frame = 300;
+  keyframe.size = 1;
+  keyframe.hash = "0123456789abcdef";
+  keyframe.key = std::string(64, '0');
+  Action(code, fmt::format(R"({{"message":{{"t":"msg","from":"peer","d":{}}}}})",
+                           picojson::value(KeyframeOfferToJson(keyframe)).serialize()));
+  ASSERT_TRUE(Wait([&] {
+    for (const auto& event : room->TakePeerEvents())
+      if (event.kind == PeerEvent::Kind::Keyframe)
+        return true;
+    return false;
+  }));
+  EXPECT_EQ(room->Code(), code);
+}
+
+TEST(OrcaRoomResilience, ReconnectBudgetRollsAfterFiveMinutesAndJitterIsBounded)
+{
+  RoomReconnectBudget budget;
+  const auto start = RoomClock::time_point{};
+  for (int i = 0; i < 6; ++i)
+    EXPECT_TRUE(budget.Take(start + std::chrono::seconds(i)));
+  EXPECT_FALSE(budget.Take(start + 299s));
+  EXPECT_TRUE(budget.Take(start + 300s));
+  EXPECT_FALSE(budget.Take(start + 300s));
+  for (unsigned sample = 0; sample < 61; ++sample)
+  {
+    const auto delay = RoomReconnect::Jitter(500ms, sample);
+    EXPECT_GE(delay, 350ms);
+    EXPECT_LE(delay, 650ms);
+  }
+  EXPECT_EQ(RoomReconnect::Jitter(500ms, 0), 350ms);
+  EXPECT_EQ(RoomReconnect::Jitter(500ms, 60), 650ms);
+}
+
+
+namespace
+{
+class RoomHashGame : public Game
+{
+public:
+  bool Save(int frame) override { snapshots[frame] = hash; return true; }
+  bool Load(int frame) override
+  {
+    if (!snapshots.contains(frame))
+      return false;
+    hash = snapshots[frame];
+    return true;
+  }
+  void SetPads(int frame, const Pads& input) override { next = frame; pads = input; }
+  void SetResimulating(bool) override {}
+  std::optional<u64> SnapshotChecksum(int frame) override
+  {
+    return snapshots.contains(frame) ? std::optional(snapshots[frame]) : std::nullopt;
+  }
+  void ResetPacing() override {}
+  int Run()
+  {
+    history[next] = hash;
+    hash = (hash ^ static_cast<u64>(next)) * 1099511628211ULL;
+    for (const auto& pad : pads)
+      for (const auto byte : pad)
+        hash = (hash ^ byte) * 1099511628211ULL;
+    return next;
+  }
+  int next = 0;
+  u64 hash = 1469598103934665603ULL;
+  Pads pads{};
+  std::map<int, u64> snapshots, history;
+};
+
+Packet NeutralFrames(int first, int count)
+{
+  Packet packet;
+  packet.seat = 0;
+  packet.first_frame = first;
+  packet.current_frame = first + count;
+  packet.pads.resize(count);
+  return packet;
+}
+
+std::string InjectPacket(const Packet& packet)
+{
+  return fmt::format(R"({{"message":{{"t":"msg","from":"peer","d":{}}}}})", EncodePacket(packet));
+}
+
+Config RoomSessionConfig()
+{
+  Config config;
+  config.local_seat = 1;
+  config.time_sync = false;
+  config.fixed_delay = 2;
+  config.max_delay = 2;
+  config.checksum_every = 1000000;
+  return config;
+}
+}  // namespace
+
+TEST_F(OrcaRoomRuntime, HealthyRealSessionHashesMatchWithRecoveryDisabled)
+{
+  const auto run = [&](bool recovery) {
+    const std::string code = recovery ? "healthy1" : "healthy0";
+    auto room = Open(code, "{}", true, true, recovery);
+    EXPECT_TRUE(Wait([&] { return room->Seat() == 1 && room->RoundTripMs() >= 0; }));
+    struct BufferedRoom : Transport
+    {
+      explicit BufferedRoom(YouGameRoom& r) : room(r) {}
+      void Send(const Packet& p) override { room.Send(p); }
+      std::vector<Packet> Receive() override
+      {
+        auto next = room.Receive();
+        pending.insert(pending.end(), next.begin(), next.end());
+        return std::exchange(pending, {});
+      }
+      bool Connected() const override { return room.Connected(); }
+      YouGameRoom& room;
+      std::vector<Packet> pending;
+    } transport(*room);
+    RoomHashGame game;
+    Session session(RoomSessionConfig(), game, transport);
+    int completed = -1;
+    for (int frame = 0; frame < 200; ++frame)
+    {
+      Packet peer = NeutralFrames(frame, 1);
+      if (frame >= 2)
+        peer.pads[0][0] = static_cast<u8>((frame - 2) % 17);
+      Action(code, InjectPacket(peer));
+      EXPECT_TRUE(Wait([&] {
+        auto packets = room->Receive();
+        transport.pending.insert(transport.pending.end(), packets.begin(), packets.end());
+        return !transport.pending.empty();
+      }));
+      const auto start = RoomClock::now();
+      const auto step = Rollback::StepSession(session, game, completed,
+          [&] { return Pad{static_cast<u8>(frame % 13)}; }, [] { return false; }, 1ms, 10s,
+          nullptr, nullptr, [&](RoomClock::time_point now) {
+            return room->HoldInputSilence(start, now);
+          });
+      EXPECT_EQ(step.kind, StepKind::Run) << session.Error();
+      if (step.kind != StepKind::Run)
+        break;
+      completed = game.Run();
+    }
+    EXPECT_TRUE(session.Error().empty());
+    EXPECT_EQ(game.history.size(), 200u);
+    return game.history;
+  };
+  EXPECT_EQ(run(true), run(false));
+}
+
+TEST_F(OrcaRoomRuntime, BothSilentForFifteenSecondsKeepTheRealSessionAndRoom)
+{
+  const std::string code = "blip15s4";
+  const auto recovery = NeutralFrames(0, 40);
+  auto room = Open(code, fmt::format(R"({{"recovery_packet":{{"t":"msg","from":"peer","d":{}}}}})",
+                                    EncodePacket(recovery)));
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 1 && room->RoundTripMs() >= 0; }));
+  Action(code, InjectPacket(NeutralFrames(0, 16)));
+  RoomHashGame game;
+  Session session(RoomSessionConfig(), game, *room);
+  int completed = -1;
+  ASSERT_TRUE(Wait([&] {
+    const auto step = session.OnBoundary(completed, Pad{});
+    if (step.kind == StepKind::Run)
+      completed = game.Run();
+    return step.kind == StepKind::Stall;
+  }));
+  room->TakePeerEvents();
+  Action(code, R"({"block_for":15})");
+  room->TestDropConnection();
+  const auto since = RoomClock::now();
+  int holds = 0;
+  bool gave_up = false;
+  const auto step = Rollback::StepSession(session, game, completed, [] { return Pad{}; },
+      [&] { return room->HostLeftPending(); }, 1ms, 10s, &gave_up, nullptr,
+      [&](RoomClock::time_point now) {
+        ++holds;
+        return room->HoldInputSilence(since, now);
+      });
+  EXPECT_GE(RoomClock::now() - since, 14s);
+  EXPECT_LT(RoomClock::now() - since, 22s);
+  EXPECT_GT(holds, 0);
+  EXPECT_FALSE(gave_up);
+  EXPECT_EQ(step.kind, StepKind::Run) << session.Error();
+  EXPECT_TRUE(session.Error().empty());
+  EXPECT_EQ(room->Code(), code);
+  EXPECT_EQ(room->GetState(), RoomState::Waiting);
+  EXPECT_FALSE(room->HostLeftPending());
+  EXPECT_FALSE(Sent(code, "leave"));
+}
+
+TEST_F(OrcaRoomRuntime, MissingInputBuffersRequestDropInInTheSameRoom)
+{
+  const std::string code = "gapres44";
+  auto room = Open(code);
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 1 && room->RoundTripMs() >= 0; }));
+  Action(code, InjectPacket(NeutralFrames(0, 16)));
+  RoomHashGame game;
+  Session session(RoomSessionConfig(), game, *room);
+  int completed = -1;
+  ASSERT_TRUE(Wait([&] {
+    const auto step = session.OnBoundary(completed, Pad{});
+    if (step.kind == StepKind::Run)
+      completed = game.Run();
+    return step.kind == StepKind::Stall;
+  }));
+  room->TakePeerEvents();
+  const auto since = RoomClock::now();
+  ASSERT_TRUE(room->HoldInputSilence(since, since + 10s));
+  Action(code, InjectPacket(NeutralFrames(1000, 16)));
+  const auto step = Rollback::StepSession(session, game, completed, [] { return Pad{}; },
+      [&] { return room->HostLeftPending(); }, 1ms, 1s);
+  EXPECT_EQ(step.kind, StepKind::Ended);
+  EXPECT_TRUE(session.Error().empty());
+  ASSERT_TRUE(room->HostAwayDeadline());
+  const auto events = room->TakePeerEvents();
+  ASSERT_FALSE(events.empty());
+  EXPECT_EQ(events[0].reason, "room-resume");
+  EXPECT_TRUE(Wait([&] { return Sent(code, "msg", "hello"); }));
+  Action(code, R"({"message":{"t":"msg","from":"peer","d":{"k":"hello","c":"test","h":true,"r":true}}})");
+  const std::string keyframe = fmt::format(R"({{"message":{{"t":"msg","from":"peer","d":{{"k":"kf",
+      "f":1000,"n":1,"id":"replay-1000-01234567","x":"0123456789abcdef","key":"{}"}}}}}})", std::string(64, '0'));
+  Action(code, keyframe);
+  EXPECT_TRUE(Wait([&] {
+    for (const auto& event : room->TakePeerEvents())
+      if (event.kind == PeerEvent::Kind::Keyframe && event.keyframe.frame == 1000)
+        return true;
+    return false;
+  }));
+  EXPECT_EQ(room->Code(), code);
+  EXPECT_EQ(room->GetState(), RoomState::Waiting);
+  EXPECT_FALSE(Sent(code, "leave"));
+}
+
+
+TEST_F(OrcaRoomRuntime, ANewResumeRequestCanResetAHostThatAlreadyResumedOnce)
+{
+  const std::string code = "hostres4";
+  auto room = Open(code, R"({"joining":false})", false);
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 0 && Sent(code, "msg", "hello"); }));
+  room->TakePeerEvents();
+  const auto resume = [&](const char* id) {
+    Action(code, fmt::format(R"({{"message":{{"t":"msg","from":"peer","d":{{"k":"hello",
+        "c":"test","r":true,"h":false,"resume":true,"resume_id":"{}"}}}}}})", id));
+  };
+  resume("first");
+  ASSERT_TRUE(Wait([&] {
+    for (const auto& e : room->TakePeerEvents())
+      if (e.kind == PeerEvent::Kind::Arrived)
+        return true;
+    return false;
+  }));
+  KeyframeInfo keyframe{300, "replay-300-01234567", 1, "0123456789abcdef", std::string(64, '0')};
+  room->OfferKeyframe(1, keyframe);
+  Packet peer = NeutralFrames(300, 1);
+  peer.seat = 1;
+  Action(code, InjectPacket(peer));
+  ASSERT_TRUE(Wait([&] { return !room->Receive().empty(); }));
+  // The old keyframe offer and a live-session packet must not suppress this new request.
+  resume("second");
+  ASSERT_TRUE(Wait([&] {
+    for (const auto& e : room->TakePeerEvents())
+      if (e.kind == PeerEvent::Kind::Arrived)
+        return true;
+    return false;
+  }));
+  EXPECT_EQ(room->Code(), code);
+  EXPECT_EQ(room->GetState(), RoomState::Waiting);
+}
+
+TEST_F(OrcaRoomRuntime, UnreportedSilenceHasABoundedHoldAndRealLeaveInterruptsIt)
+{
+  const std::string code = "verdict4";
+  auto room = Open(code);
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 1 && Sent(code, "msg", "hello"); }));
+  room->TakePeerEvents();
+  const auto now = RoomClock::now();
+  ASSERT_TRUE(room->HoldInputSilence(now - 89s, now));
+  EXPECT_FALSE(room->HoldInputSilence(now, now + 2s)); // a retry cannot restart the hold
+  Action(code, fmt::format(R"({{"message":{}}})", RosterMessage("leave", true, false)));
+  ASSERT_TRUE(Wait([&] { return room->HostLeftPending(); }));
+  EXPECT_FALSE(room->HoldInputSilence(now, now));
+  EXPECT_FALSE(room->HostAwayDeadline());
+}
+
+
+TEST_F(OrcaRoomRuntime, PrivateWelcomeOverridesAnInitialQueueHint)
+{
+  const std::string code = "privhint";
+  Request("/configure/" + code, "{}");
+  auto options = TraceOptions();
+  options.room_code = code;
+  options.friends_room = false;
+  YouGameRoom room(options);
+  ASSERT_TRUE(Wait([&] { return room.Seat() == 1 && room.RoundTripMs() >= 0; }));
+  u32 before;
+  room.RoundTripMs(&before);
+  room.TestDropConnection();
+  ASSERT_TRUE(Wait([&] {
+    u32 after;
+    room.RoundTripMs(&after);
+    return after > before && Connections(code) == 2;
+  }));
+  EXPECT_EQ(room.Code(), code);
+  EXPECT_EQ(room.GetState(), RoomState::Waiting);
 }
