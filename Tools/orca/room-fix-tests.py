@@ -66,7 +66,8 @@ class Handler(BaseHTTPRequestHandler):
                 time.sleep(delay)
             try:
                 self.reply({"url": f"http://127.0.0.1:{self.server.server_port}",
-                            "ticket": "loopback-fixture", "direct": False})
+                            "ticket": "loopback-fixture", "direct": cfg.get("direct", False),
+                            "ice": [{"urls": "stun:127.0.0.1:9"}]})
             except (BrokenPipeError, ConnectionResetError):
                 pass
             return
@@ -132,7 +133,7 @@ class Handler(BaseHTTPRequestHandler):
                 welcome["me"] = cfg["recovery_identity"]
             send(ws, welcome)
             send(ws, {"t": "msg", "from": "peer", "d": {"k": "hello", "c": "test", "r": False,
-                                                              "h": cfg.get("joining", True)}})
+                          "h": cfg.get("joining", True), "dl": int(cfg.get("direct", False))}})
             if attempt > 1 and cfg.get("recovery_packet"):
                 send(ws, cfg["recovery_packet"])
             while True:
@@ -160,7 +161,8 @@ class Handler(BaseHTTPRequestHandler):
                     cfg["messages"].append(message)
                 if message.get("d", {}).get("k") == "hello":
                     send(ws, {"t": "msg", "from": "peer", "d": {"k": "hello", "c": "test",
-                              "r": True, "h": cfg.get("joining", True)}})
+                              "r": True, "h": cfg.get("joining", True),
+                              "dl": int(cfg.get("direct", False))}})
                 if message.get("t") == "ping":
                     send(ws, {"t": "pong", "at": message["at"]})
                 if message.get("t") == "leave":

@@ -1,6 +1,7 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -26,6 +27,7 @@
 #include "Core/HW/Memmap.h"
 #include "Core/Orca/Games/Generic/GenericModule.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/Session/DirectLink.h"
 #include "Core/Orca/Session/Keyframe.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Session/RoomResilience.h"
@@ -1781,6 +1783,7 @@ protected:
   std::string url;
   std::vector<std::unique_ptr<ScopedEnv>> vars;
 };
+
 }  // namespace
 
 TEST_F(OrcaRoomRuntime, RecoveredSocketUsesTheRealGoodbyeTeardown)
@@ -2038,6 +2041,129 @@ Orca::Net::Config RoomSessionConfig()
   config.checksum_every = 1000000;
   return config;
 }
+class OrcaRoomStallRuntime : public OrcaRoomRuntime
+{
+protected:
+  void OpenDirect(const std::string& code, bool joining)
+  {
+    vars.push_back(std::make_unique<ScopedEnv>("ORCA_DIRECT", "1"));
+    vars.push_back(std::make_unique<ScopedEnv>("ORCA_DIRECT_LOOPBACK", "1"));
+    vars.push_back(std::make_unique<ScopedEnv>("ORCA_DIRECT_STUN", "0"));
+    room_code = code;
+    local_seat = joining ? 1 : 0;
+    room = Open(code, fmt::format(R"({{"direct":true,"joining":{}}})", joining), joining);
+    ASSERT_TRUE(Wait([&] { return room->Seat() == local_seat && room->RoundTripMs() >= 0; }));
+    DirectOptions options;
+    options.me = "peer";
+    options.room = code;
+    options.ice.stun_host.clear();
+    options.loopback = true;
+    direct.Start(std::move(options));
+    direct.AddPeer("me", local_seat);
+    size_t seen = 0;
+    ASSERT_TRUE(Wait([&] {
+      for (auto& [to, message] : direct.TakeSignals())
+        Action(code, fmt::format(R"({{"message":{{"t":"msg","from":"peer","d":{}}}}})",
+                                 picojson::value(message).serialize()));
+      const auto state = Request("/state/" + code);
+      const auto& messages = state.get("messages").get<picojson::array>();
+      for (; seen < messages.size(); ++seen)
+      {
+        const auto& data = messages[seen].get("d");
+        if (data.is<picojson::object>() && data.get("k").to_str().starts_with("dl"))
+          direct.OnSignal("me", data.get<picojson::object>());
+      }
+      direct.Send(EncodePacket(NeutralPacket(0, 1)));
+      room->Receive();
+      return room->Direct().transport == 1;
+    }, 10s));
+    room->TakePeerEvents();
+    auto config = RoomSessionConfigForSeat();
+    session = std::make_unique<Session>(config, game, *room);
+  }
+  Packet NeutralPacket(int first, int count)
+  {
+    Packet packet;
+    packet.seat = 1 - local_seat;
+    packet.first_frame = first;
+    packet.current_frame = first + count;
+    packet.pads.resize(count);
+    return packet;
+  }
+  Orca::Net::Config RoomSessionConfigForSeat()
+  {
+    Orca::Net::Config config;
+    config.local_seat = local_seat;
+    config.time_sync = false;
+    config.fixed_delay = 2;
+    config.max_delay = 2;
+    config.checksum_every = 1000000;
+    return config;
+  }
+
+  Step StallFor(std::chrono::milliseconds duration, bool drop_socket = false)
+  {
+    if (drop_socket)
+    {
+      Action(room_code, R"({"block_for":80})");
+      room->TestDropConnection();
+    }
+    const auto begin = RoomClock::now();
+    int polls = 0;
+    std::thread restore([&] {
+      std::this_thread::sleep_for(duration);
+      const auto packet = EncodePacket(NeutralPacket(next_input, 16));
+      // Repeated UDP packets, as the session does, until StepSession has received them.
+      while (!restored.load())
+      {
+        direct.Send(packet);
+        std::this_thread::sleep_for(2ms);
+      }
+    });
+    Step result{};
+    for (int boundary = 0; boundary < 100; ++boundary)
+    {
+      const auto start = RoomClock::now();
+      const int before = session->GetStats().stalls;
+      bool held_seen = false;
+      result = Rollback::StepSession(*session, game, completed, [] { return Pad{}; }, [&] {
+        ++polls;
+        const auto now = RoomClock::now();
+        const bool held = room->HoldInputSilence(start, now);
+        held_seen |= held;
+        return budget.Spent(now, start, held) || room->HostLeftPending() ||
+               now - begin > duration + 5s;
+      }, 1ms, 10s, nullptr, nullptr,
+      [&](RoomClock::time_point now) { return room->HoldInputSilence(start, now); });
+      if (session->GetStats().stalls > before)
+      {
+        const auto end = RoomClock::now();
+        if (held_seen)
+          last_excused = budget.ExcuseRecovered(end);
+        if (!held_seen || !last_excused)
+          budget.Add(start, end);
+      }
+      if (result.kind == StepKind::Run || result.kind == StepKind::Rollback)
+        completed = game.Run();
+      if (polls > 0 || result.kind == StepKind::Ended)
+        break;
+    }
+    restored = true;
+    restore.join();
+    restored = false;
+    next_input += 16;
+    return result;
+  }
+  std::string room_code;
+  int local_seat = 1, completed = -1, next_input = 0;
+  std::unique_ptr<YouGameRoom> room;
+  DirectLink direct;
+  RoomHashGame game;
+  std::unique_ptr<Session> session;
+  Rollback::OnlineMatch::StallBudget budget;
+  std::atomic<bool> restored{false};
+  bool last_excused = false;
+};
 }  // namespace
 
 TEST_F(OrcaRoomRuntime, HealthyRealSessionHashesMatchWithRecoveryDisabled)
@@ -2756,4 +2882,18 @@ TEST_F(OrcaRoomRuntime, QueueBackAndJoinKeepTheirOriginalRuntimePolicy)
       EXPECT_EQ(room->Queue(), queue);
     }
   }
+}
+
+TEST_F(OrcaRoomStallRuntime, OrdinaryStallsLeaveRecoveryAllowanceForDarkJoiner)
+{
+  OpenDirect("budgetdark", true);
+  ASSERT_TRUE(session);
+  for (int small = 0; small < 3; ++small)
+    ASSERT_EQ(StallFor(100ms).kind, StepKind::Run);
+  // These were normal packet delays, without a socket loss or room-away verdict.
+  // They must leave the allowances available for the first real outage.
+  ASSERT_EQ(StallFor(14900ms, true).kind, StepKind::Run);
+  EXPECT_TRUE(last_excused);
+  EXPECT_LT(budget.Stalled(RoomClock::now()), 1s);
+  EXPECT_EQ(StallFor(200ms).kind, StepKind::Run);
 }
