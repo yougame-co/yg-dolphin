@@ -29,6 +29,7 @@
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/Sandbox.h"
 #include "Core/Orca/UX/GamePatches.h"
 
 namespace Orca::Mod
@@ -546,7 +547,8 @@ std::string FlatBundleDir(const std::string* executable_path)
   return dir;
 }
 
-void ResolveBundle(const std::string* executable_path, std::span<const u8> launcher_bytes)
+static void ResolveBundleWithJail(const std::string* executable_path,
+                                 std::span<const u8> launcher_bytes, bool jailed)
 {
   const std::string dir = FlatBundleDir(executable_path);
   // Once per process (DolphinNoGUI boots once): a second boot from the same folder keeps the first
@@ -570,17 +572,21 @@ void ResolveBundle(const std::string* executable_path, std::span<const u8> launc
     resolution.error = fmt::format("YG Dolphin refused this game's pack: {}", why);
     decide(BundleKind::Refused);
   };
-  if (!SessionActive() || dir.empty())
+  if (dir.empty())
     return decide(BundleKind::None);
   // Mods phase 1: a run folder the app wrote with tree.json (checked by LoadModProfile at boot).
   if (explicit_dir && File::Exists(dir + "tree.json"))
-    return decide(BundleKind::Tree);
+    return decide(SessionActive() ? BundleKind::Tree : BundleKind::None);
   if (!File::Exists(dir + std::string(FLAT_MANIFEST)))
   {
-    if (explicit_dir)
+    if (SessionActive() && explicit_dir)
       return refuse("it has neither tree.json nor mod.json");
     return decide(BundleKind::None);
   }
+  if (!jailed)
+    return refuse("this pack requires the YouGame app's sandbox; open it through YouGame");
+  if (!SessionActive())
+    return decide(BundleKind::None);
   if (TrustedKeys().empty())
     return refuse("this build trusts no bundle key");
 
@@ -617,6 +623,17 @@ void ResolveBundle(const std::string* executable_path, std::span<const u8> launc
                      .count());
   resolution.flat = std::move(bundle);
   decide(BundleKind::Flat);
+}
+
+void ResolveBundle(const std::string* executable_path, std::span<const u8> launcher_bytes)
+{
+  ResolveBundleWithJail(executable_path, launcher_bytes, Sandbox::PackJailed());
+}
+
+void ResolveBundleForTests(const std::string* executable_path, std::span<const u8> launcher_bytes,
+                          bool jailed)
+{
+  ResolveBundleWithJail(executable_path, launcher_bytes, jailed);
 }
 
 std::optional<BundleKind> ResolvedKind()

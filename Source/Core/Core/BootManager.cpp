@@ -57,9 +57,8 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
 
   SConfig& StartUp = SConfig::GetInstance();
 
-  // Orca: the bundle this session plays, if any (Core/Orca/Bundle.h), decided before anything
+  // Orca: the bundle this boot plays, if any (Core/Orca/Bundle.h), decided before anything
   // reads a game setting (mod mode leaves the player's game INIs out). Once per process.
-  if (Orca::SessionActive())
   {
     const auto* executable = std::get_if<BootParameters::Executable>(&boot->parameters);
     // A launcher is checked as the bytes its reader already holds: those are what run.
@@ -67,6 +66,14 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
     if (executable && executable->reader)
       launcher_bytes = executable->reader->GetBytes();
     Orca::Mod::ResolveBundle(executable ? &executable->path : nullptr, launcher_bytes);
+    if (!Orca::SessionActive() &&
+        Orca::Mod::ResolvedKind() == Orca::Mod::BundleKind::Refused)
+    {
+      const std::string error = Orca::Mod::ResolvedError();
+      Orca::Status::Error("profile", error);
+      PanicAlertFmt("{}", error);
+      return false;
+    }
   }
 
   if (!StartUp.SetPathsAndGameMetadata(system, *boot))

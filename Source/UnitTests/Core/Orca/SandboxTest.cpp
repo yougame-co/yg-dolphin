@@ -19,6 +19,9 @@
 #include <picojson.h>
 
 #ifndef _WIN32
+#ifdef __APPLE__
+#include <sandbox.h>
+#endif
 #include <sys/stat.h>
 #include <unistd.h>
 #endif
@@ -898,3 +901,22 @@ TEST(OrcaLive, StdioBridgeMirrorsTheRoomAndTakesLeave)
   EXPECT_TRUE(app.Problems().empty()) << app.Problems().front();
   EXPECT_GE(Bridge::GetStats().replies, 3u);
 }
+
+#ifdef __APPLE__
+TEST(OrcaSandboxDeathTest, PackJailRecognizesAnAppliedProcessSandbox)
+{
+  // Apply a fixture profile only in the test's child; the parent's sandbox is unchanged.
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  EXPECT_EXIT(
+      {
+        char* error = nullptr;
+        const int result = sandbox_init("(version 1)(allow default)(deny network*)", 0, &error);
+        if (error)
+          sandbox_free_error(error);
+        _exit(result == 0 && Sandbox::PackJailed() ? 0 : 1);
+      },
+      ::testing::ExitedWithCode(0), "");
+#pragma clang diagnostic pop
+}
+#endif

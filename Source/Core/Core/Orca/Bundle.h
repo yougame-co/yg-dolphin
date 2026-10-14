@@ -127,6 +127,10 @@ enum class BundleKind
 };
 // `launcher_bytes`: what the boot's reader holds for `executable_path` (Boot.h).
 void ResolveBundle(const std::string* executable_path, std::span<const u8> launcher_bytes = {});
+// Tests: exercise the same resolution with a supplied jail state. Production boots always use
+// ResolveBundle's OS query.
+void ResolveBundleForTests(const std::string* executable_path, std::span<const u8> launcher_bytes,
+                          bool jailed);
 // nullopt before ResolveBundle ran.
 std::optional<BundleKind> ResolvedKind();
 std::string ResolvedDir();

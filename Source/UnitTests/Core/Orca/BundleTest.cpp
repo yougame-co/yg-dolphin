@@ -23,6 +23,7 @@
 #include "Core/Orca/Bundle.h"
 #include "Core/Orca/Mod.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/Sandbox.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Status.h"
 
@@ -830,6 +831,10 @@ TEST(OrcaBundle, FindsItsFolder)
 // never the built-in game in a refused pack's place).
 TEST(OrcaBundle, ResolvesOrRefuses)
 {
+  const auto resolve = [](const std::string* executable_path,
+                          std::span<const u8> launcher_bytes = {}) {
+    Orca::Mod::ResolveBundleForTests(executable_path, launcher_bytes, true);
+  };
   const ScopedEnv session("ORCA_SESSION", "1");
   const ScopedEnv no_dir("ORCA_MOD_DIR", "");
   const ScopedEnv brawl_game("YOUGAME_GAME", "open-brawl");
@@ -848,27 +853,27 @@ TEST(OrcaBundle, ResolvesOrRefuses)
   EXPECT_FALSE(Orca::Mod::Requested());
 
   // No folder, or one with no mod.json: legacy.
-  Orca::Mod::ResolveBundle(nullptr);
+  resolve(nullptr);
   EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::None);
   EXPECT_FALSE(Orca::Mod::Requested());
 
   // Brawl's run folder with a signed bundle: mod mode, from that folder.
   Orca::Mod::ResetResolvedBundle();
   Flat b = MakeBrawl(root + "run/open-brawl/", signer);
-  Orca::Mod::ResolveBundle(nullptr);
+  resolve(nullptr);
   EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Flat);
   EXPECT_TRUE(Orca::Mod::Requested());
   ASSERT_NE(Orca::Mod::ResolvedFlat(), nullptr);
   EXPECT_EQ(Orca::Mod::Dir(), root + "user/../run/open-brawl/");
   // Once per process: a change after the check isn't seen until the next process.
   b.Put("RSBE01.patches", "# changed\n");
-  Orca::Mod::ResolveBundle(nullptr);
+  resolve(nullptr);
   EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Flat);
 
   // The same folder tampered with, in a new process: the session is refused, with the reason the
   // player reads (no folder path), not played as legacy.
   Orca::Mod::ResetResolvedBundle();
-  Orca::Mod::ResolveBundle(nullptr);
+  resolve(nullptr);
   EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Refused);
   EXPECT_TRUE(Orca::Mod::Requested());
   EXPECT_EQ(Orca::Mod::ResolvedFlat(), nullptr);
@@ -878,13 +883,13 @@ TEST(OrcaBundle, ResolvesOrRefuses)
       << Orca::Mod::ResolvedError();
   b.Sign(signer);
   Orca::Mod::ResetResolvedBundle();
-  Orca::Mod::ResolveBundle(nullptr);
+  resolve(nullptr);
   EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Flat);
 
   // A build that trusts no key: a mod.json it finds refuses the session.
   Orca::Mod::TrustKeysForTests({});
   Orca::Mod::ResetResolvedBundle();
-  Orca::Mod::ResolveBundle(nullptr);
+  resolve(nullptr);
   EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Refused);
   EXPECT_NE(Orca::Mod::ResolvedError().find("trusts no bundle key"), std::string::npos);
   Orca::Mod::TrustKeysForTests(std::span(&key, 1));
@@ -893,7 +898,7 @@ TEST(OrcaBundle, ResolvesOrRefuses)
     const ScopedEnv game("YOUGAME_GAME", "no-pack-here");
     Orca::Mod::TrustKeysForTests({});
     Orca::Mod::ResetResolvedBundle();
-    Orca::Mod::ResolveBundle(nullptr);
+    resolve(nullptr);
     EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::None);
     EXPECT_FALSE(Orca::Mod::Requested());
     Orca::Mod::TrustKeysForTests(std::span(&key, 1));
@@ -906,27 +911,27 @@ TEST(OrcaBundle, ResolvesOrRefuses)
   const std::string& dol = p.files["Project+ Netplay Launcher.dol"];
   const std::vector<u8> dol_bytes(dol.begin(), dol.end());
   Orca::Mod::ResetResolvedBundle();
-  Orca::Mod::ResolveBundle(&launcher, dol_bytes);
+  resolve(&launcher, dol_bytes);
   EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Flat);
   Orca::Mod::ResetResolvedBundle();
-  Orca::Mod::ResolveBundle(&launcher);  // no reader bytes: the file
+  resolve(&launcher);  // no reader bytes: the file
   EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Flat);
   const std::string other = p.dir + "sd.raw";
   Orca::Mod::ResetResolvedBundle();
-  Orca::Mod::ResolveBundle(&other);
+  resolve(&other);
   EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Refused);
   // Under another listing: refused.
   {
     const ScopedEnv game("YOUGAME_GAME", "open-brawl");
     Orca::Mod::ResetResolvedBundle();
-    Orca::Mod::ResolveBundle(&launcher, dol_bytes);
+    resolve(&launcher, dol_bytes);
     EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Refused);
   }
   // Signed by a key the build doesn't pin: refused.
   const PublicKey stranger_key = stranger.Key();
   Orca::Mod::TrustKeysForTests(std::span(&stranger_key, 1));
   Orca::Mod::ResetResolvedBundle();
-  Orca::Mod::ResolveBundle(&launcher, dol_bytes);
+  resolve(&launcher, dol_bytes);
   EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Refused);
   EXPECT_TRUE(Orca::Mod::Requested());
   Orca::Mod::TrustKeysForTests(std::span(&key, 1));
@@ -937,12 +942,12 @@ TEST(OrcaBundle, ResolvesOrRefuses)
     const std::string legacy_launcher = root + "legacy-pplus/Project+ Netplay Launcher.dol";
     ASSERT_TRUE(File::WriteStringToFile(legacy_launcher, dol));
     Orca::Mod::ResetResolvedBundle();
-    Orca::Mod::ResolveBundle(&legacy_launcher, dol_bytes);
+    resolve(&legacy_launcher, dol_bytes);
     EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::None);
     EXPECT_FALSE(Orca::Mod::Requested());
     Orca::Mod::TrustKeysForTests({});
     Orca::Mod::ResetResolvedBundle();
-    Orca::Mod::ResolveBundle(&legacy_launcher, dol_bytes);
+    resolve(&legacy_launcher, dol_bytes);
     EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::None);
     EXPECT_FALSE(Orca::Mod::Requested());
     Orca::Mod::TrustKeysForTests(std::span(&key, 1));
@@ -952,11 +957,11 @@ TEST(OrcaBundle, ResolvesOrRefuses)
   {
     const ScopedEnv dir("ORCA_MOD_DIR", p.dir);
     Orca::Mod::ResetResolvedBundle();
-    Orca::Mod::ResolveBundle(&launcher, dol_bytes);
+    resolve(&launcher, dol_bytes);
     EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Flat);
     // A launcher bundle for a disc boot.
     Orca::Mod::ResetResolvedBundle();
-    Orca::Mod::ResolveBundle(nullptr);
+    resolve(nullptr);
     EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Refused);
     EXPECT_TRUE(Orca::Mod::Requested());
     EXPECT_EQ(Orca::Mod::ResolvedFlat(), nullptr);
@@ -970,7 +975,7 @@ TEST(OrcaBundle, ResolvesOrRefuses)
     // No key trusted.
     Orca::Mod::TrustKeysForTests({});
     Orca::Mod::ResetResolvedBundle();
-    Orca::Mod::ResolveBundle(&launcher, dol_bytes);
+    resolve(&launcher, dol_bytes);
     EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Refused);
     EXPECT_NE(Orca::Mod::ResolvedError().find("trusts no bundle key"), std::string::npos);
     Orca::Mod::TrustKeysForTests(std::span(&key, 1));
@@ -979,7 +984,7 @@ TEST(OrcaBundle, ResolvesOrRefuses)
     File::CreateFullPath(root + "empty/");
     const ScopedEnv dir("ORCA_MOD_DIR", root + "empty");
     Orca::Mod::ResetResolvedBundle();
-    Orca::Mod::ResolveBundle(nullptr);
+    resolve(nullptr);
     EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Refused);
     EXPECT_NE(Orca::Mod::ResolvedError().find("neither tree.json nor mod.json"), std::string::npos);
   }
@@ -990,7 +995,7 @@ TEST(OrcaBundle, ResolvesOrRefuses)
     File::WriteStringToFile(root + "tree/tree.json", "{}");
     const ScopedEnv dir("ORCA_MOD_DIR", root + "tree");
     Orca::Mod::ResetResolvedBundle();
-    Orca::Mod::ResolveBundle(nullptr);
+    resolve(nullptr);
     EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::Tree);
     EXPECT_TRUE(Orca::Mod::Requested());
     EXPECT_EQ(Orca::Mod::Dir(), root + "tree/");
@@ -999,7 +1004,7 @@ TEST(OrcaBundle, ResolvesOrRefuses)
   {
     const ScopedEnv no_session("ORCA_SESSION", "");
     Orca::Mod::ResetResolvedBundle();
-    Orca::Mod::ResolveBundle(&launcher, dol_bytes);
+    resolve(&launcher, dol_bytes);
     EXPECT_EQ(Orca::Mod::ResolvedKind(), BundleKind::None);
     EXPECT_FALSE(Orca::Mod::Requested());
   }
@@ -1007,4 +1012,85 @@ TEST(OrcaBundle, ResolvesOrRefuses)
   Orca::Mod::ResetTrustedKeysForTests();
   File::SetUserPath(D_USER_IDX, old_user);
   File::DeleteDirRecursively(root);
+}
+
+TEST(OrcaBundle, FlatRunsRequireAJailAndLegacyRunsKeepTheirBehavior)
+{
+  const ScopedEnv session("ORCA_SESSION", "1");
+  const ScopedEnv no_dir("ORCA_MOD_DIR", "");
+  const ScopedEnv game("YOUGAME_GAME", "open-brawl");
+  const std::string root = TempDir();
+  ASSERT_FALSE(root.empty());
+  const std::string old_user = File::GetUserPath(D_USER_IDX);
+  File::SetUserPath(D_USER_IDX, root + "user/");
+  File::CreateFullPath(root + "user/");
+  const auto done = [&] {
+    Orca::Mod::ResetResolvedBundle();
+    Orca::Mod::ResetTrustedKeysForTests();
+    File::SetUserPath(D_USER_IDX, old_user);
+    File::DeleteDirRecursively(root);
+  };
+  struct Cleanup { std::function<void()> run; ~Cleanup() { run(); } } cleanup{done};
+  const Signer signer(1);
+  const PublicKey key = signer.Key();
+  Orca::Mod::TrustKeysForTests(std::span(&key, 1));
+  const Flat pack = MakeBrawl(root + "run/open-brawl/", signer);
+  const auto refused = [&] {
+    EXPECT_EQ(Orca::Mod::ResolvedKind(), Orca::Mod::BundleKind::Refused);
+    EXPECT_EQ(Orca::Mod::ResolvedError(),
+              "YG Dolphin refused this game's pack: this pack requires the YouGame app's sandbox; "
+              "open it through YouGame");
+    EXPECT_EQ(Orca::Mod::ResolvedFlat(), nullptr);
+    EXPECT_TRUE(Orca::Mod::Requested());
+  };
+  // A valid signed run/<slug>/mod.json is refused before it can supply a boot profile.
+  Orca::Mod::ResetResolvedBundle();
+  Orca::Mod::ResolveBundleForTests(nullptr, {}, false);
+  refused();
+  // Direct launcher boots also require the jail when session mode was not requested.
+  {
+    const ScopedEnv no_session("ORCA_SESSION", "0");
+    const std::string launcher = pack.dir + "game.dol";
+    Orca::Mod::ResetResolvedBundle();
+    Orca::Mod::ResolveBundleForTests(&launcher, {}, false);
+    EXPECT_EQ(Orca::Mod::ResolvedKind(), Orca::Mod::BundleKind::Refused);
+    EXPECT_EQ(Orca::Mod::ResolvedFlat(), nullptr);
+  }
+  // Naming the same flat folder explicitly does not change the requirement.
+  {
+    const ScopedEnv explicit_dir("ORCA_MOD_DIR", pack.dir);
+    Orca::Mod::ResetResolvedBundle();
+    Orca::Mod::ResolveBundleForTests(nullptr, {}, false);
+    refused();
+  }
+  // Launch switches do not change the OS-confirmed state. Also exercise the production entry.
+  const bool jailed = Orca::Sandbox::PackJailed();
+  {
+    const ScopedEnv marker("ORCA_NET", "internet");
+    EXPECT_EQ(Orca::Sandbox::PackJailed(), jailed);
+    Orca::Mod::ResetResolvedBundle();
+    Orca::Mod::ResolveBundle(nullptr);
+    if (jailed)
+      EXPECT_EQ(Orca::Mod::ResolvedKind(), Orca::Mod::BundleKind::Flat);
+    else
+      refused();
+  }
+  Orca::Mod::ResetResolvedBundle();
+  Orca::Mod::ResolveBundleForTests(nullptr, {}, true);
+  EXPECT_EQ(Orca::Mod::ResolvedKind(), Orca::Mod::BundleKind::Flat);
+  // No mod.json remains legacy, including a launcher's own folder, without a jail.
+  {
+    const ScopedEnv legacy_game("YOUGAME_GAME", "legacy");
+    Orca::Mod::ResetResolvedBundle();
+    Orca::Mod::ResolveBundleForTests(nullptr, {}, false);
+    EXPECT_EQ(Orca::Mod::ResolvedKind(), Orca::Mod::BundleKind::None);
+    EXPECT_FALSE(Orca::Mod::Requested());
+  }
+  File::CreateFullPath(root + "legacy/");
+  const std::string launcher = root + "legacy/game.dol";
+  ASSERT_TRUE(File::WriteStringToFile(launcher, "legacy fixture"));
+  Orca::Mod::ResetResolvedBundle();
+  Orca::Mod::ResolveBundleForTests(&launcher, {}, false);
+  EXPECT_EQ(Orca::Mod::ResolvedKind(), Orca::Mod::BundleKind::None);
+  EXPECT_FALSE(Orca::Mod::Requested());
 }

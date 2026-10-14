@@ -45,6 +45,9 @@ bool AddressAllowed(NetMode mode, std::string_view address);
 
 // Inside the app's sandbox: an AppContainer on Windows, or a launch that set ORCA_NET.
 bool Jailed();
+// Flat packs require an OS-confirmed jail: an AppContainer token on Windows, an applied process
+// sandbox on macOS. Legacy launch switches keep their existing meaning in Jailed().
+bool PackJailed();
 
 // Dolphin's own GameCube adapter code (libusb, UsbDk on Windows, IOKit on a Mac). Never in a
 // session: the app's controller helper owns the adapter and sends its ports in the snapshots, and
