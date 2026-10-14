@@ -73,7 +73,7 @@ class Handler(BaseHTTPRequestHandler):
         code = self.path.split("/")[-1]
         if self.path.startswith("/configure/"):
             with lock:
-                rooms[code] = dict(body, tickets=0, connects=0, probes=0, messages=[], sockets=[])
+                rooms[code] = dict(body, tickets=0, connects=0, probes=0, closes=0, messages=[], sockets=[])
             self.reply({})
         elif self.path.startswith("/action/"):
             with lock:
@@ -100,7 +100,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/state/"):
             with lock:
                 cfg = rooms[code]
-                self.reply({k: cfg[k] for k in ("tickets", "connects", "probes", "messages")})
+                self.reply({k: cfg[k] for k in ("tickets", "connects", "probes", "closes", "messages")})
             return
         with lock:
             cfg = rooms[code]
@@ -109,7 +109,8 @@ class Handler(BaseHTTPRequestHandler):
             attempt = cfg["connects"]
             refuse = cfg.get("refuse")
             refuse_count = cfg.get("refuse_count", 100)
-            delay = max(cfg.get("upgrade_delay", 0), cfg.get("blocked_until", 0) - time.monotonic())
+            delay = max(cfg.get("probe_delay" if probe else "upgrade_delay", 0),
+                        cfg.get("blocked_until", 0) - time.monotonic())
         if delay:
             time.sleep(delay)
         if refuse and attempt <= refuse_count:
@@ -126,7 +127,10 @@ class Handler(BaseHTTPRequestHandler):
         with lock:
             cfg["sockets"].append(ws)
         try:
-            send(ws, roster(code, cfg))
+            welcome = roster(code, cfg)
+            if attempt > 1 and cfg.get("recovery_identity"):
+                welcome["me"] = cfg["recovery_identity"]
+            send(ws, welcome)
             send(ws, {"t": "msg", "from": "peer", "d": {"k": "hello", "c": "test", "r": False,
                                                               "h": cfg.get("joining", True)}})
             if attempt > 1 and cfg.get("recovery_packet"):
@@ -145,6 +149,8 @@ class Handler(BaseHTTPRequestHandler):
                 if mask:
                     payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
                 if opcode == 8:
+                    with lock:
+                        cfg["closes"] += 1
                     send(ws, payload, 8)
                     break
                 if opcode != 1:

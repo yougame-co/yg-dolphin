@@ -803,6 +803,11 @@ void TestDropRoom()
 {
   if (const auto room = Room())
   {
+    if (!room->FriendsRecovery() && Env("ORCA_TEST_DROP_SILENT") == "1")
+    {
+      static std::vector<std::shared_ptr<Net::YouGameRoom>> s_kept;
+      s_kept.push_back(room);
+    }
     room->TestDropConnection();
   }
 }

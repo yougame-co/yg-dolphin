@@ -125,9 +125,7 @@ bool WebSocket::Connect(const std::string& url, std::chrono::milliseconds timeou
                          status);
     if (status == 409)
     {
-      if (refusal.find("seat in use") != std::string::npos)
-        *error += " seat in use";
-      else if (refusal.find("This match is complete") != std::string::npos)
+      if (refusal.find("This match is complete") != std::string::npos)
         *error += " match complete";
       else if (refusal.find("Room is full") != std::string::npos)
         *error += " room full";

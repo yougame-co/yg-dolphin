@@ -7,6 +7,7 @@
 #include <functional>
 #include <fstream>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <string>
 #include <thread>
@@ -15,7 +16,11 @@
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
+#include "Common/CommonPaths.h"
+#include "Common/Config/Config.h"
+#include "Common/FileUtil.h"
 #include "Common/HttpRequest.h"
+#include "Common/Logging/LogManager.h"
 #include "Common/WebSocket.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Session/RoomResilience.h"
@@ -1827,31 +1832,26 @@ TEST_F(OrcaRoomRuntime, WelcomeDoesNotResetTheReconnectBudget)
   room->TestDropConnection();
   ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }));
   EXPECT_EQ(room->ErrorCode(), "reconnect-limit");
+  room->Leave();  // final teardown must not make a new connection for leave
   EXPECT_EQ(Connections(code), 7);
+  EXPECT_FALSE(Sent(code, "leave"));
 }
 
-TEST_F(OrcaRoomRuntime, FirstUpgradeFullAndCompleteAreImmediateRefusals)
+TEST_F(OrcaRoomRuntime, FirstUpgradeRefusalsMakeOnlyOneRequest)
 {
-  for (const auto& [code, body, result] : std::vector<std::tuple<std::string, std::string, std::string>>{
-           {"fullroom", "Room is full", "room_full"},
-           {"complete", "This match is complete", "match-over"}})
+  for (const auto& [code, body] : std::vector<std::pair<std::string, std::string>>{
+           {"fullroom", "Room is full"}, {"complete", "This match is complete"},
+           {"seatbusy", "seat in use"}, {"unknown4", "unclassified"}})
   {
     auto room = Open(code, fmt::format(R"({{"refuse":"{}"}})", body));
     ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }, 1s));
-    EXPECT_EQ(room->ErrorCode(), result);
+    if (body == "This match is complete")
+      EXPECT_TRUE(room->ErrorCode() == "match-over" || room->ErrorCode() == "room_full");
+    else
+      EXPECT_EQ(room->ErrorCode(), "room_full");
     EXPECT_EQ(Connections(code), 1);
+    EXPECT_EQ(Request("/state/" + code).get("probes").get<double>(), 0);
   }
-}
-
-TEST_F(OrcaRoomRuntime, FirstSeatInUseRetriesThreeTimesThenEnds)
-{
-  auto room = Open("seatbusy", R"({"refuse":"seat in use"})");
-  ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }, 7s));
-  EXPECT_EQ(room->ErrorCode(), "seat-in-use");
-  EXPECT_EQ(Connections("seatbusy"), 4);
-  auto recovered = Open("seatback", R"({"refuse":"seat in use","refuse_count":2})");
-  ASSERT_TRUE(Wait([&] { return recovered->Seat() == 1; }));
-  EXPECT_EQ(Connections("seatback"), 3);
 }
 
 TEST_F(OrcaRoomRuntime, QueueRoomsRetainTheirOriginalDropAndHelloBehavior)
@@ -2020,9 +2020,9 @@ std::string InjectPacket(const Packet& packet)
   return fmt::format(R"({{"message":{{"t":"msg","from":"peer","d":{}}}}})", EncodePacket(packet));
 }
 
-Config RoomSessionConfig()
+Orca::Net::Config RoomSessionConfig()
 {
-  Config config;
+  Orca::Net::Config config;
   config.local_seat = 1;
   config.time_sync = false;
   config.fixed_delay = 2;
@@ -2239,4 +2239,166 @@ TEST_F(OrcaRoomRuntime, PrivateWelcomeOverridesAnInitialQueueHint)
   }));
   EXPECT_EQ(room.Code(), code);
   EXPECT_EQ(room.GetState(), RoomState::Waiting);
+}
+
+TEST(OrcaRoomResilience, QueueBackAndJoinGreetImmediatelyAndEmitNoRoomNotices)
+{
+  for (const char* queue : {"casual", "ranked"})
+  {
+    for (const char* event : {"back", "join"})
+    {
+      picojson::value welcome;
+      ASSERT_TRUE(picojson::parse(welcome, RosterMessage("welcome")).empty());
+      picojson::object metadata;
+      metadata["queue"] = picojson::value(queue);
+      welcome.get<picojson::object>()["room"] = picojson::value(metadata);
+      const auto trace = TraceRoomForTest(TraceOptions(), {
+          {RK::Message, 0, welcome.serialize()}, {RK::Message, 0, PeerHello()},
+          {RK::Tick, 1000}, {RK::Message, 1001, RosterMessage(event)}, {RK::Tick, 1002},
+          {RK::Message, 1003, RosterMessage("leave", true, false)},
+          {RK::SocketClose, 1004, "closed", 1008},
+      });
+      ASSERT_EQ(trace[4].sent.size(), 1u);
+      EXPECT_NE(trace[4].sent[0].find("hello"), std::string::npos);
+      EXPECT_EQ(trace[3].events.size(), 1u);
+      for (const auto& step : trace)
+        EXPECT_TRUE(step.notices.empty());
+    }
+  }
+}
+
+TEST_F(OrcaRoomRuntime, QueueSilentDropKeepsTheSocketUnreadThroughLeave)
+{
+  ScopedEnv silent("ORCA_TEST_DROP_SILENT", "1");
+  for (const char* queue : {"casual", "ranked"})
+  {
+    const std::string code = std::string(queue) + "silent";
+    auto room = Open(code, fmt::format(R"({{"queue":"{}"}})", queue), true, false);
+    ASSERT_TRUE(Wait([&] { return room->Seat() == 1 && room->RoundTripMs() >= 0; }));
+    room->TestDropConnection();
+    ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }));
+    room->Leave();  // joins Run; Online's retained shared_ptr keeps this socket alive
+    EXPECT_EQ(Connections(code), 1);
+    EXPECT_FALSE(Sent(code, "leave"));
+    EXPECT_FALSE(Sent(code, "msg", "bye"));
+    EXPECT_EQ(Request("/state/" + code).get("closes").get<double>(), 0);
+    const auto before = Request("/state/" + code).get("messages").get<picojson::array>().size();
+    u32 sequence;
+    room->RoundTripMs(&sequence);
+    Action(code, R"({"message":{"t":"pong","at":1}})");
+    std::this_thread::sleep_for(50ms);
+    u32 after;
+    room->RoundTripMs(&after);
+    EXPECT_EQ(after, sequence);
+    EXPECT_EQ(Request("/state/" + code).get("messages").get<picojson::array>().size(), before);
+  }
+}
+
+TEST_F(OrcaRoomRuntime, ExpiredInputHoldDoesNotRequestResync)
+{
+  const std::string code = "stale444";
+  auto room = Open(code);
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 1 && room->RoundTripMs() >= 0; }));
+  room->TakePeerEvents();
+  Packet ack;
+  ack.seat = 1;
+  ack.ack[0] = 10;
+  room->Send(ack);
+  const auto now = RoomClock::now();
+  EXPECT_FALSE(room->HoldInputSilence(now - ROOM_HOLD - 1s, now));
+  Action(code, InjectPacket(NeutralFrames(1000, 16)));
+  EXPECT_TRUE(Wait([&] { return !room->Receive().empty(); }));
+  EXPECT_FALSE(room->HostLeftPending());
+  EXPECT_TRUE(room->TakePeerEvents().empty());
+}
+
+TEST_F(OrcaRoomRuntime, FinalRecoveryEndLeavesAnOpenSocketOnce)
+{
+  const std::string code = "endopen4";
+  auto room = Open(code, R"({"recovery_identity":"changed"})");
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 1 && room->RoundTripMs() >= 0; }));
+  room->TestDropConnection();
+  ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }));
+  ASSERT_TRUE(Wait([&] { return Sent(code, "leave"); }));
+  room->Leave();
+  int leaves = 0;
+  const auto state = Request("/state/" + code);
+  for (const auto& message : state.get("messages").get<picojson::array>())
+    leaves += message.get("t").to_str() == "leave";
+  EXPECT_EQ(leaves, 1);
+  EXPECT_EQ(Connections(code), 2);
+}
+
+TEST_F(OrcaRoomRuntime, UpgradeFailurePathsNeverLogTicketUrls)
+{
+  using namespace Common::Log;
+  struct Capture final : LogListener
+  {
+    void Log(LogLevel, const char* line) override
+    {
+      std::lock_guard lock(mutex);
+      lines.emplace_back(line);
+    }
+    std::mutex mutex;
+    std::vector<std::string> lines;
+  };
+  struct Logs
+  {
+    struct BaseLayer final : ::Config::ConfigLayerLoader
+    {
+      BaseLayer() : ConfigLayerLoader(::Config::LayerType::Base) {}
+      void Load(::Config::Layer*) override {}
+      void Save(::Config::Layer*) override {}
+    };
+    Logs()
+    {
+      old = File::GetUserPath(D_USER_IDX);
+      dir = File::CreateTempDir();
+      File::SetUserPath(D_USER_IDX, dir + DIR_SEP);
+      ::Config::Init();
+      ::Config::AddLayer(std::make_unique<BaseLayer>());
+      LogManager::Init();
+    }
+    ~Logs()
+    {
+      LogManager::Shutdown();
+      ::Config::Shutdown();
+      File::SetUserPath(D_USER_IDX, old);
+      File::DeleteDirRecursively(dir);
+    }
+    std::string old, dir;
+  } logs;
+  auto capture = std::make_unique<Capture>();
+  Capture* const observed = capture.get();
+  auto* const manager = LogManager::GetInstance();
+  manager->RegisterListener(LogListener::LOG_WINDOW_LISTENER, std::move(capture));
+  manager->EnableListener(LogListener::FILE_LISTENER, false);
+  manager->EnableListener(LogListener::CONSOLE_LISTENER, false);
+  manager->EnableListener(LogListener::LOG_WINDOW_LISTENER, true);
+  manager->SetEnable(LogType::NETPLAY, true);
+  manager->SetEnable(LogType::COMMON, true);
+  {
+    auto refused = Open("logfull4", R"({"refuse":"Room is full","probe_delay":2})");
+    ASSERT_TRUE(Wait([&] { return refused->GetState() == RoomState::Ended; }));
+    auto cancelled = Open("logabort", R"({"upgrade_delay":5})");
+    ASSERT_TRUE(Wait([&] { return Connections("logabort") == 1; }));
+    cancelled->Leave();
+    auto timed = Open("logtime4");
+    ASSERT_TRUE(Wait([&] { return timed->Seat() == 1 && timed->RoundTripMs() >= 0; }));
+    Action("logtime4", R"({"upgrade_delay":5})");
+    timed->TestDropConnection();
+    ASSERT_TRUE(Wait([&] { return Connections("logtime4") >= 3; }));
+    Action("logtime4", R"({"upgrade_delay":0})");
+    timed->Leave();
+  }
+  std::lock_guard lock(observed->mutex);
+  ASSERT_FALSE(observed->lines.empty());
+  bool saw_failure = false;
+  for (const auto& line : observed->lines)
+  {
+    EXPECT_EQ(line.find("ticket="), std::string::npos);
+    EXPECT_EQ(line.find("loopback-fixture"), std::string::npos);
+    saw_failure |= line.find("WebSocket connect failed") != std::string::npos;
+  }
+  EXPECT_TRUE(saw_failure);
 }

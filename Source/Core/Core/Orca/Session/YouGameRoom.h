@@ -261,6 +261,8 @@ public:
   // The room's queue from its welcome: "private" (a friends room, and until the welcome), "casual"
   // or "ranked".
   std::string Queue() const;
+  // Whether the transport uses friends recovery, including its pre-welcome queue hint.
+  bool FriendsRecovery() const;
   // A room match is running and its result isn't in yet (for ranked, the whole set).
   bool MatchLive() const;
   // A ranked set's room after its verdict (`set-over`): it stays open, with relay and chat, until
