@@ -349,6 +349,50 @@ TEST(OrcaDirectLink, TwoOrcasLinkAndRebuild)
   }
 }
 
+// Six loopback pairs, including recipient-specific input fan-out.
+TEST(OrcaDirectLink, FourFriendsSendOnlyToTheRequestedSeat)
+{
+  Mesh mesh(4);
+  ASSERT_TRUE(mesh.WaitFor([&] { return mesh.AllUp(); }));
+  for (int from = 0; from < 4; ++from)
+  {
+    for (int to = 0; to < 4; ++to)
+    {
+      if (from != to)
+        mesh.At(from).link->Send("pair " + std::to_string(from) + " " + std::to_string(to), to);
+    }
+  }
+  ASSERT_TRUE(mesh.WaitFor([&] {
+    for (int to = 0; to < 4; ++to)
+      if (mesh.At(to).received.size() != 3)
+        return false;
+    return true;
+  }));
+  for (int to = 0; to < 4; ++to)
+  {
+    for (int from = 0; from < 4; ++from)
+    {
+      for (int recipient = 0; recipient < 4; ++recipient)
+      {
+        if (from != recipient)
+          EXPECT_EQ(Count(mesh.At(to).received,
+                          "pair " + std::to_string(from) + " " + std::to_string(recipient)),
+                    recipient == to ? 1 : 0);
+      }
+    }
+  }
+  mesh.At(0).link->RemovePeer(mesh.At(3).id);
+  mesh.At(3).link->RemovePeer(mesh.At(0).id);
+  ASSERT_TRUE(mesh.WaitFor([&] { return !mesh.Up(0, 3) && !mesh.Up(3, 0); }));
+  EXPECT_TRUE(mesh.Up(0, 1));
+  EXPECT_TRUE(mesh.Up(0, 2));
+  EXPECT_TRUE(mesh.Up(1, 3));
+  EXPECT_TRUE(mesh.Up(2, 3));
+  mesh.At(0).link->Send("remaining pair", 1);
+  ASSERT_TRUE(mesh.WaitFor([&] { return Count(mesh.At(1).received, "remaining pair") == 1; }));
+  EXPECT_EQ(Count(mesh.At(2).received, "remaining pair"), 0);
+}
+
 // Three Orcas: a link per pair, each packet to both others.
 TEST(OrcaDirectLink, ThreeOrcasLinkEveryPair)
 {
@@ -569,4 +613,37 @@ TEST(OrcaDirectLink, ScheduledBlackoutDropsBothWaysWithoutDeliveringLater)
   }));
   EXPECT_EQ(Count(mesh.At(0).received, "dark-in"), 0);
   EXPECT_EQ(Count(mesh.At(1).received, "dark-out"), 0);
+}
+
+extern "C" int OrcaTestTurnStart(const char* address);
+extern "C" void OrcaTestTurnStop();
+TEST(OrcaDirectLink, FourFriendsExerciseAllSixTurnPairs)
+{
+  const int port = OrcaTestTurnStart("127.0.0.1");
+  ASSERT_GT(port, 0);
+  struct Cleanup
+  {
+    ~Cleanup() { OrcaTestTurnStop(); }
+  } cleanup;
+  Mesh mesh(4, [&](DirectOptions& options, int) {
+    options.force = "turn";
+    options.ice.turn_host = "127.0.0.1";
+    options.ice.turn_port = static_cast<u16>(port);
+    options.ice.turn_user = "orca-fixture";
+    options.ice.turn_pass = "orca-fixture-only";
+  });
+  ASSERT_TRUE(mesh.WaitFor([&] { return mesh.AllUp(); }, 20s));
+  for (int from = 0; from < 4; ++from)
+    for (int to = 0; to < 4; ++to)
+      if (from != to)
+      {
+        EXPECT_EQ(mesh.Stats(from, to).kind, LinkKind::Turn);
+        mesh.At(from).link->Send("turn " + std::to_string(from), to);
+      }
+  EXPECT_TRUE(mesh.WaitFor([&] {
+    for (int seat = 0; seat < 4; ++seat)
+      if (mesh.At(seat).received.size() != 3)
+        return false;
+    return true;
+  }));
 }

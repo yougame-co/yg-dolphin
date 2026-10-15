@@ -60,6 +60,13 @@ import threading
 import time
 import urllib.request
 
+if len(sys.argv) > 1 and sys.argv[1] == "--doubles":
+    import runpy
+    doubles = os.path.join(os.path.dirname(os.path.abspath(__file__)), "doubles-rooms.py")
+    sys.argv = [doubles, *sys.argv[2:]]
+    runpy.run_path(doubles, run_name="__main__")
+    sys.exit(0)
+
 if len(sys.argv) < 3:
     sys.exit("usage: dropin-rooms.py <nogui> <disc> [--only rooms,page,home,lobby,guest,rejoin,stay]")
 BIN, DISC = sys.argv[1], sys.argv[2]

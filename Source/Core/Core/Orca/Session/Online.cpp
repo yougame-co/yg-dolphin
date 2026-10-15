@@ -367,6 +367,12 @@ std::string RoomQueue()
   return room ? room->Queue() : "private";
 }
 
+bool RoomDoubles()
+{
+  const auto room = Room();
+  return room && room->Doubles();
+}
+
 bool MatchLive()
 {
   const auto room = Room();
@@ -544,10 +550,11 @@ void RetryPeer(int seat)
 }
 
 bool HoldInputSilence(std::chrono::steady_clock::time_point since,
-                      std::chrono::steady_clock::time_point now)
+                       std::chrono::steady_clock::time_point now,
+                       std::optional<std::vector<int>> missing)
 {
   const auto room = Room();
-  return room && room->HoldInputSilence(since, now);
+  return room && room->HoldInputSilence(since, now, std::move(missing));
 }
 
 bool RoomRecovering(std::chrono::steady_clock::time_point now)

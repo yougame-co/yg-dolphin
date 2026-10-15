@@ -150,9 +150,9 @@ public:
 
   // ---- Any thread ----
 
-  // Sends to every peer with an open link, immediately on the caller's thread (never takes the
-  // room's locks). At most MAX_PAYLOAD bytes.
-  void Send(const std::string& payload);
+  // Sends to every peer with an open link, or just `seat` when nonnegative, immediately on the
+  // caller's thread (never takes the room's locks). At most MAX_PAYLOAD bytes.
+  void Send(const std::string& payload, int seat = -1);
   // Packets received since the last call.
   std::vector<Received> Receive();
   // How each peer's link is doing (nullopt: not a peer).

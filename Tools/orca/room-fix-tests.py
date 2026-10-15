@@ -5,6 +5,7 @@
 import base64
 import hashlib
 import json
+import os
 import struct
 import subprocess
 import sys
@@ -20,13 +21,22 @@ lock = threading.RLock()
 def roster(code, cfg, kind="welcome"):
     joining = cfg.get("joining", True)
     local, remote = (1, 0) if joining else (0, 1)
-    return {"t": kind, "me": "me", "host": "peer" if joining else "me",
+    result = {"t": kind, "me": "me", "host": "peer" if joining else "me",
             "lifecycle": "game", "revision": 1,
             "room": {"code": code, "queue": cfg.get("queue", "private"), "size": 2},
             "player": {"id": "peer"},
             "players": [{"id": "me", "name": "Me"}, {"id": "peer", "name": "Friend"}],
             "participants": [{"id": "me", "connectionId": "me", "slot": local, "name": "Me"},
                              {"id": "peer", "connectionId": "peer", "slot": remote, "name": "Friend"}]}
+    if cfg.get("doubles"):
+        result["room"]["doubles"] = True
+        result["room"]["size"] = cfg.get("size", 4)
+    if cfg.get("peers") == 3:
+        for slot in (2, 3):
+            result["players"].append({"id": f"peer{slot}", "name": f"Friend{slot}"})
+            result["participants"].append({"id": f"peer{slot}", "connectionId": f"peer{slot}",
+                                            "slot": slot, "name": f"Friend{slot}"})
+    return result
 
 
 def send(ws, value, opcode=1):
@@ -38,6 +48,15 @@ def send(ws, value, opcode=1):
         header += bytes([126]) + struct.pack("!H", len(payload))
     with ws[1]:
         ws[0].sendall(header + payload)
+
+
+def peer_hello(cfg, peer="peer", acknowledged=False):
+    data = {"k": "hello", "c": "test", "r": acknowledged,
+            "h": cfg.get("joining", True) and peer == "peer", "dl": int(cfg.get("direct", False))}
+    if cfg.get("doubles") and not cfg.get("legacy"):
+        slot = int(peer[-1]) if peer[-1].isdigit() else 1
+        data.update(doubles=True, ct=f"{slot:02x}")
+    return {"t": "msg", "from": peer, "d": data}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -132,8 +151,10 @@ class Handler(BaseHTTPRequestHandler):
             if attempt > 1 and cfg.get("recovery_identity"):
                 welcome["me"] = cfg["recovery_identity"]
             send(ws, welcome)
-            send(ws, {"t": "msg", "from": "peer", "d": {"k": "hello", "c": "test", "r": False,
-                          "h": cfg.get("joining", True), "dl": int(cfg.get("direct", False))}})
+            send(ws, peer_hello(cfg))
+            if cfg.get("peers") == 3:
+                for slot in (2, 3):
+                    send(ws, peer_hello(cfg, f"peer{slot}"))
             if attempt > 1 and cfg.get("recovery_packet"):
                 send(ws, cfg["recovery_packet"])
             while True:
@@ -160,9 +181,7 @@ class Handler(BaseHTTPRequestHandler):
                 with lock:
                     cfg["messages"].append(message)
                 if message.get("d", {}).get("k") == "hello":
-                    send(ws, {"t": "msg", "from": "peer", "d": {"k": "hello", "c": "test",
-                              "r": True, "h": cfg.get("joining", True),
-                              "dl": int(cfg.get("direct", False))}})
+                    send(ws, peer_hello(cfg, message.get("to", "peer"), True))
                 if message.get("t") == "ping":
                     send(ws, {"t": "pong", "at": message["at"]})
                 if message.get("t") == "leave":
@@ -192,9 +211,12 @@ def main():
     threading.Thread(target=keyframes.serve_forever, daemon=True).start()
     with TemporaryDirectory(prefix="orca-room-fix-") as temp:
         # Explicit, minimal test environment; no inherited app credentials or live-test opt-ins.
-        test_env = {"PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "TMPDIR": temp,
+        test_env = {"PATH": os.environ.get("PATH", "") if os.name == "nt" else
+                    "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "TMPDIR": temp,
                     "ORCA_TEST_ROOM_SERVER": f"http://127.0.0.1:{room_server.server_port}",
                     "ORCA_TEST_KEYFRAME_SERVER": f"http://127.0.0.1:{keyframes.server_port}"}
+        if os.name == "nt":
+            test_env["SystemRoot"] = os.environ.get("SystemRoot", r"C:\Windows")
         result = subprocess.run(sys.argv[1:], env=test_env)
     room_server.shutdown()
     keyframes.shutdown()

@@ -20,6 +20,22 @@ add_dolphin_test(OrcaSessionTest Orca/SessionTest.cpp)
 add_dolphin_test(OrcaStatusTest Orca/StatusTest.cpp)
 add_dolphin_test(OrcaRoomTest Orca/RoomTest.cpp)
 add_dolphin_test(OrcaDirectLinkTest Orca/DirectLinkTest.cpp)
+# TURN stays test-only; the production libjuice target keeps NO_SERVER.
+set(ORCA_TURN_SOURCE ${CMAKE_SOURCE_DIR}/Tools/orca/turn-fixture.c)
+set(ORCA_JUICE_SOURCE ${CMAKE_SOURCE_DIR}/Externals/libjuice/libjuice)
+target_sources(OrcaDirectLinkTest PRIVATE ${ORCA_TURN_SOURCE} ${ORCA_JUICE_SOURCE}/src/server.c)
+target_include_directories(OrcaDirectLinkTest PRIVATE
+  ${ORCA_JUICE_SOURCE}/src ${ORCA_JUICE_SOURCE}/include/juice)
+target_compile_definitions(OrcaDirectLinkTest PRIVATE USE_NETTLE=0 RELEASE=1)
+target_link_libraries(OrcaDirectLinkTest PRIVATE juice)
+add_executable(orca-turn-fixture EXCLUDE_FROM_ALL ${ORCA_TURN_SOURCE} ${ORCA_JUICE_SOURCE}/src/server.c)
+target_include_directories(orca-turn-fixture PRIVATE
+  ${ORCA_JUICE_SOURCE}/src ${ORCA_JUICE_SOURCE}/include/juice)
+target_compile_definitions(orca-turn-fixture PRIVATE ORCA_TURN_FIXTURE_MAIN USE_NETTLE=0 RELEASE=1)
+target_link_libraries(orca-turn-fixture PRIVATE juice)
+set_target_properties(orca-turn-fixture PROPERTIES
+  RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/Binaries/Tests)
+add_dependencies(tests orca-turn-fixture)
 # The stdio bridge and the sandbox's switches; Embed.cpp for --embed-adopted and the stdin reader.
 add_dolphin_test(OrcaSandboxTest Orca/SandboxTest.cpp
   ${CMAKE_SOURCE_DIR}/Source/Core/DolphinNoGUI/Embed.cpp)

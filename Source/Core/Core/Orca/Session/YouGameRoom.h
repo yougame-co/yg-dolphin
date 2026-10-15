@@ -76,6 +76,8 @@ struct KeyframeInfo
   // The host's count of changes to `names` (Session::RequireValues). Players acknowledge the newest
   // they hold, and the host plugs a newcomer in only once every player holds its values.
   int names_version = 0;
+  // A batch capture is deleted by its host after all consumers finish.
+  bool shared = false;
   // The encrypted replay itself, when it is small enough to travel in the offer (`kf` field `b`,
   // INLINE_KEYFRAME_MAX) instead of through YouGame's store; empty otherwise. The joiner checks it
   // exactly as a download: size, hash, then decryption and unpacking.
@@ -138,6 +140,7 @@ struct PeerEvent
   bool holding = false;
   // Arrived: a retained friends-room player requests a current-match keyframe.
   bool recovering = false;
+  bool doubles = false;
 };
 
 // How other players' inputs reach this one (DirectLink.h): the worst of them.
@@ -212,7 +215,8 @@ public:
   void RetryPeer(int seat);
   // Transport verdict during the existing game stall. No room leave means wait for the hold.
   bool HoldInputSilence(std::chrono::steady_clock::time_point since,
-                        std::chrono::steady_clock::time_point now);
+                        std::chrono::steady_clock::time_point now,
+                        std::optional<std::vector<int>> missing = std::nullopt);
   // Friends-room recovery already in progress; observing it never creates an input hold.
   bool RoomRecovering(std::chrono::steady_clock::time_point now) const;
 
@@ -267,6 +271,7 @@ public:
   // The room's queue from its welcome: "private" (a friends room, and until the welcome), "casual"
   // or "ranked".
   std::string Queue() const;
+  bool Doubles() const;
   // Whether the transport uses friends recovery, including its pre-welcome queue hint.
   bool FriendsRecovery() const;
   // A room match is running and its result isn't in yet (for ranked, the whole set).
@@ -308,6 +313,7 @@ public:
   void SendReplayPacked(const std::vector<std::vector<u8>>& pieces, int frames);
 
   void Send(const Packet& packet) override;
+  void SendToSeats(const std::map<int, Packet>& packets) override;
   std::vector<Packet> Receive() override;
   bool Connected() const override;
 
@@ -411,6 +417,11 @@ std::string RefusalCode(const std::string& connect_error);
 // Queues `packet` in place of one not yet sent, keeping the older one's earlier inputs and
 // checksum.
 void CoalescePacket(std::optional<Packet>* outgoing, const Packet& packet);
+void CoalesceBroadcast(std::optional<Packet>* outgoing,
+                       std::map<int, std::optional<Packet>>* addressed, const Packet& packet);
+void CoalesceToSeats(std::optional<Packet>* outgoing,
+                     std::map<int, std::optional<Packet>>* addressed,
+                     const std::map<int, Packet>& packets);
 // In-memory transport traces for unit tests. No thread, ticket request or socket is opened.
 struct RoomTestStep
 {

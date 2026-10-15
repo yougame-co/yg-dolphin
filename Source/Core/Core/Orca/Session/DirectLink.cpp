@@ -1160,7 +1160,7 @@ struct DirectLink::Impl
 #endif
   }
 
-  void Send(std::string_view payload, u8 kind = KIND_PACKET, Link* only = nullptr)
+  void Send(std::string_view payload, u8 kind = KIND_PACKET, Link* only = nullptr, int seat = -1)
   {
     if (payload.size() > MAX_PAYLOAD)
       return;
@@ -1169,7 +1169,7 @@ struct DirectLink::Impl
       return;
     for (const std::shared_ptr<Link>& link : sending)
     {
-      if ((only && link.get() != only) || !link->Selected())
+      if ((only && link.get() != only) || (seat >= 0 && link->slot != seat) || !link->Selected())
         continue;
       const auto start = Clock::now();
       const auto datagram = link->Seal(kind, payload);
@@ -2159,9 +2159,9 @@ void DirectLink::SetIce(const IceConfig& ice)
   m_impl->Post({Impl::Command::Kind::Ice, {}, -1, {}, ice, {}});
 }
 
-void DirectLink::Send(const std::string& payload)
+void DirectLink::Send(const std::string& payload, int seat)
 {
-  m_impl->Send(payload);
+  m_impl->Send(payload, KIND_PACKET, nullptr, seat);
 }
 
 std::vector<DirectLink::Received> DirectLink::Receive()
