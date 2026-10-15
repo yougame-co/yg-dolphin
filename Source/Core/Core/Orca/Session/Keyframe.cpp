@@ -583,6 +583,7 @@ std::vector<u8> PackReplayStreamHeader(const ReplayStreamInfo& info)
   o["first_frame"] = picojson::value(static_cast<double>(info.first_frame));
   o["segment"] = picojson::value(static_cast<double>(info.segment));
   o["room"] = picojson::value(info.room);
+  o["seat_labels"] = picojson::value(info.seat_labels);
   const std::string json = picojson::value(o).serialize();
   std::vector<u8> out(STREAM_MAGIC, STREAM_MAGIC + sizeof(STREAM_MAGIC));
   PutU32(&out, STREAM_VERSION);
@@ -742,6 +743,12 @@ bool ReplayStreamReader::Parse(std::string* error)
         return fail(m_info ? "the match's stream moved to another history" :
                              "the replay's header is incomplete");
       }
+      if (const auto labels = o.find("seat_labels"); labels != o.end())
+      {
+        if (!labels->second.is<bool>())
+          return fail("the replay's seat label flag isn't valid");
+        info.seat_labels = labels->second.get<bool>();
+      }
       info.compat = *compat;
       info.build = *build;
       info.game_id = *game;
@@ -756,7 +763,8 @@ bool ReplayStreamReader::Parse(std::string* error)
         // host's). That it is the same match is then proven frame by frame on the overlap.
         if (info.compat != m_info->compat || info.build != m_info->build ||
             info.game_id != m_info->game_id || info.origin_hash != m_info->origin_hash ||
-            info.first_frame != m_info->first_frame || info.room != m_info->room)
+            info.first_frame != m_info->first_frame || info.room != m_info->room ||
+            info.seat_labels != m_info->seat_labels)
         {
           return fail("the match's stream moved to another history");
         }

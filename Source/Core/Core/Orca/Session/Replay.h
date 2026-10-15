@@ -15,7 +15,6 @@
 #include "Common/CommonTypes.h"
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/Session/Session.h"
-#include "Core/Rollback/ReplayText.h"
 
 namespace Orca::Net
 {
@@ -91,7 +90,8 @@ inline bool ValidMenuExit(u32 exit)
 }
 
 // Name-free tag assignment decisions: names can affect which existing slot is reused and
-// whether a tag is created. Recording these decisions keeps all non-text RAM deterministic.
+// whether a tag is created. Recording these decisions preserves slot and control choices
+// when playback substitutes seat labels.
 struct TagAssignment
 {
   int port = 0;
@@ -118,8 +118,6 @@ struct ReplayFrame
 struct ReplayArchive
 {
   // Local verification state, deliberately absent from every wire/file codec.
-  Rollback::ReplayText text;
-  std::map<int, Rollback::ReplayText> text_history;
   std::map<int, u64> checksums;
   u64 origin_hash = 0;
   u64 target_hash = 0;

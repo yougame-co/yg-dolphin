@@ -351,28 +351,19 @@ struct Match
 // Desyncs this process has seen across all matches (the stats line's "ds").
 int s_desyncs = 0;
 
-// Runs the trusted frame hook with replay-only text accounting. Peer/session hashes continue to
-// use SnapshotRing::RamChecksum, with all RAM covered. Keep local text checkpoints for rollbacks.
+// Runs the trusted frame hook and retains full-RAM hashes for unlabeled histories.
 void ReplayFrameHook(Core::System& system, Match& match, int frame, bool resimulating,
                      const std::vector<Orca::Events::PortInfo>& ports, bool read_own,
                      const FrameHook& on_frame, bool restored = false)
 {
   auto& replay = match.replay;
   if (restored)
-  {
-    if (const auto it = replay.text_history.find(frame); it != replay.text_history.end())
-      replay.text = it->second;
-    replay.text_history.erase(replay.text_history.lower_bound(frame), replay.text_history.end());
     replay.checksums.erase(replay.checksums.lower_bound(frame), replay.checksums.end());
-  }
-  replay.text_history.erase(replay.text_history.begin(), replay.text_history.lower_bound(frame - 64));
-  const ReplayText::Scope text_scope(replay.text);
   on_frame(frame, resimulating, ports, read_own);
-  replay.text_history[frame] = replay.text;
   if (frame % 60 == 0 && replay.first_frame >= 0)
   {
     auto& memory = system.GetMemory();
-    replay.checksums[frame] = replay.text.Checksum(
+    replay.checksums[frame] = RamChecksum(
         {memory.GetRAM(), memory.GetRamSize()},
         {memory.GetEXRAM(), memory.GetEXRAM() ? memory.GetExRamSize() : 0});
   }

@@ -1192,13 +1192,14 @@ TEST(OrcaReplayStream, RefusesAnotherHeaderOnResume)
 {
   const auto replay = Replay(20, 500);
   const auto live = Stream(replay, 6);
-  std::vector<ReplayStreamInfo> other(6, StreamInfo());
+  std::vector<ReplayStreamInfo> other(7, StreamInfo());
   other[0].compat += "other";
   other[1].build += "other";
   other[2].game_id = "RSBP01";
   other[3].origin_hash ^= 1;
   ++other[4].first_frame;
   other[5].room += "other";
+  other[6].seat_labels = true;
   std::vector<std::vector<u8>> headers;
   for (const auto& info : other)
     headers.push_back(PackReplayStreamHeader(info));
@@ -1728,6 +1729,8 @@ TEST(OrcaReplayStream, WriterStripsRealNamesAndPreservesTagDecisions)
   std::string error;
   ASSERT_TRUE(reader.Feed(bytes.data(), bytes.size(), &error)) << error;
   ASSERT_TRUE(reader.Complete());
+  ASSERT_TRUE(reader.Info());
+  EXPECT_TRUE(reader.Info()->seat_labels);
   for (const auto& frame : reader.Archive().frames)
     for (const auto& port : *frame.ports)
       EXPECT_EQ(port.name, "P" + std::to_string(port.port + 1));
@@ -1760,6 +1763,7 @@ TEST(OrcaReplayStream, RecordingMetadataUsesSeatLabelsAcrossRenamesAndRepacking)
       RecordingPorts(live));
   auto info = StreamInfo();
   info.first_frame = original.first_frame;
+  info.seat_labels = true;
   auto bytes = PackReplayStream(info, original, {{60, 123}, {120, 456}});
   for (int pass = 0; pass < 2; ++pass)
   {
@@ -1767,6 +1771,7 @@ TEST(OrcaReplayStream, RecordingMetadataUsesSeatLabelsAcrossRenamesAndRepacking)
     std::string error;
     ASSERT_TRUE(reader.Feed(bytes.data(), bytes.size(), &error)) << error;
     ASSERT_TRUE(reader.Complete());
+    EXPECT_TRUE(reader.Info()->seat_labels);
     EXPECT_EQ(reader.Checksums().at(60), 123u);
     EXPECT_EQ(reader.Checksums().at(120), 456u);
     for (const auto& frame : reader.Archive().frames)
@@ -1780,4 +1785,33 @@ TEST(OrcaReplayStream, RecordingMetadataUsesSeatLabelsAcrossRenamesAndRepacking)
     bytes = PackReplayStream(*reader.Info(), reader.Archive(), reader.Checksums());
   }
   EXPECT_EQ(live[1].name, "Bob");
+}
+
+TEST(OrcaReplayStream, SeatLabelFlagIsOptionalAndTyped)
+{
+  const auto header = PackReplayStreamHeader(StreamInfo());
+  const std::string json(header.begin() + 12, header.end());
+  const std::string field = "\"seat_labels\":false,";
+  const auto at = json.find(field);
+  ASSERT_NE(at, std::string::npos);
+  for (const std::string replacement : {"", "\"seat_labels\":true,", "\"seat_labels\":\"false\","})
+  {
+    SCOPED_TRACE(replacement);
+    auto changed = json;
+    changed.replace(at, field.size(), replacement);
+    auto bytes = header;
+    bytes.resize(12);
+    U32(bytes, 8, static_cast<u32>(changed.size()));
+    bytes.insert(bytes.end(), changed.begin(), changed.end());
+    ReplayStreamReader reader;
+    std::string error;
+    if (replacement.find("\"false\"") != std::string::npos)
+      EXPECT_FALSE(reader.Feed(bytes.data(), bytes.size(), &error));
+    else
+    {
+      ASSERT_TRUE(reader.Feed(bytes.data(), bytes.size(), &error)) << error;
+      ASSERT_TRUE(reader.Info());
+      EXPECT_EQ(reader.Info()->seat_labels, !replacement.empty());
+    }
+  }
 }

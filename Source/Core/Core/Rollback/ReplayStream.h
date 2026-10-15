@@ -34,8 +34,8 @@ class IOFile;
 
 // Saved matches and live watching (Session/Keyframe.h "Replay streams"). A player's Orca writes its
 // history's final frames to a replay stream as they settle; a watcher or a saved replay plays one
-// back from this machine's own origin, checking every checksum it carries. A watcher is a player
-// of a stream that is still growing: it is no seat in the match, so it can't slow or change it.
+// back from this machine's own origin. Labeled recordings skip RAM checksum comparison. A watcher
+// plays a stream that is still growing: it is no seat in the match, so it can't slow or change it.
 //
 // The product switch: with the app's "record" cap (Orca/Status.h), every match runs a room-only
 // writer that records only while Online::RecordWanted() (ranked rooms by default, any room after the
@@ -147,7 +147,7 @@ public:
   explicit Writer(std::string base, bool to_room = false, bool gated = false);
   ~Writer();
   // Appends `replay`'s frames before `end` (all final) with the checksums among `checksums`
-  // (frame: replay-only checksum after its hook, discounting text writes) that they cover,
+  // (frame: full-RAM checksum after its hook) that they cover,
   // at most every 6 frames or 100 ms. `live`
   // is this machine's own newest frame, for watchers. A history other than the one being written
   // begins another file. False once writing failed.
@@ -277,9 +277,8 @@ private:
   int m_waits = 0;
   double m_waited_ms = 0;
   int m_last_progress = 0;
+  bool m_labeled_recording = false;
   MachineImage m_seek_image;
-  ReplayText m_text;
-  ReplayText m_seek_text;
   std::vector<Orca::Net::NandEntry> m_seek_nand;
   bool m_seek_taken = false;
   bool m_seek_done = false;

@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -13,6 +14,7 @@
 #include "AudioCommon/NullSoundStream.h"
 #include "Common/Config/Config.h"
 #include "Common/FileUtil.h"
+#include "Common/IOFile.h"
 #include "Common/ScopeGuard.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/ConfigManager.h"
@@ -23,6 +25,7 @@
 #include "Core/Orca/Engine/GuestMemory.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Keyframe.h"
+#include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Session/PadCodec.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/UX.h"
@@ -237,7 +240,7 @@ TEST_F(OrcaSnapshot, LegacyMenuDeadlineDoesNotPrintAPackReport)
   EXPECT_EQ(Orca::Status::ExitCode(), 0);
 }
 
-TEST_F(OrcaSnapshot, RecordedReplayChecksEveryHashWithAndWithoutViewNames)
+TEST_F(OrcaSnapshot, LabeledReplaySkipsHashesWithAndWithoutViewNames)
 {
   SetSession("1");
   m_system.GetPPCState().msr.DR = 0;
@@ -265,10 +268,12 @@ TEST_F(OrcaSnapshot, RecordedReplayChecksEveryHashWithAndWithoutViewNames)
   ASSERT_TRUE(memory.Valid(0x1000));
   std::string shown;
   const Rollback::OnlineMatch::FrameHook hook = [&](int frame, bool, const auto& ports, bool) {
-    shown = ports.at(0).name;
+    shown = ports.empty() ? "" : ports.at(0).name;
     for (size_t i = 0; i <= shown.size(); ++i)
-      Rollback::ReplayText::Write8(memory, 0x1000 + static_cast<u32>(i),
+      memory.Write8(0x1000 + static_cast<u32>(i),
                                    i < shown.size() ? static_cast<u8>(shown[i]) : 0);
+    // Model game-owned copies/glyph data beyond the name writer's destination.
+    memory.Write8(0x3000, shown.empty() ? 0 : static_cast<u8>(shown.back()));
     memory.Write32(0x2000, static_cast<u32>(frame));
   };
   Orca::Net::ReplayArchive replay;
@@ -279,12 +284,12 @@ TEST_F(OrcaSnapshot, RecordedReplayChecksEveryHashWithAndWithoutViewNames)
   for (int frame = 0; frame < 121; ++frame)
   {
     Orca::Net::ReplayFrame record;
-    record.ports = ports;
+    record.ports = frame < 30 ?
+                       std::make_shared<const std::vector<Orca::Events::PortInfo>>() : ports;
     replay.frames.push_back(record);
-    const Rollback::ReplayText::Scope scope(replay.text);
-    hook(frame, false, *ports, false);
+    hook(frame, false, *record.ports, false);
     if (frame % 60 == 0)
-      replay.checksums[frame] = replay.text.Checksum({ram.GetRAM(), ram.GetRamSize()}, {});
+      replay.checksums[frame] = Rollback::RamChecksum({ram.GetRAM(), ram.GetRamSize()}, {});
   }
   EXPECT_EQ(shown, "Alice");
   const std::string base = m_dir + "/own";
@@ -292,10 +297,26 @@ TEST_F(OrcaSnapshot, RecordedReplayChecksEveryHashWithAndWithoutViewNames)
     Rollback::ReplayStream::Writer writer(base);
     ASSERT_TRUE(writer.Pump(replay, 121, 121, &replay.checksums));
   }
-  set("ORCA_REPLAY_SOURCE", base + "-1.ygr");
-  for (const bool view_names : {false, true})
+  const std::string marked = base + "-1.ygr";
+  File::IOFile recorded(marked, "rb");
+  std::vector<u8> data(recorded.GetSize());
+  ASSERT_TRUE(recorded.ReadBytes(data.data(), data.size()));
+  Orca::Net::ReplayStreamReader reader;
+  std::string error;
+  ASSERT_TRUE(reader.Feed(data.data(), data.size(), &error)) << error;
+  auto legacy_info = *reader.Info();
+  legacy_info.seat_labels = false;
+  const auto legacy_data = Orca::Net::PackReplayStream(legacy_info, reader.Archive(), reader.Checksums());
+  const std::string legacy = base + "-legacy.ygr";
+  File::IOFile legacy_file(legacy, "wb");
+  ASSERT_TRUE(legacy_file.WriteBytes(legacy_data.data(), legacy_data.size()));
+  legacy_file.Close();
+  for (const auto [marked_labels, view_names] :
+       {std::pair{true, false}, {true, true}, {false, false}, {false, true}})
   {
+    SCOPED_TRACE(marked_labels);
     SCOPED_TRACE(view_names);
+    set("ORCA_REPLAY_SOURCE", marked_labels ? marked : legacy);
     set("ORCA_REPLAY_NAMES", view_names ? "0 Viewer%20Name" : "");
     auto player = Rollback::ReplayStream::Player::FromEnv();
     ASSERT_NE(player, nullptr);
@@ -313,12 +334,81 @@ TEST_F(OrcaSnapshot, RecordedReplayChecksEveryHashWithAndWithoutViewNames)
     for (int tick = 0; tick < 123 && !player->Over(); ++tick)
       player->Step(m_system, host, &running, origin_hash, 0, hook);
     EXPECT_TRUE(player->Over());
-    EXPECT_EQ(stopped, "The replay is over");
+    EXPECT_EQ(stopped, "The replay is over; checksums not compared (labeled recording)");
     EXPECT_EQ(shown, view_names ? "Viewer Name" : "P1");
   }
   const std::string lines = Lines();
-  const std::string verdict = "orca replay done ok frames=121 checked=2 mismatched=0";
+  const std::string verdict = "orca replay done ok frames=121 checked=0 mismatched=0";
+  EXPECT_NE(lines.find("checksums not compared (labeled recording)"), std::string::npos);
   const size_t first = lines.find(verdict);
   ASSERT_NE(first, std::string::npos) << lines;
   EXPECT_NE(lines.find(verdict, first + verdict.size()), std::string::npos) << lines;
+}
+
+TEST_F(OrcaSnapshot, UnlabeledReplayComparesFullRamUnlessViewNamesAreUsed)
+{
+  SetSession("1");
+  const std::string source_before = Orca::GetEnv("ORCA_REPLAY_SOURCE");
+  const std::string names_before = Orca::GetEnv("ORCA_REPLAY_NAMES");
+  const auto set = [](const char* key, const std::string& value) {
+#ifdef _WIN32
+    _putenv_s(key, value.c_str());
+#else
+    if (value.empty())
+      unsetenv(key);
+    else
+      setenv(key, value.c_str(), 1);
+#endif
+  };
+  const Common::ScopeGuard restore([&] {
+    set("ORCA_REPLAY_SOURCE", source_before);
+    set("ORCA_REPLAY_NAMES", names_before);
+  });
+  auto& ram = m_system.GetMemory();
+  const std::vector<u8> origin(ram.GetRAM(), ram.GetRAM() + ram.GetRamSize());
+  const u64 hash = Rollback::RamChecksum(origin, {});
+  Orca::Net::ReplayArchive replay;
+  replay.first_frame = 0;
+  replay.origin_hash = hash;
+  replay.frames.resize(2);
+  for (auto& frame : replay.frames)
+    frame.ports = std::make_shared<const std::vector<Orca::Events::PortInfo>>(
+        std::vector<Orca::Events::PortInfo>{{0, "Alice", false}});
+  Orca::Net::ReplayStreamInfo info;
+  info.compat = Orca::Online::CompatibilityKey();
+  info.origin_hash = hash;
+  info.first_frame = 0;
+  const auto bytes = Orca::Net::PackReplayStream(info, replay, {{1, hash}});
+  const std::string path = m_dir + "/unlabeled.ygr";
+  File::IOFile file(path, "wb");
+  ASSERT_TRUE(file.WriteBytes(bytes.data(), bytes.size()));
+  file.Close();
+  set("ORCA_REPLAY_SOURCE", path);
+  for (int mode = 0; mode < 3; ++mode)
+  {
+    SCOPED_TRACE(mode);
+    set("ORCA_REPLAY_NAMES", mode == 2 ? "0 Viewer" : "");
+    auto player = Rollback::ReplayStream::Player::FromEnv();
+    Rollback::ReplayStream::PlayerHost host;
+    host.restore_origin = [&] {
+      std::copy(origin.begin(), origin.end(), ram.GetRAM());
+      return true;
+    };
+    host.set_catching_up = [](bool) {};
+    host.set_pads = [](int, const auto&) {};
+    host.stopping = [] { return false; };
+    host.stop = [](const auto&) {};
+    int running = -1;
+    for (int tick = 0; tick < 4 && !player->Over(); ++tick)
+      player->Step(m_system, host, &running, hash, 0, [&](int, bool, const auto&, bool) {
+        if (mode != 0)
+          ram.GetRAM()[0x3000] = origin[0x3000] ^ 1;
+      });
+    EXPECT_TRUE(player->Over());
+  }
+  const std::string lines = Lines();
+  EXPECT_NE(lines.find("done ok frames=2 checked=1 mismatched=0"), std::string::npos) << lines;
+  EXPECT_NE(lines.find("done fail frames=2 checked=1 mismatched=1"), std::string::npos) << lines;
+  EXPECT_NE(lines.find("done ok frames=2 checked=0 mismatched=0"), std::string::npos) << lines;
+  EXPECT_NE(lines.find("checksums not compared (view names)"), std::string::npos) << lines;
 }

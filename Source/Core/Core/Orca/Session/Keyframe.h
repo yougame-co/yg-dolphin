@@ -72,6 +72,8 @@ struct ReplayStreamInfo
   // This process's history count: a fresh start or a join starts another.
   u32 segment = 0;
   std::string room;
+  // Seat labels differ from the live names in RAM, including game-owned copies.
+  bool seat_labels = false;
 };
 
 struct ReplayChunk

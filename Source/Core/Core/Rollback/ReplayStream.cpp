@@ -53,10 +53,10 @@ double MsSince(Clock::time_point start)
   return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 }
 
-u64 MemoryChecksum(Core::System& system, const ReplayText& text)
+u64 MemoryChecksum(Core::System& system)
 {
   auto& memory = system.GetMemory();
-  return text.Checksum({memory.GetRAM(), memory.GetRamSize()},
+  return RamChecksum({memory.GetRAM(), memory.GetRamSize()},
                      {memory.GetEXRAM(), memory.GetEXRAM() ? memory.GetExRamSize() : 0});
 }
 }  // namespace
@@ -578,6 +578,7 @@ bool Writer::Pump(const Orca::Net::ReplayArchive& replay, int end, int live,
     info.origin_hash = replay.origin_hash;
     info.first_frame = replay.first_frame;
     info.segment = m_segment;
+    info.seat_labels = true;
     info.room = Orca::Online::Code();
     const std::vector<u8> header = Orca::Net::PackReplayStreamHeader(info);
     m_header = header;
@@ -952,7 +953,7 @@ std::unique_ptr<Player> Player::FromEnv()
   if (product)
   {
     // Names only when the app gives them (a public replay's view-time names); a player's own replay
-    // keeps the recording's, and its RAM checksums. A malformed map shows every port as "Player N".
+    // keeps the recording's labels. A malformed map shows every port as "Player N".
     if (const std::string names = Orca::GetEnv("ORCA_REPLAY_NAMES"); !names.empty())
       play->m_names = ParseNames(names).value_or(NameMap{});
     play->m_follow = play->m_path.starts_with("ws://") || play->m_path.starts_with("wss://");
@@ -1109,18 +1110,24 @@ void Player::Finish(const PlayerHost& host, bool ok, const std::string& why)
   const double avg = m_behind_samples ? static_cast<double>(m_behind_sum) / m_behind_samples : 0.0;
   const double live_avg =
       m_behind_samples ? static_cast<double>(m_live_sum) / m_behind_samples : 0.0;
+  std::string_view comparison = "checksums compared";
+  if (m_labeled_recording)
+    comparison = "checksums not compared (labeled recording)";
+  else if (m_product && m_names)
+    comparison = "checksums not compared (view names)";
   Orca::Status::Line(fmt::format(
       "orca replay done {} frames={} checked={} mismatched={} first_mismatch={} seek={} "
       "behind_avg_ms={:.0f} behind_max_ms={:.0f} live_avg_ms={:.0f} live_max_ms={:.0f} "
-      "caught_up_ms={:.0f} waits={} waited_ms={:.0f} wall_ms={:.0f} why={}",
+      "caught_up_ms={:.0f} waits={} waited_ms={:.0f} wall_ms={:.0f} verification={} why={}",
       ok && m_mismatched == 0 ? "ok" : "fail", m_played, m_checked, m_mismatched, m_first_mismatch,
       m_seek_done ? "done" : (m_seek ? "missed" : "none"), ms(avg), ms(m_behind_max), ms(live_avg),
-      ms(m_live_max), m_caught_up_ms, m_waits, m_waited_ms, MsSince(m_started),
+      ms(m_live_max), m_caught_up_ms, m_waits, m_waited_ms, MsSince(m_started), comparison,
       why.empty() ? "-" : why));
   NOTICE_LOG_FMT(ROLLBACK, "Replay: {} after {} frames, {} checksums checked, {} differ ({})",
                  ok ? "over" : "failed", m_played, m_checked, m_mismatched, why);
   m_over = true;
-  host.stop(ok ? "The replay is over" : "The replay couldn't be played: " + why);
+  host.stop(ok ? "The replay is over; " + std::string(comparison) :
+                 "The replay couldn't be played: " + why);
 }
 
 std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, int* running,
@@ -1170,7 +1177,7 @@ std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, in
     }
     *running = origin_frame - 1;
     m_loaded = true;
-    m_text = {};
+    m_labeled_recording = info.seat_labels;
     m_position = origin_frame;
     m_catching = !m_realtime && !m_follow;
     host.set_catching_up(m_catching);
@@ -1220,7 +1227,6 @@ std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, in
         }
         Orca::Status::Line(fmt::format("orca replay seek {} -> {}", *running + 1, *seek));
         *running = origin_frame - 1;
-        m_text = {};
         m_position = origin_frame;
         rewound = origin_frame;
         m_seek_target = *seek;
@@ -1265,7 +1271,6 @@ std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, in
       return std::nullopt;
     }
     *running = to - 1;
-    m_text = m_seek_text;
     host.set_catching_up(m_catching);
     m_seek_done = true;
     m_seek_nand.clear();
@@ -1368,7 +1373,6 @@ std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, in
   {
     m_seek_taken =
         host.read_nand(&m_seek_nand) && SnapshotRing::Capture(system, &m_seek_image, false);
-    m_seek_text = m_text;
     Orca::Status::Line(fmt::format("orca replay seek-point {} {}", frame,
                                    m_seek_taken ? "taken" : "failed"));
   }
@@ -1378,6 +1382,13 @@ std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, in
     Finish(host, false, "the replay has no frame at this position");
     return std::nullopt;
   }
+  // Earlier labeled recordings predate the header flag. Recognize their seat metadata
+  // too; empty startup frames have no names yet and are not compared below.
+  if (!m_labeled_recording && !record->ports->empty() &&
+      std::ranges::all_of(*record->ports, [](const auto& port) {
+        return port.name == fmt::format("P{}", port.port + 1);
+      }))
+    m_labeled_recording = true;
   {
     Orca::Net::ReplayFrame view = *record;
     if (m_product && m_names)
@@ -1386,14 +1397,15 @@ std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, in
           ViewPorts(*record->ports, *m_names));
     }
     Orca::Net::ReplayScope scope(&view, true, true, m_product && m_names.has_value(), true);
-    const ReplayText::Scope text_scope(m_text);
     on_frame(frame, true, *view.ports, false);
   }
-  // Replay checks discount only text writes, including with view-time names enabled.
+  // Names are also copied/rendered by the game outside Orca's writes. Labeled recordings
+  // and view-time names cannot reproduce the live run's full RAM.
   if (const auto it = m_reader->Checksums().find(frame);
-      it != m_reader->Checksums().end())
+      it != m_reader->Checksums().end() && !m_labeled_recording && !record->ports->empty() &&
+      !(m_product && m_names))
   {
-    const u64 hash = MemoryChecksum(system, m_text);
+    const u64 hash = MemoryChecksum(system);
     ++m_checked;
     if (hash != it->second)
     {

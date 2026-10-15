@@ -16,7 +16,6 @@
 #include "Core/Orca/Games/Brawl/Queue.h"
 #include "Core/Orca/Games/Brawl/Relabel.h"
 #include "Core/Orca/Games/Brawl/SetBlock.h"
-#include "Core/Rollback/ReplayText.h"
 
 namespace Orca::UX::NativeText
 {
@@ -263,13 +262,13 @@ int SetWords(GuestMemory& m, const Box& box, std::string_view text)
   {
     if (m.Read8(box.buffer + i) != next[i])
     {
-      Rollback::ReplayText::Write8(m, box.buffer + i, next[i]);
+      m.Write8(box.buffer + i, next[i]);
       written = 1;
     }
   }
   if (m.Read32(box.object + BUFFER_LENGTH) != length)
   {
-    Rollback::ReplayText::Write32(m, box.object + BUFFER_LENGTH, length);
+    m.Write32(box.object + BUFFER_LENGTH, length);
     written = 1;
   }
   return written;
