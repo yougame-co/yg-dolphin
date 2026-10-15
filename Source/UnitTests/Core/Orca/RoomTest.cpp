@@ -2078,7 +2078,8 @@ protected:
         if (data.is<picojson::object>() && data.get("k").to_str().starts_with("dl"))
           direct.OnSignal("me", data.get<picojson::object>());
       }
-      direct.Send(EncodePacket(NeutralPacket(0, 1)));
+      // Link setup must not leave game inputs in flight when the session is constructed.
+      direct.Send(EncodePacket(NeutralPacket(0, 0)));
       room->Receive();
       return room->Direct().transport == 1;
     }, 10s));
