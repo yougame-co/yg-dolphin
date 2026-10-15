@@ -500,6 +500,12 @@ picojson::object PacketToJson(const Packet& packet)
   }
   if (packet.history_ack >= 0)
     d["ha"] = picojson::value(static_cast<double>(packet.history_ack));
+  if (packet.start_gate)
+  {
+    d["sg"] = picojson::value(picojson::array{
+        picojson::value(static_cast<double>(packet.start_gate->first)),
+        picojson::value(static_cast<double>(packet.start_gate->second))});
+  }
   if (packet.values_ack >= 0)
     d["va"] = picojson::value(static_cast<double>(packet.values_ack));
   if (packet.history_seat >= 0 && !packet.history.empty())
@@ -644,6 +650,20 @@ bool PacketFromJson(const picojson::object& d, Packet* packet)
       roster[s] = {values[0], values[1], values[2]};
     }
     out.roster = roster;
+  }
+  if (d.count("sg"))
+  {
+    const auto& gate = d.at("sg");
+    if (!gate.is<picojson::array>() || gate.get<picojson::array>().size() != 2)
+      return false;
+    const auto& values = gate.get<picojson::array>();
+    if (!values[0].is<double>() || !values[1].is<double>())
+      return false;
+    const double from = values[0].get<double>(), until = values[1].get<double>();
+    if (from < 0 || until < from || until > NEVER || std::floor(from) != from ||
+        std::floor(until) != until)
+      return false;
+    out.start_gate = {static_cast<int>(from), static_cast<int>(until)};
   }
   if (d.count("ha"))
   {
@@ -870,6 +890,8 @@ picojson::object KeyframeOfferToJson(const KeyframeInfo& info)
   d["key"] = picojson::value(info.key);
   d["nm"] = NamesToJson(info.names);
   d["nv"] = picojson::value(static_cast<double>(info.names_version));
+  if (info.shared)
+    d["shared"] = picojson::value(true);
   if (!info.inline_blob.empty())
     d["b"] = picojson::value(EncodeInlineKeyframe(info.inline_blob));
   return d;
@@ -904,6 +926,7 @@ std::optional<KeyframeInfo> KeyframeOfferFromJson(const picojson::object& d)
     info.inline_blob = std::move(*blob);
   }
   info.names = NamesFromJson(d);
+  info.shared = d.count("shared") && d.at("shared").is<bool>() && d.at("shared").get<bool>();
   if (const auto version = Int(d, "nv", 0, MAX_FRAME))
     info.names_version = *version;
   return info;
@@ -1012,6 +1035,7 @@ struct YouGameRoom::Impl
   // the next player in that seat doesn't read them as its own.
   std::vector<std::string> inbox_from;
   std::optional<Packet> outgoing;
+  std::map<int, std::optional<Packet>> outgoing_seats;
 
   // Owned by the I/O thread.
   std::unique_ptr<Common::WebSocket> ws = std::make_unique<Common::WebSocket>();
@@ -1166,6 +1190,7 @@ struct YouGameRoom::Impl
   std::string queue = "private";
   bool queue_known = false;
   bool stay = false;
+  bool doubles = false;
   int room_size = MAX_SEATS;
   std::string match_id;
   bool set_done = false;
@@ -1264,6 +1289,8 @@ struct YouGameRoom::Impl
   // Emulator thread: the last direct copy, and the newest input it carried.
   Clock::time_point direct_sent_at{};
   int direct_sent_newest = -1;
+  std::array<Clock::time_point, MAX_SEATS> direct_seat_sent_at{};
+  std::array<int, MAX_SEATS> direct_seat_sent_newest{-1, -1, -1, -1};
   bool direct_malformed_logged = false;
 
   // Test-only network delay (Orca::TestNetDelayMs): messages wait in these queues, in order.
@@ -2225,22 +2252,24 @@ struct YouGameRoom::Impl
   // The emulator thread's half of Send: a copy of the packet straight to every linked player, on
   // this thread, without the room's lock. Never drop-in history (the relay carries it, in order),
   // and only as many inputs as a datagram holds (the oldest first, as catch-up needs).
-  void SendDirect(const Packet& packet)
+  void SendDirect(const Packet& packet, int recipient = -1)
   {
-    if (!direct)
+    if (!direct || recipient >= MAX_SEATS)
       return;
     const auto now = Clock::now();
+    auto& sent_at = recipient < 0 ? direct_sent_at : direct_seat_sent_at[recipient];
+    auto& sent_newest = recipient < 0 ? direct_sent_newest : direct_seat_sent_newest[recipient];
     const int newest =
         packet.pads.empty() ? -1 : packet.first_frame + static_cast<int>(packet.pads.size()) - 1;
-    if (newest < direct_sent_newest - 600)
-      direct_sent_newest = -1;  // another session, from an earlier frame
-    if (newest <= direct_sent_newest && !packet.checksum_frame && !packet.leaving &&
-        now - direct_sent_at < DIRECT_STALL_GAP)
+    if (newest < sent_newest - 600)
+      sent_newest = -1;  // another session, from an earlier frame
+    if (newest <= sent_newest && !packet.checksum_frame && !packet.leaving &&
+        now - sent_at < DIRECT_STALL_GAP)
     {
       return;
     }
-    direct_sent_at = now;
-    direct_sent_newest = std::max(direct_sent_newest, newest);
+    sent_at = now;
+    sent_newest = std::max(sent_newest, newest);
     Packet copy = packet;
     copy.history_seat = -1;
     copy.history_first = 0;
@@ -2254,7 +2283,7 @@ struct YouGameRoom::Impl
       payload = EncodePacket(copy);
     }
     if (payload.size() <= DirectLink::MAX_PAYLOAD)
-      direct->Send(payload);
+      direct->Send(payload, recipient);
   }
 
   void Run()
@@ -2519,6 +2548,8 @@ struct YouGameRoom::Impl
       std::lock_guard lock(mutex);
       room["queue"] = picojson::value(queue);
       room["size"] = picojson::value(static_cast<double>(room_size));
+      if (doubles && queue == "private")
+        room["doubles"] = picojson::value(true);
     }
     room["host"] = ended ? picojson::value() : picojson::value(host);
     room["readyIds"] = picojson::value(picojson::array{});
@@ -3550,6 +3581,11 @@ struct YouGameRoom::Impl
           d["c"] = picojson::value(options.compatibility);
           d["r"] = picojson::value(peer.heard);
           d["h"] = picojson::value(!joining);
+          {
+            std::lock_guard lock(mutex);
+            if (doubles && queue == "private")
+              d["doubles"] = picojson::value(true);
+          }
           if (FriendsRecovery())
             d["run"] = picojson::value(run);  // optional; private room recovery only
           if (peer.resume_requested)
@@ -3593,18 +3629,37 @@ struct YouGameRoom::Impl
     if (now - last_send < SEND_GAP)
       return;
     std::optional<Packet> packet;
+    std::map<int, std::optional<Packet>> seat_packets;
     {
       std::lock_guard lock(mutex);
       packet.swap(outgoing);
+      seat_packets.swap(outgoing_seats);
     }
-    if (!packet)
+    if (!packet && seat_packets.empty())
       return;
     last_send = now;
     // One message to the whole room (the Worker relays it to everyone else): every player gets the
     // same inputs, and the room's message limit counts it once.
     picojson::object message;
     message["t"] = picojson::value("msg");
-    message["d"] = picojson::value(PacketToJson(*packet));
+    if (!seat_packets.empty())
+    {
+      picojson::object batch;
+      batch["k"] = picojson::value("bp");
+      picojson::array entries;
+      for (const auto& [recipient, pending] : seat_packets)
+      {
+        if (pending)
+          entries.emplace_back(picojson::array{picojson::value(static_cast<double>(recipient)),
+                                               picojson::value(PacketToJson(*pending))});
+      }
+      batch["p"] = picojson::value(entries);
+      message["d"] = picojson::value(batch);
+    }
+    else
+    {
+      message["d"] = picojson::value(PacketToJson(*packet));
+    }
     SendJson(message);
   }
 
@@ -3986,6 +4041,8 @@ struct YouGameRoom::Impl
         queue_known = true;
         stay = room.count("stay") && room.at("stay").evaluate_as_boolean();
         room_size = Int(room, "size", 2, MAX_SEATS).value_or(MAX_SEATS);
+        doubles = queue == "private" && room.count("doubles") &&
+                  room.at("doubles").is<bool>() && room.at("doubles").get<bool>();
         if (queue != "private")
         {
           NOTICE_LOG_FMT(NETPLAY, "Orca room: a matchmade {} room{}", queue,
@@ -4371,7 +4428,8 @@ struct YouGameRoom::Impl
         SetStatus(fmt::format("Room {}: {} is here", room, peer.name.empty() ? "a friend" : peer.name));
         Emit(
             {PeerEvent::Kind::Arrived, peer.slot, peer.drop_in_host, peer.name, peer.controls,
-             {}, {}, peer.queue, false, peer.recovering_arrival});
+             {}, {}, peer.queue, false, peer.recovering_arrival,
+             d.count("doubles") && d.at("doubles").is<bool>() && d.at("doubles").get<bool>()});
         // Refresh the page's lobby now, not at the next roster change.
         Publish();
       }
@@ -4434,10 +4492,45 @@ struct YouGameRoom::Impl
       direct->OnSignal(id, d);
       return;
     }
-    if (kind != "p" || !peer.announced)
+    const picojson::object* packet_data = &d;
+    if (kind == "bp")
+    {
+      bool enabled;
+      int local;
+      {
+        std::lock_guard lock(mutex);
+        enabled = doubles && queue == "private";
+        local = seat;
+      }
+      if (!enabled || !peer.announced || !d.count("p") || !d.at("p").is<picojson::array>())
+        return;
+      const auto& entries = d.at("p").get<picojson::array>();
+      if (entries.size() > MAX_SEATS - 1)
+        return;
+      packet_data = nullptr;
+      for (const auto& entry : entries)
+      {
+        if (!entry.is<picojson::array>())
+          return;
+        const auto& pair = entry.get<picojson::array>();
+        if (pair.size() != 2 || !pair[0].is<double>() || !pair[1].is<picojson::object>())
+          return;
+        if (pair[0].get<double>() == local)
+        {
+          if (packet_data)
+            return;
+          packet_data = &pair[1].get<picojson::object>();
+        }
+      }
+      if (!packet_data)
+        return;
+    }
+    else if (kind != "p")
+      return;
+    if (!peer.announced)
       return;
     Packet packet;
-    if (!PacketFromJson(d, &packet) || packet.seat != peer.slot)
+    if (!PacketFromJson(*packet_data, &packet) || packet.seat != peer.slot)
     {
       WARN_LOG_FMT(NETPLAY, "Orca room: a malformed packet from seat {}", peer.slot + 1);
       return;
@@ -4599,15 +4692,20 @@ void YouGameRoom::RetryPeer(int seat)
     m_impl->pending_retries.push_back(id->second);
 }
 
-bool YouGameRoom::HoldInputSilence(Clock::time_point since, Clock::time_point now)
+bool YouGameRoom::HoldInputSilence(Clock::time_point since, Clock::time_point now,
+                                  std::optional<std::vector<int>> missing)
 {
   std::lock_guard lock(m_impl->mutex);
   if (!m_impl->options.recovery_enabled || m_impl->queue != "private" ||
       (!m_impl->queue_known && !m_impl->options.friends_room) || m_impl->state != RoomState::Waiting ||
       m_impl->peer_ids.empty())
     return false;
+  bool held = false;
   for (const auto& [slot, id] : m_impl->peer_ids)
   {
+    if (missing && std::ranges::find(*missing, slot) == missing->end())
+      continue;
+    held = true;
     // A real departure (or a requested resync) interrupts the stall immediately.
     if (std::ranges::any_of(m_impl->events, [&](const PeerEvent& e) {
           return e.kind == PeerEvent::Kind::Left && e.seat == slot;
@@ -4629,7 +4727,7 @@ bool YouGameRoom::HoldInputSilence(Clock::time_point since, Clock::time_point no
     if (now >= hold->second)
       return false;
   }
-  return true;
+  return held;
 }
 
 bool YouGameRoom::RoomRecovering(Clock::time_point now) const
@@ -4838,6 +4936,12 @@ std::string YouGameRoom::Queue() const
   return m_impl->queue;
 }
 
+bool YouGameRoom::Doubles() const
+{
+  std::lock_guard lock(m_impl->mutex);
+  return m_impl->doubles && m_impl->queue == "private";
+}
+
 bool YouGameRoom::MatchLive() const
 {
   std::lock_guard lock(m_impl->mutex);
@@ -4965,11 +5069,33 @@ void YouGameRoom::Send(const Packet& packet)
   {
     std::lock_guard lock(m_impl->mutex);
     CoalescePacket(&m_impl->outgoing, packet);
+    m_impl->outgoing_seats.clear();
     m_impl->input_through = packet.ack;
   }
   // Every packet also goes straight to each linked player; the first copy to arrive wins
   // (Session::ReceivePackets handles both).
   m_impl->SendDirect(packet);
+}
+
+void YouGameRoom::SendToSeats(const std::map<int, Packet>& packets)
+{
+  {
+    std::lock_guard lock(m_impl->mutex);
+    m_impl->outgoing.reset();
+    std::erase_if(m_impl->outgoing_seats,
+                  [&](const auto& entry) { return !packets.contains(entry.first); });
+    for (const auto& [recipient, packet] : packets)
+    {
+      CoalescePacket(&m_impl->outgoing_seats[recipient], packet);
+      // Three fully varying histories still fit the room's existing 64 KB message cap.
+      auto& history = m_impl->outgoing_seats[recipient]->history;
+      if (history.size() > MAX_HISTORY_RUNS_IN_PACKET)
+        history.resize(MAX_HISTORY_RUNS_IN_PACKET);
+      m_impl->input_through = packet.ack;
+    }
+  }
+  for (const auto& [recipient, packet] : packets)
+    m_impl->SendDirect(packet, recipient);
 }
 
 std::vector<Packet> YouGameRoom::Receive()

@@ -270,6 +270,17 @@ bool Session::InPlay(int seat) const
          m_plan[seat].live_from != NEVER;
 }
 
+std::vector<int> Session::MissingInputSeats() const
+{
+  std::vector<int> seats;
+  for (int seat = 0; seat < m_config.seats; ++seat)
+  {
+    if (InPlay(seat) && KnownThrough(seat) < m_frame - m_config.max_rollback)
+      seats.push_back(seat);
+  }
+  return seats;
+}
+
 bool Session::CatchingUp() const
 {
   return m_config.authority_seat >= 0 && m_config.authority_seat != m_config.local_seat &&
@@ -383,6 +394,18 @@ void Session::RequireValues(int seat, int version)
     m_values_required[seat] = std::max(m_values_required[seat], version);
 }
 
+void Session::AddPeerBatch(const std::vector<int>& seats, int live_from, int history_from)
+{
+  m_start_gate = {live_from, NEVER};
+  for (const int seat : seats)
+  {
+    if (seat < 0 || seat >= m_config.seats || seat == m_config.local_seat)
+      continue;
+    AddPeer(seat, live_from, history_from);
+    m_plug_batch.insert(seat);
+  }
+}
+
 void Session::SetValuesHeld(int version)
 {
   m_values_held = std::max(m_values_held, version);
@@ -390,6 +413,9 @@ void Session::SetValuesHeld(int version)
 
 void Session::DropSeat(int seat)
 {
+  m_plug_batch.erase(seat);
+  if (m_start_gate && m_start_gate->second == NEVER && m_plug_batch.empty())
+    m_start_gate->second = m_frame;
   if (!InPlay(seat))
     return;
   SeatPlan& plan = m_plan[seat];
@@ -579,12 +605,40 @@ void Session::AppendConfirmedToLog()
 
 void Session::PlugCaughtUpPeers()
 {
+  if (!m_plug_batch.empty())
+  {
+    int worst_rtt = 0;
+    bool ready = true;
+    for (const int seat : m_plug_batch)
+    {
+      const int rtt = RoundTripFrames(seat);
+      worst_rtt = std::max(worst_rtt, rtt);
+      ready &= m_history_acked[seat] >= m_plan[seat].live_from - 1 &&
+               m_remote_frame[seat] >= m_frame - CATCH_UP_SLACK - rtt;
+      for (int peer = 0; peer < m_config.seats; ++peer)
+      {
+        if (InPlay(peer) && m_values_acked[peer] < m_values_required[seat])
+          ready = false;
+      }
+    }
+    if (ready)
+    {
+      const int plug = m_frame + m_config.max_rollback + 2 * m_config.max_delay + worst_rtt + 4;
+      m_start_gate->second = plug;
+      for (const int seat : m_plug_batch)
+      {
+        m_plan[seat].plug_from = plug;
+        AdvanceReceived(seat);
+      }
+      m_plug_batch.clear();
+    }
+  }
   // The host plugs a joiner in once it has replayed the history and caught up, far enough ahead
   // that every machine hears of it before running that frame: the joiner may be up to its delay
   // plus a rollback window ahead of what the host last heard.
   for (int s = 0; s < m_config.seats; ++s)
   {
-    if (!InPlay(s))
+    if (!InPlay(s) || m_plug_batch.contains(s))
       continue;
     SeatPlan& plan = m_plan[s];
     if (plan.plug_from != NEVER || m_history_acked[s] < plan.live_from - 1)
@@ -811,7 +865,7 @@ Step Session::OnBoundary(int completed_frame, const Pad& local_pad)
       inputs.erase(inputs.begin());
   }
   std::erase_if(m_local_checksums, [this](const auto& e) { return e.first < m_frame - 600; });
-  std::erase_if(m_peer_checksums, [this](const auto& e) { return e.first < m_frame - 600; });
+  std::erase_if(m_peer_checksums, [this](const auto& e) { return e.first.first < m_frame - 600; });
 
   m_stats.confirmed_frame = ConfirmedFrame();
   return {StepKind::Run, run};
@@ -1269,6 +1323,11 @@ Pads Session::PadsFor(int frame)
     if (after != inputs.begin())
       pads[s] = std::prev(after)->second;
   }
+  if (m_start_gate && frame >= m_start_gate->first && frame < m_start_gate->second)
+  {
+    for (Pad& pad : pads)
+      pad[0] &= static_cast<u8>(~PAD_WIRE_START_HIGH);
+  }
   return pads;
 }
 
@@ -1338,6 +1397,20 @@ void Session::ReceivePackets()
     const bool from_authority = s == m_config.authority_seat;
     if (from_authority && packet.roster && !stale)
     {
+      if (m_config.per_peer_inputs && packet.start_gate && packet.start_gate != m_start_gate)
+      {
+        const auto [from, until] = *packet.start_gate;
+        if (from < 0 || until < from || until > NEVER)
+        {
+          FailPeer("Invalid batch start gate");
+          return;
+        }
+        const int changed = m_start_gate && from == m_start_gate->first ?
+            std::min(until, m_start_gate->second) : from;
+        if (changed < m_frame && changed >= LogEnd())
+          m_dirty = std::min(m_dirty, changed);
+        m_start_gate = packet.start_gate;
+      }
       ApplyRoster(*packet.roster);
       if (!m_error.empty())
         return;
@@ -1494,7 +1567,7 @@ void Session::AddPeerChecksum(int seat, const Packet& packet)
   if (!packet.checksum_frame || *packet.checksum_frame <= m_peer_checksum_frame[seat])
     return;
   m_peer_checksum_frame[seat] = *packet.checksum_frame;
-  m_peer_checksums[*packet.checksum_frame] = packet.checksum;
+  m_peer_checksums[{*packet.checksum_frame, seat}] = packet.checksum;
 }
 
 void Session::CheckChecksums()
@@ -1515,7 +1588,7 @@ void Session::CheckChecksums()
   }
   for (auto it = m_peer_checksums.begin(); it != m_peer_checksums.end();)
   {
-    const auto mine = m_local_checksums.find(it->first);
+    const auto mine = m_local_checksums.find(it->first.first);
     if (mine == m_local_checksums.end())
     {
       ++it;
@@ -1523,7 +1596,7 @@ void Session::CheckChecksums()
     }
     if (mine->second != it->second)
     {
-      Fail(fmt::format("Desync at frame {}: {:016x} here, {:016x} there", it->first, mine->second,
+      Fail(fmt::format("Desync at frame {}: {:016x} here, {:016x} there", it->first.first, mine->second,
                        it->second));
       return;
     }
@@ -1536,8 +1609,10 @@ void Session::AddHistory(Packet* packet)
 {
   // The host sends one joiner at a time the log frames it lacks, from where the last send stopped
   // (the relay is ordered and reliable), or again from its acknowledgement if that stalls.
-  for (int s = 0; s < m_config.seats; ++s)
+  const bool rotate = m_config.per_peer_inputs && PlayersInPlay() > 2;
+  for (int offset = 0; offset < m_config.seats; ++offset)
   {
+    const int s = (offset + (rotate ? m_history_next : 0)) % m_config.seats;
     if (!InPlay(s))
       continue;
     const int until = std::min(m_plan[s].live_from - 1, LogEnd() - 1);
@@ -1567,6 +1642,8 @@ void Session::AddHistory(Packet* packet)
       packet->history.push_back(pads);
     }
     m_history_sent[s] = first + static_cast<int>(packet->history.size()) - 1;
+    if (rotate)
+      m_history_next = (s + 1) % m_config.seats;
     return;
   }
 }
@@ -1626,6 +1703,7 @@ void Session::SendPacket()
     if (m_config.authority_seat == m_config.local_seat)
     {
       packet.roster = m_plan;
+      packet.start_gate = m_start_gate;
       AddHistory(&packet);
     }
   }
@@ -1655,6 +1733,40 @@ void Session::SendPacket()
     m_pending_checksum.reset();
   }
   m_last_sent_newest = newest;
+  if (drop_in && m_config.per_peer_inputs && PlayersInPlay() > 2)
+  {
+    std::map<int, Packet> recipients;
+    for (int seat = 0; seat < m_config.seats; ++seat)
+    {
+      if (!InPlay(seat))
+        continue;
+      Packet copy = packet;
+      copy.pads.clear();
+      const int available = std::min(newest, m_remote_frame[seat] + MAX_FRAMES_AHEAD - 16);
+      int from = m_local.empty() ? 0 :
+          std::max({m_acked[seat] + 1, newest - m_config.max_pads_per_packet + 1,
+                    m_local.begin()->first});
+      if (!m_local.empty() && m_acked[seat] + 1 >= m_local.begin()->first &&
+          newest - m_acked[seat] > m_config.max_pads_per_packet)
+        from = m_acked[seat] + 1;
+      const int through = std::min(available, from + MAX_PADS_IN_PACKET - 1);
+      copy.first_frame = from <= through ? from : 0;
+      for (int frame = from; frame <= through; ++frame)
+      {
+        const auto input = m_local.find(frame);
+        copy.pads.push_back(input != m_local.end() ? input->second : Pad{});
+      }
+      if (copy.history_seat != seat)
+      {
+        copy.history_seat = -1;
+        copy.history_first = 0;
+        copy.history.clear();
+      }
+      recipients.emplace(seat, std::move(copy));
+    }
+    m_transport.SendToSeats(recipients);
+    return;
+  }
   m_transport.Send(packet);
 }
 }  // namespace Orca::Net
