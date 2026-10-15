@@ -2203,6 +2203,8 @@ protected:
     EXPECT_TRUE(session->Error().empty());
     EXPECT_FALSE(session->Idle());
     EXPECT_EQ(StallFor(200ms).kind, StepKind::Run);
+    // A short stall while the room is still recovering spends no second excuse.
+    EXPECT_EQ(budget.Recoveries(), 1);
     EXPECT_FALSE(Sent(room_code, "leave"));
     EXPECT_FALSE(Sent(room_code, "msg", "drop"));
   }
@@ -2952,7 +2954,8 @@ TEST_F(OrcaRoomStallRuntime, FourthRecoveredOutageInTenMinutesCounts)
   ASSERT_EQ(StallFor(200ms).kind, StepKind::Run);
   for (int outage = 0; outage < 3; ++outage)
   {
-    ASSERT_EQ(StallFor(100ms, false, true).kind, StepKind::Run)
+    // A recovered outage worth an excuse is at least MIN_EXCUSED_STALL long.
+    ASSERT_EQ(StallFor(2100ms, false, true).kind, StepKind::Run)
         << "outage " << outage + 1 << ": " << session->Error() << ": " << session->Describe();
     EXPECT_TRUE(last_excused);
     EXPECT_EQ(budget.Recoveries(), outage + 1);
@@ -2976,8 +2979,9 @@ TEST_F(OrcaRoomStallRuntime, RollbackSplitsOneOutageWithoutSpendingAnotherRecove
   Packet partial = NeutralPacket(20, 1);
   partial.pads[0][0] = 1;
   std::atomic<bool> partial_done{false};
+  // The two halves together last past MIN_EXCUSED_STALL, as a real outage does.
   std::thread partial_sender([&] {
-    std::this_thread::sleep_for(100ms);
+    std::this_thread::sleep_for(1200ms);
     while (!partial_done)
     {
       direct.Send(EncodePacket(partial));
@@ -3003,7 +3007,7 @@ TEST_F(OrcaRoomStallRuntime, RollbackSplitsOneOutageWithoutSpendingAnotherRecove
   remaining.pads[4][0] = 1;
   std::atomic<bool> remaining_done{false};
   std::thread remaining_sender([&] {
-    std::this_thread::sleep_for(200ms);
+    std::this_thread::sleep_for(1100ms);
     while (!remaining_done)
     {
       direct.Send(EncodePacket(remaining));

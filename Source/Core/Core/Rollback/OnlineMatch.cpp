@@ -4607,15 +4607,21 @@ void StallBudget::FinishStep(std::optional<Clock::time_point> stall_start, Clock
     for (const auto& [start, until] : m_pending_stalls)
       duration += until - start;
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(duration).count();
-    excused = ExcuseRecovered(end);
-    if (excused)
-      NOTICE_LOG_FMT(ROLLBACK,
-                     "Online: stall of {} ms excused: recovered outage ({} of {} in {} min)",
-                     ms, Recoveries(), MAX_RECOVERIES, RECOVERY_WINDOW.count());
-    else
-      NOTICE_LOG_FMT(ROLLBACK, "Online: stall of {} ms not excused: recovered outage cap reached "
-                               "({} of {} in {} min)",
-                     ms, Recoveries(), MAX_RECOVERIES, RECOVERY_WINDOW.count());
+    // A short stall during a recovery (the frames right after a resume, a hiccup before the room
+    // notices) is not the outage: it counts as usual and spends no excuse, so one outage costs one.
+    if (duration >= MIN_EXCUSED_STALL)
+    {
+      excused = ExcuseRecovered(end);
+      if (excused)
+        NOTICE_LOG_FMT(ROLLBACK,
+                       "Online: stall of {} ms excused: recovered outage ({} of {} in {} min)",
+                       ms, Recoveries(), MAX_RECOVERIES, RECOVERY_WINDOW.count());
+      else
+        NOTICE_LOG_FMT(ROLLBACK,
+                       "Online: stall of {} ms not excused: recovered outage cap reached "
+                       "({} of {} in {} min)",
+                       ms, Recoveries(), MAX_RECOVERIES, RECOVERY_WINDOW.count());
+    }
   }
   if (!excused)
     for (const auto& [start, until] : m_pending_stalls)

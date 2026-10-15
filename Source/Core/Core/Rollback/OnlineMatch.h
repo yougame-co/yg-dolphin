@@ -302,6 +302,8 @@ public:
   // other. Returns whether this one was excused.
   static constexpr std::chrono::minutes RECOVERY_WINDOW{10};
   static constexpr int MAX_RECOVERIES = 3;
+  // Only a stall at least this long is a recovered outage worth an excuse.
+  static constexpr std::chrono::seconds MIN_EXCUSED_STALL{2};
   bool ExcuseRecovered(Clock::time_point now);
   // Used by StepSession, including rollback returns that split one input stall across steps.
   void ObserveRecovery(bool recovering) { m_recovery_seen |= recovering; }
