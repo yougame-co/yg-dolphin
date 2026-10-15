@@ -3097,7 +3097,7 @@ TEST_P(OrcaRoomStallRuntime, RollbackSplitsOneOutageWithoutSpendingAnotherRecove
   OpenDirect("budgetsplt", true);
   ASSERT_TRUE(session);
   ASSERT_EQ(StallFor(100ms).kind, StepKind::Run) << session->Error() << ": " << session->Describe();
-  Action(room_code, fmt::format(R"({{"message":{}}})", RosterMessage("away", true)));
+  Action(room_code, fmt::format(R"({{"message":{}}})", PresenceRoster("away")));
   ASSERT_TRUE(Wait([&] { return room->RoomRecovering(RoomClock::now()); }));
   // Frame 20 changes a prediction, but frames 16..19 are still missing: Rollback returns
   // while the original stall is alive, and several replay steps precede its next stall poll.
@@ -3127,7 +3127,7 @@ TEST_P(OrcaRoomStallRuntime, RollbackSplitsOneOutageWithoutSpendingAnotherRecove
   EXPECT_TRUE(session->InputStalled());
   EXPECT_EQ(budget.Recoveries(), 0);
   // The room back and the rest of the inputs arrive after the rollback has returned.
-  Action(room_code, fmt::format(R"({{"message":{}}})", RosterMessage("back", true)));
+  Action(room_code, fmt::format(R"({{"message":{}}})", PresenceRoster("back")));
   Packet remaining = NeutralPacket(16, 16);
   remaining.pads[4][0] = 1;
   std::atomic<bool> remaining_done{false};
