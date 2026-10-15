@@ -4633,6 +4633,8 @@ struct MeshPlayer
               static_cast<u8>(wall % 3), 0, 0, static_cast<u8>(transport.seat + 1), 0, 0, 0};
       if (held_start)
         pad[0] |= PAD_WIRE_START_HIGH;
+      if (unplugged_pad)
+        pad = UNPLUGGED_PAD;
       const Step step = session->OnBoundary(completed, pad);
       if (step.kind == StepKind::Ended || step.kind == StepKind::Wait || step.kind == StepKind::Stall)
         return ran;
@@ -4651,6 +4653,7 @@ struct MeshPlayer
   std::unique_ptr<Session> session;
   int completed;
   bool held_start = false;
+  bool unplugged_pad = false;
 };
 
 struct FourFriends
@@ -5380,12 +5383,16 @@ TEST(OrcaDoubles, HostBoundaryKeepsPlayingAfterStaggeredFriendBlackouts)
 TEST(OrcaDoubles, HostBoundaryRoomDepartureDoesNotSpendTheNextFriendsRetry)
 {
   FourFriends friends;
+  // The departing seat's controller already reads unplugged: removing it needs no rollback,
+  // so the same Boundary must then handle the other friend's expired input hold.
+  friends.players[2]->unplugged_pad = true;
   friends.Play(400);
-  friends.mesh.blackout[2] = true;
-  friends.Play(6);
   friends.mesh.blackout[3] = true;
+  friends.Play(6);
+  friends.mesh.blackout[2] = true;
   friends.Play(50);
   auto& host = *friends.players[0];
+  ASSERT_EQ(host.session->MissingInputSeats(), (std::vector<int>{3}));
   friends.disabled[0] = friends.disabled[2] = friends.disabled[3] = true;
   bool told_left = false;
   for (int boundary = 0; boundary < 40; ++boundary)
@@ -5405,11 +5412,13 @@ TEST(OrcaDoubles, HostBoundaryRoomDepartureDoesNotSpendTheNextFriendsRetry)
     if (host.session->Plan()[3].live_from == NEVER && !host.session->Resimulating())
       break;
   }
+  EXPECT_TRUE(told_left);
   EXPECT_EQ(host.session->Plan()[2].live_from, NEVER);
   EXPECT_EQ(host.session->Plan()[3].live_from, NEVER);
+  const int compare_from = host.completed + 10;
   friends.disabled[0] = false;
   friends.Play(100);
-  friends.Compare();
+  friends.Compare(compare_from);
 }
 
 TEST(OrcaDoubles, RosterWaitUsesTheSessionsAuthoritySeat)
