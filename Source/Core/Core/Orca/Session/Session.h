@@ -101,6 +101,15 @@ struct SeatPlan
   bool operator==(const SeatPlan&) const = default;
 };
 
+// Host-owned inputs for a completed stay in a seat, including an immediate retained-seat rebuild.
+struct DepartedInputs
+{
+  int plug_from = NEVER;
+  int unplug_from = NEVER;
+  int first_frame = 0;
+  std::vector<Pad> pads;
+};
+
 // One message from one player: its recent inputs, what it has received, and a checksum.
 struct Packet
 {
@@ -144,6 +153,8 @@ struct Packet
   std::optional<std::array<SeatPlan, MAX_SEATS>> roster;
   // Multi-peer pre-match batch: suppress Start during [first, second).
   std::optional<std::pair<int, int>> start_gate;
+  // The host's final input prefix for a completed stay (opted-in friends rooms only).
+  std::map<int, DepartedInputs> departed;
   // The highest frame of shared history this sender holds contiguously from frame 0 (-1: none). The
   // host sends a joining player the history it lacks.
   int history_ack = -1;
@@ -425,6 +436,8 @@ private:
   double FramesFromMs(double ms) const;
   void TrackAdvantage();
   int KnownThrough(int seat) const;
+  int DepartedThrough(int seat) const;
+  void AddDeparted(Packet* packet, int recipient) const;
   bool InPlay(int seat) const;
   // This player and every other one in play.
   int PlayersInPlay() const;
@@ -439,6 +452,9 @@ private:
   std::set<int> m_plug_batch;
   int m_history_next = 0;
   std::optional<std::pair<int, int>> m_start_gate;
+  std::array<int, MAX_SEATS> m_authority_ack{-1, -1, -1, -1};
+  std::array<std::array<int, MAX_SEATS>, MAX_SEATS> m_peer_ack{};
+  std::map<int, DepartedInputs> m_departed;
 
   Config m_config;
   Game& m_game;

@@ -506,6 +506,21 @@ picojson::object PacketToJson(const Packet& packet)
         picojson::value(static_cast<double>(packet.start_gate->first)),
         picojson::value(static_cast<double>(packet.start_gate->second))});
   }
+  if (!packet.departed.empty())
+  {
+    picojson::array stays;
+    for (const auto& [seat, stay] : packet.departed)
+    {
+      std::string hex;
+      for (const Pad& pad : stay.pads)
+        hex += ToHex(pad.data(), pad.size());
+      stays.emplace_back(picojson::array{picojson::value(static_cast<double>(seat)),
+          picojson::value(static_cast<double>(stay.plug_from)),
+          picojson::value(static_cast<double>(stay.unplug_from)),
+          picojson::value(static_cast<double>(stay.first_frame)), picojson::value(hex)});
+    }
+    d["ds"] = picojson::value(stays);
+  }
   if (packet.values_ack >= 0)
     d["va"] = picojson::value(static_cast<double>(packet.values_ack));
   if (packet.history_seat >= 0 && !packet.history.empty())
@@ -664,6 +679,43 @@ bool PacketFromJson(const picojson::object& d, Packet* packet)
         std::floor(until) != until)
       return false;
     out.start_gate = {static_cast<int>(from), static_cast<int>(until)};
+  }
+  if (d.count("ds"))
+  {
+    const auto& stays = d.at("ds");
+    if (!stays.is<picojson::array>() || stays.get<picojson::array>().size() >= MAX_SEATS)
+      return false;
+    for (const auto& value : stays.get<picojson::array>())
+    {
+      if (!value.is<picojson::array>() || value.get<picojson::array>().size() != 5)
+        return false;
+      const auto& entry = value.get<picojson::array>();
+      int numbers[4];
+      for (int i = 0; i < 4; ++i)
+      {
+        if (!entry[i].is<double>() || entry[i].get<double>() < 0 ||
+            entry[i].get<double>() > MAX_FRAME ||
+            std::floor(entry[i].get<double>()) != entry[i].get<double>())
+          return false;
+        numbers[i] = static_cast<int>(entry[i].get<double>());
+      }
+      std::vector<u8> input;
+      if (numbers[0] >= MAX_SEATS || out.departed.contains(numbers[0]) ||
+          numbers[2] < numbers[1] || numbers[3] < numbers[1] ||
+          !entry[4].is<std::string>() ||
+          entry[4].get<std::string>().size() > MAX_PADS_IN_PACKET * sizeof(Pad) * 2 ||
+          !FromHex(entry[4].get<std::string>(), &input) || input.size() % sizeof(Pad) ||
+          numbers[3] + input.size() / sizeof(Pad) > static_cast<size_t>(numbers[2]))
+        return false;
+      DepartedInputs stay{numbers[1], numbers[2], numbers[3], {}};
+      for (size_t offset = 0; offset < input.size(); offset += sizeof(Pad))
+      {
+        Pad pad;
+        std::copy_n(input.begin() + offset, sizeof(Pad), pad.begin());
+        stay.pads.push_back(pad);
+      }
+      out.departed.emplace(numbers[0], std::move(stay));
+    }
   }
   if (d.count("ha"))
   {
@@ -4921,8 +4973,52 @@ void CoalescePacket(std::optional<Packet>* outgoing, const Packet& packet)
       merged.history_first = pending->history_first;
     }
   }
+  for (const auto& [seat, stay] : pending->departed)
+  {
+    auto [entry, inserted] = merged.departed.emplace(seat, stay);
+    if (!inserted && entry->second.unplug_from == stay.unplug_from &&
+        stay.first_frame < entry->second.first_frame)
+    {
+      auto& next = entry->second;
+      const int extra = next.first_frame - stay.first_frame;
+      if (extra <= static_cast<int>(stay.pads.size()) &&
+          extra + next.pads.size() <= MAX_PADS_IN_PACKET)
+      {
+        next.pads.insert(next.pads.begin(), stay.pads.begin(), stay.pads.begin() + extra);
+        next.first_frame = stay.first_frame;
+      }
+    }
+  }
   merged.leaving = merged.leaving || pending->leaving;
   pending = std::move(merged);
+}
+
+void CoalesceBroadcast(std::optional<Packet>* outgoing,
+                       std::map<int, std::optional<Packet>>* addressed, const Packet& packet)
+{
+  for (auto& [recipient, pending] : *addressed)
+    CoalescePacket(&pending, packet);
+  CoalescePacket(outgoing, packet);
+}
+
+void CoalesceToSeats(std::optional<Packet>* outgoing,
+                     std::map<int, std::optional<Packet>>* addressed,
+                     const std::map<int, Packet>& packets)
+{
+  if (*outgoing)
+  {
+    for (const auto& [recipient, packet] : packets)
+    {
+      Packet pending = **outgoing;
+      if (pending.history_seat != recipient)
+        pending.history.clear();
+      CoalescePacket(&(*addressed)[recipient], pending);
+    }
+    outgoing->reset();
+  }
+  std::erase_if(*addressed, [&](const auto& entry) { return !packets.contains(entry.first); });
+  for (const auto& [recipient, packet] : packets)
+    CoalescePacket(&(*addressed)[recipient], packet);
 }
 
 bool YouGameRoom::FriendsRecovery() const
@@ -5068,8 +5164,7 @@ void YouGameRoom::Send(const Packet& packet)
 {
   {
     std::lock_guard lock(m_impl->mutex);
-    CoalescePacket(&m_impl->outgoing, packet);
-    m_impl->outgoing_seats.clear();
+    CoalesceBroadcast(&m_impl->outgoing, &m_impl->outgoing_seats, packet);
     m_impl->input_through = packet.ack;
   }
   // Every packet also goes straight to each linked player; the first copy to arrive wins
@@ -5081,16 +5176,9 @@ void YouGameRoom::SendToSeats(const std::map<int, Packet>& packets)
 {
   {
     std::lock_guard lock(m_impl->mutex);
-    m_impl->outgoing.reset();
-    std::erase_if(m_impl->outgoing_seats,
-                  [&](const auto& entry) { return !packets.contains(entry.first); });
+    CoalesceToSeats(&m_impl->outgoing, &m_impl->outgoing_seats, packets);
     for (const auto& [recipient, packet] : packets)
     {
-      CoalescePacket(&m_impl->outgoing_seats[recipient], packet);
-      // Three fully varying histories still fit the room's existing 64 KB message cap.
-      auto& history = m_impl->outgoing_seats[recipient]->history;
-      if (history.size() > MAX_HISTORY_RUNS_IN_PACKET)
-        history.resize(MAX_HISTORY_RUNS_IN_PACKET);
       m_impl->input_through = packet.ack;
     }
   }

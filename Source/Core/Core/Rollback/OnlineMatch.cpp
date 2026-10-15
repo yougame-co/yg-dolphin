@@ -1336,17 +1336,20 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
           }) && std::ranges::all_of(match.menu_waiting, [&](const auto& entry) {
             return entry.first == event.seat || entry.second.doubles;
           });
-      if (!capable && (std::any_of(match.seated.begin(), match.seated.end(),
+      if ((match.doubles && !event.doubles) || (!capable && (std::any_of(match.seated.begin(), match.seated.end(),
                       [&event](int seat) { return seat != event.seat; }) ||
           std::any_of(match.waiting.begin(), match.waiting.end(),
                       [&event](const auto& waiting) { return waiting.first != event.seat; }) ||
           std::any_of(match.menu_waiting.begin(), match.menu_waiting.end(),
-                      [&event](const auto& waiting) { return waiting.first != event.seat; })))
+                      [&event](const auto& waiting) { return waiting.first != event.seat; }))))
       {
         NOTICE_LOG_FMT(ROLLBACK,
-                       "Drop-in: {} arrived for port {} with another friend in: room_full",
+                       "Drop-in: {} arrived for port {}: room_full",
                        event.name, event.seat + 1);
-        Orca::Online::DropPeer(event.seat, "room_full");
+        if (test_room)
+          test_room->DropPeer(event.seat, "room_full");
+        else
+          Orca::Online::DropPeer(event.seat, "room_full");
         continue;
       }
       NOTICE_LOG_FMT(ROLLBACK, "Drop-in: {} arrived for port {}", event.name, event.seat + 1);
@@ -1357,6 +1360,8 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
                               event.doubles};
       if (event.recovering)
       {
+        if (match.doubles && match.session)
+          match.session->DropSeat(event.seat);
         const int from = match.doubles && match.session && !match.session->LocalChecksums().empty() ?
                              match.session->LocalChecksums().rbegin()->first : match.running + 1;
         match.recovery_keyframe_from = std::max(match.recovery_keyframe_from, from);
@@ -4167,14 +4172,17 @@ std::optional<int> Boundary(Core::System& system,
         std::chrono::milliseconds{1},
         LeavingPastUnplug(match) ? LEAVE_SILENCE_LIMIT : PEER_SILENCE_LIMIT, &peer_silent, &waited,
         [&](Clock::time_point poll_time) {
-          const auto missing = Orca::Online::RoomDoubles() ?
-              std::optional(match.session->MissingInputSeats()) : std::nullopt;
+          const auto missing = FriendsMissingInputs(*match.session, Orca::Online::RoomDoubles());
           return !LeavingPastUnplug(match) &&
-                 Orca::Online::HoldInputSilence(step_start, poll_time, missing);
+                 (WaitForFriendsRoster(*match.session, match.joining, Orca::Online::RoomDoubles()) ||
+                  Orca::Online::HoldInputSilence(step_start, poll_time, missing));
         },
         // A joiner catching up waits on history by design, outside the stall budget.
         catching_up ? nullptr : &match.stall_budget,
-        [](Clock::time_point poll_time) { return Orca::Online::RoomRecovering(poll_time); });
+        [&](Clock::time_point poll_time) {
+          return WaitForFriendsRoster(*match.session, match.joining, Orca::Online::RoomDoubles()) ||
+                 Orca::Online::RoomRecovering(poll_time);
+        });
     perf_scope.reset();
     Orca::Perf::AddWait(waited);
     match.last_return = Clock::now();
@@ -4362,11 +4370,11 @@ std::optional<int> Boundary(Core::System& system,
       }
       if (error.empty())
       {
-        if (Orca::Online::RoomDoubles())
+        const auto missing = DropMissingFriends(*match.session, Orca::Online::RoomDoubles());
+        if (missing)
         {
-          for (const int seat : match.session->MissingInputSeats())
+          for (const int seat : *missing)
           {
-            match.session->DropSeat(seat);
             match.seated.erase(seat);
             match.plugging.erase(seat);
             match.doubles_seats.erase(seat);
@@ -5017,6 +5025,29 @@ HostRecoveryResult PumpFriendsHostForTest(Core::System& system, Orca::Net::YouGa
 {
   return PumpHostForTest(system, room, game, std::move(replay), current_frame, !seated.empty(),
                          seated, on_menus, std::move(store));
+}
+
+std::optional<std::vector<int>> FriendsMissingInputs(const Orca::Net::Session& session, bool doubles)
+{
+  if (!doubles)
+    return std::nullopt;
+  auto seats = session.MissingInputSeats();
+  return seats.empty() ? std::nullopt : std::optional(std::move(seats));
+}
+
+std::optional<std::vector<int>> DropMissingFriends(Orca::Net::Session& session, bool doubles)
+{
+  auto seats = FriendsMissingInputs(session, doubles);
+  if (seats)
+    for (const int seat : *seats)
+      session.DropSeat(seat);
+  return seats;
+}
+
+bool WaitForFriendsRoster(const Orca::Net::Session& session, bool joining, bool doubles)
+{
+  const auto seats = FriendsMissingInputs(session, doubles);
+  return joining && seats && std::ranges::find(*seats, 0) == seats->end();
 }
 
 bool FriendsBatch::Ready(bool on_menus, int waiting, int plugging, bool recovering,

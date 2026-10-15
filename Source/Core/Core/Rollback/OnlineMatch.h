@@ -74,6 +74,11 @@ private:
   std::optional<std::chrono::steady_clock::time_point> m_until;
 };
 
+// Boundary's silence policy: an empty selector retains the ordinary recovery/drop behavior.
+std::optional<std::vector<int>> FriendsMissingInputs(const Orca::Net::Session& session, bool doubles);
+bool WaitForFriendsRoster(const Orca::Net::Session& session, bool joining, bool doubles);
+std::optional<std::vector<int>> DropMissingFriends(Orca::Net::Session& session, bool doubles);
+
 struct JoinCapture
 {
   int frame;

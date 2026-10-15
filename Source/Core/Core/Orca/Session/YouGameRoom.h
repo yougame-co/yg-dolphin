@@ -417,6 +417,11 @@ std::string RefusalCode(const std::string& connect_error);
 // Queues `packet` in place of one not yet sent, keeping the older one's earlier inputs and
 // checksum.
 void CoalescePacket(std::optional<Packet>* outgoing, const Packet& packet);
+void CoalesceBroadcast(std::optional<Packet>* outgoing,
+                       std::map<int, std::optional<Packet>>* addressed, const Packet& packet);
+void CoalesceToSeats(std::optional<Packet>* outgoing,
+                     std::map<int, std::optional<Packet>>* addressed,
+                     const std::map<int, Packet>& packets);
 // In-memory transport traces for unit tests. No thread, ticket request or socket is opened.
 struct RoomTestStep
 {
