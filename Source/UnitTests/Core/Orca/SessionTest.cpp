@@ -5358,6 +5358,7 @@ TEST(OrcaDoubles, HostBoundaryKeepsPlayingAfterStaggeredFriendBlackouts)
         [] { return std::vector<int>{}; });
     ASSERT_TRUE(host.session);
     ASSERT_TRUE(host.session->Error().empty()) << host.session->Error();
+    ASSERT_NE(running, host.completed);  // This boundary must run or rewind, never end.
     for (int seat = 0; seat < MAX_SEATS; ++seat)
       host.ran_plugged[running][seat] = host.session->Plugged(seat, running);
     host.completed = host.game.Run();
@@ -5394,6 +5395,7 @@ TEST(OrcaDoubles, HostBoundaryRoomDepartureDoesNotSpendTheNextFriendsRetry)
         });
     ASSERT_TRUE(host.session);
     ASSERT_TRUE(host.session->Error().empty()) << host.session->Error();
+    ASSERT_NE(running, host.completed);  // This boundary must run or rewind, never end.
     for (int seat = 0; seat < MAX_SEATS; ++seat)
       host.ran_plugged[running][seat] = host.session->Plugged(seat, running);
     host.completed = host.game.Run();
