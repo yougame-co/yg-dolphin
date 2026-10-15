@@ -35,12 +35,22 @@ one room message; direct packets use the existing encoding and target one pair.
 This prevents a rebuilding peer from withholding inputs from seated peers.
 History service rotates between rebuilding seats. Ordinary one-friend sessions
 keep the existing broadcast, encoding, history order and timing decisions.
+The optional host packet `sg = [from, until]` carries the Start gate alongside
+the roster, so every peer applies it to the same simulated frames. The `bp`
+envelope has at most three `[receivingSeat, ordinaryPacket]` entries. Each
+coalesced history is capped at 128 frames to keep all three under 64 KB.
 
 Away/back, input holds, room reconnect budgets and stall budgets remain per peer
 as in 0.3.44. Buffered blackouts stall all four and resume the same session/code.
 A retained peer needing a keyframe rebuilds through its existing recovery path;
 recipient input ranges keep the other peers progressing after its unplug. A
-real leave drops only that port. Fatal session/desync policy remains unchanged.
+host with continuous predictions captures the newest final replay checkpoint
+using its saved RAM hash, rather than waiting for a fully settled live frame. A
+real friend leave drops only that port. Stall holds select only the missing-input
+seats; an expired friend's input hold drops that seat. Fatal session/desync policy
+remains unchanged. Checksums are retained per peer and frame, so one peer's report
+cannot replace another's. Permanent host departure retains the existing hosted
+session-end behavior; host migration is not introduced.
 
 Shared stored captures belong to the host until all batch members plug in (or
 the room ends); joiners must not delete them after their individual replay.

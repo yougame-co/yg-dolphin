@@ -63,6 +63,26 @@ std::optional<int> OnBoundary(Core::System& system,
 // since.
 constexpr int KEYFRAME_FRESH_FRAMES = 30 * 60;
 
+// Wall clock only: no batching timer enters the replay or session packets.
+class FriendsBatch
+{
+public:
+  bool Ready(bool on_menus, int waiting, int plugging, bool recovering,
+             std::chrono::steady_clock::time_point now);
+  void Clear() { m_until.reset(); }
+private:
+  std::optional<std::chrono::steady_clock::time_point> m_until;
+};
+
+struct JoinCapture
+{
+  int frame;
+  std::optional<u64> hash;
+};
+// Active multi-peer sessions may have predictions every frame: use a final checkpoint's hash.
+std::optional<JoinCapture> ChooseJoinCapture(const Orca::Net::Session* session, bool doubles,
+                                            int next, int earliest);
+
 // Headless runtime fixture: pumps the same host event/keyframe path with a real room and a
 // supplied game history. The caller initializes Core::System's memory and owns `game`.
 struct HostRecoveryResult
@@ -71,11 +91,17 @@ struct HostRecoveryResult
   bool seated = false;
   int current_frame = -1;
   std::optional<int> keyframe_frame;
+  std::vector<int> seats;
 };
 HostRecoveryResult PumpRecoveryHostForTest(Core::System& system, Orca::Net::YouGameRoom& room,
                                           Orca::Net::Game& game, Orca::Net::ReplayArchive replay,
                                           int current_frame, bool session_alive,
                                           std::unique_ptr<Orca::Net::KeyframeStore> store);
+HostRecoveryResult PumpFriendsHostForTest(Core::System& system, Orca::Net::YouGameRoom& room,
+                                         Orca::Net::Game& game, Orca::Net::ReplayArchive replay,
+                                         int current_frame, const std::vector<int>& seated,
+                                         bool on_menus,
+                                         std::unique_ptr<Orca::Net::KeyframeStore> store);
 
 // ---- The origin and fresh starts ----
 // Every Orca boots the same way up to its origin: port 1 plugged in with nothing pressed, ports 2-4
