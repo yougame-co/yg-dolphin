@@ -2178,6 +2178,27 @@ protected:
     return config;
   }
 
+  std::string PresenceRoster(const std::string& kind)
+  {
+    const auto json = RosterMessage(kind, local_seat == 1);
+    if (room_players != 4)
+      return json;
+    picojson::value value;
+    EXPECT_TRUE(picojson::parse(value, json).empty());
+    auto& roster = value.get<picojson::object>();
+    for (int slot : {2, 3})
+    {
+      const auto id = fmt::format("peer{}", slot);
+      picojson::object player{{"id", picojson::value(id)},
+                              {"name", picojson::value(fmt::format("Friend{}", slot))}};
+      roster["players"].get<picojson::array>().emplace_back(player);
+      player["connectionId"] = picojson::value(id);
+      player["slot"] = picojson::value(static_cast<double>(slot));
+      roster["participants"].get<picojson::array>().emplace_back(player);
+    }
+    return value.serialize();
+  }
+
   Step Boundary(RoomClock::time_point deadline, int* polls = nullptr)
   {
     extra_frame = session->CurrentFrame();
@@ -2204,7 +2225,7 @@ protected:
   {
     if (peer_away)
     {
-      Action(room_code, fmt::format(R"({{"message":{}}})", RosterMessage("away", local_seat == 1)));
+      Action(room_code, fmt::format(R"({{"message":{}}})", PresenceRoster("away")));
       EXPECT_TRUE(Wait([&] { return room->RoomRecovering(RoomClock::now()); }));
     }
     if (drop_socket)
@@ -2221,7 +2242,7 @@ protected:
       const auto recovered = NeutralPacket(next_input, 16);
       const auto packet = EncodePacket(recovered);
       if (peer_away)
-        Action(room_code, fmt::format(R"({{"message":{}}})", RosterMessage("back", local_seat == 1)));
+        Action(room_code, fmt::format(R"({{"message":{}}})", PresenceRoster("back")));
       // Repeated UDP packets, as the session does, until StepSession has received them.
       // Peer-away cases restore through the room, keeping back and its inputs in socket order.
       while (!restored.load())
