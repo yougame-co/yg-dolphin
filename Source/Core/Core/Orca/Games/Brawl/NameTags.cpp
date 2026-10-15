@@ -16,9 +16,9 @@
 #include "Core/Core.h"
 #include "Core/Orca/LocalStore.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/Session/Replay.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/Games/Brawl/BrawlModule.h"
-#include "Core/Rollback/ReplayStream.h"
 
 namespace Orca::UX
 {
@@ -765,9 +765,9 @@ std::optional<std::vector<u8>> NameTagsFrame(GuestMemory& m,
                                              const std::vector<Events::PortInfo>& write_ports,
                                              const std::vector<Events::PortInfo>& ports,
                                              OwnControlsReader* reader, const std::vector<u8>& own,
-                                             u64 resyncs, bool view_names)
+                                             u64 resyncs)
 {
-  ApplyNameTags(m, write_ports, view_names);
+  ApplyNameTags(m, write_ports, Net::ReplayScope::ViewNamesPlaying());
   // After the writes: a tag that just got the player's controls reads as those, never as the
   // game's defaults it held before this frame's writes.
   if (!reader)
@@ -785,11 +785,10 @@ void NameTagsFrameHook(const Core::CPUThreadGuard& guard,
   if (read_own && s_rebase_own.exchange(false))
     s_reader.Rebase();
   GuardMemory memory(guard);
-  const bool view_names = Rollback::ReplayStream::ProductMode() && Net::ReplayScope::Playing();
   std::optional<std::vector<u8>> changed =
       read_own ? NameTagsFrame(memory, write_ports, ports, &s_reader, Events::OwnControls(),
-                               Events::Resyncs(), view_names) :
-                 NameTagsFrame(memory, write_ports, ports, nullptr, {}, 0, view_names);
+                               Events::Resyncs()) :
+                 NameTagsFrame(memory, write_ports, ports, nullptr, {}, 0);
   if (!changed)
     return;
   NOTICE_LOG_FMT(ROLLBACK, "Name tags: this player changed their controls in the game");

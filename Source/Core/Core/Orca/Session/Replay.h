@@ -113,30 +113,36 @@ inline bool HeadersFitRuleset(const ReplayArchive& replay, u8 ruleset)
 class ReplayScope
 {
 public:
-  ReplayScope(ReplayFrame* frame, bool playback, bool network = false)
-      : m_previous(s_current), m_playback(s_playback), m_network(s_network)
+  ReplayScope(ReplayFrame* frame, bool playback, bool network = false, bool view_names = false)
+      : m_previous(s_current), m_playback(s_playback), m_network(s_network),
+        m_view_names(s_view_names)
   {
     s_current = frame;
     s_playback = playback;
     s_network = network;
+    s_view_names = view_names;
   }
   ~ReplayScope()
   {
     s_current = m_previous;
     s_playback = m_playback;
     s_network = m_network;
+    s_view_names = m_view_names;
   }
   static ReplayFrame* Current() { return s_current; }
   static bool Playing() { return s_current && s_playback; }
   static bool NetworkPlaying() { return Playing() && s_network; }
+  static bool ViewNamesPlaying() { return Playing() && s_view_names; }
 
 private:
   ReplayFrame* m_previous;
   bool m_playback;
   bool m_network;
+  bool m_view_names;
   static inline thread_local ReplayFrame* s_current = nullptr;
   static inline thread_local bool s_playback = false;
   static inline thread_local bool s_network = false;
+  static inline thread_local bool s_view_names = false;
 };
 
 class ReplayRecordingScope

@@ -1216,7 +1216,7 @@ std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, in
       view.ports = std::make_shared<const std::vector<Orca::Events::PortInfo>>(
           ViewPorts(*record->ports, *m_names));
     }
-    Orca::Net::ReplayScope scope(&view, true, true);
+    Orca::Net::ReplayScope scope(&view, true, true, m_product && m_names.has_value());
     on_frame(frame, true, *view.ports, false);
   }
   // View-time names are written into the game's tags and change full-RAM hashes: while they are

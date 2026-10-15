@@ -174,7 +174,7 @@ std::optional<std::vector<u8>> NameTagsFrame(GuestMemory& memory,
                                              const std::vector<Events::PortInfo>& write_ports,
                                              const std::vector<Events::PortInfo>& ports,
                                              OwnControlsReader* reader, const std::vector<u8>& own,
-                                             u64 resyncs, bool view_names = false);
+                                             u64 resyncs);
 
 // Runs from Events' frame callback on every frame (first runs and re-runs), before the session
 // saves a snapshot or keyframe, so those include what it wrote: NameTagsFrame on emulated memory,

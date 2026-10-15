@@ -27,10 +27,12 @@
 
 #include <fmt/format.h>
 #include "Common/FileUtil.h"
+#include "Common/ScopeGuard.h"
 #include <gtest/gtest.h>
 #include <imgui.h>
 
 #include "Core/Orca/Session/Events.h"
+#include "Core/Orca/Session/Replay.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/Chat.h"
 #include "Core/Orca/UX/ControllerSource.h"
@@ -44,6 +46,7 @@
 #include "Core/Orca/UX/Overlay.h"
 #include "Core/Orca/UX/OverlayKey.h"
 #include "Core/Orca/UX/YgOrbDraw.h"
+#include "Core/Rollback/Rollback.h"
 #include "InputCommon/GCPadStatus.h"
 #include "VideoCommon/OnScreenDisplay.h"
 
@@ -1888,6 +1891,66 @@ TEST(OrcaUXNameTags, ReplayViewNamesReplaceAWornTagAndLaterUpdates)
   EXPECT_EQ(m.TagName(0), u"BOB");
   ApplyNameTags(m, {{0, "\xf0\x9f\x90\xac", false}}, true);
   EXPECT_EQ(m.TagName(0), u"P1");
+}
+
+TEST(OrcaUXNameTags, OwnReplayKeepsEveryWornTagChecksum)
+{
+  const char* previous_source = std::getenv("ORCA_REPLAY_SOURCE");
+  const std::string old_source = previous_source ? previous_source : "";
+  const auto set_source = [](const std::string& source) {
+#ifdef _WIN32
+    _putenv_s("ORCA_REPLAY_SOURCE", source.c_str());
+#else
+    if (source.empty())
+      unsetenv("ORCA_REPLAY_SOURCE");
+    else
+      setenv("ORCA_REPLAY_SOURCE", source.c_str(), 1);
+#endif
+  };
+  const Common::ScopeGuard restore_source([&] { set_source(old_source); });
+  set_source("own-replay-test.ygr");
+  FakeBrawl recorded;
+  recorded.SetTag(0, u"MINE");
+  recorded.Join(0);
+  recorded.Join(1);
+  recorded.W32(FakeBrawl::Area(0) + 0x1C8, 0);
+  // The second name has no tag characters: own playback must not force a port label either.
+  const std::vector<Orca::Events::PortInfo> ports{{0, "Alice", false},
+                                                {1, "\xf0\x9f\x90\xac", true}};
+  FakeBrawl played = recorded;
+  const auto checksum = [](const FakeBrawl& memory) {
+    std::vector<u8> bytes;
+    for (const auto& [address, byte] : memory.bytes)
+    {
+      for (int shift = 24; shift >= 0; shift -= 8)
+        bytes.push_back(static_cast<u8>(address >> shift));
+      bytes.push_back(byte);
+    }
+    return Rollback::RamChecksum(bytes, {});
+  };
+  Orca::Net::ReplayFrame frame;
+  for (int i = 0; i < 60; ++i)
+  {
+    NameTagsFrame(recorded, ports, ports, nullptr, {}, 0);
+    const Orca::Net::ReplayScope own_scope(&frame, true, true);
+    EXPECT_FALSE(Orca::Net::ReplayScope::ViewNamesPlaying());
+    NameTagsFrame(played, ports, ports, nullptr, {}, 0);
+    EXPECT_EQ(checksum(played), checksum(recorded)) << i;
+    EXPECT_EQ(played.bytes, recorded.bytes) << i;
+    {
+      const Orca::Net::ReplayScope view_scope(&frame, true, true, true);
+      EXPECT_TRUE(Orca::Net::ReplayScope::ViewNamesPlaying());
+    }
+    EXPECT_FALSE(Orca::Net::ReplayScope::ViewNamesPlaying());
+  }
+  {
+    const Orca::Net::ReplayScope view_scope(&frame, true, true, true);
+    NameTagsFrame(played, ports, ports, nullptr, {}, 0);
+  }
+  EXPECT_FALSE(Orca::Net::ReplayScope::ViewNamesPlaying());
+  EXPECT_EQ(played.TagName(0), u"ALICE");
+  EXPECT_EQ(played.TagName(1), u"P2");
+  EXPECT_NE(checksum(played), checksum(recorded));
 }
 
 TEST(OrcaUXNameTags, ANewTagIsMadeAsTheGameMakesOneAndNothingElseIsWritten)
