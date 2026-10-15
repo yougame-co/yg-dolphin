@@ -433,12 +433,20 @@ void Session::RequireValues(int seat, int version)
 void Session::AddPeerBatch(const std::vector<int>& seats, int live_from, int history_from)
 {
   int gate_from = std::max(m_frame, m_last_sent_newest + 1);
-  if (m_start_gate && m_start_gate->second > LogEnd())
+  const auto gate_needed = [&] {
+    if (!m_start_gate)
+      return false;
+    if (m_start_gate->second > LogEnd())
+      return true;
+    for (int peer = 0; peer < m_config.seats; ++peer)
+      if (InPlay(peer) && m_acked[peer] < m_start_gate->second)
+        return true;
+    return false;
+  };
+  if (gate_needed())
   {
-    // The previous batch still covers unconfirmed frames. Extend that gate, including any
-    // unconfirmed gap between the batches, and rerun the gap with Start held back too.
-    if (m_start_gate->second < m_frame)
-      m_dirty = std::min(m_dirty, m_start_gate->second);
+    // Keep the same beginning until every in-play peer has acknowledged past the old end.
+    // A peer may still hold its open-ended version if it missed the end-frame updates.
     gate_from = std::min(gate_from, m_start_gate->first);
     if (m_start_gate->second != NEVER)
       m_previous_start_gates.push_back(*m_start_gate);
@@ -451,6 +459,11 @@ void Session::AddPeerBatch(const std::vector<int>& seats, int live_from, int his
     m_plug_batch.insert(seat);
   }
   m_start_gate = {gate_from, NEVER};
+  // Extending a confirmed gate may cover a gap already run with Start up. Only changed,
+  // unconfirmed pads need a rollback; confirmed log entries retain their exact inputs.
+  for (auto used = m_used.lower_bound(LogEnd()); used != m_used.end(); ++used)
+    if (used->first < m_frame && used->second != PadsFor(used->first))
+      m_dirty = std::min(m_dirty, used->first);
 }
 
 void Session::SetValuesHeld(int version)
@@ -1589,7 +1602,8 @@ void Session::ReceivePackets()
           m_dirty = std::min(m_dirty, changed);
         // The authority may already have confirmed its earlier batch while this peer still
         // needs to rerun it. Keep that interval until our own confirmed log covers it.
-        if (m_start_gate && from != m_start_gate->first && m_start_gate->second > LogEnd())
+        if (m_start_gate && from != m_start_gate->first && m_start_gate->second != NEVER &&
+            m_start_gate->second > LogEnd())
           m_previous_start_gates.push_back(*m_start_gate);
         m_start_gate = packet.start_gate;
       }

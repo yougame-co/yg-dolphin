@@ -19,6 +19,7 @@
 #include "Core/Orca/Session/Replay.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/Games/Brawl/BrawlModule.h"
+#include "Core/Rollback/ReplayText.h"
 
 namespace Orca::UX
 {
@@ -157,9 +158,8 @@ int FindPlayerTag(const GuestMemory& m, u32 tags, const std::u16string& name)
 // into it, so the entry starts RECORDS_TAGS before `tags + i * TAG_SIZE`. Clearing TAG_SIZE bytes
 // from the name instead (through 0.3.38) cleared the next entry's first RECORDS_TAGS bytes, and for
 // slot 119 the heap header and gmGlobalRecord right after the table.
-int MakeTag(GuestMemory& m, u32 tags, const std::u16string& name)
+int MakeTag(GuestMemory& m, u32 tags, const std::u16string& name, int unused = -1)
 {
-  int unused = -1;
   for (int i = 0; i < TAG_SLOTS && unused < 0; ++i)
   {
     if (TagAt(m, tags + static_cast<u32>(i) * TAG_SIZE).empty())
@@ -173,9 +173,14 @@ int MakeTag(GuestMemory& m, u32 tags, const std::u16string& name)
   const u32 tag = tags + static_cast<u32>(unused) * TAG_SIZE;
   const u32 entry = tag - RECORDS_TAGS;
   for (u32 i = 0; i < TAG_SIZE; i += 2)
-    m.Write16(entry + i, 0);
+  {
+    if (i >= RECORDS_TAGS && i < RECORDS_TAGS + 2 * (TAG_CHARS + 1))
+      Rollback::ReplayText::Write16(m, entry + i, 0);
+    else
+      m.Write16(entry + i, 0);
+  }
   for (u32 i = 0; i < name.size() && i < TAG_CHARS; ++i)
-    m.Write16(tag + 2 * i, static_cast<u16>(name[i]));
+    Rollback::ReplayText::Write16(m, tag + 2 * i, static_cast<u16>(name[i]));
   m.Write8(tag + TAG_RUMBLE, 1);
   for (u32 i = 0; i < CONTROLS_TEMPLATE_SIZE; ++i)
     m.Write8(tag + TAG_CONTROLS + i, m.Read8(CONTROLS_TEMPLATE + i));
@@ -359,6 +364,17 @@ std::u16string BrawlTag(std::string_view username, bool view_names)
 
 int ApplyNameTags(GuestMemory& m, const std::vector<Events::PortInfo>& ports, bool view_names)
 {
+  auto* frame = Net::ReplayScope::Current();
+  std::vector<Net::TagAssignment>* assignments = nullptr;
+  if (frame && !Net::ReplayScope::NetworkPlaying())
+  {
+    if (!frame->tag_assignments)
+      frame->tag_assignments.emplace();
+    assignments = &*frame->tag_assignments;
+    std::erase_if(*assignments, [&](const auto& tag) {
+      return std::ranges::find(ports, tag.port, &Events::PortInfo::port) == ports.end();
+    });
+  }
   u32 task = 0, tags = 0;
   if (ports.empty() || !CharacterSelectTask(m, &task) || !TagTable(m, &tags))
     return 0;
@@ -400,7 +416,7 @@ int ApplyNameTags(GuestMemory& m, const std::vector<Events::PortInfo>& ports, bo
         {
           const u16 c = i < shown.size() ? static_cast<u16>(shown[i]) : 0;
           if (m.Read16(tag + 2 * i) != c)
-            m.Write16(tag + 2 * i, c);
+            Rollback::ReplayText::Write16(m, tag + 2 * i, c);
         }
       }
       // A worn tag is the player's menu choice, including the game's exact defaults.
@@ -418,7 +434,8 @@ int ApplyNameTags(GuestMemory& m, const std::vector<Events::PortInfo>& ports, bo
     }
     if (carries && !TemplateReadable(m))
       continue;
-    if (slot < 0)
+    const bool created = slot < 0;
+    if (created)
       slot = MakeTag(m, tags, tag);
     if (slot < 0)
       continue;
@@ -431,9 +448,15 @@ int ApplyNameTags(GuestMemory& m, const std::vector<Events::PortInfo>& ports, bo
     // the menus straight into a room keeps a saved tag over newer own controls until a character
     // select alone (name-tags stage 1C makes room edits synced values).
     const u32 at = tags + static_cast<u32>(slot) * TAG_SIZE;
-    if (carries && !(room && !shares_name && SavedInGame(m, at)))
+    const bool controls = carries && !(room && !shares_name && SavedInGame(m, at));
+    if (controls)
       WriteControls(m, at, p.controls);
     m.Write32(*area + AREA_NAME_ID, static_cast<u32>(slot));
+    if (assignments)
+    {
+      std::erase_if(*assignments, [&](const auto& old) { return old.port == p.port; });
+      assignments->push_back({p.port, slot, created, controls});
+    }
     ++given;
   }
   return given;
@@ -746,8 +769,42 @@ std::optional<std::vector<u8>> NameTagsFrame(GuestMemory& m,
                                              OwnControlsReader* reader, const std::vector<u8>& own,
                                              u64 resyncs)
 {
-  const bool view_names = Net::ReplayScope::ViewNamesPlaying();
-  ApplyNameTags(m, view_names ? write_ports : Net::SeatLabelPorts(write_ports), view_names);
+  auto* frame = Net::ReplayScope::Current();
+  if (Net::ReplayScope::RecordedPlaying() && frame->tag_assignments)
+  {
+    u32 task = 0, tags = 0;
+    if (CharacterSelectTask(m, &task) && TagTable(m, &tags))
+    {
+      for (const auto& assignment : *frame->tag_assignments)
+      {
+        const auto port = std::ranges::find(write_ports, assignment.port, &Events::PortInfo::port);
+        if (port == write_ports.end() || assignment.slot < 0 || assignment.slot >= TAG_SLOTS)
+          continue;
+        const auto area = JoinedArea(m, task, assignment.port);
+        if (!area)
+          continue;
+        if (assignment.created)
+          MakeTag(m, tags, BrawlTag(port->name, Net::ReplayScope::ViewNamesPlaying()), assignment.slot);
+        if (assignment.controls && port->controls.size() == CONTROLS_PROFILE_SIZE &&
+            TemplateReadable(m))
+          WriteControls(m, tags + static_cast<u32>(assignment.slot) * TAG_SIZE, port->controls);
+        m.Write32(*area + AREA_NAME_ID, static_cast<u32>(assignment.slot));
+      }
+      if (Net::ReplayScope::ViewNamesPlaying())
+      {
+        auto worn_ports = write_ports;
+        std::erase_if(worn_ports, [&](const auto& port) {
+          const auto area = JoinedArea(m, task, port.port);
+          return !area || m.Read32(*area + AREA_NAME_ID) >= static_cast<u32>(TAG_SLOTS);
+        });
+        ApplyNameTags(m, worn_ports, true);
+      }
+    }
+  }
+  else
+  {
+    ApplyNameTags(m, write_ports, Net::ReplayScope::ViewNamesPlaying());
+  }
   // After the writes: a tag that just got the player's controls reads as those, never as the
   // game's defaults it held before this frame's writes.
   if (!reader)

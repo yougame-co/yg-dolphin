@@ -16,6 +16,7 @@
 #include "Core/Orca/Games/Brawl/Relabel.h"
 #include "Core/Orca/Games/Brawl/SetBlock.h"
 #include "Core/Orca/Session/Replay.h"
+#include "Core/Rollback/Rollback.h"
 
 using namespace Orca::UX;
 namespace NT = Orca::UX::NativeText;
@@ -585,24 +586,98 @@ TEST(OrcaNativeText, TheCharacterOrderAndTheSetInTheThirdPerson)
   EXPECT_EQ(WordsOf(over, RULES_BOX), "ADA wins the set 2-0");
 }
 
-TEST(OrcaNativeText, SeatLabelsGiveOwnReplayTheSameCharacterSelectBytes)
+TEST(OrcaNativeText, RealNamesAndReplayNamesHaveEqualReplayChecksums)
 {
   auto live = Css(15);
   auto played = live;
+  Rollback::ReplayText live_text, played_text;
+  const auto checksum = [](const FakeMemory& memory, const Rollback::ReplayText& text) {
+    std::vector<u8> bytes;
+    for (const auto& [address, byte] : memory.bytes)
+      bytes.push_back(text.VerifiedByte(address, byte));
+    return Rollback::RamChecksum(bytes, {});
+  };
   const std::vector<Orca::Events::PortInfo> ports{{0, "Alice", false}, {1, "Bob", true},
                                                 {2, "Carol", true}, {3, "Dan", true}};
   const auto stored = Orca::Net::RecordingPorts(ports);
   for (int frame = 0; frame < 60; ++frame)
   {
     u8 live_shown = 0, replay_shown = 0;
-    NT::Apply(live, Orca::Net::SeatLabelPorts(ports), &live_shown);
-    NT::Apply(played, stored, &replay_shown);
-    EXPECT_EQ(live.bytes, played.bytes);
+    {
+      const Rollback::ReplayText::Scope scope(live_text);
+      NT::Apply(live, ports, &live_shown);
+    }
+    {
+      const Rollback::ReplayText::Scope scope(played_text);
+      NT::Apply(played, stored, &replay_shown);
+    }
+    EXPECT_EQ(checksum(live, live_text), checksum(played, played_text));
     EXPECT_EQ(live_shown, replay_shown);
   }
   const auto words = NT::Wanted(played, stored);
   EXPECT_EQ(words.plates[0], "P1");
   EXPECT_EQ(words.plates[3], "P4");
-  const auto view = NT::Wanted(played, ports);
-  EXPECT_NE(view.plates[0], words.plates[0]);
+  EXPECT_EQ(WordsOf(live, 0), "ALICE");
+  EXPECT_NE(checksum(live, {}), checksum(played, {}));
+  {
+    const Rollback::ReplayText::Scope scope(played_text);
+    NT::Apply(played, ports);
+  }
+  EXPECT_EQ(WordsOf(played, 0), "ALICE");
+  EXPECT_EQ(checksum(live, live_text), checksum(played, played_text));
+  // Text survives leaving CSS; stale bytes from longer names must remain discounted.
+  live.PutString(NAMES, "scMelee");
+  played.PutString(NAMES, "scMelee");
+  EXPECT_EQ(checksum(live, live_text), checksum(played, played_text));
+  // Setup codes, capacity, data pointers, and bytes beyond the actual writes stay covered.
+  for (const u32 address : {BoxAt(0) + NT::BUFFER_CAPACITY, BoxAt(0) + NT::BUFFER_DATA,
+                            BoxAt(0) + 0x80, BoxAt(0) + 0x80 + 255})
+  {
+    const u8 before = played.Read8(address);
+    played.Write8(address, before ^ 1);
+    EXPECT_NE(checksum(live, live_text), checksum(played, played_text)) << address;
+    played.Write8(address, before);
+  }
+}
+
+TEST(OrcaNativeText, ReplayTextSnapshotsAndGameWritesKeepFullCoverageOutsideText)
+{
+  FakeMemory memory;
+  memory.Fill(0x80000000, 8);
+  memory.Fill(0x90000000, 8);
+  Rollback::ReplayText text;
+  const auto hash = [&] {
+    std::vector<u8> mem1, mem2;
+    for (u32 i = 0; i < 8; ++i)
+    {
+      mem1.push_back(memory.Read8(0x80000000 + i));
+      mem2.push_back(memory.Read8(0x90000000 + i));
+    }
+    return text.Checksum(mem1, mem2);
+  };
+  const u64 original = hash();
+  {
+    const Rollback::ReplayText::Scope scope(text);
+    Rollback::ReplayText::Write16(memory, 0x80000002, 0x4142);
+    Rollback::ReplayText::Write32(memory, 0x90000000, 0x43444546);
+  }
+  EXPECT_EQ(hash(), original);
+  const auto checkpoint = text;
+  const auto saved = memory;
+  {
+    const Rollback::ReplayText::Scope scope(text);
+    Rollback::ReplayText::Write8(memory, 0x80000002, 'Z');
+  }
+  EXPECT_EQ(hash(), original);
+  text = checkpoint;
+  memory = saved;
+  EXPECT_EQ(hash(), original);
+  memory.Write8(0x80000002, 7);  // The game reused a former text byte.
+  EXPECT_NE(hash(), original);
+  const u64 game_hash = hash();
+  {
+    const Rollback::ReplayText::Scope scope(text);
+    Rollback::ReplayText::Write8(memory, 0x80000002, 'Y');
+  }
+  EXPECT_EQ(hash(), game_hash);
 }

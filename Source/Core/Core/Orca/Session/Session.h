@@ -352,6 +352,8 @@ public:
   bool LeftDone() const;
   // Host: no other player is plugged in or joining, so the session can end and the host play solo.
   bool Idle() const;
+  // This player and every other one in play.
+  int PlayersInPlay() const;
   // ---- Port values (who plays a port, and with which controls) ---- The host sets each port's
   // values from the frame its controller plugs in, and every machine must hold them before running
   // that frame. So `seat` plugs in only once every player (newcomer included) acknowledges holding
@@ -442,8 +444,6 @@ private:
   const Pad* DepartedPad(int seat, int frame) const;
   void AddDeparted(Packet* packet, int recipient) const;
   bool InPlay(int seat) const;
-  // This player and every other one in play.
-  int PlayersInPlay() const;
   int SettleFrom() const;
   int StallLimit() const;
   void AdvanceReceived(int seat);

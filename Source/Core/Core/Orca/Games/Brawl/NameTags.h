@@ -49,9 +49,8 @@ class CPUThreadGuard;
 // game wins over one Orca made of that name: a player who made their tag in Options > Controls
 // plays with it and gets no second tag of that name (before, Orca made one at the game's defaults,
 // put them in it, and never read their own).
-// A joined port with controls that wears a tag holding exactly what the game puts in a tag it makes
-// (rumble on, the default layout: a tag the player just made, or made again after a restart, since
-// tags made in the game last only until Orca closes) gets its controls written into that tag too.
+// A tag the player selected keeps its rumble and layout, including the exact defaults. Account
+// controls apply when Orca assigns a tag to an unworn port.
 //
 // Determinism: writes depend only on emulated memory and the session's synced port list, and are
 // idempotent (a re-run frame writes the same bytes; a port that wears a tag is left alone once that
@@ -75,8 +74,8 @@ std::u16string BrawlTag(std::string_view username, bool view_names = false);
 constexpr u32 CONTROLS_LAYOUT_SIZE = 0x2D;
 constexpr u32 CONTROLS_PROFILE_SIZE = 1 + CONTROLS_LAYOUT_SIZE;
 
-// One frame's writes for these ports. Returns how many ports got a tag (a worn default tag given
-// the port's controls is not counted). Profile bytes are clamped to values the game's own menus
+// One frame's writes for these ports. Returns how many ports got a tag. Profile bytes are
+// clamped to values the game's own menus
 // could set (rumble 0 or 1, the flag bytes' own bits only, actions up to 0xE), else the game's
 // default, since profiles come from other machines. With more than one port (a room), a tag the
 // player saved in the game's Options > Controls keeps what they saved for the rest of the room.

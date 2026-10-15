@@ -53,10 +53,10 @@ double MsSince(Clock::time_point start)
   return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 }
 
-u64 MemoryChecksum(Core::System& system)
+u64 MemoryChecksum(Core::System& system, const ReplayText& text)
 {
   auto& memory = system.GetMemory();
-  return RamChecksum({memory.GetRAM(), memory.GetRamSize()},
+  return text.Checksum({memory.GetRAM(), memory.GetRamSize()},
                      {memory.GetEXRAM(), memory.GetEXRAM() ? memory.GetExRamSize() : 0});
 }
 }  // namespace
@@ -433,6 +433,8 @@ bool Writer::StartRoom(const Orca::Net::ReplayArchive& replay, int live)
                           std::make_shared<const std::vector<Orca::Events::PortInfo>>() :
                           chunk.frames.back().ports;
       }
+      frame.ports = std::make_shared<const std::vector<Orca::Events::PortInfo>>(
+          Orca::Net::RecordingPorts(*frame.ports));
       chunk.frames.push_back(std::move(frame));
     }
     for (auto it = m_room_checksums.upper_bound(first);
@@ -618,6 +620,8 @@ bool Writer::Pump(const Orca::Net::ReplayArchive& replay, int end, int live,
                         std::make_shared<const std::vector<Orca::Events::PortInfo>>() :
                         chunk.frames.back().ports;
     }
+    frame.ports = std::make_shared<const std::vector<Orca::Events::PortInfo>>(
+        Orca::Net::RecordingPorts(*frame.ports));
     chunk.frames.push_back(std::move(frame));
   }
   if (checksums)
@@ -1166,6 +1170,7 @@ std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, in
     }
     *running = origin_frame - 1;
     m_loaded = true;
+    m_text = {};
     m_position = origin_frame;
     m_catching = !m_realtime && !m_follow;
     host.set_catching_up(m_catching);
@@ -1215,6 +1220,7 @@ std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, in
         }
         Orca::Status::Line(fmt::format("orca replay seek {} -> {}", *running + 1, *seek));
         *running = origin_frame - 1;
+        m_text = {};
         m_position = origin_frame;
         rewound = origin_frame;
         m_seek_target = *seek;
@@ -1259,6 +1265,7 @@ std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, in
       return std::nullopt;
     }
     *running = to - 1;
+    m_text = m_seek_text;
     host.set_catching_up(m_catching);
     m_seek_done = true;
     m_seek_nand.clear();
@@ -1361,6 +1368,7 @@ std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, in
   {
     m_seek_taken =
         host.read_nand(&m_seek_nand) && SnapshotRing::Capture(system, &m_seek_image, false);
+    m_seek_text = m_text;
     Orca::Status::Line(fmt::format("orca replay seek-point {} {}", frame,
                                    m_seek_taken ? "taken" : "failed"));
   }
@@ -1377,16 +1385,15 @@ std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, in
       view.ports = std::make_shared<const std::vector<Orca::Events::PortInfo>>(
           ViewPorts(*record->ports, *m_names));
     }
-    Orca::Net::ReplayScope scope(&view, true, true, m_product && m_names.has_value());
+    Orca::Net::ReplayScope scope(&view, true, true, m_product && m_names.has_value(), true);
+    const ReplayText::Scope text_scope(m_text);
     on_frame(frame, true, *view.ports, false);
   }
-  // View-time names are written into the game's tags and change full-RAM hashes: while they are
-  // on, playback still checks the stream, compatibility, origin and reconnect overlap, but not
-  // those hashes. Without them (test playback, a player's own replay) every checksum is compared.
+  // Replay checks discount only text writes, including with view-time names enabled.
   if (const auto it = m_reader->Checksums().find(frame);
-      !(m_product && m_names) && it != m_reader->Checksums().end())
+      it != m_reader->Checksums().end())
   {
-    const u64 hash = MemoryChecksum(system);
+    const u64 hash = MemoryChecksum(system, m_text);
     ++m_checked;
     if (hash != it->second)
     {

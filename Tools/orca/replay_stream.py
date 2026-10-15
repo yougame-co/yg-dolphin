@@ -67,8 +67,11 @@ def _frames(raw, count, checks):
             queue = take(u64())
             ports.append((port, name, controls, queue))
         header = tuple(u32() for _ in range(5)) if u32() else None
-        clear, menu_exit, seed = u32(), u32(), u32()
-        frames.append((pads, tuple(ports), header, clear, menu_exit, seed))
+        clear = u32()
+        tag_count = u32()
+        tags = tuple(u32() for _ in range(tag_count - 1)) if tag_count else None
+        menu_exit, seed = u32(), u32()
+        frames.append((pads, tuple(ports), header, clear, menu_exit, seed, tags))
     checksums = {}
     for _ in range(checks):
         frame = u32()
@@ -85,7 +88,7 @@ def read(path):
     if data[:4] != STREAM_MAGIC:
         raise ValueError("not a replay stream")
     version, size = struct.unpack("<II", data[4:12])
-    if version != 1:
+    if version != 2:
         raise ValueError(f"version {version}")
     s.info = json.loads(data[12:12 + size])
     pos = 12 + size

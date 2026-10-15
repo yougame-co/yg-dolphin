@@ -16,7 +16,7 @@
 #include "Core/Orca/Games/Brawl/Queue.h"
 #include "Core/Orca/Games/Brawl/Relabel.h"
 #include "Core/Orca/Games/Brawl/SetBlock.h"
-#include "Core/Orca/Session/Replay.h"
+#include "Core/Rollback/ReplayText.h"
 
 namespace Orca::UX::NativeText
 {
@@ -263,13 +263,13 @@ int SetWords(GuestMemory& m, const Box& box, std::string_view text)
   {
     if (m.Read8(box.buffer + i) != next[i])
     {
-      m.Write8(box.buffer + i, next[i]);
+      Rollback::ReplayText::Write8(m, box.buffer + i, next[i]);
       written = 1;
     }
   }
   if (m.Read32(box.object + BUFFER_LENGTH) != length)
   {
-    m.Write32(box.object + BUFFER_LENGTH, length);
+    Rollback::ReplayText::Write32(m, box.object + BUFFER_LENGTH, length);
     written = 1;
   }
   return written;
@@ -430,14 +430,13 @@ void Frame(const Core::CPUThreadGuard& guard, bool resimulating,
   }
   GuardMemory memory(guard);
   u8 shown = 0;
-  const auto write_ports = Net::ReplayScope::ViewNamesPlaying() ? ports : Net::SeatLabelPorts(ports);
-  const int written = Apply(memory, write_ports, &shown, ruleset == Rules::Ruleset::Brawl, band_clock);
+  const int written = Apply(memory, ports, &shown, ruleset == Rules::Ruleset::Brawl, band_clock);
   if (resimulating)
     return;
   const u8 before = s_shown.exchange(shown, std::memory_order_relaxed);
   if (written && shown != before)
   {
-    const CssWords w = Wanted(memory, write_ports, band_clock);
+    const CssWords w = Wanted(memory, ports, band_clock);
     NOTICE_LOG_FMT(ROLLBACK, "Orca: native text: plates '{}' '{}', rules bar '{}' (shown {:02x})",
                    w.plates[0], w.plates[1],
                    ruleset == Rules::Ruleset::Brawl ? w.rules : std::string("the game's"), shown);

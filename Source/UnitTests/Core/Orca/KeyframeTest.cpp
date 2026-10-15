@@ -1356,7 +1356,7 @@ TEST(OrcaReplayStream, RefusesDamageGapsAndOtherVersions)
   }
   {
     auto bad = good;
-    bad[4] = 2;  // version 2
+    bad[4] = 3;  // Another stream version.
     ReplayStreamReader reader;
     EXPECT_FALSE(reader.Feed(bad.data(), bad.size(), &error));
   }
@@ -1676,6 +1676,71 @@ TEST(OrcaReplayStream, ProductWatchRefusalsEndOnTheFirstStep)
     EXPECT_NE(stopped.find("The replay couldn't be played:"), std::string::npos);
     EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(1));
   }
+}
+
+TEST(OrcaKeyframe, TagAssignmentsAreBoundedAndRoundTripWithoutNames)
+{
+  auto replay = Replay(0);
+  replay.boundary.tag_assignments = {{0, 119, true, true}};
+  const auto packed = PackKeyframe(0, replay);
+  ASSERT_FALSE(packed.empty());
+  int frame = -1;
+  ReplayArchive decoded;
+  ASSERT_TRUE(UnpackKeyframe(packed, &frame, &decoded));
+  EXPECT_EQ(decoded.boundary.tag_assignments, replay.boundary.tag_assignments);
+  const auto original = Raw(packed);
+  for (const u32 value : {120u << 2, 1u << 11})
+  {
+    auto raw = original;
+    U32(raw, raw.size() - 12, value);
+    EXPECT_FALSE(UnpackKeyframe(Compressed(raw), &frame, &decoded));
+  }
+  replay.boundary.tag_assignments = {{0, 1, false, false}, {0, 2, false, false}};
+  EXPECT_TRUE(PackKeyframe(0, replay).empty());
+  replay.boundary.tag_assignments = {{0, 120, false, false}};
+  EXPECT_TRUE(PackKeyframe(0, replay).empty());
+}
+
+TEST(OrcaReplayStream, WriterStripsRealNamesAndPreservesTagDecisions)
+{
+  const std::string directory = File::CreateTempDir();
+  const Common::ScopeGuard cleanup([&] { File::DeleteDirRecursively(directory); });
+  const std::string base = directory + "/recording";
+  auto replay = Replay(120);
+  const auto real_ports = std::make_shared<const std::vector<Orca::Events::PortInfo>>(
+      std::vector<Orca::Events::PortInfo>{{0, "Alice", false}, {1, "Bob", true}});
+  for (auto& frame : replay.frames)
+  {
+    frame.ports = real_ports;
+    frame.tag_assignments.emplace();
+  }
+  replay.frames[0].tag_assignments = {{0, 2, false, false}, {1, 3, true, false}};
+  {
+    Rollback::ReplayStream::Writer writer(base);
+    const std::map<int, u64> checksums{{60, 123}, {120, 456}};
+    ASSERT_TRUE(writer.Pump(replay, 120, 120, &checksums));
+  }
+  File::IOFile file(base + "-1.ygr", "rb");
+  ASSERT_TRUE(file);
+  std::vector<u8> bytes(file.GetSize());
+  ASSERT_TRUE(file.ReadBytes(bytes.data(), bytes.size()));
+  ReplayStreamReader reader;
+  std::string error;
+  ASSERT_TRUE(reader.Feed(bytes.data(), bytes.size(), &error)) << error;
+  ASSERT_TRUE(reader.Complete());
+  for (const auto& frame : reader.Archive().frames)
+    for (const auto& port : *frame.ports)
+      EXPECT_EQ(port.name, "P" + std::to_string(port.port + 1));
+  EXPECT_EQ(reader.Archive().frames[0].tag_assignments, replay.frames[0].tag_assignments);
+  EXPECT_EQ(reader.Checksums().size(), 2u);
+  EXPECT_EQ(real_ports->at(0).name, "Alice");
+  // The live join history keeps real names and all non-text decisions.
+  ReplayArchive joined;
+  int frame = -1;
+  replay.boundary.ports = real_ports;
+  ASSERT_TRUE(UnpackKeyframe(PackKeyframe(120, replay), &frame, &joined));
+  EXPECT_EQ(joined.frames[0].ports->at(0).name, "Alice");
+  EXPECT_EQ(joined.frames[0].tag_assignments, replay.frames[0].tag_assignments);
 }
 
 TEST(OrcaReplayStream, RecordingMetadataUsesSeatLabelsAcrossRenamesAndRepacking)

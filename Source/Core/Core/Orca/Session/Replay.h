@@ -4,9 +4,9 @@
 #pragma once
 
 #include <algorithm>
-
-#include <memory>
 #include <charconv>
+#include <map>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -15,6 +15,7 @@
 #include "Common/CommonTypes.h"
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/Session/Session.h"
+#include "Core/Rollback/ReplayText.h"
 
 namespace Orca::Net
 {
@@ -43,8 +44,16 @@ inline bool ValidReplayId(std::string_view id)
   return true;
 }
 
-// Names persisted in replay metadata and written into deterministic game memory. Display
-// names remain in the room/overlay, or are supplied explicitly by a replay viewer.
+// Only persisted recordings use seat labels. Live play and live join histories keep the synced
+// names, so their full-RAM peer checksums and the game's displayed names agree.
+inline std::vector<Events::PortInfo> SyncedPorts(const std::vector<Events::PortInfo>& ports)
+{
+  auto synced = ports;
+  for (auto& port : synced)
+    port.remote = false;
+  return synced;
+}
+
 inline std::vector<Events::PortInfo> SeatLabelPorts(const std::vector<Events::PortInfo>& ports)
 {
   auto labeled = ports;
@@ -81,12 +90,24 @@ inline bool ValidMenuExit(u32 exit)
   return exit == MENU_EXIT_FRIENDS || exit == MENU_EXIT_CASUAL || exit == MENU_EXIT_RANKED;
 }
 
+// Name-free tag assignment decisions: names can affect which existing slot is reused and
+// whether a tag is created. Recording these decisions keeps all non-text RAM deterministic.
+struct TagAssignment
+{
+  int port = 0;
+  int slot = 0;
+  bool created = false;
+  bool controls = false;
+  bool operator==(const TagAssignment&) const = default;
+};
+
 struct ReplayFrame
 {
   Pads pads{};
   std::shared_ptr<const std::vector<Events::PortInfo>> ports;
   std::optional<ReplayHeader> header;
   bool clear_ready = false;
+  std::optional<std::vector<TagAssignment>> tag_assignments;
   // A fresh start's way out of the built main menu (MENU_EXIT_*), or 0.
   u8 menu_exit = 0;
   // The seed this history's game draws its random numbers from (UX/OnlineMenu.h
@@ -96,6 +117,10 @@ struct ReplayFrame
 
 struct ReplayArchive
 {
+  // Local verification state, deliberately absent from every wire/file codec.
+  Rollback::ReplayText text;
+  std::map<int, Rollback::ReplayText> text_history;
+  std::map<int, u64> checksums;
   u64 origin_hash = 0;
   u64 target_hash = 0;
   // The origin's frame: frames[i] is frame first_frame + i. -1 while there is no origin yet, so
@@ -132,14 +157,16 @@ inline bool HeadersFitRuleset(const ReplayArchive& replay, u8 ruleset)
 class ReplayScope
 {
 public:
-  ReplayScope(ReplayFrame* frame, bool playback, bool network = false, bool view_names = false)
+  ReplayScope(ReplayFrame* frame, bool playback, bool network = false, bool view_names = false,
+              bool recorded = false)
       : m_previous(s_current), m_playback(s_playback), m_network(s_network),
-        m_view_names(s_view_names)
+        m_view_names(s_view_names), m_recorded(s_recorded)
   {
     s_current = frame;
     s_playback = playback;
     s_network = network;
     s_view_names = view_names;
+    s_recorded = recorded;
   }
   ~ReplayScope()
   {
@@ -147,21 +174,25 @@ public:
     s_playback = m_playback;
     s_network = m_network;
     s_view_names = m_view_names;
+    s_recorded = m_recorded;
   }
   static ReplayFrame* Current() { return s_current; }
   static bool Playing() { return s_current && s_playback; }
   static bool NetworkPlaying() { return Playing() && s_network; }
   static bool ViewNamesPlaying() { return Playing() && s_view_names; }
+  static bool RecordedPlaying() { return Playing() && s_recorded; }
 
 private:
   ReplayFrame* m_previous;
   bool m_playback;
   bool m_network;
   bool m_view_names;
+  bool m_recorded;
   static inline thread_local ReplayFrame* s_current = nullptr;
   static inline thread_local bool s_playback = false;
   static inline thread_local bool s_network = false;
   static inline thread_local bool s_view_names = false;
+  static inline thread_local bool s_recorded = false;
 };
 
 class ReplayRecordingScope

@@ -1,22 +1,26 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <gtest/gtest.h>
 
 #include "AudioCommon/NullSoundStream.h"
 #include "Common/Config/Config.h"
 #include "Common/FileUtil.h"
+#include "Common/ScopeGuard.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/HW/HW.h"
 #include "Core/HW/Memmap.h"
 #include "Core/Orca/Games/Brawl/BrawlModule.h"
+#include "Core/Orca/Engine/GuestMemory.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Keyframe.h"
 #include "Core/Orca/Session/PadCodec.h"
@@ -25,6 +29,7 @@
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/Rollback/OnlineMatch.h"
 #include "Core/Rollback/Rollback.h"
+#include "Core/Rollback/ReplayStream.h"
 #include "Core/System.h"
 #include "UICommon/UICommon.h"
 #include "VideoBackends/Null/VideoBackend.h"
@@ -230,4 +235,90 @@ TEST_F(OrcaSnapshot, LegacyMenuDeadlineDoesNotPrintAPackReport)
   EXPECT_EQ(Lines().find("no_origin"), std::string::npos);
   EXPECT_EQ(Lines().find("This pack's game"), std::string::npos);
   EXPECT_EQ(Orca::Status::ExitCode(), 0);
+}
+
+TEST_F(OrcaSnapshot, RecordedReplayChecksEveryHashWithAndWithoutViewNames)
+{
+  SetSession("1");
+  m_system.GetPPCState().msr.DR = 0;
+  const std::string source_before = Orca::GetEnv("ORCA_REPLAY_SOURCE");
+  const std::string names_before = Orca::GetEnv("ORCA_REPLAY_NAMES");
+  const auto set = [](const char* key, const std::string& value) {
+#ifdef _WIN32
+    _putenv_s(key, value.c_str());
+#else
+    if (value.empty())
+      unsetenv(key);
+    else
+      setenv(key, value.c_str(), 1);
+#endif
+  };
+  const Common::ScopeGuard restore([&] {
+    set("ORCA_REPLAY_SOURCE", source_before);
+    set("ORCA_REPLAY_NAMES", names_before);
+  });
+  auto& ram = m_system.GetMemory();
+  const std::vector<u8> origin(ram.GetRAM(), ram.GetRAM() + ram.GetRamSize());
+  const u64 origin_hash = Rollback::RamChecksum(origin, {});
+  const Core::CPUThreadGuard guard(m_system);
+  Orca::UX::GuardMemory memory(guard);
+  ASSERT_TRUE(memory.Valid(0x1000));
+  std::string shown;
+  const Rollback::OnlineMatch::FrameHook hook = [&](int frame, bool, const auto& ports, bool) {
+    shown = ports.at(0).name;
+    for (size_t i = 0; i <= shown.size(); ++i)
+      Rollback::ReplayText::Write8(memory, 0x1000 + static_cast<u32>(i),
+                                   i < shown.size() ? static_cast<u8>(shown[i]) : 0);
+    memory.Write32(0x2000, static_cast<u32>(frame));
+  };
+  Orca::Net::ReplayArchive replay;
+  replay.first_frame = 0;
+  replay.origin_hash = origin_hash;
+  auto ports = std::make_shared<const std::vector<Orca::Events::PortInfo>>(
+      std::vector<Orca::Events::PortInfo>{{0, "Alice", false}});
+  for (int frame = 0; frame < 121; ++frame)
+  {
+    Orca::Net::ReplayFrame record;
+    record.ports = ports;
+    replay.frames.push_back(record);
+    const Rollback::ReplayText::Scope scope(replay.text);
+    hook(frame, false, *ports, false);
+    if (frame % 60 == 0)
+      replay.checksums[frame] = replay.text.Checksum({ram.GetRAM(), ram.GetRamSize()}, {});
+  }
+  EXPECT_EQ(shown, "Alice");
+  const std::string base = m_dir + "/own";
+  {
+    Rollback::ReplayStream::Writer writer(base);
+    ASSERT_TRUE(writer.Pump(replay, 121, 121, &replay.checksums));
+  }
+  set("ORCA_REPLAY_SOURCE", base + "-1.ygr");
+  for (const bool view_names : {false, true})
+  {
+    SCOPED_TRACE(view_names);
+    set("ORCA_REPLAY_NAMES", view_names ? "0 Viewer%20Name" : "");
+    auto player = Rollback::ReplayStream::Player::FromEnv();
+    ASSERT_NE(player, nullptr);
+    Rollback::ReplayStream::PlayerHost host;
+    host.restore_origin = [&] {
+      std::copy(origin.begin(), origin.end(), ram.GetRAM());
+      return true;
+    };
+    host.set_catching_up = [](bool) {};
+    host.set_pads = [](int, const auto&) {};
+    host.stopping = [] { return false; };
+    std::string stopped;
+    host.stop = [&](const std::string& message) { stopped = message; };
+    int running = -1;
+    for (int tick = 0; tick < 123 && !player->Over(); ++tick)
+      player->Step(m_system, host, &running, origin_hash, 0, hook);
+    EXPECT_TRUE(player->Over());
+    EXPECT_EQ(stopped, "The replay is over");
+    EXPECT_EQ(shown, view_names ? "Viewer Name" : "P1");
+  }
+  const std::string lines = Lines();
+  const std::string verdict = "orca replay done ok frames=121 checked=2 mismatched=0";
+  const size_t first = lines.find(verdict);
+  ASSERT_NE(first, std::string::npos) << lines;
+  EXPECT_NE(lines.find(verdict, first + verdict.size()), std::string::npos) << lines;
 }

@@ -30,6 +30,7 @@
 #include "Common/FileUtil.h"
 #include "Common/HookableEvent.h"
 #include "Common/Logging/Log.h"
+#include "Common/ScopeGuard.h"
 #include "Common/StringUtil.h"
 #include "Common/Timer.h"
 #include "Core/Core.h"
@@ -349,6 +350,33 @@ struct Match
 
 // Desyncs this process has seen across all matches (the stats line's "ds").
 int s_desyncs = 0;
+
+// Runs the trusted frame hook with replay-only text accounting. Peer/session hashes continue to
+// use SnapshotRing::RamChecksum, with all RAM covered. Keep local text checkpoints for rollbacks.
+void ReplayFrameHook(Core::System& system, Match& match, int frame, bool resimulating,
+                     const std::vector<Orca::Events::PortInfo>& ports, bool read_own,
+                     const FrameHook& on_frame, bool restored = false)
+{
+  auto& replay = match.replay;
+  if (restored)
+  {
+    if (const auto it = replay.text_history.find(frame); it != replay.text_history.end())
+      replay.text = it->second;
+    replay.text_history.erase(replay.text_history.lower_bound(frame), replay.text_history.end());
+    replay.checksums.erase(replay.checksums.lower_bound(frame), replay.checksums.end());
+  }
+  replay.text_history.erase(replay.text_history.begin(), replay.text_history.lower_bound(frame - 64));
+  const ReplayText::Scope text_scope(replay.text);
+  on_frame(frame, resimulating, ports, read_own);
+  replay.text_history[frame] = replay.text;
+  if (frame % 60 == 0 && replay.first_frame >= 0)
+  {
+    auto& memory = system.GetMemory();
+    replay.checksums[frame] = replay.text.Checksum(
+        {memory.GetRAM(), memory.GetRamSize()},
+        {memory.GetEXRAM(), memory.GetEXRAM() ? memory.GetExRamSize() : 0});
+  }
+}
 
 // The local pad the last boundary read, for set over's B and Start.
 std::optional<Orca::Net::Pad> s_local_pad;
@@ -2417,7 +2445,7 @@ ReplayStep AdvanceReplay(Core::System& system, Match& match, const FrameHook& on
   Orca::Net::ReplayFrame& record = at ? *at : match.replay.boundary;
   {
     Orca::Net::ReplayScope scope(&record, true, true);
-    on_frame(frame, true, *record.ports, false);
+    ReplayFrameHook(system, match, frame, true, *record.ports, false, on_frame);
   }
   if (frame < target)
   {
@@ -3888,7 +3916,7 @@ std::optional<int> Boundary(Core::System& system,
     const int final_end = match.session ? std::min(match.running + 1, match.session->FinalFrame()) :
                                           match.running + 1;
     if (!match.replay_out->Pump(match.replay, final_end, match.running + 1,
-                                match.session ? &match.session->LocalChecksums() : nullptr,
+                                &match.replay.checksums,
                                 match.session != nullptr))
       match.replay_out.reset();
   }
@@ -3959,7 +3987,7 @@ std::optional<int> Boundary(Core::System& system,
     auto* record = Orca::Net::ReplayRecordingScope::Frame(frame);
     if (record)
     {
-      auto canonical = Orca::Net::RecordingPorts(ports);
+      auto canonical = Orca::Net::SyncedPorts(ports);
       const Orca::Net::ReplayFrame* previous = match.replay.At(frame - 1);
       if (previous && previous->ports && *previous->ports == canonical)
         record->ports = previous->ports;
@@ -3968,10 +3996,11 @@ std::optional<int> Boundary(Core::System& system,
     }
     Orca::Net::ReplayScope replay_scope(record, resimulating);
     // Nothing is this player's alone before its origin: the boot is everyone's.
-    on_frame(frame, resimulating, ports,
+    ReplayFrameHook(system, match, frame, resimulating, ports,
              !resimulating && !CanonicalBoot(match) &&
                  AloneAt(frame, SoloIdle(match), Orca::Online::DropInPending(),
-                         match.keyframe ? std::optional(match.keyframe->frame) : std::nullopt));
+                         match.keyframe ? std::optional(match.keyframe->frame) : std::nullopt),
+             on_frame);
     if (!resimulating && ports != match.told_ports)
     {
       match.told_ports = ports;
@@ -4150,8 +4179,13 @@ static std::optional<int> SessionBoundary(
     bool doubles, const std::function<bool()>& stopping, std::chrono::milliseconds silence_limit,
     const std::function<std::vector<int>()>& left_in_play)
 {
-  for (int attempt = 0; attempt < 2; ++attempt)
+  for (int attempt = 2; attempt > 0;)
   {
+    const int players_before = match.session->PlayersInPlay();
+    const Common::ScopeGuard spend_attempt([&] {
+      if (match.session && match.session->PlayersInPlay() >= players_before)
+        --attempt;
+    });
     bool peer_silent = false;
     // A joiner stalled on its host stops waiting once the host has left the room.
     bool host_left = false;
@@ -4242,11 +4276,11 @@ static std::optional<int> SessionBoundary(
       // rollback may be due to those ports changing. Rerun the hook for the frame landed on.
       auto* record = Orca::Net::ReplayRecordingScope::Frame(step.frame);
       auto ports = PortsAt(match, step.frame);
-      auto canonical = Orca::Net::RecordingPorts(ports);
+      auto canonical = Orca::Net::SyncedPorts(ports);
       if (record)
         record->ports = std::make_shared<const std::vector<Orca::Events::PortInfo>>(std::move(canonical));
       Orca::Net::ReplayScope replay_scope(record, true);
-      on_frame(step.frame, true, ports, false);
+      ReplayFrameHook(system, match, step.frame, true, ports, false, on_frame, true);
     }
     if (step.kind == Orca::Net::StepKind::Run || step.kind == Orca::Net::StepKind::Rollback)
     {
@@ -4370,13 +4404,12 @@ static std::optional<int> SessionBoundary(
                        seat + 1, match.running + 1);
         match.session->DropSeat(seat);
       }
-      // Removing seats makes progress without spending the session retry.
-      if (doubles)
-        --attempt;
+      // A shrinking in-play roster bounds the additional passes. The scope guard spends an
+      // attempt only when that count did not drop, including duplicate departure notifications.
       continue;
     }
     if (!match.joining && match.session->CurrentFrame() == match.running + 1 &&
-        (attempt == 0 || !error.empty()))
+        (attempt == 2 || !error.empty()))
     {
       // The host plays on and unplugs whoever stopped answering or broke the session. If the host's
       // own room went away, KeepRoomOpen reports that instead of "your friend left".
@@ -4420,8 +4453,6 @@ static std::optional<int> SessionBoundary(
           Orca::Status::State("friend-left stalled");
           if (match.seated.empty())
             Orca::Online::SetOpponentPlugged(false);
-          // Each pass removes at least one seat, so these retries stay bounded.
-          --attempt;
           continue;
         }
         // Silent friends: unplug them and step again; a silent ranked opponent loses the set.
@@ -4443,7 +4474,7 @@ static std::optional<int> SessionBoundary(
         Orca::Online::ReportPeerFault();
       }
       DropFriends(match, Orca::Online::IsDesync(error) ? "desync" : "network",
-                  !room_gone && attempt == 0);
+                  !room_gone && attempt == 2);
       GoSolo(match, "the session failed");
       if (!room_gone)
         AfterFriendsGone(match);

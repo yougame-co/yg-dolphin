@@ -1893,65 +1893,68 @@ TEST(OrcaUXNameTags, ReplayViewNamesReplaceAWornTagAndLaterUpdates)
   EXPECT_EQ(m.TagName(0), u"P1");
 }
 
-TEST(OrcaUXNameTags, OwnReplayKeepsEveryWornTagChecksum)
+TEST(OrcaUXNameTags, LiveNamesAndNameFreeReplayKeepAllNonTextBytes)
 {
-  const char* previous_source = std::getenv("ORCA_REPLAY_SOURCE");
-  const std::string old_source = previous_source ? previous_source : "";
-  const auto set_source = [](const std::string& source) {
-#ifdef _WIN32
-    _putenv_s("ORCA_REPLAY_SOURCE", source.c_str());
-#else
-    if (source.empty())
-      unsetenv("ORCA_REPLAY_SOURCE");
-    else
-      setenv("ORCA_REPLAY_SOURCE", source.c_str(), 1);
-#endif
-  };
-  const Common::ScopeGuard restore_source([&] { set_source(old_source); });
-  set_source("own-replay-test.ygr");
-  FakeBrawl recorded;
-  recorded.SetTag(0, u"MINE");
-  recorded.Join(0);
-  recorded.Join(1);
-  recorded.W32(FakeBrawl::Area(0) + 0x1C8, 0);
-  // The second name has no tag characters: own playback must not force a port label either.
+  FakeBrawl live;
+  live.SetTag(0, u"MINE");
+  for (int port = 0; port < 3; ++port)
+    live.Join(port);
+  live.W32(FakeBrawl::Area(0) + 0x1C8, 0);
   const std::vector<Orca::Events::PortInfo> ports{{0, "Alice", false},
-                                                {1, "\xf0\x9f\x90\xac", true}};
-  FakeBrawl played = recorded;
-  const auto checksum = [](const FakeBrawl& memory) {
+                                                {1, "\xf0\x9f\x90\xac", true},
+                                                {2, "sandbox-ada", true}};
+  const auto stored = Orca::Net::RecordingPorts(ports);
+  FakeBrawl played = live;
+  Rollback::ReplayText live_text, played_text;
+  const auto checksum = [](const FakeBrawl& memory, const Rollback::ReplayText& text) {
     std::vector<u8> bytes;
     for (const auto& [address, byte] : memory.bytes)
     {
       for (int shift = 24; shift >= 0; shift -= 8)
         bytes.push_back(static_cast<u8>(address >> shift));
-      bytes.push_back(byte);
+      bytes.push_back(text.VerifiedByte(address, byte));
     }
     return Rollback::RamChecksum(bytes, {});
   };
-  Orca::Net::ReplayFrame frame;
-  const auto stored_ports = Orca::Net::RecordingPorts(ports);
+  int mismatches = 0;
   for (int i = 0; i < 60; ++i)
   {
-    NameTagsFrame(recorded, ports, ports, nullptr, {}, 0);
-    const Orca::Net::ReplayScope own_scope(&frame, true, true);
-    EXPECT_FALSE(Orca::Net::ReplayScope::ViewNamesPlaying());
-    NameTagsFrame(played, stored_ports, stored_ports, nullptr, {}, 0);
-    EXPECT_EQ(checksum(played), checksum(recorded)) << i;
-    EXPECT_EQ(played.bytes, recorded.bytes) << i;
+    Orca::Net::ReplayFrame frame;
     {
-      const Orca::Net::ReplayScope view_scope(&frame, true, true, true);
-      EXPECT_TRUE(Orca::Net::ReplayScope::ViewNamesPlaying());
+      const Orca::Net::ReplayScope scope(&frame, false);
+      const Rollback::ReplayText::Scope text_scope(live_text);
+      NameTagsFrame(live, ports, ports, nullptr, {}, 0);
+      // Repeated boundary hooks must retain the original assignment events.
+      NameTagsFrame(live, ports, ports, nullptr, {}, 0);
     }
-    EXPECT_FALSE(Orca::Net::ReplayScope::ViewNamesPlaying());
+    {
+      const Orca::Net::ReplayScope scope(&frame, true, true, false, true);
+      const Rollback::ReplayText::Scope text_scope(played_text);
+      NameTagsFrame(played, stored, stored, nullptr, {}, 0);
+    }
+    mismatches += checksum(live, live_text) != checksum(played, played_text);
   }
+  EXPECT_EQ(mismatches, 0);
+  EXPECT_EQ(live.TagName(live.NameId(2)), u"SANDB");
+  EXPECT_EQ(played.TagName(played.NameId(2)), u"P3");
+  EXPECT_EQ(played.NameId(1), -1);  // No tag was assigned to the unshowable live name.
+  EXPECT_NE(checksum(live, {}), checksum(played, {}));  // Full peer checksums cover the names.
+  Orca::Net::ReplayFrame view;
+  view.tag_assignments.emplace();
   {
-    const Orca::Net::ReplayScope view_scope(&frame, true, true, true);
+    const Orca::Net::ReplayScope scope(&view, true, true, true, true);
+    const Rollback::ReplayText::Scope text_scope(played_text);
     NameTagsFrame(played, ports, ports, nullptr, {}, 0);
   }
-  EXPECT_FALSE(Orca::Net::ReplayScope::ViewNamesPlaying());
   EXPECT_EQ(played.TagName(0), u"ALICE");
-  EXPECT_EQ(played.TagName(1), u"P2");
-  EXPECT_NE(checksum(played), checksum(recorded));
+  EXPECT_EQ(played.TagName(played.NameId(2)), u"SANDB");
+  EXPECT_EQ(checksum(live, live_text), checksum(played, played_text));
+  // Neither controls nor slot assignments are excluded from replay verification.
+  played.Write8(FakeBrawl::Tag(0) + 0x14, 9);
+  EXPECT_NE(checksum(live, live_text), checksum(played, played_text));
+  played.Write8(FakeBrawl::Tag(0) + 0x14, live.Read8(FakeBrawl::Tag(0) + 0x14));
+  played.W32(FakeBrawl::Area(0) + 0x1C8, 2);
+  EXPECT_NE(checksum(live, live_text), checksum(played, played_text));
 }
 
 TEST(OrcaUXNameTags, ANewTagIsMadeAsTheGameMakesOneAndNothingElseIsWritten)
@@ -2552,7 +2555,7 @@ TEST(OrcaUXNameTags, AcrossRestartsATagMadeAgainKeepsTheKeptControls)
     };
     for (int f = 0; f < 3; ++f)
       frame();
-    EXPECT_EQ(m.TagName(m.NameId(0)), u"P1");
+    EXPECT_EQ(m.TagName(m.NameId(0)), u"ZEKE");
     GameMadeTag(m, 118, u"MYTAG");
     Wear(m, 0, 118);
     for (int f = 0; f < 3; ++f)
@@ -2576,7 +2579,7 @@ TEST(OrcaUXNameTags, TheOwnControlsReadComesAfterTheWrites)
     m.Join(0);
     OwnControlsReader reader;
     EXPECT_FALSE(NameTagsFrame(m, ports, ports, &reader, custom, 0));
-    EXPECT_EQ(m.TagName(0), u"P1");
+    EXPECT_EQ(m.TagName(0), u"ZEKE");
     EXPECT_EQ(TagLayout(m, 0), CustomLayout());
     // They make MYTAG again at the defaults and choose it: their choice stays intact.
     GameMadeTag(m, 118, u"MYTAG");
@@ -2592,14 +2595,14 @@ TEST(OrcaUXNameTags, TheOwnControlsReadComesAfterTheWrites)
     EXPECT_EQ((*edited)[1], 0x04);
   }
   {
-    // The worn tag gets reset to the defaults: the menu choice stays, and a default-only
-    // switch still does not replace the stored account profile.
+    // The currently worn tag is reset to the defaults: the menu choice stays, and the reader
+    // publishes this edit to that same tag (switching to a different default tag is covered above).
     FakeBrawl m;
     m.Join(0);
     OwnControlsReader reader;
     EXPECT_FALSE(NameTagsFrame(m, ports, ports, &reader, custom, 0));
     GameMadeTag(m, 0, u"ZEKE");
-    EXPECT_FALSE(NameTagsFrame(m, ports, ports, &reader, custom, 0));
+    EXPECT_EQ(NameTagsFrame(m, ports, ports, &reader, custom, 0), Profile(1, FakeBrawl::CONTROLS));
     EXPECT_EQ(TagLayout(m, 0), FakeBrawl::CONTROLS);
     // Reading before the hook follows the same default-switch rule.
     FakeBrawl old;
@@ -2607,7 +2610,7 @@ TEST(OrcaUXNameTags, TheOwnControlsReadComesAfterTheWrites)
     OwnControlsReader before;
     EXPECT_FALSE(NameTagsFrame(old, ports, ports, &before, custom, 0));
     GameMadeTag(old, 0, u"ZEKE");
-    EXPECT_FALSE(before.Read(old, ports, custom, 0));
+    EXPECT_EQ(before.Read(old, ports, custom, 0), Profile(1, FakeBrawl::CONTROLS));
   }
   {
     // Re-runs and sessions: the writes only.
@@ -2748,7 +2751,7 @@ TEST(OrcaUXNameTags, ControlsSavedInTheGamesMenusArePublishedThere)
     OwnControlsReader reader;
     const std::vector<Orca::Events::PortInfo> carried{{0, "sandbox-ada", false, custom}};
     EXPECT_FALSE(NameTagsFrame(m, carried, carried, &reader, custom, 0));
-    ASSERT_EQ(m.TagName(m.NameId(0)), u"P1");
+    ASSERT_EQ(m.TagName(m.NameId(0)), u"SANDB");
     const std::array<u8, 0x2D> orcas = TagLayout(m, 119);
     m.W32(FakeBrawl::SCENE, 0x806ff300);  // back in the menus: not the character select
     GameMadeTag(m, 0, Typed(u"SANDB"));
@@ -2764,8 +2767,8 @@ TEST(OrcaUXNameTags, ControlsSavedInTheGamesMenusArePublishedThere)
     m.W32(FakeBrawl::Area(0) + 0x1C8, 0xFFFFFFFF);  // joined again
     const std::vector<Orca::Events::PortInfo> now{{0, "sandbox-ada", false, *edited}};
     EXPECT_FALSE(NameTagsFrame(m, now, now, &reader, *edited, 0));
-    EXPECT_EQ(m.NameId(0), 1);
-    EXPECT_EQ(m.TagName(1), u"P1");
+    EXPECT_EQ(m.NameId(0), 0);
+    EXPECT_EQ(m.TagName(0), Typed(u"SANDB"));
     // Tap jump off, and the game's own Save bit kept.
     EXPECT_EQ(m.Read8(FakeBrawl::Tag(0) + 0x14 + 11), 0x01);
     EXPECT_EQ(TagLayout(m, 119), orcas);
@@ -3022,7 +3025,7 @@ TEST(OrcaUXNameTags, ButtonsSetOnTheControlsPageAreThePlayersOwnWhateverTheTagIs
     m.Join(0);
     OwnControlsReader reader;
     EXPECT_FALSE(NameTagsFrame(m, ports, ports, &reader, {}, 0));
-    ASSERT_EQ(m.TagName(m.NameId(0)), u"P1");
+    ASSERT_EQ(m.TagName(m.NameId(0)), u"SANDB");
     ASSERT_EQ(m.NameId(0), 0);
     OnScene(m, "muMenuMain");
     GameMadeTag(m, 1, Typed(u"MINE"));

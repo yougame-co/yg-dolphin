@@ -3472,6 +3472,7 @@ struct YouGameRoom::Impl
     }
     if (room_queue != "private")
     {
+      // ReportQueue maps tournament tickets to casual: their result UI intentionally starts here.
       Orca::UX::SetEnd::Current().MatchBegan(room_queue == "ranked", opponent,
                                              Orca::UX::SetEnd::NowMs());
     }

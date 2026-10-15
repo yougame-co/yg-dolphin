@@ -36,10 +36,8 @@ namespace Orca::Net
 {
 namespace
 {
-// ORP2 contains controller inputs and typed UI events; legacy machine images are rejected. Builds
-// with another layout of it have another UX compat version, so they never meet. ORP2 added each
-// frame's seed (ReplayFrame::seed).
-constexpr char MAGIC[4] = {'O', 'R', 'P', '2'};
+// ORP3 adds name-free tag assignment events. Legacy machine images are rejected.
+constexpr char MAGIC[4] = {'O', 'R', 'P', '3'};
 constexpr int WINDOW_LOG = 26;
 constexpr int LEVEL = 3;
 // Sanity limit per section (MEM2 is 64 MB; a Wii NAND is at most 512 MB).
@@ -320,6 +318,22 @@ bool WriteReplayFrame(Writer& w, const ReplayFrame& frame)
     w.U32(frame.header->room);
   }
   w.U32(frame.clear_ready);
+  w.U32(frame.tag_assignments ? static_cast<u32>(frame.tag_assignments->size()) + 1 : 0);
+  if (frame.tag_assignments)
+  {
+    if (frame.tag_assignments->size() > MAX_SEATS)
+      return false;
+    u32 assigned = 0;
+    for (const auto& tag : *frame.tag_assignments)
+    {
+      if (tag.port < 0 || tag.port >= MAX_SEATS || tag.slot < 0 || tag.slot >= 120 ||
+          (assigned & (1u << tag.port)))
+        return false;
+      assigned |= 1u << tag.port;
+      w.U32(static_cast<u32>(tag.port | tag.slot << 2 | int{tag.created} << 9 |
+                             int{tag.controls} << 10));
+    }
+  }
   w.U32(frame.menu_exit);
   w.U32(frame.seed);
   return true;
@@ -364,6 +378,25 @@ bool ReadReplayFrame(Reader& r, ReplayFrame* frame)
   if (!r.U32(&clear) || clear > 1)
     return false;
   frame->clear_ready = clear != 0;
+  u32 assignments;
+  if (!r.U32(&assignments) || assignments > MAX_SEATS + 1)
+    return false;
+  if (assignments)
+  {
+    frame->tag_assignments.emplace();
+    u32 assigned = 0;
+    for (u32 i = 1; i < assignments; ++i)
+    {
+      u32 tag;
+      if (!r.U32(&tag) || (tag & ~0x7ffu) || ((tag >> 2) & 127) >= 120 ||
+          (assigned & (1u << (tag & 3))))
+        return false;
+      assigned |= 1u << (tag & 3);
+      frame->tag_assignments->push_back({static_cast<int>(tag & 3),
+                                       static_cast<int>((tag >> 2) & 127),
+                                       bool(tag & 0x200), bool(tag & 0x400)});
+    }
+  }
   u32 menu_exit;
   if (!r.U32(&menu_exit) || (menu_exit != 0 && !ValidMenuExit(menu_exit)))
     return false;
@@ -377,7 +410,7 @@ bool ReadReplayFrame(Reader& r, ReplayFrame* frame)
 
 // The smallest a frame's record can be: pads, a port count, the header and clear-ready flags, the
 // menu exit, the seed.
-constexpr size_t MIN_FRAME_BYTES = sizeof(Pads) + 5 * 4;
+constexpr size_t MIN_FRAME_BYTES = sizeof(Pads) + 6 * 4;
 // Magic, the frame count, the first frame, the origin and target hashes.
 constexpr size_t PREAMBLE_BYTES = 4 + 4 + 4 + 8 + 8;
 }  // namespace
@@ -491,7 +524,7 @@ namespace
 {
 constexpr char STREAM_MAGIC[4] = {'Y', 'G', 'R', 'S'};
 constexpr char CHUNK_MAGIC[4] = {'Y', 'G', 'R', 'C'};
-constexpr u32 STREAM_VERSION = 1;
+constexpr u32 STREAM_VERSION = 2;
 constexpr u32 MAX_STREAM_HEADER = 16u << 10;
 // A chunk holds at most a minute of frames and 8 MB compressed.
 constexpr u32 MAX_CHUNK_FRAMES = 3600;
@@ -781,7 +814,8 @@ bool ReplayStreamReader::Parse(std::string* error)
         {
           if (next.pads != previous->pads || *next.ports != *previous->ports ||
               next.header != previous->header || next.clear_ready != previous->clear_ready ||
-              next.menu_exit != previous->menu_exit || next.seed != previous->seed)
+              next.menu_exit != previous->menu_exit || next.seed != previous->seed ||
+              next.tag_assignments != previous->tag_assignments)
             return fail("the match's stream changed");
           continue;
         }

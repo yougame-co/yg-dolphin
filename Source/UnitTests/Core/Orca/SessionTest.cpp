@@ -4551,6 +4551,7 @@ struct FriendsMesh
   std::array<bool, MAX_SEATS> hold_departed{};
   std::array<int, MAX_SEATS> latency{};
   std::array<std::array<int, MAX_SEATS>, MAX_SEATS> pair_latency{};
+  std::array<std::array<int, MAX_SEATS>, MAX_SEATS> drop_packets{};
   std::array<int, MAX_SEATS> history_sends{};
   std::array<Packet, MAX_SEATS> last_sent;
   std::array<int, MAX_SEATS> reported_rtt{-1, -1, -1, -1};
@@ -4566,6 +4567,11 @@ struct FriendsMesh
       if (mesh.reported_rtt[seat] >= 0)
         packet.rtt = mesh.reported_rtt[seat];
       mesh.last_sent[seat] = packet;
+      if (mesh.drop_packets[seat][to] > 0)
+      {
+        --mesh.drop_packets[seat][to];
+        return;
+      }
       if (mesh.hold_departed[to])
         for (auto& [departed_seat, stay] : packet.departed)
           stay.pads.clear();
@@ -5474,6 +5480,82 @@ TEST(OrcaDoubles, SuccessiveBatchesKeepTheUnconfirmedStartGate)
   EXPECT_EQ(friends.mesh.last_sent[0].start_gate->first, previous->first);
   friends.Play(1000);
   friends.Compare(compare_from);
+}
+
+TEST(OrcaDoubles, TwentyLostHostPacketsAcrossBatchesKeepCharacterSelectStartEqual)
+{
+  FourFriends friends(true, 1);
+  friends.Play(400);
+  auto& host = *friends.players[0];
+  int first = host.session->CurrentFrame() - 20;
+  const auto add = [&](int seat) {
+    const int live = host.session->CurrentFrame();
+    const int keyframe = live - 20;
+    first = std::max(first, keyframe);
+    friends.players[seat] = std::make_unique<MeshPlayer>(friends.mesh, seat, keyframe, true);
+    friends.players[seat]->game.m_state = At(host.game.m_history, keyframe);
+    host.session->AddPeerBatch({seat}, live, keyframe);
+  };
+  add(2);
+  friends.Play(1);
+  ASSERT_TRUE(friends.mesh.last_sent[0].start_gate);
+  const auto open = *friends.mesh.last_sent[0].start_gate;
+  ASSERT_EQ(open.second, NEVER);
+  // Seat 1 heard the open gate. It misses the cancelled batch's end and the next batch boundary.
+  friends.mesh.drop_packets[0][1] = 20;
+  host.session->DropSeat(2);
+  friends.disabled[2] = true;
+  friends.Play(4);
+  const auto ended = *friends.mesh.last_sent[0].start_gate;
+  ASSERT_NE(ended.second, NEVER);
+  ASSERT_LE(ended.second, host.session->LogEnd());
+  add(3);
+  friends.Play(1);
+  ASSERT_TRUE(friends.mesh.last_sent[0].start_gate);
+  EXPECT_EQ(friends.mesh.last_sent[0].start_gate->first, open.first);
+  friends.Play(400);
+  EXPECT_EQ(friends.mesh.drop_packets[0][1], 0);
+  const int start = host.session->CurrentFrame();
+  for (const int seat : {0, 1, 3})
+    friends.players[seat]->held_start = true;  // The next character-select Start.
+  friends.Play(180);
+  friends.Compare(first);
+  for (const int seat : {0, 1, 3})
+  {
+    const auto& player = *friends.players[seat];
+    EXPECT_GT(player.session->GetStats().checksums_matched, 0);
+    EXPECT_NE(At(player.game.m_ran_pads, start + 60)[0][0] & PAD_WIRE_START_HIGH, 0);
+  }
+}
+
+TEST(OrcaDoubles, ReceivingAnOpenGateThenAMovedGateDoesNotKeepItForever)
+{
+  FakeNet net;
+  FakeNet::End transport(net, 1);
+  FakeGame game;
+  auto config = DropInConfig(1, 0);
+  config.per_peer_inputs = true;
+  config.time_sync = false;
+  (*config.plan)[1] = {0, NEVER, 0};
+  Session session(config, game, transport);
+  int completed = -1;
+  for (int frame = 0; frame < 12; ++frame)
+  {
+    Packet host;
+    host.seat = 0;
+    host.sequence = frame + 1;
+    host.current_frame = frame;
+    host.first_frame = frame;
+    host.roster = config.plan;
+    host.start_gate = frame == 0 ? std::pair{0, NEVER} : std::pair{1, 3};
+    host.pads = {Pad{PAD_WIRE_START_HIGH}};
+    host.ack[1] = frame;
+    net.queues[1].push_back({0, host});
+    ASSERT_EQ(session.OnBoundary(completed, Pad{PAD_WIRE_START_HIGH}).kind, StepKind::Run);
+    completed = game.Run();
+  }
+  EXPECT_TRUE(session.Error().empty());
+  EXPECT_NE(At(game.m_ran_pads, 8)[0][0] & PAD_WIRE_START_HIGH, 0);
 }
 
 TEST(OrcaDoubles, ConfirmedDeparturesStopRepeatingTheirHistory)

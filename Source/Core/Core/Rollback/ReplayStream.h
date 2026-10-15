@@ -147,7 +147,8 @@ public:
   explicit Writer(std::string base, bool to_room = false, bool gated = false);
   ~Writer();
   // Appends `replay`'s frames before `end` (all final) with the checksums among `checksums`
-  // (frame: RAM checksum at its start) that they cover, at most every 6 frames or 100 ms. `live`
+  // (frame: replay-only checksum after its hook, discounting text writes) that they cover,
+  // at most every 6 frames or 100 ms. `live`
   // is this machine's own newest frame, for watchers. A history other than the one being written
   // begins another file. False once writing failed.
   // With the room on (ORCA_TEST_REPLAY_ROOM), the room takes a stream only from a seated player
@@ -277,6 +278,8 @@ private:
   double m_waited_ms = 0;
   int m_last_progress = 0;
   MachineImage m_seek_image;
+  ReplayText m_text;
+  ReplayText m_seek_text;
   std::vector<Orca::Net::NandEntry> m_seek_nand;
   bool m_seek_taken = false;
   bool m_seek_done = false;
