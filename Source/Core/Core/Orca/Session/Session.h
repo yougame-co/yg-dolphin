@@ -101,11 +101,11 @@ struct SeatPlan
   bool operator==(const SeatPlan&) const = default;
 };
 
-// Host-owned inputs for a completed stay in a seat, including an immediate retained-seat rebuild.
+// Host-owned inputs through completed stays, including unplugged gaps between rebuilds.
 struct DepartedInputs
 {
-  int plug_from = NEVER;
-  int unplug_from = NEVER;
+  int from = NEVER;
+  int until = NEVER;
   int first_frame = 0;
   std::vector<Pad> pads;
 };
@@ -153,7 +153,7 @@ struct Packet
   std::optional<std::array<SeatPlan, MAX_SEATS>> roster;
   // Multi-peer pre-match batch: suppress Start during [first, second).
   std::optional<std::pair<int, int>> start_gate;
-  // The host's final input prefix for a completed stay (opted-in friends rooms only).
+  // The host's final seat history through completed stays (opted-in friends rooms only).
   std::map<int, DepartedInputs> departed;
   // The highest frame of shared history this sender holds contiguously from frame 0 (-1: none). The
   // host sends a joining player the history it lacks.
@@ -361,7 +361,7 @@ public:
   // Local inputs already sampled for frames from CurrentFrame() on (the host keeps them when it
   // goes back to solo play).
   std::vector<Pad> PendingLocal() const;
-  // Whether this machine's own controller is plugged in at `frame`.
+  // Whether this seat's controller is plugged in at `frame`, including completed stays.
   bool Plugged(int seat, int frame) const;
   // The newest frame the host reported (a joining player catches up to it).
   int AuthorityFrame() const;
@@ -437,6 +437,7 @@ private:
   void TrackAdvantage();
   int KnownThrough(int seat) const;
   int DepartedThrough(int seat) const;
+  const Pad* DepartedPad(int seat, int frame) const;
   void AddDeparted(Packet* packet, int recipient) const;
   bool InPlay(int seat) const;
   // This player and every other one in play.

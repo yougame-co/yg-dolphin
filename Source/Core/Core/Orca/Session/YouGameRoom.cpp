@@ -515,8 +515,8 @@ picojson::object PacketToJson(const Packet& packet)
       for (const Pad& pad : stay.pads)
         hex += ToHex(pad.data(), pad.size());
       stays.emplace_back(picojson::array{picojson::value(static_cast<double>(seat)),
-          picojson::value(static_cast<double>(stay.plug_from)),
-          picojson::value(static_cast<double>(stay.unplug_from)),
+          picojson::value(static_cast<double>(stay.from)),
+          picojson::value(static_cast<double>(stay.until)),
           picojson::value(static_cast<double>(stay.first_frame)), picojson::value(hex)});
     }
     d["ds"] = picojson::value(stays);
@@ -4976,7 +4976,7 @@ void CoalescePacket(std::optional<Packet>* outgoing, const Packet& packet)
   for (const auto& [seat, stay] : pending->departed)
   {
     auto [entry, inserted] = merged.departed.emplace(seat, stay);
-    if (!inserted && entry->second.unplug_from == stay.unplug_from &&
+    if (!inserted && entry->second.until == stay.until &&
         stay.first_frame < entry->second.first_frame)
     {
       auto& next = entry->second;

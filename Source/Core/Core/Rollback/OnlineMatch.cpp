@@ -1636,6 +1636,11 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
   }
   if (match.keyframe->frame < match.recovery_keyframe_from)
     return;
+  int live_from = next;
+  if (match.doubles && match.session)
+    for (const auto& [seat, arrival] : match.waiting)
+      if (match.session->Plan()[seat].unplug_from != Orca::Net::NEVER)
+        live_from = std::max(live_from, match.session->Plan()[seat].unplug_from);
   const bool batch = match.doubles && !recovering &&
                      (match.waiting.size() > 1 || !match.seated.empty());
   std::vector<int> batch_seats;
@@ -1644,7 +1649,7 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
     for (const auto& [seat, arrival] : match.waiting)
     {
       batch_seats.push_back(seat);
-      AddName(match, {seat, next, arrival.name, arrival.controls, arrival.queue});
+      AddName(match, {seat, live_from, arrival.name, arrival.controls, arrival.queue});
     }
   }
   if (match.doubles && match.waiting.size() > 1)
@@ -1696,19 +1701,19 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
     }
     if (batch && !batch_seats.empty())
     {
-      match.session->AddPeerBatch(batch_seats, next, keyframe_frame);
+      match.session->AddPeerBatch(batch_seats, live_from, keyframe_frame);
       batch_seats.clear();
     }
     else if (!batch)
-      match.session->AddPeer(seat, next, keyframe_frame);
+      match.session->AddPeer(seat, live_from, keyframe_frame);
     match.seated.insert(seat);
     if (it->second.doubles)
       match.doubles_seats.insert(seat);
     match.plugging.insert(seat);
     NOTICE_LOG_FMT(ROLLBACK, "Drop-in: port {} is {} from frame {}{}", seat + 1, it->second.name,
-                   next, it->second.controls.empty() ? "" : ", with their own controls");
+                   live_from, it->second.controls.empty() ? "" : ", with their own controls");
     if (!batch)
-      AddName(match, {seat, next, it->second.name, it->second.controls, it->second.queue});
+      AddName(match, {seat, live_from, it->second.name, it->second.controls, it->second.queue});
     // The newcomer plugs in only once every player holds its values.
     match.session->RequireValues(seat, match.names_version);
     NOTICE_LOG_FMT(ROLLBACK, "Drop-in: {}", match.session->Describe());
@@ -1728,7 +1733,7 @@ void HostEvents(Core::System& system, Match& match, Orca::Net::YouGameRoom* test
     }
     NOTICE_LOG_FMT(ROLLBACK,
                    "Drop-in: port {} replays from keyframe frame {}, live from frame {}", seat + 1,
-                   keyframe_frame, next);
+                   keyframe_frame, live_from);
     it = match.waiting.erase(it);
   }
   // A joiner deletes the keyframe it loaded, so the next arrival gets a fresh one.
