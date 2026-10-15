@@ -1607,13 +1607,14 @@ TEST(OrcaMod, GoldenLegacyCompatibilityKey)
   const std::string revision = Common::GetScmRevGitStr();
   ASSERT_TRUE(parts.starts_with("orca|" + revision + "|"));
   parts.replace(5, revision.size(), "fixture-engine-revision");
-  // 0.3.43 deliberately bumps UX 29 -> 30 for the replay stream format. Pin the new golden,
-  // and normalize just that suffix back to 29 to prove no other legacy-key field changed.
-  ASSERT_TRUE(parts.ends_with("|ux=30"));
+  // 0.3.46 uses UX 31 for deterministic seat-label and selected-tag writes. Normalize only
+  // that suffix to keep both earlier serialization goldens pinned.
+  ASSERT_TRUE(parts.ends_with("|ux=31"));
   std::string previous = parts;
+  previous.replace(previous.size() - 6, 6, "|ux=30");
+  EXPECT_EQ(fmt::format("orca2:{:016x}", XXH3_64bits(previous.data(), previous.size())),
+            "orca2:ad4097b8dd752ca6");
   previous.replace(previous.size() - 6, 6, "|ux=29");
   EXPECT_EQ(fmt::format("orca2:{:016x}", XXH3_64bits(previous.data(), previous.size())),
             "orca2:395b59606b61d7e7");
-  EXPECT_EQ(fmt::format("orca2:{:016x}", XXH3_64bits(parts.data(), parts.size())),
-            "orca2:ad4097b8dd752ca6");
 }
