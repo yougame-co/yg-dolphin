@@ -10,6 +10,7 @@
 #include <map>
 #include <memory>
 #include <optional>
+#include <span>
 #include <thread>
 #include <string>
 #include <string_view>
@@ -73,6 +74,22 @@ namespace Rollback::ReplayStream
 // ports, as PortInfo does: "0 Alice 2 Bob%20Smith" (encodeURIComponent, chat's 24-point limit).
 using NameMap = std::map<int, std::string>;
 bool ProductMode();
+// Replay mode has no room-ticket reply: the app supplies one rooms origin explicitly, for the
+// selected environment, in ORCA_REPLAY_ROOMS_ORIGIN (https://host[:port]). No implicit hosts.
+bool WatchSourceAllowed(std::string_view source, std::string_view rooms_origin, bool test_knobs,
+                        std::string* error);
+std::unique_ptr<File::IOFile> OpenReplayFile(const std::string& path, std::string* error);
+
+// Pending socket data and reset offsets share one budget, including resets without data.
+constexpr size_t WATCH_PENDING_MAX = 8u << 20;
+struct WatchPending
+{
+  bool Append(std::span<const u8> incoming);
+  bool Reset();
+  std::vector<u8> bytes;
+  std::vector<size_t> resets;
+};
+
 std::optional<NameMap> ParseNames(std::string_view fields);
 // Copies metadata, replacing every name. The reader's original stays intact for Resume checks.
 std::vector<Orca::Events::PortInfo> ViewPorts(const std::vector<Orca::Events::PortInfo>& ports,

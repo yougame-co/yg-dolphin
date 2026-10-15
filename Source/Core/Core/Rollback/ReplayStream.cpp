@@ -10,6 +10,14 @@
 #include <mutex>
 #include <sstream>
 #include <thread>
+#include <sys/stat.h>
+
+#ifdef _WIN32
+#include <io.h>
+#else
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 
 #include <fmt/format.h>
 #include <picojson.h>
@@ -56,6 +64,137 @@ u64 MemoryChecksum(Core::System& system)
 bool ProductMode()
 {
   return !Orca::GetEnv("ORCA_REPLAY_SOURCE").empty();
+}
+
+namespace
+{
+struct WatchOrigin
+{
+  std::string scheme;
+  std::string host;
+  unsigned port;
+};
+
+// Deliberately accept only the DNS/IPv4 authorities used by rooms. Reject ambiguous encodings
+// before passing the original URL to the socket library.
+std::optional<WatchOrigin> ParseWatchOrigin(std::string_view url, bool origin_only)
+{
+  if (url.find_first_of("\\@#") != std::string_view::npos ||
+      std::any_of(url.begin(), url.end(), [](unsigned char c) { return c <= 32 || c >= 127; }))
+    return std::nullopt;
+  const size_t split = url.find("://");
+  if (split == std::string_view::npos)
+    return std::nullopt;
+  const std::string scheme(url.substr(0, split));
+  if (scheme != "wss" && scheme != "ws" && scheme != "https" && scheme != "http")
+    return std::nullopt;
+  url.remove_prefix(split + 3);
+  const size_t end = url.find_first_of("/?");
+  if (origin_only && end != std::string_view::npos && url.substr(end) != "/")
+    return std::nullopt;
+  const auto authority = url.substr(0, end);
+  const size_t colon = authority.find(':');
+  std::string host(authority.substr(0, colon));
+  if (host.empty() || host.front() == '.' || host.back() == '.' ||
+      std::any_of(host.begin(), host.end(), [](char c) {
+        return !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                 (c >= '0' && c <= '9') || c == '.' || c == '-');
+      }))
+    return std::nullopt;
+  for (char& c : host)
+    if (c >= 'A' && c <= 'Z')
+      c = static_cast<char>(c - 'A' + 'a');
+  unsigned port = scheme == "wss" || scheme == "https" ? 443 : 80;
+  if (colon != std::string_view::npos)
+  {
+    const auto field = authority.substr(colon + 1);
+    const auto [last, ec] = std::from_chars(field.data(), field.data() + field.size(), port);
+    if (ec != std::errc{} || last != field.data() + field.size() || port == 0 || port > 65535)
+      return std::nullopt;
+  }
+  return WatchOrigin{scheme, std::move(host), port};
+}
+}  // namespace
+
+bool WatchSourceAllowed(std::string_view source, std::string_view rooms_origin, bool test_knobs,
+                        std::string* error)
+{
+  const auto target = ParseWatchOrigin(source, false);
+  const auto rooms = ParseWatchOrigin(rooms_origin, true);
+  const auto local_test = [test_knobs](const WatchOrigin& origin) {
+    return test_knobs && (origin.host == "localhost" || origin.host == "127.0.0.1");
+  };
+  if (!target || (target->scheme != "wss" &&
+                  !(target->scheme == "ws" && local_test(*target))))
+    *error = "the replay watch source must use an approved wss URL";
+  else if (!rooms || (rooms->scheme != "https" && rooms->scheme != "wss" &&
+                     !((rooms->scheme == "http" || rooms->scheme == "ws") && local_test(*rooms))))
+    *error = "the replay rooms origin is missing or invalid";
+  else if (target->host != rooms->host)
+    *error = "the replay watch host does not match the rooms origin";
+  else if (target->port != (target->scheme == "wss" ? 443u : 80u) &&
+           target->port != rooms->port)
+    *error = "the replay watch port does not match the rooms origin";
+  else
+    return true;
+  return false;
+}
+
+std::unique_ptr<File::IOFile> OpenReplayFile(const std::string& path, std::string* error)
+{
+#ifdef _WIN32
+  auto file = std::make_unique<File::IOFile>(path, "rb", File::SharedAccess::ReadWrite);
+  if (!*file)
+  {
+    *error = "the replay file can't be opened";
+    return nullptr;
+  }
+  struct _stat64 info;
+  if (_fstat64(_fileno(file->GetHandle()), &info) != 0 ||
+      (info.st_mode & _S_IFMT) != _S_IFREG)
+#else
+  // A FIFO must not block before its descriptor can be checked.
+  const int fd = open(path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+  if (fd < 0)
+  {
+    *error = "the replay file can't be opened";
+    return nullptr;
+  }
+  Common::ScopeGuard close_fd([fd] { close(fd); });
+  struct stat info;
+  if (fstat(fd, &info) != 0 || !S_ISREG(info.st_mode))
+#endif
+  {
+    *error = "the replay source must be a regular file";
+    return nullptr;
+  }
+#ifndef _WIN32
+  std::FILE* handle = fdopen(fd, "rb");
+  if (!handle)
+  {
+    *error = "the replay file can't be opened";
+    return nullptr;
+  }
+  close_fd.Dismiss();
+  auto file = std::make_unique<File::IOFile>(handle);
+#endif
+  return file;
+}
+
+bool WatchPending::Append(std::span<const u8> incoming)
+{
+  if (incoming.size() > WATCH_PENDING_MAX - bytes.size() - resets.size() * sizeof(size_t))
+    return false;
+  bytes.insert(bytes.end(), incoming.begin(), incoming.end());
+  return true;
+}
+
+bool WatchPending::Reset()
+{
+  if (WATCH_PENDING_MAX - bytes.size() - resets.size() * sizeof(size_t) < sizeof(size_t))
+    return false;
+  resets.push_back(bytes.size());
+  return true;
 }
 
 std::optional<NameMap> ParseNames(std::string_view fields)
@@ -515,10 +654,9 @@ struct Player::Watch
   std::thread thread;
   std::atomic<bool> stop{false};
   std::mutex mutex;
-  std::vector<u8> bytes;
-  // Reset markers at byte offsets in `bytes`, including multiple resets without intervening data.
-  std::vector<size_t> resets;
+  WatchPending pending;
   bool ended = false;
+  bool fatal = false;
   std::string error;
 };
 
@@ -592,11 +730,14 @@ static std::string WatchTarget(const std::string& source, std::string* error)
 void Player::WatchThread(std::string source)
 {
   Watch& watch = *m_watch;
-  const auto fail = [&watch](std::string why) {
+  const auto fail = [&watch](std::string why, bool fatal = false) {
     std::lock_guard lock(watch.mutex);
     if (watch.error.empty())
       watch.error = std::move(why);
     watch.ended = true;
+    watch.fatal = fatal;
+    if (fatal)
+      watch.pending = {};
   };
   // ORCA_TEST_REPLAY_WATCH_DROP=<s>: the socket drops once, that long after it first connected, as
   // a network failure would (the reconnect test).
@@ -629,6 +770,12 @@ void Player::WatchThread(std::string source)
         std::this_thread::sleep_for(std::chrono::seconds(2));
       }
       const std::string url = WatchTarget(source, &error);
+      if (m_product && !WatchSourceAllowed(url, Orca::GetEnv("ORCA_REPLAY_ROOMS_ORIGIN"),
+                                           Orca::UX::TestKnobsAllowed(), &error))
+      {
+        fail(error, true);
+        return;
+      }
       connected = !url.empty() && socket.Connect(url, std::chrono::seconds(10), &error);
     }
     if (watch.stop)
@@ -729,16 +876,30 @@ void Player::WatchThread(std::string source)
           head.insert(head.end(), bytes->begin() + from,
                       bytes->begin() + std::min(bytes->size(), from + (65536 - head.size())));
         }
-        std::lock_guard lock(watch.mutex);
-        watch.bytes.insert(watch.bytes.end(), bytes->begin() + from, bytes->end());
+        bool queued;
+        {
+          std::lock_guard lock(watch.mutex);
+          queued = watch.pending.Append(std::span(*bytes).subspan(from));
+        }
+        if (!queued)
+        {
+          fail("the replay watch queue is over 8 MiB", true);
+          return;
+        }
       }
       else if (t == "reset")
       {
         // The room starts another segment, possibly a repack of this same history. The player
         // checks its header and overlap, after every byte queued before this marker.
+        bool queued;
         {
           std::lock_guard lock(watch.mutex);
-          watch.resets.push_back(watch.bytes.size());
+          queued = watch.pending.Reset();
+        }
+        if (!queued)
+        {
+          fail("the replay watch queue is over 8 MiB", true);
+          return;
         }
         received = 0;
         received_before = 0;
@@ -826,6 +987,9 @@ bool Player::Poll(std::string* error)
   if (m_path.starts_with("ws://") || m_path.starts_with("wss://") ||
       (!m_product && m_path.starts_with("watch:")))
   {
+    if (m_product && !WatchSourceAllowed(m_path, Orca::GetEnv("ORCA_REPLAY_ROOMS_ORIGIN"),
+                                        Orca::UX::TestKnobsAllowed(), error))
+      return false;
     if (!m_watch)
     {
       m_watch = std::make_unique<Watch>();
@@ -835,11 +999,11 @@ bool Player::Poll(std::string* error)
     std::vector<size_t> resets;
     {
       std::lock_guard lock(m_watch->mutex);
-      bytes.swap(m_watch->bytes);
-      resets.swap(m_watch->resets);
+      bytes.swap(m_watch->pending.bytes);
+      resets.swap(m_watch->pending.resets);
       if (m_watch->ended)
         m_source_ended = true;
-      if (!m_watch->error.empty() && !m_reader->Info())
+      if (!m_watch->error.empty() && (m_watch->fatal || !m_reader->Info()))
       {
         *error = m_watch->error;
         return false;
@@ -876,15 +1040,12 @@ bool Player::Poll(std::string* error)
   if (!m_file)
   {
     // The writer may still have it open for writing (a live watcher of a growing file).
-    m_file = std::make_unique<File::IOFile>(m_path, "rb", File::SharedAccess::ReadWrite);
-    if (!*m_file)
+    m_file = OpenReplayFile(m_path, error);
+    if (!m_file)
     {
-      m_file.reset();
-      if (!m_follow)
-      {
-        *error = "the replay file can't be opened";
+      if (!m_follow || *error != "the replay file can't be opened")
         return false;
-      }
+      error->clear();
       return true;  // a live stream not started yet
     }
   }

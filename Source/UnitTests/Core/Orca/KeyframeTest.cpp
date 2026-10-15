@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <cstdlib>
@@ -16,13 +17,20 @@
 #include <thread>
 #include <vector>
 
+#ifndef _WIN32
+#include <sys/stat.h>
+#endif
+
 #include <gtest/gtest.h>
 #include <zstd.h>
 
 #include "Common/FileUtil.h"
 #include "Common/IOFile.h"
+#include "Common/ScopeGuard.h"
+#include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Keyframe.h"
 #include "Core/Rollback/ReplayStream.h"
+#include "Core/System.h"
 
 using namespace Orca::Net;
 
@@ -1518,4 +1526,154 @@ TEST(OrcaReplayStream, CompletionRejectsAnIncompleteSavedTail)
   EXPECT_TRUE(partial.Complete());
   whole.Resume();
   EXPECT_FALSE(whole.Complete());
+}
+
+TEST(OrcaReplayStream, WatchSourcesMatchTheExplicitRoomsOrigin)
+{
+  using Rollback::ReplayStream::WatchSourceAllowed;
+  std::string error;
+  for (const auto* origin : {"https://rooms.example", "https://staging-rooms.example:8443/"})
+  {
+    const std::string host = std::string(origin).substr(8);
+    const std::string authority = host.substr(0, host.find('/'));
+    EXPECT_TRUE(WatchSourceAllowed("wss://" + authority + "/watch/test", origin, false, &error))
+        << error;
+  }
+  EXPECT_TRUE(WatchSourceAllowed("wss://ROOMS.example:443/watch/test", "https://rooms.example",
+                                false, &error));
+  EXPECT_TRUE(WatchSourceAllowed("wss://rooms.example/watch/test", "https://rooms.example:8443",
+                                false, &error));
+  for (const auto* source : {"wss://other.example/watch/test",
+                             "wss://rooms.example.other.example/watch/test",
+                             "wss://user@rooms.example/watch/test",
+                             "wss://user:pass@rooms.example/watch/test",
+                             "ws://rooms.example/watch/test",
+                             "wss://rooms.example:8443/watch/test",
+                             "wss://rooms.example:0/watch/test",
+                             "wss://rooms.example:65536/watch/test",
+                             "wss://rooms.example:/watch/test",
+                             "wss://rooms.example:443:8443/watch/test",
+                             "wss://rooms%2eexample/watch/test",
+                             "wss://rooms.example\\other.example/watch/test",
+                             "wss://rooms.example/watch/test#fragment",
+                             "wss://rooms.example\n/watch/test",
+                             "https://rooms.example/watch/test"})
+  {
+    error.clear();
+    EXPECT_FALSE(WatchSourceAllowed(source, "https://rooms.example", false, &error)) << source;
+    EXPECT_FALSE(error.empty());
+  }
+  for (const auto* origin : {"", "https://", "https://rooms.example/path",
+                             "https://user@rooms.example", "http://rooms.example"})
+    EXPECT_FALSE(WatchSourceAllowed("wss://rooms.example/watch/test", origin, false, &error));
+}
+
+TEST(OrcaReplayStream, PlainWatchSourcesRequireBothLoopbackAndTestKnobs)
+{
+  using Rollback::ReplayStream::WatchSourceAllowed;
+  std::string error;
+  for (const auto* host : {"localhost", "127.0.0.1"})
+  {
+    const std::string origin = std::string("http://") + host + ":45678";
+    const std::string source = std::string("ws://") + host + ":45678/watch/test";
+    EXPECT_TRUE(WatchSourceAllowed(source, origin, true, &error)) << error;
+    EXPECT_FALSE(WatchSourceAllowed(source, origin, false, &error));
+    EXPECT_FALSE(WatchSourceAllowed(source, "", true, &error));
+    EXPECT_FALSE(WatchSourceAllowed(std::string("ws://") + host + ":45679/watch/test", origin,
+                                   true, &error));
+  }
+  EXPECT_FALSE(WatchSourceAllowed("ws://rooms.example/watch/test", "https://rooms.example",
+                                 true, &error));
+  EXPECT_FALSE(WatchSourceAllowed("ws://127.1/watch/test", "https://127.1", true, &error));
+}
+
+TEST(OrcaReplayStream, PendingWatchBytesAndResetsShareOneLimit)
+{
+  using namespace Rollback::ReplayStream;
+  WatchPending pending;
+  const std::vector<u8> bytes(WATCH_PENDING_MAX - sizeof(size_t), 7);
+  ASSERT_TRUE(pending.Append(bytes));
+  ASSERT_TRUE(pending.Reset());
+  EXPECT_EQ(pending.resets, std::vector<size_t>{bytes.size()});
+  EXPECT_FALSE(pending.Append(std::array<u8, 1>{8}));
+  EXPECT_FALSE(pending.Reset());
+  EXPECT_EQ(pending.bytes.size(), bytes.size());
+  EXPECT_EQ(pending.resets.size(), 1u);
+  pending = {};
+  ASSERT_TRUE(pending.Append(std::vector<u8>(WATCH_PENDING_MAX, 9)));
+  EXPECT_FALSE(pending.Reset());
+  EXPECT_FALSE(pending.Append(std::array<u8, 1>{8}));
+}
+
+TEST(OrcaReplayStream, PendingWatchResetsAloneReachTheLimit)
+{
+  using namespace Rollback::ReplayStream;
+  WatchPending pending;
+  for (size_t i = 0; i < WATCH_PENDING_MAX / sizeof(size_t); ++i)
+    ASSERT_TRUE(pending.Reset()) << i;
+  EXPECT_FALSE(pending.Reset());
+  EXPECT_FALSE(pending.Append(std::array<u8, 1>{8}));
+  EXPECT_TRUE(pending.bytes.empty());
+  EXPECT_EQ(pending.resets.size(), WATCH_PENDING_MAX / sizeof(size_t));
+}
+
+TEST(OrcaReplayStream, LocalSourcesMustBeRegularFiles)
+{
+  const std::string directory = File::CreateTempDir();
+  ASSERT_FALSE(directory.empty());
+  const Common::ScopeGuard cleanup([&] { File::DeleteDirRecursively(directory); });
+  const std::string path = directory + "/replay.ygr";
+  ASSERT_TRUE(File::WriteStringToFile(path, "replay"));
+  std::string error;
+  auto file = Rollback::ReplayStream::OpenReplayFile(path, &error);
+  ASSERT_NE(file, nullptr) << error;
+  EXPECT_EQ(file->GetSize(), 6u);
+  EXPECT_EQ(Rollback::ReplayStream::OpenReplayFile(directory, &error), nullptr);
+#ifndef _WIN32
+  const std::string fifo = directory + "/fifo";
+  ASSERT_EQ(mkfifo(fifo.c_str(), 0600), 0);
+  const auto started = std::chrono::steady_clock::now();
+  EXPECT_EQ(Rollback::ReplayStream::OpenReplayFile(fifo, &error), nullptr);
+  EXPECT_EQ(error, "the replay source must be a regular file");
+  EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(1));
+#endif
+}
+
+TEST(OrcaReplayStream, ProductWatchRefusalsEndOnTheFirstStep)
+{
+  const auto set = [](const char* key, const std::string& value) {
+#ifdef _WIN32
+    _putenv_s(key, value.c_str());
+#else
+    if (value.empty())
+      unsetenv(key);
+    else
+      setenv(key, value.c_str(), 1);
+#endif
+  };
+  const std::string old_source = Orca::GetEnv("ORCA_REPLAY_SOURCE");
+  const std::string old_origin = Orca::GetEnv("ORCA_REPLAY_ROOMS_ORIGIN");
+  const Common::ScopeGuard restore([&] {
+    set("ORCA_REPLAY_SOURCE", old_source);
+    set("ORCA_REPLAY_ROOMS_ORIGIN", old_origin);
+  });
+  // These are parsed and refused before any socket is created.
+  set("ORCA_REPLAY_ROOMS_ORIGIN", "https://127.0.0.1:45678");
+  for (const auto* source : {"wss://localhost:45678/watch/test",
+                             "wss://user@127.0.0.1:45678/watch/test",
+                             "wss://127.0.0.1:45679/watch/test"})
+  {
+    set("ORCA_REPLAY_SOURCE", source);
+    auto player = Rollback::ReplayStream::Player::FromEnv();
+    ASSERT_NE(player, nullptr);
+    std::string stopped;
+    Rollback::ReplayStream::PlayerHost host;
+    host.stop = [&](const std::string& message) { stopped = message; };
+    int running = -1;
+    const auto started = std::chrono::steady_clock::now();
+    EXPECT_FALSE(player->Step(Core::System::GetInstance(), host, &running, 0, 0, {}));
+    EXPECT_TRUE(player->Over());
+    EXPECT_NE(stopped.find("The replay couldn't be played:"), std::string::npos);
+    EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(1));
+  }
 }

@@ -2279,8 +2279,14 @@ Orca --embed --parent <handle> --rect X Y W H [--embed-adopted] [-u <user>] -e <
 
 **Replay playback.** Use the same game, disc/profile, session (`ORCA_SESSION=1`) and embed launch,
 with `ORCA_REPLAY_SOURCE=<local file path or ws(s) watch URL with ticket>`. YG Dolphin boots to its
-local canonical origin and plays the stream instead of joining or creating a room. A saved file
-(at most 1 MiB) plays at real speed. A watch URL follows live, 12 frames behind the newest final
+local canonical origin and plays the stream instead of joining or creating a room. A saved regular
+file (at most 1 MiB) plays at real speed. For watch playback the app also sets
+`ORCA_REPLAY_ROOMS_ORIGIN=https://<rooms host>[:port]` for its selected environment. Replay has no
+room-ticket reply from which to learn that origin. Watch URLs use `wss://`, have no userinfo, and
+match that host (case-insensitively) with either the default port or the origin's port. No origin
+means no watch connection. Test-knob builds may also use `ws://` for `localhost` or `127.0.0.1`
+with a matching explicit origin. Pending watch bytes and reset offsets share an 8 MiB limit.
+A watch URL follows live, 12 frames behind the newest final
 frame, catches up after joining late, and drains the tail when the stream ends. The
 `ORCA_TEST_REPLAY_*` knobs still work when no product source is set and test knobs are allowed;
 they do not alter product playback.
@@ -2293,8 +2299,9 @@ An empty map is valid. Every loaded port's name is replaced; a missing port show
 in-game tags retain their existing five-character ASCII conversion; unsupported glyphs use its
 port label. Worn tags are renamed on the character select when the view map changes. Controls
 and queue metadata remain those of the recording. Names change guest RAM, so recorded full-RAM
-checksum comparisons are retained only in test playback; product playback still validates stream
-hashes, compatibility, the local origin, and reconnect overlap.
+checksum comparisons are retained in test playback and in a player's own product replay without
+a view-time name map. Playback with a view-time map still validates stream hashes, compatibility,
+the local origin, and reconnect overlap.
 
 The desktop bridge is `window.yougameDesktop.orca.watchReplay({ bytes?, url?, names, launch? })`.
 Supply exactly one source: the page fetches a saved replay with its own session and passes an
