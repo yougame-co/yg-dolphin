@@ -3482,3 +3482,26 @@ TEST(OrcaDoublesTransport, SwitchingFanoutKeepsPendingHistoryAndInputs)
     EXPECT_EQ(addressed[1]->pads.size(), 16u);
   }
 }
+
+TEST(OrcaDoublesTransport, BroadcastHistoryReachesANewRecipientDuringTheSwitch)
+{
+  std::optional<Packet> broadcast;
+  std::map<int, std::optional<Packet>> addressed;
+  Packet old = Frames(0, 100, 8);
+  old.history_seat = 1;
+  old.history_first = 20;
+  old.history.resize(128);
+  CoalesceToSeats(&broadcast, &addressed, {{1, old}});
+  Packet next = Frames(0, 108, 8);
+  next.history_seat = 2;
+  next.history_first = 40;
+  next.history.resize(128);
+  CoalesceBroadcast(&broadcast, &addressed, next);
+  ASSERT_TRUE(addressed[1]);
+  EXPECT_EQ(addressed[1]->history_first, 20);
+  EXPECT_EQ(addressed[1]->history_seat, 1);
+  ASSERT_TRUE(addressed[2]);
+  EXPECT_EQ(addressed[2]->history_first, 40);
+  EXPECT_EQ(addressed[2]->history_seat, 2);
+  EXPECT_EQ(addressed[2]->history, next.history);
+}

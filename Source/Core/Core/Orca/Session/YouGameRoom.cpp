@@ -4996,8 +4996,16 @@ void CoalescePacket(std::optional<Packet>* outgoing, const Packet& packet)
 void CoalesceBroadcast(std::optional<Packet>* outgoing,
                        std::map<int, std::optional<Packet>>* addressed, const Packet& packet)
 {
+  // A roster can replace every old recipient before this queued batch is flushed.
+  if (!addressed->empty() && packet.history_seat >= 0 && !packet.history.empty())
+    addressed->try_emplace(packet.history_seat);
   for (auto& [recipient, pending] : *addressed)
-    CoalescePacket(&pending, packet);
+  {
+    Packet copy = packet;
+    if (copy.history_seat != recipient)
+      copy.history.clear();
+    CoalescePacket(&pending, copy);
+  }
   CoalescePacket(outgoing, packet);
 }
 
