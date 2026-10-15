@@ -21,7 +21,7 @@ namespace Orca::UX
 // two builds that would diverge never meet in a room. A change to one game's module only bumps that
 // game's own revision instead (Engine/Module.h Manifest::compat, Games/Brawl/BrawlGame.h), which
 // the key adds as `ux=<n>.<game>` (Session/Online.h UxKeyPart).
-constexpr int kCompatVersion = 30;
+constexpr int kCompatVersion = 31;
 
 // The disc the game boots from. The overlay reads the game's own fonts from it. Call before Init.
 void SetGameDisc(std::string path);

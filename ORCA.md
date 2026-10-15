@@ -2667,6 +2667,10 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.46
+
+- Play doubles with friends: up to four in a friends room. Tournament matches report their own results.
+
 ### 0.3.45
 
 - Watch your recorded matches again from the site.
