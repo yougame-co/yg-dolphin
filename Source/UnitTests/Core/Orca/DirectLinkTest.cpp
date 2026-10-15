@@ -614,3 +614,36 @@ TEST(OrcaDirectLink, ScheduledBlackoutDropsBothWaysWithoutDeliveringLater)
   EXPECT_EQ(Count(mesh.At(0).received, "dark-in"), 0);
   EXPECT_EQ(Count(mesh.At(1).received, "dark-out"), 0);
 }
+
+extern "C" int OrcaTestTurnStart(const char* address);
+extern "C" void OrcaTestTurnStop();
+TEST(OrcaDirectLink, FourFriendsExerciseAllSixTurnPairs)
+{
+  const int port = OrcaTestTurnStart("127.0.0.1");
+  ASSERT_GT(port, 0);
+  struct Cleanup
+  {
+    ~Cleanup() { OrcaTestTurnStop(); }
+  } cleanup;
+  Mesh mesh(4, [&](DirectOptions& options, int) {
+    options.force = "turn";
+    options.ice.turn_host = "127.0.0.1";
+    options.ice.turn_port = static_cast<u16>(port);
+    options.ice.turn_user = "orca-fixture";
+    options.ice.turn_pass = "orca-fixture-only";
+  });
+  ASSERT_TRUE(mesh.WaitFor([&] { return mesh.AllUp(); }, 20s));
+  for (int from = 0; from < 4; ++from)
+    for (int to = 0; to < 4; ++to)
+      if (from != to)
+      {
+        EXPECT_EQ(mesh.Stats(from, to).kind, LinkKind::Turn);
+        mesh.At(from).link->Send("turn " + std::to_string(from), to);
+      }
+  EXPECT_TRUE(mesh.WaitFor([&] {
+    for (int seat = 0; seat < 4; ++seat)
+      if (mesh.At(seat).received.size() != 3)
+        return false;
+    return true;
+  }));
+}

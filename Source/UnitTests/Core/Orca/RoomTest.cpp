@@ -1,6 +1,7 @@
 // Copyright 2026 YouGame
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdio>
@@ -2045,18 +2046,27 @@ Orca::Net::Config RoomSessionConfig()
   config.checksum_every = 1000000;
   return config;
 }
-class OrcaRoomStallRuntime : public OrcaRoomRuntime
+class OrcaRoomStallRuntime : public OrcaRoomRuntime, public testing::WithParamInterface<int>
 {
 protected:
+  ~OrcaRoomStallRuntime() override
+  {
+    extra_done = true;
+    if (extra_sender.joinable())
+      extra_sender.join();
+  }
   void OpenDirect(const std::string& code, bool joining, const std::string& queue = "private",
                   bool recovery_enabled = true)
   {
     vars.push_back(std::make_unique<ScopedEnv>("ORCA_DIRECT", "1"));
     vars.push_back(std::make_unique<ScopedEnv>("ORCA_DIRECT_LOOPBACK", "1"));
     vars.push_back(std::make_unique<ScopedEnv>("ORCA_DIRECT_STUN", "0"));
+    // Queue rooms retain their ordinary two-player budget cases in every instantiation.
+    room_players = queue == "private" ? GetParam() : 0;
     room_code = code;
     local_seat = joining ? 1 : 0;
-    room = Open(code, fmt::format(R"({{"direct":true,"joining":{},"queue":"{}"}})", joining, queue),
+    room = Open(code, fmt::format(R"({{"direct":true,"joining":{},"queue":"{}","doubles":{},"size":{},"peers":{}}})",
+        joining, queue, room_players > 0, room_players == 4 ? 4 : 2, room_players == 4 ? 3 : 1),
                 joining, queue == "private", recovery_enabled);
     ASSERT_TRUE(Wait([&] { return room->Seat() == local_seat && room->RoundTripMs() >= 0; }));
     DirectOptions options;
@@ -2066,18 +2076,43 @@ protected:
     options.loopback = true;
     direct.Start(std::move(options));
     direct.AddPeer("me", local_seat);
+    if (room_players == 4)
+    {
+      for (int slot : {2, 3})
+      {
+        extra_direct[slot] = std::make_unique<DirectLink>();
+        DirectOptions extra_options;
+        extra_options.me = fmt::format("peer{}", slot);
+        extra_options.room = code;
+        extra_options.ice.stun_host.clear();
+        extra_options.loopback = true;
+        extra_direct[slot]->Start(std::move(extra_options));
+        extra_direct[slot]->AddPeer("me", local_seat);
+      }
+    }
     size_t seen = 0;
     ASSERT_TRUE(Wait([&] {
       for (auto& [to, message] : direct.TakeSignals())
         Action(code, fmt::format(R"({{"message":{{"t":"msg","from":"peer","d":{}}}}})",
                                  picojson::value(message).serialize()));
+      for (int slot : {2, 3})
+        if (extra_direct[slot])
+          for (auto& [to, message] : extra_direct[slot]->TakeSignals())
+            Action(code, fmt::format(R"({{"message":{{"t":"msg","from":"peer{}","d":{}}}}})",
+                                    slot, picojson::value(message).serialize()));
       const auto state = Request("/state/" + code);
       const auto& messages = state.get("messages").get<picojson::array>();
       for (; seen < messages.size(); ++seen)
       {
         const auto& data = messages[seen].get("d");
-        if (data.is<picojson::object>() && data.get("k").to_str().starts_with("dl"))
+        if (!data.is<picojson::object>() || !data.get("k").to_str().starts_with("dl"))
+          continue;
+        const auto& target = messages[seen].get("to").to_str();
+        if (target == "peer")
           direct.OnSignal("me", data.get<picojson::object>());
+        for (int slot : {2, 3})
+          if (extra_direct[slot] && target == fmt::format("peer{}", slot))
+            extra_direct[slot]->OnSignal("me", data.get<picojson::object>());
       }
       // Link setup must not leave game inputs in flight when the session is constructed.
       direct.Send(EncodePacket(NeutralPacket(0, 0)));
@@ -2087,6 +2122,35 @@ protected:
     room->TakePeerEvents();
     auto config = RoomSessionConfigForSeat();
     session = std::make_unique<Session>(config, game, *room);
+    if (room_players == 4)
+      extra_sender = std::thread([this] {
+        int tick = 0;
+        std::array<int, MAX_SEATS> ack{-1, -1, -1, -1};
+        while (!extra_done)
+        {
+          const int frame = extra_frame;
+          for (int slot : {2, 3})
+          {
+            for (const auto& received : extra_direct[slot]->Receive())
+            {
+              Packet input;
+              if (DecodeDirectPacket(received.payload, local_seat, &input))
+                ack[slot] = std::max(ack[slot], input.first_frame + static_cast<int>(input.pads.size()) - 1);
+            }
+            if (slot == 3 && tick % 3 != 0)
+              continue;
+            Packet packet;
+            packet.seat = slot;
+            packet.first_frame = std::max(0, frame - 16);
+            packet.current_frame = frame;
+            packet.ack[local_seat] = ack[slot];
+            packet.pads.resize(frame + 32 - packet.first_frame);
+            extra_direct[slot]->Send(EncodePacket(packet));
+          }
+          ++tick;
+          std::this_thread::sleep_for(2ms);
+        }
+      });
   }
   Packet NeutralPacket(int first, int count)
   {
@@ -2095,12 +2159,18 @@ protected:
     packet.first_frame = first;
     packet.current_frame = first + count;
     packet.pads.resize(count);
+    if (room_players == 4)
+      for (int seat : {2, 3})
+        packet.ack[seat] = first + count + 2;
     return packet;
   }
   Orca::Net::Config RoomSessionConfigForSeat()
   {
     Orca::Net::Config config;
     config.local_seat = local_seat;
+    config.per_peer_inputs = room_players > 0;
+    config.seats = room_players == 4 ? 4 : 2;
+    config.authority_seat = room_players > 0 ? 0 : -1;
     config.time_sync = false;
     config.fixed_delay = 2;
     config.max_delay = 2;
@@ -2110,6 +2180,7 @@ protected:
 
   Step Boundary(RoomClock::time_point deadline, int* polls = nullptr)
   {
+    extra_frame = session->CurrentFrame();
     const auto start = RoomClock::now();
     const int recoveries_before = budget.Recoveries();
     const auto result = Rollback::StepSession(*session, game, completed, [] { return Pad{}; }, [&] {
@@ -2119,7 +2190,9 @@ protected:
     }, 1ms, 10s, nullptr, nullptr,
     [&](RoomClock::time_point now) {
       ++hold_calls;
-      return room->HoldInputSilence(start, now);
+      return Rollback::OnlineMatch::WaitForFriendsRoster(*session, local_seat != 0, room->Doubles()) ||
+             room->HoldInputSilence(start, now,
+                 Rollback::OnlineMatch::FriendsMissingInputs(*session, room->Doubles()));
     }, &budget, [&](RoomClock::time_point now) { return room->RoomRecovering(now); });
     last_excused = budget.Recoveries() > recoveries_before;
     if (result.kind == StepKind::Run || result.kind == StepKind::Rollback)
@@ -2161,21 +2234,28 @@ protected:
       }
     });
     Step result{};
+    bool outage_excused = false;
     for (int boundary = 0; boundary < 100; ++boundary)
     {
       result = Boundary(begin + duration + 5s, &polls);
-      if (polls > 0 || result.kind == StepKind::Ended)
+      outage_excused |= last_excused;
+      // Another friend's shorter wait may finish first. Consume this returning peer's entire
+      // prefix before advancing next_input, so the fixture cannot skip a range between outages.
+      if (result.kind == StepKind::Ended ||
+          (polls > 0 && (room_players != 4 || session->ConfirmedFrame() >= next_input + 15)))
         break;
     }
     restored = true;
     restore.join();
     restored = false;
+    last_excused = outage_excused;
     if (peer_away)
       EXPECT_TRUE(Wait([&] { return !room->RoomRecovering(RoomClock::now()); }));
     next_input += 16;
     return result;
   }
   std::string room_code;
+  int room_players = 0;
   int local_seat = 1, completed = -1, next_input = 0, hold_calls = 0;
   std::unique_ptr<YouGameRoom> room;
   DirectLink direct;
@@ -2184,12 +2264,16 @@ protected:
   Rollback::OnlineMatch::StallBudget budget;
   std::atomic<bool> restored{false};
   bool last_excused = false;
+  std::array<std::unique_ptr<DirectLink>, MAX_SEATS> extra_direct;
+  std::atomic<bool> extra_done{false};
+  std::atomic<int> extra_frame{0};
+  std::thread extra_sender;
 
   void ExpectDarkRecovery(std::chrono::milliseconds duration)
   {
     ASSERT_TRUE(session);
     for (int small = 0; small < 3; ++small)
-      ASSERT_EQ(StallFor(100ms).kind, StepKind::Run);
+      ASSERT_EQ(StallFor(100ms).kind, StepKind::Run) << session->Error() << ": " << session->Describe();
     EXPECT_EQ(budget.Recoveries(), 0);
     EXPECT_EQ(hold_calls, 0);
     // The room socket stays down when the actual UDP link returns, just as in staging.
@@ -2949,25 +3033,25 @@ TEST_F(OrcaRoomRuntime, QueueBackAndJoinKeepTheirOriginalRuntimePolicy)
   }
 }
 
-TEST_F(OrcaRoomStallRuntime, OrdinaryStallsLeaveRecoveryAllowanceForDarkJoiner)
+TEST_P(OrcaRoomStallRuntime, OrdinaryStallsLeaveRecoveryAllowanceForDarkJoiner)
 {
   OpenDirect("budgetdark", true);
   ExpectDarkRecovery(15s);
 }
 
-TEST_F(OrcaRoomStallRuntime, DarkHostFifteenSecondsKeepsTheSessionAfterAnotherStall)
+TEST_P(OrcaRoomStallRuntime, DarkHostFifteenSecondsKeepsTheSessionAfterAnotherStall)
 {
   OpenDirect("budgethost", false);
   ExpectDarkRecovery(15s);
 }
 
-TEST_F(OrcaRoomStallRuntime, DarkJoinerSixtySecondsKeepsTheSessionAfterAnotherStall)
+TEST_P(OrcaRoomStallRuntime, DarkJoinerSixtySecondsKeepsTheSessionAfterAnotherStall)
 {
   OpenDirect("budgetlong", true);
   ExpectDarkRecovery(60s);
 }
 
-TEST_F(OrcaRoomStallRuntime, FourthRecoveredOutageInTenMinutesCounts)
+TEST_P(OrcaRoomStallRuntime, FourthRecoveredOutageInTenMinutesCounts)
 {
   OpenDirect("budgetcap", true);
   ASSERT_TRUE(session);
@@ -2987,11 +3071,11 @@ TEST_F(OrcaRoomStallRuntime, FourthRecoveredOutageInTenMinutesCounts)
   EXPECT_EQ(StallFor(100ms).kind, StepKind::Ended);
 }
 
-TEST_F(OrcaRoomStallRuntime, RollbackSplitsOneOutageWithoutSpendingAnotherRecovery)
+TEST_P(OrcaRoomStallRuntime, RollbackSplitsOneOutageWithoutSpendingAnotherRecovery)
 {
   OpenDirect("budgetsplt", true);
   ASSERT_TRUE(session);
-  ASSERT_EQ(StallFor(100ms).kind, StepKind::Run);
+  ASSERT_EQ(StallFor(100ms).kind, StepKind::Run) << session->Error() << ": " << session->Describe();
   Action(room_code, fmt::format(R"({{"message":{}}})", RosterMessage("away", true)));
   ASSERT_TRUE(Wait([&] { return room->RoomRecovering(RoomClock::now()); }));
   // Frame 20 changes a prediction, but frames 16..19 are still missing: Rollback returns
@@ -3047,7 +3131,7 @@ TEST_F(OrcaRoomStallRuntime, RollbackSplitsOneOutageWithoutSpendingAnotherRecove
   EXPECT_EQ(hold_calls, 0);
 }
 
-TEST_F(OrcaRoomStallRuntime, RankedStallsKeepTheBudgetAndSilenceLimit)
+TEST_P(OrcaRoomStallRuntime, RankedStallsKeepTheBudgetAndSilenceLimit)
 {
   OpenDirect("budgetrank", true, "ranked");
   ASSERT_TRUE(session);
@@ -3058,7 +3142,7 @@ TEST_F(OrcaRoomStallRuntime, RankedStallsKeepTheBudgetAndSilenceLimit)
   EXPECT_GE(budget.Stalled(RoomClock::now()), 15s);
 }
 
-TEST_F(OrcaRoomStallRuntime, CasualStallsKeepTheBudgetAndSilenceLimit)
+TEST_P(OrcaRoomStallRuntime, CasualStallsKeepTheBudgetAndSilenceLimit)
 {
   OpenDirect("budgetcasual", true, "casual");
   ASSERT_TRUE(session);
@@ -3308,4 +3392,93 @@ TEST_F(OrcaRoomRuntime, SimultaneousRecoveriesShareHostOwnedCapture)
   }
   EXPECT_EQ(ids.size(), 1u);
   EXPECT_EQ(recipients, (std::set<std::string>{"peer2", "peer3"}));
+}
+
+// Fixed wire fixtures from 3bfe032623 (0.3.44); doubles is absent in every input.
+TEST(OrcaLegacy044, PacketAndKeyframeOfferGolden)
+{
+  EXPECT_EQ(EncodePacket(Sample()),
+      R"({"a":[130,-1,-1,-1],"c":121,"f":120,"h":"fedcba9876543210","j":5,"k":"p","l":64,"n":3,"p":"00ff807f0001a00f01ff807f0001a10f02ff807f0001a20f","r":42,"s":1,"sp":[1,2,2,3],"v":-17,"x":60})");
+  KeyframeInfo info;
+  info.frame = 240;
+  info.id = "fixture";
+  info.size = 3;
+  info.hash = "fixture-hash";
+  info.names = {{0, 0, "Host", {1, 2}, {}}, {1, 240, "Friend", {3}, {}}};
+  info.names_version = 2;
+  info.inline_blob = {1, 2, 3};
+  EXPECT_EQ(picojson::value(KeyframeOfferToJson(info)).serialize(),
+      R"({"b":"AQID","f":240,"id":"fixture","k":"kf","key":"","n":3,"nm":[[0,0,"Host","0102"],[1,240,"Friend","03"]],"nv":2,"x":"fixture-hash"})");
+}
+
+TEST(OrcaLegacy044, WelcomeAndHelloGolden)
+{
+  ScopedEnv direct("ORCA_DIRECT", "1");
+  auto options = TraceOptions();
+  options.recovery_enabled = false;
+  options.controls = {1, 2};
+  const auto trace = TraceRoomForTest(options, {
+      {RK::Message, 0, RosterMessage("welcome")}, {RK::Tick, 1100},
+      {RK::Message, 1101, PeerHello()}, {RK::Tick, 2200}});
+  EXPECT_EQ(trace[0].state, RoomState::Waiting);
+  EXPECT_TRUE(trace[0].events.empty());
+  ASSERT_EQ(trace[2].events.size(), 1u);
+  EXPECT_EQ(trace[2].events[0].seat, 0);
+  EXPECT_TRUE(trace[2].events[0].host);
+  EXPECT_EQ(trace[2].events[0].name, "Friend");
+  std::vector<std::string> first_hello, second_hello;
+  for (const auto& message : trace[1].sent)
+    if (message.find("hello") != std::string::npos) first_hello.push_back(message);
+  for (const auto& message : trace[3].sent)
+    if (message.find("hello") != std::string::npos) second_hello.push_back(message);
+  ASSERT_EQ(first_hello.size(), 1u);
+  EXPECT_EQ(first_hello[0], R"({"d":{"c":"test","ct":"0102","dl":1,"h":false,"k":"hello","r":false},"t":"msg","to":"peer"})");
+  EXPECT_TRUE(second_hello.empty());
+}
+
+INSTANTIATE_TEST_SUITE_P(LegacyAndDoubles, OrcaRoomStallRuntime, testing::Values(0, 2, 4));
+
+TEST_F(OrcaRoomRuntime, Legacy044PeerInDoublesIsRefusedWithRoomFull)
+{
+  FriendsHeadlessCore core;
+  const std::string code = "legacy444";
+  auto room = Open(code, R"({"joining":false,"doubles":true,"legacy":true,"size":2})", false);
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 0 && room->ArrivalPending(); }));
+  ReplayArchive replay = FriendsReplay(1524, 6000, 0);
+  RoomHashGame game;
+  const auto result = Rollback::OnlineMatch::PumpFriendsHostForTest(
+      core.system, *room, game, replay, 6000, {}, true, nullptr);
+  EXPECT_TRUE(result.seats.empty());
+  ASSERT_TRUE(Wait([&] { return Sent(code, "msg", "drop"); }));
+  EXPECT_NE(Request("/state/" + code).serialize().find("room_full"), std::string::npos);
+  EXPECT_EQ(room->GetState(), RoomState::Waiting);
+}
+
+TEST(OrcaDoublesTransport, SwitchingFanoutKeepsPendingHistoryAndInputs)
+{
+  for (const bool to_seats_first : {false, true})
+  {
+    std::optional<Packet> broadcast;
+    std::map<int, std::optional<Packet>> addressed;
+    Packet old = Frames(0, 100, 8);
+    old.history_seat = 1;
+    old.history_first = 20;
+    old.history.resize(128);
+    Packet next = Frames(0, 108, 8);
+    if (to_seats_first)
+    {
+      CoalesceToSeats(&broadcast, &addressed, {{1, old}, {2, next}});
+      CoalesceBroadcast(&broadcast, &addressed, next);
+    }
+    else
+    {
+      CoalesceBroadcast(&broadcast, &addressed, old);
+      CoalesceToSeats(&broadcast, &addressed, {{1, next}, {2, next}});
+    }
+    ASSERT_TRUE(addressed[1]);
+    EXPECT_EQ(addressed[1]->history, old.history);
+    EXPECT_EQ(addressed[1]->history_first, 20);
+    EXPECT_EQ(addressed[1]->first_frame, 100);
+    EXPECT_EQ(addressed[1]->pads.size(), 16u);
+  }
 }
