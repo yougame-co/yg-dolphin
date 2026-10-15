@@ -1677,3 +1677,42 @@ TEST(OrcaReplayStream, ProductWatchRefusalsEndOnTheFirstStep)
     EXPECT_LT(std::chrono::steady_clock::now() - started, std::chrono::seconds(1));
   }
 }
+
+TEST(OrcaReplayStream, RecordingMetadataUsesSeatLabelsAcrossRenamesAndRepacking)
+{
+  auto original = Replay(120);
+  std::vector<Orca::Events::PortInfo> live{{0, "Alice", false, {1}, {2}},
+                                          {1, "Bob", true, {3}, {4}},
+                                          {2, "Carol", true, {5}, {6}},
+                                          {3, "Dan", true, {7}, {8}}};
+  for (auto& frame : original.frames)
+  {
+    frame.ports = std::make_shared<const std::vector<Orca::Events::PortInfo>>(
+        RecordingPorts(live));
+    live[0].name += "x";
+  }
+  original.boundary.ports = std::make_shared<const std::vector<Orca::Events::PortInfo>>(
+      RecordingPorts(live));
+  auto info = StreamInfo();
+  info.first_frame = original.first_frame;
+  auto bytes = PackReplayStream(info, original, {{60, 123}, {120, 456}});
+  for (int pass = 0; pass < 2; ++pass)
+  {
+    ReplayStreamReader reader;
+    std::string error;
+    ASSERT_TRUE(reader.Feed(bytes.data(), bytes.size(), &error)) << error;
+    ASSERT_TRUE(reader.Complete());
+    EXPECT_EQ(reader.Checksums().at(60), 123u);
+    EXPECT_EQ(reader.Checksums().at(120), 456u);
+    for (const auto& frame : reader.Archive().frames)
+      for (const auto& port : *frame.ports)
+      {
+        EXPECT_EQ(port.name, "P" + std::to_string(port.port + 1));
+        EXPECT_FALSE(port.remote);
+        EXPECT_EQ(port.controls, live[port.port].controls);
+        EXPECT_EQ(port.queue, live[port.port].queue);
+      }
+    bytes = PackReplayStream(*reader.Info(), reader.Archive(), reader.Checksums());
+  }
+  EXPECT_EQ(live[1].name, "Bob");
+}

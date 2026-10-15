@@ -1929,12 +1929,13 @@ TEST(OrcaUXNameTags, OwnReplayKeepsEveryWornTagChecksum)
     return Rollback::RamChecksum(bytes, {});
   };
   Orca::Net::ReplayFrame frame;
+  const auto stored_ports = Orca::Net::RecordingPorts(ports);
   for (int i = 0; i < 60; ++i)
   {
     NameTagsFrame(recorded, ports, ports, nullptr, {}, 0);
     const Orca::Net::ReplayScope own_scope(&frame, true, true);
     EXPECT_FALSE(Orca::Net::ReplayScope::ViewNamesPlaying());
-    NameTagsFrame(played, ports, ports, nullptr, {}, 0);
+    NameTagsFrame(played, stored_ports, stored_ports, nullptr, {}, 0);
     EXPECT_EQ(checksum(played), checksum(recorded)) << i;
     EXPECT_EQ(played.bytes, recorded.bytes) << i;
     {
@@ -2557,7 +2558,7 @@ TEST(OrcaUXNameTags, AcrossRestartsATagMadeAgainKeepsTheKeptControls)
     };
     for (int f = 0; f < 3; ++f)
       frame();
-    EXPECT_EQ(m.TagName(m.NameId(0)), u"ZEKE");
+    EXPECT_EQ(m.TagName(m.NameId(0)), u"P1");
     GameMadeTag(m, 118, u"MYTAG");
     Wear(m, 0, 118);
     for (int f = 0; f < 3; ++f)
@@ -2581,7 +2582,7 @@ TEST(OrcaUXNameTags, TheOwnControlsReadComesAfterTheWrites)
     m.Join(0);
     OwnControlsReader reader;
     EXPECT_FALSE(NameTagsFrame(m, ports, ports, &reader, custom, 0));
-    EXPECT_EQ(m.TagName(0), u"ZEKE");
+    EXPECT_EQ(m.TagName(0), u"P1");
     EXPECT_EQ(TagLayout(m, 0), CustomLayout());
     // They make MYTAG again (the game makes it at its defaults) and wear it: the same frame gives
     // it their controls, and the read sees those, not the defaults.
@@ -2754,7 +2755,7 @@ TEST(OrcaUXNameTags, ControlsSavedInTheGamesMenusArePublishedThere)
     OwnControlsReader reader;
     const std::vector<Orca::Events::PortInfo> carried{{0, "sandbox-ada", false, custom}};
     EXPECT_FALSE(NameTagsFrame(m, carried, carried, &reader, custom, 0));
-    ASSERT_EQ(m.TagName(m.NameId(0)), u"SANDB");
+    ASSERT_EQ(m.TagName(m.NameId(0)), u"P1");
     const std::array<u8, 0x2D> orcas = TagLayout(m, 119);
     m.W32(FakeBrawl::SCENE, 0x806ff300);  // back in the menus: not the character select
     GameMadeTag(m, 0, Typed(u"SANDB"));
@@ -3027,7 +3028,7 @@ TEST(OrcaUXNameTags, ButtonsSetOnTheControlsPageAreThePlayersOwnWhateverTheTagIs
     m.Join(0);
     OwnControlsReader reader;
     EXPECT_FALSE(NameTagsFrame(m, ports, ports, &reader, {}, 0));
-    ASSERT_EQ(m.TagName(m.NameId(0)), u"SANDB");
+    ASSERT_EQ(m.TagName(m.NameId(0)), u"P1");
     ASSERT_EQ(m.NameId(0), 0);
     OnScene(m, "muMenuMain");
     GameMadeTag(m, 1, Typed(u"MINE"));

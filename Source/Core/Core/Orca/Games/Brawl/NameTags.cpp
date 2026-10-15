@@ -767,7 +767,8 @@ std::optional<std::vector<u8>> NameTagsFrame(GuestMemory& m,
                                              OwnControlsReader* reader, const std::vector<u8>& own,
                                              u64 resyncs)
 {
-  ApplyNameTags(m, write_ports, Net::ReplayScope::ViewNamesPlaying());
+  const bool view_names = Net::ReplayScope::ViewNamesPlaying();
+  ApplyNameTags(m, view_names ? write_ports : Net::SeatLabelPorts(write_ports), view_names);
   // After the writes: a tag that just got the player's controls reads as those, never as the
   // game's defaults it held before this frame's writes.
   if (!reader)

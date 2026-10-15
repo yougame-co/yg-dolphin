@@ -8,6 +8,7 @@
 #include <memory>
 #include <charconv>
 #include <optional>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -40,6 +41,24 @@ inline bool ValidReplayId(std::string_view id)
       return false;
   }
   return true;
+}
+
+// Names persisted in replay metadata and written into deterministic game memory. Display
+// names remain in the room/overlay, or are supplied explicitly by a replay viewer.
+inline std::vector<Events::PortInfo> SeatLabelPorts(const std::vector<Events::PortInfo>& ports)
+{
+  auto labeled = ports;
+  for (auto& port : labeled)
+    port.name = "P" + std::to_string(port.port + 1);
+  return labeled;
+}
+
+inline std::vector<Events::PortInfo> RecordingPorts(const std::vector<Events::PortInfo>& ports)
+{
+  auto recorded = SeatLabelPorts(ports);
+  for (auto& port : recorded)
+    port.remote = false;
+  return recorded;
 }
 
 struct ReplayHeader

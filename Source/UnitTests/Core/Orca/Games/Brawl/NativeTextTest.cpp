@@ -15,6 +15,7 @@
 #include "Core/Orca/Games/Brawl/Queue.h"
 #include "Core/Orca/Games/Brawl/Relabel.h"
 #include "Core/Orca/Games/Brawl/SetBlock.h"
+#include "Core/Orca/Session/Replay.h"
 
 using namespace Orca::UX;
 namespace NT = Orca::UX::NativeText;
@@ -582,4 +583,26 @@ TEST(OrcaNativeText, TheCharacterOrderAndTheSetInTheThirdPerson)
   over.Write8(MB::BASE + SetBlock::SET_WINNER, 0);
   NT::Apply(over, ports);
   EXPECT_EQ(WordsOf(over, RULES_BOX), "ADA wins the set 2-0");
+}
+
+TEST(OrcaNativeText, SeatLabelsGiveOwnReplayTheSameCharacterSelectBytes)
+{
+  auto live = Css(15);
+  auto played = live;
+  const std::vector<Orca::Events::PortInfo> ports{{0, "Alice", false}, {1, "Bob", true},
+                                                {2, "Carol", true}, {3, "Dan", true}};
+  const auto stored = Orca::Net::RecordingPorts(ports);
+  for (int frame = 0; frame < 60; ++frame)
+  {
+    u8 live_shown = 0, replay_shown = 0;
+    NT::Apply(live, Orca::Net::SeatLabelPorts(ports), &live_shown);
+    NT::Apply(played, stored, &replay_shown);
+    EXPECT_EQ(live.bytes, played.bytes);
+    EXPECT_EQ(live_shown, replay_shown);
+  }
+  const auto words = NT::Wanted(played, stored);
+  EXPECT_EQ(words.plates[0], "P1");
+  EXPECT_EQ(words.plates[3], "P4");
+  const auto view = NT::Wanted(played, ports);
+  EXPECT_NE(view.plates[0], words.plates[0]);
 }

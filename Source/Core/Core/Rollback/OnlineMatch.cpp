@@ -3959,9 +3959,7 @@ std::optional<int> Boundary(Core::System& system,
     auto* record = Orca::Net::ReplayRecordingScope::Frame(frame);
     if (record)
     {
-      auto canonical = ports;
-      for (auto& port : canonical)
-        port.remote = false;
+      auto canonical = Orca::Net::RecordingPorts(ports);
       const Orca::Net::ReplayFrame* previous = match.replay.At(frame - 1);
       if (previous && previous->ports && *previous->ports == canonical)
         record->ports = previous->ports;
@@ -4244,9 +4242,7 @@ static std::optional<int> SessionBoundary(
       // rollback may be due to those ports changing. Rerun the hook for the frame landed on.
       auto* record = Orca::Net::ReplayRecordingScope::Frame(step.frame);
       auto ports = PortsAt(match, step.frame);
-      auto canonical = ports;
-      for (auto& port : canonical)
-        port.remote = false;
+      auto canonical = Orca::Net::RecordingPorts(ports);
       if (record)
         record->ports = std::make_shared<const std::vector<Orca::Events::PortInfo>>(std::move(canonical));
       Orca::Net::ReplayScope replay_scope(record, true);
