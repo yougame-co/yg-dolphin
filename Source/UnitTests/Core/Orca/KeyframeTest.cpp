@@ -1708,7 +1708,7 @@ TEST(OrcaReplayStream, RecordingMetadataUsesSeatLabelsAcrossRenamesAndRepacking)
       for (const auto& port : *frame.ports)
       {
         EXPECT_EQ(port.name, "P" + std::to_string(port.port + 1));
-        EXPECT_FALSE(port.remote);
+        EXPECT_TRUE(port.remote);  // Playback has no local player.
         EXPECT_EQ(port.controls, live[port.port].controls);
         EXPECT_EQ(port.queue, live[port.port].queue);
       }

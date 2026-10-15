@@ -2764,7 +2764,8 @@ TEST(OrcaUXNameTags, ControlsSavedInTheGamesMenusArePublishedThere)
     m.W32(FakeBrawl::Area(0) + 0x1C8, 0xFFFFFFFF);  // joined again
     const std::vector<Orca::Events::PortInfo> now{{0, "sandbox-ada", false, *edited}};
     EXPECT_FALSE(NameTagsFrame(m, now, now, &reader, *edited, 0));
-    EXPECT_EQ(m.NameId(0), 0);
+    EXPECT_EQ(m.NameId(0), 1);
+    EXPECT_EQ(m.TagName(1), u"P1");
     // Tap jump off, and the game's own Save bit kept.
     EXPECT_EQ(m.Read8(FakeBrawl::Tag(0) + 0x14 + 11), 0x01);
     EXPECT_EQ(TagLayout(m, 119), orcas);
