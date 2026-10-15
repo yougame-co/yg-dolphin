@@ -19,7 +19,6 @@
 #include "Core/Orca/Session/Replay.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/Games/Brawl/BrawlModule.h"
-#include "Core/Rollback/ReplayText.h"
 
 namespace Orca::UX
 {
@@ -173,14 +172,9 @@ int MakeTag(GuestMemory& m, u32 tags, const std::u16string& name, int unused = -
   const u32 tag = tags + static_cast<u32>(unused) * TAG_SIZE;
   const u32 entry = tag - RECORDS_TAGS;
   for (u32 i = 0; i < TAG_SIZE; i += 2)
-  {
-    if (i >= RECORDS_TAGS && i < RECORDS_TAGS + 2 * (TAG_CHARS + 1))
-      Rollback::ReplayText::Write16(m, entry + i, 0);
-    else
-      m.Write16(entry + i, 0);
-  }
+    m.Write16(entry + i, 0);
   for (u32 i = 0; i < name.size() && i < TAG_CHARS; ++i)
-    Rollback::ReplayText::Write16(m, tag + 2 * i, static_cast<u16>(name[i]));
+    m.Write16(tag + 2 * i, static_cast<u16>(name[i]));
   m.Write8(tag + TAG_RUMBLE, 1);
   for (u32 i = 0; i < CONTROLS_TEMPLATE_SIZE; ++i)
     m.Write8(tag + TAG_CONTROLS + i, m.Read8(CONTROLS_TEMPLATE + i));
@@ -366,14 +360,12 @@ int ApplyNameTags(GuestMemory& m, const std::vector<Events::PortInfo>& ports, bo
 {
   auto* frame = Net::ReplayScope::Current();
   std::vector<Net::TagAssignment>* assignments = nullptr;
-  if (frame && !Net::ReplayScope::NetworkPlaying())
+  if (frame && !Net::ReplayScope::NetworkPlaying() && !Net::ReplayScope::RecordedPlaying())
   {
-    if (!frame->tag_assignments)
-      frame->tag_assignments.emplace();
+    // A live frame can run again after rollback with different RAM. Only this run's
+    // decisions belong in the recording, including when it assigns no tags.
+    frame->tag_assignments.emplace();
     assignments = &*frame->tag_assignments;
-    std::erase_if(*assignments, [&](const auto& tag) {
-      return std::ranges::find(ports, tag.port, &Events::PortInfo::port) == ports.end();
-    });
   }
   u32 task = 0, tags = 0;
   if (ports.empty() || !CharacterSelectTask(m, &task) || !TagTable(m, &tags))
@@ -416,7 +408,7 @@ int ApplyNameTags(GuestMemory& m, const std::vector<Events::PortInfo>& ports, bo
         {
           const u16 c = i < shown.size() ? static_cast<u16>(shown[i]) : 0;
           if (m.Read16(tag + 2 * i) != c)
-            Rollback::ReplayText::Write16(m, tag + 2 * i, c);
+            m.Write16(tag + 2 * i, c);
         }
       }
       // A worn tag is the player's menu choice, including the game's exact defaults.
@@ -453,10 +445,7 @@ int ApplyNameTags(GuestMemory& m, const std::vector<Events::PortInfo>& ports, bo
       WriteControls(m, at, p.controls);
     m.Write32(*area + AREA_NAME_ID, static_cast<u32>(slot));
     if (assignments)
-    {
-      std::erase_if(*assignments, [&](const auto& old) { return old.port == p.port; });
       assignments->push_back({p.port, slot, created, controls});
-    }
     ++given;
   }
   return given;

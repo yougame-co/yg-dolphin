@@ -1893,7 +1893,7 @@ TEST(OrcaUXNameTags, ReplayViewNamesReplaceAWornTagAndLaterUpdates)
   EXPECT_EQ(m.TagName(0), u"P1");
 }
 
-TEST(OrcaUXNameTags, LiveNamesAndNameFreeReplayKeepAllNonTextBytes)
+TEST(OrcaUXNameTags, LiveNamesAndNameFreeReplayKeepTagDecisions)
 {
   FakeBrawl live;
   live.SetTag(0, u"MINE");
@@ -1905,56 +1905,90 @@ TEST(OrcaUXNameTags, LiveNamesAndNameFreeReplayKeepAllNonTextBytes)
                                                 {2, "sandbox-ada", true}};
   const auto stored = Orca::Net::RecordingPorts(ports);
   FakeBrawl played = live;
-  Rollback::ReplayText live_text, played_text;
-  const auto checksum = [](const FakeBrawl& memory, const Rollback::ReplayText& text) {
-    std::vector<u8> bytes;
-    for (const auto& [address, byte] : memory.bytes)
-    {
-      for (int shift = 24; shift >= 0; shift -= 8)
-        bytes.push_back(static_cast<u8>(address >> shift));
-      bytes.push_back(text.VerifiedByte(address, byte));
-    }
-    return Rollback::RamChecksum(bytes, {});
-  };
-  int mismatches = 0;
   for (int i = 0; i < 60; ++i)
   {
     Orca::Net::ReplayFrame frame;
     {
       const Orca::Net::ReplayScope scope(&frame, false);
-      const Rollback::ReplayText::Scope text_scope(live_text);
-      NameTagsFrame(live, ports, ports, nullptr, {}, 0);
-      // Repeated boundary hooks must retain the original assignment events.
       NameTagsFrame(live, ports, ports, nullptr, {}, 0);
     }
     {
       const Orca::Net::ReplayScope scope(&frame, true, true, false, true);
-      const Rollback::ReplayText::Scope text_scope(played_text);
       NameTagsFrame(played, stored, stored, nullptr, {}, 0);
     }
-    mismatches += checksum(live, live_text) != checksum(played, played_text);
+    for (int port = 0; port < 3; ++port)
+      EXPECT_EQ(live.NameId(port), played.NameId(port));
   }
-  EXPECT_EQ(mismatches, 0);
   EXPECT_EQ(live.TagName(live.NameId(2)), u"SANDB");
   EXPECT_EQ(played.TagName(played.NameId(2)), u"P3");
-  EXPECT_EQ(played.NameId(1), -1);  // No tag was assigned to the unshowable live name.
-  EXPECT_NE(checksum(live, {}), checksum(played, {}));  // Full peer checksums cover the names.
-  Orca::Net::ReplayFrame view;
-  view.tag_assignments.emplace();
+  EXPECT_EQ(played.NameId(1), -1);
+  EXPECT_NE(live.bytes, played.bytes);  // Peer hashes continue to cover real names.
+}
+
+TEST(OrcaUXNameTags, RollbackReplacesPredictedTagAssignments)
+{
+  const std::vector<Orca::Events::PortInfo> ports{{0, "Alice", false}};
+  for (const bool resimulating : {false, true})
   {
-    const Orca::Net::ReplayScope scope(&view, true, true, true, true);
-    const Rollback::ReplayText::Scope text_scope(played_text);
-    NameTagsFrame(played, ports, ports, nullptr, {}, 0);
+    SCOPED_TRACE(resimulating);
+    FakeBrawl confirmed;
+    confirmed.SetTag(3, u"MINE");
+    confirmed.Join(0);
+    confirmed.W32(FakeBrawl::Area(0) + 0x1C8, 3);
+    FakeBrawl predicted = confirmed;
+    predicted.W32(FakeBrawl::Area(0) + 0x1C8, 0xffffffff);
+    Orca::Net::ReplayFrame frame;
+    {
+      const Orca::Net::ReplayScope scope(&frame, false);
+      NameTagsFrame(predicted, ports, ports, nullptr, {}, 0);
+    }
+    ASSERT_TRUE(frame.tag_assignments);
+    ASSERT_EQ(frame.tag_assignments->size(), 1u);
+    auto rerun = confirmed;
+    {
+      // Live netplay rollback uses playback=true, network=false. Its writes must be
+      // recomputed from restored RAM, as on an ordinary live frame.
+      const Orca::Net::ReplayScope scope(&frame, resimulating);
+      NameTagsFrame(rerun, ports, ports, nullptr, {}, 0);
+    }
+    ASSERT_TRUE(frame.tag_assignments);
+    EXPECT_TRUE(frame.tag_assignments->empty());
+    Orca::Net::ReplayFrame clean_frame;
+    auto clean = confirmed;
+    {
+      const Orca::Net::ReplayScope scope(&clean_frame, false);
+      NameTagsFrame(clean, ports, ports, nullptr, {}, 0);
+    }
+    EXPECT_EQ(rerun.bytes, clean.bytes);
+    EXPECT_EQ(frame.tag_assignments, clean_frame.tag_assignments);
+    auto played = confirmed;
+    const auto labeled = Orca::Net::RecordingPorts(ports);
+    {
+      const Orca::Net::ReplayScope scope(&frame, true, true, false, true);
+      NameTagsFrame(played, labeled, labeled, nullptr, {}, 0);
+    }
+    EXPECT_EQ(played.bytes, clean.bytes);
+    EXPECT_EQ(played.NameId(0), 3);
   }
-  EXPECT_EQ(played.TagName(0), u"ALICE");
-  EXPECT_EQ(played.TagName(played.NameId(2)), u"SANDB");
-  EXPECT_EQ(checksum(live, live_text), checksum(played, played_text));
-  // Neither controls nor slot assignments are excluded from replay verification.
-  played.Write8(FakeBrawl::Tag(0) + 0x14, 9);
-  EXPECT_NE(checksum(live, live_text), checksum(played, played_text));
-  played.Write8(FakeBrawl::Tag(0) + 0x14, live.Read8(FakeBrawl::Tag(0) + 0x14));
-  played.W32(FakeBrawl::Area(0) + 0x1C8, 2);
-  EXPECT_NE(checksum(live, live_text), checksum(played, played_text));
+}
+
+TEST(OrcaUXNameTags, RollbackClearsAssignmentsBeforeCharacterSelectChecks)
+{
+  FakeBrawl memory;
+  memory.Join(0);
+  const std::vector<Orca::Events::PortInfo> ports{{0, "Alice", false}};
+  Orca::Net::ReplayFrame frame;
+  {
+    const Orca::Net::ReplayScope scope(&frame, false);
+    NameTagsFrame(memory, ports, ports, nullptr, {}, 0);
+  }
+  ASSERT_EQ(frame.tag_assignments->size(), 1u);
+  memory.Write8(FakeBrawl::NAME, 'x');  // Restored frame is outside character select.
+  {
+    const Orca::Net::ReplayScope scope(&frame, true);
+    NameTagsFrame(memory, ports, ports, nullptr, {}, 0);
+  }
+  EXPECT_TRUE(frame.tag_assignments->empty());
 }
 
 TEST(OrcaUXNameTags, ANewTagIsMadeAsTheGameMakesOneAndNothingElseIsWritten)
