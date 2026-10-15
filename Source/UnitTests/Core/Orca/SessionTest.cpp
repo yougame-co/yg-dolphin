@@ -5337,3 +5337,73 @@ TEST(OrcaDoubles, RebuildingSeatAcknowledgesItsCompletedPrefixAcrossChunks)
     friends.Compare(keyframe);
   }
 }
+
+TEST(OrcaDoubles, HostBoundaryKeepsPlayingAfterStaggeredFriendBlackouts)
+{
+  FourFriends friends;
+  friends.mesh.latency = {0, 1, 1, 1};
+  friends.Play(400);
+  friends.mesh.blackout[2] = true;
+  friends.Play(6);
+  friends.mesh.blackout[3] = true;
+  friends.Play(50);
+  auto& host = *friends.players[0];
+  ASSERT_EQ(host.session->MissingInputSeats(), (std::vector<int>{2}));
+  friends.disabled[0] = friends.disabled[2] = friends.disabled[3] = true;
+  bool dropped_both = false;
+  for (int boundary = 0; boundary < 40; ++boundary)
+  {
+    const int running = Rollback::OnlineMatch::PumpFriendsHostBoundaryForTest(
+        host.session, host.completed, {1, 2, 3}, [&] { friends.Play(1); },
+        [] { return std::vector<int>{}; });
+    ASSERT_TRUE(host.session);
+    ASSERT_TRUE(host.session->Error().empty()) << host.session->Error();
+    for (int seat = 0; seat < MAX_SEATS; ++seat)
+      host.ran_plugged[running][seat] = host.session->Plugged(seat, running);
+    host.completed = host.game.Run();
+    EXPECT_EQ(host.completed, running);
+    dropped_both = host.session->Plan()[2].live_from == NEVER &&
+                   host.session->Plan()[3].live_from == NEVER;
+    if (dropped_both && !host.session->Resimulating())
+      break;
+  }
+  EXPECT_TRUE(dropped_both);
+  const int after_drop = host.completed;
+  friends.disabled[0] = false;
+  friends.Play(100);
+  EXPECT_GT(host.completed, after_drop + 30);
+  friends.Compare();
+}
+
+TEST(OrcaDoubles, HostBoundaryRoomDepartureDoesNotSpendTheNextFriendsRetry)
+{
+  FourFriends friends;
+  friends.Play(400);
+  friends.mesh.blackout[2] = true;
+  friends.Play(6);
+  friends.mesh.blackout[3] = true;
+  friends.Play(50);
+  auto& host = *friends.players[0];
+  friends.disabled[0] = friends.disabled[2] = friends.disabled[3] = true;
+  bool told_left = false;
+  for (int boundary = 0; boundary < 40; ++boundary)
+  {
+    const int running = Rollback::OnlineMatch::PumpFriendsHostBoundaryForTest(
+        host.session, host.completed, {1, 2, 3}, [&] { friends.Play(1); }, [&] {
+          return std::exchange(told_left, true) ? std::vector<int>{} : std::vector<int>{2};
+        });
+    ASSERT_TRUE(host.session);
+    ASSERT_TRUE(host.session->Error().empty()) << host.session->Error();
+    for (int seat = 0; seat < MAX_SEATS; ++seat)
+      host.ran_plugged[running][seat] = host.session->Plugged(seat, running);
+    host.completed = host.game.Run();
+    EXPECT_EQ(host.completed, running);
+    if (host.session->Plan()[3].live_from == NEVER && !host.session->Resimulating())
+      break;
+  }
+  EXPECT_EQ(host.session->Plan()[2].live_from, NEVER);
+  EXPECT_EQ(host.session->Plan()[3].live_from, NEVER);
+  friends.disabled[0] = false;
+  friends.Play(100);
+  friends.Compare();
+}

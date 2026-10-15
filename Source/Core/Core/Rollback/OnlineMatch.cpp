@@ -3696,6 +3696,13 @@ std::vector<int> LeftSeatsInPlay(const Match& match)
   return seats;
 }
 
+static std::optional<int> SessionBoundary(
+    Core::System& system, Match& match,
+    const std::function<Orca::Net::Pad(int)>& local_pad, const FrameHook& on_frame,
+    const std::function<void(int)>& local_pad_waiting, std::optional<int> rewound_to,
+    bool doubles, const std::function<bool()>& stopping, std::chrono::milliseconds silence_limit,
+    const std::function<std::vector<int>()>& left_in_play);
+
 std::optional<int> Boundary(Core::System& system,
                             const std::function<Orca::Net::Pad(int local_seat)>& local_pad,
                             const FrameHook& on_frame,
@@ -4136,6 +4143,19 @@ std::optional<int> Boundary(Core::System& system,
     match.session->RequestLeave();
   }
 
+  return SessionBoundary(system, match, local_pad, on_frame, local_pad_waiting, rewound_to,
+                         Orca::Online::RoomDoubles(), [&] { return Stopping(system); },
+                         LeavingPastUnplug(match) ? LEAVE_SILENCE_LIMIT : PEER_SILENCE_LIMIT,
+                         [&] { return LeftSeatsInPlay(match); });
+}
+
+static std::optional<int> SessionBoundary(
+    Core::System& system, Match& match,
+    const std::function<Orca::Net::Pad(int)>& local_pad, const FrameHook& on_frame,
+    const std::function<void(int)>& local_pad_waiting, std::optional<int> rewound_to,
+    bool doubles, const std::function<bool()>& stopping, std::chrono::milliseconds silence_limit,
+    const std::function<std::vector<int>()>& left_in_play)
+{
   for (int attempt = 0; attempt < 2; ++attempt)
   {
     bool peer_silent = false;
@@ -4174,7 +4194,7 @@ std::optional<int> Boundary(Core::System& system,
             Orca::UX::SetEnd::Current().Stall(static_cast<int>(MsSince(step_start)),
                                               Orca::UX::SetEnd::NowMs());
             if (!match.joining)
-              left_seats = LeftSeatsInPlay(match);
+              left_seats = left_in_play();
             if (!stall_claimed && poll_time - step_start >= RANKED_STALL_LIMIT &&
                 Orca::Online::RoomQueue() == "ranked" && Orca::Online::MatchLive())
             {
@@ -4188,20 +4208,20 @@ std::optional<int> Boundary(Core::System& system,
           }
           if (match.joining && Orca::Online::HostLeftPending())
             host_left = true;
-          return host_left || !left_seats.empty() || Stopping(system);
+          return host_left || !left_seats.empty() || stopping();
         },
         std::chrono::milliseconds{1},
-        LeavingPastUnplug(match) ? LEAVE_SILENCE_LIMIT : PEER_SILENCE_LIMIT, &peer_silent, &waited,
+        silence_limit, &peer_silent, &waited,
         [&](Clock::time_point poll_time) {
-          const auto missing = FriendsMissingInputs(*match.session, Orca::Online::RoomDoubles());
+          const auto missing = FriendsMissingInputs(*match.session, doubles);
           return !LeavingPastUnplug(match) &&
-                 (WaitForFriendsRoster(*match.session, match.joining, Orca::Online::RoomDoubles()) ||
+                 (WaitForFriendsRoster(*match.session, match.joining, doubles) ||
                   Orca::Online::HoldInputSilence(step_start, poll_time, missing));
         },
         // A joiner catching up waits on history by design, outside the stall budget.
         catching_up ? nullptr : &match.stall_budget,
         [&](Clock::time_point poll_time) {
-          return WaitForFriendsRoster(*match.session, match.joining, Orca::Online::RoomDoubles()) ||
+          return WaitForFriendsRoster(*match.session, match.joining, doubles) ||
                  Orca::Online::RoomRecovering(poll_time);
         });
     perf_scope.reset();
@@ -4335,7 +4355,7 @@ std::optional<int> Boundary(Core::System& system,
                     static_cast<int>(step.kind), step.frame);
       return rewound_to;
     }
-    if (Stopping(system))
+    if (stopping())
       return rewound_to;
     const std::string error = match.session->Error();
     if (host_left && error.empty() && !match.session->Resimulating())
@@ -4358,6 +4378,9 @@ std::optional<int> Boundary(Core::System& system,
                        seat + 1, match.running + 1);
         match.session->DropSeat(seat);
       }
+      // Removing seats makes progress without spending the session retry.
+      if (doubles)
+        --attempt;
       continue;
     }
     if (!match.joining && match.session->CurrentFrame() == match.running + 1 &&
@@ -4391,7 +4414,7 @@ std::optional<int> Boundary(Core::System& system,
       }
       if (error.empty())
       {
-        const auto missing = DropMissingFriends(*match.session, Orca::Online::RoomDoubles());
+        const auto missing = DropMissingFriends(*match.session, doubles);
         if (missing)
         {
           for (const int seat : *missing)
@@ -4405,6 +4428,8 @@ std::optional<int> Boundary(Core::System& system,
           Orca::Status::State("friend-left stalled");
           if (match.seated.empty())
             Orca::Online::SetOpponentPlugged(false);
+          // Each pass removes at least one seat, so these retries stay bounded.
+          --attempt;
           continue;
         }
         // Silent friends: unplug them and step again; a silent ranked opponent loses the set.
@@ -5046,6 +5071,24 @@ HostRecoveryResult PumpFriendsHostForTest(Core::System& system, Orca::Net::YouGa
 {
   return PumpHostForTest(system, room, game, std::move(replay), current_frame, !seated.empty(),
                          seated, on_menus, std::move(store));
+}
+
+int PumpFriendsHostBoundaryForTest(std::unique_ptr<Orca::Net::Session>& session, int completed,
+                                   const std::vector<int>& seated,
+                                   const std::function<void()>& poll,
+                                   const std::function<std::vector<int>()>& left_in_play)
+{
+  Core::System& system = Core::System::GetInstance();
+  Match match;
+  match.port = std::make_unique<RingPort>(system, MAX_ROLLBACK, true);
+  match.running = completed;
+  match.seated.insert(seated.begin(), seated.end());
+  match.session = std::move(session);
+  SessionBoundary(system, match, [](int) { return Pad{}; }, [](int, bool, const auto&, bool) {},
+                  [&](int) { poll(); }, std::nullopt, true, [] { return false; },
+                  std::chrono::milliseconds(20), left_in_play);
+  session = std::move(match.session);
+  return match.running;
 }
 
 std::optional<std::vector<int>> FriendsMissingInputs(const Orca::Net::Session& session, bool doubles)

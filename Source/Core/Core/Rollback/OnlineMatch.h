@@ -108,6 +108,12 @@ HostRecoveryResult PumpFriendsHostForTest(Core::System& system, Orca::Net::YouGa
                                          bool on_menus,
                                          std::unique_ptr<Orca::Net::KeyframeStore> store);
 
+// Runs Boundary's session loop with a supplied host session and short silence window.
+int PumpFriendsHostBoundaryForTest(std::unique_ptr<Orca::Net::Session>& session, int completed,
+                                   const std::vector<int>& seated,
+                                   const std::function<void()>& poll,
+                                   const std::function<std::vector<int>()>& left_in_play);
+
 // ---- The origin and fresh starts ----
 // Every Orca boots the same way up to its origin: port 1 plugged in with nothing pressed, ports 2-4
 // unplugged, whatever the player's seat or controller, and nobody's name or controls. The origin is
