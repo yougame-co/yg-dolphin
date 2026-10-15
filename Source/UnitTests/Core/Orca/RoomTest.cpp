@@ -2178,7 +2178,7 @@ protected:
     return config;
   }
 
-  std::string PresenceRoster(const std::string& kind)
+  std::string PresenceRoster(const char* kind)
   {
     const auto json = RosterMessage(kind, local_seat == 1);
     if (room_players != 4)
