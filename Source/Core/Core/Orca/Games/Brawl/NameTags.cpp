@@ -343,10 +343,10 @@ std::u16string PortLabel(int port)
 }
 }  // namespace
 
-std::u16string BrawlTag(std::string_view username)
+std::u16string BrawlTag(std::string_view username, bool view_names)
 {
   // A replay's anonymized "Player N" (view-time names) fits the 5-character tag as "PN", not "PLAYE".
-  if (username.size() > 7 && username.size() <= 9 && username.starts_with("Player ") &&
+  if (view_names && username.size() > 7 && username.size() <= 9 && username.starts_with("Player ") &&
       std::all_of(username.begin() + 7, username.end(), [](char c) { return c >= '0' && c <= '9'; }))
   {
     std::u16string tag = u"P";
@@ -380,7 +380,7 @@ int ApplyNameTags(GuestMemory& m, const std::vector<Events::PortInfo>& ports, bo
   // with, for the whole room, and nothing synced changes when a player edits their tag there.
   const bool room = ports.size() > 1;
   const auto tag_name = [view_names](const Events::PortInfo& p) {
-    std::u16string name = BrawlTag(p.name);
+    std::u16string name = BrawlTag(p.name, view_names);
     if (name.empty() && (view_names || p.controls.size() == CONTROLS_PROFILE_SIZE))
       name = PortLabel(p.port);
     return name;

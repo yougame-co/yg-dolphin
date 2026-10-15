@@ -68,7 +68,7 @@ constexpr int TAG_SLOTS = 120;
 // A YouGame username as a Brawl tag: letters uppercased, digits and '-', '.', '!', '?' kept, '_'
 // and spaces become '-', anything else dropped, at most 5 characters. Locale-independent, so
 // identical on every machine. Empty when nothing usable is left.
-std::u16string BrawlTag(std::string_view username);
+std::u16string BrawlTag(std::string_view username, bool view_names = false);
 
 // A controls profile (PortInfo::controls): a tag's rumble byte, then its layout. Any other size is
 // no profile.

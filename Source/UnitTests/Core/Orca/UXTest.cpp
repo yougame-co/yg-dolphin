@@ -1804,9 +1804,12 @@ TEST(OrcaUXNameTags, UsernamesBecomeBrawlTags)
   EXPECT_EQ(BrawlTag("sandbox-ada"), u"SANDB");
   EXPECT_EQ(BrawlTag("a_b c"), u"A-B-C");
   // An anonymized replay name fits the tag.
-  EXPECT_EQ(BrawlTag("Player 2"), u"P2");
-  EXPECT_EQ(BrawlTag("Player 12"), u"P12");
-  EXPECT_EQ(BrawlTag("Player X"), u"PLAYE");
+  EXPECT_EQ(BrawlTag("Player 2", true), u"P2");
+  EXPECT_EQ(BrawlTag("Player 12", true), u"P12");
+  EXPECT_EQ(BrawlTag("Player X", true), u"PLAYE");
+  // Normal play keeps compat 30's tag bytes, including names matching replay labels.
+  EXPECT_EQ(BrawlTag("Player 2"), u"PLAYE");
+  EXPECT_EQ(BrawlTag("Player 12"), u"PLAYE");
   EXPECT_EQ(BrawlTag("x.y!?"), u"X.Y!?");
   EXPECT_EQ(BrawlTag("H4l9x"), u"H4L9X");
   EXPECT_EQ(BrawlTag("j\xc3\xa9r\xc3\xb4me"), u"JRME");  // non-ASCII dropped, never transliterated
