@@ -3515,12 +3515,8 @@ void PublishStall(Match& match, double stalled_ms)
   {
     const auto missing = match.session && Orca::Online::RoomDoubles() ?
                              match.session->MissingInputSeats() : std::vector<int>{};
-    if (!missing.empty())
-      link.waiting_seat = missing.front();
-    else if (match.joining)
-      link.waiting_seat = match.host_seat;
-    else if (!match.seated.empty())
-      link.waiting_seat = *match.seated.begin();
+    link.waiting_seat = WaitingFriendSeat(match.local_seat, missing, match.joining, match.host_seat,
+                                         {match.seated.begin(), match.seated.end()});
   }
   Orca::Events::PublishLinkStats(link);
 }
@@ -5108,10 +5104,23 @@ std::optional<std::vector<int>> DropMissingFriends(Orca::Net::Session& session, 
   return seats;
 }
 
+int WaitingFriendSeat(int local_seat, const std::vector<int>& missing, bool joining,
+                       int host_seat, const std::vector<int>& seated)
+{
+  const auto other = [local_seat](int seat) { return seat >= 0 && seat != local_seat; };
+  if (const auto seat = std::ranges::find_if(missing, other); seat != missing.end())
+    return *seat;
+  if (joining && other(host_seat))
+    return host_seat;
+  if (const auto seat = std::ranges::find_if(seated, other); seat != seated.end())
+    return *seat;
+  return -1;
+}
+
 bool WaitForFriendsRoster(const Orca::Net::Session& session, bool joining, bool doubles)
 {
   const auto seats = FriendsMissingInputs(session, doubles);
-  return joining && seats && std::ranges::find(*seats, 0) == seats->end();
+  return joining && seats && std::ranges::find(*seats, session.AuthoritySeat()) == seats->end();
 }
 
 bool FriendsBatch::Ready(bool on_menus, int waiting, int plugging, bool recovering,

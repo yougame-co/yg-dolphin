@@ -5407,3 +5407,117 @@ TEST(OrcaDoubles, HostBoundaryRoomDepartureDoesNotSpendTheNextFriendsRetry)
   friends.Play(100);
   friends.Compare();
 }
+
+TEST(OrcaDoubles, RosterWaitUsesTheSessionsAuthoritySeat)
+{
+  FakeNet net;
+  FakeNet::End transport(net, 1);
+  FakeGame game;
+  auto config = DropInConfig(1, 0);
+  config.per_peer_inputs = true;
+  config.authority_seat = 2;
+  std::swap((*config.plan)[0], (*config.plan)[2]);
+  Session session(config, game, transport);
+  ASSERT_EQ(session.MissingInputSeats(), (std::vector<int>{2}));
+  EXPECT_FALSE(Rollback::OnlineMatch::WaitForFriendsRoster(session, true, true));
+}
+
+TEST(OrcaDoubles, WaitingOverlayAlwaysSelectsAnotherSeat)
+{
+  using Rollback::OnlineMatch::WaitingFriendSeat;
+  EXPECT_EQ(WaitingFriendSeat(1, {1, 3}, true, 0, {}), 3);
+  EXPECT_EQ(WaitingFriendSeat(1, {1}, true, 0, {}), 0);
+  EXPECT_EQ(WaitingFriendSeat(0, {0}, false, 0, {0, 2}), 2);
+  EXPECT_EQ(WaitingFriendSeat(0, {0}, true, 0, {0}), -1);
+}
+
+TEST(OrcaDoubles, SuccessiveBatchesKeepTheUnconfirmedStartGate)
+{
+  FourFriends friends(true, 1);
+  friends.mesh.latency = {0, 2, 1, 3};
+  friends.players[0]->held_start = friends.players[1]->held_start = true;
+  friends.Play(400);
+  auto& host = *friends.players[0];
+  int compare_from = 300;
+  const auto add = [&](int seat) {
+    const int live = host.session->CurrentFrame();
+    const int keyframe = live - 20;
+    compare_from = keyframe;
+    friends.players[seat] = std::make_unique<MeshPlayer>(friends.mesh, seat, keyframe, true);
+    friends.players[seat]->held_start = true;
+    friends.players[seat]->game.m_state = At(host.game.m_history, keyframe);
+    host.session->AddPeerBatch({seat}, live, keyframe);
+  };
+  add(2);
+  for (int tick = 0; tick < 100 && host.session->Plan()[2].plug_from == NEVER; ++tick)
+    friends.Play(1);
+  ASSERT_NE(host.session->Plan()[2].plug_from, NEVER);
+  const auto previous = friends.mesh.last_sent[0].start_gate;
+  ASSERT_TRUE(previous);
+  ASSERT_GT(previous->second, host.session->LogEnd());
+  add(3);
+  friends.Play(1);
+  ASSERT_TRUE(friends.mesh.last_sent[0].start_gate);
+  EXPECT_EQ(friends.mesh.last_sent[0].start_gate->first, previous->first);
+  friends.Play(1000);
+  friends.Compare(compare_from);
+}
+
+TEST(OrcaDoubles, ConfirmedDeparturesStopRepeatingTheirHistory)
+{
+  FourFriends friends;
+  friends.mesh.latency = {0, 1, 3, 2};
+  friends.Play(400);
+  friends.mesh.blackout[3] = true;
+  friends.Play(60);
+  friends.players[0]->session->DropSeat(3);
+  friends.disabled[3] = true;
+  friends.Play(400);
+  EXPECT_TRUE(friends.mesh.last_sent[0].departed.empty());
+  friends.players[0]->session->SetFixedDelay(4);
+  friends.players[0]->session->SetFixedDelay(std::nullopt);
+  friends.Play(100);
+  EXPECT_TRUE(friends.mesh.last_sent[0].departed.empty());
+  friends.Compare();
+}
+
+TEST(OrcaDoubles, NewAuthorityGateRetainsThePeersUnconfirmedPreviousGate)
+{
+  FakeNet net;
+  net.latency = 1;
+  net.extra = {0, 2};  // One frame outbound, three inbound.
+  FakeNet::End transport(net, 1);
+  FakeGame game;
+  auto config = DropInConfig(1, 0);
+  config.per_peer_inputs = true;
+  config.time_sync = false;
+  Session session(config, game, transport);
+  Packet host;
+  host.seat = 0;
+  host.sequence = 1;
+  host.roster = config.plan;
+  (*host.roster)[1] = {20, NEVER, 0};
+  host.start_gate = {0, 12};
+  host.pads = {Pad{PAD_WIRE_START_HIGH}};
+  host.departed[1] = {0, 12, 0, std::vector<Pad>(12, Pad{PAD_WIRE_START_HIGH})};
+  // The initial roster is held before running; subsequent inputs use the uneven link.
+  net.queues[1].push_back({0, host});
+  int completed = -1;
+  for (int tick = 0; tick < 3; ++tick)
+  {
+    net.now = tick;
+    ASSERT_EQ(session.OnBoundary(completed, Pad{PAD_WIRE_START_HIGH}).kind, StepKind::Run);
+    completed = game.Run();
+  }
+  EXPECT_EQ(At(game.m_ran_pads, 1)[0][0] & PAD_WIRE_START_HIGH, 0);
+  EXPECT_EQ(At(game.m_ran_pads, 1)[1][0] & PAD_WIRE_START_HIGH, 0);
+  host.start_gate = {20, NEVER};
+  host.sequence = 2;
+  host.current_frame = 3;
+  host.first_frame = 1;
+  net.queues[1].push_back({net.latency + net.extra[1], host});
+  net.now = 3;
+  EXPECT_EQ(session.OnBoundary(completed, Pad{PAD_WIRE_START_HIGH}).kind, StepKind::Run);
+  EXPECT_EQ(session.GetStats().rollbacks, 0);
+  EXPECT_TRUE(session.Error().empty());
+}

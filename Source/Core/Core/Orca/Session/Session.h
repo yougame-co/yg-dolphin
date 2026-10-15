@@ -366,6 +366,7 @@ public:
   bool Plugged(int seat, int frame) const;
   // The newest frame the host reported (a joining player catches up to it).
   int AuthorityFrame() const;
+  int AuthoritySeat() const { return m_config.authority_seat; }
   // This player is still replaying the host's game; its own controller isn't plugged in yet.
   bool CatchingUp() const;
   // Something besides inputs that frames from `frame` on depend on changed (a port's name arrived
@@ -454,6 +455,7 @@ private:
   std::set<int> m_plug_batch;
   int m_history_next = 0;
   std::optional<std::pair<int, int>> m_start_gate;
+  std::vector<std::pair<int, int>> m_previous_start_gates;
   std::array<int, MAX_SEATS> m_authority_ack{-1, -1, -1, -1};
   std::array<std::array<int, MAX_SEATS>, MAX_SEATS> m_peer_ack{};
   std::map<int, DepartedInputs> m_departed;

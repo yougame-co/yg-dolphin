@@ -76,6 +76,8 @@ private:
 
 // Boundary's silence policy: an empty selector retains the ordinary recovery/drop behavior.
 std::optional<std::vector<int>> FriendsMissingInputs(const Orca::Net::Session& session, bool doubles);
+int WaitingFriendSeat(int local_seat, const std::vector<int>& missing, bool joining,
+                       int host_seat, const std::vector<int>& seated);
 bool WaitForFriendsRoster(const Orca::Net::Session& session, bool joining, bool doubles);
 std::optional<std::vector<int>> DropMissingFriends(Orca::Net::Session& session, bool doubles);
 

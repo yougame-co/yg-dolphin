@@ -2600,8 +2600,7 @@ struct YouGameRoom::Impl
       std::lock_guard lock(mutex);
       room["queue"] = picojson::value(queue);
       room["size"] = picojson::value(static_cast<double>(room_size));
-      if (doubles && queue == "private")
-        room["doubles"] = picojson::value(true);
+      room["doubles"] = picojson::value(doubles && queue == "private");
     }
     room["host"] = ended ? picojson::value() : picojson::value(host);
     room["readyIds"] = picojson::value(picojson::array{});

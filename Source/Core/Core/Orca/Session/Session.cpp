@@ -93,6 +93,7 @@ constexpr double SPACING_DEAD_BAND_MS = 0.25;
 // this many packets.
 constexpr int CATCH_UP_SLACK = 8;
 constexpr int MAX_HISTORY_RUNS = 32;
+constexpr int MULTI_PEER_HISTORY_FRAMES = 128;
 constexpr int HISTORY_AHEAD = 4096;
 constexpr int HISTORY_RESEND_PACKETS = 120;
 }  // namespace
@@ -431,7 +432,16 @@ void Session::RequireValues(int seat, int version)
 
 void Session::AddPeerBatch(const std::vector<int>& seats, int live_from, int history_from)
 {
-  m_start_gate = {std::max(m_frame, m_last_sent_newest + 1), NEVER};
+  int gate_from = std::max(m_frame, m_last_sent_newest + 1);
+  if (m_start_gate && m_start_gate->second > LogEnd())
+  {
+    // The previous batch still covers unconfirmed frames. Extend that gate, including any
+    // unconfirmed gap between the batches, and rerun the gap with Start held back too.
+    if (m_start_gate->second < m_frame)
+      m_dirty = std::min(m_dirty, m_start_gate->second);
+    gate_from = std::min(gate_from, m_start_gate->first);
+  }
+  m_start_gate = {gate_from, NEVER};
   for (const int seat : seats)
   {
     if (seat < 0 || seat >= m_config.seats || seat == m_config.local_seat)
@@ -671,6 +681,20 @@ void Session::AppendConfirmedToLog()
       break;
     m_log.push_back(it->second);
   }
+  std::erase_if(m_previous_start_gates,
+                [&](const auto& gate) { return gate.second <= LogEnd(); });
+  std::erase_if(m_departed, [&](const auto& entry) {
+    const auto& [seat, stay] = entry;
+    if (LogEnd() < stay.until)
+      return false;
+    // The host also retains the prefix for every seated peer that has not confirmed it yet.
+    if (m_config.local_seat == m_config.authority_seat)
+      for (int peer = 0; peer < m_config.seats; ++peer)
+        if (InPlay(peer) && m_peer_ack[peer][seat] < stay.until - 1 &&
+            !(peer == seat && m_plan[seat].live_from >= stay.until))
+          return false;
+    return true;
+  });
 }
 
 void Session::PlugCaughtUpPeers()
@@ -1101,8 +1125,6 @@ void Session::SetFixedDelay(std::optional<int> frames)
     m_delay_from_link = true;
     m_link_below_windows = 0;
     m_need_history.fill(NO_NEED);
-  for (auto& ack : m_peer_ack)
-    ack.fill(-1);
     m_evidence_windows = 0;
     m_quiet_windows = 0;
     m_hold_windows = STALL_HOLD_WINDOWS;
@@ -1406,7 +1428,11 @@ Pads Session::PadsFor(int frame)
   for (const auto& [seat, prefix] : m_departed)
     if (const Pad* pad = DepartedPad(seat, frame))
       pads[seat] = *pad;
-  if (m_start_gate && frame >= m_start_gate->first && frame < m_start_gate->second)
+  const auto gates_frame = [frame](const auto& gate) {
+    return frame >= gate.first && frame < gate.second;
+  };
+  if ((m_start_gate && gates_frame(*m_start_gate)) ||
+      std::ranges::any_of(m_previous_start_gates, gates_frame))
   {
     for (Pad& pad : pads)
       pad[0] &= static_cast<u8>(~PAD_WIRE_START_HIGH);
@@ -1493,6 +1519,8 @@ void Session::ReceivePackets()
           FailPeer("Invalid completed seat inputs");
           return;
         }
+        if (stay.until <= LogEnd())
+          continue;
         auto& held = m_departed[seat];
         if (held.from != NEVER && stay.until < held.until)
           continue;
@@ -1551,6 +1579,10 @@ void Session::ReceivePackets()
             std::min(until, m_start_gate->second) : from;
         if (changed < m_frame && changed >= LogEnd())
           m_dirty = std::min(m_dirty, changed);
+        // The authority may already have confirmed its earlier batch while this peer still
+        // needs to rerun it. Keep that interval until our own confirmed log covers it.
+        if (m_start_gate && from != m_start_gate->first && m_start_gate->second > LogEnd())
+          m_previous_start_gates.push_back(*m_start_gate);
         m_start_gate = packet.start_gate;
       }
       ApplyRoster(*packet.roster);
@@ -1802,7 +1834,7 @@ void Session::AddHistory(Packet* packet)
       m_history_stuck[s] = 0;
     }
     const int first = std::max(m_history_sent[s], m_history_acked[s]) + 1;
-    const int last = std::min({until, first + (rotate ? 128 : MAX_HISTORY_IN_PACKET / 2) - 1,
+    const int last = std::min({until, first + (rotate ? MULTI_PEER_HISTORY_FRAMES : MAX_HISTORY_IN_PACKET / 2) - 1,
                                std::max(m_remote_frame[s], m_log_base) + HISTORY_AHEAD});
     if (last < first)
       continue;
