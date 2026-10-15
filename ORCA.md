@@ -2277,6 +2277,39 @@ Orca --embed --parent <handle> --rect X Y W H [--embed-adopted] [-u <user>] -e <
 
 `--embed-adopted` is the sandbox's way to embed on Windows ([Adopted window](#adopted-window)).
 
+**Replay playback.** Use the same game, disc/profile, session (`ORCA_SESSION=1`) and embed launch,
+with `ORCA_REPLAY_SOURCE=<local file path or ws(s) watch URL with ticket>`. YG Dolphin boots to its
+local canonical origin and plays the stream instead of joining or creating a room. A saved file
+(at most 1 MiB) plays at real speed. A watch URL follows live, 12 frames behind the newest final
+frame, catches up after joining late, and drains the tail when the stream ends. The
+`ORCA_TEST_REPLAY_*` knobs still work when no product source is set and test knobs are allowed;
+they do not alter product playback.
+
+`ORCA_REPLAY_NAMES` is the complete view-time name map: alternating zero-based GameCube port and
+`encodeURIComponent` UTF-8 name, e.g. `0 Alice%20Smith 2 Ren%C3%A9`. At most four entries (ports
+0..3, no duplicates), each 1..24 code points, with chat's ban on controls and line separators.
+An empty map is valid. Every loaded port's name is replaced; a missing port shows `Player N`
+(one-based N). The reader keeps its original metadata for reconnect overlap checks. Brawl's
+in-game tags retain their existing five-character ASCII conversion; unsupported glyphs use its
+port label. Worn tags are renamed on the character select when the view map changes. Controls
+and queue metadata remain those of the recording. Names change guest RAM, so recorded full-RAM
+checksum comparisons are retained only in test playback; product playback still validates stream
+hashes, compatibility, the local origin, and reconnect overlap.
+
+The desktop bridge is `window.yougameDesktop.orca.watchReplay({ bytes?, url?, names, launch? })`.
+Supply exactly one source: the page fetches a saved replay with its own session and passes an
+`ArrayBuffer` of at most 1 MiB, or supplies the live ticketed watch URL. Main creates a private,
+unique file in the app's temporary replay folder, grants that one file read-only in the sandbox,
+and removes it after exit or failure. `launch` supplies the usual play metadata (game slug, disc
+key, rectangle and optional graphics); without it, the last Play's metadata is reused. Every
+replay has a fresh session. The promise resolves on exit, as `play` does. Main automatically
+answers `caps replay` for this API; a page may answer the caps again through `send`.
+`on("replay-time", cb)` and `on("replay-done", cb)` return unsubscribe functions. Time events carry
+`{ frame, ms, slug, session }`; done events carry `{ ok, frames, why, slug, session }`.
+`pauseReplay()`, `resumeReplay()`, `seekReplay(frame)` and `replayNames(names)` use the same filtered
+stdin as `send(slug, session, line)`. The page-side `fetchReplayBytes(url, init)` helper preserves
+session request headers/cookies and bounds the streamed response before passing bytes to main.
+
 - `--parent`: on Windows the HWND as a decimal number; on macOS the window's **CGWindowID** (in
   Electron, the middle field of `win.getMediaSourceId()`), since an `NSView*` means nothing to
   another process; on Linux the X11 window id (Electron's `getNativeWindowHandle()` when the app
@@ -2320,6 +2353,9 @@ moves inside the window.
 | `host <code>` / `queue-cancel` / `queue rating <n\|->` | Matchmaking ([Matchmaking](#matchmaking-and-results)). |
 | `direct on\|off` | The player's switch for direct links. |
 | `record on\|off\|auto` | Whether this player's match streams to the room for watchers and the saved replay in the players' accounts, cap `record`. `auto` (the default) records ranked rooms only; a tournament or friends room records after `record on`. See `Rollback/ReplayStream.h`. |
+| `replay pause` / `replay resume` | Product playback only, cap `replay`: hold the displayed replay position or continue. Prints `state paused` / `state running`. The window heartbeat and replay clock keep reporting while paused. |
+| `replay seek <frame>` | Cap `replay`: absolute recorded frame in the history received so far, including its first frame and excluding the end. Restores the local origin and replays unseen to that frame, which is rendered. Keeps the pause choice. Out-of-range targets answer `unsupported replay`. |
+| `replay names [<port> <name> ...]` | Cap `replay`: replace the complete view-time map, in the same format as `ORCA_REPLAY_NAMES`. No pairs clears it to the `Player N` defaults. |
 | `delay auto` / `delay N` | Orca's default input delay (a fixed 3), or a fixed 1-6 frames. |
 | `chat <name> <text>` | A line from the page's chat, shown while Orca fills the screen. Fields are `encodeURIComponent` of UTF-8 (name at most 24 code points, text 140). Never logged. |
 | `controls <hex>` | The player's own controls ([Each player's own controls](#each-players-own-controls)); the tag gets them at the next character select. A bad profile answers `unsupported controls`. |
@@ -2333,6 +2369,10 @@ replaces the whole answer. A command without its cap, or a malformed one, answer
 `unsupported <command>`. Any other line goes to stderr. Drawing
 commands (`view`, `dim`, `perf`, `chat`, `orb`, `notice`, `talk`) are host-only: never in game
 memory or the compatibility key.
+
+`replay` is offered only with `ORCA_REPLAY_SOURCE`, after `talk` and `rumble` and before `record`,
+which remains last. Even a profile offering every cap stays within the app's 24-word limit. Replay
+mode withdraws `join`, `host` and `direct`; it never opens a seated room.
 
 **Opening YouGame's overlay** prints `orca orb`: a left press on the button (Windows), Shift+Tab
 while Orca has the keyboard, or, on a controller, holding the D-pad's Up and pressing Start
@@ -2379,6 +2419,8 @@ ring every 1.2 s.
 | `orca active <interval_s> <active_s> <inputs> <mode> <pads>` | How much the player played: every 60 s while the game runs, and once more when it stops ([Activity lines](#activity-lines)). |
 | `orca perf <json>` | This machine's speed: `info` once after `ready`, `win` every 15 s of running time, `auto` when the run switched its graphics to Performance ([This machine's speed](#this-machines-speed)). |
 | `orca rumble <port> <0\|1> <adapter\|pad\|none> <index>` | The game's motor for the local player's controller, on change and every 30 frames while on, cap `rumble` ([Rumble](#rumble)). |
+| `orca replay time <frame> <ms>` | Product playback position, about four times a second, including paused/live waits, plus initial and final positions. Absolute replay frame and whole milliseconds from its first frame, `max(0, frame - first) * 1000 / 60` rounded down. A seek may move both backward. For chat synchronization, not wall-clock time. |
+| `orca replay done ok\|fail frames=<n> ... why=<text>` | Replay completion or failure; the existing diagnostic fields stay intact. `frames` counts executed replay frames, including seeks; `why=-` means normal saved-file completion. Main forwards this as `replay-done`. |
 | `exit <code>` | Always last: 0 normal, 1 a reported error, 2 bad arguments. |
 
 ### Activity lines

@@ -18,6 +18,7 @@
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/Games/Brawl/BrawlModule.h"
+#include "Core/Rollback/ReplayStream.h"
 
 namespace Orca::UX
 {
@@ -344,6 +345,15 @@ std::u16string PortLabel(int port)
 
 std::u16string BrawlTag(std::string_view username)
 {
+  // A replay's anonymized "Player N" (view-time names) fits the 5-character tag as "PN", not "PLAYE".
+  if (username.size() > 7 && username.size() <= 9 && username.starts_with("Player ") &&
+      std::all_of(username.begin() + 7, username.end(), [](char c) { return c >= '0' && c <= '9'; }))
+  {
+    std::u16string tag = u"P";
+    for (const char c : username.substr(7))
+      tag.push_back(static_cast<char16_t>(c));
+    return tag;
+  }
   std::u16string tag;
   for (const char c : username)
   {
@@ -361,7 +371,7 @@ std::u16string BrawlTag(std::string_view username)
   return tag;
 }
 
-int ApplyNameTags(GuestMemory& m, const std::vector<Events::PortInfo>& ports)
+int ApplyNameTags(GuestMemory& m, const std::vector<Events::PortInfo>& ports, bool view_names)
 {
   u32 task = 0, tags = 0;
   if (ports.empty() || !CharacterSelectTask(m, &task) || !TagTable(m, &tags))
@@ -369,9 +379,9 @@ int ApplyNameTags(GuestMemory& m, const std::vector<Events::PortInfo>& ports)
   // In a room (more than one port in the synced list) a port's controls are the ones it joined
   // with, for the whole room, and nothing synced changes when a player edits their tag there.
   const bool room = ports.size() > 1;
-  const auto tag_name = [](const Events::PortInfo& p) {
+  const auto tag_name = [view_names](const Events::PortInfo& p) {
     std::u16string name = BrawlTag(p.name);
-    if (name.empty() && p.controls.size() == CONTROLS_PROFILE_SIZE)
+    if (name.empty() && (view_names || p.controls.size() == CONTROLS_PROFILE_SIZE))
       name = PortLabel(p.port);
     return name;
   };
@@ -396,6 +406,17 @@ int ApplyNameTags(GuestMemory& m, const std::vector<Events::PortInfo>& ports)
       continue;
     if (const u32 worn = m.Read32(*area + AREA_NAME_ID); worn != NO_TAG)
     {
+      if (view_names && worn < static_cast<u32>(TAG_SLOTS))
+      {
+        const auto shown = shares_name ? Variant(name, p.port) : name;
+        const u32 tag = tags + worn * TAG_SIZE;
+        for (u32 i = 0; i < TAG_CHARS; ++i)
+        {
+          const u16 c = i < shown.size() ? static_cast<u16>(shown[i]) : 0;
+          if (m.Read16(tag + 2 * i) != c)
+            m.Write16(tag + 2 * i, c);
+        }
+      }
       // A tag the player picked keeps its controls, unless it holds exactly what a tag the game
       // just made holds (a tag they made, or made again after a restart): then it gets the port's
       // own controls, as the tag Orca gives does. Written once, it no longer holds the defaults.
@@ -744,9 +765,9 @@ std::optional<std::vector<u8>> NameTagsFrame(GuestMemory& m,
                                              const std::vector<Events::PortInfo>& write_ports,
                                              const std::vector<Events::PortInfo>& ports,
                                              OwnControlsReader* reader, const std::vector<u8>& own,
-                                             u64 resyncs)
+                                             u64 resyncs, bool view_names)
 {
-  ApplyNameTags(m, write_ports);
+  ApplyNameTags(m, write_ports, view_names);
   // After the writes: a tag that just got the player's controls reads as those, never as the
   // game's defaults it held before this frame's writes.
   if (!reader)
@@ -764,10 +785,11 @@ void NameTagsFrameHook(const Core::CPUThreadGuard& guard,
   if (read_own && s_rebase_own.exchange(false))
     s_reader.Rebase();
   GuardMemory memory(guard);
+  const bool view_names = Rollback::ReplayStream::ProductMode() && Net::ReplayScope::Playing();
   std::optional<std::vector<u8>> changed =
       read_own ? NameTagsFrame(memory, write_ports, ports, &s_reader, Events::OwnControls(),
-                               Events::Resyncs()) :
-                 NameTagsFrame(memory, write_ports, ports, nullptr, {}, 0);
+                               Events::Resyncs(), view_names) :
+                 NameTagsFrame(memory, write_ports, ports, nullptr, {}, 0, view_names);
   if (!changed)
     return;
   NOTICE_LOG_FMT(ROLLBACK, "Name tags: this player changed their controls in the game");

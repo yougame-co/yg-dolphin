@@ -5,8 +5,10 @@
 
 #include <algorithm>
 #include <atomic>
+#include <charconv>
 #include <cstdlib>
 #include <mutex>
+#include <sstream>
 #include <thread>
 
 #include <fmt/format.h>
@@ -24,6 +26,7 @@
 #include "Core/Orca/Session/YouGameRoom.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/Probe.h"
+#include "Core/Orca/UX/Chat.h"
 #include "Core/System.h"
 
 namespace Rollback::ReplayStream
@@ -31,6 +34,11 @@ namespace Rollback::ReplayStream
 namespace
 {
 using Clock = std::chrono::steady_clock;
+
+std::mutex s_control_mutex;
+std::optional<bool> s_pause;
+std::optional<int> s_seek;
+std::optional<NameMap> s_names;
 
 double MsSince(Clock::time_point start)
 {
@@ -44,6 +52,80 @@ u64 MemoryChecksum(Core::System& system)
                      {memory.GetEXRAM(), memory.GetEXRAM() ? memory.GetExRamSize() : 0});
 }
 }  // namespace
+
+bool ProductMode()
+{
+  return !Orca::GetEnv("ORCA_REPLAY_SOURCE").empty();
+}
+
+std::optional<NameMap> ParseNames(std::string_view fields)
+{
+  if (fields.size() > 4 * (Orca::UX::Chat::NAME_ENCODED + 3))
+    return std::nullopt;
+  std::istringstream in{std::string(fields)};
+  NameMap names;
+  for (std::string port, encoded; in >> port;)
+  {
+    if (port.size() != 1 || port[0] < '0' || port[0] > '3' || !(in >> encoded))
+      return std::nullopt;
+    auto name = Orca::UX::Chat::DecodeField(encoded, Orca::UX::Chat::NAME_ENCODED,
+                                          Orca::UX::Chat::NAME_POINTS);
+    if (!name || !names.emplace(port[0] - '0', std::move(*name)).second)
+      return std::nullopt;
+  }
+  return names;
+}
+
+std::vector<Orca::Events::PortInfo> ViewPorts(const std::vector<Orca::Events::PortInfo>& ports,
+                                          const NameMap& names)
+{
+  auto view = ports;
+  for (auto& port : view)
+  {
+    const auto it = names.find(port.port);
+    port.name = it != names.end() ? it->second : fmt::format("Player {}", port.port + 1);
+  }
+  return view;
+}
+
+bool Command(std::string_view line)
+{
+  if (!ProductMode())
+    return false;
+  std::istringstream in{std::string(line)};
+  std::string prefix, verb, value, more;
+  in >> prefix >> verb;
+  if (prefix != "replay")
+    return false;
+  if ((verb == "pause" || verb == "resume") && !(in >> more))
+  {
+    std::lock_guard lock(s_control_mutex);
+    s_pause = verb == "pause";
+    return true;
+  }
+  if (verb == "seek" && (in >> value) && !(in >> more))
+  {
+    int frame = -1;
+    const auto [end, error] = std::from_chars(value.data(), value.data() + value.size(), frame);
+    if (error != std::errc{} || end != value.data() + value.size() || frame < 0)
+      return false;
+    std::lock_guard lock(s_control_mutex);
+    s_seek = frame;
+    return true;
+  }
+  if (verb == "names")
+  {
+    std::string fields;
+    std::getline(in, fields);
+    auto names = ParseNames(fields);
+    if (!names)
+      return false;
+    std::lock_guard lock(s_control_mutex);
+    s_names = std::move(*names);
+    return true;
+  }
+  return false;
+}
 
 std::vector<std::vector<u8>> RepackedPieces(const std::vector<u8>& written, int* frames,
                                             size_t max_piece, bool* too_big)
@@ -518,7 +600,9 @@ void Player::WatchThread(std::string source)
   };
   // ORCA_TEST_REPLAY_WATCH_DROP=<s>: the socket drops once, that long after it first connected, as
   // a network failure would (the reconnect test).
-  const int drop_after = std::max(0, std::atoi(Orca::GetEnv("ORCA_TEST_REPLAY_WATCH_DROP").c_str()));
+  const int drop_after = !m_product && Orca::UX::TestKnobsAllowed() ?
+                            std::max(0, std::atoi(Orca::GetEnv("ORCA_TEST_REPLAY_WATCH_DROP").c_str())) :
+                            0;
   bool dropped = false;
   // This segment's bytes taken so far. A connection starts the newest segment from its header,
   // so after a reconnect the first `received` bytes are ones already played: they are skipped,
@@ -691,13 +775,27 @@ void Player::WatchThread(std::string source)
 
 std::unique_ptr<Player> Player::FromEnv()
 {
-  if (!Orca::UX::TestKnobsAllowed())
-    return nullptr;
-  std::string path = Orca::GetEnv("ORCA_TEST_REPLAY_IN");
+  const bool product = ProductMode();
+  std::string path = Orca::GetEnv("ORCA_REPLAY_SOURCE");
+  if (!product && Orca::UX::TestKnobsAllowed())
+    path = Orca::GetEnv("ORCA_TEST_REPLAY_IN");
   if (path.empty())
     return nullptr;
   auto play = std::make_unique<Player>();
   play->m_path = std::move(path);
+  play->m_product = product;
+  if (product)
+  {
+    // Names only when the app gives them (a public replay's view-time names); a player's own replay
+    // keeps the recording's, and its RAM checksums. A malformed map shows every port as "Player N".
+    if (const std::string names = Orca::GetEnv("ORCA_REPLAY_NAMES"); !names.empty())
+      play->m_names = ParseNames(names).value_or(NameMap{});
+    play->m_follow = play->m_path.starts_with("ws://") || play->m_path.starts_with("wss://");
+    play->m_realtime = !play->m_follow;
+    play->m_started = Clock::now();
+    play->m_last_data = play->m_started;
+    return play;
+  }
   play->m_follow = Orca::GetEnv("ORCA_TEST_REPLAY_FOLLOW") == "1";
   play->m_realtime = Orca::GetEnv("ORCA_TEST_REPLAY_REALTIME") == "1";
   if (const std::string delay = Orca::GetEnv("ORCA_TEST_REPLAY_DELAY"); !delay.empty())
@@ -725,7 +823,8 @@ bool Player::Poll(std::string* error)
 {
   if (!m_reader)
     m_reader = std::make_unique<Orca::Net::ReplayStreamReader>(Orca::Online::CompatibilityKey());
-  if (m_path.starts_with("ws://") || m_path.starts_with("wss://") || m_path.starts_with("watch:"))
+  if (m_path.starts_with("ws://") || m_path.starts_with("wss://") ||
+      (!m_product && m_path.starts_with("watch:")))
   {
     if (!m_watch)
     {
@@ -790,6 +889,11 @@ bool Player::Poll(std::string* error)
     }
   }
   const u64 size = m_file->GetSize();
+  if (m_product && (size == 0 || size > Orca::Net::REPLAY_PACKED_MAX))
+  {
+    *error = size == 0 ? "the saved replay is empty" : "the saved replay is over 1 MiB";
+    return false;
+  }
   if (size <= m_offset)
     return true;
   std::vector<u8> bytes(static_cast<size_t>(size - m_offset));
@@ -801,11 +905,41 @@ bool Player::Poll(std::string* error)
   }
   m_offset = size;
   m_last_data = Clock::now();
-  return m_reader->Feed(bytes.data(), bytes.size(), error);
+  if (!m_reader->Feed(bytes.data(), bytes.size(), error))
+    return false;
+  if (m_product && (!m_reader->Complete() || m_reader->Archive().frames.empty()))
+  {
+    *error = "the saved replay is incomplete";
+    return false;
+  }
+  return true;
+}
+
+void Player::PrintTime(int frame, bool force)
+{
+  if (!m_product || !m_loaded || !m_reader->Info())
+    return;
+  if (!force && Clock::now() - m_time_printed < std::chrono::milliseconds(250))
+    return;
+  m_time_printed = Clock::now();
+  const s64 elapsed = std::max<s64>(0, static_cast<s64>(frame) - m_reader->Info()->first_frame);
+  Orca::Status::Line(fmt::format("orca replay time {} {}", frame, elapsed * 1000 / 60));
+}
+
+void Player::Fail(const PlayerHost& host, const std::string& why)
+{
+  if (!m_over)
+    Finish(host, false, why);
 }
 
 void Player::Finish(const PlayerHost& host, bool ok, const std::string& why)
 {
+  if (ok && m_product && (!m_reader || !m_reader->Complete() || m_reader->Archive().frames.empty()))
+  {
+    Finish(host, false, "the replay stream ended incomplete");
+    return;
+  }
+  PrintTime(m_position, true);
   const auto ms = [](double frames) { return frames * 1000.0 / 60.0; };
   const double avg = m_behind_samples ? static_cast<double>(m_behind_sum) / m_behind_samples : 0.0;
   const double live_avg =
@@ -871,12 +1005,89 @@ std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, in
     }
     *running = origin_frame - 1;
     m_loaded = true;
+    m_position = origin_frame;
     m_catching = !m_realtime && !m_follow;
     host.set_catching_up(m_catching);
     rewound = origin_frame;
     Orca::Status::Line(fmt::format("orca replay start build={} game={} first={} origin={:016x}",
                                    info.build, info.game_id, info.first_frame, info.origin_hash));
+    PrintTime(m_position, true);
   }
+  // The window thread never touches the player or machine state. Apply its mailbox here, even
+  // while paused or waiting on a live chunk, so stdin and the window heartbeat keep working.
+  const auto controls = [&] {
+    if (!m_product)
+      return true;
+    std::optional<bool> pause;
+    std::optional<int> seek;
+    std::optional<NameMap> names;
+    {
+      std::lock_guard lock(s_control_mutex);
+      pause.swap(s_pause);
+      seek.swap(s_seek);
+      names.swap(s_names);
+    }
+    if (names)
+      m_names = std::move(names);
+    if (pause)
+    {
+      m_paused = *pause;
+      Orca::Status::Line(m_paused ? "state paused" : "state running");
+    }
+    if (m_seek_target && *running >= *m_seek_target)
+      m_seek_target.reset();
+    if (seek)
+    {
+      const auto& archive = m_reader->Archive();
+      // Live playback can seek only within the history already received. An invalid target
+      // leaves the run and its pause alone, like any unsupported embed command.
+      if (*seek < archive.first_frame || *seek >= archive.EndFrame())
+      {
+        Orca::Status::Line("unsupported replay");
+      }
+      else
+      {
+        if (!host.restore_origin())
+        {
+          Finish(host, false, "couldn't seek in the replay");
+          return false;
+        }
+        Orca::Status::Line(fmt::format("orca replay seek {} -> {}", *running + 1, *seek));
+        *running = origin_frame - 1;
+        m_position = origin_frame;
+        rewound = origin_frame;
+        m_seek_target = *seek;
+        m_catching = true;
+        host.set_catching_up(true);
+      }
+    }
+    return true;
+  };
+  const auto wait_paused = [&] {
+    if (!controls())
+      return false;
+    // A pause queued during boot still presents the first replay frame before holding it.
+    while (m_paused && !m_seek_target && *running >= origin_frame)
+    {
+      // Keep the last picture visible while the CPU thread waits at its next boundary.
+      host.set_catching_up(false);
+      m_catching = false;
+      PrintTime(m_position);
+      if (host.stopping())
+        return false;
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      if (!Poll(&error))
+      {
+        Finish(host, false, error);
+        return false;
+      }
+      if (!controls())
+        return false;
+    }
+    return true;
+  };
+  if (!wait_paused())
+    return std::nullopt;
   int frame = *running + 1;
   if (m_seek && m_seek_taken && !m_seek_done && frame == m_seek->second)
   {
@@ -895,7 +1106,7 @@ std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, in
     rewound = to;
   }
   Orca::Net::ReplayArchive& archive = m_reader->Archive();
-  if (m_follow)
+  if (m_follow && !m_seek_target)
   {
     // A live watcher stays `delay` frames behind the newest final frame, so a late chunk doesn't
     // freeze the picture; it waits when closer, and plays out the tail once the stream goes quiet.
@@ -905,6 +1116,12 @@ std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, in
       ++m_waits;
       while (archive.EndFrame() - frame <= m_delay)
       {
+        if (!wait_paused())
+          return std::nullopt;
+        frame = *running + 1;
+        if (m_seek_target || archive.EndFrame() - frame > m_delay)
+          break;
+        PrintTime(m_position);
         // A file is over once it stops growing; a watch socket says so ({"t":"end"}, or it is lost
         // for good), and its silence is a network hiccup or a reconnect, not the end.
         const auto quiet_after = m_watch ? std::chrono::seconds(150) : std::chrono::seconds(5);
@@ -954,9 +1171,14 @@ std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, in
   // A saved replay plays flat out unless asked for real time. A watcher plays flat out while far
   // behind (joining late, or after a stall) and in real time once back near its delay; the gap
   // between the two thresholds keeps it from flapping.
-  bool catching = !m_realtime;
-  if (m_follow && !m_realtime)
+  // Render the requested frame before a paused seek waits at the next boundary. Earlier seek
+  // frames are hidden and unthrottled, as the canonical boot is.
+  const bool seeking = m_seek_target.has_value();
+  bool catching = seeking ? frame < *m_seek_target : !m_realtime;
+  if (m_follow && !m_realtime && !seeking)
     catching = m_catching ? behind > m_delay + 2 : behind > m_delay + 30;
+  if (m_paused && !seeking)
+    catching = false;
   if (catching != m_catching)
   {
     host.set_catching_up(catching);
@@ -982,11 +1204,26 @@ std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, in
                                    m_seek_taken ? "taken" : "failed"));
   }
   Orca::Net::ReplayFrame* const record = archive.At(frame);
+  if (!record)
   {
-    Orca::Net::ReplayScope scope(record, true, true);
-    on_frame(frame, true, *record->ports, false);
+    Finish(host, false, "the replay has no frame at this position");
+    return std::nullopt;
   }
-  if (const auto it = m_reader->Checksums().find(frame); it != m_reader->Checksums().end())
+  {
+    Orca::Net::ReplayFrame view = *record;
+    if (m_product && m_names)
+    {
+      view.ports = std::make_shared<const std::vector<Orca::Events::PortInfo>>(
+          ViewPorts(*record->ports, *m_names));
+    }
+    Orca::Net::ReplayScope scope(&view, true, true);
+    on_frame(frame, true, *view.ports, false);
+  }
+  // View-time names are written into the game's tags and change full-RAM hashes: while they are
+  // on, playback still checks the stream, compatibility, origin and reconnect overlap, but not
+  // those hashes. Without them (test playback, a player's own replay) every checksum is compared.
+  if (const auto it = m_reader->Checksums().find(frame);
+      !(m_product && m_names) && it != m_reader->Checksums().end())
   {
     const u64 hash = MemoryChecksum(system);
     ++m_checked;
@@ -1003,6 +1240,8 @@ std::optional<int> Player::Step(Core::System& system, const PlayerHost& host, in
   }
   host.set_pads(frame, record->pads);
   *running = frame;
+  m_position = frame;
+  PrintTime(frame);
   ++m_played;
   if (frame - m_last_progress >= 600)
   {

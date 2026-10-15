@@ -1445,3 +1445,77 @@ TEST(OrcaReplayStream, RefusesADamagedPreamble)
     EXPECT_TRUE(reader.Archive().frames.empty()) << field;
   }
 }
+
+TEST(OrcaReplayStream, ViewTimeNamesReplaceEveryFrameWithoutChangingSourceMetadata)
+{
+  auto original = Replay(30, 500);
+  original.frames[15].ports = std::make_shared<const std::vector<Orca::Events::PortInfo>>(
+      std::vector<Orca::Events::PortInfo>{{0, "stored rename", false, {9}, {10}},
+                                        {1, "stored newcomer", true, {11}, {12}}});
+  const auto bytes = Stream(original, 7);
+  ReplayStreamReader reader;
+  std::string error;
+  ASSERT_TRUE(reader.Feed(bytes.data(), bytes.size(), &error)) << error;
+  const auto names = Rollback::ReplayStream::ParseNames("0 Alice%20Smith 2 Ren%C3%A9");
+  ASSERT_TRUE(names);
+  for (const auto& frame : reader.Archive().frames)
+  {
+    const auto before = *frame.ports;
+    const auto view = Rollback::ReplayStream::ViewPorts(before, *names);
+    ASSERT_EQ(view.size(), before.size());
+    for (size_t i = 0; i < view.size(); ++i)
+    {
+      EXPECT_EQ(view[i].name, view[i].port == 0 ? "Alice Smith" :
+                              view[i].port == 2 ? "Ren\xc3\xa9" : "Player 2");
+      EXPECT_EQ(view[i].port, before[i].port);
+      EXPECT_EQ(view[i].remote, before[i].remote);
+      EXPECT_EQ(view[i].controls, before[i].controls);
+      EXPECT_EQ(view[i].queue, before[i].queue);
+    }
+    EXPECT_EQ(*frame.ports, before);
+    const auto fallback = Rollback::ReplayStream::ViewPorts(before, {});
+    EXPECT_EQ(fallback[0].name, "Player 1");
+  }
+  // A reconnect still compares the recording's names, even after views were made with new ones.
+  reader.Resume();
+  ASSERT_TRUE(reader.Feed(bytes.data(), bytes.size(), &error)) << error;
+  EXPECT_EQ(reader.Archive().frames.size(), original.frames.size());
+  const auto replacement = Rollback::ReplayStream::ParseNames("0 New%20name");
+  ASSERT_TRUE(replacement);
+  const auto view = Rollback::ReplayStream::ViewPorts(*reader.Archive().frames[0].ports, *replacement);
+  EXPECT_EQ(view[0].name, "New name");
+  EXPECT_EQ(view[1].name, "Player 3");
+}
+
+TEST(OrcaReplayStream, ViewTimeNamesUseChatUnicodeAndPortLimits)
+{
+  using Rollback::ReplayStream::ParseNames;
+  ASSERT_TRUE(ParseNames(""));
+  EXPECT_TRUE(ParseNames("0 O'Neil 1 Player%20Two 2 %F0%9F%90%AC 3 Ada"));
+  std::string points;
+  for (int i = 0; i < 24; ++i)
+    points += "%F0%9F%90%AC";
+  EXPECT_TRUE(ParseNames("0 " + points));
+  EXPECT_FALSE(ParseNames("0 " + points + "A"));
+  for (const char* invalid : {"0 Alice 0 Bob", "4 Alice", "-1 Alice", "00 Alice", "0",
+                              "0 %00", "0 %0A", "0 %C2%80", "0 %E2%80%A8", "0 %ED%A0%80",
+                              "0 %C0%AF", "0 %FF", "0 %", "0 Alice extra"})
+    EXPECT_FALSE(ParseNames(invalid)) << invalid;
+}
+
+TEST(OrcaReplayStream, CompletionRejectsAnIncompleteSavedTail)
+{
+  const auto bytes = Stream(Replay(30, 500), 7);
+  ReplayStreamReader whole;
+  std::string error;
+  ASSERT_TRUE(whole.Feed(bytes.data(), bytes.size(), &error)) << error;
+  EXPECT_TRUE(whole.Complete());
+  ReplayStreamReader partial;
+  ASSERT_TRUE(partial.Feed(bytes.data(), bytes.size() - 1, &error)) << error;
+  EXPECT_FALSE(partial.Archive().frames.empty());
+  EXPECT_FALSE(partial.Complete());
+  ASSERT_TRUE(partial.Feed(bytes.data() + bytes.size() - 1, 1, &error)) << error;
+  EXPECT_TRUE(partial.Complete());
+  whole.Resume();
+  EXPECT_FALSE(whole.Complete());
+}

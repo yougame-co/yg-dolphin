@@ -73,6 +73,7 @@ void Report(std::string_view code, std::string_view sentence);
 //            accounts) in ranked rooms, and in any room after the app's "record on"; "record off"
 //            stops it everywhere, "record auto" goes back to the default (Session/Online.h
 //            RecordWanted, Rollback/ReplayStream.h)
+//   replay   product replay only: app may send "replay pause|resume|seek <frame>|names ..."
 inline constexpr const char* CAPS =
     "join leave stats pause delay perf direct host chat yougame gfx";
 // "music": offered where Orca can tell the game's music apart (Orca/Music.h Supported).
@@ -95,17 +96,21 @@ inline constexpr const char* QUEUE2_CAP = "queue2";
 inline constexpr const char* PICK_CAPS = "pick-casual pick-ranked";
 // "talk": hold-to-talk. Orca prints "orca overlay down|up|cancel keys|pad" for the overlay key's
 // press and release instead of the "orca orb" toggle (UX/OverlayKey.h), and the app may send
-// "talk ..." lines, one row in the YouGame button's pill (UX/YgOrb.h). Offered third from last, so
-// an app that reads fewer words drops only "record", "rumble" and this.
+// "talk ..." lines, one row in the YouGame button's pill (UX/YgOrb.h). Before "rumble", optional
+// "replay" and "record", so an app that reads fewer words drops these first.
 inline constexpr const char* TALK_CAP = "talk";
 // "rumble": every profile, after "talk", so an app that reads fewer caps words drops only "record"
 // before it.
 inline constexpr const char* RUMBLE_CAP = "rumble";
+// Product replay playback only. After rumble and before record, which remains last. At most
+// 21 offered words with every profile cap: inside the app's 24-word limit.
+inline constexpr const char* REPLAY_CAP = "replay";
 // "record": every profile, last. The newest word: an app that reads fewer caps words drops it first,
 // and an app without it never records.
 inline constexpr const char* RECORD_CAP = "record";
 // This build's caps for the running profile: CAPS, plus "music", "results", "locks", "queue2" and
-// the pick caps where supported, then "talk", "rumble" and "record" (every mode, mod mode included). In mod
+// the pick caps where supported, then "talk", "rumble", "replay" in product playback and "record"
+// (every mode, mod mode included). In mod
 // mode (Core/Orca/Mod.h) a builtin's caps only once its guard words have held, and never after they
 // failed.
 std::string OfferedCaps();

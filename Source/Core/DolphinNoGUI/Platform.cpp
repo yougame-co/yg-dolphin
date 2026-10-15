@@ -34,6 +34,7 @@
 #include "Core/Orca/UX/SetEnd.h"
 #include "Core/Orca/UX/YgOrb.h"
 #include "Core/Rollback/OnlineMatch.h"
+#include "Core/Rollback/ReplayStream.h"
 #include "Core/System.h"
 #include "VideoCommon/FrameDumper.h"
 #include "VideoCommon/Present.h"
@@ -389,6 +390,12 @@ void Platform::ProcessEmbedCommands()
         Orca::Music::SetOn(value == "on");
       else
         Embed::Out("unsupported music");
+    }
+    else if (cmd == "replay")
+    {
+      if (!Orca::Status::Cap(Orca::Status::REPLAY_CAP) ||
+          !Rollback::ReplayStream::Command(line))
+        Embed::Out("unsupported replay");
     }
     else if (cmd == "record")
     {

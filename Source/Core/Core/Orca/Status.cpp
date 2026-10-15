@@ -19,6 +19,7 @@
 #include "Core/Orca/Music.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/UX/UX.h"
+#include "Core/Rollback/ReplayStream.h"
 
 namespace Orca::Status
 {
@@ -152,7 +153,8 @@ std::string OfferedCaps()
   std::istringstream base{CAPS};
   for (std::string cap; base >> cap;)
   {
-    if (s_online_withdrawn && (cap == "join" || cap == "host" || cap == "direct"))
+    if ((s_online_withdrawn || Rollback::ReplayStream::ProductMode()) &&
+        (cap == "join" || cap == "host" || cap == "direct"))
       continue;
     if (!caps.empty())
       caps += ' ';
@@ -186,7 +188,10 @@ std::string OfferedCaps()
   }
   // Engine caps, like "music": every profile, legacy or mod, whatever its builtin or guards. Last,
   // so an app that reads fewer words drops them before any other.
-  caps += fmt::format(" {} {} {}", TALK_CAP, RUMBLE_CAP, RECORD_CAP);
+  caps += fmt::format(" {} {}", TALK_CAP, RUMBLE_CAP);
+  if (Rollback::ReplayStream::ProductMode())
+    caps += fmt::format(" {}", REPLAY_CAP);
+  caps += fmt::format(" {}", RECORD_CAP);
   return caps;
 }
 
