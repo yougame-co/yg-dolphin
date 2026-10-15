@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -2783,39 +2784,58 @@ TEST_F(OrcaRoomRuntime, BlackoutRoomReturnsBeforeTheDirectWindowEnds)
   EXPECT_EQ(room->Seat(), 1);
 }
 
+namespace
+{
+struct FriendsHeadlessCore
+{
+  FriendsHeadlessCore()
+  {
+    old_user = File::GetUserPath(D_USER_IDX);
+    directory = File::CreateTempDir();
+    File::SetUserPath(D_USER_IDX, directory + DIR_SEP);
+    ::Config::Init();
+    SConfig::Init();
+    system.Initialize();
+    old_wii = system.IsWii();
+    system.SetIsWii(false);
+    system.GetMemory().Init();
+    Orca::Engine::SetModule(&module);
+  }
+  ~FriendsHeadlessCore()
+  {
+    Orca::UX::SelectModule(nullptr);
+    system.GetMemory().Shutdown();
+    system.SetIsWii(old_wii);
+    SConfig::Shutdown();
+    ::Config::Shutdown();
+    File::SetUserPath(D_USER_IDX, old_user);
+    File::DeleteDirRecursively(directory);
+  }
+  Core::System& system = Core::System::GetInstance();
+  Orca::UX::GenericModule module;
+  std::string old_user, directory;
+  bool old_wii = false;
+};
+
+ReplayArchive FriendsReplay(int first, int current, int friends = 0)
+{
+  ReplayArchive replay;
+  replay.first_frame = first;
+  replay.origin_hash = 1234;
+  replay.frames.resize(current - first + 1);
+  auto ports = std::make_shared<std::vector<Orca::Events::PortInfo>>();
+  for (int port = 0; port <= friends; ++port)
+    ports->push_back({port, fmt::format("Player{}", port), false, {}, {}});
+  for (auto& frame : replay.frames)
+    frame.ports = ports;
+  return replay;
+}
+}
+
 TEST_F(OrcaRoomRuntime, ReturningFriendUsesActualHostCurrentMatchKeyframe)
 {
   // Core RAM represents the running match. The origin/menu has a different checksum.
-  struct HeadlessCore
-  {
-    HeadlessCore()
-    {
-      old_user = File::GetUserPath(D_USER_IDX);
-      directory = File::CreateTempDir();
-      File::SetUserPath(D_USER_IDX, directory + DIR_SEP);
-      ::Config::Init();
-      SConfig::Init();
-      system.Initialize();
-      old_wii = system.IsWii();
-      system.SetIsWii(false);
-      system.GetMemory().Init();
-      Orca::Engine::SetModule(&module);
-    }
-    ~HeadlessCore()
-    {
-      Orca::UX::SelectModule(nullptr);
-      system.GetMemory().Shutdown();
-      system.SetIsWii(old_wii);
-      SConfig::Shutdown();
-      ::Config::Shutdown();
-      File::SetUserPath(D_USER_IDX, old_user);
-      File::DeleteDirRecursively(directory);
-    }
-    Core::System& system = Core::System::GetInstance();
-    Orca::UX::GenericModule module;
-    std::string old_user, directory;
-    bool old_wii = false;
-  } core;
+  FriendsHeadlessCore core;
   constexpr int origin = 1524;
   constexpr int current = 6000;
   core.system.GetMemory().GetRAM()[0] = 0x42;
@@ -3047,4 +3067,245 @@ TEST_F(OrcaRoomStallRuntime, CasualStallsKeepTheBudgetAndSilenceLimit)
   EXPECT_EQ(StallFor(7s).kind, StepKind::Ended);
   EXPECT_EQ(budget.Recoveries(), 0);
   EXPECT_GE(budget.Stalled(RoomClock::now()), 15s);
+}
+
+
+TEST(OrcaDoublesAdmission, WindowFillsEarlyAndLateArrivalsWaitForMenus)
+{
+  using Rollback::OnlineMatch::FriendsBatch;
+  const auto now = RoomClock::time_point{};
+  FriendsBatch batch;
+  EXPECT_FALSE(batch.Ready(true, 1, 0, false, now));
+  EXPECT_FALSE(batch.Ready(true, 2, 0, false, now + 1s));
+  EXPECT_TRUE(batch.Ready(true, 3, 0, false, now + 1s));
+  batch.Clear();
+  EXPECT_FALSE(batch.Ready(false, 3, 0, false, now));
+  EXPECT_FALSE(batch.Ready(false, 3, 0, false, now + 30s));
+  EXPECT_TRUE(batch.Ready(true, 3, 0, false, now + 31s));
+  EXPECT_FALSE(batch.Ready(true, 1, 1, false, now + 32s));
+  EXPECT_TRUE(batch.Ready(false, 1, 1, true, now + 32s));
+  batch.Clear();
+  EXPECT_FALSE(batch.Ready(true, 1, 0, false, now));
+  EXPECT_FALSE(batch.Ready(true, 1, 0, false, now + 1999ms));
+  EXPECT_TRUE(batch.Ready(true, 1, 0, false, now + 2s));
+}
+
+TEST_F(OrcaRoomRuntime, DoublesBatchOffersOneCaptureWithEveryPortValue)
+{
+  FriendsHeadlessCore core;
+  const std::string code = "batch444";
+  auto room = Open(code, R"({"joining":false,"peers":3,"doubles":true})", false);
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 0 && room->RoundTripMs() >= 0; }));
+  ASSERT_TRUE(room->Doubles());
+  constexpr int origin = 1524, current = 1600;
+  ReplayArchive replay = FriendsReplay(origin, current);
+  RoomHashGame game;
+  auto store = MakeHttpKeyframeStore([&](bool fresh, std::string* ticket, std::string* server,
+                                        std::string* error) {
+    return room->FreshTicket(fresh, ticket, server, error);
+  });
+  const auto result = Rollback::OnlineMatch::PumpFriendsHostForTest(
+      core.system, *room, game, replay, current, {}, true, std::move(store));
+  EXPECT_EQ(result.seats, (std::vector<int>{1, 2, 3}));
+  EXPECT_EQ(result.keyframe_frame, current);
+  EXPECT_FALSE(result.fresh_start);
+  ASSERT_TRUE(Wait([&] {
+    const auto state = Request("/state/" + code);
+    std::set<std::string> recipients;
+    for (const auto& message : state.get("messages").get<picojson::array>())
+      if (message.get("d").is<picojson::object>() && message.get("d").get("k").to_str() == "kf")
+        recipients.insert(message.get("to").to_str());
+    return recipients.size() == 3;
+  }));
+  const auto state = Request("/state/" + code);
+  std::set<std::string> captures;
+  std::set<std::string> recipients;
+  std::optional<std::vector<KeyframeInfo::Name>> names;
+  for (const auto& message : state.get("messages").get<picojson::array>())
+  {
+    const auto& data = message.get("d");
+    if (!data.is<picojson::object>() || data.get("k").to_str() != "kf")
+      continue;
+    const auto offer = KeyframeOfferFromJson(data.get<picojson::object>());
+    ASSERT_TRUE(offer);
+    EXPECT_TRUE(offer->shared);
+    EXPECT_EQ(offer->frame, current);
+    captures.insert(offer->id);
+    recipients.insert(message.get("to").to_str());
+    if (!names)
+      names = offer->names;
+    EXPECT_EQ(offer->names, *names);
+    std::set<int> ports;
+    for (const auto& name : offer->names)
+    {
+      ports.insert(name.seat);
+      if (name.seat > 0)
+        EXPECT_EQ(name.controls, (std::vector<u8>{static_cast<u8>(name.seat)}));
+    }
+    EXPECT_EQ(ports, (std::set<int>{0, 1, 2, 3}));
+  }
+  EXPECT_EQ(captures.size(), 1u);
+  EXPECT_EQ(recipients.size(), 3u);
+}
+
+TEST_F(OrcaRoomRuntime, DoublesFlagCannotEnableQueueRooms)
+{
+  for (const auto* queue : {"ranked", "casual"})
+  {
+    auto room = Open(std::string("ndbl") + queue,
+                     fmt::format(R"({{"queue":"{}","doubles":true}})", queue));
+    ASSERT_TRUE(Wait([&] { return room->Seat() == 1; }));
+    EXPECT_FALSE(room->Doubles());
+  }
+}
+
+TEST_F(OrcaRoomRuntime, BatchEnvelopeDeliversOnlyThisRecipientsPacket)
+{
+  const std::string code = "batchp444";
+  auto room = Open(code, R"({"doubles":true})");
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 1 && room->RoundTripMs() >= 0; }));
+  room->Receive();
+  Packet mine = Frames(0, 100, 4);
+  Packet other = Frames(0, 500, 4);
+  const std::string envelope = fmt::format(
+      R"({{"message":{{"t":"msg","from":"peer","d":{{"k":"bp","p":[[1,{}],[2,{}]]}}}}}})",
+      EncodePacket(mine), EncodePacket(other));
+  Action(code, envelope);
+  std::vector<Packet> got;
+  ASSERT_TRUE(Wait([&] { got = room->Receive(); return !got.empty(); }));
+  ASSERT_EQ(got.size(), 1u);
+  EXPECT_EQ(got[0].first_frame, 100);
+  EXPECT_EQ(got[0].pads, mine.pads);
+  // Duplicate recipient entries are rejected as a whole.
+  Action(code, fmt::format(
+      R"({{"message":{{"t":"msg","from":"peer","d":{{"k":"bp","p":[[1,{}],[1,{}]]}}}}}})",
+      EncodePacket(mine), EncodePacket(other)));
+  std::this_thread::sleep_for(100ms);
+  EXPECT_TRUE(room->Receive().empty());
+}
+
+
+TEST_F(OrcaRoomRuntime, ThreePeersKeepIndependentAwayBackAndResumeHolds)
+{
+  const std::string code = "holds444";
+  auto room = Open(code, R"({"joining":false,"peers":3,"doubles":true})", false);
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 0 && room->RoundTripMs() >= 0; }));
+  room->TakePeerEvents();
+  Action(code, R"({"message":{"t":"away","player":{"id":"peer2"}}})");
+  std::this_thread::sleep_for(100ms);
+  const auto start = RoomClock::now();
+  EXPECT_TRUE(room->HoldInputSilence(start - 15s, start, std::vector<int>{2}));
+  EXPECT_TRUE(room->InputHoldFor("peer2"));
+  EXPECT_FALSE(room->InputHoldFor("peer"));
+  EXPECT_FALSE(room->InputHoldFor("peer3"));
+  EXPECT_EQ(room->Code(), code);
+  EXPECT_TRUE(room->TakePeerEvents().empty());
+  Action(code, R"({"message":{"t":"back","player":{"id":"peer2"}}})");
+  std::this_thread::sleep_for(100ms);
+  EXPECT_TRUE(room->TakePeerEvents().empty());
+  Packet ack;
+  ack.seat = 0;
+  ack.ack = {-1, 199, 199, 199};
+  room->Send(ack);
+  auto returning = Frames(2, 190, 16);
+  Action(code, fmt::format(R"({{"message":{{"t":"msg","from":"peer2","d":{}}}}})",
+                           EncodePacket(returning)));
+  ASSERT_TRUE(Wait([&] { return !room->Receive().empty(); }));
+  EXPECT_FALSE(room->InputHoldFor("peer2"));
+  EXPECT_EQ(room->Code(), code);
+  EXPECT_EQ(room->GetState(), RoomState::Waiting);
+}
+
+TEST_F(OrcaRoomRuntime, ThirdRetainedPeerGetsCurrentMatchCaptureWithTwoOthersSeated)
+{
+  FriendsHeadlessCore core;
+  const std::string code = "resume444";
+  auto room = Open(code, R"({"joining":false,"peers":3,"doubles":true})", false);
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 0 && room->RoundTripMs() >= 0; }));
+  room->TakePeerEvents();
+  Action(code, R"({"message":{"t":"msg","from":"peer3","d":{"k":"hello","c":"test",
+                   "r":true,"h":false,"doubles":true,"resume":true,"resume_id":"fixture-cycle"}}})");
+  ASSERT_TRUE(Wait([&] { return room->ArrivalPending(); }));
+  ReplayArchive replay = FriendsReplay(1524, 6000, 3);
+  RoomHashGame game;
+  auto store = MakeHttpKeyframeStore([&](bool fresh, std::string* ticket, std::string* server,
+                                        std::string* error) {
+    return room->FreshTicket(fresh, ticket, server, error);
+  });
+  const auto result = Rollback::OnlineMatch::PumpFriendsHostForTest(
+      core.system, *room, game, replay, 6000, {1, 2, 3}, false, std::move(store));
+  EXPECT_EQ(result.seats, (std::vector<int>{1, 2, 3}));
+  EXPECT_EQ(result.keyframe_frame, 6000);
+  EXPECT_FALSE(result.fresh_start);
+  EXPECT_EQ(room->Code(), code);
+  ASSERT_TRUE(Wait([&] { return Sent(code, "msg", "kf"); }));
+}
+
+
+TEST_F(OrcaRoomRuntime, LateFriendsAreHeldByTheActualHostDuringAFight)
+{
+  FriendsHeadlessCore core;
+  const std::string code = "late444";
+  auto room = Open(code, R"({"joining":false,"peers":3,"doubles":true})", false);
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 0 && room->RoundTripMs() >= 0; }));
+  ReplayArchive replay = FriendsReplay(1524, 6000, 1);
+  RoomHashGame game;
+  auto store = MakeHttpKeyframeStore([&](bool fresh, std::string* ticket, std::string* server,
+                                        std::string* error) {
+    return room->FreshTicket(fresh, ticket, server, error);
+  });
+  const auto result = Rollback::OnlineMatch::PumpFriendsHostForTest(
+      core.system, *room, game, replay, 6000, {1}, false, std::move(store));
+  EXPECT_EQ(result.seats, (std::vector<int>{1}));
+  EXPECT_FALSE(result.keyframe_frame);
+  EXPECT_FALSE(result.fresh_start);
+  ASSERT_TRUE(Wait([&] { return Sent(code, "msg", "hold"); }));
+  EXPECT_FALSE(Sent(code, "msg", "kf"));
+  EXPECT_EQ(room->Code(), code);
+}
+
+
+TEST_F(OrcaRoomRuntime, SimultaneousRecoveriesShareHostOwnedCapture)
+{
+  FriendsHeadlessCore core;
+  const std::string code = "resmulti44";
+  auto room = Open(code, R"({"joining":false,"peers":3,"doubles":true})", false);
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 0 && room->RoundTripMs() >= 0; }));
+  room->TakePeerEvents();
+  for (int seat : {2, 3})
+    Action(code, fmt::format(R"({{"message":{{"t":"msg","from":"peer{}","d":{{"k":"hello","c":"test",
+                            "r":true,"h":false,"doubles":true,"resume":true,"resume_id":"fixture-group"}}}}}})", seat));
+  ASSERT_TRUE(Wait([&] { return room->ArrivalPending(); }));
+  std::this_thread::sleep_for(100ms);
+  RoomHashGame game;
+  auto store = MakeHttpKeyframeStore([&](bool fresh, std::string* ticket, std::string* server,
+                                        std::string* error) {
+    return room->FreshTicket(fresh, ticket, server, error);
+  });
+  const auto result = Rollback::OnlineMatch::PumpFriendsHostForTest(
+      core.system, *room, game, FriendsReplay(1524, 6000, 3), 6000, {1, 2, 3}, false, std::move(store));
+  EXPECT_EQ(result.seats, (std::vector<int>{1, 2, 3}));
+  ASSERT_TRUE(Wait([&] {
+    const auto snapshot = Request("/state/" + code);
+    std::set<std::string> offered;
+    for (const auto& message : snapshot.get("messages").get<picojson::array>())
+      if (message.get("d").is<picojson::object>() && message.get("d").get("k").to_str() == "kf")
+        offered.insert(message.get("to").to_str());
+    return offered.size() == 2;
+  }));
+  const auto state = Request("/state/" + code);
+  std::set<std::string> ids, recipients;
+  for (const auto& message : state.get("messages").get<picojson::array>())
+  {
+    const auto& data = message.get("d");
+    if (!data.is<picojson::object>() || data.get("k").to_str() != "kf")
+      continue;
+    const auto offer = KeyframeOfferFromJson(data.get<picojson::object>());
+    ASSERT_TRUE(offer);
+    EXPECT_TRUE(offer->shared);
+    ids.insert(offer->id);
+    recipients.insert(message.get("to").to_str());
+  }
+  EXPECT_EQ(ids.size(), 1u);
+  EXPECT_EQ(recipients, (std::set<std::string>{"peer2", "peer3"}));
 }

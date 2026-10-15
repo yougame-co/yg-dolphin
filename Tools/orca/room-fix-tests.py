@@ -20,13 +20,22 @@ lock = threading.RLock()
 def roster(code, cfg, kind="welcome"):
     joining = cfg.get("joining", True)
     local, remote = (1, 0) if joining else (0, 1)
-    return {"t": kind, "me": "me", "host": "peer" if joining else "me",
+    result = {"t": kind, "me": "me", "host": "peer" if joining else "me",
             "lifecycle": "game", "revision": 1,
             "room": {"code": code, "queue": cfg.get("queue", "private"), "size": 2},
             "player": {"id": "peer"},
             "players": [{"id": "me", "name": "Me"}, {"id": "peer", "name": "Friend"}],
             "participants": [{"id": "me", "connectionId": "me", "slot": local, "name": "Me"},
                              {"id": "peer", "connectionId": "peer", "slot": remote, "name": "Friend"}]}
+    if cfg.get("doubles"):
+        result["room"]["doubles"] = True
+        result["room"]["size"] = 4
+    if cfg.get("peers") == 3 and not joining:
+        for slot in (2, 3):
+            result["players"].append({"id": f"peer{slot}", "name": f"Friend{slot}"})
+            result["participants"].append({"id": f"peer{slot}", "connectionId": f"peer{slot}",
+                                            "slot": slot, "name": f"Friend{slot}"})
+    return result
 
 
 def send(ws, value, opcode=1):
@@ -38,6 +47,15 @@ def send(ws, value, opcode=1):
         header += bytes([126]) + struct.pack("!H", len(payload))
     with ws[1]:
         ws[0].sendall(header + payload)
+
+
+def peer_hello(cfg, peer="peer", acknowledged=False):
+    data = {"k": "hello", "c": "test", "r": acknowledged,
+            "h": cfg.get("joining", True), "dl": int(cfg.get("direct", False))}
+    if cfg.get("doubles"):
+        slot = int(peer[-1]) if peer[-1].isdigit() else 1
+        data.update(doubles=True, ct=f"{slot:02x}")
+    return {"t": "msg", "from": peer, "d": data}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -132,8 +150,10 @@ class Handler(BaseHTTPRequestHandler):
             if attempt > 1 and cfg.get("recovery_identity"):
                 welcome["me"] = cfg["recovery_identity"]
             send(ws, welcome)
-            send(ws, {"t": "msg", "from": "peer", "d": {"k": "hello", "c": "test", "r": False,
-                          "h": cfg.get("joining", True), "dl": int(cfg.get("direct", False))}})
+            send(ws, peer_hello(cfg))
+            if cfg.get("peers") == 3 and not cfg.get("joining", True):
+                for slot in (2, 3):
+                    send(ws, peer_hello(cfg, f"peer{slot}"))
             if attempt > 1 and cfg.get("recovery_packet"):
                 send(ws, cfg["recovery_packet"])
             while True:
@@ -160,9 +180,7 @@ class Handler(BaseHTTPRequestHandler):
                 with lock:
                     cfg["messages"].append(message)
                 if message.get("d", {}).get("k") == "hello":
-                    send(ws, {"t": "msg", "from": "peer", "d": {"k": "hello", "c": "test",
-                              "r": True, "h": cfg.get("joining", True),
-                              "dl": int(cfg.get("direct", False))}})
+                    send(ws, peer_hello(cfg, message.get("to", "peer"), True))
                 if message.get("t") == "ping":
                     send(ws, {"t": "pong", "at": message["at"]})
                 if message.get("t") == "leave":
