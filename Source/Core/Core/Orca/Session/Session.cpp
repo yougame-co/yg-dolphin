@@ -1757,16 +1757,21 @@ void Session::AddDeparted(Packet* packet, int recipient) const
   {
     int first = stay.first_frame;
     if (recipient == seat)
-      first = std::max(first, std::min(m_plan[seat].live_from, stay.until));
+      first = std::max({first, std::min(m_plan[seat].live_from, stay.until),
+                        m_peer_ack[seat][seat] + 1});
     else if (recipient >= 0)
       first = std::max(first, m_peer_ack[recipient][seat] + 1);
     else
     {
-      int ack = NEVER;
+      int needed = stay.until;
       for (int peer = 0; peer < m_config.seats; ++peer)
-        if (InPlay(peer) && peer != seat)
-          ack = std::min(ack, m_peer_ack[peer][seat]);
-      first = std::max(first, ack == NEVER ? stay.until : ack + 1);
+      {
+        if (!InPlay(peer))
+          continue;
+        const int ack = m_peer_ack[peer][seat] + 1;
+        needed = std::min(needed, peer == seat ? std::max(ack, m_plan[seat].live_from) : ack);
+      }
+      first = std::max(first, needed);
     }
     first = std::min(first, stay.until);
     const int offset = first - stay.first_frame;
@@ -1882,6 +1887,11 @@ void Session::SendPacket()
   }
   for (int s = 0; s < m_config.seats; ++s)
     packet.ack[s] = s == m_config.local_seat ? -1 : std::min(m_received[s], DepartedThrough(s));
+  // A rebuilding seat can also need several packets of its own completed prefix.
+  const auto completed = m_departed.find(m_config.local_seat);
+  if (m_config.per_peer_inputs && completed != m_departed.end())
+    packet.ack[m_config.local_seat] =
+        std::min(DepartedThrough(m_config.local_seat), completed->second.until - 1);
   packet.current_frame = m_frame;
   packet.resimulated = m_last_resimulated;
   packet.stalls = m_link_stalls;

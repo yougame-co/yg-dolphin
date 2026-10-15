@@ -5295,3 +5295,45 @@ TEST(OrcaDoubles, UnevenRequestedLeaveForwardsTheCompletedPrefix)
   EXPECT_EQ(friends.players[0]->session->Plan()[3].live_from, NEVER);
   friends.Compare();
 }
+
+
+TEST(OrcaDoubles, RebuildingSeatAcknowledgesItsCompletedPrefixAcrossChunks)
+{
+  for (const int room_friends : {1, 3})
+  {
+    SCOPED_TRACE(room_friends);
+    FourFriends friends(true, room_friends);
+    friends.mesh.latency = {0, 1, 2, 0};
+    const int recovering = room_friends;
+    friends.mesh.pair_latency[recovering][0] = 2;  // Different inbound and outbound delays.
+    for (auto& player : friends.players)
+      if (player)
+        player->session->SetFixedDelay(6);
+    friends.Play(400);
+    friends.mesh.reported_rtt[recovering] = 2000;
+    auto& host = *friends.players[0];
+    int keyframe = 0;
+    const auto rebuild = [&] {
+      const int live = host.session->CurrentFrame();
+      keyframe = live - 20;
+      host.session->DropSeat(recovering);
+      host.session->AddPeer(recovering, live, keyframe);
+      for (auto& queue : friends.mesh.pending)
+        std::erase_if(queue, [&](const auto& pending) { return pending.packet.seat == recovering; });
+      friends.mesh.pending[recovering].clear();
+      friends.players[recovering] = std::make_unique<MeshPlayer>(friends.mesh, recovering, keyframe, true);
+      friends.players[recovering]->game.m_state = At(host.game.m_history, keyframe);
+    };
+    rebuild();
+    for (int tick = 0; tick < 100 && host.session->Plan()[recovering].plug_from == NEVER; ++tick)
+      friends.Play(1);
+    ASSERT_NE(host.session->Plan()[recovering].plug_from, NEVER);
+    ASSERT_GT(host.session->Plan()[recovering].plug_from - host.session->CurrentFrame(),
+              MAX_PADS_IN_PACKET * 2);
+    rebuild();
+    friends.Play(1500);
+    EXPECT_GT(friends.players[recovering]->session->CurrentFrame(), keyframe + 1000)
+        << friends.players[recovering]->session->Describe();
+    friends.Compare(keyframe);
+  }
+}

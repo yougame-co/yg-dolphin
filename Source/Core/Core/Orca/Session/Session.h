@@ -121,7 +121,8 @@ struct Packet
   // pads[i] is the input for frame first_frame + i.
   int first_frame = 0;
   std::vector<Pad> pads;
-  // Highest frame of each other seat's input this sender has received in order (-1: none).
+  // Highest contiguous input received for each seat (-1: none). The sender's own seat stays -1,
+  // except for completed-seat history during a doubles rebuild.
   std::array<int, MAX_SEATS> ack{-1, -1, -1, -1};
   // The frame this sender is at, for time sync.
   int current_frame = 0;
