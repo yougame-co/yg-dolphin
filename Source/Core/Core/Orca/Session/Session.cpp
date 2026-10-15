@@ -440,8 +440,9 @@ void Session::AddPeerBatch(const std::vector<int>& seats, int live_from, int his
     if (m_start_gate->second < m_frame)
       m_dirty = std::min(m_dirty, m_start_gate->second);
     gate_from = std::min(gate_from, m_start_gate->first);
+    if (m_start_gate->second != NEVER)
+      m_previous_start_gates.push_back(*m_start_gate);
   }
-  m_start_gate = {gate_from, NEVER};
   for (const int seat : seats)
   {
     if (seat < 0 || seat >= m_config.seats || seat == m_config.local_seat)
@@ -449,6 +450,7 @@ void Session::AddPeerBatch(const std::vector<int>& seats, int live_from, int his
     AddPeer(seat, live_from, history_from);
     m_plug_batch.insert(seat);
   }
+  m_start_gate = {gate_from, NEVER};
 }
 
 void Session::SetValuesHeld(int version)
@@ -460,7 +462,11 @@ void Session::DropSeat(int seat)
 {
   m_plug_batch.erase(seat);
   if (m_start_gate && m_start_gate->second == NEVER && m_plug_batch.empty())
+  {
     m_start_gate->second = std::max({m_frame, m_last_sent_newest + 1, m_start_gate->first});
+    for (const auto& gate : m_previous_start_gates)
+      m_start_gate->second = std::max(m_start_gate->second, gate.second);
+  }
   if (!InPlay(seat))
     return;
   SeatPlan& plan = m_plan[seat];
@@ -720,7 +726,9 @@ void Session::PlugCaughtUpPeers()
     }
     if (ready)
     {
-      const int plug = m_frame + m_config.max_rollback + 2 * m_config.max_delay + worst_rtt + 4;
+      int plug = m_frame + m_config.max_rollback + 2 * m_config.max_delay + worst_rtt + 4;
+      for (const auto& gate : m_previous_start_gates)
+        plug = std::max(plug, gate.second);
       m_start_gate->second = plug;
       for (const int seat : m_plug_batch)
       {

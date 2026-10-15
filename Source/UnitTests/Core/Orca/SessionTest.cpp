@@ -5534,3 +5534,39 @@ TEST(OrcaDoubles, NewAuthorityGateRetainsThePeersUnconfirmedPreviousGate)
   EXPECT_EQ(session.GetStats().rollbacks, 0);
   EXPECT_TRUE(session.Error().empty());
 }
+
+TEST(OrcaDoubles, FasterBatchKeepsThePreviousUnconfirmedGateEnd)
+{
+  FourFriends friends(true, 1);
+  friends.players[0]->held_start = friends.players[1]->held_start = true;
+  friends.Play(400);
+  auto& host = *friends.players[0];
+  int compare_from = 300;
+  const auto add = [&](int seat) {
+    const int live = host.session->CurrentFrame();
+    compare_from = live - 20;
+    friends.players[seat] = std::make_unique<MeshPlayer>(friends.mesh, seat, compare_from, true);
+    friends.players[seat]->game.m_state = At(host.game.m_history, compare_from);
+    friends.players[seat]->held_start = true;
+    host.session->AddPeerBatch({seat}, live, compare_from);
+  };
+  friends.mesh.reported_rtt[2] = 400;
+  add(2);
+  for (int tick = 0; tick < 100 && host.session->Plan()[2].plug_from == NEVER; ++tick)
+    friends.Play(1);
+  ASSERT_TRUE(friends.mesh.last_sent[0].start_gate);
+  const auto previous = *friends.mesh.last_sent[0].start_gate;
+  ASSERT_NE(previous.second, NEVER);
+  ASSERT_GT(previous.second, host.session->CurrentFrame() + 23);
+  host.session->DropSeat(2);
+  friends.disabled[2] = true;
+  add(3);
+  for (int tick = 0; tick < 100 && host.session->Plan()[3].plug_from == NEVER; ++tick)
+    friends.Play(1);
+  ASSERT_NE(host.session->Plan()[3].plug_from, NEVER);
+  ASSERT_TRUE(friends.mesh.last_sent[0].start_gate);
+  EXPECT_EQ(friends.mesh.last_sent[0].start_gate->first, previous.first);
+  EXPECT_GE(friends.mesh.last_sent[0].start_gate->second, previous.second);
+  friends.Play(800);
+  friends.Compare(compare_from);
+}
