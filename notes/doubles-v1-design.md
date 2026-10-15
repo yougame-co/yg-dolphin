@@ -8,6 +8,8 @@ Only an authoritative `room.queue = "private"` welcome with optional boolean
 `room.doubles = true` enables the new path. Size remains the existing optional
 `room.size` (2..4). The room service assigns ports 2..4 in arrival order; Dolphin
 uses the authoritative slots and never independently renumbers another player.
+A doubles room refuses a peer without `hello.doubles` with `room_full`; an ordinary
+room retains the 0.3.44 two-player path.
 Optional boolean `hello.doubles = true` advertises support. Absent fields retain
 the existing one-friend policy; queue rooms cannot enable doubles. A legacy peer
 can still play an ordinary two-player room without new fields or packet bytes.
