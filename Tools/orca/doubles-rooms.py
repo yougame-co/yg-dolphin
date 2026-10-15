@@ -16,6 +16,7 @@ import ipaddress
 import json
 import os
 import queue
+import re
 import socket
 import struct
 import subprocess
@@ -78,6 +79,48 @@ class Rooms:
         self.joined = set()
         self.offers = []
         self.captures = {}
+        self.hashes = {}
+        self.frames = {}
+        self.reports = {}
+        self.expired = set()
+        self.blocked = set()
+
+    def blackout(self, room, player):
+        with self.lock:
+            self.blocked.add((room, player))
+            connection = self.sockets.get((room, player))
+            if connection:
+                connection[0].shutdown(socket.SHUT_RDWR)
+            expiry = threading.Timer(90, self.expire, (room, player))
+            expiry.daemon = True
+            expiry.start()
+
+    def expire(self, room, player):
+        with self.lock:
+            self.expired.add((room, player))
+            self.members.pop((room, player), None)
+            connection = self.sockets.pop((room, player), None)
+            if connection:
+                connection[0].shutdown(socket.SHUT_RDWR)
+            for (code, name), other in list(self.sockets.items()):
+                if code == room:
+                    self.send(other, self.roster(room, name, "leave", player))
+
+    def diagnostics(self, room):
+        active = [name for code, name in self.members if code == room]
+        reports = {name: value for (code, name), value in self.reports.items() if code == room}
+        hashes = {name: value for (code, name), value in self.hashes.items() if code == room}
+        return {"active": active, "reports": reports,
+                "frames": {name: frame_number for (code, name), frame_number in self.frames.items() if code == room}, "hashes": {name: dict(value) for name, value in hashes.items()}}
+
+    def record(self, room, player, data):
+        packets = [entry[1] for entry in data.get("p", [])] if data.get("k") == "bp" else [data]
+        for packet in packets:
+            if packet.get("k") == "p":
+                key = (room, player)
+                self.frames[key] = max(self.frames.get(key, 0), packet.get("c", 0))
+            if packet.get("k") == "p" and "x" in packet and "h" in packet:
+                self.hashes.setdefault((room, player), {})[str(packet["x"])] = packet["h"]
 
     def roster(self, room, local, kind="welcome", changed=None, away=False):
         members = sorted(((seat, name) for (code, name), seat in self.members.items() if code == room))
@@ -106,9 +149,24 @@ class Rooms:
 class Server(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address):
+    def __init__(self, address, turn_binary=None):
         self.rooms = Rooms()
+        self.turn = None
+        self.ice = []
+        if turn_binary:
+            self.turn = subprocess.Popen([turn_binary, address[0]], stdout=subprocess.PIPE,
+                                         stderr=subprocess.DEVNULL, text=True)
+            port = int(self.turn.stdout.readline())
+            self.ice = [{"urls": f"turn:{address[0]}:{port}", "username": "orca-fixture",
+                         "credential": "orca-fixture-only"}]
         super().__init__(address, Handler)
+
+    def server_close(self):
+        super().server_close()
+        if self.turn:
+            self.turn.terminate()
+            self.turn.wait(timeout=5)
+            self.turn.stdout.close()
 
     def handle_error(self, request, address):
         pass  # Expected fixture disconnects never print packet contents.
@@ -129,6 +187,24 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):
+        if self.path.startswith(("/report/", "/expire/", "/blackout/")):
+            count = int(self.headers.get("Content-Length", 0))
+            if count > 4096:
+                return self.reply({}, 413)
+            body = json.loads(self.rfile.read(count))
+            room = self.path.rsplit("/", 1)[-1]
+            player = body.get("player")
+            if player not in {f"Doubles{seat}" for seat in range(4)}:
+                return self.reply({}, 400)
+            rooms = self.server.rooms
+            with rooms.lock:
+                if self.path.startswith("/blackout/"):
+                    rooms.blackout(room, player)
+                elif self.path.startswith("/expire/"):
+                    rooms.expire(room, player)
+                else:
+                    rooms.reports[(room, player)] = body
+            return self.reply({})
         if self.path != "/api/multiplayer/ticket":
             return self.reply({}, 404)
         count = int(self.headers.get("Content-Length", 0))
@@ -141,6 +217,10 @@ class Handler(BaseHTTPRequestHandler):
         with self.server.rooms.lock:
             members = self.server.rooms.members
             key = (room, player)
+            if key in self.server.rooms.blocked:
+                return self.reply({"error": "room-recovering"}, 409)
+            if key in self.server.rooms.expired:
+                return self.reply({"error": "room-hold-expired"}, 409)
             if key not in members:
                 used = {seat for (code, _), seat in members.items() if code == room}
                 if len(used) == 4:
@@ -148,9 +228,12 @@ class Handler(BaseHTTPRequestHandler):
                 members[key] = min(set(range(4)) - used)
         # This literal is a throwaway local fixture value, never a production ticket.
         host = self.headers["Host"]
-        self.reply({"url": "http://" + host, "ticket": player, "direct": False})
+        self.reply({"url": "http://" + host, "ticket": player, "direct": True, "ice": self.server.ice})
 
     def do_GET(self):
+        if self.path.startswith("/diagnostics/"):
+            with self.server.rooms.lock:
+                return self.reply(self.server.rooms.diagnostics(self.path.rsplit("/", 1)[-1]))
         if self.path.startswith("/api/orca/keyframes/"):
             return self.keyframe("get")
         parsed = urllib.parse.urlsplit(self.path)
@@ -184,6 +267,7 @@ class Handler(BaseHTTPRequestHandler):
                     if message.get("t") == "ping":
                         rooms.send(connection, {"t": "pong", "at": message["at"]})
                     elif message.get("t") == "msg":
+                        rooms.record(room, player, message["d"])
                         outgoing = {"t": "msg", "from": player, "d": message["d"]}
                         if message["d"].get("k") == "kf":
                             rooms.offers.append((message.get("to"), message["d"].get("id"), message["d"].get("f")))
@@ -207,7 +291,7 @@ class Handler(BaseHTTPRequestHandler):
             with rooms.lock:
                 if rooms.sockets.get((room, player)) is connection:
                     rooms.sockets.pop((room, player), None)
-                    if not departed:
+                    if not departed and (room, player) in rooms.members:
                         for (code, name), other in list(rooms.sockets.items()):
                             if code == room and name != player:
                                 try:
@@ -269,8 +353,8 @@ def client(site, player, room):
     return sock, stream
 
 
-def self_test():
-    server = Server(("127.0.0.1", 0))
+def self_test(turn_binary=None):
+    server = Server(("127.0.0.1", 0), turn_binary)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     site = f"http://127.0.0.1:{server.server_port}"
     clients = []
@@ -308,7 +392,34 @@ def self_test():
         for _, stream in clients[:3]:
             verdict = receive(stream)
             assert verdict["t"] == "leave" and len(verdict["participants"]) == 3
-        print("PASS: four loopback clients, six pairs, one shared capture, same-seat recovery, isolated leave")
+        clients[2][0].shutdown(socket.SHUT_RDWR)
+        clients[2][1].close()
+        clients[2][0].close()
+        for _, stream in clients[:2]:
+            assert receive(stream)["t"] == "away"
+        server.rooms.expire("dry444", "Doubles2")
+        for _, stream in clients[:2]:
+            verdict = receive(stream)
+            assert verdict["t"] == "leave" and verdict["player"]["id"] == "Doubles2"
+        for role in range(3):
+            server.rooms.reports[("dry444", f"Doubles{role}")] = {"port": role + 1, "plug": 360 if role else None}
+            server.rooms.record("dry444", f"Doubles{role}", {"k": "p", "x": 600, "h": "fixture-hash"})
+        verify_diagnostics(server.rooms.diagnostics("dry444"), expected=3)
+        bad = server.rooms.diagnostics("dry444")
+        bad["reports"]["Doubles2"] = {"port": 3, "plug": 361}
+        try:
+            verify_diagnostics(bad, expected=3)
+            raise AssertionError("different cross-machine plug frames accepted")
+        except ValueError:
+            pass
+        bad = server.rooms.diagnostics("dry444")
+        bad["hashes"]["Doubles1"] = {"600": "different"}
+        try:
+            verify_diagnostics(bad, expected=3)
+            raise AssertionError("different final hashes accepted")
+        except ValueError:
+            pass
+        print("PASS: four clients, six pairs, shared capture, recovery, leave, hold expiry, cross-machine plugs and hashes")
     finally:
         for sock, stream in clients:
             stream.close()
@@ -317,10 +428,42 @@ def self_test():
         server.server_close()
 
 
+def verify_diagnostics(data, expected=4):
+    reports = data["reports"]
+    if len(reports) < expected:
+        raise ValueError("waiting for reports from both machines")
+    plugs = [report["plug"] for report in reports.values() if report.get("plug") is not None]
+    if not plugs or len(set(plugs)) != 1:
+        raise ValueError("cross-machine plug frames differ")
+    ports = [report["port"] for report in reports.values() if report.get("port") is not None]
+    if len(ports) != len(set(ports)):
+        raise ValueError("duplicate ports across machines")
+    active = data["active"]
+    hashes = [data["hashes"].get(name, {}) for name in active]
+    common = set.intersection(*(set(values) for values in hashes)) if hashes else set()
+    if not common:
+        raise ValueError("no common confirmed frame hash")
+    for frame_number in common:
+        if len({values[frame_number] for values in hashes}) != 1:
+            raise ValueError(f"confirmed frame {frame_number} differs across machines")
+    latest = max(map(int, common))
+    if latest < min(data["frames"].get(name, 0) for name in active) - 120:
+        raise ValueError("common confirmed hashes stopped before the end of the run")
+    return latest
+
+
+def post_fixture(site, path, body):
+    request = urllib.request.Request(site + path, json.dumps(body).encode(), {"Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=3) as response:
+        return json.load(response)
+
+
 def run(args):
     address = urllib.parse.urlsplit(args.site)
     if address.scheme != "http" or not isolated_host(address.hostname) or address.username or address.password:
         raise ValueError("--site must be a loopback or isolated LAN dev fixture")
+    if args.hold_expiry and args.seconds < 120:
+        raise ValueError("--hold-expiry needs at least 120 seconds for the 90-second hold")
     roles = [int(role) for role in args.roles.split(",")]
     if len(set(roles)) != len(roles) or not set(roles) <= set(range(4)):
         raise ValueError("roles must be distinct values from 0..3")
@@ -330,11 +473,14 @@ def run(args):
             for role in roles:
                 user = Path(work) / f"user-{role}"
                 user.mkdir()
-                environment = {"HOME": str(user), "PATH": "/usr/bin:/bin:/opt/homebrew/bin",
+                environment = {"PATH": os.environ.get("PATH", ""),
                                "ORCA_SESSION": "1", "ORCA_TEST_COMMANDS": "1", "ORCA_TEST_ROOM_DROP": "1",
                                "ORCA_TEST_DEV_GAME": "orca-doubles-test", "ORCA_SITE": args.site,
                                "ORCA_ROOM": args.room, "ORCA_JOIN": "0" if role == 0 else "1",
-                               "ORCA_TEST_PLAYER": f"Doubles{role}", "ORCA_NAME": f"Doubles{role}"}
+                               "ORCA_TEST_PLAYER": f"Doubles{role}", "ORCA_NAME": f"Doubles{role}",
+                               "ORCA_DIRECT": "1", "ORCA_DIRECT_LOOPBACK": "1", "ORCA_DIRECT_STUN": "0"}
+                if args.transport == "turn":
+                    environment["ORCA_DIRECT_FORCE"] = "turn"
                 if os.name == "nt":
                     environment["SystemRoot"] = os.environ.get("SystemRoot", r"C:\Windows")
                 if args.input:
@@ -387,8 +533,18 @@ def run(args):
                                     pass
             threading.Thread(target=commands, daemon=True).start()
             deadline = time.monotonic() + args.seconds
+            expire_at = time.monotonic() + max(15, (args.seconds - 105) / 2) if args.hold_expiry else None
+            expired = False
             while time.monotonic() < deadline:
+                if expire_at and not expired and time.monotonic() >= expire_at and 3 in roles:
+                    process = next(proc for role, proc, _, _ in players if role == 3)
+                    process.stdin.write("test-direct off\n")
+                    process.stdin.flush()
+                    post_fixture(args.site, "/blackout/" + args.room, {"player": "Doubles3"})
+                    expired = True
                 for role, process, _, lines in players:
+                    if args.hold_expiry and role == 3 and expired:
+                        continue
                     if process.poll() is not None:
                         raise RuntimeError(f"peer {role} exited")
                     while not lines.empty():
@@ -401,7 +557,6 @@ def run(args):
             # All joiners must actually plug in, at the same frame.
             frames = []
             ports = []
-            import re
             for role, _, _, _ in players:
                 if role:
                     text = (Path(work) / f"peer-{role}.log").read_text()
@@ -412,11 +567,25 @@ def run(args):
                         raise RuntimeError(f"peer {role} did not plug into its assigned port")
                     ports.append(int(match[1]))
                     frames.append(int(match[2]))
+                    report = {"player": f"Doubles{role}", "port": int(match[1]), "plug": int(match[2])}
+                else:
+                    report = {"player": "Doubles0", "port": 1, "plug": None}
+                post_fixture(args.site, "/report/" + args.room, report)
             if len(set(ports)) != len(ports):
                 raise RuntimeError("joiners were assigned duplicate ports")
             if len(set(frames)) > 1:
                 raise RuntimeError("joiners plugged in at different frames")
-            print(f"PASS: local joiner ports {ports}, plug frames {frames}")
+            report_deadline = time.monotonic() + 90
+            while True:
+                with urllib.request.urlopen(args.site + "/diagnostics/" + args.room, timeout=3) as response:
+                    diagnostics = json.load(response)
+                if len(diagnostics["reports"]) == 4:
+                    break
+                if time.monotonic() > report_deadline:
+                    raise RuntimeError("missing cross-machine reports")
+                time.sleep(0.2)
+            final_frame = verify_diagnostics(diagnostics)
+            print(f"PASS: all machines agree on plug {frames}, confirmed hashes through frame {final_frame}")
         finally:
             for _, process, stderr, _ in players:
                 if process.poll() is None:
@@ -455,13 +624,16 @@ def main():
     game.add_argument("--mod-dir", help="local prepared mod bundle; no download or install")
     parser.add_argument("--seconds", type=int, default=180)
     parser.add_argument("--keep-logs")
+    parser.add_argument("--turn-binary", help="locally built orca-turn-fixture for --serve or --self-test")
+    parser.add_argument("--transport", choices=("direct", "turn"), default="direct")
+    parser.add_argument("--hold-expiry", action="store_true", help="expire role 3 halfway through the run")
     args = parser.parse_args()
     if args.self_test:
-        self_test()
+        self_test(args.turn_binary)
     elif args.serve:
         if not isolated_host(args.listen):
             parser.error("--listen must be loopback or an isolated LAN address")
-        server = Server((args.listen, args.port))
+        server = Server((args.listen, args.port), args.turn_binary)
         print(f"Dev friends-room fixture listening on port {server.server_port}", flush=True)
         try:
             server.serve_forever()
