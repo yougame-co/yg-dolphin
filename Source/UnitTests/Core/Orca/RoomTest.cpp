@@ -3526,3 +3526,49 @@ TEST(OrcaDoublesTransport, BroadcastHistoryReachesANewRecipientDuringTheSwitch)
   EXPECT_EQ(addressed[2]->history_seat, 2);
   EXPECT_EQ(addressed[2]->history, next.history);
 }
+
+TEST_F(OrcaRoomRuntime, PrivateTournamentTicketBeginsAndReportsTheMatch)
+{
+  const std::string code = "tourney1";
+  auto room = Open(code, R"({"joining":false,"tourney":1})", false);
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 0 && room->RoundTripMs() >= 0; }));
+  room->SetOpponentPlugged(true);
+  ASSERT_TRUE(Wait([&] { return Sent(code, "begin"); }));
+  EXPECT_EQ(room->Queue(), "private");
+  GameReport report;
+  report.kind = GameReport::Kind::Win;
+  report.winner_seat = 0;
+  report.detail = "{}";
+  room->ReportGame(report);  // Held until the room assigns the match.
+  Action(code, R"({"message":{"t":"start","matchId":"t1","participants":[{"id":"me","connectionId":"me","slot":0},{"id":"peer","connectionId":"peer","slot":1}]}})");
+  ASSERT_TRUE(Wait([&] { return Sent(code, "finish"); }));
+  const auto state = Request("/state/" + code);
+  for (const auto& message : state.get("messages").get<picojson::array>())
+    if (message.get("t").to_str() == "finish")
+    {
+      EXPECT_EQ(message.get("matchId").to_str(), "t1");
+      EXPECT_EQ(message.get("winner").to_str(), "me");
+    }
+}
+
+TEST_F(OrcaRoomRuntime, OrdinaryPrivateTicketsKeepReportsLocal)
+{
+  for (const std::string flag : {"", ",\"tourney\":0", ",\"tourney\":true", ",\"tourney\":\"1\""})
+  {
+    const std::string code = "private" + std::to_string(flag.size());
+    auto room = Open(code, "{\"joining\":false" + flag + "}", false);
+    ASSERT_TRUE(Wait([&] { return room->Seat() == 0 && room->RoundTripMs() >= 0; }));
+    room->SetOpponentPlugged(true);
+    GameReport report;
+    report.kind = GameReport::Kind::Draw;
+    report.detail = "{}";
+    room->ReportGame(report);
+    Action(code, R"({"message":{"t":"start","matchId":"p1"}})");
+    ASSERT_TRUE(Wait([&] { return room->MatchLive(); }));
+    room->ReportGame(report);
+    std::this_thread::sleep_for(150ms);
+    EXPECT_FALSE(Sent(code, "begin"));
+    EXPECT_FALSE(Sent(code, "finish"));
+    EXPECT_FALSE(Sent(code, "game-report"));
+  }
+}

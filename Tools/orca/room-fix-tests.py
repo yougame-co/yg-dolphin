@@ -86,7 +86,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 self.reply({"url": f"http://127.0.0.1:{self.server.server_port}",
                             "ticket": "loopback-fixture", "direct": cfg.get("direct", False),
-                            "ice": [{"urls": "stun:127.0.0.1:9"}]})
+                            "ice": [{"urls": "stun:127.0.0.1:9"}],
+                            **({"tourney": cfg["tourney"]} if "tourney" in cfg else {})})
             except (BrokenPipeError, ConnectionResetError):
                 pass
             return

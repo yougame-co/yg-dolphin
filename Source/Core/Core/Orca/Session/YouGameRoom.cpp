@@ -1241,6 +1241,7 @@ struct YouGameRoom::Impl
   // opponent plugged in, game reports, a desync.
   std::string queue = "private";
   bool queue_known = false;
+  bool ticket_tourney = false;
   bool stay = false;
   bool doubles = false;
   int room_size = MAX_SEATS;
@@ -1679,6 +1680,7 @@ struct YouGameRoom::Impl
       ParseIce(it->second, &ice);
     ice_minted = Clock::now();
     ticket_direct = TicketAllowsDirect(reply);
+    ticket_tourney = Int(reply, "tourney", 1, 1).has_value();
     return true;
   }
 
@@ -1801,6 +1803,7 @@ struct YouGameRoom::Impl
     if (const auto it = reply.find("ice"); it != reply.end() && ParseIce(it->second, &ice))
       ice_minted = Clock::now();
     ticket_direct = TicketAllowsDirect(reply);
+    ticket_tourney = Int(reply, "tourney", 1, 1).has_value();
     return true;
   }
 
@@ -2961,6 +2964,13 @@ struct YouGameRoom::Impl
       WARN_LOG_FMT(NETPLAY, "Orca room: send failed: {}", ws->Error());
   }
 
+  // Tournament eligibility comes only from this room's ticket response. The room service
+  // validates it again; the emulator reports a private tournament game as a casual game.
+  std::string ReportQueue() const
+  {
+    return queue == "private" && ticket_tourney ? "casual" : queue;
+  }
+
   // The host's Orca starts the room's match once its opponent plays in its game.
   void TryBegin()
   {
@@ -2970,7 +2980,7 @@ struct YouGameRoom::Impl
     {
       std::lock_guard lock(mutex);
       current_match = match_id;
-      room_queue = queue;
+      room_queue = ReportQueue();
       plugged = opponent_plugged;
       done = set_done;
       my_seat = seat;
@@ -3119,7 +3129,7 @@ struct YouGameRoom::Impl
     {
       std::lock_guard lock(mutex);
       current_match = match_id;
-      room_queue = queue;
+      room_queue = ReportQueue();
       done = set_done;
       desync = std::exchange(desync_pending, false);
       fault = std::exchange(fault_pending, false);
@@ -3345,7 +3355,7 @@ struct YouGameRoom::Impl
     std::string room_queue;
     {
       std::lock_guard lock(mutex);
-      room_queue = queue;
+      room_queue = ReportQueue();
     }
     const std::string match = Str(m, "matchId");
     if (room_queue == "private" || match.empty() || !verdicts_seen.insert(match + "/$final").second)
@@ -3451,7 +3461,7 @@ struct YouGameRoom::Impl
     std::string room_queue, opponent;
     {
       std::lock_guard lock(mutex);
-      room_queue = queue;
+      room_queue = ReportQueue();
       for (const auto& p : match_participants)
       {
         if (p.connection == me)
