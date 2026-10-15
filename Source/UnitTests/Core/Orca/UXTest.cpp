@@ -4464,7 +4464,7 @@ TEST(OrcaUXNameTags, SelectedSmashControlsSurviveAStaleAccountTiltProfile)
 {
   FakeBrawl host, joiner;
   auto tilt = FakeBrawl::CONTROLS;
-  tilt[8] = 1;  // C-stick: Attack, instead of the default Smash action (5).
+  tilt[8] = 0;  // C-stick: Attack (Tilt), instead of the default Smash action (5).
   for (auto* memory : {&host, &joiner})
   {
     GameMadeTag(*memory, 40, u"SMASH");
