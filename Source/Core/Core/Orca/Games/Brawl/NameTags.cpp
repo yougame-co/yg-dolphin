@@ -280,20 +280,6 @@ bool TemplateReadable(const GuestMemory& m)
   return m.Valid(CONTROLS_TEMPLATE) && m.Valid(CONTROLS_TEMPLATE + CONTROLS_TEMPLATE_SIZE - 1);
 }
 
-// Whether the tag holds exactly what the game puts in a tag it makes: rumble on and the default
-// layout. The caller checked that the defaults are readable.
-bool HoldsDefaults(const GuestMemory& m, u32 tag)
-{
-  if (m.Read8(tag + TAG_RUMBLE) != 1)
-    return false;
-  for (u32 i = 0; i < CONTROLS_LAYOUT_SIZE; ++i)
-  {
-    if (m.Read8(tag + TAG_CONTROLS + i) != m.Read8(CONTROLS_TEMPLATE + i))
-      return false;
-  }
-  return true;
-}
-
 // The character select's task, when that scene is running.
 bool CharacterSelectTask(const GuestMemory& m, u32* task)
 {
@@ -417,15 +403,8 @@ int ApplyNameTags(GuestMemory& m, const std::vector<Events::PortInfo>& ports, bo
             m.Write16(tag + 2 * i, c);
         }
       }
-      // A tag the player picked keeps its controls, unless it holds exactly what a tag the game
-      // just made holds (a tag they made, or made again after a restart): then it gets the port's
-      // own controls, as the tag Orca gives does. Written once, it no longer holds the defaults.
-      if (carries && worn < static_cast<u32>(TAG_SLOTS) && TemplateReadable(m))
-      {
-        const u32 tag = tags + worn * TAG_SIZE;
-        if (!TagAt(m, tag).empty() && HoldsDefaults(m, tag))
-          WriteControls(m, tag, p.controls);
-      }
+      // A worn tag is the player's menu choice, including the game's exact defaults.
+      // Account controls apply only when Orca assigns an unworn tag below.
       continue;
     }
     std::u16string tag = name;

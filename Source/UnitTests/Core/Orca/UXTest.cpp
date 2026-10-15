@@ -2186,10 +2186,10 @@ TEST(OrcaUXNameTags, ControlsReplaceThoseOfATagAlreadyHoldingTheName)
   EXPECT_TRUE(chosen.written.empty());
 }
 
-TEST(OrcaUXNameTags, ATagThePlayerMakesAgainWearsTheirOwnControls)
+TEST(OrcaUXNameTags, ATagThePlayerMakesAgainKeepsItsSelectedDefaults)
 {
   // Tags made in the game die with Orca, so after a restart the player makes MYTAG again: the game
-  // creates it with its defaults, rumble on, and the port wears it. Its own controls go in it.
+  // creates it with its defaults, rumble on, and the player chooses those controls.
   FakeBrawl m;
   GameMadeTag(m, 118, u"MYTAG");
   m.Join(0);
@@ -2199,18 +2199,12 @@ TEST(OrcaUXNameTags, ATagThePlayerMakesAgainWearsTheirOwnControls)
   // No tag given: the port keeps the one it wears.
   EXPECT_EQ(ApplyNameTags(m, ports), 0);
   EXPECT_EQ(m.NameId(0), 118);
-  EXPECT_EQ(TagLayout(m, 118), CustomLayout());
-  EXPECT_EQ(m.Read8(FakeBrawl::Tag(118) + 0x0C), 0);
+  EXPECT_EQ(TagLayout(m, 118), FakeBrawl::CONTROLS);
+  EXPECT_EQ(m.Read8(FakeBrawl::Tag(118) + 0x0C), 1);
   EXPECT_EQ(m.TagName(118), u"MYTAG");
   EXPECT_EQ(m.TagName(0), u"");  // no YouGame tag made (it would be the lowest free slot)
-  // Only that tag's rumble and layout.
-  for (const u32 a : m.written)
-  {
-    EXPECT_TRUE(a == FakeBrawl::Tag(118) + 0x0C ||
-                (a >= FakeBrawl::Tag(118) + 0x14 && a < FakeBrawl::Tag(118) + 0x41))
-        << std::hex << a;
-  }
-  // Idempotent: it no longer holds the defaults, so the next frame (or a re-run) writes nothing.
+  EXPECT_TRUE(m.written.empty());
+  // The next frame and a re-run also leave the chosen controls alone.
   const int writes = m.writes;
   EXPECT_EQ(ApplyNameTags(m, ports), 0);
   EXPECT_EQ(m.writes, writes);
@@ -2226,14 +2220,14 @@ TEST(OrcaUXNameTags, ATagThePlayerMakesAgainWearsTheirOwnControls)
   }
   ApplyNameTags(host, {{0, "cy", false, {}}, {1, "ada", true, Profile(1, CustomLayout())}});
   ApplyNameTags(joiner, {{0, "cy", true, {}}, {1, "ada", false, Profile(1, CustomLayout())}});
-  EXPECT_EQ(TagLayout(host, 40), CustomLayout());
+  EXPECT_EQ(TagLayout(host, 40), FakeBrawl::CONTROLS);
   EXPECT_EQ(host.Read8(FakeBrawl::Tag(40) + 0x0C), 1);
   EXPECT_EQ(host.TagName(host.NameId(0)), u"CY");
   EXPECT_EQ(TagLayout(host, host.NameId(0)), FakeBrawl::CONTROLS);
   EXPECT_EQ(host.bytes, joiner.bytes);
 }
 
-TEST(OrcaUXNameTags, OnlyAWornTagHoldingExactlyTheDefaultsGetsThePortsControls)
+TEST(OrcaUXNameTags, WornTagsKeepEveryMenuChoice)
 {
   const std::vector<Orca::Events::PortInfo> carries{{0, "zeke", false, Profile(0, CustomLayout())}};
   const auto untouched = [](FakeBrawl& m, const std::vector<Orca::Events::PortInfo>& ports) {
@@ -2279,7 +2273,7 @@ TEST(OrcaUXNameTags, OnlyAWornTagHoldingExactlyTheDefaultsGetsThePortsControls)
     Wear(m, 0, 101);
     Wear(m, 1, 100);
     EXPECT_EQ(ApplyNameTags(m, {{1, "ada", true, Profile(0, CustomLayout())}}), 0);
-    EXPECT_EQ(TagLayout(m, 100), CustomLayout());
+    EXPECT_EQ(TagLayout(m, 100), FakeBrawl::CONTROLS);
     EXPECT_EQ(TagLayout(m, 101), FakeBrawl::CONTROLS);
     EXPECT_EQ(TagLayout(m, 102), FakeBrawl::CONTROLS);
     EXPECT_EQ(m.Read8(FakeBrawl::Tag(101) + 0x0C), 1);
@@ -2564,8 +2558,8 @@ TEST(OrcaUXNameTags, AcrossRestartsATagMadeAgainKeepsTheKeptControls)
     for (int f = 0; f < 3; ++f)
       frame();
     EXPECT_TRUE(published.empty()) << "run " << run;
-    EXPECT_EQ(TagLayout(m, 118), CustomLayout()) << "run " << run;
-    EXPECT_EQ(m.Read8(FakeBrawl::Tag(118) + 0x0C), 0) << "run " << run;
+    EXPECT_EQ(TagLayout(m, 118), FakeBrawl::CONTROLS) << "run " << run;
+    EXPECT_EQ(m.Read8(FakeBrawl::Tag(118) + 0x0C), 1) << "run " << run;
     if (!published.empty())
       kept = published.back();
   }
@@ -2584,12 +2578,11 @@ TEST(OrcaUXNameTags, TheOwnControlsReadComesAfterTheWrites)
     EXPECT_FALSE(NameTagsFrame(m, ports, ports, &reader, custom, 0));
     EXPECT_EQ(m.TagName(0), u"P1");
     EXPECT_EQ(TagLayout(m, 0), CustomLayout());
-    // They make MYTAG again (the game makes it at its defaults) and wear it: the same frame gives
-    // it their controls, and the read sees those, not the defaults.
+    // They make MYTAG again at the defaults and choose it: their choice stays intact.
     GameMadeTag(m, 118, u"MYTAG");
     Wear(m, 0, 118);
     EXPECT_FALSE(NameTagsFrame(m, ports, ports, &reader, custom, 0));
-    EXPECT_EQ(TagLayout(m, 118), CustomLayout());
+    EXPECT_EQ(TagLayout(m, 118), FakeBrawl::CONTROLS);
     EXPECT_FALSE(NameTagsFrame(m, ports, ports, &reader, custom, 0));
     // Their own edit of it is still their change.
     m.Write8(FakeBrawl::Tag(118) + 0x14, 0x04);
@@ -2599,22 +2592,22 @@ TEST(OrcaUXNameTags, TheOwnControlsReadComesAfterTheWrites)
     EXPECT_EQ((*edited)[1], 0x04);
   }
   {
-    // The defaults land in the very tag the port wears on the character select: Orca puts the
-    // controls back in the same frame, and the read after the writes sees no change.
+    // The worn tag gets reset to the defaults: the menu choice stays, and a default-only
+    // switch still does not replace the stored account profile.
     FakeBrawl m;
     m.Join(0);
     OwnControlsReader reader;
     EXPECT_FALSE(NameTagsFrame(m, ports, ports, &reader, custom, 0));
     GameMadeTag(m, 0, u"ZEKE");
     EXPECT_FALSE(NameTagsFrame(m, ports, ports, &reader, custom, 0));
-    EXPECT_EQ(TagLayout(m, 0), CustomLayout());
-    // Read before the writes (the old order), that frame published the defaults.
+    EXPECT_EQ(TagLayout(m, 0), FakeBrawl::CONTROLS);
+    // Reading before the hook follows the same default-switch rule.
     FakeBrawl old;
     old.Join(0);
     OwnControlsReader before;
     EXPECT_FALSE(NameTagsFrame(old, ports, ports, &before, custom, 0));
     GameMadeTag(old, 0, u"ZEKE");
-    EXPECT_EQ(before.Read(old, ports, custom, 0), Profile(1, FakeBrawl::CONTROLS));
+    EXPECT_FALSE(before.Read(old, ports, custom, 0));
   }
   {
     // Re-runs and sessions: the writes only.
@@ -4464,4 +4457,29 @@ TEST(OrcaUXYgOrb, LiveWordsKeepTheirEndAndAreCutBeforeAWord)
   // Half of a two-byte e acute and "s" fit two: the cut stays after the e.
   EXPECT_EQ(FitSuffix("caf\xC3\xA9s", 2, w), 5u);
   EXPECT_EQ(FitSuffix("ab", 0, w), 2u);
+}
+
+TEST(OrcaUXNameTags, SelectedSmashControlsSurviveAStaleAccountTiltProfile)
+{
+  FakeBrawl host, joiner;
+  auto tilt = FakeBrawl::CONTROLS;
+  tilt[8] = 1;  // C-stick: Attack, instead of the default Smash action (5).
+  for (auto* memory : {&host, &joiner})
+  {
+    GameMadeTag(*memory, 40, u"SMASH");
+    memory->Join(0);
+    memory->Join(1);
+    Wear(*memory, 1, 40);
+  }
+  for (int frame = 0; frame < 60; ++frame)
+  {
+    ApplyNameTags(host, {{0, "host", false}, {1, "friend", true, Profile(1, tilt)}});
+    ApplyNameTags(joiner, {{0, "host", true}, {1, "friend", false, Profile(1, tilt)}});
+    EXPECT_EQ(TagLayout(host, 40), FakeBrawl::CONTROLS);
+    EXPECT_EQ(host.bytes, joiner.bytes);
+  }
+  host.W32(FakeBrawl::SCENE, 0x806ff300);  // Outside character select: no writes.
+  host.recording = true;
+  ApplyNameTags(host, {{1, "friend", true, Profile(1, tilt)}});
+  EXPECT_TRUE(host.written.empty());
 }
