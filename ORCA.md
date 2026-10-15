@@ -2660,6 +2660,10 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.45
+
+- Watch your recorded matches again from the site.
+
 ### 0.3.44
 
 - **Friends rooms ride through short connection drops.** If your connection drops for a moment, the room
