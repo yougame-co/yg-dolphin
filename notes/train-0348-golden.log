@@ -1,0 +1,12 @@
+Running main() from UnitTestsMain.cpp
+Note: Google Test filter = OrcaReplayStream.HeaderBytesMatchRoomsGoldenFixture
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from OrcaReplayStream
+[ RUN      ] OrcaReplayStream.HeaderBytesMatchRoomsGoldenFixture
+[       OK ] OrcaReplayStream.HeaderBytesMatchRoomsGoldenFixture (0 ms)
+[----------] 1 test from OrcaReplayStream (0 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (0 ms total)
+[  PASSED  ] 1 test.

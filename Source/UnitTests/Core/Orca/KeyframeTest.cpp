@@ -27,6 +27,7 @@
 #include "Common/FileUtil.h"
 #include "Common/IOFile.h"
 #include "Common/ScopeGuard.h"
+#include "Common/StringUtil.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Keyframe.h"
 #include "Core/Rollback/ReplayStream.h"
@@ -854,6 +855,26 @@ std::vector<u8> Stream(const ReplayArchive& replay, size_t per_chunk)
   return out;
 }
 }  // namespace
+
+// Changing this header also requires updating rooms/test/fixtures/yg-dolphin-stream-header.json;
+// its "about" field describes the refresh steps.
+TEST(OrcaReplayStream, HeaderBytesMatchRoomsGoldenFixture)
+{
+  auto info = StreamInfo();
+  EXPECT_EQ(Common::BytesToHexString(PackReplayStreamHeader(info)),
+            "5947525301000000ab0000007b226275696c64223a2230313233343536373839616263646566222c22636f6d70617422"
+            "3a226f726361323a74657374222c2266697273745f6672616d65223a3530302c2267616d65223a22525342453031222c"
+            "226f726967696e5f68617368223a2231323334353637383961626364656630222c22726f6f6d223a2261626331323322"
+            "2c22736561745f6c6162656c73223a66616c73652c227365676d656e74223a322c2276223a327d");
+  info.seat_labels = true;
+  EXPECT_EQ(Common::BytesToHexString(PackReplayStreamHeader(info)),
+            "5947525301000000aa0000007b226275696c64223a2230313233343536373839616263646566222c22636f6d70617422"
+            "3a226f726361323a74657374222c2266697273745f6672616d65223a3530302c2267616d65223a22525342453031222c"
+            "226f726967696e5f68617368223a2231323334353637383961626364656630222c22726f6f6d223a2261626331323322"
+            "2c22736561745f6c6162656c73223a747275652c227365676d656e74223a322c2276223a327d");
+  // The XML report carries the real chunked sample used in notes/train-0348-replay-fixture.md.
+  RecordProperty("chunked_fixture_hex", Common::BytesToHexString(Stream(Replay(30, 0), 10)));
+}
 
 // A game's saved copy is the written live stream (small chunks, every checksum) read back and packed
 // compactly. The room's pieces can split a compressed chunk; joined, they read as the same match.

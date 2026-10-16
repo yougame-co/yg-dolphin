@@ -9,365 +9,1104 @@ CMake Warning (deprecated) at CMakeLists.txt:6 (cmake_policy):
 This warning is for project developers.  Use -Wno-author or -Wno-deprecated
 to suppress it.
 
--- The C compiler identification is AppleClang 17.0.0.17000603
--- The CXX compiler identification is AppleClang 17.0.0.17000603
--- Detecting C compiler ABI info
--- Detecting C compiler ABI info - done
--- Check for working C compiler: /usr/bin/cc - skipped
--- Detecting C compile features
--- Detecting C compile features - done
--- Detecting CXX compiler ABI info
--- Detecting CXX compiler ABI info - done
--- Check for working CXX compiler: /usr/bin/c++ - skipped
--- Detecting CXX compile features
--- Detecting CXX compile features - done
 -- Using AppleClang 17.0.0.17000603
--- Looking for _GLIBCXX_RELEASE
--- Looking for _GLIBCXX_RELEASE - not found
--- Looking for _LIBCPP_VERSION
--- Looking for _LIBCPP_VERSION - found
--- Performing Test HAS_MINIMUM_LLVM_libc++
--- Performing Test HAS_MINIMUM_LLVM_libc++ - Success
--- The OBJC compiler identification is AppleClang 17.0.0.17000603
--- Detecting OBJC compiler ABI info
--- Detecting OBJC compiler ABI info - done
--- Check for working OBJC compiler: /usr/bin/clang - skipped
--- The OBJCXX compiler identification is AppleClang 17.0.0.17000603
--- Detecting OBJCXX compiler ABI info
--- Detecting OBJCXX compiler ABI info - done
--- Check for working OBJCXX compiler: /usr/bin/clang++ - skipped
 -- Detected architecture: arm64
--- Performing Test FLAG_C_HAVE_ARCH_ARMV8
--- Performing Test FLAG_C_HAVE_ARCH_ARMV8 - Success
--- Performing Test FLAG_CXX_HAVE_ARCH_ARMV8
--- Performing Test FLAG_CXX_HAVE_ARCH_ARMV8 - Success
--- Performing Test FLAG_C_DIAGNOSTICS_COLOR
--- Performing Test FLAG_C_DIAGNOSTICS_COLOR - Success
--- Performing Test FLAG_CXX_DIAGNOSTICS_COLOR
--- Performing Test FLAG_CXX_DIAGNOSTICS_COLOR - Success
--- Performing Test FLAG_C_NO_STRICT_ALIASING
--- Performing Test FLAG_C_NO_STRICT_ALIASING - Success
--- Performing Test FLAG_CXX_NO_STRICT_ALIASING
--- Performing Test FLAG_CXX_NO_STRICT_ALIASING - Success
--- Performing Test FLAG_C_NO_EXCEPTIONS
--- Performing Test FLAG_C_NO_EXCEPTIONS - Success
--- Performing Test FLAG_CXX_NO_EXCEPTIONS
--- Performing Test FLAG_CXX_NO_EXCEPTIONS - Success
--- Performing Test FLAG_C_VISIBILITY_INLINES_HIDDEN
--- Performing Test FLAG_C_VISIBILITY_INLINES_HIDDEN - Success
--- Performing Test FLAG_CXX_VISIBILITY_INLINES_HIDDEN
--- Performing Test FLAG_CXX_VISIBILITY_INLINES_HIDDEN - Success
--- Performing Test FLAG_C_VISIBILITY_HIDDEN
--- Performing Test FLAG_C_VISIBILITY_HIDDEN - Success
--- Performing Test FLAG_CXX_VISIBILITY_HIDDEN
--- Performing Test FLAG_CXX_VISIBILITY_HIDDEN - Success
--- Performing Test FLAG_C_FOMIT_FRAME_POINTER
--- Performing Test FLAG_C_FOMIT_FRAME_POINTER - Success
--- Performing Test FLAG_CXX_FOMIT_FRAME_POINTER
--- Performing Test FLAG_CXX_FOMIT_FRAME_POINTER - Success
--- Performing Test FLAG_C_GGDB
--- Performing Test FLAG_C_GGDB - Success
--- Performing Test FLAG_CXX_GGDB
--- Performing Test FLAG_CXX_GGDB - Success
--- Performing Test CMAKE_HAVE_LIBC_PTHREAD
--- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
--- Found Threads: TRUE
--- Found PkgConfig: /opt/homebrew/bin/pkg-config (found version "3.0.7")
--- Found OpenGL: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk/System/Library/Frameworks/OpenGL.framework
 -- Using named pipes as controller inputs
 -- Watching game memory for changes
 -- Using static FMT from Externals
-CMake Error at Externals/fmt/CMakeLists.txt:1 (add_subdirectory):
-  The source directory
-
-    /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Externals/fmt/fmt
-
-  does not contain a CMakeLists.txt file.
-
-
-CMake Error at CMake/DolphinDisableWarningsMSVC.cmake:4 (get_target_property):
-  get_target_property() called with non-existent target "fmt".
-Call Stack (most recent call first):
-  Externals/fmt/CMakeLists.txt:2 (dolphin_disable_warnings)
-
-
+-- {fmt} version: 12.0.0
+-- Build type: Release
+-- Performing Test HAS_NULLPTR_WARNING
+-- Performing Test HAS_NULLPTR_WARNING - Success
 -- Using static glslang from Externals
-CMake Error at Externals/glslang/CMakeLists.txt:9 (add_subdirectory):
-  The source directory
-
-    /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Externals/glslang/glslang
-
-  does not contain a CMakeLists.txt file.
-
-
--- Found Iconv: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk/usr/lib/libiconv.tbd (Required is at least version "1.14")
 -- Using system Iconv
 -- Using static pugixml from Externals
-CMake Error at Externals/pugixml/CMakeLists.txt:6 (add_subdirectory):
-  The source directory
-
-    /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Externals/pugixml/pugixml
-
-  does not contain a CMakeLists.txt file.
-
-
-CMake Error at CMake/DolphinDisableWarningsMSVC.cmake:4 (get_target_property):
-  get_target_property() called with non-existent target "pugixml-static".
-Call Stack (most recent call first):
-  Externals/pugixml/CMakeLists.txt:7 (dolphin_disable_warnings)
-
-
 -- Using static ENET from Externals
-CMake Error at Externals/enet/CMakeLists.txt:1 (add_subdirectory):
-  The source directory
-
-    /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Externals/enet/enet
-
-  does not contain a CMakeLists.txt file.
-
-
-CMake Error at CMake/DolphinDisableWarningsMSVC.cmake:4 (get_target_property):
-  get_target_property() called with non-existent target "enet".
-Call Stack (most recent call first):
-  Externals/enet/CMakeLists.txt:3 (dolphin_disable_warnings)
-
-
-CMake Error at Externals/enet/CMakeLists.txt:4 (add_library):
-  add_library cannot create ALIAS target "enet::enet" because target "enet"
-  does not already exist.
-
-
-CMake Error at Externals/enet/CMakeLists.txt:5 (target_include_directories):
-  Cannot specify include directories for target "enet" which is not built by
-  this project.
-
-
+-- Looking for fcntl
+-- Looking for fcntl - found
+-- Looking for poll
+-- Looking for poll - found
+-- Looking for getaddrinfo
+-- Looking for getaddrinfo - found
+-- Looking for getnameinfo
+-- Looking for getnameinfo - found
+-- Looking for gethostbyname_r
+-- Looking for gethostbyname_r - not found
+-- Looking for gethostbyaddr_r
+-- Looking for gethostbyaddr_r - not found
+-- Looking for inet_pton
+-- Looking for inet_pton - found
+-- Looking for inet_ntop
+-- Looking for inet_ntop - found
+-- Performing Test HAS_MSGHDR_FLAGS
+-- Performing Test HAS_MSGHDR_FLAGS - Success
+-- Check size of socklen_t
+-- Check size of socklen_t - done
 -- Using static xxhash from Externals
 -- Using static BZip2 from Externals
--- Looking for sys/types.h
--- Looking for sys/types.h - found
--- Looking for stdint.h
--- Looking for stdint.h - found
--- Looking for stddef.h
--- Looking for stddef.h - found
--- Check size of off64_t
--- Check size of off64_t - failed
--- Looking for fseeko
--- Looking for fseeko - found
--- Looking for unistd.h
--- Looking for unistd.h - found
 -- Using static LibLZMA from Externals
 -- Using static ZSTD from Externals
-CMake Error at Externals/zstd/CMakeLists.txt:7 (add_subdirectory):
-  The source directory
-
-    /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Externals/zstd/zstd
-
-  does not contain a CMakeLists.txt file.
-
-
-CMake Error at CMake/DolphinDisableWarningsMSVC.cmake:4 (get_target_property):
-  get_target_property() called with non-existent target "libzstd_static".
-Call Stack (most recent call first):
-  Externals/zstd/CMakeLists.txt:9 (dolphin_disable_warnings)
-
-
-CMake Error at Externals/zstd/CMakeLists.txt:10 (add_library):
-  add_library cannot create ALIAS target "zstd::zstd" because target
-  "libzstd_static" does not already exist.
-
-
+-- ZSTD VERSION: 1.5.8
+-- CMAKE_INSTALL_PREFIX: /usr/local
+-- CMAKE_INSTALL_LIBDIR: lib
+-- ZSTD_LEGACY_SUPPORT enabled
+-- Multi-threading support enabled
+-- Performing Test C_FLAG_WALL
+-- Performing Test C_FLAG_WALL - Success
+-- Performing Test CXX_FLAG_WALL
+-- Performing Test CXX_FLAG_WALL - Success
+-- Performing Test C_FLAG_WEXTRA
+-- Performing Test C_FLAG_WEXTRA - Success
+-- Performing Test CXX_FLAG_WEXTRA
+-- Performing Test CXX_FLAG_WEXTRA - Success
+-- Performing Test C_FLAG_WUNDEF
+-- Performing Test C_FLAG_WUNDEF - Success
+-- Performing Test CXX_FLAG_WUNDEF
+-- Performing Test CXX_FLAG_WUNDEF - Success
+-- Performing Test C_FLAG_WSHADOW
+-- Performing Test C_FLAG_WSHADOW - Success
+-- Performing Test CXX_FLAG_WSHADOW
+-- Performing Test CXX_FLAG_WSHADOW - Success
+-- Performing Test C_FLAG_WCAST_ALIGN
+-- Performing Test C_FLAG_WCAST_ALIGN - Success
+-- Performing Test CXX_FLAG_WCAST_ALIGN
+-- Performing Test CXX_FLAG_WCAST_ALIGN - Success
+-- Performing Test C_FLAG_WCAST_QUAL
+-- Performing Test C_FLAG_WCAST_QUAL - Success
+-- Performing Test CXX_FLAG_WCAST_QUAL
+-- Performing Test CXX_FLAG_WCAST_QUAL - Success
+-- Performing Test C_FLAG_WSTRICT_PROTOTYPES
+-- Performing Test C_FLAG_WSTRICT_PROTOTYPES - Success
+-- Performing Test LD_FLAG_WL_Z_NOEXECSTACK
+-- Performing Test LD_FLAG_WL_Z_NOEXECSTACK - Failed
+-- Performing Test C_FLAG_QUNUSED_ARGUMENTS
+-- Performing Test C_FLAG_QUNUSED_ARGUMENTS - Success
+-- Performing Test CXX_FLAG_QUNUSED_ARGUMENTS
+-- Performing Test CXX_FLAG_QUNUSED_ARGUMENTS - Success
+-- Performing Test C_FLAG_WA_NOEXECSTACK
+-- Performing Test C_FLAG_WA_NOEXECSTACK - Success
+-- Performing Test CXX_FLAG_WA_NOEXECSTACK
+-- Performing Test CXX_FLAG_WA_NOEXECSTACK - Success
 -- Using static ZLIB from Externals
-CMake Error at Externals/zlib-ng/CMakeLists.txt:7 (add_subdirectory):
-  The source directory
+CMake Warning (deprecated) at Externals/zlib-ng/zlib-ng/CMakeLists.txt:1 (cmake_minimum_required):
+  Compatibility with CMake < 3.10 will be removed from a future version of
+  CMake.
 
-    /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Externals/zlib-ng/zlib-ng
+  Update the VERSION argument <min> value.  Or, use the <min>...<max> syntax
+  to tell CMake that the project requires at least <min> but has been updated
+  to work with policies introduced by <max> or earlier.
+This warning is for project developers.  Use -Wno-author or -Wno-deprecated
+to suppress it.
 
-  does not contain a CMakeLists.txt file.
+-- Using CMake version 4.4.3
+-- ZLIB_HEADER_VERSION: 1.2.12
+-- ZLIBNG_HEADER_VERSION: 2.1.0.devel
+-- Arch detected: 'arm64'
+-- Basearch of 'arm64' has been detected as: 'arm'
+-- Performing Test HAVE_FLOATABI_SOFTFP
+-- Performing Test HAVE_FLOATABI_SOFTFP - Failed
+-- Performing Test HAVE_FLOATABI_HARD
+-- Performing Test HAVE_FLOATABI_HARD - Failed
+-- ARM floating point arch not auto-detected
+-- Performing Test FNO_LTO_AVAILABLE
+-- Performing Test FNO_LTO_AVAILABLE - Success
+-- Looking for sys/auxv.h
+-- Looking for sys/auxv.h - not found
+-- Looking for sys/sdt.h
+-- Looking for sys/sdt.h - found
+-- Check size of _off64_t
+-- Check size of _off64_t - failed
+-- Check size of __off64_t
+-- Check size of __off64_t - failed
+-- Looking for strerror
+-- Looking for strerror - found
+-- Looking for posix_memalign
+-- Looking for posix_memalign - found
+-- Performing Test HAVE_NO_INTERPOSITION
+-- Performing Test HAVE_NO_INTERPOSITION - Success
+-- Performing Test HAVE_ATTRIBUTE_VISIBILITY_HIDDEN
+-- Performing Test HAVE_ATTRIBUTE_VISIBILITY_HIDDEN - Success
+-- Performing Test HAVE_ATTRIBUTE_VISIBILITY_INTERNAL
+-- Performing Test HAVE_ATTRIBUTE_VISIBILITY_INTERNAL - Success
+-- Performing Test HAVE_BUILTIN_CTZ
+-- Performing Test HAVE_BUILTIN_CTZ - Success
+-- Performing Test HAVE_BUILTIN_CTZLL
+-- Performing Test HAVE_BUILTIN_CTZLL - Success
+-- Performing Test HAVE_PTRDIFF_T
+-- Performing Test HAVE_PTRDIFF_T - Success
+-- Performing Test HAVE_ACLE_FLAG
+-- Performing Test HAVE_ACLE_FLAG - Success
+-- Performing Test MFPU_NEON_AVAILABLE
+-- Performing Test MFPU_NEON_AVAILABLE - Success
+-- Performing Test NEON_HAS_LD4
+-- Performing Test NEON_HAS_LD4 - Success
+-- Architecture-specific source files: arch/arm/arm_features.c;arch/arm/crc32_acle.c;arch/arm/insert_string_acle.c;arch/arm/adler32_neon.c;arch/arm/chunkset_neon.c;arch/arm/compare256_neon.c;arch/arm/slide_hash_neon.c
+-- The following features have been enabled:
 
+ * CMAKE_BUILD_TYPE, Build type: Release (selected)
+ * ACLE_CRC, Support ACLE optimized CRC hash generation, using "-march=armv8-a+crc"
+ * NEON_ADLER32, Support NEON instructions in adler32, using "-mfpu=neon"
+ * NEON_SLIDEHASH, Support NEON instructions in slide_hash, using "-mfpu=neon"
+ * WITH_GZFILEOP, Compile with support for gzFile related functions
+ * ZLIB_COMPAT, Compile with zlib compatible API
+ * WITH_SANITIZER, Enable sanitizer support
+ * WITH_OPTIM, Build with optimisation
+ * WITH_NEW_STRATEGIES, Use new strategies
+ * WITH_ACLE, Build with ACLE
+ * WITH_NEON, Build with NEON intrinsics
 
-CMake Error at Externals/zlib-ng/CMakeLists.txt:14 (add_library):
-  add_library cannot create ALIAS target "ZLIB::ZLIB" because target "zlib"
-  does not already exist.
+-- The following OPTIONAL packages have been found:
 
+ * PkgConfig
+ * OpenGL
+ * Iconv (required version >= 1.14)
 
-CMake Error at CMake/DolphinDisableWarningsMSVC.cmake:4 (get_target_property):
-  get_target_property() called with non-existent target "zlib".
-Call Stack (most recent call first):
-  Externals/zlib-ng/CMakeLists.txt:15 (dolphin_disable_warnings)
+-- The following REQUIRED packages have been found:
 
+ * Threads
+
+-- The following features have been disabled:
+
+ * ZLIB_SYMBOL_PREFIX, Publicly exported symbols DO NOT have a custom prefix
+ * ZLIB_ENABLE_TESTS, Build test binaries
+ * WITH_FUZZERS, Build test/fuzz
+ * WITH_BENCHMARKS, Build test/benchmarks
+ * WITH_BENCHMARK_APPS, Build application benchmarks
+ * WITH_NATIVE_INSTRUCTIONS, Instruct the compiler to use the full instruction set on this host (gcc/clang -march=native)
+ * WITH_MAINTAINER_WARNINGS, Build with project maintainer warnings
+ * WITH_CODE_COVERAGE, Enable code coverage reporting
+ * WITH_INFLATE_STRICT, Build with strict inflate distance checking
+ * WITH_INFLATE_ALLOW_INVALID_DIST, Build with zero fill for inflate invalid distances
+ * INSTALL_UTILS, Copy minigzip and minideflate during install
 
 -- Using static minizip-ng from Externals
-CMake Error at Externals/minizip-ng/CMakeLists.txt:36 (get_target_property):
-  get_target_property() called with non-existent target "zstd::zstd".
+-- Using CMake version 4.4.3
+-- Using LZMA
+-- Using ZSTD
+-- Using Iconv
+-- The following features have been enabled:
 
+ * CMAKE_BUILD_TYPE, Build type: Release (selected)
+ * ACLE_CRC, Support ACLE optimized CRC hash generation, using "-march=armv8-a+crc"
+ * NEON_ADLER32, Support NEON instructions in adler32, using "-mfpu=neon"
+ * NEON_SLIDEHASH, Support NEON instructions in slide_hash, using "-mfpu=neon"
+ * WITH_GZFILEOP, Compile with support for gzFile related functions
+ * ZLIB_COMPAT, Compile with zlib compatible API
+ * WITH_SANITIZER, Enable sanitizer support
+ * WITH_OPTIM, Build with optimisation
+ * WITH_NEW_STRATEGIES, Use new strategies
+ * WITH_ACLE, Build with ACLE
+ * WITH_NEON, Build with NEON intrinsics
+ * MZ_LZMA, Enables LZMA & XZ compression
+ * MZ_ZSTD, Enables ZSTD compression
+ * MZ_LIBCOMP, Enables Apple compression
+ * MZ_ICONV, Enables iconv string encoding conversion library
 
-CMake Error at Externals/minizip-ng/CMakeLists.txt:43 (add_subdirectory):
-  The source directory
+-- The following features have been disabled:
 
-    /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Externals/minizip-ng/minizip-ng
-
-  does not contain a CMakeLists.txt file.
-
-
-CMake Error at CMake/DolphinDisableWarningsMSVC.cmake:4 (get_target_property):
-  get_target_property() called with non-existent target "minizip-ng".
-Call Stack (most recent call first):
-  Externals/minizip-ng/CMakeLists.txt:44 (dolphin_disable_warnings)
-
+ * ZLIB_SYMBOL_PREFIX, Publicly exported symbols DO NOT have a custom prefix
+ * ZLIB_ENABLE_TESTS, Build test binaries
+ * WITH_FUZZERS, Build test/fuzz
+ * WITH_BENCHMARKS, Build test/benchmarks
+ * WITH_BENCHMARK_APPS, Build application benchmarks
+ * WITH_NATIVE_INSTRUCTIONS, Instruct the compiler to use the full instruction set on this host (gcc/clang -march=native)
+ * WITH_MAINTAINER_WARNINGS, Build with project maintainer warnings
+ * WITH_CODE_COVERAGE, Enable code coverage reporting
+ * WITH_INFLATE_STRICT, Build with strict inflate distance checking
+ * WITH_INFLATE_ALLOW_INVALID_DIST, Build with zero fill for inflate invalid distances
+ * INSTALL_UTILS, Copy minigzip and minideflate during install
+ * MZ_COMPAT, Enables compatibility layer
+ * MZ_ZLIB, Enables ZLIB compression
+ * MZ_BZIP2, Enables BZIP2 compression
+ * MZ_FETCH_LIBS, Enables fetching third-party libraries if not found
+ * MZ_FORCE_FETCH_LIBS, Enables fetching third-party libraries always
+ * MZ_PKCRYPT, Enables PKWARE traditional encryption
+ * MZ_WZAES, Enables WinZIP AES encryption
+ * MZ_OPENSSL, Enables OpenSSL for encryption
+ * MZ_LIBBSD, Builds with libbsd crypto random
+ * MZ_COMPRESS_ONLY, Only support compression
+ * MZ_DECOMPRESS_ONLY, Only support decompression
+ * MZ_FILE32_API, Builds using posix 32-bit file api
+ * MZ_BUILD_TESTS, Builds minizip test executable
+ * MZ_BUILD_UNIT_TESTS, Builds minizip unit test project
+ * MZ_BUILD_FUZZ_TESTS, Builds minizip fuzzer executables
+ * MZ_CODE_COVERAGE, Builds with code coverage flags
 
 -- Using static LZO from Externals
 -- Using static lz4 from Externals
-CMake Error at Externals/lz4/CMakeLists.txt:9 (add_subdirectory):
-  add_subdirectory given source "lz4/build/cmake" which is not an existing
-  directory.
+CMake Warning (deprecated) at Externals/lz4/lz4/build/cmake/CMakeLists.txt:13 (cmake_minimum_required):
+  Compatibility with CMake < 3.10 will be removed from a future version of
+  CMake.
 
+  Update the VERSION argument <min> value.  Or, use the <min>...<max> syntax
+  to tell CMake that the project requires at least <min> but has been updated
+  to work with policies introduced by <max> or earlier.
+This warning is for project developers.  Use -Wno-author or -Wno-deprecated
+to suppress it.
 
-CMake Error at CMake/DolphinDisableWarningsMSVC.cmake:4 (get_target_property):
-  get_target_property() called with non-existent target "lz4_static".
-Call Stack (most recent call first):
-  Externals/lz4/CMakeLists.txt:11 (dolphin_disable_warnings)
-
-
-CMake Error at Externals/lz4/CMakeLists.txt:12 (add_library):
-  add_library cannot create ALIAS target "LZ4::LZ4" because target
-  "lz4_static" does not already exist.
-
-
-CMake Error at Externals/lz4/CMakeLists.txt:13 (target_compile_definitions):
-  Cannot specify compile definitions for target "lz4_static" which is not
-  built by this project.
-
-
+-- Performing Test CFLAG_Wall
+-- Performing Test CFLAG_Wall - Success
+-- Performing Test CFLAG_Wextra
+-- Performing Test CFLAG_Wextra - Success
+-- Performing Test CFLAG_Wundef
+-- Performing Test CFLAG_Wundef - Success
+-- Performing Test CFLAG_Wcast_qual
+-- Performing Test CFLAG_Wcast_qual - Success
+-- Performing Test CFLAG_Wcast_align
+-- Performing Test CFLAG_Wcast_align - Success
+-- Performing Test CFLAG_Wshadow
+-- Performing Test CFLAG_Wshadow - Success
+-- Performing Test CFLAG_Wswitch_enum
+-- Performing Test CFLAG_Wswitch_enum - Success
+-- Performing Test CFLAG_Wdeclaration_after_statement
+-- Performing Test CFLAG_Wdeclaration_after_statement - Success
+-- Performing Test CFLAG_Wstrict_prototypes
+-- Performing Test CFLAG_Wstrict_prototypes - Success
+-- Performing Test CFLAG_Wpointer_arith
+-- Performing Test CFLAG_Wpointer_arith - Success
+-- Performing Test CFLAG_W4
+-- Performing Test CFLAG_W4 - Failed
 -- Using static SPNG from Externals
-CMake Error at Externals/libspng/CMakeLists.txt:8 (add_subdirectory):
-  The source directory
-
-    /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Externals/libspng/libspng
-
-  does not contain a CMakeLists.txt file.
-
-
-CMake Error at Externals/libspng/CMakeLists.txt:12 (add_library):
-  add_library cannot create ALIAS target "spng::spng" because target
-  "spng_static" does not already exist.
-
-
+-- Found ZLIB: ZLIB::ZLIB
 -- Using static FreeSurround from Externals
 -- Using ed25519 from Externals
 -- Using static CUBEB from Externals
--- Performing Test COMPILER_HAS_HIDDEN_VISIBILITY
--- Performing Test COMPILER_HAS_HIDDEN_VISIBILITY - Success
--- Performing Test COMPILER_HAS_HIDDEN_INLINE_VISIBILITY
--- Performing Test COMPILER_HAS_HIDDEN_INLINE_VISIBILITY - Success
--- Performing Test COMPILER_HAS_DEPRECATED_ATTR
--- Performing Test COMPILER_HAS_DEPRECATED_ATTR - Success
-CMake Error: File /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Externals/cubeb/cubeb/Config.cmake.in does not exist.
-CMake Error at /opt/homebrew/share/cmake/Modules/CMakePackageConfigHelpers.cmake:549 (configure_file):
-  configure_file Problem configuring file
-Call Stack (most recent call first):
-  Externals/cubeb/CMakeLists.txt:100 (configure_package_config_file)
-
-
 -- Checking for module 'speexdsp'
 --   Package 'speexdsp' not found
--- Looking for include file pulse/pulseaudio.h
--- Looking for include file pulse/pulseaudio.h - not found
--- Looking for include file alsa/asoundlib.h
--- Looking for include file alsa/asoundlib.h - not found
--- Looking for include file jack/jack.h
--- Looking for include file jack/jack.h - not found
--- Looking for include file sndio.h
--- Looking for include file sndio.h - not found
--- Looking for include file AudioUnit/AudioUnit.h
--- Looking for include file AudioUnit/AudioUnit.h - found
--- Looking for include file audioclient.h
--- Looking for include file audioclient.h - not found
--- Looking for include files windows.h, mmsystem.h
--- Looking for include files windows.h, mmsystem.h - not found
--- Looking for include file SLES/OpenSLES.h
--- Looking for include file SLES/OpenSLES.h - not found
--- Looking for include file sys/soundcard.h
--- Looking for include file sys/soundcard.h - not found
--- Looking for include file android/log.h
--- Looking for include file android/log.h - not found
--- Looking for include file sys/audioio.h
--- Looking for include file sys/audioio.h - not found
--- Looking for include file kai.h
--- Looking for include file kai.h - not found
 -- Using static LibUSB from Externals
--- Looking for include file asm/types.h
--- Looking for include file asm/types.h - not found
--- Looking for clock_gettime
--- Looking for clock_gettime - found
--- Looking for EFD_CLOEXEC
--- Looking for EFD_CLOEXEC - not found
--- Looking for EFD_NONBLOCK
--- Looking for EFD_NONBLOCK - not found
--- Looking for TFD_CLOEXEC
--- Looking for TFD_CLOEXEC - not found
--- Looking for TFD_NONBLOCK
--- Looking for TFD_NONBLOCK - not found
--- Looking for include file dlfcn.h
--- Looking for include file dlfcn.h - found
--- Looking for include file sys/eventfd.h
--- Looking for include file sys/eventfd.h - not found
--- Looking for include file inttypes.h
--- Looking for include file inttypes.h - found
--- Looking for include file IOKit/usb/IOUSBHostFamilyDefinitions.h
--- Looking for include file IOKit/usb/IOUSBHostFamilyDefinitions.h - found
--- Looking for include file memory.h
--- Looking for include file memory.h - found
--- Check size of nfds_t
--- Check size of nfds_t - done
--- Looking for pipe2
--- Looking for pipe2 - not found
--- Looking for pthread_condattr_setclock
--- Looking for pthread_condattr_setclock - not found
--- Looking for pthread_setname_np
--- Looking for pthread_setname_np - found
--- Looking for pthread_threadid_np
--- Looking for pthread_threadid_np - found
--- Looking for include file stdlib.h
--- Looking for include file stdlib.h - found
--- Looking for include file strings.h
--- Looking for include file strings.h - found
--- Looking for include file string.h
--- Looking for include file string.h - found
--- Check size of struct timespec
--- Check size of struct timespec - failed
--- Looking for syslog
--- Looking for syslog - found
--- Looking for include file sys/stat.h
--- Looking for include file sys/stat.h - found
--- Looking for include file sys/time.h
--- Looking for include file sys/time.h - found
--- Looking for include file sys/timerfd.h
--- Looking for include file sys/timerfd.h - not found
 -- Using static SDL3 from Externals
-CMake Error at Externals/SDL/CMakeLists.txt:28 (add_subdirectory):
-  The source directory
-
-    /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Externals/SDL/SDL
-
-  does not contain a CMakeLists.txt file.
-
-
+-- Performing Test HAVE_GCC_WALL
+-- Performing Test HAVE_GCC_WALL - Success
+-- Performing Test HAVE_GCC_WUNDEF
+-- Performing Test HAVE_GCC_WUNDEF - Success
+-- Performing Test HAVE_GCC_WFLOAT_CONVERSION
+-- Performing Test HAVE_GCC_WFLOAT_CONVERSION - Success
+-- Performing Test HAVE_GCC_NO_STRICT_ALIASING
+-- Performing Test HAVE_GCC_NO_STRICT_ALIASING - Success
+-- Performing Test HAVE_GCC_WDOCUMENTATION
+-- Performing Test HAVE_GCC_WDOCUMENTATION - Success
+-- Performing Test HAVE_GCC_WDOCUMENTATION_UNKNOWN_COMMAND
+-- Performing Test HAVE_GCC_WDOCUMENTATION_UNKNOWN_COMMAND - Success
+-- Performing Test HAVE_GCC_COMMENT_BLOCK_COMMANDS
+-- Performing Test HAVE_GCC_COMMENT_BLOCK_COMMANDS - Success
+-- Performing Test HAVE_GCC_WSHADOW
+-- Performing Test HAVE_GCC_WSHADOW - Success
+-- Performing Test HAVE_GCC_WUNUSED_LOCAL_TYPEDEFS
+-- Performing Test HAVE_GCC_WUNUSED_LOCAL_TYPEDEFS - Success
+-- Performing Test HAVE_GCC_WIMPLICIT_FALLTHROUGH
+-- Performing Test HAVE_GCC_WIMPLICIT_FALLTHROUGH - Success
+-- Performing Test COMPILER_SUPPORTS_FCOLOR_DIAGNOSTICS
+-- Performing Test COMPILER_SUPPORTS_FCOLOR_DIAGNOSTICS - Success
+-- Looking for __GLIBC__
+-- Looking for __GLIBC__ - not found
+-- Performing Test HAVE_WL_VERSION_SCRIPT
+-- Performing Test HAVE_WL_VERSION_SCRIPT - Failed
+-- Performing Test COMPILER_SUPPORTS_GCC_ATOMICS
+-- Performing Test COMPILER_SUPPORTS_GCC_ATOMICS - Success
+-- Performing Test HAVE_GCC_FVISIBILITY
+-- Performing Test HAVE_GCC_FVISIBILITY - Success
+-- Performing Test COMPILER_SUPPORTS_WNO_ERROR_DEPRECATED_DECLARATIONS
+-- Performing Test COMPILER_SUPPORTS_WNO_ERROR_DEPRECATED_DECLARATIONS - Success
+-- Performing Test COMPILER_SUPPORTS_WNO_DEPRECATED_DECLARATIONS
+-- Performing Test COMPILER_SUPPORTS_WNO_DEPRECATED_DECLARATIONS - Success
+-- Performing Test LINKER_SUPPORTS_WL_NO_UNDEFINED
+-- Performing Test LINKER_SUPPORTS_WL_NO_UNDEFINED - Failed
+-- Performing Test COMPILER_SUPPORTS_ARMNEON
+-- Performing Test COMPILER_SUPPORTS_ARMNEON - Success
+-- Looking for alloca.h
+-- Looking for alloca.h - found
+-- Looking for float.h
+-- Looking for float.h - found
+-- Looking for iconv.h
+-- Looking for iconv.h - found
+-- Looking for inttypes.h
+-- Looking for inttypes.h - found
+-- Looking for limits.h
+-- Looking for limits.h - found
+-- Looking for malloc.h
+-- Looking for malloc.h - not found
+-- Looking for math.h
+-- Looking for math.h - found
+-- Looking for memory.h
+-- Looking for memory.h - found
+-- Looking for signal.h
+-- Looking for signal.h - found
+-- Looking for stdarg.h
+-- Looking for stdarg.h - found
+-- Looking for stdbool.h
+-- Looking for stdbool.h - found
+-- Looking for stddef.h
+-- Looking for stddef.h - found
+-- Looking for stdint.h
+-- Looking for stdint.h - found
+-- Looking for stdio.h
+-- Looking for stdio.h - found
+-- Looking for stdlib.h
+-- Looking for stdlib.h - found
+-- Looking for string.h
+-- Looking for string.h - found
+-- Looking for strings.h
+-- Looking for strings.h - found
+-- Looking for sys/types.h
+-- Looking for sys/types.h - found
+-- Looking for time.h
+-- Looking for time.h - found
+-- Looking for wchar.h
+-- Looking for wchar.h - found
+-- Looking for pow in m
+-- Looking for pow in m - found
+-- Looking for abs
+-- Looking for abs - found
+-- Looking for acos
+-- Looking for acos - found
+-- Looking for acosf
+-- Looking for acosf - found
+-- Looking for asin
+-- Looking for asin - found
+-- Looking for asinf
+-- Looking for asinf - found
+-- Looking for atan
+-- Looking for atan - found
+-- Looking for atan2
+-- Looking for atan2 - found
+-- Looking for atan2f
+-- Looking for atan2f - found
+-- Looking for atanf
+-- Looking for atanf - found
+-- Looking for atof
+-- Looking for atof - found
+-- Looking for atoi
+-- Looking for atoi - found
+-- Looking for bcopy
+-- Looking for bcopy - found
+-- Looking for ceil
+-- Looking for ceil - found
+-- Looking for ceilf
+-- Looking for ceilf - found
+-- Looking for copysign
+-- Looking for copysign - found
+-- Looking for copysignf
+-- Looking for copysignf - found
+-- Looking for cos
+-- Looking for cos - found
+-- Looking for cosf
+-- Looking for cosf - found
+-- Looking for _Exit
+-- Looking for _Exit - found
+-- Looking for exp
+-- Looking for exp - found
+-- Looking for expf
+-- Looking for expf - found
+-- Looking for fabs
+-- Looking for fabs - found
+-- Looking for fabsf
+-- Looking for fabsf - found
+-- Looking for floor
+-- Looking for floor - found
+-- Looking for floorf
+-- Looking for floorf - found
+-- Looking for fmod
+-- Looking for fmod - found
+-- Looking for fmodf
+-- Looking for fmodf - found
+-- Looking for fopen64
+-- Looking for fopen64 - not found
+-- Looking for fseeko
+-- Looking for fseeko - found
+-- Looking for fseeko64
+-- Looking for fseeko64 - not found
+-- Looking for getenv
+-- Looking for getenv - found
+-- Looking for _i64toa
+-- Looking for _i64toa - not found
+-- Looking for index
+-- Looking for index - found
+-- Looking for itoa
+-- Looking for itoa - not found
+-- Looking for log
+-- Looking for log - found
+-- Looking for log10
+-- Looking for log10 - found
+-- Looking for log10f
+-- Looking for log10f - found
+-- Looking for logf
+-- Looking for logf - found
+-- Looking for lround
+-- Looking for lround - found
+-- Looking for lroundf
+-- Looking for lroundf - found
+-- Looking for _ltoa
+-- Looking for _ltoa - not found
+-- Looking for malloc
+-- Looking for malloc - found
+-- Looking for memcmp
+-- Looking for memcmp - found
+-- Looking for memcpy
+-- Looking for memcpy - found
+-- Looking for memmove
+-- Looking for memmove - found
+-- Looking for memset
+-- Looking for memset - found
+-- Looking for modf
+-- Looking for modf - found
+-- Looking for modff
+-- Looking for modff - found
+-- Looking for pow
+-- Looking for pow - found
+-- Looking for powf
+-- Looking for powf - found
+-- Looking for putenv
+-- Looking for putenv - found
+-- Looking for rindex
+-- Looking for rindex - found
+-- Looking for round
+-- Looking for round - found
+-- Looking for roundf
+-- Looking for roundf - found
+-- Looking for scalbn
+-- Looking for scalbn - found
+-- Looking for scalbnf
+-- Looking for scalbnf - found
+-- Looking for setenv
+-- Looking for setenv - found
+-- Looking for sin
+-- Looking for sin - found
+-- Looking for sinf
+-- Looking for sinf - found
+-- Looking for sqr
+-- Looking for sqr - not found
+-- Looking for sqrt
+-- Looking for sqrt - found
+-- Looking for sqrtf
+-- Looking for sqrtf - found
+-- Looking for sscanf
+-- Looking for sscanf - found
+-- Looking for strchr
+-- Looking for strchr - found
+-- Looking for strcmp
+-- Looking for strcmp - found
+-- Looking for strlcat
+-- Looking for strlcat - found
+-- Looking for strlcpy
+-- Looking for strlcpy - found
+-- Looking for strlen
+-- Looking for strlen - found
+-- Looking for strncmp
+-- Looking for strncmp - found
+-- Looking for strnlen
+-- Looking for strnlen - found
+-- Looking for strpbrk
+-- Looking for strpbrk - found
+-- Looking for strrchr
+-- Looking for strrchr - found
+-- Looking for strstr
+-- Looking for strstr - found
+-- Looking for strnstr
+-- Looking for strnstr - found
+-- Looking for strtod
+-- Looking for strtod - found
+-- Looking for strtok_r
+-- Looking for strtok_r - found
+-- Looking for strtol
+-- Looking for strtol - found
+-- Looking for strtoll
+-- Looking for strtoll - found
+-- Looking for strtoul
+-- Looking for strtoul - found
+-- Looking for strtoull
+-- Looking for strtoull - found
+-- Looking for tan
+-- Looking for tan - found
+-- Looking for tanf
+-- Looking for tanf - found
+-- Looking for trunc
+-- Looking for trunc - found
+-- Looking for truncf
+-- Looking for truncf - found
+-- Looking for unsetenv
+-- Looking for unsetenv - found
+-- Looking for vsnprintf
+-- Looking for vsnprintf - found
+-- Looking for vsscanf
+-- Looking for vsscanf - found
+-- Looking for wcsnlen
+-- Looking for wcsnlen - found
+-- Looking for wcscmp
+-- Looking for wcscmp - found
+-- Looking for wcsdup
+-- Looking for wcsdup - found
+-- Looking for wcslcat
+-- Looking for wcslcat - found
+-- Looking for wcslcpy
+-- Looking for wcslcpy - found
+-- Looking for wcslen
+-- Looking for wcslen - found
+-- Looking for wcsncmp
+-- Looking for wcsncmp - found
+-- Looking for wcsstr
+-- Looking for wcsstr - found
+-- Looking for wcstol
+-- Looking for wcstol - found
+-- Looking for strcasestr
+-- Looking for strcasestr - found
+-- Performing Test LIBC_HAS_ISINF
+-- Performing Test LIBC_HAS_ISINF - Success
+-- Performing Test LIBC_ISINF_HANDLES_FLOAT
+-- Performing Test LIBC_ISINF_HANDLES_FLOAT - Success
+-- Performing Test LIBC_HAS_ISINFF
+-- Performing Test LIBC_HAS_ISINFF - Failed
+-- Performing Test LIBC_HAS_ISNAN
+-- Performing Test LIBC_HAS_ISNAN - Success
+-- Performing Test LIBC_ISNAN_HANDLES_FLOAT
+-- Performing Test LIBC_ISNAN_HANDLES_FLOAT - Success
+-- Performing Test LIBC_HAS_ISNANF
+-- Performing Test LIBC_HAS_ISNANF - Failed
+-- Looking for fdatasync
+-- Looking for fdatasync - not found
+-- Looking for gethostname
+-- Looking for gethostname - found
+-- Looking for getpagesize
+-- Looking for getpagesize - found
+-- Looking for getresgid
+-- Looking for getresgid - not found
+-- Looking for getresuid
+-- Looking for getresuid - not found
+-- Looking for sigaction
+-- Looking for sigaction - found
+-- Looking for sigtimedwait
+-- Looking for sigtimedwait - not found
+-- Looking for setjmp
+-- Looking for setjmp - found
+-- Looking for nanosleep
+-- Looking for nanosleep - found
+-- Looking for gmtime_r
+-- Looking for gmtime_r - found
+-- Looking for localtime_r
+-- Looking for localtime_r - found
+-- Looking for nl_langinfo
+-- Looking for nl_langinfo - found
+-- Looking for sysconf
+-- Looking for sysconf - found
+-- Looking for sysctlbyname
+-- Looking for sysctlbyname - found
+-- Looking for getauxval
+-- Looking for getauxval - not found
+-- Looking for elf_aux_info
+-- Looking for elf_aux_info - not found
+-- Looking for ppoll
+-- Looking for ppoll - not found
+-- Looking for memfd_create
+-- Looking for memfd_create - not found
+-- Looking for posix_fallocate
+-- Looking for posix_fallocate - not found
+-- Looking for posix_spawn_file_actions_addchdir
+-- Looking for posix_spawn_file_actions_addchdir - found
+-- Looking for posix_spawn_file_actions_addchdir_np
+-- Looking for posix_spawn_file_actions_addchdir_np - found
+-- Looking for dlopen
+-- Looking for dlopen - found
+-- Performing Test HAVE_O_CLOEXEC
+-- Performing Test HAVE_O_CLOEXEC - Success
+-- Performing Test HAVE_LIBUSB_H
+-- Performing Test HAVE_LIBUSB_H - Success
+-- Performing Test HAVE_FRAMEWORK_GAMECONTROLLER
+-- Performing Test HAVE_FRAMEWORK_GAMECONTROLLER - Success
+-- Performing Test HAVE_FRAMEWORK_COREHAPTICS
+-- Performing Test HAVE_FRAMEWORK_COREHAPTICS - Success
+-- Performing Test HAVE_PTHREADS
+-- Performing Test HAVE_PTHREADS - Success
+-- Performing Test HAVE_RECURSIVE_MUTEXES
+-- Performing Test HAVE_RECURSIVE_MUTEXES - Success
+-- Performing Test HAVE_PTHREADS_SEM
+-- Performing Test HAVE_PTHREADS_SEM - Success
+-- Performing Test COMPILER_HAS_SEM_TIMEDWAIT
+-- Performing Test COMPILER_HAS_SEM_TIMEDWAIT - Failed
+-- Looking for pthread.h
+-- Looking for pthread.h - found
+-- Looking for pthread_np.h
+-- Looking for pthread_np.h - not found
+-- Performing Test HAVE_POSIX_SPAWN
+-- Performing Test HAVE_POSIX_SPAWN - Success
+-- Performing Test COMPILER_SUPPORTS_FOBJC_ARC
+-- Performing Test COMPILER_SUPPORTS_FOBJC_ARC - Success
+--
+-- SDL3 was configured with the following options:
+--
+-- Platform: Darwin-25.3.0
+-- 64-bit:   TRUE
+-- Compiler: /usr/bin/cc
+-- Revision: SDL-3.4.12-f87239e
+-- Vendor:
+--
+-- Subsystems:
+--   Audio:    OFF
+--   Video:    OFF
+--   GPU:      OFF
+--   Render:   OFF
+--   Camera:   OFF
+--   Joystick: ON
+--   Haptic:   ON
+--   Hidapi:   ON
+--   Power:    ON
+--   Sensor:   ON
+--   Dialog:   OFF
+--   Tray:     OFF
+--
+-- Options:
+--   SDL_ALSA                    (Wanted: OFF): OFF
+--   SDL_ALSA_SHARED             (Wanted: OFF): OFF
+--   SDL_ALTIVEC                 (Wanted: OFF): OFF
+--   SDL_ARMNEON                 (Wanted: ON): ON
+--   SDL_ASAN                    (Wanted: OFF): OFF
+--   SDL_ASSEMBLY                (Wanted: ON): ON
+--   SDL_ASSERTIONS              (Wanted: auto): auto
+--   SDL_AVX                     (Wanted: OFF): OFF
+--   SDL_AVX2                    (Wanted: OFF): OFF
+--   SDL_AVX512F                 (Wanted: OFF): OFF
+--   SDL_BACKGROUNDING_SIGNAL    (Wanted: OFF): OFF
+--   SDL_CCACHE                  (Wanted: ON): ON
+--   SDL_CLANG_TIDY              (Wanted: OFF): OFF
+--   SDL_CLOCK_GETTIME           (Wanted: OFF): ON
+--   SDL_COCOA                   (Wanted: ON): OFF
+--   SDL_DBUS                    (Wanted: OFF): OFF
+--   SDL_DEPS_SHARED             (Wanted: ON): OFF
+--   SDL_DIRECTX                 (Wanted: OFF): OFF
+--   SDL_DISKAUDIO               (Wanted: OFF): OFF
+--   SDL_DLOPEN_NOTES            (Wanted: OFF): OFF
+--   SDL_DUMMYAUDIO              (Wanted: OFF): OFF
+--   SDL_DUMMYCAMERA             (Wanted: OFF): OFF
+--   SDL_DUMMYVIDEO              (Wanted: OFF): OFF
+--   SDL_EXAMPLES                (Wanted: OFF): OFF
+--   SDL_EXAMPLES_LINK_SHARED    (Wanted: OFF): OFF
+--   SDL_FOREGROUNDING_SIGNAL    (Wanted: OFF): OFF
+--   SDL_FRIBIDI                 (Wanted: OFF): OFF
+--   SDL_FRIBIDI_SHARED          (Wanted: OFF): OFF
+--   SDL_GCC_ATOMICS             (Wanted: ON): ON
+--   SDL_HIDAPI                  (Wanted: ON): ON
+--   SDL_HIDAPI_JOYSTICK         (Wanted: ON): ON
+--   SDL_HIDAPI_LIBUSB           (Wanted: ON): ON
+--   SDL_HIDAPI_LIBUSB_SHARED    (Wanted: OFF): OFF
+--   SDL_IBUS                    (Wanted: OFF): OFF
+--   SDL_INSTALL                 (Wanted: OFF): OFF
+--   SDL_INSTALL_TESTS           (Wanted: OFF): OFF
+--   SDL_JACK                    (Wanted: OFF): OFF
+--   SDL_JACK_SHARED             (Wanted: OFF): OFF
+--   SDL_KMSDRM                  (Wanted: OFF): OFF
+--   SDL_KMSDRM_SHARED           (Wanted: OFF): OFF
+--   SDL_LASX                    (Wanted: OFF): OFF
+--   SDL_LIBC                    (Wanted: ON): ON
+--   SDL_LIBICONV                (Wanted: OFF): OFF
+--   SDL_LIBTHAI                 (Wanted: OFF): OFF
+--   SDL_LIBTHAI_SHARED          (Wanted: OFF): OFF
+--   SDL_LIBUDEV                 (Wanted: ON): OFF
+--   SDL_LIBURING                (Wanted: OFF): OFF
+--   SDL_LSX                     (Wanted: OFF): OFF
+--   SDL_METAL                   (Wanted: ON): OFF
+--   SDL_MMX                     (Wanted: OFF): OFF
+--   SDL_OFFSCREEN               (Wanted: ON): OFF
+--   SDL_OPENGL                  (Wanted: OFF): OFF
+--   SDL_OPENGLES                (Wanted: OFF): OFF
+--   SDL_OPENVR                  (Wanted: OFF): OFF
+--   SDL_OSS                     (Wanted: OFF): OFF
+--   SDL_PIPEWIRE                (Wanted: OFF): OFF
+--   SDL_PIPEWIRE_SHARED         (Wanted: OFF): OFF
+--   SDL_PTHREADS                (Wanted: ON): ON
+--   SDL_PTHREADS_SEM            (Wanted: ON): ON
+--   SDL_PULSEAUDIO              (Wanted: OFF): OFF
+--   SDL_PULSEAUDIO_SHARED       (Wanted: OFF): OFF
+--   SDL_RENDER_D3D              (Wanted: OFF): OFF
+--   SDL_RENDER_D3D11            (Wanted: OFF): OFF
+--   SDL_RENDER_D3D12            (Wanted: OFF): OFF
+--   SDL_RENDER_GPU              (Wanted: OFF): OFF
+--   SDL_RENDER_METAL            (Wanted: OFF): OFF
+--   SDL_RENDER_VULKAN           (Wanted: OFF): OFF
+--   SDL_ROCKCHIP                (Wanted: OFF): OFF
+--   SDL_RPATH                   (Wanted: ON): OFF
+--   SDL_RPI                     (Wanted: OFF): OFF
+--   SDL_SNDIO                   (Wanted: OFF): OFF
+--   SDL_SNDIO_SHARED            (Wanted: OFF): OFF
+--   SDL_SSE                     (Wanted: OFF): OFF
+--   SDL_SSE2                    (Wanted: OFF): OFF
+--   SDL_SSE3                    (Wanted: OFF): OFF
+--   SDL_SSE4_1                  (Wanted: OFF): OFF
+--   SDL_SSE4_2                  (Wanted: OFF): OFF
+--   SDL_SYSTEM_ICONV            (Wanted: OFF): OFF
+--   SDL_TESTS                   (Wanted: OFF): OFF
+--   SDL_TESTS_LINK_SHARED       (Wanted: OFF): OFF
+--   SDL_UNINSTALL               (Wanted: OFF): OFF
+--   SDL_VIRTUAL_JOYSTICK        (Wanted: ON): ON
+--   SDL_VIVANTE                 (Wanted: OFF): OFF
+--   SDL_VULKAN                  (Wanted: OFF): OFF
+--   SDL_WASAPI                  (Wanted: OFF): OFF
+--   SDL_WAYLAND                 (Wanted: OFF): OFF
+--   SDL_WAYLAND_LIBDECOR        (Wanted: OFF): OFF
+--   SDL_WAYLAND_LIBDECOR_SHARED (Wanted: OFF): OFF
+--   SDL_WAYLAND_SHARED          (Wanted: OFF): OFF
+--   SDL_X11                     (Wanted: OFF): OFF
+--   SDL_X11_SHARED              (Wanted: OFF): OFF
+--   SDL_X11_XCURSOR             (Wanted: OFF): OFF
+--   SDL_X11_XDBE                (Wanted: OFF): OFF
+--   SDL_X11_XFIXES              (Wanted: OFF): OFF
+--   SDL_X11_XINPUT              (Wanted: OFF): OFF
+--   SDL_X11_XRANDR              (Wanted: OFF): OFF
+--   SDL_X11_XSCRNSAVER          (Wanted: OFF): OFF
+--   SDL_X11_XSHAPE              (Wanted: OFF): OFF
+--   SDL_X11_XSYNC               (Wanted: OFF): OFF
+--   SDL_X11_XTEST               (Wanted: OFF): OFF
+--   SDL_XINPUT                  (Wanted: OFF): OFF
+--
+--  Build Shared Library: OFF
+--  Build Static Library: ON
+--  Build libraries as Apple Framework: OFF
+--
+-- Enabled backends:
+--   Video drivers: dummy
+--   Render drivers:
+--   GPU drivers: disabled
+--   Audio drivers: dummy
+--   Joystick drivers: hidapi iokit mfi virtual
+--   Camera drivers: dummy
+--
+-- If something was not detected, although the libraries
+-- were installed, then make sure you have set the
+-- CMAKE_C_FLAGS and CMAKE_PREFIX_PATH CMake variables correctly.
+--
 -- Using static SFML from Externals
 -- Using static MBEDTLS from Externals
--- Found Python3: /opt/homebrew/Frameworks/Python.framework/Versions/3.14/bin/python3.14 (found version "3.14.7") found components: Interpreter
 -- Using static CURL from Externals
-CMake Error at Externals/curl/CMakeLists.txt:51 (add_subdirectory):
-  The source directory
-
-    /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Externals/curl/curl
-
-  does not contain a CMakeLists.txt file.
-
-
-CMake Error at Externals/curl/CMakeLists.txt:55 (target_link_libraries):
-  Cannot specify link libraries for target "libcurl_static" which is not
-  built by this project.
-
-
--- Configuring incomplete, errors occurred!
+-- Using CMake version 4.4.3
+-- curl version=[8.15.0-DEV]
+-- CMake platform flags: APPLE UNIX
+-- Picky compiler options: -Werror=partial-availability -Werror-implicit-function-declaration -Wextra -Wall -pedantic -Wbad-function-cast -Wconversion -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wno-long-long -Wno-multichar -Wpointer-arith -Wshadow -Wsign-compare -Wundef -Wunused -Wwrite-strings -Waddress -Wattributes -Wcast-align -Wcast-qual -Wdeclaration-after-statement -Wdiv-by-zero -Wempty-body -Wendif-labels -Wfloat-equal -Wformat-security -Wignored-qualifiers -Wmissing-field-initializers -Wmissing-noreturn -Wno-format-nonliteral -Wno-sign-conversion -Wno-system-headers -Wold-style-definition -Wredundant-decls -Wstrict-prototypes -Wtype-limits -Wunreachable-code -Wunused-parameter -Wvla -Wshift-sign-overflow -Wshorten-64-to-32 -Wformat=2 -Wlanguage-extension-token -Wdouble-promotion -Wenum-conversion -Wheader-guard -Wpragmas -Wsometimes-uninitialized -Wunused-const-variable -Wcomma -Wmissing-variable-declarations -Wassign-enum -Wextra-semi-stmt -Wimplicit-fallthrough -Wxor-used-as-pow
+-- Found Perl: /usr/bin/perl (found version "5.34.1")
+-- Performing Test HAVE_SOCKADDR_IN6_SIN6_SCOPE_ID
+-- Performing Test HAVE_SOCKADDR_IN6_SIN6_SCOPE_ID - Success
+-- Performing Test HAVE_SOCKADDR_IN6_SIN6_ADDR
+-- Performing Test HAVE_SOCKADDR_IN6_SIN6_ADDR - Success
+-- Performing Test USE_UNIX_SOCKETS
+-- Performing Test USE_UNIX_SOCKETS - Success
+-- Found CA bundle: /etc/ssl/cert.pem
+-- Looking for sys/eventfd.h
+-- Looking for sys/eventfd.h - not found
+-- Looking for sys/filio.h
+-- Looking for sys/filio.h - found
+-- Looking for sys/ioctl.h
+-- Looking for sys/ioctl.h - found
+-- Looking for sys/param.h
+-- Looking for sys/param.h - found
+-- Looking for sys/poll.h
+-- Looking for sys/poll.h - found
+-- Looking for sys/resource.h
+-- Looking for sys/resource.h - found
+-- Looking for 3 include files sys/socket.h, ..., sys/select.h
+-- Looking for 3 include files sys/socket.h, ..., sys/select.h - found
+-- Looking for sys/sockio.h
+-- Looking for sys/sockio.h - found
+-- Looking for sys/un.h
+-- Looking for sys/un.h - found
+-- Looking for 5 include files sys/socket.h, ..., sys/utime.h
+-- Looking for 5 include files sys/socket.h, ..., sys/utime.h - not found
+-- Looking for 5 include files sys/socket.h, ..., arpa/inet.h
+-- Looking for 5 include files sys/socket.h, ..., arpa/inet.h - found
+-- Looking for dirent.h
+-- Looking for dirent.h - found
+-- Looking for fcntl.h
+-- Looking for fcntl.h - found
+-- Looking for 6 include files sys/socket.h, ..., ifaddrs.h
+-- Looking for 6 include files sys/socket.h, ..., ifaddrs.h - found
+-- Looking for io.h
+-- Looking for io.h - not found
+-- Looking for 7 include files sys/socket.h, ..., libgen.h
+-- Looking for 7 include files sys/socket.h, ..., libgen.h - found
+-- Looking for linux/tcp.h
+-- Looking for linux/tcp.h - not found
+-- Looking for locale.h
+-- Looking for locale.h - found
+-- Looking for 8 include files sys/socket.h, ..., net/if.h
+-- Looking for 8 include files sys/socket.h, ..., net/if.h - found
+-- Looking for 9 include files sys/socket.h, ..., netdb.h
+-- Looking for 9 include files sys/socket.h, ..., netdb.h - found
+-- Looking for 10 include files sys/socket.h, ..., netinet/in.h
+-- Looking for 10 include files sys/socket.h, ..., netinet/in.h - found
+-- Looking for netinet/in6.h
+-- Looking for netinet/in6.h - not found
+-- Looking for 11 include files sys/socket.h, ..., netinet/tcp.h
+-- Looking for 11 include files sys/socket.h, ..., netinet/tcp.h - found
+-- Looking for 12 include files sys/socket.h, ..., netinet/udp.h
+-- Looking for 12 include files sys/socket.h, ..., netinet/udp.h - found
+-- Looking for poll.h
+-- Looking for poll.h - found
+-- Looking for pwd.h
+-- Looking for pwd.h - found
+-- Looking for stdatomic.h
+-- Looking for stdatomic.h - found
+-- Looking for stdbool.h
+-- Looking for stdbool.h - found
+-- Looking for stropts.h
+-- Looking for stropts.h - not found
+-- Looking for termio.h
+-- Looking for termio.h - not found
+-- Looking for termios.h
+-- Looking for termios.h - found
+-- Looking for utime.h
+-- Looking for utime.h - found
+-- Check size of size_t
+-- Check size of size_t - done
+-- Check size of ssize_t
+-- Check size of ssize_t - done
+-- Check size of long long
+-- Check size of long long - done
+-- Check size of long
+-- Check size of long - done
+-- Check size of int
+-- Check size of int - done
+-- Check size of __int64
+-- Check size of __int64 - failed
+-- Check size of time_t
+-- Check size of time_t - done
+-- Check size of suseconds_t
+-- Check size of suseconds_t - done
+-- Looking for accept4
+-- Looking for accept4 - not found
+-- Looking for fnmatch
+-- Looking for fnmatch - found
+-- Looking for basename
+-- Looking for basename - found
+-- Looking for opendir
+-- Looking for opendir - found
+-- Looking for poll
+-- Looking for poll - found
+-- Looking for socket
+-- Looking for socket - found
+-- Looking for socketpair
+-- Looking for socketpair - found
+-- Looking for recv
+-- Looking for recv - found
+-- Looking for send
+-- Looking for send - found
+-- Looking for sendmsg
+-- Looking for sendmsg - found
+-- Looking for select
+-- Looking for select - found
+-- Looking for strdup
+-- Looking for strdup - found
+-- Looking for memrchr
+-- Looking for memrchr - not found
+-- Looking for alarm
+-- Looking for alarm - found
+-- Looking for fcntl
+-- Looking for fcntl - found
+-- Looking for getppid
+-- Looking for getppid - found
+-- Looking for utimes
+-- Looking for utimes - found
+-- Looking for gettimeofday
+-- Looking for gettimeofday - found
+-- Looking for closesocket
+-- Looking for closesocket - not found
+-- Looking for sigsetjmp
+-- Looking for sigsetjmp - found
+-- Looking for getpwuid
+-- Looking for getpwuid - found
+-- Looking for getpwuid_r
+-- Looking for getpwuid_r - found
+-- Looking for geteuid
+-- Looking for geteuid - found
+-- Looking for utime
+-- Looking for utime - found
+-- Looking for gethostbyname_r
+-- Looking for gethostbyname_r - not found
+-- Looking for signal
+-- Looking for signal - found
+-- Looking for strerror_r
+-- Looking for strerror_r - found
+-- Looking for siginterrupt
+-- Looking for siginterrupt - found
+-- Looking for getaddrinfo
+-- Looking for getaddrinfo - found
+-- Looking for getifaddrs
+-- Looking for getifaddrs - found
+-- Looking for freeaddrinfo
+-- Looking for freeaddrinfo - found
+-- Looking for pipe
+-- Looking for pipe - found
+-- Looking for ftruncate
+-- Looking for ftruncate - found
+-- Looking for getpeername
+-- Looking for getpeername - found
+-- Looking for getsockname
+-- Looking for getsockname - found
+-- Looking for if_nametoindex
+-- Looking for if_nametoindex - found
+-- Looking for getrlimit
+-- Looking for getrlimit - found
+-- Looking for setlocale
+-- Looking for setlocale - found
+-- Looking for setrlimit
+-- Looking for setrlimit - found
+-- Looking for realpath
+-- Looking for realpath - found
+-- Looking for sched_yield
+-- Looking for sched_yield - found
+-- Looking for strcasecmp
+-- Looking for strcasecmp - found
+-- Looking for stricmp
+-- Looking for stricmp - not found
+-- Looking for strcmpi
+-- Looking for strcmpi - not found
+-- Looking for setmode
+-- Looking for setmode - found
+-- Looking for snprintf
+-- Looking for snprintf - found
+-- Looking for mach_absolute_time
+-- Looking for mach_absolute_time - found
+-- Looking for inet_ntop
+-- Looking for inet_ntop - found
+-- Looking for inet_pton
+-- Looking for inet_pton - found
+-- Looking for fsetxattr
+-- Looking for fsetxattr - found
+-- Performing Test HAVE_FSETXATTR_5
+-- Performing Test HAVE_FSETXATTR_5 - Failed
+-- Performing Test HAVE_FSETXATTR_6
+-- Performing Test HAVE_FSETXATTR_6 - Success
+-- Check size of sa_family_t
+-- Check size of sa_family_t - done
+-- Performing Test HAVE_FCNTL_O_NONBLOCK
+-- Performing Test HAVE_FCNTL_O_NONBLOCK - Success
+-- Performing Test HAVE_IOCTLSOCKET
+-- Performing Test HAVE_IOCTLSOCKET - Failed
+-- Performing Test HAVE_IOCTLSOCKET_CAMEL
+-- Performing Test HAVE_IOCTLSOCKET_CAMEL - Failed
+-- Performing Test HAVE_IOCTLSOCKET_CAMEL_FIONBIO
+-- Performing Test HAVE_IOCTLSOCKET_CAMEL_FIONBIO - Failed
+-- Performing Test HAVE_IOCTLSOCKET_FIONBIO
+-- Performing Test HAVE_IOCTLSOCKET_FIONBIO - Failed
+-- Performing Test HAVE_IOCTL_FIONBIO
+-- Performing Test HAVE_IOCTL_FIONBIO - Success
+-- Performing Test HAVE_IOCTL_SIOCGIFADDR
+-- Performing Test HAVE_IOCTL_SIOCGIFADDR - Success
+-- Performing Test HAVE_SETSOCKOPT_SO_NONBLOCK
+-- Performing Test HAVE_SETSOCKOPT_SO_NONBLOCK - Failed
+-- Performing Test HAVE_GETHOSTBYNAME_R_3
+-- Performing Test HAVE_GETHOSTBYNAME_R_3 - Failed
+-- Performing Test HAVE_GETHOSTBYNAME_R_5
+-- Performing Test HAVE_GETHOSTBYNAME_R_5 - Failed
+-- Performing Test HAVE_GETHOSTBYNAME_R_6
+-- Performing Test HAVE_GETHOSTBYNAME_R_6 - Failed
+-- Performing Test HAVE_BOOL_T
+-- Performing Test HAVE_BOOL_T - Success
+-- Performing Test STDC_HEADERS
+-- Performing Test STDC_HEADERS - Success
+-- Performing Test HAVE_ATOMIC
+-- Performing Test HAVE_ATOMIC - Success
+-- Performing Test HAVE_GETHOSTBYNAME_R_3_REENTRANT
+-- Performing Test HAVE_GETHOSTBYNAME_R_3_REENTRANT - Failed
+-- Performing Test HAVE_GETHOSTBYNAME_R_5_REENTRANT
+-- Performing Test HAVE_GETHOSTBYNAME_R_5_REENTRANT - Failed
+-- Performing Test HAVE_GETHOSTBYNAME_R_6_REENTRANT
+-- Performing Test HAVE_GETHOSTBYNAME_R_6_REENTRANT - Failed
+-- Performing Test HAVE_FILE_OFFSET_BITS
+-- Performing Test HAVE_FILE_OFFSET_BITS - Success
+-- Check size of off_t
+-- Check size of off_t - done
+-- Check size of curl_off_t
+-- Check size of curl_off_t - done
+-- Check size of curl_socket_t
+-- Check size of curl_socket_t - done
+-- Performing Test HAVE_TIME_T_UNSIGNED
+-- Performing Test HAVE_TIME_T_UNSIGNED - Failed
+-- Performing Test HAVE_GLIBC_STRERROR_R
+-- Performing Test HAVE_GLIBC_STRERROR_R - Failed
+-- Performing Test HAVE_POSIX_STRERROR_R
+-- Performing Test HAVE_POSIX_STRERROR_R - Success
+-- Performing Test HAVE_CLOCK_GETTIME_MONOTONIC
+-- Performing Test HAVE_CLOCK_GETTIME_MONOTONIC - Success
+-- Performing Test HAVE_BUILTIN_AVAILABLE
+-- Performing Test HAVE_BUILTIN_AVAILABLE - Success
+-- Check size of struct sockaddr_storage
+-- Check size of struct sockaddr_storage - done
+-- Performing Test HAVE_MSG_NOSIGNAL
+-- Performing Test HAVE_MSG_NOSIGNAL - Success
+-- Performing Test HAVE_STRUCT_TIMEVAL
+-- Performing Test HAVE_STRUCT_TIMEVAL - Success
+-- Performing Test HAVE_CLOCK_GETTIME_MONOTONIC_RAW
+-- Performing Test HAVE_CLOCK_GETTIME_MONOTONIC_RAW - Success
+-- Protocols: http https ws wss
+-- Features: alt-svc AsynchDNS HTTPS-proxy IPv6 Largefile NTLM SSL threadsafe UnixSockets
+-- Enabled SSL backends: mbedTLS
+-- Using static HIDAPI from Externals
+-- Could NOT find SYSTEMD (missing: SYSTEMD_LIBRARIES SYSTEMD_INCLUDE_DIRS)
+-- libsystemd not found, disabling traversal server watchdog support
+-- Found Git: /usr/bin/git (found version "2.50.1 (Apple Git-155)")
+-- Using static GTEST from Externals
+-- Performing Test FLAG_C_HAVE_WALL
+-- Performing Test FLAG_C_HAVE_WALL - Success
+-- Performing Test FLAG_CXX_HAVE_WALL
+-- Performing Test FLAG_CXX_HAVE_WALL - Success
+-- Performing Test FLAG_C_TYPE_LIMITS
+-- Performing Test FLAG_C_TYPE_LIMITS - Success
+-- Performing Test FLAG_CXX_TYPE_LIMITS
+-- Performing Test FLAG_CXX_TYPE_LIMITS - Success
+-- Performing Test FLAG_C_SIGN_COMPARE
+-- Performing Test FLAG_C_SIGN_COMPARE - Success
+-- Performing Test FLAG_CXX_SIGN_COMPARE
+-- Performing Test FLAG_CXX_SIGN_COMPARE - Success
+-- Performing Test FLAG_C_IGNORED_QUALIFIERS
+-- Performing Test FLAG_C_IGNORED_QUALIFIERS - Success
+-- Performing Test FLAG_CXX_IGNORED_QUALIFIERS
+-- Performing Test FLAG_CXX_IGNORED_QUALIFIERS - Success
+-- Performing Test FLAG_C_UNINITIALIZED
+-- Performing Test FLAG_C_UNINITIALIZED - Success
+-- Performing Test FLAG_CXX_UNINITIALIZED
+-- Performing Test FLAG_CXX_UNINITIALIZED - Success
+-- Performing Test FLAG_C_LOGICAL_OP
+-- Performing Test FLAG_C_LOGICAL_OP - Failed
+-- Performing Test FLAG_CXX_LOGICAL_OP
+-- Performing Test FLAG_CXX_LOGICAL_OP - Failed
+-- Performing Test FLAG_C_SHADOW
+-- Performing Test FLAG_C_SHADOW - Success
+-- Performing Test FLAG_CXX_SHADOW
+-- Performing Test FLAG_CXX_SHADOW - Success
+-- Performing Test FLAG_C_SHADOW_FIELD_IN_CONSTRUCTOR
+-- Performing Test FLAG_C_SHADOW_FIELD_IN_CONSTRUCTOR - Success
+-- Performing Test FLAG_CXX_SHADOW_FIELD_IN_CONSTRUCTOR
+-- Performing Test FLAG_CXX_SHADOW_FIELD_IN_CONSTRUCTOR - Success
+-- Performing Test FLAG_C_INIT_SELF
+-- Performing Test FLAG_C_INIT_SELF - Success
+-- Performing Test FLAG_CXX_INIT_SELF
+-- Performing Test FLAG_CXX_INIT_SELF - Success
+-- Performing Test FLAG_C_MISSING_DECLARATIONS
+-- Performing Test FLAG_C_MISSING_DECLARATIONS - Success
+-- Performing Test FLAG_CXX_MISSING_DECLARATIONS
+-- Performing Test FLAG_CXX_MISSING_DECLARATIONS - Success
+-- Performing Test FLAG_C_MISSING_VARIABLE_DECLARATIONS
+-- Performing Test FLAG_C_MISSING_VARIABLE_DECLARATIONS - Success
+-- Performing Test FLAG_CXX_MISSING_VARIABLE_DECLARATIONS
+-- Performing Test FLAG_CXX_MISSING_VARIABLE_DECLARATIONS - Success
+-- Performing Test FLAG_C_IMPLICIT_FALLTHROUGH
+-- Performing Test FLAG_C_IMPLICIT_FALLTHROUGH - Success
+-- Performing Test FLAG_CXX_IMPLICIT_FALLTHROUGH
+-- Performing Test FLAG_CXX_IMPLICIT_FALLTHROUGH - Success
+-- Performing Test HAS_STRINGOP_TRUNCATION_WARNING
+-- Performing Test HAS_STRINGOP_TRUNCATION_WARNING - Failed
+-- Performing Test HAS_FORMAT_WARNING
+-- Performing Test HAS_FORMAT_WARNING - Success
+-- Performing Test FLAG_C_FORMAT_WARNING_TO_ERROR
+-- Performing Test FLAG_C_FORMAT_WARNING_TO_ERROR - Success
+-- Performing Test FLAG_CXX_FORMAT_WARNING_TO_ERROR
+-- Performing Test FLAG_CXX_FORMAT_WARNING_TO_ERROR - Success
+-- Performing Test HAS_TRIGRAPHS_WARNING
+-- Performing Test HAS_TRIGRAPHS_WARNING - Success
+-- Performing Test FLAG_C_NO_TRIGRAPHS_WARNING
+-- Performing Test FLAG_C_NO_TRIGRAPHS_WARNING - Success
+-- Performing Test FLAG_CXX_NO_TRIGRAPHS_WARNING
+-- Performing Test FLAG_CXX_NO_TRIGRAPHS_WARNING - Success
+-- Cubeb found, enabling Cubeb sound backend
+-- Could NOT find ALSA (missing: ALSA_LIBRARY ALSA_INCLUDE_DIR)
+-- ALSA NOT found, disabling ALSA sound backend
+-- PulseAudio NOT found, disabling PulseAudio sound backend
+-- Orca flat bundles: no key (set ORCA_BUNDLE_PUBLIC_KEY): every bundle is refused
+-- Configuring done (41.3s)
+-- Generating done (0.3s)
+-- Build files have been written to: /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/build-orca-tests
