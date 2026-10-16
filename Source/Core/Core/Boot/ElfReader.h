@@ -33,6 +33,12 @@ public:
   explicit ElfReader(File::IOFile file);
   explicit ElfReader(std::vector<u8> buffer);
   ~ElfReader() override;
+  // The header, segment and section pointers point into this reader's own m_image: a copy or a
+  // move would keep pointing into the source's.
+  ElfReader(const ElfReader&) = delete;
+  ElfReader& operator=(const ElfReader&) = delete;
+  ElfReader(ElfReader&&) = delete;
+  ElfReader& operator=(ElfReader&&) = delete;
   u32 Read32(int off) const { return base32[off >> 2]; }
   // Quick accessors
   ElfType GetType() const { return (ElfType)(header->e_type); }
