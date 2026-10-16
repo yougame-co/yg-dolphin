@@ -816,6 +816,17 @@ std::string RefusalReason(const std::string& connect_error)
 {
   if (connect_error.find("(HTTP 403)") != std::string::npos)
   {
+    if (connect_error.find(" host_older") != std::string::npos)
+    {
+      const std::string marker = " host_version=";
+      const auto version = connect_error.find(marker);
+      return "Your friend is on an older YG Dolphin" +
+             (version == std::string::npos ? std::string() :
+                                            " (" + connect_error.substr(version + marker.size()) + ")") +
+             ": ask them to press Play to update.";
+    }
+    if (connect_error.find(" host_newer") != std::string::npos)
+      return "Your friend is on a newer YG Dolphin: press Play to update.";
     return "The room didn't let you in: your friend's YG Dolphin, disc or save differs from yours "
            "(both of you: update YouGame and press Play again), or the host removed you";
   }
@@ -2217,9 +2228,13 @@ struct YouGameRoom::Impl
       std::string ticket, store, ticket_error;
       // Ticket responses can include app-provided text. Log only this stage's fixed outcome.
       raw->error = "ticket-refresh-failed";
-      if (FreshTicket(true, &ticket, &store, &ticket_error, &raw->cancel) && !raw->cancel &&
-          Clock::now() < deadline)
+      // A returning guest must first present the ticket that owns its live seat. Refresh only
+      // after an HTTP refusal other than seat-in-use; transport failures keep the same ticket.
+      for (const bool fresh : {false, true})
       {
+        if (!FreshTicket(fresh, &ticket, &store, &ticket_error, &raw->cancel) || raw->cancel ||
+            stop || leave_requested || Clock::now() >= deadline)
+          break;
         auto socket = std::make_unique<Common::WebSocket>();
         const auto remaining =
             std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now());
@@ -2230,11 +2245,15 @@ struct YouGameRoom::Impl
           return;
         }
         if (ConnectRoom(*socket, ticket,
-                            std::min(remaining, std::chrono::milliseconds(2000)), &raw->error,
-                            [this, raw] { return stop || leave_requested || raw->cancel; }))
+                        std::min(remaining, std::chrono::milliseconds(2000)), &raw->error,
+                        [this, raw] { return stop || leave_requested || raw->cancel; }))
         {
           raw->socket = std::move(socket);
+          break;
         }
+        if (raw->error.find("(HTTP 4") == std::string::npos ||
+            raw->error.find("seat in use") != std::string::npos)
+          break;
       }
       raw->done = true;
     });
@@ -4413,6 +4432,9 @@ struct YouGameRoom::Impl
         End("YouGame couldn't pass your friend's game to you", "network");
       else if (reason == "room_full")
         End("Your friend's game already has another friend in it", "room_full");
+      else if (reason == "replay_limit")
+        End("Your friend's game couldn't send the match to you (too long to catch up). "
+            "Try again at the next character select.", "replay_limit");
       else
         End("Your friend's game disconnected you", "network");
       return;

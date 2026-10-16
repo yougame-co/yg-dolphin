@@ -1182,7 +1182,7 @@ void KeepRoomOpen(Match& match)
   }
   const auto now = Clock::now();
   // Someone else holds that room (a friend, or another copy on this account): never rejoin it.
-  if (Orca::Online::RoomTaken())
+  if (Orca::Online::RoomTaken() || code == "room_full")
     match.home_code.clear();
   if (!match.room_lost)
   {

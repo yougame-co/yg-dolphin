@@ -1829,6 +1829,161 @@ TEST_F(OrcaRoomRuntime, FinalCloseCodesReachRunAndNeverReconnect)
   }
 }
 
+TEST_F(OrcaRoomRuntime, ServerCloseEchoesTheSameCodeBeforeCleanup)
+{
+  for (const int close : {4004, 4000, 1012, 0})
+  {
+    const std::string code = "echo" + std::to_string(close);
+    Request("/configure/" + code, "{}");
+    Common::WebSocket socket;
+    std::string error;
+    ASSERT_TRUE(socket.Connect("ws" + url.substr(4) + "/room/" + code, 2s, &error)) << error;
+    ASSERT_TRUE(socket.ReceiveText(1s));
+    Action(code, close ? fmt::format(R"({{"close":{}}})", close) : R"({"close_empty":true})");
+    ASSERT_TRUE(Wait([&] {
+      socket.ReceiveText(20ms);
+      return !socket.IsOpen();
+    }));
+    EXPECT_EQ(socket.CloseCode(), close);
+    ASSERT_TRUE(Wait([&] { return Request("/state/" + code).get("closes").get<double>() == 1; }));
+    const auto codes = Request("/state/" + code).get("close_codes").get<picojson::array>();
+    ASSERT_EQ(codes.size(), 1u);
+    EXPECT_EQ(codes[0].get<double>(), close);
+    socket.Close();
+    EXPECT_EQ(Request("/state/" + code).get("closes").get<double>(), 1);
+  }
+}
+
+TEST_F(OrcaRoomRuntime, ReconnectReusesTheSeatTicketAndClosesTheOpenSocketWith4001)
+{
+  const std::string code = "sameticket";
+  auto room = Open(code, R"({"same_ticket":true})");
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 1 && room->RoundTripMs() >= 0; }));
+  u32 before;
+  room->RoundTripMs(&before);
+  room->TestDropConnection();
+  ASSERT_TRUE(Wait([&] {
+    u32 sequence;
+    room->RoundTripMs(&sequence);
+    return sequence > before && Connections(code) == 2;
+  }));
+  const auto state = Request("/state/" + code);
+  EXPECT_EQ(state.get("tickets").get<double>(), 1);
+  const auto tickets = state.get("ticket_uses").get<picojson::array>();
+  ASSERT_EQ(tickets.size(), 2u);
+  EXPECT_EQ(tickets[0].get<double>(), 1);
+  EXPECT_EQ(tickets[1].get<double>(), 1);
+  const auto closes = state.get("close_codes").get<picojson::array>();
+  ASSERT_EQ(closes.size(), 1u);
+  EXPECT_EQ(closes[0].get<double>(), 4001);
+}
+
+TEST_F(OrcaRoomRuntime, ReconnectRefreshesOnlyAfterTheCachedTicketIsRefused)
+{
+  const std::string code = "expireticket";
+  auto room = Open(code);
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 1 && room->RoundTripMs() >= 0; }));
+  Action(code, R"({"reject_first_ticket":true})");
+  u32 before;
+  room->RoundTripMs(&before);
+  room->TestDropConnection();
+  ASSERT_TRUE(Wait([&] {
+    u32 sequence;
+    room->RoundTripMs(&sequence);
+    return sequence > before && Connections(code) == 3;
+  }));
+  const auto state = Request("/state/" + code);
+  EXPECT_EQ(state.get("tickets").get<double>(), 2);
+  const auto tickets = state.get("ticket_uses").get<picojson::array>();
+  ASSERT_EQ(tickets.size(), 3u);
+  EXPECT_EQ(tickets[0].get<double>(), 1);
+  EXPECT_EQ(tickets[1].get<double>(), 1);
+  EXPECT_EQ(tickets[2].get<double>(), 2);
+}
+
+TEST_F(OrcaRoomRuntime, RealSeatInUseBodyRetriesWithoutMintingAnotherTicket)
+{
+  // origin/main:rooms/src/index.ts's seatInUse refusal, including its sentence and code.
+  const std::string refusal =
+      R"({"error":"This seat is in use. Join again in a moment.","code":"seat_in_use"})";
+  for (const bool initial : {false, true})
+  {
+    const std::string code = initial ? "initialseat" : "recoverseat";
+    auto room = Open(code, initial ?
+        fmt::format(R"({{"refuse":{},"refuse_count":1}})", refusal) : "{}");
+    if (!initial)
+    {
+      ASSERT_TRUE(Wait([&] { return room->Seat() == 1 && room->RoundTripMs() >= 0; }));
+      Action(code, fmt::format(R"({{"refuse":{},"refuse_count":2}})", refusal));
+      room->TestDropConnection();
+    }
+    const int expected = initial ? 2 : 3;
+    ASSERT_TRUE(Wait([&] {
+      return room->Seat() == 1 && room->RoundTripMs() >= 0 && Connections(code) == expected;
+    }));
+    EXPECT_NE(room->GetState(), RoomState::Ended);
+    const auto state = Request("/state/" + code);
+    EXPECT_EQ(state.get("tickets").get<double>(), 1);
+    for (const auto& ticket : state.get("ticket_uses").get<picojson::array>())
+      EXPECT_EQ(ticket.get<double>(), 1);
+  }
+}
+
+TEST_F(OrcaRoomRuntime, RealFullRoomBodyEndsRecoveryAfterOneFreshTicketFallback)
+{
+  const std::string code = "recoverfull";
+  auto room = Open(code);
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 1 && room->RoundTripMs() >= 0; }));
+  Action(code, R"({"refuse":{"error":"Room is full"}})");
+  room->TestDropConnection();
+  ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }));
+  EXPECT_EQ(room->ErrorCode(), "room_full");
+  EXPECT_EQ(room->Status(), "That room is full");
+  EXPECT_EQ(Connections(code), 3);
+  EXPECT_EQ(Request("/state/" + code).get("tickets").get<double>(), 2);
+}
+
+TEST_F(OrcaRoomRuntime, VersionRefusalBodiesKeepTheSiteCodeAndExplainWhichFriendMustUpdate)
+{
+  const std::string mismatch = RefusalReason("WebSocket connect failed: ... (HTTP 403)");
+  const std::string older = "Your friend is on an older YG Dolphin: ask them to press Play to update.";
+  const std::string newer = "Your friend is on a newer YG Dolphin: press Play to update.";
+  const std::vector<std::pair<std::string, std::string>> cases{
+      {R"({"error":"This room uses a different lobby protocol or configuration","code":"host_older","host_version":"0.3.44","your_version":"0.3.48"})",
+       "Your friend is on an older YG Dolphin (0.3.44): ask them to press Play to update."},
+      {R"({"error":"This room uses a different lobby protocol or configuration","code":"host_older"})", older},
+      {R"({"error":"This room uses a different lobby protocol or configuration","code":"host_newer","host_version":"0.3.49","your_version":"0.3.48"})", newer},
+      {R"({"error":"This room uses a different lobby protocol or configuration","code":"host_newer"})", newer},
+      {R"({"error":"This room uses a different lobby protocol or configuration","code":"lobby_mismatch"})", mismatch},
+      {R"({"error":"This room uses a different lobby protocol or configuration"})", mismatch},
+      {R"({"error":"host_older host_version=injected","code":"unknown"})", mismatch},
+      {R"({"error":"ignored","code":"host_older","host_version":"0.3.44\ntext"})", older},
+      {R"({"error":"ignored","code":"host_older","host_version":44})", older},
+  };
+  for (size_t i = 0; i < cases.size(); ++i)
+  {
+    const auto& [body, sentence] = cases[i];
+    SCOPED_TRACE(body);
+    const std::string code = "version" + std::to_string(i);
+    auto room = Open(code, fmt::format(R"({{"refuse":{},"refuse_status":403}})", body));
+    ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }));
+    EXPECT_EQ(room->Status(), sentence);
+    EXPECT_EQ(room->ErrorCode(), "room_mismatch");
+    EXPECT_EQ(Connections(code), 1);
+  }
+}
+
+TEST_F(OrcaRoomRuntime, ReplayLimitExplainsTheJoinFailure)
+{
+  auto room = Open("replaylimit");
+  ASSERT_TRUE(Wait([&] { return room->Seat() == 1; }));
+  Action("replaylimit", R"({"message":{"t":"msg","from":"peer","d":{"k":"drop","r":"replay_limit"}}})");
+  ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }));
+  EXPECT_EQ(room->ErrorCode(), "replay_limit");
+  EXPECT_EQ(room->Status(), "Your friend's game couldn't send the match to you (too long to catch up). "
+                            "Try again at the next character select.");
+}
+
 TEST_F(OrcaRoomRuntime, WelcomeDoesNotResetTheReconnectBudget)
 {
   const std::string code = "budget44";
@@ -1857,12 +2012,12 @@ TEST_F(OrcaRoomRuntime, FirstUpgradeRefusalsMakeOnlyOneRequest)
 {
   for (const auto& [code, body] : std::vector<std::pair<std::string, std::string>>{
            {"fullroom", "Room is full"}, {"complete", "This match is complete"},
-           {"seatbusy", "seat in use"}, {"unknown4", "unclassified"}})
+           {"unknown4", "unclassified"}})
   {
     auto room = Open(code, fmt::format(R"({{"refuse":"{}"}})", body));
     ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }, 1s));
     if (body == "This match is complete")
-      EXPECT_TRUE(room->ErrorCode() == "match-over" || room->ErrorCode() == "room_full");
+      EXPECT_EQ(room->ErrorCode(), "match-over");
     else
       EXPECT_EQ(room->ErrorCode(), "room_full");
     EXPECT_EQ(Connections(code), 1);
@@ -1921,9 +2076,10 @@ TEST_F(OrcaRoomRuntime, QuitCancelsATicketRefreshAndAttemptsLeave)
   const std::string code = "quittkt4";
   auto room = Open(code);
   ASSERT_TRUE(Wait([&] { return room->Seat() == 1; }));
-  Action(code, R"({"ticket_delay":6})");
+  Action(code, R"({"ticket_delay":6,"reject_first_ticket":true})");
   room->TestDropConnection();
   ASSERT_TRUE(Wait([&] { return Request("/state/" + code).get("tickets").get<double>() >= 2; }));
+  Action(code, R"({"reject_first_ticket":false})");
   const auto start = RoomClock::now();
   room->Leave();
   EXPECT_LT(RoomClock::now() - start, 3s);

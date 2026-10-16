@@ -13,6 +13,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from tempfile import TemporaryDirectory
+from urllib.parse import parse_qs, urlsplit
 
 rooms = {}
 lock = threading.RLock()
@@ -80,12 +81,13 @@ class Handler(BaseHTTPRequestHandler):
             with lock:
                 cfg = rooms[code]
                 cfg["tickets"] += 1
+                ticket_number = cfg["tickets"]
                 delay = cfg.get("ticket_delay", 0) if cfg["tickets"] > 1 else 0
             if delay:
                 time.sleep(delay)
             try:
                 self.reply({"url": f"http://127.0.0.1:{self.server.server_port}",
-                            "ticket": "loopback-fixture", "direct": cfg.get("direct", False),
+                            "ticket": f"loopback-fixture-{ticket_number}", "direct": cfg.get("direct", False),
                             "ice": [{"urls": "stun:127.0.0.1:9"}],
                             **({"tourney": cfg["tourney"]} if "tourney" in cfg else {})})
             except (BrokenPipeError, ConnectionResetError):
@@ -94,7 +96,8 @@ class Handler(BaseHTTPRequestHandler):
         code = self.path.split("/")[-1]
         if self.path.startswith("/configure/"):
             with lock:
-                rooms[code] = dict(body, tickets=0, connects=0, probes=0, closes=0, messages=[], sockets=[])
+                rooms[code] = dict(body, tickets=0, connects=0, probes=0, closes=0,
+                                   messages=[], sockets=[], close_codes=[], ticket_uses=[])
             self.reply({})
         elif self.path.startswith("/action/"):
             with lock:
@@ -106,10 +109,15 @@ class Handler(BaseHTTPRequestHandler):
                     cfg["blocked_until"] = time.monotonic() + body["block_for"]
                 if "upgrade_delay" in body:
                     cfg["upgrade_delay"] = body["upgrade_delay"]
+                for name in ("refuse", "refuse_status", "refuse_count", "reject_first_ticket"):
+                    if name in body:
+                        cfg[name] = body[name]
             if ws:
                 try:
                     if "close" in body:
                         send(ws, struct.pack("!H", body["close"]), 8)
+                    if body.get("close_empty"):
+                        send(ws, b"", 8)
                     if "message" in body:
                         send(ws, body["message"])
                 except OSError:
@@ -121,7 +129,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith("/state/"):
             with lock:
                 cfg = rooms[code]
-                self.reply({k: cfg[k] for k in ("tickets", "connects", "probes", "closes", "messages")})
+                self.reply({k: cfg[k] for k in ("tickets", "connects", "probes", "closes",
+                                              "messages", "close_codes", "ticket_uses")})
             return
         with lock:
             cfg = rooms[code]
@@ -130,12 +139,22 @@ class Handler(BaseHTTPRequestHandler):
             attempt = cfg["connects"]
             refuse = cfg.get("refuse")
             refuse_count = cfg.get("refuse_count", 100)
+            refuse_status = cfg.get("refuse_status", 409)
+            ticket = parse_qs(urlsplit(self.path).query).get("ticket", [""])[0]
+            ticket_number = int(ticket.rsplit("-", 1)[-1]) if ticket.startswith("loopback-fixture-") else 0
+            cfg["ticket_uses"].append(ticket_number)
+            if attempt > 1 and cfg.get("same_ticket") and ticket_number != 1:
+                refuse = {"error": "This seat is in use. Join again in a moment.", "code": "seat_in_use"}
+                refuse_count, refuse_status = attempt, 409
+            if cfg.get("reject_first_ticket") and ticket_number == 1:
+                refuse = {"error": "Ticket expired"}
+                refuse_count, refuse_status = attempt, 401
             delay = max(cfg.get("probe_delay" if probe else "upgrade_delay", 0),
                         cfg.get("blocked_until", 0) - time.monotonic())
         if delay:
             time.sleep(delay)
         if refuse and attempt <= refuse_count:
-            self.reply({"error": refuse}, 409)
+            self.reply(refuse if isinstance(refuse, dict) else {"error": refuse}, refuse_status)
             return
         self.send_response(101)
         self.send_header("Upgrade", "websocket")
@@ -174,6 +193,7 @@ class Handler(BaseHTTPRequestHandler):
                 if opcode == 8:
                     with lock:
                         cfg["closes"] += 1
+                        cfg["close_codes"].append(struct.unpack("!H", payload[:2])[0] if len(payload) >= 2 else 0)
                     send(ws, payload, 8)
                     break
                 if opcode != 1:
@@ -215,7 +235,11 @@ def main():
         test_env = {"PATH": os.environ.get("PATH", "") if os.name == "nt" else
                     "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin", "TMPDIR": temp,
                     "ORCA_TEST_ROOM_SERVER": f"http://127.0.0.1:{room_server.server_port}",
-                    "ORCA_TEST_KEYFRAME_SERVER": f"http://127.0.0.1:{keyframes.server_port}"}
+                    "ORCA_TEST_KEYFRAME_SERVER": f"http://127.0.0.1:{keyframes.server_port}",
+                    "ORCA_NO_LOCAL_INPUT": "1", "SDL_JOYSTICK_HIDAPI": "0",
+                    "SDL_JOYSTICK_HIDAPI_GAMECUBE": "0", "SDL_HIDAPI_LIBUSB": "0",
+                    "SDL_JOYSTICK_IOKIT": "0", "SDL_JOYSTICK_MFI": "0",
+                    "SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT": "0x0000/0x0000"}
         if os.name == "nt":
             test_env["SystemRoot"] = os.environ.get("SystemRoot", r"C:\Windows")
         result = subprocess.run(sys.argv[1:], env=test_env)

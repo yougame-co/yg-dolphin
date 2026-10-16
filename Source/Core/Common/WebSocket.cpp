@@ -3,10 +3,12 @@
 
 #include "Common/WebSocket.h"
 
+#include <algorithm>
 #include <array>
 
 #include <curl/curl.h>
 #include <fmt/format.h>
+#include <picojson.h>
 
 #include "Common/CurlTLS.h"
 
@@ -21,6 +23,17 @@ namespace Common
 namespace
 {
 constexpr size_t MAX_MESSAGE = 1024 * 1024;
+
+bool IsVersion(std::string_view version)
+{
+  if (version.empty() || version.size() > 32 || version.front() == '.' || version.back() == '.')
+    return false;
+  return std::count(version.begin(), version.end(), '.') == 2 &&
+         version.find("..") == std::string_view::npos &&
+         std::all_of(version.begin(), version.end(), [](char c) {
+           return (c >= '0' && c <= '9') || c == '.';
+         });
+}
 
 // Waits until the socket is readable (or writable). Returns false on timeout or error.
 bool WaitSocket(curl_socket_t socket, bool for_write, std::chrono::milliseconds timeout)
@@ -60,6 +73,23 @@ struct WebSocket::Impl
     curl = nullptr;
     socket = CURL_SOCKET_BAD;
     open = false;
+  }
+
+  void EchoClose(std::string_view payload)
+  {
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+    while (true)
+    {
+      size_t sent = 0;
+      const CURLcode result =
+          curl_ws_send(curl, payload.data(), payload.size(), &sent, 0, CURLWS_CLOSE);
+      if (result != CURLE_AGAIN)
+        return;
+      const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
+          deadline - std::chrono::steady_clock::now());
+      if (left.count() <= 0 || !WaitSocket(socket, true, left))
+        return;
+    }
   }
 };
 
@@ -117,18 +147,34 @@ bool WebSocket::Connect(const std::string& url, std::chrono::milliseconds timeou
   curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &m_impl->cancelled);
 
   const CURLcode result = curl_easy_perform(curl);
-  if (result != CURLE_OK)
+  long status = 0;
+  curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
+  if (result != CURLE_OK || status != 101)
   {
-    long status = 0;
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &status);
-    *error = fmt::format("WebSocket connect failed: {} (HTTP {})", curl_easy_strerror(result),
-                         status);
+    *error = fmt::format("WebSocket connect failed: {} (HTTP {})",
+                         result == CURLE_OK ? "upgrade refused" : curl_easy_strerror(result), status);
+    picojson::value body;
+    const bool object = picojson::parse(body, refusal).empty() && body.is<picojson::object>();
+    const auto field = [&](const char* name) {
+      return object && body.get(name).is<std::string>() ? body.get(name).get<std::string>() :
+                                                        std::string();
+    };
+    const std::string code = field("code");
     if (status == 409)
     {
-      if (refusal.find("This match is complete") != std::string::npos)
+      if (code == "seat_in_use")
+        *error += " seat in use";
+      else if (refusal.find("This match is complete") != std::string::npos)
         *error += " match complete";
       else if (refusal.find("Room is full") != std::string::npos)
         *error += " room full";
+    }
+    else if (status == 403 && (code == "host_older" || code == "host_newer"))
+    {
+      *error += " " + code;
+      const std::string version = field("host_version");
+      if (code == "host_older" && IsVersion(version))
+        *error += " host_version=" + version;
     }
     m_impl->Release();
     return false;
@@ -220,9 +266,13 @@ std::optional<std::string> WebSocket::ReceiveText(std::chrono::milliseconds time
         m_impl->close_code =
             static_cast<u16>(static_cast<u8>(buffer[0]) << 8 | static_cast<u8>(buffer[1]));
       }
+      // Complete the close handshake while the connection is still open. Echo only the code;
+      // an empty close gets an empty reply rather than a status the server never sent.
+      m_impl->EchoClose(std::string_view(buffer.data(), received >= 2 ? 2 : 0));
       m_impl->Fail(m_impl->close_code ?
                        fmt::format("WebSocket closed by the server ({})", m_impl->close_code) :
                        std::string("WebSocket closed by the server"));
+      m_impl->Release();
       return std::nullopt;
     }
     // libcurl answers pings itself. Only text frames and their continuations carry messages.
