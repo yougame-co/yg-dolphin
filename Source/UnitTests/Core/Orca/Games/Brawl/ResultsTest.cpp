@@ -536,6 +536,8 @@ FakeMemory RankedResult()
   m.Write8(SET_RULE + 0x02, 0x81);  // stock; the bits above the rule are not the rule's
   m.Write8(SET_RULE + 0x03, 2);     // a timed match's minutes: not this match's
   m.Write8(SET_RULE + 0x04, 3);
+  m.Write8(SET_RULE + 0x05, 0);   // handicap off
+  m.Write8(SET_RULE + 0x06, 10);  // damage ratio 1.0
   m.Write8(SET_RULE + 0x08, 8);
   m.Write8(ITEM_FREQUENCY, 0);
   m.writes = 0;
@@ -588,12 +590,23 @@ TEST(OrcaResults, RankedRulesReadTheRulesTheFightStartedWith)
   check(m, SET_RULE + 0x08, 0, "timeMinutes");  // no time limit
   for (const int frequency : {1, 2, 3, 4})
     check(m, ITEM_FREQUENCY, static_cast<u8>(frequency), "items");
+  // The engine's own two: handicap off and a damage ratio of 1.0, whatever mod.json says.
+  for (const int handicap : {1, 2})
+    check(m, SET_RULE + 0x05, static_cast<u8>(handicap), "handicap");
+  for (const int ratio : {0, 5, 9, 11, 20})
+    check(m, SET_RULE + 0x06, static_cast<u8>(ratio), "damageRatio");
   // The first rule that differs is the one named.
   FakeMemory all = RankedResult();
   all.Write8(SET_RULE + 0x08, 6);
   all.Write8(ITEM_FREQUENCY, 2);
   EXPECT_EQ(ReadResults(all, RULES).block.differing_rule, "timeMinutes");
   EXPECT_EQ(ReadResults(all, Orca::Mod::RankedRules{3, 6}).block.differing_rule, "items");
+  all.Write8(SET_RULE + 0x05, 1);
+  all.Write8(SET_RULE + 0x06, 20);
+  all.Write8(ITEM_FREQUENCY, 0);
+  EXPECT_EQ(ReadResults(all, Orca::Mod::RankedRules{3, 6}).block.differing_rule, "handicap");
+  all.Write8(SET_RULE + 0x05, 0);
+  EXPECT_EQ(ReadResults(all, Orca::Mod::RankedRules{3, 6}).block.differing_rule, "damageRatio");
 }
 
 TEST(OrcaResults, RankedRulesThatCantBeReadAreNotRated)
@@ -601,6 +614,8 @@ TEST(OrcaResults, RankedRulesThatCantBeReadAreNotRated)
   for (const auto& [address, rule] :
        std::map<u32, std::string>{{SET_RULE + 0x02, "stocks"},
                                   {SET_RULE + 0x04, "stocks"},
+                                  {SET_RULE + 0x05, "handicap"},
+                                  {SET_RULE + 0x06, "damageRatio"},
                                   {SET_RULE + 0x08, "timeMinutes"},
                                   {ITEM_FREQUENCY, "items"}})
   {

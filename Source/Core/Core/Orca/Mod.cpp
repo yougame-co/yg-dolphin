@@ -857,6 +857,13 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
     if (!m.offers.empty() && m.builtin == Builtin::None)
       return fail("a mod with no builtin has no logic to offer caps with");
   }
+  // Without declared rules a results-only game would count whatever Brawl's rules menu holds (its
+  // defaults: a 2-minute timed match, items on): it reads no results, so it offers none.
+  if (m.builtin == Builtin::BrawlRev2Results && !m.ranked_rules &&
+      std::ranges::find(m.offers, "results") != m.offers.end())
+  {
+    return fail("builtin brawl-rev2-results offers \"results\" only with \"rankedRules\"");
+  }
 
   if (!flat)
     return m;
@@ -1406,7 +1413,8 @@ bool Offers(std::string_view cap)
   const ModInfo* mod = ActiveMod();
   // Only the builtin's supported caps, once its guards have held and never after failure.
   return mod && mod->manifest.builtin != Builtin::None && s_held_once && !s_guards_failed &&
-         (mod->manifest.builtin != Builtin::BrawlRev2Results || cap == "results") &&
+         (mod->manifest.builtin != Builtin::BrawlRev2Results ||
+          (cap == "results" && mod->manifest.ranked_rules)) &&
          std::ranges::find(mod->manifest.offers, cap) != mod->manifest.offers.end();
 }
 }  // namespace Orca::Mod

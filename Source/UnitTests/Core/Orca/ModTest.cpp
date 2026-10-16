@@ -1775,6 +1775,20 @@ std::string ResultsMod()
   auto& object = value.get<picojson::object>();
   object["builtin"] = picojson::value("brawl-rev2-results");
   object["offers"] = picojson::value(picojson::array{picojson::value("results")});
+  picojson::value rules;
+  picojson::parse(rules, R"({"stocks":3,"timeMinutes":8,"items":"off"})");
+  object["rankedRules"] = rules;
+  return value.serialize();
+}
+
+// ResultsMod without rankedRules (and so offering nothing): a friends-only pack.
+std::string UnruledResultsMod()
+{
+  picojson::value value;
+  picojson::parse(value, ResultsMod());
+  auto& object = value.get<picojson::object>();
+  object.erase("rankedRules");
+  object["offers"] = picojson::value(picojson::array{});
   return value.serialize();
 }
 
@@ -1797,6 +1811,17 @@ TEST(OrcaMod, ResultsOnlyBuiltinIsValidated)
   ASSERT_TRUE(plain) << error;
   EXPECT_EQ(plain->builtin, Builtin::BrawlRev2Results);
   EXPECT_EQ(plain->offers, std::vector<std::string>{"results"});
+  // results only with declared ranked rules; without them the pack offers nothing.
+  const auto unruled = Orca::Mod::ParseManifest(UnruledResultsMod(), &error);
+  ASSERT_TRUE(unruled) << error;
+  EXPECT_FALSE(unruled->ranked_rules);
+  EXPECT_TRUE(unruled->offers.empty());
+  picojson::value value;
+  picojson::parse(value, UnruledResultsMod());
+  value.get<picojson::object>()["offers"] =
+      picojson::value(picojson::array{picojson::value("results")});
+  EXPECT_FALSE(Orca::Mod::ParseManifest(value.serialize(), &error));
+  EXPECT_NE(error.find("offers \"results\" only with \"rankedRules\""), std::string::npos) << error;
   EXPECT_TRUE(Refused(ResultsWith("builtin", R"("brawl-rev2-result")")));
   for (const char* offers : {R"(["locks"])", R"(["queue2"])", R"(["pick-ranked"])",
                              R"(["pick-casual"])", R"(["results","locks"])"})
@@ -1891,7 +1916,8 @@ struct ResultsGuest
 };
 
 // Brawl's scene manager and g_GameGlobal as Results.h reads them, at free MEM1 addresses: the scene
-// named `scene`, a 1v1's result info (port 1 won) and the rules block (3 stocks, 8:00), items off.
+// named `scene`, a 1v1's result info (port 1 won) and the rules block (3 stocks, 8:00, handicap
+// off, damage 1.0), items off.
 void ResultsScreen(Orca::UX::GuestMemory& m, std::string_view scene)
 {
   m.Write32(0x805A0060, 0x80900000);
@@ -1913,6 +1939,8 @@ void ResultsScreen(Orca::UX::GuestMemory& m, std::string_view scene)
   }
   m.Write8(0x80905002, 1);
   m.Write8(0x80905004, 3);
+  m.Write8(0x80905005, 0);
+  m.Write8(0x80905006, 10);
   m.Write8(0x80905008, 8);
   m.Write8(0x9017BE50, 0);
 }
@@ -2125,6 +2153,18 @@ TEST(OrcaMod, ResultsOnlyAdmitsRankedWithoutRulesetGates)
   EXPECT_FALSE(Orca::Mod::Offers("results"));
   EXPECT_FALSE(module.Active());
   EXPECT_FALSE(Orca::UX::ResultsVerified());
+  // Without rankedRules: no results read, so no Ranked, even if a manifest got "results" past the
+  // parser.
+  auto unruled = *profile;
+  unruled.mod->manifest.ranked_rules.reset();
+  Orca::SetActiveProfile(unruled);
+  Orca::Mod::NoteGuards(true, 2);
+  ASSERT_TRUE(module.Active());
+  EXPECT_FALSE(module.Describe().results);
+  EXPECT_FALSE(Orca::UX::ResultsVerified());
+  EXPECT_FALSE(Orca::Mod::Offers("results"));
+  EXPECT_EQ(Orca::Status::OfferedCaps(), base + tail);
+  EXPECT_FALSE(Rollback::OnlineMatch::RoomRefusal("ranked", module.Describe().results).empty());
   // A Brawl pack with no builtin still can't play Ranked.
   auto none = *profile;
   none.mod->manifest.builtin = Builtin::None;
@@ -2178,6 +2218,22 @@ TEST(OrcaMod, SchemaKnowsRankedRules)
     EXPECT_EQ(rules.get(key).get("maximum").get<double>(), 99.0) << key;
   }
   EXPECT_EQ(rules.get("items").get("const").get<std::string>(), "off");
+  // brawl-rev2-results offers results only with it.
+  bool results_need_rules = false;
+  for (const auto& rule : schema.get("allOf").get<picojson::array>())
+  {
+    if (!rule.get("then").contains("required"))
+      continue;
+    const auto& then = rule.get("then").get("required").get<picojson::array>();
+    const picojson::value& when = rule.get("if").get("properties");
+    if (then.size() == 1 && then[0].get<std::string>() == "rankedRules" &&
+        when.get("builtin").get("const").get<std::string>() == "brawl-rev2-results" &&
+        when.get("offers").get("contains").get("const").get<std::string>() == "results")
+    {
+      results_need_rules = true;
+    }
+  }
+  EXPECT_TRUE(results_need_rules);
 }
 
 TEST(OrcaMod, RankedRulesAreValidated)
@@ -2185,7 +2241,10 @@ TEST(OrcaMod, RankedRulesAreValidated)
   std::string error;
   const auto plain = Orca::Mod::ParseManifest(ResultsMod(), &error);
   ASSERT_TRUE(plain) << error;
-  EXPECT_FALSE(plain->ranked_rules);
+  EXPECT_EQ(plain->ranked_rules, (Orca::Mod::RankedRules{3, 8}));
+  const auto unruled = Orca::Mod::ParseManifest(UnruledResultsMod(), &error);
+  ASSERT_TRUE(unruled) << error;
+  EXPECT_FALSE(unruled->ranked_rules);
   constexpr char rules[] = R"({"stocks":3,"timeMinutes":8,"items":"off"})";
   for (const int format : {1, 2})
   {

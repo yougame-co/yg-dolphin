@@ -298,8 +298,11 @@ only by `LoadModProfile` and `LoadFlatProfile`, or on `Mod::Requested()`).
 - **Results without a ruleset (`brawl-rev2-results`)**, for Brawl-engine mods without Project+'s
   code (PM 3.6, Brawl Minus, Legacy): RSBE01 revision 2 only, profile game id `RSBE01`, its own game
   compat 1 (the key's `ux=<engine>.1`; the other builtins' keys are unchanged). Its guards are the
-  eight Brawl words alone. `offers` may name only `results`: the parser refuses `locks` and
-  `queue2`, and `Mod::Offers` offers nothing else for it, so no pick caps either. It is the legacy
+  eight Brawl words alone. `offers` may name only `results`, and only with `rankedRules`: the
+  parser refuses `locks` and `queue2`, and `results` without declared rules (Brawl's own defaults, a
+  2-minute timed match with items, would count), and `Mod::Offers` offers nothing else for it, so no
+  pick caps either. Without `rankedRules` it reads no results (`Describe().results` is false) and
+  plays no Ranked, so friends rooms only. It is the legacy
   `brawl-rev2-launcher` game in mod mode: results (`ResultsVerified`: the vanilla scene manager and
   `g_GameGlobal`'s result info, never the match block), the Online menu's Casual/Ranked picks, fresh
   starts, name tags, menu text and music. Its ruleset is `None`, so nothing that needs one runs: no
@@ -312,19 +315,20 @@ only by `LoadModProfile` and `LoadFlatProfile`, or on `Mod::Requested()`).
   admits it (`RoomRefusal` asks only for `results`), unlocked: nothing in the game enforces stages
   or rules, and each game is reported as its results screen shows it. The legacy launcher game is
   unchanged. `OrcaMod.ResultsOnlyAdmitsRankedWithoutRulesetGates`.
-- **`rankedRules`** (`brawl-rev2-results` only, either bundle format, owner-only like `builtin`):
-  `"rankedRules": {"stocks": 3, "timeMinutes": 8, "items": "off"}`, all three required, `stocks` and
-  `timeMinutes` integers 1-99, `items` only `"off"`. On the results screen the reader compares the
-  rules the fight started with, which only the Rules menu changes: `g_GameGlobal +0x1C` (gmSetRule,
-  the block the online rules lock: `+0x02` low 3 bits 1 for a stock match, `+0x04` stocks, `+0x08`
-  the stock match's time limit in minutes) and the item frequency at `0x9017BE50` (gmGlobalRecord's
-  menu data, RSBE01.patches' items group; 0 None). The first rule that differs, or can't be read,
-  makes the game void `rules-stocks`, `rules-timeMinutes` or `rules-items` (the room gets `void`, as
-  for `nocontest`), never a win or a loss, with one line `Orca result: frame <n>: not rated,
-  rankedRules.<rule> differs from this match's rule`. Casual and ranked rooms alike; nothing is
-  written or locked. Without the key, results are judged as above with no rules check. Both layouts
-  are Brawl rev 2's; a mod that moved them voids every game, and one real 1v1 on the mod proves them.
-  `OrcaResults.RankedRules*`.
+- **`rankedRules`** (`brawl-rev2-results` only, either bundle format, owner-only like `builtin`;
+  required to offer `results`): `"rankedRules": {"stocks": 3, "timeMinutes": 8, "items": "off"}`,
+  all three required, `stocks` and `timeMinutes` integers 1-99, `items` only `"off"`. On the results
+  screen the reader compares the rules the fight started with, which only the Rules menu changes:
+  `g_GameGlobal +0x1C` (gmSetRule, the block the online rules lock: `+0x02` low 3 bits 1 for a stock
+  match, `+0x04` stocks, `+0x08` the stock match's time limit in minutes) and the item frequency at
+  `0x9017BE50` (gmGlobalRecord's menu data, RSBE01.patches' items group; 0 None), then two rules the
+  engine fixes for every such game, not pack fields: `+0x05` handicap off (0) and `+0x06` damage
+  ratio 1.0 (10), as the locks set them. The first rule that differs, or can't be read, makes the
+  game void `rules-stocks`, `rules-timeMinutes`, `rules-items`, `rules-handicap` or
+  `rules-damageRatio` (the room gets `void`, as for `nocontest`), never a win or a loss, with one
+  line `Orca result: frame <n>: not rated, its <rule> is not the ranked rules'`. Casual and ranked
+  rooms alike; nothing is written or locked. Both layouts are Brawl rev 2's; a mod that moved them
+  voids every game, and one real 1v1 on the mod proves them. `OrcaResults.RankedRules*`.
 - **P+ fork guards** (flat format 2 only): the listing owner may add
   `"pplusGuards": {"rssExdata": "0x80551DD4", "pageIndex": "0x80552B70", "currentPage": "0x80552F90"}`
   with `builtin: "brawl-rev2-pplus"` (Project+Ex 1.7's NETBOOST.GCT holds Project+ v3.2's three
@@ -382,8 +386,9 @@ ORCA_SESSION=1 ORCA_MOD_DIR=<run folder> ORCA_SD_CACHE=<cache> [ORCA_DISC_SHA1=<
 
 ### Reaching Casual/Ranked from a non-P+ Brawl build
 
-For a `brawl-rev2-results` pack (PM 3.6, Brawl Minus, Legacy), whose mod has no Project+ codeset.
-What Orca reads needs a builtin whose guards hold, never a ruleset ([Online menu](#online-menu)):
+For a `brawl-rev2-results` pack (PM 3.6, Brawl Minus, Legacy), whose mod has no Project+ codeset,
+offering `results` with its `rankedRules` (without them it plays friends rooms only). What Orca
+reads needs a builtin whose guards hold, never a ruleset ([Online menu](#online-menu)):
 
 - **The pick.** The Online menu reader (`OnlineMenu.cpp` `ReadMenuState`,
   `OnlineMenuReader::Boundary`) follows the scene manager (`[0x805A0060]`: `+0x4` the scene, whose

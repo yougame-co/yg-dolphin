@@ -51,6 +51,16 @@
         "properties": { "builtin": { "const": "brawl-rev2-results" } }
       },
       "then": { "properties": { "offers": { "items": { "const": "results" } } } }
+    },
+    {
+      "if": {
+        "required": ["builtin", "offers"],
+        "properties": {
+          "builtin": { "const": "brawl-rev2-results" },
+          "offers": { "contains": { "const": "results" } }
+        }
+      },
+      "then": { "required": ["rankedRules"] }
     }
   ],
   "properties": {
@@ -202,7 +212,7 @@
       }
     },
     "builtin": {
-      "description": "Phase 1: the compiled UX modules the mod runs, each on only while its guard words hold. Only on RSBE01 revision 2. brawl-rev2-results (a Brawl-engine mod without Project+'s code) reads results only: no ruleset, and it may offer only results.",
+      "description": "Phase 1: the compiled UX modules the mod runs, each on only while its guard words hold. Only on RSBE01 revision 2. brawl-rev2-results (a Brawl-engine mod without Project+'s code) reads results only: no ruleset, and it may offer only results, with rankedRules.",
       "enum": ["brawl-rev2", "brawl-rev2-pplus", "brawl-rev2-results"]
     },
     "pplusGuards": {
@@ -217,7 +227,7 @@
       }
     },
     "rankedRules": {
-      "description": "Owner-only, brawl-rev2-results only: the rules a game must have been played under to count, a stock match with these stocks and time limit and items off. A game played under other rules, or whose rules can't be read, is reported void, never a win or a loss. Nothing is locked. Absent: no rules check.",
+      "description": "Owner-only, brawl-rev2-results only, and required for it to offer results: the rules a game must have been played under to count, a stock match with these stocks and time limit and items off (the engine also requires handicap off and a damage ratio of 1.0). A game played under other rules, or whose rules can't be read, is reported void, never a win or a loss. Nothing is locked. Without it the pack reads no results and plays no Ranked.",
       "type": "object",
       "additionalProperties": false,
       "required": ["stocks", "timeMinutes", "items"],
@@ -315,7 +325,7 @@
     "sd.clusterBytes, when set, leaves FAT32 more than 65,525 clusters: with S = bytes/512 sectors and C = clusterBytes/512, (S - 32 - ceil((floor(S/C)*4 + 8)/512) * fats) / C > 65525.",
     "saveTitle equals the disc's own title ID: 0x00010000 followed by the hex of disc.id's first 4 characters (RSBE01: 0x0001000052534245).",
     "builtin is only for disc RSBE01 revision 2.",
-    "offers is empty unless builtin is set. brawl-rev2-results may offer only results.",
+    "offers is empty unless builtin is set. brawl-rev2-results may offer only results, and only with rankedRules.",
     "rankedRules: builtin brawl-rev2-results only. The listing owner alone may change it, like builtin.",
     "pplusGuards: format 2 and builtin brawl-rev2-pplus only; its three 8-byte pairs don't overlap. The listing owner alone may change it, like builtin.",
     "keepGameCode: no address twice; the game's word differs from the mod's.",

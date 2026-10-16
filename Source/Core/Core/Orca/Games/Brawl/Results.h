@@ -37,6 +37,7 @@ class CPUThreadGuard;
 //         +0x0A u8 stocks left (0xFF timed), +0x0E u8 place (0 winner), +0x10 u32 KOs,
 //         +0x14 u32 falls, +0x18 u16 self-destructs
 //   +0x1C rules (0x9017F360): +0x02 u8 mode, +0x03 u8 timed minutes, +0x04 u8 stocks,
+//         +0x05 u8 handicap (0 off), +0x06 u8 damage ratio x10,
 //         +0x08 u8 stock match time limit in minutes (0 none), +0x0C u8 item frequency (0 none)
 // gmGlobalRecord menu data (0x9017B640 + 0x810 = 0x9017BE50): +0x00 u8 item frequency (0 None),
 // where a match takes its items from (RSBE01.patches' and PPLUS32.patches' items groups).
@@ -65,7 +66,8 @@ struct ResultBlock
   int decision = 0;  // +0x1378: 1 time up, 2 KO win, 9 no contest (0: not read)
   std::array<PortResult, 4> ports{};
   // With mod.json's rankedRules: the first rule this match was not played under ("stocks",
-  // "timeMinutes", "items"; the rules block and the item record above), or empty.
+  // "timeMinutes", "items", "handicap", "damageRatio"; the rules block and the item record above),
+  // or empty.
   std::string_view differing_rule;
   bool operator==(const ResultBlock&) const = default;
 };

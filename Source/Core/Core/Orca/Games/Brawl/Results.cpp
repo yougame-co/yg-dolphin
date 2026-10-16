@@ -37,11 +37,16 @@ constexpr u8 TYPE_NONE = 3;
 // gmSetRule offsets: what the Rules menu sets.
 constexpr u32 RULE_MODE = 0x02;
 constexpr u32 RULE_STOCKS = 0x04;
+constexpr u32 RULE_HANDICAP = 0x05;
+constexpr u32 RULE_RATIO = 0x06;
 constexpr u32 RULE_STOCK_MINUTES = 0x08;
 constexpr u32 RULE_ITEMS = 0x0C;
 // The rule in RULE_MODE's low 3 bits (OnlineRules.cpp keeps the others): 1 a stock match.
 constexpr u8 RULE_MODE_MASK = 0x07;
 constexpr u8 RULE_MODE_STOCK = 1;
+// Handicap off, and a damage ratio of 1.0 (stored x10), as the online rules' locks set them.
+constexpr u8 HANDICAP_OFF = 0;
+constexpr u8 RATIO_ONE = 10;
 // gmGlobalRecord's menu data: the item frequency a match takes (u8, 0 None), as RSBE01.patches'
 // items group and OnlineRules.cpp's MENU_ITEM_FREQUENCY use it.
 constexpr u32 RECORD_ITEM_FREQUENCY = 0x9017BE50;
@@ -69,11 +74,12 @@ u32 GlobalField(const GuestMemory& m, u32 field)
 
 std::atomic<bool> s_rules_pending{false};
 
-// mod.json's rankedRules (Mod.h): the first rule this match was not played under, by its mod.json
-// name ("stocks", "timeMinutes", "items"), or empty. Read on the results screen from the rules the
-// fight started with: gmSetRule, the block OnlineRules' locks write (mode, stocks, the stock
-// match's time limit), which only the Rules menu changes, and the record's item frequency. A rule
-// that can't be read differs.
+// mod.json's rankedRules (Mod.h): the first rule this match was not played under, or empty: its
+// mod.json fields ("stocks", "timeMinutes", "items"), then two the engine fixes for every ranked
+// game ("handicap" off, "damageRatio" 1.0). Read on the results screen from the rules the fight
+// started with: gmSetRule, the block OnlineRules' locks write (mode, stocks, handicap, damage ratio,
+// the stock match's time limit), which only the Rules menu changes, and the record's item
+// frequency. A rule that can't be read differs.
 std::string_view DifferingRule(const GuestMemory& m, const Orca::Mod::RankedRules& rules)
 {
   const auto byte = [&m](u32 address) -> std::optional<u8> {
@@ -90,6 +96,10 @@ std::string_view DifferingRule(const GuestMemory& m, const Orca::Mod::RankedRule
     return "timeMinutes";
   if (byte(RECORD_ITEM_FREQUENCY) != ITEMS_OFF)
     return "items";
+  if (byte(rule + RULE_HANDICAP) != HANDICAP_OFF)
+    return "handicap";
+  if (byte(rule + RULE_RATIO) != RATIO_ONE)
+    return "damageRatio";
   return {};
 }
 }  // namespace
@@ -373,9 +383,7 @@ std::vector<GameResult> ResultsTracker::Confirm(int confirmed, int plug_frame,
         out.push_back(Judge(r.block, frame));
         if (!r.block.differing_rule.empty())
         {
-          NOTICE_LOG_FMT(ROLLBACK,
-                         "Orca result: frame {}: not rated, rankedRules.{} differs from this "
-                         "match's rule",
+          NOTICE_LOG_FMT(ROLLBACK, "Orca result: frame {}: not rated, its {} is not the ranked rules'",
                          frame, r.block.differing_rule);
         }
         m_in_game = false;

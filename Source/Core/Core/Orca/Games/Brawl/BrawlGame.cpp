@@ -47,6 +47,9 @@ Orca::Engine::Manifest Identify(const Orca::Profile* profile)
       break;
     case Orca::Mod::Builtin::BrawlRev2Results:
       game = Game(BRAWL_REV2_RESULTS, Orca::Engine::Ruleset::None, BRAWL_REV2_RESULTS_COMPAT);
+      // Results only under the rules mod.json declares (Mod.h RankedRules): without them it reads
+      // none and plays no Ranked (Rollback::OnlineMatch::RoomRefusal).
+      game.results = profile->mod->manifest.ranked_rules.has_value();
       break;
     default:
       break;
