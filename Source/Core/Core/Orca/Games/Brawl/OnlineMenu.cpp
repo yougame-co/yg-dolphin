@@ -17,6 +17,7 @@
 #include "Core/Orca/Session/Events.h"
 #include "Core/Orca/Session/Replay.h"
 #include "Core/Orca/Status.h"
+#include "Core/Orca/Games/Brawl/BrawlGame.h"
 #include "Core/Orca/Games/Brawl/BrawlModule.h"
 #include "Core/Orca/Games/Brawl/CssTitle.h"
 #include "Core/Orca/Games/Brawl/MatchBlock.h"
@@ -407,6 +408,10 @@ bool Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
     s_drop_in_held = SequenceHoldsDropIn(in.sequence) || test_hold;
     s_training.store(in.sequence == "sqTraining", std::memory_order_relaxed);
   }
+  // The friends bytes are the match block's, in sora_scene's free space: not in a game whose free
+  // space may be its own code (brawl-rev2-results), which keeps nothing and never moves.
+  if (!BrawlGame::UsesFreeSpace(Builtin().Describe()))
+    return false;
   in.present = B::Present(m) && m.Valid(B::FRIENDS) && m.Valid(B::FRIENDS_END - 1);
   if (!in.present || !Pointer(m, SCENE_MANAGER))
     return false;

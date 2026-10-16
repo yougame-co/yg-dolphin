@@ -7,11 +7,13 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "Common/CommonTypes.h"
 #include "Core/Orca/Engine/MatchTypes.h"
 #include "Core/Orca/Games/Brawl/SetBlock.h"
+#include "Core/Orca/Mod.h"
 
 namespace Core
 {
@@ -35,7 +37,10 @@ class CPUThreadGuard;
 //         +0x0A u8 stocks left (0xFF timed), +0x0E u8 place (0 winner), +0x10 u32 KOs,
 //         +0x14 u32 falls, +0x18 u16 self-destructs
 //   +0x1C rules (0x9017F360): +0x02 u8 mode, +0x03 u8 timed minutes, +0x04 u8 stocks,
+//         +0x05 u8 handicap (0 off), +0x06 u8 damage ratio x10,
 //         +0x08 u8 stock match time limit in minutes (0 none), +0x0C u8 item frequency (0 none)
+// gmGlobalRecord menu data (0x9017B640 + 0x810 = 0x9017BE50): +0x00 u8 item frequency (0 None),
+// where a match takes its items from (RSBE01.patches' and PPLUS32.patches' items groups).
 // Scene names (scene manager 0x805A0060 +4 -> +0 name): "scMelee" fight, "scMemoryChange" between
 // scenes, "scVsResult" results screen.
 namespace Orca::UX
@@ -60,6 +65,10 @@ struct ResultBlock
   int end = 0;
   int decision = 0;  // +0x1378: 1 time up, 2 KO win, 9 no contest (0: not read)
   std::array<PortResult, 4> ports{};
+  // With mod.json's rankedRules: the first rule this match was not played under ("stocks",
+  // "timeMinutes", "items", "handicap", "damageRatio"; the rules block and the item record above),
+  // or empty.
+  std::string_view differing_rule;
   bool operator==(const ResultBlock&) const = default;
 };
 
@@ -75,8 +84,10 @@ struct Reading
   bool operator==(const Reading&) const = default;
 };
 
-// Reads one frame's state (read only).
-Reading ReadResults(const GuestMemory& memory);
+// Reads one frame's state (read only). With `ranked_rules`, the results screen's reading also
+// names the first rule the match differed from (ResultBlock::differing_rule).
+Reading ReadResults(const GuestMemory& memory,
+                    const std::optional<Orca::Mod::RankedRules>& ranked_rules = std::nullopt);
 
 // One game's result, as both players report it: Engine/MatchTypes.h (the session reports it).
 using Orca::Engine::GameResult;
@@ -84,8 +95,9 @@ using Orca::Engine::GameResult;
 // Game `index` of a ranked set, as the match block recorded it.
 GameResult FromRecord(const SetBlock::SetState& set, int index);
 
-// Judges a results screen. Void "ports" unless exactly two humans are on ports 1 and 2, void
-// "nocontest" unless the fight ended normally. One player first is a win, both first a draw.
+// Judges a results screen. Void "rules-<rule>" when the match differed from mod.json's
+// rankedRules, void "ports" unless exactly two humans are on ports 1 and 2, void "nocontest" unless
+// the fight ended normally. One player first is a win, both first a draw.
 GameResult Judge(const ResultBlock& block, int frame);
 
 // Turns per-frame readings into game results once those frames are final, identically on every

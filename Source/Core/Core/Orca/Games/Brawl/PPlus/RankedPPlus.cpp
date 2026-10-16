@@ -943,7 +943,7 @@ Lines s_lines;
 void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
            const std::vector<Events::PortInfo>& ports, bool /*alone*/)
 {
-  if (!ResultsVerified())
+  if (!ResultsVerified() || Rules::ProfileRuleset() == Rules::Ruleset::None)
     return;
   GuardMemory memory(guard);
   bool p1 = false, p2 = false;

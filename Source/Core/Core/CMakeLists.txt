@@ -915,6 +915,9 @@ endif()
 # Read by Source/UnitTests/Core (OrcaBundle.PinnedKey checks the build trusts exactly these).
 set(ORCA_BUNDLE_DEFINITIONS "${ORCA_BUNDLE_DEFINITIONS}" CACHE INTERNAL "")
 set_source_files_properties(Orca/Bundle.cpp PROPERTIES COMPILE_DEFINITIONS "${ORCA_BUNDLE_DEFINITIONS}")
+# The running version a mod.json's engine.minOrca is checked against (Mod::EngineVersion).
+set_source_files_properties(Orca/Mod.cpp PROPERTIES COMPILE_DEFINITIONS
+                            "ORCA_ENGINE_VERSION=\"${ORCA_VERSION}\"")
 # Orca data compiled in byte for byte (Engine/Ruleset.cpp, Games/Brawl/Rulesets.cpp): the ruleset
 # schema and the builtin module's rulesets, each written as a list of char literals that a source
 # file includes. Changing one of them re-runs CMake.

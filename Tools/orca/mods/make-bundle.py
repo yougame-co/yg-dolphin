@@ -159,7 +159,7 @@ def main():
     ap.add_argument("--pplus-user", help="Project+ release's user/ folder (Launcher/, Wii/sd.raw)")
     ap.add_argument("--7z", dest="sevenzip", default=None,
                     help="unpack sd.raw with this 7-Zip (7zz or 7z.exe); default: fatread.py, no 7-Zip needed")
-    ap.add_argument("--min-orca", default=None, help="engine.minOrca (default 0.4.0; --flat 0.3.35)")
+    ap.add_argument("--min-orca", default=None, help="engine.minOrca (default 0.3.35; YG Dolphin refuses a pack above its own version)")
     ap.add_argument("--flat", action="store_true", help="a flat bundle (mod.json format 2)")
     ap.add_argument("--pplus-run", help="--flat: a folder with Project+'s launcher and sd.raw side by side")
     ap.add_argument("--key", help="--flat: sign with this private key (sign-bundle.py keygen)")
@@ -168,7 +168,7 @@ def main():
     ap.add_argument("--any-card", action="store_true", help="--flat: take an sd.raw that isn't Project+ v3.2's")
     args = ap.parse_args()
     if args.min_orca is None:
-        args.min_orca = "0.3.35" if args.flat else "0.4.0"
+        args.min_orca = "0.3.35"
     if args.flat:
         if args.tree or not args.profile:
             sys.exit("--flat takes a profile and no --tree")

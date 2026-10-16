@@ -8,6 +8,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <regex>
 #include <span>
 #include <set>
 #include <string>
@@ -37,6 +38,21 @@
 #include "Core/Orca/Games/Brawl/OnlineMenu.h"
 #include "Core/Orca/Games/Brawl/OnlineRules.h"
 #include "Core/Orca/Games/Brawl/Results.h"
+#include "Core/Core.h"
+#include "Core/HW/Memmap.h"
+#include "Core/Orca/Engine/GuestMemory.h"
+#include "Core/Orca/Games/Brawl/BrawlGame.h"
+#include "Core/Orca/Games/Brawl/CharOrder.h"
+#include "Core/Orca/Games/Brawl/FreeSpace.h"
+#include "Core/Orca/UX/MenuEvents.h"
+#include "Core/Orca/UX/QueueApp.h"
+#include "Core/Orca/UX/Search.h"
+#include "Core/PowerPC/MMU.h"
+#include "Core/PowerPC/PowerPC.h"
+#include "Core/Rollback/InputGate.h"
+#include "Core/Rollback/OnlineMatch.h"
+#include "Core/System.h"
+#include "InputCommon/GCPadStatus.h"
 
 namespace
 {
@@ -71,7 +87,7 @@ picojson::value ReadJson(const std::string& path)
 // Project+'s mod.json as Tools/orca/mods/make-bundle.py writes it.
 constexpr char PPLUS_MOD[] = R"({
   "format": 1,
-  "engine": {"api": 1, "minOrca": "0.4.0"},
+  "engine": {"api": 1, "minOrca": "0.3.35"},
   "title": "Project+",
   "disc": {"id": "RSBE01", "revision": 2},
   "launcher": "launcher.dol",
@@ -91,7 +107,7 @@ constexpr char PPLUS_MOD[] = R"({
 
 constexpr char BRAWL_MOD[] = R"({
   "format": 1,
-  "engine": {"api": 1, "minOrca": "0.4.0"},
+  "engine": {"api": 1, "minOrca": "0.3.35"},
   "disc": {"id": "RSBE01", "revision": 2},
   "frameHook": {"address": "0x80017504", "word": "0x90170100"},
   "bootNandFrame": 1800,
@@ -265,13 +281,68 @@ TEST(OrcaMod, TreeRefusals)
   EXPECT_TRUE(refused("{"));
 }
 
+TEST(OrcaMod, MinOrcaAboveThisBuildRefuses)
+{
+  // Number by number, not as text.
+  using Orca::Mod::VersionAtLeast;
+  EXPECT_TRUE(VersionAtLeast("0.3.47", "0.3.47"));
+  EXPECT_TRUE(VersionAtLeast("0.3.47", "0.3.9"));
+  EXPECT_TRUE(VersionAtLeast("0.3.10", "0.3.9"));
+  EXPECT_TRUE(VersionAtLeast("1.0.0", "0.99.99"));
+  EXPECT_TRUE(VersionAtLeast("0.3.047", "0.3.47"));
+  EXPECT_TRUE(VersionAtLeast("10.0.0", "9.99.999"));
+  EXPECT_FALSE(VersionAtLeast("0.3.9", "0.3.10"));
+  EXPECT_FALSE(VersionAtLeast("0.3.47", "0.3.48"));
+  EXPECT_FALSE(VersionAtLeast("0.3.47", "0.4.0"));
+  EXPECT_FALSE(VersionAtLeast("0.3.47", "1.0.0"));
+  EXPECT_FALSE(VersionAtLeast("0.3.47", "0.3.100000000000000000"));
+  // This build's version is X.Y.Z, and a pack may need exactly it.
+  const std::string running(Orca::Mod::EngineVersion());
+  ASSERT_EQ(std::count(running.begin(), running.end(), '.'), 2) << running;
+  std::string error;
+  EXPECT_TRUE(Orca::Mod::ParseManifest(
+      BrawlWith("engine", fmt::format(R"({{"api": 1, "minOrca": "{}"}})", running)), &error))
+      << error;
+  EXPECT_TRUE(Orca::Mod::ParseManifest(BrawlWith("engine", R"({"api": 1, "minOrca": "0.0.1"})"),
+                                       &error))
+      << error;
+  // One patch newer: refused with the player's message, and before anything else this build can't
+  // read in it (a key from a later release, a builtin it doesn't know).
+  const size_t dot = running.rfind('.');
+  const std::string next =
+      running.substr(0, dot + 1) + std::to_string(std::stoull(running.substr(dot + 1)) + 1);
+  const std::string message =
+      fmt::format("This pack needs YG Dolphin {} or newer. Update the YouGame app and try again.",
+                  next);
+  for (const auto& [json, api] : std::vector<std::pair<std::string, double>>{
+           {BRAWL_MOD, 1}, {BRAWL_MOD, 2}, {BrawlWith("laterKey", "1"), 1},
+           {BrawlWith("builtin", R"("brawl-rev3")"), 1}})
+  {
+    picojson::value value;
+    ASSERT_EQ(picojson::parse(value, json), "");
+    value.get<picojson::object>()["engine"] = picojson::value(picojson::object{
+        {"api", picojson::value(api)}, {"minOrca", picojson::value(next)}});
+    error.clear();
+    EXPECT_FALSE(Orca::Mod::ParseManifest(value.serialize(), &error));
+    EXPECT_EQ(error, message) << value.serialize();
+  }
+  EXPECT_FALSE(Orca::Mod::ParseManifest(
+      BrawlWith("engine", R"({"api": 1, "minOrca": "999999999999.0.0"})"), &error));
+  EXPECT_EQ(error, "This pack needs YG Dolphin 999999999999.0.0 or newer. Update the YouGame app "
+                   "and try again.");
+  // A malformed one is still a form error, not an update.
+  EXPECT_FALSE(
+      Orca::Mod::ParseManifest(BrawlWith("engine", R"({"api": 1, "minOrca": "9.9"})"), &error));
+  EXPECT_NE(error.find("engine.minOrca must be a version"), std::string::npos) << error;
+}
+
 TEST(OrcaMod, ParsesEveryField)
 {
   std::string error;
   const auto m = Orca::Mod::ParseManifest(PPLUS_MOD, &error);
   ASSERT_TRUE(m) << error;
   EXPECT_EQ(m->engine_api, 1);
-  EXPECT_EQ(m->min_orca, "0.4.0");
+  EXPECT_EQ(m->min_orca, "0.3.35");
   EXPECT_EQ(m->title, "Project+");
   EXPECT_EQ(m->disc_id, "RSBE01");
   EXPECT_EQ(m->disc_revision, 2);
@@ -318,10 +389,10 @@ TEST(OrcaMod, RefusesAnythingElse)
   EXPECT_TRUE(Refused(BrawlWithout("engine")));
   EXPECT_TRUE(Refused(BrawlWithout("disc")));
   EXPECT_TRUE(Refused(BrawlWithout("frameHook")));
-  EXPECT_TRUE(Refused(BrawlWith("engine", R"({"api": 2, "minOrca": "0.4.0"})")));
+  EXPECT_TRUE(Refused(BrawlWith("engine", R"({"api": 2, "minOrca": "0.3.35"})")));
   EXPECT_TRUE(Refused(BrawlWith("engine", R"({"api": 1})")));
   EXPECT_TRUE(Refused(BrawlWith("engine", R"({"api": 1, "minOrca": "0.4"})")));
-  EXPECT_TRUE(Refused(BrawlWith("engine", R"({"api": 1, "minOrca": "0.4.0", "x": 1})")));
+  EXPECT_TRUE(Refused(BrawlWith("engine", R"({"api": 1, "minOrca": "0.3.35", "x": 1})")));
   EXPECT_TRUE(Refused(BrawlWith("title", R"("")")));
   EXPECT_TRUE(Refused(BrawlWith("title", "\"" + std::string(49, 'x') + "\"")));
   EXPECT_TRUE(Refused(BrawlWith("title", "\"caf\xc3\xa9\"")));
@@ -413,7 +484,8 @@ TEST(OrcaMod, SchemaMatchesTheEngine)
   EXPECT_EQ(strings(limits.get("offerableCaps")), std::vector<std::string>(caps.begin(), caps.end()));
   EXPECT_EQ(strings(limits.get("builtins")),
             (std::vector<std::string>{std::string(Orca::Mod::BuiltinName(Builtin::BrawlRev2)),
-                                      std::string(Orca::Mod::BuiltinName(Builtin::BrawlRev2PPlus))}));
+                                      std::string(Orca::Mod::BuiltinName(Builtin::BrawlRev2PPlus)),
+                                      std::string(Orca::Mod::BuiltinName(Builtin::BrawlRev2Results))}));
   // Every forced key of the schema's own list is on the allowlist, and nothing else is.
   std::vector<std::string> forced_keys;
   for (const auto& [key, value] : schema.get("properties").get("forced").get("properties").get<picojson::object>())
@@ -758,6 +830,136 @@ TEST(OrcaMod, GuardsAreNotOrcasOwnPatches)
       vanilla_only = true;
   }
   EXPECT_TRUE(vanilla_only);
+}
+
+namespace
+{
+std::string FlatPPlusGuards(const std::string& guards)
+{
+  picojson::value value;
+  picojson::parse(value, BRAWL_MOD);
+  auto& object = value.get<picojson::object>();
+  object["format"] = picojson::value(2.0);
+  object["listing"] = picojson::value("pplus-fork");
+  object["serial"] = picojson::value(1.0);
+  object["builtin"] = picojson::value("brawl-rev2-pplus");
+  picojson::value addresses;
+  EXPECT_EQ(picojson::parse(addresses, guards), "");
+  object["pplusGuards"] = addresses;
+  return value.serialize();
+}
+constexpr char PPLUS_EX_GUARDS[] =
+    R"({"rssExdata":"0x80551DD4","pageIndex":"0x80552B70","currentPage":"0x80552F90"})";
+}  // namespace
+
+TEST(OrcaMod, PPlusGuardAddressesAreValidated)
+{
+  std::string error;
+  const auto manifest = Orca::Mod::ParseManifest(FlatPPlusGuards(PPLUS_EX_GUARDS), &error);
+  ASSERT_TRUE(manifest) << error;
+  ASSERT_TRUE(manifest->pplus_guards);
+  EXPECT_EQ(*manifest->pplus_guards, (Orca::Mod::PPlusGuardAddresses{0x80551DD4, 0x80552B70, 0x80552F90}));
+  const auto defaults = Orca::Mod::ParseManifest(PPLUS_MOD, &error);
+  ASSERT_TRUE(defaults) << error;
+  EXPECT_FALSE(defaults->pplus_guards);
+  const auto words = Orca::Mod::BuiltinGuards(Builtin::BrawlRev2PPlus);
+  ASSERT_EQ(words.size(), 14u);
+  EXPECT_EQ(words[8].address, 0x80553594u);
+  EXPECT_EQ(words[10].address, 0x80554320u);
+  EXPECT_EQ(words[12].address, 0x805518D0u);
+  for (const char* invalid : {
+           R"(null)", R"({})",
+           R"({"rssExdata":"0x80551DD4","pageIndex":"0x80552B70"})",
+           R"({"rssExdata":"0x80551DD5","pageIndex":"0x80552B70","currentPage":"0x80552F90"})",
+           R"({"rssExdata":"0x8055000C","pageIndex":"0x80552B70","currentPage":"0x80552F90"})",
+           R"({"rssExdata":"0x8059FFFC","pageIndex":"0x80552B70","currentPage":"0x80552F90"})",
+           R"({"rssExdata":"0x805A0000","pageIndex":"0x80552B70","currentPage":"0x80552F90"})",
+           R"({"rssExdata":"0x90551DD4","pageIndex":"0x80552B70","currentPage":"0x80552F90"})",
+           R"({"rssExdata":"0x80551DD4","pageIndex":"0x80551DD4","currentPage":"0x80552F90"})",
+           R"({"rssExdata":"0x80551DD4","pageIndex":"0x80551DD8","currentPage":"0x80552F90"})",
+           R"({"rssExdata":"0x80551DD4","pageIndex":"0x80551DD0","currentPage":"0x80552F90"})",
+           R"({"rssExdata":"0x80551DD4","pageIndex":"0x80552B70","currentPage":"0x80552B74"})",
+           R"({"rssExdata":"0x80551DD4","pageIndex":"0x80552B70","currentPage":"0x80552F90","word":"0x1234"})"})
+  {
+    EXPECT_TRUE(Refused(FlatPPlusGuards(invalid))) << invalid;
+  }
+  EXPECT_TRUE(Orca::Mod::ParseManifest(FlatPPlusGuards(
+      R"({"rssExdata":"0x80550010","pageIndex":"0x80550018","currentPage":"0x8059FFF8"})"), &error)) << error;
+  picojson::value value;
+  picojson::parse(value, FlatPPlusGuards(PPLUS_EX_GUARDS));
+  auto& object = value.get<picojson::object>();
+  object["builtin"] = picojson::value("brawl-rev2");
+  EXPECT_FALSE(Orca::Mod::ParseManifest(value.serialize(), &error));
+  EXPECT_NE(error.find("requires builtin brawl-rev2-pplus"), std::string::npos);
+  object.erase("builtin");
+  object.erase("offers");
+  EXPECT_FALSE(Orca::Mod::ParseManifest(value.serialize(), &error));
+  EXPECT_NE(error.find("requires builtin brawl-rev2-pplus"), std::string::npos);
+  object["format"] = picojson::value(1.0);
+  object.erase("listing");
+  object.erase("serial");
+  object["builtin"] = picojson::value("brawl-rev2-pplus");
+  EXPECT_TRUE(Refused(value.serialize()));
+}
+
+TEST(OrcaMod, PPlusGuardsReadTheDeclaredPairs)
+{
+  std::string error;
+  const auto manifest = Orca::Mod::ParseManifest(FlatPPlusGuards(PPLUS_EX_GUARDS), &error);
+  ASSERT_TRUE(manifest) << error;
+  std::map<u32, u32> memory;
+  const auto guards = Orca::Mod::BuiltinGuards(Builtin::BrawlRev2PPlus);
+  for (size_t i = 0; i < 8; ++i)
+    memory[guards[i].address] = guards[i].word;
+  // Explicit fixture: no words at the P+ 3.2 codeset addresses.
+  memory.insert({{0x80551DD4, 0x3CA08042}, {0x80551DD8, 0x60A5C4E8},
+                 {0x80552B70, 0x3C608042}, {0x80552B74, 0x6063C821},
+                 {0x80552F90, 0x3E008049}, {0x80552F94, 0x62106000}});
+  size_t reads = 0;
+  const auto read = [&](u32 address) -> std::optional<u32> {
+    ++reads;
+    const auto it = memory.find(address);
+    return it == memory.end() ? std::nullopt : std::optional(it->second);
+  };
+  EXPECT_TRUE(Orca::Mod::GuardsHold(manifest->builtin, read, manifest->pplus_guards));
+  EXPECT_EQ(reads, 14u);
+  EXPECT_FALSE(Orca::Mod::GuardsHold(manifest->builtin, read));
+  for (auto& [address, word] : memory)
+  {
+    word ^= 1;
+    EXPECT_FALSE(Orca::Mod::GuardsHold(manifest->builtin, read, manifest->pplus_guards)) << std::hex << address;
+    word ^= 1;
+  }
+  memory.erase(0x80552F94);
+  EXPECT_FALSE(Orca::Mod::GuardsHold(manifest->builtin, read, manifest->pplus_guards));
+}
+
+TEST(OrcaMod, SchemaKnowsPPlusGuards)
+{
+  const picojson::value schema = ReadJson(RepoPath("Tools/orca/mods/mod.schema.json"));
+  std::vector<std::string> required;
+  for (const auto& key :
+       schema.get("properties").get("pplusGuards").get("required").get<picojson::array>())
+  {
+    required.push_back(key.get<std::string>());
+  }
+  EXPECT_EQ(required, (std::vector<std::string>{"rssExdata", "pageIndex", "currentPage"}));
+  // The address pattern accepts exactly what the engine accepts for one pair, the other two kept
+  // where they don't overlap it.
+  const std::regex pattern(
+      schema.get("$defs").get("pplusGuardWord").get("pattern").get<std::string>(),
+      std::regex::ECMAScript);
+  for (const char* address :
+       {"0x80550010", "0x80550014", "0x8055000C", "0x80550000", "0x8054FFFC", "0x80551DD4",
+        "0x80551dd4", "0X80551DD4", "0x80551DD6", "0x80551DD5", "0x80580000", "0x8059FFF8",
+        "0x8059fff8", "0x8059FFFC", "0x8059FFF4", "0x805A0000", "0x805A0004", "0x8155D000",
+        "0x0080551DD4", "0x551DD4", "80551DD4"})
+  {
+    const std::string json = FlatPPlusGuards(
+        fmt::format(R"({{"rssExdata":"{}","pageIndex":"0x80558000","currentPage":"0x80558010"}})",
+                    address));
+    EXPECT_EQ(std::regex_match(std::string(address), pattern), !Refused(json)) << address;
+  }
 }
 
 TEST(OrcaMod, Guards)
@@ -1617,4 +1819,522 @@ TEST(OrcaMod, GoldenLegacyCompatibilityKey)
   previous.replace(previous.size() - 6, 6, "|ux=29");
   EXPECT_EQ(fmt::format("orca2:{:016x}", XXH3_64bits(previous.data(), previous.size())),
             "orca2:395b59606b61d7e7");
+}
+
+namespace
+{
+std::string ResultsMod()
+{
+  picojson::value value;
+  picojson::parse(value, BRAWL_MOD);
+  auto& object = value.get<picojson::object>();
+  object["builtin"] = picojson::value("brawl-rev2-results");
+  object["offers"] = picojson::value(picojson::array{picojson::value("results")});
+  picojson::value rules;
+  picojson::parse(rules, R"({"stocks":3,"timeMinutes":8,"items":"off"})");
+  object["rankedRules"] = rules;
+  return value.serialize();
+}
+
+// ResultsMod without rankedRules (and so offering nothing): a friends-only pack.
+std::string UnruledResultsMod()
+{
+  picojson::value value;
+  picojson::parse(value, ResultsMod());
+  auto& object = value.get<picojson::object>();
+  object.erase("rankedRules");
+  object["offers"] = picojson::value(picojson::array{});
+  return value.serialize();
+}
+
+std::string ResultsWith(std::string_view key, const std::string& json)
+{
+  picojson::value value, field;
+  picojson::parse(value, ResultsMod());
+  EXPECT_EQ(picojson::parse(field, json), "");
+  value.get<picojson::object>()[std::string(key)] = field;
+  return value.serialize();
+}
+}  // namespace
+
+TEST(OrcaMod, ResultsOnlyBuiltinIsValidated)
+{
+  EXPECT_EQ(Orca::Mod::BuiltinFromName("brawl-rev2-results"), Builtin::BrawlRev2Results);
+  EXPECT_EQ(Orca::Mod::BuiltinName(Builtin::BrawlRev2Results), "brawl-rev2-results");
+  std::string error;
+  const auto plain = Orca::Mod::ParseManifest(ResultsMod(), &error);
+  ASSERT_TRUE(plain) << error;
+  EXPECT_EQ(plain->builtin, Builtin::BrawlRev2Results);
+  EXPECT_EQ(plain->offers, std::vector<std::string>{"results"});
+  // results only with declared ranked rules; without them the pack offers nothing.
+  const auto unruled = Orca::Mod::ParseManifest(UnruledResultsMod(), &error);
+  ASSERT_TRUE(unruled) << error;
+  EXPECT_FALSE(unruled->ranked_rules);
+  EXPECT_TRUE(unruled->offers.empty());
+  picojson::value value;
+  picojson::parse(value, UnruledResultsMod());
+  value.get<picojson::object>()["offers"] =
+      picojson::value(picojson::array{picojson::value("results")});
+  EXPECT_FALSE(Orca::Mod::ParseManifest(value.serialize(), &error));
+  EXPECT_NE(error.find("offers \"results\" only with \"rankedRules\""), std::string::npos) << error;
+  EXPECT_TRUE(Refused(ResultsWith("builtin", R"("brawl-rev2-result")")));
+  for (const char* offers : {R"(["locks"])", R"(["queue2"])", R"(["pick-ranked"])",
+                             R"(["pick-casual"])", R"(["results","locks"])"})
+    EXPECT_TRUE(Refused(ResultsWith("offers", offers))) << offers;
+  EXPECT_FALSE(Refused(ResultsWith("offers", "[]")));
+  EXPECT_TRUE(Refused(ResultsWith("disc", R"({"id":"RSBE01","revision":1})")));
+  EXPECT_TRUE(Refused(ResultsWith("disc", R"({"id":"RSBP01","revision":2})")));
+}
+
+TEST(OrcaMod, ResultsOnlyUsesEightCommonGuards)
+{
+  const auto guards = Orca::Mod::BuiltinGuards(Builtin::BrawlRev2Results);
+  ASSERT_EQ(guards.size(), 8u);
+  const auto vanilla = Orca::Mod::BuiltinGuards(Builtin::BrawlRev2);
+  std::map<u32, u32> image;
+  for (size_t i = 0; i < guards.size(); ++i)
+  {
+    EXPECT_EQ(guards[i].address, vanilla[i].address);
+    EXPECT_EQ(guards[i].word, vanilla[i].word);
+    image[guards[i].address] = guards[i].word;
+  }
+  const auto read = [&](u32 address) -> std::optional<u32> {
+    const auto it = image.find(address);
+    return it == image.end() ? std::nullopt : std::optional(it->second);
+  };
+  EXPECT_TRUE(Orca::Mod::GuardsHold(Builtin::BrawlRev2Results, read));
+  EXPECT_FALSE(Orca::Mod::GuardsHold(Builtin::BrawlRev2, read));
+  EXPECT_FALSE(Orca::Mod::GuardsHold(Builtin::BrawlRev2PPlus, read));
+  for (const auto& word : guards)
+  {
+    image[word.address] ^= 1;
+    EXPECT_FALSE(Orca::Mod::GuardsHold(Builtin::BrawlRev2Results, read));
+    image[word.address] ^= 1;
+  }
+}
+
+namespace
+{
+// An isolated in-memory Wii guest (MEM1 and MEM2, zeros), with no disc, device backend or user
+// configuration, as RoomTest's FriendsHeadlessCore.
+struct ResultsGuest
+{
+  ResultsGuest()
+  {
+    old_user = File::GetUserPath(D_USER_IDX);
+    directory = File::CreateTempDir();
+    File::SetUserPath(D_USER_IDX, directory + DIR_SEP);
+    Config::Init();
+    SConfig::Init();
+    system.Initialize();
+    old_wii = system.IsWii();
+    system.SetIsWii(true);
+    system.GetMemory().Init();
+    // Brawl's view of memory: MEM1 at 0x80000000 and MEM2 at 0x90000000, the BATs a Wii boot sets
+    // (CBoot::SetupBAT).
+    auto& ppc = system.GetPPCState();
+    ppc.spr[SPR_DBAT0U] = 0x80001fff;
+    ppc.spr[SPR_DBAT0L] = 0x00000002;
+    ppc.spr[SPR_DBAT4U] = 0x90001fff;
+    ppc.spr[SPR_DBAT4L] = 0x10000002;
+    HID4(ppc).SBE = 1;
+    system.GetMMU().DBATUpdated();
+    ppc.msr.DR = 1;
+    system.GetPowerPC().MSRUpdated();
+    Core::DeclareAsCPUThread();
+  }
+  ~ResultsGuest()
+  {
+    Core::UndeclareAsCPUThread();
+    Orca::Status::SetAppCaps("");
+    Orca::UX::AnnounceMenuCancel();
+    Orca::UX::Builtin().Header().SetWanted(Orca::UX::Rules::Mode::None);
+    Orca::UX::Tracker().Reset();
+    Orca::SetActiveProfile(std::nullopt);
+    auto& ppc = system.GetPPCState();
+    for (const int spr : {SPR_DBAT0U, SPR_DBAT0L, SPR_DBAT4U, SPR_DBAT4L})
+      ppc.spr[spr] = 0;
+    HID4(ppc).SBE = 0;
+    ppc.msr.DR = 0;
+    system.GetPowerPC().MSRUpdated();
+    system.GetMMU().DBATUpdated();
+    system.GetMemory().Shutdown();
+    system.SetIsWii(old_wii);
+    SConfig::Shutdown();
+    Config::Shutdown();
+    File::SetUserPath(D_USER_IDX, old_user);
+    File::DeleteDirRecursively(directory);
+  }
+  Core::System& system = Core::System::GetInstance();
+  std::string old_user, directory;
+  bool old_wii = false;
+};
+
+// Brawl's scene manager and g_GameGlobal as Results.h reads them, at free MEM1 addresses: the scene
+// named `scene`, a 1v1's result info (port 1 won) and the rules block (3 stocks, 8:00, handicap
+// off, damage 1.0), items off.
+void ResultsScreen(Orca::UX::GuestMemory& m, std::string_view scene)
+{
+  m.Write32(0x805A0060, 0x80900000);
+  m.Write32(0x80900004, 0x80901000);
+  m.Write32(0x80901000, 0x80902000);
+  for (u32 i = 0; i <= scene.size(); ++i)
+    m.Write8(0x80902000 + i, i == scene.size() ? u8{0} : static_cast<u8>(scene[i]));
+  m.Write32(0x805A00E0, 0x80903000);
+  m.Write32(0x80903018, 0x80904000);
+  m.Write32(0x8090301C, 0x80905000);
+  m.Write8(0x80904001, 1);
+  m.Write16(0x8090400E, 1);
+  for (u32 port = 0; port < 4; ++port)
+  {
+    const u32 record = 0x80904024 + port * 0x2AC;
+    m.Write8(record + 0x01, port < 2 ? 0 : 3);
+    m.Write8(record + 0x0A, port == 0 ? 2 : 0);
+    m.Write8(record + 0x0E, static_cast<u8>(port));
+  }
+  m.Write8(0x80905002, 1);
+  m.Write8(0x80905004, 3);
+  m.Write8(0x80905005, 0);
+  m.Write8(0x80905006, 10);
+  m.Write8(0x80905008, 8);
+  m.Write8(0x9017BE50, 0);
+}
+}  // namespace
+
+TEST(OrcaMod, ResultsOnlyAdmitsRankedWithoutRulesetGates)
+{
+  ResultsGuest guest;
+  struct Dirs
+  {
+    std::vector<std::string> list;
+    ~Dirs()
+    {
+      for (const std::string& dir : list)
+        File::DeleteDirRecursively(dir);
+    }
+  } dirs;
+  Bundle bundle = MakeBundle(ResultsMod());
+  dirs.list.push_back(bundle.dir);
+  bundle.WriteTree();
+  std::string error;
+  const auto profile = Orca::LoadModProfile(bundle.dir, &error);
+  ASSERT_TRUE(profile) << error;
+  EXPECT_EQ(profile->game_id, "RSBE01");
+  Orca::SetActiveProfile(profile);
+  auto& module = Orca::UX::Builtin();
+  const auto game = module.Describe();
+  EXPECT_EQ(game.id, Orca::UX::BrawlGame::BRAWL_REV2_RESULTS);
+  EXPECT_EQ(game.ruleset, Orca::Engine::Ruleset::None);
+  EXPECT_TRUE(game.results);
+  EXPECT_TRUE(game.music);
+  EXPECT_EQ(game.compat, Orca::UX::BrawlGame::BRAWL_REV2_RESULTS_COMPAT);
+  EXPECT_EQ(Orca::UX::BrawlGame::BRAWL_REV2_RESULTS_COMPAT, 1);
+  EXPECT_FALSE(Orca::UX::BrawlGame::UsesFreeSpace(game));
+  EXPECT_FALSE(module.Active());
+  EXPECT_FALSE(Orca::Mod::Offers("results"));
+  const std::string tail = fmt::format(" {} {} {}", Orca::Status::TALK_CAP,
+                                       Orca::Status::RUMBLE_CAP, Orca::Status::RECORD_CAP);
+  const std::string base = std::string(Orca::Status::CAPS) + " " + Orca::Status::MUSIC_CAP;
+  EXPECT_EQ(Orca::Status::OfferedCaps(), base + tail);
+  // Its eight guard words held: results and the menus, and nothing a ruleset brings.
+  Orca::Mod::NoteGuards(true, 2);
+  ASSERT_TRUE(module.Active());
+  EXPECT_TRUE(Orca::UX::ResultsVerified());
+  EXPECT_TRUE(Orca::UX::FreshMove::Supported());
+  EXPECT_TRUE(Orca::Music::Supported());
+  EXPECT_EQ(Orca::Status::OfferedCaps(), base + " results" + tail);
+  EXPECT_TRUE(Rollback::OnlineMatch::RoomRefusal("ranked", game.results).empty());
+  EXPECT_TRUE(Orca::Mod::Offers("results"));
+  for (const char* cap : {"locks", "queue2", "pick-casual", "pick-ranked"})
+    EXPECT_FALSE(Orca::Mod::Offers(cap)) << cap;
+  EXPECT_EQ(module.ProfileRuleset(), Orca::Engine::Ruleset::None);
+  EXPECT_EQ(Orca::UX::Rules::ProfileRuleset(), Orca::UX::Rules::Ruleset::None);
+  // Mod::Offers keeps to the builtin's one cap even if a manifest listed more (the parser refuses
+  // them first).
+  auto listed = *profile;
+  listed.mod->manifest.offers = {"results", "locks", "queue2"};
+  Orca::SetActiveProfile(listed);
+  Orca::Mod::NoteGuards(true, 2);
+  EXPECT_TRUE(Orca::Mod::Offers("results"));
+  EXPECT_FALSE(Orca::Mod::Offers("locks"));
+  EXPECT_FALSE(Orca::Mod::Offers("queue2"));
+  EXPECT_EQ(Orca::Status::OfferedCaps(), base + " results" + tail);
+  Orca::SetActiveProfile(profile);
+  Orca::Mod::NoteGuards(true, 2);
+  Orca::Status::SetAppCaps("host results locks queue2 pick-casual pick-ranked");
+  EXPECT_TRUE(Orca::Status::Cap("host"));
+  EXPECT_TRUE(Orca::Status::Cap("results"));
+  for (const char* cap : {"locks", "queue2", "pick-casual", "pick-ranked"})
+    EXPECT_FALSE(Orca::Status::Cap(cap)) << cap;
+  // The Online menu's exit codes 30 and 31 start the older search at the pick (no queue2).
+  for (const u32 code : {30u, 31u})
+  {
+    Orca::UX::OnlineMenuReader reader;
+    EXPECT_FALSE(reader.Boundary({Orca::UX::MenuState::Where::Menu, 0}, false, true, 0));
+    EXPECT_FALSE(reader.Boundary({Orca::UX::MenuState::Where::Menu, 0}, false, true, 0));
+    const auto pick = reader.Boundary({Orca::UX::MenuState::Where::Leaving, code}, false, true, 0);
+    ASSERT_TRUE(pick);
+    EXPECT_EQ(*pick, code == 30 ? Orca::UX::OnlinePick::Casual : Orca::UX::OnlinePick::Ranked);
+    Orca::UX::AnnounceOnlinePick(*pick);
+    EXPECT_EQ(Orca::UX::Search::Current(), Orca::UX::Search::State::Searching);
+    EXPECT_FALSE(Orca::UX::QueueApp::Active());
+    Orca::UX::AnnounceMenuCancel();
+  }
+
+  // sora_scene's free space holds a valid ranked Project+ header, and the rest of it bytes that are
+  // nobody's: every step that reads the match block would act on it. None may write there.
+  const Core::CPUThreadGuard guard(guest.system);
+  Orca::UX::GuardMemory memory(guard);
+  constexpr u32 free_begin = Orca::UX::FreeSpace::kMatchBlock.begin;
+  constexpr u32 free_end = Orca::UX::FreeSpace::kCodeCaves.back().end;
+  for (u32 address = free_begin; address < free_end; ++address)
+    memory.Write8(address, 0xA5);
+  memory.Write32(free_begin, Orca::UX::FreeSpace::kMatchBlockOriginalWord);
+  ASSERT_GT(Orca::UX::Rules::WriteHeader(memory, Orca::UX::Rules::Mode::Ranked,
+                                         Orca::UX::Rules::Ruleset::PPlus),
+            0);
+  ASSERT_TRUE(Orca::UX::Rules::ReadHeader(memory).Locked());
+  ASSERT_TRUE(Orca::UX::SetBlock::ReadHeader(memory));
+  // A set's second game (port 1 won the first), whose character order would start on the
+  // character select below: its task (scene +0x400) and two human player areas (task +0x44, kind
+  // at +0x1B4).
+  memory.Write8(Orca::UX::SetBlock::BASE + Orca::UX::SetBlock::SET_WINS, 1);
+  memory.Write8(Orca::UX::SetBlock::BASE + Orca::UX::SetBlock::SET_LAST_WINNER, 0);
+  memory.Write32(0x80901400, 0x80906000);
+  memory.Write32(0x80906044, 0x80907000);
+  memory.Write32(0x80906048, 0x80908000);
+  memory.Write32(0x80907000 + 0x1B4, 1);
+  memory.Write32(0x80908000 + 0x1B4, 1);
+  std::vector<u8> before;
+  for (u32 address = free_begin; address < free_end; ++address)
+    before.push_back(memory.Read8(address));
+  ASSERT_TRUE(memory.Valid(0x9017BE50));
+  (void)module.Header().TakeMismatch();
+  // The session's asks too: a ranked room's header and the queue's rules preset.
+  module.Header().SetWanted(Orca::UX::Rules::Mode::Ranked, 0, "room");
+  Orca::UX::RequestQueueRules();
+  // Two players plugged in on the built main menu, a friend's drop-in move due; pads pressing
+  // everything the masks would take.
+  const std::vector<Orca::Events::PortInfo> ports{{0, "Ada", false, {}, {}},
+                                                  {1, "Bo", true, {}, {}}};
+  std::array<std::optional<GCPadStatus>, Rollback::InputGate::PORTS> raw;
+  GCPadStatus pad;
+  pad.button = PAD_BUTTON_A | PAD_BUTTON_B | PAD_BUTTON_START | PAD_TRIGGER_Z | PAD_BUTTON_UP;
+  raw[0] = raw[1] = pad;
+  ResultsScreen(memory, "muMenuMain");
+  memory.Write32(0x80900000 + 0x288, Orca::UX::FriendsMove::STEP_RUNNING);
+  memory.Write8(0x80901000 + Orca::UX::FriendsMove::MENU_BUILT, 1);
+  Orca::UX::Tracker().Reset();
+  int frame = 400;
+  const auto run = [&](std::string_view scene, int frames) {
+    ResultsScreen(memory, scene);
+    if (scene == "scSelctCharacter")
+    {
+      // What a ruleset game's character order would start from here.
+      const auto set = Orca::UX::CharOrder::ReadSet(memory);
+      EXPECT_NE(set.ruleset, Orca::UX::CharOrder::Ruleset::None);
+      EXPECT_EQ(set.game, 2);
+      EXPECT_EQ(set.last_winner, 0);
+      const auto css = Orca::UX::CharOrder::ReadCss(memory);
+      EXPECT_TRUE(css.on_css);
+      EXPECT_TRUE(css.ports[0].human && css.ports[1].human);
+    }
+    for (int i = 0; i < frames; ++i, ++frame)
+    {
+      for (const bool resimulating : {false, true})
+      {
+        for (const bool alone : {true, false})
+        {
+          module.Latch(guard, raw);
+          for (const auto& mask : module.Masks(guard))
+          {
+            EXPECT_EQ(mask.buttons, 0);
+            EXPECT_EQ(mask.press, 0);
+            EXPECT_EQ(mask.a_as, 0);
+            EXPECT_FALSE(mask.main_stick);
+            EXPECT_FALSE(mask.c_stick);
+            EXPECT_FALSE(mask.steer);
+          }
+          module.OnBoundary(guard, frame, resimulating, ports, alone);
+          Orca::UX::ApplyQueueRules(guard, alone);
+        }
+      }
+    }
+  };
+  run("muMenuMain", 40);
+  run("scSelctCharacter", 2);
+  run("scMelee", 2);
+  run("scVsResult", 2);
+  for (u32 address = free_begin; address < free_end; ++address)
+    ASSERT_EQ(memory.Read8(address), before[address - free_begin]) << std::hex << address;
+  EXPECT_FALSE(module.Header().TakeMismatch());
+  EXPECT_TRUE(module.Header().HeaderInPlace());
+  // The results come from the vanilla result info, not from the header's (empty) ranked set.
+  auto results = module.Results().Confirm(frame, -1);
+  ASSERT_EQ(results.size(), 1u);
+  EXPECT_EQ(results[0].kind, Orca::UX::GameResult::Kind::Win);
+  EXPECT_EQ(results[0].winner_port, 0);
+  EXPECT_TRUE(results[0].why.empty());
+  EXPECT_EQ(results[0].start, -1);
+
+  // rankedRules reaches the reader from mod.json: the same match under items Medium is not rated.
+  Bundle rules_bundle =
+      MakeBundle(ResultsWith("rankedRules", R"({"stocks":3,"timeMinutes":8,"items":"off"})"));
+  dirs.list.push_back(rules_bundle.dir);
+  rules_bundle.WriteTree();
+  const auto rules_profile = Orca::LoadModProfile(rules_bundle.dir, &error);
+  ASSERT_TRUE(rules_profile) << error;
+  Orca::SetActiveProfile(rules_profile);
+  Orca::Mod::NoteGuards(true, 2);
+  ASSERT_TRUE(Orca::UX::ResultsVerified());
+  for (const u8 items : {u8{0}, u8{2}})
+  {
+    Orca::UX::Tracker().Reset();
+    for (const std::string_view scene : {"muMenuMain", "scMelee", "scVsResult"})
+    {
+      ResultsScreen(memory, scene);
+      memory.Write8(0x9017BE50, items);
+      Orca::UX::ReadResultsFrame(guard, frame++);
+    }
+    results = Orca::UX::Tracker().Confirm(frame, -1);
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_EQ(results[0].kind, items == 0 ? Orca::UX::GameResult::Kind::Win :
+                                            Orca::UX::GameResult::Kind::Void);
+    EXPECT_EQ(results[0].why, items == 0 ? "" : "rules-items");
+  }
+
+  // Its guards broken after holding: nothing offered, nothing on.
+  Orca::Mod::NoteGuards(false, 500);
+  EXPECT_FALSE(Orca::Mod::Offers("results"));
+  EXPECT_FALSE(module.Active());
+  EXPECT_FALSE(Orca::UX::ResultsVerified());
+  // Without rankedRules: no results read, so no Ranked, even if a manifest got "results" past the
+  // parser.
+  auto unruled = *profile;
+  unruled.mod->manifest.ranked_rules.reset();
+  Orca::SetActiveProfile(unruled);
+  Orca::Mod::NoteGuards(true, 2);
+  ASSERT_TRUE(module.Active());
+  EXPECT_FALSE(module.Describe().results);
+  EXPECT_FALSE(Orca::UX::ResultsVerified());
+  EXPECT_FALSE(Orca::Mod::Offers("results"));
+  EXPECT_EQ(Orca::Status::OfferedCaps(), base + tail);
+  EXPECT_FALSE(Rollback::OnlineMatch::RoomRefusal("ranked", module.Describe().results).empty());
+  // A Brawl pack with no builtin still can't play Ranked.
+  auto none = *profile;
+  none.mod->manifest.builtin = Builtin::None;
+  none.mod->manifest.offers.clear();
+  Orca::SetActiveProfile(none);
+  EXPECT_FALSE(module.Describe().results);
+  EXPECT_FALSE(Rollback::OnlineMatch::RoomRefusal("ranked", module.Describe().results).empty());
+}
+
+TEST(OrcaMod, ResultsOnlyKeyEndsWithItsOwnGameCompat)
+{
+  SConfig::Init();
+  struct Done
+  {
+    int ux;
+    ~Done()
+    {
+      Orca::Engine::SetModule(nullptr);
+      Orca::Events::SetUXCompatVersion(ux);
+      Orca::SetActiveProfile(std::nullopt);
+      SConfig::Shutdown();
+    }
+  } done{Orca::Events::UXCompatVersion()};
+  Orca::Events::SetUXCompatVersion(Orca::UX::kCompatVersion);
+  Orca::Engine::SetModule(&Orca::UX::Builtin());
+  std::string error;
+  Bundle results = MakeBundle(ResultsMod());
+  results.WriteTree();
+  const auto profile = Orca::LoadModProfile(results.dir, &error);
+  ASSERT_TRUE(profile) << error;
+  Orca::SetActiveProfile(profile);
+  EXPECT_EQ(Orca::UX::Builtin().Describe().compat, 1);
+  const std::string parts = Orca::Online::CompatibilityKeyParts();
+  EXPECT_TRUE(parts.starts_with("orca2|")) << parts;
+  EXPECT_TRUE(parts.ends_with(fmt::format("|ux={}.1", Orca::UX::kCompatVersion))) << parts;
+  File::DeleteDirRecursively(results.dir);
+}
+
+TEST(OrcaMod, SchemaKnowsRankedRules)
+{
+  const picojson::value schema = ReadJson(RepoPath("Tools/orca/mods/mod.schema.json"));
+  const picojson::value& ranked = schema.get("properties").get("rankedRules");
+  std::vector<std::string> required;
+  for (const auto& key : ranked.get("required").get<picojson::array>())
+    required.push_back(key.get<std::string>());
+  EXPECT_EQ(required, (std::vector<std::string>{"stocks", "timeMinutes", "items"}));
+  const picojson::value& rules = ranked.get("properties");
+  for (const char* key : {"stocks", "timeMinutes"})
+  {
+    EXPECT_EQ(rules.get(key).get("minimum").get<double>(), 1.0) << key;
+    EXPECT_EQ(rules.get(key).get("maximum").get<double>(), 99.0) << key;
+  }
+  EXPECT_EQ(rules.get("items").get("const").get<std::string>(), "off");
+  // brawl-rev2-results offers results only with it.
+  bool results_need_rules = false;
+  for (const auto& rule : schema.get("allOf").get<picojson::array>())
+  {
+    if (!rule.get("then").contains("required"))
+      continue;
+    const auto& then = rule.get("then").get("required").get<picojson::array>();
+    const picojson::value& when = rule.get("if").get("properties");
+    if (then.size() == 1 && then[0].get<std::string>() == "rankedRules" &&
+        when.get("builtin").get("const").get<std::string>() == "brawl-rev2-results" &&
+        when.get("offers").get("contains").get("const").get<std::string>() == "results")
+    {
+      results_need_rules = true;
+    }
+  }
+  EXPECT_TRUE(results_need_rules);
+}
+
+TEST(OrcaMod, RankedRulesAreValidated)
+{
+  std::string error;
+  const auto plain = Orca::Mod::ParseManifest(ResultsMod(), &error);
+  ASSERT_TRUE(plain) << error;
+  EXPECT_EQ(plain->ranked_rules, (Orca::Mod::RankedRules{3, 8}));
+  const auto unruled = Orca::Mod::ParseManifest(UnruledResultsMod(), &error);
+  ASSERT_TRUE(unruled) << error;
+  EXPECT_FALSE(unruled->ranked_rules);
+  constexpr char rules[] = R"({"stocks":3,"timeMinutes":8,"items":"off"})";
+  for (const int format : {1, 2})
+  {
+    picojson::value value;
+    picojson::parse(value, ResultsWith("rankedRules", rules));
+    auto& object = value.get<picojson::object>();
+    if (format == 2)
+    {
+      object["format"] = picojson::value(2.0);
+      object["listing"] = picojson::value("results-pack");
+      object["serial"] = picojson::value(1.0);
+    }
+    const auto manifest = Orca::Mod::ParseManifest(value.serialize(), &error);
+    ASSERT_TRUE(manifest) << error;
+    EXPECT_EQ(manifest->ranked_rules, (Orca::Mod::RankedRules{3, 8}));
+    for (const char* builtin : {"brawl-rev2", "brawl-rev2-pplus", ""})
+    {
+      object["builtin"] = picojson::value(builtin);
+      if (std::string_view(builtin).empty())
+        object.erase("builtin");
+      EXPECT_FALSE(Orca::Mod::ParseManifest(value.serialize(), &error));
+      EXPECT_NE(error.find("rankedRules requires builtin brawl-rev2-results"), std::string::npos);
+    }
+  }
+  for (const char* invalid :
+       {"null", "[]", "{}", R"({"stocks":3,"timeMinutes":8})",
+        R"({"stocks":0,"timeMinutes":8,"items":"off"})",
+        R"({"stocks":100,"timeMinutes":8,"items":"off"})",
+        R"({"stocks":3,"timeMinutes":0,"items":"off"})",
+        R"({"stocks":3,"timeMinutes":100,"items":"off"})",
+        R"({"stocks":3.5,"timeMinutes":8,"items":"off"})",
+        R"({"stocks":3,"timeMinutes":"8","items":"off"})",
+        R"({"stocks":3,"timeMinutes":8,"items":"on"})", R"({"stocks":3,"timeMinutes":8,"items":0})",
+        R"({"stocks":3,"timeMinutes":8,"items":"off","extra":1})"})
+    EXPECT_TRUE(Refused(ResultsWith("rankedRules", invalid))) << invalid;
+  EXPECT_FALSE(
+      Refused(ResultsWith("rankedRules", R"({"stocks":99,"timeMinutes":99,"items":"off"})")));
 }

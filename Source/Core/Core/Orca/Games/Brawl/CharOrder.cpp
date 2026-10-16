@@ -376,6 +376,18 @@ int CurrentPicker()
 void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating,
            const std::vector<Events::PortInfo>& ports)
 {
+  // No ruleset, no character order: nothing to read or write, and nothing left on screen.
+  if (Rules::ProfileRuleset() == Rules::Ruleset::None)
+  {
+    if (!resimulating)
+    {
+      SetRuleLine({});
+      s_picker.store(-1, std::memory_order_relaxed);
+      std::lock_guard lk(s_ribbon_lock);
+      s_ribbon.clear();
+    }
+    return;
+  }
   GuardMemory m(guard);
   const SetView set = ReadSet(m);
   const CssView css = ReadCss(m);

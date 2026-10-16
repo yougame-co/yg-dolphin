@@ -34,7 +34,7 @@ endif()
 if(APPLE)
   option(ORCA_MACOS_BUNDLE "Build the NoGUI frontend as Orca.app, a self-contained bundle" OFF)
 endif()
-set(ORCA_VERSION "0.3.47" CACHE STRING "The Orca version (macOS Info.plist, Windows version resource)")
+# ORCA_VERSION is set in Source/Core/CMakeLists.txt (Core reads it too).
 
 if (WIN32)
   target_sources(dolphin-nogui PRIVATE DolphinNoGUI.exe.manifest DolphinNoGUI.rc)

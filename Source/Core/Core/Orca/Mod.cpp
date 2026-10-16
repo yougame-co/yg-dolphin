@@ -172,7 +172,44 @@ bool IsVersion(std::string_view s)
   }
   return dots == 2 && digit && s.size() <= 20;
 }
+
+// A version's three numbers as written (IsVersion), without leading zeros ("007" is "7").
+std::array<std::string_view, 3> VersionParts(std::string_view s)
+{
+  std::array<std::string_view, 3> parts{};
+  for (std::string_view& part : parts)
+  {
+    const size_t dot = s.find('.');
+    part = s.substr(0, dot);
+    s = dot == std::string_view::npos ? std::string_view{} : s.substr(dot + 1);
+    while (part.size() > 1 && part.front() == '0')
+      part.remove_prefix(1);
+  }
+  return parts;
+}
 }  // namespace
+
+#ifndef ORCA_ENGINE_VERSION
+#error "ORCA_ENGINE_VERSION (CMake's ORCA_VERSION) is set for this file in Source/Core/Core/CMakeLists.txt"
+#endif
+std::string_view EngineVersion()
+{
+  return ORCA_ENGINE_VERSION;
+}
+
+bool VersionAtLeast(std::string_view version, std::string_view minimum)
+{
+  const auto have = VersionParts(version), need = VersionParts(minimum);
+  for (size_t i = 0; i < have.size(); ++i)
+  {
+    // Decimal digits without leading zeros: the longer number is the larger, else by digit.
+    if (have[i].size() != need[i].size())
+      return have[i].size() > need[i].size();
+    if (have[i] != need[i])
+      return have[i] > need[i];
+  }
+  return true;
+}
 
 // --- The tree ----------------------------------------------------------------------------------
 
@@ -383,6 +420,8 @@ std::optional<Builtin> BuiltinFromName(std::string_view name)
     return Builtin::BrawlRev2;
   if (name == "brawl-rev2-pplus")
     return Builtin::BrawlRev2PPlus;
+  if (name == "brawl-rev2-results")
+    return Builtin::BrawlRev2Results;
   return std::nullopt;
 }
 
@@ -394,6 +433,8 @@ std::string_view BuiltinName(Builtin builtin)
     return "brawl-rev2";
   case Builtin::BrawlRev2PPlus:
     return "brawl-rev2-pplus";
+  case Builtin::BrawlRev2Results:
+    return "brawl-rev2-results";
   default:
     return "none";
   }
@@ -435,6 +476,20 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
     return it == o.end() ? nullptr : &it->second;
   };
 
+  // A pack for a newer YG Dolphin says so before anything else it holds that this build may not
+  // know (keys, builtins, limits): the player's message, as the session's error.
+  if (const picojson::value* v = get("engine"); v && v->is<picojson::object>())
+  {
+    const picojson::object& e = v->get<picojson::object>();
+    if (const auto it = e.find("minOrca"); it != e.end() && it->second.is<std::string>() &&
+                                           IsVersion(it->second.get<std::string>()) &&
+                                           !VersionAtLeast(EngineVersion(), it->second.get<std::string>()))
+    {
+      *error = fmt::format(fmt::runtime(UPDATE_MESSAGE), it->second.get<std::string>());
+      return std::nullopt;
+    }
+  }
+
   Manifest m;
   // format: 1, a tree bundle (ORCA_MOD_DIR with tree.json); 2, a flat bundle (Bundle.h). It decides
   // which keys there may be.
@@ -450,10 +505,12 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
       flat ? UnknownKey(o, {"format", "engine", "listing", "serial", "title", "disc", "launcher",
                             "sdImage", "patches", "jitwarm", "textures", "frameHook",
                             "bootNandFrame", "firstKeyframeFrame", "jitClearFrame", "keepGameCode",
-                            "saveTitle", "forced", "origin", "builtin", "rulesets", "offers"}) :
+                            "saveTitle", "forced", "origin", "builtin", "pplusGuards",
+                            "rankedRules", "rulesets", "offers"}) :
              UnknownKey(o, {"format", "engine", "title", "disc", "launcher", "sd", "frameHook",
                             "bootNandFrame", "firstKeyframeFrame", "jitClearFrame", "keepGameCode",
-                            "saveTitle", "forced", "origin", "builtin", "rulesets", "offers"});
+                            "saveTitle", "forced", "origin", "builtin", "rankedRules", "rulesets",
+                            "offers"});
   if (unknown)
     return fail(fmt::format("unknown key {} (format {})", *unknown, m.format));
 
@@ -748,10 +805,63 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
   {
     const auto builtin = v->is<std::string>() ? BuiltinFromName(v->get<std::string>()) : std::nullopt;
     if (!builtin)
-      return fail("\"builtin\" must be \"brawl-rev2\" or \"brawl-rev2-pplus\"");
+      return fail("\"builtin\" must be \"brawl-rev2\", \"brawl-rev2-pplus\" or "
+                  "\"brawl-rev2-results\"");
     if (m.disc_id != "RSBE01" || m.disc_revision != 2)
       return fail(fmt::format("builtin {} runs on RSBE01 revision 2 only", BuiltinName(*builtin)));
     m.builtin = *builtin;
+  }
+
+  // Only flat packs may relocate the three pairs; their instruction words stay engine constants.
+  if (const picojson::value* v = get("pplusGuards"))
+  {
+    if (m.builtin != Builtin::BrawlRev2PPlus)
+      return fail("pplusGuards requires builtin brawl-rev2-pplus");
+    if (!v->is<picojson::object>())
+      return fail("pplusGuards must be an object");
+    const auto& addresses = v->get<picojson::object>();
+    if (const auto key = UnknownKey(addresses, {"rssExdata", "pageIndex", "currentPage"}))
+      return fail(fmt::format("unknown key pplusGuards.{}", *key));
+    std::array<u32, 3> pairs{};
+    size_t index = 0;
+    for (const char* key : {"rssExdata", "pageIndex", "currentPage"})
+    {
+      const auto address = addresses.contains(key) ? HexWord(addresses.at(key)) : std::nullopt;
+      if (!address || !InMem1Word(*address) || *address < PPLUS_CODESET_REGION.first ||
+          *address > PPLUS_CODESET_REGION.second - 8)
+      {
+        return fail(fmt::format("pplusGuards.{} must start an aligned 8-byte pair in "
+                                "0x80550010-0x8059FFFF", key));
+      }
+      for (size_t previous = 0; previous < index; ++previous)
+      {
+        if (*address < pairs[previous] + 8 && pairs[previous] < *address + 8)
+          return fail("pplusGuards pairs must not overlap");
+      }
+      pairs[index++] = *address;
+    }
+    m.pplus_guards = PPlusGuardAddresses{pairs[0], pairs[1], pairs[2]};
+  }
+
+  if (const picojson::value* v = get("rankedRules"))
+  {
+    if (m.builtin != Builtin::BrawlRev2Results)
+      return fail("rankedRules requires builtin brawl-rev2-results");
+    if (!v->is<picojson::object>())
+      return fail("rankedRules must be an object");
+    const auto& rules = v->get<picojson::object>();
+    if (const auto key = UnknownKey(rules, {"stocks", "timeMinutes", "items"}))
+      return fail(fmt::format("unknown key rankedRules.{}", *key));
+    const auto stocks =
+        rules.contains("stocks") ? Integer(rules.at("stocks"), 1, 99) : std::nullopt;
+    const auto minutes =
+        rules.contains("timeMinutes") ? Integer(rules.at("timeMinutes"), 1, 99) : std::nullopt;
+    if (!stocks || !minutes)
+      return fail("rankedRules.stocks and timeMinutes must be integers from 1 to 99");
+    if (!rules.contains("items") || !rules.at("items").is<std::string>() ||
+        rules.at("items").get<std::string>() != "off")
+      return fail("rankedRules.items must be \"off\"");
+    m.ranked_rules = RankedRules{static_cast<u8>(*stocks), static_cast<u8>(*minutes)};
   }
 
   if (m.origin && m.builtin != Builtin::None &&
@@ -789,12 +899,21 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
       const std::string* cap = item.is<std::string>() ? &item.get<std::string>() : nullptr;
       if (!cap || std::ranges::find(OFFERABLE_CAPS, *cap) == OFFERABLE_CAPS.end())
         return fail("offers must be among \"results\", \"locks\", \"queue2\"");
+      if (m.builtin == Builtin::BrawlRev2Results && *cap != "results")
+        return fail("builtin brawl-rev2-results may offer only \"results\"");
       if (std::ranges::find(m.offers, *cap) != m.offers.end())
         return fail(fmt::format("offer {} twice", *cap));
       m.offers.push_back(*cap);
     }
     if (!m.offers.empty() && m.builtin == Builtin::None)
       return fail("a mod with no builtin has no logic to offer caps with");
+  }
+  // Without declared rules a results-only game would count whatever Brawl's rules menu holds (its
+  // defaults: a 2-minute timed match, items on): it reads no results, so it offers none.
+  if (m.builtin == Builtin::BrawlRev2Results && !m.ranked_rules &&
+      std::ranges::find(m.offers, "results") != m.offers.end())
+  {
+    return fail("builtin brawl-rev2-results offers \"results\" only with \"rankedRules\"");
   }
 
   if (!flat)
@@ -1133,8 +1252,8 @@ constexpr auto BRAWL_REV2_GUARDS = std::to_array<GuardWord>({
 });
 // Project+ v3.2 adds its codeset's code that reads and writes the stage select data RankedPPlus and
 // the online rules use (Source/Netplay/Net-Random.asm: the data at 0x8042C4E8, its page index at
-// 0x8042C821, the current page at 0x80496000). A codeset built with those routines elsewhere loses
-// the builtin (phase 3's labels name them instead).
+// 0x8042C821, the current page at 0x80496000). Flat packs can relocate these instruction pairs
+// with pplusGuards; the referenced data and the exact instruction words stay the same.
 constexpr auto PPLUS_GUARDS = std::to_array<GuardWord>({
     {0x80553594, 0x3CA08042},  // lis r5,0x8042
     {0x80553598, 0x60A5C4E8},  // ori r5,r5,0xC4E8: the stage select data
@@ -1160,8 +1279,37 @@ constexpr std::array<GuardWord, A + B> Join(const std::array<GuardWord, A>& a,
   std::ranges::copy(b, all.begin() + A);
   return all;
 }
+// pplusGuards' defaults are these pairs' first words (Mod.h).
+static_assert(PPlusGuardAddresses{}.rss_exdata == PPLUS_GUARDS[0].address &&
+              PPlusGuardAddresses{}.page_index == PPLUS_GUARDS[2].address &&
+              PPlusGuardAddresses{}.current_page == PPLUS_GUARDS[4].address);
 constexpr auto VANILLA_BRAWL_GUARDS = Join(BRAWL_REV2_GUARDS, VANILLA_GUARDS);
 constexpr auto BRAWL_REV2_PPLUS_GUARDS = Join(BRAWL_REV2_GUARDS, PPLUS_GUARDS);
+
+u32 GuardAddress(Builtin builtin, u32 address, const std::optional<PPlusGuardAddresses>& declared)
+{
+  if (builtin != Builtin::BrawlRev2PPlus || !declared)
+    return address;
+  const std::array<u32, 3> pairs{declared->rss_exdata, declared->page_index, declared->current_page};
+  for (size_t i = 0; i < pairs.size(); ++i)
+  {
+    const u32 base = PPLUS_GUARDS[2 * i].address;
+    if (address == base || address == base + 4)
+      return pairs[i] + (address - base);
+  }
+  return address;
+}
+
+std::string BuiltinLogName(const Manifest& manifest)
+{
+  if (const auto& addresses = manifest.pplus_guards)
+  {
+    return fmt::format("{} (pplusGuards rssExdata={:#010x} pageIndex={:#010x} currentPage={:#010x})",
+                       BuiltinName(manifest.builtin), addresses->rss_exdata,
+                       addresses->page_index, addresses->current_page);
+  }
+  return std::string(BuiltinName(manifest.builtin));
+}
 }  // namespace
 
 std::span<const GuardWord> BuiltinGuards(Builtin builtin)
@@ -1170,6 +1318,8 @@ std::span<const GuardWord> BuiltinGuards(Builtin builtin)
   {
   case Builtin::BrawlRev2:
     return VANILLA_BRAWL_GUARDS;
+  case Builtin::BrawlRev2Results:
+    return BRAWL_REV2_GUARDS;
   case Builtin::BrawlRev2PPlus:
     return BRAWL_REV2_PPLUS_GUARDS;
   default:
@@ -1177,13 +1327,14 @@ std::span<const GuardWord> BuiltinGuards(Builtin builtin)
   }
 }
 
-bool GuardsHold(Builtin builtin, const std::function<std::optional<u32>(u32)>& read)
+bool GuardsHold(Builtin builtin, const std::function<std::optional<u32>(u32)>& read,
+                const std::optional<PPlusGuardAddresses>& pplus_guards)
 {
   if (builtin == Builtin::None)
     return false;
   for (const GuardWord& g : BuiltinGuards(builtin))
   {
-    if (read(g.address) != g.word)
+    if (read(GuardAddress(builtin, g.address, pplus_guards)) != g.word)
       return false;
   }
   return true;
@@ -1201,19 +1352,20 @@ std::atomic<int> s_guards{-1};
 std::atomic<bool> s_guards_failed{false};
 std::atomic<bool> s_held_once{false};
 
-void LogFirstBrokenGuard(const Core::CPUThreadGuard& guard, Builtin builtin)
+void LogFirstBrokenGuard(const Core::CPUThreadGuard& guard, const Manifest& manifest)
 {
-  for (const GuardWord& g : BuiltinGuards(builtin))
+  for (const GuardWord& g : BuiltinGuards(manifest.builtin))
   {
-    const u32 word = PowerPC::MMU::HostIsRAMAddress(guard, g.address) ?
-                         PowerPC::MMU::HostRead<u32>(guard, g.address) :
+    const u32 address = GuardAddress(manifest.builtin, g.address, manifest.pplus_guards);
+    const u32 word = PowerPC::MMU::HostIsRAMAddress(guard, address) ?
+                         PowerPC::MMU::HostRead<u32>(guard, address) :
                          0;
     if (word != g.word)
     {
       WARN_LOG_FMT(BOOT,
                    "Orca mod: builtin {} failed: {:08x} holds {:08x}, not {:08x} (this mod's code "
                    "moved what the builtin's modules rely on; its caps are withdrawn)",
-                   BuiltinName(builtin), g.address, word, g.word);
+                   BuiltinLogName(manifest), address, word, g.word);
       return;
     }
   }
@@ -1244,14 +1396,24 @@ void RefreshGuards(const Core::CPUThreadGuard& guard, std::optional<int> frame)
     if (!PowerPC::MMU::HostIsRAMAddress(guard, address))
       return std::nullopt;
     return PowerPC::MMU::HostRead<u32>(guard, address);
-  });
+  }, mod->manifest.pplus_guards);
   // Logged once each per boot: memory may go back and forth (a join's replay of frame 1).
   const bool held_before = s_held_once, failed_before = s_guards_failed;
   NoteGuards(held, frame);
   if (!held_before && s_held_once)
-    NOTICE_LOG_FMT(BOOT, "Orca mod: builtin {} on (its guard words hold)", BuiltinName(builtin));
+  {
+    NOTICE_LOG_FMT(BOOT, "Orca mod: builtin {} on (its guard words hold)",
+                   BuiltinLogName(mod->manifest));
+    // pplusGuards moves the guards only (ORCA.md "P+ fork guards"): the data stays v3.2's.
+    if (mod->manifest.pplus_guards)
+    {
+      WARN_LOG_FMT(BOOT, "Orca mod: pplusGuards: known limits on a fork: a locked header's "
+                         "character select writes Project+ v3.2's stage preset to 0x8042C4E8, and "
+                         "the Code Menu is locked only where v3.2's layout is found");
+    }
+  }
   if (!failed_before && s_guards_failed)
-    LogFirstBrokenGuard(guard, builtin);
+    LogFirstBrokenGuard(guard, mod->manifest);
 }
 
 void NoteGuards(bool held, std::optional<int> frame)
@@ -1300,9 +1462,10 @@ bool GuardsFailed()
 bool Offers(std::string_view cap)
 {
   const ModInfo* mod = ActiveMod();
-  // Both builtins carry results, the online rules' locks and the queue's character select: offered
-  // only once their guards have held, and never again after they failed.
+  // Only the builtin's supported caps, once its guards have held and never after failure.
   return mod && mod->manifest.builtin != Builtin::None && s_held_once && !s_guards_failed &&
+         (mod->manifest.builtin != Builtin::BrawlRev2Results ||
+          (cap == "results" && mod->manifest.ranked_rules)) &&
          std::ranges::find(mod->manifest.offers, cap) != mod->manifest.offers.end();
 }
 }  // namespace Orca::Mod
@@ -1348,6 +1511,7 @@ std::optional<Profile> ProfileFromManifest(const std::string& dir, Mod::Tree tre
   switch (manifest.builtin)
   {
   case Mod::Builtin::BrawlRev2:
+  case Mod::Builtin::BrawlRev2Results:
     profile.game_id = "RSBE01";
     break;
   case Mod::Builtin::BrawlRev2PPlus:

@@ -255,8 +255,11 @@ only by `LoadModProfile` and `LoadFlatProfile`, or on `Mod::Requested()`).
   so do trailing text after the JSON value. `forced` takes only `Dolphin.Core.CustomRTCValue`
   (what PPLUS32.ini forces besides the card); the card itself follows `sd`. `saveTitle` only the
   disc's own. `firstKeyframeFrame` (default and least 300) replaces `FIRST_KEYFRAME_FRAME` and
-  `FriendsMove::FIRST_FRIEND_FRAME`. `engine.api` above `Mod::ENGINE_API` (1) refuses; `minOrca` is
-  checked for form only (the build has no version of its own: the app compares it).
+  `FriendsMove::FIRST_FRIEND_FRAME`. `engine.api` above `Mod::ENGINE_API` (1) refuses. `minOrca`
+  above the running YG Dolphin (`Mod::EngineVersion`, CMake's `ORCA_VERSION`, set in
+  `Source/Core/CMakeLists.txt`; X.Y.Z compared number by number) refuses before any other check,
+  with the player's message "This pack needs YG Dolphin <minOrca> or newer. Update the YouGame app
+  and try again." as the session's error (`OrcaMod.MinOrcaAboveThisBuildRefuses`).
 - **`tree.json`** (written by the app): sorted, unique also without case, no file that is also a
   folder, paths of at most 100 bytes of printable ASCII with no `..`, leading dots, trailing dots or
   spaces, Windows device names or `<>:"\|?*`. `tree` must be the contract's hash of the list
@@ -276,12 +279,12 @@ only by `LoadModProfile` and `LoadFlatProfile`, or on `Mod::Requested()`).
   share a key.
 - **Builtins** replace the game-id checks (`ProfileRuleset`, `ResultsVerified`, `BrawlExecutable`,
   NameTags, MenuText, `VanillaBrawl`, `RequestQueueRules`; JitWarm's `KnownGame` and the harness's
-  scene reader take the declared builtin, host-only). `brawl-rev2` and `brawl-rev2-pplus` run only
-  while their guard words hold (`Mod::BuiltinGuards`: the frame loop's word, r13's base, the scene
+  scene reader take the declared builtin, host-only). `brawl-rev2`, `brawl-rev2-pplus` and
+  `brawl-rev2-results` run only while their guard words hold (`Mod::BuiltinGuards`: the frame loop's word, r13's base, the scene
   manager / g_GameGlobal / pad system loads, the message buffer's vtable; for `brawl-rev2` Brawl's
   word at 0x8001CD24, which Project+'s codes rewrite (not the v-sync call any more: since 0.3.33
   RSBE01.patches moves it as Project+ does; `OrcaMod.GuardsAreNotOrcasOwnPatches`); Project+'s stage select routines at 0x80553594, 0x80554320, 0x805518D0 for
-  `brawl-rev2-pplus`), checked against memory at every entry into the UX (frame callback, input gate
+  `brawl-rev2-pplus`, or where its `pplusGuards` puts them), checked against memory at every entry into the UX (frame callback, input gate
   source and latch). The modules run exactly while the words hold in memory, a pure function of
   memory on first runs and re-runs alike: Project+'s codes land in frame 1, so its guards hold from
   frame 2, and a joiner re-executing frame 1 from its own origin runs it with the modules off, as
@@ -295,6 +298,63 @@ only by `LoadModProfile` and `LoadFlatProfile`, or on `Mod::Requested()`).
   boots to the same origin as legacy; the menu itself is still read only while the guards hold, so
   a mod that moved what its builtin relies on gets no origin and takes no players, on every machine
   alike.
+- **Results without a ruleset (`brawl-rev2-results`)**, for Brawl-engine mods without Project+'s
+  code (PM 3.6, Brawl Minus, Legacy): RSBE01 revision 2 only, profile game id `RSBE01`, its own game
+  compat 1 (the key's `ux=<engine>.1`; the other builtins' keys are unchanged). Its guards are the
+  eight Brawl words alone. `offers` may name only `results`, and only with `rankedRules`: the
+  parser refuses `locks` and `queue2`, and `results` without declared rules (Brawl's own defaults, a
+  2-minute timed match with items, would count), and `Mod::Offers` offers nothing else for it, so no
+  pick caps either. Without `rankedRules` it reads no results (`Describe().results` is false) and
+  plays no Ranked, so friends rooms only. It is the legacy
+  `brawl-rev2-launcher` game in mod mode: results (`ResultsVerified`: the vanilla scene manager and
+  `g_GameGlobal`'s result info, never the match block), the Online menu's Casual/Ranked picks, fresh
+  starts, name tags, menu text and music. Its ruleset is `None`, so nothing that needs one runs: no
+  header, rule or stage writes (`Rules::OnFrame`), no queue character select or latch (`Queue`), no
+  stage flows (`BrawlStages`, `RankedPPlus`), ranked set (`RankedSet`), character order
+  (`CharOrder`), CPU and seat rules (`OnlineSeats`), stage cursors, CSS title, relabels or native
+  text, and no input masks (`BrawlModule::Masks`). It never writes sora_scene's free space
+  (`BrawlGame::UsesFreeSpace`): there the match block and code caves may be the mod's own code, so
+  the friends' drop-in move (`FriendsMove`) is off too and the host picks With Friends itself. Ranked
+  admits it (`RoomRefusal` asks only for `results`), unlocked: nothing in the game enforces stages
+  or rules, and each game is reported as its results screen shows it. The legacy launcher game is
+  unchanged. `OrcaMod.ResultsOnlyAdmitsRankedWithoutRulesetGates`.
+- **`rankedRules`** (`brawl-rev2-results` only, either bundle format, owner-only like `builtin`;
+  required to offer `results`): `"rankedRules": {"stocks": 3, "timeMinutes": 8, "items": "off"}`,
+  all three required, `stocks` and `timeMinutes` integers 1-99, `items` only `"off"`. On the results
+  screen the reader compares the rules the fight started with, which only the Rules menu changes:
+  `g_GameGlobal +0x1C` (gmSetRule, the block the online rules lock: `+0x02` low 3 bits 1 for a stock
+  match, `+0x04` stocks, `+0x08` the stock match's time limit in minutes) and the item frequency at
+  `0x9017BE50` (gmGlobalRecord's menu data, RSBE01.patches' items group; 0 None), then two rules the
+  engine fixes for every such game, not pack fields: `+0x05` handicap off (0) and `+0x06` damage
+  ratio 1.0 (10), as the locks set them. The first rule that differs, or can't be read, makes the
+  game void `rules-stocks`, `rules-timeMinutes`, `rules-items`, `rules-handicap` or
+  `rules-damageRatio` (the room gets `void`, as for `nocontest`), never a win or a loss, with one
+  line `Orca result: frame <n>: not rated, its <rule> is not the ranked rules'`. Casual and ranked
+  rooms alike; nothing is written or locked. Both layouts are Brawl rev 2's; a mod that moved them
+  voids every game, and one real 1v1 on the mod proves them. `OrcaResults.RankedRules*`.
+- **P+ fork guards** (flat format 2 only): the listing owner may add
+  `"pplusGuards": {"rssExdata": "0x80551DD4", "pageIndex": "0x80552B70", "currentPage": "0x80552F90"}`
+  with `builtin: "brawl-rev2-pplus"` (Project+Ex 1.7's NETBOOST.GCT holds Project+ v3.2's three
+  lis/ori pairs there). Each address is the first word of its 8-byte pair, 4-byte aligned, in
+  `[0x80550010, 0x805A0000)` (`Mod::PPLUS_CODESET_REGION`: the codeset is read to 0x80550010 and
+  nothing in the repo bounds its end, so the window stops below Brawl's globals), and the pairs
+  don't overlap. The engine reads exactly those six words, no search; the words stay its own
+  constants. Without the key the v3.2 addresses apply, so Project+ v3.2's key and boot are
+  unchanged. The boot's `Orca mod: builtin ... on` / `failed` lines name the declared addresses,
+  and with the key a second line names the known limits below. The key moves the guards only:
+  - Code addresses in Project+ v3.2's own files: a pack's `.patches` replace PPLUS32.patches in mod
+    mode, and v3.2's BootToCSS group (`PPLUS32.patches:41-44`, `0x80559C20`-`0x80559C2C`, reached from
+    the hook at `0x806DD5F8`) and menu groups (`:62-168`, from `0x81179ED8`: P+'s menu module at
+    `0x81164C00`, Brawl's addresses + `0x1480`) are v3.2's; a fork's pack adapts its own copy (the
+    guarded groups simply don't land on other code). PPLUS32.jitwarm names v3.2's blocks, codeset
+    ones included (hash-checked, so a fork's pack ships its own seed or a stale one only warms less). No other engine code names a codeset address
+    (`PanicDiag.h`'s `0x80558678` is a crash example in a comment).
+  - Data stays v3.2's: RankedPPlus and the online rules read and write RSS_EXDATA (`0x8042C4E8`), its
+    page index (`0x8042C821`), the strike table, the current page (`0x80496000`) and the Code Menu
+    (`0x804E0000`-`0x804E2520`) at v3.2's layout. Known limits on a fork: the online rules write
+    v3.2's 2024 stage preset (`PPLUS_2024_RSS`) over the fork's RSS_EXDATA on a locked header's
+    character select, and lock the Code Menu only where v3.2's layout is found (`CodeMenuPresent`):
+    a fork with another Code Menu is not locked.
 - **Bundles**: `Tools/orca/mods/make-bundle.py RSBE01|PPLUS32 <out> [--pplus-user <release user/>]
   [--tree]` (no `tree.json` in a bundle; `--tree` makes a local run folder, `--tree <folder>` alone
   rewrites one). Brawl's run folder is 153 files, Project+'s 4,033 (3,878 on the card).
@@ -327,6 +387,44 @@ ORCA_SESSION=1 ORCA_MOD_DIR=<run folder> ORCA_SD_CACHE=<cache> [ORCA_DISC_SHA1=<
   195 of its 204 folders. Card `0615853dd38b01c51a3608d0199fa966` (tree `830384ca…34af4`), built
   twice byte-identical.
 
+### Reaching Casual/Ranked from a non-P+ Brawl build
+
+For a `brawl-rev2-results` pack (PM 3.6, Brawl Minus, Legacy), whose mod has no Project+ codeset,
+offering `results` with its `rankedRules` (without them it plays friends rooms only). What Orca
+reads needs a builtin whose guards hold, never a ruleset ([Online menu](#online-menu)):
+
+- **The pick.** The Online menu reader (`OnlineMenu.cpp` `ReadMenuState`,
+  `OnlineMenuReader::Boundary`) follows the scene manager (`[0x805A0060]`: `+0x4` the scene, whose
+  name is at `+0`) from the scene named `muMenuMain` into the one named `scMemoryChange`, and reads
+  the main menu's exit code at `[0x805A0060] +0x284`: **30** is Casual, **31** Ranked (24-27 With
+  Friends). The menu writes the code itself as it leaves (then its step, 2, at `+0x288`); 30 and 31
+  are Brawl's own With Anyone codes (Basic Brawl, Team Battle), so a menu that keeps those buttons
+  needs no patch for them. Picked with the game alone and the app's `host`, the search starts at
+  the pick (no `queue2`: `UX/MenuEvents.cpp` `AnnounceOnlinePick`). With friends in the game the
+  pick is kept, unarmed (no pick caps without `locks`).
+- **What the pack's `.patches` must do**, after Project+'s groups in `Data/Sys/Orca/PPLUS32.patches`
+  (RSBE01.patches has the same groups for Brawl's own menu; Project+'s menu module is Brawl's
+  `+0x1480`). Read every original word from the mod's own RAM on its main menu and guard each group
+  with them, so a group never lands on other code:
+  1. Reach the ONLINE page without the connection window (its save check and network task):
+     `:60-68`, the top page's two Play Online press checks (`bne` -> `b`).
+  2. Leave the ONLINE page without the disconnect window and keep With Friends local (exit 25):
+     `:70-155`; never enable Options or Spectator: `:157-168`.
+  3. Send exit codes 30 and 31 to the local Versus sequence instead of the network ones, leaving
+     the code where the reader saw it: `:170-181`, `sqMenuMain::setNext`'s table (in sora_scene,
+     which Project+ keeps as Brawl's: codes 24-27 and 29-31 to the block at `0x806DC8C8`), and
+     `:183-211`, that block (`sqVsMelee` as VERSUS, the code kept at `sqVsMelee +0x18`), with the
+     back out at `:213-217`. A mod that keeps Brawl's sora_scene can take these groups as they are.
+  4. Boot to the main menu: a build that boots straight to its character select needs its own
+     group like `:31-44` (Project+'s BootToCSS), and `:46-50` skips the title.
+- **Not for this pack:** the toggled group at `:219-234` acts on the match block's header
+  (`0x806F2380`), which a results-only pack never has, and nothing else here needs the match
+  block, a header or the Code Menu.
+- Proof is the pack author's: on the mod's disc, Play Online > With Anyone > Casual must print
+  `orca menu online casual` and land on the local character select (`Tools/orca/online-menu.py`
+  is the legacy flow's check), and one real 1v1 in a matchmade room must log `Matchmaking: a game
+  ended at frame ...` with its winner.
+
 ### Flat bundles
 
 A flat bundle is a game's data as at most eight files in one folder, signed, so it can ride as a
@@ -336,7 +434,7 @@ of an Orca release (`Core/Orca/Bundle.h`).
 
 | File | What |
 |---|---|
-| `mod.json` | format 2: as format 1, plus `listing` (the slug it is for) and `serial`, with `sdImage` `{file, bytes, sha256}` (the card used as it is), `patches` (file names, applied in order), `jitwarm`, `textures: "engine"` instead of `sd`. |
+| `mod.json` | format 2: as format 1, plus `listing` (the slug it is for) and `serial`, optional `pplusGuards` for P+ forks and `rankedRules` for results-only builds, with `sdImage` `{file, bytes, sha256}` (the card used as it is), `patches` (file names, applied in order), `jitwarm`, `textures: "engine"` instead of `sd`. |
 | `mod.sig` | `ed25519 <public key> <signature>`, lowercase hex, one line. |
 | the rest | exactly the files `mod.json` names: a launcher, the SD image, up to four `.patches`, a JIT seed. |
 
@@ -384,8 +482,8 @@ of an Orca release (`Core/Orca/Bundle.h`).
   Project+'s 6.
 - **Limits**: a listing change moves ranked at once (no pinned versions). The run-folder layout is a
   contract with the app (`orca.ts`: `userData/orca/{user,run/<slug>}`); if it moves, Brawl plays
-  legacy (Project+ follows its launcher). `minOrca` is not enforced (the build has no version of its
-  own); `engine.api` is. A refused bundle ends the session with its reason (above).
+  legacy (Project+ follows its launcher). `minOrca` and `engine.api` are enforced. A refused bundle
+  ends the session with its reason (above).
 
 Open: a P+ fork whose codeset moves the stage select routines loses `brawl-rev2-pplus` until phase
 3's labels; a bundle's own patches are not yet checked against the guard words (the validator's

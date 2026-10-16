@@ -14,6 +14,7 @@
 #include "Common/Logging/Log.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Engine/GuestMemory.h"
+#include "Core/Orca/Games/Brawl/OnlineRules.h"
 #include "Core/Orca/Games/Brawl/Rulesets.h"
 #include "Core/Orca/UX/Probe.h"
 #include "Core/Orca/UX/QueueApp.h"
@@ -430,7 +431,7 @@ Facts ReadFacts(const GuestMemory& memory, bool live)
 
 void Frame(const Core::CPUThreadGuard& guard, int frame, bool resimulating)
 {
-  if (!ResultsVerified())
+  if (!ResultsVerified() || Rules::ProfileRuleset() == Rules::Ruleset::None)
     return;
   GuardMemory memory(guard);
   const std::optional<SetBlock::Header> header = SetBlock::ReadHeader(memory);

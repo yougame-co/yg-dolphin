@@ -657,7 +657,7 @@ TEST(OrcaBundle, RefusesTamperedBundles)
           "mod.json is over");
   refused("a format 1 mod.json",
           [&](Flat& f) {
-            f.Put("mod.json", R"({"format": 1, "engine": {"api": 1, "minOrca": "0.4.0"},
+            f.Put("mod.json", R"({"format": 1, "engine": {"api": 1, "minOrca": "0.3.35"},
               "disc": {"id": "RSBE01", "revision": 2},
               "frameHook": {"address": "0x80017504", "word": "0x90170100"}})");
             f.Sign(signer);

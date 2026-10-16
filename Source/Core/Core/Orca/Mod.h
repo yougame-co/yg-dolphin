@@ -8,6 +8,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "Common/CommonTypes.h"
@@ -34,6 +35,15 @@ namespace Orca::Mod
 {
 // The script API version this engine implements; mod.json's engine.api must not be above it.
 inline constexpr int ENGINE_API = 1;
+// The running YG Dolphin's version, X.Y.Z (CMake's ORCA_VERSION). mod.json's engine.minOrca must not
+// be above it: ParseManifest refuses such a pack first, with UPDATE_MESSAGE's words.
+std::string_view EngineVersion();
+// Whether X.Y.Z `version` is `minimum` or newer, number by number (both IsVersion: decimal, any
+// length; "0.3.10" is newer than "0.3.9").
+bool VersionAtLeast(std::string_view version, std::string_view minimum);
+// The player's message for a pack that needs a newer YG Dolphin (fmt: the pack's minOrca).
+inline constexpr std::string_view UPDATE_MESSAGE =
+    "This pack needs YG Dolphin {} or newer. Update the YouGame app and try again.";
 // The SD image builder's version, in the cached image's name and the key (through the image hash).
 inline constexpr std::string_view SD_BUILDER = "fat2";
 // An SD card is SDSC: at most 2 GiB (above, Dolphin presents SDHC, which needs the game's IOS to
@@ -115,11 +125,37 @@ std::optional<Tree> ParseTree(std::string_view json, std::string* error);
 enum class Builtin : u8
 {
   None,
-  BrawlRev2,       // "brawl-rev2": vanilla Brawl (NTSC-U rev 2)
-  BrawlRev2PPlus,  // "brawl-rev2-pplus": Project+ on Brawl rev 2
+  BrawlRev2,         // "brawl-rev2": vanilla Brawl (NTSC-U rev 2)
+  BrawlRev2PPlus,    // "brawl-rev2-pplus": Project+ on Brawl rev 2
+  BrawlRev2Results,  // "brawl-rev2-results": a Brawl-engine mod's results, no ruleset
 };
 std::optional<Builtin> BuiltinFromName(std::string_view name);
 std::string_view BuiltinName(Builtin builtin);
+
+// Where pplusGuards may point, end exclusive: Project+'s codeset (NETBOOST.GCT) is read to
+// 0x80550010 (PPLUS32.patches), and nothing in the repo bounds its end, so the window stops below
+// Brawl's globals (0x805A0000). It bounds declarations, not the loaded file's length.
+inline constexpr std::pair<u32, u32> PPLUS_CODESET_REGION{0x80550010, 0x805A0000};
+// mod.json's pplusGuards (flat bundles, brawl-rev2-pplus only): the first word of each of Project+'s
+// three guard pairs (Mod.cpp PPLUS_GUARDS) in a fork's codeset. The words stay the engine's; the
+// defaults are Project+ v3.2's addresses, used when the key is absent.
+struct PPlusGuardAddresses
+{
+  u32 rss_exdata = 0x80553594;
+  u32 page_index = 0x80554320;
+  u32 current_page = 0x805518D0;
+  bool operator==(const PPlusGuardAddresses&) const = default;
+};
+
+// mod.json's rankedRules (brawl-rev2-results only): the rules a game must have been played under to
+// count, a stock match with these stocks and time limit and items off ("items": "off", the only
+// value). Checked on the results screen (Games/Brawl/Results.h); never written or locked.
+struct RankedRules
+{
+  u8 stocks = 3;
+  u8 time_minutes = 8;
+  bool operator==(const RankedRules&) const = default;
+};
 
 struct KeptWord
 {
@@ -175,6 +211,8 @@ struct Manifest
   // <System>.<Section>.<Key> = value, keys from ForcedAllowlist() only, in key order.
   std::vector<std::pair<std::string, std::string>> forced;
   Builtin builtin = Builtin::None;
+  std::optional<PPlusGuardAddresses> pplus_guards;  // format 2, brawl-rev2-pplus only
+  std::optional<RankedRules> ranked_rules;          // brawl-rev2-results only
   std::vector<std::string> rulesets;
   std::vector<std::string> offers;
   // Format 2 only. The listing the bundle is for (a YouGame slug: Orca refuses it under another
@@ -276,7 +314,8 @@ struct GuardWord
 };
 std::span<const GuardWord> BuiltinGuards(Builtin builtin);
 // Whether every guard word holds, reading memory through `read` (nullopt: not mapped).
-bool GuardsHold(Builtin builtin, const std::function<std::optional<u32>(u32)>& read);
+bool GuardsHold(Builtin builtin, const std::function<std::optional<u32>(u32)>& read,
+                const std::optional<PPlusGuardAddresses>& pplus_guards = std::nullopt);
 // Mod mode, on the CPU thread at every entry into the UX modules (the frame callback, with its
 // frame, and the input gate's source and latch): checks the active mod's guards against memory as
 // it is now. The modules run exactly while they hold, a pure function of memory on first runs and
