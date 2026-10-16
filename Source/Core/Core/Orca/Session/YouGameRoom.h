@@ -166,7 +166,7 @@ struct GameReport
   Kind kind = Kind::Void;
   // Win: the winner's seat (its room slot).
   int winner_seat = -1;
-  // Void: why ("nocontest", "ports").
+  // Void: why ("nocontest", "ports", "rules-<rankedRules field>").
   std::string why;
   // Win and Draw: {"f":..,"st":..,"c":[..],"s":[..],"to":..}, ports in order.
   std::string detail;

@@ -2094,6 +2094,32 @@ TEST(OrcaMod, ResultsOnlyAdmitsRankedWithoutRulesetGates)
   EXPECT_TRUE(results[0].why.empty());
   EXPECT_EQ(results[0].start, -1);
 
+  // rankedRules reaches the reader from mod.json: the same match under items Medium is not rated.
+  Bundle rules_bundle =
+      MakeBundle(ResultsWith("rankedRules", R"({"stocks":3,"timeMinutes":8,"items":"off"})"));
+  dirs.list.push_back(rules_bundle.dir);
+  rules_bundle.WriteTree();
+  const auto rules_profile = Orca::LoadModProfile(rules_bundle.dir, &error);
+  ASSERT_TRUE(rules_profile) << error;
+  Orca::SetActiveProfile(rules_profile);
+  Orca::Mod::NoteGuards(true, 2);
+  ASSERT_TRUE(Orca::UX::ResultsVerified());
+  for (const u8 items : {u8{0}, u8{2}})
+  {
+    Orca::UX::Tracker().Reset();
+    for (const std::string_view scene : {"muMenuMain", "scMelee", "scVsResult"})
+    {
+      ResultsScreen(memory, scene);
+      memory.Write8(0x9017BE50, items);
+      Orca::UX::ReadResultsFrame(guard, frame++);
+    }
+    results = Orca::UX::Tracker().Confirm(frame, -1);
+    ASSERT_EQ(results.size(), 1u);
+    EXPECT_EQ(results[0].kind, items == 0 ? Orca::UX::GameResult::Kind::Win :
+                                            Orca::UX::GameResult::Kind::Void);
+    EXPECT_EQ(results[0].why, items == 0 ? "" : "rules-items");
+  }
+
   // Its guards broken after holding: nothing offered, nothing on.
   Orca::Mod::NoteGuards(false, 500);
   EXPECT_FALSE(Orca::Mod::Offers("results"));
@@ -2135,4 +2161,66 @@ TEST(OrcaMod, ResultsOnlyKeyEndsWithItsOwnGameCompat)
   EXPECT_TRUE(parts.starts_with("orca2|")) << parts;
   EXPECT_TRUE(parts.ends_with(fmt::format("|ux={}.1", Orca::UX::kCompatVersion))) << parts;
   File::DeleteDirRecursively(results.dir);
+}
+
+TEST(OrcaMod, SchemaKnowsRankedRules)
+{
+  const picojson::value schema = ReadJson(RepoPath("Tools/orca/mods/mod.schema.json"));
+  const picojson::value& ranked = schema.get("properties").get("rankedRules");
+  std::vector<std::string> required;
+  for (const auto& key : ranked.get("required").get<picojson::array>())
+    required.push_back(key.get<std::string>());
+  EXPECT_EQ(required, (std::vector<std::string>{"stocks", "timeMinutes", "items"}));
+  const picojson::value& rules = ranked.get("properties");
+  for (const char* key : {"stocks", "timeMinutes"})
+  {
+    EXPECT_EQ(rules.get(key).get("minimum").get<double>(), 1.0) << key;
+    EXPECT_EQ(rules.get(key).get("maximum").get<double>(), 99.0) << key;
+  }
+  EXPECT_EQ(rules.get("items").get("const").get<std::string>(), "off");
+}
+
+TEST(OrcaMod, RankedRulesAreValidated)
+{
+  std::string error;
+  const auto plain = Orca::Mod::ParseManifest(ResultsMod(), &error);
+  ASSERT_TRUE(plain) << error;
+  EXPECT_FALSE(plain->ranked_rules);
+  constexpr char rules[] = R"({"stocks":3,"timeMinutes":8,"items":"off"})";
+  for (const int format : {1, 2})
+  {
+    picojson::value value;
+    picojson::parse(value, ResultsWith("rankedRules", rules));
+    auto& object = value.get<picojson::object>();
+    if (format == 2)
+    {
+      object["format"] = picojson::value(2.0);
+      object["listing"] = picojson::value("results-pack");
+      object["serial"] = picojson::value(1.0);
+    }
+    const auto manifest = Orca::Mod::ParseManifest(value.serialize(), &error);
+    ASSERT_TRUE(manifest) << error;
+    EXPECT_EQ(manifest->ranked_rules, (Orca::Mod::RankedRules{3, 8}));
+    for (const char* builtin : {"brawl-rev2", "brawl-rev2-pplus", ""})
+    {
+      object["builtin"] = picojson::value(builtin);
+      if (std::string_view(builtin).empty())
+        object.erase("builtin");
+      EXPECT_FALSE(Orca::Mod::ParseManifest(value.serialize(), &error));
+      EXPECT_NE(error.find("rankedRules requires builtin brawl-rev2-results"), std::string::npos);
+    }
+  }
+  for (const char* invalid :
+       {"null", "[]", "{}", R"({"stocks":3,"timeMinutes":8})",
+        R"({"stocks":0,"timeMinutes":8,"items":"off"})",
+        R"({"stocks":100,"timeMinutes":8,"items":"off"})",
+        R"({"stocks":3,"timeMinutes":0,"items":"off"})",
+        R"({"stocks":3,"timeMinutes":100,"items":"off"})",
+        R"({"stocks":3.5,"timeMinutes":8,"items":"off"})",
+        R"({"stocks":3,"timeMinutes":"8","items":"off"})",
+        R"({"stocks":3,"timeMinutes":8,"items":"on"})", R"({"stocks":3,"timeMinutes":8,"items":0})",
+        R"({"stocks":3,"timeMinutes":8,"items":"off","extra":1})"})
+    EXPECT_TRUE(Refused(ResultsWith("rankedRules", invalid))) << invalid;
+  EXPECT_FALSE(
+      Refused(ResultsWith("rankedRules", R"({"stocks":99,"timeMinutes":99,"items":"off"})")));
 }

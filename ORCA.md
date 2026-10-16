@@ -312,6 +312,19 @@ only by `LoadModProfile` and `LoadFlatProfile`, or on `Mod::Requested()`).
   admits it (`RoomRefusal` asks only for `results`), unlocked: nothing in the game enforces stages
   or rules, and each game is reported as its results screen shows it. The legacy launcher game is
   unchanged. `OrcaMod.ResultsOnlyAdmitsRankedWithoutRulesetGates`.
+- **`rankedRules`** (`brawl-rev2-results` only, either bundle format, owner-only like `builtin`):
+  `"rankedRules": {"stocks": 3, "timeMinutes": 8, "items": "off"}`, all three required, `stocks` and
+  `timeMinutes` integers 1-99, `items` only `"off"`. On the results screen the reader compares the
+  rules the fight started with, which only the Rules menu changes: `g_GameGlobal +0x1C` (gmSetRule,
+  the block the online rules lock: `+0x02` low 3 bits 1 for a stock match, `+0x04` stocks, `+0x08`
+  the stock match's time limit in minutes) and the item frequency at `0x9017BE50` (gmGlobalRecord's
+  menu data, RSBE01.patches' items group; 0 None). The first rule that differs, or can't be read,
+  makes the game void `rules-stocks`, `rules-timeMinutes` or `rules-items` (the room gets `void`, as
+  for `nocontest`), never a win or a loss, with one line `Orca result: frame <n>: not rated,
+  rankedRules.<rule> differs from this match's rule`. Casual and ranked rooms alike; nothing is
+  written or locked. Without the key, results are judged as above with no rules check. Both layouts
+  are Brawl rev 2's; a mod that moved them voids every game, and one real 1v1 on the mod proves them.
+  `OrcaResults.RankedRules*`.
 - **P+ fork guards** (flat format 2 only): the listing owner may add
   `"pplusGuards": {"rssExdata": "0x80551DD4", "pageIndex": "0x80552B70", "currentPage": "0x80552F90"}`
   with `builtin: "brawl-rev2-pplus"` (Project+Ex 1.7's NETBOOST.GCT holds Project+ v3.2's three
@@ -413,7 +426,7 @@ of an Orca release (`Core/Orca/Bundle.h`).
 
 | File | What |
 |---|---|
-| `mod.json` | format 2: as format 1, plus `listing` (the slug it is for) and `serial`, optional `pplusGuards` for P+ forks, with `sdImage` `{file, bytes, sha256}` (the card used as it is), `patches` (file names, applied in order), `jitwarm`, `textures: "engine"` instead of `sd`. |
+| `mod.json` | format 2: as format 1, plus `listing` (the slug it is for) and `serial`, optional `pplusGuards` for P+ forks and `rankedRules` for results-only builds, with `sdImage` `{file, bytes, sha256}` (the card used as it is), `patches` (file names, applied in order), `jitwarm`, `textures: "engine"` instead of `sd`. |
 | `mod.sig` | `ed25519 <public key> <signature>`, lowercase hex, one line. |
 | the rest | exactly the files `mod.json` names: a launcher, the SD image, up to four `.patches`, a JIT seed. |
 

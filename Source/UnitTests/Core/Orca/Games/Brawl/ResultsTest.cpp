@@ -9,6 +9,7 @@
 #include <string_view>
 #include <vector>
 
+#include <fmt/format.h>
 #include <gtest/gtest.h>
 
 #include "Core/Orca/Session/YouGameRoom.h"
@@ -521,4 +522,125 @@ TEST(OrcaMatchmakingMenu, HostIsACapResultsOnlyWithAVerifiedReader)
   EXPECT_TRUE(Orca::Status::Cap("host"));
   EXPECT_FALSE(Orca::Status::Cap("results"));
   Orca::Status::SetAppCaps("");
+}
+
+namespace
+{
+constexpr u32 ITEM_FREQUENCY = 0x9017BE50;
+
+// A 1v1's results screen (port 1 won) played under 3 stocks, 8:00 and items off, as the rules block
+// and the item record hold them. The fresh save's own rules (Game) differ in all three.
+FakeMemory RankedResult()
+{
+  FakeMemory m = Game("scVsResult");
+  m.Write8(SET_RULE + 0x02, 0x81);  // stock; the bits above the rule are not the rule's
+  m.Write8(SET_RULE + 0x03, 2);     // a timed match's minutes: not this match's
+  m.Write8(SET_RULE + 0x04, 3);
+  m.Write8(SET_RULE + 0x08, 8);
+  m.Write8(ITEM_FREQUENCY, 0);
+  m.writes = 0;
+  return m;
+}
+
+const Orca::Mod::RankedRules RULES{3, 8};
+}  // namespace
+
+TEST(OrcaResults, RankedRulesReadTheRulesTheFightStartedWith)
+{
+  FakeMemory m = RankedResult();
+  // Not read: the rules block's own item byte (+0x0C) and the result info's +0x04 and +0x08.
+  m.Write8(SET_RULE + 0x0C, 3);
+  m.Write32(RESULT_INFO + 0x04, 2);
+  m.Write32(RESULT_INFO + 0x08, 1);
+  m.writes = 0;
+  const Reading checked = ReadResults(m, RULES);
+  EXPECT_TRUE(checked.block.differing_rule.empty());
+  EXPECT_EQ(Judge(checked.block, 500).kind, Kind::Win);
+  EXPECT_EQ(Judge(checked.block, 500).winner_port, 0);
+  EXPECT_EQ(m.writes, 0);
+  // The fresh save's rules (timed, 2 minutes, items Medium) differ from the first rule on.
+  EXPECT_EQ(ReadResults(Game("scVsResult"), RULES).block.differing_rule, "stocks");
+  // Only the results screen is judged.
+  FakeMemory fight = RankedResult();
+  fight.Text(0x80920000, "scMelee");
+  fight.Write8(SET_RULE + 0x04, 4);
+  EXPECT_TRUE(ReadResults(fight, RULES).block.differing_rule.empty());
+  const auto check = [](FakeMemory image, u32 address, u8 value, std::string_view rule) {
+    SCOPED_TRACE(fmt::format("{:08x} = {}", address, value));
+    image.Write8(address, value);
+    image.writes = 0;
+    const Reading reading = ReadResults(image, RULES);
+    EXPECT_EQ(reading.block.differing_rule, rule);
+    const GameResult result = Judge(reading.block, 500);
+    EXPECT_EQ(result.kind, Kind::Void);
+    EXPECT_EQ(result.winner_port, -1);
+    EXPECT_EQ(result.why, fmt::format("rules-{}", rule));
+    EXPECT_EQ(image.writes, 0);
+    // Without rankedRules the same screen is a win, as before.
+    EXPECT_TRUE(ReadResults(image).block.differing_rule.empty());
+    EXPECT_EQ(Judge(ReadResults(image).block, 500).kind, Kind::Win);
+  };
+  check(m, SET_RULE + 0x04, 4, "stocks");
+  check(m, SET_RULE + 0x04, 2, "stocks");
+  check(m, SET_RULE + 0x02, 0x80, "stocks");  // a timed match
+  check(m, SET_RULE + 0x02, 0x02, "stocks");
+  check(m, SET_RULE + 0x08, 7, "timeMinutes");
+  check(m, SET_RULE + 0x08, 0, "timeMinutes");  // no time limit
+  for (const int frequency : {1, 2, 3, 4})
+    check(m, ITEM_FREQUENCY, static_cast<u8>(frequency), "items");
+  // The first rule that differs is the one named.
+  FakeMemory all = RankedResult();
+  all.Write8(SET_RULE + 0x08, 6);
+  all.Write8(ITEM_FREQUENCY, 2);
+  EXPECT_EQ(ReadResults(all, RULES).block.differing_rule, "timeMinutes");
+  EXPECT_EQ(ReadResults(all, Orca::Mod::RankedRules{3, 6}).block.differing_rule, "items");
+}
+
+TEST(OrcaResults, RankedRulesThatCantBeReadAreNotRated)
+{
+  for (const auto& [address, rule] :
+       std::map<u32, std::string>{{SET_RULE + 0x02, "stocks"},
+                                  {SET_RULE + 0x04, "stocks"},
+                                  {SET_RULE + 0x08, "timeMinutes"},
+                                  {ITEM_FREQUENCY, "items"}})
+  {
+    SCOPED_TRACE(fmt::format("{:08x}", address));
+    FakeMemory m = RankedResult();
+    m.bytes.erase(address);
+    const Reading reading = ReadResults(m, RULES);
+    EXPECT_EQ(reading.block.differing_rule, rule);
+    EXPECT_EQ(Judge(reading.block, 500).kind, Kind::Void);
+    EXPECT_EQ(Judge(ReadResults(m).block, 500).kind, Kind::Win);
+  }
+  // No rules block at all (g_GameGlobal +0x1C null).
+  FakeMemory m = RankedResult();
+  m.Write32(0x9018131C, 0);
+  EXPECT_EQ(ReadResults(m, RULES).block.differing_rule, "stocks");
+  EXPECT_EQ(Judge(ReadResults(m).block, 500).kind, Kind::Win);
+}
+
+TEST(OrcaResults, RankedRulesVerdictUsesFinalFramesAndReportsOnce)
+{
+  FakeMemory m = RankedResult();
+  m.Write8(ITEM_FREQUENCY, 2);
+  const Reading bad = ReadResults(m, RULES);
+  ResultsTracker tracker;
+  tracker.Store(0, At(Scene::Other), 0);
+  tracker.Store(1, At(Scene::Fight), 0);
+  tracker.Store(2, bad, 0);
+  EXPECT_TRUE(tracker.Confirm(1, -1).empty());
+  // A rollback re-run replaces frame 2's predicted reading before it is final.
+  m.Write8(ITEM_FREQUENCY, 0);
+  tracker.Store(2, ReadResults(m, RULES), 0);
+  auto out = tracker.Confirm(2, -1);
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(out[0].kind, Kind::Win);
+  tracker.Store(3, At(Scene::Fight), 0);
+  tracker.Store(4, bad, 0);
+  tracker.Store(5, bad, 0);
+  out = tracker.Confirm(5, -1);
+  ASSERT_EQ(out.size(), 1u);
+  EXPECT_EQ(out[0].kind, Kind::Void);
+  EXPECT_EQ(out[0].why, "rules-items");
+  EXPECT_TRUE(tracker.Confirm(5, -1).empty());
 }

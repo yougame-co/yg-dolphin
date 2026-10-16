@@ -138,6 +138,16 @@ struct PPlusGuardAddresses
   bool operator==(const PPlusGuardAddresses&) const = default;
 };
 
+// mod.json's rankedRules (brawl-rev2-results only): the rules a game must have been played under to
+// count, a stock match with these stocks and time limit and items off ("items": "off", the only
+// value). Checked on the results screen (Games/Brawl/Results.h); never written or locked.
+struct RankedRules
+{
+  u8 stocks = 3;
+  u8 time_minutes = 8;
+  bool operator==(const RankedRules&) const = default;
+};
+
 struct KeptWord
 {
   u32 address = 0;
@@ -193,6 +203,7 @@ struct Manifest
   std::vector<std::pair<std::string, std::string>> forced;
   Builtin builtin = Builtin::None;
   std::optional<PPlusGuardAddresses> pplus_guards;  // format 2, brawl-rev2-pplus only
+  std::optional<RankedRules> ranked_rules;          // brawl-rev2-results only
   std::vector<std::string> rulesets;
   std::vector<std::string> offers;
   // Format 2 only. The listing the bundle is for (a YouGame slug: Orca refuses it under another

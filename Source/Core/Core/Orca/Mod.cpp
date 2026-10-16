@@ -454,11 +454,12 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
       flat ? UnknownKey(o, {"format", "engine", "listing", "serial", "title", "disc", "launcher",
                             "sdImage", "patches", "jitwarm", "textures", "frameHook",
                             "bootNandFrame", "firstKeyframeFrame", "jitClearFrame", "keepGameCode",
-                            "saveTitle", "forced", "origin", "builtin", "pplusGuards", "rulesets",
-                            "offers"}) :
+                            "saveTitle", "forced", "origin", "builtin", "pplusGuards",
+                            "rankedRules", "rulesets", "offers"}) :
              UnknownKey(o, {"format", "engine", "title", "disc", "launcher", "sd", "frameHook",
                             "bootNandFrame", "firstKeyframeFrame", "jitClearFrame", "keepGameCode",
-                            "saveTitle", "forced", "origin", "builtin", "rulesets", "offers"});
+                            "saveTitle", "forced", "origin", "builtin", "rankedRules", "rulesets",
+                            "offers"});
   if (unknown)
     return fail(fmt::format("unknown key {} (format {})", *unknown, m.format));
 
@@ -789,6 +790,27 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
       pairs[index++] = *address;
     }
     m.pplus_guards = PPlusGuardAddresses{pairs[0], pairs[1], pairs[2]};
+  }
+
+  if (const picojson::value* v = get("rankedRules"))
+  {
+    if (m.builtin != Builtin::BrawlRev2Results)
+      return fail("rankedRules requires builtin brawl-rev2-results");
+    if (!v->is<picojson::object>())
+      return fail("rankedRules must be an object");
+    const auto& rules = v->get<picojson::object>();
+    if (const auto key = UnknownKey(rules, {"stocks", "timeMinutes", "items"}))
+      return fail(fmt::format("unknown key rankedRules.{}", *key));
+    const auto stocks =
+        rules.contains("stocks") ? Integer(rules.at("stocks"), 1, 99) : std::nullopt;
+    const auto minutes =
+        rules.contains("timeMinutes") ? Integer(rules.at("timeMinutes"), 1, 99) : std::nullopt;
+    if (!stocks || !minutes)
+      return fail("rankedRules.stocks and timeMinutes must be integers from 1 to 99");
+    if (!rules.contains("items") || !rules.at("items").is<std::string>() ||
+        rules.at("items").get<std::string>() != "off")
+      return fail("rankedRules.items must be \"off\"");
+    m.ranked_rules = RankedRules{static_cast<u8>(*stocks), static_cast<u8>(*minutes)};
   }
 
   if (m.origin && m.builtin != Builtin::None &&

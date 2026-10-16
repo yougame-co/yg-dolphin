@@ -39,6 +39,13 @@
       }
     },
     {
+      "if": { "required": ["rankedRules"] },
+      "then": {
+        "required": ["builtin"],
+        "properties": { "builtin": { "const": "brawl-rev2-results" } }
+      }
+    },
+    {
       "if": {
         "required": ["builtin"],
         "properties": { "builtin": { "const": "brawl-rev2-results" } }
@@ -209,6 +216,17 @@
         "currentPage": { "$ref": "#/$defs/pplusGuardWord" }
       }
     },
+    "rankedRules": {
+      "description": "Owner-only, brawl-rev2-results only: the rules a game must have been played under to count, a stock match with these stocks and time limit and items off. A game played under other rules, or whose rules can't be read, is reported void, never a win or a loss. Nothing is locked. Absent: no rules check.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["stocks", "timeMinutes", "items"],
+      "properties": {
+        "stocks": { "type": "integer", "minimum": 1, "maximum": 99 },
+        "timeMinutes": { "type": "integer", "minimum": 1, "maximum": 99 },
+        "items": { "const": "off" }
+      }
+    },
     "rulesets": {
       "type": "array",
       "maxItems": 16,
@@ -298,6 +316,7 @@
     "saveTitle equals the disc's own title ID: 0x00010000 followed by the hex of disc.id's first 4 characters (RSBE01: 0x0001000052534245).",
     "builtin is only for disc RSBE01 revision 2.",
     "offers is empty unless builtin is set. brawl-rev2-results may offer only results.",
+    "rankedRules: builtin brawl-rev2-results only. The listing owner alone may change it, like builtin.",
     "pplusGuards: format 2 and builtin brawl-rev2-pplus only; its three 8-byte pairs don't overlap. The listing owner alone may change it, like builtin.",
     "keepGameCode: no address twice; the game's word differs from the mod's.",
     "launcher, when set, names a file in the tree.",

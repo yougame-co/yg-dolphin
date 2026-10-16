@@ -65,7 +65,7 @@ struct GameResult
   Kind kind = Kind::Void;
   // Win: the winning port (0-based; seat s plays port s).
   int winner_port = -1;
-  // Void: why ("nocontest", "ports").
+  // Void: why ("nocontest", "ports", "rules-<rankedRules field>").
   std::string why;
   // Win and Draw: first results-scene frame, stage, ports 1 and 2's characters and stocks left
   // (-1 timed), and whether time ran out.

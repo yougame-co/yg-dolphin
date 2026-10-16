@@ -13,6 +13,7 @@
 #include "Core/Orca/Engine/GuestMemory.h"
 #include "Core/Orca/Games/Brawl/BrawlModule.h"
 #include "Core/Orca/Games/Brawl/OnlineMenu.h"
+#include "Core/Orca/Profile.h"
 
 namespace Orca::UX
 {
@@ -38,6 +39,13 @@ constexpr u32 RULE_MODE = 0x02;
 constexpr u32 RULE_STOCKS = 0x04;
 constexpr u32 RULE_STOCK_MINUTES = 0x08;
 constexpr u32 RULE_ITEMS = 0x0C;
+// The rule in RULE_MODE's low 3 bits (OnlineRules.cpp keeps the others): 1 a stock match.
+constexpr u8 RULE_MODE_MASK = 0x07;
+constexpr u8 RULE_MODE_STOCK = 1;
+// gmGlobalRecord's menu data: the item frequency a match takes (u8, 0 None), as RSBE01.patches'
+// items group and OnlineRules.cpp's MENU_ITEM_FREQUENCY use it.
+constexpr u32 RECORD_ITEM_FREQUENCY = 0x9017BE50;
+constexpr u8 ITEMS_OFF = 0;
 // Readings waiting to become final. Far more than a rollback window or a joiner's catch-up, since
 // confirmations come every frame.
 constexpr size_t MAX_PENDING = 4096;
@@ -60,6 +68,30 @@ u32 GlobalField(const GuestMemory& m, u32 field)
 }
 
 std::atomic<bool> s_rules_pending{false};
+
+// mod.json's rankedRules (Mod.h): the first rule this match was not played under, by its mod.json
+// name ("stocks", "timeMinutes", "items"), or empty. Read on the results screen from the rules the
+// fight started with: gmSetRule, the block OnlineRules' locks write (mode, stocks, the stock
+// match's time limit), which only the Rules menu changes, and the record's item frequency. A rule
+// that can't be read differs.
+std::string_view DifferingRule(const GuestMemory& m, const Orca::Mod::RankedRules& rules)
+{
+  const auto byte = [&m](u32 address) -> std::optional<u8> {
+    return address != 0 && m.Valid(address) ? std::optional(m.Read8(address)) : std::nullopt;
+  };
+  const u32 rule = GlobalField(m, GLOBAL_SET_RULE);
+  const std::optional<u8> mode = byte(rule ? rule + RULE_MODE : 0);
+  if (!mode || (*mode & RULE_MODE_MASK) != RULE_MODE_STOCK ||
+      byte(rule + RULE_STOCKS) != rules.stocks)
+  {
+    return "stocks";
+  }
+  if (byte(rule + RULE_STOCK_MINUTES) != rules.time_minutes)
+    return "timeMinutes";
+  if (byte(RECORD_ITEM_FREQUENCY) != ITEMS_OFF)
+    return "items";
+  return {};
+}
 }  // namespace
 
 GameResult FromRecord(const SetBlock::SetState& set, int index)
@@ -97,7 +129,7 @@ GameResult FromRecord(const SetBlock::SetState& set, int index)
   return g;
 }
 
-Reading ReadResults(const GuestMemory& m)
+Reading ReadResults(const GuestMemory& m, const std::optional<Orca::Mod::RankedRules>& ranked_rules)
 {
   Reading r;
   const std::string scene = ReadSceneName(m);
@@ -113,6 +145,8 @@ Reading ReadResults(const GuestMemory& m)
   if (!info || !m.Valid(info + RESULT_PORTS + 4 * RESULT_PORT_SIZE))
     return r;
   r.block.mode = m.Read8(info + RESULT_MODE);
+  if (ranked_rules)
+    r.block.differing_rule = DifferingRule(m, *ranked_rules);
   r.block.stage = m.Read16(info + RESULT_STAGE);
   r.block.end = m.Read16(info + RESULT_END);
   if (m.Valid(info + RESULT_DECISION))
@@ -138,6 +172,11 @@ GameResult Judge(const ResultBlock& block, int frame)
 {
   GameResult g;
   g.frame = frame;
+  if (!block.differing_rule.empty())
+  {
+    g.why = fmt::format("rules-{}", block.differing_rule);
+    return g;
+  }
   // No contest: decision 9 is the fight's initial value, and quitting from pause leaves it. With
   // no decision read, fall back to +0x0E..+0x0F != 1 (players tied for first, so a tied time-up
   // is void too).
@@ -332,6 +371,13 @@ std::vector<GameResult> ResultsTracker::Confirm(int confirmed, int plug_frame,
       if (m_in_game)
       {
         out.push_back(Judge(r.block, frame));
+        if (!r.block.differing_rule.empty())
+        {
+          NOTICE_LOG_FMT(ROLLBACK,
+                         "Orca result: frame {}: not rated, rankedRules.{} differs from this "
+                         "match's rule",
+                         frame, r.block.differing_rule);
+        }
         m_in_game = false;
         m_after_fight = false;
       }
@@ -374,7 +420,8 @@ void ReadResultsFrame(const Core::CPUThreadGuard& guard, int frame)
   if (!ResultsVerified())
     return;
   GuardMemory memory(guard);
-  Reading reading = ReadResults(memory);
+  const Orca::Mod::ModInfo* mod = Orca::Mod::ActiveMod();
+  Reading reading = ReadResults(memory, mod ? mod->manifest.ranked_rules : std::nullopt);
   // Only a game with a ruleset writes a ranked set into the match block; without one that memory
   // is the game's own (brawl-rev2-results), whatever it holds.
   if (Builtin().Describe().ruleset != Orca::Engine::Ruleset::None)
