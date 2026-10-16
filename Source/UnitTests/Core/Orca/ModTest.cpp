@@ -87,7 +87,7 @@ picojson::value ReadJson(const std::string& path)
 // Project+'s mod.json as Tools/orca/mods/make-bundle.py writes it.
 constexpr char PPLUS_MOD[] = R"({
   "format": 1,
-  "engine": {"api": 1, "minOrca": "0.4.0"},
+  "engine": {"api": 1, "minOrca": "0.3.35"},
   "title": "Project+",
   "disc": {"id": "RSBE01", "revision": 2},
   "launcher": "launcher.dol",
@@ -107,7 +107,7 @@ constexpr char PPLUS_MOD[] = R"({
 
 constexpr char BRAWL_MOD[] = R"({
   "format": 1,
-  "engine": {"api": 1, "minOrca": "0.4.0"},
+  "engine": {"api": 1, "minOrca": "0.3.35"},
   "disc": {"id": "RSBE01", "revision": 2},
   "frameHook": {"address": "0x80017504", "word": "0x90170100"},
   "bootNandFrame": 1800,
@@ -281,13 +281,68 @@ TEST(OrcaMod, TreeRefusals)
   EXPECT_TRUE(refused("{"));
 }
 
+TEST(OrcaMod, MinOrcaAboveThisBuildRefuses)
+{
+  // Number by number, not as text.
+  using Orca::Mod::VersionAtLeast;
+  EXPECT_TRUE(VersionAtLeast("0.3.47", "0.3.47"));
+  EXPECT_TRUE(VersionAtLeast("0.3.47", "0.3.9"));
+  EXPECT_TRUE(VersionAtLeast("0.3.10", "0.3.9"));
+  EXPECT_TRUE(VersionAtLeast("1.0.0", "0.99.99"));
+  EXPECT_TRUE(VersionAtLeast("0.3.047", "0.3.47"));
+  EXPECT_TRUE(VersionAtLeast("10.0.0", "9.99.999"));
+  EXPECT_FALSE(VersionAtLeast("0.3.9", "0.3.10"));
+  EXPECT_FALSE(VersionAtLeast("0.3.47", "0.3.48"));
+  EXPECT_FALSE(VersionAtLeast("0.3.47", "0.4.0"));
+  EXPECT_FALSE(VersionAtLeast("0.3.47", "1.0.0"));
+  EXPECT_FALSE(VersionAtLeast("0.3.47", "0.3.100000000000000000"));
+  // This build's version is X.Y.Z, and a pack may need exactly it.
+  const std::string running(Orca::Mod::EngineVersion());
+  ASSERT_EQ(std::count(running.begin(), running.end(), '.'), 2) << running;
+  std::string error;
+  EXPECT_TRUE(Orca::Mod::ParseManifest(
+      BrawlWith("engine", fmt::format(R"({{"api": 1, "minOrca": "{}"}})", running)), &error))
+      << error;
+  EXPECT_TRUE(Orca::Mod::ParseManifest(BrawlWith("engine", R"({"api": 1, "minOrca": "0.0.1"})"),
+                                       &error))
+      << error;
+  // One patch newer: refused with the player's message, and before anything else this build can't
+  // read in it (a key from a later release, a builtin it doesn't know).
+  const size_t dot = running.rfind('.');
+  const std::string next =
+      running.substr(0, dot + 1) + std::to_string(std::stoull(running.substr(dot + 1)) + 1);
+  const std::string message =
+      fmt::format("This pack needs YG Dolphin {} or newer. Update the YouGame app and try again.",
+                  next);
+  for (const auto& [json, api] : std::vector<std::pair<std::string, double>>{
+           {BRAWL_MOD, 1}, {BRAWL_MOD, 2}, {BrawlWith("laterKey", "1"), 1},
+           {BrawlWith("builtin", R"("brawl-rev3")"), 1}})
+  {
+    picojson::value value;
+    ASSERT_EQ(picojson::parse(value, json), "");
+    value.get<picojson::object>()["engine"] = picojson::value(picojson::object{
+        {"api", picojson::value(api)}, {"minOrca", picojson::value(next)}});
+    error.clear();
+    EXPECT_FALSE(Orca::Mod::ParseManifest(value.serialize(), &error));
+    EXPECT_EQ(error, message) << value.serialize();
+  }
+  EXPECT_FALSE(Orca::Mod::ParseManifest(
+      BrawlWith("engine", R"({"api": 1, "minOrca": "999999999999.0.0"})"), &error));
+  EXPECT_EQ(error, "This pack needs YG Dolphin 999999999999.0.0 or newer. Update the YouGame app "
+                   "and try again.");
+  // A malformed one is still a form error, not an update.
+  EXPECT_FALSE(
+      Orca::Mod::ParseManifest(BrawlWith("engine", R"({"api": 1, "minOrca": "9.9"})"), &error));
+  EXPECT_NE(error.find("engine.minOrca must be a version"), std::string::npos) << error;
+}
+
 TEST(OrcaMod, ParsesEveryField)
 {
   std::string error;
   const auto m = Orca::Mod::ParseManifest(PPLUS_MOD, &error);
   ASSERT_TRUE(m) << error;
   EXPECT_EQ(m->engine_api, 1);
-  EXPECT_EQ(m->min_orca, "0.4.0");
+  EXPECT_EQ(m->min_orca, "0.3.35");
   EXPECT_EQ(m->title, "Project+");
   EXPECT_EQ(m->disc_id, "RSBE01");
   EXPECT_EQ(m->disc_revision, 2);
@@ -334,10 +389,10 @@ TEST(OrcaMod, RefusesAnythingElse)
   EXPECT_TRUE(Refused(BrawlWithout("engine")));
   EXPECT_TRUE(Refused(BrawlWithout("disc")));
   EXPECT_TRUE(Refused(BrawlWithout("frameHook")));
-  EXPECT_TRUE(Refused(BrawlWith("engine", R"({"api": 2, "minOrca": "0.4.0"})")));
+  EXPECT_TRUE(Refused(BrawlWith("engine", R"({"api": 2, "minOrca": "0.3.35"})")));
   EXPECT_TRUE(Refused(BrawlWith("engine", R"({"api": 1})")));
   EXPECT_TRUE(Refused(BrawlWith("engine", R"({"api": 1, "minOrca": "0.4"})")));
-  EXPECT_TRUE(Refused(BrawlWith("engine", R"({"api": 1, "minOrca": "0.4.0", "x": 1})")));
+  EXPECT_TRUE(Refused(BrawlWith("engine", R"({"api": 1, "minOrca": "0.3.35", "x": 1})")));
   EXPECT_TRUE(Refused(BrawlWith("title", R"("")")));
   EXPECT_TRUE(Refused(BrawlWith("title", "\"" + std::string(49, 'x') + "\"")));
   EXPECT_TRUE(Refused(BrawlWith("title", "\"caf\xc3\xa9\"")));

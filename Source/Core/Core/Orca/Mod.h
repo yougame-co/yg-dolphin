@@ -35,6 +35,15 @@ namespace Orca::Mod
 {
 // The script API version this engine implements; mod.json's engine.api must not be above it.
 inline constexpr int ENGINE_API = 1;
+// The running YG Dolphin's version, X.Y.Z (CMake's ORCA_VERSION). mod.json's engine.minOrca must not
+// be above it: ParseManifest refuses such a pack first, with UPDATE_MESSAGE's words.
+std::string_view EngineVersion();
+// Whether X.Y.Z `version` is `minimum` or newer, number by number (both IsVersion: decimal, any
+// length; "0.3.10" is newer than "0.3.9").
+bool VersionAtLeast(std::string_view version, std::string_view minimum);
+// The player's message for a pack that needs a newer YG Dolphin (fmt: the pack's minOrca).
+inline constexpr std::string_view UPDATE_MESSAGE =
+    "This pack needs YG Dolphin {} or newer. Update the YouGame app and try again.";
 // The SD image builder's version, in the cached image's name and the key (through the image hash).
 inline constexpr std::string_view SD_BUILDER = "fat2";
 // An SD card is SDSC: at most 2 GiB (above, Dolphin presents SDHC, which needs the game's IOS to

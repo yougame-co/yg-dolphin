@@ -255,8 +255,11 @@ only by `LoadModProfile` and `LoadFlatProfile`, or on `Mod::Requested()`).
   so do trailing text after the JSON value. `forced` takes only `Dolphin.Core.CustomRTCValue`
   (what PPLUS32.ini forces besides the card); the card itself follows `sd`. `saveTitle` only the
   disc's own. `firstKeyframeFrame` (default and least 300) replaces `FIRST_KEYFRAME_FRAME` and
-  `FriendsMove::FIRST_FRIEND_FRAME`. `engine.api` above `Mod::ENGINE_API` (1) refuses; `minOrca` is
-  checked for form only (the build has no version of its own: the app compares it).
+  `FriendsMove::FIRST_FRIEND_FRAME`. `engine.api` above `Mod::ENGINE_API` (1) refuses. `minOrca`
+  above the running YG Dolphin (`Mod::EngineVersion`, CMake's `ORCA_VERSION`, set in
+  `Source/Core/CMakeLists.txt`; X.Y.Z compared number by number) refuses before any other check,
+  with the player's message "This pack needs YG Dolphin <minOrca> or newer. Update the YouGame app
+  and try again." as the session's error (`OrcaMod.MinOrcaAboveThisBuildRefuses`).
 - **`tree.json`** (written by the app): sorted, unique also without case, no file that is also a
   folder, paths of at most 100 bytes of printable ASCII with no `..`, leading dots, trailing dots or
   spaces, Windows device names or `<>:"\|?*`. `tree` must be the contract's hash of the list
@@ -479,8 +482,8 @@ of an Orca release (`Core/Orca/Bundle.h`).
   Project+'s 6.
 - **Limits**: a listing change moves ranked at once (no pinned versions). The run-folder layout is a
   contract with the app (`orca.ts`: `userData/orca/{user,run/<slug>}`); if it moves, Brawl plays
-  legacy (Project+ follows its launcher). `minOrca` is not enforced (the build has no version of its
-  own); `engine.api` is. A refused bundle ends the session with its reason (above).
+  legacy (Project+ follows its launcher). `minOrca` and `engine.api` are enforced. A refused bundle
+  ends the session with its reason (above).
 
 Open: a P+ fork whose codeset moves the stage select routines loses `brawl-rev2-pplus` until phase
 3's labels; a bundle's own patches are not yet checked against the guard words (the validator's

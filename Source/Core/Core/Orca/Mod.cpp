@@ -172,7 +172,44 @@ bool IsVersion(std::string_view s)
   }
   return dots == 2 && digit && s.size() <= 20;
 }
+
+// A version's three numbers as written (IsVersion), without leading zeros ("007" is "7").
+std::array<std::string_view, 3> VersionParts(std::string_view s)
+{
+  std::array<std::string_view, 3> parts{};
+  for (std::string_view& part : parts)
+  {
+    const size_t dot = s.find('.');
+    part = s.substr(0, dot);
+    s = dot == std::string_view::npos ? std::string_view{} : s.substr(dot + 1);
+    while (part.size() > 1 && part.front() == '0')
+      part.remove_prefix(1);
+  }
+  return parts;
+}
 }  // namespace
+
+#ifndef ORCA_ENGINE_VERSION
+#error "ORCA_ENGINE_VERSION (CMake's ORCA_VERSION) is set for this file in Source/Core/Core/CMakeLists.txt"
+#endif
+std::string_view EngineVersion()
+{
+  return ORCA_ENGINE_VERSION;
+}
+
+bool VersionAtLeast(std::string_view version, std::string_view minimum)
+{
+  const auto have = VersionParts(version), need = VersionParts(minimum);
+  for (size_t i = 0; i < have.size(); ++i)
+  {
+    // Decimal digits without leading zeros: the longer number is the larger, else by digit.
+    if (have[i].size() != need[i].size())
+      return have[i].size() > need[i].size();
+    if (have[i] != need[i])
+      return have[i] > need[i];
+  }
+  return true;
+}
 
 // --- The tree ----------------------------------------------------------------------------------
 
@@ -438,6 +475,20 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
     const auto it = o.find(key);
     return it == o.end() ? nullptr : &it->second;
   };
+
+  // A pack for a newer YG Dolphin says so before anything else it holds that this build may not
+  // know (keys, builtins, limits): the player's message, as the session's error.
+  if (const picojson::value* v = get("engine"); v && v->is<picojson::object>())
+  {
+    const picojson::object& e = v->get<picojson::object>();
+    if (const auto it = e.find("minOrca"); it != e.end() && it->second.is<std::string>() &&
+                                           IsVersion(it->second.get<std::string>()) &&
+                                           !VersionAtLeast(EngineVersion(), it->second.get<std::string>()))
+    {
+      *error = fmt::format(fmt::runtime(UPDATE_MESSAGE), it->second.get<std::string>());
+      return std::nullopt;
+    }
+  }
 
   Manifest m;
   // format: 1, a tree bundle (ORCA_MOD_DIR with tree.json); 2, a flat bundle (Bundle.h). It decides

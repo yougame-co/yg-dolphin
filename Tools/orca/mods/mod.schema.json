@@ -113,7 +113,7 @@
           "maximum": 1
         },
         "minOrca": {
-          "description": "The oldest Orca release the mod runs on. The app and site compare it with the installed Orca's version; the engine checks only its form.",
+          "description": "The oldest YG Dolphin release the mod runs on. An older one refuses the pack first, before any other check (X.Y.Z compared number by number): \"This pack needs YG Dolphin <minOrca> or newer. Update the YouGame app and try again.\"",
           "type": "string",
           "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$",
           "maxLength": 20
@@ -327,6 +327,7 @@
     "builtin is only for disc RSBE01 revision 2.",
     "offers is empty unless builtin is set. brawl-rev2-results may offer only results, and only with rankedRules.",
     "rankedRules: builtin brawl-rev2-results only. The listing owner alone may change it, like builtin.",
+    "engine.minOrca: a pack whose minOrca is above the running YG Dolphin's version is refused before every other rule.",
     "pplusGuards: format 2 and builtin brawl-rev2-pplus only; its three 8-byte pairs don't overlap. The listing owner alone may change it, like builtin.",
     "keepGameCode: no address twice; the game's word differs from the mod's.",
     "launcher, when set, names a file in the tree.",
