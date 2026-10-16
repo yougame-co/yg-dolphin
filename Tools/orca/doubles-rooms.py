@@ -540,6 +540,11 @@ def run(args):
                                "ORCA_ROOM": args.room, "ORCA_JOIN": "0" if role == 0 else "1",
                                "ORCA_TEST_PLAYER": f"Doubles{role}", "ORCA_NAME": f"Doubles{role}",
                                "ORCA_DIRECT": "1", "ORCA_DIRECT_LOOPBACK": "1", "ORCA_DIRECT_STUN": "0"}
+                # Headless peers still start the input layer: never let one open a controller or a
+                # GameCube adapter that is plugged into this machine (it is somebody's).
+                environment.update({"SDL_JOYSTICK_HIDAPI": "0", "SDL_JOYSTICK_HIDAPI_GAMECUBE": "0",
+                                    "SDL_HIDAPI_LIBUSB": "0", "SDL_JOYSTICK_IOKIT": "0", "SDL_JOYSTICK_MFI": "0",
+                                    "SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT": "0x0000/0x0000"})
                 if args.transport == "turn":
                     environment["ORCA_DIRECT_FORCE"] = "turn"
                 if os.name == "nt":
