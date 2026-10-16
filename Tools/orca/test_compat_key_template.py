@@ -78,6 +78,45 @@ class CompatKeyTemplate(unittest.TestCase):
         finally:
             shutil.rmtree(tmp)
 
+    def test_results_builtin_differs_from_brawl_only_in_ux(self):
+        t = ck.make_template(ROOT, os.path.join(ROOT, "Data", "Sys"), "0" * 40, "9.9.9", [])
+        games = t["fill"]["ux"]["games"]
+        self.assertEqual(games["brawl-rev2"], 0)
+        self.assertEqual(games["brawl-rev2-results"], 1)
+        bf = next(r for r in self.v["real"] if "launcher" not in r["mod"])
+        self.assertEqual(bf["mod"]["builtin"], "brawl-rev2")
+        results = dict(bf["mod"], builtin="brawl-rev2-results")
+        brawl_parts = ck.pack_parts(t, bf["mod"], bf["tree"], bf["sd"])
+        results_parts = ck.pack_parts(t, results, bf["tree"], bf["sd"])
+        engine = t["fill"]["ux"]["engine"]
+        self.assertEqual(len(brawl_parts), len(results_parts))
+        for a, b in zip(brawl_parts, results_parts):
+            self.assertTrue(a.endswith(f"|ux={engine}"), a)
+            self.assertEqual(a + ".1", b)
+
+    def test_profile_game_ids_follow_falling_through_cases(self):
+        def mod_cpp(cases):
+            return (ck.PROFILE_FROM_MANIFEST + " Mod::BundleKind kind)\n{\n  Profile profile;\n"
+                    "  switch (manifest.builtin)\n  {\n" + cases + "  }\n  return profile;\n}\n")
+        old = ('  case Mod::Builtin::BrawlRev2:\n    profile.game_id = "RSBE01";\n    break;\n'
+               '  case Mod::Builtin::BrawlRev2PPlus:\n    profile.game_id = "PPLUS32";\n    break;\n'
+               '  default:\n    profile.game_id = manifest.disc_id;\n    break;\n')
+        self.assertEqual(ck.builtin_game_ids(mod_cpp(old)),
+                         {"BrawlRev2": "RSBE01", "BrawlRev2PPlus": "PPLUS32"})
+        both = old.replace('  case Mod::Builtin::BrawlRev2:\n',
+                           '  case Mod::Builtin::BrawlRev2:\n  case Mod::Builtin::BrawlRev2Results:\n')
+        self.assertEqual(ck.builtin_game_ids(mod_cpp(both)),
+                         {"BrawlRev2": "RSBE01", "BrawlRev2Results": "RSBE01", "BrawlRev2PPlus": "PPLUS32"})
+        # A label that falls into the default gets no builtin game id; anything else in the switch refuses.
+        into_default = old.replace("  default:\n", "  case Mod::Builtin::BrawlRev2Results:\n  default:\n")
+        self.assertNotIn("BrawlRev2Results", ck.builtin_game_ids(mod_cpp(into_default)))
+        with self.assertRaises(SystemExit):
+            ck.builtin_game_ids(mod_cpp(old.replace("    break;\n", "    profile.revision = 2;\n", 1)))
+        # And this checkout's: every builtin the tool knows, with its game id.
+        ids = ck.builtin_game_ids(ck.mod_text(ROOT))
+        for builtin, game_id in ck.BUILTIN_GAME_IDS.items():
+            self.assertEqual(ids.get(ck.BUILTIN_ENUMS[builtin]), game_id, builtin)
+
     def test_a_tampered_template_refuses(self):
         t = json.loads(json.dumps(self.v["templates"]["train-fri-005be8ff1f"]))
         r = self.v["real"][0]

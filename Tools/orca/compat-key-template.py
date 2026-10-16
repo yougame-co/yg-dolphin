@@ -202,6 +202,9 @@ KEY_FUNCTIONS = [
 # Fingerprints of KEY_FUNCTIONS this version of the tool reproduces (sha256 hex, first 16).
 KEY_CODE = {
     "c6a3154642413e35": "train-fri 005be8ff1f (0.3.41): orca2|<rev>|api|tree|sd|disc|sys|forced|universal|ux",
+    # The same key; ProfileFromManifest gives brawl-rev2-results RSBE01 too (a case falling through to
+    # brawl-rev2's), and that game's compat is 1, so its key differs from Brawl's only in ux=<engine>.1.
+    "f86645e20656efe5": "pmv-e1e2 28ad53925c (0.3.48): c6a3154642413e35 plus builtin brawl-rev2-results",
 }
 
 # The settings the key reads (UniversalKeyParts), as Profile.cpp ForEachUniversalSetting forces them
@@ -229,8 +232,13 @@ SI_LINES = [
     ("const bool four = TestPads() == 4 || Online::Enabled();", 1),
 ]
 # The profile's game id ProfileFromManifest gives a builtin (BrawlGame.h's games); any other pack's is
-# its disc id.
-BUILTIN_GAME_IDS = {"brawl-rev2": "RSBE01", "brawl-rev2-pplus": "PPLUS32"}
+# its disc id. Checked against Mod.cpp's switch (builtin_game_ids), case labels by their enum names.
+BUILTIN_GAME_IDS = {"brawl-rev2": "RSBE01", "brawl-rev2-pplus": "PPLUS32", "brawl-rev2-results": "RSBE01"}
+BUILTIN_ENUMS = {"brawl-rev2": "BrawlRev2", "brawl-rev2-pplus": "BrawlRev2PPlus",
+                 "brawl-rev2-results": "BrawlRev2Results"}
+# Each builtin's game compat constant in BrawlGame.h (Manifest::compat: the key's ux=<engine>.<compat>).
+BUILTIN_COMPATS = {"brawl-rev2": "BRAWL_REV2_COMPAT", "brawl-rev2-pplus": "BRAWL_REV2_PPLUS_COMPAT",
+                   "brawl-rev2-results": "BRAWL_REV2_RESULTS_COMPAT"}
 # Config::System (Common/Config/Enums.h) by the name mod.json's forced keys use (Config.cpp
 # system_to_name). Only Main is reachable through FORCED_ALLOWLIST today.
 SYSTEMS = {"Dolphin": 0}
@@ -276,6 +284,39 @@ def mod_text(source):
         return f.read()
 
 
+PROFILE_FROM_MANIFEST = "std::optional<Profile> ProfileFromManifest(const std::string& dir, Mod::Tree tree,"
+
+
+def builtin_game_ids(mod_cpp):
+    """ProfileFromManifest's `switch (manifest.builtin)`: {enum name: game id}, a run of case labels
+    (falling through) sharing the `profile.game_id = "<id>";` that follows them. Only the switch's
+    shape is read; anything else in it refuses."""
+    start = mod_cpp.find(PROFILE_FROM_MANIFEST)
+    if start < 0:
+        raise SystemExit("key code: ProfileFromManifest not found in Mod.cpp")
+    switch = re.search(r"switch \(manifest\.builtin\)\s*\{(.*?)\n  \}", mod_cpp[start:], re.S)
+    if not switch:
+        raise SystemExit("key code: ProfileFromManifest has no switch (manifest.builtin)")
+    ids, labels = {}, []
+    for line in switch.group(1).splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        case = re.fullmatch(r"case Mod::Builtin::(\w+):", line)
+        assign = re.fullmatch(r'profile\.game_id = "([A-Z0-9]{6,7})";', line)
+        if case:
+            labels.append(case.group(1))
+        elif assign and labels:
+            for label in labels:
+                ids[label] = assign.group(1)
+            labels = []
+        elif line in ("break;", "default:") or line.startswith("profile.game_id = manifest.disc_id;"):
+            labels = []
+        else:
+            raise SystemExit(f"key code: ProfileFromManifest's switch holds {line!r}, which this tool can't read")
+    return ids
+
+
 def _int_constant(source, path, name):
     with open(os.path.join(source, path), encoding="utf-8") as f:
         return int(_one(rf"constexpr int {name} = (\d+);", f.read(), name))
@@ -319,17 +360,19 @@ def make_template(source, sys_dir, commit, version, covers):
     if "SIDEVICE_GC_CONTROLLER" not in si_names or "=" in si_enum.group(1):
         raise SystemExit("key code: SI_Device.h's SIDevices enum changed shape")
     si_gc = si_names.index("SIDEVICE_GC_CONTROLLER")
+    switch_ids = builtin_game_ids(mod_text(source))
     for builtin, game_id in BUILTIN_GAME_IDS.items():
-        if f'case Mod::Builtin::{ "BrawlRev2" if builtin == "brawl-rev2" else "BrawlRev2PPlus"}:\n    profile.game_id = "{game_id}";' not in mod_text(source):
+        if switch_ids.get(BUILTIN_ENUMS[builtin]) != game_id:
             raise SystemExit(f"key code: ProfileFromManifest no longer gives {builtin} the game id {game_id}")
+    unknown = sorted(set(switch_ids) - set(BUILTIN_ENUMS.values()))
+    if unknown:
+        raise SystemExit(f"key code: ProfileFromManifest gives builtins this tool doesn't know a game id: {unknown}")
     api = _int_constant(source, "Source/Core/Core/Orca/Mod.h", "ENGINE_API")
     engine_ux = _int_constant(source, "Source/Core/Core/Orca/UX/UX.h", "kCompatVersion")
     brawl = "Source/Core/Core/Orca/Games/Brawl/BrawlGame.h"
-    games = {
-        "": 0,  # no builtin: no module describes the game (BrawlGame Identify), compat 0
-        "brawl-rev2": _int_constant(source, brawl, "BRAWL_REV2_COMPAT"),
-        "brawl-rev2-pplus": _int_constant(source, brawl, "BRAWL_REV2_PPLUS_COMPAT"),
-    }
+    games = {"": 0}  # no builtin: no module describes the game (BrawlGame Identify), compat 0
+    for builtin, constant in BUILTIN_COMPATS.items():
+        games[builtin] = _int_constant(source, brawl, constant)
     with open(os.path.join(source, "Source/Core/Core/Orca/Mod.cpp"), encoding="utf-8") as f:
         mod_cpp = f.read()
     allow = re.search(r"FORCED_ALLOWLIST = std::to_array<std::string_view>\(\{(.*?)\}\);", mod_cpp, re.S)
