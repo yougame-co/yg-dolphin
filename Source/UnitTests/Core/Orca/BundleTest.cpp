@@ -4,11 +4,15 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <functional>
 #include <map>
+#include <memory>
 #include <optional>
+#include <span>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include <ed25519.h>
@@ -19,6 +23,8 @@
 #include "Common/FileUtil.h"
 #include "Common/IOFile.h"
 #include "Common/Version.h"
+#include "Core/Boot/Boot.h"
+#include "Core/Boot/ElfReader.h"
 #include "Core/ConfigManager.h"
 #include "Core/Orca/Bundle.h"
 #include "Core/Orca/Mod.h"
@@ -218,6 +224,75 @@ Flat MakeBrawl(const std::string& dir, const Signer& signer)
   return f;
 }
 
+void PutBE32(std::string* out, u32 value)
+{
+  for (int shift = 24; shift >= 0; shift -= 8)
+    out->push_back(static_cast<char>(value >> shift));
+}
+
+void PutBE16(std::string* out, u16 value)
+{
+  out->push_back(static_cast<char>(value >> 8));
+  out->push_back(static_cast<char>(value));
+}
+
+// A small big-endian PowerPC executable as devkitPPC links one (Project M 3.6's launcher is one):
+// the ELF header, one loadable code segment at `entry` (a branch to itself), no sections. Written
+// here byte by byte, not with the engine's structs. Its header fields are big-endian in the file,
+// so a reader that byte-swaps them where they lie no longer holds the file.
+std::string MinimalElf(u32 entry)
+{
+  constexpr u32 code_offset = 0x60, code_size = 0x20;
+  std::string elf = "\x7f" "ELF";
+  elf += '\x01';  // 32-bit
+  elf += '\x02';  // big-endian
+  elf += '\x01';  // version 1
+  elf.resize(16, '\0');
+  PutBE16(&elf, 2);   // e_type: ET_EXEC
+  PutBE16(&elf, 20);  // e_machine: EM_PPC
+  PutBE32(&elf, 1);   // e_version
+  PutBE32(&elf, entry);
+  PutBE32(&elf, 52);  // e_phoff: right after this header
+  PutBE32(&elf, 0);   // e_shoff: no sections
+  PutBE32(&elf, 0);   // e_flags
+  PutBE16(&elf, 52);  // e_ehsize
+  PutBE16(&elf, 32);  // e_phentsize
+  PutBE16(&elf, 1);   // e_phnum
+  PutBE16(&elf, 40);  // e_shentsize
+  PutBE16(&elf, 0);   // e_shnum
+  PutBE16(&elf, 0);   // e_shstrndx: SHN_UNDEF
+  PutBE32(&elf, 1);   // p_type: PT_LOAD
+  PutBE32(&elf, code_offset);
+  PutBE32(&elf, entry);  // p_vaddr
+  PutBE32(&elf, entry);  // p_paddr
+  PutBE32(&elf, code_size);
+  PutBE32(&elf, code_size);
+  PutBE32(&elf, 5);  // p_flags: PF_R | PF_X
+  PutBE32(&elf, 4);  // p_align
+  elf.resize(code_offset, '\0');
+  for (u32 i = 0; i < code_size / 4; ++i)
+    PutBE32(&elf, 0x48000000);  // b .
+  return elf;
+}
+
+// A small DOL: the 0x100-byte header and one 0x20-byte text section at `entry` (a branch to itself).
+std::string MinimalDol(u32 entry)
+{
+  std::string dol;
+  for (u32 word = 0; word < 0x40; ++word)
+  {
+    const u32 offset = word * 4;
+    PutBE32(&dol, offset == 0x00 ? 0x100u :  // text 0's file offset
+                      offset == 0x48 ? entry :   // text 0's address
+                      offset == 0x90 ? 0x20u :   // text 0's size
+                      offset == 0xe0 ? entry :   // the entry point
+                                       0u);
+  }
+  for (u32 i = 0; i < 8; ++i)
+    PutBE32(&dol, 0x48000000);  // b .
+  return dol;
+}
+
 std::string TempDir()
 {
   return File::CreateTempDir() + "/";
@@ -245,6 +320,23 @@ std::string Without(std::string json, const std::string& key)
   picojson::parse(v, json);
   v.get<picojson::object>().erase(key);
   return v.serialize();
+}
+
+// A launcher bundle as Project+'s (a .dol launcher) and Project M 3.6's (an .elf) are laid out: the
+// launcher `name` holding `contents`, a small card, patches and JIT seed, signed.
+Flat MakeLauncherPack(const std::string& dir, const Signer& signer, const std::string& name,
+                      const std::string& contents)
+{
+  Flat f{dir, {}, "sd.raw"};
+  File::CreateFullPath(dir);
+  f.Put(name, contents);
+  f.Put("sd.raw", std::string(65536, '\x11'));
+  f.Put("PPLUS32.patches", PATCHES);
+  f.Put("PPLUS32.jitwarm", "warm");
+  f.Put("mod.json", With(PPlusFlat(65536, Orca::Mod::ChunkedSha256File(dir + "sd.raw", 65536)),
+                         "launcher", fmt::format("\"{}\"", name)));
+  f.Sign(signer);
+  return f;
 }
 }  // namespace
 
@@ -705,6 +797,155 @@ TEST(OrcaBundle, RefusesTamperedBundles)
   // No key trusted: nothing loads.
   EXPECT_FALSE(Orca::Mod::LoadFlatBundle(b.dir, {}, &error));
   EXPECT_NE(error.find("trusts no bundle key"), std::string::npos) << error;
+  File::DeleteDirRecursively(root);
+}
+
+// A launcher as the boot reads it (BootParameters::GenerateFromFile's reader, whose GetBytes()
+// BootManager hands ResolveBundle) is checked as its file's bytes, read once: an .elf launcher's
+// (Project M 3.6's) as well as a .dol's. The ELF reader parses its own copy of those bytes, made
+// before Initialize() byte-swaps the copy's headers, so what runs comes from what was signed.
+TEST(OrcaBundle, BootLauncherIsCheckedAsItsFile)
+{
+  const ScopedEnv session("ORCA_SESSION", "1");
+  const ScopedEnv no_dir("ORCA_MOD_DIR", "");
+  const ScopedEnv game("YOUGAME_GAME", "project-rollback");
+  const Signer signer(1);
+  const PublicKey key = signer.Key();
+  Orca::Mod::TrustKeysForTests(std::span(&key, 1));
+  const std::string root = TempDir();
+  ASSERT_FALSE(root.empty());
+  using Orca::Mod::BundleKind;
+  std::string error;
+  // The session's decision for this launcher boot, from the boot's own reader.
+  const auto resolve = [](const BootParameters::Executable& launcher) {
+    Orca::Mod::ResetResolvedBundle();
+    Orca::Mod::ResolveBundleForTests(&launcher.path, launcher.reader->GetBytes(), true);
+    return Orca::Mod::ResolvedKind();
+  };
+
+  // Every copy an ELF reader makes, as it is made.
+  struct Seen
+  {
+    std::vector<u8> file, copy;
+    const u8* file_data = nullptr;
+    const u8* copy_data = nullptr;
+  };
+  std::vector<Seen> seen;
+  struct ObserverDone
+  {
+    ~ObserverDone() { ElfReader::SetCopyObserverForTests({}); }
+  } observer_done;
+  ElfReader::SetCopyObserverForTests(
+      [&seen](std::span<const u8> file_bytes, std::span<const u8> copy_bytes) {
+        seen.push_back({{file_bytes.begin(), file_bytes.end()},
+                        {copy_bytes.begin(), copy_bytes.end()},
+                        file_bytes.data(),
+                        copy_bytes.data()});
+      });
+
+  // Project M 3.6's layout: an .elf launcher.
+  const std::string elf_name = "Project M Launcher.elf";
+  Flat pm = MakeLauncherPack(root + "pm/", signer, elf_name, MinimalElf(0x80004000));
+  const std::string elf_path = pm.dir + elf_name;
+  const std::string elf_file = pm.files[elf_name];
+  const std::vector<u8> elf_signed(elf_file.begin(), elf_file.end());
+  {
+    std::unique_ptr<BootParameters> boot = BootParameters::GenerateFromFile(elf_path);
+    ASSERT_TRUE(boot);
+    const auto* launcher = std::get_if<BootParameters::Executable>(&boot->parameters);
+    ASSERT_NE(launcher, nullptr);
+    ASSERT_TRUE(launcher->reader);
+    ASSERT_TRUE(launcher->reader->IsValid());
+    EXPECT_EQ(launcher->reader->GetEntryPoint(), 0x80004000u);
+    const std::vector<u8>& hashed = launcher->reader->GetBytes();
+
+    // The reader's copy, before Initialize() ran: the bytes hashed, which are the file's, in a
+    // buffer of its own; the hashed bytes are the reader's one read of the file.
+    ASSERT_EQ(seen.size(), 1u);
+    EXPECT_EQ(seen[0].file, elf_signed);
+    EXPECT_EQ(seen[0].copy, elf_signed);
+    EXPECT_EQ(seen[0].copy, hashed);
+    EXPECT_EQ(seen[0].file_data, hashed.data());
+    EXPECT_NE(seen[0].copy_data, hashed.data());
+    // After it: the copy is what the reader parsed (its header now byte-swapped), and the hashed
+    // bytes are still the file's.
+    const auto& elf = static_cast<const ElfReader&>(*launcher->reader);
+    EXPECT_EQ(elf.GetPtr(0), seen[0].copy_data);
+    EXPECT_NE(std::memcmp(elf.GetPtr(0), elf_signed.data(), 52), 0);
+    EXPECT_EQ(hashed, elf_signed);
+
+    // The pack passes, as LoadFlatBundle and as the session's decision.
+    const Orca::Mod::BootLauncher elf_boot{elf_name, hashed};
+    EXPECT_TRUE(pm.Load(signer, &error, &elf_boot)) << error;
+    EXPECT_EQ(resolve(*launcher), BundleKind::Flat) << Orca::Mod::ResolvedError();
+    // The parsed copy (what the boot checked before) is not the signed file.
+    const std::vector<u8> parsed(elf.GetPtr(0), elf.GetPtr(0) + hashed.size());
+    const Orca::Mod::BootLauncher parsed_boot{elf_name, parsed};
+    EXPECT_FALSE(pm.Load(signer, &error, &parsed_boot));
+    EXPECT_NE(error.find("doesn't match"), std::string::npos) << error;
+  }
+
+  // One byte changed in the .elf, in its code or in its header: refused.
+  for (const size_t at : {size_t{0x60}, size_t{0x1b}})
+  {
+    std::string changed = elf_file;
+    changed[at] ^= 1;
+    ASSERT_TRUE(File::WriteStringToFile(elf_path, changed));
+    std::unique_ptr<BootParameters> boot = BootParameters::GenerateFromFile(elf_path);
+    ASSERT_TRUE(boot);
+    const auto* launcher = std::get_if<BootParameters::Executable>(&boot->parameters);
+    ASSERT_NE(launcher, nullptr);
+    ASSERT_TRUE(launcher->reader);
+    EXPECT_TRUE(launcher->reader->IsValid()) << at;
+    EXPECT_EQ(launcher->reader->GetBytes(), std::vector<u8>(changed.begin(), changed.end()))
+        << at;
+    const Orca::Mod::BootLauncher changed_boot{elf_name, launcher->reader->GetBytes()};
+    EXPECT_FALSE(pm.Load(signer, &error, &changed_boot)) << at;
+    EXPECT_NE(error.find("doesn't match"), std::string::npos) << at << ": " << error;
+    EXPECT_EQ(resolve(*launcher), BundleKind::Refused) << at;
+    EXPECT_NE(Orca::Mod::ResolvedError().find("mod.sig doesn't match the files"),
+              std::string::npos)
+        << at << ": " << Orca::Mod::ResolvedError();
+  }
+  ASSERT_TRUE(File::WriteStringToFile(elf_path, elf_file));
+
+  // Project+'s layout, a .dol launcher: its reader holds the file as read, as before; no ELF copy.
+  const size_t elf_copies = seen.size();
+  const std::string dol_name = "Project+ Netplay Launcher.dol";
+  Flat pplus = MakeLauncherPack(root + "pplus/", signer, dol_name, MinimalDol(0x80003100));
+  const std::string dol_path = pplus.dir + dol_name;
+  const std::string dol_file = pplus.files[dol_name];
+  {
+    std::unique_ptr<BootParameters> boot = BootParameters::GenerateFromFile(dol_path);
+    ASSERT_TRUE(boot);
+    const auto* launcher = std::get_if<BootParameters::Executable>(&boot->parameters);
+    ASSERT_NE(launcher, nullptr);
+    ASSERT_TRUE(launcher->reader);
+    ASSERT_TRUE(launcher->reader->IsValid());
+    EXPECT_EQ(launcher->reader->GetEntryPoint(), 0x80003100u);
+    EXPECT_EQ(launcher->reader->GetBytes(), std::vector<u8>(dol_file.begin(), dol_file.end()));
+    EXPECT_EQ(seen.size(), elf_copies);
+    const Orca::Mod::BootLauncher dol_boot{dol_name, launcher->reader->GetBytes()};
+    EXPECT_TRUE(pplus.Load(signer, &error, &dol_boot)) << error;
+    EXPECT_EQ(resolve(*launcher), BundleKind::Flat) << Orca::Mod::ResolvedError();
+  }
+  {
+    std::string changed = dol_file;
+    changed[0x100] ^= 1;
+    ASSERT_TRUE(File::WriteStringToFile(dol_path, changed));
+    std::unique_ptr<BootParameters> boot = BootParameters::GenerateFromFile(dol_path);
+    ASSERT_TRUE(boot);
+    const auto* launcher = std::get_if<BootParameters::Executable>(&boot->parameters);
+    ASSERT_NE(launcher, nullptr);
+    ASSERT_TRUE(launcher->reader);
+    const Orca::Mod::BootLauncher changed_boot{dol_name, launcher->reader->GetBytes()};
+    EXPECT_FALSE(pplus.Load(signer, &error, &changed_boot));
+    EXPECT_NE(error.find("doesn't match"), std::string::npos) << error;
+    EXPECT_EQ(resolve(*launcher), BundleKind::Refused);
+  }
+
+  Orca::Mod::ResetResolvedBundle();
+  Orca::Mod::ResetTrustedKeysForTests();
   File::DeleteDirRecursively(root);
 }
 
