@@ -1,0 +1,25 @@
+F
+======================================================================
+FAIL: test_slow_second_ticket_cannot_swap_role_ports (__main__.RunnerTest)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/test_doubles_rooms.py", line 65, in test_slow_second_ticket_cannot_swap_role_ports
+    fixture.run(args)
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 598, in run
+    spawn(role)
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 571, in spawn
+    process = subprocess.Popen(command, env=environment, stdin=subprocess.PIPE,
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/unittest/mock.py", line 1093, in __call__
+    return self._mock_call(*args, **kwargs)
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/unittest/mock.py", line 1097, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/unittest/mock.py", line 1158, in _execute_mock_call
+    result = effect(*args, **kwargs)
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/test_doubles_rooms.py", line 42, in spawn
+    self.assertTrue(registered.is_set(), "third role started before the second owned its seat")
+AssertionError: False is not true : third role started before the second owned its seat
+
+----------------------------------------------------------------------
+Ran 1 test in 0.214s
+
+FAILED (failures=1)

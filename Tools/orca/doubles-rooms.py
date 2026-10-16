@@ -581,18 +581,21 @@ def run(args):
                 players.append((role, process, stderr, lines))
                 process.stdin.write("caps join leave stats\n")
                 process.stdin.flush()
-                # The host's dev ticket must own the first slot before joiners boot.
-                if role == 0:
-                    deadline = time.monotonic() + 90
-                    while time.monotonic() < deadline:
-                        with open(Path(work) / "peer-0.log") as log:
-                            if "on seat 1" in log.read():
-                                break
-                        if process.poll() is not None:
-                            raise RuntimeError("host exited before owning its room")
-                        time.sleep(0.1)
-                    else:
-                        raise RuntimeError("host never owned its room")
+                # Tickets assign seats in arrival order. Wait for every role, since a slow
+                # ticket for role 1 must not let role 2 claim its port and invalidate pad scripts.
+                deadline = time.monotonic() + 90
+                while time.monotonic() < deadline:
+                    with open(Path(work) / f"peer-{role}.log") as log:
+                        assignment = re.search(r"on seat (\d+)", log.read())
+                    if assignment:
+                        if int(assignment[1]) != role + 1:
+                            raise RuntimeError(f"peer {role} owns unexpected seat {assignment[1]}")
+                        break
+                    if process.poll() is not None:
+                        raise RuntimeError(f"peer {role} exited before owning its room seat")
+                    time.sleep(0.1)
+                else:
+                    raise RuntimeError(f"peer {role} never owned its room seat")
             for role in roles:
                 if role not in deferred:
                     spawn(role)
