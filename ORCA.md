@@ -276,8 +276,8 @@ only by `LoadModProfile` and `LoadFlatProfile`, or on `Mod::Requested()`).
   share a key.
 - **Builtins** replace the game-id checks (`ProfileRuleset`, `ResultsVerified`, `BrawlExecutable`,
   NameTags, MenuText, `VanillaBrawl`, `RequestQueueRules`; JitWarm's `KnownGame` and the harness's
-  scene reader take the declared builtin, host-only). `brawl-rev2` and `brawl-rev2-pplus` run only
-  while their guard words hold (`Mod::BuiltinGuards`: the frame loop's word, r13's base, the scene
+  scene reader take the declared builtin, host-only). `brawl-rev2`, `brawl-rev2-pplus` and
+  `brawl-rev2-results` run only while their guard words hold (`Mod::BuiltinGuards`: the frame loop's word, r13's base, the scene
   manager / g_GameGlobal / pad system loads, the message buffer's vtable; for `brawl-rev2` Brawl's
   word at 0x8001CD24, which Project+'s codes rewrite (not the v-sync call any more: since 0.3.33
   RSBE01.patches moves it as Project+ does; `OrcaMod.GuardsAreNotOrcasOwnPatches`); Project+'s stage select routines at 0x80553594, 0x80554320, 0x805518D0 for
@@ -295,6 +295,23 @@ only by `LoadModProfile` and `LoadFlatProfile`, or on `Mod::Requested()`).
   boots to the same origin as legacy; the menu itself is still read only while the guards hold, so
   a mod that moved what its builtin relies on gets no origin and takes no players, on every machine
   alike.
+- **Results without a ruleset (`brawl-rev2-results`)**, for Brawl-engine mods without Project+'s
+  code (PM 3.6, Brawl Minus, Legacy): RSBE01 revision 2 only, profile game id `RSBE01`, its own game
+  compat 1 (the key's `ux=<engine>.1`; the other builtins' keys are unchanged). Its guards are the
+  eight Brawl words alone. `offers` may name only `results`: the parser refuses `locks` and
+  `queue2`, and `Mod::Offers` offers nothing else for it, so no pick caps either. It is the legacy
+  `brawl-rev2-launcher` game in mod mode: results (`ResultsVerified`: the vanilla scene manager and
+  `g_GameGlobal`'s result info, never the match block), the Online menu's Casual/Ranked picks, fresh
+  starts, name tags, menu text and music. Its ruleset is `None`, so nothing that needs one runs: no
+  header, rule or stage writes (`Rules::OnFrame`), no queue character select or latch (`Queue`), no
+  stage flows (`BrawlStages`, `RankedPPlus`), ranked set (`RankedSet`), character order
+  (`CharOrder`), CPU and seat rules (`OnlineSeats`), stage cursors, CSS title, relabels or native
+  text, and no input masks (`BrawlModule::Masks`). It never writes sora_scene's free space
+  (`BrawlGame::UsesFreeSpace`): there the match block and code caves may be the mod's own code, so
+  the friends' drop-in move (`FriendsMove`) is off too and the host picks With Friends itself. Ranked
+  admits it (`RoomRefusal` asks only for `results`), unlocked: nothing in the game enforces stages
+  or rules, and each game is reported as its results screen shows it. The legacy launcher game is
+  unchanged. `OrcaMod.ResultsOnlyAdmitsRankedWithoutRulesetGates`.
 - **P+ fork guards** (flat format 2 only): the listing owner may add
   `"pplusGuards": {"rssExdata": "0x80551DD4", "pageIndex": "0x80552B70", "currentPage": "0x80552F90"}`
   with `builtin: "brawl-rev2-pplus"` (Project+Ex 1.7's NETBOOST.GCT holds Project+ v3.2's three
@@ -349,6 +366,43 @@ ORCA_SESSION=1 ORCA_MOD_DIR=<run folder> ORCA_SD_CACHE=<cache> [ORCA_DISC_SHA1=<
   builder (`fat2`) lays each folder out files first, by upper-cased name, as the official image does
   195 of its 204 folders. Card `0615853dd38b01c51a3608d0199fa966` (tree `830384ca…34af4`), built
   twice byte-identical.
+
+### Reaching Casual/Ranked from a non-P+ Brawl build
+
+For a `brawl-rev2-results` pack (PM 3.6, Brawl Minus, Legacy), whose mod has no Project+ codeset.
+What Orca reads needs a builtin whose guards hold, never a ruleset ([Online menu](#online-menu)):
+
+- **The pick.** The Online menu reader (`OnlineMenu.cpp` `ReadMenuState`,
+  `OnlineMenuReader::Boundary`) follows the scene manager (`[0x805A0060]`: `+0x4` the scene, whose
+  name is at `+0`) from the scene named `muMenuMain` into the one named `scMemoryChange`, and reads
+  the main menu's exit code at `[0x805A0060] +0x284`: **30** is Casual, **31** Ranked (24-27 With
+  Friends). The menu writes the code itself as it leaves (then its step, 2, at `+0x288`); 30 and 31
+  are Brawl's own With Anyone codes (Basic Brawl, Team Battle), so a menu that keeps those buttons
+  needs no patch for them. Picked with the game alone and the app's `host`, the search starts at
+  the pick (no `queue2`: `UX/MenuEvents.cpp` `AnnounceOnlinePick`). With friends in the game the
+  pick is kept, unarmed (no pick caps without `locks`).
+- **What the pack's `.patches` must do**, after Project+'s groups in `Data/Sys/Orca/PPLUS32.patches`
+  (RSBE01.patches has the same groups for Brawl's own menu; Project+'s menu module is Brawl's
+  `+0x1480`). Read every original word from the mod's own RAM on its main menu and guard each group
+  with them, so a group never lands on other code:
+  1. Reach the ONLINE page without the connection window (its save check and network task):
+     `:60-68`, the top page's two Play Online press checks (`bne` -> `b`).
+  2. Leave the ONLINE page without the disconnect window and keep With Friends local (exit 25):
+     `:70-155`; never enable Options or Spectator: `:157-168`.
+  3. Send exit codes 30 and 31 to the local Versus sequence instead of the network ones, leaving
+     the code where the reader saw it: `:170-181`, `sqMenuMain::setNext`'s table (in sora_scene,
+     which Project+ keeps as Brawl's: codes 24-27 and 29-31 to the block at `0x806DC8C8`), and
+     `:183-211`, that block (`sqVsMelee` as VERSUS, the code kept at `sqVsMelee +0x18`), with the
+     back out at `:213-217`. A mod that keeps Brawl's sora_scene can take these groups as they are.
+  4. Boot to the main menu: a build that boots straight to its character select needs its own
+     group like `:31-44` (Project+'s BootToCSS), and `:46-50` skips the title.
+- **Not for this pack:** the toggled group at `:219-234` acts on the match block's header
+  (`0x806F2380`), which a results-only pack never has, and nothing else here needs the match
+  block, a header or the Code Menu.
+- Proof is the pack author's: on the mod's disc, Play Online > With Anyone > Casual must print
+  `orca menu online casual` and land on the local character select (`Tools/orca/online-menu.py`
+  is the legacy flow's check), and one real 1v1 in a matchmade room must log `Matchmaking: a game
+  ended at frame ...` with its winner.
 
 ### Flat bundles
 

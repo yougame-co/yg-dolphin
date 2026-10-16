@@ -383,6 +383,8 @@ std::optional<Builtin> BuiltinFromName(std::string_view name)
     return Builtin::BrawlRev2;
   if (name == "brawl-rev2-pplus")
     return Builtin::BrawlRev2PPlus;
+  if (name == "brawl-rev2-results")
+    return Builtin::BrawlRev2Results;
   return std::nullopt;
 }
 
@@ -394,6 +396,8 @@ std::string_view BuiltinName(Builtin builtin)
     return "brawl-rev2";
   case Builtin::BrawlRev2PPlus:
     return "brawl-rev2-pplus";
+  case Builtin::BrawlRev2Results:
+    return "brawl-rev2-results";
   default:
     return "none";
   }
@@ -749,7 +753,8 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
   {
     const auto builtin = v->is<std::string>() ? BuiltinFromName(v->get<std::string>()) : std::nullopt;
     if (!builtin)
-      return fail("\"builtin\" must be \"brawl-rev2\" or \"brawl-rev2-pplus\"");
+      return fail("\"builtin\" must be \"brawl-rev2\", \"brawl-rev2-pplus\" or "
+                  "\"brawl-rev2-results\"");
     if (m.disc_id != "RSBE01" || m.disc_revision != 2)
       return fail(fmt::format("builtin {} runs on RSBE01 revision 2 only", BuiltinName(*builtin)));
     m.builtin = *builtin;
@@ -821,6 +826,8 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
       const std::string* cap = item.is<std::string>() ? &item.get<std::string>() : nullptr;
       if (!cap || std::ranges::find(OFFERABLE_CAPS, *cap) == OFFERABLE_CAPS.end())
         return fail("offers must be among \"results\", \"locks\", \"queue2\"");
+      if (m.builtin == Builtin::BrawlRev2Results && *cap != "results")
+        return fail("builtin brawl-rev2-results may offer only \"results\"");
       if (std::ranges::find(m.offers, *cap) != m.offers.end())
         return fail(fmt::format("offer {} twice", *cap));
       m.offers.push_back(*cap);
@@ -1231,6 +1238,8 @@ std::span<const GuardWord> BuiltinGuards(Builtin builtin)
   {
   case Builtin::BrawlRev2:
     return VANILLA_BRAWL_GUARDS;
+  case Builtin::BrawlRev2Results:
+    return BRAWL_REV2_GUARDS;
   case Builtin::BrawlRev2PPlus:
     return BRAWL_REV2_PPLUS_GUARDS;
   default:
@@ -1373,9 +1382,9 @@ bool GuardsFailed()
 bool Offers(std::string_view cap)
 {
   const ModInfo* mod = ActiveMod();
-  // Both builtins carry results, the online rules' locks and the queue's character select: offered
-  // only once their guards have held, and never again after they failed.
+  // Only the builtin's supported caps, once its guards have held and never after failure.
   return mod && mod->manifest.builtin != Builtin::None && s_held_once && !s_guards_failed &&
+         (mod->manifest.builtin != Builtin::BrawlRev2Results || cap == "results") &&
          std::ranges::find(mod->manifest.offers, cap) != mod->manifest.offers.end();
 }
 }  // namespace Orca::Mod
@@ -1421,6 +1430,7 @@ std::optional<Profile> ProfileFromManifest(const std::string& dir, Mod::Tree tre
   switch (manifest.builtin)
   {
   case Mod::Builtin::BrawlRev2:
+  case Mod::Builtin::BrawlRev2Results:
     profile.game_id = "RSBE01";
     break;
   case Mod::Builtin::BrawlRev2PPlus:

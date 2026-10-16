@@ -116,6 +116,7 @@ void ReadOnlineMenu(const Core::CPUThreadGuard& guard, bool resimulating, bool a
 // A friend who joins while the host is in the menus moves both games to With Friends' character
 // select, as if the host had picked it. A friend who joins during a single-player mode waits until
 // the host is back (`orca state friend-holding` / `friend-waiting`).
+// Not in brawl-rev2-results (BrawlGame::UsesFreeSpace): the host picks With Friends itself there.
 //
 // gfSceneManager (0x805A0060): +0x4 scene, +0x10 sequence (names at +0), +0x284 exit code, +0x288
 // process step. Every menu exit writes the code, then step 2.

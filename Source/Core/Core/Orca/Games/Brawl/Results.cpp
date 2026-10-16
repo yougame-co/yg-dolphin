@@ -375,10 +375,15 @@ void ReadResultsFrame(const Core::CPUThreadGuard& guard, int frame)
     return;
   GuardMemory memory(guard);
   Reading reading = ReadResults(memory);
-  if (const auto header = SetBlock::ReadHeader(memory);
-      header && header->mode == SetBlock::Mode::Ranked)
+  // Only a game with a ruleset writes a ranked set into the match block; without one that memory
+  // is the game's own (brawl-rev2-results), whatever it holds.
+  if (Builtin().Describe().ruleset != Orca::Engine::Ruleset::None)
   {
-    reading.set = SetBlock::ReadSet(memory);
+    if (const auto header = SetBlock::ReadHeader(memory);
+        header && header->mode == SetBlock::Mode::Ranked)
+    {
+      reading.set = SetBlock::ReadSet(memory);
+    }
   }
   if (Orca::Net::ReplayScope::NetworkPlaying())
     Tracker().Rebase(frame, reading, Orca::Events::Resyncs());

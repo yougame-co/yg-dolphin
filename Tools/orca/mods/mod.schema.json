@@ -37,6 +37,13 @@
         "required": ["builtin"],
         "properties": { "format": { "const": 2 }, "builtin": { "const": "brawl-rev2-pplus" } }
       }
+    },
+    {
+      "if": {
+        "required": ["builtin"],
+        "properties": { "builtin": { "const": "brawl-rev2-results" } }
+      },
+      "then": { "properties": { "offers": { "items": { "const": "results" } } } }
     }
   ],
   "properties": {
@@ -188,8 +195,8 @@
       }
     },
     "builtin": {
-      "description": "Phase 1: the compiled UX modules the mod runs, each on only while its guard words hold. Only on RSBE01 revision 2.",
-      "enum": ["brawl-rev2", "brawl-rev2-pplus"]
+      "description": "Phase 1: the compiled UX modules the mod runs, each on only while its guard words hold. Only on RSBE01 revision 2. brawl-rev2-results (a Brawl-engine mod without Project+'s code) reads results only: no ruleset, and it may offer only results.",
+      "enum": ["brawl-rev2", "brawl-rev2-pplus", "brawl-rev2-results"]
     },
     "pplusGuards": {
       "description": "Format 2, owner-only, brawl-rev2-pplus only: where a Project+ fork's codeset holds the three instruction pairs Orca checks, as the address of each pair's first word; the words stay the engine's. Absent: Project+ v3.2's addresses. The pairs must not overlap.",
@@ -278,7 +285,7 @@
     "maxFiles": 20000,
     "forcedAllowlist": ["Dolphin.Core.CustomRTCValue"],
     "offerableCaps": ["results", "locks", "queue2"],
-    "builtins": ["brawl-rev2", "brawl-rev2-pplus"],
+    "builtins": ["brawl-rev2", "brawl-rev2-pplus", "brawl-rev2-results"],
     "flatMaxFiles": 8,
     "flatMaxPatches": 4,
     "minFlatSerial": 1,
@@ -290,7 +297,7 @@
     "sd.clusterBytes, when set, leaves FAT32 more than 65,525 clusters: with S = bytes/512 sectors and C = clusterBytes/512, (S - 32 - ceil((floor(S/C)*4 + 8)/512) * fats) / C > 65525.",
     "saveTitle equals the disc's own title ID: 0x00010000 followed by the hex of disc.id's first 4 characters (RSBE01: 0x0001000052534245).",
     "builtin is only for disc RSBE01 revision 2.",
-    "offers is empty unless builtin is set.",
+    "offers is empty unless builtin is set. brawl-rev2-results may offer only results.",
     "pplusGuards: format 2 and builtin brawl-rev2-pplus only; its three 8-byte pairs don't overlap. The listing owner alone may change it, like builtin.",
     "keepGameCode: no address twice; the game's word differs from the mod's.",
     "launcher, when set, names a file in the tree.",

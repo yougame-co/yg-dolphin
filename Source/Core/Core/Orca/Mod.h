@@ -116,8 +116,9 @@ std::optional<Tree> ParseTree(std::string_view json, std::string* error);
 enum class Builtin : u8
 {
   None,
-  BrawlRev2,       // "brawl-rev2": vanilla Brawl (NTSC-U rev 2)
-  BrawlRev2PPlus,  // "brawl-rev2-pplus": Project+ on Brawl rev 2
+  BrawlRev2,         // "brawl-rev2": vanilla Brawl (NTSC-U rev 2)
+  BrawlRev2PPlus,    // "brawl-rev2-pplus": Project+ on Brawl rev 2
+  BrawlRev2Results,  // "brawl-rev2-results": a Brawl-engine mod's results, no ruleset
 };
 std::optional<Builtin> BuiltinFromName(std::string_view name);
 std::string_view BuiltinName(Builtin builtin);

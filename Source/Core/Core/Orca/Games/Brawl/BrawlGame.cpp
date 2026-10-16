@@ -45,6 +45,9 @@ Orca::Engine::Manifest Identify(const Orca::Profile* profile)
     case Orca::Mod::Builtin::BrawlRev2PPlus:
       game = Game(BRAWL_REV2_PPLUS, Orca::Engine::Ruleset::PPlus, BRAWL_REV2_PPLUS_COMPAT);
       break;
+    case Orca::Mod::Builtin::BrawlRev2Results:
+      game = Game(BRAWL_REV2_RESULTS, Orca::Engine::Ruleset::None, BRAWL_REV2_RESULTS_COMPAT);
+      break;
     default:
       break;
     }
@@ -106,6 +109,11 @@ std::span<const Orca::Engine::Region> Regions()
       {0x90000800, 0x93600000, RegionKind::Data, "mem2-heap"},
   }};
   return REGIONS;
+}
+
+bool UsesFreeSpace(const Orca::Engine::Manifest& game)
+{
+  return !game.id.empty() && game.id != BRAWL_REV2_RESULTS;
 }
 
 bool On(const Orca::Engine::Manifest& game)
