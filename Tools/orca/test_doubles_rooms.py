@@ -4,6 +4,7 @@
 """Runner regressions using isolated fake Orca children; no disc or external service."""
 import importlib.util
 import io
+import socket
 from pathlib import Path
 import threading
 import time
@@ -85,6 +86,31 @@ class RunnerTest(unittest.TestCase):
         with patch.object(fixture.subprocess, "Popen", side_effect=spawn):
             with self.assertRaises(StopAfterEnvironment):
                 fixture.run(args)
+
+
+    def test_a_nonreading_peer_cannot_hold_the_room_lock(self):
+        sender, reader = socket.socketpair()
+        sender.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4096)
+        rooms = fixture.Rooms()
+        released = threading.Event()
+
+        def send():
+            with rooms.lock:
+                try:
+                    rooms.send((sender, threading.Lock()), {"d": "x" * 65500})
+                except OSError:
+                    pass
+                finally:
+                    released.set()
+
+        worker = threading.Thread(target=send, daemon=True)
+        worker.start()
+        try:
+            self.assertTrue(released.wait(2.5), "a nonreading socket kept the whole room locked")
+        finally:
+            reader.close()
+            worker.join(timeout=2)
+            sender.close()
 
 
 if __name__ == "__main__":

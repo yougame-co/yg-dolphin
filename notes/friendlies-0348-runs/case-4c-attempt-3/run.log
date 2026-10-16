@@ -1,0 +1,230 @@
+16:25  up 16:38, 4 users, load averages: 8.70 9.91 10.02
+Fixture PID: 90414
+Running roles 0,1,2; isolated logs: /var/folders/0k/gcc8hsbs5qs9bzd0254hd8n80000gn/T/orca-doubles-qed7ct2h
+peer 0: orca state booting
+peer 0: orca state playing
+peer 0: orca state friend-joining
+peer 0: orca state friend-holding
+peer 0: orca state friend-joining
+peer 1: orca state booting
+peer 1: orca state joining 0
+peer 1: orca state friend-waiting
+peer 2: orca state booting
+peer 2: orca state joining 0
+peer 2: orca state friend-waiting
+peer 1: orca state joining 0
+peer 1: orca state joining 50
+peer 2: orca state joining 0
+peer 2: orca state joining 50
+peer 1: orca state joining 99
+peer 2: orca state joining 99
+peer 0: orca state friend-joined
+peer 1: orca state playing
+peer 2: orca state playing
+peer 2: orca state room-away self kept direct-inputs attempt=0 close-code=0 close-reason=test-blackout last-error=none
+peer 2: orca state room-away self retry started attempt=0 close-code=0 close-reason=test-blackout last-error=none
+peer 2: orca state room-away self retry connecting attempt=1 close-code=0 close-reason=test-blackout last-error=none
+peer 2: orca state room-away self retry connect-failed attempt=1 close-code=0 close-reason=test-blackout last-error=network (test-blackout)
+peer 2: orca state room-away self retry connecting attempt=2 close-code=0 close-reason=test-blackout last-error=network (test-blackout)
+peer 2: orca state room-away self retry connect-failed attempt=2 close-code=0 close-reason=test-blackout last-error=network (test-blackout)
+peer 2: orca state room-away self retry connecting attempt=3 close-code=0 close-reason=test-blackout last-error=network (test-blackout)
+peer 2: orca state room-away self retry connect-failed attempt=3 close-code=0 close-reason=test-blackout last-error=network (test-blackout)
+peer 2: orca state room-away self retry connecting attempt=4 close-code=0 close-reason=test-blackout last-error=network (test-blackout)
+peer 2: orca state room-away self retry connect-failed attempt=4 close-code=0 close-reason=test-blackout last-error=network (test-blackout)
+peer 2: orca state room-away self retry connecting attempt=5 close-code=0 close-reason=test-blackout last-error=network (test-blackout)
+peer 2: orca state room-away self retry connect-failed attempt=5 close-code=0 close-reason=test-blackout last-error=WebSocket connect failed: Timeout was reached (HTTP 0)
+peer 2: orca state room-away self retry connecting attempt=6 close-code=0 close-reason=test-blackout last-error=WebSocket connect failed: Timeout was reached (HTTP 0)
+peer 0: orca state room-away self kept direct-inputs attempt=0 close-code=0 close-reason=server-silent last-error=none
+peer 0: orca state room-away self retry started attempt=0 close-code=0 close-reason=server-silent last-error=none
+peer 0: orca state room-away self retry connecting attempt=1 close-code=0 close-reason=server-silent last-error=none
+peer 1: orca state room-away self kept direct-inputs attempt=0 close-code=0 close-reason=server-silent last-error=none
+peer 1: orca state room-away self retry started attempt=0 close-code=0 close-reason=server-silent last-error=none
+peer 1: orca state room-away self retry connecting attempt=1 close-code=0 close-reason=server-silent last-error=none
+peer 2: orca state room-away self retry connect-failed attempt=6 close-code=0 close-reason=test-blackout last-error=ticket-refresh-failed
+peer 0: orca state room-away self retry connect-failed attempt=1 close-code=0 close-reason=server-silent last-error=ticket-refresh-failed
+peer 1: orca state room-away self retry connect-failed attempt=1 close-code=0 close-reason=server-silent last-error=ticket-refresh-failed
+peer 1: orca state room-away self retry connecting attempt=2 close-code=0 close-reason=server-silent last-error=ticket-refresh-failed
+peer 0: orca state room-away self retry connecting attempt=2 close-code=0 close-reason=server-silent last-error=ticket-refresh-failed
+peer 2: orca state room-away self retry connecting attempt=7 close-code=0 close-reason=test-blackout last-error=ticket-refresh-failed
+Thread 0x000000017b853000 (most recent call first):
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 230 in do_POST
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/http/server.py", line 422 in handle_one_request
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/http/server.py", line 434 in handle
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 747 in __init__
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 360 in finish_request
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 683 in process_request_thread
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 910 in run
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 973 in _bootstrap_inner
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 930 in _bootstrap
+
+Thread 0x000000017a847000 (most recent call first):
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 230 in do_POST
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/http/server.py", line 422 in handle_one_request
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/http/server.py", line 434 in handle
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 747 in __init__
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 360 in finish_request
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 683 in process_request_thread
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 910 in run
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 973 in _bootstrap_inner
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 930 in _bootstrap
+
+Thread 0x000000017983b000 (most recent call first):
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 230 in do_POST
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/http/server.py", line 422 in handle_one_request
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/http/server.py", line 434 in handle
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 747 in __init__
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 360 in finish_request
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 683 in process_request_thread
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 910 in run
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 973 in _bootstrap_inner
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 930 in _bootstrap
+
+Thread 0x000000017882f000 (most recent call first):
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 230 in do_POST
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/http/server.py", line 422 in handle_one_request
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/http/server.py", line 434 in handle
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 747 in __init__
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 360 in finish_request
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 683 in process_request_thread
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 910 in run
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 973 in _bootstrap_inner
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 930 in _bootstrap
+
+Thread 0x0000000177823000 (most recent call first):
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 230 in do_POST
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/http/server.py", line 422 in handle_one_request
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/http/server.py", line 434 in handle
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 747 in __init__
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 360 in finish_request
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 683 in process_request_thread
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 910 in run
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 973 in _bootstrap_inner
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 930 in _bootstrap
+
+Thread 0x0000000176817000 (most recent call first):
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 230 in do_POST
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/http/server.py", line 422 in handle_one_request
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/http/server.py", line 434 in handle
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 747 in __init__
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 360 in finish_request
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 683 in process_request_thread
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 910 in run
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 973 in _bootstrap_inner
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 930 in _bootstrap
+
+Thread 0x000000017580b000 (most recent call first):
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 256 in do_GET
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/http/server.py", line 422 in handle_one_request
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/http/server.py", line 434 in handle
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 747 in __init__
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 360 in finish_request
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 683 in process_request_thread
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 910 in run
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 973 in _bootstrap_inner
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 930 in _bootstrap
+
+Thread 0x00000001747ff000 (most recent call first):
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socket.py", line 704 in readinto
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 57 in receive
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 281 in do_GET
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/http/server.py", line 422 in handle_one_request
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/http/server.py", line 434 in handle
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 747 in __init__
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 360 in finish_request
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 683 in process_request_thread
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 910 in run
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 973 in _bootstrap_inner
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 930 in _bootstrap
+
+Thread 0x00000001737f3000 (most recent call first):
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 584 in read_output
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 910 in run
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 973 in _bootstrap_inner
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 930 in _bootstrap
+
+Thread 0x00000001727e7000 (most recent call first):
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 282 in do_GET
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/http/server.py", line 422 in handle_one_request
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/http/server.py", line 434 in handle
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 747 in __init__
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 360 in finish_request
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 683 in process_request_thread
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 910 in run
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 973 in _bootstrap_inner
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 930 in _bootstrap
+
+Thread 0x00000001717db000 (most recent call first):
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 584 in read_output
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 910 in run
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 973 in _bootstrap_inner
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 930 in _bootstrap
+
+Thread 0x00000001707cf000 (most recent call first):
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 144 in send
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 150 in broadcast
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 296 in do_GET
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/http/server.py", line 422 in handle_one_request
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/http/server.py", line 434 in handle
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 747 in __init__
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 360 in finish_request
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 683 in process_request_thread
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 910 in run
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 973 in _bootstrap_inner
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 930 in _bootstrap
+
+Thread 0x000000016f7c3000 (most recent call first):
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 584 in read_output
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 910 in run
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 973 in _bootstrap_inner
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 930 in _bootstrap
+
+Thread 0x000000016e7b7000 (most recent call first):
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/selectors.py", line 416 in select
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socketserver.py", line 232 in serve_forever
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 910 in run
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 973 in _bootstrap_inner
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/threading.py", line 930 in _bootstrap
+
+Current thread 0x000000020a7bf080 (most recent call first):
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 684 in run
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 822 in main
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 830 in <module>
+peer 1: orca state room-away self retry connect-failed attempt=2 close-code=0 close-reason=server-silent last-error=ticket-refresh-failed
+peer 0: orca state room-away self retry connect-failed attempt=2 close-code=0 close-reason=server-silent last-error=ticket-refresh-failed
+peer 2: orca state room-away self retry connect-failed attempt=7 close-code=0 close-reason=test-blackout last-error=ticket-refresh-failed
+peer 0: orca state room-away self retry connecting attempt=3 close-code=0 close-reason=server-silent last-error=ticket-refresh-failed
+peer 1: orca state room-away self retry connecting attempt=3 close-code=0 close-reason=server-silent last-error=ticket-refresh-failed
+peer 2: orca state room-away self retry connecting attempt=8 close-code=0 close-reason=test-blackout last-error=ticket-refresh-failed
+peer 0: orca state room-away self retry connect-failed attempt=3 close-code=0 close-reason=server-silent last-error=ticket-refresh-failed
+peer 1: orca state room-away self retry connect-failed attempt=3 close-code=0 close-reason=server-silent last-error=ticket-refresh-failed
+peer 0: orca state room-away self retry connecting attempt=4 close-code=0 close-reason=server-silent last-error=ticket-refresh-failed
+peer 1: orca state room-away self retry connecting attempt=4 close-code=0 close-reason=server-silent last-error=ticket-refresh-failed
+peer 2: orca state room-away self retry connect-failed attempt=8 close-code=0 close-reason=test-blackout last-error=ticket-refresh-failed
+Traceback (most recent call last):
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 830, in <module>
+    server = Server(("127.0.0.1", 0), args.turn_binary, doubles=not args.ordinary)
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 822, in main
+    finally:
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 690, in run
+    raise RuntimeError(f"peer {role} reported an error; inspect local log")
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/urllib/request.py", line 214, in urlopen
+    return opener.open(url, data, timeout)
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/urllib/request.py", line 517, in open
+    response = self._open(req, data)
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/urllib/request.py", line 534, in _open
+    result = self._call_chain(self.handle_open, protocol, protocol +
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/urllib/request.py", line 494, in _call_chain
+    result = func(*args)
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/urllib/request.py", line 1375, in http_open
+    return self.do_open(http.client.HTTPConnection, req)
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/urllib/request.py", line 1350, in do_open
+    r = h.getresponse()
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/http/client.py", line 1349, in getresponse
+    response.begin()
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/http/client.py", line 316, in begin
+    version, status, reason = self._read_status()
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/http/client.py", line 277, in _read_status
+    line = str(self.fp.readline(_MAXLINE + 1), "iso-8859-1")
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/socket.py", line 704, in readinto
+    return self._sock.recv_into(b)
+socket.timeout: timed out

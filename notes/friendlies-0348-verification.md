@@ -34,7 +34,7 @@ Evidence: [before](friendlies-0348-runs/role-order-before.log),
 | 3b: four fight 2v2 | PASS: teams 1+3 / 2+4, both winners have one stock and place 0 on all four peers, back to CSS, confirmed through 9000, 0 desync | case-3-attempt-3/teams-evidence.json |
 | 4a: sitting-out peer leaves | PASS: only port 3 leaves; fighters return to CSS, confirmed through 6000, 0 desync | case-4a-attempt-1/ |
 | 4b: sitting-out peer away/back | PASS: same seat retained; back to CSS, confirmed through 5940, 0 desync | case-4b-attempt-1/ |
-| 4c: sitting-out peer blackout/return | PENDING | |
+| 4c: sitting-out peer blackout/return | PASS: 50–56 s blackout, same seat, fight back to CSS, confirmed through 5640, 0 desync, one counted stall | case-4c-attempt-4/ |
 | 5: third arrival mid-fight | PENDING | |
 | 6: third arrival during recovery | PENDING | |
 | 7: fifth arrival refused alone | PENDING | |
@@ -128,3 +128,22 @@ The game compatibility revisions and updated assertions are now built. **25
 selected tests passed** (20 OnlineSeats plus the per-game, legacy key, historical
 key goldens, results-only and generic-module key checks). Evidence:
 `compat-revision-build.log`, `compat-revision-tests.log` under the runs directory.
+
+## Blackout fixture writer correction — proved
+
+Attempts 2/3 admitted all peers but the local fixture stopped answering room
+requests during the blackout. The live SIGUSR1 thread trace in attempt 3 shows
+`Rooms.send` blocked in its socket write via `broadcast`, while room ticket and
+GET handlers wait for the room lock. The nonreading-socket regression reproduces
+that indefinite lock hold (FAIL before). The fixture now applies a one-second
+kernel send timeout (reads can remain idle) and closes a socket whose write
+fails, allowing its normal away handler to run. All **3 Python runner tests PASS**
+afterward. Evidence: `room-backpressure-before.log`, `room-backpressure-after.log`,
+`case-4c-attempt-3/run.log`. `--dump-stacks` can reproduce the own-fixture trace
+with SIGUSR1; it reads no other process.
+
+Attempt 4 PASS: only peer 3 blacked out at 50–56 s, recovered on the same seat,
+and both fighters retained it. The fight returned to CSS; confirmed hashes agree
+through 5640, 0 desync, one counted stall. Healthy peers' room connections stay
+up with the fixture correction. The fixture prints its exact PID and cleans up
+only its own game children in finally. No emulator recovery change was needed.

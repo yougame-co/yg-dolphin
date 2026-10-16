@@ -11,12 +11,14 @@ without it steer each isolated headless instance with stdin pad commands.
 """
 import argparse
 import base64
+import faulthandler
 import hashlib
 import ipaddress
 import json
 import os
 import queue
 import re
+import signal
 import socket
 import struct
 import subprocess
@@ -139,7 +141,18 @@ class Rooms:
     def send(self, connection, data):
         sock, guard = connection
         with guard:
-            sock.sendall(frame(data))
+            try:
+                # A blackout can stop a peer reading. Bound writes without timing out idle
+                # reads, so this socket cannot hold the room lock throughout the blackout.
+                timeout = 1000 if os.name == "nt" else struct.pack("ll", 1, 0)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDTIMEO, timeout)
+                sock.sendall(frame(data))
+            except OSError:
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+                raise
 
     def broadcast(self, room, local, message):
         for (code, name), connection in list(self.sockets.items()):
@@ -532,6 +545,8 @@ def run(args):
     with tempfile.TemporaryDirectory(prefix="orca-doubles-") as work:
         try:
             print(f"Fixture PID: {os.getpid()}", flush=True)
+            if getattr(args, "dump_stacks", False):
+                faulthandler.register(signal.SIGUSR1, file=sys.stderr, all_threads=True)
             def spawn(role):
                 user = Path(work) / f"user-{role}"
                 user.mkdir()
@@ -774,6 +789,8 @@ def main():
     parser.add_argument("--blackout-role", action="append", default=[], metavar="ROLE=FROM-TO",
                         help="set ORCA_TEST_BLACKOUT for one role")
     parser.add_argument("--probe", help="read-only gameplay evidence probe script")
+    parser.add_argument("--dump-stacks", action="store_true",
+                        help="debug this fixture's threads with SIGUSR1 (POSIX only)")
     parser.add_argument("--expect-fight", action="append", default=[], type=lambda value: int(value, 0),
                         help="human-port bitmask for each fight; requires probe-fight-N.bin and return to CSS")
     parser.add_argument("--events", help="JSON scheduled per-role spawn/command events, triggered by logs")

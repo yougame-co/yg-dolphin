@@ -1,0 +1,15 @@
+FFixture PID: 89913
+.Fixture PID: 89913
+.
+======================================================================
+FAIL: test_a_nonreading_peer_cannot_hold_the_room_lock (__main__.RunnerTest)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/test_doubles_rooms.py", line 109, in test_a_nonreading_peer_cannot_hold_the_room_lock
+    self.assertTrue(released.wait(2.5), "a nonreading socket kept the whole room locked")
+AssertionError: False is not true : a nonreading socket kept the whole room locked
+
+----------------------------------------------------------------------
+Ran 3 tests in 2.733s
+
+FAILED (failures=1)
