@@ -2765,6 +2765,15 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.48
+
+- Doubles friends rooms take up to four people. Anyone who doesn't pick a character sits out and
+  can rotate in at the next character select. To sit out after playing, pick up your token with B,
+  then press A on your own player button.
+- Packs that need a newer YG Dolphin now give a clear message telling you to update the YouGame app.
+- Known limit: a friend who is sitting out is still connected. Their bad connection can briefly
+  stall the fight.
+
 ### 0.3.47
 
 - Recorded matches reach the site again: 0.3.46 never uploaded them. Fixes a rare crash at start on

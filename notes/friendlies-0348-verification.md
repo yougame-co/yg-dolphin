@@ -125,5 +125,8 @@ The runner rechecks load after acquiring the lock; it reserves headroom below
 It releases the lock without starting a fixture if that check fails. Exact own
 fixture PIDs are printed; finally quits/waits/kills only its own children.
 No heavy-slot call, push, external service, production operation, signing or
-mailbox call. Required final train-wide gates are recorded in
-[train verification](train-0348-verification.md); they follow the version bump.
+mailbox call. Final version-0.3.48 gates passed: full binary 2,157 passed / 21
+guarded skips / 0 failures; Orca filter 1,085 passed / 21 guarded skips / 0 failures;
+doubles self-test PASS; compatibility template 78/78; Python regressions 3/3;
+four touched C++ translation units compile with -Werror. See
+[train verification](train-0348-verification.md) for commands, logs and skip reasons.

@@ -1,0 +1,2779 @@
+Running main() from UnitTestsMain.cpp
+Note: Google Test filter = Orca*
+[==========] Running 1106 tests from 117 test suites.
+[----------] Global test environment set-up.
+[----------] 1 test from OrcaSandboxDeathTest
+[ RUN      ] OrcaSandboxDeathTest.PackJailRecognizesAnAppliedProcessSandbox
+[       OK ] OrcaSandboxDeathTest.PackJailRecognizesAnAppliedProcessSandbox (6 ms)
+[----------] 1 test from OrcaSandboxDeathTest (6 ms total)
+
+[----------] 11 tests from OrcaSession
+[ RUN      ] OrcaSession.NoLatencyNeverRollsBack
+[       OK ] OrcaSession.NoLatencyNeverRollsBack (0 ms)
+[ RUN      ] OrcaSession.SavesOnlyFramesItMayRollBackTo
+[       OK ] OrcaSession.SavesOnlyFramesItMayRollBackTo (0 ms)
+[ RUN      ] OrcaSession.LatencyRollsBackAndStaysInSync
+[       OK ] OrcaSession.LatencyRollsBackAndStaysInSync (2 ms)
+[ RUN      ] OrcaSession.LatencyBeyondTheWindowStalls
+[       OK ] OrcaSession.LatencyBeyondTheWindowStalls (1 ms)
+[ RUN      ] OrcaSession.InputsHeldBackAreFoundLate
+[       OK ] OrcaSession.InputsHeldBackAreFoundLate (12 ms)
+[ RUN      ] OrcaSession.RerunOnlyWithASnapshotInReach
+[       OK ] OrcaSession.RerunOnlyWithASnapshotInReach (1 ms)
+[ RUN      ] OrcaSession.DetectsDesync
+[       OK ] OrcaSession.DetectsDesync (0 ms)
+[ RUN      ] OrcaSession.RejectsHostilePackets
+[       OK ] OrcaSession.RejectsHostilePackets (0 ms)
+[ RUN      ] OrcaSession.NeverSavesAFrameTwice
+[       OK ] OrcaSession.NeverSavesAFrameTwice (12 ms)
+[ RUN      ] OrcaSession.HostilePeerTelemetryIsBounded
+[       OK ] OrcaSession.HostilePeerTelemetryIsBounded (0 ms)
+[ RUN      ] OrcaSession.DepthOneRollbacksLoadTheCorrectedState
+[       OK ] OrcaSession.DepthOneRollbacksLoadTheCorrectedState (0 ms)
+[----------] 11 tests from OrcaSession (34 ms total)
+
+[----------] 2 tests from OrcaPadCodec
+[ RUN      ] OrcaPadCodec.NeutralIsZeroAndRoundTrips
+[       OK ] OrcaPadCodec.NeutralIsZeroAndRoundTrips (0 ms)
+[ RUN      ] OrcaPadCodec.UnpluggedIsNotAButton
+[       OK ] OrcaPadCodec.UnpluggedIsNotAButton (0 ms)
+[----------] 2 tests from OrcaPadCodec (0 ms total)
+
+[----------] 15 tests from OrcaLive
+[ RUN      ] OrcaLive.TwoRoomsPlayEachOther
+/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Source/UnitTests/Core/Orca/RoomTest.cpp:812: Skipped
+set ORCA_LIVE_TEST=1
+
+[  SKIPPED ] OrcaLive.TwoRoomsPlayEachOther (0 ms)
+[ RUN      ] OrcaLive.DirectLinkBetweenTwoRooms
+/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Source/UnitTests/Core/Orca/RoomTest.cpp:912: Skipped
+set ORCA_LIVE_TEST=1
+
+[  SKIPPED ] OrcaLive.DirectLinkBetweenTwoRooms (0 ms)
+[ RUN      ] OrcaLive.ArrivalIsPendingUntilTaken
+/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Source/UnitTests/Core/Orca/RoomTest.cpp:1018: Skipped
+set ORCA_LIVE_TEST=1
+
+[  SKIPPED ] OrcaLive.ArrivalIsPendingUntilTaken (0 ms)
+[ RUN      ] OrcaLive.HostLeavingIsPendingUntilTaken
+/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Source/UnitTests/Core/Orca/RoomTest.cpp:1047: Skipped
+set ORCA_LIVE_TEST=1
+
+[  SKIPPED ] OrcaLive.HostLeavingIsPendingUntilTaken (0 ms)
+[ RUN      ] OrcaLive.TestNetworkDelayHoldsMessages
+/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Source/UnitTests/Core/Orca/RoomTest.cpp:1083: Skipped
+set ORCA_LIVE_TEST=1
+
+[  SKIPPED ] OrcaLive.TestNetworkDelayHoldsMessages (0 ms)
+[ RUN      ] OrcaLive.BridgeMirrorsTheRoomAndTakesLeave
+/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Source/UnitTests/Core/Orca/RoomTest.cpp:1136: Skipped
+set ORCA_LIVE_TEST=1, ORCA_TEST_BRIDGE_ROOM and a bridge
+
+[  SKIPPED ] OrcaLive.BridgeMirrorsTheRoomAndTakesLeave (0 ms)
+[ RUN      ] OrcaLive.DifferentKeysAreRefusedWithAReason
+/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Source/UnitTests/Core/Orca/RoomTest.cpp:1211: Skipped
+set ORCA_LIVE_TEST=1
+
+[  SKIPPED ] OrcaLive.DifferentKeysAreRefusedWithAReason (0 ms)
+[ RUN      ] OrcaLive.DesyncIsReportedOnBothSides
+/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Source/UnitTests/Core/Orca/RoomTest.cpp:1250: Skipped
+set ORCA_LIVE_TEST=1
+
+[  SKIPPED ] OrcaLive.DesyncIsReportedOnBothSides (0 ms)
+[ RUN      ] OrcaLive.AHostsMismatchReachesItsJoiner
+/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Source/UnitTests/Core/Orca/RoomTest.cpp:1337: Skipped
+set ORCA_LIVE_TEST=1
+
+[  SKIPPED ] OrcaLive.AHostsMismatchReachesItsJoiner (0 ms)
+[ RUN      ] OrcaLive.ReturningPlayerIsGreetedAgain
+/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Source/UnitTests/Core/Orca/RoomTest.cpp:1400: Skipped
+set ORCA_LIVE_TEST=1
+
+[  SKIPPED ] OrcaLive.ReturningPlayerIsGreetedAgain (0 ms)
+[ RUN      ] OrcaLive.HostSecondInItsRoomGivesItUp
+/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Source/UnitTests/Core/Orca/RoomTest.cpp:1452: Skipped
+set ORCA_LIVE_TEST=1
+
+[  SKIPPED ] OrcaLive.HostSecondInItsRoomGivesItUp (0 ms)
+[ RUN      ] OrcaLive.HostComesBackToItsRoom
+/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Source/UnitTests/Core/Orca/RoomTest.cpp:1486: Skipped
+set ORCA_LIVE_TEST=1
+
+[  SKIPPED ] OrcaLive.HostComesBackToItsRoom (0 ms)
+[ RUN      ] OrcaLive.WaitingRoomStaysOpen
+/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Source/UnitTests/Core/Orca/RoomTest.cpp:1525: Skipped
+set ORCA_LIVE_TEST=1
+
+[  SKIPPED ] OrcaLive.WaitingRoomStaysOpen (0 ms)
+[ RUN      ] OrcaLive.StdioBridgeMirrorsTheRoomAndTakesLeave
+/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Source/UnitTests/Core/Orca/SandboxTest.cpp:836: Skipped
+set ORCA_LIVE_TEST=1
+
+[  SKIPPED ] OrcaLive.StdioBridgeMirrorsTheRoomAndTakesLeave (0 ms)
+[ RUN      ] OrcaLive.WebSocketReachesARoom
+/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Source/UnitTests/Core/Orca/SessionTest.cpp:1368: Skipped
+set ORCA_LIVE_TEST=1
+
+[  SKIPPED ] OrcaLive.WebSocketReachesARoom (0 ms)
+[----------] 15 tests from OrcaLive (0 ms total)
+
+[----------] 20 tests from OrcaSessionDelay
+[ RUN      ] OrcaSessionDelay.DeepRollbacksAloneRaiseNothing
+[       OK ] OrcaSessionDelay.DeepRollbacksAloneRaiseNothing (2 ms)
+[ RUN      ] OrcaSessionDelay.StaysPutWhenQuietOrDisabled
+[       OK ] OrcaSessionDelay.StaysPutWhenQuietOrDisabled (3 ms)
+[ RUN      ] OrcaSessionDelay.SteadyHighRoundTripRaises
+[       OK ] OrcaSessionDelay.SteadyHighRoundTripRaises (3 ms)
+[ RUN      ] OrcaSessionDelay.LinkRaisesAtOnceAndFallsAFrameAtATime
+[       OK ] OrcaSessionDelay.LinkRaisesAtOnceAndFallsAFrameAtATime (9 ms)
+[ RUN      ] OrcaSessionDelay.StepsDownOnlyWithHeadroomAndUndoesAWrongOne
+[       OK ] OrcaSessionDelay.StepsDownOnlyWithHeadroomAndUndoesAWrongOne (8 ms)
+[ RUN      ] OrcaSessionDelay.FixedDelaySamplesLandDelayFramesLater
+[       OK ] OrcaSessionDelay.FixedDelaySamplesLandDelayFramesLater (0 ms)
+[ RUN      ] OrcaSessionDelay.RaiseDuringAStall
+[       OK ] OrcaSessionDelay.RaiseDuringAStall (0 ms)
+[ RUN      ] OrcaSessionDelay.StallsARaiseWouldSpareRaiseThenDecay
+[       OK ] OrcaSessionDelay.StallsARaiseWouldSpareRaiseThenDecay (11 ms)
+[ RUN      ] OrcaSessionDelay.OneHiccupBothWaysRaisesNothing
+[       OK ] OrcaSessionDelay.OneHiccupBothWaysRaisesNothing (0 ms)
+[ RUN      ] OrcaSessionDelay.StallsOnAPeerHitchRaiseNothing
+[       OK ] OrcaSessionDelay.StallsOnAPeerHitchRaiseNothing (1 ms)
+[ RUN      ] OrcaSessionDelay.ALoadHitchCountsApartAndItsStallsDont
+[       OK ] OrcaSessionDelay.ALoadHitchCountsApartAndItsStallsDont (0 ms)
+[ RUN      ] OrcaSessionDelay.NoStallCountsWhileSettling
+[       OK ] OrcaSessionDelay.NoStallCountsWhileSettling (2 ms)
+[ RUN      ] OrcaSessionDelay.RoundTripsSetTheFloor
+[       OK ] OrcaSessionDelay.RoundTripsSetTheFloor (3 ms)
+[ RUN      ] OrcaSessionDelay.WifiSpikesKeepTheDelayAtTwo
+[ Wi-Fi spikes, friend hitching A ] rollbacks 1851, re-run 2021, deepest 7, stalls 17 (0 counted, 0 a frame would spare), waits 16, delay 2 (+0 -0 reverted 0, most 2), advantage 0.50, round trip 35 ms, hitches 0
+[ Wi-Fi spikes, friend hitching B ] rollbacks 1597, re-run 1646, deepest 5, stalls 0 (0 counted, 0 a frame would spare), waits 0, delay 2 (+0 -0 reverted 0, most 2), advantage -0.50, round trip 23 ms, hitches 17
+[ Wi-Fi spikes past the window A ] rollbacks 2775, re-run 2869, deepest 7, stalls 18 (18 counted, 0 a frame would spare), waits 0, delay 2 (+0 -0 reverted 0, most 2), advantage -0.00, round trip 35 ms, hitches 0
+[ Wi-Fi spikes past the window B ] rollbacks 404, re-run 683, deepest 7, stalls 18 (18 counted, 0 a frame would spare), waits 12, delay 2 (+0 -0 reverted 0, most 2), advantage 0.00, round trip 23 ms, hitches 0
+[       OK ] OrcaSessionDelay.WifiSpikesKeepTheDelayAtTwo (286 ms)
+[ RUN      ] OrcaSessionDelay.FixedDelayNeverAdapts
+[       OK ] OrcaSessionDelay.FixedDelayNeverAdapts (6 ms)
+[ RUN      ] OrcaSessionDelay.AnInflatedFirstMedianComesBackDown
+[       OK ] OrcaSessionDelay.AnInflatedFirstMedianComesBackDown (0 ms)
+[ RUN      ] OrcaSessionDelay.StallsCountOnlyFromPlayersWaitingOnUs
+[       OK ] OrcaSessionDelay.StallsCountOnlyFromPlayersWaitingOnUs (0 ms)
+[ RUN      ] OrcaSessionDelay.StallsWeighByWhatARaiseWouldSpare
+[       OK ] OrcaSessionDelay.StallsWeighByWhatARaiseWouldSpare (1 ms)
+[ RUN      ] OrcaSessionDelay.ChosenDelayChangesMidMatchStayInSync
+[       OK ] OrcaSessionDelay.ChosenDelayChangesMidMatchStayInSync (1 ms)
+[ RUN      ] OrcaSessionDelay.StallBeforeFirstInputRaisesNothing
+[       OK ] OrcaSessionDelay.StallBeforeFirstInputRaisesNothing (1 ms)
+[----------] 20 tests from OrcaSessionDelay (348 ms total)
+
+[----------] 3 tests from OrcaSessionTimeSync
+[ RUN      ] OrcaSessionTimeSync.FastSideWaits
+[       OK ] OrcaSessionTimeSync.FastSideWaits (17 ms)
+[ RUN      ] OrcaSessionTimeSync.StepSessionReadsThePadAgainAfterAWait
+[       OK ] OrcaSessionTimeSync.StepSessionReadsThePadAgainAfterAWait (574 ms)
+[ RUN      ] OrcaSessionTimeSync.UnequalRelayRoundTrips
+[       OK ] OrcaSessionTimeSync.UnequalRelayRoundTrips (3 ms)
+[----------] 3 tests from OrcaSessionTimeSync (594 ms total)
+
+[----------] 13 tests from OrcaSessionRelay
+[ RUN      ] OrcaSessionRelay.SlowJitteryLinkStallsRarely
+[ T3 A ] rollbacks 410, re-run 1948, deepest 7, stalls 22 (17 counted, 17 a frame would spare), waits 114, delay 2 (+0 -0 reverted 0, most 2), advantage 0.83, round trip 194 ms, hitches 0
+[ T3 B ] rollbacks 409, re-run 1325, deepest 5, stalls 1 (0 counted, 0 a frame would spare), waits 1, delay 3 (+1 -0 reverted 0, most 3), advantage -0.80, round trip 17 ms, hitches 0
+[       OK ] OrcaSessionRelay.SlowJitteryLinkStallsRarely (173 ms)
+[ RUN      ] OrcaSessionRelay.JitterBothWaysEitherSideFast
+[ both ways, A fast A ] rollbacks 409, re-run 1824, deepest 7, stalls 24 (11 counted, 11 a frame would spare), waits 116, delay 3 (+1 -0 reverted 0, most 3), advantage 1.09, round trip 232 ms, hitches 0
+[ both ways, A fast B ] rollbacks 409, re-run 1580, deepest 6, stalls 1 (0 counted, 0 a frame would spare), waits 1, delay 4 (+2 -0 reverted 0, most 4), advantage -0.91, round trip 17 ms, hitches 0
+[ both ways, B fast A ] rollbacks 409, re-run 1588, deepest 7, stalls 4 (0 counted, 0 a frame would spare), waits 0, delay 4 (+2 -0 reverted 0, most 4), advantage -0.40, round trip 220 ms, hitches 0
+[ both ways, B fast B ] rollbacks 409, re-run 1837, deepest 7, stalls 26 (10 counted, 10 a frame would spare), waits 115, delay 3 (+1 -0 reverted 0, most 3), advantage 0.59, round trip 17 ms, hitches 0
+[       OK ] OrcaSessionRelay.JitterBothWaysEitherSideFast (358 ms)
+[ RUN      ] OrcaSessionRelay.LanWithHitchesTracksTheLink
+[ LAN, hitches unreported A ] rollbacks 310, re-run 436, deepest 7, stalls 33 (26 counted, 1 a frame would spare), waits 90, delay 2 (+0 -0 reverted 0, most 2), advantage 0.87, round trip 29 ms, hitches 0
+[ LAN, hitches unreported B ] rollbacks 46, re-run 86, deepest 7, stalls 19 (12 counted, 2 a frame would spare), waits 3, delay 2 (+0 -0 reverted 0, most 2), advantage -0.90, round trip 29 ms, hitches 0
+[ LAN, hitches A ] rollbacks 310, re-run 436, deepest 7, stalls 33 (0 counted, 0 a frame would spare), waits 90, delay 2 (+0 -0 reverted 0, most 2), advantage 0.87, round trip 29 ms, hitches 20
+[ LAN, hitches B ] rollbacks 46, re-run 86, deepest 7, stalls 19 (0 counted, 0 a frame would spare), waits 3, delay 2 (+0 -0 reverted 0, most 2), advantage -0.90, round trip 29 ms, hitches 36
+[       OK ] OrcaSessionRelay.LanWithHitchesTracksTheLink (281 ms)
+[ RUN      ] OrcaSessionRelay.DropInOnACleanLinkKeepsTwo
+[ drop-in at 10 s, Mac hosts A ] rollbacks 2656, re-run 2656, deepest 1, stalls 0 (0 counted, 0 a frame would spare), waits 36, delay 2 (+0 -0 reverted 0, most 2), advantage 0.53, round trip 29 ms, hitches 0
+[ drop-in at 10 s, Mac hosts B ] rollbacks 14, re-run 14, deepest 1, stalls 2 (0 counted, 0 a frame would spare), waits 0, delay 2 (+0 -0 reverted 0, most 2), advantage -0.51, round trip 17 ms, hitches 0
+[ drop-in at 10 s, PC hosts A ] rollbacks 41, re-run 149, deepest 7, stalls 0 (0 counted, 0 a frame would spare), waits 6, delay 2 (+0 -0 reverted 0, most 2), advantage -0.89, round trip 21 ms, hitches 0
+[ drop-in at 10 s, PC hosts B ] rollbacks 2616, re-run 2616, deepest 1, stalls 1 (0 counted, 0 a frame would spare), waits 35, delay 2 (+0 -0 reverted 0, most 2), advantage 0.82, round trip 27 ms, hitches 0
+[ drop-in at 30 s, Mac hosts A ] rollbacks 2834, re-run 2834, deepest 1, stalls 0 (0 counted, 0 a frame would spare), waits 36, delay 2 (+0 -0 reverted 0, most 2), advantage 1.00, round trip 30 ms, hitches 0
+[ drop-in at 30 s, Mac hosts B ] rollbacks 0, re-run 0, deepest 0, stalls 3 (0 counted, 0 a frame would spare), waits 0, delay 2 (+0 -0 reverted 0, most 2), advantage -1.00, round trip 20 ms, hitches 0
+[ drop-in at 30 s, PC hosts A ] rollbacks 34, re-run 96, deepest 6, stalls 0 (0 counted, 0 a frame would spare), waits 5, delay 2 (+0 -0 reverted 0, most 2), advantage -0.99, round trip 20 ms, hitches 0
+[ drop-in at 30 s, PC hosts B ] rollbacks 2610, re-run 2610, deepest 1, stalls 1 (0 counted, 0 a frame would spare), waits 35, delay 2 (+0 -0 reverted 0, most 2), advantage 0.97, round trip 30 ms, hitches 0
+[ drop-in at 75 s, Mac hosts A ] rollbacks 2784, re-run 2784, deepest 1, stalls 0 (0 counted, 0 a frame would spare), waits 36, delay 2 (+0 -0 reverted 0, most 2), advantage 1.00, round trip 26 ms, hitches 0
+[ drop-in at 75 s, Mac hosts B ] rollbacks 0, re-run 0, deepest 0, stalls 3 (0 counted, 0 a frame would spare), waits 0, delay 2 (+0 -0 reverted 0, most 2), advantage -1.00, round trip 18 ms, hitches 0
+[ drop-in at 75 s, PC hosts A ] rollbacks 36, re-run 103, deepest 6, stalls 0 (0 counted, 0 a frame would spare), waits 5, delay 2 (+0 -0 reverted 0, most 2), advantage -0.93, round trip 20 ms, hitches 0
+[ drop-in at 75 s, PC hosts B ] rollbacks 2681, re-run 2681, deepest 1, stalls 1 (0 counted, 0 a frame would spare), waits 35, delay 2 (+0 -0 reverted 0, most 2), advantage 0.93, round trip 31 ms, hitches 0
+[       OK ] OrcaSessionRelay.DropInOnACleanLinkKeepsTwo (1653 ms)
+[ RUN      ] OrcaSessionRelay.SpikesEveryFewSecondsKeepTwo
+[ Mac spikes, Mac hosts A ] rollbacks 1071, re-run 1511, deepest 7, stalls 50 (49 counted, 9 a frame would spare), waits 9, delay 2 (+0 -0 reverted 0, most 2), advantage 0.11, round trip 29 ms, hitches 0
+[ Mac spikes, Mac hosts B ] rollbacks 423, re-run 815, deepest 7, stalls 45 (42 counted, 10 a frame would spare), waits 5, delay 2 (+0 -0 reverted 0, most 2), advantage -0.13, round trip 18 ms, hitches 0
+[ Mac spikes, PC hosts A ] rollbacks 527, re-run 917, deepest 7, stalls 49 (47 counted, 14 a frame would spare), waits 10, delay 2 (+0 -0 reverted 0, most 2), advantage -0.52, round trip 18 ms, hitches 0
+[ Mac spikes, PC hosts B ] rollbacks 858, re-run 1250, deepest 7, stalls 61 (54 counted, 16 a frame would spare), waits 8, delay 2 (+0 -0 reverted 0, most 2), advantage 0.52, round trip 27 ms, hitches 0
+[       OK ] OrcaSessionRelay.SpikesEveryFewSecondsKeepTwo (569 ms)
+[ RUN      ] OrcaSessionRelay.SteadySmallWaitsRaiseNothing
+[ fast clock, jitter A ] rollbacks 2647, re-run 3154, deepest 2, stalls 0 (0 counted, 0 a frame would spare), waits 176, delay 2 (+0 -0 reverted 0, most 2), advantage 0.86, round trip 37 ms, hitches 0
+[ fast clock, jitter B ] rollbacks 1, re-run 1, deepest 1, stalls 0 (0 counted, 0 a frame would spare), waits 0, delay 2 (+0 -0 reverted 0, most 2), advantage -0.84, round trip 18 ms, hitches 0
+[       OK ] OrcaSessionRelay.SteadySmallWaitsRaiseNothing (136 ms)
+[ RUN      ] OrcaSessionRelay.SpikesAtRandomKeepTwo
+[       OK ] OrcaSessionRelay.SpikesAtRandomKeepTwo (4632 ms)
+[ RUN      ] OrcaSessionRelay.SpikesAtRandomEveryTwoSecondsRarelyMove
+[       OK ] OrcaSessionRelay.SpikesAtRandomEveryTwoSecondsRarelyMove (2397 ms)
+[ RUN      ] OrcaSessionRelay.ClusteredLatenessRaisesTheLateSide
+[ slow, bursty uplink A ] rollbacks 4908, re-run 23582, deepest 6, stalls 0 (0 counted, 0 a frame would spare), waits 40, delay 3 (+1 -0 reverted 0, most 3), advantage 0.00, round trip 186 ms, hitches 0
+[ slow, bursty uplink B ] rollbacks 4333, re-run 18033, deepest 7, stalls 12 (9 counted, 9 a frame would spare), waits 1, delay 2 (+0 -0 reverted 0, most 2), advantage 0.15, round trip 20 ms, hitches 0
+[ slow, bursty uplink A ] rollbacks 4905, re-run 23614, deepest 6, stalls 0 (0 counted, 0 a frame would spare), waits 42, delay 3 (+1 -0 reverted 0, most 3), advantage 0.65, round trip 228 ms, hitches 0
+[ slow, bursty uplink B ] rollbacks 4302, re-run 17884, deepest 7, stalls 17 (13 counted, 13 a frame would spare), waits 0, delay 2 (+0 -0 reverted 0, most 2), advantage -0.61, round trip 19 ms, hitches 0
+[ slow, bursty uplink A ] rollbacks 4894, re-run 23259, deepest 6, stalls 0 (0 counted, 0 a frame would spare), waits 42, delay 3 (+1 -0 reverted 0, most 3), advantage 0.18, round trip 195 ms, hitches 0
+[ slow, bursty uplink B ] rollbacks 4340, re-run 18024, deepest 7, stalls 16 (13 counted, 13 a frame would spare), waits 0, delay 2 (+0 -0 reverted 0, most 2), advantage -0.24, round trip 19 ms, hitches 0
+[ slow, bursty uplink A ] rollbacks 4919, re-run 23524, deepest 6, stalls 0 (0 counted, 0 a frame would spare), waits 42, delay 3 (+1 -0 reverted 0, most 3), advantage 0.15, round trip 182 ms, hitches 0
+[ slow, bursty uplink B ] rollbacks 4318, re-run 18028, deepest 7, stalls 19 (14 counted, 14 a frame would spare), waits 1, delay 2 (+0 -0 reverted 0, most 2), advantage -0.12, round trip 20 ms, hitches 0
+[ slow, bursty uplink A ] rollbacks 4902, re-run 24547, deepest 7, stalls 0 (0 counted, 0 a frame would spare), waits 46, delay 3 (+1 -0 reverted 0, most 3), advantage 0.29, round trip 200 ms, hitches 0
+[ slow, bursty uplink B ] rollbacks 4364, re-run 17986, deepest 7, stalls 23 (20 counted, 20 a frame would spare), waits 4, delay 2 (+0 -0 reverted 0, most 2), advantage -0.19, round trip 21 ms, hitches 0
+[ slow, bursty uplink A ] rollbacks 4889, re-run 24157, deepest 7, stalls 1 (0 counted, 0 a frame would spare), waits 45, delay 3 (+1 -0 reverted 0, most 3), advantage 0.10, round trip 179 ms, hitches 0
+[ slow, bursty uplink B ] rollbacks 4341, re-run 17895, deepest 7, stalls 24 (19 counted, 19 a frame would spare), waits 2, delay 2 (+0 -0 reverted 0, most 2), advantage -0.02, round trip 19 ms, hitches 0
+[ slow, bursty uplink A ] rollbacks 4906, re-run 24294, deepest 7, stalls 2 (1 counted, 1 a frame would spare), waits 54, delay 3 (+1 -0 reverted 0, most 3), advantage 0.42, round trip 160 ms, hitches 0
+[ slow, bursty uplink B ] rollbacks 4329, re-run 18304, deepest 7, stalls 30 (21 counted, 21 a frame would spare), waits 2, delay 2 (+0 -0 reverted 0, most 2), advantage -0.47, round trip 19 ms, hitches 0
+[ slow, bursty uplink A ] rollbacks 4898, re-run 24026, deepest 7, stalls 1 (0 counted, 0 a frame would spare), waits 46, delay 3 (+1 -0 reverted 0, most 3), advantage -0.73, round trip 221 ms, hitches 0
+[ slow, bursty uplink B ] rollbacks 4354, re-run 18185, deepest 7, stalls 23 (16 counted, 16 a frame would spare), waits 2, delay 2 (+0 -0 reverted 0, most 2), advantage 0.49, round trip 19 ms, hitches 0
+[       OK ] OrcaSessionRelay.ClusteredLatenessRaisesTheLateSide (2508 ms)
+[ RUN      ] OrcaSessionRelay.SustainedLatenessRaisesThenComesBackDown
+[ a slow, bursty minute A ] rollbacks 1143, re-run 4571, deepest 6, stalls 0 (0 counted, 0 a frame would spare), waits 15, delay 3 (+1 -0 reverted 0, most 3), advantage 0.83, round trip 232 ms, hitches 0
+[ a slow, bursty minute B ] rollbacks 781, re-run 3450, deepest 7, stalls 15 (15 counted, 13 a frame would spare), waits 0, delay 2 (+0 -0 reverted 0, most 2), advantage -0.86, round trip 19 ms, hitches 0
+[ a slow, bursty minute A ] rollbacks 1156, re-run 4631, deepest 6, stalls 0 (0 counted, 0 a frame would spare), waits 15, delay 3 (+1 -0 reverted 0, most 3), advantage 0.83, round trip 168 ms, hitches 0
+[ a slow, bursty minute B ] rollbacks 788, re-run 3760, deepest 7, stalls 11 (11 counted, 9 a frame would spare), waits 0, delay 2 (+0 -0 reverted 0, most 2), advantage -0.70, round trip 19 ms, hitches 0
+[ a slow, bursty minute A ] rollbacks 1148, re-run 4598, deepest 6, stalls 0 (0 counted, 0 a frame would spare), waits 14, delay 3 (+1 -0 reverted 0, most 3), advantage 0.46, round trip 178 ms, hitches 0
+[ a slow, bursty minute B ] rollbacks 781, re-run 3610, deepest 7, stalls 15 (15 counted, 14 a frame would spare), waits 0, delay 2 (+0 -0 reverted 0, most 2), advantage -0.48, round trip 19 ms, hitches 0
+[ a slow, bursty minute A ] rollbacks 1153, re-run 4545, deepest 6, stalls 0 (0 counted, 0 a frame would spare), waits 16, delay 3 (+1 -0 reverted 0, most 3), advantage 0.70, round trip 224 ms, hitches 0
+[ a slow, bursty minute B ] rollbacks 789, re-run 3497, deepest 7, stalls 22 (22 counted, 20 a frame would spare), waits 0, delay 2 (+0 -0 reverted 0, most 2), advantage -0.58, round trip 20 ms, hitches 0
+[       OK ] OrcaSessionRelay.SustainedLatenessRaisesThenComesBackDown (553 ms)
+[ RUN      ] OrcaSessionRelay.DropoutsAFrameWouldSpareRaiseAndStay
+[ dropouts every 2.1 s A ] rollbacks 216, re-run 866, deepest 7, stalls 31 (27 counted, 24 a frame would spare), waits 27, delay 3 (+1 -0 reverted 0, most 3), advantage 0.82, round trip 29 ms, hitches 0
+[ dropouts every 2.1 s B ] rollbacks 192, re-run 748, deepest 7, stalls 14 (12 counted, 9 a frame would spare), waits 0, delay 4 (+2 -0 reverted 0, most 4), advantage -0.77, round trip 22 ms, hitches 0
+[ dropouts every 2.1 s A ] rollbacks 203, re-run 822, deepest 7, stalls 31 (28 counted, 25 a frame would spare), waits 23, delay 3 (+1 -0 reverted 0, most 3), advantage 0.72, round trip 29 ms, hitches 0
+[ dropouts every 2.1 s B ] rollbacks 180, re-run 728, deepest 7, stalls 13 (10 counted, 10 a frame would spare), waits 0, delay 4 (+2 -0 reverted 0, most 4), advantage -0.66, round trip 19 ms, hitches 0
+[ dropouts every 2.1 s A ] rollbacks 238, re-run 841, deepest 7, stalls 22 (19 counted, 17 a frame would spare), waits 26, delay 3 (+1 -0 reverted 0, most 3), advantage 1.00, round trip 25 ms, hitches 0
+[ dropouts every 2.1 s B ] rollbacks 209, re-run 754, deepest 7, stalls 10 (9 counted, 8 a frame would spare), waits 0, delay 4 (+2 -0 reverted 0, most 4), advantage -1.00, round trip 18 ms, hitches 0
+[ dropouts every 2.1 s A ] rollbacks 220, re-run 820, deepest 7, stalls 21 (18 counted, 16 a frame would spare), waits 28, delay 3 (+1 -0 reverted 0, most 3), advantage 0.85, round trip 26 ms, hitches 0
+[ dropouts every 2.1 s B ] rollbacks 173, re-run 719, deepest 7, stalls 12 (10 counted, 9 a frame would spare), waits 0, delay 4 (+2 -0 reverted 0, most 4), advantage -0.82, round trip 19 ms, hitches 0
+[       OK ] OrcaSessionRelay.DropoutsAFrameWouldSpareRaiseAndStay (852 ms)
+[ RUN      ] OrcaSessionRelay.LongDropoutsEverySecondRaiseNothing
+[ a minute of long dropouts A ] rollbacks 969, re-run 1719, deepest 7, stalls 62 (56 counted, 6 a frame would spare), waits 37, delay 2 (+0 -0 reverted 0, most 2), advantage 0.58, round trip 29 ms, hitches 0
+[ a minute of long dropouts B ] rollbacks 400, re-run 1112, deepest 7, stalls 59 (57 counted, 3 a frame would spare), waits 32, delay 2 (+0 -0 reverted 0, most 2), advantage -0.58, round trip 19 ms, hitches 0
+[ a minute of long dropouts A ] rollbacks 947, re-run 1645, deepest 7, stalls 65 (58 counted, 4 a frame would spare), waits 23, delay 2 (+0 -0 reverted 0, most 2), advantage 0.23, round trip 26 ms, hitches 0
+[ a minute of long dropouts B ] rollbacks 367, re-run 1012, deepest 7, stalls 61 (54 counted, 4 a frame would spare), waits 14, delay 2 (+0 -0 reverted 0, most 2), advantage -0.24, round trip 17 ms, hitches 0
+[ a minute of long dropouts A ] rollbacks 856, re-run 1338, deepest 7, stalls 65 (61 counted, 5 a frame would spare), waits 17, delay 2 (+0 -0 reverted 0, most 2), advantage 0.32, round trip 31 ms, hitches 0
+[ a minute of long dropouts B ] rollbacks 294, re-run 789, deepest 7, stalls 65 (63 counted, 4 a frame would spare), waits 14, delay 2 (+0 -0 reverted 0, most 2), advantage -0.33, round trip 20 ms, hitches 0
+[ a minute of long dropouts A ] rollbacks 904, re-run 1415, deepest 7, stalls 63 (55 counted, 1 a frame would spare), waits 16, delay 2 (+0 -0 reverted 0, most 2), advantage 0.52, round trip 31 ms, hitches 0
+[ a minute of long dropouts B ] rollbacks 368, re-run 950, deepest 7, stalls 64 (62 counted, 8 a frame would spare), waits 20, delay 2 (+0 -0 reverted 0, most 2), advantage -0.50, round trip 20 ms, hitches 0
+[       OK ] OrcaSessionRelay.LongDropoutsEverySecondRaiseNothing (408 ms)
+[ RUN      ] OrcaSessionRelay.StallsSetOffByTheOtherSidesStallCountForNothing
+[ Mac download spikes A ] rollbacks 243, re-run 607, deepest 7, stalls 58 (58 counted, 7 a frame would spare), waits 2, delay 2 (+0 -0 reverted 0, most 2), advantage 0.00, round trip 29 ms, hitches 0
+[ Mac download spikes B ] rollbacks 930, re-run 4716, deepest 7, stalls 68 (0 counted, 0 a frame would spare), waits 116, delay 2 (+4 -4 reverted 0, most 6), advantage -0.02, round trip 19 ms, hitches 0
+[       OK ] OrcaSessionRelay.StallsSetOffByTheOtherSidesStallCountForNothing (65 ms)
+[----------] 13 tests from OrcaSessionRelay (14592 ms total)
+
+[----------] 2 tests from OrcaSessionFuzz
+[ RUN      ] OrcaSessionFuzz.BothSidesRunIdenticalInputsUnderDelaySwings
+[       OK ] OrcaSessionFuzz.BothSidesRunIdenticalInputsUnderDelaySwings (337 ms)
+[ RUN      ] OrcaSessionFuzz.SparseSnapshotsKeepBothSidesIdentical
+[       OK ] OrcaSessionFuzz.SparseSnapshotsKeepBothSidesIdentical (967 ms)
+[----------] 2 tests from OrcaSessionFuzz (1304 ms total)
+
+[----------] 3 tests from OrcaSessionSparse
+[ RUN      ] OrcaSessionSparse.SavesDropByKUnderConstantPrediction
+[ sparse still k=1 ] 1.000 saves per frame, 0 rollbacks, 0 re-run frames, deepest 0
+[ sparse still k=2 ] 0.500 saves per frame, 0 rollbacks, 0 re-run frames, deepest 0
+[ sparse still k=3 ] 0.333 saves per frame, 0 rollbacks, 0 re-run frames, deepest 0
+[ sparse still k=4 ] 0.250 saves per frame, 0 rollbacks, 0 re-run frames, deepest 0
+[ sparse moving k=1 ] 1.584 saves per frame, 584 rollbacks, 1752 re-run frames, deepest 3
+[ sparse moving k=2 ] 0.792 saves per frame, 584 rollbacks, 2045 re-run frames, deepest 4
+[ sparse moving k=3 ] 0.528 saves per frame, 584 rollbacks, 2260 re-run frames, deepest 5
+[ sparse moving k=4 ] 0.396 saves per frame, 584 rollbacks, 2631 re-run frames, deepest 6
+[       OK ] OrcaSessionSparse.SavesDropByKUnderConstantPrediction (33 ms)
+[ RUN      ] OrcaSessionSparse.RollbackBetweenSnapshotsReRunsFromTheOlderOne
+[ between lag 4 k=2 ] 55 rollbacks, 28 loaded a snapshot before the wrong frame
+[ between lag 4 k=3 ] 54 rollbacks, 36 loaded a snapshot before the wrong frame
+[ between lag 4 k=4 ] 53 rollbacks, 40 loaded a snapshot before the wrong frame
+[ between lag 7 k=2 ] 48 rollbacks, 24 loaded a snapshot before the wrong frame
+[ between lag 7 k=3 ] 47 rollbacks, 32 loaded a snapshot before the wrong frame
+[ between lag 7 k=4 ] 47 rollbacks, 36 loaded a snapshot before the wrong frame
+[       OK ] OrcaSessionSparse.RollbackBetweenSnapshotsReRunsFromTheOlderOne (9 ms)
+[ RUN      ] OrcaSessionSparse.SpacingFollowsTheMeasuredSaveTime
+[       OK ] OrcaSessionSparse.SpacingFollowsTheMeasuredSaveTime (3 ms)
+[----------] 3 tests from OrcaSessionSparse (46 ms total)
+
+[----------] 14 tests from OrcaDropIn
+[ RUN      ] OrcaDropIn.PacketFieldsRoundTrip
+[       OK ] OrcaDropIn.PacketFieldsRoundTrip (0 ms)
+[ RUN      ] OrcaDropIn.FriendJoinsPlaysLeavesAndAnotherJoins
+[       OK ] OrcaDropIn.FriendJoinsPlaysLeavesAndAnotherJoins (16 ms)
+[ RUN      ] OrcaDropIn.DroppedFriendUnplugsAfterItsLastInput
+[       OK ] OrcaDropIn.DroppedFriendUnplugsAfterItsLastInput (1 ms)
+[ RUN      ] OrcaDropIn.FriendBackInTheSameSeatAfterADrop
+[       OK ] OrcaDropIn.FriendBackInTheSameSeatAfterADrop (5 ms)
+[ RUN      ] OrcaDropIn.PlugInWaitsForEveryPlayerToHoldThePortValues
+[       OK ] OrcaDropIn.PlugInWaitsForEveryPlayerToHoldThePortValues (0 ms)
+[ RUN      ] OrcaDropIn.PlayersAcknowledgeTheValuesTheyHold
+[       OK ] OrcaDropIn.PlayersAcknowledgeTheValuesTheyHold (0 ms)
+[ RUN      ] OrcaDropIn.PlanSurvivesTheGuestFloatMode
+[       OK ] OrcaDropIn.PlanSurvivesTheGuestFloatMode (0 ms)
+[ RUN      ] OrcaDropIn.HistoryPastTheJoinersLiveFrameEndsTheSession
+[       OK ] OrcaDropIn.HistoryPastTheJoinersLiveFrameEndsTheSession (0 ms)
+[ RUN      ] OrcaDropIn.RosterThatTakesBackTheJoinersSeatEndsTheSession
+[       OK ] OrcaDropIn.RosterThatTakesBackTheJoinersSeatEndsTheSession (1 ms)
+[ RUN      ] OrcaDropIn.HostRosterThatEndsTheSessionIsThePeersFault
+[       OK ] OrcaDropIn.HostRosterThatEndsTheSessionIsThePeersFault (1 ms)
+[ RUN      ] OrcaDropIn.PlugInBeforeTheJoinerHoldsItsHistoryEndsTheSession
+[       OK ] OrcaDropIn.PlugInBeforeTheJoinerHoldsItsHistoryEndsTheSession (0 ms)
+[ RUN      ] OrcaDropIn.JoinersUnplugOnlyComesEarlier
+[       OK ] OrcaDropIn.JoinersUnplugOnlyComesEarlier (0 ms)
+[ RUN      ] OrcaDropIn.PlugInAsTheFirstRosterTheJoinerHears
+[       OK ] OrcaDropIn.PlugInAsTheFirstRosterTheJoinerHears (0 ms)
+[ RUN      ] OrcaDropIn.HistoryAheadOfTheJoinerIsBounded
+[       OK ] OrcaDropIn.HistoryAheadOfTheJoinerIsBounded (2 ms)
+[----------] 14 tests from OrcaDropIn (30 ms total)
+
+[----------] 4 tests from OrcaSessionDirect
+[ RUN      ] OrcaSessionDirect.StaleCopiesNeverPutTheRosterOrTheClockBack
+[       OK ] OrcaSessionDirect.StaleCopiesNeverPutTheRosterOrTheClockBack (0 ms)
+[ RUN      ] OrcaSessionDirect.FriendJoinsOverADirectLink
+[       OK ] OrcaSessionDirect.FriendJoinsOverADirectLink (2 ms)
+[ RUN      ] OrcaSessionDirect.DirectLinkBesideTheRelay
+[ relay only A ] rollbacks 937, re-run 1881, deepest 3, stalls 0 (0 counted, 0 a frame would spare), waits 1, delay 2 (+0 -0 reverted 0, most 2), advantage 0.50, round trip 17 ms, hitches 0
+[ relay only B ] rollbacks 931, re-run 931, deepest 1, stalls 0 (0 counted, 0 a frame would spare), waits 0, delay 2 (+0 -0 reverted 0, most 2), advantage -0.50, round trip 81 ms, hitches 0
+[ direct + relay A ] rollbacks 16, re-run 17, deepest 2, stalls 0 (0 counted, 0 a frame would spare), waits 2, delay 2 (+0 -0 reverted 0, most 2), advantage -0.03, round trip 17 ms, hitches 0
+[ direct + relay B ] rollbacks 7, re-run 9, deepest 2, stalls 0 (0 counted, 0 a frame would spare), waits 0, delay 2 (+0 -0 reverted 0, most 2), advantage 0.03, round trip 81 ms, hitches 0
+[       OK ] OrcaSessionDirect.DirectLinkBesideTheRelay (109 ms)
+[ RUN      ] OrcaSessionDirect.RoomBlipWithLiveInputsKeepsEveryFrameHash
+[       OK ] OrcaSessionDirect.RoomBlipWithLiveInputsKeepsEveryFrameHash (2 ms)
+[----------] 4 tests from OrcaSessionDirect (115 ms total)
+
+[----------] 36 tests from OrcaDoubles
+[ RUN      ] OrcaDoubles.ThreeRebuildsPlugTogetherAfterTheSlowest
+[       OK ] OrcaDoubles.ThreeRebuildsPlugTogetherAfterTheSlowest (205 ms)
+[ RUN      ] OrcaDoubles.APeerLeavesAndTheOtherThreeContinue
+[       OK ] OrcaDoubles.APeerLeavesAndTheOtherThreeContinue (77 ms)
+[ RUN      ] OrcaDoubles.OneBlackoutStallsAllAndRecoversTheSameSessions
+[       OK ] OrcaDoubles.OneBlackoutStallsAllAndRecoversTheSameSessions (131 ms)
+[ RUN      ] OrcaDoubles.RebuildingRetainedPeerDoesNotThrottleSeatedPeers
+[       OK ] OrcaDoubles.RebuildingRetainedPeerDoesNotThrottleSeatedPeers (276 ms)
+[ RUN      ] OrcaDoubles.TwoPlayerPacketsAndEveryFrameRemainIdentical
+[       OK ] OrcaDoubles.TwoPlayerPacketsAndEveryFrameRemainIdentical (60 ms)
+[ RUN      ] OrcaDoubles.WorstOfSixPairsStaysWithinRollbackLimit
+[       OK ] OrcaDoubles.WorstOfSixPairsStaysWithinRollbackLimit (412 ms)
+[ RUN      ] OrcaDoubles.StartWaitsForTheWholeBatchAndTheGateTravelsWithTheRoster
+[       OK ] OrcaDoubles.StartWaitsForTheWholeBatchAndTheGateTravelsWithTheRoster (97 ms)
+[ RUN      ] OrcaDoubles.AThirdPeersChecksumIsComparedEvenWhenOthersReportTheSameFrame
+[       OK ] OrcaDoubles.AThirdPeersChecksumIsComparedEvenWhenOthersReportTheSameFrame (50 ms)
+[ RUN      ] OrcaDoubles.ActivePredictionsUseAFinalCheckpointForResyncCapture
+[       OK ] OrcaDoubles.ActivePredictionsUseAFinalCheckpointForResyncCapture (90 ms)
+[ RUN      ] OrcaDoubles.UnevenBlackoutDropKeepsEverySurvivorHash
+[       OK ] OrcaDoubles.UnevenBlackoutDropKeepsEverySurvivorHash (256 ms)
+[ RUN      ] OrcaDoubles.UnevenRetainedRecoveryKeepsEverySurvivorHash
+[       OK ] OrcaDoubles.UnevenRetainedRecoveryKeepsEverySurvivorHash (346 ms)
+[ RUN      ] OrcaDoubles.SeatedStartAcrossUnevenBatchArrivalAndDrop
+[       OK ] OrcaDoubles.SeatedStartAcrossUnevenBatchArrivalAndDrop (66 ms)
+[ RUN      ] OrcaDoubles.CatchingUpStallNamesItsMissingSeatWithUnevenLatency
+[       OK ] OrcaDoubles.CatchingUpStallNamesItsMissingSeatWithUnevenLatency (1 ms)
+[ RUN      ] OrcaDoubles.BoundaryWaitsForHostRosterAfterAnotherFriendsHoldExpires
+[       OK ] OrcaDoubles.BoundaryWaitsForHostRosterAfterAnotherFriendsHoldExpires (144 ms)
+[ RUN      ] OrcaDoubles.DelayedBatchRosterRetainsSeatedLocalInputs
+[       OK ] OrcaDoubles.DelayedBatchRosterRetainsSeatedLocalInputs (263 ms)
+[ RUN      ] OrcaDoubles.BatchHistorySenderCountsOnlyTheFramesItEmits
+[       OK ] OrcaDoubles.BatchHistorySenderCountsOnlyTheFramesItEmits (0 ms)
+[ RUN      ] OrcaDoubles.BoundaryEmptyMissingSelectionUsesOrdinaryRecovery
+[       OK ] OrcaDoubles.BoundaryEmptyMissingSelectionUsesOrdinaryRecovery (81 ms)
+[ RUN      ] OrcaDoubles.BoundaryDropsOnlyMissingFriendsAfterUnevenBlackout
+[       OK ] OrcaDoubles.BoundaryDropsOnlyMissingFriendsAfterUnevenBlackout (142 ms)
+[ RUN      ] OrcaDoubles.LateSeatStallNamesMissingPeerWithUnevenLatency
+[       OK ] OrcaDoubles.LateSeatStallNamesMissingPeerWithUnevenLatency (4 ms)
+[ RUN      ] OrcaDoubles.BatchPlugMarginIncludesSeatedPeers
+[       OK ] OrcaDoubles.BatchPlugMarginIncludesSeatedPeers (128 ms)
+[ RUN      ] OrcaDoubles.RetainedRebuildFinishesItsBufferedInputsBeforeTheNewStay
+[       OK ] OrcaDoubles.RetainedRebuildFinishesItsBufferedInputsBeforeTheNewStay (257 ms)
+[ RUN      ] OrcaDoubles.UnplugPrefixStillNamesItsMissingSeat
+[       OK ] OrcaDoubles.UnplugPrefixStillNamesItsMissingSeat (132 ms)
+[ RUN      ] OrcaDoubles.StartGateComparesLatePadsAndRetiredCopiesAfterMasking
+[       OK ] OrcaDoubles.StartGateComparesLatePadsAndRetiredCopiesAfterMasking (0 ms)
+[ RUN      ] OrcaDoubles.TwoRetainedRebuildsPreserveBufferedPortHistory
+[       OK ] OrcaDoubles.TwoRetainedRebuildsPreserveBufferedPortHistory (255 ms)
+[ RUN      ] OrcaDoubles.UnevenRequestedLeaveForwardsTheCompletedPrefix
+[       OK ] OrcaDoubles.UnevenRequestedLeaveForwardsTheCompletedPrefix (129 ms)
+[ RUN      ] OrcaDoubles.RebuildingSeatAcknowledgesItsCompletedPrefixAcrossChunks
+[       OK ] OrcaDoubles.RebuildingSeatAcknowledgesItsCompletedPrefixAcrossChunks (574 ms)
+[ RUN      ] OrcaDoubles.HostBoundaryKeepsPlayingAfterStaggeredFriendBlackouts
+[       OK ] OrcaDoubles.HostBoundaryKeepsPlayingAfterStaggeredFriendBlackouts (131 ms)
+[ RUN      ] OrcaDoubles.HostBoundaryRoomDepartureDoesNotSpendTheNextFriendsRetry
+[       OK ] OrcaDoubles.HostBoundaryRoomDepartureDoesNotSpendTheNextFriendsRetry (102 ms)
+[ RUN      ] OrcaDoubles.RosterWaitUsesTheSessionsAuthoritySeat
+[       OK ] OrcaDoubles.RosterWaitUsesTheSessionsAuthoritySeat (0 ms)
+[ RUN      ] OrcaDoubles.WaitingOverlayAlwaysSelectsAnotherSeat
+[       OK ] OrcaDoubles.WaitingOverlayAlwaysSelectsAnotherSeat (0 ms)
+[ RUN      ] OrcaDoubles.SuccessiveBatchesKeepTheUnconfirmedStartGate
+[       OK ] OrcaDoubles.SuccessiveBatchesKeepTheUnconfirmedStartGate (264 ms)
+[ RUN      ] OrcaDoubles.TwentyLostHostPacketsAcrossBatchesKeepCharacterSelectStartEqual
+[       OK ] OrcaDoubles.TwentyLostHostPacketsAcrossBatchesKeepCharacterSelectStartEqual (96 ms)
+[ RUN      ] OrcaDoubles.ReceivingAnOpenGateThenAMovedGateDoesNotKeepItForever
+[       OK ] OrcaDoubles.ReceivingAnOpenGateThenAMovedGateDoesNotKeepItForever (0 ms)
+[ RUN      ] OrcaDoubles.ConfirmedDeparturesStopRepeatingTheirHistory
+[       OK ] OrcaDoubles.ConfirmedDeparturesStopRepeatingTheirHistory (142 ms)
+[ RUN      ] OrcaDoubles.NewAuthorityGateRetainsThePeersUnconfirmedPreviousGate
+[       OK ] OrcaDoubles.NewAuthorityGateRetainsThePeersUnconfirmedPreviousGate (0 ms)
+[ RUN      ] OrcaDoubles.FasterBatchKeepsThePreviousUnconfirmedGateEnd
+[       OK ] OrcaDoubles.FasterBatchKeepsThePreviousUnconfirmedGateEnd (115 ms)
+[----------] 36 tests from OrcaDoubles (5039 ms total)
+
+[----------] 4 tests from OrcaLegacy044
+[ RUN      ] OrcaLegacy044.PacketAndKeyframeOfferGolden
+[       OK ] OrcaLegacy044.PacketAndKeyframeOfferGolden (0 ms)
+[ RUN      ] OrcaLegacy044.WelcomeAndHelloGolden
+[       OK ] OrcaLegacy044.WelcomeAndHelloGolden (0 ms)
+[ RUN      ] OrcaLegacy044.InitialSessionPacketGolden
+[       OK ] OrcaLegacy044.InitialSessionPacketGolden (0 ms)
+[ RUN      ] OrcaLegacy044.SessionPacketStreamGolden
+[       OK ] OrcaLegacy044.SessionPacketStreamGolden (36 ms)
+[----------] 4 tests from OrcaLegacy044 (36 ms total)
+
+[----------] 3 tests from OrcaStatus
+[ RUN      ] OrcaStatus.ReportsRemainSurvivableAfterOnlineWithdrawal
+[       OK ] OrcaStatus.ReportsRemainSurvivableAfterOnlineWithdrawal (0 ms)
+[ RUN      ] OrcaStatus.LegacyMenuOriginFailureKeepsItsExistingLogOnly
+[       OK ] OrcaStatus.LegacyMenuOriginFailureKeepsItsExistingLogOnly (0 ms)
+[ RUN      ] OrcaStatus.LegacyRebootReagreesOnlyTheAppsListedCapabilities
+[       OK ] OrcaStatus.LegacyRebootReagreesOnlyTheAppsListedCapabilities (0 ms)
+[----------] 3 tests from OrcaStatus (0 ms total)
+
+[----------] 14 tests from OrcaRoom
+[ RUN      ] OrcaRoom.PacketRoundTrips
+[       OK ] OrcaRoom.PacketRoundTrips (0 ms)
+[ RUN      ] OrcaRoom.PortValuesRoundTrip
+[       OK ] OrcaRoom.PortValuesRoundTrip (0 ms)
+[ RUN      ] OrcaRoom.RejectsMalformedPackets
+[       OK ] OrcaRoom.RejectsMalformedPackets (0 ms)
+[ RUN      ] OrcaRoom.GameStartIsTheRoomsMessage
+[       OK ] OrcaRoom.GameStartIsTheRoomsMessage (0 ms)
+[ RUN      ] OrcaRoom.ADropMidSetKeepsTheRoom
+[       OK ] OrcaRoom.ADropMidSetKeepsTheRoom (0 ms)
+[ RUN      ] OrcaRoom.AReconnectKeepsTheGamesItKnew
+[       OK ] OrcaRoom.AReconnectKeepsTheGamesItKnew (0 ms)
+[ RUN      ] OrcaRoom.FinishIsTheRoomsMessage
+[       OK ] OrcaRoom.FinishIsTheRoomsMessage (0 ms)
+[ RUN      ] OrcaRoom.KeepAliveOnlyWhileTheGameRuns
+[       OK ] OrcaRoom.KeepAliveOnlyWhileTheGameRuns (0 ms)
+[ RUN      ] OrcaRoom.AnUnreadableValueCostsOnlyThatValue
+[       OK ] OrcaRoom.AnUnreadableValueCostsOnlyThatValue (0 ms)
+[ RUN      ] OrcaRoom.CoalescingKeepsEarlierInputsAndChecksum
+[       OK ] OrcaRoom.CoalescingKeepsEarlierInputsAndChecksum (0 ms)
+[ RUN      ] OrcaRoom.TicketSwitchesDirectLinks
+[       OK ] OrcaRoom.TicketSwitchesDirectLinks (0 ms)
+[ RUN      ] OrcaRoom.RefusesToStartOutsideTheApp
+[       OK ] OrcaRoom.RefusesToStartOutsideTheApp (12 ms)
+[ RUN      ] OrcaRoom.RefusalsSayWhy
+[       OK ] OrcaRoom.RefusalsSayWhy (0 ms)
+[ RUN      ] OrcaRoom.RefusalsHaveAppCodes
+[       OK ] OrcaRoom.RefusalsHaveAppCodes (0 ms)
+[----------] 14 tests from OrcaRoom (13 ms total)
+
+[----------] 26 tests from OrcaRoomResilience
+[ RUN      ] OrcaRoomResilience.AwayWithDirectInputsKeepsPeerAndBackDoesNotAnnounceAgain
+[       OK ] OrcaRoomResilience.AwayWithDirectInputsKeepsPeerAndBackDoesNotAnnounceAgain (0 ms)
+[ RUN      ] OrcaRoomResilience.SilentDirectInputsKeepTheSessionUntilTheRoomVerdict
+[       OK ] OrcaRoomResilience.SilentDirectInputsKeepTheSessionUntilTheRoomVerdict (0 ms)
+[ RUN      ] OrcaRoomResilience.RealLeaveEndsEvenWhenDirectInputIsLive
+[       OK ] OrcaRoomResilience.RealLeaveEndsEvenWhenDirectInputIsLive (0 ms)
+[ RUN      ] OrcaRoomResilience.RealLeaveAlsoEndsTheSuspendedHostWait
+[       OK ] OrcaRoomResilience.RealLeaveAlsoEndsTheSuspendedHostWait (0 ms)
+[ RUN      ] OrcaRoomResilience.HoldExpiresEvenWithDirectInputsAndDuplicateAwayDoesNotExtendIt
+[       OK ] OrcaRoomResilience.HoldExpiresEvenWithDirectInputsAndDuplicateAwayDoesNotExtendIt (0 ms)
+[ RUN      ] OrcaRoomResilience.AwayPeerMissingFromARosterStillHasItsHeldSeat
+[       OK ] OrcaRoomResilience.AwayPeerMissingFromARosterStillHasItsHeldSeat (0 ms)
+[ RUN      ] OrcaRoomResilience.OwnSocketReattachesWithoutResettingALivePeer
+[       OK ] OrcaRoomResilience.OwnSocketReattachesWithoutResettingALivePeer (0 ms)
+[ RUN      ] OrcaRoomResilience.FinalSocketClosesEndButRelayOnlyRoomsCanRecoverTheirHeldSeat
+[       OK ] OrcaRoomResilience.FinalSocketClosesEndButRelayOnlyRoomsCanRecoverTheirHeldSeat (0 ms)
+[ RUN      ] OrcaRoomResilience.RecoveryRefusesAChangedIdentityOrSeat
+[       OK ] OrcaRoomResilience.RecoveryRefusesAChangedIdentityOrSeat (0 ms)
+[ RUN      ] OrcaRoomResilience.ResumeHelloRequestsDropInOnce
+[       OK ] OrcaRoomResilience.ResumeHelloRequestsDropInOnce (0 ms)
+[ RUN      ] OrcaRoomResilience.NewBootAfterBackRequiresFreshDropIn
+[       OK ] OrcaRoomResilience.NewBootAfterBackRequiresFreshDropIn (0 ms)
+[ RUN      ] OrcaRoomResilience.WaitingJoinerRequestsResumeOnBackAndReceivesAKeyframe
+[       OK ] OrcaRoomResilience.WaitingJoinerRequestsResumeOnBackAndReceivesAKeyframe (0 ms)
+[ RUN      ] OrcaRoomResilience.ReconnectDeadlineAndInputTimeoutDoNotRestartOnRetry
+[       OK ] OrcaRoomResilience.ReconnectDeadlineAndInputTimeoutDoNotRestartOnRetry (0 ms)
+[ RUN      ] OrcaRoomResilience.JoinerWaitsForBackThenUsesFreshDropInBeforeTheHoldExpires
+[       OK ] OrcaRoomResilience.JoinerWaitsForBackThenUsesFreshDropInBeforeTheHoldExpires (0 ms)
+[ RUN      ] OrcaRoomResilience.RuntimeRestartsAndReceiveFailuresAreReconnectable
+[       OK ] OrcaRoomResilience.RuntimeRestartsAndReceiveFailuresAreReconnectable (0 ms)
+[ RUN      ] OrcaRoomResilience.SeatInUseRetriesWithBoundedExponentialBackoff
+[       OK ] OrcaRoomResilience.SeatInUseRetriesWithBoundedExponentialBackoff (0 ms)
+[ RUN      ] OrcaRoomResilience.InitialSeatInUseRefusalRetriesButOtherRefusalsRemainFinal
+[       OK ] OrcaRoomResilience.InitialSeatInUseRefusalRetriesButOtherRefusalsRemainFinal (0 ms)
+[ RUN      ] OrcaRoomResilience.ReconnectRetriesNeverExtendTheHoldAndLogTheFinalOutcomeOnce
+[       OK ] OrcaRoomResilience.ReconnectRetriesNeverExtendTheHoldAndLogTheFinalOutcomeOnce (0 ms)
+[ RUN      ] OrcaRoomResilience.OwnRoomLossWithSilentInputsWaitsForFreshDropIn
+[       OK ] OrcaRoomResilience.OwnRoomLossWithSilentInputsWaitsForFreshDropIn (0 ms)
+[ RUN      ] OrcaRoomResilience.SameRunHelloAfterBackKeepsTheLivePeer
+[       OK ] OrcaRoomResilience.SameRunHelloAfterBackKeepsTheLivePeer (0 ms)
+[ RUN      ] OrcaRoomResilience.LegacyHelloStillInteroperatesAfterBackWithLiveInputs
+[       OK ] OrcaRoomResilience.LegacyHelloStillInteroperatesAfterBackWithLiveInputs (0 ms)
+[ RUN      ] OrcaRoomResilience.RecoveryWelcomeClearsAMissedBackAndHonorsARealLeave
+[       OK ] OrcaRoomResilience.RecoveryWelcomeClearsAMissedBackAndHonorsARealLeave (0 ms)
+[ RUN      ] OrcaRoomResilience.RecoveryWelcomeDoesNotClearAPeerStillAway
+[       OK ] OrcaRoomResilience.RecoveryWelcomeDoesNotClearAPeerStillAway (0 ms)
+[ RUN      ] OrcaRoomResilience.OldSessionStalledNoticeCrossingBackKeepsTheRoom
+[       OK ] OrcaRoomResilience.OldSessionStalledNoticeCrossingBackKeepsTheRoom (0 ms)
+[ RUN      ] OrcaRoomResilience.ReconnectBudgetRollsAfterFiveMinutesAndJitterIsBounded
+[       OK ] OrcaRoomResilience.ReconnectBudgetRollsAfterFiveMinutesAndJitterIsBounded (0 ms)
+[ RUN      ] OrcaRoomResilience.QueueBackAndJoinGreetImmediatelyAndEmitNoRoomNotices
+[       OK ] OrcaRoomResilience.QueueBackAndJoinGreetImmediatelyAndEmitNoRoomNotices (0 ms)
+[----------] 26 tests from OrcaRoomResilience (0 ms total)
+
+[----------] 37 tests from OrcaRoomRuntime
+[ RUN      ] OrcaRoomRuntime.RecoveredSocketUsesTheRealGoodbyeTeardown
+[       OK ] OrcaRoomRuntime.RecoveredSocketUsesTheRealGoodbyeTeardown (517 ms)
+[ RUN      ] OrcaRoomRuntime.FinalCloseCodesReachRunAndNeverReconnect
+[       OK ] OrcaRoomRuntime.FinalCloseCodesReachRunAndNeverReconnect (41 ms)
+[ RUN      ] OrcaRoomRuntime.WelcomeDoesNotResetTheReconnectBudget
+[       OK ] OrcaRoomRuntime.WelcomeDoesNotResetTheReconnectBudget (3863 ms)
+[ RUN      ] OrcaRoomRuntime.FirstUpgradeRefusalsMakeOnlyOneRequest
+[       OK ] OrcaRoomRuntime.FirstUpgradeRefusalsMakeOnlyOneRequest (51 ms)
+[ RUN      ] OrcaRoomRuntime.QueueRoomsRetainTheirOriginalDropAndHelloBehavior
+[       OK ] OrcaRoomRuntime.QueueRoomsRetainTheirOriginalDropAndHelloBehavior (53 ms)
+[ RUN      ] OrcaRoomRuntime.DropHookIsInertWithoutItsOptIn
+[       OK ] OrcaRoomRuntime.DropHookIsInertWithoutItsOptIn (717 ms)
+[ RUN      ] OrcaRoomRuntime.QuitCancelsAnUpgradeAndAttemptsLeaveWithTheCachedTicket
+[       OK ] OrcaRoomRuntime.QuitCancelsAnUpgradeAndAttemptsLeaveWithTheCachedTicket (1620 ms)
+[ RUN      ] OrcaRoomRuntime.QuitCancelsATicketRefreshAndAttemptsLeave
+[       OK ] OrcaRoomRuntime.QuitCancelsATicketRefreshAndAttemptsLeave (1554 ms)
+[ RUN      ] OrcaRoomRuntime.ResumeRetriesUntilAKeyframeArrives
+[       OK ] OrcaRoomRuntime.ResumeRetriesUntilAKeyframeArrives (2025 ms)
+[ RUN      ] OrcaRoomRuntime.HealthyRealSessionHashesMatchWithRecoveryDisabled
+[       OK ] OrcaRoomRuntime.HealthyRealSessionHashesMatchWithRecoveryDisabled (149 ms)
+[ RUN      ] OrcaRoomRuntime.BothSilentForFifteenSecondsKeepTheRealSessionAndRoom
+[       OK ] OrcaRoomRuntime.BothSilentForFifteenSecondsKeepTheRealSessionAndRoom (15297 ms)
+[ RUN      ] OrcaRoomRuntime.MissingInputBuffersRequestDropInInTheSameRoom
+[       OK ] OrcaRoomRuntime.MissingInputBuffersRequestDropInInTheSameRoom (292 ms)
+[ RUN      ] OrcaRoomRuntime.ANewResumeRequestCanResetAHostThatAlreadyResumedOnce
+[       OK ] OrcaRoomRuntime.ANewResumeRequestCanResetAHostThatAlreadyResumedOnce (14 ms)
+[ RUN      ] OrcaRoomRuntime.UnreportedSilenceHasABoundedHoldAndRealLeaveInterruptsIt
+[       OK ] OrcaRoomRuntime.UnreportedSilenceHasABoundedHoldAndRealLeaveInterruptsIt (15 ms)
+[ RUN      ] OrcaRoomRuntime.PrivateWelcomeOverridesAnInitialQueueHint
+[       OK ] OrcaRoomRuntime.PrivateWelcomeOverridesAnInitialQueueHint (629 ms)
+[ RUN      ] OrcaRoomRuntime.QueueSilentDropKeepsTheSocketUnreadThroughLeave
+[       OK ] OrcaRoomRuntime.QueueSilentDropKeepsTheSocketUnreadThroughLeave (163 ms)
+[ RUN      ] OrcaRoomRuntime.ExpiredInputHoldDoesNotRequestResync
+[       OK ] OrcaRoomRuntime.ExpiredInputHoldDoesNotRequestResync (14 ms)
+[ RUN      ] OrcaRoomRuntime.FinalRecoveryEndLeavesAnOpenSocketOnce
+[       OK ] OrcaRoomRuntime.FinalRecoveryEndLeavesAnOpenSocketOnce (523 ms)
+[ RUN      ] OrcaRoomRuntime.UpgradeFailurePathsNeverLogTicketUrls
+[       OK ] OrcaRoomRuntime.UpgradeFailurePathsNeverLogTicketUrls (4868 ms)
+[ RUN      ] OrcaRoomRuntime.QuickBackAndSameIdJoinGrantHoldBeforeAnyStall
+[       OK ] OrcaRoomRuntime.QuickBackAndSameIdJoinGrantHoldBeforeAnyStall (236 ms)
+[ RUN      ] OrcaRoomRuntime.BackWithoutASharedSessionGrantsNoHold
+[       OK ] OrcaRoomRuntime.BackWithoutASharedSessionGrantsNoHold (235 ms)
+[ RUN      ] OrcaRoomRuntime.HostNoWordTimeoutKeepsQuickBackUntilInputsReturn
+[       OK ] OrcaRoomRuntime.HostNoWordTimeoutKeepsQuickBackUntilInputsReturn (12406 ms)
+[ RUN      ] OrcaRoomRuntime.QuickBackPreservesTheOriginalHoldExpiry
+[       OK ] OrcaRoomRuntime.QuickBackPreservesTheOriginalHoldExpiry (1024 ms)
+[ RUN      ] OrcaRoomRuntime.BlackoutFailsUpgradesSilentlyThenRecovers
+orca state room-away self retry waiting-input-timeout attempt=0 close-code=0 close-reason=test-blackout last-error=none
+orca state room-away self retry started attempt=0 close-code=0 close-reason=test-blackout last-error=none
+orca state room-away self retry connecting attempt=1 close-code=0 close-reason=test-blackout last-error=none
+orca state room-away self retry connect-failed attempt=1 close-code=0 close-reason=test-blackout last-error=network (test-blackout)
+orca state room-away self retry connecting attempt=2 close-code=0 close-reason=test-blackout last-error=network (test-blackout)
+orca state room-away self retry connect-failed attempt=2 close-code=0 close-reason=test-blackout last-error=network (test-blackout)
+orca state room-away self retry connecting attempt=3 close-code=0 close-reason=test-blackout last-error=network (test-blackout)
+orca state room-away self retry connect-failed attempt=3 close-code=0 close-reason=test-blackout last-error=network (test-blackout)
+orca state room-away self retry connecting attempt=4 close-code=0 close-reason=test-blackout last-error=network (test-blackout)
+orca state room-away self retry connected-awaiting-welcome attempt=4 close-code=0 close-reason=test-blackout last-error=network (test-blackout)
+orca state room-back self kept same-seat attempt=4 close-code=0 close-reason=test-blackout last-error=network (test-blackout)
+[       OK ] OrcaRoomRuntime.BlackoutFailsUpgradesSilentlyThenRecovers (5591 ms)
+[ RUN      ] OrcaRoomRuntime.BlackoutRoomReturnsBeforeTheDirectWindowEnds
+orca state room-away self retry waiting-input-timeout attempt=0 close-code=0 close-reason=test-blackout last-error=none
+orca state room-away self retry started attempt=0 close-code=0 close-reason=test-blackout last-error=none
+orca state room-away self retry connecting attempt=1 close-code=0 close-reason=test-blackout last-error=none
+orca state room-away self retry connect-failed attempt=1 close-code=0 close-reason=test-blackout last-error=network (test-blackout)
+orca state room-away self retry connecting attempt=2 close-code=0 close-reason=test-blackout last-error=network (test-blackout)
+orca state room-away self retry connect-failed attempt=2 close-code=0 close-reason=test-blackout last-error=network (test-blackout)
+orca state room-away self retry connecting attempt=3 close-code=0 close-reason=test-blackout last-error=network (test-blackout)
+orca state room-away self retry connect-failed attempt=3 close-code=0 close-reason=test-blackout last-error=network (test-blackout)
+orca state room-away self retry connecting attempt=4 close-code=0 close-reason=test-blackout last-error=network (test-blackout)
+orca state room-away self retry connected-awaiting-welcome attempt=4 close-code=0 close-reason=test-blackout last-error=network (test-blackout)
+orca state room-back self kept same-seat attempt=4 close-code=0 close-reason=test-blackout last-error=network (test-blackout)
+[       OK ] OrcaRoomRuntime.BlackoutRoomReturnsBeforeTheDirectWindowEnds (5662 ms)
+[ RUN      ] OrcaRoomRuntime.ReturningFriendUsesActualHostCurrentMatchKeyframe
+[       OK ] OrcaRoomRuntime.ReturningFriendUsesActualHostCurrentMatchKeyframe (307 ms)
+[ RUN      ] OrcaRoomRuntime.QueueBackAndJoinKeepTheirOriginalRuntimePolicy
+[       OK ] OrcaRoomRuntime.QueueBackAndJoinKeepTheirOriginalRuntimePolicy (100 ms)
+[ RUN      ] OrcaRoomRuntime.DoublesBatchOffersOneCaptureWithEveryPortValue
+[       OK ] OrcaRoomRuntime.DoublesBatchOffersOneCaptureWithEveryPortValue (32 ms)
+[ RUN      ] OrcaRoomRuntime.DoublesFlagCannotEnableQueueRooms
+[       OK ] OrcaRoomRuntime.DoublesFlagCannotEnableQueueRooms (24 ms)
+[ RUN      ] OrcaRoomRuntime.BatchEnvelopeDeliversOnlyThisRecipientsPacket
+[       OK ] OrcaRoomRuntime.BatchEnvelopeDeliversOnlyThisRecipientsPacket (117 ms)
+[ RUN      ] OrcaRoomRuntime.ThreePeersKeepIndependentAwayBackAndResumeHolds
+[       OK ] OrcaRoomRuntime.ThreePeersKeepIndependentAwayBackAndResumeHolds (221 ms)
+[ RUN      ] OrcaRoomRuntime.ThirdRetainedPeerGetsCurrentMatchCaptureWithTwoOthersSeated
+[       OK ] OrcaRoomRuntime.ThirdRetainedPeerGetsCurrentMatchCaptureWithTwoOthersSeated (32 ms)
+[ RUN      ] OrcaRoomRuntime.LateFriendsAreHeldByTheActualHostDuringAFight
+[       OK ] OrcaRoomRuntime.LateFriendsAreHeldByTheActualHostDuringAFight (30 ms)
+[ RUN      ] OrcaRoomRuntime.SimultaneousRecoveriesShareHostOwnedCapture
+[       OK ] OrcaRoomRuntime.SimultaneousRecoveriesShareHostOwnedCapture (127 ms)
+[ RUN      ] OrcaRoomRuntime.Legacy044PeerInDoublesIsRefusedWithRoomFull
+[       OK ] OrcaRoomRuntime.Legacy044PeerInDoublesIsRefusedWithRoomFull (29 ms)
+[ RUN      ] OrcaRoomRuntime.PrivateTournamentTicketBeginsAndReportsTheMatch
+[       OK ] OrcaRoomRuntime.PrivateTournamentTicketBeginsAndReportsTheMatch (27 ms)
+[ RUN      ] OrcaRoomRuntime.OrdinaryPrivateTicketsKeepReportsLocal
+[       OK ] OrcaRoomRuntime.OrdinaryPrivateTicketsKeepReportsLocal (675 ms)
+[----------] 37 tests from OrcaRoomRuntime (59298 ms total)
+
+[----------] 1 test from OrcaRoomBlackout
+[ RUN      ] OrcaRoomBlackout.StrictParsingWindowAndInertness
+[       OK ] OrcaRoomBlackout.StrictParsingWindowAndInertness (0 ms)
+[----------] 1 test from OrcaRoomBlackout (0 ms total)
+
+[----------] 1 test from OrcaDoublesAdmission
+[ RUN      ] OrcaDoublesAdmission.WindowFillsEarlyAndLateArrivalsWaitForMenus
+[       OK ] OrcaDoublesAdmission.WindowFillsEarlyAndLateArrivalsWaitForMenus (0 ms)
+[----------] 1 test from OrcaDoublesAdmission (0 ms total)
+
+[----------] 2 tests from OrcaDoublesTransport
+[ RUN      ] OrcaDoublesTransport.SwitchingFanoutKeepsPendingHistoryAndInputs
+[       OK ] OrcaDoublesTransport.SwitchingFanoutKeepsPendingHistoryAndInputs (0 ms)
+[ RUN      ] OrcaDoublesTransport.BroadcastHistoryReachesANewRecipientDuringTheSwitch
+[       OK ] OrcaDoublesTransport.BroadcastHistoryReachesANewRecipientDuringTheSwitch (0 ms)
+[----------] 2 tests from OrcaDoublesTransport (0 ms total)
+
+[----------] 15 tests from OrcaDirectLink
+[ RUN      ] OrcaDirectLink.ParsesTheTicketsIceServers
+[       OK ] OrcaDirectLink.ParsesTheTicketsIceServers (0 ms)
+[ RUN      ] OrcaDirectLink.KeysDifferPerDirectionGenerationRoomAndPair
+[       OK ] OrcaDirectLink.KeysDifferPerDirectionGenerationRoomAndPair (0 ms)
+[ RUN      ] OrcaDirectLink.OneLanNeedsASharedPublicAddress
+[       OK ] OrcaDirectLink.OneLanNeedsASharedPublicAddress (0 ms)
+[ RUN      ] OrcaDirectLink.DatagramsAuthenticateAndRefuseReplays
+[       OK ] OrcaDirectLink.DatagramsAuthenticateAndRefuseReplays (0 ms)
+[ RUN      ] OrcaDirectLink.DirectPacketsOnlyForTheSendersSeat
+[       OK ] OrcaDirectLink.DirectPacketsOnlyForTheSendersSeat (0 ms)
+[ RUN      ] OrcaDirectLink.TwoOrcasLinkAndRebuild
+[ pair ] prflx/host / prflx/host
+[       OK ] OrcaDirectLink.TwoOrcasLinkAndRebuild (4229 ms)
+[ RUN      ] OrcaDirectLink.FourFriendsSendOnlyToTheRequestedSeat
+[       OK ] OrcaDirectLink.FourFriendsSendOnlyToTheRequestedSeat (238 ms)
+[ RUN      ] OrcaDirectLink.ThreeOrcasLinkEveryPair
+[       OK ] OrcaDirectLink.ThreeOrcasLinkEveryPair (220 ms)
+[ RUN      ] OrcaDirectLink.BlockedOrTurnOnlyStaysOnTheRelay
+[       OK ] OrcaDirectLink.BlockedOrTurnOnlyStaysOnTheRelay (3784 ms)
+[ RUN      ] OrcaDirectLink.TestDelayCoversTheLinkBothWays
+[       OK ] OrcaDirectLink.TestDelayCoversTheLinkBothWays (2319 ms)
+[ RUN      ] OrcaDirectLink.AFloodingPeerIsHeldToTheRate
+[ flood ] 3000 sent, 70 delivered, 2930 dropped over the rate, in 0.32 s
+[       OK ] OrcaDirectLink.AFloodingPeerIsHeldToTheRate (1417 ms)
+[ RUN      ] OrcaDirectLink.OneSideStartingOverCatchesUp
+[ restart ] offering side: up again at link 5 after 0.7 s
+[ restart ] answering side: up again at link 6 after 5.2 s
+[       OK ] OrcaDirectLink.OneSideStartingOverCatchesUp (9780 ms)
+[ RUN      ] OrcaDirectLink.AFailedIceMintBacksOff
+[       OK ] OrcaDirectLink.AFailedIceMintBacksOff (4199 ms)
+[ RUN      ] OrcaDirectLink.ScheduledBlackoutDropsBothWaysWithoutDeliveringLater
+[       OK ] OrcaDirectLink.ScheduledBlackoutDropsBothWaysWithoutDeliveringLater (4108 ms)
+[ RUN      ] OrcaDirectLink.FourFriendsExerciseAllSixTurnPairs
+[       OK ] OrcaDirectLink.FourFriendsExerciseAllSixTurnPairs (241 ms)
+[----------] 15 tests from OrcaDirectLink (30540 ms total)
+
+[----------] 2 tests from OrcaBridgeLines
+[ RUN      ] OrcaBridgeLines.SplitsAcrossReadsAndDropsOverlongLinesWhole
+[       OK ] OrcaBridgeLines.SplitsAcrossReadsAndDropsOverlongLinesWhole (0 ms)
+[ RUN      ] OrcaBridgeLines.ParsesOnlyTheShapesTheAppSends
+[       OK ] OrcaBridgeLines.ParsesOnlyTheShapesTheAppSends (0 ms)
+[----------] 2 tests from OrcaBridgeLines (0 ms total)
+
+[----------] 8 tests from OrcaBridge
+[ RUN      ] OrcaBridge.PassesCommandsOnInOrderAndKeepsBridgeLinesOut
+[       OK ] OrcaBridge.PassesCommandsOnInOrderAndKeepsBridgeLinesOut (0 ms)
+[ RUN      ] OrcaBridge.OffWithoutYougameStdio
+[       OK ] OrcaBridge.OffWithoutYougameStdio (0 ms)
+[ RUN      ] OrcaBridge.LobbyPushesGoToTheCurrentHandlerOnly
+[       OK ] OrcaBridge.LobbyPushesGoToTheCurrentHandlerOnly (0 ms)
+[ RUN      ] OrcaBridge.OnlyTheNewestControllerSnapshotOfAReadIsParsed
+[       OK ] OrcaBridge.OnlyTheNewestControllerSnapshotOfAReadIsParsed (0 ms)
+[ RUN      ] OrcaBridge.SnapshotsReachTheControllerCache
+[       OK ] OrcaBridge.SnapshotsReachTheControllerCache (0 ms)
+[ RUN      ] OrcaBridge.RequestsOnlyWhatOrcaAsksForAndOnlyWithAPipe
+[       OK ] OrcaBridge.RequestsOnlyWhatOrcaAsksForAndOnlyWithAPipe (0 ms)
+[ RUN      ] OrcaBridge.ARequestGetsItsOwnReply
+[       OK ] OrcaBridge.ARequestGetsItsOwnReply (2 ms)
+[ RUN      ] OrcaBridge.ARequestGivesUpOnTimeoutCancelAndAClosedStdin
+[       OK ] OrcaBridge.ARequestGivesUpOnTimeoutCancelAndAClosedStdin (249 ms)
+[----------] 8 tests from OrcaBridge (252 ms total)
+
+[----------] 1 test from OrcaBridgeHeartbeat
+[ RUN      ] OrcaBridgeHeartbeat.DueAtOnceThenOncePerPeriod
+[       OK ] OrcaBridgeHeartbeat.DueAtOnceThenOncePerPeriod (0 ms)
+[----------] 1 test from OrcaBridgeHeartbeat (0 ms total)
+
+[----------] 7 tests from OrcaSandbox
+[ RUN      ] OrcaSandbox.NetworkModes
+[       OK ] OrcaSandbox.NetworkModes (0 ms)
+[ RUN      ] OrcaSandbox.WhichAddressesEachModeMayUse
+[       OK ] OrcaSandbox.WhichAddressesEachModeMayUse (0 ms)
+[ RUN      ] OrcaSandbox.DirectLinksOfferOnlyCandidatesTheSandboxCanReach
+[       OK ] OrcaSandbox.DirectLinksOfferOnlyCandidatesTheSandboxCanReach (0 ms)
+[ RUN      ] OrcaSandbox.SessionsLeaveTheAdapterAndTheMacKeyboardToTheApp
+[       OK ] OrcaSandbox.SessionsLeaveTheAdapterAndTheMacKeyboardToTheApp (0 ms)
+[ RUN      ] OrcaSandbox.EmbedAdoptedNeedsEmbed
+[       OK ] OrcaSandbox.EmbedAdoptedNeedsEmbed (0 ms)
+[ RUN      ] OrcaSandbox.TheBuildDeclaresItsSandboxMode
+[       OK ] OrcaSandbox.TheBuildDeclaresItsSandboxMode (1 ms)
+[ RUN      ] OrcaSandbox.AFileTheSandboxDidNotGrantIsSaidSo
+[       OK ] OrcaSandbox.AFileTheSandboxDidNotGrantIsSaidSo (0 ms)
+[----------] 7 tests from OrcaSandbox (2 ms total)
+
+[----------] 11 tests from OrcaDisc
+[ RUN      ] OrcaDisc.MissingFileIsRefused
+[       OK ] OrcaDisc.MissingFileIsRefused (0 ms)
+[ RUN      ] OrcaDisc.NonDiscFileIsRefused
+[       OK ] OrcaDisc.NonDiscFileIsRefused (0 ms)
+[ RUN      ] OrcaDisc.BootFileThatIsGoneIsNamed
+[       OK ] OrcaDisc.BootFileThatIsGoneIsNamed (0 ms)
+[ RUN      ] OrcaDisc.BootFileThatOpensPasses
+[       OK ] OrcaDisc.BootFileThatOpensPasses (0 ms)
+[ RUN      ] OrcaDisc.BootFileThatWontOpenIsNamed
+[       OK ] OrcaDisc.BootFileThatWontOpenIsNamed (0 ms)
+[ RUN      ] OrcaDisc.TheRightDiscPasses
+/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Source/UnitTests/Core/Orca/DiscTest.cpp:108: Skipped
+set ORCA_TEST_DISC to a Brawl (USA, Rev 2) image
+
+[  SKIPPED ] OrcaDisc.TheRightDiscPasses (0 ms)
+[ RUN      ] OrcaDisc.ReadPatchesLandInTheirRangeOnly
+[       OK ] OrcaDisc.ReadPatchesLandInTheirRangeOnly (0 ms)
+[ RUN      ] OrcaDisc.ReadPatchesWithAWrongOriginalPatchNothing
+[       OK ] OrcaDisc.ReadPatchesWithAWrongOriginalPatchNothing (5 ms)
+[ RUN      ] OrcaDisc.BrawlRev1ReadsAsRev2
+/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Source/UnitTests/Core/Orca/DiscTest.cpp:187: Skipped
+set ORCA_TEST_DISC_REV1 to a Brawl (USA) (Rev 1) image
+
+[  SKIPPED ] OrcaDisc.BrawlRev1ReadsAsRev2 (0 ms)
+[ RUN      ] OrcaDisc.SessionSaveSeedingCanBeTurnedOff
+[       OK ] OrcaDisc.SessionSaveSeedingCanBeTurnedOff (0 ms)
+[ RUN      ] OrcaDisc.EmptySessionSaveHashesToZero
+[       OK ] OrcaDisc.EmptySessionSaveHashesToZero (0 ms)
+[----------] 11 tests from OrcaDisc (7 ms total)
+
+[----------] 1 test from OrcaInput
+[ RUN      ] OrcaInput.AnyNameMatchesSourceAndId
+[       OK ] OrcaInput.AnyNameMatchesSourceAndId (0 ms)
+[----------] 1 test from OrcaInput (0 ms total)
+
+[----------] 16 tests from OrcaDiscVerify
+[ RUN      ] OrcaDiscVerify.NoProblemsIsOk
+[       OK ] OrcaDiscVerify.NoProblemsIsOk (0 ms)
+[ RUN      ] OrcaDiscVerify.GoodScrubbedBrawlIsOk
+[       OK ] OrcaDiscVerify.GoodScrubbedBrawlIsOk (0 ms)
+[ RUN      ] OrcaDiscVerify.MediumOrHighIsDamaged
+[       OK ] OrcaDiscVerify.MediumOrHighIsDamaged (0 ms)
+[ RUN      ] OrcaDiscVerify.MasterpieceOnlyProblemsDontCount
+[       OK ] OrcaDiscVerify.MasterpieceOnlyProblemsDontCount (0 ms)
+[ RUN      ] OrcaDiscVerify.DataDamageCountsBesideMasterpieces
+[       OK ] OrcaDiscVerify.DataDamageCountsBesideMasterpieces (0 ms)
+[ RUN      ] OrcaDiscVerify.ProblemLines
+[       OK ] OrcaDiscVerify.ProblemLines (0 ms)
+[ RUN      ] OrcaDiscVerify.ProblemTextGoesOnOneLine
+[       OK ] OrcaDiscVerify.ProblemTextGoesOnOneLine (0 ms)
+[ RUN      ] OrcaDiscVerify.ProgressAndUnreadableLines
+[       OK ] OrcaDiscVerify.ProgressAndUnreadableLines (0 ms)
+[ RUN      ] OrcaDiscVerify.ProgressAtMostOnceASecond
+[       OK ] OrcaDiscVerify.ProgressAtMostOnceASecond (0 ms)
+[ RUN      ] OrcaDiscVerify.TakesTheFlagAndItsPath
+[       OK ] OrcaDiscVerify.TakesTheFlagAndItsPath (0 ms)
+[ RUN      ] OrcaDiscVerify.NoFlagKeepsEverything
+[       OK ] OrcaDiscVerify.NoFlagKeepsEverything (0 ms)
+[ RUN      ] OrcaDiscVerify.FlagWithoutPathIsRefused
+[       OK ] OrcaDiscVerify.FlagWithoutPathIsRefused (0 ms)
+[ RUN      ] OrcaDiscVerify.NonDiscIsUnreadable
+[       OK ] OrcaDiscVerify.NonDiscIsUnreadable (0 ms)
+[ RUN      ] OrcaDiscVerify.BlankGameCubeImageIsDamaged
+[       OK ] OrcaDiscVerify.BlankGameCubeImageIsDamaged (1 ms)
+[ RUN      ] OrcaDiscVerify.ClearsTheNandsOfKilledVerifies
+[       OK ] OrcaDiscVerify.ClearsTheNandsOfKilledVerifies (1 ms)
+[ RUN      ] OrcaDiscVerify.ThisProcessIsAliveAndANandIsItsOwn
+[       OK ] OrcaDiscVerify.ThisProcessIsAliveAndANandIsItsOwn (0 ms)
+[----------] 16 tests from OrcaDiscVerify (3 ms total)
+
+[----------] 13 tests from OrcaPanicDiag
+[ RUN      ] OrcaPanicDiag.ViewsThatAgree
+[       OK ] OrcaPanicDiag.ViewsThatAgree (0 ms)
+[ RUN      ] OrcaPanicDiag.ViewsThatDisagreeSaySo
+[       OK ] OrcaPanicDiag.ViewsThatDisagreeSaySo (0 ms)
+[ RUN      ] OrcaPanicDiag.OnlyViewsThatCoverTheWord
+[       OK ] OrcaPanicDiag.OnlyViewsThatCoverTheWord (0 ms)
+[ RUN      ] OrcaPanicDiag.ReadsTheVectorsAndThreadGlobals
+[       OK ] OrcaPanicDiag.ReadsTheVectorsAndThreadGlobals (0 ms)
+[ RUN      ] OrcaPanicDiag.GuestRamMapsTheDefaultBats
+[       OK ] OrcaPanicDiag.GuestRamMapsTheDefaultBats (0 ms)
+[ RUN      ] OrcaPanicDiag.BackChainWalksToItsEnd
+[       OK ] OrcaPanicDiag.BackChainWalksToItsEnd (0 ms)
+[ RUN      ] OrcaPanicDiag.BackChainStopsOnAWildStackPointer
+[       OK ] OrcaPanicDiag.BackChainStopsOnAWildStackPointer (0 ms)
+[ RUN      ] OrcaPanicDiag.BackChainDepthIsCapped
+[       OK ] OrcaPanicDiag.BackChainDepthIsCapped (0 ms)
+[ RUN      ] OrcaPanicDiag.WordsAroundAnAddress
+[       OK ] OrcaPanicDiag.WordsAroundAnAddress (0 ms)
+[ RUN      ] OrcaPanicDiag.ModulesAndTheSectionHoldingAnAddress
+[       OK ] OrcaPanicDiag.ModulesAndTheSectionHoldingAnAddress (0 ms)
+[ RUN      ] OrcaPanicDiag.CurrentContextAndThread
+[       OK ] OrcaPanicDiag.CurrentContextAndThread (0 ms)
+[ RUN      ] OrcaPanicDiag.CodeHashSeesRewrittenCode
+[       OK ] OrcaPanicDiag.CodeHashSeesRewrittenCode (0 ms)
+[ RUN      ] OrcaPanicDiag.ExceptionRingOldestFirst
+[       OK ] OrcaPanicDiag.ExceptionRingOldestFirst (0 ms)
+[----------] 13 tests from OrcaPanicDiag (0 ms total)
+
+[----------] 8 tests from OrcaCrashNote
+[ RUN      ] OrcaCrashNote.AlertToAStreamThatRefusesWritesDoesNotThrow
+
+[WARNING] /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Externals/gtest/googletest/src/gtest-death-test.cc:1104:: Death tests use fork(), which is unsafe particularly in a threaded context. For this test, Google Test detected 4 threads. See https://github.com/google/googletest/blob/main/docs/advanced.md#death-tests-and-threads for more explanation and suggested solutions, especially if this is the last message you see before your test times out.
+[       OK ] OrcaCrashNote.AlertToAStreamThatRefusesWritesDoesNotThrow (2 ms)
+[ RUN      ] OrcaCrashNote.WriteLineWritesTheTextAndANewline
+[       OK ] OrcaCrashNote.WriteLineWritesTheTextAndANewline (0 ms)
+[ RUN      ] OrcaCrashNote.TypeNames
+[       OK ] OrcaCrashNote.TypeNames (0 ms)
+[ RUN      ] OrcaCrashNote.ReadThrowInfoListsTheTypesAndFindsStdException
+[       OK ] OrcaCrashNote.ReadThrowInfoListsTheTypesAndFindsStdException (0 ms)
+[ RUN      ] OrcaCrashNote.ReadThrowInfoWithoutTypesIsEmpty
+[       OK ] OrcaCrashNote.ReadThrowInfoWithoutTypesIsEmpty (0 ms)
+[ RUN      ] OrcaCrashNote.FixedLineCutsToFitAndStaysTerminated
+[       OK ] OrcaCrashNote.FixedLineCutsToFitAndStaysTerminated (0 ms)
+[ RUN      ] OrcaCrashNote.FaultNamesOnlyTheFatalCodes
+[       OK ] OrcaCrashNote.FaultNamesOnlyTheFatalCodes (0 ms)
+[ RUN      ] OrcaCrashNote.FaultLineNamesTheModuleOffsetAndGraphicsDevice
+[       OK ] OrcaCrashNote.FaultLineNamesTheModuleOffsetAndGraphicsDevice (0 ms)
+[----------] 8 tests from OrcaCrashNote (2 ms total)
+
+[----------] 5 tests from OrcaGpuLost
+[ RUN      ] OrcaGpuLost.TheAppReadsTheCodeAndThePlayerTheSentence
+[       OK ] OrcaGpuLost.TheAppReadsTheCodeAndThePlayerTheSentence (0 ms)
+[ RUN      ] OrcaGpuLost.ReasonNames
+[       OK ] OrcaGpuLost.ReasonNames (0 ms)
+[ RUN      ] OrcaGpuLost.TheLogLineSaysWhyAndWhere
+[       OK ] OrcaGpuLost.TheLogLineSaysWhyAndWhere (0 ms)
+[ RUN      ] OrcaGpuLost.ReportedOnceAndKeptForCrashNotes
+Orca: [VIDEO] the graphics device is lost (D3D11: device hung, 0x887A0006) at a 16x16x1 texture; Orca stops
+[       OK ] OrcaGpuLost.ReportedOnceAndKeptForCrashNotes (0 ms)
+[ RUN      ] OrcaGpuLost.DeviceStateCutsToFit
+[       OK ] OrcaGpuLost.DeviceStateCutsToFit (0 ms)
+[----------] 5 tests from OrcaGpuLost (0 ms total)
+
+[----------] 3 tests from OrcaBootLogs
+[ RUN      ] OrcaBootLogs.TheAppsBootLogsEndAtTheFirstFrame
+[       OK ] OrcaBootLogs.TheAppsBootLogsEndAtTheFirstFrame (0 ms)
+[ RUN      ] OrcaBootLogs.WhatLoggerIniTurnsOnStaysOn
+[       OK ] OrcaBootLogs.WhatLoggerIniTurnsOnStaysOn (0 ms)
+[ RUN      ] OrcaBootLogs.NothingOnNothingEnds
+[       OK ] OrcaBootLogs.NothingOnNothingEnds (0 ms)
+[----------] 3 tests from OrcaBootLogs (0 ms total)
+
+[----------] 1 test from OrcaBootLogsNoManager
+[ RUN      ] OrcaBootLogsNoManager.WithoutALogManagerNothingHappens
+[       OK ] OrcaBootLogsNoManager.WithoutALogManagerNothingHappens (0 ms)
+[----------] 1 test from OrcaBootLogsNoManager (0 ms total)
+
+[----------] 7 tests from OrcaBranding
+[ RUN      ] OrcaBranding.ProductName
+[       OK ] OrcaBranding.ProductName (0 ms)
+[ RUN      ] OrcaBranding.ReplacesEachWord
+[       OK ] OrcaBranding.ReplacesEachWord (0 ms)
+[ RUN      ] OrcaBranding.ReplacesBothWords
+[       OK ] OrcaBranding.ReplacesBothWords (0 ms)
+[ RUN      ] OrcaBranding.WordEdges
+[       OK ] OrcaBranding.WordEdges (0 ms)
+[ RUN      ] OrcaBranding.LeavesOtherWords
+[       OK ] OrcaBranding.LeavesOtherWords (0 ms)
+[ RUN      ] OrcaBranding.LeavesPathsAndFileNames
+[       OK ] OrcaBranding.LeavesPathsAndFileNames (0 ms)
+[ RUN      ] OrcaBranding.TwiceIsOnce
+[       OK ] OrcaBranding.TwiceIsOnce (0 ms)
+[----------] 7 tests from OrcaBranding (0 ms total)
+
+[----------] 10 tests from OrcaLaunch
+[ RUN      ] OrcaLaunch.ParsesTheTwoKeys
+[       OK ] OrcaLaunch.ParsesTheTwoKeys (0 ms)
+[ RUN      ] OrcaLaunch.RefusesAnythingElse
+[       OK ] OrcaLaunch.RefusesAnythingElse (0 ms)
+[ RUN      ] OrcaLaunch.PathsStayInsideTheFolder
+[       OK ] OrcaLaunch.PathsStayInsideTheFolder (0 ms)
+[ RUN      ] OrcaLaunch.ReadsAFolderWithANonAsciiName
+[       OK ] OrcaLaunch.ReadsAFolderWithANonAsciiName (0 ms)
+[ RUN      ] OrcaLaunch.ReadsTheFileNextToTheApp
+[       OK ] OrcaLaunch.ReadsTheFileNextToTheApp (1 ms)
+[ RUN      ] OrcaLaunch.SaysWhyTheDiscDidNotOpen
+[       OK ] OrcaLaunch.SaysWhyTheDiscDidNotOpen (0 ms)
+[ RUN      ] OrcaLaunch.DiscPathWithEqualsArrivesWhole
+[       OK ] OrcaLaunch.DiscPathWithEqualsArrivesWhole (0 ms)
+[ RUN      ] OrcaLaunch.JitClearOnceABoot
+[       OK ] OrcaLaunch.JitClearOnceABoot (0 ms)
+[ RUN      ] OrcaLaunch.KeptGameCode
+[       OK ] OrcaLaunch.KeptGameCode (0 ms)
+[ RUN      ] OrcaLaunch.ProjectPlusKeepsBrawlsCode
+[       OK ] OrcaLaunch.ProjectPlusKeepsBrawlsCode (0 ms)
+[----------] 10 tests from OrcaLaunch (3 ms total)
+
+[----------] 3 tests from OrcaLocalStore
+[ RUN      ] OrcaLocalStore.SeenReadsTheFileThePlayerAlreadyHas
+[       OK ] OrcaLocalStore.SeenReadsTheFileThePlayerAlreadyHas (0 ms)
+[ RUN      ] OrcaLocalStore.TheSeenFileKeepsOneKeyPerLine
+[       OK ] OrcaLocalStore.TheSeenFileKeepsOneKeyPerLine (0 ms)
+[ RUN      ] OrcaLocalStore.MarkSeenKeepsTheKeyBesideTheOthers
+[       OK ] OrcaLocalStore.MarkSeenKeepsTheKeyBesideTheOthers (0 ms)
+[----------] 3 tests from OrcaLocalStore (1 ms total)
+
+[----------] 41 tests from OrcaMod
+[ RUN      ] OrcaMod.TreeHashVector
+[       OK ] OrcaMod.TreeHashVector (0 ms)
+[ RUN      ] OrcaMod.PathRules
+[       OK ] OrcaMod.PathRules (0 ms)
+[ RUN      ] OrcaMod.TreeRefusals
+[       OK ] OrcaMod.TreeRefusals (0 ms)
+[ RUN      ] OrcaMod.MinOrcaAboveThisBuildRefuses
+[       OK ] OrcaMod.MinOrcaAboveThisBuildRefuses (0 ms)
+[ RUN      ] OrcaMod.ParsesEveryField
+[       OK ] OrcaMod.ParsesEveryField (0 ms)
+[ RUN      ] OrcaMod.RefusesAnythingElse
+[       OK ] OrcaMod.RefusesAnythingElse (0 ms)
+[ RUN      ] OrcaMod.SchemaMatchesTheEngine
+[       OK ] OrcaMod.SchemaMatchesTheEngine (0 ms)
+[ RUN      ] OrcaMod.AllowlistCoversTheShippedProfiles
+[       OK ] OrcaMod.AllowlistCoversTheShippedProfiles (0 ms)
+[ RUN      ] OrcaMod.LoadsABundle
+[       OK ] OrcaMod.LoadsABundle (1 ms)
+[ RUN      ] OrcaMod.RefusesABundleThatDiffersFromItsTree
+[       OK ] OrcaMod.RefusesABundleThatDiffersFromItsTree (9 ms)
+[ RUN      ] OrcaMod.RefusesOversizedOrDeepJson
+[       OK ] OrcaMod.RefusesOversizedOrDeepJson (0 ms)
+[ RUN      ] OrcaMod.SdImageIsDeterministic
+[       OK ] OrcaMod.SdImageIsDeterministic (135 ms)
+[ RUN      ] OrcaMod.SdImageCache
+[       OK ] OrcaMod.SdImageCache (61 ms)
+[ RUN      ] OrcaMod.GuardsAreNotOrcasOwnPatches
+[       OK ] OrcaMod.GuardsAreNotOrcasOwnPatches (3 ms)
+[ RUN      ] OrcaMod.PPlusGuardAddressesAreValidated
+[       OK ] OrcaMod.PPlusGuardAddressesAreValidated (0 ms)
+[ RUN      ] OrcaMod.PPlusGuardsReadTheDeclaredPairs
+[       OK ] OrcaMod.PPlusGuardsReadTheDeclaredPairs (0 ms)
+[ RUN      ] OrcaMod.SchemaKnowsPPlusGuards
+[       OK ] OrcaMod.SchemaKnowsPPlusGuards (0 ms)
+[ RUN      ] OrcaMod.Guards
+[       OK ] OrcaMod.Guards (0 ms)
+[ RUN      ] OrcaMod.LegacyCapsLinesArePinned
+[       OK ] OrcaMod.LegacyCapsLinesArePinned (0 ms)
+[ RUN      ] OrcaMod.ModeGates
+[       OK ] OrcaMod.ModeGates (1 ms)
+[ RUN      ] OrcaMod.GameIdentityIsTheModules
+[       OK ] OrcaMod.GameIdentityIsTheModules (1 ms)
+[ RUN      ] OrcaMod.SceneNamesAreTheModules
+[       OK ] OrcaMod.SceneNamesAreTheModules (1 ms)
+[ RUN      ] OrcaMod.GuardsFollowMemoryOnReRuns
+[       OK ] OrcaMod.GuardsFollowMemoryOnReRuns (0 ms)
+[ RUN      ] OrcaMod.LauncherBootReadsRev1AsRev2
+/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Source/UnitTests/Core/Orca/ModTest.cpp:1352: Skipped
+set ORCA_TEST_DISC_REV1 to a Brawl (USA) (Rev 1) image
+
+[  SKIPPED ] OrcaMod.LauncherBootReadsRev1AsRev2 (0 ms)
+[ RUN      ] OrcaMod.LauncherBootSaysWhyTheDiscDidNotOpen
+[       OK ] OrcaMod.LauncherBootSaysWhyTheDiscDidNotOpen (0 ms)
+[ RUN      ] OrcaMod.UxKeyPartIsPerGame
+[       OK ] OrcaMod.UxKeyPartIsPerGame (1 ms)
+[ RUN      ] OrcaMod.ModuleWritesAreRecordedNotRefused
+[       OK ] OrcaMod.ModuleWritesAreRecordedNotRefused (0 ms)
+[ RUN      ] OrcaMod.LegacyKeyIsUnchanged
+[       OK ] OrcaMod.LegacyKeyIsUnchanged (0 ms)
+[ RUN      ] OrcaMod.CapsWaitForTheGuards
+orca caps join leave stats pause delay perf direct host chat yougame gfx music results locks queue2 pick-casual pick-ranked talk rumble record
+orca caps join leave stats pause delay perf direct host chat yougame gfx music talk rumble record
+[       OK ] OrcaMod.CapsWaitForTheGuards (0 ms)
+[ RUN      ] OrcaMod.OriginAcceptedBoundsInBothFormats
+[       OK ] OrcaMod.OriginAcceptedBoundsInBothFormats (0 ms)
+[ RUN      ] OrcaMod.OriginRefusesMalformedFields
+[       OK ] OrcaMod.OriginRefusesMalformedFields (0 ms)
+[ RUN      ] OrcaMod.OriginFollowsBootFramesAndBuiltinVerdict
+[       OK ] OrcaMod.OriginFollowsBootFramesAndBuiltinVerdict (0 ms)
+[ RUN      ] OrcaMod.OriginChangesOnlyThePacksTreeHash
+[       OK ] OrcaMod.OriginChangesOnlyThePacksTreeHash (0 ms)
+[ RUN      ] OrcaMod.NoOriginWithdrawsOnlineForOnlyThisBoot
+orca caps leave stats pause delay perf chat yougame gfx talk rumble record
+[       OK ] OrcaMod.NoOriginWithdrawsOnlineForOnlyThisBoot (0 ms)
+[ RUN      ] OrcaMod.GoldenLegacyCompatibilityKey
+[       OK ] OrcaMod.GoldenLegacyCompatibilityKey (0 ms)
+[ RUN      ] OrcaMod.ResultsOnlyBuiltinIsValidated
+[       OK ] OrcaMod.ResultsOnlyBuiltinIsValidated (0 ms)
+[ RUN      ] OrcaMod.ResultsOnlyUsesEightCommonGuards
+[       OK ] OrcaMod.ResultsOnlyUsesEightCommonGuards (0 ms)
+[ RUN      ] OrcaMod.ResultsOnlyAdmitsRankedWithoutRulesetGates
+[       OK ] OrcaMod.ResultsOnlyAdmitsRankedWithoutRulesetGates (7 ms)
+[ RUN      ] OrcaMod.ResultsOnlyKeyEndsWithItsOwnGameCompat
+[       OK ] OrcaMod.ResultsOnlyKeyEndsWithItsOwnGameCompat (0 ms)
+[ RUN      ] OrcaMod.SchemaKnowsRankedRules
+[       OK ] OrcaMod.SchemaKnowsRankedRules (0 ms)
+[ RUN      ] OrcaMod.RankedRulesAreValidated
+[       OK ] OrcaMod.RankedRulesAreValidated (0 ms)
+[----------] 41 tests from OrcaMod (229 ms total)
+
+[----------] 13 tests from OrcaBundle
+[ RUN      ] OrcaBundle.SignatureVector
+[       OK ] OrcaBundle.SignatureVector (0 ms)
+[ RUN      ] OrcaBundle.PinnedKey
+[       OK ] OrcaBundle.PinnedKey (0 ms)
+[ RUN      ] OrcaBundle.ChunkedSha256
+[       OK ] OrcaBundle.ChunkedSha256 (253 ms)
+[ RUN      ] OrcaBundle.FlatNames
+[       OK ] OrcaBundle.FlatNames (0 ms)
+[ RUN      ] OrcaBundle.SchemaKnowsTheFlatForm
+[       OK ] OrcaBundle.SchemaKnowsTheFlatForm (0 ms)
+[ RUN      ] OrcaBundle.ParsesTheFlatForm
+[       OK ] OrcaBundle.ParsesTheFlatForm (0 ms)
+[ RUN      ] OrcaBundle.LoadsASignedBundle
+[       OK ] OrcaBundle.LoadsASignedBundle (2 ms)
+[ RUN      ] OrcaBundle.RefusesTamperedBundles
+[       OK ] OrcaBundle.RefusesTamperedBundles (45 ms)
+[ RUN      ] OrcaBundle.KeyMovesWithTheBundleOnly
+[       OK ] OrcaBundle.KeyMovesWithTheBundleOnly (2 ms)
+[ RUN      ] OrcaBundle.PackSessionsOfferTheEngineCaps
+[       OK ] OrcaBundle.PackSessionsOfferTheEngineCaps (2 ms)
+[ RUN      ] OrcaBundle.FindsItsFolder
+[       OK ] OrcaBundle.FindsItsFolder (0 ms)
+[ RUN      ] OrcaBundle.ResolvesOrRefuses
+[       OK ] OrcaBundle.ResolvesOrRefuses (6 ms)
+[ RUN      ] OrcaBundle.FlatRunsRequireAJailAndLegacyRunsKeepTheirBehavior
+[       OK ] OrcaBundle.FlatRunsRequireAJailAndLegacyRunsKeepTheirBehavior (2 ms)
+[----------] 13 tests from OrcaBundle (317 ms total)
+
+[----------] 3 tests from OrcaUndoLog
+[ RUN      ] OrcaUndoLog.RestoresEverySnapshotNewestFirst
+[       OK ] OrcaUndoLog.RestoresEverySnapshotNewestFirst (0 ms)
+[ RUN      ] OrcaUndoLog.DropMergesIntoTheOlderSnapshot
+[       OK ] OrcaUndoLog.DropMergesIntoTheOlderSnapshot (0 ms)
+[ RUN      ] OrcaUndoLog.RandomRingMatchesFullCopies
+[       OK ] OrcaUndoLog.RandomRingMatchesFullCopies (2 ms)
+[----------] 3 tests from OrcaUndoLog (2 ms total)
+
+[----------] 1 test from OrcaCow
+[ RUN      ] OrcaCow.WriteFaultsRestoreAndChecksum
+[       OK ] OrcaCow.WriteFaultsRestoreAndChecksum (95 ms)
+[----------] 1 test from OrcaCow (95 ms total)
+
+[----------] 20 tests from OrcaKeyframe
+[ RUN      ] OrcaKeyframe.ReplayRoundTripsInputsAndTypedEvents
+[       OK ] OrcaKeyframe.ReplayRoundTripsInputsAndTypedEvents (2 ms)
+[ RUN      ] OrcaKeyframe.AReplayNeverSetsAnotherGamesRules
+[       OK ] OrcaKeyframe.AReplayNeverSetsAnotherGamesRules (0 ms)
+[ RUN      ] OrcaKeyframe.RejectsLegacyStatesTruncationAndTrailingData
+[       OK ] OrcaKeyframe.RejectsLegacyStatesTruncationAndTrailingData (1 ms)
+[ RUN      ] OrcaKeyframe.BoundsCountsSeatsAndPayloadLengthsBeforeAllocation
+[       OK ] OrcaKeyframe.BoundsCountsSeatsAndPayloadLengthsBeforeAllocation (0 ms)
+[ RUN      ] OrcaKeyframe.BoundsDecompressionAndTypedHeaderValues
+[       OK ] OrcaKeyframe.BoundsDecompressionAndTypedHeaderValues (8 ms)
+[ RUN      ] OrcaKeyframe.ReplayRecordingRetainsWinningInputsAndEventsAcrossRollback
+[       OK ] OrcaKeyframe.ReplayRecordingRetainsWinningInputsAndEventsAcrossRollback (0 ms)
+[ RUN      ] OrcaKeyframe.AReplayFromAFreshStartHoldsOnlyItsOwnFrames
+[       OK ] OrcaKeyframe.AReplayFromAFreshStartHoldsOnlyItsOwnFrames (0 ms)
+[ RUN      ] OrcaKeyframe.AHistorysSeedTravelsOnItsFirstFrameOnly
+[       OK ] OrcaKeyframe.AHistorysSeedTravelsOnItsFirstFrameOnly (0 ms)
+[ RUN      ] OrcaKeyframe.PackingRefusesAReplayThatDoesntFitItsOrigin
+[       OK ] OrcaKeyframe.PackingRefusesAReplayThatDoesntFitItsOrigin (0 ms)
+[ RUN      ] OrcaKeyframe.UnpackingRefusesAMenuExitOffTheFirstFrame
+[       OK ] OrcaKeyframe.UnpackingRefusesAMenuExitOffTheFirstFrame (0 ms)
+[ RUN      ] OrcaKeyframe.RecordingStartsAtTheOrigin
+[       OK ] OrcaKeyframe.RecordingStartsAtTheOrigin (0 ms)
+[ RUN      ] OrcaKeyframe.ReplacingTheNandWritesOnlyWhatDiffers
+[       OK ] OrcaKeyframe.ReplacingTheNandWritesOnlyWhatDiffers (3 ms)
+[ RUN      ] OrcaKeyframe.BoundsDecodedMetadataWhenCompressedDataIsSmall
+[       OK ] OrcaKeyframe.BoundsDecodedMetadataWhenCompressedDataIsSmall (15 ms)
+[ RUN      ] OrcaKeyframe.RejectsLegacyAndRedirectingDownloadIds
+[       OK ] OrcaKeyframe.RejectsLegacyAndRedirectingDownloadIds (0 ms)
+[ RUN      ] OrcaKeyframe.EncryptionRoundTripsAndRefusesTampering
+[       OK ] OrcaKeyframe.EncryptionRoundTripsAndRefusesTampering (0 ms)
+[ RUN      ] OrcaKeyframe.InlineBase64IsStrict
+[       OK ] OrcaKeyframe.InlineBase64IsStrict (0 ms)
+[ RUN      ] OrcaKeyframe.ASmallReplayTravelsInTheOffer
+[       OK ] OrcaKeyframe.ASmallReplayTravelsInTheOffer (0 ms)
+[ RUN      ] OrcaKeyframe.AnInlineReplayIsBoundedAndChecked
+[       OK ] OrcaKeyframe.AnInlineReplayIsBoundedAndChecked (1 ms)
+[ RUN      ] OrcaKeyframe.HttpStoreAgainstAFakeServer
+[       OK ] OrcaKeyframe.HttpStoreAgainstAFakeServer (6602 ms)
+[ RUN      ] OrcaKeyframe.TagAssignmentsAreBoundedAndRoundTripWithoutNames
+[       OK ] OrcaKeyframe.TagAssignmentsAreBoundedAndRoundTripWithoutNames (0 ms)
+[----------] 20 tests from OrcaKeyframe (6639 ms total)
+
+[----------] 32 tests from OrcaReplayStream
+[ RUN      ] OrcaReplayStream.HeaderBytesMatchRoomsGoldenFixture
+[       OK ] OrcaReplayStream.HeaderBytesMatchRoomsGoldenFixture (0 ms)
+[ RUN      ] OrcaReplayStream.RepackedPiecesKeepTheWholeHistory
+[       OK ] OrcaReplayStream.RepackedPiecesKeepTheWholeHistory (30 ms)
+[ RUN      ] OrcaReplayStream.RepackedPiecesRefuseCopiesOverOneMiB
+[       OK ] OrcaReplayStream.RepackedPiecesRefuseCopiesOverOneMiB (44 ms)
+[ RUN      ] OrcaReplayStream.RepackedPiecesRefuseBadBytes
+[       OK ] OrcaReplayStream.RepackedPiecesRefuseBadBytes (0 ms)
+[ RUN      ] OrcaReplayStream.PackedSenderNeverBlocksTheCaller
+[       OK ] OrcaReplayStream.PackedSenderNeverBlocksTheCaller (0 ms)
+[ RUN      ] OrcaReplayStream.PackedSenderSendsNothingForABadCopy
+[       OK ] OrcaReplayStream.PackedSenderSendsNothingForABadCopy (0 ms)
+[ RUN      ] OrcaReplayStream.PackedSenderMarksAHistoryTooBig
+[       OK ] OrcaReplayStream.PackedSenderMarksAHistoryTooBig (30 ms)
+[ RUN      ] OrcaReplayStream.RoundTripsWholeOrInPieces
+[       OK ] OrcaReplayStream.RoundTripsWholeOrInPieces (2 ms)
+[ RUN      ] OrcaReplayStream.HoldsBackAPartialChunk
+[       OK ] OrcaReplayStream.HoldsBackAPartialChunk (0 ms)
+[ RUN      ] OrcaReplayStream.ResumesWithARepackedBacklog
+[       OK ] OrcaReplayStream.ResumesWithARepackedBacklog (5 ms)
+[ RUN      ] OrcaReplayStream.RefusesAnotherHeaderOnResume
+[       OK ] OrcaReplayStream.RefusesAnotherHeaderOnResume (0 ms)
+[ RUN      ] OrcaReplayStream.ResumesAcrossTheRecordersSegmentNumber
+[       OK ] OrcaReplayStream.ResumesAcrossTheRecordersSegmentNumber (0 ms)
+[ RUN      ] OrcaReplayStream.RefusesAChangedOverlappingFrame
+[       OK ] OrcaReplayStream.RefusesAChangedOverlappingFrame (0 ms)
+[ RUN      ] OrcaReplayStream.RefusesAChangedOverlappingChecksum
+[       OK ] OrcaReplayStream.RefusesAChangedOverlappingChecksum (0 ms)
+[ RUN      ] OrcaReplayStream.RefusesDamageGapsAndOtherVersions
+[       OK ] OrcaReplayStream.RefusesDamageGapsAndOtherVersions (0 ms)
+[ RUN      ] OrcaReplayStream.ContainerVersionIsTheOneTheServersAccept
+[       OK ] OrcaReplayStream.ContainerVersionIsTheOneTheServersAccept (0 ms)
+[ RUN      ] OrcaReplayStream.ReadsAHeaderTheSiteRebuilt
+[       OK ] OrcaReplayStream.ReadsAHeaderTheSiteRebuilt (0 ms)
+[ RUN      ] OrcaReplayStream.RefusesAnotherBuildBeforeItsFrames
+[       OK ] OrcaReplayStream.RefusesAnotherBuildBeforeItsFrames (0 ms)
+[ RUN      ] OrcaReplayStream.SurvivesRandomDamage
+[       OK ] OrcaReplayStream.SurvivesRandomDamage (50 ms)
+[ RUN      ] OrcaReplayStream.RefusesADamagedPreamble
+[       OK ] OrcaReplayStream.RefusesADamagedPreamble (0 ms)
+[ RUN      ] OrcaReplayStream.ViewTimeNamesReplaceEveryFrameWithoutChangingSourceMetadata
+[       OK ] OrcaReplayStream.ViewTimeNamesReplaceEveryFrameWithoutChangingSourceMetadata (0 ms)
+[ RUN      ] OrcaReplayStream.ViewTimeNamesUseChatUnicodeAndPortLimits
+[       OK ] OrcaReplayStream.ViewTimeNamesUseChatUnicodeAndPortLimits (0 ms)
+[ RUN      ] OrcaReplayStream.CompletionRejectsAnIncompleteSavedTail
+[       OK ] OrcaReplayStream.CompletionRejectsAnIncompleteSavedTail (0 ms)
+[ RUN      ] OrcaReplayStream.WatchSourcesMatchTheExplicitRoomsOrigin
+[       OK ] OrcaReplayStream.WatchSourcesMatchTheExplicitRoomsOrigin (0 ms)
+[ RUN      ] OrcaReplayStream.PlainWatchSourcesRequireBothLoopbackAndTestKnobs
+[       OK ] OrcaReplayStream.PlainWatchSourcesRequireBothLoopbackAndTestKnobs (0 ms)
+[ RUN      ] OrcaReplayStream.PendingWatchBytesAndResetsShareOneLimit
+[       OK ] OrcaReplayStream.PendingWatchBytesAndResetsShareOneLimit (0 ms)
+[ RUN      ] OrcaReplayStream.PendingWatchResetsAloneReachTheLimit
+[       OK ] OrcaReplayStream.PendingWatchResetsAloneReachTheLimit (2 ms)
+[ RUN      ] OrcaReplayStream.LocalSourcesMustBeRegularFiles
+[       OK ] OrcaReplayStream.LocalSourcesMustBeRegularFiles (0 ms)
+[ RUN      ] OrcaReplayStream.ProductWatchRefusalsEndOnTheFirstStep
+[       OK ] OrcaReplayStream.ProductWatchRefusalsEndOnTheFirstStep (0 ms)
+[ RUN      ] OrcaReplayStream.WriterStripsRealNamesAndPreservesTagDecisions
+[       OK ] OrcaReplayStream.WriterStripsRealNamesAndPreservesTagDecisions (0 ms)
+[ RUN      ] OrcaReplayStream.RecordingMetadataUsesSeatLabelsAcrossRenamesAndRepacking
+[       OK ] OrcaReplayStream.RecordingMetadataUsesSeatLabelsAcrossRenamesAndRepacking (0 ms)
+[ RUN      ] OrcaReplayStream.SeatLabelFlagIsOptionalAndTyped
+[       OK ] OrcaReplayStream.SeatLabelFlagIsOptionalAndTyped (0 ms)
+[----------] 32 tests from OrcaReplayStream (171 ms total)
+
+[----------] 2 tests from OrcaCanonicalBoot
+[ RUN      ] OrcaCanonicalBoot.EveryBootPlaysPort1WithNothingPressedAndNobodyElse
+[       OK ] OrcaCanonicalBoot.EveryBootPlaysPort1WithNothingPressedAndNobodyElse (0 ms)
+[ RUN      ] OrcaCanonicalBoot.TheOriginIsTheMainMenuBuiltForHalfASecond
+[       OK ] OrcaCanonicalBoot.TheOriginIsTheMainMenuBuiltForHalfASecond (0 ms)
+[----------] 2 tests from OrcaCanonicalBoot (0 ms total)
+
+[----------] 11 tests from OrcaFreshStart
+[ RUN      ] OrcaFreshStart.AQueueRoomsHostFreshStartsOnceItsWelcomeCame
+[       OK ] OrcaFreshStart.AQueueRoomsHostFreshStartsOnceItsWelcomeCame (0 ms)
+[ RUN      ] OrcaFreshStart.AFriendAfterTenSecondsFreshStartsTheHost
+[       OK ] OrcaFreshStart.AFriendAfterTenSecondsFreshStartsTheHost (0 ms)
+[ RUN      ] OrcaFreshStart.AFriendTakenInPlaceStaysInPlace
+[       OK ] OrcaFreshStart.AFriendTakenInPlaceStaysInPlace (0 ms)
+[ RUN      ] OrcaFreshStart.ASinglePlayerModeHoldsTheFriendFirst
+[       OK ] OrcaFreshStart.ASinglePlayerModeHoldsTheFriendFirst (0 ms)
+[ RUN      ] OrcaFreshStart.NeverInASessionOrWhileJoining
+[       OK ] OrcaFreshStart.NeverInASessionOrWhileJoining (0 ms)
+[ RUN      ] OrcaFreshStart.NoOriginMeansWaitingAndTheKnobTurnsItOff
+[       OK ] OrcaFreshStart.NoOriginMeansWaitingAndTheKnobTurnsItOff (0 ms)
+[ RUN      ] OrcaFreshStart.AFriendInAQueueRoomIsTheQueuesBusiness
+[       OK ] OrcaFreshStart.AFriendInAQueueRoomIsTheQueuesBusiness (0 ms)
+[ RUN      ] OrcaFreshStart.AFriendLandsOnTheSelectTheHostIsOn
+[       OK ] OrcaFreshStart.AFriendLandsOnTheSelectTheHostIsOn (0 ms)
+[ RUN      ] OrcaFreshStart.AQueueHostsHoldAndSteerRunUnseenUpToALimit
+[       OK ] OrcaFreshStart.AQueueHostsHoldAndSteerRunUnseenUpToALimit (0 ms)
+[ RUN      ] OrcaFreshStart.TheHeaderGoesInOnlyDuringTheUnseenHold
+[       OK ] OrcaFreshStart.TheHeaderGoesInOnlyDuringTheUnseenHold (0 ms)
+[ RUN      ] OrcaFreshStart.UnseenBoundariesNeverCountTowardTheHeaderLimit
+[       OK ] OrcaFreshStart.UnseenBoundariesNeverCountTowardTheHeaderLimit (0 ms)
+[----------] 11 tests from OrcaFreshStart (0 ms total)
+
+[----------] 4 tests from OrcaDeclaredOrigin
+[ RUN      ] OrcaDeclaredOrigin.ExactlyTheDeclaredBoundaryWithoutWords
+[       OK ] OrcaDeclaredOrigin.ExactlyTheDeclaredBoundaryWithoutWords (0 ms)
+[ RUN      ] OrcaDeclaredOrigin.WordsMustHoldConsecutivelyAndMappedZeroIsDistinct
+[       OK ] OrcaDeclaredOrigin.WordsMustHoldConsecutivelyAndMappedZeroIsDistinct (0 ms)
+[ RUN      ] OrcaDeclaredOrigin.SettleBoundsAndWindow
+[       OK ] OrcaDeclaredOrigin.SettleBoundsAndWindow (0 ms)
+[ RUN      ] OrcaDeclaredOrigin.RuleSelectionMatrix
+[       OK ] OrcaDeclaredOrigin.RuleSelectionMatrix (0 ms)
+[----------] 4 tests from OrcaDeclaredOrigin (0 ms total)
+
+[----------] 7 tests from OrcaResetStart
+[ RUN      ] OrcaResetStart.OnlyDeclaredOriginsUseResetAndExitZero
+[       OK ] OrcaResetStart.OnlyDeclaredOriginsUseResetAndExitZero (0 ms)
+[ RUN      ] OrcaResetStart.FriendsJoinInPlaceThroughThreeMinutesAtAnyFrameRate
+[       OK ] OrcaResetStart.FriendsJoinInPlaceThroughThreeMinutesAtAnyFrameRate (0 ms)
+[ RUN      ] OrcaResetStart.QueueRestartsOnceAndOnlyASoloHostCanRestart
+[       OK ] OrcaResetStart.QueueRestartsOnceAndOnlyASoloHostCanRestart (0 ms)
+[ RUN      ] OrcaResetStart.TailSettlesImmediatelyWithoutACharacterSelect
+[       OK ] OrcaResetStart.TailSettlesImmediatelyWithoutACharacterSelect (0 ms)
+[ RUN      ] OrcaResetStart.NewHistoryRecordsNoMenuExitOrSeed
+[       OK ] OrcaResetStart.NewHistoryRecordsNoMenuExitOrSeed (0 ms)
+[ RUN      ] OrcaResetStart.TheHostExplainsTheRestartToItsPlayer
+[       OK ] OrcaResetStart.TheHostExplainsTheRestartToItsPlayer (0 ms)
+[ RUN      ] OrcaResetStart.WarnsBeforeSchedulingAFriendsReset
+[       OK ] OrcaResetStart.WarnsBeforeSchedulingAFriendsReset (0 ms)
+[----------] 7 tests from OrcaResetStart (0 ms total)
+
+[----------] 1 test from OrcaOriginNand
+[ RUN      ] OrcaOriginNand.GameCubeNeedsNoIosAndWiiKeepsItsSessionRootRequirement
+[       OK ] OrcaOriginNand.GameCubeNeedsNoIosAndWiiKeepsItsSessionRootRequirement (0 ms)
+[----------] 1 test from OrcaOriginNand (0 ms total)
+
+[----------] 5 tests from OrcaSnapshot
+[ RUN      ] OrcaSnapshot.GameCubeCaptureRestoreAndKeyframeLoadWithoutIos
+[       OK ] OrcaSnapshot.GameCubeCaptureRestoreAndKeyframeLoadWithoutIos (32 ms)
+[ RUN      ] OrcaSnapshot.BoundarySwitchesRuleBeforeTheFirstKeyframeHook
+[       OK ] OrcaSnapshot.BoundarySwitchesRuleBeforeTheFirstKeyframeHook (14 ms)
+[ RUN      ] OrcaSnapshot.LegacyMenuDeadlineDoesNotPrintAPackReport
+[       OK ] OrcaSnapshot.LegacyMenuDeadlineDoesNotPrintAPackReport (11 ms)
+[ RUN      ] OrcaSnapshot.LabeledReplaySkipsHashesWithAndWithoutViewNames
+[       OK ] OrcaSnapshot.LabeledReplaySkipsHashesWithAndWithoutViewNames (19 ms)
+[ RUN      ] OrcaSnapshot.UnlabeledReplayComparesFullRamUnlessViewNamesAreUsed
+[       OK ] OrcaSnapshot.UnlabeledReplayComparesFullRamUnlessViewNamesAreUsed (17 ms)
+[----------] 5 tests from OrcaSnapshot (96 ms total)
+
+[----------] 10 tests from OrcaGenericModule
+[ RUN      ] OrcaGenericModule.ContractHasNoGameRulesScenesOrResults
+[       OK ] OrcaGenericModule.ContractHasNoGameRulesScenesOrResults (0 ms)
+[ RUN      ] OrcaGenericModule.HeaderTracksOnlyWantedChanges
+[       OK ] OrcaGenericModule.HeaderTracksOnlyWantedChanges (0 ms)
+[ RUN      ] OrcaGenericModule.RankedRoomsRequireResultsFromAnyModule
+[       OK ] OrcaGenericModule.RankedRoomsRequireResultsFromAnyModule (0 ms)
+[ RUN      ] OrcaGenericModule.NoCssNeverArmsOrSteers
+[       OK ] OrcaGenericModule.NoCssNeverArmsOrSteers (0 ms)
+[ RUN      ] OrcaGenericModule.BoundariesAndLatchDoNotNeedGuestMemory
+[       OK ] OrcaGenericModule.BoundariesAndLatchDoNotNeedGuestMemory (0 ms)
+[ RUN      ] OrcaGenericModule.MenuReadsUseOnlyThisBootsDeclaredOriginRule
+[       OK ] OrcaGenericModule.MenuReadsUseOnlyThisBootsDeclaredOriginRule (0 ms)
+[ RUN      ] OrcaGenericModule.SelectionMatrixKeepsFlatPacksJailedInEveryBuild
+[       OK ] OrcaGenericModule.SelectionMatrixKeepsFlatPacksJailedInEveryBuild (0 ms)
+[ RUN      ] OrcaGenericModule.LegacySelectionAndShutdownKeepTheBuiltinFallback
+[       OK ] OrcaGenericModule.LegacySelectionAndShutdownKeepTheBuiltinFallback (0 ms)
+[ RUN      ] OrcaGenericModule.PackKeyDistinguishesGenericFromAnInactiveBuiltin
+[       OK ] OrcaGenericModule.PackKeyDistinguishesGenericFromAnInactiveBuiltin (0 ms)
+[ RUN      ] OrcaGenericModule.NoBrawlWarmupOrSceneReadsEvenOnBrawlsDisc
+[       OK ] OrcaGenericModule.NoBrawlWarmupOrSceneReadsEvenOnBrawlsDisc (0 ms)
+[----------] 10 tests from OrcaGenericModule (0 ms total)
+
+[----------] 11 tests from OrcaUXControllers
+[ RUN      ] OrcaUXControllers.AdapterBytesMatchDolphinsAdapterForEveryButtonMask
+[       OK ] OrcaUXControllers.AdapterBytesMatchDolphinsAdapterForEveryButtonMask (0 ms)
+[ RUN      ] OrcaUXControllers.EveryAxisByteIsPassedThroughUncalibrated
+[       OK ] OrcaUXControllers.EveryAxisByteIsPassedThroughUncalibrated (0 ms)
+[ RUN      ] OrcaUXControllers.CalibrationOriginIsAnOffsetAndClamps
+[       OK ] OrcaUXControllers.CalibrationOriginIsAnOffsetAndClamps (0 ms)
+[ RUN      ] OrcaUXControllers.StandardPadOnAGameCubeLayout
+[       OK ] OrcaUXControllers.StandardPadOnAGameCubeLayout (0 ms)
+[ RUN      ] OrcaUXControllers.StandardPadCStickRestingOffCentreReadsAsNeutral
+[       OK ] OrcaUXControllers.StandardPadCStickRestingOffCentreReadsAsNeutral (0 ms)
+[ RUN      ] OrcaUXControllers.ParsesTheHelpersSnapshot
+[       OK ] OrcaUXControllers.ParsesTheHelpersSnapshot (0 ms)
+[ RUN      ] OrcaUXControllers.RefusesMalformedSnapshots
+[       OK ] OrcaUXControllers.RefusesMalformedSnapshots (0 ms)
+[ RUN      ] OrcaUXControllers.ChoosesTheClaimedAdapterPortThenTheFirstGamepad
+[       OK ] OrcaUXControllers.ChoosesTheClaimedAdapterPortThenTheFirstGamepad (0 ms)
+[ RUN      ] OrcaUXControllers.StaleOrSuspendedInputIsNeutral
+[       OK ] OrcaUXControllers.StaleOrSuspendedInputIsNeutral (0 ms)
+[ RUN      ] OrcaUXControllers.BoxControllerBytesReachTheGameExactlyInBothDirections
+[       OK ] OrcaUXControllers.BoxControllerBytesReachTheGameExactlyInBothDirections (0 ms)
+[ RUN      ] OrcaUXControllers.AnalogSticksKeepTheirMapOffTheEightBitLattice
+[       OK ] OrcaUXControllers.AnalogSticksKeepTheirMapOffTheEightBitLattice (11 ms)
+[----------] 11 tests from OrcaUXControllers (11 ms total)
+
+[----------] 17 tests from OrcaUXOverlay
+[ RUN      ] OrcaUXOverlay.ToastsFollowThePortListOnceEach
+[       OK ] OrcaUXOverlay.ToastsFollowThePortListOnceEach (0 ms)
+[ RUN      ] OrcaUXOverlay.NothingInAPictureTooThinForText
+[       OK ] OrcaUXOverlay.NothingInAPictureTooThinForText (0 ms)
+[ RUN      ] OrcaUXOverlay.ReleaseBuildImGuiAssertCarriesOn
+[       OK ] OrcaUXOverlay.ReleaseBuildImGuiAssertCarriesOn (0 ms)
+[ RUN      ] OrcaUXOverlay.WaitingOnlyAfterAQuarterSecondOfStall
+[       OK ] OrcaUXOverlay.WaitingOnlyAfterAQuarterSecondOfStall (0 ms)
+[ RUN      ] OrcaUXOverlay.SignalFromRoundTripAndRecentStalls
+[       OK ] OrcaUXOverlay.SignalFromRoundTripAndRecentStalls (0 ms)
+[ RUN      ] OrcaUXOverlay.StatsReadoutOnlyWhenAskedAndOnline
+[       OK ] OrcaUXOverlay.StatsReadoutOnlyWhenAskedAndOnline (0 ms)
+[ RUN      ] OrcaUXOverlay.FrameMeterTextSoloAfterItsFirstSecond
+[       OK ] OrcaUXOverlay.FrameMeterTextSoloAfterItsFirstSecond (0 ms)
+[ RUN      ] OrcaUXOverlay.FrameMeterColourThresholds
+[       OK ] OrcaUXOverlay.FrameMeterColourThresholds (0 ms)
+[ RUN      ] OrcaUXOverlay.FrameMeterHoldsTheColourTwoSecondsAfterTheReadoutClears
+[       OK ] OrcaUXOverlay.FrameMeterHoldsTheColourTwoSecondsAfterTheReadoutClears (0 ms)
+[ RUN      ] OrcaUXOverlay.FrameMeterCountsShownFramesOnlyAndTimesReRunsIntoThem
+[       OK ] OrcaUXOverlay.FrameMeterCountsShownFramesOnlyAndTimesReRunsIntoThem (0 ms)
+[ RUN      ] OrcaUXOverlay.FrameMeterStandsStillWhilePausedAndShowsAStallAsItLasts
+[       OK ] OrcaUXOverlay.FrameMeterStandsStillWhilePausedAndShowsAStallAsItLasts (0 ms)
+[ RUN      ] OrcaUXOverlay.FrameMeterTimesOnlyTheRunningPartOfAFrameAPauseCutsIn
+[       OK ] OrcaUXOverlay.FrameMeterTimesOnlyTheRunningPartOfAFrameAPauseCutsIn (0 ms)
+[ RUN      ] OrcaUXOverlay.FrameMeterStartsAfterTheFirstBoundarysWait
+[       OK ] OrcaUXOverlay.FrameMeterStartsAfterTheFirstBoundarysWait (0 ms)
+[ RUN      ] OrcaUXOverlay.GameHeldTimeIsWhatTheGameTookPastOneFrame
+[       OK ] OrcaUXOverlay.GameHeldTimeIsWhatTheGameTookPastOneFrame (0 ms)
+[ RUN      ] OrcaUXOverlay.FrameMeterLeavesOutWhatTheGameItselfHeld
+[       OK ] OrcaUXOverlay.FrameMeterLeavesOutWhatTheGameItselfHeld (0 ms)
+[ RUN      ] OrcaUXOverlay.FrameMeterDetailedAddsTheGraphAndOnlineTheDelay
+[       OK ] OrcaUXOverlay.FrameMeterDetailedAddsTheGraphAndOnlineTheDelay (0 ms)
+[ RUN      ] OrcaUXOverlay.ChatLinesStayEightSecondsTheNewestThree
+[       OK ] OrcaUXOverlay.ChatLinesStayEightSecondsTheNewestThree (0 ms)
+[----------] 17 tests from OrcaUXOverlay (0 ms total)
+
+[----------] 3 tests from OrcaUXOverlayDraw
+[ RUN      ] OrcaUXOverlayDraw.AnyPictureSizeDrawsWithoutAnImGuiAssert
+[       OK ] OrcaUXOverlayDraw.AnyPictureSizeDrawsWithoutAnImGuiAssert (0 ms)
+[ RUN      ] OrcaUXOverlayDraw.ACutWindowKeepsOrcasOwnElementsInIt
+[       OK ] OrcaUXOverlayDraw.ACutWindowKeepsOrcasOwnElementsInIt (0 ms)
+[ RUN      ] OrcaUXOverlayDraw.DimIsTheLastThingDrawnOverTheWholeDisplay
+[       OK ] OrcaUXOverlayDraw.DimIsTheLastThingDrawnOverTheWholeDisplay (0 ms)
+[----------] 3 tests from OrcaUXOverlayDraw (2 ms total)
+
+[----------] 8 tests from OrcaUXGamePatches
+[ RUN      ] OrcaUXGamePatches.ParsesTheFileAndRefusesAnythingElse
+[       OK ] OrcaUXGamePatches.ParsesTheFileAndRefusesAnythingElse (0 ms)
+[ RUN      ] OrcaUXGamePatches.ConsecutiveCodeLinesAreOneGroupWrittenWhole
+[       OK ] OrcaUXGamePatches.ConsecutiveCodeLinesAreOneGroupWrittenWhole (0 ms)
+[ RUN      ] OrcaUXGamePatches.TheShippedBrawlFileParses
+[       OK ] OrcaUXGamePatches.TheShippedBrawlFileParses (0 ms)
+[ RUN      ] OrcaUXGamePatches.BrawlInputLagFixIsTheMagusCodeInPlace
+[       OK ] OrcaUXGamePatches.BrawlInputLagFixIsTheMagusCodeInPlace (0 ms)
+[ RUN      ] OrcaUXGamePatches.BrawlHasNoRandomTripping
+[       OK ] OrcaUXGamePatches.BrawlHasNoRandomTripping (0 ms)
+[ RUN      ] OrcaUXGamePatches.BrawlRunsProjectPlusVSyncMove
+[       OK ] OrcaUXGamePatches.BrawlRunsProjectPlusVSyncMove (0 ms)
+[ RUN      ] OrcaUXGamePatches.TheShippedProjectPlusFileGuardsEveryLine
+[       OK ] OrcaUXGamePatches.TheShippedProjectPlusFileGuardsEveryLine (0 ms)
+[ RUN      ] OrcaUXGamePatches.ItemsOffIsOneGroupThatLandsOnlyOnTheGamesDefaults
+[       OK ] OrcaUXGamePatches.ItemsOffIsOneGroupThatLandsOnlyOnTheGamesDefaults (0 ms)
+[----------] 8 tests from OrcaUXGamePatches (0 ms total)
+
+[----------] 1 test from OrcaUXFreeSpace
+[ RUN      ] OrcaUXFreeSpace.TheBlockAndTheCavesFitAndNoShippedPatchStraysIntoThem
+[       OK ] OrcaUXFreeSpace.TheBlockAndTheCavesFitAndNoShippedPatchStraysIntoThem (0 ms)
+[----------] 1 test from OrcaUXFreeSpace (0 ms total)
+
+[----------] 33 tests from OrcaUXNameTags
+[ RUN      ] OrcaUXNameTags.UsernamesBecomeBrawlTags
+[       OK ] OrcaUXNameTags.UsernamesBecomeBrawlTags (0 ms)
+[ RUN      ] OrcaUXNameTags.TheRemoteFlagNeverChangesWhatIsWritten
+[       OK ] OrcaUXNameTags.TheRemoteFlagNeverChangesWhatIsWritten (10 ms)
+[ RUN      ] OrcaUXNameTags.JoinedPortsGetTheirTagOnTheCharacterSelect
+[       OK ] OrcaUXNameTags.JoinedPortsGetTheirTagOnTheCharacterSelect (1 ms)
+[ RUN      ] OrcaUXNameTags.ReusesTheSameNameAndLeavesAChosenTagAlone
+[       OK ] OrcaUXNameTags.ReusesTheSameNameAndLeavesAChosenTagAlone (1 ms)
+[ RUN      ] OrcaUXNameTags.ReplayViewNamesReplaceAWornTagAndLaterUpdates
+[       OK ] OrcaUXNameTags.ReplayViewNamesReplaceAWornTagAndLaterUpdates (1 ms)
+[ RUN      ] OrcaUXNameTags.LiveNamesAndNameFreeReplayKeepTagDecisions
+[       OK ] OrcaUXNameTags.LiveNamesAndNameFreeReplayKeepTagDecisions (3 ms)
+[ RUN      ] OrcaUXNameTags.RollbackReplacesPredictedTagAssignments
+[       OK ] OrcaUXNameTags.RollbackReplacesPredictedTagAssignments (14 ms)
+[ RUN      ] OrcaUXNameTags.RollbackClearsAssignmentsBeforeCharacterSelectChecks
+[       OK ] OrcaUXNameTags.RollbackClearsAssignmentsBeforeCharacterSelectChecks (1 ms)
+[ RUN      ] OrcaUXNameTags.ANewTagIsMadeAsTheGameMakesOneAndNothingElseIsWritten
+[       OK ] OrcaUXNameTags.ANewTagIsMadeAsTheGameMakesOneAndNothingElseIsWritten (1 ms)
+[ RUN      ] OrcaUXNameTags.ATagGoesInTheLowestFreeSlotAndWritesOnlyItsOwnEntry
+[       OK ] OrcaUXNameTags.ATagGoesInTheLowestFreeSlotAndWritesOnlyItsOwnEntry (5 ms)
+[ RUN      ] OrcaUXNameTags.TwoPortsNeverShareATag
+[       OK ] OrcaUXNameTags.TwoPortsNeverShareATag (4 ms)
+[ RUN      ] OrcaUXNameTags.APortsOwnControlsGoIntoTheTagItGets
+[       OK ] OrcaUXNameTags.APortsOwnControlsGoIntoTheTagItGets (3 ms)
+[ RUN      ] OrcaUXNameTags.ControlsReplaceThoseOfATagAlreadyHoldingTheName
+[       OK ] OrcaUXNameTags.ControlsReplaceThoseOfATagAlreadyHoldingTheName (3 ms)
+[ RUN      ] OrcaUXNameTags.ATagThePlayerMakesAgainKeepsItsSelectedDefaults
+[       OK ] OrcaUXNameTags.ATagThePlayerMakesAgainKeepsItsSelectedDefaults (4 ms)
+[ RUN      ] OrcaUXNameTags.WornTagsKeepEveryMenuChoice
+[       OK ] OrcaUXNameTags.WornTagsKeepEveryMenuChoice (11 ms)
+[ RUN      ] OrcaUXNameTags.ControlsOnlyAsTheGamesMenusSetThem
+[       OK ] OrcaUXNameTags.ControlsOnlyAsTheGamesMenusSetThem (1 ms)
+[ RUN      ] OrcaUXNameTags.AProfileOfAnotherSizeIsNoneAndANamelessPlayerWithOneWearsItsPortLabel
+[       OK ] OrcaUXNameTags.AProfileOfAnotherSizeIsNoneAndANamelessPlayerWithOneWearsItsPortLabel (3 ms)
+[ RUN      ] OrcaUXNameTags.OwnControlsFollowTheTagThePlayerWears
+[       OK ] OrcaUXNameTags.OwnControlsFollowTheTagThePlayerWears (4 ms)
+[ RUN      ] OrcaUXNameTags.AProfileAsTextRoundTripsAndOnlyAsTheMenusSetIt
+[       OK ] OrcaUXNameTags.AProfileAsTextRoundTripsAndOnlyAsTheMenusSetIt (0 ms)
+[ RUN      ] OrcaUXNameTags.OnlyThePlayersOwnChangesToTheirTagArePublished
+[       OK ] OrcaUXNameTags.OnlyThePlayersOwnChangesToTheirTagArePublished (0 ms)
+[ RUN      ] OrcaUXNameTags.ASwitchToATagAtTheDefaultsIsNoChange
+[       OK ] OrcaUXNameTags.ASwitchToATagAtTheDefaultsIsNoChange (1 ms)
+[ RUN      ] OrcaUXNameTags.AcrossRestartsATagMadeAgainKeepsTheKeptControls
+[       OK ] OrcaUXNameTags.AcrossRestartsATagMadeAgainKeepsTheKeptControls (3 ms)
+[ RUN      ] OrcaUXNameTags.TheOwnControlsReadComesAfterTheWrites
+[       OK ] OrcaUXNameTags.TheOwnControlsReadComesAfterTheWrites (7 ms)
+[ RUN      ] OrcaUXNameTags.ATagThePlayerTypedInTheGameIsTheirs
+[       OK ] OrcaUXNameTags.ATagThePlayerTypedInTheGameIsTheirs (7 ms)
+[ RUN      ] OrcaUXNameTags.ControlsSavedInTheGamesMenusArePublishedThere
+[       OK ] OrcaUXNameTags.ControlsSavedInTheGamesMenusArePublishedThere (3 ms)
+[ RUN      ] OrcaUXNameTags.InARoomATagSavedInTheGamesMenusKeepsWhatWasSaved
+[       OK ] OrcaUXNameTags.InARoomATagSavedInTheGamesMenusKeepsWhatWasSaved (7 ms)
+[ RUN      ] OrcaUXNameTags.RumbleWiiRemoteAndClassicEditsDoNotNeedTheGameCubeSaveBitToBeRead
+[       OK ] OrcaUXNameTags.RumbleWiiRemoteAndClassicEditsDoNotNeedTheGameCubeSaveBitToBeRead (17 ms)
+[ RUN      ] OrcaUXNameTags.RumbleWiiRemoteAndClassicRoomEditsKeepOnlyTagsWithTheSaveBit
+[       OK ] OrcaUXNameTags.RumbleWiiRemoteAndClassicRoomEditsKeepOnlyTagsWithTheSaveBit (18 ms)
+[ RUN      ] OrcaUXNameTags.ATemplateWithTheSaveBitDoesNotMakeNewRoomTagsReadAsEdited
+[       OK ] OrcaUXNameTags.ATemplateWithTheSaveBitDoesNotMakeNewRoomTagsReadAsEdited (1 ms)
+[ RUN      ] OrcaUXNameTags.ButtonsSetOnTheControlsPageAreThePlayersOwnWhateverTheTagIsCalled
+[       OK ] OrcaUXNameTags.ButtonsSetOnTheControlsPageAreThePlayersOwnWhateverTheTagIsCalled (7 ms)
+[ RUN      ] OrcaUXNameTags.UnmappedPointersWriteNothing
+[       OK ] OrcaUXNameTags.UnmappedPointersWriteNothing (4 ms)
+[ RUN      ] OrcaUXNameTags.NothingOutsideTheCharacterSelectOrWhenItDoesNotLookRight
+[       OK ] OrcaUXNameTags.NothingOutsideTheCharacterSelectOrWhenItDoesNotLookRight (5 ms)
+[ RUN      ] OrcaUXNameTags.SelectedSmashControlsSurviveAStaleAccountTiltProfile
+[       OK ] OrcaUXNameTags.SelectedSmashControlsSurviveAStaleAccountTiltProfile (9 ms)
+[----------] 33 tests from OrcaUXNameTags (172 ms total)
+
+[----------] 5 tests from OrcaUXControllerStream
+[ RUN      ] OrcaUXControllerStream.CachesTheNewestSnapshotAndGoesNeutralThenFallsBack
+[       OK ] OrcaUXControllerStream.CachesTheNewestSnapshotAndGoesNeutralThenFallsBack (1306 ms)
+[ RUN      ] OrcaUXControllerStream.CrlfCommentsAndMultiLineData
+[       OK ] OrcaUXControllerStream.CrlfCommentsAndMultiLineData (1004 ms)
+[ RUN      ] OrcaUXControllerStream.RefusedTokenStopsAndNonLoopbackNeverConnects
+[       OK ] OrcaUXControllerStream.RefusedTokenStopsAndNonLoopbackNeverConnects (1506 ms)
+[ RUN      ] OrcaUXControllerStream.InputAgeAtFrameReads
+[       OK ] OrcaUXControllerStream.InputAgeAtFrameReads (1004 ms)
+[ RUN      ] OrcaUXControllerStream.InputAgeIgnoresTheHelpersClock
+[       OK ] OrcaUXControllerStream.InputAgeIgnoresTheHelpersClock (1004 ms)
+[----------] 5 tests from OrcaUXControllerStream (5826 ms total)
+
+[----------] 2 tests from OrcaUXLatency
+[ RUN      ] OrcaUXLatency.BridgeTransport
+/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Source/UnitTests/Core/Orca/UXTest.cpp:3597: Skipped
+set ORCA_UX_LATENCY_BRIDGE/TOKEN (Tools/orca/controller-latency.mjs)
+
+[  SKIPPED ] OrcaUXLatency.BridgeTransport (0 ms)
+[ RUN      ] OrcaUXLatency.BoundaryInputAge
+/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Source/UnitTests/Core/Orca/UXTest.cpp:3625: Skipped
+set ORCA_UX_LATENCY_BRIDGE/TOKEN (Tools/orca/fake_bridge.py)
+
+[  SKIPPED ] OrcaUXLatency.BoundaryInputAge (0 ms)
+[----------] 2 tests from OrcaUXLatency (0 ms total)
+
+[----------] 3 tests from OrcaUXChat
+[ RUN      ] OrcaUXChat.DecodesBothFieldsAsUtf8
+[       OK ] OrcaUXChat.DecodesBothFieldsAsUtf8 (0 ms)
+[ RUN      ] OrcaUXChat.LengthLimitsInCodePointsAndEncodedCharacters
+[       OK ] OrcaUXChat.LengthLimitsInCodePointsAndEncodedCharacters (0 ms)
+[ RUN      ] OrcaUXChat.RefusesControlCharactersNewlinesAndBadEncodings
+[       OK ] OrcaUXChat.RefusesControlCharactersNewlinesAndBadEncodings (0 ms)
+[----------] 3 tests from OrcaUXChat (0 ms total)
+
+[----------] 9 tests from OrcaUXYgOrb
+[ RUN      ] OrcaUXYgOrb.ParsesTheButtonsPlaceAndItsOffAndBlink
+[       OK ] OrcaUXYgOrb.ParsesTheButtonsPlaceAndItsOffAndBlink (0 ms)
+[ RUN      ] OrcaUXYgOrb.ParsesNoticesWithAndWithoutAHint
+[       OK ] OrcaUXYgOrb.ParsesNoticesWithAndWithoutAHint (0 ms)
+[ RUN      ] OrcaUXYgOrb.LinesStayAsLongAsThePagesTheNewestThree
+[       OK ] OrcaUXYgOrb.LinesStayAsLongAsThePagesTheNewestThree (0 ms)
+[ RUN      ] OrcaUXYgOrb.TheButtonShowsBlinksAndTakesPressesOnItsDisc
+[       OK ] OrcaUXYgOrb.TheButtonShowsBlinksAndTakesPressesOnItsDisc (0 ms)
+[ RUN      ] OrcaUXYgOrb.ParsesTalkLines
+[       OK ] OrcaUXYgOrb.ParsesTalkLines (0 ms)
+[ RUN      ] OrcaUXYgOrb.TheTalkRowIsReplacedInPlaceAndOutlivesTheNotices
+[       OK ] OrcaUXYgOrb.TheTalkRowIsReplacedInPlaceAndOutlivesTheNotices (0 ms)
+[ RUN      ] OrcaUXYgOrb.ThePlaceScalesFromThePagesPixelsToTheBackbuffer
+[       OK ] OrcaUXYgOrb.ThePlaceScalesFromThePagesPixelsToTheBackbuffer (0 ms)
+[ RUN      ] OrcaUXYgOrb.ThePillsWordsAreCutAfterASpaceAndNeverInsideACharacter
+[       OK ] OrcaUXYgOrb.ThePillsWordsAreCutAfterASpaceAndNeverInsideACharacter (0 ms)
+[ RUN      ] OrcaUXYgOrb.LiveWordsKeepTheirEndAndAreCutBeforeAWord
+[       OK ] OrcaUXYgOrb.LiveWordsKeepTheirEndAndAreCutBeforeAWord (0 ms)
+[----------] 9 tests from OrcaUXYgOrb (0 ms total)
+
+[----------] 6 tests from OrcaUXOrbCombo
+[ RUN      ] OrcaUXOrbCombo.UpThenStartFiresOnceAndMasksStartAndTheDpadUntilBothAreLetGo
+[       OK ] OrcaUXOrbCombo.UpThenStartFiresOnceAndMasksStartAndTheDpadUntilBothAreLetGo (0 ms)
+[ RUN      ] OrcaUXOrbCombo.StartFirstOrStartHeldIsNotTheShortcut
+[       OK ] OrcaUXOrbCombo.StartFirstOrStartHeldIsNotTheShortcut (0 ms)
+[ RUN      ] OrcaUXOrbCombo.TheLocalPadKeepsItsStateWhileUnfocusedAndOnReRuns
+[       OK ] OrcaUXOrbCombo.TheLocalPadKeepsItsStateWhileUnfocusedAndOnReRuns (0 ms)
+[ RUN      ] OrcaUXOrbCombo.LettingGoOfStartEndsAHoldOnceWithTheMaskUnchanged
+[       OK ] OrcaUXOrbCombo.LettingGoOfStartEndsAHoldOnceWithTheMaskUnchanged (0 ms)
+[ RUN      ] OrcaUXOrbCombo.TheLocalPadPrintsItsPressAndReleaseWithTalk
+[       OK ] OrcaUXOrbCombo.TheLocalPadPrintsItsPressAndReleaseWithTalk (0 ms)
+[ RUN      ] OrcaUXOrbCombo.AStallEndsATalkPressWhenStartIsLetGoWithTheSentPadsUnchanged
+[       OK ] OrcaUXOrbCombo.AStallEndsATalkPressWhenStartIsLetGoWithTheSentPadsUnchanged (0 ms)
+[----------] 6 tests from OrcaUXOrbCombo (0 ms total)
+
+[----------] 2 tests from OrcaUXOverlayKey
+[ RUN      ] OrcaUXOverlayKey.APressIsADownThenOneUpOrCancelAndTheToggleWithoutTalk
+[       OK ] OrcaUXOverlayKey.APressIsADownThenOneUpOrCancelAndTheToggleWithoutTalk (0 ms)
+[ RUN      ] OrcaUXOverlayKey.APadLetGoAtATimeOrcaCannotPlaceIsCancelledOncePastTheTapLine
+[       OK ] OrcaUXOverlayKey.APadLetGoAtATimeOrcaCannotPlaceIsCancelledOncePastTheTapLine (0 ms)
+[----------] 2 tests from OrcaUXOverlayKey (0 ms total)
+
+[----------] 7 tests from OrcaKitFont
+[ RUN      ] OrcaKitFont.Lz10LiteralsAndBackReferences
+[       OK ] OrcaKitFont.Lz10LiteralsAndBackReferences (0 ms)
+[ RUN      ] OrcaKitFont.Utf8CodePoints
+[       OK ] OrcaKitFont.Utf8CodePoints (0 ms)
+[ RUN      ] OrcaKitFont.ReadsTheMapsTheWidthsAndTheI4Sheet
+[       OK ] OrcaKitFont.ReadsTheMapsTheWidthsAndTheI4Sheet (0 ms)
+[ RUN      ] OrcaKitFont.RefusesWhatItCantRead
+[       OK ] OrcaKitFont.RefusesWhatItCantRead (0 ms)
+[ RUN      ] OrcaKitFont.AtlasCellsApartWithMipLevels
+[       OK ] OrcaKitFont.AtlasCellsApartWithMipLevels (0 ms)
+[ RUN      ] OrcaKitFont.OverlayPunctuationHasSubstitutes
+[       OK ] OrcaKitFont.OverlayPunctuationHasSubstitutes (0 ms)
+[ RUN      ] OrcaKitFont.ReadsBothFacesFromTheDisc
+[       OK ] OrcaKitFont.ReadsBothFacesFromTheDisc (9 ms)
+[----------] 7 tests from OrcaKitFont (9 ms total)
+
+[----------] 4 tests from OrcaKitDraw
+[ RUN      ] OrcaKitDraw.EveryPrimitiveDrawsWithoutTheGamesFont
+[       OK ] OrcaKitDraw.EveryPrimitiveDrawsWithoutTheGamesFont (3 ms)
+[ RUN      ] OrcaKitDraw.DesignFPieces
+[       OK ] OrcaKitDraw.DesignFPieces (2 ms)
+[ RUN      ] OrcaKitDraw.TitlesFollowTheLook
+[       OK ] OrcaKitDraw.TitlesFollowTheLook (0 ms)
+[ RUN      ] OrcaKitDraw.DumpTheDemoForDesignChecks
+/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Source/UnitTests/Core/Orca/KitTest.cpp:739: Skipped
+design checks only: ORCA_KIT_DUMP=<dir> ORCA_TEST_DISC=<disc>
+
+[  SKIPPED ] OrcaKitDraw.DumpTheDemoForDesignChecks (0 ms)
+[----------] 4 tests from OrcaKitDraw (6 ms total)
+
+[----------] 3 tests from OrcaKit
+[ RUN      ] OrcaKit.AttentionBlinks
+[       OK ] OrcaKit.AttentionBlinks (0 ms)
+[ RUN      ] OrcaKit.GuideOfOrcasHints
+[       OK ] OrcaKit.GuideOfOrcasHints (0 ms)
+[ RUN      ] OrcaKit.FontTexturesGoWithTheBackend
+[       OK ] OrcaKit.FontTexturesGoWithTheBackend (0 ms)
+[----------] 3 tests from OrcaKit (0 ms total)
+
+[----------] 3 tests from OrcaOnlineMenuGates
+[ RUN      ] OrcaOnlineMenuGates.BrawlOpensTheOnlinePageWithNoConnection
+[       OK ] OrcaOnlineMenuGates.BrawlOpensTheOnlinePageWithNoConnection (0 ms)
+[ RUN      ] OrcaOnlineMenuGates.ProjectPlusOpensTheOnlinePageWithNoConnection
+[       OK ] OrcaOnlineMenuGates.ProjectPlusOpensTheOnlinePageWithNoConnection (0 ms)
+[ RUN      ] OrcaOnlineMenuGates.SceneGroupsAreTheSameInBothGames
+[       OK ] OrcaOnlineMenuGates.SceneGroupsAreTheSameInBothGames (0 ms)
+[----------] 3 tests from OrcaOnlineMenuGates (0 ms total)
+
+[----------] 1 test from OrcaOnlineMenuSound
+[ RUN      ] OrcaOnlineMenuSound.TheBalanceSliderStaysInTheMiddleInBothGames
+[       OK ] OrcaOnlineMenuSound.TheBalanceSliderStaysInTheMiddleInBothGames (0 ms)
+[----------] 1 test from OrcaOnlineMenuSound (0 ms total)
+
+[----------] 3 tests from OrcaOnlineMenuTextures
+[ RUN      ] OrcaOnlineMenuTextures.TextureNamesParse
+[       OK ] OrcaOnlineMenuTextures.TextureNamesParse (0 ms)
+[ RUN      ] OrcaOnlineMenuTextures.EveryShippedTextureIsAnIntegerMultipleOfItsName
+[       OK ] OrcaOnlineMenuTextures.EveryShippedTextureIsAnIntegerMultipleOfItsName (50 ms)
+[ RUN      ] OrcaOnlineMenuTextures.OrcasPackKeepsItsOwnNamesAndThePlayersPackTheRest
+[       OK ] OrcaOnlineMenuTextures.OrcasPackKeepsItsOwnNamesAndThePlayersPackTheRest (1 ms)
+[----------] 3 tests from OrcaOnlineMenuTextures (51 ms total)
+
+[----------] 9 tests from OrcaOnlineMenuReader
+[ RUN      ] OrcaOnlineMenuReader.EachPickIsAnnouncedOnceAsTheMenuLeaves
+[       OK ] OrcaOnlineMenuReader.EachPickIsAnnouncedOnceAsTheMenuLeaves (0 ms)
+[ RUN      ] OrcaOnlineMenuReader.OnlyOnlineExitsFromTheMenu
+[       OK ] OrcaOnlineMenuReader.OnlyOnlineExitsFromTheMenu (0 ms)
+[ RUN      ] OrcaOnlineMenuReader.NeverOnReRunFrames
+[       OK ] OrcaOnlineMenuReader.NeverOnReRunFrames (0 ms)
+[ RUN      ] OrcaOnlineMenuReader.APickMadeWhileNotAloneIsNeverAnnouncedLater
+[       OK ] OrcaOnlineMenuReader.APickMadeWhileNotAloneIsNeverAnnouncedLater (0 ms)
+[ RUN      ] OrcaOnlineMenuReader.APickMadeWithFriendsGoesToTheSessionOnce
+[       OK ] OrcaOnlineMenuReader.APickMadeWithFriendsGoesToTheSessionOnce (0 ms)
+[ RUN      ] OrcaOnlineMenuReader.AloneMeansNoFriendIsAboutToLand
+[       OK ] OrcaOnlineMenuReader.AloneMeansNoFriendIsAboutToLand (0 ms)
+[ RUN      ] OrcaOnlineMenuReader.APickWhileAFriendIsAboutToLandIsNeverAnnounced
+[       OK ] OrcaOnlineMenuReader.APickWhileAFriendIsAboutToLandIsNeverAnnounced (0 ms)
+[ RUN      ] OrcaOnlineMenuReader.AResyncStartsOverWithoutAnnouncing
+[       OK ] OrcaOnlineMenuReader.AResyncStartsOverWithoutAnnouncing (0 ms)
+[ RUN      ] OrcaOnlineMenuReader.ReadsTheSceneAndTheExitCode
+[       OK ] OrcaOnlineMenuReader.ReadsTheSceneAndTheExitCode (0 ms)
+[----------] 9 tests from OrcaOnlineMenuReader (0 ms total)
+
+[----------] 7 tests from OrcaOnlineMenuText
+[ RUN      ] OrcaOnlineMenuText.EveryEditFitsItsSlotAndSaysNothingOfNintendo
+[       OK ] OrcaOnlineMenuText.EveryEditFitsItsSlotAndSaysNothingOfNintendo (0 ms)
+[ RUN      ] OrcaOnlineMenuText.TheOnlinePagesWithFriendsPromisesNoRoster
+[       OK ] OrcaOnlineMenuText.TheOnlinePagesWithFriendsPromisesNoRoster (0 ms)
+[ RUN      ] OrcaOnlineMenuText.WithFriendsSaysWhereEachButtonGoes
+[       OK ] OrcaOnlineMenuText.WithFriendsSaysWhereEachButtonGoes (0 ms)
+[ RUN      ] OrcaOnlineMenuText.RewritesTheDescriptionBoxsCopy
+[       OK ] OrcaOnlineMenuText.RewritesTheDescriptionBoxsCopy (0 ms)
+[ RUN      ] OrcaOnlineMenuText.LeavesTheBoxAloneUnlessItShowsThatMessage
+[       OK ] OrcaOnlineMenuText.LeavesTheBoxAloneUnlessItShowsThatMessage (0 ms)
+[ RUN      ] OrcaOnlineMenuText.RewritesTheGamesOwnWordsInPlace
+[       OK ] OrcaOnlineMenuText.RewritesTheGamesOwnWordsInPlace (0 ms)
+[ RUN      ] OrcaOnlineMenuText.WritesNothingUnlessItIsTheMenusOwnText
+[       OK ] OrcaOnlineMenuText.WritesNothingUnlessItIsTheMenusOwnText (0 ms)
+[----------] 7 tests from OrcaOnlineMenuText (3 ms total)
+
+[----------] 1 test from OrcaOnlineMenuBoot
+[ RUN      ] OrcaOnlineMenuBoot.BothGamesBootToTheMainMenu
+[       OK ] OrcaOnlineMenuBoot.BothGamesBootToTheMainMenu (0 ms)
+[----------] 1 test from OrcaOnlineMenuBoot (0 ms total)
+
+[----------] 7 tests from OrcaOnlineMenuDropIn
+[ RUN      ] OrcaOnlineMenuDropIn.SingleTrackModesHoldAFriendsJoin
+[       OK ] OrcaOnlineMenuDropIn.SingleTrackModesHoldAFriendsJoin (0 ms)
+[ RUN      ] OrcaOnlineMenuDropIn.AFriendOnTheMainMenuTakesTheHostToWithFriends
+[       OK ] OrcaOnlineMenuDropIn.AFriendOnTheMainMenuTakesTheHostToWithFriends (0 ms)
+[ RUN      ] OrcaOnlineMenuDropIn.AFriendWhoPluggedInDuringTheBootWaitsForTheMenu
+[       OK ] OrcaOnlineMenuDropIn.AFriendWhoPluggedInDuringTheBootWaitsForTheMenu (0 ms)
+[ RUN      ] OrcaOnlineMenuDropIn.AMenuStillLoadingIsNeverLeft
+[       OK ] OrcaOnlineMenuDropIn.AMenuStillLoadingIsNeverLeft (0 ms)
+[ RUN      ] OrcaOnlineMenuDropIn.TheNameKeypadIsNeverLeft
+[       OK ] OrcaOnlineMenuDropIn.TheNameKeypadIsNeverLeft (0 ms)
+[ RUN      ] OrcaOnlineMenuDropIn.NoMoveForQueueRoomsVersusOrAFriendWhoLeft
+[       OK ] OrcaOnlineMenuDropIn.NoMoveForQueueRoomsVersusOrAFriendWhoLeft (0 ms)
+[ RUN      ] OrcaOnlineMenuDropIn.ReadsTheNameKeypadFromTheMenusTasks
+[       OK ] OrcaOnlineMenuDropIn.ReadsTheNameKeypadFromTheMenusTasks (0 ms)
+[----------] 7 tests from OrcaOnlineMenuDropIn (0 ms total)
+
+[----------] 4 tests from OrcaOnlineMenuFresh
+[ RUN      ] OrcaOnlineMenuFresh.ReadsTheBuiltMainMenuAndTheCharacterSelect
+[       OK ] OrcaOnlineMenuFresh.ReadsTheBuiltMainMenuAndTheCharacterSelect (0 ms)
+[ RUN      ] OrcaOnlineMenuFresh.AFreshStartLeavesOnlyABuiltMainMenuWithItsExit
+[       OK ] OrcaOnlineMenuFresh.AFreshStartLeavesOnlyABuiltMainMenuWithItsExit (1 ms)
+[ RUN      ] OrcaOnlineMenuFresh.AHistorysSeedStartsBothRandomNumberGenerators
+[       OK ] OrcaOnlineMenuFresh.AHistorysSeedStartsBothRandomNumberGenerators (0 ms)
+[ RUN      ] OrcaOnlineMenuFresh.TheCharacterSelectsRandomDrawsDependOnTheSeed
+[       OK ] OrcaOnlineMenuFresh.TheCharacterSelectsRandomDrawsDependOnTheSeed (0 ms)
+[----------] 4 tests from OrcaOnlineMenuFresh (2 ms total)
+
+[----------] 14 tests from OrcaOnlineMenuLobby
+[ RUN      ] OrcaOnlineMenuLobby.TheMenusAreTheMainMenuAndACharacterSelect
+[       OK ] OrcaOnlineMenuLobby.TheMenusAreTheMainMenuAndACharacterSelect (0 ms)
+[ RUN      ] OrcaOnlineMenuLobby.APeerFaultOrAVerdictThatNeverCameVoidsFirst
+[       OK ] OrcaOnlineMenuLobby.APeerFaultOrAVerdictThatNeverCameVoidsFirst (0 ms)
+[ RUN      ] OrcaOnlineMenuLobby.AJoinersOwnPortValuesAreItsOwn
+[       OK ] OrcaOnlineMenuLobby.AJoinersOwnPortValuesAreItsOwn (0 ms)
+[ RUN      ] OrcaOnlineMenuLobby.AFormerJoinerComesHomeOnTheMenusAlone
+[       OK ] OrcaOnlineMenuLobby.AFormerJoinerComesHomeOnTheMenusAlone (0 ms)
+[ RUN      ] OrcaOnlineMenuLobby.CasualOrRankedWithFriendsLeavesTheFriendsLobby
+[       OK ] OrcaOnlineMenuLobby.CasualOrRankedWithFriendsLeavesTheFriendsLobby (0 ms)
+[ RUN      ] OrcaOnlineMenuLobby.WithFriendsAQueueThePageCantSearchKeepsThem
+[       OK ] OrcaOnlineMenuLobby.WithFriendsAQueueThePageCantSearchKeepsThem (0 ms)
+[ RUN      ] OrcaOnlineMenuLobby.APickKeptWithFriendsIsArmedOnceTheyAreGone
+[       OK ] OrcaOnlineMenuLobby.APickKeptWithFriendsIsArmedOnceTheyAreGone (0 ms)
+[ RUN      ] OrcaOnlineMenuLobby.EveryCapFitsTheAppsCapsLine
+[       OK ] OrcaOnlineMenuLobby.EveryCapFitsTheAppsCapsLine (0 ms)
+[ RUN      ] OrcaOnlineMenuLobby.APickWithNobodyToLeaveIsAnnounced
+[       OK ] OrcaOnlineMenuLobby.APickWithNobodyToLeaveIsAnnounced (0 ms)
+[ RUN      ] OrcaOnlineMenuLobby.AFriendHomeOnThePicksCharacterSelectTakesThePickToo
+[       OK ] OrcaOnlineMenuLobby.AFriendHomeOnThePicksCharacterSelectTakesThePickToo (0 ms)
+[ RUN      ] OrcaOnlineMenuLobby.AFormerJoinersMoveToPort1NeverTakesTheMenuToWithFriends
+[       OK ] OrcaOnlineMenuLobby.AFormerJoinersMoveToPort1NeverTakesTheMenuToWithFriends (0 ms)
+[ RUN      ] OrcaOnlineMenuLobby.AFriendOnTheWayEndsTheHostsQueue
+[       OK ] OrcaOnlineMenuLobby.AFriendOnTheWayEndsTheHostsQueue (0 ms)
+[ RUN      ] OrcaOnlineMenuLobby.JoiningAFriendsRoomEndsTheJoinersQueue
+[       OK ] OrcaOnlineMenuLobby.JoiningAFriendsRoomEndsTheJoinersQueue (0 ms)
+[ RUN      ] OrcaOnlineMenuLobby.AHostsPickIsArmedAgainOnceTheFriendsItEndedForAreGone
+[       OK ] OrcaOnlineMenuLobby.AHostsPickIsArmedAgainOnceTheFriendsItEndedForAreGone (0 ms)
+[----------] 14 tests from OrcaOnlineMenuLobby (0 ms total)
+
+[----------] 3 tests from OrcaStallBudget
+[ RUN      ] OrcaStallBudget.ATrickleUnderTheSilenceLimitRunsTheBudgetOut
+[       OK ] OrcaStallBudget.ATrickleUnderTheSilenceLimitRunsTheBudgetOut (0 ms)
+[ RUN      ] OrcaStallBudget.ARecoveredOutageIsExcusedAFewTimesOnly
+[       OK ] OrcaStallBudget.ARecoveredOutageIsExcusedAFewTimesOnly (0 ms)
+[ RUN      ] OrcaStallBudget.RoomHoldsExcuseOnlyTheOngoingStall
+[       OK ] OrcaStallBudget.RoomHoldsExcuseOnlyTheOngoingStall (0 ms)
+[----------] 3 tests from OrcaStallBudget (0 ms total)
+
+[----------] 8 tests from OrcaGamePatches
+[ RUN      ] OrcaGamePatches.ParsesWhenBlocks
+[       OK ] OrcaGamePatches.ParsesWhenBlocks (0 ms)
+[ RUN      ] OrcaGamePatches.RefusesMalformedBlocks
+[       OK ] OrcaGamePatches.RefusesMalformedBlocks (0 ms)
+[ RUN      ] OrcaGamePatches.ConditionsReadOneMaskedWordEach
+[       OK ] OrcaGamePatches.ConditionsReadOneMaskedWordEach (0 ms)
+[ RUN      ] OrcaGamePatches.AToggledGroupOnlyEverMovesBetweenItsTwoStates
+[       OK ] OrcaGamePatches.AToggledGroupOnlyEverMovesBetweenItsTwoStates (0 ms)
+[ RUN      ] OrcaGamePatches.ToggledGroupsFollowTheirConditionBothWays
+[       OK ] OrcaGamePatches.ToggledGroupsFollowTheirConditionBothWays (0 ms)
+[ RUN      ] OrcaGamePatches.EachPassTakesItsOwnKind
+[       OK ] OrcaGamePatches.EachPassTakesItsOwnKind (0 ms)
+[ RUN      ] OrcaGamePatches.TogglesArePureFunctionsOfMemory
+[       OK ] OrcaGamePatches.TogglesArePureFunctionsOfMemory (0 ms)
+[ RUN      ] OrcaGamePatches.TheShippedFilesLandAsBefore
+[       OK ] OrcaGamePatches.TheShippedFilesLandAsBefore (0 ms)
+[----------] 8 tests from OrcaGamePatches (0 ms total)
+
+[----------] 4 tests from OrcaPause
+[ RUN      ] OrcaPause.SessionWithoutARoomMayPause
+[       OK ] OrcaPause.SessionWithoutARoomMayPause (0 ms)
+[ RUN      ] OrcaPause.OnlineSessionWaitsForItsFirstBoundary
+[       OK ] OrcaPause.OnlineSessionWaitsForItsFirstBoundary (0 ms)
+[ RUN      ] OrcaPause.DropInRequestsWaitForTheNextBoundary
+[       OK ] OrcaPause.DropInRequestsWaitForTheNextBoundary (0 ms)
+[ RUN      ] OrcaPause.PausedTimeIsLeftOutOfTheStats
+[       OK ] OrcaPause.PausedTimeIsLeftOutOfTheStats (70 ms)
+[----------] 4 tests from OrcaPause (70 ms total)
+
+[----------] 9 tests from OrcaJitWarm
+[ RUN      ] OrcaJitWarm.FileRoundTrips
+[       OK ] OrcaJitWarm.FileRoundTrips (0 ms)
+[ RUN      ] OrcaJitWarm.DamagedFileIsRefused
+[       OK ] OrcaJitWarm.DamagedFileIsRefused (0 ms)
+[ RUN      ] OrcaJitWarm.ImplausibleBlocksAreRefused
+[       OK ] OrcaJitWarm.ImplausibleBlocksAreRefused (0 ms)
+[ RUN      ] OrcaJitWarm.OversizedFilesAreRefused
+[       OK ] OrcaJitWarm.OversizedFilesAreRefused (1 ms)
+[ RUN      ] OrcaJitWarm.HashFollowsWordsAndRanges
+[       OK ] OrcaJitWarm.HashFollowsWordsAndRanges (0 ms)
+[ RUN      ] OrcaJitWarm.MergeAgesRefreshesAndAdds
+[       OK ] OrcaJitWarm.MergeAgesRefreshesAndAdds (0 ms)
+[ RUN      ] OrcaJitWarm.MergeKeepsTheYoungestPastTheCap
+[       OK ] OrcaJitWarm.MergeKeepsTheYoungestPastTheCap (19 ms)
+[ RUN      ] OrcaJitWarm.PacedTargetMeetsEveryDeadline
+[       OK ] OrcaJitWarm.PacedTargetMeetsEveryDeadline (0 ms)
+[ RUN      ] OrcaJitWarm.ShippedSeedListsRead
+[       OK ] OrcaJitWarm.ShippedSeedListsRead (1 ms)
+[----------] 9 tests from OrcaJitWarm (22 ms total)
+
+[----------] 13 tests from OrcaMusic
+[ RUN      ] OrcaMusic.OnlyStreamVoicesAreMusic
+[       OK ] OrcaMusic.OnlyStreamVoicesAreMusic (0 ms)
+[ RUN      ] OrcaMusic.AStreamVoiceStaysMusicThroughItsSongsLoop
+[       OK ] OrcaMusic.AStreamVoiceStaysMusicThroughItsSongsLoop (0 ms)
+[ RUN      ] OrcaMusic.AVoiceThatNeverStreamedIsNoMusic
+[       OK ] OrcaMusic.AVoiceThatNeverStreamedIsNoMusic (0 ms)
+[ RUN      ] OrcaMusic.AStreamVoiceReusedForAnEffectIsNoLongerMusic
+[       OK ] OrcaMusic.AStreamVoiceReusedForAnEffectIsNoLongerMusic (0 ms)
+[ RUN      ] OrcaMusic.EachStreamVoiceHasItsOwnRing
+[       OK ] OrcaMusic.EachStreamVoiceHasItsOwnRing (0 ms)
+[ RUN      ] OrcaMusic.WithoutMusicTheFrameIsTheOneWrittenToRam
+[       OK ] OrcaMusic.WithoutMusicTheFrameIsTheOneWrittenToRam (0 ms)
+[ RUN      ] OrcaMusic.TheQuietFrameIsTheMixOfEverythingElse
+[       OK ] OrcaMusic.TheQuietFrameIsTheMixOfEverythingElse (0 ms)
+[ RUN      ] OrcaMusic.MusicAloneIsSilent
+[       OK ] OrcaMusic.MusicAloneIsSilent (0 ms)
+[ RUN      ] OrcaMusic.TheDmaPlaysTheQuietFrameOnlyWhileRamHoldsWhatTheMixerWrote
+[       OK ] OrcaMusic.TheDmaPlaysTheQuietFrameOnlyWhileRamHoldsWhatTheMixerWrote (0 ms)
+[ RUN      ] OrcaMusic.TheMixersAddressAndTheDmasAreTheSameFrame
+[       OK ] OrcaMusic.TheMixersAddressAndTheDmasAreTheSameFrame (0 ms)
+[ RUN      ] OrcaMusic.ARerunFrameReplacesTheFirstAndAnOlderOneStillMatchesAfterALoad
+[       OK ] OrcaMusic.ARerunFrameReplacesTheFirstAndAnOlderOneStillMatchesAfterALoad (0 ms)
+[ RUN      ] OrcaMusic.OldFramesLeaveTheShadow
+[       OK ] OrcaMusic.OldFramesLeaveTheShadow (0 ms)
+[ RUN      ] OrcaMusic.OnlyAProfileWithStreamedMusicOffersTheSwitch
+[       OK ] OrcaMusic.OnlyAProfileWithStreamedMusicOffersTheSwitch (0 ms)
+[----------] 13 tests from OrcaMusic (1 ms total)
+
+[----------] 26 tests from OrcaActivity
+[ RUN      ] OrcaActivity.PressAndReleaseAreTwoEdges
+[       OK ] OrcaActivity.PressAndReleaseAreTwoEdges (0 ms)
+[ RUN      ] OrcaActivity.FirstPadIsTheBaseline
+[       OK ] OrcaActivity.FirstPadIsTheBaseline (0 ms)
+[ RUN      ] OrcaActivity.StatusBitsAndAnalogFaceButtonsAreNotInput
+[       OK ] OrcaActivity.StatusBitsAndAnalogFaceButtonsAreNotInput (0 ms)
+[ RUN      ] OrcaActivity.TriggerThresholdWithHysteresis
+[       OK ] OrcaActivity.TriggerThresholdWithHysteresis (0 ms)
+[ RUN      ] OrcaActivity.TriggerClickCountsOnceWithItsAnalog
+[       OK ] OrcaActivity.TriggerClickCountsOnceWithItsAnalog (0 ms)
+[ RUN      ] OrcaActivity.StickDeadzoneCrossingWithHysteresis
+[       OK ] OrcaActivity.StickDeadzoneCrossingWithHysteresis (0 ms)
+[ RUN      ] OrcaActivity.DriftAndHeldSticksNeverCount
+[       OK ] OrcaActivity.DriftAndHeldSticksNeverCount (0 ms)
+[ RUN      ] OrcaActivity.GamepadNoiseNeverCounts
+[       OK ] OrcaActivity.GamepadNoiseNeverCounts (0 ms)
+[ RUN      ] OrcaActivity.RealPlayOnAGamepadCounts
+[       OK ] OrcaActivity.RealPlayOnAGamepadCounts (0 ms)
+[ RUN      ] OrcaActivity.ModeMapping
+[       OK ] OrcaActivity.ModeMapping (0 ms)
+[ RUN      ] OrcaActivity.NoInputIsNoActivity
+[       OK ] OrcaActivity.NoInputIsNoActivity (0 ms)
+[ RUN      ] OrcaActivity.ThirtySecondsAfterAnInput
+[       OK ] OrcaActivity.ThirtySecondsAfterAnInput (0 ms)
+[ RUN      ] OrcaActivity.OverlappingWindowsMerge
+[       OK ] OrcaActivity.OverlappingWindowsMerge (0 ms)
+[ RUN      ] OrcaActivity.WindowCarriesAcrossTheIntervalBoundary
+[       OK ] OrcaActivity.WindowCarriesAcrossTheIntervalBoundary (0 ms)
+[ RUN      ] OrcaActivity.InputExactlyAtTheBoundary
+[       OK ] OrcaActivity.InputExactlyAtTheBoundary (0 ms)
+[ RUN      ] OrcaActivity.PartialLastInterval
+[       OK ] OrcaActivity.PartialLastInterval (0 ms)
+[ RUN      ] OrcaActivity.EmptyLastLine
+[       OK ] OrcaActivity.EmptyLastLine (0 ms)
+[ RUN      ] OrcaActivity.SecondsRoundToTheNearest
+[       OK ] OrcaActivity.SecondsRoundToTheNearest (0 ms)
+[ RUN      ] OrcaActivity.CouchPadsShareTheSeconds
+[       OK ] OrcaActivity.CouchPadsShareTheSeconds (0 ms)
+[ RUN      ] OrcaActivity.ActiveNeverExceedsTheInterval
+[       OK ] OrcaActivity.ActiveNeverExceedsTheInterval (0 ms)
+[ RUN      ] OrcaActivity.ModeWithTheMostActiveTime
+[       OK ] OrcaActivity.ModeWithTheMostActiveTime (0 ms)
+[ RUN      ] OrcaActivity.ReRunsAndRebuildsReadNothing
+[       OK ] OrcaActivity.ReRunsAndRebuildsReadNothing (0 ms)
+[ RUN      ] OrcaActivity.UnfocusedDolphinPadIsSkipped
+[       OK ] OrcaActivity.UnfocusedDolphinPadIsSkipped (0 ms)
+[ RUN      ] OrcaActivity.ControllersMissingFromARead
+[       OK ] OrcaActivity.ControllersMissingFromARead (0 ms)
+[ RUN      ] OrcaActivity.SnapshotPads
+[       OK ] OrcaActivity.SnapshotPads (0 ms)
+[ RUN      ] OrcaActivity.ThreeMinutesOfFrames
+[       OK ] OrcaActivity.ThreeMinutesOfFrames (0 ms)
+[----------] 26 tests from OrcaActivity (0 ms total)
+
+[----------] 14 tests from OrcaResults
+[ RUN      ] OrcaResults.ReadsTheResultInfoOnTheResultsScreenOnly
+[       OK ] OrcaResults.ReadsTheResultInfoOnTheResultsScreenOnly (0 ms)
+[ RUN      ] OrcaResults.JudgesAOneVersusOne
+[       OK ] OrcaResults.JudgesAOneVersusOne (0 ms)
+[ RUN      ] OrcaResults.AGameIsAFightThatReachesItsResults
+[       OK ] OrcaResults.AGameIsAFightThatReachesItsResults (0 ms)
+[ RUN      ] OrcaResults.AFightRunningWhenTheOpponentPluggedInNeverCounts
+[       OK ] OrcaResults.AFightRunningWhenTheOpponentPluggedInNeverCounts (0 ms)
+[ RUN      ] OrcaResults.ReconstructedHistoryNeverReportsOldResults
+[       OK ] OrcaResults.ReconstructedHistoryNeverReportsOldResults (0 ms)
+[ RUN      ] OrcaResults.AFightThatEndsWithoutItsResultsIsNoContest
+[       OK ] OrcaResults.AFightThatEndsWithoutItsResultsIsNoContest (0 ms)
+[ RUN      ] OrcaResults.SuddenDeathIsTheSameGame
+[       OK ] OrcaResults.SuddenDeathIsTheSameGame (0 ms)
+[ RUN      ] OrcaResults.OnlyFinalFramesCountAndARerunReplacesTheGuess
+[       OK ] OrcaResults.OnlyFinalFramesCountAndARerunReplacesTheGuess (0 ms)
+[ RUN      ] OrcaResults.ConfirmingInStepsOrAtOnceIsTheSame
+[       OK ] OrcaResults.ConfirmingInStepsOrAtOnceIsTheSame (0 ms)
+[ RUN      ] OrcaResults.AResyncForgetsWhatWasRead
+[       OK ] OrcaResults.AResyncForgetsWhatWasRead (0 ms)
+[ RUN      ] OrcaResults.TheQueueRulesPresetBrawlsRules
+[       OK ] OrcaResults.TheQueueRulesPresetBrawlsRules (0 ms)
+[ RUN      ] OrcaResults.RankedRulesReadTheRulesTheFightStartedWith
+[       OK ] OrcaResults.RankedRulesReadTheRulesTheFightStartedWith (1 ms)
+[ RUN      ] OrcaResults.RankedRulesThatCantBeReadAreNotRated
+[       OK ] OrcaResults.RankedRulesThatCantBeReadAreNotRated (0 ms)
+[ RUN      ] OrcaResults.RankedRulesVerdictUsesFinalFramesAndReportsOnce
+[       OK ] OrcaResults.RankedRulesVerdictUsesFinalFramesAndReportsOnce (0 ms)
+[----------] 14 tests from OrcaResults (3 ms total)
+
+[----------] 17 tests from OrcaRankedSet
+[ RUN      ] OrcaRankedSet.BestOfThree
+[       OK ] OrcaRankedSet.BestOfThree (0 ms)
+[ RUN      ] OrcaRankedSet.VoidGamesAreNotRecorded
+[       OK ] OrcaRankedSet.VoidGamesAreNotRecorded (0 ms)
+[ RUN      ] OrcaRankedSet.BrawlTimeOutLedgeLimitThenStocksThenPercent
+[       OK ] OrcaRankedSet.BrawlTimeOutLedgeLimitThenStocksThenPercent (0 ms)
+[ RUN      ] OrcaRankedSet.BrawlTieMeansATiebreakGame
+[       OK ] OrcaRankedSet.BrawlTieMeansATiebreakGame (0 ms)
+[ RUN      ] OrcaRankedSet.BrawlSuddenDeathInTheSameFightScene
+[       OK ] OrcaRankedSet.BrawlSuddenDeathInTheSameFightScene (0 ms)
+[ RUN      ] OrcaRankedSet.BrawlTimeOutWithoutTheClockUsesTheGamesStocks
+[       OK ] OrcaRankedSet.BrawlTimeOutWithoutTheClockUsesTheGamesStocks (0 ms)
+[ RUN      ] OrcaRankedSet.ProjectPlusKeepsItsOwnTimeOutRules
+[       OK ] OrcaRankedSet.ProjectPlusKeepsItsOwnTimeOutRules (0 ms)
+[ RUN      ] OrcaRankedSet.NoRulesetKeepsTheOldDefaults
+[       OK ] OrcaRankedSet.NoRulesetKeepsTheOldDefaults (0 ms)
+[ RUN      ] OrcaRankedSet.AGameBeginsWhenItsFightersAreIn
+[       OK ] OrcaRankedSet.AGameBeginsWhenItsFightersAreIn (0 ms)
+[ RUN      ] OrcaRankedSet.ScoreLine
+[       OK ] OrcaRankedSet.ScoreLine (0 ms)
+[ RUN      ] OrcaRankedSet.ResultToast
+[       OK ] OrcaRankedSet.ResultToast (0 ms)
+[ RUN      ] OrcaRankedSet.DotsFollowTheDecidedGames
+[       OK ] OrcaRankedSet.DotsFollowTheDecidedGames (0 ms)
+[ RUN      ] OrcaRankedSet.TrackerReportsTheBlocksGames
+[       OK ] OrcaRankedSet.TrackerReportsTheBlocksGames (0 ms)
+[ RUN      ] OrcaRankedSet.TrackerSaysWhenEachGameBegan
+[       OK ] OrcaRankedSet.TrackerSaysWhenEachGameBegan (0 ms)
+[ RUN      ] OrcaRankedSet.AGameBeginsOnlyOnFinalFramesAfterThePlugFrame
+[       OK ] OrcaRankedSet.AGameBeginsOnlyOnFinalFramesAfterThePlugFrame (0 ms)
+[ RUN      ] OrcaRankedSet.FirstToTwoWins
+[       OK ] OrcaRankedSet.FirstToTwoWins (0 ms)
+[ RUN      ] OrcaRankedSet.SevenGamesWithoutAWinnerAreVoid
+[       OK ] OrcaRankedSet.SevenGamesWithoutAWinnerAreVoid (0 ms)
+[----------] 17 tests from OrcaRankedSet (0 ms total)
+
+[----------] 4 tests from OrcaMatchmakingMenu
+[ RUN      ] OrcaMatchmakingMenu.CasualAndRankedSayLocalOnlyWithoutHost
+[       OK ] OrcaMatchmakingMenu.CasualAndRankedSayLocalOnlyWithoutHost (0 ms)
+[ RUN      ] OrcaMatchmakingMenu.TheSearchLinesFollowTheQueue
+[       OK ] OrcaMatchmakingMenu.TheSearchLinesFollowTheQueue (0 ms)
+[ RUN      ] OrcaMatchmakingMenu.AMatchedJoinerSaysTheOpponentWasFound
+[       OK ] OrcaMatchmakingMenu.AMatchedJoinerSaysTheOpponentWasFound (0 ms)
+[ RUN      ] OrcaMatchmakingMenu.HostIsACapResultsOnlyWithAVerifiedReader
+[       OK ] OrcaMatchmakingMenu.HostIsACapResultsOnlyWithAVerifiedReader (0 ms)
+[----------] 4 tests from OrcaMatchmakingMenu (0 ms total)
+
+[----------] 2 tests from OrcaSetBlock
+[ RUN      ] OrcaSetBlock.HeaderRoundTripsAndStartsAFreshSet
+[       OK ] OrcaSetBlock.HeaderRoundTripsAndStartsAFreshSet (0 ms)
+[ RUN      ] OrcaSetBlock.SetRoundTripsAndWritesOnlyWhatChanged
+[       OK ] OrcaSetBlock.SetRoundTripsAndWritesOnlyWhatChanged (0 ms)
+[----------] 2 tests from OrcaSetBlock (0 ms total)
+
+[----------] 12 tests from OrcaInputGate
+[ RUN      ] OrcaInputGate.EmptyMaskChangesNothing
+[       OK ] OrcaInputGate.EmptyMaskChangesNothing (0 ms)
+[ RUN      ] OrcaInputGate.ButtonsReleasedTheRestKept
+[       OK ] OrcaInputGate.ButtonsReleasedTheRestKept (0 ms)
+[ RUN      ] OrcaInputGate.TriggersAndAnalogButtonsGoWithTheirButtons
+[       OK ] OrcaInputGate.TriggersAndAnalogButtonsGoWithTheirButtons (0 ms)
+[ RUN      ] OrcaInputGate.SticksCentredSeparately
+[       OK ] OrcaInputGate.SticksCentredSeparately (0 ms)
+[ RUN      ] OrcaInputGate.AReadsAsAnotherButtonWhileHeld
+[       OK ] OrcaInputGate.AReadsAsAnotherButtonWhileHeld (0 ms)
+[ RUN      ] OrcaInputGate.TheStickCentresWhileAIsDown
+[       OK ] OrcaInputGate.TheStickCentresWhileAIsDown (0 ms)
+[ RUN      ] OrcaInputGate.DownDropsOnlyWhileLAndRAreBothHeld
+[       OK ] OrcaInputGate.DownDropsOnlyWhileLAndRAreBothHeld (0 ms)
+[ RUN      ] OrcaInputGate.AllIsANeutralConnectedPadButOriginBitsStay
+[       OK ] OrcaInputGate.AllIsANeutralConnectedPadButOriginBitsStay (0 ms)
+[ RUN      ] OrcaInputGate.OnlyGameButtonsAreMasked
+[       OK ] OrcaInputGate.OnlyGameButtonsAreMasked (0 ms)
+[ RUN      ] OrcaInputGate.UnpluggedPadLeftAlone
+[       OK ] OrcaInputGate.UnpluggedPadLeftAlone (0 ms)
+[ RUN      ] OrcaInputGate.Idempotent
+[       OK ] OrcaInputGate.Idempotent (0 ms)
+[ RUN      ] OrcaInputGate.SameBytesAsTheWireSees
+[       OK ] OrcaInputGate.SameBytesAsTheWireSees (0 ms)
+[----------] 12 tests from OrcaInputGate (0 ms total)
+
+[----------] 4 tests from OrcaInputGateBoundary
+[ RUN      ] OrcaInputGateBoundary.NoSourceNoMasks
+[       OK ] OrcaInputGateBoundary.NoSourceNoMasks (0 ms)
+[ RUN      ] OrcaInputGateBoundary.MasksFollowTheStateAtEachBoundary
+[       OK ] OrcaInputGateBoundary.MasksFollowTheStateAtEachBoundary (0 ms)
+[ RUN      ] OrcaInputGateBoundary.ClearedSourceAndClearStopMasking
+[       OK ] OrcaInputGateBoundary.ClearedSourceAndClearStopMasking (0 ms)
+[ RUN      ] OrcaInputGateBoundary.GameReadsGatedRawReadsDoNot
+[       OK ] OrcaInputGateBoundary.GameReadsGatedRawReadsDoNot (0 ms)
+[----------] 4 tests from OrcaInputGateBoundary (0 ms total)
+
+[----------] 3 tests from OrcaInputGateTestKnob
+[ RUN      ] OrcaInputGateTestKnob.Parses
+[       OK ] OrcaInputGateTestKnob.Parses (0 ms)
+[ RUN      ] OrcaInputGateTestKnob.Refuses
+[       OK ] OrcaInputGateTestKnob.Refuses (0 ms)
+[ RUN      ] OrcaInputGateTestKnob.MemoryRulesFollowTheHash
+[       OK ] OrcaInputGateTestKnob.MemoryRulesFollowTheHash (0 ms)
+[----------] 3 tests from OrcaInputGateTestKnob (0 ms total)
+
+[----------] 39 tests from OrcaOnlineRules
+[ RUN      ] OrcaOnlineRules.AJoinTakesNoSetGamesItDidntSee
+[       OK ] OrcaOnlineRules.AJoinTakesNoSetGamesItDidntSee (0 ms)
+[ RUN      ] OrcaOnlineRules.NoHeaderInTheGamesDeadCode
+[       OK ] OrcaOnlineRules.NoHeaderInTheGamesDeadCode (0 ms)
+[ RUN      ] OrcaOnlineRules.TheHeaderIsWrittenOnceAndSavesThePlayersRules
+[       OK ] OrcaOnlineRules.TheHeaderIsWrittenOnceAndSavesThePlayersRules (0 ms)
+[ RUN      ] OrcaOnlineRules.ClearingGivesBackThePlayersRules
+[       OK ] OrcaOnlineRules.ClearingGivesBackThePlayersRules (0 ms)
+[ RUN      ] OrcaOnlineRules.NoHeaderBeforeTheGameLoadsTheModule
+[       OK ] OrcaOnlineRules.NoHeaderBeforeTheGameLoadsTheModule (0 ms)
+[ RUN      ] OrcaOnlineRules.AnotherQueueRoomStartsANewSetAndKeepsTheSavedRules
+[       OK ] OrcaOnlineRules.AnotherQueueRoomStartsANewSetAndKeepsTheSavedRules (0 ms)
+[ RUN      ] OrcaOnlineRules.BrawlsCasualRules
+[       OK ] OrcaOnlineRules.BrawlsCasualRules (0 ms)
+[ RUN      ] OrcaOnlineRules.RankedChoosesTheStageAndProjectPlusPlaysFourStocks
+[       OK ] OrcaOnlineRules.RankedChoosesTheStageAndProjectPlusPlaysFourStocks (0 ms)
+[ RUN      ] OrcaOnlineRules.IceClimbersTakeFinalDestinationOutOfTheRandomStages
+[       OK ] OrcaOnlineRules.IceClimbersTakeFinalDestinationOutOfTheRandomStages (0 ms)
+[ RUN      ] OrcaOnlineRules.ProjectPlusTakesThe2024ProposedListOnTheCharacterSelect
+[       OK ] OrcaOnlineRules.ProjectPlusTakesThe2024ProposedListOnTheCharacterSelect (0 ms)
+[ RUN      ] OrcaOnlineRules.TheGateLocksTheMenusOnlyUnderAHeader
+[       OK ] OrcaOnlineRules.TheGateLocksTheMenusOnlyUnderAHeader (0 ms)
+[ RUN      ] OrcaOnlineRules.RankedResultsNeverTakeB
+[       OK ] OrcaOnlineRules.RankedResultsNeverTakeB (1 ms)
+[ RUN      ] OrcaOnlineRules.TheResultsScreenNeverTakesZ
+[       OK ] OrcaOnlineRules.TheResultsScreenNeverTakesZ (1 ms)
+[ RUN      ] OrcaOnlineRules.TheCharacterSelectPassesAOnlyInTheGrid
+[       OK ] OrcaOnlineRules.TheCharacterSelectPassesAOnlyInTheGrid (0 ms)
+[ RUN      ] OrcaOnlineRules.AOnBackBacksOutOfTheQueuesOwnCharacterSelectOnly
+[       OK ] OrcaOnlineRules.AOnBackBacksOutOfTheQueuesOwnCharacterSelectOnly (0 ms)
+[ RUN      ] OrcaOnlineRules.TheQueuesOwnSelectLetsThePlayerPickTheirTagWhileNotSearching
+[       OK ] OrcaOnlineRules.TheQueuesOwnSelectLetsThePlayerPickTheirTagWhileNotSearching (0 ms)
+[ RUN      ] OrcaOnlineRules.BReachesTheCharacterSelectOnlyToTakeTheTokenUp
+[       OK ] OrcaOnlineRules.BReachesTheCharacterSelectOnlyToTakeTheTokenUp (0 ms)
+[ RUN      ] OrcaOnlineRules.TheHandsAreReadPerPort
+[       OK ] OrcaOnlineRules.TheHandsAreReadPerPort (0 ms)
+[ RUN      ] OrcaOnlineRules.FriendsGamesAreUntouched
+[       OK ] OrcaOnlineRules.FriendsGamesAreUntouched (0 ms)
+[ RUN      ] OrcaOnlineRules.RankedsReadyTimerFindsTheNoShow
+[       OK ] OrcaOnlineRules.RankedsReadyTimerFindsTheNoShow (5 ms)
+[ RUN      ] OrcaOnlineRules.TheReadyTimerWaitsForBothPlayersAndStopsWhenBothPick
+[       OK ] OrcaOnlineRules.TheReadyTimerWaitsForBothPlayersAndStopsWhenBothPick (15 ms)
+[ RUN      ] OrcaOnlineRules.TheReadyTimerIsTheSameWhenABoundaryRunsAgain
+[       OK ] OrcaOnlineRules.TheReadyTimerIsTheSameWhenABoundaryRunsAgain (0 ms)
+[ RUN      ] OrcaOnlineRules.TheHeaderCarriesTheCoinAndANewRoomStartsANewSet
+[       OK ] OrcaOnlineRules.TheHeaderCarriesTheCoinAndANewRoomStartsANewSet (0 ms)
+[ RUN      ] OrcaOnlineRules.TheTestQueueKnobTakesACoin
+[       OK ] OrcaOnlineRules.TheTestQueueKnobTakesACoin (0 ms)
+[ RUN      ] OrcaOnlineRules.LocksArePureFunctionsOfMemory
+[       OK ] OrcaOnlineRules.LocksArePureFunctionsOfMemory (0 ms)
+[ RUN      ] OrcaOnlineRules.TheQueuesFlagsAreTheHeaders
+[       OK ] OrcaOnlineRules.TheQueuesFlagsAreTheHeaders (0 ms)
+[ RUN      ] OrcaOnlineRules.TheRoomsHeaderComesFromItsCode
+[       OK ] OrcaOnlineRules.TheRoomsHeaderComesFromItsCode (0 ms)
+[ RUN      ] OrcaOnlineRules.AJoinerRefusesAHeaderThatIsNotItsRooms
+[       OK ] OrcaOnlineRules.AJoinerRefusesAHeaderThatIsNotItsRooms (0 ms)
+[ RUN      ] OrcaOnlineRules.EveryChangeOfTheHeaderCalledForCounts
+[       OK ] OrcaOnlineRules.EveryChangeOfTheHeaderCalledForCounts (0 ms)
+[ RUN      ] OrcaOnlineRules.TheRoomsHeaderLandsWithTheOpponentOnTheWay
+[       OK ] OrcaOnlineRules.TheRoomsHeaderLandsWithTheOpponentOnTheWay (0 ms)
+[ RUN      ] OrcaOnlineRules.AQueueRoomNeverMakesAKeyframeWithoutItsHeader
+[       OK ] OrcaOnlineRules.AQueueRoomNeverMakesAKeyframeWithoutItsHeader (0 ms)
+[ RUN      ] OrcaOnlineRules.TheCodeMenuDefaultsAreTheFilesWords
+[       OK ] OrcaOnlineRules.TheCodeMenuDefaultsAreTheFilesWords (0 ms)
+[ RUN      ] OrcaOnlineRules.TheCodeMenuIsOffAndAtItsDefaultsUnderAProjectPlusHeader
+[       OK ] OrcaOnlineRules.TheCodeMenuIsOffAndAtItsDefaultsUnderAProjectPlusHeader (25 ms)
+[ RUN      ] OrcaOnlineRules.AnOpenCodeMenuClosesAndTheGameRunsAgain
+[       OK ] OrcaOnlineRules.AnOpenCodeMenuClosesAndTheGameRunsAgain (0 ms)
+[ RUN      ] OrcaOnlineRules.TheCodeMenuIsLeftAloneWithoutItsHeaderOrItsLayout
+[       OK ] OrcaOnlineRules.TheCodeMenuIsLeftAloneWithoutItsHeaderOrItsLayout (19 ms)
+[ RUN      ] OrcaOnlineRules.ClearingGivesBackTheCodeMenusActivation
+[       OK ] OrcaOnlineRules.ClearingGivesBackTheCodeMenusActivation (2 ms)
+[ RUN      ] OrcaOnlineRules.ProjectPlusBannedFightersPlayAsTheirBaseFighters
+[       OK ] OrcaOnlineRules.ProjectPlusBannedFightersPlayAsTheirBaseFighters (2 ms)
+[ RUN      ] OrcaOnlineRules.ProjectPlusNeverSeesTheCodeMenusChord
+[       OK ] OrcaOnlineRules.ProjectPlusNeverSeesTheCodeMenusChord (4 ms)
+[ RUN      ] OrcaOnlineRules.TheCodeMenuLockIsAPureFunctionOfMemory
+[       OK ] OrcaOnlineRules.TheCodeMenuLockIsAPureFunctionOfMemory (1 ms)
+[----------] 39 tests from OrcaOnlineRules (92 ms total)
+
+[----------] 20 tests from OrcaOnlineSeats
+[ RUN      ] OrcaOnlineSeats.WhatIsOnline
+[       OK ] OrcaOnlineSeats.WhatIsOnline (0 ms)
+[ RUN      ] OrcaOnlineSeats.TheRecordKeepsNoCpuAndNoHumanWithoutAPort
+[       OK ] OrcaOnlineSeats.TheRecordKeepsNoCpuAndNoHumanWithoutAPort (0 ms)
+[ RUN      ] OrcaOnlineSeats.ACpuFromLocalVersusNeverReachesRankedsCharacterSelect
+[       OK ] OrcaOnlineSeats.ACpuFromLocalVersusNeverReachesRankedsCharacterSelect (2 ms)
+[ RUN      ] OrcaOnlineSeats.TheRecordIsClearedOnlyBetweenScenes
+[       OK ] OrcaOnlineSeats.TheRecordIsClearedOnlyBetweenScenes (10 ms)
+[ RUN      ] OrcaOnlineSeats.EveryOnlineModeClearsTheRecordAndLocalVersusKeepsItsCpus
+[       OK ] OrcaOnlineSeats.EveryOnlineModeClearsTheRecordAndLocalVersusKeepsItsCpus (21 ms)
+[ RUN      ] OrcaOnlineSeats.AFriendsHumanStaysWhileTheyArePluggedIn
+[       OK ] OrcaOnlineSeats.AFriendsHumanStaysWhileTheyArePluggedIn (1 ms)
+[ RUN      ] OrcaOnlineSeats.ACpuPanelOnAnOnlineSelectBecomesEmpty
+[       OK ] OrcaOnlineSeats.ACpuPanelOnAnOnlineSelectBecomesEmpty (8 ms)
+[ RUN      ] OrcaOnlineSeats.AFriendWhoLeftIsTheGamesToEmpty
+[       OK ] OrcaOnlineSeats.AFriendWhoLeftIsTheGamesToEmpty (4 ms)
+[ RUN      ] OrcaOnlineSeats.WhichSeatsAreHidden
+[       OK ] OrcaOnlineSeats.WhichSeatsAreHidden (0 ms)
+[ RUN      ] OrcaOnlineSeats.TheQueuesOwnSelectShowsThePlayerAloneThenTheSearchingSeat
+[       OK ] OrcaOnlineSeats.TheQueuesOwnSelectShowsThePlayerAloneThenTheSearchingSeat (2 ms)
+[ RUN      ] OrcaOnlineSeats.AQueueRoomShowsBothPlayers
+[       OK ] OrcaOnlineSeats.AQueueRoomShowsBothPlayers (2 ms)
+[ RUN      ] OrcaOnlineSeats.WithFriendsShowsAFriendsPanelAsTheyPlugIn
+[       OK ] OrcaOnlineSeats.WithFriendsShowsAFriendsPanelAsTheyPlugIn (2 ms)
+[ RUN      ] OrcaOnlineSeats.ASelectThatStopsBeingOnlineShowsEveryPanelAgain
+[       OK ] OrcaOnlineSeats.ASelectThatStopsBeingOnlineShowsEveryPanelAgain (4 ms)
+[ RUN      ] OrcaOnlineSeats.OnlyModelsThisKnowsAreTouched
+[       OK ] OrcaOnlineSeats.OnlyModelsThisKnowsAreTouched (4 ms)
+[ RUN      ] OrcaOnlineSeats.APlayerTypeButtonNeverTakesAOnAnOnlineSelectWithoutAHeader
+[       OK ] OrcaOnlineSeats.APlayerTypeButtonNeverTakesAOnAnOnlineSelectWithoutAHeader (0 ms)
+[ RUN      ] OrcaOnlineSeats.TheGateKeepsAOffTheButtonsOnlyWhereItShould
+[       OK ] OrcaOnlineSeats.TheGateKeepsAOffTheButtonsOnlyWhereItShould (8 ms)
+[ RUN      ] OrcaOnlineSeats.InAMultiFriendRoomAHeldTokenCanReturnToItsOwnPanel
+[       OK ] OrcaOnlineSeats.InAMultiFriendRoomAHeldTokenCanReturnToItsOwnPanel (2 ms)
+[ RUN      ] OrcaOnlineSeats.ThePlayersOwnNameButtonAndItsListTakeA
+[       OK ] OrcaOnlineSeats.ThePlayersOwnNameButtonAndItsListTakeA (4 ms)
+[ RUN      ] OrcaOnlineSeats.APanelACpuLeftIsJoinedWithTheGamesOwnA
+[       OK ] OrcaOnlineSeats.APanelACpuLeftIsJoinedWithTheGamesOwnA (8 ms)
+[ RUN      ] OrcaOnlineSeats.PluggedInMemoryReadsTheFriendsBytes
+[       OK ] OrcaOnlineSeats.PluggedInMemoryReadsTheFriendsBytes (2 ms)
+[----------] 20 tests from OrcaOnlineSeats (91 ms total)
+
+[----------] 43 tests from OrcaQueue
+[ RUN      ] OrcaQueue.TheIdentityRoundTrips
+[       OK ] OrcaQueue.TheIdentityRoundTrips (0 ms)
+[ RUN      ] OrcaQueue.OnItsOwnCharacterSelectStartReadiesAndBUnreadies
+[       OK ] OrcaQueue.OnItsOwnCharacterSelectStartReadiesAndBUnreadies (0 ms)
+[ RUN      ] OrcaQueue.NeverReadyWithTheNameListOpen
+[       OK ] OrcaQueue.NeverReadyWithTheNameListOpen (0 ms)
+[ RUN      ] OrcaQueue.TheBThatStopsTheSearchIsSwallowedUntilLetGo
+[       OK ] OrcaQueue.TheBThatStopsTheSearchIsSwallowedUntilLetGo (0 ms)
+[ RUN      ] OrcaQueue.HoldingBWhileSearchingLeaves
+[       OK ] OrcaQueue.HoldingBWhileSearchingLeaves (0 ms)
+[ RUN      ] OrcaQueue.TheHoldBTipShowsOnce
+[       OK ] OrcaQueue.TheHoldBTipShowsOnce (0 ms)
+[ RUN      ] OrcaQueue.AStartHeldThroughTheWayBackIsSwallowedUntilLetGo
+[       OK ] OrcaQueue.AStartHeldThroughTheWayBackIsSwallowedUntilLetGo (0 ms)
+[ RUN      ] OrcaQueue.ItsOwnCharacterSelectsMasks
+[       OK ] OrcaQueue.ItsOwnCharacterSelectsMasks (0 ms)
+[ RUN      ] OrcaQueue.AOnBackWhileSearchingUnreadiesThenBacksOut
+[       OK ] OrcaQueue.AOnBackWhileSearchingUnreadiesThenBacksOut (0 ms)
+[ RUN      ] OrcaQueue.TheLogSaysWhyReadyDropped
+[       OK ] OrcaQueue.TheLogSaysWhyReadyDropped (0 ms)
+[ RUN      ] OrcaQueue.BothReadyGoOnAndPort1PressesStart
+[       OK ] OrcaQueue.BothReadyGoOnAndPort1PressesStart (0 ms)
+[ RUN      ] OrcaQueue.CasualTimeoutNamesWhoWasntReadyAndFreezes
+[       OK ] OrcaQueue.CasualTimeoutNamesWhoWasntReadyAndFreezes (0 ms)
+[ RUN      ] OrcaQueue.RankedTimeoutGoesOnWithThePicks
+[       OK ] OrcaQueue.RankedTimeoutGoesOnWithThePicks (0 ms)
+[ RUN      ] OrcaQueue.RankedLaterGamesWaitForTheCharacterOrder
+[       OK ] OrcaQueue.RankedLaterGamesWaitForTheCharacterOrder (0 ms)
+[ RUN      ] OrcaQueue.RankedLaterGamesGoOnTheMomentTheOrderHasBothLockIns
+[       OK ] OrcaQueue.RankedLaterGamesGoOnTheMomentTheOrderHasBothLockIns (0 ms)
+[ RUN      ] OrcaQueue.ALockedInPlayerKeepsTheirPickAndBUnlocks
+[       OK ] OrcaQueue.ALockedInPlayerKeepsTheirPickAndBUnlocks (0 ms)
+[ RUN      ] OrcaQueue.CasualLaterGamesWaitForBothStartsWithNoTimer
+[       OK ] OrcaQueue.CasualLaterGamesWaitForBothStartsWithNoTimer (0 ms)
+[ RUN      ] OrcaQueue.OnlyBothPlayersStartTheTimer
+[       OK ] OrcaQueue.OnlyBothPlayersStartTheTimer (0 ms)
+[ RUN      ] OrcaQueue.Game1PicksLockOnceIn
+[       OK ] OrcaQueue.Game1PicksLockOnceIn (0 ms)
+[ RUN      ] OrcaQueue.ThePort2PickIsSteeredIn
+[       OK ] OrcaQueue.ThePort2PickIsSteeredIn (0 ms)
+[ RUN      ] OrcaQueue.SteeringGivesUpAfterItsLimit
+[       OK ] OrcaQueue.SteeringGivesUpAfterItsLimit (0 ms)
+[ RUN      ] OrcaQueue.TheCostumeGivesUpAfterItsLimit
+[       OK ] OrcaQueue.TheCostumeGivesUpAfterItsLimit (0 ms)
+[ RUN      ] OrcaQueue.PortOnesColourIsAnyColour
+[       OK ] OrcaQueue.PortOnesColourIsAnyColour (0 ms)
+[ RUN      ] OrcaQueue.PortOnesOwnPickIsPutBackByItsOwnInputs
+[       OK ] OrcaQueue.PortOnesOwnPickIsPutBackByItsOwnInputs (0 ms)
+[ RUN      ] OrcaQueue.PortOnesOwnPickGivesUpAndNeedsAPick
+[       OK ] OrcaQueue.PortOnesOwnPickGivesUpAndNeedsAPick (0 ms)
+[ RUN      ] OrcaQueue.PortOnesOwnPickSteersOnlyOnTheRoomsFirstCharacterSelect
+[       OK ] OrcaQueue.PortOnesOwnPickSteersOnlyOnTheRoomsFirstCharacterSelect (0 ms)
+[ RUN      ] OrcaQueue.SteeringAimsAtThePick
+[       OK ] OrcaQueue.SteeringAimsAtThePick (0 ms)
+[ RUN      ] OrcaQueue.FixedPointIsTheFloatsValueTruncated
+[       OK ] OrcaQueue.FixedPointIsTheFloatsValueTruncated (11 ms)
+[ RUN      ] OrcaQueue.IntSqrtIsExact
+[       OK ] OrcaQueue.IntSqrtIsExact (5 ms)
+[ RUN      ] OrcaQueue.SteeringIsTheSameOnEveryHost
+[       OK ] OrcaQueue.SteeringIsTheSameOnEveryHost (0 ms)
+[ RUN      ] OrcaQueue.SteeringFollowsTheFloatFormula
+[       OK ] OrcaQueue.SteeringFollowsTheFloatFormula (8 ms)
+[ RUN      ] OrcaQueue.TheHandIsStillUnderAFrameOfCreep
+[       OK ] OrcaQueue.TheHandIsStillUnderAFrameOfCreep (0 ms)
+[ RUN      ] OrcaQueue.HoldingBSkipsOnce
+[       OK ] OrcaQueue.HoldingBSkipsOnce (0 ms)
+[ RUN      ] OrcaQueue.RankedHasNoSkip
+[       OK ] OrcaQueue.RankedHasNoSkip (0 ms)
+[ RUN      ] OrcaQueue.ZIsTheGamesOnEveryQueueSelect
+[       OK ] OrcaQueue.ZIsTheGamesOnEveryQueueSelect (0 ms)
+[ RUN      ] OrcaQueue.RandomIsAPickLikeAnyCharacter
+[       OK ] OrcaQueue.RandomIsAPickLikeAnyCharacter (0 ms)
+[ RUN      ] OrcaQueue.TheLatchKeepsTheRawButtons
+[       OK ] OrcaQueue.TheLatchKeepsTheRawButtons (0 ms)
+[ RUN      ] OrcaQueue.TheStateRoundTripsThroughTheBlock
+[       OK ] OrcaQueue.TheStateRoundTripsThroughTheBlock (0 ms)
+[ RUN      ] OrcaQueue.APickAimedAtAnotherSquareHoldsThePadUntilItsLimit
+[       OK ] OrcaQueue.APickAimedAtAnotherSquareHoldsThePadUntilItsLimit (0 ms)
+[ RUN      ] OrcaQueue.AHandOverTheCharacterTeachesItsPlace
+[       OK ] OrcaQueue.AHandOverTheCharacterTeachesItsPlace (0 ms)
+[ RUN      ] OrcaQueue.ATokenAlreadyDownTeachesNothing
+[       OK ] OrcaQueue.ATokenAlreadyDownTeachesNothing (0 ms)
+[ RUN      ] OrcaQueue.AnUnknownPlaceIsPublishedWithNoPick
+[       OK ] OrcaQueue.AnUnknownPlaceIsPublishedWithNoPick (0 ms)
+[ RUN      ] OrcaQueue.AfterARankedSetTheRoomsPlacementIsTheNextPicksPlace
+[       OK ] OrcaQueue.AfterARankedSetTheRoomsPlacementIsTheNextPicksPlace (0 ms)
+[----------] 43 tests from OrcaQueue (26 ms total)
+
+[----------] 16 tests from OrcaRankedSteps
+[ RUN      ] OrcaRankedSteps.PPlusGameOneIsOneTwoOneOnTheStartersFromTheCoin
+[       OK ] OrcaRankedSteps.PPlusGameOneIsOneTwoOneOnTheStartersFromTheCoin (0 ms)
+[ RUN      ] OrcaRankedSteps.PPlusLaterGamesWinnerStrikesTwoLoserPicksWithFullDsr
+[       OK ] OrcaRankedSteps.PPlusLaterGamesWinnerStrikesTwoLoserPicksWithFullDsr (0 ms)
+[ RUN      ] OrcaRankedSteps.BrawlBanIsOptionalMetaKnightAndIceClimbersClauses
+[       OK ] OrcaRankedSteps.BrawlBanIsOptionalMetaKnightAndIceClimbersClauses (0 ms)
+[ RUN      ] OrcaRankedSteps.TimerDefaultsTakeTheFirstStagesInListOrder
+[       OK ] OrcaRankedSteps.TimerDefaultsTakeTheFirstStagesInListOrder (0 ms)
+[ RUN      ] OrcaRankedSteps.CoinIsFairAndTheSameEverywhere
+[       OK ] OrcaRankedSteps.CoinIsFairAndTheSameEverywhere (0 ms)
+[ RUN      ] OrcaRankedSteps.CasualIsOnePreferStepForBothOnTheWholeList
+[       OK ] OrcaRankedSteps.CasualIsOnePreferStepForBothOnTheWholeList (0 ms)
+[ RUN      ] OrcaRankedSteps.AgreementIsLegalInPlayAndNotStruck
+[       OK ] OrcaRankedSteps.AgreementIsLegalInPlayAndNotStruck (0 ms)
+[ RUN      ] OrcaRankedSteps.CasualCoinIsTheSameEverywhereAndFair
+[       OK ] OrcaRankedSteps.CasualCoinIsTheSameEverywhereAndFair (0 ms)
+[ RUN      ] OrcaRankedSteps.ProgressCasualBothNameThenTheSameOrTheCoin
+[       OK ] OrcaRankedSteps.ProgressCasualBothNameThenTheSameOrTheCoin (0 ms)
+[ RUN      ] OrcaRankedSteps.CasualRandomIsThePortsSeededDrawAndStaysAMarker
+[       OK ] OrcaRankedSteps.CasualRandomIsThePortsSeededDrawAndStaysAMarker (0 ms)
+[ RUN      ] OrcaRankedSteps.RankedHasNoRandom
+[       OK ] OrcaRankedSteps.RankedHasNoRandom (0 ms)
+[ RUN      ] OrcaRankedSteps.CasualRandomIsTheSameOnBothMachines
+[       OK ] OrcaRankedSteps.CasualRandomIsTheSameOnBothMachines (0 ms)
+[ RUN      ] OrcaRankedSteps.ProgressDrivesGameOneOneTwoOneThenThePick
+[       OK ] OrcaRankedSteps.ProgressDrivesGameOneOneTwoOneThenThePick (0 ms)
+[ RUN      ] OrcaRankedSteps.ProgressTimersTakeTheDefaults
+[       OK ] OrcaRankedSteps.ProgressTimersTakeTheDefaults (0 ms)
+[ RUN      ] OrcaRankedSteps.ProgressLaterGamesBanIsOptionalAndThePickHasFullDsr
+[       OK ] OrcaRankedSteps.ProgressLaterGamesBanIsOptionalAndThePickHasFullDsr (0 ms)
+[ RUN      ] OrcaRankedSteps.ProgressMetaKnightClauseIsOnePickOfAnyLegalStage
+[       OK ] OrcaRankedSteps.ProgressMetaKnightClauseIsOnePickOfAnyLegalStage (0 ms)
+[----------] 16 tests from OrcaRankedSteps (1 ms total)
+
+[----------] 1 test from OrcaMatchBlock
+[ RUN      ] OrcaMatchBlock.RoundTripsAndWritesOnlyWhatChanged
+[       OK ] OrcaMatchBlock.RoundTripsAndWritesOnlyWhatChanged (0 ms)
+[----------] 1 test from OrcaMatchBlock (0 ms total)
+
+[----------] 17 tests from OrcaRankedPPlus
+[ RUN      ] OrcaRankedPPlus.PageZeroOfTheProposedPresetIsTheLegalList
+[       OK ] OrcaRankedPPlus.PageZeroOfTheProposedPresetIsTheLegalList (0 ms)
+[ RUN      ] OrcaRankedPPlus.NothingWithoutARankedBlock
+[       OK ] OrcaRankedPPlus.NothingWithoutARankedBlock (0 ms)
+[ RUN      ] OrcaRankedPPlus.PresetOutsideTheStageSelectOnly
+[       OK ] OrcaRankedPPlus.PresetOutsideTheStageSelectOnly (0 ms)
+[ RUN      ] OrcaRankedPPlus.CharacterSelectClearsALeftoverMyMusicStep
+[       OK ] OrcaRankedPPlus.CharacterSelectClearsALeftoverMyMusicStep (0 ms)
+[ RUN      ] OrcaRankedPPlus.GameOneStrikesInTurnsThenTheCoinPicks
+[       OK ] OrcaRankedPPlus.GameOneStrikesInTurnsThenTheCoinPicks (0 ms)
+[ RUN      ] OrcaRankedPPlus.BothProposingOneStageSkipsTheSteps
+[       OK ] OrcaRankedPPlus.BothProposingOneStageSkipsTheSteps (0 ms)
+[ RUN      ] OrcaRankedPPlus.TimersStrikeTheFirstStagesThenPickForThePlayer
+[       OK ] OrcaRankedPPlus.TimersStrikeTheFirstStagesThenPickForThePlayer (0 ms)
+[ RUN      ] OrcaRankedPPlus.TwoWinsTakeTheSetAndFreeTheStageSelect
+[       OK ] OrcaRankedPPlus.TwoWinsTakeTheSetAndFreeTheStageSelect (0 ms)
+[ RUN      ] OrcaRankedPPlus.AnOpponentWhoLeavesFreesTheStageSelect
+[       OK ] OrcaRankedPPlus.AnOpponentWhoLeavesFreesTheStageSelect (0 ms)
+[ RUN      ] OrcaRankedPPlus.OverlayLines
+[       OK ] OrcaRankedPPlus.OverlayLines (0 ms)
+[ RUN      ] OrcaRankedPPlus.CasualBothNameAStageAtOnce
+[       OK ] OrcaRankedPPlus.CasualBothNameAStageAtOnce (0 ms)
+[ RUN      ] OrcaRankedPPlus.CasualTwoStagesTheCoinAndTimeRunsOut
+[       OK ] OrcaRankedPPlus.CasualTwoStagesTheCoinAndTimeRunsOut (0 ms)
+[ RUN      ] OrcaRankedPPlus.CasualPickWaitsForTwoPlayers
+[       OK ] OrcaRankedPPlus.CasualPickWaitsForTwoPlayers (0 ms)
+[ RUN      ] OrcaRankedPPlus.CasualRandomOnTheRandomButton
+[       OK ] OrcaRankedPPlus.CasualRandomOnTheRandomButton (0 ms)
+[ RUN      ] OrcaRankedPPlus.CasualBothRandomPicksAtOnceAndARandomOutlastsTheTimer
+[       OK ] OrcaRankedPPlus.CasualBothRandomPicksAtOnceAndARandomOutlastsTheTimer (0 ms)
+[ RUN      ] OrcaRankedPPlus.RankedIgnoresRandomAndSaysItIsCasualOnly
+[       OK ] OrcaRankedPPlus.RankedIgnoresRandomAndSaysItIsCasualOnly (0 ms)
+[ RUN      ] OrcaRankedPPlus.AnAMashedOrHeldIntoTheStageSelectNamesNothing
+[       OK ] OrcaRankedPPlus.AnAMashedOrHeldIntoTheStageSelectNamesNothing (0 ms)
+[----------] 17 tests from OrcaRankedPPlus (6 ms total)
+
+[----------] 7 tests from OrcaRuleset
+[ RUN      ] OrcaRuleset.CompiledSchemaIsTheFile
+[       OK ] OrcaRuleset.CompiledSchemaIsTheFile (0 ms)
+[ RUN      ] OrcaRuleset.SchemaListsTheInterpretersKeywords
+[       OK ] OrcaRuleset.SchemaListsTheInterpretersKeywords (0 ms)
+[ RUN      ] OrcaRuleset.Vectors
+[       OK ] OrcaRuleset.Vectors (3 ms)
+[ RUN      ] OrcaRuleset.StrictJson
+[       OK ] OrcaRuleset.StrictJson (0 ms)
+[ RUN      ] OrcaRuleset.SchemaLintRefusesOutsideTheSubset
+[       OK ] OrcaRuleset.SchemaLintRefusesOutsideTheSubset (0 ms)
+[ RUN      ] OrcaRuleset.MismatchesNameThePath
+[       OK ] OrcaRuleset.MismatchesNameThePath (0 ms)
+[ RUN      ] OrcaRuleset.ReadingIsAPureFunction
+[       OK ] OrcaRuleset.ReadingIsAPureFunction (0 ms)
+[----------] 7 tests from OrcaRuleset (4 ms total)
+
+[----------] 3 tests from OrcaRulesets
+[ RUN      ] OrcaRulesets.BuiltinsAreTheOldTables
+[       OK ] OrcaRulesets.BuiltinsAreTheOldTables (0 ms)
+[ RUN      ] OrcaRulesets.CompiledInAreTheFiles
+[       OK ] OrcaRulesets.CompiledInAreTheFiles (0 ms)
+[ RUN      ] OrcaRulesets.StageIdsComeFromTheRuleset
+[       OK ] OrcaRulesets.StageIdsComeFromTheRuleset (0 ms)
+[----------] 3 tests from OrcaRulesets (0 ms total)
+
+[----------] 20 tests from OrcaBrawlStages
+[ RUN      ] OrcaBrawlStages.NothingWithoutARankedSet
+[       OK ] OrcaBrawlStages.NothingWithoutARankedSet (1 ms)
+[ RUN      ] OrcaBrawlStages.GameOneStrikesOnTheStageSelect
+[       OK ] OrcaBrawlStages.GameOneStrikesOnTheStageSelect (10 ms)
+[ RUN      ] OrcaBrawlStages.ThePickersAPicks
+[       OK ] OrcaBrawlStages.ThePickersAPicks (8 ms)
+[ RUN      ] OrcaBrawlStages.TheTimerCountsTheScreensFrames
+[       OK ] OrcaBrawlStages.TheTimerCountsTheScreensFrames (23 ms)
+[ RUN      ] OrcaBrawlStages.TheGameSeesNoPadWhileTheCursorsRunAndTheFlowPressesForIt
+[       OK ] OrcaBrawlStages.TheGameSeesNoPadWhileTheCursorsRunAndTheFlowPressesForIt (5 ms)
+[ RUN      ] OrcaBrawlStages.AgreementSkipsTheStepsButNeverTakesAStruckStage
+[       OK ] OrcaBrawlStages.AgreementSkipsTheStepsButNeverTakesAStruckStage (12 ms)
+[ RUN      ] OrcaBrawlStages.LaterGamesAgreementIgnoresDsrNotTheBan
+[       OK ] OrcaBrawlStages.LaterGamesAgreementIgnoresDsrNotTheBan (7 ms)
+[ RUN      ] OrcaBrawlStages.TheWinnerSkipsTheBanWithYAndBothAgree
+[       OK ] OrcaBrawlStages.TheWinnerSkipsTheBanWithYAndBothAgree (5 ms)
+[ RUN      ] OrcaBrawlStages.APageTurnGoesThroughThePageButton
+[       OK ] OrcaBrawlStages.APageTurnGoesThroughThePageButton (6 ms)
+[ RUN      ] OrcaBrawlStages.OnlyThePlayerWhoseStepItIsTurnsThePage
+[       OK ] OrcaBrawlStages.OnlyThePlayerWhoseStepItIsTurnsThePage (6 ms)
+[ RUN      ] OrcaBrawlStages.ResultsMakeTheSetAndLaterGamesBanThenPick
+[       OK ] OrcaBrawlStages.ResultsMakeTheSetAndLaterGamesBanThenPick (8 ms)
+[ RUN      ] OrcaBrawlStages.AFriendsGameClearsTheSet
+[       OK ] OrcaBrawlStages.AFriendsGameClearsTheSet (1 ms)
+[ RUN      ] OrcaBrawlStages.ATakenStageTheStepsDontAllowIsReplaced
+[       OK ] OrcaBrawlStages.ATakenStageTheStepsDontAllowIsReplaced (4 ms)
+[ RUN      ] OrcaBrawlStages.AStageTakenDuringStrikesTakesTheDefaults
+[       OK ] OrcaBrawlStages.AStageTakenDuringStrikesTakesTheDefaults (1 ms)
+[ RUN      ] OrcaBrawlStages.TheMatchBlocksHeaderTurnsTheFlowOn
+[       OK ] OrcaBrawlStages.TheMatchBlocksHeaderTurnsTheFlowOn (3 ms)
+[ RUN      ] OrcaBrawlStages.TheResultsTracksSetDrivesTheSteps
+[       OK ] OrcaBrawlStages.TheResultsTracksSetDrivesTheSteps (1 ms)
+[ RUN      ] OrcaBrawlStages.ANewStageSelectStartsTheStepsAgain
+[       OK ] OrcaBrawlStages.ANewStageSelectStartsTheStepsAgain (35 ms)
+[ RUN      ] OrcaBrawlStages.TheGamesCursorFollowsWhoeverMovedLast
+[       OK ] OrcaBrawlStages.TheGamesCursorFollowsWhoeverMovedLast (1 ms)
+[ RUN      ] OrcaBrawlStages.TheOverlaysTopLineHasTheSetTheTurnTheCountAndTheTime
+[       OK ] OrcaBrawlStages.TheOverlaysTopLineHasTheSetTheTurnTheCountAndTheTime (5 ms)
+[ RUN      ] OrcaBrawlStages.RankedIgnoresRandom
+[       OK ] OrcaBrawlStages.RankedIgnoresRandom (6 ms)
+[----------] 20 tests from OrcaBrawlStages (157 ms total)
+
+[----------] 4 tests from OrcaStageCursors
+[ RUN      ] OrcaStageCursors.TurnText
+[       OK ] OrcaStageCursors.TurnText (0 ms)
+[ RUN      ] OrcaStageCursors.TurnTextBothAtOnce
+[       OK ] OrcaStageCursors.TurnTextBothAtOnce (0 ms)
+[ RUN      ] OrcaStageCursors.TheLatchMovesEachCursorWithItsOwnStick
+[       OK ] OrcaStageCursors.TheLatchMovesEachCursorWithItsOwnStick (0 ms)
+[ RUN      ] OrcaStageCursors.EdgesAreSeenOnceAndTilesAreTheLayouts
+[       OK ] OrcaStageCursors.EdgesAreSeenOnceAndTilesAreTheLayouts (0 ms)
+[----------] 4 tests from OrcaStageCursors (0 ms total)
+
+[----------] 7 tests from OrcaBrawlCasual
+[ RUN      ] OrcaBrawlCasual.BothPickAtOnceTheSameStagePlays
+[       OK ] OrcaBrawlCasual.BothPickAtOnceTheSameStagePlays (8 ms)
+[ RUN      ] OrcaBrawlCasual.EitherPlayerTurnsThePage
+[       OK ] OrcaBrawlCasual.EitherPlayerTurnsThePage (5 ms)
+[ RUN      ] OrcaBrawlCasual.TwoStagesTheCoinTakesOneAndTimeRunsOut
+[       OK ] OrcaBrawlCasual.TwoStagesTheCoinTakesOneAndTimeRunsOut (14 ms)
+[ RUN      ] OrcaBrawlCasual.NoFinalDestinationForAnIceClimbersAndNothingAlone
+[       OK ] OrcaBrawlCasual.NoFinalDestinationForAnIceClimbersAndNothingAlone (3 ms)
+[ RUN      ] OrcaBrawlCasual.RandomIsAPickAndItsStageStaysHidden
+[       OK ] OrcaBrawlCasual.RandomIsAPickAndItsStageStaysHidden (11 ms)
+[ RUN      ] OrcaBrawlCasual.BothRandomPicksAtOnceAndARandomOutlastsTheTimer
+[       OK ] OrcaBrawlCasual.BothRandomPicksAtOnceAndARandomOutlastsTheTimer (13 ms)
+[ RUN      ] OrcaBrawlCasual.AnAMashedOrHeldIntoTheStageSelectNamesNothing
+[       OK ] OrcaBrawlCasual.AnAMashedOrHeldIntoTheStageSelectNamesNothing (32 ms)
+[----------] 7 tests from OrcaBrawlCasual (88 ms total)
+
+[----------] 36 tests from OrcaCharOrder
+[ RUN      ] OrcaCharOrder.StartsWithTheWinnerOnAProjectPlusLaterGame
+[       OK ] OrcaCharOrder.StartsWithTheWinnerOnAProjectPlusLaterGame (0 ms)
+[ RUN      ] OrcaCharOrder.NothingOnGameOneFriendsOrOffTheCharacterSelect
+[       OK ] OrcaCharOrder.NothingOnGameOneFriendsOrOffTheCharacterSelect (0 ms)
+[ RUN      ] OrcaCharOrder.PickerIsWhoseTurnItIs
+[       OK ] OrcaCharOrder.PickerIsWhoseTurnItIs (0 ms)
+[ RUN      ] OrcaCharOrder.PickerRibbonSaysWhoseTurnItIs
+[       OK ] OrcaCharOrder.PickerRibbonSaysWhoseTurnItIs (0 ms)
+[ RUN      ] OrcaCharOrder.StaleOrderClearsOnACharacterSelectItDoesNotApplyTo
+[       OK ] OrcaCharOrder.StaleOrderClearsOnACharacterSelectItDoesNotApplyTo (0 ms)
+[ RUN      ] OrcaCharOrder.WinnerLocksInWithStartThenTheLoser
+[       OK ] OrcaCharOrder.WinnerLocksInWithStartThenTheLoser (0 ms)
+[ RUN      ] OrcaCharOrder.RandomLocksInLikeAnyCharacter
+[       OK ] OrcaCharOrder.RandomLocksInLikeAnyCharacter (0 ms)
+[ RUN      ] OrcaCharOrder.APicksBTakesTheTokenUpAndNeitherLocksIn
+[       OK ] OrcaCharOrder.APicksBTakesTheTokenUpAndNeitherLocksIn (0 ms)
+[ RUN      ] OrcaCharOrder.BReachesTheGameOnlyAsAPressWithTheTokenDown
+[       OK ] OrcaCharOrder.BReachesTheGameOnlyAsAPressWithTheTokenDown (0 ms)
+[ RUN      ] OrcaCharOrder.EachPickTimesOutAfter45Seconds
+[       OK ] OrcaCharOrder.EachPickTimesOutAfter45Seconds (0 ms)
+[ RUN      ] OrcaCharOrder.GateMasksWhoseTurnItIsNot
+[       OK ] OrcaCharOrder.GateMasksWhoseTurnItIsNot (0 ms)
+[ RUN      ] OrcaCharOrder.DonePressesStartForTheLoserEveryOtherFrame
+[       OK ] OrcaCharOrder.DonePressesStartForTheLoserEveryOtherFrame (0 ms)
+[ RUN      ] OrcaCharOrder.LAndRAsEachPlayerLocksInAreHeldAsTheSelectEnds
+[       OK ] OrcaCharOrder.LAndRAsEachPlayerLocksInAreHeldAsTheSelectEnds (0 ms)
+[ RUN      ] OrcaCharOrder.LAndRAreKeptAtATimeOutAndAFreeWinnersEarlyLockIn
+[       OK ] OrcaCharOrder.LAndRAreKeptAtATimeOutAndAFreeWinnersEarlyLockIn (0 ms)
+[ RUN      ] OrcaCharOrder.GateIgnoresAStateTheMachineWouldClear
+[       OK ] OrcaCharOrder.GateIgnoresAStateTheMachineWouldClear (0 ms)
+[ RUN      ] OrcaCharOrder.LineSaysWhoseTurnAndTheTimeLeft
+[       OK ] OrcaCharOrder.LineSaysWhoseTurnAndTheTimeLeft (0 ms)
+[ RUN      ] OrcaCharOrder.StateBytesRoundTripAndWriteOnlyWhatDiffers
+[       OK ] OrcaCharOrder.StateBytesRoundTripAndWriteOnlyWhatDiffers (0 ms)
+[ RUN      ] OrcaCharOrder.MetaKnightClause
+[       OK ] OrcaCharOrder.MetaKnightClause (0 ms)
+[ RUN      ] OrcaCharOrder.TestKnob
+[       OK ] OrcaCharOrder.TestKnob (0 ms)
+[ RUN      ] OrcaCharOrder.TheOrderIsOneConstantWinnerFirstByDefault
+[       OK ] OrcaCharOrder.TheOrderIsOneConstantWinnerFirstByDefault (0 ms)
+[ RUN      ] OrcaCharOrder.FreeAsksTheLoserFirstAndTheWinnerMayLockInAnyTime
+[       OK ] OrcaCharOrder.FreeAsksTheLoserFirstAndTheWinnerMayLockInAnyTime (0 ms)
+[ RUN      ] OrcaCharOrder.FreeWinnerWhoWaitsGetsItsOwnTurn
+[       OK ] OrcaCharOrder.FreeWinnerWhoWaitsGetsItsOwnTurn (0 ms)
+[ RUN      ] OrcaCharOrder.FreeLine
+[       OK ] OrcaCharOrder.FreeLine (0 ms)
+[ RUN      ] OrcaCharOrder.ReadsTheSetFromTheMatchBlock
+[       OK ] OrcaCharOrder.ReadsTheSetFromTheMatchBlock (0 ms)
+[ RUN      ] OrcaCharOrder.DoneWithATokenStillInAHand
+[       OK ] OrcaCharOrder.DoneWithATokenStillInAHand (0 ms)
+[ RUN      ] OrcaCharOrder.ReadsTheCharacterSelect
+[       OK ] OrcaCharOrder.ReadsTheCharacterSelect (0 ms)
+[ RUN      ] OrcaCharOrder.OrderHoldsWhileAPlayerIsNotAHuman
+[       OK ] OrcaCharOrder.OrderHoldsWhileAPlayerIsNotAHuman (0 ms)
+[ RUN      ] OrcaCharOrder.LockedPortsFollowTheTurns
+[       OK ] OrcaCharOrder.LockedPortsFollowTheTurns (0 ms)
+[ RUN      ] OrcaCharOrder.ATokenParkedOffTheGridGoesBackAndDown
+[       OK ] OrcaCharOrder.ATokenParkedOffTheGridGoesBackAndDown (0 ms)
+[ RUN      ] OrcaCharOrder.AnchorsAreKeptOnlyOverACharacterWithTheTokenInHand
+[       OK ] OrcaCharOrder.AnchorsAreKeptOnlyOverACharacterWithTheTokenInHand (0 ms)
+[ RUN      ] OrcaCharOrder.NoCharacterAtTheAnchorSteersForTheMiddle
+[       OK ] OrcaCharOrder.NoCharacterAtTheAnchorSteersForTheMiddle (0 ms)
+[ RUN      ] OrcaCharOrder.ATokenStillInHandLongAfterBothTurnsIsANoShow
+[       OK ] OrcaCharOrder.ATokenStillInHandLongAfterBothTurnsIsANoShow (0 ms)
+[ RUN      ] OrcaCharOrder.EveryOtherFramePressesNeverStop
+[       OK ] OrcaCharOrder.EveryOtherFramePressesNeverStop (0 ms)
+[ RUN      ] OrcaCharOrder.AnchorBytesRoundTrip
+[       OK ] OrcaCharOrder.AnchorBytesRoundTrip (0 ms)
+[ RUN      ] OrcaCharOrder.TheSecondTurnWaitsForTheFirstPickToBeDown
+[       OK ] OrcaCharOrder.TheSecondTurnWaitsForTheFirstPickToBeDown (0 ms)
+[ RUN      ] OrcaCharOrder.FreeLosersTurnWaitsForItsTokenToo
+[       OK ] OrcaCharOrder.FreeLosersTurnWaitsForItsTokenToo (0 ms)
+[----------] 36 tests from OrcaCharOrder (0 ms total)
+
+[----------] 5 tests from OrcaCssTitle
+[ RUN      ] OrcaCssTitle.WhatTheTitleSays
+[       OK ] OrcaCssTitle.WhatTheTitleSays (5 ms)
+[ RUN      ] OrcaCssTitle.ThePickIsReadOnlyFromARunningVersus
+[       OK ] OrcaCssTitle.ThePickIsReadOnlyFromARunningVersus (0 ms)
+[ RUN      ] OrcaCssTitle.TheSlotIsTheTitlePalettesBackgroundEntry
+[       OK ] OrcaCssTitle.TheSlotIsTheTitlePalettesBackgroundEntry (0 ms)
+[ RUN      ] OrcaCssTitle.EveryMarkIsATransparentColourOfItsOwn
+[       OK ] OrcaCssTitle.EveryMarkIsATransparentColourOfItsOwn (0 ms)
+[ RUN      ] OrcaCssTitle.ApplyWritesTheMarkOnceAndGivesTheGamesTitleBack
+[       OK ] OrcaCssTitle.ApplyWritesTheMarkOnceAndGivesTheGamesTitleBack (1 ms)
+[----------] 5 tests from OrcaCssTitle (8 ms total)
+
+[----------] 6 tests from OrcaRelabel
+[ RUN      ] OrcaRelabel.TheMarksValues
+[       OK ] OrcaRelabel.TheMarksValues (0 ms)
+[ RUN      ] OrcaRelabel.StageTurnsAsTheLabelsNameThem
+[       OK ] OrcaRelabel.StageTurnsAsTheLabelsNameThem (0 ms)
+[ RUN      ] OrcaRelabel.ReadyToFightsMarkIsItsPalettesTransparentEntry
+[       OK ] OrcaRelabel.ReadyToFightsMarkIsItsPalettesTransparentEntry (0 ms)
+[ RUN      ] OrcaRelabel.NothingCalledForPutsTheGamesWordsBack
+[       OK ] OrcaRelabel.NothingCalledForPutsTheGamesWordsBack (0 ms)
+[ RUN      ] OrcaRelabel.TheStageSelectsTitleSaysTheMode
+[       OK ] OrcaRelabel.TheStageSelectsTitleSaysTheMode (0 ms)
+[ RUN      ] OrcaRelabel.StageSelectsStaleMarkGoesAndTheLegendIsProjectPlusOwn
+[       OK ] OrcaRelabel.StageSelectsStaleMarkGoesAndTheLegendIsProjectPlusOwn (0 ms)
+[----------] 6 tests from OrcaRelabel (2 ms total)
+
+[----------] 5 tests from OrcaSetEndRating
+[ RUN      ] OrcaSetEndRating.UpdatingUntilTheNewNumberThenGoneAfterTheWait
+[       OK ] OrcaSetEndRating.UpdatingUntilTheNewNumberThenGoneAfterTheWait (0 ms)
+[ RUN      ] OrcaSetEndRating.CountsFromOldToNewThenPopsAndSettles
+[       OK ] OrcaSetEndRating.CountsFromOldToNewThenPopsAndSettles (0 ms)
+[ RUN      ] OrcaSetEndRating.ALossCountsDownAndTheChangeIsNegative
+[       OK ] OrcaSetEndRating.ALossCountsDownAndTheChangeIsNegative (0 ms)
+[ RUN      ] OrcaSetEndRating.NoChangeOrNoNumberBeforeShowsAtOnceWithoutAnimation
+[       OK ] OrcaSetEndRating.NoChangeOrNoNumberBeforeShowsAtOnceWithoutAnimation (0 ms)
+[ RUN      ] OrcaSetEndRating.AnotherNumberCountsOnFromWhereTheCountStands
+[       OK ] OrcaSetEndRating.AnotherNumberCountsOnFromWhereTheCountStands (0 ms)
+[----------] 5 tests from OrcaSetEndRating (0 ms total)
+
+[----------] 7 tests from OrcaSetEndCountdown
+[ RUN      ] OrcaSetEndCountdown.SecondsLeftRoundUp
+[       OK ] OrcaSetEndCountdown.SecondsLeftRoundUp (0 ms)
+[ RUN      ] OrcaSetEndCountdown.ALeaveCountsTheRoomsGraceThenTheForfeitWinsTheSet
+[       OK ] OrcaSetEndCountdown.ALeaveCountsTheRoomsGraceThenTheForfeitWinsTheSet (0 ms)
+[ RUN      ] OrcaSetEndCountdown.AStallCountsTheSessionsLimitAndGoesIfTheyComeBack
+[       OK ] OrcaSetEndCountdown.AStallCountsTheSessionsLimitAndGoesIfTheyComeBack (0 ms)
+[ RUN      ] OrcaSetEndCountdown.ALeaveDuringAStallCountsFromTheLeave
+[       OK ] OrcaSetEndCountdown.ALeaveDuringAStallCountsFromTheLeave (0 ms)
+[ RUN      ] OrcaSetEndCountdown.BeforeTheFirstGameTheCountdownIsToNoContest
+[       OK ] OrcaSetEndCountdown.BeforeTheFirstGameTheCountdownIsToNoContest (0 ms)
+[ RUN      ] OrcaSetEndCountdown.BackInTheRoomTakesTheNoticeAway
+[       OK ] OrcaSetEndCountdown.BackInTheRoomTakesTheNoticeAway (0 ms)
+[ RUN      ] OrcaSetEndCountdown.OnlyMidRankedSet
+[       OK ] OrcaSetEndCountdown.OnlyMidRankedSet (0 ms)
+[----------] 7 tests from OrcaSetEndCountdown (0 ms total)
+
+[----------] 4 tests from OrcaSetEndPanel
+[ RUN      ] OrcaSetEndPanel.TheBlockOpensVictoryOnceAndTheRoomsRatingCountsIn
+[       OK ] OrcaSetEndPanel.TheBlockOpensVictoryOnceAndTheRoomsRatingCountsIn (0 ms)
+[ RUN      ] OrcaSetEndPanel.DefeatWithThePagesRatingAndNoneAfterTheWait
+[       OK ] OrcaSetEndPanel.DefeatWithThePagesRatingAndNoneAfterTheWait (0 ms)
+[ RUN      ] OrcaSetEndPanel.TheVerdictAloneOpensItAndAVoidSetSaysSo
+[       OK ] OrcaSetEndPanel.TheVerdictAloneOpensItAndAVoidSetSaysSo (0 ms)
+[ RUN      ] OrcaSetEndPanel.ANewMatchClearsEverything
+[       OK ] OrcaSetEndPanel.ANewMatchClearsEverything (0 ms)
+[----------] 4 tests from OrcaSetEndPanel (0 ms total)
+
+[----------] 3 tests from OrcaSetEndNotice
+[ RUN      ] OrcaSetEndNotice.LeavingARankedSetSaysItCountsAsALoss
+[       OK ] OrcaSetEndNotice.LeavingARankedSetSaysItCountsAsALoss (0 ms)
+[ RUN      ] OrcaSetEndNotice.LeavingBeforeTheFirstGameSaysItDoesNotCount
+[       OK ] OrcaSetEndNotice.LeavingBeforeTheFirstGameSaysItDoesNotCount (0 ms)
+[ RUN      ] OrcaSetEndNotice.CasualGamesAndTheOpponentLeaving
+[       OK ] OrcaSetEndNotice.CasualGamesAndTheOpponentLeaving (0 ms)
+[----------] 3 tests from OrcaSetEndNotice (0 ms total)
+
+[----------] 3 tests from OrcaSetEndSetOver
+[ RUN      ] OrcaSetEndSetOver.NothingIsAForfeitAndTheOpponentLeavingIsOnlyThat
+[       OK ] OrcaSetEndSetOver.NothingIsAForfeitAndTheOpponentLeavingIsOnlyThat (0 ms)
+[ RUN      ] OrcaSetEndSetOver.OnlyAfterTheRoomSaysSo
+[       OK ] OrcaSetEndSetOver.OnlyAfterTheRoomSaysSo (0 ms)
+[ RUN      ] OrcaSetEndSetOver.TheLeaveHintAndBsHold
+[       OK ] OrcaSetEndSetOver.TheLeaveHintAndBsHold (0 ms)
+[----------] 3 tests from OrcaSetEndSetOver (0 ms total)
+
+[----------] 1 test from OrcaSetEndDraw
+[ RUN      ] OrcaSetEndDraw.EveryScreenDrawsWithoutAnImGuiAssert
+[       OK ] OrcaSetEndDraw.EveryScreenDrawsWithoutAnImGuiAssert (16 ms)
+[----------] 1 test from OrcaSetEndDraw (16 ms total)
+
+[----------] 14 tests from OrcaNativeText
+[ RUN      ] OrcaNativeText.ReadsThePlatesAndTheRulesBarAsTheGameFormatsThem
+[       OK ] OrcaNativeText.ReadsThePlatesAndTheRulesBarAsTheGameFormatsThem (0 ms)
+[ RUN      ] OrcaNativeText.RejectsAnythingElse
+[       OK ] OrcaNativeText.RejectsAnythingElse (1 ms)
+[ RUN      ] OrcaNativeText.SetWordsKeepsTheCodesAndTheLength
+[       OK ] OrcaNativeText.SetWordsKeepsTheCodesAndTheLength (0 ms)
+[ RUN      ] OrcaNativeText.SetWordsNeverPassesTheCapacity
+[       OK ] OrcaNativeText.SetWordsNeverPassesTheCapacity (0 ms)
+[ RUN      ] OrcaNativeText.TextTheFontCanDraw
+[       OK ] OrcaNativeText.TextTheFontCanDraw (0 ms)
+[ RUN      ] OrcaNativeText.AFriendsRoomNamesItsPlayersOnTheirPlates
+[       OK ] OrcaNativeText.AFriendsRoomNamesItsPlayersOnTheirPlates (0 ms)
+[ RUN      ] OrcaNativeText.NothingOffTheCharacterSelect
+[       OK ] OrcaNativeText.NothingOffTheCharacterSelect (0 ms)
+[ RUN      ] OrcaNativeText.TheSameWordsOnBothMachines
+[       OK ] OrcaNativeText.TheSameWordsOnBothMachines (0 ms)
+[ RUN      ] OrcaNativeText.TheBandTakesTheTimerWhenItSaysLockIn
+[       OK ] OrcaNativeText.TheBandTakesTheTimerWhenItSaysLockIn (1 ms)
+[ RUN      ] OrcaNativeText.TheRulesBarFollowsTheQueue
+[       OK ] OrcaNativeText.TheRulesBarFollowsTheQueue (2 ms)
+[ RUN      ] OrcaNativeText.TheQueuesOwnCharacterSelect
+[       OK ] OrcaNativeText.TheQueuesOwnCharacterSelect (0 ms)
+[ RUN      ] OrcaNativeText.ProjectPlusKeepsItsRulesBar
+[       OK ] OrcaNativeText.ProjectPlusKeepsItsRulesBar (0 ms)
+[ RUN      ] OrcaNativeText.TheCharacterOrderAndTheSetInTheThirdPerson
+[       OK ] OrcaNativeText.TheCharacterOrderAndTheSetInTheThirdPerson (1 ms)
+[ RUN      ] OrcaNativeText.RecordingLabelsReplaceRealNames
+[       OK ] OrcaNativeText.RecordingLabelsReplaceRealNames (1 ms)
+[----------] 14 tests from OrcaNativeText (13 ms total)
+
+[----------] 7 tests from OrcaLayout
+[ RUN      ] OrcaLayout.NoHintIsTheWholeBackbuffer
+[       OK ] OrcaLayout.NoHintIsTheWholeBackbuffer (0 ms)
+[ RUN      ] OrcaLayout.ThePanelsCutKeepsThePictureWhereItWas
+[       OK ] OrcaLayout.ThePanelsCutKeepsThePictureWhereItWas (0 ms)
+[ RUN      ] OrcaLayout.PlacementInTheWholeWindowIsDolphins
+[       OK ] OrcaLayout.PlacementInTheWholeWindowIsDolphins (0 ms)
+[ RUN      ] OrcaLayout.TheBackbufferFollowsTheWindowLate
+[       OK ] OrcaLayout.TheBackbufferFollowsTheWindowLate (0 ms)
+[ RUN      ] OrcaLayout.TheHintIsScaledToTheBackbuffer
+[       OK ] OrcaLayout.TheHintIsScaledToTheBackbuffer (0 ms)
+[ RUN      ] OrcaLayout.AWindowOnlyOnTheBarDrawsNoPicture
+[       OK ] OrcaLayout.AWindowOnlyOnTheBarDrawsNoPicture (0 ms)
+[ RUN      ] OrcaLayout.VisiblePictureIsThePictureInTheWindow
+[       OK ] OrcaLayout.VisiblePictureIsThePictureInTheWindow (0 ms)
+[----------] 7 tests from OrcaLayout (0 ms total)
+
+[----------] 5 tests from OrcaPresentPacing
+[ RUN      ] OrcaPresentPacing.FollowsSteadyArrivalsNearTheirLatest
+[       OK ] OrcaPresentPacing.FollowsSteadyArrivalsNearTheirLatest (0 ms)
+[ RUN      ] OrcaPresentPacing.RareLateFramesMoveNothing
+[       OK ] OrcaPresentPacing.RareLateFramesMoveNothing (2 ms)
+[ RUN      ] OrcaPresentPacing.FrequentLateFramesAreAbsorbed
+[       OK ] OrcaPresentPacing.FrequentLateFramesAreAbsorbed (1 ms)
+[ RUN      ] OrcaPresentPacing.MovesAtMostItsStepPerFrame
+[       OK ] OrcaPresentPacing.MovesAtMostItsStepPerFrame (0 ms)
+[ RUN      ] OrcaPresentPacing.NeverWaitsPastTheDueTime
+[       OK ] OrcaPresentPacing.NeverWaitsPastTheDueTime (0 ms)
+[----------] 5 tests from OrcaPresentPacing (4 ms total)
+
+[----------] 27 tests from OrcaPerf
+[ RUN      ] OrcaPerf.WorkTakesOutSleepsAndWaits
+[       OK ] OrcaPerf.WorkTakesOutSleepsAndWaits (0 ms)
+[ RUN      ] OrcaPerf.PercentilesAreNearestRank
+[       OK ] OrcaPerf.PercentilesAreNearestRank (0 ms)
+[ RUN      ] OrcaPerf.CapIsWhatTheMachineCouldRunNotWhatItShowed
+[       OK ] OrcaPerf.CapIsWhatTheMachineCouldRunNotWhatItShowed (0 ms)
+[ RUN      ] OrcaPerf.ASlowMachineReadsUnder60
+[       OK ] OrcaPerf.ASlowMachineReadsUnder60 (0 ms)
+[ RUN      ] OrcaPerf.ReRunsCountAsTheMachinesWork
+[       OK ] OrcaPerf.ReRunsCountAsTheMachinesWork (0 ms)
+[ RUN      ] OrcaPerf.ReRunWorkLeavesItsWaitsOut
+[       OK ] OrcaPerf.ReRunWorkLeavesItsWaitsOut (0 ms)
+[ RUN      ] OrcaPerf.ReRunsOfAFrameThatDoesntCountAreLeftOutToo
+[       OK ] OrcaPerf.ReRunsOfAFrameThatDoesntCountAreLeftOutToo (0 ms)
+[ RUN      ] OrcaPerf.SessionWaitsAreNotWork
+[       OK ] OrcaPerf.SessionWaitsAreNotWork (0 ms)
+[ RUN      ] OrcaPerf.GpuShareIsReported
+[       OK ] OrcaPerf.GpuShareIsReported (0 ms)
+[ RUN      ] OrcaPerf.MenusAndTheMatchStartAreLeftOut
+[       OK ] OrcaPerf.MenusAndTheMatchStartAreLeftOut (0 ms)
+[ RUN      ] OrcaPerf.PausesHidingHoldsAndUnseenFramesAreLeftOut
+[       OK ] OrcaPerf.PausesHidingHoldsAndUnseenFramesAreLeftOut (0 ms)
+[ RUN      ] OrcaPerf.ACatchUpSpoilsTheNextFrame
+[       OK ] OrcaPerf.ACatchUpSpoilsTheNextFrame (0 ms)
+[ RUN      ] OrcaPerf.ModeFollowsThePeers
+[       OK ] OrcaPerf.ModeFollowsThePeers (0 ms)
+[ RUN      ] OrcaPerf.AWindowCountsWithEnoughFramesSoloOr1v1
+[       OK ] OrcaPerf.AWindowCountsWithEnoughFramesSoloOr1v1 (0 ms)
+[ RUN      ] OrcaPerf.TheSwitchFiresAfterFourSlowWindowsInARow
+[       OK ] OrcaPerf.TheSwitchFiresAfterFourSlowWindowsInARow (0 ms)
+[ RUN      ] OrcaPerf.MenusAndBigRoomsDontBreakTheRun
+[       OK ] OrcaPerf.MenusAndBigRoomsDontBreakTheRun (0 ms)
+[ RUN      ] OrcaPerf.AFastWindowPerformanceOrAChangeStartsOver
+[       OK ] OrcaPerf.AFastWindowPerformanceOrAChangeStartsOver (0 ms)
+[ RUN      ] OrcaPerf.AFineMachineWithDipsNeverSwitches
+[       OK ] OrcaPerf.AFineMachineWithDipsNeverSwitches (0 ms)
+[ RUN      ] OrcaPerf.TheSwitchReadsTheReferenceRerunLoad
+[       OK ] OrcaPerf.TheSwitchReadsTheReferenceRerunLoad (0 ms)
+[ RUN      ] OrcaPerf.ANormalPcAtOnlineLatencyNeverSwitches
+[       OK ] OrcaPerf.ANormalPcAtOnlineLatencyNeverSwitches (0 ms)
+[ RUN      ] OrcaPerf.ASlowMachineSwitchesWhateverItsRerunLoad
+[       OK ] OrcaPerf.ASlowMachineSwitchesWhateverItsRerunLoad (0 ms)
+[ RUN      ] OrcaPerf.ASlowMachineSwitchesInItsFirstMatch
+[       OK ] OrcaPerf.ASlowMachineSwitchesInItsFirstMatch (0 ms)
+[ RUN      ] OrcaPerf.TheLinesAreVersionedJson
+[       OK ] OrcaPerf.TheLinesAreVersionedJson (0 ms)
+[ RUN      ] OrcaPerf.TheInfoLineFitsThreeHundredBytes
+[       OK ] OrcaPerf.TheInfoLineFitsThreeHundredBytes (0 ms)
+[ RUN      ] OrcaPerf.NamesAreCleaned
+[       OK ] OrcaPerf.NamesAreCleaned (0 ms)
+[ RUN      ] OrcaPerf.GfxTakesOnlyItsOwnKeysAndRanges
+[       OK ] OrcaPerf.GfxTakesOnlyItsOwnKeysAndRanges (0 ms)
+[ RUN      ] OrcaPerf.ThePerformancePresetIsNativeWithoutScaledCopies
+[       OK ] OrcaPerf.ThePerformancePresetIsNativeWithoutScaledCopies (0 ms)
+[----------] 27 tests from OrcaPerf (0 ms total)
+
+[----------] 17 tests from OrcaGraphicsSettings
+[ RUN      ] OrcaGraphicsSettings.GameAffectingSettingsFromOutsideAreIgnored
+[       OK ] OrcaGraphicsSettings.GameAffectingSettingsFromOutsideAreIgnored (0 ms)
+[ RUN      ] OrcaGraphicsSettings.NoKeyboardOrUsbDeviceFromOutside
+[       OK ] OrcaGraphicsSettings.NoKeyboardOrUsbDeviceFromOutside (0 ms)
+[ RUN      ] OrcaGraphicsSettings.DrawingOnlySettingsAreThePlayers
+[       OK ] OrcaGraphicsSettings.DrawingOnlySettingsAreThePlayers (0 ms)
+[ RUN      ] OrcaGraphicsSettings.ShaderModesThatStallTheOtherPlayerAreRefused
+[       OK ] OrcaGraphicsSettings.ShaderModesThatStallTheOtherPlayerAreRefused (0 ms)
+[ RUN      ] OrcaGraphicsSettings.SyncUberIsRefusedToo
+[       OK ] OrcaGraphicsSettings.SyncUberIsRefusedToo (0 ms)
+[ RUN      ] OrcaGraphicsSettings.NothingPassedMeansWhatSessionsForcedBefore
+[       OK ] OrcaGraphicsSettings.NothingPassedMeansWhatSessionsForcedBefore (0 ms)
+[ RUN      ] OrcaGraphicsSettings.OneThreadIsThePlayersChoiceToo
+[       OK ] OrcaGraphicsSettings.OneThreadIsThePlayersChoiceToo (0 ms)
+[ RUN      ] OrcaGraphicsSettings.ThreadsOutsideTheAppsChoicesAreAuto
+[       OK ] OrcaGraphicsSettings.ThreadsOutsideTheAppsChoicesAreAuto (0 ms)
+[ RUN      ] OrcaGraphicsSettings.TheHighestLayerUnderTheSessionDecides
+[       OK ] OrcaGraphicsSettings.TheHighestLayerUnderTheSessionDecides (0 ms)
+[ RUN      ] OrcaGraphicsSettings.TheModeIsPinnedForTheRun
+[       OK ] OrcaGraphicsSettings.TheModeIsPinnedForTheRun (0 ms)
+[ RUN      ] OrcaGraphicsSettings.AnythingAboveTheSessionFailsTheBoot
+[       OK ] OrcaGraphicsSettings.AnythingAboveTheSessionFailsTheBoot (0 ms)
+[ RUN      ] OrcaGraphicsSettings.LiveChangesTouchOnlyDrawingSettings
+[       OK ] OrcaGraphicsSettings.LiveChangesTouchOnlyDrawingSettings (0 ms)
+[ RUN      ] OrcaGraphicsSettings.ResolutionChangesNeverReloadTheShaders
+[       OK ] OrcaGraphicsSettings.ResolutionChangesNeverReloadTheShaders (0 ms)
+[ RUN      ] OrcaGraphicsSettings.QueuedChangesKeepTheLastValuePerKey
+[       OK ] OrcaGraphicsSettings.QueuedChangesKeepTheLastValuePerKey (0 ms)
+[ RUN      ] OrcaGraphicsSettings.TheShippedProfilesForceNoLiveKey
+[       OK ] OrcaGraphicsSettings.TheShippedProfilesForceNoLiveKey (0 ms)
+[ RUN      ] OrcaGraphicsSettings.ThePerformancePresetIsRecognized
+[       OK ] OrcaGraphicsSettings.ThePerformancePresetIsRecognized (0 ms)
+[ RUN      ] OrcaGraphicsSettings.TheForcedListHoldsTheNewKeys
+[       OK ] OrcaGraphicsSettings.TheForcedListHoldsTheNewKeys (0 ms)
+[----------] 17 tests from OrcaGraphicsSettings (1 ms total)
+
+[----------] 18 tests from OrcaRumble
+[ RUN      ] OrcaRumble.TheMotorIsOutput1OfTheControllersDirectCommand
+[       OK ] OrcaRumble.TheMotorIsOutput1OfTheControllersDirectCommand (0 ms)
+[ RUN      ] OrcaRumble.TheLineNamesThePortTheStateAndTheDevice
+[       OK ] OrcaRumble.TheLineNamesThePortTheStateAndTheDevice (0 ms)
+[ RUN      ] OrcaRumble.OnAtOnceOffAfterThreeFramesOff
+[       OK ] OrcaRumble.OnAtOnceOffAfterThreeFramesOff (0 ms)
+[ RUN      ] OrcaRumble.ASteadyMotorIsSaidAgainEveryHalfSecond
+[       OK ] OrcaRumble.ASteadyMotorIsSaidAgainEveryHalfSecond (0 ms)
+[ RUN      ] OrcaRumble.TheGamesOnOffPatternsAreOneBuzz
+[       OK ] OrcaRumble.TheGamesOnOffPatternsAreOneBuzz (0 ms)
+[ RUN      ] OrcaRumble.NoRenewalWhileTheMotorIsOff
+[       OK ] OrcaRumble.NoRenewalWhileTheMotorIsOff (0 ms)
+[ RUN      ] OrcaRumble.AtMostTenOnLinesAndTwentyLinesASecond
+[       OK ] OrcaRumble.AtMostTenOnLinesAndTwentyLinesASecond (0 ms)
+[ RUN      ] OrcaRumble.AnOffNeverWaitsForTheGap
+[       OK ] OrcaRumble.AnOffNeverWaitsForTheGap (0 ms)
+[ RUN      ] OrcaRumble.TheNextHitAfterALongBuzzIsOnAtOnce
+[       OK ] OrcaRumble.TheNextHitAfterALongBuzzIsOnAtOnce (0 ms)
+[ RUN      ] OrcaRumble.NoRumbleWithoutTheFocus
+[       OK ] OrcaRumble.NoRumbleWithoutTheFocus (0 ms)
+[ RUN      ] OrcaRumble.NoAppDeviceNoRumble
+[       OK ] OrcaRumble.NoAppDeviceNoRumble (0 ms)
+[ RUN      ] OrcaRumble.AnotherDeviceMidBuzzIsSaid
+[       OK ] OrcaRumble.AnotherDeviceMidBuzzIsSaid (0 ms)
+[ RUN      ] OrcaRumble.AnOffDeviceChangeSaysNothing
+[       OK ] OrcaRumble.AnOffDeviceChangeSaysNothing (0 ms)
+[ RUN      ] OrcaRumble.ThePortFollowsTheLocalPlayer
+[       OK ] OrcaRumble.ThePortFollowsTheLocalPlayer (0 ms)
+[ RUN      ] OrcaRumble.AHaltSaysOffAtOnceAndOnlyOnce
+[       OK ] OrcaRumble.AHaltSaysOffAtOnceAndOnlyOnce (0 ms)
+[ RUN      ] OrcaRumble.NothingToHaltWhenOff
+[       OK ] OrcaRumble.NothingToHaltWhenOff (0 ms)
+[ RUN      ] OrcaRumble.NoLinesWithoutTheCap
+[       OK ] OrcaRumble.NoLinesWithoutTheCap (0 ms)
+[ RUN      ] OrcaRumble.NoAppDeviceBeforeTheAppsStream
+[       OK ] OrcaRumble.NoAppDeviceBeforeTheAppsStream (0 ms)
+[----------] 18 tests from OrcaRumble (0 ms total)
+
+[----------] 3 tests from OrcaDeviceBudget
+[ RUN      ] OrcaDeviceBudget.WhatTheGamesOpenIsAllowed
+[       OK ] OrcaDeviceBudget.WhatTheGamesOpenIsAllowed (0 ms)
+[ RUN      ] OrcaDeviceBudget.EverythingElseIsAbsent
+[       OK ] OrcaDeviceBudget.EverythingElseIsAbsent (0 ms)
+[ RUN      ] OrcaDeviceBudget.NandPathsAreNotDevices
+[       OK ] OrcaDeviceBudget.NandPathsAreNotDevices (0 ms)
+[----------] 3 tests from OrcaDeviceBudget (0 ms total)
+
+[----------] 5 tests from OrcaNandQuota
+[ RUN      ] OrcaNandQuota.AWriteThatWouldOverfillTheNandFails
+[       OK ] OrcaNandQuota.AWriteThatWouldOverfillTheNandFails (1 ms)
+[ RUN      ] OrcaNandQuota.FilesAlreadyThereCount
+[       OK ] OrcaNandQuota.FilesAlreadyThereCount (1 ms)
+[ RUN      ] OrcaNandQuota.NoQuotaOutsideASession
+[       OK ] OrcaNandQuota.NoQuotaOutsideASession (0 ms)
+[ RUN      ] OrcaNandQuota.RollingBackForgetsTheGrowth
+[       OK ] OrcaNandQuota.RollingBackForgetsTheGrowth (1 ms)
+[ RUN      ] OrcaNandQuota.TheJournalKeepsBoundedBytes
+[       OK ] OrcaNandQuota.TheJournalKeepsBoundedBytes (74 ms)
+[----------] 5 tests from OrcaNandQuota (79 ms total)
+
+[----------] 1 test from OrcaJitHookCompile
+[ RUN      ] OrcaJitHookCompile.ABlockTooBigForTheFreeSpaceIsDroppedNotACacheClear
+[       OK ] OrcaJitHookCompile.ABlockTooBigForTheFreeSpaceIsDroppedNotACacheClear (243 ms)
+[----------] 1 test from OrcaJitHookCompile (243 ms total)
+
+[----------] 1 test from OrcaEfbCopyBounds
+[ RUN      ] OrcaEfbCopyBounds.AStrideUnderARowCoversTheLastRow
+[       OK ] OrcaEfbCopyBounds.AStrideUnderARowCoversTheLastRow (0 ms)
+[----------] 1 test from OrcaEfbCopyBounds (0 ms total)
+
+[----------] 6 tests from OrcaVertexBounds
+[ RUN      ] OrcaVertexBounds.ReadsFollowTheVertexLayout
+[       OK ] OrcaVertexBounds.ReadsFollowTheVertexLayout (0 ms)
+[ RUN      ] OrcaVertexBounds.ThreeNormalIndicesReadThreeVectors
+[       OK ] OrcaVertexBounds.ThreeNormalIndicesReadThreeVectors (0 ms)
+[ RUN      ] OrcaVertexBounds.OffsetsMatchTheVertexSizeForEveryLayout
+[       OK ] OrcaVertexBounds.OffsetsMatchTheVertexSizeForEveryLayout (15 ms)
+[ RUN      ] OrcaVertexBounds.AnInvalidColorFormatCantBeChecked
+[       OK ] OrcaVertexBounds.AnInvalidColorFormatCantBeChecked (0 ms)
+[ RUN      ] OrcaVertexBounds.AnElementPastTheRoomDropsTheDraw
+[       OK ] OrcaVertexBounds.AnElementPastTheRoomDropsTheDraw (0 ms)
+[ RUN      ] OrcaVertexBounds.AByteBeforeRamIsOutsideItToo
+[       OK ] OrcaVertexBounds.AByteBeforeRamIsOutsideItToo (0 ms)
+[----------] 6 tests from OrcaVertexBounds (15 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1106 tests from 117 test suites ran. (126948 ms total)
+[  PASSED  ] 1085 tests.
+[  SKIPPED ] 21 tests, listed below:
+[  SKIPPED ] OrcaLive.TwoRoomsPlayEachOther
+[  SKIPPED ] OrcaLive.DirectLinkBetweenTwoRooms
+[  SKIPPED ] OrcaLive.ArrivalIsPendingUntilTaken
+[  SKIPPED ] OrcaLive.HostLeavingIsPendingUntilTaken
+[  SKIPPED ] OrcaLive.TestNetworkDelayHoldsMessages
+[  SKIPPED ] OrcaLive.BridgeMirrorsTheRoomAndTakesLeave
+[  SKIPPED ] OrcaLive.DifferentKeysAreRefusedWithAReason
+[  SKIPPED ] OrcaLive.DesyncIsReportedOnBothSides
+[  SKIPPED ] OrcaLive.AHostsMismatchReachesItsJoiner
+[  SKIPPED ] OrcaLive.ReturningPlayerIsGreetedAgain
+[  SKIPPED ] OrcaLive.HostSecondInItsRoomGivesItUp
+[  SKIPPED ] OrcaLive.HostComesBackToItsRoom
+[  SKIPPED ] OrcaLive.WaitingRoomStaysOpen
+[  SKIPPED ] OrcaLive.StdioBridgeMirrorsTheRoomAndTakesLeave
+[  SKIPPED ] OrcaLive.WebSocketReachesARoom
+[  SKIPPED ] OrcaDisc.TheRightDiscPasses
+[  SKIPPED ] OrcaDisc.BrawlRev1ReadsAsRev2
+[  SKIPPED ] OrcaMod.LauncherBootReadsRev1AsRev2
+[  SKIPPED ] OrcaUXLatency.BridgeTransport
+[  SKIPPED ] OrcaUXLatency.BoundaryInputAge
+[  SKIPPED ] OrcaKitDraw.DumpTheDemoForDesignChecks

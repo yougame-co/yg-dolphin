@@ -1,0 +1,5 @@
+PASS: Source/UnitTests/Core/Orca/KeyframeTest.cpp (-Werror object compile)
+PASS: Source/Core/Core/Orca/Games/Brawl/OnlineSeats.cpp (-Werror object compile)
+PASS: Source/UnitTests/Core/Orca/Games/Brawl/OnlineSeatsTest.cpp (-Werror object compile)
+PASS: Source/UnitTests/Core/Orca/ModTest.cpp (-Werror object compile)
+PASS: 4 translation units; touched headers checked through their includes.

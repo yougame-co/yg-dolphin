@@ -1,0 +1,324 @@
+CMake Warning (deprecated) at CMakeLists.txt:6 (cmake_policy):
+  The OLD behavior for policy CMP0080 will be removed from a future version
+  of CMake.
+
+  The cmake-policies(7) manual explains that the OLD behaviors of all
+  policies are deprecated and that a policy should be set to OLD only under
+  specific short-term circumstances.  Projects should be ported to the NEW
+  behavior and not rely on setting a policy to OLD.
+This warning is for project developers.  Use -Wno-author or -Wno-deprecated
+to suppress it.
+
+-- Using AppleClang 17.0.0.17000603
+-- Detected architecture: arm64
+-- Using named pipes as controller inputs
+-- Watching game memory for changes
+-- Using static FMT from Externals
+-- {fmt} version: 12.0.0
+-- Build type: Release
+-- Using static glslang from Externals
+-- Using system Iconv
+-- Using static pugixml from Externals
+-- Using static ENET from Externals
+-- Using static xxhash from Externals
+-- Using static BZip2 from Externals
+-- Using static LibLZMA from Externals
+-- Using static ZSTD from Externals
+-- ZSTD VERSION: 1.5.8
+-- CMAKE_INSTALL_PREFIX: /usr/local
+-- CMAKE_INSTALL_LIBDIR: lib
+-- ZSTD_LEGACY_SUPPORT enabled
+-- Multi-threading support enabled
+-- Using static ZLIB from Externals
+CMake Warning (deprecated) at Externals/zlib-ng/zlib-ng/CMakeLists.txt:1 (cmake_minimum_required):
+  Compatibility with CMake < 3.10 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value.  Or, use the <min>...<max> syntax
+  to tell CMake that the project requires at least <min> but has been updated
+  to work with policies introduced by <max> or earlier.
+This warning is for project developers.  Use -Wno-author or -Wno-deprecated
+to suppress it.
+
+-- Using CMake version 4.4.3
+-- ZLIB_HEADER_VERSION: 1.2.12
+-- ZLIBNG_HEADER_VERSION: 2.1.0.devel
+-- Arch detected: 'arm64'
+-- Basearch of 'arm64' has been detected as: 'arm'
+-- ARM floating point arch not auto-detected
+-- Architecture-specific source files: arch/arm/arm_features.c;arch/arm/crc32_acle.c;arch/arm/insert_string_acle.c;arch/arm/adler32_neon.c;arch/arm/chunkset_neon.c;arch/arm/compare256_neon.c;arch/arm/slide_hash_neon.c
+-- The following features have been enabled:
+
+ * CMAKE_BUILD_TYPE, Build type: Release (selected)
+ * ACLE_CRC, Support ACLE optimized CRC hash generation, using "-march=armv8-a+crc"
+ * NEON_ADLER32, Support NEON instructions in adler32, using "-mfpu=neon"
+ * NEON_SLIDEHASH, Support NEON instructions in slide_hash, using "-mfpu=neon"
+ * WITH_GZFILEOP, Compile with support for gzFile related functions
+ * ZLIB_COMPAT, Compile with zlib compatible API
+ * WITH_SANITIZER, Enable sanitizer support
+ * WITH_OPTIM, Build with optimisation
+ * WITH_NEW_STRATEGIES, Use new strategies
+ * WITH_ACLE, Build with ACLE
+ * WITH_NEON, Build with NEON intrinsics
+
+-- The following OPTIONAL packages have been found:
+
+ * PkgConfig
+ * OpenGL
+ * Iconv (required version >= 1.14)
+
+-- The following REQUIRED packages have been found:
+
+ * Threads
+
+-- The following features have been disabled:
+
+ * ZLIB_SYMBOL_PREFIX, Publicly exported symbols DO NOT have a custom prefix
+ * ZLIB_ENABLE_TESTS, Build test binaries
+ * WITH_FUZZERS, Build test/fuzz
+ * WITH_BENCHMARKS, Build test/benchmarks
+ * WITH_BENCHMARK_APPS, Build application benchmarks
+ * WITH_NATIVE_INSTRUCTIONS, Instruct the compiler to use the full instruction set on this host (gcc/clang -march=native)
+ * WITH_MAINTAINER_WARNINGS, Build with project maintainer warnings
+ * WITH_CODE_COVERAGE, Enable code coverage reporting
+ * WITH_INFLATE_STRICT, Build with strict inflate distance checking
+ * WITH_INFLATE_ALLOW_INVALID_DIST, Build with zero fill for inflate invalid distances
+ * INSTALL_UTILS, Copy minigzip and minideflate during install
+
+-- Using static minizip-ng from Externals
+-- Using CMake version 4.4.3
+-- Using LZMA
+-- Using ZSTD
+-- Using Iconv
+-- The following features have been enabled:
+
+ * CMAKE_BUILD_TYPE, Build type: Release (selected)
+ * ACLE_CRC, Support ACLE optimized CRC hash generation, using "-march=armv8-a+crc"
+ * NEON_ADLER32, Support NEON instructions in adler32, using "-mfpu=neon"
+ * NEON_SLIDEHASH, Support NEON instructions in slide_hash, using "-mfpu=neon"
+ * WITH_GZFILEOP, Compile with support for gzFile related functions
+ * ZLIB_COMPAT, Compile with zlib compatible API
+ * WITH_SANITIZER, Enable sanitizer support
+ * WITH_OPTIM, Build with optimisation
+ * WITH_NEW_STRATEGIES, Use new strategies
+ * WITH_ACLE, Build with ACLE
+ * WITH_NEON, Build with NEON intrinsics
+ * MZ_LZMA, Enables LZMA & XZ compression
+ * MZ_ZSTD, Enables ZSTD compression
+ * MZ_LIBCOMP, Enables Apple compression
+ * MZ_ICONV, Enables iconv string encoding conversion library
+
+-- The following features have been disabled:
+
+ * ZLIB_SYMBOL_PREFIX, Publicly exported symbols DO NOT have a custom prefix
+ * ZLIB_ENABLE_TESTS, Build test binaries
+ * WITH_FUZZERS, Build test/fuzz
+ * WITH_BENCHMARKS, Build test/benchmarks
+ * WITH_BENCHMARK_APPS, Build application benchmarks
+ * WITH_NATIVE_INSTRUCTIONS, Instruct the compiler to use the full instruction set on this host (gcc/clang -march=native)
+ * WITH_MAINTAINER_WARNINGS, Build with project maintainer warnings
+ * WITH_CODE_COVERAGE, Enable code coverage reporting
+ * WITH_INFLATE_STRICT, Build with strict inflate distance checking
+ * WITH_INFLATE_ALLOW_INVALID_DIST, Build with zero fill for inflate invalid distances
+ * INSTALL_UTILS, Copy minigzip and minideflate during install
+ * MZ_COMPAT, Enables compatibility layer
+ * MZ_ZLIB, Enables ZLIB compression
+ * MZ_BZIP2, Enables BZIP2 compression
+ * MZ_FETCH_LIBS, Enables fetching third-party libraries if not found
+ * MZ_FORCE_FETCH_LIBS, Enables fetching third-party libraries always
+ * MZ_PKCRYPT, Enables PKWARE traditional encryption
+ * MZ_WZAES, Enables WinZIP AES encryption
+ * MZ_OPENSSL, Enables OpenSSL for encryption
+ * MZ_LIBBSD, Builds with libbsd crypto random
+ * MZ_COMPRESS_ONLY, Only support compression
+ * MZ_DECOMPRESS_ONLY, Only support decompression
+ * MZ_FILE32_API, Builds using posix 32-bit file api
+ * MZ_BUILD_TESTS, Builds minizip test executable
+ * MZ_BUILD_UNIT_TESTS, Builds minizip unit test project
+ * MZ_BUILD_FUZZ_TESTS, Builds minizip fuzzer executables
+ * MZ_CODE_COVERAGE, Builds with code coverage flags
+
+-- Using static LZO from Externals
+-- Using static lz4 from Externals
+CMake Warning (deprecated) at Externals/lz4/lz4/build/cmake/CMakeLists.txt:13 (cmake_minimum_required):
+  Compatibility with CMake < 3.10 will be removed from a future version of
+  CMake.
+
+  Update the VERSION argument <min> value.  Or, use the <min>...<max> syntax
+  to tell CMake that the project requires at least <min> but has been updated
+  to work with policies introduced by <max> or earlier.
+This warning is for project developers.  Use -Wno-author or -Wno-deprecated
+to suppress it.
+
+-- Using static SPNG from Externals
+-- Using static FreeSurround from Externals
+-- Using ed25519 from Externals
+-- Using static CUBEB from Externals
+-- Checking for module 'speexdsp'
+--   Package 'speexdsp' not found
+-- Using static LibUSB from Externals
+-- Using static SDL3 from Externals
+--
+-- SDL3 was configured with the following options:
+--
+-- Platform: Darwin-25.3.0
+-- 64-bit:   TRUE
+-- Compiler: /usr/bin/cc
+-- Revision: SDL-3.4.12-f87239e
+-- Vendor:
+--
+-- Subsystems:
+--   Audio:    OFF
+--   Video:    OFF
+--   GPU:      OFF
+--   Render:   OFF
+--   Camera:   OFF
+--   Joystick: ON
+--   Haptic:   ON
+--   Hidapi:   ON
+--   Power:    ON
+--   Sensor:   ON
+--   Dialog:   OFF
+--   Tray:     OFF
+--
+-- Options:
+--   SDL_ALSA                    (Wanted: OFF): OFF
+--   SDL_ALSA_SHARED             (Wanted: OFF): OFF
+--   SDL_ALTIVEC                 (Wanted: OFF): OFF
+--   SDL_ARMNEON                 (Wanted: ON): ON
+--   SDL_ASAN                    (Wanted: OFF): OFF
+--   SDL_ASSEMBLY                (Wanted: ON): ON
+--   SDL_ASSERTIONS              (Wanted: auto): auto
+--   SDL_AVX                     (Wanted: OFF): OFF
+--   SDL_AVX2                    (Wanted: OFF): OFF
+--   SDL_AVX512F                 (Wanted: OFF): OFF
+--   SDL_BACKGROUNDING_SIGNAL    (Wanted: OFF): OFF
+--   SDL_CCACHE                  (Wanted: ON): ON
+--   SDL_CLANG_TIDY              (Wanted: OFF): OFF
+--   SDL_CLOCK_GETTIME           (Wanted: OFF): ON
+--   SDL_COCOA                   (Wanted: ON): OFF
+--   SDL_DBUS                    (Wanted: OFF): OFF
+--   SDL_DEPS_SHARED             (Wanted: ON): OFF
+--   SDL_DIRECTX                 (Wanted: OFF): OFF
+--   SDL_DISKAUDIO               (Wanted: OFF): OFF
+--   SDL_DLOPEN_NOTES            (Wanted: OFF): OFF
+--   SDL_DUMMYAUDIO              (Wanted: OFF): OFF
+--   SDL_DUMMYCAMERA             (Wanted: OFF): OFF
+--   SDL_DUMMYVIDEO              (Wanted: OFF): OFF
+--   SDL_EXAMPLES                (Wanted: OFF): OFF
+--   SDL_EXAMPLES_LINK_SHARED    (Wanted: OFF): OFF
+--   SDL_FOREGROUNDING_SIGNAL    (Wanted: OFF): OFF
+--   SDL_FRIBIDI                 (Wanted: OFF): OFF
+--   SDL_FRIBIDI_SHARED          (Wanted: OFF): OFF
+--   SDL_GCC_ATOMICS             (Wanted: ON): ON
+--   SDL_HIDAPI                  (Wanted: ON): ON
+--   SDL_HIDAPI_JOYSTICK         (Wanted: ON): ON
+--   SDL_HIDAPI_LIBUSB           (Wanted: ON): ON
+--   SDL_HIDAPI_LIBUSB_SHARED    (Wanted: OFF): OFF
+--   SDL_IBUS                    (Wanted: OFF): OFF
+--   SDL_INSTALL                 (Wanted: OFF): OFF
+--   SDL_INSTALL_TESTS           (Wanted: OFF): OFF
+--   SDL_JACK                    (Wanted: OFF): OFF
+--   SDL_JACK_SHARED             (Wanted: OFF): OFF
+--   SDL_KMSDRM                  (Wanted: OFF): OFF
+--   SDL_KMSDRM_SHARED           (Wanted: OFF): OFF
+--   SDL_LASX                    (Wanted: OFF): OFF
+--   SDL_LIBC                    (Wanted: ON): ON
+--   SDL_LIBICONV                (Wanted: OFF): OFF
+--   SDL_LIBTHAI                 (Wanted: OFF): OFF
+--   SDL_LIBTHAI_SHARED          (Wanted: OFF): OFF
+--   SDL_LIBUDEV                 (Wanted: ON): OFF
+--   SDL_LIBURING                (Wanted: OFF): OFF
+--   SDL_LSX                     (Wanted: OFF): OFF
+--   SDL_METAL                   (Wanted: ON): OFF
+--   SDL_MMX                     (Wanted: OFF): OFF
+--   SDL_OFFSCREEN               (Wanted: ON): OFF
+--   SDL_OPENGL                  (Wanted: OFF): OFF
+--   SDL_OPENGLES                (Wanted: OFF): OFF
+--   SDL_OPENVR                  (Wanted: OFF): OFF
+--   SDL_OSS                     (Wanted: OFF): OFF
+--   SDL_PIPEWIRE                (Wanted: OFF): OFF
+--   SDL_PIPEWIRE_SHARED         (Wanted: OFF): OFF
+--   SDL_PTHREADS                (Wanted: ON): ON
+--   SDL_PTHREADS_SEM            (Wanted: ON): ON
+--   SDL_PULSEAUDIO              (Wanted: OFF): OFF
+--   SDL_PULSEAUDIO_SHARED       (Wanted: OFF): OFF
+--   SDL_RENDER_D3D              (Wanted: OFF): OFF
+--   SDL_RENDER_D3D11            (Wanted: OFF): OFF
+--   SDL_RENDER_D3D12            (Wanted: OFF): OFF
+--   SDL_RENDER_GPU              (Wanted: OFF): OFF
+--   SDL_RENDER_METAL            (Wanted: OFF): OFF
+--   SDL_RENDER_VULKAN           (Wanted: OFF): OFF
+--   SDL_ROCKCHIP                (Wanted: OFF): OFF
+--   SDL_RPATH                   (Wanted: ON): OFF
+--   SDL_RPI                     (Wanted: OFF): OFF
+--   SDL_SNDIO                   (Wanted: OFF): OFF
+--   SDL_SNDIO_SHARED            (Wanted: OFF): OFF
+--   SDL_SSE                     (Wanted: OFF): OFF
+--   SDL_SSE2                    (Wanted: OFF): OFF
+--   SDL_SSE3                    (Wanted: OFF): OFF
+--   SDL_SSE4_1                  (Wanted: OFF): OFF
+--   SDL_SSE4_2                  (Wanted: OFF): OFF
+--   SDL_SYSTEM_ICONV            (Wanted: OFF): OFF
+--   SDL_TESTS                   (Wanted: OFF): OFF
+--   SDL_TESTS_LINK_SHARED       (Wanted: OFF): OFF
+--   SDL_UNINSTALL               (Wanted: OFF): OFF
+--   SDL_VIRTUAL_JOYSTICK        (Wanted: ON): ON
+--   SDL_VIVANTE                 (Wanted: OFF): OFF
+--   SDL_VULKAN                  (Wanted: OFF): OFF
+--   SDL_WASAPI                  (Wanted: OFF): OFF
+--   SDL_WAYLAND                 (Wanted: OFF): OFF
+--   SDL_WAYLAND_LIBDECOR        (Wanted: OFF): OFF
+--   SDL_WAYLAND_LIBDECOR_SHARED (Wanted: OFF): OFF
+--   SDL_WAYLAND_SHARED          (Wanted: OFF): OFF
+--   SDL_X11                     (Wanted: OFF): OFF
+--   SDL_X11_SHARED              (Wanted: OFF): OFF
+--   SDL_X11_XCURSOR             (Wanted: OFF): OFF
+--   SDL_X11_XDBE                (Wanted: OFF): OFF
+--   SDL_X11_XFIXES              (Wanted: OFF): OFF
+--   SDL_X11_XINPUT              (Wanted: OFF): OFF
+--   SDL_X11_XRANDR              (Wanted: OFF): OFF
+--   SDL_X11_XSCRNSAVER          (Wanted: OFF): OFF
+--   SDL_X11_XSHAPE              (Wanted: OFF): OFF
+--   SDL_X11_XSYNC               (Wanted: OFF): OFF
+--   SDL_X11_XTEST               (Wanted: OFF): OFF
+--   SDL_XINPUT                  (Wanted: OFF): OFF
+--
+--  Build Shared Library: OFF
+--  Build Static Library: ON
+--  Build libraries as Apple Framework: OFF
+--
+-- Enabled backends:
+--   Video drivers: dummy
+--   Render drivers:
+--   GPU drivers: disabled
+--   Audio drivers: dummy
+--   Joystick drivers: hidapi iokit mfi virtual
+--   Camera drivers: dummy
+--
+-- If something was not detected, although the libraries
+-- were installed, then make sure you have set the
+-- CMAKE_C_FLAGS and CMAKE_PREFIX_PATH CMake variables correctly.
+--
+-- Using static SFML from Externals
+-- Using static MBEDTLS from Externals
+-- Using static CURL from Externals
+-- Using CMake version 4.4.3
+-- curl version=[8.15.0-DEV]
+-- CMake platform flags: APPLE UNIX
+-- Picky compiler options: -Werror=partial-availability -Werror-implicit-function-declaration -Wextra -Wall -pedantic -Wbad-function-cast -Wconversion -Wmissing-declarations -Wmissing-prototypes -Wnested-externs -Wno-long-long -Wno-multichar -Wpointer-arith -Wshadow -Wsign-compare -Wundef -Wunused -Wwrite-strings -Waddress -Wattributes -Wcast-align -Wcast-qual -Wdeclaration-after-statement -Wdiv-by-zero -Wempty-body -Wendif-labels -Wfloat-equal -Wformat-security -Wignored-qualifiers -Wmissing-field-initializers -Wmissing-noreturn -Wno-format-nonliteral -Wno-sign-conversion -Wno-system-headers -Wold-style-definition -Wredundant-decls -Wstrict-prototypes -Wtype-limits -Wunreachable-code -Wunused-parameter -Wvla -Wshift-sign-overflow -Wshorten-64-to-32 -Wformat=2 -Wlanguage-extension-token -Wdouble-promotion -Wenum-conversion -Wheader-guard -Wpragmas -Wsometimes-uninitialized -Wunused-const-variable -Wcomma -Wmissing-variable-declarations -Wassign-enum -Wextra-semi-stmt -Wimplicit-fallthrough -Wxor-used-as-pow
+-- Protocols: http https ws wss
+-- Features: alt-svc AsynchDNS HTTPS-proxy IPv6 Largefile NTLM SSL threadsafe UnixSockets
+-- Enabled SSL backends: mbedTLS
+-- Using static HIDAPI from Externals
+-- Could NOT find SYSTEMD (missing: SYSTEMD_LIBRARIES SYSTEMD_INCLUDE_DIRS)
+-- libsystemd not found, disabling traversal server watchdog support
+-- Using static GTEST from Externals
+-- Cubeb found, enabling Cubeb sound backend
+-- Could NOT find ALSA (missing: ALSA_LIBRARY ALSA_INCLUDE_DIR)
+-- ALSA NOT found, disabling ALSA sound backend
+-- PulseAudio NOT found, disabling PulseAudio sound backend
+-- Orca flat bundles: no key (set ORCA_BUNDLE_PUBLIC_KEY): every bundle is refused
+-- Configuring done (1.7s)
+-- Generating done (0.4s)
+-- Build files have been written to: /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/build-orca-tests
