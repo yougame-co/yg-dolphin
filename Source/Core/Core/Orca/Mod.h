@@ -8,6 +8,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "Common/CommonTypes.h"
@@ -121,6 +122,21 @@ enum class Builtin : u8
 std::optional<Builtin> BuiltinFromName(std::string_view name);
 std::string_view BuiltinName(Builtin builtin);
 
+// Where pplusGuards may point, end exclusive: Project+'s codeset (NETBOOST.GCT) is read to
+// 0x80550010 (PPLUS32.patches), and nothing in the repo bounds its end, so the window stops below
+// Brawl's globals (0x805A0000). It bounds declarations, not the loaded file's length.
+inline constexpr std::pair<u32, u32> PPLUS_CODESET_REGION{0x80550010, 0x805A0000};
+// mod.json's pplusGuards (flat bundles, brawl-rev2-pplus only): the first word of each of Project+'s
+// three guard pairs (Mod.cpp PPLUS_GUARDS) in a fork's codeset. The words stay the engine's; the
+// defaults are Project+ v3.2's addresses, used when the key is absent.
+struct PPlusGuardAddresses
+{
+  u32 rss_exdata = 0x80553594;
+  u32 page_index = 0x80554320;
+  u32 current_page = 0x805518D0;
+  bool operator==(const PPlusGuardAddresses&) const = default;
+};
+
 struct KeptWord
 {
   u32 address = 0;
@@ -175,6 +191,7 @@ struct Manifest
   // <System>.<Section>.<Key> = value, keys from ForcedAllowlist() only, in key order.
   std::vector<std::pair<std::string, std::string>> forced;
   Builtin builtin = Builtin::None;
+  std::optional<PPlusGuardAddresses> pplus_guards;  // format 2, brawl-rev2-pplus only
   std::vector<std::string> rulesets;
   std::vector<std::string> offers;
   // Format 2 only. The listing the bundle is for (a YouGame slug: Orca refuses it under another
@@ -276,7 +293,8 @@ struct GuardWord
 };
 std::span<const GuardWord> BuiltinGuards(Builtin builtin);
 // Whether every guard word holds, reading memory through `read` (nullopt: not mapped).
-bool GuardsHold(Builtin builtin, const std::function<std::optional<u32>(u32)>& read);
+bool GuardsHold(Builtin builtin, const std::function<std::optional<u32>(u32)>& read,
+                const std::optional<PPlusGuardAddresses>& pplus_guards = std::nullopt);
 // Mod mode, on the CPU thread at every entry into the UX modules (the frame callback, with its
 // frame, and the input gate's source and latch): checks the active mod's guards against memory as
 // it is now. The modules run exactly while they hold, a pure function of memory on first runs and

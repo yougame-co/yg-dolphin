@@ -8,6 +8,7 @@
 #include <functional>
 #include <map>
 #include <optional>
+#include <regex>
 #include <span>
 #include <set>
 #include <string>
@@ -758,6 +759,136 @@ TEST(OrcaMod, GuardsAreNotOrcasOwnPatches)
       vanilla_only = true;
   }
   EXPECT_TRUE(vanilla_only);
+}
+
+namespace
+{
+std::string FlatPPlusGuards(const std::string& guards)
+{
+  picojson::value value;
+  picojson::parse(value, BRAWL_MOD);
+  auto& object = value.get<picojson::object>();
+  object["format"] = picojson::value(2.0);
+  object["listing"] = picojson::value("pplus-fork");
+  object["serial"] = picojson::value(1.0);
+  object["builtin"] = picojson::value("brawl-rev2-pplus");
+  picojson::value addresses;
+  EXPECT_EQ(picojson::parse(addresses, guards), "");
+  object["pplusGuards"] = addresses;
+  return value.serialize();
+}
+constexpr char PPLUS_EX_GUARDS[] =
+    R"({"rssExdata":"0x80551DD4","pageIndex":"0x80552B70","currentPage":"0x80552F90"})";
+}  // namespace
+
+TEST(OrcaMod, PPlusGuardAddressesAreValidated)
+{
+  std::string error;
+  const auto manifest = Orca::Mod::ParseManifest(FlatPPlusGuards(PPLUS_EX_GUARDS), &error);
+  ASSERT_TRUE(manifest) << error;
+  ASSERT_TRUE(manifest->pplus_guards);
+  EXPECT_EQ(*manifest->pplus_guards, (Orca::Mod::PPlusGuardAddresses{0x80551DD4, 0x80552B70, 0x80552F90}));
+  const auto defaults = Orca::Mod::ParseManifest(PPLUS_MOD, &error);
+  ASSERT_TRUE(defaults) << error;
+  EXPECT_FALSE(defaults->pplus_guards);
+  const auto words = Orca::Mod::BuiltinGuards(Builtin::BrawlRev2PPlus);
+  ASSERT_EQ(words.size(), 14u);
+  EXPECT_EQ(words[8].address, 0x80553594u);
+  EXPECT_EQ(words[10].address, 0x80554320u);
+  EXPECT_EQ(words[12].address, 0x805518D0u);
+  for (const char* invalid : {
+           R"(null)", R"({})",
+           R"({"rssExdata":"0x80551DD4","pageIndex":"0x80552B70"})",
+           R"({"rssExdata":"0x80551DD5","pageIndex":"0x80552B70","currentPage":"0x80552F90"})",
+           R"({"rssExdata":"0x8055000C","pageIndex":"0x80552B70","currentPage":"0x80552F90"})",
+           R"({"rssExdata":"0x8059FFFC","pageIndex":"0x80552B70","currentPage":"0x80552F90"})",
+           R"({"rssExdata":"0x805A0000","pageIndex":"0x80552B70","currentPage":"0x80552F90"})",
+           R"({"rssExdata":"0x90551DD4","pageIndex":"0x80552B70","currentPage":"0x80552F90"})",
+           R"({"rssExdata":"0x80551DD4","pageIndex":"0x80551DD4","currentPage":"0x80552F90"})",
+           R"({"rssExdata":"0x80551DD4","pageIndex":"0x80551DD8","currentPage":"0x80552F90"})",
+           R"({"rssExdata":"0x80551DD4","pageIndex":"0x80551DD0","currentPage":"0x80552F90"})",
+           R"({"rssExdata":"0x80551DD4","pageIndex":"0x80552B70","currentPage":"0x80552B74"})",
+           R"({"rssExdata":"0x80551DD4","pageIndex":"0x80552B70","currentPage":"0x80552F90","word":"0x1234"})"})
+  {
+    EXPECT_TRUE(Refused(FlatPPlusGuards(invalid))) << invalid;
+  }
+  EXPECT_TRUE(Orca::Mod::ParseManifest(FlatPPlusGuards(
+      R"({"rssExdata":"0x80550010","pageIndex":"0x80550018","currentPage":"0x8059FFF8"})"), &error)) << error;
+  picojson::value value;
+  picojson::parse(value, FlatPPlusGuards(PPLUS_EX_GUARDS));
+  auto& object = value.get<picojson::object>();
+  object["builtin"] = picojson::value("brawl-rev2");
+  EXPECT_FALSE(Orca::Mod::ParseManifest(value.serialize(), &error));
+  EXPECT_NE(error.find("requires builtin brawl-rev2-pplus"), std::string::npos);
+  object.erase("builtin");
+  object.erase("offers");
+  EXPECT_FALSE(Orca::Mod::ParseManifest(value.serialize(), &error));
+  EXPECT_NE(error.find("requires builtin brawl-rev2-pplus"), std::string::npos);
+  object["format"] = picojson::value(1.0);
+  object.erase("listing");
+  object.erase("serial");
+  object["builtin"] = picojson::value("brawl-rev2-pplus");
+  EXPECT_TRUE(Refused(value.serialize()));
+}
+
+TEST(OrcaMod, PPlusGuardsReadTheDeclaredPairs)
+{
+  std::string error;
+  const auto manifest = Orca::Mod::ParseManifest(FlatPPlusGuards(PPLUS_EX_GUARDS), &error);
+  ASSERT_TRUE(manifest) << error;
+  std::map<u32, u32> memory;
+  const auto guards = Orca::Mod::BuiltinGuards(Builtin::BrawlRev2PPlus);
+  for (size_t i = 0; i < 8; ++i)
+    memory[guards[i].address] = guards[i].word;
+  // Explicit fixture: no words at the P+ 3.2 codeset addresses.
+  memory.insert({{0x80551DD4, 0x3CA08042}, {0x80551DD8, 0x60A5C4E8},
+                 {0x80552B70, 0x3C608042}, {0x80552B74, 0x6063C821},
+                 {0x80552F90, 0x3E008049}, {0x80552F94, 0x62106000}});
+  size_t reads = 0;
+  const auto read = [&](u32 address) -> std::optional<u32> {
+    ++reads;
+    const auto it = memory.find(address);
+    return it == memory.end() ? std::nullopt : std::optional(it->second);
+  };
+  EXPECT_TRUE(Orca::Mod::GuardsHold(manifest->builtin, read, manifest->pplus_guards));
+  EXPECT_EQ(reads, 14u);
+  EXPECT_FALSE(Orca::Mod::GuardsHold(manifest->builtin, read));
+  for (auto& [address, word] : memory)
+  {
+    word ^= 1;
+    EXPECT_FALSE(Orca::Mod::GuardsHold(manifest->builtin, read, manifest->pplus_guards)) << std::hex << address;
+    word ^= 1;
+  }
+  memory.erase(0x80552F94);
+  EXPECT_FALSE(Orca::Mod::GuardsHold(manifest->builtin, read, manifest->pplus_guards));
+}
+
+TEST(OrcaMod, SchemaKnowsPPlusGuards)
+{
+  const picojson::value schema = ReadJson(RepoPath("Tools/orca/mods/mod.schema.json"));
+  std::vector<std::string> required;
+  for (const auto& key :
+       schema.get("properties").get("pplusGuards").get("required").get<picojson::array>())
+  {
+    required.push_back(key.get<std::string>());
+  }
+  EXPECT_EQ(required, (std::vector<std::string>{"rssExdata", "pageIndex", "currentPage"}));
+  // The address pattern accepts exactly what the engine accepts for one pair, the other two kept
+  // where they don't overlap it.
+  const std::regex pattern(
+      schema.get("$defs").get("pplusGuardWord").get("pattern").get<std::string>(),
+      std::regex::ECMAScript);
+  for (const char* address :
+       {"0x80550010", "0x80550014", "0x8055000C", "0x80550000", "0x8054FFFC", "0x80551DD4",
+        "0x80551dd4", "0X80551DD4", "0x80551DD6", "0x80551DD5", "0x80580000", "0x8059FFF8",
+        "0x8059fff8", "0x8059FFFC", "0x8059FFF4", "0x805A0000", "0x805A0004", "0x8155D000",
+        "0x0080551DD4", "0x551DD4", "80551DD4"})
+  {
+    const std::string json = FlatPPlusGuards(
+        fmt::format(R"({{"rssExdata":"{}","pageIndex":"0x80558000","currentPage":"0x80558010"}})",
+                    address));
+    EXPECT_EQ(std::regex_match(std::string(address), pattern), !Refused(json)) << address;
+  }
 }
 
 TEST(OrcaMod, Guards)

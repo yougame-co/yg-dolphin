@@ -281,7 +281,7 @@ only by `LoadModProfile` and `LoadFlatProfile`, or on `Mod::Requested()`).
   manager / g_GameGlobal / pad system loads, the message buffer's vtable; for `brawl-rev2` Brawl's
   word at 0x8001CD24, which Project+'s codes rewrite (not the v-sync call any more: since 0.3.33
   RSBE01.patches moves it as Project+ does; `OrcaMod.GuardsAreNotOrcasOwnPatches`); Project+'s stage select routines at 0x80553594, 0x80554320, 0x805518D0 for
-  `brawl-rev2-pplus`), checked against memory at every entry into the UX (frame callback, input gate
+  `brawl-rev2-pplus`, or where its `pplusGuards` puts them), checked against memory at every entry into the UX (frame callback, input gate
   source and latch). The modules run exactly while the words hold in memory, a pure function of
   memory on first runs and re-runs alike: Project+'s codes land in frame 1, so its guards hold from
   frame 2, and a joiner re-executing frame 1 from its own origin runs it with the modules off, as
@@ -295,6 +295,29 @@ only by `LoadModProfile` and `LoadFlatProfile`, or on `Mod::Requested()`).
   boots to the same origin as legacy; the menu itself is still read only while the guards hold, so
   a mod that moved what its builtin relies on gets no origin and takes no players, on every machine
   alike.
+- **P+ fork guards** (flat format 2 only): the listing owner may add
+  `"pplusGuards": {"rssExdata": "0x80551DD4", "pageIndex": "0x80552B70", "currentPage": "0x80552F90"}`
+  with `builtin: "brawl-rev2-pplus"` (Project+Ex 1.7's NETBOOST.GCT holds Project+ v3.2's three
+  lis/ori pairs there). Each address is the first word of its 8-byte pair, 4-byte aligned, in
+  `[0x80550010, 0x805A0000)` (`Mod::PPLUS_CODESET_REGION`: the codeset is read to 0x80550010 and
+  nothing in the repo bounds its end, so the window stops below Brawl's globals), and the pairs
+  don't overlap. The engine reads exactly those six words, no search; the words stay its own
+  constants. Without the key the v3.2 addresses apply, so Project+ v3.2's key and boot are
+  unchanged. The boot's `Orca mod: builtin ... on` / `failed` lines name the declared addresses,
+  and with the key a second line names the known limits below. The key moves the guards only:
+  - Code addresses in Project+ v3.2's own files: a pack's `.patches` replace PPLUS32.patches in mod
+    mode, and v3.2's BootToCSS group (`PPLUS32.patches:41-44`, `0x80559C20`-`0x80559C2C`, reached from
+    the hook at `0x806DD5F8`) and menu groups (`:62-168`, from `0x81179ED8`: P+'s menu module at
+    `0x81164C00`, Brawl's addresses + `0x1480`) are v3.2's; a fork's pack adapts its own copy (the
+    guarded groups simply don't land on other code). PPLUS32.jitwarm names v3.2's blocks, codeset
+    ones included (hash-checked, so a fork's pack ships its own seed or a stale one only warms less). No other engine code names a codeset address
+    (`PanicDiag.h`'s `0x80558678` is a crash example in a comment).
+  - Data stays v3.2's: RankedPPlus and the online rules read and write RSS_EXDATA (`0x8042C4E8`), its
+    page index (`0x8042C821`), the strike table, the current page (`0x80496000`) and the Code Menu
+    (`0x804E0000`-`0x804E2520`) at v3.2's layout. Known limits on a fork: the online rules write
+    v3.2's 2024 stage preset (`PPLUS_2024_RSS`) over the fork's RSS_EXDATA on a locked header's
+    character select, and lock the Code Menu only where v3.2's layout is found (`CodeMenuPresent`):
+    a fork with another Code Menu is not locked.
 - **Bundles**: `Tools/orca/mods/make-bundle.py RSBE01|PPLUS32 <out> [--pplus-user <release user/>]
   [--tree]` (no `tree.json` in a bundle; `--tree` makes a local run folder, `--tree <folder>` alone
   rewrites one). Brawl's run folder is 153 files, Project+'s 4,033 (3,878 on the card).
@@ -336,7 +359,7 @@ of an Orca release (`Core/Orca/Bundle.h`).
 
 | File | What |
 |---|---|
-| `mod.json` | format 2: as format 1, plus `listing` (the slug it is for) and `serial`, with `sdImage` `{file, bytes, sha256}` (the card used as it is), `patches` (file names, applied in order), `jitwarm`, `textures: "engine"` instead of `sd`. |
+| `mod.json` | format 2: as format 1, plus `listing` (the slug it is for) and `serial`, optional `pplusGuards` for P+ forks, with `sdImage` `{file, bytes, sha256}` (the card used as it is), `patches` (file names, applied in order), `jitwarm`, `textures: "engine"` instead of `sd`. |
 | `mod.sig` | `ed25519 <public key> <signature>`, lowercase hex, one line. |
 | the rest | exactly the files `mod.json` names: a launcher, the SD image, up to four `.patches`, a JIT seed. |
 

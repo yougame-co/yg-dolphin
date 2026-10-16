@@ -450,7 +450,8 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
       flat ? UnknownKey(o, {"format", "engine", "listing", "serial", "title", "disc", "launcher",
                             "sdImage", "patches", "jitwarm", "textures", "frameHook",
                             "bootNandFrame", "firstKeyframeFrame", "jitClearFrame", "keepGameCode",
-                            "saveTitle", "forced", "origin", "builtin", "rulesets", "offers"}) :
+                            "saveTitle", "forced", "origin", "builtin", "pplusGuards", "rulesets",
+                            "offers"}) :
              UnknownKey(o, {"format", "engine", "title", "disc", "launcher", "sd", "frameHook",
                             "bootNandFrame", "firstKeyframeFrame", "jitClearFrame", "keepGameCode",
                             "saveTitle", "forced", "origin", "builtin", "rulesets", "offers"});
@@ -752,6 +753,37 @@ std::optional<Manifest> ParseManifest(std::string_view json, std::string* error)
     if (m.disc_id != "RSBE01" || m.disc_revision != 2)
       return fail(fmt::format("builtin {} runs on RSBE01 revision 2 only", BuiltinName(*builtin)));
     m.builtin = *builtin;
+  }
+
+  // Only flat packs may relocate the three pairs; their instruction words stay engine constants.
+  if (const picojson::value* v = get("pplusGuards"))
+  {
+    if (m.builtin != Builtin::BrawlRev2PPlus)
+      return fail("pplusGuards requires builtin brawl-rev2-pplus");
+    if (!v->is<picojson::object>())
+      return fail("pplusGuards must be an object");
+    const auto& addresses = v->get<picojson::object>();
+    if (const auto key = UnknownKey(addresses, {"rssExdata", "pageIndex", "currentPage"}))
+      return fail(fmt::format("unknown key pplusGuards.{}", *key));
+    std::array<u32, 3> pairs{};
+    size_t index = 0;
+    for (const char* key : {"rssExdata", "pageIndex", "currentPage"})
+    {
+      const auto address = addresses.contains(key) ? HexWord(addresses.at(key)) : std::nullopt;
+      if (!address || !InMem1Word(*address) || *address < PPLUS_CODESET_REGION.first ||
+          *address > PPLUS_CODESET_REGION.second - 8)
+      {
+        return fail(fmt::format("pplusGuards.{} must start an aligned 8-byte pair in "
+                                "0x80550010-0x8059FFFF", key));
+      }
+      for (size_t previous = 0; previous < index; ++previous)
+      {
+        if (*address < pairs[previous] + 8 && pairs[previous] < *address + 8)
+          return fail("pplusGuards pairs must not overlap");
+      }
+      pairs[index++] = *address;
+    }
+    m.pplus_guards = PPlusGuardAddresses{pairs[0], pairs[1], pairs[2]};
   }
 
   if (m.origin && m.builtin != Builtin::None &&
@@ -1133,8 +1165,8 @@ constexpr auto BRAWL_REV2_GUARDS = std::to_array<GuardWord>({
 });
 // Project+ v3.2 adds its codeset's code that reads and writes the stage select data RankedPPlus and
 // the online rules use (Source/Netplay/Net-Random.asm: the data at 0x8042C4E8, its page index at
-// 0x8042C821, the current page at 0x80496000). A codeset built with those routines elsewhere loses
-// the builtin (phase 3's labels name them instead).
+// 0x8042C821, the current page at 0x80496000). Flat packs can relocate these instruction pairs
+// with pplusGuards; the referenced data and the exact instruction words stay the same.
 constexpr auto PPLUS_GUARDS = std::to_array<GuardWord>({
     {0x80553594, 0x3CA08042},  // lis r5,0x8042
     {0x80553598, 0x60A5C4E8},  // ori r5,r5,0xC4E8: the stage select data
@@ -1160,8 +1192,37 @@ constexpr std::array<GuardWord, A + B> Join(const std::array<GuardWord, A>& a,
   std::ranges::copy(b, all.begin() + A);
   return all;
 }
+// pplusGuards' defaults are these pairs' first words (Mod.h).
+static_assert(PPlusGuardAddresses{}.rss_exdata == PPLUS_GUARDS[0].address &&
+              PPlusGuardAddresses{}.page_index == PPLUS_GUARDS[2].address &&
+              PPlusGuardAddresses{}.current_page == PPLUS_GUARDS[4].address);
 constexpr auto VANILLA_BRAWL_GUARDS = Join(BRAWL_REV2_GUARDS, VANILLA_GUARDS);
 constexpr auto BRAWL_REV2_PPLUS_GUARDS = Join(BRAWL_REV2_GUARDS, PPLUS_GUARDS);
+
+u32 GuardAddress(Builtin builtin, u32 address, const std::optional<PPlusGuardAddresses>& declared)
+{
+  if (builtin != Builtin::BrawlRev2PPlus || !declared)
+    return address;
+  const std::array<u32, 3> pairs{declared->rss_exdata, declared->page_index, declared->current_page};
+  for (size_t i = 0; i < pairs.size(); ++i)
+  {
+    const u32 base = PPLUS_GUARDS[2 * i].address;
+    if (address == base || address == base + 4)
+      return pairs[i] + (address - base);
+  }
+  return address;
+}
+
+std::string BuiltinLogName(const Manifest& manifest)
+{
+  if (const auto& addresses = manifest.pplus_guards)
+  {
+    return fmt::format("{} (pplusGuards rssExdata={:#010x} pageIndex={:#010x} currentPage={:#010x})",
+                       BuiltinName(manifest.builtin), addresses->rss_exdata,
+                       addresses->page_index, addresses->current_page);
+  }
+  return std::string(BuiltinName(manifest.builtin));
+}
 }  // namespace
 
 std::span<const GuardWord> BuiltinGuards(Builtin builtin)
@@ -1177,13 +1238,14 @@ std::span<const GuardWord> BuiltinGuards(Builtin builtin)
   }
 }
 
-bool GuardsHold(Builtin builtin, const std::function<std::optional<u32>(u32)>& read)
+bool GuardsHold(Builtin builtin, const std::function<std::optional<u32>(u32)>& read,
+                const std::optional<PPlusGuardAddresses>& pplus_guards)
 {
   if (builtin == Builtin::None)
     return false;
   for (const GuardWord& g : BuiltinGuards(builtin))
   {
-    if (read(g.address) != g.word)
+    if (read(GuardAddress(builtin, g.address, pplus_guards)) != g.word)
       return false;
   }
   return true;
@@ -1201,19 +1263,20 @@ std::atomic<int> s_guards{-1};
 std::atomic<bool> s_guards_failed{false};
 std::atomic<bool> s_held_once{false};
 
-void LogFirstBrokenGuard(const Core::CPUThreadGuard& guard, Builtin builtin)
+void LogFirstBrokenGuard(const Core::CPUThreadGuard& guard, const Manifest& manifest)
 {
-  for (const GuardWord& g : BuiltinGuards(builtin))
+  for (const GuardWord& g : BuiltinGuards(manifest.builtin))
   {
-    const u32 word = PowerPC::MMU::HostIsRAMAddress(guard, g.address) ?
-                         PowerPC::MMU::HostRead<u32>(guard, g.address) :
+    const u32 address = GuardAddress(manifest.builtin, g.address, manifest.pplus_guards);
+    const u32 word = PowerPC::MMU::HostIsRAMAddress(guard, address) ?
+                         PowerPC::MMU::HostRead<u32>(guard, address) :
                          0;
     if (word != g.word)
     {
       WARN_LOG_FMT(BOOT,
                    "Orca mod: builtin {} failed: {:08x} holds {:08x}, not {:08x} (this mod's code "
                    "moved what the builtin's modules rely on; its caps are withdrawn)",
-                   BuiltinName(builtin), g.address, word, g.word);
+                   BuiltinLogName(manifest), address, word, g.word);
       return;
     }
   }
@@ -1244,14 +1307,24 @@ void RefreshGuards(const Core::CPUThreadGuard& guard, std::optional<int> frame)
     if (!PowerPC::MMU::HostIsRAMAddress(guard, address))
       return std::nullopt;
     return PowerPC::MMU::HostRead<u32>(guard, address);
-  });
+  }, mod->manifest.pplus_guards);
   // Logged once each per boot: memory may go back and forth (a join's replay of frame 1).
   const bool held_before = s_held_once, failed_before = s_guards_failed;
   NoteGuards(held, frame);
   if (!held_before && s_held_once)
-    NOTICE_LOG_FMT(BOOT, "Orca mod: builtin {} on (its guard words hold)", BuiltinName(builtin));
+  {
+    NOTICE_LOG_FMT(BOOT, "Orca mod: builtin {} on (its guard words hold)",
+                   BuiltinLogName(mod->manifest));
+    // pplusGuards moves the guards only (ORCA.md "P+ fork guards"): the data stays v3.2's.
+    if (mod->manifest.pplus_guards)
+    {
+      WARN_LOG_FMT(BOOT, "Orca mod: pplusGuards: known limits on a fork: a locked header's "
+                         "character select writes Project+ v3.2's stage preset to 0x8042C4E8, and "
+                         "the Code Menu is locked only where v3.2's layout is found");
+    }
+  }
   if (!failed_before && s_guards_failed)
-    LogFirstBrokenGuard(guard, builtin);
+    LogFirstBrokenGuard(guard, mod->manifest);
 }
 
 void NoteGuards(bool held, std::optional<int> frame)
