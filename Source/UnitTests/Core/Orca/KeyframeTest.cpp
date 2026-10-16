@@ -1369,6 +1369,32 @@ TEST(OrcaReplayStream, RefusesDamageGapsAndOtherVersions)
   }
 }
 
+// The servers parse the container and refuse any version but 1 (rooms/src/replay-stream.ts, the
+// site's api/replays/orca and tournament-replay-body.ts). 0.3.46 wrote 2 and no recording was
+// ever handed off; raise this only together with all three.
+TEST(OrcaReplayStream, ContainerVersionIsTheOneTheServersAccept)
+{
+  const std::vector<u8> header = PackReplayStreamHeader(StreamInfo());
+  ASSERT_GE(header.size(), 12u);
+  EXPECT_EQ(std::string(header.begin(), header.begin() + 4), "YGRS");
+  EXPECT_EQ(header[4] | header[5] << 8 | header[6] << 16 | header[7] << 24, 1);
+}
+
+// The site rebuilds a tournament download's header with "v":1; the same build's stream still plays.
+TEST(OrcaReplayStream, ReadsAHeaderTheSiteRebuilt)
+{
+  const auto replay = Replay(30, 0);
+  const std::vector<u8> good = Stream(replay, 10);
+  std::string bytes(good.begin(), good.end());
+  const size_t at = bytes.find("\"v\":2");
+  ASSERT_NE(at, std::string::npos);
+  bytes[at + 4] = '1';
+  std::string error;
+  ReplayStreamReader reader("orca2:test");
+  EXPECT_TRUE(reader.Feed(reinterpret_cast<const u8*>(bytes.data()), bytes.size(), &error)) << error;
+  EXPECT_EQ(reader.Archive().frames.size(), 30u);
+}
+
 // A player only reads a stream of its own build: another build's is refused at the header, before
 // any frame of it is decoded.
 TEST(OrcaReplayStream, RefusesAnotherBuildBeforeItsFrames)

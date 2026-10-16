@@ -88,9 +88,11 @@ def read(path):
     if data[:4] != STREAM_MAGIC:
         raise ValueError("not a replay stream")
     version, size = struct.unpack("<II", data[4:12])
-    if version != 2:
+    if version != 1:
         raise ValueError(f"version {version}")
     s.info = json.loads(data[12:12 + size])
+    # The frame layout is the header's "v" (2 = ORP3), but the site rewrites a tournament
+    # download's to 1: this tool reads only 0.3.46+ recordings (compat 31 and up).
     pos = 12 + size
     while len(data) - pos >= PREAMBLE:
         if data[pos:pos + 4] != CHUNK_MAGIC:

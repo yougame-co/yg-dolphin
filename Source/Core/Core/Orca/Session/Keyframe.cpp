@@ -524,7 +524,15 @@ namespace
 {
 constexpr char STREAM_MAGIC[4] = {'Y', 'G', 'R', 'S'};
 constexpr char CHUNK_MAGIC[4] = {'Y', 'G', 'R', 'C'};
-constexpr u32 STREAM_VERSION = 2;
+// The container's version: the preamble, the header and the chunk framing. The rooms Worker
+// (rooms/src/replay-stream.ts) and the site (api/replays/orca, tournament-replay-body.ts) refuse
+// any other, so it changes only together with them. 0.3.46 raised it with the frame layout and no
+// recording reached a server.
+constexpr u32 STREAM_VERSION = 1;
+// The layout of the frames inside the chunks, written as the header's "v" for tools: 2 is ORP3,
+// with tag assignments. The reader doesn't check it: the site rebuilds a tournament download's
+// header with "v":1, and the compat key (it carries the git revision) already keeps builds apart.
+constexpr u32 FRAME_LAYOUT = 2;
 constexpr u32 MAX_STREAM_HEADER = 16u << 10;
 // A chunk holds at most a minute of frames and 8 MB compressed.
 constexpr u32 MAX_CHUNK_FRAMES = 3600;
@@ -575,7 +583,7 @@ u64 GetU64(const u8* p)
 std::vector<u8> PackReplayStreamHeader(const ReplayStreamInfo& info)
 {
   picojson::object o;
-  o["v"] = picojson::value(static_cast<double>(STREAM_VERSION));
+  o["v"] = picojson::value(static_cast<double>(FRAME_LAYOUT));
   o["compat"] = picojson::value(info.compat);
   o["build"] = picojson::value(info.build);
   o["game"] = picojson::value(info.game_id);
