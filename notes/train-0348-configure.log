@@ -1,0 +1,373 @@
+CMake Warning (deprecated) at CMakeLists.txt:6 (cmake_policy):
+  The OLD behavior for policy CMP0080 will be removed from a future version
+  of CMake.
+
+  The cmake-policies(7) manual explains that the OLD behaviors of all
+  policies are deprecated and that a policy should be set to OLD only under
+  specific short-term circumstances.  Projects should be ported to the NEW
+  behavior and not rely on setting a policy to OLD.
+This warning is for project developers.  Use -Wno-author or -Wno-deprecated
+to suppress it.
+
+-- The C compiler identification is AppleClang 17.0.0.17000603
+-- The CXX compiler identification is AppleClang 17.0.0.17000603
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /usr/bin/cc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Using AppleClang 17.0.0.17000603
+-- Looking for _GLIBCXX_RELEASE
+-- Looking for _GLIBCXX_RELEASE - not found
+-- Looking for _LIBCPP_VERSION
+-- Looking for _LIBCPP_VERSION - found
+-- Performing Test HAS_MINIMUM_LLVM_libc++
+-- Performing Test HAS_MINIMUM_LLVM_libc++ - Success
+-- The OBJC compiler identification is AppleClang 17.0.0.17000603
+-- Detecting OBJC compiler ABI info
+-- Detecting OBJC compiler ABI info - done
+-- Check for working OBJC compiler: /usr/bin/clang - skipped
+-- The OBJCXX compiler identification is AppleClang 17.0.0.17000603
+-- Detecting OBJCXX compiler ABI info
+-- Detecting OBJCXX compiler ABI info - done
+-- Check for working OBJCXX compiler: /usr/bin/clang++ - skipped
+-- Detected architecture: arm64
+-- Performing Test FLAG_C_HAVE_ARCH_ARMV8
+-- Performing Test FLAG_C_HAVE_ARCH_ARMV8 - Success
+-- Performing Test FLAG_CXX_HAVE_ARCH_ARMV8
+-- Performing Test FLAG_CXX_HAVE_ARCH_ARMV8 - Success
+-- Performing Test FLAG_C_DIAGNOSTICS_COLOR
+-- Performing Test FLAG_C_DIAGNOSTICS_COLOR - Success
+-- Performing Test FLAG_CXX_DIAGNOSTICS_COLOR
+-- Performing Test FLAG_CXX_DIAGNOSTICS_COLOR - Success
+-- Performing Test FLAG_C_NO_STRICT_ALIASING
+-- Performing Test FLAG_C_NO_STRICT_ALIASING - Success
+-- Performing Test FLAG_CXX_NO_STRICT_ALIASING
+-- Performing Test FLAG_CXX_NO_STRICT_ALIASING - Success
+-- Performing Test FLAG_C_NO_EXCEPTIONS
+-- Performing Test FLAG_C_NO_EXCEPTIONS - Success
+-- Performing Test FLAG_CXX_NO_EXCEPTIONS
+-- Performing Test FLAG_CXX_NO_EXCEPTIONS - Success
+-- Performing Test FLAG_C_VISIBILITY_INLINES_HIDDEN
+-- Performing Test FLAG_C_VISIBILITY_INLINES_HIDDEN - Success
+-- Performing Test FLAG_CXX_VISIBILITY_INLINES_HIDDEN
+-- Performing Test FLAG_CXX_VISIBILITY_INLINES_HIDDEN - Success
+-- Performing Test FLAG_C_VISIBILITY_HIDDEN
+-- Performing Test FLAG_C_VISIBILITY_HIDDEN - Success
+-- Performing Test FLAG_CXX_VISIBILITY_HIDDEN
+-- Performing Test FLAG_CXX_VISIBILITY_HIDDEN - Success
+-- Performing Test FLAG_C_FOMIT_FRAME_POINTER
+-- Performing Test FLAG_C_FOMIT_FRAME_POINTER - Success
+-- Performing Test FLAG_CXX_FOMIT_FRAME_POINTER
+-- Performing Test FLAG_CXX_FOMIT_FRAME_POINTER - Success
+-- Performing Test FLAG_C_GGDB
+-- Performing Test FLAG_C_GGDB - Success
+-- Performing Test FLAG_CXX_GGDB
+-- Performing Test FLAG_CXX_GGDB - Success
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD
+-- Performing Test CMAKE_HAVE_LIBC_PTHREAD - Success
+-- Found Threads: TRUE
+-- Found PkgConfig: /opt/homebrew/bin/pkg-config (found version "3.0.7")
+-- Found OpenGL: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk/System/Library/Frameworks/OpenGL.framework
+-- Using named pipes as controller inputs
+-- Watching game memory for changes
+-- Using static FMT from Externals
+CMake Error at Externals/fmt/CMakeLists.txt:1 (add_subdirectory):
+  The source directory
+
+    /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Externals/fmt/fmt
+
+  does not contain a CMakeLists.txt file.
+
+
+CMake Error at CMake/DolphinDisableWarningsMSVC.cmake:4 (get_target_property):
+  get_target_property() called with non-existent target "fmt".
+Call Stack (most recent call first):
+  Externals/fmt/CMakeLists.txt:2 (dolphin_disable_warnings)
+
+
+-- Using static glslang from Externals
+CMake Error at Externals/glslang/CMakeLists.txt:9 (add_subdirectory):
+  The source directory
+
+    /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Externals/glslang/glslang
+
+  does not contain a CMakeLists.txt file.
+
+
+-- Found Iconv: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.2.sdk/usr/lib/libiconv.tbd (Required is at least version "1.14")
+-- Using system Iconv
+-- Using static pugixml from Externals
+CMake Error at Externals/pugixml/CMakeLists.txt:6 (add_subdirectory):
+  The source directory
+
+    /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Externals/pugixml/pugixml
+
+  does not contain a CMakeLists.txt file.
+
+
+CMake Error at CMake/DolphinDisableWarningsMSVC.cmake:4 (get_target_property):
+  get_target_property() called with non-existent target "pugixml-static".
+Call Stack (most recent call first):
+  Externals/pugixml/CMakeLists.txt:7 (dolphin_disable_warnings)
+
+
+-- Using static ENET from Externals
+CMake Error at Externals/enet/CMakeLists.txt:1 (add_subdirectory):
+  The source directory
+
+    /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Externals/enet/enet
+
+  does not contain a CMakeLists.txt file.
+
+
+CMake Error at CMake/DolphinDisableWarningsMSVC.cmake:4 (get_target_property):
+  get_target_property() called with non-existent target "enet".
+Call Stack (most recent call first):
+  Externals/enet/CMakeLists.txt:3 (dolphin_disable_warnings)
+
+
+CMake Error at Externals/enet/CMakeLists.txt:4 (add_library):
+  add_library cannot create ALIAS target "enet::enet" because target "enet"
+  does not already exist.
+
+
+CMake Error at Externals/enet/CMakeLists.txt:5 (target_include_directories):
+  Cannot specify include directories for target "enet" which is not built by
+  this project.
+
+
+-- Using static xxhash from Externals
+-- Using static BZip2 from Externals
+-- Looking for sys/types.h
+-- Looking for sys/types.h - found
+-- Looking for stdint.h
+-- Looking for stdint.h - found
+-- Looking for stddef.h
+-- Looking for stddef.h - found
+-- Check size of off64_t
+-- Check size of off64_t - failed
+-- Looking for fseeko
+-- Looking for fseeko - found
+-- Looking for unistd.h
+-- Looking for unistd.h - found
+-- Using static LibLZMA from Externals
+-- Using static ZSTD from Externals
+CMake Error at Externals/zstd/CMakeLists.txt:7 (add_subdirectory):
+  The source directory
+
+    /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Externals/zstd/zstd
+
+  does not contain a CMakeLists.txt file.
+
+
+CMake Error at CMake/DolphinDisableWarningsMSVC.cmake:4 (get_target_property):
+  get_target_property() called with non-existent target "libzstd_static".
+Call Stack (most recent call first):
+  Externals/zstd/CMakeLists.txt:9 (dolphin_disable_warnings)
+
+
+CMake Error at Externals/zstd/CMakeLists.txt:10 (add_library):
+  add_library cannot create ALIAS target "zstd::zstd" because target
+  "libzstd_static" does not already exist.
+
+
+-- Using static ZLIB from Externals
+CMake Error at Externals/zlib-ng/CMakeLists.txt:7 (add_subdirectory):
+  The source directory
+
+    /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Externals/zlib-ng/zlib-ng
+
+  does not contain a CMakeLists.txt file.
+
+
+CMake Error at Externals/zlib-ng/CMakeLists.txt:14 (add_library):
+  add_library cannot create ALIAS target "ZLIB::ZLIB" because target "zlib"
+  does not already exist.
+
+
+CMake Error at CMake/DolphinDisableWarningsMSVC.cmake:4 (get_target_property):
+  get_target_property() called with non-existent target "zlib".
+Call Stack (most recent call first):
+  Externals/zlib-ng/CMakeLists.txt:15 (dolphin_disable_warnings)
+
+
+-- Using static minizip-ng from Externals
+CMake Error at Externals/minizip-ng/CMakeLists.txt:36 (get_target_property):
+  get_target_property() called with non-existent target "zstd::zstd".
+
+
+CMake Error at Externals/minizip-ng/CMakeLists.txt:43 (add_subdirectory):
+  The source directory
+
+    /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Externals/minizip-ng/minizip-ng
+
+  does not contain a CMakeLists.txt file.
+
+
+CMake Error at CMake/DolphinDisableWarningsMSVC.cmake:4 (get_target_property):
+  get_target_property() called with non-existent target "minizip-ng".
+Call Stack (most recent call first):
+  Externals/minizip-ng/CMakeLists.txt:44 (dolphin_disable_warnings)
+
+
+-- Using static LZO from Externals
+-- Using static lz4 from Externals
+CMake Error at Externals/lz4/CMakeLists.txt:9 (add_subdirectory):
+  add_subdirectory given source "lz4/build/cmake" which is not an existing
+  directory.
+
+
+CMake Error at CMake/DolphinDisableWarningsMSVC.cmake:4 (get_target_property):
+  get_target_property() called with non-existent target "lz4_static".
+Call Stack (most recent call first):
+  Externals/lz4/CMakeLists.txt:11 (dolphin_disable_warnings)
+
+
+CMake Error at Externals/lz4/CMakeLists.txt:12 (add_library):
+  add_library cannot create ALIAS target "LZ4::LZ4" because target
+  "lz4_static" does not already exist.
+
+
+CMake Error at Externals/lz4/CMakeLists.txt:13 (target_compile_definitions):
+  Cannot specify compile definitions for target "lz4_static" which is not
+  built by this project.
+
+
+-- Using static SPNG from Externals
+CMake Error at Externals/libspng/CMakeLists.txt:8 (add_subdirectory):
+  The source directory
+
+    /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Externals/libspng/libspng
+
+  does not contain a CMakeLists.txt file.
+
+
+CMake Error at Externals/libspng/CMakeLists.txt:12 (add_library):
+  add_library cannot create ALIAS target "spng::spng" because target
+  "spng_static" does not already exist.
+
+
+-- Using static FreeSurround from Externals
+-- Using ed25519 from Externals
+-- Using static CUBEB from Externals
+-- Performing Test COMPILER_HAS_HIDDEN_VISIBILITY
+-- Performing Test COMPILER_HAS_HIDDEN_VISIBILITY - Success
+-- Performing Test COMPILER_HAS_HIDDEN_INLINE_VISIBILITY
+-- Performing Test COMPILER_HAS_HIDDEN_INLINE_VISIBILITY - Success
+-- Performing Test COMPILER_HAS_DEPRECATED_ATTR
+-- Performing Test COMPILER_HAS_DEPRECATED_ATTR - Success
+CMake Error: File /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Externals/cubeb/cubeb/Config.cmake.in does not exist.
+CMake Error at /opt/homebrew/share/cmake/Modules/CMakePackageConfigHelpers.cmake:549 (configure_file):
+  configure_file Problem configuring file
+Call Stack (most recent call first):
+  Externals/cubeb/CMakeLists.txt:100 (configure_package_config_file)
+
+
+-- Checking for module 'speexdsp'
+--   Package 'speexdsp' not found
+-- Looking for include file pulse/pulseaudio.h
+-- Looking for include file pulse/pulseaudio.h - not found
+-- Looking for include file alsa/asoundlib.h
+-- Looking for include file alsa/asoundlib.h - not found
+-- Looking for include file jack/jack.h
+-- Looking for include file jack/jack.h - not found
+-- Looking for include file sndio.h
+-- Looking for include file sndio.h - not found
+-- Looking for include file AudioUnit/AudioUnit.h
+-- Looking for include file AudioUnit/AudioUnit.h - found
+-- Looking for include file audioclient.h
+-- Looking for include file audioclient.h - not found
+-- Looking for include files windows.h, mmsystem.h
+-- Looking for include files windows.h, mmsystem.h - not found
+-- Looking for include file SLES/OpenSLES.h
+-- Looking for include file SLES/OpenSLES.h - not found
+-- Looking for include file sys/soundcard.h
+-- Looking for include file sys/soundcard.h - not found
+-- Looking for include file android/log.h
+-- Looking for include file android/log.h - not found
+-- Looking for include file sys/audioio.h
+-- Looking for include file sys/audioio.h - not found
+-- Looking for include file kai.h
+-- Looking for include file kai.h - not found
+-- Using static LibUSB from Externals
+-- Looking for include file asm/types.h
+-- Looking for include file asm/types.h - not found
+-- Looking for clock_gettime
+-- Looking for clock_gettime - found
+-- Looking for EFD_CLOEXEC
+-- Looking for EFD_CLOEXEC - not found
+-- Looking for EFD_NONBLOCK
+-- Looking for EFD_NONBLOCK - not found
+-- Looking for TFD_CLOEXEC
+-- Looking for TFD_CLOEXEC - not found
+-- Looking for TFD_NONBLOCK
+-- Looking for TFD_NONBLOCK - not found
+-- Looking for include file dlfcn.h
+-- Looking for include file dlfcn.h - found
+-- Looking for include file sys/eventfd.h
+-- Looking for include file sys/eventfd.h - not found
+-- Looking for include file inttypes.h
+-- Looking for include file inttypes.h - found
+-- Looking for include file IOKit/usb/IOUSBHostFamilyDefinitions.h
+-- Looking for include file IOKit/usb/IOUSBHostFamilyDefinitions.h - found
+-- Looking for include file memory.h
+-- Looking for include file memory.h - found
+-- Check size of nfds_t
+-- Check size of nfds_t - done
+-- Looking for pipe2
+-- Looking for pipe2 - not found
+-- Looking for pthread_condattr_setclock
+-- Looking for pthread_condattr_setclock - not found
+-- Looking for pthread_setname_np
+-- Looking for pthread_setname_np - found
+-- Looking for pthread_threadid_np
+-- Looking for pthread_threadid_np - found
+-- Looking for include file stdlib.h
+-- Looking for include file stdlib.h - found
+-- Looking for include file strings.h
+-- Looking for include file strings.h - found
+-- Looking for include file string.h
+-- Looking for include file string.h - found
+-- Check size of struct timespec
+-- Check size of struct timespec - failed
+-- Looking for syslog
+-- Looking for syslog - found
+-- Looking for include file sys/stat.h
+-- Looking for include file sys/stat.h - found
+-- Looking for include file sys/time.h
+-- Looking for include file sys/time.h - found
+-- Looking for include file sys/timerfd.h
+-- Looking for include file sys/timerfd.h - not found
+-- Using static SDL3 from Externals
+CMake Error at Externals/SDL/CMakeLists.txt:28 (add_subdirectory):
+  The source directory
+
+    /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Externals/SDL/SDL
+
+  does not contain a CMakeLists.txt file.
+
+
+-- Using static SFML from Externals
+-- Using static MBEDTLS from Externals
+-- Found Python3: /opt/homebrew/Frameworks/Python.framework/Versions/3.14/bin/python3.14 (found version "3.14.7") found components: Interpreter
+-- Using static CURL from Externals
+CMake Error at Externals/curl/CMakeLists.txt:51 (add_subdirectory):
+  The source directory
+
+    /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Externals/curl/curl
+
+  does not contain a CMakeLists.txt file.
+
+
+CMake Error at Externals/curl/CMakeLists.txt:55 (target_link_libraries):
+  Cannot specify link libraries for target "libcurl_static" which is not
+  built by this project.
+
+
+-- Configuring incomplete, errors occurred!
