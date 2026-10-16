@@ -1,0 +1,33 @@
+Task: friendlies-0348
+Worktree: /Users/luis/ClaudeWorktrees/orca-0343
+Branch: friendlies-0348
+
+Required initial base check:
+$ git log -1 --oneline
+1588a81517 Set version 0.3.47 and player notes
+$ git merge-base --is-ancestor 1588a81517 HEAD && echo BASE-OK
+BASE-OK
+
+Initial git status:
+?? imgui.ini
+(Pre-existing file; not changed or staged.)
+
+Existing build configuration, build-orca-0343/CMakeCache.txt:
+CMAKE_BUILD_TYPE:STRING=Release
+ENABLE_NOGUI:BOOL=ON
+ENABLE_TESTS:BOOL=ON
+CMAKE_GENERATOR:INTERNAL=Ninja
+CMAKE_HOME_DIRECTORY:INTERNAL=/Users/luis/ClaudeWorktrees/orca-0343
+
+Worktree game-image discovery (filenames only, including ignored files):
+$ rg --files --hidden --no-ignore -g '*.iso' -g '*.wbfs' -g '*.rvz' -g '*.dol' -g '!.git/**' -g '!node_modules/**' -g '!Externals/**' -g '!.env*' -g '!.dev.vars' -g '!auth.json' .
+Exit 1; no matching files.
+
+Tools/orca/doubles-rooms.py main():
+--disc has no default.
+--run rejects missing --binary or --disc.
+The supplied task does not name an available disc path.
+
+BLOCKED: no authorized game image available for the required headless gameplay proof.
+Stopped under task hard rule 8. No game instances or fixture servers started.
+No builds, test suites, or fixture self-tests run before the stop.
