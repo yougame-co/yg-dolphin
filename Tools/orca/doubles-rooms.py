@@ -72,7 +72,8 @@ def receive(stream):
 
 
 class Rooms:
-    def __init__(self):
+    def __init__(self, doubles=True):
+        self.doubles = doubles
         self.lock = threading.RLock()
         self.members = {}
         self.sockets = {}
@@ -84,6 +85,7 @@ class Rooms:
         self.reports = {}
         self.expired = set()
         self.blocked = set()
+        self.away = set()
 
     def blackout(self, room, player):
         with self.lock:
@@ -111,6 +113,7 @@ class Rooms:
         reports = {name: value for (code, name), value in self.reports.items() if code == room}
         hashes = {name: value for (code, name), value in self.hashes.items() if code == room}
         return {"active": active, "reports": reports,
+                "offers": list(self.offers),
                 "frames": {name: frame_number for (code, name), frame_number in self.frames.items() if code == room}, "hashes": {name: dict(value) for name, value in hashes.items()}}
 
     def record(self, room, player, data):
@@ -125,9 +128,10 @@ class Rooms:
     def roster(self, room, local, kind="welcome", changed=None, away=False):
         members = sorted(((seat, name) for (code, name), seat in self.members.items() if code == room))
         return {"t": kind, "me": local, "host": members[0][1], "lifecycle": "game", "revision": 1,
-                "room": {"code": room, "queue": "private", "size": 4, "doubles": True},
+                "room": {"code": room, "queue": "private", "size": 4, "doubles": self.doubles},
                 "player": {"id": changed or local},
-                "players": [{"id": name, "name": name, **({"away": True} if away and name == changed else {})}
+                "players": [{"id": name, "name": name,
+                             **({"away": True} if (room, name) in self.away or (away and name == changed) else {})}
                             for _, name in members],
                 "participants": [{"id": name, "connectionId": name, "slot": seat, "name": name}
                                  for seat, name in members]}
@@ -149,8 +153,8 @@ class Rooms:
 class Server(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address, turn_binary=None):
-        self.rooms = Rooms()
+    def __init__(self, address, turn_binary=None, doubles=True):
+        self.rooms = Rooms(doubles)
         self.turn = None
         self.ice = []
         if turn_binary:
@@ -187,7 +191,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):
-        if self.path.startswith(("/report/", "/expire/", "/blackout/")):
+        if self.path.startswith(("/report/", "/expire/", "/blackout/", "/away/", "/back/")):
             count = int(self.headers.get("Content-Length", 0))
             if count > 4096:
                 return self.reply({}, 413)
@@ -200,6 +204,13 @@ class Handler(BaseHTTPRequestHandler):
             with rooms.lock:
                 if self.path.startswith("/blackout/"):
                     rooms.blackout(room, player)
+                elif self.path.startswith("/away/"):
+                    rooms.blocked.add((room, player))
+                    connection = rooms.sockets.get((room, player))
+                    if connection:
+                        connection[0].shutdown(socket.SHUT_RDWR)
+                elif self.path.startswith("/back/"):
+                    rooms.blocked.discard((room, player))
                 elif self.path.startswith("/expire/"):
                     rooms.expire(room, player)
                 else:
@@ -212,7 +223,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply({}, 413)
         body = json.loads(self.rfile.read(count))
         room, player = body["room"], body["player_id"]
-        if body.get("dev") != "orca-doubles-test" or player not in {"Doubles0", "Doubles1", "Doubles2", "Doubles3"}:
+        if body.get("dev") != "orca-doubles-test" or player not in {f"Doubles{seat}" for seat in range(5)}:
             return self.reply({}, 403)
         with self.server.rooms.lock:
             members = self.server.rooms.members
@@ -241,6 +252,8 @@ class Handler(BaseHTTPRequestHandler):
         player = urllib.parse.parse_qs(parsed.query).get("ticket", [""])[0]
         rooms = self.server.rooms
         with rooms.lock:
+            if (room, player) in rooms.blocked:
+                return self.reply({"error": "room-recovering"}, 409)
             if (room, player) not in rooms.members:
                 return self.reply({}, 403)
         self.send_response(101)
@@ -253,6 +266,7 @@ class Handler(BaseHTTPRequestHandler):
         connection = (self.connection, threading.Lock())
         with rooms.lock:
             returning = (room, player) in rooms.joined
+            rooms.away.discard((room, player))
             rooms.joined.add((room, player))
             rooms.sockets[(room, player)] = connection
             rooms.send(connection, rooms.roster(room, player))
@@ -292,6 +306,7 @@ class Handler(BaseHTTPRequestHandler):
                 if rooms.sockets.get((room, player)) is connection:
                     rooms.sockets.pop((room, player), None)
                     if not departed and (room, player) in rooms.members:
+                        rooms.away.add((room, player))
                         for (code, name), other in list(rooms.sockets.items()):
                             if code == room and name != player:
                                 try:
@@ -369,6 +384,12 @@ def self_test(turn_binary=None):
             for _ in range(3 - seat):
                 assert receive(stream)["t"] == "join"
             sock.sendall(frame({"t": "msg", "d": {"k": "hello", "doubles": True}}, True))
+        try:
+            client(site, "Doubles4", "dry444")
+            raise AssertionError("fifth client was accepted")
+        except urllib.error.HTTPError as error:
+            assert error.code == 409
+        assert len(server.rooms.members) == 4
         for seat, (_, stream) in enumerate(clients):
             senders = {receive(stream)["from"] for _ in range(3)}
             assert senders == {f"Doubles{other}" for other in range(4) if other != seat}
@@ -383,6 +404,9 @@ def self_test(turn_binary=None):
         clients[3][0].close()
         for _, stream in clients[:3]:
             assert receive(stream)["t"] == "away"
+        # A newcomer/reconnecting peer must see every retained away seat, not only the latest event.
+        assert next(player for player in server.rooms.roster("dry444", "Doubles0")["players"]
+                    if player["id"] == "Doubles3")["away"]
         clients[3] = client(site, "Doubles3", "dry444")
         resumed = receive(clients[3][1])
         assert resumed["room"]["code"] == "dry444" and resumed["participants"][-1]["slot"] == 3
@@ -412,6 +436,9 @@ def self_test(turn_binary=None):
             raise AssertionError("different cross-machine plug frames accepted")
         except ValueError:
             pass
+        late = server.rooms.diagnostics("dry444")
+        late["reports"]["Doubles2"] = {"port": 3, "plug": 480, "capture": "later-capture"}
+        verify_diagnostics(late, expected=3)
         bad = server.rooms.diagnostics("dry444")
         bad["hashes"]["Doubles1"] = {"600": "different"}
         try:
@@ -419,7 +446,8 @@ def self_test(turn_binary=None):
             raise AssertionError("different final hashes accepted")
         except ValueError:
             pass
-        print("PASS: four clients, six pairs, shared capture, recovery, leave, hold expiry, cross-machine plugs and hashes")
+        print("PASS: four clients, fifth refused, six pairs, shared capture, retained away roster, "
+              "recovery, leave, hold expiry, capture-scoped plugs and confirmed hashes")
     finally:
         for sock, stream in clients:
             stream.close()
@@ -432,9 +460,12 @@ def verify_diagnostics(data, expected=4):
     reports = data["reports"]
     if len(reports) < expected:
         raise ValueError("waiting for reports from both machines")
-    plugs = [report["plug"] for report in reports.values() if report.get("plug") is not None]
-    if not plugs or len(set(plugs)) != 1:
-        raise ValueError("cross-machine plug frames differ")
+    batches = {}
+    for report in reports.values():
+        if report.get("plug") is not None:
+            batches.setdefault(report.get("capture", "initial"), set()).add(report["plug"])
+    if not batches or any(len(plugs) != 1 for plugs in batches.values()):
+        raise ValueError("cross-machine plug frames differ within a capture")
     ports = [report["port"] for report in reports.values() if report.get("port") is not None]
     if len(ports) != len(set(ports)):
         raise ValueError("duplicate ports across machines")
@@ -458,6 +489,28 @@ def post_fixture(site, path, body):
         return json.load(response)
 
 
+def verify_gameplay(work, masks):
+    """Require actual human fighter records and a return to CSS for every requested fight."""
+    for index, mask in enumerate(masks, 1):
+        expected = {port for port in range(4) if mask & (1 << port)}
+        for path in Path(work).glob(f"user-*/probe-fight-{index}.bin"):
+            record = path.read_bytes()
+            humans = {port for port in range(4) if record[port * 0x5c + 1] == 0}
+            if humans != expected:
+                raise RuntimeError(f"fight {index}: {path.parent.name} humans {humans}, expected {expected}")
+        host_probe = Path(work) / "user-0" / f"probe-fight-{index}.bin"
+        if not host_probe.exists():
+            raise RuntimeError(f"fight {index}: no host fighter record")
+    host_log = (Path(work) / "peer-0.log").read_text()
+    scenes = re.findall(r"Scene frame (\d+): .* -> (\w+)", host_log)
+    fights = [offset for offset, (_, scene) in enumerate(scenes) if scene == "scMelee"]
+    if len(fights) < len(masks):
+        raise RuntimeError("not all requested fights began")
+    for offset in fights[:len(masks)]:
+        if not any(scene == "scSelctCharacter" for _, scene in scenes[offset + 1:]):
+            raise RuntimeError("a requested fight did not return to character select")
+
+
 def run(args):
     address = urllib.parse.urlsplit(args.site)
     if address.scheme != "http" or not isolated_host(address.hostname) or address.username or address.password:
@@ -468,9 +521,17 @@ def run(args):
     if len(set(roles)) != len(roles) or not set(roles) <= set(range(4)):
         raise ValueError("roles must be distinct values from 0..3")
     players = []
+    role_inputs = dict(value.split("=", 1) for value in args.input_role)
+    role_blackouts = dict(value.split("=", 1) for value in args.blackout_role)
+    events = json.loads(Path(args.events).read_text()) if args.events else []
+    deferred = set(args.defer_role)
+    if not deferred <= set(roles) or any(event.get("role", 0) not in roles for event in events):
+        raise ValueError("deferred/event roles must belong to --roles")
+    refused = set(args.refused_role)
+    refused_seen = set()
     with tempfile.TemporaryDirectory(prefix="orca-doubles-") as work:
         try:
-            for role in roles:
+            def spawn(role):
                 user = Path(work) / f"user-{role}"
                 user.mkdir()
                 environment = {"PATH": os.environ.get("PATH", ""),
@@ -483,8 +544,14 @@ def run(args):
                     environment["ORCA_DIRECT_FORCE"] = "turn"
                 if os.name == "nt":
                     environment["SystemRoot"] = os.environ.get("SystemRoot", r"C:\Windows")
-                if args.input:
-                    environment["YG_INPUT"] = str(Path(args.input).resolve())
+                environment["YG_SCENES"] = "1"
+                if str(role) in role_blackouts:
+                    environment["ORCA_TEST_BLACKOUT"] = role_blackouts[str(role)]
+                if args.probe:
+                    environment["ORCA_UX_PROBE"] = str(Path(args.probe).resolve())
+                input_path = role_inputs.get(str(role), args.input)
+                if input_path:
+                    environment["YG_INPUT"] = str(Path(input_path).resolve())
                 if args.profile:
                     environment["ORCA_PROFILE"] = args.profile
                 if args.mod_dir:
@@ -499,9 +566,12 @@ def run(args):
                 process = subprocess.Popen(command, env=environment, stdin=subprocess.PIPE,
                                            stdout=subprocess.PIPE, stderr=stderr, text=True, bufsize=1)
                 lines = queue.Queue()
-                def read_output(proc=process, output=lines):
-                    for line in proc.stdout:
-                        output.put(line.rstrip())
+                def read_output(proc=process, output=lines, role_number=role):
+                    with open(Path(work) / f"peer-{role_number}.stdout.log", "w") as log:
+                        for line in proc.stdout:
+                            log.write(line)
+                            log.flush()
+                            output.put(line.rstrip())
                 threading.Thread(target=read_output, daemon=True).start()
                 players.append((role, process, stderr, lines))
                 process.stdin.write("caps join leave stats\n")
@@ -518,6 +588,9 @@ def run(args):
                         time.sleep(0.1)
                     else:
                         raise RuntimeError("host never owned its room")
+            for role in roles:
+                if role not in deferred:
+                    spawn(role)
             print(f"Running roles {args.roles}; isolated logs: {work}", flush=True)
             # Operator commands are scoped to one exact harness child, e.g. `3 test-drop-room`.
             def commands():
@@ -536,6 +609,39 @@ def run(args):
             expire_at = time.monotonic() + max(15, (args.seconds - 105) / 2) if args.hold_expiry else None
             expired = False
             while time.monotonic() < deadline:
+                for event in events:
+                    if event.get("done"):
+                        continue
+                    if "armed" not in event:
+                        source = Path(work) / f"peer-{event.get('source', 0)}.log"
+                        text = source.read_text() if source.exists() else ""
+                        if len(re.findall(event["pattern"], text)) < event.get("occurrence", 1):
+                            continue
+                        event["armed"] = time.monotonic()
+                    if time.monotonic() < event["armed"] + event.get("delay", 0):
+                        continue
+                    role = event.get("role", 0)
+                    if event["action"] == "spawn":
+                        if any(existing == role for existing, _, _, _ in players):
+                            raise RuntimeError(f"duplicate scheduled role {role}")
+                        spawn(role)
+                    elif event["action"] == "command":
+                        process = next(proc for number, proc, _, _ in players if number == role)
+                        process.stdin.write(event["command"] + "\n")
+                        process.stdin.flush()
+                    elif event["action"] in ("away", "back"):
+                        post_fixture(args.site, f"/{event['action']}/{args.room}", {"player": f"Doubles{role}"})
+                    elif event["action"] == "fifth":
+                        try:
+                            client(args.site, "Doubles4", args.room)
+                            raise RuntimeError("fifth arrival was accepted")
+                        except urllib.error.HTTPError as error:
+                            if error.code != 409:
+                                raise
+                    else:
+                        raise ValueError("unknown fixture event action")
+                    event["done"] = True
+                    print(f"EVENT: {event}", flush=True)
                 if expire_at and not expired and time.monotonic() >= expire_at and 3 in roles:
                     process = next(proc for role, proc, _, _ in players if role == 3)
                     process.stdin.write("test-direct off\n")
@@ -550,14 +656,31 @@ def run(args):
                     while not lines.empty():
                         line = lines.get()
                         if line.startswith("orca error"):
+                            if role in refused and line.startswith("orca error room_full"):
+                                refused_seen.add(role)
+                                print(f"peer {role}: {line}", flush=True)
+                                continue
                             raise RuntimeError(f"peer {role} reported an error; inspect local log")
+                        if line.startswith("orca stats ") and json.loads(line[11:]).get("ds", 0):
+                            raise RuntimeError(f"peer {role} reported a desync")
                         if line.startswith(("orca state", "orca menu")):
                             print(f"peer {role}: {line}", flush=True)
                 time.sleep(0.1)
-            # All joiners must actually plug in, at the same frame.
+            if any(not event.get("done") for event in events):
+                raise RuntimeError("scheduled fixture events did not run")
+            if refused_seen != refused:
+                raise RuntimeError("expected room_full refusals were not observed")
+            # Each capture's joiners must plug in together; later captures have their own frame.
+            with urllib.request.urlopen(args.site + "/diagnostics/" + args.room, timeout=3) as response:
+                offers = json.load(response)["offers"]
             frames = []
             ports = []
             for role, _, _, _ in players:
+                if role in refused:
+                    text = (Path(work) / f"peer-{role}.log").read_text()
+                    if "plugged into port" in text:
+                        raise RuntimeError("refused newcomer was plugged in")
+                    continue
                 if role:
                     text = (Path(work) / f"peer-{role}.log").read_text()
                     assignment = re.search(r"on seat (\d+)", text)
@@ -567,26 +690,38 @@ def run(args):
                         raise RuntimeError(f"peer {role} did not plug into its assigned port")
                     ports.append(int(match[1]))
                     frames.append(int(match[2]))
-                    report = {"player": f"Doubles{role}", "port": int(match[1]), "plug": int(match[2])}
+                    capture = next((capture for target, capture, _ in offers if target == f"Doubles{role}"), "initial")
+                    report = {"player": f"Doubles{role}", "port": int(match[1]), "plug": int(match[2]), "capture": capture}
                 else:
                     report = {"player": "Doubles0", "port": 1, "plug": None}
                 post_fixture(args.site, "/report/" + args.room, report)
             if len(set(ports)) != len(ports):
                 raise RuntimeError("joiners were assigned duplicate ports")
-            if len(set(frames)) > 1:
-                raise RuntimeError("joiners plugged in at different frames")
             report_deadline = time.monotonic() + 90
             while True:
                 with urllib.request.urlopen(args.site + "/diagnostics/" + args.room, timeout=3) as response:
                     diagnostics = json.load(response)
-                if len(diagnostics["reports"]) == 4:
+                if len(diagnostics["reports"]) == args.expected:
                     break
                 if time.monotonic() > report_deadline:
                     raise RuntimeError("missing cross-machine reports")
                 time.sleep(0.2)
-            final_frame = verify_diagnostics(diagnostics)
-            print(f"PASS: all machines agree on plug {frames}, confirmed hashes through frame {final_frame}")
+            if refused:
+                diagnostics["active"] = [name for name in diagnostics["active"]
+                                         if name not in {f"Doubles{role}" for role in refused}]
+            final_frame = verify_diagnostics(diagnostics, expected=args.expected)
+            verify_gameplay(work, args.expect_fight)
+            print(f"PASS: all machines agree on plug {frames}, confirmed hashes through frame {final_frame}; "
+                  f"0 desyncs; {len(args.expect_fight)} requested fights returned to CSS")
         finally:
+            if args.keep_logs:
+                target = Path(args.keep_logs)
+                target.mkdir(parents=True, exist_ok=True)
+                try:
+                    with urllib.request.urlopen(args.site + "/diagnostics/" + args.room, timeout=3) as response:
+                        (target / "diagnostics.json").write_bytes(response.read())
+                except OSError as error:
+                    (target / "diagnostics-error.txt").write_text(type(error).__name__ + "\n")
             for _, process, stderr, _ in players:
                 if process.poll() is None:
                     try:
@@ -603,6 +738,9 @@ def run(args):
                 target.mkdir(parents=True, exist_ok=True)
                 for log in Path(work).glob("peer-*.log"):
                     shutil.copyfile(log, target / log.name)
+                for role in roles:
+                    for probe in (Path(work) / f"user-{role}").rglob("probe-*.bin"):
+                        shutil.copyfile(probe, target / f"peer-{role}-{probe.name}")
 
 
 def main():
@@ -619,6 +757,21 @@ def main():
     parser.add_argument("--binary")
     parser.add_argument("--disc")
     parser.add_argument("--input")
+    parser.add_argument("--input-role", action="append", default=[], metavar="ROLE=PATH",
+                        help="override --input for one role; an empty script keeps it idle")
+    parser.add_argument("--blackout-role", action="append", default=[], metavar="ROLE=FROM-TO",
+                        help="set ORCA_TEST_BLACKOUT for one role")
+    parser.add_argument("--probe", help="read-only gameplay evidence probe script")
+    parser.add_argument("--expect-fight", action="append", default=[], type=lambda value: int(value, 0),
+                        help="human-port bitmask for each fight; requires probe-fight-N.bin and return to CSS")
+    parser.add_argument("--events", help="JSON scheduled per-role spawn/command events, triggered by logs")
+    parser.add_argument("--defer-role", action="append", default=[], type=int, choices=range(4))
+    parser.add_argument("--refused-role", action="append", default=[], type=int, choices=range(1, 4),
+                        help="require room_full for only this newcomer, which must never plug in")
+    parser.add_argument("--expected", type=int, default=4, choices=(2, 3, 4))
+    parser.add_argument("--doubles", action="store_true", help="accepted for dropin-rooms compatibility")
+    parser.add_argument("--ordinary", action="store_true", help="serve an ordinary friends room")
+    parser.add_argument("--local", action="store_true", help="own a loopback server for this run")
     game = parser.add_mutually_exclusive_group()
     game.add_argument("--profile", help="launcher profile, e.g. PPLUS32")
     game.add_argument("--mod-dir", help="local prepared mod bundle; no download or install")
@@ -633,7 +786,7 @@ def main():
     elif args.serve:
         if not isolated_host(args.listen):
             parser.error("--listen must be loopback or an isolated LAN address")
-        server = Server((args.listen, args.port), args.turn_binary)
+        server = Server((args.listen, args.port), args.turn_binary, doubles=not args.ordinary)
         print(f"Dev friends-room fixture listening on port {server.server_port}", flush=True)
         try:
             server.serve_forever()
@@ -642,7 +795,17 @@ def main():
     else:
         if not args.binary or not args.disc:
             parser.error("--run requires --binary and --disc")
-        run(args)
+        server = None
+        try:
+            if args.local:
+                server = Server(("127.0.0.1", 0), args.turn_binary, doubles=not args.ordinary)
+                threading.Thread(target=server.serve_forever, daemon=True).start()
+                args.site = f"http://127.0.0.1:{server.server_port}"
+            run(args)
+        finally:
+            if server:
+                server.shutdown()
+                server.server_close()
 
 
 if __name__ == "__main__":
