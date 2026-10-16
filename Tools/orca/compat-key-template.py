@@ -370,7 +370,9 @@ def make_template(source, sys_dir, commit, version, covers):
     api = _int_constant(source, "Source/Core/Core/Orca/Mod.h", "ENGINE_API")
     engine_ux = _int_constant(source, "Source/Core/Core/Orca/UX/UX.h", "kCompatVersion")
     brawl = "Source/Core/Core/Orca/Games/Brawl/BrawlGame.h"
-    games = {"": 0}  # no builtin: no module describes the game (BrawlGame Identify), compat 0
+    # No builtin: a flat pack runs GenericModule (UX.cpp), whose game compat is GENERIC_COMPAT (GenericModule.h):
+    # the engine logs ux=<engine>.<GENERIC_COMPAT> for it (a 0.3.47 P+Ex run logged ux=31.1).
+    games = {"": _int_constant(source, "Source/Core/Core/Orca/Games/Generic/GenericModule.h", "GENERIC_COMPAT")}
     for builtin, constant in BUILTIN_COMPATS.items():
         games[builtin] = _int_constant(source, brawl, constant)
     with open(os.path.join(source, "Source/Core/Core/Orca/Mod.cpp"), encoding="utf-8") as f:
