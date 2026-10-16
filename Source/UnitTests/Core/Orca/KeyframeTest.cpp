@@ -14,6 +14,7 @@
 #include <optional>
 #include <random>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -28,6 +29,7 @@
 #include "Common/IOFile.h"
 #include "Common/ScopeGuard.h"
 #include "Common/StringUtil.h"
+#include "Core/Orca/Mod.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/Keyframe.h"
 #include "Core/Rollback/ReplayStream.h"
@@ -872,8 +874,14 @@ TEST(OrcaReplayStream, HeaderBytesMatchRoomsGoldenFixture)
             "3a226f726361323a74657374222c2266697273745f6672616d65223a3530302c2267616d65223a22525342453031222c"
             "226f726967696e5f68617368223a2231323334353637383961626364656630222c22726f6f6d223a2261626331323322"
             "2c22736561745f6c6162656c73223a747275652c227365676d656e74223a322c2276223a327d");
-  // The XML report carries the real chunked sample used in notes/train-0348-replay-fixture.md.
-  RecordProperty("chunked_fixture_hex", Common::BytesToHexString(Stream(Replay(30, 0), 10)));
+  // A change here means updating rooms/test/fixtures/yg-dolphin-stream-header.json streams.chunked
+  // too. The XML report carries the sample used in notes/train-0348-replay-fixture.md.
+  const auto chunked = Stream(Replay(30, 0), 10);
+  EXPECT_EQ(chunked.size(), 1516u);
+  EXPECT_EQ(Orca::Mod::Sha256Hex(
+                std::string_view(reinterpret_cast<const char*>(chunked.data()), chunked.size())),
+            "36d2a4e821fd27739e20fcd4726b42be65d1c3420b2e7a47bc47ea79f2222c7e");
+  RecordProperty("chunked_fixture_hex", Common::BytesToHexString(chunked));
 }
 
 // A game's saved copy is the written live stream (small chunks, every checksum) read back and packed

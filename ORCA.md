@@ -300,8 +300,8 @@ only by `LoadModProfile` and `LoadFlatProfile`, or on `Mod::Requested()`).
   alike.
 - **Results without a ruleset (`brawl-rev2-results`)**, for Brawl-engine mods without Project+'s
   code (PM 3.6, Brawl Minus, Legacy): RSBE01 revision 2 only, profile game id `RSBE01`, its own game
-  compat 1 (the key's `ux=<engine>.1`; the other builtins' keys are unchanged). Its guards are the
-  eight Brawl words alone. `offers` may name only `results`, and only with `rankedRules`: the
+  compat 1 (the key's `ux=<engine>.1`; Brawl and Project+ also use game revision 1 from 0.3.48).
+  Its guards are the eight Brawl words alone. `offers` may name only `results`, and only with `rankedRules`: the
   parser refuses `locks` and `queue2`, and `results` without declared rules (Brawl's own defaults, a
   2-minute timed match with items, would count), and `Mod::Offers` offers nothing else for it, so no
   pick caps either. Without `rankedRules` it reads no results (`Describe().results` is false) and
@@ -1640,17 +1640,21 @@ away.
 
 Any new header (another mode, ruleset, coin or room) starts every track's state fresh.
 Compatibility: a change to one game's module that changes only what that game computes bumps that
-game's own revision (`Games/Brawl/BrawlGame.h`, the key's `ux=<n>.<game>`; every game's is 0, so the
-key says `ux=<n>` alone, as before); anything else that changes what the game computes bumps
-`UX::kCompatVersion` (currently `ux=29`: a casual stage select's Random, the two cursors start on
+game's own revision (`Games/Brawl/BrawlGame.h`, the key's `ux=<n>.<game>`; a game revision of 0
+omits the suffix). Engine compatibility (`UX::kCompatVersion`) is currently **31**. From 0.3.48,
+Brawl and Project+ use game revision **1** for returning a held token to the player's own panel
+to sit out, so their keys say `ux=31.1`. Results-only and GenericModule also use revision **1**;
+the legacy Brawl launcher stays at **0** (`ux=31`). Anything else that changes what the game
+computes bumps the engine compatibility. Engine 31 keeps player-selected tag controls, including
+the C-stick. Earlier engine changes: `ux=29`: a casual stage select's Random, the two cursors start on
 nothing, and a button held into the stage select counts once it is let go, so an A held into a
 ranked stage select no longer proposes until released, and Project+'s auto-pick waits for the hover
 to leave Random; also leaving is a held B and Z reaches the game on the queue's selects (hold B to
 leave); `ux=28`: a friend's move from the menus waits while Options > Controls is open; `ux=27`: how
 a turn ends in the [Character order](#character-order), and who turns Brawl's stage select page;
 `ux=26` since 0.3.37: the history's seed, [Random numbers](#random-numbers), and tags typed in the
-game, [Port values](#port-values-each-players-name-and-controls)), which is in the compatibility
-key.
+game, [Port values](#port-values-each-players-name-and-controls). These revisions are in the
+compatibility key.
 
 ## Input gate
 
@@ -2767,9 +2771,13 @@ What each release changed for players, in plain words.
 
 ### 0.3.48
 
-- Doubles friends rooms take up to four people. Anyone who doesn't pick a character sits out and
-  can rotate in at the next character select. To sit out after playing, pick up your token with B,
-  then press A on your own player button.
+- In a friends room with three or four people, you can now sit out after a fight: pick up your
+  token with B, then press A on your own player button. Whoever doesn't pick a character sits out;
+  they can pick at the next character select.
+- A clearer message tells you when a friend's YG Dolphin is older or newer. Ask them to press Play
+  to update.
+- Fewer "room is full" retries after a dropped connection.
+- A clear message tells you when a friend's game is too far behind to send you the match.
 - Packs that need a newer YG Dolphin now give a clear message telling you to update the YouGame app.
 - Known limit: a friend who is sitting out is still connected. Their bad connection can briefly
   stall the fight.

@@ -1,6 +1,8 @@
 # Friendlies 0.3.48 verification
 
-**Gameplay cases 1–8 PASS**, including every subcase. Train `train-0348`, 2026-10-16.
+**Vanilla Brawl gameplay cases 1–8 PASS**, including every subcase. Train `train-0348`, 2026-10-16.
+**Project+ remains incomplete:** the finish-0348 run stopped at the machine load ceiling;
+see the Project+ section below. The earlier Brawl results do not prove Project+ rotation.
 The required base `694f5f9644` was checked before edits: initial HEAD was
 `15621acde9 Record train 0.3.48 configuration blocker`, followed by `BASE-OK`.
 The previous missing-submodule and disc prerequisites are resolved.
@@ -21,7 +23,7 @@ active peers; after a permanent leave, that means the remaining fighters.
 | 3b: all four play 2v2 | PASS: teams 1+3 versus 2+4; joint winners 1/3, both with a stock remaining; back to CSS | 9000 | `case-3-attempt-3/`, `teams-evidence.json` |
 | 4a: sitting-out peer leaves for good | PASS: peer 3 leaves mid-fight; only that port drops; fighters continue to CSS | 6000 | `case-4a-attempt-1/` |
 | 4b: sitting-out peer away/back inside budget | PASS: relay absent for six seconds; direct traffic continues; same seat and peer retained; fight returns to CSS | 5940 | `case-4b-attempt-1/` |
-| 4c: sitting-out peer blacks out and recovers | PASS: ORCA_TEST_BLACKOUT at 50–56 seconds; both transports absent; same seat retained; one counted stall; fight returns to CSS | 5640 | `case-4c-attempt-4/` |
+| 4c: sitting-out peer blacks out and recovers | PASS: ORCA_TEST_BLACKOUT at 50–56 seconds; fixture closes the room socket after a send blocks for 1 s; reconnect keeps the same seat; one counted stall; fight returns to CSS | 5640 | `case-4c-attempt-4/` |
 | 5: third arrives mid-fight | PASS: newcomer waits; CSS at 4044, port 3 plugs at 4455; original friend plugged at 1570; fighters finish normally | 5940 | `case-5-attempt-1/` |
 | 6: third arrives during another friend's recovery | PASS: port 2's relay and direct traffic stop; newcomer arrives; port 2 returns on the same seat; CSS at 4045, newcomer plugs at 4466 | 5580 | `case-6-attempt-1/` |
 | 7: fifth arrival | PASS: fifth dev ticket gets HTTP 409; no fifth game process; original four continue through fight and CSS | 6000 | `case-7-attempt-1/` |
@@ -31,6 +33,60 @@ The two-fight 2v2 run is checked beyond its human-port mask: all four probes hav
 teams `[0,1,0,1]`, results stocks `[1,0,1,0]`, places `[0,2,0,3]`. Ports 1 and 3
 are joint winners. The fight lasts 864 frames, before port 3's scheduled walk at
 1000. See [team evidence](friendlies-0348-runs/case-3-attempt-3/teams-evidence.json).
+
+## Project+
+
+Task `finish-0348`, base `85112b1bd6`, 2026-10-16. **INCOMPLETE / blocked by
+machine load**: neither requested Project+ case has a final fixture PASS.
+Case 1 has not been run separately. Case 2 reached the second stage select,
+but did not reach fight 2 before the runner stopped at load >=18. The first
+post-stop `uptime` reported **19.05**, above the required ceiling of 18.
+No further heavy jobs were started after that stop.
+
+| Run | Verdict and observed evidence |
+| --- | --- |
+| `pplus-case-2-attempt-1/` | FAIL: the Brawl cursor timings returned Project+ from CSS to the main menu; no fight. Stopped exact own fixture PID 72957 with SIGINT. |
+| `pplus-case-2-attempt-2/` | NO VERDICT: machine-load stop, exact own fixture PID 79524. All three probes show humans 1/2 in fight 1 and a return to CSS. Port 2's panel changes from human (1) at CSS2 frame 240 to empty (0) at 270/300/400 on every peer. Next stage select begins at frame 4013; no fight-2 probe exists. All common confirmed hashes agree through frame 4140. |
+
+Evidence: [first run](friendlies-0348-runs/pplus-case-2-attempt-1/run.log),
+[second run](friendlies-0348-runs/pplus-case-2-attempt-2/run.log),
+[load stop](friendlies-0348-runs/pplus-case-2-attempt-2/load-stop.txt),
+[per-peer summary](friendlies-0348-runs/pplus-case-2-attempt-2/evidence-summary.json).
+Both directories retain arguments, stdout/stderr and diagnostics; the second
+also retains the fighter, hand and panel probes. Neither attempt is a rotation PASS.
+
+The fixture now accepts `--pplus <launcher.dol>`: it selects the existing
+`PPLUS32` legacy profile, boots that DOL and supplies the authorized Brawl disc
+as `Dolphin.Core.DefaultISO`. Every child gets `ORCA_NO_LOCAL_INPUT=1` plus
+the six existing SDL variables, headless Null video and muted audio. No runtime
+gameplay code was changed for these attempts.
+
+Project+ controls are separate `pplus-basic-role-*.txt` and
+`pplus-rotation-role-*.txt` files. Compared with the Brawl scripts, CSS up/down
+motion is shortened from 41 to 27 inclusive input frames; the host alone picks
+the stage, using a five-frame upward move and A, without Brawl's leftward move.
+The B-then-A action and each role's fighting/rotation assignment are unchanged.
+These scripts still need the complete case 2 and case 1 proofs.
+
+Each attempt used its own **writable APFS clone** of the authorized launcher
+and adjacent `sd.raw`, under `build-orca-tests/finish-0348-pplus-*`. The source
+`/Volumes/YGWorktrees/OSCOO/pplus-3.2/run/` and authorized disc were read only.
+Both clones were deleted after exact-child cleanup; none remains. Each run
+held the shared flock with nice 10, used three instances, and checked load
+every two seconds. The second stopped as required when that check reached 18.
+
+When the machine is available, reproduce with a fresh attempt name:
+
+```sh
+uptime
+flock /Users/luis/Code/brawl-dolphin/build.lock nice -n 10 python3 notes/friendlies-0348-runs/controls/run-pplus-case.py 2 NEW
+flock /Users/luis/Code/brawl-dolphin/build.lock nice -n 10 python3 notes/friendlies-0348-runs/controls/run-pplus-case.py 1 NEW
+```
+
+The runner checks load <14 after acquiring the lock, clones with `cp -c`, makes
+only the clones writable, and removes them in `finally`. It never overwrites
+an existing evidence directory. The remaining finish-0348 gates are recorded
+in [finish verification](finish-0348-verification.md).
 
 ## Runtime fix: returning a token to sit out
 
@@ -85,6 +141,10 @@ legacy/historical, results-only and generic-module key checks:
 The final Python runner suite has **3 passing regressions**. No emulator recovery
 change was necessary. The fixture's optional `--dump-stacks` traces only its own
 threads on SIGUSR1; it does not inspect other processes.
+
+Case 4c proves that reconnecting after the fixture closes a peer's room socket
+keeps that peer's seat. The fixture closes the socket when a send blocks for
+one second; it does not hold that socket open through the blackout.
 
 ## Earlier attempts retained honestly
 

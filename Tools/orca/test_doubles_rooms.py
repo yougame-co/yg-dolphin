@@ -60,7 +60,7 @@ class RunnerTest(unittest.TestCase):
         args = SimpleNamespace(site="http://127.0.0.1:1", room="test", hold_expiry=False,
                                roles="0,1,2", input_role=[], blackout_role=[], events=None,
                                defer_role=[], refused_role=[], transport="direct", probe=None,
-                               input=None, profile=None, mod_dir=None, binary="fake-orca",
+                               input=None, profile=None, pplus=None, mod_dir=None, binary="fake-orca",
                                disc="unused", keep_logs=None)
         with patch.object(fixture.subprocess, "Popen", side_effect=spawn):
             with self.assertRaises(StopAfterThirdSpawn):
@@ -81,10 +81,32 @@ class RunnerTest(unittest.TestCase):
         args = SimpleNamespace(site="http://127.0.0.1:1", room="test", hold_expiry=False,
                                roles="0,1,2", input_role=[], blackout_role=["2=50-56"], events=None,
                                defer_role=[], refused_role=[], transport="direct", probe=None,
-                               input=None, profile=None, mod_dir=None, binary="fake-orca",
+                               input=None, profile=None, pplus=None, mod_dir=None, binary="fake-orca",
                                disc="unused", keep_logs=None)
         with patch.object(fixture.subprocess, "Popen", side_effect=spawn):
             with self.assertRaises(StopAfterEnvironment):
+                fixture.run(args)
+
+
+    def test_legacy_pplus_boots_the_launcher_with_the_disc_and_no_local_input(self):
+        class StopAfterCommand(Exception):
+            pass
+
+        def spawn(command, **kwargs):
+            kwargs["stderr"].close()  # Inspect the command without starting an emulator.
+            self.assertEqual(kwargs["env"].get("ORCA_PROFILE"), "PPLUS32")
+            self.assertEqual(kwargs["env"].get("ORCA_NO_LOCAL_INPUT"), "1")
+            self.assertEqual(command[command.index("-e") + 1], "clone/launcher.dol")
+            self.assertIn("Dolphin.Core.DefaultISO=brawl.wbfs", command)
+            raise StopAfterCommand()
+
+        args = SimpleNamespace(site="http://127.0.0.1:1", room="test", hold_expiry=False,
+                               roles="0,1,2", input_role=[], blackout_role=[], events=None,
+                               defer_role=[], refused_role=[], transport="direct", probe=None,
+                               input=None, profile=None, pplus="clone/launcher.dol", mod_dir=None,
+                               binary="fake-orca", disc="brawl.wbfs", keep_logs=None)
+        with patch.object(fixture.subprocess, "Popen", side_effect=spawn):
+            with self.assertRaises(StopAfterCommand):
                 fixture.run(args)
 
 

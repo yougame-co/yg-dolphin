@@ -1,0 +1,261 @@
+{
+  "verdict": "INCOMPLETE: stopped at machine load ceiling",
+  "observed_load_after_stop": 19.05,
+  "required_load_below": 18,
+  "latest_matching_confirmed_frame": 4140,
+  "all_common_hashes_match": true,
+  "peers": {
+    "0": {
+      "profile": "PPLUS32",
+      "fight_1_human_ports": [
+        1,
+        2
+      ],
+      "port_2_panel_kind_at_css2": {
+        "240": 1,
+        "270": 0,
+        "300": 0,
+        "400": 0
+      },
+      "scene_entries": [
+        [
+          1,
+          "scStrap"
+        ],
+        [
+          104,
+          "scMemoryChange"
+        ],
+        [
+          121,
+          "scBoot"
+        ],
+        [
+          157,
+          "scMemoryChange"
+        ],
+        [
+          161,
+          "scTitle"
+        ],
+        [
+          177,
+          "scMemoryChange"
+        ],
+        [
+          195,
+          "muMenuMain"
+        ],
+        [
+          386,
+          "scMemoryChange"
+        ],
+        [
+          390,
+          "scSelctCharacter"
+        ],
+        [
+          998,
+          "scSelStage"
+        ],
+        [
+          1220,
+          "scMemoryChange"
+        ],
+        [
+          1221,
+          "scMelee"
+        ],
+        [
+          2877,
+          "scMemoryChange"
+        ],
+        [
+          2882,
+          "scVsResult"
+        ],
+        [
+          3302,
+          "scMemoryChange"
+        ],
+        [
+          3305,
+          "scSelctCharacter"
+        ],
+        [
+          4013,
+          "scSelStage"
+        ]
+      ],
+      "second_fight_probe_present": false
+    },
+    "1": {
+      "profile": "PPLUS32",
+      "fight_1_human_ports": [
+        1,
+        2
+      ],
+      "port_2_panel_kind_at_css2": {
+        "240": 1,
+        "270": 0,
+        "300": 0,
+        "400": 0
+      },
+      "scene_entries": [
+        [
+          1,
+          "scStrap"
+        ],
+        [
+          104,
+          "scMemoryChange"
+        ],
+        [
+          121,
+          "scBoot"
+        ],
+        [
+          157,
+          "scMemoryChange"
+        ],
+        [
+          161,
+          "scTitle"
+        ],
+        [
+          177,
+          "scMemoryChange"
+        ],
+        [
+          195,
+          "muMenuMain"
+        ],
+        [
+          386,
+          "scMemoryChange"
+        ],
+        [
+          390,
+          "scSelctCharacter"
+        ],
+        [
+          998,
+          "scSelStage"
+        ],
+        [
+          1220,
+          "scMemoryChange"
+        ],
+        [
+          1221,
+          "scMelee"
+        ],
+        [
+          2877,
+          "scMemoryChange"
+        ],
+        [
+          2882,
+          "scVsResult"
+        ],
+        [
+          3302,
+          "scMemoryChange"
+        ],
+        [
+          3305,
+          "scSelctCharacter"
+        ],
+        [
+          4013,
+          "scSelStage"
+        ]
+      ],
+      "second_fight_probe_present": false
+    },
+    "2": {
+      "profile": "PPLUS32",
+      "fight_1_human_ports": [
+        1,
+        2
+      ],
+      "port_2_panel_kind_at_css2": {
+        "240": 1,
+        "270": 0,
+        "300": 0,
+        "400": 0
+      },
+      "scene_entries": [
+        [
+          1,
+          "scStrap"
+        ],
+        [
+          104,
+          "scMemoryChange"
+        ],
+        [
+          121,
+          "scBoot"
+        ],
+        [
+          157,
+          "scMemoryChange"
+        ],
+        [
+          161,
+          "scTitle"
+        ],
+        [
+          177,
+          "scMemoryChange"
+        ],
+        [
+          195,
+          "muMenuMain"
+        ],
+        [
+          386,
+          "scMemoryChange"
+        ],
+        [
+          390,
+          "scSelctCharacter"
+        ],
+        [
+          998,
+          "scSelStage"
+        ],
+        [
+          1220,
+          "scMemoryChange"
+        ],
+        [
+          1221,
+          "scMelee"
+        ],
+        [
+          2877,
+          "scMemoryChange"
+        ],
+        [
+          2882,
+          "scVsResult"
+        ],
+        [
+          3302,
+          "scMemoryChange"
+        ],
+        [
+          3305,
+          "scSelctCharacter"
+        ],
+        [
+          4013,
+          "scSelStage"
+        ]
+      ],
+      "second_fight_probe_present": false
+    }
+  }
+}

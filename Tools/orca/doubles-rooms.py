@@ -552,6 +552,7 @@ def run(args):
                 user.mkdir()
                 environment = {"PATH": os.environ.get("PATH", ""),
                                "ORCA_SESSION": "1", "ORCA_TEST_COMMANDS": "1", "ORCA_TEST_ROOM_DROP": "1",
+                               "ORCA_NO_LOCAL_INPUT": "1",
                                "ORCA_TEST_DEV_GAME": "orca-doubles-test", "ORCA_SITE": args.site,
                                "ORCA_ROOM": args.room, "ORCA_JOIN": "0" if role == 0 else "1",
                                "ORCA_TEST_PLAYER": f"Doubles{role}", "ORCA_NAME": f"Doubles{role}",
@@ -576,8 +577,8 @@ def run(args):
                 input_path = role_inputs.get(str(role), args.input)
                 if input_path:
                     environment["YG_INPUT"] = str(Path(input_path).resolve())
-                if args.profile:
-                    environment["ORCA_PROFILE"] = args.profile
+                if args.profile or args.pplus:
+                    environment["ORCA_PROFILE"] = "PPLUS32" if args.pplus else args.profile
                 if args.mod_dir:
                     environment["ORCA_MOD_DIR"] = str(Path(args.mod_dir).resolve())
                     environment["ORCA_SD_CACHE"] = str(Path(work) / "sd-cache")
@@ -585,8 +586,11 @@ def run(args):
                 command = [args.binary, "-p", "headless", "-u", str(user), "-v", "Null",
                            "-C", "Dolphin.DSP.Backend=No Audio Output",
                            "-C", "Dolphin.Input.BackgroundInput=True", "-C", "Logger.Logs.ROLLBACK=True",
-                           "-C", "Logger.Logs.NETPLAY=True", "-C", "Logger.Options.Verbosity=3",
-                           "-e", args.disc]
+                           "-C", "Logger.Logs.NETPLAY=True", "-C", "Logger.Options.Verbosity=3"]
+                if args.pplus:
+                    command += ["-C", f"Dolphin.Core.DefaultISO={args.disc}", "-e", args.pplus]
+                else:
+                    command += ["-e", args.disc]
                 process = subprocess.Popen(command, env=environment, stdin=subprocess.PIPE,
                                            stdout=subprocess.PIPE, stderr=stderr, text=True, bufsize=1)
                 lines = queue.Queue()
@@ -803,6 +807,7 @@ def main():
     parser.add_argument("--local", action="store_true", help="own a loopback server for this run")
     game = parser.add_mutually_exclusive_group()
     game.add_argument("--profile", help="launcher profile, e.g. PPLUS32")
+    game.add_argument("--pplus", help="legacy P+ launcher DOL with sd.raw beside it; --disc is Brawl")
     game.add_argument("--mod-dir", help="local prepared mod bundle; no download or install")
     parser.add_argument("--seconds", type=int, default=180)
     parser.add_argument("--keep-logs")

@@ -1,0 +1,9 @@
+# Project+: the CSS cursor needs 26 frames upward; only the host picks a stage.
+@scStrap mash 30 99999 1 40 A
+@scBoot mash 30 99999 1 40 A
+@scTitle mash 30 99999 1 40 A
+@scSelctCharacter:1 250 276 2 SY=255
+@scSelctCharacter:1 340 343 2 A
+@scVsResult mash 260 99999 2 40 A
+@scVsResult mash 620 99999 2 40 START
+@scMelee:1 900 99999 2 SX=1
