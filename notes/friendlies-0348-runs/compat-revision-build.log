@@ -1,0 +1,15 @@
+[0/2] Re-checking globbed directories...
+[1/15] cd /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/build-orca-tests && /opt/homebrew/bin/cmake -DPROJECT_SOURCE_DIR=/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348 -DPROJECT_BINARY_DIR=/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/build-orca-tests -DDISTRIBUTOR=None -DDOLPHIN_DEFAULT_UPDATE_TRACK= -DGIT_FOUND=TRUE -DGIT_EXECUTABLE=/usr/bin/git -DDOLPHIN_WC_REVISION= -DDOLPHIN_WC_DESCRIBE= -DDOLPHIN_WC_BRANCH= -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -P /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/CMake/ScmRevGen.cmake
+[2/15] Building CXX object Source/Core/Common/CMakeFiles/common.dir/Version.cpp.o
+[3/15] Linking CXX static library Source/Core/Common/libcommon.a
+[4/15] Building CXX object Source/Core/Core/CMakeFiles/core.dir/Orca/Games/Brawl/OnlineSeats.cpp.o
+[5/15] Building CXX object Source/UnitTests/Core/CMakeFiles/OrcaGenericModuleTest.dir/Orca/GenericModuleTest.cpp.o
+[6/15] Building CXX object Source/Core/Core/CMakeFiles/core.dir/Orca/Games/Brawl/BrawlGame.cpp.o
+[7/15] Building CXX object Source/Core/Core/CMakeFiles/core.dir/Orca/Games/Brawl/OnlineMenu.cpp.o
+[8/15] Building CXX object Source/Core/Core/CMakeFiles/core.dir/Orca/Games/Brawl/BrawlModule.cpp.o
+[9/15] Building CXX object Source/Core/Core/CMakeFiles/core.dir/Orca/Games/Brawl/OnlineRules.cpp.o
+[10/15] Linking CXX static library Source/Core/Core/libcore.a
+[11/15] Building CXX object Source/UnitTests/Core/CMakeFiles/OrcaOnlineSeatsTest.dir/Orca/Games/Brawl/OnlineSeatsTest.cpp.o
+[12/15] Linking CXX executable Binaries/dolphin-emu-nogui
+[13/15] Building CXX object Source/UnitTests/Core/CMakeFiles/OrcaModTest.dir/Orca/ModTest.cpp.o
+[14/15] Linking CXX executable Binaries/Tests/tests

@@ -1,0 +1,66 @@
+Running main() from UnitTestsMain.cpp
+Note: Google Test filter = OrcaOnlineSeats.*:OrcaMod.UxKeyPartIsPerGame:OrcaMod.GoldenLegacyCompatibilityKey:OrcaMod.LegacyKeyIsUnchanged:OrcaMod.ResultsOnlyKeyEndsWithItsOwnGameCompat:OrcaGenericModule.PackKeyDistinguishesGenericFromAnInactiveBuiltin
+[==========] Running 25 tests from 3 test suites.
+[----------] Global test environment set-up.
+[----------] 4 tests from OrcaMod
+[ RUN      ] OrcaMod.UxKeyPartIsPerGame
+[       OK ] OrcaMod.UxKeyPartIsPerGame (4 ms)
+[ RUN      ] OrcaMod.LegacyKeyIsUnchanged
+[       OK ] OrcaMod.LegacyKeyIsUnchanged (0 ms)
+[ RUN      ] OrcaMod.GoldenLegacyCompatibilityKey
+[       OK ] OrcaMod.GoldenLegacyCompatibilityKey (0 ms)
+[ RUN      ] OrcaMod.ResultsOnlyKeyEndsWithItsOwnGameCompat
+[       OK ] OrcaMod.ResultsOnlyKeyEndsWithItsOwnGameCompat (0 ms)
+[----------] 4 tests from OrcaMod (6 ms total)
+
+[----------] 1 test from OrcaGenericModule
+[ RUN      ] OrcaGenericModule.PackKeyDistinguishesGenericFromAnInactiveBuiltin
+[       OK ] OrcaGenericModule.PackKeyDistinguishesGenericFromAnInactiveBuiltin (0 ms)
+[----------] 1 test from OrcaGenericModule (0 ms total)
+
+[----------] 20 tests from OrcaOnlineSeats
+[ RUN      ] OrcaOnlineSeats.WhatIsOnline
+[       OK ] OrcaOnlineSeats.WhatIsOnline (0 ms)
+[ RUN      ] OrcaOnlineSeats.TheRecordKeepsNoCpuAndNoHumanWithoutAPort
+[       OK ] OrcaOnlineSeats.TheRecordKeepsNoCpuAndNoHumanWithoutAPort (0 ms)
+[ RUN      ] OrcaOnlineSeats.ACpuFromLocalVersusNeverReachesRankedsCharacterSelect
+[       OK ] OrcaOnlineSeats.ACpuFromLocalVersusNeverReachesRankedsCharacterSelect (2 ms)
+[ RUN      ] OrcaOnlineSeats.TheRecordIsClearedOnlyBetweenScenes
+[       OK ] OrcaOnlineSeats.TheRecordIsClearedOnlyBetweenScenes (11 ms)
+[ RUN      ] OrcaOnlineSeats.EveryOnlineModeClearsTheRecordAndLocalVersusKeepsItsCpus
+[       OK ] OrcaOnlineSeats.EveryOnlineModeClearsTheRecordAndLocalVersusKeepsItsCpus (21 ms)
+[ RUN      ] OrcaOnlineSeats.AFriendsHumanStaysWhileTheyArePluggedIn
+[       OK ] OrcaOnlineSeats.AFriendsHumanStaysWhileTheyArePluggedIn (2 ms)
+[ RUN      ] OrcaOnlineSeats.ACpuPanelOnAnOnlineSelectBecomesEmpty
+[       OK ] OrcaOnlineSeats.ACpuPanelOnAnOnlineSelectBecomesEmpty (8 ms)
+[ RUN      ] OrcaOnlineSeats.AFriendWhoLeftIsTheGamesToEmpty
+[       OK ] OrcaOnlineSeats.AFriendWhoLeftIsTheGamesToEmpty (5 ms)
+[ RUN      ] OrcaOnlineSeats.WhichSeatsAreHidden
+[       OK ] OrcaOnlineSeats.WhichSeatsAreHidden (0 ms)
+[ RUN      ] OrcaOnlineSeats.TheQueuesOwnSelectShowsThePlayerAloneThenTheSearchingSeat
+[       OK ] OrcaOnlineSeats.TheQueuesOwnSelectShowsThePlayerAloneThenTheSearchingSeat (2 ms)
+[ RUN      ] OrcaOnlineSeats.AQueueRoomShowsBothPlayers
+[       OK ] OrcaOnlineSeats.AQueueRoomShowsBothPlayers (2 ms)
+[ RUN      ] OrcaOnlineSeats.WithFriendsShowsAFriendsPanelAsTheyPlugIn
+[       OK ] OrcaOnlineSeats.WithFriendsShowsAFriendsPanelAsTheyPlugIn (2 ms)
+[ RUN      ] OrcaOnlineSeats.ASelectThatStopsBeingOnlineShowsEveryPanelAgain
+[       OK ] OrcaOnlineSeats.ASelectThatStopsBeingOnlineShowsEveryPanelAgain (4 ms)
+[ RUN      ] OrcaOnlineSeats.OnlyModelsThisKnowsAreTouched
+[       OK ] OrcaOnlineSeats.OnlyModelsThisKnowsAreTouched (4 ms)
+[ RUN      ] OrcaOnlineSeats.APlayerTypeButtonNeverTakesAOnAnOnlineSelectWithoutAHeader
+[       OK ] OrcaOnlineSeats.APlayerTypeButtonNeverTakesAOnAnOnlineSelectWithoutAHeader (0 ms)
+[ RUN      ] OrcaOnlineSeats.TheGateKeepsAOffTheButtonsOnlyWhereItShould
+[       OK ] OrcaOnlineSeats.TheGateKeepsAOffTheButtonsOnlyWhereItShould (9 ms)
+[ RUN      ] OrcaOnlineSeats.InAMultiFriendRoomAHeldTokenCanReturnToItsOwnPanel
+[       OK ] OrcaOnlineSeats.InAMultiFriendRoomAHeldTokenCanReturnToItsOwnPanel (2 ms)
+[ RUN      ] OrcaOnlineSeats.ThePlayersOwnNameButtonAndItsListTakeA
+[       OK ] OrcaOnlineSeats.ThePlayersOwnNameButtonAndItsListTakeA (4 ms)
+[ RUN      ] OrcaOnlineSeats.APanelACpuLeftIsJoinedWithTheGamesOwnA
+[       OK ] OrcaOnlineSeats.APanelACpuLeftIsJoinedWithTheGamesOwnA (8 ms)
+[ RUN      ] OrcaOnlineSeats.PluggedInMemoryReadsTheFriendsBytes
+[       OK ] OrcaOnlineSeats.PluggedInMemoryReadsTheFriendsBytes (2 ms)
+[----------] 20 tests from OrcaOnlineSeats (95 ms total)
+
+[----------] Global test environment tear-down
+[==========] 25 tests from 3 test suites ran. (101 ms total)
+[  PASSED  ] 25 tests.

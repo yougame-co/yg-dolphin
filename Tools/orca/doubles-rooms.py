@@ -531,6 +531,7 @@ def run(args):
     refused_seen = set()
     with tempfile.TemporaryDirectory(prefix="orca-doubles-") as work:
         try:
+            print(f"Fixture PID: {os.getpid()}", flush=True)
             def spawn(role):
                 user = Path(work) / f"user-{role}"
                 user.mkdir()
@@ -550,8 +551,11 @@ def run(args):
                 if os.name == "nt":
                     environment["SystemRoot"] = os.environ.get("SystemRoot", r"C:\Windows")
                 environment["YG_SCENES"] = "1"
-                if str(role) in role_blackouts:
-                    environment["ORCA_TEST_BLACKOUT"] = role_blackouts[str(role)]
+                if role_blackouts:
+                    # The knob adds test=true to the compatibility key. Keep every peer in
+                    # that test setup, while only the requested role blacks out during the run.
+                    environment["ORCA_TEST_BLACKOUT"] = role_blackouts.get(
+                        str(role), "1000000-1000001")
                 if args.probe:
                     environment["ORCA_UX_PROBE"] = str(Path(args.probe).resolve())
                 input_path = role_inputs.get(str(role), args.input)

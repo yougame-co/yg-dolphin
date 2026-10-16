@@ -1,0 +1,30 @@
+Fixture PID: 55140
+FFixture PID: 55140
+/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/sre_parse.py:495: ResourceWarning: unclosed file <_io.FileIO name='/var/folders/0k/gcc8hsbs5qs9bzd0254hd8n80000gn/T/orca-doubles-4adu1ztf/peer-0.log' mode='wb' closefd=True>
+  subpattern = SubPattern(state)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.
+======================================================================
+FAIL: test_blackout_keeps_all_roles_on_the_same_test_compatibility (__main__.RunnerTest)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/test_doubles_rooms.py", line 85, in test_blackout_keeps_all_roles_on_the_same_test_compatibility
+    fixture.run(args)
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 602, in run
+    spawn(role)
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 572, in spawn
+    process = subprocess.Popen(command, env=environment, stdin=subprocess.PIPE,
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/unittest/mock.py", line 1093, in __call__
+    return self._mock_call(*args, **kwargs)
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/unittest/mock.py", line 1097, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+  File "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/Python3.framework/Versions/3.9/lib/python3.9/unittest/mock.py", line 1158, in _execute_mock_call
+    result = effect(*args, **kwargs)
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/test_doubles_rooms.py", line 75, in spawn
+    self.assertEqual(kwargs["env"].get("ORCA_TEST_BLACKOUT"), "1000000-1000001")
+AssertionError: None != '1000000-1000001'
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.232s
+
+FAILED (failures=1)

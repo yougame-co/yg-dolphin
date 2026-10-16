@@ -39,6 +39,7 @@ class RunnerTest(unittest.TestCase):
         def spawn(command, **kwargs):
             role = int(Path(command[command.index("-u") + 1]).name.split("-")[1])
             if role == 2:
+                kwargs["stderr"].close()  # This stub never creates the third child.
                 self.assertTrue(registered.is_set(), "third role started before the second owned its seat")
                 raise StopAfterThirdSpawn()
             log = kwargs["stderr"]
@@ -62,6 +63,27 @@ class RunnerTest(unittest.TestCase):
                                disc="unused", keep_logs=None)
         with patch.object(fixture.subprocess, "Popen", side_effect=spawn):
             with self.assertRaises(StopAfterThirdSpawn):
+                fixture.run(args)
+
+
+    def test_blackout_keeps_all_roles_on_the_same_test_compatibility(self):
+        class StopAfterEnvironment(Exception):
+            pass
+
+        def spawn(command, **kwargs):
+            # Even the non-faulted host must have a valid (inactive) blackout config:
+            # TestOverridesActive contributes test=true to the compatibility key.
+            kwargs["stderr"].close()  # This environment-only stub creates no child.
+            self.assertEqual(kwargs["env"].get("ORCA_TEST_BLACKOUT"), "1000000-1000001")
+            raise StopAfterEnvironment()
+
+        args = SimpleNamespace(site="http://127.0.0.1:1", room="test", hold_expiry=False,
+                               roles="0,1,2", input_role=[], blackout_role=["2=50-56"], events=None,
+                               defer_role=[], refused_role=[], transport="direct", probe=None,
+                               input=None, profile=None, mod_dir=None, binary="fake-orca",
+                               disc="unused", keep_logs=None)
+        with patch.object(fixture.subprocess, "Popen", side_effect=spawn):
+            with self.assertRaises(StopAfterEnvironment):
                 fixture.run(args)
 
 

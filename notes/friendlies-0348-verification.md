@@ -32,8 +32,8 @@ Evidence: [before](friendlies-0348-runs/role-order-before.log),
 | 2: rotation at next CSS | PASS: ports 1/2 then 1/3, both fights back to CSS, confirmed through 7740, 0 desync | case-2-attempt-7/ |
 | 3a: four peers, two sit out | PASS: four synchronized peers, only ports 1/2 fight, back to CSS, confirmed through 9000 | case-3-attempt-1/ |
 | 3b: four fight 2v2 | PASS: teams 1+3 / 2+4, both winners have one stock and place 0 on all four peers, back to CSS, confirmed through 9000, 0 desync | case-3-attempt-3/teams-evidence.json |
-| 4a: sitting-out peer leaves | PENDING | |
-| 4b: sitting-out peer away/back | PENDING | |
+| 4a: sitting-out peer leaves | PASS: only port 3 leaves; fighters return to CSS, confirmed through 6000, 0 desync | case-4a-attempt-1/ |
+| 4b: sitting-out peer away/back | PASS: same seat retained; back to CSS, confirmed through 5940, 0 desync | case-4b-attempt-1/ |
 | 4c: sitting-out peer blackout/return | PENDING | |
 | 5: third arrival mid-fight | PENDING | |
 | 6: third arrival during recovery | PENDING | |
@@ -111,3 +111,20 @@ Ports 1 and 3 are joint winners. The fight lasts 864 frames, before port 3's
 scheduled walk at 1000, and returns to CSS. All four agree through frame 9000;
 0 desyncs. Evidence: `case-3-attempt-3/teams-evidence.json`, probe binaries,
 scene logs and `run.log`, all under `friendlies-0348-runs/`.
+
+## Blackout fixture setup
+
+Case 4c attempt 1 ended before gameplay with `room_mismatch`. The per-role
+blackout knob contributes `test=true` to the compatibility key; only the faulted
+peer had it, so the other peers correctly refused that different setup. This is
+a fixture setup failure, not a runtime blackout verdict. The fixture now gives
+non-faulted peers a valid inactive blackout interval (`1000000-1000001` seconds),
+so every peer has the same test setup and only the selected peer loses traffic
+during the run. The regression failed before and passes after; **2 Python runner
+tests pass cleanly**. Evidence: `blackout-compat-before.log` and
+`blackout-compat-after.log`. Attempt 2 is queued.
+
+The game compatibility revisions and updated assertions are now built. **25
+selected tests passed** (20 OnlineSeats plus the per-game, legacy key, historical
+key goldens, results-only and generic-module key checks). Evidence:
+`compat-revision-build.log`, `compat-revision-tests.log` under the runs directory.
