@@ -1,149 +1,129 @@
 # Friendlies 0.3.48 verification
 
-Train `train-0348`, resumed 2026-10-16 at `15621acde9`; required base `694f5f9644`
-is an ancestor (`BASE-OK`). One `build-orca-tests` Ninja Release arm64 build,
-tests and NoGUI enabled. All runs use localhost dev tickets, the authorized Brawl
-WBFS read in place, isolated temporary users, headless Null video and no sound.
-Build/test/fixture commands use the shared flock and nice 10, preflight load <18,
-and no more than four game instances. Fixture `finally` cleans up its exact children.
+**Gameplay cases 1–8 PASS**, including every subcase. Train `train-0348`, 2026-10-16.
+The required base `694f5f9644` was checked before edits: initial HEAD was
+`15621acde9 Record train 0.3.48 configuration blocker`, followed by `BASE-OK`.
+The previous missing-submodule and disc prerequisites are resolved.
 
-## Fixture correction
+## Runs and evidence
 
-The first case-2 attempt was stopped after logs showed `Doubles2` received port 2
-and `Doubles1` port 3. Concurrent ticket requests assigned seats in arrival order,
-while role-specific pad scripts assumed role order. Three peers synchronized, but
-this could not prove the intended fighters/rotation. No game/runtime defect was shown.
-Evidence: [attempt 1](friendlies-0348-runs/case-2-attempt-1/peer-0.log),
-[peer 1](friendlies-0348-runs/case-2-attempt-1/peer-1.log),
-[peer 2](friendlies-0348-runs/case-2-attempt-1/peer-2.log).
+Evidence paths below are relative to `notes/friendlies-0348-runs/`. Each final run
+has a real fixture PASS line, peer stderr/stdout logs, diagnostics and fighter
+record probes. Every requested fight returned to character select (CSS), and
+all final runs reported **0 desyncs**. Confirmed hashes are compared among the
+active peers; after a permanent leave, that means the remaining fighters.
 
-The runner now waits for each role's authoritative seat assignment before booting
-the next role and checks that it received the intended port. The isolated runner
-regression delays the second ticket and checks that the third child cannot start
-before it owns its seat: **FAIL before, PASS after (1 test)**.
-Evidence: [before](friendlies-0348-runs/role-order-before.log),
-[after](friendlies-0348-runs/role-order-after.log).
+| Case | Result and observed behavior | Confirmed through | Evidence directory |
+| --- | --- | --- | --- |
+| 1: three peers, two fight, one sits out | PASS repeated: humans on ports 1/2; port 3 idle; back to CSS | 7740 across the two-fight run | `case-2-attempt-7/` |
+| 2: rotate at next CSS | PASS: port 2 empties its panel; port 3 picks; fight 2 has humans 1/3 and returns to CSS | 7740 | `case-2-attempt-7/` |
+| 3a: four peers, two sit out | PASS: humans 1/2, ports 3/4 idle, all four remain synchronized through the fight and CSS | 9000 | `case-3-attempt-3/` |
+| 3b: all four play 2v2 | PASS: teams 1+3 versus 2+4; joint winners 1/3, both with a stock remaining; back to CSS | 9000 | `case-3-attempt-3/`, `teams-evidence.json` |
+| 4a: sitting-out peer leaves for good | PASS: peer 3 leaves mid-fight; only that port drops; fighters continue to CSS | 6000 | `case-4a-attempt-1/` |
+| 4b: sitting-out peer away/back inside budget | PASS: relay absent for six seconds; direct traffic continues; same seat and peer retained; fight returns to CSS | 5940 | `case-4b-attempt-1/` |
+| 4c: sitting-out peer blacks out and recovers | PASS: ORCA_TEST_BLACKOUT at 50–56 seconds; both transports absent; same seat retained; one counted stall; fight returns to CSS | 5640 | `case-4c-attempt-4/` |
+| 5: third arrives mid-fight | PASS: newcomer waits; CSS at 4044, port 3 plugs at 4455; original friend plugged at 1570; fighters finish normally | 5940 | `case-5-attempt-1/` |
+| 6: third arrives during another friend's recovery | PASS: port 2's relay and direct traffic stop; newcomer arrives; port 2 returns on the same seat; CSS at 4045, newcomer plugs at 4466 | 5580 | `case-6-attempt-1/` |
+| 7: fifth arrival | PASS: fifth dev ticket gets HTTP 409; no fifth game process; original four continue through fight and CSS | 6000 | `case-7-attempt-1/` |
+| 8: ordinary room, third arrival | PASS: only newcomer reports room_full and never plugs; original pair fight and return to CSS | 5940 | `case-8-attempt-1/` |
 
-## Gameplay cases
+The two-fight 2v2 run is checked beyond its human-port mask: all four probes have
+teams `[0,1,0,1]`, results stocks `[1,0,1,0]`, places `[0,2,0,3]`. Ports 1 and 3
+are joint winners. The fight lasts 864 frames, before port 3's scheduled walk at
+1000. See [team evidence](friendlies-0348-runs/case-3-attempt-3/teams-evidence.json).
 
-| Case | Result | Evidence |
-| --- | --- | --- |
-| 1: three peers, two fight, one sits out | PASS repeated as fight 1 of rotation | case-2-attempt-7/ |
-| 2: rotation at next CSS | PASS: ports 1/2 then 1/3, both fights back to CSS, confirmed through 7740, 0 desync | case-2-attempt-7/ |
-| 3a: four peers, two sit out | PASS: four synchronized peers, only ports 1/2 fight, back to CSS, confirmed through 9000 | case-3-attempt-1/ |
-| 3b: four fight 2v2 | PASS: teams 1+3 / 2+4, both winners have one stock and place 0 on all four peers, back to CSS, confirmed through 9000, 0 desync | case-3-attempt-3/teams-evidence.json |
-| 4a: sitting-out peer leaves | PASS: only port 3 leaves; fighters return to CSS, confirmed through 6000, 0 desync | case-4a-attempt-1/ |
-| 4b: sitting-out peer away/back | PASS: same seat retained; back to CSS, confirmed through 5940, 0 desync | case-4b-attempt-1/ |
-| 4c: sitting-out peer blackout/return | PASS: 50–56 s blackout, same seat, fight back to CSS, confirmed through 5640, 0 desync, one counted stall | case-4c-attempt-4/ |
-| 5: third arrival mid-fight | PENDING | |
-| 6: third arrival during recovery | PENDING | |
-| 7: fifth arrival refused alone | PENDING | |
-| 8: ordinary room refuses only third | PENDING | |
+## Runtime fix: returning a token to sit out
 
-The controls and rule setup are under `friendlies-0348-runs/controls/`.
-`one-stock.probe` sets stock mode/one stock for finite fights, then reads each
-fight's four player records. A fight's mask is checked from those records on
-every peer that dumped it, with a host dump required; scene logs must show each
-fight returning to CSS. Final confirmation hashes must agree and stats show 0 desync.
+Picking a token up with B leaves the human panel active, which blocks Start.
+The existing online input gate also blocked A on the player's own type button,
+so the player could not empty that panel to sit out. The new regression in
+`Source/UnitTests/Core/Orca/Games/Brawl/OnlineSeatsTest.cpp` failed against the
+original gate; the fix passes the full 20-test OnlineSeats suite.
+Evidence: [before](friendlies-0348-runs/rotation-test-before.log),
+[after](friendlies-0348-runs/rotation-test-after.log).
 
-## Gates
+With at least three plugged ports and no locked header, A may now reach only a
+connected player's own human panel while its token is held and not flying; the
+stick is centred during A. The native game panel and existing CPU clear make it
+empty. No bench state or rotation message was added. The ordinary two-player,
+ranked, other-panel, empty-panel and unplugged-port gates remain covered.
+In live case 2, the outgoing panel changes from human to empty after this press
+and stays empty at CSS2 frames 270/300/400; the next fight has humans only 1/3.
 
-Initial doubles fixture self-test PASS (four clients, fifth refusal, six pairs,
-shared capture, retained-away roster, recovery, leave, expiry and confirmed hashes).
-Evidence: [self-test](friendlies-0348-runs/self-test.log).
-Final self-test, full unit binary and Orca-filter counts are pending.
-No pushes, production operations, external services, signing or mailbox calls.
+This changes emulated input handling: Brawl and Project+ game revisions become
+**1**, making their key suffix `ux=31.1`. An older mask would diverge on the
+newly permitted action, so this per-game bump is necessary. Engine compatibility
+remains **31**; results-only and legacy-launcher revisions remain unchanged.
+Historical key serialization goldens remain pinned after normalizing only this
+suffix. **25 selected C++ tests PASS**, including the OnlineSeats, per-game,
+legacy/historical, results-only and generic-module key checks:
+[build](friendlies-0348-runs/compat-revision-build.log),
+[tests](friendlies-0348-runs/compat-revision-tests.log).
 
-## Rotation investigation in progress
+## Fixture corrections and regression evidence
 
-Attempts 2 and 3 picked up the outgoing player's token with B; this leaves their
-human panel active, so Start cannot begin the next fight. Attempt 5 moved that
-held token to the portrait area and pressed A: the panel stayed active. Attempt 6
-held B over the own player-type button: all peers returned to the main menu,
-not a rotation. These are real failed control attempts, with no second fight.
-Their first fights used ports 1/2, returned to CSS and stayed synchronized.
-Attempt 4 was interrupted by SIGINT to its exact fixture PID when measured load
-rose to 18.35; its finally cleanup finished. This is no gameplay verdict.
+- **Ticket order:** a slow second ticket let role 2 claim role 1's port, invalidating
+  per-role scripts. The runner now waits for every authoritative seat assignment.
+  Delayed-ticket regression FAIL before / PASS after:
+  [before](friendlies-0348-runs/role-order-before.log),
+  [after](friendlies-0348-runs/role-order-after.log).
+- **Blackout setup parity:** the blackout knob adds test=true to the compatibility
+  key. Non-faulted peers now get an inactive `1000000-1000001` interval, so only
+  the requested peer blacks out while every peer has the same test setup.
+  Regression FAIL before / PASS after:
+  [before](friendlies-0348-runs/blackout-compat-before.log),
+  [after](friendlies-0348-runs/blackout-compat-after.log).
+- **Fixture writer:** a nonreading peer blocked a socket write while the room lock
+  was held. The live own-fixture SIGUSR1 trace confirms the blocked writer and
+  waiting ticket handlers. Writes now have a one-second kernel send timeout;
+  failed sockets close and their normal away handling runs, while idle reads
+  are unchanged. Nonreading-socket regression FAIL before / PASS after:
+  [before](friendlies-0348-runs/room-backpressure-before.log),
+  [after](friendlies-0348-runs/room-backpressure-after.log),
+  [live trace](friendlies-0348-runs/case-4c-attempt-3/run.log).
 
-A regression now exercises A on the outgoing player's own human panel with a
-held token and at least three connected ports. It failed against the original
-gate (A masked); the experimental gate passes all **20 OrcaOnlineSeats tests**,
-including the new regression and the existing two-player/ranked behavior checks.
-Evidence: `rotation-test-before.log`, `rotation-test-after.log` under the runs dir.
-Live attempt 7 uses this experimental binary. No live rotation PASS yet; do not
-claim the change is complete until it works and each remaining case is proved.
-No compatibility revision has changed yet. Engine compatibility stays 31; if this
-module input change is retained, the affected games need their own revision bump.
+The final Python runner suite has **3 passing regressions**. No emulator recovery
+change was necessary. The fixture's optional `--dump-stacks` traces only its own
+threads on SIGUSR1; it does not inspect other processes.
 
-The reproducible case runner is `friendlies-0348-runs/controls/run-case.py`.
-It uses the shared lock per fixture and rechecks load after acquiring it, reserving
-headroom by requiring load below 12 before starting up to four game processes.
-The hard limit is 18. Subsequent runs print their exact fixture PID for cleanup.
+## Earlier attempts retained honestly
 
-## Confirmed rotation fix and compatibility
+| Attempt | Verdict |
+| --- | --- |
+| Case 2 attempt 1 | INVALID: role/port race; stopped with SIGINT to its exact fixture PID; finally cleaned its children |
+| Case 2 attempts 2/3 | FAIL: B unpicked the token but did not empty the human panel; no second fight |
+| Case 2 attempt 4 | NO VERDICT: load rose to 18.35; stopped exact fixture PID 44555; cleanup complete; see load-stop.txt |
+| Case 2 attempt 5 | FAIL: A on the portrait area did not empty the panel |
+| Case 2 attempt 6 | FAIL: held B on the own panel backed the room to the main menu |
+| Case 3 attempt 1 | PASS for 3a and a four-human free-for-all; not 3b: team-tab click missed |
+| Case 3 attempt 2 | Not 3b: team tab clicked, but colour inputs made 1v3 |
+| Case 4c attempt 1 | Setup FAIL before gameplay: mixed test flags caused room_mismatch |
+| Case 4c attempts 2/3 | Fixture FAIL: blocked writer made diagnostics/tickets time out; attempt 3 has the live trace |
 
-Live attempt 7 PASS: plug frame 1570 for both joiners; first fight humans ports
-1/2, second fight 1/3, both back to CSS; matching confirmed hashes through 7740,
-0 desyncs. The outgoing player's panel changes from human to empty after A on
-the own player-type button while holding the token; it stays empty (area dumps
-at CSS2 frames 270/300/400). Existing input handling masked that action.
-The fix permits it only for a connected player's own human panel, token held and
-not flying, with at least three connected ports, outside a locked header. It
-centres the stick on A. No new bench state or rotation messages; native game
-panel state and the existing CPU clear do the work. The two-player, ranked and
-other-panel gates remain covered by tests.
+All these logs remain under the runs directory. No failed attempt is used as a
+final gameplay PASS.
 
-This changes emulated input handling. The Brawl and Project+ game revisions must
-be 1 (`ux=31.1`) to keep the earlier masks from joining these sessions. Engine
-compatibility stays **31**; the results-only and legacy-launcher game revisions
-stay unchanged. The per-game bump and compatibility assertions are written;
-they will be included in the final build/gates.
+## Reproduction and machine rules
 
-## Four-peer proof
+Use `python3 notes/friendlies-0348-runs/controls/run-case.py <case> <new-attempt>`;
+cases are `2`, `3`, `4a`, `4b`, `4c`, `5`, `6`, `7`, `8`. Existing attempt
+directories are never overwritten. `arguments.json` records each invocation;
+controls, scheduled events and probes are in `controls/`. The one-stock setup
+writes only fixture rules; fighter/team/results dumps are read-only evidence.
 
-Attempt 1 PASS for a two-fighter/two-idle fight and a four-human free-for-all,
-through confirmed frame 9000, 0 desyncs. It is **not** the 2v2 proof: the team-tab
-click missed (cursor target 0). Attempt 2 clicked the native team tab (target 1,
-button 3), but the colour inputs made a 1v3 split; likewise not 2v2 proof.
-Attempt 3 corrects the colour inputs: fight 2's player records have teams
-`[0,1,0,1]`, and all four peers' results have stocks `[1,0,1,0]`, places `[0,2,0,3]`.
-Ports 1 and 3 are joint winners. The fight lasts 864 frames, before port 3's
-scheduled walk at 1000, and returns to CSS. All four agree through frame 9000;
-0 desyncs. Evidence: `case-3-attempt-3/teams-evidence.json`, probe binaries,
-scene logs and `run.log`, all under `friendlies-0348-runs/`.
+One Ninja Release arm64 build at `build-orca-tests`, tests and NoGUI ON, Qt,
+bundle and signing OFF; binary `build-orca-tests/Binaries/dolphin-emu-nogui`.
+Vanilla Brawl, no launcher profile. Authorized disc, read in place, never copied:
+`/Volumes/YGWorktrees/OSCOO/ROMs/Wii/Super Smash Bros. Brawl (USA, Canada) (Rev 2).wbfs`.
+Only headless Null video, muted audio and isolated temporary users; no installed
+apps, personal profiles, controllers or adapter changes. No disk image attached.
 
-## Blackout fixture setup
-
-Case 4c attempt 1 ended before gameplay with `room_mismatch`. The per-role
-blackout knob contributes `test=true` to the compatibility key; only the faulted
-peer had it, so the other peers correctly refused that different setup. This is
-a fixture setup failure, not a runtime blackout verdict. The fixture now gives
-non-faulted peers a valid inactive blackout interval (`1000000-1000001` seconds),
-so every peer has the same test setup and only the selected peer loses traffic
-during the run. The regression failed before and passes after; **2 Python runner
-tests pass cleanly**. Evidence: `blackout-compat-before.log` and
-`blackout-compat-after.log`. Attempt 2 is queued.
-
-The game compatibility revisions and updated assertions are now built. **25
-selected tests passed** (20 OnlineSeats plus the per-game, legacy key, historical
-key goldens, results-only and generic-module key checks). Evidence:
-`compat-revision-build.log`, `compat-revision-tests.log` under the runs directory.
-
-## Blackout fixture writer correction — proved
-
-Attempts 2/3 admitted all peers but the local fixture stopped answering room
-requests during the blackout. The live SIGUSR1 thread trace in attempt 3 shows
-`Rooms.send` blocked in its socket write via `broadcast`, while room ticket and
-GET handlers wait for the room lock. The nonreading-socket regression reproduces
-that indefinite lock hold (FAIL before). The fixture now applies a one-second
-kernel send timeout (reads can remain idle) and closes a socket whose write
-fails, allowing its normal away handler to run. All **3 Python runner tests PASS**
-afterward. Evidence: `room-backpressure-before.log`, `room-backpressure-after.log`,
-`case-4c-attempt-3/run.log`. `--dump-stacks` can reproduce the own-fixture trace
-with SIGUSR1; it reads no other process.
-
-Attempt 4 PASS: only peer 3 blacked out at 50–56 s, recovered on the same seat,
-and both fighters retained it. The fight returned to CSS; confirmed hashes agree
-through 5640, 0 desync, one counted stall. Healthy peers' room connections stay
-up with the fixture correction. The fixture prints its exact PID and cleans up
-only its own game children in finally. No emulator recovery change was needed.
+Every fixture/build/test ran under the shared flock and nice 10, builds at most
+six jobs, tests one worker, one fixture at a time, at most four game instances.
+The runner rechecks load after acquiring the lock; it reserves headroom below
+18 (initially 12 for all fixtures, later 14 for up to three roles / 12 for four).
+It releases the lock without starting a fixture if that check fails. Exact own
+fixture PIDs are printed; finally quits/waits/kills only its own children.
+No heavy-slot call, push, external service, production operation, signing or
+mailbox call. Required final train-wide gates are recorded in
+[train verification](train-0348-verification.md); they follow the version bump.

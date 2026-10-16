@@ -1,0 +1,113 @@
+orca state booting
+orca caps join leave stats pause delay perf direct host chat yougame gfx music results locks queue2 pick-casual pick-ranked talk rumble record
+YG Dolphin — Super Smash Bros. Brawl (RSBE01)
+orca state playing
+YG Dolphin — Super Smash Bros. Brawl (RSBE01) — waiting for your friend
+orca state friend-joining
+orca state friend-holding
+YG Dolphin — Super Smash Bros. Brawl (RSBE01) — Doubles1 is here
+orca stats {"delay":0,"ds":0,"f":62,"fpmed":-1,"fps":61.299999999999997,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":0,"phi":0,"ping":0,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca state friend-joining
+YG Dolphin — Super Smash Bros. Brawl (RSBE01) — Doubles2 is here
+orca stats {"delay":0,"ds":0,"f":114,"fpmed":-1,"fps":59.600000000000001,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":0,"phi":0,"ping":0,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":0,"ds":0,"f":164,"fpmed":-1,"fps":60,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":0,"phi":0,"ping":0,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":0,"ds":0,"f":224,"fpmed":-1,"fps":59.899999999999999,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":0,"phi":0,"ping":1,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":0,"ds":0,"f":284,"fpmed":-1,"fps":59.899999999999999,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":0,"phi":0,"ping":0,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":0,"ds":0,"f":344,"fpmed":-1,"fps":59.899999999999999,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":0,"phi":0,"ping":1,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":0,"ds":0,"f":404,"fpmed":-1,"fps":59.899999999999999,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":0,"phi":0,"ping":1,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":0,"ds":0,"f":464,"fpmed":-1,"fps":59.899999999999999,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":0,"phi":0,"ping":0,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":0,"ds":0,"f":524,"fpmed":-1,"fps":59.899999999999999,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":0,"phi":0,"ping":1,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":0,"ds":0,"f":584,"fpmed":-1,"fps":59.899999999999999,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":0,"phi":0,"ping":0,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":0,"ds":0,"f":644,"fpmed":-1,"fps":59.899999999999999,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":0,"phi":0,"ping":0,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":0,"ds":0,"f":704,"fpmed":-1,"fps":59.899999999999999,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":0,"phi":0,"ping":0,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":0,"ds":0,"f":764,"fpmed":-1,"fps":59.899999999999999,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":0,"phi":0,"ping":0,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":0,"ds":0,"f":824,"fpmed":-1,"fps":59.899999999999999,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":0,"phi":0,"ping":0,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":0,"ds":0,"f":884,"fpmed":-1,"fps":59.899999999999999,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":0,"phi":0,"ping":0,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":0,"ds":0,"f":944,"fpmed":-1,"fps":59.899999999999999,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":0,"phi":0,"ping":0,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":0,"ds":0,"f":1004,"fpmed":-1,"fps":59.899999999999999,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":0,"phi":0,"ping":0,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":0,"ds":0,"f":1064,"fpmed":-1,"fps":59.899999999999999,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":0,"phi":0,"ping":0,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":0,"ds":0,"f":1124,"fpmed":-1,"fps":59.899999999999999,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":0,"phi":0,"ping":1,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":0,"ds":0,"f":1184,"fpmed":-1,"fps":59.899999999999999,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":0,"phi":0,"ping":0,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":0,"ds":0,"f":1244,"fpmed":-1,"fps":59.899999999999999,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":0,"phi":0,"ping":0,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":0,"ds":0,"f":1300,"fpmed":-1,"fps":60.100000000000001,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":0,"phi":0,"ping":0,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":0,"ds":0,"f":1360,"fpmed":-1,"fps":59.799999999999997,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":0,"phi":0,"ping":0,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":0,"ds":0,"f":1417,"fpmed":-1,"fps":60.200000000000003,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":0,"phi":0,"ping":1,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":0,"ds":0,"f":1473,"fpmed":-1,"fps":58.799999999999997,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":0,"phi":0,"ping":1,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":0,"ds":0,"f":1524,"fpmed":-1,"fps":58.899999999999999,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":0,"phi":0,"ping":0,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca state friend-joined
+orca stats {"delay":3,"ds":0,"f":1586,"fpmed":0,"fps":61.799999999999997,"hi":0,"hil":0,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":1,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":1636,"fpmed":0,"fps":59.399999999999999,"hi":0,"hil":2,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":1,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":1697,"fpmed":0,"fps":60.5,"hi":0,"hil":2,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":1757,"fpmed":0,"fps":59.899999999999999,"hi":0,"hil":2,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":1,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":1817,"fpmed":0,"fps":59.899999999999999,"hi":0,"hil":2,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":1,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":1877,"fpmed":0,"fps":59.5,"hi":0,"hil":2,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":1938,"fpmed":1,"fps":60.399999999999999,"hi":1,"hil":2,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":1998,"fpmed":0,"fps":60,"hi":1,"hil":2,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":2058,"fpmed":0,"fps":59.899999999999999,"hi":1,"hil":2,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":2118,"fpmed":0,"fps":59.899999999999999,"hi":1,"hil":2,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":1,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":2178,"fpmed":0,"fps":59.899999999999999,"hi":1,"hil":2,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":2234,"fpmed":0,"fps":60,"hi":1,"hil":4,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":1,"pmed":1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":2294,"fpmed":0,"fps":59.899999999999999,"hi":1,"hil":4,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":2353,"fpmed":0,"fps":59.899999999999999,"hi":1,"hil":5,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":2413,"fpmed":0,"fps":59.899999999999999,"hi":1,"hil":5,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":2473,"fpmed":0,"fps":60,"hi":1,"hil":5,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":2534,"fpmed":0,"fps":60.200000000000003,"hi":1,"hil":5,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":1,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":2594,"fpmed":0,"fps":59.899999999999999,"hi":1,"hil":5,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":2647,"fpmed":0,"fps":59.700000000000003,"hi":1,"hil":7,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":1,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":2707,"fpmed":0,"fps":59.899999999999999,"hi":1,"hil":7,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":2767,"fpmed":0,"fps":60,"hi":1,"hil":7,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":2827,"fpmed":0,"fps":59.899999999999999,"hi":1,"hil":7,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":2887,"fpmed":0,"fps":59.899999999999999,"hi":1,"hil":7,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":2947,"fpmed":0,"fps":59.899999999999999,"hi":1,"hil":7,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":3007,"fpmed":0,"fps":59.899999999999999,"hi":1,"hil":7,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":3021,"fpmed":0,"fps":2.2999999999999998,"hi":1,"hil":7,"late":0,"lrtt":-1,"pa":-1,"peers":2,"phi":0,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":1,"stms":5817,"tx":0}
+orca state room-away peer 3 kept direct-inputs
+orca stats {"delay":3,"ds":0,"f":3080,"fpmed":0,"fps":58.700000000000003,"hi":1,"hil":7,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca state room-back peer 3 kept same-peer
+orca state room-back peer 3 kept buffered-inputs
+orca stats {"delay":3,"ds":0,"f":3140,"fpmed":0,"fps":59.899999999999999,"hi":1,"hil":7,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":1,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca active 60 58 76 friends 1
+orca stats {"delay":3,"ds":0,"f":3200,"fpmed":0,"fps":59.899999999999999,"hi":1,"hil":7,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":3260,"fpmed":0,"fps":59.899999999999999,"hi":1,"hil":7,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":3320,"fpmed":0,"fps":59.899999999999999,"hi":1,"hil":7,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":3380,"fpmed":0,"fps":59.899999999999999,"hi":1,"hil":7,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":3440,"fpmed":0,"fps":59.899999999999999,"hi":1,"hil":7,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":3500,"fpmed":0,"fps":59.899999999999999,"hi":1,"hil":7,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":3560,"fpmed":0,"fps":59.899999999999999,"hi":1,"hil":7,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":0,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":3621,"fpmed":0,"fps":60,"hi":2,"hil":7,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":3679,"fpmed":0,"fps":58.799999999999997,"hi":2,"hil":8,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":3739,"fpmed":0,"fps":59.899999999999999,"hi":2,"hil":8,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":3799,"fpmed":0,"fps":60,"hi":2,"hil":8,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":3859,"fpmed":0,"fps":59.899999999999999,"hi":2,"hil":8,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":3919,"fpmed":0,"fps":59.899999999999999,"hi":2,"hil":8,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":3979,"fpmed":0,"fps":60,"hi":2,"hil":8,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":4040,"fpmed":0,"fps":60,"hi":2,"hil":8,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":1,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":4087,"fpmed":0,"fps":60.899999999999999,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":4147,"fpmed":0,"fps":59.899999999999999,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":4207,"fpmed":0,"fps":59.899999999999999,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":4267,"fpmed":0,"fps":59.899999999999999,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":4327,"fpmed":0,"fps":60,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":4387,"fpmed":0,"fps":59.899999999999999,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":4447,"fpmed":0,"fps":59.899999999999999,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":4507,"fpmed":0,"fps":60,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":4567,"fpmed":0,"fps":59.899999999999999,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":1,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":4627,"fpmed":0,"fps":59.899999999999999,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":4687,"fpmed":1,"fps":59.899999999999999,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":4747,"fpmed":0,"fps":59.899999999999999,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":4807,"fpmed":1,"fps":59.899999999999999,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":4867,"fpmed":1,"fps":59.899999999999999,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":4927,"fpmed":1,"fps":59.899999999999999,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":4987,"fpmed":0,"fps":59.899999999999999,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":5047,"fpmed":0,"fps":59.899999999999999,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":5107,"fpmed":0,"fps":59.899999999999999,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":5167,"fpmed":0,"fps":59.899999999999999,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":5227,"fpmed":0,"fps":59.899999999999999,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":5287,"fpmed":0,"fps":60,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":5347,"fpmed":0,"fps":59.899999999999999,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":5407,"fpmed":0,"fps":59.899999999999999,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":5467,"fpmed":0,"fps":60,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":5527,"fpmed":0,"fps":60,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":5587,"fpmed":0,"fps":59.899999999999999,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":1,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca stats {"delay":3,"ds":0,"f":5647,"fpmed":0,"fps":59.899999999999999,"hi":2,"hil":10,"late":0,"lrtt":0,"pa":-1,"peers":2,"phi":1,"ping":0,"pmed":0,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca active 41 41 10 friends 1
+orca state ended

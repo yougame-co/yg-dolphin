@@ -1,0 +1,24 @@
+17:02:022 Core/Rollback/Harness.cpp:301 N[ROLLBACK]: Harness input: 12 rules from /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/notes/friendlies-0348-runs/controls/basic-role-0.txt
+17:02:152 Core/HLE/HLE.cpp:126 N[ROLLBACK]: RSBE01: frame boundary hook at 80017504
+17:02:313 Core/Rollback/Rollback.cpp:550 N[ROLLBACK]: Frame hook: the CPU thread arrived in the guest's floating-point mode (0x1000002); the hook runs in the host's (0x0)
+17:02:313 Core/Orca/Session/Online.cpp:246 N[NETPLAY]: Orca: compatibility orca2:a638eacecfa85893 from orca|6a4ada1e332f1be99f95664c6db1c849fcc8f394|RSBE01|2|c35db548e2b4aa6e|d71effcd55814fd3|-|-|e1e29b864607d23d|-|a4a2f890de222076|-|-|-|thread=false|fma=true|rtc=true:1735689600|si=6,6,6,6|efb=true|xfb=true|access=false|bbox=false|save=0000000000000000|test=false|sdcard=false:false|disc=|ux=31.1
+17:02:313 Core/Orca/Session/Online.cpp:276 N[NETPLAY]: Orca: joining a YouGame room (as the host), compatibility orca2:a638eacecfa85893
+17:02:317 Core/Rollback/OnlineMatch.cpp:3795 N[ROLLBACK]: Drop-in: playing solo on port 1; room Connecting to YouGame...
+17:02:317 Core/Orca/Session/YouGameRoom.cpp:1870 N[NETPLAY]: Orca room: direct links on, no TURN in the ticket
+17:02:317 Core/Orca/Session/YouGameRoom.cpp:4148 N[NETPLAY]: Orca room: in room doubles444 on seat 1, hosting
+17:02:323 Core/Orca/UX/UX.cpp:62 N[ROLLBACK]: Orca UX: frame hook live at frame 0
+17:02:323 Core/Orca/UX/GamePatches.cpp:408 N[ROLLBACK]: Orca: 265 game patches from /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/build-orca-tests/Binaries/Contents/Resources/Sys/Orca/RSBE01.patches
+17:02:323 Core/Orca/Games/Brawl/Queue.cpp:712 N[ROLLBACK]: Queue: frame 0: ready 0x0
+17:02:323 Core/Orca/JitWarm.cpp:333 N[ROLLBACK]: JIT warm-up: on (/var/folders/0k/gcc8hsbs5qs9bzd0254hd8n80000gn/T/orca-doubles-t5aane9w/user-0/Cache/RSBE01.jitwarm, 8000 us per frame)
+17:02:325 Core/Orca/JitWarm.cpp:768 N[ROLLBACK]: JIT warm-up: no list of this player's yet; Orca's /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/build-orca-tests/Binaries/Contents/Resources/Sys/Orca/RSBE01.jitwarm (31405 blocks)
+17:02:972 Core/Rollback/OnlineMatch.cpp:1374 N[ROLLBACK]: Drop-in: Doubles1 arrived for port 2
+17:02:972 Core/Rollback/OnlineMatch.cpp:1516 N[ROLLBACK]: Drop-in: the join waits for the menus or its batch at frame 40
+17:02:973 Core/Orca/Session/DirectLink.cpp:1868 N[NETPLAY]: Orca direct link: seat 2: offering link 1 (new)
+17:02:978 Core/Orca/Session/DirectLink.cpp:1969 N[NETPLAY]: Orca direct link: seat 2 up, direct prflx/host, round trip not measured yet (link 1)
+17:03:559 Core/Orca/PanicDiag.cpp:354 N[ROLLBACK]: orca scene scStrap at frame 67
+17:03:559 Core/Orca/Games/Brawl/Queue.cpp:712 N[ROLLBACK]: Queue: frame 67: ready 0x0
+17:03:559 Core/Rollback/Harness.cpp:1245 N[ROLLBACK]: Scene frame 67:  -> scStrap
+17:03:620 Core/Orca/Session/YouGameRoom.cpp:1968 N[NETPLAY]: Orca room: room-leave peer 3 ended real-leave
+17:03:845 Core/Orca/Session/DirectLink.cpp:1697 N[NETPLAY]: Orca direct link: seat 2 link 1 closed: 5 sent, 5 received, 0 refused, 0 replayed, 0 over the rate; sends 39.4 us on average, longest 56 us, 0 over 1 ms
+17:03:845 Core/Orca/Session/YouGameRoom.cpp:1467 W[NETPLAY]: Orca room ended: You left the room
+17:03:846 Core/Orca/UX/UX.cpp:130 N[ROLLBACK]: Orca: module brawl-builtin made 57 guest writes, 0 outside its regions

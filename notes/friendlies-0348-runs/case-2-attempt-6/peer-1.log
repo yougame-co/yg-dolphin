@@ -1,0 +1,112 @@
+50:50:482 Core/Rollback/Harness.cpp:301 N[ROLLBACK]: Harness input: 16 rules from /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/notes/friendlies-0348-runs/controls/rotation-role-1.txt
+50:50:610 Core/HLE/HLE.cpp:126 N[ROLLBACK]: RSBE01: frame boundary hook at 80017504
+50:50:779 Core/Rollback/Rollback.cpp:550 N[ROLLBACK]: Frame hook: the CPU thread arrived in the guest's floating-point mode (0x1000002); the hook runs in the host's (0x0)
+50:50:779 Core/Orca/Session/Online.cpp:246 N[NETPLAY]: Orca: compatibility orca2:97b9d20956846b20 from orca|15621acde9007cbfcf05e786ce22675f390e404d|RSBE01|2|c35db548e2b4aa6e|d71effcd55814fd3|-|-|e1e29b864607d23d|-|a4a2f890de222076|-|-|-|thread=false|fma=true|rtc=true:1735689600|si=6,6,6,6|efb=true|xfb=true|access=false|bbox=false|save=0000000000000000|test=false|sdcard=false:false|disc=|ux=31
+50:50:779 Core/Orca/Session/Online.cpp:276 N[NETPLAY]: Orca: joining a YouGame room (to join a friend's game), compatibility orca2:97b9d20956846b20
+50:50:781 Core/Orca/Session/YouGameRoom.cpp:1870 N[NETPLAY]: Orca room: direct links on, no TURN in the ticket
+50:50:781 Core/Orca/Session/YouGameRoom.cpp:4148 N[NETPLAY]: Orca room: in room doubles444 on seat 2, joining
+50:50:788 Core/Orca/UX/UX.cpp:62 N[ROLLBACK]: Orca UX: frame hook live at frame 0
+50:50:788 Core/Orca/UX/GamePatches.cpp:408 N[ROLLBACK]: Orca: 265 game patches from /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/build-orca-tests/Binaries/Contents/Resources/Sys/Orca/RSBE01.patches
+50:50:788 Core/Orca/Games/Brawl/Queue.cpp:712 N[ROLLBACK]: Queue: frame 0: ready 0x0
+50:50:788 Core/Rollback/OnlineMatch.cpp:1957 N[NETPLAY]: Orca: Room doubles444: Doubles0 is here
+50:50:790 Core/Orca/Session/DirectLink.cpp:1868 N[NETPLAY]: Orca direct link: seat 1: answering link 1 (offer)
+50:50:803 Core/Orca/Session/DirectLink.cpp:1969 N[NETPLAY]: Orca direct link: seat 1 up, direct prflx/host, round trip not measured yet (link 1)
+50:50:813 Core/Rollback/OnlineMatch.cpp:1900 N[ROLLBACK]: Drop-in: the host is in a single-player mode: the join waits
+50:50:905 Core/Orca/PanicDiag.cpp:354 N[ROLLBACK]: orca scene scStrap at frame 67
+50:50:905 Core/Orca/Games/Brawl/Queue.cpp:712 N[ROLLBACK]: Queue: frame 67: ready 0x0
+50:50:905 Core/Rollback/Harness.cpp:1245 N[ROLLBACK]: Scene frame 67:  -> scStrap
+50:51:418 Core/Rollback/OnlineMatch.cpp:1957 N[NETPLAY]: Orca: Room doubles444: Doubles2 is here
+50:51:421 Core/Orca/Session/DirectLink.cpp:1868 N[NETPLAY]: Orca direct link: seat 3: offering link 1 (new)
+50:51:430 Core/Orca/PanicDiag.cpp:354 N[ROLLBACK]: orca scene scMemoryChange at frame 1243
+50:51:430 Core/Rollback/Harness.cpp:1245 N[ROLLBACK]: Scene frame 1243: scStrap -> scMemoryChange
+50:51:467 Core/Orca/PanicDiag.cpp:354 N[ROLLBACK]: orca scene scBoot at frame 1259
+50:51:467 Core/Rollback/Harness.cpp:1245 N[ROLLBACK]: Scene frame 1259: scMemoryChange -> scBoot
+50:51:504 Core/Orca/PanicDiag.cpp:354 N[ROLLBACK]: orca scene scMemoryChange at frame 1307
+50:51:504 Core/Rollback/Harness.cpp:1245 N[ROLLBACK]: Scene frame 1307: scBoot -> scMemoryChange
+50:51:511 Core/Orca/PanicDiag.cpp:354 N[ROLLBACK]: orca scene scTitle at frame 1311
+50:51:511 Core/Rollback/Harness.cpp:1245 N[ROLLBACK]: Scene frame 1311: scMemoryChange -> scTitle
+50:51:572 Core/Orca/PanicDiag.cpp:354 N[ROLLBACK]: orca scene scMemoryChange at frame 1411
+50:51:572 Core/Rollback/Harness.cpp:1245 N[ROLLBACK]: Scene frame 1411: scTitle -> scMemoryChange
+50:51:596 Core/Orca/PanicDiag.cpp:354 N[ROLLBACK]: orca scene muMenuMain at frame 1428
+50:51:596 Core/Rollback/Harness.cpp:1245 N[ROLLBACK]: Scene frame 1428: scMemoryChange -> muMenuMain
+50:51:636 Core/Orca/Session/DirectLink.cpp:1969 N[NETPLAY]: Orca direct link: seat 3 up, direct prflx/host, round trip 0 ms (link 1)
+50:51:744 Core/Rollback/OnlineMatch.cpp:2098 N[ROLLBACK]: Drop-in: origin at frame 1524: RAM b20d4aa0ad09bc01, NAND 37807 KB (42 ms)
+50:51:744 Core/Rollback/OnlineMatch.cpp:2102 N[ROLLBACK]: Orca origin: rule menu at frame 1524: RAM b20d4aa0ad09bc01
+50:51:744 Core/Orca/Games/Brawl/OnlineMenu.cpp:559 N[ROLLBACK]: Online menu: frame 1524: the game's random numbers start from this history's seed 81dd2cc6
+51:16:480 Core/Rollback/OnlineMatch.cpp:1900 N[ROLLBACK]: Drop-in: the host is back in the menus: the join goes on
+51:16:500 Core/Rollback/OnlineMatch.cpp:1936 N[ROLLBACK]: Drop-in: the host offers keyframe replay-1539-beecd7b5 (frame 1539, 138 bytes, inline)
+51:16:541 Core/Orca/Games/Brawl/OnlineMenu.cpp:559 N[ROLLBACK]: Online menu: frame 1524: the game's random numbers start from this history's seed 31838f93
+51:16:614 Core/Rollback/OnlineMatch.cpp:3148 N[ROLLBACK]: Drop-in: port 1 is Doubles0 from frame 1524
+51:16:614 Core/Rollback/OnlineMatch.cpp:3148 N[ROLLBACK]: Drop-in: port 2 is Doubles1 from frame 1540
+51:16:614 Core/Rollback/OnlineMatch.cpp:3148 N[ROLLBACK]: Drop-in: port 3 is Doubles2 from frame 1540
+51:16:614 Core/Rollback/OnlineMatch.cpp:2317 N[ROLLBACK]: Drop-in: rebuilt replay frame 1539 locally in 74 ms
+51:16:615 Core/Rollback/Cow.cpp:349 N[ROLLBACK]: Rollback: copy-on-write snapshots over 16 KB pages, 6 views
+51:16:619 Core/Orca/Games/Brawl/OnlineRules.cpp:1185 N[ROLLBACK]: Online rules: the host's header matches this room (no header)
+51:16:628 Core/Orca/JitWarm.cpp:333 N[ROLLBACK]: JIT warm-up: on (/var/folders/0k/gcc8hsbs5qs9bzd0254hd8n80000gn/T/orca-doubles-wz7dndeg/user-1/Cache/RSBE01.jitwarm, 8000 us per frame)
+51:16:629 Core/Orca/JitWarm.cpp:768 N[ROLLBACK]: JIT warm-up: no list of this player's yet; Orca's /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/build-orca-tests/Binaries/Contents/Resources/Sys/Orca/RSBE01.jitwarm (31405 blocks)
+51:16:962 Core/Rollback/OnlineMatch.cpp:4311 N[ROLLBACK]: Drop-in: plugged into port 2 at frame 1571: catch-up 421 ms, 462 ms since the keyframe was offered, 489 ms since this Orca's first frame
+51:17:487 Core/Orca/Engine/Regions.cpp:72 N[ROLLBACK]: Orca: module brawl-builtin wrote 4 byte(s) at 805b8e24, outside the regions it declares (recorded, not refused)
+51:17:487 Core/Orca/Games/Brawl/OnlineMenu.cpp:466 N[ROLLBACK]: Online menu: frame 1601: a friend plugged in, the main menu goes to With Friends' character select (exit code 25)
+51:17:502 Core/Orca/PanicDiag.cpp:354 N[ROLLBACK]: orca scene scMemoryChange at frame 1602
+51:17:502 Core/Rollback/Harness.cpp:1245 N[ROLLBACK]: Scene frame 1602: muMenuMain -> scMemoryChange
+51:17:550 Core/Orca/PanicDiag.cpp:354 N[ROLLBACK]: orca scene scSelctCharacter at frame 1605
+51:17:550 Core/Rollback/Harness.cpp:1245 N[ROLLBACK]: Scene frame 1605: scMemoryChange -> scSelctCharacter
+51:17:886 Core/Orca/UX/Probe.cpp:273 N[ROLLBACK]: Probe scSelctCharacter 20: write 9017f362 01 
+51:17:886 Core/Orca/UX/Probe.cpp:273 N[ROLLBACK]: Probe scSelctCharacter 20: write 9017f364 01 
+51:18:151 Core/Orca/Games/Brawl/CssTitle.cpp:251 N[ROLLBACK]: Orca: the character select's title reads FRIENDS (932cb420 = 0eeb)
+51:18:297 Core/Orca/Games/Brawl/OnlineSeats.cpp:281 N[ROLLBACK]: Online seats: frame 1636: panels hidden 0x8 (39 model flags written)
+51:21:108 Core/Rollback/OnlineMatch.cpp:4682 N[ROLLBACK]: Online match at frame 1800: frame 1801, 0 rollbacks, 0 re-run frames, deepest 0, 0 stalls (0 counted), 5 waits, 0 hitches here (2 more in game loads), 0 there, frame advantage 0.51, input delay 3 (chosen) (+0 -0 reverted 0), 0 counted stalls a frame more would have spared, 8 checksums matched, confirmed frame 1801, round trip 0 ms (median 0 ms here, 0 ms there), link direct prflx/host 0 ms, 171 snapshots (every 1, 0.71 ms each), 0 found late
+51:21:108 Core/Rollback/OnlineMatch.cpp:4285 N[ROLLBACK]: Drop-in: frame 1801 confirmed 1801 log [1539, 1801) local [1571, 1803]; seat 1 plug 0 unplug - live 0 received 1802 acked 1801 at 1799 history -1/-1 values -1/-1; seat 2 plug 1571 unplug - live 1540 received 1570 acked -1 at 0 history -1/-1 values -1/-1; seat 3 plug 1571 unplug - live 1540 received 1802 acked 1802 at 1799 history -1/-1 values -1/-1; seat 4 plug - unplug - live - received 1539 acked -1 at 0 history -1/-1 values -1/-1
+51:22:376 Core/Orca/Games/Brawl/NativeText.cpp:441 N[ROLLBACK]: Orca: native text: plates 'DOUBLES0' 'DOUBLES1', rules bar '' (shown 03)
+51:27:997 Core/Orca/PanicDiag.cpp:354 N[ROLLBACK]: orca scene scSelStage at frame 2213
+51:27:997 Core/Rollback/Harness.cpp:1245 N[ROLLBACK]: Scene frame 2213: scSelctCharacter -> scSelStage
+51:31:767 Core/Orca/PanicDiag.cpp:354 N[ROLLBACK]: orca scene scMemoryChange at frame 2435
+51:31:767 Core/Rollback/Harness.cpp:1245 N[ROLLBACK]: Scene frame 2435: scSelStage -> scMemoryChange
+51:31:783 Core/Orca/PanicDiag.cpp:354 N[ROLLBACK]: orca scene scMelee at frame 2436
+51:31:783 Core/Rollback/Harness.cpp:1245 N[ROLLBACK]: Scene frame 2436: scMemoryChange -> scMelee
+51:31:783 Core/Orca/JitWarm.cpp:440 N[ROLLBACK]: JIT warm-up: match 1 starts, 31405 blocks known
+51:33:452 Core/Orca/UX/Probe.cpp:273 N[ROLLBACK]: Probe scMelee 100: dump 90180fb8 170 fight-1
+51:41:912 Core/Orca/JitWarm.cpp:472 N[ROLLBACK]: JIT warm-up: match 1: 30314 of 31405 blocks compiled ahead (316.0 ms, frames 0 to 69, at most 8.2 ms in one), 68 already compiled, 1023 not in RAM, 0 given up (0 discarded), 19 sweeps, 0 boundaries without room
+51:41:912 Core/Orca/JitWarm.cpp:545 N[ROLLBACK]: JIT warm-up: match 1 compiled 2425 blocks itself in its first 600 frames (0 rewritten since, not kept)
+51:43:244 Core/Orca/PanicDiag.cpp:354 N[ROLLBACK]: orca scene scMemoryChange at frame 3116
+51:43:244 Core/Rollback/Harness.cpp:1245 N[ROLLBACK]: Scene frame 3116: scMelee -> scMemoryChange
+51:43:345 Core/Orca/PanicDiag.cpp:354 N[ROLLBACK]: orca scene scVsResult at frame 3122
+51:43:346 Core/Rollback/OnlineMatch.cpp:3518 N[ROLLBACK]: Matchmaking: a game ended at frame 3122: port 1 won, {"f":3122,"st":2,"c":[0,3],"s":[1,0],"to":0}
+51:43:346 Core/Rollback/Harness.cpp:1245 N[ROLLBACK]: Scene frame 3122: scMemoryChange -> scVsResult
+51:50:386 Core/Orca/PanicDiag.cpp:354 N[ROLLBACK]: orca scene scMemoryChange at frame 3542
+51:50:386 Core/Rollback/Harness.cpp:1245 N[ROLLBACK]: Scene frame 3542: scVsResult -> scMemoryChange
+51:50:434 Core/Orca/PanicDiag.cpp:354 N[ROLLBACK]: orca scene scSelctCharacter at frame 3545
+51:50:434 Core/Rollback/Harness.cpp:1245 N[ROLLBACK]: Scene frame 3545: scMemoryChange -> scSelctCharacter
+51:50:999 Core/Orca/Games/Brawl/CssTitle.cpp:251 N[ROLLBACK]: Orca: the character select's title reads FRIENDS (932cb420 = 0eeb)
+51:51:155 Core/Orca/Games/Brawl/NativeText.cpp:441 N[ROLLBACK]: Orca: native text: plates 'DOUBLES0' 'DOUBLES1', rules bar '' (shown 03)
+51:51:155 Core/Orca/Games/Brawl/OnlineSeats.cpp:281 N[ROLLBACK]: Online seats: frame 3575: panels hidden 0x8 (39 model flags written)
+51:51:590 Core/Rollback/OnlineMatch.cpp:4682 N[ROLLBACK]: Online match at frame 3600: frame 3601, 0 rollbacks, 0 re-run frames, deepest 0, 0 stalls (0 counted), 5 waits, 1 hitches here (10 more in game loads), 1 there, frame advantage 0.50, input delay 3 (chosen) (+0 -0 reverted 0), 0 counted stalls a frame more would have spared, 68 checksums matched, confirmed frame 3601, round trip 0 ms (median 0 ms here, 0 ms there), link direct prflx/host 0 ms, 202 snapshots (every 1, 2.00 ms each), 0 found late
+51:51:590 Core/Rollback/OnlineMatch.cpp:4285 N[ROLLBACK]: Drop-in: frame 3601 confirmed 3601 log [1539, 3601) local [1571, 3603]; seat 1 plug 0 unplug - live 0 received 3602 acked 3601 at 3599 history -1/-1 values -1/-1; seat 2 plug 1571 unplug - live 1540 received 1570 acked -1 at 0 history -1/-1 values -1/-1; seat 3 plug 1571 unplug - live 1540 received 3602 acked 3602 at 3599 history -1/-1 values -1/-1; seat 4 plug - unplug - live - received 1539 acked -1 at 0 history -1/-1 values -1/-1
+51:51:656 Core/Orca/UX/Probe.cpp:273 N[ROLLBACK]: Probe scSelctCharacter 60: dump 90180bf8 170 css2-60
+51:51:656 Core/Orca/UX/Probe.cpp:273 N[ROLLBACK]: Probe scSelctCharacter 60: dump 814a0a40 34 hand-1-60
+51:51:656 Core/Orca/UX/Probe.cpp:273 N[ROLLBACK]: Probe scSelctCharacter 60: dump 81458380 34 hand-2-60
+51:53:491 Core/Orca/UX/Probe.cpp:273 N[ROLLBACK]: Probe scSelctCharacter 170: dump 90180bf8 170 css2-170
+51:53:491 Core/Orca/UX/Probe.cpp:273 N[ROLLBACK]: Probe scSelctCharacter 170: dump 814a0a40 34 hand-1-170
+51:53:491 Core/Orca/UX/Probe.cpp:273 N[ROLLBACK]: Probe scSelctCharacter 170: dump 81458380 34 hand-2-170
+51:54:659 Core/Orca/UX/Probe.cpp:273 N[ROLLBACK]: Probe scSelctCharacter 240: dump 90180bf8 170 css2-240
+51:54:659 Core/Orca/UX/Probe.cpp:273 N[ROLLBACK]: Probe scSelctCharacter 240: dump 814a0a40 34 hand-1-240
+51:54:659 Core/Orca/UX/Probe.cpp:273 N[ROLLBACK]: Probe scSelctCharacter 240: dump 81458380 34 hand-2-240
+51:55:192 Core/Orca/Games/Brawl/NativeText.cpp:441 N[ROLLBACK]: Orca: native text: plates 'DOUBLES0' 'DOUBLES1', rules bar '' (shown 07)
+51:55:596 Core/Orca/PanicDiag.cpp:354 N[ROLLBACK]: orca scene scMemoryChange at frame 3841
+51:55:596 Core/Rollback/Harness.cpp:1245 N[ROLLBACK]: Scene frame 3841: scSelctCharacter -> scMemoryChange
+51:55:938 Core/Orca/PanicDiag.cpp:354 N[ROLLBACK]: orca scene muMenuMain at frame 3858
+51:55:938 Core/Rollback/Harness.cpp:1245 N[ROLLBACK]: Scene frame 3858: scMemoryChange -> muMenuMain
+52:21:836 Core/Rollback/OnlineMatch.cpp:4682 N[ROLLBACK]: Online match at frame 5400: frame 5401, 0 rollbacks, 0 re-run frames, deepest 0, 0 stalls (0 counted), 5 waits, 1 hitches here (12 more in game loads), 1 there, frame advantage 0.51, input delay 3 (chosen) (+0 -0 reverted 0), 0 counted stalls a frame more would have spared, 128 checksums matched, confirmed frame 5401, round trip 0 ms (median 0 ms here, 0 ms there), link direct prflx/host 0 ms, 232 snapshots (every 1, 2.41 ms each), 0 found late
+52:21:836 Core/Rollback/OnlineMatch.cpp:4285 N[ROLLBACK]: Drop-in: frame 5401 confirmed 5401 log [1539, 5401) local [1571, 5403]; seat 1 plug 0 unplug - live 0 received 5402 acked 5401 at 5399 history -1/-1 values -1/-1; seat 2 plug 1571 unplug - live 1540 received 1570 acked -1 at 0 history -1/-1 values -1/-1; seat 3 plug 1571 unplug - live 1540 received 5402 acked 5402 at 5399 history -1/-1 values -1/-1; seat 4 plug - unplug - live - received 1539 acked -1 at 0 history -1/-1 values -1/-1
+52:51:866 Core/Rollback/OnlineMatch.cpp:4682 N[ROLLBACK]: Online match at frame 7200: frame 7201, 0 rollbacks, 0 re-run frames, deepest 0, 0 stalls (0 counted), 5 waits, 1 hitches here (12 more in game loads), 1 there, frame advantage 0.51, input delay 3 (chosen) (+0 -0 reverted 0), 0 counted stalls a frame more would have spared, 188 checksums matched, confirmed frame 7201, round trip 0 ms (median 0 ms here, 0 ms there), link direct prflx/host 0 ms, 262 snapshots (every 1, 1.99 ms each), 0 found late
+52:51:866 Core/Rollback/OnlineMatch.cpp:4285 N[ROLLBACK]: Drop-in: frame 7201 confirmed 7201 log [1539, 7201) local [3105, 7203]; seat 1 plug 0 unplug - live 0 received 7202 acked 7201 at 7199 history -1/-1 values -1/-1; seat 2 plug 1571 unplug - live 1540 received 1570 acked -1 at 0 history -1/-1 values -1/-1; seat 3 plug 1571 unplug - live 1540 received 7202 acked 7202 at 7199 history -1/-1 values -1/-1; seat 4 plug - unplug - live - received 1539 acked -1 at 0 history -1/-1 values -1/-1
+53:01:772 Core/Orca/Session/YouGameRoom.cpp:1968 N[NETPLAY]: Orca room: room-leave peer 1 ended real-leave
+53:01:772 Core/Orca/Session/DirectLink.cpp:1697 N[NETPLAY]: Orca direct link: seat 1 link 1 closed: 6371 sent, 6377 received, 0 refused, 0 replayed, 0 over the rate; sends 15.9 us on average, longest 48 us, 0 over 1 ms
+53:01:775 Core/Rollback/OnlineMatch.cpp:4682 N[ROLLBACK]: Online match host left: frame 7795, 0 rollbacks, 0 re-run frames, deepest 0, 0 stalls (0 counted), 5 waits, 1 hitches here (12 more in game loads), 1 there, frame advantage 0.51, input delay 3 (chosen) (+0 -0 reverted 0), 0 counted stalls a frame more would have spared, 208 checksums matched, confirmed frame 7793, round trip 0 ms (median 0 ms here, 0 ms there), link direct prflx/host 0 ms, 272 snapshots (every 1, 1.92 ms each), 0 found late
+53:01:775 Core/Rollback/OnlineMatch.cpp:877 N[ROLLBACK]: Drop-in: back to solo play at frame 7795 (host left): 0 rollbacks, 208 checksums matched
+53:01:775 Core/Rollback/OnlineMatch.cpp:1255 N[ROLLBACK]: Drop-in: playing solo on port 2 from frame 7795 (host left)
+53:01:776 Core/Orca/Session/DirectLink.cpp:1697 N[NETPLAY]: Orca direct link: seat 3 link 1 closed: 6368 sent, 6373 received, 0 refused, 0 replayed, 0 over the rate; sends 4.7 us on average, longest 45 us, 0 over 1 ms
+53:01:776 Core/Orca/Session/YouGameRoom.cpp:1467 W[NETPLAY]: Orca room ended: You left the room
+53:01:792 Core/Rollback/OnlineMatch.cpp:2989 N[ROLLBACK]: Drop-in: back to a game of its own on the menus (frame 7796): a room of its own opens
+53:01:792 Core/Rollback/OnlineMatch.cpp:1094 N[ROLLBACK]: Drop-in: port 2 moves to port 1 from frame 7796
+53:02:252 Core/Orca/UX/UX.cpp:130 N[ROLLBACK]: Orca: module brawl-builtin made 2286 guest writes, 2 outside its regions

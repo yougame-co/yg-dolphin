@@ -1,0 +1,20 @@
+# Deterministic fixture rules setup; fighter records are read-only evidence.
+@scSelctCharacter:1 20 write [[805a00e0]+1c]+2 01
+@scSelctCharacter:1 20 write [[805a00e0]+1c]+4 01
+@scMelee:1 100 dump [[805a00e0]+8]+98 170 fight-1
+@scMelee:2 100 dump [[805a00e0]+8]+98 170 fight-2
+@scSelctCharacter:2 60 dump [[805a00e0]+10]+b8 170 css2-60
+@scSelctCharacter:2 60 dump [[[[[805a0060]+4]+400]+48]+1a8]+80 34 hand-1-60
+@scSelctCharacter:2 60 dump [[[[[805a0060]+4]+400]+4c]+1a8]+80 34 hand-2-60
+@scSelctCharacter:2 170 dump [[805a00e0]+10]+b8 170 css2-170
+@scSelctCharacter:2 170 dump [[[[[805a0060]+4]+400]+48]+1a8]+80 34 hand-1-170
+@scSelctCharacter:2 170 dump [[[[[805a0060]+4]+400]+4c]+1a8]+80 34 hand-2-170
+@scSelctCharacter:2 240 dump [[805a00e0]+10]+b8 170 css2-240
+@scSelctCharacter:2 240 dump [[[[[805a0060]+4]+400]+48]+1a8]+80 34 hand-1-240
+@scSelctCharacter:2 240 dump [[[[[805a0060]+4]+400]+4c]+1a8]+80 34 hand-2-240
+@scSelctCharacter:2 400 dump [[805a00e0]+10]+b8 170 css2-400
+@scSelctCharacter:2 400 dump [[[[[805a0060]+4]+400]+48]+1a8]+80 34 hand-1-400
+@scSelctCharacter:2 400 dump [[[[[805a0060]+4]+400]+4c]+1a8]+80 34 hand-2-400
+@scSelctCharacter:2 800 dump [[805a00e0]+10]+b8 170 css2-800
+@scSelctCharacter:2 800 dump [[[[[805a0060]+4]+400]+48]+1a8]+80 34 hand-1-800
+@scSelctCharacter:2 800 dump [[[[[805a0060]+4]+400]+4c]+1a8]+80 34 hand-2-800

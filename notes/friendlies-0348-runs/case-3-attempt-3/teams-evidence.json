@@ -1,0 +1,111 @@
+{
+  "peers": {
+    "0": {
+      "human_ports": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "teams": [
+        0,
+        1,
+        0,
+        1
+      ],
+      "stocks": [
+        1,
+        0,
+        1,
+        0
+      ],
+      "places": [
+        0,
+        2,
+        0,
+        3
+      ]
+    },
+    "1": {
+      "human_ports": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "teams": [
+        0,
+        1,
+        0,
+        1
+      ],
+      "stocks": [
+        1,
+        0,
+        1,
+        0
+      ],
+      "places": [
+        0,
+        2,
+        0,
+        3
+      ]
+    },
+    "2": {
+      "human_ports": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "teams": [
+        0,
+        1,
+        0,
+        1
+      ],
+      "stocks": [
+        1,
+        0,
+        1,
+        0
+      ],
+      "places": [
+        0,
+        2,
+        0,
+        3
+      ]
+    },
+    "3": {
+      "human_ports": [
+        1,
+        2,
+        3,
+        4
+      ],
+      "teams": [
+        0,
+        1,
+        0,
+        1
+      ],
+      "stocks": [
+        1,
+        0,
+        1,
+        0
+      ],
+      "places": [
+        0,
+        2,
+        0,
+        3
+      ]
+    }
+  },
+  "second_fight_frames": 864,
+  "port_3_would_walk_at_frame": 1000,
+  "result": "PASS: teams 1+3 versus 2+4; both winning teammates retain one stock and place 0; all four agree"
+}

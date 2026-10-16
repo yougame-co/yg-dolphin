@@ -1,0 +1,22 @@
+16:44  up 16:57, 4 users, load averages: 11.32 12.61 11.83
+Fixture PID: 61607
+Running roles 0,1,2; isolated logs: /var/folders/0k/gcc8hsbs5qs9bzd0254hd8n80000gn/T/orca-doubles-ymszdg27
+peer 0: orca state booting
+peer 0: orca state playing
+peer 0: orca state friend-joining
+peer 0: orca state room-leave peer 3 ended real-leave
+peer 1: orca state booting
+peer 1: orca state joining 0
+peer 1: orca state room-leave peer 3 ended real-leave
+peer 2: orca state booting
+peer 2: orca state joining 0
+peer 2: orca error room_full Couldn't join: Your friend's game already has another friend in it
+peer 2: orca state playing
+peer 1: orca state joining 0
+peer 1: orca state joining 50
+peer 1: orca state joining 97
+peer 1: orca state joining 98
+peer 1: orca state joining 99
+peer 1: orca state playing
+peer 0: orca state friend-joined
+PASS: all machines agree on plug [1562], confirmed hashes through frame 5940; 0 desyncs; 1 requested fights returned to CSS

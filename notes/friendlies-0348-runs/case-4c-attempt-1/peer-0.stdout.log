@@ -1,0 +1,12 @@
+orca state booting
+orca caps join leave stats pause delay perf direct host chat yougame gfx music results locks queue2 pick-casual pick-ranked talk rumble record
+YG Dolphin — Super Smash Bros. Brawl (RSBE01)
+orca state playing
+YG Dolphin — Super Smash Bros. Brawl (RSBE01) — waiting for your friend
+orca state friend-joining
+orca state friend-holding
+YG Dolphin — Super Smash Bros. Brawl (RSBE01) — Doubles1 is here
+orca stats {"delay":0,"ds":0,"f":62,"fpmed":-1,"fps":61.399999999999999,"hi":0,"hil":0,"late":0,"lrtt":1,"pa":-1,"peers":0,"phi":0,"ping":1,"pmed":-1,"rb":0,"rbf":0,"rbmax":0,"rpf":-1,"seat":0,"st":0,"stms":0,"tx":1}
+orca state room-leave peer 3 ended real-leave
+orca active 1 0 0 solo 0
+orca state ended

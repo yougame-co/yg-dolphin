@@ -1,0 +1,4 @@
+Stopped the exact fixture PID 44555 with SIGINT at the observed load check:
+15:43, load averages: 18.35 14.41 10.31.
+The fixture's finally cleanup completed (exit 130); no gameplay verdict.
+No other process or lock was killed or modified.

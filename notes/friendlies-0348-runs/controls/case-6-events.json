@@ -1,0 +1,34 @@
+[
+  {
+    "pattern": "Scene frame \\d+: .* -> scMelee",
+    "role": 1,
+    "action": "command",
+    "delay": 6,
+    "command": "test-direct off"
+  },
+  {
+    "pattern": "Scene frame \\d+: .* -> scMelee",
+    "action": "away",
+    "delay": 6,
+    "role": 1
+  },
+  {
+    "pattern": "Scene frame \\d+: .* -> scMelee",
+    "action": "spawn",
+    "delay": 7,
+    "role": 2
+  },
+  {
+    "pattern": "Scene frame \\d+: .* -> scMelee",
+    "action": "back",
+    "delay": 12,
+    "role": 1
+  },
+  {
+    "pattern": "Scene frame \\d+: .* -> scMelee",
+    "role": 1,
+    "action": "command",
+    "delay": 12,
+    "command": "test-direct on"
+  }
+]

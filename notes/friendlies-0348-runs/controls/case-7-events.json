@@ -1,0 +1,8 @@
+[
+  {
+    "pattern": "Scene frame \\d+: .* -> scMelee",
+    "action": "fifth",
+    "delay": 6,
+    "role": 2
+  }
+]

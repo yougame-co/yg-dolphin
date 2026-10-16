@@ -1,0 +1,33 @@
+Running roles 0,1,2; isolated logs: /var/folders/0k/gcc8hsbs5qs9bzd0254hd8n80000gn/T/orca-doubles-411_bbc1
+peer 0: orca state booting
+peer 0: orca state playing
+peer 0: orca state friend-joining
+peer 0: orca state friend-holding
+peer 0: orca state friend-joining
+peer 1: orca state booting
+peer 1: orca state joining 0
+peer 1: orca state friend-waiting
+peer 2: orca state booting
+peer 2: orca state joining 0
+peer 2: orca state friend-waiting
+peer 1: orca state joining 0
+peer 1: orca state joining 50
+peer 2: orca state joining 0
+peer 2: orca state joining 50
+peer 1: orca state joining 98
+peer 1: orca state joining 99
+peer 2: orca state joining 98
+peer 2: orca state joining 99
+peer 0: orca state friend-joined
+peer 1: orca state playing
+peer 2: orca state playing
+Traceback (most recent call last):
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 820, in <module>
+    main()
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 812, in main
+    run(args)
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 721, in run
+    verify_gameplay(work, args.expect_fight)
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 503, in verify_gameplay
+    raise RuntimeError(f"fight {index}: no host fighter record")
+RuntimeError: fight 2: no host fighter record

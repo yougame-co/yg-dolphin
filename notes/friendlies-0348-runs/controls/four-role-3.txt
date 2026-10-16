@@ -1,0 +1,14 @@
+@scStrap mash 30 99999 1 40 A
+@scBoot mash 30 99999 1 40 A
+@scTitle mash 30 99999 1 40 A
+@scSelctCharacter:2 250 290 4 SY=255
+@scSelctCharacter:2 380 383 4 A
+@scMelee:2 500 99999 4 SX=1
+@scSelStage:2 150 188 4 SY=255
+@scSelStage:2 190 193 4 SX=1
+@scSelStage:2 270 273 4 A
+@scSelStage:2 mash 400 99999 4 40 A
+@scVsResult mash 300 99999 4 40 A
+@scVsResult mash 660 99999 4 40 START
+@scSelctCharacter:2 420 450 4 SY=1
+@scSelctCharacter:2 480 483 4 A

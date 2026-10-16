@@ -1,0 +1,11 @@
+# Deterministic fixture rules setup; fighter records are read-only evidence.
+@scSelctCharacter:1 20 write [[805a00e0]+1c]+2 01
+@scSelctCharacter:1 20 write [[805a00e0]+1c]+4 01
+@scMelee:1 100 dump [[805a00e0]+8]+98 170 fight-1
+@scMelee:2 100 dump [[805a00e0]+8]+98 170 fight-2
+@scSelctCharacter:2 30 dump [[805a00e0]+1c] 20 rules-before-team
+@scSelctCharacter:2 130 dump [[[[[805a0060]+4]+400]+44]+1a8]+80 34 team-hand
+@scSelctCharacter:2 180 dump [[805a00e0]+1c] 20 rules-after-team
+@scMelee:2 100 dump [[805a00e0]+8] 98 melee-mode
+@scMelee:1 100 dump [[805a00e0]+8] 98 melee-mode-1
+@scSelctCharacter:2 600 dump [[805a00e0]+10]+b8 170 css2-four

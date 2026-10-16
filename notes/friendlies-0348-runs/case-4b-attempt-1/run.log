@@ -1,0 +1,47 @@
+16:15  up 16:28, 4 users, load averages: 9.49 10.51 9.32
+Fixture PID: 46315
+Running roles 0,1,2; isolated logs: /var/folders/0k/gcc8hsbs5qs9bzd0254hd8n80000gn/T/orca-doubles-jdmt9xkb
+peer 0: orca state booting
+peer 0: orca state playing
+peer 0: orca state friend-joining
+peer 0: orca state friend-holding
+peer 0: orca state friend-joining
+peer 1: orca state booting
+peer 1: orca state joining 0
+peer 1: orca state friend-waiting
+peer 2: orca state booting
+peer 2: orca state joining 0
+peer 2: orca state friend-waiting
+peer 1: orca state joining 0
+peer 1: orca state joining 50
+peer 2: orca state joining 0
+peer 2: orca state joining 50
+peer 1: orca state joining 99
+peer 2: orca state joining 99
+peer 0: orca state friend-joined
+peer 1: orca state playing
+peer 2: orca state playing
+EVENT: {'pattern': 'Scene frame \\d+: .* -> scMelee', 'action': 'away', 'delay': 6, 'role': 2, 'armed': 42.337587125, 'done': True}
+peer 0: orca state room-away peer 3 kept direct-inputs
+peer 1: orca state room-away peer 3 kept direct-inputs
+peer 2: orca state room-away self kept direct-inputs attempt=0 close-code=0 close-reason=WebSocket closed by the server last-error=none
+peer 2: orca state room-away self retry started attempt=0 close-code=0 close-reason=WebSocket closed by the server last-error=none
+peer 2: orca state room-away self retry connecting attempt=1 close-code=0 close-reason=WebSocket closed by the server last-error=none
+peer 2: orca state room-away self retry connect-failed attempt=1 close-code=0 close-reason=WebSocket closed by the server last-error=ticket-refresh-failed
+peer 2: orca state room-away self retry connecting attempt=2 close-code=0 close-reason=WebSocket closed by the server last-error=ticket-refresh-failed
+peer 2: orca state room-away self retry connect-failed attempt=2 close-code=0 close-reason=WebSocket closed by the server last-error=ticket-refresh-failed
+peer 2: orca state room-away self retry connecting attempt=3 close-code=0 close-reason=WebSocket closed by the server last-error=ticket-refresh-failed
+peer 2: orca state room-away self retry connect-failed attempt=3 close-code=0 close-reason=WebSocket closed by the server last-error=ticket-refresh-failed
+peer 2: orca state room-away self retry connecting attempt=4 close-code=0 close-reason=WebSocket closed by the server last-error=ticket-refresh-failed
+peer 2: orca state room-away self retry connect-failed attempt=4 close-code=0 close-reason=WebSocket closed by the server last-error=ticket-refresh-failed
+EVENT: {'pattern': 'Scene frame \\d+: .* -> scMelee', 'action': 'back', 'delay': 12, 'role': 2, 'armed': 42.337648666, 'done': True}
+peer 0: orca state room-back peer 3 kept same-peer
+peer 0: orca state room-back peer 3 kept buffered-inputs
+peer 1: orca state room-back peer 3 kept same-peer
+peer 1: orca state room-back peer 3 kept buffered-inputs
+peer 2: orca state room-away self retry connecting attempt=5 close-code=0 close-reason=WebSocket closed by the server last-error=ticket-refresh-failed
+peer 2: orca state room-away self retry connected-awaiting-welcome attempt=5 close-code=0 close-reason=WebSocket closed by the server last-error=ticket-refresh-failed
+peer 2: orca state room-back self kept same-seat attempt=5 close-code=0 close-reason=WebSocket closed by the server last-error=ticket-refresh-failed
+peer 2: orca state room-back peer 2 kept buffered-inputs
+peer 2: orca state room-back peer 1 kept buffered-inputs
+PASS: all machines agree on plug [1570, 1570], confirmed hashes through frame 5940; 0 desyncs; 1 requested fights returned to CSS

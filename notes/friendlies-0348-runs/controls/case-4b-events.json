@@ -1,0 +1,14 @@
+[
+  {
+    "pattern": "Scene frame \\d+: .* -> scMelee",
+    "action": "away",
+    "delay": 6,
+    "role": 2
+  },
+  {
+    "pattern": "Scene frame \\d+: .* -> scMelee",
+    "action": "back",
+    "delay": 12,
+    "role": 2
+  }
+]

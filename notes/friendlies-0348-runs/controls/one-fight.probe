@@ -1,0 +1,4 @@
+# Finite one-stock fight, with read-only fighter evidence.
+@scSelctCharacter:1 20 write [[805a00e0]+1c]+2 01
+@scSelctCharacter:1 20 write [[805a00e0]+1c]+4 01
+@scMelee:1 100 dump [[805a00e0]+8]+98 170 fight-1

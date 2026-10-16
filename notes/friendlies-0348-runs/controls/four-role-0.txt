@@ -1,0 +1,23 @@
+@scStrap mash 30 99999 1 40 A
+@scBoot mash 30 99999 1 40 A
+@scTitle mash 30 99999 1 40 A
+@scSelctCharacter:1 250 290 1 SY=255
+@scSelctCharacter:1 320 323 1 A
+@scSelctCharacter:1 mash 600 99999 1 120 START
+@scSelctCharacter:2 60 120 1 SY=255
+@scSelctCharacter:2 130 139 1 SX=255
+@scSelctCharacter:2 150 152 1 SY=1
+@scSelctCharacter:2 180 183 1 A
+@scSelctCharacter:2 190 199 1 SX=1
+@scSelctCharacter:2 210 215 1 SY=1
+@scSelctCharacter:2 mash 800 99999 1 120 START
+@scSelStage:1 150 188 1 SY=255
+@scSelStage:1 190 193 1 SX=1
+@scSelStage:1 210 213 1 A
+@scSelStage:1 mash 400 99999 1 40 A
+@scSelStage:2 150 188 1 SY=255
+@scSelStage:2 190 193 1 SX=1
+@scSelStage:2 210 213 1 A
+@scSelStage:2 mash 400 99999 1 40 A
+@scVsResult mash 240 99999 1 40 A
+@scVsResult mash 600 99999 1 40 START

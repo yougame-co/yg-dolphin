@@ -1,0 +1,120 @@
+16:35  up 16:48, 4 users, load averages: 14.44 13.47 11.74
+Load is at least 12; reserving headroom below 18 and releasing the lock without starting the job.
+16:37  up 16:50, 4 users, load averages: 14.63 13.01 11.75
+Load is at least 12; reserving headroom below 18 and releasing the lock without starting the job.
+16:38  up 16:51, 4 users, load averages: 11.58 12.37 11.55
+Fixture PID: 38091
+Running roles 0,1,2; isolated logs: /var/folders/0k/gcc8hsbs5qs9bzd0254hd8n80000gn/T/orca-doubles-subr21vc
+peer 0: orca state booting
+peer 0: orca state playing
+peer 0: orca state friend-joining
+peer 0: orca state friend-holding
+peer 1: orca state booting
+peer 1: orca state joining 0
+peer 1: orca state friend-waiting
+peer 0: orca state friend-joining
+peer 1: orca state joining 0
+peer 1: orca state joining 50
+peer 1: orca state joining 99
+peer 0: orca state friend-joined
+peer 1: orca state playing
+EVENT: {'pattern': 'Scene frame \\d+: .* -> scMelee', 'action': 'spawn', 'delay': 6, 'role': 2, 'armed': 42.371523833, 'done': True}
+peer 0: orca state friend-joining
+peer 0: orca state friend-holding
+peer 2: orca state booting
+peer 2: orca state joining 0
+peer 2: orca state friend-waiting
+peer 0: orca state friend-joining
+peer 2: orca state joining 0
+peer 2: orca state joining 50
+peer 2: orca state joining 51
+peer 2: orca state joining 52
+peer 2: orca state joining 53
+peer 2: orca state joining 54
+peer 2: orca state joining 55
+peer 2: orca state joining 56
+peer 2: orca state joining 57
+peer 2: orca state joining 58
+peer 2: orca state joining 59
+peer 2: orca state joining 60
+peer 2: orca state joining 61
+peer 2: orca state joining 62
+peer 2: orca state joining 63
+peer 2: orca state joining 64
+peer 2: orca state joining 65
+peer 2: orca state joining 66
+peer 2: orca state joining 67
+peer 2: orca state joining 68
+peer 2: orca state joining 69
+peer 2: orca state joining 70
+peer 2: orca state joining 71
+peer 2: orca state joining 72
+peer 2: orca state joining 73
+peer 2: orca state joining 74
+peer 2: orca state joining 75
+peer 2: orca state joining 76
+peer 2: orca state joining 77
+peer 2: orca state joining 78
+peer 2: orca state joining 79
+peer 2: orca state joining 80
+peer 2: orca state joining 81
+peer 2: orca state joining 82
+peer 2: orca state joining 83
+peer 2: orca state joining 84
+peer 2: orca state joining 85
+peer 2: orca state joining 86
+peer 2: orca state joining 87
+peer 2: orca state joining 88
+peer 2: orca state joining 89
+peer 2: orca state joining 51
+peer 2: orca state joining 52
+peer 2: orca state joining 53
+peer 2: orca state joining 54
+peer 2: orca state joining 55
+peer 2: orca state joining 56
+peer 2: orca state joining 57
+peer 2: orca state joining 58
+peer 2: orca state joining 59
+peer 2: orca state joining 60
+peer 2: orca state joining 61
+peer 2: orca state joining 62
+peer 2: orca state joining 63
+peer 2: orca state joining 64
+peer 2: orca state joining 65
+peer 2: orca state joining 66
+peer 2: orca state joining 67
+peer 2: orca state joining 68
+peer 2: orca state joining 69
+peer 2: orca state joining 70
+peer 2: orca state joining 71
+peer 2: orca state joining 72
+peer 2: orca state joining 73
+peer 2: orca state joining 74
+peer 2: orca state joining 75
+peer 2: orca state joining 76
+peer 2: orca state joining 77
+peer 2: orca state joining 78
+peer 2: orca state joining 79
+peer 2: orca state joining 80
+peer 2: orca state joining 81
+peer 2: orca state joining 82
+peer 2: orca state joining 83
+peer 2: orca state joining 84
+peer 2: orca state joining 85
+peer 2: orca state joining 86
+peer 2: orca state joining 87
+peer 2: orca state joining 88
+peer 2: orca state joining 89
+peer 2: orca state joining 90
+peer 2: orca state joining 91
+peer 2: orca state joining 92
+peer 2: orca state joining 93
+peer 2: orca state joining 94
+peer 2: orca state joining 95
+peer 2: orca state joining 96
+peer 2: orca state joining 97
+peer 2: orca state joining 98
+peer 2: orca state joining 99
+peer 0: orca state friend-joined
+peer 2: orca state playing
+PASS: all machines agree on plug [1570, 4455], confirmed hashes through frame 5940; 0 desyncs; 1 requested fights returned to CSS

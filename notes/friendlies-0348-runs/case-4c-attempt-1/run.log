@@ -1,0 +1,22 @@
+16:17  up 16:30, 4 users, load averages: 11.76 10.96 9.64
+Fixture PID: 52623
+Running roles 0,1,2; isolated logs: /var/folders/0k/gcc8hsbs5qs9bzd0254hd8n80000gn/T/orca-doubles-t5aane9w
+peer 0: orca state booting
+peer 0: orca state playing
+peer 0: orca state friend-joining
+peer 0: orca state friend-holding
+peer 0: orca state room-leave peer 3 ended real-leave
+peer 1: orca state booting
+peer 1: orca state joining 0
+peer 1: orca state friend-waiting
+peer 1: orca state room-leave peer 3 ended real-leave
+peer 2: orca state booting
+peer 2: orca state joining 0
+Traceback (most recent call last):
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 821, in <module>
+    main()
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 813, in main
+    run(args)
+  File "/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Tools/orca/doubles-rooms.py", line 672, in run
+    raise RuntimeError(f"peer {role} reported an error; inspect local log")
+RuntimeError: peer 2 reported an error; inspect local log
