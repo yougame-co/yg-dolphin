@@ -2667,6 +2667,11 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.47
+
+- Recorded matches reach the site again: 0.3.46 never uploaded them. Fixes a rare crash at start on
+  Windows when the time zone can't be read.
+
 ### 0.3.46
 
 - Play doubles with friends: up to four in a friends room. Tournament matches report their own results.
