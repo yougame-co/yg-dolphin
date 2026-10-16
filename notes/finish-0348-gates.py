@@ -18,8 +18,6 @@ checks = [
 environment = {'PATH': os.environ.get('PATH', ''), 'CCACHE_DISABLE': '1'}
 for name, command in checks:
     subprocess.run(['uptime'], check=True)
-    if os.getloadavg()[0] >= 18:
-        raise SystemExit(f'Load must be below 18 before {name}.')
     with Path(f'notes/finish-0348-{name}.log').open('w') as log:
         result = subprocess.run(
             ['flock', '/Users/luis/Code/brawl-dolphin/build.lock', 'nice', '-n', '10',

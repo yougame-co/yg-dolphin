@@ -1,8 +1,8 @@
 # Friendlies 0.3.48 verification
 
 **Vanilla Brawl gameplay cases 1–8 PASS**, including every subcase. Train `train-0348`, 2026-10-16.
-**Project+ remains incomplete:** the finish-0348 run stopped at the machine load ceiling;
-see the Project+ section below. The earlier Brawl results do not prove Project+ rotation.
+**Project+ cases 2 and 1 PASS**, each with 0 desyncs. See the Project+ section
+below for the independent Project+ proof.
 The required base `694f5f9644` was checked before edits: initial HEAD was
 `15621acde9 Record train 0.3.48 configuration blocker`, followed by `BASE-OK`.
 The previous missing-submodule and disc prerequisites are resolved.
@@ -36,46 +36,53 @@ are joint winners. The fight lasts 864 frames, before port 3's scheduled walk at
 
 ## Project+
 
-Task `finish-0348`, base `85112b1bd6`, 2026-10-16. **INCOMPLETE / blocked by
-machine load**: neither requested Project+ case has a final fixture PASS.
-Case 1 has not been run separately. Case 2 reached the second stage select,
-but did not reach fight 2 before the runner stopped at load >=18. The first
-post-stop `uptime` reported **19.05**, above the required ceiling of 18.
-No further heavy jobs were started after that stop.
+Task `finish-0348`, resumed from `56e1109463`, 2026-10-16. Required resume base
+check: `56e1109463 Update 0.3.48 notes and replay sample checks`, then `BASE-OK`.
+**Cases 2 and 1 PASS, each with 0 desyncs.** Each run boots the legacy
+Project+ 3.2 launcher; all three peers log `PPLUS32`. Scene transitions match
+exactly across all three peers, as do all 158 common confirmed hashes per run.
 
 | Run | Verdict and observed evidence |
 | --- | --- |
-| `pplus-case-2-attempt-1/` | FAIL: the Brawl cursor timings returned Project+ from CSS to the main menu; no fight. Stopped exact own fixture PID 72957 with SIGINT. |
-| `pplus-case-2-attempt-2/` | NO VERDICT: machine-load stop, exact own fixture PID 79524. All three probes show humans 1/2 in fight 1 and a return to CSS. Port 2's panel changes from human (1) at CSS2 frame 240 to empty (0) at 270/300/400 on every peer. Next stage select begins at frame 4013; no fight-2 probe exists. All common confirmed hashes agree through frame 4140. |
+| `pplus-case-2-attempt-3/` | PASS: all three fighter probes show humans 1/2 in fight 1, then 1/3 in fight 2. On every peer, port 2's panel is human (1) at CSS2 frame 240 and empty (0) at 270/300/400. Both fights return to CSS; all common hashes match through 9780; 0 desyncs. |
+| `pplus-case-1-attempt-1/` | PASS: separate three-peer run; all three fighter probes show humans 1/2 and port 3 sitting out. Fight returns to CSS; all common hashes match through 9780; 0 desyncs. |
 
-Evidence: [first run](friendlies-0348-runs/pplus-case-2-attempt-1/run.log),
-[second run](friendlies-0348-runs/pplus-case-2-attempt-2/run.log),
-[load stop](friendlies-0348-runs/pplus-case-2-attempt-2/load-stop.txt),
-[per-peer summary](friendlies-0348-runs/pplus-case-2-attempt-2/evidence-summary.json).
-Both directories retain arguments, stdout/stderr and diagnostics; the second
-also retains the fighter, hand and panel probes. Neither attempt is a rotation PASS.
+Case 2 evidence: [fixture PASS](friendlies-0348-runs/pplus-case-2-attempt-3/run.log),
+[per-peer summary](friendlies-0348-runs/pplus-case-2-attempt-3/evidence-summary.json).
+Case 1 evidence: [fixture PASS](friendlies-0348-runs/pplus-case-1-attempt-1/run.log),
+[per-peer summary](friendlies-0348-runs/pplus-case-1-attempt-1/evidence-summary.json).
+Each directory retains arguments, peer stdout/stderr, diagnostics and probes.
 
-The fixture now accepts `--pplus <launcher.dol>`: it selects the existing
-`PPLUS32` legacy profile, boots that DOL and supplies the authorized Brawl disc
-as `Dolphin.Core.DefaultISO`. Every child gets `ORCA_NO_LOCAL_INPUT=1` plus
-the six existing SDL variables, headless Null video and muted audio. No runtime
-gameplay code was changed for these attempts.
+Earlier attempts remain evidence of their actual outcomes:
+
+- `pplus-case-2-attempt-1/`: FAIL, scripted menu navigation returned to the main
+  menu. Stopped only own fixture PID 72957; children and clone cleaned.
+- `pplus-case-2-attempt-2/`: INCOMPLETE, interrupted at load >=18 (own fixture
+  PID 79524). Fight 1 and the panel-empty action were observed on all peers;
+  matching hashes through 4140, but no second-fight probe or fixture PASS.
+  [Log](friendlies-0348-runs/pplus-case-2-attempt-2/run.log),
+  [summary](friendlies-0348-runs/pplus-case-2-attempt-2/evidence-summary.json).
+
+The fixture accepts `--pplus <launcher.dol>`: it selects the existing `PPLUS32`
+legacy profile, boots that DOL and supplies the authorized Brawl disc as
+`Dolphin.Core.DefaultISO`. Every child gets `ORCA_NO_LOCAL_INPUT=1` plus all six
+SDL variables, headless Null video and muted audio. No runtime gameplay code
+was changed for the Project+ proof.
 
 Project+ controls are separate `pplus-basic-role-*.txt` and
 `pplus-rotation-role-*.txt` files. Compared with the Brawl scripts, CSS up/down
 motion is shortened from 41 to 27 inclusive input frames; the host alone picks
 the stage, using a five-frame upward move and A, without Brawl's leftward move.
 The B-then-A action and each role's fighting/rotation assignment are unchanged.
-These scripts still need the complete case 2 and case 1 proofs.
+No additional input adjustment was needed on the resumed run.
 
-Each attempt used its own **writable APFS clone** of the authorized launcher
+Each attempt uses its own **writable APFS clone** of the authorized launcher
 and adjacent `sd.raw`, under `build-orca-tests/finish-0348-pplus-*`. The source
-`/Volumes/YGWorktrees/OSCOO/pplus-3.2/run/` and authorized disc were read only.
-Both clones were deleted after exact-child cleanup; none remains. Each run
-held the shared flock with nice 10, used three instances, and checked load
-every two seconds. The second stopped as required when that check reached 18.
+`/Volumes/YGWorktrees/OSCOO/pplus-3.2/run/` and authorized disc are read only.
+Both resumed clones were removed after exact-child cleanup; none remains.
+Each run holds the shared flock with nice 10 and uses three instances.
 
-When the machine is available, reproduce with a fresh attempt name:
+Reproduce with a fresh attempt name:
 
 ```sh
 uptime
@@ -83,10 +90,14 @@ flock /Users/luis/Code/brawl-dolphin/build.lock nice -n 10 python3 notes/friendl
 flock /Users/luis/Code/brawl-dolphin/build.lock nice -n 10 python3 notes/friendlies-0348-runs/controls/run-pplus-case.py 1 NEW
 ```
 
-The runner checks load <14 after acquiring the lock, clones with `cp -c`, makes
-only the clones writable, and removes them in `finally`. It never overwrites
-an existing evidence directory. The remaining finish-0348 gates are recorded
-in [finish verification](finish-0348-verification.md).
+The resumed runner checks load <18 after acquiring the lock. When load is too
+high, it prints `uptime` every 60 seconds and waits up to 45 continuous minutes,
+per the lead addendum. A running attempt still monitors load every two seconds;
+an interrupted attempt must be retried after that wait, never counted as PASS.
+Both resumed runs started below 18 and completed without a load interruption.
+The runner clones with `cp -c`, makes only the clones writable, and removes
+them in `finally`. It never overwrites an existing evidence directory. See
+[finish verification](finish-0348-verification.md) for the final build/test gates.
 
 ## Runtime fix: returning a token to sit out
 
@@ -185,7 +196,7 @@ The runner rechecks load after acquiring the lock; it reserves headroom below
 It releases the lock without starting a fixture if that check fails. Exact own
 fixture PIDs are printed; finally quits/waits/kills only its own children.
 No heavy-slot call, push, external service, production operation, signing or
-mailbox call. Final version-0.3.48 gates passed: full binary 2,157 passed / 21
+mailbox call. Earlier train version-0.3.48 gates passed: full binary 2,157 passed / 21
 guarded skips / 0 failures; Orca filter 1,085 passed / 21 guarded skips / 0 failures;
 doubles self-test PASS; compatibility template 78/78; Python regressions 3/3;
 four touched C++ translation units compile with -Werror. See

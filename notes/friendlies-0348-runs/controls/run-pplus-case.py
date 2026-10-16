@@ -9,14 +9,14 @@ import subprocess
 import sys
 import time
 
+from load_gate import wait_for_load
+
 root = Path(__file__).resolve().parents[3]
 os.chdir(root)
 case, attempt = sys.argv[1:]
 if case not in ('1', '2'):
     raise SystemExit('choose case 1 or 2')
-subprocess.run(['uptime'], check=True)
-if os.getloadavg()[0] >= 14:
-    raise SystemExit('Load must be below 14 before starting three peers (ceiling 18).')
+wait_for_load()
 controls = Path('notes/friendlies-0348-runs/controls')
 target = Path(f'notes/friendlies-0348-runs/pplus-case-{case}-attempt-{attempt}')
 target.mkdir(parents=True, exist_ok=False)

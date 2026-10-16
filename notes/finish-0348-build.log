@@ -1,8 +1,8 @@
+19:36  up 19:49, 4 users, load averages: 15.86 12.08 10.97
 [0/2] Re-checking globbed directories...
-[1/8] cd /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/build-orca-tests && /opt/homebrew/bin/cmake -DPROJECT_SOURCE_DIR=/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348 -DPROJECT_BINARY_DIR=/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/build-orca-tests -DDISTRIBUTOR=None -DDOLPHIN_DEFAULT_UPDATE_TRACK= -DGIT_FOUND=TRUE -DGIT_EXECUTABLE=/usr/bin/git -DDOLPHIN_WC_REVISION= -DDOLPHIN_WC_DESCRIBE= -DDOLPHIN_WC_BRANCH= -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -P /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/CMake/ScmRevGen.cmake
-[2/8] Building CXX object Source/Core/Common/CMakeFiles/common.dir/Version.cpp.o
-[3/8] Linking CXX static library Source/Core/Common/libcommon.a
-[4/8] Building CXX object Source/Core/DolphinNoGUI/CMakeFiles/dolphin-nogui.dir/MainNoGUI.cpp.o
-[5/8] Linking CXX executable Binaries/dolphin-emu-nogui
-[6/8] Building CXX object Source/UnitTests/Core/CMakeFiles/OrcaKeyframeTest.dir/Orca/KeyframeTest.cpp.o
-[7/8] Linking CXX executable Binaries/Tests/tests
+[1/7] cd /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/build-orca-tests && /opt/homebrew/bin/cmake -DPROJECT_SOURCE_DIR=/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348 -DPROJECT_BINARY_DIR=/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/build-orca-tests -DDISTRIBUTOR=None -DDOLPHIN_DEFAULT_UPDATE_TRACK= -DGIT_FOUND=TRUE -DGIT_EXECUTABLE=/usr/bin/git -DDOLPHIN_WC_REVISION= -DDOLPHIN_WC_DESCRIBE= -DDOLPHIN_WC_BRANCH= -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -P /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/CMake/ScmRevGen.cmake
+[2/7] Building CXX object Source/Core/Common/CMakeFiles/common.dir/Version.cpp.o
+[3/7] Linking CXX static library Source/Core/Common/libcommon.a
+[4/7] Linking CXX executable Binaries/dolphin-emu-nogui
+[5/7] Building CXX object Source/UnitTests/Core/CMakeFiles/OrcaKeyframeTest.dir/Orca/KeyframeTest.cpp.o
+[6/7] Linking CXX executable Binaries/Tests/tests

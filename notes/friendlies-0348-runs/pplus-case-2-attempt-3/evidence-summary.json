@@ -1,0 +1,348 @@
+{
+  "verdict": "PASS",
+  "latest_matching_confirmed_frame": 9780,
+  "all_common_hashes_match": true,
+  "common_hash_count": 158,
+  "peers": {
+    "0": {
+      "profile": "PPLUS32",
+      "fight_human_ports": {
+        "1": [
+          1,
+          2
+        ],
+        "2": [
+          1,
+          3
+        ]
+      },
+      "port_2_panel_kind_at_css2": {
+        "240": 1,
+        "270": 0,
+        "300": 0,
+        "400": 0
+      },
+      "scene_entries": [
+        [
+          1,
+          "scStrap"
+        ],
+        [
+          104,
+          "scMemoryChange"
+        ],
+        [
+          121,
+          "scBoot"
+        ],
+        [
+          157,
+          "scMemoryChange"
+        ],
+        [
+          161,
+          "scTitle"
+        ],
+        [
+          177,
+          "scMemoryChange"
+        ],
+        [
+          195,
+          "muMenuMain"
+        ],
+        [
+          388,
+          "scMemoryChange"
+        ],
+        [
+          392,
+          "scSelctCharacter"
+        ],
+        [
+          1000,
+          "scSelStage"
+        ],
+        [
+          1222,
+          "scMemoryChange"
+        ],
+        [
+          1223,
+          "scMelee"
+        ],
+        [
+          2879,
+          "scMemoryChange"
+        ],
+        [
+          2884,
+          "scVsResult"
+        ],
+        [
+          3304,
+          "scMemoryChange"
+        ],
+        [
+          3307,
+          "scSelctCharacter"
+        ],
+        [
+          4015,
+          "scSelStage"
+        ],
+        [
+          4237,
+          "scMemoryChange"
+        ],
+        [
+          4239,
+          "scMelee"
+        ],
+        [
+          5863,
+          "scMemoryChange"
+        ],
+        [
+          5868,
+          "scVsResult"
+        ],
+        [
+          6268,
+          "scMemoryChange"
+        ],
+        [
+          6271,
+          "scSelctCharacter"
+        ]
+      ]
+    },
+    "1": {
+      "profile": "PPLUS32",
+      "fight_human_ports": {
+        "1": [
+          1,
+          2
+        ],
+        "2": [
+          1,
+          3
+        ]
+      },
+      "port_2_panel_kind_at_css2": {
+        "240": 1,
+        "270": 0,
+        "300": 0,
+        "400": 0
+      },
+      "scene_entries": [
+        [
+          1,
+          "scStrap"
+        ],
+        [
+          104,
+          "scMemoryChange"
+        ],
+        [
+          121,
+          "scBoot"
+        ],
+        [
+          157,
+          "scMemoryChange"
+        ],
+        [
+          161,
+          "scTitle"
+        ],
+        [
+          177,
+          "scMemoryChange"
+        ],
+        [
+          195,
+          "muMenuMain"
+        ],
+        [
+          388,
+          "scMemoryChange"
+        ],
+        [
+          392,
+          "scSelctCharacter"
+        ],
+        [
+          1000,
+          "scSelStage"
+        ],
+        [
+          1222,
+          "scMemoryChange"
+        ],
+        [
+          1223,
+          "scMelee"
+        ],
+        [
+          2879,
+          "scMemoryChange"
+        ],
+        [
+          2884,
+          "scVsResult"
+        ],
+        [
+          3304,
+          "scMemoryChange"
+        ],
+        [
+          3307,
+          "scSelctCharacter"
+        ],
+        [
+          4015,
+          "scSelStage"
+        ],
+        [
+          4237,
+          "scMemoryChange"
+        ],
+        [
+          4239,
+          "scMelee"
+        ],
+        [
+          5863,
+          "scMemoryChange"
+        ],
+        [
+          5868,
+          "scVsResult"
+        ],
+        [
+          6268,
+          "scMemoryChange"
+        ],
+        [
+          6271,
+          "scSelctCharacter"
+        ]
+      ]
+    },
+    "2": {
+      "profile": "PPLUS32",
+      "fight_human_ports": {
+        "1": [
+          1,
+          2
+        ],
+        "2": [
+          1,
+          3
+        ]
+      },
+      "port_2_panel_kind_at_css2": {
+        "240": 1,
+        "270": 0,
+        "300": 0,
+        "400": 0
+      },
+      "scene_entries": [
+        [
+          1,
+          "scStrap"
+        ],
+        [
+          104,
+          "scMemoryChange"
+        ],
+        [
+          121,
+          "scBoot"
+        ],
+        [
+          157,
+          "scMemoryChange"
+        ],
+        [
+          161,
+          "scTitle"
+        ],
+        [
+          177,
+          "scMemoryChange"
+        ],
+        [
+          195,
+          "muMenuMain"
+        ],
+        [
+          388,
+          "scMemoryChange"
+        ],
+        [
+          392,
+          "scSelctCharacter"
+        ],
+        [
+          1000,
+          "scSelStage"
+        ],
+        [
+          1222,
+          "scMemoryChange"
+        ],
+        [
+          1223,
+          "scMelee"
+        ],
+        [
+          2879,
+          "scMemoryChange"
+        ],
+        [
+          2884,
+          "scVsResult"
+        ],
+        [
+          3304,
+          "scMemoryChange"
+        ],
+        [
+          3307,
+          "scSelctCharacter"
+        ],
+        [
+          4015,
+          "scSelStage"
+        ],
+        [
+          4237,
+          "scMemoryChange"
+        ],
+        [
+          4239,
+          "scMelee"
+        ],
+        [
+          5863,
+          "scMemoryChange"
+        ],
+        [
+          5868,
+          "scVsResult"
+        ],
+        [
+          6268,
+          "scMemoryChange"
+        ],
+        [
+          6271,
+          "scSelctCharacter"
+        ]
+      ]
+    }
+  },
+  "all_scene_transitions_match": true
+}
