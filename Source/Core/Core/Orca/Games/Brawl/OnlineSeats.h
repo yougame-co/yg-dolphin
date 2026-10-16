@@ -33,9 +33,10 @@ class CPUThreadGuard;
 //   It keeps its CPU plate until ApplySeats hides it or a player joins it. A human's panel on an
 //   unplugged port is left to the game, which empties it 17 frames after the controller goes;
 //   emptying it first would leave the token's highlight on the grid.
-// - GateMasks, without a header: A never reaches a player-type button, another panel's name
-//   button, or any place within one frame's travel of them. The player's own name button and its
-//   list take A as on the queue's own select (Rules::CssNameTakesA). A panel a CPU had is joined by
+// - GateMasks, without a header: A never reaches another panel's player-type or name button,
+//   or any place within one frame's travel of them. With at least three plugged ports, a human
+//   holding their token can press A on their own player-type button to sit out. The player's own
+//   name button and its list take A as on the queue's own select (Rules::CssNameTakesA). A panel a CPU had is joined by
 //   Orca pressing A for its port while that port's hand rests on the panel's player-type button
 //   (PressesJoin).
 // - ApplySeats, on the character select: an empty panel whose port nobody plugged in is hidden.

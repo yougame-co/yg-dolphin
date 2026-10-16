@@ -576,6 +576,41 @@ TEST(OrcaOnlineSeats, TheGateKeepsAOffTheButtonsOnlyWhereItShould)
   EXPECT_TRUE(GateMasks(sss)[0].Empty());
 }
 
+// A friend who played the last fight returns their held token to their own player panel.
+// This must not change the ordinary two-player or ranked character selects.
+TEST(OrcaOnlineSeats, InAMultiFriendRoomAHeldTokenCanReturnToItsOwnPanel)
+{
+  FakeMemory m = Game("scSelctCharacter", 25);
+  m.bytes[MB::FRIENDS_TAG] = MB::FRIENDS_TAG_VALUE;
+  m.bytes[MB::FRIENDS_SEEN] = 0x7;
+  SetKind(m, 1, AREA_KIND_HUMAN);
+  SetToken(m, 1, true);
+  SetHand(m, 1, Rules::CSS_HAND_BUTTON, -19.8f, Rules::CSS_BUTTON_PLAYER_TYPE, 1);
+  EXPECT_EQ(GateMasks(m)[1].buttons & PAD_BUTTON_A, 0);
+  EXPECT_TRUE(GateMasks(m)[1].a_centres_stick);
+
+  // A still cannot alter another player's type or add a CPU from an empty panel.
+  SetHand(m, 1, Rules::CSS_HAND_BUTTON, -19.8f, Rules::CSS_BUTTON_PLAYER_TYPE, 0);
+  EXPECT_NE(GateMasks(m)[1].buttons & PAD_BUTTON_A, 0);
+  SetHand(m, 1, Rules::CSS_HAND_BUTTON, -19.8f, Rules::CSS_BUTTON_PLAYER_TYPE, 1);
+  SetKind(m, 1, AREA_KIND_NONE);
+  EXPECT_NE(GateMasks(m)[1].buttons & PAD_BUTTON_A, 0);
+  SetKind(m, 1, AREA_KIND_HUMAN);
+  SetToken(m, 1, false);
+  EXPECT_NE(GateMasks(m)[1].buttons & PAD_BUTTON_A, 0);
+  SetToken(m, 1, true, true);
+  EXPECT_NE(GateMasks(m)[1].buttons & PAD_BUTTON_A, 0);
+  SetToken(m, 1, true);
+  m.bytes[MB::FRIENDS_SEEN] = 0xD;
+  EXPECT_NE(GateMasks(m)[1].buttons & PAD_BUTTON_A, 0);
+
+  m.bytes[MB::FRIENDS_SEEN] = 0x3;
+  EXPECT_NE(GateMasks(m)[1].buttons & PAD_BUTTON_A, 0);
+  Rules::WriteHeader(m, Mode::Ranked, Ruleset::Brawl, 0, 0, ROOM);
+  m.bytes[MB::FRIENDS_SEEN] = 0x7;
+  EXPECT_TRUE(GateMasks(m)[1].Empty());
+}
+
 TEST(OrcaOnlineSeats, ThePlayersOwnNameButtonAndItsListTakeA)
 {
   using Rules::CssHand;

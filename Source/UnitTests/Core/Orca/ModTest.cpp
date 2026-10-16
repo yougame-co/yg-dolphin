@@ -1417,7 +1417,7 @@ TEST(OrcaMod, LauncherBootSaysWhyTheDiscDidNotOpen)
 }
 
 // S3 (WP19 a): the key's UX version is the engine's, then the running game's own revision when it
-// has one. Every game's is 0 today, so Brawl rev 2's and Project+'s keys end exactly as before S3.
+// has one. Brawl rev 2 and Project+ revision 1 distinguish the multi-friend token return.
 TEST(OrcaMod, UxKeyPartIsPerGame)
 {
   EXPECT_EQ(Orca::Online::UxKeyPart(29, 0), "|ux=29");
@@ -1428,7 +1428,7 @@ TEST(OrcaMod, UxKeyPartIsPerGame)
   {
     ~ConfigDone() { SConfig::Shutdown(); }
   } config_done;
-  const std::string ux = fmt::format("|ux={}", Orca::UX::kCompatVersion);
+  const std::string ux = fmt::format("|ux={}.1", Orca::UX::kCompatVersion);
   const int before = Orca::Events::UXCompatVersion();
   // The module, the UX version and the profile as they were, whatever fails.
   struct SessionDone
@@ -1450,7 +1450,7 @@ TEST(OrcaMod, UxKeyPartIsPerGame)
     const auto profile = Orca::LoadProfileFrom(RepoPath("Data/Sys/"), name, 2, &error);
     ASSERT_TRUE(profile) << error;
     Orca::SetActiveProfile(profile);
-    EXPECT_EQ(Orca::UX::Builtin().Describe().compat, 0);
+    EXPECT_EQ(Orca::UX::Builtin().Describe().compat, 1);
     EXPECT_TRUE(Orca::Online::CompatibilityKeyParts().ends_with(ux));
   }
   // Mod mode's key ends the same way.
@@ -1464,7 +1464,7 @@ TEST(OrcaMod, UxKeyPartIsPerGame)
     const auto mod = Orca::LoadModProfile(bundle->dir, &error);
     ASSERT_TRUE(mod) << error;
     Orca::SetActiveProfile(mod);
-    EXPECT_EQ(Orca::UX::Builtin().Describe().compat, 0);
+    EXPECT_EQ(Orca::UX::Builtin().Describe().compat, 1);
     const std::string parts = Orca::Online::CompatibilityKeyParts();
     EXPECT_TRUE(parts.starts_with("orca2|")) << parts;
     EXPECT_TRUE(parts.ends_with(ux)) << parts;
@@ -1809,11 +1809,11 @@ TEST(OrcaMod, GoldenLegacyCompatibilityKey)
   const std::string revision = Common::GetScmRevGitStr();
   ASSERT_TRUE(parts.starts_with("orca|" + revision + "|"));
   parts.replace(5, revision.size(), "fixture-engine-revision");
-  // 0.3.46 uses UX 31 for deterministic seat-label and selected-tag writes. Normalize only
-  // that suffix to keep both earlier serialization goldens pinned.
-  ASSERT_TRUE(parts.ends_with("|ux=31"));
+  // UX 31 plus Brawl revision 1 (multi-friend token return). Normalize only that suffix
+  // to keep both earlier serialization goldens pinned.
+  ASSERT_TRUE(parts.ends_with("|ux=31.1"));
   std::string previous = parts;
-  previous.replace(previous.size() - 6, 6, "|ux=30");
+  previous.replace(previous.size() - 8, 8, "|ux=30");
   EXPECT_EQ(fmt::format("orca2:{:016x}", XXH3_64bits(previous.data(), previous.size())),
             "orca2:ad4097b8dd752ca6");
   previous.replace(previous.size() - 6, 6, "|ux=29");

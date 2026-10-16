@@ -1,0 +1,6 @@
+[0/2] Re-checking globbed directories...
+[1/8] cd /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/build-orca-tests && /opt/homebrew/bin/cmake -DPROJECT_SOURCE_DIR=/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348 -DPROJECT_BINARY_DIR=/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/build-orca-tests -DDISTRIBUTOR=None -DDOLPHIN_DEFAULT_UPDATE_TRACK= -DGIT_FOUND=TRUE -DGIT_EXECUTABLE=/usr/bin/git -DDOLPHIN_WC_REVISION= -DDOLPHIN_WC_DESCRIBE= -DDOLPHIN_WC_BRANCH= -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 -P /Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/CMake/ScmRevGen.cmake
+[2/6] Building CXX object Source/Core/Core/CMakeFiles/core.dir/Orca/Games/Brawl/OnlineSeats.cpp.o
+[3/6] Linking CXX static library Source/Core/Core/libcore.a
+[4/6] Linking CXX executable Binaries/dolphin-emu-nogui
+[5/6] Linking CXX executable Binaries/Tests/tests

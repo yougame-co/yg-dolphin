@@ -27,11 +27,11 @@ inline constexpr std::string_view BRAWL_REV2_RESULTS = "brawl-rev2-results";
 inline constexpr std::string_view BRAWL_REV2_LAUNCHER = "brawl-rev2-launcher";
 
 // Each game's own compatibility revision (Manifest::compat; the key's `ux=<engine>.<game>`, or
-// `ux=<engine>` alone while it is 0, as the first three games' are, so S3 changed no key;
-// brawl-rev2-results starts at 1, its own from the start). The games share this module's code: a
-// step change that reaches more than one of them bumps each.
-inline constexpr int BRAWL_REV2_COMPAT = 0;
-inline constexpr int BRAWL_REV2_PPLUS_COMPAT = 0;
+// `ux=<engine>` alone while it is 0). The games share this module's code: a step change that
+// reaches more than one of them bumps each. Brawl and Project+ revision 1 let a player return
+// their held token to their own panel in a multi-friend room; older masks would diverge.
+inline constexpr int BRAWL_REV2_COMPAT = 1;
+inline constexpr int BRAWL_REV2_PPLUS_COMPAT = 1;
 inline constexpr int BRAWL_REV2_RESULTS_COMPAT = 1;
 inline constexpr int BRAWL_REV2_LAUNCHER_COMPAT = 0;
 

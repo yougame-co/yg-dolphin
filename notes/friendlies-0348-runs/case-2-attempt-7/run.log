@@ -1,0 +1,24 @@
+15:58  up 16:11, 4 users, load averages: 6.63 6.67 7.63
+Fixture PID: 92935
+Running roles 0,1,2; isolated logs: /var/folders/0k/gcc8hsbs5qs9bzd0254hd8n80000gn/T/orca-doubles-7wawqr2e
+peer 0: orca state booting
+peer 0: orca state playing
+peer 0: orca state friend-joining
+peer 0: orca state friend-holding
+peer 0: orca state friend-joining
+peer 1: orca state booting
+peer 1: orca state joining 0
+peer 1: orca state friend-waiting
+peer 2: orca state booting
+peer 2: orca state joining 0
+peer 2: orca state friend-waiting
+peer 1: orca state joining 0
+peer 1: orca state joining 50
+peer 2: orca state joining 0
+peer 2: orca state joining 50
+peer 1: orca state joining 99
+peer 2: orca state joining 99
+peer 0: orca state friend-joined
+peer 1: orca state playing
+peer 2: orca state playing
+PASS: all machines agree on plug [1570, 1570], confirmed hashes through frame 7740; 0 desyncs; 2 requested fights returned to CSS

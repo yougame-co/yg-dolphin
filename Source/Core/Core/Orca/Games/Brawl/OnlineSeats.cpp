@@ -228,9 +228,21 @@ Rollback::InputGate::Masks GateMasks(const GuestMemory& m)
   for (int port = 0; port < Rollback::InputGate::PORTS; ++port)
   {
     const Rules::CssHand hand = Rules::ReadCssHand(m, port);
+    const u32 area = Area(m, port);
+    const Rules::CssToken token = Rules::ReadCssToken(m, port);
+    const bool return_token = std::popcount(plugged) > 2 && ((plugged >> port) & 1) && area &&
+                              m.Read32(area + AREA_KIND) == AREA_KIND_HUMAN && token.valid &&
+                              token.in_hand && !token.flying && hand.valid &&
+                              hand.target == Rules::CSS_HAND_BUTTON &&
+                              hand.button == Rules::CSS_BUTTON_PLAYER_TYPE && hand.panel == port;
     const bool list = Rules::ReadCssNameList(m, port);
+    // Returning the held token to one's own human panel lets this friend sit out next round.
+    if (return_token)
+    {
+      masks[port].a_centres_stick = true;
+    }
     // The player's own tag and its controls: A on their own name button and in its list.
-    if (Rules::CssNameTakesA(hand, port, list))
+    else if (Rules::CssNameTakesA(hand, port, list))
     {
       masks[port].a_centres_stick = true;
       if (list)
@@ -240,8 +252,6 @@ Rollback::InputGate::Masks GateMasks(const GuestMemory& m)
     {
       masks[port].buttons |= PAD_BUTTON_A;
     }
-    const u32 area = Area(m, port);
-    const Rules::CssToken token = Rules::ReadCssToken(m, port);
     if (((plugged >> port) & 1) && area && token.valid &&
         PressesJoin(hand, port, m.Read32(area + AREA_KIND), token.in_hand, token.flying))
     {

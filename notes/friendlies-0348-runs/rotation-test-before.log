@@ -1,0 +1,27 @@
+Running main() from UnitTestsMain.cpp
+Note: Google Test filter = OrcaOnlineSeats.InAMultiFriendRoomAHeldTokenCanReturnToItsOwnPanel
+[==========] Running 1 test from 1 test suite.
+[----------] Global test environment set-up.
+[----------] 1 test from OrcaOnlineSeats
+[ RUN      ] OrcaOnlineSeats.InAMultiFriendRoomAHeldTokenCanReturnToItsOwnPanel
+/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Source/UnitTests/Core/Orca/Games/Brawl/OnlineSeatsTest.cpp:589: Failure
+Expected equality of these values:
+  GateMasks(m)[1].buttons & PAD_BUTTON_A
+    Which is: 256
+  0
+
+/Volumes/YGWorktrees/ClaudeWorktrees/orca-0348/Source/UnitTests/Core/Orca/Games/Brawl/OnlineSeatsTest.cpp:590: Failure
+Value of: GateMasks(m)[1].a_centres_stick
+  Actual: false
+Expected: true
+
+[  FAILED  ] OrcaOnlineSeats.InAMultiFriendRoomAHeldTokenCanReturnToItsOwnPanel (2 ms)
+[----------] 1 test from OrcaOnlineSeats (2 ms total)
+
+[----------] Global test environment tear-down
+[==========] 1 test from 1 test suite ran. (2 ms total)
+[  PASSED  ] 0 tests.
+[  FAILED  ] 1 test, listed below:
+[  FAILED  ] OrcaOnlineSeats.InAMultiFriendRoomAHeldTokenCanReturnToItsOwnPanel
+
+ 1 FAILED TEST

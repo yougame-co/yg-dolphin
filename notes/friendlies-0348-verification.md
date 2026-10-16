@@ -28,10 +28,10 @@ Evidence: [before](friendlies-0348-runs/role-order-before.log),
 
 | Case | Result | Evidence |
 | --- | --- | --- |
-| 1: three peers, two fight, one sits out | Prior PASS supplied by Luis; not rerun yet | Original task |
-| 2: rotation at next CSS | RUNNING (attempt 1 invalidated by role ordering) | friendlies-0348-runs/case-2-attempt-2/ |
-| 3a: four peers, two sit out | PENDING | |
-| 3b: four fight 2v2 | PENDING | |
+| 1: three peers, two fight, one sits out | PASS repeated as fight 1 of rotation | case-2-attempt-7/ |
+| 2: rotation at next CSS | PASS: ports 1/2 then 1/3, both fights back to CSS, confirmed through 7740, 0 desync | case-2-attempt-7/ |
+| 3a: four peers, two sit out | PASS: four synchronized peers, only ports 1/2 fight, back to CSS, confirmed through 9000 | case-3-attempt-1/ |
+| 3b: four fight 2v2 | PASS: teams 1+3 / 2+4, both winners have one stock and place 0 on all four peers, back to CSS, confirmed through 9000, 0 desync | case-3-attempt-3/teams-evidence.json |
 | 4a: sitting-out peer leaves | PENDING | |
 | 4b: sitting-out peer away/back | PENDING | |
 | 4c: sitting-out peer blackout/return | PENDING | |
@@ -53,3 +53,61 @@ shared capture, retained-away roster, recovery, leave, expiry and confirmed hash
 Evidence: [self-test](friendlies-0348-runs/self-test.log).
 Final self-test, full unit binary and Orca-filter counts are pending.
 No pushes, production operations, external services, signing or mailbox calls.
+
+## Rotation investigation in progress
+
+Attempts 2 and 3 picked up the outgoing player's token with B; this leaves their
+human panel active, so Start cannot begin the next fight. Attempt 5 moved that
+held token to the portrait area and pressed A: the panel stayed active. Attempt 6
+held B over the own player-type button: all peers returned to the main menu,
+not a rotation. These are real failed control attempts, with no second fight.
+Their first fights used ports 1/2, returned to CSS and stayed synchronized.
+Attempt 4 was interrupted by SIGINT to its exact fixture PID when measured load
+rose to 18.35; its finally cleanup finished. This is no gameplay verdict.
+
+A regression now exercises A on the outgoing player's own human panel with a
+held token and at least three connected ports. It failed against the original
+gate (A masked); the experimental gate passes all **20 OrcaOnlineSeats tests**,
+including the new regression and the existing two-player/ranked behavior checks.
+Evidence: `rotation-test-before.log`, `rotation-test-after.log` under the runs dir.
+Live attempt 7 uses this experimental binary. No live rotation PASS yet; do not
+claim the change is complete until it works and each remaining case is proved.
+No compatibility revision has changed yet. Engine compatibility stays 31; if this
+module input change is retained, the affected games need their own revision bump.
+
+The reproducible case runner is `friendlies-0348-runs/controls/run-case.py`.
+It uses the shared lock per fixture and rechecks load after acquiring it, reserving
+headroom by requiring load below 12 before starting up to four game processes.
+The hard limit is 18. Subsequent runs print their exact fixture PID for cleanup.
+
+## Confirmed rotation fix and compatibility
+
+Live attempt 7 PASS: plug frame 1570 for both joiners; first fight humans ports
+1/2, second fight 1/3, both back to CSS; matching confirmed hashes through 7740,
+0 desyncs. The outgoing player's panel changes from human to empty after A on
+the own player-type button while holding the token; it stays empty (area dumps
+at CSS2 frames 270/300/400). Existing input handling masked that action.
+The fix permits it only for a connected player's own human panel, token held and
+not flying, with at least three connected ports, outside a locked header. It
+centres the stick on A. No new bench state or rotation messages; native game
+panel state and the existing CPU clear do the work. The two-player, ranked and
+other-panel gates remain covered by tests.
+
+This changes emulated input handling. The Brawl and Project+ game revisions must
+be 1 (`ux=31.1`) to keep the earlier masks from joining these sessions. Engine
+compatibility stays **31**; the results-only and legacy-launcher game revisions
+stay unchanged. The per-game bump and compatibility assertions are written;
+they will be included in the final build/gates.
+
+## Four-peer proof
+
+Attempt 1 PASS for a two-fighter/two-idle fight and a four-human free-for-all,
+through confirmed frame 9000, 0 desyncs. It is **not** the 2v2 proof: the team-tab
+click missed (cursor target 0). Attempt 2 clicked the native team tab (target 1,
+button 3), but the colour inputs made a 1v3 split; likewise not 2v2 proof.
+Attempt 3 corrects the colour inputs: fight 2's player records have teams
+`[0,1,0,1]`, and all four peers' results have stocks `[1,0,1,0]`, places `[0,2,0,3]`.
+Ports 1 and 3 are joint winners. The fight lasts 864 frames, before port 3's
+scheduled walk at 1000, and returns to CSS. All four agree through frame 9000;
+0 desyncs. Evidence: `case-3-attempt-3/teams-evidence.json`, probe binaries,
+scene logs and `run.log`, all under `friendlies-0348-runs/`.
