@@ -90,8 +90,9 @@ void ResetTrustedKeysForTests();
 bool IsTestKey(const PublicKey& key);
 std::string KeyHex(const PublicKey& key);
 
-// The launcher a boot runs: its file name, and the bytes the boot's reader holds (Boot.h), which
-// are what runs. Empty bytes: read the bundle's file instead.
+// The launcher a boot runs: its file name, and its file's bytes as the boot's reader read them
+// (BootExecutableReader::GetBytes, Boot.h), which are what runs. Empty bytes: read the bundle's
+// file instead.
 struct BootLauncher
 {
   std::string name;
