@@ -29,6 +29,7 @@
 
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
 #include "InputCommon/ControllerInterface/Wiimote/WiimoteController.h"
+#include "InputCommon/LocalInput.h"
 
 namespace WiimoteReal
 {
@@ -559,6 +560,9 @@ static unsigned int CalculateWantedBB()
 
 void WiimoteScanner::StartThread()
 {
+  if (InputCommon::LocalInputDisabled())
+    return;
+
   if (m_scan_thread_running.IsSet())
     return;
   m_scan_thread_running.Set();
@@ -883,6 +887,9 @@ int Wiimote::GetIndex() const
 // config dialog calls this when some settings change
 void Initialize(::Wiimote::InitializeMode init_mode)
 {
+  if (InputCommon::LocalInputDisabled())
+    return;
+
   if (!s_real_wiimotes_initialized)
   {
     s_wiimote_scanner.StartThread();

@@ -52,6 +52,8 @@
 //       [--disc-b <disc>] [--delay <n>]
 //       [--record [--rooms-log <captured-worker-jsonl>]]
 //   node Tools/orca/queue-e2e.mjs --self-test  (dry; no Orcas, cookies or network)
+// Ticket requests require ORCA_BUILD=<version>:<commit> for the YG Dolphin being run
+// (for example ORCA_BUILD=0.3.48:<its git commit>); a version alone sends commit: null.
 //
 // --record (casual, scenario match): negotiate record and send `record on` after each caps
 // answer. Replay hand-off is server-to-server, invisible to this stand-in bridge: print each
@@ -75,6 +77,13 @@ import path from "node:path";
 
 const argv = process.argv.slice(2);
 const SELF_TEST = argv.includes("--self-test");
+function parseOrcaBuild(value) {
+  if (!value) return null;
+  const match = /^(\d+\.\d+\.\d+)(?:[:\s]+([a-f0-9]{7,40}))?$/i.exec(value.trim());
+  if (!match) throw new Error("ORCA_BUILD must be <version>:<git commit> or <version>");
+  return { version: match[1], commit: match[2]?.toLowerCase() ?? null };
+}
+const ORCA_BUILD = SELF_TEST ? null : parseOrcaBuild(process.env.ORCA_BUILD);
 const opt = (name, fallback) => {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : fallback;
@@ -84,6 +93,10 @@ if ((!BIN || !DISC) && !SELF_TEST) {
   console.error(
     "usage: queue-e2e.mjs <nogui> <disc> [--pplus <dol>] [--queue ranked|casual] ...",
   );
+  process.exit(2);
+}
+if (!SELF_TEST && !ORCA_BUILD) {
+  console.error("set ORCA_BUILD=<version>:<commit> for the YG Dolphin being run");
   process.exit(2);
 }
 const PPLUS = opt("--pplus");
@@ -504,10 +517,11 @@ class Side {
     };
   }
 
-  async ticket(body) {
+  async ticket(body, orcaBuild = ORCA_BUILD) {
+    if (!orcaBuild) throw new Error("set ORCA_BUILD=<version>:<commit> for the YG Dolphin being run");
     const full = SLUG
-      ? { slug: SLUG, player_id: this.playerId, name: this.name, ...body }
-      : { dev: DEV_GAME, player_id: this.playerId, name: this.name, ...body };
+      ? { slug: SLUG, player_id: this.playerId, name: this.name, ...body, orca_build: orcaBuild }
+      : { dev: DEV_GAME, player_id: this.playerId, name: this.name, ...body, orca_build: orcaBuild };
     const res = await fetch(`${SITE}/api/multiplayer/ticket`, {
       method: "POST",
       headers: {
@@ -532,6 +546,13 @@ class Side {
       ORCA_SESSION: "1",
       ORCA_TEST_COMMANDS: "1",
       ORCA_TEST_ROOM_DROP: "1",
+      ORCA_NO_LOCAL_INPUT: "1",
+      SDL_JOYSTICK_HIDAPI: "0",
+      SDL_JOYSTICK_HIDAPI_GAMECUBE: "0",
+      SDL_HIDAPI_LIBUSB: "0",
+      SDL_JOYSTICK_IOKIT: "0",
+      SDL_JOYSTICK_MFI: "0",
+      SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT: "0x0000/0x0000",
       YOUGAME_BRIDGE: `http://127.0.0.1:${this.port}`,
       YOUGAME_TOKEN: this.token,
       YOUGAME_GAME: SLUG || DEV_GAME,
@@ -545,8 +566,8 @@ class Side {
       env.ORCA_TEST_DEV_GAME = DEV_GAME; // test knobs work in dev games only
     }
     // Test overrides from this script's own environment, the same for both Orcas (for example
-    // ORCA_TEST_SET_RULES=1,8: a ranked Brawl set's games at 1 stock), and SDL's switches (on a
-    // shared Mac, SDL_JOYSTICK_HIDAPI=0 and friends keep test Orcas off a player's adapter).
+    // ORCA_TEST_SET_RULES=1,8: a ranked Brawl set's games at 1 stock), and additional SDL switches.
+    // The explicit local-input settings above are kept for every peer, on Mac and Windows.
     for (const [k, v] of Object.entries(process.env)) {
       if ((k.startsWith("ORCA_TEST_") || k.startsWith("SDL_")) && !(k in env)) env[k] = v;
     }
@@ -2359,6 +2380,30 @@ async function verifyRecording() {
 }
 
 async function drySelfTest() {
+  const build = { version: "0.3.48", commit: "0123456789abcdef0123456789abcdef01234567" };
+  assert.deepEqual(parseOrcaBuild(`${build.version}:${build.commit}`), build);
+  assert.deepEqual(parseOrcaBuild(`${build.version} ${build.commit.toUpperCase()}`), build);
+  assert.deepEqual(parseOrcaBuild("0.3.48"), { version: "0.3.48", commit: null });
+  assert.equal(parseOrcaBuild(undefined), null);
+  assert.throws(() => parseOrcaBuild("invalid"), /ORCA_BUILD/);
+  const ticketSide = new Side("dry-ticket");
+  const realFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (_url, options) => {
+    requests.push(JSON.parse(options.body));
+    return { ok: true, json: async () => ({ room: "dry444" }) };
+  };
+  try {
+    await assert.rejects(ticketSide.ticket({ room: "dry444" }), /set ORCA_BUILD/);
+    assert.equal(requests.length, 0);
+    await ticketSide.ticket({ room: "dry444", mode: "private" }, build);
+    await ticketSide.ticket({ queue: "ranked", mode: "queue" }, build);
+    assert.equal(requests.length, 2);
+    for (const request of requests) assert.deepEqual(request.orca_build, build);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  log("PASS: ticket build parsing, room/queue bodies and missing-build refusal; fetch mocked");
   assert(PAGE_CAPS.has("record"));
   const offered = new Set(["join", "record", "delay", "music"]);
   assert.deepEqual(pageCommands("dry", "caps join delay", offered,

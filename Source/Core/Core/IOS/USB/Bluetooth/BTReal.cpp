@@ -26,6 +26,8 @@
 #include "Core/IOS/USB/Host.h"
 #include "Core/System.h"
 
+#include "InputCommon/LocalInput.h"
+
 #include "VideoCommon/OnScreenDisplay.h"
 
 namespace IOS::HLE
@@ -44,6 +46,9 @@ BluetoothRealDevice::~BluetoothRealDevice()
 
 std::optional<IPCReply> BluetoothRealDevice::Open(const OpenRequest& request)
 {
+  if (InputCommon::LocalInputDisabled())
+    return IPCReply{IPC_ENOENT};
+
   m_lib_usb_bt_adapter = std::make_unique<LibUSBBluetoothAdapter>();
 
   return Device::Open(request);
