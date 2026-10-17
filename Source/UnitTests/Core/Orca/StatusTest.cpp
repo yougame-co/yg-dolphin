@@ -8,6 +8,7 @@
 
 #include <gtest/gtest.h>
 
+#include "Common/ScopeGuard.h"
 #include "Core/Orca/Mod.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Status.h"
@@ -103,4 +104,44 @@ TEST(OrcaStatus, LegacyRebootReagreesOnlyTheAppsListedCapabilities)
   Orca::SetActiveProfile(std::nullopt);
   EXPECT_FALSE(Orca::Status::Cap("join"));
   SetEnv("ORCA_SESSION", old_session);
+}
+
+TEST(OrcaStatus, AppSetResultsMarkHarnessInputAndPreserveNormalBytes)
+{
+  const std::string old_session = Orca::GetEnv("ORCA_SESSION");
+  const std::string old_input = Orca::GetEnv("YG_INPUT");
+  const std::string old_commands = Orca::GetEnv("ORCA_TEST_COMMANDS");
+  const auto old_profile = Orca::ActiveProfile() ? std::optional{*Orca::ActiveProfile()} : std::nullopt;
+  Common::ScopeGuard restore([&] {
+    Orca::Status::SetOutput(nullptr);
+    Orca::Status::SetAppCaps("");
+    Orca::SetActiveProfile(old_profile);
+    SetEnv("ORCA_SESSION", old_session);
+    SetEnv("YG_INPUT", old_input);
+    SetEnv("ORCA_TEST_COMMANDS", old_commands);
+  });
+  SetEnv("ORCA_SESSION", "1");
+  Orca::Profile profile;
+  profile.game_id = "RSBE01";
+  profile.revision = 2;
+  Orca::SetActiveProfile(profile);
+  Orca::Status::SetAppCaps("results");
+  ASSERT_TRUE(Orca::Status::Cap("results"));
+  for (int mode = 0; mode < 3; ++mode)
+  {
+    SetEnv("YG_INPUT", mode == 1 ? "fixture-pads.txt" : "");
+    SetEnv("ORCA_TEST_COMMANDS", mode == 2 ? "1" : "");
+    std::FILE* output = std::tmpfile();
+    ASSERT_NE(output, nullptr);
+    Orca::Status::SetOutput(output);
+    Orca::Status::Result(R"({"q":"ranked","k":"set","out":"win"})");
+    std::rewind(output);
+    char buffer[512]{};
+    ASSERT_NE(std::fgets(buffer, sizeof(buffer), output), nullptr);
+    EXPECT_EQ(std::string(buffer), mode == 0 ?
+        "orca result {\"q\":\"ranked\",\"k\":\"set\",\"out\":\"win\"}\n" :
+        "orca result {\"q\":\"ranked\",\"k\":\"set\",\"out\":\"win\",\"harness\":true}\n");
+    Orca::Status::SetOutput(nullptr);
+    std::fclose(output);
+  }
 }
