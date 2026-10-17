@@ -62,7 +62,8 @@ std::optional<IPCReply> BluetoothRealDevice::Close(u32 fd)
   m_fake_replies = {};
 
   // FYI: LibUSBBluetoothAdapter destruction will attempt to wait for command completion.
-  SendHCIResetCommand();
+  if (m_lib_usb_bt_adapter)
+    SendHCIResetCommand();
 
   m_lib_usb_bt_adapter.reset();
 
@@ -71,6 +72,9 @@ std::optional<IPCReply> BluetoothRealDevice::Close(u32 fd)
 
 std::optional<IPCReply> BluetoothRealDevice::IOCtlV(const IOCtlVRequest& request)
 {
+  if (InputCommon::LocalInputDisabled() || !m_lib_usb_bt_adapter)
+    return IPCReply{IPC_ENOENT};
+
   switch (request.request)
   {
   // HCI commands to the Bluetooth adapter
@@ -163,6 +167,9 @@ std::optional<IPCReply> BluetoothRealDevice::IOCtlV(const IOCtlVRequest& request
 
 void BluetoothRealDevice::Update()
 {
+  if (InputCommon::LocalInputDisabled() || !m_lib_usb_bt_adapter)
+    return;
+
   TryToFillHCIEndpoint();
   TryToFillACLEndpoint();
 }
@@ -329,6 +336,17 @@ void BluetoothRealDevice::DoState(PointerWrap& p)
 {
   bool passthrough_bluetooth = true;
   p.Do(passthrough_bluetooth);
+  if (p.IsReadMode() && InputCommon::LocalInputDisabled())
+  {
+    m_is_active = false;
+    m_hci_endpoint.reset();
+    m_acl_endpoint.reset();
+    m_fake_replies = {};
+    Core::DisplayMessage("State requires local input. Aborting load.", 4000);
+    p.SetVerifyMode();
+    return;
+  }
+
   if (!passthrough_bluetooth && p.IsReadMode())
   {
     Core::DisplayMessage("State needs Bluetooth passthrough to be disabled. Aborting load.", 4000);

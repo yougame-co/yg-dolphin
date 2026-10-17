@@ -8,6 +8,11 @@ were changed. Line numbers below refer to the reviewed HEAD.
 
 ### B1 — File playback still has a Balance Board UDP path
 
+**Fixed:** Both Balance Board dump sites now check `Common::OfflineReplay()` before
+constructing the UDP socket. The fake-board regression covers read and write sends to
+a loopback receiver with local input enabled, including a missing replay file and
+unset/empty/live-source controls.
+
 **Location:** `Source/Core/Core/HW/WiimoteReal/WiimoteReal.cpp:322` (also `:303`);
 policy introduced at `Source/Core/Common/Network.cpp:32`.
 
@@ -32,6 +37,12 @@ was accessed.
 
 ### B2 — Windows guest USB keyboard bypasses the no-input switch
 
+**Fixed:** `USB_KBD::Update` returns before key/modifier polling under
+`ORCA_NO_LOCAL_INPUT=1`, clears pending input, and `IOCtl` suppresses queued delivery.
+The injected keyboard regression checks zero polls and no queued guest report, with
+an unset-switch polling/delivery control. Modifier polling shares the same injectable
+key reader and retains the original Windows high-bit test.
+
 **Location:** `Source/Core/Core/IOS/USB/USB_KBD.cpp:238`, `:229`, `:283`;
 new backend gate at
 `Source/Core/InputCommon/ControllerInterface/ControllerInterface.cpp:62`.
@@ -51,6 +62,12 @@ controller interface, GC adapter and real-Wiimote scanner, so they cannot detect
 this omission. Static finding; no Windows key polling was performed.
 
 ### B3 — A passthrough savestate can restore an active device with no adapter
+
+**Fixed:** Passthrough state loads under `ORCA_NO_LOCAL_INPUT=1` abort before restoring
+device activation or endpoints and leave the device inactive. Adapterless update,
+control requests and close also return safely. The regression serializes a real active
+device with a pending HCI request without opening hardware, then checks rejection and
+safe follow-up operations. An unset-switch control checks identical serialized bytes.
 
 **Location:** `Source/Core/Core/IOS/USB/Bluetooth/BTReal.cpp:49`; related
 `:339`, `:341`, `:192`, and `:83`.
@@ -162,5 +179,43 @@ passing tests do not reproduce or disprove B1–B3; their specific coverage gaps
 are identified with each finding.
 
 No builds, installs, external service requests or native input-device operations
-were performed. No review task or test remains blocked. Findings remain unfixed
-because this task authorizes a review report only.
+were performed during the original review. The original review left the findings
+unfixed; the B1–B3 fixes and their subsequent validation are recorded above and below.
+
+## fix-0349 follow-up verification
+
+Required initial base check:
+
+```text
+4017359ddd Record review-0349 results
+BASE-OK
+```
+
+Replacing the three production `.cpp` bodies with their base versions, while retaining
+the test access seams, produced three expected failures: the Balance Board regression,
+the guest keyboard regression, and the passthrough-state regression. The fixed sources
+were restored and rebuilt. The final UDP test also waits up to 50 ms for delivery before
+asserting silence, and checks the complete normal/live-source datagrams byte for byte.
+
+The keyboard test injects the key reader while running the real `Update` and `IOCtl`
+paths. Native Windows execution was unavailable on this macOS host. All device tests
+use temporary user/NAND data and synthetic input or IPC requests; no physical board,
+keyboard polling, or Bluetooth adapter was accessed.
+
+All build, test, and warning checks used
+`flock /Users/luis/Code/brawl-dolphin/build.lock nice -n 10`, after checking that
+one-minute load was below 20. Builds used at most six jobs; Google Test ran serially.
+The shared lock was allowed to wait normally and was never removed or bypassed.
+
+| Check | Result |
+| --- | --- |
+| `cmake --build build-orca-tests --target tests --parallel 6` | Passed |
+| Unfiltered `build-orca-tests/Binaries/Tests/tests`, launched with a minimal environment and temporary user data | 2,116 passed, 94 skipped, 0 failures; exit 0; 67,322 ms |
+| `python3 Tools/orca/room-fix-tests.py build-orca-tests/Binaries/Tests/tests` (unfiltered) | 2,187 passed, 23 skipped, 0 failures; exit 0; 602,661 ms |
+| All five touched C++ translation units, using their compilation-database commands with `-Werror -fsyntax-only` | Passed, exit 0; includes all three touched production headers |
+| `git diff --check` | Passed |
+
+All four new tests passed in both unfiltered runs. The wrapper supplied the 71 room/
+keyframe fixture cases skipped by the direct run. The remaining 23 skips require
+opt-in live services, bridges, disc images, or design captures; these were not enabled.
+No required B1–B3 gate remains blocked. No installs or pushes were performed.
