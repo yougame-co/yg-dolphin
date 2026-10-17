@@ -4178,6 +4178,8 @@ TEST(OrcaRoom, HarnessHelloIsOptionalOnTheActualRoomPath)
     {
       picojson::value parsed;
       ASSERT_TRUE(picojson::parse(parsed, text).empty());
+      if (!parsed.contains("d") || !parsed.get("d").is<picojson::object>())
+        continue;
       const auto& hello = parsed.get("d");
       if (hello.get("k").to_str() != "hello")
         continue;
