@@ -147,7 +147,7 @@ class Handler(BaseHTTPRequestHandler):
                 refuse = {"error": "This seat is in use. Join again in a moment.", "code": "seat_in_use"}
                 refuse_count, refuse_status = attempt, 409
             if cfg.get("reject_first_ticket") and ticket_number == 1:
-                refuse = {"error": "Ticket expired"}
+                refuse = {"error": "Bad or expired ticket"}
                 refuse_count, refuse_status = attempt, 401
             delay = max(cfg.get("probe_delay" if probe else "upgrade_delay", 0),
                         cfg.get("blocked_until", 0) - time.monotonic())
@@ -157,6 +157,9 @@ class Handler(BaseHTTPRequestHandler):
             self.reply(refuse if isinstance(refuse, dict) else {"error": refuse}, refuse_status)
             return
         self.send_response(101)
+        ray = cfg.get("recovery_cf_ray", cfg.get("cf_ray")) if attempt > 1 else cfg.get("cf_ray")
+        if ray is not None:
+            self.send_header("cF-rAy", ray)
         self.send_header("Upgrade", "websocket")
         self.send_header("Connection", "Upgrade")
         accept = base64.b64encode(hashlib.sha1(
@@ -194,6 +197,8 @@ class Handler(BaseHTTPRequestHandler):
                     with lock:
                         cfg["closes"] += 1
                         cfg["close_codes"].append(struct.unpack("!H", payload[:2])[0] if len(payload) >= 2 else 0)
+                    if cfg.get("close_delay"):
+                        time.sleep(cfg["close_delay"])
                     send(ws, payload, 8)
                     break
                 if opcode != 1:

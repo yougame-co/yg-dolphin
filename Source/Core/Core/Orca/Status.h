@@ -29,6 +29,10 @@
 // refused a signed-out player's game; the host says "friend-left signed_out"), internal, gpu_lost
 // (the graphics device was lost and the run stops: Orca/GpuLost.h). Only the first error is
 // printed, since it explains the exit. Outside a session nothing is printed.
+// Room failures must use a code in the page's ROOM_ERRORS on both supported web branches:
+// room_mismatch, mismatch, room_full, kicked, network, peer_left, desync, host_gone, signed_out.
+// Internal room reasons (e.g. taken and match-over) are mapped or reported as state events;
+// never add a wire error code for a more specific room sentence.
 namespace Orca::Status
 {
 void State(std::string_view state);

@@ -1548,22 +1548,32 @@ TEST(OrcaRoomResilience, RuntimeRestartsAndReceiveFailuresAreReconnectable)
            {1013, "WebSocket closed by the server (1013)"},
            {0, "WebSocket closed by the server"},
            {0, "WebSocket receive failed: Failure when receiving data from the peer"},
-           {0, "server-silent"}})
+           {0, "server-silent"},
+           {0, "WebSocket send failed: connection reset"}})
   {
     const auto trace = TraceRoomForTest(TraceOptions(), {
         {RK::Message, 0, RosterMessage("welcome")}, {RK::Message, 0, PeerHello()},
         {RK::DirectInput, 1000, "peer"}, {RK::SocketClose, 1000, reason, code},
-        {RK::PollReconnect, 1499}, {RK::PollReconnect, 1500},
+        {RK::PollReconnect, 1000}, {RK::PollReconnect, 1500},
         {RK::Message, 2000, RosterMessage("welcome")},
     });
     EXPECT_TRUE(trace[3].reconnect_started);
-    EXPECT_EQ(trace[4].reconnect_attempts, 0u);
+    const bool immediate = reason.starts_with("WebSocket receive") ||
+                           reason.starts_with("WebSocket closed");
+    EXPECT_EQ(trace[4].reconnect_attempts, immediate ? 1u : 0u);
     EXPECT_EQ(trace[5].reconnect_attempts, 1u);
+    EXPECT_EQ(trace[3].reconnect_at,
+              RoomClock::time_point{} + (immediate ? 1000ms : 1500ms));
+    const std::string loss = reason == "server-silent" ? "silent" :
+                             reason.starts_with("WebSocket receive") ? "recv" :
+                             reason.starts_with("WebSocket send") ? "send" : "eof";
+    EXPECT_NE(trace[3].notices.back().find(" " + loss), std::string::npos);
     EXPECT_FALSE(trace[6].reconnecting);
     EXPECT_TRUE(trace[6].events.empty());
-    ASSERT_FALSE(trace[5].notices.empty());
-    EXPECT_NE(trace[5].notices.back().find("close-code=" + std::to_string(code)), std::string::npos);
-    EXPECT_NE(trace[5].notices.back().find("close-reason=" + reason), std::string::npos);
+    const auto& connecting = trace[immediate ? 4 : 5];
+    ASSERT_FALSE(connecting.notices.empty());
+    EXPECT_NE(connecting.notices.back().find("close-code=" + std::to_string(code)), std::string::npos);
+    EXPECT_NE(connecting.notices.back().find("close-reason=" + reason), std::string::npos);
     ASSERT_FALSE(trace[6].notices.empty());
     EXPECT_NE(trace[6].notices.back().find("same-seat"), std::string::npos);
   }
@@ -1588,7 +1598,7 @@ TEST(OrcaRoomResilience, SeatInUseRetriesWithBoundedExponentialBackoff)
   EXPECT_EQ(trace[7].reconnect_at, at(3000));
   EXPECT_EQ(trace[9].reconnect_at, at(5000));
   EXPECT_EQ(trace[11].reconnect_at, at(9000));
-  EXPECT_EQ(trace[13].reconnect_at, at(13000));
+  EXPECT_EQ(trace[13].reconnect_at, at(11000));
   EXPECT_EQ(trace[13].reconnect_attempts, 5u);
   ASSERT_FALSE(trace[4].notices.empty());
   EXPECT_NE(trace[4].notices.back().find("seat-in-use"), std::string::npos);
@@ -1613,11 +1623,84 @@ TEST(OrcaRoomResilience, InitialSeatInUseRefusalRetriesButOtherRefusalsRemainFin
   EXPECT_EQ(refused.back().state, RoomState::Ended);
 }
 
+TEST(OrcaRoomResilience, InitialSeatRetriesCoverTheLiveSeatWindowBeforeSoftFailure)
+{
+  const std::string refusal = "WebSocket upgrade failed (HTTP 409) seat in use";
+  std::vector<RoomTestStep> steps{{RK::InitialConnectFailure, 0, refusal}};
+  for (const int ms : {500, 1500, 3500, 7500, 11500, 15500})
+  {
+    steps.push_back({RK::PollReconnect, ms});
+    steps.push_back({RK::ConnectFailure, ms, refusal});
+  }
+  const auto trace = TraceRoomForTest(TraceOptions(), steps);
+  for (size_t i = 0; i + 1 < trace.size(); ++i)
+    EXPECT_NE(trace[i].state, RoomState::Ended) << i;
+  EXPECT_EQ(trace.back().state, RoomState::Ended);
+  EXPECT_EQ(trace.back().error_code, "network");
+  EXPECT_EQ(trace.back().status, "Your seat in that room is still held by your last connection. "
+                                 "Try again in a few seconds.");
+  // A seat released after 10 s succeeds on the next attempt, before the refusal deadline.
+  steps.resize(11);
+  steps.push_back({RK::Message, 11500, RosterMessage("welcome")});
+  const auto recovered = TraceRoomForTest(TraceOptions(), steps);
+  EXPECT_EQ(recovered.back().state, RoomState::Waiting);
+  EXPECT_FALSE(recovered.back().reconnecting);
+}
+
+TEST(OrcaRoomResilience, ServerCloseRefusalsRetryForTenSecondsWithoutExtendingTheWindow)
+{
+  for (const auto& refusal : {"WebSocket upgrade failed (HTTP 410)",
+                              "WebSocket upgrade failed (HTTP 409) seat in use",
+                              "WebSocket upgrade failed (HTTP 503)"})
+  {
+    SCOPED_TRACE(refusal);
+    std::vector<RoomTestStep> steps{
+        {RK::Message, 0, RosterMessage("welcome")}, {RK::Message, 0, PeerHello()},
+        {RK::SocketClose, 1000, "WebSocket closed by the server"},
+    };
+    for (const int ms : {1000, 1500, 2500, 4500, 8500})
+    {
+      steps.push_back({RK::PollReconnect, ms});
+      steps.push_back({RK::ConnectFailure, ms, refusal});
+    }
+    steps.push_back({RK::PollReconnect, 10999});
+    steps.push_back({RK::PollReconnect, 11000});
+    steps.push_back({RK::ConnectFailure, 11000, refusal});
+    const auto trace = TraceRoomForTest(TraceOptions(), steps);
+    EXPECT_EQ(trace[3].reconnect_attempts, 1u);  // immediate first reconnect
+    EXPECT_EQ(trace[4].reconnect_at, RoomClock::time_point{} + 1500ms);  // later backoff
+    EXPECT_EQ(trace[12].reconnect_at, RoomClock::time_point{} + 11000ms);
+    EXPECT_EQ(trace[13].reconnect_attempts, 5u);
+    EXPECT_EQ(trace[14].reconnect_attempts, 6u);
+    for (size_t i = 0; i + 1 < trace.size(); ++i)
+      EXPECT_NE(trace[i].state, RoomState::Ended) << i;
+    EXPECT_EQ(trace.back().state, RoomState::Ended);
+    EXPECT_EQ(trace.back().error_code, "network");
+    // A welcome inside that window keeps the session and resets only the outage.
+    steps.resize(13);
+    steps.push_back({RK::Message, 10000, RosterMessage("welcome")});
+    const auto recovered = TraceRoomForTest(TraceOptions(), steps);
+    EXPECT_EQ(recovered.back().state, RoomState::Waiting);
+    EXPECT_FALSE(recovered.back().reconnecting);
+  }
+  // Other refusals remain final; no retry window for a genuinely full room or a 403.
+  for (const auto& refusal : {"WebSocket upgrade failed (HTTP 409) room full",
+                              "WebSocket upgrade failed (HTTP 403) host_older"})
+  {
+    const auto trace = TraceRoomForTest(TraceOptions(), {
+        {RK::Message, 0, RosterMessage("welcome")},
+        {RK::SocketClose, 1000, "WebSocket closed by the server"},
+        {RK::ConnectFailure, 1000, refusal},
+    });
+    EXPECT_EQ(trace.back().state, RoomState::Ended);
+  }
+}
+
 TEST(OrcaRoomResilience, ReconnectRetriesNeverExtendTheHoldAndLogTheFinalOutcomeOnce)
 {
   const auto trace = TraceRoomForTest(TraceOptions(), {
       {RK::Message, 0, RosterMessage("welcome")}, {RK::Message, 0, PeerHello()},
-      {RK::SocketClose, 1000, "WebSocket closed by the server", 1013},
+      {RK::SocketClose, 1000, "WebSocket receive failed: connection reset", 1013},
       {RK::ConnectFailure, 89000, "WebSocket upgrade failed (HTTP 409) seat in use"},
       {RK::PollReconnect, 90999}, {RK::PollReconnect, 91000}, {RK::PollReconnect, 92000},
   });
@@ -1816,7 +1899,7 @@ TEST_F(OrcaRoomRuntime, RecoveredSocketUsesTheRealGoodbyeTeardown)
 TEST_F(OrcaRoomRuntime, FinalCloseCodesReachRunAndNeverReconnect)
 {
   for (const auto& [close, reason] : std::vector<std::pair<int, std::string>>{
-           {1008, "message-limit"}, {4001, "kicked"}, {4003, "locked"}})
+           {1008, "network"}, {4001, "kicked"}, {4003, "network"}})
   {
     const std::string code = "final" + std::to_string(close);
     auto room = Open(code);
@@ -1851,6 +1934,53 @@ TEST_F(OrcaRoomRuntime, ServerCloseEchoesTheSameCodeBeforeCleanup)
     EXPECT_EQ(codes[0].get<double>(), close);
     socket.Close();
     EXPECT_EQ(Request("/state/" + code).get("closes").get<double>(), 1);
+  }
+}
+
+TEST_F(OrcaRoomRuntime, CloseWaitsForAcknowledgementButKeepsItsTwoHundredMillisecondBudget)
+{
+  for (const int delay_ms : {60, 1000})
+  {
+    const std::string code = "closewait" + std::to_string(delay_ms);
+    Request("/configure/" + code, fmt::format(R"({{"close_delay":{}}})", delay_ms / 1000.0));
+    Common::WebSocket socket;
+    std::string error;
+    ASSERT_TRUE(socket.Connect("ws" + url.substr(4) + "/room/" + code, 2s, &error)) << error;
+    const auto since = RoomClock::now();
+    socket.Close(1000, 200ms);
+    const auto elapsed = RoomClock::now() - since;
+    EXPECT_GE(elapsed, delay_ms == 60 ? 40ms : 180ms);
+    EXPECT_LT(elapsed, 600ms);
+    EXPECT_FALSE(socket.IsOpen());
+    const auto frames = Request("/state/" + code).get("close_codes").get<picojson::array>();
+    ASSERT_EQ(frames.size(), 1u);
+    EXPECT_EQ(frames[0].get<double>(), 1000);
+  }
+}
+
+TEST_F(OrcaRoomRuntime, CloudflareColoKeepsOnlyTheValidatedHeaderSuffix)
+{
+  const std::vector<std::pair<std::string, std::string>> cases{
+      {R"({"cf_ray":"fixture-EWR"})", "EWR"},
+      {R"({"cf_ray":"fixture-IAD"})", "IAD"},
+      {R"({"cf_ray":"fixture-invalid"})", ""},
+      {R"({"cf_ray":"fixture-ABC extra"})", ""},
+      {R"({})", ""},
+  };
+  for (size_t i = 0; i < cases.size(); ++i)
+  {
+    const std::string code = "edgecolo" + std::to_string(i);
+    Request("/configure/" + code, cases[i].first);
+    Common::WebSocket socket;
+    std::string error;
+    ASSERT_TRUE(socket.Connect("ws" + url.substr(4) + "/room/" + code, 2s, &error)) << error;
+    EXPECT_EQ(socket.EdgeColo(), cases[i].second);
+    EXPECT_TRUE(socket.LossClass().empty());
+    EXPECT_FALSE(socket.OsError());
+    Action(code, R"({"close":1013})");
+    ASSERT_TRUE(Wait([&] { socket.ReceiveText(10ms); return !socket.IsOpen(); }));
+    EXPECT_EQ(socket.LossClass(), "eof");
+    EXPECT_EQ(socket.EdgeColo(), cases[i].second);  // retained after cleanup
   }
 }
 
@@ -1943,33 +2073,75 @@ TEST_F(OrcaRoomRuntime, RealFullRoomBodyEndsRecoveryAfterOneFreshTicketFallback)
   EXPECT_EQ(Request("/state/" + code).get("tickets").get<double>(), 2);
 }
 
+TEST_F(OrcaRoomRuntime, RealRestartRefusalBodiesRecoverAfterAServerClose)
+{
+  const std::vector<std::pair<int, std::string>> refusals{
+      {410, R"({"error":"Your friend isn't in that game any more","code":"host_gone"})"},
+      {409, R"({"error":"This seat is in use. Join again in a moment.","code":"seat_in_use"})"},
+      {503, R"({"error":"Service Unavailable"})"},
+  };
+  for (const auto& [status, body] : refusals)
+  {
+    const std::string code = "restart" + std::to_string(status);
+    auto room = Open(code);
+    ASSERT_TRUE(Wait([&] { return room->Seat() == 1 && room->RoundTripMs() >= 0; }));
+    u32 before;
+    room->RoundTripMs(&before);
+    Action(code, fmt::format(R"({{"refuse":{},"refuse_status":{},"refuse_count":3,"close":1013}})",
+                             body, status));
+    ASSERT_TRUE(Wait([&] {
+      u32 after;
+      room->RoundTripMs(&after);
+      return after > before && Connections(code) == 4;
+    }));
+    EXPECT_NE(room->GetState(), RoomState::Ended);
+    EXPECT_TRUE(room->ErrorCode().empty());
+  }
+}
+
+TEST_F(OrcaRoomRuntime, RealExpiredTicketBodyKeepsTheKnownNetworkCode)
+{
+  auto room = Open("expired401",
+                   R"({"refuse":{"error":"Bad or expired ticket"},"refuse_status":401})");
+  ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }));
+  EXPECT_EQ(room->ErrorCode(), "network");
+  EXPECT_EQ(room->Status(), "The invite expired; press Play again");
+  EXPECT_EQ(Connections("expired401"), 1);
+}
+
 TEST_F(OrcaRoomRuntime, VersionRefusalBodiesKeepTheSiteCodeAndExplainWhichFriendMustUpdate)
 {
   const std::string mismatch = RefusalReason("WebSocket connect failed: ... (HTTP 403)");
-  const std::string older = "Your friend is on an older YG Dolphin: ask them to press Play to update.";
-  const std::string newer = "Your friend is on a newer YG Dolphin: press Play to update.";
+  const std::string older = "Your friend is on an older YG Dolphin. Ask them to press Play to update it and send you a new invite.";
+  const std::string newer = "Your friend is on a newer YG Dolphin. Press Play to update, then join again.";
   const std::vector<std::pair<std::string, std::string>> cases{
-      {R"({"error":"This room uses a different lobby protocol or configuration","code":"host_older","host_version":"0.3.44","your_version":"0.3.48"})",
-       "Your friend is on an older YG Dolphin (0.3.44): ask them to press Play to update."},
-      {R"({"error":"This room uses a different lobby protocol or configuration","code":"host_older"})", older},
-      {R"({"error":"This room uses a different lobby protocol or configuration","code":"host_newer","host_version":"0.3.49","your_version":"0.3.48"})", newer},
-      {R"({"error":"This room uses a different lobby protocol or configuration","code":"host_newer"})", newer},
+      {R"({"error":"Your friend is on an older YG Dolphin. Ask them to press Play to update it and send you a new invite.","code":"host_older","host_version":"0.3.47","your_version":"0.3.48"})",
+       "Your friend is on an older YG Dolphin (0.3.47). Ask them to press Play to update it and send you a new invite."},
+      {R"({"error":"Your friend is on an older YG Dolphin. Ask them to press Play to update it and send you a new invite.","code":"host_older","your_version":"0.3.48"})", older},
+      {R"({"error":"Your friend is on a newer YG Dolphin. Press Play to update yours.","code":"host_newer","host_version":"0.3.49","your_version":"0.3.48"})", newer},
+      {R"({"error":"Your friend is on a newer YG Dolphin. Press Play to update yours.","code":"host_newer"})", newer},
       {R"({"error":"This room uses a different lobby protocol or configuration","code":"lobby_mismatch"})", mismatch},
       {R"({"error":"This room uses a different lobby protocol or configuration"})", mismatch},
       {R"({"error":"host_older host_version=injected","code":"unknown"})", mismatch},
       {R"({"error":"ignored","code":"host_older","host_version":"0.3.44\ntext"})", older},
       {R"({"error":"ignored","code":"host_older","host_version":44})", older},
   };
-  for (size_t i = 0; i < cases.size(); ++i)
+  for (const bool friends : {true, false})
   {
-    const auto& [body, sentence] = cases[i];
-    SCOPED_TRACE(body);
-    const std::string code = "version" + std::to_string(i);
-    auto room = Open(code, fmt::format(R"({{"refuse":{},"refuse_status":403}})", body));
-    ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }));
-    EXPECT_EQ(room->Status(), sentence);
-    EXPECT_EQ(room->ErrorCode(), "room_mismatch");
-    EXPECT_EQ(Connections(code), 1);
+    for (size_t i = 0; i < cases.size(); ++i)
+    {
+      const auto& [body, sentence] = cases[i];
+      SCOPED_TRACE(body);
+      const std::string code = std::string(friends ? "version" : "qversion") + std::to_string(i);
+      auto room = Open(code, fmt::format(R"({{"refuse":{},"refuse_status":403,"queue":"{}"}})",
+                                        body, friends ? "private" : "ranked"), true, friends);
+      ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }));
+      std::string queue_mismatch = mismatch;
+      queue_mismatch.replace(queue_mismatch.find("your friend"), 11, "the other player");
+      EXPECT_EQ(room->Status(), friends ? sentence : queue_mismatch);
+      EXPECT_EQ(room->ErrorCode(), "room_mismatch");
+      EXPECT_EQ(Connections(code), 1);
+    }
   }
 }
 
@@ -1979,7 +2151,7 @@ TEST_F(OrcaRoomRuntime, ReplayLimitExplainsTheJoinFailure)
   ASSERT_TRUE(Wait([&] { return room->Seat() == 1; }));
   Action("replaylimit", R"({"message":{"t":"msg","from":"peer","d":{"k":"drop","r":"replay_limit"}}})");
   ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }));
-  EXPECT_EQ(room->ErrorCode(), "replay_limit");
+  EXPECT_EQ(room->ErrorCode(), "network");
   EXPECT_EQ(room->Status(), "Your friend's game couldn't send the match to you (too long to catch up). "
                             "Try again at the next character select.");
 }
@@ -2002,7 +2174,7 @@ TEST_F(OrcaRoomRuntime, WelcomeDoesNotResetTheReconnectBudget)
   }
   room->TestDropConnection();
   ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }));
-  EXPECT_EQ(room->ErrorCode(), "reconnect-limit");
+  EXPECT_EQ(room->ErrorCode(), "network");
   room->Leave();  // final teardown must not make a new connection for leave
   EXPECT_EQ(Connections(code), 7);
   EXPECT_FALSE(Sent(code, "leave"));
@@ -2831,17 +3003,38 @@ TEST_F(OrcaRoomRuntime, UpgradeFailurePathsNeverLogTicketUrls)
     ASSERT_TRUE(Wait([&] { return Connections("logtime4") >= 3; }));
     Action("logtime4", R"({"upgrade_delay":0})");
     timed->Leave();
+    auto moved = Open("logcolo4", R"({"cf_ray":"fixture-EWR","recovery_cf_ray":"fixture-IAD"})");
+    ASSERT_TRUE(Wait([&] { return moved->Seat() == 1 && moved->RoundTripMs() >= 0; }));
+    u32 before;
+    moved->RoundTripMs(&before);
+    Action("logcolo4", R"({"close":1013})");
+    ASSERT_TRUE(Wait([&] {
+      u32 after;
+      moved->RoundTripMs(&after);
+      return after > before && Connections("logcolo4") == 2;
+    }));
+    moved->Leave();
   }
   std::lock_guard lock(observed->mutex);
   ASSERT_FALSE(observed->lines.empty());
   bool saw_failure = false;
+  bool saw_loss = false;
+  bool saw_move = false;
   for (const auto& line : observed->lines)
   {
     EXPECT_EQ(line.find("ticket="), std::string::npos);
     EXPECT_EQ(line.find("loopback-fixture"), std::string::npos);
     saw_failure |= line.find("WebSocket connect failed") != std::string::npos;
+    saw_loss |= line.find("room-away self retry started attempt=0 close-code=1013") != std::string::npos &&
+                line.find(" eof errno=") != std::string::npos &&
+                line.find(" colo=EWR") != std::string::npos;
+    saw_move |= line.find("room-back self kept same-seat") != std::string::npos &&
+                line.find(" eof errno=") != std::string::npos &&
+                line.find(" colo=EWR->IAD") != std::string::npos;
   }
   EXPECT_TRUE(saw_failure);
+  EXPECT_TRUE(saw_loss);
+  EXPECT_TRUE(saw_move);
 }
 
 TEST(OrcaRoomBlackout, StrictParsingWindowAndInertness)

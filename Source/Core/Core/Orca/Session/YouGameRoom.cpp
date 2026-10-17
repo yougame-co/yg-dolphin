@@ -60,6 +60,10 @@ constexpr size_t MAX_INBOX = 1024;
 // sends still succeed into the socket buffer (the network vanished, the laptop slept). Not much
 // shorter: a keyframe upload can fill a home uplink and delay pings by a second or two.
 constexpr auto SERVER_SILENCE_LIMIT = std::chrono::seconds(8);
+// A fresh room instance can briefly refuse a returning seat while its host reconnects.
+constexpr auto REJOIN_REFUSAL_GRACE = std::chrono::seconds(10);
+// The Worker's live-seat window is 10 s. Allow an attempt after it, even with jitter.
+constexpr auto INITIAL_SEAT_GRACE = std::chrono::seconds(12);
 // A joiner whose room has no host (a stale invite, a host that left or restarted) gives up this
 // long after its welcome; a present host says hello within about a second.
 constexpr auto HOST_WAIT = std::chrono::seconds(8);
@@ -823,10 +827,10 @@ std::string RefusalReason(const std::string& connect_error)
       return "Your friend is on an older YG Dolphin" +
              (version == std::string::npos ? std::string() :
                                             " (" + connect_error.substr(version + marker.size()) + ")") +
-             ": ask them to press Play to update.";
+             ". Ask them to press Play to update it and send you a new invite.";
     }
     if (connect_error.find(" host_newer") != std::string::npos)
-      return "Your friend is on a newer YG Dolphin: press Play to update.";
+      return "Your friend is on a newer YG Dolphin. Press Play to update, then join again.";
     return "The room didn't let you in: your friend's YG Dolphin, disc or save differs from yours "
            "(both of you: update YouGame and press Play again), or the host removed you";
   }
@@ -1130,6 +1134,8 @@ struct YouGameRoom::Impl
   }
   unsigned reconnect_close_code = 0;
   std::string reconnect_reason, reconnect_error;
+  std::string reconnect_loss, reconnect_old_colo, reconnect_new_colo;
+  std::optional<long> reconnect_errno;
   bool reconnect_logged = false;
   struct ReconnectJob
   {
@@ -2027,7 +2033,34 @@ struct YouGameRoom::Impl
   {
     return fmt::format("attempt={} close-code={} close-reason={} last-error={}",
                        reconnect.attempts, reconnect_close_code, reconnect_reason,
-                       reconnect_error.empty() ? "none" : reconnect_error);
+                       reconnect_error.empty() ? "none" : reconnect_error) + ReconnectDiagnostics();
+  }
+
+  std::string ReconnectDiagnostics() const
+  {
+    std::string out = reconnect_loss.empty() ? "" : " " + reconnect_loss;
+    if (reconnect_errno)
+      out += fmt::format(" errno={}", *reconnect_errno);
+    if (!reconnect_old_colo.empty() && !reconnect_new_colo.empty())
+      out += " colo=" + reconnect_old_colo + "->" + reconnect_new_colo;
+    else if (!reconnect_old_colo.empty() || !reconnect_new_colo.empty())
+      out += " colo=" + (reconnect_old_colo.empty() ? reconnect_new_colo : reconnect_old_colo);
+    return out;
+  }
+
+  void CaptureSocketLoss(const std::string& why)
+  {
+    reconnect_loss = why == "server-silent" ? "silent" : std::string(ws->LossClass());
+    // The fake-clock trace supplies the same fixed transport errors without a socket.
+    if (reconnect_loss.empty() && why.starts_with("WebSocket receive failed"))
+      reconnect_loss = "recv";
+    if (reconnect_loss.empty() && why.starts_with("WebSocket closed by the server"))
+      reconnect_loss = "eof";
+    if (reconnect_loss.empty() && why.starts_with("WebSocket send"))
+      reconnect_loss = "send";
+    reconnect_errno = ws->OsError();
+    reconnect_old_colo = ws->EdgeColo();
+    reconnect_new_colo.clear();
   }
 
   void ReconnectOutcome(const std::string& why, bool kept)
@@ -2067,6 +2100,10 @@ struct YouGameRoom::Impl
     {
       reconnect_close_code = close_code;
       reconnect_reason = why;
+      CaptureSocketLoss(why);
+      // The first receive failure/EOF reconnect starts immediately; later attempts keep jitter.
+      if (reconnect_loss == "recv" || reconnect_loss == "eof")
+        reconnect.next_attempt = now;
       reconnect_error.clear();
       reconnect_logged = false;
       // The room can reconnect while the game stalls on inputs. Keep its peer identities
@@ -2121,22 +2158,24 @@ struct YouGameRoom::Impl
   {
     if (StartReconnect(close_code, why))
       return true;
+    CaptureSocketLoss(why);
     if (close_code == CLOSE_MATCH_OVER)
     {
-      RoomNotice("room-away self ended match-over close-code=4004 close-reason=" + why);
+      RoomNotice("room-away self ended match-over close-code=4004 close-reason=" + why +
+                 ReconnectDiagnostics());
       End("The match is over", "match-over");
       return false;
     }
     const bool replaced = close_code == 4000;
     const char* final = FinalRoomClose(close_code);
     RoomNotice(fmt::format("room-away self ended {} close-code={} close-reason={}",
-                           final ? final : "network", close_code, why));
+                           final ? final : "network", close_code, why) + ReconnectDiagnostics());
     if (FriendsRecovery() && close_code == 1008)
-      End("The room closed because too many or too large messages were sent", "message-limit");
+      End("The room closed because too many or too large messages were sent", "network");
     else if (FriendsRecovery() && close_code == 4001)
       End("You were removed from the room", "kicked");
     else if (FriendsRecovery() && close_code == 4003)
-      End("The room is locked", "locked");
+      End("The room is locked", "network");
     else
       End(fmt::format("{} ({})", replaced ? "Another game of yours took over this room" :
                                            "Lost the connection to the room", why),
@@ -2156,21 +2195,35 @@ struct YouGameRoom::Impl
 
   void ReconnectFailed(const std::string& error)
   {
-    // A known refusal is final, including during recovery. Only seat-in-use may retry 409.
-    if (error.find("(HTTP 4") != std::string::npos &&
-        !(error.find("(HTTP 409)") != std::string::npos &&
-          error.find("seat in use") != std::string::npos))
-    {
-      End(RefusalReason(error), RefusalCode(error));
-      return;
-    }
-    if (initial_seat_retry && reconnect.attempts >= 3)
-    {
-      End("The room seat is still in use", "seat-in-use");
-      return;
-    }
     reconnect_error = error;
-    reconnect.Retry(Now(), ReconnectJitter());
+    const auto now = Now();
+    const bool seat_in_use = error.find("(HTTP 409)") != std::string::npos &&
+                             error.find("seat in use") != std::string::npos;
+    const bool restart_refusal = error.find("(HTTP 410)") != std::string::npos || seat_in_use ||
+                                 error.find("(HTTP 503)") != std::string::npos;
+    const bool server_closed = reconnect_reason.starts_with("WebSocket closed by the server");
+    const bool grace = server_closed && restart_refusal && reconnect.since &&
+                       now < *reconnect.since + REJOIN_REFUSAL_GRACE;
+    // A known refusal is final except the short restart window and the held-seat policy.
+    if (!grace && ((error.find("(HTTP 4") != std::string::npos && !seat_in_use) ||
+                   (server_closed && restart_refusal && !seat_in_use)))
+    {
+      End(RoomRefusalReason(error), RefusalCode(error));
+      return;
+    }
+    if (seat_in_use && reconnect.since &&
+        ((initial_seat_retry && now >= *reconnect.since + INITIAL_SEAT_GRACE) ||
+         (server_closed && !grace)))
+    {
+      End("Your seat in that room is still held by your last connection. "
+          "Try again in a few seconds.", "network");
+      return;
+    }
+    reconnect.Retry(now, ReconnectJitter());
+    // Try exactly at the grace boundary rather than overshooting it by a full backoff.
+    if (grace)
+      reconnect.next_attempt = std::min(*reconnect.next_attempt,
+                                       *reconnect.since + REJOIN_REFUSAL_GRACE);
     RoomNotice(fmt::format("room-away self retry {} {}",
                            error.find("seat in use") != std::string::npos ? "seat-in-use" :
                                                                          "connect-failed",
@@ -2195,6 +2248,7 @@ struct YouGameRoom::Impl
       {
         reconnect_budget.Take(now);
         ws = std::move(reconnect_job->socket);
+        reconnect_new_colo = ws->EdgeColo();
         last_heard = now;
         last_ping = last_hello = {};
         RoomNotice("room-away self retry connected-awaiting-welcome " + ReconnectContext());
@@ -2210,7 +2264,7 @@ struct YouGameRoom::Impl
       return;
     if (!reconnect_budget.Available(now))
     {
-      End("The room exceeded its reconnect budget (6 reconnects in 5 minutes)", "reconnect-limit");
+      End("The room exceeded its reconnect budget (6 reconnects in 5 minutes)", "network");
       return;
     }
     RoomNotice("room-away self retry connecting " + ReconnectContext());
@@ -2224,12 +2278,13 @@ struct YouGameRoom::Impl
     auto job = std::make_unique<ReconnectJob>();
     ReconnectJob* const raw = job.get();
     const auto deadline = *reconnect.since + ROOM_HOLD;
-    job->thread = std::thread([this, raw, deadline] {
+    const bool server_closed = reconnect_reason.starts_with("WebSocket closed by the server");
+    job->thread = std::thread([this, raw, deadline, server_closed] {
       std::string ticket, store, ticket_error;
       // Ticket responses can include app-provided text. Log only this stage's fixed outcome.
       raw->error = "ticket-refresh-failed";
       // A returning guest must first present the ticket that owns its live seat. Refresh only
-      // after an HTTP refusal other than seat-in-use; transport failures keep the same ticket.
+      // after a ticket refusal; seat-in-use and a restarted room keep the same ticket.
       for (const bool fresh : {false, true})
       {
         if (!FreshTicket(fresh, &ticket, &store, &ticket_error, &raw->cancel) || raw->cancel ||
@@ -2252,12 +2307,31 @@ struct YouGameRoom::Impl
           break;
         }
         if (raw->error.find("(HTTP 4") == std::string::npos ||
-            raw->error.find("seat in use") != std::string::npos)
+            raw->error.find("seat in use") != std::string::npos ||
+            (server_closed && raw->error.find("(HTTP 410)") != std::string::npos))
           break;
       }
       raw->done = true;
     });
     reconnect_job = std::move(job);
+  }
+
+  std::string RoomRefusalReason(const std::string& error) const
+  {
+    std::string sentence = RefusalReason(error);
+    bool queue_room;
+    {
+      std::lock_guard lock(mutex);
+      queue_room = queue_known ? queue != "private" : !options.friends_room;
+    }
+    if (queue_room)
+    {
+      if (const auto at = sentence.find("your friend"); at != std::string::npos)
+        sentence.replace(at, 11, "the other player");
+      if (const auto at = sentence.find("Your friend"); at != std::string::npos)
+        sentence.replace(at, 11, "The other player");
+    }
+    return sentence;
   }
 
   bool ConnectRoom(Common::WebSocket& socket, const std::string& ticket,
@@ -2277,9 +2351,12 @@ struct YouGameRoom::Impl
       return true;
     if (!FriendsRecovery())
     {
-      // Queue rooms retain the train's status-only refusal, even if curl delivered a body.
-      if (const auto http_status = error->find("(HTTP 409)"); http_status != std::string::npos)
-        error->erase(http_status + 10);
+      // Queue rooms retain status-only refusals and never inherit friends-room wording.
+      for (const auto status_text : {"(HTTP 409)", "(HTTP 403)"})
+      {
+        if (const auto http_status = error->find(status_text); http_status != std::string::npos)
+          error->erase(http_status + 10);
+      }
       return false;
     }
     return false;
@@ -2312,9 +2389,9 @@ struct YouGameRoom::Impl
     picojson::object leave;
     leave["t"] = picojson::value("leave");
     SendJson(leave, std::chrono::milliseconds(100), false);
-    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Now());
-    ws->Close(1000, std::clamp(remaining, std::chrono::milliseconds(0),
-                             std::chrono::milliseconds(500)));
+    // Reserve a close-handshake budget even if ticket/connect/send used the leave deadline.
+    // Close returns early on acknowledgement/EOF; all this work stays on the room I/O thread.
+    ws->Close(1000, std::chrono::milliseconds(200));
   }
 
   std::string CodeForReconnect()
@@ -2385,7 +2462,7 @@ struct YouGameRoom::Impl
       WARN_LOG_FMT(NETPLAY, "Orca room: {}", error);
       if (!RetryInitialRefusal(error))
       {
-        End(RefusalReason(error), RefusalCode(error));
+        End(RoomRefusalReason(error), RefusalCode(error));
         return;
       }
     }
@@ -4434,7 +4511,7 @@ struct YouGameRoom::Impl
         End("Your friend's game already has another friend in it", "room_full");
       else if (reason == "replay_limit")
         End("Your friend's game couldn't send the match to you (too long to catch up). "
-            "Try again at the next character select.", "replay_limit");
+            "Try again at the next character select.", "network");
       else
         End("Your friend's game disconnected you", "network");
       return;
@@ -4692,13 +4769,14 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
     case RoomTestStep::Kind::InitialConnectFailure:
       reconnect_started = room.RetryInitialRefusal(step.text);
       if (!reconnect_started)
-        room.End(RefusalReason(step.text), RefusalCode(step.text));
+        room.End(room.RoomRefusalReason(step.text), RefusalCode(step.text));
       break;
     }
     trace.push_back({room.state, std::exchange(room.events, {}), std::exchange(room.inbox, {}),
                      room.host_away_until, room.reconnect.since.has_value(), reconnect_started,
                      std::exchange(room.test_sent, {}), room.reconnect.attempts,
-                     room.reconnect.next_attempt, std::exchange(room.test_notices, {}), room.status});
+                     room.reconnect.next_attempt, std::exchange(room.test_notices, {}), room.status,
+                     room.error_code});
     room.inbox_from.clear();
   }
   return trace;

@@ -454,6 +454,7 @@ struct RoomTestSnapshot
   std::optional<std::chrono::steady_clock::time_point> reconnect_at;
   std::vector<std::string> notices;
   std::string status;
+  std::string error_code;
 };
 std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
                                              const std::vector<RoomTestStep>& steps);

@@ -57,13 +57,44 @@ struct WebSocket::Impl
   u16 close_code = 0;
   std::string partial;
   std::string refusal;
+  std::string loss_class;
+  std::optional<long> os_error;
+  std::string edge_colo;
   std::function<bool()> cancelled;
 
-  void Fail(std::string why)
+  void Fail(std::string why, std::string loss = {})
   {
     if (error.empty())
+    {
       error = std::move(why);
+      loss_class = std::move(loss);
+      long socket_error = 0;
+      if (curl && !loss_class.empty() &&
+          curl_easy_getinfo(curl, CURLINFO_OS_ERRNO, &socket_error) == CURLE_OK)
+        os_error = socket_error;
+    }
     open = false;
+  }
+
+  void Header(std::string_view header)
+  {
+    if (header.starts_with("HTTP/"))
+      edge_colo.clear();
+    constexpr std::string_view name = "cf-ray:";
+    if (header.size() < name.size() ||
+        !std::equal(name.begin(), name.end(), header.begin(), [](char lower, char c) {
+          return c == lower || (lower >= 'a' && lower <= 'z' && c == lower - ('a' - 'A'));
+        }))
+      return;
+    const auto end = header.find_last_not_of(" \t\r\n");
+    const auto dash = header.rfind('-');
+    if (dash == std::string_view::npos || end == std::string_view::npos || end <= dash)
+      return;
+    const auto colo = header.substr(dash + 1, end - dash);
+    if (colo.size() == 3 && std::all_of(colo.begin(), colo.end(), [](char c) {
+          return c >= 'A' && c <= 'Z';
+        }))
+      edge_colo = colo;
   }
 
   void Release()
@@ -75,22 +106,26 @@ struct WebSocket::Impl
     open = false;
   }
 
-  void EchoClose(std::string_view payload)
+  bool SendClose(std::string_view payload, std::chrono::steady_clock::time_point deadline)
   {
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(250);
+    size_t offset = 0;
     while (true)
     {
       size_t sent = 0;
-      const CURLcode result =
-          curl_ws_send(curl, payload.data(), payload.size(), &sent, 0, CURLWS_CLOSE);
-      if (result != CURLE_AGAIN)
-        return;
+      const CURLcode result = curl_ws_send(curl, payload.data() + offset, payload.size() - offset,
+                                           &sent, 0, CURLWS_CLOSE);
+      offset += sent;
+      if (result == CURLE_OK && offset == payload.size())
+        return true;
+      if (result != CURLE_OK && result != CURLE_AGAIN)
+        return false;
       const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
           deadline - std::chrono::steady_clock::now());
       if (left.count() <= 0 || !WaitSocket(socket, true, left))
-        return;
+        return false;
     }
   }
+
 };
 
 WebSocket::WebSocket() : m_impl(std::make_unique<Impl>())
@@ -108,6 +143,9 @@ bool WebSocket::Connect(const std::string& url, std::chrono::milliseconds timeou
   m_impl->Release();
   m_impl->error.clear();
   m_impl->close_code = 0;
+  m_impl->loss_class.clear();
+  m_impl->os_error.reset();
+  m_impl->edge_colo.clear();
   m_impl->partial.clear();
   m_impl->curl = curl_easy_init();
   if (!m_impl->curl)
@@ -141,6 +179,13 @@ bool WebSocket::Connect(const std::string& url, std::chrono::milliseconds timeou
            {CURLOPT_TIMEOUT_MS, timeout.count()}, {CURLOPT_NOSIGNAL, 1L},
            {CURLOPT_NOPROGRESS, cancelled ? 0L : 1L}}})
     curl_easy_setopt(curl, option, value);
+  const auto header = +[](char* data, size_t size, size_t count, void* target) -> size_t {
+    const size_t bytes = size * count;
+    static_cast<Impl*>(target)->Header(std::string_view(data, bytes));
+    return bytes;
+  };
+  curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, header);
+  curl_easy_setopt(curl, CURLOPT_HEADERDATA, m_impl.get());
   curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write);
   curl_easy_setopt(curl, CURLOPT_WRITEDATA, &refusal);
   curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, progress);
@@ -218,14 +263,14 @@ bool WebSocket::SendText(std::string_view text, std::chrono::milliseconds timeou
     }
     if (result != CURLE_AGAIN)
     {
-      m_impl->Fail(fmt::format("WebSocket send failed: {}", curl_easy_strerror(result)));
+      m_impl->Fail(fmt::format("WebSocket send failed: {}", curl_easy_strerror(result)), "send");
       return false;
     }
     const auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
         deadline - std::chrono::steady_clock::now());
     if (left.count() <= 0 || !WaitSocket(m_impl->socket, true, left))
     {
-      m_impl->Fail("WebSocket send timed out");
+      m_impl->Fail("WebSocket send timed out", "send");
       return false;
     }
   }
@@ -254,7 +299,8 @@ std::optional<std::string> WebSocket::ReceiveText(std::chrono::milliseconds time
     {
       m_impl->Fail(result == CURLE_GOT_NOTHING ?
                        "WebSocket closed by the server" :
-                       fmt::format("WebSocket receive failed: {}", curl_easy_strerror(result)));
+                       fmt::format("WebSocket receive failed: {}", curl_easy_strerror(result)),
+                   result == CURLE_GOT_NOTHING ? "eof" : "recv");
       return std::nullopt;
     }
     if (!meta)
@@ -268,10 +314,11 @@ std::optional<std::string> WebSocket::ReceiveText(std::chrono::milliseconds time
       }
       // Complete the close handshake while the connection is still open. Echo only the code;
       // an empty close gets an empty reply rather than a status the server never sent.
-      m_impl->EchoClose(std::string_view(buffer.data(), received >= 2 ? 2 : 0));
+      m_impl->SendClose(std::string_view(buffer.data(), received >= 2 ? 2 : 0),
+                        std::chrono::steady_clock::now() + std::chrono::milliseconds(250));
       m_impl->Fail(m_impl->close_code ?
                        fmt::format("WebSocket closed by the server ({})", m_impl->close_code) :
-                       std::string("WebSocket closed by the server"));
+                       std::string("WebSocket closed by the server"), "eof");
       m_impl->Release();
       return std::nullopt;
     }
@@ -281,7 +328,7 @@ std::optional<std::string> WebSocket::ReceiveText(std::chrono::milliseconds time
     m_impl->partial.append(buffer.data(), received);
     if (m_impl->partial.size() > MAX_MESSAGE)
     {
-      m_impl->Fail("WebSocket message too large");
+      m_impl->Fail("WebSocket message too large", "recv");
       return std::nullopt;
     }
     if (meta->bytesleft == 0 && !(meta->flags & CURLWS_CONT))
@@ -309,16 +356,36 @@ const std::string& WebSocket::Error() const
   return m_impl->error;
 }
 
+std::string_view WebSocket::LossClass() const
+{
+  return m_impl->loss_class;
+}
+
+std::optional<long> WebSocket::OsError() const
+{
+  return m_impl->os_error;
+}
+
+const std::string& WebSocket::EdgeColo() const
+{
+  return m_impl->edge_colo;
+}
+
 void WebSocket::Close(u16 code, std::chrono::milliseconds timeout)
 {
   if (m_impl->open && m_impl->curl)
   {
     const std::array<char, 2> payload{static_cast<char>(code >> 8), static_cast<char>(code & 0xFF)};
-    size_t sent = 0;
-    curl_ws_send(m_impl->curl, payload.data(), payload.size(), &sent, 0, CURLWS_CLOSE);
+    const auto deadline = std::chrono::steady_clock::now() + timeout;
+    // A busy socket may not take the close immediately. Share the same bounded deadline
+    // between sending it and waiting for the acknowledgement.
+    if (!m_impl->SendClose(std::string_view(payload.data(), payload.size()), deadline))
+    {
+      m_impl->Release();
+      return;
+    }
     // Wait briefly for the server's close frame. Closing with unread data sends a TCP reset,
     // which can drop the last message we sent (such as a room "leave").
-    const auto deadline = std::chrono::steady_clock::now() + timeout;
     std::array<char, 4096> buffer;
     while (true)
     {

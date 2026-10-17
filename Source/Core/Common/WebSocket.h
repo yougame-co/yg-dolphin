@@ -40,6 +40,11 @@ public:
   const std::string& Error() const;
   // The status code from the server's close frame, or 0 if none arrived.
   u16 CloseCode() const;
+  // Fixed loss class and OS error, retained after cleanup; empty while no loss was observed.
+  std::string_view LossClass() const;
+  std::optional<long> OsError() const;
+  // Data centre suffix from CF-RAY (never the ray identifier).
+  const std::string& EdgeColo() const;
 
   // Sends a close frame (best effort) and releases the connection.
   void Close(u16 code = 1000, std::chrono::milliseconds timeout = std::chrono::milliseconds(500));
