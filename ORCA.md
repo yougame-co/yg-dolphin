@@ -2769,6 +2769,13 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.50
+
+- In full screen, the YouGame menu over the game can now send feedback with a screenshot of the
+  game, change the volume, mute, leave full screen and leave the match (with YouGame 0.12.52).
+- A networking fix for Windows.
+- Behind the scenes: test copies mark their results as tests, and safer checks on the game's own menus.
+
 ### 0.3.49
 
 - Saved replays play back completely offline: watching one never connects to anything.
