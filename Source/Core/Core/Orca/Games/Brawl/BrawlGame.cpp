@@ -97,7 +97,11 @@ std::span<const Orca::Engine::Region> Regions()
   // about 0x8107D000-0x811A9000; Project+'s at 0x817C5000) and up to MEM2's arena. They still hold
   // the code of whatever REL loads inside them: telling code from data there is the enforcement
   // step's (modules.md section 4.2), not this record's.
-  static constexpr std::array<Orca::Engine::Region, 7> REGIONS{{
+  static constexpr std::array<Orca::Engine::Region, 12> REGIONS{{
+      // RankedPPlus::ClearStaleMusicSelect: only the ten words My Music clears.
+      {0x80002810, 0x80002814, RegionKind::Data, "pplus-music-step"},
+      {0x80002818, 0x8000282C, RegionKind::Data, "pplus-music-selection"},
+      {0x80002830, 0x80002840, RegionKind::Data, "pplus-music-return"},
       // Project+'s stage select data (RSS_EXDATA, the page index, the strike table)
       {0x8042C4E8, 0x8042C840, RegionKind::Data, "pplus-stage-data"},
       // Project+'s Code Menu (OnlineRules.h CODE_MENU_END)
@@ -105,6 +109,11 @@ std::span<const Orca::Engine::Region> Regions()
       // g_mtRandDefault and the menu's mtRand, a fresh start's seed (OnlineMenu.h)
       {0x805A00B8, 0x805A00C0, RegionKind::Data, "rng-default"},
       {0x805A0420, 0x805A0428, RegionKind::Data, "rng-menu"},
+      // Rules::ForceCodeMenu restores the game's pause word when closing the menu.
+      {0x805B8A08, 0x805B8A0C, RegionKind::Data, "pplus-game-pause"},
+      // OnlineMenu FriendsMove::Apply / ApplySceneMove: gfSceneManager's exit code and step.
+      // The singleton at 0x805B8BA0 is reached through the pointer at 0x805A0060.
+      {0x805B8E24, 0x805B8E2C, RegionKind::Data, "scene-manager-exit"},
       // The match block in sora_scene's free space, up to its limit (FreeSpace.h)
       {FreeSpace::kMatchBlock.begin, FreeSpace::kMatchBlockLimit, RegionKind::Scratch,
        "match-block"},

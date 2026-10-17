@@ -2338,3 +2338,25 @@ TEST(OrcaMod, RankedRulesAreValidated)
   EXPECT_FALSE(
       Refused(ResultsWith("rankedRules", R"({"stocks":99,"timeMinutes":99,"items":"off"})")));
 }
+
+TEST(OrcaMod, BuiltinFixedWritersHaveExactRegions)
+{
+  const auto regions = Orca::UX::Builtin().Regions();
+  const auto contains = [&](u32 address, u32 bytes) {
+    return std::any_of(regions.begin(), regions.end(),
+                       [&](const auto& region) { return region.Contains(address, bytes); });
+  };
+  // ClearStaleMusicSelect's complete word list, ForceCodeMenu's pause word, and
+  // FriendsMove::Apply / ApplySceneMove's two scene-manager words.
+  for (const u32 address : {0x80002810u, 0x80002818u, 0x8000281Cu, 0x80002820u,
+                            0x80002824u, 0x80002828u, 0x80002830u, 0x80002834u,
+                            0x80002838u, 0x8000283Cu, 0x805B8A08u, 0x805B8E24u,
+                            0x805B8E28u})
+    EXPECT_TRUE(contains(address, 4)) << std::hex << address;
+  // The adjacent words and the holes between the My Music words stay undeclared.
+  for (const u32 address : {0x8000280Cu, 0x80002814u, 0x8000282Cu, 0x80002840u,
+                            0x805B8A04u, 0x805B8A0Cu, 0x805B8E20u, 0x805B8E2Cu})
+    EXPECT_FALSE(contains(address, 4)) << std::hex << address;
+  EXPECT_FALSE(contains(0x805B8A08, 5));
+  EXPECT_FALSE(contains(0x805B8E28, 5));
+}
