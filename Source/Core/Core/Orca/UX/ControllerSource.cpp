@@ -21,6 +21,7 @@
 
 #include "Common/HttpRequest.h"
 #include "Common/Logging/Log.h"
+#include "Common/Network.h"
 #include "Core/Orca/Bridge.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Session/PadCodec.h"
@@ -605,7 +606,7 @@ std::optional<LocalChoice> Choose(bool for_frame)
 void StartControllerStream(const std::string& bridge, const std::string& token)
 {
   std::unique_ptr<Stream> next;
-  if (LoopbackBridge(bridge) && !token.empty())
+  if (!Common::OfflineReplay() && LoopbackBridge(bridge) && !token.empty())
   {
     // Run libcurl's global init (via HttpRequest's once-only path) before the thread uses curl.
     { Common::HttpRequest init; }

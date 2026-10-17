@@ -11,6 +11,7 @@
 #include <picojson.h>
 
 #include "Common/CurlTLS.h"
+#include "Common/Network.h"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -147,6 +148,11 @@ bool WebSocket::Connect(const std::string& url, std::chrono::milliseconds timeou
   m_impl->os_error.reset();
   m_impl->edge_colo.clear();
   m_impl->partial.clear();
+  if (OfflineReplay())
+  {
+    *error = "network off for file replay";
+    return false;
+  }
   m_impl->curl = curl_easy_init();
   if (!m_impl->curl)
   {

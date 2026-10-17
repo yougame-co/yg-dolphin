@@ -133,7 +133,8 @@ public:
 
   // Starts the link thread. It binds a throwaway UDP socket at once, so a firewall prompt (Windows
   // Defender Firewall) appears now, in the lobby, rather than when a friend arrives mid-game.
-  void Start(DirectOptions options);
+  // False when file playback disables networking, or the thread is already started.
+  bool Start(DirectOptions options);
   // A player of this game (it said hello with our compatibility key and supports direct links). The
   // lower connection id of the pair offers; the other answers.
   void AddPeer(const std::string& id, int slot);

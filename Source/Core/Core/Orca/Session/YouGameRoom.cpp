@@ -26,6 +26,7 @@
 
 #include "Common/HttpRequest.h"
 #include "Common/Logging/Log.h"
+#include "Common/Network.h"
 #include "Common/WebSocket.h"
 #include "Core/Orca/Bridge.h"
 #include "Core/Orca/Profile.h"
@@ -1443,6 +1444,11 @@ struct YouGameRoom::Impl
 
   explicit Impl(RoomOptions room_options, bool start_thread = true) : options(std::move(room_options))
   {
+    if (Common::OfflineReplay())
+    {
+      End("network off for file replay", "network");
+      return;
+    }
     joining = options.joining;
     site = Env("ORCA_SITE");
     if (site.empty())
@@ -1715,6 +1721,11 @@ struct YouGameRoom::Impl
   bool FreshTicket(bool fresh, std::string* ticket, std::string* store_url, std::string* error,
                    const std::atomic<bool>* cancel = nullptr)
   {
+    if (Common::OfflineReplay())
+    {
+      *error = "network off for file replay";
+      return false;
+    }
     std::string room;
     {
       std::lock_guard lock(mutex);
@@ -1868,6 +1879,9 @@ struct YouGameRoom::Impl
   // later when turned on.
   void StartDirect()
   {
+    if (Common::OfflineReplay())
+      return;
+
     if (!direct || direct_started || me.empty())
       return;
     direct_started = true;
@@ -2789,6 +2803,9 @@ struct YouGameRoom::Impl
 
   void BridgeLoop()
   {
+    if (Common::OfflineReplay())
+      return;
+
     Common::HttpRequest http(std::chrono::seconds(5),
                              [this](s64, s64, s64, s64) { return !bridge_done.load(); });
     while (!bridge_done)
@@ -2884,6 +2901,9 @@ struct YouGameRoom::Impl
 
   void EventsLoop()
   {
+    if (Common::OfflineReplay())
+      return;
+
     // The stream stays open for the whole session; reconnect if the app restarts it.
     int backoff = 500;
     while (!bridge_done)

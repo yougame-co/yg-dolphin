@@ -30,6 +30,7 @@
 #include "Common/FileUtil.h"
 #include "Common/IOFile.h"
 #include "Common/Logging/Log.h"
+#include "Common/Network.h"
 #include "Core/Orca/Profile.h"
 
 namespace Orca::Net
@@ -1174,7 +1175,7 @@ public:
 
   void Delete(const std::string& id) override
   {
-    if (!ValidReplayId(id))
+    if (Common::OfflineReplay() || !ValidReplayId(id))
       return;
     // Best effort, off the caller's thread (the CPU thread calls this right after a load); the
     // site's cleanup catches anything missed. Copy the ticket now, since the room may be gone when
@@ -1219,6 +1220,11 @@ private:
   bool WithRetries(std::string* error,
                    const std::function<void(const std::string&, const std::string&, Result*)>& op)
   {
+    if (Common::OfflineReplay())
+    {
+      *error = "network off for file replay";
+      return false;
+    }
     t_last_refusal.clear();
     bool fresh = false;
     for (int attempt = 0; attempt < ATTEMPTS; ++attempt)
@@ -1346,6 +1352,12 @@ private:
                         const std::atomic<bool>* cancel)
   {
     Result result;
+    if (Common::OfflineReplay())
+    {
+      result.error = "network off for file replay";
+      result.final = true;
+      return result;
+    }
     CURL* curl = curl_easy_init();
     if (!curl)
     {

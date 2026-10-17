@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "Common/CommonTypes.h"
+#include "Common/Network.h"
 #include "Common/WorkQueueThread.h"
 #include "Core/Orca/Session/Keyframe.h"
 #include "Core/Rollback/OnlineMatch.h"
@@ -74,6 +75,7 @@ namespace Rollback::ReplayStream
 // ports, as PortInfo does: "0 Alice 2 Bob%20Smith" (encodeURIComponent, chat's 24-point limit).
 using NameMap = std::map<int, std::string>;
 bool ProductMode();
+using Common::OfflineReplay;
 // Replay mode has no room-ticket reply: the app supplies one rooms origin explicitly, for the
 // selected environment, in ORCA_REPLAY_ROOMS_ORIGIN (https://host[:port]). No implicit hosts.
 bool WatchSourceAllowed(std::string_view source, std::string_view rooms_origin, bool test_knobs,

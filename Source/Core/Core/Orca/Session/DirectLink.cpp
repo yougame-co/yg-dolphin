@@ -37,6 +37,7 @@
 #include <mbedtls/md.h>
 
 #include "Common/Logging/Log.h"
+#include "Common/Network.h"
 #include "Common/Random.h"
 #include "Common/SocketContext.h"
 #include "Core/Orca/Profile.h"
@@ -770,6 +771,9 @@ bool ParseIce(const picojson::value& ice, IceConfig* out)
 
 std::optional<DirectOptions> DirectOptionsFromEnv()
 {
+  if (Common::OfflineReplay())
+    return std::nullopt;
+
   if (GetEnv("ORCA_DIRECT") == "0")
     return std::nullopt;
   DirectOptions options;
@@ -2100,10 +2104,13 @@ DirectLink::DirectLink() : m_impl(std::make_unique<Impl>())
 
 DirectLink::~DirectLink() = default;
 
-void DirectLink::Start(DirectOptions options)
+bool DirectLink::Start(DirectOptions options)
 {
+  if (Common::OfflineReplay())
+    return false;
+
   if (m_impl->started.exchange(true))
-    return;
+    return false;
   m_impl->options = std::move(options);
   if (m_impl->options.blocked)
   {
@@ -2111,6 +2118,7 @@ void DirectLink::Start(DirectOptions options)
     m_impl->block_out = true;
   }
   m_impl->thread = std::thread([impl = m_impl.get()] { impl->Run(); });
+  return true;
 }
 
 void DirectLink::AddPeer(const std::string& id, int slot)

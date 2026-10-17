@@ -18,7 +18,7 @@ add_dolphin_test(FileSystemTest IOS/FS/FileSystemTest.cpp)
 
 add_dolphin_test(OrcaSessionTest Orca/SessionTest.cpp)
 add_dolphin_test(OrcaStatusTest Orca/StatusTest.cpp)
-add_dolphin_test(OrcaRoomTest Orca/RoomTest.cpp)
+add_dolphin_test(OrcaRoomTest Orca/RoomTest.cpp Orca/OfflineReplayTest.cpp)
 add_dolphin_test(OrcaDirectLinkTest Orca/DirectLinkTest.cpp)
 # TURN stays test-only; the production libjuice target keeps NO_SERVER.
 set(ORCA_TURN_SOURCE ${CMAKE_SOURCE_DIR}/Tools/orca/turn-fixture.c)
