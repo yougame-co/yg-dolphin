@@ -1729,6 +1729,70 @@ TEST(OrcaRoomResilience, ServerCloseRefusalsRetryForTenSecondsWithoutExtendingTh
   }
 }
 
+TEST(OrcaRoomResilience, ServerClose503RefusalsKeepFriendsUntilTheRoomHoldExpires)
+{
+  constexpr int closed_ms = 1000;
+  constexpr int deadline_ms =
+      closed_ms + std::chrono::duration_cast<std::chrono::milliseconds>(ROOM_HOLD).count();
+  // Midpoint jitter: immediate, 500 ms, 1 s, 2 s, 4 s, the 10 s restart boundary,
+  // then one attempt per 4 s backoff. Refused upgrades do not spend the rolling budget
+  // of six *successful connections*, so they must keep retrying throughout the hold.
+  std::vector<int> attempts{1000, 1500, 2500, 4500, 8500, 11000};
+  for (int ms = 15000; ms < deadline_ms; ms += 4000)
+    attempts.push_back(ms);
+  std::vector<RoomTestStep> steps{
+      {RK::Message, 0, RosterMessage("welcome")}, {RK::Message, 0, PeerHello()},
+      {RK::SocketClose, closed_ms, "WebSocket closed by the server"},
+  };
+  size_t next = 0;
+  for (int ms = closed_ms; ms < deadline_ms; ms += 100)
+  {
+    steps.push_back({RK::PollReconnect, ms});
+    if (next < attempts.size() && ms == attempts[next])
+    {
+      steps.push_back({RK::ConnectFailure, ms, "WebSocket upgrade failed (HTTP 503)"});
+      steps.push_back({RK::PollReconnect, ms});  // Polling again cannot bypass the backoff.
+      ++next;
+    }
+  }
+  steps.push_back({RK::PollReconnect, deadline_ms - 1});
+  steps.push_back({RK::PollReconnect, deadline_ms});
+  steps.push_back({RK::PollReconnect, deadline_ms + 1});
+  const auto trace = TraceRoomForTest(TraceOptions(), steps);
+  ASSERT_EQ(trace.size(), steps.size());
+  unsigned expected_attempts = 0;
+  next = 0;
+  for (size_t i = 3; i < trace.size(); ++i)
+  {
+    SCOPED_TRACE(steps[i].milliseconds);
+    if (next < attempts.size() && steps[i].kind == RK::PollReconnect &&
+        steps[i].milliseconds == attempts[next])
+    {
+      ++expected_attempts;
+      ++next;
+    }
+    EXPECT_EQ(trace[i].reconnect_attempts, expected_attempts);
+    if (steps[i].milliseconds < deadline_ms)
+    {
+      EXPECT_NE(trace[i].state, RoomState::Ended);
+      EXPECT_TRUE(trace[i].reconnecting);
+      if (steps[i].kind == RK::ConnectFailure)
+        EXPECT_EQ(trace[i].reconnect_at, RoomClock::time_point{} +
+                      std::chrono::milliseconds(next < attempts.size() ? attempts[next] : deadline_ms));
+    }
+    else
+    {
+      EXPECT_EQ(trace[i].state, RoomState::Ended);
+      EXPECT_EQ(trace[i].error_code, "network");
+      EXPECT_EQ(trace[i].status, "Lost the connection to the room (hold-expired)");
+    }
+  }
+  EXPECT_EQ(expected_attempts, attempts.size());
+  ASSERT_FALSE(trace[trace.size() - 2].notices.empty());
+  EXPECT_NE(trace[trace.size() - 2].notices.back().find("hold-expired"), std::string::npos);
+  EXPECT_TRUE(trace.back().notices.empty());
+}
+
 TEST(OrcaRoomResilience, ReconnectRetriesNeverExtendTheHoldAndLogTheFinalOutcomeOnce)
 {
   const auto trace = TraceRoomForTest(TraceOptions(), {

@@ -8,6 +8,12 @@
 For the lead's two-machine run, serve on an isolated LAN and run --roles 0,1 on
 Mac and --roles 2,3 on PC, with the same --site and --room. --input is optional;
 without it steer each isolated headless instance with stdin pad commands.
+
+--role-binary ROLE=PATH overrides --binary for one process. --version-refusals
+checks the lobby and YG Dolphin version at the WebSocket upgrade, as the rooms
+Worker does. --role-version ROLE=X.Y.Z supplies the page's ticket ob (the dev
+binary requests a ticket without the desktop page). --owner-relaunch also lets
+the owner reopen its empty room on another lobby, logging orca_room_started_over.
 """
 import argparse
 import base64
@@ -30,6 +36,43 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+
+HOST_OLDER = ("Your friend is on an older YG Dolphin. Ask them to press Play to update it "
+              "and send you a new invite.")
+HOST_NEWER = "Your friend is on a newer YG Dolphin. Press Play to update yours."
+LOBBY_MISMATCH = "This room uses a different lobby protocol or configuration"
+
+
+def clean_version(value):
+    return value if isinstance(value, str) and re.fullmatch(r"[0-9]{1,4}\.[0-9]{1,4}\.[0-9]{1,4}", value) else None
+
+
+def lobby_mismatch(key_differs, host_version, your_version):
+    """rooms/src/room-rules.ts lobbyMismatch: versions explain a different key only."""
+    host, yours = clean_version(host_version), clean_version(your_version)
+    body = {"error": LOBBY_MISMATCH, "code": "lobby_mismatch"}
+    if host:
+        body["host_version"] = host
+    if yours:
+        body["your_version"] = yours
+    if key_differs and host and yours:
+        left, right = tuple(map(int, host.split("."))), tuple(map(int, yours.split(".")))
+        if left < right:
+            body.update(error=HOST_OLDER, code="host_older")
+        elif left > right:
+            body.update(error=HOST_NEWER, code="host_newer")
+    return body
+
+
+def role_values(values):
+    result = {}
+    for value in values:
+        role, separator, setting = value.partition("=")
+        if not separator or role not in {"0", "1", "2", "3"} or not setting or role in result:
+            raise ValueError("role overrides must be distinct ROLE=VALUE entries for roles 0..3")
+        result[role] = setting
+    return result
 
 
 def isolated_host(host):
@@ -74,8 +117,12 @@ def receive(stream):
 
 
 class Rooms:
-    def __init__(self, doubles=True):
+    def __init__(self, doubles=True, version_refusals=False, owner_relaunch=False):
         self.doubles = doubles
+        self.version_refusals = version_refusals or owner_relaunch
+        self.owner_relaunch = owner_relaunch
+        self.lobbies = {}
+        self.version_events = []
         self.lock = threading.RLock()
         self.members = {}
         self.sockets = {}
@@ -88,6 +135,45 @@ class Rooms:
         self.expired = set()
         self.blocked = set()
         self.away = set()
+
+    def admit(self, room, ticket):
+        """Called under lock at the upgrade; refused tickets never acquire a seat."""
+        player = ticket["p"]
+        meta = self.lobbies.get(room)
+        if meta and self.version_refusals:
+            key_differs = meta.get("l") != ticket.get("l")
+            differs = key_differs or meta.get("m") != ticket.get("m") or meta.get("k") != ticket.get("k")
+            others = [name for code, name in self.members if code == room and
+                      not (name == player and (room, name) in self.away)]
+            if (differs and self.owner_relaunch and meta["p"] == player and not others
+                    and ticket.get("l")):
+                event = {"ev": "orca_room_started_over", "why": "owner_relaunch", "room": room}
+                self.version_events.append(event)
+                print(json.dumps(event), flush=True)
+                # A retained owner seat and its old socket belong to the old lobby.
+                old = self.sockets.pop((room, player), None)
+                if old:
+                    old[0].shutdown(socket.SHUT_RDWR)
+                self.members.pop((room, player), None)
+                self.joined.discard((room, player))
+                self.away.discard((room, player))
+                self.lobbies.pop(room)
+                meta = None
+            elif differs:
+                opener_here = meta["p"] != player and (room, meta["p"]) in self.members
+                body = lobby_mismatch(key_differs, meta.get("ob") if opener_here else None, ticket.get("ob"))
+                self.version_events.append({"ev": "fixture_version_refusal", "room": room,
+                                            "player": player, **body})
+                return body, 403
+        if not meta:
+            self.lobbies[room] = ticket.copy()
+        key = (room, player)
+        if key not in self.members:
+            used = {seat for (code, _), seat in self.members.items() if code == room}
+            if len(used) == 4:
+                return {}, 409
+            self.members[key] = min(set(range(4)) - used)
+        return None
 
     def blackout(self, room, player):
         with self.lock:
@@ -115,7 +201,7 @@ class Rooms:
         reports = {name: value for (code, name), value in self.reports.items() if code == room}
         hashes = {name: value for (code, name), value in self.hashes.items() if code == room}
         return {"active": active, "reports": reports,
-                "offers": list(self.offers),
+                "offers": list(self.offers), "version_events": list(self.version_events),
                 "frames": {name: frame_number for (code, name), frame_number in self.frames.items() if code == room}, "hashes": {name: dict(value) for name, value in hashes.items()}}
 
     def record(self, room, player, data):
@@ -166,8 +252,10 @@ class Rooms:
 class Server(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address, turn_binary=None, doubles=True):
-        self.rooms = Rooms(doubles)
+    def __init__(self, address, turn_binary=None, doubles=True, version_refusals=False,
+                 owner_relaunch=False, role_versions=None):
+        self.rooms = Rooms(doubles, version_refusals, owner_relaunch)
+        self.role_versions = role_versions or {}
         self.turn = None
         self.ice = []
         if turn_binary:
@@ -245,14 +333,20 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply({"error": "room-recovering"}, 409)
             if key in self.server.rooms.expired:
                 return self.reply({"error": "room-hold-expired"}, 409)
-            if key not in members:
+            if key not in members and not self.server.rooms.version_refusals:
                 used = {seat for (code, _), seat in members.items() if code == room}
                 if len(used) == 4:
                     return self.reply({}, 409)
                 members[key] = min(set(range(4)) - used)
         # This literal is a throwaway local fixture value, never a production ticket.
         host = self.headers["Host"]
-        self.reply({"url": "http://" + host, "ticket": player, "direct": True, "ice": self.server.ice})
+        ticket = player
+        if self.server.rooms.version_refusals:
+            payload = {"p": player, "c": room, "l": body.get("lobby"), "m": body.get("mode"),
+                       "k": body.get("players", 4),
+                       "ob": self.server.role_versions.get(player[-1], body.get("ob"))}
+            ticket = "fixture." + base64.urlsafe_b64encode(json.dumps(payload).encode()).decode()
+        self.reply({"url": "http://" + host, "ticket": ticket, "direct": True, "ice": self.server.ice})
 
     def do_GET(self):
         if self.path.startswith("/diagnostics/"):
@@ -262,12 +356,26 @@ class Handler(BaseHTTPRequestHandler):
             return self.keyframe("get")
         parsed = urllib.parse.urlsplit(self.path)
         room = parsed.path.rsplit("/", 1)[-1]
-        player = urllib.parse.parse_qs(parsed.query).get("ticket", [""])[0]
+        raw_ticket = urllib.parse.parse_qs(parsed.query).get("ticket", [""])[0]
         rooms = self.server.rooms
+        ticket = None
+        player = raw_ticket
+        if rooms.version_refusals:
+            try:
+                ticket = json.loads(base64.urlsafe_b64decode(raw_ticket.removeprefix("fixture.")))
+                player = ticket["p"]
+                if ticket.get("c") != room or player not in {f"Doubles{seat}" for seat in range(4)}:
+                    return self.reply({}, 403)
+            except (ValueError, KeyError, TypeError):
+                return self.reply({}, 403)
         with rooms.lock:
             if (room, player) in rooms.blocked:
                 return self.reply({"error": "room-recovering"}, 409)
-            if (room, player) not in rooms.members:
+            if ticket:
+                refusal = rooms.admit(room, ticket)
+                if refusal:
+                    return self.reply(*refusal)
+            elif (room, player) not in rooms.members:
                 return self.reply({}, 403)
         self.send_response(101)
         self.send_header("Connection", "Upgrade")
@@ -330,8 +438,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def keyframe(self, operation):
         parts = self.path.split("/")
-        if len(parts) != 6 or self.headers.get("Authorization") not in {
-                f"Ticket Doubles{seat}" for seat in range(4)}:
+        authorization = self.headers.get("Authorization", "")
+        valid = authorization in {f"Ticket Doubles{seat}" for seat in range(4)}
+        if self.server.rooms.version_refusals and authorization.startswith("Ticket fixture."):
+            try:
+                ticket = json.loads(base64.urlsafe_b64decode(authorization[len("Ticket fixture."):]))
+                valid = ticket.get("p") in {f"Doubles{seat}" for seat in range(4)} and ticket.get("c") == parts[4]
+            except (ValueError, TypeError, IndexError):
+                valid = False
+        if len(parts) != 6 or not valid:
             return self.reply({}, 403)
         capture = (parts[4], parts[5])
         rooms = self.server.rooms
@@ -363,22 +478,35 @@ class Handler(BaseHTTPRequestHandler):
         self.keyframe("delete")
 
 
-def client(site, player, room):
+def client(site, player, room, **fields):
     request = urllib.request.Request(site + "/api/multiplayer/ticket", json.dumps(
-        {"dev": "orca-doubles-test", "room": room, "player_id": player}).encode(),
+        {"dev": "orca-doubles-test", "room": room, "player_id": player, **fields}).encode(),
         {"Content-Type": "application/json"})
     with urllib.request.urlopen(request, timeout=3) as response:
-        json.load(response)
+        ticket = json.load(response)["ticket"]
     address = urllib.parse.urlsplit(site)
     sock = socket.create_connection((address.hostname, address.port), timeout=3)
-    sock.sendall((f"GET /room/{room}?ticket={player} HTTP/1.1\r\nHost: {address.netloc}\r\n"
+    sock.sendall((f"GET /room/{room}?ticket={urllib.parse.quote(ticket)} HTTP/1.1\r\nHost: {address.netloc}\r\n"
                   "Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
                   "Sec-WebSocket-Key: dGVzdGRvdWJsZXNmaXh0dXJl\r\n\r\n").encode())
     stream = sock.makefile("rb")
-    assert b"101" in stream.readline()
-    while stream.readline().strip():
-        pass
+    status = int(stream.readline().split()[1])
+    headers = {}
+    while line := stream.readline().strip():
+        key, value = line.decode().split(":", 1)
+        headers[key.lower()] = value.strip()
+    if status != 101:
+        body = stream.read(int(headers.get("content-length", 0)))
+        stream.close()
+        sock.close()
+        raise FixtureRefusal(status, json.loads(body))
     return sock, stream
+
+
+class FixtureRefusal(Exception):
+    def __init__(self, status, body):
+        self.status, self.body = status, body
+        super().__init__(f"fixture HTTP {status}: {body.get('code', 'refused')}")
 
 
 def self_test(turn_binary=None):
@@ -467,6 +595,97 @@ def self_test(turn_binary=None):
             sock.close()
         server.shutdown()
         server.server_close()
+    version_self_test()
+
+
+def version_self_test():
+    server = Server(("127.0.0.1", 0), version_refusals=True, owner_relaunch=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    site = f"http://127.0.0.1:{server.server_port}"
+    clients = []
+
+    def connect(room, role, version, key, **fields):
+        peer = client(site, f"Doubles{role}", room, ob=version, mode="orca-rsbe01", players=4,
+                      lobby={"version": 1, "minPlayers": 2, "maxLocalPlayers": 1,
+                             "compatibility": key}, **fields)
+        clients.append(peer)
+        assert receive(peer[1])["room"]["code"] == room
+        return peer
+
+    def refuse(room, version, key, expected, role=1):
+        before = dict(server.rooms.members)
+        try:
+            connect(room, role, version, key)
+            raise AssertionError("mismatched lobby was accepted")
+        except FixtureRefusal as error:
+            assert error.status == 403 and error.body == expected, error.body
+        assert server.rooms.members == before
+
+    def disconnect(peer, room, role, leave=False):
+        if leave:
+            peer[0].sendall(frame({"t": "leave"}, True))
+        else:
+            peer[0].shutdown(socket.SHUT_RDWR)
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            with server.rooms.lock:
+                ready = ((room, f"Doubles{role}") not in server.rooms.members if leave else
+                         (room, f"Doubles{role}") in server.rooms.away)
+            if ready:
+                return
+            time.sleep(0.01)
+        raise AssertionError("fixture did not observe disconnect")
+
+    try:
+        connect("old444", 0, "0.3.47", "old-key")
+        refuse("old444", "0.3.48", "new-key", {"error": HOST_OLDER, "code": "host_older",
+                                               "host_version": "0.3.47", "your_version": "0.3.48"})
+        connect("new444", 0, "0.3.49", "new-key")
+        refuse("new444", "0.3.48", "old-key", {"error": HOST_NEWER, "code": "host_newer",
+                                               "host_version": "0.3.49", "your_version": "0.3.48"})
+        connect("same444", 0, "0.3.48", "disc-a")
+        refuse("same444", "0.3.48", "disc-b", {"error": LOBBY_MISMATCH, "code": "lobby_mismatch",
+                                                 "host_version": "0.3.48", "your_version": "0.3.48"})
+        refuse("old444", None, "new-key", {"error": LOBBY_MISMATCH, "code": "lobby_mismatch",
+                                            "host_version": "0.3.47"})
+        assert lobby_mismatch(False, "0.3.47", "0.3.48")["code"] == "lobby_mismatch"
+        assert lobby_mismatch(True, "0.3.9", "0.3.10")["code"] == "host_older"
+        # A version alone is not a compatibility key; matching lobbies still admit.
+        connect("old444", 1, "0.3.48", "old-key")
+        refuse("old444", "0.3.49", "another-key", {"error": LOBBY_MISMATCH,
+               "code": "lobby_mismatch", "your_version": "0.3.49"}, role=0)
+        assert not server.rooms.version_events[-1].get("why")
+
+        # Empty after an explicit leave, and empty except for the owner's held seat.
+        for held in (False, True):
+            room = "held444" if held else "empty444"
+            peer = connect(room, 0, "0.3.47", "old-key")
+            disconnect(peer, room, 0, leave=not held)
+            before = len(server.rooms.version_events)
+            connect(room, 0, "0.3.48", "new-key")
+            assert server.rooms.version_events[before:] == [
+                {"ev": "orca_room_started_over", "why": "owner_relaunch", "room": room}]
+            assert server.rooms.lobbies[room]["ob"] == "0.3.48"
+            assert server.rooms.members[(room, "Doubles0")] == 0
+        # A friend's held seat prevents an owner reset too.
+        owner = connect("busy444", 0, "0.3.47", "old-key")
+        friend = connect("busy444", 1, "0.3.47", "old-key")
+        disconnect(friend, "busy444", 1)
+        disconnect(owner, "busy444", 0)
+        refuse("busy444", "0.3.48", "new-key", {"error": LOBBY_MISMATCH,
+               "code": "lobby_mismatch", "your_version": "0.3.48"}, role=0)
+        print("PASS: upgrade 403 host_older/host_newer/lobby_mismatch bodies, numeric versions, "
+              "matching keys, empty/held owner relaunch, occupied-room refusal")
+    finally:
+        for sock, stream in clients:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            stream.close()
+            sock.close()
+        server.shutdown()
+        server.server_close()
 
 
 def verify_diagnostics(data, expected=4):
@@ -533,6 +752,17 @@ def run(args):
     roles = [int(role) for role in args.roles.split(",")]
     if len(set(roles)) != len(roles) or not set(roles) <= set(range(4)):
         raise ValueError("roles must be distinct values from 0..3")
+    binaries = role_values(args.role_binary)
+    if not args.binary and any(str(role) not in binaries for role in roles):
+        raise ValueError("each role needs --binary or --role-binary")
+    version_refused = role_values(args.expect_version_refusal)
+    if not set(map(int, version_refused)) <= set(roles) - {0}:
+        raise ValueError("expected version refusals must name joiners in --roles")
+    if any(code not in {"host_older", "host_newer", "lobby_mismatch"} for code in version_refused.values()):
+        raise ValueError("expected version refusal must be host_older, host_newer or lobby_mismatch")
+    if version_refused and (args.defer_role or args.events):
+        raise ValueError("version refusal checks start all roles directly")
+    version_refused_seen = set()
     players = []
     role_inputs = dict(value.split("=", 1) for value in args.input_role)
     role_blackouts = dict(value.split("=", 1) for value in args.blackout_role)
@@ -547,6 +777,20 @@ def run(args):
             print(f"Fixture PID: {os.getpid()}", flush=True)
             if getattr(args, "dump_stacks", False):
                 faulthandler.register(signal.SIGUSR1, file=sys.stderr, all_threads=True)
+
+            def version_refusal(role, text):
+                errors = [line for line in text.splitlines() if line.startswith("orca error ")]
+                for line in errors:
+                    code = version_refused.get(str(role))
+                    sentence = {"host_older": HOST_OLDER, "host_newer": HOST_NEWER,
+                                "lobby_mismatch": LOBBY_MISMATCH}.get(code)
+                    if sentence and line == f"orca error room_mismatch {sentence}":
+                        version_refused_seen.add(str(role))
+                        print(f"peer {role}: {line}", flush=True)
+                    else:
+                        raise RuntimeError(f"peer {role}: {line}")
+                return str(role) in version_refused_seen
+
             def spawn(role):
                 user = Path(work) / f"user-{role}"
                 user.mkdir()
@@ -583,7 +827,9 @@ def run(args):
                     environment["ORCA_MOD_DIR"] = str(Path(args.mod_dir).resolve())
                     environment["ORCA_SD_CACHE"] = str(Path(work) / "sd-cache")
                 stderr = open(Path(work) / f"peer-{role}.log", "w")
-                command = [args.binary, "-p", "headless", "-u", str(user), "-v", "Null",
+                binary = binaries.get(str(role), args.binary)
+                print(f"peer {role} binary: {binary}", flush=True)
+                command = [binary, "-p", "headless", "-u", str(user), "-v", "Null",
                            "-C", "Dolphin.DSP.Backend=No Audio Output",
                            "-C", "Dolphin.Input.BackgroundInput=True", "-C", "Logger.Logs.ROLLBACK=True",
                            "-C", "Logger.Logs.NETPLAY=True", "-C", "Logger.Options.Verbosity=3"]
@@ -608,6 +854,10 @@ def run(args):
                 # ticket for role 1 must not let role 2 claim its port and invalidate pad scripts.
                 deadline = time.monotonic() + 90
                 while time.monotonic() < deadline:
+                    if version_refused:
+                        output = Path(work) / f"peer-{role}.stdout.log"
+                        if output.exists() and version_refusal(role, output.read_text()):
+                            return
                     with open(Path(work) / f"peer-{role}.log") as log:
                         assignment = re.search(r"on seat (\d+)", log.read())
                     if assignment:
@@ -622,6 +872,17 @@ def run(args):
             for role in roles:
                 if role not in deferred:
                     spawn(role)
+            if version_refused:
+                if version_refused_seen != set(version_refused):
+                    raise RuntimeError("expected version refusals were not observed")
+                for role, _, _, _ in players:
+                    version_refusal(role, (Path(work) / f"peer-{role}.stdout.log").read_text())
+                    if str(role) in version_refused:
+                        text = (Path(work) / f"peer-{role}.log").read_text()
+                        if "plugged into port" in text or re.search(r"on seat (\d+)", text):
+                            raise RuntimeError(f"refused peer {role} acquired a seat")
+                print("PASS: requested room_mismatch sentences reached the joiners; no refused peer seated")
+                return
             print(f"Running roles {args.roles}; isolated logs: {work}", flush=True)
             # Operator commands are scoped to one exact harness child, e.g. `3 test-drop-room`.
             def commands():
@@ -691,7 +952,7 @@ def run(args):
                                 refused_seen.add(role)
                                 print(f"peer {role}: {line}", flush=True)
                                 continue
-                            raise RuntimeError(f"peer {role} reported an error; inspect local log")
+                            raise RuntimeError(f"peer {role}: {line}")
                         if line.startswith("orca stats ") and json.loads(line[11:]).get("ds", 0):
                             raise RuntimeError(f"peer {role} reported a desync")
                         if line.startswith(("orca state", "orca menu")):
@@ -786,6 +1047,16 @@ def main():
     parser.add_argument("--room", default="doubles444")
     parser.add_argument("--roles", default="0,1,2,3")
     parser.add_argument("--binary")
+    parser.add_argument("--role-binary", action="append", default=[], metavar="ROLE=PATH",
+                        help="override --binary for one role")
+    parser.add_argument("--role-version", action="append", default=[], metavar="ROLE=X.Y.Z",
+                        help="page-supplied ticket ob for a role in the local fixture")
+    parser.add_argument("--version-refusals", action="store_true",
+                        help="refuse incompatible lobbies at the WebSocket upgrade with Worker bodies")
+    parser.add_argument("--owner-relaunch", action="store_true",
+                        help="start an owner's empty room over on another lobby; enables version checks")
+    parser.add_argument("--expect-version-refusal", action="append", default=[], metavar="ROLE=CODE",
+                        help="require the exact room_mismatch sentence instead of a gameplay session")
     parser.add_argument("--disc")
     parser.add_argument("--input")
     parser.add_argument("--input-role", action="append", default=[], metavar="ROLE=PATH",
@@ -815,24 +1086,31 @@ def main():
     parser.add_argument("--transport", choices=("direct", "turn"), default="direct")
     parser.add_argument("--hold-expiry", action="store_true", help="expire role 3 halfway through the run")
     args = parser.parse_args()
+    versions = role_values(args.role_version)
+    if any(not clean_version(version) for version in versions.values()):
+        parser.error("--role-version needs X.Y.Z versions")
     if args.self_test:
         self_test(args.turn_binary)
     elif args.serve:
         if not isolated_host(args.listen):
             parser.error("--listen must be loopback or an isolated LAN address")
-        server = Server((args.listen, args.port), args.turn_binary, doubles=not args.ordinary)
+        server = Server((args.listen, args.port), args.turn_binary, doubles=not args.ordinary,
+                        version_refusals=args.version_refusals, owner_relaunch=args.owner_relaunch,
+                        role_versions=versions)
         print(f"Dev friends-room fixture listening on port {server.server_port}", flush=True)
         try:
             server.serve_forever()
         finally:
             server.server_close()
     else:
-        if not args.binary or not args.disc:
-            parser.error("--run requires --binary and --disc")
+        if not (args.binary or args.role_binary) or not args.disc:
+            parser.error("--run requires --binary/--role-binary and --disc")
         server = None
         try:
             if args.local:
-                server = Server(("127.0.0.1", 0), args.turn_binary, doubles=not args.ordinary)
+                server = Server(("127.0.0.1", 0), args.turn_binary, doubles=not args.ordinary,
+                                version_refusals=args.version_refusals, owner_relaunch=args.owner_relaunch,
+                                role_versions=versions)
                 threading.Thread(target=server.serve_forever, daemon=True).start()
                 args.site = f"http://127.0.0.1:{server.server_port}"
             run(args)

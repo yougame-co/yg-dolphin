@@ -50,6 +50,13 @@
 //       [--probe <file>] [--controls <ada>,<bo>] [--controls-mid <bo>]
 //       [--slug <listing> --cookie-a <file> --cookie-b <file> --id-a <id> --id-b <id>]
 //       [--disc-b <disc>] [--delay <n>]
+//       [--record [--rooms-log <captured-worker-jsonl>]]
+//   node Tools/orca/queue-e2e.mjs --self-test  (dry; no Orcas, cookies or network)
+//
+// --record (casual, scenario match): negotiate record and send `record on` after each caps
+// answer. Replay hand-off is server-to-server, invisible to this stand-in bridge: print each
+// room and match id from mpRoom and the Worker event to check. --rooms-log verifies a captured
+// orca_replay_delivery event for each played room; without it the hand-off remains PENDING.
 //
 // --disc-b: the second player (bo) boots this disc (Brawl Rev 1 against Rev 2, or the reverse).
 // Without --slug: dev tickets (an anonymous dev game of this run's own, nothing recorded, keyframes
@@ -59,6 +66,7 @@
 // Orca runs nice'd, muted, with Null video and a perl alarm. On a shared machine, don't run it
 // while someone is playing or the load is high.
 import { spawn } from "node:child_process";
+import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import http from "node:http";
@@ -66,12 +74,13 @@ import os from "node:os";
 import path from "node:path";
 
 const argv = process.argv.slice(2);
+const SELF_TEST = argv.includes("--self-test");
 const opt = (name, fallback) => {
   const i = argv.indexOf(name);
   return i >= 0 ? argv[i + 1] : fallback;
 };
 const [BIN, DISC] = argv;
-if (!BIN || !DISC) {
+if ((!BIN || !DISC) && !SELF_TEST) {
   console.error(
     "usage: queue-e2e.mjs <nogui> <disc> [--pplus <dol>] [--queue ranked|casual] ...",
   );
@@ -80,13 +89,15 @@ if (!BIN || !DISC) {
 const PPLUS = opt("--pplus");
 const DISC_B = opt("--disc-b", DISC);
 const QUEUE = opt("--queue", "ranked");
+const RECORD = argv.includes("--record");
+const ROOMS_LOG = opt("--rooms-log");
 const GAMES = Number(opt("--games", QUEUE === "ranked" ? "3" : "2"));
 const SITE = (opt("--site", "https://yougame.co") || "").replace(/\/$/, "");
 const SLUG = opt("--slug");
 const KEEP = argv.includes("--keep");
 // YG_SITE_COOKIE: a Cookie header value ("name=value") sent with every request to --site, such as a
 // staging site's team access cookie, handed in by a wrapper. Never logged.
-const SITE_COOKIE = process.env.YG_SITE_COOKIE || "";
+const SITE_COOKIE = SELF_TEST ? "" : process.env.YG_SITE_COOKIE || "";
 const siteCookie = (own) => [own, SITE_COOKIE].filter(Boolean).join("; ");
 const ALARM = Number(opt("--alarm", "900"));
 // Scenarios without --q2:
@@ -97,6 +108,14 @@ const ALARM = Number(opt("--alarm", "900"));
 //   noshow   the opponent never arrives; the host moves on to a room of its own
 // zleave is bleave's old name (leaving moved from Z to B).
 const SCENARIO = opt("--scenario", "match") === "zleave" ? "bleave" : opt("--scenario", "match");
+if (!SELF_TEST && ((RECORD && (QUEUE !== "casual" || SCENARIO !== "match")) || (ROOMS_LOG && !RECORD))) {
+  console.error("--record needs --queue casual --scenario match; --rooms-log needs --record");
+  process.exit(2);
+}
+if (RECORD && !SELF_TEST && (!SLUG || !opt("--cookie-a") || !opt("--cookie-b"))) {
+  console.error("--record needs --slug and two signed-in test sessions (--cookie-a and --cookie-b)");
+  process.exit(2);
+}
 if (SCENARIO === "altz" && !argv.includes("--pplus")) {
   console.error("--scenario altz is for Project+ (--pplus)");
   process.exit(2);
@@ -194,8 +213,44 @@ const INVITE_GAP_MS = Number(opt("--invite-gap", "4000"));
 // The page's answer to `orca caps` (YouGame lib/orca.ts orcaCapsAnswer): what Orca offers of these.
 const PAGE_CAPS = new Set([
   "join", "leave", "stats", "pause", "delay", "perf", "direct", "host", "results", "locks", "queue2",
-  "pick-casual", "pick-ranked",
+  "pick-casual", "pick-ranked", "record",
 ]);
+
+function pageCommands(name, line, offered, { record = RECORD, music = false, delay = DELAY } = {}) {
+  if (!line.startsWith("caps ")) return [line];
+  const caps = new Set(line.slice(5).split(" "));
+  if (record) {
+    if (!offered.has("record")) throw new Error(`${name}: Orca offers no record`);
+    caps.add("record");
+  }
+  if (music) {
+    if (!offered.has("music")) throw new Error(`${name}: Orca offers no music`);
+    caps.add("music");
+  }
+  return [`caps ${[...caps].join(" ")}`, ...(record ? ["record on"] : []),
+    ...(music ? ["music off"] : []), ...(delay && caps.has("delay") ? [`delay ${delay}`] : [])];
+}
+
+// Accept plain event JSONL or the JSON envelope from an operator's Worker log capture.
+// Read only the event's fixed fields; never print a captured request or its headers.
+function replayDeliveries(text) {
+  const events = [];
+  const visit = (value) => {
+    if (typeof value === "string") {
+      try { visit(JSON.parse(value)); } catch { /* non-JSON console line */ }
+    } else if (Array.isArray(value)) value.forEach(visit);
+    else if (value && typeof value === "object") {
+      if (value.ev === "orca_replay_delivery") events.push(value);
+      if (Array.isArray(value.logs)) for (const entry of value.logs) visit(entry.message);
+    }
+  };
+  for (const line of text.split("\n")) visit(line);
+  return events;
+}
+
+function deliveredRoom(events, room) {
+  return events.some((e) => e.code === room && e.ok === true && e.status >= 200 && e.status < 300);
+}
 // --pick random (--q2): both pick the RANDOM tile (ORCA.md "The queue's character select"); the
 // verdicts' resolved characters must match on both sides.
 const PICK = opt("--pick", "character");
@@ -303,6 +358,8 @@ class Side {
     this.shots = []; // the scenario's own screenshots (test-shot)
     this.joinLog = []; // { at, line }: drop-in and room lines (--scenario playagain)
     this.gameStarts = []; // { at, msg }: the room's game-start messages this Orca sent
+    this.recordMatches = new Map(); // The matched casual room's mpRoom snapshots, including past games.
+    this.recordEnabled = false;
   }
 
   // The scenario's own screenshot (`test-shot`), when this Orca renders.
@@ -399,6 +456,13 @@ class Side {
     if (msg.type === "hello") return { room: "" };
     if (msg.type === "mpRoom") {
       this.mirror = msg;
+      if (msg.code === this.match?.room && typeof msg.matchId === "string" && msg.matchId) {
+        const key = `${msg.code}/${msg.matchId}`;
+        if (!this.recordMatches.has(key)) {
+          this.recordMatches.set(key, { room: msg.code, matchId: msg.matchId });
+          if (RECORD) log(`RECORD: ${this.name} room=${msg.code} match=${msg.matchId}`);
+        }
+      }
       return {};
     }
     if (msg.type !== "mpTicket") throw new Error(`unknown ${msg.type}`);
@@ -652,16 +716,12 @@ class Side {
   }
 
   send(line) {
-    // --music-off: this page turns `music` on in its caps answer and sends the switch after it.
-    const music = line.startsWith("caps") && MUSIC_OFF.includes(this.name);
-    if (music && !this.lines.some((l) => l && /^orca caps .*\bmusic\b/.test(l)))
-      fail(`${this.name}: Orca offers no music`);
-    const outs = music ? [`${line} music`, "music off"] : [line];
-    // --delay: the page's input delay right after its caps answer, as OrcaEmbed sends it.
-    if (DELAY && line.startsWith("caps") && /\bdelay\b/.test(line)) outs.push(`delay ${DELAY}`);
+    const offered = new Set(this.lines.find((l) => l?.startsWith("orca caps "))?.slice(10).split(" ") ?? []);
+    const outs = pageCommands(this.name, line, offered, { music: MUSIC_OFF.includes(this.name) });
     for (const out of outs) {
       log(`${this.name}< ${out}`);
       this.proc.stdin.write(`${out}\n`);
+      if (out === "record on") this.recordEnabled = true;
     }
   }
 
@@ -2264,9 +2324,71 @@ async function main() {
   log(`PASS: ${n} verdicts, the same on both sides`);
 }
 
+async function verifyRecording() {
+  if (sides.length !== 2 || sides.some((s) => !s.recordEnabled || !s.recordMatches.size))
+    fail("record: both pages must enable recording and observe the matched room's match id");
+  const matches = new Map(sides.flatMap((s) => [...s.recordMatches]));
+  for (const { room, matchId } of matches.values()) {
+    log(`RECORD CHECK: room=${room} match=${matchId}`);
+  }
+  const rooms = [...new Set([...matches.values()].map((m) => m.room))];
+  for (const room of rooms) {
+    // mpRoom is a latest-only mirror: the unused next match can appear on just one page
+    // while they leave. Require a shared match in each played room, not every transient id.
+    if (![...matches].some(([key, match]) => match.room === room &&
+        sides.every((s) => s.recordMatches.has(key))))
+      fail(`record: both pages did not observe a shared match id in room=${room}`);
+  }
+  if (!ROOMS_LOG) {
+    log("RECORD HAND-OFF PENDING: the rooms Worker makes POST /api/replays/orca; the page bridge cannot observe it.");
+    for (const room of rooms)
+      log(`CHECK Worker logs after both players leave: ev=orca_replay_delivery code=${room} ok=true status=2xx. Match ids above correlate the games; the delivery event is per room and has no match id.`);
+    log("Capture Worker JSONL during the run and pass --rooms-log <file> to require that evidence automatically.");
+    return;
+  }
+  const deadline = Date.now() + 35000; // Three server delivery attempts, each bounded to 10 s.
+  let missing;
+  do {
+    const events = replayDeliveries(fs.existsSync(ROOMS_LOG) ? fs.readFileSync(ROOMS_LOG, "utf8") : "");
+    missing = rooms.filter((room) => !deliveredRoom(events, room));
+    if (!missing.length) break;
+    await sleep(1000);
+  } while (Date.now() < deadline);
+  if (missing.length) fail(`record: no successful orca_replay_delivery for room(s) ${missing.join(", ")}`);
+  log(`PASS: replay hand-off: Worker POST /api/replays/orca succeeded for room(s) ${rooms.join(", ")}`);
+}
+
+async function drySelfTest() {
+  assert(PAGE_CAPS.has("record"));
+  const offered = new Set(["join", "record", "delay", "music"]);
+  assert.deepEqual(pageCommands("dry", "caps join delay", offered,
+    { record: true, music: true, delay: "3" }),
+  ["caps join delay record music", "record on", "music off", "delay 3"]);
+  assert.deepEqual(pageCommands("dry", "caps join record", offered, { record: true, delay: null }),
+    ["caps join record", "record on"]);
+  assert.deepEqual(pageCommands("dry", "leave", offered, { record: true }), ["leave"]);
+  assert.deepEqual(pageCommands("dry", "caps join", offered, { record: false }), ["caps join"]);
+  assert.throws(() => pageCommands("dry", "caps join", new Set(), { record: true }), /offers no record/);
+  const side = new Side("dry");
+  side.match = { room: "dry444" };
+  await side.sdk({ type: "mpRoom", code: "dry444", matchId: "match-dry" });
+  await side.sdk({ type: "mpRoom", code: "own444", matchId: "ignore" });
+  await side.sdk({ type: "mpRoom", code: "dry444", matchId: null });
+  assert.deepEqual([...side.recordMatches.values()], [{ room: "dry444", matchId: "match-dry" }]);
+  const event = { ev: "orca_replay_delivery", code: "dry444", status: 201, ok: true };
+  const events = replayDeliveries(`${JSON.stringify({ ...event, status: 503, ok: false })}\n` +
+    `${JSON.stringify({ logs: [{ message: [JSON.stringify(event)] }] })}\npartial`);
+  assert(deliveredRoom(events, "dry444"));
+  assert(!deliveredRoom(events, "other444"));
+  assert(!deliveredRoom([{ ...event, status: 403 }], "dry444"));
+  assert(!deliveredRoom([{ ...event, ok: false }], "dry444"));
+  log("PASS: dry record caps/commands, casual match correlation, Worker delivery evidence and failure controls; no network or Orcas");
+}
+
 let code = 0;
 try {
-  await main();
+  if (SELF_TEST) await drySelfTest();
+  else await main();
 } catch (e) {
   if (!failed) log(`FAIL: ${e.message}`);
   code = 1;
@@ -2274,7 +2396,14 @@ try {
   for (const s of sides) if (s.proc) s.stop();
 }
 // Both Orcas stop (quit, then killed after 8 s), then the work folder goes unless kept.
-await sleep(9000);
+if (!SELF_TEST) await sleep(9000);
+if (RECORD && !SELF_TEST && code === 0) {
+  try { await verifyRecording(); }
+  catch (e) {
+    if (!failed) log(`FAIL: ${e.message}`);
+    code = 1;
+  }
+}
 if (SHOTS_OUT) {
   fs.mkdirSync(SHOTS_OUT, { recursive: true });
   for (const s of sides) {
