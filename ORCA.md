@@ -2769,6 +2769,11 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.49
+
+- Saved replays play back completely offline: watching one never connects to anything.
+- Behind the scenes: safer test copies (they never touch a player's controllers) and more tests for dropped connections.
+
 ### 0.3.48
 
 - In a friends room with three or four people, you can now sit out after a fight: pick up your
