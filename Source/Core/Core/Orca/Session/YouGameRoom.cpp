@@ -2033,8 +2033,13 @@ struct YouGameRoom::Impl
   {
     return fmt::format("attempt={} close-code={} close-reason={} last-error={}",
                        reconnect.attempts, reconnect_close_code, reconnect_reason,
-                       reconnect_error.empty() ? "none" : reconnect_error) + ReconnectDiagnostics();
+                       reconnect_error.empty() ? "none" : reconnect_error);
   }
+
+  // "room-away self" plus the loss class, errno and edge colos, BEFORE any free text
+  // (close-reason=, last-error=), as the site's cleanOrcaRoomLine keeps them:
+  // "room-away self recv errno=10054 colo=EWR->IAD retry started attempt=0 close-code=...".
+  std::string AwaySelf() const { return "room-away self" + ReconnectDiagnostics(); }
 
   std::string ReconnectDiagnostics() const
   {
@@ -2043,8 +2048,10 @@ struct YouGameRoom::Impl
       out += fmt::format(" errno={}", *reconnect_errno);
     if (!reconnect_old_colo.empty() && !reconnect_new_colo.empty())
       out += " colo=" + reconnect_old_colo + "->" + reconnect_new_colo;
-    else if (!reconnect_old_colo.empty() || !reconnect_new_colo.empty())
-      out += " colo=" + (reconnect_old_colo.empty() ? reconnect_new_colo : reconnect_old_colo);
+    else if (!reconnect_old_colo.empty())
+      out += " colo=" + reconnect_old_colo + "->";
+    else if (!reconnect_new_colo.empty())
+      out += " colo=->" + reconnect_new_colo;
     return out;
   }
 
@@ -2068,8 +2075,9 @@ struct YouGameRoom::Impl
     if (reconnect_logged)
       return;
     reconnect_logged = true;
-    RoomNotice(fmt::format("{} self {} {} {}", kept ? "room-back" : "room-away",
-                           kept ? "kept" : "ended", why, ReconnectContext()));
+    RoomNotice(fmt::format("{} self{} {} {} {}", kept ? "room-back" : "room-away",
+                           ReconnectDiagnostics(), kept ? "kept" : "ended", why,
+                           ReconnectContext()));
   }
 
   void PublishRoomRecovery()
@@ -2101,9 +2109,11 @@ struct YouGameRoom::Impl
       reconnect_close_code = close_code;
       reconnect_reason = why;
       CaptureSocketLoss(why);
-      // The first receive failure/EOF reconnect starts immediately; later attempts keep jitter.
+      // The first receive failure/EOF reconnect starts almost at once (0-250 ms, so a whole
+      // colo's players don't arrive in the same instant); later attempts keep the full jitter.
       if (reconnect_loss == "recv" || reconnect_loss == "eof")
-        reconnect.next_attempt = now;
+        reconnect.next_attempt =
+            now + std::chrono::milliseconds(test_now ? 0 : ReconnectJitter() * 250 / 60);
       reconnect_error.clear();
       reconnect_logged = false;
       // The room can reconnect while the game stalls on inputs. Keep its peer identities
@@ -2146,10 +2156,10 @@ struct YouGameRoom::Impl
       const bool live = std::ranges::any_of(peers, [&](const auto& p) {
         return p.second.announced && DirectInputLive(LastDirectInput(p.first), now);
       });
-      RoomNotice(fmt::format("room-away self {} {} {}", live ? "kept" : "retry",
+      RoomNotice(AwaySelf() + fmt::format(" {} {} {}", live ? "kept" : "retry",
                             live ? "direct-inputs" : "waiting-input-timeout", ReconnectContext()));
     }
-    RoomNotice(fmt::format("room-away self retry {} {}", retry ? "socket-closed" : "started",
+    RoomNotice(AwaySelf() + fmt::format(" retry {} {}", retry ? "socket-closed" : "started",
                            ReconnectContext()));
     return true;
   }
@@ -2161,15 +2171,14 @@ struct YouGameRoom::Impl
     CaptureSocketLoss(why);
     if (close_code == CLOSE_MATCH_OVER)
     {
-      RoomNotice("room-away self ended match-over close-code=4004 close-reason=" + why +
-                 ReconnectDiagnostics());
+      RoomNotice(AwaySelf() + " ended match-over close-code=4004 close-reason=" + why);
       End("The match is over", "match-over");
       return false;
     }
     const bool replaced = close_code == 4000;
     const char* final = FinalRoomClose(close_code);
-    RoomNotice(fmt::format("room-away self ended {} close-code={} close-reason={}",
-                           final ? final : "network", close_code, why) + ReconnectDiagnostics());
+    RoomNotice(AwaySelf() + fmt::format(" ended {} close-code={} close-reason={}",
+                                        final ? final : "network", close_code, why));
     if (FriendsRecovery() && close_code == 1008)
       End("The room closed because too many or too large messages were sent", "network");
     else if (FriendsRecovery() && close_code == 4001)
@@ -2202,11 +2211,14 @@ struct YouGameRoom::Impl
     const bool restart_refusal = error.find("(HTTP 410)") != std::string::npos || seat_in_use ||
                                  error.find("(HTTP 503)") != std::string::npos;
     const bool server_closed = reconnect_reason.starts_with("WebSocket closed by the server");
+    // The server's live-seat window is 10 s; a held seat gets 12 s so the last try lands after it.
+    const auto grace_window = seat_in_use ? INITIAL_SEAT_GRACE : REJOIN_REFUSAL_GRACE;
     const bool grace = server_closed && restart_refusal && reconnect.since &&
-                       now < *reconnect.since + REJOIN_REFUSAL_GRACE;
-    // A known refusal is final except the short restart window and the held-seat policy.
-    if (!grace && ((error.find("(HTTP 4") != std::string::npos && !seat_in_use) ||
-                   (server_closed && restart_refusal && !seat_in_use)))
+                       now < *reconnect.since + grace_window;
+    // A 4xx refusal is final once the short restart window is over (the held seat has its own
+    // policy below). A 503 is never final here: a restarting rooms isolate answers 503 until the
+    // site answers it, so after the fast retries it falls through to the ordinary room hold.
+    if (!grace && error.find("(HTTP 4") != std::string::npos && !seat_in_use)
     {
       End(RoomRefusalReason(error), RefusalCode(error));
       return;
@@ -2222,9 +2234,8 @@ struct YouGameRoom::Impl
     reconnect.Retry(now, ReconnectJitter());
     // Try exactly at the grace boundary rather than overshooting it by a full backoff.
     if (grace)
-      reconnect.next_attempt = std::min(*reconnect.next_attempt,
-                                       *reconnect.since + REJOIN_REFUSAL_GRACE);
-    RoomNotice(fmt::format("room-away self retry {} {}",
+      reconnect.next_attempt = std::min(*reconnect.next_attempt, *reconnect.since + grace_window);
+    RoomNotice(AwaySelf() + fmt::format(" retry {} {}",
                            error.find("seat in use") != std::string::npos ? "seat-in-use" :
                                                                          "connect-failed",
                            ReconnectContext()));
@@ -2251,7 +2262,7 @@ struct YouGameRoom::Impl
         reconnect_new_colo = ws->EdgeColo();
         last_heard = now;
         last_ping = last_hello = {};
-        RoomNotice("room-away self retry connected-awaiting-welcome " + ReconnectContext());
+        RoomNotice(AwaySelf() + " retry connected-awaiting-welcome " + ReconnectContext());
         // Recovery finishes at welcome, after the room confirms the same identity and seat.
       }
       else
@@ -2267,7 +2278,7 @@ struct YouGameRoom::Impl
       End("The room exceeded its reconnect budget (6 reconnects in 5 minutes)", "network");
       return;
     }
-    RoomNotice("room-away self retry connecting " + ReconnectContext());
+    RoomNotice(AwaySelf() + " retry connecting " + ReconnectContext());
     if (RoomBlackedOut())
     {
       ReconnectFailed("network (test-blackout)");

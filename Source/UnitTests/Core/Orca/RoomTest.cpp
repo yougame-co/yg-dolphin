@@ -1567,7 +1567,7 @@ TEST(OrcaRoomResilience, RuntimeRestartsAndReceiveFailuresAreReconnectable)
     const std::string loss = reason == "server-silent" ? "silent" :
                              reason.starts_with("WebSocket receive") ? "recv" :
                              reason.starts_with("WebSocket send") ? "send" : "eof";
-    EXPECT_NE(trace[3].notices.back().find(" " + loss), std::string::npos);
+    EXPECT_NE(trace[3].notices.back().find("room-away self " + loss), std::string::npos);
     EXPECT_FALSE(trace[6].reconnecting);
     EXPECT_TRUE(trace[6].events.empty());
     const auto& connecting = trace[immediate ? 4 : 5];
@@ -1598,7 +1598,8 @@ TEST(OrcaRoomResilience, SeatInUseRetriesWithBoundedExponentialBackoff)
   EXPECT_EQ(trace[7].reconnect_at, at(3000));
   EXPECT_EQ(trace[9].reconnect_at, at(5000));
   EXPECT_EQ(trace[11].reconnect_at, at(9000));
-  EXPECT_EQ(trace[13].reconnect_at, at(11000));
+  // A held seat's retries run to 12 s after the drop (the server's live-seat window is 10 s).
+  EXPECT_EQ(trace[13].reconnect_at, at(13000));
   EXPECT_EQ(trace[13].reconnect_attempts, 5u);
   ASSERT_FALSE(trace[4].notices.empty());
   EXPECT_NE(trace[4].notices.back().find("seat-in-use"), std::string::npos);
@@ -1649,9 +1650,7 @@ TEST(OrcaRoomResilience, InitialSeatRetriesCoverTheLiveSeatWindowBeforeSoftFailu
 
 TEST(OrcaRoomResilience, ServerCloseRefusalsRetryForTenSecondsWithoutExtendingTheWindow)
 {
-  for (const auto& refusal : {"WebSocket upgrade failed (HTTP 410)",
-                              "WebSocket upgrade failed (HTTP 409) seat in use",
-                              "WebSocket upgrade failed (HTTP 503)"})
+  for (const auto& refusal : {"WebSocket upgrade failed (HTTP 410)"})
   {
     SCOPED_TRACE(refusal);
     std::vector<RoomTestStep> steps{
@@ -1682,6 +1681,40 @@ TEST(OrcaRoomResilience, ServerCloseRefusalsRetryForTenSecondsWithoutExtendingTh
     const auto recovered = TraceRoomForTest(TraceOptions(), steps);
     EXPECT_EQ(recovered.back().state, RoomState::Waiting);
     EXPECT_FALSE(recovered.back().reconnecting);
+  }
+  // A held seat gets 12 s (the server's live-seat window is 10 s), then ends; a 503 (a rooms
+  // isolate restarting until the site answers) is never final: it falls back to the room hold.
+  for (const auto& refusal : {"WebSocket upgrade failed (HTTP 409) seat in use",
+                              "WebSocket upgrade failed (HTTP 503)"})
+  {
+    SCOPED_TRACE(refusal);
+    const bool seat = std::string_view(refusal).find("seat in use") != std::string_view::npos;
+    std::vector<RoomTestStep> steps{
+        {RK::Message, 0, RosterMessage("welcome")}, {RK::Message, 0, PeerHello()},
+        {RK::SocketClose, 1000, "WebSocket closed by the server"},
+    };
+    for (const int ms : {1000, 1500, 2500, 4500, 8500, 11000})
+    {
+      steps.push_back({RK::PollReconnect, ms});
+      steps.push_back({RK::ConnectFailure, ms, refusal});
+    }
+    const auto at_eleven = TraceRoomForTest(TraceOptions(), steps);
+    for (const auto& row : at_eleven)
+      EXPECT_NE(row.state, RoomState::Ended);
+    EXPECT_TRUE(at_eleven.back().reconnecting);
+    steps.push_back({RK::PollReconnect, 13000});
+    steps.push_back({RK::ConnectFailure, 13000, refusal});
+    const auto later = TraceRoomForTest(TraceOptions(), steps);
+    if (seat)
+    {
+      EXPECT_EQ(later.back().state, RoomState::Ended);
+      EXPECT_EQ(later.back().error_code, "network");
+    }
+    else
+    {
+      EXPECT_NE(later.back().state, RoomState::Ended);
+      EXPECT_TRUE(later.back().reconnecting);
+    }
   }
   // Other refusals remain final; no retry window for a genuinely full room or a 403.
   for (const auto& refusal : {"WebSocket upgrade failed (HTTP 409) room full",
@@ -3025,12 +3058,20 @@ TEST_F(OrcaRoomRuntime, UpgradeFailurePathsNeverLogTicketUrls)
     EXPECT_EQ(line.find("ticket="), std::string::npos);
     EXPECT_EQ(line.find("loopback-fixture"), std::string::npos);
     saw_failure |= line.find("WebSocket connect failed") != std::string::npos;
-    saw_loss |= line.find("room-away self retry started attempt=0 close-code=1013") != std::string::npos &&
-                line.find(" eof errno=") != std::string::npos &&
-                line.find(" colo=EWR") != std::string::npos;
-    saw_move |= line.find("room-back self kept same-seat") != std::string::npos &&
-                line.find(" eof errno=") != std::string::npos &&
-                line.find(" colo=EWR->IAD") != std::string::npos;
+    // The site keeps the class word, errno and colos only right after "<kind> self", before any
+    // free text (close-reason=, last-error=).
+    const auto front = [&](std::string_view kind, std::string_view colo) {
+      const std::string head = fmt::format("{} self eof errno=", kind);
+      const size_t at = line.find(head);
+      const size_t colo_at = line.find(fmt::format(" colo={}", colo));
+      const size_t reason_at = line.find(" close-reason=");
+      return at != std::string::npos && colo_at != std::string::npos &&
+             (reason_at == std::string::npos || colo_at < reason_at);
+    };
+    saw_loss |= front("room-away", "EWR->") &&
+                line.find(" retry started attempt=0 close-code=1013") != std::string::npos;
+    saw_move |= front("room-back", "EWR->IAD") &&
+                line.find(" kept same-seat") != std::string::npos;
   }
   EXPECT_TRUE(saw_failure);
   EXPECT_TRUE(saw_loss);
