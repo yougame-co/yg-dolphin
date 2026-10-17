@@ -28,6 +28,13 @@ target_include_directories(OrcaDirectLinkTest PRIVATE
   ${ORCA_JUICE_SOURCE}/src ${ORCA_JUICE_SOURCE}/include/juice)
 target_compile_definitions(OrcaDirectLinkTest PRIVATE USE_NETTLE=0 RELEASE=1)
 target_link_libraries(OrcaDirectLinkTest PRIVATE juice)
+add_dolphin_test(OrcaJuicePollTest Orca/JuicePollTest.cpp Orca/JuicePollHarness.c)
+set_target_properties(OrcaJuicePollTest PROPERTIES C_STANDARD 11)
+target_include_directories(OrcaJuicePollTest PRIVATE
+  ${CMAKE_BINARY_DIR}/Externals/libjuice
+  ${ORCA_JUICE_SOURCE}/src ${ORCA_JUICE_SOURCE}/include/juice)
+target_compile_definitions(OrcaJuicePollTest PRIVATE USE_NETTLE=0 RELEASE=1)
+target_link_libraries(OrcaJuicePollTest PRIVATE juice)
 add_executable(orca-turn-fixture EXCLUDE_FROM_ALL ${ORCA_TURN_SOURCE} ${ORCA_JUICE_SOURCE}/src/server.c)
 target_include_directories(orca-turn-fixture PRIVATE
   ${ORCA_JUICE_SOURCE}/src ${ORCA_JUICE_SOURCE}/include/juice)
