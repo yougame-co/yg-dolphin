@@ -160,6 +160,10 @@ void PrioritizeThread(LatencyThread thread);
 //                            port 1 won. Same value in both processes.
 // Not in TestOverridesActive, since it can't change the game:
 //   ORCA_TEST_SHADER_WAIT_MS=N  the boot's shader wait (WaitForBootCompile) gives up after N ms.
+// Scripted pads, including the stdio test driver before its first snapshot arrives.
+bool HarnessInputActive();
+// Adds the optional room/app report marker; normal play preserves every byte.
+std::string HarnessReport(std::string json);
 int TestPads();
 bool TestSkipRender();
 std::optional<int> TestNetDelayMs();

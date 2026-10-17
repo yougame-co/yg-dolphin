@@ -341,6 +341,18 @@ bool SessionActive()
   return EnvIs("ORCA_SESSION", "1");
 }
 
+bool HarnessInputActive()
+{
+  return !GetEnv("YG_INPUT").empty() || EnvIs("ORCA_TEST_COMMANDS", "1");
+}
+
+std::string HarnessReport(std::string json)
+{
+  if (HarnessInputActive() && !json.empty() && json.back() == '}')
+    json.insert(json.size() - 1, ",\"harness\":true");
+  return json;
+}
+
 int TestPads()
 {
   return SessionActive() && EnvIs("ORCA_TEST_PADS", "4") ? 4 : 0;

@@ -112,7 +112,7 @@ void Result(std::string_view json)
 {
   if (!SessionActive() || !Cap(RESULTS_CAP))
     return;
-  std::string line = fmt::format("orca result {}", OneLine(json));
+  std::string line = fmt::format("orca result {}", HarnessReport(OneLine(json)));
   // The app forwards at most 300 characters of a line.
   if (line.size() > 300)
     return;

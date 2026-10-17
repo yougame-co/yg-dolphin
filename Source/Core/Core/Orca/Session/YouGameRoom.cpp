@@ -1636,6 +1636,8 @@ struct YouGameRoom::Impl
         // An invite the player opened in the app names the room.
         picojson::object hello;
         hello["type"] = picojson::value("hello");
+        if (HarnessInputActive())
+          hello["harness"] = picojson::value(true);
         if (!post(bridge + "/sdk", hello, headers, &reply))
           return false;
         room = Str(reply, "room");
@@ -3125,7 +3127,7 @@ struct YouGameRoom::Impl
     ++begin_tries;
     NOTICE_LOG_FMT(NETPLAY, "Orca room: beginning the room's {} match (revision {}, try {})",
                    room_queue, revision, begin_tries);
-    SendRaw(fmt::format("{{\"t\":\"begin\",\"revision\":{}}}", revision));
+    SendRaw(HarnessReport(fmt::format("{{\"t\":\"begin\",\"revision\":{}}}", revision)));
   }
 
   // A game's report to the room's match, identical from both Orcas.
@@ -3183,7 +3185,7 @@ struct YouGameRoom::Impl
                              JsonString(match), id, outcome) :
                  fmt::format("{{\"t\":\"finish\",\"matchId\":{},{}}}", JsonString(match), outcome);
     NOTICE_LOG_FMT(NETPLAY, "Orca room: report {}", text);
-    SendRaw(text);
+    SendRaw(HarnessReport(text));
   }
 
   // A ranked game began: the room's match hears it once (GameStartMessage), so a leave from here on
@@ -3191,7 +3193,7 @@ struct YouGameRoom::Impl
   void SendGameStart(int start, const std::string& match, const std::string& room_queue,
                      bool decided)
   {
-    const std::string text = GameStartMessage(room_queue, match, decided, start);
+    const std::string text = HarnessReport(GameStartMessage(room_queue, match, decided, start));
     if (text.empty() || !starts_sent.insert(start).second)
       return;
     NoteKnownGames();
@@ -3214,7 +3216,7 @@ struct YouGameRoom::Impl
     finish_sent = true;
     if (!why.empty())
       void_why["$final"] = why;
-    const std::string text = FinishMessage(match, winner);
+    const std::string text = HarnessReport(FinishMessage(match, winner));
     NOTICE_LOG_FMT(NETPLAY, "Orca room: {}", text);
     last_finish = text;
     finish_retry_at.reset();
@@ -3767,6 +3769,8 @@ struct YouGameRoom::Impl
         {
           picojson::object d;
           d["k"] = picojson::value("hello");
+          if (HarnessInputActive())
+            d["harness"] = picojson::value(true);
           d["c"] = picojson::value(options.compatibility);
           d["r"] = picojson::value(peer.heard);
           d["h"] = picojson::value(!joining);

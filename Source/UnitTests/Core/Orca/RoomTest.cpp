@@ -15,6 +15,7 @@
 #include <set>
 #include <string>
 #include <thread>
+#include <tuple>
 #include <vector>
 
 #include <fmt/format.h>
@@ -4134,5 +4135,32 @@ TEST_F(OrcaRoomRuntime, OrdinaryPrivateTicketsKeepReportsLocal)
     EXPECT_FALSE(Sent(code, "begin"));
     EXPECT_FALSE(Sent(code, "finish"));
     EXPECT_FALSE(Sent(code, "game-report"));
+  }
+}
+
+TEST(OrcaRoom, ScriptedInputMarksReportsAndNormalPlayPreservesBytes)
+{
+  for (const auto& [script, commands, harness] :
+       {std::tuple{"", "", false}, std::tuple{"", "0", false},
+        std::tuple{"fixture-pads.txt", "", true}, std::tuple{"", "1", true}})
+  {
+    ScopedEnv input("YG_INPUT", script);
+    ScopedEnv test_commands("ORCA_TEST_COMMANDS", commands);
+    EXPECT_EQ(Orca::HarnessInputActive(), harness);
+    for (const char* kind : {"lobby_result", "begin", "set", "game-start", "game-report",
+                             "finish", "hello"})
+    {
+      const std::string normal = fmt::format("{{\"t\":\"{}\",\"detail\":{{}}}}", kind);
+      const std::string marked = Orca::HarnessReport(normal);
+      if (!harness)
+        EXPECT_EQ(marked, normal);
+      picojson::value parsed;
+      ASSERT_TRUE(picojson::parse(parsed, marked).empty());
+      const auto& object = parsed.get<picojson::object>();
+      EXPECT_EQ(object.contains("harness"), harness);
+      if (harness)
+        EXPECT_TRUE(object.at("harness").get<bool>());
+    }
+    EXPECT_TRUE(Orca::HarnessReport("").empty());
   }
 }
