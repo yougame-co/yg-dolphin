@@ -161,7 +161,6 @@ protected:
 
 private:
   bool InitEmbedded();
-  bool m_feedback_key_down = false;
   // Embed mode, every main loop pass: keeps the window on top of the parent as it moves, resizes,
   // hides or changes Space, and decides whether the game gets input. Returns false once the parent
   // window is gone.
@@ -301,16 +300,6 @@ void PlatformMacOS::MainLoop()
     else
       UpdateWindowPosition();
     UpdateSurfaceVisible();
-    if (IsEmbedded() && Orca::UX::YgOrb::HostEnabled())
-    {
-      // Embedded windows cannot become key. Read only this shortcut while the app has given
-      // the game focus, using the same physical-key state as Dolphin's focused input.
-      const bool down = m_window_focus &&
-          CGEventSourceKeyState(kCGEventSourceStateHIDSystemState, kVK_F8);
-      if (down && !m_feedback_key_down)
-        Orca::UX::YgOrb::HandleHostKey(Orca::UX::YgOrb::HostKey::Feedback);
-      m_feedback_key_down = down;
-    }
   }
 }
 
@@ -624,7 +613,8 @@ void PlatformMacOS::ProcessEvents()
         const NSRect bounds = [view convertRectToBacking:[view bounds]];
         handled = Orb::ClickControls(pixel.x, bounds.size.height - pixel.y);
       }
-      else if ([event type] == NSEventTypeKeyDown && ![event isARepeat])
+      // The embedded app owns keyboard focus and relays feedback / host-menu on stdin.
+      else if (!IsEmbedded() && [event type] == NSEventTypeKeyDown && ![event isARepeat])
       {
         switch ([event keyCode])
         {

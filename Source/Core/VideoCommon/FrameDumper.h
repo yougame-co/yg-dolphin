@@ -4,6 +4,7 @@
 #pragma once
 
 #include <functional>
+#include <mutex>
 
 #include "Common/CommonTypes.h"
 #include "Common/Event.h"
@@ -17,6 +18,10 @@
 class AbstractStagingTexture;
 class AbstractTexture;
 class AbstractFramebuffer;
+namespace Core
+{
+enum class State;
+}
 
 class FrameDumper
 {
@@ -107,3 +112,19 @@ private:
 };
 
 extern std::unique_ptr<FrameDumper> g_frame_dumper;
+
+// Host-thread screenshot entry point. Publish only after renderer initialization succeeds;
+// detach before any renderer teardown. Detaching waits for in-flight requests, so the dumper
+// stays alive throughout SaveScreenshot without exposing its global owner to the host thread.
+class ScreenshotRequestGate
+{
+public:
+  void SetRenderer(FrameDumper* dumper);
+  bool Request(Core::State state, std::string filename, std::function<void(bool)> completed);
+
+private:
+  std::mutex m_mutex;
+  FrameDumper* m_dumper = nullptr;
+};
+
+ScreenshotRequestGate& ScreenshotRequests();

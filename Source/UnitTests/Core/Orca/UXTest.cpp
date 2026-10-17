@@ -12,9 +12,11 @@
 #include <cstring>
 #include <filesystem>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <utility>
 
@@ -26,14 +28,18 @@
 #endif
 
 #include <fmt/format.h>
+#include "Common/Config/Config.h"
 #include "Common/FileUtil.h"
 #include "Common/Image.h"
 #include "Common/IOFile.h"
+#include "Common/Logging/LogManager.h"
 #include "Common/ScopeGuard.h"
 #include <gtest/gtest.h>
 #include <imgui.h>
 
 #include "Core/Orca/Session/Events.h"
+#include "Core/Core.h"
+#include "Core/Orca/Bridge.h"
 #include "Core/Orca/Session/Replay.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/Chat.h"
@@ -51,6 +57,7 @@
 #include "Core/Rollback/Rollback.h"
 #include "InputCommon/GCPadStatus.h"
 #include "VideoCommon/OnScreenDisplay.h"
+#include "VideoCommon/FrameDumper.h"
 
 using namespace Orca::UX;
 
@@ -394,10 +401,10 @@ TEST(OrcaUXControllers, RefusesMalformedSnapshots)
   EXPECT_FALSE(
       ParseSnapshotEvent(Event(false, "", PadJson(0, "standard", "[2,0,0,0]", Buttons17())))
           .has_value());
-  EXPECT_FALSE(ParseSnapshotEvent(R"({"type":"other","snapshot":{}})").has_value());
-  EXPECT_FALSE(ParseSnapshotEvent("not json").has_value());
+  EXPECT_FALSE(ParseSnapshotEvent(std::string_view{R"({"type":"other","snapshot":{}})"}).has_value());
+  EXPECT_FALSE(ParseSnapshotEvent(std::string_view{"not json"}).has_value());
   EXPECT_FALSE(ParseSnapshotEvent(std::string(100, '[') + std::string(100, ']')).has_value());
-  EXPECT_FALSE(ParseSnapshotEvent(R"({"type":"controllers","n":1e999})").has_value());
+  EXPECT_FALSE(ParseSnapshotEvent(std::string_view{R"({"type":"controllers","n":1e999})"}).has_value());
   EXPECT_FALSE(
       ParseSnapshotEvent(R"({"type":"controllers","n":)" + std::string(400, '9') + "}").has_value());
 }
@@ -4602,4 +4609,155 @@ TEST(OrcaUXYgOrb, FeedbackPublishesACompletePngBeforeReturningItsLine)
   for (const std::string& invalid : std::array<std::string, 5>{
            "../frame.png", "dir/frame.png", "a b.png", ".png", std::string(65, 'a') + ".png"})
     EXPECT_FALSE(PublishFeedback(directory, invalid, true));
+}
+
+TEST(OrcaUXYgOrb, FeedbackRejectsAnUnavailableRenderer)
+{
+  using namespace Orca::UX::YgOrb;
+  using namespace Common::Log;
+  class CaptureLog final : public LogListener
+  {
+  public:
+    explicit CaptureLog(std::string& text) : m_text(text) {}
+    void Log(LogLevel, const char* message) override { m_text += message; }
+
+  private:
+    std::string& m_text;
+  };
+  class MemoryLayer final : public Config::ConfigLayerLoader
+  {
+  public:
+    MemoryLayer() : ConfigLayerLoader(Config::LayerType::Base) {}
+    void Load(Config::Layer*) override {}
+    void Save(Config::Layer*) override {}
+  };
+  const std::string dir = File::CreateTempDir();
+  ASSERT_FALSE(dir.empty());
+  const std::string old_user = File::GetUserPath(D_USER_IDX);
+  const char* old_stdio = std::getenv("YOUGAME_STDIO");
+  const bool had_stdio = old_stdio != nullptr;
+  const std::string saved_stdio = old_stdio ? old_stdio : "";
+  std::string logs;
+  const auto set_stdio = [](const char* value) {
+#ifdef _WIN32
+    _putenv_s("YOUGAME_STDIO", value ? value : "");
+#else
+    if (value)
+      setenv("YOUGAME_STDIO", value, 1);
+    else
+      unsetenv("YOUGAME_STDIO");
+#endif
+  };
+  Common::ScopeGuard cleanup([&] {
+    LogManager::Shutdown();
+    Config::Shutdown();
+    Orca::Bridge::SetWriter(nullptr);
+    Orca::Bridge::ResetForTests();
+    set_stdio(had_stdio ? saved_stdio.c_str() : nullptr);
+    File::SetUserPath(D_USER_IDX, old_user);
+    File::DeleteDirRecursively(dir);
+  });
+  File::SetUserPath(D_USER_IDX, dir + "/");
+  Config::Init();
+  Config::AddLayer(std::make_unique<MemoryLayer>());
+  Config::SetCurrent(LOGGER_VERBOSITY, LogLevel::LWARNING);
+  LogManager::Init();
+  auto& logger = *LogManager::GetInstance();
+  logger.SetEnable(LogType::VIDEO, true);
+  logger.EnableListener(LogListener::CONSOLE_LISTENER, false);
+  logger.RegisterListener(LogListener::LOG_WINDOW_LISTENER, std::make_unique<CaptureLog>(logs));
+  logger.EnableListener(LogListener::LOG_WINDOW_LISTENER, true);
+  set_stdio("1");
+  Orca::Bridge::ResetForTests();
+  StatusLines lines("");
+  ASSERT_TRUE(lines.Ok());
+  EXPECT_FALSE(HostEnabled());
+  ActivateHost(HostAction::Feedback);
+  EXPECT_EQ(lines.Take(), "");
+  EXPECT_NE(logs.find("Feedback request rejected: host controls unavailable"), std::string::npos);
+  Orca::Bridge::SetWriter(+[](const std::string&) {});
+  ASSERT_TRUE(HostEnabled());
+  ASSERT_FALSE(g_frame_dumper);
+  ActivateHost(HostAction::Feedback);
+  EXPECT_EQ(lines.Take(), "");
+  EXPECT_NE(logs.find("Feedback request rejected: renderer unavailable"), std::string::npos);
+  EXPECT_TRUE(std::filesystem::is_empty(dir));
+}
+
+TEST(OrcaUXYgOrb, FeedbackRejectsStartingStoppingAndFailedRenderers)
+{
+  const std::string dir = File::CreateTempDir();
+  ASSERT_FALSE(dir.empty());
+  Common::ScopeGuard cleanup([&] { File::DeleteDirRecursively(dir); });
+  const std::string path = dir + "/feedback.png.tmp";
+  ScreenshotRequestGate requests;
+  int completions = 0;
+  const auto completed = [&](bool saved) {
+    EXPECT_FALSE(saved);
+    ++completions;
+  };
+  EXPECT_FALSE(requests.Request(Core::State::Running, path, completed));
+  auto dumper = std::make_unique<FrameDumper>();
+  // Allocation alone does not publish the renderer: initialization can still fail.
+  EXPECT_FALSE(requests.Request(Core::State::Running, path, completed));
+  dumper.reset();
+  EXPECT_FALSE(requests.Request(Core::State::Running, path, completed));
+
+  dumper = std::make_unique<FrameDumper>();
+  requests.SetRenderer(dumper.get());
+  for (const auto state : {Core::State::Uninitialized, Core::State::Starting, Core::State::Stopping})
+    EXPECT_FALSE(requests.Request(state, path, completed));
+  EXPECT_EQ(completions, 0);
+  ASSERT_TRUE(requests.Request(Core::State::Paused, path, completed));
+  EXPECT_FALSE(requests.Request(Core::State::Running, path, completed));  // Busy.
+  requests.SetRenderer(nullptr);
+  EXPECT_FALSE(requests.Request(Core::State::Running, path, completed));
+  dumper.reset();  // No XFB arrived; cancellation must still complete exactly once.
+  EXPECT_EQ(completions, 1);
+  EXPECT_TRUE(std::filesystem::is_empty(dir));
+}
+
+TEST(OrcaUXYgOrb, FeedbackRequestsCanRaceRendererTeardown)
+{
+  const std::string dir = File::CreateTempDir();
+  ASSERT_FALSE(dir.empty());
+  Common::ScopeGuard cleanup([&] { File::DeleteDirRecursively(dir); });
+  ScreenshotRequestGate requests;
+  const std::string path = dir + "/feedback.png.tmp";
+  std::atomic<int> accepted{0}, cancelled{0}, attempts{0};
+  std::atomic<bool> done{false};
+  const auto completed = [&](bool saved) {
+    EXPECT_FALSE(saved);
+    ++cancelled;
+  };
+  auto dumper = std::make_unique<FrameDumper>();
+  requests.SetRenderer(dumper.get());
+  ASSERT_TRUE(requests.Request(Core::State::Running, path, completed));
+  ++accepted;
+  std::thread requester([&] {
+    while (!done.load())
+    {
+      if (requests.Request(Core::State::Running, path, completed))
+        ++accepted;
+      ++attempts;
+      std::this_thread::yield();
+    }
+  });
+  while (attempts.load() == 0)
+    std::this_thread::yield();
+  for (int iteration = 0; iteration < 100; ++iteration)
+  {
+    requests.SetRenderer(nullptr);
+    dumper.reset();
+    dumper = std::make_unique<FrameDumper>();
+    requests.SetRenderer(dumper.get());
+    std::this_thread::yield();
+  }
+  requests.SetRenderer(nullptr);
+  dumper.reset();
+  done = true;
+  requester.join();
+  EXPECT_GT(attempts.load(), 0);
+  EXPECT_EQ(accepted.load(), cancelled.load());
+  EXPECT_TRUE(std::filesystem::is_empty(dir));
 }

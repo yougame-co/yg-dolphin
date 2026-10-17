@@ -15,6 +15,12 @@
    the global poll and deliver the shortcut through the focused app's existing `feedback`
    command, without requiring additional macOS permissions.
 
+   **Fixed:** Removed the Mac poll. Embedded shortcuts use the focused app's existing
+   `feedback` / `host-menu` commands; mouse/controller overlay navigation remains available.
+   Windows modifiers now come solely from delivered window messages and reset on focus loss.
+   `Tools/orca/check-host-input.py` checks every native host platform and all train additions
+   for system keyboard-state API calls, including X11 and Windows.
+
 2. **B2 — Protect the frame dumper's lifetime before requesting feedback.**
    `Source/Core/Core/Orca/UX/YgOrb.cpp:638`–`643` checks and then dereferences the global
    `std::unique_ptr<FrameDumper>` on the window thread without synchronization with its
@@ -31,6 +37,14 @@
    an operation that protects the renderer's lifetime and rejects unavailable/starting/
    stopping renderers; another unsynchronized null/state check is insufficient. Add a
    regression for feedback crossing renderer initialization failure/teardown.
+
+   **Fixed:** Feedback uses `ScreenshotRequestGate`, published only after successful renderer
+   initialization and detached under the same mutex before teardown. Requests hold that mutex
+   through screenshot submission and reject starting/stopping/unavailable renderers with a log
+   and no capture/output line. Pending captures without an XFB complete as failures at teardown.
+   Regressions exercise actual host rejection (including logs, no files and no protocol line),
+   unpublished dumper allocation/destruction, starting/stopping states, and concurrent
+   submission/teardown.
 
 ## Non-blocking
 
@@ -112,3 +126,34 @@
   set results, the four changed region tests, and the existing Mac keyboard policy test.
   Fixtures used loopback endpoints and a minimal environment with local input disabled.
 - `git diff --check ce0a4d906a..HEAD` passed. Only this review note is to be committed.
+
+## fix-0350 validation (2026-10-17)
+
+- Starting base output: `1fd2c11927 Record train 0350 review`; `BASE-OK` for
+  `git merge-base --is-ancestor 1fd2c11927 HEAD`. Branch: `train-0350`.
+- All builds and test commands used the shared build lock and `nice -n 10`, after checking
+  a 1-minute load below 20. Build and compiler workers were capped at two; the test binary
+  ran without a parallel test runner. No native window launch or external service request.
+- `cmake --build build-orca-tests --target tests dolphin-emu-nogui --parallel 2`: PASS.
+- `python3 notes/train-0350-werror.py` with the seven touched translation units: PASS for
+  all six macOS compilation commands. Windows' native window source is excluded from this
+  build's compilation database; it received source review and the platform-independent
+  input static check. Headers were compiled through their including translation units.
+- `python3 Tools/orca/check-host-input.py`: PASS for native host sources and additions
+  since `ce0a4d906a` throughout `Source`.
+- All YgOrb tests through `Tools/orca/room-fix-tests.py`: PASS, 15/15, no skips, exit 0.
+  The three new regressions exercise production host rejection and the production lifetime
+  gate with real `FrameDumper` instances, without a GPU frame or native renderer launch.
+  Successful PNG encoding/publication retains the existing helper-level coverage described
+  in N1; these tests do not claim native renderer integration coverage.
+- Full test binary with a minimal environment and local input disabled: PASS, 2,128 passed,
+  95 skipped, zero failed (2,223 total), exit 0. Log: `build-orca-tests/fix-0350-tests.log`.
+- Full binary through `Tools/orca/room-fix-tests.py`: PASS, 2,200 passed, 23 skipped, zero
+  failed (2,223 total), exit 0, 603.557 seconds. The remaining skips are opt-in live/disc/
+  latency/visual checks. Log: `build-orca-tests/fix-0350-room-tests.log`.
+- Build, focused test and compiler logs are in `build-orca-tests/fix-0350-*.log`. The initial
+  build exposed an overload ambiguity after including the bridge header; the existing JSON
+  parser calls now select `std::string_view` explicitly. The first focused run exposed the
+  new test logger's missing in-memory base layer on shutdown; that fixture was corrected.
+- `git diff --check ce0a4d906a`: PASS. Removed the test-generated `imgui.ini`. Changes remain
+  local on `train-0350`; no remaining requested implementation work or blocked gate.

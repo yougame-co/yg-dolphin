@@ -188,7 +188,8 @@ private:
 };
 
 // Host controls never write a pad or guest memory. Up + Start opens this menu using the
-// existing corner shortcut; D-pad moves, A selects and B closes. F8 requests feedback.
+// existing corner shortcut; D-pad moves, A selects and B closes. The focused app relays its
+// feedback shortcut over stdin, without any host keyboard polling.
 enum class HostAction
 {
   Feedback,

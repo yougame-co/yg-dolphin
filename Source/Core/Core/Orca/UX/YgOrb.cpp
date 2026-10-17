@@ -10,10 +10,13 @@
 #include <system_error>
 
 #include "Common/FileUtil.h"
+#include "Common/Logging/Log.h"
+#include "Core/Core.h"
 #include "Core/Orca/Bridge.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/Chat.h"
+#include "Core/System.h"
 #include "VideoCommon/FrameDumper.h"
 
 namespace Orca::UX::YgOrb
@@ -628,25 +631,34 @@ std::optional<std::string> PublishFeedback(const std::string& directory, std::st
 void ActivateHost(HostAction action)
 {
   if (!HostEnabled())
+  {
+    if (action == HostAction::Feedback)
+      WARN_LOG_FMT(VIDEO, "Feedback request rejected: host controls unavailable");
     return;
+  }
   if (action != HostAction::Feedback)
   {
     if (Menu().HostDue(NowMs()))
       Status::Line(HostLine(action));
     return;
   }
-  if (!g_frame_dumper || !Menu().FeedbackDue(NowMs()))
+  if (!Menu().FeedbackDue(NowMs()))
     return;
   const std::string name = "feedback-" + std::to_string(static_cast<u64>(NowMs() * 1000)) + ".png";
   const std::string directory = File::GetUserPath(D_USER_IDX);
-  const bool queued = g_frame_dumper->SaveScreenshot(
-      directory + name + ".tmp", [directory, name](bool saved) {
+  const bool queued = ScreenshotRequests().Request(
+      Core::GetState(Core::System::GetInstance()), directory + name + ".tmp",
+      [directory, name](bool saved) {
         if (const auto line = PublishFeedback(directory, name, saved))
         {
           if (HostEnabled())
             Status::Line(*line);
           else
             File::Delete(directory + name, File::IfAbsentBehavior::NoConsoleWarning);
+        }
+        else
+        {
+          WARN_LOG_FMT(VIDEO, "Feedback capture unavailable");
         }
         Menu().FeedbackFinished(NowMs());
       });

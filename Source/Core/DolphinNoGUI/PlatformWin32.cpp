@@ -71,6 +71,10 @@ private:
   bool m_embed_visible = true;
   // The app's "focus" / "blur": whether the game gets input. On by default, as on macOS.
   bool m_embed_focus = true;
+  // Modifiers come only from this window's messages; never query system keyboard state.
+  bool m_shift_down = false;
+  bool m_control_down = false;
+  bool m_alt_down = false;
 
   int m_window_x = Config::Get(Config::MAIN_RENDER_WINDOW_XPOS);
   int m_window_y = Config::Get(Config::MAIN_RENDER_WINDOW_YPOS);
@@ -362,6 +366,17 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
                                const LPARAM lParam)
 {
   PlatformWin32* platform = reinterpret_cast<PlatformWin32*>(GetWindowLongPtr(hwnd, GWLP_USERDATA));
+  if (platform && (msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN || msg == WM_KEYUP ||
+                   msg == WM_SYSKEYUP))
+  {
+    const bool down = msg == WM_KEYDOWN || msg == WM_SYSKEYDOWN;
+    switch (wParam)
+    {
+    case VK_SHIFT: platform->m_shift_down = down; break;
+    case VK_CONTROL: platform->m_control_down = down; break;
+    case VK_MENU: platform->m_alt_down = down; break;
+    }
+  }
   switch (msg)
   {
   case WM_NCCREATE:
@@ -391,7 +406,8 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
   break;
 
   case WM_KEYDOWN:
-    if (!(lParam & (1 << 30)))
+    // The embedded app owns keyboard focus and relays feedback / host-menu on stdin.
+    if (!platform->IsEmbedded() && !(lParam & (1 << 30)))
     {
       namespace Orb = Orca::UX::YgOrb;
       std::optional<Orb::HostKey> key;
@@ -405,7 +421,7 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
       case VK_RETURN: key = Orb::HostKey::Select; break;
       case VK_ESCAPE: key = Orb::HostKey::Close; break;
       case VK_TAB:
-        if (GetKeyState(VK_SHIFT) & 0x8000)
+        if (platform->m_shift_down)
           key = Orb::HostKey::Menu;
         break;
       }
@@ -425,8 +441,8 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
         Embed::Out("key escape");
       else if (wParam == VK_F11)
         Embed::Out("key fullscreen");
-      else if (wParam == VK_TAB && (GetKeyState(VK_SHIFT) & 0x8000) &&
-               !(GetKeyState(VK_CONTROL) & 0x8000) && !(GetKeyState(VK_MENU) & 0x8000))
+      else if (wParam == VK_TAB && platform->m_shift_down && !platform->m_control_down &&
+               !platform->m_alt_down)
         OutKey(Orca::UX::OverlayKey::Keys().Down(Orca::Status::Cap(Orca::Status::TALK_CAP)));
     }
     else if (wParam == VK_ESCAPE)
@@ -443,6 +459,12 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
 
   // The keyboard went elsewhere, so a Shift+Tab press still down never sees its key-up here.
   case WM_KILLFOCUS:
+    if (platform)
+    {
+      platform->m_shift_down = false;
+      platform->m_control_down = false;
+      platform->m_alt_down = false;
+    }
     if (platform && platform->IsEmbedded())
       OutKey(Orca::UX::OverlayKey::Keys().Cancel());
     return DefWindowProc(hwnd, msg, wParam, lParam);

@@ -9,6 +9,7 @@
 
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/MainSettings.h"
+#include "Core/Core.h"
 
 #include "VideoCommon/AbstractFramebuffer.h"
 #include "VideoCommon/AbstractGfx.h"
@@ -36,6 +37,9 @@ FrameDumper::FrameDumper()
 FrameDumper::~FrameDumper()
 {
   ShutdownFrameDumping();
+  // A renderer can stop before the first XFB. Complete that request as a failure too.
+  if (m_screenshot_callback)
+    m_screenshot_callback(false);
 }
 
 void FrameDumper::DumpCurrentFrame(const AbstractTexture* src_texture,
@@ -378,3 +382,32 @@ void FrameDumper::DoState(PointerWrap& p)
 #endif
 }
 std::unique_ptr<FrameDumper> g_frame_dumper;
+
+void ScreenshotRequestGate::SetRenderer(FrameDumper* dumper)
+{
+  std::lock_guard lock(m_mutex);
+  m_dumper = dumper;
+}
+
+bool ScreenshotRequestGate::Request(Core::State state, std::string filename,
+                                    std::function<void(bool)> completed)
+{
+  std::lock_guard lock(m_mutex);
+  if ((state != Core::State::Running && state != Core::State::Paused) || !m_dumper)
+  {
+    WARN_LOG_FMT(VIDEO, "Feedback request rejected: renderer unavailable");
+    return false;
+  }
+  if (!m_dumper->SaveScreenshot(std::move(filename), std::move(completed)))
+  {
+    WARN_LOG_FMT(VIDEO, "Feedback request rejected: screenshot busy");
+    return false;
+  }
+  return true;
+}
+
+ScreenshotRequestGate& ScreenshotRequests()
+{
+  static ScreenshotRequestGate requests;
+  return requests;
+}
