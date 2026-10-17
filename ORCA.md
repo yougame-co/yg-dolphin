@@ -2769,6 +2769,11 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.52
+
+- Everything in 0.3.50, under a new number. 0.3.51 was a networking fix for Windows on the previous
+  release line; 0.3.52 includes it.
+
 ### 0.3.50
 
 - In full screen, the YouGame menu over the game can now send feedback with a screenshot of the
