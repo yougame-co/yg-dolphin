@@ -2347,7 +2347,7 @@ TEST(OrcaMod, BuiltinFixedWritersHaveExactRegions)
                        [&](const auto& region) { return region.Contains(address, bytes); });
   };
   // ClearStaleMusicSelect's complete word list, ForceCodeMenu's pause word, and
-  // FriendsMove::Apply / ApplySceneMove's two scene-manager words.
+  // FriendsMove::Apply / FreshMove::Apply's two scene-manager words.
   for (const u32 address : {0x80002810u, 0x80002818u, 0x8000281Cu, 0x80002820u,
                             0x80002824u, 0x80002828u, 0x80002830u, 0x80002834u,
                             0x80002838u, 0x8000283Cu, 0x805B8A08u, 0x805B8E24u,

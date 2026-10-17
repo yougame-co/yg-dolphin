@@ -28,6 +28,7 @@
 #include "Core/Orca/UX/GamePatches.h"
 #include "Core/Orca/Games/Brawl/MenuText.h"
 #include "Core/Orca/Engine/GuestMemory.h"
+#include "Core/Orca/Games/Brawl/BrawlGame.h"
 #include "Core/Orca/Games/Brawl/OnlineMenu.h"
 #include "Core/Rollback/OnlineMatch.h"
 #include "VideoCommon/HiresTextures.h"
@@ -913,6 +914,8 @@ public:
   void Write8(u32 a, u8 v) override
   {
     bytes[a] = v;
+    if (track_writes)
+      recorded.push_back(a);
     ++writes;
   }
   void Write16(u32 a, u16 v) override
@@ -936,6 +939,8 @@ public:
       bytes[a + static_cast<u32>(i)] = static_cast<u8>(s[i]);
     bytes[a + static_cast<u32>(s.size())] = 0;
   }
+  bool track_writes = false;
+  std::vector<u32> recorded;
   std::map<u32, u8> bytes;
   int writes = 0;
 };
@@ -2586,4 +2591,26 @@ TEST(OrcaOnlineMenuLobby, AHostsPickIsArmedAgainOnceTheFriendsItEndedForAreGone)
   EXPECT_EQ(with([](FriendsPickInputs& i) { i.queue_or_search = true; }), FriendsPickStep::Drop);
   EXPECT_EQ(with([](FriendsPickInputs& i) { i.host_cap = false; }), FriendsPickStep::Drop);
   EXPECT_EQ(with([](FriendsPickInputs& i) { i.elsewhere = true; }), FriendsPickStep::Drop);
+}
+
+TEST(OrcaOnlineMenuReader, SceneExitWritesOnlyItsDeclaredSingletonWords)
+{
+  FakeMemory m = Scene("muMenuMain", 0);
+  constexpr u32 manager = 0x805B8BA0;
+  m.Fill(manager, 0x300);
+  m.Write32(0x805A0060, manager);
+  m.Write32(manager + 4, 0x80910000);
+  m.Write32(manager + 0x288, FriendsMove::STEP_RUNNING);
+  m.Fill(0x80910000, FriendsMove::MENU_BUILT + 1);
+  m.Write32(0x80910000, 0x80920000);
+  m.Write8(0x80910000 + FriendsMove::MENU_BUILT, 1);
+  m.track_writes = true;
+  ASSERT_TRUE(FreshMove::Apply(m, 25));
+  EXPECT_EQ(m.Read32(0x805B8E24), 25u);
+  EXPECT_EQ(m.recorded.size(), 8u);
+  const auto regions = BrawlGame::Regions();
+  for (const u32 address : m.recorded)
+    EXPECT_TRUE(std::any_of(regions.begin(), regions.end(),
+                           [&](const auto& region) { return region.Contains(address, 1); }))
+        << std::hex << address;
 }

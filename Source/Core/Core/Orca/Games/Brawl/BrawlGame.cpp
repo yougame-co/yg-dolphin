@@ -111,7 +111,7 @@ std::span<const Orca::Engine::Region> Regions()
       {0x805A0420, 0x805A0428, RegionKind::Data, "rng-menu"},
       // Rules::ForceCodeMenu restores the game's pause word when closing the menu.
       {0x805B8A08, 0x805B8A0C, RegionKind::Data, "pplus-game-pause"},
-      // OnlineMenu FriendsMove::Apply / ApplySceneMove: gfSceneManager's exit code and step.
+      // OnlineMenu FriendsMove::Apply / FreshMove::Apply: gfSceneManager's exit code and step.
       // The singleton at 0x805B8BA0 is reached through the pointer at 0x805A0060.
       {0x805B8E24, 0x805B8E2C, RegionKind::Data, "scene-manager-exit"},
       // The match block in sora_scene's free space, up to its limit (FreeSpace.h)

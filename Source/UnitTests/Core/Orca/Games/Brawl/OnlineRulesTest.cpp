@@ -4,17 +4,20 @@
 // The online rules for queue matches (Core/Orca/Games/Brawl/OnlineRules.h): the match block's
 // header and what it locks, over a fake of the game's memory.
 
+#include <algorithm>
 #include <bit>
 #include <cmath>
 #include <map>
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <gtest/gtest.h>
 
 #include "Core/Orca/Games/Brawl/MatchBlock.h"
 #include "Core/Orca/Engine/GuestMemory.h"
+#include "Core/Orca/Games/Brawl/BrawlGame.h"
 #include "Core/Orca/Games/Brawl/OnlineRules.h"
 #include "Core/Orca/Games/Brawl/Rulesets.h"
 #include "Core/Orca/Games/Brawl/SetBlock.h"
@@ -46,6 +49,8 @@ public:
   void Write8(u32 a, u8 v) override
   {
     bytes[a] = v;
+    if (track_writes)
+      recorded.push_back(a);
     ++writes;
   }
   void Write16(u32 a, u16 v) override
@@ -69,6 +74,8 @@ public:
       bytes[a + static_cast<u32>(i)] = static_cast<u8>(s[i]);
     bytes[a + static_cast<u32>(s.size())] = 0;
   }
+  bool track_writes = false;
+  std::vector<u32> recorded;
   std::map<u32, u8> bytes;
   int writes = 0;
 };
@@ -1266,7 +1273,16 @@ TEST(OrcaOnlineRules, AnOpenCodeMenuClosesAndTheGameRunsAgain)
   m.Write32(CODE_MENU_STATE, CODE_MENU_OPEN);
   m.Write32(CODE_MENU_SAVED_PAUSE, 0);
   m.Write32(CODE_MENU_GAME_PAUSE, 1);
+  m.track_writes = true;
   ApplyLocks(m, NextFrame());
+  m.track_writes = false;
+  const auto regions = BrawlGame::Regions();
+  ASSERT_FALSE(m.recorded.empty());
+  for (const u32 address : m.recorded)
+    EXPECT_TRUE(std::any_of(regions.begin(), regions.end(),
+                           [&](const auto& region) { return region.Contains(address, 1); }))
+        << std::hex << address;
+
   EXPECT_EQ(m.Read32(CODE_MENU_STATE), 0u);
   EXPECT_EQ(m.Read32(CODE_MENU_GAME_PAUSE), 0u);
   m.writes = 0;

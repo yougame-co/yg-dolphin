@@ -5,16 +5,19 @@
 // the match block (MatchBlock.h) and Project+'s flow on its stage select (RankedPPlus.h), over a
 // fake of the game's memory.
 
+#include <algorithm>
 #include <array>
 #include <map>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <fmt/format.h>
 #include <gtest/gtest.h>
 
 #include "Core/Orca/Games/Brawl/MatchBlock.h"
 #include "Core/Orca/Engine/GuestMemory.h"
+#include "Core/Orca/Games/Brawl/BrawlGame.h"
 #include "Core/Orca/Games/Brawl/PPlus/RankedPPlus.h"
 #include "Core/Orca/Games/Brawl/Rulesets.h"
 #include "Core/Orca/UX/RankedSteps.h"
@@ -34,7 +37,12 @@ public:
   u8 Read8(u32 a) const override { return bytes.at(a); }
   u16 Read16(u32 a) const override { return static_cast<u16>(Read8(a) << 8 | Read8(a + 1)); }
   u32 Read32(u32 a) const override { return u32(Read16(a)) << 16 | Read16(a + 2); }
-  void Write8(u32 a, u8 v) override { bytes[a] = v; }
+  void Write8(u32 a, u8 v) override
+  {
+    bytes[a] = v;
+    if (track_writes)
+      recorded.push_back(a);
+  }
   void Write16(u32 a, u16 v) override
   {
     Write8(a, static_cast<u8>(v >> 8));
@@ -56,6 +64,8 @@ public:
       bytes[a + static_cast<u32>(i)] = static_cast<u8>(s[i]);
     bytes[a + static_cast<u32>(s.size())] = 0;
   }
+  bool track_writes = false;
+  std::vector<u32> recorded;
   std::map<u32, u8> bytes;
 };
 
@@ -1402,4 +1412,20 @@ TEST(OrcaRankedSteps, ProgressMetaKnightClauseIsOnePickOfAnyLegalStage)
   EXPECT_EQ(Ranked::Current(plan, p)->port, 1);
   // Any legal stage but FD (Ice Climbers).
   EXPECT_EQ(Ranked::Allowed(plan, p), static_cast<StageMask>(0x7F & ~(1 << 5)));
+}
+
+TEST(OrcaRankedPPlus, EveryMusicCleanupWriteIsDeclared)
+{
+  FakeMemory m = Game("scSelctCharacter");
+  m.Fill(RankedPPlus::MUSIC_SELECT, 0x30);
+  for (const u32 offset : RankedPPlus::MUSIC_SELECT_WORDS)
+    m.Write32(RankedPPlus::MUSIC_SELECT + offset, 1);
+  m.track_writes = true;
+  EXPECT_EQ(RankedPPlus::ClearStaleMusicSelect(m), 40);
+  ASSERT_EQ(m.recorded.size(), 40u);
+  const auto regions = BrawlGame::Regions();
+  for (const u32 address : m.recorded)
+    EXPECT_TRUE(std::any_of(regions.begin(), regions.end(),
+                           [&](const auto& region) { return region.Contains(address, 1); }))
+        << std::hex << address;
 }
