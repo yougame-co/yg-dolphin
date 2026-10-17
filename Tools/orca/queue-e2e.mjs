@@ -55,7 +55,8 @@
 // Ticket requests require ORCA_BUILD=<version>:<commit> for the YG Dolphin being run
 // (for example ORCA_BUILD=0.3.48:<its git commit>); a version alone sends commit: null.
 //
-// --record (casual, scenario match): negotiate record and send `record on` after each caps
+// Both queue flows agree record by default and keep the auto choice (ranked only).
+// --record (casual, scenario match): send `record on` after each caps
 // answer. Replay hand-off is server-to-server, invisible to this stand-in bridge: print each
 // room and match id from mpRoom and the Worker event to check. --rooms-log verifies a captured
 // orca_replay_delivery event for each played room; without it the hand-off remains PENDING.
@@ -228,6 +229,8 @@ const PAGE_CAPS = new Set([
   "join", "leave", "stats", "pause", "delay", "perf", "direct", "host", "results", "locks", "queue2",
   "pick-casual", "pick-ranked", "record",
 ]);
+const CAPS_Q1 = "caps join leave stats pause delay perf direct host results record";
+const CAPS_Q2 = "caps join leave stats pause delay perf direct host results queue2 record";
 
 function pageCommands(name, line, offered, { record = RECORD, music = false, delay = DELAY } = {}) {
   if (!line.startsWith("caps ")) return [line];
@@ -1058,7 +1061,7 @@ async function cancelScenario() {
   await a.startBridge();
   a.start();
   await a.expect(/^orca caps .*\bhost\b/, 120000);
-  a.send("caps join leave stats pause delay perf direct host results");
+  a.send(CAPS_Q1);
   await menuToQueue(a, QUEUE);
   // 1. Searching, then the page's Cancel.
   let search = queueUp(a, QUEUE).catch((e) => e);
@@ -1131,7 +1134,7 @@ async function noShowScenario() {
   b.start();
   for (const s of [a, b]) {
     await s.expect(/^orca caps .*\bhost\b/, 120000);
-    s.send("caps join leave stats pause delay perf direct host results");
+    s.send(CAPS_Q1);
   }
   const from = [a.lines.length, b.lines.length];
   await menuToQueue(a, QUEUE);
@@ -1242,8 +1245,6 @@ function noErrors(sides, allowed = /^$/) {
 }
 
 // ---- queue2 (--q2) ----
-
-const CAPS_Q2 = "caps join leave stats pause delay perf direct host results queue2";
 
 // On the queue's own character select: up into the grid (that joins the panel), A on a character,
 // then Start until Orca says the player is ready.
@@ -2274,7 +2275,7 @@ async function main() {
     await s.expect(/^orca caps .*\bhost\b/, 120000);
     if (QUEUE === "ranked" && !s.lines.some((l) => l && /^orca caps .*\bresults\b/.test(l)))
       fail(`${s.name}: Orca offers no results for this profile`);
-    s.send("caps join leave stats pause delay perf direct host results");
+    s.send(CAPS_Q1);
   }
   const { host, joiner, room } = await meet(a, b, QUEUE, (s) => menuToQueue(s, QUEUE));
 
@@ -2405,6 +2406,12 @@ async function drySelfTest() {
   }
   log("PASS: ticket build parsing, room/queue bodies and missing-build refusal; fetch mocked");
   assert(PAGE_CAPS.has("record"));
+  for (const caps of [CAPS_Q1, CAPS_Q2]) {
+    const commands = pageCommands("dry", caps, PAGE_CAPS, { record: false, delay: null });
+    assert(commands[0].split(" ").includes("record"), "default queue caps must agree record");
+    assert.deepEqual(commands, [caps], "default queues must keep the auto recording choice");
+  }
+  log("PASS: q1/q2 agree record without record on; ranked keeps the auto recording choice");
   const offered = new Set(["join", "record", "delay", "music"]);
   assert.deepEqual(pageCommands("dry", "caps join delay", offered,
     { record: true, music: true, delay: "3" }),

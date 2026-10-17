@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <functional>
 #include <fstream>
 #include <memory>
@@ -24,6 +25,7 @@
 #include "Common/FileUtil.h"
 #include "Common/HttpRequest.h"
 #include "Common/Logging/LogManager.h"
+#include "Common/ScopeGuard.h"
 #include "Common/WebSocket.h"
 #include "Core/ConfigManager.h"
 #include "Core/HW/Memmap.h"
@@ -37,6 +39,7 @@
 #include "Core/Orca/Status.h"
 #include "Core/Orca/UX/UX.h"
 #include "Core/Rollback/OnlineMatch.h"
+#include "Core/Rollback/ReplayStream.h"
 #include "Core/Rollback/Rollback.h"
 #include "Core/System.h"
 
@@ -3389,6 +3392,113 @@ ReplayArchive FriendsReplay(int first, int current, int friends = 0)
     frame.ports = ports;
   return replay;
 }
+}
+
+TEST_F(OrcaRoomRuntime, RankedRecordingUsesTheMatchedRoomAndAgreedCapability)
+{
+  FriendsHeadlessCore core;
+  const ScopedEnv session("ORCA_SESSION", "1");
+  // Use the commands the queue driver actually sends, so its capability agreement exercises the
+  // same recording decision as the app. No subprocess, account or external service is involved.
+  std::string driver;
+  const auto root = std::filesystem::path(__FILE__).parent_path() / "../../../..";
+  ASSERT_TRUE(File::ReadFileToString((root / "Tools/orca/queue-e2e.mjs").string(), driver));
+  Orca::Profile profile;
+  profile.game_id = "RSBE01";
+  profile.revision = 2;
+  Orca::SetActiveProfile(profile);
+  Orca::UX::SelectModule(Orca::ActiveProfile());
+  const Common::ScopeGuard cleanup([] {
+    Orca::Online::Shutdown();
+    Orca::Online::SetRecordChoice(Orca::Online::RecordChoice::Auto);
+    Orca::Status::SetAppCaps("");
+    Orca::SetActiveProfile(std::nullopt);
+  });
+  for (const bool q2 : {false, true})
+  {
+    const std::string caps =
+        std::string(Orca::Status::CAPS) + " record" + (q2 ? " queue2" : "");
+    for (const bool joining : {false, true})
+    {
+      SCOPED_TRACE(fmt::format("q2={} joining={}", q2, joining));
+      const std::string code = fmt::format("record{}{}", q2 ? 2 : 1, joining ? 1 : 0);
+      Request("/configure/" + code,
+              fmt::format(R"({{"queue":"ranked","joining":{},"compatibility":"{}"}})",
+                          joining, Orca::Online::CompatibilityKey()));
+      Orca::Status::SetAppCaps(caps);
+      ASSERT_EQ(Orca::Status::Cap("queue2"), q2);
+      Orca::Online::SetRecordChoice(Orca::Online::RecordChoice::Auto);
+      const std::string solo = "own" + code;
+      Request("/configure/" + solo, R"({"joining":false})");
+      Orca::Online::StartRoom(solo, false);
+      ASSERT_TRUE(Wait([&] { return Orca::Online::Seat() == 0; }));
+      ASSERT_EQ(Orca::Online::RoomQueue(), "private");
+      // HostInPlay/JoinInPlay replace the solo/search room with this matched room.
+      Orca::Online::ShutdownInBackground();
+      Orca::Online::StartRoom(code, joining, false);
+      ASSERT_TRUE(Wait([&] { return Orca::Online::Seat() == (joining ? 1 : 0); }));
+      EXPECT_EQ(Orca::Online::Code(), code);
+      EXPECT_EQ(Orca::Online::RoomQueue(), "ranked");
+      ASSERT_TRUE(Orca::Status::Cap(Orca::Status::RECORD_CAP));
+      EXPECT_TRUE(Orca::Online::RecordWanted());
+      Rollback::ReplayStream::Writer writer("", true, true);
+      const auto replay = FriendsReplay(230, 300);
+      ASSERT_TRUE(writer.Pump(replay, replay.EndFrame(), 300, nullptr, true));
+      EXPECT_TRUE(Wait([&] { return Sent(code, "rs"); }));
+      fmt::print("record proof: q{} code={} seat={} queue={} cap={} auto={} stream={}\n",
+                 q2 ? 2 : 1, Orca::Online::Code(), Orca::Online::Seat(),
+                 Orca::Online::RoomQueue(), Orca::Status::Cap(Orca::Status::RECORD_CAP),
+                 Orca::Online::RecordWanted(), Sent(code, "rs"));
+      Orca::Status::SetAppCaps(q2 ? "join host queue2" : "join host");
+      EXPECT_FALSE(Orca::Status::Cap(Orca::Status::RECORD_CAP));
+      EXPECT_FALSE(Orca::Online::RecordWanted());
+      Orca::Status::SetAppCaps(caps);
+      Orca::Online::SetRecordChoice(Orca::Online::RecordChoice::Off);
+      EXPECT_FALSE(Orca::Online::RecordWanted());
+      const std::string prefix = fmt::format("const CAPS_Q{} = \"caps ", q2 ? 2 : 1);
+      const auto command = driver.find(prefix);
+      ASSERT_NE(command, std::string::npos);
+      const auto first = command + prefix.size();
+      const auto last = driver.find('"', first);
+      ASSERT_NE(last, std::string::npos);
+      Orca::Online::SetRecordChoice(Orca::Online::RecordChoice::Auto);
+      Orca::Status::SetAppCaps(driver.substr(first, last - first));
+      fmt::print("queue driver proof: q{} code={} queue={} cap={} auto={}\n", q2 ? 2 : 1,
+                 Orca::Online::Code(), Orca::Online::RoomQueue(),
+                 Orca::Status::Cap(Orca::Status::RECORD_CAP), Orca::Online::RecordWanted());
+      EXPECT_TRUE(Orca::Status::Cap(Orca::Status::RECORD_CAP));
+      EXPECT_TRUE(Orca::Online::RecordWanted());
+      Orca::Online::Shutdown();
+    }
+    for (const std::string queue : {"casual", "private"})
+    {
+      SCOPED_TRACE(fmt::format("q2={} queue={}", q2, queue));
+      const std::string code = fmt::format("{}rec{}", queue, q2 ? 2 : 1);
+      Request("/configure/" + code,
+              fmt::format(R"({{"queue":"{}","joining":false}})", queue));
+      Orca::Status::SetAppCaps(caps);
+      Orca::Online::SetRecordChoice(Orca::Online::RecordChoice::Auto);
+      Orca::Online::StartRoom(code, false, queue == "private");
+      ASSERT_TRUE(Wait([&] { return Orca::Online::Seat() == 0; }));
+      EXPECT_EQ(Orca::Online::RoomQueue(), queue);
+      EXPECT_FALSE(Orca::Online::RecordWanted());
+      const auto replay = FriendsReplay(230, 300);
+      Rollback::ReplayStream::Writer quiet("", true, true);
+      ASSERT_TRUE(quiet.Pump(replay, replay.EndFrame(), 300, nullptr, true));
+      EXPECT_FALSE(Sent(code, "rs"));
+      Orca::Online::SetRecordChoice(Orca::Online::RecordChoice::On);
+      EXPECT_TRUE(Orca::Online::RecordWanted());
+      Rollback::ReplayStream::Writer enabled("", true, true);
+      ASSERT_TRUE(enabled.Pump(replay, replay.EndFrame(), 300, nullptr, true));
+      EXPECT_TRUE(Wait([&] { return Sent(code, "rs"); }));
+      Orca::Online::SetRecordChoice(Orca::Online::RecordChoice::Off);
+      EXPECT_FALSE(Orca::Online::RecordWanted());
+      Orca::Status::SetAppCaps("");
+      Orca::Online::SetRecordChoice(Orca::Online::RecordChoice::On);
+      EXPECT_FALSE(Orca::Online::RecordWanted());
+      Orca::Online::Shutdown();
+    }
+  }
 }
 
 TEST_F(OrcaRoomRuntime, ReturningFriendUsesActualHostCurrentMatchKeyframe)
