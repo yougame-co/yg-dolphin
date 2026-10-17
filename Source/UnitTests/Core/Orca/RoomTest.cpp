@@ -4164,3 +4164,67 @@ TEST(OrcaRoom, ScriptedInputMarksReportsAndNormalPlayPreservesBytes)
     EXPECT_TRUE(Orca::HarnessReport("").empty());
   }
 }
+
+TEST(OrcaRoom, HarnessHelloIsOptionalOnTheActualRoomPath)
+{
+  for (int mode = 0; mode < 3; ++mode)
+  {
+    ScopedEnv input("YG_INPUT", mode == 1 ? "fixture-pads.txt" : "");
+    ScopedEnv commands("ORCA_TEST_COMMANDS", mode == 2 ? "1" : "");
+    const auto trace = TraceRoomForTest(TraceOptions(), {
+        {RK::Message, 0, RosterMessage("welcome")}, {RK::Tick, 1100}});
+    bool saw_hello = false;
+    for (const auto& text : trace.back().sent)
+    {
+      picojson::value parsed;
+      ASSERT_TRUE(picojson::parse(parsed, text).empty());
+      const auto& hello = parsed.get("d");
+      if (hello.get("k").to_str() != "hello")
+        continue;
+      saw_hello = true;
+      EXPECT_EQ(hello.contains("harness"), mode != 0);
+      if (mode != 0)
+        EXPECT_TRUE(hello.get("harness").get<bool>());
+    }
+    EXPECT_TRUE(saw_hello);
+  }
+}
+
+TEST_F(OrcaRoomRuntime, HarnessMarkerFollowsActualBeginGameStartReportAndFinish)
+{
+  for (int mode = 0; mode < 3; ++mode)
+  {
+    ScopedEnv input("YG_INPUT", mode == 1 ? "fixture-pads.txt" : "");
+    ScopedEnv commands("ORCA_TEST_COMMANDS", mode == 2 ? "1" : "");
+    const std::string code = "harness" + std::to_string(mode);
+    auto room = Open(code, R"({"joining":false,"queue":"ranked"})", false, false);
+    ASSERT_TRUE(Wait([&] { return room->Seat() == 0 && room->RoundTripMs() >= 0; }));
+    room->SetOpponentPlugged(true);
+    ASSERT_TRUE(Wait([&] { return Sent(code, "begin"); }));
+    Action(code, R"({"message":{"t":"start","matchId":"h1","participants":[{"id":"me","connectionId":"me","slot":0},{"id":"peer","connectionId":"peer","slot":1}]}})");
+    room->ReportGameStart(100);
+    ASSERT_TRUE(Wait([&] { return Sent(code, "game-start"); }));
+    GameReport report;
+    report.kind = GameReport::Kind::Win;
+    report.winner_seat = 0;
+    report.start = 100;
+    report.detail = "{}";
+    room->ReportGame(report);
+    ASSERT_TRUE(Wait([&] { return Sent(code, "game-report"); }));
+    room->ReportFault();
+    ASSERT_TRUE(Wait([&] { return Sent(code, "finish"); }));
+    const auto state = Request("/state/" + code);
+    std::set<std::string> seen;
+    for (const auto& message : state.get("messages").get<picojson::array>())
+    {
+      const auto type = message.get("t").to_str();
+      if (type != "begin" && type != "game-start" && type != "game-report" && type != "finish")
+        continue;
+      seen.insert(type);
+      EXPECT_EQ(message.contains("harness"), mode != 0) << type;
+      if (mode != 0)
+        EXPECT_TRUE(message.get("harness").get<bool>()) << type;
+    }
+    EXPECT_EQ(seen.size(), 4u);
+  }
+}
