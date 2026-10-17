@@ -8,6 +8,7 @@
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/UX/YgOrb.h"
 #include "Core/State.h"
 #include "Core/System.h"
 #include "VideoCommon/EFBInterface.h"
@@ -160,6 +161,7 @@ protected:
 
 private:
   bool InitEmbedded();
+  bool m_feedback_key_down = false;
   // Embed mode, every main loop pass: keeps the window on top of the parent as it moves, resizes,
   // hides or changes Space, and decides whether the game gets input. Returns false once the parent
   // window is gone.
@@ -299,6 +301,16 @@ void PlatformMacOS::MainLoop()
     else
       UpdateWindowPosition();
     UpdateSurfaceVisible();
+    if (IsEmbedded() && Orca::UX::YgOrb::HostEnabled())
+    {
+      // Embedded windows cannot become key. Read only this shortcut while the app has given
+      // the game focus, using the same physical-key state as Dolphin's focused input.
+      const bool down = m_window_focus &&
+          CGEventSourceKeyState(kCGEventSourceStateHIDSystemState, kVK_F8);
+      if (down && !m_feedback_key_down)
+        Orca::UX::YgOrb::HandleHostKey(Orca::UX::YgOrb::HostKey::Feedback);
+      m_feedback_key_down = down;
+    }
   }
 }
 
@@ -582,6 +594,17 @@ void PlatformMacOS::ProcessEvents()
 {
   @autoreleasepool
   {
+    // Intercept only our host buttons; the rest of an embedded view keeps passing through.
+    if (IsEmbedded())
+    {
+      NSView* view = [m_window contentView];
+      const NSPoint point = [view convertPoint:[m_window mouseLocationOutsideOfEventStream]
+                                      fromView:nil];
+      const NSPoint pixel = [view convertPointToBacking:point];
+      const NSRect bounds = [view convertRectToBacking:[view bounds]];
+      const bool hit = Orca::UX::YgOrb::HitControls(pixel.x, bounds.size.height - pixel.y);
+      [m_window setIgnoresMouseEvents:!hit];
+    }
     // When embedded, poll at 120 Hz so the window follows the app's window smoothly.
     NSDate* expiration = [NSDate dateWithTimeIntervalSinceNow:IsEmbedded() ? 1.0 / 120 : 1];
     NSEvent* event = [NSApp nextEventMatchingMask:NSEventMaskAny
@@ -589,7 +612,37 @@ void PlatformMacOS::ProcessEvents()
                                            inMode:NSDefaultRunLoopMode
                                           dequeue:YES];
 
-    if (event)
+    bool handled = false;
+    if (event && [event window] == m_window)
+    {
+      namespace Orb = Orca::UX::YgOrb;
+      if ([event type] == NSEventTypeLeftMouseDown)
+      {
+        NSView* view = [m_window contentView];
+        const NSPoint point = [view convertPoint:[event locationInWindow] fromView:nil];
+        const NSPoint pixel = [view convertPointToBacking:point];
+        const NSRect bounds = [view convertRectToBacking:[view bounds]];
+        handled = Orb::ClickControls(pixel.x, bounds.size.height - pixel.y);
+      }
+      else if ([event type] == NSEventTypeKeyDown && ![event isARepeat])
+      {
+        switch ([event keyCode])
+        {
+        case kVK_F8: handled = Orb::HandleHostKey(Orb::HostKey::Feedback); break;
+        case kVK_UpArrow:
+        case kVK_LeftArrow: handled = Orb::HandleHostKey(Orb::HostKey::Previous); break;
+        case kVK_DownArrow:
+        case kVK_RightArrow: handled = Orb::HandleHostKey(Orb::HostKey::Next); break;
+        case kVK_Return: handled = Orb::HandleHostKey(Orb::HostKey::Select); break;
+        case kVK_Escape: handled = Orb::HandleHostKey(Orb::HostKey::Close); break;
+        case kVK_Tab:
+          if ([event modifierFlags] & NSEventModifierFlagShift)
+            handled = Orb::HandleHostKey(Orb::HostKey::Menu);
+          break;
+        }
+      }
+    }
+    if (event && !handled)
       [NSApp sendEvent:event];
     if (IsEmbedded())
       return;

@@ -335,6 +335,11 @@ void Stopping()
   s_stopping.store(true, std::memory_order_relaxed);
 }
 
+bool IsStopping()
+{
+  return s_stopping.load(std::memory_order_relaxed);
+}
+
 int Finish()
 {
   if (!SessionActive())

@@ -21,6 +21,7 @@ Kit::Box ButtonBox(const Model::View& view);
 // Draws the button with its blink ring (or the green listening pulse), held-seat dot and unread
 // badge.
 void DrawButton(ImDrawList* dl, const Model::View& view);
+void DrawHostControls(ImDrawList* dl, const Model::View& view);
 // One row of the pill beside the button: a chat line (name over up to two lines of text), an Orca
 // toast (text beside the logo), a notice ("<name> <text>" on one line, with an optional hint), or
 // hold-to-talk's row (as a notice; live words keep their end).

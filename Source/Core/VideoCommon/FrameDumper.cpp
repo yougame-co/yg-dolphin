@@ -226,8 +226,12 @@ void FrameDumper::FrameDumpThreadFunc()
     {
       std::lock_guard<std::mutex> lk(m_screenshot_lock);
 
-      if (DumpFrameToPNG(frame, m_screenshot_name))
+      const bool saved = DumpFrameToPNG(frame, m_screenshot_name);
+      if (m_screenshot_callback)
+        m_screenshot_callback(saved);
+      else if (saved)
         OSD::AddMessage("Screenshot saved to " + m_screenshot_name);
+      m_screenshot_callback = {};
 
       // Reset settings
       m_screenshot_name.clear();
@@ -338,11 +342,15 @@ void FrameDumper::DumpFrameToImage(const FrameData& frame)
   m_frame_dump_image_counter++;
 }
 
-void FrameDumper::SaveScreenshot(std::string filename)
+bool FrameDumper::SaveScreenshot(std::string filename, std::function<void(bool)> completed)
 {
   std::lock_guard<std::mutex> lk(m_screenshot_lock);
+  if (!m_screenshot_name.empty())
+    return false;
   m_screenshot_name = std::move(filename);
+  m_screenshot_callback = std::move(completed);
   m_screenshot_request.Set();
+  return true;
 }
 
 bool FrameDumper::IsFrameDumping() const

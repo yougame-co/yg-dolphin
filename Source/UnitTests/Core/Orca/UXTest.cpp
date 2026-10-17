@@ -27,6 +27,8 @@
 
 #include <fmt/format.h>
 #include "Common/FileUtil.h"
+#include "Common/Image.h"
+#include "Common/IOFile.h"
 #include "Common/ScopeGuard.h"
 #include <gtest/gtest.h>
 #include <imgui.h>
@@ -4520,4 +4522,84 @@ TEST(OrcaUXNameTags, SelectedSmashControlsSurviveAStaleAccountTiltProfile)
   host.recording = true;
   ApplyNameTags(host, {{1, "friend", true, Profile(1, tilt)}});
   EXPECT_TRUE(host.written.empty());
+}
+
+TEST(OrcaUXYgOrb, HostMenuUsesTheCornerControllerNavigation)
+{
+  using namespace Orca::UX::YgOrb;
+  HostMenu menu;
+  EXPECT_FALSE(menu.Pad(PAD_BUTTON_A, false));
+  EXPECT_FALSE(menu.At().open);
+  EXPECT_FALSE(menu.Pad(PAD_BUTTON_UP | PAD_BUTTON_START, true));
+  ASSERT_TRUE(menu.At().open);
+  EXPECT_EQ(menu.At().selected, 0);  // Feedback is reachable first.
+  EXPECT_FALSE(menu.Pad(0, false));
+  EXPECT_EQ(menu.Pad(PAD_BUTTON_A, false), HostAction::Feedback);
+  EXPECT_FALSE(menu.At().open);
+  menu.Toggle();
+  menu.Pad(0, false);
+  menu.Pad(PAD_BUTTON_DOWN, false);
+  EXPECT_EQ(menu.At().selected, 1);
+  menu.Pad(PAD_BUTTON_DOWN, false);  // A hold never advances twice.
+  EXPECT_EQ(menu.At().selected, 1);
+  menu.Pad(0, false);
+  EXPECT_EQ(menu.Pad(PAD_BUTTON_A, false), HostAction::VolumeUp);
+  menu.Toggle();
+  menu.Pad(PAD_BUTTON_B, false);
+  EXPECT_FALSE(menu.At().open);
+  menu.Toggle();
+  menu.Move(-1, false);
+  EXPECT_EQ(menu.Move(0, true), HostAction::Controls);
+  EXPECT_EQ(HostLine(HostAction::VolumeUp), "orca host volume-up");
+  EXPECT_EQ(HostLine(HostAction::VolumeDown), "orca host volume-down");
+  EXPECT_EQ(HostLine(HostAction::Mute), "orca host mute");
+  EXPECT_EQ(HostLine(HostAction::ExitFullscreen), "orca host exit-fullscreen");
+  EXPECT_EQ(HostLine(HostAction::Leave), "orca host leave");
+}
+
+TEST(OrcaUXYgOrb, FeedbackWaitsForCompletionAndThenFiveSeconds)
+{
+  using namespace Orca::UX::YgOrb;
+  HostMenu menu;
+  ASSERT_TRUE(menu.FeedbackDue(0));
+  EXPECT_FALSE(menu.FeedbackDue(100000));  // Still encoding.
+  menu.FeedbackFinished(100000);
+  EXPECT_FALSE(menu.FeedbackDue(104999));
+  EXPECT_TRUE(menu.FeedbackDue(105000));
+  menu.FeedbackFinished(105001);
+  EXPECT_FALSE(menu.FeedbackDue(110000));
+  for (int n = 0; n < 10; ++n)
+    EXPECT_TRUE(menu.HostDue(0));
+  EXPECT_FALSE(menu.HostDue(999));
+  EXPECT_TRUE(menu.HostDue(1000));
+}
+
+TEST(OrcaUXYgOrb, FeedbackPublishesACompletePngBeforeReturningItsLine)
+{
+  using namespace Orca::UX::YgOrb;
+  const std::string dir = File::CreateTempDir();
+  ASSERT_FALSE(dir.empty());
+  Common::ScopeGuard cleanup([&] { File::DeleteDirRecursively(dir); });
+  const std::string directory = dir + "/", name = "feedback-test.png";
+  const std::string final = directory + name, temp = final + ".tmp";
+  const std::array<u8, 4> pixel{255, 64, 32, 255};
+  ASSERT_TRUE(Common::ConvertRGBAToRGBAndSavePNG(temp, pixel.data(), 1, 1, 4, 6));
+  EXPECT_FALSE(File::Exists(final));
+  EXPECT_EQ(PublishFeedback(directory, name, true), "orca feedback feedback-test.png");
+  EXPECT_FALSE(File::Exists(temp));
+  File::IOFile png(final, "rb");
+  std::array<u8, 8> signature{};
+  ASSERT_TRUE(png.ReadBytes(signature.data(), signature.size()));
+  EXPECT_EQ(signature, (std::array<u8, 8>{137, 80, 78, 71, 13, 10, 26, 10}));
+  EXPECT_GT(png.GetSize(), signature.size());
+  ASSERT_TRUE(png.Close());
+  ASSERT_TRUE(File::Delete(final));
+  ASSERT_TRUE(Common::ConvertRGBAToRGBAndSavePNG(temp, pixel.data(), 1, 1, 4, 6));
+  EXPECT_FALSE(PublishFeedback(directory, name, false));
+  EXPECT_FALSE(File::Exists(temp));
+  EXPECT_FALSE(File::Exists(final));
+  EXPECT_FALSE(PublishFeedback(directory, name, true));  // Missing capture never emits a line.
+  for (const std::string& invalid : std::array<std::string, 5>{
+           "../frame.png", "dir/frame.png", "a b.png", ".png", std::string(65, 'a') + ".png"})
+    EXPECT_FALSE(PublishFeedback(directory, invalid, true));
 }

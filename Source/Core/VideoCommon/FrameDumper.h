@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include <functional>
+
 #include "Common/CommonTypes.h"
 #include "Common/Event.h"
 #include "Common/Flag.h"
@@ -30,7 +32,8 @@ public:
                         const MathUtil::Rectangle<int>& src_rect,
                         const MathUtil::Rectangle<int>& target_rect, u64 ticks, int frame_number);
 
-  void SaveScreenshot(std::string filename);
+  // Completion runs after the PNG is closed, on the dump thread. Busy requests are rejected.
+  bool SaveScreenshot(std::string filename, std::function<void(bool)> completed = {});
 
   bool IsFrameDumping() const;
   int GetRequiredResolutionLeastCommonMultiple() const;
@@ -98,6 +101,7 @@ private:
   Common::Event m_screenshot_completed;
   std::mutex m_screenshot_lock;
   std::string m_screenshot_name;
+  std::function<void(bool)> m_screenshot_callback;
 
   Common::EventHook m_frame_end_handle;
 };

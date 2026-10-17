@@ -13,6 +13,8 @@
 #include <utility>
 #include <vector>
 
+#include "Common/CommonTypes.h"
+
 // The YouGame button and its notice lines, drawn by Orca over a full-screen game in place of the
 // app's own button, which Orca's window covers. The app drives it over stdin:
 //   orb <x> <y> <size> <lit> <away> <badge>
@@ -184,6 +186,73 @@ private:
   double m_listen_at = 0;  // when the mic opened: the pulse runs on through the live words
   int m_view_width = 0;
 };
+
+// Host controls never write a pad or guest memory. Up + Start opens this menu using the
+// existing corner shortcut; D-pad moves, A selects and B closes. F8 requests feedback.
+enum class HostAction
+{
+  Feedback,
+  VolumeUp,
+  VolumeDown,
+  Mute,
+  ExitFullscreen,
+  Leave,
+  Controls,
+};
+inline constexpr int HOST_ROWS = 7;
+std::string_view HostLabel(HostAction action);
+std::string_view HostLine(HostAction action);
+
+class HostMenu
+{
+public:
+  struct View
+  {
+    bool open = false;
+    int selected = 0;
+  };
+  void Toggle();
+  void Close();
+  View At() const;
+  std::optional<HostAction> Pad(u16 buttons, bool toggle);
+  std::optional<HostAction> Move(int direction, bool select);
+  bool FeedbackDue(double now_ms);
+  void FeedbackFinished(double now_ms);
+  bool HostDue(double now_ms);
+
+private:
+  mutable std::mutex m_lock;
+  View m_view;
+  u16 m_buttons = 0;
+  double m_feedback_at = -5000;
+  bool m_feedback_pending = false;
+  std::deque<double> m_host_actions;
+};
+
+bool HostEnabled();
+HostMenu& Menu();
+// The app's placement, or a visible default while the bridge is up before its first orb line.
+Model::View HostView(double now_ms);
+// View pixels, matching the platform's input coordinates. Includes the feedback button and menu.
+bool HitControls(float x, float y);
+bool ClickControls(float x, float y);
+void ToggleHostMenu();
+enum class HostKey
+{
+  Feedback,
+  Menu,
+  Previous,
+  Next,
+  Select,
+  Close,
+};
+bool HandleHostKey(HostKey key);
+void NavigateHostPad(u16 buttons, bool toggle);
+void ActivateHost(HostAction action);
+// Publish a completed capture, then return its control line. Failure leaves no published file.
+// The temporary file is <directory>/<name>.tmp and the final name is always bare.
+std::optional<std::string> PublishFeedback(const std::string& directory, std::string_view name,
+                                          bool saved);
 
 // The process-wide button. The stdin thread updates it and the video thread draws it. NowMs() is
 // steady time in ms.

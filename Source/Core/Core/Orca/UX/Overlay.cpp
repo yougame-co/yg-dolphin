@@ -1014,7 +1014,7 @@ void DrawScene()
   }
   // Load the chat font before any chat needs it.
   Yg::Warm();
-  const YgOrb::Model::View yg = YgOrb::Current().At(now);
+  const YgOrb::Model::View yg = YgOrb::HostView(now);
   // Dolphin's OSD messages are drawn top left before this. While the YouGame button shows they
   // move below it, from the next frame.
   if (!yg.on)
@@ -1217,6 +1217,7 @@ void DrawScene()
     SetEnd::Draw(dl, unit, vis.x, vis.y, vis_size.x, vis_size.y, s.set_end);
   // The YouGame button goes on top, where the app's own button is.
   YgOrb::DrawButton(dl, yg);
+  YgOrb::DrawHostControls(dl, yg);
 }
 
 // The dim (SetDim) over the whole display, last on the foreground list so it covers everything.

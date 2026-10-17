@@ -391,6 +391,27 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
   break;
 
   case WM_KEYDOWN:
+    if (!(lParam & (1 << 30)))
+    {
+      namespace Orb = Orca::UX::YgOrb;
+      std::optional<Orb::HostKey> key;
+      switch (wParam)
+      {
+      case VK_F8: key = Orb::HostKey::Feedback; break;
+      case VK_UP:
+      case VK_LEFT: key = Orb::HostKey::Previous; break;
+      case VK_DOWN:
+      case VK_RIGHT: key = Orb::HostKey::Next; break;
+      case VK_RETURN: key = Orb::HostKey::Select; break;
+      case VK_ESCAPE: key = Orb::HostKey::Close; break;
+      case VK_TAB:
+        if (GetKeyState(VK_SHIFT) & 0x8000)
+          key = Orb::HostKey::Menu;
+        break;
+      }
+      if (key && Orb::HandleHostKey(*key))
+        return 0;
+    }
     if (platform->IsEmbedded())
     {
       // Ignore auto-repeat, so a held F11 doesn't toggle full screen over and over.
@@ -448,6 +469,10 @@ LRESULT PlatformWin32::WndProc(const HWND hwnd, const UINT msg, const WPARAM wPa
   case WM_LBUTTONDOWN:
   case WM_RBUTTONDOWN:
   case WM_MBUTTONDOWN:
+    if (msg == WM_LBUTTONDOWN &&
+        Orca::UX::YgOrb::ClickControls(static_cast<float>(GET_X_LPARAM(lParam)),
+                                      static_cast<float>(GET_Y_LPARAM(lParam))))
+      return 0;
     if (platform && platform->IsEmbedded())
     {
       const bool orb = msg == WM_LBUTTONDOWN &&

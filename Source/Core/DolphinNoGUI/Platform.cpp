@@ -574,6 +574,14 @@ void Platform::ProcessEmbedCommands()
       else
         Embed::Out("unsupported chat");
     }
+    else if (cmd == "feedback")
+    {
+      Orca::UX::YgOrb::ActivateHost(Orca::UX::YgOrb::HostAction::Feedback);
+    }
+    else if (cmd == "host-menu")
+    {
+      Orca::UX::YgOrb::ToggleHostMenu();
+    }
     else if (cmd == "orb")
     {
       // Draws the YouGame button where the page's own sits under Orca (UX/YgOrb.h).

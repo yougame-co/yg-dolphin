@@ -156,6 +156,7 @@ void SetErrorListener(void (*listener)(std::string_view code, std::string_view s
 // The app asked Orca to stop ("quit", or its stdin closed). A game stopped before its first frame
 // was not a boot that failed: Finish() then reports no boot error.
 void Stopping();
+bool IsStopping();
 // At exit: reports a boot error if the game never reached a frame, no reason was given and the app
 // didn't stop it, then "ended". Returns ExitCode().
 int Finish();

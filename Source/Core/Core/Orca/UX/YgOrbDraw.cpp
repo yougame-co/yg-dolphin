@@ -107,6 +107,32 @@ void DrawButton(ImDrawList* dl, const Model::View& view)
   }
 }
 
+void DrawHostControls(ImDrawList* dl, const Model::View& view)
+{
+  if (!HostEnabled())
+    return;
+  const Place p = ScaledPlace(view.place, view.view_width, ImGui::GetIO().DisplaySize.x);
+  const float k = p.size / 40;
+  const ImVec2 min(p.x + 48 * k, p.y), max(p.x + 88 * k, p.y + p.size);
+  dl->AddRectFilled(min, max, Rgba(30, 30, 30, 0.9f), 8 * k);
+  Yg::Text(dl, ImVec2(min.x + 10 * k, min.y + 7 * k), 24 * k, IM_COL32_WHITE, "Δ");
+  const HostMenu::View menu = Menu().At();
+  if (!menu.open)
+    return;
+  const float top = p.y + 48 * k;
+  dl->AddRectFilled(ImVec2(p.x, top), ImVec2(p.x + 240 * k, top + HOST_ROWS * 32 * k),
+                    Rgba(20, 20, 20, 0.97f), 8 * k);
+  for (int row = 0; row < HOST_ROWS; ++row)
+  {
+    const float y = top + row * 32 * k;
+    if (row == menu.selected)
+      dl->AddRectFilled(ImVec2(p.x, y), ImVec2(p.x + 240 * k, y + 32 * k),
+                        Rgba(90, 90, 90, 0.8f), 6 * k);
+    Yg::Text(dl, ImVec2(p.x + 12 * k, y + 7 * k), 16 * k, IM_COL32_WHITE,
+             HostLabel(static_cast<HostAction>(row)));
+  }
+}
+
 namespace
 {
 // Notices as last copied out by Model::Lines. Video thread only.
@@ -165,7 +191,7 @@ Pill PillFor(float k)
 {
   Pill m;
   m.k = k;
-  m.pad_left = 54 * k;
+  m.pad_left = (HostEnabled() ? 102 : 54) * k;
   m.pad_right = 12 * k;
   m.pad_y = 7 * k;
   m.gap = 6 * k;
