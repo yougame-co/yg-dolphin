@@ -65,6 +65,7 @@ struct DirectStats
   int rtt_ms = -1;
   // Candidate types of the selected pair, local/remote ("host/host"; "" until selected).
   std::string pair;
+  std::string test_local_address;
   int generation = 0;
   u64 sent = 0;
   u64 received = 0;

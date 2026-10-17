@@ -2080,6 +2080,13 @@ struct DirectLink::Impl
       if (peer.link)
       {
         const bool selected = peer.link->Selected();
+        if (selected && options.loopback)
+        {
+          char local[JUICE_MAX_ADDRESS_STRING_LEN] = {};
+          if (juice_get_selected_addresses(peer.link->agent, local, sizeof(local), nullptr, 0) ==
+              JUICE_ERR_SUCCESS)
+            s.test_local_address = local;
+        }
         std::lock_guard lock(peer.link->m);
         const bool up = selected && peer.link->last_rx && now - *peer.link->last_rx < UP_WINDOW;
         s.kind = !up ? LinkKind::Relay : peer.turn ? LinkKind::Turn : LinkKind::Direct;

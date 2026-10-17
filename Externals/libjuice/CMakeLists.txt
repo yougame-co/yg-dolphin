@@ -3,6 +3,10 @@
 # library from its sources, without its server, tests, shared library or install rules.
 # A networking fix for Windows, targeting upstream b89c792e3612faf2f12cf35bcc56857313a06be3.
 set(LIBJUICE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/libjuice)
+option(ORCA_JUICE_UNPATCHED "Test-only: disable a networking fix for Windows" OFF)
+if(ORCA_JUICE_UNPATCHED AND NOT ENABLE_TESTS)
+  message(FATAL_ERROR "ORCA_JUICE_UNPATCHED requires ENABLE_TESTS")
+endif()
 
 function(juice_replace_once source_var anchor replacement)
   string(FIND "${${source_var}}" "${anchor}" first)
@@ -25,7 +29,7 @@ foreach(JUICE_PATCH_FILE conn_poll conn_thread conn_mux)
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${upstream}")
   file(READ "${upstream}" source)
   string(REPLACE "\r\n" "\n" source "${source}")
-  if(JUICE_PATCH_FILE STREQUAL "conn_poll")
+  if(NOT ORCA_JUICE_UNPATCHED AND JUICE_PATCH_FILE STREQUAL "conn_poll")
     juice_replace_once(source [=[			if ((ret = conn_poll_recv_udp(conn_impl->udp_sock, buffer, BUFFER_SIZE,
 							&src)) <= 0) {
 				break;
@@ -52,7 +56,7 @@ foreach(JUICE_PATCH_FILE conn_poll conn_thread conn_mux)
 			return -SEMSGSIZE;
 		}
 		if (sockerrno != SEAGAIN && sockerrno != SEWOULDBLOCK)]=])
-  else()
+  elseif(NOT ORCA_JUICE_UNPATCHED)
     juice_replace_once(source [=[		JLOG_ERROR("recvfrom failed, errno=%d", sockerrno);
 		return -1;]=] [=[		if (sockerrno == SEMSGSIZE) {
 			JLOG_VERBOSE("Dropping oversized datagram");

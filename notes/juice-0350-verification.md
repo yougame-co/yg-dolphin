@@ -90,3 +90,69 @@ locally in `build-juice-check/juice-0350-verification/` (untracked build artifac
 The host is macOS arm64 using AppleClang and Ninja. Windows/MSVC and Linux were not run
 on this machine; their existing socket constants and build definitions are retained.
 No version or `ORCA.md` changes, external-service calls, pushes, or releases.
+
+## juice-e2e-0350: real UDP regression
+
+- Starting output: `b63200da69 A networking fix for Windows`; `BASE-OK` from
+  `git merge-base --is-ancestor b63200da69 HEAD && echo BASE-OK`.
+- Added `OrcaDirectLink.AnOversizedDatagramLeavesTheLinkUp` next to
+  `TwoOrcasLinkAndRebuild`. Two Mesh peers first exchange payloads, then a plain
+  platform UDP socket sends three 5,000-byte datagrams and one 9,000-byte datagram
+  of zeros to peer 1 over IPv4 loopback. The destination port comes from the local
+  selected pair via `juice_get_selected_addresses`; the agent's wildcard-bound
+  socket accepts loopback on that same port. `DirectStats::test_local_address` is
+  populated only with the existing `DirectOptions::loopback` test knob enabled.
+- For two seconds the test checks both generations, peer 1's Direct state, and
+  `AllUp()`, then requires fresh payload delivery both ways and unchanged generations.
+  Mesh only collects `DirectLink::Receive()`: it has no relay payload delivery.
+- An oversized datagram is dropped, the link stays up. On macOS/Linux the receive
+  is silently truncated, so the real-socket test is expected to pass with upstream
+  libjuice too; the test comment records this platform distinction. Windows/MSVC
+  must provide the red/green result on the PC; it was not available on this Mac.
+- The optional second two-agent libjuice fixture was omitted to keep this change
+  small; the existing five poll tests remain in the full binary.
+- `ORCA_JUICE_UNPATCHED` is a test-only CMake option, default **OFF**, rejected
+  unless `ENABLE_TESTS=ON`. ON uses unchanged upstream content for all three
+  configure-time copies, including the copy used by the poll harness. Configuring
+  ON and comparing all three generated files with normalized upstream sources
+  **PASS**; restored OFF, reconfigured and rebuilt before the final full run.
+- Release / Ninja / NoGUI / tests ON / `USE_SANITIZERS=OFF`, target `tests`:
+  **PASS**, including the final build after restoring OFF.
+- `--gtest_repeat=10 --gtest_filter=OrcaDirectLink.AnOversizedDatagram*`:
+  **10 runs, 10 passed, zero failed**.
+- Full DirectLink coverage (`--gtest_filter=OrcaDirectLink.*`):
+  **16 tests, 16 passed, zero failed** (32.794 seconds).
+- Full `build-orca-tests/Binaries/Tests/tests`: **PASS, exit 0**, 2,229 tests
+  from 176 suites: **2,134 passed, 95 skipped, zero failed** (69.475 seconds).
+  Skips are the suite's conditional fixture/platform/live-service skips; no external
+  services were enabled. `git diff --check`: **PASS**. The upstream submodule and
+  `.gitmodules` remain unchanged.
+- Configured compiler commands plus `-Wall -Werror -fsyntax-only`:
+  **PASS** for `DirectLink.cpp` and `DirectLinkTest.cpp` (also covers the touched header).
+- Builds, compiler checks and test runs used the shared `flock` and `nice -n 10`,
+  with `CCACHE_DIR=/Volumes/YGWorktrees/ccache`, at most six build jobs and one
+  test process. Load was below 18 before each command; no load wait was needed.
+
+### Windows/MSVC commands (from an MSVC developer shell, with Ninja available)
+
+The executable belongs to target `tests`; `OrcaDirectLinkTest` is an object library,
+not a separate executable. With the existing dependencies present, build and run:
+
+```powershell
+cmake -S . -B build-orca-tests -G Ninja -DCMAKE_BUILD_TYPE=Release -DENABLE_NOGUI=ON -DENABLE_QT=OFF -DENABLE_TESTS=ON -DUSE_SANITIZERS=OFF -DORCA_JUICE_UNPATCHED=OFF
+cmake --build build-orca-tests --target tests --parallel 6
+.\build-orca-tests\Binaries\Tests\tests.exe --gtest_repeat=10 --gtest_filter=OrcaDirectLink.AnOversizedDatagram*
+```
+
+For the Windows red run, retain the test and select upstream sources:
+
+```powershell
+cmake -S . -B build-orca-tests -DORCA_JUICE_UNPATCHED=ON
+cmake --build build-orca-tests --target tests --parallel 6
+.\build-orca-tests\Binaries\Tests\tests.exe --gtest_filter=OrcaDirectLink.AnOversizedDatagram*
+```
+
+Expect a nonzero exit and a failed test on Windows. Restore the default with
+`cmake -S . -B build-orca-tests -DORCA_JUICE_UNPATCHED=OFF`, rebuild target `tests`,
+and rerun the ten-repeat command above: expect zero failures. Run only the new
+filter for the unpatched comparison; the existing poll harness tests expect the fix.

@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <charconv>
 #include <chrono>
 #include <cstdio>
 #include <functional>
@@ -12,6 +13,15 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+#ifdef _WIN32
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#else
+#include <arpa/inet.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#endif
 
 #include <gtest/gtest.h>
 #include <picojson.h>
@@ -347,6 +357,90 @@ TEST(OrcaDirectLink, TwoOrcasLinkAndRebuild)
     EXPECT_EQ(mesh.Stats(i, 1 - i).auth_drops, 0u);
     EXPECT_EQ(mesh.Stats(i, 1 - i).replays, 0u);
   }
+}
+
+// A networking fix for Windows: an oversized datagram is dropped, the link stays up.
+// macOS/Linux silently truncate the datagram, so this passes there with upstream libjuice too.
+TEST(OrcaDirectLink, AnOversizedDatagramLeavesTheLinkUp)
+{
+  Mesh mesh(2);
+  ASSERT_TRUE(mesh.WaitFor([&] { return mesh.AllUp(); })) << mesh.Stats(1, 0).reason;
+  mesh.At(0).link->Send("before from a");
+  mesh.At(1).link->Send("before from b");
+  ASSERT_TRUE(mesh.WaitFor([&] {
+    return Count(mesh.At(1).received, "before from a") == 1 &&
+           Count(mesh.At(0).received, "before from b") == 1;
+  }));
+  const std::array<int, 2> generations{mesh.Stats(0, 1).generation,
+                                      mesh.Stats(1, 0).generation};
+  const std::string local = mesh.Stats(1, 0).test_local_address;
+  const auto colon = local.rfind(':');
+  ASSERT_NE(colon, std::string::npos) << local;
+  unsigned short port = 0;
+  const auto parsed = std::from_chars(local.data() + colon + 1, local.data() + local.size(), port);
+  ASSERT_EQ(parsed.ec, std::errc{});
+  ASSERT_EQ(parsed.ptr, local.data() + local.size());
+  ASSERT_NE(port, 0);
+
+#ifdef _WIN32
+  WSADATA data{};
+  ASSERT_EQ(WSAStartup(MAKEWORD(2, 2), &data), 0);
+  struct UdpSocket
+  {
+    SOCKET fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    ~UdpSocket()
+    {
+      if (fd != INVALID_SOCKET)
+        closesocket(fd);
+      WSACleanup();
+    }
+  } udp;
+  ASSERT_NE(udp.fd, INVALID_SOCKET);
+#else
+  struct UdpSocket
+  {
+    int fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    ~UdpSocket()
+    {
+      if (fd >= 0)
+        close(fd);
+    }
+  } udp;
+  ASSERT_GE(udp.fd, 0);
+#endif
+  sockaddr_in destination{};
+  destination.sin_family = AF_INET;
+  destination.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  destination.sin_port = htons(port);
+  const std::array<char, 9000> junk{};
+  for (const int size : {5000, 5000, 5000, 9000})
+  {
+    ASSERT_EQ(sendto(udp.fd, junk.data(), size, 0,
+                     reinterpret_cast<const sockaddr*>(&destination), sizeof(destination)),
+              size);
+  }
+
+  const auto until = std::chrono::steady_clock::now() + 2s;
+  do
+  {
+    mesh.Pump();
+    ASSERT_EQ(mesh.Stats(0, 1).generation, generations[0]);
+    ASSERT_EQ(mesh.Stats(1, 0).generation, generations[1]);
+    ASSERT_EQ(mesh.Stats(1, 0).kind, LinkKind::Direct);
+    ASSERT_TRUE(mesh.AllUp());
+    std::this_thread::sleep_for(5ms);
+  } while (std::chrono::steady_clock::now() < until);
+
+  mesh.At(0).link->Send("after from a");
+  mesh.At(1).link->Send("after from b");
+  ASSERT_TRUE(mesh.WaitFor([&] {
+    return Count(mesh.At(1).received, "after from a") == 1 &&
+           Count(mesh.At(0).received, "after from b") == 1;
+  }));
+  EXPECT_EQ(mesh.Stats(0, 1).generation, generations[0]);
+  EXPECT_EQ(mesh.Stats(1, 0).generation, generations[1]);
+  EXPECT_EQ(mesh.Stats(0, 1).kind, LinkKind::Direct);
+  EXPECT_EQ(mesh.Stats(1, 0).kind, LinkKind::Direct);
 }
 
 // Six loopback pairs, including recipient-specific input fan-out.
