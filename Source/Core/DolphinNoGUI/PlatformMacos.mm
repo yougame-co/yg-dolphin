@@ -155,6 +155,7 @@ public:
   WindowSystemInfo GetWindowSystemInfo() const override;
 
 protected:
+  std::optional<Embed::WindowBounds> EmbedGetBounds() const override;
   void EmbedSetRect(const Embed::Rect& rect) override;
   void EmbedSetVisible(bool visible) override;
   void EmbedSetFocus(bool focus) override;
@@ -393,6 +394,18 @@ bool PlatformMacOS::InitEmbedded()
   }
   ObserveOcclusion();
   return true;
+}
+
+std::optional<Embed::WindowBounds> PlatformMacOS::EmbedGetBounds() const
+{
+  @autoreleasepool
+  {
+    if (!m_window)
+      return std::nullopt;
+    const NSRect frame = [m_window frame];
+    return Embed::WindowBounds{frame.origin.x, frame.origin.y, frame.size.width, frame.size.height,
+                               [m_window backingScaleFactor]};
+  }
 }
 
 void PlatformMacOS::EmbedSetRect(const Embed::Rect&)

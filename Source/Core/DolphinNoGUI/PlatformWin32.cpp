@@ -46,6 +46,7 @@ public:
   WindowSystemInfo GetWindowSystemInfo() const override;
 
 protected:
+  std::optional<Embed::WindowBounds> EmbedGetBounds() const override;
   void EmbedSetRect(const Embed::Rect& rect) override;
   void EmbedSetVisible(bool visible) override;
   void EmbedSetFocus(bool focus) override;
@@ -320,6 +321,17 @@ void PlatformWin32::KeepAdoptedPlaced()
             rc.top, rc.right - rc.left, rc.bottom - rc.top, r.x, r.y, r.w, r.h);
   }
   SetWindowPos(m_hwnd, HWND_TOP, r.x, r.y, r.w, r.h, SWP_NOACTIVATE);
+}
+
+std::optional<Embed::WindowBounds> PlatformWin32::EmbedGetBounds() const
+{
+  RECT rect{};
+  if (!GetWindowRect(m_hwnd, &rect))
+    return std::nullopt;
+  return Embed::WindowBounds{static_cast<double>(rect.left), static_cast<double>(rect.top),
+                             static_cast<double>(rect.right - rect.left),
+                             static_cast<double>(rect.bottom - rect.top),
+                             GetDpiForWindow(m_hwnd) / 96.0};
 }
 
 void PlatformWin32::EmbedSetRect(const Embed::Rect& r)

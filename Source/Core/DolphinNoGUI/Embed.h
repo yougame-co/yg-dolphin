@@ -24,6 +24,15 @@ struct Rect
   int h = 1;
 };
 
+// Actual bounds in screen coordinates (macOS points; Windows/X11 pixels).
+struct WindowBounds
+{
+  double x, y, w, h;
+  double scale;
+};
+bool TraceEnabled();
+void Trace(const Rect& requested, const WindowBounds& actual);
+
 struct Options
 {
   bool enabled = false;

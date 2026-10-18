@@ -207,6 +207,14 @@ void Platform::ApplyEmbedView()
       VideoCommon::LayoutHint{r.w, r.h, v.x - r.x, v.y - r.y, v.w, v.h});
 }
 
+void Platform::TraceEmbedRect(const Embed::Rect& requested) const
+{
+  if (!m_embed.enabled || !Embed::TraceEnabled())
+    return;
+  if (const auto actual = EmbedGetBounds())
+    Embed::Trace(requested, *actual);
+}
+
 void Platform::ProcessEmbedCommands()
 {
   if (!m_embed.enabled && !m_test_commands)
@@ -282,6 +290,7 @@ void Platform::ProcessEmbedCommands()
           // window system resizes it.
           ApplyEmbedView();
           EmbedSetRect(*rect);
+          TraceEmbedRect(*rect);
           // The YouGame button is placed in the page's device pixels (UX/YgOrb.h).
           Orca::UX::YgOrb::SetViewSize(rect->w, rect->h);
         }
@@ -307,12 +316,14 @@ void Platform::ProcessEmbedCommands()
       {
         m_embed_view.reset();
         ApplyEmbedView();
+        TraceEmbedRect(m_embed.rect);
       }
       else if (const std::optional<Embed::Rect> view = Embed::ParseRect(rest);
                view && !Embed::TooSmall(*view))
       {
         m_embed_view = *view;
         ApplyEmbedView();
+        TraceEmbedRect(*view);
       }
       else
       {

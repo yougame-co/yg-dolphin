@@ -85,6 +85,9 @@ protected:
   void WatchRoomWhilePaused();
   // Per-platform handlers for the window commands. The rect is relative to the parent; its units
   // depend on the OS (see ORCA.md, "Embedding").
+  // Queried only with ORCA_EMBED_TRACE=1; each backend reads only our own window.
+  virtual std::optional<Embed::WindowBounds> EmbedGetBounds() const { return std::nullopt; }
+  void TraceEmbedRect(const Embed::Rect& requested) const;
   virtual void EmbedSetRect(const Embed::Rect& rect) {}
   virtual void EmbedSetVisible(bool visible) {}
   virtual void EmbedSetFocus(bool focus) {}

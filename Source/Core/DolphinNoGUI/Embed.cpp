@@ -4,6 +4,7 @@
 #include "DolphinNoGUI/Embed.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -20,6 +21,7 @@
 #include <unistd.h>
 #endif
 
+#include "Common/Logging/Log.h"
 #include "Core/Orca/Bridge.h"
 
 namespace Embed
@@ -79,6 +81,22 @@ std::optional<Rect> ParseRect(const std::string& text)
   if (r.h < 1)
     r.h = 1;
   return r;
+}
+
+bool TraceEnabled()
+{
+  const char* const value = std::getenv("ORCA_EMBED_TRACE");
+  return value && std::strcmp(value, "1") == 0;
+}
+
+void Trace(const Rect& requested, const WindowBounds& actual)
+{
+  const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                      std::chrono::steady_clock::now().time_since_epoch())
+                      .count();
+  NOTICE_LOG_FMT(CONSOLE, "embed-trace t={} req={},{},{},{} real={},{},{},{} scale={}", ms,
+                 requested.x, requested.y, requested.w, requested.h, actual.x, actual.y, actual.w,
+                 actual.h, actual.scale);
 }
 
 bool TooSmall(const Rect& rect)

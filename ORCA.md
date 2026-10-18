@@ -2442,6 +2442,13 @@ relative to the parent X window (the app adds its menu bar's height to Y) and Or
 child, so it moves, clips and hides with it as on Windows. The app sends `rect` only when the box
 moves inside the window.
 
+`ORCA_EMBED_TRACE=1` is a diagnostic switch: each applied `rect` or `view` command logs
+`embed-trace t=<steady-clock ms> req=<x,y,w,h> real=<x,y,w,h> scale=<s>` to the normal log.
+`req` is the received rectangle (`view off` uses the current window rectangle); `real` is our own
+window's actual screen bounds immediately afterward: macOS screen points (Cocoa origin), Windows
+physical pixels, X11 pixels. `scale` is the window's backing scale (1 on X11). Small rectangles
+that only hide the window are not applied resizes. Unset, the switch adds no queries or logs.
+
 ### stdin
 
 | Command | Effect |

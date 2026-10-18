@@ -75,6 +75,7 @@ public:
   WindowSystemInfo GetWindowSystemInfo() const override;
 
 protected:
+  std::optional<Embed::WindowBounds> EmbedGetBounds() const override;
   void EmbedSetRect(const Embed::Rect& rect) override;
   void EmbedSetVisible(bool visible) override;
   void EmbedSetFocus(bool focus) override;
@@ -347,6 +348,20 @@ void PlatformX11::UpdateWindowPosition()
 
 // The window commands act only when embedded: ORCA_TEST_COMMANDS alone sends them too, and the
 // window then is Dolphin's own top-level one, the window manager's to place.
+std::optional<Embed::WindowBounds> PlatformX11::EmbedGetBounds() const
+{
+  XWindowAttributes attributes{};
+  if (!XGetWindowAttributes(m_display, m_window, &attributes))
+    return std::nullopt;
+  int x = 0, y = 0;
+  Window child{};
+  if (!XTranslateCoordinates(m_display, m_window, attributes.root, 0, 0, &x, &y, &child))
+    return std::nullopt;
+  return Embed::WindowBounds{static_cast<double>(x), static_cast<double>(y),
+                             static_cast<double>(attributes.width),
+                             static_cast<double>(attributes.height), 1.0};
+}
+
 void PlatformX11::EmbedSetRect(const Embed::Rect& r)
 {
   if (!IsEmbedded())
