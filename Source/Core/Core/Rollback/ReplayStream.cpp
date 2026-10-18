@@ -30,6 +30,7 @@
 #include "Common/WebSocket.h"
 #include "Core/HW/Memmap.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/SafeJson.h"
 #include "Core/Orca/Session/Online.h"
 #include "Core/Orca/Session/YouGameRoom.h"
 #include "Core/Orca/Status.h"
@@ -698,7 +699,7 @@ static std::string WatchTarget(const std::string& source, std::string* error)
                 {{"Content-Type", "application/json"}}, Common::HttpRequest::AllowedReturnCodes::All);
   picojson::value json;
   if (!response ||
-      !picojson::parse(json, std::string(response->begin(), response->end())).empty() ||
+      !Orca::Json::ParseJson(std::string(response->begin(), response->end()), &json) ||
       !json.is<picojson::object>())
   {
     *error = fmt::format("no watch ticket (HTTP {})", http.GetLastResponseCode());
@@ -832,7 +833,7 @@ void Player::WatchThread(std::string source)
         continue;
       }
       picojson::value value;
-      if (!picojson::parse(value, *text).empty() || !value.is<picojson::object>())
+      if (!Orca::Json::ParseJson(*text, &value) || !value.is<picojson::object>())
         continue;
       const picojson::object& message = value.get<picojson::object>();
       const auto type = message.find("t");

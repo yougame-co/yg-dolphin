@@ -679,6 +679,20 @@ TEST(OrcaMod, RefusesOversizedOrDeepJson)
   EXPECT_NE(error.find("over"), std::string::npos) << error;
 }
 
+TEST(OrcaMod, RefusesHugeJsonNumbersAndTrailingValues)
+{
+  std::string error;
+  for (const auto& number : {std::string("1e999"), std::string(400, '9')})
+  {
+    EXPECT_FALSE(Orca::Mod::ParseManifest(R"({"format":)" + number + "}", &error));
+    EXPECT_FALSE(error.empty());
+    EXPECT_FALSE(Orca::Mod::ParseTree(R"({"files":[{"bytes":)" + number + "}]}", &error));
+    EXPECT_FALSE(error.empty());
+  }
+  EXPECT_FALSE(Orca::Mod::ParseManifest(std::string(BRAWL_MOD) + " {}", &error));
+  EXPECT_NE(error.find("after the JSON value"), std::string::npos);
+}
+
 // The card is built from the listed files only, and the same files and size give the same bytes.
 TEST(OrcaMod, SdImageIsDeterministic)
 {

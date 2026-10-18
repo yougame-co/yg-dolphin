@@ -30,6 +30,7 @@
 #include "Common/WebSocket.h"
 #include "Core/Orca/Bridge.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/SafeJson.h"
 #include "Core/Orca/Session/DirectLink.h"
 #include "Core/Orca/Session/Keyframe.h"
 #include "Core/Orca/Session/Online.h"
@@ -320,129 +321,6 @@ std::string CleanLabel(const std::string& raw, size_t max)
       out += c;
   }
   return out;
-}
-
-// picojson has no nesting limit (deep arrays overflow the I/O thread's stack) and aborts on numbers
-// that overflow a double. Nothing YouGame sends nests deeply, uses an exponent or has over 17
-// digits in a row, so such values become null before parsing: a message carrying one (a value
-// another player put in the room, echoed by the server) is still read, without that value.
-constexpr int MAX_JSON_DEPTH = 16;
-constexpr int MAX_JSON_DIGITS = 17;
-
-// The index just past the string starting at `at` (a quote), or npos if it never ends.
-size_t SkipJsonString(std::string_view text, size_t at)
-{
-  for (size_t i = at + 1; i < text.size(); ++i)
-  {
-    if (text[i] == '\\')
-      ++i;
-    else if (text[i] == '"')
-      return i + 1;
-  }
-  return std::string_view::npos;
-}
-
-// The index of the bracket closing the array or object opened at `at`, or npos.
-size_t MatchingClose(std::string_view text, size_t at)
-{
-  int depth = 0;
-  for (size_t i = at; i < text.size();)
-  {
-    const char c = text[i];
-    if (c == '"')
-    {
-      i = SkipJsonString(text, i);
-      if (i == std::string_view::npos)
-        return i;
-      continue;
-    }
-    if (c == '[' || c == '{')
-      ++depth;
-    else if ((c == ']' || c == '}') && --depth == 0)
-      return i;
-    ++i;
-  }
-  return std::string_view::npos;
-}
-
-bool SafeNumber(std::string_view number)
-{
-  int digits = 0;
-  for (const char c : number)
-  {
-    if (c == 'e' || c == 'E')
-      return false;
-    digits = c >= '0' && c <= '9' ? digits + 1 : 0;
-    if (digits > MAX_JSON_DIGITS)
-      return false;
-  }
-  return true;
-}
-
-// `text` with every value picojson can't take safely (nested past MAX_JSON_DEPTH, a number with an
-// exponent or over MAX_JSON_DIGITS digits in a row) replaced by null. Nullopt if a string or
-// bracket never closes (picojson would refuse it anyway).
-std::optional<std::string> SanitizeJson(std::string_view text)
-{
-  std::string out;
-  out.reserve(text.size());
-  int depth = 0;
-  for (size_t i = 0; i < text.size();)
-  {
-    const char c = text[i];
-    if (c == '"')
-    {
-      const size_t end = SkipJsonString(text, i);
-      if (end == std::string_view::npos)
-        return std::nullopt;
-      out.append(text.substr(i, end - i));
-      i = end;
-      continue;
-    }
-    if (c == '[' || c == '{')
-    {
-      if (depth >= MAX_JSON_DEPTH)
-      {
-        const size_t end = MatchingClose(text, i);
-        if (end == std::string_view::npos)
-          return std::nullopt;
-        out += "null";
-        i = end + 1;
-        continue;
-      }
-      ++depth;
-    }
-    else if (c == ']' || c == '}')
-    {
-      --depth;
-    }
-    else if (c == '-' || (c >= '0' && c <= '9'))
-    {
-      size_t end = i + 1;
-      while (end < text.size() &&
-             ((text[end] >= '0' && text[end] <= '9') || text[end] == '.' || text[end] == 'e' ||
-              text[end] == 'E' || text[end] == '+' || text[end] == '-'))
-      {
-        ++end;
-      }
-      const std::string_view number = text.substr(i, end - i);
-      if (SafeNumber(number))
-        out.append(number);
-      else
-        out += "null";
-      i = end;
-      continue;
-    }
-    out += c;
-    ++i;
-  }
-  return out;
-}
-
-bool ParseJson(const std::string& text, picojson::value* value)
-{
-  const std::optional<std::string> safe = SanitizeJson(text);
-  return safe && picojson::parse(*value, *safe).empty();
 }
 
 picojson::object PacketToJson(const Packet& packet)
@@ -854,7 +732,7 @@ std::string EncodePacket(const Packet& packet)
 bool DecodePacket(const std::string& json, Packet* packet)
 {
   picojson::value value;
-  if (!ParseJson(json, &value) || !value.is<picojson::object>())
+  if (!Json::ParseJson(json, &value) || !value.is<picojson::object>())
     return false;
   return PacketFromJson(value.get<picojson::object>(), packet);
 }
@@ -1017,7 +895,7 @@ std::string GameStartMessage(const std::string& queue, const std::string& match,
 
 bool ParseRoomJson(const std::string& text, picojson::value* value)
 {
-  return ParseJson(text, value);
+  return Json::ParseJson(text, value);
 }
 
 bool DropKeepsRoom(const std::string& queue, bool match_live, bool set_over)
@@ -1647,7 +1525,7 @@ struct YouGameRoom::Impl
       {
         json = picojson::value(std::move(*answer));
       }
-      else if (!ParseJson(std::string(response->begin(), response->end()), &json) ||
+      else if (!Json::ParseJson(std::string(response->begin(), response->end()), &json) ||
                !json.is<picojson::object>())
       {
         End(fmt::format("YouGame sent an unreadable reply (HTTP {})", http.GetLastResponseCode()));
@@ -1851,7 +1729,7 @@ struct YouGameRoom::Impl
       *error = "no ticket from the app";
       return false;
     }
-    else if (!response || !ParseJson(std::string(response->begin(), response->end()), &json) ||
+    else if (!response || !Json::ParseJson(std::string(response->begin(), response->end()), &json) ||
              !json.is<picojson::object>())
     {
       *error = fmt::format("no ticket from YouGame (HTTP {})", http.GetLastResponseCode());
@@ -2874,7 +2752,7 @@ struct YouGameRoom::Impl
     if (stdio)
     {
       picojson::value request;
-      if (!ParseJson(body, &request) || !request.is<picojson::object>())
+      if (!Json::ParseJson(body, &request) || !request.is<picojson::object>())
         return false;
       const auto reply =
           Orca::Bridge::Request(std::move(request.get<picojson::object>()), timeout, cancelled);
@@ -2886,7 +2764,7 @@ struct YouGameRoom::Impl
         Common::HttpRequest::AllowedReturnCodes::All);
     picojson::value reply;
     return response && http.GetLastResponseCode() == 200 &&
-           ParseJson(std::string(response->begin(), response->end()), &reply) &&
+           Json::ParseJson(std::string(response->begin(), response->end()), &reply) &&
            reply.is<picojson::object>() && reply.get("ok").evaluate_as_boolean();
   }
 
@@ -2932,7 +2810,7 @@ struct YouGameRoom::Impl
   void OnPageEvent(const std::string& line)
   {
     picojson::value value;
-    if (!ParseJson(line, &value) || !value.is<picojson::object>())
+    if (!Json::ParseJson(line, &value) || !value.is<picojson::object>())
       return;
     OnPageEvent(value.get<picojson::object>());
   }
@@ -3476,7 +3354,8 @@ struct YouGameRoom::Impl
       st.clear();
       picojson::value sent;
       if (const auto it = sent_detail.find(id);
-          it != sent_detail.end() && ParseJson(it->second, &sent) && sent.is<picojson::object>())
+          it != sent_detail.end() && Json::ParseJson(it->second, &sent) &&
+          sent.is<picojson::object>())
       {
         have = from(sent.get<picojson::object>());
       }
@@ -4308,7 +4187,7 @@ struct YouGameRoom::Impl
   void OnMessage(const std::string& text)
   {
     picojson::value value;
-    if (!ParseJson(text, &value) || !value.is<picojson::object>())
+    if (!Json::ParseJson(text, &value) || !value.is<picojson::object>())
     {
       WARN_LOG_FMT(NETPLAY, "Orca room: ignored an unreadable message ({} bytes)", text.size());
       return;

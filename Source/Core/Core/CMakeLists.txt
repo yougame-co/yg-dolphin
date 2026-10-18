@@ -563,6 +563,8 @@ add_library(core
   Orca/Policy/Queue.h
   Orca/Profile.cpp
   Orca/Profile.h
+  Orca/SafeJson.cpp
+  Orca/SafeJson.h
   Orca/Sandbox.cpp
   Orca/Sandbox.h
   Orca/Status.cpp
