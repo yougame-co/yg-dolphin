@@ -172,7 +172,7 @@ void Platform::NotifyFirstFrame(int width, int height, double fps)
 
 void Platform::EmbedTeardown()
 {
-  if (!m_embed.enabled)
+  if (!IsEmbedded())
     return;
   EmbedSetFocus(false);
   EmbedSetVisible(false);
@@ -181,6 +181,7 @@ void Platform::EmbedTeardown()
 void Platform::SetEmbed(const Embed::Options& options)
 {
   m_embed = options;
+  m_embed_result = Embed::Result(options.enabled && !options.adopted);
   m_embed_rect_known = options.enabled;
   // If --rect was too small, the platform creates the view hidden (Embed.h).
   m_embed_too_small = options.too_small;
@@ -207,9 +208,20 @@ void Platform::ApplyEmbedView()
       VideoCommon::LayoutHint{r.w, r.h, v.x - r.x, v.y - r.y, v.w, v.h});
 }
 
+void Platform::EmbedSucceeded()
+{
+  m_embed_result.Decide();
+}
+
+void Platform::EmbedFallback(std::string_view reason)
+{
+  m_embed_result.Decide(reason);
+  m_embed_fallback = true;
+}
+
 void Platform::TraceEmbedRect(const Embed::Rect& requested) const
 {
-  if (!m_embed.enabled || !Embed::TraceEnabled())
+  if (!IsEmbedded() || !Embed::TraceEnabled())
     return;
   if (const auto actual = EmbedGetBounds())
     Embed::Trace(requested, *actual);
@@ -237,11 +249,15 @@ void Platform::ProcessEmbedCommands()
       // Prints nothing outside a session.
       Orca::Status::PrintCaps();
       Embed::Out(*ready);
+      if (const auto result = m_embed_result.TakeLine(true))
+        Embed::Out(*result);
       // The activity lines may start now (Orca/Activity.h, HoldUntilReady), and so may the speed
       // lines (Orca/Perf.h).
       Orca::Activity::Ready();
       Orca::Perf::Ready();
     }
+    if (const auto result = m_embed_result.TakeLine(m_ready_sent))
+      Embed::Out(*result);
     // Test commands: the caps once the boot chose its profile and they are settled.
     if (m_test_caps_pending && settled)
     {
@@ -278,7 +294,7 @@ void Platform::ProcessEmbedCommands()
     {
       std::string rest;
       std::getline(in, rest);
-      if (const std::optional<Embed::Rect> rect = Embed::ParseRect(rest))
+      if (const std::optional<Embed::Rect> rect = Embed::ParseRect(rest, false))
       {
         // A rect too small for the game hides it at its last size instead (Embed.h).
         const bool too_small = Embed::TooSmall(*rect);
@@ -290,7 +306,6 @@ void Platform::ProcessEmbedCommands()
           // window system resizes it.
           ApplyEmbedView();
           EmbedSetRect(*rect);
-          TraceEmbedRect(*rect);
           // The YouGame button is placed in the page's device pixels (UX/YgOrb.h).
           Orca::UX::YgOrb::SetViewSize(rect->w, rect->h);
         }
@@ -299,6 +314,7 @@ void Platform::ProcessEmbedCommands()
           m_embed_too_small = too_small;
           ApplyEmbedVisible();
         }
+        TraceEmbedRect(*rect);
       }
     }
     else if (cmd == "view")

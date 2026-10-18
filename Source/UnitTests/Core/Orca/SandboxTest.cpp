@@ -920,3 +920,33 @@ TEST(OrcaSandboxDeathTest, PackJailRecognizesAnAppliedProcessSandbox)
 #pragma clang diagnostic pop
 }
 #endif
+
+TEST(OrcaEmbed, ResultWaitsForReadyAndKeepsFirstDecision)
+{
+  Embed::Result result(true);
+  EXPECT_FALSE(result.TakeLine(true));
+  result.Decide();
+  EXPECT_FALSE(result.TakeLine(false));
+  result.Decide("parent-gone");
+  EXPECT_EQ(result.TakeLine(true), "orca embed ok");
+  EXPECT_FALSE(result.TakeLine(true));
+  result.Decide("track-failed");
+  EXPECT_FALSE(result.TakeLine(true));
+}
+
+TEST(OrcaEmbed, FailureFormatsAndAdoptedSilence)
+{
+  for (const char* reason : {"parent-gone", "setparent", "no-parent", "track-failed"})
+  {
+    Embed::Result result(true);
+    result.Decide(reason);
+    EXPECT_FALSE(result.TakeLine(false));
+    result.Decide();
+    EXPECT_EQ(result.TakeLine(true), std::string("orca embed failed ") + reason);
+    EXPECT_FALSE(result.TakeLine(true));
+  }
+  Embed::Result adopted;
+  adopted.Decide();
+  adopted.Decide("setparent");
+  EXPECT_FALSE(adopted.TakeLine(true));
+}

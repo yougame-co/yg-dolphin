@@ -118,12 +118,12 @@
 @implementation EmbedWindow
 - (BOOL)canBecomeKeyWindow
 {
-  return NO;
+  return ([self styleMask] & NSWindowStyleMaskTitled) != 0;
 }
 
 - (BOOL)canBecomeMainWindow
 {
-  return NO;
+  return ([self styleMask] & NSWindowStyleMaskTitled) != 0;
 }
 @end
 
@@ -190,6 +190,7 @@ private:
   // Embed mode.
   bool m_embed_visible = true;      // "show" / "hide"
   bool m_embed_focus = true;        // "focus" / "blur"
+  bool m_embed_placed = false;
   bool m_embed_on_screen = false;   // Ordered in, over the parent.
   // When the parent left the window list. Stop after a grace period: a new window, or one moving
   // between Spaces, can be missing from the list for a moment.
@@ -364,7 +365,10 @@ bool PlatformMacOS::InitEmbedded()
                                               backing:NSBackingStoreBuffered
                                                 defer:NO];
   if (m_window == nil)
-    return false;
+  {
+    EmbedFallback("track-failed");
+    return Init();
+  }
   [m_window setReleasedWhenClosed:NO];
   [m_window setOpaque:YES];
   [m_window setBackgroundColor:[NSColor blackColor]];
@@ -387,11 +391,10 @@ bool PlatformMacOS::InitEmbedded()
   // A window the app just created may not be in the window list yet.
   while (TrackParent() && m_parent_missing_since)
     std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  if (!IsEmbedded())
+    return true;
   if (!IsRunning())
-  {
-    fprintf(stderr, "Orca: --parent %llu is not a window on this screen\n", m_embed.parent);
     return false;
-  }
   ObserveOcclusion();
   return true;
 }
@@ -410,11 +413,14 @@ std::optional<Embed::WindowBounds> PlatformMacOS::EmbedGetBounds() const
 
 void PlatformMacOS::EmbedSetRect(const Embed::Rect&)
 {
-  TrackParent();
+  if (IsEmbedded())
+    TrackParent();
 }
 
 void PlatformMacOS::EmbedSetVisible(bool visible)
 {
+  if (!IsEmbedded())
+    return;
   m_embed_visible = visible;
   TrackParent();
   UpdateSurfaceVisible();
@@ -422,6 +428,8 @@ void PlatformMacOS::EmbedSetVisible(bool visible)
 
 void PlatformMacOS::EmbedSetFocus(bool focus)
 {
+  if (!IsEmbedded())
+    return;
   m_embed_focus = focus;
   TrackParent();
 }
@@ -498,6 +506,27 @@ bool PlatformMacOS::TrackParent()
         m_parent_missing_since = now;
       if (now - *m_parent_missing_since < std::chrono::seconds(2))
         return true;
+      if (!m_embed_placed)
+      {
+        EmbedFallback("parent-gone");
+        // Keep the same render surface even if this happens after a hidden boot.
+        [m_window setStyleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
+                               NSWindowStyleMaskResizable];
+        [m_window setIgnoresMouseEvents:NO];
+        [m_window setCollectionBehavior:NSWindowCollectionBehaviorDefault];
+        [m_window setFrame:NSMakeRect(m_window_x, m_window_y, m_window_width, m_window_height)
+                   display:YES];
+        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
+        [m_window makeKeyAndOrderFront:NSApp];
+        [m_window makeMainWindow];
+        [[NSNotificationCenter defaultCenter] addObserver:NSApp
+                                                selector:@selector(shutdown)
+                                                    name:NSWindowWillCloseNotification
+                                                  object:m_window];
+        SetupMenu();
+        ObserveOcclusion();
+        return false;
+      }
       if (IsRunning())
         fprintf(stderr, "Orca: the app's window %u is gone, stopping\n", parent);
       Stop();
@@ -563,6 +592,11 @@ bool PlatformMacOS::TrackParent()
       {
         [m_window orderWindow:NSWindowAbove relativeTo:static_cast<NSInteger>(parent)];
         m_embed_on_screen = true;
+      }
+      if ([m_window isVisible])
+      {
+        m_embed_placed = true;
+        EmbedSucceeded();
       }
     }
     else if (m_embed_on_screen)

@@ -11,3 +11,14 @@ Format: `embed-trace t=<steady-clock ms> req=<x,y,w,h> real=<x,y,w,h> scale=<s>`
 macOS real uses Cocoa screen points; Windows real uses physical screen pixels; X11 uses screen
 pixels with scale 1. No new window enumeration APIs. Runtime GUI checks intentionally omitted.
 Build and test gate results are recorded below after all four items.
+
+## Item 2 — self-embedding result
+
+Added a first-decision latch shared by self-embedding backends, held until ready. Initial native
+rect placement counts; hidden/minimized starts wait for actual visibility. Initial embed failure
+falls back to a standalone window while retaining the protocol. A parent lost after placement
+still stops as before. Adopted sessions disable the latch.
+Exact stdout: `orca embed ok` or `orca embed failed <reason>`, where reason is one of
+`parent-gone`, `setparent`, `no-parent`, `track-failed`. Never before ready, never twice.
+Documented in Status.h and ORCA.md Embedding. Unit tests cover ready gating, first decision,
+each failure token and disabled/adopted silence. Native UI checks omitted per task instructions.

@@ -2379,6 +2379,15 @@ Orca --embed --parent <handle> --rect X Y W H [--embed-adopted] [-u <user>] -e <
 
 `--embed-adopted` is the sandbox's way to embed on Windows ([Adopted window](#adopted-window)).
 
+Self-embedding (`--embed --parent`, macOS, X11 and unjailed Windows) prints one decisive stdout
+line: `orca embed ok` after the first applied rectangle is visibly in place, or
+`orca embed failed <reason>` when embedding fails and it falls back to its own window. The reason
+is exactly one token: `parent-gone`, `setparent`, `no-parent`, or `track-failed`. Only the first
+result is sent. A result decided before `ready` is held and printed immediately after `ready`;
+a later result is sent on the next main-loop pass. `--embed-adopted` never sends these lines:
+the jailed Windows launcher reports adoption itself. Parent loss after successful embedding
+still stops the run as described below.
+
 **Replay playback.** Use the same game, disc/profile, session (`ORCA_SESSION=1`) and embed launch,
 with `ORCA_REPLAY_SOURCE=<local file path or ws(s) watch URL with ticket>`. YG Dolphin boots to its
 local canonical origin and plays the stream instead of joining or creating a room. A saved regular
@@ -2446,8 +2455,8 @@ moves inside the window.
 `embed-trace t=<steady-clock ms> req=<x,y,w,h> real=<x,y,w,h> scale=<s>` to the normal log.
 `req` is the received rectangle (`view off` uses the current window rectangle); `real` is our own
 window's actual screen bounds immediately afterward: macOS screen points (Cocoa origin), Windows
-physical pixels, X11 pixels. `scale` is the window's backing scale (1 on X11). Small rectangles
-that only hide the window are not applied resizes. Unset, the switch adds no queries or logs.
+physical pixels, X11 pixels. `scale` is the window's backing scale (1 on X11). Small `rect` commands
+log their raw request and the unchanged bounds after hiding the window. Unset, the switch adds no queries or logs.
 
 ### stdin
 

@@ -14,6 +14,8 @@
 //     friend-joined, friend-left <why>, host-left, left, left lobby, no-room, friend-holding,
 //     friend-waiting ("left lobby": the host left its friends for a With Anyone queue pick)
 //   room-away|room-back|room-leave <self|host|peer N> <kept|ended|retry> <reason>
+//   orca embed ok | orca embed failed <parent-gone|setparent|no-parent|track-failed>
+//     once after ready, self-embedding only; never --embed-adopted
 //   orca error <code> <sentence for the player>
 //   orca menu <event>       a pick in the game's own Online menu
 //   orca result <json>      a matchmade room's verdict (with the app's "results")

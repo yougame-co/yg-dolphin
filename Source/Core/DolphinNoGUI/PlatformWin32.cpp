@@ -198,11 +198,16 @@ bool PlatformWin32::CreateRenderWindow()
     if (!m_hwnd)
     {
       fprintf(stderr, "Orca: CreateWindowEx under the app's window failed (%lu)\n", GetLastError());
-      return false;
+      EmbedFallback(!parent ? "no-parent" : !IsWindow(parent) ? "parent-gone" : "setparent");
+      return CreateRenderWindow();
     }
     m_embed_visible = !m_embed.too_small;  // Hidden until a big enough rect (Embed.h).
     if (m_embed_visible)
+    {
       ShowWindow(m_hwnd, SW_SHOWNA);
+      if (IsWindowVisible(m_hwnd))
+        EmbedSucceeded();
+    }
     UpdateEmbedFocus();
     return true;
   }
@@ -336,22 +341,34 @@ std::optional<Embed::WindowBounds> PlatformWin32::EmbedGetBounds() const
 
 void PlatformWin32::EmbedSetRect(const Embed::Rect& r)
 {
-  SetWindowPos(m_hwnd, HWND_TOP, r.x, r.y, r.w, r.h,
-               SWP_NOACTIVATE | (m_embed_visible ? SWP_SHOWWINDOW : SWP_NOREDRAW));
+  if (!IsEmbedded())
+    return;
+  if (SetWindowPos(m_hwnd, HWND_TOP, r.x, r.y, r.w, r.h,
+                   SWP_NOACTIVATE | (m_embed_visible ? SWP_SHOWWINDOW : SWP_NOREDRAW)) &&
+      IsWindowVisible(m_hwnd))
+  {
+    EmbedSucceeded();
+  }
 }
 
 void PlatformWin32::EmbedSetVisible(bool visible)
 {
+  if (!IsEmbedded())
+    return;
   // A hidden window gets no key-up: a Shift+Tab press still down ends here.
   if (!visible)
     OutKey(Orca::UX::OverlayKey::Keys().Cancel());
   m_embed_visible = visible;
   ShowWindow(m_hwnd, visible ? SW_SHOWNA : SW_HIDE);
+  if (IsWindowVisible(m_hwnd))
+    EmbedSucceeded();
   UpdateEmbedFocus();
 }
 
 void PlatformWin32::EmbedSetFocus(bool focus)
 {
+  if (!IsEmbedded())
+    return;
   m_embed_focus = focus;
   UpdateEmbedFocus();
 }
@@ -360,6 +377,8 @@ void PlatformWin32::EmbedSetFocus(bool focus)
 // the app's window is in the foreground, the game is shown, and the app's last word was "focus".
 void PlatformWin32::UpdateEmbedFocus()
 {
+  if (!EmbedResultDecided() && IsWindowVisible(m_hwnd))
+    EmbedSucceeded();
   const HWND root = GetAncestor(m_hwnd, GA_ROOT);
   m_window_focus = m_embed_visible && m_embed_focus && root && GetForegroundWindow() == root;
 }
