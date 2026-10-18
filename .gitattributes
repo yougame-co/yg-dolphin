@@ -6,3 +6,5 @@
 # Orca: ruleset data and its schema are compiled in and copied to the site byte for byte: LF everywhere
 Tools/orca/mods/*.json text eol=lf
 Source/Core/Core/Orca/Games/**/Rulesets/*.json text eol=lf
+# Windows checkouts must hash Data/Sys and test fixtures byte-for-byte like macOS: no EOL conversion for .ini
+*.ini -text
