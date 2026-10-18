@@ -435,6 +435,7 @@ struct RoomTestStep
     PollReconnect,
     ConnectFailure,
     InitialConnectFailure,
+    SendFailure,
     ReportGame,
     GameStart,
     Stall,

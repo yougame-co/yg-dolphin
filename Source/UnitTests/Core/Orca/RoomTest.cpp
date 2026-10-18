@@ -423,10 +423,66 @@ TEST(OrcaRoomRecovery, RankedRejoinPreservesGameCountAndDoesNotRepeatReports)
       starts += message.find("game-start") != std::string::npos;
       reports += message.find("game-report") != std::string::npos;
     }
-  EXPECT_EQ(starts, 2);
+  EXPECT_EQ(starts, 3);
   EXPECT_EQ(reports, 2);
   EXPECT_EQ(trace.back().known_games, 2);
   EXPECT_EQ(trace.back().state, RoomState::Waiting);
+}
+
+TEST(OrcaRoomRecovery, ReportsRetryOriginalBytesAndRejoinWithoutGameplay)
+{
+  for (const char* queue : {"casual", "ranked"})
+  {
+    for (const bool failed : {false, true})
+    {
+      SCOPED_TRACE(std::string(queue) + (failed ? " failed send" : " lost processing/receipt"));
+      const auto trace = TraceRoomForTest(QueueTraceOptions(), {
+          {RK::Message, 0, QueueRoster("welcome", queue)},
+          {RK::Message, 0, QueueRoster("start", queue)}, {RK::Message, 0, PeerHello()},
+          {RK::GameStart, 1, "", 120}, {RK::ReportGame, 2, "1", 120},
+          {RK::SendFailure, 3, "", failed ? (std::string(queue) == "ranked" ? 2u : 1u) : 0u}, {RK::Tick, 4},
+          {RK::Tick, 10004}, {RK::SocketClose, 11000},
+          {RK::Message, 12000, QueueRoster("welcome", queue)},
+          {RK::Message, 12001, QueueRoster("start", queue)},
+          {RK::Message, 12002, std::string(queue) == "ranked" ?
+              R"({"t":"game-result","matchId":"queue-recovery-match","id":"g120","ranking":["me","peer"]})" :
+              R"({"t":"result","matchId":"queue-recovery-match","ranking":["me","peer"]})"},
+          {RK::Message, 12003, std::string(queue) == "ranked" ?
+              R"({"t":"game-result","matchId":"queue-recovery-match","id":"g120","ranking":["me","peer"]})" :
+              R"({"t":"result","matchId":"queue-recovery-match","ranking":["me","peer"]})"},
+          {RK::Tick, 25000},
+      });
+      std::map<std::string, std::vector<std::string>> payloads;
+      size_t results = 0;
+      for (const auto& step : trace)
+      {
+        results += step.results.size();
+        for (const auto& wire : step.sent)
+        {
+          picojson::value message;
+          ASSERT_TRUE(picojson::parse(message, wire).empty());
+          const auto kind = message.get("t").to_str();
+          if (kind == "game-start" || kind == "game-report" || kind == "finish")
+            payloads[kind].push_back(wire);
+        }
+      }
+      EXPECT_EQ(results, 1u);
+      const auto& reports = payloads[std::string(queue) == "ranked" ? "game-report" : "finish"];
+      ASSERT_GE(reports.size(), 2u);
+      for (const auto& wire : reports)
+        EXPECT_EQ(wire, reports.front());
+      if (std::string(queue) == "ranked")
+      {
+        ASSERT_EQ(payloads["game-start"].size(), 2u);
+        EXPECT_EQ(payloads["game-start"][0], payloads["game-start"][1]);
+      }
+      for (const auto& wire : trace.back().sent)
+      {
+        EXPECT_EQ(wire.find("game-report"), std::string::npos);
+        EXPECT_EQ(wire.find("finish"), std::string::npos);
+      }
+    }
+  }
 }
 
 TEST(OrcaRoomRecovery, RankedRecoveryNeverClaimsAStall)

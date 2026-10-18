@@ -131,6 +131,9 @@ class Rooms:
         self.matches = {}
         self.match_numbers = {}
         self.game_reports = {}
+        self.receipts = {}
+        self.drop_receipts = 0
+        self.lost_receipts = []
         self.commands = []
         self.drops = []
         self.verdicts = []
@@ -285,6 +288,10 @@ class Rooms:
                 if code == room:
                     self.send(connection, self.roster(room, name, "start"))
             return
+        key = (message.get("matchId"), message.get("id", "$final"))
+        if kind in {"game-report", "finish"} and key in self.receipts:
+            self.deliver_receipt(room, self.receipts[key])
+            return
         match = self.matches.get(room)
         if not match or message.get("matchId") != match or kind == "game-start":
             return
@@ -308,12 +315,20 @@ class Rooms:
                                                        if code == room and name != winner]
         if "detail" in message:
             verdict["detail"] = message["detail"]
+        self.receipts[key] = verdict
         if kind == "finish":
-            self.final_result(room, verdict)
-        else:
-            for (code, _), connection in list(self.sockets.items()):
-                if code == room:
-                    self.send(connection, verdict)
+            self.matches.pop(room, None)
+        self.deliver_receipt(room, verdict)
+
+    def deliver_receipt(self, room, verdict):
+        if self.drop_receipts:
+            self.drop_receipts -= 1
+            self.lost_receipts.append(verdict)
+            return
+        self.verdicts.append(verdict)
+        for (code, _), connection in list(self.sockets.items()):
+            if code == room:
+                self.send(connection, verdict)
 
     def diagnostics(self, room):
         active = [name for code, name in self.members if code == room]
@@ -322,6 +337,7 @@ class Rooms:
         return {"active": active, "reports": reports,
                 "offers": list(self.offers), "version_events": list(self.version_events),
                 "commands": list(self.commands), "drops": list(self.drops),
+                "lost_receipts": list(self.lost_receipts),
                 "verdicts": list(self.verdicts), "connections": list(self.connections),
                 "frames": {name: frame_number for (code, name), frame_number in self.frames.items() if code == room}, "hashes": {name: dict(value) for name, value in hashes.items()}}
 
@@ -739,6 +755,54 @@ def self_test(turn_binary=None):
         server.server_close()
     version_self_test()
     queue_self_test()
+    receipt_self_test()
+
+
+def receipt_self_test():
+    server = Server(("127.0.0.1", 0), queue_mode="ranked")
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    site = f"http://127.0.0.1:{server.server_port}"
+    clients = []
+    try:
+        for role in (0, 1):
+            clients.append(client(site, f"Doubles{role}", "receipt355"))
+            receive(clients[-1][1])
+        receive(clients[0][1])
+        clients[0][0].sendall(frame({"t": "begin"}, True))
+        starts = [receive(stream) for _, stream in clients]
+        match = starts[0]["matchId"]
+        for kind in ("game-report", "finish"):
+            report = {"t": kind, "matchId": match, "winner": "Doubles0"}
+            if kind == "game-report":
+                report["id"] = "g120"
+            server.rooms.drop_receipts = 1
+            for sock, _ in clients:
+                sock.sendall(frame(report, True))
+            deadline = time.monotonic() + 2
+            while not server.rooms.lost_receipts or server.rooms.lost_receipts[-1]["t"] != ("game-result" if kind == "game-report" else "result"):
+                assert time.monotonic() < deadline, "receipt was not recorded/dropped"
+                time.sleep(0.01)
+            # No new gameplay report is generated: resend the exact wire payload after rejoin.
+            clients[1][0].shutdown(socket.SHUT_RDWR)
+            clients[1][1].close()
+            clients[1][0].close()
+            assert receive(clients[0][1])["t"] == "away"
+            clients[1] = client(site, "Doubles1", "receipt355")
+            receive(clients[1][1])
+            assert receive(clients[0][1])["t"] == "back"
+            clients[1][0].sendall(frame(report, True))
+            verdicts = [receive(stream) for _, stream in clients]
+            assert verdicts[0] == verdicts[1] == server.rooms.lost_receipts[-1]
+            matching = [entry for entry in server.rooms.commands if entry["t"] == kind]
+            assert all({key: value for key, value in entry.items() if key != "player"} == report for entry in matching)
+        assert len(server.rooms.receipts) == 2
+        print("PASS: report fixture loses game/final receipts, rejoins, replays identical reports and returns recorded receipts")
+    finally:
+        for sock, stream in clients:
+            stream.close()
+            sock.close()
+        server.shutdown()
+        server.server_close()
 
 
 def queue_self_test():
@@ -1294,6 +1358,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--self-test", action="store_true")
+    mode.add_argument("--receipt-self-test", action="store_true")
     mode.add_argument("--serve", action="store_true")
     mode.add_argument("--run", action="store_true")
     parser.add_argument("--listen", default="127.0.0.1")
@@ -1358,7 +1423,9 @@ def main():
         args.expected = 2
     if args.no_recovery and not args.queue:
         parser.error("--no-recovery requires --queue")
-    if args.self_test:
+    if args.receipt_self_test:
+        receipt_self_test()
+    elif args.self_test:
         self_test(args.turn_binary)
     elif args.serve:
         if not isolated_host(args.listen):

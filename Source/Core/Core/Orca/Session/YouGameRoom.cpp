@@ -1243,6 +1243,13 @@ struct YouGameRoom::Impl
   // Ranked games whose game-start went to this match (their fights' first frames).
   std::set<int> starts_sent;
   std::set<int> reports_sent;
+  // I/O-owned, original wire messages for this match. Starts have no protocol receipt.
+  struct PendingReport
+  {
+    std::string match, id, text;
+    std::optional<Clock::time_point> retry;
+  };
+  std::vector<PendingReport> report_outbox;
 
   // Direct links to the other Orcas, unless ORCA_DIRECT=0. The pointer never changes after
   // construction; the link thread starts with the welcome.
@@ -1342,6 +1349,7 @@ struct YouGameRoom::Impl
 
   std::optional<Clock::time_point> test_now;
   std::vector<std::string> test_sent;
+  unsigned test_send_failures = 0;
   std::vector<std::string> test_notices;
   std::vector<std::string> test_results;
   Clock::time_point Now() const { return test_now.value_or(Clock::now()); }
@@ -1418,6 +1426,7 @@ struct YouGameRoom::Impl
       if (reconnect_job)
         reconnect_job->cancel = true;
       input_holds.clear();
+      report_outbox.clear();
       room_recovery_until = {};
       host_away_until.reset();
       host_hold_until.reset();
@@ -3064,20 +3073,60 @@ struct YouGameRoom::Impl
     return "";
   }
 
-  void SendRaw(const std::string& text)
+  bool SendRaw(const std::string& text)
   {
     if (test_now)
     {
+      if (test_send_failures)
+      {
+        --test_send_failures;
+        return false;
+      }
       test_sent.push_back(text);
-      return;
+      return true;
     }
     if (net_delay)
     {
       held_out.push_back({HoldUntil(held_out), text});
+      return false;  // Queued, not yet written; the retained report remains retryable.
+    }
+    const bool sent = ws->SendText(text, std::chrono::seconds(2));
+    if (!sent)
+      WARN_LOG_FMT(NETPLAY, "Orca room: send failed: {}", ws->Error());
+    return sent;
+  }
+
+  void FlushReportOutbox(bool replay = false)
+  {
+    if (!QueueRecovery() || reconnect.since || (!test_now && !ws->IsOpen()))
+      return;
+    const auto now = Now();
+    for (auto& entry : report_outbox)
+    {
+      if (!replay && (!entry.retry || now < *entry.retry))
+        continue;
+      const bool sent = SendRaw(entry.text);
+      entry.retry = sent && entry.id.starts_with("start:") ? std::nullopt :
+                        std::optional(now + KEEP_ALIVE_EVERY);
+    }
+  }
+
+  void SendMatchReport(const std::string& match, const std::string& id, const std::string& text)
+  {
+    if (!QueueRecovery())
+    {
+      SendRaw(text);
       return;
     }
-    if (!ws->SendText(text, std::chrono::seconds(2)))
-      WARN_LOG_FMT(NETPLAY, "Orca room: send failed: {}", ws->Error());
+    report_outbox.push_back({match, id, text, Now()});
+    FlushReportOutbox();
+  }
+
+  void AckMatchReport(const std::string& match, const std::string& id)
+  {
+    std::erase_if(report_outbox, [&](const PendingReport& entry) {
+      return entry.match == match && (id == "$final" || entry.id == id);
+    });
   }
 
   // Tournament eligibility comes only from this room's ticket response. The room service
@@ -3175,7 +3224,7 @@ struct YouGameRoom::Impl
                              JsonString(match), id, outcome) :
                  fmt::format("{{\"t\":\"finish\",\"matchId\":{},{}}}", JsonString(match), outcome);
     NOTICE_LOG_FMT(NETPLAY, "Orca room: report {}", text);
-    SendRaw(HarnessReport(text));
+    SendMatchReport(match, ranked ? id : "$final", HarnessReport(text));
   }
 
   // A ranked game began: the room's match hears it once (GameStartMessage), so a leave from here on
@@ -3188,7 +3237,7 @@ struct YouGameRoom::Impl
       return;
     NoteKnownGames();
     NOTICE_LOG_FMT(NETPLAY, "Orca room: {}", text);
-    SendRaw(text);
+    SendMatchReport(match, fmt::format("start:{}", start), text);
   }
 
   // KnownSetGames for the room's match: what this room saw, or what this process saw of the same
@@ -3210,7 +3259,7 @@ struct YouGameRoom::Impl
     NOTICE_LOG_FMT(NETPLAY, "Orca room: {}", text);
     last_finish = text;
     finish_retry_at.reset();
-    SendRaw(text);
+    SendMatchReport(match, "$final", text);
   }
 
   // A replay stream's waiting messages, in order; then at most one saved-copy piece (32 KiB, ~44 KB
@@ -3245,6 +3294,7 @@ struct YouGameRoom::Impl
     // All recovery queues keep pending results until the same-seat welcome has completed.
     if (QueueRecovery() && (reconnect.since || (!test_now && !ws->IsOpen())))
       return;
+    FlushReportOutbox();
     std::string current_match, room_queue;
     bool desync, fault, done, stall;
     std::vector<HeldReport> ready;
@@ -3440,6 +3490,7 @@ struct YouGameRoom::Impl
     {
       return;
     }
+    AckMatchReport(match, id);
     const Verdict v = ReadVerdict(m, id);
     std::optional<SetTally::End> end = tally.Game(v.winner);
     NoteKnownGames();
@@ -3512,6 +3563,7 @@ struct YouGameRoom::Impl
     }
     if (room_queue == "private" || match.empty() || !verdicts_seen.insert(match + "/$final").second)
       return false;
+    AckMatchReport(match, "$final");
     if (room_queue == "ranked")
     {
       const Verdict v = ReadVerdict(m, "$final");
@@ -3613,6 +3665,7 @@ struct YouGameRoom::Impl
     block_ids.clear();
     starts_sent.clear();
     reports_sent.clear();
+    report_outbox.clear();
     match_participants.clear();
     LobbyFields(m);
     // After LobbyFields: the new match's id, so its count starts from what this process knew of it.
@@ -4350,6 +4403,7 @@ struct YouGameRoom::Impl
         dropped = false;
         initial_seat_retry = false;
         test_held_socket.reset();
+        FlushReportOutbox(true);
       }
       std::lock_guard lock(mutex);
       NOTICE_LOG_FMT(NETPLAY, "Orca room: in room {} on seat {}, {}", code, seat + 1,
@@ -4870,6 +4924,9 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
       room.reports.push_back({report, *room.test_now, step.kind == RoomTestStep::Kind::GameStart});
       break;
     }
+    case RoomTestStep::Kind::SendFailure:
+      room.test_send_failures = step.close_code;
+      break;
     case RoomTestStep::Kind::Stall:
       room.stall_pending = true;
       break;
