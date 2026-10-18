@@ -1110,40 +1110,60 @@ struct YouGameRoom::Impl
   std::map<std::string, Clock::time_point> input_holds;
   // I/O-owned reconnect/presence state, published under mutex for the session thread.
   Clock::time_point room_recovery_until{};
-  // Shared under mutex. Public 1v1 recovery has one deadline, including input silence.
-  std::optional<Clock::time_point> public_hold_until;
+  // Shared under mutex: self reconnect and each peer keep independent hold deadlines.
+  std::optional<Clock::time_point> public_self_hold_until;
+  std::map<std::string, Clock::time_point> public_peer_holds;
   bool public_socket_reachable = false;
 
-  bool PublicHoldAliveLocked(Clock::time_point now) const
+  bool PublicHoldAliveLocked(std::optional<Clock::time_point> deadline,
+                            Clock::time_point now) const
   {
-    return public_hold_until && now < *public_hold_until +
+    return deadline && now < *deadline +
         (public_socket_reachable ? ROOM_VERDICT_GRACE : std::chrono::seconds(0));
+  }
+
+  std::optional<Clock::time_point> PeerDeadlineLocked(const std::string& id) const
+  {
+    const auto hold = public_peer_holds.find(id);
+    return hold == public_peer_holds.end() ? std::nullopt : std::optional(hold->second);
+  }
+
+  std::optional<Clock::time_point> WaitingDeadlineLocked() const
+  {
+    if (public_self_hold_until)
+      return public_self_hold_until;
+    if (!public_peer_holds.empty())
+      return public_peer_holds.begin()->second;
+    return std::nullopt;
   }
 
   std::optional<Clock::time_point> PublicDeadline() const
   {
     std::lock_guard lock(mutex);
-    return QueueRecoveryLocked() ? public_hold_until : std::nullopt;
+    return QueueRecoveryLocked() ? public_self_hold_until : std::nullopt;
   }
 
-  void ReconcilePublicHold(const picojson::object& message)
+  void ReconcilePublicHold(const picojson::object& message, const std::string& peer = {})
   {
     std::lock_guard lock(mutex);
     if (!QueueRecoveryLocked())
       return;
-    if (const auto ms = Int(message, "hold_ms", 0, std::numeric_limits<int>::max()))
-      public_hold_until = Now() + std::chrono::milliseconds(*ms);
-    else if (!public_hold_until)
-      public_hold_until = Now() + ROOM_HOLD;
-    // Existing input holds are markers; every public consumer reads public_hold_until.
-    for (const auto& [slot, id] : peer_ids)
-      input_holds.try_emplace(id, *public_hold_until);
-    for (auto& [id, deadline] : input_holds)
-      deadline = *public_hold_until;
-    if (host_away_until)
-      host_away_until = public_hold_until;
-    if (host_hold_until)
-      host_hold_until = public_hold_until;
+    const auto ms = Int(message, "hold_ms", 0, std::numeric_limits<int>::max());
+    if (peer.empty())
+    {
+      if (ms || !public_self_hold_until)
+        public_self_hold_until = Now() + (ms ? std::chrono::milliseconds(*ms) : ROOM_HOLD);
+      return;
+    }
+    auto [hold, inserted] = public_peer_holds.try_emplace(peer, Now() + ROOM_HOLD);
+    if (ms)
+      hold->second = Now() + std::chrono::milliseconds(*ms);
+    input_holds[peer] = hold->second;
+    if (peer == host)
+    {
+      host_away_until = hold->second;
+      host_hold_until = hold->second;
+    }
   }
   std::vector<std::string> pending_room_notices;
   std::array<int, MAX_SEATS> input_through{-1, -1, -1, -1};
@@ -1464,7 +1484,8 @@ struct YouGameRoom::Impl
       input_holds.clear();
       report_outbox.clear();
       room_recovery_until = {};
-      public_hold_until.reset();
+      public_self_hold_until.reset();
+      public_peer_holds.clear();
       host_away_until.reset();
       host_hold_until.reset();
     }
@@ -1992,8 +2013,9 @@ struct YouGameRoom::Impl
   {
     std::lock_guard lock(mutex);
     const auto hold = input_holds.find(id);
-    return hold != input_holds.end() && (QueueRecoveryLocked() ? PublicHoldAliveLocked(now) :
-                                                               now < hold->second);
+    return hold != input_holds.end() &&
+           (QueueRecoveryLocked() ? PublicHoldAliveLocked(PeerDeadlineLocked(id), now) :
+                                    now < hold->second);
   }
 
   // A fast room back is not evidence that the direct path recovered. An announced peer
@@ -2004,15 +2026,15 @@ struct YouGameRoom::Impl
     if (QueueRecovery())
     {
       std::lock_guard lock(mutex);
+      const auto deadline = PeerDeadlineLocked(id);
       const bool keep = !peer.presence.suspended &&
-                        (!public_hold_until || PublicHoldAliveLocked(now));
+                        (!deadline || PublicHoldAliveLocked(deadline, now));
       if (keep && peer.announced && (peer.sent_packet || direct_inputs.contains(id)))
       {
-        if (!public_hold_until)
-          public_hold_until = now + ROOM_HOLD;
-        input_holds.try_emplace(id, *public_hold_until);
+        const auto [hold, inserted] = public_peer_holds.try_emplace(id, now + ROOM_HOLD);
+        input_holds.try_emplace(id, hold->second);
         if (peer.drop_in_host)
-          host_hold_until = public_hold_until;
+          host_hold_until = hold->second;
       }
       peer.presence.away_since.reset();
       peer.presence.suspended = false;
@@ -2101,13 +2123,13 @@ struct YouGameRoom::Impl
       std::optional<Clock::time_point> deadline;
       {
         std::lock_guard lock(mutex);
-        const bool held = reconnect.since || !input_holds.empty() ||
-            std::ranges::any_of(peers, [](const auto& p) {
-              return p.second.presence.away_since.has_value();
-            });
-        if (!held || state == RoomState::Ended)
-          public_hold_until.reset();
-        deadline = public_hold_until;
+        std::erase_if(public_peer_holds, [&](const auto& hold) {
+          const auto peer = peers.find(hold.first);
+          return !input_holds.contains(hold.first) &&
+                 (peer == peers.end() || !peer->second.presence.away_since);
+        });
+        if (state != RoomState::Ended)
+          deadline = WaitingDeadlineLocked();
         room_recovery_until = deadline.value_or(Clock::time_point{});
       }
       const double remaining = deadline ?
@@ -2157,8 +2179,8 @@ struct YouGameRoom::Impl
     {
       std::lock_guard lock(mutex);
       public_socket_reachable = false;
-      if (!public_hold_until)
-        public_hold_until = now + ROOM_HOLD;
+      if (!public_self_hold_until)
+        public_self_hold_until = now + ROOM_HOLD;
     }
     if (!retry)
     {
@@ -2183,7 +2205,7 @@ struct YouGameRoom::Impl
         if (peer.drop_in_host)
         {
           std::lock_guard lock(mutex);
-          host_away_until = QueueRecoveryLocked() ? public_hold_until : peer.presence.Deadline();
+          host_away_until = QueueRecoveryLocked() ? public_self_hold_until : peer.presence.Deadline();
           host_hold_until = host_away_until;
         }
       }
@@ -2341,7 +2363,7 @@ struct YouGameRoom::Impl
       bool waiting = false;
       {
         std::lock_guard lock(mutex);
-        waiting = QueueRecoveryLocked() && PublicHoldAliveLocked(now);
+        waiting = QueueRecoveryLocked() && PublicHoldAliveLocked(public_self_hold_until, now);
       }
       if (!waiting)
       {
@@ -4141,7 +4163,10 @@ struct YouGameRoom::Impl
       keyframe_offers.erase(p->second.slot);
       direct_inputs.erase(p->first);
       if (why == "room-resume")
+      {
         input_holds.erase(p->first);
+        public_peer_holds.erase(p->first);
+      }
       if (recovery)
         std::erase_if(pending_drops, [&](const auto& drop) { return drop.first == p->second.slot; });
     }
@@ -4165,7 +4190,11 @@ struct YouGameRoom::Impl
       bool expired;
       {
         std::lock_guard lock(mutex);
-        expired = public_hold_until && !PublicHoldAliveLocked(now);
+        expired = public_self_hold_until ?
+            !PublicHoldAliveLocked(public_self_hold_until, now) :
+            std::ranges::any_of(public_peer_holds, [&](const auto& hold) {
+              return !PublicHoldAliveLocked(hold.second, now);
+            });
       }
       if (expired)
         EndRecovery("room-hold-expired");
@@ -4327,6 +4356,7 @@ struct YouGameRoom::Impl
         keyframe_offers.erase(p->second.slot);
         direct_inputs.erase(p->first);
         input_holds.erase(p->first);
+        public_peer_holds.erase(p->first);
         if (p->second.drop_in_host)
         {
           host_away_until.reset();
@@ -4459,7 +4489,29 @@ struct YouGameRoom::Impl
             continue;
           }
           if (present->count("away") && present->at("away").evaluate_as_boolean())
+          {
+            // An away missed while our socket was down needs its own local fallback
+            // until rooms sends that peer's away message with the remaining hold.
+            ReconcilePublicHold({}, p->first);
             continue;
+          }
+          if (QueueRecovery())
+          {
+            // A missed back cancels an expired presence hold. Silent input buffers
+            // still need their own fallback; a valid existing input hold stays intact.
+            std::lock_guard lock(mutex);
+            const auto deadline = PeerDeadlineLocked(p->first);
+            if (deadline && !PublicHoldAliveLocked(deadline, Now()))
+            {
+              public_peer_holds.erase(p->first);
+              if (input_holds.contains(p->first))
+              {
+                const auto until = Now() + ROOM_HOLD;
+                public_peer_holds.emplace(p->first, until);
+                input_holds[p->first] = until;
+              }
+            }
+          }
           const bool was_host = peer.drop_in_host;
           const bool resume = peer.resume_requested;
           if (!BackPeer(p->first, peer, Now()))
@@ -4538,6 +4590,10 @@ struct YouGameRoom::Impl
         }
         ReconnectOutcome(kept_session ? "same-seat" : "same-seat-fresh-drop-in", kept_session);
         reconnect = {};
+        {
+          std::lock_guard lock(mutex);
+          public_self_hold_until.reset();
+        }
         dropped = false;
         initial_seat_retry = false;
         test_held_socket.reset();
@@ -4576,13 +4632,14 @@ struct YouGameRoom::Impl
             }
             else if (t == "away")
             {
-              ReconcilePublicHold(m);
+              ReconcilePublicHold(m, id);
               p->second.presence.Away(now);
               p->second.resume_handled = false;
               if (p->second.drop_in_host)
               {
                 std::lock_guard lock(mutex);
-                host_away_until = QueueRecoveryLocked() ? public_hold_until : p->second.presence.Deadline();
+                host_away_until = QueueRecoveryLocked() ? PeerDeadlineLocked(id) :
+                                                         p->second.presence.Deadline();
                 host_hold_until = host_away_until;
               }
               RoomNotice(fmt::format("room-away peer {} kept {}", p->second.slot + 1,
@@ -4601,6 +4658,7 @@ struct YouGameRoom::Impl
               {
                 std::lock_guard lock(mutex);
                 input_holds.erase(id);
+                public_peer_holds.erase(id);
               }
               OpponentGone(id);
               ResetPeer(p);
@@ -5127,7 +5185,7 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
                      std::exchange(room.test_sent, {}), room.reconnect.attempts,
                      room.reconnect.next_attempt, std::exchange(room.test_notices, {}), room.status,
                      room.error_code, room.RoomRecovery(), room.known_games,
-                     std::exchange(room.test_results, {}), room.public_hold_until,
+                     std::exchange(room.test_results, {}), room.WaitingDeadlineLocked(),
                      owner.RoomRecovering(*room.test_now)});
     room.inbox_from.clear();
   }
@@ -5227,16 +5285,21 @@ bool YouGameRoom::HoldInputSilence(Clock::time_point since, Clock::time_point no
       return false;
     if (m_impl->QueueRecoveryLocked())
     {
-      if (!m_impl->public_hold_until)
+      // While our room socket is away, input silence waits on our own reconnect hold.
+      // A separately announced peer hold remains untouched throughout that reconnect.
+      if (m_impl->public_self_hold_until)
       {
-        if (now >= since + ROOM_HOLD)
+        if (!m_impl->PublicHoldAliveLocked(m_impl->public_self_hold_until, now))
           return false;
-        m_impl->public_hold_until = since + ROOM_HOLD;
+        continue;
       }
-      m_impl->input_holds.try_emplace(id, *m_impl->public_hold_until);
+      if (!m_impl->public_peer_holds.contains(id) && now >= since + ROOM_HOLD)
+        return false;
+      const auto [hold, inserted] = m_impl->public_peer_holds.try_emplace(id, since + ROOM_HOLD);
+      m_impl->input_holds.try_emplace(id, hold->second);
       if (m_impl->joining && slot == 0)
-        m_impl->host_hold_until = m_impl->public_hold_until;
-      if (!m_impl->PublicHoldAliveLocked(now))
+        m_impl->host_hold_until = hold->second;
+      if (!m_impl->PublicHoldAliveLocked(hold->second, now))
         return false;
       continue;
     }
@@ -5266,7 +5329,7 @@ bool YouGameRoom::RoomRecovering(Clock::time_point now) const
   if (!m_impl->RoomRecoveryLocked() || m_impl->state != RoomState::Waiting)
     return false;
   if (m_impl->QueueRecoveryLocked())
-    return m_impl->PublicHoldAliveLocked(now);
+    return m_impl->PublicHoldAliveLocked(m_impl->WaitingDeadlineLocked(), now);
   return now < m_impl->room_recovery_until ||
          std::ranges::any_of(m_impl->input_holds,
                              [&](const auto& hold) { return now < hold.second; });
@@ -5706,8 +5769,9 @@ std::vector<Packet> YouGameRoom::Receive()
         return false;
       const auto hold = m_impl->input_holds.find(id->second);
       if (hold == m_impl->input_holds.end() ||
-          (m_impl->QueueRecoveryLocked() ? !m_impl->PublicHoldAliveLocked(m_impl->Now()) :
-                                          m_impl->Now() >= hold->second))
+          (m_impl->QueueRecoveryLocked() ?
+               !m_impl->PublicHoldAliveLocked(m_impl->PeerDeadlineLocked(id->second), m_impl->Now()) :
+               m_impl->Now() >= hold->second))
         return false;
       if (std::ranges::find(m_impl->pending_retries, id->second) != m_impl->pending_retries.end())
         return true;

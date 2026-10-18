@@ -289,3 +289,37 @@ the shared lock as needed. No installs were needed.
 
 Final `git diff --check`: PASS. All requested host gates passed; nothing remains
 blocked. One local commit only; no push, release or deployment.
+
+## fix-0355: per-player recovery holds
+
+Required pre-edit base check:
+
+```text
+789c8342f3 Handle recovery rejoin room closes
+BASE-OK
+```
+
+Self recovery and peer recovery now retain independent deadlines. Self `recovering`
+and rejoin WELCOME reconcile only the returning player's deadline. Peer `away`
+reconciles only that peer's deadline, including a fresh announcement after rejoin.
+The overlay uses self while reconnecting and the peer while waiting for that peer;
+retry cutoff, input acceptance, session exemption and peer expiry use the matching
+player's hold. Missing/invalid `hold_ms` retains the local 90-second fallback.
+
+Updated rooms contract (supersedes the shared-deadline proposal above):
+
+```text
+self rejoin WELCOME hold_ms = the returning player's own remaining hold; a still-away peer is reported with its own away message + hold_ms.
+```
+
+Fake-clock regression coverage includes both crossed hold orderings at t=0/t=85/
+t=89, a 1-second self WELCOME remainder, independent peer expiry and acceptance
+of the server verdict, plus a fresh peer away deadline following WELCOME. Existing
+single-player drop, short authoritative hold and fallback cases remain covered.
+A missed peer away announcement gets an independent local fallback until its
+own away message arrives; an authoritative present roster cancels a missed back.
+While self is away, expiry follows the self deadline. The loopback fixture records
+WELCOME's self remainder and still-away roster; `crossed-events.json` schedules
+independent socket losses and a delayed peer away announcement after WELCOME.
+
+Validation and final gates are recorded below after completion.

@@ -602,18 +602,22 @@ TEST(OrcaRoomRecovery, ShortServerHoldAndLateVerdictUseOneBoundedWindow)
     std::vector<RoomTestStep> steps{
         {RK::Message, 0, QueueRoster("welcome", "ranked")}, {RK::Message, 0, PeerHello()},
         {self ? RK::SocketClose : RK::InputSilence, 1000, "", 0},
-        {RK::Message, 2000, WithHold(QueueRoster(self ? "welcome" : "away", "ranked"), "1500")},
+        {RK::Message, 2000, self ? R"({"t":"recovering","hold_ms":1500})" :
+            WithHold(QueueRoster("away", "ranked"), "1500")},
         {RK::Tick, 3500}, {RK::InputSilence, 3501, "", 0}, {RK::Tick, 5500},
     };
+    if (self)
+      steps.insert(steps.begin() + 3, {RK::SocketConnected, 2000});
+    const size_t deadline_step = self ? 4 : 3;
     const auto pending = TraceRoomForTest(QueueTraceOptions(), steps);
-    EXPECT_EQ(*pending[3].public_deadline, std::chrono::steady_clock::time_point{} + std::chrono::milliseconds(3500));
+    EXPECT_EQ(*pending[deadline_step].public_deadline, std::chrono::steady_clock::time_point{} + std::chrono::milliseconds(3500));
     EXPECT_EQ(pending.back().state, RoomState::Waiting);
     EXPECT_TRUE(pending.back().session_recovering);
     auto no_verdict = steps;
     no_verdict.push_back({RK::Tick, 13499});
     no_verdict.push_back({RK::Tick, 13500});
     const auto expired = TraceRoomForTest(QueueTraceOptions(), no_verdict);
-    EXPECT_EQ(expired[7].state, RoomState::Waiting);
+    EXPECT_EQ(expired[expired.size() - 2].state, RoomState::Waiting);
     EXPECT_EQ(expired.back().state, RoomState::Ended);
     steps.push_back({RK::Message, 5500, R"({"t":"result","matchId":"queue-recovery-match","ranking":["me","peer"],"disposition":"forfeit"})"});
     const auto verdict = TraceRoomForTest(QueueTraceOptions(), steps);
@@ -662,6 +666,135 @@ TEST(OrcaRoomRecovery, MissingOrInvalidHoldKeepsNinetySecondsAndLegacyIgnoresFie
     EXPECT_EQ(trace.back().state, RoomState::Ended);
     EXPECT_EQ(trace.back().status, "Lost the connection to the room (no reason given)");
   }
+}
+
+TEST(OrcaRoomRecovery, CrossedHoldsKeepEachPlayersDeadline)
+{
+  // Both orderings: the peer's earlier hold, and the review's returning player whose
+  // almost-expired hold crosses a peer that dropped much later.
+  for (const bool peer_first : {true, false})
+  {
+    const int peer_drop = peer_first ? 0 : 85000;
+    const int self_drop = peer_first ? 85000 : 0;
+    const int peer_end = peer_drop + 90000;
+    auto welcome = QueueRoster("welcome", "ranked");
+    picojson::value roster;
+    picojson::parse(roster, welcome);
+    for (auto& player : roster.get<picojson::object>()["players"].get<picojson::array>())
+      if (player.get("id").to_str() == "peer")
+        player.get<picojson::object>()["away"] = picojson::value(true);
+    std::vector<RoomTestStep> steps{
+        {RK::Message, 0, QueueRoster("welcome", "ranked")}, {RK::Message, 0, PeerHello()},
+    };
+    const RoomTestStep away{RK::Message, peer_drop, WithHold(QueueRoster("away", "ranked"), "90000")};
+    const RoomTestStep self{RK::SocketClose, self_drop};
+    steps.push_back(peer_first ? away : self);
+    steps.push_back(peer_first ? self : away);
+    steps.push_back({RK::Message, 89000, WithHold(roster.serialize(), "1000")});
+    steps.push_back({RK::Tick, 100001});
+    if (peer_first)
+      steps.back().milliseconds = 90000;
+    steps.push_back({RK::Tick, peer_end + 9999});
+    auto no_verdict = steps;
+    no_verdict.push_back({RK::Tick, peer_end + 10000});
+    const auto expired = TraceRoomForTest(QueueTraceOptions(), no_verdict);
+    EXPECT_EQ(expired[expired.size() - 2].state, RoomState::Waiting);
+    EXPECT_EQ(expired.back().state, RoomState::Ended);
+    steps.push_back({RK::Message, peer_end + 2000,
+        R"({"t":"result","matchId":"queue-recovery-match","ranking":["me","peer"],"disposition":"forfeit"})"});
+    steps[steps.size() - 2].milliseconds = peer_end + 1000;
+    const auto trace = TraceRoomForTest(QueueTraceOptions(), steps);
+    ASSERT_TRUE(trace[4].public_deadline);
+    EXPECT_EQ(*trace[4].public_deadline, std::chrono::steady_clock::time_point{} +
+              std::chrono::milliseconds(peer_end));
+    EXPECT_EQ(trace[5].state, RoomState::Waiting);
+    ASSERT_EQ(trace.back().results.size(), 1u);
+    EXPECT_EQ(trace.back().error_code, "match-over");
+  }
+}
+
+TEST(OrcaRoomRecovery, SingleSelfRejoinReleasesItsHoldAndMissingFieldsUseNinetySeconds)
+{
+  for (const bool self : {false, true})
+  {
+    const auto trace = TraceRoomForTest(QueueTraceOptions(), {
+        {RK::Message, 0, QueueRoster("welcome", "ranked")}, {RK::Message, 0, PeerHello()},
+        {self ? RK::SocketClose : RK::Message, 1000, self ? "" : QueueRoster("away", "ranked")},
+        {RK::Tick, 90999}, {self ? RK::PollReconnect : RK::Tick, self ? 91000 : 101000},
+    });
+    ASSERT_TRUE(trace[2].public_deadline);
+    EXPECT_EQ(*trace[2].public_deadline, std::chrono::steady_clock::time_point{} + std::chrono::seconds(91));
+    EXPECT_EQ(trace[3].state, RoomState::Waiting);
+    EXPECT_EQ(trace.back().state, RoomState::Ended);
+  }
+  const auto returned = TraceRoomForTest(QueueTraceOptions(), {
+      {RK::Message, 0, QueueRoster("welcome", "ranked")}, {RK::Message, 0, PeerHello()},
+      {RK::SocketClose, 85000},
+      {RK::Message, 89000, WithHold(QueueRoster("welcome", "ranked"), "1000")},
+      {RK::Tick, 101000},
+  });
+  EXPECT_FALSE(returned[3].reconnecting);
+  EXPECT_EQ(returned.back().state, RoomState::Waiting);
+}
+
+TEST(OrcaRoomRecovery, PeerAwayMissedDuringSelfDropGetsAnIndependentFallback)
+{
+  picojson::value welcome;
+  picojson::parse(welcome, QueueRoster("welcome", "ranked"));
+  for (auto& player : welcome.get<picojson::object>()["players"].get<picojson::array>())
+    if (player.get("id").to_str() == "peer")
+      player.get<picojson::object>()["away"] = picojson::value(true);
+  const auto trace = TraceRoomForTest(QueueTraceOptions(), {
+      {RK::Message, 0, QueueRoster("welcome", "ranked")}, {RK::Message, 0, PeerHello()},
+      {RK::SocketClose, 0}, {RK::Message, 89000, WithHold(welcome.serialize(), "1000")},
+      {RK::Tick, 100001},
+      {RK::Message, 101000, WithHold(QueueRoster("away", "ranked"), "74000")},
+      {RK::Tick, 175000},
+      {RK::Message, 177000, R"({"t":"result","matchId":"queue-recovery-match","ranking":["me","peer"],"disposition":"forfeit"})"},
+  });
+  ASSERT_TRUE(trace[3].public_deadline);
+  EXPECT_EQ(*trace[3].public_deadline, std::chrono::steady_clock::time_point{} + std::chrono::seconds(179));
+  EXPECT_EQ(trace[4].state, RoomState::Waiting);
+  EXPECT_EQ(*trace[5].public_deadline, std::chrono::steady_clock::time_point{} + std::chrono::seconds(175));
+  EXPECT_EQ(trace[6].state, RoomState::Waiting);
+  ASSERT_EQ(trace.back().results.size(), 1u);
+  EXPECT_EQ(trace.back().error_code, "match-over");
+}
+
+TEST(OrcaRoomRecovery, SelfReconnectUsesOwnHoldAndRosterCancelsMissedPeerBack)
+{
+  const auto trace = TraceRoomForTest(QueueTraceOptions(), {
+      {RK::Message, 0, QueueRoster("welcome", "ranked")}, {RK::Message, 0, PeerHello()},
+      {RK::Message, 0, WithHold(QueueRoster("away", "ranked"), "90000")},
+      {RK::SocketClose, 85000}, {RK::Tick, 100001},
+      {RK::Message, 110000, WithHold(QueueRoster("welcome", "ranked"), "65000")},
+      {RK::Tick, 185001},
+  });
+  EXPECT_EQ(trace[4].state, RoomState::Waiting);
+  ASSERT_TRUE(trace[4].public_deadline);
+  EXPECT_EQ(*trace[4].public_deadline, std::chrono::steady_clock::time_point{} + std::chrono::seconds(175));
+  EXPECT_FALSE(trace[5].reconnecting);
+  EXPECT_EQ(trace.back().state, RoomState::Waiting);
+  EXPECT_TRUE(trace.back().results.empty());
+}
+
+TEST(OrcaRoomRecovery, PeerAwayAfterRejoinUpdatesOnlyThatPeersHold)
+{
+  picojson::value welcome;
+  picojson::parse(welcome, QueueRoster("welcome", "ranked"));
+  for (auto& player : welcome.get<picojson::object>()["players"].get<picojson::array>())
+    if (player.get("id").to_str() == "peer")
+      player.get<picojson::object>()["away"] = picojson::value(true);
+  const auto trace = TraceRoomForTest(QueueTraceOptions(), {
+      {RK::Message, 0, QueueRoster("welcome", "ranked")}, {RK::Message, 0, PeerHello()},
+      {RK::Message, 0, WithHold(QueueRoster("away", "ranked"), "90000")},
+      {RK::SocketClose, 85000}, {RK::Message, 89000, WithHold(welcome.serialize(), "1000")},
+      {RK::Message, 89001, WithHold(QueueRoster("away", "ranked"), "5000")},
+      {RK::Tick, 104001},
+  });
+  EXPECT_EQ(*trace[4].public_deadline, std::chrono::steady_clock::time_point{} + std::chrono::seconds(90));
+  EXPECT_EQ(*trace[5].public_deadline, std::chrono::steady_clock::time_point{} + std::chrono::milliseconds(94001));
+  EXPECT_EQ(trace.back().state, RoomState::Ended);
 }
 
 TEST(OrcaRoomRecovery, RankedFinalRetriesAndReplaysUntilItsReceipt)

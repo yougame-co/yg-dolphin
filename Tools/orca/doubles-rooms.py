@@ -158,6 +158,7 @@ class Rooms:
         self.hold_ms = None
         self.hold_until = {}
         self.verdict_delay = 0
+        self.peer_away_after_rejoin = None
 
     def mode(self, room):
         return self.queue_mode if self.queue_room in (None, room) else None
@@ -552,9 +553,20 @@ class Handler(BaseHTTPRequestHandler):
             rooms.away.discard((room, player))
             rooms.joined.add((room, player))
             rooms.sockets[(room, player)] = connection
+            welcome = rooms.roster(room, player)
             rooms.connections.append({"room": room, "player": player, "returning": returning,
-                                      "slot": rooms.members[(room, player)], "at": time.monotonic()})
-            rooms.send(connection, rooms.roster(room, player))
+                                      "slot": rooms.members[(room, player)], "at": time.monotonic(),
+                                      "hold_ms": welcome.get("hold_ms"),
+                                      "away": [p["id"] for p in welcome["players"] if p.get("away")]})
+            rooms.send(connection, welcome)
+            if returning and rooms.peer_away_after_rejoin is not None:
+                for peer in welcome["players"]:
+                    if peer.get("away") and peer["id"] != player:
+                        timer = threading.Timer(rooms.peer_away_after_rejoin, rooms.notify_away,
+                                                (room, peer["id"]))
+                        timer.daemon = True
+                        rooms.timers.append(timer)
+                        timer.start()
             for (code, name), other in list(rooms.sockets.items()):
                 if code == room and name != player:
                     rooms.send(other, rooms.roster(room, name, "back" if returning else "join", player))
@@ -1039,6 +1051,18 @@ def verify_queue_run(args, work, diagnostics, errors):
                  if connection["player"] == drop["player"] and connection["returning"]]
         if not backs or backs[-1]["at"] - drop["at"] < 15:
             raise RuntimeError("room socket was not absent for 15 seconds")
+    if args.expect_crossed_holds:
+        returning = [entry for entry in diagnostics["connections"]
+                     if entry["player"] == "Doubles0" and entry["returning"] and
+                     entry["away"] == ["Doubles1"]]
+        if not returning or not 0 <= returning[-1]["hold_ms"] < 10000:
+            raise RuntimeError("crossed hold did not return with a small self remainder and away peer")
+        peer_drop = next(drop for drop in drops if drop["player"] == "Doubles1")
+        if returning[-1]["at"] >= peer_drop["at"] + 90:
+            raise RuntimeError("crossed peer was no longer inside its independent hold")
+        if 0 in errors:
+            raise RuntimeError("returning player departed before the peer's verdict")
+        print("PASS: self WELCOME small remainder preserves the still-away peer's independent hold and verdict", flush=True)
     if args.expect_report_replay:
         if not diagnostics["lost_receipts"]:
             raise RuntimeError("report replay run did not lose a receipt")
@@ -1425,6 +1449,7 @@ def main():
                         help="two-player public room; welcome room.queue plus room.recovery:true")
     parser.add_argument("--hold-ms", type=int, help="fake server hold remaining milliseconds; omit for legacy 90 s fallback")
     parser.add_argument("--verdict-delay", type=float, default=0, help="deliver the server verdict this many seconds after its hold")
+    parser.add_argument("--expect-crossed-holds", action="store_true", help="verify small self WELCOME remainder while a peer retains its later hold")
     parser.add_argument("--expect-report-replay", action="store_true", help="require lost receipt, stable report replay after rejoin, and one local result per peer")
     parser.add_argument("--drop-report-receipts", type=int, default=0, help="lose this many report receipt broadcasts; retained receipts replay on retry")
     parser.add_argument("--no-recovery", action="store_true", help="omit recovery from the queue welcome (legacy policy)")
@@ -1470,6 +1495,7 @@ def main():
                         role_versions=versions, queue_mode=args.queue, recovery=not args.no_recovery, queue_room=args.room)
         server.rooms.hold_ms = args.hold_ms
         server.rooms.verdict_delay = args.verdict_delay
+        server.rooms.peer_away_after_rejoin = 20 if args.expect_crossed_holds else None
         server.rooms.drop_receipts = args.drop_report_receipts
         print(f"Dev friends-room fixture listening on port {server.server_port}", flush=True)
         try:
@@ -1487,6 +1513,7 @@ def main():
                                 role_versions=versions, queue_mode=args.queue, recovery=not args.no_recovery, queue_room=args.room)
                 server.rooms.hold_ms = args.hold_ms
                 server.rooms.verdict_delay = args.verdict_delay
+                server.rooms.peer_away_after_rejoin = 20 if args.expect_crossed_holds else None
                 server.rooms.drop_receipts = args.drop_report_receipts
                 threading.Thread(target=server.serve_forever, daemon=True).start()
                 args.site = f"http://127.0.0.1:{server.server_port}"
