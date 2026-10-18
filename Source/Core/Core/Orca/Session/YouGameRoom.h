@@ -329,6 +329,7 @@ public:
   void TestDropConnection();
 
 private:
+  YouGameRoom(RoomOptions options, bool start_io);
   friend std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions&,
                                                       const std::vector<RoomTestStep>&);
   struct Impl;
@@ -435,6 +436,8 @@ struct RoomTestStep
     PollReconnect,
     ConnectFailure,
     InitialConnectFailure,
+    InputSilence,
+    SocketConnected,
     SendFailure,
     ReportGame,
     GameStart,
@@ -462,6 +465,8 @@ struct RoomTestSnapshot
   bool recovery = false;
   int known_games = 0;
   std::vector<std::string> results;
+  std::optional<std::chrono::steady_clock::time_point> public_deadline;
+  bool session_recovering = false;
 };
 std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
                                              const std::vector<RoomTestStep>& steps);

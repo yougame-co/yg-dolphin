@@ -535,7 +535,7 @@ bool Model::InSetOver() const
 
 std::optional<Notice> Model::NoticeAt(double now, bool* hides_waiting) const
 {
-  if (m_room_hold && now < *m_room_hold)
+  if (m_room_hold)
   {
     Notice n;
     n.title = "Reconnecting…";

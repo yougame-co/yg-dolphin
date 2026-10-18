@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <deque>
 #include <functional>
+#include <limits>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -1109,6 +1110,41 @@ struct YouGameRoom::Impl
   std::map<std::string, Clock::time_point> input_holds;
   // I/O-owned reconnect/presence state, published under mutex for the session thread.
   Clock::time_point room_recovery_until{};
+  // Shared under mutex. Public 1v1 recovery has one deadline, including input silence.
+  std::optional<Clock::time_point> public_hold_until;
+  bool public_socket_reachable = false;
+
+  bool PublicHoldAliveLocked(Clock::time_point now) const
+  {
+    return public_hold_until && now < *public_hold_until +
+        (public_socket_reachable ? ROOM_VERDICT_GRACE : std::chrono::seconds(0));
+  }
+
+  std::optional<Clock::time_point> PublicDeadline() const
+  {
+    std::lock_guard lock(mutex);
+    return QueueRecoveryLocked() ? public_hold_until : std::nullopt;
+  }
+
+  void ReconcilePublicHold(const picojson::object& message)
+  {
+    std::lock_guard lock(mutex);
+    if (!QueueRecoveryLocked())
+      return;
+    if (const auto ms = Int(message, "hold_ms", 0, std::numeric_limits<int>::max()))
+      public_hold_until = Now() + std::chrono::milliseconds(*ms);
+    else if (!public_hold_until)
+      public_hold_until = Now() + ROOM_HOLD;
+    // Existing input holds are markers; every public consumer reads public_hold_until.
+    for (const auto& [slot, id] : peer_ids)
+      input_holds.try_emplace(id, *public_hold_until);
+    for (auto& [id, deadline] : input_holds)
+      deadline = *public_hold_until;
+    if (host_away_until)
+      host_away_until = public_hold_until;
+    if (host_hold_until)
+      host_hold_until = public_hold_until;
+  }
   std::vector<std::string> pending_room_notices;
   std::array<int, MAX_SEATS> input_through{-1, -1, -1, -1};
   std::optional<std::pair<std::vector<KeyframeInfo::Name>, int>> pending_names;
@@ -1428,6 +1464,7 @@ struct YouGameRoom::Impl
       input_holds.clear();
       report_outbox.clear();
       room_recovery_until = {};
+      public_hold_until.reset();
       host_away_until.reset();
       host_hold_until.reset();
     }
@@ -1955,7 +1992,8 @@ struct YouGameRoom::Impl
   {
     std::lock_guard lock(mutex);
     const auto hold = input_holds.find(id);
-    return hold != input_holds.end() && now < hold->second;
+    return hold != input_holds.end() && (QueueRecoveryLocked() ? PublicHoldAliveLocked(now) :
+                                                               now < hold->second);
   }
 
   // A fast room back is not evidence that the direct path recovered. An announced peer
@@ -1963,6 +2001,23 @@ struct YouGameRoom::Impl
   bool BackPeer(const std::string& id, Peer& peer, Clock::time_point now)
   {
     const bool live = DirectInputLive(LastDirectInput(id), now);
+    if (QueueRecovery())
+    {
+      std::lock_guard lock(mutex);
+      const bool keep = !peer.presence.suspended &&
+                        (!public_hold_until || PublicHoldAliveLocked(now));
+      if (keep && peer.announced && (peer.sent_packet || direct_inputs.contains(id)))
+      {
+        if (!public_hold_until)
+          public_hold_until = now + ROOM_HOLD;
+        input_holds.try_emplace(id, *public_hold_until);
+        if (peer.drop_in_host)
+          host_hold_until = public_hold_until;
+      }
+      peer.presence.away_since.reset();
+      peer.presence.suspended = false;
+      return keep;
+    }
     bool keep_session = peer.announced && !peer.presence.suspended &&
                         (!peer.presence.Deadline() || now < *peer.presence.Deadline());
     if (keep_session)
@@ -2041,6 +2096,26 @@ struct YouGameRoom::Impl
   void PublishRoomRecovery()
   {
     const auto now = Now();
+    if (QueueRecovery())
+    {
+      std::optional<Clock::time_point> deadline;
+      {
+        std::lock_guard lock(mutex);
+        const bool held = reconnect.since || !input_holds.empty() ||
+            std::ranges::any_of(peers, [](const auto& p) {
+              return p.second.presence.away_since.has_value();
+            });
+        if (!held || state == RoomState::Ended)
+          public_hold_until.reset();
+        deadline = public_hold_until;
+        room_recovery_until = deadline.value_or(Clock::time_point{});
+      }
+      const double remaining = deadline ?
+          std::chrono::duration<double, std::milli>(*deadline - now).count() : 0;
+      Orca::UX::SetEnd::Current().RoomHold(deadline ?
+          std::optional(Orca::UX::SetEnd::NowMs() + remaining) : std::nullopt);
+      return;
+    }
     auto until = reconnect.since ? *reconnect.since + ROOM_HOLD : Clock::time_point{};
     for (const auto& [id, peer] : peers)
     {
@@ -2078,6 +2153,13 @@ struct YouGameRoom::Impl
     if (!RoomRecovery() || !reconnect.Start(now, close_code, ReconnectJitter()))
       return false;
     dropped = true;
+    if (QueueRecovery())
+    {
+      std::lock_guard lock(mutex);
+      public_socket_reachable = false;
+      if (!public_hold_until)
+        public_hold_until = now + ROOM_HOLD;
+    }
     if (!retry)
     {
       reconnect_close_code = close_code;
@@ -2101,7 +2183,7 @@ struct YouGameRoom::Impl
         if (peer.drop_in_host)
         {
           std::lock_guard lock(mutex);
-          host_away_until = peer.presence.Deadline();
+          host_away_until = QueueRecoveryLocked() ? public_hold_until : peer.presence.Deadline();
           host_hold_until = host_away_until;
         }
       }
@@ -2109,7 +2191,7 @@ struct YouGameRoom::Impl
     else
     {
       reconnect_error = fmt::format("close-code={} close-reason={}", close_code, why);
-      reconnect.Retry(now, ReconnectJitter());
+      reconnect.Retry(now, ReconnectJitter(), PublicDeadline());
     }
     // No leave: the server must hold this seat and the host role. The room mirror and transport
     // remain live, and direct links retain their identity, queues and keys.
@@ -2226,7 +2308,7 @@ struct YouGameRoom::Impl
           "Try again in a few seconds.", "network");
       return;
     }
-    reconnect.Retry(now, ReconnectJitter());
+    reconnect.Retry(now, ReconnectJitter(), PublicDeadline());
     // Try exactly at the grace boundary rather than overshooting it by a full backoff.
     if (grace)
       reconnect.next_attempt = std::min(*reconnect.next_attempt, *reconnect.since + grace_window);
@@ -2239,12 +2321,26 @@ struct YouGameRoom::Impl
   void PollReconnect()
   {
     const auto now = Now();
-    if (reconnect.Check(now) == RoomLoss::HoldExpired)
+    if (QueueRecovery() && reconnect_job && reconnect_job->done && reconnect_job->socket)
     {
-      if (reconnect_job)
-        reconnect_job->cancel = true;
-      EndRecovery("Lost the connection to the room (hold-expired)");
-      return;
+      std::lock_guard lock(mutex);
+      public_socket_reachable = true;
+    }
+    if (reconnect.Check(now, PublicDeadline()) == RoomLoss::HoldExpired)
+    {
+      bool waiting = false;
+      {
+        std::lock_guard lock(mutex);
+        waiting = QueueRecoveryLocked() && PublicHoldAliveLocked(now);
+      }
+      if (!waiting)
+      {
+        if (reconnect_job)
+          reconnect_job->cancel = true;
+        EndRecovery("Lost the connection to the room (hold-expired)");
+        return;
+      }
+      // Retry cutoff reached; keep reading a reachable room for its verdict.
     }
     if (reconnect_job)
     {
@@ -2256,6 +2352,10 @@ struct YouGameRoom::Impl
         ws = std::move(reconnect_job->socket);
         reconnect_new_colo = ws->EdgeColo();
         last_heard = now;
+        {
+          std::lock_guard lock(mutex);
+          public_socket_reachable = true;
+        }
         last_ping = last_hello = {};
         RoomNotice(AwaySelf() + " retry connected-awaiting-welcome " + ReconnectContext());
         // Recovery finishes at welcome, after the room confirms the same identity and seat.
@@ -2266,7 +2366,7 @@ struct YouGameRoom::Impl
       }
       reconnect_job.reset();
     }
-    if (ws->IsOpen() || reconnect_job || !reconnect.Attempt(now))
+    if (ws->IsOpen() || reconnect_job || !reconnect.Attempt(now, PublicDeadline()))
       return;
     if (!reconnect_budget.Available(now))
     {
@@ -2283,7 +2383,7 @@ struct YouGameRoom::Impl
       return;
     auto job = std::make_unique<ReconnectJob>();
     ReconnectJob* const raw = job.get();
-    const auto deadline = *reconnect.since + ROOM_HOLD;
+    const auto deadline = PublicDeadline().value_or(*reconnect.since + ROOM_HOLD);
     const bool server_closed = reconnect_reason.starts_with("WebSocket closed by the server");
     job->thread = std::thread([this, raw, deadline, server_closed] {
       std::string ticket, store, ticket_error;
@@ -4050,6 +4150,17 @@ struct YouGameRoom::Impl
     // All recovery rooms share this transport hold/notice/leave policy.
     if (!RoomRecovery())
       return;
+    if (QueueRecovery())
+    {
+      bool expired;
+      {
+        std::lock_guard lock(mutex);
+        expired = public_hold_until && !PublicHoldAliveLocked(now);
+      }
+      if (expired)
+        EndRecovery("room-hold-expired");
+      return;
+    }
     for (auto& [id, peer] : peers)
     {
       RoomLoss loss = peer.presence.Check(now, LastDirectInput(id));
@@ -4272,7 +4383,15 @@ struct YouGameRoom::Impl
           return;
         }
       }
-      if (recovering && reconnect.Check(Now()) == RoomLoss::HoldExpired)
+      if (recovering && QueueRecovery())
+      {
+        {
+          std::lock_guard lock(mutex);
+          public_socket_reachable = true;
+        }
+        ReconcilePublicHold(m);
+      }
+      if (recovering && !QueueRecovery() && reconnect.Check(Now()) == RoomLoss::HoldExpired)
       {
         EndRecovery("Lost the connection to the room (hold-expired)");
         return;
@@ -4372,8 +4491,17 @@ struct YouGameRoom::Impl
                          stay ? " (the players stay together)" : "");
         }
       }
+      if (QueueRecovery())
+      {
+        std::lock_guard lock(mutex);
+        public_socket_reachable = true;
+      }
       LinkPeers();
       Roster(m);
+      if (QueueRecovery() &&
+          (m.count("hold_ms") || (m.count("recovering") && m.at("recovering").is<bool>() &&
+                                  m.at("recovering").get<bool>())))
+        ReconcilePublicHold(m);
       if (recovering)
       {
         if (State() == RoomState::Ended)
@@ -4411,6 +4539,10 @@ struct YouGameRoom::Impl
       if (state == RoomState::Connecting)
         state = RoomState::Waiting;
     }
+    else if (t == "recovering" && QueueRecovery())
+    {
+      ReconcilePublicHold(m);
+    }
     else if (t == "join" || t == "back" || t == "leave" || t == "away" || t == "lobby")
     {
       if (t != "lobby")
@@ -4434,12 +4566,13 @@ struct YouGameRoom::Impl
             }
             else if (t == "away")
             {
+              ReconcilePublicHold(m);
               p->second.presence.Away(now);
               p->second.resume_handled = false;
               if (p->second.drop_in_host)
               {
                 std::lock_guard lock(mutex);
-                host_away_until = p->second.presence.Deadline();
+                host_away_until = QueueRecoveryLocked() ? public_hold_until : p->second.presence.Deadline();
                 host_hold_until = host_away_until;
               }
               RoomNotice(fmt::format("room-away peer {} kept {}", p->second.slot + 1,
@@ -4895,12 +5028,18 @@ YouGameRoom::YouGameRoom(RoomOptions options) : m_impl(std::make_unique<Impl>(st
 {
 }
 
+YouGameRoom::YouGameRoom(RoomOptions options, bool start_io)
+    : m_impl(std::make_unique<Impl>(std::move(options), start_io))
+{
+}
+
 YouGameRoom::~YouGameRoom() = default;
 
 std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
                                              const std::vector<RoomTestStep>& steps)
 {
-  YouGameRoom::Impl room(options, false);
+  YouGameRoom owner(options, false);
+  auto& room = *owner.m_impl;
   room.code = options.room_code;
   std::vector<RoomTestSnapshot> trace;
   for (const RoomTestStep& step : steps)
@@ -4924,6 +5063,13 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
       room.reports.push_back({report, *room.test_now, step.kind == RoomTestStep::Kind::GameStart});
       break;
     }
+    case RoomTestStep::Kind::InputSilence:
+      owner.HoldInputSilence(Clock::time_point{} + std::chrono::milliseconds(step.close_code),
+                             *room.test_now);
+      break;
+    case RoomTestStep::Kind::SocketConnected:
+      room.public_socket_reachable = true;
+      break;
     case RoomTestStep::Kind::SendFailure:
       room.test_send_failures = step.close_code;
       break;
@@ -4971,7 +5117,8 @@ std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
                      std::exchange(room.test_sent, {}), room.reconnect.attempts,
                      room.reconnect.next_attempt, std::exchange(room.test_notices, {}), room.status,
                      room.error_code, room.RoomRecovery(), room.known_games,
-                     std::exchange(room.test_results, {})});
+                     std::exchange(room.test_results, {}), room.public_hold_until,
+                     owner.RoomRecovering(*room.test_now)});
     room.inbox_from.clear();
   }
   return trace;
@@ -5068,6 +5215,21 @@ bool YouGameRoom::HoldInputSilence(Clock::time_point since, Clock::time_point no
           return e.kind == PeerEvent::Kind::Left && e.seat == slot;
         }))
       return false;
+    if (m_impl->QueueRecoveryLocked())
+    {
+      if (!m_impl->public_hold_until)
+      {
+        if (now >= since + ROOM_HOLD)
+          return false;
+        m_impl->public_hold_until = since + ROOM_HOLD;
+      }
+      m_impl->input_holds.try_emplace(id, *m_impl->public_hold_until);
+      if (m_impl->joining && slot == 0)
+        m_impl->host_hold_until = m_impl->public_hold_until;
+      if (!m_impl->PublicHoldAliveLocked(now))
+        return false;
+      continue;
+    }
     // A caller can reach the timeout after the window has already elapsed. Do not install an
     // already-expired new hold; existing holds still keep their original deadline.
     if (!m_impl->input_holds.contains(id) && now >= since + ROOM_HOLD)
@@ -5093,6 +5255,8 @@ bool YouGameRoom::RoomRecovering(Clock::time_point now) const
   // All recovery rooms expose input holds/countdown to the session and overlay.
   if (!m_impl->RoomRecoveryLocked() || m_impl->state != RoomState::Waiting)
     return false;
+  if (m_impl->QueueRecoveryLocked())
+    return m_impl->PublicHoldAliveLocked(now);
   return now < m_impl->room_recovery_until ||
          std::ranges::any_of(m_impl->input_holds,
                              [&](const auto& hold) { return now < hold.second; });
@@ -5531,7 +5695,9 @@ std::vector<Packet> YouGameRoom::Receive()
       if (id == m_impl->peer_ids.end() || packet.pads.empty())
         return false;
       const auto hold = m_impl->input_holds.find(id->second);
-      if (hold == m_impl->input_holds.end() || m_impl->Now() >= hold->second)
+      if (hold == m_impl->input_holds.end() ||
+          (m_impl->QueueRecoveryLocked() ? !m_impl->PublicHoldAliveLocked(m_impl->Now()) :
+                                          m_impl->Now() >= hold->second))
         return false;
       if (std::ranges::find(m_impl->pending_retries, id->second) != m_impl->pending_retries.end())
         return true;

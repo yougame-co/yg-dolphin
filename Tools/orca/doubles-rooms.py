@@ -155,6 +155,9 @@ class Rooms:
         self.expired = set()
         self.blocked = set()
         self.away = set()
+        self.hold_ms = None
+        self.hold_until = {}
+        self.verdict_delay = 0
 
     def mode(self, room):
         return self.queue_mode if self.queue_room in (None, room) else None
@@ -223,10 +226,15 @@ class Rooms:
         """Drop only the room socket; the real direct link remains available to the peers."""
         with self.lock:
             self.blocked.add((room, player))
+            hold = (self.hold_ms / 1000) if self.hold_ms is not None else 90
+            self.hold_until[(room, player)] = time.monotonic() + hold
             self.drops.append({"room": room, "player": player, "seconds": seconds,
                                "at": time.monotonic()})
             connection = self.sockets.get((room, player))
             if connection:
+                if self.mode(room) and self.recovery and self.hold_ms is not None:
+                    remaining = max(0, int((self.hold_until[(room, player)] - time.monotonic()) * 1000))
+                    self.send(connection, {"t": "recovering", "hold_ms": remaining})
                 connection[0].shutdown(socket.SHUT_RDWR)
             def back():
                 with self.lock:
@@ -235,9 +243,9 @@ class Rooms:
             timer.daemon = True
             self.timers.append(timer)
             timer.start()
-            if self.mode(room) == "ranked" and seconds >= 90:
+            if self.mode(room) == "ranked" and seconds >= hold:
                 # The server owns this verdict, including for a socket which cannot come back.
-                timer = threading.Timer(90, self.forfeit, (room, player))
+                timer = threading.Timer(hold + self.verdict_delay, self.forfeit, (room, player))
                 timer.daemon = True
                 self.timers.append(timer)
                 timer.start()
@@ -362,6 +370,10 @@ class Rooms:
                                  for seat, name in members]}
         if self.mode(room) and self.recovery and kind == "welcome":
             result["room"]["recovery"] = True
+        if self.mode(room) and self.recovery and self.hold_ms is not None:
+            held = self.hold_until.get((room, changed if kind == "away" else local))
+            if held is not None and kind in {"away", "welcome", "recovering"}:
+                result["hold_ms"] = max(0, int((held - time.monotonic()) * 1000))
         if room in self.matches:
             result["matchId"] = self.matches[room]
         return result
@@ -541,7 +553,7 @@ class Handler(BaseHTTPRequestHandler):
             rooms.joined.add((room, player))
             rooms.sockets[(room, player)] = connection
             rooms.connections.append({"room": room, "player": player, "returning": returning,
-                                      "at": time.monotonic()})
+                                      "slot": rooms.members[(room, player)], "at": time.monotonic()})
             rooms.send(connection, rooms.roster(room, player))
             for (code, name), other in list(rooms.sockets.items()):
                 if code == room and name != player:
@@ -582,16 +594,7 @@ class Handler(BaseHTTPRequestHandler):
                     rooms.sockets.pop((room, player), None)
                     if not departed and (room, player) in rooms.members:
                         rooms.away.add((room, player))
-                        if rooms.mode(room) == "ranked" and (room, player) in rooms.blocked:
-                            # Relay delivery follows server detection. Keep a small explicit delay
-                            # so a 90 s server verdict is inside the receiver's 90 s hold, without
-                            # relying on scheduler races between two different clocks.
-                            timer = threading.Timer(0.25, rooms.notify_away, (room, player))
-                            timer.daemon = True
-                            rooms.timers.append(timer)
-                            timer.start()
-                        else:
-                            rooms.notify_away(room, player)
+                        rooms.notify_away(room, player)
             self.close_connection = True
 
     def keyframe(self, operation):
@@ -1012,7 +1015,7 @@ def verify_queue_run(args, work, diagnostics, errors):
         dropped = int(drops[-1]["player"][-1])
         if not any(command["t"] == "game-start" for command in diagnostics["commands"]):
             raise RuntimeError("ranked fight never reported that its fighters were in")
-        if drops[-1]["seconds"] < 90:
+        if drops[-1]["seconds"] < (args.hold_ms / 1000 if args.hold_ms is not None else 90):
             raise RuntimeError("ranked forfeit check requires an outage exceeding the hold")
         if errors.get(dropped) != ("orca error network Lost the connection to the match. "
                                    "Press Play to look for a new one."):
@@ -1028,13 +1031,31 @@ def verify_queue_run(args, work, diagnostics, errors):
     else:
         if errors:
             raise RuntimeError("recovering queue ended with an error")
-        if not any("room-back self" in log and "kept same-seat" in log for log in logs):
+        if not any(("room-back self" in log and "kept same-seat" in log) or
+                   (args.expect_report_replay and "same-seat-fresh-drop-in" in log) for log in logs):
             raise RuntimeError("dropped queue socket did not recover its same seat/session")
         drop = drops[-1]
         backs = [connection for connection in diagnostics["connections"]
                  if connection["player"] == drop["player"] and connection["returning"]]
         if not backs or backs[-1]["at"] - drop["at"] < 15:
             raise RuntimeError("room socket was not absent for 15 seconds")
+    if args.expect_report_replay:
+        if not diagnostics["lost_receipts"]:
+            raise RuntimeError("report replay run did not lose a receipt")
+        dropped = drops[-1]["player"]
+        seats = [entry["slot"] for entry in diagnostics["connections"]
+                 if entry["room"] == args.room and entry["player"] == dropped]
+        if len(seats) < 2 or len(set(seats)) != 1:
+            raise RuntimeError("report replay did not retain its original seat")
+        reports = [entry for entry in diagnostics["commands"]
+                   if entry["player"] == dropped and entry["t"] in {"game-report", "finish"}]
+        if len(reports) < 2 or any(entry != reports[0] for entry in reports):
+            raise RuntimeError("dropped peer did not replay identical report bytes/identity")
+        for log in logs:
+            results = [line for line in log.splitlines() if line.startswith("orca result ")]
+            if len(results) != 1:
+                raise RuntimeError(f"report replay applied {len(results)} local results instead of one")
+        print("PASS: engine report replay after lost receipt and rejoin; stable payload, one result per peer", flush=True)
     print(f"PASS: {args.queue} queue {args.expect_queue_ending or 'same-seat recovery'}; "
           f"room drops {[(d['player'], d['seconds']) for d in drops]}", flush=True)
 
@@ -1320,7 +1341,17 @@ def run(args):
                                          if name not in {f"Doubles{role}" for role in refused}]
             if args.queue:
                 verify_queue_run(args, work, diagnostics, queue_errors)
-            final_frame = verify_diagnostics(diagnostics, expected=args.expected) if not args.expect_queue_ending else "pre-drop (ending verified)"
+            if args.expect_queue_ending or args.expect_report_replay:
+                samples = list(diagnostics["hashes"].values())
+                common = set.intersection(*(set(sample) for sample in samples)) if len(samples) == args.expected else set()
+                if not common:
+                    raise RuntimeError("ending fixture has no common confirmed checksum samples")
+                for sample in common:
+                    if len({values[sample] for values in samples}) != 1:
+                        raise RuntimeError(f"pre-ending checksum mismatch at {sample}")
+                final_frame = f"{max(map(int, common))} ({len(common)} common pre-ending samples)"
+            else:
+                final_frame = verify_diagnostics(diagnostics, expected=args.expected)
             verify_gameplay(work, args.expect_fight)
             print(f"PASS: all machines agree on plug {frames}, confirmed hashes through frame {final_frame}; "
                   f"0 desyncs; {len(args.expect_fight)} requested fights returned to CSS")
@@ -1392,6 +1423,10 @@ def main():
                         "action=spawn|command|away|back|drop (seconds, default 15); drop severs only room socket")
     parser.add_argument("--queue", choices=("casual", "ranked"),
                         help="two-player public room; welcome room.queue plus room.recovery:true")
+    parser.add_argument("--hold-ms", type=int, help="fake server hold remaining milliseconds; omit for legacy 90 s fallback")
+    parser.add_argument("--verdict-delay", type=float, default=0, help="deliver the server verdict this many seconds after its hold")
+    parser.add_argument("--expect-report-replay", action="store_true", help="require lost receipt, stable report replay after rejoin, and one local result per peer")
+    parser.add_argument("--drop-report-receipts", type=int, default=0, help="lose this many report receipt broadcasts; retained receipts replay on retry")
     parser.add_argument("--no-recovery", action="store_true", help="omit recovery from the queue welcome (legacy policy)")
     parser.add_argument("--expect-queue-ending", choices=("network", "forfeit"),
                         help="verify legacy network ending or the fixture's ranked forfeit after a 90 s hold")
@@ -1433,6 +1468,9 @@ def main():
         server = Server((args.listen, args.port), args.turn_binary, doubles=not args.ordinary,
                         version_refusals=args.version_refusals, owner_relaunch=args.owner_relaunch,
                         role_versions=versions, queue_mode=args.queue, recovery=not args.no_recovery, queue_room=args.room)
+        server.rooms.hold_ms = args.hold_ms
+        server.rooms.verdict_delay = args.verdict_delay
+        server.rooms.drop_receipts = args.drop_report_receipts
         print(f"Dev friends-room fixture listening on port {server.server_port}", flush=True)
         try:
             server.serve_forever()
@@ -1447,6 +1485,9 @@ def main():
                 server = Server(("127.0.0.1", 0), args.turn_binary, doubles=not args.ordinary,
                                 version_refusals=args.version_refusals, owner_relaunch=args.owner_relaunch,
                                 role_versions=versions, queue_mode=args.queue, recovery=not args.no_recovery, queue_room=args.room)
+                server.rooms.hold_ms = args.hold_ms
+                server.rooms.verdict_delay = args.verdict_delay
+                server.rooms.drop_receipts = args.drop_report_receipts
                 threading.Thread(target=server.serve_forever, daemon=True).start()
                 args.site = f"http://127.0.0.1:{server.server_port}"
             run(args)
