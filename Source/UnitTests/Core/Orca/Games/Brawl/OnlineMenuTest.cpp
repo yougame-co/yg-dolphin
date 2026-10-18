@@ -2386,13 +2386,13 @@ TEST(OrcaOnlineMenuLobby, EveryCapFitsTheAppsCapsLine)
 {
   // Apps before the Music switch's release read at most 16 caps words; desktop 0.12.39 and later
   // read 24. With "gfx" (17) Orca needs at least that app; its manifest asks for 0.12.41, the app
-  // that sends "gfx". "talk" (18), "rumble" (19) and "record" (20) come last.
+  // that sends "gfx". "talk" (18), "rumble" (19), "record" (20), then "hostui" (21).
   // The most any profile offers is all of them.
   const std::string all = fmt::format(
-      "{} {} {} {} {} {} {} {} {}", Orca::Status::CAPS, Orca::Status::MUSIC_CAP,
+      "{} {} {} {} {} {} {} {} {} {}", Orca::Status::CAPS, Orca::Status::MUSIC_CAP,
       Orca::Status::RESULTS_CAP, Orca::Status::LOCKS_CAP, Orca::Status::QUEUE2_CAP,
       Orca::Status::PICK_CAPS, Orca::Status::TALK_CAP, Orca::Status::RUMBLE_CAP,
-      Orca::Status::RECORD_CAP);
+      Orca::Status::RECORD_CAP, Orca::Status::HOSTUI_CAP);
   std::istringstream words{all};
   int count = 0;
   for (std::string word; words >> word;)
@@ -2401,9 +2401,11 @@ TEST(OrcaOnlineMenuLobby, EveryCapFitsTheAppsCapsLine)
     EXPECT_LE(word.size(), 24u) << word;
   }
   EXPECT_LE(count, 24);
+  EXPECT_EQ(count, 21);
   const std::string offered = Orca::Status::OfferedCaps();
-  const std::string tail = fmt::format(" {} {} {}", Orca::Status::TALK_CAP,
-                                       Orca::Status::RUMBLE_CAP, Orca::Status::RECORD_CAP);
+  const std::string tail = fmt::format(" {} {} {} {}", Orca::Status::TALK_CAP,
+                                       Orca::Status::RUMBLE_CAP, Orca::Status::RECORD_CAP,
+                                       Orca::Status::HOSTUI_CAP);
   ASSERT_GE(offered.size(), tail.size());
   EXPECT_EQ(offered.substr(offered.size() - tail.size()), tail);
 }

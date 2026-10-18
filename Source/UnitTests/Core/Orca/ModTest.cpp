@@ -994,7 +994,7 @@ TEST(OrcaMod, Guards)
 TEST(OrcaMod, LegacyCapsLinesArePinned)
 {
   const std::string line = "join leave stats pause delay perf direct host chat yougame gfx music "
-                           "results locks queue2 pick-casual pick-ranked talk rumble record";
+                           "results locks queue2 pick-casual pick-ranked talk rumble record hostui";
   std::string error;
   const auto brawl = Orca::LoadProfileFrom(RepoPath("Data/Sys/"), "RSBE01", 2, &error);
   ASSERT_TRUE(brawl) << error;
@@ -1033,8 +1033,9 @@ TEST(OrcaMod, ModeGates)
   // The music switch is host-only and follows the disc as in legacy (Music::Supported), guards or
   // not; the pick caps go with "locks". The engine caps "talk", "rumble" and "record" are offered in
   // every mode, last, guards or not.
-  const std::string tail = fmt::format(" {} {} {}", Orca::Status::TALK_CAP,
-                                       Orca::Status::RUMBLE_CAP, Orca::Status::RECORD_CAP);
+  const std::string tail = fmt::format(" {} {} {} {}", Orca::Status::TALK_CAP,
+                                       Orca::Status::RUMBLE_CAP, Orca::Status::RECORD_CAP,
+                                       Orca::Status::HOSTUI_CAP);
   const std::string base =
       std::string(Orca::Status::CAPS) + " " + Orca::Status::MUSIC_CAP + tail;
   const std::string all = std::string(Orca::Status::CAPS) + " " + Orca::Status::MUSIC_CAP +
@@ -2032,8 +2033,9 @@ TEST(OrcaMod, ResultsOnlyAdmitsRankedWithoutRulesetGates)
   EXPECT_FALSE(Orca::UX::BrawlGame::UsesFreeSpace(game));
   EXPECT_FALSE(module.Active());
   EXPECT_FALSE(Orca::Mod::Offers("results"));
-  const std::string tail = fmt::format(" {} {} {}", Orca::Status::TALK_CAP,
-                                       Orca::Status::RUMBLE_CAP, Orca::Status::RECORD_CAP);
+  const std::string tail = fmt::format(" {} {} {} {}", Orca::Status::TALK_CAP,
+                                       Orca::Status::RUMBLE_CAP, Orca::Status::RECORD_CAP,
+                                       Orca::Status::HOSTUI_CAP);
   const std::string base = std::string(Orca::Status::CAPS) + " " + Orca::Status::MUSIC_CAP;
   EXPECT_EQ(Orca::Status::OfferedCaps(), base + tail);
   // Its eight guard words held: results and the menus, and nothing a ruleset brings.

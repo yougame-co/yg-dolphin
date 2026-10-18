@@ -187,7 +187,8 @@ private:
   int m_view_width = 0;
 };
 
-// Host controls never write a pad or guest memory. Up + Start opens this menu using the
+// Host controls require agreed cap "hostui" and never write a pad or guest memory.
+// Up + Start opens this menu using the
 // existing corner shortcut; D-pad moves, A selects and B closes. The focused app relays its
 // feedback shortcut over stdin, without any host keyboard polling.
 enum class HostAction
@@ -232,7 +233,7 @@ private:
 
 bool HostEnabled();
 HostMenu& Menu();
-// The app's placement, or a visible default while the bridge is up before its first orb line.
+// The app's placement, or a visible default with agreed hostui before its first orb line.
 Model::View HostView(double now_ms);
 // View pixels, matching the platform's input coordinates. Includes the feedback button and menu.
 bool HitControls(float x, float y);

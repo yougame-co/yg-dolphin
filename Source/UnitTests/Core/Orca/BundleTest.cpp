@@ -1010,8 +1010,8 @@ TEST(OrcaBundle, PackSessionsOfferTheEngineCaps)
   const Signer signer(1);
   const std::string root = TempDir();
   const std::string tail =
-      fmt::format(" {} {} {}", Orca::Status::TALK_CAP, Orca::Status::RUMBLE_CAP,
-                  Orca::Status::RECORD_CAP);
+      fmt::format(" {} {} {} {}", Orca::Status::TALK_CAP, Orca::Status::RUMBLE_CAP,
+                  Orca::Status::RECORD_CAP, Orca::Status::HOSTUI_CAP);
   const auto ends_with_tail = [&tail] {
     const std::string offered = Orca::Status::OfferedCaps();
     return offered.size() >= tail.size() &&

@@ -81,3 +81,82 @@ Final checks: `git diff --check` passes; no tracked INI differs from base; all 1
 show attr/-text. After committing this rule and these notes, `git status --porcelain` is empty.
 The unit suite's generated imgui.ini was moved under build-orca-tests/; no untracked files
 remain outside that ignored build directory. No version bump or push. Nothing blocked.
+
+## hostui-0353 — negotiated native host menu
+
+Base check before edits:
+
+```text
+11e16e5e7b Preserve INI checkout bytes across platforms
+BASE-OK
+```
+
+Read the requested compatibility note (section 7) and compared the UX, NoGUI and bridge changes
+from 0.3.49 (`ce0a4d906a`) through the task base (`11e16e5e7b`). The new engine capability is
+`hostui`, offered after `record`, last so truncating app readers drop the newest word first.
+The ordinary ruleset offer now has 21 words, within the desktop's 24-word limit; the existing
+optional replay word remains before record/hostui. No existing word is removed or reordered.
+
+Before this change an active stdio session with a writer enabled the native host menu regardless
+of the app's support. Now `YgOrb::HostEnabled()` also requires `Status::Cap(HOSTUI_CAP)`, using
+the intersection of the current engine offer and the app's complete caps answer. This gates the
+fallback orb, delta/menu drawing, menu actions/output, feedback capture/cooldown, controller and
+keyboard navigation, orb clicks and Mac hit-box interception through their existing entry points.
+The feedback stdin handler silently ignores the command without the cap; host-menu uses the
+same gated toggle. A later caps answer takes effect immediately and withdrawing hostui closes
+an open menu, including an off/on pair between UI polls. Screenshot completion already checks
+HostEnabled before emitting output, so withdrawal also suppresses that output.
+
+Without agreement, the app drives the original orb placement, Windows orb clicks take the
+existing `orca orb` fallback, Mac clicks pass through, and Up+Start uses the original overlay
+press/release with talk or the `orca orb` toggle without talk. Existing overlay-key handling and
+shortcut pad masking are unchanged. With agreement, the 0.3.50 native controls remain available.
+ORCA.md Embedding, stdin/stdout and caps docs describe the agreement; desktop 0.13.0 / V2 web
+will opt in, while the listed production desktops and V1 retain the legacy path.
+
+Three new UX tests cover absent agreement with a live writer (no host/feedback output, screenshot
+cooldown consumption, native drawing or hit boxes; legacy orb/shortcut/key paths), enabled controls, and
+mid-run caps changes including both kinds of in-flight shortcut press. Existing screenshot,
+five-second cooldown, host rate, renderer and controller tests are retained; their renderer test
+now explicitly agrees hostui. Caps goldens for legacy/mod/pack profiles include the appended word,
+and the ordinary-offer test asserts exactly 21 words and the newest-last suffix.
+
+Exact ordinary offers (pinned by OrcaMod.LegacyCapsLinesArePinned):
+
+Brawl rev 2:
+```text
+orca caps join leave stats pause delay perf direct host chat yougame gfx music results locks queue2 pick-casual pick-ranked talk rumble record hostui
+```
+
+Project+:
+```text
+orca caps join leave stats pause delay perf direct host chat yougame gfx music results locks queue2 pick-casual pick-ranked talk rumble record hostui
+```
+
+### hostui-0353 gates
+
+All I/O-heavy checks used `flock /Users/luis/Code/brawl-dolphin/build.lock nice -n 10`.
+Build/compiler jobs used at most two workers and `CCACHE_DIR=/Volumes/YGWorktrees/ccache`;
+unit binaries ran sequentially in a minimal environment with ORCA_NO_LOCAL_INPUT=1 and all six
+requested SDL isolation variables. Loads were checked before starting each job and during the
+shared-lock wait; they stayed below 18. No dependency installs, game instances or native UI smoke
+runs were needed. Windows input fallback was reviewed in source; native Windows UI was not
+exercised on this macOS host.
+
+- Build: `cmake --build build-orca-tests --target dolphin-nogui tests --parallel 2`, PASS, exit 0.
+  The existing unused BUTTON_START warning remains in untouched Games/Brawl/Queue.cpp.
+  Log: build-orca-tests/hostui-0353-build.log.
+- Focused regressions: 28 tests from 6 suites, 28 passed, 0 failed, exit 0.
+  Log: build-orca-tests/hostui-0353-focused.log.
+- Full unfiltered binary: 2,237 tests from 180 suites; 2,142 passed, 95 skipped, 0 failed,
+  exit 0 (69.767 s). Log: build-orca-tests/hostui-0353-full-tests.log.
+- `--gtest_filter=Orca*`: 1,158 tests from 123 suites; 1,084 passed, 74 skipped, 0 failed,
+  exit 0 (65.008 s). Log: build-orca-tests/hostui-0353-orca-tests.log.
+  Skips are the existing opt-in fixtures; no live-service or disc setup was supplied.
+- Strict compilation: the existing notes/train-0350-werror.py runner, explicitly passed all nine
+  touched C++ sources plus OrbCombo.cpp, YgOrbDraw.cpp and PlatformMacos.mm, compiled all 12 with
+  their actual compile_commands.json flags plus `-Werror`; 12 passed, exit 0.
+  Log: build-orca-tests/hostui-0353-werror.log.
+- `git diff --check`: PASS. Test-generated files remain inside the ignored build directory.
+
+No version bump, push, PR, release or deployment. Nothing blocked or left for this task.

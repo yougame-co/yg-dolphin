@@ -510,7 +510,8 @@ bool HostMenu::HostDue(double now_ms)
 
 bool HostEnabled()
 {
-  return SessionActive() && !Status::IsStopping() && Bridge::Ready();
+  return SessionActive() && !Status::IsStopping() && Status::Cap(Status::HOSTUI_CAP) &&
+         Bridge::Ready();
 }
 
 HostMenu& Menu()

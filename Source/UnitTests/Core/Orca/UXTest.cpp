@@ -4531,6 +4531,187 @@ TEST(OrcaUXNameTags, SelectedSmashControlsSurviveAStaleAccountTiltProfile)
   EXPECT_TRUE(host.written.empty());
 }
 
+class OrcaUXHostUI : public OrcaUXOverlayDraw
+{
+protected:
+  void SetUp() override
+  {
+    OrcaUXOverlayDraw::SetUp();
+    const char* was = std::getenv("YOUGAME_STDIO");
+    m_had_stdio = was != nullptr;
+    m_stdio = was ? was : "";
+    SetStdio("1");
+    Orca::Bridge::ResetForTests();
+    Orca::Bridge::SetWriter(+[](const std::string&) {});
+    m_lines = std::make_unique<StatusLines>("");
+    ASSERT_TRUE(m_lines->Ok());
+    YgOrb::Current().Apply({}, YgOrb::NowMs());
+    YgOrb::Menu().Close();
+    LocalPadStopped();
+    Pad(0);
+    m_lines->Take();
+  }
+
+  void TearDown() override
+  {
+    LocalPadStopped();
+    Pad(0);
+    YgOrb::Current().Apply({}, YgOrb::NowMs());
+    m_lines.reset();
+    Orca::Bridge::SetWriter(nullptr);
+    Orca::Bridge::ResetForTests();
+    SetStdio(m_had_stdio ? m_stdio.c_str() : nullptr);
+    OrcaUXOverlayDraw::TearDown();
+  }
+
+  static void SetStdio(const char* value)
+  {
+#ifdef _WIN32
+    _putenv_s("YOUGAME_STDIO", value ? value : "");
+#else
+    if (value)
+      setenv("YOUGAME_STDIO", value, 1);
+    else
+      unsetenv("YOUGAME_STDIO");
+#endif
+  }
+
+  static u16 Pad(u16 buttons)
+  {
+    GCPadStatus pad{};
+    pad.button = buttons;
+    return FilterLocalPad(pad, true, true).button;
+  }
+
+  static int HostVertices()
+  {
+    ImGuiIO& io = ImGui::GetIO();
+    io.DisplaySize = ImVec2(640, 480);
+    io.DeltaTime = 1.0f / 60;
+    ImGui::NewFrame();
+    YgOrb::DrawHostControls(ImGui::GetForegroundDrawList(), YgOrb::HostView(YgOrb::NowMs()));
+    ImGui::Render();
+    return ImGui::GetDrawData()->TotalVtxCount;
+  }
+
+  std::unique_ptr<StatusLines> m_lines;
+  bool m_had_stdio = false;
+  std::string m_stdio;
+};
+
+TEST_F(OrcaUXHostUI, WithoutAgreementTheOrbAndShortcutKeepTheirLegacyPaths)
+{
+  using namespace YgOrb;
+  ASSERT_TRUE(Orca::Bridge::Ready());
+  EXPECT_TRUE(Orca::Status::OfferedCaps().ends_with(" record hostui"));
+  for (const char* caps : {"", "yougame", "yougame talk"})
+  {
+    SCOPED_TRACE(caps);
+    Orca::Status::SetAppCaps(caps);
+    ASSERT_FALSE(HostEnabled());
+    Current().Apply({}, NowMs());
+    EXPECT_FALSE(HostView(NowMs()).on);  // No bridge-created default orb.
+    Current().Apply(*ParseOrb("orb 16 16 40 1 0 0"), NowMs());
+    EXPECT_TRUE(HostView(NowMs()).on);  // The app still controls the original orb.
+    EXPECT_TRUE(Current().Hit(36, 36));
+    EXPECT_FALSE(HitControls(36, 36));  // macOS keeps passing clicks to the app.
+    EXPECT_FALSE(HitControls(84, 36));  // No feedback hit box.
+    EXPECT_FALSE(ClickControls(36, 36));  // Windows falls through to its `orca orb` path.
+    ToggleHostMenu();  // The host-menu stdin entry point.
+    EXPECT_FALSE(Menu().At().open);
+    for (const HostKey key : {HostKey::Feedback, HostKey::Menu, HostKey::Next, HostKey::Select})
+      EXPECT_FALSE(HandleHostKey(key));
+    Menu().FeedbackFinished(NowMs() - 5001);
+    for (int row = 0; row < HOST_ROWS; ++row)
+      ActivateHost(static_cast<HostAction>(row));
+    EXPECT_TRUE(Menu().FeedbackDue(NowMs())) << "No screenshot request or cooldown without hostui";
+    Menu().FeedbackFinished(-5000);
+    EXPECT_EQ(m_lines->Take(), "");  // No host, feedback or Controls output.
+    EXPECT_EQ(HostVertices(), 0);  // Neither delta nor menu is drawn.
+
+    EXPECT_EQ(Pad(PAD_BUTTON_UP), PAD_BUTTON_UP);
+    EXPECT_EQ(Pad(PAD_BUTTON_UP | PAD_BUTTON_START), 0);
+    EXPECT_FALSE(Menu().At().open);
+    EXPECT_EQ(Pad(0), 0);
+    const bool talk = Orca::Status::Cap(Orca::Status::TALK_CAP);
+    EXPECT_EQ(m_lines->Take(), talk ? "orca overlay down pad\norca overlay up pad\n" :
+                                    "orca orb\n");
+    // The overlay keyboard press/release is independent of hostui.
+    OverlayKey::Press keys(OverlayKey::Source::Keys);
+    EXPECT_EQ(keys.Down(talk), talk ? "orca overlay down keys" : "orca orb");
+    EXPECT_EQ(keys.Up(), talk ? "orca overlay up keys" : "");
+  }
+}
+
+TEST_F(OrcaUXHostUI, AgreementEnablesTheNativeMenuAndHostActions)
+{
+  using namespace YgOrb;
+  Orca::Status::SetAppCaps("yougame talk hostui");
+  ASSERT_TRUE(HostEnabled());
+  EXPECT_TRUE(HostView(NowMs()).on);
+  EXPECT_FALSE(Current().At(NowMs()).on);
+  EXPECT_TRUE(HitControls(36, 36));
+  EXPECT_TRUE(HitControls(84, 36));
+  EXPECT_GT(HostVertices(), 0);  // Delta is visible before opening the menu.
+  EXPECT_TRUE(ClickControls(36, 36));
+  ASSERT_TRUE(Menu().At().open);
+  EXPECT_TRUE(HitControls(100, 80));
+  EXPECT_GT(HostVertices(), 0);
+  EXPECT_TRUE(HandleHostKey(HostKey::Next));
+  EXPECT_TRUE(HandleHostKey(HostKey::Select));
+  EXPECT_FALSE(Menu().At().open);
+  for (const HostAction action : {HostAction::VolumeDown, HostAction::Mute,
+                                HostAction::ExitFullscreen, HostAction::Leave, HostAction::Controls})
+    ActivateHost(action);
+  EXPECT_EQ(m_lines->Take(), "orca host volume-up\norca host volume-down\norca host mute\n"
+                            "orca host exit-fullscreen\norca host leave\norca orb\n");
+  EXPECT_EQ(Pad(PAD_BUTTON_UP | PAD_BUTTON_START), 0);
+  EXPECT_TRUE(Menu().At().open);
+  EXPECT_EQ(Pad(0), 0);
+  EXPECT_EQ(m_lines->Take(), "");  // Native shortcut consumes its whole press.
+  EXPECT_EQ(Pad(PAD_BUTTON_B), PAD_BUTTON_B);
+  EXPECT_FALSE(Menu().At().open);
+}
+
+TEST_F(OrcaUXHostUI, LaterCapsReplaceTheAgreementIncludingDuringAShortcutPress)
+{
+  using namespace YgOrb;
+  Orca::Status::SetAppCaps("talk");
+  Pad(PAD_BUTTON_UP | PAD_BUTTON_START);
+  EXPECT_EQ(m_lines->Take(), "orca overlay down pad\n");
+  Orca::Status::SetAppCaps("talk hostui");
+  ASSERT_TRUE(HostEnabled());
+  Pad(0);
+  EXPECT_EQ(m_lines->Take(), "orca overlay up pad\n");  // Finish the original legacy press.
+  Pad(PAD_BUTTON_UP | PAD_BUTTON_START);
+  ASSERT_TRUE(Menu().At().open);
+  EXPECT_EQ(m_lines->Take(), "");
+  Orca::Status::SetAppCaps("talk");
+  EXPECT_FALSE(Menu().At().open);
+  EXPECT_FALSE(HostEnabled());
+  EXPECT_FALSE(HostView(NowMs()).on);
+  EXPECT_FALSE(HitControls(36, 36));
+  EXPECT_FALSE(ClickControls(36, 36));
+  EXPECT_EQ(HostVertices(), 0);
+  ToggleHostMenu();
+  ActivateHost(HostAction::Feedback);
+  ActivateHost(HostAction::Mute);
+  Pad(0);
+  EXPECT_EQ(m_lines->Take(), "");  // No unmatched legacy release for a native press.
+  Pad(PAD_BUTTON_UP | PAD_BUTTON_START);
+  Pad(0);
+  EXPECT_EQ(m_lines->Take(), "orca overlay down pad\norca overlay up pad\n");
+  Orca::Status::SetAppCaps("talk hostui");
+  ASSERT_TRUE(HostEnabled());
+  EXPECT_FALSE(Menu().At().open);
+  ToggleHostMenu();
+  EXPECT_TRUE(Menu().At().open);
+  // Even off/on caps with no intervening UI poll discard the old menu.
+  Orca::Status::SetAppCaps("talk");
+  Orca::Status::SetAppCaps("talk hostui");
+  EXPECT_FALSE(Menu().At().open);
+}
+
 TEST(OrcaUXYgOrb, HostMenuUsesTheCornerControllerNavigation)
 {
   using namespace Orca::UX::YgOrb;
@@ -4669,7 +4850,7 @@ TEST(OrcaUXYgOrb, FeedbackRejectsAnUnavailableRenderer)
   logger.EnableListener(LogListener::LOG_WINDOW_LISTENER, true);
   set_stdio("1");
   Orca::Bridge::ResetForTests();
-  StatusLines lines("");
+  StatusLines lines("hostui");
   ASSERT_TRUE(lines.Ok());
   EXPECT_FALSE(HostEnabled());
   ActivateHost(HostAction::Feedback);

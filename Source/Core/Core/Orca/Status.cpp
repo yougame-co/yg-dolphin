@@ -20,6 +20,7 @@
 #include "Core/Orca/Music.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/UX/UX.h"
+#include "Core/Orca/UX/YgOrb.h"
 #include "Core/Rollback/ReplayStream.h"
 
 namespace Orca::Status
@@ -193,7 +194,7 @@ std::string OfferedCaps()
   caps += fmt::format(" {} {}", TALK_CAP, RUMBLE_CAP);
   if (Rollback::ReplayStream::ProductMode())
     caps += fmt::format(" {}", REPLAY_CAP);
-  caps += fmt::format(" {}", RECORD_CAP);
+  caps += fmt::format(" {} {}", RECORD_CAP, HOSTUI_CAP);
   return caps;
 }
 
@@ -261,6 +262,8 @@ void SetAppCaps(std::string_view list)
   std::lock_guard lock(s_mutex);
   s_app_list = std::string(list);
   s_app_caps = Agreed(offered, list);
+  if (!s_app_caps.contains(HOSTUI_CAP))
+    UX::YgOrb::Menu().Close();
 }
 
 bool Cap(std::string_view name)

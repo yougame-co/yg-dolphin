@@ -80,6 +80,8 @@ void Report(std::string_view code, std::string_view sentence);
 //            stops it everywhere, "record auto" goes back to the default (Session/Online.h
 //            RecordWanted, Rollback/ReplayStream.h)
 //   replay   product replay only: app may send "replay pause|resume|seek <frame>|names ..."
+//   hostui   app may handle "orca host ..." and "orca feedback ..." and wants YG Dolphin's
+//            native host menu; without it YG Dolphin behaves as 0.3.49 did
 inline constexpr const char* CAPS =
     "join leave stats pause delay perf direct host chat yougame gfx";
 // "music": offered where Orca can tell the game's music apart (Orca/Music.h Supported).
@@ -96,29 +98,29 @@ inline constexpr const char* QUEUE2_CAP = "queue2";
 // later "caps" line when that changes. A host with friends in its game leaves them for a With
 // Anyone pick only with that pick's cap; without it the pick prints in place, unarmed ("orca menu
 // online <queue> kept"), and arms once the friends are gone (Rollback/OnlineMatch.h
-// DecideLobbyPick, DecideKeptPick). Offered with "locks". A ruleset profile then offers 20 caps
-// (with "talk", "rumble" and "record"); the app reads up to 24 (desktop 0.12.39 and later), and Orca
-// needs a newer app than that anyway.
+// DecideLobbyPick, DecideKeptPick). Offered with "locks". A ruleset profile then offers 21 caps
+// (with "talk", "rumble", "record" and "hostui"); the app reads up to 24 (desktop 0.12.39 and
+// later), and Orca needs a newer app than that anyway.
 inline constexpr const char* PICK_CAPS = "pick-casual pick-ranked";
 // "talk": hold-to-talk. Orca prints "orca overlay down|up|cancel keys|pad" for the overlay key's
 // press and release instead of the "orca orb" toggle (UX/OverlayKey.h), and the app may send
 // "talk ..." lines, one row in the YouGame button's pill (UX/YgOrb.h). Before "rumble", optional
-// "replay" and "record", so an app that reads fewer words drops these first.
+// "replay", "record" and "hostui", so an app that reads fewer words drops these first.
 inline constexpr const char* TALK_CAP = "talk";
-// "rumble": every profile, after "talk", so an app that reads fewer caps words drops only "record"
-// before it.
+// "rumble": every profile, after "talk", before optional "replay", "record" and "hostui".
 inline constexpr const char* RUMBLE_CAP = "rumble";
-// Product replay playback only. After rumble and before record, which remains last. At most
-// 21 offered words with every profile cap: inside the app's 24-word limit.
+// Product replay playback only. After rumble and before record and hostui. At most
+// 22 offered words with every profile cap: inside the app's 24-word limit.
 inline constexpr const char* REPLAY_CAP = "replay";
-// "record": every profile, last. The newest word: an app that reads fewer caps words drops it first,
-// and an app without it never records.
+// "record": every profile, after optional replay and before hostui; an app without it never records.
 inline constexpr const char* RECORD_CAP = "record";
+// "hostui": every profile, last. The newest word: an app that reads fewer caps words drops it first.
+// Only an app that agrees it gets the native host menu (UX/YgOrb.h).
+inline constexpr const char* HOSTUI_CAP = "hostui";
 // This build's caps for the running profile: CAPS, plus "music", "results", "locks", "queue2" and
-// the pick caps where supported, then "talk", "rumble", "replay" in product playback and "record"
-// (every mode, mod mode included). In mod
-// mode (Core/Orca/Mod.h) a builtin's caps only once its guard words have held, and never after they
-// failed.
+// the pick caps where supported, then "talk", "rumble", "replay" in product playback, "record"
+// and "hostui" (every mode, mod mode included). In mod mode (Core/Orca/Mod.h) a builtin's caps
+// only once its guard words have held, and never after they failed.
 std::string OfferedCaps();
 void PrintCaps();
 // Whether `orca caps` (and "ready" after it) may go out: always outside mod mode; in mod mode once

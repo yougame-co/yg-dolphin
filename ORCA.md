@@ -1873,7 +1873,7 @@ contest"; from it on, "This set counts as a loss" and "They forfeit in". Tests:
 
 | stdout | |
 |---|---|
-| `orca caps ... host results locks queue2 pick-casual pick-ranked` | `results` where the result reader is verified; `locks`, `queue2` and the pick caps where the profile has a ruleset (Brawl rev 2 and Project+). The app answers a pick cap only for a queue it can search now. With `music` that is 16 caps, the most an app before the Music switch's release passes (that release takes 24); more needs it as the minimum app (`OrcaOnlineMenuLobby.EveryCapFitsTheAppsCapsLine`). `talk`, `rumble` and then `record` come after them, so such an app drops only those. |
+| `orca caps ... host results locks queue2 pick-casual pick-ranked` | `results` where the result reader is verified; `locks`, `queue2` and the pick caps where the profile has a ruleset (Brawl rev 2 and Project+). The app answers a pick cap only for a queue it can search now. With `music` that is 16 caps, the most an app before the Music switch's release passes (that release takes 24); more needs it as the minimum app (`OrcaOnlineMenuLobby.EveryCapFitsTheAppsCapsLine`). `talk`, `rumble`, `record` and then `hostui` come after them, so such an app drops only those. |
 | `orca result <json>` | The room's verdict, when it arrives. At most 300 bytes. |
 | `orca state friend-left match-over` / `host-left match-over` | A ranked room closed after its set. |
 
@@ -2487,17 +2487,29 @@ log their raw request and the unchanged bounds after hiding the window. Unset, t
 | `orb <x> <y> <size> <lit> <away> <badge>` / `orb blink` / `orb off` | YouGame's overlay button, drawn where the page's own stands under Orca's window. |
 | `notice <kind> <name> <text> [<key> <verb>]` | One of the YouGame overlay's lines (join, leave, invite, ...). Never logged. |
 | `talk listen\|send\|sent\|error <name> <text>` / `talk off` | Hold-to-talk's row, cap `talk`: one row after the notices, replaced by each line. Fields as in `chat`. Never logged. |
+| `feedback` / `host-menu` | Cap `hostui`: request feedback with a game screenshot, or toggle the native host menu. Ignored without the agreed cap. The app relays these shortcuts only from its focused view. |
 | `quit` | Stop at once and exit. |
 
 Most commands are gated by capabilities (`caps`) that Orca and the app agree on; a later `caps` line
 replaces the whole answer. A command without its cap, or a malformed one, answers
-`unsupported <command>`. Any other line goes to stderr. Drawing
+`unsupported <command>` (except unagreed `feedback` and `host-menu`, which are ignored). Any other line goes to stderr. Drawing
 commands (`view`, `dim`, `perf`, `chat`, `orb`, `notice`, `talk`) are host-only: never in game
 memory or the compatibility key.
 
-`replay` is offered only with `ORCA_REPLAY_SOURCE`, after `talk` and `rumble` and before `record`,
-which remains last. Even a profile offering every cap stays within the app's 24-word limit. Replay
+`replay` is offered only with `ORCA_REPLAY_SOURCE`, after `talk` and `rumble` and before `record`
+and `hostui`. The newest word, `hostui`, stays last so apps that read fewer words drop it first.
+A ruleset profile normally offers 21 words (22 with `replay`), within the app's 24-word limit. Replay
 mode withdraws `join`, `host` and `direct`; it never opens a seated room.
+
+**Native host menu** (cap `hostui`). The app may handle `orca host ...` and `orca feedback ...`
+and wants YG Dolphin's native host menu only when both sides list `hostui`. Desktop 0.13.0 / V2 web
+will add this agreement; desktop 0.12.100, 0.12.43/44 and V1 web keep the 0.3.49 orb and overlay
+behavior without it. With the cap, Δ appears beside the orb; an orb click or Up+Start opens
+Feedback, Volume up/down, Mute, Exit fullscreen, Leave and Controls. Feedback captures at most
+one screenshot per five seconds after completion. A later `caps` answer can enable or withdraw
+the menu immediately; withdrawal closes an open menu and suppresses pending feedback output.
+
+Without `hostui`, overlay and talk input follow these paths:
 
 **Opening YouGame's overlay** prints `orca orb`: a left press on the button (Windows), Shift+Tab
 while Orca has the keyboard, or, on a controller, holding the D-pad's Up and pressing Start
@@ -2505,7 +2517,7 @@ while Orca has the keyboard, or, on a controller, holding the D-pad's Up and pre
 and the masked pad is what is recorded and sent, so every machine plays it. Opening the overlay
 never pauses Orca: the page sends `blur`, the player's pad goes neutral, and the match goes on.
 
-**Hold-to-talk** (cap `talk`, offered last). With it, those two presses print their press and
+**Hold-to-talk** (cap `talk`, offered before `rumble`, `record` and `hostui`). Without `hostui`, those two presses print their press and
 release instead of `orca orb` (`Orca/UX/OverlayKey.h`): `orca overlay down keys|pad`, then exactly
 one `orca overlay up keys|pad` (let go: Tab or Shift; Start, even with Up still held) or
 `orca overlay cancel keys|pad` (no longer read: Orca's window lost the keyboard or was hidden; the
@@ -2537,6 +2549,8 @@ ring every 1.2 s.
 | `key escape` / `key fullscreen` | Windows only, if Orca's window somehow has the keyboard. |
 | `orca click` | Windows only: a mouse press on Orca's window, which the page never sees; the app focuses its page and sends `focus`. On macOS and Linux the press reaches the page. |
 | `orca orb` / `orca overlay down\|up\|cancel keys\|pad` | The overlay key, as a toggle, or (cap `talk`) its press and release: see Hold-to-talk above. |
+| `orca host volume-up\|volume-down\|mute\|exit-fullscreen\|leave` | Cap `hostui`: the native host menu's requested app action. Controls uses `orca orb`. |
+| `orca feedback <filename>.png` | Cap `hostui`: a completed screenshot in the run's user directory, ready for the app's feedback UI. |
 | `error <sentence>` | Something failed. Each `orca error` also gets an `error` twin. |
 | `orca state <state>` / `orca error <code> <sentence>` | Session status (`Orca/Status.h`). Forward every line that starts with `orca `. |
 | `orca menu ...`, `orca result ...`, `orca queue ...` | See [Online menu](#online-menu) and [Matchmaking](#matchmaking-and-results). |

@@ -604,7 +604,8 @@ void Platform::ProcessEmbedCommands()
     else if (cmd == "feedback")
     {
       // The app sends this shortcut only from its focused view; Orca never polls for it.
-      Orca::UX::YgOrb::ActivateHost(Orca::UX::YgOrb::HostAction::Feedback);
+      if (Orca::Status::Cap(Orca::Status::HOSTUI_CAP))
+        Orca::UX::YgOrb::ActivateHost(Orca::UX::YgOrb::HostAction::Feedback);
     }
     else if (cmd == "host-menu")
     {
