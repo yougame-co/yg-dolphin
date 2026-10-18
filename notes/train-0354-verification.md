@@ -88,3 +88,70 @@ Reproduction: run `Tools/orca/doubles-rooms.py --run --local` with `--binary bui
 | Ranked expiry | `--queue ranked --expect-queue-ending forfeit` | `--input queue-input.txt --events ranked-events.json` | `--seconds 240 --keep-logs build-orca-tests/train-0354/ranked-final` |
 
 `python3 Tools/orca/doubles-rooms.py --self-test` uses only loopback sockets and no Dolphin processes. No version bump or rooms-service change is included; the lead owns the version and server rollout.
+
+
+## fix-0354 inert ship verification (2026-10-18)
+
+The required first commands on `train-0354` printed:
+
+```text
+b2a412b929 Record public room recovery verification
+BASE-OK
+```
+
+`git merge-base --is-ancestor b2a412b929 HEAD` succeeded before any change.
+Local merge `874e15c49b` (`Merge the shared safe JSON reader`) has parents
+`b2a412b929` and `5c525342ce`; the merge was clean. Inspection of its room diff
+confirmed that train recovery code remains and room JSON callers use `Orca::Json`.
+The private branch verification note was read before merging.
+
+The only additional production change replaces Tick's retry queue inequality with
+`if (QueueRecovery()) retries.clear();`. This supersedes the earlier note's
+private-only description of manual retries: private rooms and public rooms without
+opt-in retain the base retry handling; only opted-in public recovery discards these
+requests. No later opt-in review items were changed.
+
+Two new unit tests cover both casual and ranked. With missing or false
+`room.recovery`, an announced peer's RetryPeer request emits the base Left event
+(seat, host, name and `room-resume` reason), sends the normal ping and resume hello
+(including its new resume identity), and rejects packet delivery pending the new
+handshake. With true opt-in, two ticks emit no peer events or resume messages and
+the existing session continues delivering packets. Existing private retry coverage
+also passes.
+
+Final-source gates use `build-orca-tests`, the shared `flock ... nice -n 10` lock,
+CCACHE_DIR=/Volumes/YGWorktrees/ccache, two build workers and one test process.
+Load is checked before every job, waiting with 60-second uptime samples if needed,
+resuming below 18 with a 45-minute load-wait budget. Runtime tests use the existing
+minimal loopback launcher; Dolphin fixture peers use headless/Null video, isolated
+users, ORCA_NO_LOCAL_INPUT=1 and all six SDL device-disabling variables. Only the
+authorized read-only Brawl path is supplied. No installs or external services.
+
+- Build `tests` and `dolphin-nogui`: PASS (`build-orca-tests/fix-0354-build.log`
+  and `build-orca-tests/fix-0354-build-final.log`).
+- Focused room/replay/JSON/mod/controller suite: 139 tests, 138 passed, one existing
+  disc opt-in skip, zero failures (`build-orca-tests/fix-0354-focused.log`).
+- `-Werror`: PASS for all ten C++ translation units touched by the merge or fix
+  (`build-orca-tests/fix-0354-werror.log`; exact compile-command checks in
+  `build-orca-tests/fix-0354-werror.py`).
+- Full loopback binary: **2,262 tests, 2,239 passed, 23 existing optional skips,
+  zero failures**, 606.703 seconds (`build-orca-tests/fix-0354-tests.log` and
+  `build-orca-tests/fix-0354-tests.xml`). No live-service opt-ins were supplied.
+- Casual recovery fixture rerun: **PASS**; 16-second socket drop, same-seat
+  return, matching confirmed hashes through frame 11,580, zero desyncs
+  (`build-orca-tests/fix-0354-casual.log` and retained peer logs/diagnostics).
+- Legacy casual ending fixture rerun: **PASS**; the 16-second socket drop
+  immediately produced the existing room network sentence, with no hold/rejoin
+  and zero runtime desyncs (`build-orca-tests/fix-0354-legacy.log` and retained
+  peer logs/diagnostics). The existing ending verifier does not compare common
+  checksum samples; no new checksum claim is made for this ending run.
+
+The two fixture commands reproduce the casual and legacy rows above, with the
+same inputs/events and observation windows (140/120 seconds), retaining new
+artifacts under `build-orca-tests/fix-0354-casual` and
+`build-orca-tests/fix-0354-legacy` and adjacent `.log` files. Exact gate orchestration
+and lock/load results are retained in `build-orca-tests/fix-0354-gates.py` and
+`build-orca-tests/fix-0354-gates.log`. The pre-existing untracked review note is
+left untracked. All commits are local; no push or production action.
+
+**fix-0354 status: all requested inert-ship gates PASS.** No task blocker remains.

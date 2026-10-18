@@ -453,6 +453,80 @@ TEST(OrcaRoomRecovery, PrivateManualRetryDoesNotDependOnTransportRecovery)
   }));
 }
 
+TEST(OrcaRoomRecovery, PublicManualRetryWithoutOptInKeepsLegacyResetAndResume)
+{
+  for (const char* queue : {"casual", "ranked"})
+  {
+    for (const std::string flag : {"", "false"})
+    {
+      SCOPED_TRACE(std::string(queue) + ":" + flag);
+      const auto trace = TraceRoomForTest(QueueTraceOptions(), {
+          {RK::Message, 0, QueueRoster("welcome", queue, flag)},
+          {RK::Message, 0, PeerHello()}, {RK::Message, 1, PeerPacket()},
+          {RK::RetryPeer, 1000, "", 0}, {RK::Tick, 1001},
+          {RK::Message, 1002, PeerPacket()},
+      });
+      ASSERT_EQ(trace[1].events.size(), 1u);
+      EXPECT_EQ(trace[1].events[0].kind, PeerEvent::Kind::Arrived);
+      ASSERT_EQ(trace[2].packets.size(), 1u);
+      EXPECT_FALSE(trace[0].recovery);
+      // Base 343a655173 resets the announced peer and starts a fresh resume handshake.
+      ASSERT_EQ(trace[4].events.size(), 1u);
+      const auto& left = trace[4].events[0];
+      EXPECT_EQ(left.kind, PeerEvent::Kind::Left);
+      EXPECT_EQ(left.seat, 0);
+      EXPECT_TRUE(left.host);
+      EXPECT_EQ(left.name, "Friend");
+      EXPECT_EQ(left.reason, "room-resume");
+      ASSERT_EQ(trace[4].sent.size(), 2u);
+      picojson::value message;
+      ASSERT_TRUE(picojson::parse(message, trace[4].sent[0]).empty());
+      EXPECT_EQ(message.get("t").to_str(), "ping");
+      ASSERT_TRUE(picojson::parse(message, trace[4].sent[1]).empty());
+      EXPECT_EQ(message.get("t").to_str(), "msg");
+      EXPECT_EQ(message.get("to").to_str(), "peer");
+      const auto& hello = message.get("d");
+      EXPECT_EQ(hello.get("k").to_str(), "hello");
+      EXPECT_EQ(hello.get("c").to_str(), "test");
+      EXPECT_FALSE(hello.get("r").evaluate_as_boolean());
+      EXPECT_FALSE(hello.get("h").evaluate_as_boolean());
+      EXPECT_TRUE(hello.get("resume").evaluate_as_boolean());
+      EXPECT_FALSE(hello.get("resume_id").to_str().empty());
+      EXPECT_TRUE(trace[5].packets.empty());
+      EXPECT_EQ(trace.back().state, RoomState::Waiting);
+    }
+  }
+}
+
+TEST(OrcaRoomRecovery, PublicManualRetryWithOptInKeepsTheSession)
+{
+  for (const char* queue : {"casual", "ranked"})
+  {
+    SCOPED_TRACE(queue);
+    const auto trace = TraceRoomForTest(QueueTraceOptions(), {
+        {RK::Message, 0, QueueRoster("welcome", queue)}, {RK::Message, 0, PeerHello()},
+        {RK::Message, 1, PeerPacket()}, {RK::RetryPeer, 1000, "", 0},
+        {RK::Tick, 1001}, {RK::Tick, 2002}, {RK::Message, 2003, PeerPacket()},
+    });
+    EXPECT_TRUE(trace[0].recovery);
+    ASSERT_EQ(trace[1].events.size(), 1u);
+    EXPECT_EQ(trace[1].events[0].kind, PeerEvent::Kind::Arrived);
+    ASSERT_EQ(trace[2].packets.size(), 1u);
+    for (size_t i = 3; i < trace.size(); ++i)
+    {
+      EXPECT_TRUE(trace[i].events.empty()) << i;
+      for (const auto& sent : trace[i].sent)
+      {
+        picojson::value message;
+        ASSERT_TRUE(picojson::parse(message, sent).empty());
+        EXPECT_EQ(message.get("t").to_str(), "ping") << i;
+      }
+    }
+    EXPECT_EQ(trace.back().packets.size(), 1u);
+    EXPECT_EQ(trace.back().state, RoomState::Waiting);
+  }
+}
+
 TEST(OrcaRoomRecovery, CompletedWelcomeCanDeliverItsFirstFinalVerdict)
 {
   for (const char* queue : {"casual", "ranked"})

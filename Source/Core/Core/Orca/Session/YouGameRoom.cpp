@@ -3650,8 +3650,8 @@ struct YouGameRoom::Impl
     }
     for (const auto& notice : notices)
       RoomNotice(notice);
-    // Friends-only fresh drop-in; public rooms keep the existing session until server/expiry.
-    if (queue != "private")
+    // Opted-in public rooms keep the existing session until server/expiry.
+    if (QueueRecovery())
       retries.clear();
     for (const auto& id : retries)
     {
