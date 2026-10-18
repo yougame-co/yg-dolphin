@@ -2799,6 +2799,12 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.54
+
+- Groundwork for public casual and ranked matches to ride through a dropped connection, the way
+  friends rooms already do. It switches on later, from the server side.
+- Safer handling of saved and live match replays.
+
 ### 0.3.53
 
 - If your PC runs out of memory while a game starts, YG Dolphin now says so plainly instead of closing.
