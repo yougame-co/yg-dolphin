@@ -27,6 +27,7 @@
 #include "Core/Orca/Bundle.h"
 #include "Core/Orca/Disc.h"
 #include "Core/Orca/Profile.h"
+#include "Core/Orca/SafeJson.h"
 #include "Core/Orca/UX/GamePatches.h"
 #include "Core/PowerPC/MMU.h"
 #include "DiscIO/Volume.h"
@@ -121,13 +122,7 @@ std::string ParseWhole(picojson::value* root, std::string_view json, u64 max_byt
     return fmt::format("over {} bytes", max_bytes);
   if (TooDeep(json))
     return fmt::format("nested deeper than {} levels", MAX_JSON_DEPTH);
-  std::string error;
-  const auto end = picojson::parse(*root, json.begin(), json.end(), &error);
-  if (!error.empty())
-    return error;
-  if (!std::all_of(end, json.end(), [](char c) { return c == ' ' || c == '\t' || c == '\n' || c == '\r'; }))
-    return "something after the JSON value";
-  return {};
+  return Json::ParseWholeJson(json, root);
 }
 
 bool InMem1Word(u32 address)
