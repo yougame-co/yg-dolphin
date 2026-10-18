@@ -557,6 +557,12 @@ bool HoldInputSilence(std::chrono::steady_clock::time_point since,
   return room && room->HoldInputSilence(since, now, std::move(missing));
 }
 
+bool RoomRecovery()
+{
+  const auto room = Room();
+  return room && room->RoomRecovery();
+}
+
 bool RoomRecovering(std::chrono::steady_clock::time_point now)
 {
   const auto room = Room();
@@ -823,7 +829,8 @@ void TestDropRoom()
 {
   if (const auto room = Room())
   {
-    if (!room->FriendsRecovery() && Env("ORCA_TEST_DROP_SILENT") == "1")
+    // All recovery rooms retain the same room object; legacy silent drops keep the socket.
+    if (!room->RoomRecovery() && Env("ORCA_TEST_DROP_SILENT") == "1")
     {
       static std::vector<std::shared_ptr<Net::YouGameRoom>> s_kept;
       s_kept.push_back(room);

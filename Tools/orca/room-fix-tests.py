@@ -29,6 +29,8 @@ def roster(code, cfg, kind="welcome"):
             "players": [{"id": "me", "name": "Me"}, {"id": "peer", "name": "Friend"}],
             "participants": [{"id": "me", "connectionId": "me", "slot": local, "name": "Me"},
                              {"id": "peer", "connectionId": "peer", "slot": remote, "name": "Friend"}]}
+    if "recovery" in cfg:
+        result["room"]["recovery"] = cfg["recovery"]
     if cfg.get("doubles"):
         result["room"]["doubles"] = True
         result["room"]["size"] = cfg.get("size", 4)

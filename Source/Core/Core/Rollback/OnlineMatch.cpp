@@ -4210,12 +4210,16 @@ static std::optional<int> SessionBoundary(
             PublishStall(match, MsSince(step_start));
             Orca::Events::NotifyStall(static_cast<int>(MsSince(step_start)));
             // Mid ranked set, a long stall shows as a disconnect with a forfeit countdown.
-            Orca::UX::SetEnd::Current().Stall(static_cast<int>(MsSince(step_start)),
-                                              Orca::UX::SetEnd::NowMs());
+            // Public recovery shows its hold; friends keep their existing overlay flow.
+            if (Orca::Online::RoomQueue() == "private" || !Orca::Online::RoomRecovery())
+              Orca::UX::SetEnd::Current().Stall(static_cast<int>(MsSince(step_start)),
+                                                Orca::UX::SetEnd::NowMs());
             if (!match.joining)
               left_seats = left_in_play();
+            // Opted-in queue recovery waits for the server; never announce a local forfeit.
             if (!stall_claimed && poll_time - step_start >= RANKED_STALL_LIMIT &&
-                Orca::Online::RoomQueue() == "ranked" && Orca::Online::MatchLive())
+                Orca::Online::RoomQueue() == "ranked" && Orca::Online::MatchLive() &&
+                !Orca::Online::RoomRecovery())
             {
               stall_claimed = true;
               WARN_LOG_FMT(ROLLBACK, "Matchmaking: the opponent's inputs stopped for {} s: "

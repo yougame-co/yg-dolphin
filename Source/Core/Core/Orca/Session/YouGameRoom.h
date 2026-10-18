@@ -272,8 +272,8 @@ public:
   // or "ranked".
   std::string Queue() const;
   bool Doubles() const;
-  // Whether the transport uses friends recovery, including its pre-welcome queue hint.
-  bool FriendsRecovery() const;
+  // Friends policy before welcome, or a casual/ranked welcome with room.recovery:true.
+  bool RoomRecovery() const;
   // A room match is running and its result isn't in yet (for ranked, the whole set).
   bool MatchLive() const;
   // A ranked set's room after its verdict (`set-over`): it stays open, with relay and chat, until
@@ -435,6 +435,9 @@ struct RoomTestStep
     PollReconnect,
     ConnectFailure,
     InitialConnectFailure,
+    ReportGame,
+    GameStart,
+    Stall,
   };
   Kind kind;
   int milliseconds = 0;
@@ -455,6 +458,9 @@ struct RoomTestSnapshot
   std::vector<std::string> notices;
   std::string status;
   std::string error_code;
+  bool recovery = false;
+  int known_games = 0;
+  std::vector<std::string> results;
 };
 std::vector<RoomTestSnapshot> TraceRoomForTest(const RoomOptions& options,
                                              const std::vector<RoomTestStep>& steps);

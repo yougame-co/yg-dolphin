@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Four-instance friends-room fixture; dev tickets, isolated users, no app credentials.
+"""Friends-room and opt-in public queue fixture; dev tickets, isolated users, no app credentials.
 
   dropin-rooms.py --doubles --self-test
   dropin-rooms.py --doubles --serve --listen 127.0.0.1 --port 8765
@@ -8,6 +8,11 @@
 For the lead's two-machine run, serve on an isolated LAN and run --roles 0,1 on
 Mac and --roles 2,3 on PC, with the same --site and --room. --input is optional;
 without it steer each isolated headless instance with stdin pad commands.
+
+--queue casual|ranked uses normal host/join commands from private home rooms and
+opts in with room.recovery:true; --no-recovery omits that field. A log-triggered
+--events entry {"action":"drop","role":1,"pattern":"-> scMelee","seconds":16}
+drops only the room socket, retaining the direct link and the same room seat.
 
 --role-binary ROLE=PATH overrides --binary for one process. --version-refusals
 checks the lobby and YG Dolphin version at the WebSocket upgrade, as the rooms
@@ -117,8 +122,20 @@ def receive(stream):
 
 
 class Rooms:
-    def __init__(self, doubles=True, version_refusals=False, owner_relaunch=False):
-        self.doubles = doubles
+    def __init__(self, doubles=True, version_refusals=False, owner_relaunch=False,
+                 queue_mode=None, recovery=True, queue_room=None):
+        self.queue_mode = queue_mode
+        self.queue_room = queue_room
+        self.recovery = recovery
+        self.doubles = doubles and not queue_mode
+        self.matches = {}
+        self.match_numbers = {}
+        self.game_reports = {}
+        self.commands = []
+        self.drops = []
+        self.verdicts = []
+        self.connections = []
+        self.timers = []
         self.version_refusals = version_refusals or owner_relaunch
         self.owner_relaunch = owner_relaunch
         self.lobbies = {}
@@ -135,6 +152,9 @@ class Rooms:
         self.expired = set()
         self.blocked = set()
         self.away = set()
+
+    def mode(self, room):
+        return self.queue_mode if self.queue_room in (None, room) else None
 
     def admit(self, room, ticket):
         """Called under lock at the upgrade; refused tickets never acquire a seat."""
@@ -170,9 +190,9 @@ class Rooms:
         key = (room, player)
         if key not in self.members:
             used = {seat for (code, _), seat in self.members.items() if code == room}
-            if len(used) == 4:
+            if len(used) == (2 if self.mode(room) else 4):
                 return {}, 409
-            self.members[key] = min(set(range(4)) - used)
+            self.members[key] = min(set(range(2 if self.mode(room) else 4)) - used)
         return None
 
     def blackout(self, room, player):
@@ -196,12 +216,113 @@ class Rooms:
                 if code == room:
                     self.send(other, self.roster(room, name, "leave", player))
 
+    def drop(self, room, player, seconds):
+        """Drop only the room socket; the real direct link remains available to the peers."""
+        with self.lock:
+            self.blocked.add((room, player))
+            self.drops.append({"room": room, "player": player, "seconds": seconds,
+                               "at": time.monotonic()})
+            connection = self.sockets.get((room, player))
+            if connection:
+                connection[0].shutdown(socket.SHUT_RDWR)
+            def back():
+                with self.lock:
+                    self.blocked.discard((room, player))
+            timer = threading.Timer(seconds, back)
+            timer.daemon = True
+            self.timers.append(timer)
+            timer.start()
+            if self.mode(room) == "ranked" and seconds >= 90:
+                # The server owns this verdict, including for a socket which cannot come back.
+                timer = threading.Timer(90, self.forfeit, (room, player))
+                timer.daemon = True
+                self.timers.append(timer)
+                timer.start()
+
+    def notify_away(self, room, player):
+        with self.lock:
+            if (room, player) not in self.away:
+                return
+            for (code, name), other in list(self.sockets.items()):
+                if code == room and name != player:
+                    try:
+                        self.send(other, self.roster(room, name, "away", player, True))
+                    except OSError:
+                        pass
+
+    def forfeit(self, room, player):
+        with self.lock:
+            match = self.matches.get(room)
+            if not match:
+                return
+            winner = next(name for code, name in self.members if code == room and name != player)
+            self.final_result(room, {"t": "result", "matchId": match,
+                                    "ranking": [winner, player], "disposition": "forfeit",
+                                    "reason": "The other player lost the connection. You win this set."})
+
+    def final_result(self, room, verdict):
+        self.verdicts.append(verdict)
+        self.matches.pop(room, None)
+        for (code, _), connection in list(self.sockets.items()):
+            if code == room:
+                try:
+                    self.send(connection, verdict)
+                    if self.mode(room) == "ranked":
+                        self.send(connection, {"t": "set-over", "ms": 300000})
+                except OSError:
+                    pass
+
+    def match_command(self, room, player, message):
+        """Minimal agreement/result protocol, with stable game ids recorded as evidence."""
+        self.commands.append({"player": player, **message})
+        kind = message["t"]
+        if kind == "begin":
+            if room in self.matches:
+                return
+            self.match_numbers[room] = self.match_numbers.get(room, 0) + 1
+            self.matches[room] = f"fixture-{room}-{self.match_numbers[room]}"
+            for (code, name), connection in list(self.sockets.items()):
+                if code == room:
+                    self.send(connection, self.roster(room, name, "start"))
+            return
+        match = self.matches.get(room)
+        if not match or message.get("matchId") != match or kind == "game-start":
+            return
+        key = (match, message.get("id", "$final"))
+        reports = self.game_reports.setdefault(key, {})
+        reports[player] = message
+        if len(reports) < 2:
+            return
+        outcomes = [(r.get("winner"), r.get("draw", False), r.get("void", False))
+                    for r in reports.values()]
+        verdict = {"t": "game-result" if kind == "game-report" else "result", "matchId": match}
+        if kind == "game-report":
+            verdict["id"] = message["id"]
+        if len(set(outcomes)) != 1 or outcomes[0][2]:
+            verdict["void"] = True
+        elif outcomes[0][1]:
+            verdict["draw"] = True
+        else:
+            winner = outcomes[0][0]
+            verdict["ranking"] = [winner] + [name for code, name in self.members
+                                                       if code == room and name != winner]
+        if "detail" in message:
+            verdict["detail"] = message["detail"]
+        if kind == "finish":
+            self.final_result(room, verdict)
+        else:
+            for (code, _), connection in list(self.sockets.items()):
+                if code == room:
+                    self.send(connection, verdict)
+
     def diagnostics(self, room):
         active = [name for code, name in self.members if code == room]
         reports = {name: value for (code, name), value in self.reports.items() if code == room}
         hashes = {name: value for (code, name), value in self.hashes.items() if code == room}
         return {"active": active, "reports": reports,
                 "offers": list(self.offers), "version_events": list(self.version_events),
+                "commands": list(self.commands), "drops": list(self.drops),
+                "verdicts": list(self.verdicts), "connections": list(self.connections),
                 "frames": {name: frame_number for (code, name), frame_number in self.frames.items() if code == room}, "hashes": {name: dict(value) for name, value in hashes.items()}}
 
     def record(self, room, player, data):
@@ -215,14 +336,19 @@ class Rooms:
 
     def roster(self, room, local, kind="welcome", changed=None, away=False):
         members = sorted(((seat, name) for (code, name), seat in self.members.items() if code == room))
-        return {"t": kind, "me": local, "host": members[0][1], "lifecycle": "game", "revision": 1,
-                "room": {"code": room, "queue": "private", "size": 4, "doubles": self.doubles},
+        result = {"t": kind, "me": local, "host": members[0][1] if members else local, "lifecycle": "game", "revision": 1,
+                "room": {"code": room, "queue": self.mode(room) or "private", "size": 2 if self.mode(room) else 4, "doubles": self.doubles},
                 "player": {"id": changed or local},
                 "players": [{"id": name, "name": name,
                              **({"away": True} if (room, name) in self.away or (away and name == changed) else {})}
                             for _, name in members],
                 "participants": [{"id": name, "connectionId": name, "slot": seat, "name": name}
                                  for seat, name in members]}
+        if self.mode(room) and self.recovery and kind == "welcome":
+            result["room"]["recovery"] = True
+        if room in self.matches:
+            result["matchId"] = self.matches[room]
+        return result
 
     def send(self, connection, data):
         sock, guard = connection
@@ -253,8 +379,8 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
 
     def __init__(self, address, turn_binary=None, doubles=True, version_refusals=False,
-                 owner_relaunch=False, role_versions=None):
-        self.rooms = Rooms(doubles, version_refusals, owner_relaunch)
+                 owner_relaunch=False, role_versions=None, queue_mode=None, recovery=True, queue_room=None):
+        self.rooms = Rooms(doubles, version_refusals, owner_relaunch, queue_mode, recovery, queue_room)
         self.role_versions = role_versions or {}
         self.turn = None
         self.ice = []
@@ -267,6 +393,8 @@ class Server(ThreadingHTTPServer):
         super().__init__(address, Handler)
 
     def server_close(self):
+        for timer in self.rooms.timers:
+            timer.cancel()
         super().server_close()
         if self.turn:
             self.turn.terminate()
@@ -292,7 +420,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(data)
 
     def do_POST(self):
-        if self.path.startswith(("/report/", "/expire/", "/blackout/", "/away/", "/back/")):
+        if self.path.startswith(("/report/", "/expire/", "/blackout/", "/away/", "/back/", "/drop/")):
             count = int(self.headers.get("Content-Length", 0))
             if count > 4096:
                 return self.reply({}, 413)
@@ -303,7 +431,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply({}, 400)
             rooms = self.server.rooms
             with rooms.lock:
-                if self.path.startswith("/blackout/"):
+                if self.path.startswith("/drop/"):
+                    seconds = body.get("seconds", 15)
+                    if not isinstance(seconds, (int, float)) or not 1 <= seconds <= 300:
+                        return self.reply({}, 400)
+                    rooms.drop(room, player, seconds)
+                elif self.path.startswith("/blackout/"):
                     rooms.blackout(room, player)
                 elif self.path.startswith("/away/"):
                     rooms.blocked.add((room, player))
@@ -330,14 +463,15 @@ class Handler(BaseHTTPRequestHandler):
             members = self.server.rooms.members
             key = (room, player)
             if key in self.server.rooms.blocked:
-                return self.reply({"error": "room-recovering"}, 409)
+                return self.reply({"error": "Service Unavailable"}, 503) if self.server.rooms.mode(room) else self.reply({"error": "room-recovering"}, 409)
             if key in self.server.rooms.expired:
                 return self.reply({"error": "room-hold-expired"}, 409)
             if key not in members and not self.server.rooms.version_refusals:
                 used = {seat for (code, _), seat in members.items() if code == room}
-                if len(used) == 4:
+                size = 2 if self.server.rooms.mode(room) else 4
+                if len(used) == size:
                     return self.reply({}, 409)
-                members[key] = min(set(range(4)) - used)
+                members[key] = min(set(range(size)) - used)
         # This literal is a throwaway local fixture value, never a production ticket.
         host = self.headers["Host"]
         ticket = player
@@ -370,7 +504,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply({}, 403)
         with rooms.lock:
             if (room, player) in rooms.blocked:
-                return self.reply({"error": "room-recovering"}, 409)
+                return self.reply({"error": "Service Unavailable"}, 503) if self.server.rooms.mode(room) else self.reply({"error": "room-recovering"}, 409)
             if ticket:
                 refusal = rooms.admit(room, ticket)
                 if refusal:
@@ -390,6 +524,8 @@ class Handler(BaseHTTPRequestHandler):
             rooms.away.discard((room, player))
             rooms.joined.add((room, player))
             rooms.sockets[(room, player)] = connection
+            rooms.connections.append({"room": room, "player": player, "returning": returning,
+                                      "at": time.monotonic()})
             rooms.send(connection, rooms.roster(room, player))
             for (code, name), other in list(rooms.sockets.items()):
                 if code == room and name != player:
@@ -413,6 +549,8 @@ class Handler(BaseHTTPRequestHandler):
                                 rooms.send(other, outgoing)
                         else:
                             rooms.broadcast(room, player, outgoing)
+                    elif rooms.mode(room) and message.get("t") in {"begin", "game-start", "game-report", "finish"}:
+                        rooms.match_command(room, player, message)
                     elif message.get("t") == "leave":
                         rooms.members.pop((room, player), None)
                         for (code, name), other in list(rooms.sockets.items()):
@@ -428,12 +566,16 @@ class Handler(BaseHTTPRequestHandler):
                     rooms.sockets.pop((room, player), None)
                     if not departed and (room, player) in rooms.members:
                         rooms.away.add((room, player))
-                        for (code, name), other in list(rooms.sockets.items()):
-                            if code == room and name != player:
-                                try:
-                                    rooms.send(other, rooms.roster(room, name, "away", player, True))
-                                except OSError:
-                                    pass
+                        if rooms.mode(room) == "ranked" and (room, player) in rooms.blocked:
+                            # Relay delivery follows server detection. Keep a small explicit delay
+                            # so a 90 s server verdict is inside the receiver's 90 s hold, without
+                            # relying on scheduler races between two different clocks.
+                            timer = threading.Timer(0.25, rooms.notify_away, (room, player))
+                            timer.daemon = True
+                            rooms.timers.append(timer)
+                            timer.start()
+                        else:
+                            rooms.notify_away(room, player)
             self.close_connection = True
 
     def keyframe(self, operation):
@@ -596,6 +738,53 @@ def self_test(turn_binary=None):
         server.shutdown()
         server.server_close()
     version_self_test()
+    queue_self_test()
+
+
+def queue_self_test():
+    for mode, recovery in (("casual", True), ("casual", False), ("ranked", True)):
+        server = Server(("127.0.0.1", 0), queue_mode=mode, recovery=recovery)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        site = f"http://127.0.0.1:{server.server_port}"
+        clients = []
+        try:
+            for role in (0, 1):
+                clients.append(client(site, f"Doubles{role}", "queue354"))
+                welcome = receive(clients[-1][1])
+                assert welcome["room"]["queue"] == mode
+                assert welcome["room"].get("recovery", False) is recovery
+                assert welcome["room"]["size"] == 2 and not welcome["room"]["doubles"]
+            assert receive(clients[0][1])["t"] == "join"
+            clients[0][0].sendall(frame({"t": "begin"}, True))
+            starts = [receive(stream) for _, stream in clients]
+            assert starts[0]["matchId"] == starts[1]["matchId"]
+            match = starts[0]["matchId"]
+            for sock, _ in clients:
+                sock.sendall(frame({"t": "game-report", "matchId": match,
+                                    "id": "g120", "winner": "Doubles0"}, True))
+            assert all(receive(stream)["t"] == "game-result" for _, stream in clients)
+            # Socket-only outage holds the seat and puts away/back in the other peer's roster.
+            server.rooms.drop("queue354", "Doubles1", 0.05)
+            assert receive(clients[0][1])["t"] == "away"
+            clients[1][1].close()
+            clients[1][0].close()
+            time.sleep(0.06)
+            clients[1] = client(site, "Doubles1", "queue354")
+            assert receive(clients[1][1])["matchId"] == match
+            assert receive(clients[0][1])["t"] == "back"
+            if mode == "ranked":
+                server.rooms.forfeit("queue354", "Doubles1")
+                for _, stream in clients:
+                    verdict = receive(stream)
+                    assert verdict["disposition"] == "forfeit" and verdict["ranking"][0] == "Doubles0"
+                    assert receive(stream)["t"] == "set-over"
+        finally:
+            for sock, stream in clients:
+                stream.close()
+                sock.close()
+            server.shutdown()
+            server.server_close()
+    print("PASS: casual/ranked welcome opt-in, legacy omission, stable match, game agreement, socket drop/rejoin, server forfeit")
 
 
 def version_self_test():
@@ -743,6 +932,49 @@ def verify_gameplay(work, masks):
             raise RuntimeError("a requested fight did not return to character select")
 
 
+def verify_queue_run(args, work, diagnostics, errors):
+    drops = [drop for drop in diagnostics["drops"] if drop["room"] == args.room]
+    if not drops or min(drop["seconds"] for drop in drops) < 15:
+        raise RuntimeError("queue check needs a scheduled room drop of at least 15 seconds")
+    if not any(command["t"] == "begin" for command in diagnostics["commands"]):
+        raise RuntimeError("queue match never began")
+    logs = [(Path(work) / f"peer-{role}.stdout.log").read_text() for role in (0, 1)]
+    if args.expect_queue_ending == "network":
+        if not args.no_recovery or not errors:
+            raise RuntimeError("legacy queue did not produce its network ending")
+        if any("room-away self" in log or "room-back self" in log for log in logs):
+            raise RuntimeError("legacy queue entered recovery")
+    elif args.expect_queue_ending == "forfeit":
+        dropped = int(drops[-1]["player"][-1])
+        if not any(command["t"] == "game-start" for command in diagnostics["commands"]):
+            raise RuntimeError("ranked fight never reported that its fighters were in")
+        if drops[-1]["seconds"] < 90:
+            raise RuntimeError("ranked forfeit check requires an outage exceeding the hold")
+        if errors.get(dropped) != ("orca error network Lost the connection to the match. "
+                                   "Press Play to look for a new one."):
+            raise RuntimeError("absent ranked peer did not end its expired hold as a network loss")
+        if args.queue != "ranked" or not any(v.get("disposition") == "forfeit" for v in diagnostics["verdicts"]):
+            raise RuntimeError("fixture did not decide a ranked forfeit")
+        results = [json.loads(line[len("orca result "):])
+                   for line in logs[1 - dropped].splitlines() if line.startswith("orca result ")]
+        if not any(result.get("by") == "forfeit" and result.get("out") == "won" for result in results):
+            raise RuntimeError("server's winning forfeit verdict never reached the other player")
+        if any(command["t"] == "finish" and "winner" in command for command in diagnostics["commands"]):
+            raise RuntimeError("engine claimed the set during recovery")
+    else:
+        if errors:
+            raise RuntimeError("recovering queue ended with an error")
+        if not any("room-back self" in log and "kept same-seat" in log for log in logs):
+            raise RuntimeError("dropped queue socket did not recover its same seat/session")
+        drop = drops[-1]
+        backs = [connection for connection in diagnostics["connections"]
+                 if connection["player"] == drop["player"] and connection["returning"]]
+        if not backs or backs[-1]["at"] - drop["at"] < 15:
+            raise RuntimeError("room socket was not absent for 15 seconds")
+    print(f"PASS: {args.queue} queue {args.expect_queue_ending or 'same-seat recovery'}; "
+          f"room drops {[(d['player'], d['seconds']) for d in drops]}", flush=True)
+
+
 def run(args):
     address = urllib.parse.urlsplit(args.site)
     if address.scheme != "http" or not isolated_host(address.hostname) or address.username or address.password:
@@ -772,7 +1004,8 @@ def run(args):
         raise ValueError("deferred/event roles must belong to --roles")
     refused = set(args.refused_role)
     refused_seen = set()
-    with tempfile.TemporaryDirectory(prefix="orca-doubles-") as work:
+    queue_errors = {}
+    with tempfile.TemporaryDirectory(prefix="orca-doubles-", dir=args.scratch) as work:
         try:
             print(f"Fixture PID: {os.getpid()}", flush=True)
             if getattr(args, "dump_stacks", False):
@@ -800,6 +1033,11 @@ def run(args):
                                "ORCA_ROOM": args.room, "ORCA_JOIN": "0" if role == 0 else "1",
                                "ORCA_TEST_PLAYER": f"Doubles{role}", "ORCA_NAME": f"Doubles{role}",
                                "ORCA_DIRECT": "1", "ORCA_DIRECT_LOOPBACK": "1", "ORCA_DIRECT_STUN": "0"}
+                if args.queue:
+                    # Public matchmaking is entered by host/join from the game's own lobby.
+                    # ORCA_ROOM's startup shortcut intentionally does not arm the queue header.
+                    environment["ORCA_ROOM"] = f"qhome{role}"
+                    environment["ORCA_JOIN"] = "0"
                 # Headless peers still start the input layer: never let one open a controller or a
                 # GameCube adapter that is plugged into this machine (it is somebody's).
                 environment.update({"ORCA_NO_LOCAL_INPUT": "1",
@@ -848,18 +1086,25 @@ def run(args):
                             output.put(line.rstrip())
                 threading.Thread(target=read_output, daemon=True).start()
                 players.append((role, process, stderr, lines))
-                process.stdin.write("caps join leave stats\n")
+                process.stdin.write("caps join leave stats" + (" host results locks" if args.queue else "") + "\n")
                 process.stdin.flush()
                 # Tickets assign seats in arrival order. Wait for every role, since a slow
                 # ticket for role 1 must not let role 2 claim its port and invalidate pad scripts.
                 deadline = time.monotonic() + 90
+                queue_commanded = False
                 while time.monotonic() < deadline:
                     if version_refused:
                         output = Path(work) / f"peer-{role}.stdout.log"
                         if output.exists() and version_refusal(role, output.read_text()):
                             return
                     with open(Path(work) / f"peer-{role}.log") as log:
-                        assignment = re.search(r"on seat (\d+)", log.read())
+                        text = log.read()
+                    if args.queue and not queue_commanded and re.search(r"Scene frame .* -> scSelctCharacter", text):
+                        process.stdin.write(f"{'host' if role == 0 else 'join'} {args.room}\n")
+                        process.stdin.flush()
+                        queue_commanded = True
+                    assignment = re.search((rf"in room {re.escape(args.room)} on seat (\d+)" if args.queue
+                                            else r"on seat (\d+)"), text)
                     if assignment:
                         if int(assignment[1]) != role + 1:
                             raise RuntimeError(f"peer {role} owns unexpected seat {assignment[1]}")
@@ -921,6 +1166,9 @@ def run(args):
                         process = next(proc for number, proc, _, _ in players if number == role)
                         process.stdin.write(event["command"] + "\n")
                         process.stdin.flush()
+                    elif event["action"] == "drop":
+                        post_fixture(args.site, f"/drop/{args.room}",
+                                     {"player": f"Doubles{role}", "seconds": event.get("seconds", 15)})
                     elif event["action"] in ("away", "back"):
                         post_fixture(args.site, f"/{event['action']}/{args.room}", {"player": f"Doubles{role}"})
                     elif event["action"] == "fifth":
@@ -952,6 +1200,10 @@ def run(args):
                                 refused_seen.add(role)
                                 print(f"peer {role}: {line}", flush=True)
                                 continue
+                            if args.expect_queue_ending and line.startswith("orca error network "):
+                                queue_errors[role] = line
+                                print(f"peer {role}: {line}", flush=True)
+                                continue
                             raise RuntimeError(f"peer {role}: {line}")
                         if line.startswith("orca stats ") and json.loads(line[11:]).get("ds", 0):
                             raise RuntimeError(f"peer {role} reported a desync")
@@ -975,7 +1227,8 @@ def run(args):
                     continue
                 if role:
                     text = (Path(work) / f"peer-{role}.log").read_text()
-                    assignment = re.search(r"on seat (\d+)", text)
+                    assignment = re.search((rf"in room {re.escape(args.room)} on seat (\d+)" if args.queue
+                                            else r"on seat (\d+)"), text)
                     match = re.search(r"plugged into port (\d+) at frame (\d+)", text)
                     if (not assignment or not match or int(match[1]) not in (2, 3, 4) or
                             match[1] != assignment[1]):
@@ -1001,7 +1254,9 @@ def run(args):
             if refused:
                 diagnostics["active"] = [name for name in diagnostics["active"]
                                          if name not in {f"Doubles{role}" for role in refused}]
-            final_frame = verify_diagnostics(diagnostics, expected=args.expected)
+            if args.queue:
+                verify_queue_run(args, work, diagnostics, queue_errors)
+            final_frame = verify_diagnostics(diagnostics, expected=args.expected) if not args.expect_queue_ending else "pre-drop (ending verified)"
             verify_gameplay(work, args.expect_fight)
             print(f"PASS: all machines agree on plug {frames}, confirmed hashes through frame {final_frame}; "
                   f"0 desyncs; {len(args.expect_fight)} requested fights returned to CSS")
@@ -1068,7 +1323,14 @@ def main():
                         help="debug this fixture's threads with SIGUSR1 (POSIX only)")
     parser.add_argument("--expect-fight", action="append", default=[], type=lambda value: int(value, 0),
                         help="human-port bitmask for each fight; requires probe-fight-N.bin and return to CSS")
-    parser.add_argument("--events", help="JSON scheduled per-role spawn/command events, triggered by logs")
+    parser.add_argument("--events", help="JSON log-triggered events: pattern, source/role, delay; "
+                        "action=spawn|command|away|back|drop (seconds, default 15); drop severs only room socket")
+    parser.add_argument("--queue", choices=("casual", "ranked"),
+                        help="two-player public room; welcome room.queue plus room.recovery:true")
+    parser.add_argument("--no-recovery", action="store_true", help="omit recovery from the queue welcome (legacy policy)")
+    parser.add_argument("--expect-queue-ending", choices=("network", "forfeit"),
+                        help="verify legacy network ending or the fixture's ranked forfeit after a 90 s hold")
+    parser.add_argument("--scratch", help="directory for isolated temporary users/logs")
     parser.add_argument("--defer-role", action="append", default=[], type=int, choices=range(4))
     parser.add_argument("--refused-role", action="append", default=[], type=int, choices=range(1, 4),
                         help="require room_full for only this newcomer, which must never plug in")
@@ -1089,6 +1351,13 @@ def main():
     versions = role_values(args.role_version)
     if any(not clean_version(version) for version in versions.values()):
         parser.error("--role-version needs X.Y.Z versions")
+    if args.queue:
+        if args.roles not in {"0,1", "0,1,2,3"}:
+            parser.error("--queue runs exactly roles 0,1")
+        args.roles = "0,1"
+        args.expected = 2
+    if args.no_recovery and not args.queue:
+        parser.error("--no-recovery requires --queue")
     if args.self_test:
         self_test(args.turn_binary)
     elif args.serve:
@@ -1096,7 +1365,7 @@ def main():
             parser.error("--listen must be loopback or an isolated LAN address")
         server = Server((args.listen, args.port), args.turn_binary, doubles=not args.ordinary,
                         version_refusals=args.version_refusals, owner_relaunch=args.owner_relaunch,
-                        role_versions=versions)
+                        role_versions=versions, queue_mode=args.queue, recovery=not args.no_recovery, queue_room=args.room)
         print(f"Dev friends-room fixture listening on port {server.server_port}", flush=True)
         try:
             server.serve_forever()
@@ -1110,7 +1379,7 @@ def main():
             if args.local:
                 server = Server(("127.0.0.1", 0), args.turn_binary, doubles=not args.ordinary,
                                 version_refusals=args.version_refusals, owner_relaunch=args.owner_relaunch,
-                                role_versions=versions)
+                                role_versions=versions, queue_mode=args.queue, recovery=not args.no_recovery, queue_room=args.room)
                 threading.Thread(target=server.serve_forever, daemon=True).start()
                 args.site = f"http://127.0.0.1:{server.server_port}"
             run(args)

@@ -125,6 +125,7 @@ void RetryPeer(int seat);
 bool HoldInputSilence(std::chrono::steady_clock::time_point since,
                        std::chrono::steady_clock::time_point now,
                        std::optional<std::vector<int>> missing = std::nullopt);
+bool RoomRecovery();
 bool RoomRecovering(std::chrono::steady_clock::time_point now);
 bool RoomEnded();
 // This Orca is in its room: the welcome arrived and the room hasn't ended.

@@ -176,6 +176,8 @@ public:
   void Stall(int stalled_ms, double now);
   // The wait is over: `resumed` if their inputs came, else the session gave up or stopped.
   void StallOver(bool resumed, double now);
+  // Opted-in public rooms: a transport hold, never a forfeit countdown. Null clears it.
+  void RoomHold(std::optional<double> deadline_ms);
   // The session gave up and unplugged the opponent. The countdown stays until the verdict.
   void OpponentDropped(double now);
   // Casual: the opponent left and the app searches again.
@@ -215,6 +217,7 @@ private:
   bool m_casual_live = false;
   // The ranked set reached its first game (GameBegan): a leave from here on is a forfeit.
   bool m_game_began = false;
+  std::optional<double> m_room_hold;
 
   // The opponent gone mid-set: since when, and why.
   std::optional<double> m_left_at;   // the room's leave
