@@ -438,6 +438,49 @@ TEST(OrcaRoomRecovery, RankedRecoveryNeverClaimsAStall)
     EXPECT_EQ(message.find("finish"), std::string::npos);
 }
 
+TEST(OrcaRoomRecovery, CompletedWelcomeCanDeliverItsFirstFinalVerdict)
+{
+  for (const char* queue : {"casual", "ranked"})
+  {
+    picojson::value welcome;
+    ASSERT_TRUE(picojson::parse(welcome, QueueRoster("welcome", queue)).empty());
+    welcome.get<picojson::object>()["matchId"] = picojson::value();
+    const auto trace = TraceRoomForTest(QueueTraceOptions(), {
+        {RK::Message, 0, welcome.serialize()},
+        {RK::Message, 1, R"({"t":"result","matchId":"queue-recovery-match","void":true})"},
+        {RK::SocketClose, 2, "room ended", 4004},
+    });
+    ASSERT_EQ(trace[1].results.size(), 1u);
+    EXPECT_NE(trace[1].results[0].find("void"), std::string::npos);
+    EXPECT_EQ(trace.back().state, RoomState::Ended);
+    EXPECT_EQ(trace.back().error_code, "match-over");
+    EXPECT_FALSE(trace.back().reconnecting);
+  }
+}
+
+TEST(OrcaRoomRecovery, RecoveryWelcomeCanClearTheMatchBeforeItsFinalVerdict)
+{
+  for (const char* queue : {"casual", "ranked"})
+  {
+    picojson::value welcome;
+    ASSERT_TRUE(picojson::parse(welcome, QueueRoster("welcome", queue)).empty());
+    welcome.get<picojson::object>()["matchId"] = picojson::value();
+    const auto trace = TraceRoomForTest(QueueTraceOptions(), {
+        {RK::Message, 0, QueueRoster("welcome", queue)}, {RK::Message, 0, PeerHello()},
+        {RK::DirectInput, 1000, "peer"}, {RK::SocketClose, 1000},
+        {RK::Message, 17000, welcome.serialize()}, {RK::Tick, 17001},
+        {RK::Message, 17002, R"({"t":"result","matchId":"queue-recovery-match","ranking":["peer","me"],"disposition":"forfeit"})"},
+    });
+    for (const auto& message : trace[5].sent)
+      EXPECT_EQ(message.find("begin"), std::string::npos);
+    ASSERT_EQ(trace.back().results.size(), 1u);
+    EXPECT_NE(trace.back().results[0].find("lost"), std::string::npos);
+    EXPECT_EQ(trace.back().state, RoomState::Ended);
+    EXPECT_EQ(trace.back().error_code, "match-over");
+    EXPECT_FALSE(trace.back().reconnecting);
+  }
+}
+
 TEST(OrcaRoomRecovery, RejoinCannotRemoveTheOptInOrMoveToAnotherQueue)
 {
   for (const std::string& welcome : {QueueRoster("welcome", "ranked", ""),

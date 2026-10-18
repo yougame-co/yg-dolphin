@@ -1287,6 +1287,7 @@ struct YouGameRoom::Impl
   bool doubles = false;
   int room_size = MAX_SEATS;
   std::string match_id;
+  std::string last_match_id;  // The server may clear the roster match before sending its result.
   bool set_done = false;
   // The room's `set-over` arrived: it stays open after the verdict until the players leave.
   bool set_over = false;
@@ -3088,8 +3089,13 @@ struct YouGameRoom::Impl
       std::string id = it->second.is<std::string>() ? it->second.get<std::string>() : "";
       if (id.size() > 64)
         id.clear();
+      // A recovery roster can name no active match before replaying the final verdict. Keep
+      // that pending match's identity, so neither reports nor a new begin outrun its outcome.
+      const bool held_match = id.empty() && QueueHold();
       std::lock_guard lock(mutex);
-      if (id != match_id)
+      if (!id.empty())
+        last_match_id = id;
+      if (id != match_id && !held_match)
       {
         NOTICE_LOG_FMT(NETPLAY, "Orca room: room match {}", id.empty() ? "over" : id);
         // A match this process played before its room link dropped: the games it knew of come back.
@@ -3101,7 +3107,8 @@ struct YouGameRoom::Impl
                          id, known_games);
         }
       }
-      match_id = std::move(id);
+      if (!held_match)
+        match_id = std::move(id);
     }
     if (const auto it = m.find("participants"); it != m.end() && it->second.is<picojson::array>())
     {
@@ -3620,7 +3627,8 @@ struct YouGameRoom::Impl
     if (QueueRecovery())
     {
       std::lock_guard lock(mutex);
-      if (match != match_id)
+      const std::string& expected = match_id.empty() ? last_match_id : match_id;
+      if (!expected.empty() && match != expected)
         return false;
     }
     if (room_queue == "private" || match.empty() || !verdicts_seen.insert(match + "/$final").second)
