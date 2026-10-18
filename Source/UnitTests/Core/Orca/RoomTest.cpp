@@ -438,6 +438,21 @@ TEST(OrcaRoomRecovery, RankedRecoveryNeverClaimsAStall)
     EXPECT_EQ(message.find("finish"), std::string::npos);
 }
 
+TEST(OrcaRoomRecovery, PrivateManualRetryDoesNotDependOnTransportRecovery)
+{
+  auto options = TraceOptions(false);
+  options.recovery_enabled = false;
+  const auto trace = TraceRoomForTest(options, {
+      {RK::Message, 0, RosterMessage("welcome", false)}, {RK::Message, 0, PeerHello(false)},
+      {RK::RetryPeer, 1000, "", 1}, {RK::Tick, 1001},
+  });
+  ASSERT_EQ(trace.back().events.size(), 1u);
+  EXPECT_EQ(trace.back().events[0].kind, PeerEvent::Kind::Left);
+  EXPECT_TRUE(std::ranges::any_of(trace.back().sent, [](const std::string& message) {
+    return message.find(R"("resume":true)") != std::string::npos;
+  }));
+}
+
 TEST(OrcaRoomRecovery, CompletedWelcomeCanDeliverItsFirstFinalVerdict)
 {
   for (const char* queue : {"casual", "ranked"})
