@@ -17,7 +17,10 @@ add_dolphin_test(ESFormatsTest IOS/ES/FormatsTest.cpp)
 add_dolphin_test(FileSystemTest IOS/FS/FileSystemTest.cpp)
 
 add_dolphin_test(OrcaSessionTest Orca/SessionTest.cpp)
-add_dolphin_test(OrcaStatusTest Orca/StatusTest.cpp)
+add_dolphin_test(OrcaStatusTest Orca/StatusTest.cpp Orca/BootMemoryTest.cpp)
+if(NOT MSVC)
+  set_property(SOURCE Orca/BootMemoryTest.cpp APPEND PROPERTY COMPILE_OPTIONS -fexceptions)
+endif()
 add_dolphin_test(OrcaRoomTest Orca/RoomTest.cpp Orca/OfflineReplayTest.cpp)
 add_dolphin_test(OrcaDirectLinkTest Orca/DirectLinkTest.cpp)
 # TURN stays test-only; the production libjuice target keeps NO_SERVER.

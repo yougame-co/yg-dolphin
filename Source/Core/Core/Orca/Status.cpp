@@ -15,6 +15,7 @@
 #include <fmt/format.h>
 
 #include "Core/Orca/Activity.h"
+#include "Core/Orca/BootMemory.h"
 #include "Core/Orca/Mod.h"
 #include "Core/Orca/Music.h"
 #include "Core/Orca/Profile.h"
@@ -141,6 +142,7 @@ void Report(std::string_view code, std::string_view sentence)
     Error(code, sentence);
     return;
   }
+  BootMemory::LogMemory();
   if (!SessionActive())
     return;
   std::lock_guard lock(s_mutex);
@@ -285,6 +287,7 @@ void Shaders(std::size_t compiled, std::size_t total)
 
 void Error(std::string_view code, std::string_view sentence)
 {
+  BootMemory::LogMemory();
   if (!SessionActive())
     return;
   std::lock_guard lock(s_mutex);

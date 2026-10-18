@@ -37,6 +37,7 @@
 #include "Core/HW/Sram.h"
 #include "Core/Movie.h"
 #include "Core/NetPlayProto.h"
+#include "Core/Orca/BootMemory.h"
 #include "Core/Orca/Bundle.h"
 #include "Core/Orca/Profile.h"
 #include "Core/Orca/Status.h"
@@ -52,6 +53,7 @@ namespace BootManager
 bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
               const WindowSystemInfo& wsi)
 {
+  Orca::BootMemory::BeginBoot();
   if (!boot)
     return false;
 

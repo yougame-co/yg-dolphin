@@ -511,6 +511,8 @@ add_library(core
   Orca/Activity.h
   Orca/BootLogs.cpp
   Orca/BootLogs.h
+  Orca/BootMemory.cpp
+  Orca/BootMemory.h
   Orca/Branding.cpp
   Orca/Branding.h
   Orca/Bridge.cpp
@@ -1098,8 +1100,10 @@ if(NOT MSVC)
   set_property(SOURCE ${ORCA_DETERMINISTIC_SOURCES} APPEND PROPERTY COMPILE_OPTIONS -ffp-contract=off)
   # The replay codec and the threads that pack and unpack replays catch their own size and
   # allocation failures (try/catch, as MSVC's /EHsc builds them); the rest of a non-MSVC build has
-  # -fno-exceptions.
-  set_property(SOURCE Orca/Session/Keyframe.cpp Rollback/OnlineMatch.cpp APPEND PROPERTY
+  # -fno-exceptions. The boot boundary must unwind its scope guards, and the cache allocator
+  # must throw rather than abort when its vector growth runs out of memory.
+  set_property(SOURCE Orca/Session/Keyframe.cpp Rollback/OnlineMatch.cpp
+               Core.cpp Orca/BootMemory.cpp PowerPC/PPCCache.cpp APPEND PROPERTY
                COMPILE_OPTIONS -fexceptions)
 endif()
 

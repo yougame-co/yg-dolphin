@@ -40,6 +40,7 @@
 #include "Core/Host.h"
 #include "Core/Orca/Activity.h"
 #include "Core/Orca/BootLogs.h"
+#include "Core/Orca/BootMemory.h"
 #include "Core/Orca/Branding.h"
 #include "Core/Orca/Bridge.h"
 #include "Core/Orca/CrashNote.h"
@@ -702,7 +703,11 @@ static int Run(const int argc, char* argv[], const Embed::Options& embed)
       Orca::Perf::Ready();
   }
 
-  if (!BootManager::BootCore(Core::System::GetInstance(), std::move(boot), wsi))
+  bool booted = false;
+  Orca::BootMemory::Run([&] {
+    booted = BootManager::BootCore(Core::System::GetInstance(), std::move(boot), wsi);
+  });
+  if (!booted)
   {
     fprintf(stderr, "Could not boot the specified file\n");
     // In a session, the session status has already reported the error.
