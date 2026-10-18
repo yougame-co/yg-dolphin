@@ -159,3 +159,66 @@ change was needed for that verifier correction.
 All work is local. No engine work or gate remains blocked. Rooms must implement
 the pasted remaining-hold contract; the web team owns the terminal queue mapping
 described above. No deployment, push, release or version bump is included.
+
+## adopt-0355: Windows window adoption (2026-10-18)
+
+Initial checks on `recovery-0355`, before edits:
+
+```text
+70d919e283 Reconcile public room recovery deadlines
+BASE-OK
+```
+
+`git merge-base --is-ancestor 5097fe19d0 HEAD` passed; the starting worktree was
+clean. The code change is confined to `Source/Core/DolphinNoGUI/PlatformWin32.cpp`.
+Both wait-loop and final adoption checks call the tiny `IsAdoptedBy(HWND, HWND)`
+helper, which compares `GetAncestor(self, GA_PARENT)` to the requested parent.
+The single named timeout is 20 seconds, allowing the desktop launcher's late
+`SetParent` retry. Message pumping and the real-timeout error path, including
+the existing diagnostic's literal "10 s" and status sentence, are unchanged.
+
+After adoption, `SetWindowLongPtr(GWL_STYLE)` clears `WS_POPUP`, sets `WS_CHILD`
+and preserves both clipping styles. `SetWindowPos` applies `SWP_FRAMECHANGED`
+with no move, resize, z-order change or activation before the existing placement.
+The placement helper also reads `GA_PARENT`. Focus and keyboard routing already
+use `GA_ROOT` to find the foreground/focus target and need no changes.
+
+There is no existing unit seam for the native adoption predicate; the helper is
+kept local and directly reviewable. macOS cannot run Win32 window APIs or the
+cross-process adoption scenario, and the configured compilation database has
+zero `PlatformWin32.cpp` entries (CMake selects it only under `WIN32`). Thus no
+runtime adoption test or native Windows `-Werror` compile can run on this host.
+Diff review checked HWND/GA_PARENT usage, LONG_PTR style-mask width, style order,
+SetWindowPos flags and preservation of the timeout path. Windows MSVC compilation
+and adoption testing remain with the release kit. Non-Windows code/build files
+are untouched.
+
+Host build: PASS (exit 0), using:
+
+```text
+CCACHE_DIR=/Volumes/YGWorktrees/ccache flock /Users/luis/Code/brawl-dolphin/build.lock nice -n 10 cmake --build build-recovery --target tests dolphin-nogui --parallel 6
+```
+
+`uptime` was checked below load 20 before submission; the command waited for the
+shared lock. Log: `build-recovery/adopt-0355-build.log`. The build has 28 linker
+warnings about duplicate libraries and existing Homebrew dylibs targeting newer
+macOS versions than the configured deployment target; no C++ compiler warnings.
+The changed Windows translation unit is excluded on macOS as expected.
+
+Full test binary: PASS (exit 0), **2,270 tests from 183 suites; 2,247 passed,
+23 existing optional skips, zero failures/errors (609.199 s)**. Command:
+
+```text
+CCACHE_DIR=/Volumes/YGWorktrees/ccache flock /Users/luis/Code/brawl-dolphin/build.lock nice -n 10 python3 Tools/orca/room-fix-tests.py build-recovery/Binaries/Tests/tests --gtest_brief=1 --gtest_output=xml:build-recovery/adopt-0355-tests.xml
+```
+
+Load before submission was 13.38. The existing wrapper supplies loopback-only
+fixtures and a minimal environment without live-service/disc opt-ins, and runs
+one GoogleTest process. Evidence: `build-recovery/adopt-0355-tests.log` and
+`build-recovery/adopt-0355-tests.xml`. The generated `imgui.ini` is retained as
+`build-recovery/adopt-0355-imgui.ini` instead of leaving a root-level artifact.
+
+Final `git diff --check`: PASS. Manual Windows API/diff review: PASS; native
+Windows compilation, warning enforcement and adoption runtime verification
+remain for the PC release kit as noted above. No host gate is blocked. Local
+commit only; no push, release or deployment.

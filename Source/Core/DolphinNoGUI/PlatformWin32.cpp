@@ -27,6 +27,15 @@
 
 namespace
 {
+// The desktop launcher can retry a late SetParent.
+constexpr auto ADOPTION_TIMEOUT = std::chrono::seconds(20);
+
+bool IsAdoptedBy(HWND self, HWND parent)
+{
+  // Match the launcher's parent check; GetParent can return a popup's owner instead.
+  return GetAncestor(self, GA_PARENT) == parent;
+}
+
 // Prints a line from Orca/UX/OverlayKey.h, if any.
 void OutKey(std::string_view line)
 {
@@ -122,7 +131,7 @@ bool PlatformWin32::RegisterRenderWindowClass(bool embedded)
 // --embed-adopted (the sandbox): a sandboxed process may not create a window under the app's, so
 // the window starts top-level and hidden, and yougame-sandbox.exe (outside the sandbox) makes it a
 // child of the app's window, finding it by its class and caption, both "Orca", which never change.
-// Messages are answered while waiting; after 10 s without that, Orca gives up (sandbox_embed).
+// Messages are answered while waiting; after ADOPTION_TIMEOUT, Orca gives up (sandbox_embed).
 bool PlatformWin32::CreateAdoptedWindow()
 {
   const HWND parent = reinterpret_cast<HWND>(static_cast<uintptr_t>(m_embed.parent));
@@ -139,8 +148,8 @@ bool PlatformWin32::CreateAdoptedWindow()
     fprintf(stderr, "Orca: CreateWindowEx for adoption failed (%lu)\n", GetLastError());
     return false;
   }
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
-  while (GetParent(m_hwnd) != parent && std::chrono::steady_clock::now() < deadline)
+  const auto deadline = std::chrono::steady_clock::now() + ADOPTION_TIMEOUT;
+  while (!IsAdoptedBy(m_hwnd, parent) && std::chrono::steady_clock::now() < deadline)
   {
     MSG msg;
     while (PeekMessage(&msg, nullptr, 0, 0, PM_REMOVE))
@@ -150,7 +159,7 @@ bool PlatformWin32::CreateAdoptedWindow()
     }
     Sleep(5);
   }
-  if (GetParent(m_hwnd) != parent)
+  if (!IsAdoptedBy(m_hwnd, parent))
   {
     fprintf(stderr, "Orca: nothing adopted the window into the app's in 10 s\n");
     Orca::Status::Error(Orca::Sandbox::EMBED_ERROR, Orca::Sandbox::EMBED_SENTENCE);
@@ -158,11 +167,18 @@ bool PlatformWin32::CreateAdoptedWindow()
   }
   fprintf(stderr, "Orca: adopted into the app's window\n");
   m_adopted = true;
+  // SetParent does not change window styles; make the adopted window a child here too.
+  const LONG_PTR style = GetWindowLongPtr(m_hwnd, GWL_STYLE);
+  SetWindowLongPtr(m_hwnd, GWL_STYLE,
+                   (style & ~static_cast<LONG_PTR>(WS_POPUP)) | WS_CHILD | WS_CLIPSIBLINGS |
+                       WS_CLIPCHILDREN);
+  SetWindowPos(m_hwnd, nullptr, 0, 0, 0, 0,
+               SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
   // Placed only now: a window moved before the launcher's SetParent stays where it was on screen.
   m_embed_visible = !m_embed.too_small;  // Hidden until a big enough rect (Embed.h).
   SetWindowPos(m_hwnd, HWND_TOP, r.x, r.y, r.w, r.h,
                SWP_NOACTIVATE | (m_embed_visible ? SWP_SHOWWINDOW : 0));
-  // GetParent can say "adopted" while the launcher's SetParent is still on its way out: once more,
+  // GA_PARENT can say "adopted" while the launcher's SetParent is still on its way out: once more,
   // a moment later, so the window is where it belongs for the rest of the boot too (MainLoop keeps
   // it there after that).
   const auto settle = std::chrono::steady_clock::now() + std::chrono::milliseconds(50);
@@ -308,7 +324,7 @@ void PlatformWin32::UpdateWindowPosition()
 // rounding are left alone.
 void PlatformWin32::KeepAdoptedPlaced()
 {
-  const HWND parent = GetParent(m_hwnd);
+  const HWND parent = GetAncestor(m_hwnd, GA_PARENT);
   RECT rc{};
   if (!m_embed_visible || !parent || !GetWindowRect(m_hwnd, &rc))
     return;
