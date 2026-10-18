@@ -389,15 +389,87 @@ TEST(OrcaRoomRecovery, ServerVerdictsEndPublicHoldsWithoutLocalForfeits)
   }
 }
 
-TEST(OrcaRoomRecovery, RoomEndedCloseTerminatesPublicHold)
+TEST(OrcaRoomRecovery, RefusedRejoinCloseEndsPublicRoomImmediatelyWithoutRetry)
 {
-  const auto trace = TraceRoomForTest(QueueTraceOptions(), {
-      {RK::Message, 0, QueueRoster("welcome", "ranked")}, {RK::SocketClose, 1000},
-      {RK::SocketClose, 2000, "room ended", 4004},
-  });
-  EXPECT_EQ(trace.back().state, RoomState::Ended);
-  EXPECT_EQ(trace.back().error_code, "match-over");
-  EXPECT_FALSE(trace.back().reconnecting);
+  for (const char* queue : {"casual", "ranked"})
+  {
+    for (const char* reason : {"rejoin-refused", "rejoin-refused:allowance",
+                               "rejoin-refused:not-your-seat", "WebSocket closed by the server (4004)"})
+    {
+      for (const bool held : {false, true})
+      {
+        SCOPED_TRACE(fmt::format("{} {} held={}", queue, reason, held));
+        std::vector<RoomTestStep> steps{{RK::Message, 0, QueueRoster("welcome", queue)}};
+        if (held)
+          steps.push_back({RK::SocketClose, 1000});
+        steps.push_back({RK::SocketClose, 2000, reason, 4004});
+        steps.push_back({RK::PollReconnect, 3000});
+        const auto trace = TraceRoomForTest(QueueTraceOptions(), steps);
+        for (size_t i = trace.size() - 2; i < trace.size(); ++i)
+        {
+          EXPECT_EQ(trace[i].state, RoomState::Ended);
+          EXPECT_EQ(trace[i].error_code, "network");
+          EXPECT_EQ(trace[i].status, "You couldn't rejoin the match (the time to reconnect ran out).");
+          EXPECT_FALSE(trace[i].reconnect_started);
+          EXPECT_FALSE(trace[i].reconnecting);
+          EXPECT_FALSE(trace[i].reconnect_at);
+          EXPECT_EQ(trace[i].reconnect_attempts, 0u);
+          EXPECT_FALSE(trace[i].public_deadline);
+          EXPECT_TRUE(trace[i].results.empty());
+        }
+      }
+    }
+  }
+}
+
+TEST(OrcaRoomRecovery, RefusedRejoinClosePreservesLegacyAndFriendsBehavior)
+{
+  for (const char* queue : {"casual", "ranked", "private"})
+  {
+    for (const std::string flag : {"", "false", "true"})
+    {
+      for (const bool enabled : {false, true})
+      {
+        if (std::string(queue) != "private" && flag == "true" && enabled)
+          continue;
+        SCOPED_TRACE(fmt::format("{} recovery={} enabled={}", queue, flag, enabled));
+        auto options = QueueTraceOptions();
+        options.recovery_enabled = enabled;
+        const auto trace = TraceRoomForTest(options, {
+            {RK::Message, 0, QueueRoster("welcome", queue, flag)},
+            {RK::SocketClose, 1000, "rejoin-refused:allowance", 4004},
+        });
+        EXPECT_EQ(trace.back().state, RoomState::Ended);
+        EXPECT_EQ(trace.back().error_code, "match-over");
+        EXPECT_EQ(trace.back().status, "The match is over");
+        EXPECT_FALSE(trace.back().reconnect_started);
+      }
+    }
+  }
+}
+
+TEST(OrcaRoomRecovery, AuthoritativeVerdictWinsOverRefusedRejoinClose)
+{
+  for (const char* queue : {"casual", "ranked"})
+  {
+    for (const bool held : {false, true})
+    {
+      SCOPED_TRACE(fmt::format("{} held={}", queue, held));
+      std::vector<RoomTestStep> steps{{RK::Message, 0, QueueRoster("welcome", queue)}};
+      if (held)
+        steps.push_back({RK::SocketClose, 1000});
+      steps.push_back({RK::Message, 2000, R"({"t":"result","matchId":"queue-recovery-match","ranking":["me","peer"],"reason":"The server ended this match."})"});
+      steps.push_back({RK::SocketClose, 2001, "rejoin-refused:not-your-seat", 4004});
+      const auto trace = TraceRoomForTest(QueueTraceOptions(), steps);
+      ASSERT_EQ(trace[trace.size() - 2].results.size(), 1u);
+      EXPECT_NE(trace[trace.size() - 2].results[0].find("won"), std::string::npos);
+      EXPECT_EQ(trace.back().state, RoomState::Ended);
+      EXPECT_EQ(trace.back().error_code, "match-over");
+      EXPECT_EQ(trace.back().status, held ? "The server ended this match." : "The match is over");
+      EXPECT_FALSE(trace.back().reconnecting);
+      EXPECT_TRUE(trace.back().results.empty());
+    }
+  }
 }
 
 TEST(OrcaRoomRecovery, RankedRejoinPreservesGameCountAndDoesNotRepeatReports)

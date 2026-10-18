@@ -222,3 +222,70 @@ Final `git diff --check`: PASS. Manual Windows API/diff review: PASS; native
 Windows compilation, warning enforcement and adoption runtime verification
 remain for the PC release kit as noted above. No host gate is blocked. Local
 commit only; no push, release or deployment.
+
+
+## close4004-0355: recovery rejoin refusal (2026-10-18)
+
+Required initial checks on `recovery-0355`, before edits:
+
+```text
+85612596a8 Align Windows window adoption handling
+BASE-OK
+```
+
+`git merge-base --is-ancestor 70d919e283 HEAD` passed. The starting worktree
+was clean; work continues from that HEAD with no merge or rebase.
+
+An undecided public room opted into recovery now handles close 4004 immediately,
+before reconnect policy: it ends with outcome `network` and the exact sentence
+"You couldn't rejoin the match (the time to reconnect ran out)." This covers
+`rejoin-refused`, `rejoin-refused:allowance` and `rejoin-refused:not-your-seat`.
+The existing transport exposes the close code without its reason text, so the
+decision uses 4004 inside the existing public recovery gate. A prior authoritative
+verdict wins, including a casual result and a result after cleared match metadata.
+Friends, non-opted public rooms and disabled recovery retain their existing
+4004 outcome and wording.
+
+Unit coverage checks casual/ranked rooms, each refusal reason and the transport's
+close diagnostic, both with and without an existing recovery hold. It checks
+immediate termination, no retry now or after polling, cleared recovery state,
+no invented result, legacy/friends behavior, and authoritative-verdict precedence.
+The existing completed-WELCOME test also covers cleared match metadata.
+
+Build `tests` and `dolphin-nogui`: PASS (exit 0), six build workers.
+Both touched C++ translation units: PASS with `-Werror -fsyntax-only` (exit 0).
+The build has the previously documented linker warnings about duplicate libraries
+and dependency macOS deployment targets; the warning check has no diagnostics.
+Evidence: `build-recovery/close4004-0355-build.log`,
+`build-recovery/close4004-0355-werror.log` and its adjacent Python driver.
+
+Commands, each submitted after checking uptime below load 20:
+
+```text
+CCACHE_DIR=/Volumes/YGWorktrees/ccache flock /Users/luis/Code/brawl-dolphin/build.lock nice -n 10 cmake --build build-recovery --target tests dolphin-nogui --parallel 6
+CCACHE_DIR=/Volumes/YGWorktrees/ccache flock /Users/luis/Code/brawl-dolphin/build.lock nice -n 10 python3 build-recovery/close4004-0355-werror.py
+```
+
+Focused recovery/resilience tests: PASS, **54/54 tests, zero failures/errors**
+(0.003 s). This includes the new refusal, legacy/friends and verdict precedence
+regressions. Evidence: `build-recovery/close4004-0355-focused.log` and adjacent XML.
+
+```text
+CCACHE_DIR=/Volumes/YGWorktrees/ccache flock /Users/luis/Code/brawl-dolphin/build.lock nice -n 10 python3 Tools/orca/room-fix-tests.py build-recovery/Binaries/Tests/tests '--gtest_filter=OrcaRoomRecovery.*:OrcaRoomResilience.*' --gtest_brief=1 --gtest_output=xml:build-recovery/close4004-0355-focused.xml
+CCACHE_DIR=/Volumes/YGWorktrees/ccache flock /Users/luis/Code/brawl-dolphin/build.lock nice -n 10 python3 Tools/orca/room-fix-tests.py build-recovery/Binaries/Tests/tests --gtest_brief=1 --gtest_output=xml:build-recovery/close4004-0355-tests.xml
+```
+
+Full test binary: PASS (exit 0), **2,272 tests from 183 suites; 2,249 passed,
+23 existing optional skips, zero failures/errors (608.613 s)**. Evidence:
+`build-recovery/close4004-0355-tests.log` and adjacent XML. The existing wrapper
+uses loopback fixtures and a minimal environment without live-service or disc
+opt-ins, with one GoogleTest process. Generated `imgui.ini` is retained at
+`build-recovery/close4004-0355-imgui.ini`.
+
+All heavy commands used the shared flock, nice 10 and the requested CCACHE_DIR;
+load was below 20 before each submission. Build workers were capped at six,
+warning checks were sequential, and tests used one process. Commands waited for
+the shared lock as needed. No installs were needed.
+
+Final `git diff --check`: PASS. All requested host gates passed; nothing remains
+blocked. One local commit only; no push, release or deployment.

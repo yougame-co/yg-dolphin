@@ -2228,11 +2228,21 @@ struct YouGameRoom::Impl
       bool decided;
       {
         std::lock_guard lock(mutex);
-        decided = set_done || set_over;
+        const std::string& match = match_id.empty() ? last_match_id : match_id;
+        decided = set_done || set_over ||
+                  (close_code == CLOSE_MATCH_OVER &&
+                   (match.empty() ? std::ranges::any_of(verdicts_seen, [](const auto& id) {
+                      return id.ends_with("/$final");
+                    }) : verdicts_seen.contains(match + "/$final")));
       }
       if (decided)
       {
         End("The match is over", "match-over");
+        return false;
+      }
+      if (close_code == CLOSE_MATCH_OVER)
+      {
+        End("You couldn't rejoin the match (the time to reconnect ran out).", "network");
         return false;
       }
     }
