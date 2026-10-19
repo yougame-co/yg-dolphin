@@ -4393,6 +4393,7 @@ struct YouGameRoom::Impl
       present[id] = {*slot, Str(o, "name")};
     }
     int my_seat;
+    bool friends_room;
     {
       std::lock_guard lock(mutex);
       seat_names = std::move(names);
@@ -4400,6 +4401,15 @@ struct YouGameRoom::Impl
       for (const auto& [id, info] : present)
         peer_ids[info.first] = id;
       my_seat = seat;
+      friends_room = queue_known && queue == "private";
+    }
+    // Reopening a friends room can find the friend back first. Keep this socket and use the
+    // ordinary invite handshake; the emulation thread adopts the joining role before host work.
+    if (!joining && options.join_if_taken && friends_room && my_seat > 0 &&
+        present.contains(host) && present.at(host).first == 0)
+    {
+      std::lock_guard lock(mutex);
+      joining = true;
     }
     // A hosting Orca must hold the room's first seat and be the room's host: its port 1 is seat 0,
     // and joiners trust only the room's host. If a friend got here first (an invite sent before
@@ -5485,14 +5495,16 @@ std::string YouGameRoom::SeatName(int seat) const
 
 std::vector<u8> YouGameRoom::HelloControls() const
 {
+  std::lock_guard lock(m_impl->mutex);
   const auto& controls = m_impl->options.controls;
-  return m_impl->options.joining && controls.size() <= MAX_CONTROLS ? controls : std::vector<u8>{};
+  return m_impl->joining && controls.size() <= MAX_CONTROLS ? controls : std::vector<u8>{};
 }
 
 std::vector<u8> YouGameRoom::HelloQueue() const
 {
+  std::lock_guard lock(m_impl->mutex);
   const auto& queue = m_impl->options.queue;
-  return m_impl->options.joining && queue.size() <= MAX_QUEUE ? queue : std::vector<u8>{};
+  return m_impl->joining && queue.size() <= MAX_QUEUE ? queue : std::vector<u8>{};
 }
 
 std::string YouGameRoom::Code() const

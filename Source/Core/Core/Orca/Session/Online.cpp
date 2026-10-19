@@ -266,7 +266,7 @@ void StartLocked(Net::RoomOptions options)
     options.player_name = Env("ORCA_NAME").substr(0, 32);
   // A joiner's own controls, for its port in the host's game (none for a launch join, whose game
   // hasn't run yet).
-  if (options.joining)
+  if (options.joining || options.join_if_taken)
   {
     options.controls = Events::OwnControls();
     options.queue = Events::OwnQueue();
@@ -289,7 +289,7 @@ void Start()
   StartLocked(std::move(options));
 }
 
-void StartRoom(const std::string& code, bool joining, bool friends_room)
+void StartRoom(const std::string& code, bool joining, bool friends_room, bool join_if_taken)
 {
   std::lock_guard lock(s_mutex);
   if (s_room)
@@ -298,6 +298,7 @@ void StartRoom(const std::string& code, bool joining, bool friends_room)
   options.room_code = code;
   options.joining = joining;
   options.friends_room = friends_room;
+  options.join_if_taken = join_if_taken;
   options.ask_app_for_room = false;
   StartLocked(std::move(options));
 }

@@ -35,6 +35,8 @@ struct RoomOptions
   std::string mode = "orca-test";
   // This Orca joins a friend's running game (ORCA_JOIN=1, or the app opened an invite).
   bool joining = false;
+  // A held friends-room reopen may find the friend hosting it: join that game instead.
+  bool join_if_taken = false;
   // Known queue requests keep their original behavior even before the first welcome.
   bool friends_room = true;
   // Transport policy can be disabled for the healthy-session baseline comparison.

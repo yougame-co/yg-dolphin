@@ -94,6 +94,8 @@ std::optional<JoinCapture> ChooseJoinCapture(const Orca::Net::Session* session, 
 // Reopen a held friends room under its code; a queue, expired or taken room needs a fresh code.
 std::string RoomReopenCode(const std::string& previous_code, const std::string& queue,
                             bool held, bool taken);
+// Pumps the actual reopen path against Online's room and returns whether it adopted a friend.
+bool PumpRoomReopenForTest();
 
 // Headless runtime fixture: pumps the same host event/keyframe path with a real room and a
 // supplied game history. The caller initializes Core::System's memory and owns `game`.

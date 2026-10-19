@@ -4647,6 +4647,46 @@ ReplayArchive FriendsReplay(int first, int current, int friends = 0)
 }
 }
 
+TEST_F(OrcaRoomRuntime, FriendsReopenJoinsTheFriendWhoReturnedFirst)
+{
+  FriendsHeadlessCore core;
+  const ScopedEnv session("ORCA_SESSION", "1");
+  Orca::Status::SetAppCaps("join");
+  const Common::ScopeGuard cleanup([] {
+    Orca::Online::Shutdown();
+    Orca::Status::SetAppCaps("");
+  });
+  const std::string code = "friends359";
+  // The friend rejoined during the old host's reopen delay and is now the room's host.
+  Request("/configure/" + code,
+          fmt::format(R"({{"joining":true,"compatibility":"{}"}})",
+                      Orca::Online::CompatibilityKey()));
+  Orca::Online::StartRoom(code, false, true, true);
+  ASSERT_TRUE(Wait([] { return Orca::Online::InRoom() || Orca::Online::RoomEnded(); }));
+  auto* room = dynamic_cast<YouGameRoom*>(Orca::Online::Transport());
+  ASSERT_NE(room, nullptr);
+  ASSERT_TRUE(room->ErrorCode().empty()) << room->Status();
+  const u64 generation = room->Generation();
+  EXPECT_EQ(room->Joining(), true);
+  EXPECT_EQ(room->Seat(), 1);
+  EXPECT_TRUE(Rollback::OnlineMatch::PumpRoomReopenForTest());
+  EXPECT_EQ(Orca::Online::Code(), code);
+  EXPECT_EQ(room->Generation(), generation);
+  ASSERT_TRUE(Wait([&] { return Sent(code, "msg", "hello"); }));
+  const auto state = Request("/state/" + code);
+  EXPECT_EQ(state.get("connects").get<double>(), 1);
+  EXPECT_EQ(state.get("closes").get<double>(), 0);
+  for (const auto& message : state.get("messages").get<picojson::array>())
+  {
+    EXPECT_NE(message.get("t").to_str(), "leave");
+    const auto& data = message.get("d");
+    if (data.is<picojson::object>() && data.get("k").to_str() == "hello")
+      EXPECT_FALSE(data.get("h").evaluate_as_boolean());
+  }
+  EXPECT_TRUE(room->Connected());
+  EXPECT_TRUE(room->ErrorCode().empty());
+}
+
 TEST_F(OrcaRoomRuntime, RankedRecordingUsesTheMatchedRoomAndAgreedCapability)
 {
   FriendsHeadlessCore core;

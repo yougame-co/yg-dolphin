@@ -27,7 +27,8 @@ void Start();
 // Switches to a new room after Shutdown: a friend's (`code`, joining) or this player's own (empty
 // code). Never asks the app for an invite. A joiner sends the host its own controls
 // (Orca::Events::OwnControls).
-void StartRoom(const std::string& code, bool joining, bool friends_room = true);
+void StartRoom(const std::string& code, bool joining, bool friends_room = true,
+               bool join_if_taken = false);
 // The room's code once known; "" before that or with no room.
 std::string Code();
 // The roster's name for a seat; "" when unknown or with no room.
