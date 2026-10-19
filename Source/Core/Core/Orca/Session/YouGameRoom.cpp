@@ -1143,7 +1143,8 @@ struct YouGameRoom::Impl
     return QueueRecoveryLocked() ? public_self_hold_until : std::nullopt;
   }
 
-  void ReconcilePublicHold(const picojson::object& message, const std::string& peer = {})
+  void ReconcilePublicHold(const picojson::object& message, const std::string& peer = {},
+                           bool fresh = false)
   {
     std::lock_guard lock(mutex);
     if (!QueueRecoveryLocked() || set_done || set_over)
@@ -1156,8 +1157,8 @@ struct YouGameRoom::Impl
       return;
     }
     auto [hold, inserted] = public_peer_holds.try_emplace(peer, Now() + ROOM_HOLD);
-    if (ms)
-      hold->second = Now() + std::chrono::milliseconds(*ms);
+    if (ms || fresh)
+      hold->second = Now() + (ms ? std::chrono::milliseconds(*ms) : ROOM_HOLD);
     input_holds[peer] = hold->second;
     if (peer == host)
     {
@@ -1222,6 +1223,7 @@ struct YouGameRoom::Impl
   int room_size = MAX_SEATS;
   std::string match_id;
   std::string last_match_id;  // The server may clear the roster match before sending its result.
+  bool rejoin_verdict_pending = false;
   bool set_done = false;
   // The room's `set-over` arrived: it stays open after the verdict until the players leave.
   bool set_over = false;
@@ -3115,8 +3117,13 @@ struct YouGameRoom::Impl
       // that pending match's identity, so neither reports nor a new begin outrun its outcome.
       const bool held_match = id.empty() && QueueHold();
       std::lock_guard lock(mutex);
+      if (held_match && reconnect.since && !match_id.empty())
+        rejoin_verdict_pending = true;
       if (!id.empty())
+      {
         last_match_id = id;
+        rejoin_verdict_pending = false;
+      }
       if (id != match_id && !held_match)
       {
         NOTICE_LOG_FMT(NETPLAY, "Orca room: room match {}", id.empty() ? "over" : id);
@@ -3691,7 +3698,7 @@ struct YouGameRoom::Impl
         }))
       return true;
     std::lock_guard lock(mutex);
-    return !input_holds.empty();
+    return rejoin_verdict_pending || !input_holds.empty();
   }
 
   void ResultLine(const std::string& line)
@@ -4522,7 +4529,7 @@ struct YouGameRoom::Impl
         for (auto p = peers.begin(); p != peers.end(); ++p)
         {
           auto& peer = p->second;
-          if (!peer.local_room_away && !peer.presence.away_since)
+          if (!QueueRecovery() && !peer.local_room_away && !peer.presence.away_since)
             continue;
           // Welcome is authoritative after a missed back/leave while our socket was down.
           const auto participants = m.find("players");
@@ -4537,39 +4544,35 @@ struct YouGameRoom::Impl
             }
           }
           peer.local_room_away = false;
+          if (present && present->count("away") && present->at("away").evaluate_as_boolean())
+          {
+            // Our socket may have missed a back and another away. Never reuse that outage's
+            // deadline: use this peer's remaining hold, or a fresh fallback until its own away.
+            ReconcilePublicHold(*present, p->first, true);
+            continue;
+          }
+          if (QueueRecovery())
+          {
+            std::lock_guard lock(mutex);
+            public_peer_holds.erase(p->first);
+            input_holds.erase(p->first);
+            if (p->first == host)
+            {
+              host_away_until.reset();
+              host_hold_until.reset();
+            }
+            peer.presence.away_since.reset();
+            peer.presence.suspended = false;
+          }
           if (!present)
           {
             peer.presence.away_since.reset();  // Roster removes a real leave below.
             kept_session = false;
             continue;
           }
-          if (present->count("away") && present->at("away").evaluate_as_boolean())
-          {
-            // An away missed while our socket was down needs its own local fallback
-            // until rooms sends that peer's away message with the remaining hold.
-            ReconcilePublicHold({}, p->first);
-            continue;
-          }
-          if (QueueRecovery())
-          {
-            // A missed back cancels an expired presence hold. Silent input buffers
-            // still need their own fallback; a valid existing input hold stays intact.
-            std::lock_guard lock(mutex);
-            const auto deadline = PeerDeadlineLocked(p->first);
-            if (deadline && !PublicHoldAliveLocked(deadline, Now()))
-            {
-              public_peer_holds.erase(p->first);
-              if (input_holds.contains(p->first))
-              {
-                const auto until = Now() + ROOM_HOLD;
-                public_peer_holds.emplace(p->first, until);
-                input_holds[p->first] = until;
-              }
-            }
-          }
           const bool was_host = peer.drop_in_host;
           const bool resume = peer.resume_requested;
-          if (!BackPeer(p->first, peer, Now()))
+          if (!QueueRecovery() && !BackPeer(p->first, peer, Now()))
           {
             kept_session = false;
             // CheckAwayPeers already reported this session's timeout.

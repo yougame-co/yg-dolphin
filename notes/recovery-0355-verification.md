@@ -436,3 +436,97 @@ All requested local gates pass. The rooms team owns alignment with the updated
 per-player contract above, and the release team owns release-kit/shipping work.
 No local gate remains blocked. Local commits only; no version change, dependency
 install, external-service request, push, release, signing or deployment.
+
+## stalehold-0355: rejoin roster reconciliation
+
+Required initial checks, before edits:
+
+```text
+35b5ed27da YG Dolphin 0.3.55
+BASE-OK
+```
+
+`git merge-base --is-ancestor 35b5ed27da HEAD` passed on `recovery-0355`;
+the starting worktree was clean. The change is confined to `YouGameRoom.cpp`,
+`RoomTest.cpp` and this appended verification record.
+
+A self rejoin WELCOME replaces every known still-away peer's previous public
+deadline with receipt-time now plus its own `players[]` entry's valid `hold_ms`,
+or a fresh local 90-second fallback. The public/input deadlines and host mirrors
+are updated together. A later peer `away` reconciles its own remaining hold again.
+Peers absent from the away roster have their holds cleared; subsequent input
+silence can establish a new hold. A completed-match roster retains its pending
+server verdict separately, preserving the existing final-verdict regression.
+Friends and non-opted public rooms retain their existing policy.
+
+Updated rooms contract:
+
+```text
+on a rejoin WELCOME, each still-away peer may carry its own remaining hold_ms; without it the engine waits the local 90 s for that peer until the peer's own away arrives.
+```
+
+The optional field belongs to that away peer's object in WELCOME `players[]`.
+Top-level WELCOME `hold_ms` remains the returning player's own remaining hold.
+Zero is valid; malformed/missing per-peer values use the independent fallback.
+
+The new fake-clock regression records the peer's first away at t=0, self loss at
+t=85, missed peer back at t=86 and second away at t=110, then WELCOME at t=111.
+The t=111.003 tick stays open; input silence uses the refreshed peer deadline;
+the peer's subsequent `hold_ms=2990` sets t=114; the server verdict at t=116 is
+accepted. Fourteen combinations cover present/missing self remaining hold and
+missing, valid, zero and malformed per-peer remaining holds. Both original B1
+crossed orderings still assert their independent server deadlines, now supplied
+in the corresponding peer's WELCOME entry. The existing pre-expiry rejoin test
+also checks a fresh fallback, and present-roster tests check hold cancellation.
+
+Build `tests` + `dolphin-nogui`: PASS, two build workers. Both touched C++
+translation units pass `-Werror -fsyntax-only` without diagnostics. Existing
+duplicate-library and dependency deployment-target linker warnings remain.
+Focused recovery/resilience/public-WELCOME/result-panel suite: **88/88 PASS**.
+Fixture self-test: PASS. Evidence is under `build-recovery/stalehold-0355/`;
+`gates.py` records the commands and `gates.log` records load and exit status.
+
+Intermediate attempts are retained there: the initial test compile needed an
+explicit JSON number conversion; the first focused run needed its fixture's
+relative `Tools` path available from the artifact directory; the next focused
+run exposed the completed-match verdict retention described above. The corrected
+build, warning checks and all focused cases pass.
+
+The first casual gameplay attempt missed character selection before any outage:
+port 2 attached at frame 3469, after its scripted one-shot selection. The failed
+attempt is retained in `casual-before-control-delay{.log,/}`. Private copies of
+the casual/ranked controls under the same artifact directory shift only character
+selection commands by 600 frames (10 seconds), allowing seat attachment. The
+checked-in controls, event files, observation durations and verifier are unchanged.
+Final fixture commands in `gates.py` use those private input copies and the original
+events under `Tools/orca/fixtures/recovery-0355/`.
+
+All four required gameplay runs PASS on the final engine:
+
+| Run | Result / evidence under `build-recovery/stalehold-0355/` |
+| --- | --- |
+| `casual` | PASS: 16-second outage, same-seat return after 17.649 s; 123 common confirmed samples through frame 11,580; zero desyncs. |
+| `legacy` | PASS: expected no-opt-in network ending, no rejoin; 43 matching pre-ending samples through frame 5,760; zero desyncs. |
+| `ranked` | PASS: 96-second outage, absent peer network expiry and authoritative forfeit accepted with pending score/report retries; 109 matching samples through frame 9,720; zero desyncs. |
+| `crossed` | PASS: self returns after 83.872 s with 6,128 ms on WELCOME while its away peer has about 86,109 ms; delayed peer update and authoritative forfeit accepted; 109 matching samples through frame 9,720; zero desyncs. |
+
+Each row has its named `.log`, retained peer logs/stdout and `diagnostics.json`.
+All heavy commands are wrapped separately in
+`flock /Users/luis/Code/brawl-dolphin/build.lock nice -n 10`, with
+`CCACHE_DIR=/Volumes/YGWorktrees/ccache`. Build workers are two, strict syntax
+checks are sequential, and unit tests use one process. Uptime is checked before
+each job, waiting at 60-second intervals above 20 until below 18, with a 45-minute
+load-wait limit. Every submitted job started below load 20. Gameplay uses two
+headless/Null peers, isolated users, ORCA_NO_LOCAL_INPUT=1 and all six SDL disabling
+variables. Only the supplied read-only Brawl path is used, without copying it.
+
+Full final binary: **PASS, 2,281 tests from 183 suites; 2,258 passed, 23 existing
+optional skips, zero failures/errors (613.026 s)**. Evidence: `tests.log` and
+`tests.xml` under `build-recovery/stalehold-0355/`. The existing loopback wrapper
+uses its minimal environment without live-service/disc opt-ins. Tests run from
+the artifact directory (with a local `Tools` symlink for the wrapper), so generated
+`imgui.ini` stays there. `gates.log` ends with `ALL GATES PASS`.
+
+Final `git diff --check`: PASS. All requested gates pass; no local work remains
+blocked. One local commit only; no version change, dependency install, external
+service request, push, PR, release, signing or deployment.
