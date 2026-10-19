@@ -2298,6 +2298,8 @@ TEST(OrcaRoom, RefusalsSayWhy)
   // WebSocket::Connect's error carries the upgrade's HTTP status.
   EXPECT_NE(RefusalReason("WebSocket connect failed: ... (HTTP 403)").find("differs"),
             std::string::npos);
+  EXPECT_EQ(RefusalReason("WebSocket connect failed: ... (HTTP 403) lobby_mismatch"),
+            "That room is set up for a different game or mode, so your game opened its own room.");
   EXPECT_EQ(RefusalReason("WebSocket connect failed: ... (HTTP 409)"), "That room is full");
   EXPECT_NE(RefusalReason("WebSocket connect failed: ... (HTTP 401)").find("expired"),
             std::string::npos);
@@ -2337,6 +2339,8 @@ TEST(OrcaLive, DifferentKeysAreRefusedWithAReason)
 TEST(OrcaRoom, RefusalsHaveAppCodes)
 {
   EXPECT_EQ(RefusalCode("WebSocket connect failed: ... (HTTP 403)"), "room_mismatch");
+  for (const std::string reason : {"host_older", "host_newer", "lobby_mismatch"})
+    EXPECT_EQ(RefusalCode("WebSocket connect failed: ... (HTTP 403) " + reason), "room_mismatch");
   EXPECT_EQ(RefusalCode("WebSocket connect failed: ... (HTTP 409)"), "room_full");
   EXPECT_EQ(RefusalCode("WebSocket connect failed: ... (HTTP 0)"), "network");
 }
@@ -3073,6 +3077,61 @@ protected:
 
 }  // namespace
 
+TEST(OrcaRoom, ReopenDiscardsQueueExpiredAndTakenCodesAcrossRetries)
+{
+  using Rollback::OnlineMatch::RoomReopenCode;
+  for (const std::string queue : {"casual", "ranked"})
+  {
+    const std::string retained = RoomReopenCode("oldqueue", queue, true, false);
+    EXPECT_TRUE(retained.empty());
+    // A failed fresh-room upgrade has no queue welcome; it must not revive the old queue code.
+    EXPECT_TRUE(RoomReopenCode(retained, "private", true, false).empty());
+  }
+  EXPECT_EQ(RoomReopenCode("friends1", "private", true, false), "friends1");
+  EXPECT_TRUE(RoomReopenCode("friends1", "private", false, false).empty());
+  EXPECT_TRUE(RoomReopenCode("friends1", "private", true, true).empty());
+}
+
+TEST_F(OrcaRoomRuntime, NetworkEndedRoomsReopenWithFreshQueueCodesAndRetainFriendsCodes)
+{
+  for (const std::string queue : {"casual", "ranked", "private"})
+  {
+    SCOPED_TRACE(queue);
+    const std::string old_code = queue + "0358";
+    const std::string fresh_code = "solo" + queue;
+    const ScopedEnv fresh("ORCA_TEST_ROOM", fresh_code.c_str());
+    Request("/configure/" + fresh_code, R"({"joining":false})");
+    auto room = Open(old_code, fmt::format(R"({{"queue":"{}","joining":false}})", queue),
+                     false, queue == "private", false);
+    ASSERT_TRUE(Wait([&] { return room->Seat() == 0 && room->RoundTripMs() >= 0; }));
+    ASSERT_EQ(room->Queue(), queue);
+    room->TestDropConnection();
+    ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }));
+    ASSERT_EQ(room->ErrorCode(), "network");
+    // Use the welcome's queue even after the socket and room ended, as KeepRoomOpen does.
+    const std::string reopen = Rollback::OnlineMatch::RoomReopenCode(
+        room->Code(), room->Queue(), true, false);
+    if (queue == "private")
+      EXPECT_EQ(reopen, old_code);
+    else
+    {
+      EXPECT_TRUE(reopen.empty());
+      // A private-mode retry of the queue code would be refused on every attempt.
+      Action(old_code, R"({"refuse":{"code":"lobby_mismatch"},"refuse_status":403})");
+    }
+    room.reset();
+    auto options = TraceOptions(false);
+    options.room_code = reopen;
+    options.ask_app_for_room = false;
+    room = std::make_unique<YouGameRoom>(options);
+    ASSERT_TRUE(Wait([&] { return room->Seat() == 0 && room->RoundTripMs() >= 0; }));
+    EXPECT_TRUE(room->ErrorCode().empty());
+    EXPECT_EQ(room->Code(), queue == "private" ? old_code : fresh_code);
+    EXPECT_EQ(Connections(old_code), queue == "private" ? 2 : 1);
+    EXPECT_EQ(Connections(fresh_code), queue == "private" ? 0 : 1);
+  }
+}
+
 TEST_F(OrcaRoomRuntime, RecoveredSocketUsesTheRealGoodbyeTeardown)
 {
   const std::string code = "teardown";
@@ -3308,7 +3367,7 @@ TEST_F(OrcaRoomRuntime, RealExpiredTicketBodyKeepsTheKnownNetworkCode)
   EXPECT_EQ(Connections("expired401"), 1);
 }
 
-TEST_F(OrcaRoomRuntime, VersionRefusalBodiesKeepTheSiteCodeAndExplainWhichFriendMustUpdate)
+TEST_F(OrcaRoomRuntime, RefusalBodiesKeepTheSiteCodeAndDistinguishVersionsFromGameOrMode)
 {
   const std::string mismatch = RefusalReason("WebSocket connect failed: ... (HTTP 403)");
   const std::string older = "Your friend is on an older YG Dolphin. Ask them to press Play to update it and send you a new invite.";
@@ -3319,7 +3378,8 @@ TEST_F(OrcaRoomRuntime, VersionRefusalBodiesKeepTheSiteCodeAndExplainWhichFriend
       {R"({"error":"Your friend is on an older YG Dolphin. Ask them to press Play to update it and send you a new invite.","code":"host_older","your_version":"0.3.48"})", older},
       {R"({"error":"Your friend is on a newer YG Dolphin. Press Play to update yours.","code":"host_newer","host_version":"0.3.49","your_version":"0.3.48"})", newer},
       {R"({"error":"Your friend is on a newer YG Dolphin. Press Play to update yours.","code":"host_newer"})", newer},
-      {R"({"error":"This room uses a different lobby protocol or configuration","code":"lobby_mismatch"})", mismatch},
+      {R"({"error":"This room uses a different lobby protocol or configuration","code":"lobby_mismatch"})",
+       "That room is set up for a different game or mode, so your game opened its own room."},
       {R"({"error":"This room uses a different lobby protocol or configuration"})", mismatch},
       {R"({"error":"host_older host_version=injected","code":"unknown"})", mismatch},
       {R"({"error":"ignored","code":"host_older","host_version":"0.3.44\ntext"})", older},
@@ -3335,9 +3395,15 @@ TEST_F(OrcaRoomRuntime, VersionRefusalBodiesKeepTheSiteCodeAndExplainWhichFriend
       auto room = Open(code, fmt::format(R"({{"refuse":{},"refuse_status":403,"queue":"{}"}})",
                                         body, friends ? "private" : "ranked"), true, friends);
       ASSERT_TRUE(Wait([&] { return room->GetState() == RoomState::Ended; }));
-      std::string queue_mismatch = mismatch;
-      queue_mismatch.replace(queue_mismatch.find("your friend"), 11, "the other player");
-      EXPECT_EQ(room->Status(), friends ? sentence : queue_mismatch);
+      std::string expected = sentence;
+      if (!friends)
+      {
+        if (const auto at = expected.find("your friend"); at != std::string::npos)
+          expected.replace(at, 11, "the other player");
+        if (const auto at = expected.find("Your friend"); at != std::string::npos)
+          expected.replace(at, 11, "The other player");
+      }
+      EXPECT_EQ(room->Status(), expected);
       EXPECT_EQ(room->ErrorCode(), "room_mismatch");
       EXPECT_EQ(Connections(code), 1);
     }

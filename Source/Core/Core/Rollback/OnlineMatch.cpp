@@ -1134,8 +1134,8 @@ void AfterFriendsGone(Match& match)
 }
 
 // Host on port 1: its room ended without this player leaving, so friends can't drop in. Report
-// once, then reopen after 2 s, backing off to 30 s. While the server holds the seat (ROOM_HOLD),
-// reuse the code so pending invites still work; otherwise use a fresh one.
+// once, then reopen after 2 s, backing off to 30 s. While the server holds a friends-room seat
+// (ROOM_HOLD), reuse the code so pending invites still work; queue rooms need a fresh solo room.
 void KeepRoomOpen(Match& match)
 {
   if (match.local_seat != 0)
@@ -1187,9 +1187,6 @@ void KeepRoomOpen(Match& match)
     return;
   }
   const auto now = Clock::now();
-  // Someone else holds that room (a friend, or another copy on this account): never rejoin it.
-  if (Orca::Online::RoomTaken() || code == "room_full")
-    match.home_code.clear();
   if (!match.room_lost)
   {
     match.room_lost = true;
@@ -1209,10 +1206,13 @@ void KeepRoomOpen(Match& match)
     // Whoever waited for a keyframe was in that room.
     ResetDropIn(match);
   }
+  // Forget queue codes before trying a private room, including on later retries.
+  match.home_code = RoomReopenCode(match.home_code, Orca::Online::RoomQueue(),
+                                   now - match.room_lost_at < ROOM_HOLD,
+                                   Orca::Online::RoomTaken() || code == "room_full");
   if (now < match.reopen_at)
     return;
-  const bool held = now - match.room_lost_at < ROOM_HOLD;
-  const std::string reopen = held ? match.home_code : std::string();
+  const std::string reopen = match.home_code;
   NOTICE_LOG_FMT(ROLLBACK, "Drop-in: reopening {} (the last ended: {}: {})",
                  reopen.empty() ? std::string("a new room") : "room " + reopen, code,
                  Orca::Online::StatusLine());
@@ -5063,6 +5063,13 @@ Orca::Net::ReplayArchive FreshReplayStart(FreshKind kind, int frame, u64 origin_
 bool LocalNandReady(bool is_wii, bool has_host_nand, bool temporary)
 {
   return !is_wii || (has_host_nand && temporary);
+}
+
+std::string RoomReopenCode(const std::string& previous_code, const std::string& queue,
+                            bool held, bool taken)
+{
+  return held && !taken && QueueMode(queue) == Orca::Engine::Mode::None ? previous_code :
+                                                                       std::string();
 }
 
 static HostRecoveryResult PumpHostForTest(Core::System& system, Orca::Net::YouGameRoom& room,

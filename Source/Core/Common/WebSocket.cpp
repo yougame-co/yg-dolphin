@@ -220,7 +220,8 @@ bool WebSocket::Connect(const std::string& url, std::chrono::milliseconds timeou
       else if (refusal.find("Room is full") != std::string::npos)
         *error += " room full";
     }
-    else if (status == 403 && (code == "host_older" || code == "host_newer"))
+    else if (status == 403 &&
+             (code == "host_older" || code == "host_newer" || code == "lobby_mismatch"))
     {
       *error += " " + code;
       const std::string version = field("host_version");

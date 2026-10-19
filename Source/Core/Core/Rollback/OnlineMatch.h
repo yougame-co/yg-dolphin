@@ -14,6 +14,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -89,6 +90,10 @@ struct JoinCapture
 // Active multi-peer sessions may have predictions every frame: use a final checkpoint's hash.
 std::optional<JoinCapture> ChooseJoinCapture(const Orca::Net::Session* session, bool doubles,
                                             int next, int earliest);
+
+// Reopen a held friends room under its code; a queue, expired or taken room needs a fresh code.
+std::string RoomReopenCode(const std::string& previous_code, const std::string& queue,
+                            bool held, bool taken);
 
 // Headless runtime fixture: pumps the same host event/keyframe path with a real room and a
 // supplied game history. The caller initializes Core::System's memory and owns `game`.

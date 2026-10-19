@@ -711,6 +711,8 @@ std::string RefusalReason(const std::string& connect_error)
     }
     if (connect_error.find(" host_newer") != std::string::npos)
       return "Your friend is on a newer YG Dolphin. Press Play to update, then join again.";
+    if (connect_error.find(" lobby_mismatch") != std::string::npos)
+      return "That room is set up for a different game or mode, so your game opened its own room.";
     return "The room didn't let you in: your friend's YG Dolphin, disc or save differs from yours "
            "(both of you: update YouGame and press Play again), or the host removed you";
   }
@@ -2520,12 +2522,10 @@ struct YouGameRoom::Impl
       return true;
     if (!RoomRecovery())
     {
-      // Legacy queue rooms retain status-only refusals and never inherit friends-room wording.
-      for (const auto status_text : {"(HTTP 409)", "(HTTP 403)"})
-      {
-        if (const auto http_status = error->find(status_text); http_status != std::string::npos)
-          error->erase(http_status + 10);
-      }
+      // Legacy queue rooms retain status-only 409 refusals. Keep recognized 403 reasons so
+      // game/mode refusals and version refusals get their own wording, even without recovery.
+      if (const auto http_status = error->find("(HTTP 409)"); http_status != std::string::npos)
+        error->erase(http_status + 10);
       return false;
     }
     return false;
