@@ -2799,6 +2799,11 @@ STUN and TURN are internet traffic and work in every mode.
 
 What each release changed for players, in plain words.
 
+### 0.3.57
+
+- A tournament opponent can now join the host's game at character select: in rooms the page opens
+  with `host` outside the matchmaking queue, the host sends its game state to the arriving player.
+
 ### 0.3.56
 
 - Returning to a public match after the reconnect time runs out now says why you couldn't rejoin.
